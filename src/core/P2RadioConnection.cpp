@@ -114,13 +114,19 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     m_seqHighPri = 0;
     m_ccSeqNo = 0;
 
-    // From Thetis create_rnet defaults
+    // From Thetis create_rnet defaults + Thetis pcap analysis
     m_numAdc = info.adcCount;
     m_numDac = 1;
+    m_wdt = 1;  // Watchdog timer MUST be enabled — radio requires it for streaming
 
-    // Enable RX0 by default
-    m_rx[0].enable = 1;
-    m_rx[0].frequency = 14225000;  // Default 20m
+    // From Thetis console.cs:8216 UpdateDDCs() for ANAN-G2 (OrionMkII/Saturn)
+    // In non-diversity, non-PureSignal RX mode:
+    //   DDCEnable = DDC2 (bit 2), Rate[2] = rx1_rate
+    // This means DDC2 is the primary receiver, not DDC0!
+    // From Thetis console.cs:8234-8241
+    m_rx[2].enable = 1;
+    m_rx[2].frequency = 14225000;  // Default 20m
+    m_rx[2].samplingRate = 48;     // 48 kHz
 
     setState(ConnectionState::Connecting);
 
@@ -412,8 +418,10 @@ void P2RadioConnection::sendCmdGeneral()
     buf[27] = m_wbUpdateRate;      // 70ms
     buf[28] = m_wbPacketsPerFrame; // 32
 
-    // From Thetis network.c:896
-    buf[37] = 0x08;  // send phase word (bit 3)
+    // From Thetis network.c:896 — 0x08 = bit[3] "freq or phase word"
+    // Thetis sends 0x08 but stores frequencies as Hz in prn->rx[].frequency
+    // Keep this matching Thetis exactly
+    buf[37] = 0x08;
 
     // From Thetis network.c:898
     buf[38] = m_wdt;  // Watchdog timer (0 = disabled)
