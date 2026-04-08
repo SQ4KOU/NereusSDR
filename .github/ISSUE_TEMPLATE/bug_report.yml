@@ -1,0 +1,73 @@
+name: Bug Report
+description: Report a bug in NereusSDR
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the details below.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: What happened? What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this bug?
+      placeholder: |
+        1. Connect to radio...
+        2. Click on...
+        3. See error...
+    validations:
+      required: true
+
+  - type: input
+    id: radio
+    attributes:
+      label: Radio Model & Protocol
+      placeholder: "e.g. ANAN-7000DLE, Protocol 1"
+    validations:
+      required: true
+
+  - type: input
+    id: firmware
+    attributes:
+      label: Radio Firmware Version
+      placeholder: "e.g. 12.4"
+
+  - type: input
+    id: version
+    attributes:
+      label: NereusSDR Version
+      placeholder: "e.g. 0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Linux (Ubuntu/Debian)
+        - Linux (Arch/Manjaro)
+        - Linux (Fedora)
+        - Linux (other)
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs
+      description: Attach logs from `~/.config/NereusSDR/nereussdr.log` if relevant
+      render: text
