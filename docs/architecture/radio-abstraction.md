@@ -607,15 +607,33 @@ for approximately 2 seconds, it will stop transmitting EP6 data.
 
 ## 6. P2RadioConnection — Protocol 2 Implementation
 
-Protocol 2 separates control and data into distinct channels.
+**CORRECTION (2026-04-08):** P2 uses **UDP-only** communication on multiple
+dedicated ports, NOT TCP+UDP as originally described. This was confirmed by
+pcap analysis of Thetis ChannelMaster traffic and reading the Thetis
+`network.c` source. A single UDP socket (`listenSock`) handles all traffic.
 
 ### Transport Architecture
 
 ```
-PC ◄─── TCP ───► Radio     Command/response channel (structured commands)
-PC ◄─── UDP ───► Radio     High-bandwidth I/Q data streams (per-receiver)
-PC ◄─── UDP ───► Radio     Wideband data (spectrum, mic, etc.)
+PC ◄─── UDP ───► Radio     Single socket, commands to ports 1024-1027
+                           Radio responds from ports 1025-1041
+                           Dispatch by source port of incoming packets
 ```
+
+### Port Map (from Thetis ChannelMaster/network.c)
+
+| Port | Direction | Content | Size |
+|------|-----------|---------|------|
+| 1024 | PC→Radio | CmdGeneral (port config, watchdog) | 60 bytes |
+| 1025 | PC→Radio | CmdRx (ADC, rate, enables) | 1444 bytes |
+| 1025 | Radio→PC | High-priority status feedback | 60 bytes |
+| 1026 | PC→Radio | CmdTx (CW, keyer, mic) | 60 bytes |
+| 1026 | Radio→PC | Mic samples | 132 bytes |
+| 1027 | PC→Radio | CmdHighPriority (run, freq, drive) | 1444 bytes |
+| 1027-1034 | Radio→PC | Wideband ADC data | 1028 bytes |
+| 1028 | PC→Radio | RX audio (L/R) to radio | 260 bytes |
+| 1029 | PC→Radio | TX I/Q to radio | 1444 bytes |
+| 1035-1041 | Radio→PC | DDC I/Q data (DDC0-DDC6) | 1444 bytes |
 
 ### Class Interface
 

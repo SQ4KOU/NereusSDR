@@ -239,10 +239,13 @@ User TX → Mic → AudioEngine → WdspEngine (TX channel)
 
 ### Protocol 2 (Orion MkII / Saturn / ANAN-G2)
 
-* **Transport:** TCP for commands + UDP for high-bandwidth data
-* **Discovery:** UDP broadcast/multicast on port 1024
-* **Command channel:** TCP with structured command/response protocol
-* **Data channels:** Separate UDP streams for each data type
+* **Transport:** UDP-only on multiple dedicated ports (NOT TCP — confirmed via pcap)
+* **Discovery:** 60-byte UDP packet with byte[4]=0x02 broadcast to port 1024
+* **Commands:** Single UDP socket sends to radio ports 1024-1027
+* **Data:** Radio responds from ports 1025-1041 to the PC's socket port
+* **Dispatch:** By source port of incoming packets (matching Thetis ReadUDPFrame)
+* **Watchdog:** CmdGeneral byte 38 must be 1 (WDT enabled) or radio won't stream
+* **DDC mapping:** ANAN-G2 uses DDC2 as primary receiver (from Thetis UpdateDDCs)
 * **Supports:** Independent receiver streams, wider bandwidth, more control
 
 ### Key Protocol Facts

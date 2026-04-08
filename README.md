@@ -59,8 +59,8 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 
 | Phase | Goal | Status |
 |---|---|---|
-| **3A: Radio Connection** | Connect to ANAN-G2 via Protocol 2, receive I/Q | Next up |
-| **3B: WDSP Integration** | Process I/Q through WDSP, demodulate audio | Planned |
+| **3A: Radio Connection** | Connect to ANAN-G2 via Protocol 2, receive I/Q | **Complete** |
+| **3B: WDSP Integration** | Process I/Q through WDSP, demodulate audio | Next up |
 | **3C: Audio Pipeline** | RX audio to speakers, TX audio from mic | Planned |
 | **3D: GPU Spectrum** | Live FFT spectrum + waterfall from I/Q | Planned |
 | **3E: Multi-Panadapter** | 1-4 pans in configurable layouts | Planned |

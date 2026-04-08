@@ -31,9 +31,28 @@ NereusSDR is a ground-up port of Thetis (OpenHPSDR SDR console) from C# to Qt6/C
 | 2D: Skin Compatibility | 864 | SkinParser (ZIP/XML/PNG), SkinRenderer, control mapping (70+ controls), remote servers |
 | 2E: WDSP Integration | 1,968 | RxChannel/TxChannel wrappers, PureSignal, thread safety, channel lifecycle, meter/spectrum |
 
+### Completed: Phase 3A — Radio Connection (P2 / ANAN-G2)
+- P2RadioConnection faithfully ported from Thetis ChannelMaster/network.c
+- Single UDP socket matching Thetis `listenSock` pattern
+- P2 discovery (60-byte packet, byte[4]=0x02) on all network interfaces
+- CmdGeneral/CmdRx/CmdTx/CmdHighPriority byte-for-byte from Thetis
+- I/Q data streaming confirmed: DDC0, 1444 bytes/packet, 238 samples at 48kHz
+- ConnectionPanel dialog with discovered radio list, connect/disconnect
+- LogManager with runtime category toggles, AppSettings persistence
+- SupportDialog with log viewer, category checkboxes, support bundle creation
+- Status bar with live connection state indicator
+- Auto-reconnect to last connected radio via saved MAC
+- Key findings from pcap analysis:
+  - WDT=1 (watchdog timer) required in CmdGeneral for radio to stream
+  - DDC2 enable (bit 2) is the primary RX for ANAN-G2 (from Thetis UpdateDDCs)
+  - Radio sends I/Q from port 1035, status from 1025, mic from 1026
+  - IPv4 address must strip ::ffff: prefix for writeDatagram to work
+- 12 new files, ~3500 lines of new code
+- Verified with ANAN-G2 (Orion MkII, FW 27) at 192.168.109.45
+
 ### CI Status: GREEN
 - Build passes on Ubuntu 24.04 with Qt6, cmake, ninja, fftw3
-- 11 commits on main
+- Windows local build passes with Qt 6.11.0 / MinGW 13.1
 
 ---
 
@@ -46,7 +65,7 @@ NereusSDR is a ground-up port of Thetis (OpenHPSDR SDR console) from C# to Qt6/C
 | Preserve full feature set of Thetis | 33 panels + 11 groups mapped to 16 widget types | Design done |
 | Multi-panadapter (up to 4) | PanadapterStack with 5 layouts (2B) | Design done |
 | Waterfall fluidity | Client-side FFT + ring-buffer GPU waterfall (2C) | Design done |
-| Protocol 1 and Protocol 2 support | P2 first (ANAN-G2), P1 later (2A) | Design done |
+| Protocol 1 and Protocol 2 support | P2 first (ANAN-G2), P1 later (2A) | **P2 working** |
 | WDSP integration (100% feature parity) | 256 API functions mapped, RxChannel/TxChannel designed (2E) | Design done |
 | Legacy skin compatibility | Extended skin format + Thetis import (2D) | Design done |
 | Configurable containers (Thetis multi-meter) | Unified container system (float/dock/axis-lock) | Design done |
@@ -62,19 +81,35 @@ NereusSDR is a ground-up port of Thetis (OpenHPSDR SDR console) from C# to Qt6/C
 
 ## Phase 3 — Implementation (Named Phases)
 
-### Phase 3A: Radio Connection (P2 — ANAN-G2)
+### Phase 3A: Radio Connection (P2 — ANAN-G2) ✅ COMPLETE
 **Goal:** Connect to an ANAN-G2 (Protocol 2) radio, receive raw I/Q data.
 
-**Hardware available for testing:** ANAN-G2 (Saturn / Orion MkII board) — Protocol 2 only.
-Start with P2 implementation, add P1 later for Hermes Lite 2 / older ANAN radios.
+**Hardware:** ANAN-G2 (Orion MkII board, FW 27) at 192.168.109.45 via ZeroTier VPN.
 
-Files to modify/create:
-- `src/core/RadioDiscovery.cpp` — flesh out P2 discovery (byte 0 = 0x00 discriminator, board type at byte 11)
-- `src/core/RadioConnection.h/.cpp` — refactor into abstract base + P2RadioConnection subclass
-- `src/core/P2RadioConnection.h/.cpp` — **new** — TCP command channel + UDP data streams
-- `src/core/ReceiverManager.h/.cpp` — **new** — client-side receiver lifecycle, hardware RX mapping
-- `src/models/RadioModel.cpp` — wire connection signals, handle I/Q routing
-- (P1 deferred: MetisFrameParser + P1RadioConnection added later)
+**Files created/modified:**
+- `src/core/LogCategories.h/.cpp` — **new** — LogManager with runtime category toggles
+- `src/core/SupportBundle.h/.cpp` — **new** — diagnostic archive (logs, system/radio info)
+- `src/core/RadioDiscovery.h/.cpp` — BoardType/ProtocolVersion enums, P2 discovery, multi-interface broadcast
+- `src/core/RadioConnection.h/.cpp` — abstract base with factory, worker thread pattern
+- `src/core/P2RadioConnection.h/.cpp` — **new** — faithfully ported from Thetis ChannelMaster/network.c
+- `src/core/ReceiverManager.h/.cpp` — **new** — logical-to-hardware receiver mapping
+- `src/models/RadioModel.h/.cpp` — worker thread (moveToThread+init), signal wiring, teardown
+- `src/gui/ConnectionPanel.h/.cpp` — **new** — discovered radio list, connect/disconnect UI
+- `src/gui/SupportDialog.h/.cpp` — **new** — log viewer, category toggles, bundle creation
+- `src/gui/MainWindow.h/.cpp` — menus, status bar, auto-reconnect
+
+**Protocol corrections (vs original architecture doc):**
+- P2 is **UDP-only** on multiple ports, not TCP+UDP as originally assumed
+- Single socket for all communication (matching Thetis `listenSock`)
+- P2 discovery uses 60-byte packet with byte[4]=0x02, NOT the P1 0xEF 0xFE format
+- ANAN-G2 uses DDC2 (bit 2) as primary receiver, not DDC0 (from Thetis UpdateDDCs)
+- Watchdog timer (WDT=1) MUST be enabled in CmdGeneral or radio won't stream
+- CmdGeneral byte 37 = 0x08 (phase word flag) per Thetis
+
+**Known issues for future work:**
+- Sequence errors over ZeroTier VPN (packets arrive slightly out of order)
+- Not sending TX I/Q (port 1029) or audio (port 1028) silence frames
+- DDC mapping hardcoded — should port full UpdateDDCs() from Thetis console.cs:8186
 
 Key design reference: `docs/architecture/radio-abstraction.md`
 
@@ -196,37 +231,26 @@ CI workflows already in place. Finalize:
 
 ---
 
-## Recommended Next Step: Phase 3A — Radio Connection (P2 / ANAN-G2)
+## Recommended Next Step: Phase 3B — WDSP Integration Layer
 
-This is the foundation everything else depends on. **Start with Protocol 2** since the only test hardware available is an ANAN-G2 (Saturn / Orion MkII), which is P2-only.
+Phase 3A is complete — I/Q data is streaming from the ANAN-G2. Next: feed the I/Q data through WDSP for demodulation and audio output.
+
+### Key References
+- Thetis: `cmaster.cs` (channel master), `wdsp.cs` (P/Invoke declarations)
+- WDSP source: `../wdsp/src/` (channel.c, RXA.c, TXA.c)
+- Design doc: `docs/architecture/wdsp-integration.md`
 
 ### Implementation Steps
-
-1. **P2 Discovery** — Extend RadioDiscovery for P2 responses
-   - P2 discovery response: byte 0 = 0x00 (discriminator), board type at byte 11, protocol version at byte 12
-   - Differentiate P1 (0xEF 0xFE prefix) from P2 (0x00 prefix) in discovery parsing
-
-2. **Refactor RadioConnection** — Abstract base + P2 subclass
-   - P2RadioConnection: TCP command channel + UDP data streams
-   - TCP for structured commands (frequency, sample rate, receiver config)
-   - UDP for high-bandwidth I/Q data (separate stream per receiver)
-   - Connection state machine: Disconnected → Connecting → Connected → Error
-   - Emit iqDataReceived signal with parsed I/Q samples
-
-3. **ReceiverManager** — Client-side receiver tracking
-   - Create/activate/deactivate receivers
-   - Map to hardware RX indices
-   - Configure sample rate and receiver count via P2 TCP commands
-
-4. **Wire into RadioModel** — Connect signals
-   - RadioDiscovery → RadioModel → P2RadioConnection → iqDataReceived
-   - Connection state management and UI feedback
+1. Build WDSP from source in `third_party/wdsp/`
+2. Port channel lifecycle from Thetis cmaster.cs
+3. Implement RxChannel wrapper (I/Q in → audio out via fexchange2)
+4. Wire ReceiverManager::iqDataForChannel → WdspEngine
+5. Extract FFT data from WDSP for spectrum display
 
 ### Verification
-- Discover the ANAN-G2 on the local network
-- Connect via P2 TCP + UDP
-- Receive I/Q data stream (verify with debug logging: sample rate, frame count)
-- Test with actual ANAN-G2 hardware
+- Feed I/Q from radio into WDSP channel
+- Hear demodulated audio (SSB/AM/CW) through speakers
+- Tune to a known signal on the ANAN-G2
 
 ---
 
