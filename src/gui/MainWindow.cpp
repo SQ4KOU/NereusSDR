@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "models/RadioModel.h"
 #include "core/AppSettings.h"
+#include "core/RadioDiscovery.h"
 
 #include <QApplication>
 #include <QCloseEvent>
@@ -44,7 +45,7 @@ void MainWindow::buildUI()
 void MainWindow::buildMenuBar()
 {
     auto* fileMenu = menuBar()->addMenu("&File");
-    fileMenu->addAction("&Quit", qApp, &QApplication::quit, QKeySequence::Quit);
+    fileMenu->addAction("&Quit", QKeySequence::Quit, qApp, &QApplication::quit);
 
     auto* radioMenu = menuBar()->addMenu("&Radio");
     radioMenu->addAction("&Discover...", this, [this]() {
