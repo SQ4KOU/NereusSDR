@@ -45,8 +45,8 @@ void AppSettings::load()
                 continue;
             }
             // Check if this is a station section
-            if (!inStation && xml.attributes().hasAttribute("type")
-                && xml.attributes().value("type") == "station") {
+            if (!inStation && xml.attributes().hasAttribute(QStringLiteral("type"))
+                && xml.attributes().value(QStringLiteral("type")) == QStringLiteral("station")) {
                 inStation = true;
                 currentStation = tag;
                 m_stationName = tag;
