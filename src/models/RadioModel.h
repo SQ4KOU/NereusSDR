@@ -4,27 +4,28 @@
 #include "PanadapterModel.h"
 #include "MeterModel.h"
 #include "TransmitModel.h"
+#include "core/RadioDiscovery.h"
+#include "core/RadioConnection.h"
 
 #include <QObject>
 #include <QString>
 #include <QList>
-#include <QTimer>
+#include <QThread>
 
 namespace NereusSDR {
 
-class RadioConnection;
-class RadioDiscovery;
+class ReceiverManager;
 class AudioEngine;
 class WdspEngine;
-struct RadioInfo;
 
 // RadioModel is the central data model for a connected radio.
-// It owns the RadioConnection, processes incoming data, and exposes
-// the radio's current state to the GUI via Qt properties/signals.
+// It owns the RadioConnection (on a worker thread), ReceiverManager,
+// and all sub-models. It routes signals between components.
 //
-// Unlike AetherSDR's RadioModel (which mirrors radio-side state),
-// NereusSDR's RadioModel manages more client-side state because
-// OpenHPSDR radios don't have concepts like "slices" or "panadapters".
+// Thread architecture:
+//   Main thread: RadioModel, ReceiverManager, all sub-models, GUI
+//   Connection thread: RadioConnection (sockets, protocol I/O)
+//   Audio thread: AudioEngine + WdspEngine (future)
 class RadioModel : public QObject {
     Q_OBJECT
 
@@ -38,10 +39,12 @@ public:
     ~RadioModel() override;
 
     // Sub-components
-    RadioConnection*  connection()  { return m_connection; }
-    RadioDiscovery*   discovery()   { return m_discovery; }
-    AudioEngine*      audioEngine() { return m_audioEngine; }
-    WdspEngine*       wdspEngine()  { return m_wdspEngine; }
+    RadioConnection*  connection()       { return m_connection; }
+    const RadioConnection* connection() const { return m_connection; }
+    RadioDiscovery*   discovery()        { return m_discovery; }
+    ReceiverManager*  receiverManager()  { return m_receiverManager; }
+    AudioEngine*      audioEngine()      { return m_audioEngine; }
+    WdspEngine*       wdspEngine()       { return m_wdspEngine; }
 
     // Sub-models
     MeterModel&       meterModel()       { return m_meterModel; }
@@ -80,15 +83,21 @@ signals:
     void panadapterRemoved(int index);
 
 private slots:
-    void onConnectionStateChanged();
-    void onDataReceived(const QByteArray& data);
+    void onConnectionStateChanged(NereusSDR::ConnectionState state);
 
 private:
-    // Sub-components (owned)
-    RadioConnection* m_connection{nullptr};
+    void wireConnectionSignals();
+    void teardownConnection();
+
+    // Sub-components (owned, main thread)
     RadioDiscovery*  m_discovery{nullptr};
+    ReceiverManager* m_receiverManager{nullptr};
     AudioEngine*     m_audioEngine{nullptr};
     WdspEngine*      m_wdspEngine{nullptr};
+
+    // Connection (owned, lives on m_connThread)
+    RadioConnection* m_connection{nullptr};
+    QThread*         m_connThread{nullptr};
 
     // Sub-models
     MeterModel    m_meterModel;
@@ -103,6 +112,10 @@ private:
     QString m_name;
     QString m_model;
     QString m_version;
+
+    // Reconnect state
+    RadioInfo m_lastRadioInfo;
+    bool m_intentionalDisconnect{false};
 };
 
 } // namespace NereusSDR

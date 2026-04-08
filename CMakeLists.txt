@@ -120,8 +120,12 @@ endif()
 # --------------------------------------------------------------------------
 set(CORE_SOURCES
     src/core/AppSettings.cpp
+    src/core/LogCategories.cpp
+    src/core/SupportBundle.cpp
     src/core/RadioDiscovery.cpp
     src/core/RadioConnection.cpp
+    src/core/P2RadioConnection.cpp
+    src/core/ReceiverManager.cpp
     src/core/AudioEngine.cpp
     src/core/WdspEngine.cpp
 )
@@ -136,6 +140,8 @@ set(MODEL_SOURCES
 
 set(GUI_SOURCES
     src/gui/MainWindow.cpp
+    src/gui/ConnectionPanel.cpp
+    src/gui/SupportDialog.cpp
 )
 
 # --------------------------------------------------------------------------

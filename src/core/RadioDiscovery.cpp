@@ -1,10 +1,13 @@
 #include "RadioDiscovery.h"
+#include "LogCategories.h"
 
 #include <QDateTime>
 #include <QNetworkDatagram>
-#include <QDebug>
+#include <QNetworkInterface>
 
 namespace NereusSDR {
+
+// --- RadioInfo static helpers ---
 
 QString RadioInfo::displayName() const
 {
@@ -14,18 +17,62 @@ QString RadioInfo::displayName() const
     return boardTypeName(boardType) + " (" + macAddress + ")";
 }
 
-QString RadioInfo::boardTypeName(int type)
+QString RadioInfo::boardTypeName(BoardType type)
 {
     switch (type) {
-    case 0:  return "Metis";
-    case 1:  return "Hermes";
-    case 2:  return "Griffin";
-    case 4:  return "Angelia";
-    case 5:  return "Orion";
-    case 6:  return "Hermes Lite";
-    case 10: return "Orion MkII";
-    default: return QString("Unknown (%1)").arg(type);
+    case BoardType::Metis:      return QStringLiteral("Metis");
+    case BoardType::Hermes:     return QStringLiteral("Hermes");
+    case BoardType::Griffin:    return QStringLiteral("Griffin");
+    case BoardType::Angelia:    return QStringLiteral("Angelia");
+    case BoardType::Orion:      return QStringLiteral("Orion");
+    case BoardType::HermesLite: return QStringLiteral("Hermes Lite");
+    case BoardType::OrionMkII:  return QStringLiteral("Orion MkII");
+    case BoardType::Saturn:     return QStringLiteral("Saturn");
+    case BoardType::Unknown:    return QStringLiteral("Unknown");
     }
+    return QStringLiteral("Unknown (%1)").arg(static_cast<int>(type));
+}
+
+int RadioInfo::adcCountForBoard(BoardType type)
+{
+    switch (type) {
+    case BoardType::Angelia:
+    case BoardType::Orion:
+    case BoardType::OrionMkII:
+    case BoardType::Saturn:
+        return 2;
+    default:
+        return 1;
+    }
+}
+
+int RadioInfo::maxReceiversForBoard(BoardType type)
+{
+    switch (type) {
+    case BoardType::Metis:      return 3;
+    case BoardType::Hermes:     return 4;
+    case BoardType::Griffin:    return 4;
+    case BoardType::HermesLite: return 4;
+    case BoardType::Angelia:    return 7;
+    case BoardType::Orion:      return 7;
+    case BoardType::OrionMkII:  return 7;
+    case BoardType::Saturn:     return 7;
+    default:                    return 1;
+    }
+}
+
+// --- RadioDiscovery ---
+
+QString RadioDiscovery::macToString(const char* bytes)
+{
+    return QString("%1:%2:%3:%4:%5:%6")
+        .arg(static_cast<quint8>(bytes[0]), 2, 16, QChar('0'))
+        .arg(static_cast<quint8>(bytes[1]), 2, 16, QChar('0'))
+        .arg(static_cast<quint8>(bytes[2]), 2, 16, QChar('0'))
+        .arg(static_cast<quint8>(bytes[3]), 2, 16, QChar('0'))
+        .arg(static_cast<quint8>(bytes[4]), 2, 16, QChar('0'))
+        .arg(static_cast<quint8>(bytes[5]), 2, 16, QChar('0'))
+        .toUpper();
 }
 
 RadioDiscovery::RadioDiscovery(QObject* parent)
@@ -48,7 +95,7 @@ void RadioDiscovery::startDiscovery()
 
     m_socket = new QUdpSocket(this);
     if (!m_socket->bind(QHostAddress::Any, 0)) {
-        qWarning() << "RadioDiscovery: failed to bind UDP socket";
+        qCWarning(lcDiscovery) << "Failed to bind UDP socket";
         delete m_socket;
         m_socket = nullptr;
         return;
@@ -57,10 +104,10 @@ void RadioDiscovery::startDiscovery()
     connect(m_socket, &QUdpSocket::readyRead, this, &RadioDiscovery::onReadyRead);
 
     sendDiscoveryPacket();
-    m_discoveryTimer.start(2000);
+    m_discoveryTimer.start(kDiscoveryIntervalMs);
     m_staleTimer.start(kStaleTimeoutMs);
 
-    qDebug() << "RadioDiscovery: started on port" << m_socket->localPort();
+    qCDebug(lcDiscovery) << "Started on port" << m_socket->localPort();
 }
 
 void RadioDiscovery::stopDiscovery()
@@ -86,14 +133,40 @@ void RadioDiscovery::sendDiscoveryPacket()
         return;
     }
 
-    // OpenHPSDR Protocol 1 discovery packet:
-    // 63 bytes: 0xEF 0xFE 0x02 followed by 60 zero bytes
-    QByteArray packet(63, 0);
-    packet[0] = static_cast<char>(0xEF);
-    packet[1] = static_cast<char>(0xFE);
-    packet[2] = static_cast<char>(0x02);
+    // P1 discovery packet: 63 bytes: 0xEF 0xFE 0x02 followed by 60 zero bytes
+    QByteArray p1Packet(63, 0);
+    p1Packet[0] = static_cast<char>(0xEF);
+    p1Packet[1] = static_cast<char>(0xFE);
+    p1Packet[2] = static_cast<char>(0x02);
 
-    m_socket->writeDatagram(packet, QHostAddress::Broadcast, kDiscoveryPort);
+    // P2 discovery packet: 60 bytes, byte[4] = 0x02 (rest zeros)
+    // P2 radios (ANAN-G2, OrionMkII, Saturn) only respond to this format
+    QByteArray p2Packet(60, 0);
+    p2Packet[4] = static_cast<char>(0x02);
+
+    // Broadcast on all network interfaces to reach radios on VPN/secondary subnets
+    const auto interfaces = QNetworkInterface::allInterfaces();
+    for (const QNetworkInterface& iface : interfaces) {
+        if (!(iface.flags() & QNetworkInterface::IsUp)
+            || !(iface.flags() & QNetworkInterface::IsRunning)
+            || (iface.flags() & QNetworkInterface::IsLoopBack)) {
+            continue;
+        }
+
+        const auto entries = iface.addressEntries();
+        for (const QNetworkAddressEntry& entry : entries) {
+            QHostAddress broadcast = entry.broadcast();
+            if (broadcast.isNull() || broadcast.protocol() != QAbstractSocket::IPv4Protocol) {
+                continue;
+            }
+            m_socket->writeDatagram(p1Packet, broadcast, kDiscoveryPort);
+            m_socket->writeDatagram(p2Packet, broadcast, kDiscoveryPort);
+        }
+    }
+
+    // Also send to global broadcast as fallback
+    m_socket->writeDatagram(p1Packet, QHostAddress::Broadcast, kDiscoveryPort);
+    m_socket->writeDatagram(p2Packet, QHostAddress::Broadcast, kDiscoveryPort);
 }
 
 void RadioDiscovery::onReadyRead()
@@ -102,51 +175,88 @@ void RadioDiscovery::onReadyRead()
         QNetworkDatagram datagram = m_socket->receiveDatagram();
         QByteArray data = datagram.data();
 
-        // Minimum discovery response: 60 bytes, starts with 0xEF 0xFE
-        if (data.size() < 60) {
-            continue;
-        }
-        if (static_cast<quint8>(data[0]) != 0xEF || static_cast<quint8>(data[1]) != 0xFE) {
+        if (data.size() < 11) {
             continue;
         }
 
-        // Byte 2: status (0x02 = discovery response, 0x03 = in use)
-        quint8 status = static_cast<quint8>(data[2]);
-        if (status != 0x02 && status != 0x03) {
-            continue;
-        }
+        // P1 responses start with 0xEF 0xFE
+        // P2 responses start with 0x00 (discriminator byte)
+        // Dispatch based on first byte
+        const quint8 firstByte = static_cast<quint8>(data[0]);
 
-        // Parse discovery response
         RadioInfo info;
-        info.address = datagram.senderAddress();
-        info.port = kDiscoveryPort;
-        info.inUse = (status == 0x03);
 
-        // MAC address: bytes 3-8
-        info.macAddress = QString("%1:%2:%3:%4:%5:%6")
-            .arg(static_cast<quint8>(data[3]), 2, 16, QChar('0'))
-            .arg(static_cast<quint8>(data[4]), 2, 16, QChar('0'))
-            .arg(static_cast<quint8>(data[5]), 2, 16, QChar('0'))
-            .arg(static_cast<quint8>(data[6]), 2, 16, QChar('0'))
-            .arg(static_cast<quint8>(data[7]), 2, 16, QChar('0'))
-            .arg(static_cast<quint8>(data[8]), 2, 16, QChar('0'))
-            .toUpper();
+        if (firstByte == 0xEF && data.size() >= 11
+            && static_cast<quint8>(data[1]) == 0xFE) {
+            // Protocol 1 discovery response
+            quint8 status = static_cast<quint8>(data[2]);
+            if (status != 0x02 && status != 0x03) {
+                continue;
+            }
 
-        // Board type: byte 10
-        info.boardType = static_cast<quint8>(data[10]);
+            info.address = datagram.senderAddress();
+            info.port = kDiscoveryPort;
+            info.protocol = ProtocolVersion::Protocol1;
+            info.inUse = (status == 0x03);
+            info.macAddress = macToString(data.constData() + 3);  // bytes 3-8
+            info.firmwareVersion = static_cast<quint8>(data[9]);
+            info.boardType = static_cast<BoardType>(static_cast<quint8>(data[10]));
+
+        } else if (firstByte == 0x00 && data.size() >= 21) {
+            // Protocol 2 discovery response
+            // Bytes 0-3: 0x00 (P2 discriminator)
+            // Byte 4: status (0x02 = available, 0x03 = busy)
+            quint8 status = static_cast<quint8>(data[4]);
+            if (status != 0x02 && status != 0x03) {
+                continue;
+            }
+
+            info.address = datagram.senderAddress();
+            info.port = kDiscoveryPort;
+            info.protocol = ProtocolVersion::Protocol2;
+            info.inUse = (status == 0x03);
+            info.macAddress = macToString(data.constData() + 5);  // bytes 5-10
+            info.boardType = static_cast<BoardType>(static_cast<quint8>(data[11]));
+            info.firmwareVersion = static_cast<quint8>(data[13]);
+
+            // Byte 20: number of hardware receivers (if present)
+            if (data.size() > 20) {
+                int hwRx = static_cast<quint8>(data[20]);
+                if (hwRx > 0) {
+                    info.maxReceivers = hwRx;
+                }
+            }
+
+            qCDebug(lcDiscovery) << "P2 response from" << info.address.toString()
+                                 << "board:" << RadioInfo::boardTypeName(info.boardType)
+                                 << "fw:" << info.firmwareVersion;
+        } else {
+            continue;  // Unknown response format
+        }
+
+        // Populate derived capabilities
+        info.adcCount = RadioInfo::adcCountForBoard(info.boardType);
+        if (info.maxReceivers <= 0) {
+            info.maxReceivers = RadioInfo::maxReceiversForBoard(info.boardType);
+        }
         info.name = RadioInfo::boardTypeName(info.boardType);
+        info.hasDiversityReceiver = (info.adcCount >= 2);
+        info.hasPureSignal = (info.boardType != BoardType::Metis
+                              && info.boardType != BoardType::Unknown);
 
-        // Firmware version: byte 9
-        info.firmwareVersion = static_cast<quint8>(data[9]);
-
-        // Protocol 1 by default; Protocol 2 radios respond differently
-        info.protocol = 1;
+        // P2 boards support higher sample rates
+        if (info.protocol == ProtocolVersion::Protocol2) {
+            info.maxSampleRate = 1536000;
+        }
 
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
         m_lastSeen[info.macAddress] = now;
 
         if (!m_radios.contains(info.macAddress)) {
             m_radios.insert(info.macAddress, info);
+            qCDebug(lcDiscovery) << "Discovered:" << info.displayName()
+                                 << "P" << static_cast<int>(info.protocol)
+                                 << "at" << info.address.toString();
             emit radioDiscovered(info);
         } else {
             m_radios[info.macAddress] = info;
@@ -167,6 +277,7 @@ void RadioDiscovery::onStaleCheck()
     }
 
     for (const QString& mac : stale) {
+        qCDebug(lcDiscovery) << "Radio lost:" << mac;
         m_radios.remove(mac);
         m_lastSeen.remove(mac);
         emit radioLost(mac);

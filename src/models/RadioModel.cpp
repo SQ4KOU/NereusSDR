@@ -1,28 +1,28 @@
 #include "RadioModel.h"
 #include "core/RadioConnection.h"
 #include "core/RadioDiscovery.h"
+#include "core/ReceiverManager.h"
 #include "core/AudioEngine.h"
 #include "core/WdspEngine.h"
+#include "core/LogCategories.h"
 
-#include <QDebug>
+#include <QMetaObject>
 
 namespace NereusSDR {
 
 RadioModel::RadioModel(QObject* parent)
     : QObject(parent)
-    , m_connection(new RadioConnection(this))
     , m_discovery(new RadioDiscovery(this))
+    , m_receiverManager(new ReceiverManager(this))
     , m_audioEngine(new AudioEngine(this))
     , m_wdspEngine(new WdspEngine(this))
 {
-    connect(m_connection, &RadioConnection::connectionStateChanged,
-            this, &RadioModel::onConnectionStateChanged);
-    connect(m_connection, &RadioConnection::dataReceived,
-            this, &RadioModel::onDataReceived);
+    // Connection starts null — created by connectToRadio() via factory
 }
 
 RadioModel::~RadioModel()
 {
+    teardownConnection();
     qDeleteAll(m_slices);
     qDeleteAll(m_panadapters);
 }
@@ -31,6 +31,8 @@ bool RadioModel::isConnected() const
 {
     return m_connection && m_connection->isConnected();
 }
+
+// --- Slice Management ---
 
 SliceModel* RadioModel::sliceAt(int index) const
 {
@@ -79,6 +81,8 @@ void RadioModel::setActiveSlice(int index)
     }
 }
 
+// --- Panadapter Management ---
+
 int RadioModel::addPanadapter()
 {
     auto* pan = new PanadapterModel(this);
@@ -98,38 +102,165 @@ void RadioModel::removePanadapter(int index)
     emit panadapterRemoved(index);
 }
 
+// --- Connection ---
+
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
-    m_name = info.name;
-    m_model = info.model;
+    // Tear down any existing connection
+    if (m_connection) {
+        teardownConnection();
+    }
+
+    m_lastRadioInfo = info;
+    m_intentionalDisconnect = false;
+
+    m_name = info.displayName();
+    m_model = RadioInfo::boardTypeName(info.boardType);
     m_version = QString::number(info.firmwareVersion);
     emit infoChanged();
 
-    m_connection->connectToRadio(info);
+    // Configure ReceiverManager with hardware capabilities
+    m_receiverManager->setMaxReceivers(info.maxReceivers);
+
+    // Factory-create the connection (no parent — will be moved to thread)
+    auto conn = RadioConnection::create(info);
+    if (!conn) {
+        qCWarning(lcConnection) << "Failed to create connection for" << info.displayName();
+        return;
+    }
+    m_connection = conn.release();
+
+    // Create worker thread
+    m_connThread = new QThread(this);
+    m_connThread->setObjectName(QStringLiteral("ConnectionThread"));
+
+    // Move connection to worker thread BEFORE wiring signals
+    m_connection->moveToThread(m_connThread);
+
+    // Wire signals (auto-queued across threads)
+    wireConnectionSignals();
+
+    // Start thread — init() will be called on the worker thread
+    connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
+    m_connThread->start();
+
+    // Dispatch connect command to worker thread
+    QMetaObject::invokeMethod(m_connection, [conn = m_connection, info]() {
+        conn->connectToRadio(info);
+    });
+
+    qCDebug(lcConnection) << "Connecting to" << info.displayName()
+                          << "P" << static_cast<int>(info.protocol);
 }
 
 void RadioModel::disconnectFromRadio()
 {
-    m_connection->disconnect();
+    m_intentionalDisconnect = true;
+    teardownConnection();
 }
 
-void RadioModel::onConnectionStateChanged()
+void RadioModel::wireConnectionSignals()
 {
-    emit connectionStateChanged();
-    if (isConnected()) {
-        qDebug() << "Connected to" << m_name;
-    } else {
-        qDebug() << "Disconnected from" << m_name;
+    if (!m_connection) {
+        return;
+    }
+
+    // Connection state → RadioModel (auto-queued: connection thread → main thread)
+    connect(m_connection, &RadioConnection::connectionStateChanged,
+            this, &RadioModel::onConnectionStateChanged);
+
+    // I/Q data → ReceiverManager (auto-queued: connection thread → main thread)
+    connect(m_connection, &RadioConnection::iqDataReceived,
+            m_receiverManager, &ReceiverManager::feedIqData);
+
+    // Meter data → MeterModel
+    connect(m_connection, &RadioConnection::meterDataReceived,
+            this, [this](float fwd, float rev, float voltage, float current) {
+        Q_UNUSED(voltage);
+        Q_UNUSED(current);
+        // MeterModel update — expand when MeterModel has proper setters
+        Q_UNUSED(fwd);
+        Q_UNUSED(rev);
+    });
+
+    // Error handling
+    connect(m_connection, &RadioConnection::errorOccurred,
+            this, [this](const QString& msg) {
+        qCWarning(lcConnection) << "Connection error:" << msg;
+    });
+
+    // ReceiverManager → RadioConnection (hardware updates)
+    // These use QMetaObject::invokeMethod to cross from main→connection thread
+    connect(m_receiverManager, &ReceiverManager::hardwareReceiverCountChanged,
+            this, [this](int count) {
+        if (m_connection) {
+            QMetaObject::invokeMethod(m_connection, [conn = m_connection, count]() {
+                conn->setActiveReceiverCount(count);
+            });
+        }
+    });
+
+    connect(m_receiverManager, &ReceiverManager::hardwareFrequencyChanged,
+            this, [this](int hwIndex, quint64 freq) {
+        if (m_connection) {
+            QMetaObject::invokeMethod(m_connection, [conn = m_connection, hwIndex, freq]() {
+                conn->setReceiverFrequency(hwIndex, freq);
+            });
+        }
+    });
+}
+
+void RadioModel::teardownConnection()
+{
+    if (!m_connection) {
+        return;
+    }
+
+    // Disconnect all signals FIRST (prevents use-after-free)
+    QObject::disconnect(m_connection, nullptr, this, nullptr);
+    QObject::disconnect(m_connection, nullptr, m_receiverManager, nullptr);
+
+    // Ask worker thread to disconnect — use a short timeout to avoid deadlock
+    if (m_connThread && m_connThread->isRunning()) {
+        // Queue the disconnect call
+        QMetaObject::invokeMethod(m_connection, &RadioConnection::disconnect);
+        // Request the thread to exit its event loop
+        m_connThread->quit();
+        // Wait up to 2 seconds for clean shutdown
+        if (!m_connThread->wait(2000)) {
+            qCWarning(lcConnection) << "Worker thread did not stop in time, terminating";
+            m_connThread->terminate();
+            m_connThread->wait(1000);
+        }
+    }
+
+    delete m_connection;
+    m_connection = nullptr;
+
+    if (m_connThread) {
+        delete m_connThread;
+        m_connThread = nullptr;
     }
 }
 
-void RadioModel::onDataReceived(const QByteArray& data)
+void RadioModel::onConnectionStateChanged(ConnectionState state)
 {
-    Q_UNUSED(data);
-    // TODO: Parse incoming OpenHPSDR protocol data
-    // - Extract I/Q samples and route to WdspEngine
-    // - Extract meter data and route to MeterModel
-    // - Handle C&C feedback data
+    emit connectionStateChanged();
+
+    switch (state) {
+    case ConnectionState::Connected:
+        qCDebug(lcConnection) << "Connected to" << m_name;
+        break;
+    case ConnectionState::Disconnected:
+        qCDebug(lcConnection) << "Disconnected from" << m_name;
+        break;
+    case ConnectionState::Connecting:
+        qCDebug(lcConnection) << "Connecting to" << m_name << "...";
+        break;
+    case ConnectionState::Error:
+        qCWarning(lcConnection) << "Connection error for" << m_name;
+        break;
+    }
 }
 
 } // namespace NereusSDR

@@ -1,5 +1,6 @@
 #include "gui/MainWindow.h"
 #include "core/AppSettings.h"
+#include "core/LogCategories.h"
 
 #include <QApplication>
 #include <QStyleFactory>
@@ -117,6 +118,9 @@ int main(int argc, char* argv[])
 
     // Load XML settings
     NereusSDR::AppSettings::instance().load();
+
+    // Restore logging category toggles from settings
+    NereusSDR::LogManager::instance().loadSettings();
 
     qDebug() << "Starting NereusSDR" << app.applicationVersion();
 
