@@ -194,7 +194,12 @@ void RadioDiscovery::onReadyRead()
                 continue;
             }
 
-            info.address = datagram.senderAddress();
+            // Convert IPv6-mapped IPv4 (::ffff:x.x.x.x) to pure IPv4
+            // so writeDatagram works correctly on IPv4-only sockets
+            QHostAddress sender = datagram.senderAddress();
+            bool ok = false;
+            quint32 ipv4 = sender.toIPv4Address(&ok);
+            info.address = ok ? QHostAddress(ipv4) : sender;
             info.port = kDiscoveryPort;
             info.protocol = ProtocolVersion::Protocol1;
             info.inUse = (status == 0x03);
@@ -211,7 +216,12 @@ void RadioDiscovery::onReadyRead()
                 continue;
             }
 
-            info.address = datagram.senderAddress();
+            // Convert IPv6-mapped IPv4 (::ffff:x.x.x.x) to pure IPv4
+            // so writeDatagram works correctly on IPv4-only sockets
+            QHostAddress sender = datagram.senderAddress();
+            bool ok = false;
+            quint32 ipv4 = sender.toIPv4Address(&ok);
+            info.address = ok ? QHostAddress(ipv4) : sender;
             info.port = kDiscoveryPort;
             info.protocol = ProtocolVersion::Protocol2;
             info.inUse = (status == 0x03);

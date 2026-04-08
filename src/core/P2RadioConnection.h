@@ -12,12 +12,14 @@ namespace NereusSDR {
 
 // Protocol 2 connection for Orion MkII / Saturn (ANAN-G2) radios.
 //
-// P2 uses UDP-only communication on multiple dedicated ports:
-//   PC→Radio: 1024 (General), 1025 (RX config), 1026 (TX config), 1027 (HighPri)
-//   Radio→PC: 1025 (HighPri status), 1028 (RX audio), 1035-1041 (DDC I/Q)
+// Ported from Thetis ChannelMaster/network.c.
+// Uses a SINGLE UDP socket for all communication (matching Thetis listenSock).
+// Commands sent TO radio ports 1024-1027, radio responds FROM ports 1025-1041.
+// Dispatch based on source port of incoming packets.
 //
-// Start sequence: CmdGeneral → CmdRx → CmdTx → CmdHighPriority(run=1)
-// Stop:           CmdHighPriority(run=0)
+// Startup: SendStart() = set run=1, CmdGeneral+CmdRx+CmdTx+CmdHighPriority
+// Shutdown: SendStop() = set run=0, CmdHighPriority
+// Keepalive: CmdGeneral every 500ms (Thetis KeepAliveLoop)
 class P2RadioConnection : public RadioConnection {
     Q_OBJECT
 
@@ -41,59 +43,40 @@ public slots:
     void setAntenna(int antennaIndex) override;
 
 private slots:
-    void onDataReady();
-    void onHighPriorityStatusReady();
-    void onHighPriorityTick();
+    void onReadyRead();
+    void onKeepAliveTick();
     void onReconnectTimeout();
 
 private:
-    // --- P2 Command Packet Builders ---
-    // Each returns a fixed-size packet ready to send.
-    QByteArray buildCmdGeneral();          // 60 bytes → port 1024
-    QByteArray buildCmdRx();               // 1444 bytes → port 1025
-    QByteArray buildCmdTx();               // 60 bytes → port 1026
-    QByteArray buildCmdHighPriority();     // 1444 bytes → port 1027
-
-    // Send all configuration commands (used during connect and resync)
-    void sendAllCommands();
+    // --- P2 Command Senders (match Thetis CmdGeneral/CmdRx/CmdTx/CmdHighPriority) ---
+    // Returns bytes sent, or -1 on error.
+    qint64 sendCmdGeneral();          // 60 bytes -> radio:1024
+    qint64 sendCmdRx();               // 1444 bytes -> radio:1025
+    qint64 sendCmdTx();               // 60 bytes -> radio:1026
+    qint64 sendCmdHighPriority();     // 1444 bytes -> radio:1027
 
     // --- P2 Data Parsing ---
     void processIqPacket(const QByteArray& data, int ddcIndex);
     void processHighPriorityStatus(const QByteArray& data);
 
-    // 24-bit big-endian signed → float in [-1.0, 1.0]
+    // 24-bit big-endian signed → float (matches Thetis conversion exactly)
     static float decodeP2Sample(const unsigned char* p);
-
-    // Write a 32-bit big-endian unsigned value into a byte array at offset
     static void writeBE32(QByteArray& buf, int offset, quint32 value);
-    // Write a 16-bit big-endian unsigned value
     static void writeBE16(QByteArray& buf, int offset, quint16 value);
 
-    // --- Port Assignments ---
-    // P2 port map (offsets from base port 1024)
+    // --- Constants (from Thetis network.c) ---
     static constexpr quint16 kBasePort = 1024;
-    static constexpr quint16 kPortGeneral     = 1024;  // PC→Radio: general config
-    static constexpr quint16 kPortRxConfig    = 1025;  // PC→Radio: RX config
-    static constexpr quint16 kPortTxConfig    = 1026;  // PC→Radio: TX config
-    static constexpr quint16 kPortHighPri     = 1027;  // PC→Radio: high priority
-    static constexpr quint16 kPortHighPriFrom = 1025;  // Radio→PC: high priority status
-    static constexpr quint16 kPortRxAudio     = 1028;  // Radio→PC: RX audio
-    static constexpr quint16 kPortMicData     = 1029;  // PC→Radio: mic data
-    static constexpr quint16 kPortDdcBase     = 1035;  // Radio→PC: DDC0 I/Q (1035-1041)
-
-    static constexpr int kMaxDdc = 7;          // DDC0-DDC6
-    static constexpr int kSamplesPerPacket = 238;
+    static constexpr int kMaxDdc = 7;              // DDC0-DDC6
+    static constexpr int kSamplesPerPacket = 238;  // Thetis: prn->rx[0].spp
     static constexpr int kIqBytesPerSample = 6;    // 3 bytes I + 3 bytes Q
-    static constexpr int kIqDataOffset = 16;       // I/Q data starts at byte 16 in packet
-    static constexpr int kHighPriIntervalMs = 100;  // Resend high-priority every 100ms
+    static constexpr int kIqDataOffset = 16;       // I/Q data starts at byte 16
+    static constexpr int kKeepAliveIntervalMs = 500; // Thetis KeepAliveLoop interval
 
-    // --- Sockets ---
-    QUdpSocket* m_cmdSocket{nullptr};         // Sends commands to radio
-    QUdpSocket* m_dataSocket{nullptr};        // Receives I/Q data from radio
-    QUdpSocket* m_highPriStatusSocket{nullptr}; // Receives high-priority status from radio
+    // --- Single socket (matches Thetis listenSock) ---
+    QUdpSocket* m_socket{nullptr};
 
     // --- Timers ---
-    QTimer* m_highPriorityTimer{nullptr};  // Periodic high-priority command resend
+    QTimer* m_keepAliveTimer{nullptr};   // Thetis KeepAliveLoop (500ms CmdGeneral)
     QTimer* m_reconnectTimer{nullptr};
 
     // --- Sequence counters (per command type) ---
@@ -104,22 +87,17 @@ private:
 
     // --- Hardware state cache ---
     static constexpr int kMaxReceivers = 7;
-    std::array<quint64, kMaxReceivers> m_rxFrequencies{};  // Hz per DDC
+    std::array<quint64, kMaxReceivers> m_rxFrequencies{};
     quint64 m_txFrequency{14225000};
     int m_activeReceiverCount{1};
     int m_sampleRate{48000};
     int m_attenuatorDb{0};
     bool m_preampOn{false};
-    int m_txDriveLevel{0};     // 0-255
+    int m_txDriveLevel{0};
     bool m_mox{false};
     bool m_running{false};
     int m_antennaIndex{0};
-
     bool m_intentionalDisconnect{false};
-
-    // Local port the data socket is bound to (reported to radio in CmdGeneral)
-    quint16 m_localDataPort{0};
-    quint16 m_localHighPriStatusPort{0};
 
     // I/Q sample buffers (one per DDC, reused to avoid allocation)
     std::array<QVector<float>, kMaxDdc> m_iqBuffers;
@@ -127,7 +105,7 @@ private:
     // Sequence tracking for incoming I/Q packets
     std::array<quint32, kMaxDdc> m_lastIqSeq{};
     std::array<bool, kMaxDdc> m_firstIqPacket{};
-    int m_totalIqPackets{0};   // diagnostic counter
+    int m_totalIqPackets{0};
 };
 
 } // namespace NereusSDR
