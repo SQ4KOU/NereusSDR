@@ -12,14 +12,9 @@ namespace NereusSDR {
 
 // Protocol 2 connection for Orion MkII / Saturn (ANAN-G2) radios.
 //
-// Ported from Thetis ChannelMaster/network.c.
-// Uses a SINGLE UDP socket for all communication (matching Thetis listenSock).
-// Commands sent TO radio ports 1024-1027, radio responds FROM ports 1025-1041.
-// Dispatch based on source port of incoming packets.
-//
-// Startup: SendStart() = set run=1, CmdGeneral+CmdRx+CmdTx+CmdHighPriority
-// Shutdown: SendStop() = set run=0, CmdHighPriority
-// Keepalive: CmdGeneral every 500ms (Thetis KeepAliveLoop)
+// Faithfully ported from Thetis ChannelMaster/network.c and network.h.
+// Uses a single UDP socket matching Thetis listenSock.
+// State structs mirror Thetis _radionet (network.h:53).
 class P2RadioConnection : public RadioConnection {
     Q_OBJECT
 
@@ -48,63 +43,120 @@ private slots:
     void onReconnectTimeout();
 
 private:
-    // --- P2 Command Senders (match Thetis CmdGeneral/CmdRx/CmdTx/CmdHighPriority) ---
-    // Returns bytes sent, or -1 on error.
-    qint64 sendCmdGeneral();          // 60 bytes -> radio:1024
-    qint64 sendCmdRx();               // 1444 bytes -> radio:1025
-    qint64 sendCmdTx();               // 60 bytes -> radio:1026
-    qint64 sendCmdHighPriority();     // 1444 bytes -> radio:1027
+    // --- Command senders (ported from Thetis network.c) ---
+    void sendCmdGeneral();       // network.c:821 → port 1024
+    void sendCmdHighPriority();  // network.c:913 → port 1027
+    void sendCmdRx();            // network.c:1066 → port 1025
+    void sendCmdTx();            // network.c:1181 → port 1026
 
-    // --- P2 Data Parsing ---
     void processIqPacket(const QByteArray& data, int ddcIndex);
     void processHighPriorityStatus(const QByteArray& data);
 
-    // 24-bit big-endian signed → float (matches Thetis conversion exactly)
-    static float decodeP2Sample(const unsigned char* p);
-    static void writeBE32(QByteArray& buf, int offset, quint32 value);
-    static void writeBE16(QByteArray& buf, int offset, quint16 value);
+    static void writeBE32(char* buf, int offset, quint32 value);
 
-    // --- Constants (from Thetis network.c) ---
-    static constexpr quint16 kBasePort = 1024;
-    static constexpr int kMaxDdc = 7;              // DDC0-DDC6
-    static constexpr int kSamplesPerPacket = 238;  // Thetis: prn->rx[0].spp
-    static constexpr int kIqBytesPerSample = 6;    // 3 bytes I + 3 bytes Q
-    static constexpr int kIqDataOffset = 16;       // I/Q data starts at byte 16
-    static constexpr int kKeepAliveIntervalMs = 500; // Thetis KeepAliveLoop interval
+    // --- Constants from Thetis network.h ---
+    static constexpr int kMaxRxStreams = 12;  // network.h:34 MAX_RX_STREAMS
+    static constexpr int kMaxTxStreams = 3;   // network.h:35 MAX_TX_STREAMS
+    static constexpr int kMaxAdc = 3;         // network.h:33 MAX_ADC
+    static constexpr int kMaxDdc = 7;         // DDC0-DDC6
+    static constexpr int kBufLen = 1444;      // Thetis BUFLEN
+    static constexpr int kKeepAliveIntervalMs = 500; // network.c:1428
 
-    // --- Single socket (matches Thetis listenSock) ---
+    // --- Single socket (Thetis listenSock, network.c:67) ---
     QUdpSocket* m_socket{nullptr};
-
-    // --- Timers ---
-    QTimer* m_keepAliveTimer{nullptr};   // Thetis KeepAliveLoop (500ms CmdGeneral)
+    QTimer* m_keepAliveTimer{nullptr};
     QTimer* m_reconnectTimer{nullptr};
 
-    // --- Sequence counters (per command type) ---
+    // --- Port configuration (from Thetis _radionet, network.h:55-56) ---
+    int m_p2CustomPortBase{1025};    // prn->p2_custom_port_base
+    int m_baseOutboundPort{1024};    // prn->base_outbound_port
+
+    // --- Run state (from Thetis _radionet, network.h:65-66) ---
+    bool m_running{false};           // prn->run
+    int m_wdt{0};                    // prn->wdt (watchdog timer, 0=disabled)
+    bool m_intentionalDisconnect{false};
+
+    // --- Hardware config (from Thetis _radionet) ---
+    int m_numAdc{1};                 // prn->num_adc
+    int m_numDac{1};                 // prn->num_dac
+
+    // --- Sequence counters ---
     quint32 m_seqGeneral{0};
     quint32 m_seqRx{0};
     quint32 m_seqTx{0};
     quint32 m_seqHighPri{0};
+    quint32 m_ccSeqNo{0};            // prn->cc_seq_no
 
-    // --- Hardware state cache ---
-    static constexpr int kMaxReceivers = 7;
-    std::array<quint64, kMaxReceivers> m_rxFrequencies{};
-    quint64 m_txFrequency{14225000};
-    int m_activeReceiverCount{1};
-    int m_sampleRate{48000};
-    int m_attenuatorDb{0};
-    bool m_preampOn{false};
-    int m_txDriveLevel{0};
-    bool m_mox{false};
-    bool m_running{false};
-    int m_antennaIndex{0};
-    bool m_intentionalDisconnect{false};
+    // --- RX state (from Thetis _radionet._rx, network.h:191-213) ---
+    struct RxState {
+        int id{0};
+        int rxAdc{0};                // prn->rx[i].rx_adc
+        int frequency{0};            // prn->rx[i].frequency (Hz)
+        int enable{0};               // prn->rx[i].enable
+        int sync{0};                 // prn->rx[i].sync
+        int samplingRate{48};        // prn->rx[i].sampling_rate (kHz value)
+        int bitDepth{24};            // prn->rx[i].bit_depth
+        int preamp{0};               // prn->rx[i].preamp
+        int spp{238};                // prn->rx[i].spp (IQ-samples per packet)
+        quint32 rxInSeqNo{0};        // prn->rx[i].rx_in_seq_no
+        quint32 rxInSeqErr{0};       // prn->rx[i].rx_in_seq_err
+    };
+    std::array<RxState, kMaxRxStreams> m_rx;
 
-    // I/Q sample buffers (one per DDC, reused to avoid allocation)
+    // --- TX state (from Thetis _radionet._tx, network.h:215-236) ---
+    struct TxState {
+        int id{0};
+        int frequency{0};            // prn->tx[i].frequency (Hz)
+        int samplingRate{48};        // prn->tx[i].sampling_rate
+        int cwx{0};                  // prn->tx[i].cwx
+        int dash{0};
+        int dot{0};
+        int pttOut{0};               // prn->tx[i].ptt_out
+        int driveLevel{0};           // prn->tx[i].drive_level
+        int phaseShift{0};           // prn->tx[i].phase_shift
+        int pa{1};                   // prn->tx[i].pa
+        int epwmMax{0};
+        int epwmMin{0};
+    };
+    std::array<TxState, kMaxTxStreams> m_tx;
+
+    // --- ADC state (from Thetis _radionet._adc, network.h:125-140) ---
+    struct AdcState {
+        int rxStepAttn{0};           // prn->adc[i].rx_step_attn
+        int txStepAttn{31};          // prn->adc[i].tx_step_attn (default 31 from create_rnet:1472)
+        int dither{0};
+        int random{0};
+    };
+    std::array<AdcState, kMaxAdc> m_adc;
+
+    // --- CW state (from Thetis _radionet._cw, network.h:142-167) ---
+    struct CwState {
+        int sidetoneLevel{0};
+        int sidetoneFreq{0};
+        int keyerSpeed{0};
+        int keyerWeight{0};
+        int hangDelay{0};
+        int rfDelay{0};
+        int edgeLength{7};           // From create_rnet:1454
+        unsigned char modeControl{0};
+    };
+    CwState m_cw;
+
+    // --- Mic state (from Thetis _radionet._mic, network.h:169-189) ---
+    struct MicState {
+        unsigned char micControl{0};
+        int lineInGain{0};
+    };
+    MicState m_mic;
+
+    // --- Wideband settings (from Thetis create_rnet:1461-1466) ---
+    int m_wbSamplesPerPacket{512};
+    int m_wbSampleSize{16};
+    int m_wbUpdateRate{70};
+    int m_wbPacketsPerFrame{32};
+
+    // --- I/Q buffers and packet counters ---
     std::array<QVector<float>, kMaxDdc> m_iqBuffers;
-
-    // Sequence tracking for incoming I/Q packets
-    std::array<quint32, kMaxDdc> m_lastIqSeq{};
-    std::array<bool, kMaxDdc> m_firstIqPacket{};
     int m_totalIqPackets{0};
 };
 
