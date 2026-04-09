@@ -54,6 +54,10 @@ private:
 
     static void writeBE32(char* buf, int offset, quint32 value);
 
+    // From pcap analysis: phase_word = freq_hz * 2^32 / 122880000
+    // General cmd byte 37 bit 3 = 1 means radio expects phase words, not Hz.
+    static quint32 hzToPhaseWord(quint64 freqHz);
+
     // --- Constants from Thetis network.h ---
     static constexpr int kMaxRxStreams = 12;  // network.h:34 MAX_RX_STREAMS
     static constexpr int kMaxTxStreams = 3;   // network.h:35 MAX_TX_STREAMS

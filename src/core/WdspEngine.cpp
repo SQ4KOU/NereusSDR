@@ -253,9 +253,10 @@ RxChannel* WdspEngine::createRxChannel(int channelId,
         0.05,                   // backtau    — from Thetis cmaster.c:67
         30.0);                  // threshold  — from Thetis cmaster.c:68
 
-    // Set defaults: USB mode, standard SSB bandpass, medium AGC
-    SetRXAMode(channelId, static_cast<int>(DSPMode::USB));
-    SetRXABandpassFreqs(channelId, 150.0, 2850.0);
+    // Set defaults: LSB mode for 80m, standard SSB bandpass, medium AGC
+    // TODO: Make mode configurable from SliceModel (currently hardcoded for 3865 LSB testing)
+    SetRXAMode(channelId, static_cast<int>(DSPMode::LSB));
+    SetRXABandpassFreqs(channelId, -2850.0, -150.0);
     SetRXAAGCMode(channelId, static_cast<int>(AGCMode::Med));
     SetRXAAGCTop(channelId, 80.0);
 

@@ -125,8 +125,21 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // This means DDC2 is the primary receiver, not DDC0!
     // From Thetis console.cs:8234-8241
     m_rx[2].enable = 1;
-    m_rx[2].frequency = 14225000;  // Default 20m
-    m_rx[2].samplingRate = 48;     // 48 kHz
+    m_rx[2].frequency = 3865000;   // 80m LSB — 3865 kHz
+    m_rx[2].samplingRate = 48;     // 48 kHz — keep matching WDSP input rate
+    // Note: pcap shows Thetis uses 768 kHz for wider spectrum. To enable that,
+    // WDSP must also be configured for 768 kHz input (future work).
+
+    // From pcap: Thetis enables dither and random on all ADCs
+    m_adc[0].dither = 1;
+    m_adc[1].dither = 1;
+    m_adc[2].dither = 1;
+    m_adc[0].random = 1;
+    m_adc[1].random = 1;
+    m_adc[2].random = 1;
+
+    // TX frequency (same as RX dial for simplex) — from pcap: TX0 = 3865000 Hz
+    m_tx[0].frequency = 3865000;
 
     setState(ConnectionState::Connecting);
 
@@ -456,17 +469,20 @@ void P2RadioConnection::sendCmdHighPriority()
     buf[5] = (m_tx[0].dash << 2 | m_tx[0].dot << 1 | m_tx[0].cwx) & 0x7;
 
     // From Thetis network.c:936-1005
-    // RX frequencies — 4 bytes each, big-endian Hz
+    // RX frequencies — 4 bytes each, big-endian phase words.
+    // General cmd byte 37 = 0x08 (bit 3) means frequencies are NCO phase words.
+    // From pcap analysis: phase_word = freq_hz * 2^32 / 122880000
     // RX0-RX1 have PureSignal override logic; for now use straight frequency
     for (int i = 0; i < kMaxRxStreams; ++i) {
         int offset = 9 + (i * 4);
         if (offset + 3 < kBufLen) {
-            writeBE32(buf, offset, static_cast<quint32>(m_rx[i].frequency));
+            quint32 phaseWord = hzToPhaseWord(m_rx[i].frequency);
+            writeBE32(buf, offset, phaseWord);
         }
     }
 
-    // From Thetis network.c:1008-1011 — TX0 frequency
-    writeBE32(buf, 329, static_cast<quint32>(m_tx[0].frequency));
+    // From Thetis network.c:1008-1011 — TX0 frequency (also phase word)
+    writeBE32(buf, 329, hzToPhaseWord(m_tx[0].frequency));
 
     // From Thetis network.c:1014
     buf[345] = m_tx[0].driveLevel;
@@ -477,6 +493,12 @@ void P2RadioConnection::sendCmdHighPriority()
     // From Thetis network.c:1055-1057 — Step Attenuators
     buf[1442] = m_adc[1].rxStepAttn;
     buf[1443] = m_adc[0].rxStepAttn;
+
+    // From pcap analysis: Alex filter registers (bytes 1428-1435)
+    // Alex0 and Alex1: 0x01400020 = ANT1 + 80/60m BPF for 80m band
+    // TODO: Compute dynamically based on frequency band (port from Thetis)
+    writeBE32(buf, 1428, 0x01400020);  // Alex0
+    writeBE32(buf, 1432, 0x01400020);  // Alex1
 
     // From Thetis network.c:1062
     // sendPacket(listenSock, packetbuf, BUFLEN, prn->base_outbound_port + 3);
@@ -676,6 +698,15 @@ void P2RadioConnection::writeBE32(char* buf, int offset, quint32 value)
     buf[offset + 1] = static_cast<char>((value >> 16) & 0xFF);
     buf[offset + 2] = static_cast<char>((value >> 8)  & 0xFF);
     buf[offset + 3] = static_cast<char>( value        & 0xFF);
+}
+
+// From pcap analysis: phase_word = freq_hz * 2^32 / 122880000
+// The ANAN-G2 clock is 122.88 MHz. Phase word mode (General byte 37 bit 3)
+// tells the radio to interpret frequency fields as NCO phase increments.
+quint32 P2RadioConnection::hzToPhaseWord(quint64 freqHz)
+{
+    // Use 64-bit math to avoid overflow: freq * 2^32 / 122880000
+    return static_cast<quint32>((freqHz * 4294967296ULL) / 122880000ULL);
 }
 
 } // namespace NereusSDR
