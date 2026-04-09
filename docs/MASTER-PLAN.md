@@ -65,10 +65,20 @@ NereusSDR is a ground-up port of Thetis (OpenHPSDR SDR console) from C# to Qt6/C
 - Fixed use-after-free crash: wisdom poll timer accessing deleted QThread
 - Builds and runs on macOS Apple Silicon (commit bdb55e0)
 
+### In Progress: Phase 3D — GPU Spectrum & Waterfall
+- FFTEngine: FFTW3 float-precision on dedicated spectrum worker thread
+- SpectrumWidget: QPainter CPU rendering (spectrum trace + waterfall ring buffer)
+- 4096-point FFT, Blackman-Harris 4-term window, 30 FPS rate limiting
+- Waterfall scroll direction ported from Thetis display.cs:7719 pattern
+- AetherSDR default color scheme (black→blue→cyan→green→yellow→red)
+- Signal routing: RadioModel::rawIqData → FFTEngine → SpectrumWidget
+- Live spectrum verified with ANAN-G2 at 14.2 MHz (commit 39e35a6)
+- Remaining: color mapping improvements, GPU rendering, overlays, settings UI
+
 ### CI Status: GREEN
 - Build passes on Ubuntu 24.04 with Qt6, cmake, ninja, fftw3
 - Windows local build passes with Qt 6.11.0 / MinGW 13.1
-- macOS Apple Silicon build passes (local, commit bdb55e0)
+- macOS Apple Silicon build passes (local, commit 39e35a6)
 
 ---
 

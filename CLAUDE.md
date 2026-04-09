@@ -193,6 +193,8 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 * `WdspEngine` — WDSP lifecycle manager (wisdom, channels, impulse cache)
 * `RxChannel` — per-receiver WDSP channel wrapper (fexchange2, NB, mode/filter/AGC)
 * `AudioEngine` — QAudioSink output (Int16 stereo, timer-based drain)
+* `FFTEngine` — FFTW3 spectrum computation (worker thread, I/Q → dBm bins)
+* `SpectrumWidget` — spectrum trace + waterfall display (QPainter, future QRhi GPU)
 * `AppSettings` — custom XML settings persistence (NOT QSettings)
 * `MainWindow` — wires everything together, signal routing hub
 
