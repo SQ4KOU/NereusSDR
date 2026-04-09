@@ -125,7 +125,7 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // This means DDC2 is the primary receiver, not DDC0!
     // From Thetis console.cs:8234-8241
     m_rx[2].enable = 1;
-    m_rx[2].frequency = 3865000;   // 80m LSB — 3865 kHz
+    m_rx[2].frequency = 14225000;  // Default — overridden by SliceModel via setReceiverFrequency
     m_rx[2].samplingRate = 48;     // 48 kHz — keep matching WDSP input rate
     // Note: pcap shows Thetis uses 768 kHz for wider spectrum. To enable that,
     // WDSP must also be configured for 768 kHz input (future work).
@@ -138,8 +138,8 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     m_adc[1].random = 1;
     m_adc[2].random = 1;
 
-    // TX frequency (same as RX dial for simplex) — from pcap: TX0 = 3865000 Hz
-    m_tx[0].frequency = 3865000;
+    // TX frequency — overridden by SliceModel via setTxFrequency (simplex: TX=RX)
+    m_tx[0].frequency = 14225000;
 
     setState(ConnectionState::Connecting);
 
@@ -202,6 +202,13 @@ void P2RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
         return;
     }
     m_rx[receiverIndex].frequency = static_cast<int>(frequencyHz);
+
+    // Update Alex HPF/LPF based on new frequency
+    // From Thetis console.cs:6830-7234 — auto-select band filters
+    double freqMhz = frequencyHz / 1e6;
+    m_alex.hpfBits = computeAlexHpf(freqMhz);
+    m_alex.lpfBits = computeAlexLpf(freqMhz);
+
     if (m_running) {
         sendCmdHighPriority();
     }
@@ -277,8 +284,12 @@ void P2RadioConnection::setMox(bool enabled)
 
 void P2RadioConnection::setAntenna(int antennaIndex)
 {
-    Q_UNUSED(antennaIndex);
-    // Alex filter/antenna control is complex — deferred to later
+    // antennaIndex: 0=ANT1, 1=ANT2, 2=ANT3
+    m_alex.rxAnt = antennaIndex + 1;  // 1-based for Alex register encoding
+    m_alex.txAnt = antennaIndex + 1;
+    if (m_running) {
+        sendCmdHighPriority();
+    }
 }
 
 // --- UDP Reception ---
@@ -494,11 +505,12 @@ void P2RadioConnection::sendCmdHighPriority()
     buf[1442] = m_adc[1].rxStepAttn;
     buf[1443] = m_adc[0].rxStepAttn;
 
-    // From pcap analysis: Alex filter registers (bytes 1428-1435)
-    // Alex0 and Alex1: 0x01400020 = ANT1 + 80/60m BPF for 80m band
-    // TODO: Compute dynamically based on frequency band (port from Thetis)
-    writeBE32(buf, 1428, 0x01400020);  // Alex0
-    writeBE32(buf, 1432, 0x01400020);  // Alex1
+    // Alex filter/antenna registers (bytes 1428-1435)
+    // From Thetis ChannelMaster/network.c:1040-1050
+    // Alex0 (bytes 1432-1435): RX antenna + HPF + LPF
+    // Alex1 (bytes 1428-1431): TX antenna + HPF + LPF
+    writeBE32(buf, 1432, buildAlex0());
+    writeBE32(buf, 1428, buildAlex1());
 
     // From Thetis network.c:1062
     // sendPacket(listenSock, packetbuf, BUFLEN, prn->base_outbound_port + 3);
@@ -707,6 +719,147 @@ quint32 P2RadioConnection::hzToPhaseWord(quint64 freqHz)
 {
     // Use 64-bit math to avoid overflow: freq * 2^32 / 122880000
     return static_cast<quint32>((freqHz * 4294967296ULL) / 122880000ULL);
+}
+
+// ============================================================================
+// Alex Filter/Antenna Register Computation
+// ============================================================================
+
+// Porting from Thetis console.cs:6830-6942 — setAlexHPF
+// Selects the appropriate high-pass filter based on RX frequency.
+// Returns HPF bits for the Alex bpfilter register.
+int P2RadioConnection::computeAlexHpf(double freqMhz)
+{
+    // From Thetis console.cs:6836-6939 — frequency breakpoints with default ranges
+    // Each HPF has a start/end range; these are the Thetis defaults.
+    if (freqMhz < 1.5) {
+        return 0x20;   // Bypass HPF (below 1.5 MHz)
+    }
+    if (freqMhz < 6.5) {
+        return 0x10;   // 1.5 MHz HPF
+    }
+    if (freqMhz < 9.5) {
+        return 0x08;   // 6.5 MHz HPF
+    }
+    if (freqMhz < 13.0) {
+        return 0x04;   // 9.5 MHz HPF
+    }
+    if (freqMhz < 20.0) {
+        return 0x01;   // 13 MHz HPF
+    }
+    if (freqMhz < 50.0) {
+        return 0x02;   // 20 MHz HPF
+    }
+    // 6m band: use 6M BPF/preamp
+    return 0x40;       // 6M preamp/BPF
+}
+
+// Porting from Thetis console.cs:7168-7234 — setAlexLPF
+// Selects the appropriate low-pass filter based on TX frequency.
+// Returns LPF bits for the Alex bpfilter register.
+int P2RadioConnection::computeAlexLpf(double freqMhz)
+{
+    // From Thetis console.cs:7172-7230 — frequency breakpoints with default ranges
+    if (freqMhz < 2.0) {
+        return 0x08;   // 160m LPF
+    }
+    if (freqMhz < 4.0) {
+        return 0x04;   // 80m LPF
+    }
+    if (freqMhz < 7.3) {
+        return 0x02;   // 60/40m LPF
+    }
+    if (freqMhz < 14.35) {
+        return 0x01;   // 30/20m LPF
+    }
+    if (freqMhz < 21.45) {
+        return 0x40;   // 17/15m LPF
+    }
+    if (freqMhz < 29.7) {
+        return 0x20;   // 12/10m LPF
+    }
+    // 6m and above
+    return 0x10;       // 6m LPF
+}
+
+// Build Alex0 32-bit register (bytes 1432-1435 in CmdHighPriority).
+// Contains: RX antenna (bits 24-26), LPF (bits 20-31), HPF (bits 0-6),
+//           RX relay bits (bits 8-15).
+// From Thetis ChannelMaster/network.h:263-358 bpfilter struct.
+quint32 P2RadioConnection::buildAlex0() const
+{
+    quint32 reg = 0;
+
+    // RX antenna selection — from Thetis netInterface.c:479-485
+    // ANT1=0x01, ANT2=0x02, ANT3=0x03 → bits 24-26
+    int antBits = m_alex.rxAnt & 0x03;
+    if (antBits == 0x01) {
+        reg |= (1 << 24);  // _ANT_1
+    } else if (antBits == 0x02) {
+        reg |= (1 << 25);  // _ANT_2
+    } else if (antBits == 0x03) {
+        reg |= (1 << 26);  // _ANT_3
+    }
+
+    // LPF bits — from Thetis netInterface.c:682-726
+    // Bits map: 30_20[20], 60_40[21], 80[22], 160[23], 6[29], 12_10[30], 17_15[31]
+    if (m_alex.lpfBits & 0x01) { reg |= (1 << 20); }  // 30/20m
+    if (m_alex.lpfBits & 0x02) { reg |= (1 << 21); }  // 60/40m
+    if (m_alex.lpfBits & 0x04) { reg |= (1 << 22); }  // 80m
+    if (m_alex.lpfBits & 0x08) { reg |= (1 << 23); }  // 160m
+    if (m_alex.lpfBits & 0x10) { reg |= (1 << 29); }  // 6m
+    if (m_alex.lpfBits & 0x20) { reg |= (1 << 30); }  // 12/10m
+    if (m_alex.lpfBits & 0x40) { reg |= (1 << 31); }  // 17/15m
+
+    // HPF bits — from Thetis netInterface.c:605-621
+    // Bits map: 13MHz[1], 20MHz[2], 6M_preamp[3], 9.5MHz[4], 6.5MHz[5], 1.5MHz[6]
+    if (m_alex.hpfBits & 0x01) { reg |= (1 << 1); }   // 13 MHz
+    if (m_alex.hpfBits & 0x02) { reg |= (1 << 2); }   // 20 MHz
+    if (m_alex.hpfBits & 0x04) { reg |= (1 << 4); }   // 9.5 MHz
+    if (m_alex.hpfBits & 0x08) { reg |= (1 << 5); }   // 6.5 MHz
+    if (m_alex.hpfBits & 0x10) { reg |= (1 << 6); }   // 1.5 MHz
+    if (m_alex.hpfBits & 0x20) { reg |= (1 << 12); }  // Bypass
+    if (m_alex.hpfBits & 0x40) { reg |= (1 << 3); }   // 6M preamp
+
+    return reg;
+}
+
+// Build Alex1 32-bit register (bytes 1428-1431 in CmdHighPriority).
+// Contains: TX antenna (bits 24-26), same LPF/HPF layout as Alex0.
+// From Thetis ChannelMaster/network.h bpfilter2 struct.
+quint32 P2RadioConnection::buildAlex1() const
+{
+    quint32 reg = 0;
+
+    // TX antenna selection — same encoding as RX but in Alex1
+    int antBits = m_alex.txAnt & 0x03;
+    if (antBits == 0x01) {
+        reg |= (1 << 24);  // _TXANT_1
+    } else if (antBits == 0x02) {
+        reg |= (1 << 25);  // _TXANT_2
+    } else if (antBits == 0x03) {
+        reg |= (1 << 26);  // _TXANT_3
+    }
+
+    // Same LPF bits as Alex0 (TX uses same LPF selection)
+    if (m_alex.lpfBits & 0x01) { reg |= (1 << 20); }
+    if (m_alex.lpfBits & 0x02) { reg |= (1 << 21); }
+    if (m_alex.lpfBits & 0x04) { reg |= (1 << 22); }
+    if (m_alex.lpfBits & 0x08) { reg |= (1 << 23); }
+    if (m_alex.lpfBits & 0x10) { reg |= (1 << 29); }
+    if (m_alex.lpfBits & 0x20) { reg |= (1 << 30); }
+    if (m_alex.lpfBits & 0x40) { reg |= (1 << 31); }
+
+    // Same HPF bits
+    if (m_alex.hpfBits & 0x01) { reg |= (1 << 1); }
+    if (m_alex.hpfBits & 0x02) { reg |= (1 << 2); }
+    if (m_alex.hpfBits & 0x04) { reg |= (1 << 4); }
+    if (m_alex.hpfBits & 0x08) { reg |= (1 << 5); }
+    if (m_alex.hpfBits & 0x10) { reg |= (1 << 6); }
+    if (m_alex.hpfBits & 0x20) { reg |= (1 << 12); }
+    if (m_alex.hpfBits & 0x40) { reg |= (1 << 3); }
+
+    return reg;
 }
 
 } // namespace NereusSDR

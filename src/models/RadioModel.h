@@ -90,7 +90,11 @@ private slots:
 
 private:
     void wireConnectionSignals();
+    void wireSliceSignals();
     void teardownConnection();
+    void loadSliceState(SliceModel* slice);
+    void saveSliceState(SliceModel* slice);
+    void scheduleSettingsSave();
 
     // Sub-components (owned, main thread)
     RadioDiscovery*  m_discovery{nullptr};
@@ -125,6 +129,9 @@ private:
     static constexpr int kWdspBufSize = 1024;
     QVector<float> m_iqAccumI;
     QVector<float> m_iqAccumQ;
+
+    // Settings save coalescing
+    bool m_settingsSaveScheduled{false};
 };
 
 } // namespace NereusSDR

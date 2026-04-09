@@ -36,6 +36,7 @@ private:
     void buildStatusBar();
     void applyDarkTheme();
     void tryAutoReconnect();
+    void wireSliceToSpectrum();
 
     RadioModel* m_radioModel{nullptr};
     ConnectionPanel* m_connectionPanel{nullptr};

@@ -134,6 +134,36 @@ void ReceiverManager::setReceiverSampleRate(int receiverIndex, int sampleRate)
     m_receivers[receiverIndex].sampleRate = sampleRate;
 }
 
+void ReceiverManager::setDdcMapping(int receiverIndex, int ddcIndex)
+{
+    if (!m_receivers.contains(receiverIndex)) {
+        return;
+    }
+    m_receivers[receiverIndex].ddcIndex = ddcIndex;
+    if (m_receivers[receiverIndex].active) {
+        rebuildHardwareMapping();
+    }
+    qCDebug(lcReceiver) << "Receiver" << receiverIndex << "mapped to DDC" << ddcIndex;
+}
+
+int ReceiverManager::ddcIndex(int receiverIndex) const
+{
+    auto it = m_receivers.constFind(receiverIndex);
+    if (it != m_receivers.constEnd()) {
+        return it->hardwareRx;
+    }
+    return -1;
+}
+
+void ReceiverManager::setAdcForReceiver(int receiverIndex, int adcIndex)
+{
+    if (!m_receivers.contains(receiverIndex)) {
+        return;
+    }
+    m_receivers[receiverIndex].adcIndex = adcIndex;
+    qCDebug(lcReceiver) << "Receiver" << receiverIndex << "using ADC" << adcIndex;
+}
+
 void ReceiverManager::feedIqData(int hwReceiverIndex, const QVector<float>& samples)
 {
     auto it = m_hwToLogical.constFind(hwReceiverIndex);
@@ -143,8 +173,11 @@ void ReceiverManager::feedIqData(int hwReceiverIndex, const QVector<float>& samp
 
     int logicalIndex = it.value();
     auto rxIt = m_receivers.constFind(logicalIndex);
-    if (rxIt != m_receivers.constEnd() && rxIt->wdspChannel >= 0) {
-        emit iqDataForChannel(rxIt->wdspChannel, samples);
+    if (rxIt != m_receivers.constEnd()) {
+        emit iqDataForReceiver(logicalIndex, samples);
+        if (rxIt->wdspChannel >= 0) {
+            emit iqDataForChannel(rxIt->wdspChannel, samples);
+        }
     }
 }
 
@@ -152,19 +185,23 @@ void ReceiverManager::rebuildHardwareMapping()
 {
     m_hwToLogical.clear();
 
-    // Assign sequential hardware DDC indices to active receivers
-    int hwIndex = 0;
+    // Assign hardware DDC indices to active receivers.
+    // If a receiver has an explicit ddcIndex set (e.g., DDC2 for ANAN-G2 RX1),
+    // use that. Otherwise fall back to sequential assignment.
+    // From Thetis console.cs:8216 UpdateDDCs — DDC mapping is board-dependent.
+    int nextAutoHw = 0;
+    int count = 0;
     for (auto it = m_receivers.begin(); it != m_receivers.end(); ++it) {
         if (it->active) {
-            it->hardwareRx = hwIndex;
-            m_hwToLogical.insert(hwIndex, it->receiverIndex);
-            ++hwIndex;
+            int hwIdx = (it->ddcIndex >= 0) ? it->ddcIndex : nextAutoHw++;
+            it->hardwareRx = hwIdx;
+            m_hwToLogical.insert(hwIdx, it->receiverIndex);
+            ++count;
         } else {
             it->hardwareRx = -1;
         }
     }
 
-    int count = hwIndex;
     qCDebug(lcReceiver) << "Hardware mapping rebuilt:" << count << "active receivers";
 
     emit activeReceiverCountChanged(count);

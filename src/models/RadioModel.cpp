@@ -5,10 +5,12 @@
 #include "core/AudioEngine.h"
 #include "core/WdspEngine.h"
 #include "core/RxChannel.h"
+#include "core/AppSettings.h"
 #include "core/LogCategories.h"
 
 #include <QMetaObject>
 #include <QStandardPaths>
+#include <QTimer>
 #include <QVector>
 
 namespace NereusSDR {
@@ -49,6 +51,7 @@ int RadioModel::addSlice()
 {
     auto* slice = new SliceModel(this);
     int index = m_slices.size();
+    slice->setSliceIndex(index);
     m_slices.append(slice);
 
     if (!m_activeSlice) {
@@ -125,6 +128,23 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // Configure ReceiverManager with hardware capabilities
     m_receiverManager->setMaxReceivers(info.maxReceivers);
 
+    // Create receiver 0 with DDC mapping for ANAN-G2
+    // From Thetis console.cs:8216 UpdateDDCs: DDC2 is the primary RX for 2-ADC boards
+    int rxIdx = m_receiverManager->createReceiver();
+    m_receiverManager->setDdcMapping(rxIdx, 2);   // DDC2 for ANAN-G2
+    m_receiverManager->setAdcForReceiver(rxIdx, 0); // ADC0
+
+    // Create slice 0 and load persisted VFO state from AppSettings
+    if (m_slices.isEmpty()) {
+        addSlice();
+    }
+    setActiveSlice(0);
+    m_activeSlice->setReceiverIndex(rxIdx);
+    loadSliceState(m_activeSlice);
+
+    // Activate receiver (this sends hardwareReceiverCountChanged to RadioConnection)
+    m_receiverManager->activateReceiver(rxIdx);
+
     // Initialize WDSP DSP engine (wisdom runs async — channel creation
     // is deferred until initializedChanged fires)
     QString configDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
@@ -136,7 +156,19 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // 1024 samples input buffer (standard WDSP size), accumulate from 238-sample P2 packets
         RxChannel* rxCh = m_wdspEngine->createRxChannel(0, 1024, 4096, 48000, 48000, 48000);
         if (rxCh) {
+            // Apply slice state to WDSP channel (no longer hardcoded)
+            if (m_activeSlice) {
+                rxCh->setMode(m_activeSlice->dspMode());
+                rxCh->setFilterFreqs(m_activeSlice->filterLow(),
+                                     m_activeSlice->filterHigh());
+                rxCh->setAgcMode(m_activeSlice->agcMode());
+                rxCh->setAgcTop(m_activeSlice->rfGain());
+            }
             rxCh->setActive(true);
+        }
+        // Apply volume from slice
+        if (m_activeSlice) {
+            m_audioEngine->setVolume(m_activeSlice->afGain() / 100.0f);
         }
         // Start audio output
         m_audioEngine->start();
@@ -191,22 +223,28 @@ void RadioModel::wireConnectionSignals()
     connect(m_connection, &RadioConnection::connectionStateChanged,
             this, &RadioModel::onConnectionStateChanged);
 
-    // I/Q data → accumulate → WDSP → AudioEngine
-    // Bypass ReceiverManager DDC mapping for now — ANAN-G2 uses DDC2 as primary
-    // receiver but ReceiverManager assigns sequential hw indices starting at 0.
-    // TODO: Port full UpdateDDCs() logic from Thetis console.cs:8186
-    //
-    // Accumulate 238-sample P2 packets into 1024-sample WDSP buffers.
-    // This reduces fexchange2 call rate from ~200/sec to ~47/sec and uses
-    // a standard power-of-2 buffer size that WDSP handles reliably.
+    // --- Slice → WDSP + RadioConnection ---
+    // Wire active slice property changes to WDSP DSP engine and radio hardware.
+    wireSliceSignals();
+
+    // --- I/Q data → ReceiverManager → WDSP → AudioEngine ---
+    // Route through ReceiverManager for DDC-aware mapping.
+    // ReceiverManager maps DDC indices to logical receivers.
     m_iqAccumI.clear();
     m_iqAccumQ.clear();
     m_iqAccumI.reserve(kWdspBufSize);
     m_iqAccumQ.reserve(kWdspBufSize);
 
+    // Step 1: RadioConnection I/Q → ReceiverManager (DDC routing)
     connect(m_connection, &RadioConnection::iqDataReceived,
             this, [this](int ddcIndex, const QVector<float>& samples) {
-        Q_UNUSED(ddcIndex);
+        m_receiverManager->feedIqData(ddcIndex, samples);
+    });
+
+    // Step 2: ReceiverManager → processReceiverIq (WDSP + audio + FFT)
+    connect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
+            this, [this](int receiverIndex, const QVector<float>& samples) {
+        Q_UNUSED(receiverIndex);
 
         // Fork raw I/Q to spectrum display (before WDSP processing)
         emit rawIqData(samples);
@@ -245,7 +283,6 @@ void RadioModel::wireConnectionSignals()
             this, [this](float fwd, float rev, float voltage, float current) {
         Q_UNUSED(voltage);
         Q_UNUSED(current);
-        // MeterModel update — expand when MeterModel has proper setters
         Q_UNUSED(fwd);
         Q_UNUSED(rev);
     });
@@ -257,7 +294,6 @@ void RadioModel::wireConnectionSignals()
     });
 
     // ReceiverManager → RadioConnection (hardware updates)
-    // These use QMetaObject::invokeMethod to cross from main→connection thread
     connect(m_receiverManager, &ReceiverManager::hardwareReceiverCountChanged,
             this, [this](int count) {
         if (m_connection) {
@@ -275,6 +311,197 @@ void RadioModel::wireConnectionSignals()
             });
         }
     });
+}
+
+// Wire active slice signals to WDSP channel and radio hardware.
+// Called from wireConnectionSignals after connection is established.
+void RadioModel::wireSliceSignals()
+{
+    if (!m_activeSlice || !m_connection) {
+        return;
+    }
+
+    SliceModel* slice = m_activeSlice;
+
+    // Frequency → ReceiverManager → radio hardware
+    // ReceiverManager handles DDC mapping (receiver 0 → DDC2 for ANAN-G2)
+    connect(slice, &SliceModel::frequencyChanged, this, [this, slice](double freq) {
+        int rxIdx = slice->receiverIndex();
+        if (rxIdx >= 0) {
+            m_receiverManager->setReceiverFrequency(rxIdx, static_cast<quint64>(freq));
+        }
+        // TX follows RX (simplex)
+        if (m_connection) {
+            quint64 freqHz = static_cast<quint64>(freq);
+            QMetaObject::invokeMethod(m_connection, [conn = m_connection, freqHz]() {
+                conn->setTxFrequency(freqHz);
+            });
+        }
+        scheduleSettingsSave();
+    });
+
+    // Mode → WDSP
+    connect(slice, &SliceModel::dspModeChanged, this, [this](DSPMode mode) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setMode(mode);
+        }
+        scheduleSettingsSave();
+    });
+
+    // Filter → WDSP
+    connect(slice, &SliceModel::filterChanged, this, [this](int low, int high) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setFilterFreqs(low, high);
+        }
+        scheduleSettingsSave();
+    });
+
+    // AGC → WDSP
+    connect(slice, &SliceModel::agcModeChanged, this, [this](AGCMode mode) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setAgcMode(mode);
+        }
+        scheduleSettingsSave();
+    });
+
+    // AF gain → AudioEngine volume
+    connect(slice, &SliceModel::afGainChanged, this, [this](int gain) {
+        m_audioEngine->setVolume(gain / 100.0f);
+        scheduleSettingsSave();
+    });
+
+    // RF gain → WDSP AGC top
+    connect(slice, &SliceModel::rfGainChanged, this, [this](int gain) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setAgcTop(static_cast<double>(gain));
+        }
+        scheduleSettingsSave();
+    });
+
+    // Antenna changes → Alex register via RadioConnection
+    connect(slice, &SliceModel::rxAntennaChanged, this, [this](const QString& ant) {
+        if (m_connection) {
+            // Map antenna name to index: ANT1=0, ANT2=1, ANT3=2
+            int idx = 0;
+            if (ant == QLatin1String("ANT2")) { idx = 1; }
+            else if (ant == QLatin1String("ANT3")) { idx = 2; }
+            QMetaObject::invokeMethod(m_connection, [conn = m_connection, idx]() {
+                conn->setAntenna(idx);
+            });
+        }
+        scheduleSettingsSave();
+    });
+    connect(slice, &SliceModel::txAntennaChanged, this, [this](const QString&) {
+        // TX antenna is set in the same setAntenna call for now
+        // Full TX-specific antenna routing deferred to TX implementation
+        scheduleSettingsSave();
+    });
+
+    // Send initial frequency to radio (after connection init completes)
+    QTimer::singleShot(100, this, [this, slice]() {
+        if (m_connection && m_connection->isConnected()) {
+            int rxIdx = slice->receiverIndex();
+            quint64 freqHz = static_cast<quint64>(slice->frequency());
+            if (rxIdx >= 0) {
+                m_receiverManager->setReceiverFrequency(rxIdx, freqHz);
+            }
+            QMetaObject::invokeMethod(m_connection, [conn = m_connection, freqHz]() {
+                conn->setTxFrequency(freqHz);
+            });
+        }
+    });
+}
+
+// Load persisted VFO state from AppSettings into a slice.
+void RadioModel::loadSliceState(SliceModel* slice)
+{
+    if (!slice) {
+        return;
+    }
+
+    auto& s = AppSettings::instance();
+
+    double freq = s.value(QStringLiteral("VfoFrequency"), 14225000.0).toDouble();
+    slice->setFrequency(freq);
+
+    int modeInt = s.value(QStringLiteral("VfoDspMode"),
+                          static_cast<int>(DSPMode::USB)).toInt();
+    DSPMode mode = static_cast<DSPMode>(modeInt);
+    // Set mode without auto-applying default filter (load persisted filter instead)
+    // We need to set the mode field directly and then load filter separately
+    slice->setDspMode(mode);
+
+    // Override filter with persisted values if they exist
+    if (s.contains(QStringLiteral("VfoFilterLow")) &&
+        s.contains(QStringLiteral("VfoFilterHigh"))) {
+        int low = s.value(QStringLiteral("VfoFilterLow")).toInt();
+        int high = s.value(QStringLiteral("VfoFilterHigh")).toInt();
+        slice->setFilter(low, high);
+    }
+
+    int agcInt = s.value(QStringLiteral("VfoAgcMode"),
+                         static_cast<int>(AGCMode::Med)).toInt();
+    slice->setAgcMode(static_cast<AGCMode>(agcInt));
+
+    int stepHz = s.value(QStringLiteral("VfoStepHz"), 100).toInt();
+    slice->setStepHz(stepHz);
+
+    int afGain = s.value(QStringLiteral("VfoAfGain"), 50).toInt();
+    slice->setAfGain(afGain);
+
+    int rfGain = s.value(QStringLiteral("VfoRfGain"), 80).toInt();
+    slice->setRfGain(rfGain);
+
+    QString rxAnt = s.value(QStringLiteral("VfoRxAntenna"),
+                            QStringLiteral("ANT1")).toString();
+    slice->setRxAntenna(rxAnt);
+
+    QString txAnt = s.value(QStringLiteral("VfoTxAntenna"),
+                            QStringLiteral("ANT1")).toString();
+    slice->setTxAntenna(txAnt);
+
+    qCInfo(lcDsp) << "Loaded VFO state:"
+                  << SliceModel::modeName(mode)
+                  << freq / 1e6 << "MHz"
+                  << "AGC:" << agcInt
+                  << "AF:" << afGain << "RF:" << rfGain;
+}
+
+// Coalesce settings saves to avoid writing on every scroll tick.
+void RadioModel::scheduleSettingsSave()
+{
+    if (m_settingsSaveScheduled) {
+        return;
+    }
+    m_settingsSaveScheduled = true;
+    QTimer::singleShot(500, this, [this]() {
+        m_settingsSaveScheduled = false;
+        saveSliceState(m_activeSlice);
+    });
+}
+
+// Persist current slice state to AppSettings.
+void RadioModel::saveSliceState(SliceModel* slice)
+{
+    if (!slice) {
+        return;
+    }
+
+    auto& s = AppSettings::instance();
+    s.setValue(QStringLiteral("VfoFrequency"), slice->frequency());
+    s.setValue(QStringLiteral("VfoDspMode"), static_cast<int>(slice->dspMode()));
+    s.setValue(QStringLiteral("VfoFilterLow"), slice->filterLow());
+    s.setValue(QStringLiteral("VfoFilterHigh"), slice->filterHigh());
+    s.setValue(QStringLiteral("VfoAgcMode"), static_cast<int>(slice->agcMode()));
+    s.setValue(QStringLiteral("VfoStepHz"), slice->stepHz());
+    s.setValue(QStringLiteral("VfoAfGain"), slice->afGain());
+    s.setValue(QStringLiteral("VfoRfGain"), slice->rfGain());
+    s.setValue(QStringLiteral("VfoRxAntenna"), slice->rxAntenna());
+    s.setValue(QStringLiteral("VfoTxAntenna"), slice->txAntenna());
 }
 
 void RadioModel::teardownConnection()

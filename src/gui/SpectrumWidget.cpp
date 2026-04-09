@@ -1,5 +1,6 @@
 #include "SpectrumWidget.h"
 #include "SpectrumOverlayMenu.h"
+#include "widgets/VfoWidget.h"
 #include "core/AppSettings.h"
 
 #include <QPainter>
@@ -711,7 +712,11 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
         return;
     }
 
+#ifdef NEREUS_GPU_SPECTRUM
+    markOverlayDirty();  // cursor frequency needs GPU overlay refresh
+#else
     update();  // repaint for cursor frequency display
+#endif
     QWidget::mouseMoveEvent(event);
 }
 
@@ -725,21 +730,34 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* event)
 
 void SpectrumWidget::wheelEvent(QWheelEvent* event)
 {
-    // Ctrl+scroll: zoom bandwidth
-    // Plain scroll: adjust ref level
+    // Plain scroll: tune VFO by step size (matches Thetis panadapter behavior)
+    // Ctrl+scroll: adjust ref level
+    // Ctrl+Shift+scroll: zoom bandwidth
     int delta = event->angleDelta().y();
+    if (delta == 0) {
+        QWidget::wheelEvent(event);
+        return;
+    }
 
     if (event->modifiers() & Qt::ControlModifier) {
-        // Zoom bandwidth: scroll up = zoom in (narrower), down = zoom out (wider)
-        double factor = (delta > 0) ? 0.8 : 1.25;
-        double newBw = m_bandwidthHz * factor;
-        newBw = qBound(5000.0, newBw, 1000000.0);  // 5 kHz to 1 MHz
-        m_bandwidthHz = newBw;
-        emit bandwidthChangeRequested(newBw);
+        if (event->modifiers() & Qt::ShiftModifier) {
+            // Ctrl+Shift: zoom bandwidth
+            double factor = (delta > 0) ? 0.8 : 1.25;
+            double newBw = m_bandwidthHz * factor;
+            newBw = qBound(5000.0, newBw, 1000000.0);
+            m_bandwidthHz = newBw;
+            emit bandwidthChangeRequested(newBw);
+        } else {
+            // Ctrl only: adjust ref level
+            float step = (delta > 0) ? 5.0f : -5.0f;
+            m_refLevel = qBound(-160.0f, m_refLevel + step, 20.0f);
+        }
     } else {
-        // Scroll ref level: up = increase (show stronger signals at top)
-        float step = (delta > 0) ? 5.0f : -5.0f;
-        m_refLevel = qBound(-160.0f, m_refLevel + step, 20.0f);
+        // Plain scroll: tune VFO by step size
+        int steps = (delta > 0) ? 1 : -1;
+        double newHz = m_vfoHz + steps * m_stepHz;
+        newHz = std::max(newHz, 100000.0);
+        emit frequencyClicked(newHz);
     }
 
     update();
@@ -1254,5 +1272,57 @@ void SpectrumWidget::releaseResources()
 }
 
 #endif // NEREUS_GPU_SPECTRUM
+
+// ============================================================================
+// VFO Flag Widget Hosting (AetherSDR pattern)
+// ============================================================================
+
+void SpectrumWidget::setVfoFrequency(double hz)
+{
+    m_vfoHz = hz;
+    updateVfoPositions();
+    update();
+}
+
+VfoWidget* SpectrumWidget::addVfoWidget(int sliceIndex)
+{
+    if (m_vfoWidgets.contains(sliceIndex)) {
+        return m_vfoWidgets[sliceIndex];
+    }
+
+    auto* w = new VfoWidget(this);
+    w->setSliceIndex(sliceIndex);
+    m_vfoWidgets[sliceIndex] = w;
+    w->show();
+    w->raise();
+    return w;
+}
+
+void SpectrumWidget::removeVfoWidget(int sliceIndex)
+{
+    if (auto* w = m_vfoWidgets.take(sliceIndex)) {
+        delete w;
+    }
+}
+
+VfoWidget* SpectrumWidget::vfoWidget(int sliceIndex) const
+{
+    return m_vfoWidgets.value(sliceIndex, nullptr);
+}
+
+void SpectrumWidget::updateVfoPositions()
+{
+    int w = width();
+    int h = height();
+    int specH = static_cast<int>(h * m_spectrumFrac);
+    QRect specRect(kDbmStripW, 0, w - kDbmStripW, specH);
+
+    for (auto it = m_vfoWidgets.begin(); it != m_vfoWidgets.end(); ++it) {
+        VfoWidget* vfo = it.value();
+        // Use the main VFO frequency for slice 0 (others will have their own)
+        int vfoX = hzToX(m_vfoHz, specRect);
+        vfo->updatePosition(vfoX, 0);
+    }
+}
 
 } // namespace NereusSDR

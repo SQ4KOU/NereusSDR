@@ -3,6 +3,8 @@
 #include "SupportDialog.h"
 #include "SpectrumWidget.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
+#include "widgets/VfoWidget.h"
 #include "core/AppSettings.h"
 #include "core/RadioDiscovery.h"
 #include "core/WdspEngine.h"
@@ -110,12 +112,18 @@ void MainWindow::buildUI()
 
     m_spectrumWidget = new SpectrumWidget(central);
     m_spectrumWidget->loadSettings();
-    m_spectrumWidget->setFrequencyRange(3865000.0, 200000.0);  // 3.865 MHz LSB, 200 kHz BW
-    m_spectrumWidget->setVfoFrequency(3865000.0);
-    m_spectrumWidget->setFilterOffset(-2850, -150);  // LSB passband
     layout->addWidget(m_spectrumWidget);
 
     setCentralWidget(central);
+
+    // Wire spectrum display to SliceModel (values come from persisted state,
+    // no longer hardcoded). Connection is deferred to wireSliceToSpectrum()
+    // which runs after RadioModel creates slice 0.
+    connect(m_radioModel, &RadioModel::sliceAdded, this, [this](int index) {
+        if (index == 0) {
+            wireSliceToSpectrum();
+        }
+    });
 
     // Create FFTEngine on a worker thread (spectrum thread from architecture)
     m_fftEngine = new FFTEngine(0);  // receiver 0
@@ -206,6 +214,122 @@ void MainWindow::buildStatusBar()
     // Click status label to open connection panel
     m_connStatusLabel->setCursor(Qt::PointingHandCursor);
     m_connStatusLabel->installEventFilter(this);
+}
+
+void MainWindow::wireSliceToSpectrum()
+{
+    SliceModel* slice = m_radioModel->activeSlice();
+    if (!slice || !m_spectrumWidget) {
+        return;
+    }
+
+    // Set initial spectrum display from slice state
+    double freq = slice->frequency();
+    m_spectrumWidget->setFrequencyRange(freq, 200000.0);
+    m_spectrumWidget->setVfoFrequency(freq);
+    m_spectrumWidget->setFilterOffset(slice->filterLow(), slice->filterHigh());
+    m_spectrumWidget->setStepSize(slice->stepHz());
+
+    // --- Create floating VFO flag widget (AetherSDR pattern) ---
+    VfoWidget* vfo = m_spectrumWidget->addVfoWidget(0);
+    vfo->setFrequency(freq);
+    vfo->setMode(slice->dspMode());
+    vfo->setFilter(slice->filterLow(), slice->filterHigh());
+    vfo->setAgcMode(slice->agcMode());
+    vfo->setAfGain(slice->afGain());
+    vfo->setRfGain(slice->rfGain());
+    vfo->setRxAntenna(slice->rxAntenna());
+    vfo->setTxAntenna(slice->txAntenna());
+    vfo->setStepHz(slice->stepHz());
+
+    // --- Slice → spectrum display ---
+
+    connect(slice, &SliceModel::frequencyChanged, this, [this, vfo](double freq) {
+        m_spectrumWidget->setVfoFrequency(freq);
+        m_spectrumWidget->setFrequencyRange(freq, m_spectrumWidget->bandwidth());
+        vfo->setFrequency(freq);
+    });
+
+    connect(slice, &SliceModel::filterChanged, this, [this, vfo](int low, int high) {
+        m_spectrumWidget->setFilterOffset(low, high);
+        vfo->setFilter(low, high);
+    });
+
+    connect(slice, &SliceModel::dspModeChanged, this, [vfo](DSPMode mode) {
+        vfo->setMode(mode);
+    });
+
+    connect(slice, &SliceModel::agcModeChanged, this, [vfo](AGCMode mode) {
+        vfo->setAgcMode(mode);
+    });
+
+    connect(slice, &SliceModel::afGainChanged, this, [vfo](int gain) {
+        vfo->setAfGain(gain);
+    });
+
+    connect(slice, &SliceModel::rfGainChanged, this, [vfo](int gain) {
+        vfo->setRfGain(gain);
+    });
+
+    connect(slice, &SliceModel::stepHzChanged, this, [this, vfo](int hz) {
+        m_spectrumWidget->setStepSize(hz);
+        vfo->setStepHz(hz);
+    });
+
+    connect(slice, &SliceModel::rxAntennaChanged, this, [vfo](const QString& ant) {
+        vfo->setRxAntenna(ant);
+    });
+
+    connect(slice, &SliceModel::txAntennaChanged, this, [vfo](const QString& ant) {
+        vfo->setTxAntenna(ant);
+    });
+
+    // --- VFO flag → slice ---
+
+    connect(vfo, &VfoWidget::frequencyChanged, this, [slice](double hz) {
+        slice->setFrequency(hz);
+    });
+
+    connect(vfo, &VfoWidget::modeChanged, this, [slice](DSPMode mode) {
+        slice->setDspMode(mode);
+    });
+
+    connect(vfo, &VfoWidget::filterChanged, this, [slice](int low, int high) {
+        slice->setFilter(low, high);
+    });
+
+    connect(vfo, &VfoWidget::agcModeChanged, this, [slice](AGCMode mode) {
+        slice->setAgcMode(mode);
+    });
+
+    connect(vfo, &VfoWidget::afGainChanged, this, [slice](int gain) {
+        slice->setAfGain(gain);
+    });
+
+    connect(vfo, &VfoWidget::rfGainChanged, this, [slice](int gain) {
+        slice->setRfGain(gain);
+    });
+
+    connect(vfo, &VfoWidget::rxAntennaChanged, this, [slice](const QString& ant) {
+        slice->setRxAntenna(ant);
+    });
+
+    connect(vfo, &VfoWidget::txAntennaChanged, this, [slice](const QString& ant) {
+        slice->setTxAntenna(ant);
+    });
+
+    connect(vfo, &VfoWidget::sliceActivationRequested, this, [this](int index) {
+        m_radioModel->setActiveSlice(index);
+    });
+
+    // --- Spectrum click-to-tune → slice ---
+    connect(m_spectrumWidget, &SpectrumWidget::frequencyClicked,
+            this, [slice](double hz) {
+        slice->setFrequency(hz);
+    });
+
+    // Position the VFO flag
+    m_spectrumWidget->updateVfoPositions();
 }
 
 void MainWindow::applyDarkTheme()

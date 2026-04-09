@@ -159,6 +159,32 @@ private:
     int m_wbUpdateRate{70};
     int m_wbPacketsPerFrame{32};
 
+    // --- Alex filter/antenna state ---
+    // From Thetis ChannelMaster/network.h bpfilter struct
+    // Each Alex register is a 32-bit value written to CmdHighPriority bytes 1428-1435.
+    // Alex0 (bytes 1432-1435): RX antenna, HPF bits, LPF bits
+    // Alex1 (bytes 1428-1431): TX antenna, HPF/LPF bits
+    struct AlexState {
+        // Antenna selection — from Thetis netInterface.c:459-499 SetAntBits
+        int rxAnt{1};       // 1=ANT1, 2=ANT2, 3=ANT3
+        int txAnt{1};       // 1=ANT1, 2=ANT2, 3=ANT3
+        int hpfBits{0x20};  // HPF filter bits (default: bypass = 0x20)
+        int lpfBits{0x10};  // LPF filter bits (default: 6m LPF = 0x10)
+    };
+    AlexState m_alex;
+
+    // Compute Alex HPF bits based on frequency.
+    // Ported from Thetis console.cs:6830-6942 setAlexHPF
+    static int computeAlexHpf(double freqMhz);
+
+    // Compute Alex LPF bits based on frequency.
+    // Ported from Thetis console.cs:7168-7234 setAlexLPF
+    static int computeAlexLpf(double freqMhz);
+
+    // Build Alex0 and Alex1 32-bit register values from current state.
+    quint32 buildAlex0() const;
+    quint32 buildAlex1() const;
+
     // --- I/Q buffers and packet counters ---
     std::array<QVector<float>, kMaxDdc> m_iqBuffers;
     int m_totalIqPackets{0};

@@ -9,8 +9,10 @@ namespace NereusSDR {
 // Per-receiver configuration state.
 struct ReceiverConfig {
     int receiverIndex{-1};       // Logical receiver index (0-based)
-    int hardwareRx{-1};          // Hardware receiver mapped to DDC (0-based)
+    int hardwareRx{-1};          // Hardware DDC index (e.g., DDC2 for ANAN-G2 RX1)
     int wdspChannel{-1};         // WDSP channel number (assigned at creation)
+    int adcIndex{0};             // Which ADC feeds this receiver's DDC (0 or 1)
+    int ddcIndex{-1};            // Explicit DDC mapping (-1 = auto-assign)
     quint64 frequencyHz{14225000};
     int sampleRate{48000};
     bool active{false};
@@ -55,6 +57,15 @@ public:
     void setReceiverFrequency(int receiverIndex, quint64 frequencyHz);
     void setReceiverSampleRate(int receiverIndex, int sampleRate);
 
+    // Set explicit DDC mapping for a receiver.
+    // For ANAN-G2: receiver 0 → DDC 2 (from Thetis UpdateDDCs console.cs:8216).
+    // If ddcIndex = -1, sequential auto-assignment is used.
+    void setDdcMapping(int receiverIndex, int ddcIndex);
+    int ddcIndex(int receiverIndex) const;
+
+    // Set which ADC feeds this receiver's DDC (for 2-ADC boards).
+    void setAdcForReceiver(int receiverIndex, int adcIndex);
+
     // --- I/Q Data Routing ---
     // Called when I/Q data arrives for a hardware DDC.
     // Routes to the correct logical receiver.
@@ -74,8 +85,10 @@ signals:
     void hardwareFrequencyChanged(int hardwareRx, quint64 frequencyHz);
 
     // I/Q data routed to the appropriate WDSP channel.
-    // WdspEngine connects to this in a later phase.
     void iqDataForChannel(int wdspChannel, const QVector<float>& samples);
+
+    // I/Q data routed to the appropriate receiver (by logical index).
+    void iqDataForReceiver(int receiverIndex, const QVector<float>& samples);
 
 private:
     // Rebuild hardware DDC mapping after receiver changes.

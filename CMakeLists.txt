@@ -55,8 +55,18 @@ if(WIN32)
     if(EXISTS "${FFTW3_ROOT}/include/fftw3.h")
         set(FFTW3_FOUND TRUE)
         set(FFTW3_INCLUDE_DIRS "${FFTW3_ROOT}/include")
-        set(FFTW3_LIBRARIES "${FFTW3_ROOT}/lib/fftw3.lib")
+        set(FFTW3_LIBRARIES "${FFTW3_ROOT}/bin/libfftw3-3.dll")
         set(FFTW3_DLL "${FFTW3_ROOT}/bin/libfftw3-3.dll")
+        # Float precision FFTW3 for FFTEngine display FFT
+        if(EXISTS "${FFTW3_ROOT}/lib/libfftw3f-3.a")
+            list(APPEND FFTW3_LIBRARIES "${FFTW3_ROOT}/lib/libfftw3f-3.a")
+            set(FFTW3F_DLL "${FFTW3_ROOT}/bin/libfftw3f-3.dll")
+            message(STATUS "FFTW3F (float) found — FFTEngine enabled")
+        elseif(EXISTS "${FFTW3_ROOT}/bin/libfftw3f-3.dll")
+            list(APPEND FFTW3_LIBRARIES "${FFTW3_ROOT}/bin/libfftw3f-3.dll")
+            set(FFTW3F_DLL "${FFTW3_ROOT}/bin/libfftw3f-3.dll")
+            message(STATUS "FFTW3F (float) found — FFTEngine enabled (DLL direct)")
+        endif()
     else()
         message(STATUS "FFTW3 not found at ${FFTW3_ROOT}. Client-side FFT disabled.")
     endif()
@@ -120,6 +130,12 @@ if(WIN32 AND FFTW3_FOUND AND NOT EXISTS "${FFTW3_ROOT}/lib/fftw3.lib")
     else()
         # Fallback: link directly against DLL (MinGW compatible)
         set(FFTW3_LIBRARIES "${FFTW3_ROOT}/bin/libfftw3-3.dll")
+        # Re-append float import library if available
+        if(EXISTS "${FFTW3_ROOT}/lib/libfftw3f-3.a")
+            list(APPEND FFTW3_LIBRARIES "${FFTW3_ROOT}/lib/libfftw3f-3.a")
+        elseif(EXISTS "${FFTW3_ROOT}/bin/libfftw3f-3.dll")
+            list(APPEND FFTW3_LIBRARIES "${FFTW3_ROOT}/bin/libfftw3f-3.dll")
+        endif()
         message(STATUS "FFTW3: linking directly against DLL (lib.exe not found)")
     endif()
 endif()
@@ -175,6 +191,7 @@ set(GUI_SOURCES
     src/gui/SupportDialog.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/SpectrumOverlayMenu.cpp
+    src/gui/widgets/VfoWidget.cpp
 )
 
 # --------------------------------------------------------------------------

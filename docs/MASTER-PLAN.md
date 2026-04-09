@@ -85,6 +85,33 @@ NereusSDR is a ground-up port of Thetis (OpenHPSDR SDR console) from C# to Qt6/C
 - CPU fallback preserved under #ifndef NEREUS_GPU_SPECTRUM
 - Verified: live spectrum + waterfall + audio on 75m LSB from ANAN-G2
 
+### Completed: Phase 3E — VFO & Controls + Multi-Receiver Foundation
+- **SliceModel enriched** — DSPMode enum (was QString), AGCMode, per-mode filter defaults from Thetis InitFilterPresets (console.cs:5180-5575), tuning step, AF/RF gain, RX/TX antenna, panId, receiverIndex
+- **Floating VFO flag widget** (AetherSDR pattern) — 250px transparent panel, child of SpectrumWidget
+  - Header: RX antenna (blue), TX antenna (red) with dropdown, filter width, TX badge, slice badge (A/B/C/D colors)
+  - Frequency: 26px monospace "14.225.000" format, double-click to edit, mouse wheel to tune
+  - Tab bar: Audio (AF gain + AGC combo), DSP (NB/NR/ANF toggles), Mode (mode combo + dynamic filter presets + RF gain), X/RIT (stub)
+  - Mode-dependent positioning: USB family → flag RIGHT of marker, LSB family → LEFT
+  - Per-slice color table: A=cyan #00d4ff, B=magenta, C=green, D=yellow
+- **Signal wiring** — bidirectional VfoWidget ↔ SliceModel ↔ RxChannel/RadioConnection with m_updatingFromModel guards
+- **Click-to-tune** wired: SpectrumWidget::frequencyClicked → SliceModel::setFrequency → RadioConnection
+- **Scroll-to-tune** on spectrum: plain scroll = tune by stepHz, Ctrl+scroll = ref level, Ctrl+Shift+scroll = zoom
+- **Alex filter registers** — dynamic HPF/LPF selection based on frequency (ported from Thetis console.cs:6830-7234)
+  - HPF: bypass/1.5M/6.5M/9.5M/13M/20M/6M-preamp breakpoints
+  - LPF: 160m/80m/60-40m/30-20m/17-15m/12-10m/6m breakpoints
+  - Antenna: ANT1/ANT2/ANT3 selection via Alex register bits 24-26
+  - Register encoding: Alex0 (bytes 1432-1435) + Alex1 (bytes 1428-1431) in CmdHighPriority
+- **I/Q pipeline rewired through ReceiverManager** — DDC-aware routing
+  - ReceiverManager maps DDC2 → receiver 0 for ANAN-G2 (from Thetis UpdateDDCs)
+  - Explicit DDC mapping via setDdcMapping() (no more sequential auto-assign)
+  - ADC assignment per receiver via setAdcForReceiver()
+  - Signal chain: P2RadioConnection → iqDataReceived(DDC2) → ReceiverManager::feedIqData(2) → iqDataForReceiver(0) → WDSP → AudioEngine
+- **Settings persistence** — VfoFrequency, VfoDspMode, VfoFilterLow/High, VfoAgcMode, VfoStepHz, VfoAfGain, VfoRfGain, VfoRxAntenna, VfoTxAntenna (coalesced 500ms saves)
+- **FFTW3 float DLL fix** — added libfftw3f-3.dll + import library for Windows FFTEngine build
+- **GPU overlay fix** — markOverlayDirty() on mouseMoveEvent for cursor frequency tracking
+- No hardcoded frequencies, modes, or filters remain — all state flows from SliceModel
+- Verified: dynamic tuning + mode switching + filter presets + audio on ANAN-G2 via Windows D3D11
+
 ### CI Status: GREEN
 - Build passes on Ubuntu 24.04 with Qt6, cmake, ninja, fftw3
 - Windows local build passes with Qt 6.11.0 / MinGW 13.1
@@ -191,7 +218,7 @@ Key design reference: `docs/architecture/gpu-waterfall.md`
 
 Verification: See live spectrum + waterfall from the ANAN-G2 while receiving.
 
-### Phase 3E: VFO & Controls + Multi-Receiver Foundation
+### Phase 3E: VFO & Controls + Multi-Receiver Foundation ✅ COMPLETE
 **Goal:** Add VFO tuning, mode selection, filter, AGC controls. Simultaneously rewire
 the I/Q pipeline to route through ReceiverManager with per-receiver WDSP channels and
 FFTEngines. Only one receiver is active, but the plumbing supports N.

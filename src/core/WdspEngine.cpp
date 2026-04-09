@@ -253,10 +253,12 @@ RxChannel* WdspEngine::createRxChannel(int channelId,
         0.05,                   // backtau    — from Thetis cmaster.c:67
         30.0);                  // threshold  — from Thetis cmaster.c:68
 
-    // Set defaults: LSB mode for 80m, standard SSB bandpass, medium AGC
-    // TODO: Make mode configurable from SliceModel (currently hardcoded for 3865 LSB testing)
-    SetRXAMode(channelId, static_cast<int>(DSPMode::LSB));
-    SetRXABandpassFreqs(channelId, -2850.0, -150.0);
+    // Initialize WDSP to match RxChannel's cached defaults so that
+    // subsequent setMode/setFilterFreqs calls from RadioModel work correctly.
+    // Without this, the RxChannel guard (if val == m_mode) would skip the
+    // WDSP call when the requested mode matches the cached default.
+    SetRXAMode(channelId, static_cast<int>(DSPMode::USB));
+    SetRXABandpassFreqs(channelId, 150.0, 2850.0);
     SetRXAAGCMode(channelId, static_cast<int>(AGCMode::Med));
     SetRXAAGCTop(channelId, 80.0);
 

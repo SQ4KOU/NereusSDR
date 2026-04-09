@@ -5,6 +5,7 @@
 #include <QImage>
 #include <QColor>
 #include <QPoint>
+#include <QMap>
 
 // GPU spectrum: QRhiWidget base class for Metal/Vulkan/D3D12 rendering.
 // CPU fallback: QWidget with QPainter.
@@ -20,6 +21,7 @@ using SpectrumBaseClass = QWidget;
 namespace NereusSDR {
 
 class SpectrumOverlayMenu;
+class VfoWidget;
 
 // Waterfall color scheme presets.
 // Default matches AetherSDR/SmartSDR style.
@@ -81,12 +83,18 @@ public:
     void saveSettings();
 
     // ---- VFO / filter overlay ----
-    void setVfoFrequency(double hz) { m_vfoHz = hz; update(); }
+    void setVfoFrequency(double hz);
     void setFilterOffset(int lowHz, int highHz) { m_filterLowHz = lowHz; m_filterHighHz = highHz; update(); }
 
     // ---- Tuning step ----
     void setStepSize(int hz) { m_stepHz = hz; }
     int  stepSize() const { return m_stepHz; }
+
+    // ---- VFO flag widgets (AetherSDR pattern) ----
+    VfoWidget* addVfoWidget(int sliceIndex);
+    void removeVfoWidget(int sliceIndex);
+    VfoWidget* vfoWidget(int sliceIndex) const;
+    void updateVfoPositions();
 
 public slots:
     // Feed a new FFT frame. binsDbm are dBm values, one per frequency bin.
@@ -183,6 +191,9 @@ private:
     int    m_stepHz{100};           // tuning step size
 
     int    m_panIndex{0};            // for per-pan settings keys
+
+    // ---- VFO flag widgets ----
+    QMap<int, VfoWidget*> m_vfoWidgets;
 
     // ---- Overlay menu ----
     SpectrumOverlayMenu* m_overlayMenu{nullptr};

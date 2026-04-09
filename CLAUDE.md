@@ -188,6 +188,8 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 **Key classes:**
 
 * `RadioModel` — central state, owns connection + all sub-models + WdspEngine
+* `SliceModel` — per-receiver VFO state (freq, mode, filter, AGC, gains, antenna). Single source of truth.
+* `ReceiverManager` — DDC-aware receiver lifecycle, maps logical receivers to hardware DDCs
 * `RadioDiscovery` — OpenHPSDR radio discovery on UDP port 1024
 * `RadioConnection` — Protocol 1 (UDP) and Protocol 2 (UDP multi-port) connections
 * `WdspEngine` — WDSP lifecycle manager (wisdom, channels, impulse cache)
@@ -195,6 +197,7 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 * `AudioEngine` — QAudioSink output (Int16 stereo, timer-based drain)
 * `FFTEngine` — FFTW3 spectrum computation (worker thread, I/Q → dBm bins)
 * `SpectrumWidget` — GPU spectrum trace + waterfall display (QRhiWidget — Metal/Vulkan/D3D12)
+* `VfoWidget` — floating VFO flag (AetherSDR pattern): freq display, mode/filter/AGC tabs, antenna buttons
 * `AppSettings` — custom XML settings persistence (NOT QSettings)
 * `MainWindow` — wires everything together, signal routing hub
 
@@ -210,6 +213,31 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 Cross-thread communication uses auto-queued signals exclusively.
 RadioModel owns all sub-models on the main thread. Never hold a mutex in the
 audio callback.
+
+### Data Flow (Phase 3E — VERIFIED WORKING)
+
+```
+Radio (ADC) → UDP port 1037 (DDC2) → P2RadioConnection
+    ↓ iqDataReceived(ddcIndex=2, interleaved float I/Q)
+ReceiverManager::feedIqData(2) → maps DDC2 → receiver 0
+    ↓ iqDataForReceiver(0, samples)
+RadioModel lambda:
+    ├── emit rawIqData(samples) → FFTEngine → SpectrumWidget
+    ├── Deinterleave I/Q, accumulate 238 → 1024 samples
+    └── RxChannel::processIq() → fexchange2() → decoded audio
+        ↓
+    AudioEngine::feedAudio() → float→int16 → m_rxBuffer
+        ↓ 10ms timer drain
+    QAudioSink (48kHz stereo Int16) → Speakers
+
+User tunes VFO:
+    VfoWidget (wheel/click/edit) → emit frequencyChanged(hz)
+    → SliceModel::setFrequency(hz)
+    → ReceiverManager::setReceiverFrequency(0, hz)
+      → hardwareFrequencyChanged(DDC2, hz)
+      → P2RadioConnection::setReceiverFrequency(2, hz) + Alex HPF/LPF update
+      → sendCmdHighPriority() → radio retunes DDC NCO
+```
 
 ---
 
