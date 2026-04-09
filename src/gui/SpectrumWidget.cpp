@@ -402,17 +402,23 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
 }
 
 // ---- dBm to waterfall color ----
-// From AetherSDR SpectrumWidget.cpp:1700 — dbmToRgb()
-// Color gain and black level adjustments match AetherSDR formula
+// From Thetis display.cs:6800+ — waterfall uses its own high/low thresholds
+// (default -80/-130 dBm) for better contrast than the full spectrum range.
+// Color gain and black level from AetherSDR SpectrumWidget.cpp:1700
 QRgb SpectrumWidget::dbmToRgb(float dbm) const
 {
-    float bottom = m_refLevel - m_dynamicRange;
+    // Use waterfall-specific thresholds (narrower range = better contrast)
+    // From Thetis display.cs:2522-2536
+    float range = m_wfHighThreshold - m_wfLowThreshold;
+    if (range < 1.0f) {
+        range = 1.0f;
+    }
 
-    // Normalize to 0.0-1.0
-    float intensity = (dbm - bottom) / m_dynamicRange;
+    // Normalize to 0.0-1.0 based on waterfall thresholds
+    float intensity = (dbm - m_wfLowThreshold) / range;
     intensity = qBound(0.0f, intensity, 1.0f);
 
-    // Apply color gain and black level
+    // Apply color gain and black level adjustments
     // From AetherSDR SpectrumWidget.cpp:1700
     float floorShift = (125.0f - static_cast<float>(m_wfBlackLevel)) * 0.4f / 125.0f;
     float visRange = 1.0f - static_cast<float>(m_wfColorGain) * 0.7f / 100.0f;

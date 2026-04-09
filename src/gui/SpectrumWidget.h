@@ -104,10 +104,15 @@ private:
     int    m_wfWriteRow{0};
 
     // ---- Waterfall display controls ----
-    // From AetherSDR SpectrumWidget defaults
+    // From AetherSDR SpectrumWidget defaults + Thetis display.cs:2522-2536
     WfColorScheme m_wfColorScheme{WfColorScheme::Default};
     int    m_wfColorGain{50};         // 0-100
     int    m_wfBlackLevel{15};        // 0-125
+    // Waterfall uses its own dBm range (narrower than spectrum for better contrast)
+    // From Thetis display.cs:2522 waterfall_high_threshold = -80.0F
+    // From Thetis display.cs:2536 waterfall_low_threshold = -130.0F
+    float  m_wfHighThreshold{-80.0f};
+    float  m_wfLowThreshold{-130.0f};
 
     // ---- Smoothing constant ----
     // From AetherSDR SpectrumWidget.h:417 — SMOOTH_ALPHA = 0.35f
