@@ -1,5 +1,7 @@
 # Phase 3D: GPU Spectrum & Waterfall — Implementation Plan
 
+**Status: COMPLETE** (commit 4577fcf, 2026-04-09)
+
 ## Context
 
 NereusSDR Phase 3B is complete — ANAN-G2 I/Q streams through WDSP to audio output. The next milestone is **live spectrum display and waterfall** from the raw I/Q data. Unlike AetherSDR (where the radio sends pre-computed FFT bins), NereusSDR must compute FFTs client-side via FFTW3 and render them with Qt RHI GPU acceleration.

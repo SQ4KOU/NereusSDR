@@ -65,15 +65,24 @@ NereusSDR is a ground-up port of Thetis (OpenHPSDR SDR console) from C# to Qt6/C
 - Fixed use-after-free crash: wisdom poll timer accessing deleted QThread
 - Builds and runs on macOS Apple Silicon (commit bdb55e0)
 
-### In Progress: Phase 3D — GPU Spectrum & Waterfall
+### Completed: Phase 3D — GPU Spectrum & Waterfall
 - FFTEngine: FFTW3 float-precision on dedicated spectrum worker thread
-- SpectrumWidget: QPainter CPU rendering (spectrum trace + waterfall ring buffer)
+- SpectrumWidget: QRhiWidget GPU rendering via Metal (macOS) / Vulkan / D3D12
+- 3 GPU pipelines: waterfall (ring-buffer texture), spectrum (vertex-colored), overlay (QPainter→texture)
+- 6 GLSL 4.40 shaders compiled to QSB via qt_add_shaders()
 - 4096-point FFT, Blackman-Harris 4-term window, 30 FPS rate limiting
 - Waterfall scroll direction ported from Thetis display.cs:7719 pattern
-- AetherSDR default color scheme (black→blue→cyan→green→yellow→red)
+- AetherSDR default color scheme + Thetis Enhanced/Spectran/BlackWhite schemes
+- Waterfall color mapping ported from Thetis display.cs:6889 (low/high threshold)
+- VFO marker (orange), filter passband overlay (cyan), cursor frequency readout
+- Mouse interaction: scroll zoom, drag ref level, click-to-tune, Ctrl+scroll bandwidth
+- Right-click SpectrumOverlayMenu: color scheme, gain, black level, fill, ref level, dyn range
+- Display settings persistence via AppSettings (per-pan keys)
+- Phase word NCO fix from pcap analysis (Hz→phase word conversion)
+- Alex band filters (80/60m BPF), dither/random enabled on all ADCs
 - Signal routing: RadioModel::rawIqData → FFTEngine → SpectrumWidget
-- Live spectrum verified with ANAN-G2 at 14.2 MHz (commit 39e35a6)
-- Remaining: color mapping improvements, GPU rendering, overlays, settings UI
+- CPU fallback preserved under #ifndef NEREUS_GPU_SPECTRUM
+- Verified: live spectrum + waterfall + audio on 75m LSB from ANAN-G2
 
 ### CI Status: GREEN
 - Build passes on Ubuntu 24.04 with Qt6, cmake, ninja, fftw3

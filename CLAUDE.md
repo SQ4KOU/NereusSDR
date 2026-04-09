@@ -270,7 +270,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 
 | Plan | Phase | Status |
 | --- | --- | --- |
-| [phase3d-spectrum-waterfall-plan.md](docs/architecture/phase3d-spectrum-waterfall-plan.md) | 3D: GPU Spectrum & Waterfall | **In Progress** |
+| [phase3d-spectrum-waterfall-plan.md](docs/architecture/phase3d-spectrum-waterfall-plan.md) | 3D: GPU Spectrum & Waterfall | **Complete** |
 
 ### Phase 1 Analysis Docs (`docs/phase1/`)
 
@@ -287,8 +287,8 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | 3A: Radio Connection | Connect to ANAN-G2 via P2, receive I/Q | **Complete** |
 | 3B: WDSP Integration | Process I/Q through WDSP, audio output | **Complete** |
 | 3C: macOS Build | Cross-platform WDSP build + wisdom crash fix | **Complete** |
-| **3D: Spectrum Display** | **Live FFT spectrum + waterfall from I/Q** | **In Progress** |
-| 3E: VFO & Controls | Tuning, mode selection, filter, AGC | Planned |
+| **3D: Spectrum Display** | **GPU spectrum + waterfall (QRhi Metal/Vulkan/D3D12)** | **Complete** |
+| 3E: VFO & Controls | Tuning, mode selection, filter, AGC | Next up |
 | 3F: Container System | Unified dock/float container architecture | Planned |
 
 ---

@@ -24,7 +24,7 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 
 ## Current Status
 
-**Phase 3D in progress — live spectrum + waterfall.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates audio through WDSP, and displays a live spectrum trace + waterfall computed client-side via FFTW3.
+**Phase 3D — GPU spectrum + waterfall rendering.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates audio through WDSP, and renders a live GPU-accelerated spectrum trace + waterfall via Metal (macOS), Vulkan (Linux), or D3D12 (Windows).
 
 ## Key Features
 
@@ -35,11 +35,14 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 - Real-time audio output via QAudioSink (48kHz stereo Int16)
 - FFTW wisdom caching with first-run progress dialog
 - Audio device selection and persistence
-- Live spectrum trace + waterfall display (FFTW3, 4096-point FFT, 30 FPS)
+- GPU-accelerated spectrum + waterfall (QRhi — Metal, Vulkan, D3D12, OpenGL fallback)
+- FFTW3 client-side FFT (4096-point, Blackman-Harris window, 30 FPS)
+- VFO marker, filter passband overlay, cursor frequency readout
+- Right-click display settings (color scheme, gain, black level, ref level)
+- Mouse interaction (scroll zoom, drag ref level, click-to-tune)
+- Phase word NCO tuning with Alex band filters (80m BPF verified)
+- Display settings persistence via AppSettings
 - Cross-platform build (Windows, Linux, macOS)
-
-**Planned:**
-- GPU-accelerated waterfall rendering (QRhi — Vulkan, Metal, D3D12, OpenGL)
 - Up to 4 independent panadapters in configurable layouts
 - Full WDSP DSP features (NR/NR2, NB/NB2, ANF, EQ, compression, PureSignal)
 - VFO tuning, mode selection, filter controls
@@ -77,8 +80,8 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 |---|---|---|
 | **3A: Radio Connection** | Connect to ANAN-G2 via Protocol 2, receive I/Q | **Complete** |
 | **3B: WDSP Integration** | Process I/Q through WDSP, demodulate audio | **Complete** |
-| **3C: Spectrum Display** | Live FFT spectrum + waterfall from I/Q | **In Progress** |
-| **3D: VFO & Controls** | Tuning, mode selection, filter, AGC controls | Planned |
+| **3C: Spectrum Display** | GPU spectrum + waterfall (QRhi Metal/Vulkan/D3D12) | **Complete** |
+| **3D: VFO & Controls** | Tuning, mode selection, filter, AGC controls | Next up |
 | **3E: Multi-Panadapter** | 1-4 pans in configurable layouts | Planned |
 | **3F: Container System** | Unified float/dock containers with 16 widget types | Planned |
 | **3G: Skin System** | Thetis-inspired skins with 4-pan support | Planned |
