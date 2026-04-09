@@ -74,7 +74,8 @@ VfoWidget::~VfoWidget() = default;
 void VfoWidget::buildUI()
 {
     auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(4, 4, 4, 4);
+    // From AetherSDR VfoWidget.cpp:237-238 — margins (6, 2, 6, 0)
+    mainLayout->setContentsMargins(6, 2, 6, 0);
     mainLayout->setSpacing(2);
 
     buildHeaderRow();
@@ -82,25 +83,34 @@ void VfoWidget::buildUI()
     buildSmeterRow();
     buildTabBar();
 
-    // Tab content stacked widget
+    // Tab content stacked widget — HIDDEN by default (compact flag)
+    // From AetherSDR VfoWidget.cpp:545 — m_tabStack->hide()
     m_tabStack = new QStackedWidget(this);
     buildAudioTab();
     buildDspTab();
     buildModeTab();
 
-    // Add a stub X/RIT tab
+    // Stub X/RIT tab
     auto* ritWidget = new QWidget;
     auto* ritLayout = new QVBoxLayout(ritWidget);
     ritLayout->setContentsMargins(4, 4, 4, 4);
-    auto* ritLabel = new QLabel(QStringLiteral("RIT/XIT (Phase 3G)"), ritWidget);
+    auto* ritLabel = new QLabel(QStringLiteral("RIT/XIT"), ritWidget);
     ritLabel->setStyleSheet(QStringLiteral("color: #6888a0; font-size: 11px;"));
     ritLayout->addWidget(ritLabel);
     m_tabStack->addWidget(ritWidget);
 
+    // Stub DAX tab
+    auto* daxWidget = new QWidget;
+    auto* daxLayout = new QVBoxLayout(daxWidget);
+    daxLayout->setContentsMargins(4, 4, 4, 4);
+    auto* daxLabel = new QLabel(QStringLiteral("DAX"), daxWidget);
+    daxLabel->setStyleSheet(QStringLiteral("color: #6888a0; font-size: 11px;"));
+    daxLayout->addWidget(daxLabel);
+    m_tabStack->addWidget(daxWidget);
+
     mainLayout->addWidget(m_tabStack);
-    m_tabStack->setCurrentIndex(2);  // Mode tab by default
-    m_activeTab = 2;
-    m_tabButtons[2]->setChecked(true);
+    m_tabStack->hide();  // Hidden by default — click tab to expand
+    m_activeTab = -1;    // No tab active initially
 
     setLayout(mainLayout);
     adjustSize();
@@ -252,27 +262,53 @@ void VfoWidget::buildTabBar()
     tabLayout->setSpacing(0);
     tabLayout->setContentsMargins(0, 0, 0, 0);
 
-    // Tab labels: Audio (speaker icon), DSP, Mode, X/RIT
+    // Tab labels — from AetherSDR VfoWidget.cpp:522
+    // [🔊] | DSP | USB | X/RIT | DAX
     QStringList tabLabels = {
-        QStringLiteral("AF"),
+        QString::fromUtf8("\xF0\x9F\x94\x8A"),  // 🔊 speaker
         QStringLiteral("DSP"),
         SliceModel::modeName(m_currentMode),
-        QStringLiteral("X/RIT")
+        QStringLiteral("X/RIT"),
+        QStringLiteral("DAX")
     };
 
     for (int i = 0; i < tabLabels.size(); ++i) {
+        // Add separator before each tab except the first
+        // From AetherSDR VfoWidget.cpp:523-530
+        if (i > 0) {
+            auto* sep = new QLabel(QStringLiteral("|"), this);
+            sep->setStyleSheet(QStringLiteral(
+                "QLabel { background: transparent; border: none;"
+                "color: rgba(255,255,255,80); font-size: 13px; padding: 0; }"));
+            sep->setFixedWidth(6);
+            tabLayout->addWidget(sep);
+        }
+
         auto* btn = new QPushButton(tabLabels[i], this);
         btn->setCheckable(true);
         btn->setStyleSheet(kTabBtn);
-        btn->setFixedHeight(22);
+        btn->setFixedHeight(24);  // 24px from AetherSDR
         connect(btn, &QPushButton::clicked, this, [this, i]() {
-            m_activeTab = i;
-            m_tabStack->setCurrentIndex(i);
-            for (int j = 0; j < m_tabButtons.size(); ++j) {
-                m_tabButtons[j]->setChecked(j == i);
+            if (m_activeTab == i) {
+                // Toggle: clicking active tab hides content
+                m_tabStack->hide();
+                m_activeTab = -1;
+                for (auto* b : m_tabButtons) { b->setChecked(false); }
+            } else {
+                m_activeTab = i;
+                m_tabStack->setCurrentIndex(i);
+                m_tabStack->show();
+                for (int j = 0; j < m_tabButtons.size(); ++j) {
+                    m_tabButtons[j]->setChecked(j == i);
+                }
+            }
+            adjustSize();
+            // Notify parent to reposition
+            if (parentWidget()) {
+                parentWidget()->update();
             }
         });
-        tabLayout->addWidget(btn);
+        tabLayout->addWidget(btn, 1);  // stretch equally
         m_tabButtons.append(btn);
     }
 
@@ -369,8 +405,20 @@ void VfoWidget::buildDspTab()
     };
 
     m_nbBtn = makeToggle(QStringLiteral("NB"));
+    connect(m_nbBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) { emit nb1Changed(on); }
+    });
+
     m_nrBtn = makeToggle(QStringLiteral("NR"));
+    connect(m_nrBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) { emit nrChanged(on); }
+    });
+
     m_anfBtn = makeToggle(QStringLiteral("ANF"));
+    connect(m_anfBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) { emit anfChanged(on); }
+    });
+
     dspLayout->addStretch();
 
     m_tabStack->addWidget(dspWidget);
@@ -676,7 +724,8 @@ void VfoWidget::setSmeter(double dbm)
 
 void VfoWidget::updatePosition(int vfoX, int specTop, FlagDir dir)
 {
-    int w = width();
+    int flagW = width();
+    int parentW = parentWidget() ? parentWidget()->width() : 2000;
     bool onLeft = false;
 
     if (dir == FlagDir::ForceLeft) {
@@ -684,24 +733,33 @@ void VfoWidget::updatePosition(int vfoX, int specTop, FlagDir dir)
     } else if (dir == FlagDir::ForceRight) {
         onLeft = false;
     } else {
-        // Auto: LSB family → flag on left, USB family → flag on right
-        // From AetherSDR VfoWidget::updatePosition
+        // Auto: flag goes OPPOSITE side of passband so it doesn't cover signals.
+        // From AetherSDR VfoWidget.cpp:1696 — onLeft = !lowerSideband
         bool lowerSideband = (m_currentMode == DSPMode::LSB ||
                               m_currentMode == DSPMode::DIGL ||
                               m_currentMode == DSPMode::CWL);
         onLeft = !lowerSideband;
     }
 
-    int x = onLeft ? (vfoX - w) : vfoX;
-
-    // Clip detection — flip if extending past parent edge
-    if (parentWidget()) {
+    int x;
+    if (onLeft) {
+        x = vfoX - flagW;
+        // Flip to right if clipped off left edge
         if (x < 0) {
             x = vfoX;
-        } else if (x + w > parentWidget()->width()) {
-            x = vfoX - w;
+            onLeft = false;
+        }
+    } else {
+        x = vfoX;
+        // Flip to left if clipped off right edge
+        if (x + flagW > parentW) {
+            x = vfoX - flagW;
+            onLeft = true;
         }
     }
+
+    // Final clamp to stay on screen
+    x = std::clamp(x, 0, std::max(0, parentW - flagW));
 
     move(x, specTop);
 }

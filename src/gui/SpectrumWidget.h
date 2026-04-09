@@ -63,6 +63,7 @@ public:
 
     // ---- Frequency range ----
     void setFrequencyRange(double centerHz, double bandwidthHz);
+    void setCenterFrequency(double centerHz);
     double centerFrequency() const { return m_centerHz; }
     double bandwidth() const { return m_bandwidthHz; }
 
@@ -104,6 +105,10 @@ public slots:
 signals:
     // Emitted when user clicks on spectrum/waterfall to tune
     void frequencyClicked(double hz);
+    // Emitted when user drags a filter edge
+    void filterEdgeDragged(int lowHz, int highHz);
+    // Emitted when pan center changes (drag, auto-scroll)
+    void centerChanged(double centerHz);
     // Emitted when user scrolls to change bandwidth
     void bandwidthChangeRequested(double newBandwidthHz);
 
@@ -204,6 +209,31 @@ private:
     float  m_dragStartRef{0.0f};
     QPoint m_mousePos;              // for cursor frequency display
     bool   m_mouseInWidget{false};
+
+    // Filter edge drag — from AetherSDR SpectrumWidget.h:429-432
+    enum class FilterEdge { None, Low, High };
+    FilterEdge m_draggingFilter{FilterEdge::None};
+    int  m_filterDragStartX{0};     // pixel X at grab time
+    int  m_filterDragStartHz{0};    // filter edge Hz at grab time
+
+    // Passband center drag (slide-to-tune) — AetherSDR:434
+    bool m_draggingVfo{false};
+
+    // Divider drag (spectrum/waterfall split) — AetherSDR:419
+    bool m_draggingDivider{false};
+
+    // Pan drag (waterfall/spectrum drag to change center) — AetherSDR:425-427
+    bool   m_draggingPan{false};
+    int    m_panDragStartX{0};
+    double m_panDragStartCenter{0.0};
+
+    // Bandwidth drag (frequency scale bar) — AetherSDR:421-423
+    bool   m_draggingBandwidth{false};
+    int    m_bwDragStartX{0};
+    double m_bwDragStartBw{0.0};
+
+    // Filter edge grab zone — from AetherSDR line 1087: GRAB = 5
+    static constexpr int kFilterGrab = 5;
 
 #ifdef NEREUS_GPU_SPECTRUM
     bool m_rhiInitialized{false};

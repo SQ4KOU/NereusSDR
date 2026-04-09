@@ -69,6 +69,9 @@ signals:
     void rfGainChanged(int gain);
     void rxAntennaChanged(const QString& ant);
     void txAntennaChanged(const QString& ant);
+    void nb1Changed(bool enabled);
+    void nrChanged(bool enabled);
+    void anfChanged(bool enabled);
     void sliceActivationRequested(int sliceIndex);
 
 protected:

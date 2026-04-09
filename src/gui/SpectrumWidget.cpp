@@ -182,7 +182,17 @@ void SpectrumWidget::setFrequencyRange(double centerHz, double bandwidthHz)
 {
     m_centerHz = centerHz;
     m_bandwidthHz = bandwidthHz;
+    updateVfoPositions();
     update();
+}
+
+void SpectrumWidget::setCenterFrequency(double centerHz)
+{
+    if (!qFuzzyCompare(m_centerHz, centerHz)) {
+        m_centerHz = centerHz;
+        updateVfoPositions();
+        update();
+    }
 }
 
 void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
@@ -245,6 +255,9 @@ void SpectrumWidget::resizeEvent(QResizeEvent* event)
         markOverlayDirty();
 #endif
     }
+
+    // Reposition VFO flags after resize
+    updateVfoPositions();
 }
 
 void SpectrumWidget::paintEvent(QPaintEvent* event)
@@ -283,6 +296,11 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
     drawFreqScale(p, freqRect);
     drawDbmScale(p, QRect(0, 0, kDbmStripW, specH));
     drawCursorInfo(p, specRect);
+
+    // Reposition VFO flag widgets every frame — ensures flag tracks marker
+    // exactly with no frame delay. From AetherSDR: updatePosition called
+    // from within the paint/render cycle.
+    updateVfoPositions();
 }
 
 // ---- Grid drawing ----
@@ -556,8 +574,8 @@ QRgb SpectrumWidget::dbmToRgb(float dbm) const
 }
 
 // ---- VFO marker + filter passband overlay ----
-// From Thetis display.cs DrawPanadapterDX2D — VFO line + filter rectangle
-// Colors from AetherSDR: orange VFO, cyan filter passband
+// Ported from AetherSDR SpectrumWidget.cpp:3211-3294
+// Uses per-slice colors with exact alpha values from AetherSDR.
 void SpectrumWidget::drawVfoMarker(QPainter& p, const QRect& specRect, const QRect& wfRect)
 {
     if (m_vfoHz <= 0.0) {
@@ -565,12 +583,12 @@ void SpectrumWidget::drawVfoMarker(QPainter& p, const QRect& specRect, const QRe
     }
 
     int vfoX = hzToX(m_vfoHz, specRect);
-    if (vfoX < specRect.left() || vfoX > specRect.right()) {
-        return;
-    }
+
+    // Per-slice color — from AetherSDR SliceColors.h:15-20
+    // Slice 0 (A) = cyan, active
+    static constexpr int kSliceR = 0x00, kSliceG = 0xd4, kSliceB = 0xff;
 
     // Filter passband rectangle
-    // From AetherSDR: translucent cyan for active filter
     double loHz = m_vfoHz + m_filterLowHz;
     double hiHz = m_vfoHz + m_filterHighHz;
     int xLo = hzToX(loHz, specRect);
@@ -578,26 +596,52 @@ void SpectrumWidget::drawVfoMarker(QPainter& p, const QRect& specRect, const QRe
     if (xLo > xHi) {
         std::swap(xLo, xHi);
     }
+    int fW = xHi - xLo;
 
-    // Spectrum passband
-    QColor filterColor(0, 180, 216, 40);  // NereusSDR accent cyan, semi-transparent
-    p.fillRect(xLo, specRect.top(), xHi - xLo, specRect.height(), filterColor);
+    // Spectrum passband fill — from AetherSDR line 3232: alpha=35
+    p.fillRect(xLo, specRect.top(), fW, specRect.height(),
+               QColor(kSliceR, kSliceG, kSliceB, 35));
 
-    // Waterfall passband (slightly more transparent)
-    QColor wfFilterColor(0, 180, 216, 25);
-    p.fillRect(xLo, wfRect.top(), xHi - xLo, wfRect.height(), wfFilterColor);
+    // Waterfall passband fill — from AetherSDR line 3234: alpha=25
+    p.fillRect(xLo, wfRect.top(), fW, wfRect.height(),
+               QColor(kSliceR, kSliceG, kSliceB, 25));
 
-    // VFO center line — orange for active slice
-    // From AetherSDR SpectrumWidget: slice marker color
-    QPen vfoPen(QColor(255, 165, 0), 1);
-    p.setPen(vfoPen);
-    p.drawLine(vfoX, specRect.top(), vfoX, wfRect.bottom());
-
-    // Filter edge lines (thin white)
-    QPen edgePen(QColor(255, 255, 255, 80), 1);
-    p.setPen(edgePen);
+    // Filter edge lines — from AetherSDR line 3237: slice color, alpha=130
+    p.setPen(QPen(QColor(kSliceR, kSliceG, kSliceB, 130), 1));
     p.drawLine(xLo, specRect.top(), xLo, wfRect.bottom());
     p.drawLine(xHi, specRect.top(), xHi, wfRect.bottom());
+
+    // VFO center line — from AetherSDR line 3281: slice color, alpha=220, width=2
+    // Width narrows to 1 when filter edge is ≤4px away (CW modes)
+    qreal vfoLineW = (std::abs(vfoX - xLo) <= 4 || std::abs(vfoX - xHi) <= 4) ? 1.0 : 2.0;
+    p.setPen(QPen(QColor(kSliceR, kSliceG, kSliceB, 220), vfoLineW));
+    p.drawLine(vfoX, specRect.top(), vfoX, wfRect.bottom());
+
+    // VFO triangle marker — from AetherSDR line 3285-3293
+    // Drawn below any VFO flag widget that may be positioned at the top.
+    // If a VfoWidget exists for this slice, draw triangle at the flag's bottom edge.
+    // Otherwise draw at spectrum top.
+    if (vfoX >= specRect.left() && vfoX <= specRect.right()) {
+        static constexpr int kTriHalf = 6;
+        static constexpr int kTriH = 10;
+
+        int triTop = specRect.top();
+        // If VFO flag is present, position triangle below it
+        auto it = m_vfoWidgets.constFind(0);
+        if (it != m_vfoWidgets.constEnd() && it.value()->isVisible()) {
+            triTop = it.value()->y() + it.value()->height();
+        }
+        // Clamp to spectrum area
+        triTop = std::max(triTop, specRect.top());
+
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(kSliceR, kSliceG, kSliceB));
+        QPolygon tri;
+        tri << QPoint(vfoX - kTriHalf, triTop)
+            << QPoint(vfoX + kTriHalf, triTop)
+            << QPoint(vfoX, triTop + kTriH);
+        p.drawPolygon(tri);
+    }
 }
 
 // ---- Cursor frequency display ----
@@ -640,18 +684,24 @@ void SpectrumWidget::drawCursorInfo(QPainter& p, const QRect& specRect)
 // ---- Mouse event handlers ----
 // From gpu-waterfall.md:1064-1076 mouse interaction table
 
+// ---- AetherSDR panadapter interaction model ----
+// Hit-test priority from AetherSDR SpectrumWidget.cpp:824-1128
+// Filter edge drag, passband slide-to-tune, divider drag, dBm drag, click-to-tune
+
 void SpectrumWidget::mousePressEvent(QMouseEvent* event)
 {
     int w = width();
     int h = height();
     int specH = static_cast<int>(h * m_spectrumFrac);
+    int dividerY = specH;
     QRect specRect(kDbmStripW, 0, w - kDbmStripW, specH);
+    int mx = static_cast<int>(event->position().x());
+    int my = static_cast<int>(event->position().y());
 
     if (event->button() == Qt::RightButton) {
         // Show overlay menu on right-click
         if (!m_overlayMenu) {
             m_overlayMenu = new SpectrumOverlayMenu(this);
-
             connect(m_overlayMenu, &SpectrumOverlayMenu::wfColorGainChanged,
                     this, [this](int v) { m_wfColorGain = v; update(); });
             connect(m_overlayMenu, &SpectrumOverlayMenu::wfBlackLevelChanged,
@@ -667,7 +717,6 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
             connect(m_overlayMenu, &SpectrumOverlayMenu::dynRangeChanged,
                     this, [this](float v) { m_dynamicRange = v; update(); });
         }
-
         m_overlayMenu->setValues(m_wfColorGain, m_wfBlackLevel, false,
                                   static_cast<int>(m_wfColorScheme),
                                   m_fillAlpha, m_panFill, false,
@@ -677,21 +726,82 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
         return;
     }
 
-    if (event->button() == Qt::LeftButton) {
-        // Check if clicking on dBm scale strip — start drag for ref level
-        if (event->position().x() < kDbmStripW) {
-            m_draggingDbm = true;
-            m_dragStartY = static_cast<int>(event->position().y());
-            m_dragStartRef = m_refLevel;
-            return;
-        }
-
-        // Click on spectrum/waterfall — tune to clicked frequency
-        double hz = xToHz(static_cast<int>(event->position().x()), specRect);
-        // Snap to step size
-        hz = std::round(hz / m_stepHz) * m_stepHz;
-        emit frequencyClicked(hz);
+    if (event->button() != Qt::LeftButton) {
+        QWidget::mousePressEvent(event);
+        return;
     }
+
+    // 1. dBm scale strip — drag to adjust ref level
+    if (mx < kDbmStripW) {
+        m_draggingDbm = true;
+        m_dragStartY = my;
+        m_dragStartRef = m_refLevel;
+        setCursor(Qt::SizeVerCursor);
+        return;
+    }
+
+    // 2. Frequency scale bar drag — zoom bandwidth
+    // From AetherSDR SpectrumWidget.cpp:868-876
+    int freqScaleY = h - kFreqScaleH;
+    if (my >= freqScaleY) {
+        m_draggingBandwidth = true;
+        m_bwDragStartX = mx;
+        m_bwDragStartBw = m_bandwidthHz;
+        setCursor(Qt::SizeHorCursor);
+        return;
+    }
+
+    // 3. Divider drag — resize spectrum/waterfall split
+    // From AetherSDR: DIVIDER_H = 4, grab zone is the divider bar
+    if (my >= dividerY && my < dividerY + kDividerH) {
+        m_draggingDivider = true;
+        setCursor(Qt::SplitVCursor);
+        return;
+    }
+
+    // Compute filter edge pixel positions for hit-testing
+    double loHz = m_vfoHz + m_filterLowHz;
+    double hiHz = m_vfoHz + m_filterHighHz;
+    int xLo = hzToX(loHz, specRect);
+    int xHi = hzToX(hiHz, specRect);
+    if (xLo > xHi) { std::swap(xLo, xHi); }
+
+    // 3. Filter edge grab — ±5px from edge
+    // From AetherSDR SpectrumWidget.cpp:1080-1109
+    bool loHit = std::abs(mx - xLo) <= kFilterGrab;
+    bool hiHit = std::abs(mx - xHi) <= kFilterGrab;
+    if (loHit || hiHit) {
+        if (loHit && hiHit) {
+            // Both edges within grab range — pick closer one
+            m_draggingFilter = (std::abs(mx - xLo) <= std::abs(mx - xHi))
+                ? FilterEdge::Low : FilterEdge::High;
+        } else {
+            m_draggingFilter = loHit ? FilterEdge::Low : FilterEdge::High;
+        }
+        m_filterDragStartX = mx;
+        m_filterDragStartHz = (m_draggingFilter == FilterEdge::Low)
+            ? m_filterLowHz : m_filterHighHz;
+        setCursor(Qt::SizeHorCursor);
+        return;
+    }
+
+    // 4. Inside passband — slide-to-tune (VFO drag)
+    // From AetherSDR SpectrumWidget.cpp:1112-1119
+    int left = std::min(xLo, xHi);
+    int right = std::max(xLo, xHi);
+    if (mx > left + kFilterGrab && mx < right - kFilterGrab) {
+        m_draggingVfo = true;
+        setCursor(Qt::SizeHorCursor);
+        return;
+    }
+
+    // 5. Pan drag — click in spectrum/waterfall area and drag to pan the view
+    // From AetherSDR SpectrumWidget.cpp:879-887
+    m_draggingPan = true;
+    m_panDragStartX = mx;
+    m_panDragStartCenter = m_centerHz;
+    setCursor(Qt::ClosedHandCursor);
+    // Don't emit click-to-tune — the release event handles that if drag distance is small
 
     QWidget::mousePressEvent(event);
 }
@@ -700,22 +810,125 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
 {
     m_mousePos = event->pos();
     m_mouseInWidget = true;
+    int mx = static_cast<int>(event->position().x());
+    int my = static_cast<int>(event->position().y());
+    int w = width();
+    int h = height();
+    int specH = static_cast<int>(h * m_spectrumFrac);
+    QRect specRect(kDbmStripW, 0, w - kDbmStripW, specH);
+
+    // --- Active drag modes ---
 
     if (m_draggingDbm) {
-        // Drag dBm scale to adjust reference level
-        int dy = static_cast<int>(event->position().y()) - m_dragStartY;
-        int specH = static_cast<int>(height() * m_spectrumFrac);
+        int dy = my - m_dragStartY;
         float dbPerPixel = m_dynamicRange / static_cast<float>(specH);
         m_refLevel = m_dragStartRef + static_cast<float>(dy) * dbPerPixel;
-        m_refLevel = qBound(-20.0f, m_refLevel, 20.0f);
+        m_refLevel = qBound(-160.0f, m_refLevel, 20.0f);
         update();
         return;
     }
 
+    if (m_draggingFilter != FilterEdge::None) {
+        // Compute new filter Hz from pixel delta
+        // From AetherSDR SpectrumWidget.cpp:1203-1220
+        double hzPerPx = m_bandwidthHz / specRect.width();
+        int newHz = m_filterDragStartHz +
+            static_cast<int>(std::round((mx - m_filterDragStartX) * hzPerPx));
+        int low = m_filterLowHz;
+        int high = m_filterHighHz;
+        if (m_draggingFilter == FilterEdge::Low) {
+            low = newHz;
+        } else {
+            high = newHz;
+        }
+        // Ensure minimum 10 Hz width
+        if (std::abs(high - low) >= 10) {
+            m_filterLowHz = low;
+            m_filterHighHz = high;
+            emit filterEdgeDragged(low, high);
+        }
+        update();
+        return;
+    }
+
+    if (m_draggingVfo) {
+        // Slide-to-tune: real-time frequency update
+        // From AetherSDR SpectrumWidget.cpp:1222-1228
+        double hz = xToHz(mx, specRect);
+        hz = std::round(hz / m_stepHz) * m_stepHz;
+        emit frequencyClicked(hz);
+        return;
+    }
+
+    if (m_draggingBandwidth) {
+        // Zoom bandwidth by horizontal drag
+        // From AetherSDR SpectrumWidget.cpp:868-876
+        // Drag right = zoom out (wider), drag left = zoom in (narrower)
+        int dx = mx - m_bwDragStartX;
+        double factor = 1.0 + dx * 0.003;  // 0.3% per pixel
+        double newBw = m_bwDragStartBw * factor;
+        newBw = std::clamp(newBw, 1000.0, 48000.0);  // 1 kHz min to 48 kHz (DDC sample rate)
+        m_bandwidthHz = newBw;
+        updateVfoPositions();
+        update();
+        return;
+    }
+
+    if (m_draggingDivider) {
+        // Resize spectrum/waterfall split
+        // From AetherSDR SpectrumWidget.cpp:1148-1165
+        float frac = static_cast<float>(my) / h;
+        m_spectrumFrac = std::clamp(frac, 0.10f, 0.90f);
+        update();
+        return;
+    }
+
+    if (m_draggingPan) {
+        // Pan the view — drag changes center, not VFO
+        // From AetherSDR SpectrumWidget.cpp:1230-1237
+        double deltaPx = mx - m_panDragStartX;
+        double deltaHz = -(deltaPx / static_cast<double>(specRect.width())) * m_bandwidthHz;
+        m_centerHz = m_panDragStartCenter + deltaHz;
+        emit centerChanged(m_centerHz);
+        updateVfoPositions();
+        update();
+        return;
+    }
+
+    // --- Hover cursor feedback (not dragging) ---
+    // From AetherSDR SpectrumWidget.cpp:1242-1344
+
+    int freqScaleY = h - kFreqScaleH;
+    if (mx < kDbmStripW) {
+        setCursor(Qt::SizeVerCursor);
+    } else if (my >= freqScaleY) {
+        setCursor(Qt::SizeHorCursor);
+    } else if (my >= specH && my < specH + kDividerH) {
+        setCursor(Qt::SplitVCursor);
+    } else {
+        // Check filter edges and passband
+        double loHz = m_vfoHz + m_filterLowHz;
+        double hiHz = m_vfoHz + m_filterHighHz;
+        int xLo = hzToX(loHz, specRect);
+        int xHi = hzToX(hiHz, specRect);
+        if (xLo > xHi) { std::swap(xLo, xHi); }
+
+        bool onEdge = std::abs(mx - xLo) <= kFilterGrab ||
+                      std::abs(mx - xHi) <= kFilterGrab;
+        bool inPassband = mx > std::min(xLo, xHi) + kFilterGrab &&
+                          mx < std::max(xLo, xHi) - kFilterGrab;
+
+        if (onEdge || inPassband) {
+            setCursor(Qt::SizeHorCursor);
+        } else {
+            setCursor(Qt::CrossCursor);
+        }
+    }
+
 #ifdef NEREUS_GPU_SPECTRUM
-    markOverlayDirty();  // cursor frequency needs GPU overlay refresh
+    markOverlayDirty();
 #else
-    update();  // repaint for cursor frequency display
+    update();
 #endif
     QWidget::mouseMoveEvent(event);
 }
@@ -723,7 +936,27 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
 void SpectrumWidget::mouseReleaseEvent(QMouseEvent* event)
 {
     if (event->button() == Qt::LeftButton) {
+        // If pan drag was short (click, not real drag), treat as click-to-tune
+        // From AetherSDR SpectrumWidget.cpp:1427-1457 — 4px Manhattan threshold
+        if (m_draggingPan) {
+            int dx = std::abs(static_cast<int>(event->position().x()) - m_panDragStartX);
+            if (dx <= 4) {
+                int w = width();
+                int specH = static_cast<int>(height() * m_spectrumFrac);
+                QRect specRect(kDbmStripW, 0, w - kDbmStripW, specH);
+                double hz = xToHz(static_cast<int>(event->position().x()), specRect);
+                hz = std::round(hz / m_stepHz) * m_stepHz;
+                emit frequencyClicked(hz);
+            }
+        }
+
         m_draggingDbm = false;
+        m_draggingFilter = FilterEdge::None;
+        m_draggingVfo = false;
+        m_draggingDivider = false;
+        m_draggingPan = false;
+        m_draggingBandwidth = false;
+        setCursor(Qt::CrossCursor);
     }
     QWidget::mouseReleaseEvent(event);
 }
@@ -740,18 +973,16 @@ void SpectrumWidget::wheelEvent(QWheelEvent* event)
     }
 
     if (event->modifiers() & Qt::ControlModifier) {
-        if (event->modifiers() & Qt::ShiftModifier) {
-            // Ctrl+Shift: zoom bandwidth
-            double factor = (delta > 0) ? 0.8 : 1.25;
-            double newBw = m_bandwidthHz * factor;
-            newBw = qBound(5000.0, newBw, 1000000.0);
-            m_bandwidthHz = newBw;
-            emit bandwidthChangeRequested(newBw);
-        } else {
-            // Ctrl only: adjust ref level
-            float step = (delta > 0) ? 5.0f : -5.0f;
-            m_refLevel = qBound(-160.0f, m_refLevel + step, 20.0f);
-        }
+        // Ctrl+scroll: zoom bandwidth in/out
+        double factor = (delta > 0) ? 0.8 : 1.25;
+        double newBw = m_bandwidthHz * factor;
+        newBw = std::clamp(newBw, 1000.0, 48000.0);
+        m_bandwidthHz = newBw;
+        updateVfoPositions();
+    } else if (event->modifiers() & Qt::ShiftModifier) {
+        // Shift+scroll: adjust ref level
+        float step = (delta > 0) ? 5.0f : -5.0f;
+        m_refLevel = qBound(-160.0f, m_refLevel + step, 20.0f);
     } else {
         // Plain scroll: tune VFO by step size
         int steps = (delta > 0) ? 1 : -1;
@@ -1280,6 +1511,28 @@ void SpectrumWidget::releaseResources()
 void SpectrumWidget::setVfoFrequency(double hz)
 {
     m_vfoHz = hz;
+
+    // Auto-scroll pan center to keep VFO visible
+    // From Thetis console.cs:31371-31385 — recenter if VFO goes outside display
+    double leftEdge = m_centerHz - m_bandwidthHz / 2.0;
+    double rightEdge = m_centerHz + m_bandwidthHz / 2.0;
+    double margin = m_bandwidthHz * 0.10;  // 10% margin from edges
+
+    bool needsScroll = false;
+    if (hz < leftEdge + margin) {
+        // VFO approaching left edge — scroll left
+        m_centerHz = hz + m_bandwidthHz / 2.0 - margin;
+        needsScroll = true;
+    } else if (hz > rightEdge - margin) {
+        // VFO approaching right edge — scroll right
+        m_centerHz = hz - m_bandwidthHz / 2.0 + margin;
+        needsScroll = true;
+    }
+
+    if (needsScroll) {
+        emit centerChanged(m_centerHz);
+    }
+
     updateVfoPositions();
     update();
 }
@@ -1312,16 +1565,21 @@ VfoWidget* SpectrumWidget::vfoWidget(int sliceIndex) const
 
 void SpectrumWidget::updateVfoPositions()
 {
-    int w = width();
-    int h = height();
-    int specH = static_cast<int>(h * m_spectrumFrac);
-    QRect specRect(kDbmStripW, 0, w - kDbmStripW, specH);
+    if (width() <= 0 || height() <= 0) {
+        return;
+    }
+
+    int specH = static_cast<int>(height() * m_spectrumFrac);
+    QRect specRect(kDbmStripW, 0, width() - kDbmStripW, specH);
+    int vfoX = hzToX(m_vfoHz, specRect);
 
     for (auto it = m_vfoWidgets.begin(); it != m_vfoWidgets.end(); ++it) {
         VfoWidget* vfo = it.value();
-        // Use the main VFO frequency for slice 0 (others will have their own)
-        int vfoX = hzToX(m_vfoHz, specRect);
+        if (vfo->width() <= 0) {
+            vfo->adjustSize();
+        }
         vfo->updatePosition(vfoX, 0);
+        vfo->raise();
     }
 }
 
