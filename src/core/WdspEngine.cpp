@@ -257,8 +257,8 @@ RxChannel* WdspEngine::createRxChannel(int channelId,
     // subsequent setMode/setFilterFreqs calls from RadioModel work correctly.
     // Without this, the RxChannel guard (if val == m_mode) would skip the
     // WDSP call when the requested mode matches the cached default.
-    SetRXAMode(channelId, static_cast<int>(DSPMode::USB));
-    SetRXABandpassFreqs(channelId, 150.0, 2850.0);
+    SetRXAMode(channelId, static_cast<int>(DSPMode::LSB));
+    SetRXABandpassFreqs(channelId, -2850.0, -150.0);
     SetRXAAGCMode(channelId, static_cast<int>(AGCMode::Med));
     SetRXAAGCTop(channelId, 80.0);
 

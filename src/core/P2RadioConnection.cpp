@@ -125,7 +125,7 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // This means DDC2 is the primary receiver, not DDC0!
     // From Thetis console.cs:8234-8241
     m_rx[2].enable = 1;
-    m_rx[2].frequency = 14225000;  // Default — overridden by SliceModel via setReceiverFrequency
+    m_rx[2].frequency = 3865000;   // 80m LSB — matching Phase 3D verified config
     m_rx[2].samplingRate = 48;     // 48 kHz — keep matching WDSP input rate
     // Note: pcap shows Thetis uses 768 kHz for wider spectrum. To enable that,
     // WDSP must also be configured for 768 kHz input (future work).
@@ -139,7 +139,7 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     m_adc[2].random = 1;
 
     // TX frequency — overridden by SliceModel via setTxFrequency (simplex: TX=RX)
-    m_tx[0].frequency = 14225000;
+    m_tx[0].frequency = 3865000;
 
     setState(ConnectionState::Connecting);
 

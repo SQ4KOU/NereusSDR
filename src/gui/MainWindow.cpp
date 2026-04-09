@@ -225,8 +225,8 @@ void MainWindow::wireSliceToSpectrum()
         return;
     }
 
-    // Set initial spectrum display from slice state
-    // Bandwidth = DDC sample rate (48 kHz). The full I/Q FFT covers this range.
+    // Set initial spectrum display — 48 kHz centered on VFO.
+    // With N/2 FFT, only positive frequencies (right half) show real signals.
     double freq = slice->frequency();
     m_spectrumWidget->setFrequencyRange(freq, 48000.0);
     m_spectrumWidget->setVfoFrequency(freq);
@@ -250,15 +250,9 @@ void MainWindow::wireSliceToSpectrum()
     // VFO frequency change → move VFO marker (do NOT recenter pan)
     // Auto-scroll handled inside setVfoFrequency if VFO reaches edge.
     connect(slice, &SliceModel::frequencyChanged, this, [this, vfo](double freq) {
+        m_spectrumWidget->setFrequencyRange(freq, 48000.0);
         m_spectrumWidget->setVfoFrequency(freq);
         vfo->setFrequency(freq);
-        // Update WDSP oscillator offset: demod at VFO position within DDC bandwidth
-        double centerHz = m_spectrumWidget->centerFrequency();
-        double offsetHz = freq - centerHz;
-        RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
-        if (rxCh) {
-            rxCh->setOscFreq(offsetHz);
-        }
     });
 
     connect(slice, &SliceModel::filterChanged, this, [this, vfo](int low, int high) {
@@ -359,22 +353,11 @@ void MainWindow::wireSliceToSpectrum()
         slice->setFilter(low, high);
     });
 
-    // --- Pan center changed → retune DDC + update RXOsc ---
-    // From Thetis: DDC tunes to pan center, WDSP RXOsc offsets to VFO position
+    // --- Pan center changed (pan drag) → retune VFO to match ---
+    // CTUN OFF mode: pan drag changes the actual tuned frequency.
     connect(m_spectrumWidget, &SpectrumWidget::centerChanged,
-            this, [this, slice](double centerHz) {
-        // Retune DDC to new pan center
-        int rxIdx = slice->receiverIndex();
-        if (rxIdx >= 0) {
-            m_radioModel->receiverManager()->setReceiverFrequency(
-                rxIdx, static_cast<quint64>(centerHz));
-        }
-        // Update WDSP oscillator offset
-        double offsetHz = slice->frequency() - centerHz;
-        RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
-        if (rxCh) {
-            rxCh->setOscFreq(offsetHz);
-        }
+            this, [slice](double centerHz) {
+        slice->setFrequency(centerHz);
     });
 
     // Position the VFO flag

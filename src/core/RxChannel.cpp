@@ -40,24 +40,6 @@ void RxChannel::setMode(DSPMode mode)
 // Bandpass filter
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Oscillator offset — from Thetis radio.cs:1407-1417 RXOsc
-// ---------------------------------------------------------------------------
-
-void RxChannel::setOscFreq(double offsetHz)
-{
-#ifdef HAVE_WDSP
-    // From Thetis radio.cs:1417 — SetRXAShiftFreq(id, -value)
-    // Thetis: rx1_osc = -(VFO - Center) * 1e6, then SetRXAShiftFreq(id, -rx1_osc)
-    // Net effect: SetRXAShiftFreq receives +(VFO - Center) in Hz.
-    // We receive offsetHz = (VFO - Center) already in Hz — pass directly.
-    SetRXAShiftFreq(m_channelId, offsetHz);
-    SetRXAShiftRun(m_channelId, (offsetHz != 0.0) ? 1 : 0);
-#else
-    Q_UNUSED(offsetHz);
-#endif
-}
-
 void RxChannel::setFilterFreqs(double lowHz, double highHz)
 {
     if (m_filterLow == lowHz && m_filterHigh == highHz) {

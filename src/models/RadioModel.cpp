@@ -323,11 +323,13 @@ void RadioModel::wireSliceSignals()
 
     SliceModel* slice = m_activeSlice;
 
-    // Frequency → TX follows RX (simplex), DDC retuning handled by
-    // MainWindow::centerChanged signal (pan center = DDC center).
-    // VFO frequency change does NOT retune DDC — only updates RXOsc offset
-    // and TX frequency. This enables AetherSDR-style independent pan/VFO.
-    connect(slice, &SliceModel::frequencyChanged, this, [this](double freq) {
+    // Frequency → ReceiverManager → radio hardware
+    // ReceiverManager handles DDC mapping (receiver 0 → DDC2 for ANAN-G2)
+    connect(slice, &SliceModel::frequencyChanged, this, [this, slice](double freq) {
+        int rxIdx = slice->receiverIndex();
+        if (rxIdx >= 0) {
+            m_receiverManager->setReceiverFrequency(rxIdx, static_cast<quint64>(freq));
+        }
         // TX follows RX (simplex)
         if (m_connection) {
             quint64 freqHz = static_cast<quint64>(freq);
@@ -400,7 +402,6 @@ void RadioModel::wireSliceSignals()
     });
 
     // Send initial frequency to radio (after connection init completes)
-    // DDC tunes to VFO frequency initially (pan center = VFO on startup)
     QTimer::singleShot(100, this, [this, slice]() {
         if (m_connection && m_connection->isConnected()) {
             int rxIdx = slice->receiverIndex();
@@ -411,11 +412,6 @@ void RadioModel::wireSliceSignals()
             QMetaObject::invokeMethod(m_connection, [conn = m_connection, freqHz]() {
                 conn->setTxFrequency(freqHz);
             });
-            // RXOsc = 0 at startup (VFO = pan center)
-            RxChannel* rxCh = m_wdspEngine->rxChannel(0);
-            if (rxCh) {
-                rxCh->setOscFreq(0.0);
-            }
         }
     });
 }
@@ -506,7 +502,6 @@ void RadioModel::saveSliceState(SliceModel* slice)
     s.setValue(QStringLiteral("VfoRfGain"), slice->rfGain());
     s.setValue(QStringLiteral("VfoRxAntenna"), slice->rxAntenna());
     s.setValue(QStringLiteral("VfoTxAntenna"), slice->txAntenna());
-    s.save();
 }
 
 void RadioModel::teardownConnection()

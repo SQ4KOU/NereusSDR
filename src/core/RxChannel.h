@@ -48,12 +48,6 @@ public:
     double filterLow() const { return m_filterLow; }
     double filterHigh() const { return m_filterHigh; }
 
-    // --- Oscillator offset (VFO - pan center) ---
-    // From Thetis radio.cs:1407-1417 RXOsc property.
-    // Shifts the demodulation frequency within the I/Q bandwidth.
-    // offsetHz = (VFO frequency - DDC center frequency) in Hz.
-    void setOscFreq(double offsetHz);
-
     // --- AGC ---
 
     AGCMode agcMode() const { return static_cast<AGCMode>(m_agcMode.load()); }

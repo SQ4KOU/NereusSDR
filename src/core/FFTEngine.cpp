@@ -222,27 +222,21 @@ void FFTEngine::processFrame()
     // Execute FFT (window already applied during accumulation in feedIQ)
     fftwf_execute(m_plan);
 
-    // Convert to dBm with FFT shift: output ALL bins (full I/Q bandwidth)
-    // with negative frequencies on the left, DC center, positive on the right.
-    // FFTW output order: [DC, +1, +2, ..., +N/2-1, -N/2, ..., -2, -1]
-    // FFT shift reorders: [-N/2, ..., -1, DC, +1, ..., +N/2-1]
-    int N = m_currentFftSize;
-    int half = N / 2;
-    QVector<float> binsDbm(N);
+    // Convert to dBm: 10 * log10(I² + Q²) + normalization
+    // Output only positive frequencies (first half of FFT output)
+    int numBins = m_currentFftSize / 2;
+    QVector<float> binsDbm(numBins);
 
-    // Normalization: dB offset from window coherent gain
-    for (int i = 0; i < N; ++i) {
-        // FFT shift + spectrum inversion for OpenHPSDR I/Q convention.
-        // OpenHPSDR radios output I/Q with the opposite sideband convention
-        // to FFTW's default, so we reverse the bin order.
-        // Output index i maps to FFTW index (half - 1 - i + N) % N
-        int fftIdx = (N + half - 1 - i) % N;
-        float re = m_fftOut[fftIdx][0];
-        float im = m_fftOut[fftIdx][1];
+    // Normalization: the FFT output magnitude needs to be divided by the
+    // window's coherent gain (sum of window coefficients) to get correct
+    // power. We apply this as a dB offset: m_dbmOffset = -20*log10(sum).
+    for (int i = 0; i < numBins; ++i) {
+        float re = m_fftOut[i][0];
+        float im = m_fftOut[i][1];
         float powerSq = re * re + im * im;
 
         // Avoid log(0) — floor at -200 dBm
-        // From Thetis display.cs:2842
+        // From Thetis display.cs:2842 — initializes display data to -200
         if (powerSq < 1e-20f) {
             binsDbm[i] = -200.0f;
         } else {
