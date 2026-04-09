@@ -4,6 +4,7 @@
 #include <QLabel>
 
 class QProgressDialog;
+class QThread;
 
 namespace NereusSDR {
 
@@ -11,6 +12,8 @@ class RadioModel;
 class ConnectionPanel;
 class SupportDialog;
 class WdspEngine;
+class FFTEngine;
+class SpectrumWidget;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -44,6 +47,11 @@ private:
 
     // Wisdom generation dialog (shown on first run)
     QProgressDialog* m_wisdomDialog{nullptr};
+
+    // Spectrum display
+    SpectrumWidget* m_spectrumWidget{nullptr};
+    FFTEngine*      m_fftEngine{nullptr};
+    QThread*        m_fftThread{nullptr};
 };
 
 } // namespace NereusSDR

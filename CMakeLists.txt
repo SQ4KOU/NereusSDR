@@ -76,6 +76,14 @@ else()
 endif()
 if(FFTW3_FOUND)
     message(STATUS "FFTW3 found — client-side FFT enabled")
+    # Also find fftw3f (single-precision) for FFTEngine display FFT
+    if(NOT WIN32)
+        find_library(FFTW3F_LIB fftw3f HINTS ${FFTW3_LIBRARY_DIRS})
+        if(FFTW3F_LIB)
+            list(APPEND FFTW3_LIBRARIES ${FFTW3F_LIB})
+            message(STATUS "FFTW3F (float) found — FFTEngine enabled")
+        endif()
+    endif()
 else()
     message(STATUS "FFTW3 not found — client-side FFT disabled")
 endif()
@@ -150,6 +158,7 @@ set(CORE_SOURCES
     src/core/AudioEngine.cpp
     src/core/WdspEngine.cpp
     src/core/RxChannel.cpp
+    src/core/FFTEngine.cpp
 )
 
 set(MODEL_SOURCES
@@ -164,6 +173,7 @@ set(GUI_SOURCES
     src/gui/MainWindow.cpp
     src/gui/ConnectionPanel.cpp
     src/gui/SupportDialog.cpp
+    src/gui/SpectrumWidget.cpp
 )
 
 # --------------------------------------------------------------------------

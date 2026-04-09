@@ -82,6 +82,9 @@ signals:
     void panadapterAdded(int index);
     void panadapterRemoved(int index);
 
+    // Raw interleaved I/Q for spectrum display (tapped before WDSP processing)
+    void rawIqData(const QVector<float>& interleavedIQ);
+
 private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
 

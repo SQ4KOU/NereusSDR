@@ -208,6 +208,9 @@ void RadioModel::wireConnectionSignals()
             this, [this](int ddcIndex, const QVector<float>& samples) {
         Q_UNUSED(ddcIndex);
 
+        // Fork raw I/Q to spectrum display (before WDSP processing)
+        emit rawIqData(samples);
+
         // Deinterleave and append to accumulation buffers
         int numSamples = samples.size() / 2;
         for (int i = 0; i < numSamples; ++i) {

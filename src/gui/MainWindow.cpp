@@ -1,10 +1,12 @@
 #include "MainWindow.h"
 #include "ConnectionPanel.h"
 #include "SupportDialog.h"
+#include "SpectrumWidget.h"
 #include "models/RadioModel.h"
 #include "core/AppSettings.h"
 #include "core/RadioDiscovery.h"
 #include "core/WdspEngine.h"
+#include "core/FFTEngine.h"
 #include "core/LogCategories.h"
 
 #include <QApplication>
@@ -15,6 +17,7 @@
 #include <QVBoxLayout>
 #include <QProgressDialog>
 #include <QTimer>
+#include <QThread>
 
 #include <cstdlib>
 
@@ -100,18 +103,39 @@ void MainWindow::buildUI()
     setMinimumSize(800, 600);
     resize(1280, 800);
 
-    // Central widget with placeholder
+    // Central widget with SpectrumWidget
     auto* central = new QWidget(this);
     auto* layout = new QVBoxLayout(central);
     layout->setContentsMargins(0, 0, 0, 0);
 
-    auto* placeholder = new QLabel(QStringLiteral("NereusSDR"), central);
-    placeholder->setAlignment(Qt::AlignCenter);
-    placeholder->setStyleSheet(QStringLiteral(
-        "font-size: 24px; color: #00b4d8; font-weight: bold;"));
-    layout->addWidget(placeholder);
+    m_spectrumWidget = new SpectrumWidget(central);
+    m_spectrumWidget->setFrequencyRange(14225000.0, 200000.0);  // 14.225 MHz, 200 kHz BW
+    layout->addWidget(m_spectrumWidget);
 
     setCentralWidget(central);
+
+    // Create FFTEngine on a worker thread (spectrum thread from architecture)
+    m_fftEngine = new FFTEngine(0);  // receiver 0
+    m_fftEngine->setSampleRate(48000.0);
+    m_fftEngine->setFftSize(4096);
+    m_fftEngine->setOutputFps(30);
+
+    m_fftThread = new QThread(this);
+    m_fftThread->setObjectName(QStringLiteral("SpectrumThread"));
+    m_fftEngine->moveToThread(m_fftThread);
+
+    // Clean up FFTEngine when thread finishes
+    connect(m_fftThread, &QThread::finished, m_fftEngine, &QObject::deleteLater);
+
+    // Wire: RadioModel raw I/Q → FFTEngine (auto-queued: main → spectrum thread)
+    connect(m_radioModel, &RadioModel::rawIqData,
+            m_fftEngine, &FFTEngine::feedIQ);
+
+    // Wire: FFTEngine FFT bins → SpectrumWidget (auto-queued: spectrum → main thread)
+    connect(m_fftEngine, &FFTEngine::fftReady,
+            m_spectrumWidget, &SpectrumWidget::updateSpectrum);
+
+    m_fftThread->start();
 }
 
 void MainWindow::buildMenuBar()
@@ -289,6 +313,12 @@ void MainWindow::closeEvent(QCloseEvent* event)
 {
     // Stop discovery to prevent new signals during shutdown
     m_radioModel->discovery()->stopDiscovery();
+
+    // Stop FFT thread
+    if (m_fftThread && m_fftThread->isRunning()) {
+        m_fftThread->quit();
+        m_fftThread->wait(2000);
+    }
 
     // Tear down connection (sends stop command, closes sockets, joins thread)
     m_radioModel->disconnectFromRadio();
