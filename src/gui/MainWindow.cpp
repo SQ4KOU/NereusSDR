@@ -110,6 +110,8 @@ void MainWindow::buildUI()
 
     m_spectrumWidget = new SpectrumWidget(central);
     m_spectrumWidget->setFrequencyRange(3865000.0, 200000.0);  // 3.865 MHz LSB, 200 kHz BW
+    m_spectrumWidget->setVfoFrequency(3865000.0);
+    m_spectrumWidget->setFilterOffset(-2850, -150);  // LSB passband
     layout->addWidget(m_spectrumWidget);
 
     setCentralWidget(central);

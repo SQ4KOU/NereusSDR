@@ -4,6 +4,7 @@
 #include <QVector>
 #include <QImage>
 #include <QColor>
+#include <QPoint>
 
 namespace NereusSDR {
 
@@ -60,14 +61,32 @@ public:
     void setWfColorGain(int gain) { m_wfColorGain = gain; }
     void setWfBlackLevel(int level) { m_wfBlackLevel = level; }
 
+    // ---- VFO / filter overlay ----
+    void setVfoFrequency(double hz) { m_vfoHz = hz; update(); }
+    void setFilterOffset(int lowHz, int highHz) { m_filterLowHz = lowHz; m_filterHighHz = highHz; update(); }
+
+    // ---- Tuning step ----
+    void setStepSize(int hz) { m_stepHz = hz; }
+    int  stepSize() const { return m_stepHz; }
+
 public slots:
     // Feed a new FFT frame. binsDbm are dBm values, one per frequency bin.
     // Called from the main thread after FFTEngine delivers the frame.
     void updateSpectrum(int receiverId, const QVector<float>& binsDbm);
 
+signals:
+    // Emitted when user clicks on spectrum/waterfall to tune
+    void frequencyClicked(double hz);
+    // Emitted when user scrolls to change bandwidth
+    void bandwidthChangeRequested(double newBandwidthHz);
+
 protected:
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
 
 private:
     // ---- Drawing helpers ----
@@ -76,6 +95,8 @@ private:
     void drawWaterfall(QPainter& p, const QRect& wfRect);
     void drawFreqScale(QPainter& p, const QRect& r);
     void drawDbmScale(QPainter& p, const QRect& specRect);
+    void drawVfoMarker(QPainter& p, const QRect& specRect, const QRect& wfRect);
+    void drawCursorInfo(QPainter& p, const QRect& specRect);
 
     // ---- Coordinate helpers ----
     int    hzToX(double hz, const QRect& r) const;
@@ -130,6 +151,19 @@ private:
     QColor m_fillColor{0x00, 0xe5, 0xff};  // cyan
     float  m_fillAlpha{0.70f};
     bool   m_panFill{true};
+
+    // ---- VFO / filter overlay ----
+    double m_vfoHz{0.0};
+    int    m_filterLowHz{-2850};    // LSB default — from Thetis
+    int    m_filterHighHz{-150};
+    int    m_stepHz{100};           // tuning step size
+
+    // ---- Mouse state ----
+    bool   m_draggingDbm{false};
+    int    m_dragStartY{0};
+    float  m_dragStartRef{0.0f};
+    QPoint m_mousePos;              // for cursor frequency display
+    bool   m_mouseInWidget{false};
 };
 
 } // namespace NereusSDR

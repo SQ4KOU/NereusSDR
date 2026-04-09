@@ -3,6 +3,8 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QResizeEvent>
+#include <QMouseEvent>
+#include <QWheelEvent>
 
 #include <cmath>
 
@@ -78,6 +80,8 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
 {
     setMinimumSize(400, 200);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    setMouseTracking(true);  // receive mouseMoveEvent without button pressed
+    setCursor(Qt::CrossCursor);
 
     // Dark background matching NereusSDR STYLEGUIDE
     setAutoFillBackground(true);
@@ -171,8 +175,10 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
     drawGrid(p, specRect);
     drawSpectrum(p, specRect);
     drawWaterfall(p, wfRect);
+    drawVfoMarker(p, specRect, wfRect);
     drawFreqScale(p, freqRect);
     drawDbmScale(p, QRect(0, 0, kDbmStripW, specH));
+    drawCursorInfo(p, specRect);
 }
 
 // ---- Grid drawing ----
@@ -447,6 +453,168 @@ QRgb SpectrumWidget::dbmToRgb(float dbm) const
     return qRgb(stops[stopCount - 1].r,
                 stops[stopCount - 1].g,
                 stops[stopCount - 1].b);
+}
+
+// ---- VFO marker + filter passband overlay ----
+// From Thetis display.cs DrawPanadapterDX2D — VFO line + filter rectangle
+// Colors from AetherSDR: orange VFO, cyan filter passband
+void SpectrumWidget::drawVfoMarker(QPainter& p, const QRect& specRect, const QRect& wfRect)
+{
+    if (m_vfoHz <= 0.0) {
+        return;
+    }
+
+    int vfoX = hzToX(m_vfoHz, specRect);
+    if (vfoX < specRect.left() || vfoX > specRect.right()) {
+        return;
+    }
+
+    // Filter passband rectangle
+    // From AetherSDR: translucent cyan for active filter
+    double loHz = m_vfoHz + m_filterLowHz;
+    double hiHz = m_vfoHz + m_filterHighHz;
+    int xLo = hzToX(loHz, specRect);
+    int xHi = hzToX(hiHz, specRect);
+    if (xLo > xHi) {
+        std::swap(xLo, xHi);
+    }
+
+    // Spectrum passband
+    QColor filterColor(0, 180, 216, 40);  // NereusSDR accent cyan, semi-transparent
+    p.fillRect(xLo, specRect.top(), xHi - xLo, specRect.height(), filterColor);
+
+    // Waterfall passband (slightly more transparent)
+    QColor wfFilterColor(0, 180, 216, 25);
+    p.fillRect(xLo, wfRect.top(), xHi - xLo, wfRect.height(), wfFilterColor);
+
+    // VFO center line — orange for active slice
+    // From AetherSDR SpectrumWidget: slice marker color
+    QPen vfoPen(QColor(255, 165, 0), 1);
+    p.setPen(vfoPen);
+    p.drawLine(vfoX, specRect.top(), vfoX, wfRect.bottom());
+
+    // Filter edge lines (thin white)
+    QPen edgePen(QColor(255, 255, 255, 80), 1);
+    p.setPen(edgePen);
+    p.drawLine(xLo, specRect.top(), xLo, wfRect.bottom());
+    p.drawLine(xHi, specRect.top(), xHi, wfRect.bottom());
+}
+
+// ---- Cursor frequency display ----
+void SpectrumWidget::drawCursorInfo(QPainter& p, const QRect& specRect)
+{
+    if (!m_mouseInWidget) {
+        return;
+    }
+
+    double hz = xToHz(m_mousePos.x(), specRect);
+    double mhz = hz / 1.0e6;
+
+    QString label = QString::number(mhz, 'f', 4) + QStringLiteral(" MHz");
+
+    QFont font = p.font();
+    font.setPixelSize(11);
+    font.setBold(true);
+    p.setFont(font);
+
+    QFontMetrics fm(font);
+    int textW = fm.horizontalAdvance(label) + 12;
+    int textH = fm.height() + 6;
+
+    // Position near cursor, offset to avoid covering the crosshair
+    int labelX = m_mousePos.x() + 12;
+    int labelY = m_mousePos.y() - textH - 4;
+    if (labelX + textW > specRect.right()) {
+        labelX = m_mousePos.x() - textW - 12;
+    }
+    if (labelY < specRect.top()) {
+        labelY = m_mousePos.y() + 12;
+    }
+
+    // Background
+    p.fillRect(labelX, labelY, textW, textH, QColor(0x10, 0x15, 0x20, 200));
+    p.setPen(QColor(0xc8, 0xd8, 0xe8));
+    p.drawText(labelX + 6, labelY + fm.ascent() + 3, label);
+}
+
+// ---- Mouse event handlers ----
+// From gpu-waterfall.md:1064-1076 mouse interaction table
+
+void SpectrumWidget::mousePressEvent(QMouseEvent* event)
+{
+    int w = width();
+    int h = height();
+    int specH = static_cast<int>(h * m_spectrumFrac);
+    QRect specRect(kDbmStripW, 0, w - kDbmStripW, specH);
+
+    if (event->button() == Qt::LeftButton) {
+        // Check if clicking on dBm scale strip — start drag for ref level
+        if (event->position().x() < kDbmStripW) {
+            m_draggingDbm = true;
+            m_dragStartY = static_cast<int>(event->position().y());
+            m_dragStartRef = m_refLevel;
+            return;
+        }
+
+        // Click on spectrum/waterfall — tune to clicked frequency
+        double hz = xToHz(static_cast<int>(event->position().x()), specRect);
+        // Snap to step size
+        hz = std::round(hz / m_stepHz) * m_stepHz;
+        emit frequencyClicked(hz);
+    }
+
+    QWidget::mousePressEvent(event);
+}
+
+void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
+{
+    m_mousePos = event->pos();
+    m_mouseInWidget = true;
+
+    if (m_draggingDbm) {
+        // Drag dBm scale to adjust reference level
+        int dy = static_cast<int>(event->position().y()) - m_dragStartY;
+        int specH = static_cast<int>(height() * m_spectrumFrac);
+        float dbPerPixel = m_dynamicRange / static_cast<float>(specH);
+        m_refLevel = m_dragStartRef + static_cast<float>(dy) * dbPerPixel;
+        m_refLevel = qBound(-20.0f, m_refLevel, 20.0f);
+        update();
+        return;
+    }
+
+    update();  // repaint for cursor frequency display
+    QWidget::mouseMoveEvent(event);
+}
+
+void SpectrumWidget::mouseReleaseEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton) {
+        m_draggingDbm = false;
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+void SpectrumWidget::wheelEvent(QWheelEvent* event)
+{
+    // Ctrl+scroll: zoom bandwidth
+    // Plain scroll: adjust ref level
+    int delta = event->angleDelta().y();
+
+    if (event->modifiers() & Qt::ControlModifier) {
+        // Zoom bandwidth: scroll up = zoom in (narrower), down = zoom out (wider)
+        double factor = (delta > 0) ? 0.8 : 1.25;
+        double newBw = m_bandwidthHz * factor;
+        newBw = qBound(5000.0, newBw, 1000000.0);  // 5 kHz to 1 MHz
+        m_bandwidthHz = newBw;
+        emit bandwidthChangeRequested(newBw);
+    } else {
+        // Scroll ref level: up = increase (show stronger signals at top)
+        float step = (delta > 0) ? 5.0f : -5.0f;
+        m_refLevel = qBound(-160.0f, m_refLevel + step, 20.0f);
+    }
+
+    update();
+    QWidget::wheelEvent(event);
 }
 
 } // namespace NereusSDR
