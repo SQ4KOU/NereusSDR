@@ -489,10 +489,10 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
 QRgb SpectrumWidget::dbmToRgb(float dbm) const
 {
     // Effective thresholds adjusted by gain/black level sliders
-    // Black level slider (0-125): shifts low threshold UP (more black)
+    // Black level slider (0-125): lower = more black, higher = less black
     // Color gain slider (0-100): shifts high threshold DOWN (more color)
     // From Thetis display.cs:2522-2536 defaults: high=-80, low=-130
-    float effectiveLow = m_wfLowThreshold + static_cast<float>(m_wfBlackLevel) * 0.4f;
+    float effectiveLow = m_wfLowThreshold + static_cast<float>(125 - m_wfBlackLevel) * 0.4f;
     float effectiveHigh = m_wfHighThreshold - static_cast<float>(m_wfColorGain) * 0.3f;
     if (effectiveHigh <= effectiveLow) {
         effectiveHigh = effectiveLow + 1.0f;
