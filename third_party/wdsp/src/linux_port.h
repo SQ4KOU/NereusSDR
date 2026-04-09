@@ -32,9 +32,13 @@ john.d.melton@googlemail.com
 #include <semaphore.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #define CRITICAL_SECTION pthread_mutex_t
+typedef pthread_mutex_t *LPCRITICAL_SECTION;
 #define byte unsigned char
 #define String char *
 #define LONG long
@@ -64,7 +68,8 @@ john.d.melton@googlemail.com
 #define _int64 long long
 #define _aligned_malloc(x,y) malloc(x);
 #define _aligned_free(x) free(x);
-#define freopen_s freopen
+// Windows freopen_s to "conout$" is a no-op on POSIX — stdout works as-is
+#define freopen_s(pFile, name, mode, stream) ((void)0)
 #define min(x,y) (x<y?x:y)
 #define max(x,y) (x<y?y:x)
 #define THREAD_PRIORITY_HIGHEST 0
@@ -75,6 +80,24 @@ john.d.melton@googlemail.com
 #define WaitForSingleObject(x, y) LinuxWaitForSingleObject(x, y)
 #define ReleaseSemaphore(x,y,z) LinuxReleaseSemaphore(x,y,z)
 #define SetEvent(x) LinuxSetEvent(x)
+#define ResetEvent(x) LinuxResetEvent(x)
+
+#define AllocConsole() ((void)0)
+#define FreeConsole()  ((void)0)
+
+// Windows AVRT (multimedia thread scheduling) — no-ops on POSIX
+#define AvSetMmThreadCharacteristics(name, idx) ((HANDLE)0)
+#define AvSetMmThreadPriority(h, p) ((void)0)
+#define AvRevertMmThreadCharacteristics(h) ((void)0)
+#define GetCurrentThread() ((HANDLE)0)
+
+// ARM64 has flush-to-zero by default; SSE intrinsics not available
+#ifdef __aarch64__
+#define _MM_SET_FLUSH_ZERO_MODE(x) ((void)0)
+#define _MM_FLUSH_ZERO_ON 0
+#else
+#include <xmmintrin.h>
+#endif
 
 #define INFINITE -1
 
@@ -98,6 +121,8 @@ void LinuxReleaseSemaphore(sem_t *sem,int release_count, int* previous_count);
 sem_t *CreateEvent(void* security_attributes,int bManualReset,int bInitialState,char* name);
 
 void LinuxSetEvent(sem_t* sem);
+
+void LinuxResetEvent(sem_t* sem);
 
 HANDLE wdsp_beginthread( void( __cdecl *start_address )( void * ), unsigned stack_size, void *arglist);
 

@@ -134,6 +134,11 @@ void LinuxSetEvent(sem_t* sem) {
 	sem_post(sem);
 }
 
+void LinuxResetEvent(sem_t* sem) {
+	// Drain the semaphore (non-blocking) to reset it to zero
+	while (sem_trywait(sem) == 0) { }
+}
+
 HANDLE wdsp_beginthread( void( __cdecl *start_address )( void * ), unsigned stack_size, void *arglist) {
 	pthread_t threadid;
 	pthread_attr_t  attr;

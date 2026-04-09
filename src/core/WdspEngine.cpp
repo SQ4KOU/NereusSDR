@@ -105,21 +105,19 @@ bool WdspEngine::initialize(const QString& configDir)
         });
         wisdomThread->setObjectName(QStringLiteral("WisdomThread"));
 
-        connect(wisdomThread, &QThread::finished, this, [this, wisdomThread]() {
+        // Poll wisdom_get_status() for progress updates
+        auto* pollTimer = new QTimer(this);
+        pollTimer->setInterval(250);
+
+        connect(wisdomThread, &QThread::finished, this, [this, wisdomThread, pollTimer]() {
+            pollTimer->stop();
+            pollTimer->deleteLater();
             wisdomThread->deleteLater();
             emit wisdomProgress(100, QStringLiteral("FFTW planning complete"));
             finishInitialization();
         });
 
-        // Poll wisdom_get_status() for progress updates
-        auto* pollTimer = new QTimer(this);
-        pollTimer->setInterval(250);
-        connect(pollTimer, &QTimer::timeout, this, [this, pollTimer, wisdomThread]() {
-            if (wisdomThread->isFinished()) {
-                pollTimer->stop();
-                pollTimer->deleteLater();
-                return;
-            }
+        connect(pollTimer, &QTimer::timeout, this, [this]() {
             char* status = wisdom_get_status();
             if (status && status[0] != '\0') {
                 int pct = estimateWisdomPercent(status);
