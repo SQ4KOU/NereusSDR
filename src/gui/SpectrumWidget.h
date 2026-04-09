@@ -6,6 +6,17 @@
 #include <QColor>
 #include <QPoint>
 
+// GPU spectrum: QRhiWidget base class for Metal/Vulkan/D3D12 rendering.
+// CPU fallback: QWidget with QPainter.
+// Note: NEREUS_GPU_SPECTRUM is set in CMakeLists.txt via target_compile_definitions.
+#ifdef NEREUS_GPU_SPECTRUM
+#include <QRhiWidget>
+#include <rhi/qrhi.h>
+using SpectrumBaseClass = QRhiWidget;
+#else
+using SpectrumBaseClass = QWidget;
+#endif
+
 namespace NereusSDR {
 
 class SpectrumOverlayMenu;
@@ -39,7 +50,7 @@ const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count);
 //   20px  - frequency scale bar
 //
 // From gpu-waterfall.md lines 274-289
-class SpectrumWidget : public QWidget {
+class SpectrumWidget : public SpectrumBaseClass {
     Q_OBJECT
 
 public:
@@ -89,6 +100,11 @@ signals:
     void bandwidthChangeRequested(double newBandwidthHz);
 
 protected:
+#ifdef NEREUS_GPU_SPECTRUM
+    void initialize(QRhiCommandBuffer* cb) override;
+    void render(QRhiCommandBuffer* cb) override;
+    void releaseResources() override;
+#endif
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
@@ -177,6 +193,53 @@ private:
     float  m_dragStartRef{0.0f};
     QPoint m_mousePos;              // for cursor frequency display
     bool   m_mouseInWidget{false};
+
+#ifdef NEREUS_GPU_SPECTRUM
+    bool m_rhiInitialized{false};
+
+    // GPU pipeline init helpers
+    void initWaterfallPipeline();
+    void initOverlayPipeline();
+    void initSpectrumPipeline();
+    void renderGpuFrame(QRhiCommandBuffer* cb);
+
+    // ---- Waterfall GPU resources ----
+    QRhiGraphicsPipeline*       m_wfPipeline{nullptr};
+    QRhiShaderResourceBindings* m_wfSrb{nullptr};
+    QRhiBuffer*                 m_wfVbo{nullptr};
+    QRhiBuffer*                 m_wfUbo{nullptr};
+    QRhiTexture*                m_wfGpuTex{nullptr};
+    QRhiSampler*                m_wfSampler{nullptr};
+    int  m_wfGpuTexW{0};
+    int  m_wfGpuTexH{0};
+    bool m_wfTexFullUpload{true};
+    int  m_wfLastUploadedRow{-1};
+
+    // ---- Overlay GPU resources ----
+    QRhiGraphicsPipeline*       m_ovPipeline{nullptr};
+    QRhiShaderResourceBindings* m_ovSrb{nullptr};
+    QRhiBuffer*                 m_ovVbo{nullptr};
+    QRhiTexture*                m_ovGpuTex{nullptr};
+    QRhiSampler*                m_ovSampler{nullptr};
+    QImage m_overlayStatic;
+    bool   m_overlayStaticDirty{true};
+    bool   m_overlayNeedsUpload{true};
+
+    // ---- FFT spectrum GPU resources ----
+    QRhiGraphicsPipeline*       m_fftLinePipeline{nullptr};
+    QRhiGraphicsPipeline*       m_fftFillPipeline{nullptr};
+    QRhiShaderResourceBindings* m_fftSrb{nullptr};
+    QRhiBuffer*                 m_fftLineVbo{nullptr};
+    QRhiBuffer*                 m_fftFillVbo{nullptr};
+    // From AetherSDR: kMaxFftBins = 8192, kFftVertStride = 6
+    static constexpr int kMaxFftBins = 16384;
+    static constexpr int kFftVertStride = 6;  // x, y, r, g, b, a
+
+    void markOverlayDirty() {
+        m_overlayStaticDirty = true;
+        update();
+    }
+#endif
 };
 
 } // namespace NereusSDR

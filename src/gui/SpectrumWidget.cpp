@@ -7,6 +7,11 @@
 #include <QResizeEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
+#include <QFile>
+
+#ifdef NEREUS_GPU_SPECTRUM
+#include <rhi/qshader.h>
+#endif
 
 #include <cmath>
 
@@ -78,18 +83,26 @@ const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count)
 // ---- SpectrumWidget ----
 
 SpectrumWidget::SpectrumWidget(QWidget* parent)
-    : QWidget(parent)
+    : SpectrumBaseClass(parent)
 {
     setMinimumSize(400, 200);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setMouseTracking(true);  // receive mouseMoveEvent without button pressed
     setCursor(Qt::CrossCursor);
 
-    // Dark background matching NereusSDR STYLEGUIDE
+#ifdef NEREUS_GPU_SPECTRUM
+    // From AetherSDR SpectrumWidget: request Metal on macOS for best performance
+#ifdef Q_OS_MAC
+    setApi(QRhiWidget::Api::Metal);
+#endif
+    setAttribute(Qt::WA_NativeWindow);
+#else
+    // CPU fallback: dark background
     setAutoFillBackground(true);
     QPalette pal = palette();
     pal.setColor(QPalette::Window, QColor(0x0f, 0x0f, 0x1a));
     setPalette(pal);
+#endif
 }
 
 SpectrumWidget::~SpectrumWidget() = default;
@@ -209,20 +222,38 @@ void SpectrumWidget::updateSpectrum(int receiverId, const QVector<float>& binsDb
 
 void SpectrumWidget::resizeEvent(QResizeEvent* event)
 {
-    QWidget::resizeEvent(event);
+    SpectrumBaseClass::resizeEvent(event);
 
-    // Recreate waterfall image at new width
-    int wfW = width() - kDbmStripW;
-    int wfH = static_cast<int>(height() * (1.0f - m_spectrumFrac)) - kFreqScaleH - kDividerH;
-    if (wfW > 0 && wfH > 0) {
+    // Recreate waterfall image at new size
+    int w = width();
+    int h = height();
+#ifdef NEREUS_GPU_SPECTRUM
+    // GPU mode: waterfall is full width (dBm strip is in overlay)
+    int wfW = w;
+#else
+    int wfW = w - kDbmStripW;
+#endif
+    int wfH = static_cast<int>(h * (1.0f - m_spectrumFrac)) - kFreqScaleH - kDividerH;
+    if (wfW > 0 && wfH > 0 && (m_waterfall.isNull() ||
+        m_waterfall.width() != wfW || m_waterfall.height() != wfH)) {
         m_waterfall = QImage(wfW, wfH, QImage::Format_RGB32);
         m_waterfall.fill(QColor(0x0f, 0x0f, 0x1a));
         m_wfWriteRow = 0;
+#ifdef NEREUS_GPU_SPECTRUM
+        m_wfTexFullUpload = true;
+        markOverlayDirty();
+#endif
     }
 }
 
 void SpectrumWidget::paintEvent(QPaintEvent* event)
 {
+#ifdef NEREUS_GPU_SPECTRUM
+    // GPU mode: render() handles everything via QRhi.
+    // Do NOT use QPainter on QRhiWidget — it doesn't support paintEngine.
+    SpectrumBaseClass::paintEvent(event);
+    return;
+#endif
     Q_UNUSED(event);
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
@@ -714,5 +745,514 @@ void SpectrumWidget::wheelEvent(QWheelEvent* event)
     update();
     QWidget::wheelEvent(event);
 }
+
+// ============================================================================
+// GPU Rendering Path (QRhiWidget)
+// Ported from AetherSDR SpectrumWidget GPU pipeline
+// ============================================================================
+
+#ifdef NEREUS_GPU_SPECTRUM
+
+// Fullscreen quad: position (x,y) + texcoord (u,v)
+// From AetherSDR SpectrumWidget.cpp:1779
+static const float kQuadData[] = {
+    -1, -1,  0, 1,   // bottom-left
+     1, -1,  1, 1,   // bottom-right
+    -1,  1,  0, 0,   // top-left
+     1,  1,  1, 0,   // top-right
+};
+
+static QShader loadShader(const QString& path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        qWarning() << "SpectrumWidget: failed to load shader" << path;
+        return {};
+    }
+    QShader s = QShader::fromSerialized(f.readAll());
+    if (!s.isValid()) {
+        qWarning() << "SpectrumWidget: invalid shader" << path;
+    }
+    return s;
+}
+
+void SpectrumWidget::initWaterfallPipeline()
+{
+    QRhi* r = rhi();
+
+    m_wfVbo = r->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, sizeof(kQuadData));
+    m_wfVbo->create();
+
+    m_wfUbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 16);
+    m_wfUbo->create();
+
+    m_wfGpuTexW = qMax(width(), 64);
+    m_wfGpuTexH = qMax(m_waterfall.height(), 64);
+    m_wfGpuTex = r->newTexture(QRhiTexture::RGBA8, QSize(m_wfGpuTexW, m_wfGpuTexH));
+    m_wfGpuTex->create();
+
+    // From AetherSDR: ClampToEdge U, Repeat V (for ring buffer wrap)
+    m_wfSampler = r->newSampler(QRhiSampler::Linear, QRhiSampler::Linear,
+                                 QRhiSampler::None,
+                                 QRhiSampler::ClampToEdge, QRhiSampler::Repeat);
+    m_wfSampler->create();
+
+    m_wfSrb = r->newShaderResourceBindings();
+    m_wfSrb->setBindings({
+        QRhiShaderResourceBinding::uniformBuffer(0, QRhiShaderResourceBinding::FragmentStage, m_wfUbo),
+        QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage, m_wfGpuTex, m_wfSampler),
+    });
+    m_wfSrb->create();
+
+    QShader vs = loadShader(QStringLiteral(":/shaders/resources/shaders/waterfall.vert.qsb"));
+    QShader fs = loadShader(QStringLiteral(":/shaders/resources/shaders/waterfall.frag.qsb"));
+    if (!vs.isValid() || !fs.isValid()) { return; }
+
+    m_wfPipeline = r->newGraphicsPipeline();
+    m_wfPipeline->setShaderStages({
+        {QRhiShaderStage::Vertex, vs},
+        {QRhiShaderStage::Fragment, fs},
+    });
+
+    QRhiVertexInputLayout layout;
+    layout.setBindings({{4 * sizeof(float)}});
+    layout.setAttributes({
+        {0, 0, QRhiVertexInputAttribute::Float2, 0},
+        {0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float)},
+    });
+    m_wfPipeline->setVertexInputLayout(layout);
+    m_wfPipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
+    m_wfPipeline->setShaderResourceBindings(m_wfSrb);
+    m_wfPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+    m_wfPipeline->create();
+}
+
+void SpectrumWidget::initOverlayPipeline()
+{
+    QRhi* r = rhi();
+
+    m_ovVbo = r->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, sizeof(kQuadData));
+    m_ovVbo->create();
+
+    int w = qMax(width(), 64);
+    int h = qMax(height(), 64);
+    const qreal dpr = devicePixelRatioF();
+    const int pw = static_cast<int>(w * dpr);
+    const int ph = static_cast<int>(h * dpr);
+    m_ovGpuTex = r->newTexture(QRhiTexture::RGBA8, QSize(pw, ph));
+    m_ovGpuTex->create();
+
+    m_ovSampler = r->newSampler(QRhiSampler::Linear, QRhiSampler::Linear,
+                                 QRhiSampler::None,
+                                 QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge);
+    m_ovSampler->create();
+
+    m_ovSrb = r->newShaderResourceBindings();
+    m_ovSrb->setBindings({
+        QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage, m_ovGpuTex, m_ovSampler),
+    });
+    m_ovSrb->create();
+
+    QShader vs = loadShader(QStringLiteral(":/shaders/resources/shaders/overlay.vert.qsb"));
+    QShader fs = loadShader(QStringLiteral(":/shaders/resources/shaders/overlay.frag.qsb"));
+    if (!vs.isValid() || !fs.isValid()) { return; }
+
+    m_ovPipeline = r->newGraphicsPipeline();
+    m_ovPipeline->setShaderStages({
+        {QRhiShaderStage::Vertex, vs},
+        {QRhiShaderStage::Fragment, fs},
+    });
+
+    QRhiVertexInputLayout layout;
+    layout.setBindings({{4 * sizeof(float)}});
+    layout.setAttributes({
+        {0, 0, QRhiVertexInputAttribute::Float2, 0},
+        {0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float)},
+    });
+    m_ovPipeline->setVertexInputLayout(layout);
+    m_ovPipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
+    m_ovPipeline->setShaderResourceBindings(m_ovSrb);
+    m_ovPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+
+    // Alpha blending for overlay compositing
+    QRhiGraphicsPipeline::TargetBlend blend;
+    blend.enable = true;
+    blend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
+    blend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+    blend.srcAlpha = QRhiGraphicsPipeline::One;
+    blend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+    m_ovPipeline->setTargetBlends({blend});
+    m_ovPipeline->create();
+
+    m_overlayStatic = QImage(pw, ph, QImage::Format_RGBA8888_Premultiplied);
+    m_overlayStatic.setDevicePixelRatio(dpr);
+}
+
+void SpectrumWidget::initSpectrumPipeline()
+{
+    QRhi* r = rhi();
+
+    m_fftLineVbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer,
+                                 kMaxFftBins * kFftVertStride * sizeof(float));
+    m_fftLineVbo->create();
+
+    m_fftFillVbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer,
+                                 kMaxFftBins * 2 * kFftVertStride * sizeof(float));
+    m_fftFillVbo->create();
+
+    m_fftSrb = r->newShaderResourceBindings();
+    m_fftSrb->setBindings({});
+    m_fftSrb->create();
+
+    QShader vs = loadShader(QStringLiteral(":/shaders/resources/shaders/spectrum.vert.qsb"));
+    QShader fs = loadShader(QStringLiteral(":/shaders/resources/shaders/spectrum.frag.qsb"));
+    if (!vs.isValid() || !fs.isValid()) { return; }
+
+    QRhiVertexInputLayout layout;
+    layout.setBindings({{kFftVertStride * sizeof(float)}});
+    layout.setAttributes({
+        {0, 0, QRhiVertexInputAttribute::Float2, 0},
+        {0, 1, QRhiVertexInputAttribute::Float4, 2 * sizeof(float)},
+    });
+
+    QRhiGraphicsPipeline::TargetBlend blend;
+    blend.enable = true;
+    blend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
+    blend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+    blend.srcAlpha = QRhiGraphicsPipeline::One;
+    blend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+
+    // Fill pipeline (triangle strip)
+    m_fftFillPipeline = r->newGraphicsPipeline();
+    m_fftFillPipeline->setShaderStages({{QRhiShaderStage::Vertex, vs}, {QRhiShaderStage::Fragment, fs}});
+    m_fftFillPipeline->setVertexInputLayout(layout);
+    m_fftFillPipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
+    m_fftFillPipeline->setShaderResourceBindings(m_fftSrb);
+    m_fftFillPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+    m_fftFillPipeline->setTargetBlends({blend});
+    m_fftFillPipeline->create();
+
+    // Line pipeline (line strip)
+    m_fftLinePipeline = r->newGraphicsPipeline();
+    m_fftLinePipeline->setShaderStages({{QRhiShaderStage::Vertex, vs}, {QRhiShaderStage::Fragment, fs}});
+    m_fftLinePipeline->setVertexInputLayout(layout);
+    m_fftLinePipeline->setTopology(QRhiGraphicsPipeline::LineStrip);
+    m_fftLinePipeline->setShaderResourceBindings(m_fftSrb);
+    m_fftLinePipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+    m_fftLinePipeline->setTargetBlends({blend});
+    m_fftLinePipeline->create();
+}
+
+void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
+{
+    if (m_rhiInitialized) { return; }
+
+    QRhi* r = rhi();
+    if (!r) {
+        qWarning() << "SpectrumWidget: QRhi init failed — no GPU backend";
+        return;
+    }
+    qDebug() << "SpectrumWidget: QRhi backend:" << r->backendName();
+
+    auto* batch = r->nextResourceUpdateBatch();
+
+    initWaterfallPipeline();
+    initOverlayPipeline();
+    initSpectrumPipeline();
+
+    // Upload quad VBO data
+    batch->uploadStaticBuffer(m_wfVbo, kQuadData);
+    batch->uploadStaticBuffer(m_ovVbo, kQuadData);
+
+    // Initial full waterfall texture upload
+    if (!m_waterfall.isNull()) {
+        QImage rgba = m_waterfall.convertToFormat(QImage::Format_RGBA8888);
+        QRhiTextureSubresourceUploadDescription desc(rgba);
+        batch->uploadTexture(m_wfGpuTex, QRhiTextureUploadEntry(0, 0, desc));
+    }
+
+    cb->resourceUpdate(batch);
+    m_wfTexFullUpload = false;
+    m_wfLastUploadedRow = m_wfWriteRow;
+    m_rhiInitialized = true;
+}
+
+void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
+{
+    QRhi* r = rhi();
+    const int w = width();
+    const int h = height();
+    if (w <= 0 || h <= kFreqScaleH + kDividerH + 2) { return; }
+
+    const int chromeH = kFreqScaleH + kDividerH;
+    const int contentH = h - chromeH;
+    const int specH = static_cast<int>(contentH * m_spectrumFrac);
+    const int wfY = specH + kDividerH + kFreqScaleH;
+    const int wfH = h - wfY;
+    const QRect specRect(0, 0, w, specH);
+    const QRect wfRect(0, wfY, w, wfH);
+
+    auto* batch = r->nextResourceUpdateBatch();
+
+    // ---- Waterfall texture upload (incremental) ----
+    if (!m_waterfall.isNull()) {
+        if (m_waterfall.width() != m_wfGpuTexW || m_waterfall.height() != m_wfGpuTexH) {
+            m_wfGpuTexW = m_waterfall.width();
+            m_wfGpuTexH = m_waterfall.height();
+            m_wfGpuTex->setPixelSize(QSize(m_wfGpuTexW, m_wfGpuTexH));
+            m_wfGpuTex->create();
+            m_wfSrb->setBindings({
+                QRhiShaderResourceBinding::uniformBuffer(0, QRhiShaderResourceBinding::FragmentStage, m_wfUbo),
+                QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage, m_wfGpuTex, m_wfSampler),
+            });
+            m_wfSrb->create();
+            m_wfTexFullUpload = true;
+        }
+
+        if (m_wfTexFullUpload) {
+            QImage rgba = m_waterfall.convertToFormat(QImage::Format_RGBA8888);
+            batch->uploadTexture(m_wfGpuTex, QRhiTextureUploadEntry(0, 0,
+                QRhiTextureSubresourceUploadDescription(rgba)));
+            m_wfLastUploadedRow = m_wfWriteRow;
+            m_wfTexFullUpload = false;
+        } else if (m_wfWriteRow != m_wfLastUploadedRow) {
+            // Incremental: upload only dirty rows
+            const int texH = m_wfGpuTexH;
+            int row = m_wfLastUploadedRow;
+            QVector<QRhiTextureUploadEntry> entries;
+            int maxRows = texH;
+            while (row != m_wfWriteRow && maxRows-- > 0) {
+                row = (row - 1 + texH) % texH;
+                const uchar* srcLine = m_waterfall.constScanLine(row);
+                QImage rowImg(srcLine, m_wfGpuTexW, 1, m_waterfall.bytesPerLine(),
+                              QImage::Format_RGB32);
+                QImage rowRgba = rowImg.convertToFormat(QImage::Format_RGBA8888);
+                QRhiTextureSubresourceUploadDescription desc(rowRgba);
+                desc.setDestinationTopLeft(QPoint(0, row));
+                entries.append(QRhiTextureUploadEntry(0, 0, desc));
+            }
+            if (!entries.isEmpty()) {
+                QRhiTextureUploadDescription uploadDesc;
+                uploadDesc.setEntries(entries.begin(), entries.end());
+                batch->uploadTexture(m_wfGpuTex, uploadDesc);
+            }
+            m_wfLastUploadedRow = m_wfWriteRow;
+        }
+    }
+
+    // ---- Waterfall UBO (ring buffer offset) ----
+    float rowOffset = (m_wfGpuTexH > 0)
+        ? static_cast<float>(m_wfWriteRow) / m_wfGpuTexH : 0.0f;
+    float uniforms[] = {rowOffset, 0.0f, 0.0f, 0.0f};
+    batch->updateDynamicBuffer(m_wfUbo, 0, sizeof(uniforms), uniforms);
+
+    // ---- Overlay texture (static, only on state change) ----
+    {
+        const qreal dpr = devicePixelRatioF();
+        const int pw = static_cast<int>(w * dpr);
+        const int ph = static_cast<int>(h * dpr);
+        if (m_overlayStatic.size() != QSize(pw, ph)) {
+            m_overlayStatic = QImage(pw, ph, QImage::Format_RGBA8888_Premultiplied);
+            m_overlayStatic.setDevicePixelRatio(dpr);
+            m_ovGpuTex->setPixelSize(QSize(pw, ph));
+            m_ovGpuTex->create();
+            m_ovSrb->setBindings({
+                QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage, m_ovGpuTex, m_ovSampler),
+            });
+            m_ovSrb->create();
+            m_overlayStaticDirty = true;
+        }
+
+        if (m_overlayStaticDirty) {
+            m_overlayStatic.fill(Qt::transparent);
+            QPainter p(&m_overlayStatic);
+            p.setRenderHint(QPainter::Antialiasing, false);
+
+            drawGrid(p, specRect);
+            drawDbmScale(p, QRect(0, 0, kDbmStripW, specH));
+            p.fillRect(0, specH, w, kDividerH, QColor(0x30, 0x40, 0x50));
+            drawFreqScale(p, QRect(0, specH + kDividerH, w, kFreqScaleH));
+            drawVfoMarker(p, specRect, wfRect);
+
+            // Cursor info
+            if (m_mouseInWidget) {
+                drawCursorInfo(p, specRect);
+            }
+
+            m_overlayStaticDirty = false;
+            m_overlayNeedsUpload = true;
+        }
+
+        if (m_overlayNeedsUpload) {
+            batch->uploadTexture(m_ovGpuTex, QRhiTextureUploadEntry(0, 0,
+                QRhiTextureSubresourceUploadDescription(m_overlayStatic)));
+            m_overlayNeedsUpload = false;
+        }
+    }
+
+    // ---- FFT spectrum vertices ----
+    if (!m_smoothed.isEmpty() && m_fftLineVbo && m_fftFillVbo) {
+        const int n = qMin(m_smoothed.size(), kMaxFftBins);
+        const float minDbm = m_refLevel - m_dynamicRange;
+        const float range = m_dynamicRange;
+        const float yBot = -1.0f;
+        const float yTop = 1.0f;
+
+        const float fr = m_fillColor.redF();
+        const float fg = m_fillColor.greenF();
+        const float fb = m_fillColor.blueF();
+        const float fa = m_fillAlpha;
+
+        QVector<float> lineVerts(n * kFftVertStride);
+        QVector<float> fillVerts(n * 2 * kFftVertStride);
+
+        for (int i = 0; i < n; ++i) {
+            float x = 2.0f * i / (n - 1) - 1.0f;
+            float t = qBound(0.0f, (m_smoothed[i] - minDbm) / range, 1.0f);
+            float y = yBot + t * (yTop - yBot);
+
+            // Heat map: blue → cyan → green → yellow → red
+            // From AetherSDR SpectrumWidget.cpp:2298-2310
+            float cr, cg, cb2;
+            if (t < 0.25f) {
+                float s = t / 0.25f;
+                cr = 0.0f; cg = s; cb2 = 1.0f;
+            } else if (t < 0.5f) {
+                float s = (t - 0.25f) / 0.25f;
+                cr = 0.0f; cg = 1.0f; cb2 = 1.0f - s;
+            } else if (t < 0.75f) {
+                float s = (t - 0.5f) / 0.25f;
+                cr = s; cg = 1.0f; cb2 = 0.0f;
+            } else {
+                float s = (t - 0.75f) / 0.25f;
+                cr = 1.0f; cg = 1.0f - s; cb2 = 0.0f;
+            }
+
+            // Line vertex
+            int li = i * kFftVertStride;
+            lineVerts[li]     = x;
+            lineVerts[li + 1] = y;
+            lineVerts[li + 2] = cr;
+            lineVerts[li + 3] = cg;
+            lineVerts[li + 4] = cb2;
+            lineVerts[li + 5] = 0.9f;
+
+            // Fill vertices (top at signal, bottom at base)
+            int fi = i * 2 * kFftVertStride;
+            fillVerts[fi]     = x;
+            fillVerts[fi + 1] = y;
+            fillVerts[fi + 2] = cr;
+            fillVerts[fi + 3] = cg;
+            fillVerts[fi + 4] = cb2;
+            fillVerts[fi + 5] = fa * 0.3f;
+            fillVerts[fi + 6] = x;
+            fillVerts[fi + 7] = yBot;
+            fillVerts[fi + 8]  = 0.0f;
+            fillVerts[fi + 9]  = 0.0f;
+            fillVerts[fi + 10] = 0.3f;
+            fillVerts[fi + 11] = fa;
+        }
+
+        batch->updateDynamicBuffer(m_fftLineVbo, 0,
+            n * kFftVertStride * sizeof(float), lineVerts.constData());
+        batch->updateDynamicBuffer(m_fftFillVbo, 0,
+            n * 2 * kFftVertStride * sizeof(float), fillVerts.constData());
+    }
+
+    cb->resourceUpdate(batch);
+
+    // ---- Begin render pass ----
+    const QColor clearColor(0x0a, 0x0a, 0x14);
+    cb->beginPass(renderTarget(), clearColor, {1.0f, 0});
+
+    const QSize outputSize = renderTarget()->pixelSize();
+    const float dpr = outputSize.width() / static_cast<float>(qMax(1, w));
+
+    // Draw waterfall
+    if (m_wfPipeline) {
+        cb->setGraphicsPipeline(m_wfPipeline);
+        cb->setShaderResources(m_wfSrb);
+        float vpX = static_cast<float>(wfRect.x()) * dpr;
+        float vpY = static_cast<float>(h - wfRect.bottom() - 1) * dpr;
+        float vpW = static_cast<float>(wfRect.width()) * dpr;
+        float vpH = static_cast<float>(wfRect.height()) * dpr;
+        cb->setViewport({vpX, vpY, vpW, vpH});
+        const QRhiCommandBuffer::VertexInput vbuf(m_wfVbo, 0);
+        cb->setVertexInput(0, 1, &vbuf);
+        cb->draw(4);
+    }
+
+    // Draw FFT spectrum
+    if (m_fftFillPipeline && m_fftLinePipeline && !m_smoothed.isEmpty()) {
+        const int n = qMin(m_smoothed.size(), kMaxFftBins);
+        float specVpX = static_cast<float>(specRect.x()) * dpr;
+        float specVpY = static_cast<float>(h - specRect.bottom() - 1) * dpr;
+        float specVpW = static_cast<float>(specRect.width()) * dpr;
+        float specVpH = static_cast<float>(specRect.height()) * dpr;
+        QRhiViewport specVp(specVpX, specVpY, specVpW, specVpH);
+
+        // Fill pass
+        cb->setGraphicsPipeline(m_fftFillPipeline);
+        cb->setShaderResources(m_fftSrb);
+        cb->setViewport(specVp);
+        const QRhiCommandBuffer::VertexInput fillVbuf(m_fftFillVbo, 0);
+        cb->setVertexInput(0, 1, &fillVbuf);
+        cb->draw(n * 2);
+
+        // Line pass
+        cb->setGraphicsPipeline(m_fftLinePipeline);
+        cb->setShaderResources(m_fftSrb);
+        cb->setViewport(specVp);
+        const QRhiCommandBuffer::VertexInput lineVbuf(m_fftLineVbo, 0);
+        cb->setVertexInput(0, 1, &lineVbuf);
+        cb->draw(n);
+    }
+
+    // Draw overlay
+    if (m_ovPipeline) {
+        cb->setGraphicsPipeline(m_ovPipeline);
+        cb->setShaderResources(m_ovSrb);
+        cb->setViewport({0, 0,
+            static_cast<float>(outputSize.width()),
+            static_cast<float>(outputSize.height())});
+        const QRhiCommandBuffer::VertexInput vbuf(m_ovVbo, 0);
+        cb->setVertexInput(0, 1, &vbuf);
+        cb->draw(4);
+    }
+
+    cb->endPass();
+}
+
+void SpectrumWidget::render(QRhiCommandBuffer* cb)
+{
+    if (!m_rhiInitialized) { return; }
+    renderGpuFrame(cb);
+}
+
+void SpectrumWidget::releaseResources()
+{
+    delete m_wfPipeline;      m_wfPipeline = nullptr;
+    delete m_wfSrb;           m_wfSrb = nullptr;
+    delete m_wfVbo;           m_wfVbo = nullptr;
+    delete m_wfUbo;           m_wfUbo = nullptr;
+    delete m_wfGpuTex;        m_wfGpuTex = nullptr;
+    delete m_wfSampler;       m_wfSampler = nullptr;
+
+    delete m_ovPipeline;      m_ovPipeline = nullptr;
+    delete m_ovSrb;           m_ovSrb = nullptr;
+    delete m_ovVbo;           m_ovVbo = nullptr;
+    delete m_ovGpuTex;        m_ovGpuTex = nullptr;
+    delete m_ovSampler;       m_ovSampler = nullptr;
+
+    delete m_fftLinePipeline;  m_fftLinePipeline = nullptr;
+    delete m_fftFillPipeline;  m_fftFillPipeline = nullptr;
+    delete m_fftSrb;           m_fftSrb = nullptr;
+    delete m_fftLineVbo;       m_fftLineVbo = nullptr;
+    delete m_fftFillVbo;       m_fftFillVbo = nullptr;
+
+    m_rhiInitialized = false;
+}
+
+#endif // NEREUS_GPU_SPECTRUM
 
 } // namespace NereusSDR
