@@ -237,6 +237,19 @@ endif()
 if(NEREUS_GPU_SPECTRUM)
     target_link_libraries(NereusSDR PRIVATE Qt6::GuiPrivate)
     target_compile_definitions(NereusSDR PRIVATE NEREUS_GPU_SPECTRUM)
+
+    if(Qt6ShaderTools_FOUND)
+        qt_add_shaders(NereusSDR "nereus_shaders"
+            PREFIX "/shaders"
+            FILES
+                resources/shaders/waterfall.vert
+                resources/shaders/waterfall.frag
+                resources/shaders/spectrum.vert
+                resources/shaders/spectrum.frag
+                resources/shaders/overlay.vert
+                resources/shaders/overlay.frag
+        )
+    endif()
 endif()
 
 # --------------------------------------------------------------------------
