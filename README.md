@@ -22,16 +22,31 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 
 ---
 
-## Key Features (Planned)
+## Current Status
 
+**Phase 3B complete — first audio achieved.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates it through the WDSP DSP engine, and outputs audio to the speakers. The full receive pipeline is working end-to-end.
+
+## Key Features
+
+**Working now:**
+- OpenHPSDR Protocol 2 radio discovery and connection
+- Raw I/Q reception from ANAN-G2 (DDC2, 48kHz, 238 samples/packet)
+- WDSP v1.29 DSP engine — USB demodulation, AGC, bandpass filtering
+- Real-time audio output via QAudioSink (48kHz stereo Int16)
+- FFTW wisdom caching with first-run progress dialog
+- Audio device selection and persistence
+- Cross-platform build (Windows, Linux, macOS)
+
+**Planned:**
 - GPU-accelerated waterfall and spectrum display (QRhi — Vulkan, Metal, D3D12, OpenGL)
 - Up to 4 independent panadapters in configurable layouts
-- Full WDSP DSP engine (AGC, NR/NR2, NB/NB2, ANF, EQ, compression, PureSignal)
+- Full WDSP DSP features (NR/NR2, NB/NB2, ANF, EQ, compression, PureSignal)
+- VFO tuning, mode selection, filter controls
 - Configurable floating/dockable containers — put any control anywhere, across multiple monitors
 - Thetis-inspired skin system with 4-pan support
-- OpenHPSDR Protocol 1 and Protocol 2
+- OpenHPSDR Protocol 1 (Hermes Lite 2, older ANAN radios)
 - TCI protocol server, CAT control (rigctld), DAX virtual audio
-- Cross-platform: Windows, Linux, macOS
+- TX support (mic → WDSP → radio)
 
 ---
 
@@ -60,15 +75,16 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 | Phase | Goal | Status |
 |---|---|---|
 | **3A: Radio Connection** | Connect to ANAN-G2 via Protocol 2, receive I/Q | **Complete** |
-| **3B: WDSP Integration** | Process I/Q through WDSP, demodulate audio | Next up |
-| **3C: Audio Pipeline** | RX audio to speakers, TX audio from mic | Planned |
-| **3D: GPU Spectrum** | Live FFT spectrum + waterfall from I/Q | Planned |
+| **3B: WDSP Integration** | Process I/Q through WDSP, demodulate audio | **Complete** |
+| **3C: Spectrum Display** | Live FFT spectrum + waterfall from I/Q | Next up |
+| **3D: VFO & Controls** | Tuning, mode selection, filter, AGC controls | Planned |
 | **3E: Multi-Panadapter** | 1-4 pans in configurable layouts | Planned |
 | **3F: Container System** | Unified float/dock containers with 16 widget types | Planned |
 | **3G: Skin System** | Thetis-inspired skins with 4-pan support | Planned |
-| **3H: TCI Server** | TCI v2.0 WebSocket for external apps | Planned |
-| **3I: Protocol 1** | P1 support for Hermes Lite 2 / older ANAN | Planned |
-| **3J: Packaging** | AppImage, Windows installer, macOS DMG | Planned |
+| **3H: TX Pipeline** | Mic → WDSP → radio, TX audio + silence frames | Planned |
+| **3I: TCI Server** | TCI v2.0 WebSocket for external apps | Planned |
+| **3J: Protocol 1** | P1 support for Hermes Lite 2 / older ANAN | Planned |
+| **3K: Packaging** | AppImage, Windows installer, macOS DMG | Planned |
 
 See [docs/MASTER-PLAN.md](docs/MASTER-PLAN.md) for the full implementation plan.
 
@@ -91,6 +107,10 @@ sudo pacman -S qt6-base qt6-multimedia cmake ninja pkgconf fftw
 brew install qt@6 ninja cmake pkgconf fftw
 ```
 
+### Windows (FFTW3 Setup)
+
+Download the [FFTW3 64-bit DLLs](https://fftw.org/install/windows.html) and place `fftw3.h` in `third_party/fftw3/include/` and `libfftw3-3.dll` in `third_party/fftw3/bin/`.
+
 ### Build & Run
 
 ```bash
@@ -100,6 +120,8 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j$(nproc)
 ./build/NereusSDR
 ```
+
+On first run, NereusSDR generates FFTW wisdom (optimized FFT plans). This takes ~15 minutes and shows a progress dialog. The wisdom file is cached for subsequent launches.
 
 See [docs/MASTER-PLAN.md](docs/MASTER-PLAN.md) for the full implementation plan and [docs/project-brief.md](docs/project-brief.md) for the project brief.
 
