@@ -289,8 +289,8 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | 3B: WDSP Integration | Process I/Q through WDSP, audio output | **Complete** |
 | 3C: macOS Build | Cross-platform WDSP build + wisdom crash fix | **Complete** |
 | 3D: Spectrum Display | GPU spectrum + waterfall (QRhi Metal/Vulkan/D3D12) | **Complete** |
-| **3E: VFO & Controls** | **Tuning, mode selection, filter, AGC** | **Next up** |
-| 3F: Multi-Panadapter | 1-4 pans in configurable layouts | Planned |
+| **3E: VFO + Multi-RX Foundation** | **VFO controls + rewire I/Q pipeline for N receivers** | **Next up** |
+| 3F: Multi-Panadapter | DDC assignment, FFTRouter, PanadapterStack, enable RX2 | Planned |
 | 3G: Container System | Unified dock/float container architecture | Planned |
 
 ---

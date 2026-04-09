@@ -83,8 +83,8 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 | **3B: WDSP Integration** | Process I/Q through WDSP, demodulate audio | **Complete** |
 | **3C: macOS Build** | Cross-platform WDSP build + wisdom crash fix | **Complete** |
 | **3D: Spectrum Display** | GPU spectrum + waterfall (QRhi Metal/Vulkan/D3D12) | **Complete** |
-| **3E: VFO & Controls** | Tuning, mode selection, filter, AGC controls | Next up |
-| **3F: Multi-Panadapter** | 1-4 pans in configurable layouts | Planned |
+| **3E: VFO + Multi-RX Foundation** | VFO controls + rewire I/Q pipeline for N receivers | Next up |
+| **3F: Multi-Panadapter** | DDC assignment, FFTRouter, PanadapterStack, enable RX2 | Planned |
 | **3G: Container System** | Unified float/dock containers with 16 widget types | Planned |
 | **3H: Skin System** | Thetis-inspired skins with 4-pan support | Planned |
 | **3I: TX Pipeline** | Mic → WDSP → radio, TX audio + silence frames | Planned |

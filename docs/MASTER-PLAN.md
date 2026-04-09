@@ -191,34 +191,51 @@ Key design reference: `docs/architecture/gpu-waterfall.md`
 
 Verification: See live spectrum + waterfall from the ANAN-G2 while receiving.
 
-### Phase 3E: VFO & Controls
-**Goal:** Tuning, mode selection, filter, AGC controls.
+### Phase 3E: VFO & Controls + Multi-Receiver Foundation
+**Goal:** Add VFO tuning, mode selection, filter, AGC controls. Simultaneously rewire
+the I/Q pipeline to route through ReceiverManager with per-receiver WDSP channels and
+FFTEngines. Only one receiver is active, but the plumbing supports N.
+
+**I/Q Pipeline Rewire** (critical prerequisite for Phase 3F multi-panadapter):
+The current RadioModel.cpp:207-241 hardwires a single-receiver pipeline — ddcIndex is
+ignored, ReceiverManager is bypassed, and rxChannel(0) is hardcoded. This phase routes
+I/Q through ReceiverManager with per-receiver WDSP channels and FFTEngines.
 
 Files to modify/create:
-- `src/gui/widgets/VfoDisplay.h/.cpp` — **new** — frequency readout, band buttons, RIT/XIT
-- `src/gui/widgets/RxControls.h/.cpp` — **new** — mode, filter, AGC, AF/RF, squelch
-- `src/models/SliceModel.h/.cpp` — frequency, mode, filter, AGC properties
-- `src/gui/MainWindow.cpp` — VFO-to-model wiring, keyboard tuning
+- `src/models/RadioModel.cpp` — route iqDataReceived through ReceiverManager instead of direct processing
+- `src/core/ReceiverManager.h/.cpp` — add adcIndex to ReceiverConfig; board-type-aware DDC mapping (DDC2=RX1 on 2-ADC boards)
+- `src/core/WdspEngine.h/.cpp` — support multiple RxChannel instances keyed by receiver index
+- `src/core/FFTEngine.h/.cpp` — support instantiation per receiver
+- `src/models/SliceModel.h/.cpp` — frequency, mode, filter, AGC properties; slice→receiver mapping; N-slice capable
+- `src/gui/widgets/VfoDisplay.h/.cpp` — **new** — frequency readout with click-to-tune digit editing
+- `src/gui/widgets/RxControls.h/.cpp` — **new** — mode, filter, AGC, AF/RF controls
+- `src/gui/MainWindow.cpp` — VFO-to-model wiring, per-receiver FFTEngine wiring
 
-Key design reference: `docs/architecture/multi-panadapter.md` (slice-to-pan association)
+Key design references:
+- `docs/architecture/multi-panadapter.md` (slice-to-pan association)
+- `docs/architecture/adc-ddc-panadapter-mapping.md` (DDC assignment per board type)
 
-Verification: Tune to different frequencies/modes via VFO display. Mode/filter changes reflect in WDSP demodulation.
+Verification: Tune to different frequencies/modes via VFO display. Mode/filter changes
+reflect in WDSP demodulation. I/Q flows through ReceiverManager (no regression).
 
 ### Phase 3F: Multi-Panadapter Layout
-**Goal:** Support 1-4 panadapters in configurable layouts with proper DDC-to-ADC mapping.
+**Goal:** Support 1-4 panadapters with proper DDC-to-ADC mapping and multiple active receivers.
+Multi-receiver plumbing from Phase 3E is a prerequisite.
 
 Files to modify/create:
-- `src/gui/PanadapterStack.h/.cpp` — **new** — QSplitter layout manager
-- `src/gui/PanadapterApplet.h/.cpp` — **new** — single pan container
-- `src/gui/MainWindow.cpp` — wirePanadapter(), layout menu, slice-to-pan routing
-- `src/core/ReceiverManager.cpp` — port UpdateDDCs() DDC assignment strategy from Thetis console.cs:8186
-- `src/core/FFTRouter.h/.cpp` — **new** — map receiver FFT output to panadapter(s)
+- `src/core/ReceiverManager.cpp` — add updateDdcAssignment() ported from Thetis UpdateDDCs (console.cs:8186-8538)
+- `src/core/FFTRouter.h/.cpp` — **new** — map receiver FFT output to 1+ panadapter(s)
+- `src/gui/PanadapterStack.h/.cpp` — **new** — QSplitter layout manager (5 layouts)
+- `src/gui/PanadapterApplet.h/.cpp` — **new** — single pan container with independent display state
+- `src/gui/MainWindow.cpp` — wirePanadapter(), layout menu, multi-pan FFT routing, enable RX2
 
 Key design references:
 - `docs/architecture/multi-panadapter.md`
 - `docs/architecture/adc-ddc-panadapter-mapping.md`
 
-Verification: 4 pans in 2x2 grid, each with independent FFT/waterfall. RX1 on DDC2, RX2 on DDC3 (2-ADC boards).
+Verification: 2 pans stacked — RX1 on 20m, RX2 on 40m with independent spectrums.
+4 pans in 2x2 grid — 2 pans share RX1 at different zoom, 2 pans on RX2.
+RX1 on DDC2 (ADC0), RX2 on DDC3 (ADC1) for 2-ADC boards.
 
 ### Phase 3G: Container System & DSP Control UI
 **Goal:** Unified container system with all Thetis DSP controls as widget types.
@@ -297,26 +314,36 @@ CI workflows already in place. Finalize:
 
 ---
 
-## Recommended Next Step: Phase 3E — VFO & Controls
+## Recommended Next Step: Phase 3E — VFO & Controls + Multi-Receiver Foundation
 
 Phases 3A-3D are complete — the radio connects, demodulates audio, and renders
-live GPU spectrum + waterfall. Next: add VFO tuning, mode selection, filter,
-and AGC controls so the user can actually operate the radio.
+live GPU spectrum + waterfall. Next: add VFO controls AND rewire the I/Q pipeline
+to support multiple receivers. The current RadioModel.cpp:207-241 hardwires a
+single-receiver path (ignores ddcIndex, bypasses ReceiverManager, uses rxChannel(0)).
+Fixing this now avoids a massive rewrite when adding multi-panadapter in Phase 3F.
 
 ### Key References
-- Thetis: `console.cs` (VFO, band, mode, filter logic)
-- Design docs: `docs/architecture/multi-panadapter.md` (slice-to-pan association),
-  `docs/architecture/adc-ddc-panadapter-mapping.md` (DDC assignment for multi-RX)
+- Thetis: `console.cs` (VFO, band, mode, filter logic), `cmaster.cs` (channel master)
+- Design docs: `docs/architecture/adc-ddc-panadapter-mapping.md` (DDC assignment),
+  `docs/architecture/multi-panadapter.md` (slice-to-pan association)
 - AetherSDR: SliceModel pattern for frequency/mode/filter state
 
-### Implementation Steps
-1. Implement SliceModel frequency/mode/filter/AGC properties
-2. Create VfoDisplay widget with click-to-tune digit editing
-3. Wire frequency changes through RadioConnection to hardware NCO
-4. Add mode/filter/AGC controls with WDSP parameter routing
-5. Implement band stacking registers for per-band memory
+### Implementation Steps (two parallel tracks)
+
+**Track A: I/Q Pipeline Rewire**
+1. Route iqDataReceived through ReceiverManager (not direct RadioModel accumulation)
+2. Make ReceiverManager board-type-aware (DDC2=RX1 on 2-ADC, DDC0=RX1 on 1-ADC)
+3. Support multiple RxChannel instances in WdspEngine (keyed by receiver index)
+4. Support per-receiver FFTEngine instances
+
+**Track B: VFO & Controls**
+5. Implement SliceModel with frequency/mode/filter/AGC and slice→receiver mapping
+6. Create VfoDisplay widget with click-to-tune digit editing
+7. Wire frequency changes: SliceModel → ReceiverManager → P2RadioConnection
+8. Add mode/filter/AGC controls with WDSP parameter routing
 
 ### Verification
+- I/Q pipeline still works after rewire (no audio/spectrum regression)
 - Tune to different frequencies by clicking VFO digits
 - Change mode (USB/LSB/CW/AM) and hear correct demodulation
 - Adjust filter bandwidth, see passband overlay update on spectrum
