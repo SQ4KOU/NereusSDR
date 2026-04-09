@@ -272,6 +272,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | Plan | Phase | Status |
 | --- | --- | --- |
 | [phase3d-spectrum-waterfall-plan.md](docs/architecture/phase3d-spectrum-waterfall-plan.md) | 3D: GPU Spectrum & Waterfall | **Complete** |
+| [phase3f-multi-panadapter-plan.md](docs/architecture/phase3f-multi-panadapter-plan.md) | 3F: Multi-Panadapter + DDC Assignment | Planning |
 
 ### Phase 1 Analysis Docs (`docs/phase1/`)
 
