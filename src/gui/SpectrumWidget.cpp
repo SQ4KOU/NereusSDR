@@ -1,4 +1,6 @@
 #include "SpectrumWidget.h"
+#include "SpectrumOverlayMenu.h"
+#include "core/AppSettings.h"
 
 #include <QPainter>
 #include <QPainterPath>
@@ -91,6 +93,76 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
 }
 
 SpectrumWidget::~SpectrumWidget() = default;
+
+// ---- Settings persistence ----
+// Per-pan keys use AetherSDR pattern: "DisplayFftSize" for pan 0, "DisplayFftSize_1" for pan 1
+static QString settingsKey(const QString& base, int panIndex)
+{
+    if (panIndex == 0) {
+        return base;
+    }
+    return QStringLiteral("%1_%2").arg(base).arg(panIndex);
+}
+
+void SpectrumWidget::loadSettings()
+{
+    auto& s = AppSettings::instance();
+
+    auto readFloat = [&](const QString& key, float def) -> float {
+        QString val = s.value(settingsKey(key, m_panIndex)).toString();
+        if (val.isEmpty()) { return def; }
+        bool ok = false;
+        float v = val.toFloat(&ok);
+        return ok ? v : def;
+    };
+    auto readInt = [&](const QString& key, int def) -> int {
+        QString val = s.value(settingsKey(key, m_panIndex)).toString();
+        if (val.isEmpty()) { return def; }
+        bool ok = false;
+        int v = val.toInt(&ok);
+        return ok ? v : def;
+    };
+
+    m_refLevel       = readFloat(QStringLiteral("DisplayGridMax"), -40.0f);
+    m_dynamicRange   = readFloat(QStringLiteral("DisplayGridMax"), -40.0f)
+                     - readFloat(QStringLiteral("DisplayGridMin"), -140.0f);
+    m_spectrumFrac   = readFloat(QStringLiteral("DisplaySpectrumFrac"), 0.40f);
+    m_wfColorGain    = readInt(QStringLiteral("DisplayWfColorGain"), 50);
+    m_wfBlackLevel   = readInt(QStringLiteral("DisplayWfBlackLevel"), 15);
+    m_wfHighThreshold = readFloat(QStringLiteral("DisplayWfHighLevel"), -80.0f);
+    m_wfLowThreshold = readFloat(QStringLiteral("DisplayWfLowLevel"), -130.0f);
+    m_fillAlpha      = readFloat(QStringLiteral("DisplayFftFillAlpha"), 0.70f);
+    m_panFill        = s.value(settingsKey(QStringLiteral("DisplayPanFill"), m_panIndex),
+                               QStringLiteral("True")).toString() == QStringLiteral("True");
+
+    int scheme = readInt(QStringLiteral("DisplayWfColorScheme"), 0);
+    m_wfColorScheme = static_cast<WfColorScheme>(qBound(0, scheme,
+                          static_cast<int>(WfColorScheme::Count) - 1));
+}
+
+void SpectrumWidget::saveSettings()
+{
+    auto& s = AppSettings::instance();
+
+    auto writeFloat = [&](const QString& key, float val) {
+        s.setValue(settingsKey(key, m_panIndex), QString::number(static_cast<double>(val)));
+    };
+    auto writeInt = [&](const QString& key, int val) {
+        s.setValue(settingsKey(key, m_panIndex), QString::number(val));
+    };
+
+    writeFloat(QStringLiteral("DisplayGridMax"), m_refLevel);
+    writeFloat(QStringLiteral("DisplayGridMin"), m_refLevel - m_dynamicRange);
+    writeFloat(QStringLiteral("DisplaySpectrumFrac"), m_spectrumFrac);
+    writeInt(QStringLiteral("DisplayWfColorGain"), m_wfColorGain);
+    writeInt(QStringLiteral("DisplayWfBlackLevel"), m_wfBlackLevel);
+    writeFloat(QStringLiteral("DisplayWfHighLevel"), m_wfHighThreshold);
+    writeFloat(QStringLiteral("DisplayWfLowLevel"), m_wfLowThreshold);
+    writeFloat(QStringLiteral("DisplayFftFillAlpha"), m_fillAlpha);
+    s.setValue(settingsKey(QStringLiteral("DisplayPanFill"), m_panIndex),
+              m_panFill ? QStringLiteral("True") : QStringLiteral("False"));
+    writeInt(QStringLiteral("DisplayWfColorScheme"), static_cast<int>(m_wfColorScheme));
+}
 
 void SpectrumWidget::setFrequencyRange(double centerHz, double bandwidthHz)
 {
@@ -408,31 +480,27 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
 }
 
 // ---- dBm to waterfall color ----
-// From Thetis display.cs:6800+ — waterfall uses its own high/low thresholds
-// (default -80/-130 dBm) for better contrast than the full spectrum range.
-// Color gain and black level from AetherSDR SpectrumWidget.cpp:1700
+// Porting from Thetis display.cs:6826-6954 — waterfall color mapping.
+// Thetis uses low_threshold and high_threshold (dBm) directly:
+//   if (data <= low_threshold) → low_color (black)
+//   if (data >= high_threshold) → max color
+//   else: overall_percent = (data - low) / (high - low)  → 0.0 to 1.0
+// Color gain adjusts high_threshold, black level adjusts low_threshold.
 QRgb SpectrumWidget::dbmToRgb(float dbm) const
 {
-    // Use waterfall-specific thresholds (narrower range = better contrast)
-    // From Thetis display.cs:2522-2536
-    float range = m_wfHighThreshold - m_wfLowThreshold;
-    if (range < 1.0f) {
-        range = 1.0f;
+    // Effective thresholds adjusted by gain/black level sliders
+    // Black level slider (0-125): shifts low threshold UP (more black)
+    // Color gain slider (0-100): shifts high threshold DOWN (more color)
+    // From Thetis display.cs:2522-2536 defaults: high=-80, low=-130
+    float effectiveLow = m_wfLowThreshold + static_cast<float>(m_wfBlackLevel) * 0.4f;
+    float effectiveHigh = m_wfHighThreshold - static_cast<float>(m_wfColorGain) * 0.3f;
+    if (effectiveHigh <= effectiveLow) {
+        effectiveHigh = effectiveLow + 1.0f;
     }
 
-    // Normalize to 0.0-1.0 based on waterfall thresholds
-    float intensity = (dbm - m_wfLowThreshold) / range;
-    intensity = qBound(0.0f, intensity, 1.0f);
-
-    // Apply color gain and black level adjustments
-    // From AetherSDR SpectrumWidget.cpp:1700
-    float floorShift = (125.0f - static_cast<float>(m_wfBlackLevel)) * 0.4f / 125.0f;
-    float visRange = 1.0f - static_cast<float>(m_wfColorGain) * 0.7f / 100.0f;
-    if (visRange < 0.1f) {
-        visRange = 0.1f;
-    }
-
-    float adjusted = (intensity - floorShift) / visRange;
+    // From Thetis display.cs:6889-6891
+    float range = effectiveHigh - effectiveLow;
+    float adjusted = (dbm - effectiveLow) / range;
     adjusted = qBound(0.0f, adjusted, 1.0f);
 
     // Look up in gradient stops for current color scheme
@@ -546,6 +614,36 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
     int h = height();
     int specH = static_cast<int>(h * m_spectrumFrac);
     QRect specRect(kDbmStripW, 0, w - kDbmStripW, specH);
+
+    if (event->button() == Qt::RightButton) {
+        // Show overlay menu on right-click
+        if (!m_overlayMenu) {
+            m_overlayMenu = new SpectrumOverlayMenu(this);
+
+            connect(m_overlayMenu, &SpectrumOverlayMenu::wfColorGainChanged,
+                    this, [this](int v) { m_wfColorGain = v; update(); });
+            connect(m_overlayMenu, &SpectrumOverlayMenu::wfBlackLevelChanged,
+                    this, [this](int v) { m_wfBlackLevel = v; update(); });
+            connect(m_overlayMenu, &SpectrumOverlayMenu::wfColorSchemeChanged,
+                    this, [this](int v) { m_wfColorScheme = static_cast<WfColorScheme>(v); update(); });
+            connect(m_overlayMenu, &SpectrumOverlayMenu::fillAlphaChanged,
+                    this, [this](float v) { m_fillAlpha = v; update(); });
+            connect(m_overlayMenu, &SpectrumOverlayMenu::panFillChanged,
+                    this, [this](bool v) { m_panFill = v; update(); });
+            connect(m_overlayMenu, &SpectrumOverlayMenu::refLevelChanged,
+                    this, [this](float v) { m_refLevel = v; update(); });
+            connect(m_overlayMenu, &SpectrumOverlayMenu::dynRangeChanged,
+                    this, [this](float v) { m_dynamicRange = v; update(); });
+        }
+
+        m_overlayMenu->setValues(m_wfColorGain, m_wfBlackLevel, false,
+                                  static_cast<int>(m_wfColorScheme),
+                                  m_fillAlpha, m_panFill, false,
+                                  m_refLevel, m_dynamicRange);
+        m_overlayMenu->move(event->globalPosition().toPoint());
+        m_overlayMenu->show();
+        return;
+    }
 
     if (event->button() == Qt::LeftButton) {
         // Check if clicking on dBm scale strip — start drag for ref level

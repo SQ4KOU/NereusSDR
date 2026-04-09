@@ -8,6 +8,8 @@
 
 namespace NereusSDR {
 
+class SpectrumOverlayMenu;
+
 // Waterfall color scheme presets.
 // Default matches AetherSDR/SmartSDR style.
 // From Thetis enums.cs:68-79 (ColorScheme enum)
@@ -60,6 +62,12 @@ public:
     void setWfColorScheme(WfColorScheme scheme);
     void setWfColorGain(int gain) { m_wfColorGain = gain; }
     void setWfBlackLevel(int level) { m_wfBlackLevel = level; }
+
+    // ---- Per-pan settings persistence ----
+    void setPanIndex(int idx) { m_panIndex = idx; }
+    int  panIndex() const { return m_panIndex; }
+    void loadSettings();
+    void saveSettings();
 
     // ---- VFO / filter overlay ----
     void setVfoFrequency(double hz) { m_vfoHz = hz; update(); }
@@ -157,6 +165,11 @@ private:
     int    m_filterLowHz{-2850};    // LSB default — from Thetis
     int    m_filterHighHz{-150};
     int    m_stepHz{100};           // tuning step size
+
+    int    m_panIndex{0};            // for per-pan settings keys
+
+    // ---- Overlay menu ----
+    SpectrumOverlayMenu* m_overlayMenu{nullptr};
 
     // ---- Mouse state ----
     bool   m_draggingDbm{false};

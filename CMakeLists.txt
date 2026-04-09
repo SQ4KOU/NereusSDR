@@ -174,6 +174,7 @@ set(GUI_SOURCES
     src/gui/ConnectionPanel.cpp
     src/gui/SupportDialog.cpp
     src/gui/SpectrumWidget.cpp
+    src/gui/SpectrumOverlayMenu.cpp
 )
 
 # --------------------------------------------------------------------------

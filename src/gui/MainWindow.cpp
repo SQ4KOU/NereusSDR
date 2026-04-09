@@ -109,6 +109,7 @@ void MainWindow::buildUI()
     layout->setContentsMargins(0, 0, 0, 0);
 
     m_spectrumWidget = new SpectrumWidget(central);
+    m_spectrumWidget->loadSettings();
     m_spectrumWidget->setFrequencyRange(3865000.0, 200000.0);  // 3.865 MHz LSB, 200 kHz BW
     m_spectrumWidget->setVfoFrequency(3865000.0);
     m_spectrumWidget->setFilterOffset(-2850, -150);  // LSB passband
@@ -320,6 +321,11 @@ void MainWindow::closeEvent(QCloseEvent* event)
     if (m_fftThread && m_fftThread->isRunning()) {
         m_fftThread->quit();
         m_fftThread->wait(2000);
+    }
+
+    // Save display settings before shutdown
+    if (m_spectrumWidget) {
+        m_spectrumWidget->saveSettings();
     }
 
     // Tear down connection (sends stop command, closes sockets, joins thread)
