@@ -4,6 +4,7 @@
 #include "models/RadioModel.h"
 #include "core/AppSettings.h"
 #include "core/RadioDiscovery.h"
+#include "core/WdspEngine.h"
 #include "core/LogCategories.h"
 
 #include <QApplication>
@@ -12,6 +13,8 @@
 #include <QStatusBar>
 #include <QLabel>
 #include <QVBoxLayout>
+#include <QProgressDialog>
+#include <QTimer>
 
 #include <cstdlib>
 
@@ -29,6 +32,58 @@ MainWindow::MainWindow(QWidget* parent)
     // Wire connection state changes to status bar
     connect(m_radioModel, &RadioModel::connectionStateChanged,
             this, &MainWindow::onConnectionStateChanged);
+
+    // WDSP wisdom progress dialog — shown as a modal window during first-run
+    // wisdom generation. Pattern from AetherSDR MainWindow::enableNr2WithWisdom().
+    connect(m_radioModel->wdspEngine(), &WdspEngine::wisdomProgress,
+            this, [this](int percent, const QString& status) {
+        // Create dialog on first progress signal
+        if (!m_wisdomDialog && percent < 100) {
+            m_wisdomDialog = new QProgressDialog(this);
+            m_wisdomDialog->setWindowTitle(QStringLiteral("NereusSDR — FFTW Wisdom"));
+            m_wisdomDialog->setLabelText(
+                QStringLiteral("Optimizing FFT plans for DSP engine...\n\n"
+                               "This only happens on first run."));
+            m_wisdomDialog->setRange(0, 100);
+            m_wisdomDialog->setValue(0);
+            m_wisdomDialog->setCancelButton(nullptr);
+            m_wisdomDialog->setAutoClose(false);
+            m_wisdomDialog->setMinimumWidth(500);
+            m_wisdomDialog->setMinimumDuration(0);
+            m_wisdomDialog->setWindowModality(Qt::ApplicationModal);
+            m_wisdomDialog->setStyleSheet(QStringLiteral(
+                "QProgressDialog { background: #0f0f1a; }"
+                "QLabel { color: #c8d8e8; font-size: 13px; }"
+                "QProgressBar {"
+                "  text-align: center; font-size: 13px;"
+                "  font-weight: bold; color: #c8d8e8;"
+                "  background: #1a2a3a; border: 1px solid #2e4e6e;"
+                "  border-radius: 3px; min-height: 24px;"
+                "}"
+                "QProgressBar::chunk { background: #00b4d8; }"));
+            m_wisdomDialog->show();
+        }
+
+        if (m_wisdomDialog) {
+            m_wisdomDialog->setValue(percent);
+            if (!status.isEmpty() && percent < 100) {
+                m_wisdomDialog->setLabelText(
+                    QStringLiteral("Optimizing FFT plans for DSP engine...\n\n%1").arg(status));
+            }
+            if (percent >= 100) {
+                m_wisdomDialog->setLabelText(QStringLiteral("FFTW planning complete!"));
+                m_wisdomDialog->setValue(100);
+                // Auto-close after brief delay
+                QTimer::singleShot(800, this, [this]() {
+                    if (m_wisdomDialog) {
+                        m_wisdomDialog->close();
+                        m_wisdomDialog->deleteLater();
+                        m_wisdomDialog = nullptr;
+                    }
+                });
+            }
+        }
+    });
 
     // Start discovery in background so radios are found before the user opens the panel
     m_radioModel->discovery()->startDiscovery();

@@ -181,6 +181,10 @@ cmake --build build -j$(nproc)
 
 Dependencies: `qt6-base qt6-multimedia cmake ninja pkgconf fftw`
 
+WDSP source is in `third_party/wdsp/` (TAPR v1.29 + linux_port.h for cross-platform).
+FFTW3: system package on Linux/macOS, pre-built DLL on Windows (`third_party/fftw3/`).
+First run generates FFTW wisdom (~15 min). Cached in `~/.config/NereusSDR/` for subsequent launches.
+
 Current version: **0.1.0** (set in `CMakeLists.txt`).
 
 ---
@@ -195,8 +199,9 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 * `RadioModel` — central state, owns connection + all sub-models + WdspEngine
 * `RadioDiscovery` — OpenHPSDR radio discovery on UDP port 1024
 * `RadioConnection` — Protocol 1 (UDP) and Protocol 2 (TCP+UDP) connections
-* `WdspEngine` — C++20 wrapper around WDSP DSP library
-* `AudioEngine` — I/Q → WDSP → audio output pipeline
+* `WdspEngine` — WDSP lifecycle manager (wisdom, channels, impulse cache)
+* `RxChannel` — per-receiver WDSP channel wrapper (fexchange2, NB, mode/filter/AGC)
+* `AudioEngine` — QAudioSink output (Int16 stereo, timer-based drain)
 * `AppSettings` — custom XML settings persistence (NOT QSettings)
 * `MainWindow` — wires everything together, signal routing hub
 
@@ -204,21 +209,23 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 Worker threads communicate exclusively via auto-queued signals. Never hold
 a mutex in the audio callback.
 
-### Data Flow
+### Data Flow (Phase 3B — VERIFIED WORKING)
 
 ```
-Radio (ADC) → UDP → Raw I/Q samples
-                        ↓
-                    WdspEngine (per-receiver channel)
-                    ├── Demodulation (AM/FM/SSB/CW/DIGU/DIGL)
-                    ├── AGC, NB, NR, ANF, Filtering
-                    ├── FFT → Spectrum/Waterfall data
-                    └── Decoded audio → AudioEngine → Speakers
+Radio (ADC) → UDP port 1037 (DDC2) → P2RadioConnection
+    ↓ iqDataReceived signal (238 samples/packet, interleaved float I/Q)
+RadioModel accumulation buffer (238 → 1024 samples)
+    ↓
+RxChannel::processIq()
+    ├── xanbEXTF (NB1, if enabled)
+    ├── xnobEXTF (NB2, if enabled)
+    └── fexchange2() → WDSP RX chain (demod, AGC, NR, ANF, filter)
+    ↓ decoded audio (float L/R)
+AudioEngine::feedAudio() → float→int16 conversion → m_rxBuffer
+    ↓ 10ms timer drain (AetherSDR pattern)
+QAudioSink (48kHz stereo Int16) → Speakers
 
-User TX → Mic → AudioEngine → WdspEngine (TX channel)
-                                ├── Compression, EQ, VOX
-                                ├── PureSignal (PA linearization)
-                                └── I/Q samples → UDP → Radio (DAC)
+User TX → Mic → AudioEngine → WdspEngine (TX channel) [FUTURE]
 ```
 
 ---
@@ -273,14 +280,20 @@ WDSP (by Warren Pratt NR0V) provides ALL signal processing:
 * **PureSignal:** PA linearization using feedback I/Q
 * **Spectrum/FFT:** WDSP can compute display spectrum data
 
-### WDSP Architecture in NereusSDR
+### WDSP Architecture in NereusSDR (Phase 3B — WORKING)
 
-* One WDSP "channel" per receiver (independent DSP state)
-* `WdspEngine` class wraps the WDSP C API with C++20/Qt6 interface
-* All DSP parameters exposed as Qt properties with signal/slot notification
-* Audio thread feeds I/Q into WDSP, gets demodulated audio out
-* FFT data extracted from WDSP for spectrum/waterfall display
-* PureSignal uses a separate feedback receiver channel
+* **WDSP v1.29** (TAPR/OpenHPSDR-wdsp) built as static library in `third_party/wdsp/`
+* Cross-platform via `linux_port.h/c` from g0orx/wdsp (Windows/Linux/macOS)
+* FFTW3 dependency: pre-built on Windows (`third_party/fftw3/`), system packages on Linux/macOS
+* `wdsp_api.h` — extern "C" declarations for all WDSP functions
+* `WdspTypes.h` — C++ enum wrappers (DSPMode, AGCMode, RxMeterType)
+* `WdspEngine` — system lifecycle (WDSPwisdom, impulse cache, channel management)
+* `RxChannel` — per-receiver wrapper, calls fexchange2 for I/Q→audio processing
+* `AudioEngine` — QAudioSink output (48kHz stereo Int16, timer-based drain from AetherSDR)
+* FFTW wisdom generated on first run (~15 min with FFTW_PATIENT), cached for subsequent launches
+* I/Q accumulation: 238-sample P2 packets → 1024-sample WDSP buffers
+* Audio device persisted via AppSettings key `AudioOutputDeviceId`
+* **Status:** First audio achieved — ANAN-G2 I/Q → WDSP USB demod → speakers
 
 ---
 

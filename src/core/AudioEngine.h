@@ -2,14 +2,30 @@
 
 #include <QObject>
 #include <QString>
+#include <QAudioFormat>
+#include <QAudioDevice>
+#include <QByteArray>
+
+#include <memory>
+
+QT_BEGIN_NAMESPACE
+class QAudioSink;
+class QIODevice;
+class QTimer;
+QT_END_NAMESPACE
 
 namespace NereusSDR {
 
 // Audio engine for NereusSDR.
-// Unlike AetherSDR (which receives decoded PCM from the radio), NereusSDR
-// receives raw I/Q samples and must decode via WDSP before outputting audio.
+// Receives decoded audio from WDSP and plays it through QAudioSink.
 //
-// Data flow: Radio → Raw I/Q → WdspEngine → Decoded audio → AudioEngine → Speakers
+// Pattern from AetherSDR AudioEngine:
+//   - feedAudio() appends to m_rxBuffer
+//   - 10ms timer drains m_rxBuffer to QAudioSink via bytesFree()/write()
+//   - Int16 stereo format (universal WASAPI/PulseAudio/CoreAudio support)
+//   - Buffer capped at 200ms to prevent latency buildup
+//
+// Format: 48000 Hz, stereo, Int16, push mode.
 class AudioEngine : public QObject {
     Q_OBJECT
 
@@ -17,24 +33,45 @@ public:
     explicit AudioEngine(QObject* parent = nullptr);
     ~AudioEngine() override;
 
-    // Feed decoded audio from WDSP to the output device
-    void feedAudio(int receiverId, const float* leftSamples, const float* rightSamples, int sampleCount);
+    // Start/stop audio output.
+    void start();
+    void stop();
+    bool isRunning() const { return m_running; }
 
-    // Audio output device management
-    void setAudioOutputDevice(const QString& deviceName);
-    QString audioOutputDevice() const;
+    // Feed decoded audio from WDSP (float32 L/R → converted to int16 stereo).
+    void feedAudio(int receiverId, const float* leftSamples,
+                   const float* rightSamples, int sampleCount);
 
-    // Volume control
+    // Play a 1kHz test tone to verify audio output works.
+    void playTestTone(int durationMs = 2000);
+
+    // Device management (persisted via AppSettings).
+    void setOutputDevice(const QAudioDevice& device);
+    QAudioDevice outputDevice() const { return m_outputDevice; }
+
+    // Volume (0.0 to 1.0)
     void setVolume(float volume);
     float volume() const { return m_volume; }
 
 signals:
-    void audioOutputDeviceChanged(const QString& deviceName);
+    void outputDeviceChanged(const QAudioDevice& device);
     void volumeChanged(float volume);
 
 private:
-    QString m_outputDevice;
-    float m_volume{1.0f};
+    void createAudioSink();
+    void loadSavedDevice();
+
+    QAudioDevice m_outputDevice;
+    float m_volume{0.5f};
+    bool m_running{false};
+
+    QAudioFormat m_format;
+    std::unique_ptr<QAudioSink> m_audioSink;
+    QIODevice* m_audioIO{nullptr};  // owned by QAudioSink
+
+    // Buffer + timer drain pattern (from AetherSDR)
+    QByteArray m_rxBuffer;
+    QTimer* m_rxTimer{nullptr};
 };
 
 } // namespace NereusSDR

@@ -116,6 +116,12 @@ private:
     // Reconnect state
     RadioInfo m_lastRadioInfo;
     bool m_intentionalDisconnect{false};
+
+    // I/Q accumulation buffer for WDSP (accumulates 238-sample P2 packets
+    // until we have 1024 samples for one fexchange2 call)
+    static constexpr int kWdspBufSize = 1024;
+    QVector<float> m_iqAccumI;
+    QVector<float> m_iqAccumQ;
 };
 
 } // namespace NereusSDR

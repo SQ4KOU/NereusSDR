@@ -1,6 +1,12 @@
 #include "WdspEngine.h"
+#include "RxChannel.h"
+#include "LogCategories.h"
+#include "wdsp_api.h"
 
-#include <QDebug>
+#include <QDir>
+#include <QStandardPaths>
+#include <QTimer>
+#include <QThread>
 
 namespace NereusSDR {
 
@@ -11,192 +17,292 @@ WdspEngine::WdspEngine(QObject* parent)
 
 WdspEngine::~WdspEngine()
 {
-    // Destroy all remaining channels
-    for (auto it = m_channels.constBegin(); it != m_channels.constEnd(); ++it) {
-        qDebug() << "WdspEngine: destroying channel" << it.key();
+    if (m_initialized) {
+        shutdown();
     }
-    m_channels.clear();
 }
 
-int WdspEngine::createChannel(int sampleRate, int fftSize)
+// Check if wisdom file needs generation (first run detection).
+// From AetherSDR AudioEngine::needsWisdomGeneration() pattern.
+bool WdspEngine::needsWisdomGeneration(const QString& configDir)
 {
-    int id = m_nextChannelId++;
-    ChannelState state;
-    state.sampleRate = sampleRate;
-    state.fftSize = fftSize;
-    m_channels.insert(id, state);
+    // WDSP writes wisdom to "{configDir}wdspWisdom00"
+    // (see wisdom.c: strncat(wisdom_file, "wdspWisdom00", 16))
+    QString wisdomFile = configDir + QStringLiteral("wdspWisdom00");
+    return !QFile::exists(wisdomFile);
+}
+
+// Parse an FFT size from the WDSP status string and estimate progress %.
+// WDSP plans sizes 64..262144 (powers of 2) = 13 sizes.
+// For filter sizes: 3 plans each (COMPLEX FWD, COMPLEX BWD, COMPLEX BWD+1).
+// For display sizes: 1-2 more. Total ~42 steps.
+static int estimateWisdomPercent(const char* status)
+{
+    if (!status || status[0] == '\0') {
+        return 0;
+    }
+    // Extract FFT size from status like "Planning COMPLEX FORWARD  FFT size 4096"
+    int fftSize = 0;
+    const char* sizeStr = strstr(status, "size ");
+    if (sizeStr) {
+        fftSize = atoi(sizeStr + 5);
+    }
+    if (fftSize <= 0) {
+        return 0;
+    }
+    // Map FFT size to approximate progress:
+    // 64=5%, 128=10%, 256=15%, 512=20%, 1024=25%, 2048=30%, 4096=35%,
+    // 8192=45%, 16384=55%, 32768=65%, 65536=75%, 131072=85%, 262144=95%
+    int step = 0;
+    for (int s = 64; s <= 262144; s *= 2) {
+        step++;
+        if (fftSize <= s) {
+            break;
+        }
+    }
+    return qBound(1, step * 100 / 14, 99);
+}
+
+bool WdspEngine::initialize(const QString& configDir)
+{
+    if (m_initialized) {
+        qCWarning(lcDsp) << "WdspEngine already initialized";
+        return true;
+    }
 
 #ifdef HAVE_WDSP
-    // TODO: Call WDSP OpenChannel() and SetInputSamplerate()
-#endif
+    m_configDir = configDir;
 
-    qDebug() << "WdspEngine: created channel" << id
-             << "sampleRate=" << sampleRate << "fftSize=" << fftSize;
-    return id;
+    // Ensure config directory exists
+    QDir dir(m_configDir);
+    if (!dir.exists()) {
+        dir.mkpath(QStringLiteral("."));
+    }
+
+    // WDSP appends "wdspWisdom00" directly to the path — ensure trailing separator
+    if (!m_configDir.endsWith(QLatin1Char('/')) && !m_configDir.endsWith(QLatin1Char('\\'))) {
+        m_configDir += QLatin1Char('/');
+    }
+
+    // Note: Thetis wisdom files are NOT reusable — FFTW wisdom is specific
+    // to the exact FFTW build. Copying across builds hangs on import.
+    bool needsGeneration = needsWisdomGeneration(m_configDir);
+    QByteArray configPath = m_configDir.toUtf8();
+
+    if (!needsGeneration) {
+        // Fast path: wisdom file exists — WDSPwisdom just loads it (instant).
+        // Safe to call on main thread.
+        qCInfo(lcDsp) << "Loading existing WDSP wisdom file...";
+        WDSPwisdom(configPath.data());
+        qCInfo(lcDsp) << "WDSP wisdom loaded";
+        finishInitialization();
+    } else {
+        // Slow path: generate wisdom on a background thread with progress.
+        qCInfo(lcDsp) << "Generating WDSP wisdom (first run, may take several minutes)...";
+
+        auto* wisdomThread = QThread::create([configPath]() {
+            WDSPwisdom(const_cast<char*>(configPath.constData()));
+        });
+        wisdomThread->setObjectName(QStringLiteral("WisdomThread"));
+
+        connect(wisdomThread, &QThread::finished, this, [this, wisdomThread]() {
+            wisdomThread->deleteLater();
+            emit wisdomProgress(100, QStringLiteral("FFTW planning complete"));
+            finishInitialization();
+        });
+
+        // Poll wisdom_get_status() for progress updates
+        auto* pollTimer = new QTimer(this);
+        pollTimer->setInterval(250);
+        connect(pollTimer, &QTimer::timeout, this, [this, pollTimer, wisdomThread]() {
+            if (wisdomThread->isFinished()) {
+                pollTimer->stop();
+                pollTimer->deleteLater();
+                return;
+            }
+            char* status = wisdom_get_status();
+            if (status && status[0] != '\0') {
+                int pct = estimateWisdomPercent(status);
+                QString msg = QString::fromUtf8(status).trimmed();
+                emit wisdomProgress(pct, msg);
+            }
+        });
+
+        wisdomThread->start();
+        pollTimer->start();
+    }
+    return true;
+
+#else
+    Q_UNUSED(configDir);
+    qCInfo(lcDsp) << "WDSP not available (stub mode)";
+    m_initialized = true;
+    emit initializedChanged(true);
+    return true;
+#endif
 }
 
-void WdspEngine::destroyChannel(int channelId)
+void WdspEngine::finishInitialization()
 {
-    if (!m_channels.contains(channelId)) {
+#ifdef HAVE_WDSP
+    qCInfo(lcDsp) << "WDSP wisdom initialized";
+
+    // Initialize impulse cache for faster filter coefficient computation
+    init_impulse_cache(1);
+
+    // Load cached impulse data if available
+    QString cacheFile = m_configDir + QStringLiteral("/impulse_cache.bin");
+    QByteArray cachePath = cacheFile.toUtf8();
+    if (QFile::exists(cacheFile)) {
+        int cacheResult = read_impulse_cache(cachePath.constData());
+        qCDebug(lcDsp) << "Impulse cache loaded, result:" << cacheResult;
+    }
+
+    m_initialized = true;
+    emit initializedChanged(true);
+    qCInfo(lcDsp) << "WDSP initialized successfully";
+#endif
+}
+
+void WdspEngine::shutdown()
+{
+    if (!m_initialized) {
+        return;
+    }
+
+    qCInfo(lcDsp) << "Shutting down WDSP...";
+
+    // Destroy all RX channels (collect IDs first to avoid iterator invalidation)
+    std::vector<int> channelIds;
+    for (const auto& [id, ch] : m_rxChannels) {
+        channelIds.push_back(id);
+    }
+    for (int id : channelIds) {
+        destroyRxChannel(id);
+    }
+
+#ifdef HAVE_WDSP
+    // Save impulse cache for next startup
+    QString cacheFile = m_configDir + QStringLiteral("/impulse_cache.bin");
+    QByteArray cachePath = cacheFile.toUtf8();
+    save_impulse_cache(cachePath.constData());
+    qCDebug(lcDsp) << "Impulse cache saved";
+
+    destroy_impulse_cache();
+#endif
+
+    m_initialized = false;
+    emit initializedChanged(false);
+    qCInfo(lcDsp) << "WDSP shut down";
+}
+
+RxChannel* WdspEngine::createRxChannel(int channelId,
+                                       int inputBufferSize,
+                                       int dspBufferSize,
+                                       int inputSampleRate,
+                                       int dspSampleRate,
+                                       int outputSampleRate)
+{
+    if (!m_initialized) {
+        qCWarning(lcDsp) << "Cannot create channel: WDSP not initialized";
+        return nullptr;
+    }
+
+    if (m_rxChannels.count(channelId)) {
+        qCWarning(lcDsp) << "Channel" << channelId << "already exists";
+        return m_rxChannels.at(channelId).get();
+    }
+
+#ifdef HAVE_WDSP
+    // From Thetis cmaster.c:72-86 (create_rcvr OpenChannel call)
+    OpenChannel(
+        channelId,
+        inputBufferSize,        // in_size
+        dspBufferSize,          // dsp_size (4096 from Thetis)
+        inputSampleRate,        // input sample rate
+        dspSampleRate,          // dsp sample rate
+        outputSampleRate,       // output sample rate
+        0,                      // type: 0=RX
+        0,                      // state: 0=off initially
+        0.010,                  // tdelayup  — from Thetis cmaster.c:82
+        0.025,                  // tslewup   — from Thetis cmaster.c:83
+        0.000,                  // tdelaydown — from Thetis cmaster.c:84
+        0.010,                  // tslewdown — from Thetis cmaster.c:85
+        1);                     // bfo: block until output available
+
+    // Create NB1 (Analog Noise Blanker) — from Thetis cmaster.c:43-53
+    create_anbEXT(
+        channelId,
+        0,                      // run: off initially
+        inputBufferSize,        // buffsize
+        static_cast<double>(inputSampleRate),  // samplerate
+        0.0001,                 // tau        — from Thetis cmaster.c:49
+        0.0001,                 // hangtime   — from Thetis cmaster.c:50
+        0.0001,                 // advtime    — from Thetis cmaster.c:51
+        0.05,                   // backtau    — from Thetis cmaster.c:52
+        30.0);                  // threshold  — from Thetis cmaster.c:53
+
+    // Create NB2 (Impulse Noise Blanker) — from Thetis cmaster.c:55-68
+    create_nobEXT(
+        channelId,
+        0,                      // run: off initially
+        0,                      // mode       — from Thetis cmaster.c:61
+        inputBufferSize,        // buffsize
+        static_cast<double>(inputSampleRate),  // samplerate
+        0.0001,                 // slewtime   — from Thetis cmaster.c:62
+        0.0001,                 // hangtime   — from Thetis cmaster.c:65
+        0.0001,                 // advtime    — from Thetis cmaster.c:63
+        0.05,                   // backtau    — from Thetis cmaster.c:67
+        30.0);                  // threshold  — from Thetis cmaster.c:68
+
+    // Set defaults: USB mode, standard SSB bandpass, medium AGC
+    SetRXAMode(channelId, static_cast<int>(DSPMode::USB));
+    SetRXABandpassFreqs(channelId, 150.0, 2850.0);
+    SetRXAAGCMode(channelId, static_cast<int>(AGCMode::Med));
+    SetRXAAGCTop(channelId, 80.0);
+
+    qCInfo(lcDsp) << "Created RX channel" << channelId
+                   << "bufSize=" << inputBufferSize
+                   << "rate=" << inputSampleRate;
+#endif
+
+    auto channel = std::make_unique<RxChannel>(channelId, inputBufferSize,
+                                               inputSampleRate, this);
+    RxChannel* ptr = channel.get();
+    m_rxChannels.emplace(channelId, std::move(channel));
+    return ptr;
+}
+
+void WdspEngine::destroyRxChannel(int channelId)
+{
+    auto it = m_rxChannels.find(channelId);
+    if (it == m_rxChannels.end()) {
         return;
     }
 
 #ifdef HAVE_WDSP
-    // TODO: Call WDSP CloseChannel()
+    // Deactivate with drain
+    SetChannelState(channelId, 0, 1);
+
+    // Destroy NB1 and NB2
+    destroy_anbEXT(channelId);
+    destroy_nobEXT(channelId);
+
+    // Close the WDSP channel
+    CloseChannel(channelId);
 #endif
 
-    m_channels.remove(channelId);
-    qDebug() << "WdspEngine: destroyed channel" << channelId;
+    m_rxChannels.erase(it);
+    qCInfo(lcDsp) << "Destroyed RX channel" << channelId;
 }
 
-void WdspEngine::processIq(int channelId, const float* iData, const float* qData,
-                           float* outLeft, float* outRight, int sampleCount)
+RxChannel* WdspEngine::rxChannel(int channelId) const
 {
-    Q_UNUSED(channelId);
-    Q_UNUSED(iData);
-    Q_UNUSED(qData);
-    Q_UNUSED(outLeft);
-    Q_UNUSED(outRight);
-    Q_UNUSED(sampleCount);
-
-#ifdef HAVE_WDSP
-    // TODO: Call WDSP fexchange0() or fexchange2() to process I/Q through the DSP chain
-#endif
-}
-
-void WdspEngine::setMode(int channelId, int mode)
-{
-    if (m_channels.contains(channelId)) {
-        m_channels[channelId].mode = mode;
-#ifdef HAVE_WDSP
-        // TODO: Call WDSP SetRXAMode()
-#endif
+    auto it = m_rxChannels.find(channelId);
+    if (it != m_rxChannels.end()) {
+        return it->second.get();
     }
-}
-
-void WdspEngine::setFilter(int channelId, int lowCut, int highCut)
-{
-    if (m_channels.contains(channelId)) {
-        m_channels[channelId].filterLow = lowCut;
-        m_channels[channelId].filterHigh = highCut;
-#ifdef HAVE_WDSP
-        // TODO: Call WDSP SetRXABandpassFreqs()
-#endif
-    }
-}
-
-void WdspEngine::setAgcMode(int channelId, int mode)
-{
-    if (m_channels.contains(channelId)) {
-        m_channels[channelId].agcMode = mode;
-#ifdef HAVE_WDSP
-        // TODO: Call WDSP SetRXAAGCMode()
-#endif
-    }
-}
-
-void WdspEngine::setAgcThreshold(int channelId, int threshold)
-{
-    Q_UNUSED(channelId);
-    Q_UNUSED(threshold);
-#ifdef HAVE_WDSP
-    // TODO: Call WDSP SetRXAAGCTop()
-#endif
-}
-
-void WdspEngine::setNrEnabled(int channelId, bool enabled)
-{
-    if (m_channels.contains(channelId)) {
-        m_channels[channelId].nrEnabled = enabled;
-#ifdef HAVE_WDSP
-        // TODO: Call WDSP SetRXAANRRun()
-#endif
-    }
-}
-
-void WdspEngine::setNr2Enabled(int channelId, bool enabled)
-{
-    Q_UNUSED(channelId);
-    Q_UNUSED(enabled);
-#ifdef HAVE_WDSP
-    // TODO: Call WDSP SetRXAEMNRRun()
-#endif
-}
-
-void WdspEngine::setNbEnabled(int channelId, bool enabled)
-{
-    if (m_channels.contains(channelId)) {
-        m_channels[channelId].nbEnabled = enabled;
-#ifdef HAVE_WDSP
-        // TODO: Call WDSP SetRXAANBRun()
-#endif
-    }
-}
-
-void WdspEngine::setNb2Enabled(int channelId, bool enabled)
-{
-    Q_UNUSED(channelId);
-    Q_UNUSED(enabled);
-#ifdef HAVE_WDSP
-    // TODO: Call WDSP SetRXANOBRun()
-#endif
-}
-
-void WdspEngine::setAnfEnabled(int channelId, bool enabled)
-{
-    if (m_channels.contains(channelId)) {
-        m_channels[channelId].anfEnabled = enabled;
-#ifdef HAVE_WDSP
-        // TODO: Call WDSP SetRXAANFRun()
-#endif
-    }
-}
-
-void WdspEngine::setSquelchEnabled(int channelId, bool enabled)
-{
-    Q_UNUSED(channelId);
-    Q_UNUSED(enabled);
-#ifdef HAVE_WDSP
-    // TODO: Call WDSP SetRXAAMSQRun()
-#endif
-}
-
-void WdspEngine::setSquelchLevel(int channelId, int level)
-{
-    Q_UNUSED(channelId);
-    Q_UNUSED(level);
-#ifdef HAVE_WDSP
-    // TODO: Call WDSP SetRXAAMSQThreshold()
-#endif
-}
-
-void WdspEngine::setTxCompression(int channelId, bool enabled, float level)
-{
-    Q_UNUSED(channelId);
-    Q_UNUSED(enabled);
-    Q_UNUSED(level);
-#ifdef HAVE_WDSP
-    // TODO: Call WDSP SetTXACompressorRun() and SetTXACompressorGain()
-#endif
-}
-
-void WdspEngine::setTxEqEnabled(int channelId, bool enabled)
-{
-    Q_UNUSED(channelId);
-    Q_UNUSED(enabled);
-#ifdef HAVE_WDSP
-    // TODO: Call WDSP SetTXAEQRun()
-#endif
-}
-
-void WdspEngine::getSpectrum(int channelId, float* buffer, int size)
-{
-    Q_UNUSED(channelId);
-    Q_UNUSED(buffer);
-    Q_UNUSED(size);
-#ifdef HAVE_WDSP
-    // TODO: Call WDSP GetSpectrum() or Spectrum0()
-#endif
+    return nullptr;
 }
 
 } // namespace NereusSDR

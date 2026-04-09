@@ -86,12 +86,33 @@ endif()
 option(ENABLE_WDSP "Build with WDSP DSP engine" ON)
 if(ENABLE_WDSP)
     set(WDSP_DIR ${CMAKE_SOURCE_DIR}/third_party/wdsp)
-    if(EXISTS "${WDSP_DIR}/src/wdsp.h")
+    if(EXISTS "${WDSP_DIR}/src/comm.h")
         set(WDSP_FOUND TRUE)
         message(STATUS "WDSP found — DSP engine enabled")
     else()
         set(WDSP_FOUND FALSE)
         message(STATUS "WDSP not found at ${WDSP_DIR} — DSP engine disabled (stub mode)")
+    endif()
+endif()
+
+# On Windows, generate FFTW3 import library from .def if .lib is missing
+if(WIN32 AND FFTW3_FOUND AND NOT EXISTS "${FFTW3_ROOT}/lib/fftw3.lib")
+    find_program(MSVC_LIB lib.exe)
+    if(MSVC_LIB)
+        execute_process(
+            COMMAND ${MSVC_LIB} /def:${FFTW3_ROOT}/lib/libfftw3-3.def
+                    /machine:x64 /out:${FFTW3_ROOT}/lib/fftw3.lib
+            WORKING_DIRECTORY ${FFTW3_ROOT}/lib
+            RESULT_VARIABLE LIB_RESULT
+        )
+        if(LIB_RESULT EQUAL 0)
+            set(FFTW3_LIBRARIES "${FFTW3_ROOT}/lib/fftw3.lib")
+            message(STATUS "Generated FFTW3 import library")
+        endif()
+    else()
+        # Fallback: link directly against DLL (MinGW compatible)
+        set(FFTW3_LIBRARIES "${FFTW3_ROOT}/bin/libfftw3-3.dll")
+        message(STATUS "FFTW3: linking directly against DLL (lib.exe not found)")
     endif()
 endif()
 
@@ -128,6 +149,7 @@ set(CORE_SOURCES
     src/core/ReceiverManager.cpp
     src/core/AudioEngine.cpp
     src/core/WdspEngine.cpp
+    src/core/RxChannel.cpp
 )
 
 set(MODEL_SOURCES
@@ -196,6 +218,8 @@ if(FFTW3_FOUND)
 endif()
 
 if(WDSP_FOUND)
+    add_subdirectory(third_party/wdsp)
+    target_link_libraries(NereusSDR PRIVATE wdsp_static)
     target_compile_definitions(NereusSDR PRIVATE HAVE_WDSP)
 endif()
 

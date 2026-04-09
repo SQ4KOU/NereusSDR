@@ -4,9 +4,12 @@
 #include "core/ReceiverManager.h"
 #include "core/AudioEngine.h"
 #include "core/WdspEngine.h"
+#include "core/RxChannel.h"
 #include "core/LogCategories.h"
 
 #include <QMetaObject>
+#include <QStandardPaths>
+#include <QVector>
 
 namespace NereusSDR {
 
@@ -122,6 +125,25 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // Configure ReceiverManager with hardware capabilities
     m_receiverManager->setMaxReceivers(info.maxReceivers);
 
+    // Initialize WDSP DSP engine (wisdom runs async — channel creation
+    // is deferred until initializedChanged fires)
+    QString configDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    connect(m_wdspEngine, &WdspEngine::initializedChanged, this, [this](bool ok) {
+        if (!ok) {
+            return;
+        }
+        // Create primary RX channel once WDSP is ready
+        // 1024 samples input buffer (standard WDSP size), accumulate from 238-sample P2 packets
+        RxChannel* rxCh = m_wdspEngine->createRxChannel(0, 1024, 4096, 48000, 48000, 48000);
+        if (rxCh) {
+            rxCh->setActive(true);
+        }
+        // Start audio output
+        m_audioEngine->start();
+        qCInfo(lcDsp) << "WDSP ready — RX channel 0 active, audio started";
+    }, Qt::SingleShotConnection);
+    m_wdspEngine->initialize(configDir);
+
     // Factory-create the connection (no parent — will be moved to thread)
     auto conn = RadioConnection::create(info);
     if (!conn) {
@@ -169,9 +191,51 @@ void RadioModel::wireConnectionSignals()
     connect(m_connection, &RadioConnection::connectionStateChanged,
             this, &RadioModel::onConnectionStateChanged);
 
-    // I/Q data → ReceiverManager (auto-queued: connection thread → main thread)
+    // I/Q data → accumulate → WDSP → AudioEngine
+    // Bypass ReceiverManager DDC mapping for now — ANAN-G2 uses DDC2 as primary
+    // receiver but ReceiverManager assigns sequential hw indices starting at 0.
+    // TODO: Port full UpdateDDCs() logic from Thetis console.cs:8186
+    //
+    // Accumulate 238-sample P2 packets into 1024-sample WDSP buffers.
+    // This reduces fexchange2 call rate from ~200/sec to ~47/sec and uses
+    // a standard power-of-2 buffer size that WDSP handles reliably.
+    m_iqAccumI.clear();
+    m_iqAccumQ.clear();
+    m_iqAccumI.reserve(kWdspBufSize);
+    m_iqAccumQ.reserve(kWdspBufSize);
+
     connect(m_connection, &RadioConnection::iqDataReceived,
-            m_receiverManager, &ReceiverManager::feedIqData);
+            this, [this](int ddcIndex, const QVector<float>& samples) {
+        Q_UNUSED(ddcIndex);
+
+        // Deinterleave and append to accumulation buffers
+        int numSamples = samples.size() / 2;
+        for (int i = 0; i < numSamples; ++i) {
+            m_iqAccumI.append(samples[i * 2]);
+            m_iqAccumQ.append(samples[i * 2 + 1]);
+        }
+
+        // Process when we have enough samples
+        while (m_iqAccumI.size() >= kWdspBufSize) {
+            RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+            if (!rxCh) {
+                m_iqAccumI.clear();
+                m_iqAccumQ.clear();
+                return;
+            }
+
+            QVector<float> outI(kWdspBufSize);
+            QVector<float> outQ(kWdspBufSize);
+            rxCh->processIq(m_iqAccumI.data(), m_iqAccumQ.data(),
+                            outI.data(), outQ.data(), kWdspBufSize);
+
+            m_audioEngine->feedAudio(0, outI.data(), outQ.data(), kWdspBufSize);
+
+            // Remove processed samples
+            m_iqAccumI.remove(0, kWdspBufSize);
+            m_iqAccumQ.remove(0, kWdspBufSize);
+        }
+    });
 
     // Meter data → MeterModel
     connect(m_connection, &RadioConnection::meterDataReceived,
@@ -216,9 +280,16 @@ void RadioModel::teardownConnection()
         return;
     }
 
+    // Stop audio output
+    m_audioEngine->stop();
+
+    // Shutdown WDSP (destroys all channels, saves cache)
+    m_wdspEngine->shutdown();
+
     // Disconnect all signals FIRST (prevents new work being queued)
     QObject::disconnect(m_connection, nullptr, this, nullptr);
     QObject::disconnect(m_connection, nullptr, m_receiverManager, nullptr);
+    QObject::disconnect(m_receiverManager, nullptr, this, nullptr);
 
     if (m_connThread && m_connThread->isRunning()) {
         // Queue disconnect() then quit() on the worker thread.

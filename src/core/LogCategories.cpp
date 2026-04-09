@@ -14,8 +14,8 @@ Q_LOGGING_CATEGORY(lcDiscovery,  "nereus.discovery")
 Q_LOGGING_CATEGORY(lcConnection, "nereus.connection")
 Q_LOGGING_CATEGORY(lcProtocol,   "nereus.protocol")
 Q_LOGGING_CATEGORY(lcReceiver,   "nereus.receiver")
-Q_LOGGING_CATEGORY(lcAudio,      "nereus.audio",  QtWarningMsg)
-Q_LOGGING_CATEGORY(lcDsp,        "nereus.dsp",    QtWarningMsg)
+Q_LOGGING_CATEGORY(lcAudio,      "nereus.audio",  QtInfoMsg)
+Q_LOGGING_CATEGORY(lcDsp,        "nereus.dsp",    QtInfoMsg)
 
 // --- LogManager ---
 

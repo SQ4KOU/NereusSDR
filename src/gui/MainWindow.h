@@ -3,11 +3,14 @@
 #include <QMainWindow>
 #include <QLabel>
 
+class QProgressDialog;
+
 namespace NereusSDR {
 
 class RadioModel;
 class ConnectionPanel;
 class SupportDialog;
+class WdspEngine;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -38,6 +41,9 @@ private:
     // Status bar widgets
     QLabel* m_connStatusLabel{nullptr};
     QLabel* m_radioInfoLabel{nullptr};
+
+    // Wisdom generation dialog (shown on first run)
+    QProgressDialog* m_wisdomDialog{nullptr};
 };
 
 } // namespace NereusSDR

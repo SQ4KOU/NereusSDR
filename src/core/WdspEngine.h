@@ -1,73 +1,89 @@
 #pragma once
 
+#include "WdspTypes.h"
+
 #include <QObject>
-#include <QMap>
-#include <QVector>
+#include <QString>
+
+#include <map>
+#include <memory>
 
 namespace NereusSDR {
 
-// C++20 wrapper around the WDSP DSP library.
-// Each receiver gets one WDSP "channel" with independent DSP state.
+class RxChannel;
+
+// Central WDSP manager. Owns all RxChannel instances and manages
+// system-level initialization (FFTW wisdom, impulse cache).
 //
-// WDSP handles: demodulation, AGC, noise blanker (NB/NB2), noise reduction
-// (NR/NR2), auto-notch filter (ANF), bandpass filtering, equalization,
-// TX compression, CESSB, VOX/DEXP, PureSignal PA linearization.
+// Owned by RadioModel. Created once per radio connection.
+// Thread safety: create/destroy on main thread only.
+//                processIq called from audio callback via RxChannel.
 //
-// When WDSP is not available (HAVE_WDSP not defined), all methods are no-ops.
+// Ported from Thetis cmaster.cs:491 (CMCreateCMaster) and
+// cmaster.c:32-93 (create_rcvr).
 class WdspEngine : public QObject {
     Q_OBJECT
+
+    Q_PROPERTY(bool initialized READ isInitialized NOTIFY initializedChanged)
 
 public:
     explicit WdspEngine(QObject* parent = nullptr);
     ~WdspEngine() override;
 
-    // Channel lifecycle
-    int createChannel(int sampleRate, int fftSize);
-    void destroyChannel(int channelId);
+    // --- System lifecycle ---
 
-    // Process I/Q samples through WDSP for a given channel.
-    // Outputs demodulated audio (left/right).
-    void processIq(int channelId, const float* iData, const float* qData,
-                   float* outLeft, float* outRight, int sampleCount);
+    // Check if wisdom file needs to be generated (first run).
+    // If true, initialize() will take 30-60s and emit wisdomProgress.
+    static bool needsWisdomGeneration(const QString& configDir);
 
-    // DSP parameter setters (per-channel)
-    void setMode(int channelId, int mode);
-    void setFilter(int channelId, int lowCut, int highCut);
-    void setAgcMode(int channelId, int mode);
-    void setAgcThreshold(int channelId, int threshold);
-    void setNrEnabled(int channelId, bool enabled);
-    void setNr2Enabled(int channelId, bool enabled);
-    void setNbEnabled(int channelId, bool enabled);
-    void setNb2Enabled(int channelId, bool enabled);
-    void setAnfEnabled(int channelId, bool enabled);
-    void setSquelchEnabled(int channelId, bool enabled);
-    void setSquelchLevel(int channelId, int level);
+    // Initialize WDSP: load FFTW wisdom, initialize impulse cache.
+    // configDir: directory for wisdom file and impulse cache.
+    // Wisdom runs async — listen to initializedChanged for completion.
+    bool initialize(const QString& configDir);
 
-    // TX DSP
-    void setTxCompression(int channelId, bool enabled, float level);
-    void setTxEqEnabled(int channelId, bool enabled);
+    // Shutdown WDSP: save impulse cache, destroy all channels, free resources.
+    void shutdown();
 
-    // Spectrum/FFT data extraction
-    void getSpectrum(int channelId, float* buffer, int size);
+    bool isInitialized() const { return m_initialized; }
+
+    // --- RX Channel management ---
+
+    // Create an RX channel with the given parameters.
+    // Returns the new RxChannel (owned by WdspEngine) or nullptr on failure.
+    // channelId: WDSP channel number (0-31). Must be unique.
+    //
+    // Default parameters match our P2 DDC configuration:
+    //   inputBufferSize=238 (one P2 packet), dspBufferSize=4096,
+    //   all rates=48000 (no resampling needed)
+    //
+    // From Thetis cmaster.c:72-86 (OpenChannel call in create_rcvr)
+    RxChannel* createRxChannel(int channelId,
+                               int inputBufferSize = 238,
+                               int dspBufferSize = 4096,
+                               int inputSampleRate = 48000,
+                               int dspSampleRate = 48000,
+                               int outputSampleRate = 48000);
+
+    // Destroy an RX channel by ID. The RxChannel pointer becomes invalid.
+    void destroyRxChannel(int channelId);
+
+    // Look up an existing RX channel by WDSP channel ID.
+    RxChannel* rxChannel(int channelId) const;
 
 signals:
-    void spectrumReady(int channelId, const QVector<float>& data);
+    void initializedChanged(bool initialized);
+    // Emitted during wisdom generation. percent=0-100, status=what's being planned.
+    void wisdomProgress(int percent, const QString& status);
 
 private:
-    struct ChannelState {
-        int sampleRate{48000};
-        int fftSize{4096};
-        int mode{0};
-        int filterLow{-2850};
-        int filterHigh{-150};
-        int agcMode{3};  // Medium
-        bool nrEnabled{false};
-        bool nbEnabled{false};
-        bool anfEnabled{false};
-    };
+    bool m_initialized{false};
+    QString m_configDir;
 
-    QMap<int, ChannelState> m_channels;
-    int m_nextChannelId{0};
+    // Finish initialization after WDSPwisdom completes (called from timer)
+    void finishInitialization();
+
+    // RX channels keyed by WDSP channel ID.
+    std::map<int, std::unique_ptr<RxChannel>> m_rxChannels;
 };
 
 } // namespace NereusSDR
