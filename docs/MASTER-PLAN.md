@@ -283,21 +283,23 @@ Thetis source: `ucMeter.cs`, `frmMeterDisplay.cs`, `MeterManager.cs`
 
 Verification: Create containers, dock/float/resize, persist across restart, axis-lock holds on resize.
 
-### Phase 3G-2: MeterWidget GPU Renderer
+### Phase 3G-2: MeterWidget GPU Renderer ✅ COMPLETE
 **Goal:** QRhi-based meter rendering engine following SpectrumWidget's 3-pipeline pattern.
 
 Scope:
 - `MeterWidget : public QRhiWidget` — one per container, renders all items in one draw pass
-- Pipeline 1 (textured quad): cached QPainter textures, history graph ring buffer
-- Pipeline 2 (vertex-colored geometry): needle sweep, bar fill, magic eye — uniform-driven animation
-- Pipeline 3 (QPainter → texture overlay): tick marks, text readouts, LED states, button faces
-- `MeterItem` base class — position, size, data source binding, visual properties, serialization
-- `ItemGroup` — composites N items into functional meter types
-- Data binding framework — poll WDSP meters at ~100ms, push to bound items
-- Shaders: `meter_bar.vert/.frag`, `meter_needle.vert/.frag`, `meter_overlay.vert/.frag`
-- Item types: BarItem (H_BAR, V_BAR), TextItem, ScaleItem (H_SCALE, V_SCALE), SolidColourItem, ImageItem
+- Pipeline 1 (textured quad): cached QPainter textures for backgrounds and images
+- Pipeline 2 (vertex-colored geometry, Triangles topology): animated bar fills with attack/decay smoothing
+- Pipeline 3 (QPainter → texture overlay, split static/dynamic): tick marks, text readouts, scale labels
+- `MeterItem` base class — position (normalized 0-1), data source binding, z-order, serialization
+- Concrete item types: BarItem (H/V), TextItem, ScaleItem (H/V), SolidColourItem, ImageItem
+- `ItemGroup` — composites N items into named presets with factory methods
+- `MeterPoller` — QTimer polling RxChannel::getMeter() at 100ms, pushes to bound MeterWidgets
+- Shaders: `meter_textured.vert/.frag` (Pipelines 1 & 3), `meter_geometry.vert/.frag` (Pipeline 2)
+- Pipe-delimited item serialization compatible with ContainerWidget persistence
+- Container #0 pre-populated with live horizontal signal strength bar
 
-Verification: Container with live bar meter bound to WDSP signal strength, updating at 10fps via GPU.
+Verification: Container #0 displays live H_BAR bound to WDSP SignalPeak, updating at 10fps via GPU. ✅
 
 ### Phase 3G-3: Core Meter Groups
 **Goal:** Ship the meters operators expect on day one.

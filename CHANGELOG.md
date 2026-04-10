@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added — Phase 3G-2: MeterWidget GPU Renderer
+- MeterWidget (QRhiWidget): 3-pipeline GPU rendering engine for meters inside ContainerWidget
+  - Pipeline 1 (textured quad): cached background textures and images
+  - Pipeline 2 (vertex-colored geometry): animated bar fills with per-frame vertex updates
+  - Pipeline 3 (QPainter overlay, split static/dynamic): tick marks, labels, value readouts
+- MeterItem base class with normalized 0-1 positioning and data binding
+- Concrete item types: BarItem (H/V), TextItem, ScaleItem (H/V), SolidColourItem, ImageItem
+- BarItem exponential smoothing (attack 0.8 / decay 0.2, from Thetis MeterManager.cs)
+- ItemGroup composite with createHBarPreset() factory (AetherSDR visual style)
+- MeterPoller: QTimer-based WDSP meter polling at 100ms via RxChannel::getMeter()
+- MeterBinding constants mapping to RxMeterType (SignalPeak through AgcAvg)
+- Pipe-delimited item serialization compatible with ContainerWidget persistence
+- Container #0 pre-populated with live horizontal signal strength bar meter
+- Shaders: meter_textured.vert/.frag (Pipelines 1 & 3), meter_geometry.vert/.frag (Pipeline 2)
+- lcMeter logging category
+
 ### Added — Phase 3G-1: Container Infrastructure
 - ContainerWidget: dock/float/resize container shell with title bar, axis-lock (8 positions), content slot
 - FloatingContainer: top-level window wrapper with pin-on-top, minimize-with-console, geometry persist

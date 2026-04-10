@@ -201,6 +201,10 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 * `ContainerWidget` — dock/float/resize/axis-lock container shell (Thetis ucMeter equivalent)
 * `FloatingContainer` — top-level window wrapper for floating containers (Thetis frmMeterDisplay equivalent)
 * `ContainerManager` — singleton container lifecycle: 3 dock modes (panel/overlay/floating), axis-lock reposition, QSplitter, persistence
+* `MeterWidget` — GPU meter renderer (QRhiWidget — 3 pipelines: background texture, vertex geometry, QPainter overlay); one per container, renders all MeterItems in single draw pass
+* `MeterItem` — base class for composable meter elements (normalized 0-1 positioning, data binding, z-order); concrete types: BarItem, TextItem, ScaleItem, SolidColourItem, ImageItem
+* `ItemGroup` — composites N MeterItems into named presets; factory methods for common meter layouts
+* `MeterPoller` — QTimer-based WDSP meter polling (100ms/10fps); calls RxChannel::getMeter(), pushes to bound MeterWidgets
 * `AppSettings` — custom XML settings persistence (NOT QSettings)
 * `MainWindow` — wires everything together, signal routing hub; uses QSplitter for spectrum + container panel
 
@@ -322,6 +326,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | [phase3d-spectrum-waterfall-plan.md](docs/architecture/phase3d-spectrum-waterfall-plan.md) | 3D: GPU Spectrum & Waterfall | **Complete** |
 | [ctun-zoom-plan.md](docs/architecture/ctun-zoom-plan.md) | 3E: CTUN Zoom Bin Subsetting | **Complete** |
 | [phase3g1-container-infrastructure-plan.md](docs/architecture/phase3g1-container-infrastructure-plan.md) | 3G-1: Container Infrastructure | **Complete** |
+| [phase3g2-meter-widget.md](docs/superpowers/plans/2026-04-10-phase3g2-meter-widget.md) | 3G-2: MeterWidget GPU Renderer | **Complete** |
 | [phase3f-multi-panadapter-plan.md](docs/architecture/phase3f-multi-panadapter-plan.md) | 3F: Multi-Panadapter + DDC Assignment | Planning (after 3I-4) |
 
 ### Protocol Reference (`docs/protocols/`)
@@ -339,7 +344,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | 1B: Thetis Analysis | Dual-thread DSP (RX1/RX2), pre-allocated receivers, one-way protocol, skin system |
 | 1C: WDSP Analysis | 256 API functions, channel-based DSP, fexchange2() for I/Q, PureSignal feedback loop |
 
-### Current Phase: 3G-2 — MeterWidget GPU Renderer
+### Current Phase: 3G-3 — Core Meter Groups
 
 | Phase | Goal | Status |
 | --- | --- | --- |
@@ -349,7 +354,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | 3D: Spectrum Display | GPU spectrum + waterfall (QRhi Metal/Vulkan/D3D12) | **Complete** |
 | 3E: VFO + Multi-RX Foundation | VFO controls, CTUN panadapter, rewired I/Q pipeline | **Complete** |
 | **3G-1: Container Infrastructure** | **Dock/float/resize/persist container shells** | **Complete** |
-| 3G-2: MeterWidget GPU Renderer | QRhi-based meter rendering engine | Planned |
+| **3G-2: MeterWidget GPU Renderer** | **QRhi-based meter rendering engine** | **Complete** |
 | 3G-3: Core Meter Groups | S-Meter, Power/SWR, ALC presets | Planned |
 | 3G-4: Advanced Meter Items | History graph, magic eye, dial, LED | Planned |
 | 3G-5: Interactive Meter Items | Band/mode/filter buttons, VFO display, clock | Planned |

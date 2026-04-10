@@ -24,7 +24,7 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 
 ## Current Status
 
-**Phase 3E complete — VFO controls + CTUN panadapter.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates audio through WDSP, renders a live GPU-accelerated spectrum + waterfall, and supports full VFO tuning with SmartSDR-style CTUN mode (independent pan center and VFO, WDSP shift offsets, off-screen VFO indicator).
+**Phase 3G-2 complete — GPU-rendered meters.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates audio through WDSP, renders a live GPU-accelerated spectrum + waterfall with VFO tuning (CTUN mode), and displays live GPU-rendered signal meters in dockable/floatable containers. The meter engine uses the same QRhi 3-pipeline architecture as the spectrum display, polling WDSP meters at 10 FPS.
 
 ## Key Features
 
@@ -46,10 +46,14 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 - Mouse interaction (scroll-to-tune, drag ref level, click-to-tune, waterfall pan)
 - Phase word NCO tuning with Alex HPF/LPF/BPF filters (fully enabled)
 - Display settings persistence via AppSettings
+- Dockable/floatable containers with axis-lock, hover-reveal title bar, serialization
+- GPU-rendered meter engine (QRhi 3-pipeline: background texture, vertex geometry, QPainter overlay)
+- Live signal strength bar meter in Container #0 (WDSP polling at 10 FPS)
+- Composable MeterItems: BarItem, TextItem, ScaleItem, SolidColourItem, ImageItem
 - Cross-platform build (Windows, Linux, macOS)
 
 **Planned (see Roadmap):**
-- Configurable floating/dockable containers with GPU-rendered meters (Phase 3G)
+- Core meter presets: S-Meter needle, Power/SWR, ALC (Phase 3G-3)
 - TX pipeline — SSB, CW, full processing chain, PureSignal (Phase 3I)
 - Up to 4 independent panadapters in configurable layouts (Phase 3F)
 - Thetis-inspired skin system (Phase 3H)
@@ -89,9 +93,9 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 | **3C: macOS Build** | Cross-platform WDSP build + wisdom crash fix | **Complete** |
 | **3D: Spectrum Display** | GPU spectrum + waterfall (QRhi Metal/Vulkan/D3D12) | **Complete** |
 | **3E: VFO + Multi-RX Foundation** | VFO controls + rewire I/Q pipeline for N receivers + CTUN panadapter | **Complete** |
-| **3G-1: Container Infrastructure** | **Dock/float/resize/persist container shells** | **Next up** |
-| 3G-2: MeterWidget GPU Renderer | QRhi-based meter rendering engine | Planned |
-| 3G-3: Core Meter Groups | S-Meter, Power/SWR, ALC presets | Planned |
+| **3G-1: Container Infrastructure** | **Dock/float/resize/persist container shells** | **Complete** |
+| **3G-2: MeterWidget GPU Renderer** | **QRhi-based meter rendering engine** | **Complete** |
+| 3G-3: Core Meter Groups | S-Meter, Power/SWR, ALC presets | **Next up** |
 | 3G-4: Advanced Meter Items | History graph, magic eye, dial, LED | Planned |
 | 3G-5: Interactive Meter Items | Band/mode/filter buttons, VFO display, clock | Planned |
 | 3G-6: Container Settings Dialog | Full composability UI, import/export | Planned |
