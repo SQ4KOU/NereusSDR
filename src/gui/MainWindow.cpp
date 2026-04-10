@@ -232,17 +232,23 @@ void MainWindow::buildUI()
     }
 
     // Wire RxChannel to poller when WDSP finishes initializing.
-    // sliceAdded fires BEFORE WDSP creates the RxChannel, so we must
-    // connect to initializedChanged which fires AFTER rxChannel(0) exists.
+    // RadioModel's initializedChanged handler creates the RxChannel, but
+    // it was registered AFTER this connection (RadioModel registers during
+    // onConnectionStateChanged, not buildUI). Qt fires in registration order,
+    // so we defer by one event loop pass to ensure RxChannel exists.
     connect(m_radioModel->wdspEngine(), &WdspEngine::initializedChanged,
             this, [this](bool ok) {
         if (!ok) { return; }
-        RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
-        if (rxCh) {
-            m_meterPoller->setRxChannel(rxCh);
-            m_meterPoller->start();
-            qCDebug(lcMeter) << "MeterPoller started on RxChannel 0";
-        }
+        QTimer::singleShot(0, this, [this]() {
+            RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
+            if (rxCh) {
+                m_meterPoller->setRxChannel(rxCh);
+                m_meterPoller->start();
+                qCDebug(lcMeter) << "MeterPoller started on RxChannel 0";
+            } else {
+                qCWarning(lcMeter) << "MeterPoller: RxChannel 0 still null after WDSP init";
+            }
+        });
     });
 }
 
