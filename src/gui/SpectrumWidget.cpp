@@ -1095,7 +1095,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
         int dx = mx - m_bwDragStartX;
         double factor = 1.0 + dx * 0.003;  // 0.3% per pixel
         double newBw = m_bwDragStartBw * factor;
-        newBw = std::clamp(newBw, 1000.0, 768000.0);
+        newBw = std::clamp(newBw, 1000.0, m_sampleRateHz);
         m_bandwidthHz = newBw;
         // Recenter on VFO when zooming so the signal stays visible
         m_centerHz = m_vfoHz;
@@ -1228,7 +1228,7 @@ void SpectrumWidget::wheelEvent(QWheelEvent* event)
         // Cmd+scroll (macOS) or Ctrl+scroll: zoom bandwidth in/out
         double factor = (delta > 0) ? 0.8 : 1.25;
         double newBw = m_bandwidthHz * factor;
-        newBw = std::clamp(newBw, 1000.0, 768000.0);
+        newBw = std::clamp(newBw, 1000.0, m_sampleRateHz);
         m_bandwidthHz = newBw;
         // Recenter on VFO when zooming
         m_centerHz = m_vfoHz;
