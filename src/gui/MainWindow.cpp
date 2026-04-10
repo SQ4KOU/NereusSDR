@@ -122,19 +122,22 @@ void MainWindow::buildUI()
     m_mainSplitter->setStyleSheet(QStringLiteral(
         "QSplitter::handle { background: #203040; }"));
 
-    // Left side: spectrum + zoom bar (inside a container widget)
+    // Left side: spectrum + zoom bar
     auto* spectrumPane = new QWidget(m_mainSplitter);
+    spectrumPane->setMinimumWidth(400);
     auto* layout = new QVBoxLayout(spectrumPane);
     layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
 
     m_spectrumWidget = new SpectrumWidget(spectrumPane);
     m_spectrumWidget->loadSettings();
-    layout->addWidget(m_spectrumWidget, 1);  // stretch=1 takes all space
+    m_spectrumWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    layout->addWidget(m_spectrumWidget, 1);
 
     // Zoom slider bar below spectrum
     auto* zoomBar = new QSlider(Qt::Horizontal, spectrumPane);
-    zoomBar->setRange(1, 768);  // 1 kHz to 768 kHz
-    zoomBar->setValue(768);     // Start fully zoomed out
+    zoomBar->setRange(1, 768);
+    zoomBar->setValue(768);
     zoomBar->setFixedHeight(20);
     zoomBar->setToolTip(QStringLiteral("Zoom: drag to adjust spectrum bandwidth"));
     zoomBar->setStyleSheet(QStringLiteral(
