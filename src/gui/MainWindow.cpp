@@ -314,8 +314,8 @@ void MainWindow::wireSliceToSpectrum()
             }
         } else {
             // CTUN: VFO within pan — DDC stays at pan center, shift for audio
-            // Negative: WDSP shift moves demod DOWN to where VFO signal sits in baseband
-            double shiftHz = -(freq - center);
+            // From Thetis radio.cs:1417 — SetRXAShiftFreq receives +(freq - center)
+            double shiftHz = freq - center;
             RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
             if (rxCh) {
                 rxCh->setShiftFrequency(shiftHz);
@@ -440,7 +440,8 @@ void MainWindow::wireSliceToSpectrum()
                     rxIdx, static_cast<quint64>(centerHz));
             }
             // Offset WDSP shift so audio stays on VFO frequency
-            double shiftHz = -(slice->frequency() - centerHz);
+            // From Thetis radio.cs:1417 — SetRXAShiftFreq receives +(freq - center)
+            double shiftHz = slice->frequency() - centerHz;
             RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
             if (rxCh) {
                 rxCh->setShiftFrequency(shiftHz);

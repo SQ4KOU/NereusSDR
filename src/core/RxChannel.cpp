@@ -137,7 +137,9 @@ void RxChannel::setShiftFrequency(double offsetHz)
         // No offset — disable shift for efficiency
         SetRXAShiftRun(m_channelId, 0);
     } else {
+        // From Thetis radio.cs:1417-1418 — both calls use the same sign
         SetRXAShiftFreq(m_channelId, offsetHz);
+        RXANBPSetShiftFrequency(m_channelId, offsetHz);
         SetRXAShiftRun(m_channelId, 1);
     }
 #else
