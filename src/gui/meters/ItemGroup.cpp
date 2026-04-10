@@ -150,6 +150,13 @@ ItemGroup* ItemGroup::deserialize(const QString& data, QObject* parent)
             } else {
                 delete text;
             }
+        } else if (typeTag == QLatin1String("NEEDLE")) {
+            NeedleItem* needle = new NeedleItem();
+            if (needle->deserialize(itemData)) {
+                item = needle;
+            } else {
+                delete needle;
+            }
         }
 
         if (item) {

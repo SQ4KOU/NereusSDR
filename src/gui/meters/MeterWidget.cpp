@@ -144,6 +144,8 @@ bool MeterWidget::deserializeItems(const QString& data)
             item = new ScaleItem();
         } else if (type == QStringLiteral("TEXT")) {
             item = new TextItem();
+        } else if (type == QStringLiteral("NEEDLE")) {
+            item = new NeedleItem();
         }
 
         if (item && item->deserialize(line)) {

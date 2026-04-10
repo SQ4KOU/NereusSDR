@@ -268,4 +268,69 @@ private:
     int     m_decimals{1};
 };
 
+// ---------------------------------------------------------------------------
+// NeedleItem — Arc-style S-meter needle (AetherSDR SMeterWidget port)
+// Participates in all 4 render layers:
+//   P1 Background:     arc colored segments (white S0-S9, red S9+)
+//   P2 Geometry:       needle quad + peak marker triangle
+//   P3 OverlayStatic:  tick marks, tick labels, source label
+//   P3 OverlayDynamic: S-unit readout (left), dBm readout (right)
+// ---------------------------------------------------------------------------
+class NeedleItem : public MeterItem {
+    Q_OBJECT
+public:
+    explicit NeedleItem(QObject* parent = nullptr);
+
+    // --- Arc geometry constants (from AetherSDR SMeterWidget.cpp) ---
+    static constexpr float kArcStartDeg = 55.0f;   // right end (S9+60)
+    static constexpr float kArcEndDeg   = 125.0f;  // left end (S0)
+    static constexpr float kRadiusRatio = 0.85f;    // radius = width * 0.85
+    static constexpr float kCenterYRatio = 0.65f;   // cy = h + radius - h*0.65
+
+    // --- S-meter scale constants (from AetherSDR SMeterWidget.h) ---
+    static constexpr float kS0Dbm  = -127.0f;      // S0
+    static constexpr float kS9Dbm  = -73.0f;        // S9 = S0 + 9*6
+    static constexpr float kMaxDbm = -13.0f;         // S9+60
+    static constexpr float kDbPerS = 6.0f;           // dB per S-unit
+
+    // --- Smoothing (from AetherSDR SMOOTH_ALPHA) ---
+    static constexpr float kSmoothAlpha = 0.3f;
+
+    // --- Peak hold: Medium preset (from AetherSDR) ---
+    static constexpr int   kPeakHoldFrames   = 5;    // 500ms at 100ms poll
+    static constexpr float kPeakDecayPerFrame = 1.0f; // 10 dB/sec = 1dB/100ms
+    static constexpr int   kPeakResetFrames  = 100;   // 10s hard reset
+
+    void setSourceLabel(const QString& label) { m_sourceLabel = label; }
+    QString sourceLabel() const { return m_sourceLabel; }
+
+    void setValue(double v) override;
+
+    // Multi-layer: participates in all 4 pipeline layers
+    bool participatesIn(Layer layer) const override;
+    Layer renderLayer() const override { return Layer::Geometry; }
+    void paint(QPainter& p, int widgetW, int widgetH) override;
+    void paintForLayer(QPainter& p, int widgetW, int widgetH, Layer layer) override;
+    void emitVertices(QVector<float>& verts, int widgetW, int widgetH) override;
+
+    QString serialize() const override;
+    bool deserialize(const QString& data) override;
+
+private:
+    // From AetherSDR SMeterWidget.cpp dbmToFraction()
+    float dbmToFraction(float dbm) const;
+    // From AetherSDR SMeterWidget.cpp sUnitsText()
+    QString sUnitsText(float dbm) const;
+
+    void paintBackground(QPainter& p, int widgetW, int widgetH);
+    void paintOverlayStatic(QPainter& p, int widgetW, int widgetH);
+    void paintOverlayDynamic(QPainter& p, int widgetW, int widgetH);
+
+    QString m_sourceLabel{QStringLiteral("S-Meter")};
+    float   m_smoothedDbm{kS0Dbm};
+    float   m_peakDbm{kS0Dbm};
+    int     m_peakHoldCounter{0};
+    int     m_peakResetCounter{0};
+};
+
 } // namespace NereusSDR
