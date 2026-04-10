@@ -18,6 +18,7 @@ Q_LOGGING_CATEGORY(lcAudio,      "nereus.audio",  QtInfoMsg)
 Q_LOGGING_CATEGORY(lcDsp,        "nereus.dsp",    QtInfoMsg)
 Q_LOGGING_CATEGORY(lcSpectrum,   "nereus.spectrum", QtInfoMsg)
 Q_LOGGING_CATEGORY(lcContainer,  "nereus.container")
+Q_LOGGING_CATEGORY(lcMeter,      "nereus.meter")
 
 // --- LogManager ---
 
@@ -48,6 +49,8 @@ LogManager::LogManager()
           QStringLiteral("FFT engine, spectrum display, waterfall rendering"), false },
         { QStringLiteral("nereus.container"), QStringLiteral("Container"),
           QStringLiteral("Container dock/float/resize, lifecycle, persistence"), false },
+        { QStringLiteral("nereus.meter"),    QStringLiteral("Meter"),
+          QStringLiteral("Meter widget rendering, polling, and item lifecycle"), false },
     };
 }
 
