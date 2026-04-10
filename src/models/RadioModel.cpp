@@ -153,8 +153,9 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             return;
         }
         // Create primary RX channel once WDSP is ready
-        // 1024 samples input buffer (standard WDSP size), accumulate from 238-sample P2 packets
-        RxChannel* rxCh = m_wdspEngine->createRxChannel(0, 1024, 4096, 48000, 48000, 48000);
+        // in_size=1024 at 768k (Thetis formula: 64 * 768000/48000 = 1024)
+        // WDSP decimates 768k→48k internally, outputs 64 samples per exchange
+        RxChannel* rxCh = m_wdspEngine->createRxChannel(0, 1024, 4096, 768000, 48000, 48000);
         if (rxCh) {
             // Apply slice state to WDSP channel (no longer hardcoded)
             if (m_activeSlice) {
@@ -270,7 +271,8 @@ void RadioModel::wireConnectionSignals()
             rxCh->processIq(m_iqAccumI.data(), m_iqAccumQ.data(),
                             outI.data(), outQ.data(), kWdspBufSize);
 
-            m_audioEngine->feedAudio(0, outI.data(), outQ.data(), kWdspBufSize);
+            // WDSP outputs out_size samples (64 at 768k→48k decimation)
+            m_audioEngine->feedAudio(0, outI.data(), outQ.data(), kWdspOutSize);
 
             // Remove processed samples
             m_iqAccumI.remove(0, kWdspBufSize);

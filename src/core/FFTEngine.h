@@ -106,7 +106,7 @@ private:
     float m_dbmOffset{0.0f};
 
     // From Thetis display.cs:215
-    static constexpr int kMaxFftSize = 16384;
+    static constexpr int kMaxFftSize = 65536;
 };
 
 } // namespace NereusSDR

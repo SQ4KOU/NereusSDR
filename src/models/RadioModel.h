@@ -125,8 +125,11 @@ private:
     bool m_intentionalDisconnect{false};
 
     // I/Q accumulation buffer for WDSP (accumulates 238-sample P2 packets
-    // until we have 1024 samples for one fexchange2 call)
+    // until we have in_size samples for one fexchange2 call)
+    // Thetis formula: in_size = 64 * rate / 48000 → 1024 at 768 kHz
+    // WDSP output: out_size = in_size * out_rate / in_rate → 64 at 768k→48k
     static constexpr int kWdspBufSize = 1024;
+    static constexpr int kWdspOutSize = 64;   // 1024 * 48000 / 768000
     QVector<float> m_iqAccumI;
     QVector<float> m_iqAccumQ;
 

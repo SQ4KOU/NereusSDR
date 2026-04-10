@@ -70,6 +70,7 @@ private:
     QUdpSocket* m_socket{nullptr};
     QTimer* m_keepAliveTimer{nullptr};
     QTimer* m_reconnectTimer{nullptr};
+    QTimer* m_txIqTimer{nullptr};
 
     // --- Port configuration (from Thetis _radionet, network.h:55-56) ---
     int m_p2CustomPortBase{1025};    // prn->p2_custom_port_base
@@ -88,6 +89,7 @@ private:
     quint32 m_seqGeneral{0};
     quint32 m_seqRx{0};
     quint32 m_seqTx{0};
+    quint32 m_seqTxIq{0};
     quint32 m_seqHighPri{0};
     quint32 m_ccSeqNo{0};            // prn->cc_seq_no
 

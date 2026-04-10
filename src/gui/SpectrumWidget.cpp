@@ -3,6 +3,8 @@
 #include "widgets/VfoWidget.h"
 #include "core/AppSettings.h"
 
+#include <QHoverEvent>
+
 #include <QPainter>
 #include <QPainterPath>
 #include <QResizeEvent>
@@ -88,15 +90,18 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
 {
     setMinimumSize(400, 200);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    setMouseTracking(true);  // receive mouseMoveEvent without button pressed
-    setCursor(Qt::CrossCursor);
+    setAutoFillBackground(false);
 
 #ifdef NEREUS_GPU_SPECTRUM
-    // From AetherSDR SpectrumWidget: request Metal on macOS for best performance
+    // From AetherSDR SpectrumWidget: request Metal on macOS for best performance.
+    // Order matters: setApi() first, then WA_NativeWindow, then setMouseTracking().
+    // WA_NativeWindow creates a dedicated native NSView; setMouseTracking() must
+    // come AFTER so the NSTrackingArea is configured on the final native surface.
 #ifdef Q_OS_MAC
     setApi(QRhiWidget::Api::Metal);
-#endif
     setAttribute(Qt::WA_NativeWindow);
+    setAttribute(Qt::WA_Hover);  // Ensure HoverMove events are delivered
+#endif
 #else
     // CPU fallback: dark background
     setAutoFillBackground(true);
@@ -104,6 +109,18 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     pal.setColor(QPalette::Window, QColor(0x0f, 0x0f, 0x1a));
     setPalette(pal);
 #endif
+
+    setCursor(Qt::CrossCursor);
+    setMouseTracking(true);
+
+    // QRhiWidget on macOS Metal does not deliver mouseMoveEvent without button press.
+    // Workaround: a transparent QWidget overlay that receives mouse tracking events
+    // and forwards them. The overlay sits on top of the QRhiWidget, passes through
+    // all clicks and drags, but captures hover movement.
+    // Note: QRhiWidget with WA_NativeWindow on macOS does not support child widget
+    // overlays or mouse tracking without button press. Zoom control is handled via
+    // the frequency scale bar inside the QRhiWidget's own mouse press/drag events
+    // (which DO work when a button is pressed).
 }
 
 SpectrumWidget::~SpectrumWidget() = default;
@@ -267,6 +284,12 @@ void SpectrumWidget::updateSpectrum(int receiverId, const QVector<float>& binsDb
 void SpectrumWidget::resizeEvent(QResizeEvent* event)
 {
     SpectrumBaseClass::resizeEvent(event);
+
+    // Keep mouse overlay covering entire widget
+    if (m_mouseOverlay) {
+        m_mouseOverlay->setGeometry(0, 0, width(), height());
+        m_mouseOverlay->raise();
+    }
 
     // Recreate waterfall image at new size
     int w = width();
@@ -776,6 +799,44 @@ void SpectrumWidget::drawCursorInfo(QPainter& p, const QRect& specRect)
 // ---- Mouse event handlers ----
 // From gpu-waterfall.md:1064-1076 mouse interaction table
 
+// ---- QRhiWidget hover event workaround ----
+// QRhiWidget on macOS Metal does not deliver mouseMoveEvent without a button press.
+// Workaround: m_mouseOverlay (a plain QWidget child) receives mouse tracking events.
+// This eventFilter forwards them to our mouseMoveEvent/mousePressEvent/etc.
+bool SpectrumWidget::eventFilter(QObject* obj, QEvent* ev)
+{
+    if (obj == m_mouseOverlay) {
+        switch (ev->type()) {
+        case QEvent::MouseMove: {
+            auto* me = static_cast<QMouseEvent*>(ev);
+            mouseMoveEvent(me);
+            // Propagate cursor from SpectrumWidget to the overlay
+            m_mouseOverlay->setCursor(cursor());
+            return true;
+        }
+        case QEvent::MouseButtonPress:
+            mousePressEvent(static_cast<QMouseEvent*>(ev));
+            return true;
+        case QEvent::MouseButtonRelease:
+            mouseReleaseEvent(static_cast<QMouseEvent*>(ev));
+            return true;
+        case QEvent::MouseButtonDblClick:
+            mousePressEvent(static_cast<QMouseEvent*>(ev));
+            return true;
+        case QEvent::Wheel:
+            wheelEvent(static_cast<QWheelEvent*>(ev));
+            return true;
+        case QEvent::Leave:
+            m_mouseInWidget = false;
+            update();
+            return true;
+        default:
+            break;
+        }
+    }
+    return SpectrumBaseClass::eventFilter(obj, ev);
+}
+
 // ---- AetherSDR panadapter interaction model ----
 // Hit-test priority from AetherSDR SpectrumWidget.cpp:824-1128
 // Filter edge drag, passband slide-to-tune, divider drag, dBm drag, click-to-tune
@@ -845,22 +906,20 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
         return;
     }
 
-    // 2. Frequency scale bar drag — zoom bandwidth
-    // From AetherSDR SpectrumWidget.cpp:868-876
+    // 2. Divider bar (thin line) — resize spectrum/waterfall split up/down
+    if (my >= dividerY && my < dividerY + kDividerH) {
+        m_draggingDivider = true;
+        setCursor(Qt::SplitVCursor);
+        return;
+    }
+
+    // 3. Frequency scale bar (bottom with freq text) — zoom bandwidth left/right
     int freqScaleY = h - kFreqScaleH;
     if (my >= freqScaleY) {
         m_draggingBandwidth = true;
         m_bwDragStartX = mx;
         m_bwDragStartBw = m_bandwidthHz;
         setCursor(Qt::SizeHorCursor);
-        return;
-    }
-
-    // 3. Divider drag — resize spectrum/waterfall split
-    // From AetherSDR: DIVIDER_H = 4, grab zone is the divider bar
-    if (my >= dividerY && my < dividerY + kDividerH) {
-        m_draggingDivider = true;
-        setCursor(Qt::SplitVCursor);
         return;
     }
 
@@ -972,19 +1031,30 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
         int dx = mx - m_bwDragStartX;
         double factor = 1.0 + dx * 0.003;  // 0.3% per pixel
         double newBw = m_bwDragStartBw * factor;
-        newBw = std::clamp(newBw, 1000.0, 48000.0);  // 1 kHz min to 48 kHz (DDC sample rate)
+        newBw = std::clamp(newBw, 1000.0, 768000.0);
         m_bandwidthHz = newBw;
+        // Recenter on VFO when zooming so the signal stays visible
+        m_centerHz = m_vfoHz;
+        emit centerChanged(m_centerHz);
+        emit bandwidthChangeRequested(newBw);
         updateVfoPositions();
+#ifdef NEREUS_GPU_SPECTRUM
+        markOverlayDirty();
+#else
         update();
+#endif
         return;
     }
 
     if (m_draggingDivider) {
         // Resize spectrum/waterfall split
-        // From AetherSDR SpectrumWidget.cpp:1148-1165
         float frac = static_cast<float>(my) / h;
         m_spectrumFrac = std::clamp(frac, 0.10f, 0.90f);
+#ifdef NEREUS_GPU_SPECTRUM
+        markOverlayDirty();
+#else
         update();
+#endif
         return;
     }
 
@@ -1086,13 +1156,20 @@ void SpectrumWidget::wheelEvent(QWheelEvent* event)
         return;
     }
 
-    if (event->modifiers() & Qt::ControlModifier) {
-        // Ctrl+scroll: zoom bandwidth in/out
+    if (event->modifiers() & Qt::MetaModifier || event->modifiers() & Qt::ControlModifier) {
+        // Cmd+scroll (macOS) or Ctrl+scroll: zoom bandwidth in/out
         double factor = (delta > 0) ? 0.8 : 1.25;
         double newBw = m_bandwidthHz * factor;
-        newBw = std::clamp(newBw, 1000.0, 48000.0);
+        newBw = std::clamp(newBw, 1000.0, 768000.0);
         m_bandwidthHz = newBw;
+        // Recenter on VFO when zooming
+        m_centerHz = m_vfoHz;
+        emit centerChanged(m_centerHz);
+        emit bandwidthChangeRequested(newBw);
         updateVfoPositions();
+#ifdef NEREUS_GPU_SPECTRUM
+        markOverlayDirty();
+#endif
     } else if (event->modifiers() & Qt::ShiftModifier) {
         // Shift+scroll: adjust ref level
         float step = (delta > 0) ? 5.0f : -5.0f;

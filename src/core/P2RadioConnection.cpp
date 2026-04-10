@@ -90,6 +90,23 @@ void P2RadioConnection::init()
     m_reconnectTimer->setSingleShot(true);
     connect(m_reconnectTimer, &QTimer::timeout, this, &P2RadioConnection::onReconnectTimeout);
 
+    // TX I/Q silence stream — radio expects continuous TX data on port 1029
+    // even in RX-only mode. From pcap: ~800 packets/sec at 192 kHz / 240 spp.
+    m_txIqTimer = new QTimer(this);
+    m_txIqTimer->setInterval(5);  // ~200 packets/sec (close enough, radio buffers)
+    connect(m_txIqTimer, &QTimer::timeout, this, [this]() {
+        if (!m_running || !m_socket) {
+            return;
+        }
+        // 4-byte seq + 240 I/Q pairs × 6 bytes (24-bit I + 24-bit Q) = 1444 bytes
+        static constexpr int kTxPktLen = 4 + 240 * 6;
+        char buf[kTxPktLen];
+        memset(buf, 0, sizeof(buf));
+        writeBE32(buf, 0, m_seqTxIq++);
+        QByteArray pkt(buf, sizeof(buf));
+        m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 4);
+    });
+
     qCDebug(lcConnection) << "P2: init() socket port:" << m_socket->localPort();
 }
 
@@ -126,7 +143,7 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // From Thetis console.cs:8234-8241
     m_rx[2].enable = 1;
     m_rx[2].frequency = 3865000;   // 80m LSB — matching Phase 3D verified config
-    m_rx[2].samplingRate = 48;     // 48 kHz — keep matching WDSP input rate
+    m_rx[2].samplingRate = 768;
     // Note: pcap shows Thetis uses 768 kHz for wider spectrum. To enable that,
     // WDSP must also be configured for 768 kHz input (future work).
 
@@ -159,6 +176,7 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // From Thetis StartAudioNative netInterface.c:83
     // prn->hKeepAliveThread = _beginthreadex(NULL, 0, KeepAliveMain, 0, 0, NULL);
     m_keepAliveTimer->start();
+    // m_txIqTimer->start();  // DISABLED: testing if TX silence stream causes weak signals
 
     setState(ConnectionState::Connected);
 }
@@ -172,6 +190,9 @@ void P2RadioConnection::disconnect()
 
     if (m_keepAliveTimer) {
         m_keepAliveTimer->stop();
+    }
+    if (m_txIqTimer) {
+        m_txIqTimer->stop();
     }
     if (m_reconnectTimer) {
         m_reconnectTimer->stop();

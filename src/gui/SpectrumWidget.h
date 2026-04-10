@@ -128,6 +128,7 @@ protected:
 #endif
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    bool eventFilter(QObject* obj, QEvent* event) override;  // mouse overlay forwarding
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
@@ -187,7 +188,7 @@ private:
     // ---- Layout constants ----
     // From gpu-waterfall.md:590-593
     float  m_spectrumFrac{0.40f};     // 40% spectrum, 60% waterfall
-    static constexpr int kFreqScaleH = 20;
+    static constexpr int kFreqScaleH = 28;  // Taller for easier grab target
     static constexpr int kDividerH = 4;
     static constexpr int kDbmStripW = 36;
 
@@ -213,6 +214,9 @@ private:
     enum class VfoOffScreen { None, Left, Right };
     VfoOffScreen m_vfoOffScreen{VfoOffScreen::None};
     void drawOffScreenIndicator(QPainter& p, const QRect& specRect, const QRect& wfRect);
+
+    // ---- Mouse tracking overlay (QRhiWidget macOS workaround) ----
+    QWidget* m_mouseOverlay{nullptr};
 
     // ---- Overlay menu ----
     SpectrumOverlayMenu* m_overlayMenu{nullptr};
@@ -291,7 +295,7 @@ private:
     QRhiBuffer*                 m_fftLineVbo{nullptr};
     QRhiBuffer*                 m_fftFillVbo{nullptr};
     // From AetherSDR: kMaxFftBins = 8192, kFftVertStride = 6
-    static constexpr int kMaxFftBins = 16384;
+    static constexpr int kMaxFftBins = 65536;
     static constexpr int kFftVertStride = 6;  // x, y, r, g, b, a
 
     void markOverlayDirty() {

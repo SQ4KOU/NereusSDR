@@ -16,6 +16,7 @@
 #include <cmath>
 
 #include <QApplication>
+#include <QSlider>
 #include <QCloseEvent>
 #include <QMenuBar>
 #include <QStatusBar>
@@ -116,7 +117,25 @@ void MainWindow::buildUI()
 
     m_spectrumWidget = new SpectrumWidget(central);
     m_spectrumWidget->loadSettings();
-    layout->addWidget(m_spectrumWidget);
+    layout->addWidget(m_spectrumWidget, 1);  // stretch=1 takes all space
+
+    // Zoom slider bar below spectrum — separate QWidget so it gets mouse events
+    // (QRhiWidget with WA_NativeWindow doesn't support mouse tracking on macOS)
+    auto* zoomBar = new QSlider(Qt::Horizontal, central);
+    zoomBar->setRange(1, 768);  // 1 kHz to 768 kHz
+    zoomBar->setValue(768);     // Start fully zoomed out
+    zoomBar->setFixedHeight(20);
+    zoomBar->setToolTip(QStringLiteral("Zoom: drag to adjust spectrum bandwidth"));
+    zoomBar->setStyleSheet(QStringLiteral(
+        "QSlider { background: #0a0a14; }"
+        "QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
+        "QSlider::handle:horizontal { background: #00b4d8; width: 14px; margin: -4px 0; border-radius: 7px; }"));
+    layout->addWidget(zoomBar);
+    connect(zoomBar, &QSlider::valueChanged, this, [this](int val) {
+        double bwHz = val * 1000.0;
+        m_spectrumWidget->setFrequencyRange(m_spectrumWidget->centerFrequency(), bwHz);
+        emit m_spectrumWidget->bandwidthChangeRequested(bwHz);
+    });
 
     setCentralWidget(central);
 
@@ -131,7 +150,7 @@ void MainWindow::buildUI()
 
     // Create FFTEngine on a worker thread (spectrum thread from architecture)
     m_fftEngine = new FFTEngine(0);  // receiver 0
-    m_fftEngine->setSampleRate(48000.0);
+    m_fftEngine->setSampleRate(768000.0);
     m_fftEngine->setFftSize(4096);
     m_fftEngine->setOutputFps(30);
 
@@ -149,6 +168,24 @@ void MainWindow::buildUI()
     // Wire: FFTEngine FFT bins → SpectrumWidget (auto-queued: spectrum → main thread)
     connect(m_fftEngine, &FFTEngine::fftReady,
             m_spectrumWidget, &SpectrumWidget::updateSpectrum);
+
+    // Wire: zoom changes → adjust FFT size for appropriate bin resolution
+    // Target: ~500-1000 bins across the visible bandwidth for good detail
+    connect(m_spectrumWidget, &SpectrumWidget::bandwidthChangeRequested,
+            this, [this](double bwHz) {
+        // Pick FFT size so bin_width ≈ bw / 1000 (aim for ~1000 bins across display)
+        // bin_width = sampleRate / fftSize → fftSize = sampleRate / bin_width
+        double sampleRate = 768000.0;
+        int targetBins = 1000;
+        int desiredSize = static_cast<int>(sampleRate * targetBins / bwHz);
+        // Round up to next power of 2, clamp to valid range
+        int fftSize = 1024;
+        while (fftSize < desiredSize && fftSize < 65536) {
+            fftSize *= 2;
+        }
+        fftSize = std::clamp(fftSize, 1024, 65536);
+        m_fftEngine->setFftSize(fftSize);
+    });
 
     m_fftThread->start();
 }
@@ -230,7 +267,7 @@ void MainWindow::wireSliceToSpectrum()
     // Set initial spectrum display — 48 kHz centered on VFO.
     // With N/2 FFT, only positive frequencies (right half) show real signals.
     double freq = slice->frequency();
-    m_spectrumWidget->setFrequencyRange(freq, 48000.0);
+    m_spectrumWidget->setFrequencyRange(freq, 768000.0);
     m_spectrumWidget->setVfoFrequency(freq);
     m_spectrumWidget->setFilterOffset(slice->filterLow(), slice->filterHigh());
     m_spectrumWidget->setStepSize(slice->stepHz());
@@ -258,20 +295,27 @@ void MainWindow::wireSliceToSpectrum()
         double halfBw = m_spectrumWidget->bandwidth() / 2.0;
         bool offScreen = (freq < center - halfBw) || (freq > center + halfBw);
         if (!m_spectrumWidget->ctunEnabled() || offScreen) {
-            // Traditional mode or band jump: recenter on VFO, unlock DDC
+            // Traditional mode or band jump: recenter, retune DDC to VFO
             m_radioModel->receiverManager()->setDdcFrequencyLocked(false);
             m_spectrumWidget->setCenterFrequency(freq);
+            // DDC retunes via RadioModel path now that lock is off
+            // Force it explicitly too in case RadioModel already fired
+            int rxIdx = slice->receiverIndex();
+            if (rxIdx >= 0) {
+                m_radioModel->receiverManager()->forceHardwareFrequency(
+                    rxIdx, static_cast<quint64>(freq));
+            }
             RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
             if (rxCh) {
                 rxCh->setShiftFrequency(0.0);
             }
-            // Re-lock if still in CTUN mode (band jump recentered but stays CTUN)
             if (m_spectrumWidget->ctunEnabled()) {
                 m_radioModel->receiverManager()->setDdcFrequencyLocked(true);
             }
         } else {
-            // CTUN: VFO moved within pan — DDC locked at pan center, just update shift
-            double shiftHz = freq - center;
+            // CTUN: VFO within pan — DDC stays at pan center, shift for audio
+            // Negative: WDSP shift moves demod DOWN to where VFO signal sits in baseband
+            double shiftHz = -(freq - center);
             RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
             if (rxCh) {
                 rxCh->setShiftFrequency(shiftHz);
@@ -396,7 +440,7 @@ void MainWindow::wireSliceToSpectrum()
                     rxIdx, static_cast<quint64>(centerHz));
             }
             // Offset WDSP shift so audio stays on VFO frequency
-            double shiftHz = slice->frequency() - centerHz;
+            double shiftHz = -(slice->frequency() - centerHz);
             RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
             if (rxCh) {
                 rxCh->setShiftFrequency(shiftHz);
@@ -404,12 +448,11 @@ void MainWindow::wireSliceToSpectrum()
         }
     });
 
-    // --- CTUN mode toggled → lock/unlock DDC frequency ---
+    // --- CTUN mode toggled → lock/unlock DDC ---
     connect(m_spectrumWidget, &SpectrumWidget::ctunEnabledChanged,
-            this, [this, slice](bool enabled) {
+            this, [this](bool enabled) {
         m_radioModel->receiverManager()->setDdcFrequencyLocked(enabled);
         if (!enabled) {
-            // Switching to traditional: clear WDSP shift, DDC follows VFO
             RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
             if (rxCh) {
                 rxCh->setShiftFrequency(0.0);
