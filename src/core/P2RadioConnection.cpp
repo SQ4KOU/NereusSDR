@@ -453,6 +453,10 @@ void P2RadioConnection::sendCmdGeneral()
     // From Thetis network.c:904
     buf[58] = (!m_tx[0].pa) & 0x01;  // PA enable
 
+    // From Thetis network.c:906 — Alex enable (BPF board)
+    // prbpfilter->enable | prbpfilter2->enable
+    buf[59] = 0x03;  // Enable both Alex0 and Alex1
+
     // Sequence number (bytes 0-3 big-endian)
     // From Thetis sendPacket — seq is in the packet buffer
     writeBE32(buf, 0, m_seqGeneral++);

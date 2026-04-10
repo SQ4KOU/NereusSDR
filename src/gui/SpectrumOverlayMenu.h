@@ -25,7 +25,8 @@ public:
     // Set current values (called before showing)
     void setValues(int wfColorGain, int wfBlackLevel, bool autoBlack,
                    int wfScheme, float fillAlpha, bool panFill,
-                   bool heatMap, float refLevel, float dynRange);
+                   bool heatMap, float refLevel, float dynRange,
+                   bool ctunEnabled = true);
 
 signals:
     void wfColorGainChanged(int gain);
@@ -35,6 +36,7 @@ signals:
     void panFillChanged(bool on);
     void refLevelChanged(float dBm);
     void dynRangeChanged(float dB);
+    void ctunChanged(bool enabled);
 
 private:
     void buildUI();
@@ -51,6 +53,7 @@ private:
     QLabel*    m_fillAlphaLabel{nullptr};
     QLabel*    m_refLevelLabel{nullptr};
     QLabel*    m_dynRangeLabel{nullptr};
+    QCheckBox* m_ctunCheck{nullptr};
 };
 
 } // namespace NereusSDR

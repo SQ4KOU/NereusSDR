@@ -164,12 +164,26 @@ void SpectrumOverlayMenu::buildUI()
         emit dynRangeChanged(static_cast<float>(v));
     });
 
+    // --- Tuning Mode section ---
+    auto* tuneLabel = new QLabel(QStringLiteral("Tuning"), this);
+    tuneLabel->setStyleSheet(QStringLiteral("font-weight: bold; color: #00b4d8; margin-top: 6px;"));
+    layout->addWidget(tuneLabel);
+
+    m_ctunCheck = new QCheckBox(QStringLiteral("CTUN (independent pan)"), this);
+    m_ctunCheck->setToolTip(QStringLiteral(
+        "SmartSDR-style: pan stays fixed, VFO moves within it.\n"
+        "Off: traditional — pan follows VFO."));
+    layout->addWidget(m_ctunCheck);
+
+    connect(m_ctunCheck, &QCheckBox::toggled, this, &SpectrumOverlayMenu::ctunChanged);
+
     setFixedWidth(280);
 }
 
 void SpectrumOverlayMenu::setValues(int wfColorGain, int wfBlackLevel, bool autoBlack,
                                      int wfScheme, float fillAlpha, bool panFill,
-                                     bool heatMap, float refLevel, float dynRange)
+                                     bool heatMap, float refLevel, float dynRange,
+                                     bool ctunEnabled)
 {
     Q_UNUSED(autoBlack);
     Q_UNUSED(heatMap);
@@ -207,6 +221,10 @@ void SpectrumOverlayMenu::setValues(int wfColorGain, int wfBlackLevel, bool auto
     m_dynRangeSlider->setValue(static_cast<int>(dynRange));
     m_dynRangeLabel->setText(QStringLiteral("%1 dB").arg(static_cast<int>(dynRange)));
     m_dynRangeSlider->blockSignals(false);
+
+    m_ctunCheck->blockSignals(true);
+    m_ctunCheck->setChecked(ctunEnabled);
+    m_ctunCheck->blockSignals(false);
 }
 
 } // namespace NereusSDR

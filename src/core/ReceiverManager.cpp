@@ -120,7 +120,20 @@ void ReceiverManager::setReceiverFrequency(int receiverIndex, quint64 frequencyH
     m_receivers[receiverIndex].frequencyHz = frequencyHz;
     emit receiverFrequencyChanged(receiverIndex, frequencyHz);
 
-    // If active, notify the hardware
+    // If active, notify the hardware — unless DDC is locked (CTUN mode,
+    // MainWindow manages DDC frequency directly)
+    if (!m_ddcFreqLocked
+        && m_receivers[receiverIndex].active
+        && m_receivers[receiverIndex].hardwareRx >= 0) {
+        emit hardwareFrequencyChanged(m_receivers[receiverIndex].hardwareRx, frequencyHz);
+    }
+}
+
+void ReceiverManager::forceHardwareFrequency(int receiverIndex, quint64 frequencyHz)
+{
+    if (!m_receivers.contains(receiverIndex)) {
+        return;
+    }
     if (m_receivers[receiverIndex].active && m_receivers[receiverIndex].hardwareRx >= 0) {
         emit hardwareFrequencyChanged(m_receivers[receiverIndex].hardwareRx, frequencyHz);
     }

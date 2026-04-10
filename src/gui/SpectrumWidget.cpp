@@ -149,6 +149,9 @@ void SpectrumWidget::loadSettings()
     m_panFill        = s.value(settingsKey(QStringLiteral("DisplayPanFill"), m_panIndex),
                                QStringLiteral("True")).toString() == QStringLiteral("True");
 
+    m_ctunEnabled    = s.value(settingsKey(QStringLiteral("DisplayCtunEnabled"), m_panIndex),
+                               QStringLiteral("True")).toString() == QStringLiteral("True");
+
     int scheme = readInt(QStringLiteral("DisplayWfColorScheme"), 0);
     m_wfColorScheme = static_cast<WfColorScheme>(qBound(0, scheme,
                           static_cast<int>(WfColorScheme::Count) - 1));
@@ -176,6 +179,8 @@ void SpectrumWidget::saveSettings()
     s.setValue(settingsKey(QStringLiteral("DisplayPanFill"), m_panIndex),
               m_panFill ? QStringLiteral("True") : QStringLiteral("False"));
     writeInt(QStringLiteral("DisplayWfColorScheme"), static_cast<int>(m_wfColorScheme));
+    s.setValue(settingsKey(QStringLiteral("DisplayCtunEnabled"), m_panIndex),
+              m_ctunEnabled ? QStringLiteral("True") : QStringLiteral("False"));
 }
 
 void SpectrumWidget::scheduleSettingsSave()
@@ -204,8 +209,23 @@ void SpectrumWidget::setCenterFrequency(double centerHz)
     if (!qFuzzyCompare(m_centerHz, centerHz)) {
         m_centerHz = centerHz;
         updateVfoPositions();
+#ifdef NEREUS_GPU_SPECTRUM
+        markOverlayDirty();
+#else
         update();
+#endif
     }
+}
+
+void SpectrumWidget::setFilterOffset(int lowHz, int highHz)
+{
+    m_filterLowHz = lowHz;
+    m_filterHighHz = highHz;
+#ifdef NEREUS_GPU_SPECTRUM
+    markOverlayDirty();
+#else
+    update();
+#endif
 }
 
 void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
@@ -306,6 +326,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
     drawSpectrum(p, specRect);
     drawWaterfall(p, wfRect);
     drawVfoMarker(p, specRect, wfRect);
+    drawOffScreenIndicator(p, specRect, wfRect);
     drawFreqScale(p, freqRect);
     drawDbmScale(p, QRect(0, 0, kDbmStripW, specH));
     drawCursorInfo(p, specRect);
@@ -657,6 +678,64 @@ void SpectrumWidget::drawVfoMarker(QPainter& p, const QRect& specRect, const QRe
     }
 }
 
+// ---- Off-screen VFO indicator (AetherSDR pattern) ----
+void SpectrumWidget::drawOffScreenIndicator(QPainter& p, const QRect& specRect,
+                                             const QRect& wfRect)
+{
+    Q_UNUSED(wfRect);
+    if (m_vfoOffScreen == VfoOffScreen::None) {
+        return;
+    }
+
+    // Arrow and label colors — match slice accent color
+    static constexpr int kArrowW = 14;
+    static constexpr int kArrowH = 20;
+    QColor arrowColor(0x00, 0xb4, 0xd8);  // Cyan accent
+
+    // Format frequency text
+    double mhz = m_vfoHz / 1.0e6;
+    QString label = QString::number(mhz, 'f', 4);
+
+    QFont font = p.font();
+    font.setPixelSize(11);
+    font.setBold(true);
+    p.setFont(font);
+    QFontMetrics fm(font);
+
+    int arrowY = specRect.top() + specRect.height() / 2 - kArrowH / 2;
+
+    if (m_vfoOffScreen == VfoOffScreen::Left) {
+        // Left arrow at left edge
+        int x = specRect.left() + 4;
+        QPolygon arrow;
+        arrow << QPoint(x, arrowY + kArrowH / 2)
+              << QPoint(x + kArrowW, arrowY)
+              << QPoint(x + kArrowW, arrowY + kArrowH);
+        p.setPen(Qt::NoPen);
+        p.setBrush(arrowColor);
+        p.drawPolygon(arrow);
+
+        // Frequency label to the right of arrow
+        p.setPen(arrowColor);
+        p.drawText(x + kArrowW + 4, arrowY + kArrowH / 2 + fm.ascent() / 2, label);
+    } else {
+        // Right arrow at right edge
+        int textW = fm.horizontalAdvance(label);
+        int x = specRect.right() - 4;
+        QPolygon arrow;
+        arrow << QPoint(x, arrowY + kArrowH / 2)
+              << QPoint(x - kArrowW, arrowY)
+              << QPoint(x - kArrowW, arrowY + kArrowH);
+        p.setPen(Qt::NoPen);
+        p.setBrush(arrowColor);
+        p.drawPolygon(arrow);
+
+        // Frequency label to the left of arrow
+        p.setPen(arrowColor);
+        p.drawText(x - kArrowW - textW - 4, arrowY + kArrowH / 2 + fm.ascent() / 2, label);
+    }
+}
+
 // ---- Cursor frequency display ----
 void SpectrumWidget::drawCursorInfo(QPainter& p, const QRect& specRect)
 {
@@ -711,6 +790,17 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
     int mx = static_cast<int>(event->position().x());
     int my = static_cast<int>(event->position().y());
 
+    // Double-click on off-screen indicator → recenter pan on VFO
+    if (event->type() == QEvent::MouseButtonDblClick
+        && event->button() == Qt::LeftButton
+        && m_vfoOffScreen != VfoOffScreen::None) {
+        if ((m_vfoOffScreen == VfoOffScreen::Left && mx < specRect.left() + 60)
+            || (m_vfoOffScreen == VfoOffScreen::Right && mx > specRect.right() - 60)) {
+            recenterOnVfo();
+            return;
+        }
+    }
+
     if (event->button() == Qt::RightButton) {
         // Show overlay menu on right-click
         if (!m_overlayMenu) {
@@ -729,11 +819,13 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
                     this, [this](float v) { m_refLevel = v; update(); scheduleSettingsSave(); });
             connect(m_overlayMenu, &SpectrumOverlayMenu::dynRangeChanged,
                     this, [this](float v) { m_dynamicRange = v; update(); scheduleSettingsSave(); });
+            connect(m_overlayMenu, &SpectrumOverlayMenu::ctunChanged,
+                    this, [this](bool v) { setCtunEnabled(v); });
         }
         m_overlayMenu->setValues(m_wfColorGain, m_wfBlackLevel, false,
                                   static_cast<int>(m_wfColorScheme),
                                   m_fillAlpha, m_panFill, false,
-                                  m_refLevel, m_dynamicRange);
+                                  m_refLevel, m_dynamicRange, m_ctunEnabled);
         m_overlayMenu->move(event->globalPosition().toPoint());
         m_overlayMenu->show();
         return;
@@ -904,7 +996,11 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
         m_centerHz = m_panDragStartCenter + deltaHz;
         emit centerChanged(m_centerHz);
         updateVfoPositions();
+#ifdef NEREUS_GPU_SPECTRUM
+        markOverlayDirty();
+#else
         update();
+#endif
         return;
     }
 
@@ -1341,6 +1437,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             p.fillRect(0, specH, w, kDividerH, QColor(0x30, 0x40, 0x50));
             drawFreqScale(p, QRect(0, specH + kDividerH, w, kFreqScaleH));
             drawVfoMarker(p, specRect, wfRect);
+            drawOffScreenIndicator(p, specRect, wfRect);
 
             // Cursor info
             if (m_mouseInWidget) {
@@ -1531,29 +1628,75 @@ void SpectrumWidget::setVfoFrequency(double hz)
 {
     m_vfoHz = hz;
 
-    // Auto-scroll pan center to keep VFO visible
-    // From Thetis console.cs:31371-31385 — recenter if VFO goes outside display
-    double leftEdge = m_centerHz - m_bandwidthHz / 2.0;
-    double rightEdge = m_centerHz + m_bandwidthHz / 2.0;
-    double margin = m_bandwidthHz * 0.10;  // 10% margin from edges
+    if (!m_ctunEnabled) {
+        // Traditional mode: auto-scroll pan center to keep VFO visible
+        // From Thetis console.cs:31371-31385
+        double leftEdge = m_centerHz - m_bandwidthHz / 2.0;
+        double rightEdge = m_centerHz + m_bandwidthHz / 2.0;
+        double margin = m_bandwidthHz * 0.10;
 
-    bool needsScroll = false;
-    if (hz < leftEdge + margin) {
-        // VFO approaching left edge — scroll left
-        m_centerHz = hz + m_bandwidthHz / 2.0 - margin;
-        needsScroll = true;
-    } else if (hz > rightEdge - margin) {
-        // VFO approaching right edge — scroll right
-        m_centerHz = hz - m_bandwidthHz / 2.0 + margin;
-        needsScroll = true;
+        bool needsScroll = false;
+        if (hz < leftEdge + margin) {
+            m_centerHz = hz + m_bandwidthHz / 2.0 - margin;
+            needsScroll = true;
+        } else if (hz > rightEdge - margin) {
+            m_centerHz = hz - m_bandwidthHz / 2.0 + margin;
+            needsScroll = true;
+        }
+
+        if (needsScroll) {
+            emit centerChanged(m_centerHz);
+        }
     }
 
-    if (needsScroll) {
-        emit centerChanged(m_centerHz);
+    // Update off-screen indicator state (both modes)
+    double leftEdge = m_centerHz - m_bandwidthHz / 2.0;
+    double rightEdge = m_centerHz + m_bandwidthHz / 2.0;
+    if (hz < leftEdge) {
+        m_vfoOffScreen = VfoOffScreen::Left;
+    } else if (hz > rightEdge) {
+        m_vfoOffScreen = VfoOffScreen::Right;
+    } else {
+        m_vfoOffScreen = VfoOffScreen::None;
     }
 
     updateVfoPositions();
+#ifdef NEREUS_GPU_SPECTRUM
+    markOverlayDirty();
+#else
     update();
+#endif
+}
+
+void SpectrumWidget::recenterOnVfo()
+{
+    m_centerHz = m_vfoHz;
+    m_vfoOffScreen = VfoOffScreen::None;
+    emit centerChanged(m_centerHz);
+    updateVfoPositions();
+#ifdef NEREUS_GPU_SPECTRUM
+    markOverlayDirty();
+#else
+    update();
+#endif
+}
+
+void SpectrumWidget::setCtunEnabled(bool enabled)
+{
+    if (m_ctunEnabled == enabled) {
+        return;
+    }
+    m_ctunEnabled = enabled;
+
+    if (!enabled) {
+        // Switching to traditional mode: recenter on VFO
+        recenterOnVfo();
+    }
+    // Recompute off-screen state
+    setVfoFrequency(m_vfoHz);
+
+    emit ctunEnabledChanged(enabled);
+    scheduleSettingsSave();
 }
 
 VfoWidget* SpectrumWidget::addVfoWidget(int sliceIndex)
@@ -1588,6 +1731,17 @@ void SpectrumWidget::updateVfoPositions()
         return;
     }
 
+    // Recompute off-screen state (pan drag changes center without calling setVfoFrequency)
+    double leftEdge = m_centerHz - m_bandwidthHz / 2.0;
+    double rightEdge = m_centerHz + m_bandwidthHz / 2.0;
+    if (m_vfoHz < leftEdge) {
+        m_vfoOffScreen = VfoOffScreen::Left;
+    } else if (m_vfoHz > rightEdge) {
+        m_vfoOffScreen = VfoOffScreen::Right;
+    } else {
+        m_vfoOffScreen = VfoOffScreen::None;
+    }
+
     int specH = static_cast<int>(height() * m_spectrumFrac);
     QRect specRect(kDbmStripW, 0, width() - kDbmStripW, specH);
     int vfoX = hzToX(m_vfoHz, specRect);
@@ -1597,8 +1751,16 @@ void SpectrumWidget::updateVfoPositions()
         if (vfo->width() <= 0) {
             vfo->adjustSize();
         }
-        vfo->updatePosition(vfoX, 0);
-        vfo->raise();
+        // Hide VFO flag when off-screen (SmartSDR pattern)
+        if (m_vfoOffScreen != VfoOffScreen::None) {
+            vfo->hide();
+        } else {
+            if (!vfo->isVisible()) {
+                vfo->show();
+            }
+            vfo->updatePosition(vfoX, 0);
+            vfo->raise();
+        }
     }
 }
 

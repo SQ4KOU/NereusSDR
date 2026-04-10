@@ -33,27 +33,35 @@ static const char* kTabBtn =
     "  border-bottom: 2px solid #00b4d8;"
     "}";
 
+// From AetherSDR VfoWidget.cpp:158-162 — kDspToggle style
 static const char* kDspToggle =
     "QPushButton {"
     "  background: #1a2a3a; border: 1px solid #304050;"
-    "  border-radius: 3px; color: #6888a0;"
-    "  font-size: 11px; font-weight: bold;"
-    "  padding: 2px 6px; min-width: 32px;"
+    "  border-radius: 2px; color: #c8d8e8;"
+    "  font-size: 13px; font-weight: bold;"
+    "  padding: 2px 4px; min-width: 32px;"
     "}"
     "QPushButton:checked {"
-    "  background: #0a3a2a; border-color: #00a040;"
-    "  color: #00e060;"
+    "  background: #1a6030; color: #ffffff;"
+    "  border: 1px solid #20a040;"
+    "}"
+    "QPushButton:hover {"
+    "  border: 1px solid #0090e0;"
     "}";
 
+// Same green toggle style as DSP tab for consistency
 static const char* kFilterBtn =
     "QPushButton {"
     "  background: #1a2a3a; border: 1px solid #304050;"
-    "  border-radius: 3px; color: #8899aa;"
-    "  font-size: 11px; padding: 2px 4px; min-width: 36px;"
+    "  border-radius: 2px; color: #c8d8e8;"
+    "  font-size: 13px; font-weight: bold; padding: 3px;"
     "}"
     "QPushButton:checked {"
-    "  background: #0a2a5a; border-color: #0070c0;"
-    "  color: #ffffff;"
+    "  background: #1a6030; color: #ffffff;"
+    "  border: 1px solid #20a040;"
+    "}"
+    "QPushButton:hover {"
+    "  border: 1px solid #0090e0;"
     "}";
 
 // ---- Construction ----
@@ -69,7 +77,14 @@ VfoWidget::VfoWidget(QWidget* parent)
     buildUI();
 }
 
-VfoWidget::~VfoWidget() = default;
+VfoWidget::~VfoWidget()
+{
+    // Floating buttons are parented to SpectrumWidget, clean them up
+    delete m_closeBtn;
+    delete m_lockBtn;
+    delete m_recBtn;
+    delete m_playBtn;
+}
 
 void VfoWidget::buildUI()
 {
@@ -114,6 +129,10 @@ void VfoWidget::buildUI()
 
     setLayout(mainLayout);
     adjustSize();
+
+    // Floating buttons are children of our PARENT (SpectrumWidget)
+    // so they render outside the VFO flag bounds. Deferred until
+    // first updatePosition() when parentWidget() is available.
 }
 
 void VfoWidget::buildHeaderRow()
@@ -591,17 +610,27 @@ void VfoWidget::rebuildFilterButtons(DSPMode mode)
         auto* btn = new QPushButton(QString::fromLatin1(p.label), m_filterBtnContainer);
         btn->setCheckable(true);
         btn->setStyleSheet(kFilterBtn);
-        btn->setFixedHeight(20);
-        // Check if this is the current/default filter
-        if (p.low == defLow && p.high == defHigh) {
-            btn->setChecked(true);
-        }
+        btn->setFixedHeight(26);
         int low = p.low;
         int high = p.high;
-        connect(btn, &QPushButton::clicked, this, [this, low, high, btn]() {
-            // Uncheck all other filter buttons
+        btn->setProperty("filterLow", low);
+        btn->setProperty("filterHigh", high);
+        // Check if this matches current filter
+        if (low == defLow && high == defHigh) {
+            btn->setChecked(true);
+        }
+        // Exclusive toggle: click selects this preset, emits filterChanged
+        connect(btn, &QPushButton::clicked, this, [this, low, high, btn](bool checked) {
+            if (!checked) {
+                // Don't allow unchecking the active preset — keep it toggled on
+                btn->setChecked(true);
+                return;
+            }
+            // Uncheck all other filter buttons (exclusive group)
             for (auto* child : m_filterBtnContainer->findChildren<QPushButton*>()) {
-                child->setChecked(child == btn);
+                if (child != btn) {
+                    child->setChecked(false);
+                }
             }
             if (!m_updatingFromModel) {
                 emit filterChanged(low, high);
@@ -640,10 +669,11 @@ void VfoWidget::setFilter(int low, int high)
 {
     m_updatingFromModel = true;
     m_filterWidthLbl->setText(formatFilterWidth(low, high));
-    // Update checked state of filter buttons
+    // Update checked state of filter buttons — match by stored property
     for (auto* btn : m_filterBtnContainer->findChildren<QPushButton*>()) {
-        // Match by checking if this button's preset matches
-        btn->setChecked(false);
+        int bLow = btn->property("filterLow").toInt();
+        int bHigh = btn->property("filterHigh").toInt();
+        btn->setChecked(bLow == low && bHigh == high);
     }
     m_updatingFromModel = false;
 }
@@ -720,10 +750,126 @@ void VfoWidget::setSmeter(double dbm)
     update();  // repaint S-meter bar
 }
 
+// ---- Floating control buttons (AetherSDR pattern) ----
+// Close, Lock, Record, Play — rendered on parent SpectrumWidget
+
+static const char* kFloatingBtn =
+    "QPushButton {"
+    "  background: rgba(255,255,255,15); border: none;"
+    "  border-radius: 10px; color: #c8d8e8; font-size: 11px; padding: 0;"
+    "}"
+    "QPushButton:hover {"
+    "  background: rgba(255,255,255,40);"
+    "}";
+
+static const char* kFloatingBtnClose =
+    "QPushButton {"
+    "  background: rgba(255,255,255,15); border: none;"
+    "  border-radius: 10px; color: #c8d8e8; font-size: 11px; padding: 0;"
+    "}"
+    "QPushButton:hover {"
+    "  background: rgba(204,32,32,180); color: #ffffff;"
+    "}";
+
+// Not wired up yet — show red X overlay
+static const char* kFloatingBtnDisabled =
+    "QPushButton {"
+    "  background: rgba(255,255,255,8); border: none;"
+    "  border-radius: 10px; color: #556070; font-size: 11px; padding: 0;"
+    "}";
+
+void VfoWidget::buildFloatingButtons()
+{
+    QWidget* parent = parentWidget();
+    if (!parent || m_closeBtn) {
+        return;  // Already built or no parent
+    }
+
+    auto makeBtn = [&](const QString& text, const char* style) -> QPushButton* {
+        auto* btn = new QPushButton(text, parent);
+        btn->setFixedSize(20, 20);
+        btn->setStyleSheet(style);
+        btn->show();
+        return btn;
+    };
+
+    // Close button — wired
+    m_closeBtn = makeBtn(QStringLiteral("\u2715"), kFloatingBtnClose);
+    m_closeBtn->setToolTip(QStringLiteral("Close slice"));
+    connect(m_closeBtn, &QPushButton::clicked, this, [this]() {
+        emit closeRequested(m_sliceIndex);
+    });
+
+    // Lock button — wired
+    m_lockBtn = makeBtn(QStringLiteral("\U0001F513"), kFloatingBtn);
+    m_lockBtn->setToolTip(QStringLiteral("Lock VFO frequency"));
+    m_lockBtn->setCheckable(true);
+    connect(m_lockBtn, &QPushButton::toggled, this, [this](bool locked) {
+        m_locked = locked;
+        m_lockBtn->setText(locked ? QStringLiteral("\U0001F512") : QStringLiteral("\U0001F513"));
+        if (locked) {
+            m_lockBtn->setStyleSheet(QStringLiteral(
+                "QPushButton { background: rgba(255,100,100,80); border: none;"
+                "  border-radius: 10px; color: #c8d8e8; font-size: 11px; padding: 0; }"
+                "QPushButton:hover { background: rgba(255,100,100,120); }"));
+        } else {
+            m_lockBtn->setStyleSheet(kFloatingBtn);
+        }
+        emit lockChanged(locked);
+    });
+
+    // Record button — not wired yet
+    m_recBtn = makeBtn(QStringLiteral("\u23FA"), kFloatingBtnDisabled);
+    m_recBtn->setToolTip(QStringLiteral("Record (not implemented)"));
+
+    // Play button — not wired yet
+    m_playBtn = makeBtn(QStringLiteral("\u25B6"), kFloatingBtnDisabled);
+    m_playBtn->setToolTip(QStringLiteral("Play (not implemented)"));
+}
+
+void VfoWidget::positionFloatingButtons()
+{
+    if (!m_closeBtn) {
+        return;
+    }
+
+    // Stack vertically on the opposite side of the flag from the VFO marker
+    // From AetherSDR VfoWidget.cpp:1724-1749
+    int btnX;
+    if (m_onLeft) {
+        // Flag is on the left of marker → buttons on right side of flag
+        btnX = x() + width() + 2;
+    } else {
+        // Flag is on the right of marker → buttons on left side of flag
+        btnX = x() - 22;
+    }
+
+    // Clamp to parent bounds
+    if (parentWidget()) {
+        btnX = std::clamp(btnX, 0, parentWidget()->width() - 20);
+    }
+
+    int btnY = y();
+    QPushButton* btns[] = {m_closeBtn, m_lockBtn, m_recBtn, m_playBtn};
+    for (QPushButton* btn : btns) {
+        btn->move(btnX, btnY);
+        btn->setVisible(isVisible());
+        if (isVisible()) {
+            btn->raise();
+        }
+        btnY += 22;
+    }
+}
+
 // ---- Positioning ----
 
 void VfoWidget::updatePosition(int vfoX, int specTop, FlagDir dir)
 {
+    // Build floating buttons on first call (parent is now available)
+    if (!m_closeBtn && parentWidget()) {
+        buildFloatingButtons();
+    }
+
     int flagW = width();
     int parentW = parentWidget() ? parentWidget()->width() : 2000;
     bool onLeft = false;
@@ -761,7 +907,9 @@ void VfoWidget::updatePosition(int vfoX, int specTop, FlagDir dir)
     // Final clamp to stay on screen
     x = std::clamp(x, 0, std::max(0, parentW - flagW));
 
+    m_onLeft = onLeft;
     move(x, specTop);
+    positionFloatingButtons();
 }
 
 // ---- Painting ----
@@ -810,6 +958,9 @@ void VfoWidget::mousePressEvent(QMouseEvent* event)
 void VfoWidget::wheelEvent(QWheelEvent* event)
 {
     event->accept();
+    if (m_locked) {
+        return;
+    }
     int delta = event->angleDelta().y();
     if (delta == 0) {
         return;

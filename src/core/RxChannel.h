@@ -67,6 +67,10 @@ public:
     void setNrEnabled(bool enabled);
     void setAnfEnabled(bool enabled);
 
+    // --- Frequency shift (for pan offset from VFO) ---
+
+    void setShiftFrequency(double offsetHz);
+
     // --- Channel state ---
 
     bool isActive() const { return m_active.load(); }

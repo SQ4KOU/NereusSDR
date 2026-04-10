@@ -53,8 +53,16 @@ public:
     bool isReceiverActive(int receiverIndex) const;
     ReceiverConfig receiverConfig(int receiverIndex) const;
 
+    // --- DDC frequency lock (CTUN mode) ---
+    // When locked, setReceiverFrequency stores the freq but does NOT
+    // emit hardwareFrequencyChanged. MainWindow manages DDC directly.
+    void setDdcFrequencyLocked(bool locked) { m_ddcFreqLocked = locked; }
+    bool ddcFrequencyLocked() const { return m_ddcFreqLocked; }
+
     // --- Receiver Configuration ---
     void setReceiverFrequency(int receiverIndex, quint64 frequencyHz);
+    // Force DDC retune even when locked (used by MainWindow CTUN pan drag)
+    void forceHardwareFrequency(int receiverIndex, quint64 frequencyHz);
     void setReceiverSampleRate(int receiverIndex, int sampleRate);
 
     // Set explicit DDC mapping for a receiver.
@@ -96,6 +104,7 @@ private:
 
     int m_maxReceivers{7};
     int m_nextWdspChannel{0};
+    bool m_ddcFreqLocked{false};
 
     // Receivers keyed by logical index
     QMap<int, ReceiverConfig> m_receivers;

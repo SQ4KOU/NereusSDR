@@ -13,6 +13,8 @@
 #include "core/FFTEngine.h"
 #include "core/LogCategories.h"
 
+#include <cmath>
+
 #include <QApplication>
 #include <QCloseEvent>
 #include <QMenuBar>
@@ -247,10 +249,34 @@ void MainWindow::wireSliceToSpectrum()
 
     // --- Slice → spectrum display ---
 
-    // VFO frequency change → move VFO marker (do NOT recenter pan)
-    // Auto-scroll handled inside setVfoFrequency if VFO reaches edge.
-    connect(slice, &SliceModel::frequencyChanged, this, [this, vfo](double freq) {
-        m_spectrumWidget->setFrequencyRange(freq, 48000.0);
+    // VFO frequency change → move VFO marker
+    // In CTUN mode (SmartSDR-style): pan stays fixed, VFO moves within it.
+    // In traditional mode: pan follows VFO (auto-scroll handled in setVfoFrequency).
+    // Band changes (large jumps) always recenter regardless of mode.
+    connect(slice, &SliceModel::frequencyChanged, this, [this, vfo, slice](double freq) {
+        double center = m_spectrumWidget->centerFrequency();
+        double halfBw = m_spectrumWidget->bandwidth() / 2.0;
+        bool offScreen = (freq < center - halfBw) || (freq > center + halfBw);
+        if (!m_spectrumWidget->ctunEnabled() || offScreen) {
+            // Traditional mode or band jump: recenter on VFO, unlock DDC
+            m_radioModel->receiverManager()->setDdcFrequencyLocked(false);
+            m_spectrumWidget->setCenterFrequency(freq);
+            RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
+            if (rxCh) {
+                rxCh->setShiftFrequency(0.0);
+            }
+            // Re-lock if still in CTUN mode (band jump recentered but stays CTUN)
+            if (m_spectrumWidget->ctunEnabled()) {
+                m_radioModel->receiverManager()->setDdcFrequencyLocked(true);
+            }
+        } else {
+            // CTUN: VFO moved within pan — DDC locked at pan center, just update shift
+            double shiftHz = freq - center;
+            RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
+            if (rxCh) {
+                rxCh->setShiftFrequency(shiftHz);
+            }
+        }
         m_spectrumWidget->setVfoFrequency(freq);
         vfo->setFrequency(freq);
     });
@@ -353,12 +379,47 @@ void MainWindow::wireSliceToSpectrum()
         slice->setFilter(low, high);
     });
 
-    // --- Pan center changed (pan drag) → retune VFO to match ---
-    // CTUN OFF mode: pan drag changes the actual tuned frequency.
+    // --- Pan center changed (pan drag) ---
+    // CTUN mode (SmartSDR): retune DDC to pan center, offset WDSP to keep
+    // demodulating at VFO frequency. This lets the spectrum show real data
+    // across the full pan range.
+    // Traditional mode: pan drag retunes the VFO (DDC follows VFO naturally).
     connect(m_spectrumWidget, &SpectrumWidget::centerChanged,
-            this, [slice](double centerHz) {
-        slice->setFrequency(centerHz);
+            this, [this, slice](double centerHz) {
+        if (!m_spectrumWidget->ctunEnabled()) {
+            slice->setFrequency(centerHz);
+        } else {
+            // CTUN: retune DDC to pan center (bypasses lock) so spectrum shows correct data
+            int rxIdx = slice->receiverIndex();
+            if (rxIdx >= 0) {
+                m_radioModel->receiverManager()->forceHardwareFrequency(
+                    rxIdx, static_cast<quint64>(centerHz));
+            }
+            // Offset WDSP shift so audio stays on VFO frequency
+            double shiftHz = slice->frequency() - centerHz;
+            RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
+            if (rxCh) {
+                rxCh->setShiftFrequency(shiftHz);
+            }
+        }
     });
+
+    // --- CTUN mode toggled → lock/unlock DDC frequency ---
+    connect(m_spectrumWidget, &SpectrumWidget::ctunEnabledChanged,
+            this, [this, slice](bool enabled) {
+        m_radioModel->receiverManager()->setDdcFrequencyLocked(enabled);
+        if (!enabled) {
+            // Switching to traditional: clear WDSP shift, DDC follows VFO
+            RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
+            if (rxCh) {
+                rxCh->setShiftFrequency(0.0);
+            }
+        }
+    });
+
+    // Set initial lock state
+    m_radioModel->receiverManager()->setDdcFrequencyLocked(
+        m_spectrumWidget->ctunEnabled());
 
     // Position the VFO flag
     m_spectrumWidget->updateVfoPositions();

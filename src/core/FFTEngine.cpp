@@ -73,8 +73,10 @@ void FFTEngine::feedIQ(const QVector<float>& interleavedIQ)
             processFrame();
             m_iqWritePos = 0;
         }
-        m_fftIn[m_iqWritePos][0] = interleavedIQ[i * 2]     * m_window[m_iqWritePos];  // I * window
-        m_fftIn[m_iqWritePos][1] = interleavedIQ[i * 2 + 1] * m_window[m_iqWritePos];  // Q * window
+        // Swap I↔Q for spectrum display — matches Thetis analyzer.c:1757-1758
+        // Audio path (WDSP fexchange2) uses normal I/Q order; display is inverted.
+        m_fftIn[m_iqWritePos][0] = interleavedIQ[i * 2 + 1] * m_window[m_iqWritePos];  // Q→I
+        m_fftIn[m_iqWritePos][1] = interleavedIQ[i * 2]     * m_window[m_iqWritePos];  // I→Q
         m_iqWritePos++;
     }
 #else
@@ -223,16 +225,22 @@ void FFTEngine::processFrame()
     fftwf_execute(m_plan);
 
     // Convert to dBm: 10 * log10(I² + Q²) + normalization
-    // Output only positive frequencies (first half of FFT output)
-    int numBins = m_currentFftSize / 2;
-    QVector<float> binsDbm(numBins);
+    // Complex I/Q FFT: output all N bins with FFT-shift.
+    // Raw FFT order: [DC..+fs/2, -fs/2..DC)
+    // Shifted order:  [-fs/2..DC..+fs/2) — matches spectrum display left-to-right
+    int N = m_currentFftSize;
+    int half = N / 2;
+    QVector<float> binsDbm(N);
 
     // Normalization: the FFT output magnitude needs to be divided by the
     // window's coherent gain (sum of window coefficients) to get correct
     // power. We apply this as a dB offset: m_dbmOffset = -20*log10(sum).
-    for (int i = 0; i < numBins; ++i) {
-        float re = m_fftOut[i][0];
-        float im = m_fftOut[i][1];
+    for (int i = 0; i < N; ++i) {
+        // FFT-shift: swap halves so negative freqs are on left.
+        // I/Q swap in feedIQ handles spectrum orientation (no mirror needed).
+        int srcIdx = (i + half) % N;
+        float re = m_fftOut[srcIdx][0];
+        float im = m_fftOut[srcIdx][1];
         float powerSq = re * re + im * im;
 
         // Avoid log(0) — floor at -200 dBm

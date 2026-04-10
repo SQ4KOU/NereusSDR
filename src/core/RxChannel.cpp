@@ -2,6 +2,8 @@
 #include "LogCategories.h"
 #include "wdsp_api.h"
 
+#include <cmath>
+
 namespace NereusSDR {
 
 RxChannel::RxChannel(int channelId, int bufferSize, int sampleRate,
@@ -121,6 +123,25 @@ void RxChannel::setAnfEnabled(bool enabled)
 
 #ifdef HAVE_WDSP
     SetRXAANFRun(m_channelId, enabled ? 1 : 0);
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Frequency shift (pan offset from VFO)
+// ---------------------------------------------------------------------------
+
+void RxChannel::setShiftFrequency(double offsetHz)
+{
+#ifdef HAVE_WDSP
+    if (std::abs(offsetHz) < 0.5) {
+        // No offset — disable shift for efficiency
+        SetRXAShiftRun(m_channelId, 0);
+    } else {
+        SetRXAShiftFreq(m_channelId, offsetHz);
+        SetRXAShiftRun(m_channelId, 1);
+    }
+#else
+    Q_UNUSED(offsetHz);
 #endif
 }
 

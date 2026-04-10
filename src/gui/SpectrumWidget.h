@@ -86,7 +86,12 @@ public:
 
     // ---- VFO / filter overlay ----
     void setVfoFrequency(double hz);
-    void setFilterOffset(int lowHz, int highHz) { m_filterLowHz = lowHz; m_filterHighHz = highHz; update(); }
+    void setFilterOffset(int lowHz, int highHz);  // updates filter passband overlay
+
+    // ---- CTUN mode (SmartSDR-style independent pan) ----
+    void setCtunEnabled(bool enabled);
+    bool ctunEnabled() const { return m_ctunEnabled; }
+    void recenterOnVfo();
 
     // ---- Tuning step ----
     void setStepSize(int hz) { m_stepHz = hz; }
@@ -112,6 +117,8 @@ signals:
     void centerChanged(double centerHz);
     // Emitted when user scrolls to change bandwidth
     void bandwidthChangeRequested(double newBandwidthHz);
+    // Emitted when CTUN mode changes
+    void ctunEnabledChanged(bool enabled);
 
 protected:
 #ifdef NEREUS_GPU_SPECTRUM
@@ -200,6 +207,12 @@ private:
 
     // ---- VFO flag widgets ----
     QMap<int, VfoWidget*> m_vfoWidgets;
+
+    // ---- CTUN mode ----
+    bool   m_ctunEnabled{true};  // true = SmartSDR-style (pan independent of VFO)
+    enum class VfoOffScreen { None, Left, Right };
+    VfoOffScreen m_vfoOffScreen{VfoOffScreen::None};
+    void drawOffScreenIndicator(QPainter& p, const QRect& specRect, const QRect& wfRect);
 
     // ---- Overlay menu ----
     SpectrumOverlayMenu* m_overlayMenu{nullptr};

@@ -73,6 +73,8 @@ signals:
     void nrChanged(bool enabled);
     void anfChanged(bool enabled);
     void sliceActivationRequested(int sliceIndex);
+    void closeRequested(int sliceIndex);
+    void lockChanged(bool locked);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -141,6 +143,17 @@ private:
     QPushButton*        m_nbBtn{nullptr};
     QPushButton*        m_nrBtn{nullptr};
     QPushButton*        m_anfBtn{nullptr};
+
+    // --- Floating control buttons (AetherSDR pattern) ---
+    // Rendered as children of parent widget, positioned beside the VFO flag.
+    QPushButton* m_closeBtn{nullptr};
+    QPushButton* m_lockBtn{nullptr};
+    QPushButton* m_recBtn{nullptr};
+    QPushButton* m_playBtn{nullptr};
+    bool m_locked{false};
+    bool m_onLeft{false};  // track flag side for button placement
+    void buildFloatingButtons();
+    void positionFloatingButtons();
 
     // Slice color table: A=cyan, B=magenta, C=green, D=yellow
     static QColor sliceColor(int index);
