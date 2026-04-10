@@ -12,6 +12,11 @@
 - Full-spectrum FFT output (all N bins, FFT-shift + mirror for correct sideband orientation)
 - VFO settings persistence (frequency, mode, filter, AGC, step, gains, antennas)
 - AetherSDR-style VFO control buttons and green toggle filter presets
+- CTUN zoom: frequency scale bar drag and Ctrl+scroll zoom into FFT bin subsets
+- Hybrid zoom: smooth bin subsetting during drag, FFT replan on mouse release
+- visibleBinRange() maps display window to DDC bin indices (GPU + CPU + waterfall)
+- DDC center frequency tracking (m_ddcCenterHz) for correct bin-to-frequency mapping
+- Waterfall preserves existing rows across zoom changes (new rows at current scale)
 
 ### Added — Phase 3D: GPU Spectrum & Waterfall
 - FFTEngine: FFTW3 float-precision on dedicated spectrum worker thread

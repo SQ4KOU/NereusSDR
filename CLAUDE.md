@@ -196,7 +196,7 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 * `RxChannel` — per-receiver WDSP channel wrapper (fexchange2, NB, mode/filter/AGC, shift offset for CTUN demodulation)
 * `AudioEngine` — QAudioSink output (Int16 stereo, timer-based drain)
 * `FFTEngine` — FFTW3 spectrum computation (worker thread, I/Q → dBm bins)
-* `SpectrumWidget` — GPU spectrum trace + waterfall display (QRhiWidget — Metal/Vulkan/D3D12)
+* `SpectrumWidget` — GPU spectrum trace + waterfall display (QRhiWidget — Metal/Vulkan/D3D12); zoom via visibleBinRange() bin subsetting with m_ddcCenterHz/m_sampleRateHz
 * `VfoWidget` — floating VFO flag (AetherSDR pattern): freq display, mode/filter/AGC tabs, antenna buttons
 * `AppSettings` — custom XML settings persistence (NOT QSettings)
 * `MainWindow` — wires everything together, signal routing hub
@@ -214,7 +214,7 @@ Cross-thread communication uses auto-queued signals exclusively.
 RadioModel owns all sub-models on the main thread. Never hold a mutex in the
 audio callback.
 
-### Data Flow (Phase 3E + CTUN — VERIFIED WORKING)
+### Data Flow (Phase 3E + CTUN + Zoom — VERIFIED WORKING)
 
 ```
 Radio (ADC) → UDP port 1037 (DDC2) → P2RadioConnection
@@ -229,6 +229,19 @@ RadioModel lambda:
     AudioEngine::feedAudio() → float→int16 → m_rxBuffer
         ↓ 10ms timer drain
     QAudioSink (48kHz stereo Int16) → Speakers
+
+FFT → Display (with zoom):
+    FFTEngine emits N bins (full DDC bandwidth)
+    → SpectrumWidget::updateSpectrum() stores in m_smoothed
+    → visibleBinRange(N) maps m_centerHz ± m_bandwidthHz/2 to bin indices
+      using m_ddcCenterHz + m_sampleRateHz for bin-to-frequency mapping
+    → GPU/CPU renderer iterates only [firstBin..lastBin], stretched to full display
+    → pushWaterfallRow() writes only visible bin subset to waterfall texture
+
+User zooms (freq scale drag or Ctrl+scroll):
+    m_bandwidthHz changes → visibleBinRange() narrows → immediate visual zoom
+    On mouse release → bandwidthChangeRequested → MainWindow replans FFT size
+    → FFTEngine delivers more bins → sharper resolution at new zoom level
 
 User tunes VFO:
     VfoWidget (wheel/click/edit) → emit frequencyChanged(hz)
@@ -297,12 +310,14 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | [wdsp-integration.md](docs/architecture/wdsp-integration.md) | RxChannel/TxChannel wrappers, PureSignal, thread safety, WDSP channel lifecycle |
 | [skin-compatibility.md](docs/architecture/skin-compatibility.md) | SkinParser, extended skin format, Thetis import, 4-pan support |
 | [adc-ddc-panadapter-mapping.md](docs/architecture/adc-ddc-panadapter-mapping.md) | ADC->DDC->Receiver->FFT->Pan signal chain, Thetis UpdateDDCs() analysis, per-board DDC assignment, bandwidth limits |
+| [ctun-zoom-design.md](docs/architecture/ctun-zoom-design.md) | CTUN zoom bin subsetting: visibleBinRange(), hybrid FFT replan, DDC center tracking |
 
 ### Implementation Plans (`docs/architecture/phase*-plan.md`)
 
 | Plan | Phase | Status |
 | --- | --- | --- |
 | [phase3d-spectrum-waterfall-plan.md](docs/architecture/phase3d-spectrum-waterfall-plan.md) | 3D: GPU Spectrum & Waterfall | **Complete** |
+| [ctun-zoom-plan.md](docs/architecture/ctun-zoom-plan.md) | 3E: CTUN Zoom Bin Subsetting | **Complete** |
 | [phase3f-multi-panadapter-plan.md](docs/architecture/phase3f-multi-panadapter-plan.md) | 3F: Multi-Panadapter + DDC Assignment | Planning |
 
 ### Protocol Reference (`docs/protocols/`)

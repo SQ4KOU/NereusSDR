@@ -39,6 +39,7 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 - Full-spectrum FFTW3 FFT (4096-point, Blackman-Harris window, 30 FPS, FFT-shift + mirror)
 - VFO tuning, mode selection, filter controls (floating VFO flag widget)
 - CTUN panadapter mode — independent pan center and VFO, WDSP shift offsets
+- CTUN zoom — frequency scale bar drag or Ctrl+scroll zooms into FFT bin subsets with hybrid FFT replan
 - Off-screen VFO indicator with double-click to recenter
 - VFO marker, filter passband overlay, cursor frequency readout, filter drag
 - Right-click display settings (color scheme, gain, black level, ref level, CTUN toggle)
