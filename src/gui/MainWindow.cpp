@@ -173,18 +173,18 @@ void MainWindow::buildUI()
     // Target: ~500-1000 bins across the visible bandwidth for good detail
     connect(m_spectrumWidget, &SpectrumWidget::bandwidthChangeRequested,
             this, [this](double bwHz) {
-        // Pick FFT size so bin_width ≈ bw / 2000 (aim for ~2000 bins across display)
+        // Pick FFT size so bin_width ≈ bw / 4000 (aim for ~4000 bins across display)
         // bin_width = sampleRate / fftSize → fftSize = sampleRate / bin_width
         double sampleRate = m_spectrumWidget->sampleRate();
-        int targetBins = 2000;
+        int targetBins = 4000;
         int desiredSize = static_cast<int>(sampleRate * targetBins / bwHz);
         // Round up to next power of 2, clamp to valid range
-        // 131072 max → 5.86 Hz/bin at 768 kHz (~5.8 FPS at deepest zoom)
+        // 262144 max → 2.93 Hz/bin at 768 kHz (~2.9 FPS at deepest zoom)
         int fftSize = 1024;
-        while (fftSize < desiredSize && fftSize < 131072) {
+        while (fftSize < desiredSize && fftSize < 262144) {
             fftSize *= 2;
         }
-        fftSize = std::clamp(fftSize, 1024, 131072);
+        fftSize = std::clamp(fftSize, 1024, 262144);
         m_fftEngine->setFftSize(fftSize);
     });
 
