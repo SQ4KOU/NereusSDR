@@ -587,7 +587,7 @@ double SpectrumWidget::xToHz(int x, const QRect& r) const
 std::pair<int, int> SpectrumWidget::visibleBinRange(int binCount) const
 {
     if (binCount <= 0 || m_sampleRateHz <= 0.0) {
-        return {0, 0};
+        return {0, -1};  // empty range — callers compute count = 0
     }
 
     double binWidth = m_sampleRateHz / binCount;
@@ -1098,8 +1098,11 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
         newBw = std::clamp(newBw, 1000.0, m_sampleRateHz);
         m_bandwidthHz = newBw;
         // Recenter on VFO when zooming so the signal stays visible
-        m_centerHz = m_vfoHz;
-        emit centerChanged(m_centerHz);
+        // Only emit centerChanged if center actually moved — avoids DDC retune per drag frame
+        if (!qFuzzyCompare(m_centerHz, m_vfoHz)) {
+            m_centerHz = m_vfoHz;
+            emit centerChanged(m_centerHz);
+        }
         updateVfoPositions();
 #ifdef NEREUS_GPU_SPECTRUM
         markOverlayDirty();
