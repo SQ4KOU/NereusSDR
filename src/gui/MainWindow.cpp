@@ -268,6 +268,8 @@ void MainWindow::wireSliceToSpectrum()
     // With N/2 FFT, only positive frequencies (right half) show real signals.
     double freq = slice->frequency();
     m_spectrumWidget->setFrequencyRange(freq, 768000.0);
+    m_spectrumWidget->setDdcCenterFrequency(freq);
+    m_spectrumWidget->setSampleRate(768000.0);
     m_spectrumWidget->setVfoFrequency(freq);
     m_spectrumWidget->setFilterOffset(slice->filterLow(), slice->filterHigh());
     m_spectrumWidget->setStepSize(slice->stepHz());
@@ -312,6 +314,7 @@ void MainWindow::wireSliceToSpectrum()
                 m_radioModel->receiverManager()->forceHardwareFrequency(
                     rxIdx, static_cast<quint64>(freq));
             }
+            m_spectrumWidget->setDdcCenterFrequency(freq);
 
             RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
             if (rxCh) {
@@ -452,6 +455,7 @@ void MainWindow::wireSliceToSpectrum()
                 m_radioModel->receiverManager()->forceHardwareFrequency(
                     rxIdx, static_cast<quint64>(centerHz));
             }
+            m_spectrumWidget->setDdcCenterFrequency(centerHz);
             // Offset WDSP shift so audio stays on VFO frequency
             // From Thetis radio.cs:1417 — SetRXAShiftFreq receives +(freq - center)
             double shiftHz = slice->frequency() - centerHz;
