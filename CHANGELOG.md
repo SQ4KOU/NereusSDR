@@ -11,6 +11,8 @@
 - 24-field pipe-delimited serialization (Thetis-compatible + DockMode extension)
 - Container + splitter state persistence to AppSettings
 - Hover-reveal title bar with dock-mode-aware buttons (float/dock, axis cycle, pin, settings)
+- Wider hover detection zone (40px) for reliable title bar reveal on high-DPI displays
+- Frameless floating containers on macOS (no native title bar, container provides its own)
 - Ctrl-snap to 10px grid during drag and resize
 - Phase roadmap: AetherSDR-style AppletPanel planned for Container #0 in Phase 3G-AP
 

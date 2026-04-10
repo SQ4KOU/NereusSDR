@@ -139,10 +139,11 @@ void ContainerWidget::buildUI()
         emit settingsRequested();
     });
 
-    // Event filters for title bar drag + resize grip
+    // Event filters for title bar drag + resize grip + hover detection
     m_titleBar->installEventFilter(this);
     m_titleLabel->installEventFilter(this);
     m_resizeGrip->installEventFilter(this);
+    m_contentHolder->installEventFilter(this);
 }
 
 void ContainerWidget::setContent(QWidget* widget)
@@ -155,6 +156,8 @@ void ContainerWidget::setContent(QWidget* widget)
     m_content = widget;
     if (m_content) {
         m_content->setParent(m_contentHolder);
+        m_content->setMouseTracking(true);
+        m_content->installEventFilter(this);
         layout->addWidget(m_content);
     }
 }
@@ -343,11 +346,11 @@ void ContainerWidget::mouseMoveEvent(QMouseEvent* event)
     bool noControls = m_noControls && !(QApplication::keyboardModifiers() & Qt::ShiftModifier);
 
     if (!m_dragging && !noControls) {
-        bool inTitleRegion = event->position().y() < 22;
-        if (inTitleRegion && !m_titleBar->isVisible()) {
+        int y = static_cast<int>(event->position().y());
+        if (y < kTitleHoverZone && !m_titleBar->isVisible()) {
             m_titleBar->setVisible(true);
             m_titleBar->raise();
-        } else if (!inTitleRegion && m_titleBar->isVisible() && !m_dragging) {
+        } else if (y >= kTitleBarHeight && m_titleBar->isVisible() && !m_dragging) {
             m_titleBar->setVisible(false);
         }
     }
@@ -403,6 +406,24 @@ bool ContainerWidget::eventFilter(QObject* watched, QEvent* event)
         } else if (event->type() == QEvent::MouseButtonRelease && m_dragging) {
             endDrag();
             return true;
+        }
+    }
+
+    // Content area hover — detect mouse in title region when title bar is hidden
+    // (hidden title bar collapses in layout, so content fills top area)
+    if ((watched == m_contentHolder || watched == m_content)
+        && event->type() == QEvent::MouseMove && !m_locked) {
+        QMouseEvent* me = static_cast<QMouseEvent*>(event);
+        bool noControls = m_noControls && !(QApplication::keyboardModifiers() & Qt::ShiftModifier);
+        if (!noControls) {
+            QWidget* w = static_cast<QWidget*>(watched);
+            int y = w->mapTo(this, me->position().toPoint()).y();
+            if (y < kTitleHoverZone && !m_titleBar->isVisible()) {
+                m_titleBar->setVisible(true);
+                m_titleBar->raise();
+            } else if (y >= kTitleBarHeight && m_titleBar->isVisible() && !m_dragging) {
+                m_titleBar->setVisible(false);
+            }
         }
     }
 
