@@ -214,7 +214,7 @@ ItemGroup* ItemGroup::createHBarPreset(int bindingId, double minVal, double maxV
     bar->setBindingId(bindingId);
     bar->setBarColor(QColor(QStringLiteral("#00b4d8")));
     bar->setBarRedColor(QColor(QStringLiteral("#ff4444")));
-    bar->setRedThreshold(maxVal * 0.9);
+    bar->setRedThreshold(minVal + (maxVal - minVal) * 0.9);
     bar->setZOrder(5);
     group->addItem(bar);
 

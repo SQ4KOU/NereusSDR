@@ -203,46 +203,31 @@ void BarItem::emitVertices(QVector<float>& verts, int widgetW, int widgetH)
     const float b = static_cast<float>(fillColor.blueF());
     const float a = static_cast<float>(fillColor.alphaF());
 
-    float fillR = ndcL;
-    float fillT = ndcT;
-    float fillL = ndcL;
-    float fillB = ndcB;
-
+    // Compute filled quad corners
+    float qL, qR, qT, qB;
     if (m_orientation == Orientation::Horizontal) {
-        fillR = ndcL + static_cast<float>(frac) * (ndcR - ndcL);
-        fillT = ndcT;
-        fillB = ndcB;
+        qL = ndcL;
+        qR = ndcL + static_cast<float>(frac) * (ndcR - ndcL);
+        qT = ndcT;
+        qB = ndcB;
     } else {
         // Vertical: fill from bottom
-        fillL = ndcL;
-        fillR = ndcR;
-        fillB = ndcB + static_cast<float>(frac) * (ndcT - ndcB);
-        fillT = fillB; // reassign; build quad properly below
-        fillB = ndcB;
+        qL = ndcL;
+        qR = ndcR;
+        qB = ndcB;
+        qT = ndcB + static_cast<float>(frac) * (ndcT - ndcB);
     }
 
-    if (m_orientation == Orientation::Horizontal) {
-        // Triangle strip: TL, BL, TR, BR
-        // Top-left
-        verts << fillL << fillT << r << g << b << a;
-        // Bottom-left
-        verts << fillL << fillB << r << g << b << a;
-        // Top-right
-        verts << fillR << fillT << r << g << b << a;
-        // Bottom-right
-        verts << fillR << fillB << r << g << b << a;
-    } else {
-        // Vertical fill from bottom: compute top of fill
-        const float topOfFill = ndcB + static_cast<float>(frac) * (ndcT - ndcB);
-        // Top-left
-        verts << ndcL << topOfFill << r << g << b << a;
-        // Bottom-left
-        verts << ndcL << ndcB      << r << g << b << a;
-        // Top-right
-        verts << ndcR << topOfFill << r << g << b << a;
-        // Bottom-right
-        verts << ndcR << ndcB      << r << g << b << a;
-    }
+    // Emit 6 vertices (2 triangles) for Triangles topology.
+    // This avoids degenerate strip artifacts when multiple bars share the VBO.
+    // Triangle 1: TL, BL, TR
+    verts << qL << qT << r << g << b << a;
+    verts << qL << qB << r << g << b << a;
+    verts << qR << qT << r << g << b << a;
+    // Triangle 2: TR, BL, BR
+    verts << qR << qT << r << g << b << a;
+    verts << qL << qB << r << g << b << a;
+    verts << qR << qB << r << g << b << a;
 }
 
 QString BarItem::serialize() const

@@ -59,6 +59,9 @@ MeterWidget::~MeterWidget()
 void MeterWidget::addItem(MeterItem* item)
 {
     if (!item || m_items.contains(item)) { return; }
+    if (!item->parent()) {
+        item->setParent(this);
+    }
     m_items.append(item);
 #ifdef NEREUS_GPU_SPECTRUM
     markOverlayDirty();
@@ -80,6 +83,11 @@ void MeterWidget::removeItem(MeterItem* item)
 
 void MeterWidget::clearItems()
 {
+    for (MeterItem* item : m_items) {
+        if (item->parent() == this) {
+            delete item;
+        }
+    }
     m_items.clear();
 #ifdef NEREUS_GPU_SPECTRUM
     markOverlayDirty();
@@ -202,12 +210,12 @@ static QShader loadMeterShader(const QString& path)
 {
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
-        qWarning() << "MeterWidget: failed to load shader" << path;
+        qCWarning(lcMeter) << "MeterWidget: failed to load shader" << path;
         return {};
     }
     QShader s = QShader::fromSerialized(f.readAll());
     if (!s.isValid()) {
-        qWarning() << "MeterWidget: invalid shader" << path;
+        qCWarning(lcMeter) << "MeterWidget: invalid shader" << path;
     }
     return s;
 }
@@ -298,7 +306,7 @@ void MeterWidget::initGeometryPipeline()
         {QRhiShaderStage::Fragment, fs},
     });
     m_geomPipeline->setVertexInputLayout(layout);
-    m_geomPipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
+    m_geomPipeline->setTopology(QRhiGraphicsPipeline::Triangles);
     m_geomPipeline->setShaderResourceBindings(m_geomSrb);
     m_geomPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
     m_geomPipeline->setTargetBlends({blend});
