@@ -104,7 +104,7 @@ private:
     const int m_sampleRate;
 
     // Atomic flags for lock-free audio thread reads
-    std::atomic<int> m_mode{static_cast<int>(DSPMode::USB)};
+    std::atomic<int> m_mode{static_cast<int>(DSPMode::LSB)};  // Must match WdspEngine::createRxChannel init
     std::atomic<int> m_agcMode{static_cast<int>(AGCMode::Med)};
     std::atomic<bool> m_nb1Enabled{false};
     std::atomic<bool> m_nb2Enabled{false};

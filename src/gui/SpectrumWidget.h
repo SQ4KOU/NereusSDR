@@ -6,6 +6,7 @@
 #include <QColor>
 #include <QPoint>
 #include <QMap>
+#include <QTimer>
 
 // GPU spectrum: QRhiWidget base class for Metal/Vulkan/D3D12 rendering.
 // CPU fallback: QWidget with QPainter.
@@ -202,6 +203,10 @@ private:
 
     // ---- Overlay menu ----
     SpectrumOverlayMenu* m_overlayMenu{nullptr};
+
+    // ---- Coalesced settings save ----
+    void scheduleSettingsSave();
+    bool m_settingsSaveScheduled{false};
 
     // ---- Mouse state ----
     bool   m_draggingDbm{false};

@@ -178,6 +178,19 @@ void SpectrumWidget::saveSettings()
     writeInt(QStringLiteral("DisplayWfColorScheme"), static_cast<int>(m_wfColorScheme));
 }
 
+void SpectrumWidget::scheduleSettingsSave()
+{
+    if (m_settingsSaveScheduled) {
+        return;
+    }
+    m_settingsSaveScheduled = true;
+    QTimer::singleShot(500, this, [this]() {
+        m_settingsSaveScheduled = false;
+        saveSettings();
+        AppSettings::instance().save();
+    });
+}
+
 void SpectrumWidget::setFrequencyRange(double centerHz, double bandwidthHz)
 {
     m_centerHz = centerHz;
@@ -703,19 +716,19 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
         if (!m_overlayMenu) {
             m_overlayMenu = new SpectrumOverlayMenu(this);
             connect(m_overlayMenu, &SpectrumOverlayMenu::wfColorGainChanged,
-                    this, [this](int v) { m_wfColorGain = v; update(); });
+                    this, [this](int v) { m_wfColorGain = v; update(); scheduleSettingsSave(); });
             connect(m_overlayMenu, &SpectrumOverlayMenu::wfBlackLevelChanged,
-                    this, [this](int v) { m_wfBlackLevel = v; update(); });
+                    this, [this](int v) { m_wfBlackLevel = v; update(); scheduleSettingsSave(); });
             connect(m_overlayMenu, &SpectrumOverlayMenu::wfColorSchemeChanged,
-                    this, [this](int v) { m_wfColorScheme = static_cast<WfColorScheme>(v); update(); });
+                    this, [this](int v) { m_wfColorScheme = static_cast<WfColorScheme>(v); update(); scheduleSettingsSave(); });
             connect(m_overlayMenu, &SpectrumOverlayMenu::fillAlphaChanged,
-                    this, [this](float v) { m_fillAlpha = v; update(); });
+                    this, [this](float v) { m_fillAlpha = v; update(); scheduleSettingsSave(); });
             connect(m_overlayMenu, &SpectrumOverlayMenu::panFillChanged,
-                    this, [this](bool v) { m_panFill = v; update(); });
+                    this, [this](bool v) { m_panFill = v; update(); scheduleSettingsSave(); });
             connect(m_overlayMenu, &SpectrumOverlayMenu::refLevelChanged,
-                    this, [this](float v) { m_refLevel = v; update(); });
+                    this, [this](float v) { m_refLevel = v; update(); scheduleSettingsSave(); });
             connect(m_overlayMenu, &SpectrumOverlayMenu::dynRangeChanged,
-                    this, [this](float v) { m_dynamicRange = v; update(); });
+                    this, [this](float v) { m_dynamicRange = v; update(); scheduleSettingsSave(); });
         }
         m_overlayMenu->setValues(m_wfColorGain, m_wfBlackLevel, false,
                                   static_cast<int>(m_wfColorScheme),
@@ -950,6 +963,11 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* event)
             }
         }
 
+        // Persist display settings after drag adjustments
+        if (m_draggingDbm || m_draggingDivider) {
+            scheduleSettingsSave();
+        }
+
         m_draggingDbm = false;
         m_draggingFilter = FilterEdge::None;
         m_draggingVfo = false;
@@ -983,6 +1001,7 @@ void SpectrumWidget::wheelEvent(QWheelEvent* event)
         // Shift+scroll: adjust ref level
         float step = (delta > 0) ? 5.0f : -5.0f;
         m_refLevel = qBound(-160.0f, m_refLevel + step, 20.0f);
+        scheduleSettingsSave();
     } else {
         // Plain scroll: tune VFO by step size
         int steps = (delta > 0) ? 1 : -1;
