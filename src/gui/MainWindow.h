@@ -16,6 +16,8 @@ class WdspEngine;
 class FFTEngine;
 class SpectrumWidget;
 class ContainerManager;
+class MeterWidget;
+class MeterPoller;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -68,6 +70,11 @@ private:
     int m_vDelta{0};
 
     void createDefaultContainers();
+
+    // Meter system (Phase 3G-2)
+    MeterWidget* m_meterWidget{nullptr};
+    MeterPoller* m_meterPoller{nullptr};
+    void populateDefaultMeter();
 };
 
 } // namespace NereusSDR

@@ -14,6 +14,10 @@
 #include "core/LogCategories.h"
 #include "containers/ContainerManager.h"
 #include "containers/ContainerWidget.h"
+#include "meters/MeterWidget.h"
+#include "meters/MeterItem.h"
+#include "meters/ItemGroup.h"
+#include "meters/MeterPoller.h"
 
 #include <cmath>
 
@@ -218,6 +222,26 @@ void MainWindow::buildUI()
     });
 
     m_fftThread->start();
+
+    // --- Meter Poller (Phase 3G-2) ---
+    m_meterPoller = new MeterPoller(this);
+    populateDefaultMeter();
+
+    if (m_meterWidget) {
+        m_meterPoller->addTarget(m_meterWidget);
+    }
+
+    // Wire RxChannel to poller when WDSP creates it
+    connect(m_radioModel, &RadioModel::sliceAdded, this, [this](int index) {
+        if (index == 0 && m_radioModel->wdspEngine()) {
+            RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
+            if (rxCh) {
+                m_meterPoller->setRxChannel(rxCh);
+                m_meterPoller->start();
+                qCDebug(lcMeter) << "MeterPoller started on RxChannel 0";
+            }
+        }
+    });
 }
 
 void MainWindow::createDefaultContainers()
@@ -229,6 +253,30 @@ void MainWindow::createDefaultContainers()
     c0->setNoControls(false);
 
     qCDebug(lcContainer) << "Created default Container #0 (panel-docked):" << c0->id();
+}
+
+void MainWindow::populateDefaultMeter()
+{
+    ContainerWidget* c0 = m_containerManager->panelContainer();
+    if (!c0) {
+        qCWarning(lcContainer) << "No panel container for meter widget";
+        return;
+    }
+
+    m_meterWidget = new MeterWidget();
+
+    // Create default H_BAR preset (AetherSDR visual style)
+    ItemGroup* group = ItemGroup::createHBarPreset(
+        MeterBinding::SignalPeak, -140.0, 0.0,
+        QStringLiteral("Signal"), m_meterWidget);
+
+    // Install group items into MeterWidget
+    for (MeterItem* item : group->items()) {
+        m_meterWidget->addItem(item);
+    }
+
+    c0->setContent(m_meterWidget);
+    qCDebug(lcMeter) << "Installed MeterWidget in Container #0 with signal meter";
 }
 
 void MainWindow::buildMenuBar()
