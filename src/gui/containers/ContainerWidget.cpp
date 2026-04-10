@@ -9,6 +9,7 @@
 #include <QPushButton>
 #include <QMouseEvent>
 #include <QApplication>
+#include <algorithm>
 
 namespace NereusSDR {
 
@@ -199,51 +200,361 @@ void ContainerWidget::setupBorder()
     }
 }
 
-// --- Stub implementations for methods declared but not yet implemented ---
-// These will be filled in Tasks 3 and 4.
+// --- Property setters ---
 
 void ContainerWidget::setId(const QString& id) { m_id = id; m_id.remove(QLatin1Char('|')); }
 void ContainerWidget::setRxSource(int rx) { m_rxSource = rx; updateTitle(); }
-void ContainerWidget::setDockMode(DockMode mode) { if (m_dockMode == mode) return; m_dockMode = mode; updateTitleBar(); emit dockModeChanged(mode); }
-void ContainerWidget::setAxisLock(AxisLock) {}
-void ContainerWidget::cycleAxisLock(bool) {}
-void ContainerWidget::setPinOnTop(bool) {}
+
+void ContainerWidget::setDockMode(DockMode mode)
+{
+    if (m_dockMode == mode) {
+        return;
+    }
+    m_dockMode = mode;
+    updateTitleBar();
+    emit dockModeChanged(mode);
+}
+
+void ContainerWidget::setAxisLock(AxisLock lock)
+{
+    m_axisLock = lock;
+
+    // Update axis button icon — from Thetis ucMeter.cs:936-968
+    static const QChar arrows[] = {
+        QChar(0x2190),  // LEFT
+        QChar(0x2196),  // TOPLEFT
+        QChar(0x2191),  // TOP
+        QChar(0x2197),  // TOPRIGHT
+        QChar(0x2192),  // RIGHT
+        QChar(0x2198),  // BOTTOMRIGHT
+        QChar(0x2193),  // BOTTOM
+        QChar(0x2199),  // BOTTOMLEFT
+    };
+    int idx = static_cast<int>(lock);
+    if (idx >= 0 && idx < 8) {
+        m_btnAxis->setText(QString(arrows[idx]));
+    }
+}
+
+void ContainerWidget::cycleAxisLock(bool reverse)
+{
+    // From Thetis ucMeter.cs:912-935
+    int n = static_cast<int>(m_axisLock);
+    if (reverse) {
+        n--;
+    } else {
+        n++;
+    }
+    if (n > static_cast<int>(AxisLock::BottomLeft)) {
+        n = static_cast<int>(AxisLock::Left);
+    }
+    if (n < static_cast<int>(AxisLock::Left)) {
+        n = static_cast<int>(AxisLock::BottomLeft);
+    }
+    setAxisLock(static_cast<AxisLock>(n));
+    emit dockedMoved();
+}
+
+void ContainerWidget::setPinOnTop(bool pin)
+{
+    // From Thetis ucMeter.cs:974-978
+    m_pinOnTop = pin;
+    m_btnPin->setText(pin ? QStringLiteral("\U0001F4CD") : QStringLiteral("\U0001F4CC"));
+    setTopMost();
+}
+
+void ContainerWidget::setTopMost()
+{
+    // From Thetis ucMeter.cs:980-993
+    if (isFloating() && parentWidget()) {
+        FloatingContainer* fc = qobject_cast<FloatingContainer*>(parentWidget());
+        if (fc) {
+            bool wasVisible = fc->isVisible();
+            if (m_pinOnTop) {
+                fc->setWindowFlags(fc->windowFlags() | Qt::WindowStaysOnTopHint);
+            } else {
+                fc->setWindowFlags(fc->windowFlags() & ~Qt::WindowStaysOnTopHint);
+            }
+            if (wasVisible) {
+                fc->show();
+            }
+        }
+    }
+}
+
 void ContainerWidget::setBorder(bool border) { m_border = border; setupBorder(); }
 void ContainerWidget::setLocked(bool locked) { m_locked = locked; }
 void ContainerWidget::setContainerEnabled(bool enabled) { m_enabled = enabled; }
 void ContainerWidget::setShowOnRx(bool show) { m_showOnRx = show; }
 void ContainerWidget::setShowOnTx(bool show) { m_showOnTx = show; }
 void ContainerWidget::setHiddenByMacro(bool hidden) { m_hiddenByMacro = hidden; }
-void ContainerWidget::setContainerMinimises(bool m) { m_containerMinimises = m; }
-void ContainerWidget::setContainerHidesWhenRxNotUsed(bool h) { m_containerHidesWhenRxNotUsed = h; }
-void ContainerWidget::setNotes(const QString& notes) { m_notes = notes; m_notes.remove(QLatin1Char('|')); updateTitle(); }
-void ContainerWidget::setNoControls(bool nc) { m_noControls = nc; }
-void ContainerWidget::setAutoHeight(bool ah) { m_autoHeight = ah; }
+void ContainerWidget::setContainerMinimises(bool minimises) { m_containerMinimises = minimises; }
+void ContainerWidget::setContainerHidesWhenRxNotUsed(bool hides) { m_containerHidesWhenRxNotUsed = hides; }
+
+void ContainerWidget::setNotes(const QString& notes)
+{
+    m_notes = notes;
+    m_notes.remove(QLatin1Char('|'));
+    updateTitle();
+}
+
+void ContainerWidget::setNoControls(bool noControls) { m_noControls = noControls; }
+void ContainerWidget::setAutoHeight(bool autoHeight) { m_autoHeight = autoHeight; }
 void ContainerWidget::setDockedLocation(const QPoint& loc) { m_dockedLocation = loc; }
 void ContainerWidget::setDockedSize(const QSize& size) { m_dockedSize = size; }
 void ContainerWidget::setDelta(const QPoint& delta) { m_delta = delta; }
 
-void ContainerWidget::storeLocation() { m_dockedLocation = pos(); m_dockedSize = size(); }
-void ContainerWidget::restoreLocation() {
-    if (m_dockedLocation != pos()) { move(m_dockedLocation); }
-    if (m_dockedSize != size()) { resize(m_dockedSize); }
+void ContainerWidget::storeLocation()
+{
+    // From Thetis ucMeter.cs:567-572
+    m_dockedLocation = pos();
+    m_dockedSize = size();
 }
 
-// Event handlers — stubs for Task 3
-void ContainerWidget::mouseMoveEvent(QMouseEvent* event) { QWidget::mouseMoveEvent(event); }
-void ContainerWidget::leaveEvent(QEvent* event) { QWidget::leaveEvent(event); }
-bool ContainerWidget::eventFilter(QObject* watched, QEvent* event) { return QWidget::eventFilter(watched, event); }
-void ContainerWidget::beginDrag(const QPoint&) {}
-void ContainerWidget::updateDrag(const QPoint&) {}
-void ContainerWidget::endDrag() {}
-void ContainerWidget::beginResize(const QPoint&) {}
-void ContainerWidget::updateResize(const QPoint&) {}
-void ContainerWidget::endResize() {}
-void ContainerWidget::doResize(int, int) {}
-void ContainerWidget::setTopMost() {}
-int ContainerWidget::roundToNearestTen(int value) { return ((value + 5) / 10) * 10; }
+void ContainerWidget::restoreLocation()
+{
+    // From Thetis ucMeter.cs:574-593
+    bool moved = false;
+    if (m_dockedLocation != pos()) {
+        move(m_dockedLocation);
+        moved = true;
+    }
+    if (m_dockedSize != size()) {
+        resize(m_dockedSize);
+        moved = true;
+    }
+    if (moved) {
+        update();
+    }
+}
 
-// Serialization stubs — Task 4
+int ContainerWidget::roundToNearestTen(int value)
+{
+    return ((value + 5) / 10) * 10;
+}
+
+// --- Hover show/hide ---
+
+void ContainerWidget::mouseMoveEvent(QMouseEvent* event)
+{
+    // From Thetis ucMeter.cs:1198-1229
+    bool noControls = m_noControls && !(QApplication::keyboardModifiers() & Qt::ShiftModifier);
+
+    if (!m_dragging && !noControls) {
+        bool inTitleRegion = event->position().y() < 22;
+        if (inTitleRegion && !m_titleBar->isVisible()) {
+            m_titleBar->setVisible(true);
+            m_titleBar->raise();
+        } else if (!inTitleRegion && m_titleBar->isVisible() && !m_dragging) {
+            m_titleBar->setVisible(false);
+        }
+    }
+
+    // Resize grip: only for overlay-docked and floating, not panel-docked
+    if (!m_resizing && !noControls && !isPanelDocked()) {
+        bool inGripRegion = event->position().x() > (width() - 16)
+                         && event->position().y() > (height() - 16);
+        if (inGripRegion && !m_resizeGrip->isVisible()) {
+            m_resizeGrip->move(width() - 12, height() - 12);
+            m_resizeGrip->setVisible(true);
+            m_resizeGrip->raise();
+        } else if (!inGripRegion && m_resizeGrip->isVisible() && !m_resizing) {
+            m_resizeGrip->setVisible(false);
+        }
+    }
+
+    if (m_dragging) {
+        updateDrag(event->globalPosition().toPoint());
+    }
+    if (m_resizing) {
+        updateResize(event->globalPosition().toPoint());
+    }
+
+    QWidget::mouseMoveEvent(event);
+}
+
+void ContainerWidget::leaveEvent(QEvent* event)
+{
+    if (!m_dragging && !m_resizing) {
+        m_titleBar->setVisible(false);
+        m_resizeGrip->setVisible(false);
+    }
+    QWidget::leaveEvent(event);
+}
+
+// --- Event filter for title bar drag + resize grip ---
+
+bool ContainerWidget::eventFilter(QObject* watched, QEvent* event)
+{
+    // Title bar drag
+    if ((watched == m_titleBar || watched == m_titleLabel) && !m_locked) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            QMouseEvent* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton && !isPanelDocked()) {
+                beginDrag(me->globalPosition().toPoint());
+                return true;
+            }
+        } else if (event->type() == QEvent::MouseMove && m_dragging) {
+            QMouseEvent* me = static_cast<QMouseEvent*>(event);
+            updateDrag(me->globalPosition().toPoint());
+            return true;
+        } else if (event->type() == QEvent::MouseButtonRelease && m_dragging) {
+            endDrag();
+            return true;
+        }
+    }
+
+    // Resize grip (not for panel-docked)
+    if (watched == m_resizeGrip && !m_locked && !isPanelDocked()) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            QMouseEvent* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                beginResize(me->globalPosition().toPoint());
+                return true;
+            }
+        } else if (event->type() == QEvent::MouseMove && m_resizing) {
+            QMouseEvent* me = static_cast<QMouseEvent*>(event);
+            updateResize(me->globalPosition().toPoint());
+            return true;
+        } else if (event->type() == QEvent::MouseButtonRelease && m_resizing) {
+            endResize();
+            return true;
+        }
+    }
+
+    return QWidget::eventFilter(watched, event);
+}
+
+// --- Drag logic ---
+
+void ContainerWidget::beginDrag(const QPoint& globalPos)
+{
+    // From Thetis ucMeter.cs:281-294
+    m_dragging = true;
+    if (isFloating()) {
+        m_dragStartPos = globalPos - parentWidget()->pos();
+    } else {
+        raise();
+        m_dragStartPos = globalPos - pos();
+    }
+}
+
+void ContainerWidget::updateDrag(const QPoint& globalPos)
+{
+    if (!m_dragging) {
+        return;
+    }
+
+    if (isFloating()) {
+        // From Thetis ucMeter.cs:319-345
+        QPoint newPos = globalPos - m_dragStartPos;
+        if (QApplication::keyboardModifiers() & Qt::ControlModifier) {
+            newPos.setX(roundToNearestTen(newPos.x()));
+            newPos.setY(roundToNearestTen(newPos.y()));
+        }
+        if (parentWidget() && parentWidget()->pos() != newPos) {
+            parentWidget()->move(newPos);
+        }
+    } else {
+        // From Thetis ucMeter.cs:346-374 — overlay-docked, clamped
+        QPoint newPos = globalPos - m_dragStartPos;
+        if (QApplication::keyboardModifiers() & Qt::ControlModifier) {
+            newPos.setX(roundToNearestTen(newPos.x()));
+            newPos.setY(roundToNearestTen(newPos.y()));
+        }
+        if (parentWidget()) {
+            int maxX = parentWidget()->width() - width();
+            int maxY = parentWidget()->height() - height();
+            newPos.setX(std::clamp(newPos.x(), 0, std::max(0, maxX)));
+            newPos.setY(std::clamp(newPos.y(), 0, std::max(0, maxY)));
+        }
+        if (pos() != newPos) {
+            move(newPos);
+            update();
+        }
+    }
+}
+
+void ContainerWidget::endDrag()
+{
+    m_dragging = false;
+    m_dragStartPos = QPoint();
+    if (isOverlayDocked()) {
+        m_dockedLocation = pos();
+        emit dockedMoved();
+    }
+}
+
+// --- Resize logic ---
+
+void ContainerWidget::beginResize(const QPoint& globalPos)
+{
+    // From Thetis ucMeter.cs:400-407
+    m_resizeStartGlobal = globalPos;
+    m_resizeStartSize = isFloating() && parentWidget() ? parentWidget()->size() : size();
+    m_resizing = true;
+    raise();
+}
+
+void ContainerWidget::updateResize(const QPoint& globalPos)
+{
+    if (!m_resizing) {
+        return;
+    }
+
+    // From Thetis ucMeter.cs:489-518
+    int dX = globalPos.x() - m_resizeStartGlobal.x();
+    int dY = globalPos.y() - m_resizeStartGlobal.y();
+
+    int newW = m_resizeStartSize.width() + dX;
+    int newH = m_resizeStartSize.height() + dY;
+
+    if (QApplication::keyboardModifiers() & Qt::ControlModifier) {
+        newW = roundToNearestTen(newW);
+        newH = roundToNearestTen(newH);
+    }
+
+    doResize(newW, newH);
+}
+
+void ContainerWidget::endResize()
+{
+    m_resizing = false;
+    m_resizeStartGlobal = QPoint();
+    if (isOverlayDocked()) {
+        m_dockedSize = size();
+    }
+}
+
+void ContainerWidget::doResize(int w, int h)
+{
+    // From Thetis ucMeter.cs:520-549
+    w = std::max(w, kMinContainerWidth);
+    h = std::max(h, kMinContainerHeight);
+
+    if (isFloating()) {
+        if (parentWidget()) {
+            parentWidget()->resize(w, h);
+        }
+    } else {
+        if (parentWidget()) {
+            if (x() + w > parentWidget()->width()) {
+                w = parentWidget()->width() - x();
+            }
+            if (y() + h > parentWidget()->height()) {
+                h = parentWidget()->height() - y();
+            }
+        }
+        QSize newSize(w, h);
+        if (newSize != size()) {
+            resize(newSize);
+            update();
+        }
+    }
+}
+
+// --- Serialization stubs (Task 4) ---
+
 QString ContainerWidget::axisLockToString(AxisLock) { return QStringLiteral("TOPLEFT"); }
 AxisLock ContainerWidget::axisLockFromString(const QString&) { return AxisLock::TopLeft; }
 QString ContainerWidget::dockModeToString(DockMode) { return QStringLiteral("OVERLAY"); }
