@@ -768,20 +768,22 @@ private:
     std::atomic<bool> m_active{false};
 
     // --- Non-atomic cached state (protected by m_stateMutex for writes) ---
-    double m_filterLow{-2850.0};
-    double m_filterHigh{-150.0};
+    // Filter defaults are mode-dependent preset tables per Thetis console.cs:5180-5273.
+    // Examples: USB F5 = +100/+3000, LSB F5 = -3000/-100
+    double m_filterLow{150.0};   // From Thetis (mode-dependent)
+    double m_filterHigh{2850.0}; // From Thetis (mode-dependent)
     int m_filterKernelSize{2048};
     bool m_filterMinPhase{false};
 
-    double m_agcTop{80.0};
+    double m_agcTop{90.0};        // From Thetis radio.cs:1018
     double m_agcFixedGain{20.0};
     double m_agcAttack{2.0};
     double m_agcDecay{250.0};
     double m_agcHang{100.0};
     double m_agcSlope{0.0};
 
-    double m_nb1Threshold{20.0};
-    double m_nb2Threshold{20.0};
+    double m_nb1Threshold{3.3};   // From Thetis radio.cs:843
+    double m_nb2Threshold{30.0};  // From Thetis cmaster.c:53
 
     int m_nrTaps{64};
     int m_nrDelay{16};
@@ -1792,11 +1794,11 @@ RxChannel* WdspEngine::createRxChannel(int channelId, ...)
     // 2. Create noise blanker instances (separate lifecycle from channel)
     create_anbEXT(channelId, 0 /*run=off*/, inputBufferSize,
                   inputSampleRate, 0.1 /*tau*/, 0.1 /*hangtime*/,
-                  0.1 /*advtime*/, 0.05 /*backtau*/, 20.0 /*threshold*/);
+                  0.1 /*advtime*/, 0.05 /*backtau*/, 3.3 /*threshold - Thetis radio.cs:843*/);
 
     create_nobEXT(channelId, 0 /*run=off*/, 0 /*mode*/,
                   inputBufferSize, inputSampleRate,
-                  0.1, 0.1, 0.1, 0.05, 20.0);
+                  0.1, 0.1, 0.1, 0.05, 30.0 /*threshold - Thetis cmaster.c:53*/);
 #endif
 
     // 3. Create the C++ wrapper
@@ -1876,7 +1878,7 @@ void RadioModel::configureChannelDefaults(RxChannel* rx, SliceModel* slice)
     rx->setMode(stringToDspMode(slice->mode()));
     rx->setFilterFreqs(slice->filterLow(), slice->filterHigh());
     rx->setAgcMode(AGCMode::Med);
-    rx->setAgcTop(80.0);
+    rx->setAgcTop(90.0);  // From Thetis radio.cs:1018
     rx->setVolume(1.0);
     rx->setPan(0.5);
 
