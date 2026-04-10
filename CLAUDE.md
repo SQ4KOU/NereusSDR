@@ -318,7 +318,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | --- | --- | --- |
 | [phase3d-spectrum-waterfall-plan.md](docs/architecture/phase3d-spectrum-waterfall-plan.md) | 3D: GPU Spectrum & Waterfall | **Complete** |
 | [ctun-zoom-plan.md](docs/architecture/ctun-zoom-plan.md) | 3E: CTUN Zoom Bin Subsetting | **Complete** |
-| [phase3f-multi-panadapter-plan.md](docs/architecture/phase3f-multi-panadapter-plan.md) | 3F: Multi-Panadapter + DDC Assignment | Planning |
+| [phase3f-multi-panadapter-plan.md](docs/architecture/phase3f-multi-panadapter-plan.md) | 3F: Multi-Panadapter + DDC Assignment | Planning (after 3I-4) |
 
 ### Protocol Reference (`docs/protocols/`)
 
@@ -335,7 +335,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | 1B: Thetis Analysis | Dual-thread DSP (RX1/RX2), pre-allocated receivers, one-way protocol, skin system |
 | 1C: WDSP Analysis | 256 API functions, channel-based DSP, fexchange2() for I/Q, PureSignal feedback loop |
 
-### Current Phase: 3F — Multi-Panadapter
+### Current Phase: 3G-1 — Container Infrastructure
 
 | Phase | Goal | Status |
 | --- | --- | --- |
@@ -344,12 +344,17 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | 3C: macOS Build | Cross-platform WDSP build + wisdom crash fix | **Complete** |
 | 3D: Spectrum Display | GPU spectrum + waterfall (QRhi Metal/Vulkan/D3D12) | **Complete** |
 | 3E: VFO + Multi-RX Foundation | VFO controls, CTUN panadapter, rewired I/Q pipeline | **Complete** |
-| **3F: Multi-Panadapter** | **DDC assignment (incl. PS states), FFTRouter, PanadapterStack, enable RX2** | **Next up** |
+| **3G-1: Container Infrastructure** | **Dock/float/resize/persist container shells** | **Next up** |
+| 3G-2: MeterWidget GPU Renderer | QRhi-based meter rendering engine | Planned |
+| 3G-3: Core Meter Groups | S-Meter, Power/SWR, ALC presets | Planned |
+| 3G-4: Advanced Meter Items | History graph, magic eye, dial, LED | Planned |
+| 3G-5: Interactive Meter Items | Band/mode/filter buttons, VFO display, clock | Planned |
+| 3G-6: Container Settings Dialog | Full composability UI, import/export | Planned |
 | 3I-1: Basic SSB TX | TxChannel, mic input, MOX state machine, I/Q output | Planned |
 | 3I-2: CW TX | Sidetone, firmware keyer, QSK/break-in | Planned |
 | 3I-3: TX Processing | 18-stage TXA chain + RX DSP additions (SNB, peak hold, histogram) | Planned |
 | 3I-4: PureSignal | Feedback DDC, calcc/IQC engine, PSForm, AmpView | Planned |
-| 3G-1..6: Container System | GPU meter rendering, 30+ item types, full composability | Planned |
+| 3F: Multi-Panadapter | DDC assignment (incl. PS states), FFTRouter, PanadapterStack, enable RX2 | Planned |
 | 3H: Skins | Thetis-inspired skin format, 4-pan, legacy import | Planned |
 | 3J: TCI + Spots | TCI server, DX Cluster/RBN clients, spot overlay | Planned |
 | 3K: CAT/rigctld | 4-channel rigctld, TCP CAT server | Planned |

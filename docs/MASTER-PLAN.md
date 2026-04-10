@@ -268,30 +268,78 @@ Key design references:
 Verification: Tune to different frequencies/modes via VFO display. Mode/filter changes
 reflect in WDSP demodulation. I/Q flows through ReceiverManager (no regression).
 
-### Phase 3F: Multi-Panadapter Layout ← NEXT
-**Goal:** Support 1-4 panadapters with proper DDC-to-ADC mapping and multiple active receivers.
-Multi-receiver plumbing from Phase 3E is a prerequisite.
+### Phase 3G-1: Container Infrastructure ← NEXT
+**Goal:** Dock/float/resize/persist container shells — no rendering yet.
 
-**Critical addition (from 2026-04-10 plan review):** `UpdateDDCs()` port must include ALL
-state machine cases from Thetis `console.cs:8186-8538`, including PureSignal DDC states
-(DDC0+DDC1 sync at 192kHz, ADC cntrl1 override `(rx_adc_ctrl1 & 0xf3) | 0x08`), even
-though PS won't be enabled until Phase 3I-4. This prevents reworking the state machine later.
+Scope:
+- `ContainerWidget` — dock/float/resize/axis-lock (8 positions), title bar, settings gear
+  - Properties: border, background color, title/notes, RX source, show on RX/TX,
+    auto-height, locked, hidden-by-macro, container-minimises, container-hides-when-rx-not-used
+- `FloatingContainer` — `QWidget` with `Qt::Window | Qt::Tool`, pin-on-top, per-monitor DPI, geometry persist
+- `ContainerManager` — singleton, create/destroy, float/dock transitions, axis-lock reposition, serialize to AppSettings, macro visibility
+- Default layout: single right-side container (Container #0) with placeholder content
 
-Files to modify/create:
-- `src/core/ReceiverManager.cpp` — add updateDdcAssignment() ported from Thetis UpdateDDCs (console.cs:8186-8538)
-- `src/core/FFTRouter.h/.cpp` — **new** — map receiver FFT output to 1+ panadapter(s)
-- `src/gui/PanadapterStack.h/.cpp` — **new** — QSplitter layout manager (5 layouts)
-- `src/gui/PanadapterApplet.h/.cpp` — **new** — single pan container with independent display state
-- `src/gui/MainWindow.cpp` — wirePanadapter(), layout menu, multi-pan FFT routing, enable RX2
+Thetis source: `ucMeter.cs`, `frmMeterDisplay.cs`, `MeterManager.cs`
 
-Key design references:
-- `docs/architecture/multi-panadapter.md`
-- `docs/architecture/adc-ddc-panadapter-mapping.md`
-- Implementation plan: `docs/architecture/phase3f-multi-panadapter-plan.md`
+Verification: Create containers, dock/float/resize, persist across restart, axis-lock holds on resize.
 
-Verification: 2 pans stacked — RX1 on 20m, RX2 on 40m with independent spectrums.
-4 pans in 2x2 grid — 2 pans share RX1 at different zoom, 2 pans on RX2.
-RX1 on DDC2 (ADC0), RX2 on DDC3 (ADC1) for 2-ADC boards.
+### Phase 3G-2: MeterWidget GPU Renderer
+**Goal:** QRhi-based meter rendering engine following SpectrumWidget's 3-pipeline pattern.
+
+Scope:
+- `MeterWidget : public QRhiWidget` — one per container, renders all items in one draw pass
+- Pipeline 1 (textured quad): cached QPainter textures, history graph ring buffer
+- Pipeline 2 (vertex-colored geometry): needle sweep, bar fill, magic eye — uniform-driven animation
+- Pipeline 3 (QPainter → texture overlay): tick marks, text readouts, LED states, button faces
+- `MeterItem` base class — position, size, data source binding, visual properties, serialization
+- `ItemGroup` — composites N items into functional meter types
+- Data binding framework — poll WDSP meters at ~100ms, push to bound items
+- Shaders: `meter_bar.vert/.frag`, `meter_needle.vert/.frag`, `meter_overlay.vert/.frag`
+- Item types: BarItem (H_BAR, V_BAR), TextItem, ScaleItem (H_SCALE, V_SCALE), SolidColourItem, ImageItem
+
+Verification: Container with live bar meter bound to WDSP signal strength, updating at 10fps via GPU.
+
+### Phase 3G-3: Core Meter Groups
+**Goal:** Ship the meters operators expect on day one.
+
+Scope:
+- NeedleItem (NEEDLE, NEEDLE_SCALE_PWR) + `meter_needle` shader
+- Default presets: S-Meter (needle+scale+text+background), Power/SWR, ALC bar, Mic/Comp bars
+- Default Container #0 pre-loaded with: S-Meter, Power/SWR, ALC
+- Data binding: SIGNAL_STRENGTH, AVG_SIGNAL_STRENGTH, ADC, AGC_GAIN, PWR, REVERSE_PWR, SWR, MIC, COMP, ALC
+
+Verification: Live S-meter needle, Power/SWR during TX, correct readings vs Thetis on same signal.
+
+### Phase 3G-4: Advanced Meter Items
+**Goal:** Visual flair — items that make it look like a real radio console.
+
+Scope:
+- HistoryItem (HISTORY) — scrolling signal graph, ring buffer texture, `meter_history.vert/.frag`
+- MagicEyeItem (MAGIC_EYE) — animated vacuum tube iris, `meter_eye.vert/.frag`
+- DialItem (DIAL_DISPLAY) — analog dial with rotating pointer
+- LedItem (LED) — on/off/blink, FadeCoverItem, WebImageItem, CustomMeterBarItem
+
+Verification: History graph scrolling, magic eye responding to signal strength.
+
+### Phase 3G-5: Interactive Meter Items
+**Goal:** Button grids and frequency displays inside containers.
+
+Scope:
+- ButtonItem (GPU face + QWidget overlay): Band, Mode, Filter, Antenna, TuneStep, VoiceRecordPlay, Other
+- VfoDisplayItem, ClockItem, SpacerItem, ClickBoxItem
+
+Verification: Band buttons switch bands, mode buttons switch modes, all route through SliceModel.
+
+### Phase 3G-6: Container Settings Dialog
+**Goal:** Full user customization — the composability UI.
+
+Scope:
+- Container settings dialog: item palette, current item list (drag reorder), per-item property panel, live preview
+- Preset templates for common configurations
+- Import/export (Base64-encoded container strings)
+- Duplicate, recover off-screen, macro visibility hooks
+
+Verification: Create container from scratch, add items, configure data sources, export/import Base64.
 
 ### Phase 3I-1: Basic SSB TX
 **Goal:** Get RF out the door — prove the TX I/Q output path works.
@@ -380,78 +428,30 @@ Thetis source: `PSForm.cs` (1164 lines), `calcc.c`, `iqc.c`, `TXA.c:557-591`
 
 Verification: Enable PS on ANAN-G2, feedback level green, measurable IMD improvement.
 
-### Phase 3G-1: Container Infrastructure
-**Goal:** Dock/float/resize/persist container shells — no rendering yet.
+### Phase 3F: Multi-Panadapter Layout
+**Goal:** Support 1-4 panadapters with proper DDC-to-ADC mapping and multiple active receivers.
+Multi-receiver plumbing from Phase 3E is a prerequisite.
 
-Scope:
-- `ContainerWidget` — dock/float/resize/axis-lock (8 positions), title bar, settings gear
-  - Properties: border, background color, title/notes, RX source, show on RX/TX,
-    auto-height, locked, hidden-by-macro, container-minimises, container-hides-when-rx-not-used
-- `FloatingContainer` — `QWidget` with `Qt::Window | Qt::Tool`, pin-on-top, per-monitor DPI, geometry persist
-- `ContainerManager` — singleton, create/destroy, float/dock transitions, axis-lock reposition, serialize to AppSettings, macro visibility
-- Default layout: single right-side container (Container #0) with placeholder content
+**Critical note:** `UpdateDDCs()` port must include ALL state machine cases from Thetis
+`console.cs:8186-8538`, including PureSignal DDC states (DDC0+DDC1 sync at 192kHz, ADC
+cntrl1 override `(rx_adc_ctrl1 & 0xf3) | 0x08`). PureSignal (Phase 3I-4) is complete
+by this point, so these states should be fully wired — not just stubbed.
 
-Thetis source: `ucMeter.cs`, `frmMeterDisplay.cs`, `MeterManager.cs`
+Files to modify/create:
+- `src/core/ReceiverManager.cpp` — add updateDdcAssignment() ported from Thetis UpdateDDCs (console.cs:8186-8538)
+- `src/core/FFTRouter.h/.cpp` — **new** — map receiver FFT output to 1+ panadapter(s)
+- `src/gui/PanadapterStack.h/.cpp` — **new** — QSplitter layout manager (5 layouts)
+- `src/gui/PanadapterApplet.h/.cpp` — **new** — single pan container with independent display state
+- `src/gui/MainWindow.cpp` — wirePanadapter(), layout menu, multi-pan FFT routing, enable RX2
 
-Verification: Create containers, dock/float/resize, persist across restart, axis-lock holds on resize.
+Key design references:
+- `docs/architecture/multi-panadapter.md`
+- `docs/architecture/adc-ddc-panadapter-mapping.md`
+- Implementation plan: `docs/architecture/phase3f-multi-panadapter-plan.md`
 
-### Phase 3G-2: MeterWidget GPU Renderer
-**Goal:** QRhi-based meter rendering engine following SpectrumWidget's 3-pipeline pattern.
-
-Scope:
-- `MeterWidget : public QRhiWidget` — one per container, renders all items in one draw pass
-- Pipeline 1 (textured quad): cached QPainter textures, history graph ring buffer
-- Pipeline 2 (vertex-colored geometry): needle sweep, bar fill, magic eye — uniform-driven animation
-- Pipeline 3 (QPainter → texture overlay): tick marks, text readouts, LED states, button faces
-- `MeterItem` base class — position, size, data source binding, visual properties, serialization
-- `ItemGroup` — composites N items into functional meter types
-- Data binding framework — poll WDSP meters at ~100ms, push to bound items
-- Shaders: `meter_bar.vert/.frag`, `meter_needle.vert/.frag`, `meter_overlay.vert/.frag`
-- Item types: BarItem (H_BAR, V_BAR), TextItem, ScaleItem (H_SCALE, V_SCALE), SolidColourItem, ImageItem
-
-Verification: Container with live bar meter bound to WDSP signal strength, updating at 10fps via GPU.
-
-### Phase 3G-3: Core Meter Groups
-**Goal:** Ship the meters operators expect on day one.
-
-Scope:
-- NeedleItem (NEEDLE, NEEDLE_SCALE_PWR) + `meter_needle` shader
-- Default presets: S-Meter (needle+scale+text+background), Power/SWR, ALC bar, Mic/Comp bars
-- Default Container #0 pre-loaded with: S-Meter, Power/SWR, ALC
-- Data binding: SIGNAL_STRENGTH, AVG_SIGNAL_STRENGTH, ADC, AGC_GAIN, PWR, REVERSE_PWR, SWR, MIC, COMP, ALC
-
-Verification: Live S-meter needle, Power/SWR during TX, correct readings vs Thetis on same signal.
-
-### Phase 3G-4: Advanced Meter Items
-**Goal:** Visual flair — items that make it look like a real radio console.
-
-Scope:
-- HistoryItem (HISTORY) — scrolling signal graph, ring buffer texture, `meter_history.vert/.frag`
-- MagicEyeItem (MAGIC_EYE) — animated vacuum tube iris, `meter_eye.vert/.frag`
-- DialItem (DIAL_DISPLAY) — analog dial with rotating pointer
-- LedItem (LED) — on/off/blink, FadeCoverItem, WebImageItem, CustomMeterBarItem
-
-Verification: History graph scrolling, magic eye responding to signal strength.
-
-### Phase 3G-5: Interactive Meter Items
-**Goal:** Button grids and frequency displays inside containers.
-
-Scope:
-- ButtonItem (GPU face + QWidget overlay): Band, Mode, Filter, Antenna, TuneStep, VoiceRecordPlay, Other
-- VfoDisplayItem, ClockItem, SpacerItem, ClickBoxItem
-
-Verification: Band buttons switch bands, mode buttons switch modes, all route through SliceModel.
-
-### Phase 3G-6: Container Settings Dialog
-**Goal:** Full user customization — the composability UI.
-
-Scope:
-- Container settings dialog: item palette, current item list (drag reorder), per-item property panel, live preview
-- Preset templates for common configurations
-- Import/export (Base64-encoded container strings)
-- Duplicate, recover off-screen, macro visibility hooks
-
-Verification: Create container from scratch, add items, configure data sources, export/import Base64.
+Verification: 2 pans stacked — RX1 on 20m, RX2 on 40m with independent spectrums.
+4 pans in 2x2 grid — 2 pans share RX1 at different zoom, 2 pans on RX2.
+RX1 on DDC2 (ADC0), RX2 on DDC3 (ADC1) for 2-ADC boards.
 
 ### Phase 3H: Skin System
 **Goal:** Thetis-inspired skin format with 4-pan support + legacy skin import.
@@ -525,13 +525,17 @@ CI workflows already in place. Finalize:
 
 ---
 
-## Recommended Next Step: Phase 3F — Multi-Panadapter Layout
+## Recommended Next Step: Phase 3G-1 — Container Infrastructure
 
 Phases 3A–3E are complete — the radio connects, demodulates audio, renders live GPU
 spectrum + waterfall, and supports full VFO tuning with CTUN panadapter mode.
-Next: enable multiple simultaneous receivers and panadapter layout management.
 
-Implementation plan: `docs/architecture/phase3f-multi-panadapter-plan.md`
+Next: build the container/widget framework (3G-1..6) so the right-side panel has GPU-
+rendered meters, band buttons, mode controls, and full composability. Then TX pipeline
+(3I-1..4) including PureSignal. Multi-panadapter (3F) comes last — by then the single-
+receiver experience is fully complete, and multi-pan just adds more of the same.
+
+Execution order: **3G-1..6 → 3I-1..4 → 3F → 3H → 3J+**
 
 ---
 

@@ -49,13 +49,13 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 - Cross-platform build (Windows, Linux, macOS)
 
 **Planned (see Roadmap):**
+- Configurable floating/dockable containers with GPU-rendered meters (Phase 3G)
+- TX pipeline — SSB, CW, full processing chain, PureSignal (Phase 3I)
 - Up to 4 independent panadapters in configurable layouts (Phase 3F)
-- Full WDSP DSP suite — NR/NR2, ANF, EQ, compression, PureSignal (Phase 3G)
-- Configurable floating/dockable containers (Phase 3G)
 - Thetis-inspired skin system (Phase 3H)
-- TX pipeline — mic → WDSP → radio (Phase 3I)
-- TCI protocol server, CAT control, DAX virtual audio (Phase 3J)
-- OpenHPSDR Protocol 1 — Hermes Lite 2, older ANAN radios (Phase 3K)
+- TCI protocol server, DX Cluster/RBN spots (Phase 3J)
+- CAT/rigctld for logging and contest software (Phase 3K)
+- OpenHPSDR Protocol 1 — Hermes Lite 2, older ANAN radios (Phase 3L)
 
 ---
 
@@ -89,13 +89,23 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 | **3C: macOS Build** | Cross-platform WDSP build + wisdom crash fix | **Complete** |
 | **3D: Spectrum Display** | GPU spectrum + waterfall (QRhi Metal/Vulkan/D3D12) | **Complete** |
 | **3E: VFO + Multi-RX Foundation** | VFO controls + rewire I/Q pipeline for N receivers + CTUN panadapter | **Complete** |
-| **3F: Multi-Panadapter** | DDC assignment, FFTRouter, PanadapterStack, enable RX2 | **Next up** |
-| **3G: Container System** | Unified float/dock containers with 16 widget types | Planned |
-| **3H: Skin System** | Thetis-inspired skins with 4-pan support | Planned |
-| **3I: TX Pipeline** | Mic → WDSP → radio, TX audio + silence frames | Planned |
-| **3J: TCI Server** | TCI v2.0 WebSocket for external apps | Planned |
-| **3K: Protocol 1** | P1 support for Hermes Lite 2 / older ANAN | Planned |
-| **3L: Packaging** | AppImage, Windows installer, macOS DMG | Planned |
+| **3G-1: Container Infrastructure** | **Dock/float/resize/persist container shells** | **Next up** |
+| 3G-2: MeterWidget GPU Renderer | QRhi-based meter rendering engine | Planned |
+| 3G-3: Core Meter Groups | S-Meter, Power/SWR, ALC presets | Planned |
+| 3G-4: Advanced Meter Items | History graph, magic eye, dial, LED | Planned |
+| 3G-5: Interactive Meter Items | Band/mode/filter buttons, VFO display, clock | Planned |
+| 3G-6: Container Settings Dialog | Full composability UI, import/export | Planned |
+| 3I-1: Basic SSB TX | TxChannel, MOX state machine, RF output | Planned |
+| 3I-2: CW TX | Sidetone, firmware keyer, QSK/break-in | Planned |
+| 3I-3: TX Processing | 18-stage TXA chain + RX DSP additions | Planned |
+| 3I-4: PureSignal | Feedback DDC, calcc/IQC engine, PA linearization | Planned |
+| 3F: Multi-Panadapter | DDC assignment, FFTRouter, PanadapterStack, enable RX2 | Planned |
+| 3H: Skin System | Thetis-inspired skins with 4-pan support | Planned |
+| 3J: TCI + Spots | TCI v2.0 WebSocket, DX Cluster/RBN clients, spot overlay | Planned |
+| 3K: CAT/rigctld | 4-channel rigctld, TCP CAT server | Planned |
+| 3L: Protocol 1 | P1 support for Hermes Lite 2 / older ANAN | Planned |
+| 3M: Recording | WAV record/playback, I/Q record, scheduled | Planned |
+| 3N: Packaging | AppImage, Windows installer, macOS DMG | Planned |
 
 See [docs/MASTER-PLAN.md](docs/MASTER-PLAN.md) for the full implementation plan.
 
