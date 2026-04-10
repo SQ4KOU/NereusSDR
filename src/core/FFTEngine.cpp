@@ -29,14 +29,14 @@ FFTEngine::~FFTEngine()
 
 void FFTEngine::setFftSize(int size)
 {
-    // Validate power of 2, within range
     if (size < 1024 || size > kMaxFftSize) {
         return;
     }
     if ((size & (size - 1)) != 0) {
-        return;  // not power of 2
+        return;
     }
-    m_fftSize.store(size);
+    // Defer to next feedIQ call — coalesces rapid slider changes
+    m_pendingFftSize.store(size);
 }
 
 void FFTEngine::setWindowFunction(WindowFunction wf)
@@ -57,11 +57,10 @@ void FFTEngine::setOutputFps(int fps)
 void FFTEngine::feedIQ(const QVector<float>& interleavedIQ)
 {
 #ifdef HAVE_FFTW3
-    int desiredSize = m_fftSize.load();
-
-    // Replan if FFT size changed
-    if (desiredSize != m_currentFftSize) {
-        m_fftSize.store(desiredSize);
+    // Apply any pending FFT size change (coalesces rapid slider drags)
+    int pending = m_pendingFftSize.exchange(0);
+    if (pending > 0 && pending != m_currentFftSize) {
+        m_fftSize.store(pending);
         replanFft();
     }
 
@@ -108,8 +107,9 @@ void FFTEngine::replanFft()
     m_fftIn  = fftwf_alloc_complex(size);
     m_fftOut = fftwf_alloc_complex(size);
 
-    // Create plan (FFTW_MEASURE uses wisdom for optimal performance)
-    m_plan = fftwf_plan_dft_1d(size, m_fftIn, m_fftOut, FFTW_FORWARD, FFTW_MEASURE);
+    // FFTW_ESTIMATE: fast plan without measurement (avoids global FFTW mutex
+    // contention with WDSP audio thread). Startup wisdom covers common sizes.
+    m_plan = fftwf_plan_dft_1d(size, m_fftIn, m_fftOut, FFTW_FORWARD, FFTW_ESTIMATE);
 
     m_currentFftSize = size;
     m_iqWritePos = 0;

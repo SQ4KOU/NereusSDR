@@ -78,6 +78,7 @@ private:
 
     // FFT configuration (atomics for cross-thread access)
     std::atomic<int>    m_fftSize{4096};
+    std::atomic<int>    m_pendingFftSize{0};  // 0 = no change pending
     std::atomic<int>    m_windowFunc{static_cast<int>(WindowFunction::BlackmanHarris4)};
     std::atomic<double> m_sampleRate{48000.0};
     std::atomic<int>    m_targetFps{30};
