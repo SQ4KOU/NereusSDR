@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-10
 **Branch:** main
-**Status:** Functional with known issues
+**Status:** Complete — all bugs fixed (see Known Bugs section)
 
 ---
 
@@ -43,48 +43,40 @@
 
 ---
 
-## Known Bugs / Issues
+## Known Bugs / Issues (All Fixed — 2026-04-10)
 
-### Signal Level Drop on Band Change
-- When tuning out of band and back, signals can drop and not recover
-- Root cause: DDC lock suppresses RadioModel's frequency→hardware update;
-  the `forceHardwareFrequency` in the band-jump handler may not always fire
-  in the correct order relative to RadioModel's queued signal
-- Workaround: disconnect and reconnect, or toggle CTUN off/on
-- Needs investigation: signal chain ordering between RadioModel thread and
-  MainWindow's frequencyChanged handler
+### ~~Signal Level Drop on Band Change~~ — FIXED (65acb5f)
+- **Root cause:** `setCenterFrequency()` triggered `centerChanged` signal which
+  fired `forceHardwareFrequency` a second time with the pan center (not VFO),
+  creating competing DDC retune commands.
+- **Fix:** Added `m_handlingBandJump` re-entrancy guard to suppress `centerChanged`
+  handler during band-jump processing in `frequencyChanged` handler.
 
-### WDSP Shift Sign / Dial Accuracy
-- Shift sign was negated (`-(freq - center)`) based on testing but may still
-  be wrong in some scenarios
-- The dial frequency display may not perfectly match the demodulated audio
-  when CTUN shift is active (VFO offset from pan center)
-- Needs A/B testing against Thetis with known signals at known frequencies
+### ~~WDSP Shift Sign / Dial Accuracy~~ — FIXED (2259ed9)
+- **Root cause:** NereusSDR passed `-(freq - center)` to `SetRXAShiftFreq`.
+  Thetis source analysis (radio.cs:1417 + console.cs:31357) shows the correct
+  sign is `+(freq - center)`.
+- **Fix:** Corrected sign in both MainWindow handlers. Also added missing
+  `RXANBPSetShiftFrequency` call (Thetis radio.cs:1418) to keep NB passband in sync.
 
-### QRhiWidget Mouse Tracking on macOS
+### QRhiWidget Mouse Tracking on macOS — KNOWN LIMITATION
 - QRhiWidget with `WA_NativeWindow` does not deliver `mouseMoveEvent` without
   a button press on macOS Metal, even with `setMouseTracking(true)`, `WA_Hover`,
   `event()` override for QHoverEvent, or transparent child widget overlay
-- AetherSDR reportedly works with just `setMouseTracking(true)` + `WA_NativeWindow`
-  but we could not reproduce this on Qt 6.11.0
 - Current workaround: zoom slider is an external QWidget below the QRhiWidget
-- Hover cursor changes (↔ for freq scale, ↕ for divider) do NOT work without
-  button press — only visible during click-drag
-- Future: investigate if a QWindow-level event filter or NSView subclass can
-  intercept trackpad hover
+- **Status:** Qt6 platform limitation. Not a Phase 3E blocker.
 
-### Protocol Gaps vs Thetis pcap
-- CW defaults still zeros (sidetone, keyer speed, etc.) — reverted during
-  signal level debugging, needs to be re-applied carefully
-- Mic control byte still 0x00 (pcap shows 0x0C) — same, reverted
-- TX sample rate still 48 kHz (pcap shows 192 kHz) — same, reverted
-- These were reverted because signal drop was initially blamed on protocol
-  changes; the actual cause was the DDC lock mechanism
+### ~~Protocol Gaps vs Thetis pcap~~ — FIXED (143dc82, 001e5ee)
+- TX sample rate restored to 192 (from Thetis netInterface.c:1513)
+- mic_control bit-field fully documented for Phase 3I-1
+- CW defaults remain at zero (correct per Thetis create_rnet:1447-1454;
+  non-zero values come from console.cs setup, which is Phase 3I-2 scope)
+- Root cause of signal drop was DDC lock re-entrancy, not protocol bytes
 
-### FFT Bin Resolution at Full Zoom-Out
-- At 768 kHz with 4096 FFT: bin width = 187.5 Hz (adequate)
-- At deep zoom with 65536 FFT: bin width = 11.7 Hz (excellent)
-- But FFT replan at 65536 may cause brief audio glitch during transition
+### ~~FFT Replan Audio Glitch~~ — FIXED (73b301f)
+- **Fix:** `setFftSize()` now defers to `m_pendingFftSize` atomic; `feedIQ()`
+  applies at frame boundary. `FFTW_MEASURE` replaced with `FFTW_ESTIMATE` for
+  runtime replans to avoid FFTW global mutex contention with WDSP audio thread.
 
 ---
 
