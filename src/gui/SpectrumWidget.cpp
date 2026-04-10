@@ -436,20 +436,25 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
         return;
     }
 
-    int binCount = m_smoothed.size();
-    float xStep = static_cast<float>(specRect.width()) / static_cast<float>(binCount);
+    auto [firstBin, lastBin] = visibleBinRange(m_smoothed.size());
+    int count = lastBin - firstBin + 1;
+    if (count < 2) {
+        return;
+    }
 
-    // Build polyline for spectrum trace
-    QVector<QPointF> points(binCount);
-    for (int i = 0; i < binCount; ++i) {
-        float x = specRect.left() + static_cast<float>(i) * xStep;
-        float y = static_cast<float>(dbmToY(m_smoothed[i], specRect));
-        points[i] = QPointF(x, y);
+    float xStep = static_cast<float>(specRect.width()) / static_cast<float>(count - 1);
+
+    // Build polyline for visible bin subset
+    QVector<QPointF> points(count);
+    for (int j = 0; j < count; ++j) {
+        float x = specRect.left() + static_cast<float>(j) * xStep;
+        float y = static_cast<float>(dbmToY(m_smoothed[firstBin + j], specRect));
+        points[j] = QPointF(x, y);
     }
 
     // Fill under the trace (if enabled)
     // From AetherSDR: fill alpha 0.70, cyan color
-    if (m_panFill && binCount > 1) {
+    if (m_panFill && count > 1) {
         QPainterPath fillPath;
         fillPath.moveTo(points.first().x(), specRect.bottom());
         for (const QPointF& pt : points) {
@@ -468,7 +473,7 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
     // We use the fill color for consistency with AetherSDR style
     QPen tracePen(m_fillColor, 1.5);
     p.setPen(tracePen);
-    p.drawPolyline(points.data(), binCount);
+    p.drawPolyline(points.data(), count);
 }
 
 // ---- Waterfall drawing ----
