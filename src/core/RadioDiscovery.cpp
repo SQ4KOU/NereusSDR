@@ -5,6 +5,8 @@
 #include <QNetworkDatagram>
 #include <QNetworkInterface>
 
+#include <sys/socket.h>
+
 namespace NereusSDR {
 
 // --- RadioInfo static helpers ---
@@ -99,6 +101,13 @@ void RadioDiscovery::startDiscovery()
         delete m_socket;
         m_socket = nullptr;
         return;
+    }
+
+    // Enable SO_BROADCAST so writeDatagram to broadcast addresses works
+    int fd = m_socket->socketDescriptor();
+    if (fd >= 0) {
+        int broadcastEnable = 1;
+        ::setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable));
     }
 
     connect(m_socket, &QUdpSocket::readyRead, this, &RadioDiscovery::onReadyRead);
