@@ -431,8 +431,8 @@ void MeterWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             QPainter p(&m_bgImage);
             p.setRenderHint(QPainter::Antialiasing, false);
             for (MeterItem* item : m_items) {
-                if (item->renderLayer() == MeterItem::Layer::Background) {
-                    item->paint(p, w, h);
+                if (item->participatesIn(MeterItem::Layer::Background)) {
+                    item->paintForLayer(p, w, h, MeterItem::Layer::Background);
                 }
             }
             batch->uploadTexture(m_bgGpuTex, QRhiTextureUploadEntry(0, 0,
@@ -447,7 +447,7 @@ void MeterWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         QVector<float> verts;
         verts.reserve(kMaxGeomVerts * kGeomVertStride);
         for (MeterItem* item : m_items) {
-            if (item->renderLayer() == MeterItem::Layer::Geometry) {
+            if (item->participatesIn(MeterItem::Layer::Geometry)) {
                 item->emitVertices(verts, w, h);
             }
         }
@@ -485,8 +485,8 @@ void MeterWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             QPainter p(&m_overlayStatic);
             p.setRenderHint(QPainter::Antialiasing, false);
             for (MeterItem* item : m_items) {
-                if (item->renderLayer() == MeterItem::Layer::OverlayStatic) {
-                    item->paint(p, w, h);
+                if (item->participatesIn(MeterItem::Layer::OverlayStatic)) {
+                    item->paintForLayer(p, w, h, MeterItem::Layer::OverlayStatic);
                 }
             }
             m_overlayStaticDirty = false;
@@ -499,8 +499,8 @@ void MeterWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             QPainter p(&m_overlayDynamic);
             p.setRenderHint(QPainter::Antialiasing, false);
             for (MeterItem* item : m_items) {
-                if (item->renderLayer() == MeterItem::Layer::OverlayDynamic) {
-                    item->paint(p, w, h);
+                if (item->participatesIn(MeterItem::Layer::OverlayDynamic)) {
+                    item->paintForLayer(p, w, h, MeterItem::Layer::OverlayDynamic);
                 }
             }
             m_overlayDynamicDirty = false;

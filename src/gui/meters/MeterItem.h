@@ -48,6 +48,16 @@ public:
         Q_UNUSED(verts); Q_UNUSED(widgetW); Q_UNUSED(widgetH);
     }
 
+    // Multi-layer support: items that participate in multiple pipelines
+    // override participatesIn() to return true for each layer they render to,
+    // and override paintForLayer() to dispatch per-layer painting.
+    // Default: single-layer (backward-compatible with existing items).
+    virtual bool participatesIn(Layer layer) const { return layer == renderLayer(); }
+    virtual void paintForLayer(QPainter& p, int widgetW, int widgetH, Layer layer) {
+        Q_UNUSED(layer);
+        paint(p, widgetW, widgetH);
+    }
+
     virtual QString serialize() const;
     virtual bool deserialize(const QString& data);
 
