@@ -37,7 +37,7 @@ NereusSDR is a ground-up port of Thetis (OpenHPSDR SDR console) from C# to Qt6/C
 - Single UDP socket matching Thetis `listenSock` pattern
 - P2 discovery (60-byte packet, byte[4]=0x02) on all network interfaces
 - CmdGeneral/CmdRx/CmdTx/CmdHighPriority byte-for-byte from Thetis
-- I/Q data streaming confirmed: DDC0, 1444 bytes/packet, 238 samples at 48kHz
+- I/Q data streaming confirmed: DDC2, 1444 bytes/packet, 238 samples at 48kHz
 - ConnectionPanel dialog with discovered radio list, connect/disconnect
 - LogManager with runtime category toggles, AppSettings persistence
 - SupportDialog with log viewer, category checkboxes, support bundle creation
@@ -124,6 +124,16 @@ NereusSDR is a ground-up port of Thetis (OpenHPSDR SDR console) from C# to Qt6/C
 - **VfoWidget improvements**: AetherSDR-style floating control buttons (close/lock/record/play), green toggle filter preset buttons with exclusive selection
 - Files modified: `FFTEngine.cpp`, `P2RadioConnection.cpp`, `ReceiverManager.h/.cpp`, `RxChannel.h/.cpp`, `MainWindow.cpp`, `SpectrumWidget.h/.cpp`, `SpectrumOverlayMenu.h/.cpp`, `VfoWidget.h/.cpp`
 
+### Post-3E Enhancement: CTUN Zoom — Bin Subsetting (commit a4568c2)
+- **Zoom via bin subsetting** — `visibleBinRange()` maps display window (m_centerHz ± m_bandwidthHz/2) to FFT bin indices using m_ddcCenterHz + m_sampleRateHz
+- **GPU + CPU + waterfall** all render only the visible bin subset, stretched to full display width
+- **Hybrid zoom** — smooth bin subsetting during freq scale bar drag, FFT replan on mouse release for sharp resolution
+- **Waterfall preserves** existing rows across zoom changes (new rows at current scale)
+- **DDC center tracking** — MainWindow wires m_ddcCenterHz on init, band jumps, and CTUN pan drags
+- **Zoom direction** — drag right to zoom in, left to zoom out; Ctrl+scroll also zooms
+- Design: `docs/architecture/ctun-zoom-design.md`, Plan: `docs/architecture/ctun-zoom-plan.md`
+- Files modified: `SpectrumWidget.h/.cpp`, `MainWindow.cpp`
+
 ### CI Status: GREEN
 - Build passes on Ubuntu 24.04 with Qt6, cmake, ninja, fftw3
 - Windows local build passes with Qt 6.11.0 / MinGW 13.1
@@ -206,8 +216,8 @@ Key design reference: `docs/architecture/wdsp-integration.md`
 
 Verification: Feed I/Q from radio into WDSP, hear demodulated audio through speakers.
 
-### Phase 3C: macOS Build + Audio Pipeline ✅ COMPLETE
-**Goal:** RX audio through speakers, TX audio from microphone.
+### Phase 3C: macOS Build + Crash Fix ✅ COMPLETE
+**Goal:** Cross-platform WDSP build, macOS Apple Silicon support.
 
 Files to modify/create:
 - `src/core/AudioEngine.h/.cpp` — implement QAudioSink/Source, WDSP audio routing
