@@ -9,7 +9,7 @@
 namespace NereusSDR {
 
 FloatingContainer::FloatingContainer(int rxSource, QWidget* parent)
-    : QWidget(parent, Qt::Window | Qt::Tool | Qt::FramelessWindowHint)
+    : QWidget(parent, Qt::Window | Qt::FramelessWindowHint)
     , m_rxSource(rxSource)
 {
     setMinimumSize(ContainerWidget::kMinContainerWidth,
