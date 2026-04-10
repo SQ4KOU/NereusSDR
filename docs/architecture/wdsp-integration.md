@@ -2,6 +2,14 @@
 
 **Status:** Phase 2E -- Design
 
+> **2026-04-10 CORRECTION:** Several default values in this document were found
+> to be incorrect during implementation and debugging. The code (`RxChannel.cpp`)
+> has the correct Thetis-sourced values. Key discrepancies: AGC top should be
+> 90.0 (not 80.0), NR adapt rate 0.0016 (not 0.0001), NR leak 1e-7 (not 0.0001),
+> NB1 threshold 3.3/30.0 (not 20.0), filter defaults are mode-dependent preset
+> tables (not a single -2850/-150 pair). Full correction details in
+> `docs/architecture/reviews/2026-04-10-plan-review.md` section 2.1.
+
 ---
 
 ## 1. Overview

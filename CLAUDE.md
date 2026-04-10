@@ -329,8 +329,18 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | 3C: macOS Build | Cross-platform WDSP build + wisdom crash fix | **Complete** |
 | 3D: Spectrum Display | GPU spectrum + waterfall (QRhi Metal/Vulkan/D3D12) | **Complete** |
 | 3E: VFO + Multi-RX Foundation | VFO controls, CTUN panadapter, rewired I/Q pipeline | **Complete** |
-| **3F: Multi-Panadapter** | **DDC assignment, FFTRouter, PanadapterStack, enable RX2** | **Next up** |
-| 3G: Container System | Unified dock/float container architecture | Planned |
+| **3F: Multi-Panadapter** | **DDC assignment (incl. PS states), FFTRouter, PanadapterStack, enable RX2** | **Next up** |
+| 3I-1: Basic SSB TX | TxChannel, mic input, MOX state machine, I/Q output | Planned |
+| 3I-2: CW TX | Sidetone, firmware keyer, QSK/break-in | Planned |
+| 3I-3: TX Processing | 18-stage TXA chain + RX DSP additions (SNB, peak hold, histogram) | Planned |
+| 3I-4: PureSignal | Feedback DDC, calcc/IQC engine, PSForm, AmpView | Planned |
+| 3G-1..6: Container System | GPU meter rendering, 30+ item types, full composability | Planned |
+| 3H: Skins | Thetis-inspired skin format, 4-pan, legacy import | Planned |
+| 3J: TCI + Spots | TCI server, DX Cluster/RBN clients, spot overlay | Planned |
+| 3K: CAT/rigctld | 4-channel rigctld, TCP CAT server | Planned |
+| 3L: Protocol 1 | Hermes Lite 2, older ANAN radios | Planned |
+| 3M: Recording | WAV record/playback, I/Q record, scheduled | Planned |
+| 3N: Packaging | AppImage, NSIS, DMG release builds | Planned |
 
 ---
 

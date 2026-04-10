@@ -137,7 +137,7 @@ NereusSDR is a ground-up port of Thetis (OpenHPSDR SDR console) from C# to Qt6/C
 |---|---|---|
 | Port Thetis from C# to Qt6/C++20 | Full architecture designed | Phase 1+2 done |
 | Cross-platform, GPU-accelerated SDR console | QRhi GPU rendering (2C) | **3D complete** |
-| Preserve full feature set of Thetis | 33 panels + 11 groups mapped to 16 widget types | Design done |
+| Preserve full feature set of Thetis | 35 panels + 11 groups mapped to container item types | Design done |
 | Multi-panadapter (up to 4) | PanadapterStack with 5 layouts (2B), ADC-DDC-Pan chain (2F) | Design done |
 | Waterfall fluidity | Client-side FFT + ring-buffer GPU waterfall (2C) | **3D complete** |
 | Protocol 1 and Protocol 2 support | P2 first (ANAN-G2), P1 later (2A) | **P2 working** |
@@ -151,7 +151,8 @@ NereusSDR is a ground-up port of Thetis (OpenHPSDR SDR console) from C# to Qt6/C
 | Radio-authoritative state | Designed per AetherSDR pattern | Adopted |
 | Multi-receiver ADC/DDC mapping | Full signal chain analyzed (2F), UpdateDDCs() porting needed | Design done |
 
-**All project brief objectives are covered.** No gaps identified.
+**All project brief objectives are covered.** Feature gap analysis completed 2026-04-10
+(see `docs/architecture/reviews/2026-04-10-plan-review.md` for full audit).
 
 ---
 
@@ -257,9 +258,14 @@ Key design references:
 Verification: Tune to different frequencies/modes via VFO display. Mode/filter changes
 reflect in WDSP demodulation. I/Q flows through ReceiverManager (no regression).
 
-### Phase 3F: Multi-Panadapter Layout
+### Phase 3F: Multi-Panadapter Layout ← NEXT
 **Goal:** Support 1-4 panadapters with proper DDC-to-ADC mapping and multiple active receivers.
 Multi-receiver plumbing from Phase 3E is a prerequisite.
+
+**Critical addition (from 2026-04-10 plan review):** `UpdateDDCs()` port must include ALL
+state machine cases from Thetis `console.cs:8186-8538`, including PureSignal DDC states
+(DDC0+DDC1 sync at 192kHz, ADC cntrl1 override `(rx_adc_ctrl1 & 0xf3) | 0x08`), even
+though PS won't be enabled until Phase 3I-4. This prevents reworking the state machine later.
 
 Files to modify/create:
 - `src/core/ReceiverManager.cpp` — add updateDdcAssignment() ported from Thetis UpdateDDCs (console.cs:8186-8538)
@@ -271,42 +277,180 @@ Files to modify/create:
 Key design references:
 - `docs/architecture/multi-panadapter.md`
 - `docs/architecture/adc-ddc-panadapter-mapping.md`
+- Implementation plan: `docs/architecture/phase3f-multi-panadapter-plan.md`
 
 Verification: 2 pans stacked — RX1 on 20m, RX2 on 40m with independent spectrums.
 4 pans in 2x2 grid — 2 pans share RX1 at different zoom, 2 pans on RX2.
 RX1 on DDC2 (ADC0), RX2 on DDC3 (ADC1) for 2-ADC boards.
 
-### Phase 3G: Container System & DSP Control UI
-**Goal:** Unified container system with all Thetis DSP controls as widget types.
+### Phase 3I-1: Basic SSB TX
+**Goal:** Get RF out the door — prove the TX I/Q output path works.
 
-Files to create:
-- `src/gui/ContainerWidget.h/.cpp` — **new** — base container (dock/float/axis-lock/resize)
-- `src/gui/FloatingContainer.h/.cpp` — **new** — separate window for floating containers
-- `src/gui/ContainerManager.h/.cpp` — **new** — owns all containers, persistence, macro control
-- Widget types (all **new**):
-  - `src/gui/widgets/RxControls.h/.cpp` — mode, filter, AGC, AF/RF, squelch, NB/NR/ANF
-  - `src/gui/widgets/TxControls.h/.cpp` — power, tune, MOX, ATU, TX profile
-  - `src/gui/widgets/PowerMeter.h/.cpp` — fwd power, SWR, ALC gauges
-  - `src/gui/widgets/SMeterWidget.h/.cpp` — signal meter (multiple modes)
-  - `src/gui/widgets/EqControls.h/.cpp` — 10-band RX/TX graphic EQ
-  - `src/gui/widgets/CwControls.h/.cpp` — speed, pitch, breakin, QSK, APF
-  - `src/gui/widgets/FmControls.h/.cpp` — CTCSS, deviation, offset
-  - `src/gui/widgets/PhoneControls.h/.cpp` — VOX, noise gate, mic, CPDR
-  - `src/gui/widgets/DigitalControls.h/.cpp` — VAC, sample rate
-  - `src/gui/widgets/VfoDisplay.h/.cpp` — frequency readout, band buttons, RIT/XIT
-  - `src/gui/widgets/BandButtons.h/.cpp` — HF/VHF/GEN band grid
-  - `src/gui/widgets/PureSignalStatus.h/.cpp` — calibration, feedback status
-  - `src/gui/widgets/DiversityControls.h/.cpp` — sub-RX, ESC beamforming
-  - `src/gui/widgets/ClockDisplay.h/.cpp` — UTC/local time
-  - `src/gui/widgets/CustomMeter.h/.cpp` — configurable WDSP meter
-- `src/gui/ContainerSettingsDialog.h/.cpp` — **new** — per-container config
+Scope:
+- `TxChannel` WDSP wrapper — create TX channel, `fexchange2()` TX path
+- Mic input via QAudioSource (48kHz, 16-bit)
+- WDSP internal rate: 192kHz for P2, 48kHz for P1 (resampling handled by WDSP)
+- MOX state machine — RX→TX→RX transition ported from Thetis `console.cs:29311`
+  - 6 configurable delays: `rf_delay`, `mox_delay`, `ptt_out_delay`, `key_up_delay`, etc.
+  - RX channel muting, DDC reconfiguration, T/R relay switching
+  - Ordered WDSP channel enable/disable with flush
+- TX I/Q output to radio — port 1029, 240 samples/packet, 24-bit big-endian
+- `sendCmdTx()` on P2RadioConnection — port 1026 for mic/CW data
+- TUNE function (reduced power carrier)
 
-Key design reference: Container System section in this plan
+Thetis source: `console.cs:29311-29650`, `cmaster.cs:491-540`, `network.c:1250-1273`
 
-Verification: Create containers, add/remove widgets, float/dock, persist across restart.
+Verification: Key MOX, see RF output on ANAN-G2, hear SSB on another receiver.
+
+### Phase 3I-2: CW TX
+**Goal:** Full CW transmit with keyer and sidetone.
+
+Scope:
+- Sidetone generator — port from Thetis `sidetone.c`
+  - Raised-cosine edge shaping, NOT through TXA WDSP channel
+  - Dot/dash timing: `dot_time = 1.2 / wpm`
+- Firmware keyer support — dot/dash/PTT via P2 port 1025
+- QSK / semi break-in — CWHangTime, key_up_delay
+- CW MOX special case — TX WDSP channel NOT enabled in CW mode
+- APF (Audio Peak Filter) — narrowband CW filter via WDSP
+
+Thetis source: `sidetone.c`, `cwkeyer.cs`, `console.cs:29590`
+
+Verification: Send CW via paddle/keyboard, hear sidetone, clean CW on air.
+
+### Phase 3I-3: TX Processing Chain + RX DSP Additions
+**Goal:** Full TX audio processing feature parity with Thetis TXA chain (18 stages).
+
+TX DSP (all need WDSP call wiring + UI controls):
+- Phase Rotator (`SetTXAosctrlRun`)
+- 10-band TX EQ (`SetTXAEQRun`, `SetTXAGrphEQ10`)
+- Leveler (`SetTXALevelerSt`)
+- CFC — Continuous Frequency Compressor (`SetTXACFCRun` + dedicated config dialog)
+- CPDR — Compressor (`SetTXACompressorRun`, `SetTXACompressorGain`)
+- CESSB — Controlled-Envelope SSB (`SetTXAosctrlRun` with CESSB params)
+- ALC (`SetTXAALCMaxGain`, `SetTXAALCDecay`)
+- DEXP — Downward Expander / VOX (`SetDEXPRunVox`, full 9+ parameter set)
+
+RX DSP additions (slot into existing widgets):
+- SNB (Stochastic Noise Blanker) — RxControls toggle
+- Spectral Peak Hold — SpectrumWidget overlay pipeline
+- Histogram display mode — SpectrumWidget alternate render path
+- RTTY mark/shift parameters — SliceModel properties
+
+Thetis source: `TXA.c:557-591`, `dsp.cs`, `radio.cs`, `setup.cs`
+
+Verification: Clean SSB with TX EQ + compression + ALC. Proper FM deviation. CESSB measurably improves average power.
+
+### Phase 3I-4: PureSignal PA Linearization
+**Goal:** Client-side PA predistortion — full feature parity with Thetis PSForm.
+
+PureSignal is entirely client-side for OpenHPSDR radios (no AetherSDR reference — pure Thetis port).
+
+Scope:
+- **Feedback RX channel** — dedicated WDSP channel wired to DDC0 (synced with DDC1 at 192kHz)
+  - ADC cntrl1 override: `(rx_adc_ctrl1 & 0xf3) | 0x08`
+  - `SetPSRxIdx(0, 0)` / `SetPSTxIdx(0, 1)` — stream routing
+- **calcc engine** — port `calcc.c` 10-state machine (LRESET→LWAIT→LMOXDELAY→LSETUP→LCOLLECT→MOXCHECK→LCALC→LDELAY→LSTAYON→LTURNON)
+  - Amplitude-binned sample collection, piecewise cubic Hermite spline correction
+  - Stabilize/pin/map modes, polynomial tolerance validation
+  - 4-second collection watchdog, IQC dog count watchdog
+- **IQC real-time correction** — port `iqc.c` (runs on every TX sample)
+  - `PRE_I = ym * (I*yc - Q*ys)`, `PRE_Q = ym * (I*ys + Q*yc)`
+  - Double-buffered coefficients with cosine crossfade
+- **TX/RX delay alignment** — fractional delay lines, 20ns step resolution
+- **Auto-attenuation** — monitors feedback level (target 128-181 of 256), adjusts TX attenuation
+- **PSForm UI** — accessible from menu bar (not buried in sub-dialog)
+  - Calibrate (single-shot + auto-cal), feedback level indicator (color-coded)
+  - Advanced: mox delay, loop delay, TX delay, stabilize/map/pin, tolerance
+  - Save/restore coefficients, two-tone test generator
+  - Info bar integration for status bar feedback display
+- **AmpView** — correction curve visualization, accessible from menu bar (DSP or Tools)
+
+Thetis source: `PSForm.cs` (1164 lines), `calcc.c`, `iqc.c`, `TXA.c:557-591`
+
+Verification: Enable PS on ANAN-G2, feedback level green, measurable IMD improvement.
+
+### Phase 3G-1: Container Infrastructure
+**Goal:** Dock/float/resize/persist container shells — no rendering yet.
+
+Scope:
+- `ContainerWidget` — dock/float/resize/axis-lock (8 positions), title bar, settings gear
+  - Properties: border, background color, title/notes, RX source, show on RX/TX,
+    auto-height, locked, hidden-by-macro, container-minimises, container-hides-when-rx-not-used
+- `FloatingContainer` — `QWidget` with `Qt::Window | Qt::Tool`, pin-on-top, per-monitor DPI, geometry persist
+- `ContainerManager` — singleton, create/destroy, float/dock transitions, axis-lock reposition, serialize to AppSettings, macro visibility
+- Default layout: single right-side container (Container #0) with placeholder content
+
+Thetis source: `ucMeter.cs`, `frmMeterDisplay.cs`, `MeterManager.cs`
+
+Verification: Create containers, dock/float/resize, persist across restart, axis-lock holds on resize.
+
+### Phase 3G-2: MeterWidget GPU Renderer
+**Goal:** QRhi-based meter rendering engine following SpectrumWidget's 3-pipeline pattern.
+
+Scope:
+- `MeterWidget : public QRhiWidget` — one per container, renders all items in one draw pass
+- Pipeline 1 (textured quad): cached QPainter textures, history graph ring buffer
+- Pipeline 2 (vertex-colored geometry): needle sweep, bar fill, magic eye — uniform-driven animation
+- Pipeline 3 (QPainter → texture overlay): tick marks, text readouts, LED states, button faces
+- `MeterItem` base class — position, size, data source binding, visual properties, serialization
+- `ItemGroup` — composites N items into functional meter types
+- Data binding framework — poll WDSP meters at ~100ms, push to bound items
+- Shaders: `meter_bar.vert/.frag`, `meter_needle.vert/.frag`, `meter_overlay.vert/.frag`
+- Item types: BarItem (H_BAR, V_BAR), TextItem, ScaleItem (H_SCALE, V_SCALE), SolidColourItem, ImageItem
+
+Verification: Container with live bar meter bound to WDSP signal strength, updating at 10fps via GPU.
+
+### Phase 3G-3: Core Meter Groups
+**Goal:** Ship the meters operators expect on day one.
+
+Scope:
+- NeedleItem (NEEDLE, NEEDLE_SCALE_PWR) + `meter_needle` shader
+- Default presets: S-Meter (needle+scale+text+background), Power/SWR, ALC bar, Mic/Comp bars
+- Default Container #0 pre-loaded with: S-Meter, Power/SWR, ALC
+- Data binding: SIGNAL_STRENGTH, AVG_SIGNAL_STRENGTH, ADC, AGC_GAIN, PWR, REVERSE_PWR, SWR, MIC, COMP, ALC
+
+Verification: Live S-meter needle, Power/SWR during TX, correct readings vs Thetis on same signal.
+
+### Phase 3G-4: Advanced Meter Items
+**Goal:** Visual flair — items that make it look like a real radio console.
+
+Scope:
+- HistoryItem (HISTORY) — scrolling signal graph, ring buffer texture, `meter_history.vert/.frag`
+- MagicEyeItem (MAGIC_EYE) — animated vacuum tube iris, `meter_eye.vert/.frag`
+- DialItem (DIAL_DISPLAY) — analog dial with rotating pointer
+- LedItem (LED) — on/off/blink, FadeCoverItem, WebImageItem, CustomMeterBarItem
+
+Verification: History graph scrolling, magic eye responding to signal strength.
+
+### Phase 3G-5: Interactive Meter Items
+**Goal:** Button grids and frequency displays inside containers.
+
+Scope:
+- ButtonItem (GPU face + QWidget overlay): Band, Mode, Filter, Antenna, TuneStep, VoiceRecordPlay, Other
+- VfoDisplayItem, ClockItem, SpacerItem, ClickBoxItem
+
+Verification: Band buttons switch bands, mode buttons switch modes, all route through SliceModel.
+
+### Phase 3G-6: Container Settings Dialog
+**Goal:** Full user customization — the composability UI.
+
+Scope:
+- Container settings dialog: item palette, current item list (drag reorder), per-item property panel, live preview
+- Preset templates for common configurations
+- Import/export (Base64-encoded container strings)
+- Duplicate, recover off-screen, macro visibility hooks
+
+Verification: Create container from scratch, add items, configure data sources, export/import Base64.
 
 ### Phase 3H: Skin System
 **Goal:** Thetis-inspired skin format with 4-pan support + legacy skin import.
+
+Updates from 2026-04-10 review:
+- Always allow 4 pans (removed 2-pan legacy cap)
+- `TransparencyKey` dropped (no Qt6 equivalent — known limitation)
+- Font fallback: "Microsoft Sans Serif" → system sans-serif on macOS/Linux
+- Graceful degradation for non-standard community skin ZIPs
 
 Files to create:
 - `src/gui/SkinParser.h/.cpp` — **new** — parse skin ZIP (JSON + XML + PNG)
@@ -317,33 +461,51 @@ Key design reference: `docs/architecture/skin-compatibility.md`
 
 Verification: Load a Thetis skin, see colors/images applied, 4 pans still work.
 
-### Phase 3I: TX Pipeline
-**Goal:** Transmit audio from microphone through WDSP to radio.
+### Phase 3J: TCI Protocol + Spot System
+**Goal:** TCI v2.0 WebSocket server + DX spot overlay system.
 
-Files to create:
-- `src/core/TxChannel.h/.cpp` — **new** — TX WDSP channel wrapper
-- `src/core/AudioEngine.h/.cpp` — add mic input via QAudioSource
-- `src/core/P2RadioConnection.cpp` — send TX I/Q (port 1029) and audio (port 1028)
+Scope:
+- TCI WebSocket server (~50 commands, scope v2.0 command set)
+- TCI spot ingestion path — external programs push spots via TCI
+- Built-in DX Cluster telnet client (AetherSDR-style `DxClusterClient`)
+- Built-in RBN client (AetherSDR-style `RbnClient`)
+- `SpotModel` (AetherSDR pattern, batched at 1Hz)
+- Spectrum overlay rendering for spots (callsign + frequency on panadapter)
+- Country/prefix database for callsign → country lookup
+- Verify against Thetis `SpotManager2.cs` for completeness
 
-Key design reference: `docs/architecture/wdsp-integration.md`
+### Phase 3K: CAT/rigctld + TCP Server
+**Goal:** External radio control for logging and contest software.
 
-Verification: Key radio into TX, transmit SSB/CW/AM signal.
+Scope:
+- 4-channel slice-bound rigctld server (AetherSDR `RigctlServer` + `RigctlPty` pattern)
+- TCP/IP CAT server (AetherSDR pattern, verified against Thetis `TCPIPcatServer.cs`)
+- Verify CAT command set against Thetis `SIOListenerII` for completeness
+- CatApplet UI for configuration
 
-### Phase 3J: TCI Protocol Server
-**Goal:** TCI v2.0 WebSocket server for external app integration.
-
-Files to create:
-- `src/core/TciServer.h/.cpp` — **new** — WebSocket server
-- `src/core/TciProtocol.h/.cpp` — **new** — TCI command parsing
-
-### Phase 3K: Protocol 1 Support
+### Phase 3L: Protocol 1 Support
 **Goal:** Add P1 support for Hermes Lite 2 and older ANAN radios.
 
-Files to create:
-- `src/core/P1RadioConnection.h/.cpp` — **new** — UDP-only Metis framing
-- `src/core/MetisFrameParser.h/.cpp` — **new** — 1032-byte frame parsing
+Scope:
+- `P1RadioConnection` — UDP-only Metis framing (1032-byte frames)
+- `MetisFrameParser` — C&C register rotation, EP6 I/Q format
+- P1 discovery (0xEF 0xFE format)
+- Phase word encoding: `freq * 2^32 / 122880000`
+- P1-specific DDC assignment (`rx_adc_ctrl_P1` encoding)
+- TX at 48kHz (not 192kHz) — no CFIR needed
 
-### Phase 3L: Cross-Platform Packaging
+### Phase 3M: Recording/Playback
+**Goal:** Full audio and I/Q recording system.
+
+Scope:
+- WAV audio recording — tap demodulated audio after WDSP
+- WAV playback through WDSP — route WAV as live I/Q (dev/demo without hardware)
+- Quick record/playback — one-button 30-second scratch pad
+- Scheduled recording — timer-based auto-start/stop
+- I/Q recording — raw I/Q samples for offline analysis
+- Recording controls wired to VfoWidget (existing button stubs)
+
+### Phase 3N: Cross-Platform Packaging
 **Goal:** Release builds for Linux, Windows, macOS.
 
 CI workflows already in place. Finalize:
@@ -359,16 +521,37 @@ Phases 3A–3E are complete — the radio connects, demodulates audio, renders l
 spectrum + waterfall, and supports full VFO tuning with CTUN panadapter mode.
 Next: enable multiple simultaneous receivers and panadapter layout management.
 
-### Key References
-- Thetis: `console.cs:8186-8538` (UpdateDDCs), `display.cs` (multi-pan layout)
-- Design docs: `docs/architecture/multi-panadapter.md`,
-  `docs/architecture/adc-ddc-panadapter-mapping.md`
-- Implementation plan: `docs/architecture/phase3f-multi-panadapter-plan.md`
+Implementation plan: `docs/architecture/phase3f-multi-panadapter-plan.md`
 
-### Verification
-- 2 pans stacked — RX1 on 20m, RX2 on 40m with independent spectrums
-- 4 pans in 2×2 grid — 2 pans share RX1 at different zoom, 2 pans on RX2
-- RX1 on DDC2 (ADC0), RX2 on DDC3 (ADC1) for 2-ADC boards
+---
+
+## Documented / Deferred Features
+
+Features recognized but not on the active roadmap. Revisit based on user demand or when
+prerequisite infrastructure exists.
+
+| Feature | Why Deferred | Revisit When |
+|---|---|---|
+| N1MM+ UDP integration | Not needed to ship | After 3K (CAT framework) |
+| DVK (Digital Voice Keyer) | Contest feature, not core | After 3M (recording framework) |
+| Andromeda front panel | Niche hardware (G8NJJ serial) | User demand |
+| RA (signal level recorder) | Low priority; HistoryItem covers similar ground | After 3G-4 |
+| Quick Recall pad | Nice-to-have UX | Post-ship |
+| Finder (settings search) | Nice-to-have UX | Post-ship |
+| Wideband display | Research done (`wideband-adc-brainstorm.md`) | After 3L (P1) |
+| Discord integration | Thetis-specific, niche | Unlikely |
+| Phase/Phase2 display | I/Q Lissajous, niche diagnostic | User demand |
+| Panascope/Spectrascope | Combined display modes | User demand |
+| External amp monitoring | PGXL/TGXL are FlexRadio-specific | Post-ship, design for OpenHPSDR amps |
+| DRM/SPEC modes | Listed but no implementation detail | When digital mode support designed |
+
+---
+
+## Plan Review History
+
+| Date | Scope | Document |
+|---|---|---|
+| 2026-04-10 | Full plan review: Thetis/AetherSDR deep-dive, feature gap analysis, phase restructuring, container/PureSignal/TX architecture | [2026-04-10-plan-review.md](architecture/reviews/2026-04-10-plan-review.md) |
 
 ---
 
@@ -495,8 +678,8 @@ NereusSDR follows AetherSDR's 3-zone layout with applet panel:
 
 ### Complete Thetis Container → NereusSDR Applet Mapping
 
-Thetis has 33 panels, 11 group boxes, and 9 spawned forms.
-NereusSDR maps these into ~12 applets + dialogs:
+Thetis has 35 panels (31 PanelTS + 4 plain Panel), 11 group boxes, and ~16 spawned forms.
+NereusSDR maps these into container item types + dialogs (see Phase 3G):
 
 #### Always-Available Applets (in AppletPanel)
 

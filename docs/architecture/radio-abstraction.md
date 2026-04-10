@@ -322,7 +322,9 @@ std::optional<RadioInfo> RadioDiscovery::parseP1Response(
     info.maxReceivers = RadioInfo::maxReceiversForBoard(info.boardType);
     info.name = RadioInfo::boardTypeName(info.boardType);
     info.hasDiversityReceiver = (info.adcCount >= 2);
-    info.hasPureSignal = (info.boardType != BoardType::Metis);
+    // PureSignal requires 2+ ADCs for feedback path (Metis and Hermes are single-ADC)
+    // Corrected 2026-04-10: was (boardType != Metis) which wrongly included Hermes
+    info.hasPureSignal = (info.adcCount >= 2);
 
     return info;
 }
@@ -1408,8 +1410,8 @@ shared (copy-on-write), so the auto-queued signal copy is efficient.
 │ │ +buildMetisFrame() │    │ +sendCommand()     │                        │
 │ │ +frequencyTo       │    │ +encodeFrequency() │                        │
 │ │  PhaseWord()       │    │                    │                        │
-│ │                    │    │ QTcpSocket (cmd)   │                        │
-│ │ QUdpSocket         │    │ QUdpSocket (data)  │                        │
+│ │                    │    │ QUdpSocket (single │                        │
+│ │ QUdpSocket         │    │  socket, all I/O)  │  ← CORRECTED 2026-04-10│
 │ │                    │    └────────────────────┘                        │
 │ │ ┌────────────────┐ │                                                  │
 │ │ │MetisFrameParser│ │                                                  │

@@ -439,7 +439,13 @@ control is skipped and the default theme applies.
 
 ## 5. Layout Constraints
 
-### 5.1 Two-Panadapter Assumption
+### 5.1 Panadapter Layout (UPDATED 2026-04-10)
+
+> **Correction:** The original design constrained legacy skins to 2
+> panadapters. Per the 2026-04-10 plan review, NereusSDR always allows
+> up to 4 panadapters regardless of skin. Legacy Thetis skins define
+> positions for 2 display panels — these are used as defaults, but the
+> user can add additional panadapters at any time.
 
 Thetis skins were designed for a fixed two-panadapter layout: RX1
 (primary) and RX2 (secondary). Skin XML files define positions for
@@ -447,24 +453,11 @@ exactly two display panels.
 
 When a legacy skin is active:
 
-- NereusSDR constrains the display to a maximum of 2 panadapter panels.
-- The two panels are positioned according to the skin's `panelDisplay`
-  and `panelRX2Display` control definitions.
-- Additional panadapters beyond 2 cannot be added while the skin is active.
-
-### 5.2 Upgrade Path
-
-The user can optionally "upgrade" a legacy skin to unlock additional
-panadapters:
-
-1. From the skin settings, choose "Unlock Additional Panadapters".
-2. NereusSDR retains the skin's colors, fonts, and button images but
-   switches to its native flexible layout engine for panel arrangement.
-3. The two original panel positions from the skin are preserved as
-   defaults, but the user can rearrange and add more panels.
-
-This is a one-way override per session (reverting re-applies the
-2-panadapter constraint).
+- The two original panel positions from the skin are applied as defaults.
+- The user can always add up to 4 panadapters via the View menu.
+- Additional panels beyond the skin's 2 use NereusSDR's native flexible
+  layout engine for positioning.
+- The skin's colors, fonts, and button images apply to all panels.
 
 ### 5.3 Resolution Scaling
 
