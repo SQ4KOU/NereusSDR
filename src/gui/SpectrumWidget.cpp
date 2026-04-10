@@ -95,14 +95,18 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     setAutoFillBackground(false);
 
 #ifdef NEREUS_GPU_SPECTRUM
-    // From AetherSDR SpectrumWidget: request Metal on macOS for best performance.
+    // Platform-specific QRhi backend selection.
     // Order matters: setApi() first, then WA_NativeWindow, then setMouseTracking().
-    // WA_NativeWindow creates a dedicated native NSView; setMouseTracking() must
-    // come AFTER so the NSTrackingArea is configured on the final native surface.
+    // WA_NativeWindow creates a dedicated native surface (NSView on macOS, HWND on
+    // Windows); setMouseTracking() must come AFTER so tracking is configured on
+    // the final native surface.
 #ifdef Q_OS_MAC
     setApi(QRhiWidget::Api::Metal);
     setAttribute(Qt::WA_NativeWindow);
     setAttribute(Qt::WA_Hover);  // Ensure HoverMove events are delivered
+#elif defined(Q_OS_WIN)
+    setApi(QRhiWidget::Api::Direct3D11);
+    setAttribute(Qt::WA_NativeWindow);
 #endif
 #else
     // CPU fallback: dark background
