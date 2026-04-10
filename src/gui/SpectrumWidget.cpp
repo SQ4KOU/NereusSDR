@@ -240,11 +240,7 @@ void SpectrumWidget::setDdcCenterFrequency(double hz)
 {
     if (!qFuzzyCompare(m_ddcCenterHz, hz)) {
         m_ddcCenterHz = hz;
-#ifdef NEREUS_GPU_SPECTRUM
-        markOverlayDirty();
-#else
         update();
-#endif
     }
 }
 
@@ -252,11 +248,7 @@ void SpectrumWidget::setSampleRate(double hz)
 {
     if (!qFuzzyCompare(m_sampleRateHz, hz)) {
         m_sampleRateHz = hz;
-#ifdef NEREUS_GPU_SPECTRUM
-        markOverlayDirty();
-#else
         update();
-#endif
     }
 }
 
@@ -454,7 +446,7 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
 
     // Fill under the trace (if enabled)
     // From AetherSDR: fill alpha 0.70, cyan color
-    if (m_panFill && count > 1) {
+    if (m_panFill) {
         QPainterPath fillPath;
         fillPath.moveTo(points.first().x(), specRect.bottom());
         for (const QPointF& pt : points) {
@@ -1614,9 +1606,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         const float yBot = -1.0f;
         const float yTop = 1.0f;
 
-        const float fr = m_fillColor.redF();
-        const float fg = m_fillColor.greenF();
-        const float fb = m_fillColor.blueF();
         const float fa = m_fillAlpha;
 
         QVector<float> lineVerts(n * kFftVertStride);
