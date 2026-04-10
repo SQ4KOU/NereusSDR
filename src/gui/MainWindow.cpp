@@ -12,16 +12,20 @@
 #include "core/WdspEngine.h"
 #include "core/FFTEngine.h"
 #include "core/LogCategories.h"
+#include "containers/ContainerManager.h"
+#include "containers/ContainerWidget.h"
 
 #include <cmath>
 
 #include <QApplication>
 #include <QSlider>
 #include <QCloseEvent>
+#include <QResizeEvent>
 #include <QMenuBar>
 #include <QStatusBar>
 #include <QLabel>
 #include <QVBoxLayout>
+#include <QSplitter>
 #include <QProgressDialog>
 #include <QTimer>
 #include <QThread>
@@ -110,18 +114,25 @@ void MainWindow::buildUI()
     setMinimumSize(800, 600);
     resize(1280, 800);
 
-    // Central widget with SpectrumWidget
-    auto* central = new QWidget(this);
-    auto* layout = new QVBoxLayout(central);
+    // --- Main QSplitter: spectrum (left) + container panel (right) ---
+    // AetherSDR pattern: right panel is a proper layout element, not an overlay.
+    m_mainSplitter = new QSplitter(Qt::Horizontal, this);
+    m_mainSplitter->setChildrenCollapsible(false);
+    m_mainSplitter->setHandleWidth(3);
+    m_mainSplitter->setStyleSheet(QStringLiteral(
+        "QSplitter::handle { background: #203040; }"));
+
+    // Left side: spectrum + zoom bar (inside a container widget)
+    auto* spectrumPane = new QWidget(m_mainSplitter);
+    auto* layout = new QVBoxLayout(spectrumPane);
     layout->setContentsMargins(0, 0, 0, 0);
 
-    m_spectrumWidget = new SpectrumWidget(central);
+    m_spectrumWidget = new SpectrumWidget(spectrumPane);
     m_spectrumWidget->loadSettings();
     layout->addWidget(m_spectrumWidget, 1);  // stretch=1 takes all space
 
-    // Zoom slider bar below spectrum — separate QWidget so it gets mouse events
-    // (QRhiWidget with WA_NativeWindow doesn't support mouse tracking on macOS)
-    auto* zoomBar = new QSlider(Qt::Horizontal, central);
+    // Zoom slider bar below spectrum
+    auto* zoomBar = new QSlider(Qt::Horizontal, spectrumPane);
     zoomBar->setRange(1, 768);  // 1 kHz to 768 kHz
     zoomBar->setValue(768);     // Start fully zoomed out
     zoomBar->setFixedHeight(20);
@@ -137,7 +148,23 @@ void MainWindow::buildUI()
         emit m_spectrumWidget->bandwidthChangeRequested(bwHz);
     });
 
-    setCentralWidget(central);
+    m_mainSplitter->addWidget(spectrumPane);
+
+    // Right side: Container #0 will be added by ContainerManager
+    setCentralWidget(m_mainSplitter);
+
+    // --- Container Infrastructure (Phase 3G-1) ---
+    m_containerManager = new ContainerManager(spectrumPane, m_mainSplitter, this);
+    m_containerManager->restoreState();
+    if (m_containerManager->containerCount() == 0) {
+        createDefaultContainers();
+    }
+    m_containerManager->restoreSplitterState();
+
+    // Default splitter sizes on first run: ~80% spectrum, ~20% panel
+    if (!AppSettings::instance().contains(QStringLiteral("MainSplitterSizes"))) {
+        m_mainSplitter->setSizes({1024, 256});
+    }
 
     // Wire spectrum display to SliceModel (values come from persisted state,
     // no longer hardcoded). Connection is deferred to wireSliceToSpectrum()
@@ -188,6 +215,17 @@ void MainWindow::buildUI()
     });
 
     m_fftThread->start();
+}
+
+void MainWindow::createDefaultContainers()
+{
+    // Container #0: panel-docked right side (AetherSDR pattern).
+    // Placeholder content in 3G-1, replaced by AppletPanel in 3G-AP.
+    ContainerWidget* c0 = m_containerManager->createContainer(1, DockMode::PanelDocked);
+    c0->setNotes(QStringLiteral("Main Panel"));
+    c0->setNoControls(false);
+
+    qCDebug(lcContainer) << "Created default Container #0 (panel-docked):" << c0->id();
 }
 
 void MainWindow::buildMenuBar()
@@ -486,6 +524,22 @@ void MainWindow::wireSliceToSpectrum()
     m_spectrumWidget->updateVfoPositions();
 }
 
+void MainWindow::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+
+    // Update axis-lock positions for overlay-docked containers
+    if (m_mainSplitter && m_containerManager) {
+        // Use the spectrum pane (first splitter child) as reference
+        QWidget* spectrumPane = m_mainSplitter->widget(0);
+        if (spectrumPane) {
+            m_hDelta = spectrumPane->width();
+            m_vDelta = spectrumPane->height();
+            m_containerManager->updateDockedPositions(m_hDelta, m_vDelta);
+        }
+    }
+}
+
 void MainWindow::applyDarkTheme()
 {
     setStyleSheet(QStringLiteral(
@@ -608,6 +662,11 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
     // Tear down connection (sends stop command, closes sockets, joins thread)
     m_radioModel->disconnectFromRadio();
+
+    // Save container layout
+    if (m_containerManager) {
+        m_containerManager->saveState();
+    }
 
     AppSettings::instance().save();
     event->accept();

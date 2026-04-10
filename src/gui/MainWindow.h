@@ -5,6 +5,7 @@
 
 class QProgressDialog;
 class QThread;
+class QSplitter;
 
 namespace NereusSDR {
 
@@ -14,6 +15,7 @@ class SupportDialog;
 class WdspEngine;
 class FFTEngine;
 class SpectrumWidget;
+class ContainerManager;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -24,6 +26,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private slots:
     void onConnectionStateChanged();
@@ -57,6 +60,14 @@ private:
     // Re-entrancy guard: prevents centerChanged from firing a second
     // forceHardwareFrequency while frequencyChanged is already retuning the DDC
     bool m_handlingBandJump{false};
+
+    // Container infrastructure (Phase 3G-1)
+    ContainerManager* m_containerManager{nullptr};
+    QSplitter* m_mainSplitter{nullptr};
+    int m_hDelta{0};
+    int m_vDelta{0};
+
+    void createDefaultContainers();
 };
 
 } // namespace NereusSDR
