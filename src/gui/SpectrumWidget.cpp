@@ -1100,7 +1100,6 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
         // Recenter on VFO when zooming so the signal stays visible
         m_centerHz = m_vfoHz;
         emit centerChanged(m_centerHz);
-        emit bandwidthChangeRequested(newBw);
         updateVfoPositions();
 #ifdef NEREUS_GPU_SPECTRUM
         markOverlayDirty();
@@ -1196,6 +1195,11 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* event)
         // Persist display settings after drag adjustments
         if (m_draggingDbm || m_draggingDivider) {
             scheduleSettingsSave();
+        }
+
+        // Hybrid zoom: replan FFT on drag-end for sharp resolution
+        if (m_draggingBandwidth) {
+            emit bandwidthChangeRequested(m_bandwidthHz);
         }
 
         m_draggingDbm = false;
