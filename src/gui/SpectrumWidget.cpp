@@ -16,7 +16,9 @@
 #include <rhi/qshader.h>
 #endif
 
+#include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace NereusSDR {
 
@@ -575,6 +577,31 @@ double SpectrumWidget::xToHz(int x, const QRect& r) const
 {
     double frac = static_cast<double>(x - r.left()) / r.width();
     return (m_centerHz - m_bandwidthHz / 2.0) + frac * m_bandwidthHz;
+}
+
+std::pair<int, int> SpectrumWidget::visibleBinRange(int binCount) const
+{
+    if (binCount <= 0 || m_sampleRateHz <= 0.0) {
+        return {0, 0};
+    }
+
+    double binWidth = m_sampleRateHz / binCount;
+    double fftLowHz = m_ddcCenterHz - m_sampleRateHz / 2.0;
+
+    double displayLowHz  = m_centerHz - m_bandwidthHz / 2.0;
+    double displayHighHz = m_centerHz + m_bandwidthHz / 2.0;
+
+    int firstBin = static_cast<int>(std::floor((displayLowHz - fftLowHz) / binWidth));
+    int lastBin  = static_cast<int>(std::ceil((displayHighHz - fftLowHz) / binWidth));
+
+    firstBin = std::clamp(firstBin, 0, binCount - 1);
+    lastBin  = std::clamp(lastBin, 0, binCount - 1);
+
+    if (firstBin > lastBin) {
+        firstBin = lastBin;
+    }
+
+    return {firstBin, lastBin};
 }
 
 int SpectrumWidget::dbmToY(float dbm, const QRect& r) const

@@ -8,6 +8,8 @@
 #include <QMap>
 #include <QTimer>
 
+#include <utility>
+
 // GPU spectrum: QRhiWidget base class for Metal/Vulkan/D3D12 rendering.
 // CPU fallback: QWidget with QPainter.
 // Note: NEREUS_GPU_SPECTRUM is set in CMakeLists.txt via target_compile_definitions.
@@ -152,6 +154,11 @@ private:
     int    hzToX(double hz, const QRect& r) const;
     double xToHz(int x, const QRect& r) const;
     int    dbmToY(float dbm, const QRect& r) const;
+
+    // Returns the first and last FFT bin indices visible in the current
+    // display window (m_centerHz ± m_bandwidthHz/2), mapped against
+    // the DDC center and sample rate. Clamped to [0, binCount-1].
+    std::pair<int, int> visibleBinRange(int binCount) const;
 
     // ---- Waterfall helpers ----
     void   pushWaterfallRow(const QVector<float>& bins);
