@@ -192,6 +192,9 @@ set(GUI_SOURCES
     src/gui/SpectrumWidget.cpp
     src/gui/SpectrumOverlayMenu.cpp
     src/gui/widgets/VfoWidget.cpp
+    src/gui/containers/ContainerWidget.cpp
+    src/gui/containers/FloatingContainer.cpp
+    src/gui/containers/ContainerManager.cpp
 )
 
 # --------------------------------------------------------------------------

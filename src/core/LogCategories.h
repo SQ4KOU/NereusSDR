@@ -16,6 +16,7 @@ Q_DECLARE_LOGGING_CATEGORY(lcReceiver)
 Q_DECLARE_LOGGING_CATEGORY(lcAudio)
 Q_DECLARE_LOGGING_CATEGORY(lcDsp)
 Q_DECLARE_LOGGING_CATEGORY(lcSpectrum)
+Q_DECLARE_LOGGING_CATEGORY(lcContainer)
 
 // Runtime-manageable logging category metadata.
 struct LogCategoryInfo {

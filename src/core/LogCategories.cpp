@@ -17,6 +17,7 @@ Q_LOGGING_CATEGORY(lcReceiver,   "nereus.receiver")
 Q_LOGGING_CATEGORY(lcAudio,      "nereus.audio",  QtInfoMsg)
 Q_LOGGING_CATEGORY(lcDsp,        "nereus.dsp",    QtInfoMsg)
 Q_LOGGING_CATEGORY(lcSpectrum,   "nereus.spectrum", QtInfoMsg)
+Q_LOGGING_CATEGORY(lcContainer,  "nereus.container")
 
 // --- LogManager ---
 
@@ -45,6 +46,8 @@ LogManager::LogManager()
           QStringLiteral("WDSP channel processing, demodulation, FFT"), false },
         { QStringLiteral("nereus.spectrum"),   QStringLiteral("Spectrum"),
           QStringLiteral("FFT engine, spectrum display, waterfall rendering"), false },
+        { QStringLiteral("nereus.container"), QStringLiteral("Container"),
+          QStringLiteral("Container dock/float/resize, lifecycle, persistence"), false },
     };
 }
 
