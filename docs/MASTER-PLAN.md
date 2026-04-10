@@ -112,6 +112,18 @@ NereusSDR is a ground-up port of Thetis (OpenHPSDR SDR console) from C# to Qt6/C
 - No hardcoded frequencies, modes, or filters remain — all state flows from SliceModel
 - Verified: dynamic tuning + mode switching + filter presets + audio on ANAN-G2 via Windows D3D11
 
+### Post-3E Enhancement: CTUN Panadapter (commit 3f2283e)
+- **CTUN mode** (default on): pan center and VFO are fully independent — SmartSDR/AetherSDR style
+  - Click/scroll/passband-drag tunes VFO within fixed pan; DDC frequency locked at pan center
+  - Waterfall drag pans the view and retunes DDC NCO
+  - WDSP shift offsets audio demodulation when VFO ≠ DDC center
+  - Off-screen VFO indicator with double-click to recenter
+  - Band jumps auto-recenter; CTUN toggle in right-click overlay menu
+- **FFT fixes**: full N-bin output (was only positive half), FFT-shift + mirror for correct sideband orientation
+- **Alex BPF board** fully enabled (byte 59 in CmdGeneral had missing enable flag)
+- **VfoWidget improvements**: AetherSDR-style floating control buttons (close/lock/record/play), green toggle filter preset buttons with exclusive selection
+- Files modified: `FFTEngine.cpp`, `P2RadioConnection.cpp`, `ReceiverManager.h/.cpp`, `RxChannel.h/.cpp`, `MainWindow.cpp`, `SpectrumWidget.h/.cpp`, `SpectrumOverlayMenu.h/.cpp`, `VfoWidget.h/.cpp`
+
 ### CI Status: GREEN
 - Build passes on Ubuntu 24.04 with Qt6, cmake, ninja, fftw3
 - Windows local build passes with Qt 6.11.0 / MinGW 13.1
@@ -179,7 +191,7 @@ Key design reference: `docs/architecture/radio-abstraction.md`
 
 Verification: Discover the ANAN-G2 on the local network, connect via P2, receive I/Q data stream.
 
-### Phase 3B: WDSP Integration Layer
+### Phase 3B: WDSP Integration Layer ✅ COMPLETE
 **Goal:** Process I/Q through WDSP, output demodulated audio.
 
 Files to modify/create:
@@ -193,7 +205,7 @@ Key design reference: `docs/architecture/wdsp-integration.md`
 
 Verification: Feed I/Q from radio into WDSP, hear demodulated audio through speakers.
 
-### Phase 3C: Audio Pipeline
+### Phase 3C: macOS Build + Audio Pipeline ✅ COMPLETE
 **Goal:** RX audio through speakers, TX audio from microphone.
 
 Files to modify/create:
@@ -203,7 +215,7 @@ Files to modify/create:
 
 Verification: Tune to a known signal on the ANAN-G2, hear audio.
 
-### Phase 3D: GPU Spectrum & Waterfall
+### Phase 3D: GPU Spectrum & Waterfall ✅ COMPLETE
 **Goal:** Display live FFT spectrum and waterfall from I/Q data.
 
 Files to modify/create:
@@ -341,39 +353,22 @@ CI workflows already in place. Finalize:
 
 ---
 
-## Recommended Next Step: Phase 3E — VFO & Controls + Multi-Receiver Foundation
+## Recommended Next Step: Phase 3F — Multi-Panadapter Layout
 
-Phases 3A-3D are complete — the radio connects, demodulates audio, and renders
-live GPU spectrum + waterfall. Next: add VFO controls AND rewire the I/Q pipeline
-to support multiple receivers. The current RadioModel.cpp:207-241 hardwires a
-single-receiver path (ignores ddcIndex, bypasses ReceiverManager, uses rxChannel(0)).
-Fixing this now avoids a massive rewrite when adding multi-panadapter in Phase 3F.
+Phases 3A–3E are complete — the radio connects, demodulates audio, renders live GPU
+spectrum + waterfall, and supports full VFO tuning with CTUN panadapter mode.
+Next: enable multiple simultaneous receivers and panadapter layout management.
 
 ### Key References
-- Thetis: `console.cs` (VFO, band, mode, filter logic), `cmaster.cs` (channel master)
-- Design docs: `docs/architecture/adc-ddc-panadapter-mapping.md` (DDC assignment),
-  `docs/architecture/multi-panadapter.md` (slice-to-pan association)
-- AetherSDR: SliceModel pattern for frequency/mode/filter state
-
-### Implementation Steps (two parallel tracks)
-
-**Track A: I/Q Pipeline Rewire**
-1. Route iqDataReceived through ReceiverManager (not direct RadioModel accumulation)
-2. Make ReceiverManager board-type-aware (DDC2=RX1 on 2-ADC, DDC0=RX1 on 1-ADC)
-3. Support multiple RxChannel instances in WdspEngine (keyed by receiver index)
-4. Support per-receiver FFTEngine instances
-
-**Track B: VFO & Controls**
-5. Implement SliceModel with frequency/mode/filter/AGC and slice→receiver mapping
-6. Create VfoDisplay widget with click-to-tune digit editing
-7. Wire frequency changes: SliceModel → ReceiverManager → P2RadioConnection
-8. Add mode/filter/AGC controls with WDSP parameter routing
+- Thetis: `console.cs:8186-8538` (UpdateDDCs), `display.cs` (multi-pan layout)
+- Design docs: `docs/architecture/multi-panadapter.md`,
+  `docs/architecture/adc-ddc-panadapter-mapping.md`
+- Implementation plan: `docs/architecture/phase3f-multi-panadapter-plan.md`
 
 ### Verification
-- I/Q pipeline still works after rewire (no audio/spectrum regression)
-- Tune to different frequencies by clicking VFO digits
-- Change mode (USB/LSB/CW/AM) and hear correct demodulation
-- Adjust filter bandwidth, see passband overlay update on spectrum
+- 2 pans stacked — RX1 on 20m, RX2 on 40m with independent spectrums
+- 4 pans in 2×2 grid — 2 pans share RX1 at different zoom, 2 pans on RX2
+- RX1 on DDC2 (ADC0), RX2 on DDC3 (ADC1) for 2-ADC boards
 
 ---
 

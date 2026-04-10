@@ -24,33 +24,37 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 
 ## Current Status
 
-**Phase 3D — GPU spectrum + waterfall rendering.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates audio through WDSP, and renders a live GPU-accelerated spectrum trace + waterfall via Metal (macOS), Vulkan (Linux), or D3D12 (Windows).
+**Phase 3E complete — VFO controls + CTUN panadapter.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates audio through WDSP, renders a live GPU-accelerated spectrum + waterfall, and supports full VFO tuning with SmartSDR-style CTUN mode (independent pan center and VFO, WDSP shift offsets, off-screen VFO indicator).
 
 ## Key Features
 
 **Working now:**
 - OpenHPSDR Protocol 2 radio discovery and connection
 - Raw I/Q reception from ANAN-G2 (DDC2, 48kHz, 238 samples/packet)
-- WDSP v1.29 DSP engine — USB demodulation, AGC, bandpass filtering
+- WDSP v1.29 DSP engine — USB/LSB/AM/CW demodulation, AGC, NB1/NB2, bandpass filtering
 - Real-time audio output via QAudioSink (48kHz stereo Int16)
 - FFTW wisdom caching with first-run progress dialog
 - Audio device selection and persistence
 - GPU-accelerated spectrum + waterfall (QRhi — Metal, Vulkan, D3D12, OpenGL fallback)
-- FFTW3 client-side FFT (4096-point, Blackman-Harris window, 30 FPS)
-- VFO marker, filter passband overlay, cursor frequency readout
-- Right-click display settings (color scheme, gain, black level, ref level)
-- Mouse interaction (scroll zoom, drag ref level, click-to-tune)
-- Phase word NCO tuning with Alex band filters (80m BPF verified)
+- Full-spectrum FFTW3 FFT (4096-point, Blackman-Harris window, 30 FPS, FFT-shift + mirror)
+- VFO tuning, mode selection, filter controls (floating VFO flag widget)
+- CTUN panadapter mode — independent pan center and VFO, WDSP shift offsets
+- Off-screen VFO indicator with double-click to recenter
+- VFO marker, filter passband overlay, cursor frequency readout, filter drag
+- Right-click display settings (color scheme, gain, black level, ref level, CTUN toggle)
+- Mouse interaction (scroll-to-tune, drag ref level, click-to-tune, waterfall pan)
+- Phase word NCO tuning with Alex HPF/LPF/BPF filters (fully enabled)
 - Display settings persistence via AppSettings
 - Cross-platform build (Windows, Linux, macOS)
-- Up to 4 independent panadapters in configurable layouts
-- Full WDSP DSP features (NR/NR2, NB/NB2, ANF, EQ, compression, PureSignal)
-- VFO tuning, mode selection, filter controls
-- Configurable floating/dockable containers — put any control anywhere, across multiple monitors
-- Thetis-inspired skin system with 4-pan support
-- OpenHPSDR Protocol 1 (Hermes Lite 2, older ANAN radios)
-- TCI protocol server, CAT control (rigctld), DAX virtual audio
-- TX support (mic → WDSP → radio)
+
+**Planned (see Roadmap):**
+- Up to 4 independent panadapters in configurable layouts (Phase 3F)
+- Full WDSP DSP suite — NR/NR2, ANF, EQ, compression, PureSignal (Phase 3G)
+- Configurable floating/dockable containers (Phase 3G)
+- Thetis-inspired skin system (Phase 3H)
+- TX pipeline — mic → WDSP → radio (Phase 3I)
+- TCI protocol server, CAT control, DAX virtual audio (Phase 3J)
+- OpenHPSDR Protocol 1 — Hermes Lite 2, older ANAN radios (Phase 3K)
 
 ---
 
@@ -83,8 +87,8 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 | **3B: WDSP Integration** | Process I/Q through WDSP, demodulate audio | **Complete** |
 | **3C: macOS Build** | Cross-platform WDSP build + wisdom crash fix | **Complete** |
 | **3D: Spectrum Display** | GPU spectrum + waterfall (QRhi Metal/Vulkan/D3D12) | **Complete** |
-| **3E: VFO + Multi-RX Foundation** | VFO controls + rewire I/Q pipeline for N receivers | Next up |
-| **3F: Multi-Panadapter** | DDC assignment, FFTRouter, PanadapterStack, enable RX2 | Planned |
+| **3E: VFO + Multi-RX Foundation** | VFO controls + rewire I/Q pipeline for N receivers + CTUN panadapter | **Complete** |
+| **3F: Multi-Panadapter** | DDC assignment, FFTRouter, PanadapterStack, enable RX2 | **Next up** |
 | **3G: Container System** | Unified float/dock containers with 16 widget types | Planned |
 | **3H: Skin System** | Thetis-inspired skins with 4-pan support | Planned |
 | **3I: TX Pipeline** | Mic → WDSP → radio, TX audio + silence frames | Planned |

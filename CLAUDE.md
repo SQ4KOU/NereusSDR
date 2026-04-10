@@ -189,11 +189,11 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 
 * `RadioModel` — central state, owns connection + all sub-models + WdspEngine
 * `SliceModel` — per-receiver VFO state (freq, mode, filter, AGC, gains, antenna). Single source of truth.
-* `ReceiverManager` — DDC-aware receiver lifecycle, maps logical receivers to hardware DDCs
+* `ReceiverManager` — DDC-aware receiver lifecycle, maps logical receivers to hardware DDCs; exposes DDC center frequency for CTUN pan positioning
 * `RadioDiscovery` — OpenHPSDR radio discovery on UDP port 1024
 * `RadioConnection` — Protocol 1 (UDP) and Protocol 2 (UDP multi-port) connections
 * `WdspEngine` — WDSP lifecycle manager (wisdom, channels, impulse cache)
-* `RxChannel` — per-receiver WDSP channel wrapper (fexchange2, NB, mode/filter/AGC)
+* `RxChannel` — per-receiver WDSP channel wrapper (fexchange2, NB, mode/filter/AGC, shift offset for CTUN demodulation)
 * `AudioEngine` — QAudioSink output (Int16 stereo, timer-based drain)
 * `FFTEngine` — FFTW3 spectrum computation (worker thread, I/Q → dBm bins)
 * `SpectrumWidget` — GPU spectrum trace + waterfall display (QRhiWidget — Metal/Vulkan/D3D12)
@@ -214,7 +214,7 @@ Cross-thread communication uses auto-queued signals exclusively.
 RadioModel owns all sub-models on the main thread. Never hold a mutex in the
 audio callback.
 
-### Data Flow (Phase 3E — VERIFIED WORKING)
+### Data Flow (Phase 3E + CTUN — VERIFIED WORKING)
 
 ```
 Radio (ADC) → UDP port 1037 (DDC2) → P2RadioConnection
@@ -310,7 +310,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | 1B: Thetis Analysis | Dual-thread DSP (RX1/RX2), pre-allocated receivers, one-way protocol, skin system |
 | 1C: WDSP Analysis | 256 API functions, channel-based DSP, fexchange2() for I/Q, PureSignal feedback loop |
 
-### Current Phase: 3E — VFO & Controls
+### Current Phase: 3F — Multi-Panadapter
 
 | Phase | Goal | Status |
 | --- | --- | --- |
@@ -318,8 +318,8 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | 3B: WDSP Integration | Process I/Q through WDSP, audio output | **Complete** |
 | 3C: macOS Build | Cross-platform WDSP build + wisdom crash fix | **Complete** |
 | 3D: Spectrum Display | GPU spectrum + waterfall (QRhi Metal/Vulkan/D3D12) | **Complete** |
-| **3E: VFO + Multi-RX Foundation** | **VFO controls + rewire I/Q pipeline for N receivers** | **Next up** |
-| 3F: Multi-Panadapter | DDC assignment, FFTRouter, PanadapterStack, enable RX2 | Planned |
+| 3E: VFO + Multi-RX Foundation | VFO controls, CTUN panadapter, rewired I/Q pipeline | **Complete** |
+| **3F: Multi-Panadapter** | **DDC assignment, FFTRouter, PanadapterStack, enable RX2** | **Next up** |
 | 3G: Container System | Unified dock/float container architecture | Planned |
 
 ---
