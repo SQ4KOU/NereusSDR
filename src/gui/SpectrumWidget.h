@@ -67,6 +67,10 @@ public:
     void setCenterFrequency(double centerHz);
     double centerFrequency() const { return m_centerHz; }
     double bandwidth() const { return m_bandwidthHz; }
+    void setDdcCenterFrequency(double hz);
+    double ddcCenterFrequency() const { return m_ddcCenterHz; }
+    void setSampleRate(double hz);
+    double sampleRate() const { return m_sampleRateHz; }
 
     // ---- Display range ----
     void setDbmRange(float minDbm, float maxDbm);
@@ -160,6 +164,8 @@ private:
     // ---- Frequency range ----
     double m_centerHz{14225000.0};    // 14.225 MHz default
     double m_bandwidthHz{200000.0};   // 200 kHz default
+    double m_ddcCenterHz{14225000.0};   // DDC hardware center frequency
+    double m_sampleRateHz{768000.0};    // DDC sample rate
 
     // ---- Display range ----
     // From Thetis display.cs:1743-1754

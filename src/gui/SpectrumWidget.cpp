@@ -234,6 +234,30 @@ void SpectrumWidget::setCenterFrequency(double centerHz)
     }
 }
 
+void SpectrumWidget::setDdcCenterFrequency(double hz)
+{
+    if (!qFuzzyCompare(m_ddcCenterHz, hz)) {
+        m_ddcCenterHz = hz;
+#ifdef NEREUS_GPU_SPECTRUM
+        markOverlayDirty();
+#else
+        update();
+#endif
+    }
+}
+
+void SpectrumWidget::setSampleRate(double hz)
+{
+    if (!qFuzzyCompare(m_sampleRateHz, hz)) {
+        m_sampleRateHz = hz;
+#ifdef NEREUS_GPU_SPECTRUM
+        markOverlayDirty();
+#else
+        update();
+#endif
+    }
+}
+
 void SpectrumWidget::setFilterOffset(int lowHz, int highHz)
 {
     m_filterLowHz = lowHz;
