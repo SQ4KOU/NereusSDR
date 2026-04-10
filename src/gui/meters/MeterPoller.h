@@ -20,6 +20,16 @@ namespace MeterBinding {
     constexpr int AgcGain      = 4;    // RxMeterType::AgcGain
     constexpr int AgcPeak      = 5;    // RxMeterType::AgcPeak
     constexpr int AgcAvg       = 6;    // RxMeterType::AgcAvg
+
+    // TX bindings (100+). From Thetis MeterManager.cs Reading enum.
+    // Stub values until TxChannel exists (Phase 3I-1).
+    // PWR/SWR are hardware PA measurements, not WDSP meters.
+    constexpr int TxPower        = 100;  // Forward power (hardware PA)
+    constexpr int TxReversePower = 101;  // Reverse power (hardware PA)
+    constexpr int TxSwr          = 102;  // SWR (computed fwd/rev ratio)
+    constexpr int TxMic          = 103;  // TXA_MIC_AV
+    constexpr int TxComp         = 104;  // TXA_COMP_AV
+    constexpr int TxAlc          = 105;  // TXA_ALC_AV
 }
 
 class MeterPoller : public QObject {
