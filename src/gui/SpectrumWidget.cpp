@@ -627,17 +627,23 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
         return;
     }
 
+    auto [firstBin, lastBin] = visibleBinRange(bins.size());
+    int subsetCount = lastBin - firstBin + 1;
+    if (subsetCount <= 0) {
+        return;
+    }
+
     int h = m_waterfall.height();
     // Decrement write pointer (wrapping) — newest data at top of display
     m_wfWriteRow = (m_wfWriteRow - 1 + h) % h;
 
     int w = m_waterfall.width();
     QRgb* scanline = reinterpret_cast<QRgb*>(m_waterfall.scanLine(m_wfWriteRow));
-    float binScale = static_cast<float>(bins.size()) / static_cast<float>(w);
+    float binScale = static_cast<float>(subsetCount) / static_cast<float>(w);
 
     for (int x = 0; x < w; ++x) {
-        int srcBin = static_cast<int>(static_cast<float>(x) * binScale);
-        srcBin = qBound(0, srcBin, bins.size() - 1);
+        int srcBin = firstBin + static_cast<int>(static_cast<float>(x) * binScale);
+        srcBin = qBound(firstBin, srcBin, lastBin);
         scanline[x] = dbmToRgb(bins[srcBin]);
     }
 }
