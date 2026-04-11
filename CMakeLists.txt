@@ -223,6 +223,8 @@ set(GUI_SOURCES
     src/gui/meters/DiscordButtonItem.cpp
     src/gui/meters/VfoDisplayItem.cpp
     src/gui/meters/ClockItem.cpp
+    src/gui/meters/ClickBoxItem.cpp
+    src/gui/meters/DataOutItem.cpp
     src/gui/HGauge.cpp
     src/gui/SpectrumOverlayPanel.cpp
     src/gui/SetupDialog.cpp
