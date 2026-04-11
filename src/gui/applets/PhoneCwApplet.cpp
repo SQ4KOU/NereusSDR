@@ -1016,6 +1016,13 @@ void PhoneCwApplet::showPage(int index)
     if (m_stack) {
         m_stack->setCurrentIndex(index);
     }
+    // Sync the tab selector buttons so they reflect the active page
+    if (m_tabGroup) {
+        QAbstractButton* btn = m_tabGroup->button(index);
+        if (btn && !btn->isChecked()) {
+            btn->setChecked(true);
+        }
+    }
 }
 
 } // namespace NereusSDR
