@@ -2,6 +2,52 @@
 
 ## [Unreleased]
 
+### Added — Phase 3-UI: Full UI Skeleton
+
+**Applets (12 total, 150+ control widgets):**
+- `src/gui/applets/RxApplet.h/.cpp` — RX controls: mode, AGC, AF/RF gain, filter presets; Tier 1 wired to SliceModel
+- `src/gui/applets/TxApplet.h/.cpp` — TX controls: mic gain, drive, tune power, compression, DEX
+- `src/gui/applets/PhoneCwApplet.h/.cpp` — Voice/CW macro keys, VOX, CW speed/weight
+- `src/gui/applets/EqApplet.h/.cpp` — 10-band RX/TX graphic equalizer
+- `src/gui/applets/FmApplet.h/.cpp` — FM deviation, sub-tone, repeater offset
+- `src/gui/applets/DigitalApplet.h/.cpp` — digital mode settings (baud, shift, encoding)
+- `src/gui/applets/PureSignalApplet.h/.cpp` — PureSignal calibrate, feedback level indicator
+- `src/gui/applets/DiversityApplet.h/.cpp` — diversity RX phase/gain controls
+- `src/gui/applets/CwxApplet.h/.cpp` — CW message memory keyer
+- `src/gui/applets/DvkApplet.h/.cpp` — digital voice keyer playback controls
+- `src/gui/applets/CatApplet.h/.cpp` — CAT/rigctld port configuration
+- `src/gui/applets/TunerApplet.h/.cpp` — antenna tuner control (tune, bypass, memory)
+
+**Spectrum Overlay Panel:**
+- `src/gui/SpectrumOverlayPanel.h/.cpp` — 10-button overlay panel with 5 flyout sub-panels (display, filter, noise, spots, tools); auto-close on outside click
+
+**Menu Bar (9 menus, ~60 items):**
+- File, Radio, View, DSP, Band, Mode, Containers, Tools, Help menus wired to MainWindow
+
+**Status Bar:**
+- Double-height status bar (46px): UTC clock, radio info, TX/RX indicators, signal level
+
+**Setup Dialog:**
+- `src/gui/SetupDialog.h/.cpp` — 47 pages across 10 categories (Radio, Audio, DSP, Display, CW, Digital, TX, Logging, Network, Misc); all pages have real controls
+
+**Applet Panel:**
+- `src/gui/AppletPanelWidget.h/.cpp` — fixed header (S-Meter) + scrollable applet body for Container #0
+
+**Infrastructure:**
+- `src/gui/StyleConstants.h` — shared color palette, font sizes, widget style constants
+- `src/gui/widgets/HGauge.h/.cpp` — horizontal bar gauge widget
+- `src/gui/widgets/ComboStyle.h/.cpp` — styled combo box shared across applets
+
+**Container / Persistence fixes:**
+- Content restored on restart (applet panel state persisted)
+- Pin-on-top state persists across sessions
+- Floating container position persists correctly
+- Container minimum width 260px enforced in all dock modes
+
+**S-Meter enhancements:**
+- Dynamic resize with aspect-ratio scaling and full-width arc
+- SMeterWidget ported directly from AetherSDR for pixel-identical fidelity
+
 ### Added — Phase 3G-3: Core Meter Groups (in progress)
 - NeedleItem: arc-style S-meter needle participating in all 4 GPU render pipelines
   - P1 Background: QPainter arc segments (white S0-S9, red S9+, blue inner TX arc)

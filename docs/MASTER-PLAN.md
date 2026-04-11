@@ -134,6 +134,48 @@ NereusSDR is a ground-up port of Thetis (OpenHPSDR SDR console) from C# to Qt6/C
 - Design: `docs/architecture/ctun-zoom-design.md`, Plan: `docs/architecture/ctun-zoom-plan.md`
 - Files modified: `SpectrumWidget.h/.cpp`, `MainWindow.cpp`
 
+### Completed: Phase 3-UI — Full UI Skeleton
+
+**Applets (12 total, 150+ control widgets):**
+- RxApplet — mode, AGC, AF/RF gain, filter presets; Tier 1 wired to SliceModel
+- TxApplet — mic gain, drive, tune power, compression, DEX
+- PhoneCwApplet — voice/CW macro keys, VOX, CW speed/weight
+- EqApplet — 10-band RX/TX graphic equalizer
+- FmApplet — FM deviation, sub-tone, repeater offset
+- DigitalApplet — digital mode settings (baud, shift, encoding)
+- PureSignalApplet — PureSignal calibrate, feedback level indicator
+- DiversityApplet — diversity RX phase/gain controls
+- CwxApplet — CW message memory keyer
+- DvkApplet — digital voice keyer playback controls
+- CatApplet — CAT/rigctld port configuration
+- TunerApplet — antenna tuner control (tune, bypass, memory)
+
+**Spectrum Overlay Panel:**
+- `SpectrumOverlayPanel` — 10-button overlay panel on SpectrumWidget with 5 flyout sub-panels (display, filter, noise, spots, tools); auto-close on outside click
+
+**Menu Bar:** 9 menus (File, Radio, View, DSP, Band, Mode, Containers, Tools, Help), ~60 items wired to MainWindow
+
+**Status Bar:** Double-height (46px) with UTC clock, radio info, TX/RX indicators, signal level
+
+**Setup Dialog:** `SetupDialog` — 47 pages across 10 categories with real controls
+
+**Applet Panel:** `AppletPanelWidget` — fixed S-Meter header + scrollable applet body for Container #0
+
+**Infrastructure:**
+- `StyleConstants.h` — shared color palette, fonts, widget style constants
+- `HGauge` — horizontal bar gauge widget
+- `ComboStyle` — styled combo box shared across applets
+
+**Container / Persistence fixes:**
+- Content, pin-on-top state, and floating position all persist across restarts
+- Container minimum width 260px enforced in all dock modes
+
+**S-Meter enhancements:**
+- Dynamic resize with aspect-ratio scaling and full-width arc
+- SMeterWidget ported directly from AetherSDR for pixel-identical fidelity
+
+**RxApplet Tier 1 wired:** mode, AGC, AF gain, and filter presets fully wired to SliceModel
+
 ### CI Status: GREEN
 - Build passes on Ubuntu 24.04 with Qt6, cmake, ninja, fftw3
 - Windows local build passes with Qt 6.11.0 / MinGW 13.1
@@ -301,7 +343,7 @@ Scope:
 
 Verification: Container #0 displays live H_BAR bound to WDSP SignalPeak, updating at 10fps via GPU. ✅
 
-### Phase 3G-3: Core Meter Groups
+### Phase 3G-3: Core Meter Groups ✅ COMPLETE
 **Goal:** Ship the meters operators expect on day one.
 
 Scope:
@@ -312,15 +354,42 @@ Scope:
 - TX MeterBinding constants 100-105 (stubs until TxChannel in Phase 3I-1)
 - Data binding: SIGNAL_STRENGTH, AVG_SIGNAL_STRENGTH, ADC, AGC_GAIN, PWR, REVERSE_PWR, SWR, MIC, COMP, ALC
 
-Status:
-- ✅ Multi-layer MeterItem infrastructure (participatesIn + paintForLayer)
-- ✅ NeedleItem with arc rendering, smoothing, peak hold, S-unit scaling
-- ✅ TX MeterBinding constants (100-105)
-- ✅ Preset factories (S-Meter, Power/SWR, ALC, Mic, Comp)
-- ✅ Default Container #0 layout (S-Meter 55% + Power/SWR 30% + ALC 15%)
-- 🔄 SMeterWidget: direct AetherSDR port for pixel-identical fidelity (next)
+Delivered:
+- Multi-layer MeterItem infrastructure (participatesIn + paintForLayer)
+- NeedleItem with arc rendering, smoothing, peak hold, S-unit scaling
+- TX MeterBinding constants (100-105)
+- Preset factories (S-Meter, Power/SWR, ALC, Mic, Comp)
+- Default Container #0 layout (S-Meter 55% + Power/SWR 30% + ALC 15%)
+- SMeterWidget: direct AetherSDR port for pixel-identical fidelity; dynamic aspect-ratio resize, full-width arc
 
 Verification: Live S-meter needle, Power/SWR during TX, correct readings vs Thetis on same signal.
+
+### Phase 3-UI: Full UI Skeleton ✅ COMPLETE
+**Goal:** Build the complete application UI frame — all applets, menus, setup dialog, and spectrum controls — so every feature has a home before deep wiring begins.
+
+**Files created:**
+- `src/gui/applets/RxApplet.h/.cpp` — RX controls; Tier 1 (mode, AGC, AF gain, filter presets) wired to SliceModel
+- `src/gui/applets/TxApplet.h/.cpp` — TX controls (mic gain, drive, tune power, compression, DEX)
+- `src/gui/applets/PhoneCwApplet.h/.cpp` — voice/CW macro keys, VOX, CW speed/weight
+- `src/gui/applets/EqApplet.h/.cpp` — 10-band RX/TX graphic equalizer
+- `src/gui/applets/FmApplet.h/.cpp` — FM deviation, sub-tone, repeater offset
+- `src/gui/applets/DigitalApplet.h/.cpp` — digital mode settings
+- `src/gui/applets/PureSignalApplet.h/.cpp` — PureSignal calibrate + feedback level
+- `src/gui/applets/DiversityApplet.h/.cpp` — diversity RX phase/gain controls
+- `src/gui/applets/CwxApplet.h/.cpp` — CW message memory keyer
+- `src/gui/applets/DvkApplet.h/.cpp` — digital voice keyer playback controls
+- `src/gui/applets/CatApplet.h/.cpp` — CAT/rigctld port configuration
+- `src/gui/applets/TunerApplet.h/.cpp` — antenna tuner control
+- `src/gui/SpectrumOverlayPanel.h/.cpp` — 10-button overlay panel, 5 flyout sub-panels, auto-close
+- `src/gui/SetupDialog.h/.cpp` — 47 pages across 10 categories with real controls
+- `src/gui/AppletPanelWidget.h/.cpp` — fixed S-Meter header + scrollable applet body
+- `src/gui/StyleConstants.h` — shared color palette, fonts, widget style constants
+- `src/gui/widgets/HGauge.h/.cpp` — horizontal bar gauge widget
+- `src/gui/widgets/ComboStyle.h/.cpp` — styled combo box shared across applets
+
+**Implementation plan:** `docs/architecture/phase3-ui-skeleton-plan-v2.md`
+
+Verification: All menus, applets, and dialogs present and navigable; RxApplet Tier 1 controls update SliceModel live.
 
 ### Phase 3G-4: Advanced Meter Items
 **Goal:** Visual flair — items that make it look like a real radio console.
@@ -537,33 +606,33 @@ CI workflows already in place. Finalize:
 
 ---
 
-## Recommended Next Step: Phase 3G-3 — Core Meter Groups (in progress)
+## Recommended Next Step: Phase 3I-1 — Basic SSB TX or Phase 3G-4 — Advanced Meter Items
 
-Phases 3A–3E, 3G-1, and 3G-2 are complete — the radio connects, demodulates audio,
-renders live GPU spectrum + waterfall, supports full VFO tuning with CTUN panadapter
-mode, the container infrastructure (dock/float/resize/persist) is in place, and the
-MeterWidget GPU renderer (3 pipelines, MeterItem hierarchy, live data binding) is
-working in Container #0.
+Phases 3A–3E, 3G-1, 3G-2, 3G-3, and 3-UI are all complete. The radio connects,
+demodulates audio, renders live GPU spectrum + waterfall, supports full VFO tuning with
+CTUN panadapter mode, the container/applet infrastructure (dock/float/resize/persist/
+applet panel + S-meter) is in place, and the full UI skeleton (12 applets, 9-menu bar,
+47-page SetupDialog, SpectrumOverlayPanel) is complete with RxApplet Tier 1 wired.
 
-Current: finish Phase 3G-3 — the SMeterWidget (direct AetherSDR port for
-pixel-identical S-meter fidelity) is the remaining deliverable. NeedleItem,
-preset factories, and default Container #0 layout are already committed.
+Two viable next paths:
+- **3I-1 (Basic SSB TX)** — get RF out the door; proves TX I/Q output path end-to-end
+- **3G-4 (Advanced Meter Items)** — history graph, magic eye, dial, LED for visual completeness
 
-Execution order: **3G-3..6 → 3I-1..4 → 3F → 3H → 3J+**
+Execution order: **3G-4..6 → 3I-1..4 → 3F → 3H → 3J+**
 
 ### Phase Dependencies
 
 ```
-3G-3 → 3G-4 → 3G-5 → 3G-6    (meter system, sequential)
-              ↘
-3G-3 → 3I-1 → 3I-2 → 3I-3 → 3I-4 → 3F → 3H    (TX then multi-RX)
-                                      ↑
-                              PureSignal must complete before 3F because
-                              UpdateDDCs() state machine includes PS DDC
-                              states (DDC0+DDC1 sync at 192kHz)
+3G-4 → 3G-5 → 3G-6    (meter system, sequential)
+
+3I-1 → 3I-2 → 3I-3 → 3I-4 → 3F → 3H    (TX then multi-RX)
+                               ↑
+                       PureSignal must complete before 3F because
+                       UpdateDDCs() state machine includes PS DDC
+                       states (DDC0+DDC1 sync at 192kHz)
 ```
 
-Independent phases (can start anytime after 3G-3): 3J (TCI), 3K (CAT), 3L (P1), 3M (Recording).
+Independent phases (can start anytime): 3J (TCI), 3K (CAT), 3L (P1), 3M (Recording).
 
 ---
 

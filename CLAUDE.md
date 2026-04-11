@@ -207,6 +207,13 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 * `MeterPoller` — QTimer-based WDSP meter polling (100ms/10fps); calls RxChannel::getMeter(), pushes to bound MeterWidgets
 * `AppSettings` — custom XML settings persistence (NOT QSettings)
 * `MainWindow` — wires everything together, signal routing hub; uses QSplitter for spectrum + container panel
+* `SpectrumOverlayPanel` — 10-button overlay panel on SpectrumWidget with 5 flyout sub-panels (display/filter/noise/spots/tools), auto-close
+* `SetupDialog` — 47-page setup dialog across 10 categories with real controls
+* `AppletPanelWidget` — fixed S-Meter header + scrollable applet body for Container #0
+* `applets/` — 12 applets: RxApplet, TxApplet, PhoneCwApplet, EqApplet, FmApplet, DigitalApplet, PureSignalApplet, DiversityApplet, CwxApplet, DvkApplet, CatApplet, TunerApplet
+* `StyleConstants.h` — shared color palette, fonts, widget style constants
+* `HGauge` — horizontal bar gauge widget
+* `ComboStyle` — styled combo box shared across applets
 
 **Thread Architecture:**
 
@@ -327,7 +334,8 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | [ctun-zoom-plan.md](docs/architecture/ctun-zoom-plan.md) | 3E: CTUN Zoom Bin Subsetting | **Complete** |
 | [phase3g1-container-infrastructure-plan.md](docs/architecture/phase3g1-container-infrastructure-plan.md) | 3G-1: Container Infrastructure | **Complete** |
 | [phase3g2-meter-widget.md](docs/superpowers/plans/2026-04-10-phase3g2-meter-widget.md) | 3G-2: MeterWidget GPU Renderer | **Complete** |
-| [phase3g3-core-meter-groups.md](docs/superpowers/plans/2026-04-10-phase3g3-core-meter-groups.md) | 3G-3: Core Meter Groups | **In Progress** |
+| [phase3g3-core-meter-groups.md](docs/superpowers/plans/2026-04-10-phase3g3-core-meter-groups.md) | 3G-3: Core Meter Groups | **Complete** |
+| [phase3-ui-skeleton-plan-v2.md](docs/architecture/phase3-ui-skeleton-plan-v2.md) | 3-UI: Full UI Skeleton | **Complete** |
 | [phase3f-multi-panadapter-plan.md](docs/architecture/phase3f-multi-panadapter-plan.md) | 3F: Multi-Panadapter + DDC Assignment | Planning (after 3I-4) |
 
 ### Protocol Reference (`docs/protocols/`)
@@ -345,7 +353,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | 1B: Thetis Analysis | Dual-thread DSP (RX1/RX2), pre-allocated receivers, one-way protocol, skin system |
 | 1C: WDSP Analysis | 256 API functions, channel-based DSP, fexchange2() for I/Q, PureSignal feedback loop |
 
-### Current Phase: 3G-3 — Core Meter Groups
+### Current Phase: 3I-1 — Basic SSB TX (recommended next) or 3G-4 — Advanced Meter Items
 
 | Phase | Goal | Status |
 | --- | --- | --- |
@@ -356,7 +364,8 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | 3E: VFO + Multi-RX Foundation | VFO controls, CTUN panadapter, rewired I/Q pipeline | **Complete** |
 | **3G-1: Container Infrastructure** | **Dock/float/resize/persist container shells** | **Complete** |
 | **3G-2: MeterWidget GPU Renderer** | **QRhi-based meter rendering engine** | **Complete** |
-| **3G-3: Core Meter Groups** | **S-Meter, Power/SWR, ALC presets** | **In Progress** |
+| **3G-3: Core Meter Groups** | **S-Meter, Power/SWR, ALC presets** | **Complete** |
+| **3-UI: Full UI Skeleton** | **12 applets, 9-menu bar, SetupDialog (47pp), SpectrumOverlayPanel** | **Complete** |
 | 3G-4: Advanced Meter Items | History graph, magic eye, dial, LED | Planned |
 | 3G-5: Interactive Meter Items | Band/mode/filter buttons, VFO display, clock | Planned |
 | 3G-6: Container Settings Dialog | Full composability UI, import/export | Planned |
