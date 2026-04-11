@@ -1,5 +1,6 @@
 #include "ContainerManager.h"
 #include "ContainerWidget.h"
+#include "ContainerSettingsDialog.h"
 #include "FloatingContainer.h"
 #include "core/AppSettings.h"
 #include "core/LogCategories.h"
@@ -30,6 +31,10 @@ void ContainerManager::wireContainer(ContainerWidget* container)
     });
     connect(container, &ContainerWidget::dockRequested, this, [this, container]() {
         dockContainer(container->id());
+    });
+    connect(container, &ContainerWidget::settingsRequested, this, [container]() {
+        ContainerSettingsDialog dialog(container, container->window());
+        dialog.exec();
     });
 }
 
