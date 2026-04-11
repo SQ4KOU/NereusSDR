@@ -244,6 +244,64 @@ ItemGroup* ItemGroup::createHBarPreset(int bindingId, double minVal, double maxV
 }
 
 // ---------------------------------------------------------------------------
+// createCompactHBarPreset
+// Compact single-line layout: label (left 20%), bar (center 50%), readout (right 28%).
+// No scale ticks. From AetherSDR HGauge pattern (24px fixed height).
+// ---------------------------------------------------------------------------
+
+ItemGroup* ItemGroup::createCompactHBarPreset(int bindingId, double minVal, double maxVal,
+                                               const QString& name, QObject* parent)
+{
+    ItemGroup* group = new ItemGroup(name, parent);
+
+    // Background fill
+    SolidColourItem* bg = new SolidColourItem();
+    bg->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+    bg->setColour(QColor(QStringLiteral("#0f0f1a")));
+    bg->setZOrder(0);
+    group->addItem(bg);
+
+    // Label text (left 15%)
+    TextItem* label = new TextItem();
+    label->setRect(0.02f, 0.05f, 0.15f, 0.9f);
+    label->setLabel(name);
+    label->setBindingId(-1);
+    label->setTextColor(QColor(QStringLiteral("#8090a0")));
+    label->setFontSize(8);
+    label->setBold(false);
+    label->setZOrder(10);
+    group->addItem(label);
+
+    // Bar meter (center 45%)
+    BarItem* bar = new BarItem();
+    bar->setRect(0.17f, 0.2f, 0.45f, 0.6f);
+    bar->setOrientation(BarItem::Orientation::Horizontal);
+    bar->setRange(minVal, maxVal);
+    bar->setBindingId(bindingId);
+    bar->setBarColor(QColor(QStringLiteral("#00b4d8")));
+    bar->setBarRedColor(QColor(QStringLiteral("#ff4444")));
+    bar->setRedThreshold(minVal + (maxVal - minVal) * 0.9);
+    bar->setZOrder(5);
+    group->addItem(bar);
+
+    // Readout text (right 36%)
+    TextItem* readout = new TextItem();
+    readout->setRect(0.62f, 0.05f, 0.36f, 0.9f);
+    readout->setBindingId(bindingId);
+    readout->setTextColor(QColor(QStringLiteral("#c8d8e8")));
+    readout->setFontSize(8);
+    readout->setBold(true);
+    readout->setSuffix(QStringLiteral(" dBm"));
+    readout->setDecimals(1);
+    readout->setIdleText(QStringLiteral("\u2014 dBm"));
+    readout->setMinValidValue(minVal);
+    readout->setZOrder(10);
+    group->addItem(readout);
+
+    return group;
+}
+
+// ---------------------------------------------------------------------------
 // installInto
 // Transforms each item's normalized 0-1 rect into the target rect and
 // transfers ownership to the given MeterWidget.
@@ -322,6 +380,8 @@ ItemGroup* ItemGroup::createPowerSwrPreset(const QString& name, QObject* parent)
     pwrReadout->setBold(true);
     pwrReadout->setSuffix(QStringLiteral(" W"));
     pwrReadout->setDecimals(0);
+    pwrReadout->setIdleText(QStringLiteral("\u2014 W"));
+    pwrReadout->setMinValidValue(0.0);
     pwrReadout->setZOrder(10);
     group->addItem(pwrReadout);
 
@@ -369,6 +429,8 @@ ItemGroup* ItemGroup::createPowerSwrPreset(const QString& name, QObject* parent)
     swrReadout->setBold(true);
     swrReadout->setSuffix(QStringLiteral(":1"));
     swrReadout->setDecimals(1);
+    swrReadout->setIdleText(QStringLiteral("\u221E:1"));
+    swrReadout->setMinValidValue(1.0);
     swrReadout->setZOrder(10);
     group->addItem(swrReadout);
 
@@ -407,8 +469,8 @@ ItemGroup* ItemGroup::createPowerSwrPreset(const QString& name, QObject* parent)
 
 ItemGroup* ItemGroup::createAlcPreset(QObject* parent)
 {
-    return createHBarPreset(MeterBinding::TxAlc, -30.0, 0.0,
-                            QStringLiteral("ALC"), parent);
+    return createCompactHBarPreset(MeterBinding::TxAlc, -30.0, 0.0,
+                                   QStringLiteral("ALC"), parent);
 }
 
 // ---------------------------------------------------------------------------

@@ -318,20 +318,20 @@ void MainWindow::populateDefaultMeter()
 
     m_meterWidget = new MeterWidget();
 
-    // S-Meter: top 55% — arc needle bound to SignalAvg
+    // S-Meter: top 45% — arc needle bound to SignalAvg
     // From Thetis MeterManager.cs: ANAN needle uses AVG_SIGNAL_STRENGTH
     ItemGroup* smeter = ItemGroup::createSMeterPreset(
         MeterBinding::SignalAvg, QStringLiteral("S-Meter"), m_meterWidget);
-    smeter->installInto(m_meterWidget, 0.0f, 0.0f, 1.0f, 0.55f);
+    smeter->installInto(m_meterWidget, 0.0f, 0.0f, 1.0f, 0.45f);
     delete smeter;
 
-    // Power/SWR: middle 30% — stacked bars (stub TX bindings)
+    // Power/SWR: middle 40% — stacked bars (stub TX bindings)
     ItemGroup* pwrSwr = ItemGroup::createPowerSwrPreset(
         QStringLiteral("Power/SWR"), m_meterWidget);
-    pwrSwr->installInto(m_meterWidget, 0.0f, 0.55f, 1.0f, 0.30f);
+    pwrSwr->installInto(m_meterWidget, 0.0f, 0.45f, 1.0f, 0.40f);
     delete pwrSwr;
 
-    // ALC: bottom 15% — horizontal bar (stub TX binding)
+    // ALC: bottom 15% — compact single-line bar (stub TX binding)
     ItemGroup* alc = ItemGroup::createAlcPreset(m_meterWidget);
     alc->installInto(m_meterWidget, 0.0f, 0.85f, 1.0f, 0.15f);
     delete alc;

@@ -253,6 +253,12 @@ public:
     void setDecimals(int decimals) { m_decimals = decimals; }
     int decimals() const { return m_decimals; }
 
+    // Text shown when value is below minValidValue (no signal / TX off)
+    void setIdleText(const QString& text) { m_idleText = text; }
+    QString idleText() const { return m_idleText; }
+    void setMinValidValue(double v) { m_minValidValue = v; }
+    double minValidValue() const { return m_minValidValue; }
+
     Layer renderLayer() const override { return Layer::OverlayDynamic; }
     void paint(QPainter& p, int widgetW, int widgetH) override;
     QString serialize() const override;
@@ -266,6 +272,8 @@ private:
     bool    m_bold{true};
     QString m_suffix{QStringLiteral(" dBm")};
     int     m_decimals{1};
+    QString m_idleText;
+    double  m_minValidValue{-139.0};  // below default -140 = always show
 };
 
 // ---------------------------------------------------------------------------

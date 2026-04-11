@@ -283,8 +283,13 @@ void ScaleItem::paint(QPainter& p, int widgetW, int widgetH)
         return;
     }
 
+    // Dynamic pixel-based font sizing (matches NeedleItem pattern).
+    // Labels occupy bottom 2/3 of rect; scale font to fit, m_fontSize is floor.
+    const int pixH = rect.height();
+    const int dynFontSize = qMax(m_fontSize, pixH / 3);
+
     QFont font = p.font();
-    font.setPointSize(m_fontSize);
+    font.setPixelSize(dynFontSize);
     p.setFont(font);
 
     if (m_orientation == Orientation::Horizontal) {
@@ -393,19 +398,36 @@ void TextItem::paint(QPainter& p, int widgetW, int widgetH)
 {
     const QRect rect = pixelRect(widgetW, widgetH);
 
+    // Dynamic pixel-based font sizing (matches NeedleItem pattern).
+    // Scale with rect height, m_fontSize is the minimum floor.
+    const int pixH = rect.height();
+    int dynFontSize = qMax(m_fontSize, static_cast<int>(pixH * 0.7f));
+
     QFont font = p.font();
-    font.setPointSize(m_fontSize);
     font.setBold(m_bold);
-    p.setFont(font);
-    p.setPen(m_textColor);
 
     QString text;
-    if (m_bindingId >= 0) {
+    if (m_bindingId >= 0 && m_value < m_minValidValue && !m_idleText.isEmpty()) {
+        text = m_idleText;
+    } else if (m_bindingId >= 0) {
         text = QString::number(m_value, 'f', m_decimals) + m_suffix;
     } else {
         text = m_label;
     }
 
+    // Shrink font if text overflows rect width
+    font.setPixelSize(dynFontSize);
+    while (dynFontSize > m_fontSize) {
+        const QFontMetrics fm(font);
+        if (fm.horizontalAdvance(text) <= rect.width()) {
+            break;
+        }
+        --dynFontSize;
+        font.setPixelSize(dynFontSize);
+    }
+
+    p.setFont(font);
+    p.setPen(m_textColor);
     p.drawText(rect, Qt::AlignCenter, text);
 }
 

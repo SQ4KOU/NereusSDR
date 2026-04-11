@@ -38,6 +38,11 @@ public:
     static ItemGroup* createHBarPreset(int bindingId, double minVal, double maxVal,
                                         const QString& name, QObject* parent = nullptr);
 
+    // Compact HBar: single-line layout (label left, bar center, readout right).
+    // No scale ticks. From AetherSDR HGauge pattern.
+    static ItemGroup* createCompactHBarPreset(int bindingId, double minVal, double maxVal,
+                                               const QString& name, QObject* parent = nullptr);
+
     // S-Meter preset: arc-style NeedleItem with full readout.
     // From AetherSDR SMeterWidget visual style.
     static ItemGroup* createSMeterPreset(int bindingId, const QString& name,
