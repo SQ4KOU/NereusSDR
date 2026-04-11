@@ -2,6 +2,19 @@
 #include "MeterWidget.h"
 #include "MeterPoller.h"
 
+#include "SpacerItem.h"
+#include "FadeCoverItem.h"
+#include "LEDItem.h"
+#include "HistoryGraphItem.h"
+#include "MagicEyeItem.h"
+#include "NeedleScalePwrItem.h"
+#include "SignalTextItem.h"
+#include "DialItem.h"
+#include "TextOverlayItem.h"
+#include "WebImageItem.h"
+#include "FilterDisplayItem.h"
+#include "RotatorItem.h"
+
 #include <QStringList>
 #include <QtAlgorithms>
 
@@ -158,6 +171,90 @@ ItemGroup* ItemGroup::deserialize(const QString& data, QObject* parent)
                 item = needle;
             } else {
                 delete needle;
+            }
+        } else if (typeTag == QLatin1String("SPACER")) {
+            SpacerItem* spacer = new SpacerItem();
+            if (spacer->deserialize(itemData)) {
+                item = spacer;
+            } else {
+                delete spacer;
+            }
+        } else if (typeTag == QLatin1String("FADECOVER")) {
+            FadeCoverItem* fadecover = new FadeCoverItem();
+            if (fadecover->deserialize(itemData)) {
+                item = fadecover;
+            } else {
+                delete fadecover;
+            }
+        } else if (typeTag == QLatin1String("LED")) {
+            LEDItem* led = new LEDItem();
+            if (led->deserialize(itemData)) {
+                item = led;
+            } else {
+                delete led;
+            }
+        } else if (typeTag == QLatin1String("HISTORY")) {
+            HistoryGraphItem* history = new HistoryGraphItem();
+            if (history->deserialize(itemData)) {
+                item = history;
+            } else {
+                delete history;
+            }
+        } else if (typeTag == QLatin1String("MAGICEYE")) {
+            MagicEyeItem* magiceye = new MagicEyeItem();
+            if (magiceye->deserialize(itemData)) {
+                item = magiceye;
+            } else {
+                delete magiceye;
+            }
+        } else if (typeTag == QLatin1String("NEEDLESCALEPWR")) {
+            NeedleScalePwrItem* needlescalepwr = new NeedleScalePwrItem();
+            if (needlescalepwr->deserialize(itemData)) {
+                item = needlescalepwr;
+            } else {
+                delete needlescalepwr;
+            }
+        } else if (typeTag == QLatin1String("SIGNALTEXT")) {
+            SignalTextItem* signaltext = new SignalTextItem();
+            if (signaltext->deserialize(itemData)) {
+                item = signaltext;
+            } else {
+                delete signaltext;
+            }
+        } else if (typeTag == QLatin1String("DIAL")) {
+            DialItem* dial = new DialItem();
+            if (dial->deserialize(itemData)) {
+                item = dial;
+            } else {
+                delete dial;
+            }
+        } else if (typeTag == QLatin1String("TEXTOVERLAY")) {
+            TextOverlayItem* textoverlay = new TextOverlayItem();
+            if (textoverlay->deserialize(itemData)) {
+                item = textoverlay;
+            } else {
+                delete textoverlay;
+            }
+        } else if (typeTag == QLatin1String("WEBIMAGE")) {
+            WebImageItem* webimage = new WebImageItem();
+            if (webimage->deserialize(itemData)) {
+                item = webimage;
+            } else {
+                delete webimage;
+            }
+        } else if (typeTag == QLatin1String("FILTERDISPLAY")) {
+            FilterDisplayItem* filterdisplay = new FilterDisplayItem();
+            if (filterdisplay->deserialize(itemData)) {
+                item = filterdisplay;
+            } else {
+                delete filterdisplay;
+            }
+        } else if (typeTag == QLatin1String("ROTATOR")) {
+            RotatorItem* rotator = new RotatorItem();
+            if (rotator->deserialize(itemData)) {
+                item = rotator;
+            } else {
+                delete rotator;
             }
         }
 
