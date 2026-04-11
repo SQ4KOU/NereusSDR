@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+### Added — Phase 3G-5: Interactive Meter Items
+
+**Mouse event infrastructure:**
+- MeterItem base class gains virtual `hitTest()`, `handleMousePress()`, `handleMouseRelease()`, `handleMouseMove()`, `handleWheel()` with default no-op implementations
+- MeterWidget forwards mouse events to items in reverse z-order (top-first hit dispatch)
+
+**ButtonBoxItem shared base class** (from Thetis clsButtonBox, MeterManager.cs:12307+):
+- Configurable grid layout (rows/columns), rounded rectangle buttons
+- 13 indicator types: Ring, Bar (L/R/B/T), Dot (L/R/B/T/TL/TR/BL/BR), TextIconColour
+- Three-state colors per button (fill/hover/click), on/off state
+- 100ms click highlight timer (from Thetis `setupClick` pattern)
+- FadeOnRx/FadeOnTx visibility guards, visibility bitmask
+
+**8 interactive button grid items:**
+- `BandButtonItem` — 12 band buttons (160m-6m, GEN), left-click select + right-click bandstack popup (from Thetis clsBandButtonBox)
+- `ModeButtonItem` — 10 mode buttons (LSB-DIGU), left-click select (from Thetis clsModeButtonBox)
+- `FilterButtonItem` — 12 filter buttons (F1-F10, Var1/2), mode-dependent labels, right-click context menu (from Thetis clsFilterButtonBox)
+- `AntennaButtonItem` — 10 color-coded buttons: Rx (green), Aux (orange), Tx (red), Toggle (yellow) (from Thetis clsAntennaButtonBox)
+- `TuneStepButtonItem` — 7 step buttons (1Hz-1MHz) with active highlighting (from Thetis clsTunestepButtons)
+- `OtherButtonItem` — 34 core control buttons + 31 macro slots with Toggle/CAT/ContainerVis modes (from Thetis clsOtherButtons)
+- `VoiceRecordPlayItem` — 5 DVK buttons (REC/PLAY/STOP/NEXT/PREV) (from Thetis clsVoiceRecordPlay)
+- `DiscordButtonItem` — 12 Discord Rich Presence buttons (from Thetis clsDiscordButtonBox)
+
+**3 standalone interactive items:**
+- `VfoDisplayItem` — frequency display in XX.XXX.XXX format with per-digit mouse wheel tuning, mode/filter/band labels, RX/TX indicator, split indicator (from Thetis clsVfoDisplay)
+- `ClockItem` — dual Local + UTC time display with 1s auto-refresh, 24h/12h toggle (from Thetis clsClock)
+- `ClickBoxItem` — invisible hit region for unit cycling overlays (from Thetis clsClickBox)
+
+**1 data item:**
+- `DataOutItem` — MMIO external data bridge with JSON/XML/RAW output formats and UDP/TCP/Serial transport (from Thetis clsDataOut)
+
+**Signal-based interaction:** all interactive items emit Qt signals, never touch RadioModel directly. Signal chain: MeterItem → MeterWidget → ContainerWidget → MainWindow.
+
+**ContainerWidget signal forwarding:** `wireInteractiveItem()` connects band/mode/filter/antenna/tuneStep/other/macro/voice/discord/VFO signals from MeterItems to container-level signals.
+
+**ItemGroup extensions:** 13 new type tags in deserialize registry. 3 new presets: VFO Display, Clock, Contest (VFO + band buttons + mode buttons + clock).
+
 ### Added — Phase 3G-4: Advanced Meter Items
 
 **12 new MeterItem types (passive/display):**

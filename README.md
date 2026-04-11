@@ -24,7 +24,7 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 
 ## Current Status
 
-**Phase 3G-4 complete — advanced meter items.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates audio through WDSP, renders a live GPU-accelerated spectrum + waterfall with VFO tuning (CTUN mode), and has a full UI skeleton with 12 applets, 150+ control widgets, and a complete meter system with 18 item types. The meter engine supports composable items including arc-style S-meter, Power/SWR bars, ANANMM 7-needle multi-meter, CrossNeedle dual fwd/rev power, magic eye tube display, history graph, rotator compass, filter display, LED indicators, and more — all ported from the Thetis MeterManager.
+**Phase 3G-5 complete — interactive meter items.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates audio through WDSP, renders a live GPU-accelerated spectrum + waterfall with VFO tuning (CTUN mode), and has a full UI skeleton with 12 applets, 150+ control widgets, and a complete meter system with 31 item types. The meter engine supports composable items including arc-style S-meter, Power/SWR bars, ANANMM 7-needle multi-meter, CrossNeedle dual fwd/rev power, magic eye tube display, history graph, rotator compass, filter display, LED indicators, interactive band/mode/filter/antenna/tuning-step button grids, VFO frequency display with per-digit wheel tuning, and dual UTC/Local clock — all ported from the Thetis MeterManager.
 
 ## Key Features
 
@@ -49,18 +49,20 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 - Dockable/floatable containers with axis-lock, hover-reveal title bar, serialization
 - GPU-rendered meter engine (QRhi 3-pipeline: background texture, vertex geometry, QPainter overlay)
 - Live signal strength bar meter in Container #0 (WDSP polling at 10 FPS)
-- Composable MeterItems: 18 item types (BarItem, NeedleItem, TextItem, ScaleItem, SolidColourItem, ImageItem, SpacerItem, FadeCoverItem, LEDItem, HistoryGraphItem, MagicEyeItem, NeedleScalePwrItem, SignalTextItem, DialItem, TextOverlayItem, WebImageItem, FilterDisplayItem, RotatorItem)
+- Composable MeterItems: 31 item types (BarItem, NeedleItem, TextItem, ScaleItem, SolidColourItem, ImageItem, SpacerItem, FadeCoverItem, LEDItem, HistoryGraphItem, MagicEyeItem, NeedleScalePwrItem, SignalTextItem, DialItem, TextOverlayItem, WebImageItem, FilterDisplayItem, RotatorItem, ButtonBoxItem, BandButtonItem, ModeButtonItem, FilterButtonItem, AntennaButtonItem, TuneStepButtonItem, OtherButtonItem, VoiceRecordPlayItem, DiscordButtonItem, VfoDisplayItem, ClockItem, ClickBoxItem, DataOutItem)
 - Arc-style S-meter needle, Power/SWR bars, ALC/Mic/Comp presets
 - ANANMM 7-needle multi-meter with exact Thetis calibration (signal, volts, amps, power, SWR, compression, ALC)
 - CrossNeedle dual fwd/rev power meter with mirrored geometry
 - Edge meter display mode (thin-line indicator style)
-- 35+ meter presets via ItemGroup factories
+- Interactive button grids: band, mode, filter, antenna, tuning step, macro controls — all with hover/click feedback
+- VFO frequency display with per-digit mouse wheel tuning, mode/filter/band labels
+- Dual UTC/Local clock display with 1s auto-refresh
+- 38+ meter presets via ItemGroup factories
 - Full UI skeleton: 12 applets, 9-menu bar, 47-page SetupDialog, SpectrumOverlayPanel, status bar
 - Cross-platform build (Windows, Linux, macOS)
 
 **Planned (see Roadmap):**
-- Interactive meter items: band/mode/filter/antenna buttons, VFO display, clock (Phase 3G-5)
-- Container settings dialog with import/export and preset browser (Phase 3G-6)
+- Container settings dialog with full composability UI, import/export, preset browser (Phase 3G-6)
 - TX pipeline — SSB, CW, full processing chain, PureSignal (Phase 3I)
 - Up to 4 independent panadapters in configurable layouts (Phase 3F)
 - Thetis-inspired skin system (Phase 3H)
@@ -105,7 +107,7 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 | **3G-3: Core Meter Groups** | **S-Meter, Power/SWR, ALC presets** | **Complete** |
 | **3-UI: Full UI Skeleton** | **12 applets, 9-menu bar, SetupDialog, SpectrumOverlayPanel** | **Complete** |
 | **3G-4: Advanced Meter Items** | **12 item types + ANANMM/CrossNeedle presets + Edge mode** | **Complete** |
-| 3G-5: Interactive Meter Items | Band/mode/filter buttons, VFO display, clock | Planned |
+| **3G-5: Interactive Meter Items** | **14 interactive items + mouse forwarding + ButtonBoxItem base** | **Complete** |
 | 3G-6: Container Settings Dialog | Full composability UI, import/export | Planned |
 | 3I-1: Basic SSB TX | TxChannel, MOX state machine, RF output | Planned |
 | 3I-2: CW TX | Sidetone, firmware keyer, QSK/break-in | Planned |

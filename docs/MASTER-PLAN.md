@@ -391,25 +391,37 @@ Verification: Live S-meter needle, Power/SWR during TX, correct readings vs Thet
 
 Verification: All menus, applets, and dialogs present and navigable; RxApplet Tier 1 controls update SliceModel live.
 
-### Phase 3G-4: Advanced Meter Items
+### Phase 3G-4: Advanced Meter Items ✅ COMPLETE
 **Goal:** Visual flair — items that make it look like a real radio console.
 
-Scope:
-- HistoryItem (HISTORY) — scrolling signal graph, ring buffer texture, `meter_history.vert/.frag`
-- MagicEyeItem (MAGIC_EYE) — animated vacuum tube iris, `meter_eye.vert/.frag`
-- DialItem (DIAL_DISPLAY) — analog dial with rotating pointer
-- LedItem (LED) — on/off/blink, FadeCoverItem, WebImageItem, CustomMeterBarItem
+Delivered:
+- 12 new passive MeterItem types: SpacerItem, FadeCoverItem, LEDItem, HistoryGraphItem, MagicEyeItem, NeedleScalePwrItem, SignalTextItem, DialItem, TextOverlayItem, WebImageItem, FilterDisplayItem, RotatorItem
+- ANANMM 7-needle composite preset with exact Thetis calibration points
+- CrossNeedle dual fwd/rev power meter with mirrored geometry
+- Edge meter display mode (BarItem Filled/Edge style)
+- 15+ new bar preset factories, MeterBinding extensions (7-8, 106-112, 200-202, 300-301)
 
-Verification: History graph scrolling, magic eye responding to signal strength.
+**Implementation plan:** `docs/architecture/phase3g4-advanced-meters-plan.md`
 
-### Phase 3G-5: Interactive Meter Items
+Verification: All items render correctly, ANANMM/CrossNeedle calibration matches Thetis. ✅
+
+### Phase 3G-5: Interactive Meter Items ✅ COMPLETE
 **Goal:** Button grids and frequency displays inside containers.
 
-Scope:
-- ButtonItem (GPU face + QWidget overlay): Band, Mode, Filter, Antenna, TuneStep, VoiceRecordPlay, Other
-- VfoDisplayItem, ClockItem, SpacerItem, ClickBoxItem
+Delivered:
+- MeterItem mouse event virtuals (hitTest, handleMousePress/Release/Move, handleWheel)
+- MeterWidget reverse z-order mouse forwarding
+- ButtonBoxItem shared base class (grid layout, 13 indicator types, 3-state colors, 100ms click highlight)
+- 8 button grid items: BandButtonItem (12 bands), ModeButtonItem (10 modes), FilterButtonItem (12 filters), AntennaButtonItem (10 color-coded), TuneStepButtonItem (7 steps), OtherButtonItem (34 core + 31 macros), VoiceRecordPlayItem (5 DVK), DiscordButtonItem (12 status)
+- VfoDisplayItem (XX.XXX.XXX format, per-digit wheel tuning, mode/filter/band labels)
+- ClockItem (dual Local + UTC, 1s timer, 24h/12h)
+- ClickBoxItem (invisible hit region), DataOutItem (MMIO bridge)
+- ContainerWidget signal forwarding via wireInteractiveItem()
+- ItemGroup deserialize registry (13 new tags) + 3 presets (VFO Display, Clock, Contest)
 
-Verification: Band buttons switch bands, mode buttons switch modes, all route through SliceModel.
+**Implementation plan:** `docs/architecture/phase3g5-interactive-meters-plan.md`
+
+Verification: Build clean, all items compile, signal chain wired through ContainerWidget. ✅
 
 ### Phase 3G-6: Container Settings Dialog
 **Goal:** Full user customization — the composability UI.
@@ -606,19 +618,19 @@ CI workflows already in place. Finalize:
 
 ---
 
-## Recommended Next Step: Phase 3I-1 — Basic SSB TX or Phase 3G-4 — Advanced Meter Items
+## Recommended Next Step: Phase 3G-6 — Container Settings Dialog or Phase 3I-1 — Basic SSB TX
 
-Phases 3A–3E, 3G-1, 3G-2, 3G-3, and 3-UI are all complete. The radio connects,
+Phases 3A–3E, 3G-1 through 3G-5, and 3-UI are all complete. The radio connects,
 demodulates audio, renders live GPU spectrum + waterfall, supports full VFO tuning with
-CTUN panadapter mode, the container/applet infrastructure (dock/float/resize/persist/
-applet panel + S-meter) is in place, and the full UI skeleton (12 applets, 9-menu bar,
-47-page SetupDialog, SpectrumOverlayPanel) is complete with RxApplet Tier 1 wired.
+CTUN panadapter mode, and has a complete meter system with 31 item types (18 passive + 13
+interactive) including button grids, VFO display, and clock — all with signal-based
+interaction wired through ContainerWidget.
 
 Two viable next paths:
+- **3G-6 (Container Settings Dialog)** — full composability UI, import/export, preset browser — completes the meter system
 - **3I-1 (Basic SSB TX)** — get RF out the door; proves TX I/Q output path end-to-end
-- **3G-4 (Advanced Meter Items)** — history graph, magic eye, dial, LED for visual completeness
 
-Execution order: **3G-4..6 → 3I-1..4 → 3F → 3H → 3J+**
+Execution order: **3G-6 → 3I-1..4 → 3F → 3H → 3J+**
 
 ### Phase Dependencies
 
