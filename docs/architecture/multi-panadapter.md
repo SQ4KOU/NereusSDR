@@ -18,8 +18,8 @@ This means:
 - Layout persistence is handled by AppSettings, not the radio
 
 **Important:** Each panadapter's visible bandwidth is limited by the DDC
-sample rate of its associated receiver (max ~384 kHz), not the full ADC
-bandwidth (61.44 MHz). See
+sample rate of its associated receiver (up to ~768 kHz at the highest DDC
+rate), not the full ADC bandwidth (61.44 MHz). See
 [adc-ddc-panadapter-mapping.md](adc-ddc-panadapter-mapping.md) for the
 complete ADC -> DDC -> Receiver -> FFT -> Panadapter signal chain.
 

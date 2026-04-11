@@ -352,3 +352,19 @@ Overall assessment: **GREEN — on track with manageable risks**.
 *Review generated from: MASTER-PLAN.md, CONTRIBUTING.md, CHANGELOG.md,
 STYLEGUIDE.md, 7 architecture docs, 5 implementation plans, and full source
 tree audit (61 files, 15,601 LOC).*
+
+---
+
+## Appendix: Remediation (2026-04-11)
+
+The following inconsistencies from Section 4 have been fixed:
+
+| # | Gap | Fix Applied |
+|---|-----|-------------|
+| 1 | multi-panadapter.md 384 kHz limit | Updated to ~768 kHz (reflects Phase 3E DDC rate) |
+| 2 | wdsp-integration.md NR leakage default | Fixed `m_nrLeakage` from 10.0 to 1e-7 (matches correction note) |
+| 3 | MASTER-PLAN.md stale recommended next step | Updated from 3G-2 to 3G-3 (current phase) |
+| 4 | No phase dependency DAG | Added dependency section with ASCII DAG to MASTER-PLAN.md |
+| 5 | adc-ddc-panadapter-mapping.md 384 kHz refs | Updated 6 references to 768 kHz, added 768k row to table |
+| 6 | CONTRIBUTING.md GuardedSlider "(planned)" | Replaced with event filter guidance + future note |
+| 7 | No test strategy document | Not addressed — requires separate planning effort |
