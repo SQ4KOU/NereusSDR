@@ -65,6 +65,31 @@ public:
     // From Thetis MeterManager.cs COMP scale (-25 to 0 dB).
     static ItemGroup* createCompPreset(QObject* parent = nullptr);
 
+    // --- Phase 3G-4 bar presets (from Thetis MeterManager.cs AddMeter factory) ---
+    static ItemGroup* createSignalBarPreset(QObject* parent = nullptr);
+    static ItemGroup* createAvgSignalBarPreset(QObject* parent = nullptr);
+    static ItemGroup* createMaxBinBarPreset(QObject* parent = nullptr);
+    static ItemGroup* createAdcBarPreset(QObject* parent = nullptr);
+    static ItemGroup* createAdcMaxMagPreset(QObject* parent = nullptr);
+    static ItemGroup* createAgcBarPreset(QObject* parent = nullptr);
+    static ItemGroup* createAgcGainBarPreset(QObject* parent = nullptr);
+    static ItemGroup* createPbsnrBarPreset(QObject* parent = nullptr);
+    static ItemGroup* createEqBarPreset(QObject* parent = nullptr);
+    static ItemGroup* createLevelerBarPreset(QObject* parent = nullptr);
+    static ItemGroup* createLevelerGainBarPreset(QObject* parent = nullptr);
+    static ItemGroup* createAlcGainBarPreset(QObject* parent = nullptr);
+    static ItemGroup* createAlcGroupBarPreset(QObject* parent = nullptr);
+    static ItemGroup* createCfcBarPreset(QObject* parent = nullptr);
+    static ItemGroup* createCfcGainBarPreset(QObject* parent = nullptr);
+    static ItemGroup* createCustomBarPreset(int bindingId, double minVal, double maxVal,
+                                             const QString& name, QObject* parent = nullptr);
+
+    // --- Phase 3G-4 composite presets ---
+    static ItemGroup* createMagicEyePreset(int bindingId, QObject* parent = nullptr);
+    static ItemGroup* createSignalTextPreset(int bindingId, QObject* parent = nullptr);
+    static ItemGroup* createHistoryPreset(int bindingId, QObject* parent = nullptr);
+    static ItemGroup* createSpacerPreset(QObject* parent = nullptr);
+
     // Install all items from this group into a MeterWidget, transforming
     // their normalized 0-1 positions into the given target rect.
     // Transfers item ownership to widget; clears this group's item list.

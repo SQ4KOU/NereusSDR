@@ -594,4 +594,202 @@ ItemGroup* ItemGroup::createCompPreset(QObject* parent)
                             QStringLiteral("Comp"), parent);
 }
 
+// ---------------------------------------------------------------------------
+// Phase 3G-4 bar presets (from Thetis MeterManager.cs AddMeter factory)
+// ---------------------------------------------------------------------------
+
+ItemGroup* ItemGroup::createSignalBarPreset(QObject* parent)
+{
+    return createHBarPreset(MeterBinding::SignalPeak, -140.0, 0.0,
+                            QStringLiteral("Signal"), parent);
+}
+
+ItemGroup* ItemGroup::createAvgSignalBarPreset(QObject* parent)
+{
+    return createHBarPreset(MeterBinding::SignalAvg, -140.0, 0.0,
+                            QStringLiteral("Avg Signal"), parent);
+}
+
+ItemGroup* ItemGroup::createMaxBinBarPreset(QObject* parent)
+{
+    return createHBarPreset(MeterBinding::SignalMaxBin, -140.0, 0.0,
+                            QStringLiteral("Max Bin"), parent);
+}
+
+ItemGroup* ItemGroup::createAdcBarPreset(QObject* parent)
+{
+    return createHBarPreset(MeterBinding::AdcAvg, -140.0, 0.0,
+                            QStringLiteral("ADC"), parent);
+}
+
+ItemGroup* ItemGroup::createAdcMaxMagPreset(QObject* parent)
+{
+    return createHBarPreset(MeterBinding::AdcPeak, -140.0, 0.0,
+                            QStringLiteral("ADC Max"), parent);
+}
+
+ItemGroup* ItemGroup::createAgcBarPreset(QObject* parent)
+{
+    return createHBarPreset(MeterBinding::AgcAvg, -20.0, 120.0,
+                            QStringLiteral("AGC"), parent);
+}
+
+ItemGroup* ItemGroup::createAgcGainBarPreset(QObject* parent)
+{
+    return createHBarPreset(MeterBinding::AgcGain, -20.0, 120.0,
+                            QStringLiteral("AGC Gain"), parent);
+}
+
+ItemGroup* ItemGroup::createPbsnrBarPreset(QObject* parent)
+{
+    return createHBarPreset(MeterBinding::PbSnr, 0.0, 60.0,
+                            QStringLiteral("PBSNR"), parent);
+}
+
+ItemGroup* ItemGroup::createEqBarPreset(QObject* parent)
+{
+    return createHBarPreset(MeterBinding::TxEq, -30.0, 0.0,
+                            QStringLiteral("EQ"), parent);
+}
+
+ItemGroup* ItemGroup::createLevelerBarPreset(QObject* parent)
+{
+    return createHBarPreset(MeterBinding::TxLeveler, -30.0, 0.0,
+                            QStringLiteral("Leveler"), parent);
+}
+
+ItemGroup* ItemGroup::createLevelerGainBarPreset(QObject* parent)
+{
+    return createHBarPreset(MeterBinding::TxLevelerGain, 0.0, 30.0,
+                            QStringLiteral("Leveler Gain"), parent);
+}
+
+ItemGroup* ItemGroup::createAlcGainBarPreset(QObject* parent)
+{
+    return createHBarPreset(MeterBinding::TxAlcGain, 0.0, 30.0,
+                            QStringLiteral("ALC Gain"), parent);
+}
+
+ItemGroup* ItemGroup::createAlcGroupBarPreset(QObject* parent)
+{
+    return createHBarPreset(MeterBinding::TxAlcGroup, -30.0, 25.0,
+                            QStringLiteral("ALC Group"), parent);
+}
+
+ItemGroup* ItemGroup::createCfcBarPreset(QObject* parent)
+{
+    return createHBarPreset(MeterBinding::TxCfc, -30.0, 0.0,
+                            QStringLiteral("CFC"), parent);
+}
+
+ItemGroup* ItemGroup::createCfcGainBarPreset(QObject* parent)
+{
+    return createHBarPreset(MeterBinding::TxCfcGain, 0.0, 30.0,
+                            QStringLiteral("CFC Gain"), parent);
+}
+
+ItemGroup* ItemGroup::createCustomBarPreset(int bindingId, double minVal, double maxVal,
+                                             const QString& name, QObject* parent)
+{
+    return createHBarPreset(bindingId, minVal, maxVal, name, parent);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3G-4 composite presets
+// ---------------------------------------------------------------------------
+
+// createMagicEyePreset
+// Single MagicEyeItem fills the full group rect.
+// From Thetis MeterManager.cs clsMagicEye usage.
+ItemGroup* ItemGroup::createMagicEyePreset(int bindingId, QObject* parent)
+{
+    ItemGroup* group = new ItemGroup(QStringLiteral("Magic Eye"), parent);
+
+    MagicEyeItem* eye = new MagicEyeItem();
+    eye->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+    eye->setBindingId(bindingId);
+    eye->setZOrder(5);
+    group->addItem(eye);
+
+    return group;
+}
+
+// createSignalTextPreset
+// Dark background + large SignalTextItem (S-units mode).
+// From Thetis MeterManager.cs clsSignalText (line 20286+).
+// Yellow text (#ffff00) from Thetis line 21708.
+ItemGroup* ItemGroup::createSignalTextPreset(int bindingId, QObject* parent)
+{
+    ItemGroup* group = new ItemGroup(QStringLiteral("Signal Text"), parent);
+
+    // Background
+    SolidColourItem* bg = new SolidColourItem();
+    bg->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+    bg->setColour(QColor(0x0f, 0x0f, 0x1a));
+    bg->setZOrder(0);
+    group->addItem(bg);
+
+    SignalTextItem* text = new SignalTextItem();
+    text->setRect(0.02f, 0.05f, 0.96f, 0.9f);
+    text->setBindingId(bindingId);
+    text->setUnits(SignalTextItem::Units::SUnits);
+    text->setFontSize(40.0f);
+    text->setColour(QColor(0xff, 0xff, 0x00));  // Yellow (from Thetis line 21708)
+    text->setZOrder(5);
+    group->addItem(text);
+
+    return group;
+}
+
+// createHistoryPreset
+// Dark background + HistoryGraphItem (top 80%) + TextItem readout (bottom 20%).
+// From Thetis MeterManager.cs clsHistoryItem (line 16149+).
+ItemGroup* ItemGroup::createHistoryPreset(int bindingId, QObject* parent)
+{
+    ItemGroup* group = new ItemGroup(QStringLiteral("History"), parent);
+
+    // Background
+    SolidColourItem* bg = new SolidColourItem();
+    bg->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+    bg->setColour(QColor(0x0a, 0x0a, 0x18));
+    bg->setZOrder(0);
+    group->addItem(bg);
+
+    // History graph (top 80%)
+    HistoryGraphItem* hist = new HistoryGraphItem();
+    hist->setRect(0.0f, 0.0f, 1.0f, 0.8f);
+    hist->setBindingId(bindingId);
+    hist->setCapacity(300);
+    hist->setZOrder(5);
+    group->addItem(hist);
+
+    // Text readout (bottom 20%)
+    TextItem* readout = new TextItem();
+    readout->setRect(0.02f, 0.8f, 0.96f, 0.2f);
+    readout->setBindingId(bindingId);
+    readout->setTextColor(QColor(0xc8, 0xd8, 0xe8));
+    readout->setFontSize(13);
+    readout->setBold(true);
+    readout->setSuffix(QStringLiteral(" dBm"));
+    readout->setDecimals(1);
+    readout->setZOrder(10);
+    group->addItem(readout);
+
+    return group;
+}
+
+// createSpacerPreset
+// Invisible spacer that occupies the full group rect.
+ItemGroup* ItemGroup::createSpacerPreset(QObject* parent)
+{
+    ItemGroup* group = new ItemGroup(QStringLiteral("Spacer"), parent);
+
+    SpacerItem* spacer = new SpacerItem();
+    spacer->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+    spacer->setZOrder(0);
+    group->addItem(spacer);
+
+    return group;
+}
+
 } // namespace NereusSDR
