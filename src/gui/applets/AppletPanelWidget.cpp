@@ -85,7 +85,11 @@ void AppletPanelWidget::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
     if (m_headerWidget && m_headerAspect > 0.0f) {
-        int h = qMax(80, static_cast<int>(event->size().width() / m_headerAspect));
+        int w = event->size().width();
+        int totalH = event->size().height();
+        int h = static_cast<int>(w / m_headerAspect);
+        // Clamp: min 80px, max 40% of total panel height so applets aren't crowded
+        h = qBound(80, h, totalH * 40 / 100);
         m_headerWidget->setFixedHeight(h);
     }
 }

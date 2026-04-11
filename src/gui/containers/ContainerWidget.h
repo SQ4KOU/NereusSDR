@@ -30,7 +30,7 @@ class ContainerWidget : public QWidget {
     Q_OBJECT
 
 public:
-    static constexpr int kMinContainerWidth = 24;
+    static constexpr int kMinContainerWidth = 260;
     static constexpr int kMinContainerHeight = 24;
     static constexpr int kTitleBarHeight = 22;
     static constexpr int kTitleHoverZone = 40;  // larger target for hover reveal

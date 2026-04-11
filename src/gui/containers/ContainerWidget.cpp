@@ -158,6 +158,12 @@ void ContainerWidget::setContent(QWidget* widget)
         m_content->setParent(m_contentHolder);
         m_content->setMouseTracking(true);
         m_content->installEventFilter(this);
+        // Enable mouse tracking + event filter on all descendants so hover
+        // detection works even when mouse is over child widgets (scroll areas, applets).
+        for (QWidget* child : m_content->findChildren<QWidget*>()) {
+            child->setMouseTracking(true);
+            child->installEventFilter(this);
+        }
         layout->addWidget(m_content);
     }
 }
@@ -212,12 +218,16 @@ void ContainerWidget::setRxSource(int rx) { m_rxSource = rx; updateTitle(); }
 
 void ContainerWidget::setDockMode(DockMode mode)
 {
-    if (m_dockMode == mode) {
-        return;
-    }
+    bool changed = (m_dockMode != mode);
     m_dockMode = mode;
-    updateTitleBar();
-    emit dockModeChanged(mode);
+
+    // Enforce minimum width in all dock modes so the applets are always usable.
+    setMinimumWidth(260);
+
+    if (changed) {
+        updateTitleBar();
+        emit dockModeChanged(mode);
+    }
 }
 
 void ContainerWidget::setAxisLock(AxisLock lock)
@@ -411,8 +421,14 @@ bool ContainerWidget::eventFilter(QObject* watched, QEvent* event)
 
     // Content area hover — detect mouse in title region when title bar is hidden
     // (hidden title bar collapses in layout, so content fills top area)
-    if ((watched == m_contentHolder || watched == m_content)
-        && event->type() == QEvent::MouseMove && !m_locked) {
+    bool isContentArea = (watched == m_contentHolder || watched == m_content);
+    if (!isContentArea && m_content) {
+        QWidget* w = qobject_cast<QWidget*>(watched);
+        if (w && w->isAncestorOf(m_content) == false && m_content->isAncestorOf(w)) {
+            isContentArea = true;
+        }
+    }
+    if (isContentArea && event->type() == QEvent::MouseMove && !m_locked) {
         QMouseEvent* me = static_cast<QMouseEvent*>(event);
         bool noControls = m_noControls && !(QApplication::keyboardModifiers() & Qt::ShiftModifier);
         if (!noControls) {
