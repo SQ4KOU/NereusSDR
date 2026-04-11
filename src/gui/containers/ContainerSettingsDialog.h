@@ -48,6 +48,9 @@ private:
     void refreshItemList();
     static QString typeTagDisplayName(const QString& tag);
 
+    void addNewItem(const QString& typeTag);
+    static MeterItem* createDefaultItem(const QString& typeTag);
+
     void populateItemList();
     void updatePreview();
     void applyToContainer();

@@ -46,6 +46,7 @@
 #include <QColorDialog>
 #include <QColor>
 #include <QMap>
+#include <QMenu>
 #include <QStringList>
 
 namespace NereusSDR {
@@ -420,14 +421,261 @@ void ContainerSettingsDialog::buildButtonBar()
 }
 
 // ---------------------------------------------------------------------------
-// Slots (stubs — filled in later tasks)
+// Slots
 // ---------------------------------------------------------------------------
 
 void ContainerSettingsDialog::onItemSelectionChanged() {}
-void ContainerSettingsDialog::onAddItem()              {}
-void ContainerSettingsDialog::onRemoveItem()           {}
-void ContainerSettingsDialog::onMoveItemUp()           {}
-void ContainerSettingsDialog::onMoveItemDown()         {}
+
+void ContainerSettingsDialog::onAddItem()
+{
+    // Styled popup menu with categorized sub-menus
+    auto* menu = new QMenu(this);
+    menu->setStyleSheet(
+        QStringLiteral("QMenu {"
+                       "  background: #1a2a3a;"
+                       "  color: #c8d8e8;"
+                       "  border: 1px solid #205070;"
+                       "}"
+                       "QMenu::item:selected {"
+                       "  background: #00b4d8;"
+                       "  color: #0f0f1a;"
+                       "}"
+                       "QMenu::separator {"
+                       "  background: #203040;"
+                       "  height: 1px;"
+                       "}"));
+
+    // --- Meters ---
+    QMenu* metersMenu = menu->addMenu(QStringLiteral("Meters"));
+    metersMenu->setStyleSheet(menu->styleSheet());
+    metersMenu->addAction(QStringLiteral("Bar Meter"),     this, [this]{ addNewItem(QStringLiteral("BAR")); });
+    metersMenu->addAction(QStringLiteral("Needle Meter"),  this, [this]{ addNewItem(QStringLiteral("NEEDLE")); });
+    metersMenu->addAction(QStringLiteral("Dial Meter"),    this, [this]{ addNewItem(QStringLiteral("DIAL")); });
+    metersMenu->addAction(QStringLiteral("History Graph"), this, [this]{ addNewItem(QStringLiteral("HISTORY")); });
+    metersMenu->addAction(QStringLiteral("Magic Eye"),     this, [this]{ addNewItem(QStringLiteral("MAGICEYE")); });
+    metersMenu->addAction(QStringLiteral("Signal Text"),   this, [this]{ addNewItem(QStringLiteral("SIGNALTEXT")); });
+    metersMenu->addAction(QStringLiteral("Power Scale"),   this, [this]{ addNewItem(QStringLiteral("NEEDLESCALEPWR")); });
+
+    // --- Indicators ---
+    QMenu* indicatorsMenu = menu->addMenu(QStringLiteral("Indicators"));
+    indicatorsMenu->setStyleSheet(menu->styleSheet());
+    indicatorsMenu->addAction(QStringLiteral("LED Indicator"), this, [this]{ addNewItem(QStringLiteral("LED")); });
+    indicatorsMenu->addAction(QStringLiteral("Text Readout"),  this, [this]{ addNewItem(QStringLiteral("TEXT")); });
+    indicatorsMenu->addAction(QStringLiteral("Clock"),         this, [this]{ addNewItem(QStringLiteral("CLOCK")); });
+    indicatorsMenu->addAction(QStringLiteral("Text Overlay"),  this, [this]{ addNewItem(QStringLiteral("TEXTOVERLAY")); });
+
+    // --- Controls ---
+    QMenu* controlsMenu = menu->addMenu(QStringLiteral("Controls"));
+    controlsMenu->setStyleSheet(menu->styleSheet());
+    controlsMenu->addAction(QStringLiteral("Band Buttons"),      this, [this]{ addNewItem(QStringLiteral("BANDBTNS")); });
+    controlsMenu->addAction(QStringLiteral("Mode Buttons"),      this, [this]{ addNewItem(QStringLiteral("MODEBTNS")); });
+    controlsMenu->addAction(QStringLiteral("Filter Buttons"),    this, [this]{ addNewItem(QStringLiteral("FILTERBTNS")); });
+    controlsMenu->addAction(QStringLiteral("Antenna Buttons"),   this, [this]{ addNewItem(QStringLiteral("ANTENNABTNS")); });
+    controlsMenu->addAction(QStringLiteral("Tune Step Buttons"), this, [this]{ addNewItem(QStringLiteral("TUNESTEPBTNS")); });
+    controlsMenu->addAction(QStringLiteral("Other Buttons"),     this, [this]{ addNewItem(QStringLiteral("OTHERBTNS")); });
+    controlsMenu->addAction(QStringLiteral("Voice Rec/Play"),    this, [this]{ addNewItem(QStringLiteral("VOICERECPLAY")); });
+    controlsMenu->addAction(QStringLiteral("VFO Display"),       this, [this]{ addNewItem(QStringLiteral("VFO")); });
+    controlsMenu->addAction(QStringLiteral("Discord Buttons"),   this, [this]{ addNewItem(QStringLiteral("DISCORDBTNS")); });
+
+    // --- Display ---
+    QMenu* displayMenu = menu->addMenu(QStringLiteral("Display"));
+    displayMenu->setStyleSheet(menu->styleSheet());
+    displayMenu->addAction(QStringLiteral("Filter Display"), this, [this]{ addNewItem(QStringLiteral("FILTERDISPLAY")); });
+    displayMenu->addAction(QStringLiteral("Rotator"),        this, [this]{ addNewItem(QStringLiteral("ROTATOR")); });
+
+    // --- Layout ---
+    QMenu* layoutMenu = menu->addMenu(QStringLiteral("Layout"));
+    layoutMenu->setStyleSheet(menu->styleSheet());
+    layoutMenu->addAction(QStringLiteral("Solid Color"), this, [this]{ addNewItem(QStringLiteral("SOLID")); });
+    layoutMenu->addAction(QStringLiteral("Image"),       this, [this]{ addNewItem(QStringLiteral("IMAGE")); });
+    layoutMenu->addAction(QStringLiteral("Web Image"),   this, [this]{ addNewItem(QStringLiteral("WEBIMAGE")); });
+    layoutMenu->addAction(QStringLiteral("Spacer"),      this, [this]{ addNewItem(QStringLiteral("SPACER")); });
+    layoutMenu->addAction(QStringLiteral("Fade Cover"),  this, [this]{ addNewItem(QStringLiteral("FADECOVER")); });
+    layoutMenu->addAction(QStringLiteral("Click Box"),   this, [this]{ addNewItem(QStringLiteral("CLICKBOX")); });
+    layoutMenu->addAction(QStringLiteral("Scale"),       this, [this]{ addNewItem(QStringLiteral("SCALE")); });
+
+    // --- Data ---
+    QMenu* dataMenu = menu->addMenu(QStringLiteral("Data"));
+    dataMenu->setStyleSheet(menu->styleSheet());
+    dataMenu->addAction(QStringLiteral("Data Output"), this, [this]{ addNewItem(QStringLiteral("DATAOUT")); });
+
+    menu->popup(m_btnAdd->mapToGlobal(QPoint(0, m_btnAdd->height())));
+}
+
+void ContainerSettingsDialog::onRemoveItem()
+{
+    const int row = m_itemList->currentRow();
+    if (row < 0 || row >= m_workingItems.size()) {
+        return;
+    }
+
+    delete m_workingItems.takeAt(row);
+    refreshItemList();
+
+    // Select nearest remaining item
+    if (!m_workingItems.isEmpty()) {
+        const int newRow = qMin(row, m_workingItems.size() - 1);
+        m_itemList->setCurrentRow(newRow);
+    }
+
+    updatePreview();
+}
+
+void ContainerSettingsDialog::onMoveItemUp()
+{
+    const int row = m_itemList->currentRow();
+    if (row <= 0) {
+        return;
+    }
+
+    m_workingItems.swapItemsAt(row, row - 1);
+    refreshItemList();
+    m_itemList->setCurrentRow(row - 1);
+    updatePreview();
+}
+
+void ContainerSettingsDialog::onMoveItemDown()
+{
+    const int row = m_itemList->currentRow();
+    if (row < 0 || row >= m_workingItems.size() - 1) {
+        return;
+    }
+
+    m_workingItems.swapItemsAt(row, row + 1);
+    refreshItemList();
+    m_itemList->setCurrentRow(row + 1);
+    updatePreview();
+}
+
+// ---------------------------------------------------------------------------
+// addNewItem — create and insert a new item after the current selection
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::addNewItem(const QString& typeTag)
+{
+    // Calculate yPos: max (y + height) of existing items, clamped to 0.9
+    float yPos = 0.0f;
+    for (const MeterItem* item : m_workingItems) {
+        const float bottom = item->y() + item->itemHeight();
+        if (bottom > yPos) {
+            yPos = bottom;
+        }
+    }
+    if (yPos > 0.9f) {
+        yPos = 0.9f;
+    }
+
+    MeterItem* newItem = nullptr;
+
+    if (typeTag == QLatin1String("BAR")) {
+        auto* item = new BarItem();
+        item->setRect(0.0f, yPos, 1.0f, 0.15f);
+        item->setRange(-140.0, 0.0);
+        item->setBindingId(0);
+        newItem = item;
+    } else if (typeTag == QLatin1String("NEEDLE")) {
+        auto* item = new NeedleItem();
+        item->setRect(0.0f, yPos, 1.0f, 0.5f);
+        item->setBindingId(0);
+        newItem = item;
+    } else if (typeTag == QLatin1String("SOLID")) {
+        auto* item = new SolidColourItem();
+        item->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+        item->setZOrder(-10);
+        newItem = item;
+    } else if (typeTag == QLatin1String("TEXT")) {
+        auto* item = new TextItem();
+        item->setRect(0.0f, yPos, 1.0f, 0.1f);
+        item->setBindingId(0);
+        newItem = item;
+    } else if (typeTag == QLatin1String("SCALE")) {
+        auto* item = new ScaleItem();
+        item->setRect(0.0f, yPos, 1.0f, 0.12f);
+        newItem = item;
+    } else if (typeTag == QLatin1String("IMAGE")) {
+        auto* item = new ImageItem();
+        item->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+        item->setZOrder(-5);
+        newItem = item;
+    } else {
+        newItem = createDefaultItem(typeTag);
+        if (newItem) {
+            newItem->setRect(0.0f, yPos, 1.0f, 0.2f);
+        }
+    }
+
+    if (!newItem) {
+        return;
+    }
+
+    // Insert after current selection, or at end if nothing is selected
+    const int currentRow = m_itemList->currentRow();
+    const int insertAt = (currentRow >= 0) ? currentRow + 1 : m_workingItems.size();
+    m_workingItems.insert(insertAt, newItem);
+
+    refreshItemList();
+    m_itemList->setCurrentRow(insertAt);
+    updatePreview();
+}
+
+// ---------------------------------------------------------------------------
+// createDefaultItem — static factory for types not special-cased in addNewItem
+// ---------------------------------------------------------------------------
+
+MeterItem* ContainerSettingsDialog::createDefaultItem(const QString& typeTag)
+{
+    if (typeTag == QLatin1String("SPACER")) {
+        return new SpacerItem();
+    } else if (typeTag == QLatin1String("FADECOVER")) {
+        return new FadeCoverItem();
+    } else if (typeTag == QLatin1String("LED")) {
+        return new LEDItem();
+    } else if (typeTag == QLatin1String("HISTORY")) {
+        return new HistoryGraphItem();
+    } else if (typeTag == QLatin1String("MAGICEYE")) {
+        return new MagicEyeItem();
+    } else if (typeTag == QLatin1String("NEEDLESCALEPWR")) {
+        return new NeedleScalePwrItem();
+    } else if (typeTag == QLatin1String("SIGNALTEXT")) {
+        return new SignalTextItem();
+    } else if (typeTag == QLatin1String("DIAL")) {
+        return new DialItem();
+    } else if (typeTag == QLatin1String("TEXTOVERLAY")) {
+        return new TextOverlayItem();
+    } else if (typeTag == QLatin1String("WEBIMAGE")) {
+        return new WebImageItem();
+    } else if (typeTag == QLatin1String("FILTERDISPLAY")) {
+        return new FilterDisplayItem();
+    } else if (typeTag == QLatin1String("ROTATOR")) {
+        return new RotatorItem();
+    } else if (typeTag == QLatin1String("BANDBTNS")) {
+        return new BandButtonItem();
+    } else if (typeTag == QLatin1String("MODEBTNS")) {
+        return new ModeButtonItem();
+    } else if (typeTag == QLatin1String("FILTERBTNS")) {
+        return new FilterButtonItem();
+    } else if (typeTag == QLatin1String("ANTENNABTNS")) {
+        return new AntennaButtonItem();
+    } else if (typeTag == QLatin1String("TUNESTEPBTNS")) {
+        return new TuneStepButtonItem();
+    } else if (typeTag == QLatin1String("OTHERBTNS")) {
+        return new OtherButtonItem();
+    } else if (typeTag == QLatin1String("VOICERECPLAY")) {
+        return new VoiceRecordPlayItem();
+    } else if (typeTag == QLatin1String("DISCORDBTNS")) {
+        return new DiscordButtonItem();
+    } else if (typeTag == QLatin1String("VFO")) {
+        return new VfoDisplayItem();
+    } else if (typeTag == QLatin1String("CLOCK")) {
+        return new ClockItem();
+    } else if (typeTag == QLatin1String("CLICKBOX")) {
+        return new ClickBoxItem();
+    } else if (typeTag == QLatin1String("DATAOUT")) {
+        return new DataOutItem();
+    }
+
+    return nullptr;
+}
 
 // ---------------------------------------------------------------------------
 // createItemFromSerialized — factory matching ItemGroup::deserialize() pattern
