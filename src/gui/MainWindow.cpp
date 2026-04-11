@@ -327,13 +327,13 @@ void MainWindow::populateDefaultMeter()
     m_phoneCwApplet = new PhoneCwApplet(m_radioModel, nullptr);
     panel->addApplet(m_phoneCwApplet);
 
-    // EqApplet — 8-band EQ, NYI
-    auto* eqApplet = new EqApplet(m_radioModel, nullptr);
-    panel->addApplet(eqApplet);
+    // EqApplet — 10-band EQ, NYI (Phase 3I-3)
+    m_eqApplet = new EqApplet(m_radioModel, nullptr);
+    panel->addApplet(m_eqApplet);
 
     c0->setContent(panel);
     qCDebug(lcMeter) << "Installed default meter layout: S-Meter + Power/SWR + ALC";
-    qCDebug(lcContainer) << "Container #0: Meters + RxApplet + TxApplet + PhoneCwApplet + EqApplet";
+    qCDebug(lcContainer) << "Container #0: Meters + RxApplet + TxApplet + PhoneCwApplet + EqApplet (10-band)";
 }
 
 void MainWindow::buildMenuBar()

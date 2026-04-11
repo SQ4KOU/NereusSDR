@@ -86,10 +86,10 @@ static constexpr const char* kVSliderStyle =
     "QSlider::handle:vertical { height: 10px; width: 16px; margin: 0 -6px;"
     " background: #00b4d8; border-radius: 5px; }";
 
-// Band count and frequency labels (8-band mode: 63 Hz – 8 kHz).
-static constexpr int kEqBandCount = 8;
+// 10-band frequency labels: 32/63/125/250/500/1k/2k/4k/8k/16k Hz.
+static constexpr int kEqBandCount = 10;
 static constexpr const char* kBandLabels[kEqBandCount] = {
-    "63", "125", "250", "500", "1k", "2k", "4k", "8k"
+    "32", "63", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"
 };
 
 
@@ -105,10 +105,10 @@ EqApplet::EqApplet(RadioModel* model, QWidget* parent)
 void EqApplet::buildUI()
 {
     auto* vbox = new QVBoxLayout(this);
-    vbox->setContentsMargins(4, 4, 4, 4);
+    vbox->setContentsMargins(4, 2, 4, 4);
     vbox->setSpacing(4);
 
-    // ── Control row: ON | RX | TX + stretch + Reset ───────────────────────────
+    // ── Control row: ON | Reset | RX | TX ────────────────────────────────────
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
@@ -121,6 +121,12 @@ void EqApplet::buildUI()
         m_onBtn->setToolTip(QStringLiteral("Enable equalizer"));
         row->addWidget(m_onBtn);
         NyiOverlay::markNyi(m_onBtn, QStringLiteral("Phase 3I-3"));
+
+        // Control 4: Reset — 22×22, paints 3/4-circle undo icon (pen #c8d8e8, 1.5px)
+        auto* resetBtn = new ResetButton(this);
+        m_resetBtn = resetBtn;
+        row->addWidget(m_resetBtn);
+        NyiOverlay::markNyi(m_resetBtn, QStringLiteral("Phase 3I-3"));
 
         // Control 2: RX — blue checkable 36×22
         m_rxBtn = new QPushButton(QStringLiteral("RX"), this);
@@ -143,16 +149,19 @@ void EqApplet::buildUI()
 
         row->addStretch();
 
-        // Control 4: Reset — 22×22, paints 3/4-circle undo icon (pen #c8d8e8, 1.5px)
-        auto* resetBtn = new ResetButton(this);
-        m_resetBtn = resetBtn;
-        row->addWidget(m_resetBtn);
-        NyiOverlay::markNyi(m_resetBtn, QStringLiteral("Phase 3I-3"));
-
         vbox->addLayout(row);
     }
 
-    // ── Band label row (63/125/250/500/1k/2k/4k/8k Hz) ───────────────────────
+    // ── Horizontal divider ────────────────────────────────────────────────────
+    {
+        auto* line = new QFrame(this);
+        line->setFrameShape(QFrame::HLine);
+        line->setFrameShadow(QFrame::Plain);
+        line->setStyleSheet(QStringLiteral("QFrame { color: #203040; }"));
+        vbox->addWidget(line);
+    }
+
+    // ── Band label row (controls 5): 32/63/125/250/500/1k/2k/4k/8k/16k ──────
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(0);
@@ -177,7 +186,7 @@ void EqApplet::buildUI()
         vbox->addLayout(row);
     }
 
-    // ── Slider area: left dB scale | 8 sliders | right dB scale ─────────────
+    // ── Slider area: left dB scale (control 6) | 10 sliders (controls 7-16) | right dB scale ──
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(0);
@@ -212,7 +221,7 @@ void EqApplet::buildUI()
             row->addLayout(col);
         }
 
-        // Controls 5–12: 8 vertical band sliders (63/125/250/500/1k/2k/4k/8k Hz)
+        // Controls 7–16: 10 vertical band sliders
         for (int i = 0; i < kEqBandCount; ++i) {
             auto* col = new QVBoxLayout;
             col->setSpacing(1);
@@ -275,25 +284,26 @@ void EqApplet::buildUI()
         vbox->addLayout(row);
     }
 
-    // ── Control 14: Frequency response curve placeholder (minHeight 30) ───────
+    // ── Horizontal divider ────────────────────────────────────────────────────
     {
-        m_freqCurve = new QWidget(this);
-        m_freqCurve->setMinimumHeight(30);
-        m_freqCurve->setStyleSheet(
-            QStringLiteral("QWidget { background: #0a0a18; border: 1px solid #203040; "
-                           "border-radius: 2px; }"));
-        m_freqCurve->setToolTip(
-            QStringLiteral("Frequency response curve — NYI (Phase 3I-3)"));
-        vbox->addWidget(m_freqCurve);
-        NyiOverlay::markNyi(m_freqCurve, QStringLiteral("Phase 3I-3"));
+        auto* line = new QFrame(this);
+        line->setFrameShape(QFrame::HLine);
+        line->setFrameShadow(QFrame::Plain);
+        line->setStyleSheet(QStringLiteral("QFrame { color: #203040; }"));
+        vbox->addWidget(line);
     }
 
-    // ── Preset row: combo (control 13) + 10-Band toggle (control 15) ─────────
+    // ── Preset row: "Preset" label + combo (control 17) ─────────────────────
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
-        // Control 13: Preset combo — Flat / Voice / Music / Custom
+        auto* presetLbl = new QLabel(QStringLiteral("Preset"), this);
+        presetLbl->setStyleSheet(
+            QStringLiteral("QLabel { color: #8090a0; font-size: 10px; }"));
+        row->addWidget(presetLbl);
+
+        // Control 17: Preset combo — Flat / Voice / Music / Custom
         m_presetCombo = new QComboBox(this);
         m_presetCombo->addItem(QStringLiteral("Flat"));
         m_presetCombo->addItem(QStringLiteral("Voice"));
@@ -302,15 +312,6 @@ void EqApplet::buildUI()
         m_presetCombo->setToolTip(QStringLiteral("Equalizer preset"));
         row->addWidget(m_presetCombo, 1);
         NyiOverlay::markNyi(m_presetCombo, QStringLiteral("Phase 3I-3"));
-
-        // Control 15: 10-Band mode toggle
-        m_tenBandBtn = new QPushButton(QStringLiteral("10-Band"), this);
-        m_tenBandBtn->setCheckable(true);
-        m_tenBandBtn->setStyleSheet(kBtnBase + kBlueActive);
-        m_tenBandBtn->setToolTip(
-            QStringLiteral("Switch to 10-band equalizer mode"));
-        row->addWidget(m_tenBandBtn);
-        NyiOverlay::markNyi(m_tenBandBtn, QStringLiteral("Phase 3I-3"));
 
         vbox->addLayout(row);
     }

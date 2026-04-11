@@ -96,6 +96,7 @@ private:
     // Applets (Phase 3-UI)
     class RxApplet* m_rxApplet{nullptr};
     class PhoneCwApplet* m_phoneCwApplet{nullptr};
+    class EqApplet* m_eqApplet{nullptr};
 
     // Spectrum overlay panel
     class SpectrumOverlayPanel* m_overlayPanel{nullptr};
