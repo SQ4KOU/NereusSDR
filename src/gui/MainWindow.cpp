@@ -273,18 +273,26 @@ void MainWindow::populateDefaultMeter()
 
     m_meterWidget = new MeterWidget();
 
-    // Create default H_BAR preset (AetherSDR visual style)
-    ItemGroup* group = ItemGroup::createHBarPreset(
-        MeterBinding::SignalPeak, -140.0, 0.0,
-        QStringLiteral("Signal"), m_meterWidget);
+    // S-Meter: top 55% — arc needle bound to SignalAvg
+    // From Thetis MeterManager.cs: ANAN needle uses AVG_SIGNAL_STRENGTH
+    ItemGroup* smeter = ItemGroup::createSMeterPreset(
+        MeterBinding::SignalAvg, QStringLiteral("S-Meter"), m_meterWidget);
+    smeter->installInto(m_meterWidget, 0.0f, 0.0f, 1.0f, 0.55f);
+    delete smeter;
 
-    // Install group items into MeterWidget
-    for (MeterItem* item : group->items()) {
-        m_meterWidget->addItem(item);
-    }
+    // Power/SWR: middle 30% — stacked bars (stub TX bindings)
+    ItemGroup* pwrSwr = ItemGroup::createPowerSwrPreset(
+        QStringLiteral("Power/SWR"), m_meterWidget);
+    pwrSwr->installInto(m_meterWidget, 0.0f, 0.55f, 1.0f, 0.30f);
+    delete pwrSwr;
+
+    // ALC: bottom 15% — horizontal bar (stub TX binding)
+    ItemGroup* alc = ItemGroup::createAlcPreset(m_meterWidget);
+    alc->installInto(m_meterWidget, 0.0f, 0.85f, 1.0f, 0.15f);
+    delete alc;
 
     c0->setContent(m_meterWidget);
-    qCDebug(lcMeter) << "Installed MeterWidget in Container #0 with signal meter";
+    qCDebug(lcMeter) << "Installed default meter layout: S-Meter + Power/SWR + ALC";
 }
 
 void MainWindow::buildMenuBar()
