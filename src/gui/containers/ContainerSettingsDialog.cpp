@@ -944,16 +944,33 @@ void ContainerSettingsDialog::refreshItemList()
 // Helpers (stubs / partial — filled in later tasks)
 // ---------------------------------------------------------------------------
 
+MeterWidget* ContainerSettingsDialog::findMeterWidget() const
+{
+    if (!m_container) {
+        return nullptr;
+    }
+
+    // Direct content: container holds a MeterWidget (floating containers, new containers)
+    MeterWidget* meter = qobject_cast<MeterWidget*>(m_container->content());
+    if (meter) {
+        return meter;
+    }
+
+    // Nested: Container #0 has an AppletPanelWidget with MeterWidget as header child.
+    // findChild traverses the widget tree to locate it.
+    QWidget* content = m_container->content();
+    if (content) {
+        meter = content->findChild<MeterWidget*>();
+    }
+    return meter;
+}
+
 void ContainerSettingsDialog::populateItemList()
 {
     qDeleteAll(m_workingItems);
     m_workingItems.clear();
 
-    if (!m_container) {
-        return;
-    }
-
-    MeterWidget* meter = qobject_cast<MeterWidget*>(m_container->content());
+    MeterWidget* meter = findMeterWidget();
     if (!meter) {
         return;
     }
@@ -996,6 +1013,7 @@ void ContainerSettingsDialog::applyToContainer()
         return;
     }
 
+    // Apply container-level properties
     m_container->setNotes(m_titleEdit->text());
     m_container->setBorder(m_borderCheck->isChecked());
 
@@ -1004,6 +1022,24 @@ void ContainerSettingsDialog::applyToContainer()
 
     m_container->setShowOnRx(m_showOnRxCheck->isChecked());
     m_container->setShowOnTx(m_showOnTxCheck->isChecked());
+
+    // Write items back to the real MeterWidget
+    MeterWidget* target = findMeterWidget();
+    if (!target) {
+        return;
+    }
+
+    target->clearItems();
+    for (const MeterItem* item : m_workingItems) {
+        const QString data = item->serialize();
+        MeterItem* clone = createItemFromSerialized(data);
+        if (clone) {
+            target->addItem(clone);
+            // Re-wire interactive item signals through the container
+            m_container->wireInteractiveItem(clone);
+        }
+    }
+    target->update();
 }
 
 // ---------------------------------------------------------------------------

@@ -832,6 +832,30 @@ void MainWindow::buildMenuBar()
     QMenu* containersMenu = menuBar()->addMenu(QStringLiteral("Contai&ners"));
 
     {
+        // New Container: creates a floating container with a fresh MeterWidget,
+        // then opens the settings dialog so the user can pick a preset or add items.
+        // From Thetis setup.cs:24358 — btnAddRX1Container_Click → AddMeterContainer(1, false)
+        QAction* newContAction = containersMenu->addAction(QStringLiteral("&New Container..."));
+        connect(newContAction, &QAction::triggered, this, [this]() {
+            if (!m_containerManager) { return; }
+
+            ContainerWidget* c = m_containerManager->createContainer(1, DockMode::Floating);
+            c->setNotes(QStringLiteral("Meter"));
+
+            // Give it a MeterWidget as content (replaces the default placeholder label)
+            MeterWidget* meter = new MeterWidget();
+            c->setContent(meter);
+
+            // Open settings dialog so user can configure it
+            ContainerSettingsDialog dialog(c, this);
+            if (dialog.exec() == QDialog::Rejected) {
+                // User cancelled — destroy the container
+                m_containerManager->destroyContainer(c->id());
+            }
+        });
+    }
+    {
+        // Edit settings for the panel-docked Container #0 (S-Meter / applet panel)
         QAction* contSettingsAction = containersMenu->addAction(QStringLiteral("Container &Settings..."));
         connect(contSettingsAction, &QAction::triggered, this, [this]() {
             ContainerWidget* c = m_containerManager ? m_containerManager->panelContainer() : nullptr;

@@ -65,6 +65,11 @@ private:
     void updatePreview();
     void applyToContainer();
 
+    // Find the MeterWidget inside the container's content hierarchy.
+    // Handles both direct MeterWidget content and MeterWidget nested
+    // inside AppletPanelWidget as a header widget.
+    MeterWidget* findMeterWidget() const;
+
     // Common property editor (Task 4)
     void buildCommonPropsPage();
     void loadCommonProperties(int row);
