@@ -219,6 +219,8 @@ set(GUI_SOURCES
     src/gui/meters/AntennaButtonItem.cpp
     src/gui/meters/TuneStepButtonItem.cpp
     src/gui/meters/OtherButtonItem.cpp
+    src/gui/meters/VoiceRecordPlayItem.cpp
+    src/gui/meters/DiscordButtonItem.cpp
     src/gui/HGauge.cpp
     src/gui/SpectrumOverlayPanel.cpp
     src/gui/SetupDialog.cpp
