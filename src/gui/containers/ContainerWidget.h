@@ -5,11 +5,14 @@
 #include <QSize>
 #include <QColor>
 #include <QString>
+#include <cstdint>
 
 class QLabel;
 class QPushButton;
 
 namespace NereusSDR {
+
+class MeterItem;
 
 // From Thetis ucMeter.cs:49-59 — axis lock positions for docked containers.
 enum class AxisLock {
@@ -105,12 +108,30 @@ public:
     QString serialize() const;
     bool deserialize(const QString& data);
 
+    // Wire interactive MeterItem signals to this container's forwarding signals.
+    // Call after installing items into the container's MeterWidget.
+    void wireInteractiveItem(MeterItem* item);
+
 signals:
     void floatRequested();
     void dockRequested();
     void settingsRequested();
     void dockedMoved();
     void dockModeChanged(DockMode mode);
+
+    // --- Phase 3G-5 interactive item signals ---
+    void bandClicked(int bandIndex);
+    void bandStackRequested(int bandIndex);
+    void modeClicked(int modeIndex);
+    void filterClicked(int filterIndex);
+    void filterContextRequested(int filterIndex);
+    void antennaSelected(int index);
+    void tuneStepSelected(int stepIndex);
+    void otherButtonClicked(int buttonId);
+    void macroTriggered(int macroIndex);
+    void voiceAction(int action);
+    void discordAction(int action);
+    void frequencyChangeRequested(int64_t deltaHz);
 
 public:
     // Re-apply pin-on-top window flag (call after reparenting to FloatingContainer)

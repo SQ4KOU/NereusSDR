@@ -1,6 +1,15 @@
 #include "ContainerWidget.h"
 #include "FloatingContainer.h"
 #include "core/LogCategories.h"
+#include "gui/meters/BandButtonItem.h"
+#include "gui/meters/ModeButtonItem.h"
+#include "gui/meters/FilterButtonItem.h"
+#include "gui/meters/AntennaButtonItem.h"
+#include "gui/meters/TuneStepButtonItem.h"
+#include "gui/meters/OtherButtonItem.h"
+#include "gui/meters/VoiceRecordPlayItem.h"
+#include "gui/meters/DiscordButtonItem.h"
+#include "gui/meters/VfoDisplayItem.h"
 
 #include <QUuid>
 #include <QVBoxLayout>
@@ -589,6 +598,50 @@ void ContainerWidget::doResize(int w, int h)
             resize(newSize);
             update();
         }
+    }
+}
+
+// --- Interactive item signal forwarding ---
+
+void ContainerWidget::wireInteractiveItem(MeterItem* item)
+{
+    if (auto* band = qobject_cast<BandButtonItem*>(item)) {
+        connect(band, &BandButtonItem::bandClicked,
+                this, &ContainerWidget::bandClicked);
+        connect(band, &BandButtonItem::bandStackRequested,
+                this, &ContainerWidget::bandStackRequested);
+    } else if (auto* mode = qobject_cast<ModeButtonItem*>(item)) {
+        connect(mode, &ModeButtonItem::modeClicked,
+                this, &ContainerWidget::modeClicked);
+    } else if (auto* filter = qobject_cast<FilterButtonItem*>(item)) {
+        connect(filter, &FilterButtonItem::filterClicked,
+                this, &ContainerWidget::filterClicked);
+        connect(filter, &FilterButtonItem::filterContextRequested,
+                this, &ContainerWidget::filterContextRequested);
+    } else if (auto* ant = qobject_cast<AntennaButtonItem*>(item)) {
+        connect(ant, &AntennaButtonItem::antennaSelected,
+                this, &ContainerWidget::antennaSelected);
+    } else if (auto* step = qobject_cast<TuneStepButtonItem*>(item)) {
+        connect(step, &TuneStepButtonItem::tuneStepSelected,
+                this, &ContainerWidget::tuneStepSelected);
+    } else if (auto* other = qobject_cast<OtherButtonItem*>(item)) {
+        connect(other, &OtherButtonItem::otherButtonClicked,
+                this, &ContainerWidget::otherButtonClicked);
+        connect(other, &OtherButtonItem::macroTriggered,
+                this, &ContainerWidget::macroTriggered);
+    } else if (auto* voice = qobject_cast<VoiceRecordPlayItem*>(item)) {
+        connect(voice, &VoiceRecordPlayItem::voiceAction,
+                this, &ContainerWidget::voiceAction);
+    } else if (auto* discord = qobject_cast<DiscordButtonItem*>(item)) {
+        connect(discord, &DiscordButtonItem::discordAction,
+                this, &ContainerWidget::discordAction);
+    } else if (auto* vfo = qobject_cast<VfoDisplayItem*>(item)) {
+        connect(vfo, &VfoDisplayItem::frequencyChangeRequested,
+                this, &ContainerWidget::frequencyChangeRequested);
+        connect(vfo, &VfoDisplayItem::bandStackRequested,
+                this, &ContainerWidget::bandStackRequested);
+        connect(vfo, &VfoDisplayItem::filterContextRequested,
+                this, &ContainerWidget::filterContextRequested);
     }
 }
 
