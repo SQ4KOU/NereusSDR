@@ -218,6 +218,7 @@ set(GUI_SOURCES
     src/gui/meters/FilterButtonItem.cpp
     src/gui/meters/AntennaButtonItem.cpp
     src/gui/meters/TuneStepButtonItem.cpp
+    src/gui/meters/OtherButtonItem.cpp
     src/gui/HGauge.cpp
     src/gui/SpectrumOverlayPanel.cpp
     src/gui/SetupDialog.cpp
