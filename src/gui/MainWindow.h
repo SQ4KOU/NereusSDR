@@ -122,6 +122,9 @@ private:
 
     // Spectrum overlay panel
     class SpectrumOverlayPanel* m_overlayPanel{nullptr};
+
+    // Applet panel — scrollable content widget inside Container #0
+    class AppletPanelWidget* m_appletPanel{nullptr};
 };
 
 } // namespace NereusSDR

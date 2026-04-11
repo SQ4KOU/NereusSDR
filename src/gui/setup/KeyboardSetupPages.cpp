@@ -18,10 +18,6 @@ void KeyboardShortcutsPage::buildUI()
 {
     setStyleSheet(QString::fromLatin1(Style::kPageStyle));
 
-    auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(8, 8, 8, 8);
-    mainLayout->setSpacing(8);
-
     auto* group = new QGroupBox(QStringLiteral("Shortcuts"), this);
     group->setStyleSheet(QString::fromLatin1(Style::kGroupBoxStyle));
 
@@ -76,8 +72,8 @@ void KeyboardShortcutsPage::buildUI()
 
     vLayout->addLayout(btnRow);
 
-    mainLayout->addWidget(group);
-    mainLayout->addStretch();
+    contentLayout()->addWidget(group);
+    contentLayout()->addStretch();
 }
 
 } // namespace NereusSDR

@@ -76,10 +76,6 @@ void ColorsThemePage::buildUI()
 {
     applyDarkStyle(this);
 
-    auto* outerLayout = new QVBoxLayout(this);
-    outerLayout->setContentsMargins(12, 12, 12, 12);
-    outerLayout->setSpacing(12);
-
     // --- Section: Background ---
     auto* bgGroup = new QGroupBox(QStringLiteral("Background"), this);
     auto* bgForm  = new QFormLayout(bgGroup);
@@ -91,7 +87,7 @@ void ColorsThemePage::buildUI()
     m_textColorLabel = makeColorSwatch(QStringLiteral("Text Color"), QStringLiteral("#405060"), bgGroup);
     bgForm->addRow(QStringLiteral("Text:"), m_textColorLabel);
 
-    outerLayout->addWidget(bgGroup);
+    contentLayout()->addWidget(bgGroup);
 
     // --- Section: Spectrum ---
     auto* specGroup = new QGroupBox(QStringLiteral("Spectrum"), this);
@@ -107,7 +103,7 @@ void ColorsThemePage::buildUI()
     m_filterColorLabel = makeColorSwatch(QStringLiteral("Filter Color"), QStringLiteral("#003060"), specGroup);
     specForm->addRow(QStringLiteral("Filter:"), m_filterColorLabel);
 
-    outerLayout->addWidget(specGroup);
+    contentLayout()->addWidget(specGroup);
 
     // --- Section: Waterfall ---
     auto* wfGroup = new QGroupBox(QStringLiteral("Waterfall"), this);
@@ -120,8 +116,8 @@ void ColorsThemePage::buildUI()
     m_wfHighColorLabel = makeColorSwatch(QStringLiteral("High Level Color"), QStringLiteral("#ff8000"), wfGroup);
     wfForm->addRow(QStringLiteral("High Level:"), m_wfHighColorLabel);
 
-    outerLayout->addWidget(wfGroup);
-    outerLayout->addStretch();
+    contentLayout()->addWidget(wfGroup);
+    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -137,10 +133,6 @@ MeterStylesPage::MeterStylesPage(RadioModel* model, QWidget* parent)
 void MeterStylesPage::buildUI()
 {
     applyDarkStyle(this);
-
-    auto* outerLayout = new QVBoxLayout(this);
-    outerLayout->setContentsMargins(12, 12, 12, 12);
-    outerLayout->setSpacing(12);
 
     // --- Section: S-Meter ---
     auto* smGroup = new QGroupBox(QStringLiteral("S-Meter"), this);
@@ -166,8 +158,8 @@ void MeterStylesPage::buildUI()
     m_decayRateSlider->setToolTip(QStringLiteral("S-Meter peak decay rate — not yet implemented"));
     smForm->addRow(QStringLiteral("Decay Rate:"), m_decayRateSlider);
 
-    outerLayout->addWidget(smGroup);
-    outerLayout->addStretch();
+    contentLayout()->addWidget(smGroup);
+    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -183,10 +175,6 @@ GradientsPage::GradientsPage(RadioModel* model, QWidget* parent)
 void GradientsPage::buildUI()
 {
     applyDarkStyle(this);
-
-    auto* outerLayout = new QVBoxLayout(this);
-    outerLayout->setContentsMargins(12, 12, 12, 12);
-    outerLayout->setSpacing(12);
 
     // --- Section: Waterfall Gradient ---
     auto* gradGroup = new QGroupBox(QStringLiteral("Waterfall Gradient"), this);
@@ -212,8 +200,8 @@ void GradientsPage::buildUI()
     m_presetCombo->setToolTip(QStringLiteral("Waterfall gradient preset — not yet implemented"));
     gradForm->addRow(QStringLiteral("Preset:"), m_presetCombo);
 
-    outerLayout->addWidget(gradGroup);
-    outerLayout->addStretch();
+    contentLayout()->addWidget(gradGroup);
+    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -229,10 +217,6 @@ SkinsPage::SkinsPage(RadioModel* model, QWidget* parent)
 void SkinsPage::buildUI()
 {
     applyDarkStyle(this);
-
-    auto* outerLayout = new QVBoxLayout(this);
-    outerLayout->setContentsMargins(12, 12, 12, 12);
-    outerLayout->setSpacing(12);
 
     // --- Section: Skins ---
     auto* skinGroup = new QGroupBox(QStringLiteral("Skins"), this);
@@ -272,8 +256,8 @@ void SkinsPage::buildUI()
     btnRow->addStretch();
     skinLayout->addLayout(btnRow);
 
-    outerLayout->addWidget(skinGroup);
-    outerLayout->addStretch();
+    contentLayout()->addWidget(skinGroup);
+    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -289,10 +273,6 @@ CollapsibleDisplayPage::CollapsibleDisplayPage(RadioModel* model, QWidget* paren
 void CollapsibleDisplayPage::buildUI()
 {
     applyDarkStyle(this);
-
-    auto* outerLayout = new QVBoxLayout(this);
-    outerLayout->setContentsMargins(12, 12, 12, 12);
-    outerLayout->setSpacing(12);
 
     // --- Section: Collapsible ---
     auto* colGroup = new QGroupBox(QStringLiteral("Collapsible"), this);
@@ -320,8 +300,8 @@ void CollapsibleDisplayPage::buildUI()
     m_enableToggle->setToolTip(QStringLiteral("Enable collapsible spectrum section — not yet implemented"));
     colForm->addRow(QString(), m_enableToggle);
 
-    outerLayout->addWidget(colGroup);
-    outerLayout->addStretch();
+    contentLayout()->addWidget(colGroup);
+    contentLayout()->addStretch();
 }
 
 } // namespace NereusSDR

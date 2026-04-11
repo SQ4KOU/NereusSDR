@@ -23,10 +23,6 @@ void CatSerialPortsPage::buildUI()
 {
     setStyleSheet(QString::fromLatin1(Style::kPageStyle));
 
-    auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(8, 8, 8, 8);
-    mainLayout->setSpacing(8);
-
     static const char* kPortLabels[4] = {
         "CAT Port 1", "CAT Port 2", "CAT Port 3", "CAT Port 4"
     };
@@ -79,10 +75,10 @@ void CatSerialPortsPage::buildUI()
         m_ports[i].statusLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
         grid->addWidget(m_ports[i].statusLabel, 1, 2, 1, 2);
 
-        mainLayout->addWidget(group);
+        contentLayout()->addWidget(group);
     }
 
-    mainLayout->addStretch();
+    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -98,10 +94,6 @@ CatTciServerPage::CatTciServerPage(QWidget* parent)
 void CatTciServerPage::buildUI()
 {
     setStyleSheet(QString::fromLatin1(Style::kPageStyle));
-
-    auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(8, 8, 8, 8);
-    mainLayout->setSpacing(8);
 
     auto* group = new QGroupBox(QStringLiteral("TCI"), this);
     group->setStyleSheet(QString::fromLatin1(Style::kGroupBoxStyle));
@@ -150,8 +142,8 @@ void CatTciServerPage::buildUI()
     m_clientsLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
     grid->addWidget(m_clientsLabel, 4, 0, 1, 2);
 
-    mainLayout->addWidget(group);
-    mainLayout->addStretch();
+    contentLayout()->addWidget(group);
+    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -167,10 +159,6 @@ CatTcpIpPage::CatTcpIpPage(QWidget* parent)
 void CatTcpIpPage::buildUI()
 {
     setStyleSheet(QString::fromLatin1(Style::kPageStyle));
-
-    auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(8, 8, 8, 8);
-    mainLayout->setSpacing(8);
 
     auto* group = new QGroupBox(QStringLiteral("TCP CAT"), this);
     group->setStyleSheet(QString::fromLatin1(Style::kGroupBoxStyle));
@@ -214,8 +202,8 @@ void CatTcpIpPage::buildUI()
     m_statusLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
     grid->addWidget(m_statusLabel, 3, 0, 1, 2);
 
-    mainLayout->addWidget(group);
-    mainLayout->addStretch();
+    contentLayout()->addWidget(group);
+    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -231,10 +219,6 @@ CatMidiControlPage::CatMidiControlPage(QWidget* parent)
 void CatMidiControlPage::buildUI()
 {
     setStyleSheet(QString::fromLatin1(Style::kPageStyle));
-
-    auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(8, 8, 8, 8);
-    mainLayout->setSpacing(8);
 
     auto* group = new QGroupBox(QStringLiteral("MIDI"), this);
     group->setStyleSheet(QString::fromLatin1(Style::kGroupBoxStyle));
@@ -276,8 +260,8 @@ void CatMidiControlPage::buildUI()
     m_learnButton->setToolTip(QStringLiteral("NYI — MIDI learn mode"));
     grid->addWidget(m_learnButton, 3, 0, 1, 2);
 
-    mainLayout->addWidget(group);
-    mainLayout->addStretch();
+    contentLayout()->addWidget(group);
+    contentLayout()->addStretch();
 }
 
 } // namespace NereusSDR

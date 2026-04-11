@@ -326,7 +326,8 @@ void MainWindow::populateDefaultMeter()
 
     // Build an AppletPanelWidget: MeterWidget on top, then all applets below.
     // This is a single scrollable content widget per the v2 plan.
-    auto* panel = new AppletPanelWidget();
+    m_appletPanel = new AppletPanelWidget();
+    auto* panel = m_appletPanel;
     panel->addWidget(m_meterWidget, QStringLiteral("Meters"));
 
     // RxApplet — Tier 1 wired to SliceModel (slice attached in wireSliceToSpectrum)
@@ -375,6 +376,7 @@ void MainWindow::buildMenuBar()
                 dialog->show();
             });
         settingsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Comma));
+        settingsAction->setMenuRole(QAction::NoRole);  // Keep in File menu, don't let macOS move it
         settingsAction->setToolTip(QStringLiteral("Open application settings"));
     }
 
@@ -830,7 +832,31 @@ void MainWindow::buildMenuBar()
     }
 
     containersMenu->addSeparator();
-    // Dynamic container show/hide list — populated by Task 15
+
+    // Dynamic show/hide toggles for the 7 optional applets in Container #0.
+    // Checked = visible in panel; unchecked = hidden/removed.
+    // All 7 are hidden by default; user enables as needed.
+    auto addContainerToggle = [&](const QString& name, AppletWidget* applet, bool defaultVisible) {
+        auto* action = containersMenu->addAction(name);
+        action->setCheckable(true);
+        action->setChecked(defaultVisible);
+        connect(action, &QAction::toggled, this, [this, applet](bool show) {
+            if (!m_appletPanel) { return; }
+            if (show) {
+                m_appletPanel->addApplet(applet);
+            } else {
+                m_appletPanel->removeApplet(applet);
+            }
+        });
+    };
+
+    addContainerToggle(QStringLiteral("Digital / VAC"), m_digitalApplet,    false);
+    addContainerToggle(QStringLiteral("PureSignal"),    m_pureSignalApplet, false);
+    addContainerToggle(QStringLiteral("Diversity"),     m_diversityApplet,  false);
+    addContainerToggle(QStringLiteral("CW Keyer"),      m_cwxApplet,        false);
+    addContainerToggle(QStringLiteral("Voice Keyer"),   m_dvkApplet,        false);
+    addContainerToggle(QStringLiteral("CAT / TCI"),     m_catApplet,        false);
+    addContainerToggle(QStringLiteral("ATU Control"),   m_tunerApplet,      false);
 
     // =========================================================================
     // TOOLS
@@ -916,12 +942,12 @@ void MainWindow::buildMenuBar()
     helpMenu->addSeparator();
 
     helpMenu->addAction(QStringLiteral("&About NereusSDR"), this, [this]() {
-        QMessageBox::about(this,
-            QStringLiteral("About NereusSDR"),
-            QStringLiteral("<b>NereusSDR</b> v%1<br><br>"
-                           "An open-source SDR console for OpenHPSDR radios.<br><br>"
-                           "Built with Qt6 and WDSP.")
-                .arg(NEREUSSDR_VERSION));
+        QMessageBox::about(this, QStringLiteral("About NereusSDR"),
+            QString(QStringLiteral("NereusSDR v%1\n\n"
+                                   "Cross-platform SDR Console\n"
+                                   "Qt %2\n\n"
+                                   "github.com/boydsoftprez/NereusSDR"))
+                .arg(QCoreApplication::applicationVersion(), QString::fromUtf8(qVersion())));
     });
 }
 
@@ -1309,8 +1335,23 @@ void MainWindow::wireSliceToSpectrum()
         vfo->setFilter(low, high);
     });
 
-    connect(slice, &SliceModel::dspModeChanged, this, [vfo](DSPMode mode) {
+    connect(slice, &SliceModel::dspModeChanged, this, [this, vfo](DSPMode mode) {
         vfo->setMode(mode);
+        // Switch PhoneCwApplet page based on active mode
+        if (m_phoneCwApplet) {
+            switch (mode) {
+                case DSPMode::CWL:
+                case DSPMode::CWU:
+                    m_phoneCwApplet->showPage(1);  // CW page
+                    break;
+                case DSPMode::FM:
+                    m_phoneCwApplet->showPage(2);  // FM page
+                    break;
+                default:
+                    m_phoneCwApplet->showPage(0);  // Phone page
+                    break;
+            }
+        }
     });
 
     connect(slice, &SliceModel::agcModeChanged, this, [vfo](AGCMode mode) {

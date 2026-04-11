@@ -79,10 +79,6 @@ void SpectrumDefaultsPage::buildUI()
 {
     applyDarkStyle(this);
 
-    auto* outerLayout = new QVBoxLayout(this);
-    outerLayout->setContentsMargins(12, 12, 12, 12);
-    outerLayout->setSpacing(12);
-
     // --- Section: FFT ---
     auto* fftGroup = new QGroupBox(QStringLiteral("FFT"), this);
     auto* fftForm  = new QFormLayout(fftGroup);
@@ -104,7 +100,7 @@ void SpectrumDefaultsPage::buildUI()
     m_windowCombo->setToolTip(QStringLiteral("FFT window function — not yet implemented"));
     fftForm->addRow(QStringLiteral("Window:"), m_windowCombo);
 
-    outerLayout->addWidget(fftGroup);
+    contentLayout()->addWidget(fftGroup);
 
     // --- Section: Rendering ---
     auto* renderGroup = new QGroupBox(QStringLiteral("Rendering"), this);
@@ -144,7 +140,7 @@ void SpectrumDefaultsPage::buildUI()
     m_lineWidthSlider->setToolTip(QStringLiteral("Trace line width (1–3 px) — not yet implemented"));
     renderForm->addRow(QStringLiteral("Line Width:"), m_lineWidthSlider);
 
-    outerLayout->addWidget(renderGroup);
+    contentLayout()->addWidget(renderGroup);
 
     // --- Section: Calibration ---
     auto* calGroup = new QGroupBox(QStringLiteral("Calibration"), this);
@@ -174,8 +170,8 @@ void SpectrumDefaultsPage::buildUI()
     m_peakHoldDelaySpin->setToolTip(QStringLiteral("Peak hold decay delay — not yet implemented"));
     calForm->addRow(QStringLiteral("Peak Delay:"), m_peakHoldDelaySpin);
 
-    outerLayout->addWidget(calGroup);
-    outerLayout->addStretch();
+    contentLayout()->addWidget(calGroup);
+    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -191,10 +187,6 @@ WaterfallDefaultsPage::WaterfallDefaultsPage(RadioModel* model, QWidget* parent)
 void WaterfallDefaultsPage::buildUI()
 {
     applyDarkStyle(this);
-
-    auto* outerLayout = new QVBoxLayout(this);
-    outerLayout->setContentsMargins(12, 12, 12, 12);
-    outerLayout->setSpacing(12);
 
     // --- Section: Levels ---
     auto* levGroup = new QGroupBox(QStringLiteral("Levels"), this);
@@ -220,7 +212,7 @@ void WaterfallDefaultsPage::buildUI()
     m_agcToggle->setToolTip(QStringLiteral("Waterfall AGC — not yet implemented"));
     levForm->addRow(QString(), m_agcToggle);
 
-    outerLayout->addWidget(levGroup);
+    contentLayout()->addWidget(levGroup);
 
     // --- Section: Display ---
     auto* dispGroup = new QGroupBox(QStringLiteral("Display"), this);
@@ -253,7 +245,7 @@ void WaterfallDefaultsPage::buildUI()
     m_colorSchemeCombo->setToolTip(QStringLiteral("Waterfall color scheme — not yet implemented"));
     dispForm->addRow(QStringLiteral("Color Scheme:"), m_colorSchemeCombo);
 
-    outerLayout->addWidget(dispGroup);
+    contentLayout()->addWidget(dispGroup);
 
     // --- Section: Time ---
     auto* timeGroup = new QGroupBox(QStringLiteral("Time"), this);
@@ -273,8 +265,8 @@ void WaterfallDefaultsPage::buildUI()
     m_timestampModeCombo->setToolTip(QStringLiteral("Timestamp time zone — not yet implemented"));
     timeForm->addRow(QStringLiteral("Timestamp Mode:"), m_timestampModeCombo);
 
-    outerLayout->addWidget(timeGroup);
-    outerLayout->addStretch();
+    contentLayout()->addWidget(timeGroup);
+    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -290,10 +282,6 @@ GridScalesPage::GridScalesPage(RadioModel* model, QWidget* parent)
 void GridScalesPage::buildUI()
 {
     applyDarkStyle(this);
-
-    auto* outerLayout = new QVBoxLayout(this);
-    outerLayout->setContentsMargins(12, 12, 12, 12);
-    outerLayout->setSpacing(12);
 
     // --- Section: Grid ---
     auto* gridGroup = new QGroupBox(QStringLiteral("Grid"), this);
@@ -330,7 +318,7 @@ void GridScalesPage::buildUI()
     m_dbStepSpin->setToolTip(QStringLiteral("Grid dB step size — not yet implemented"));
     gridForm->addRow(QStringLiteral("dB Step:"), m_dbStepSpin);
 
-    outerLayout->addWidget(gridGroup);
+    contentLayout()->addWidget(gridGroup);
 
     // --- Section: Labels ---
     auto* lblGroup = new QGroupBox(QStringLiteral("Labels"), this);
@@ -356,8 +344,8 @@ void GridScalesPage::buildUI()
     m_showFpsToggle->setToolTip(QStringLiteral("Show FPS counter overlay — not yet implemented"));
     lblForm->addRow(QString(), m_showFpsToggle);
 
-    outerLayout->addWidget(lblGroup);
-    outerLayout->addStretch();
+    contentLayout()->addWidget(lblGroup);
+    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -373,10 +361,6 @@ Rx2DisplayPage::Rx2DisplayPage(RadioModel* model, QWidget* parent)
 void Rx2DisplayPage::buildUI()
 {
     applyDarkStyle(this);
-
-    auto* outerLayout = new QVBoxLayout(this);
-    outerLayout->setContentsMargins(12, 12, 12, 12);
-    outerLayout->setSpacing(12);
 
     // --- Section: RX2 Spectrum ---
     auto* specGroup = new QGroupBox(QStringLiteral("RX2 Spectrum"), this);
@@ -406,7 +390,7 @@ void Rx2DisplayPage::buildUI()
     m_colorSchemeCombo->setToolTip(QStringLiteral("RX2 waterfall color scheme — not yet implemented"));
     specForm->addRow(QStringLiteral("Color Scheme:"), m_colorSchemeCombo);
 
-    outerLayout->addWidget(specGroup);
+    contentLayout()->addWidget(specGroup);
 
     // --- Section: RX2 Waterfall ---
     auto* wfGroup = new QGroupBox(QStringLiteral("RX2 Waterfall"), this);
@@ -427,8 +411,8 @@ void Rx2DisplayPage::buildUI()
     m_lowThresholdSlider->setToolTip(QStringLiteral("RX2 waterfall low threshold — not yet implemented"));
     wfForm->addRow(QStringLiteral("Low Threshold:"), m_lowThresholdSlider);
 
-    outerLayout->addWidget(wfGroup);
-    outerLayout->addStretch();
+    contentLayout()->addWidget(wfGroup);
+    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -444,10 +428,6 @@ TxDisplayPage::TxDisplayPage(RadioModel* model, QWidget* parent)
 void TxDisplayPage::buildUI()
 {
     applyDarkStyle(this);
-
-    auto* outerLayout = new QVBoxLayout(this);
-    outerLayout->setContentsMargins(12, 12, 12, 12);
-    outerLayout->setSpacing(12);
 
     // --- Section: TX Spectrum ---
     auto* specGroup = new QGroupBox(QStringLiteral("TX Spectrum"), this);
@@ -476,8 +456,8 @@ void TxDisplayPage::buildUI()
     m_calOffsetSpin->setToolTip(QStringLiteral("TX calibration offset — not yet implemented"));
     specForm->addRow(QStringLiteral("Cal Offset:"), m_calOffsetSpin);
 
-    outerLayout->addWidget(specGroup);
-    outerLayout->addStretch();
+    contentLayout()->addWidget(specGroup);
+    contentLayout()->addStretch();
 }
 
 } // namespace NereusSDR

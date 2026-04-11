@@ -56,13 +56,34 @@ AppletPanelWidget::AppletPanelWidget(QWidget* parent)
 void AppletPanelWidget::addApplet(AppletWidget* applet)
 {
     if (!applet) { return; }
+    if (m_applets.contains(applet)) { return; }  // already present
     m_applets.append(applet);
 
+    applet->setParent(this);
+    applet->show();
     QWidget* wrapped = wrapWithTitleBar(applet, applet->appletTitle());
+    m_wrappers[applet] = wrapped;
 
     // Insert before the trailing stretch
     int idx = m_stackLayout->count() - 1;
     m_stackLayout->insertWidget(idx, wrapped);
+}
+
+void AppletPanelWidget::removeApplet(AppletWidget* applet)
+{
+    if (!applet) { return; }
+    if (!m_applets.contains(applet)) { return; }
+
+    QWidget* wrapper = m_wrappers.value(applet, nullptr);
+    if (wrapper) {
+        m_stackLayout->removeWidget(wrapper);
+        // Reparent applet out of the wrapper before deleting it
+        applet->setParent(nullptr);
+        applet->hide();
+        wrapper->deleteLater();
+        m_wrappers.remove(applet);
+    }
+    m_applets.removeOne(applet);
 }
 
 void AppletPanelWidget::addWidget(QWidget* widget, const QString& title)

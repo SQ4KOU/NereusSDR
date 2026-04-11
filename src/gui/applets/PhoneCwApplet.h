@@ -30,6 +30,9 @@ public:
     QString appletTitle() const override { return QStringLiteral("Phone / CW"); }
     void syncFromModel() override;
 
+    // Switch the stacked widget page: 0=Phone, 1=CW, 2=FM
+    void showPage(int index);
+
 private:
     void buildUI();
     void buildPhonePage(QWidget* page);

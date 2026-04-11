@@ -3,6 +3,7 @@
 
 #include <QWidget>
 #include <QList>
+#include <QMap>
 
 class QVBoxLayout;
 class QScrollArea;
@@ -28,6 +29,10 @@ public:
     // Add an applet — wraps it with a title bar and adds to the scroll stack
     void addApplet(AppletWidget* applet);
 
+    // Remove an applet (and its title bar wrapper) from the scroll stack.
+    // The applet widget itself is hidden and reparented to nullptr (not deleted).
+    void removeApplet(AppletWidget* applet);
+
     // Add a raw widget (e.g., MeterWidget) with a custom title
     void addWidget(QWidget* widget, const QString& title);
 
@@ -39,6 +44,7 @@ private:
     QScrollArea* m_scrollArea = nullptr;
     QVBoxLayout* m_stackLayout = nullptr;
     QList<AppletWidget*> m_applets;
+    QMap<AppletWidget*, QWidget*> m_wrappers;  // applet → wrapper widget
 };
 
 } // namespace NereusSDR

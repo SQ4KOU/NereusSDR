@@ -23,10 +23,6 @@ void DiagSignalGeneratorPage::buildUI()
 {
     setStyleSheet(QString::fromLatin1(Style::kPageStyle));
 
-    auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(8, 8, 8, 8);
-    mainLayout->setSpacing(8);
-
     // --- Tone section ---
     {
         auto* group = new QGroupBox(QStringLiteral("Tone"), this);
@@ -66,7 +62,7 @@ void DiagSignalGeneratorPage::buildUI()
         m_toneEnableCheck->setToolTip(QStringLiteral("NYI — enable test tone injection"));
         grid->addWidget(m_toneEnableCheck, 2, 0, 1, 2);
 
-        mainLayout->addWidget(group);
+        contentLayout()->addWidget(group);
     }
 
     // --- Noise section ---
@@ -95,7 +91,7 @@ void DiagSignalGeneratorPage::buildUI()
         m_noiseLevelSlider->setToolTip(QStringLiteral("NYI — noise level"));
         grid->addWidget(m_noiseLevelSlider, 1, 1);
 
-        mainLayout->addWidget(group);
+        contentLayout()->addWidget(group);
     }
 
     // --- Sweep section ---
@@ -118,10 +114,10 @@ void DiagSignalGeneratorPage::buildUI()
         m_sweepRangeLabel->setAlignment(Qt::AlignCenter);
         grid->addWidget(m_sweepRangeLabel, 1, 0, 1, 2);
 
-        mainLayout->addWidget(group);
+        contentLayout()->addWidget(group);
     }
 
-    mainLayout->addStretch();
+    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -137,10 +133,6 @@ DiagHardwareTestsPage::DiagHardwareTestsPage(QWidget* parent)
 void DiagHardwareTestsPage::buildUI()
 {
     setStyleSheet(QString::fromLatin1(Style::kPageStyle));
-
-    auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(8, 8, 8, 8);
-    mainLayout->setSpacing(8);
 
     auto* group = new QGroupBox(QStringLiteral("Tests"), this);
     group->setStyleSheet(QString::fromLatin1(Style::kGroupBoxStyle));
@@ -170,8 +162,8 @@ void DiagHardwareTestsPage::buildUI()
     m_loopbackButton->setToolTip(QStringLiteral("NYI — TX/RX loopback test"));
     vLayout->addWidget(m_loopbackButton);
 
-    mainLayout->addWidget(group);
-    mainLayout->addStretch();
+    contentLayout()->addWidget(group);
+    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -187,10 +179,6 @@ DiagLoggingPage::DiagLoggingPage(QWidget* parent)
 void DiagLoggingPage::buildUI()
 {
     setStyleSheet(QString::fromLatin1(Style::kPageStyle));
-
-    auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(8, 8, 8, 8);
-    mainLayout->setSpacing(8);
 
     // --- Log section ---
     {
@@ -235,7 +223,7 @@ void DiagLoggingPage::buildUI()
 
         grid->addLayout(btnRow, 2, 0, 1, 2);
 
-        mainLayout->addWidget(group);
+        contentLayout()->addWidget(group);
     }
 
     // --- Categories section ---
@@ -251,10 +239,10 @@ void DiagLoggingPage::buildUI()
         m_filterLabel->setMinimumHeight(60);
         vLayout->addWidget(m_filterLabel);
 
-        mainLayout->addWidget(group);
+        contentLayout()->addWidget(group);
     }
 
-    mainLayout->addStretch();
+    contentLayout()->addStretch();
 }
 
 } // namespace NereusSDR

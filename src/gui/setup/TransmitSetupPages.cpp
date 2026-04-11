@@ -69,10 +69,6 @@ void PowerPaPage::buildUI()
 {
     applyDarkStyle(this);
 
-    auto* outerLayout = new QVBoxLayout(this);
-    outerLayout->setContentsMargins(12, 12, 12, 12);
-    outerLayout->setSpacing(12);
-
     // --- Section: Power ---
     auto* pwrGroup = new QGroupBox(QStringLiteral("Power"), this);
     auto* pwrForm  = new QFormLayout(pwrGroup);
@@ -92,7 +88,7 @@ void PowerPaPage::buildUI()
     m_swrProtectionSlider->setToolTip(QStringLiteral("SWR protection threshold — not yet implemented"));
     pwrForm->addRow(QStringLiteral("SWR Protection:"), m_swrProtectionSlider);
 
-    outerLayout->addWidget(pwrGroup);
+    contentLayout()->addWidget(pwrGroup);
 
     // --- Section: PA ---
     auto* paGroup = new QGroupBox(QStringLiteral("PA"), this);
@@ -114,8 +110,8 @@ void PowerPaPage::buildUI()
     m_fanControlCombo->setToolTip(QStringLiteral("PA fan control — not yet implemented"));
     paForm->addRow(QStringLiteral("Fan Control:"), m_fanControlCombo);
 
-    outerLayout->addWidget(paGroup);
-    outerLayout->addStretch();
+    contentLayout()->addWidget(paGroup);
+    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -131,10 +127,6 @@ TxProfilesPage::TxProfilesPage(RadioModel* model, QWidget* parent)
 void TxProfilesPage::buildUI()
 {
     applyDarkStyle(this);
-
-    auto* outerLayout = new QVBoxLayout(this);
-    outerLayout->setContentsMargins(12, 12, 12, 12);
-    outerLayout->setSpacing(12);
 
     // --- Section: Profile ---
     auto* profGroup = new QGroupBox(QStringLiteral("Profile"), this);
@@ -182,7 +174,7 @@ void TxProfilesPage::buildUI()
     btnRow->addStretch();
     profLayout->addLayout(btnRow);
 
-    outerLayout->addWidget(profGroup);
+    contentLayout()->addWidget(profGroup);
 
     // --- Section: Compression ---
     auto* compGroup = new QGroupBox(QStringLiteral("Compression"), this);
@@ -206,8 +198,8 @@ void TxProfilesPage::buildUI()
     m_cessbToggle->setToolTip(QStringLiteral("Controlled Envelope SSB — not yet implemented"));
     compForm->addRow(QString(), m_cessbToggle);
 
-    outerLayout->addWidget(compGroup);
-    outerLayout->addStretch();
+    contentLayout()->addWidget(compGroup);
+    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -223,10 +215,6 @@ SpeechProcessorPage::SpeechProcessorPage(RadioModel* model, QWidget* parent)
 void SpeechProcessorPage::buildUI()
 {
     applyDarkStyle(this);
-
-    auto* outerLayout = new QVBoxLayout(this);
-    outerLayout->setContentsMargins(12, 12, 12, 12);
-    outerLayout->setSpacing(12);
 
     // --- Section: Compressor ---
     auto* compGroup = new QGroupBox(QStringLiteral("Compressor"), this);
@@ -245,7 +233,7 @@ void SpeechProcessorPage::buildUI()
     m_cessbToggle->setToolTip(QStringLiteral("Controlled Envelope SSB — not yet implemented"));
     compForm->addRow(QString(), m_cessbToggle);
 
-    outerLayout->addWidget(compGroup);
+    contentLayout()->addWidget(compGroup);
 
     // --- Section: Phase Rotator ---
     auto* prGroup = new QGroupBox(QStringLiteral("Phase Rotator"), this);
@@ -266,7 +254,7 @@ void SpeechProcessorPage::buildUI()
     m_cornerFreqSlider->setToolTip(QStringLiteral("Phase rotator corner frequency (Hz) — not yet implemented"));
     prForm->addRow(QStringLiteral("Corner Freq (Hz):"), m_cornerFreqSlider);
 
-    outerLayout->addWidget(prGroup);
+    contentLayout()->addWidget(prGroup);
 
     // --- Section: CFC ---
     auto* cfcGroup = new QGroupBox(QStringLiteral("CFC"), this);
@@ -284,8 +272,8 @@ void SpeechProcessorPage::buildUI()
     m_cfcProfileLabel->setEnabled(false);
     cfcForm->addRow(QStringLiteral("Profile:"), m_cfcProfileLabel);
 
-    outerLayout->addWidget(cfcGroup);
-    outerLayout->addStretch();
+    contentLayout()->addWidget(cfcGroup);
+    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -301,10 +289,6 @@ PureSignalPage::PureSignalPage(RadioModel* model, QWidget* parent)
 void PureSignalPage::buildUI()
 {
     applyDarkStyle(this);
-
-    auto* outerLayout = new QVBoxLayout(this);
-    outerLayout->setContentsMargins(12, 12, 12, 12);
-    outerLayout->setSpacing(12);
 
     // --- Section: PureSignal ---
     auto* psGroup = new QGroupBox(QStringLiteral("PureSignal"), this);
@@ -344,8 +328,8 @@ void PureSignalPage::buildUI()
     m_infoLabel->setEnabled(false);
     psForm->addRow(QStringLiteral("Status:"), m_infoLabel);
 
-    outerLayout->addWidget(psGroup);
-    outerLayout->addStretch();
+    contentLayout()->addWidget(psGroup);
+    contentLayout()->addStretch();
 }
 
 } // namespace NereusSDR

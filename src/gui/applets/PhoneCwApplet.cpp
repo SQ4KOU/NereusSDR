@@ -1009,4 +1009,13 @@ void PhoneCwApplet::syncFromModel()
     // NYI — wired in Phase 3I-1 (Phone/FM) / Phase 3I-2 (CW)
 }
 
+// ── showPage — switch stacked widget to the given page index ─────────────────
+
+void PhoneCwApplet::showPage(int index)
+{
+    if (m_stack) {
+        m_stack->setCurrentIndex(index);
+    }
+}
+
 } // namespace NereusSDR
