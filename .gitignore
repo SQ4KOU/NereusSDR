@@ -5,3 +5,4 @@ build-*/
 .qtc_clangd/
 reference/
 CMakeFiles/
+.worktrees/
