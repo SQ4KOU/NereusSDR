@@ -57,11 +57,11 @@ void FilterPassbandWidget::paintEvent(QPaintEvent*)
     // Fixed geometry — shape doesn't change with filter width
     // From AetherSDR FilterPassbandWidget.cpp lines 53-64
     const int margin = 16;
-    const int topY = 14;
+    const int topY = 8;
     const int botY = h - 16;  // room for labels
     const int loX = margin;
     const int hiX = w - margin;
-    constexpr int kSkirt = 16;
+    const int kSkirt = (hiX - loX) / 7;
 
     // Filter shape: left skirt, flat top, right skirt (no bottom, no fill)
     // From AetherSDR: cyan (#00b4d8), 1.5px
@@ -70,11 +70,10 @@ void FilterPassbandWidget::paintEvent(QPaintEvent*)
     p.drawLine(loX + kSkirt, topY, hiX - kSkirt, topY);  // flat top
     p.drawLine(hiX - kSkirt, topY, hiX, botY);           // right skirt
 
-    // Dashed vertical lines at filter edges (8px inside the skirt vertices)
-    // From AetherSDR FilterPassbandWidget.cpp lines 67-69
+    // Dashed vertical lines at filter edges (3px inside the skirt tops)
     p.setPen(QPen(QColor(0x00, 0xb4, 0xd8, 120), 1, Qt::DashLine));
-    p.drawLine(loX + kSkirt + 8, 2, loX + kSkirt + 8, h - 2);
-    p.drawLine(hiX - kSkirt - 8, 2, hiX - kSkirt - 8, h - 2);
+    p.drawLine(loX + kSkirt + 3, 2, loX + kSkirt + 3, h - 2);
+    p.drawLine(hiX - kSkirt - 3, 2, hiX - kSkirt - 3, h - 2);
 
     // ── Labels ──────────────────────────────────────────────────────────
     // From AetherSDR FilterPassbandWidget.cpp lines 72-99
@@ -122,9 +121,9 @@ void FilterPassbandWidget::mousePressEvent(QMouseEvent* ev)
     // Three zones: left of lo line = drag low edge, right of hi line = drag high edge,
     // center = shift. From AetherSDR FilterPassbandWidget.cpp lines 112-125
     constexpr int margin = 16;
-    constexpr int kSkirt = 16;
-    const int loLineX = margin + kSkirt + 8;
-    const int hiLineX = width() - margin - kSkirt - 8;
+    const int kSkirt = (width() - 32) / 7;
+    const int loLineX = margin + kSkirt + 3;
+    const int hiLineX = width() - margin - kSkirt - 3;
 
     if (ev->pos().x() <= loLineX) {
         m_dragMode = DragLo;
