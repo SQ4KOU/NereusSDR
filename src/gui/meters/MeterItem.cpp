@@ -165,6 +165,13 @@ void BarItem::setValue(double v)
 
 void BarItem::paint(QPainter& p, int widgetW, int widgetH)
 {
+    // Dispatch to Edge renderer if configured
+    // From Thetis console.cs:12612-12678
+    if (m_barStyle == BarStyle::Edge) {
+        paintEdge(p, widgetW, widgetH);
+        return;
+    }
+
     const QRect rect = pixelRect(widgetW, widgetH);
     const double range = m_maxVal - m_minVal;
     const double frac  = (range > 0.0)
@@ -231,9 +238,50 @@ void BarItem::emitVertices(QVector<float>& verts, int widgetW, int widgetH)
     verts << qR << qB << r << g << b << a;
 }
 
+// ---------------------------------------------------------------------------
+// BarItem::paintEdge()
+// Edge rendering mode: draws a single vertical indicator line instead of
+// a filled bar. From Thetis console.cs:23589-23624
+// ---------------------------------------------------------------------------
+void BarItem::paintEdge(QPainter& p, int widgetW, int widgetH)
+{
+    const QRect rect = pixelRect(widgetW, widgetH);
+
+    // Background outline (from Thetis console.cs:23589)
+    p.setPen(QPen(m_edgeBgColor, 1));
+    p.setBrush(Qt::NoBrush);
+    p.drawRect(rect);
+
+    // Calculate meter position
+    const double range = m_maxVal - m_minVal;
+    const double frac = (range > 0.0)
+        ? std::clamp((m_smoothedValue - m_minVal) / range, 0.0, 1.0)
+        : 0.0;
+    const int pixelX = rect.left() + static_cast<int>(frac * rect.width());
+
+    // Shadow color: midpoint blend of indicator and background
+    // From Thetis console.cs:23605-23608
+    const QColor shadowColor = QColor(
+        (m_edgeAvgColor.red()   + m_edgeBgColor.red())   / 2,
+        (m_edgeAvgColor.green() + m_edgeBgColor.green()) / 2,
+        (m_edgeAvgColor.blue()  + m_edgeBgColor.blue())  / 2
+    );
+
+    // Three vertical lines: shadow-center-shadow
+    // From Thetis console.cs:23622-23624
+    p.setPen(QPen(shadowColor, 1));
+    p.drawLine(pixelX - 1, rect.top() + 1, pixelX - 1, rect.bottom() - 1);
+    p.drawLine(pixelX + 1, rect.top() + 1, pixelX + 1, rect.bottom() - 1);
+
+    p.setPen(QPen(m_edgeAvgColor, 1));
+    p.drawLine(pixelX, rect.top() + 1, pixelX, rect.bottom() - 1);
+}
+
 QString BarItem::serialize() const
 {
-    return QStringLiteral("BAR|%1|%2|%3|%4|%5|%6|%7|%8|%9")
+    // Fields 0-14: BAR|x|y|w|h|bindingId|zOrder|orientation|min|max|barColor|barRedColor|redThreshold|attack|decay
+    // Fields 15-19: barStyle|edgeBgColor|edgeLowColor|edgeHighColor|edgeAvgColor
+    return QStringLiteral("BAR|%1|%2|%3|%4|%5|%6|%7|%8|%9|%10|%11|%12|%13|%14")
         .arg(baseFields(*this))
         .arg(m_orientation == Orientation::Horizontal ? QStringLiteral("H") : QStringLiteral("V"))
         .arg(m_minVal)
@@ -242,12 +290,18 @@ QString BarItem::serialize() const
         .arg(m_barRedColor.name(QColor::HexArgb))
         .arg(m_redThreshold)
         .arg(static_cast<double>(m_attackRatio))
-        .arg(static_cast<double>(m_decayRatio));
+        .arg(static_cast<double>(m_decayRatio))
+        .arg(m_barStyle == BarStyle::Edge ? QStringLiteral("Edge") : QStringLiteral("Filled"))
+        .arg(m_edgeBgColor.name(QColor::HexArgb))
+        .arg(m_edgeLowColor.name(QColor::HexArgb))
+        .arg(m_edgeHighColor.name(QColor::HexArgb))
+        .arg(m_edgeAvgColor.name(QColor::HexArgb));
 }
 
 bool BarItem::deserialize(const QString& data)
 {
     const QStringList parts = data.split(QLatin1Char('|'));
+    // Legacy format: 15 fields (indices 0-14), new format: 20 fields (adds Edge style fields)
     if (parts.size() < 15 || parts[0] != QLatin1String("BAR")) {
         return false;
     }
@@ -265,6 +319,16 @@ bool BarItem::deserialize(const QString& data)
     m_redThreshold = parts[12].toDouble(&ok); if (!ok) { return false; }
     m_attackRatio  = parts[13].toFloat(&ok);  if (!ok) { return false; }
     m_decayRatio   = parts[14].toFloat(&ok);  if (!ok) { return false; }
+
+    // Optional Edge mode fields (new format, 20 fields total)
+    // From Thetis console.cs:12612-12678
+    if (parts.size() >= 20) {
+        m_barStyle    = (parts[15] == QLatin1String("Edge")) ? BarStyle::Edge : BarStyle::Filled;
+        QColor ec1 = QColor(parts[16]); if (ec1.isValid()) { m_edgeBgColor   = ec1; }
+        QColor ec2 = QColor(parts[17]); if (ec2.isValid()) { m_edgeLowColor  = ec2; }
+        QColor ec3 = QColor(parts[18]); if (ec3.isValid()) { m_edgeHighColor = ec3; }
+        QColor ec4 = QColor(parts[19]); if (ec4.isValid()) { m_edgeAvgColor  = ec4; }
+    }
 
     return true;
 }

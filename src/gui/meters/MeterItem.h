@@ -131,6 +131,7 @@ class BarItem : public MeterItem {
     Q_OBJECT
 public:
     enum class Orientation { Horizontal, Vertical };
+    enum class BarStyle { Filled, Edge };
 
     explicit BarItem(QObject* parent = nullptr) : MeterItem(parent) {}
 
@@ -156,6 +157,22 @@ public:
     void setDecayRatio(float d) { m_decayRatio = d; }
     float decayRatio() const { return m_decayRatio; }
 
+    void setBarStyle(BarStyle s) { m_barStyle = s; }
+    BarStyle barStyle() const { return m_barStyle; }
+
+    // Edge mode colors (from Thetis console.cs:12612-12678)
+    void setEdgeBackgroundColor(const QColor& c) { m_edgeBgColor = c; }
+    QColor edgeBackgroundColor() const { return m_edgeBgColor; }
+
+    void setEdgeLowColor(const QColor& c) { m_edgeLowColor = c; }
+    QColor edgeLowColor() const { return m_edgeLowColor; }
+
+    void setEdgeHighColor(const QColor& c) { m_edgeHighColor = c; }
+    QColor edgeHighColor() const { return m_edgeHighColor; }
+
+    void setEdgeAvgColor(const QColor& c) { m_edgeAvgColor = c; }
+    QColor edgeAvgColor() const { return m_edgeAvgColor; }
+
     // Override setValue() for exponential smoothing
     // From Thetis MeterManager.cs — attack/decay smoothing
     void setValue(double v) override;
@@ -167,6 +184,8 @@ public:
     bool deserialize(const QString& data) override;
 
 private:
+    void paintEdge(QPainter& p, int widgetW, int widgetH);
+
     Orientation m_orientation{Orientation::Horizontal};
     double      m_minVal{-140.0};
     double      m_maxVal{0.0};
@@ -178,6 +197,11 @@ private:
     float       m_attackRatio{0.8f};
     float       m_decayRatio{0.2f};
     double      m_smoothedValue{-140.0};
+    BarStyle    m_barStyle{BarStyle::Filled};
+    QColor      m_edgeBgColor{Qt::black};
+    QColor      m_edgeLowColor{Qt::white};
+    QColor      m_edgeHighColor{Qt::red};
+    QColor      m_edgeAvgColor{Qt::yellow};
 };
 
 // ---------------------------------------------------------------------------
