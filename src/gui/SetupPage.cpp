@@ -20,6 +20,17 @@ static const QString kLabelStyle =
 SetupPage::SetupPage(const QString& title, RadioModel* model, QWidget* parent)
     : QWidget(parent), m_title(title), m_model(model)
 {
+    init(title);
+}
+
+SetupPage::SetupPage(const QString& title, QWidget* parent)
+    : QWidget(parent), m_title(title), m_model(nullptr)
+{
+    init(title);
+}
+
+void SetupPage::init(const QString& title)
+{
     auto* rootLayout = new QVBoxLayout(this);
     rootLayout->setContentsMargins(12, 8, 12, 8);
     rootLayout->setSpacing(6);
@@ -56,27 +67,106 @@ void SetupPage::syncFromModel()
     // Base implementation is a no-op; subclasses override to pull from RadioModel.
 }
 
+// ── Static NYI marker ─────────────────────────────────────────────────────────
+
+void SetupPage::markNyi(QWidget* widget, const QString& phase)
+{
+    if (widget == nullptr) { return; }
+    widget->setEnabled(false);
+    widget->setToolTip(QStringLiteral("NYI — %1").arg(phase));
+}
+
 // ── Section helper ────────────────────────────────────────────────────────────
 
-QGroupBox* SetupPage::addSection(const QString& title, int wired, int total)
+QGroupBox* SetupPage::addSection(const QString& title)
 {
-    QString heading = title;
-    if (total > 0) {
-        heading = QStringLiteral("%1 (%2/%3 wired)").arg(title).arg(wired).arg(total);
-    }
-
-    auto* group = new QGroupBox(heading);
+    auto* group = new QGroupBox(title);
     group->setStyleSheet(kGroupStyle);
 
     auto* groupLayout = new QVBoxLayout(group);
     groupLayout->setContentsMargins(8, 4, 8, 8);
     groupLayout->setSpacing(4);
 
+    m_activeSectionLayout = groupLayout;
+
     // Insert before the trailing stretch
     const int stretchIndex = m_contentLayout->count() - 1;
     m_contentLayout->insertWidget(stretchIndex, group);
 
     return group;
+}
+
+// ── Convenience single-argument row builders ──────────────────────────────────
+
+QPushButton* SetupPage::addLabeledToggle(const QString& label)
+{
+    auto* btn = new QPushButton;
+    btn->setCheckable(true);
+    QLayout* target = m_activeSectionLayout ? m_activeSectionLayout : m_contentLayout;
+    addLabeledToggle(target, label, btn);
+    return btn;
+}
+
+QComboBox* SetupPage::addLabeledCombo(const QString& label, const QStringList& items)
+{
+    auto* combo = new QComboBox;
+    combo->addItems(items);
+    QLayout* target = m_activeSectionLayout ? m_activeSectionLayout : m_contentLayout;
+    addLabeledCombo(target, label, combo);
+    return combo;
+}
+
+QSlider* SetupPage::addLabeledSlider(const QString& label, int minimum, int maximum, int value)
+{
+    auto* slider = new QSlider(Qt::Horizontal);
+    slider->setRange(minimum, maximum);
+    slider->setValue(value);
+    QLayout* target = m_activeSectionLayout ? m_activeSectionLayout : m_contentLayout;
+    addLabeledSlider(target, label, slider);
+    return slider;
+}
+
+QSpinBox* SetupPage::addLabeledSpinner(const QString& label, int minimum, int maximum, int value)
+{
+    auto* spin = new QSpinBox;
+    spin->setRange(minimum, maximum);
+    spin->setValue(value);
+    QLayout* target = m_activeSectionLayout ? m_activeSectionLayout : m_contentLayout;
+    addLabeledSpinner(target, label, spin);
+    return spin;
+}
+
+QPushButton* SetupPage::addLabeledButton(const QString& label, const QString& buttonText)
+{
+    auto* btn = new QPushButton(buttonText);
+    btn->setAutoDefault(false);
+    QLayout* target = m_activeSectionLayout ? m_activeSectionLayout : m_contentLayout;
+    addLabeledToggle(target, label, btn);  // reuse row layout
+    // Re-style as a plain button (not a toggle)
+    btn->setCheckable(false);
+    btn->setStyleSheet(
+        "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
+        "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 3px 10px; }"
+        "QPushButton:hover { background: #203040; }"
+        "QPushButton:pressed { background: #00b4d8; color: #0f0f1a; }");
+    return btn;
+}
+
+QLabel* SetupPage::addLabeledLabel(const QString& label, const QString& value)
+{
+    auto* lbl = new QLabel(value);
+    QLayout* target = m_activeSectionLayout ? m_activeSectionLayout : m_contentLayout;
+    addLabeledLabel(target, label, lbl);
+    return lbl;
+}
+
+QLineEdit* SetupPage::addLabeledEdit(const QString& label, const QString& placeholder)
+{
+    auto* edit = new QLineEdit;
+    if (!placeholder.isEmpty()) { edit->setPlaceholderText(placeholder); }
+    QLayout* target = m_activeSectionLayout ? m_activeSectionLayout : m_contentLayout;
+    addLabeledEdit(target, label, edit);
+    return edit;
 }
 
 // ── Private row builder ───────────────────────────────────────────────────────
@@ -100,7 +190,7 @@ QHBoxLayout* SetupPage::makeLabeledRow(QLayout* parent, const QString& labelText
     return row;
 }
 
-// ── Public helper methods ─────────────────────────────────────────────────────
+// ── Public helper methods (pre-created control variants) ──────────────────────
 
 QHBoxLayout* SetupPage::addLabeledCombo(QLayout* parent, const QString& label, QComboBox* combo)
 {

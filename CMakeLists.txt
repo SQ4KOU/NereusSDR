@@ -203,6 +203,16 @@ set(GUI_SOURCES
     src/gui/SpectrumOverlayPanel.cpp
     src/gui/SetupDialog.cpp
     src/gui/SetupPage.cpp
+    src/gui/setup/GeneralSetupPages.cpp
+    src/gui/setup/HardwareSetupPages.cpp
+    src/gui/setup/AudioSetupPages.cpp
+    src/gui/setup/DspSetupPages.cpp
+    src/gui/setup/DisplaySetupPages.cpp
+    src/gui/setup/TransmitSetupPages.cpp
+    src/gui/setup/AppearanceSetupPages.cpp
+    src/gui/setup/CatNetworkSetupPages.cpp
+    src/gui/setup/KeyboardSetupPages.cpp
+    src/gui/setup/DiagnosticsSetupPages.cpp
     src/gui/applets/AppletWidget.cpp
     src/gui/applets/NyiOverlay.cpp
     src/gui/applets/AppletPanelWidget.cpp

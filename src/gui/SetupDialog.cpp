@@ -1,6 +1,27 @@
 #include "SetupDialog.h"
 #include "SetupPage.h"
 
+// General
+#include "setup/GeneralSetupPages.h"
+// Hardware
+#include "setup/HardwareSetupPages.h"
+// Audio
+#include "setup/AudioSetupPages.h"
+// DSP
+#include "setup/DspSetupPages.h"
+// Display
+#include "setup/DisplaySetupPages.h"
+// Transmit
+#include "setup/TransmitSetupPages.h"
+// Appearance
+#include "setup/AppearanceSetupPages.h"
+// CAT & Network
+#include "setup/CatNetworkSetupPages.h"
+// Keyboard
+#include "setup/KeyboardSetupPages.h"
+// Diagnostics
+#include "setup/DiagnosticsSetupPages.h"
+
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QShowEvent>
@@ -80,20 +101,6 @@ void SetupDialog::showEvent(QShowEvent* event)
 
 // ── Tree builder ──────────────────────────────────────────────────────────────
 
-QTreeWidgetItem* SetupDialog::addPage(QTreeWidgetItem* parent,
-                                      const QString& label,
-                                      RadioModel* model)
-{
-    auto* item = new QTreeWidgetItem(parent, QStringList{label});
-    const int pageIndex = m_stack->count();
-    item->setData(0, Qt::UserRole, pageIndex);
-
-    auto* page = new SetupPage(label, model);
-    m_stack->addWidget(page);
-
-    return item;
-}
-
 void SetupDialog::buildTree()
 {
     // ── Helper: create a category (top-level, non-selectable) ─────────────────
@@ -107,82 +114,92 @@ void SetupDialog::buildTree()
         return item;
     };
 
+    // ── Helper: add a page with its specialized class ─────────────────────────
+    auto add = [this](QTreeWidgetItem* parent, const QString& label,
+                      SetupPage* page) -> QTreeWidgetItem* {
+        auto* item = new QTreeWidgetItem(parent, QStringList{label});
+        const int idx = m_stack->count();
+        item->setData(0, Qt::UserRole, idx);
+        m_stack->addWidget(page);
+        return item;
+    };
+
     // ── General ──────────────────────────────────────────────────────────────
     QTreeWidgetItem* general = addCategory("General");
-    addPage(general, "Startup & Preferences", m_model);
-    addPage(general, "UI Scale & Theme",       m_model);
-    addPage(general, "Navigation",             m_model);
+    add(general, "Startup & Preferences", new StartupPrefsPage(m_model));
+    add(general, "UI Scale & Theme",       new UiScalePage(m_model));
+    add(general, "Navigation",             new NavigationPage(m_model));
 
     // ── Hardware ─────────────────────────────────────────────────────────────
     QTreeWidgetItem* hardware = addCategory("Hardware");
-    addPage(hardware, "Radio Selection",     m_model);
-    addPage(hardware, "ADC/DDC Config",      m_model);
-    addPage(hardware, "Calibration",         m_model);
-    addPage(hardware, "Alex Filters",        m_model);
-    addPage(hardware, "Penny/Hermes OC",     m_model);
-    addPage(hardware, "Firmware",            m_model);
-    addPage(hardware, "Other H/W",           m_model);
+    add(hardware, "Radio Selection",     new RadioSelectionPage(m_model));
+    add(hardware, "ADC/DDC Config",      new AdcDdcPage(m_model));
+    add(hardware, "Calibration",         new CalibrationPage(m_model));
+    add(hardware, "Alex Filters",        new AlexFiltersPage(m_model));
+    add(hardware, "Penny/Hermes OC",     new PennyHermesPage(m_model));
+    add(hardware, "Firmware",            new FirmwarePage(m_model));
+    add(hardware, "Other H/W",           new OtherHwPage(m_model));
 
     // ── Audio ─────────────────────────────────────────────────────────────────
     QTreeWidgetItem* audio = addCategory("Audio");
-    addPage(audio, "Device Selection", m_model);
-    addPage(audio, "ASIO Config",      m_model);
-    addPage(audio, "VAC 1",            m_model);
-    addPage(audio, "VAC 2",            m_model);
-    addPage(audio, "NereusDAX",        m_model);
-    addPage(audio, "Recording",        m_model);
+    add(audio, "Device Selection", new DeviceSelectionPage(m_model));
+    add(audio, "ASIO Config",      new AsioConfigPage(m_model));
+    add(audio, "VAC 1",            new Vac1Page(m_model));
+    add(audio, "VAC 2",            new Vac2Page(m_model));
+    add(audio, "NereusDAX",        new NereusDaxPage(m_model));
+    add(audio, "Recording",        new RecordingPage(m_model));
 
     // ── DSP ───────────────────────────────────────────────────────────────────
     QTreeWidgetItem* dsp = addCategory("DSP");
-    addPage(dsp, "AGC/ALC",  m_model);
-    addPage(dsp, "NR/ANF",   m_model);
-    addPage(dsp, "NB/SNB",   m_model);
-    addPage(dsp, "CW",       m_model);
-    addPage(dsp, "AM/SAM",   m_model);
-    addPage(dsp, "FM",       m_model);
-    addPage(dsp, "VOX/DEXP", m_model);
-    addPage(dsp, "CFC",      m_model);
-    addPage(dsp, "MNF",      m_model);
+    add(dsp, "AGC/ALC",  new AgcAlcSetupPage(m_model));
+    add(dsp, "NR/ANF",   new NrAnfSetupPage(m_model));
+    add(dsp, "NB/SNB",   new NbSnbSetupPage(m_model));
+    add(dsp, "CW",       new CwSetupPage(m_model));
+    add(dsp, "AM/SAM",   new AmSamSetupPage(m_model));
+    add(dsp, "FM",       new FmSetupPage(m_model));
+    add(dsp, "VOX/DEXP", new VoxDexpSetupPage(m_model));
+    add(dsp, "CFC",      new CfcSetupPage(m_model));
+    add(dsp, "MNF",      new MnfSetupPage(m_model));
 
     // ── Display ───────────────────────────────────────────────────────────────
     QTreeWidgetItem* display = addCategory("Display");
-    addPage(display, "Spectrum Defaults",  m_model);
-    addPage(display, "Waterfall Defaults", m_model);
-    addPage(display, "Grid & Scales",      m_model);
-    addPage(display, "RX2 Display",        m_model);
-    addPage(display, "TX Display",         m_model);
+    add(display, "Spectrum Defaults",  new SpectrumDefaultsPage(m_model));
+    add(display, "Waterfall Defaults", new WaterfallDefaultsPage(m_model));
+    add(display, "Grid & Scales",      new GridScalesPage(m_model));
+    add(display, "RX2 Display",        new Rx2DisplayPage(m_model));
+    add(display, "TX Display",         new TxDisplayPage(m_model));
 
     // ── Transmit ──────────────────────────────────────────────────────────────
     QTreeWidgetItem* transmit = addCategory("Transmit");
-    addPage(transmit, "Power & PA",         m_model);
-    addPage(transmit, "TX Profiles",        m_model);
-    addPage(transmit, "Speech Processor",   m_model);
-    addPage(transmit, "PureSignal",         m_model);
+    add(transmit, "Power & PA",         new PowerPaPage(m_model));
+    add(transmit, "TX Profiles",        new TxProfilesPage(m_model));
+    add(transmit, "Speech Processor",   new SpeechProcessorPage(m_model));
+    add(transmit, "PureSignal",         new PureSignalPage(m_model));
 
     // ── Appearance ────────────────────────────────────────────────────────────
     QTreeWidgetItem* appearance = addCategory("Appearance");
-    addPage(appearance, "Colors & Theme",       m_model);
-    addPage(appearance, "Meter Styles",         m_model);
-    addPage(appearance, "Gradients",            m_model);
-    addPage(appearance, "Skins",                m_model);
-    addPage(appearance, "Collapsible Display",  m_model);
+    add(appearance, "Colors & Theme",       new ColorsThemePage(m_model));
+    add(appearance, "Meter Styles",         new MeterStylesPage(m_model));
+    add(appearance, "Gradients",            new GradientsPage(m_model));
+    add(appearance, "Skins",               new SkinsPage(m_model));
+    add(appearance, "Collapsible Display",  new CollapsibleDisplayPage(m_model));
 
     // ── CAT & Network ─────────────────────────────────────────────────────────
     QTreeWidgetItem* cat = addCategory("CAT & Network");
-    addPage(cat, "Serial Ports", m_model);
-    addPage(cat, "TCI Server",   m_model);
-    addPage(cat, "TCP/IP CAT",   m_model);
-    addPage(cat, "MIDI Control", m_model);
+    add(cat, "Serial Ports", new CatSerialPortsPage);
+    add(cat, "TCI Server",   new CatTciServerPage);
+    add(cat, "TCP/IP CAT",   new CatTcpIpPage);
+    add(cat, "MIDI Control", new CatMidiControlPage);
 
     // ── Keyboard ──────────────────────────────────────────────────────────────
     QTreeWidgetItem* keyboard = addCategory("Keyboard");
-    addPage(keyboard, "Shortcuts", m_model);
+    add(keyboard, "Shortcuts", new KeyboardShortcutsPage);
 
     // ── Diagnostics ───────────────────────────────────────────────────────────
     QTreeWidgetItem* diagnostics = addCategory("Diagnostics");
-    addPage(diagnostics, "Signal Generator", m_model);
-    addPage(diagnostics, "Hardware Tests",   m_model);
-    addPage(diagnostics, "Logging",          m_model);
+    add(diagnostics, "Signal Generator", new DiagSignalGeneratorPage);
+    add(diagnostics, "Hardware Tests",   new DiagHardwareTestsPage);
+    add(diagnostics, "Logging",          new DiagLoggingPage);
 
     m_tree->expandAll();
 }

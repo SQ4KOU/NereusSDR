@@ -4,7 +4,6 @@
 #include <QTreeWidget>
 #include <QStackedWidget>
 #include <QSplitter>
-#include <QMap>
 
 namespace NereusSDR {
 
@@ -12,7 +11,7 @@ class RadioModel;
 class SetupPage;
 
 // Main settings dialog with tree-based navigation.
-// Left pane: QTreeWidget with 10 top-level categories.
+// Left pane: QTreeWidget with top-level category items.
 // Right pane: QStackedWidget showing the selected page.
 class SetupDialog : public QDialog {
     Q_OBJECT
@@ -24,11 +23,6 @@ protected:
 
 private:
     void buildTree();
-    // Creates a SetupPage, adds a tree item for it, and pushes it onto the stack.
-    // Returns the new tree item.
-    QTreeWidgetItem* addPage(QTreeWidgetItem* parent,
-                             const QString& label,
-                             RadioModel* model);
 
     RadioModel*      m_model   = nullptr;
     QTreeWidget*     m_tree    = nullptr;

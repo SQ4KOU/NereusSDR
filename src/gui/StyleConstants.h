@@ -163,4 +163,52 @@ inline QString titleBarStyle()
     ).arg(kTitleGradTop, kTitleGradMid, kTitleGradBot, kTitleBorder);
 }
 
+// ── Setup Dialog Page Stylesheets ─────────────────────────────────────────────
+// Flat string constants used by SetupPage subclasses that build their own
+// layouts directly (CatNetwork, Keyboard, Diagnostics pages).
+
+constexpr auto kPageStyle =
+    "QWidget { background: #0f0f1a; color: #c8d8e8; }";
+
+constexpr auto kGroupBoxStyle =
+    "QGroupBox { border: 1px solid #304050; border-radius: 4px;"
+    " margin-top: 8px; padding-top: 12px; font-weight: bold; color: #8aa8c0; }"
+    "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }";
+
+constexpr auto kSecondaryLabelStyle =
+    "QLabel { color: #8090a0; font-size: 11px; }";
+
+constexpr auto kComboStyle =
+    "QComboBox { background: #1a2a3a; border: 1px solid #304050;"
+    " border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }"
+    "QComboBox::drop-down { border: none; }"
+    "QComboBox QAbstractItemView { background: #1a2a3a; color: #c8d8e8;"
+    " selection-background-color: #00b4d8; }";
+
+constexpr auto kCheckBoxStyle =
+    "QCheckBox { color: #c8d8e8; font-size: 12px; }"
+    "QCheckBox::indicator { width: 14px; height: 14px; background: #1a2a3a;"
+    " border: 1px solid #304050; border-radius: 2px; }"
+    "QCheckBox::indicator:checked { background: #00b4d8; border-color: #00b4d8; }";
+
+constexpr auto kLineEditStyle =
+    "QLineEdit { background: #1a2a3a; border: 1px solid #304050;"
+    " border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }";
+
+constexpr auto kSpinBoxStyle =
+    "QSpinBox { background: #1a2a3a; border: 1px solid #304050;"
+    " border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }"
+    "QSpinBox::up-button, QSpinBox::down-button { background: #203040; border: none; }";
+
+constexpr auto kSliderStyle =
+    "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
+    "QSlider::handle:horizontal { background: #00b4d8; width: 12px;"
+    " height: 12px; border-radius: 6px; margin: -4px 0; }";
+
+constexpr auto kButtonStyle =
+    "QPushButton { background: #1a2a3a; border: 1px solid #304050;"
+    " border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 3px 10px; }"
+    "QPushButton:hover { background: #203040; }"
+    "QPushButton:pressed { background: #00b4d8; color: #0f0f1a; }";
+
 } // namespace NereusSDR::Style
