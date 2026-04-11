@@ -1,0 +1,133 @@
+#pragma once
+
+#include "MeterItem.h"
+
+#include <QColor>
+#include <QFont>
+#include <QTimer>
+#include <QVector>
+
+class QMouseEvent;
+
+namespace NereusSDR {
+
+// Shared base for all button grid items.
+// Ported from Thetis clsButtonBox (MeterManager.cs:12307+).
+// Handles configurable grid layout, rounded rect buttons, 3-state colors,
+// indicator system, icon support, click highlight timer.
+class ButtonBoxItem : public MeterItem {
+    Q_OBJECT
+
+public:
+    // From Thetis MeterManager.cs:12309-12327 IndicatorType enum
+    enum class IndicatorType {
+        Ring, BarLeft, BarRight, BarBottom, BarTop,
+        DotLeft, DotRight, DotBottom, DotTop,
+        DotTopLeft, DotTopRight, DotBottomLeft, DotBottomRight,
+        TextIconColour
+    };
+
+    explicit ButtonBoxItem(QObject* parent = nullptr);
+    ~ButtonBoxItem() override;
+
+    // Grid configuration
+    void setColumns(int cols) { m_columns = cols; }
+    int columns() const { return m_columns; }
+
+    void setBorderWidth(float w) { m_borderWidth = w; }
+    float borderWidth() const { return m_borderWidth; }
+
+    void setMargin(float m) { m_margin = m; }
+    float margin() const { return m_margin; }
+
+    void setCornerRadius(float r) { m_cornerRadius = r; }
+    float cornerRadius() const { return m_cornerRadius; }
+
+    void setHeightRatio(float r) { m_heightRatio = r; }
+    float heightRatio() const { return m_heightRatio; }
+
+    // Button count
+    int buttonCount() const { return m_buttonCount; }
+
+    // Per-button state
+    struct ButtonState {
+        QString text;
+        QColor fillColour{0x1a, 0x2a, 0x3a};       // STYLEGUIDE button base
+        QColor hoverColour{0x20, 0x40, 0x60};       // STYLEGUIDE button hover
+        QColor clickColour{0x00, 0xb4, 0xd8};       // STYLEGUIDE accent
+        QColor borderColour{0x20, 0x50, 0x70};      // STYLEGUIDE border
+        QColor onColour{0x00, 0x70, 0xc0};          // STYLEGUIDE blue active bg
+        QColor offColour{0x1a, 0x2a, 0x3a};
+        QColor textColour{0xc8, 0xd8, 0xe8};        // STYLEGUIDE primary text
+        IndicatorType indicatorType{IndicatorType::Ring};
+        float indicatorWidth{0.005f};
+        bool on{false};
+        bool visible{true};
+        bool enabled{true};
+    };
+
+    void setButtonCount(int count);
+    ButtonState& button(int index);
+    const ButtonState& button(int index) const;
+
+    // Visibility bitmask (from Thetis clsButtonBox _visible_bits)
+    void setVisibleBits(uint32_t bits);
+    uint32_t visibleBits() const { return m_visibleBits; }
+
+    // FadeOnRx/FadeOnTx (from Thetis clsButtonBox)
+    void setFadeOnRx(bool v) { m_fadeOnRx = v; }
+    bool fadeOnRx() const { return m_fadeOnRx; }
+    void setFadeOnTx(bool v) { m_fadeOnTx = v; }
+    bool fadeOnTx() const { return m_fadeOnTx; }
+
+    void setTransmitting(bool tx) { m_transmitting = tx; }
+
+    // Rendering
+    Layer renderLayer() const override { return Layer::OverlayDynamic; }
+    void paint(QPainter& p, int widgetW, int widgetH) override;
+
+    // Mouse interaction
+    bool handleMousePress(QMouseEvent* event, int widgetW, int widgetH) override;
+    bool handleMouseRelease(QMouseEvent* event, int widgetW, int widgetH) override;
+    bool handleMouseMove(QMouseEvent* event, int widgetW, int widgetH) override;
+
+    QString serialize() const override;
+    bool deserialize(const QString& data) override;
+
+signals:
+    // Emitted when any button is clicked. Subclasses connect or override.
+    void buttonClicked(int index, Qt::MouseButton button);
+
+protected:
+    // Returns the button index at the given widget-pixel position, or -1.
+    int buttonAt(const QPointF& pos, int widgetW, int widgetH) const;
+
+    // Subclasses call this to set up their button labels/colors after setButtonCount.
+    void setupButton(int index, const QString& text, const QColor& onColour = QColor());
+
+    int m_buttonCount{0};
+    QVector<ButtonState> m_buttons;
+
+private:
+    // From Thetis clsButtonBox layout calculation
+    QRectF buttonRect(int index, const QRectF& area) const;
+    void paintButton(QPainter& p, int index, const QRectF& rect);
+    void paintIndicator(QPainter& p, int index, const QRectF& rect);
+
+    int m_columns{4};
+    float m_borderWidth{0.005f};    // From Thetis clsButtonBox default
+    float m_margin{0.0f};
+    float m_cornerRadius{3.0f};
+    float m_heightRatio{1.0f};
+    uint32_t m_visibleBits{0xFFFFFFFF};
+    bool m_fadeOnRx{false};
+    bool m_fadeOnTx{false};
+    bool m_transmitting{false};
+
+    // Click highlight (from Thetis 100ms timer pattern)
+    int m_hoveredIndex{-1};
+    int m_clickedIndex{-1};
+    QTimer m_clickTimer;
+};
+
+} // namespace NereusSDR
