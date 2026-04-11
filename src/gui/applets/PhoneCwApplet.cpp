@@ -162,10 +162,18 @@ void PhoneCwApplet::buildUI()
         m_tabGroup->addButton(m_cwTabBtn, 1);
         tabRow->addWidget(m_cwTabBtn);
 
+        m_fmTabBtn = new QPushButton(QStringLiteral("FM"), this);
+        m_fmTabBtn->setCheckable(true);
+        m_fmTabBtn->setFixedHeight(20);
+        m_fmTabBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_fmTabBtn->setStyleSheet(QString(kButtonBase) + kBlueActive);
+        m_tabGroup->addButton(m_fmTabBtn, 2);
+        tabRow->addWidget(m_fmTabBtn);
+
         root->addLayout(tabRow);
     }
 
-    // ── Stacked widget (Phone + CW only — FM is separate FmApplet) ──────────
+    // ── Stacked widget: Phone (0) / CW (1) / FM (2) ─────────────────────────
     m_stack = new QStackedWidget(this);
 
     auto* phonePage = new QWidget(m_stack);
@@ -175,6 +183,10 @@ void PhoneCwApplet::buildUI()
     auto* cwPage = new QWidget(m_stack);
     buildCwPage(cwPage);
     m_stack->addWidget(cwPage);     // index 1
+
+    auto* fmPage = new QWidget(m_stack);
+    buildFmPage(fmPage);
+    m_stack->addWidget(fmPage);     // index 2
 
     m_stack->setCurrentIndex(0);
     root->addWidget(m_stack);
