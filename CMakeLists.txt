@@ -213,6 +213,9 @@ set(GUI_SOURCES
     src/gui/meters/FilterDisplayItem.cpp
     src/gui/meters/RotatorItem.cpp
     src/gui/meters/ButtonBoxItem.cpp
+    src/gui/meters/BandButtonItem.cpp
+    src/gui/meters/ModeButtonItem.cpp
+    src/gui/meters/FilterButtonItem.cpp
     src/gui/HGauge.cpp
     src/gui/SpectrumOverlayPanel.cpp
     src/gui/SetupDialog.cpp
