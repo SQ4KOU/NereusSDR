@@ -98,6 +98,15 @@ private:
     class PhoneCwApplet* m_phoneCwApplet{nullptr};
     class EqApplet* m_eqApplet{nullptr};
 
+    // Applets — Tasks 7-10 (NYI shells, hidden until Task 15 Container wiring)
+    class DigitalApplet*    m_digitalApplet{nullptr};
+    class PureSignalApplet* m_pureSignalApplet{nullptr};
+    class DiversityApplet*  m_diversityApplet{nullptr};
+    class CwxApplet*        m_cwxApplet{nullptr};
+    class DvkApplet*        m_dvkApplet{nullptr};
+    class CatApplet*        m_catApplet{nullptr};
+    class TunerApplet*      m_tunerApplet{nullptr};
+
     // Spectrum overlay panel
     class SpectrumOverlayPanel* m_overlayPanel{nullptr};
 };

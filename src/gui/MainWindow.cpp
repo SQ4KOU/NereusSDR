@@ -23,6 +23,13 @@
 #include "applets/TxApplet.h"
 #include "applets/PhoneCwApplet.h"
 #include "applets/EqApplet.h"
+#include "applets/DigitalApplet.h"
+#include "applets/PureSignalApplet.h"
+#include "applets/DiversityApplet.h"
+#include "applets/CwxApplet.h"
+#include "applets/DvkApplet.h"
+#include "applets/CatApplet.h"
+#include "applets/TunerApplet.h"
 #include "SpectrumOverlayPanel.h"
 #include "SetupDialog.h"
 
@@ -330,6 +337,16 @@ void MainWindow::populateDefaultMeter()
     // EqApplet — 10-band EQ, NYI (Phase 3I-3)
     m_eqApplet = new EqApplet(m_radioModel, nullptr);
     panel->addApplet(m_eqApplet);
+
+    // Tasks 7-10: NYI applets created but NOT added to the container.
+    // Task 15 (final assembly) will wire these via the Containers menu.
+    m_digitalApplet    = new DigitalApplet(m_radioModel, nullptr);
+    m_pureSignalApplet = new PureSignalApplet(m_radioModel, nullptr);
+    m_diversityApplet  = new DiversityApplet(m_radioModel, nullptr);
+    m_cwxApplet        = new CwxApplet(m_radioModel, nullptr);
+    m_dvkApplet        = new DvkApplet(m_radioModel, nullptr);
+    m_catApplet        = new CatApplet(m_radioModel, nullptr);
+    m_tunerApplet      = new TunerApplet(m_radioModel, nullptr);
 
     c0->setContent(panel);
     qCDebug(lcMeter) << "Installed default meter layout: S-Meter + Power/SWR + ALC";

@@ -36,58 +36,78 @@ static QLineEdit* makePortEdit(const QString& def, int w, QWidget* parent)
     return ed;
 }
 
+static QLabel* makePathLabel(const QString& text, QWidget* parent)
+{
+    auto* lbl = new QLabel(text, parent);
+    lbl->setStyleSheet(QStringLiteral(
+        "QLabel { color: %1; font-size: 9px; }").arg(Style::kTextSecondary));
+    return lbl;
+}
+
 CatApplet::CatApplet(RadioModel* model, QWidget* parent)
     : AppletWidget(model, parent)
 {
+    buildUI();
+}
+
+void CatApplet::buildUI()
+{
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(4, 2, 4, 2);
-    root->setSpacing(2);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
+    root->addWidget(appletTitleBar(QStringLiteral("CAT / TCI")));
 
-    root->addWidget(appletTitleBar(QStringLiteral("CAT")));
+    auto* body = new QWidget(this);
+    auto* vbox = new QVBoxLayout(body);
+    vbox->setContentsMargins(4, 2, 4, 4);
+    vbox->setSpacing(2);
 
-    // --- rigctld row: enable + 4 LEDs (A/B/C/D) ---
+    // --- Control 1: CAT TCP enable + 4 status LEDs (A/B/C/D) ---
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
-        m_rigctldBtn = greenToggle(QStringLiteral("rigctld"));
-        m_rigctldBtn->setCheckable(true);
-        row->addWidget(m_rigctldBtn);
+        m_tcpBtn = greenToggle(QStringLiteral("TCP"));
+        m_tcpBtn->setCheckable(true);
+        row->addWidget(m_tcpBtn);
 
         const QString ledNames[4] = {
             QStringLiteral("A"), QStringLiteral("B"),
             QStringLiteral("C"), QStringLiteral("D")
         };
         for (int i = 0; i < 4; ++i) {
-            m_rigctldLed[i] = makeLed(ledNames[i], this);
-            row->addWidget(m_rigctldLed[i]);
+            m_tcpLed[i] = makeLed(ledNames[i], this);
+            row->addWidget(m_tcpLed[i]);
         }
         row->addStretch();
 
-        root->addLayout(row);
-        NyiOverlay::markNyi(m_rigctldBtn, QStringLiteral("3K"));
+        vbox->addLayout(row);
+        NyiOverlay::markNyi(m_tcpBtn, QStringLiteral("3K"));
     }
 
-    // --- TCP CAT row: enable + port ---
+    // --- Control 2: CAT PTY enable + 4 path labels ---
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
-        m_tcpCatBtn = greenToggle(QStringLiteral("TCP CAT"));
-        m_tcpCatBtn->setCheckable(true);
-        row->addWidget(m_tcpCatBtn);
+        m_ptyBtn = greenToggle(QStringLiteral("PTY"));
+        m_ptyBtn->setCheckable(true);
+        row->addWidget(m_ptyBtn);
 
-        m_tcpCatPort = makePortEdit(QStringLiteral("4532"), 50, this);
-        row->addWidget(m_tcpCatPort);
+        for (int i = 0; i < 4; ++i) {
+            m_ptyPath[i] = makePathLabel(
+                QStringLiteral("/dev/ptyp%1").arg(i), this);
+            row->addWidget(m_ptyPath[i]);
+        }
         row->addStretch();
 
-        root->addLayout(row);
-
-        NyiOverlay::markNyi(m_tcpCatBtn,  QStringLiteral("3K"));
-        NyiOverlay::markNyi(m_tcpCatPort, QStringLiteral("3K"));
+        vbox->addLayout(row);
+        NyiOverlay::markNyi(m_ptyBtn, QStringLiteral("3K"));
     }
 
-    // --- TCI row: enable + port + LED ---
+    vbox->addWidget(divider());
+
+    // --- Control 3: TCI enable + port + status LED ---
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
@@ -96,38 +116,71 @@ CatApplet::CatApplet(RadioModel* model, QWidget* parent)
         m_tciBtn->setCheckable(true);
         row->addWidget(m_tciBtn);
 
-        m_tciPort = makePortEdit(QStringLiteral("40001"), 50, this);
+        m_tciPort = makePortEdit(QStringLiteral("40001"), 55, this);
         row->addWidget(m_tciPort);
 
         m_tciLed = makeLed(QStringLiteral("\u2022"), this);
         row->addWidget(m_tciLed);
         row->addStretch();
 
-        root->addLayout(row);
+        vbox->addLayout(row);
 
-        NyiOverlay::markNyi(m_tciBtn,  QStringLiteral("3K"));
-        NyiOverlay::markNyi(m_tciPort, QStringLiteral("3K"));
+        NyiOverlay::markNyi(m_tciBtn,  QStringLiteral("3J"));
+        NyiOverlay::markNyi(m_tciPort, QStringLiteral("3J"));
     }
 
-    // --- Active connections readout ---
-    m_connectLabel = new QLabel(QStringLiteral("Connections: 0"), this);
-    m_connectLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: %1; font-size: 10px; }").arg(Style::kTextSecondary));
-    root->addWidget(m_connectLabel);
+    vbox->addWidget(divider());
 
-    // --- Serial port combo ---
-    m_serialCombo = new QComboBox(this);
-    m_serialCombo->addItem(QStringLiteral("(none)"));
-    applyComboStyle(m_serialCombo);
-    root->addWidget(m_serialCombo);
-    NyiOverlay::markNyi(m_serialCombo, QStringLiteral("3K"));
+    // --- Control 4: DAX enable + 4 channel status labels ---
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
 
-    root->addStretch();
+        m_daxBtn = greenToggle(QStringLiteral("DAX"));
+        m_daxBtn->setCheckable(true);
+        row->addWidget(m_daxBtn);
+
+        for (int i = 0; i < 4; ++i) {
+            m_daxStatus[i] = makeLed(QStringLiteral("Ch%1").arg(i + 1), this);
+            row->addWidget(m_daxStatus[i]);
+        }
+        row->addStretch();
+
+        vbox->addLayout(row);
+        NyiOverlay::markNyi(m_daxBtn, QStringLiteral("3-DAX"));
+    }
+
+    // --- Control 5: DAX IQ enable + rate combo ---
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        m_iqBtn = greenToggle(QStringLiteral("IQ"));
+        m_iqBtn->setCheckable(true);
+        row->addWidget(m_iqBtn);
+
+        m_iqRateCombo = new QComboBox(this);
+        m_iqRateCombo->addItems({
+            QStringLiteral("48000"),
+            QStringLiteral("96000"),
+            QStringLiteral("192000")
+        });
+        applyComboStyle(m_iqRateCombo);
+        row->addWidget(m_iqRateCombo, 1);
+
+        vbox->addLayout(row);
+
+        NyiOverlay::markNyi(m_iqBtn,       QStringLiteral("3-DAX"));
+        NyiOverlay::markNyi(m_iqRateCombo, QStringLiteral("3-DAX"));
+    }
+
+    vbox->addStretch();
+    root->addWidget(body);
 }
 
 void CatApplet::syncFromModel()
 {
-    // NYI — Phase 3K
+    // NYI — Phase 3K / 3J / 3-DAX
 }
 
 } // namespace NereusSDR

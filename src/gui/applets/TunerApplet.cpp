@@ -33,28 +33,41 @@ static QProgressBar* makeRelayBar(QWidget* parent)
 TunerApplet::TunerApplet(RadioModel* model, QWidget* parent)
     : AppletWidget(model, parent)
 {
+    buildUI();
+}
+
+void TunerApplet::buildUI()
+{
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(4, 2, 4, 2);
-    root->setSpacing(2);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
+    root->addWidget(appletTitleBar(QStringLiteral("ATU Control")));
 
-    root->addWidget(appletTitleBar(QStringLiteral("Tuner")));
+    auto* body = new QWidget(this);
+    auto* vbox = new QVBoxLayout(body);
+    vbox->setContentsMargins(4, 2, 4, 4);
+    vbox->setSpacing(2);
 
-    // --- Forward power gauge: 0–200 W, red@150 ---
+    // --- Control 1: Forward power gauge (0-200W, yellow@125, red@125) ---
     m_fwdPowerGauge = new HGauge(this);
     m_fwdPowerGauge->setRange(0.0, 200.0);
-    m_fwdPowerGauge->setRedStart(150.0);
+    m_fwdPowerGauge->setYellowStart(125.0);
+    m_fwdPowerGauge->setRedStart(125.0);
     m_fwdPowerGauge->setTitle(QStringLiteral("Fwd Power"));
     m_fwdPowerGauge->setUnit(QStringLiteral("W"));
-    root->addWidget(m_fwdPowerGauge);
+    vbox->addWidget(m_fwdPowerGauge);
+    NyiOverlay::markNyi(m_fwdPowerGauge, QStringLiteral("future"));
 
-    // --- SWR gauge: 1.0–3.0, red@2.5 ---
+    // --- Control 2: SWR gauge (1.0-3.0, yellow@2.5, red@2.5) ---
     m_swrGauge = new HGauge(this);
     m_swrGauge->setRange(1.0, 3.0);
+    m_swrGauge->setYellowStart(2.5);
     m_swrGauge->setRedStart(2.5);
     m_swrGauge->setTitle(QStringLiteral("SWR"));
-    root->addWidget(m_swrGauge);
+    vbox->addWidget(m_swrGauge);
+    NyiOverlay::markNyi(m_swrGauge, QStringLiteral("future"));
 
-    // --- Relay position bars (C1 / L / C2) ---
+    // --- Control 3: Relay position bars (C1 / L / C2) ---
     {
         auto* grid = new QVBoxLayout;
         grid->setSpacing(2);
@@ -80,27 +93,27 @@ TunerApplet::TunerApplet(RadioModel* model, QWidget* parent)
             grid->addLayout(row);
         }
 
-        root->addLayout(grid);
+        vbox->addLayout(grid);
     }
 
-    // --- TUNE button ---
+    // --- Control 4: TUNE button (non-toggle) ---
     m_tuneBtn = styledButton(QStringLiteral("TUNE"));
-    root->addWidget(m_tuneBtn);
-    NyiOverlay::markNyi(m_tuneBtn, QStringLiteral("Aries ATU"));
+    vbox->addWidget(m_tuneBtn);
+    NyiOverlay::markNyi(m_tuneBtn, QStringLiteral("future"));
 
-    // --- Mode buttons (mutually exclusive): Operate / Bypass / Standby ---
+    // --- Control 5: OPERATE/BYPASS/STANDBY — blue toggles, exclusive ---
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(2);
 
-        m_operateBtn = greenToggle(QStringLiteral("Operate"));
+        m_operateBtn = blueToggle(QStringLiteral("Operate"));
         m_operateBtn->setCheckable(true);
         m_operateBtn->setChecked(true);
 
-        m_bypassBtn  = styledButton(QStringLiteral("Bypass"));
+        m_bypassBtn  = blueToggle(QStringLiteral("Bypass"));
         m_bypassBtn->setCheckable(true);
 
-        m_standbyBtn = styledButton(QStringLiteral("Standby"));
+        m_standbyBtn = blueToggle(QStringLiteral("Standby"));
         m_standbyBtn->setCheckable(true);
 
         m_modeGroup = new QButtonGroup(this);
@@ -113,14 +126,14 @@ TunerApplet::TunerApplet(RadioModel* model, QWidget* parent)
         row->addWidget(m_bypassBtn);
         row->addWidget(m_standbyBtn);
 
-        root->addLayout(row);
+        vbox->addLayout(row);
 
-        NyiOverlay::markNyi(m_operateBtn, QStringLiteral("Aries ATU"));
-        NyiOverlay::markNyi(m_bypassBtn,  QStringLiteral("Aries ATU"));
-        NyiOverlay::markNyi(m_standbyBtn, QStringLiteral("Aries ATU"));
+        NyiOverlay::markNyi(m_operateBtn, QStringLiteral("future"));
+        NyiOverlay::markNyi(m_bypassBtn,  QStringLiteral("future"));
+        NyiOverlay::markNyi(m_standbyBtn, QStringLiteral("future"));
     }
 
-    // --- Antenna switch buttons (mutually exclusive, blue active): 1 / 2 / 3 ---
+    // --- Control 6: Antenna switch 1/2/3 — blue toggles, exclusive ---
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(2);
@@ -146,19 +159,20 @@ TunerApplet::TunerApplet(RadioModel* model, QWidget* parent)
         row->addWidget(m_ant3Btn);
         row->addStretch();
 
-        root->addLayout(row);
+        vbox->addLayout(row);
 
-        NyiOverlay::markNyi(m_ant1Btn, QStringLiteral("Aries ATU"));
-        NyiOverlay::markNyi(m_ant2Btn, QStringLiteral("Aries ATU"));
-        NyiOverlay::markNyi(m_ant3Btn, QStringLiteral("Aries ATU"));
+        NyiOverlay::markNyi(m_ant1Btn, QStringLiteral("future"));
+        NyiOverlay::markNyi(m_ant2Btn, QStringLiteral("future"));
+        NyiOverlay::markNyi(m_ant3Btn, QStringLiteral("future"));
     }
 
-    root->addStretch();
+    vbox->addStretch();
+    root->addWidget(body);
 }
 
 void TunerApplet::syncFromModel()
 {
-    // NYI — Aries ATU integration phase
+    // NYI — future Aries ATU integration phase
 }
 
 } // namespace NereusSDR

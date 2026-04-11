@@ -10,35 +10,46 @@ class QComboBox;
 namespace NereusSDR {
 
 // CAT / rigctld / TCI control interfaces.
-// NYI — Phase 3K (CAT/rigctld — 4-channel rigctld, TCP CAT server).
+// NYI — Phase 3K (CAT/rigctld) + 3J (TCI) + 3-DAX (DAX/IQ).
+//
+// Controls:
+//   1. CAT TCP enable + LEDs — QPushButton green "TCP" + 4x QLabel (A/B/C/D)
+//   2. CAT PTY enable + paths — QPushButton green "PTY" + 4x QLabel paths
+//   3. TCI enable + port + LED — QPushButton green "TCI" + QLineEdit port + QLabel LED
+//   4. DAX enable + meters — QPushButton green "DAX" + 4x QLabel channel status
+//   5. DAX IQ enable + rate — QPushButton green "IQ" + QComboBox rate
 class CatApplet : public AppletWidget {
     Q_OBJECT
 public:
     explicit CatApplet(RadioModel* model, QWidget* parent = nullptr);
 
     QString appletId()    const override { return QStringLiteral("cat"); }
-    QString appletTitle() const override { return QStringLiteral("CAT"); }
+    QString appletTitle() const override { return QStringLiteral("CAT / TCI"); }
     void    syncFromModel() override;
 
 private:
-    // rigctld row: enable button + 4 status LEDs (A/B/C/D)
-    QPushButton* m_rigctldBtn    = nullptr;  // green toggle
-    QLabel*      m_rigctldLed[4] = {};       // A/B/C/D status
+    void buildUI();
 
-    // TCP CAT row: enable button + port field
-    QPushButton* m_tcpCatBtn     = nullptr;  // green toggle
-    QLineEdit*   m_tcpCatPort    = nullptr;  // "4532", fixedWidth 50
+    // Control 1 — CAT TCP: enable button + 4 status LEDs (A/B/C/D)
+    QPushButton* m_tcpBtn        = nullptr;
+    QLabel*      m_tcpLed[4]     = {};
 
-    // TCI row: enable button + port field + status LED
-    QPushButton* m_tciBtn        = nullptr;  // green toggle
-    QLineEdit*   m_tciPort       = nullptr;  // "40001"
+    // Control 2 — CAT PTY: enable button + 4 path labels
+    QPushButton* m_ptyBtn        = nullptr;
+    QLabel*      m_ptyPath[4]    = {};
+
+    // Control 3 — TCI: enable button + port field + status LED
+    QPushButton* m_tciBtn        = nullptr;
+    QLineEdit*   m_tciPort       = nullptr;
     QLabel*      m_tciLed        = nullptr;
 
-    // Active connections readout
-    QLabel*      m_connectLabel  = nullptr;
+    // Control 4 — DAX: enable button + 4 channel status labels
+    QPushButton* m_daxBtn        = nullptr;
+    QLabel*      m_daxStatus[4]  = {};
 
-    // Serial port combo
-    QComboBox*   m_serialCombo   = nullptr;
+    // Control 5 — DAX IQ: enable button + rate combo
+    QPushButton* m_iqBtn         = nullptr;
+    QComboBox*   m_iqRateCombo   = nullptr;
 };
 
 } // namespace NereusSDR
