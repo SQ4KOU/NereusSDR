@@ -222,6 +222,7 @@ set(GUI_SOURCES
     src/gui/meters/VoiceRecordPlayItem.cpp
     src/gui/meters/DiscordButtonItem.cpp
     src/gui/meters/VfoDisplayItem.cpp
+    src/gui/meters/ClockItem.cpp
     src/gui/HGauge.cpp
     src/gui/SpectrumOverlayPanel.cpp
     src/gui/SetupDialog.cpp
