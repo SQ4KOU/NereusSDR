@@ -2,6 +2,7 @@
 #include "ContainerWidget.h"
 #include "../meters/MeterWidget.h"
 #include "../meters/MeterItem.h"
+#include "../meters/ItemGroup.h"
 
 // Core meter item types (MeterItem.h defines: BarItem, SolidColourItem, ImageItem,
 //                                               ScaleItem, TextItem, NeedleItem)
@@ -51,6 +52,9 @@
 #include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QScrollArea>
+#include <QMessageBox>
+#include <QClipboard>
+#include <QApplication>
 
 namespace NereusSDR {
 
@@ -419,6 +423,9 @@ void ContainerSettingsDialog::buildButtonBar()
     barLayout->addWidget(m_btnOk);
 
     // Wire buttons
+    connect(m_btnPreset, &QPushButton::clicked, this, &ContainerSettingsDialog::onLoadPreset);
+    connect(m_btnExport, &QPushButton::clicked, this, &ContainerSettingsDialog::onExport);
+    connect(m_btnImport, &QPushButton::clicked, this, &ContainerSettingsDialog::onImport);
     connect(m_btnApply,  &QPushButton::clicked, this, &ContainerSettingsDialog::applyToContainer);
     connect(m_btnCancel, &QPushButton::clicked, this, &QDialog::reject);
     connect(m_btnOk,     &QPushButton::clicked, this, [this]() {
@@ -997,6 +1004,256 @@ void ContainerSettingsDialog::applyToContainer()
 
     m_container->setShowOnRx(m_showOnRxCheck->isChecked());
     m_container->setShowOnTx(m_showOnTxCheck->isChecked());
+}
+
+// ---------------------------------------------------------------------------
+// Task 6: Preset browser
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::onLoadPreset()
+{
+    constexpr const char* kMenuStyle =
+        "QMenu { background: #1a2a3a; color: #c8d8e8; border: 1px solid #205070; }"
+        "QMenu::item:selected { background: #00b4d8; color: #0f0f1a; }"
+        "QMenu::separator { background: #203040; height: 1px; }";
+
+    QMenu menu(this);
+    menu.setStyleSheet(QLatin1String(kMenuStyle));
+
+    // S-Meter sub-menu
+    QMenu* sMeterMenu = menu.addMenu(QStringLiteral("S-Meter"));
+    sMeterMenu->setStyleSheet(QLatin1String(kMenuStyle));
+    sMeterMenu->addAction(QStringLiteral("S-Meter Only"),        this, [this]{ loadPresetByName(QStringLiteral("SMeterOnly")); });
+    sMeterMenu->addAction(QStringLiteral("S-Meter Bar Signal"),  this, [this]{ loadPresetByName(QStringLiteral("SignalBar")); });
+    sMeterMenu->addAction(QStringLiteral("S-Meter Bar Avg"),     this, [this]{ loadPresetByName(QStringLiteral("AvgSignalBar")); });
+    sMeterMenu->addAction(QStringLiteral("S-Meter Bar MaxBin"),  this, [this]{ loadPresetByName(QStringLiteral("MaxBinBar")); });
+    sMeterMenu->addAction(QStringLiteral("S-Meter Text"),        this, [this]{ loadPresetByName(QStringLiteral("SignalText")); });
+
+    // Composite sub-menu
+    QMenu* compositeMenu = menu.addMenu(QStringLiteral("Composite"));
+    compositeMenu->setStyleSheet(QLatin1String(kMenuStyle));
+    compositeMenu->addAction(QStringLiteral("ANAN Multi Meter"), this, [this]{ loadPresetByName(QStringLiteral("AnanMM")); });
+    compositeMenu->addAction(QStringLiteral("Cross Needle"),     this, [this]{ loadPresetByName(QStringLiteral("CrossNeedle")); });
+    compositeMenu->addAction(QStringLiteral("Magic Eye"),        this, [this]{ loadPresetByName(QStringLiteral("MagicEye")); });
+    compositeMenu->addAction(QStringLiteral("History"),          this, [this]{ loadPresetByName(QStringLiteral("History")); });
+
+    // TX Meters sub-menu
+    QMenu* txMenu = menu.addMenu(QStringLiteral("TX Meters"));
+    txMenu->setStyleSheet(QLatin1String(kMenuStyle));
+    txMenu->addAction(QStringLiteral("Power/SWR"),      this, [this]{ loadPresetByName(QStringLiteral("PowerSwr")); });
+    txMenu->addAction(QStringLiteral("ALC"),            this, [this]{ loadPresetByName(QStringLiteral("Alc")); });
+    txMenu->addAction(QStringLiteral("ALC Gain"),       this, [this]{ loadPresetByName(QStringLiteral("AlcGain")); });
+    txMenu->addAction(QStringLiteral("ALC Group"),      this, [this]{ loadPresetByName(QStringLiteral("AlcGroup")); });
+    txMenu->addAction(QStringLiteral("Mic Level"),      this, [this]{ loadPresetByName(QStringLiteral("Mic")); });
+    txMenu->addAction(QStringLiteral("Compressor"),     this, [this]{ loadPresetByName(QStringLiteral("Comp")); });
+    txMenu->addAction(QStringLiteral("EQ Level"),       this, [this]{ loadPresetByName(QStringLiteral("Eq")); });
+    txMenu->addAction(QStringLiteral("Leveler"),        this, [this]{ loadPresetByName(QStringLiteral("Leveler")); });
+    txMenu->addAction(QStringLiteral("Leveler Gain"),   this, [this]{ loadPresetByName(QStringLiteral("LevelerGain")); });
+    txMenu->addAction(QStringLiteral("CFC"),            this, [this]{ loadPresetByName(QStringLiteral("Cfc")); });
+    txMenu->addAction(QStringLiteral("CFC Gain"),       this, [this]{ loadPresetByName(QStringLiteral("CfcGain")); });
+
+    // RX Meters sub-menu
+    QMenu* rxMenu = menu.addMenu(QStringLiteral("RX Meters"));
+    rxMenu->setStyleSheet(QLatin1String(kMenuStyle));
+    rxMenu->addAction(QStringLiteral("ADC"),         this, [this]{ loadPresetByName(QStringLiteral("Adc")); });
+    rxMenu->addAction(QStringLiteral("ADC MaxMag"),  this, [this]{ loadPresetByName(QStringLiteral("AdcMaxMag")); });
+    rxMenu->addAction(QStringLiteral("AGC"),         this, [this]{ loadPresetByName(QStringLiteral("Agc")); });
+    rxMenu->addAction(QStringLiteral("AGC Gain"),    this, [this]{ loadPresetByName(QStringLiteral("AgcGain")); });
+    rxMenu->addAction(QStringLiteral("PBSNR"),       this, [this]{ loadPresetByName(QStringLiteral("Pbsnr")); });
+
+    // Interactive sub-menu
+    QMenu* interactiveMenu = menu.addMenu(QStringLiteral("Interactive"));
+    interactiveMenu->setStyleSheet(QLatin1String(kMenuStyle));
+    interactiveMenu->addAction(QStringLiteral("VFO Display"), this, [this]{ loadPresetByName(QStringLiteral("Vfo")); });
+    interactiveMenu->addAction(QStringLiteral("Clock"),       this, [this]{ loadPresetByName(QStringLiteral("Clock")); });
+    interactiveMenu->addAction(QStringLiteral("Contest"),     this, [this]{ loadPresetByName(QStringLiteral("Contest")); });
+
+    // Display sub-menu
+    QMenu* displayMenu = menu.addMenu(QStringLiteral("Display"));
+    displayMenu->setStyleSheet(QLatin1String(kMenuStyle));
+    displayMenu->addAction(QStringLiteral("Rotator"),        this, [this]{ loadPresetByName(QStringLiteral("Rotator")); });
+    displayMenu->addAction(QStringLiteral("Filter Display"), this, [this]{ loadPresetByName(QStringLiteral("FilterDisplay")); });
+
+    // Top-level
+    menu.addSeparator();
+    menu.addAction(QStringLiteral("Spacer"), this, [this]{ loadPresetByName(QStringLiteral("Spacer")); });
+
+    menu.exec(m_btnPreset->mapToGlobal(QPoint(0, -menu.sizeHint().height())));
+}
+
+void ContainerSettingsDialog::loadPresetByName(const QString& name)
+{
+    if (!m_workingItems.isEmpty()) {
+        const QMessageBox::StandardButton result = QMessageBox::question(
+            this,
+            QStringLiteral("Load Preset"),
+            QStringLiteral("This will replace all current items. Continue?"),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (result != QMessageBox::Yes) {
+            return;
+        }
+    }
+
+    qDeleteAll(m_workingItems);
+    m_workingItems.clear();
+
+    ItemGroup* group = nullptr;
+
+    if (name == QLatin1String("SMeterOnly")) {
+        group = ItemGroup::createSMeterPreset(0, QStringLiteral("S-Meter"), this);
+    } else if (name == QLatin1String("SignalBar")) {
+        group = ItemGroup::createSignalBarPreset(this);
+    } else if (name == QLatin1String("AvgSignalBar")) {
+        group = ItemGroup::createAvgSignalBarPreset(this);
+    } else if (name == QLatin1String("MaxBinBar")) {
+        group = ItemGroup::createMaxBinBarPreset(this);
+    } else if (name == QLatin1String("SignalText")) {
+        group = ItemGroup::createSignalTextPreset(0, this);
+    } else if (name == QLatin1String("AnanMM")) {
+        group = ItemGroup::createAnanMMPreset(this);
+    } else if (name == QLatin1String("CrossNeedle")) {
+        group = ItemGroup::createCrossNeedlePreset(this);
+    } else if (name == QLatin1String("MagicEye")) {
+        group = ItemGroup::createMagicEyePreset(0, this);
+    } else if (name == QLatin1String("History")) {
+        group = ItemGroup::createHistoryPreset(0, this);
+    } else if (name == QLatin1String("PowerSwr")) {
+        group = ItemGroup::createPowerSwrPreset(QStringLiteral("Power/SWR"), this);
+    } else if (name == QLatin1String("Alc")) {
+        group = ItemGroup::createAlcPreset(this);
+    } else if (name == QLatin1String("AlcGain")) {
+        group = ItemGroup::createAlcGainBarPreset(this);
+    } else if (name == QLatin1String("AlcGroup")) {
+        group = ItemGroup::createAlcGroupBarPreset(this);
+    } else if (name == QLatin1String("Mic")) {
+        group = ItemGroup::createMicPreset(this);
+    } else if (name == QLatin1String("Comp")) {
+        group = ItemGroup::createCompPreset(this);
+    } else if (name == QLatin1String("Eq")) {
+        group = ItemGroup::createEqBarPreset(this);
+    } else if (name == QLatin1String("Leveler")) {
+        group = ItemGroup::createLevelerBarPreset(this);
+    } else if (name == QLatin1String("LevelerGain")) {
+        group = ItemGroup::createLevelerGainBarPreset(this);
+    } else if (name == QLatin1String("Cfc")) {
+        group = ItemGroup::createCfcBarPreset(this);
+    } else if (name == QLatin1String("CfcGain")) {
+        group = ItemGroup::createCfcGainBarPreset(this);
+    } else if (name == QLatin1String("Adc")) {
+        group = ItemGroup::createAdcBarPreset(this);
+    } else if (name == QLatin1String("AdcMaxMag")) {
+        group = ItemGroup::createAdcMaxMagPreset(this);
+    } else if (name == QLatin1String("Agc")) {
+        group = ItemGroup::createAgcBarPreset(this);
+    } else if (name == QLatin1String("AgcGain")) {
+        group = ItemGroup::createAgcGainBarPreset(this);
+    } else if (name == QLatin1String("Pbsnr")) {
+        group = ItemGroup::createPbsnrBarPreset(this);
+    } else if (name == QLatin1String("Vfo")) {
+        group = ItemGroup::createVfoDisplayPreset(this);
+    } else if (name == QLatin1String("Clock")) {
+        group = ItemGroup::createClockPreset(this);
+    } else if (name == QLatin1String("Contest")) {
+        group = ItemGroup::createContestPreset(this);
+    } else if (name == QLatin1String("Spacer")) {
+        group = ItemGroup::createSpacerPreset(this);
+    } else if (name == QLatin1String("Rotator")) {
+        auto* item = new RotatorItem();
+        item->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+        item->setBindingId(300);
+        m_workingItems.append(item);
+    } else if (name == QLatin1String("FilterDisplay")) {
+        auto* item = new FilterDisplayItem();
+        item->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+        m_workingItems.append(item);
+    }
+
+    if (group) {
+        for (MeterItem* src : group->items()) {
+            MeterItem* clone = createItemFromSerialized(src->serialize());
+            if (clone) {
+                m_workingItems.append(clone);
+            }
+        }
+        delete group;
+    }
+
+    refreshItemList();
+    if (!m_workingItems.isEmpty()) {
+        m_itemList->setCurrentRow(0);
+    }
+    updatePreview();
+}
+
+// ---------------------------------------------------------------------------
+// Task 7: Import/Export via Base64
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::onExport()
+{
+    QStringList lines;
+    for (const MeterItem* item : m_workingItems) {
+        lines << item->serialize();
+    }
+    const QString raw = lines.join(QLatin1Char('\n'));
+    const QString encoded = QString::fromLatin1(raw.toUtf8().toBase64());
+    QApplication::clipboard()->setText(encoded);
+    QMessageBox::information(
+        this,
+        QStringLiteral("Export"),
+        QStringLiteral("Layout copied to clipboard as Base64.\nPaste it into another container to import."));
+}
+
+void ContainerSettingsDialog::onImport()
+{
+    const QString clipText = QApplication::clipboard()->text().trimmed();
+    if (clipText.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Import"),
+                             QStringLiteral("Clipboard is empty."));
+        return;
+    }
+
+    const QByteArray decoded = QByteArray::fromBase64(clipText.toUtf8());
+    const QString raw = QString::fromUtf8(decoded);
+    const QStringList lines = raw.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+
+    QVector<MeterItem*> imported;
+    for (const QString& line : lines) {
+        MeterItem* item = createItemFromSerialized(line);
+        if (item) {
+            imported.append(item);
+        }
+    }
+
+    if (imported.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Import"),
+                             QStringLiteral("No valid items found in clipboard data."));
+        return;
+    }
+
+    const QMessageBox::StandardButton result = QMessageBox::question(
+        this,
+        QStringLiteral("Import"),
+        QStringLiteral("Replace all current items with %1 imported item(s)?")
+            .arg(imported.size()),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+
+    if (result != QMessageBox::Yes) {
+        qDeleteAll(imported);
+        return;
+    }
+
+    qDeleteAll(m_workingItems);
+    m_workingItems.clear();
+    m_workingItems = imported;
+
+    refreshItemList();
+    if (!m_workingItems.isEmpty()) {
+        m_itemList->setCurrentRow(0);
+    }
+    updatePreview();
 }
 
 // ---------------------------------------------------------------------------

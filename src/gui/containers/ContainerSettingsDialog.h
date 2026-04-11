@@ -41,6 +41,9 @@ private slots:
     void onRemoveItem();
     void onMoveItemUp();
     void onMoveItemDown();
+    void onLoadPreset();
+    void onExport();
+    void onImport();
 
 private:
     void buildLayout();
@@ -56,6 +59,7 @@ private:
 
     void addNewItem(const QString& typeTag);
     static MeterItem* createDefaultItem(const QString& typeTag);
+    void loadPresetByName(const QString& name);
 
     void populateItemList();
     void updatePreview();
