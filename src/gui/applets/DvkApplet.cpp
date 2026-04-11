@@ -8,20 +8,29 @@
 #include <QHBoxLayout>
 #include <QPushButton>
 #include <QLabel>
-#include <QSpinBox>
+#include <QSlider>
 
 namespace NereusSDR {
 
 DvkApplet::DvkApplet(RadioModel* model, QWidget* parent)
     : AppletWidget(model, parent)
 {
+    buildUI();
+}
+
+void DvkApplet::buildUI()
+{
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(4, 2, 4, 2);
-    root->setSpacing(2);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
+    root->addWidget(appletTitleBar(QStringLiteral("Voice Keyer")));
 
-    root->addWidget(appletTitleBar(QStringLiteral("DVK")));
+    auto* body = new QWidget(this);
+    auto* vbox = new QVBoxLayout(body);
+    vbox->setContentsMargins(4, 2, 4, 4);
+    vbox->setSpacing(2);
 
-    // --- Voice keyer slots (4 rows) ---
+    // --- Control 1: Voice keyer slots (4 rows) ---
     const QString slotNames[4] = {
         QStringLiteral("Slot 1"), QStringLiteral("Slot 2"),
         QStringLiteral("Slot 3"), QStringLiteral("Slot 4")
@@ -45,61 +54,59 @@ DvkApplet::DvkApplet(RadioModel* model, QWidget* parent)
         row->addWidget(m_playBtn[i]);
         row->addWidget(m_stopBtn[i]);
 
-        root->addLayout(row);
+        vbox->addLayout(row);
 
         NyiOverlay::markNyi(m_recBtn[i],  QStringLiteral("3I-1"));
         NyiOverlay::markNyi(m_playBtn[i], QStringLiteral("3I-1"));
         NyiOverlay::markNyi(m_stopBtn[i], QStringLiteral("3I-1"));
     }
 
-    // --- Record level gauge: -40 to 0 dB, red@-3 ---
+    // --- Control 2: Record level gauge (0-100) ---
     m_recLevel = new HGauge(this);
-    m_recLevel->setRange(-40.0, 0.0);
-    m_recLevel->setRedStart(-3.0);
+    m_recLevel->setRange(0.0, 100.0);
+    m_recLevel->setYellowStart(70.0);
+    m_recLevel->setRedStart(90.0);
     m_recLevel->setTitle(QStringLiteral("Rec Level"));
-    m_recLevel->setUnit(QStringLiteral("dB"));
-    root->addWidget(m_recLevel);
+    vbox->addWidget(m_recLevel);
+    NyiOverlay::markNyi(m_recLevel, QStringLiteral("3I-1"));
 
-    // --- Repeat toggle + interval ---
+    // --- Control 3: Repeat toggle + interval slider (1..60s) ---
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
-        m_repeatBtn = greenToggle(QStringLiteral("Repeat"));
+        m_repeatBtn = greenToggle(QStringLiteral("Rpt"));
         m_repeatBtn->setCheckable(true);
         row->addWidget(m_repeatBtn);
 
-        m_repeatSpin = new QSpinBox(this);
-        m_repeatSpin->setRange(1, 999);
-        m_repeatSpin->setValue(5);
-        m_repeatSpin->setSuffix(QStringLiteral(" s"));
-        m_repeatSpin->setFixedWidth(60);
-        m_repeatSpin->setStyleSheet(QStringLiteral(
-            "QSpinBox {"
-            "  background: %1; border: 1px solid %2;"
-            "  border-radius: 3px; color: %3; font-size: 10px;"
-            "}").arg(Style::kInsetBg, Style::kInsetBorder, Style::kTextPrimary));
-        row->addWidget(m_repeatSpin);
-        row->addStretch();
+        m_repeatSlider = new QSlider(Qt::Horizontal, this);
+        m_repeatSlider->setRange(1, 60);
+        m_repeatSlider->setValue(5);
+        m_repeatSlider->setFixedHeight(18);
+        row->addWidget(m_repeatSlider, 1);
 
-        root->addLayout(row);
+        m_repeatValue = insetValue(QStringLiteral("5"));
+        row->addWidget(m_repeatValue);
 
-        NyiOverlay::markNyi(m_repeatBtn,  QStringLiteral("3I-1"));
-        NyiOverlay::markNyi(m_repeatSpin, QStringLiteral("3I-1"));
+        vbox->addLayout(row);
+
+        NyiOverlay::markNyi(m_repeatBtn,    QStringLiteral("3I-1"));
+        NyiOverlay::markNyi(m_repeatSlider, QStringLiteral("3I-1"));
     }
 
-    // --- Semi break-in toggle ---
+    // --- Control 4: Semi break-in toggle ---
     m_semiBkBtn = greenToggle(QStringLiteral("Semi BK"));
     m_semiBkBtn->setCheckable(true);
-    root->addWidget(m_semiBkBtn);
+    vbox->addWidget(m_semiBkBtn);
     NyiOverlay::markNyi(m_semiBkBtn, QStringLiteral("3I-1"));
 
-    // --- WAV import button ---
+    // --- Control 5: WAV file import button ---
     m_importBtn = styledButton(QStringLiteral("Import WAV\u2026"));
-    root->addWidget(m_importBtn);
+    vbox->addWidget(m_importBtn);
     NyiOverlay::markNyi(m_importBtn, QStringLiteral("3I-1"));
 
-    root->addStretch();
+    vbox->addStretch();
+    root->addWidget(body);
 }
 
 void DvkApplet::syncFromModel()
