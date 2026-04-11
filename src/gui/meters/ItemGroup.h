@@ -98,6 +98,11 @@ public:
     static ItemGroup* createHistoryPreset(int bindingId, QObject* parent = nullptr);
     static ItemGroup* createSpacerPreset(QObject* parent = nullptr);
 
+    // --- Phase 3G-5 interactive presets ---
+    static ItemGroup* createVfoDisplayPreset(QObject* parent = nullptr);
+    static ItemGroup* createClockPreset(QObject* parent = nullptr);
+    static ItemGroup* createContestPreset(QObject* parent = nullptr);
+
     // Install all items from this group into a MeterWidget, transforming
     // their normalized 0-1 positions into the given target rect.
     // Transfers item ownership to widget; clears this group's item list.

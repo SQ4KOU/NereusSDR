@@ -14,6 +14,19 @@
 #include "WebImageItem.h"
 #include "FilterDisplayItem.h"
 #include "RotatorItem.h"
+#include "ButtonBoxItem.h"
+#include "BandButtonItem.h"
+#include "ModeButtonItem.h"
+#include "FilterButtonItem.h"
+#include "AntennaButtonItem.h"
+#include "TuneStepButtonItem.h"
+#include "OtherButtonItem.h"
+#include "VoiceRecordPlayItem.h"
+#include "DiscordButtonItem.h"
+#include "VfoDisplayItem.h"
+#include "ClockItem.h"
+#include "ClickBoxItem.h"
+#include "DataOutItem.h"
 
 #include <QStringList>
 #include <QtAlgorithms>
@@ -256,6 +269,42 @@ ItemGroup* ItemGroup::deserialize(const QString& data, QObject* parent)
             } else {
                 delete rotator;
             }
+        } else if (typeTag == QLatin1String("BANDBTNS")) {
+            auto* item = new BandButtonItem(group);
+            if (item->deserialize(itemData)) { group->addItem(item); } else { delete item; }
+        } else if (typeTag == QLatin1String("MODEBTNS")) {
+            auto* item = new ModeButtonItem(group);
+            if (item->deserialize(itemData)) { group->addItem(item); } else { delete item; }
+        } else if (typeTag == QLatin1String("FILTERBTNS")) {
+            auto* item = new FilterButtonItem(group);
+            if (item->deserialize(itemData)) { group->addItem(item); } else { delete item; }
+        } else if (typeTag == QLatin1String("ANTENNABTNS")) {
+            auto* item = new AntennaButtonItem(group);
+            if (item->deserialize(itemData)) { group->addItem(item); } else { delete item; }
+        } else if (typeTag == QLatin1String("TUNESTEPBTNS")) {
+            auto* item = new TuneStepButtonItem(group);
+            if (item->deserialize(itemData)) { group->addItem(item); } else { delete item; }
+        } else if (typeTag == QLatin1String("OTHERBTNS")) {
+            auto* item = new OtherButtonItem(group);
+            if (item->deserialize(itemData)) { group->addItem(item); } else { delete item; }
+        } else if (typeTag == QLatin1String("VOICERECPLAY")) {
+            auto* item = new VoiceRecordPlayItem(group);
+            if (item->deserialize(itemData)) { group->addItem(item); } else { delete item; }
+        } else if (typeTag == QLatin1String("DISCORDBTNS")) {
+            auto* item = new DiscordButtonItem(group);
+            if (item->deserialize(itemData)) { group->addItem(item); } else { delete item; }
+        } else if (typeTag == QLatin1String("VFO")) {
+            auto* item = new VfoDisplayItem(group);
+            if (item->deserialize(itemData)) { group->addItem(item); } else { delete item; }
+        } else if (typeTag == QLatin1String("CLOCK")) {
+            auto* item = new ClockItem(group);
+            if (item->deserialize(itemData)) { group->addItem(item); } else { delete item; }
+        } else if (typeTag == QLatin1String("CLICKBOX")) {
+            auto* item = new ClickBoxItem(group);
+            if (item->deserialize(itemData)) { group->addItem(item); } else { delete item; }
+        } else if (typeTag == QLatin1String("DATAOUT")) {
+            auto* item = new DataOutItem(group);
+            if (item->deserialize(itemData)) { group->addItem(item); } else { delete item; }
         }
 
         if (item) {
@@ -1179,6 +1228,67 @@ ItemGroup* ItemGroup::createSpacerPreset(QObject* parent)
     spacer->setZOrder(0);
     group->addItem(spacer);
 
+    return group;
+}
+
+// ============================================================================
+// Phase 3G-5 Interactive Presets
+// ============================================================================
+
+ItemGroup* ItemGroup::createVfoDisplayPreset(QObject* parent)
+{
+    auto* group = new ItemGroup(QStringLiteral("VFO Display"), parent);
+    auto* bg = new SolidColourItem(group);
+    bg->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+    bg->setColour(QColor(0x0f, 0x0f, 0x1a));
+    bg->setZOrder(0);
+    group->addItem(bg);
+    auto* vfo = new VfoDisplayItem(group);
+    vfo->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+    vfo->setZOrder(1);
+    group->addItem(vfo);
+    return group;
+}
+
+ItemGroup* ItemGroup::createClockPreset(QObject* parent)
+{
+    auto* group = new ItemGroup(QStringLiteral("Clock"), parent);
+    auto* bg = new SolidColourItem(group);
+    bg->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+    bg->setColour(QColor(0x0f, 0x0f, 0x1a));
+    bg->setZOrder(0);
+    group->addItem(bg);
+    auto* clock = new ClockItem(group);
+    clock->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+    clock->setZOrder(1);
+    group->addItem(clock);
+    return group;
+}
+
+ItemGroup* ItemGroup::createContestPreset(QObject* parent)
+{
+    auto* group = new ItemGroup(QStringLiteral("Contest"), parent);
+    auto* bg = new SolidColourItem(group);
+    bg->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+    bg->setColour(QColor(0x0f, 0x0f, 0x1a));
+    bg->setZOrder(0);
+    group->addItem(bg);
+    auto* vfo = new VfoDisplayItem(group);
+    vfo->setRect(0.0f, 0.0f, 1.0f, 0.3f);
+    vfo->setZOrder(1);
+    group->addItem(vfo);
+    auto* bands = new BandButtonItem(group);
+    bands->setRect(0.0f, 0.3f, 1.0f, 0.25f);
+    bands->setZOrder(1);
+    group->addItem(bands);
+    auto* modes = new ModeButtonItem(group);
+    modes->setRect(0.0f, 0.55f, 1.0f, 0.2f);
+    modes->setZOrder(1);
+    group->addItem(modes);
+    auto* clock = new ClockItem(group);
+    clock->setRect(0.0f, 0.75f, 1.0f, 0.25f);
+    clock->setZOrder(1);
+    group->addItem(clock);
     return group;
 }
 
