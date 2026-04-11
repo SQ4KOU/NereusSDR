@@ -199,6 +199,18 @@ set(GUI_SOURCES
     src/gui/meters/MeterItem.cpp
     src/gui/meters/ItemGroup.cpp
     src/gui/meters/MeterPoller.cpp
+    src/gui/meters/SpacerItem.cpp
+    src/gui/meters/FadeCoverItem.cpp
+    src/gui/meters/LEDItem.cpp
+    src/gui/meters/HistoryGraphItem.cpp
+    src/gui/meters/MagicEyeItem.cpp
+    src/gui/meters/NeedleScalePwrItem.cpp
+    src/gui/meters/SignalTextItem.cpp
+    src/gui/meters/DialItem.cpp
+    src/gui/meters/TextOverlayItem.cpp
+    src/gui/meters/WebImageItem.cpp
+    src/gui/meters/FilterDisplayItem.cpp
+    src/gui/meters/RotatorItem.cpp
     src/gui/HGauge.cpp
     src/gui/SpectrumOverlayPanel.cpp
     src/gui/SetupDialog.cpp
