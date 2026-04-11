@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed — Applet Panel Layout
+- RxApplet: fix STEP row overflow (138px content in 99px column), change filter grid
+  from 2×5 to 3-column layout matching AetherSDR, remove fixedWidth from RIT/XIT
+  labels so they flex with panel width, add Expanding sizePolicy to RIT/XIT toggles
+- TxApplet: add outer→body wrapping pattern, merge MOX/TUNE/ATU/MEM into single
+  4-button row matching AetherSDR, fix value label styles and slider label colors
+- PhoneCwApplet: add missing applyComboStyle() to mic combos, set Ignored sizePolicy
+  on CW QSK/Iambic/FW Keyer buttons for even spacing, flex CW pitch label
+- EqApplet: add outer→body wrapping, reduce scale/spacer widths for 10-band fit,
+  reduce band label font to 9px, add applyComboStyle() to preset combo
+
 ### Added — Phase 3-UI: Full UI Skeleton
 
 **Applets (12 total, 150+ control widgets):**
