@@ -3,6 +3,35 @@
 #include "../meters/MeterWidget.h"
 #include "../meters/MeterItem.h"
 
+// Core meter item types (MeterItem.h defines: BarItem, SolidColourItem, ImageItem,
+//                                               ScaleItem, TextItem, NeedleItem)
+// Phase 3G-4 passive item types
+#include "../meters/SpacerItem.h"
+#include "../meters/FadeCoverItem.h"
+#include "../meters/LEDItem.h"
+#include "../meters/HistoryGraphItem.h"
+#include "../meters/MagicEyeItem.h"
+#include "../meters/NeedleScalePwrItem.h"
+#include "../meters/SignalTextItem.h"
+#include "../meters/DialItem.h"
+#include "../meters/TextOverlayItem.h"
+#include "../meters/WebImageItem.h"
+#include "../meters/FilterDisplayItem.h"
+#include "../meters/RotatorItem.h"
+// Phase 3G-5 interactive item types
+#include "../meters/BandButtonItem.h"
+#include "../meters/ModeButtonItem.h"
+#include "../meters/FilterButtonItem.h"
+#include "../meters/AntennaButtonItem.h"
+#include "../meters/TuneStepButtonItem.h"
+#include "../meters/OtherButtonItem.h"
+#include "../meters/VoiceRecordPlayItem.h"
+#include "../meters/DiscordButtonItem.h"
+#include "../meters/VfoDisplayItem.h"
+#include "../meters/ClockItem.h"
+#include "../meters/ClickBoxItem.h"
+#include "../meters/DataOutItem.h"
+
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSplitter>
@@ -16,6 +45,8 @@
 #include <QFrame>
 #include <QColorDialog>
 #include <QColor>
+#include <QMap>
+#include <QStringList>
 
 namespace NereusSDR {
 
@@ -399,11 +430,270 @@ void ContainerSettingsDialog::onMoveItemUp()           {}
 void ContainerSettingsDialog::onMoveItemDown()         {}
 
 // ---------------------------------------------------------------------------
+// createItemFromSerialized — factory matching ItemGroup::deserialize() pattern
+// ---------------------------------------------------------------------------
+
+MeterItem* ContainerSettingsDialog::createItemFromSerialized(const QString& data)
+{
+    if (data.isEmpty()) {
+        return nullptr;
+    }
+
+    const int pipeIdx = data.indexOf(QLatin1Char('|'));
+    const QString typeTag = (pipeIdx >= 0) ? data.left(pipeIdx) : data;
+
+    // Core types (defined in MeterItem.h)
+    if (typeTag == QLatin1String("BAR")) {
+        BarItem* item = new BarItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("SOLID")) {
+        SolidColourItem* item = new SolidColourItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("IMAGE")) {
+        ImageItem* item = new ImageItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("SCALE")) {
+        ScaleItem* item = new ScaleItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("TEXT")) {
+        TextItem* item = new TextItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("NEEDLE")) {
+        NeedleItem* item = new NeedleItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    }
+    // Phase 3G-4 passive types
+    else if (typeTag == QLatin1String("SPACER")) {
+        SpacerItem* item = new SpacerItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("FADECOVER")) {
+        FadeCoverItem* item = new FadeCoverItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("LED")) {
+        LEDItem* item = new LEDItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("HISTORY")) {
+        HistoryGraphItem* item = new HistoryGraphItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("MAGICEYE")) {
+        MagicEyeItem* item = new MagicEyeItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("NEEDLESCALEPWR")) {
+        NeedleScalePwrItem* item = new NeedleScalePwrItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("SIGNALTEXT")) {
+        SignalTextItem* item = new SignalTextItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("DIAL")) {
+        DialItem* item = new DialItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("TEXTOVERLAY")) {
+        TextOverlayItem* item = new TextOverlayItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("WEBIMAGE")) {
+        WebImageItem* item = new WebImageItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("FILTERDISPLAY")) {
+        FilterDisplayItem* item = new FilterDisplayItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("ROTATOR")) {
+        RotatorItem* item = new RotatorItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    }
+    // Phase 3G-5 interactive types
+    else if (typeTag == QLatin1String("BANDBTNS")) {
+        BandButtonItem* item = new BandButtonItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("MODEBTNS")) {
+        ModeButtonItem* item = new ModeButtonItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("FILTERBTNS")) {
+        FilterButtonItem* item = new FilterButtonItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("ANTENNABTNS")) {
+        AntennaButtonItem* item = new AntennaButtonItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("TUNESTEPBTNS")) {
+        TuneStepButtonItem* item = new TuneStepButtonItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("OTHERBTNS")) {
+        OtherButtonItem* item = new OtherButtonItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("VOICERECPLAY")) {
+        VoiceRecordPlayItem* item = new VoiceRecordPlayItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("DISCORDBTNS")) {
+        DiscordButtonItem* item = new DiscordButtonItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("VFO")) {
+        VfoDisplayItem* item = new VfoDisplayItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("CLOCK")) {
+        ClockItem* item = new ClockItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("CLICKBOX")) {
+        ClickBoxItem* item = new ClickBoxItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    } else if (typeTag == QLatin1String("DATAOUT")) {
+        DataOutItem* item = new DataOutItem();
+        if (item->deserialize(data)) { return item; }
+        delete item;
+    }
+
+    return nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// typeTagDisplayName — human-readable label for each type tag
+// ---------------------------------------------------------------------------
+
+QString ContainerSettingsDialog::typeTagDisplayName(const QString& tag)
+{
+    static const QMap<QString, QString> kDisplayNames = {
+        // Core types
+        { QStringLiteral("BAR"),           QStringLiteral("Bar Meter") },
+        { QStringLiteral("SOLID"),         QStringLiteral("Solid Colour") },
+        { QStringLiteral("IMAGE"),         QStringLiteral("Image") },
+        { QStringLiteral("SCALE"),         QStringLiteral("Scale") },
+        { QStringLiteral("TEXT"),          QStringLiteral("Text Readout") },
+        { QStringLiteral("NEEDLE"),        QStringLiteral("Needle Meter") },
+        // Phase 3G-4 passive types
+        { QStringLiteral("SPACER"),        QStringLiteral("Spacer") },
+        { QStringLiteral("FADECOVER"),     QStringLiteral("Fade Cover") },
+        { QStringLiteral("LED"),           QStringLiteral("LED Indicator") },
+        { QStringLiteral("HISTORY"),       QStringLiteral("History Graph") },
+        { QStringLiteral("MAGICEYE"),      QStringLiteral("Magic Eye") },
+        { QStringLiteral("NEEDLESCALEPWR"),QStringLiteral("Needle Scale Power") },
+        { QStringLiteral("SIGNALTEXT"),    QStringLiteral("Signal Text") },
+        { QStringLiteral("DIAL"),          QStringLiteral("Dial") },
+        { QStringLiteral("TEXTOVERLAY"),   QStringLiteral("Text Overlay") },
+        { QStringLiteral("WEBIMAGE"),      QStringLiteral("Web Image") },
+        { QStringLiteral("FILTERDISPLAY"), QStringLiteral("Filter Display") },
+        { QStringLiteral("ROTATOR"),       QStringLiteral("Rotator") },
+        // Phase 3G-5 interactive types
+        { QStringLiteral("BANDBTNS"),      QStringLiteral("Band Buttons") },
+        { QStringLiteral("MODEBTNS"),      QStringLiteral("Mode Buttons") },
+        { QStringLiteral("FILTERBTNS"),    QStringLiteral("Filter Buttons") },
+        { QStringLiteral("ANTENNABTNS"),   QStringLiteral("Antenna Buttons") },
+        { QStringLiteral("TUNESTEPBTNS"),  QStringLiteral("Tune Step Buttons") },
+        { QStringLiteral("OTHERBTNS"),     QStringLiteral("Other Buttons") },
+        { QStringLiteral("VOICERECPLAY"),  QStringLiteral("Voice Rec/Play") },
+        { QStringLiteral("DISCORDBTNS"),   QStringLiteral("Discord Buttons") },
+        { QStringLiteral("VFO"),           QStringLiteral("VFO Display") },
+        { QStringLiteral("CLOCK"),         QStringLiteral("Clock") },
+        { QStringLiteral("CLICKBOX"),      QStringLiteral("Click Box") },
+        { QStringLiteral("DATAOUT"),       QStringLiteral("Data Out") },
+    };
+
+    const auto it = kDisplayNames.constFind(tag);
+    if (it != kDisplayNames.constEnd()) {
+        return it.value();
+    }
+    return tag;  // fall back to raw tag if unknown
+}
+
+// ---------------------------------------------------------------------------
+// refreshItemList — rebuild the QListWidget from m_workingItems
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::refreshItemList()
+{
+    m_itemList->clear();
+    for (const MeterItem* item : m_workingItems) {
+        // Derive the type tag from serialize() (first pipe-delimited field)
+        const QString serialized = item->serialize();
+        const int pipeIdx = serialized.indexOf(QLatin1Char('|'));
+        const QString typeTag = (pipeIdx >= 0) ? serialized.left(pipeIdx) : serialized;
+
+        const QString displayName = typeTagDisplayName(typeTag);
+        const int bindingId = item->bindingId();
+
+        QString label = displayName;
+        if (bindingId >= 0) {
+            label += QStringLiteral(" [id:%1]").arg(bindingId);
+        }
+        m_itemList->addItem(label);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers (stubs / partial — filled in later tasks)
 // ---------------------------------------------------------------------------
 
-void ContainerSettingsDialog::populateItemList() {}
-void ContainerSettingsDialog::updatePreview()    {}
+void ContainerSettingsDialog::populateItemList()
+{
+    qDeleteAll(m_workingItems);
+    m_workingItems.clear();
+
+    if (!m_container) {
+        return;
+    }
+
+    MeterWidget* meter = qobject_cast<MeterWidget*>(m_container->content());
+    if (!meter) {
+        return;
+    }
+
+    const QString serialized = meter->serializeItems();
+    const QStringList lines = serialized.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    for (const QString& line : lines) {
+        MeterItem* item = createItemFromSerialized(line);
+        if (item) {
+            m_workingItems.append(item);
+        }
+    }
+
+    refreshItemList();
+    updatePreview();
+}
+
+void ContainerSettingsDialog::updatePreview()
+{
+    if (!m_previewWidget) {
+        return;
+    }
+
+    m_previewWidget->clearItems();
+
+    for (const MeterItem* item : m_workingItems) {
+        const QString serialized = item->serialize();
+        MeterItem* clone = createItemFromSerialized(serialized);
+        if (clone) {
+            m_previewWidget->addItem(clone);
+        }
+    }
+
+    m_previewWidget->update();
+}
 
 void ContainerSettingsDialog::applyToContainer()
 {

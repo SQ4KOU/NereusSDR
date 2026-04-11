@@ -44,6 +44,10 @@ private:
     void buildContainerPropertiesSection(QVBoxLayout* parentLayout);
     void buildButtonBar();
 
+    static MeterItem* createItemFromSerialized(const QString& data);
+    void refreshItemList();
+    static QString typeTagDisplayName(const QString& tag);
+
     void populateItemList();
     void updatePreview();
     void applyToContainer();
