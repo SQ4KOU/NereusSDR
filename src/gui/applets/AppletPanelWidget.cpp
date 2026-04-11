@@ -7,6 +7,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QSizePolicy>
 
 namespace NereusSDR {
 
@@ -18,11 +19,17 @@ AppletPanelWidget::AppletPanelWidget(QWidget* parent)
     setStyleSheet(QStringLiteral("AppletPanelWidget { background: %1; }")
                       .arg(Style::kPanelBg));
 
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->setSpacing(0);
+    m_rootLayout = new QVBoxLayout(this);
+    m_rootLayout->setContentsMargins(0, 0, 0, 0);
+    m_rootLayout->setSpacing(0);
 
-    // Scrollable area for the applet stack
+    // Fixed header area (above scroll) — for MeterWidget / S-Meter
+    m_headerLayout = new QVBoxLayout;
+    m_headerLayout->setContentsMargins(0, 0, 0, 0);
+    m_headerLayout->setSpacing(0);
+    m_rootLayout->addLayout(m_headerLayout);
+
+    // Scrollable area for the applet stack (below header)
     m_scrollArea = new QScrollArea(this);
     m_scrollArea->setFrameShape(QFrame::NoFrame);
     m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -50,7 +57,23 @@ AppletPanelWidget::AppletPanelWidget(QWidget* parent)
     m_stackLayout->addStretch();
 
     m_scrollArea->setWidget(stackWidget);
-    root->addWidget(m_scrollArea);
+    m_rootLayout->addWidget(m_scrollArea);
+}
+
+void AppletPanelWidget::setHeaderWidget(QWidget* widget, const QString& title,
+                                         int fixedHeight)
+{
+    if (!widget) { return; }
+
+    // Set fixed height so the meter never gets compressed.
+    // Force minimum width to fill the panel — QRhiWidgets may not expand naturally.
+    widget->setFixedHeight(fixedHeight);
+    widget->setMinimumWidth(Style::kAppletPanelW - 2);  // panel width minus tiny margin
+    widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+
+    QWidget* wrapped = wrapWithTitleBar(widget, title);
+    wrapped->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_headerLayout->addWidget(wrapped);
 }
 
 void AppletPanelWidget::addApplet(AppletWidget* applet)

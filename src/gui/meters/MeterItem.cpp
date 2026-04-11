@@ -569,7 +569,8 @@ void NeedleItem::paint(QPainter& p, int widgetW, int widgetH)
     const float pw = static_cast<float>(rect.width());
     const float ph = static_cast<float>(rect.height());
     const float cx = rect.left() + pw * 0.5f;
-    const float radius = pw * kRadiusRatio;
+    const float effectiveW = std::min(pw, ph * kTargetAspect);
+    const float radius = effectiveW * kRadiusRatio;
     const float cy = rect.top() + ph + radius - ph * kCenterYRatio;
     const float pivotY = rect.top() + ph + 6.0f;
 
@@ -608,7 +609,8 @@ void NeedleItem::paintBackground(QPainter& p, int widgetW, int widgetH)
     // From AetherSDR: cx = width*0.5, radius = width*0.85
     // cy = height + radius - height*0.65
     const float cx = rect.left() + pw * 0.5f;
-    const float radius = pw * kRadiusRatio;
+    const float effectiveW = std::min(pw, ph * kTargetAspect);
+    const float radius = effectiveW * kRadiusRatio;
     const float cy = rect.top() + ph + radius - ph * kCenterYRatio;
 
     const QRectF arcRect(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f);
@@ -657,7 +659,8 @@ void NeedleItem::emitVertices(QVector<float>& verts, int widgetW, int widgetH)
     const float pw = static_cast<float>(rect.width());
     const float ph = static_cast<float>(rect.height());
     const float cx = rect.left() + pw * 0.5f;
-    const float radius = pw * kRadiusRatio;
+    const float effectiveW = std::min(pw, ph * kTargetAspect);
+    const float radius = effectiveW * kRadiusRatio;
     const float cy = rect.top() + ph + radius - ph * kCenterYRatio;
 
     // From AetherSDR: needleCy = height + 6.0f (pivot below widget bottom)
@@ -765,7 +768,8 @@ void NeedleItem::paintOverlayStatic(QPainter& p, int widgetW, int widgetH)
     const float pw = static_cast<float>(rect.width());
     const float ph = static_cast<float>(rect.height());
     const float cx = rect.left() + pw * 0.5f;
-    const float radius = pw * kRadiusRatio;
+    const float effectiveW = std::min(pw, ph * kTargetAspect);
+    const float radius = effectiveW * kRadiusRatio;
     const float cy = rect.top() + ph + radius - ph * kCenterYRatio;
 
     // Tick definitions from AetherSDR SMeterWidget.cpp lines 340-347

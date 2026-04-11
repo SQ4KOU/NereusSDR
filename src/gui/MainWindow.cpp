@@ -306,29 +306,31 @@ void MainWindow::populateDefaultMeter()
 
     m_meterWidget = new MeterWidget();
 
-    // S-Meter: top 55% — arc needle bound to SignalAvg
+    // S-Meter: top 45% — arc needle bound to SignalAvg
     // From Thetis MeterManager.cs: ANAN needle uses AVG_SIGNAL_STRENGTH
     ItemGroup* smeter = ItemGroup::createSMeterPreset(
         MeterBinding::SignalAvg, QStringLiteral("S-Meter"), m_meterWidget);
-    smeter->installInto(m_meterWidget, 0.0f, 0.0f, 1.0f, 0.55f);
+    smeter->installInto(m_meterWidget, 0.0f, 0.0f, 1.0f, 0.45f);
     delete smeter;
 
-    // Power/SWR: middle 30% — stacked bars (stub TX bindings)
+    // Power/SWR: middle 35% — stacked bars (stub TX bindings)
     ItemGroup* pwrSwr = ItemGroup::createPowerSwrPreset(
         QStringLiteral("Power/SWR"), m_meterWidget);
-    pwrSwr->installInto(m_meterWidget, 0.0f, 0.55f, 1.0f, 0.30f);
+    pwrSwr->installInto(m_meterWidget, 0.0f, 0.45f, 1.0f, 0.35f);
     delete pwrSwr;
 
-    // ALC: bottom 15% — horizontal bar (stub TX binding)
+    // ALC: bottom 20% — horizontal bar (stub TX binding)
     ItemGroup* alc = ItemGroup::createAlcPreset(m_meterWidget);
-    alc->installInto(m_meterWidget, 0.0f, 0.85f, 1.0f, 0.15f);
+    alc->installInto(m_meterWidget, 0.0f, 0.80f, 1.0f, 0.20f);
     delete alc;
 
     // Build an AppletPanelWidget: MeterWidget on top, then all applets below.
     // This is a single scrollable content widget per the v2 plan.
     m_appletPanel = new AppletPanelWidget();
     auto* panel = m_appletPanel;
-    panel->addWidget(m_meterWidget, QStringLiteral("Meters"));
+    // Fixed header: MeterWidget stays visible, never scrolls
+    // 200px is enough for the S-Meter arc + Power/SWR + ALC bars
+    panel->setHeaderWidget(m_meterWidget, QStringLiteral("Meters"), 200);
 
     // RxApplet — Tier 1 wired to SliceModel (slice attached in wireSliceToSpectrum)
     m_rxApplet = new RxApplet(nullptr, m_radioModel, nullptr);

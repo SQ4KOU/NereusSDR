@@ -286,8 +286,9 @@ public:
     static constexpr float kArcEndDeg   = 125.0f;  // left end (S0)
     static constexpr float kRadiusRatio = 0.85f;    // radius = width * 0.85
     static constexpr float kCenterYRatio = 0.65f;   // cy = h + radius - h*0.65
-    // From AetherSDR sizeHint 280x140 — lock aspect ratio to match
-    static constexpr float kTargetAspect = 2.0f;    // width / height
+    // Aspect ratio for scaling arc when height is constrained.
+    // Higher value = wider arc filling more of the panel width.
+    static constexpr float kTargetAspect = 2.8f;
 
     // --- S-meter scale constants (from AetherSDR SMeterWidget.h) ---
     static constexpr float kS0Dbm  = -127.0f;      // S0

@@ -26,6 +26,10 @@ class AppletPanelWidget : public QWidget {
 public:
     explicit AppletPanelWidget(QWidget* parent = nullptr);
 
+    // Set a fixed header widget (e.g., MeterWidget) that stays visible above
+    // the scroll area. Only one header — subsequent calls replace the previous.
+    void setHeaderWidget(QWidget* widget, const QString& title, int fixedHeight = 300);
+
     // Add an applet — wraps it with a title bar and adds to the scroll stack
     void addApplet(AppletWidget* applet);
 
@@ -33,7 +37,7 @@ public:
     // The applet widget itself is hidden and reparented to nullptr (not deleted).
     void removeApplet(AppletWidget* applet);
 
-    // Add a raw widget (e.g., MeterWidget) with a custom title
+    // Add a raw widget (e.g., MeterWidget) with a custom title to the scroll area
     void addWidget(QWidget* widget, const QString& title);
 
     QList<AppletWidget*> applets() const { return m_applets; }
@@ -41,8 +45,10 @@ public:
 private:
     QWidget* wrapWithTitleBar(QWidget* child, const QString& title);
 
+    QVBoxLayout* m_rootLayout = nullptr;     // top-level: header + scroll
+    QVBoxLayout* m_headerLayout = nullptr;   // fixed header above scroll area
     QScrollArea* m_scrollArea = nullptr;
-    QVBoxLayout* m_stackLayout = nullptr;
+    QVBoxLayout* m_stackLayout = nullptr;    // inside scroll area
     QList<AppletWidget*> m_applets;
     QMap<AppletWidget*, QWidget*> m_wrappers;  // applet → wrapper widget
 };
