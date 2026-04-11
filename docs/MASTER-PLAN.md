@@ -537,18 +537,33 @@ CI workflows already in place. Finalize:
 
 ---
 
-## Recommended Next Step: Phase 3G-2 — MeterWidget GPU Renderer
+## Recommended Next Step: Phase 3G-3 — Core Meter Groups (in progress)
 
-Phases 3A–3E and 3G-1 are complete — the radio connects, demodulates audio, renders
-live GPU spectrum + waterfall, supports full VFO tuning with CTUN panadapter mode,
-and the container infrastructure (dock/float/resize/persist) is in place with a
-QSplitter-based right panel (Container #0).
+Phases 3A–3E, 3G-1, and 3G-2 are complete — the radio connects, demodulates audio,
+renders live GPU spectrum + waterfall, supports full VFO tuning with CTUN panadapter
+mode, the container infrastructure (dock/float/resize/persist) is in place, and the
+MeterWidget GPU renderer (3 pipelines, MeterItem hierarchy, live data binding) is
+working in Container #0.
 
-Next: build the MeterWidget QRhi renderer (3G-2) so containers can display live GPU-
-rendered meter items. Then core meter groups (3G-3), interactive items (3G-5), and the
-AetherSDR-style AppletPanel (3G-AP) for the default right-panel experience.
+Current: finish Phase 3G-3 — the SMeterWidget (direct AetherSDR port for
+pixel-identical S-meter fidelity) is the remaining deliverable. NeedleItem,
+preset factories, and default Container #0 layout are already committed.
 
-Execution order: **3G-2..6 → 3I-1..4 → 3F → 3H → 3J+**
+Execution order: **3G-3..6 → 3I-1..4 → 3F → 3H → 3J+**
+
+### Phase Dependencies
+
+```
+3G-3 → 3G-4 → 3G-5 → 3G-6    (meter system, sequential)
+              ↘
+3G-3 → 3I-1 → 3I-2 → 3I-3 → 3I-4 → 3F → 3H    (TX then multi-RX)
+                                      ↑
+                              PureSignal must complete before 3F because
+                              UpdateDDCs() state machine includes PS DDC
+                              states (DDC0+DDC1 sync at 192kHz)
+```
+
+Independent phases (can start anytime after 3G-3): 3J (TCI), 3K (CAT), 3L (P1), 3M (Recording).
 
 ---
 

@@ -115,9 +115,9 @@ See `docs/protocols/` for detailed protocol documentation.
 
 - All GUI follows the dark theme: `#0f0f1a` background, `#c8d8e8` text,
   `#00b4d8` accent, `#203040` borders.
-- Use `GuardedSlider` (from `GuardedSlider.h`, planned) instead of `QSlider` — it
-  will prevent wheel events from leaking to parent widgets.
-- Use `GuardedComboBox` (planned) for combo boxes in scrollable areas.
+- In scrollable areas, install an event filter on `QSlider` and `QComboBox` to
+  block wheel events from leaking to parent widgets. Dedicated `GuardedSlider`
+  and `GuardedComboBox` convenience wrappers will be added in a future phase.
 - Disable `autoDefault` on QPushButtons inside QDialogs.
 
 ### Optional Dependencies

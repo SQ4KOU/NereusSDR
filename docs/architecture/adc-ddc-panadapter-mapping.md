@@ -14,7 +14,7 @@ Thetis source code. It answers: how is each ADC mapped to each DDC, how does
 a DDC feed a panadapter, and how much spectrum can each pan actually show?
 
 **Key insight:** Each ADC captures the full 0-61.44 MHz band, but each DDC
-narrows this to a window determined by its sample rate (max 384 kHz). The
+narrows this to a window determined by its sample rate (up to 768 kHz). The
 panadapter displays this narrow window, NOT the full ADC bandwidth.
 
 ---
@@ -30,7 +30,7 @@ panadapter displays this narrow window, NOT the full ADC bandwidth.
 │ sample rate  │    │ freq in ADC  │    │ I/Q -> audio │    │ I/Q -> dBm   │    │ into FFT data│
 │ 0-61.44 MHz  │    │ bandwidth    │    │              │    │ bins         │    │              │
 │ full Nyquist │    │ Outputs at   │    │              │    │              │    │              │
-│              │    │ 48k-384k Hz  │    │              │    │              │    │              │
+│              │    │ 48k-768k Hz  │    │              │    │              │    │              │
 └──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
      1 or 2              up to 7           up to 7              1 per RX           up to 4
    per radio           per radio         (logical)                              (NereusSDR)
@@ -61,12 +61,13 @@ one or more panIds. Multiple pans can share one receiver's FFT output.
 | 48,000 Hz | ~48 kHz | Narrow: single SSB/CW signal |
 | 96,000 Hz | ~96 kHz | Medium: see nearby signals |
 | 192,000 Hz | ~192 kHz | Wide: see good portion of a band |
-| 384,000 Hz | ~384 kHz | Maximum: see most of a band segment |
+| 384,000 Hz | ~384 kHz | Wide: see most of a band segment |
+| 768,000 Hz | ~768 kHz | Maximum: see a full band segment |
 
-- **Max visible spectrum per panadapter = ~384 kHz** (at max DDC sample rate)
+- **Max visible spectrum per panadapter = ~768 kHz** (at max DDC sample rate)
 - The pan can zoom IN within this range but never wider than the DDC provides
 - Two pans showing the SAME receiver can show different zoom levels of the
-  same ~384 kHz window
+  same DDC window
 - Two pans showing DIFFERENT receivers can show completely different
   frequencies/bands
 
@@ -243,7 +244,7 @@ ADC1 (0-61.44 MHz)  --- DDC3 (7.150 MHz, 96kHz SR) --- Receiver 1 --- WDSP Ch 1
 
 ### What you CAN do
 
-- **4 independent panadapters**, each showing up to ~384 kHz of spectrum
+- **4 independent panadapters**, each showing up to ~768 kHz of spectrum
 - **Each pan on a different receiver/DDC** -- see 4 different frequency ranges
   simultaneously
 - **Two pans on the same receiver** -- same DDC data, different zoom levels
@@ -256,7 +257,7 @@ ADC1 (0-61.44 MHz)  --- DDC3 (7.150 MHz, 96kHz SR) --- Receiver 1 --- WDSP Ch 1
 
 ### What you CANNOT do
 
-- **See more than ~384 kHz per pan** -- the DDC sample rate caps the view
+- **See more than ~768 kHz per pan** -- the DDC sample rate caps the view
 - **See the full 61.44 MHz ADC bandwidth at once** -- no wideband bandscope
   in standard operation (wideband data IS available on P2 ports 1027-1034
   but Thetis does not use it for the main panadapter display)

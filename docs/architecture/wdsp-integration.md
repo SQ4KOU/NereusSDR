@@ -788,7 +788,7 @@ private:
     int m_nrTaps{64};
     int m_nrDelay{16};
     double m_nrGain{16.0};
-    double m_nrLeakage{10.0};
+    double m_nrLeakage{1e-7};  // Corrected — was 10.0 in original design
 
     int m_anfTaps{64};
     int m_anfDelay{16};
