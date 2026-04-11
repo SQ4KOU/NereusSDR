@@ -5,6 +5,8 @@
 #include <QRect>
 #include <QColor>
 #include <QImage>
+#include <QMap>
+#include <QPointF>
 #include <QString>
 
 class QPainter;
@@ -287,6 +289,9 @@ private:
 class NeedleItem : public MeterItem {
     Q_OBJECT
 public:
+    // --- ANANMM/CrossNeedle extensions (Phase 3G-4) ---
+    enum class NeedleDirection { Clockwise, CounterClockwise };
+
     explicit NeedleItem(QObject* parent = nullptr);
 
     // --- Arc geometry constants (from AetherSDR SMeterWidget.cpp) ---
@@ -314,6 +319,62 @@ public:
 
     void setSourceLabel(const QString& label) { m_sourceLabel = label; }
     QString sourceLabel() const { return m_sourceLabel; }
+
+    // --- ANANMM/CrossNeedle extension setters/getters (Phase 3G-4) ---
+    void setScaleCalibration(const QMap<float, QPointF>& cal) { m_scaleCalibration = cal; }
+    QMap<float, QPointF> scaleCalibration() const { return m_scaleCalibration; }
+
+    void setNeedleOffset(const QPointF& off) { m_needleOffset = off; }
+    QPointF needleOffset() const { return m_needleOffset; }
+
+    void setRadiusRatio(const QPointF& r) { m_radiusRatio = r; }
+    QPointF radiusRatio() const { return m_radiusRatio; }
+
+    void setLengthFactor(float f) { m_lengthFactor = f; }
+    float lengthFactor() const { return m_lengthFactor; }
+
+    void setStrokeWidth(float w) { m_strokeWidth = w; }
+    float strokeWidth() const { return m_strokeWidth; }
+
+    void setDirection(NeedleDirection d) { m_direction = d; }
+    NeedleDirection direction() const { return m_direction; }
+
+    void setOnlyWhenRx(bool v) { m_onlyWhenRx = v; }
+    bool onlyWhenRx() const { return m_onlyWhenRx; }
+
+    void setOnlyWhenTx(bool v) { m_onlyWhenTx = v; }
+    bool onlyWhenTx() const { return m_onlyWhenTx; }
+
+    void setDisplayGroup(int g) { m_displayGroup = g; }
+    int displayGroup() const { return m_displayGroup; }
+
+    void setHistoryEnabled(bool v) { m_historyEnabled = v; }
+    bool historyEnabled() const { return m_historyEnabled; }
+
+    void setHistoryDuration(int ms) { m_historyDuration = ms; }
+    int historyDuration() const { return m_historyDuration; }
+
+    void setHistoryColor(const QColor& c) { m_historyColor = c; }
+    QColor historyColor() const { return m_historyColor; }
+
+    void setNormaliseTo100W(bool v) { m_normaliseTo100W = v; }
+    bool normaliseTo100W() const { return m_normaliseTo100W; }
+
+    void setMaxPower(float p) { m_maxPower = p; }
+    float maxPower() const { return m_maxPower; }
+
+    void setNeedleColor(const QColor& c) { m_needleColor = c; }
+    QColor needleColor() const { return m_needleColor; }
+
+    void setAttackRatio(float a) { m_attackRatio = a; }
+    float attackRatio() const { return m_attackRatio; }
+
+    void setDecayRatio(float d) { m_decayRatio = d; }
+    float decayRatio() const { return m_decayRatio; }
+
+    // Interpolate needle position from scale calibration map
+    // From Thetis MeterManager.cs calibration point interpolation
+    QPointF calibratedPosition(float value) const;
 
     void setValue(double v) override;
 
@@ -346,6 +407,42 @@ private:
     float   m_peakDbm{kS0Dbm};
     int     m_peakHoldCounter{0};
     int     m_peakResetCounter{0};
+
+    // --- ANANMM/CrossNeedle extensions (Phase 3G-4) ---
+    // Custom scale calibration: value -> normalized (x,y) position on gauge face.
+    // When non-empty, paint() uses this instead of dbmToFraction().
+    // From Thetis MeterManager.cs AddAnanMM() calibration tables
+    QMap<float, QPointF> m_scaleCalibration;
+
+    // Needle geometry overrides
+    QPointF m_needleOffset{0.0, 0.0};     // Center offset for needle pivot
+    QPointF m_radiusRatio{1.0, 1.0};      // Elliptical scaling
+    float   m_lengthFactor{1.0f};         // Needle length multiplier
+    float   m_strokeWidth{1.5f};          // Needle line thickness
+
+    // Direction
+    NeedleDirection m_direction{NeedleDirection::Clockwise};
+
+    // Visibility filtering
+    bool m_onlyWhenRx{false};
+    bool m_onlyWhenTx{false};
+    int  m_displayGroup{-1};  // -1 = always visible
+
+    // History trail
+    bool   m_historyEnabled{false};
+    int    m_historyDuration{4000};  // ms
+    QColor m_historyColor{Qt::transparent};
+
+    // Power normalisation
+    bool  m_normaliseTo100W{false};
+    float m_maxPower{100.0f};
+
+    // Needle color (default white for S-meter backward compat)
+    QColor m_needleColor{Qt::white};
+
+    // Attack/decay smoothing ratios (defaults match S-meter behavior)
+    float m_attackRatio{0.3f};   // kSmoothAlpha default
+    float m_decayRatio{0.3f};    // kSmoothAlpha default
 };
 
 } // namespace NereusSDR

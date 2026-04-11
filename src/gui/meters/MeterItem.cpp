@@ -537,6 +537,48 @@ float NeedleItem::dbmToFraction(float dbm) const
     return 0.6f + 0.4f * (clamped - kS9Dbm) / (kMaxDbm - kS9Dbm);
 }
 
+// Interpolate needle position from scale calibration map.
+// From Thetis MeterManager.cs calibration point interpolation.
+// Finds the two calibration points bracketing `value` and linearly
+// interpolates the (x,y) position between them.
+QPointF NeedleItem::calibratedPosition(float value) const
+{
+    if (m_scaleCalibration.isEmpty()) {
+        return QPointF(0.5, 0.5);
+    }
+
+    // Use QMap's ordered iteration to find bracketing keys
+    auto it = m_scaleCalibration.lowerBound(value);
+
+    // Value is at or beyond the last calibration point
+    if (it == m_scaleCalibration.end()) {
+        return (--it).value();
+    }
+
+    // Value is at or before the first calibration point
+    if (it == m_scaleCalibration.begin()) {
+        return it.value();
+    }
+
+    // Exact match
+    if (it.key() == value) {
+        return it.value();
+    }
+
+    // Interpolate between the two bracketing points
+    auto upper = it;
+    auto lower = --it;
+    const float range = upper.key() - lower.key();
+    if (range <= 0.0f) {
+        return lower.value();
+    }
+    const float t = (value - lower.key()) / range;
+    const QPointF& p0 = lower.value();
+    const QPointF& p1 = upper.value();
+    return QPointF(p0.x() + t * (p1.x() - p0.x()),
+                   p0.y() + t * (p1.y() - p0.y()));
+}
+
 // From AetherSDR SMeterWidget.cpp sUnitsText()
 QString NeedleItem::sUnitsText(float dbm) const
 {
