@@ -20,6 +20,12 @@ namespace NereusSDR {
 class ContainerWidget;
 class MeterWidget;
 class MeterItem;
+class BarItem;
+class NeedleItem;
+class TextItem;
+class ScaleItem;
+class SolidColourItem;
+class LEDItem;
 
 class ContainerSettingsDialog : public QDialog {
     Q_OBJECT
@@ -55,6 +61,21 @@ private:
     void updatePreview();
     void applyToContainer();
 
+    // Common property editor (Task 4)
+    void buildCommonPropsPage();
+    void loadCommonProperties(int row);
+    void saveCommonProperties(int row);
+    void populateBindingCombo();
+    QWidget* buildTypeSpecificEditor(MeterItem* item);
+
+    // Type-specific editors (Task 5)
+    QWidget* buildBarItemEditor(BarItem* item);
+    QWidget* buildNeedleItemEditor(NeedleItem* item);
+    QWidget* buildTextItemEditor(TextItem* item);
+    QWidget* buildScaleItemEditor(ScaleItem* item);
+    QWidget* buildSolidItemEditor(SolidColourItem* item);
+    QWidget* buildLedItemEditor(LEDItem* item);
+
     ContainerWidget* m_container{nullptr};
     QVector<MeterItem*> m_workingItems;
 
@@ -70,6 +91,20 @@ private:
     // Center panel
     QStackedWidget* m_propertyStack{nullptr};
     QWidget* m_emptyPage{nullptr};
+
+    // Common property controls
+    QWidget* m_commonPropsPage{nullptr};
+    QDoubleSpinBox* m_propX{nullptr};
+    QDoubleSpinBox* m_propY{nullptr};
+    QDoubleSpinBox* m_propW{nullptr};
+    QDoubleSpinBox* m_propH{nullptr};
+    QSpinBox* m_propZOrder{nullptr};
+    QComboBox* m_propBinding{nullptr};
+
+    // Type-specific property area
+    QWidget* m_typePropsContainer{nullptr};
+    QVBoxLayout* m_typePropsLayout{nullptr};
+    QWidget* m_currentTypeEditor{nullptr};
 
     // Right panel
     MeterWidget* m_previewWidget{nullptr};
