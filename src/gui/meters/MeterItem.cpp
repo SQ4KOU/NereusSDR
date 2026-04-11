@@ -577,6 +577,9 @@ void NeedleItem::paintBackground(QPainter& p, int widgetW, int widgetH)
     const float pw = static_cast<float>(rect.width());
     const float ph = static_cast<float>(rect.height());
 
+    // Background fill — from AetherSDR SMeterWidget.cpp line 197
+    p.fillRect(rect, QColor(0x0f, 0x0f, 0x1a));
+
     // From AetherSDR: cx = width*0.5, radius = width*0.85
     // cy = height + radius - height*0.65
     const float cx = rect.left() + pw * 0.5f;
@@ -590,9 +593,9 @@ void NeedleItem::paintBackground(QPainter& p, int widgetW, int widgetH)
     const float s9Frac = 0.6f;
     const float s9Angle = kArcEndDeg - s9Frac * arcSpan;  // 83 degrees
 
+    // AetherSDR uses default cap style (SquareCap) — do not set FlatCap
     QPen arcPen;
     arcPen.setWidthF(3.0f);
-    arcPen.setCapStyle(Qt::FlatCap);
 
     // White segment: S9 angle to ARC_END (left portion, S0-S9)
     // QPainter drawArc: angles in 1/16 degrees, 0=3 o'clock, positive=CCW
@@ -608,6 +611,16 @@ void NeedleItem::paintBackground(QPainter& p, int widgetW, int widgetH)
     const int redStart = static_cast<int>(kArcStartDeg * 16.0f);
     const int redSpan  = static_cast<int>((s9Angle - kArcStartDeg) * 16.0f);
     p.drawArc(arcRect, redStart, redSpan);
+
+    // Inner TX arc — from AetherSDR SMeterWidget.cpp lines 236-269
+    // Blue arc 6px inside the outer arc (always drawn)
+    const float innerR = radius - 6.0f;
+    const QRectF innerArc(cx - innerR, cy - innerR, innerR * 2.0f, innerR * 2.0f);
+    arcPen.setColor(QColor(0x00, 0x80, 0xd0));  // From AetherSDR blueColor
+    p.setPen(arcPen);
+    const int fullStart = static_cast<int>(kArcStartDeg * 16.0f);
+    const int fullSpan  = static_cast<int>((kArcEndDeg - kArcStartDeg) * 16.0f);
+    p.drawArc(innerArc, fullStart, fullSpan);
 }
 
 // Needle geometry: tapered quad from pivot to tip (2 triangles = 6 verts).
@@ -635,15 +648,19 @@ void NeedleItem::emitVertices(QVector<float>& verts, int widgetW, int widgetH)
     const float tipX = cx + tipDist * std::cos(angleRad);
     const float tipY = cy - tipDist * std::sin(angleRad);
 
-    // Perpendicular for needle width
+    // Perpendicular direction for needle width
     const float dx = tipX - pivotX;
     const float dy = tipY - pivotY;
     const float len = std::sqrt(dx * dx + dy * dy);
     if (len < 1.0f) { return; }
 
-    const float halfWidth = 1.5f;
-    const float nx = -dy / len * halfWidth;
-    const float ny =  dx / len * halfWidth;
+    const float perpX = -dy / len;
+    const float perpY =  dx / len;
+
+    // From AetherSDR: shadow pen width 3 (halfWidth 1.5), needle pen width 2 (halfWidth 1.0)
+    // Uniform width along entire length — NOT tapered (matches QPainter drawLine)
+    const float shadowHW = 1.5f;
+    const float needleHW = 1.0f;
 
     // Pixel to NDC conversion lambdas
     const float invW = 2.0f / static_cast<float>(widgetW);
@@ -652,13 +669,13 @@ void NeedleItem::emitVertices(QVector<float>& verts, int widgetW, int widgetH)
     auto ndcY = [invH](float py) { return 1.0f - py * invH; };
 
     // --- Shadow quad (black, offset +1px) ---
-    // From AetherSDR: shadow color rgba(0,0,0,80), pen width 3, offset +1
+    // From AetherSDR SMeterWidget.cpp line 429: QPen(QColor(0,0,0,80), 3), offset (+1,+1)
     const float sr = 0.0f, sg = 0.0f, sb = 0.0f, sa = 80.0f / 255.0f;
     const float sOff = 1.0f;
-    const float sp1x = pivotX + nx + sOff, sp1y = pivotY + ny + sOff;
-    const float sp2x = pivotX - nx + sOff, sp2y = pivotY - ny + sOff;
-    const float sp3x = tipX + nx * 0.3f + sOff, sp3y = tipY + ny * 0.3f + sOff;
-    const float sp4x = tipX - nx * 0.3f + sOff, sp4y = tipY - ny * 0.3f + sOff;
+    const float sp1x = pivotX + perpX * shadowHW + sOff, sp1y = pivotY + perpY * shadowHW + sOff;
+    const float sp2x = pivotX - perpX * shadowHW + sOff, sp2y = pivotY - perpY * shadowHW + sOff;
+    const float sp3x = tipX + perpX * shadowHW + sOff,   sp3y = tipY + perpY * shadowHW + sOff;
+    const float sp4x = tipX - perpX * shadowHW + sOff,   sp4y = tipY - perpY * shadowHW + sOff;
     // Triangle 1
     verts << ndcX(sp1x) << ndcY(sp1y) << sr << sg << sb << sa;
     verts << ndcX(sp2x) << ndcY(sp2y) << sr << sg << sb << sa;
@@ -668,13 +685,13 @@ void NeedleItem::emitVertices(QVector<float>& verts, int widgetW, int widgetH)
     verts << ndcX(sp2x) << ndcY(sp2y) << sr << sg << sb << sa;
     verts << ndcX(sp4x) << ndcY(sp4y) << sr << sg << sb << sa;
 
-    // --- Needle quad (white) ---
-    // From AetherSDR: needle color #ffffff, pen width 2
+    // --- Needle quad (white, uniform width) ---
+    // From AetherSDR SMeterWidget.cpp line 433: QPen(#ffffff, 2)
     const float nr = 1.0f, ng = 1.0f, nb = 1.0f, na = 1.0f;
-    const float np1x = pivotX + nx, np1y = pivotY + ny;
-    const float np2x = pivotX - nx, np2y = pivotY - ny;
-    const float np3x = tipX + nx * 0.3f, np3y = tipY + ny * 0.3f;  // tapers
-    const float np4x = tipX - nx * 0.3f, np4y = tipY - ny * 0.3f;
+    const float np1x = pivotX + perpX * needleHW, np1y = pivotY + perpY * needleHW;
+    const float np2x = pivotX - perpX * needleHW, np2y = pivotY - perpY * needleHW;
+    const float np3x = tipX + perpX * needleHW,   np3y = tipY + perpY * needleHW;
+    const float np4x = tipX - perpX * needleHW,   np4y = tipY - perpY * needleHW;
     // Triangle 1
     verts << ndcX(np1x) << ndcY(np1y) << nr << ng << nb << na;
     verts << ndcX(np2x) << ndcY(np2y) << nr << ng << nb << na;
@@ -684,30 +701,35 @@ void NeedleItem::emitVertices(QVector<float>& verts, int widgetW, int widgetH)
     verts << ndcX(np2x) << ndcY(np2y) << nr << ng << nb << na;
     verts << ndcX(np4x) << ndcY(np4y) << nr << ng << nb << na;
 
-    // --- Peak marker triangle (amber) ---
-    // From AetherSDR: peak marker #ffaa00, shown when peak > current + 1 dBm
+    // --- Peak marker triangle (amber, points INWARD toward center) ---
+    // From AetherSDR SMeterWidget.cpp lines 437-462: tip at radius-2, base 6px behind
     if (m_peakDbm > m_smoothedDbm + 1.0f) {
         const float peakFrac = dbmToFraction(m_peakDbm);
         const float peakAngleDeg = kArcEndDeg - peakFrac * (kArcEndDeg - kArcStartDeg);
         const float peakAngleRad = qDegreesToRadians(peakAngleDeg);
 
         const float mr = 1.0f, mg = 0.667f, mb = 0.0f, ma = 1.0f;  // #ffaa00
-        const float markerInnerR = radius + 2.0f;
-        const float markerOuterR = radius + 10.0f;
+        const float cosA = std::cos(peakAngleRad);
+        const float sinA = std::sin(peakAngleRad);
+
+        // Tip at radius-2 (inside the arc), base 6px behind toward center
+        const float markerTipR = radius - 2.0f;
+        const float markerBaseR = radius - 8.0f;
         const float markerHalf = 3.0f;
 
-        // Tip (outward)
-        const float mtx = cx + markerOuterR * std::cos(peakAngleRad);
-        const float mty = cy - markerOuterR * std::sin(peakAngleRad);
-        // Base perpendicular
-        const float perpX = -std::sin(peakAngleRad) * markerHalf;
-        const float perpY = -std::cos(peakAngleRad) * markerHalf;
-        const float mbx = cx + markerInnerR * std::cos(peakAngleRad);
-        const float mby = cy - markerInnerR * std::sin(peakAngleRad);
+        // Tip (inward, on arc inner edge)
+        const float mtx = cx + markerTipR * cosA;
+        const float mty = cy - markerTipR * sinA;
+        // Base center (further inward)
+        const float mbcx = cx + markerBaseR * cosA;
+        const float mbcy = cy - markerBaseR * sinA;
+        // Perpendicular at base — from AetherSDR: perpCos = -sinA, perpSin = cosA
+        const float mpx = -sinA * markerHalf;
+        const float mpy =  cosA * markerHalf;
 
         verts << ndcX(mtx) << ndcY(mty) << mr << mg << mb << ma;
-        verts << ndcX(mbx + perpX) << ndcY(mby + perpY) << mr << mg << mb << ma;
-        verts << ndcX(mbx - perpX) << ndcY(mby - perpY) << mr << mg << mb << ma;
+        verts << ndcX(mbcx + mpx) << ndcY(mbcy + mpy) << mr << mg << mb << ma;
+        verts << ndcX(mbcx - mpx) << ndcY(mbcy - mpy) << mr << mg << mb << ma;
     }
 }
 
@@ -721,18 +743,22 @@ void NeedleItem::paintOverlayStatic(QPainter& p, int widgetW, int widgetH)
     const float radius = pw * kRadiusRatio;
     const float cy = rect.top() + ph + radius - ph * kCenterYRatio;
 
-    // Tick definitions from AetherSDR SMeterWidget.cpp
-    // Only odd S-units + over-S9 marks shown
+    // Tick definitions from AetherSDR SMeterWidget.cpp lines 340-347
+    // Only odd S-units + over-S9 marks shown. BARE numbers (no "S" prefix).
     struct TickDef { float dbm; const char* label; bool isRed; };
     static const TickDef ticks[] = {
-        {-121.0f, "S1",  false},  // From AetherSDR: frac 0.0667
-        {-109.0f, "S3",  false},  // frac 0.200
-        { -97.0f, "S5",  false},  // frac 0.333
-        { -85.0f, "S7",  false},  // frac 0.467
-        { -73.0f, "S9",  false},  // frac 0.600
-        { -53.0f, "+20", true},   // frac 0.733
-        { -33.0f, "+40", true},   // frac 0.867
+        {-121.0f, "1",   false},  // From AetherSDR: QString::number(s)
+        {-109.0f, "3",   false},
+        { -97.0f, "5",   false},
+        { -85.0f, "7",   false},
+        { -73.0f, "9",   false},
+        { -53.0f, "+20", true},   // From AetherSDR: QString("+%1").arg(over)
+        { -33.0f, "+40", true},
     };
+
+    // Needle pivot for needleDir calculation
+    // From AetherSDR SMeterWidget.cpp line 279-286: direction from (cx, needleCy) through arc point
+    const float pivotY = rect.top() + ph + 6.0f;
 
     // From AetherSDR: tick font = max(10, height/10) px, bold
     QFont tickFont = p.font();
@@ -740,37 +766,45 @@ void NeedleItem::paintOverlayStatic(QPainter& p, int widgetW, int widgetH)
     tickFont.setPixelSize(tickFontSize);
     tickFont.setBold(true);
     p.setFont(tickFont);
+    const QFontMetrics tfm(tickFont);
 
     for (const auto& tick : ticks) {
         const float frac = dbmToFraction(tick.dbm);
         const float angleDeg = kArcEndDeg - frac * (kArcEndDeg - kArcStartDeg);
         const float angleRad = qDegreesToRadians(angleDeg);
 
-        // From AetherSDR: tick line 14px, inset 2px from arc, width 1.5
-        const float innerR = radius - 2.0f;
-        const float outerR = radius + 12.0f;
-        const float ix = cx + innerR * std::cos(angleRad);
-        const float iy = cy - innerR * std::sin(angleRad);
-        const float ox = cx + outerR * std::cos(angleRad);
-        const float oy = cy - outerR * std::sin(angleRad);
+        // Arc point
+        const float arcPtX = cx + radius * std::cos(angleRad);
+        const float arcPtY = cy - radius * std::sin(angleRad);
+
+        // needleDir: direction from pivot (cx, pivotY) through arc point, normalized
+        // From AetherSDR SMeterWidget.cpp lines 279-286
+        const float ndx = arcPtX - cx;
+        const float ndy = arcPtY - pivotY;
+        const float ndLen = std::sqrt(ndx * ndx + ndy * ndy);
+        const float ux = ndx / ndLen;
+        const float uy = ndy / ndLen;
+
+        // From AetherSDR: tick starts 2px outside arc, extends 14px outward (both outside)
+        // SMeterWidget.cpp lines 296-297
+        const QPointF inner(arcPtX + 2.0f * ux, arcPtY + 2.0f * uy);
+        const QPointF outer(arcPtX + 14.0f * ux, arcPtY + 14.0f * uy);
 
         const QColor tickColor = tick.isRed ? QColor(0xff, 0x44, 0x44)
                                             : QColor(0xc8, 0xd8, 0xe8);
         QPen tickPen(tickColor);
         tickPen.setWidthF(1.5f);
         p.setPen(tickPen);
-        p.drawLine(QPointF(ix, iy), QPointF(ox, oy));
+        p.drawLine(inner, outer);
 
-        // From AetherSDR: label 26px from arc, centered on tick angle
-        const float labelR = radius + 26.0f;
-        const float lx = cx + labelR * std::cos(angleRad);
-        const float ly = cy - labelR * std::sin(angleRad);
-
+        // From AetherSDR: label 26px from arc point along needleDir
+        // SMeterWidget.cpp line 303
+        const QPointF labelPt(arcPtX + 26.0f * ux, arcPtY + 26.0f * uy);
         p.setPen(tickColor);
-        const QFontMetrics fm(tickFont);
         const QString labelStr = QString::fromLatin1(tick.label);
-        const int tw = fm.horizontalAdvance(labelStr);
-        p.drawText(QPointF(lx - tw / 2.0f, ly + fm.ascent() / 2.0f), labelStr);
+        const int tw = tfm.horizontalAdvance(labelStr);
+        p.drawText(QPointF(labelPt.x() - tw / 2.0f,
+                            labelPt.y() + tfm.ascent() / 2.0f), labelStr);
     }
 
     // From AetherSDR: source label centered, max(9, h/14) px, non-bold, #8090a0
@@ -807,17 +841,19 @@ void NeedleItem::paintOverlayDynamic(QPainter& p, int widgetW, int widgetH)
     p.setFont(valFont);
     const QFontMetrics valFm(valFont);
 
-    // S-unit text (left, cyan) — from AetherSDR: #00b4d8, x=6
+    // S-unit text (left, cyan) — from AetherSDR SMeterWidget.cpp line 533
+    // AetherSDR uses drawText(x, topY, text) where topY is the baseline.
+    // QPointF overload also treats Y as baseline — pass topY directly, no ascent offset.
     const QString sText = sUnitsText(m_smoothedDbm);
     p.setPen(QColor(0x00, 0xb4, 0xd8));
-    p.drawText(QPointF(rect.left() + 6.0f, topY + valFm.ascent()), sText);
+    p.drawText(QPointF(rect.left() + 6.0f, topY), sText);
 
-    // dBm text (right, light steel) — from AetherSDR: #c8d8e8, right-aligned -6
+    // dBm text (right, light steel) — from AetherSDR SMeterWidget.cpp line 537
     const QString dbmText = QString::number(static_cast<int>(std::round(m_smoothedDbm)))
                           + QStringLiteral(" dBm");
     p.setPen(QColor(0xc8, 0xd8, 0xe8));
     const int dbmW = valFm.horizontalAdvance(dbmText);
-    p.drawText(QPointF(rect.right() - dbmW - 6.0f, topY + valFm.ascent()), dbmText);
+    p.drawText(QPointF(rect.right() - dbmW - 6.0f, topY), dbmText);
 }
 
 // Format: NEEDLE|x|y|w|h|bindingId|zOrder|sourceLabel
