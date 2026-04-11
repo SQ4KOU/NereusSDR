@@ -1,5 +1,7 @@
 #include "DigitalApplet.h"
 #include "NyiOverlay.h"
+#include "gui/ComboStyle.h"
+#include "gui/StyleConstants.h"
 
 #include <QComboBox>
 #include <QSlider>
@@ -10,46 +12,6 @@
 #include <QHBoxLayout>
 
 namespace NereusSDR {
-
-// --------------------------------------------------------------------------
-// Style constants
-// --------------------------------------------------------------------------
-
-// Blue active state (Stereo button)
-static const char* kBlueActive =
-    "QPushButton {"
-    "  background: #1a2a3a; color: #c8d8e8;"
-    "  border: 1px solid #205070; border-radius: 3px;"
-    "  padding: 2px 4px; font-size: 10px; font-weight: bold;"
-    "}"
-    "QPushButton:hover { background: #203040; }"
-    "QPushButton:checked {"
-    "  background: #0070c0; color: #ffffff; border: 1px solid #0090e0;"
-    "}";
-
-// Green active state (VAC 1, VAC 2 enable)
-static const char* kGreenActive =
-    "QPushButton {"
-    "  background: #1a2a3a; color: #c8d8e8;"
-    "  border: 1px solid #205070; border-radius: 3px;"
-    "  padding: 2px 4px; font-size: 10px; font-weight: bold;"
-    "}"
-    "QPushButton:hover { background: #203040; }"
-    "QPushButton:checked {"
-    "  background: #006040; color: #00ff88; border: 1px solid #00a060;"
-    "}";
-
-// Inset value label
-static const char* kInsetValue =
-    "QLabel {"
-    "  font-size: 10px;"
-    "  background: #0a0a18; border: 1px solid #1e2e3e; border-radius: 3px;"
-    "  padding: 1px 2px; color: #c8d8e8;"
-    "}";
-
-// Section label style
-static const char* kSectionLabel =
-    "QLabel { color: #8090a0; font-size: 10px; }";
 
 // --------------------------------------------------------------------------
 // DigitalApplet
@@ -68,7 +30,8 @@ void DigitalApplet::buildSliderRow(QVBoxLayout* root, const QString& label,
     row->setSpacing(4);
 
     auto* lbl = new QLabel(label, this);
-    lbl->setStyleSheet(kSectionLabel);
+    lbl->setStyleSheet(QStringLiteral(
+        "QLabel { color: %1; font-size: 10px; }").arg(Style::kTextSecondary));
     lbl->setFixedWidth(50);
     row->addWidget(lbl);
 
@@ -78,10 +41,7 @@ void DigitalApplet::buildSliderRow(QVBoxLayout* root, const QString& label,
     sliderOut->setFixedHeight(18);
     row->addWidget(sliderOut, 1);
 
-    valueLblOut = new QLabel(QStringLiteral("50"), this);
-    valueLblOut->setStyleSheet(kInsetValue);
-    valueLblOut->setFixedWidth(30);
-    valueLblOut->setAlignment(Qt::AlignCenter);
+    valueLblOut = insetValue(QStringLiteral("50"));
     row->addWidget(valueLblOut);
 
     root->addLayout(row);
@@ -90,9 +50,14 @@ void DigitalApplet::buildSliderRow(QVBoxLayout* root, const QString& label,
 void DigitalApplet::buildUI()
 {
     auto* root = new QVBoxLayout(this);
-    // Body margins: (4,2,4,2), spacing 2 — per task spec
-    root->setContentsMargins(4, 2, 4, 2);
-    root->setSpacing(2);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
+    root->addWidget(appletTitleBar(QStringLiteral("Digital / VAC")));
+
+    auto* body = new QWidget(this);
+    auto* vbox = new QVBoxLayout(body);
+    vbox->setContentsMargins(4, 2, 4, 4);
+    vbox->setSpacing(2);
 
     // -----------------------------------------------------------------------
     // VAC 1 group: enable button + device combo
@@ -101,19 +66,17 @@ void DigitalApplet::buildUI()
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
-        m_vac1Btn = new QPushButton(QStringLiteral("VAC 1"), this);
+        m_vac1Btn = greenToggle(QStringLiteral("VAC 1"));
         m_vac1Btn->setCheckable(true);
-        m_vac1Btn->setFixedHeight(22);
         m_vac1Btn->setFixedWidth(50);
-        m_vac1Btn->setStyleSheet(kGreenActive);
         row->addWidget(m_vac1Btn);
 
         m_vac1DevCombo = new QComboBox(this);
-        m_vac1DevCombo->setFixedHeight(22);
         m_vac1DevCombo->setToolTip(QStringLiteral("VAC 1 audio device"));
+        applyComboStyle(m_vac1DevCombo);
         row->addWidget(m_vac1DevCombo, 1);
 
-        root->addLayout(row);
+        vbox->addLayout(row);
     }
 
     // -----------------------------------------------------------------------
@@ -123,58 +86,44 @@ void DigitalApplet::buildUI()
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
-        m_vac2Btn = new QPushButton(QStringLiteral("VAC 2"), this);
+        m_vac2Btn = greenToggle(QStringLiteral("VAC 2"));
         m_vac2Btn->setCheckable(true);
-        m_vac2Btn->setFixedHeight(22);
         m_vac2Btn->setFixedWidth(50);
-        m_vac2Btn->setStyleSheet(kGreenActive);
         row->addWidget(m_vac2Btn);
 
         m_vac2DevCombo = new QComboBox(this);
-        m_vac2DevCombo->setFixedHeight(22);
         m_vac2DevCombo->setToolTip(QStringLiteral("VAC 2 audio device"));
+        applyComboStyle(m_vac2DevCombo);
         row->addWidget(m_vac2DevCombo, 1);
 
-        root->addLayout(row);
+        vbox->addLayout(row);
     }
 
-    // Divider between VAC sections and shared settings
-    {
-        auto* divider = new QFrame(this);
-        divider->setFrameShape(QFrame::HLine);
-        divider->setFrameShadow(QFrame::Sunken);
-        divider->setFixedHeight(2);
-        divider->setStyleSheet(QStringLiteral("QFrame { color: #1e2e3e; }"));
-        root->addWidget(divider);
-    }
+    vbox->addWidget(divider());
 
     // -----------------------------------------------------------------------
-    // Control 5: Sample rate combo
+    // Control 5: Sample rate combo — "48000", "96000", "192000"
     // -----------------------------------------------------------------------
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
         auto* lbl = new QLabel(QStringLiteral("Rate"), this);
-        lbl->setStyleSheet(kSectionLabel);
+        lbl->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTextSecondary));
         lbl->setFixedWidth(50);
         row->addWidget(lbl);
 
         m_sampleRateCombo = new QComboBox(this);
-        m_sampleRateCombo->setFixedHeight(22);
         m_sampleRateCombo->addItems({
-            QStringLiteral("8000"),
-            QStringLiteral("11025"),
-            QStringLiteral("22050"),
-            QStringLiteral("44100"),
             QStringLiteral("48000"),
-            QStringLiteral("96000")
+            QStringLiteral("96000"),
+            QStringLiteral("192000")
         });
-        // Default to 48000
-        m_sampleRateCombo->setCurrentIndex(4);
+        applyComboStyle(m_sampleRateCombo);
         row->addWidget(m_sampleRateCombo, 1);
 
-        root->addLayout(row);
+        vbox->addLayout(row);
     }
 
     // -----------------------------------------------------------------------
@@ -184,36 +133,91 @@ void DigitalApplet::buildUI()
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
-        m_stereoBtn = new QPushButton(QStringLiteral("Stereo"), this);
+        m_stereoBtn = blueToggle(QStringLiteral("Stereo"));
         m_stereoBtn->setCheckable(true);
         m_stereoBtn->setChecked(true);
-        m_stereoBtn->setFixedHeight(22);
-        m_stereoBtn->setStyleSheet(kBlueActive);
         row->addWidget(m_stereoBtn, 1);
 
-        root->addLayout(row);
+        vbox->addLayout(row);
     }
 
     // -----------------------------------------------------------------------
-    // Control 7: RX Gain + TX Gain sliders
+    // Control 7: Buffer size combo — "256", "512", "1024", "2048"
     // -----------------------------------------------------------------------
-    buildSliderRow(root, QStringLiteral("RX Gain"), m_rxGainSlider, m_rxGainLbl);
-    buildSliderRow(root, QStringLiteral("TX Gain"), m_txGainSlider, m_txGainLbl);
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
 
-    root->addStretch();
+        auto* lbl = new QLabel(QStringLiteral("Buffer"), this);
+        lbl->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTextSecondary));
+        lbl->setFixedWidth(50);
+        row->addWidget(lbl);
+
+        m_bufferSizeCombo = new QComboBox(this);
+        m_bufferSizeCombo->addItems({
+            QStringLiteral("256"),
+            QStringLiteral("512"),
+            QStringLiteral("1024"),
+            QStringLiteral("2048")
+        });
+        applyComboStyle(m_bufferSizeCombo);
+        row->addWidget(m_bufferSizeCombo, 1);
+
+        vbox->addLayout(row);
+    }
+
+    vbox->addWidget(divider());
+
+    // -----------------------------------------------------------------------
+    // RX Gain + TX Gain sliders
+    // -----------------------------------------------------------------------
+    buildSliderRow(vbox, QStringLiteral("RX Gain"), m_rxGainSlider, m_rxGainLbl);
+    buildSliderRow(vbox, QStringLiteral("TX Gain"), m_txGainSlider, m_txGainLbl);
+
+    // -----------------------------------------------------------------------
+    // rigctld channel combo
+    // -----------------------------------------------------------------------
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        auto* lbl = new QLabel(QStringLiteral("rigctld"), this);
+        lbl->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTextSecondary));
+        lbl->setFixedWidth(50);
+        row->addWidget(lbl);
+
+        m_rigctldCombo = new QComboBox(this);
+        m_rigctldCombo->addItems({
+            QStringLiteral("Ch 1"),
+            QStringLiteral("Ch 2"),
+            QStringLiteral("Ch 3"),
+            QStringLiteral("Ch 4")
+        });
+        applyComboStyle(m_rigctldCombo);
+        row->addWidget(m_rigctldCombo, 1);
+
+        vbox->addLayout(row);
+    }
+
+    vbox->addStretch();
+    root->addWidget(body);
 
     // -----------------------------------------------------------------------
     // Mark all controls NYI — Phase 3-DAX
     // -----------------------------------------------------------------------
     const QString kPhase = QStringLiteral("Phase 3-DAX");
-    NyiOverlay::markNyi(m_vac1Btn,         kPhase);
-    NyiOverlay::markNyi(m_vac1DevCombo,    kPhase);
-    NyiOverlay::markNyi(m_vac2Btn,         kPhase);
-    NyiOverlay::markNyi(m_vac2DevCombo,    kPhase);
-    NyiOverlay::markNyi(m_sampleRateCombo, kPhase);
-    NyiOverlay::markNyi(m_stereoBtn,       kPhase);
-    NyiOverlay::markNyi(m_rxGainSlider,    kPhase);
-    NyiOverlay::markNyi(m_txGainSlider,    kPhase);
+    NyiOverlay::markNyi(m_vac1Btn,          kPhase);
+    NyiOverlay::markNyi(m_vac1DevCombo,     kPhase);
+    NyiOverlay::markNyi(m_vac2Btn,          kPhase);
+    NyiOverlay::markNyi(m_vac2DevCombo,     kPhase);
+    NyiOverlay::markNyi(m_sampleRateCombo,  kPhase);
+    NyiOverlay::markNyi(m_stereoBtn,        kPhase);
+    NyiOverlay::markNyi(m_bufferSizeCombo,  kPhase);
+    NyiOverlay::markNyi(m_rxGainSlider,     kPhase);
+    NyiOverlay::markNyi(m_txGainSlider,     kPhase);
+    NyiOverlay::markNyi(m_rigctldCombo,     kPhase);
 }
 
 void DigitalApplet::syncFromModel()

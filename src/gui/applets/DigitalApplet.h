@@ -6,7 +6,6 @@ class QComboBox;
 class QSlider;
 class QPushButton;
 class QLabel;
-class QVBoxLayout;
 
 namespace NereusSDR {
 
@@ -17,11 +16,12 @@ namespace NereusSDR {
 //   2. VAC 1 device combo — QComboBox (device list, empty)
 //   3. VAC 2 enable       — QPushButton("VAC 2", green, checkable)
 //   4. VAC 2 device combo — QComboBox (device list, empty)
-//   5. Sample rate combo  — QComboBox: 8000, 11025, 22050, 44100, 48000, 96000
+//   5. Sample rate combo  — QComboBox: "48000", "96000", "192000"
 //   6. Stereo/Mono toggle — QPushButton("Stereo", blue, checkable)
-//   7. RX/TX gain sliders — "RX Gain" row + "TX Gain" row (slider + value each)
+//   7. Buffer size combo  — QComboBox: "256", "512", "1024", "2048"
 //
-// All controls are disabled (NYI). Body margins: (4,2,4,2), spacing 2.
+// Additional: TX/RX gain sliders (x2), rigctld channel combo.
+// All controls disabled (NYI). Body margins: (4,2,4,2), spacing 2.
 class DigitalApplet : public AppletWidget {
     Q_OBJECT
 
@@ -29,7 +29,7 @@ public:
     explicit DigitalApplet(RadioModel* model, QWidget* parent = nullptr);
 
     QString appletId()    const override { return QStringLiteral("DIG"); }
-    QString appletTitle() const override { return QStringLiteral("Digital"); }
+    QString appletTitle() const override { return QStringLiteral("Digital / VAC"); }
     void syncFromModel() override;
 
 private:
@@ -53,11 +53,17 @@ private:
     // Control 6 — Stereo/Mono
     QPushButton* m_stereoBtn      = nullptr;
 
-    // Control 7 — RX/TX gain sliders
+    // Control 7 — Buffer size
+    QComboBox*   m_bufferSizeCombo = nullptr;
+
+    // Additional — RX/TX gain sliders
     QSlider*     m_rxGainSlider   = nullptr;
     QLabel*      m_rxGainLbl      = nullptr;
     QSlider*     m_txGainSlider   = nullptr;
     QLabel*      m_txGainLbl      = nullptr;
+
+    // Additional — rigctld channel combo
+    QComboBox*   m_rigctldCombo   = nullptr;
 };
 
 } // namespace NereusSDR
