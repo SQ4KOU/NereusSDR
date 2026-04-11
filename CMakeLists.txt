@@ -199,10 +199,16 @@ set(GUI_SOURCES
     src/gui/meters/MeterItem.cpp
     src/gui/meters/ItemGroup.cpp
     src/gui/meters/MeterPoller.cpp
+<<<<<<< HEAD
     src/gui/HGauge.cpp
     src/gui/applets/AppletWidget.cpp
     src/gui/applets/NyiOverlay.cpp
     src/gui/applets/AppletPanelWidget.cpp
+=======
+    src/gui/applets/AppletWidget.cpp
+    src/gui/applets/NyiOverlay.cpp
+    src/gui/applets/EqApplet.cpp
+>>>>>>> worktree-agent-ab456fc2
 )
 
 # --------------------------------------------------------------------------
