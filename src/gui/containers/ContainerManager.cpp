@@ -168,6 +168,7 @@ void ContainerManager::setMeterFloating(ContainerWidget* container, FloatingCont
     form->takeOwner(container);
     form->setContainerFloating(true);
     container->setDockMode(DockMode::Floating);
+    container->setTopMost();  // Re-apply pin-on-top now that parent is set
     form->show();
     qCDebug(lcContainer) << "Floated container:" << container->id();
 }

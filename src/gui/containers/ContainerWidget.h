@@ -112,6 +112,10 @@ signals:
     void dockedMoved();
     void dockModeChanged(DockMode mode);
 
+public:
+    // Re-apply pin-on-top window flag (call after reparenting to FloatingContainer)
+    void setTopMost();
+
 protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void leaveEvent(QEvent* event) override;
@@ -122,7 +126,6 @@ private:
     void updateTitleBar();
     void updateTitle();
     void setupBorder();
-    void setTopMost();
 
     void beginDrag(const QPoint& pos);
     void updateDrag(const QPoint& globalPos);
