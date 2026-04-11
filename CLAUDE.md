@@ -202,8 +202,8 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 * `FloatingContainer` — top-level window wrapper for floating containers (Thetis frmMeterDisplay equivalent)
 * `ContainerManager` — singleton container lifecycle: 3 dock modes (panel/overlay/floating), axis-lock reposition, QSplitter, persistence
 * `MeterWidget` — GPU meter renderer (QRhiWidget — 3 pipelines: background texture, vertex geometry, QPainter overlay); one per container, renders all MeterItems in single draw pass
-* `MeterItem` — base class for composable meter elements (normalized 0-1 positioning, data binding, z-order); concrete types: BarItem, TextItem, ScaleItem, SolidColourItem, ImageItem
-* `ItemGroup` — composites N MeterItems into named presets; factory methods for common meter layouts
+* `MeterItem` — base class for composable meter elements (normalized 0-1 positioning, data binding, z-order); concrete types: BarItem (+ Edge mode), TextItem, ScaleItem, SolidColourItem, ImageItem, NeedleItem (+ ANANMM/CrossNeedle calibration extensions), SpacerItem, FadeCoverItem, LEDItem, HistoryGraphItem, MagicEyeItem, NeedleScalePwrItem, SignalTextItem, DialItem, TextOverlayItem, WebImageItem, FilterDisplayItem, RotatorItem
+* `ItemGroup` — composites N MeterItems into named presets; 35+ factory methods including S-Meter, Power/SWR, ANANMM (7-needle), CrossNeedle (dual fwd/rev), MagicEye, History, SignalText, and all TX bar meters
 * `MeterPoller` — QTimer-based WDSP meter polling (100ms/10fps); calls RxChannel::getMeter(), pushes to bound MeterWidgets
 * `AppSettings` — custom XML settings persistence (NOT QSettings)
 * `MainWindow` — wires everything together, signal routing hub; uses QSplitter for spectrum + container panel
@@ -337,7 +337,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | [phase3g3-core-meter-groups.md](docs/superpowers/plans/2026-04-10-phase3g3-core-meter-groups.md) | 3G-3: Core Meter Groups | **Complete** |
 | [phase3-ui-skeleton-plan-v2.md](docs/architecture/phase3-ui-skeleton-plan-v2.md) | 3-UI: Full UI Skeleton | **Complete** |
 | [phase3g4-g6-advanced-meters-design.md](docs/architecture/phase3g4-g6-advanced-meters-design.md) | 3G-4/5/6: Advanced Meters Design Spec | **Approved** |
-| [phase3g4-advanced-meters-plan.md](docs/architecture/phase3g4-advanced-meters-plan.md) | 3G-4: Advanced Meter Items | **Ready** |
+| [phase3g4-advanced-meters-plan.md](docs/architecture/phase3g4-advanced-meters-plan.md) | 3G-4: Advanced Meter Items | **Complete** |
 | [phase3f-multi-panadapter-plan.md](docs/architecture/phase3f-multi-panadapter-plan.md) | 3F: Multi-Panadapter + DDC Assignment | Planning (after 3I-4) |
 
 ### Protocol Reference (`docs/protocols/`)
@@ -368,7 +368,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | **3G-2: MeterWidget GPU Renderer** | **QRhi-based meter rendering engine** | **Complete** |
 | **3G-3: Core Meter Groups** | **S-Meter, Power/SWR, ALC presets** | **Complete** |
 | **3-UI: Full UI Skeleton** | **12 applets, 9-menu bar, SetupDialog (47pp), SpectrumOverlayPanel** | **Complete** |
-| 3G-4: Advanced Meter Items | History graph, magic eye, dial, LED | Planned |
+| **3G-4: Advanced Meter Items** | **12 item types + ANANMM/CrossNeedle presets + Edge mode** | **Complete** |
 | 3G-5: Interactive Meter Items | Band/mode/filter buttons, VFO display, clock | Planned |
 | 3G-6: Container Settings Dialog | Full composability UI, import/export | Planned |
 | 3I-1: Basic SSB TX | TxChannel, mic input, MOX state machine, I/Q output | Planned |

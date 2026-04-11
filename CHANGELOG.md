@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+### Added — Phase 3G-4: Advanced Meter Items
+
+**12 new MeterItem types (passive/display):**
+- `SpacerItem` — layout spacer with gradient fill (from Thetis clsSpacerItem)
+- `FadeCoverItem` — RX/TX transition overlay (from Thetis clsFadeCover)
+- `LEDItem` — LED indicator: 3 shapes (Square/Round/Triangle), 2 styles (Flat/ThreeD), blink/pulsate (from Thetis clsLed)
+- `HistoryGraphItem` — scrolling time-series with dual-axis ring buffer, auto-scaling (from Thetis clsHistoryItem)
+- `MagicEyeItem` — vacuum tube magic eye with green phosphor arc (from Thetis clsMagicEyeItem)
+- `NeedleScalePwrItem` — non-linear power scale labels for needle arcs (from Thetis clsNeedleScalePwrItem)
+- `SignalTextItem` — S-units/dBm/uV signal display with peak hold and bar styles (from Thetis clsSignalText)
+- `DialItem` — circular dial with VFO/ACCEL/LOCK quadrant buttons (from Thetis clsDialDisplay)
+- `TextOverlayItem` — two-line text with %VARIABLE% substitution parser (from Thetis clsTextOverlay)
+- `WebImageItem` — async web-fetched image with periodic refresh (from Thetis clsWebImage)
+- `FilterDisplayItem` — mini passband spectrum/waterfall with filter edges and notch overlays (from Thetis clsFilterItem)
+- `RotatorItem` — antenna rotator compass dial with AZ/ELE/BOTH modes (from Thetis clsRotatorItem)
+
+**Complex composite presets:**
+- ANANMM 7-needle multi-meter (signal, volts, amps, power, SWR, compression, ALC) with exact Thetis calibration points
+- CrossNeedle dual fwd/rev power meter with mirrored CounterClockwise geometry
+
+**NeedleItem extensions:** scaleCalibration, needleOffset, radiusRatio, lengthFactor, direction (CW/CCW), onlyWhenRx/Tx, displayGroup, historyEnabled/Color, normaliseTo100W
+
+**Edge meter display mode:** BarItem gains Filled/Edge style with 3-line indicator (from Thetis Edge meter)
+
+**15+ bar preset factories:** Signal, AvgSignal, MaxBin, ADC, AGC, PBSNR, EQ, Leveler, ALC variants, CFC variants
+
+**MeterBinding extensions:** SignalMaxBin(7), PbSnr(8), TxEq-TxCfcGain(106-112), HwVolts/Amps/Temp(200-202), RotatorAz/Ele(300-301)
+
 ### Fixed — Applet Panel Layout
 - RxApplet: fix STEP row overflow (138px content in 99px column), change filter grid
   from 2×5 to 3-column layout matching AetherSDR, remove fixedWidth from RIT/XIT
