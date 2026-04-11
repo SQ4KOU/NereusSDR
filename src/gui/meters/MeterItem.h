@@ -286,6 +286,8 @@ public:
     static constexpr float kArcEndDeg   = 125.0f;  // left end (S0)
     static constexpr float kRadiusRatio = 0.85f;    // radius = width * 0.85
     static constexpr float kCenterYRatio = 0.65f;   // cy = h + radius - h*0.65
+    // From AetherSDR sizeHint 280x140 — lock aspect ratio to match
+    static constexpr float kTargetAspect = 2.0f;    // width / height
 
     // --- S-meter scale constants (from AetherSDR SMeterWidget.h) ---
     static constexpr float kS0Dbm  = -127.0f;      // S0
@@ -325,6 +327,10 @@ private:
     void paintBackground(QPainter& p, int widgetW, int widgetH);
     void paintOverlayStatic(QPainter& p, int widgetW, int widgetH);
     void paintOverlayDynamic(QPainter& p, int widgetW, int widgetH);
+
+    // Compute aspect-locked drawing rect (2:1 like AetherSDR 280x140),
+    // centered within the item's pixel rect.
+    QRect meterRect(int widgetW, int widgetH) const;
 
     QString m_sourceLabel{QStringLiteral("S-Meter")};
     float   m_smoothedDbm{kS0Dbm};

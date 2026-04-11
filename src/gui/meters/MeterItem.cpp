@@ -454,6 +454,31 @@ NeedleItem::NeedleItem(QObject* parent)
 {
 }
 
+// From AetherSDR sizeHint 280x140: lock to 2:1 aspect ratio.
+// Centers the meter drawing area within the item's pixel rect.
+QRect NeedleItem::meterRect(int widgetW, int widgetH) const
+{
+    const QRect pr = pixelRect(widgetW, widgetH);
+    const int pw = pr.width();
+    const int ph = pr.height();
+    const float currentAspect = static_cast<float>(pw) / qMax(1.0f, static_cast<float>(ph));
+
+    int ew, eh;
+    if (currentAspect > kTargetAspect) {
+        // Too wide — constrain by height
+        eh = ph;
+        ew = static_cast<int>(ph * kTargetAspect);
+    } else {
+        // Too tall — constrain by width
+        ew = pw;
+        eh = static_cast<int>(pw / kTargetAspect);
+    }
+
+    const int ex = pr.left() + (pw - ew) / 2;
+    const int ey = pr.top() + (ph - eh) / 2;
+    return QRect(ex, ey, ew, eh);
+}
+
 bool NeedleItem::participatesIn(Layer layer) const
 {
     // NeedleItem renders across all 4 pipeline layers
@@ -540,7 +565,7 @@ void NeedleItem::paint(QPainter& p, int widgetW, int widgetH)
     paintOverlayStatic(p, widgetW, widgetH);
 
     // CPU needle: draw as a simple line (no vertex geometry available)
-    const QRect rect = pixelRect(widgetW, widgetH);
+    const QRect rect = meterRect(widgetW, widgetH);
     const float pw = static_cast<float>(rect.width());
     const float ph = static_cast<float>(rect.height());
     const float cx = rect.left() + pw * 0.5f;
@@ -573,7 +598,7 @@ void NeedleItem::paint(QPainter& p, int widgetW, int widgetH)
 // From AetherSDR SMeterWidget.cpp paintEvent() — arc drawing section
 void NeedleItem::paintBackground(QPainter& p, int widgetW, int widgetH)
 {
-    const QRect rect = pixelRect(widgetW, widgetH);
+    const QRect rect = meterRect(widgetW, widgetH);
     const float pw = static_cast<float>(rect.width());
     const float ph = static_cast<float>(rect.height());
 
@@ -628,7 +653,7 @@ void NeedleItem::paintBackground(QPainter& p, int widgetW, int widgetH)
 // From AetherSDR SMeterWidget.cpp paintEvent() — needle drawing section
 void NeedleItem::emitVertices(QVector<float>& verts, int widgetW, int widgetH)
 {
-    const QRect rect = pixelRect(widgetW, widgetH);
+    const QRect rect = meterRect(widgetW, widgetH);
     const float pw = static_cast<float>(rect.width());
     const float ph = static_cast<float>(rect.height());
     const float cx = rect.left() + pw * 0.5f;
@@ -736,7 +761,7 @@ void NeedleItem::emitVertices(QVector<float>& verts, int widgetW, int widgetH)
 // From AetherSDR SMeterWidget.cpp paintEvent() — tick drawing section
 void NeedleItem::paintOverlayStatic(QPainter& p, int widgetW, int widgetH)
 {
-    const QRect rect = pixelRect(widgetW, widgetH);
+    const QRect rect = meterRect(widgetW, widgetH);
     const float pw = static_cast<float>(rect.width());
     const float ph = static_cast<float>(rect.height());
     const float cx = rect.left() + pw * 0.5f;
@@ -823,7 +848,7 @@ void NeedleItem::paintOverlayStatic(QPainter& p, int widgetW, int widgetH)
 // From AetherSDR SMeterWidget.cpp paintEvent() — readout drawing section
 void NeedleItem::paintOverlayDynamic(QPainter& p, int widgetW, int widgetH)
 {
-    const QRect rect = pixelRect(widgetW, widgetH);
+    const QRect rect = meterRect(widgetW, widgetH);
     const float ph = static_cast<float>(rect.height());
 
     // Compute source label baseline for vertical positioning
