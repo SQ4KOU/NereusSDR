@@ -1302,7 +1302,9 @@ void ContainerSettingsDialog::buildCommonPropsPage()
         return;  // Already built
     }
 
-    // Wrap in a scroll area so small dialogs don't clip content
+    // Wrap in a scroll area so small dialogs don't clip content.
+    // m_commonPropsPage must point to the scroll area (the widget added to
+    // m_propertyStack) so that setCurrentWidget(m_commonPropsPage) works.
     QScrollArea* scroll = new QScrollArea(m_propertyStack);
     scroll->setWidgetResizable(true);
     scroll->setStyleSheet(
@@ -1310,21 +1312,23 @@ void ContainerSettingsDialog::buildCommonPropsPage()
         "QScrollBar:vertical { background: #111122; width: 8px; }"
         "QScrollBar::handle:vertical { background: #203040; border-radius: 3px; }");
 
-    m_commonPropsPage = new QWidget();
-    m_commonPropsPage->setStyleSheet("background: #0a0a18;");
-    scroll->setWidget(m_commonPropsPage);
+    m_commonPropsPage = scroll;  // Stack switches on this widget
 
-    QVBoxLayout* pageLayout = new QVBoxLayout(m_commonPropsPage);
+    QWidget* innerPage = new QWidget();
+    innerPage->setStyleSheet("background: #0a0a18;");
+    scroll->setWidget(innerPage);
+
+    QVBoxLayout* pageLayout = new QVBoxLayout(innerPage);
     pageLayout->setContentsMargins(8, 8, 8, 8);
     pageLayout->setSpacing(6);
 
     // --- Position section ---
-    QLabel* posHeader = new QLabel(QStringLiteral("Position (normalized 0\u20131)"), m_commonPropsPage);
+    QLabel* posHeader = new QLabel(QStringLiteral("Position (normalized 0\u20131)"), innerPage);
     posHeader->setStyleSheet(kSectionHeaderStyle);
     pageLayout->addWidget(posHeader);
 
     auto makeDoubleSpinBox = [&](double min, double max, double step, int decimals) -> QDoubleSpinBox* {
-        QDoubleSpinBox* sb = new QDoubleSpinBox(m_commonPropsPage);
+        QDoubleSpinBox* sb = new QDoubleSpinBox(innerPage);
         sb->setRange(min, max);
         sb->setSingleStep(step);
         sb->setDecimals(decimals);
@@ -1335,13 +1339,13 @@ void ContainerSettingsDialog::buildCommonPropsPage()
     QGridLayout* posGrid = new QGridLayout();
     posGrid->setSpacing(4);
 
-    QLabel* xLabel = new QLabel(QStringLiteral("X:"), m_commonPropsPage);
+    QLabel* xLabel = new QLabel(QStringLiteral("X:"), innerPage);
     xLabel->setStyleSheet(kLabelStyle);
-    QLabel* yLabel = new QLabel(QStringLiteral("Y:"), m_commonPropsPage);
+    QLabel* yLabel = new QLabel(QStringLiteral("Y:"), innerPage);
     yLabel->setStyleSheet(kLabelStyle);
-    QLabel* wLabel = new QLabel(QStringLiteral("W:"), m_commonPropsPage);
+    QLabel* wLabel = new QLabel(QStringLiteral("W:"), innerPage);
     wLabel->setStyleSheet(kLabelStyle);
-    QLabel* hLabel = new QLabel(QStringLiteral("H:"), m_commonPropsPage);
+    QLabel* hLabel = new QLabel(QStringLiteral("H:"), innerPage);
     hLabel->setStyleSheet(kLabelStyle);
 
     m_propX = makeDoubleSpinBox(0.0, 1.0, 0.01, 3);
@@ -1360,14 +1364,14 @@ void ContainerSettingsDialog::buildCommonPropsPage()
     pageLayout->addLayout(posGrid);
 
     // --- Z-Order section ---
-    QLabel* zHeader = new QLabel(QStringLiteral("Z-Order"), m_commonPropsPage);
+    QLabel* zHeader = new QLabel(QStringLiteral("Z-Order"), innerPage);
     zHeader->setStyleSheet(kSectionHeaderStyle);
     pageLayout->addWidget(zHeader);
 
     QHBoxLayout* zRow = new QHBoxLayout();
-    QLabel* zLabel = new QLabel(QStringLiteral("Z:"), m_commonPropsPage);
+    QLabel* zLabel = new QLabel(QStringLiteral("Z:"), innerPage);
     zLabel->setStyleSheet(kLabelStyle);
-    m_propZOrder = new QSpinBox(m_commonPropsPage);
+    m_propZOrder = new QSpinBox(innerPage);
     m_propZOrder->setRange(-100, 100);
     m_propZOrder->setStyleSheet(kSpinStyle);
     zRow->addWidget(zLabel);
@@ -1376,14 +1380,14 @@ void ContainerSettingsDialog::buildCommonPropsPage()
     pageLayout->addLayout(zRow);
 
     // --- Binding section ---
-    QLabel* bindHeader = new QLabel(QStringLiteral("Data Binding"), m_commonPropsPage);
+    QLabel* bindHeader = new QLabel(QStringLiteral("Data Binding"), innerPage);
     bindHeader->setStyleSheet(kSectionHeaderStyle);
     pageLayout->addWidget(bindHeader);
 
     QHBoxLayout* bindRow = new QHBoxLayout();
-    QLabel* bindLabel = new QLabel(QStringLiteral("Source:"), m_commonPropsPage);
+    QLabel* bindLabel = new QLabel(QStringLiteral("Source:"), innerPage);
     bindLabel->setStyleSheet(kLabelStyle);
-    m_propBinding = new QComboBox(m_commonPropsPage);
+    m_propBinding = new QComboBox(innerPage);
     m_propBinding->setStyleSheet(
         "QComboBox { background: #0a0a18; color: #c8d8e8;"
         "  border: 1px solid #1e2e3e; border-radius: 3px; padding: 2px; }"
@@ -1395,13 +1399,13 @@ void ContainerSettingsDialog::buildCommonPropsPage()
     pageLayout->addLayout(bindRow);
 
     // --- Separator ---
-    QFrame* sep = new QFrame(m_commonPropsPage);
+    QFrame* sep = new QFrame(innerPage);
     sep->setFrameShape(QFrame::HLine);
     sep->setStyleSheet("QFrame { color: #203040; }");
     pageLayout->addWidget(sep);
 
     // --- Type-specific area ---
-    m_typePropsContainer = new QWidget(m_commonPropsPage);
+    m_typePropsContainer = new QWidget(innerPage);
     m_typePropsLayout = new QVBoxLayout(m_typePropsContainer);
     m_typePropsLayout->setContentsMargins(0, 0, 0, 0);
     m_typePropsLayout->setSpacing(4);
@@ -1410,13 +1414,11 @@ void ContainerSettingsDialog::buildCommonPropsPage()
     // Stretch at bottom
     pageLayout->addStretch();
 
-    // Connect all controls to save + preview
+    // Connect all controls to save + preview (no list rebuild to avoid re-trigger)
     auto connectSave = [this]() {
         const int row = m_itemList->currentRow();
         if (row >= 0 && row < m_workingItems.size()) {
             saveCommonProperties(row);
-            refreshItemList();
-            m_itemList->setCurrentRow(row);
             updatePreview();
         }
     };
@@ -1428,8 +1430,8 @@ void ContainerSettingsDialog::buildCommonPropsPage()
     connect(m_propZOrder,  QOverload<int>::of(&QSpinBox::valueChanged),          this, connectSave);
     connect(m_propBinding, QOverload<int>::of(&QComboBox::currentIndexChanged),  this, connectSave);
 
-    // Add to stack (wrapped in scroll)
-    m_propertyStack->addWidget(scroll);
+    // Add scroll area (m_commonPropsPage) to stack
+    m_propertyStack->addWidget(m_commonPropsPage);
 }
 
 // ---------------------------------------------------------------------------
