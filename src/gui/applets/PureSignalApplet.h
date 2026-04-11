@@ -11,6 +11,18 @@ class HGauge;
 
 // PureSignal / PS-A feedback predistortion controls.
 // NYI — Phase 3I-4 (PureSignal DDC + calcc/IQC engine).
+//
+// Controls:
+//   1. Calibrate button      — QPushButton (non-toggle)
+//   2. Auto-cal toggle       — QPushButton green "Auto"
+//   3. Feedback level gauge  — HGauge (0-100, yellow@70, red@90, title "FB Level")
+//   4. Correction mag gauge  — HGauge (0-100, yellow@80, red@95, title "Correction")
+//   5. Save coefficients     — QPushButton "Save"
+//   6. Restore coefficients  — QPushButton "Restore"
+//   7. Two-tone test         — QPushButton green toggle "2-Tone"
+//   8. Status LEDs           — 3x QLabel (8x8 circles: "Cal", "Run", "Fbk")
+//
+// Plus: info readout labels (Iterations, Feedback dB, Correction dB).
 class PureSignalApplet : public AppletWidget {
     Q_OBJECT
 public:
@@ -21,25 +33,30 @@ public:
     void    syncFromModel() override;
 
 private:
-    // Row 1 — calibration controls
+    void buildUI();
+
+    // Control 1 — calibrate button (non-toggle)
     QPushButton* m_calibrateBtn  = nullptr;
-    QPushButton* m_autoCalBtn    = nullptr;  // green toggle
+    // Control 2 — auto-cal toggle (green)
+    QPushButton* m_autoCalBtn    = nullptr;
 
-    // Row 2 — gauges
-    HGauge* m_feedbackGauge      = nullptr;  // feedback level 0–100, red@80
-    HGauge* m_correctionGauge    = nullptr;  // correction magnitude 0–100
+    // Control 3 — feedback level gauge (0-100, yellow@70, red@90)
+    HGauge* m_feedbackGauge      = nullptr;
+    // Control 4 — correction magnitude gauge (0-100, yellow@80, red@95)
+    HGauge* m_correctionGauge    = nullptr;
 
-    // Row 3 — coefficient management
+    // Control 5 — save coefficients
     QPushButton* m_saveBtn       = nullptr;
+    // Control 6 — restore coefficients
     QPushButton* m_restoreBtn    = nullptr;
 
-    // Row 4 — two-tone test
+    // Control 7 — two-tone test (green toggle)
     QPushButton* m_twoToneBtn    = nullptr;
 
-    // Row 5 — status LEDs (x3)
+    // Control 8 — status LEDs: "Cal", "Run", "Fbk"
     QLabel* m_led[3]             = {};
 
-    // Row 6 — info readout (x3)
+    // Info readout labels
     QLabel* m_iterations         = nullptr;
     QLabel* m_feedbackDb         = nullptr;
     QLabel* m_correctionDb       = nullptr;
