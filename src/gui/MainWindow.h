@@ -93,8 +93,12 @@ private:
     QAction*      m_modeActions[12]  = {};
     QActionGroup* m_modeActionGroup  = nullptr;
 
-    // PhoneCwApplet (Phase 3I-1 NYI shell — Phone/CW/FM 30 controls)
+    // Applets (Phase 3-UI)
+    class RxApplet* m_rxApplet{nullptr};
     class PhoneCwApplet* m_phoneCwApplet{nullptr};
+
+    // Spectrum overlay panel
+    class SpectrumOverlayPanel* m_overlayPanel{nullptr};
 };
 
 } // namespace NereusSDR

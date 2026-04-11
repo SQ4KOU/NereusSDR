@@ -19,7 +19,12 @@
 #include "meters/ItemGroup.h"
 #include "meters/MeterPoller.h"
 #include "applets/AppletPanelWidget.h"
+#include "applets/RxApplet.h"
+#include "applets/TxApplet.h"
 #include "applets/PhoneCwApplet.h"
+#include "applets/EqApplet.h"
+#include "SpectrumOverlayPanel.h"
+#include "SetupDialog.h"
 
 #include <cmath>
 
@@ -146,6 +151,11 @@ void MainWindow::buildUI()
     m_spectrumWidget->loadSettings();
     m_spectrumWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     layout->addWidget(m_spectrumWidget, 1);
+
+    // Left overlay panel (SpectrumOverlayPanel) — child of spectrum widget
+    m_overlayPanel = new SpectrumOverlayPanel(m_spectrumWidget);
+    m_overlayPanel->move(4, 4);
+    m_overlayPanel->show();
 
     // Zoom slider bar below spectrum
     auto* zoomBar = new QSlider(Qt::Horizontal, spectrumPane);
@@ -300,17 +310,30 @@ void MainWindow::populateDefaultMeter()
     alc->installInto(m_meterWidget, 0.0f, 0.85f, 1.0f, 0.15f);
     delete alc;
 
-    // Build an AppletPanelWidget: MeterWidget on top, PhoneCwApplet below.
+    // Build an AppletPanelWidget: MeterWidget on top, then all applets below.
+    // This is a single scrollable content widget per the v2 plan.
     auto* panel = new AppletPanelWidget();
     panel->addWidget(m_meterWidget, QStringLiteral("Meters"));
 
-    // PhoneCwApplet — 30 controls (Phone 13 + CW 9 + FM 8), all NYI.
+    // RxApplet — Tier 1 wired to SliceModel (slice attached in wireSliceToSpectrum)
+    m_rxApplet = new RxApplet(nullptr, m_radioModel, nullptr);
+    panel->addApplet(m_rxApplet);
+
+    // TxApplet — NYI shell (Phase 3I-1)
+    auto* txApplet = new TxApplet(m_radioModel, nullptr);
+    panel->addApplet(txApplet);
+
+    // PhoneCwApplet — Phone + CW pages, NYI
     m_phoneCwApplet = new PhoneCwApplet(m_radioModel, nullptr);
     panel->addApplet(m_phoneCwApplet);
 
+    // EqApplet — 8-band EQ, NYI
+    auto* eqApplet = new EqApplet(m_radioModel, nullptr);
+    panel->addApplet(eqApplet);
+
     c0->setContent(panel);
     qCDebug(lcMeter) << "Installed default meter layout: S-Meter + Power/SWR + ALC";
-    qCDebug(lcContainer) << "Added PhoneCwApplet to Container #0";
+    qCDebug(lcContainer) << "Container #0: Meters + RxApplet + TxApplet + PhoneCwApplet + EqApplet";
 }
 
 void MainWindow::buildMenuBar()
@@ -321,8 +344,9 @@ void MainWindow::buildMenuBar()
     QMenu* fileMenu = menuBar()->addMenu(QStringLiteral("&File"));
 
     fileMenu->addAction(QStringLiteral("&Settings..."), this, [this]() {
-        // SetupDialog NYI — placeholder until SetupDialog class is implemented
-        qCDebug(lcConnection) << "SetupDialog NYI";
+        auto* dialog = new SetupDialog(m_radioModel, this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->show();
     });
 
     {
@@ -1228,6 +1252,19 @@ void MainWindow::wireSliceToSpectrum()
 
     // Position the VFO flag
     m_spectrumWidget->updateVfoPositions();
+
+    // --- Wire RxApplet to active slice ---
+    if (m_rxApplet) {
+        m_rxApplet->setSlice(slice);
+    }
+
+    // --- Wire overlay Band flyout to slice ---
+    if (m_overlayPanel) {
+        connect(m_overlayPanel, &SpectrumOverlayPanel::bandSelected,
+                this, [slice](const QString& /*name*/, double freqHz, const QString& /*mode*/) {
+            slice->setFrequency(freqHz);
+        });
+    }
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event)

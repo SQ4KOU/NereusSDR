@@ -380,14 +380,20 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
         vbox->addLayout(row);
     }
 
-    // ── Control 11: VOX toggle + level slider ────────────────────────────────
+    // ── Control 10: VOX toggle + level slider + delay slider ────────────────
+    // Spec: QPushButton green 36px + QSlider level + QSlider delay + 2 insets
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
-        m_voxBtn = new QPushButton(QStringLiteral("VOX"), page);
+        auto* voxLbl = new QLabel(QStringLiteral("VOX"), page);
+        voxLbl->setStyleSheet(kDimLabelStyle);
+        voxLbl->setFixedWidth(24);
+        row->addWidget(voxLbl);
+
+        m_voxBtn = new QPushButton(QStringLiteral("ON"), page);
         m_voxBtn->setCheckable(true);
-        m_voxBtn->setFixedWidth(48);
+        m_voxBtn->setFixedWidth(36);
         m_voxBtn->setFixedHeight(22);
         m_voxBtn->setStyleSheet(QString(kButtonBase) + kGreenActive);
         m_voxBtn->setAccessibleName(QStringLiteral("VOX voice-operated transmit"));
@@ -400,11 +406,24 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
         m_voxSlider->setAccessibleName(QStringLiteral("VOX level"));
         row->addWidget(m_voxSlider, 1);
 
-        auto* voxLabel = new QLabel(QStringLiteral("50"), page);
-        voxLabel->setStyleSheet(kLabelStyle);
-        voxLabel->setFixedWidth(22);
-        voxLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        row->addWidget(voxLabel);
+        m_voxLvlLabel = new QLabel(QStringLiteral("50"), page);
+        m_voxLvlLabel->setStyleSheet(kInsetValueStyle);
+        m_voxLvlLabel->setFixedWidth(22);
+        m_voxLvlLabel->setAlignment(Qt::AlignCenter);
+        row->addWidget(m_voxLvlLabel);
+
+        m_voxDlySlider = new QSlider(Qt::Horizontal, page);
+        m_voxDlySlider->setRange(0, 100);
+        m_voxDlySlider->setValue(30);
+        m_voxDlySlider->setStyleSheet(kSliderStyle);
+        m_voxDlySlider->setAccessibleName(QStringLiteral("VOX delay"));
+        row->addWidget(m_voxDlySlider, 1);
+
+        m_voxDlyLabel = new QLabel(QStringLiteral("300"), page);
+        m_voxDlyLabel->setStyleSheet(kInsetValueStyle);
+        m_voxDlyLabel->setFixedWidth(26);
+        m_voxDlyLabel->setAlignment(Qt::AlignCenter);
+        row->addWidget(m_voxDlyLabel);
 
         vbox->addLayout(row);
     }
@@ -481,24 +500,53 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
         vbox->addLayout(highRow);
     }
 
-    // ── Mark all Phone controls NYI (Phase 3I-1) ─────────────────────────────
-    NyiOverlay::markNyi(m_levelGauge,       kNyiPhone);
-    NyiOverlay::markNyi(m_compGauge,        kNyiPhone);
-    NyiOverlay::markNyi(m_micProfileCombo,  kNyiPhone);
-    NyiOverlay::markNyi(m_micSourceCombo,   kNyiPhone);
-    NyiOverlay::markNyi(m_micLevelSlider,   kNyiPhone);
-    NyiOverlay::markNyi(m_accBtn,           kNyiPhone);
-    NyiOverlay::markNyi(m_procBtn,          kNyiPhone);
-    NyiOverlay::markNyi(m_procSlider,       kNyiPhone);
-    NyiOverlay::markNyi(m_daxBtn,           kNyiPhone);
-    NyiOverlay::markNyi(m_monBtn,           kNyiPhone);
-    NyiOverlay::markNyi(m_monSlider,        kNyiPhone);
-    NyiOverlay::markNyi(m_voxBtn,           kNyiPhone);
-    NyiOverlay::markNyi(m_voxSlider,        kNyiPhone);
-    NyiOverlay::markNyi(m_dexpBtn,          kNyiPhone);
-    NyiOverlay::markNyi(m_dexpSlider,       kNyiPhone);
-    NyiOverlay::markNyi(m_txFiltLowSlider,  kNyiPhone);
-    NyiOverlay::markNyi(m_txFiltHighSlider, kNyiPhone);
+    // ── Control 13: AM Carrier level slider (0-100) + inset "25" ────────────
+    // Spec: Phase 3I-3
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        auto* lbl = new QLabel(QStringLiteral("AM Car:"), page);
+        lbl->setStyleSheet(kDimLabelStyle);
+        lbl->setFixedWidth(40);
+        row->addWidget(lbl);
+
+        m_amCarSlider = new QSlider(Qt::Horizontal, page);
+        m_amCarSlider->setRange(0, 100);
+        m_amCarSlider->setValue(25);
+        m_amCarSlider->setStyleSheet(kSliderStyle);
+        m_amCarSlider->setAccessibleName(QStringLiteral("AM carrier level"));
+        row->addWidget(m_amCarSlider, 1);
+
+        m_amCarLabel = new QLabel(QStringLiteral("25"), page);
+        m_amCarLabel->setStyleSheet(kInsetValueStyle);
+        m_amCarLabel->setFixedWidth(30);
+        m_amCarLabel->setAlignment(Qt::AlignCenter);
+        row->addWidget(m_amCarLabel);
+
+        vbox->addLayout(row);
+    }
+
+    // ── Mark all Phone controls NYI ───────────────────────────────────────────
+    NyiOverlay::markNyi(m_levelGauge,       kNyiPhone);   // #1
+    NyiOverlay::markNyi(m_compGauge,        kNyiProc);    // #2 — Phase 3I-3
+    NyiOverlay::markNyi(m_micProfileCombo,  kNyiPhone);   // #3
+    NyiOverlay::markNyi(m_micSourceCombo,   kNyiPhone);   // #4
+    NyiOverlay::markNyi(m_micLevelSlider,   kNyiPhone);   // #5
+    NyiOverlay::markNyi(m_accBtn,           kNyiPhone);   // #6
+    NyiOverlay::markNyi(m_procBtn,          kNyiProc);    // #7 — Phase 3I-3
+    NyiOverlay::markNyi(m_procSlider,       kNyiProc);    // #7 slider
+    NyiOverlay::markNyi(m_daxBtn,           kNyiDax);     // #8 — Phase 3-DAX
+    NyiOverlay::markNyi(m_monBtn,           kNyiPhone);   // #9
+    NyiOverlay::markNyi(m_monSlider,        kNyiPhone);   // #9 slider
+    NyiOverlay::markNyi(m_voxBtn,           kNyiProc);    // #10 — Phase 3I-3
+    NyiOverlay::markNyi(m_voxSlider,        kNyiProc);    // #10 level
+    NyiOverlay::markNyi(m_voxDlySlider,     kNyiProc);    // #10 delay
+    NyiOverlay::markNyi(m_dexpBtn,          kNyiProc);    // #11 — Phase 3I-3
+    NyiOverlay::markNyi(m_dexpSlider,       kNyiProc);    // #11 slider
+    NyiOverlay::markNyi(m_txFiltLowSlider,  kNyiProc);    // #12 — Phase 3I-3
+    NyiOverlay::markNyi(m_txFiltHighSlider, kNyiProc);    // #12 hi
+    NyiOverlay::markNyi(m_amCarSlider,      kNyiProc);    // #13 — Phase 3I-3
 }
 
 // ── CW page (9 controls) ──────────────────────────────────────────────────────
