@@ -5,6 +5,7 @@
 
 #include "EqApplet.h"
 #include "NyiOverlay.h"
+#include "gui/ComboStyle.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -104,9 +105,17 @@ EqApplet::EqApplet(RadioModel* model, QWidget* parent)
 
 void EqApplet::buildUI()
 {
-    auto* vbox = new QVBoxLayout(this);
-    vbox->setContentsMargins(4, 2, 4, 4);
+    // Outer layout: zero margins (title bar flush to edges)
+    // Body: padded content — matches AetherSDR EqApplet.cpp outer/vbox pattern
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    auto* body = new QWidget(this);
+    auto* vbox = new QVBoxLayout(body);
+    vbox->setContentsMargins(4, 4, 4, 4);
     vbox->setSpacing(4);
+    outer->addWidget(body);
 
     // ── Control row: ON | Reset | RX | TX ────────────────────────────────────
     {
@@ -168,19 +177,19 @@ void EqApplet::buildUI()
 
         // Left spacer aligns with dB scale (fixedWidth 20)
         auto* spacerL = new QWidget(this);
-        spacerL->setFixedWidth(20);
+        spacerL->setFixedWidth(16);
         row->addWidget(spacerL);
 
         for (int i = 0; i < kEqBandCount; ++i) {
             auto* lbl = new QLabel(QString::fromLatin1(kBandLabels[i]), this);
             lbl->setAlignment(Qt::AlignCenter);
-            lbl->setStyleSheet(QStringLiteral("QLabel { color: #8090a0; font-size: 10px; }"));
+            lbl->setStyleSheet(QStringLiteral("QLabel { color: #8090a0; font-size: 9px; }"));
             row->addWidget(lbl, 1);
         }
 
         // Right spacer aligns with right dB scale (fixedWidth 20)
         auto* spacerR = new QWidget(this);
-        spacerR->setFixedWidth(20);
+        spacerR->setFixedWidth(16);
         row->addWidget(spacerR);
 
         vbox->addLayout(row);
@@ -199,7 +208,7 @@ void EqApplet::buildUI()
             auto* topLbl = new QLabel(QStringLiteral("+10"), this);
             topLbl->setStyleSheet(QStringLiteral("QLabel { color: #607080; font-size: 9px; }"));
             topLbl->setAlignment(Qt::AlignRight | Qt::AlignTop);
-            topLbl->setFixedWidth(20);
+            topLbl->setFixedWidth(16);
             col->addWidget(topLbl);
 
             col->addStretch();
@@ -207,7 +216,7 @@ void EqApplet::buildUI()
             auto* midLbl = new QLabel(QStringLiteral("0"), this);
             midLbl->setStyleSheet(QStringLiteral("QLabel { color: #8090a0; font-size: 9px; }"));
             midLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-            midLbl->setFixedWidth(20);
+            midLbl->setFixedWidth(16);
             col->addWidget(midLbl);
 
             col->addStretch();
@@ -215,7 +224,7 @@ void EqApplet::buildUI()
             auto* botLbl = new QLabel(QStringLiteral("-10"), this);
             botLbl->setStyleSheet(QStringLiteral("QLabel { color: #607080; font-size: 9px; }"));
             botLbl->setAlignment(Qt::AlignRight | Qt::AlignBottom);
-            botLbl->setFixedWidth(20);
+            botLbl->setFixedWidth(16);
             col->addWidget(botLbl);
 
             row->addLayout(col);
@@ -259,7 +268,7 @@ void EqApplet::buildUI()
             auto* topLbl = new QLabel(QStringLiteral("+10"), this);
             topLbl->setStyleSheet(QStringLiteral("QLabel { color: #607080; font-size: 9px; }"));
             topLbl->setAlignment(Qt::AlignLeft | Qt::AlignTop);
-            topLbl->setFixedWidth(20);
+            topLbl->setFixedWidth(16);
             col->addWidget(topLbl);
 
             col->addStretch();
@@ -267,7 +276,7 @@ void EqApplet::buildUI()
             auto* midLbl = new QLabel(QStringLiteral("0"), this);
             midLbl->setStyleSheet(QStringLiteral("QLabel { color: #8090a0; font-size: 9px; }"));
             midLbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-            midLbl->setFixedWidth(20);
+            midLbl->setFixedWidth(16);
             col->addWidget(midLbl);
 
             col->addStretch();
@@ -275,7 +284,7 @@ void EqApplet::buildUI()
             auto* botLbl = new QLabel(QStringLiteral("-10"), this);
             botLbl->setStyleSheet(QStringLiteral("QLabel { color: #607080; font-size: 9px; }"));
             botLbl->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
-            botLbl->setFixedWidth(20);
+            botLbl->setFixedWidth(16);
             col->addWidget(botLbl);
 
             row->addLayout(col);
@@ -310,6 +319,7 @@ void EqApplet::buildUI()
         m_presetCombo->addItem(QStringLiteral("Music"));
         m_presetCombo->addItem(QStringLiteral("Custom"));
         m_presetCombo->setToolTip(QStringLiteral("Equalizer preset"));
+        applyComboStyle(m_presetCombo);
         row->addWidget(m_presetCombo, 1);
         NyiOverlay::markNyi(m_presetCombo, QStringLiteral("Phase 3I-3"));
 

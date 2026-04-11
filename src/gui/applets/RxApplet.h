@@ -111,7 +111,7 @@ private:
     QLabel*      m_stepLabel      = nullptr;
     TriBtn*      m_stepUp         = nullptr;
 
-    // Control 7: Filter preset grid (10 buttons, 2×5)
+    // Control 7: Filter preset grid (10 buttons, 3×4 layout)
     QVector<QPushButton*> m_filterBtns;
     QWidget*     m_filterContainer = nullptr;
     QGridLayout* m_filterGrid      = nullptr;

@@ -241,6 +241,7 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
     m_micProfileCombo->addItems({QStringLiteral("Default"), QStringLiteral("DX"),
                                  QStringLiteral("Contest"), QStringLiteral("Custom")});
     m_micProfileCombo->setAccessibleName(QStringLiteral("Microphone profile"));
+    applyComboStyle(m_micProfileCombo);
     vbox->addWidget(m_micProfileCombo);
 
     // ── Control 4: Mic source + Control 5: Mic level slider + Control 6: +ACC ─
@@ -256,6 +257,7 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
                                     QStringLiteral("LINE"), QStringLiteral("ACC"),
                                     QStringLiteral("PC")});
         m_micSourceCombo->setAccessibleName(QStringLiteral("Microphone source"));
+        applyComboStyle(m_micSourceCombo);
         row->addWidget(m_micSourceCombo);
 
         // Control 5a: Mic level slider
@@ -612,12 +614,11 @@ void PhoneCwApplet::buildCwPage(QWidget* page)
 
         m_pitchLabel = new QLabel(QStringLiteral("700 Hz"), page);
         m_pitchLabel->setAlignment(Qt::AlignCenter);
-        m_pitchLabel->setFixedWidth(48);
         m_pitchLabel->setAccessibleName(QStringLiteral("CW pitch frequency"));
         m_pitchLabel->setStyleSheet(
             "QLabel { font-size: 10px; background: #0a0a18; border: 1px solid #1e2e3e; "
             "border-radius: 3px; padding: 1px 3px; color: #c8d8e8; }");
-        row->addWidget(m_pitchLabel);
+        row->addWidget(m_pitchLabel, 1);
 
         m_pitchUp = new TriBtn(TriBtn::Right, page);
         m_pitchUp->setAccessibleName(QStringLiteral("CW pitch up"));
@@ -699,25 +700,28 @@ void PhoneCwApplet::buildCwPage(QWidget* page)
         m_breakinBtn = new QPushButton(QStringLiteral("QSK"), page);
         m_breakinBtn->setCheckable(true);
         m_breakinBtn->setFixedHeight(22);
+        m_breakinBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_breakinBtn->setStyleSheet(QString(kButtonBase) + kGreenActive);
         m_breakinBtn->setAccessibleName(QStringLiteral("CW break-in / QSK"));
-        row->addWidget(m_breakinBtn);
+        row->addWidget(m_breakinBtn, 1);
 
         // Control 7: Iambic toggle (blue)
         m_iambicBtn = new QPushButton(QStringLiteral("Iambic"), page);
         m_iambicBtn->setCheckable(true);
         m_iambicBtn->setFixedHeight(22);
+        m_iambicBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_iambicBtn->setStyleSheet(QString(kButtonBase) + kBlueActive);
         m_iambicBtn->setAccessibleName(QStringLiteral("Iambic paddle keyer"));
-        row->addWidget(m_iambicBtn);
+        row->addWidget(m_iambicBtn, 1);
 
         // Control 8: Firmware keyer toggle
         m_fwKeyerBtn = new QPushButton(QStringLiteral("FW Keyer"), page);
         m_fwKeyerBtn->setCheckable(true);
         m_fwKeyerBtn->setFixedHeight(22);
+        m_fwKeyerBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_fwKeyerBtn->setStyleSheet(QString(kButtonBase) + kGreenActive);
         m_fwKeyerBtn->setAccessibleName(QStringLiteral("Firmware CW keyer"));
-        row->addWidget(m_fwKeyerBtn);
+        row->addWidget(m_fwKeyerBtn, 1);
 
         vbox->addLayout(row);
     }

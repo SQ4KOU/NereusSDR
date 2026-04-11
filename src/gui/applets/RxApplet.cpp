@@ -249,7 +249,9 @@ void RxApplet::buildUi()
         m_stepDown = new TriBtn(TriBtn::Left, this);
         row->addWidget(m_stepDown);
 
-        m_stepLabel = insetValue(QStringLiteral("100 Hz"), 60);
+        m_stepLabel = new QLabel(QStringLiteral("100 Hz"), this);
+        m_stepLabel->setAlignment(Qt::AlignCenter);
+        m_stepLabel->setStyleSheet(Style::insetValueStyle());
         row->addWidget(m_stepLabel, 1);
 
         m_stepUp = new TriBtn(TriBtn::Right, this);
@@ -441,6 +443,7 @@ void RxApplet::buildUi()
         row->setSpacing(0);
 
         m_ritOnBtn = amberToggle(QStringLiteral("RIT"), -1, 20);
+        m_ritOnBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         row->addWidget(m_ritOnBtn);
 
         row->addSpacing(2);
@@ -454,7 +457,9 @@ void RxApplet::buildUi()
         m_ritMinus = new TriBtn(TriBtn::Left, this);
         row->addWidget(m_ritMinus);
 
-        m_ritLabel = insetValue(QStringLiteral("+0 Hz"), 48);
+        m_ritLabel = new QLabel(QStringLiteral("+0 Hz"), this);
+        m_ritLabel->setAlignment(Qt::AlignCenter);
+        m_ritLabel->setStyleSheet(Style::insetValueStyle());
         row->addWidget(m_ritLabel, 1);
 
         m_ritPlus = new TriBtn(TriBtn::Right, this);
@@ -476,6 +481,7 @@ void RxApplet::buildUi()
         row->setSpacing(0);
 
         m_xitOnBtn = amberToggle(QStringLiteral("XIT"), -1, 20);
+        m_xitOnBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         row->addWidget(m_xitOnBtn);
 
         row->addSpacing(2);
@@ -489,7 +495,9 @@ void RxApplet::buildUi()
         m_xitMinus = new TriBtn(TriBtn::Left, this);
         row->addWidget(m_xitMinus);
 
-        m_xitLabel = insetValue(QStringLiteral("+0 Hz"), 48);
+        m_xitLabel = new QLabel(QStringLiteral("+0 Hz"), this);
+        m_xitLabel->setAlignment(Qt::AlignCenter);
+        m_xitLabel->setStyleSheet(Style::insetValueStyle());
         row->addWidget(m_xitLabel, 1);
 
         m_xitPlus = new TriBtn(TriBtn::Right, this);
@@ -529,14 +537,13 @@ void RxApplet::rebuildFilterButtons()
     }
     m_filterBtns.clear();
 
-    // 10 filter presets in 2 rows × 5 columns
+    // 10 filter presets in 3-column grid (matching AetherSDR layout)
     // Blue active state when this filter is selected
     // Tier 1 wired → SliceModel::setFilter()
-    static constexpr int kRows = 2;
-    static constexpr int kCols = 5;
-    Q_ASSERT(m_filterWidths.size() >= kRows * kCols);
+    static constexpr int kCols = 3;
+    const int count = qMin(m_filterWidths.size(), 10);
 
-    for (int i = 0; i < kRows * kCols; ++i) {
+    for (int i = 0; i < count; ++i) {
         const int widthHz = m_filterWidths.value(i, 2700);
         QString label;
         if (widthHz >= 1000) {
@@ -546,8 +553,12 @@ void RxApplet::rebuildFilterButtons()
         }
 
         auto* btn = blueToggle(label, -1, 20);
-        btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        btn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         btn->setCheckable(true);
+        // Smaller padding than base style to fit narrow column
+        // (matches AetherSDR kButtonBase: padding 1px 2px)
+        btn->setStyleSheet(btn->styleSheet() + QStringLiteral(
+            "QPushButton { padding: 1px 2px; }"));
 
         connect(btn, &QPushButton::clicked, this, [this, widthHz] {
             applyFilterPreset(widthHz);

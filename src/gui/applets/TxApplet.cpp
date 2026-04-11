@@ -44,10 +44,18 @@ TxApplet::TxApplet(RadioModel* model, QWidget* parent)
 
 void TxApplet::buildUI()
 {
-    // Body: QVBoxLayout(4,2,4,2), spacing 2 — matches AetherSDR TxApplet.cpp
-    auto* vbox = new QVBoxLayout(this);
+    // Outer layout: zero margins (title bar flush to edges)
+    // Body: padded content — matches AetherSDR TxApplet.cpp outer/inner pattern
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    auto* body = new QWidget(this);
+    body->setStyleSheet(QStringLiteral("background: %1;").arg(Style::kPanelBg));
+    auto* vbox = new QVBoxLayout(body);
     vbox->setContentsMargins(4, 2, 4, 2);
     vbox->setSpacing(2);
+    outer->addWidget(body);
 
     // ── 1. Forward Power gauge ── 0–120 W, redStart 100 W ───────────────────
     // Ticks: 0 / 40 / 80 / 100 / 120  (AetherSDR TxApplet.cpp:71)
@@ -89,7 +97,8 @@ void TxApplet::buildUI()
         auto* rfValue = new QLabel(QStringLiteral("100"), this);
         rfValue->setFixedWidth(22);
         rfValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        rfValue->setStyleSheet(Style::insetValueStyle());
+        rfValue->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTextPrimary));
 
         m_rfPowerSlider = rfSlider;
         m_rfPowerValue  = rfValue;
@@ -97,10 +106,10 @@ void TxApplet::buildUI()
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
-        auto* lbl = new QLabel(QStringLiteral("RF Power"), this);
+        auto* lbl = new QLabel(QStringLiteral("RF Power:"), this);
         lbl->setFixedWidth(62);
         lbl->setStyleSheet(QStringLiteral(
-            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTextSecondary));
+            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTitleText));
         row->addWidget(lbl);
 
         rfSlider->setFixedHeight(18);
@@ -122,7 +131,8 @@ void TxApplet::buildUI()
         auto* tunValue = new QLabel(QStringLiteral("10"), this);
         tunValue->setFixedWidth(22);
         tunValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        tunValue->setStyleSheet(Style::insetValueStyle());
+        tunValue->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTextPrimary));
 
         m_tunePwrSlider = tunSlider;
         m_tunePwrValue  = tunValue;
@@ -130,10 +140,10 @@ void TxApplet::buildUI()
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
-        auto* lbl = new QLabel(QStringLiteral("Tune Pwr"), this);
+        auto* lbl = new QLabel(QStringLiteral("Tune Pwr:"), this);
         lbl->setFixedWidth(62);
         lbl->setStyleSheet(QStringLiteral(
-            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTextSecondary));
+            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTitleText));
         row->addWidget(lbl);
 
         tunSlider->setFixedHeight(18);
@@ -144,47 +154,41 @@ void TxApplet::buildUI()
         vbox->addLayout(row);
     }
 
-    // ── Button row 1: MOX + TUNE (50% each) ─────────────────────────────────
+    // ── Button row: TUNE + MOX + ATU + MEM (25% each) ─────────────────────
+    // Matches AetherSDR TxApplet.cpp:155–203 (single 4-button row)
     // MOX: red active (#cc2222 bg, #ff4444 border, white text)
     // TUNE: red active when tuning, text becomes "TUNING..."
-    // (AetherSDR TxApplet.cpp:155–203)
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(2);
 
-        const QString baseStyle = Style::buttonBaseStyle();
+        const QString btnStyle = Style::buttonBaseStyle()
+            + QStringLiteral("QPushButton { padding: 2px; }");
         const QString redChecked = Style::redCheckedStyle();
-
-        m_moxBtn = new QPushButton(QStringLiteral("MOX"), this);
-        m_moxBtn->setCheckable(true);
-        m_moxBtn->setFixedHeight(22);
-        m_moxBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_moxBtn->setStyleSheet(baseStyle + redChecked);
-        m_moxBtn->setAccessibleName(QStringLiteral("MOX transmit"));
-        NyiOverlay::markNyi(m_moxBtn, QStringLiteral("Phase 3I-1"));
-        row->addWidget(m_moxBtn, 1);
 
         m_tuneBtn = new QPushButton(QStringLiteral("TUNE"), this);
         m_tuneBtn->setCheckable(true);
         m_tuneBtn->setFixedHeight(22);
         m_tuneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_tuneBtn->setStyleSheet(baseStyle + redChecked);
+        m_tuneBtn->setStyleSheet(btnStyle + redChecked);
         m_tuneBtn->setAccessibleName(QStringLiteral("Tune carrier"));
         NyiOverlay::markNyi(m_tuneBtn, QStringLiteral("Phase 3I-1"));
         row->addWidget(m_tuneBtn, 1);
 
-        vbox->addLayout(row);
-    }
-
-    // ── Button row 2: ATU + MEM (50% each) ──────────────────────────────────
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(2);
+        m_moxBtn = new QPushButton(QStringLiteral("MOX"), this);
+        m_moxBtn->setCheckable(true);
+        m_moxBtn->setFixedHeight(22);
+        m_moxBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_moxBtn->setStyleSheet(btnStyle + redChecked);
+        m_moxBtn->setAccessibleName(QStringLiteral("MOX transmit"));
+        NyiOverlay::markNyi(m_moxBtn, QStringLiteral("Phase 3I-1"));
+        row->addWidget(m_moxBtn, 1);
 
         m_atuBtn = new QPushButton(QStringLiteral("ATU"), this);
         m_atuBtn->setCheckable(true);
         m_atuBtn->setFixedHeight(22);
         m_atuBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_atuBtn->setStyleSheet(btnStyle);
         m_atuBtn->setAccessibleName(QStringLiteral("Antenna tuner"));
         NyiOverlay::markNyi(m_atuBtn, QStringLiteral("Phase 3I-1"));
         row->addWidget(m_atuBtn, 1);
@@ -193,6 +197,7 @@ void TxApplet::buildUI()
         m_memBtn->setCheckable(true);
         m_memBtn->setFixedHeight(22);
         m_memBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_memBtn->setStyleSheet(btnStyle);
         m_memBtn->setAccessibleName(QStringLiteral("ATU memory"));
         NyiOverlay::markNyi(m_memBtn, QStringLiteral("Phase 3I-1"));
         row->addWidget(m_memBtn, 1);
