@@ -46,6 +46,17 @@ public:
     int zOrder() const { return m_zOrder; }
     void setZOrder(int z) { m_zOrder = z; }
 
+    // Visibility filter (from Thetis clsMeterItem, MeterManager.cs:6741-6744 /
+    // 6937-7096). The container's paint loop applies the rule from
+    // MeterManager.cs:31366-31368 — see MeterWidget::shouldRender().
+    // displayGroup == 0 means "always visible" (matches Thetis default).
+    bool onlyWhenRx() const { return m_onlyWhenRx; }
+    void setOnlyWhenRx(bool v) { m_onlyWhenRx = v; }
+    bool onlyWhenTx() const { return m_onlyWhenTx; }
+    void setOnlyWhenTx(bool v) { m_onlyWhenTx = v; }
+    int  displayGroup() const { return m_displayGroup; }
+    void setDisplayGroup(int g) { m_displayGroup = g; }
+
     virtual Layer renderLayer() const = 0;
     virtual void paint(QPainter& p, int widgetW, int widgetH) = 0;
     virtual void emitVertices(QVector<float>& verts, int widgetW, int widgetH) {
@@ -89,6 +100,11 @@ protected:
     int m_bindingId{-1};
     double m_value{-140.0};
     int m_zOrder{0};
+
+    // Visibility filter (see public accessors above)
+    bool m_onlyWhenRx{false};
+    bool m_onlyWhenTx{false};
+    int  m_displayGroup{0};
 };
 
 // ---------------------------------------------------------------------------
@@ -372,15 +388,6 @@ public:
     void setDirection(NeedleDirection d) { m_direction = d; }
     NeedleDirection direction() const { return m_direction; }
 
-    void setOnlyWhenRx(bool v) { m_onlyWhenRx = v; }
-    bool onlyWhenRx() const { return m_onlyWhenRx; }
-
-    void setOnlyWhenTx(bool v) { m_onlyWhenTx = v; }
-    bool onlyWhenTx() const { return m_onlyWhenTx; }
-
-    void setDisplayGroup(int g) { m_displayGroup = g; }
-    int displayGroup() const { return m_displayGroup; }
-
     void setHistoryEnabled(bool v) { m_historyEnabled = v; }
     bool historyEnabled() const { return m_historyEnabled; }
 
@@ -455,11 +462,6 @@ private:
 
     // Direction
     NeedleDirection m_direction{NeedleDirection::Clockwise};
-
-    // Visibility filtering
-    bool m_onlyWhenRx{false};
-    bool m_onlyWhenTx{false};
-    int  m_displayGroup{-1};  // -1 = always visible
 
     // History trail
     bool   m_historyEnabled{false};
