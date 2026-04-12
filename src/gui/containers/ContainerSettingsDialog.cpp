@@ -179,8 +179,13 @@ ContainerSettingsDialog::ContainerSettingsDialog(ContainerWidget* container,
     const QString shortId = m_container ? m_container->id().left(8) : QStringLiteral("????????");
     setWindowTitle(QStringLiteral("Container Settings \u2014 ") + shortId);
 
-    setMinimumSize(800, 500);
-    resize(900, 600);
+    // Phase 3G-6 block 4b: grown defaults so the Properties column
+    // has usable vertical and horizontal room for the type-specific
+    // editors landed in block 4. Users can still resize smaller, but
+    // the opening size shows the typical editor comfortably.
+    setMinimumSize(960, 600);
+    resize(1100, 750);
+    setSizeGripEnabled(true);
 
     buildLayout();
 
@@ -232,10 +237,13 @@ void ContainerSettingsDialog::buildLayout()
     buildPropertiesPanel(propsWrapper);
     m_splitter->addWidget(propsWrapper);
 
+    // Phase 3G-6 block 4b: Properties column gets the lion's share
+    // because it houses 20+ form rows per editor; Available and
+    // In-use are content-sized catalogs that don't grow much.
     m_splitter->setStretchFactor(0, 0);
     m_splitter->setStretchFactor(1, 0);
     m_splitter->setStretchFactor(2, 1);
-    m_splitter->setSizes({200, 200, 460});
+    m_splitter->setSizes({200, 200, 700});
 
     root->addWidget(m_splitter, 1);
 
