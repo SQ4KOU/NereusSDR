@@ -1,5 +1,11 @@
 #include "DisplaySetupPages.h"
+#include "gui/ColorSwatchButton.h"
+#include "gui/SpectrumWidget.h"
 #include "gui/StyleConstants.h"
+#include "core/FFTEngine.h"
+#include "models/Band.h"
+#include "models/PanadapterModel.h"
+#include "models/RadioModel.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -11,6 +17,7 @@
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
+#include <QThread>
 
 namespace NereusSDR {
 
@@ -73,11 +80,74 @@ SpectrumDefaultsPage::SpectrumDefaultsPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("Spectrum Defaults"), model, parent)
 {
     buildUI();
+    loadFromRenderer();
+}
+
+// Maps SpectrumDefaultsPage FPS slider (10-60) to FFTEngine output FPS.
+void SpectrumDefaultsPage::pushFps(int fps)
+{
+    if (!model() || !model()->fftEngine()) { return; }
+    model()->fftEngine()->setOutputFps(fps);
+}
+
+void SpectrumDefaultsPage::loadFromRenderer()
+{
+    if (!model()) { return; }
+    auto* sw = model()->spectrumWidget();
+    auto* fe = model()->fftEngine();
+    if (!sw || !fe) { return; }
+
+    QSignalBlocker b1(m_fftSizeCombo);
+    QSignalBlocker b2(m_windowCombo);
+    QSignalBlocker b3(m_fpSlider);
+    QSignalBlocker b4(m_averagingCombo);
+    QSignalBlocker b5(m_fillToggle);
+    QSignalBlocker b6(m_fillAlphaSlider);
+    QSignalBlocker b7(m_lineWidthSlider);
+    QSignalBlocker b8(m_gradientToggle);
+    QSignalBlocker b9(m_dataLineAlphaSlider);
+    QSignalBlocker b10(m_calOffsetSpin);
+    QSignalBlocker b11(m_peakHoldToggle);
+    QSignalBlocker b12(m_peakHoldDelaySpin);
+    QSignalBlocker b13(m_threadPriorityCombo);
+
+    // FFT size — map actual FFT size to combo index.
+    const int fs = fe->fftSize();
+    const QString fsText = QString::number(fs);
+    const int idx = m_fftSizeCombo->findText(fsText);
+    if (idx >= 0) { m_fftSizeCombo->setCurrentIndex(idx); }
+
+    // FFT window — enum → index (5 enum values but 4 UI options; map
+    // BlackmanHarris4 → Blackman-Harris, Hanning → Hann, Hamming → Hamming,
+    // Flat → Flat-Top. BlackmanHarris7 / Kaiser / None fall back to BH4).
+    switch (fe->windowFunction()) {
+        case WindowFunction::Hanning: m_windowCombo->setCurrentIndex(1); break;
+        case WindowFunction::Hamming: m_windowCombo->setCurrentIndex(2); break;
+        case WindowFunction::Flat:    m_windowCombo->setCurrentIndex(3); break;
+        default:                      m_windowCombo->setCurrentIndex(0); break;
+    }
+
+    m_fpSlider->setValue(fe->outputFps());
+    m_averagingCombo->setCurrentIndex(static_cast<int>(sw->averageMode()));
+    m_fillToggle->setChecked(sw->panFillEnabled());
+    m_fillAlphaSlider->setValue(static_cast<int>(sw->fillAlpha() * 100.0f));
+    m_lineWidthSlider->setValue(qBound(1, static_cast<int>(sw->lineWidth()), 3));
+    m_gradientToggle->setChecked(sw->gradientEnabled());
+    m_dataLineAlphaSlider->setValue(sw->fillColor().alpha());
+    m_calOffsetSpin->setValue(static_cast<double>(sw->dbmCalOffset()));
+    m_peakHoldToggle->setChecked(sw->peakHoldEnabled());
+    m_peakHoldDelaySpin->setValue(sw->peakHoldDelayMs());
+
+    if (m_dataLineColorBtn) { m_dataLineColorBtn->setColor(sw->fillColor()); }
+    if (m_dataFillColorBtn) { m_dataFillColorBtn->setColor(sw->fillColor()); }
 }
 
 void SpectrumDefaultsPage::buildUI()
 {
     applyDarkStyle(this);
+
+    auto* sw = model() ? model()->spectrumWidget() : nullptr;
+    auto* fe = model() ? model()->fftEngine() : nullptr;
 
     // --- Section: FFT ---
     auto* fftGroup = new QGroupBox(QStringLiteral("FFT"), this);
@@ -89,15 +159,29 @@ void SpectrumDefaultsPage::buildUI()
                               QStringLiteral("4096"), QStringLiteral("8192"),
                               QStringLiteral("16384")});
     m_fftSizeCombo->setCurrentText(QStringLiteral("4096"));
-    m_fftSizeCombo->setEnabled(false);  // NYI
-    m_fftSizeCombo->setToolTip(QStringLiteral("Default FFT size — not yet implemented"));
+    connect(m_fftSizeCombo, &QComboBox::currentTextChanged,
+            this, [this](const QString& txt) {
+        if (model() && model()->fftEngine()) {
+            model()->fftEngine()->setFftSize(txt.toInt());
+        }
+    });
     fftForm->addRow(QStringLiteral("FFT Size:"), m_fftSizeCombo);
 
     m_windowCombo = new QComboBox(fftGroup);
     m_windowCombo->addItems({QStringLiteral("Blackman-Harris"), QStringLiteral("Hann"),
                              QStringLiteral("Hamming"),         QStringLiteral("Flat-Top")});
-    m_windowCombo->setEnabled(false);  // NYI
-    m_windowCombo->setToolTip(QStringLiteral("FFT window function — not yet implemented"));
+    connect(m_windowCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+        if (!model() || !model()->fftEngine()) { return; }
+        WindowFunction wf = WindowFunction::BlackmanHarris4;
+        switch (i) {
+            case 0: wf = WindowFunction::BlackmanHarris4; break;
+            case 1: wf = WindowFunction::Hanning; break;
+            case 2: wf = WindowFunction::Hamming; break;
+            case 3: wf = WindowFunction::Flat; break;
+        }
+        model()->fftEngine()->setWindowFunction(wf);
+    });
     fftForm->addRow(QStringLiteral("Window:"), m_windowCombo);
 
     contentLayout()->addWidget(fftGroup);
@@ -110,40 +194,124 @@ void SpectrumDefaultsPage::buildUI()
     m_fpSlider = new QSlider(Qt::Horizontal, renderGroup);
     m_fpSlider->setRange(10, 60);
     m_fpSlider->setValue(30);
-    m_fpSlider->setEnabled(false);  // NYI
-    m_fpSlider->setToolTip(QStringLiteral("Spectrum update rate (FPS) — not yet implemented"));
+    connect(m_fpSlider, &QSlider::valueChanged, this, [this](int v) { pushFps(v); });
     renderForm->addRow(QStringLiteral("FPS (10–60):"), m_fpSlider);
 
     m_averagingCombo = new QComboBox(renderGroup);
     m_averagingCombo->addItems({QStringLiteral("None"), QStringLiteral("Weighted"),
-                                QStringLiteral("Logarithmic")});
-    m_averagingCombo->setEnabled(false);  // NYI
-    m_averagingCombo->setToolTip(QStringLiteral("Spectrum averaging mode — not yet implemented"));
+                                QStringLiteral("Logarithmic"), QStringLiteral("Time Window")});
+    connect(m_averagingCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setAverageMode(static_cast<AverageMode>(i));
+        }
+    });
     renderForm->addRow(QStringLiteral("Averaging:"), m_averagingCombo);
 
+    m_averagingTimeSpin = new QSpinBox(renderGroup);
+    m_averagingTimeSpin->setRange(10, 5000);
+    m_averagingTimeSpin->setSingleStep(10);
+    m_averagingTimeSpin->setSuffix(QStringLiteral(" ms"));
+    m_averagingTimeSpin->setValue(100);
+    connect(m_averagingTimeSpin, qOverload<int>(&QSpinBox::valueChanged),
+            this, [this](int ms) {
+        // Translate ms to an alpha between 0.05 (slow) and 0.95 (fast).
+        const float a = qBound(0.05f, 1.0f - (ms / 5000.0f), 0.95f);
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setAverageAlpha(a);
+        }
+    });
+    renderForm->addRow(QStringLiteral("Averaging Time:"), m_averagingTimeSpin);
+
+    m_decimationSpin = new QSpinBox(renderGroup);
+    m_decimationSpin->setRange(1, 32);
+    m_decimationSpin->setValue(1);
+    m_decimationSpin->setToolTip(QStringLiteral("Spectrum decimation factor (Thetis udDisplayDecimation parity)"));
+    // Scaffolded only — FFTEngine decimation hook deferred to a future phase.
+    renderForm->addRow(QStringLiteral("Decimation:"), m_decimationSpin);
+
     m_fillToggle = new QCheckBox(QStringLiteral("Fill under trace"), renderGroup);
-    m_fillToggle->setEnabled(false);  // NYI
-    m_fillToggle->setToolTip(QStringLiteral("Fill spectrum trace area — not yet implemented"));
+    connect(m_fillToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setPanFillEnabled(on);
+        }
+    });
     renderForm->addRow(QString(), m_fillToggle);
 
     m_fillAlphaSlider = new QSlider(Qt::Horizontal, renderGroup);
     m_fillAlphaSlider->setRange(0, 100);
-    m_fillAlphaSlider->setValue(30);
-    m_fillAlphaSlider->setEnabled(false);  // NYI
-    m_fillAlphaSlider->setToolTip(QStringLiteral("Fill opacity (0–100) — not yet implemented"));
+    m_fillAlphaSlider->setValue(70);
+    connect(m_fillAlphaSlider, &QSlider::valueChanged, this, [this](int v) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setFillAlpha(v / 100.0f);
+        }
+    });
     renderForm->addRow(QStringLiteral("Fill Alpha:"), m_fillAlphaSlider);
 
     m_lineWidthSlider = new QSlider(Qt::Horizontal, renderGroup);
     m_lineWidthSlider->setRange(1, 3);
     m_lineWidthSlider->setValue(1);
-    m_lineWidthSlider->setEnabled(false);  // NYI
-    m_lineWidthSlider->setToolTip(QStringLiteral("Trace line width (1–3 px) — not yet implemented"));
+    connect(m_lineWidthSlider, &QSlider::valueChanged, this, [this](int v) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setLineWidth(static_cast<float>(v));
+        }
+    });
     renderForm->addRow(QStringLiteral("Line Width:"), m_lineWidthSlider);
+
+    m_gradientToggle = new QCheckBox(QStringLiteral("Trace gradient"), renderGroup);
+    connect(m_gradientToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setGradientEnabled(on);
+        }
+    });
+    renderForm->addRow(QString(), m_gradientToggle);
 
     contentLayout()->addWidget(renderGroup);
 
+    // --- Section: Colors ---
+    auto* colorGroup = new QGroupBox(QStringLiteral("Trace Colors"), this);
+    auto* colorForm  = new QFormLayout(colorGroup);
+    colorForm->setSpacing(6);
+
+    const QColor initLine = sw ? sw->fillColor() : QColor(0x00, 0xe5, 0xff);
+    m_dataLineColorBtn = new ColorSwatchButton(initLine, colorGroup);
+    connect(m_dataLineColorBtn, &ColorSwatchButton::colorChanged,
+            this, [this](const QColor& c) {
+        // SpectrumWidget currently uses one colour for both line and fill.
+        // Plan §6 S11/S13 allow splitting once the renderer grows a
+        // dedicated m_dataLineColor; for now both pickers set the shared
+        // fill colour.
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setFillColor(c);
+        }
+    });
+    colorForm->addRow(QStringLiteral("Data Line Color:"), m_dataLineColorBtn);
+
+    m_dataLineAlphaSlider = new QSlider(Qt::Horizontal, colorGroup);
+    m_dataLineAlphaSlider->setRange(0, 255);
+    m_dataLineAlphaSlider->setValue(230);
+    connect(m_dataLineAlphaSlider, &QSlider::valueChanged, this, [this](int a) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            QColor c = w->fillColor();
+            c.setAlpha(a);
+            w->setFillColor(c);
+        }
+    });
+    colorForm->addRow(QStringLiteral("Line Alpha:"), m_dataLineAlphaSlider);
+
+    m_dataFillColorBtn = new ColorSwatchButton(initLine, colorGroup);
+    connect(m_dataFillColorBtn, &ColorSwatchButton::colorChanged,
+            this, [this](const QColor& c) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setFillColor(c);
+        }
+    });
+    colorForm->addRow(QStringLiteral("Data Fill Color:"), m_dataFillColorBtn);
+
+    contentLayout()->addWidget(colorGroup);
+
     // --- Section: Calibration ---
-    auto* calGroup = new QGroupBox(QStringLiteral("Calibration"), this);
+    auto* calGroup = new QGroupBox(QStringLiteral("Calibration & Peak Hold"), this);
     auto* calForm  = new QFormLayout(calGroup);
     calForm->setSpacing(6);
 
@@ -152,13 +320,20 @@ void SpectrumDefaultsPage::buildUI()
     m_calOffsetSpin->setSingleStep(0.5);
     m_calOffsetSpin->setSuffix(QStringLiteral(" dBm"));
     m_calOffsetSpin->setValue(0.0);
-    m_calOffsetSpin->setEnabled(false);  // NYI
-    m_calOffsetSpin->setToolTip(QStringLiteral("Display calibration offset — not yet implemented"));
+    connect(m_calOffsetSpin, qOverload<double>(&QDoubleSpinBox::valueChanged),
+            this, [this](double v) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setDbmCalOffset(static_cast<float>(v));
+        }
+    });
     calForm->addRow(QStringLiteral("Cal Offset:"), m_calOffsetSpin);
 
     m_peakHoldToggle = new QCheckBox(QStringLiteral("Peak hold"), calGroup);
-    m_peakHoldToggle->setEnabled(false);  // NYI
-    m_peakHoldToggle->setToolTip(QStringLiteral("Hold spectrum peaks — not yet implemented"));
+    connect(m_peakHoldToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setPeakHoldEnabled(on);
+        }
+    });
     calForm->addRow(QString(), m_peakHoldToggle);
 
     m_peakHoldDelaySpin = new QSpinBox(calGroup);
@@ -166,12 +341,50 @@ void SpectrumDefaultsPage::buildUI()
     m_peakHoldDelaySpin->setSingleStep(100);
     m_peakHoldDelaySpin->setSuffix(QStringLiteral(" ms"));
     m_peakHoldDelaySpin->setValue(2000);
-    m_peakHoldDelaySpin->setEnabled(false);  // NYI
-    m_peakHoldDelaySpin->setToolTip(QStringLiteral("Peak hold decay delay — not yet implemented"));
+    connect(m_peakHoldDelaySpin, qOverload<int>(&QSpinBox::valueChanged),
+            this, [this](int v) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setPeakHoldDelayMs(v);
+        }
+    });
     calForm->addRow(QStringLiteral("Peak Delay:"), m_peakHoldDelaySpin);
 
     contentLayout()->addWidget(calGroup);
+
+    // --- Section: Thread ---
+    auto* threadGroup = new QGroupBox(QStringLiteral("Thread"), this);
+    auto* threadForm  = new QFormLayout(threadGroup);
+    threadForm->setSpacing(6);
+
+    m_threadPriorityCombo = new QComboBox(threadGroup);
+    m_threadPriorityCombo->addItems({
+        QStringLiteral("Lowest"), QStringLiteral("Below Normal"),
+        QStringLiteral("Normal"), QStringLiteral("Above Normal"),
+        QStringLiteral("Highest")
+    });
+    m_threadPriorityCombo->setCurrentIndex(3);  // Above Normal (Thetis default)
+    connect(m_threadPriorityCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+        // Map Thetis 5-item ThreadPriority → QThread::Priority per §13 Q3.
+        const QThread::Priority pri =
+            (i == 0) ? QThread::LowestPriority :
+            (i == 1) ? QThread::LowPriority    :
+            (i == 2) ? QThread::NormalPriority :
+            (i == 3) ? QThread::HighPriority   :
+                       QThread::HighestPriority;
+        if (model() && model()->fftEngine()) {
+            if (auto* t = model()->fftEngine()->thread()) {
+                t->setPriority(pri);
+            }
+        }
+    });
+    threadForm->addRow(QStringLiteral("Display Thread Priority:"), m_threadPriorityCombo);
+
+    contentLayout()->addWidget(threadGroup);
     contentLayout()->addStretch();
+
+    Q_UNUSED(sw);
+    Q_UNUSED(fe);
 }
 
 // ---------------------------------------------------------------------------

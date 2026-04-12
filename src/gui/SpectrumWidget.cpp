@@ -574,6 +574,16 @@ void SpectrumWidget::setDbmCalOffset(float db)
     update();
 }
 
+void SpectrumWidget::setFillColor(const QColor& c)
+{
+    if (!c.isValid() || m_fillColor == c) {
+        return;
+    }
+    m_fillColor = c;
+    scheduleSettingsSave();
+    update();
+}
+
 // ---- Phase 3G-8 commit 4: waterfall setters ----
 
 void SpectrumWidget::setWfHighThreshold(float dbm)

@@ -16,6 +16,8 @@ namespace NereusSDR {
 // Corresponds to Thetis setup.cs Display tab, Spectrum section.
 // All controls are NYI (disabled). Wired to persistence in a future phase.
 // ---------------------------------------------------------------------------
+class ColorSwatchButton;
+
 class SpectrumDefaultsPage : public SetupPage {
     Q_OBJECT
 public:
@@ -23,6 +25,8 @@ public:
 
 private:
     void buildUI();
+    void loadFromRenderer();
+    void pushFps(int fps);
 
     // Section: FFT
     QComboBox* m_fftSizeCombo{nullptr};      // 1024/2048/4096/8192/16384
@@ -30,15 +34,26 @@ private:
 
     // Section: Rendering
     QSlider*   m_fpSlider{nullptr};          // 10–60 fps
-    QComboBox* m_averagingCombo{nullptr};    // None/Weighted/Logarithmic
+    QComboBox* m_averagingCombo{nullptr};    // None/Weighted/Logarithmic/TimeWindow
+    QSpinBox*  m_averagingTimeSpin{nullptr}; // S15 avg time (ms)
+    QSpinBox*  m_decimationSpin{nullptr};    // S16 decimation
     QCheckBox* m_fillToggle{nullptr};        // Fill under spectrum trace
     QSlider*   m_fillAlphaSlider{nullptr};   // 0–100
     QSlider*   m_lineWidthSlider{nullptr};   // 1–3
+    QCheckBox* m_gradientToggle{nullptr};    // S14 gradient enabled
+
+    // Section: Colors (S11/S13)
+    ColorSwatchButton* m_dataLineColorBtn{nullptr};
+    QSlider*           m_dataLineAlphaSlider{nullptr}; // S12
+    ColorSwatchButton* m_dataFillColorBtn{nullptr};
 
     // Section: Calibration
     QDoubleSpinBox* m_calOffsetSpin{nullptr}; // Display calibration offset (dBm)
     QCheckBox*      m_peakHoldToggle{nullptr};
     QSpinBox*       m_peakHoldDelaySpin{nullptr}; // ms
+
+    // Section: Thread (S17)
+    QComboBox*      m_threadPriorityCombo{nullptr};
 };
 
 // ---------------------------------------------------------------------------
