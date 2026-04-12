@@ -973,19 +973,37 @@ void ContainerSettingsDialog::onMoveItemDown()
 // addNewItem — create and insert a new item after the current selection
 // ---------------------------------------------------------------------------
 
-void ContainerSettingsDialog::addNewItem(const QString& typeTag)
+float ContainerSettingsDialog::nextStackYPos(const QVector<MeterItem*>& items)
 {
-    // Calculate yPos: max (y + height) of existing items, clamped to 0.9
+    // Compute the next vertical-stack y-position. Skip items that
+    // span more than 70% of the container vertically — those are
+    // background / overlay-style items (ImageItem backgrounds, ANANMM
+    // full-container needles) and don't participate in the stack.
+    // Without this filter the next-position math would clamp every
+    // newly-added item at y=0.9 the moment a full-container item
+    // existed, piling new items on top of each other.
+    constexpr float kBackgroundSpanThreshold = 0.7f;
+    constexpr float kBottomClamp = 0.9f;
     float yPos = 0.0f;
-    for (const MeterItem* item : m_workingItems) {
+    for (const MeterItem* item : items) {
+        if (!item) { continue; }
+        if (item->itemHeight() > kBackgroundSpanThreshold) {
+            continue;
+        }
         const float bottom = item->y() + item->itemHeight();
         if (bottom > yPos) {
             yPos = bottom;
         }
     }
-    if (yPos > 0.9f) {
-        yPos = 0.9f;
+    if (yPos > kBottomClamp) {
+        yPos = kBottomClamp;
     }
+    return yPos;
+}
+
+void ContainerSettingsDialog::addNewItem(const QString& typeTag)
+{
+    const float yPos = nextStackYPos(m_workingItems);
 
     MeterItem* newItem = nullptr;
 

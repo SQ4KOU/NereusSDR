@@ -447,6 +447,16 @@ public:
 
     void setValue(double v) override;
 
+    // Smoothed value as currently held by the needle. Named
+    // m_smoothedDbm historically because the needle started life as a
+    // dBm-only S-meter; for calibrated needles (ANANMM Volts/Amps/
+    // Power/SWR/Compression/ALC) it holds the value in the calibration
+    // map's native units (volts, amps, watts, etc.) — see setValue()
+    // for the per-mode clamp logic. Exposed so tests can assert the
+    // post-smoothing value without round-tripping through paint
+    // geometry.
+    float smoothedValue() const { return m_smoothedDbm; }
+
     // Multi-layer: participates in all 4 pipeline layers
     bool participatesIn(Layer layer) const override;
     Layer renderLayer() const override { return Layer::Geometry; }

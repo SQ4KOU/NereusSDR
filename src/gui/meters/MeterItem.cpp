@@ -597,11 +597,27 @@ void NeedleItem::setValue(double v)
 {
     MeterItem::setValue(v);
 
-    const float dbm = static_cast<float>(v);
+    const float val = static_cast<float>(v);
 
     // Exponential smoothing (from AetherSDR SMOOTH_ALPHA = 0.3)
-    m_smoothedDbm += kSmoothAlpha * (dbm - m_smoothedDbm);
-    m_smoothedDbm = std::clamp(m_smoothedDbm, kS0Dbm, kMaxDbm);
+    m_smoothedDbm += kSmoothAlpha * (val - m_smoothedDbm);
+
+    // Clamp to the appropriate value range. Calibrated needles
+    // (ANANMM Volts/Amps/Power/SWR/Compression/ALC) use the
+    // calibration map's key range — they're in native units (volts,
+    // amps, watts, etc.), NOT dBm. Clamping a 13V reading to the
+    // [-127, -13] dBm range mangles it to -13, then
+    // calibratedPosition() looks up -13 in a {10, 12.5, 15} map and
+    // returns the first calibration point — the symptom was every
+    // calibrated needle drawing as a near-horizontal line at the
+    // offset row.
+    if (m_scaleCalibration.isEmpty()) {
+        m_smoothedDbm = std::clamp(m_smoothedDbm, kS0Dbm, kMaxDbm);
+    } else {
+        const float minKey = m_scaleCalibration.firstKey();
+        const float maxKey = m_scaleCalibration.lastKey();
+        m_smoothedDbm = std::clamp(m_smoothedDbm, minKey, maxKey);
+    }
 
     // Peak tracking (from AetherSDR Medium preset: 500ms hold, 10 dB/sec decay)
     if (m_smoothedDbm > m_peakDbm) {

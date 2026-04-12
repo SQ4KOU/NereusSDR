@@ -16,6 +16,7 @@
 
 #include "core/AppSettings.h"
 #include "gui/containers/ContainerManager.h"
+#include "gui/containers/ContainerSettingsDialog.h"
 #include "gui/containers/ContainerWidget.h"
 #include "gui/meters/MeterItem.h"
 #include "gui/meters/MeterWidget.h"
@@ -213,6 +214,102 @@ private slots:
             QVERIFY(c);
             QCOMPARE(announced.first(), qobject_cast<MeterWidget*>(c->content()));
         }
+    }
+
+    // NeedleItem::setValue historically clamped to the AetherSDR
+    // S-meter dBm range [-127, -13]. ANANMM's calibrated needles
+    // (Volts 10-15, Amps 0-20, Power 0-150W, SWR 1-10, Compression
+    // 0-30 dB, ALC 0-30 dB) all use NATIVE units in their calibration
+    // maps. The dBm clamp destroyed the value before
+    // calibratedPosition() ran, collapsing every calibrated needle
+    // to the first/last calibration point. Visually: needles drew as
+    // a near-horizontal line at the offset row regardless of value.
+    //
+    // RED: with the old clamp, smoothedValue() will sit at -13.0 (or
+    // similar) after pushing 13.0 because it's outside [-127, -13].
+    // GREEN: clamp uses calibration map's key range when the map is
+    // populated.
+    void calibratedNeedleNotClampedToDbmRange()
+    {
+        NeedleItem needle;
+
+        // Volts-style calibration: keys 10..15 V, all positions in
+        // the same y row (matches the ANANMM voltmeter layout).
+        QMap<float, QPointF> cal;
+        cal.insert(10.0f, QPointF(0.559, 0.756));
+        cal.insert(12.5f, QPointF(0.605, 0.772));
+        cal.insert(15.0f, QPointF(0.665, 0.784));
+        needle.setScaleCalibration(cal);
+
+        // Push a realistic Volts reading enough times for the
+        // exponential smoothing (alpha 0.3) to converge from the
+        // default kS0Dbm.
+        for (int i = 0; i < 40; ++i) {
+            needle.setValue(13.0);
+        }
+
+        // Must be inside the calibration range, NOT clamped to the
+        // dBm range (-127..-13) which would leave it at or below -13.
+        const float v = needle.smoothedValue();
+        QVERIFY2(v >= 10.0f,
+                 qPrintable(QStringLiteral(
+                     "calibrated needle smoothedValue %1 below "
+                     "calibration min — dBm clamp not bypassed").arg(v)));
+        QVERIFY2(v <= 15.0f,
+                 qPrintable(QStringLiteral(
+                     "calibrated needle smoothedValue %1 above "
+                     "calibration max").arg(v)));
+    }
+
+    // ContainerSettingsDialog::addNewItem stacks new items vertically
+    // by computing yPos = max(y + height) of existing items, clamped
+    // at 0.9. The ANANMM preset installs 7 needles each at (0,0,1,1)
+    // — full-container background overlays. With the old logic, the
+    // clamp pinned every new item at y=0.9 and they piled up on top
+    // of each other. The fix: items with itemHeight() > 0.7 are
+    // treated as backgrounds and excluded from the stack
+    // calculation.
+    void nextStackYPosIgnoresFullContainerOverlays()
+    {
+        // Case 1: only an ANANMM-style full-container needle present.
+        // Old behaviour returned 0.9 (clamped from 1.0). New
+        // behaviour should return 0.0 — there are no narrow stacked
+        // items, so the next item starts at the top.
+        QVector<MeterItem*> overlaysOnly;
+        auto* fullNeedle = new NeedleItem();
+        fullNeedle->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+        overlaysOnly.append(fullNeedle);
+
+        const float yOverlay =
+            ContainerSettingsDialog::nextStackYPos(overlaysOnly);
+        QVERIFY2(yOverlay < 0.05f,
+                 qPrintable(QStringLiteral(
+                     "yPos %1 still pinned by full-container overlay").arg(yOverlay)));
+
+        // Case 2: full-container background + two real stacked bars.
+        // Should return 0.30 (after the second bar), not 0.9.
+        QVector<MeterItem*> mixed;
+        auto* bg = new NeedleItem();
+        bg->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+        mixed.append(bg);
+
+        auto* bar1 = new BarItem();
+        bar1->setRect(0.0f, 0.0f, 1.0f, 0.15f);
+        mixed.append(bar1);
+
+        auto* bar2 = new BarItem();
+        bar2->setRect(0.0f, 0.15f, 1.0f, 0.15f);
+        mixed.append(bar2);
+
+        const float yMixed =
+            ContainerSettingsDialog::nextStackYPos(mixed);
+        QVERIFY2(qFuzzyCompare(yMixed + 1.0f, 0.30f + 1.0f),
+                 qPrintable(QStringLiteral(
+                     "yPos %1 should follow stacked bars (0.30), not "
+                     "the overlay clamp").arg(yMixed)));
+
+        qDeleteAll(overlaysOnly);
+        qDeleteAll(mixed);
     }
 };
 
