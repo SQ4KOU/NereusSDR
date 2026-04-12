@@ -1359,6 +1359,19 @@ void ContainerSettingsDialog::populateItemList()
         }
     }
 
+    // Phase 3G-7: serializeItems() above strips MMIO bindings (block 5 kept
+    // them in-memory only). Re-attach each binding from the live meter into
+    // its corresponding working item by index.
+    const QVector<MeterItem*> liveItems = meter->items();
+    const int n = qMin(liveItems.size(), m_workingItems.size());
+    for (int i = 0; i < n; ++i) {
+        if (liveItems[i] && liveItems[i]->hasMmioBinding()) {
+            m_workingItems[i]->setMmioBinding(
+                liveItems[i]->mmioGuid(),
+                liveItems[i]->mmioVariable());
+        }
+    }
+
     refreshItemList();
     updatePreview();
 }
@@ -1566,6 +1579,17 @@ void ContainerSettingsDialog::takeSnapshot()
     m_containerSnapshot = m_container->serialize();
     MeterWidget* meter = findMeterWidget();
     m_itemsSnapshot = meter ? meter->serializeItems() : QString();
+    // Phase 3G-7: parallel snapshot of MMIO bindings (not in text snapshot).
+    m_mmioSnapshot.clear();
+    if (meter) {
+        for (MeterItem* item : meter->items()) {
+            if (item) {
+                m_mmioSnapshot.append({item->mmioGuid(), item->mmioVariable()});
+            } else {
+                m_mmioSnapshot.append({QUuid(), QString()});
+            }
+        }
+    }
     m_snapshotTaken = true;
 }
 
@@ -1575,6 +1599,16 @@ void ContainerSettingsDialog::revertFromSnapshot()
     m_container->deserialize(m_containerSnapshot);
     if (MeterWidget* meter = findMeterWidget()) {
         meter->deserializeItems(m_itemsSnapshot);
+        // Phase 3G-7: restore MMIO bindings the text snapshot couldn't carry.
+        const QVector<MeterItem*> liveItems = meter->items();
+        const int n = qMin(liveItems.size(), m_mmioSnapshot.size());
+        for (int i = 0; i < n; ++i) {
+            if (liveItems[i] && !m_mmioSnapshot[i].first.isNull()) {
+                liveItems[i]->setMmioBinding(
+                    m_mmioSnapshot[i].first,
+                    m_mmioSnapshot[i].second);
+            }
+        }
         meter->update();
     }
     m_container->update();
@@ -1625,6 +1659,12 @@ void ContainerSettingsDialog::applyToContainer()
         const QString data = item->serialize();
         MeterItem* clone = createItemFromSerialized(data);
         if (clone) {
+            // Phase 3G-7: serialize() drops MMIO bindings; copy them
+            // directly so Apply doesn't silently break the binding the
+            // user just made via the "Variable…" picker.
+            if (item->hasMmioBinding()) {
+                clone->setMmioBinding(item->mmioGuid(), item->mmioVariable());
+            }
             target->addItem(clone);
             // Re-wire interactive item signals through the container
             m_container->wireInteractiveItem(clone);
@@ -1800,6 +1840,12 @@ void ContainerSettingsDialog::loadPresetByName(const QString& name)
         for (MeterItem* src : group->items()) {
             MeterItem* clone = createItemFromSerialized(src->serialize());
             if (clone) {
+                // Phase 3G-7: factory presets won't normally have MMIO
+                // bindings, but copy them defensively in case a future
+                // preset wires one.
+                if (src->hasMmioBinding()) {
+                    clone->setMmioBinding(src->mmioGuid(), src->mmioVariable());
+                }
                 m_workingItems.append(clone);
             }
         }

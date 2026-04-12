@@ -1,6 +1,9 @@
 #pragma once
 
 #include <QDialog>
+#include <QPair>
+#include <QUuid>
+#include <QVector>
 
 class QListWidget;
 class QStackedWidget;
@@ -98,6 +101,10 @@ private:
     // Apply discards the snapshot and the in-progress edits stick.
     QString m_containerSnapshot;
     QString m_itemsSnapshot;
+    // Phase 3G-7: MMIO bindings are not part of the text snapshot (block 5
+    // kept them in-memory only). Capture them in parallel by item index so
+    // Cancel restores them when revertFromSnapshot reloads from text.
+    QVector<QPair<QUuid, QString>> m_mmioSnapshot;
     bool    m_snapshotTaken{false};
 
     void takeSnapshot();
