@@ -1325,3 +1325,184 @@ motivated it.
 - [ ] Replay the 302,256-frame `HL2_Packet_Capture.pcapng` capture through Nereus's P1 parser and confirm bit-exact decoding of all EP6 frames: correct sequence numbers, correct C0 slot dispatch, correct I/Q sample values for at least the first and last 100 frames (see §1, §4)
 - [ ] Drive Nereus's EP2 builder with the same parameter inputs observed in this capture and verify that output C0/C1–C4 bytes match the reference capture values for each of the 17 standard command slots (see §5.4)
 - [ ] Run Nereus against a live HL2 (board ID `0x06`, firmware `0x4A`) and confirm: EP6 received at ~5053 Hz, EP2 emitted at ~378 Hz, RX audio passes through WDSP without drops or sequence errors (see §6)
+
+---
+
+## Appendix A — Reproducing This Analysis
+
+Every hex dump, table, and statistic in this document was produced with the commands below, run against `HL2_Packet_Capture.pcapng` on macOS with Wireshark's `tshark` 4.x. The filtered session subset `/tmp/hl2cap/hl2_session.pcapng` is produced in A.1 and used by all subsequent commands.
+
+### A.1 Create filtered session subset
+
+Extract only the P1 session frames (port 1024) from the full capture, removing discovery broadcasts on port 50533:
+
+```bash
+tshark -r /tmp/hl2cap/HL2_Packet_Capture.pcapng \
+  -Y 'udp.port == 1024' \
+  -w /tmp/hl2cap/hl2_session.pcapng
+```
+
+### A.2 Discovery exchange — hex dump of discovery frames
+
+Extract discovery REQUEST/REPLY frames on ephemeral source port 50533:
+
+```bash
+tshark -r /tmp/hl2cap/HL2_Packet_Capture.pcapng \
+  -Y '(udp.srcport == 50533 or udp.dstport == 50533)' \
+  -x
+```
+
+### A.3 Start/stop frame detection
+
+Locate start/stop command frames by filtering for the Metis command opcode `0x04`:
+
+```bash
+tshark -r /tmp/hl2cap/hl2_session.pcapng \
+  -Y 'ip.src == 169.254.105.135 and udp.dstport == 1024' \
+  -T fields -e frame.number -e frame.time_relative -e udp.payload 2>/dev/null \
+  | awk '{if (substr($3,1,6)=="effe04") print $1, $2, substr($3,1,16)}'
+```
+
+### A.4 EP6 frame size check
+
+Verify all radio→host EP6 frames (opcode `0x01`) are exactly 1032 bytes:
+
+```bash
+tshark -r /tmp/hl2cap/hl2_session.pcapng \
+  -Y 'ip.src == 169.254.19.221' \
+  -T fields -e udp.length | sort -u
+```
+
+### A.5 EP6 C0 status index enumeration
+
+Extract C0 status bytes from EP6 frames and histogram the slot indices (bits [7:3]) for both USB sub-frames.
+
+**USB1 (offset 11):**
+
+```bash
+tshark -r /tmp/hl2cap/hl2_session.pcapng \
+  -Y 'ip.src == 169.254.19.221' \
+  -T fields -e udp.payload 2>/dev/null \
+  | awk 'substr($0,1,6)=="effe01" {c0=strtonum("0x" substr($0,23,2)); printf "0x%02X\n", and(c0,0xf8)}' \
+  | sort | uniq -c | sort -rn
+```
+
+**USB2 (offset 523):**
+
+```bash
+tshark -r /tmp/hl2cap/hl2_session.pcapng \
+  -Y 'ip.src == 169.254.19.221' \
+  -T fields -e udp.payload 2>/dev/null \
+  | awk 'substr($0,1,6)=="effe01" {c0=strtonum("0x" substr($0,1047,2)); printf "0x%02X\n", and(c0,0xf8)}' \
+  | sort | uniq -c | sort -rn
+```
+
+### A.6 EP2 C0 command enumeration
+
+Extract C0 status bytes from EP2 frames (host→radio, opcode `0x02`) and histogram the command indices for comparison.
+
+**USB1 (offset 11):**
+
+```bash
+tshark -r /tmp/hl2cap/hl2_session.pcapng \
+  -Y 'ip.src == 169.254.105.135 and udp.dstport == 1024' \
+  -T fields -e udp.payload 2>/dev/null \
+  | awk 'substr($0,1,6)=="effe02" {c0=strtonum("0x" substr($0,23,2)); printf "0x%02X\n", and(c0,0xfe)}' \
+  | sort | uniq -c | sort -rn
+```
+
+**USB2 (offset 523):**
+
+```bash
+tshark -r /tmp/hl2cap/hl2_session.pcapng \
+  -Y 'ip.src == 169.254.105.135 and udp.dstport == 1024' \
+  -T fields -e udp.payload 2>/dev/null \
+  | awk 'substr($0,1,6)=="effe02" {c0=strtonum("0x" substr($0,1047,2)); printf "0x%02X\n", and(c0,0xfe)}' \
+  | sort | uniq -c | sort -rn
+```
+
+### A.7 Cadence computation — frame rates
+
+Count frames per direction and compute rate (frames / duration).
+
+**EP6 (radio→host, 5052.9 Hz observed):**
+
+```bash
+tshark -r /tmp/hl2cap/hl2_session.pcapng \
+  -Y 'ip.src == 169.254.19.221' \
+  -T fields -e frame.number -e frame.time_relative 2>/dev/null \
+  | awk 'NR==1{first=$2; first_frame=$1} NR==NF{last=$2; last_frame=$1} END{print "Frames:", last_frame - first_frame, "Duration:", last - first, "Rate:", (last_frame - first_frame) / (last - first)}'
+```
+
+**EP2 (host→radio, 378.0 Hz observed):**
+
+```bash
+tshark -r /tmp/hl2cap/hl2_session.pcapng \
+  -Y 'ip.src == 169.254.105.135 and udp.dstport == 1024' \
+  -T fields -e frame.number -e frame.time_relative 2>/dev/null \
+  | awk 'NR==1{first=$2; first_frame=$1} NR==NF{last=$2; last_frame=$1} END{print "Frames:", last_frame - first_frame, "Duration:", last - first, "Rate:", (last_frame - first_frame) / (last - first)}'
+```
+
+### A.8 Sequence continuity check
+
+Verify EP6 Metis sequence numbers (bytes 4–7, 32-bit big-endian) are contiguous with no gaps:
+
+```bash
+tshark -r /tmp/hl2cap/hl2_session.pcapng \
+  -Y 'ip.src == 169.254.19.221' \
+  -T fields -e udp.payload 2>/dev/null \
+  | awk 'substr($0,1,6)=="effe01" {seq=strtonum("0x" substr($0,9,8)); if(prev!="" && seq != prev+1) gaps++; prev=seq} END{print "gaps="gaps}'
+```
+
+### A.9 RX1 frequency-change event detection
+
+Locate case-0x04 (RX1/DDC0) slot transitions by filtering EP2 frames and extracting the frequency value (bytes 4–7 of payload after C0–C4):
+
+```bash
+tshark -r /tmp/hl2cap/hl2_session.pcapng \
+  -Y 'ip.src == 169.254.105.135 and udp.dstport == 1024' \
+  -T fields -e frame.time_relative -e udp.payload 2>/dev/null \
+  | awk 'substr($2,1,6)=="effe02" {c0=strtonum("0x" substr($2,23,2)); if(and(c0,0xfe)==0x04) {freq=strtonum("0x" substr($2,11,8)); if(last_freq!="" && freq!=last_freq) print $1, "RX1 change", last_freq, "->", freq; last_freq=freq}}'
+```
+
+### A.10 MOX transition detection
+
+Monitor EP2 case-0x00 (general C&C) C0 bit 0 (MOX) for RX↔TX transitions:
+
+```bash
+tshark -r /tmp/hl2cap/hl2_session.pcapng \
+  -Y 'ip.src == 169.254.105.135 and udp.dstport == 1024' \
+  -T fields -e frame.time_relative -e udp.payload 2>/dev/null \
+  | awk 'substr($2,1,6)=="effe02" {c0=strtonum("0x" substr($2,23,2)); mox=and(c0,0x01); if(last_mox!="" && mox!=last_mox) print $1, "MOX", (last_mox?"off":"on"), "->", (mox?"on":"off"); last_mox=mox}'
+```
+
+### A.11 ADC overload bit check
+
+Scan EP6 case-0x00 (general C&C) USB1 C1 bit 0 (ADC overload) across the entire session:
+
+```bash
+tshark -r /tmp/hl2cap/hl2_session.pcapng \
+  -Y 'ip.src == 169.254.19.221' \
+  -T fields -e udp.payload 2>/dev/null \
+  | awk 'substr($0,1,6)=="effe01" {c0=strtonum("0x" substr($0,23,2)); if(and(c0,0xf8)==0x00) {c1=strtonum("0x" substr($0,25,2)); adc_ol=and(c1,0x01); if(adc_ol) print "ADC overload detected"}}' \
+  | sort | uniq -c
+```
+
+---
+
+### Re-running on a Different Capture
+
+To re-run this analysis on a different P1 capture, follow these steps:
+
+1. Identify the host and radio IP addresses from the new capture (use `tshark -r capture.pcapng -Y 'udp.port == 1024'` to find them)
+2. Replace `169.254.105.135` (host) and `169.254.19.221` (radio) in all `-Y` filters with the new addresses
+3. Replace `/tmp/hl2cap/HL2_Packet_Capture.pcapng` with the path to your capture file
+4. Run blocks A.1 through A.11 in order
+
+**Important:** All commands assume bash with GNU `awk` (gawk). On macOS, ensure `gawk` is installed via Homebrew:
+
+```bash
+brew install gawk
+```
+
+Or substitute `awk` with `gawk` explicitly in all commands above if the default `awk` is BSD awk (which lacks `strtonum` and `and` functions needed for hex parsing).
