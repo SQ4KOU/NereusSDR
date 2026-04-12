@@ -172,22 +172,24 @@ void ContainerSettingsDialog::buildLayout()
     m_splitter->setStyleSheet(
         "QSplitter::handle { background: #203040; width: 3px; }");
 
-    // Phase 3G-6 block 3 commit 11: the live-preview panel (a nested
-    // MeterWidget inside the modal dialog) is removed. The Thetis
-    // 3-column layout added in commit 12 will reintroduce a Properties
-    // column on the right; for this commit the splitter is just a
-    // 2-column Items / Type-Properties layout.
-    QWidget* leftWrapper = new QWidget(m_splitter);
-    buildLeftPanel(leftWrapper);
-    m_splitter->addWidget(leftWrapper);
+    // Phase 3G-6 block 3 commit 12: Thetis 3-column layout.
+    // Left = Available (catalog), center = In-use, right = Properties.
+    QWidget* availWrapper = new QWidget(m_splitter);
+    buildAvailablePanel(availWrapper);
+    m_splitter->addWidget(availWrapper);
 
-    QWidget* centerWrapper = new QWidget(m_splitter);
-    buildCenterPanel(centerWrapper);
-    m_splitter->addWidget(centerWrapper);
+    QWidget* inUseWrapper = new QWidget(m_splitter);
+    buildInUsePanel(inUseWrapper);
+    m_splitter->addWidget(inUseWrapper);
+
+    QWidget* propsWrapper = new QWidget(m_splitter);
+    buildPropertiesPanel(propsWrapper);
+    m_splitter->addWidget(propsWrapper);
 
     m_splitter->setStretchFactor(0, 0);
-    m_splitter->setStretchFactor(1, 1);
-    m_splitter->setSizes({240, 620});
+    m_splitter->setStretchFactor(1, 0);
+    m_splitter->setStretchFactor(2, 1);
+    m_splitter->setSizes({200, 200, 460});
 
     root->addWidget(m_splitter, 1);
 
@@ -195,13 +197,51 @@ void ContainerSettingsDialog::buildLayout()
     buildButtonBar();
 }
 
-void ContainerSettingsDialog::buildLeftPanel(QWidget* parent)
+// ---------------------------------------------------------------------------
+// Phase 3G-6 block 3 commit 12: Thetis 3-column layout
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::buildAvailablePanel(QWidget* parent)
+{
+    // Mirrors Thetis lstMetersAvailable (setup.cs:24522-24566). Commit 15
+    // adds RX / TX / Special category headers; for this commit the list
+    // is flat alphabetical.
+    QVBoxLayout* layout = new QVBoxLayout(parent);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
+
+    QLabel* header = new QLabel(QStringLiteral("Available"), parent);
+    header->setStyleSheet(kSectionHeaderStyle);
+    layout->addWidget(header);
+
+    m_availableList = new QListWidget(parent);
+    m_availableList->setStyleSheet(kListStyle);
+    layout->addWidget(m_availableList, 1);
+
+    QHBoxLayout* btnRow = new QHBoxLayout;
+    btnRow->setSpacing(3);
+    m_btnAddFromAvailable = makeBtn(QStringLiteral("Add \u2192"), parent);
+    m_btnAddFromAvailable->setToolTip(
+        QStringLiteral("Add the selected available item to the in-use list"));
+    btnRow->addStretch();
+    btnRow->addWidget(m_btnAddFromAvailable);
+    layout->addLayout(btnRow);
+
+    connect(m_btnAddFromAvailable, &QPushButton::clicked,
+            this, &ContainerSettingsDialog::onAddFromAvailable);
+    connect(m_availableList, &QListWidget::itemDoubleClicked, this,
+            [this](QListWidgetItem*) { onAddFromAvailable(); });
+
+    populateAvailableList();
+}
+
+void ContainerSettingsDialog::buildInUsePanel(QWidget* parent)
 {
     QVBoxLayout* layout = new QVBoxLayout(parent);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(4);
 
-    QLabel* header = new QLabel(QStringLiteral("Content Items"), parent);
+    QLabel* header = new QLabel(QStringLiteral("In-use items"), parent);
     header->setStyleSheet(kSectionHeaderStyle);
     layout->addWidget(header);
 
@@ -212,16 +252,18 @@ void ContainerSettingsDialog::buildLeftPanel(QWidget* parent)
     connect(m_itemList, &QListWidget::currentRowChanged,
             this, &ContainerSettingsDialog::onItemSelectionChanged);
 
-    // Action buttons row
+    // Action buttons row — the legacy + (popup) button is kept for
+    // parity with the old flow; it sits alongside the new Remove /
+    // Up / Down controls.
     QHBoxLayout* btnRow = new QHBoxLayout;
     btnRow->setSpacing(3);
 
-    m_btnAdd    = makeBtn(QStringLiteral("+"),  parent);
-    m_btnRemove = makeBtn(QStringLiteral("\u2212"), parent);  // − (minus sign)
-    m_btnMoveUp = makeBtn(QStringLiteral("\u25b2"), parent);  // ▲
-    m_btnMoveDown = makeBtn(QStringLiteral("\u25bc"), parent); // ▼
+    m_btnAdd      = makeBtn(QStringLiteral("+"),           parent);
+    m_btnRemove   = makeBtn(QStringLiteral("\u2212"),      parent);
+    m_btnMoveUp   = makeBtn(QStringLiteral("\u25b2"),      parent);
+    m_btnMoveDown = makeBtn(QStringLiteral("\u25bc"),      parent);
 
-    m_btnAdd->setToolTip(QStringLiteral("Add item"));
+    m_btnAdd->setToolTip(QStringLiteral("Add item (popup)"));
     m_btnRemove->setToolTip(QStringLiteral("Remove selected item"));
     m_btnMoveUp->setToolTip(QStringLiteral("Move item up"));
     m_btnMoveDown->setToolTip(QStringLiteral("Move item down"));
@@ -242,13 +284,13 @@ void ContainerSettingsDialog::buildLeftPanel(QWidget* parent)
     populateItemList();
 }
 
-void ContainerSettingsDialog::buildCenterPanel(QWidget* parent)
+void ContainerSettingsDialog::buildPropertiesPanel(QWidget* parent)
 {
     QVBoxLayout* layout = new QVBoxLayout(parent);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(4);
 
-    QLabel* header = new QLabel(QStringLiteral("Item Properties"), parent);
+    QLabel* header = new QLabel(QStringLiteral("Properties"), parent);
     header->setStyleSheet(kSectionHeaderStyle);
     layout->addWidget(header);
 
@@ -268,8 +310,60 @@ void ContainerSettingsDialog::buildCenterPanel(QWidget* parent)
 
     layout->addWidget(m_propertyStack, 1);
 
-    // Pre-build the common props page so it's ready immediately
     buildCommonPropsPage();
+}
+
+// ---------------------------------------------------------------------------
+// Available list catalog and Add-from-available flow
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::populateAvailableList()
+{
+    if (!m_availableList) { return; }
+    m_availableList->clear();
+
+    // Flat alphabetical catalog. Commit 15 categorizes this into
+    // RX / TX / Special sections per Thetis lstMetersAvailable.
+    struct Entry { const char* tag; const char* label; };
+    static const Entry kCatalog[] = {
+        {"BAR",            "Bar Meter"},
+        {"CLICKBOX",       "Click Box"},
+        {"CLOCK",          "Clock"},
+        {"DATAOUT",        "Data Out"},
+        {"DIAL",           "Dial Meter"},
+        {"FADECOVER",      "Fade Cover"},
+        {"FILTERDISPLAY",  "Filter Display"},
+        {"HISTORY",        "History Graph"},
+        {"IMAGE",          "Image"},
+        {"LED",            "LED"},
+        {"MAGICEYE",       "Magic Eye"},
+        {"NEEDLE",         "Needle Meter"},
+        {"NEEDLESCALEPWR", "Needle Scale Power"},
+        {"ROTATOR",        "Rotator"},
+        {"SCALE",          "Scale"},
+        {"SIGNALTEXT",     "Signal Text"},
+        {"SOLID",          "Solid Colour"},
+        {"SPACER",         "Spacer"},
+        {"TEXT",           "Text Readout"},
+        {"TEXTOVERLAY",    "Text Overlay"},
+        {"VFODISPLAY",     "VFO Display"},
+        {"WEBIMAGE",       "Web Image"},
+    };
+
+    for (const auto& e : kCatalog) {
+        auto* item = new QListWidgetItem(QString::fromLatin1(e.label), m_availableList);
+        item->setData(Qt::UserRole, QString::fromLatin1(e.tag));
+    }
+}
+
+void ContainerSettingsDialog::onAddFromAvailable()
+{
+    if (!m_availableList) { return; }
+    QListWidgetItem* sel = m_availableList->currentItem();
+    if (!sel) { return; }
+    const QString tag = sel->data(Qt::UserRole).toString();
+    if (tag.isEmpty()) { return; }
+    addNewItem(tag);
 }
 
 // Phase 3G-6 block 3 commit 11: buildRightPanel / live preview deleted.

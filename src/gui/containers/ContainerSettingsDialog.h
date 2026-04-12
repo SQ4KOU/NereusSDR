@@ -47,12 +47,18 @@ private slots:
 
 private:
     void buildLayout();
-    void buildLeftPanel(QWidget* parent);
-    void buildCenterPanel(QWidget* parent);
-    // Phase 3G-6 block 3: buildRightPanel removed along with the live
-    // preview in commit 11; commit 12 reintroduces a Properties column.
+    // Thetis 3-column layout: Available | In-use | Properties.
+    void buildAvailablePanel(QWidget* parent);   // left
+    void buildInUsePanel(QWidget* parent);       // center
+    void buildPropertiesPanel(QWidget* parent);  // right
     void buildContainerPropertiesSection(QVBoxLayout* parentLayout);
     void buildButtonBar();
+
+    // Populate the Available list with every item type the user can
+    // insert into the in-use list. Commit 15 will categorize these
+    // into RX / TX / Special sections.
+    void populateAvailableList();
+    void onAddFromAvailable();   // "Add >" button click
 
     static MeterItem* createItemFromSerialized(const QString& data);
     void refreshItemList();
@@ -91,9 +97,14 @@ private:
 
     QSplitter* m_splitter{nullptr};
 
-    // Left panel
+    // Thetis 3-column layout
+    // Left panel: Available item types (catalog).
+    QListWidget* m_availableList{nullptr};
+    QPushButton* m_btnAddFromAvailable{nullptr};
+
+    // Center panel: In-use items in the container (the old m_itemList).
     QListWidget* m_itemList{nullptr};
-    QPushButton* m_btnAdd{nullptr};
+    QPushButton* m_btnAdd{nullptr};       // kept for legacy popup Add path
     QPushButton* m_btnRemove{nullptr};
     QPushButton* m_btnMoveUp{nullptr};
     QPushButton* m_btnMoveDown{nullptr};
