@@ -189,6 +189,8 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 
 * `RadioModel` — central state, owns connection + all sub-models + WdspEngine
 * `SliceModel` — per-receiver VFO state (freq, mode, filter, AGC, gains, antenna). Single source of truth.
+* `PanadapterModel` — per-panadapter display state (center freq, bandwidth, dBm range). As of 3G-8, also owns the per-band grid storage (`BandGridSettings {dbMax, dbMin}` × 14 bands, global `gridStep`) and the current `band()` derived from `setCenterFrequency()` via `Band::bandFromFrequency()`. Emits `bandChanged(Band)` on boundary crossings and pushes the stored slot into `dBmFloor`/`dBmCeiling` automatically. `RadioModel::spectrumWidget()` / `fftEngine()` non-owning view hooks are set here by `MainWindow` so setup pages reach the renderer.
+* `Band` (`src/models/Band.h`) — first-class 14-band enum (160m–6m + GEN + WWV + XVTR) with `bandLabel()`, `bandKeyName()` (AppSettings key suffix), `bandFromFrequency()` (IARU Region 2 lookup with WWV discrete centers), `bandFromUiIndex()` / `uiIndexFromBand()`. Added in 3G-8.
 * `ReceiverManager` — DDC-aware receiver lifecycle, maps logical receivers to hardware DDCs; exposes DDC center frequency for CTUN pan positioning
 * `RadioDiscovery` — OpenHPSDR radio discovery on UDP port 1024
 * `RadioConnection` — Protocol 1 (UDP) and Protocol 2 (UDP multi-port) connections
@@ -214,6 +216,7 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 * `StyleConstants.h` — shared color palette, fonts, widget style constants
 * `HGauge` — horizontal bar gauge widget
 * `ComboStyle` — styled combo box shared across applets
+* `ColorSwatchButton` (`src/gui/ColorSwatchButton.h`) — reusable color picker button: QPushButton subclass, QColorDialog with alpha, `colorChanged(QColor)` signal, static `colorToHex` / `colorFromHex` helpers for AppSettings `"#RRGGBBAA"` round-trip. Added in 3G-8; used by 9 call sites across the Display setup pages (S11/S13 trace colours, W10 waterfall low colour, G6 band edge, G9–G13 grid/text/zero-line colours).
 
 **Thread Architecture:**
 
@@ -340,6 +343,8 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | [phase3g4-advanced-meters-plan.md](docs/architecture/phase3g4-advanced-meters-plan.md) | 3G-4: Advanced Meter Items | **Complete** |
 | [phase3g5-interactive-meters-plan.md](docs/architecture/phase3g5-interactive-meters-plan.md) | 3G-5: Interactive Meter Items | **Complete** |
 | [phase3g6a-plan.md](docs/architecture/phase3g6a-plan.md) | 3G-6 (one-shot): Full Thetis Parity + MMIO | **Complete** |
+| [phase3g8-rx1-display-parity-plan.md](docs/architecture/phase3g8-rx1-display-parity-plan.md) | 3G-8: RX1 Display Parity (47 Spectrum/Waterfall/Grid controls, Band enum, per-band grid, GPU polish) | **Complete** |
+| [phase3g8-verification/README.md](docs/architecture/phase3g8-verification/README.md) | 3G-8: 47-control manual verification matrix | Matrix drafted |
 | [phase3f-multi-panadapter-plan.md](docs/architecture/phase3f-multi-panadapter-plan.md) | 3F: Multi-Panadapter + DDC Assignment | Planning (after 3I-4) |
 
 ### Protocol Reference (`docs/protocols/`)
@@ -358,7 +363,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | 1B: Thetis Analysis | Dual-thread DSP (RX1/RX2), pre-allocated receivers, one-way protocol, skin system |
 | 1C: WDSP Analysis | 256 API functions, channel-based DSP, fexchange2() for I/Q, PureSignal feedback loop |
 
-### Current Phase: 3I-1 — Basic SSB TX (recommended next) or 3G-4 — Advanced Meter Items
+### Current Phase: 3I-1 — Basic SSB TX (recommended next after 3G-8 merges)
 
 | Phase | Goal | Status |
 | --- | --- | --- |
@@ -375,6 +380,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | **3G-5: Interactive Meter Items** | **14 interactive items + mouse forwarding + ButtonBoxItem base** | **Complete** |
 | **3G-6: Container Settings Dialog (one-shot)** | **3-column dialog, 31 per-item editors, MMIO subsystem (4 transports + JSON/XML/RAW), Edit Container submenu** | **Complete** |
 | **3G-7: Polish** | **MMIO clone-path bug fix + 5 subclass accessor gap fills + NeedleItemEditor QGroupBox grouping** | **Complete** |
+| **3G-8: RX1 Display Parity** | **47 Spectrum/Waterfall/Grid controls wired (Setup → Display), `Band` enum + per-band grid on PanadapterModel, `BandButtonItem` 12→14, GPU polish: overlay cache invalidation, waterfall chrome in overlay texture, peak hold VBO, fill/gradient/cal-offset in vertex gen** | **Complete (PR #8)** |
 | 3I-1: Basic SSB TX | TxChannel, mic input, MOX state machine, I/Q output | Planned |
 | 3I-2: CW TX | Sidetone, firmware keyer, QSK/break-in | Planned |
 | 3I-3: TX Processing | 18-stage TXA chain + RX DSP additions (SNB, peak hold, histogram) | Planned |

@@ -434,6 +434,41 @@ Scope:
 
 Verification: Create container from scratch, add items, configure data sources, export/import Base64.
 
+### Phase 3G-8: RX1 Display Parity ✅ COMPLETE
+**Goal:** Bring `Setup → Display` to feature parity with Thetis for RX1 only — the 47-control wire-up.
+
+**Shipped 2026-04-12** on `feature/phase3g8-rx1-display-parity` as PR #8 (base `main`). 10 GPG-signed code commits + 3 doc-amend prep commits.
+
+Scope delivered:
+- 3 Setup pages fully wired: Spectrum Defaults (17), Waterfall Defaults (17), Grid & Scales (13)
+- New `ColorSwatchButton` reusable QColorDialog-backed widget (`src/gui/ColorSwatchButton.h/.cpp`) used by 9 call sites
+- New `Band` enum (`src/models/Band.h`): 14 bands (160m–6m + GEN + WWV + XVTR), IARU Region 2 frequency lookup, UI-index mapping
+- Per-band display grid storage on `PanadapterModel` (28 per-band Max/Min keys + 1 global Step)
+- `BandButtonItem` expanded 12 → 14 buttons
+- `SpectrumWidget` renderer additions: averaging modes (None/Weighted/Log/TimeWindow), peak hold + decay, trace fill/alpha/line-width/gradient, cal offset, waterfall AGC/reverse/opacity/overlays/timestamp, 3 new colour schemes (LinLog/LinRad/Custom — total 7), configurable grid colours, 5-mode frequency label alignment, FPS overlay
+- `FFTEngine` already had FFT size and window switching; wired through the Spectrum Defaults page
+- `RadioModel::spectrumWidget()` / `fftEngine()` non-owning view hooks so setup pages reach the renderer without depending on `MainWindow`
+- GPU path polish: overlay texture cache invalidation (11 controls), waterfall chrome factored into `drawWaterfallChrome()` and drawn into the GPU overlay texture (W6 opacity, W8/W9 timestamp, W11/W13 filter/zero-line overlays), new `m_fftPeakVbo` for GPU peak hold, vertex-gen changes so cal offset / gradient toggle / fill toggle / fill colour are live in the GPU render path
+
+Plan §13 open questions resolved:
+1. Cal Offset (S8) — real Thetis field at `display.cs:1372` (`Display.RX1DisplayCalOffset`), not an extension
+2. FPS overlay (G8) — `QPainter` text in `paintEvent` + GPU overlay texture path
+3. Display Thread Priority (S17) — 1:1 map Thetis ThreadPriority → QThread::Priority, default HighPriority
+4. Per-band grid initial values — Thetis uniform -40 / -140 for all 14 slots (authorised one-off §10 divergence)
+
+Authorised Thetis divergence (plan §10, one-off): new per-band grid slots initialise to Thetis uniform -40 / -140 rather than NereusSDR's existing -20 / -160. Source-first protocol stays as written — this phase is an exception, not a precedent.
+
+Known deferrals (tracked in PR description):
+- S7 Line Width on GPU (QRhi lacks portable setLineWidth; needs triangle strip rendering — deferred)
+- S16 FFT Decimation (UI scaffolded, no FFTEngine setter)
+- W12/W14 TX filter/zero-line overlays (gated on TX state model — post-3I-1)
+- Data Line / Data Fill Color splitting (shares `m_fillColor` until UX feedback justifies splitting)
+- W10 Waterfall Low Color runtime effect (persisted; waits for Custom-scheme `AppSettings` parser)
+
+Verification: 47-control matrix at `docs/architecture/phase3g8-verification/README.md`. Screenshot capture deferred; manual smoke-test workflow driven by the user.
+
+**Implementation plan:** `docs/architecture/phase3g8-rx1-display-parity-plan.md` (plan §13 resolutions in commit `0308b1b`, plan §5.3 correction in `b8045cc`).
+
 ### Phase 3I-1: Basic SSB TX
 **Goal:** Get RF out the door — prove the TX I/Q output path works.
 
@@ -618,19 +653,23 @@ CI workflows already in place. Finalize:
 
 ---
 
-## Recommended Next Step: Phase 3G-6 — Container Settings Dialog or Phase 3I-1 — Basic SSB TX
+## Recommended Next Step: Phase 3I-1 — Basic SSB TX
 
-Phases 3A–3E, 3G-1 through 3G-5, and 3-UI are all complete. The radio connects,
+Phases 3A–3E, 3G-1 through 3G-8, and 3-UI are all complete. The radio connects,
 demodulates audio, renders live GPU spectrum + waterfall, supports full VFO tuning with
-CTUN panadapter mode, and has a complete meter system with 31 item types (18 passive + 13
-interactive) including button grids, VFO display, and clock — all with signal-based
-interaction wired through ContainerWidget.
+CTUN panadapter mode, has a complete meter system with 31 item types (18 passive + 13
+interactive) including button grids, VFO display, and clock, has a full Thetis-parity
+Container Settings Dialog with MMIO external-data subsystem, and — as of 3G-8 — a fully
+wired Display setup category where every Spectrum Defaults / Waterfall Defaults / Grid
+& Scales control routes through to the renderer live on both the QPainter fallback and
+the QRhi/Metal GPU path.
 
-Two viable next paths:
-- **3G-6 (Container Settings Dialog)** — full composability UI, import/export, preset browser — completes the meter system
-- **3I-1 (Basic SSB TX)** — get RF out the door; proves TX I/Q output path end-to-end
+The next meaningful step is getting RF out the door:
 
-Execution order: **3G-6 → 3I-1..4 → 3F → 3H → 3J+**
+- **3I-1 (Basic SSB TX)** — TxChannel WDSP wrapper, mic input, MOX state machine, TX I/Q
+  output. Proves the TX path end-to-end and unblocks 3I-2..4, 3F, 3H.
+
+Execution order: **3I-1..4 → 3F → 3H → 3J+**
 
 ### Phase Dependencies
 

@@ -24,7 +24,7 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 
 ## Current Status
 
-**Phase 3G-6 (one-shot) + Phase 3G-7 polish complete — full Thetis-parity Container Settings Dialog + MMIO subsystem + dialog clone-path bug fixes.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates audio through WDSP, renders a live GPU-accelerated spectrum + waterfall with VFO tuning (CTUN mode), and has a full UI skeleton with 12 applets, 150+ control widgets, and a complete meter system with 31 item types. The meter engine supports composable items including arc-style S-meter, Power/SWR bars, ANANMM 7-needle multi-meter, CrossNeedle dual fwd/rev power, magic eye tube display, history graph, rotator compass, filter display, LED indicators, interactive band/mode/filter/antenna/tuning-step button grids, VFO frequency display with per-digit wheel tuning, and dual UTC/Local clock — all ported from the Thetis MeterManager.
+**Phase 3G-8 complete — RX1 Display parity: Setup → Display pages fully wired to the renderer.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates audio through WDSP, renders a live GPU-accelerated spectrum + waterfall with VFO tuning (CTUN mode), has a full UI skeleton with 12 applets, 150+ control widgets, a complete meter system with 31 item types, and — as of 3G-8 — a fully wired Display setup category where every Spectrum Defaults / Waterfall Defaults / Grid & Scales control routes through to the renderer live on both the QPainter fallback path and the QRhi/Metal GPU path. Per-band grid state persists across all 14 bands (160m–6m + GEN + WWV + XVTR).
 
 **Phase 3G-6 (one-shot)** shipped 2026-04-12 as PR #2 — 40 GPG-signed commits across 7 execution blocks on `feature/phase3g6-oneshot`:
 
@@ -44,6 +44,21 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 - **`33e5ba0`** `docs(3G-7)` — CHANGELOG flipped to complete with per-item narrowings documented; handoff doc gains a 17-item "Outstanding work after 3G-7" section so each deferred item (MMIO disk persistence, smoke test, editor width sweep, ButtonBox sub-editor, 10 phantom feature ports) can be filed as its own GitHub issue.
 
 Items A and B both turned out dramatically smaller than the original handoff scoped — see the handoff doc and CHANGELOG for the per-item narrowings. Items D, E, F and the phantom feature ports are deferred to follow-up work; full list at `docs/architecture/phase3g7-polish-handoff.md` § "Outstanding work after 3G-7".
+
+**Phase 3G-8 — RX1 Display parity** shipped 2026-04-12 on `feature/phase3g8-rx1-display-parity` — 10 GPG-signed code commits + 3 doc-amend prep commits, off `main` (after 3G-7 merge). Brings the `Setup → Display → Spectrum Defaults / Waterfall Defaults / Grid & Scales` pages from "every control disabled with NYI tooltip" to feature parity with Thetis for RX1 only:
+
+- **Commit 1** — `ColorSwatchButton` reusable color picker widget, replaces the dead `makeColorSwatch` placeholder and used by 9 call sites across the phase.
+- **Commit 2** — per-band grid storage on `PanadapterModel`. New `src/models/Band.h` with a first-class 14-band enum (160m–6m + GEN + WWV + XVTR), IARU Region 2 `frequency→band` lookup, and UI-index mapping. `BandButtonItem` expanded 12→14 buttons. 28 per-band persistence keys (Max/Min only — Thetis keeps Step global) seeded with Thetis uniform -40 / -140 defaults.
+- **Commits 3–5** — `SpectrumWidget` + `FFTEngine` renderer additions: averaging modes (None / Weighted / Logarithmic / TimeWindow), peak hold + decay, trace line width, trace fill + alpha, gradient toggle, display cal offset, waterfall AGC, reverse scroll, opacity, update-period rate limiting, waterfall averaging, use-spectrum-min/max, RX filter / zero-line / timestamp overlays, 3 new colour schemes (LinLog / LinRad / Custom, total now 7), configurable grid / grid-fine / h-grid / text / zero-line / band-edge colours, 5-mode frequency label alignment, FPS overlay.
+- **Commits 6–8** — wire each Display setup page to the renderer: Spectrum Defaults (17 controls), Waterfall Defaults (17), Grid & Scales (13). Grid & Scales includes a live "Editing band: N" label that updates on `PanadapterModel::bandChanged` so per-band Max/Min edits always target the currently active band.
+- **Commit 9** — CHANGELOG entry + 47-control verification matrix at `docs/architecture/phase3g8-verification/README.md`.
+- **Commit 10** — GPU path polish: overlay-texture cache invalidation for grid / colour / labels / FPS / zero line / cal offset (11 controls), waterfall chrome factored into `drawWaterfallChrome()` and drawn into the GPU overlay texture (W6 opacity, W8/W9 timestamp, W11/W13 filter/zero line), new `m_fftPeakVbo` for GPU peak hold, and vertex-gen changes so cal offset / gradient toggle / fill toggle / fill colour are live in the GPU render path.
+
+**Architectural additions:** `RadioModel::spectrumWidget()` / `fftEngine()` non-owning view hooks so Setup pages can reach the renderer without depending on `MainWindow`; wired by `MainWindow` right after FFTEngine creation.
+
+**Known deferrals** (tracked in the PR description and `CHANGELOG.md`): S7 Line Width on GPU (needs triangle strip rendering for portable thickness — Metal/Vulkan clamp to 1 px), S16 FFT Decimation (scaffolded only, `FFTEngine` has no decimation setter yet), W12 / W14 TX filter / zero-line overlays (gated on TX state model — post-3I-1), Data Line / Data Fill Color splitting (deferred until UX feedback justifies it), W10 Waterfall Low Color runtime effect (persisted; waits for Custom-scheme `AppSettings` parser).
+
+**Authorised Thetis divergence** (plan §10, one-off): per-band grid slots initialise to Thetis uniform -40 / -140 rather than NereusSDR's existing -20 / -160. Source-first protocol stays as written — this phase is an exception, not a precedent.
 
 ## Key Features
 
@@ -129,6 +144,7 @@ Items A and B both turned out dramatically smaller than the original handoff sco
 | **3G-5: Interactive Meter Items** | **14 interactive items + mouse forwarding + ButtonBoxItem base** | **Complete** |
 | **3G-6: Container Settings Dialog (one-shot)** | **3-column Thetis layout + per-item editors for all ~30 types + in-place editing + MMIO external-data subsystem + container-level parity + menu submenu** | **Complete** |
 | **3G-7: Polish** | **MMIO clone-path bug fix + 5 subclass accessor gap fills + NeedleItemEditor QGroupBox grouping** | **Complete** |
+| **3G-8: RX1 Display Parity** | **47 Spectrum/Waterfall/Grid controls wired, `Band` enum + per-band grid on `PanadapterModel`, `BandButtonItem` 12→14, GPU path polish for live overlay / waterfall chrome / peak hold / fill / gradient / cal offset** | **Complete** |
 | 3I-1: Basic SSB TX | TxChannel, MOX state machine, RF output | Planned |
 | 3I-2: CW TX | Sidetone, firmware keyer, QSK/break-in | Planned |
 | 3I-3: TX Processing | 18-stage TXA chain + RX DSP additions | Planned |
