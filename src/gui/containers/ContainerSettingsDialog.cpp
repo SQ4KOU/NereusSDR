@@ -1855,9 +1855,21 @@ void ContainerSettingsDialog::loadPresetByName(const QString& name)
     }
 
     if (group) {
+        // Offset every cloned preset item by the current stack
+        // position so the preset doesn't overlap existing narrow
+        // items at the top of the container. Without this offset, a
+        // user who adds a single Bar (lands at y=0) and then loads
+        // the Clock preset (factory items also at y=0) sees the bar
+        // and clocks piled on top of each other. Computed BEFORE the
+        // loop so the offset is constant for all items in the preset.
+        const float yOffset = nextStackYPos(m_workingItems);
         for (MeterItem* src : group->items()) {
             MeterItem* clone = createItemFromSerialized(src->serialize());
             if (clone) {
+                clone->setRect(clone->x(),
+                               clone->y() + yOffset,
+                               clone->itemWidth(),
+                               clone->itemHeight());
                 // Phase 3G-7: factory presets won't normally have MMIO
                 // bindings, but copy them defensively in case a future
                 // preset wires one.
