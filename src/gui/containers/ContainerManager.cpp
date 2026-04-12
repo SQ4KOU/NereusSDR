@@ -4,11 +4,31 @@
 #include "FloatingContainer.h"
 #include "core/AppSettings.h"
 #include "core/LogCategories.h"
+#include "gui/meters/MeterWidget.h"
 
 #include <QSplitter>
 #include <algorithm>
 
 namespace NereusSDR {
+
+namespace {
+// Locate the MeterWidget hosted inside a container's content widget.
+// Container shape varies: user-created containers use a bare MeterWidget
+// as content; the panel container wraps a MeterWidget inside an
+// AppletPanelWidget. findChild<MeterWidget*>() handles both cases — and
+// returns the same pointer for the bare case since the search is
+// inclusive of the receiver. Returns nullptr for placeholder content.
+MeterWidget* innerMeterWidget(QWidget* content)
+{
+    if (!content) {
+        return nullptr;
+    }
+    if (auto* m = qobject_cast<MeterWidget*>(content)) {
+        return m;
+    }
+    return content->findChild<MeterWidget*>();
+}
+} // namespace
 
 ContainerManager::ContainerManager(QWidget* dockParent, QSplitter* splitter,
                                    QObject* parent)
@@ -373,6 +393,11 @@ void ContainerManager::setContainerVisible(const QString& id, bool visible)
     }
 }
 
+void ContainerManager::setContentFactory(ContainerContentFactory factory)
+{
+    m_contentFactory = std::move(factory);
+}
+
 void ContainerManager::saveState()
 {
     // From Thetis MeterManager.cs:6391-6447
@@ -383,6 +408,7 @@ void ContainerManager::saveState()
     if (!oldIdList.isEmpty()) {
         for (const QString& oldId : oldIdList.split(QLatin1Char(','))) {
             s.remove(QStringLiteral("ContainerData_%1").arg(oldId));
+            s.remove(QStringLiteral("ContainerItems_%1").arg(oldId));
             s.remove(QStringLiteral("MeterDisplay_%1_Geometry").arg(oldId));
         }
     }
@@ -395,6 +421,17 @@ void ContainerManager::saveState()
             c->storeLocation();
         }
         s.setValue(QStringLiteral("ContainerData_%1").arg(c->id()), c->serialize());
+        // Persist the meter items hosted inside the container, if any.
+        // Bare-MeterWidget and AppletPanelWidget content shapes both
+        // resolve via innerMeterWidget(); placeholder content (the
+        // QLabel installed by the constructor) returns nullptr and is
+        // skipped. Stored in a parallel key — items payload contains
+        // both '|' and '\n' separators that would corrupt the
+        // field-tolerant container metadata format if appended.
+        if (auto* meter = innerMeterWidget(c->content())) {
+            s.setValue(QStringLiteral("ContainerItems_%1").arg(c->id()),
+                       meter->serializeItems());
+        }
         idList << c->id();
         if (m_floatingForms.contains(c->id())) {
             m_floatingForms[c->id()]->saveGeometry();
@@ -433,6 +470,29 @@ void ContainerManager::restoreState()
             qCWarning(lcContainer) << "Failed to deserialize:" << id;
             delete container;
             continue;
+        }
+
+        // Materialize the inner content widget. MainWindow registers a
+        // factory so the panel container gets an AppletPanelWidget;
+        // when no factory is set (tests, headless tools) we default to
+        // a bare MeterWidget which matches the user-created shape.
+        QWidget* content = m_contentFactory
+            ? m_contentFactory(container->id(), container->rxSource())
+            : new MeterWidget();
+        if (content) {
+            container->setContent(content);
+        }
+
+        // Restore meter items into whichever MeterWidget the content
+        // shape exposes (bare or wrapped). Empty payload → leave the
+        // fresh meter empty so caller-side seeding can decide what to
+        // do (Container #0's default presets, etc.).
+        if (auto* meter = innerMeterWidget(content)) {
+            const QString itemsPayload =
+                s.value(QStringLiteral("ContainerItems_%1").arg(id)).toString();
+            if (!itemsPayload.isEmpty()) {
+                meter->deserializeItems(itemsPayload);
+            }
         }
 
         auto* floatingForm = new FloatingContainer(container->rxSource());

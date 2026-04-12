@@ -386,25 +386,45 @@ void MainWindow::populateDefaultMeter()
         return;
     }
 
+    // ContainerManager::restoreState may have set a MeterWidget with
+    // user-saved items as the panel container's content. Capture that
+    // payload before we overwrite c0's content. We can't reuse the
+    // pointer directly because ContainerWidget::setContent() calls
+    // deleteLater on the previous m_content; round-tripping through
+    // serialize/deserialize transfers the items into a fresh
+    // m_meterWidget that becomes the AppletPanelWidget header.
+    QString restoredItems;
+    if (auto* existingMeter = qobject_cast<MeterWidget*>(c0->content())) {
+        if (!existingMeter->items().isEmpty()) {
+            restoredItems = existingMeter->serializeItems();
+        }
+    }
+
     m_meterWidget = new MeterWidget();
 
-    // S-Meter: top 45% — arc needle bound to SignalAvg
-    // From Thetis MeterManager.cs: ANAN needle uses AVG_SIGNAL_STRENGTH
-    ItemGroup* smeter = ItemGroup::createSMeterPreset(
-        MeterBinding::SignalAvg, QStringLiteral("S-Meter"), m_meterWidget);
-    smeter->installInto(m_meterWidget, 0.0f, 0.0f, 1.0f, 0.45f);
-    delete smeter;
+    if (!restoredItems.isEmpty()) {
+        m_meterWidget->deserializeItems(restoredItems);
+        qCDebug(lcContainer) << "Restored" << m_meterWidget->items().size()
+                             << "panel meter items from saved state";
+    } else {
+        // S-Meter: top 45% — arc needle bound to SignalAvg
+        // From Thetis MeterManager.cs: ANAN needle uses AVG_SIGNAL_STRENGTH
+        ItemGroup* smeter = ItemGroup::createSMeterPreset(
+            MeterBinding::SignalAvg, QStringLiteral("S-Meter"), m_meterWidget);
+        smeter->installInto(m_meterWidget, 0.0f, 0.0f, 1.0f, 0.45f);
+        delete smeter;
 
-    // Power/SWR: middle 40% — stacked bars (stub TX bindings)
-    ItemGroup* pwrSwr = ItemGroup::createPowerSwrPreset(
-        QStringLiteral("Power/SWR"), m_meterWidget);
-    pwrSwr->installInto(m_meterWidget, 0.0f, 0.45f, 1.0f, 0.40f);
-    delete pwrSwr;
+        // Power/SWR: middle 40% — stacked bars (stub TX bindings)
+        ItemGroup* pwrSwr = ItemGroup::createPowerSwrPreset(
+            QStringLiteral("Power/SWR"), m_meterWidget);
+        pwrSwr->installInto(m_meterWidget, 0.0f, 0.45f, 1.0f, 0.40f);
+        delete pwrSwr;
 
-    // ALC: bottom 15% — compact single-line bar (stub TX binding)
-    ItemGroup* alc = ItemGroup::createAlcPreset(m_meterWidget);
-    alc->installInto(m_meterWidget, 0.0f, 0.85f, 1.0f, 0.15f);
-    delete alc;
+        // ALC: bottom 15% — compact single-line bar (stub TX binding)
+        ItemGroup* alc = ItemGroup::createAlcPreset(m_meterWidget);
+        alc->installInto(m_meterWidget, 0.0f, 0.85f, 1.0f, 0.15f);
+        delete alc;
+    }
 
     // Build an AppletPanelWidget: MeterWidget on top, then all applets below.
     // This is a single scrollable content widget per the v2 plan.
