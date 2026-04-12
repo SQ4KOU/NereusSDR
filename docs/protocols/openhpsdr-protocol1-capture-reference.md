@@ -1188,3 +1188,75 @@ To key TX on HL2 via Protocol 1:
 - Drive level (case 10): `networkproto1.c:578–580`
 
 ---
+
+## 9. HL2-Specific Observations
+
+**Scope:** The observations below are from ONE Hermes Lite 2 running firmware
+version `0x4A` (decimal 74) on ONE capture session. They may not generalize to
+other HL2 firmware revisions or other P1 radios.
+
+### 9.1 Radio Identity
+
+- **Board ID:** `0x06` (HermesLite); **Firmware:** `0x4A` (74 decimal)
+- **MAC:** `00:1C:C0:A2:13:DD`
+- **Sample rate:** 192 kHz only (observed in Sections 5–6)
+- **Frame rate:** 5052.9 Hz observed vs. 4947 Hz theoretical; +2.1% delta, firmware-specific timing
+
+### 9.2 Non-standard EP6 Status Slot (`0xFA` repeating)
+
+The HL2 firmware injects a status-like frame with C0=`0xFA` approximately every
+870 frames with constant payload `02 00 00 01` (C1–C4). This slot does not
+appear in `networkproto1.c` and its purpose is unknown. See **Section 4** for
+full analysis.
+
+**ADC Overload Bit:** Case-0 USB1 frames (281,195 total) never show the ADC
+overload bit (C1 bit 0) set across the entire session.
+
+### 9.3 Non-standard EP2 Command Slots
+
+Beyond the 17 standard protocol-1 cases (0x00–0x10 even), the HL2 firmware
+recognizes four additional slot groups:
+
+1. **`0x2E` / `0x74`** — main-cycle extensions with constant payloads; purpose unknown
+2. **`0x7A`** — I2C-style aperiodic bursts (C2=`0x9D`)
+3. **`0xFA` / `0xFB`** — ~131-frame periodic timer (C2=`0x9D`, shared I2C device address?)
+
+See **Section 5** for slot-level trace and periodicity details.
+
+### 9.4 MOX in Extension Slots
+
+During TX, the MOX bit (C0 bit 0) appears in all C0 bytes, including HL2
+extension slots `0x2F` (ext 17), `0x75` (ext 18), and `0xFB` (timer). The MOX
+flag is OR'd into every slot by `WriteMainLoop` without distinction. See
+**Section 8.5** for the bring-up walk-through and trace.
+
+### 9.5 Duplex Bit Ignored
+
+The duplex bit (C4 bit 2 in case-0) is always observed as 0 in captured frames,
+despite `networkproto1.c:507` always OR'ing `0x04` into C4. The HL2 firmware
+ignores the duplex flag and operates in simplex mode (single antenna for RX and
+TX).
+
+### 9.6 Extended Discovery Reply Bytes
+
+The discovery reply from HL2 carries extra data in bytes 11–13, 20, and 21–59
+that are not parsed by the standard Thetis discovery logic. These bytes likely
+encode HL2 firmware-specific capabilities (e.g., I2C peripherals, hardware
+options). Future work should cross-reference the Hermes Lite 2 firmware source
+(Steve Haynal's repo: `github.com/softerhardware/Hermes-Lite2`) to document
+their meaning. See **Section 2** for the hex capture.
+
+### 9.7 Implications for Nereus Phase 3L
+
+Nereus must implement the standard P1 RX path against `networkproto1.c`
+exclusively, then treat HL2 as **"standard P1 + the four extension slots
+listed above"**. Do not copy HL2-specific behavior into the generic P1 RX
+path — add it conditionally when discovery returns board ID `0x06`.
+
+Concrete steps:
+1. Implement slots 0x00–0x10 (even) per `networkproto1.c`
+2. After discovery identifies board ID `0x06`, enable HL2 slots `0x2E`, `0x74`, `0x7A`, `0xFA`, `0xFB`
+3. Parse case-0 status with HL2 semantics (duplex=0, MOX in all slots)
+4. Investigate extended discovery bytes in HL2 firmware source before exposing capabilities to the UI
+
+---
