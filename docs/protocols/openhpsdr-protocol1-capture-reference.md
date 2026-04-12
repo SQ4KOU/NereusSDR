@@ -777,3 +777,192 @@ The HL2 firmware expects a ~19 ms round-robin cycle (one C0 "send all" command p
 
 Sustaining these rates without drops is a **hard requirement** for the round-robin C&C refresh to complete within the ~10 ms window the HL2 expects. Any sustained frame loss, reordering, or timing jitter will cause the HL2 to miss command updates and potentially fall out of sync with the Nereus host.
 
+
+---
+
+## 7. Band-Change Trace
+
+### 7.1 Overview
+
+When the operator retunes across an HPF or LPF boundary, the host must
+propagate several changes simultaneously: the DDC NCO frequencies, the TX VFO
+frequency, and the Alex analog front-end filter selection. Because EP2 uses a
+fixed 19-step round-robin that cannot be paused or restarted mid-cycle, Thetis
+does not implement a coordinated "atomic" commit. Instead, it writes updated
+values into the shared state structure (`prn->rx[N].frequency`,
+`prbpfilter->_80_LPF`, etc.) and allows the round-robin to pick them up slot
+by slot across two consecutive Metis frames (~2.7 ms per slot at 378 Hz). The
+result is a brief window — at most one full 19-slot cycle (~50 ms) — during
+which the DDC NCOs and the front-end filters may be in a mismatched state. The
+HL2 firmware tolerates this: it does not apply commands atomically, and no
+audio thump or relay bounce was observed.
+
+This section documents the full sequence of EP2 slots emitted during a
+representative retune from 80m (3.869 MHz) to 60m (5.331 MHz), including the
+HPF/LPF switchover at the 5 MHz boundary.
+
+**Thetis source:** RX1 frequency set in `networkproto1.c:484–494` (case 2);
+Alex/HPF/LPF set in `networkproto1.c:578–590` (case 10).
+
+---
+
+### 7.2 All frequency and filter transitions in the session
+
+| Time (s) | Frame | C0 (raw) | Command | Old value | New value |
+|----------|-------|-----------|---------|-----------|-----------|
+| 1.48 | 2423 | `0x04` | RX1 (DDC0) Freq | startup (135.091 MHz) | 3.865 MHz (80m) |
+| 5.61 | 24874 | `0x06` | RX2 (DDC1) Freq | startup (247.202 MHz) | 7.072 MHz (40m) |
+| 5.64 | 25005 | `0x04` | RX1 (DDC0) Freq | 3.865 MHz | 3.868 MHz |
+| **5.669** | **25186** | **`0x12`** | **Alex / HPF+LPF** | **1.5MHz_HPF + 80m_LPF** | **1.5MHz_HPF + 40/60m_LPF** |
+| **5.683** | **25258** | **`0x02`** | **TX VFO Freq** | **3.868 MHz** | **5.331 MHz** |
+| **5.685** | **25273** | **`0x04`** | **RX1 (DDC0) Freq** | **3.868 MHz** | **5.331 MHz** |
+| 7.714 | 36299 | `0x12` | Alex / HPF+LPF | 1.5MHz_HPF + 40/60m_LPF | 6.5MHz_HPF + 40/60m_LPF |
+| 7.727 | 36372 | `0x02` | TX VFO Freq | 5.331 MHz | 7.230 MHz (40m) |
+| 7.704 | 36242 | `0x04` | RX1 (DDC0) Freq | 5.331 MHz | 7.230 MHz (40m) |
+| 10.878 | 53484 | `0x04` | RX1 (DDC0) Freq | 7.230 MHz | 10.136 MHz (30m) |
+| 13.473 | 67590 | `0x04` | RX1 (DDC0) Freq | 10.136 MHz | 14.296 MHz (20m) |
+| 16.069 | 81695 | `0x04` | RX1 (DDC0) Freq | 14.296 MHz | 18.135 MHz (17m) |
+| 18.815 | 96619 | `0x04` | RX1 (DDC0) Freq | 18.135 MHz | 21.300 MHz (15m) |
+| 21.309 | 110167 | `0x04` | RX1 (DDC0) Freq | 21.300 MHz | 21.295 MHz |
+| 21.385 | 110580 | `0x04` | RX1 (DDC0) Freq | 21.295 MHz | 24.940 MHz (12m) |
+| 24.582 | 127953 | `0x04` | RX1 (DDC0) Freq | 24.940 MHz | 28.417 MHz (10m) |
+| 27.579 | 144240 | `0x04` | RX1 (DDC0) Freq | 28.417 MHz | 3.865 MHz (return 80m) |
+
+Summary counts for the full session: RX1 = 13 changes, RX2 = 2 changes,
+TX VFO = 29 changes (includes fine-tuning during QSO), sample-rate = 1 change
+(192 kHz, session start only), Alex/filter = 11 changes.
+
+---
+
+### 7.3 Walked-through example: 80m → 60m retune
+
+**Chosen event:** At t=5.683–5.685 s the operator moved RX1 from 3.869 MHz
+(80m) to 5.331 MHz (60m/WARC), crossing the 5 MHz HPF boundary. This event
+is the clearest single-step HPF/LPF transition in the session because:
+
+- The old 80m_LPF was replaced by the 40/60m_LPF.
+- The HPF stayed at 1.5 MHz (no HPF change yet; the 6.5 MHz HPF only engages
+  above ~6.5 MHz).
+- The RX1, TX VFO, and DDC2–DDC6 frequency slots all transition within two
+  consecutive round-robin cycles.
+
+The following timeline covers frames 25063–25345 (±1 full 19-slot cycle around
+the transition). Each Metis frame carries two USB sub-frames (USB1 and USB2)
+whose C0 slots advance in lock-step through the 19-step round-robin. MOX=0
+throughout (RX-only).
+
+```
+f=25063  t=5.6468 s  MOX=0 | USB1 Alex/Filters  : HPF=1.5MHz_HPF LPF=80m_LPF         | USB2 Preamp/Att : 0057006c
+f=25070  t=5.6479 s  MOX=0 | USB1 Att2/CW       : 20209932                             | USB2 CW_En      : 00000700
+f=25085  t=5.6507 s  MOX=0 | USB1 CW_Hang       : 4d023200                             | USB2 EER_PWM    : 1900c800
+f=25099  t=5.6532 s  MOX=0 | USB1 BPF2          : 00400000                             | USB2 HL2_ext1   : 00001e46
+f=25114  t=5.6560 s  MOX=0 | USB1 HL2_ext2      : 00000000                             | USB2 General    : 0284081c
+f=25128  t=5.6586 s  MOX=0 | USB1 TX_Freq       : 3.868498 MHz [80m]                   | USB2 RX1_Freq   : 3.868498 MHz [80m]    <- LAST 80m cycle
+f=25143  t=5.6614 s  MOX=0 | USB1 RX2_Freq      : 7.072497 MHz                         | USB2 ADC_Assign : 00000800
+f=25157  t=5.6639 s  MOX=0 | USB1 DDC2_Freq     : 3.868498 MHz                         | USB2 DDC3_Freq  : 3.868498 MHz
+f=25172  t=5.6667 s  MOX=0 | USB1 DDC4_Freq     : 5.330598 MHz [60m, STALE mix]        | USB2 DDC5_Freq  : 5.330598 MHz
+                            |  *** DDC4/5 pick up new freq before DDC0/1 slot arrives ***
+f=25186  t=5.6693 s  MOX=0 | USB1 DDC6_Freq     : 5.330598 MHz                         | USB2 Alex/Filters: HPF=1.5MHz_HPF LPF=40/60m_LPF  <- FILTER CHANGES
+f=25201  t=5.6720 s  MOX=0 | USB1 Preamp/Att    : 0057006c                             | USB2 Att2/CW    : 20209932
+f=25215  t=5.6747 s  MOX=0 | USB1 CW_En         : 00000700                             | USB2 CW_Hang    : 4d023200
+f=25230  t=5.6774 s  MOX=0 | USB1 EER_PWM       : 1900c800                             | USB2 BPF2       : 00400000
+f=25244  t=5.6800 s  MOX=0 | USB1 HL2_ext1      : 00001e46                             | USB2 HL2_ext2   : 00000000
+f=25258  t=5.6825 s  MOX=0 | USB1 General       : 0288081c                             | USB2 TX_Freq    : 5.330598 MHz [60m]   <- TX VFO updates
+f=25273  t=5.6853 s  MOX=0 | USB1 RX1_Freq      : 5.330598 MHz [60m]                  | USB2 RX2_Freq   : 7.072497 MHz         <- RX1 UPDATES (key event)
+f=25287  t=5.6879 s  MOX=0 | USB1 ADC_Assign    : 00000800                             | USB2 DDC2_Freq  : 5.330598 MHz
+f=25302  t=5.6907 s  MOX=0 | USB1 DDC3_Freq     : 5.330598 MHz                         | USB2 DDC4_Freq  : 5.330598 MHz
+f=25316  t=5.6932 s  MOX=0 | USB1 DDC5_Freq     : 5.330598 MHz                         | USB2 DDC6_Freq  : 5.330598 MHz
+f=25331  t=5.6961 s  MOX=0 | USB1 Alex/Filters  : HPF=1.5MHz_HPF LPF=40/60m_LPF       | USB2 Preamp/Att : 0057006d
+f=25345  t=5.6986 s  MOX=0 | USB1 Att2/CW       : 20209932                             | USB2 CW_En      : 00000700
+```
+
+**Sequence analysis:**
+
+1. **t=5.647 s (frame 25063):** Last round-robin cycle still carries the old
+   80m filter configuration (`1.5MHz_HPF + 80m_LPF`). TX and RX1 frequencies
+   are still 3.868 MHz.
+
+2. **t=5.666–5.669 s (frames 25172–25186):** The new frequency (5.331 MHz)
+   begins appearing in DDC4/5/6 slots *before* the DDC0 (RX1) slot arrives.
+   This is not an error; DDC4–6 track the TX frequency in the nddc=4 HL2
+   config and happen to share the same slot index as the new target frequency.
+   The Alex filter also switches here (frame 25186, USB2 slot `C0=0x12`),
+   replacing the 80m_LPF with the 40/60m_LPF — **before the RX1 DDC NCO has
+   been updated**.
+
+3. **t=5.683 s (frame 25258):** TX VFO slot (`C0=0x02`) delivers the new
+   5.331 MHz. The radio's TX path is now pointed at 60m.
+
+4. **t=5.685 s (frame 25273):** RX1 slot (`C0=0x04`) delivers 5.331 MHz. The
+   DDC0 NCO retunes. From this frame forward, the entire front-end — HPF, LPF,
+   DDC0 NCO — is consistent on 60m.
+
+5. **t=5.696 s (frame 25331):** The Alex filter slot recurs as USB1, confirming
+   the new filter state in the second consecutive cycle. All 19 command slots
+   are now stable at the new 60m configuration.
+
+**Total retune window:** from the first new-frequency appearance in DDC4/5 (frame
+25172, t=5.667 s) to the final slot confirmation (frame 25331, t=5.696 s) = ~29 ms.
+DDC0 NCO lag behind the filter update: ~16 ms (frames 25186 → 25273).
+
+---
+
+### 7.4 Recipe for Nereus Phase 3L
+
+When Phase 3L handles a retune event (user changes VFO frequency, crossing a
+filter boundary), it must emit updated values to the shared state structure
+before the round-robin picks up the next cycle. The observed Thetis ordering
+demonstrates the following priorities:
+
+1. **Update all frequency fields atomically in the shared state** before any
+   C&C frame is emitted. The round-robin then drains them slot-by-slot. Do not
+   try to "inject" a special single command — this is not how P1 works.
+
+2. **Alex filter selection must be computed from the new frequency**, not the
+   old one, before the round-robin writes the `0x12` slot. If the filter update
+   arrives one cycle ahead of DDC0 NCO update (as seen here), that is
+   acceptable — the radio handles the brief mismatch without audible artifact.
+
+3. **DDC0–DDC6 slots will be stale for up to one full 19-slot cycle** (~50 ms
+   at 378 Hz EP2 rate). This is expected behavior, not a bug. Nereus must not
+   add artificial delays or re-inject commands after a retune.
+
+4. **The HPF boundary at ~6.5 MHz** (switching from 1.5 MHz HPF to 6.5 MHz HPF)
+   requires the Alex filter update one cycle before the DDC NCO update can arrive.
+   The same "filter-first, NCO second" pattern seen in this 80m→60m transition
+   repeats for every band change in the session.
+
+5. **No special TX coordination is required for RX-only retunes** (MOX=0). The
+   TX VFO updates in the same slot cycle as RX1, one slot earlier in the
+   round-robin (case 1 = TX, case 2 = RX1).
+
+**Specific command ordering (one round-robin cycle, ~19 Metis frames):**
+
+```
+Slot  C0 (base)  Command            Action
+  0    0x00      General/SR         sample rate, OC bits (unchanged)
+  1    0x02      TX VFO Freq        new frequency [Hz, 32-bit BE]
+  2    0x04      RX1 (DDC0) Freq    new frequency [Hz, 32-bit BE]
+  3    0x06      RX2 (DDC1) Freq    unchanged (or also update if needed)
+  4    0x1C      ADC Assign         unchanged
+  5    0x08      DDC2 Freq          new frequency (tracks TX)
+  6    0x0A      DDC3 Freq          new frequency (tracks TX)
+  7    0x0C      DDC4 Freq          new frequency (tracks TX)
+  8    0x0E      DDC5 Freq          new frequency (tracks TX)
+  9    0x10      DDC6 Freq          new frequency (tracks TX)
+ 10    0x12      Alex / HPF+LPF     new filter bits — C3=HPF mask, C4=LPF mask
+ 11    0x14      Preamp/Att         unchanged
+ 12    0x16      Att2/CW            unchanged
+ ...
+ 17    0x2E      HL2 extension 1    constant (HL2-specific)
+ 18    0x74      HL2 extension 2    constant (HL2-specific)
+```
+
+**Thetis source cross-references:**
+- RX1 frequency (slot 2): `networkproto1.c:484–494` — `case 2`, assigns
+  `prn->rx[0].frequency` into C1–C4 as 32-bit big-endian Hz.
+- Alex HPF/LPF (slot 10): `networkproto1.c:578–590` — `case 10`, builds C3
+  from `prbpfilter->_13MHz_HPF … _Bypass` bits and C4 from
+  `prbpfilter->_30_20_LPF … _17_15_LPF` bits.
+
+---
