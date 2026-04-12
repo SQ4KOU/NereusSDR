@@ -1,6 +1,6 @@
 # Phase 3G-8 — RX1 Display Parity Plan
 
-> **Status:** Drafted, ready to execute. Branch created, no implementation code yet.
+> **Status:** Open questions resolved 2026-04-12. Ready to execute commit 1.
 > **Branch:** `feature/phase3g8-rx1-display-parity` (off `feature/phase3g7-polish`)
 > **Drafted:** 2026-04-12
 > **Predecessor:** Phase 3G-7 polish (shipped 2026-04-12, items A/B/C, items D/E/F deferred)
@@ -39,7 +39,7 @@ RX2 Display, TX Display, and the spectrum overlay panel are explicitly **out of 
 | S5 | Fill toggle | checkbox | unchecked default | `chkDisplayPanFill` | `setup.designer.cs:33740` |
 | S6 | Fill Alpha | slider | 0–100, default 30 | `tbDataFillAlpha` (0–255, default 128) | `setup.designer.cs:52733`, used in `display.cs:2145` `DataFillColor` alpha |
 | S7 | Line Width | slider | 1–3, default 1 | `udDisplayLineWidth` (0.0–5.0 dec, default 1.0) | `setup.designer.cs:52886`, used `display.cs:10318` |
-| S8 | Cal Offset | double spinbox | -30.0 to 30.0 dBm, default 0.0 | `udTXDisplayCalOffset` is TX-only; **no Thetis RX equivalent** — treat as NereusSDR extension or pull from Display.cs spectrum cal | `display.cs` (no setup-tab control) |
+| S8 | Cal Offset | double spinbox | -30.0 to 30.0 dBm, default 0.0 | `Display.RX1DisplayCalOffset` (float dB) — real Thetis field, no setup-tab control but exposed programmatically | `display.cs:1372-1380` |
 | S9 | Peak Hold | checkbox | unchecked | **NereusSDR extension** — Thetis has multimeter peak hold only (`udDisplayMultiPeakHoldTime`), no spectrum peak hold | n/a (extension) |
 | S10 | Peak Hold Delay | spinbox | 100–10000 ms, default 2000 | **NereusSDR extension** (paired with S9) | n/a (extension) |
 
@@ -115,19 +115,21 @@ RX2 Display, TX Display, and the spectrum overlay panel are explicitly **out of 
 
 **Total Grid & Scales page after phase: 13 controls** (8 existing + 5 added).
 
-### 5.3 Per-band grid expansion (G2/G3/G4)
+### 5.3 Per-band grid expansion (G2/G3 only)
 
-Thetis stores `DisplayGridMax<band>m` for each of: 160m, 80m, 60m, 40m, 30m, 20m, 17m, 15m, 12m, 10m, 6m, WWV, GEN, XVTR (14 bands × 3 values = 42 stored values). NereusSDR currently has one global pair.
+Thetis stores `DisplayGridMax<band>m` and `DisplayGridMin<band>m` for each of: 160m, 80m, 60m, 40m, 30m, 20m, 17m, 15m, 12m, 10m, 6m, WWV, GEN, XVTR — **14 bands × 2 values = 28 per-band values**. Grid **Step** is NOT per-band in Thetis; it's a single global value (`udDisplayGridStep`). Verified `console.cs:14242–14436` — no `DisplayGridStep<band>m` field exists. NereusSDR currently has one global pair.
+
+**Thetis per-band defaults are uniform:** every band defaults to `Max = -40.0F, Min = -140.0F` (`console.cs:14242–14436`). Thetis stores per-band so users can *customize* per band; it does not ship hand-tuned per-band values.
 
 **Implementation:**
 
-1. Add `BandGridSettings` struct to `SliceModel.h`: `{int dbMax; int dbMin; int dbStep;}` per band.
+1. Add `BandGridSettings` struct to `SliceModel.h`: `{int dbMax; int dbMin;}` per band (Step stays global).
 2. Add `QHash<Band, BandGridSettings>` to `SliceModel`.
-3. Persistence keys: `"DisplayGridMax_160m"`, `"DisplayGridMin_160m"`, `"DisplayGridStep_160m"`, etc. (42 keys total).
-4. On `SliceModel::bandChanged(Band)`, look up the band's grid settings and emit `gridChanged(dbMax, dbMin, dbStep)`.
+3. Persistence keys: `"DisplayGridMax_160m"`, `"DisplayGridMin_160m"`, etc. (**28 per-band keys** + 1 global `DisplayGridStep`).
+4. On `SliceModel::bandChanged(Band)`, look up the band's grid settings and emit `gridChanged(dbMax, dbMin)`.
 5. `SpectrumWidget::setDbmRange()` already exists; wire it to `gridChanged`.
-6. Grid & Scales page shows the values for the **currently active band on RX1**. Editing them writes back to that band's slot. A label above the controls reads "Editing band: 20m" so the user knows which band they're touching.
-7. Default initialization: copy current global default into all 14 band slots on first run, so existing users don't see anything change.
+6. Grid & Scales page: dbMax/dbMin controls show "Editing band: 20m" label above them and read/write the currently active band's slot. dbStep stays a single global control with no band label.
+7. **Default initialization (resolved per Q4):** initialize all 14 slots to Thetis uniform defaults `Max = -40, Min = -140`. Existing users will see the grid shift on first launch after upgrade; this is the authorized one-off divergence under decision #9's §10 exception scope, extended to cover per-band grid initial values (user decision 2026-04-12).
 
 **Files affected:**
 - `src/models/SliceModel.h/.cpp` — add struct, hash, signal
@@ -235,13 +237,13 @@ Per locked decision #9, NereusSDR keeps its current default values rather than a
 | FPS max | 60 | 144 | 144 FPS on a spectrum is wasteful |
 | Update Period default | 50 ms | 2 ms | 2 ms is unnecessarily aggressive for the waterfall |
 | Update Period min | 10 ms | 1 ms | Same |
-| Grid Max default | -20 | -40 | NereusSDR shows hotter signals better at -20 |
-| Grid Min default | -160 | -140 | More headroom for weak signals |
-| Grid Step default | 10 | 2 | Less visual clutter |
+| Grid Max default (global, pre-3G-8) | -20 | -40 | NereusSDR shows hotter signals better at -20. **Superseded** once per-band storage lands — see row below. |
+| Grid Min default (global, pre-3G-8) | -160 | -140 | More headroom for weak signals. **Superseded** — see row below. |
+| Grid Step default | 10 | 2 | Less visual clutter. Step remains a single global value in both Thetis and NereusSDR. |
 | Waterfall High default | -40 | -80 | Matches NereusSDR's grid max better |
 | Color Schemes count | 3 (now expanding to 7) | 7 | Now matches |
 | FFT Size widget | combo | TrackBar | Combo is friendlier than a 7-position slider |
-| Cal Offset (S8) | exists | n/a | NereusSDR-specific, no Thetis Display tab equivalent |
+| Grid Max/Min initial per-band values | -40 / -140 (Thetis uniform) | -40 / -140 (Thetis uniform) | **New divergence from §10 row above:** per Q4 resolution, new per-band slots initialize to Thetis defaults, not NereusSDR -20/-160. Existing users will see grid shift on first launch. Authorized 2026-04-12. |
 | Peak Hold (S9/S10) | exists | n/a | NereusSDR extension |
 | Reverse Scroll (W5) | exists | n/a | NereusSDR extension |
 | Timestamp (W8/W9) | exists | n/a | NereusSDR extension |
@@ -263,7 +265,7 @@ Per locked decision #9, NereusSDR keeps its current default values rather than a
 - `src/gui/SpectrumWidget.h/.cpp` — renderer additions (~600 LOC), `WfColorScheme` enum expansion
 - `src/core/FFTEngine.h/.cpp` — averaging modes, FFT window switching
 - `src/models/SliceModel.h/.cpp` — per-band grid struct, signal, persistence
-- `src/core/AppSettings.cpp` — ~70 new keys (28 NereusSDR controls + 20 added + 42 per-band - overlap)
+- `src/core/AppSettings.cpp` — ~56 new keys (28 NereusSDR controls + 20 added + 28 per-band grid [14 × Max/Min] - overlap). Grid Step is a single global key, not per-band.
 - `src/gui/SpectrumOverlayPanel.cpp` — verify Display sub-panel still works after live values
 - `CHANGELOG.md` — phase entry
 
@@ -277,12 +279,25 @@ Per locked decision #9, NereusSDR keeps its current default values rather than a
 - Pause for user review at each commit boundary per standing preference
 - Show PR description as draft before posting (no auto-post)
 
-## 13. Open questions to resolve before block 1
+## 13. Open questions — RESOLVED 2026-04-12
 
-1. **Cal Offset (S8)** — Thetis has no RX Display tab equivalent. Is this a NereusSDR extension, or should we pull from `display.cs` spectrum calibration code? Subagent didn't find a clean Thetis source. **Action:** quick read of `display.cs` calibration section before block 1, treat as extension if nothing found.
-2. **FPS overlay (G8)** — currently `chkShowFPS`. NereusSDR's `SpectrumWidget` doesn't render FPS today. Implementation choice: `QPainter` text in corner, or QRhi text? Quick choice — `QPainter` overlay layer is fine.
-3. **Display Thread Priority (S17)** — Thetis sets the Windows thread priority of the display thread. NereusSDR uses `QThread::setPriority`. Worth honoring, but the values don't map 1:1. **Action:** map Thetis's combo values (Idle/Lowest/BelowNormal/Normal/AboveNormal/Highest/TimeCritical) to `QThread::Priority` enum, document the mapping.
-4. **Per-band grid initial values** — copy current global default into all 14 slots, or use Thetis's per-band defaults from the Thetis source (which would actually make sense even though decision #9 says keep NereusSDR defaults — these are *new* per-band slots that don't have a "current value" to preserve)? Recommendation: use Thetis per-band defaults for the new slots, since there's no NereusSDR value to keep.
+1. **Cal Offset (S8)** — **Resolved:** it IS a real Thetis field. `Display.RX1DisplayCalOffset` at `display.cs:1372-1380` (float, dB). Not a NereusSDR extension. §3.1 S8 row and §10 divergence table corrected accordingly. NereusSDR keeps its existing UI range (-30..30 dB, default 0.0).
+
+2. **FPS overlay (G8)** — **Resolved:** `QPainter` text overlay in `SpectrumWidget::paintEvent`, top-right corner. Frame count + `QElapsedTimer` for rolling average. ~15 LOC. No new dependencies.
+
+3. **Display Thread Priority (S17)** — **Resolved:** Thetis combo is 5 items (`setup.cs:34022` default "Above Normal"), not 7. 1:1 map to `QThread::Priority` on the FFT worker thread:
+
+   | Thetis | QThread |
+   |---|---|
+   | Lowest | `QThread::LowestPriority` |
+   | Below Normal | `QThread::LowPriority` |
+   | Normal | `QThread::NormalPriority` |
+   | Above Normal | `QThread::HighPriority` *(default)* |
+   | Highest | `QThread::HighestPriority` |
+
+   Apply via `FFTEngine` worker's `QThread::setPriority()`. Qt abstracts the OS priority class per platform.
+
+4. **Per-band grid initial values** — **Resolved:** use Thetis uniform defaults (`Max = -40, Min = -140`) for all 14 band slots. Finding during resolution: Thetis ships every band with identical defaults (`console.cs:14242–14436`), so there's no hand-tuned per-band aesthetic to preserve — this just means adopting Thetis's -40/-140 over NereusSDR's current -20/-160 as the first-launch state. Existing users will see the grid shift on upgrade. This is the authorized one-off divergence expansion documented in §10. Also: **Grid Step is NOT per-band in Thetis** — it remains a single global value. Plan §5.3 corrected from "42 values" to "28 per-band values + 1 global Step".
 
 ## 14. How to begin (next session checklist)
 
