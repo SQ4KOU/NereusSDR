@@ -13,3 +13,4 @@ function(nereus_add_test name)
 endfunction()
 
 nereus_add_test(tst_smoke)
+nereus_add_test(tst_container_persistence)

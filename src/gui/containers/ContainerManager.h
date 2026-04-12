@@ -5,13 +5,24 @@
 #include <QMap>
 #include <QSize>
 
+#include <functional>
+
 class QSplitter;
+class QWidget;
 
 namespace NereusSDR {
 
 class ContainerWidget;
 class FloatingContainer;
 enum class DockMode;
+
+// Factory that materializes the inner content widget for a restored
+// container. MainWindow registers one so that the panel container gets
+// an AppletPanelWidget while user-created containers get a bare
+// MeterWidget. If unset, ContainerManager defaults to a fresh
+// MeterWidget — sufficient for unit tests and the common case.
+using ContainerContentFactory =
+    std::function<QWidget*(const QString& id, int rxSource)>;
 
 class ContainerManager : public QObject {
     Q_OBJECT
@@ -50,6 +61,10 @@ public:
     void saveState();
     void restoreState();
 
+    // Register the content factory used by restoreState() to populate
+    // each restored container. Must be set before restoreState().
+    void setContentFactory(ContainerContentFactory factory);
+
     // --- Queries ---
     QList<ContainerWidget*> allContainers() const;
     ContainerWidget* container(const QString& id) const;
@@ -77,6 +92,7 @@ private:
     QMap<QString, ContainerWidget*> m_containers;
     QMap<QString, FloatingContainer*> m_floatingForms;
     QString m_panelContainerId;
+    ContainerContentFactory m_contentFactory;
 };
 
 } // namespace NereusSDR
