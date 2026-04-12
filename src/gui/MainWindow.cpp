@@ -196,6 +196,31 @@ void MainWindow::buildUI()
 
     // --- Container Infrastructure (Phase 3G-1) ---
     m_containerManager = new ContainerManager(spectrumPane, m_mainSplitter, this);
+
+    // Create the MeterPoller BEFORE restoreState / populateDefaultMeter
+    // so the meterReadyForPolling signal fires into a live poller as
+    // each container's MeterWidget is materialized. Previously the
+    // poller was created later and only the panel container's
+    // m_meterWidget was registered manually — every user-created
+    // container's meter sat orphaned and bars never received setValue()
+    // calls, the root of the "BarMeter not drawing" symptom.
+    m_meterPoller = new MeterPoller(this);
+    connect(m_containerManager, &ContainerManager::meterReadyForPolling,
+            this, [this](MeterWidget* meter) {
+        if (!meter || !m_meterPoller) { return; }
+        m_meterPoller->addTarget(meter);
+        // Auto-unregister when the meter is destroyed (e.g.
+        // ContainerWidget::setContent deleteLater()s a previous
+        // content during a swap). Without this the poller would
+        // dereference a dangling pointer on its next tick.
+        connect(meter, &QObject::destroyed, m_meterPoller,
+                [this](QObject* obj) {
+            if (m_meterPoller) {
+                m_meterPoller->removeTarget(static_cast<MeterWidget*>(obj));
+            }
+        });
+    });
+
     m_containerManager->restoreState();
     if (m_containerManager->containerCount() == 0) {
         createDefaultContainers();
@@ -268,9 +293,11 @@ void MainWindow::buildUI()
     m_fftThread->start();
 
     // --- Meter Poller (Phase 3G-2) ---
-    m_meterPoller = new MeterPoller(this);
-    populateDefaultMeter();
-
+    // Poller was created earlier so the meterReadyForPolling signal
+    // could catch container restore + populateDefaultMeter emits.
+    // m_meterWidget is registered automatically via that signal —
+    // the call here is a defensive belt only and dedupes inside
+    // MeterPoller::addTarget.
     if (m_meterWidget) {
         m_meterPoller->addTarget(m_meterWidget);
     }

@@ -14,6 +14,7 @@ namespace NereusSDR {
 
 class ContainerWidget;
 class FloatingContainer;
+class MeterWidget;
 enum class DockMode;
 
 // Factory that materializes the inner content widget for a restored
@@ -81,6 +82,15 @@ signals:
     // of the display title). MainWindow consumes this in commit 45 to
     // rebuild the Containers → Edit Container submenu.
     void containerTitleChanged(const QString& id, const QString& title);
+    // Emitted whenever a MeterWidget becomes (or appears as a
+    // descendant of) a container's content. MainWindow connects this
+    // to MeterPoller::addTarget so user-created and restored
+    // containers both flow into the WDSP/MMIO poll loop. Without this
+    // hookup the poller only knew about the panel container's initial
+    // m_meterWidget and every other container's items sat at default
+    // values forever — symptom: bars frozen at frac=0, needles never
+    // moving.
+    void meterReadyForPolling(MeterWidget* meter);
 
 private:
     void setMeterFloating(ContainerWidget* container, FloatingContainer* form);

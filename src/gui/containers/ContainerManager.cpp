@@ -61,6 +61,16 @@ void ContainerManager::wireContainer(ContainerWidget* container)
             [this, container](const QString& notes) {
         emit containerTitleChanged(container->id(), notes);
     });
+    // Announce any MeterWidget that becomes a (descendant of) the
+    // container's content. Listens for both the create path
+    // (createContainer + caller setContent) and the restore path
+    // (ContainerManager itself calls setContent after wireContainer).
+    connect(container, &ContainerWidget::contentChanged, this,
+            [this](QWidget* content) {
+        if (auto* meter = innerMeterWidget(content)) {
+            emit meterReadyForPolling(meter);
+        }
+    });
 }
 
 ContainerWidget* ContainerManager::duplicateContainer(const QString& sourceId)
@@ -472,6 +482,12 @@ void ContainerManager::restoreState()
             continue;
         }
 
+        // wireContainer BEFORE setContent so the contentChanged
+        // listener catches the meterReadyForPolling emit on the
+        // restore path. (Originally wireContainer ran after setContent
+        // and listeners missed the announcement.)
+        wireContainer(container);
+
         // Materialize the inner content widget. MainWindow registers a
         // factory so the panel container gets an AppletPanelWidget;
         // when no factory is set (tests, headless tools) we default to
@@ -498,7 +514,6 @@ void ContainerManager::restoreState()
         auto* floatingForm = new FloatingContainer(container->rxSource());
         floatingForm->setId(container->id());
 
-        wireContainer(container);
         m_containers.insert(container->id(), container);
         m_floatingForms.insert(container->id(), floatingForm);
 

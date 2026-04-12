@@ -146,6 +146,74 @@ private slots:
             QCOMPARE(meter->items().size(), 3);
         }
     }
+
+    // ContainerManager must announce every MeterWidget it manages so
+    // MainWindow can wire them into MeterPoller. Previously, only the
+    // initial m_meterWidget on the panel container was registered;
+    // user-created containers' meters were orphaned and never received
+    // setValue() calls — bars sat at frac=0 (visually invisible) and
+    // needles never moved. Symptom: "BarMeter not drawing".
+    void createdContainerMeterAnnouncedForPolling()
+    {
+        QWidget dockParent;
+        QSplitter splitter;
+        ContainerManager mgr(&dockParent, &splitter);
+
+        QList<MeterWidget*> announced;
+        QObject::connect(&mgr, &ContainerManager::meterReadyForPolling,
+                         [&announced](MeterWidget* m) {
+            announced.append(m);
+        });
+
+        ContainerWidget* c = mgr.createContainer(1, DockMode::Floating);
+        QVERIFY(c);
+        auto* meter = new MeterWidget();
+        c->setContent(meter);
+
+        QCOMPARE(announced.size(), 1);
+        QCOMPARE(announced.first(), meter);
+    }
+
+    // After restoreState, every container that ContainerManager
+    // materialized a MeterWidget for must also be announced. The
+    // restored meter is a fresh instance, not the one the test
+    // populated in phase 1, so we just assert that exactly one signal
+    // fired with a non-null pointer matching the container's content.
+    void restoredContainerMeterAnnouncedForPolling()
+    {
+        QWidget dockParent;
+        QSplitter splitter;
+        QString savedId;
+
+        {
+            ContainerManager mgr(&dockParent, &splitter);
+            ContainerWidget* c = mgr.createContainer(1, DockMode::Floating);
+            savedId = c->id();
+            auto* meter = new MeterWidget();
+            c->setContent(meter);
+            meter->addItem(new BarItem());
+            mgr.saveState();
+        }
+
+        {
+            ContainerManager mgr2(&dockParent, &splitter);
+
+            QList<MeterWidget*> announced;
+            QObject::connect(&mgr2, &ContainerManager::meterReadyForPolling,
+                             [&announced](MeterWidget* m) {
+                announced.append(m);
+            });
+
+            mgr2.restoreState();
+
+            QCOMPARE(announced.size(), 1);
+            QVERIFY(announced.first() != nullptr);
+
+            ContainerWidget* c = mgr2.container(savedId);
+            QVERIFY(c);
+            QCOMPARE(announced.first(), qobject_cast<MeterWidget*>(c->content()));
+        }
+    }
 };
 
 QTEST_MAIN(TstContainerPersistence)
