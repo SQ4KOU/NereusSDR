@@ -1260,3 +1260,68 @@ Concrete steps:
 4. Investigate extended discovery bytes in HL2 firmware source before exposing capabilities to the UI
 
 ---
+
+## 10. Nereus Implementation Checklist (Phase 3L)
+
+The tasks below are derived from the observations in Sections 2–9 and are
+scoped small enough for individual PRs. Each references the section that
+motivated it.
+
+### 3L-1 — Discovery & Session Bring-Up
+
+- [ ] Emit 63-byte discovery broadcast request (`EF FE 02` + 60 zero bytes) to subnet broadcast address on UDP port 1024 (see §2.1)
+- [ ] Parse discovery reply: validate `data[0]==0xEF`, `data[1]==0xFE`, `data[2]==0x02`/`0x03`; extract MAC (bytes 3–8), firmware version (byte 9), board ID (byte 10), MetisVersion (byte 19), NumRxs (byte 20) (see §2.2)
+- [ ] Map board ID `0x06` → `BoardType::HermesLite`; treat `data[2]==0x03` as "busy" and surface that state to the UI (see §2.2)
+- [ ] TODO (defer to 3L-HL2): parse HL2 extended discovery bytes 11–13 and 21–59 against HL2 firmware source (see §2.2, §9.6)
+- [ ] Bind session UDP socket on ephemeral source port; record radio address `169.254.x.x:1024` as the session endpoint (see §1)
+- [ ] Emit 64-byte start command (`EF FE 04 01` + 60 zero bytes) to radio port 1024 after successful discovery reply (see §3.1)
+- [ ] Emit 64-byte stop command (`EF FE 04 00` + 60 zero bytes) on session teardown (see §3.2)
+
+### 3L-2 — EP6 RX Ingestion
+
+- [ ] Parse 1032-byte Metis envelope: validate `data[0..1]==EF FE`, `data[2]==0x01`, `data[3]==0x06`; extract 32-bit BE sequence number from bytes 4–7 (see §4.1)
+- [ ] Locate USB sub-frame 1 at offset 8 and USB sub-frame 2 at offset 520; validate each `7F 7F 7F` sync prefix (see §4.1)
+- [ ] Decode C0 status index as `C0 & 0xF8` (bits [7:3]); extract PTT/dot/dash from bits [2:0] (see §4.3)
+- [ ] Implement C0 status slot switch for slots `0x00`, `0x08`, `0x10`, `0x18`, `0x20` per `networkproto1.c:334–355` decode table (see §4.3)
+- [ ] Compute samples-per-USB-frame as `spr = 504 / (6 * nddc + 2)`; deinterleave 24-bit BE I and Q samples using left-shift sign-extension (`<< 8` on each byte triple), scale by `1/2147483648.0` (see §4.2)
+- [ ] Extract mic sample at bytes 6–7 of each 8-byte sample group as 16-bit BE, scale by `1/2147483648.0` (see §4.2)
+- [ ] Track EP6 sequence number continuity; increment a drop counter on any gap; log at qCWarning level (see §6.3)
+
+### 3L-3 — EP2 Command Building
+
+- [ ] Build 1032-byte Metis EP2 envelope: header `EF FE 01 02` + 32-bit BE sequence number (auto-incrementing), then two 512-byte USB sub-frames each with `7F 7F 7F` sync + C0–C4 + 504 bytes of TX I/Q payload (see §5.1)
+- [ ] Implement `out_control_idx` round-robin counter cycling 0–16 (standard), incrementing once per USB sub-frame, resetting to 0 after slot 16 (see §5.2)
+- [ ] Build C0 as `(XmitBit & 0x01) | slot_or_mask` for every sub-frame so the MOX bit is OR'd into every slot simultaneously (see §5.2, §5.5)
+- [ ] Implement per-slot command builders for cases 0–16 matching `networkproto1.c:450–665`: case 0 (general/SR/OC), case 1 (TX freq), case 2 (DDC0/RX1 freq), case 3 (DDC1/RX2 freq), case 4 (ADC assign + TX step attn), cases 5–9 (DDC2–DDC6 freq), case 10 (drive + Alex HPF/LPF), case 11 (preamp/att/mic), case 12 (att2/CW keyer speed/weight), case 13 (CW enable/sidetone/RF delay), case 14 (CW hang/sidetone freq), case 15 (EER PWM), case 16 (BPF2/xvtr/PureSignal) (see §5.4)
+- [ ] Emit EP2 frames at the ~378 Hz steady-state rate observed in this capture; do not throttle below that rate (see §6.1, §6.4)
+
+### 3L-4 — Tuning & Band Changes
+
+- [ ] On RX1 frequency change: write new value into shared frequency state before the next round-robin write of case-2 slot (`C0 |= 0x04`); do NOT inject a one-shot special frame (see §7.4)
+- [ ] Compute Alex HPF/LPF filter bits from the new target frequency (not the old), and update case-10 state (`C0 |= 0x12`) in the same shared write; allow up to one full 19-slot cycle (~50 ms) for the filter update to precede the DDC NCO update — this is the observed Thetis ordering and is acceptable (see §7.3, §7.4)
+- [ ] On TX frequency change: update case-1 state (`C0 |= 0x02`) in the shared structure; DDC2–DDC6 slots that track TX freq will pick it up in the same cycle (see §7.4)
+- [ ] Encode sample rate selection in case-0 C1 bits [1:0] (`SampleRateIn2Bits & 3`; `0x02` = 192 kHz) and send on every case-0 round-robin occurrence (see §5.4 case 0)
+- [ ] Build case-10 Alex HPF mask into C3 and LPF mask into C4 matching `networkproto1.c:583–590` bit assignments; test at the 5 MHz, 6.5 MHz, and 9.5 MHz HPF boundaries (see §7.3)
+
+### 3L-5 — TX Path
+
+- [ ] Ensure TX frequency (case 1) and drive level (case 10 C1) are set in shared state during the RX round-robin before any MOX assertion, so no special pre-TX burst is needed (see §8.3 findings 1–2)
+- [ ] Implement MOX assert: set `XmitBit = 1`; on the next `WriteMainLoop` call, C0 for every slot must have bit 0 set; no additional MOX command frame is required (see §8.3 finding 4, §8.6 step 4)
+- [ ] Pack TX I/Q samples as 16-bit big-endian signed integers into EP2 payload at 8 bytes per sample unit (`[L_audio_I 2B][L_audio_Q 2B][TX_IQ_I 2B][TX_IQ_Q 2B]`), scaling float ±1.0 → int16 via `floor(x * 32767.0 + 0.5)` (see §8.4)
+- [ ] On MOX-off: zero-fill `outIQbufp` immediately (`memset` per `networkproto1.c:723`) so no residual TX samples are emitted after keying stops (see §8.6 step 6)
+- [ ] DEFER: mic audio capture into TX payload L/R audio bytes (bytes 0–3 per sample unit) — mark as future work once AudioEngine mic input is wired (see §8.4)
+
+### 3L-6 — HL2-Specific Extensions (conditional on board ID == `0x06`)
+
+- [ ] On receipt of EP6 C0=`0xFA` (`0xFA & 0xF8 = 0xF8`): silently ignore; log the first occurrence at qCDebug level; mark as OPEN QUESTION — decode against HL2 firmware source (`hermeslite.v`) before exposing to UI (see §4.3, §9.2)
+- [ ] Extend round-robin to 19 slots when board ID == `0x06`: add slot 17 (`C0 |= 0x2E`, constant payload `00 00 1E 46`) and slot 18 (`C0 |= 0x74`, constant payload `00 00 00 00`); emit on every cycle (see §5.3, §5.4 cases 17–18, §9.3)
+- [ ] OPEN QUESTION: determine whether skipping HL2 extension EP2 slots `0x2E`/`0x74` breaks HL2 firmware in practice — test on live HL2 hardware before committing the slots as required; document result in §5.4 (see §5.4 cases 17–18)
+- [ ] Ensure MOX bit is OR'd into HL2 extension slot C0 bytes (`0x2F`, `0x75`) during TX in the same `WriteMainLoop` pass, not as a special case (see §8.5, §9.4)
+- [ ] Treat duplex bit (case-0 C4 bit 2) as a write-only field for standard P1; do NOT assert it unconditionally when board ID == `0x06` — the HL2 ignores it but setting it may confuse other radios (see §9.5)
+- [ ] DEFER: aperiodic HL2 commands `0x7A` (I2C burst) and `0xFA`/`0xFB` (timer register) — mark as HL2-firmware-specific; do not implement until HL2 firmware source documents their function (see §5.4, §9.3)
+
+### 3L-7 — Validation
+
+- [ ] Replay the 302,256-frame `HL2_Packet_Capture.pcapng` capture through Nereus's P1 parser and confirm bit-exact decoding of all EP6 frames: correct sequence numbers, correct C0 slot dispatch, correct I/Q sample values for at least the first and last 100 frames (see §1, §4)
+- [ ] Drive Nereus's EP2 builder with the same parameter inputs observed in this capture and verify that output C0/C1–C4 bytes match the reference capture values for each of the 17 standard command slots (see §5.4)
+- [ ] Run Nereus against a live HL2 (board ID `0x06`, firmware `0x4A`) and confirm: EP6 received at ~5053 Hz, EP2 emitted at ~378 Hz, RX audio passes through WDSP without drops or sequence errors (see §6)
