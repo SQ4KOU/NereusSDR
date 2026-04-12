@@ -19,6 +19,7 @@ Q_LOGGING_CATEGORY(lcDsp,        "nereus.dsp",    QtInfoMsg)
 Q_LOGGING_CATEGORY(lcSpectrum,   "nereus.spectrum", QtInfoMsg)
 Q_LOGGING_CATEGORY(lcContainer,  "nereus.container")
 Q_LOGGING_CATEGORY(lcMeter,      "nereus.meter")
+Q_LOGGING_CATEGORY(lcMmio,       "nereus.mmio")
 
 // --- LogManager ---
 

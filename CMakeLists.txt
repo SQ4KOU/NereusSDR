@@ -197,6 +197,9 @@ set(GUI_SOURCES
     src/gui/containers/FloatingContainer.cpp
     src/gui/containers/ContainerManager.cpp
     src/gui/containers/ContainerSettingsDialog.cpp
+    src/core/mmio/MmioEndpoint.cpp
+    src/core/mmio/ExternalVariableEngine.cpp
+    src/core/mmio/FormatParser.cpp
     src/gui/containers/meter_property_editors/BaseItemEditor.cpp
     src/gui/containers/meter_property_editors/BarItemEditor.cpp
     src/gui/containers/meter_property_editors/SolidColourItemEditor.cpp
