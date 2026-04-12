@@ -24,7 +24,7 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 
 ## Current Status
 
-**Phase 3G-5 complete — interactive meter items.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates audio through WDSP, renders a live GPU-accelerated spectrum + waterfall with VFO tuning (CTUN mode), and has a full UI skeleton with 12 applets, 150+ control widgets, and a complete meter system with 31 item types. The meter engine supports composable items including arc-style S-meter, Power/SWR bars, ANANMM 7-needle multi-meter, CrossNeedle dual fwd/rev power, magic eye tube display, history graph, rotator compass, filter display, LED indicators, interactive band/mode/filter/antenna/tuning-step button grids, VFO frequency display with per-digit wheel tuning, and dual UTC/Local clock — all ported from the Thetis MeterManager.
+**Phase 3G-5 complete — interactive meter items. Phase 3G-6 (one-shot) plan frozen, execution pending.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates audio through WDSP, renders a live GPU-accelerated spectrum + waterfall with VFO tuning (CTUN mode), and has a full UI skeleton with 12 applets, 150+ control widgets, and a complete meter system with 31 item types. The meter engine supports composable items including arc-style S-meter, Power/SWR bars, ANANMM 7-needle multi-meter, CrossNeedle dual fwd/rev power, magic eye tube display, history graph, rotator compass, filter display, LED indicators, interactive band/mode/filter/antenna/tuning-step button grids, VFO frequency display with per-digit wheel tuning, and dual UTC/Local clock — all ported from the Thetis MeterManager. Phase 3G-6 will bring full Thetis-parity Container Settings Dialog (3-column layout, per-item property editors for all ~30 item types, in-place editing with snapshot/revert, container-level Lock/Notes/Highlight/Minimises/Auto-height/etc.) plus the MMIO (Multi-Meter I/O) external-data subsystem with TCP/UDP/serial transports in a single big-bang phase. See `docs/architecture/phase3g6a-plan.md` for the full plan.
 
 ## Key Features
 
@@ -62,7 +62,7 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 - Cross-platform build (Windows, Linux, macOS)
 
 **Planned (see Roadmap):**
-- Container settings dialog with full composability UI, import/export, preset browser (Phase 3G-6)
+- **Phase 3G-6 (one-shot):** Full Thetis-parity Container Settings Dialog — 3-column layout, per-item property editors for all ~30 item types, in-place editing with snapshot/revert, container-level Lock/Notes/Highlight/Minimises/Auto-height, container dropdown, Duplicate action, Containers menu submenu, Copy/Paste item settings, MMIO (Multi-Meter I/O) external-data subsystem with TCP/UDP/serial transports, variable registry, parse rules, and picker UI. See `docs/architecture/phase3g6a-plan.md`.
 - TX pipeline — SSB, CW, full processing chain, PureSignal (Phase 3I)
 - Up to 4 independent panadapters in configurable layouts (Phase 3F)
 - Thetis-inspired skin system (Phase 3H)
@@ -108,7 +108,7 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 | **3-UI: Full UI Skeleton** | **12 applets, 9-menu bar, SetupDialog, SpectrumOverlayPanel** | **Complete** |
 | **3G-4: Advanced Meter Items** | **12 item types + ANANMM/CrossNeedle presets + Edge mode** | **Complete** |
 | **3G-5: Interactive Meter Items** | **14 interactive items + mouse forwarding + ButtonBoxItem base** | **Complete** |
-| 3G-6: Container Settings Dialog | Full composability UI, import/export | Planned |
+| **3G-6: Container Settings Dialog (one-shot)** | **3-column Thetis layout + per-item editors for all ~30 types + in-place editing + MMIO external-data subsystem + container-level parity + menu submenu** | **Plan frozen, execution pending** |
 | 3I-1: Basic SSB TX | TxChannel, MOX state machine, RF output | Planned |
 | 3I-2: CW TX | Sidetone, firmware keyer, QSK/break-in | Planned |
 | 3I-3: TX Processing | 18-stage TXA chain + RX DSP additions | Planned |

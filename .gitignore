@@ -6,3 +6,5 @@ build-*/
 reference/
 CMakeFiles/
 .worktrees/
+.DS_Store
+**/.DS_Store

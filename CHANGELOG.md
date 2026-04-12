@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### In Progress — Phase 3G-6 (One-Shot): Container Settings Dialog + Full Thetis Parity + MMIO
+
+**Status:** Plan frozen, execution pending. See [`docs/architecture/phase3g6a-plan.md`](docs/architecture/phase3g6a-plan.md) for the authoritative plan and [`docs/architecture/phase3g6-oneshot-handoff.md`](docs/architecture/phase3g6-oneshot-handoff.md) for the execution handoff.
+
+Phase 3G-6 was originally landed as WIP after a prior session built the dialog infrastructure but left it with multiple rendering bugs and a minimal property editor. A debug pass (see `docs/architecture/phase3g6-debug-handoff.md`) identified:
+
+- ANANMM/CrossNeedle backgrounds referenced missing `resources/meters/*.png` paths not registered as Qt resources.
+- `NeedleScalePwrItem` did not honor `onlyWhenRx`/`onlyWhenTx`/`displayGroup`, causing scale label collisions on multi-needle presets.
+- Live preview panel rendered as solid black when editing Container #0 (nested QRhiWidget in modal dialog, edit-path-specific).
+- Per-item property editors existed for only 6 of ~30 item types, each minimal.
+- No menu-based access to floating containers other than Container #0.
+
+An interview pass decided the fix is a single one-shot phase covering the entire Thetis meter-configuration surface rather than incremental 3G-6a/6b/6c sub-phases. Scope includes:
+
+- Rendering fixes: Qt-resource-registered meter backgrounds (ananMM, cross-needle), `displayGroup` filtering ported from Thetis `clsMeterItem`, scale label clean-up.
+- Dialog rewrite to Thetis's 3-column layout (container dropdown, Available / In-use / Properties columns).
+- Replace live preview with in-place editing + snapshot/revert on Cancel.
+- Thetis-parity container-level controls: Lock, Notes, Highlight for setup, Title-bar toggle, Minimises, Auto height, Hides-when-RX-not-used, Duplicate.
+- Per-item property editors for every implemented MeterItem subclass (~30 types), 100% Thetis parity on exposed fields.
+- MMIO (Multi-Meter I/O) variable system: TCP/UDP/serial transports, variable registry, picker UI, parse rules, thread-safe value cache, persistence. New `src/core/mmio/` subsystem.
+- Containers menu submenu listing all open containers for menu-based editing.
+- Copy/Paste item settings, Reset Default Layout verification.
+
+**Branch:** `feature/phase3g6-container-settings-dialog` (PR #1, will be force-updated as execution proceeds).
+**Commit plan:** ≈48 atomic GPG-signed commits in 7 review blocks.
+**User-supplied assets required before execution:** `resources/meters/ananMM.png` (in place), `resources/meters/cross-needle.png` (pending), `resources/meters/cross-needle-bg.png` (pending).
+
 ### Added — Phase 3G-5: Interactive Meter Items
 
 **Mouse event infrastructure:**
