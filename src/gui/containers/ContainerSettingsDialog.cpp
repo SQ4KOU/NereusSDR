@@ -80,6 +80,7 @@
 #include <QFileDialog>
 #include <QFile>
 #include <QTextStream>
+#include <QScrollArea>
 #include <QFrame>
 #include <QColorDialog>
 #include <QColor>
@@ -768,9 +769,37 @@ void ContainerSettingsDialog::onItemSelectionChanged()
         m_propertyStack->setCurrentWidget(m_emptyPage);
         return;
     }
-    m_currentTypeEditor = editor;
-    m_propertyStack->addWidget(editor);
-    m_propertyStack->setCurrentWidget(editor);
+
+    // Phase 3G-6 block 4b: wrap every editor page in a QScrollArea
+    // so tall editors (NeedleItemEditor with 26+ rows + calibration
+    // table) don't get clipped by the bottom edge of the dialog.
+    // setWidgetResizable(true) makes the inner widget track the
+    // viewport width so the form rows don't squeeze horizontally.
+    auto* scroll = new QScrollArea(m_propertyStack);
+    scroll->setWidget(editor);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setStyleSheet(
+        "QScrollArea { background: #0a0a18; border: 1px solid #203040; }"
+        "QScrollArea > QWidget > QWidget { background: #0a0a18; }"
+        "QScrollBar:vertical {"
+        "  background: #0f0f1a; width: 10px; margin: 0;"
+        "}"
+        "QScrollBar::handle:vertical {"
+        "  background: #205070; border-radius: 4px; min-height: 24px;"
+        "}"
+        "QScrollBar::handle:vertical:hover { background: #00b4d8; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {"
+        "  height: 0;"
+        "}");
+
+    // Track the scroll area as the "current type editor" so the
+    // next selection change removes and deletes the whole wrapper
+    // (the inner editor is re-parented to the scroll area, so
+    // deleting the scroll area cleans up both).
+    m_currentTypeEditor = scroll;
+    m_propertyStack->addWidget(scroll);
+    m_propertyStack->setCurrentWidget(scroll);
 
     // Live-edit push: every property change on the working item
     // flushes m_workingItems back to the real container. Block 4
