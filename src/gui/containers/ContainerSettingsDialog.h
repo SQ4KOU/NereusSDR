@@ -160,6 +160,16 @@ private:
     QComboBox* m_rxSourceCombo{nullptr};
     QCheckBox* m_showOnRxCheck{nullptr};
     QCheckBox* m_showOnTxCheck{nullptr};
+    // Phase 3G-6 block 3 commit 17: additional container-level
+    // controls for full Thetis parity on the property bar.
+    QCheckBox*   m_lockCheck{nullptr};
+    QCheckBox*   m_hideTitleCheck{nullptr};   // inverse of titleBarVisible
+    QCheckBox*   m_minimisesCheck{nullptr};
+    QCheckBox*   m_autoHeightCheck{nullptr};
+    QCheckBox*   m_hidesWhenRxNotUsedCheck{nullptr};
+    QCheckBox*   m_highlightCheck{nullptr};
+    QPushButton* m_btnDuplicate{nullptr};
+    QPushButton* m_btnDelete{nullptr};
 
     // Bottom buttons
     QPushButton* m_btnPreset{nullptr};

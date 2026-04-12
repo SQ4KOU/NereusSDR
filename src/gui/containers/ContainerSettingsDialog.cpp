@@ -415,9 +415,18 @@ void ContainerSettingsDialog::buildContainerPropertiesSection(QVBoxLayout* paren
     bar->setStyleSheet(
         "QFrame { background: #111122; border: 1px solid #203040; border-radius: 4px; }");
 
-    QHBoxLayout* barLayout = new QHBoxLayout(bar);
-    barLayout->setContentsMargins(8, 4, 8, 4);
+    // Phase 3G-6 block 3 commit 17: two-row layout. Row 1 holds the
+    // container-switch dropdown, title, bg, rx, and visibility
+    // controls. Row 2 holds the remaining container-level toggles
+    // plus the Duplicate / Delete actions on the right.
+    QVBoxLayout* outer = new QVBoxLayout(bar);
+    outer->setContentsMargins(8, 4, 8, 4);
+    outer->setSpacing(4);
+
+    QHBoxLayout* barLayout = new QHBoxLayout;
+    barLayout->setContentsMargins(0, 0, 0, 0);
     barLayout->setSpacing(10);
+    outer->addLayout(barLayout);
 
     // Phase 3G-6 block 3 commit 13: container-switch dropdown.
     // Populated from ContainerManager::allContainers() when a manager
@@ -539,7 +548,7 @@ void ContainerSettingsDialog::buildContainerPropertiesSection(QVBoxLayout* paren
     barLayout->addWidget(m_showOnTxCheck);
     barLayout->addStretch();
 
-    // Populate from container
+    // Populate row 1 from container
     if (m_container) {
         m_titleEdit->setText(m_container->notes());
         m_borderCheck->setChecked(m_container->hasBorder());
@@ -551,6 +560,81 @@ void ContainerSettingsDialog::buildContainerPropertiesSection(QVBoxLayout* paren
         m_showOnRxCheck->setChecked(m_container->showOnRx());
         m_showOnTxCheck->setChecked(m_container->showOnTx());
     }
+
+    // -------- Row 2: additional container-level controls --------
+    QHBoxLayout* row2 = new QHBoxLayout;
+    row2->setContentsMargins(0, 0, 0, 0);
+    row2->setSpacing(10);
+    outer->addLayout(row2);
+
+    auto makeCheck = [bar](const QString& label, bool initial) {
+        auto* cb = new QCheckBox(label, bar);
+        cb->setStyleSheet("QCheckBox { color: #c8d8e8; }");
+        cb->setChecked(initial);
+        return cb;
+    };
+
+    m_lockCheck              = makeCheck(QStringLiteral("Lock"),
+                                         m_container && m_container->isLocked());
+    m_hideTitleCheck         = makeCheck(QStringLiteral("Hide title"),
+                                         m_container && !m_container->isTitleBarVisible());
+    m_minimisesCheck         = makeCheck(QStringLiteral("Minimises"),
+                                         m_container && m_container->containerMinimises());
+    m_autoHeightCheck        = makeCheck(QStringLiteral("Auto height"),
+                                         m_container && m_container->autoHeight());
+    m_hidesWhenRxNotUsedCheck = makeCheck(QStringLiteral("Hide when RX unused"),
+                                         m_container && m_container->containerHidesWhenRxNotUsed());
+    m_highlightCheck         = makeCheck(QStringLiteral("Highlight"),
+                                         m_container && m_container->isHighlighted());
+
+    row2->addWidget(m_lockCheck);
+    row2->addWidget(m_hideTitleCheck);
+    row2->addWidget(m_minimisesCheck);
+    row2->addWidget(m_autoHeightCheck);
+    row2->addWidget(m_hidesWhenRxNotUsedCheck);
+    row2->addWidget(m_highlightCheck);
+    row2->addStretch();
+
+    m_btnDuplicate = makeBtn(QStringLiteral("Duplicate"), bar);
+    m_btnDelete    = makeBtn(QStringLiteral("Delete"),    bar);
+    m_btnDelete->setStyleSheet(
+        "QPushButton { background: #401010; color: #ffb0b0; border: 1px solid #802020;"
+        "  border-radius: 3px; padding: 2px 8px; }"
+        "QPushButton:hover { background: #602020; }");
+    row2->addWidget(m_btnDuplicate);
+    row2->addWidget(m_btnDelete);
+
+    // Highlight is the only one that takes effect immediately — it's
+    // a pure runtime UI affordance showing the user which container
+    // is being edited. The others latch into the container on Apply
+    // / OK via applyToContainer (live-edit push machinery is block
+    // 4 territory).
+    if (m_container) {
+        m_container->setHighlighted(m_highlightCheck->isChecked());
+    }
+    connect(m_highlightCheck, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_container) { m_container->setHighlighted(on); }
+    });
+
+    connect(m_btnDuplicate, &QPushButton::clicked, this, [this]() {
+        if (m_manager && m_container) {
+            ContainerWidget* dup = m_manager->duplicateContainer(m_container->id());
+            if (dup && m_containerDropdown) {
+                const QString label = dup->notes().isEmpty() ? dup->id().left(8) : dup->notes();
+                m_containerDropdown->addItem(label, dup->id());
+            }
+        }
+    });
+    connect(m_btnDelete, &QPushButton::clicked, this, [this]() {
+        if (!m_manager || !m_container) { return; }
+        const QString id = m_container->id();
+        // Leaving the dialog open pointing at a freed container is a
+        // crash waiting to happen, so destroy + close together.
+        m_snapshotTaken = false;   // prevent revert-into-freed-container on reject
+        m_container = nullptr;
+        m_manager->destroyContainer(id);
+        reject();
+    });
 
     parentLayout->addWidget(bar);
 }
@@ -1209,6 +1293,24 @@ void ContainerSettingsDialog::applyToContainer()
 
     m_container->setShowOnRx(m_showOnRxCheck->isChecked());
     m_container->setShowOnTx(m_showOnTxCheck->isChecked());
+
+    // Phase 3G-6 block 3 commit 17: write the new toggles back too.
+    if (m_lockCheck) {
+        m_container->setLocked(m_lockCheck->isChecked());
+    }
+    if (m_hideTitleCheck) {
+        m_container->setTitleBarVisible(!m_hideTitleCheck->isChecked());
+    }
+    if (m_minimisesCheck) {
+        m_container->setContainerMinimises(m_minimisesCheck->isChecked());
+    }
+    if (m_autoHeightCheck) {
+        m_container->setAutoHeight(m_autoHeightCheck->isChecked());
+    }
+    if (m_hidesWhenRxNotUsedCheck) {
+        m_container->setContainerHidesWhenRxNotUsed(
+            m_hidesWhenRxNotUsedCheck->isChecked());
+    }
 
     // Write items back to the real MeterWidget
     MeterWidget* target = findMeterWidget();
