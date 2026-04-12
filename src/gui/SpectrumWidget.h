@@ -301,6 +301,12 @@ private:
     void drawGrid(QPainter& p, const QRect& specRect);
     void drawSpectrum(QPainter& p, const QRect& specRect);
     void drawWaterfall(QPainter& p, const QRect& wfRect);
+    // Phase 3G-8 commit 10: overlay-only waterfall chrome (filter bands,
+    // zero lines, timestamp, opacity dim) split out so the GPU overlay
+    // texture can render the same chrome without blitting the waterfall
+    // image. Called from drawWaterfall() on the QPainter fallback path
+    // and from the GPU overlay build step.
+    void drawWaterfallChrome(QPainter& p, const QRect& wfRect);
     void drawFreqScale(QPainter& p, const QRect& r);
     void drawDbmScale(QPainter& p, const QRect& specRect);
     void drawVfoMarker(QPainter& p, const QRect& specRect, const QRect& wfRect);
@@ -408,6 +414,10 @@ private:
 
     // Rate-limit waterfall pushes per m_wfUpdatePeriodMs.
     qint64 m_wfLastPushMs{0};
+
+    // 1 Hz overlay repaint tick for the waterfall timestamp; started on
+    // demand when the user selects a non-None timestamp position.
+    QTimer* m_wfTimestampTicker{nullptr};
 
     // ---- Phase 3G-8 commit 5: grid / scales renderer state ----
 
@@ -524,16 +534,28 @@ private:
     QRhiShaderResourceBindings* m_fftSrb{nullptr};
     QRhiBuffer*                 m_fftLineVbo{nullptr};
     QRhiBuffer*                 m_fftFillVbo{nullptr};
+    // Phase 3G-8 commit 10: peak hold VBO — same layout as line VBO,
+    // generated only when peak hold is enabled. m_peakHoldHasData is
+    // false between peak decay resets so we skip the draw call.
+    QRhiBuffer*                 m_fftPeakVbo{nullptr};
+    bool                        m_peakHoldHasData{false};
     // From AetherSDR: kMaxFftBins = 8192, kFftVertStride = 6
     static constexpr int kMaxFftBins = 65536;
     static constexpr int kFftVertStride = 6;  // x, y, r, g, b, a
     int m_visibleBinCount{0};  // bins rendered this frame (for draw call count)
 
+#endif
+
+    // Invalidate the GPU-path cached overlay texture so grid, labels,
+    // dBm scale, waterfall filter/zero-line/timestamp overlays, and
+    // other QPainter-drawn chrome re-render on next frame. Safe no-op
+    // when the GPU path is disabled.
     void markOverlayDirty() {
+#ifdef NEREUS_GPU_SPECTRUM
         m_overlayStaticDirty = true;
+#endif
         update();
     }
-#endif
 };
 
 } // namespace NereusSDR

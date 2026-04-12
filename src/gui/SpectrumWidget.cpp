@@ -528,7 +528,7 @@ void SpectrumWidget::setPanFillEnabled(bool on)
     }
     m_panFill = on;
     scheduleSettingsSave();
-    update();
+    update();  // vertex gen is next frame; render pass checks m_panFill
 }
 
 void SpectrumWidget::setFillAlpha(float a)
@@ -550,6 +550,8 @@ void SpectrumWidget::setLineWidth(float w)
     }
     m_lineWidth = w;
     scheduleSettingsSave();
+    // GPU pipeline line width is 1.0 at QRhi level (portable across
+    // backends); QPainter fallback path respects this immediately.
     update();
 }
 
@@ -560,7 +562,7 @@ void SpectrumWidget::setGradientEnabled(bool on)
     }
     m_gradientEnabled = on;
     scheduleSettingsSave();
-    update();
+    update();  // vertex gen next frame picks flat vs heatmap colours
 }
 
 void SpectrumWidget::setDbmCalOffset(float db)
@@ -571,7 +573,7 @@ void SpectrumWidget::setDbmCalOffset(float db)
     }
     m_dbmCalOffset = db;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();  // dBm scale strip labels shift
 }
 
 void SpectrumWidget::setFillColor(const QColor& c)
@@ -625,7 +627,7 @@ void SpectrumWidget::setWfOpacity(int percent)
     if (m_wfOpacity == percent) { return; }
     m_wfOpacity = percent;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setWfUpdatePeriodMs(int ms)
@@ -657,8 +659,20 @@ void SpectrumWidget::setWfTimestampPosition(TimestampPosition p)
 {
     if (m_wfTimestampPos == p) { return; }
     m_wfTimestampPos = p;
+    // Start/stop the 1 Hz overlay refresh timer so the clock ticks live.
+    if (p != TimestampPosition::None) {
+        if (!m_wfTimestampTicker) {
+            m_wfTimestampTicker = new QTimer(this);
+            m_wfTimestampTicker->setInterval(1000);
+            connect(m_wfTimestampTicker, &QTimer::timeout,
+                    this, [this]() { markOverlayDirty(); });
+        }
+        m_wfTimestampTicker->start();
+    } else if (m_wfTimestampTicker) {
+        m_wfTimestampTicker->stop();
+    }
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setWfTimestampMode(TimestampMode m)
@@ -666,7 +680,7 @@ void SpectrumWidget::setWfTimestampMode(TimestampMode m)
     if (m_wfTimestampMode == m) { return; }
     m_wfTimestampMode = m;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setShowRxFilterOnWaterfall(bool on)
@@ -674,7 +688,7 @@ void SpectrumWidget::setShowRxFilterOnWaterfall(bool on)
     if (m_showRxFilterOnWaterfall == on) { return; }
     m_showRxFilterOnWaterfall = on;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setShowTxFilterOnRxWaterfall(bool on)
@@ -682,7 +696,7 @@ void SpectrumWidget::setShowTxFilterOnRxWaterfall(bool on)
     if (m_showTxFilterOnRxWaterfall == on) { return; }
     m_showTxFilterOnRxWaterfall = on;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setShowRxZeroLineOnWaterfall(bool on)
@@ -690,7 +704,7 @@ void SpectrumWidget::setShowRxZeroLineOnWaterfall(bool on)
     if (m_showRxZeroLineOnWaterfall == on) { return; }
     m_showRxZeroLineOnWaterfall = on;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setShowTxZeroLineOnWaterfall(bool on)
@@ -698,7 +712,7 @@ void SpectrumWidget::setShowTxZeroLineOnWaterfall(bool on)
     if (m_showTxZeroLineOnWaterfall == on) { return; }
     m_showTxZeroLineOnWaterfall = on;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 // ---- Phase 3G-8 commit 5: grid / scales setters ----
@@ -708,7 +722,7 @@ void SpectrumWidget::setGridEnabled(bool on)
     if (m_gridEnabled == on) { return; }
     m_gridEnabled = on;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setShowZeroLine(bool on)
@@ -716,7 +730,7 @@ void SpectrumWidget::setShowZeroLine(bool on)
     if (m_showZeroLine == on) { return; }
     m_showZeroLine = on;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setShowFps(bool on)
@@ -727,7 +741,7 @@ void SpectrumWidget::setShowFps(bool on)
     m_fpsLastUpdateMs = 0;
     m_fpsDisplayValue = 0.0f;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setFreqLabelAlign(FreqLabelAlign a)
@@ -735,7 +749,7 @@ void SpectrumWidget::setFreqLabelAlign(FreqLabelAlign a)
     if (m_freqLabelAlign == a) { return; }
     m_freqLabelAlign = a;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setGridColor(const QColor& c)
@@ -743,7 +757,7 @@ void SpectrumWidget::setGridColor(const QColor& c)
     if (!c.isValid() || m_gridColor == c) { return; }
     m_gridColor = c;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setGridFineColor(const QColor& c)
@@ -751,7 +765,7 @@ void SpectrumWidget::setGridFineColor(const QColor& c)
     if (!c.isValid() || m_gridFineColor == c) { return; }
     m_gridFineColor = c;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setHGridColor(const QColor& c)
@@ -759,7 +773,7 @@ void SpectrumWidget::setHGridColor(const QColor& c)
     if (!c.isValid() || m_hGridColor == c) { return; }
     m_hGridColor = c;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setGridTextColor(const QColor& c)
@@ -767,7 +781,7 @@ void SpectrumWidget::setGridTextColor(const QColor& c)
     if (!c.isValid() || m_gridTextColor == c) { return; }
     m_gridTextColor = c;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setZeroLineColor(const QColor& c)
@@ -775,7 +789,7 @@ void SpectrumWidget::setZeroLineColor(const QColor& c)
     if (!c.isValid() || m_zeroLineColor == c) { return; }
     m_zeroLineColor = c;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setBandEdgeColor(const QColor& c)
@@ -783,7 +797,7 @@ void SpectrumWidget::setBandEdgeColor(const QColor& c)
     if (!c.isValid() || m_bandEdgeColor == c) { return; }
     m_bandEdgeColor = c;
     scheduleSettingsSave();
-    update();
+    markOverlayDirty();
 }
 
 // Feed new FFT frame — apply averaging per current mode, track peak hold,
@@ -1156,7 +1170,26 @@ void SpectrumWidget::drawWaterfall(QPainter& p, const QRect& wfRect)
         p.setOpacity(savedOpacity);
     }
 
-    // ---- Overlays (full opacity) ----
+    drawWaterfallChrome(p, wfRect);
+}
+
+// Phase 3G-8 commit 10: waterfall chrome (filter/zero-line/timestamp
+// overlays + opacity dim) factored out of drawWaterfall() so the GPU
+// overlay texture can reuse it. Called with a full-opacity painter.
+void SpectrumWidget::drawWaterfallChrome(QPainter& p, const QRect& wfRect)
+{
+    // Opacity dim for the GPU path. The QPainter fallback path dims the
+    // waterfall image itself via p.setOpacity() before the blit; this
+    // dim overlay matches that visual effect on GPU where the waterfall
+    // texture is drawn at full alpha by the m_wfPipeline and the
+    // overlay texture is layered on top.
+#ifdef NEREUS_GPU_SPECTRUM
+    const int op = qBound(0, m_wfOpacity, 100);
+    if (op < 100) {
+        const int dimAlpha = 255 - static_cast<int>(255.0 * op / 100.0);
+        p.fillRect(wfRect, QColor(10, 10, 20, dimAlpha));
+    }
+#endif
 
     // RX filter passband as a translucent vertical band spanning the
     // waterfall height. Uses m_vfoHz + m_filterLowHz/m_filterHighHz.
@@ -2193,6 +2226,11 @@ void SpectrumWidget::initSpectrumPipeline()
                                  kMaxFftBins * 2 * kFftVertStride * sizeof(float));
     m_fftFillVbo->create();
 
+    // Phase 3G-8 commit 10: peak hold VBO (same layout as line VBO).
+    m_fftPeakVbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer,
+                                 kMaxFftBins * kFftVertStride * sizeof(float));
+    m_fftPeakVbo->create();
+
     m_fftSrb = r->newShaderResourceBindings();
     m_fftSrb->setBindings({});
     m_fftSrb->create();
@@ -2368,6 +2406,39 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             drawVfoMarker(p, specRect, wfRect);
             drawOffScreenIndicator(p, specRect, wfRect);
 
+            // Phase 3G-8 commit 10: waterfall chrome (filter/zero line/
+            // timestamp/opacity dim) lands in the overlay texture on GPU
+            // so the same setters work in both paths. Overlay texture
+            // invalidation keys track every setter that feeds this plus
+            // VFO/filter changes via setVfoFrequency/setFilterOffset.
+            drawWaterfallChrome(p, wfRect);
+
+            // FPS overlay for GPU mode (QPainter path draws its own
+            // counter in paintEvent). Drawn into the cached overlay
+            // texture means it only updates on state changes or VFO
+            // tuning — good enough for a diagnostic counter and avoids
+            // re-uploading every frame.
+            if (m_showFps) {
+                const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+                m_fpsFrameCount++;
+                if (m_fpsLastUpdateMs == 0) {
+                    m_fpsLastUpdateMs = nowMs;
+                } else if (nowMs - m_fpsLastUpdateMs >= 1000) {
+                    const double elapsed = (nowMs - m_fpsLastUpdateMs) / 1000.0;
+                    m_fpsDisplayValue = static_cast<float>(m_fpsFrameCount / elapsed);
+                    m_fpsFrameCount   = 0;
+                    m_fpsLastUpdateMs = nowMs;
+                }
+                const QString fpsText =
+                    QStringLiteral("%1 fps").arg(m_fpsDisplayValue, 0, 'f', 1);
+                QFont ff = p.font();
+                ff.setPixelSize(11);
+                p.setFont(ff);
+                p.setPen(m_gridTextColor);
+                const int tw = p.fontMetrics().horizontalAdvance(fpsText);
+                p.drawText(specRect.right() - tw - 8, specRect.top() + 14, fpsText);
+            }
+
             // Cursor info
             if (m_mouseInWidget) {
                 drawCursorInfo(p, specRect);
@@ -2385,17 +2456,29 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     }
 
     // ---- FFT spectrum vertices ----
+    // Phase 3G-8 commit 10: the vertex generation now honours:
+    //   - m_dbmCalOffset (shifts every bin's dBm before y mapping)
+    //   - m_gradientEnabled (off = flat m_fillColor, on = heatmap)
+    //   - m_panFill (skips fill VBO update when disabled)
+    //   - m_fillColor / m_fillAlpha (used for the flat-fill path)
+    //   - m_peakHoldEnabled (generates a second line VBO for peak hold)
     if (!m_smoothed.isEmpty() && m_fftLineVbo && m_fftFillVbo) {
         auto [firstBin, lastBin] = visibleBinRange(m_smoothed.size());
         const int count = lastBin - firstBin + 1;
         const int n = qMin(count, kMaxFftBins);
         m_visibleBinCount = n;
         const float minDbm = m_refLevel - m_dynamicRange;
-        const float range = m_dynamicRange;
+        const float range  = m_dynamicRange;
         const float yBot = -1.0f;
         const float yTop = 1.0f;
 
         const float fa = m_fillAlpha;
+        const float cal = m_dbmCalOffset;
+
+        // Flat-mode colour picked from m_fillColor.
+        const float flatR = m_fillColor.redF();
+        const float flatG = m_fillColor.greenF();
+        const float flatB = m_fillColor.blueF();
 
         QVector<float> lineVerts(n * kFftVertStride);
         QVector<float> fillVerts(n * 2 * kFftVertStride);
@@ -2403,24 +2486,28 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         for (int j = 0; j < n; ++j) {
             int i = firstBin + j;
             float x = (n > 1) ? 2.0f * j / (n - 1) - 1.0f : 0.0f;
-            float t = qBound(0.0f, (m_smoothed[i] - minDbm) / range, 1.0f);
+            float t = qBound(0.0f, ((m_smoothed[i] + cal) - minDbm) / range, 1.0f);
             float y = yBot + t * (yTop - yBot);
 
-            // Heat map: blue → cyan → green → yellow → red
-            // From AetherSDR SpectrumWidget.cpp:2298-2310
             float cr, cg, cb2;
-            if (t < 0.25f) {
-                float s = t / 0.25f;
-                cr = 0.0f; cg = s; cb2 = 1.0f;
-            } else if (t < 0.5f) {
-                float s = (t - 0.25f) / 0.25f;
-                cr = 0.0f; cg = 1.0f; cb2 = 1.0f - s;
-            } else if (t < 0.75f) {
-                float s = (t - 0.5f) / 0.25f;
-                cr = s; cg = 1.0f; cb2 = 0.0f;
+            if (m_gradientEnabled) {
+                // Heat map: blue → cyan → green → yellow → red
+                // From AetherSDR SpectrumWidget.cpp:2298-2310
+                if (t < 0.25f) {
+                    float s = t / 0.25f;
+                    cr = 0.0f; cg = s; cb2 = 1.0f;
+                } else if (t < 0.5f) {
+                    float s = (t - 0.25f) / 0.25f;
+                    cr = 0.0f; cg = 1.0f; cb2 = 1.0f - s;
+                } else if (t < 0.75f) {
+                    float s = (t - 0.5f) / 0.25f;
+                    cr = s; cg = 1.0f; cb2 = 0.0f;
+                } else {
+                    float s = (t - 0.75f) / 0.25f;
+                    cr = 1.0f; cg = 1.0f - s; cb2 = 0.0f;
+                }
             } else {
-                float s = (t - 0.75f) / 0.25f;
-                cr = 1.0f; cg = 1.0f - s; cb2 = 0.0f;
+                cr = flatR; cg = flatG; cb2 = flatB;
             }
 
             // Line vertex
@@ -2432,7 +2519,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             lineVerts[li + 4] = cb2;
             lineVerts[li + 5] = 0.9f;
 
-            // Fill vertices (top at signal, bottom at base)
+            // Fill vertices (top at signal, bottom at base).
             int fi = j * 2 * kFftVertStride;
             fillVerts[fi]     = x;
             fillVerts[fi + 1] = y;
@@ -2452,6 +2539,32 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             n * kFftVertStride * sizeof(float), lineVerts.constData());
         batch->updateDynamicBuffer(m_fftFillVbo, 0,
             n * 2 * kFftVertStride * sizeof(float), fillVerts.constData());
+
+        // Peak hold VBO lives alongside the line VBO — generated here,
+        // drawn in the render pass after the main line. When peak hold
+        // is off we leave the buffer stale and skip the draw call via
+        // m_peakHoldHasData.
+        m_peakHoldHasData = false;
+        if (m_peakHoldEnabled && m_peakHoldBins.size() == m_smoothed.size()
+            && m_fftPeakVbo) {
+            QVector<float> peakVerts(n * kFftVertStride);
+            for (int j = 0; j < n; ++j) {
+                int i = firstBin + j;
+                float x = (n > 1) ? 2.0f * j / (n - 1) - 1.0f : 0.0f;
+                float t = qBound(0.0f, ((m_peakHoldBins[i] + cal) - minDbm) / range, 1.0f);
+                float y = yBot + t * (yTop - yBot);
+                int li = j * kFftVertStride;
+                peakVerts[li]     = x;
+                peakVerts[li + 1] = y;
+                peakVerts[li + 2] = flatR;
+                peakVerts[li + 3] = flatG;
+                peakVerts[li + 4] = flatB;
+                peakVerts[li + 5] = 0.55f;
+            }
+            batch->updateDynamicBuffer(m_fftPeakVbo, 0,
+                n * kFftVertStride * sizeof(float), peakVerts.constData());
+            m_peakHoldHasData = true;
+        }
     }
 
     cb->resourceUpdate(batch);
@@ -2485,13 +2598,25 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         float specVpH = static_cast<float>(specRect.height()) * dpr;
         QRhiViewport specVp(specVpX, specVpY, specVpW, specVpH);
 
-        // Fill pass
-        cb->setGraphicsPipeline(m_fftFillPipeline);
-        cb->setShaderResources(m_fftSrb);
-        cb->setViewport(specVp);
-        const QRhiCommandBuffer::VertexInput fillVbuf(m_fftFillVbo, 0);
-        cb->setVertexInput(0, 1, &fillVbuf);
-        cb->draw(m_visibleBinCount * 2);
+        // Fill pass — Phase 3G-8 commit 10: skip when fill is disabled.
+        if (m_panFill) {
+            cb->setGraphicsPipeline(m_fftFillPipeline);
+            cb->setShaderResources(m_fftSrb);
+            cb->setViewport(specVp);
+            const QRhiCommandBuffer::VertexInput fillVbuf(m_fftFillVbo, 0);
+            cb->setVertexInput(0, 1, &fillVbuf);
+            cb->draw(m_visibleBinCount * 2);
+        }
+
+        // Peak hold line (drawn before main line so live trace is on top).
+        if (m_peakHoldHasData && m_fftPeakVbo) {
+            cb->setGraphicsPipeline(m_fftLinePipeline);
+            cb->setShaderResources(m_fftSrb);
+            cb->setViewport(specVp);
+            const QRhiCommandBuffer::VertexInput peakVbuf(m_fftPeakVbo, 0);
+            cb->setVertexInput(0, 1, &peakVbuf);
+            cb->draw(m_visibleBinCount);
+        }
 
         // Line pass
         cb->setGraphicsPipeline(m_fftLinePipeline);
@@ -2543,6 +2668,7 @@ void SpectrumWidget::releaseResources()
     delete m_fftSrb;           m_fftSrb = nullptr;
     delete m_fftLineVbo;       m_fftLineVbo = nullptr;
     delete m_fftFillVbo;       m_fftFillVbo = nullptr;
+    delete m_fftPeakVbo;       m_fftPeakVbo = nullptr;
 
     m_rhiInitialized = false;
 }
