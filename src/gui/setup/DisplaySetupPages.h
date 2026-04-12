@@ -67,17 +67,27 @@ public:
 
 private:
     void buildUI();
+    void loadFromRenderer();
 
     // Section: Levels
-    QSlider*   m_highThresholdSlider{nullptr};
-    QSlider*   m_lowThresholdSlider{nullptr};
-    QCheckBox* m_agcToggle{nullptr};
+    QSlider*           m_highThresholdSlider{nullptr};
+    QSlider*           m_lowThresholdSlider{nullptr};
+    QCheckBox*         m_agcToggle{nullptr};
+    ColorSwatchButton* m_lowColorBtn{nullptr};                // W10
+    QCheckBox*         m_useSpectrumMinMaxToggle{nullptr};    // W15
 
     // Section: Display
     QSlider*   m_updatePeriodSlider{nullptr};
     QCheckBox* m_reverseToggle{nullptr};
     QSlider*   m_opacitySlider{nullptr};
-    QComboBox* m_colorSchemeCombo{nullptr};  // Enhanced/Grayscale/Spectrum
+    QComboBox* m_colorSchemeCombo{nullptr};  // 7 schemes
+    QComboBox* m_wfAveragingCombo{nullptr};  // W16
+
+    // Section: Overlays
+    QCheckBox* m_showRxFilterToggle{nullptr};
+    QCheckBox* m_showTxFilterToggle{nullptr};
+    QCheckBox* m_showRxZeroLineToggle{nullptr};
+    QCheckBox* m_showTxZeroLineToggle{nullptr};
 
     // Section: Time
     QComboBox* m_timestampPosCombo{nullptr};  // None/Left/Right
