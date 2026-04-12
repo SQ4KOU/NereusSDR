@@ -269,6 +269,7 @@ set(GUI_SOURCES
     src/gui/meters/ClickBoxItem.cpp
     src/gui/meters/DataOutItem.cpp
     src/gui/HGauge.cpp
+    src/gui/ColorSwatchButton.cpp
     src/gui/SpectrumOverlayPanel.cpp
     src/gui/SetupDialog.cpp
     src/gui/SetupPage.cpp
