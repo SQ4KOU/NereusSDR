@@ -212,9 +212,16 @@ void ContainerWidget::updateTitle()
 
 void ContainerWidget::setupBorder()
 {
-    // Thetis ucMeter.cs:640-643
-    if (m_border) {
-        setStyleSheet(QStringLiteral("ContainerWidget { border: 1px solid #203040; }"));
+    // Thetis ucMeter.cs:640-643, extended with highlight outline
+    // (Phase 3G-6). When m_highlighted the accent outline overrides the
+    // normal border regardless of m_border, so the user always sees
+    // which container the settings dialog is editing.
+    if (m_highlighted) {
+        setStyleSheet(QStringLiteral(
+            "ContainerWidget { border: 2px solid #00b4d8; }"));
+    } else if (m_border) {
+        setStyleSheet(QStringLiteral(
+            "ContainerWidget { border: 1px solid #203040; }"));
     } else {
         setStyleSheet(QString());
     }
@@ -353,6 +360,14 @@ void ContainerWidget::setMinimised(bool minimised)
         m_titleBar->setVisible(m_titleBarVisible);
     }
     emit minimisedChanged(minimised);
+    update();
+}
+
+void ContainerWidget::setHighlighted(bool highlighted)
+{
+    if (m_highlighted == highlighted) { return; }
+    m_highlighted = highlighted;
+    setupBorder();
     update();
 }
 void ContainerWidget::setDockedLocation(const QPoint& loc) { m_dockedLocation = loc; }

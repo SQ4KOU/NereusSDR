@@ -101,6 +101,13 @@ public:
     bool isMinimised() const { return m_minimised; }
     void setMinimised(bool minimised);
 
+    // Highlight-for-setup runtime flag (not persisted). Paints a 2px
+    // accent outline around the container frame while the settings
+    // dialog is editing it. From Thetis chkContainerHighlight
+    // (setup.cs:24443). Cleared on dialog close.
+    bool isHighlighted() const { return m_highlighted; }
+    void setHighlighted(bool highlighted);
+
     // --- Docked Position (overlay mode only) ---
     QPoint dockedLocation() const { return m_dockedLocation; }
     void setDockedLocation(const QPoint& loc);
@@ -204,6 +211,7 @@ private:
     bool m_autoHeight{false};
     bool m_titleBarVisible{true};
     bool m_minimised{false};          // runtime only, not persisted
+    bool m_highlighted{false};        // runtime only, not persisted
     QColor m_backgroundColor{0x0f, 0x0f, 0x1a};
 
     // --- Drag/Resize state ---
