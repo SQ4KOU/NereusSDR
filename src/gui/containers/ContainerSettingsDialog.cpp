@@ -1,5 +1,38 @@
 #include "ContainerSettingsDialog.h"
 #include "ContainerManager.h"
+
+// Phase 3G-6 block 4 — per-item property editors
+#include "meter_property_editors/BaseItemEditor.h"
+#include "meter_property_editors/BarItemEditor.h"
+#include "meter_property_editors/SolidColourItemEditor.h"
+#include "meter_property_editors/SpacerItemEditor.h"
+#include "meter_property_editors/FadeCoverItemEditor.h"
+#include "meter_property_editors/ImageItemEditor.h"
+#include "meter_property_editors/ScaleItemEditor.h"
+#include "meter_property_editors/NeedleItemEditor.h"
+#include "meter_property_editors/NeedleScalePwrItemEditor.h"
+#include "meter_property_editors/TextItemEditor.h"
+#include "meter_property_editors/TextOverlayItemEditor.h"
+#include "meter_property_editors/SignalTextItemEditor.h"
+#include "meter_property_editors/LedItemEditor.h"
+#include "meter_property_editors/HistoryGraphItemEditor.h"
+#include "meter_property_editors/MagicEyeItemEditor.h"
+#include "meter_property_editors/DialItemEditor.h"
+#include "meter_property_editors/WebImageItemEditor.h"
+#include "meter_property_editors/FilterDisplayItemEditor.h"
+#include "meter_property_editors/RotatorItemEditor.h"
+#include "meter_property_editors/ClockItemEditor.h"
+#include "meter_property_editors/VfoDisplayItemEditor.h"
+#include "meter_property_editors/ClickBoxItemEditor.h"
+#include "meter_property_editors/DataOutItemEditor.h"
+#include "meter_property_editors/BandButtonItemEditor.h"
+#include "meter_property_editors/ModeButtonItemEditor.h"
+#include "meter_property_editors/FilterButtonItemEditor.h"
+#include "meter_property_editors/AntennaButtonItemEditor.h"
+#include "meter_property_editors/TuneStepButtonItemEditor.h"
+#include "meter_property_editors/OtherButtonItemEditor.h"
+#include "meter_property_editors/VoiceRecordPlayItemEditor.h"
+#include "meter_property_editors/DiscordButtonItemEditor.h"
 #include "ContainerWidget.h"
 #include "../meters/MeterWidget.h"
 #include "../meters/MeterItem.h"
@@ -719,23 +752,34 @@ void ContainerSettingsDialog::onItemSelectionChanged()
         return;
     }
 
-    if (!m_commonPropsPage) {
-        buildCommonPropsPage();
-    }
-
-    m_propertyStack->setCurrentWidget(m_commonPropsPage);
-    loadCommonProperties(row);
-
-    // Replace type-specific editor
+    // Phase 3G-6 block 4: replace the legacy "common props + type
+    // editor" pair with a single BaseItemEditor subclass that
+    // handles everything for the selected item's type. The editor
+    // is built on demand and installed as a fresh page in the
+    // property stack.
     if (m_currentTypeEditor) {
-        m_typePropsLayout->removeWidget(m_currentTypeEditor);
+        m_propertyStack->removeWidget(m_currentTypeEditor);
         delete m_currentTypeEditor;
         m_currentTypeEditor = nullptr;
     }
 
-    m_currentTypeEditor = buildTypeSpecificEditor(m_workingItems[row]);
-    if (m_currentTypeEditor) {
-        m_typePropsLayout->addWidget(m_currentTypeEditor);
+    QWidget* editor = buildTypeSpecificEditor(m_workingItems[row]);
+    if (!editor) {
+        m_propertyStack->setCurrentWidget(m_emptyPage);
+        return;
+    }
+    m_currentTypeEditor = editor;
+    m_propertyStack->addWidget(editor);
+    m_propertyStack->setCurrentWidget(editor);
+
+    // Live-edit push: every property change on the working item
+    // flushes m_workingItems back to the real container. Block 4
+    // can refine this to only redraw the affected item, but for
+    // now a full applyToContainer on every edit is correct and
+    // cheap enough for interactive use.
+    if (auto* base = qobject_cast<BaseItemEditor*>(editor)) {
+        connect(base, &BaseItemEditor::propertyChanged,
+                this, &ContainerSettingsDialog::applyToContainer);
     }
 }
 
@@ -1921,21 +1965,49 @@ QWidget* ContainerSettingsDialog::buildTypeSpecificEditor(MeterItem* item)
     const int pipeIdx = serialized.indexOf(QLatin1Char('|'));
     const QString typeTag = (pipeIdx >= 0) ? serialized.left(pipeIdx) : serialized;
 
-    if (typeTag == QLatin1String("BAR")) {
-        return buildBarItemEditor(static_cast<BarItem*>(item));
-    } else if (typeTag == QLatin1String("NEEDLE")) {
-        return buildNeedleItemEditor(static_cast<NeedleItem*>(item));
-    } else if (typeTag == QLatin1String("TEXT")) {
-        return buildTextItemEditor(static_cast<TextItem*>(item));
-    } else if (typeTag == QLatin1String("SCALE")) {
-        return buildScaleItemEditor(static_cast<ScaleItem*>(item));
-    } else if (typeTag == QLatin1String("SOLID")) {
-        return buildSolidItemEditor(static_cast<SolidColourItem*>(item));
-    } else if (typeTag == QLatin1String("LED")) {
-        return buildLedItemEditor(static_cast<LEDItem*>(item));
-    }
+    // Phase 3G-6 block 4: dispatch to the per-item BaseItemEditor
+    // subclass for the item's type tag. Each editor is a complete
+    // replacement for the legacy buildXItemEditor + m_commonPropsPage
+    // pair — the base class already covers position / size / z-order /
+    // binding / filter fields, so editors only add their own
+    // type-specific rows.
+    BaseItemEditor* ed = nullptr;
 
-    return nullptr;
+    if      (typeTag == QLatin1String("BAR"))            ed = new BarItemEditor(this);
+    else if (typeTag == QLatin1String("SOLID"))          ed = new SolidColourItemEditor(this);
+    else if (typeTag == QLatin1String("SPACER"))         ed = new SpacerItemEditor(this);
+    else if (typeTag == QLatin1String("FADECOVER"))      ed = new FadeCoverItemEditor(this);
+    else if (typeTag == QLatin1String("IMAGE"))          ed = new ImageItemEditor(this);
+    else if (typeTag == QLatin1String("SCALE"))          ed = new ScaleItemEditor(this);
+    else if (typeTag == QLatin1String("NEEDLE"))         ed = new NeedleItemEditor(this);
+    else if (typeTag == QLatin1String("NEEDLESCALEPWR")) ed = new NeedleScalePwrItemEditor(this);
+    else if (typeTag == QLatin1String("TEXT"))           ed = new TextItemEditor(this);
+    else if (typeTag == QLatin1String("TEXTOVERLAY"))    ed = new TextOverlayItemEditor(this);
+    else if (typeTag == QLatin1String("SIGNALTEXT"))     ed = new SignalTextItemEditor(this);
+    else if (typeTag == QLatin1String("LED"))            ed = new LedItemEditor(this);
+    else if (typeTag == QLatin1String("HISTORY"))        ed = new HistoryGraphItemEditor(this);
+    else if (typeTag == QLatin1String("MAGICEYE"))       ed = new MagicEyeItemEditor(this);
+    else if (typeTag == QLatin1String("DIAL"))           ed = new DialItemEditor(this);
+    else if (typeTag == QLatin1String("WEBIMAGE"))       ed = new WebImageItemEditor(this);
+    else if (typeTag == QLatin1String("FILTERDISPLAY"))  ed = new FilterDisplayItemEditor(this);
+    else if (typeTag == QLatin1String("ROTATOR"))        ed = new RotatorItemEditor(this);
+    else if (typeTag == QLatin1String("CLOCK"))          ed = new ClockItemEditor(this);
+    else if (typeTag == QLatin1String("VFODISPLAY"))     ed = new VfoDisplayItemEditor(this);
+    else if (typeTag == QLatin1String("CLICKBOX"))       ed = new ClickBoxItemEditor(this);
+    else if (typeTag == QLatin1String("DATAOUT"))        ed = new DataOutItemEditor(this);
+    else if (typeTag == QLatin1String("BANDBUTTON"))     ed = new BandButtonItemEditor(this);
+    else if (typeTag == QLatin1String("MODEBUTTON"))     ed = new ModeButtonItemEditor(this);
+    else if (typeTag == QLatin1String("FILTERBUTTON"))   ed = new FilterButtonItemEditor(this);
+    else if (typeTag == QLatin1String("ANTENNABUTTON"))  ed = new AntennaButtonItemEditor(this);
+    else if (typeTag == QLatin1String("TUNESTEPBUTTON")) ed = new TuneStepButtonItemEditor(this);
+    else if (typeTag == QLatin1String("OTHERBUTTON"))    ed = new OtherButtonItemEditor(this);
+    else if (typeTag == QLatin1String("VOICERECPLAY"))   ed = new VoiceRecordPlayItemEditor(this);
+    else if (typeTag == QLatin1String("DISCORDBUTTON"))  ed = new DiscordButtonItemEditor(this);
+
+    if (ed) {
+        ed->setItem(item);
+    }
+    return ed;
 }
 
 // ---------------------------------------------------------------------------
