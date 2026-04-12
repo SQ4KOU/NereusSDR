@@ -364,6 +364,27 @@ void ContainerSettingsDialog::buildPropertiesPanel(QWidget* parent)
     m_propertyStack->addWidget(m_emptyPage);
 
     layout->addWidget(m_propertyStack, 1);
+
+    // Phase 3G-6 block 7 commit 2: Copy / Paste Settings buttons
+    // under the property stack. Mirrors Thetis's per-item clipboard
+    // affordance — copies the entire serialized item form, paste
+    // only enabled when clipboard's type tag matches the selected
+    // item's type.
+    QHBoxLayout* cpRow = new QHBoxLayout();
+    cpRow->setContentsMargins(0, 0, 0, 0);
+    cpRow->setSpacing(4);
+    m_btnCopySettings  = makeBtn(QStringLiteral("Copy settings"),  parent);
+    m_btnPasteSettings = makeBtn(QStringLiteral("Paste settings"), parent);
+    m_btnCopySettings->setEnabled(false);
+    m_btnPasteSettings->setEnabled(false);
+    cpRow->addWidget(m_btnCopySettings);
+    cpRow->addWidget(m_btnPasteSettings);
+    cpRow->addStretch();
+    layout->addLayout(cpRow);
+    connect(m_btnCopySettings,  &QPushButton::clicked,
+            this, &ContainerSettingsDialog::onCopyItemSettings);
+    connect(m_btnPasteSettings, &QPushButton::clicked,
+            this, &ContainerSettingsDialog::onPasteItemSettings);
 }
 
 // ---------------------------------------------------------------------------
@@ -508,10 +529,16 @@ void ContainerSettingsDialog::buildContainerPropertiesSection(QVBoxLayout* paren
             : m_container->notes();
         m_containerDropdown->addItem(label, m_container->id());
     }
-    // Disable until commit 14 wires the switch handler so the user
-    // cannot trigger an unimplemented transition.
+    // Phase 3G-6 block 7 commit 2: dropdown is fully active when a
+    // manager is available and there's more than one container.
     m_containerDropdown->setEnabled(m_manager != nullptr
                                     && m_containerDropdown->count() > 1);
+    if (m_manager) {
+        connect(m_containerDropdown,
+                qOverload<int>(&QComboBox::currentIndexChanged),
+                this,
+                &ContainerSettingsDialog::onContainerDropdownChanged);
+    }
 
     barLayout->addWidget(contLabel);
     barLayout->addWidget(m_containerDropdown);
@@ -757,8 +784,10 @@ void ContainerSettingsDialog::onItemSelectionChanged()
 
     if (row < 0 || row >= m_workingItems.size()) {
         m_propertyStack->setCurrentWidget(m_emptyPage);
+        updateCopyPasteButtonState();
         return;
     }
+    updateCopyPasteButtonState();
 
     // Phase 3G-6 block 4: replace the legacy "common props + type
     // editor" pair with a single BaseItemEditor subclass that
@@ -1410,6 +1439,118 @@ void ContainerSettingsDialog::onOpenMmioDialog()
     // ExternalVariableEngine.
     MmioEndpointsDialog dlg(this);
     dlg.exec();
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3G-6 block 7 commit 2: container-dropdown auto-commit + switch
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::onContainerDropdownChanged(int index)
+{
+    if (!m_manager || index < 0) { return; }
+    if (!m_containerDropdown) { return; }
+
+    const QString newId = m_containerDropdown->itemData(index).toString();
+    if (newId.isEmpty()) { return; }
+
+    ContainerWidget* newContainer = m_manager->container(newId);
+    if (!newContainer || newContainer == m_container) { return; }
+
+    // Auto-commit current edits to the outgoing container so the
+    // user doesn't lose work just by switching the dropdown.
+    applyToContainer();
+
+    // Switch the dialog's bound container.
+    m_container = newContainer;
+
+    // Repopulate everything from the new container's state.
+    populateItemList();
+
+    // Reload the property bar checkboxes / spinners from the new
+    // container — the bar widgets are persistent, only their values
+    // come from m_container.
+    if (m_titleEdit) { m_titleEdit->setText(m_container->notes()); }
+    if (m_borderCheck) { m_borderCheck->setChecked(m_container->hasBorder()); }
+    if (m_rxSourceCombo) {
+        const int idx = m_rxSourceCombo->findData(m_container->rxSource());
+        if (idx >= 0) { m_rxSourceCombo->setCurrentIndex(idx); }
+    }
+    if (m_showOnRxCheck) { m_showOnRxCheck->setChecked(m_container->showOnRx()); }
+    if (m_showOnTxCheck) { m_showOnTxCheck->setChecked(m_container->showOnTx()); }
+    if (m_lockCheck) { m_lockCheck->setChecked(m_container->isLocked()); }
+    if (m_hideTitleCheck) { m_hideTitleCheck->setChecked(!m_container->isTitleBarVisible()); }
+    if (m_minimisesCheck) { m_minimisesCheck->setChecked(m_container->containerMinimises()); }
+    if (m_autoHeightCheck) { m_autoHeightCheck->setChecked(m_container->autoHeight()); }
+    if (m_hidesWhenRxNotUsedCheck) {
+        m_hidesWhenRxNotUsedCheck->setChecked(m_container->containerHidesWhenRxNotUsed());
+    }
+    if (m_highlightCheck) { m_highlightCheck->setChecked(m_container->isHighlighted()); }
+
+    // Take a fresh snapshot of the new container so Cancel reverts
+    // to its state-on-switch, not the original opening state.
+    takeSnapshot();
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3G-6 block 7 commit 2: copy/paste item settings clipboard
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::onCopyItemSettings()
+{
+    const int row = m_itemList ? m_itemList->currentRow() : -1;
+    if (row < 0 || row >= m_workingItems.size()) { return; }
+    MeterItem* item = m_workingItems[row];
+    if (!item) { return; }
+
+    m_clipboardSerialized = item->serialize();
+    const int pipeIdx = m_clipboardSerialized.indexOf(QLatin1Char('|'));
+    m_clipboardTypeTag = (pipeIdx >= 0)
+        ? m_clipboardSerialized.left(pipeIdx)
+        : m_clipboardSerialized;
+    updateCopyPasteButtonState();
+}
+
+void ContainerSettingsDialog::onPasteItemSettings()
+{
+    if (m_clipboardSerialized.isEmpty()) { return; }
+    const int row = m_itemList ? m_itemList->currentRow() : -1;
+    if (row < 0 || row >= m_workingItems.size()) { return; }
+    MeterItem* item = m_workingItems[row];
+    if (!item) { return; }
+
+    // Type-tag check: only allow paste between items of the same
+    // class so we don't try to deserialize NEEDLE bytes into a TEXT
+    // item. Matches Thetis paste-settings behavior.
+    const QString cur = item->serialize();
+    const int pipeIdx = cur.indexOf(QLatin1Char('|'));
+    const QString curTag = (pipeIdx >= 0) ? cur.left(pipeIdx) : cur;
+    if (curTag != m_clipboardTypeTag) { return; }
+
+    item->deserialize(m_clipboardSerialized);
+    applyToContainer();
+
+    // Force the editor stack to rebuild so the property fields
+    // reload from the freshly-pasted item state.
+    onItemSelectionChanged();
+}
+
+void ContainerSettingsDialog::updateCopyPasteButtonState()
+{
+    const int row = m_itemList ? m_itemList->currentRow() : -1;
+    const bool haveSelection = (row >= 0 && row < m_workingItems.size());
+    if (m_btnCopySettings) {
+        m_btnCopySettings->setEnabled(haveSelection);
+    }
+    if (m_btnPasteSettings) {
+        bool typeMatches = false;
+        if (haveSelection && !m_clipboardTypeTag.isEmpty()) {
+            const QString cur = m_workingItems[row]->serialize();
+            const int pipeIdx = cur.indexOf(QLatin1Char('|'));
+            const QString curTag = (pipeIdx >= 0) ? cur.left(pipeIdx) : cur;
+            typeMatches = (curTag == m_clipboardTypeTag);
+        }
+        m_btnPasteSettings->setEnabled(typeMatches);
+    }
 }
 
 // ---------------------------------------------------------------------------

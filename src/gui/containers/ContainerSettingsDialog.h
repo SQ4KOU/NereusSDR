@@ -103,6 +103,24 @@ private:
     void takeSnapshot();
     void revertFromSnapshot();
 
+    // Block 7 commit 2: container-switch handler. Auto-commits the
+    // current container's edits, then re-binds the dialog to the
+    // new container, repopulates the in-use list, and takes a
+    // fresh snapshot.
+    void onContainerDropdownChanged(int index);
+
+    // Block 7 commit 2: in-memory copy/paste clipboard, keyed by
+    // type tag (the prefix of the serialized form). Paste is only
+    // enabled when the clipboard type matches the currently-
+    // selected item's type — Thetis behavior.
+    QString m_clipboardSerialized;
+    QString m_clipboardTypeTag;
+    void onCopyItemSettings();
+    void onPasteItemSettings();
+    void updateCopyPasteButtonState();
+    QPushButton* m_btnCopySettings{nullptr};
+    QPushButton* m_btnPasteSettings{nullptr};
+
     // Container-switch dropdown (block 3 commit 13). Read-only until
     // commit 14 wires auto-commit + snapshot on switch.
     QComboBox* m_containerDropdown{nullptr};
