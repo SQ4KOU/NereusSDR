@@ -847,7 +847,7 @@ void MainWindow::buildMenuBar()
             c->setContent(meter);
 
             // Open settings dialog so user can configure it
-            ContainerSettingsDialog dialog(c, this);
+            ContainerSettingsDialog dialog(c, this, m_containerManager);
             if (dialog.exec() == QDialog::Rejected) {
                 // User cancelled — destroy the container
                 m_containerManager->destroyContainer(c->id());
@@ -860,7 +860,7 @@ void MainWindow::buildMenuBar()
         connect(contSettingsAction, &QAction::triggered, this, [this]() {
             ContainerWidget* c = m_containerManager ? m_containerManager->panelContainer() : nullptr;
             if (c) {
-                ContainerSettingsDialog dialog(c, this);
+                ContainerSettingsDialog dialog(c, this, m_containerManager);
                 dialog.exec();
             }
         });

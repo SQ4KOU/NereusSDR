@@ -32,8 +32,9 @@ void ContainerManager::wireContainer(ContainerWidget* container)
     connect(container, &ContainerWidget::dockRequested, this, [this, container]() {
         dockContainer(container->id());
     });
-    connect(container, &ContainerWidget::settingsRequested, this, [container]() {
-        ContainerSettingsDialog dialog(container, container->window());
+    connect(container, &ContainerWidget::settingsRequested, this,
+            [this, container]() {
+        ContainerSettingsDialog dialog(container, container->window(), this);
         dialog.exec();
     });
     connect(container, &ContainerWidget::notesChanged, this,

@@ -1,4 +1,5 @@
 #include "ContainerSettingsDialog.h"
+#include "ContainerManager.h"
 #include "ContainerWidget.h"
 #include "../meters/MeterWidget.h"
 #include "../meters/MeterItem.h"
@@ -131,9 +132,11 @@ QPushButton* makeBtn(const QString& text, QWidget* parent)
 // ---------------------------------------------------------------------------
 
 ContainerSettingsDialog::ContainerSettingsDialog(ContainerWidget* container,
-                                                 QWidget* parent)
+                                                 QWidget* parent,
+                                                 ContainerManager* manager)
     : QDialog(parent)
     , m_container(container)
+    , m_manager(manager)
 {
     // Window title uses the first 8 chars of the container ID
     const QString shortId = m_container ? m_container->id().left(8) : QStringLiteral("????????");
@@ -380,6 +383,50 @@ void ContainerSettingsDialog::buildContainerPropertiesSection(QVBoxLayout* paren
     QHBoxLayout* barLayout = new QHBoxLayout(bar);
     barLayout->setContentsMargins(8, 4, 8, 4);
     barLayout->setSpacing(10);
+
+    // Phase 3G-6 block 3 commit 13: container-switch dropdown.
+    // Populated from ContainerManager::allContainers() when a manager
+    // is available. The switching behavior (auto-commit + new
+    // snapshot) lands in commit 14 alongside the snapshot/revert
+    // machinery; this commit just lays down the UI.
+    QLabel* contLabel = new QLabel(QStringLiteral("Container:"), bar);
+    contLabel->setStyleSheet(kLabelStyle);
+    m_containerDropdown = new QComboBox(bar);
+    m_containerDropdown->setStyleSheet(
+        "QComboBox { background: #0a0a18; color: #c8d8e8;"
+        "  border: 1px solid #1e2e3e; border-radius: 3px; padding: 2px 4px;"
+        "  min-width: 160px; }"
+        "QComboBox QAbstractItemView { background: #0a0a18; color: #c8d8e8;"
+        "  border: 1px solid #205070; selection-background-color: #00b4d8; }");
+    if (m_manager) {
+        const QList<ContainerWidget*> all = m_manager->allContainers();
+        int activeIdx = -1;
+        for (ContainerWidget* c : all) {
+            const QString label = c->notes().isEmpty()
+                ? c->id().left(8)
+                : c->notes();
+            m_containerDropdown->addItem(label, c->id());
+            if (c == m_container) {
+                activeIdx = m_containerDropdown->count() - 1;
+            }
+        }
+        if (activeIdx >= 0) {
+            m_containerDropdown->setCurrentIndex(activeIdx);
+        }
+    } else if (m_container) {
+        // Legacy single-container path: show just the current container.
+        const QString label = m_container->notes().isEmpty()
+            ? m_container->id().left(8)
+            : m_container->notes();
+        m_containerDropdown->addItem(label, m_container->id());
+    }
+    // Disable until commit 14 wires the switch handler so the user
+    // cannot trigger an unimplemented transition.
+    m_containerDropdown->setEnabled(m_manager != nullptr
+                                    && m_containerDropdown->count() > 1);
+
+    barLayout->addWidget(contLabel);
+    barLayout->addWidget(m_containerDropdown);
 
     // Title
     QLabel* titleLabel = new QLabel(QStringLiteral("Title:"), bar);

@@ -18,6 +18,7 @@ class QLabel;
 namespace NereusSDR {
 
 class ContainerWidget;
+class ContainerManager;
 class MeterWidget;
 class MeterItem;
 class BarItem;
@@ -31,8 +32,14 @@ class ContainerSettingsDialog : public QDialog {
     Q_OBJECT
 
 public:
+    // When a ContainerManager is supplied, the dialog shows a
+    // container-switch dropdown at the top listing every container
+    // via manager->allContainers(). Passing nullptr preserves the
+    // legacy single-container behavior for callers that have not
+    // been updated yet.
     explicit ContainerSettingsDialog(ContainerWidget* container,
-                                     QWidget* parent = nullptr);
+                                     QWidget* parent = nullptr,
+                                     ContainerManager* manager = nullptr);
     ~ContainerSettingsDialog() override;
 
 private slots:
@@ -93,7 +100,12 @@ private:
     QWidget* buildLedItemEditor(LEDItem* item);
 
     ContainerWidget* m_container{nullptr};
+    ContainerManager* m_manager{nullptr};
     QVector<MeterItem*> m_workingItems;
+
+    // Container-switch dropdown (block 3 commit 13). Read-only until
+    // commit 14 wires auto-commit + snapshot on switch.
+    QComboBox* m_containerDropdown{nullptr};
 
     QSplitter* m_splitter{nullptr};
 
