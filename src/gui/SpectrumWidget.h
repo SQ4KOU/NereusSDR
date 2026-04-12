@@ -157,6 +157,12 @@ public:
     void setDbmCalOffset(float db);
     float dbmCalOffset() const { return m_dbmCalOffset; }
 
+    // Trace colour (Phase 3G-8 commit 6 wiring). Single colour used for
+    // both the line and the fill in the current renderer; plan §6 S11/S13
+    // track splitting these if needed by future UI polish.
+    void setFillColor(const QColor& c);
+    QColor fillColor() const { return m_fillColor; }
+
     // ---- Waterfall renderer controls (Phase 3G-8 commit 4) ----
 
     void setWfHighThreshold(float dbm);
