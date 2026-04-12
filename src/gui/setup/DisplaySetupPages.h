@@ -11,13 +11,14 @@ class QLabel;
 
 namespace NereusSDR {
 
+class PanadapterModel;
+class ColorSwatchButton;
+
 // ---------------------------------------------------------------------------
 // Display > Spectrum Defaults
 // Corresponds to Thetis setup.cs Display tab, Spectrum section.
 // All controls are NYI (disabled). Wired to persistence in a future phase.
 // ---------------------------------------------------------------------------
-class ColorSwatchButton;
-
 class SpectrumDefaultsPage : public SetupPage {
     Q_OBJECT
 public:
@@ -104,18 +105,27 @@ public:
 
 private:
     void buildUI();
+    void loadFromRenderer();
+    void applyBandSlot(PanadapterModel* pan);
 
     // Section: Grid
     QCheckBox*      m_gridToggle{nullptr};
+    QLabel*         m_editingBandLabel{nullptr};
     QSpinBox*       m_dbMaxSpin{nullptr};
     QSpinBox*       m_dbMinSpin{nullptr};
     QSpinBox*       m_dbStepSpin{nullptr};
 
-    // Section: Labels
-    QComboBox*      m_freqLabelAlignCombo{nullptr}; // Left/Center
-    QLabel*         m_bandEdgeColorLabel{nullptr};  // placeholder color swatch
+    // Section: Labels & Colors
+    QComboBox*      m_freqLabelAlignCombo{nullptr}; // Left/Center/Right/Auto/Off
     QCheckBox*      m_zeroLineToggle{nullptr};
     QCheckBox*      m_showFpsToggle{nullptr};
+
+    ColorSwatchButton* m_gridColorBtn{nullptr};       // G9
+    ColorSwatchButton* m_gridFineColorBtn{nullptr};   // G10
+    ColorSwatchButton* m_hGridColorBtn{nullptr};      // G11
+    ColorSwatchButton* m_gridTextColorBtn{nullptr};   // G12
+    ColorSwatchButton* m_zeroLineColorBtn{nullptr};   // G13
+    ColorSwatchButton* m_bandEdgeColorBtn{nullptr};   // G6
 };
 
 // ---------------------------------------------------------------------------
