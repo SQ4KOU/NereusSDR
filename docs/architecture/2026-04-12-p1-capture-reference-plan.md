@@ -6,13 +6,13 @@
 
 **Architecture:** This is a documentation-only deliverable. Each section of the target doc is built by one task: a tshark extraction step → a Thetis cross-reference step → a markdown drafting step → a commit. No source code is modified except a small link/absorb edit to the existing P1 placeholder doc at the end.
 
-**Tech Stack:** `tshark` (already installed at `/opt/homebrew/bin/tshark`), `awk`, plain markdown. Source citations come from `../Thetis/Project Files/Source/Console/NetworkIO.cs` per the project's READ → SHOW → TRANSLATE rule (CLAUDE.md).
+**Tech Stack:** `tshark` (already installed at `/opt/homebrew/bin/tshark`), `awk`, plain markdown. Source citations come from `/Users/j.j.boyd/Thetis/Project Files/Source/Console/HPSDR/NetworkIO.cs` per the project's READ → SHOW → TRANSLATE rule (CLAUDE.md).
 
 **Working files:**
 - Capture (extracted, do not re-extract): `/tmp/hl2cap/HL2_Packet_Capture.pcapng` (320 MB)
 - Filtered subset (created in Task 1): `/tmp/hl2cap/hl2_session.pcapng`
 - Spec being implemented: `docs/superpowers/specs/2026-04-12-p1-capture-reference-design.md`
-- Thetis source: `../Thetis/Project Files/Source/Console/NetworkIO.cs`
+- Thetis source: `/Users/j.j.boyd/Thetis/Project Files/Source/Console/HPSDR/NetworkIO.cs`
 
 **Conventions:**
 - All hex dumps in the doc come from `tshark -x` output, trimmed to the relevant payload range, fenced with ` ```` `.
@@ -27,11 +27,11 @@
 
 **Files:**
 - Create: `/tmp/hl2cap/hl2_session.pcapng`
-- Read-only: `../Thetis/Project Files/Source/Console/NetworkIO.cs`
+- Read-only: `/Users/j.j.boyd/Thetis/Project Files/Source/Console/HPSDR/NetworkIO.cs`
 
 - [ ] **Step 1: Verify Thetis clone is present**
 
-Run: `ls "../Thetis/Project Files/Source/Console/NetworkIO.cs"`
+Run: `ls "/Users/j.j.boyd/Thetis/Project Files/Source/Console/HPSDR/NetworkIO.cs"`
 Expected: file exists.
 If missing, STOP and tell the user — per CLAUDE.md, do not invent protocol details. Ask where the Thetis clone lives.
 
@@ -133,7 +133,7 @@ Expected: 4 packets — 2 host→broadcast, 2 radio→host. First two bytes of e
 
 - [ ] **Step 2: Locate Thetis discovery code**
 
-Run: `grep -n -i 'discover\|0xeffe\|0xef, 0xfe' "../Thetis/Project Files/Source/Console/NetworkIO.cs" | head -40`
+Run: `grep -n -i 'discover\|0xeffe\|0xef, 0xfe' "/Users/j.j.boyd/Thetis/Project Files/Source/Console/HPSDR/NetworkIO.cs" | head -40`
 Record the line numbers of the discovery send and discovery reply parser.
 
 - [ ] **Step 3: Append Section 2 to the doc**
@@ -186,7 +186,7 @@ Expected: a list of `04` frames; the last one(s) should be the stop. The byte at
 
 - [ ] **Step 3: Locate Thetis start/stop send code**
 
-Run: `grep -n 'MetisStartStop\|metis_start\|0x04' "../Thetis/Project Files/Source/Console/NetworkIO.cs" | head -20`
+Run: `grep -n 'MetisStartStop\|metis_start\|0x04' "/Users/j.j.boyd/Thetis/Project Files/Source/Console/HPSDR/NetworkIO.cs" | head -20`
 Record the function name and line number.
 
 - [ ] **Step 4: Append Section 3 to the doc**
@@ -251,7 +251,7 @@ Expected: a small set of C0 values with counts. Record the table.
 
 - [ ] **Step 4: Locate Thetis EP6 parser**
 
-Run: `grep -n 'ProcessMetisData\|EP6\|0x7F, 0x7F, 0x7F\|c1_addr' "../Thetis/Project Files/Source/Console/NetworkIO.cs" | head -40`
+Run: `grep -n 'ProcessMetisData\|EP6\|0x7F, 0x7F, 0x7F\|c1_addr' "/Users/j.j.boyd/Thetis/Project Files/Source/Console/HPSDR/NetworkIO.cs" | head -40`
 Record the function and line range that parses incoming EP6 frames and decodes C1–C4 by C0 index.
 
 - [ ] **Step 5: Append Section 4 to the doc**
@@ -316,7 +316,7 @@ Record the C0 and the four C1–C4 bytes from the first USB frame.
 
 - [ ] **Step 4: Locate Thetis EP2 send code**
 
-Run: `grep -n 'NetworkSendC\|MetisCommand\|c0 = \|round_robin' "../Thetis/Project Files/Source/Console/NetworkIO.cs" | head -60`
+Run: `grep -n 'NetworkSendC\|MetisCommand\|c0 = \|round_robin' "/Users/j.j.boyd/Thetis/Project Files/Source/Console/HPSDR/NetworkIO.cs" | head -60`
 Identify the function(s) that build the C&C bytes per C0 index, with line numbers.
 
 - [ ] **Step 5: Append Section 5 to the doc**
