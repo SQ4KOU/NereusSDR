@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+### Phase 3G-7 — Polish (in progress)
+
+**Status:** Branch `feature/phase3g7-polish` created off
+`feature/phase3g6-oneshot`. Handoff doc landed; no code yet.
+Scope decision still open — see
+[`docs/architecture/phase3g7-polish-handoff.md`](docs/architecture/phase3g7-polish-handoff.md).
+
+Picks up the 6 known limitations from 3G-6's "Known limitations
+after block 7" list:
+
+- **A — MMIO binding serialization sweep** (~30 subclasses,
+  parallelizable). The runtime-visible bug from 3G-6 — meter
+  items lose their MMIO binding on dialog Apply because
+  `MeterItem::m_mmioGuid` / `m_mmioVariable` aren't persisted.
+- **B — MeterItem subclass setter gap fills** (~10 classes).
+  Plan section 5 listed fields whose underlying `MeterItem`
+  subclasses lack public setters / getters; block 4 editors
+  flagged each per agent report.
+- **C — `NeedleItemEditor` `QGroupBox` grouping** — wrap the
+  17 type-specific fields in 4 groups (Needle, Geometry,
+  History, Power, Calibration) for readability.
+- **D — Hand-rolled editor widget width sweep** — `BaseItemEditor`
+  helpers set `setMinimumWidth(140)` but the 30 subagent-produced
+  editors hand-roll a lot of `QLineEdit` / `QComboBox` /
+  `QPushButton` instances that still shrink-wrap.
+- **E — `ButtonBoxItem` per-button `ButtonState` sub-editor** —
+  per-button color/style/font fields live on a `ButtonState`
+  struct array; needs a per-button-index spinner UI.
+- **F — End-to-end MMIO smoke test** — first real proof MMIO
+  works (UDP listener + netcat JSON + meter item visual update).
+
+**Default proposed scope:** Tier 1+2 (items A, B, C, F) — 5
+commits, item A via 4 parallel subagents.
+
 ### Phase 3G-6 (One-Shot) — Container Settings Dialog + Full Thetis Parity + MMIO
 
 **Status:** Complete. Branch `feature/phase3g6-oneshot`, PR #2.
