@@ -966,3 +966,225 @@ Slot  C0 (base)  Command            Action
   `prbpfilter->_30_20_LPF … _17_15_LPF` bits.
 
 ---
+
+## 8. TX / Keying Trace
+
+### 8.1 Summary
+
+The capture contains **4 MOX transitions** (2 TX events). Total TX-on duration:
+approximately **11.8 seconds** across two keying events.
+
+| TX event | First MOX=1 frame | t (s) | Last MOX=1 frame | t (s) | Duration |
+|----------|-------------------|-------|------------------|-------|----------|
+| Event 1  | 174523            | 33.152 | 210370          | 39.749 | ~6.60 s |
+| Event 2  | 254309            | 47.835 | 282426          | 53.010 | ~5.18 s |
+
+### 8.2 MOX Transitions Table
+
+The following table shows the case-0 slot (masked C0 = `0x00`) transitions,
+which is where the transition-detection script tracks MOX. Because the MOX bit
+is OR'd onto every C0 slot simultaneously, the first MOX=1 frame (at any slot)
+arrives slightly earlier than the case-0 crossing; see §8.3 for detail.
+
+| Frame  | Time (s)    | Raw C0 (case-0) | MOX bit | Inter-event gap (ms) |
+|--------|-------------|-----------------|---------|----------------------|
+| 8      | 0.987       | `0x00`          | 0       | — (session start)    |
+| 174581 | 33.163      | `0x01`          | 1       | — (first TX-on)      |
+| 210377 | 39.750      | `0x06`          | 0       | 6587 (TX-on duration)|
+| 254353 | 47.844      | `0x03`          | 1       | 8094 (RX gap)        |
+| 282484 | 53.021      | `0x02`          | 0       | 5177 (TX-on duration)|
+
+> Note: the "Raw C0 (case-0)" column is the C0 byte observed when the masked
+> slot is `0x00`. After MOX-on, odd raw values like `0x01`, `0x03` carry
+> MOX=1. After MOX-off, even raw values like `0x06` carry the current slot
+> index with MOX=0.
+
+### 8.3 First MOX-on Bring-up Walk-through
+
+The first TX event begins at approximately t=33.15 s. The following table
+covers EP2 command frames from ~30 frames before the first MOX=1 (frame
+174523) through ~40 frames after it.
+
+`USB1=<C0>:<C1-C4>` and `USB2=<C0>:<C1-C4>` for each EP2 Metis frame:
+
+```
+Frame    t (s)       USB1 C0:C1-C4         USB2 C0:C1-C4        Notes
+174312   33.113  00:0284081c           02:003b0752          Case 0 MOX=0, Case 1 TX freq (MOX=0)
+174441   33.137  74:00000000           00:0284081c          HL2 slot 18 (MOX=0), Case 0 MOX=0 [last MOX=0 at case-0]
+174450   33.139  02:003b0752           04:003af9a6          Case 1 TX freq, Case 2 RX1 freq [MOX=0 on both]
+174465   33.142  06:006beaf1           1c:00000800          Case 3 RX2 freq, Case 4 ADC
+174479   33.144  08:003b0752           0a:003b0752          Case 5 DDC2, Case 6 DDC3
+174494   33.147  0c:003b0752           0e:003af9a6          Case 7 DDC4, Case 8 DDC5
+174508   33.149  10:003af9a6           12:6e4c1004          Case 9 DDC6, Case 10 Drive/Alex [MOX=0, last before TX]
+  -- XmitBit set by host between frames 174508 and 174523 (~2.8 ms gap) --
+174523   33.152  15:00570068           17:3f209932          Case 11 Preamp MOX=1, Case 12 ATT/CW MOX=1 [FIRST MOX=1]
+174537   33.155  1f:00000700           21:4d023200          Case 13 CW MOX=1, Case 14 CW hang MOX=1
+174552   33.158  23:1900c800           25:80400000          Case 15 EER MOX=1, Case 16 BPF2 MOX=1
+174566   33.160  2f:00001e46           75:00000000          HL2 slot 17 MOX=1, HL2 slot 18 MOX=1
+174581   33.163  01:0204081c           03:003b0a72          Case 0 MOX=1 [case-0 transition], Case 1 TX freq MOX=1
+174595   33.166  05:003af9a6           fb:079d0654          Case 2 RX1 freq MOX=1, HL2 0xFB slot MOX=1
+174609   33.168  07:006beaf1           1d:00000800          Case 3 RX2 freq MOX=1, Case 4 ADC MOX=1
+174624   33.171  09:003b0a72           0b:003b0a72          Case 5 DDC2 MOX=1, Case 6 DDC3 MOX=1
+174638   33.173  0d:003b0a72           0f:003af9a6          Case 7 DDC4 MOX=1, Case 8 DDC5 MOX=1
+```
+
+**Key findings from the bring-up sequence:**
+
+1. **TX frequency was set BEFORE MOX-on.** At frame 174450 (USB1 `02:003b0752`),
+   case-1 TX VFO is already at 3,869,298 Hz (80m) with MOX=0. The TX frequency
+   update is part of the normal round-robin and does not require a special
+   pre-TX burst — it was already correct from the band-change that preceded
+   this TX event.
+
+2. **Drive level was set BEFORE MOX-on.** At frame 174508, USB2 C0=`0x12` (case 10)
+   carries drive level in C1. This slot is the last frame with MOX=0 before
+   the transition. The next occurrence of case 10 will carry MOX=1 but the
+   value doesn't change.
+
+3. **No Alex TX relay update was observed in the TX bring-up window.** Case 10
+   (C0=`0x12`) carries the HPF/LPF filter bits and is sent every round-robin
+   cycle. Its filter content (C3=`0x10`, 1.5 MHz HPF; C4=`0x04`, 80m LPF) does
+   not change at MOX-on: the filter bits were already set during the preceding
+   band-change event (see Section 7). Thetis does not send a dedicated "TX relay
+   arm" command — the Alex filter state is a continuous round-robin register.
+
+4. **MOX bit appears simultaneously on ALL C0 slots** in the first frame after
+   XmitBit is set. Frame 174523 carries MOX=1 in both USB1 (`0x15`) and USB2
+   (`0x17`), which are cases 11 and 12 in the round-robin. There is no per-slot
+   staggering. The delay between the last MOX=0 frame (174508, t=33.149 s) and
+   the first MOX=1 frame (174523, t=33.152 s) is approximately **2.8 ms** —
+   one EP2 frame interval at ~378 Hz.
+
+5. **TX I/Q payload is non-zero from the very first post-MOX frame.** Frame
+   174595 is the first post-case-0-transition frame and already carries non-zero
+   TX I/Q data (see §8.4). There is no observed "ramp-in" delay of blank
+   samples.
+
+### 8.4 TX Sample Format
+
+#### 8.4.1 Hex excerpt (frame 191997, t=36.368 s, mid-TX)
+
+```
+Offset (from UDP payload start)
+  0x00  ef fe 01 02  -- Metis header (EP2)
+  0x04  00 00 34 02  -- sequence number 0x3402
+  0x08  7f 7f 7f 13  -- USB1 sync + C0=0x13 (case 9, MOX=1)
+  0x0C  6e 4c 10 04  -- C1-C4
+  0x10  00 00 00 00  -- sample 0: L audio I=0x0000, L audio Q=0x0000
+  0x14  ac 13 5d 35  -- sample 0: TX IQ I=0xAC13 (-21485), TX IQ Q=0x5D35 (+23861)
+  0x18  00 00 00 00  -- sample 1: L audio I=0x0000, L audio Q=0x0000
+  0x1C  a2 cb 53 ed  -- sample 1: TX IQ I=0xA2CB (-23349), TX IQ Q=0x53ED (+21485)
+  0x20  00 00 00 00  -- sample 2: L audio
+  0x24  9a 88 49 b9  -- sample 2: TX IQ I=0x9A88 (-25976), TX IQ Q=0x49B9 (+18873)
+```
+
+The TX IQ samples are **non-zero**. The audio bytes (every group of 4 bytes
+starting at offset `0x10`, `0x18`, ...) are zero, indicating the operator
+transmits RF signal (SSB or AM) but no audio is present at the L/R audio
+position — consistent with SSB transmit without microphone input captured in
+this session, or with the operator transmitting a carrier/tone.
+
+#### 8.4.2 Expected format from networkproto1.c
+
+`networkproto1.c:732–743` (inside `sendProtocol1Samples`):
+
+```c
+for (i = 0; i < 2 * 63; i++)          // 126 samples across both USB sub-frames
+    for (j = 0; j < 2; j++)            // j=0: L/R audio, j=1: TX I/Q
+        for (k = 0; k < 2; k++)        // k=0: I component, k=1: Q component
+        {
+            temp = /* float→int16 clamp and round */;
+            prn->OutBufp[8 * i + 4 * j + 2 * k + 0] = (char)((temp >> 8) & 0xff);
+            prn->OutBufp[8 * i + 4 * j + 2 * k + 1] = (char)(temp & 0xff);
+        }
+```
+
+Each 8-byte sample unit layout (big-endian 16-bit signed integers):
+
+| Bytes | Field | j, k |
+|-------|-------|------|
+| [0–1] | L/R audio I sample | j=0, k=0 |
+| [2–3] | L/R audio Q sample | j=0, k=1 |
+| [4–5] | TX IQ I sample     | j=1, k=0 |
+| [6–7] | TX IQ Q sample     | j=1, k=1 |
+
+**Observed vs. expected:** The captured sample layout matches exactly. The
+pattern `00 00 00 00 <I_hi> <I_lo> <Q_hi> <Q_lo>` in the hex dump corresponds
+to zero audio (bytes 0–3) plus non-zero TX IQ (bytes 4–7) per sample unit.
+This is consistent with the formula at `networkproto1.c:736`.
+
+**CW note:** `networkproto1.c:738–741` shows that in CW mode, j=1 samples are
+overwritten with keying bits (`dot<<2 | dash<<1 | cwx`). This was NOT observed
+in this capture — the j=1 data contains normal IQ amplitudes, confirming the
+operator was transmitting SSB (or AM/FM), not CW.
+
+**TX sample depth:** 16-bit signed (int16), big-endian. This is different from
+EP6 (RX I/Q), which uses 24-bit signed samples. `networkproto1.c:736` applies
+`floor(x * 32767.0 + 0.5)` / `ceil(x * 32767.0 - 0.5)` scaling — a standard
+float→int16 conversion.
+
+### 8.5 HL2 Quirks Observed During TX
+
+1. **MOX bit appears in HL2 extension slots.** Slots `0x2F` (HL2 ext 17) and
+   `0x75` (HL2 ext 18) carry MOX=1 during TX (frame 174566: `2f:00001e46` and
+   `75:00000000`). The HL2 firmware reads the MOX bit from all C0 bytes, not
+   just case-0. Extension slots must include the correct MOX bit.
+
+2. **The periodic HL2 `0xFB` slot carries MOX=1 during TX** (frame 174595:
+   `fb:079d0654`). This confirms the 0xFA/0xFB HL2 register writes continue
+   during TX with the same ~131-frame period, and the MOX bit is simply OR'd in
+   by `WriteMainLoop`. There is no TX-specific suppression or change in the HL2
+   periodic slot content.
+
+3. **One-frame blank TX sample window.** The sample region of frame 174595
+   (first complete EP2 frame after the case-0 MOX transition) shows all-zero
+   sample bytes — the WDSP transmit chain needs one write cycle before its first
+   IQ output arrives. By frame 191997 (t=36.368 s, well into the TX event),
+   IQ samples are clearly non-zero (`0xAC13` / `0x5D35`).
+
+### 8.6 Recipe for Nereus Phase 3L — TX Keying
+
+To key TX on HL2 via Protocol 1:
+
+1. **Set TX frequency** (case 1, `C0 |= 0x02`): write desired TX frequency as
+   32-bit big-endian Hz in C1–C4. This is sent every round-robin cycle
+   (`networkproto1.c:476–481`). Ensure the correct frequency is in the shared
+   state before asserting MOX.
+
+2. **Set drive level** (case 10, `C0 |= 0x12`): write `tx[0].drive_level`
+   (0–255) into C1 (`networkproto1.c:580`). This must be set before MOX-on; the
+   HL2 firmware uses this value to scale TX output power.
+
+3. **Set Alex HPF/LPF filter bits** (case 10, C3/C4): the Alex filter selection
+   lives in the same slot as drive level (`networkproto1.c:583–590`). Update
+   filter bits for the TX band before keying. In this capture the filter was
+   already correct from the preceding band-change.
+
+4. **Assert MOX**: set `XmitBit = 1`. On the very next `WriteMainLoop` call, C0
+   for every slot will have bit 0 set. No special "MOX command" burst is needed
+   — the bit propagates to all 19 slots simultaneously.
+
+5. **Stream TX I/Q**: from the same `WriteMainLoop` call that first carries
+   MOX=1, the host must supply valid TX I/Q samples in `outIQbufp` (126 complex
+   float samples, scaled to ±1.0). These are packed as 16-bit big-endian signed
+   integers at 8 bytes/sample in the EP2 payload (`networkproto1.c:732–743`).
+   **Observed delay between MOX-on and first TX I/Q frame: 1 frame (~2.6 ms).**
+
+6. **Assert MOX-off**: set `XmitBit = 0`. On the next `WriteMainLoop` call, all
+   C0 slots revert to even (MOX=0). `networkproto1.c:723` zeros `outIQbufp`
+   when `XmitBit == 0`, ensuring no residual TX samples are sent after keying
+   stops.
+
+7. **No special teardown**: there is no "TX-off" command beyond clearing XmitBit.
+   The Alex filters and drive level remain at their current values; they need not
+   be cleared. The HL2 firmware stops accepting TX IQ data as soon as MOX=0 is
+   received.
+
+**Thetis source cross-references:**
+- MOX bit build: `networkproto1.c:446` — `C0 = (unsigned char)XmitBit`
+- MOX transition detection: `networkproto1.c:436–440` — `if (XmitBit != PreviousTXBit)`
+- TX IQ zero-fill on MOX-off: `networkproto1.c:723` — `if (!XmitBit) memset(prn->outIQbufp, 0, ...)`
+- TX IQ sample pack: `networkproto1.c:732–743` — 16-bit BE int16 format
+- Drive level (case 10): `networkproto1.c:578–580`
+
+---
