@@ -167,23 +167,6 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             }
             rxCh->setActive(true);
         }
-        // DIAGNOSTIC: one-shot resync probe (removed in Phase B).
-        // Forces mode/filter to match SliceModel by briefly perturbing
-        // then restoring the RxChannel cache to bypass the equality guards.
-        if (rxCh && m_activeSlice) {
-            DSPMode wantMode = m_activeSlice->dspMode();
-            int wantLow = m_activeSlice->filterLow();
-            int wantHigh = m_activeSlice->filterHigh();
-            qCInfo(lcDsp) << "RESYNC PROBE: forcing WDSP to slice state mode="
-                           << static_cast<int>(wantMode)
-                           << "bounds=(" << wantLow << wantHigh << ")";
-            qCInfo(lcDsp) << "RESYNC PROBE: expect 2 interim dspModeChanged + 1 interim filterChanged log entries below — these are probe artifacts";
-            rxCh->setMode(wantMode == DSPMode::USB ? DSPMode::LSB : DSPMode::USB);
-            rxCh->setMode(wantMode);
-            rxCh->setFilterFreqs(wantLow + 1, wantHigh + 1);
-            rxCh->setFilterFreqs(wantLow, wantHigh);
-            qCInfo(lcDsp) << "RESYNC PROBE: done";
-        }
         // Apply volume from slice
         if (m_activeSlice) {
             m_audioEngine->setVolume(m_activeSlice->afGain() / 100.0f);
@@ -288,7 +271,9 @@ void RadioModel::wireConnectionSignals()
             rxCh->processIq(m_iqAccumI.data(), m_iqAccumQ.data(),
                             outI.data(), outQ.data(), kWdspBufSize);
 
-            // WDSP outputs out_size samples (64 at 768k→48k decimation)
+            // WDSP outputs out_size samples (64 at 768k→48k decimation).
+            // outI == outQ because SetRXAPanelBinaural(channel, 0) puts the
+            // RXA patch panel in dual-mono mode in WdspEngine::createRxChannel.
             m_audioEngine->feedAudio(0, outI.data(), outQ.data(), kWdspOutSize);
 
             // Remove processed samples
@@ -361,8 +346,6 @@ void RadioModel::wireSliceSignals()
 
     // Mode → WDSP
     connect(slice, &SliceModel::dspModeChanged, this, [this](DSPMode mode) {
-        qCInfo(lcDsp) << "RadioModel: dspModeChanged handler FIRED with"
-                       << static_cast<int>(mode);
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setMode(mode);
@@ -372,8 +355,6 @@ void RadioModel::wireSliceSignals()
 
     // Filter → WDSP
     connect(slice, &SliceModel::filterChanged, this, [this](int low, int high) {
-        qCInfo(lcDsp) << "RadioModel: filterChanged handler FIRED with"
-                       << low << high;
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setFilterFreqs(low, high);

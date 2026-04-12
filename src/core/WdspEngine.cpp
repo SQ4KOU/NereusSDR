@@ -258,15 +258,24 @@ RxChannel* WdspEngine::createRxChannel(int channelId,
     // Without this, the RxChannel guard (if val == m_mode) would skip the
     // WDSP call when the requested mode matches the cached default.
     SetRXAMode(channelId, static_cast<int>(DSPMode::LSB));
+    // Both bp1 AND nbp0 must be seeded — see RxChannel::setFilterFreqs
+    // comment for why. Thetis seeds both at channel create.
     SetRXABandpassFreqs(channelId, -2850.0, -150.0);
+    RXANBPSetFreqs(channelId, -2850.0, -150.0);
     SetRXAAGCMode(channelId, static_cast<int>(AGCMode::Med));
     SetRXAAGCTop(channelId, 80.0);
 
+    // Dual-mono audio output. WDSP's create_panel default is copy=0
+    // (binaural — I and Q carry separate phase-shifted content for
+    // a headphone stereo image). Played through speakers the two
+    // channels comb-filter each other into pitched, unintelligible
+    // "Donald Duck" audio. Thetis radio.cs:1157 drives this from
+    // BinOn which defaults to false → dual-mono. Match that default.
+    SetRXAPanelBinaural(channelId, 0);
+
     qCInfo(lcDsp) << "Created RX channel" << channelId
                    << "bufSize=" << inputBufferSize
-                   << "rate=" << inputSampleRate
-                   << "| init WDSP mode=LSB(0) bounds=(-2850,-150)"
-                   << "| NOTE: hardcoded init — cache may diverge";
+                   << "rate=" << inputSampleRate;
 #endif
 
     auto channel = std::make_unique<RxChannel>(channelId, inputBufferSize,
