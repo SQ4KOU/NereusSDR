@@ -139,6 +139,49 @@ public:
     void setDbmCalOffset(float db);
     float dbmCalOffset() const { return m_dbmCalOffset; }
 
+    // ---- Waterfall renderer controls (Phase 3G-8 commit 4) ----
+
+    void setWfHighThreshold(float dbm);
+    float wfHighThreshold() const { return m_wfHighThreshold; }
+    void setWfLowThreshold(float dbm);
+    float wfLowThreshold() const { return m_wfLowThreshold; }
+    void setWfAgcEnabled(bool on);
+    bool wfAgcEnabled() const { return m_wfAgcEnabled; }
+    void setWfReverseScroll(bool on);
+    bool wfReverseScroll() const { return m_wfReverseScroll; }
+    void setWfOpacity(int percent);          // 0..100
+    int  wfOpacity() const { return m_wfOpacity; }
+    void setWfUpdatePeriodMs(int ms);
+    int  wfUpdatePeriodMs() const { return m_wfUpdatePeriodMs; }
+
+    // Ported from setup.cs:7801 Display.WaterfallUseRX1SpectrumMinMax.
+    void setWfUseSpectrumMinMax(bool on);
+    bool wfUseSpectrumMinMax() const { return m_wfUseSpectrumMinMax; }
+
+    // Ported from setup.designer.cs:34428 comboDispWFAveraging / AverageModeWF.
+    void setWfAverageMode(AverageMode m);
+    AverageMode wfAverageMode() const { return m_wfAverageMode; }
+
+    // Timestamp overlay (NereusSDR extensions W8/W9).
+    enum class TimestampPosition : int { None = 0, Left, Right, Count };
+    enum class TimestampMode     : int { UTC = 0, Local, Count };
+    void setWfTimestampPosition(TimestampPosition p);
+    TimestampPosition wfTimestampPosition() const { return m_wfTimestampPos; }
+    void setWfTimestampMode(TimestampMode m);
+    TimestampMode wfTimestampMode() const { return m_wfTimestampMode; }
+
+    // Filter / zero-line overlays on the waterfall.
+    // From setup.cs:1048-1052 Display.ShowRXFilterOnWaterfall / ShowTXFilterOnRXWaterfall
+    // / ShowRXZeroLineOnWaterfall / ShowTXZeroLineOnWaterfall.
+    void setShowRxFilterOnWaterfall(bool on);
+    bool showRxFilterOnWaterfall() const { return m_showRxFilterOnWaterfall; }
+    void setShowTxFilterOnRxWaterfall(bool on);
+    bool showTxFilterOnRxWaterfall() const { return m_showTxFilterOnRxWaterfall; }
+    void setShowRxZeroLineOnWaterfall(bool on);
+    bool showRxZeroLineOnWaterfall() const { return m_showRxZeroLineOnWaterfall; }
+    void setShowTxZeroLineOnWaterfall(bool on);
+    bool showTxZeroLineOnWaterfall() const { return m_showTxZeroLineOnWaterfall; }
+
     // ---- Per-pan settings persistence ----
     void setPanIndex(int idx) { m_panIndex = idx; }
     int  panIndex() const { return m_panIndex; }
@@ -281,6 +324,32 @@ private:
 
     // Ported from Thetis Display.RX1DisplayCalOffset (display.cs:1372).
     float       m_dbmCalOffset{0.0f};
+
+    // ---- Phase 3G-8 commit 4: waterfall renderer state ----
+
+    bool  m_wfAgcEnabled{false};
+    bool  m_wfReverseScroll{false};
+    int   m_wfOpacity{100};           // 0..100
+    int   m_wfUpdatePeriodMs{50};     // NereusSDR default per §10 divergence
+    bool  m_wfUseSpectrumMinMax{false};
+    AverageMode m_wfAverageMode{AverageMode::None};
+    QVector<float> m_wfSmoothedBins;  // for wf averaging mode
+
+    TimestampPosition m_wfTimestampPos{TimestampPosition::None};
+    TimestampMode     m_wfTimestampMode{TimestampMode::UTC};
+
+    bool  m_showRxFilterOnWaterfall{false};
+    bool  m_showTxFilterOnRxWaterfall{false};
+    bool  m_showRxZeroLineOnWaterfall{false};
+    bool  m_showTxZeroLineOnWaterfall{false};
+
+    // AGC rolling envelope (tracked across waterfall rows).
+    float m_wfAgcRunMin{0.0f};
+    float m_wfAgcRunMax{0.0f};
+    bool  m_wfAgcPrimed{false};
+
+    // Rate-limit waterfall pushes per m_wfUpdatePeriodMs.
+    qint64 m_wfLastPushMs{0};
 
     // ---- VFO / filter overlay ----
     double m_vfoHz{0.0};

@@ -5,6 +5,7 @@
 
 #include <QHoverEvent>
 
+#include <QDateTime>
 #include <QPainter>
 #include <QPainterPath>
 #include <QResizeEvent>
@@ -197,6 +198,36 @@ void SpectrumWidget::loadSettings()
     if (peakOn) {
         setPeakHoldEnabled(true);
     }
+
+    // Phase 3G-8 commit 4: waterfall renderer state.
+    m_wfAgcEnabled = s.value(settingsKey(QStringLiteral("DisplayWfAgc"), m_panIndex),
+                             QStringLiteral("False")).toString() == QStringLiteral("True");
+    m_wfReverseScroll = s.value(settingsKey(QStringLiteral("DisplayWfReverseScroll"), m_panIndex),
+                                QStringLiteral("False")).toString() == QStringLiteral("True");
+    m_wfOpacity          = readInt(QStringLiteral("DisplayWfOpacity"), 100);
+    m_wfUpdatePeriodMs   = readInt(QStringLiteral("DisplayWfUpdatePeriodMs"), 50);
+    m_wfUseSpectrumMinMax = s.value(settingsKey(QStringLiteral("DisplayWfUseSpectrumMinMax"), m_panIndex),
+                                    QStringLiteral("False")).toString() == QStringLiteral("True");
+    const int wfAvgRaw = readInt(QStringLiteral("DisplayWfAverageMode"),
+                                 static_cast<int>(AverageMode::None));
+    m_wfAverageMode = static_cast<AverageMode>(qBound(0, wfAvgRaw,
+                          static_cast<int>(AverageMode::Count) - 1));
+    const int tsPosRaw = readInt(QStringLiteral("DisplayWfTimestampPos"),
+                                 static_cast<int>(TimestampPosition::None));
+    m_wfTimestampPos = static_cast<TimestampPosition>(qBound(0, tsPosRaw,
+                           static_cast<int>(TimestampPosition::Count) - 1));
+    const int tsModeRaw = readInt(QStringLiteral("DisplayWfTimestampMode"),
+                                  static_cast<int>(TimestampMode::UTC));
+    m_wfTimestampMode = static_cast<TimestampMode>(qBound(0, tsModeRaw,
+                            static_cast<int>(TimestampMode::Count) - 1));
+    m_showRxFilterOnWaterfall = s.value(settingsKey(QStringLiteral("DisplayShowRxFilterOnWaterfall"), m_panIndex),
+                                        QStringLiteral("False")).toString() == QStringLiteral("True");
+    m_showTxFilterOnRxWaterfall = s.value(settingsKey(QStringLiteral("DisplayShowTxFilterOnRxWaterfall"), m_panIndex),
+                                          QStringLiteral("False")).toString() == QStringLiteral("True");
+    m_showRxZeroLineOnWaterfall = s.value(settingsKey(QStringLiteral("DisplayShowRxZeroLine"), m_panIndex),
+                                          QStringLiteral("False")).toString() == QStringLiteral("True");
+    m_showTxZeroLineOnWaterfall = s.value(settingsKey(QStringLiteral("DisplayShowTxZeroLine"), m_panIndex),
+                                          QStringLiteral("False")).toString() == QStringLiteral("True");
 }
 
 void SpectrumWidget::saveSettings()
@@ -234,6 +265,27 @@ void SpectrumWidget::saveSettings()
               m_peakHoldEnabled ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(settingsKey(QStringLiteral("DisplayGradientEnabled"), m_panIndex),
               m_gradientEnabled ? QStringLiteral("True") : QStringLiteral("False"));
+
+    // Phase 3G-8 commit 4: waterfall renderer state.
+    s.setValue(settingsKey(QStringLiteral("DisplayWfAgc"), m_panIndex),
+              m_wfAgcEnabled ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(settingsKey(QStringLiteral("DisplayWfReverseScroll"), m_panIndex),
+              m_wfReverseScroll ? QStringLiteral("True") : QStringLiteral("False"));
+    writeInt(QStringLiteral("DisplayWfOpacity"), m_wfOpacity);
+    writeInt(QStringLiteral("DisplayWfUpdatePeriodMs"), m_wfUpdatePeriodMs);
+    s.setValue(settingsKey(QStringLiteral("DisplayWfUseSpectrumMinMax"), m_panIndex),
+              m_wfUseSpectrumMinMax ? QStringLiteral("True") : QStringLiteral("False"));
+    writeInt(QStringLiteral("DisplayWfAverageMode"), static_cast<int>(m_wfAverageMode));
+    writeInt(QStringLiteral("DisplayWfTimestampPos"), static_cast<int>(m_wfTimestampPos));
+    writeInt(QStringLiteral("DisplayWfTimestampMode"), static_cast<int>(m_wfTimestampMode));
+    s.setValue(settingsKey(QStringLiteral("DisplayShowRxFilterOnWaterfall"), m_panIndex),
+              m_showRxFilterOnWaterfall ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(settingsKey(QStringLiteral("DisplayShowTxFilterOnRxWaterfall"), m_panIndex),
+              m_showTxFilterOnRxWaterfall ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(settingsKey(QStringLiteral("DisplayShowRxZeroLine"), m_panIndex),
+              m_showRxZeroLineOnWaterfall ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(settingsKey(QStringLiteral("DisplayShowTxZeroLine"), m_panIndex),
+              m_showTxZeroLineOnWaterfall ? QStringLiteral("True") : QStringLiteral("False"));
 }
 
 void SpectrumWidget::scheduleSettingsSave()
@@ -427,6 +479,123 @@ void SpectrumWidget::setDbmCalOffset(float db)
         return;
     }
     m_dbmCalOffset = db;
+    scheduleSettingsSave();
+    update();
+}
+
+// ---- Phase 3G-8 commit 4: waterfall setters ----
+
+void SpectrumWidget::setWfHighThreshold(float dbm)
+{
+    if (qFuzzyCompare(m_wfHighThreshold, dbm)) { return; }
+    m_wfHighThreshold = dbm;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setWfLowThreshold(float dbm)
+{
+    if (qFuzzyCompare(m_wfLowThreshold, dbm)) { return; }
+    m_wfLowThreshold = dbm;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setWfAgcEnabled(bool on)
+{
+    if (m_wfAgcEnabled == on) { return; }
+    m_wfAgcEnabled = on;
+    m_wfAgcPrimed = false;  // reprime envelope on next frame
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setWfReverseScroll(bool on)
+{
+    if (m_wfReverseScroll == on) { return; }
+    m_wfReverseScroll = on;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setWfOpacity(int percent)
+{
+    percent = qBound(0, percent, 100);
+    if (m_wfOpacity == percent) { return; }
+    m_wfOpacity = percent;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setWfUpdatePeriodMs(int ms)
+{
+    ms = qBound(10, ms, 500);  // matches NereusSDR UI range per plan §10
+    if (m_wfUpdatePeriodMs == ms) { return; }
+    m_wfUpdatePeriodMs = ms;
+    scheduleSettingsSave();
+}
+
+void SpectrumWidget::setWfUseSpectrumMinMax(bool on)
+{
+    if (m_wfUseSpectrumMinMax == on) { return; }
+    m_wfUseSpectrumMinMax = on;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setWfAverageMode(AverageMode m)
+{
+    if (m_wfAverageMode == m) { return; }
+    m_wfAverageMode = m;
+    m_wfSmoothedBins.clear();
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setWfTimestampPosition(TimestampPosition p)
+{
+    if (m_wfTimestampPos == p) { return; }
+    m_wfTimestampPos = p;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setWfTimestampMode(TimestampMode m)
+{
+    if (m_wfTimestampMode == m) { return; }
+    m_wfTimestampMode = m;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setShowRxFilterOnWaterfall(bool on)
+{
+    if (m_showRxFilterOnWaterfall == on) { return; }
+    m_showRxFilterOnWaterfall = on;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setShowTxFilterOnRxWaterfall(bool on)
+{
+    if (m_showTxFilterOnRxWaterfall == on) { return; }
+    m_showTxFilterOnRxWaterfall = on;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setShowRxZeroLineOnWaterfall(bool on)
+{
+    if (m_showRxZeroLineOnWaterfall == on) { return; }
+    m_showRxZeroLineOnWaterfall = on;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setShowTxZeroLineOnWaterfall(bool on)
+{
+    if (m_showTxZeroLineOnWaterfall == on) { return; }
+    m_showTxZeroLineOnWaterfall = on;
     scheduleSettingsSave();
     update();
 }
@@ -707,25 +876,99 @@ void SpectrumWidget::drawWaterfall(QPainter& p, const QRect& wfRect)
         return;
     }
 
-    // Ring buffer display — newest row at top, oldest at bottom.
-    // From Thetis display.cs:7719-7729: new row written at top, old content shifts down.
-    // Our ring buffer equivalent: m_wfWriteRow is where the NEWEST row lives.
-    // Display order: writeRow → wrapping down → back to writeRow-1 (oldest).
-    int wfH = m_waterfall.height();
-
-    // Part 1 (top of screen): from writeRow to end of image
-    int part1Rows = wfH - m_wfWriteRow;
-    if (part1Rows > 0) {
-        QRect src(0, m_wfWriteRow, m_waterfall.width(), part1Rows);
-        QRect dst(wfRect.left(), wfRect.top(), wfRect.width(), part1Rows);
-        p.drawImage(dst, m_waterfall, src);
+    // Phase 3G-8 commit 4: global opacity for the waterfall image. Overlays
+    // (filter bands, zero line, timestamp) are drawn afterward at full alpha.
+    const float opacity = qBound(0, m_wfOpacity, 100) / 100.0f;
+    const float savedOpacity = static_cast<float>(p.opacity());
+    if (!qFuzzyCompare(opacity, 1.0f)) {
+        p.setOpacity(opacity);
     }
 
-    // Part 2 (bottom of screen): from 0 to writeRow
-    if (m_wfWriteRow > 0) {
-        QRect src(0, 0, m_waterfall.width(), m_wfWriteRow);
-        QRect dst(wfRect.left(), wfRect.top() + part1Rows, wfRect.width(), m_wfWriteRow);
-        p.drawImage(dst, m_waterfall, src);
+    // Ring buffer display — newest row at top, oldest at bottom (normal scroll).
+    // Reverse scroll flips that vertically: oldest at top, newest at bottom.
+    // From Thetis display.cs:7719-7729: new row written at top, old content shifts down.
+    int wfH = m_waterfall.height();
+
+    if (!m_wfReverseScroll) {
+        // Part 1 (top of screen): from writeRow to end of image
+        int part1Rows = wfH - m_wfWriteRow;
+        if (part1Rows > 0) {
+            QRect src(0, m_wfWriteRow, m_waterfall.width(), part1Rows);
+            QRect dst(wfRect.left(), wfRect.top(), wfRect.width(), part1Rows);
+            p.drawImage(dst, m_waterfall, src);
+        }
+        if (m_wfWriteRow > 0) {
+            QRect src(0, 0, m_waterfall.width(), m_wfWriteRow);
+            QRect dst(wfRect.left(), wfRect.top() + part1Rows, wfRect.width(), m_wfWriteRow);
+            p.drawImage(dst, m_waterfall, src);
+        }
+    } else {
+        // Reverse: oldest row at top, newest at bottom. writeRow points at
+        // the newest row, so we render backward.
+        int part1Rows = m_wfWriteRow + 1;
+        int part2Rows = wfH - part1Rows;
+        if (part2Rows > 0) {
+            QRect src(0, m_wfWriteRow + 1, m_waterfall.width(), part2Rows);
+            QRect dst(wfRect.left(), wfRect.top(), wfRect.width(), part2Rows);
+            p.drawImage(dst, m_waterfall, src);
+        }
+        if (part1Rows > 0) {
+            QRect src(0, 0, m_waterfall.width(), part1Rows);
+            QRect dst(wfRect.left(), wfRect.top() + part2Rows, wfRect.width(), part1Rows);
+            p.drawImage(dst, m_waterfall, src);
+        }
+    }
+
+    if (!qFuzzyCompare(opacity, 1.0f)) {
+        p.setOpacity(savedOpacity);
+    }
+
+    // ---- Overlays (full opacity) ----
+
+    // RX filter passband as a translucent vertical band spanning the
+    // waterfall height. Uses m_vfoHz + m_filterLowHz/m_filterHighHz.
+    if (m_showRxFilterOnWaterfall && m_vfoHz > 0.0) {
+        const double loHz = m_vfoHz + m_filterLowHz;
+        const double hiHz = m_vfoHz + m_filterHighHz;
+        const int x1 = hzToX(loHz, wfRect);
+        const int x2 = hzToX(hiHz, wfRect);
+        if (x2 > x1) {
+            QColor band(0x00, 0xb4, 0xd8, 50);
+            p.fillRect(QRect(x1, wfRect.top(), x2 - x1, wfRect.height()), band);
+        }
+    }
+
+    // TX filter overlay on the RX waterfall — currently unused until the
+    // TX state model exposes a TX VFO/filter pair (post-3I-1). Scaffolding
+    // in place so commit 7's checkbox wiring has a renderer hook.
+    Q_UNUSED(m_showTxFilterOnRxWaterfall);
+    Q_UNUSED(m_showTxZeroLineOnWaterfall);
+
+    if (m_showRxZeroLineOnWaterfall && m_vfoHz > 0.0) {
+        const int x = hzToX(m_vfoHz, wfRect);
+        if (x >= wfRect.left() && x <= wfRect.right()) {
+            QPen zeroPen(QColor(255, 0, 0, 180), 1);
+            p.setPen(zeroPen);
+            p.drawLine(x, wfRect.top(), x, wfRect.bottom());
+        }
+    }
+
+    // Timestamp overlay on waterfall (NereusSDR extensions W8/W9).
+    if (m_wfTimestampPos != TimestampPosition::None) {
+        const QDateTime now = (m_wfTimestampMode == TimestampMode::UTC)
+                              ? QDateTime::currentDateTimeUtc()
+                              : QDateTime::currentDateTime();
+        const QString stamp = now.toString(QStringLiteral("hh:mm:ss"));
+        QFont f = p.font();
+        f.setPixelSize(10);
+        p.setFont(f);
+        p.setPen(QColor(200, 220, 255));
+        const int pad = 4;
+        const int textW = p.fontMetrics().horizontalAdvance(stamp);
+        int x = (m_wfTimestampPos == TimestampPosition::Left)
+                ? (wfRect.left() + pad)
+                : (wfRect.right() - textW - pad);
+        p.drawText(x, wfRect.top() + 12, stamp);
     }
 }
 
@@ -848,11 +1091,24 @@ int SpectrumWidget::dbmToY(float dbm, const QRect& r) const
 // From Thetis display.cs:7719 — new row at top, old content shifts down.
 // Ring buffer equivalent: decrement write pointer so newest row is always
 // at m_wfWriteRow, and display reads forward from there (wrapping).
+//
+// Phase 3G-8 commit 4: respects m_wfUpdatePeriodMs (rate-limit),
+// m_wfAverageMode (waterfall-specific averaging), m_wfAgcEnabled (auto
+// level tracking), m_wfUseSpectrumMinMax (borrow spectrum thresholds),
+// m_wfReverseScroll (write at opposite end of ring so newest is bottom).
 void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
 {
     if (m_waterfall.isNull()) {
         return;
     }
+
+    // Rate-limit per configured update period.
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_wfUpdatePeriodMs > 0 && m_wfLastPushMs != 0 &&
+        now - m_wfLastPushMs < m_wfUpdatePeriodMs) {
+        return;
+    }
+    m_wfLastPushMs = now;
 
     auto [firstBin, lastBin] = visibleBinRange(bins.size());
     int subsetCount = lastBin - firstBin + 1;
@@ -860,9 +1116,61 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
         return;
     }
 
+    // Waterfall-specific averaging. Applied to a local smoothed copy so
+    // the spectrum trace and waterfall can diverge in smoothing.
+    const QVector<float>* src = &bins;
+    QVector<float> wfLocal;
+    if (m_wfAverageMode != AverageMode::None) {
+        if (m_wfSmoothedBins.size() != bins.size()) {
+            m_wfSmoothedBins = bins;
+        } else {
+            const float a = qBound(0.0f, m_averageAlpha, 1.0f);
+            for (int i = 0; i < bins.size(); ++i) {
+                m_wfSmoothedBins[i] = a * bins[i]
+                                    + (1.0f - a) * m_wfSmoothedBins[i];
+            }
+        }
+        wfLocal = m_wfSmoothedBins;
+        src = &wfLocal;
+    }
+
+    // AGC: track a slow envelope of visible-range min/max and bias the
+    // effective thresholds toward it. Simple one-pole follower.
+    if (m_wfAgcEnabled) {
+        float mn = (*src)[firstBin];
+        float mx = mn;
+        for (int i = firstBin + 1; i <= lastBin; ++i) {
+            const float v = (*src)[i];
+            if (v < mn) { mn = v; }
+            if (v > mx) { mx = v; }
+        }
+        if (!m_wfAgcPrimed) {
+            m_wfAgcRunMin = mn;
+            m_wfAgcRunMax = mx;
+            m_wfAgcPrimed = true;
+        } else {
+            constexpr float kAgcAlpha = 0.05f;
+            m_wfAgcRunMin = kAgcAlpha * mn + (1.0f - kAgcAlpha) * m_wfAgcRunMin;
+            m_wfAgcRunMax = kAgcAlpha * mx + (1.0f - kAgcAlpha) * m_wfAgcRunMax;
+        }
+        // Expand slightly so the hottest signal doesn't clip.
+        const float margin = 3.0f;
+        m_wfLowThreshold  = m_wfAgcRunMin - margin;
+        m_wfHighThreshold = m_wfAgcRunMax + margin;
+    } else if (m_wfUseSpectrumMinMax) {
+        // Borrow spectrum grid thresholds.
+        m_wfHighThreshold = m_refLevel;
+        m_wfLowThreshold  = m_refLevel - m_dynamicRange;
+    }
+
     int h = m_waterfall.height();
-    // Decrement write pointer (wrapping) — newest data at top of display
-    m_wfWriteRow = (m_wfWriteRow - 1 + h) % h;
+    // Decrement (normal) or increment (reverse) write pointer so the newest
+    // row lands at the appropriate edge.
+    if (m_wfReverseScroll) {
+        m_wfWriteRow = (m_wfWriteRow + 1) % h;
+    } else {
+        m_wfWriteRow = (m_wfWriteRow - 1 + h) % h;
+    }
 
     int w = m_waterfall.width();
     QRgb* scanline = reinterpret_cast<QRgb*>(m_waterfall.scanLine(m_wfWriteRow));
@@ -871,7 +1179,7 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
     for (int x = 0; x < w; ++x) {
         int srcBin = firstBin + static_cast<int>(static_cast<float>(x) * binScale);
         srcBin = qBound(firstBin, srcBin, lastBin);
-        scanline[x] = dbmToRgb(bins[srcBin]);
+        scanline[x] = dbmToRgb((*src)[srcBin]);
     }
 }
 
