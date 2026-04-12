@@ -47,6 +47,10 @@ constexpr const char* kHeaderStyle =
     "QLabel { color: #8aa8c0; font-weight: bold; font-size: 11px;"
     "  background: #1a2a38; padding: 2px 4px; }";
 
+// Phase 3G-6 block 4b: minimum widths so fields don't shrink-wrap
+// to their default size.
+constexpr int kDefaultFieldWidth = 140;
+
 } // namespace
 
 BaseItemEditor::BaseItemEditor(QWidget* parent)
@@ -216,12 +220,6 @@ void BaseItemEditor::loadBaseFields()
     m_spinDisplayGroup->setValue(m_item->displayGroup());
     endProgrammaticUpdate();
 }
-
-// Phase 3G-6 block 4b: minimum widths so fields don't shrink-wrap
-// to their default size. Without these, a QDoubleSpinBox with a
-// small range (0..1) renders only about 50 px wide, which looks
-// squeezed inside the Properties column.
-static constexpr int kDefaultFieldWidth = 140;
 
 QDoubleSpinBox* BaseItemEditor::makeDoubleRow(const QString& label,
                                               double min, double max,
