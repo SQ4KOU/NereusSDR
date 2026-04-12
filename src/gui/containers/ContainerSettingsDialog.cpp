@@ -1,5 +1,6 @@
 #include "ContainerSettingsDialog.h"
 #include "ContainerManager.h"
+#include "MmioEndpointsDialog.h"
 
 // Phase 3G-6 block 4 — per-item property editors
 #include "meter_property_editors/BaseItemEditor.h"
@@ -1405,15 +1406,12 @@ void ContainerSettingsDialog::onLoadFromFile()
 
 void ContainerSettingsDialog::onOpenMmioDialog()
 {
-    // Phase 3G-6 block 5 commit 36 replaces this stub with an actual
-    // MmioVariablesDialog invocation. Until then, inform the user
-    // that MMIO configuration is not yet available instead of
-    // silently doing nothing.
-    QMessageBox::information(this,
-        QStringLiteral("MMIO Variables"),
-        QStringLiteral("MMIO Variables configuration is not yet "
-                       "implemented. It arrives in Phase 3G-6 block 5 "
-                       "alongside the MMIO transport subsystem."));
+    // Phase 3G-6 block 5 phase 3: real MMIO endpoints dialog. The
+    // block 3 commit 18 stub is gone — this now opens the endpoint
+    // manager with live add/edit/remove backed by
+    // ExternalVariableEngine.
+    MmioEndpointsDialog dlg(this);
+    dlg.exec();
 }
 
 // ---------------------------------------------------------------------------

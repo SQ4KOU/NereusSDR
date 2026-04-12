@@ -197,6 +197,7 @@ set(GUI_SOURCES
     src/gui/containers/FloatingContainer.cpp
     src/gui/containers/ContainerManager.cpp
     src/gui/containers/ContainerSettingsDialog.cpp
+    src/gui/containers/MmioEndpointsDialog.cpp
     src/core/mmio/ITransportWorker.cpp
     src/core/mmio/MmioEndpoint.cpp
     src/core/mmio/ExternalVariableEngine.cpp
