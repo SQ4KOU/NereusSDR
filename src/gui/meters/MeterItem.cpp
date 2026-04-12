@@ -1029,17 +1029,49 @@ void NeedleItem::paintOverlayDynamic(QPainter& p, int widgetW, int widgetH)
     p.drawText(QPointF(rect.right() - dbmW - 6.0f, topY), dbmText);
 }
 
-// Format: NEEDLE|x|y|w|h|bindingId|zOrder|sourceLabel[|onlyRx|onlyTx|displayGroup]
-// The trailing 3 filter fields were added in Phase 3G-6 block 1; older
-// state (8 parts, no filter fields) still deserializes with defaults.
+// Format:
+//   NEEDLE|x|y|w|h|bindingId|zOrder|sourceLabel
+//     [|onlyRx|onlyTx|displayGroup]                    -- added block 1
+//     [|calCount|v:x:y|v:x:y|...]                      -- added block 2
+//     [|needleColor|offsetX|offsetY|radX|radY|lenFactor|direction|normalise100|maxPower|attack|decay]
+//                                                      -- added block 2
+// Each trailing group is optional for backward compatibility: older
+// serialized state deserializes cleanly with defaults for any missing
+// tail fields.
 QString NeedleItem::serialize() const
 {
-    return QStringLiteral("NEEDLE|%1|%2|%3|%4|%5")
+    QString s = QStringLiteral("NEEDLE|%1|%2|%3|%4|%5")
         .arg(baseFields(*this))
         .arg(m_sourceLabel)
         .arg(m_onlyWhenRx ? 1 : 0)
         .arg(m_onlyWhenTx ? 1 : 0)
         .arg(m_displayGroup);
+
+    // Calibration map — value:x:y triplets with a leading count.
+    s += QStringLiteral("|%1").arg(m_scaleCalibration.size());
+    for (auto it = m_scaleCalibration.constBegin();
+         it != m_scaleCalibration.constEnd(); ++it) {
+        s += QStringLiteral("|%1:%2:%3")
+            .arg(static_cast<double>(it.key()))
+            .arg(it.value().x())
+            .arg(it.value().y());
+    }
+
+    // Visual / geometry / smoothing extras.
+    s += QStringLiteral("|%1|%2|%3|%4|%5|%6|%7|%8|%9|%10|%11")
+        .arg(m_needleColor.name(QColor::HexArgb))
+        .arg(m_needleOffset.x())
+        .arg(m_needleOffset.y())
+        .arg(m_radiusRatio.x())
+        .arg(m_radiusRatio.y())
+        .arg(static_cast<double>(m_lengthFactor))
+        .arg(static_cast<int>(m_direction))
+        .arg(m_normaliseTo100W ? 1 : 0)
+        .arg(static_cast<double>(m_maxPower))
+        .arg(static_cast<double>(m_attackRatio))
+        .arg(static_cast<double>(m_decayRatio));
+
+    return s;
 }
 
 bool NeedleItem::deserialize(const QString& data)
@@ -1052,11 +1084,51 @@ bool NeedleItem::deserialize(const QString& data)
         return false;
     }
     m_sourceLabel = parts[7];
-    if (parts.size() >= 11) {
-        m_onlyWhenRx   = (parts[8].toInt() != 0);
-        m_onlyWhenTx   = (parts[9].toInt() != 0);
-        m_displayGroup = parts[10].toInt();
+
+    // Filter fields (block 1)
+    int idx = 8;
+    if (parts.size() >= idx + 3) {
+        m_onlyWhenRx   = (parts[idx++].toInt() != 0);
+        m_onlyWhenTx   = (parts[idx++].toInt() != 0);
+        m_displayGroup = parts[idx++].toInt();
     }
+
+    // Calibration map (block 2)
+    if (parts.size() > idx) {
+        bool ok = false;
+        const int calCount = parts[idx].toInt(&ok);
+        if (ok && calCount >= 0 && parts.size() >= idx + 1 + calCount) {
+            ++idx;
+            QMap<float, QPointF> cal;
+            for (int i = 0; i < calCount; ++i) {
+                const QStringList tri = parts[idx + i].split(QLatin1Char(':'));
+                if (tri.size() < 3) { cal.clear(); break; }
+                bool okv = true, okx = true, oky = true;
+                const float v  = tri[0].toFloat(&okv);
+                const float nx = tri[1].toFloat(&okx);
+                const float ny = tri[2].toFloat(&oky);
+                if (!okv || !okx || !oky) { cal.clear(); break; }
+                cal.insert(v, QPointF(nx, ny));
+            }
+            m_scaleCalibration = cal;
+            idx += calCount;
+        }
+    }
+
+    // Visual / geometry / smoothing extras (block 2)
+    if (parts.size() >= idx + 11) {
+        const QColor col(parts[idx]);
+        if (col.isValid()) { m_needleColor = col; }
+        m_needleOffset    = QPointF(parts[idx + 1].toDouble(), parts[idx + 2].toDouble());
+        m_radiusRatio     = QPointF(parts[idx + 3].toDouble(), parts[idx + 4].toDouble());
+        m_lengthFactor    = parts[idx + 5].toFloat();
+        m_direction       = static_cast<NeedleDirection>(parts[idx + 6].toInt());
+        m_normaliseTo100W = (parts[idx + 7].toInt() != 0);
+        m_maxPower        = parts[idx + 8].toFloat();
+        m_attackRatio     = parts[idx + 9].toFloat();
+        m_decayRatio      = parts[idx + 10].toFloat();
+    }
+
     return true;
 }
 
