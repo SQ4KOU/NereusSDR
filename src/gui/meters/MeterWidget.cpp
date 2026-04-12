@@ -2,6 +2,32 @@
 #include "MeterItem.h"
 #include "core/LogCategories.h"
 
+// All item types for deserializeItems() registry
+#include "SpacerItem.h"
+#include "FadeCoverItem.h"
+#include "LEDItem.h"
+#include "HistoryGraphItem.h"
+#include "MagicEyeItem.h"
+#include "NeedleScalePwrItem.h"
+#include "SignalTextItem.h"
+#include "DialItem.h"
+#include "TextOverlayItem.h"
+#include "WebImageItem.h"
+#include "FilterDisplayItem.h"
+#include "RotatorItem.h"
+#include "BandButtonItem.h"
+#include "ModeButtonItem.h"
+#include "FilterButtonItem.h"
+#include "AntennaButtonItem.h"
+#include "TuneStepButtonItem.h"
+#include "OtherButtonItem.h"
+#include "VoiceRecordPlayItem.h"
+#include "DiscordButtonItem.h"
+#include "VfoDisplayItem.h"
+#include "ClockItem.h"
+#include "ClickBoxItem.h"
+#include "DataOutItem.h"
+
 #include <QPainter>
 #include <QPaintEvent>
 #include <QResizeEvent>
@@ -136,6 +162,7 @@ bool MeterWidget::deserializeItems(const QString& data)
 
         QString type = line.section(QLatin1Char('|'), 0, 0);
         MeterItem* item = nullptr;
+        // Core types (MeterItem.h)
         if (type == QStringLiteral("BAR")) {
             item = new BarItem();
         } else if (type == QStringLiteral("SOLID")) {
@@ -148,6 +175,58 @@ bool MeterWidget::deserializeItems(const QString& data)
             item = new TextItem();
         } else if (type == QStringLiteral("NEEDLE")) {
             item = new NeedleItem();
+        }
+        // Phase 3G-4 passive types
+        else if (type == QStringLiteral("SPACER")) {
+            item = new SpacerItem();
+        } else if (type == QStringLiteral("FADECOVER")) {
+            item = new FadeCoverItem();
+        } else if (type == QStringLiteral("LED")) {
+            item = new LEDItem();
+        } else if (type == QStringLiteral("HISTORY")) {
+            item = new HistoryGraphItem();
+        } else if (type == QStringLiteral("MAGICEYE")) {
+            item = new MagicEyeItem();
+        } else if (type == QStringLiteral("NEEDLESCALEPWR")) {
+            item = new NeedleScalePwrItem();
+        } else if (type == QStringLiteral("SIGNALTEXT")) {
+            item = new SignalTextItem();
+        } else if (type == QStringLiteral("DIAL")) {
+            item = new DialItem();
+        } else if (type == QStringLiteral("TEXTOVERLAY")) {
+            item = new TextOverlayItem();
+        } else if (type == QStringLiteral("WEBIMAGE")) {
+            item = new WebImageItem();
+        } else if (type == QStringLiteral("FILTERDISPLAY")) {
+            item = new FilterDisplayItem();
+        } else if (type == QStringLiteral("ROTATOR")) {
+            item = new RotatorItem();
+        }
+        // Phase 3G-5 interactive types
+        else if (type == QStringLiteral("BANDBTNS")) {
+            item = new BandButtonItem();
+        } else if (type == QStringLiteral("MODEBTNS")) {
+            item = new ModeButtonItem();
+        } else if (type == QStringLiteral("FILTERBTNS")) {
+            item = new FilterButtonItem();
+        } else if (type == QStringLiteral("ANTENNABTNS")) {
+            item = new AntennaButtonItem();
+        } else if (type == QStringLiteral("TUNESTEPBTNS")) {
+            item = new TuneStepButtonItem();
+        } else if (type == QStringLiteral("OTHERBTNS")) {
+            item = new OtherButtonItem();
+        } else if (type == QStringLiteral("VOICERECPLAY")) {
+            item = new VoiceRecordPlayItem();
+        } else if (type == QStringLiteral("DISCORDBTNS")) {
+            item = new DiscordButtonItem();
+        } else if (type == QStringLiteral("VFO")) {
+            item = new VfoDisplayItem();
+        } else if (type == QStringLiteral("CLOCK")) {
+            item = new ClockItem();
+        } else if (type == QStringLiteral("CLICKBOX")) {
+            item = new ClickBoxItem();
+        } else if (type == QStringLiteral("DATAOUT")) {
+            item = new DataOutItem();
         }
 
         if (item && item->deserialize(line)) {
