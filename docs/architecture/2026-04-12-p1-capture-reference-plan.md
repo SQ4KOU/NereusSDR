@@ -12,7 +12,20 @@
 - Capture (extracted, do not re-extract): `/tmp/hl2cap/HL2_Packet_Capture.pcapng` (320 MB)
 - Filtered subset (created in Task 1): `/tmp/hl2cap/hl2_session.pcapng`
 - Spec being implemented: `docs/superpowers/specs/2026-04-12-p1-capture-reference-design.md`
-- Thetis source: `/Users/j.j.boyd/Thetis/Project Files/Source/Console/HPSDR/NetworkIO.cs`
+
+
+**Thetis P1 source map** — discovered during Task 3. Most P1 byte-level code lives in the **unmanaged ChannelMaster C source**, not in the C# `NetworkIO.cs` file. Subagents must grep the right file for what they need:
+
+| Topic | Authoritative file |
+| --- | --- |
+| Discovery request build / reply parse | `/Users/j.j.boyd/Thetis/Project Files/Source/Console/HPSDR/clsRadioDiscovery.cs` (C#, ~lines 1100-1310) |
+| Metis start/stop, EP2 send, EP6 receive, sequence numbers | `/Users/j.j.boyd/Thetis/Project Files/Source/ChannelMaster/networkproto1.c` (C, 749 lines, by W5WC) |
+| Metis socket setup, port binding, generic frame I/O | `/Users/j.j.boyd/Thetis/Project Files/Source/ChannelMaster/network.c` (C, 1494 lines) |
+| C# P/Invoke surface (function names, signatures) | `/Users/j.j.boyd/Thetis/Project Files/Source/Console/HPSDR/NetworkIOImports.cs` |
+| C# wrapper layer (state, callbacks) | `/Users/j.j.boyd/Thetis/Project Files/Source/Console/HPSDR/NetworkIO.cs` |
+| Board-ID enum | `/Users/j.j.boyd/Thetis/Project Files/Source/Console/enums.cs` |
+
+**Citation rule:** cite whichever file actually contains the byte layout being decoded. For Tasks 4-9 this will USUALLY be `networkproto1.c`. The grep commands shown in subsequent tasks use `NetworkIO.cs` but were written before the source layout was understood — if `NetworkIO.cs` returns no matches, retry against `networkproto1.c` and `network.c`. The `READ → SHOW → TRANSLATE` rule requires the citation to point at the file the code actually lives in.
 
 **Conventions:**
 - All hex dumps in the doc come from `tshark -x` output, trimmed to the relevant payload range, fenced with ` ```` `.
