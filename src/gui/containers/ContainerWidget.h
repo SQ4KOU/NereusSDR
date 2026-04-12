@@ -88,6 +88,19 @@ public:
     void setAutoHeight(bool autoHeight);
     int containerHeight() const { return m_containerHeight; }
 
+    // Title-bar visibility toggle — from Thetis chkContainerNoTitle
+    // (setup.cs:24447). Persistent.
+    bool isTitleBarVisible() const { return m_titleBarVisible; }
+    void setTitleBarVisible(bool visible);
+
+    // Minimised collapse state (runtime only; not persisted). Collapses
+    // a floating container to just its title bar. From Thetis
+    // ContainerMinimised runtime flag (MeterManager.cs usage). Whether a
+    // container *can* be minimised is controlled by m_containerMinimises
+    // above; whether it *is* currently minimised lives here.
+    bool isMinimised() const { return m_minimised; }
+    void setMinimised(bool minimised);
+
     // --- Docked Position (overlay mode only) ---
     QPoint dockedLocation() const { return m_dockedLocation; }
     void setDockedLocation(const QPoint& loc);
@@ -118,6 +131,8 @@ signals:
     void settingsRequested();
     void dockedMoved();
     void dockModeChanged(DockMode mode);
+    void titleBarVisibilityChanged(bool visible);
+    void minimisedChanged(bool minimised);
 
     // --- Phase 3G-5 interactive item signals ---
     void bandClicked(int bandIndex);
@@ -187,6 +202,8 @@ private:
     QString m_notes;
     int m_containerHeight{kMinContainerHeight};
     bool m_autoHeight{false};
+    bool m_titleBarVisible{true};
+    bool m_minimised{false};          // runtime only, not persisted
     QColor m_backgroundColor{0x0f, 0x0f, 0x1a};
 
     // --- Drag/Resize state ---

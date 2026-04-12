@@ -324,6 +324,37 @@ void ContainerWidget::setNotes(const QString& notes)
 
 void ContainerWidget::setNoControls(bool noControls) { m_noControls = noControls; }
 void ContainerWidget::setAutoHeight(bool autoHeight) { m_autoHeight = autoHeight; }
+
+void ContainerWidget::setTitleBarVisible(bool visible)
+{
+    if (m_titleBarVisible == visible) { return; }
+    m_titleBarVisible = visible;
+    if (m_titleBar) {
+        m_titleBar->setVisible(visible);
+    }
+    emit titleBarVisibilityChanged(visible);
+    update();
+}
+
+void ContainerWidget::setMinimised(bool minimised)
+{
+    if (m_minimised == minimised) { return; }
+    m_minimised = minimised;
+    // Collapse the content area so only the title bar shows. The title
+    // bar stays visible regardless of m_titleBarVisible while minimised
+    // so the user retains a handle to un-minimise. FloatingContainer
+    // (commit 10) picks up minimisedChanged() to resize its window.
+    if (m_contentHolder) {
+        m_contentHolder->setVisible(!minimised);
+    }
+    if (minimised && m_titleBar) {
+        m_titleBar->setVisible(true);
+    } else if (m_titleBar) {
+        m_titleBar->setVisible(m_titleBarVisible);
+    }
+    emit minimisedChanged(minimised);
+    update();
+}
 void ContainerWidget::setDockedLocation(const QPoint& loc) { m_dockedLocation = loc; }
 void ContainerWidget::setDockedSize(const QSize& size) { m_dockedSize = size; }
 void ContainerWidget::setDelta(const QPoint& delta) { m_delta = delta; }
@@ -721,6 +752,7 @@ QString ContainerWidget::serialize() const
     p << (m_containerHidesWhenRxNotUsed ? QStringLiteral("true") : QStringLiteral("false")); // 21
     p << (m_hiddenByMacro ? QStringLiteral("true") : QStringLiteral("false")); // 22
     p << dockModeToString(m_dockMode);                                      // 23 (NereusSDR extension)
+    p << (m_titleBarVisible ? QStringLiteral("true") : QStringLiteral("false")); // 24 (Phase 3G-6)
     return p.join(QLatin1Char('|'));
 }
 
@@ -790,6 +822,11 @@ bool ContainerWidget::deserialize(const QString& data)
         setDockMode(dockModeFromString(p[23]));
     } else {
         setDockMode(thetisFloating ? DockMode::Floating : DockMode::OverlayDocked);
+    }
+
+    // Field 24: Phase 3G-6 title-bar visibility toggle
+    if (p.size() > 24) {
+        setTitleBarVisible(p[24].toLower() == QStringLiteral("true"));
     }
 
     qCDebug(lcContainer) << "Deserialized:" << m_id << "rx:" << m_rxSource
