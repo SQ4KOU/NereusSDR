@@ -175,9 +175,17 @@ private:
     QPushButton* m_btnPreset{nullptr};
     QPushButton* m_btnImport{nullptr};
     QPushButton* m_btnExport{nullptr};
+    // Phase 3G-6 block 3 commits 18+19: footer additions.
+    QPushButton* m_btnSave{nullptr};     // serialize container+items to file
+    QPushButton* m_btnLoad{nullptr};     // deserialize container+items from file
+    QPushButton* m_btnMmio{nullptr};     // opens MMIO Variables dialog (block 5)
     QPushButton* m_btnOk{nullptr};
     QPushButton* m_btnCancel{nullptr};
     QPushButton* m_btnApply{nullptr};
+
+    void onSaveToFile();
+    void onLoadFromFile();
+    void onOpenMmioDialog();
 };
 
 } // namespace NereusSDR

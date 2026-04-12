@@ -44,6 +44,9 @@
 #include <QComboBox>
 #include <QPushButton>
 #include <QLabel>
+#include <QFileDialog>
+#include <QFile>
+#include <QTextStream>
 #include <QFrame>
 #include <QColorDialog>
 #include <QColor>
@@ -644,14 +647,20 @@ void ContainerSettingsDialog::buildButtonBar()
     QHBoxLayout* barLayout = new QHBoxLayout;
     barLayout->setSpacing(6);
 
-    // Left cluster: Presets / Import / Export
+    // Left cluster: Save / Load / Presets / Import / Export / MMIO
+    m_btnSave   = makeBtn(QStringLiteral("Save\u2026"),    this);
+    m_btnLoad   = makeBtn(QStringLiteral("Load\u2026"),    this);
     m_btnPreset = makeBtn(QStringLiteral("Presets\u2026"), this);
     m_btnImport = makeBtn(QStringLiteral("Import"),        this);
     m_btnExport = makeBtn(QStringLiteral("Export"),        this);
+    m_btnMmio   = makeBtn(QStringLiteral("MMIO Variables\u2026"), this);
 
+    barLayout->addWidget(m_btnSave);
+    barLayout->addWidget(m_btnLoad);
     barLayout->addWidget(m_btnPreset);
     barLayout->addWidget(m_btnImport);
     barLayout->addWidget(m_btnExport);
+    barLayout->addWidget(m_btnMmio);
     barLayout->addStretch();
 
     // Right cluster: Apply / Cancel / OK
@@ -671,6 +680,9 @@ void ContainerSettingsDialog::buildButtonBar()
     connect(m_btnPreset, &QPushButton::clicked, this, &ContainerSettingsDialog::onLoadPreset);
     connect(m_btnExport, &QPushButton::clicked, this, &ContainerSettingsDialog::onExport);
     connect(m_btnImport, &QPushButton::clicked, this, &ContainerSettingsDialog::onImport);
+    connect(m_btnSave,   &QPushButton::clicked, this, &ContainerSettingsDialog::onSaveToFile);
+    connect(m_btnLoad,   &QPushButton::clicked, this, &ContainerSettingsDialog::onLoadFromFile);
+    connect(m_btnMmio,   &QPushButton::clicked, this, &ContainerSettingsDialog::onOpenMmioDialog);
     connect(m_btnApply,  &QPushButton::clicked, this, &ContainerSettingsDialog::applyToContainer);
     connect(m_btnCancel, &QPushButton::clicked, this, [this]() {
         // Phase 3G-6 block 3 commit 14: Cancel reverts the container
@@ -1249,6 +1261,78 @@ void ContainerSettingsDialog::updatePreview()
     // changes directly to the target container's MeterWidget; until
     // then this is a no-op so the existing ~30 callsites keep
     // compiling without being rewritten one-by-one.
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3G-6 block 3 commits 18 + 19: footer buttons
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::onSaveToFile()
+{
+    if (!m_container) { return; }
+    const QString path = QFileDialog::getSaveFileName(this,
+        QStringLiteral("Save Container"),
+        QString(),
+        QStringLiteral("NereusSDR Container (*.nscontainer);;All Files (*)"));
+    if (path.isEmpty()) { return; }
+
+    // Pipe-delimited container serialize + newline + MeterWidget
+    // serialized items, so the two halves round-trip together.
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        QMessageBox::warning(this, QStringLiteral("Save Failed"),
+            QStringLiteral("Could not open %1 for writing.").arg(path));
+        return;
+    }
+    QTextStream out(&f);
+    out << m_container->serialize() << '\n';
+    if (MeterWidget* meter = findMeterWidget()) {
+        out << meter->serializeItems();
+    }
+}
+
+void ContainerSettingsDialog::onLoadFromFile()
+{
+    if (!m_container) { return; }
+    const QString path = QFileDialog::getOpenFileName(this,
+        QStringLiteral("Load Container"),
+        QString(),
+        QStringLiteral("NereusSDR Container (*.nscontainer);;All Files (*)"));
+    if (path.isEmpty()) { return; }
+
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, QStringLiteral("Load Failed"),
+            QStringLiteral("Could not open %1 for reading.").arg(path));
+        return;
+    }
+    QTextStream in(&f);
+    const QString containerLine = in.readLine();
+    const QString itemsPayload  = in.readAll();
+
+    if (!containerLine.isEmpty()) {
+        m_container->deserialize(containerLine);
+    }
+    if (MeterWidget* meter = findMeterWidget()) {
+        meter->deserializeItems(itemsPayload);
+        meter->update();
+    }
+    // Refresh dialog state from the newly-loaded container.
+    populateItemList();
+    m_container->update();
+}
+
+void ContainerSettingsDialog::onOpenMmioDialog()
+{
+    // Phase 3G-6 block 5 commit 36 replaces this stub with an actual
+    // MmioVariablesDialog invocation. Until then, inform the user
+    // that MMIO configuration is not yet available instead of
+    // silently doing nothing.
+    QMessageBox::information(this,
+        QStringLiteral("MMIO Variables"),
+        QStringLiteral("MMIO Variables configuration is not yet "
+                       "implemented. It arrives in Phase 3G-6 block 5 "
+                       "alongside the MMIO transport subsystem."));
 }
 
 // ---------------------------------------------------------------------------
