@@ -2,39 +2,60 @@
 
 ## [Unreleased]
 
-### Phase 3G-7 — Polish (in progress)
+### Phase 3G-7 — Polish (complete)
 
-**Status:** Branch `feature/phase3g7-polish` created off
-`feature/phase3g6-oneshot`. Handoff doc landed; no code yet.
-Scope decision still open — see
-[`docs/architecture/phase3g7-polish-handoff.md`](docs/architecture/phase3g7-polish-handoff.md).
+**Status:** Complete. Branch `feature/phase3g7-polish` off
+`feature/phase3g6-oneshot`. 4 GPG-signed commits, all polish
+landed in a tighter scope than the original handoff proposed.
+See [`docs/architecture/phase3g7-polish-handoff.md`](docs/architecture/phase3g7-polish-handoff.md).
 
-Picks up the 6 known limitations from 3G-6's "Known limitations
-after block 7" list:
+**Items shipped:**
 
-- **A — MMIO binding serialization sweep** (~30 subclasses,
-  parallelizable). The runtime-visible bug from 3G-6 — meter
-  items lose their MMIO binding on dialog Apply because
-  `MeterItem::m_mmioGuid` / `m_mmioVariable` aren't persisted.
-- **B — MeterItem subclass setter gap fills** (~10 classes).
-  Plan section 5 listed fields whose underlying `MeterItem`
-  subclasses lack public setters / getters; block 4 editors
-  flagged each per agent report.
-- **C — `NeedleItemEditor` `QGroupBox` grouping** — wrap the
-  17 type-specific fields in 4 groups (Needle, Geometry,
-  History, Power, Calibration) for readability.
-- **D — Hand-rolled editor widget width sweep** — `BaseItemEditor`
-  helpers set `setMinimumWidth(140)` but the 30 subagent-produced
-  editors hand-roll a lot of `QLineEdit` / `QComboBox` /
-  `QPushButton` instances that still shrink-wrap.
-- **E — `ButtonBoxItem` per-button `ButtonState` sub-editor** —
-  per-button color/style/font fields live on a `ButtonState`
-  struct array; needs a per-button-index spinner UI.
-- **F — End-to-end MMIO smoke test** — first real proof MMIO
-  works (UDP listener + netcat JSON + meter item visual update).
+- **B — MeterItem accessor gap fills** (`25a7819`). Five
+  subclasses (TextOverlayItem, RotatorItem, FilterDisplayItem,
+  ClockItem, VfoDisplayItem) had setters with no matching
+  getters, so each item's property editor `setItem()`
+  populated only a fraction of its widgets. Added 42 trivial
+  inline getters and wired each editor to populate from them.
+  Investigation showed the handoff's other "phantom field"
+  candidates (`SignalText::showMarker`, `LEDItem::condition`,
+  `HistoryGraph::keepFor`/`fadeRx`, `MagicEye::darkMode`/`eyeScale`,
+  `DialItem::vfoClickBehavior`) don't exist on either the items
+  or the editors today — they're future feature ports, not
+  gap fills, and have been moved to deferred-features list.
+- **A — MMIO binding clone-path side-channel** (`8774b7c`).
+  The 3G-6 runtime bug — meter items losing their MMIO binding
+  on dialog Apply — turned out to be a 4-site clone leak in
+  `ContainerSettingsDialog.cpp`, not a 30-subclass serialize
+  sweep. `populateItemList`, `applyToContainer`,
+  `takeSnapshot`/`revertFromSnapshot`, and the preset clone
+  loop now copy `(mmioGuid, mmioVariable)` directly around the
+  text round-trip via a parallel
+  `QVector<QPair<QUuid, QString>>` snapshot. ~50 LOC in one
+  file, no subclass changes. Disk persistence remains
+  deliberately deferred (block 5 design).
+- **C — `NeedleItemEditor` `QGroupBox` grouping** (`41c7031`).
+  The 17 needle-specific fields plus the calibration table now
+  live in 5 group boxes (Needle / Geometry / History / Power /
+  Calibration) instead of stacking flat under header labels.
+  Member pointers and connect lambdas unchanged; layout-only.
+- **F — MMIO smoke test** — *deferred*. User skipped at scope
+  decision; the runtime fix in item A is the proof MMIO works
+  end-to-end, smoke test doc tracked as separate future work.
+- **D — Editor widget width sweep** — *deferred to future*.
+  Cosmetic, block 4b's scroll area solved the load-bearing
+  reachability problem.
+- **E — `ButtonBox` per-button `ButtonState` sub-editor** —
+  *deferred to future*. Architectural addition; no current
+  workflow blocked on it.
 
-**Default proposed scope:** Tier 1+2 (items A, B, C, F) — 5
-commits, item A via 4 parallel subagents.
+**Investigation note:** Both items A and B turned out to be
+narrower than the handoff proposed. Item B's "phantom fields"
+mostly didn't exist on either side; item A's bug was a 4-site
+clone leak in one dialog file rather than a 30-subclass
+serialize sweep. The handoff's pessimistic scope estimate cost
+zero session time to disprove and saved a lot of mechanical
+edits.
 
 ### Phase 3G-6 (One-Shot) — Container Settings Dialog + Full Thetis Parity + MMIO
 
@@ -141,26 +162,52 @@ complete user-facing surface for the meter system.
 - This CHANGELOG entry + phase-table flip + debug-handoff
   marked Resolved.
 
-### Known limitations after block 7
+### Known limitations after 3G-7
 
-- `MeterItem::m_mmioBinding` (guid + variable name) is
-  in-memory only — not serialized through the dialog's clone
-  round-trip. Bindings survive within a single dialog session
-  but are lost on Apply or save/load. The fix is a 30+
-  subclass append-pair sweep that's tracked as future polish.
-- Real CrossNeedle PNG artwork still pending.
-- TX wiring from `RadioModel` / `TransmitModel` into
-  `MeterWidget::setMox()` is phase 3I-1 territory.
-- Plan section 5 lists fields for several item types whose
-  `MeterItem` subclasses don't yet have setters
-  (`TextOverlayItem`, `LEDItem` amber/red/condition,
-  `HistoryGraphItem` keepFor/ignoreHistory/axis, `MagicEyeItem`
-  darkMode/eyeScale, etc.). Additive subclass work, not editor
-  work.
-- `ButtonBoxItem` per-button `ButtonState`-struct fields
-  need a per-button-index sub-selector UI.
-- `NeedleItemEditor` `QGroupBox` grouping and a hand-rolled-
-  widget width sweep are pending future polish.
+Resolved in 3G-7:
+- ~~MMIO bindings dropped on dialog Apply~~ — fixed via the
+  4-site clone-path side-channel in `ContainerSettingsDialog.cpp`.
+- ~~`NeedleItemEditor` flat field stack~~ — now wrapped in 5
+  `QGroupBox`es.
+- ~~Five item subclasses missing accessor getters~~ —
+  TextOverlay, Rotator, FilterDisplay, Clock, VfoDisplay
+  populate fully on dialog open.
+
+Still outstanding:
+- **MMIO binding disk persistence.** Bindings survive Apply
+  and Cancel within a session, but `serialize()`/`deserialize()`
+  on each item still does not include them. Save-to-file +
+  reload, or app restart, drops bindings. Block 5's design
+  explicitly deferred this; the path forward is the original
+  handoff's "append `|guid|var` to every concrete subclass
+  format" sweep.
+- **MMIO end-to-end smoke test.** No external doc walking a
+  user through "spin up a UDP listener, send JSON, see the
+  meter move." Useful first-real-proof artifact when MMIO
+  bindings get exercised in anger.
+- **Editor `QLineEdit` / `QComboBox` / `QPushButton` width
+  sweep.** Block 4b's `BaseItemEditor` helpers set
+  `setMinimumWidth(140)` but the 30 subagent-produced editors
+  hand-roll some controls that still shrink-wrap. Cosmetic.
+- **`ButtonBoxItem` per-button `ButtonState` sub-editor.**
+  Per-button color/style/font fields live on a `ButtonState`
+  struct array; needs a per-button-index spinner UI in
+  `ButtonBoxItemEditor`. Untested code path because no
+  workflow currently exposes per-button customization.
+- **Phantom fields not yet ported from Thetis** (would expand
+  scope, not gap-fill). Each is a standalone Thetis port:
+  - `LEDItem` — custom amber/red zone colors (fields exist,
+    no setter); string-expression `condition` mode
+  - `SignalTextItem::showMarker` — bar-style marker visibility
+    toggle
+  - `HistoryGraphItem` — `keepFor` (time-based retention),
+    `ignoreHistory` (pause), manual axis range, `fadeRx/Tx`
+  - `MagicEyeItem` — `darkMode`, `eyeScale`, `eyeBezelScale`
+  - `DialItem::vfoClickBehavior` — quadrant click action remap
+- **Real CrossNeedle PNG artwork** — current files are
+  byte-identical copies of `ananMM.png`. Waiting on user.
+- **TX wiring** from `RadioModel` / `TransmitModel` into
+  `MeterWidget::setMox()` — phase 3I-1 territory.
 
 ### Added — Phase 3G-5: Interactive Meter Items
 

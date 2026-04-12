@@ -1,9 +1,27 @@
 # Phase 3G-7 Polish — Execution Handoff
 
-> **Status:** Branch created, scope proposal awaiting user direction.
+> **Status:** ✅ **Complete (2026-04-12).** 4 GPG-signed commits.
 > **Branch:** `feature/phase3g7-polish` (off `feature/phase3g6-oneshot`)
 > **Parent PR:** boydsoftprez/NereusSDR#2 (Phase 3G-6 one-shot, complete, awaiting merge)
-> **Created:** 2026-04-12
+> **Created:** 2026-04-12 (handoff)
+> **Completed:** 2026-04-12 (execution)
+>
+> **What landed:**
+> - `25a7819` feat(meters): add read-back getters for editor populate (item B, narrowed)
+> - `8774b7c` fix(meters): preserve MMIO bindings across dialog clone paths (item A, side-channel)
+> - `41c7031` feat(editor): wrap NeedleItemEditor in 5 QGroupBox sections (item C)
+> - this docs commit
+>
+> **What was deferred:** items D, E, F, plus the "phantom field" feature
+> ports flagged in original item B. See **Outstanding work** at bottom.
+>
+> **Investigation finding:** Item A and item B both turned out to be
+> dramatically smaller than the handoff proposed once the actual code
+> was read. Item A was a 4-site clone leak in one dialog file, not a
+> 30-subclass serialize sweep. Item B was 5 subclasses missing getters
+> for fields they already had, not 10 subclasses missing entire fields.
+> The original handoff scoped pessimistically; both narrowings are
+> documented per commit.
 
 ## Context
 
@@ -214,3 +232,109 @@ Default: **Tier 1+2, subagents OK for A, doc-only for F.**
 5. Wait for tier choice.
 6. Execute per the chosen tier.
 7. Pause at the end of each commit for review.
+
+---
+
+## Outstanding work after 3G-7 (file as separate issues)
+
+These items were deferred during 3G-7 execution. Each is a standalone
+unit of work with no dependency on the others — file as individual
+GitHub issues so the tracking doesn't rot in this handoff doc.
+
+### Dialog / persistence
+
+1. **MMIO binding disk persistence.** 3G-7 fixed in-session clone
+   leaks via side-channel; serialize/deserialize on each MeterItem
+   subclass still does not include `m_mmioGuid` / `m_mmioVariable`.
+   Save-to-file + reload, or app restart, drops bindings. The
+   path forward is the original handoff's **Item A — full
+   serialize sweep**: append `|<guidStr>|<varName>` to every
+   concrete subclass's serialize format, with tail-tolerant
+   deserialize. ~30 files, parallelizable across 4 subagents.
+   See "Per-item detail § A" above for the pattern reference.
+
+2. **MMIO end-to-end smoke test doc.** Single-page
+   `docs/MMIO-SMOKE-TEST.md` walking a user through: launch app,
+   open MMIO Variables dialog, add a UDP listener on port N,
+   `nc -u -w1 localhost N` a JSON blob, bind a meter item via
+   "Variable…", observe the meter respond. First real
+   end-to-end proof.
+
+3. **Snapshot revert MMIO test.** 3G-7 added the parallel
+   `m_mmioSnapshot` vector to `ContainerSettingsDialog` but it's
+   only proven by code review. Manual test: bind, open dialog,
+   change something, click Cancel — confirm binding survives.
+
+### Editors
+
+4. **Editor `QLineEdit` / `QComboBox` / `QPushButton` minimum-width
+   sweep.** `BaseItemEditor::makeDoubleRow` etc. set `setMinimumWidth(140)`
+   but the 30 subagent-produced editors hand-roll some controls
+   without that. Cosmetic only; block 4b's scroll area solved
+   reachability. Clean approach: add `makeLineEditRow`,
+   `makeComboRow`, `makeColorButtonRow` helpers to `BaseItemEditor`
+   and have each editor adopt them.
+
+5. **`ButtonBoxItemEditor` per-button `ButtonState` sub-editor.**
+   The 8 button-box subclasses inherit a `ButtonState` struct
+   array (per-button fill / hover / click / border / font). Today
+   the editor exposes only the 7 top-level container fields and
+   skips the per-button stuff entirely. Needs an `Edit button:
+   [0..N-1]` index spinner that pops a sub-form bound to the
+   selected `ButtonState`. Untested code path because nobody's
+   been able to edit per-button state via the dialog yet.
+
+### Phantom features (Thetis ports, not gap fills)
+
+These were listed in the original handoff's item B as "missing
+setters" but turned out not to exist on the items at all. Each
+is a real feature port from Thetis MeterManager.cs and warrants
+its own commit with proper source-first attribution per
+CLAUDE.md. None of them block any current workflow.
+
+6. **`LEDItem` custom amber/red zone colors.** Fields exist
+   (`m_amberColour`, `m_redColour`) but no setter; threshold
+   zones use hardcoded `#ffb800` / `#ff4444`. Editor only
+   customizes "true" and "false" colors today.
+
+7. **`LEDItem` condition-expression mode.** Thetis
+   `clsLed.Condition` is a string expression
+   (e.g. `value > 0 && tx`) evaluated against the binding
+   value + radio state. NereusSDR currently supports only
+   numeric thresholds.
+
+8. **`SignalTextItem::showMarker`.** Bar-style marker line
+   visibility toggle. Currently whatever the paint code does
+   is fixed.
+
+9. **`HistoryGraphItem::keepFor`.** Time-based retention
+   (seconds) instead of capacity-based (samples). Functionally
+   equivalent at fixed poll rate but more intuitive in UI.
+
+10. **`HistoryGraphItem::ignoreHistory`.** Pause/resume toggle.
+    Today history always accumulates while running.
+
+11. **`HistoryGraphItem` manual axis min/max.** When autoscale
+    is off there's currently no way to enter a fixed range.
+
+12. **`HistoryGraphItem::fadeRx` / `fadeTx`.** Visual fade across
+    RX↔TX transitions.
+
+13. **`MagicEyeItem::darkMode`.** Light variant of the tube.
+    Stuck with one visual style today.
+
+14. **`MagicEyeItem::eyeScale` / `eyeBezelScale`.** Relative
+    sizing of the eye vs the bezel. Fixed proportions today.
+
+15. **`DialItem::vfoClickBehavior`.** Quadrant click action remap
+    (VFO swap, mute, etc.). Hardcoded today.
+
+### Out-of-meter polish (existing 3G-6 leftovers)
+
+16. **Real CrossNeedle PNG artwork.** Files at
+    `:/meters/cross-needle/*.png` are byte-identical copies of
+    `ananMM.png`. Waiting on user art.
+
+17. **TX wiring** from `RadioModel` / `TransmitModel` into
+    `MeterWidget::setMox()`. Phase 3I-1 territory; do not
+    touch in the meter system.
