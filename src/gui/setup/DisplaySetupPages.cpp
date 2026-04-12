@@ -639,6 +639,56 @@ GridScalesPage::GridScalesPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("Grid & Scales"), model, parent)
 {
     buildUI();
+    loadFromRenderer();
+}
+
+// Helper: return the first panadapter or nullptr.
+static PanadapterModel* firstPan(RadioModel* m)
+{
+    if (!m) { return nullptr; }
+    const auto pans = m->panadapters();
+    return pans.isEmpty() ? nullptr : pans.first();
+}
+
+void GridScalesPage::applyBandSlot(PanadapterModel* pan)
+{
+    if (!pan || !m_dbMaxSpin || !m_dbMinSpin || !m_editingBandLabel) { return; }
+    const Band b = pan->band();
+    const BandGridSettings slot = pan->perBandGrid(b);
+    QSignalBlocker bMax(m_dbMaxSpin);
+    QSignalBlocker bMin(m_dbMinSpin);
+    m_dbMaxSpin->setValue(slot.dbMax);
+    m_dbMinSpin->setValue(slot.dbMin);
+    m_editingBandLabel->setText(
+        QStringLiteral("Editing band: %1").arg(bandLabel(b)));
+}
+
+void GridScalesPage::loadFromRenderer()
+{
+    auto* sw  = model() ? model()->spectrumWidget() : nullptr;
+    auto* pan = firstPan(model());
+    if (!sw || !pan) { return; }
+
+    QSignalBlocker b1(m_gridToggle);
+    QSignalBlocker b2(m_dbStepSpin);
+    QSignalBlocker b3(m_freqLabelAlignCombo);
+    QSignalBlocker b4(m_zeroLineToggle);
+    QSignalBlocker b5(m_showFpsToggle);
+
+    m_gridToggle->setChecked(sw->gridEnabled());
+    m_dbStepSpin->setValue(pan->gridStep());
+    m_freqLabelAlignCombo->setCurrentIndex(static_cast<int>(sw->freqLabelAlign()));
+    m_zeroLineToggle->setChecked(sw->showZeroLine());
+    m_showFpsToggle->setChecked(sw->showFps());
+
+    if (m_gridColorBtn)     { m_gridColorBtn->setColor(sw->gridColor()); }
+    if (m_gridFineColorBtn) { m_gridFineColorBtn->setColor(sw->gridFineColor()); }
+    if (m_hGridColorBtn)    { m_hGridColorBtn->setColor(sw->hGridColor()); }
+    if (m_gridTextColorBtn) { m_gridTextColorBtn->setColor(sw->gridTextColor()); }
+    if (m_zeroLineColorBtn) { m_zeroLineColorBtn->setColor(sw->zeroLineColor()); }
+    if (m_bandEdgeColorBtn) { m_bandEdgeColorBtn->setColor(sw->bandEdgeColor()); }
+
+    applyBandSlot(pan);
 }
 
 void GridScalesPage::buildUI()
@@ -652,35 +702,63 @@ void GridScalesPage::buildUI()
 
     m_gridToggle = new QCheckBox(QStringLiteral("Show grid"), gridGroup);
     m_gridToggle->setChecked(true);
-    m_gridToggle->setEnabled(false);  // NYI
-    m_gridToggle->setToolTip(QStringLiteral("Show spectrum grid lines — not yet implemented"));
+    connect(m_gridToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setGridEnabled(on);
+        }
+    });
     gridForm->addRow(QString(), m_gridToggle);
+
+    m_editingBandLabel = new QLabel(QStringLiteral("Editing band: —"), gridGroup);
+    m_editingBandLabel->setStyleSheet(QStringLiteral("QLabel { color: #00b4d8; font-weight: bold; }"));
+    gridForm->addRow(QString(), m_editingBandLabel);
 
     m_dbMaxSpin = new QSpinBox(gridGroup);
     m_dbMaxSpin->setRange(-200, 0);
-    m_dbMaxSpin->setValue(-20);
+    m_dbMaxSpin->setValue(-40);
     m_dbMaxSpin->setSuffix(QStringLiteral(" dB"));
-    m_dbMaxSpin->setEnabled(false);  // NYI
-    m_dbMaxSpin->setToolTip(QStringLiteral("Grid dB maximum — not yet implemented"));
-    gridForm->addRow(QStringLiteral("dB Max:"), m_dbMaxSpin);
+    connect(m_dbMaxSpin, qOverload<int>(&QSpinBox::valueChanged),
+            this, [this](int v) {
+        if (auto* pan = firstPan(model())) {
+            pan->setPerBandDbMax(pan->band(), v);
+        }
+    });
+    gridForm->addRow(QStringLiteral("dB Max (per band):"), m_dbMaxSpin);
 
     m_dbMinSpin = new QSpinBox(gridGroup);
     m_dbMinSpin->setRange(-200, 0);
-    m_dbMinSpin->setValue(-160);
+    m_dbMinSpin->setValue(-140);
     m_dbMinSpin->setSuffix(QStringLiteral(" dB"));
-    m_dbMinSpin->setEnabled(false);  // NYI
-    m_dbMinSpin->setToolTip(QStringLiteral("Grid dB minimum — not yet implemented"));
-    gridForm->addRow(QStringLiteral("dB Min:"), m_dbMinSpin);
+    connect(m_dbMinSpin, qOverload<int>(&QSpinBox::valueChanged),
+            this, [this](int v) {
+        if (auto* pan = firstPan(model())) {
+            pan->setPerBandDbMin(pan->band(), v);
+        }
+    });
+    gridForm->addRow(QStringLiteral("dB Min (per band):"), m_dbMinSpin);
 
     m_dbStepSpin = new QSpinBox(gridGroup);
     m_dbStepSpin->setRange(1, 40);
     m_dbStepSpin->setValue(10);
     m_dbStepSpin->setSuffix(QStringLiteral(" dB"));
-    m_dbStepSpin->setEnabled(false);  // NYI
-    m_dbStepSpin->setToolTip(QStringLiteral("Grid dB step size — not yet implemented"));
-    gridForm->addRow(QStringLiteral("dB Step:"), m_dbStepSpin);
+    m_dbStepSpin->setToolTip(QStringLiteral("Global grid step — Thetis stores this as a single value (not per-band)."));
+    connect(m_dbStepSpin, qOverload<int>(&QSpinBox::valueChanged),
+            this, [this](int v) {
+        if (auto* pan = firstPan(model())) {
+            pan->setGridStep(v);
+        }
+    });
+    gridForm->addRow(QStringLiteral("dB Step (global):"), m_dbStepSpin);
 
     contentLayout()->addWidget(gridGroup);
+
+    // Connect to PanadapterModel::bandChanged so the editing-band label
+    // and the dbMax/dbMin spinboxes refresh when the user tunes across a
+    // band boundary (or clicks a band button).
+    if (auto* pan = firstPan(model())) {
+        connect(pan, &PanadapterModel::bandChanged,
+                this, [this, pan](Band) { applyBandSlot(pan); });
+    }
 
     // --- Section: Labels ---
     auto* lblGroup = new QGroupBox(QStringLiteral("Labels"), this);
@@ -688,25 +766,74 @@ void GridScalesPage::buildUI()
     lblForm->setSpacing(6);
 
     m_freqLabelAlignCombo = new QComboBox(lblGroup);
-    m_freqLabelAlignCombo->addItems({QStringLiteral("Left"), QStringLiteral("Center")});
-    m_freqLabelAlignCombo->setEnabled(false);  // NYI
-    m_freqLabelAlignCombo->setToolTip(QStringLiteral("Frequency label alignment — not yet implemented"));
+    m_freqLabelAlignCombo->addItems({
+        QStringLiteral("Left"),   QStringLiteral("Center"),
+        QStringLiteral("Right"),  QStringLiteral("Auto"),
+        QStringLiteral("Off")
+    });
+    m_freqLabelAlignCombo->setCurrentIndex(1);
+    connect(m_freqLabelAlignCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setFreqLabelAlign(static_cast<FreqLabelAlign>(i));
+        }
+    });
     lblForm->addRow(QStringLiteral("Freq Label Align:"), m_freqLabelAlignCombo);
 
-    m_bandEdgeColorLabel = makeColorSwatch(QStringLiteral("Band Edge Color"), QStringLiteral("#1a4a1a"), lblGroup);
-    lblForm->addRow(QStringLiteral("Band Edge Color:"), m_bandEdgeColorLabel);
-
     m_zeroLineToggle = new QCheckBox(QStringLiteral("Show zero line"), lblGroup);
-    m_zeroLineToggle->setEnabled(false);  // NYI
-    m_zeroLineToggle->setToolTip(QStringLiteral("Show zero dB reference line — not yet implemented"));
+    connect(m_zeroLineToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setShowZeroLine(on);
+        }
+    });
     lblForm->addRow(QString(), m_zeroLineToggle);
 
     m_showFpsToggle = new QCheckBox(QStringLiteral("Show FPS overlay"), lblGroup);
-    m_showFpsToggle->setEnabled(false);  // NYI
-    m_showFpsToggle->setToolTip(QStringLiteral("Show FPS counter overlay — not yet implemented"));
+    connect(m_showFpsToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setShowFps(on);
+        }
+    });
     lblForm->addRow(QString(), m_showFpsToggle);
 
     contentLayout()->addWidget(lblGroup);
+
+    // --- Section: Colors ---
+    auto* colGroup = new QGroupBox(QStringLiteral("Colors"), this);
+    auto* colForm  = new QFormLayout(colGroup);
+    colForm->setSpacing(6);
+
+    auto makeBtn = [this](QWidget* parent, const QColor& init,
+                          void (SpectrumWidget::*setter)(const QColor&)) {
+        auto* btn = new ColorSwatchButton(init, parent);
+        connect(btn, &ColorSwatchButton::colorChanged,
+                this, [this, setter](const QColor& c) {
+            if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+                (w->*setter)(c);
+            }
+        });
+        return btn;
+    };
+
+    m_gridColorBtn     = makeBtn(colGroup, QColor(255, 255, 255, 40), &SpectrumWidget::setGridColor);
+    colForm->addRow(QStringLiteral("Grid Color:"), m_gridColorBtn);
+
+    m_gridFineColorBtn = makeBtn(colGroup, QColor(255, 255, 255, 20), &SpectrumWidget::setGridFineColor);
+    colForm->addRow(QStringLiteral("Grid Fine Color:"), m_gridFineColorBtn);
+
+    m_hGridColorBtn    = makeBtn(colGroup, QColor(255, 255, 255, 40), &SpectrumWidget::setHGridColor);
+    colForm->addRow(QStringLiteral("H-Grid Color:"), m_hGridColorBtn);
+
+    m_gridTextColorBtn = makeBtn(colGroup, QColor(255, 255, 0), &SpectrumWidget::setGridTextColor);
+    colForm->addRow(QStringLiteral("Text Color:"), m_gridTextColorBtn);
+
+    m_zeroLineColorBtn = makeBtn(colGroup, QColor(255, 0, 0), &SpectrumWidget::setZeroLineColor);
+    colForm->addRow(QStringLiteral("Zero Line Color:"), m_zeroLineColorBtn);
+
+    m_bandEdgeColorBtn = makeBtn(colGroup, QColor(255, 0, 0), &SpectrumWidget::setBandEdgeColor);
+    colForm->addRow(QStringLiteral("Band Edge Color:"), m_bandEdgeColorBtn);
+
+    contentLayout()->addWidget(colGroup);
     contentLayout()->addStretch();
 }
 
