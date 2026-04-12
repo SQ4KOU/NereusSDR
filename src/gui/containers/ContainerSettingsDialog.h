@@ -49,7 +49,8 @@ private:
     void buildLayout();
     void buildLeftPanel(QWidget* parent);
     void buildCenterPanel(QWidget* parent);
-    void buildRightPanel(QWidget* parent);
+    // Phase 3G-6 block 3: buildRightPanel removed along with the live
+    // preview in commit 11; commit 12 reintroduces a Properties column.
     void buildContainerPropertiesSection(QVBoxLayout* parentLayout);
     void buildButtonBar();
 
@@ -115,8 +116,8 @@ private:
     QVBoxLayout* m_typePropsLayout{nullptr};
     QWidget* m_currentTypeEditor{nullptr};
 
-    // Right panel
-    MeterWidget* m_previewWidget{nullptr};
+    // Phase 3G-6 block 3 commit 11: m_previewWidget deleted. The Thetis
+    // 3-column rewrite lands a Properties column in its place.
 
     // Container properties
     QLineEdit* m_titleEdit{nullptr};

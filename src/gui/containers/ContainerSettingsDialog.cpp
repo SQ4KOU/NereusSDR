@@ -172,26 +172,22 @@ void ContainerSettingsDialog::buildLayout()
     m_splitter->setStyleSheet(
         "QSplitter::handle { background: #203040; width: 3px; }");
 
-    // Left panel wrapper
+    // Phase 3G-6 block 3 commit 11: the live-preview panel (a nested
+    // MeterWidget inside the modal dialog) is removed. The Thetis
+    // 3-column layout added in commit 12 will reintroduce a Properties
+    // column on the right; for this commit the splitter is just a
+    // 2-column Items / Type-Properties layout.
     QWidget* leftWrapper = new QWidget(m_splitter);
     buildLeftPanel(leftWrapper);
     m_splitter->addWidget(leftWrapper);
 
-    // Center panel wrapper
     QWidget* centerWrapper = new QWidget(m_splitter);
     buildCenterPanel(centerWrapper);
     m_splitter->addWidget(centerWrapper);
 
-    // Right panel wrapper
-    QWidget* rightWrapper = new QWidget(m_splitter);
-    buildRightPanel(rightWrapper);
-    m_splitter->addWidget(rightWrapper);
-
-    // Set initial panel widths: 200 / stretch / 200
     m_splitter->setStretchFactor(0, 0);
     m_splitter->setStretchFactor(1, 1);
-    m_splitter->setStretchFactor(2, 0);
-    m_splitter->setSizes({200, 460, 200});
+    m_splitter->setSizes({240, 620});
 
     root->addWidget(m_splitter, 1);
 
@@ -276,20 +272,9 @@ void ContainerSettingsDialog::buildCenterPanel(QWidget* parent)
     buildCommonPropsPage();
 }
 
-void ContainerSettingsDialog::buildRightPanel(QWidget* parent)
-{
-    QVBoxLayout* layout = new QVBoxLayout(parent);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(4);
-
-    QLabel* header = new QLabel(QStringLiteral("Live Preview"), parent);
-    header->setStyleSheet(kSectionHeaderStyle);
-    layout->addWidget(header);
-
-    m_previewWidget = new MeterWidget(parent);
-    m_previewWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    layout->addWidget(m_previewWidget, 1);
-}
+// Phase 3G-6 block 3 commit 11: buildRightPanel / live preview deleted.
+// Commit 12 reintroduces a Properties column here under the Thetis
+// 3-column layout.
 
 void ContainerSettingsDialog::buildContainerPropertiesSection(QVBoxLayout* parentLayout)
 {
@@ -990,21 +975,11 @@ void ContainerSettingsDialog::populateItemList()
 
 void ContainerSettingsDialog::updatePreview()
 {
-    if (!m_previewWidget) {
-        return;
-    }
-
-    m_previewWidget->clearItems();
-
-    for (const MeterItem* item : m_workingItems) {
-        const QString serialized = item->serialize();
-        MeterItem* clone = createItemFromSerialized(serialized);
-        if (clone) {
-            m_previewWidget->addItem(clone);
-        }
-    }
-
-    m_previewWidget->update();
+    // Phase 3G-6 block 3 commit 11: live preview removed. In-place
+    // editing with snapshot/revert (commit 14) will push working-item
+    // changes directly to the target container's MeterWidget; until
+    // then this is a no-op so the existing ~30 callsites keep
+    // compiling without being rewritten one-by-one.
 }
 
 void ContainerSettingsDialog::applyToContainer()
