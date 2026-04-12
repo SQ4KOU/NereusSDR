@@ -1029,12 +1029,17 @@ void NeedleItem::paintOverlayDynamic(QPainter& p, int widgetW, int widgetH)
     p.drawText(QPointF(rect.right() - dbmW - 6.0f, topY), dbmText);
 }
 
-// Format: NEEDLE|x|y|w|h|bindingId|zOrder|sourceLabel
+// Format: NEEDLE|x|y|w|h|bindingId|zOrder|sourceLabel[|onlyRx|onlyTx|displayGroup]
+// The trailing 3 filter fields were added in Phase 3G-6 block 1; older
+// state (8 parts, no filter fields) still deserializes with defaults.
 QString NeedleItem::serialize() const
 {
-    return QStringLiteral("NEEDLE|%1|%2")
+    return QStringLiteral("NEEDLE|%1|%2|%3|%4|%5")
         .arg(baseFields(*this))
-        .arg(m_sourceLabel);
+        .arg(m_sourceLabel)
+        .arg(m_onlyWhenRx ? 1 : 0)
+        .arg(m_onlyWhenTx ? 1 : 0)
+        .arg(m_displayGroup);
 }
 
 bool NeedleItem::deserialize(const QString& data)
@@ -1047,6 +1052,11 @@ bool NeedleItem::deserialize(const QString& data)
         return false;
     }
     m_sourceLabel = parts[7];
+    if (parts.size() >= 11) {
+        m_onlyWhenRx   = (parts[8].toInt() != 0);
+        m_onlyWhenTx   = (parts[9].toInt() != 0);
+        m_displayGroup = parts[10].toInt();
+    }
     return true;
 }
 
