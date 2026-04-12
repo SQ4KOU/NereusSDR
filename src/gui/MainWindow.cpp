@@ -137,6 +137,22 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Auto-reconnect to last radio if it appears
     tryAutoReconnect();
+
+    // Defensive save on aboutToQuit. closeEvent is fine for ⌘Q but
+    // does NOT run when the process is signaled (SIGTERM from
+    // pkill, Activity Monitor force-quit, debugger detach). Without
+    // this hook, any container/state change made mid-session is
+    // lost on signal-based shutdown — which is exactly the symptom
+    // we hit during automated test cycles where pkill killed the
+    // app before saveState ran. saveState is idempotent so the
+    // ⌘Q path (closeEvent → saveState; aboutToQuit → saveState
+    // again) is harmless.
+    connect(qApp, &QCoreApplication::aboutToQuit, this, [this]() {
+        if (m_containerManager) {
+            m_containerManager->saveState();
+        }
+        AppSettings::instance().save();
+    });
 }
 
 MainWindow::~MainWindow() = default;
