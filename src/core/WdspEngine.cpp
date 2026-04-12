@@ -264,7 +264,9 @@ RxChannel* WdspEngine::createRxChannel(int channelId,
 
     qCInfo(lcDsp) << "Created RX channel" << channelId
                    << "bufSize=" << inputBufferSize
-                   << "rate=" << inputSampleRate;
+                   << "rate=" << inputSampleRate
+                   << "| init WDSP mode=LSB(0) bounds=(-2850,-150)"
+                   << "| NOTE: hardcoded init — cache may diverge";
 #endif
 
     auto channel = std::make_unique<RxChannel>(channelId, inputBufferSize,

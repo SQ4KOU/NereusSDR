@@ -24,7 +24,11 @@ RxChannel::~RxChannel() = default;
 void RxChannel::setMode(DSPMode mode)
 {
     int val = static_cast<int>(mode);
-    if (val == m_mode.load()) {
+    int oldVal = m_mode.load();
+    if (val == oldVal) {
+        qCInfo(lcDsp) << "RxChannel" << m_channelId
+                       << "setMode GUARD-HIT — cache already"
+                       << val << "— WDSP NOT updated";
         return;
     }
 
@@ -33,6 +37,11 @@ void RxChannel::setMode(DSPMode mode)
 #ifdef HAVE_WDSP
     // From Thetis wdsp-integration.md section 4.2
     SetRXAMode(m_channelId, val);
+    qCInfo(lcDsp) << "RxChannel" << m_channelId
+                   << "setMode MISS — old=" << oldVal
+                   << "new=" << val << "— pushed to WDSP";
+#else
+    Q_UNUSED(oldVal);
 #endif
 
     emit modeChanged(mode);
@@ -45,14 +54,25 @@ void RxChannel::setMode(DSPMode mode)
 void RxChannel::setFilterFreqs(double lowHz, double highHz)
 {
     if (m_filterLow == lowHz && m_filterHigh == highHz) {
+        qCInfo(lcDsp) << "RxChannel" << m_channelId
+                       << "setFilterFreqs GUARD-HIT — cache already"
+                       << lowHz << highHz << "— WDSP NOT updated";
         return;
     }
 
+    double oldLow = m_filterLow;
+    double oldHigh = m_filterHigh;
     m_filterLow = lowHz;
     m_filterHigh = highHz;
 
 #ifdef HAVE_WDSP
     SetRXABandpassFreqs(m_channelId, lowHz, highHz);
+    qCInfo(lcDsp) << "RxChannel" << m_channelId
+                   << "setFilterFreqs MISS — old=(" << oldLow << "," << oldHigh
+                   << ") new=(" << lowHz << "," << highHz << ") — pushed to WDSP";
+#else
+    Q_UNUSED(oldLow);
+    Q_UNUSED(oldHigh);
 #endif
 
     emit filterChanged(lowHz, highHz);
