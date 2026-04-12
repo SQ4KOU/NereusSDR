@@ -395,6 +395,46 @@ WaterfallDefaultsPage::WaterfallDefaultsPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("Waterfall Defaults"), model, parent)
 {
     buildUI();
+    loadFromRenderer();
+}
+
+void WaterfallDefaultsPage::loadFromRenderer()
+{
+    auto* sw = model() ? model()->spectrumWidget() : nullptr;
+    if (!sw) { return; }
+    QSignalBlocker b1(m_highThresholdSlider);
+    QSignalBlocker b2(m_lowThresholdSlider);
+    QSignalBlocker b3(m_agcToggle);
+    QSignalBlocker b4(m_useSpectrumMinMaxToggle);
+    QSignalBlocker b5(m_updatePeriodSlider);
+    QSignalBlocker b6(m_reverseToggle);
+    QSignalBlocker b7(m_opacitySlider);
+    QSignalBlocker b8(m_colorSchemeCombo);
+    QSignalBlocker b9(m_wfAveragingCombo);
+    QSignalBlocker b10(m_showRxFilterToggle);
+    QSignalBlocker b11(m_showTxFilterToggle);
+    QSignalBlocker b12(m_showRxZeroLineToggle);
+    QSignalBlocker b13(m_showTxZeroLineToggle);
+    QSignalBlocker b14(m_timestampPosCombo);
+    QSignalBlocker b15(m_timestampModeCombo);
+
+    m_highThresholdSlider->setValue(static_cast<int>(sw->wfHighThreshold()));
+    m_lowThresholdSlider->setValue(static_cast<int>(sw->wfLowThreshold()));
+    m_agcToggle->setChecked(sw->wfAgcEnabled());
+    m_useSpectrumMinMaxToggle->setChecked(sw->wfUseSpectrumMinMax());
+    m_updatePeriodSlider->setValue(sw->wfUpdatePeriodMs());
+    m_reverseToggle->setChecked(sw->wfReverseScroll());
+    m_opacitySlider->setValue(sw->wfOpacity());
+    m_colorSchemeCombo->setCurrentIndex(static_cast<int>(sw->wfColorScheme()));
+    m_wfAveragingCombo->setCurrentIndex(static_cast<int>(sw->wfAverageMode()));
+    m_showRxFilterToggle->setChecked(sw->showRxFilterOnWaterfall());
+    m_showTxFilterToggle->setChecked(sw->showTxFilterOnRxWaterfall());
+    m_showRxZeroLineToggle->setChecked(sw->showRxZeroLineOnWaterfall());
+    m_showTxZeroLineToggle->setChecked(sw->showTxZeroLineOnWaterfall());
+    m_timestampPosCombo->setCurrentIndex(static_cast<int>(sw->wfTimestampPosition()));
+    m_timestampModeCombo->setCurrentIndex(static_cast<int>(sw->wfTimestampMode()));
+
+    if (m_lowColorBtn) { m_lowColorBtn->setColor(QColor(Qt::black)); }
 }
 
 void WaterfallDefaultsPage::buildUI()
@@ -409,21 +449,48 @@ void WaterfallDefaultsPage::buildUI()
     m_highThresholdSlider = new QSlider(Qt::Horizontal, levGroup);
     m_highThresholdSlider->setRange(-200, 0);
     m_highThresholdSlider->setValue(-40);
-    m_highThresholdSlider->setEnabled(false);  // NYI
-    m_highThresholdSlider->setToolTip(QStringLiteral("Waterfall high threshold — not yet implemented"));
+    connect(m_highThresholdSlider, &QSlider::valueChanged, this, [this](int v) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWfHighThreshold(static_cast<float>(v));
+        }
+    });
     levForm->addRow(QStringLiteral("High Threshold:"), m_highThresholdSlider);
 
     m_lowThresholdSlider = new QSlider(Qt::Horizontal, levGroup);
     m_lowThresholdSlider->setRange(-200, 0);
     m_lowThresholdSlider->setValue(-130);
-    m_lowThresholdSlider->setEnabled(false);  // NYI
-    m_lowThresholdSlider->setToolTip(QStringLiteral("Waterfall low threshold — not yet implemented"));
+    connect(m_lowThresholdSlider, &QSlider::valueChanged, this, [this](int v) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWfLowThreshold(static_cast<float>(v));
+        }
+    });
     levForm->addRow(QStringLiteral("Low Threshold:"), m_lowThresholdSlider);
 
     m_agcToggle = new QCheckBox(QStringLiteral("AGC"), levGroup);
-    m_agcToggle->setEnabled(false);  // NYI
-    m_agcToggle->setToolTip(QStringLiteral("Waterfall AGC — not yet implemented"));
+    connect(m_agcToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWfAgcEnabled(on);
+        }
+    });
     levForm->addRow(QString(), m_agcToggle);
+
+    m_useSpectrumMinMaxToggle = new QCheckBox(QStringLiteral("Use spectrum min/max"), levGroup);
+    connect(m_useSpectrumMinMaxToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWfUseSpectrumMinMax(on);
+        }
+    });
+    levForm->addRow(QString(), m_useSpectrumMinMaxToggle);
+
+    m_lowColorBtn = new ColorSwatchButton(QColor(Qt::black), levGroup);
+    // Waterfall "low" colour is conceptually the 0.0 stop of the gradient —
+    // exposed here for plan §4.2 W10 parity. SpectrumWidget currently uses
+    // gradient tables from wfSchemeStops() so the user's custom value is
+    // recorded in AppSettings for future Custom-scheme wiring, but it does
+    // not rebuild the gradient on the fly yet.
+    connect(m_lowColorBtn, &ColorSwatchButton::colorChanged,
+            this, [](const QColor&) { /* stored via AppSettings on save */ });
+    levForm->addRow(QStringLiteral("Low Color:"), m_lowColorBtn);
 
     contentLayout()->addWidget(levGroup);
 
@@ -435,30 +502,100 @@ void WaterfallDefaultsPage::buildUI()
     m_updatePeriodSlider = new QSlider(Qt::Horizontal, dispGroup);
     m_updatePeriodSlider->setRange(10, 500);
     m_updatePeriodSlider->setValue(50);
-    m_updatePeriodSlider->setEnabled(false);  // NYI
-    m_updatePeriodSlider->setToolTip(QStringLiteral("Waterfall update period (ms) — not yet implemented"));
+    connect(m_updatePeriodSlider, &QSlider::valueChanged, this, [this](int v) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWfUpdatePeriodMs(v);
+        }
+    });
     dispForm->addRow(QStringLiteral("Update Period (ms):"), m_updatePeriodSlider);
 
     m_reverseToggle = new QCheckBox(QStringLiteral("Reverse scroll"), dispGroup);
-    m_reverseToggle->setEnabled(false);  // NYI
-    m_reverseToggle->setToolTip(QStringLiteral("Reverse waterfall scroll direction — not yet implemented"));
+    connect(m_reverseToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWfReverseScroll(on);
+        }
+    });
     dispForm->addRow(QString(), m_reverseToggle);
 
     m_opacitySlider = new QSlider(Qt::Horizontal, dispGroup);
     m_opacitySlider->setRange(0, 100);
     m_opacitySlider->setValue(100);
-    m_opacitySlider->setEnabled(false);  // NYI
-    m_opacitySlider->setToolTip(QStringLiteral("Waterfall opacity — not yet implemented"));
+    connect(m_opacitySlider, &QSlider::valueChanged, this, [this](int v) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWfOpacity(v);
+        }
+    });
     dispForm->addRow(QStringLiteral("Opacity:"), m_opacitySlider);
 
     m_colorSchemeCombo = new QComboBox(dispGroup);
-    m_colorSchemeCombo->addItems({QStringLiteral("Enhanced"), QStringLiteral("Grayscale"),
-                                  QStringLiteral("Spectrum")});
-    m_colorSchemeCombo->setEnabled(false);  // NYI
-    m_colorSchemeCombo->setToolTip(QStringLiteral("Waterfall color scheme — not yet implemented"));
+    m_colorSchemeCombo->addItems({
+        QStringLiteral("Default"),   QStringLiteral("Enhanced"),
+        QStringLiteral("Spectran"),  QStringLiteral("BlackWhite"),
+        QStringLiteral("LinLog"),    QStringLiteral("LinRad"),
+        QStringLiteral("Custom")
+    });
+    connect(m_colorSchemeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWfColorScheme(static_cast<WfColorScheme>(
+                qBound(0, i, static_cast<int>(WfColorScheme::Count) - 1)));
+        }
+    });
     dispForm->addRow(QStringLiteral("Color Scheme:"), m_colorSchemeCombo);
 
+    m_wfAveragingCombo = new QComboBox(dispGroup);
+    m_wfAveragingCombo->addItems({
+        QStringLiteral("None"), QStringLiteral("Weighted"),
+        QStringLiteral("Logarithmic"), QStringLiteral("Time Window")
+    });
+    connect(m_wfAveragingCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWfAverageMode(static_cast<AverageMode>(i));
+        }
+    });
+    dispForm->addRow(QStringLiteral("WF Averaging:"), m_wfAveragingCombo);
+
     contentLayout()->addWidget(dispGroup);
+
+    // --- Section: Overlays ---
+    auto* ovGroup = new QGroupBox(QStringLiteral("Overlays"), this);
+    auto* ovForm  = new QFormLayout(ovGroup);
+    ovForm->setSpacing(6);
+
+    m_showRxFilterToggle = new QCheckBox(QStringLiteral("Show RX filter on waterfall"), ovGroup);
+    connect(m_showRxFilterToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setShowRxFilterOnWaterfall(on);
+        }
+    });
+    ovForm->addRow(QString(), m_showRxFilterToggle);
+
+    m_showTxFilterToggle = new QCheckBox(QStringLiteral("Show TX filter on RX waterfall"), ovGroup);
+    connect(m_showTxFilterToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setShowTxFilterOnRxWaterfall(on);
+        }
+    });
+    ovForm->addRow(QString(), m_showTxFilterToggle);
+
+    m_showRxZeroLineToggle = new QCheckBox(QStringLiteral("Show RX zero line on waterfall"), ovGroup);
+    connect(m_showRxZeroLineToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setShowRxZeroLineOnWaterfall(on);
+        }
+    });
+    ovForm->addRow(QString(), m_showRxZeroLineToggle);
+
+    m_showTxZeroLineToggle = new QCheckBox(QStringLiteral("Show TX zero line on waterfall"), ovGroup);
+    connect(m_showTxZeroLineToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setShowTxZeroLineOnWaterfall(on);
+        }
+    });
+    ovForm->addRow(QString(), m_showTxZeroLineToggle);
+
+    contentLayout()->addWidget(ovGroup);
 
     // --- Section: Time ---
     auto* timeGroup = new QGroupBox(QStringLiteral("Time"), this);
@@ -468,14 +605,26 @@ void WaterfallDefaultsPage::buildUI()
     m_timestampPosCombo = new QComboBox(timeGroup);
     m_timestampPosCombo->addItems({QStringLiteral("None"), QStringLiteral("Left"),
                                    QStringLiteral("Right")});
-    m_timestampPosCombo->setEnabled(false);  // NYI
-    m_timestampPosCombo->setToolTip(QStringLiteral("Waterfall timestamp position — not yet implemented"));
+    connect(m_timestampPosCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWfTimestampPosition(
+                static_cast<SpectrumWidget::TimestampPosition>(
+                    qBound(0, i, static_cast<int>(SpectrumWidget::TimestampPosition::Count) - 1)));
+        }
+    });
     timeForm->addRow(QStringLiteral("Timestamp Position:"), m_timestampPosCombo);
 
     m_timestampModeCombo = new QComboBox(timeGroup);
     m_timestampModeCombo->addItems({QStringLiteral("UTC"), QStringLiteral("Local")});
-    m_timestampModeCombo->setEnabled(false);  // NYI
-    m_timestampModeCombo->setToolTip(QStringLiteral("Timestamp time zone — not yet implemented"));
+    connect(m_timestampModeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWfTimestampMode(
+                static_cast<SpectrumWidget::TimestampMode>(
+                    qBound(0, i, static_cast<int>(SpectrumWidget::TimestampMode::Count) - 1)));
+        }
+    });
     timeForm->addRow(QStringLiteral("Timestamp Mode:"), m_timestampModeCombo);
 
     contentLayout()->addWidget(timeGroup);

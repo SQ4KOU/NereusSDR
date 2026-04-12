@@ -113,8 +113,11 @@ public:
 
     // ---- Waterfall settings ----
     void setWfColorScheme(WfColorScheme scheme);
+    WfColorScheme wfColorScheme() const { return m_wfColorScheme; }
     void setWfColorGain(int gain) { m_wfColorGain = gain; }
+    int  wfColorGain() const { return m_wfColorGain; }
     void setWfBlackLevel(int level) { m_wfBlackLevel = level; }
+    int  wfBlackLevel() const { return m_wfBlackLevel; }
 
     // ---- Spectrum renderer controls (Phase 3G-8 commit 3) ----
 
