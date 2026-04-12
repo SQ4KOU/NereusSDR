@@ -11,6 +11,7 @@
 #include <QtTest/QtTest>
 #include <QSplitter>
 #include <QStringList>
+#include <QVBoxLayout>
 #include <QWidget>
 
 #include "core/AppSettings.h"
@@ -77,6 +78,72 @@ private slots:
                      "restored container has no MeterWidget content "
                      "(ContainerManager::restoreState did not materialize one)");
             QCOMPARE(meter->items().size(), 2);
+        }
+    }
+
+    // Container #0 wraps its MeterWidget inside an AppletPanelWidget
+    // (header slot). innerMeterWidget() must find the nested meter via
+    // findChild so save/restore works for the wrapped shape too. We
+    // simulate the wrap with a plain QWidget hosting a MeterWidget
+    // child — same QObject parent/child relationship the real
+    // AppletPanelWidget creates.
+    void wrappedMeterItemsSurviveSaveRestore()
+    {
+        QWidget dockParent;
+        QSplitter splitter;
+        QString savedId;
+
+        {
+            ContainerManager mgr(&dockParent, &splitter);
+            mgr.setContentFactory([](const QString&, int) -> QWidget* {
+                auto* wrapper = new QWidget();
+                auto* layout = new QVBoxLayout(wrapper);
+                layout->setContentsMargins(0, 0, 0, 0);
+                auto* meter = new MeterWidget();
+                layout->addWidget(meter);
+                return wrapper;
+            });
+
+            ContainerWidget* c = mgr.createContainer(0, DockMode::PanelDocked);
+            QVERIFY(c);
+            savedId = c->id();
+
+            // Build the wrap shape and install it as content.
+            auto* wrapper = new QWidget();
+            auto* layout = new QVBoxLayout(wrapper);
+            layout->setContentsMargins(0, 0, 0, 0);
+            auto* meter = new MeterWidget(wrapper);
+            layout->addWidget(meter);
+            c->setContent(wrapper);
+
+            meter->addItem(new BarItem());
+            meter->addItem(new TextItem());
+            meter->addItem(new BarItem());
+            QCOMPARE(meter->items().size(), 3);
+
+            mgr.saveState();
+        }
+
+        {
+            ContainerManager mgr2(&dockParent, &splitter);
+            mgr2.setContentFactory([](const QString&, int) -> QWidget* {
+                auto* wrapper = new QWidget();
+                auto* layout = new QVBoxLayout(wrapper);
+                layout->setContentsMargins(0, 0, 0, 0);
+                auto* meter = new MeterWidget();
+                layout->addWidget(meter);
+                return wrapper;
+            });
+            mgr2.restoreState();
+
+            ContainerWidget* c = mgr2.container(savedId);
+            QVERIFY(c);
+
+            // The container content is the wrapper QWidget, not the
+            // meter directly — exercises findChild<MeterWidget*>().
+            auto* meter = c->content() ? c->content()->findChild<MeterWidget*>() : nullptr;
+            QVERIFY2(meter != nullptr, "wrapped MeterWidget not found after restore");
+            QCOMPARE(meter->items().size(), 3);
         }
     }
 };
