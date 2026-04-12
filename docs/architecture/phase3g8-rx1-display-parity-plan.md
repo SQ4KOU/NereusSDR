@@ -121,21 +121,33 @@ Thetis stores `DisplayGridMax<band>m` and `DisplayGridMin<band>m` for each of: 1
 
 **Thetis per-band defaults are uniform:** every band defaults to `Max = -40.0F, Min = -140.0F` (`console.cs:14242–14436`). Thetis stores per-band so users can *customize* per band; it does not ship hand-tuned per-band values.
 
+**Architectural correction (2026-04-12).** Pre-flight investigation of commit 2 found two gaps between the original plan wording and the actual codebase:
+
+- **Wrong model home.** The original plan said "per-band grid on `SliceModel`". Reality: NereusSDR's grid scale (`dBmFloor`, `dBmCeiling`) already lives on **`PanadapterModel`**, not `SliceModel`. `SliceModel` tracks VFO state only (frequency/mode/filter/AGC/gains/antennas) and has no grid properties. Per-band storage therefore goes on `PanadapterModel` to preserve single-source-of-truth for the dBm range.
+- **No `Band` type exists.** No `Band` enum, no `frequency→band` lookup, no `bandChanged` signal existed anywhere in the codebase. Commit 2 introduces them.
+- **UI band count is 12, not 14.** `BandButtonItem::kBandCount = 12` (160m–6m + GEN) omits WWV and XVTR. Per user decision 2026-04-12, commit 2 expands `BandButtonItem` 12 → 14 alongside the model work so the band enum and the UI stay in sync. `bandClicked(int)` is re-emitted by `ContainerWidget` but not consumed at top level, so the two new indices are purely additive and cause no downstream regressions.
+
 **Implementation:**
 
-1. Add `BandGridSettings` struct to `SliceModel.h`: `{int dbMax; int dbMin;}` per band (Step stays global).
-2. Add `QHash<Band, BandGridSettings>` to `SliceModel`.
-3. Persistence keys: `"DisplayGridMax_160m"`, `"DisplayGridMin_160m"`, etc. (**28 per-band keys** + 1 global `DisplayGridStep`).
-4. On `SliceModel::bandChanged(Band)`, look up the band's grid settings and emit `gridChanged(dbMax, dbMin)`.
-5. `SpectrumWidget::setDbmRange()` already exists; wire it to `gridChanged`.
-6. Grid & Scales page: dbMax/dbMin controls show "Editing band: 20m" label above them and read/write the currently active band's slot. dbStep stays a single global control with no band label.
-7. **Default initialization (resolved per Q4):** initialize all 14 slots to Thetis uniform defaults `Max = -40, Min = -140`. Existing users will see the grid shift on first launch after upgrade; this is the authorized one-off divergence under decision #9's §10 exception scope, extended to cover per-band grid initial values (user decision 2026-04-12).
+1. New `src/models/Band.h`: `enum class Band { Band160m, Band80m, Band60m, Band40m, Band30m, Band20m, Band17m, Band15m, Band12m, Band10m, Band6m, GEN, WWV, XVTR }`. Static helpers `bandLabel(Band) → QString`, `bandKeyName(Band) → QString` (for AppSettings keys), `bandFromFrequency(double hz) → Band` (Thetis-sourced range table), `bandFromUiIndex(int)` / `uiIndexFromBand(Band)` for the 14-button UI order.
+2. Add `BandGridSettings` struct to `PanadapterModel.h`: `{int dbMax; int dbMin;}` per band (Step stays global).
+3. Add `QHash<Band, BandGridSettings> m_perBandGrid` to `PanadapterModel`.
+4. Persistence keys: `"DisplayGridMax_160m"`, `"DisplayGridMin_160m"`, …, `"DisplayGridMax_XVTR"`, `"DisplayGridMin_XVTR"` (**28 per-band keys** + 1 global `DisplayGridStep`). Loaded in `PanadapterModel` constructor, written on every `setPerBandGrid*()`.
+5. Add `band()`/`setBand(Band)` + `bandChanged(Band)` signal on `PanadapterModel`. `setCenterFrequency()` auto-derives band via `bandFromFrequency()` and calls `setBand()` on boundary crossing. Direct `setBand()` is also callable by UI (commit 8).
+6. On `bandChanged`, `PanadapterModel` looks up the band's stored `BandGridSettings` and updates `m_dBmFloor`/`m_dBmCeiling`, emitting `levelChanged()` so existing `SpectrumWidget` wiring reacts with no new connections needed.
+7. Expand `BandButtonItem::kBandCount` 12 → 14; add `"WWV"` and `"XVTR"` to `kBandLabels`.
+8. Grid & Scales page (commit 8, not commit 2): dbMax/dbMin controls show "Editing band: 20m" label above them and read/write the currently active band's slot. dbStep stays a single global control with no band label.
+9. **Default initialization (resolved per Q4):** `PanadapterModel` constructor initializes all 14 slots to Thetis uniform defaults `Max = -40, Min = -140`. Existing users will see the grid shift on first launch after upgrade; this is the authorized one-off divergence under decision #9's §10 exception scope, extended to cover per-band grid initial values (user decision 2026-04-12).
 
 **Files affected:**
-- `src/models/SliceModel.h/.cpp` — add struct, hash, signal
-- `src/core/AppSettings.cpp` — register the 42 keys (or compute key names from band enum)
-- `src/gui/setup/DisplaySetupPages.cpp` — `GridScalesPage` shows active-band label, reads/writes per-band values
-- `src/gui/SpectrumWidget.cpp` — already accepts setDbmRange, just verify the slot wiring
+- `src/models/Band.h` (new) — enum, labels, frequency lookup, UI index mapping
+- `src/models/Band.cpp` (new, if helpers need a translation unit) — lookup tables
+- `src/models/PanadapterModel.h/.cpp` — `BandGridSettings` struct, per-band hash, `band`/`setBand`/`bandChanged`, constructor default init + AppSettings load, setCenterFrequency auto-derive
+- `src/gui/meters/BandButtonItem.h/.cpp` — `kBandCount` 12 → 14, `kBandLabels` += `"WWV"`, `"XVTR"`
+- `src/core/AppSettings.cpp` — no registration step needed (NereusSDR AppSettings uses free-form string keys)
+- `src/gui/setup/DisplaySetupPages.cpp` — deferred to commit 8
+- `src/gui/SpectrumWidget.cpp` — no change needed (existing `levelChanged` wiring reacts automatically)
+- `CMakeLists.txt` — add `src/models/Band.cpp` if created
 
 ## 6. New widget — `ColorSwatchButton`
 
