@@ -24,7 +24,26 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 
 ## Current Status
 
-**Phase 3G-5 complete — interactive meter items. Phase 3G-6 (one-shot) plan frozen, execution pending.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates audio through WDSP, renders a live GPU-accelerated spectrum + waterfall with VFO tuning (CTUN mode), and has a full UI skeleton with 12 applets, 150+ control widgets, and a complete meter system with 31 item types. The meter engine supports composable items including arc-style S-meter, Power/SWR bars, ANANMM 7-needle multi-meter, CrossNeedle dual fwd/rev power, magic eye tube display, history graph, rotator compass, filter display, LED indicators, interactive band/mode/filter/antenna/tuning-step button grids, VFO frequency display with per-digit wheel tuning, and dual UTC/Local clock — all ported from the Thetis MeterManager. Phase 3G-6 will bring full Thetis-parity Container Settings Dialog (3-column layout, per-item property editors for all ~30 item types, in-place editing with snapshot/revert, container-level Lock/Notes/Highlight/Minimises/Auto-height/etc.) plus the MMIO (Multi-Meter I/O) external-data subsystem with TCP/UDP/serial transports in a single big-bang phase. See `docs/architecture/phase3g6a-plan.md` for the full plan.
+**Phase 3G-6 (one-shot) + Phase 3G-7 polish complete — full Thetis-parity Container Settings Dialog + MMIO subsystem + dialog clone-path bug fixes.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates audio through WDSP, renders a live GPU-accelerated spectrum + waterfall with VFO tuning (CTUN mode), and has a full UI skeleton with 12 applets, 150+ control widgets, and a complete meter system with 31 item types. The meter engine supports composable items including arc-style S-meter, Power/SWR bars, ANANMM 7-needle multi-meter, CrossNeedle dual fwd/rev power, magic eye tube display, history graph, rotator compass, filter display, LED indicators, interactive band/mode/filter/antenna/tuning-step button grids, VFO frequency display with per-digit wheel tuning, and dual UTC/Local clock — all ported from the Thetis MeterManager.
+
+**Phase 3G-6 (one-shot)** shipped 2026-04-12 as PR #2 — 40 GPG-signed commits across 7 execution blocks on `feature/phase3g6-oneshot`:
+
+- **Block 1** — rendering plumbing + Thetis filter rule (`MeterManager.cs:31366-31368` ported into `MeterWidget::shouldRender()`)
+- **Block 2** — container surface (lock, hide title, minimises, auto height, hide-when-RX-unused, highlight, duplicate) + `NeedleItem` calibration-driven paint rewrite so the ANANMM gauge face renders
+- **Block 3** — `ContainerSettingsDialog` rewrite to Thetis's 3-column layout (Available / In-use / Properties), snapshot+revert on Cancel, container-switch dropdown, footer Save/Load/MMIO buttons
+- **Block 4** — 31 per-item property editors built in parallel by 4 subagents (zero manual fixups, ~155 fields exposed), `QScrollArea` wrapping
+- **Block 5** — MMIO Multi-Meter I/O subsystem: 4 transport workers (UDP listener, TCP listener, TCP client, Serial), JSON/XML/RAW format parsers, dedicated worker `QThread`, XML persistence under `AppSettings/MmioEndpoints/<guid>/*`, endpoint manager dialog, variable picker popup, `MeterPoller` branch reading bound values at 10 fps. Section 6 of the plan was rewritten mid-block after a Thetis Explore agent confirmed the original draft's per-variable parse-rule taxonomy didn't exist in Thetis (real Thetis is endpoint-centric with format-driven discovery)
+- **Block 6** — `Containers → Edit Container ▸` submenu populated dynamically from `ContainerManager::allContainers()`, alphabetized by notes, click-to-edit per container regardless of dock mode. Reset Default Layout finally functional.
+- **Block 7** — polish + docs: 720 lines of legacy `buildXItemEditor` dead code removed, `lcMmio` registered in `LogManager`, copy/paste item settings clipboard with type-tag gating, container-dropdown auto-commit on switch, `CHANGELOG` + `CLAUDE.md` phase table flipped to Complete, debug-handoff marked Resolved.
+
+**Phase 3G-7 polish** shipped 2026-04-12 on `feature/phase3g7-polish` — 4 GPG-signed commits on top of 3G-6:
+
+- **`25a7819`** `feat(meters)` — Add 42 read-back getters across 5 MeterItem subclasses (TextOverlay, Rotator, FilterDisplay, Clock, VfoDisplay) so each item's property editor populates fully on dialog open. Wires each editor's `setItem()` to the new accessors.
+- **`8774b7c`** `fix(meters)` — Preserve MMIO bindings across all 4 dialog clone paths in `ContainerSettingsDialog.cpp`. Investigation showed the user-visible "binding lost on Apply" bug was a 4-site clone leak in one file, not the 30-subclass serialize sweep the original handoff proposed. Side-channel fix: `populateItemList`, `applyToContainer`, `takeSnapshot`/`revertFromSnapshot`, and the preset clone loop now copy `(mmioGuid, mmioVariable)` directly around the text round-trip via a parallel `QVector<QPair<QUuid, QString>>` snapshot.
+- **`41c7031`** `feat(editor)` — Wrap `NeedleItemEditor`'s 17 needle-specific fields plus the calibration table in 5 `QGroupBox` sections (Needle / Geometry / History / Power / Calibration). Layout-only refactor; member pointers and connect lambdas unchanged.
+- **`33e5ba0`** `docs(3G-7)` — CHANGELOG flipped to complete with per-item narrowings documented; handoff doc gains a 17-item "Outstanding work after 3G-7" section so each deferred item (MMIO disk persistence, smoke test, editor width sweep, ButtonBox sub-editor, 10 phantom feature ports) can be filed as its own GitHub issue.
+
+Items A and B both turned out dramatically smaller than the original handoff scoped — see the handoff doc and CHANGELOG for the per-item narrowings. Items D, E, F and the phantom feature ports are deferred to follow-up work; full list at `docs/architecture/phase3g7-polish-handoff.md` § "Outstanding work after 3G-7".
 
 ## Key Features
 
@@ -108,7 +127,8 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 | **3-UI: Full UI Skeleton** | **12 applets, 9-menu bar, SetupDialog, SpectrumOverlayPanel** | **Complete** |
 | **3G-4: Advanced Meter Items** | **12 item types + ANANMM/CrossNeedle presets + Edge mode** | **Complete** |
 | **3G-5: Interactive Meter Items** | **14 interactive items + mouse forwarding + ButtonBoxItem base** | **Complete** |
-| **3G-6: Container Settings Dialog (one-shot)** | **3-column Thetis layout + per-item editors for all ~30 types + in-place editing + MMIO external-data subsystem + container-level parity + menu submenu** | **Plan frozen, execution pending** |
+| **3G-6: Container Settings Dialog (one-shot)** | **3-column Thetis layout + per-item editors for all ~30 types + in-place editing + MMIO external-data subsystem + container-level parity + menu submenu** | **Complete** |
+| **3G-7: Polish** | **MMIO clone-path bug fix + 5 subclass accessor gap fills + NeedleItemEditor QGroupBox grouping** | **Complete** |
 | 3I-1: Basic SSB TX | TxChannel, MOX state machine, RF output | Planned |
 | 3I-2: CW TX | Sidetone, firmware keyer, QSK/break-in | Planned |
 | 3I-3: TX Processing | 18-stage TXA chain + RX DSP additions | Planned |
