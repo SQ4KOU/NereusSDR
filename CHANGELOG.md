@@ -2,6 +2,84 @@
 
 ## [Unreleased]
 
+### Phase 3G-9 — Thetis Meter Parity (complete, PR pending)
+
+**Status:** Complete. Branch `test/meters-on-main` off
+`origin/main` (`b9c4879`, Phase 3N tip). 20 GPG-signed
+meter-parity commits plus 24 commits that reach main via a
+merge of `feature/phase3g7-polish`. Not yet PR'd.
+
+Closes the gap between NereusSDR bar meters and Thetis's
+`Setup → Appearance → Meters/Gadgets` dialog — every per-reading
+bar row Thetis ships can now be loaded into a NereusSDR container
+with faithful composition, colour, calibration, and stacking.
+
+See [`docs/architecture/phase3g9-meter-parity-handoff.md`](docs/architecture/phase3g9-meter-parity-handoff.md)
+for the full handoff, polish gap list, and Thetis source line map.
+
+**What landed:**
+
+- **Phase A1–A4 — BarItem API expansion.** `ShowValue`,
+  `ShowPeakValue`, `FontColour`, peak high-water with optional
+  decay, history ring buffer (`ShowHistory`, `HistoryColour`,
+  `HistoryDuration`), live + peak-hold markers, `BarStyle::Line`,
+  non-linear `ScaleCalibration` waypoint map and
+  `valueToNormalizedX()`. Every field is append-only in serialize
+  so pre-A1 saved payloads load unchanged. Source:
+  `MeterManager.cs:19927-20278` `clsBarItem`.
+
+- **Phase B1–B4 — ScaleItem + readingName.** Free function
+  `readingName(int bindingId)` ported verbatim from
+  `MeterManager.cs:2258-2318`. ScaleItem gains `ShowType` +
+  `TitleColour` centered red title and `ScaleStyle::GeneralScale`
+  opt-in two-tone baseline renderer matching
+  `MeterManager.cs:32338-32423` `generalScale()`. ScaleItemEditor
+  surfaces ShowType checkbox + title colour swatch.
+
+- **Phase C — persistence sweep.** `tst_meter_item_bar` gains
+  three defensive cases covering full-phase round trip, pre-A1
+  legacy payload, and garbled calibration tolerance.
+
+- **Phase D1 — SMeter preset rebuild.** `createSMeterPreset`
+  rebuilt from `addSMeterBar:21499-21616`: dark grey backdrop +
+  Line-style BarItem with Thetis 3-point S-meter calibration +
+  ScaleItem with ShowType and GeneralScale two-tone. D1b rewrites
+  `BarItem::paint()` to render every A-phase field. D1c overrides
+  `participatesIn(Layer::OverlayDynamic)` so `MeterWidget` routes
+  BarItem through QPainter instead of the GPU `emitVertices()`
+  pipeline that bypassed all the new render paths.
+
+- **Phase E1–E4 — per-reading factories + append UX.** 16 wrapper
+  factories rewritten via shared `buildBarRow()` helper. Thetis-
+  pinned colours (white bar low, red bar high, yellow indicator,
+  red peak-hold marker, red peak text, red ShowType title). New
+  "RX Meters (Thetis)" / "TX Meters (Thetis)" sections in the
+  Available list with `PRESET_*` tags routed to a new
+  `appendPresetRow()` that rescales items into the next 10% stack
+  slot. `loadPresetByName` re-routes bar-row names to append mode
+  while composite presets (ANAN MM, Cross Needle, etc.) still
+  replace. Phase E4 handles "add bar row to container with
+  composite" by compressing the composite to the top 70% and
+  stacking the new row in the bottom 30% slot.
+
+Every preset rewrite cites its `MeterManager.cs` line range in
+both the commit body and the in-source factory comment per the
+CLAUDE.md SOURCE-FIRST PORTING PROTOCOL. Full audit and line map
+in [`docs/architecture/meter-parity-audit.md`](docs/architecture/meter-parity-audit.md).
+
+**Known polish gaps** (queued, not blockers):
+1. Title overlaps tick row at row heights ≤ 32 px
+2. `m_peakFontColour` serialize tail slot not wired
+3. `ShowPeakValue` skips non-finite values (blank text for
+   no-data bindings)
+4. `appendPresetRow` 70/30 composite/row split is hardcoded
+
+**Full test suite** 6/6 green on the merged tree (tst_smoke,
+tst_container_persistence, tst_meter_item_bar,
+tst_meter_item_scale, tst_reading_name, tst_meter_presets — 50+
+assertions total). Verified live via Quartz screencapture on the
+merged build.
+
 ### Phase 3G-8 — RX1 Display Parity (complete)
 
 **Status:** Complete. Branch `feature/phase3g8-rx1-display-parity`
