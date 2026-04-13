@@ -17,10 +17,14 @@ stacking. Users can build multi-row multimeter containers
 interactively by stacking presets the same way they do in Thetis.
 
 **Branches this PR:** `test/meters-on-main` → `main`
-**Commits ahead of main:** 56 (20 meter-parity + 24 carried by the
+**Commits ahead of main:** 57 (20 meter-parity + 24 carried by the
 merge of `feature/phase3g7-polish` which was never upstreamed to
-main + 4 handoff-era commits + 8 pre-PR verification commits —
-see *Pre-PR fixes* section below)
+main + 1 handoff-era doc + 8 pre-PR code fixes + 1 pre-PR doc
+update — see *Pre-PR fixes* section below. Git log also shows
+3 intermediate layout attempts [`017e5e2`, `0254d4e`, `28085a9`]
+that each drove toward the final Thetis-parity model in
+commit 8; they're kept in history for context but every one
+was superseded by `aececaa`.)
 **Test suite:** 6/6 green (50+ assertions)
 **Live-tested:** Quartz screencapture + manual checklist on the
 merged build (macOS arm64)
