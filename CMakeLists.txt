@@ -278,7 +278,16 @@ set(GUI_SOURCES
     src/gui/SetupDialog.cpp
     src/gui/SetupPage.cpp
     src/gui/setup/GeneralSetupPages.cpp
-    src/gui/setup/HardwareSetupPages.cpp
+    src/gui/setup/HardwarePage.cpp
+    src/gui/setup/hardware/RadioInfoTab.cpp
+    src/gui/setup/hardware/AntennaAlexTab.cpp
+    src/gui/setup/hardware/OcOutputsTab.cpp
+    src/gui/setup/hardware/XvtrTab.cpp
+    src/gui/setup/hardware/PureSignalTab.cpp
+    src/gui/setup/hardware/DiversityTab.cpp
+    src/gui/setup/hardware/PaCalibrationTab.cpp
+    src/gui/setup/hardware/Hl2IoBoardTab.cpp
+    src/gui/setup/hardware/BandwidthMonitorTab.cpp
     src/gui/setup/AudioSetupPages.cpp
     src/gui/setup/DspSetupPages.cpp
     src/gui/setup/DisplaySetupPages.cpp
