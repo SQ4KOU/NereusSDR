@@ -151,6 +151,45 @@ private slots:
         }
     }
 
+    // --- Phase E: ALC bar row PNG dump ---
+    void ALC_bar_row_dump_to_png()
+    {
+        ItemGroup* g = ItemGroup::createAlcPreset(nullptr);
+        QVERIFY(g);
+        QVERIFY(g->items().size() >= 3);
+
+        // Feed a realistic TX ALC reading (-6 dBm of compression).
+        BarItem* bar = nullptr;
+        for (MeterItem* mi : g->items()) {
+            if (auto* b = qobject_cast<BarItem*>(mi)) { bar = b; break; }
+        }
+        QVERIFY(bar);
+        for (int i = 0; i < 20; ++i) { bar->setValue(-6.0); }
+        bar->setValue(2.0);   // push a transient peak above 0 dB
+        for (int i = 0; i < 10; ++i) { bar->setValue(-6.0); }
+
+        const int W = 480;
+        const int H = 80;   // single row — shorter than the S-meter
+        QImage img(W, H, QImage::Format_ARGB32);
+        img.fill(QColor(15, 15, 26));
+
+        {
+            QPainter p(&img);
+            p.setRenderHint(QPainter::Antialiasing, true);
+            p.setRenderHint(QPainter::TextAntialiasing, true);
+            QVector<MeterItem*> ordered = g->items();
+            std::stable_sort(ordered.begin(), ordered.end(),
+                             [](MeterItem* a, MeterItem* b) {
+                return a->zOrder() < b->zOrder();
+            });
+            for (MeterItem* mi : ordered) {
+                mi->paint(p, W, H);
+            }
+        }
+        QVERIFY(img.save(QStringLiteral("/tmp/alcBarRow.png"), "PNG"));
+        delete g;
+    }
+
     // --- Headless visual dump of the full createSMeterPreset composition ---
     // Renders every item in the preset through its real paint() function
     // into a shared QImage and writes the result to /tmp/sMeterPreset.png
