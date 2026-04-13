@@ -296,14 +296,15 @@ void P1RadioConnection::init()
 
     connect(m_socket, &QUdpSocket::readyRead, this, &P1RadioConnection::onReadyRead);
 
-    // Watchdog timer — 500ms tick, not started until connectToRadio
+    // Watchdog timer — polls every kWatchdogTickMs ms; started in connectToRadio.
+    // Source: NereusSDR design doc §3.6 — silence detection + reconnect state machine.
     m_watchdogTimer = new QTimer(this);
-    m_watchdogTimer->setInterval(500);
+    m_watchdogTimer->setInterval(kWatchdogTickMs);
     connect(m_watchdogTimer, &QTimer::timeout, this, &P1RadioConnection::onWatchdogTick);
 
-    // Reconnect timer — single-shot 3s, for Task 10
+    // Reconnect timer — single-shot; fires kReconnectIntervalMs after watchdog trips.
+    // Source: NereusSDR design doc §3.6 — 5-second reconnect interval, max 3 retries.
     m_reconnectTimer = new QTimer(this);
-    m_reconnectTimer->setInterval(3000);
     m_reconnectTimer->setSingleShot(true);
     connect(m_reconnectTimer, &QTimer::timeout, this, &P1RadioConnection::onReconnectTimeout);
 
@@ -329,6 +330,11 @@ void P1RadioConnection::connectToRadio(const RadioInfo& info)
     m_intentionalDisconnect = false;
     m_epSendSeq = 0;
     m_epRecvSeqExpected = 0;
+
+    // Reset reconnect state — fresh connection resets the retry counter.
+    // Source: NereusSDR design doc §3.6 — explicit user reconnect clears attempts.
+    m_reconnectAttempts = 0;
+    m_lastEp6At = QDateTime();
 
     // Check firmware minimum — warn but don't block (Task 11 adds hard gate)
     if (info.firmwareVersion > 0 && m_caps->minFirmwareVersion > 0 &&
@@ -375,6 +381,11 @@ void P1RadioConnection::disconnect()
         m_reconnectTimer->stop();
     }
 
+    // Clear reconnect state on explicit disconnect.
+    // Source: NereusSDR design doc §3.6 — user reconnect resets the cycle.
+    m_reconnectAttempts = 0;
+    m_lastEp6At = QDateTime();
+
     if (m_running && m_socket && !m_radioInfo.address.isNull()) {
         m_running = false;
         sendMetisStop();
@@ -412,10 +423,24 @@ void P1RadioConnection::setAntenna(int antennaIndex)         { m_antennaIdx = an
 // Drains incoming datagrams. For each 1032-byte ep6 frame, calls the static
 // parseEp6Frame helper and emits iqDataReceived for each receiver.
 // Source: networkproto1.c:319-415 MetisReadThreadMainLoop
+//
+// Handles both Connected and Connecting states so that reconnect attempts
+// (which send metis-start from Connecting) can transition to Connected on
+// the first good ep6 frame (design doc §3.6 step 5).
 // ---------------------------------------------------------------------------
 void P1RadioConnection::onReadyRead()
 {
     if (!m_socket) { return; }
+
+    const ConnectionState cs = state();
+    // Only process ep6 data when Connected or Connecting (reconnect attempt).
+    if (cs != ConnectionState::Connected && cs != ConnectionState::Connecting) {
+        // Drain the socket anyway to avoid buffering.
+        while (m_socket->hasPendingDatagrams()) {
+            m_socket->receiveDatagram();
+        }
+        return;
+    }
 
     while (m_socket->hasPendingDatagrams()) {
         QNetworkDatagram dg = m_socket->receiveDatagram();
@@ -426,21 +451,116 @@ void P1RadioConnection::onReadyRead()
         // ep6 frames are exactly 1032 bytes
         // Source: networkproto1.c:319 — MetisReadThreadMainLoop receives 1032-byte frames
         if (data.size() == 1032) {
+            // Update watchdog timestamp on every good ep6 arrival.
+            // Source: NereusSDR design doc §3.6 — successful data resets the retry counter.
+            m_lastEp6At = QDateTime::currentDateTimeUtc();
+
+            // If we were in a reconnect attempt, the first good frame means recovery.
+            // Stop the reconnect timer and transition to Connected.
+            if (cs == ConnectionState::Connecting) {
+                m_reconnectAttempts = 0;
+                if (m_reconnectTimer) { m_reconnectTimer->stop(); }
+                if (!m_watchdogTimer->isActive()) { m_watchdogTimer->start(); }
+                setState(ConnectionState::Connected);
+                qCDebug(lcConnection) << "P1: Reconnected — ep6 stream restored";
+            }
+
             parseEp6Frame(data);
         }
     }
 }
 
+// ---------------------------------------------------------------------------
+// onWatchdogTick
+//
+// Fires every kWatchdogTickMs ms while connected or reconnecting.
+// Dual role:
+//   1. Sends a periodic ep2 command frame to keep the radio alive.
+//      Source: networkproto1.c:597 WriteMainLoop equivalent.
+//   2. Detects ep6 silence: if no frame has arrived for kWatchdogSilenceMs,
+//      transitions to Error and arms the reconnect timer.
+//      Applies to both Connected (initial silence detection) and Connecting
+//      (reconnect attempt timed out — the retry got no response).
+//      Source: NereusSDR design doc §3.6.
+// ---------------------------------------------------------------------------
 void P1RadioConnection::onWatchdogTick()
 {
-    // Task 9 scope: send a periodic ep2 command frame to keep the radio alive.
-    // Source: networkproto1.c:597 WriteMainLoop equivalent — periodic command send.
-    if (m_running && m_socket && !m_radioInfo.address.isNull()) {
+    if (!m_running || !m_socket || m_radioInfo.address.isNull()) { return; }
+
+    const ConnectionState cs = state();
+
+    // Send periodic command frame (keep-alive) when connected or reconnecting.
+    if (cs == ConnectionState::Connected || cs == ConnectionState::Connecting) {
         sendCommandFrame();
+    }
+
+    // Silence detection applies to both Connected and Connecting states.
+    // In Connecting: the reconnect attempt sent metis-start but got no ep6 response.
+    if (cs != ConnectionState::Connected && cs != ConnectionState::Connecting) { return; }
+
+    // If we haven't received any ep6 frame yet, don't trip the watchdog.
+    if (!m_lastEp6At.isValid()) { return; }
+
+    const qint64 silenceMs = m_lastEp6At.msecsTo(QDateTime::currentDateTimeUtc());
+    if (silenceMs > kWatchdogSilenceMs) {
+        qCWarning(lcConnection) << "P1: Watchdog — ep6 silent for" << silenceMs
+                                << "ms (state=" << static_cast<int>(cs)
+                                << "); transitioning to Error and scheduling reconnect";
+        m_watchdogTimer->stop();
+        setState(ConnectionState::Error);
+        emit errorOccurred(QStringLiteral("Radio stopped responding"));
+
+        // Arm the reconnect timer for the next retry attempt (or first if from Connected).
+        // Source: NereusSDR design doc §3.6 — 5-second reconnect interval.
+        m_reconnectTimer->start(kReconnectIntervalMs);
     }
 }
 
-void P1RadioConnection::onReconnectTimeout() { /* stub — Task 10 */ }
+// ---------------------------------------------------------------------------
+// onReconnectTimeout
+//
+// Called when the single-shot reconnect timer fires.
+// Implements bounded retries: up to kMaxReconnectAttempts, then stays in Error.
+// Source: NereusSDR design doc §3.6.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::onReconnectTimeout()
+{
+    // Guard: don't retry after an intentional disconnect.
+    if (m_intentionalDisconnect) { return; }
+
+    if (m_reconnectAttempts >= kMaxReconnectAttempts) {
+        qCWarning(lcConnection) << "P1: Reconnect — bounded retries exhausted after"
+                                << kMaxReconnectAttempts << "attempts; staying in Error";
+        // Stay in Error — user must explicitly call connectToRadio() to reset.
+        return;
+    }
+
+    ++m_reconnectAttempts;
+    qCDebug(lcConnection) << "P1: Reconnect attempt" << m_reconnectAttempts
+                          << "of" << kMaxReconnectAttempts;
+
+    // Transition to Connecting for this retry attempt.
+    setState(ConnectionState::Connecting);
+
+    // Send stop then start so the radio re-arms its ep6 sender.
+    // Source: networkproto1.c:49-110 SendStopToMetis / SendStartToMetis.
+    // The socket stays bound from the initial connect.
+    sendMetisStop();
+    sendMetisStart(false);
+
+    // Re-arm the watchdog so onReadyRead can complete the transition to Connected.
+    if (!m_watchdogTimer->isActive()) {
+        m_watchdogTimer->start();
+    }
+
+    // Re-arm the reconnect timer so if this attempt also fails, the next retry
+    // is scheduled automatically (the watchdog will stop itself and re-arm this
+    // timer again when it detects silence).
+    // We do NOT re-arm here unconditionally — the watchdog arms it when needed.
+    // But we schedule a fallback in case no ep6 data arrives within the window
+    // (i.e., watchdog trips again → re-arms reconnect timer).
+    // No extra start() needed; see onWatchdogTick for the arming path.
+}
 
 // ---------------------------------------------------------------------------
 // sendMetisStart

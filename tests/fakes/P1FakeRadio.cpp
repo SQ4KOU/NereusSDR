@@ -38,10 +38,23 @@ void P1FakeRadio::start()
     Q_ASSERT_X(ok, "P1FakeRadio::start", "Failed to bind loopback UDP socket");
 
     connect(m_socket, &QUdpSocket::readyRead, this, &P1FakeRadio::onReadyRead);
+
+    // Auto-stream timer — fires every 10ms to push ep6 frames while running.
+    // This simulates the continuous ep6 stream a real HPSDR radio sends after
+    // receiving metis-start (networkproto1.c WriteMainLoop cadence).
+    m_streamTimer = new QTimer(this);
+    m_streamTimer->setInterval(10);
+    connect(m_streamTimer, &QTimer::timeout, this, &P1FakeRadio::onAutoStreamTick);
+    m_streamTimer->start();
 }
 
 void P1FakeRadio::stop()
 {
+    if (m_streamTimer) {
+        m_streamTimer->stop();
+        m_streamTimer->deleteLater();
+        m_streamTimer = nullptr;
+    }
     if (m_socket) {
         m_socket->close();
         m_socket->deleteLater();
@@ -56,8 +69,20 @@ quint16 P1FakeRadio::localPort() const
     return m_socket->localPort();
 }
 
-void P1FakeRadio::goSilent() { m_silent = true; }
-void P1FakeRadio::resume()   { m_silent = false; }
+void P1FakeRadio::goSilent()
+{
+    m_silent = true;
+    // Also clear client tracking so auto-stream stops sending.
+    // The client address is restored when the next metis-start arrives.
+    m_clientPort = 0;
+}
+
+void P1FakeRadio::resume()
+{
+    m_silent = false;
+    // m_clientAddress/m_clientPort will be repopulated when the reconnect
+    // attempt sends a fresh metis-start.
+}
 
 // ---------------------------------------------------------------------------
 // onReadyRead — dispatch incoming datagrams
@@ -238,6 +263,19 @@ void P1FakeRadio::sendEp6Frames(int count)
         QByteArray frame = buildEp6Frame(m_ep6Seq++, 1);
         m_socket->writeDatagram(frame, m_clientAddress, m_clientPort);
     }
+}
+
+// ---------------------------------------------------------------------------
+// onAutoStreamTick — fires every 10ms; sends one ep6 frame if running and
+// not silent. Simulates the continuous ep6 cadence a real HPSDR radio sends
+// after receiving metis-start.
+// ---------------------------------------------------------------------------
+void P1FakeRadio::onAutoStreamTick()
+{
+    if (!m_socket || !m_running || m_silent || m_clientPort == 0) { return; }
+
+    QByteArray frame = buildEp6Frame(m_ep6Seq++, 1);
+    m_socket->writeDatagram(frame, m_clientAddress, m_clientPort);
 }
 
 } // namespace NereusSDR::Test

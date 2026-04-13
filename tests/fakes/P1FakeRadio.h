@@ -4,10 +4,12 @@
 // Binds a UDP socket on an ephemeral loopback port, responds to discovery
 // probes, metis-start/stop commands, and can stream canned ep6 frames.
 //
-// Used by tst_p1_loopback_connection.cpp (Phase 3I Task 9).
+// Used by tst_p1_loopback_connection.cpp (Phase 3I Task 9) and
+// tst_reconnect_on_silence.cpp (Phase 3I Task 10).
 
 #pragma once
 #include <QObject>
+#include <QTimer>
 #include <QUdpSocket>
 #include <QHostAddress>
 
@@ -32,9 +34,10 @@ public:
     // to the last client that sent a metis-start command.
     void sendEp6Frames(int count);
 
-    // Temporarily ignore incoming packets (without unbinding).
+    // Temporarily ignore incoming packets AND stop auto-streaming ep6
+    // (without unbinding). Simulates a radio that goes silent.
     void goSilent();
-    // Resume handling packets.
+    // Resume handling packets and restart auto-streaming.
     void resume();
 
     int  ep2FramesReceived() const { return m_ep2Count; }
@@ -42,6 +45,7 @@ public:
 
 private slots:
     void onReadyRead();
+    void onAutoStreamTick();
 
 private:
     void handleDiscoveryProbe(const QHostAddress& from, quint16 port);
@@ -53,6 +57,7 @@ private:
     QByteArray buildEp6Frame(quint32 seq, int numRx = 1);
 
     QUdpSocket*  m_socket{nullptr};
+    QTimer*      m_streamTimer{nullptr};
     QHostAddress m_clientAddress;
     quint16      m_clientPort{0};
     bool         m_running{false};

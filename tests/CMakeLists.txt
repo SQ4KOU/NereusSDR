@@ -27,3 +27,6 @@ nereus_add_test(tst_p1_wire_format)
 
 # P1 loopback integration test — uses P1FakeRadio from tests/fakes/
 nereus_add_test(tst_p1_loopback_connection fakes/P1FakeRadio.cpp)
+
+# P1 reconnection state machine test — uses P1FakeRadio auto-streaming (Task 10)
+nereus_add_test(tst_reconnect_on_silence fakes/P1FakeRadio.cpp)
