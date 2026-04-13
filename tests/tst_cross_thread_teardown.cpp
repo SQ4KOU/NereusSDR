@@ -18,8 +18,6 @@
 // warnings are emitted.
 
 #include <QtTest/QtTest>
-#include <QCoreApplication>
-#include <QStandardPaths>
 #include <QThread>
 #include <atomic>
 
@@ -122,16 +120,9 @@ private slots:
     }
 };
 
-// Custom main() so we can enable QStandardPaths test mode BEFORE anything
-// touches AppSettings::instance(). Without this, the singleton pins its
-// file path to the real %LOCALAPPDATA%\NereusSDR\NereusSDR.settings on
-// first construction, and test runs overwrite the user's real settings.
-int main(int argc, char* argv[])
-{
-    QStandardPaths::setTestModeEnabled(true);
-    QCoreApplication app(argc, argv);
-    TestCrossThreadTeardown tc;
-    return QTest::qExec(&tc, argc, argv);
-}
-
+// Sandbox is enabled by tests/TestSandboxInit.cpp's global static
+// constructor (linked in by nereus_add_test), so we can use QTEST_MAIN
+// like the other tests and trust that AppSettings::instance() resolves
+// to a sandbox path.
+QTEST_MAIN(TestCrossThreadTeardown)
 #include "tst_cross_thread_teardown.moc"

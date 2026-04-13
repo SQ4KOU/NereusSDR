@@ -9,7 +9,14 @@ find_package(Qt6 REQUIRED COMPONENTS Test)
 function(nereus_add_test name)
     # Additional source files may be passed as extra arguments (ARGN) —
     # needed by Phase 3I tests that link test-only fakes like P1FakeRadio.
-    add_executable(${name} ${name}.cpp ${ARGN})
+    #
+    # TestSandboxInit.cpp is always compiled in. Its global static
+    # constructor calls QStandardPaths::setTestModeEnabled(true) before
+    # main() runs, so AppSettings::instance() resolves to a sandbox
+    # path instead of the real user config file. Without this, ctest
+    # runs can (and have — see v0.1.1 alpha) silently wipe the
+    # developer's NereusSDR.settings via P1FakeRadio-keyed test writes.
+    add_executable(${name} ${name}.cpp TestSandboxInit.cpp ${ARGN})
     target_link_libraries(${name} PRIVATE NereusSDRObjs Qt6::Test)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
