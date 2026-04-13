@@ -14,6 +14,114 @@
 
 ---
 
+## What the whole app looks like right now
+
+Before you dive in, here's the honest state of the overall application so you have realistic expectations. NereusSDR is built in layered phases — each phase adds one focused slice of functionality. The slices landed so far, in rough order:
+
+| Phase | What it added | State |
+|---|---|---|
+| 3A | Protocol 2 radio discovery + connection (ANAN-G2 / Saturn first) | Working |
+| 3B | WDSP DSP engine integration — RX1 demod (USB/LSB/AM/CW), AGC, NB1/NB2, bandpass filters, audio pipeline | Working |
+| 3C | macOS build + crash fixes | Working |
+| 3D | GPU-accelerated spectrum + waterfall via Qt's QRhi abstraction (Metal on macOS, D3D12 on Windows, Vulkan on Linux) | Working |
+| 3E | VFO tuning, mode selection, filter controls, multi-receiver foundation | Working (RX1 only in the UI) |
+| 3-UI | Full UI skeleton: 12 applets, 9 menus, 47-page SetupDialog, spectrum overlay panel, status bar | Skeleton + partial wiring |
+| 3F | Up to 4 independent panadapters in configurable layouts | **Not started** |
+| 3G-1..7 | Dockable/floatable container system, GPU-rendered meter engine with 31 item types, container settings dialog, MMIO external-data subsystem | Working |
+| 3G-8 | RX1 Display parity — every control on the Setup → Display pages wired to the renderer (47 controls) | Working |
+| 3H | Thetis-inspired skin system | **Not started** |
+| 3I | **THIS PHASE** — Protocol 1 support for the full ANAN/Hermes family, including HL2 | Working — that's what you're testing |
+| 3J | TCI protocol server (for N1MM+, Log4OM etc.) | Not started |
+| 3K | CAT / rigctld bridge | Not started |
+| 3L | HL2 IoBoardHl2 I2C-over-ep2 encoding (currently inside a closed DLL) | Not started |
+| 3M | TX pipeline — SSB, CW, full processing chain, PureSignal PA linearization | **Not started** |
+
+The short version: **single-receiver RX works end-to-end on any supported ANAN/Hermes radio. Everything beyond that is either scaffolded, cold-wired, or not started.**
+
+### Touring the app
+
+When you launch NereusSDR, you'll see a main window that's modelled after Thetis but rebuilt in Qt6. Here's what's where:
+
+**Main window layout**
+- **Spectrum + waterfall widget** dominates the upper-middle of the window. GPU-rendered, ~30 FPS, 4096-point FFT with FFT-shift + mirror, Blackman-Harris window. Click anywhere on the spectrum to retune the VFO. Scroll-wheel over the spectrum drags the reference level; scroll over the frequency bar zooms. Drag the filter passband to resize filters. Right-click for a display-settings popup.
+- **Floating VFO marker** with a flag widget showing the current tune frequency, mode, and filter passband overlay. Double-click the marker to recenter the panadapter.
+- **Dockable/floatable container panels** around the edges — these hold the meters, applets, and control widgets. You can drag them to float, dock them to any edge, pin them on top, axis-lock them, or hide their title bars. Layout persists across restarts.
+- **Menu bar** across the top — 9 menus (File, Radio, View, DSP, Band, Mode, Containers, Tools, Help), ~60 items. Some are wired, some are stubs.
+- **Status bar** across the bottom — double-height, shows UTC clock, radio info, TX/RX indicators, signal level, CPU usage.
+
+**Applet panel (right side by default)**
+- **12 applets** from Thetis, ported as Qt widgets. The most complete one is **RX** — mode, AGC, AF gain, filter presets are all wired to the live slice. The others (TX, PhoneCw, EQ, FM, Digital, PureSignal, Diversity, CWX, DVK, CAT, Tuner) have their UI built out but most of their controls don't drive anything yet. You can click them, they'll look right, they won't do anything.
+
+**Meter widgets**
+- A **GPU-rendered meter engine** powers everything meter-shaped. ~31 item types in the engine: bars, needles, arc-style S-meters, dials, text overlays, rotators, clocks, magic-eye tubes, image atoms, LEDs, history graphs, multi-meter displays, data out, and interactive button grids.
+- **What actually updates with real data on your HL2:** the signal S-meter (arc needle), the noise-floor / RF power bars bound to the live RX1 channel, the clocks, and the basic button grids (band, mode, filter, antenna, tuning step).
+- **What doesn't update:** most TX-side meters (forward/reverse power, SWR, ALC, compression, mic gain), PureSignal feedback indicators, PA-related gauges, the magic eye, data out. They render their backgrounds and needles-at-zero correctly but there's no source pushing data into them. That's because the underlying pipelines (TX, PureSignal, PA control) are later phases.
+
+**Container settings**
+- Right-click a container's title bar → Container Settings. The **3-column container settings dialog** (ported from Thetis) lets you pick meter items from a library, drag them into your container, and edit per-item properties with a huge ~155-field property editor that covers every item type. Snapshot-and-revert works. Container-level lock/hide-title/minimises/highlight work. This is surprisingly complete.
+- **38+ meter presets** ship in the item library — pre-built S-meters, CrossNeedle dual forward/reverse power meters, ANANMM 7-needle multi-meter (with exact Thetis calibration curves), edge-style meters, etc. You can drop any of them into any container.
+
+**SetupDialog**
+- **47 pages across 10 categories.** The ones that are **fully functional right now**:
+  - **Display → Spectrum Defaults** (17 controls: averaging, peak hold, trace fill/width/colour, gradient, cal offset, FPS overlay, etc.)
+  - **Display → Waterfall Defaults** (17 controls: AGC, reverse scroll, opacity, update rate, overlays, timestamp, low/mid/high colours)
+  - **Display → Grid & Scales** (13 controls, including per-band Max/Min storage across all 14 bands — 160 m through 6 m + GEN + WWV + XVTR)
+  - **Hardware Config** (new in Phase 3I — what you'll be testing) with 9 capability-gated sub-tabs
+- The **other ~40 pages** mostly exist as stub widgets with `NYI` (Not Yet Implemented) tooltips on disabled controls. You can navigate into them, they won't crash, but they won't affect anything.
+
+**Spectrum overlay panel**
+- Hover-reveal overlay button strip on the spectrum widget — 10 buttons with 5 flyout sub-panels (display, filter, noise, spots, tools). Partially wired; auto-closes on outside click.
+
+**Persistence**
+- Dock layout, container contents, floating positions, pin-on-top state, per-band grid values, audio device selection, last-connected radio, per-MAC hardware settings (new in 3I), spectrum/waterfall settings — all persist across app restarts via an XML-based `AppSettings` store.
+
+### What actually works across the whole app right now
+
+Not just the Phase 3I connector — this is the **total** functional surface area as of today, on any supported radio:
+
+1. **Discover + connect + disconnect** any P1 or P2 OpenHPSDR radio on your LAN
+2. **Tune RX1** anywhere in the HF range (P1 radios go up to 61.44 MHz; P2 boards like Saturn have broader range)
+3. **Hear live audio** demodulated through WDSP in USB, LSB, AM, or CW with adjustable AGC, noise blanker (NB1 or NB2), bandpass filter, notch, and volume
+4. **See real-time spectrum** (GPU-accelerated, ~30 FPS, configurable averaging, peak hold, colours, grids, labels, FPS overlay)
+5. **See real-time waterfall** (GPU-accelerated, configurable colour scheme, AGC, opacity, reverse scroll, timestamps, overlays)
+6. **Click-to-tune** on the spectrum and waterfall, scroll-to-zoom, drag-to-adjust-reference-level, drag-filter-passband
+7. **CTUN mode** — independent panadapter center and VFO, WDSP frequency shift
+8. **Band switching** via the band button grid (14 bands: 160/80/60/40/30/20/17/15/12/10/6 m + GEN + WWV + XVTR), with per-band display settings
+9. **Mode switching** via the mode button grid — USB/LSB/AM/SAM/FM/CW/CWL/CWU/DIGL/DIGU/DRM/SPEC
+10. **Filter presets** via the filter button grid
+11. **VFO display** with per-digit mouse-wheel tuning
+12. **Signal S-meter** (arc needle, live from WDSP)
+13. **Attenuator / preamp / sample rate** controls for all supported boards, capability-gated per board
+14. **Saved radio profiles** keyed by MAC — discover once, re-use next launch with auto-reconnect
+15. **Manually-added radios** outside the local subnet via the Add Manually dialog
+16. **Full container system** with drag-to-dock, layout persistence, per-container settings
+17. **31 meter item types** styled and placed, with 38+ presets in the library
+18. **47-page Setup dialog** — Display section fully wired (47 controls), Hardware Config section new in 3I, other pages stubbed
+
+**Single-radio, single-receiver, receive-only.** Everything else listed in the "Planned" column of the phase table above is either not started or scaffolded but inert.
+
+### Where this build is especially rough
+
+Things that work but aren't polished:
+- **First discovery click** can freeze the GUI for up to ~10 seconds while the app walks every network interface (VPN tunnels, Docker bridges, etc. all count). This is a one-shot per click; it will not lock up repeatedly. Async discovery rewrite is a follow-up.
+- **Meter widgets that aren't bound** to real data show their background graphics and a zero-valued needle. They look broken but they're just waiting for a future phase to hook them up.
+- **Applets beyond RX** (TX, PhoneCw, EQ, FM, Digital, PureSignal, Diversity, CWX, DVK, CAT, Tuner) are cosmetic — clicking controls won't affect anything.
+- **~40 of the 47 Setup pages** are disabled-controls-with-NYI-tooltips. They won't crash, they just don't do anything.
+- **Some menu items** in the menu bar are not yet wired. Mostly harmless — you'll see an action and nothing will happen.
+- **Keyboard shortcuts** are partial.
+- **Multi-RX** — the app has the multi-receiver foundation in place but the UI only exposes RX1 for now. RX2 hardware support exists on 2-ADC boards; there's no second-receiver spectrum yet.
+
+### Performance expectations
+
+On a modern laptop (M-series Mac, recent AMD/Intel desktop, decent mid-range Linux box):
+- **Idle CPU:** ~1–5% after connect
+- **Audio:** no dropouts at 48 / 96 / 192 / 384 kHz
+- **Spectrum:** ~30 FPS steady on the GPU path
+- **Memory:** ~250–500 MB resident depending on container layout
+- **First-launch FFTW wisdom caching:** the very first time you run the app it will pop a progress dialog while FFTW plans its optimal FFT routines for your CPU. This takes ~10–60 seconds, once, ever. Subsequent launches skip it.
+
+---
+
 ## Before you start
 
 ### Things you need
