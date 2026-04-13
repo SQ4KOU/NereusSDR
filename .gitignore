@@ -6,5 +6,6 @@ build-*/
 reference/
 CMakeFiles/
 .worktrees/
+.superpowers/
 .DS_Store
 **/.DS_Store
