@@ -20,6 +20,9 @@
 namespace NereusSDR {
 
 // ── TriBtn: triangle stepper button (same pattern as AetherSDR CwTriBtn) ──────
+// File-local: wrapped in an anonymous namespace so it doesn't ODR-collide with
+// NereusSDR::TriBtn declared in RxApplet.h. FmApplet.cpp uses the same pattern.
+namespace {
 
 class TriBtn : public QPushButton {
 public:
@@ -55,6 +58,8 @@ protected:
 private:
     Dir m_dir;
 };
+
+} // anonymous namespace
 
 
 // ── Style constants (adapted from AetherSDR PhoneCwApplet.cpp) ────────────────
