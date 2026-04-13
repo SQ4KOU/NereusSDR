@@ -55,8 +55,19 @@ if(WIN32)
     if(EXISTS "${FFTW3_ROOT}/include/fftw3.h")
         set(FFTW3_FOUND TRUE)
         set(FFTW3_INCLUDE_DIRS "${FFTW3_ROOT}/include")
-        set(FFTW3_LIBRARIES "${FFTW3_ROOT}/bin/libfftw3-3.dll")
         set(FFTW3_DLL "${FFTW3_ROOT}/bin/libfftw3-3.dll")
+        # Prefer a proper .lib import library when available. MSVC link.exe
+        # refuses to link against a DLL directly (LNK1107 "invalid or
+        # corrupt file"), while MinGW's ld is happy either way. release.yml
+        # generates third_party/fftw3/lib/fftw3.lib from the .def file;
+        # ci.yml (MinGW) skips that and links the DLL directly.
+        if(EXISTS "${FFTW3_ROOT}/lib/fftw3.lib")
+            set(FFTW3_LIBRARIES "${FFTW3_ROOT}/lib/fftw3.lib")
+            message(STATUS "FFTW3: using import library ${FFTW3_ROOT}/lib/fftw3.lib")
+        else()
+            set(FFTW3_LIBRARIES "${FFTW3_ROOT}/bin/libfftw3-3.dll")
+            message(STATUS "FFTW3: linking directly against DLL (no fftw3.lib)")
+        endif()
         # Float precision FFTW3 for FFTEngine display FFT
         if(EXISTS "${FFTW3_ROOT}/lib/libfftw3f-3.a")
             list(APPEND FFTW3_LIBRARIES "${FFTW3_ROOT}/lib/libfftw3f-3.a")
@@ -319,16 +330,33 @@ set(GUI_SOURCES
 qt_add_resources(RESOURCES resources.qrc)
 
 # --------------------------------------------------------------------------
+# App icon (per-platform) — from main (PR #11)
+# --------------------------------------------------------------------------
+set(APP_ICON_SOURCES "")
+if(APPLE)
+    set(APP_ICON_MACOS "${CMAKE_SOURCE_DIR}/resources/icons/NereusSDR.icns")
+    set_source_files_properties(${APP_ICON_MACOS} PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources"
+    )
+    list(APPEND APP_ICON_SOURCES ${APP_ICON_MACOS})
+elseif(WIN32)
+    list(APPEND APP_ICON_SOURCES "${CMAKE_SOURCE_DIR}/resources/icons/NereusSDR.rc")
+endif()
+
+# --------------------------------------------------------------------------
 # Object library — shared between the app executable and test targets so
-# the same translation units are compiled once and consumed by both.
-# Properties on NereusSDRObjs propagate to consumers (PUBLIC) via the
-# CMake INTERFACE; the thin executable just links src/main.cpp on top.
+# the same translation units are compiled once and consumed by both
+# (Phase 3I test infrastructure). Properties on NereusSDRObjs propagate
+# to consumers (PUBLIC) via the CMake INTERFACE; the thin executable just
+# links src/main.cpp on top. Bundles the per-platform APP_ICON_SOURCES so
+# the icon lands in both the .app and the test binaries.
 # --------------------------------------------------------------------------
 add_library(NereusSDRObjs OBJECT
     ${CORE_SOURCES}
     ${MODEL_SOURCES}
     ${GUI_SOURCES}
     ${RESOURCES}
+    ${APP_ICON_SOURCES}
 )
 
 add_executable(NereusSDR src/main.cpp)
@@ -337,6 +365,9 @@ target_link_libraries(NereusSDR PRIVATE NereusSDRObjs)
 set_target_properties(NereusSDR PROPERTIES
     WIN32_EXECUTABLE TRUE
     MACOSX_BUNDLE TRUE
+    MACOSX_BUNDLE_ICON_FILE "NereusSDR.icns"
+    MACOSX_BUNDLE_BUNDLE_NAME "NereusSDR"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "com.boydsoftprez.NereusSDR"
 )
 
 target_include_directories(NereusSDRObjs PUBLIC
@@ -352,6 +383,11 @@ target_link_libraries(NereusSDRObjs PUBLIC
     Qt6::Network
     Qt6::Multimedia
 )
+
+if(WIN32)
+    # Needed by RadioDiscovery.cpp's setsockopt() call for SO_BROADCAST.
+    target_link_libraries(NereusSDR PRIVATE ws2_32)
+endif()
 
 if(Qt6SerialPort_FOUND)
     target_link_libraries(NereusSDRObjs PUBLIC Qt6::SerialPort)

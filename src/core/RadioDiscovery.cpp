@@ -8,7 +8,11 @@
 #include <QDateTime>
 #include <QNetworkInterface>
 
+#ifdef Q_OS_WIN
+#include <winsock2.h>
+#else
 #include <sys/socket.h>
+#endif
 
 namespace NereusSDR {
 
@@ -85,6 +89,12 @@ RadioDiscovery::~RadioDiscovery()
 
 void RadioDiscovery::startDiscovery()
 {
+    // Phase 3I rewrote discovery to walk all NICs per scan with ephemeral
+    // per-NIC sockets (mi0bot clsRadioDiscovery pattern). Main's older
+    // single-persistent-m_socket path was replaced entirely in Task 4;
+    // main's cross-platform socket header fix (b3c2961) is preserved at
+    // the top of this file, which is what scanAllNics() needs when it
+    // does its own setsockopt(SO_BROADCAST) per NIC.
     emit discoveryStarted();
     scanAllNics();                              // one-shot NIC walk
     if (!m_staleTimer.isActive()) {

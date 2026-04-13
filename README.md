@@ -22,6 +22,29 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 
 ---
 
+## Releases & Installation
+
+Pre-built binaries for Linux (AppImage, x86_64 + aarch64), macOS (DMG, Apple
+Silicon + Intel), and Windows (NSIS installer + portable ZIP, x64) are
+published as GitHub Releases:
+
+**<https://github.com/boydsoftprez/NereusSDR/releases>**
+
+All artifacts are GPG-signed (`KG4VCF`) via `SHA256SUMS.txt.asc`. To verify:
+
+```bash
+gpg --keyserver keyserver.ubuntu.com --recv-keys KG4VCF
+gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
+sha256sum -c SHA256SUMS.txt
+```
+
+> **Alpha builds:** until Apple Developer ID and Authenticode certificates
+> are obtained, macOS users will need to right-click → Open the DMG on first
+> launch, and Windows users will see a SmartScreen warning to click through.
+> Linux is unaffected. See the per-release notes for details.
+
+---
+
 ## Current Status
 
 **Phase 3I complete — Radio Connector & Radio-Model Port: full ANAN/Hermes P1 family now supported end-to-end.** Every OpenHPSDR Protocol 1 radio in the ANAN/Hermes family (Hermes Lite 2, ANAN-10/10E/100/100B/100D/200D, Metis) now discovers, connects, streams I/Q through the existing WDSP demod chain, and persists per-radio settings — identical behaviour to how ANAN-G2 on Protocol 2 works today. 25 GPG-signed commits in PR #12. Smoke-test checklist at [`docs/debugging/phase3i-smoke-test.md`](docs/debugging/phase3i-smoke-test.md). Design at [`docs/architecture/phase3i-radio-connector-port-design.md`](docs/architecture/phase3i-radio-connector-port-design.md), plan at [`docs/architecture/phase3i-radio-connector-port-plan.md`](docs/architecture/phase3i-radio-connector-port-plan.md).

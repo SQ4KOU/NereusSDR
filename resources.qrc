@@ -15,4 +15,7 @@
         <file alias="cross-needle.png">resources/meters/cross-needle.png</file>
         <file alias="cross-needle-bg.png">resources/meters/cross-needle-bg.png</file>
     </qresource>
+    <qresource prefix="/icons">
+        <file alias="NereusSDR.png">resources/icons/NereusSDR.png</file>
+    </qresource>
 </RCC>

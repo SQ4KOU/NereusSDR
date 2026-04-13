@@ -391,7 +391,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | 3K: CAT/rigctld | 4-channel rigctld, TCP CAT server | Planned |
 | 3L: HL2 ChannelMaster.dll port | HL2 IoBoardHl2 I2C-over-ep2 wire encoding, bandwidth monitor full port | Planned |
 | 3M: Recording | WAV record/playback, I/Q record, scheduled | Planned |
-| 3N: Packaging | AppImage, NSIS, DMG release builds | Planned |
+| **3N: Packaging** | **Consolidated `release.yml` (prepare → build×3 → sign-and-publish), `/release` skill, GPG-signed alpha builds: Linux AppImage ×2 archs, macOS Apple Silicon DMG, Windows portable ZIP + NSIS installer** | **Complete** |
 
 ---
 
