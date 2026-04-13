@@ -88,6 +88,12 @@ private:
     void addNewItem(const QString& typeTag);
     static MeterItem* createDefaultItem(const QString& typeTag);
     void loadPresetByName(const QString& name);
+    // Phase E — Thetis-parity "Add to Container" stacking flow.
+    // Called from onAddFromAvailable for PRESET_* list entries.
+    // Builds the named bar row preset and rescales its 0..1 items
+    // into the next stack slot so rows pile up vertically instead
+    // of overlapping.
+    void appendPresetRow(const QString& presetName);
 
     void populateItemList();
     void updatePreview();

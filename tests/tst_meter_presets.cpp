@@ -151,6 +151,82 @@ private slots:
         }
     }
 
+    // --- Phase E: 3-row stacked dump (ALC + EQ + Mic) ---
+    //
+    // Simulates what appendPresetRow() does in the dialog:
+    //   for each preset,
+    //     compute yPos = max bottom of existing items under the 0.7 threshold,
+    //     slotH = min(0.10, 0.95 - yPos),
+    //     clone each preset item with rect rescaled into [yPos, yPos+slotH].
+    // Renders the resulting 9-item list into /tmp/threeRowStack.png.
+    void three_rows_stack_into_a_single_container()
+    {
+        QList<MeterItem*> working;
+
+        auto appendPreset = [&working](ItemGroup* src) {
+            // max bottom of items with h <= 0.7 (skip backgrounds)
+            float yPos = 0.0f;
+            for (MeterItem* mi : working) {
+                if (mi->itemHeight() > 0.7f) { continue; }
+                const float b = mi->y() + mi->itemHeight();
+                if (b > yPos) { yPos = b; }
+            }
+            const float slotH = qMin(0.10f, 0.95f - yPos);
+            for (MeterItem* srcItem : src->items()) {
+                // Deep-clone via serialize round trip. The specific
+                // subclass we produce depends on the tag.
+                const QString blob = srcItem->serialize();
+                MeterItem* clone = nullptr;
+                if      (blob.startsWith(QLatin1String("BAR|")))    clone = new BarItem();
+                else if (blob.startsWith(QLatin1String("SCALE|")))  clone = new ScaleItem();
+                else if (blob.startsWith(QLatin1String("SOLID|")))  clone = new SolidColourItem();
+                else if (blob.startsWith(QLatin1String("TEXT|")))   clone = new TextItem();
+                if (!clone) { continue; }
+                clone->deserialize(blob);
+                clone->setRect(clone->x(),
+                               yPos + clone->y() * slotH,
+                               clone->itemWidth(),
+                               clone->itemHeight() * slotH);
+                working.append(clone);
+            }
+            delete src;
+        };
+
+        appendPreset(ItemGroup::createAlcPreset(nullptr));
+        appendPreset(ItemGroup::createEqBarPreset(nullptr));
+        appendPreset(ItemGroup::createMicPreset(nullptr));
+
+        QVERIFY(working.size() >= 9);  // 3 items per preset × 3
+
+        // Feed a realistic value to every bar so paint() has
+        // something to render.
+        for (MeterItem* mi : working) {
+            if (auto* bar = qobject_cast<BarItem*>(mi)) {
+                for (int i = 0; i < 10; ++i) { bar->setValue(-6.0); }
+            }
+        }
+
+        const int W = 480;
+        const int H = 320;  // tall enough to show 3 stacked rows
+        QImage img(W, H, QImage::Format_ARGB32);
+        img.fill(QColor(15, 15, 26));
+        {
+            QPainter p(&img);
+            p.setRenderHint(QPainter::Antialiasing, true);
+            p.setRenderHint(QPainter::TextAntialiasing, true);
+            QList<MeterItem*> ordered = working;
+            std::stable_sort(ordered.begin(), ordered.end(),
+                             [](MeterItem* a, MeterItem* b) {
+                return a->zOrder() < b->zOrder();
+            });
+            for (MeterItem* mi : ordered) {
+                mi->paint(p, W, H);
+            }
+        }
+        QVERIFY(img.save(QStringLiteral("/tmp/threeRowStack.png"), "PNG"));
+        qDeleteAll(working);
+    }
+
     // --- Phase E: ALC bar row PNG dump ---
     void ALC_bar_row_dump_to_png()
     {
