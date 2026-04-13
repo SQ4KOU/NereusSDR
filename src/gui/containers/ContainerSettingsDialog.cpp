@@ -1608,13 +1608,25 @@ void ContainerSettingsDialog::populateItemList()
     // Phase 3G-7: serializeItems() above strips MMIO bindings (block 5 kept
     // them in-memory only). Re-attach each binding from the live meter into
     // its corresponding working item by index.
+    // Phase 3G-9 post-revert: same story for the runtime-only stack
+    // metadata (m_stackSlot/m_slotLocalY/H/m_stackBandTop). Copy it
+    // from each live item into the matching clone so the dialog's
+    // working copies retain their stack tagging through the
+    // open/edit/Apply cycle.
     const QVector<MeterItem*> liveItems = meter->items();
     const int n = qMin(liveItems.size(), m_workingItems.size());
     for (int i = 0; i < n; ++i) {
-        if (liveItems[i] && liveItems[i]->hasMmioBinding()) {
+        if (!liveItems[i] || !m_workingItems[i]) { continue; }
+        if (liveItems[i]->hasMmioBinding()) {
             m_workingItems[i]->setMmioBinding(
                 liveItems[i]->mmioGuid(),
                 liveItems[i]->mmioVariable());
+        }
+        if (liveItems[i]->stackSlot() >= 0) {
+            m_workingItems[i]->setStackSlot(liveItems[i]->stackSlot());
+            m_workingItems[i]->setSlotLocalY(liveItems[i]->slotLocalY());
+            m_workingItems[i]->setSlotLocalH(liveItems[i]->slotLocalH());
+            m_workingItems[i]->setStackBandTop(liveItems[i]->stackBandTop());
         }
     }
 
@@ -1911,11 +1923,24 @@ void ContainerSettingsDialog::applyToContainer()
             if (item->hasMmioBinding()) {
                 clone->setMmioBinding(item->mmioGuid(), item->mmioVariable());
             }
+            // Phase 3G-9 post-revert: serialize() also drops the
+            // runtime-only stack metadata. Copy it explicitly so the
+            // cloned item on the target MeterWidget participates in
+            // reflowStackedItems() on the next resize (and right
+            // below, when we kick a reflow so the Apply preview
+            // reflects the pixel-minimum slot layout immediately).
+            if (item->stackSlot() >= 0) {
+                clone->setStackSlot(item->stackSlot());
+                clone->setSlotLocalY(item->slotLocalY());
+                clone->setSlotLocalH(item->slotLocalH());
+                clone->setStackBandTop(item->stackBandTop());
+            }
             target->addItem(clone);
             // Re-wire interactive item signals through the container
             m_container->wireInteractiveItem(clone);
         }
     }
+    target->reflowStackedItems();
     target->update();
 }
 
