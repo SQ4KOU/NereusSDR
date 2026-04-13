@@ -13,3 +13,4 @@ function(nereus_add_test name)
 endfunction()
 
 nereus_add_test(tst_hpsdr_enums)
+nereus_add_test(tst_board_capabilities)
