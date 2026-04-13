@@ -567,6 +567,54 @@ void ContainerSettingsDialog::appendPresetRow(const QString& presetName)
 
     if (!group) { return; }
 
+    // Phase E4 (revised) — if the working list already contains a
+    // full-height composite widget (ANAN MM, Cross Needle, Magic Eye,
+    // Dial, History Graph, or a standalone ImageItem / NeedleItem),
+    // the user wants to STACK the new bar row below the composite,
+    // not replace it or overlay it. Because composites normally
+    // occupy the entire 0..1 container, we first SHRINK every such
+    // item to live in the top 70% of the container, then append the
+    // bar row into the bottom 30% slot. This matches the Thetis
+    // Appearance dialog flow where adding a meter under a full-size
+    // needle panel compresses the needle panel to make room.
+    //
+    // Items with y+h already <= 0.7 are treated as already-room-
+    // making — no compression needed, just append under them.
+    auto isComposite = [](const MeterItem* mi) {
+        return qobject_cast<const NeedleItem*>(mi)
+            || qobject_cast<const MagicEyeItem*>(mi)
+            || qobject_cast<const DialItem*>(mi)
+            || qobject_cast<const HistoryGraphItem*>(mi)
+            || qobject_cast<const NeedleScalePwrItem*>(mi)
+            || qobject_cast<const ImageItem*>(mi);
+    };
+
+    float compositeBottom = 0.0f;
+    bool hasComposite = false;
+    for (const MeterItem* mi : m_workingItems) {
+        if (isComposite(mi)) {
+            hasComposite = true;
+            const float b = mi->y() + mi->itemHeight();
+            if (b > compositeBottom) { compositeBottom = b; }
+        }
+    }
+
+    if (hasComposite && compositeBottom > 0.70f) {
+        // Compress every composite item so its bottom sits at y=0.70.
+        // Scale both y and h by (0.70 / compositeBottom). Bar-row items
+        // in the list (SolidColour/BarItem/ScaleItem/TextItem) are
+        // left alone — they should already live in a reserved slot
+        // that was below the composite before compression.
+        const float scale = 0.70f / compositeBottom;
+        for (MeterItem* mi : m_workingItems) {
+            if (!isComposite(mi)) { continue; }
+            mi->setRect(mi->x(),
+                        mi->y() * scale,
+                        mi->itemWidth(),
+                        mi->itemHeight() * scale);
+        }
+    }
+
     // Compute the target stack slot. yPos is the current bottom of
     // the stack (ignoring full-container background items). slotH is
     // sized so ~10 rows fit — Thetis Default Multimeter containers
