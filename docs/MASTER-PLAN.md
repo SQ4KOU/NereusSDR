@@ -351,7 +351,7 @@ Scope:
 - NeedleItem (MeterItem system): composable arc needle for custom meter configurations
 - Default presets: Power/SWR, ALC bar, Mic/Comp bars (via MeterItem system)
 - Default Container #0 pre-loaded with: SMeterWidget (top), Power/SWR + ALC (bottom)
-- TX MeterBinding constants 100-105 (stubs until TxChannel in Phase 3I-1)
+- TX MeterBinding constants 100-105 (stubs until TxChannel in Phase 3M-1)
 - Data binding: SIGNAL_STRENGTH, AVG_SIGNAL_STRENGTH, ADC, AGC_GAIN, PWR, REVERSE_PWR, SWR, MIC, COMP, ALC
 
 Delivered:
@@ -461,7 +461,7 @@ Authorised Thetis divergence (plan §10, one-off): new per-band grid slots initi
 Known deferrals (tracked in PR description):
 - S7 Line Width on GPU (QRhi lacks portable setLineWidth; needs triangle strip rendering — deferred)
 - S16 FFT Decimation (UI scaffolded, no FFTEngine setter)
-- W12/W14 TX filter/zero-line overlays (gated on TX state model — post-3I-1)
+- W12/W14 TX filter/zero-line overlays (gated on TX state model — post-3M-1)
 - Data Line / Data Fill Color splitting (shares `m_fillColor` until UX feedback justifies splitting)
 - W10 Waterfall Low Color runtime effect (persisted; waits for Custom-scheme `AppSettings` parser)
 
@@ -469,7 +469,54 @@ Verification: 47-control matrix at `docs/architecture/phase3g8-verification/READ
 
 **Implementation plan:** `docs/architecture/phase3g8-rx1-display-parity-plan.md` (plan §13 resolutions in commit `0308b1b`, plan §5.3 correction in `b8045cc`).
 
-### Phase 3I-1: Basic SSB TX
+### Phase 3I: Radio Connector & Radio-Model Port ✅ COMPLETE
+**Goal:** Full Protocol 1 support across every ANAN/Hermes-family board (Hermes Lite 2, ANAN-10/10E/100/100B/100D/200D, Metis) with feature parity at the wire-format and Hardware-setup-UI level for all supported radios. A P1 radio should behave identically to how ANAN-G2 on P2 behaves today.
+
+**Shipped 2026-04-13** on `feature/phase3i-radio-connector-port` as PR #12 (base `main`). 25 GPG-signed commits across 6 logical sections.
+
+Scope delivered:
+- **Enums (Task 1):** `HPSDRModel` and `HPSDRHW` ported 1:1 from mi0bot/Thetis@Hermes-Lite `enums.cs:109` / `:388`. Integer values preserved exactly including the 7..9 reserved gap for wire-format compatibility.
+- **Capability registry (Task 2):** `BoardCapabilities` `constexpr` table — 10 entries (9 boards + `Unknown` fallback), pure data, 20+ invariant tests. Drives both protocol connections and the Hardware setup UI.
+- **Enum migration (Task 3):** legacy `BoardType` → `HPSDRHW` across the tree. One docs-era bug fix: `BoardType::Griffin=2` was a mistake; mi0bot `enums.cs:392` clarifies slot 2 is `HermesII` (ANAN-10E / 100B).
+- **Discovery (Task 4):** rewrote `RadioDiscovery` following mi0bot `clsRadioDiscovery.cs` — 6 tunable timing profiles (UltraFast → VeryTolerant), dual P1+P2 NIC walk with MAC-based de-dup.
+- **Discovery parsers (Task 5):** `parseP1Reply` / `parseP2Reply` as public statics with hex-fixture unit tests (`tst_radio_discovery_parse`).
+- **`P1RadioConnection` (Tasks 6-12):** skeleton + factory hookup (Task 6), ep2 frame/C&C bank compose (Task 7), ep6 frame parse + 24-bit sample scaler (Task 8), loopback integration test via `P1FakeRadio` (Task 9), 2 s watchdog + bounded reconnection state machine (Task 10), per-board quirks (atten clamp, firmware gate) + `RadioConnectionError` enum with 9 structured codes replacing string-only `errorOccurred` (Task 11), HL2 `IoBoardHl2` init + bandwidth-monitor sequence-gap heuristic (Task 12).
+- **P2 audit (Task 13):** `P2RadioConnection` reads `BoardCapabilities` instead of hard-coded Saturn assumptions; recognises `SaturnMKII`, `ANAN_G2_1K`, `AnvelinaPro3` via existing P2 wire path with zero wire-format rewrite.
+- **ConnectionPanel (Tasks 14-17):** expanded from 315-LOC skeleton into a full Thetis `ucRadioList.cs` port — 8 sortable columns, color-coded state, right-click context menu, saved-radio persistence keyed by MAC (`AppSettings::saveRadio/forgetRadio/savedRadios`), manual-add dialog ported from `frmAddCustomRadio.cs`, auto-reconnect on launch.
+- **HardwarePage (Tasks 18-21):** new top-level SetupDialog entry with 9 capability-gated nested tabs mirroring Thetis Setup.cs Hardware Config (Radio Info · Antenna/ALEX · OC Outputs · XVTR · PureSignal · Diversity · PA Calibration · HL2 I/O Board · Bandwidth Monitor). Per-MAC settings persistence under `hardware/<MAC>/*` in `AppSettings`, tested with radio-swap isolation.
+- **Docs + verification (Tasks 22-23):** CHANGELOG entry, `docs/architecture/radio-abstraction.md` drift fixes, per-board hardware smoke checklist at `docs/architecture/phase3i-verification.md`, smoke-test walkthrough at `docs/debugging/phase3i-smoke-test.md`.
+
+**Source-first wins during implementation** (subagents caught by reading Thetis directly):
+1. P2 boards go up to 1536 kHz, not 384 kHz (`Setup.cs:854`)
+2. Hermes/HermesII cap at 192 kHz (`Setup.cs:850-853`) — 384k is HL2-only among single-ADC P1
+3. P1 wire bytes ≠ `HPSDRHW` enum values (e.g., Angelia is wire byte 4, enum value 3) — handled via `mapP1DeviceType` in the parser
+4. `HermesII` has PureSignal (`console.cs:30276`)
+5. `IoBoardHl2.cs` is not portable byte data — it wraps closed `ChannelMaster.dll` I2C-over-ep2 framing, correctly stubbed pending Phase 3L
+
+**Test coverage:** 9 automated test executables, 9/9 pass in ~51 s (~49 s of that is the real-time bounded-retry contract test `tst_reconnect_on_silence`). Full suite:
+1. `tst_hpsdr_enums`
+2. `tst_board_capabilities`
+3. `tst_radio_discovery_parse` (hex fixtures under `tests/fixtures/discovery/`)
+4. `tst_p1_wire_format` (24 slots)
+5. `tst_p1_loopback_connection` (P1FakeRadio end-to-end)
+6. `tst_reconnect_on_silence`
+7. `tst_connection_panel_saved_radios`
+8. `tst_hardware_page_capability_gating`
+9. `tst_hardware_page_persistence`
+
+**Post-merge hotfixes** (applied during smoke testing before PR #12 was marked ready):
+- Removed the 5 s continuous NIC-walk timer from `RadioDiscovery` — `scanAllNics()` uses blocking `QUdpSocket::waitForReadyRead` on the main thread; on a laptop with 8-10 NICs the freeze was 15-20 s every 5 s. Discovery is now user-triggered only; full async rewrite is a follow-up.
+- Replaced `std::exit(0)` in `MainWindow::closeEvent` with `QCoreApplication::quit()` — the exit path was running C++ static destructors before Qt's thread-local cleanup, causing `QThreadStoragePrivate::finish` to fire a `qWarning` against destructed `QRegularExpression` objects in the PII-redaction message handler. ~100 crash reports in one afternoon of testing before the fix.
+- Added an `m_active` guard to `RxChannel::getMeter()` — `MeterPoller` was polling `GetRXAMeter` on a WDSP channel that hadn't been `SetChannelState`-activated yet, segfaulting on connect. The race was latent on Saturn too but only reliably exposed by the P1 connect ordering.
+- Wired `RadioModel::currentRadioChanged(RadioInfo)` signal and connected it in `HardwarePage` constructor so sub-tabs actually populate when a radio connects. Task 18 had left the wiring as a manual call; Task 21 added the slot but forgot to connect it at runtime.
+
+Deferred (see design §9 + verification doc): TX IQ producer (Phase 3M), PureSignal feedback DSP (Phase 3M), HL2 I2C-over-ep2 wire encoding (Phase 3L), full bandwidth-monitor port (Phase 3L), TCI protocol (Phase 3J), RedPitaya board, sidetone generator, firmware flasher, multi-radio simultaneous connection.
+
+**Design doc:** `docs/architecture/phase3i-radio-connector-port-design.md` (865 lines)
+**Plan doc:** `docs/architecture/phase3i-radio-connector-port-plan.md` (23 tasks, 2575 lines)
+**Smoke test:** `docs/debugging/phase3i-smoke-test.md`
+
+### Phase 3M-1: Basic SSB TX
 **Goal:** Get RF out the door — prove the TX I/Q output path works.
 
 Scope:
@@ -488,7 +535,7 @@ Thetis source: `console.cs:29311-29650`, `cmaster.cs:491-540`, `network.c:1250-1
 
 Verification: Key MOX, see RF output on ANAN-G2, hear SSB on another receiver.
 
-### Phase 3I-2: CW TX
+### Phase 3M-2: CW TX
 **Goal:** Full CW transmit with keyer and sidetone.
 
 Scope:
@@ -504,7 +551,7 @@ Thetis source: `sidetone.c`, `cwkeyer.cs`, `console.cs:29590`
 
 Verification: Send CW via paddle/keyboard, hear sidetone, clean CW on air.
 
-### Phase 3I-3: TX Processing Chain + RX DSP Additions
+### Phase 3M-3: TX Processing Chain + RX DSP Additions
 **Goal:** Full TX audio processing feature parity with Thetis TXA chain (18 stages).
 
 TX DSP (all need WDSP call wiring + UI controls):
@@ -527,7 +574,7 @@ Thetis source: `TXA.c:557-591`, `dsp.cs`, `radio.cs`, `setup.cs`
 
 Verification: Clean SSB with TX EQ + compression + ALC. Proper FM deviation. CESSB measurably improves average power.
 
-### Phase 3I-4: PureSignal PA Linearization
+### Phase 3M-4: PureSignal PA Linearization
 **Goal:** Client-side PA predistortion — full feature parity with Thetis PSForm.
 
 PureSignal is entirely client-side for OpenHPSDR radios (no AetherSDR reference — pure Thetis port).
@@ -562,7 +609,7 @@ Multi-receiver plumbing from Phase 3E is a prerequisite.
 
 **Critical note:** `UpdateDDCs()` port must include ALL state machine cases from Thetis
 `console.cs:8186-8538`, including PureSignal DDC states (DDC0+DDC1 sync at 192kHz, ADC
-cntrl1 override `(rx_adc_ctrl1 & 0xf3) | 0x08`). PureSignal (Phase 3I-4) is complete
+cntrl1 override `(rx_adc_ctrl1 & 0xf3) | 0x08`). PureSignal (Phase 3M-4) is complete
 by this point, so these states should be fully wired — not just stubbed.
 
 Files to modify/create:
@@ -653,7 +700,9 @@ CI workflows already in place. Finalize:
 
 ---
 
-## Recommended Next Step: Phase 3I-1 — Basic SSB TX
+## Recommended Next Step: Phase 3M-1 — Basic SSB TX (radio connector port complete)
+
+With Phase 3I merged, the entire ANAN/Hermes P1 family is supported end-to-end. The next highest-value phase is TX — taking a working RX-only setup and putting a signal on the air. See Phase 3M-1 below for scope.
 
 Phases 3A–3E, 3G-1 through 3G-8, and 3-UI are all complete. The radio connects,
 demodulates audio, renders live GPU spectrum + waterfall, supports full VFO tuning with
@@ -666,17 +715,17 @@ the QRhi/Metal GPU path.
 
 The next meaningful step is getting RF out the door:
 
-- **3I-1 (Basic SSB TX)** — TxChannel WDSP wrapper, mic input, MOX state machine, TX I/Q
-  output. Proves the TX path end-to-end and unblocks 3I-2..4, 3F, 3H.
+- **3M-1 (Basic SSB TX)** (formerly 3I-1; renumbered after Phase 3I became the radio connector port) — TxChannel WDSP wrapper, mic input, MOX state machine, TX I/Q
+  output. Proves the TX path end-to-end and unblocks 3M-2..4, 3F, 3H.
 
-Execution order: **3I-1..4 → 3F → 3H → 3J+**
+Execution order: **3M-1..4 → 3F → 3H → 3J+**
 
 ### Phase Dependencies
 
 ```
 3G-4 → 3G-5 → 3G-6    (meter system, sequential)
 
-3I-1 → 3I-2 → 3I-3 → 3I-4 → 3F → 3H    (TX then multi-RX)
+3M-1 → 3M-2 → 3M-3 → 3M-4 → 3F → 3H    (TX then multi-RX)
                                ↑
                        PureSignal must complete before 3F because
                        UpdateDDCs() state machine includes PS DDC

@@ -24,6 +24,21 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 
 ## Current Status
 
+**Phase 3I complete — Radio Connector & Radio-Model Port: full ANAN/Hermes P1 family now supported end-to-end.** Every OpenHPSDR Protocol 1 radio in the ANAN/Hermes family (Hermes Lite 2, ANAN-10/10E/100/100B/100D/200D, Metis) now discovers, connects, streams I/Q through the existing WDSP demod chain, and persists per-radio settings — identical behaviour to how ANAN-G2 on Protocol 2 works today. 25 GPG-signed commits in PR #12. Smoke-test checklist at [`docs/debugging/phase3i-smoke-test.md`](docs/debugging/phase3i-smoke-test.md). Design at [`docs/architecture/phase3i-radio-connector-port-design.md`](docs/architecture/phase3i-radio-connector-port-design.md), plan at [`docs/architecture/phase3i-radio-connector-port-plan.md`](docs/architecture/phase3i-radio-connector-port-plan.md).
+
+Phase 3I shipped:
+- `HPSDRModel` and `HPSDRHW` enums ported 1:1 from mi0bot/Thetis `enums.cs` (integer values preserved including the 7..9 reserved gap)
+- `BoardCapabilities` `constexpr` registry — pure data, one entry per `HPSDRHW`, 20+ test invariants
+- `P1RadioConnection` with full ep2 compose + ep6 parse, loopback integration test via `P1FakeRadio`, 2 s watchdog + bounded reconnection state machine
+- `P2RadioConnection` audited to read `BoardCapabilities`; recognises `SaturnMKII`, `ANAN_G2_1K`, `AnvelinaPro3`
+- `RadioDiscovery` rewritten with 6 tunable timing profiles (mi0bot `clsRadioDiscovery.cs` pattern)
+- `ConnectionPanel` expanded into a full Thetis `ucRadioList.cs` port — 8 sortable columns, saved-radio persistence keyed by MAC, manual-add dialog ported from `frmAddCustomRadio.cs`, auto-reconnect on launch
+- `HardwarePage` with 9 capability-gated nested tabs mirroring Thetis Setup.cs Hardware Config (Radio Info · Antenna/ALEX · OC Outputs · XVTR · PureSignal · Diversity · PA Calibration · HL2 I/O Board · Bandwidth Monitor), with per-MAC settings persistence
+- One docs-era bug fix: the legacy `BoardType::Griffin=2` slot was a mistake; mi0bot's `enums.cs:392` clarifies slot 2 is `HermesII` (ANAN-10E / 100B)
+- `RadioConnectionError` enum replaces string-only `errorOccurred` signal (9 structured codes)
+
+Deferred (see `docs/architecture/phase3i-verification.md` + design §9): TX IQ producer, PureSignal feedback DSP, HL2 `IoBoardHl2` I2C-over-ep2 wire encoding (Phase 3L — lives in closed `ChannelMaster.dll`), full bandwidth-monitor port, TCI, RedPitaya, sidetone generator, firmware flasher.
+
 **Phase 3G-8 complete — RX1 Display parity: Setup → Display pages fully wired to the renderer.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates audio through WDSP, renders a live GPU-accelerated spectrum + waterfall with VFO tuning (CTUN mode), has a full UI skeleton with 12 applets, 150+ control widgets, a complete meter system with 31 item types, and — as of 3G-8 — a fully wired Display setup category where every Spectrum Defaults / Waterfall Defaults / Grid & Scales control routes through to the renderer live on both the QPainter fallback path and the QRhi/Metal GPU path. Per-band grid state persists across all 14 bands (160m–6m + GEN + WWV + XVTR).
 
 **Phase 3G-6 (one-shot)** shipped 2026-04-12 as PR #2 — 40 GPG-signed commits across 7 execution blocks on `feature/phase3g6-oneshot`:
@@ -97,12 +112,12 @@ Items A and B both turned out dramatically smaller than the original handoff sco
 
 **Planned (see Roadmap):**
 - **Phase 3G-6 (one-shot):** Full Thetis-parity Container Settings Dialog — 3-column layout, per-item property editors for all ~30 item types, in-place editing with snapshot/revert, container-level Lock/Notes/Highlight/Minimises/Auto-height, container dropdown, Duplicate action, Containers menu submenu, Copy/Paste item settings, MMIO (Multi-Meter I/O) external-data subsystem with TCP/UDP/serial transports, variable registry, parse rules, and picker UI. See `docs/architecture/phase3g6a-plan.md`.
-- TX pipeline — SSB, CW, full processing chain, PureSignal (Phase 3I)
+- TX pipeline — SSB, CW, full processing chain, PureSignal (Phase 3M, future)
 - Up to 4 independent panadapters in configurable layouts (Phase 3F)
 - Thetis-inspired skin system (Phase 3H)
 - TCI protocol server, DX Cluster/RBN spots (Phase 3J)
 - CAT/rigctld for logging and contest software (Phase 3K)
-- OpenHPSDR Protocol 1 — Hermes Lite 2, older ANAN radios (Phase 3L)
+- HL2 `IoBoardHl2` I2C-over-ep2 wire encoding (Phase 3L — extraction from closed `ChannelMaster.dll`)
 
 ---
 
