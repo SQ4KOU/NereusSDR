@@ -556,6 +556,13 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
     switch (state) {
     case ConnectionState::Connected:
         qCDebug(lcConnection) << "Connected to" << m_name;
+        // Phase 3I Task 17 — record the most recently used radio so
+        // tryAutoReconnect() targets the right entry on next launch.
+        if (!m_lastRadioInfo.macAddress.isEmpty()) {
+            AppSettings& s = AppSettings::instance();
+            s.setLastConnected(m_lastRadioInfo.macAddress);
+            s.save();
+        }
         break;
     case ConnectionState::Disconnected:
         qCDebug(lcConnection) << "Disconnected from" << m_name;

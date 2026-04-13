@@ -135,8 +135,9 @@ MainWindow::MainWindow(QWidget* parent)
     // Start discovery in background so radios are found before the user opens the panel
     m_radioModel->discovery()->startDiscovery();
 
-    // Auto-reconnect to last radio if it appears
-    tryAutoReconnect();
+    // Auto-reconnect to last radio — deferred so the event loop is running
+    // before any signal/slot activity (e.g. discovery radioDiscovered).
+    QTimer::singleShot(0, this, &MainWindow::tryAutoReconnect);
 }
 
 MainWindow::~MainWindow() = default;
@@ -1756,22 +1757,95 @@ void MainWindow::onConnectionStateChanged()
     }
 }
 
+// Phase 3I Task 17 — auto-reconnect on launch.
+//
+// Logic:
+//   1. Read radios/lastConnected from AppSettings (set by ConnectionPanel
+//      whenever the user explicitly connects).
+//   2. Look up the SavedRadio entry; bail silently if missing or
+//      autoConnect == false.
+//   3a. pinToMac=true  → run a Fast-profile discovery, connect when the
+//      same MAC is seen.  A 3-second kill timer stops the attempt if no
+//      reply arrives — ConnectionPanel is unaffected.
+//   3b. pinToMac=false → direct connect using the saved IP (faster;
+//      if the IP drifted the user just opens ConnectionPanel and rescans).
+//
+// The m_autoReconnectInProgress flag gates the 3-second cleanup so it
+// does not call stopDiscovery() if the user has already launched a manual
+// scan via ConnectionPanel::onStartDiscoveryClicked.
 void MainWindow::tryAutoReconnect()
 {
-    QString lastMac = AppSettings::instance()
-        .value(QStringLiteral("LastConnectedRadioMac")).toString();
+    AppSettings& s = AppSettings::instance();
+    const QString lastMac = s.lastConnected();
     if (lastMac.isEmpty()) {
         return;
     }
 
-    // When a radio matching the last MAC is discovered, auto-connect
-    connect(m_radioModel->discovery(), &RadioDiscovery::radioDiscovered,
-            this, [this, lastMac](const RadioInfo& info) {
-        if (info.macAddress == lastMac && !m_radioModel->isConnected() && !info.inUse) {
-            qCDebug(lcConnection) << "Auto-reconnecting to" << info.displayName();
-            m_radioModel->connectToRadio(info);
+    const auto saved = s.savedRadio(lastMac);
+    if (!saved.has_value()) {
+        return;
+    }
+    if (!saved->autoConnect) {
+        return;
+    }
+
+    qCInfo(lcConnection) << "Auto-reconnect: attempting" << lastMac
+                         << "at" << saved->info.address.toString()
+                         << "(pinToMac=" << saved->pinToMac << ")";
+
+    if (saved->pinToMac) {
+        // Use Fast profile — ~480ms per NIC, shorter than the SafeDefault
+        // that the user's manual Start Discovery uses.
+        RadioDiscovery* disc = m_radioModel->discovery();
+        disc->setProfile(DiscoveryProfile::Fast);
+        m_autoReconnectInProgress = true;
+
+        // Listen for a radio that matches our saved MAC
+        QMetaObject::Connection* connPtr = new QMetaObject::Connection;
+        *connPtr = connect(disc, &RadioDiscovery::radioDiscovered,
+            this, [this, lastMac, connPtr](const RadioInfo& found) {
+            if (found.macAddress != lastMac) {
+                return;
+            }
+            if (m_radioModel->isConnected()) {
+                return; // User beat us to it
+            }
+            qCInfo(lcConnection) << "Auto-reconnect: MAC found —"
+                                 << found.displayName()
+                                 << found.address.toString();
+            QObject::disconnect(*connPtr);
+            delete connPtr;
+            m_autoReconnectInProgress = false;
+            m_radioModel->connectToRadio(found);
+        });
+
+        // Kick off the Fast-profile discovery
+        disc->startDiscovery();
+
+        // 3-second hard timeout — give up silently if MAC never appears
+        QTimer::singleShot(3000, this, [this, connPtr]() {
+            if (!m_autoReconnectInProgress) {
+                // Already connected (lambda cleaned up) — nothing to do
+                return;
+            }
+            qCInfo(lcConnection) << "Auto-reconnect: 3-second timeout — giving up silently";
+            // Disconnect the listener so it doesn't fire on later scans
+            QObject::disconnect(*connPtr);
+            delete connPtr;
+            m_autoReconnectInProgress = false;
+            // Stop the discovery pass we started; restore SafeDefault profile
+            // so the user's next manual scan uses the full timing.
+            m_radioModel->discovery()->stopDiscovery();
+            m_radioModel->discovery()->setProfile(DiscoveryProfile::SafeDefault);
+        });
+    } else {
+        // No MAC pinning — direct connect to saved IP address.
+        // Silent failure: if the radio doesn't respond, RadioConnection's
+        // internal state machine eventually times out without any popup.
+        if (!m_radioModel->isConnected()) {
+            m_radioModel->connectToRadio(saved->info);
         }
-    });
+    }
 }
 
 void MainWindow::closeEvent(QCloseEvent* event)
