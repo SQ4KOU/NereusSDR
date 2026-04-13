@@ -40,14 +40,22 @@ for the full handoff, polish gap list, and Thetis source line map.
   three defensive cases covering full-phase round trip, pre-A1
   legacy payload, and garbled calibration tolerance.
 
-- **Phase D1 — SMeter preset rebuild.** `createSMeterPreset`
-  rebuilt from `addSMeterBar:21499-21616`: dark grey backdrop +
-  Line-style BarItem with Thetis 3-point S-meter calibration +
-  ScaleItem with ShowType and GeneralScale two-tone. D1b rewrites
-  `BarItem::paint()` to render every A-phase field. D1c overrides
+- **Phase D1 — Thetis S-meter bar port (opt-in).** Initial commit
+  4bba2c2 rebuilt `createSMeterPreset` from `addSMeterBar:21499-21616`,
+  but that silently swapped the main Container #0 S-meter header
+  from an arc needle to a bar row. **Reverted**
+  (`revert(meters): restore needle S-Meter as default`):
+  `createSMeterPreset` is back to its pre-D1 single-NeedleItem
+  shape; the Thetis bar-row composition (SolidColour backdrop +
+  Line BarItem with 3-point calibration + GeneralScale ScaleItem)
+  moved to a new opt-in factory `createSMeterBarPreset` which is
+  not wired into any UI call site — add it to a new container
+  manually to run/verify. D1b rewrites `BarItem::paint()` to
+  render every A-phase field, D1c overrides
   `participatesIn(Layer::OverlayDynamic)` so `MeterWidget` routes
   BarItem through QPainter instead of the GPU `emitVertices()`
-  pipeline that bypassed all the new render paths.
+  pipeline that bypassed all the new render paths — both stay
+  (they're general BarItem improvements, not S-meter-specific).
 
 - **Phase E1–E4 — per-reading factories + append UX.** 16 wrapper
   factories rewritten via shared `buildBarRow()` helper. Thetis-
@@ -55,24 +63,118 @@ for the full handoff, polish gap list, and Thetis source line map.
   red peak-hold marker, red peak text, red ShowType title). New
   "RX Meters (Thetis)" / "TX Meters (Thetis)" sections in the
   Available list with `PRESET_*` tags routed to a new
-  `appendPresetRow()` that rescales items into the next 10% stack
-  slot. `loadPresetByName` re-routes bar-row names to append mode
-  while composite presets (ANAN MM, Cross Needle, etc.) still
-  replace. Phase E4 handles "add bar row to container with
-  composite" by compressing the composite to the top 70% and
-  stacking the new row in the bottom 30% slot.
+  `appendPresetRow()` that tags bar rows with a stack slot index
+  and within-slot 0..1 local rect snapshot. `loadPresetByName`
+  re-routes bar-row names to append mode while composite presets
+  (ANAN MM, Cross Needle, etc.) still replace on load.
 
 Every preset rewrite cites its `MeterManager.cs` line range in
 both the commit body and the in-source factory comment per the
 CLAUDE.md SOURCE-FIRST PORTING PROTOCOL. Full audit and line map
 in [`docs/architecture/meter-parity-audit.md`](docs/architecture/meter-parity-audit.md).
 
+**Pre-PR fixes** (8 commits landed at branch tip, all GPG-signed):
+
+1. **`fix(meters): clamp GeneralScale tick row on short ScaleItems`**
+   — closes polish gap #1. When `ShowType=true` and row height
+   < 40 px, scale tick fractions by 0.5 so the red title text
+   and the tick row stop colliding.
+
+2. **`fix(meters): persist BarItem peakFontColour across serialize (E2)`**
+   — closes polish gap #2. Append field 31 to the BAR format
+   (empty slot = fall back to m_fontColour). New
+   `tst_meter_item_bar::peakFontColour_roundtrip_preserves_explicit_override`.
+
+3. **`fix(meters): render "--" for idle ShowPeakValue slot`**
+   — closes polish gap #3. Non-finite peak values render a
+   literal `"--"` placeholder instead of blank text so parked
+   bindings still show a readout slot.
+
+4. **`revert(meters): restore needle S-Meter as default; preserve bar opt-in`**
+   — reverts commit 4bba2c2. Container #0's fixed S-Meter header
+   and the `"S-Meter Only"` Presets menu entry return to the
+   AetherSDR arc needle. Thetis `addSMeterBar` composition
+   preserved in new opt-in factory `createSMeterBarPreset`
+   (not wired to any UI call site). Six tests in
+   `tst_meter_presets` retargeted at the new factory; a new
+   `SMeter_preset_is_a_needle_by_default` guards the revert.
+
+5. **`fix(mainwindow): Reset Default Layout also rebuilds panel meter`**
+   — pre-existing bug surfaced during verification:
+   `resetDefaultLayout()` destroyed non-panel floating containers
+   but left Container #0's MeterWidget untouched, so a corrupt
+   or unwanted panel meter state couldn't be cleared without
+   hand-editing `~/.config/NereusSDR/NereusSDR.settings`. Fix
+   clears and repopulates the panel meter's S-Meter / Power/SWR
+   / ALC defaults alongside the floating-container teardown.
+
+6. **`fix(main): stop quit-time crash in messageHandler redactPii`**
+   — every app quit crashed with `EXC_BAD_ACCESS` in
+   `QRegularExpression::pattern()`. Classic static-destruction-
+   order fiasco: Qt's `QThreadDataDestroyer` emits warnings via
+   `QMessageLogger` from `__cxa_finalize` after the function-
+   local static regex objects in `redactPii()` had already been
+   destroyed. Fix leaks the regex pointers intentionally so they
+   survive teardown, plus `qInstallMessageHandler(nullptr)` right
+   after `app.exec()` returns as belt-and-braces.
+
+7. **`fix(dialog): preserve stack metadata through Apply + snapshot clones`**
+   — serialize/deserialize drops runtime-only stack metadata, so
+   the dialog's Apply path was landing cloned items on the target
+   `MeterWidget` with `m_stackSlot == -1`, which caused
+   `reflowStackedItems()` to no-op on them. Fix copies
+   `m_stackSlot` / `m_slotLocalY/H` across the clone alongside
+   the existing MMIO-binding copy, and kicks a reflow at the
+   end of `applyToContainer()`. Same fix applied on the
+   dialog-open `populateItemList` side.
+
+8. **`feat(meters): Thetis-parity normalized stack + ANAN MM 0.441 band`**
+   — the big one. Rewrites the Container Settings dialog's
+   append-to-stack layout to match Thetis Default Multimeter
+   exactly:
+   * Composite presets are authored at their Thetis-nominal
+     normalized size directly by the factory. ANAN MM occupies
+     `(0, 0, 1, 0.441)` per Thetis
+     `MeterManager.cs:22472 ni.Size = new SizeF(1f, 0.441f)`.
+     No compress-to-fraction step runs anywhere.
+   * Bar rows use Thetis `_fHeight = 0.05f` (normalized) from
+     `MeterManager.cs:21266`, with a NereusSDR-only **24 px
+     pixel floor** so rows stay readable in tight containers.
+   * `MeterWidget::reflowStackedItems()` computes `slotHpx =
+     max(0.05 * widgetH, 24)` and `bandTop = max(y + itemHeight)`
+     over items with `itemHeight > 0.30` on every resize.
+     Re-lays every stacked item from those values — no
+     per-item bandTop field.
+   * `ContainerSettingsDialog::appendPresetRow` loses its
+     compress-to-0.70 block entirely. Composites stay at their
+     factory size; bar rows just get a stack slot index and
+     a within-slot 0..1 local rect snapshot; reflow does the
+     rest.
+   * `MeterItem::layoutInStackSlot` signature grows a `bandTop`
+     parameter; `m_stackBandTop` field removed.
+   * `MeterWidget::inferStackFromGeometry()` runs after
+     `deserializeItems()` (MainWindow panel restore) so saved
+     containers keep their reflow-on-resize behaviour without
+     a persistence format bump.
+   * Result: ANAN MM no longer stretches to 70% of container
+     height; bar rows stack at Thetis-correct spacing with a
+     minimum pixel floor; resizing taller reveals more rows;
+     shorter clips rows off the bottom.
+
 **Known polish gaps** (queued, not blockers):
-1. Title overlaps tick row at row heights ≤ 32 px
-2. `m_peakFontColour` serialize tail slot not wired
-3. `ShowPeakValue` skips non-finite values (blank text for
-   no-data bindings)
-4. `appendPresetRow` 70/30 composite/row split is hardcoded
+1. Scale tick labels can duplicate at narrow widths
+2. `m_peakHoldDecayRatio = 0.02f` may feel slow — consider `0.05f`
+3. UI automation flakiness in QListWidget (affects regression
+   test automation, not users)
+4. Manual `AutoHeight` container mode (Thetis
+   `ucMeter.cs:903`) — Thetis auto-grows the container when
+   content would overflow; NereusSDR currently relies on the
+   user to resize the container taller manually
+
+~~Polish gap #4~~ (70/30 composite/row split) — **obsolete**,
+the entire compress block was removed in commit #8 above.
+~~Polish gap #5~~ (`nextStackYPos h > 0.7` edge case) — **obsolete**
+for the same reason.
 
 **Full test suite** 6/6 green on the merged tree (tst_smoke,
 tst_container_persistence, tst_meter_item_bar,

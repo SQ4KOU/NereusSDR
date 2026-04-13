@@ -2,10 +2,104 @@
 
 **Branch:** `test/meters-on-main`
 **Base:** `origin/main` (`b9c4879` — Phase 3N release pipeline merged)
-**Commits ahead of main:** 44 (20 meter-parity + 5 from feature/phase3g7-polish + 19 PR #9 prep)
+**Commits ahead of main:** 56 (44 from original handoff + 8 pre-PR
+commits listed below, landed during live verification)
 **Working tree:** clean
 **Test suite:** 6/6 green (50+ assertions)
 **Status:** Ready for PR — **not yet pushed, not yet PR'd**
+
+## Pre-PR fixes (8 commits, landed during live verification)
+
+Live smoke-testing the branch surfaced the three handoff polish
+gaps plus four additional issues — two pre-existing bugs (reset
+behaviour, quit-time crash) and two that only emerge when you
+actually try to use stacked bar rows at different container
+sizes. All eight are closed in GPG-signed commits at the branch
+tip before push.
+
+1. **`1b698a9 fix(meters): clamp GeneralScale tick row on short ScaleItems`**
+   — closes handoff polish gap #1 (title vs tick overlap < 40 px).
+
+2. **`59e306a fix(meters): persist BarItem peakFontColour across serialize (E2)`**
+   — closes handoff polish gap #2. BAR format field 31 +
+   round-trip test.
+
+3. **`6d7a79b fix(meters): render "--" for idle ShowPeakValue slot`**
+   — closes handoff polish gap #3.
+
+4. **`48174d5 revert(meters): restore needle S-Meter as default; preserve bar opt-in`**
+   — reverts commit 4bba2c2. `createSMeterPreset` returns to its
+   pre-D1 single-NeedleItem shape so Container #0's fixed S-Meter
+   header stays an arc needle. Thetis `addSMeterBar` bar
+   composition preserved in new opt-in factory
+   `createSMeterBarPreset`, not wired to any UI call site.
+   Six tests retargeted at the new factory; a new
+   `SMeter_preset_is_a_needle_by_default` guards the revert.
+
+5. **`5852d87 fix(mainwindow): Reset Default Layout also rebuilds panel meter`**
+   — pre-existing bug surfaced while trying to clear the stale
+   bar S-Meter state left over from commit 4bba2c2. Reset used
+   to skip the panel container entirely; now clears the panel
+   MeterWidget and rebuilds the default S-Meter / Power/SWR /
+   ALC groups alongside the floating-container teardown.
+
+6. **`a8f72d9 fix(main): stop quit-time crash in messageHandler redactPii`**
+   — pre-existing bug, every quit crashed with
+   `EXC_BAD_ACCESS` in `QRegularExpression::pattern()`. Classic
+   static-destruction-order fiasco: Qt's `QThreadDataDestroyer`
+   emits warnings via `QMessageLogger` from `__cxa_finalize`
+   after the function-local static regex objects in
+   `redactPii()` had already been destroyed. Fix leaks the
+   regex pointers intentionally so they survive teardown, plus
+   `qInstallMessageHandler(nullptr)` right after `app.exec()`
+   returns as belt-and-braces.
+
+7. **`4ad29d3 fix(dialog): preserve stack metadata through Apply + snapshot clones`**
+   — serialize / deserialize drops runtime-only stack metadata,
+   so the dialog's Apply path was landing cloned items on the
+   target MeterWidget with `m_stackSlot == -1`, which caused
+   `reflowStackedItems()` to no-op on them. Fix copies
+   `m_stackSlot` / `m_slotLocalY/H` across the clone alongside
+   the existing MMIO-binding copy, and kicks a reflow at the
+   end of `applyToContainer()`. Same fix applied on the
+   dialog-open `populateItemList` side.
+
+8. **`aececaa feat(meters): Thetis-parity normalized stack + ANAN MM 0.441 band`**
+   — the big one. Replaces the Phase 3G-9 "compress composite
+   to top 70%" layout with a faithful port of Thetis's
+   Default Multimeter coordinate system:
+   * Composite presets authored at Thetis-nominal normalized
+     size directly by the factory. ANAN MM uses
+     `(0, 0, 1, 0.441)` per
+     `MeterManager.cs:22472 ni.Size = new SizeF(1f, 0.441f)`.
+     No compress-to-fraction step runs anywhere.
+   * Bar rows use Thetis `_fHeight = 0.05f` (normalized) from
+     `MeterManager.cs:21266`, with a NereusSDR-only **24 px
+     pixel floor** so rows stay readable in tight containers.
+   * `MeterWidget::reflowStackedItems()` computes
+     `slotHpx = max(0.05 * widgetH, 24)` and
+     `bandTop = max(y + itemHeight)` over items with
+     `itemHeight > 0.30` on every resize. Re-lays every
+     stacked item from those two values.
+   * `ContainerSettingsDialog::appendPresetRow` loses its
+     compress-to-0.70 block entirely.
+   * `MeterItem::layoutInStackSlot` signature grows a
+     `bandTop` parameter; `m_stackBandTop` field removed.
+   * `inferStackFromGeometry()` runs after
+     `deserializeItems()` (MainWindow panel restore) so saved
+     containers keep their reflow-on-resize behaviour without
+     a persistence format bump.
+
+**Handoff polish gaps #4 and #5** (`appendPresetRow` 70/30 split
+hardcoded and `nextStackYPos` `h > 0.7` edge case) are **obsolete**
+— the entire compress-and-stack logic they described was removed
+in commit 8 above.
+
+**Remaining polish gaps** (queued, not blockers):
+- Scale tick labels duplicate at narrow widths
+- `m_peakHoldDecayRatio = 0.02f` feels slow — consider `0.05f`
+- QListWidget AX automation limitation
+- `AutoHeight` container mode (Thetis `ucMeter.cs:903`)
 
 ---
 
