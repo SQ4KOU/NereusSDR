@@ -334,11 +334,17 @@ void RadioDiscovery::scanAllNics()
             continue;
         }
 
-        // Enable SO_BROADCAST
-        int fd = sock.socketDescriptor();
+        // Enable SO_BROADCAST. Windows setsockopt takes optval as
+        // `const char*`; POSIX takes `const void*`. Casting to `const char*`
+        // is valid on both (main's fix b3c2961 for the legacy startDiscovery
+        // path — Phase 3I's scanAllNics added a second call site that needs
+        // the same treatment for Windows CI to build).
+        const auto fd = sock.socketDescriptor();
         if (fd >= 0) {
             int broadcastEnable = 1;
-            ::setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable));
+            ::setsockopt(static_cast<int>(fd), SOL_SOCKET, SO_BROADCAST,
+                         reinterpret_cast<const char*>(&broadcastEnable),
+                         sizeof(broadcastEnable));
         }
 
         qCDebug(lcDiscovery) << "Scanning NIC" << iface.name()
