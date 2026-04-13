@@ -48,6 +48,21 @@ public:
     QString serializeItems() const;
     bool deserializeItems(const QString& data);
 
+    // Thetis-parity stack layout with a NereusSDR pixel floor
+    // (Phase 3G-9 post-revert).
+    //
+    // reflowStackedItems() is called on every resize. It computes a
+    // per-reflow slot height (0.05 * widgetH normalized, floored at
+    // 24 px) and a bandTop (max of y+h over composite items with
+    // itemHeight > 0.30), then re-lays every stacked item.
+    //
+    // inferStackFromGeometry() rebuilds m_stackSlot + m_slotLocalY/H
+    // after a deserialize from the saved geometry so existing
+    // containers keep participating in reflow-on-resize without a
+    // persistence format bump.
+    void reflowStackedItems();
+    void inferStackFromGeometry();
+
 protected:
 #ifdef NEREUS_GPU_SPECTRUM
     void initialize(QRhiCommandBuffer* cb) override;

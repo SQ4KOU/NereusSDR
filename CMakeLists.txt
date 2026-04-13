@@ -416,7 +416,7 @@ if(NEREUS_GPU_SPECTRUM)
     target_compile_definitions(NereusSDRObjs PUBLIC NEREUS_GPU_SPECTRUM)
 
     if(Qt6ShaderTools_FOUND)
-        qt_add_shaders(NereusSDR "nereus_shaders"
+        qt_add_shaders(NereusSDRObjs "nereus_shaders"
             PREFIX "/shaders"
             FILES
                 resources/shaders/waterfall.vert
@@ -427,7 +427,7 @@ if(NEREUS_GPU_SPECTRUM)
                 resources/shaders/overlay.frag
         )
 
-        qt_add_shaders(NereusSDR "nereus_meter_shaders"
+        qt_add_shaders(NereusSDRObjs "nereus_meter_shaders"
             PREFIX "/shaders"
             FILES
                 resources/shaders/meter_textured.vert

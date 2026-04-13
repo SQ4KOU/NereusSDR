@@ -7,12 +7,22 @@
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
 function(nereus_add_test name)
-    # Additional source files may be passed as extra arguments (ARGN).
+    # Additional source files may be passed as extra arguments (ARGN) —
+    # needed by Phase 3I tests that link test-only fakes like P1FakeRadio.
     add_executable(${name} ${name}.cpp ${ARGN})
     target_link_libraries(${name} PRIVATE NereusSDRObjs Qt6::Test)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
+# ── Pre-existing tests from main (smoke + 3G-9 meter suite) ────────────────
+nereus_add_test(tst_smoke)
+nereus_add_test(tst_container_persistence)
+nereus_add_test(tst_meter_item_bar)
+nereus_add_test(tst_reading_name)
+nereus_add_test(tst_meter_item_scale)
+nereus_add_test(tst_meter_presets)
+
+# ── Phase 3I radio-connector tests ────────────────────────────────────────
 nereus_add_test(tst_hpsdr_enums)
 nereus_add_test(tst_board_capabilities)
 
