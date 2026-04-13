@@ -473,18 +473,73 @@ void ItemGroup::installInto(MeterWidget* widget, float gx, float gy, float gw, f
 // From AetherSDR SMeterWidget — single NeedleItem handles all rendering.
 // ---------------------------------------------------------------------------
 
+// From Thetis MeterManager.cs:21523-21616  addSMeterBar
+// Canonical Thetis S-meter composition: dark gray background +
+// Line-style BarItem with 3-point non-linear calibration (S0 edge
+// to S9+60) + ScaleItem showing the reading title and a two-tone
+// GeneralScale. Accepts SignalPeak / SignalAvg / SignalMaxBin
+// bindings — same composition, different data source.
 ItemGroup* ItemGroup::createSMeterPreset(int bindingId, const QString& name,
                                           QObject* parent)
 {
     ItemGroup* group = new ItemGroup(name, parent);
 
-    NeedleItem* needle = new NeedleItem();
-    needle->setRect(0.0f, 0.0f, 1.0f, 1.0f);
-    needle->setBindingId(bindingId);
-    needle->setSourceLabel(name);
-    needle->setZOrder(5);
-    group->addItem(needle);
+    // Dark gray backdrop (Thetis Color.FromArgb(32,32,32), MeterManager.cs:21571)
+    // Fills the whole preset rect so title + bar + ticks all sit on it.
+    SolidColourItem* bg = new SolidColourItem();
+    bg->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+    bg->setColour(QColor(32, 32, 32));
+    bg->setZOrder(1);
+    group->addItem(bg);
 
+    // Line-style bar with Thetis calibration curve
+    // (MeterManager.cs:21529-21555). The bar occupies the bottom ~55%
+    // of the preset rect, leaving ~45% at the top for the ScaleItem
+    // title strip.
+    BarItem* bar = new BarItem();
+    bar->setRect(0.02f, 0.45f, 0.96f, 0.50f);
+    bar->setOrientation(BarItem::Orientation::Horizontal);
+    bar->setBindingId(bindingId);
+    bar->setRange(-140.0, 0.0);  // dBm range for value labels
+    bar->setBarStyle(BarItem::BarStyle::Line);
+    bar->setAttackRatio(0.8f);
+    bar->setDecayRatio(0.2f);
+    bar->setHistoryDurationMs(4000);
+    bar->setShowHistory(true);
+    bar->setHistoryColour(QColor(255, 0, 0, 128));   // Red(128)
+    bar->setShowValue(true);
+    bar->setShowMarker(true);
+    bar->setPeakHoldMarkerColour(QColor(Qt::red));
+    bar->setFontColour(QColor(Qt::yellow));
+    bar->setBarColor(QColor(0x5f, 0x9e, 0xa0));      // CadetBlue
+    // Thetis addSMeterBar non-linear calibration
+    // (MeterManager.cs:21547-21549). -133 places S0 at the left edge
+    // (S0 is actually -127 dBm but Thetis uses -133 for the bar
+    // origin), -73 is S9 at mid-scale, -13 is S9+60 at 99% width.
+    bar->addScaleCalibration(-133.0, 0.0f);
+    bar->addScaleCalibration( -73.0, 0.5f);
+    bar->addScaleCalibration( -13.0, 0.99f);
+    bar->setZOrder(2);
+    group->addItem(bar);
+
+    // Scale with centered title and Thetis-style two-tone GeneralScale
+    // baseline (MeterManager.cs:21557-21564 + dispatch at 31911-31916:
+    //   generalScale(x,y,w,h, scale, 6, 3, -1, 60, 2, 20, ..., 0.5f, true, true)
+    // lowLongTicks=6, highLongTicks=3, lowStart=-1, highEnd=60,
+    // lowInc=2, highInc=20, centrePerc=0.5. The +/- trailing-plus
+    // flags are cosmetic label decorations we don't port yet.
+    ScaleItem* scale = new ScaleItem();
+    scale->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+    scale->setBindingId(bindingId);
+    scale->setRange(-140.0, 0.0);
+    scale->setShowType(true);
+    scale->setTitleColour(QColor(Qt::red));
+    scale->setScaleStyle(ScaleItem::ScaleStyle::GeneralScale);
+    scale->setGeneralScaleParams(6, 3, -1, 60, 2, 20, 0.5f);
+    scale->setZOrder(3);
+    group->addItem(scale);
+
+    Q_UNUSED(name);  // Thetis uses MeterType instead of a free label
     return group;
 }
 
