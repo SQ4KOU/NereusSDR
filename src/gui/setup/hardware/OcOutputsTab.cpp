@@ -187,4 +187,59 @@ void OcOutputsTab::onTxMaskChanged(QTableWidgetItem* item)
         checked);
 }
 
+// ── restoreSettings ───────────────────────────────────────────────────────────
+
+void OcOutputsTab::restoreSettings(const QMap<QString, QVariant>& settings)
+{
+    // Restore relay settle delay
+    auto it = settings.constFind(QStringLiteral("settleDelayMs"));
+    if (it != settings.constEnd()) {
+        QSignalBlocker blocker(m_settleDelaySpin);
+        m_settleDelaySpin->setValue(it.value().toInt());
+    }
+
+    // Restore RX mask checkboxes: keys like "rxMask[<bandKeyName>][<col1-based>]"
+    {
+        QSignalBlocker blocker(m_rxGrid);
+        for (auto mit = settings.constBegin(); mit != settings.constEnd(); ++mit) {
+            if (!mit.key().startsWith(QStringLiteral("rxMask["))) { continue; }
+            // Parse key "rxMask[<band>][<colNum>]"
+            QString rest = mit.key().mid(7); // strip "rxMask["
+            int closeB = rest.indexOf(QLatin1Char(']'));
+            if (closeB < 0) { continue; }
+            const QString bandName = rest.left(closeB);
+            rest = rest.mid(closeB + 2); // skip "]["
+            const int colNum = rest.left(rest.indexOf(QLatin1Char(']'))).toInt();
+            for (int row = 0; row < m_rxGrid->rowCount(); ++row) {
+                if (bandKeyName(static_cast<Band>(row)) != bandName) { continue; }
+                if (auto* item = m_rxGrid->item(row, colNum - 1)) {
+                    item->setCheckState(mit.value().toBool() ? Qt::Checked : Qt::Unchecked);
+                }
+                break;
+            }
+        }
+    }
+
+    // Restore TX mask checkboxes: keys like "txMask[<bandKeyName>][<col1-based>]"
+    {
+        QSignalBlocker blocker(m_txGrid);
+        for (auto mit = settings.constBegin(); mit != settings.constEnd(); ++mit) {
+            if (!mit.key().startsWith(QStringLiteral("txMask["))) { continue; }
+            QString rest = mit.key().mid(7);
+            int closeB = rest.indexOf(QLatin1Char(']'));
+            if (closeB < 0) { continue; }
+            const QString bandName = rest.left(closeB);
+            rest = rest.mid(closeB + 2);
+            const int colNum = rest.left(rest.indexOf(QLatin1Char(']'))).toInt();
+            for (int row = 0; row < m_txGrid->rowCount(); ++row) {
+                if (bandKeyName(static_cast<Band>(row)) != bandName) { continue; }
+                if (auto* item = m_txGrid->item(row, colNum - 1)) {
+                    item->setCheckState(mit.value().toBool() ? Qt::Checked : Qt::Unchecked);
+                }
+                break;
+            }
+        }
+    }
+}
+
 } // namespace NereusSDR

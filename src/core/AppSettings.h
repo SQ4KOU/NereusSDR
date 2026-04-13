@@ -122,6 +122,25 @@ public:
     DiscoveryProfile discoveryProfile() const;
     void             setDiscoveryProfile(DiscoveryProfile p);
 
+    // -------------------------------------------------------------------------
+    // Hardware tab persistence (Phase 3I Task 21).
+    // Keys stored under hardware/<mac>/<tabKey>/<field>.
+    // The MAC address and internal slashes/colons are encoded via the same
+    // __c__ / __s__ scheme used for radios/* keys.
+    //
+    // Example:
+    //   setHardwareValue("aa:bb:cc:11:22:33", "radioInfo/sampleRate", 192000)
+    //   → stored as flat key "hardware/aa:bb:cc:11:22:33/radioInfo/sampleRate"
+    // -------------------------------------------------------------------------
+    void    setHardwareValue(const QString& mac, const QString& key, const QVariant& value);
+    QVariant hardwareValue(const QString& mac, const QString& key,
+                           const QVariant& defaultValue = QVariant()) const;
+    // Returns all key/value pairs stored under hardware/<mac>/, with the
+    // "hardware/<mac>/" prefix stripped so callers see bare keys like
+    // "radioInfo/sampleRate".
+    QMap<QString, QVariant> hardwareValues(const QString& mac) const;
+    void    clearHardwareValues(const QString& mac);
+
 private:
     // Private default constructor — used only by instance().
     AppSettings();

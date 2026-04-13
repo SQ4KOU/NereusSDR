@@ -100,4 +100,21 @@ void BandwidthMonitorTab::updateLiveStats(int currentMbps, int throttleEventCoun
         tr("%1 events").arg(throttleEventCount));
 }
 
+// ── restoreSettings ───────────────────────────────────────────────────────────
+
+void BandwidthMonitorTab::restoreSettings(const QMap<QString, QVariant>& settings)
+{
+    auto it = settings.constFind(QStringLiteral("throttleThresholdMbps"));
+    if (it != settings.constEnd()) {
+        QSignalBlocker blocker(m_throttleThresholdSpin);
+        m_throttleThresholdSpin->setValue(it.value().toInt());
+    }
+
+    it = settings.constFind(QStringLiteral("autoPauseEp2"));
+    if (it != settings.constEnd()) {
+        QSignalBlocker blocker(m_autoPauseCheck);
+        m_autoPauseCheck->setChecked(it.value().toBool());
+    }
+}
+
 } // namespace NereusSDR

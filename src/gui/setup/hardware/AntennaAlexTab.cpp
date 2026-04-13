@@ -227,4 +227,51 @@ void AntennaAlexTab::onTxAntTableChanged(QTableWidgetItem* changed)
         col + 1 /* 1-based ANT number */);
 }
 
+// ── restoreSettings ───────────────────────────────────────────────────────────
+
+void AntennaAlexTab::restoreSettings(const QMap<QString, QVariant>& settings)
+{
+    // Restore simple boolean checkboxes. Block signals to avoid re-emitting
+    // settingChanged during restore.
+    struct CheckEntry { const char* key; QCheckBox* widget; };
+    const CheckEntry entries[] = {
+        { "rxOutOnTx",    m_rxOutOnTx    },
+        { "ext1OutOnTx",  m_ext1OutOnTx  },
+        { "ext2OutOnTx",  m_ext2OutOnTx  },
+        { "hfTrRelay",    m_hfTrRelay    },
+        { "bpf2Gnd",      m_bpf2Gnd      },
+        { "enableXvtrHf", m_enableXvtrHf },
+    };
+    for (const auto& e : entries) {
+        auto it = settings.constFind(QString::fromLatin1(e.key));
+        if (it != settings.constEnd()) {
+            QSignalBlocker blocker(e.widget);
+            e.widget->setChecked(it.value().toBool());
+        }
+    }
+
+    // Restore per-band RX antenna selections
+    {
+        QSignalBlocker blocker(m_rxAntTable);
+        for (auto it = settings.constBegin(); it != settings.constEnd(); ++it) {
+            if (!it.key().startsWith(QStringLiteral("rxAnt["))) { continue; }
+            // key format: "rxAnt[<bandKeyName>]"  value = 1-based ANT number
+            const QString inner = it.key().mid(6, it.key().size() - 7); // strip "rxAnt[" and "]"
+            for (int row = 0; row < m_rxAntTable->rowCount(); ++row) {
+                Band band = static_cast<Band>(row);
+                if (bandKeyName(band) != inner) { continue; }
+                const int antNum = it.value().toInt(); // 1-based
+                m_updating = true;
+                for (int col = 0; col < m_rxAntTable->columnCount(); ++col) {
+                    if (auto* item = m_rxAntTable->item(row, col)) {
+                        item->setCheckState((col + 1 == antNum) ? Qt::Checked : Qt::Unchecked);
+                    }
+                }
+                m_updating = false;
+                break;
+            }
+        }
+    }
+}
+
 } // namespace NereusSDR

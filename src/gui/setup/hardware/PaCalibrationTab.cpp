@@ -194,4 +194,51 @@ void PaCalibrationTab::populate(const RadioInfo& /*info*/, const BoardCapabiliti
     }
 }
 
+// ── restoreSettings ───────────────────────────────────────────────────────────
+
+void PaCalibrationTab::restoreSettings(const QMap<QString, QVariant>& settings)
+{
+    // Restore PA profile combo
+    auto it = settings.constFind(QStringLiteral("profile"));
+    if (it != settings.constEnd()) {
+        const int idx = it.value().toInt();
+        QSignalBlocker blocker(m_paProfileCombo);
+        if (idx >= 0 && idx < m_paProfileCombo->count()) {
+            m_paProfileCombo->setCurrentIndex(idx);
+        }
+    }
+
+    // Restore per-band target power: keys like "targetPower[<bandKeyName>]"
+    {
+        QSignalBlocker blocker(m_targetPowerTable);
+        for (auto mit = settings.constBegin(); mit != settings.constEnd(); ++mit) {
+            if (!mit.key().startsWith(QStringLiteral("targetPower["))) { continue; }
+            const QString bandName = mit.key().mid(12, mit.key().size() - 13);
+            for (int row = 0; row < m_targetPowerTable->rowCount(); ++row) {
+                if (bandKeyName(static_cast<Band>(row)) != bandName) { continue; }
+                if (auto* item = m_targetPowerTable->item(row, 0)) {
+                    item->setText(mit.value().toString());
+                }
+                break;
+            }
+        }
+    }
+
+    // Restore per-band gain correction: keys like "gainCorrection[<bandKeyName>]"
+    {
+        QSignalBlocker blocker(m_gainCorrectionTable);
+        for (auto mit = settings.constBegin(); mit != settings.constEnd(); ++mit) {
+            if (!mit.key().startsWith(QStringLiteral("gainCorrection["))) { continue; }
+            const QString bandName = mit.key().mid(15, mit.key().size() - 16);
+            for (int row = 0; row < m_gainCorrectionTable->rowCount(); ++row) {
+                if (bandKeyName(static_cast<Band>(row)) != bandName) { continue; }
+                if (auto* item = m_gainCorrectionTable->item(row, 0)) {
+                    item->setText(mit.value().toString());
+                }
+                break;
+            }
+        }
+    }
+}
+
 } // namespace NereusSDR

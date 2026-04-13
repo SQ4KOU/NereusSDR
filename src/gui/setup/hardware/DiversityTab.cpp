@@ -188,4 +188,43 @@ void DiversityTab::populate(const RadioInfo& /*info*/, const BoardCapabilities& 
     }
 }
 
+// ── restoreSettings ───────────────────────────────────────────────────────────
+
+void DiversityTab::restoreSettings(const QMap<QString, QVariant>& settings)
+{
+    auto it = settings.constFind(QStringLiteral("enabled"));
+    if (it != settings.constEnd()) {
+        QSignalBlocker blocker(m_enableCheck);
+        m_enableCheck->setChecked(it.value().toBool());
+    }
+
+    it = settings.constFind(QStringLiteral("phaseDeg"));
+    if (it != settings.constEnd()) {
+        QSignalBlocker blocker(m_phaseSlider);
+        const int val = it.value().toInt();
+        m_phaseSlider->setValue(val);
+        m_phaseValueLabel->setText(QStringLiteral("%1°").arg(val));
+    }
+
+    it = settings.constFind(QStringLiteral("gainDb"));
+    if (it != settings.constEnd()) {
+        QSignalBlocker blocker(m_gainSlider);
+        const int val = it.value().toInt();
+        m_gainSlider->setValue(val);
+        m_gainValueLabel->setText(QStringLiteral("%1 dB").arg(val));
+    }
+
+    it = settings.constFind(QStringLiteral("referenceAdc"));
+    if (it != settings.constEnd()) {
+        QSignalBlocker blocker(m_referenceAdcCombo);
+        const int adcIdx = it.value().toInt();
+        for (int i = 0; i < m_referenceAdcCombo->count(); ++i) {
+            if (m_referenceAdcCombo->itemData(i).toInt() == adcIdx) {
+                m_referenceAdcCombo->setCurrentIndex(i);
+                break;
+            }
+        }
+    }
+}
+
 } // namespace NereusSDR

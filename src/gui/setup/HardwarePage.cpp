@@ -3,7 +3,8 @@
 // Top-level Hardware Config page for SetupDialog. Wraps a QTabWidget with
 // 9 sub-tabs mirroring Thetis Setup.cs Hardware Config sub-tabs. Tab
 // visibility is reconciled from BoardCapabilities flags whenever the
-// connected radio changes.
+// connected radio changes. Per-MAC settings are persisted via AppSettings
+// (Phase 3I Task 21).
 
 #include "HardwarePage.h"
 
@@ -17,6 +18,7 @@
 #include "hardware/Hl2IoBoardTab.h"
 #include "hardware/BandwidthMonitorTab.h"
 
+#include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
 #include "core/RadioDiscovery.h"
 #include "models/RadioModel.h"
@@ -62,16 +64,73 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
     m_hl2IoIdx       = m_tabs->addTab(m_hl2IoTab,       tr("HL2 I/O"));
     m_bwMonitorIdx   = m_tabs->addTab(m_bwMonitorTab,   tr("Bandwidth Monitor"));
 
-    // All tabs start visible; onCurrentRadioChanged() hides the gated ones
-    // once a radio connects. Task 21 will wire the RadioModel signal.
+    // ── Wire per-tab settingChanged → write-through persistence (Task 21) ─────
+    // Lambda helper: generic connect for any tab type that has settingChanged.
+    auto wire = [this](auto* tab, const QString& tabKey) {
+        connect(tab,
+                &std::remove_pointer_t<decltype(tab)>::settingChanged,
+                this,
+                [this, tabKey](const QString& key, const QVariant& value) {
+                    onTabSettingChanged(tabKey, key, value);
+                });
+    };
+    wire(m_radioInfoTab,   QStringLiteral("radioInfo"));
+    wire(m_antennaAlexTab, QStringLiteral("antennaAlex"));
+    wire(m_ocOutputsTab,   QStringLiteral("ocOutputs"));
+    wire(m_xvtrTab,        QStringLiteral("xvtr"));
+    wire(m_pureSignalTab,  QStringLiteral("pureSignal"));
+    wire(m_diversityTab,   QStringLiteral("diversity"));
+    wire(m_paCalTab,       QStringLiteral("paCalibration"));
+    wire(m_hl2IoTab,       QStringLiteral("hl2IoBoard"));
+    wire(m_bwMonitorTab,   QStringLiteral("bandwidthMonitor"));
 }
 
 HardwarePage::~HardwarePage() = default;
+
+// ── filterPrefix ─────────────────────────────────────────────────────────────
+
+// static
+QMap<QString, QVariant> HardwarePage::filterPrefix(const QMap<QString, QVariant>& map,
+                                                     const QString& prefix)
+{
+    QMap<QString, QVariant> result;
+    for (auto it = map.constBegin(); it != map.constEnd(); ++it) {
+        if (it.key().startsWith(prefix)) {
+            result.insert(it.key().mid(prefix.size()), it.value());
+        }
+    }
+    return result;
+}
+
+// ── onTabSettingChanged ───────────────────────────────────────────────────────
+
+void HardwarePage::onTabSettingChanged(const QString& tabKey,
+                                        const QString& key,
+                                        const QVariant& value)
+{
+    if (m_currentMac.isEmpty()) { return; } // no radio connected yet
+
+    // The tab emits keys like "radioInfo/sampleRate"; strip the leading tabKey/
+    // prefix if already included, or compose it.
+    // Tab signals use bare keys (e.g. "sampleRate") OR fully-prefixed keys
+    // (e.g. "radioInfo/sampleRate"). Normalise: always store as <tabKey>/<key>.
+    QString bareKey = key;
+    const QString tabPrefix = tabKey + QLatin1Char('/');
+    if (bareKey.startsWith(tabPrefix)) {
+        bareKey = bareKey.mid(tabPrefix.size());
+    }
+    const QString fullKey = QStringLiteral("%1/%2").arg(tabKey, bareKey);
+
+    AppSettings::instance().setHardwareValue(m_currentMac, fullKey, value);
+    AppSettings::instance().save();
+}
 
 // ── onCurrentRadioChanged ─────────────────────────────────────────────────────
 
 void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
 {
+    m_currentMac = info.macAddress;
+
     const BoardCapabilities& caps = BoardCapsTable::forBoard(info.boardType);
 
     // Radio Info is always visible.
@@ -85,7 +144,7 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
     m_tabs->setTabVisible(m_hl2IoIdx,       caps.hasIoBoardHl2);
     m_tabs->setTabVisible(m_bwMonitorIdx,   caps.hasBandwidthMonitor);
 
-    // Notify each tab so it can cache the info for Task 19/20 populate() calls.
+    // Populate each tab with the new board info.
     m_radioInfoTab->populate(info, caps);
     m_antennaAlexTab->populate(info, caps);
     m_ocOutputsTab->populate(info, caps);
@@ -95,6 +154,20 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
     m_paCalTab->populate(info, caps);
     m_hl2IoTab->populate(info, caps);
     m_bwMonitorTab->populate(info, caps);
+
+    // Restore persisted settings for this radio's MAC (Task 21).
+    if (!m_currentMac.isEmpty()) {
+        const auto all = AppSettings::instance().hardwareValues(m_currentMac);
+        m_radioInfoTab->restoreSettings(   filterPrefix(all, QStringLiteral("radioInfo/")));
+        m_antennaAlexTab->restoreSettings( filterPrefix(all, QStringLiteral("antennaAlex/")));
+        m_ocOutputsTab->restoreSettings(   filterPrefix(all, QStringLiteral("ocOutputs/")));
+        m_xvtrTab->restoreSettings(        filterPrefix(all, QStringLiteral("xvtr/")));
+        m_pureSignalTab->restoreSettings(  filterPrefix(all, QStringLiteral("pureSignal/")));
+        m_diversityTab->restoreSettings(   filterPrefix(all, QStringLiteral("diversity/")));
+        m_paCalTab->restoreSettings(       filterPrefix(all, QStringLiteral("paCalibration/")));
+        m_hl2IoTab->restoreSettings(       filterPrefix(all, QStringLiteral("hl2IoBoard/")));
+        m_bwMonitorTab->restoreSettings(   filterPrefix(all, QStringLiteral("bandwidthMonitor/")));
+    }
 }
 
 // ── Test helper ───────────────────────────────────────────────────────────────

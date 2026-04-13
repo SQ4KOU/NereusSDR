@@ -2,6 +2,9 @@
 
 #include "gui/SetupPage.h"
 
+#include <QMap>
+#include <QString>
+#include <QVariant>
 #include <QWidget>
 
 class QTabWidget;
@@ -27,16 +30,12 @@ class BandwidthMonitorTab;
 // Contains a nested QTabWidget that mirrors Thetis's Setup.cs Hardware Config
 // sub-tabs. Tab visibility is capability-gated: call onCurrentRadioChanged()
 // whenever the connected radio (or its BoardCapabilities) change. Tasks 19/20
-// populate the individual tab widgets; for now they are empty stubs.
+// populate the individual tab widgets; Task 21 adds per-MAC persistence.
 class HardwarePage : public SetupPage {
     Q_OBJECT
 public:
     explicit HardwarePage(RadioModel* model, QWidget* parent = nullptr);
     ~HardwarePage() override;
-
-public slots:
-    // Reconciles tab visibility from BoardCapabilities flags.
-    void onCurrentRadioChanged(const RadioInfo& info);
 
 #ifdef NEREUS_BUILD_TESTS
     enum class Tab {
@@ -46,9 +45,28 @@ public slots:
     bool isTabVisibleForTest(Tab t) const;
 #endif
 
+public slots:
+    // Reconciles tab visibility from BoardCapabilities flags and restores
+    // persisted values for the incoming radio's MAC.
+    void onCurrentRadioChanged(const RadioInfo& info);
+
+private slots:
+    // Write-through slot: stores tab setting under hardware/<mac>/<tabKey>/<key>.
+    void onTabSettingChanged(const QString& tabKey,
+                             const QString& key,
+                             const QVariant& value);
+
 private:
+    // Extract entries whose key starts with prefix and return them with the
+    // prefix stripped.
+    static QMap<QString, QVariant> filterPrefix(const QMap<QString, QVariant>& map,
+                                                 const QString& prefix);
+
     RadioModel*  m_model{nullptr};
     QTabWidget*  m_tabs{nullptr};
+
+    // MAC address of the currently displayed radio; empty if none.
+    QString      m_currentMac;
 
     RadioInfoTab*        m_radioInfoTab{nullptr};
     AntennaAlexTab*      m_antennaAlexTab{nullptr};

@@ -36,3 +36,10 @@ target_compile_definitions(tst_reconnect_on_silence PRIVATE NEREUS_BUILD_TESTS)
 
 # Saved-radio persistence round-trip (Phase 3I Task 15)
 nereus_add_test(tst_connection_panel_saved_radios)
+
+# HardwarePage capability gating (Phase 3I Task 21)
+nereus_add_test(tst_hardware_page_capability_gating)
+target_compile_definitions(tst_hardware_page_capability_gating PRIVATE NEREUS_BUILD_TESTS)
+
+# HardwarePage per-MAC persistence round-trip (Phase 3I Task 21)
+nereus_add_test(tst_hardware_page_persistence)

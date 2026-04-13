@@ -222,4 +222,49 @@ void XvtrTab::onTableItemChanged(QTableWidgetItem* item)
         value);
 }
 
+// ── restoreSettings ───────────────────────────────────────────────────────────
+
+void XvtrTab::restoreSettings(const QMap<QString, QVariant>& settings)
+{
+    // Restore autoSelectBand checkbox
+    auto it = settings.constFind(QStringLiteral("autoSelectBand"));
+    if (it != settings.constEnd()) {
+        QSignalBlocker blocker(m_autoSelectBand);
+        m_autoSelectBand->setChecked(it.value().toBool());
+    }
+
+    // Restore table cells: keys like "row<N>/<field>"
+    {
+        QSignalBlocker blocker(m_table);
+        for (auto mit = settings.constBegin(); mit != settings.constEnd(); ++mit) {
+            if (!mit.key().startsWith(QStringLiteral("row"))) { continue; }
+            const QString rest = mit.key().mid(3); // strip "row"
+            const int slash = rest.indexOf(QLatin1Char('/'));
+            if (slash < 0) { continue; }
+            const int row = rest.left(slash).toInt();
+            if (row < 0 || row >= m_table->rowCount()) { continue; }
+            const QString field = rest.mid(slash + 1);
+
+            int col = -1;
+            if (field == QLatin1String("enabled"))  { col = 0; }
+            else if (field == QLatin1String("name"))      { col = 1; }
+            else if (field == QLatin1String("rfStartHz")) { col = 2; }
+            else if (field == QLatin1String("rfEndHz"))   { col = 3; }
+            else if (field == QLatin1String("loOffsetHz")){ col = 4; }
+            else if (field == QLatin1String("rxOnly"))    { col = 5; }
+            else if (field == QLatin1String("powerDb"))   { col = 6; }
+            else if (field == QLatin1String("loErrorHz")) { col = 7; }
+            if (col < 0 || col >= m_table->columnCount()) { continue; }
+
+            if (auto* item = m_table->item(row, col)) {
+                if (col == 0 || col == 5) { // checkable columns
+                    item->setCheckState(mit.value().toBool() ? Qt::Checked : Qt::Unchecked);
+                } else {
+                    item->setText(mit.value().toString());
+                }
+            }
+        }
+    }
+}
+
 } // namespace NereusSDR

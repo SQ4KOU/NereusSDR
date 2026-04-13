@@ -134,4 +134,29 @@ void Hl2IoBoardTab::populate(const RadioInfo& /*info*/, const BoardCapabilities&
     // future phase when HL2 detection lands.
 }
 
+// ── restoreSettings ───────────────────────────────────────────────────────────
+
+void Hl2IoBoardTab::restoreSettings(const QMap<QString, QVariant>& settings)
+{
+    struct ComboEntry { const char* key; QComboBox* widget; };
+    const ComboEntry entries[] = {
+        { "extPttPin", m_extPttInputCombo },
+        { "cwKeyPin",  m_cwKeyInputCombo  },
+        { "auxOut1",   m_auxOut1Combo     },
+        { "auxOut2",   m_auxOut2Combo     },
+    };
+    for (const auto& e : entries) {
+        auto it = settings.constFind(QString::fromLatin1(e.key));
+        if (it == settings.constEnd()) { continue; }
+        const int pinVal = it.value().toInt();
+        QSignalBlocker blocker(e.widget);
+        for (int i = 0; i < e.widget->count(); ++i) {
+            if (e.widget->itemData(i).toInt() == pinVal) {
+                e.widget->setCurrentIndex(i);
+                break;
+            }
+        }
+    }
+}
+
 } // namespace NereusSDR

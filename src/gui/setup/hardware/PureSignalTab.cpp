@@ -168,4 +168,47 @@ void PureSignalTab::populate(const RadioInfo& /*info*/, const BoardCapabilities&
     }
 }
 
+// ── restoreSettings ───────────────────────────────────────────────────────────
+
+void PureSignalTab::restoreSettings(const QMap<QString, QVariant>& settings)
+{
+    auto it = settings.constFind(QStringLiteral("enabled"));
+    if (it != settings.constEnd()) {
+        QSignalBlocker blocker(m_enableCheck);
+        m_enableCheck->setChecked(it.value().toBool());
+    }
+
+    it = settings.constFind(QStringLiteral("feedbackSource"));
+    if (it != settings.constEnd()) {
+        const int src = it.value().toInt();
+        QSignalBlocker blocker(m_feedbackSourceCombo);
+        for (int i = 0; i < m_feedbackSourceCombo->count(); ++i) {
+            if (m_feedbackSourceCombo->itemData(i).toInt() == src) {
+                m_feedbackSourceCombo->setCurrentIndex(i);
+                break;
+            }
+        }
+    }
+
+    it = settings.constFind(QStringLiteral("autoCalOnBandChange"));
+    if (it != settings.constEnd()) {
+        QSignalBlocker blocker(m_autoCalOnBandChangeCheck);
+        m_autoCalOnBandChangeCheck->setChecked(it.value().toBool());
+    }
+
+    it = settings.constFind(QStringLiteral("preserveCalibration"));
+    if (it != settings.constEnd()) {
+        QSignalBlocker blocker(m_preserveCalCheck);
+        m_preserveCalCheck->setChecked(it.value().toBool());
+    }
+
+    it = settings.constFind(QStringLiteral("rxFeedbackAtten"));
+    if (it != settings.constEnd()) {
+        QSignalBlocker blocker(m_rxFeedbackAttenSlider);
+        const int val = it.value().toInt();
+        m_rxFeedbackAttenSlider->setValue(val);
+        m_rxAttenValueLabel->setText(QStringLiteral("%1 dB").arg(val));
+    }
+}
+
 } // namespace NereusSDR

@@ -436,6 +436,10 @@ install(TARGETS NereusSDR
 # --------------------------------------------------------------------------
 option(NEREUS_BUILD_TESTS "Build NereusSDR test suite" OFF)
 if(NEREUS_BUILD_TESTS)
+    # Propagate the define to the object library so test-guard blocks
+    # (e.g. isTabVisibleForTest) are compiled into NereusSDRObjs and
+    # therefore available for linking into test executables.
+    target_compile_definitions(NereusSDRObjs PUBLIC NEREUS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()

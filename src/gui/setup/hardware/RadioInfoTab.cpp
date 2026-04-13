@@ -177,4 +177,29 @@ void RadioInfoTab::onSampleRateChanged(int index)
     }
 }
 
+// ── restoreSettings ───────────────────────────────────────────────────────────
+
+void RadioInfoTab::restoreSettings(const QMap<QString, QVariant>& settings)
+{
+    // sampleRate — match combo item data
+    auto srIt = settings.constFind(QStringLiteral("sampleRate"));
+    if (srIt != settings.constEnd()) {
+        const int rate = srIt.value().toInt();
+        QSignalBlocker blocker(m_sampleRateCombo);
+        for (int i = 0; i < m_sampleRateCombo->count(); ++i) {
+            if (m_sampleRateCombo->itemData(i).toInt() == rate) {
+                m_sampleRateCombo->setCurrentIndex(i);
+                break;
+            }
+        }
+    }
+
+    // activeRxCount
+    auto rxIt = settings.constFind(QStringLiteral("activeRxCount"));
+    if (rxIt != settings.constEnd()) {
+        QSignalBlocker blocker(m_activeRxSpin);
+        m_activeRxSpin->setValue(rxIt.value().toInt());
+    }
+}
+
 } // namespace NereusSDR

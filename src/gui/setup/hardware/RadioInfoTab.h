@@ -31,6 +31,8 @@ public:
     explicit RadioInfoTab(RadioModel* model, QWidget* parent = nullptr);
     // Called by HardwarePage when the connected radio changes.
     void populate(const RadioInfo& info, const BoardCapabilities& caps);
+    // Restore persisted control values (Phase 3I Task 21).
+    void restoreSettings(const QMap<QString, QVariant>& settings);
 
 signals:
     void settingChanged(const QString& key, const QVariant& value);

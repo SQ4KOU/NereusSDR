@@ -31,6 +31,7 @@ class OcOutputsTab : public QWidget {
 public:
     explicit OcOutputsTab(RadioModel* model, QWidget* parent = nullptr);
     void populate(const RadioInfo& info, const BoardCapabilities& caps);
+    void restoreSettings(const QMap<QString, QVariant>& settings);
 
 signals:
     void settingChanged(const QString& key, const QVariant& value);

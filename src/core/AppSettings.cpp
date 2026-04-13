@@ -53,14 +53,18 @@ static QString encodeXmlKey(const QString& key)
     QString out = key;
     out.replace(QLatin1String(":"),  QLatin1String("__c__"));
     out.replace(QLatin1String("/"),  QLatin1String("__s__"));
+    out.replace(QLatin1String("["),  QLatin1String("__lb__"));
+    out.replace(QLatin1String("]"),  QLatin1String("__rb__"));
     return out;
 }
 
 static QString decodeXmlKey(const QString& tag)
 {
     QString out = tag;
-    out.replace(QLatin1String("__c__"), QLatin1String(":"));
-    out.replace(QLatin1String("__s__"), QLatin1String("/"));
+    out.replace(QLatin1String("__c__"),  QLatin1String(":"));
+    out.replace(QLatin1String("__s__"),  QLatin1String("/"));
+    out.replace(QLatin1String("__lb__"), QLatin1String("["));
+    out.replace(QLatin1String("__rb__"), QLatin1String("]"));
     return out;
 }
 
@@ -370,6 +374,51 @@ void AppSettings::setDiscoveryProfile(DiscoveryProfile p)
 {
     m_settings.insert(QStringLiteral("radios/discoveryProfile"),
                       QString::number(static_cast<int>(p)));
+}
+
+// ---------------------------------------------------------------------------
+// Hardware tab persistence (Phase 3I Task 21)
+// ---------------------------------------------------------------------------
+
+void AppSettings::setHardwareValue(const QString& mac, const QString& key, const QVariant& value)
+{
+    const QString fullKey = QStringLiteral("hardware/%1/%2").arg(mac, key);
+    m_settings.insert(fullKey, value.toString());
+}
+
+QVariant AppSettings::hardwareValue(const QString& mac, const QString& key,
+                                     const QVariant& defaultValue) const
+{
+    const QString fullKey = QStringLiteral("hardware/%1/%2").arg(mac, key);
+    auto it = m_settings.constFind(fullKey);
+    if (it != m_settings.constEnd()) {
+        return QVariant(it.value());
+    }
+    return defaultValue;
+}
+
+QMap<QString, QVariant> AppSettings::hardwareValues(const QString& mac) const
+{
+    const QString prefix = QStringLiteral("hardware/%1/").arg(mac);
+    QMap<QString, QVariant> result;
+    for (auto it = m_settings.constBegin(); it != m_settings.constEnd(); ++it) {
+        if (it.key().startsWith(prefix)) {
+            const QString bareKey = it.key().mid(prefix.size());
+            result.insert(bareKey, QVariant(it.value()));
+        }
+    }
+    return result;
+}
+
+void AppSettings::clearHardwareValues(const QString& mac)
+{
+    const QString prefix = QStringLiteral("hardware/%1/").arg(mac);
+    const QStringList keys = m_settings.keys();
+    for (const QString& k : keys) {
+        if (k.startsWith(prefix)) {
+            m_settings.remove(k);
+        }
+    }
 }
 
 } // namespace NereusSDR
