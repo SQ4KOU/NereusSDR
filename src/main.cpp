@@ -17,20 +17,30 @@ static QFile* s_logFile = nullptr;
 
 // Redact PII from log messages before writing to file.
 // Patterns: IP addresses, MAC addresses.
+//
+// The regex objects are allocated on the heap and leaked intentionally
+// so they survive __cxa_finalize. Qt emits shutdown warnings from
+// QThreadStoragePrivate::finish *after* function-local static
+// destructors have run — if we stored them as `static const
+// QRegularExpression`, that call chain would re-enter this handler,
+// touch a destroyed regex, and crash with EXC_BAD_ACCESS at exit.
+// Leaked statics are the simplest fix for the destruction-order
+// fiasco. A belt-and-braces `qInstallMessageHandler(nullptr)` near
+// the end of main() still runs first, but this handler path has to
+// be safe even if Qt logs something between `return rc` and its own
+// thread-storage teardown.
 static QString redactPii(const QString& msg)
 {
-    QString out = msg;
-
-    // IPv4 addresses: 192.168.50.121 -> *.*.*. 121 (keep last octet)
-    static const QRegularExpression ipRe(
+    static const QRegularExpression* ipRe = new QRegularExpression(
         R"((\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}))");
-    out.replace(ipRe, QStringLiteral("*.*.*. \\4"));
-
-    // MAC addresses: 00:1C:2D:05:37:2A -> **:**:**:**:**:2A
-    static const QRegularExpression macRe(
+    static const QRegularExpression* macRe = new QRegularExpression(
         R"(([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2}))");
-    out.replace(macRe, QStringLiteral("**:**:**:**:**:\\2"));
 
+    QString out = msg;
+    // IPv4 addresses: 192.168.50.121 -> *.*.*. 121 (keep last octet)
+    out.replace(*ipRe, QStringLiteral("*.*.*. \\4"));
+    // MAC addresses: 00:1C:2D:05:37:2A -> **:**:**:**:**:2A
+    out.replace(*macRe, QStringLiteral("**:**:**:**:**:\\2"));
     return out;
 }
 
@@ -140,5 +150,20 @@ int main(int argc, char* argv[])
     // Graceful shutdown so worker threads drain before the engine
     // singleton is destroyed.
     NereusSDR::ExternalVariableEngine::instance().shutdown();
+
+    // Restore the default message handler before statics start
+    // tearing down. Qt's QThreadStoragePrivate::finish() emits
+    // warnings from __cxa_finalize, and if we leave our custom
+    // handler installed those warnings land in messageHandler ->
+    // redactPii() after its function-local statics (or anything
+    // else in this TU) could already be destroyed. Belt-and-braces
+    // for the leaked-regex fix in redactPii().
+    qInstallMessageHandler(nullptr);
+    if (s_logFile) {
+        s_logFile->close();
+        // Intentionally leaked — Qt may still try to log between
+        // here and __cxa_finalize; the default handler routes to
+        // stderr which is safe.
+    }
     return rc;
 }

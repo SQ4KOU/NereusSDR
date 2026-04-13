@@ -258,10 +258,112 @@ void MeterWidget::paintEvent(QPaintEvent* event)
 void MeterWidget::resizeEvent(QResizeEvent* event)
 {
     MeterBaseClass::resizeEvent(event);
+    reflowStackedItems();
 #ifdef NEREUS_GPU_SPECTRUM
     markOverlayDirty();
     m_bgDirty = true;
 #endif
+}
+
+void MeterWidget::reflowStackedItems()
+{
+    const int h = height();
+    if (h <= 0) { return; }
+
+    // Thetis-parity stack layout with NereusSDR pixel floor:
+    //   slotHpx = max(kNormalRowHNorm * widgetH, kMinRowHeightPx)
+    //   bandTop = max(y + itemHeight) over items with itemHeight > 0.30
+    // Re-lays every stacked item from those two values so adding,
+    // removing, or resizing a composite shifts the stack without
+    // touching any per-item metadata.
+    constexpr float kNormalRowHNorm = 0.05f;  // Thetis _fHeight @ MeterManager.cs:21266
+    constexpr int   kMinRowHeightPx = 24;     // NereusSDR pixel floor
+    const int normalRowPx = static_cast<int>(kNormalRowHNorm * static_cast<float>(h));
+    const int slotHeightPx = qMax(normalRowPx, kMinRowHeightPx);
+
+    float bandTop = 0.0f;
+    for (const MeterItem* item : m_items) {
+        if (!item) { continue; }
+        if (item->itemHeight() <= 0.30f) { continue; }
+        const float bottom = item->y() + item->itemHeight();
+        if (bottom > bandTop) { bandTop = bottom; }
+    }
+
+    for (MeterItem* item : m_items) {
+        if (!item) { continue; }
+        item->layoutInStackSlot(h, slotHeightPx, bandTop);
+    }
+}
+
+void MeterWidget::inferStackFromGeometry()
+{
+    // Walk deserialized items, cluster non-composite, non-background
+    // items into rows by overlapping y-intervals, and assign stack
+    // metadata so resize reflow works on loaded containers too. The
+    // clustering is deliberately forgiving: any item with
+    // itemHeight() < 0.15 counts as a stack candidate, and clusters
+    // whose y-intervals touch get merged.
+    //
+    // "Composite" detection stays loose — we only care that big
+    // needle panels (h > 0.3) are excluded from the stack tagging
+    // so they don't get pulled into the reflow path.
+    //
+    // The stack band top is inferred from the topmost cluster's
+    // y-min, rounded to the nearest standard band start (0.0 or
+    // 0.70). This lets bar rows that were saved under a compressed
+    // ANAN MM come back with the correct bandTop.
+    if (m_items.isEmpty()) { return; }
+    const int widgetH = height();
+    if (widgetH <= 0) { return; }
+
+    struct Cluster {
+        float yMin;
+        float yMax;
+        QVector<MeterItem*> members;
+    };
+    QVector<Cluster> clusters;
+    for (MeterItem* item : m_items) {
+        if (!item) { continue; }
+        const float h = item->itemHeight();
+        if (h <= 0.0f || h >= 0.30f) { continue; }  // skip composites + backgrounds
+        const float yMin = item->y();
+        const float yMax = item->y() + h;
+        bool placed = false;
+        for (Cluster& c : clusters) {
+            if (yMin <= c.yMax && yMax >= c.yMin) {
+                c.yMin = qMin(c.yMin, yMin);
+                c.yMax = qMax(c.yMax, yMax);
+                c.members.append(item);
+                placed = true;
+                break;
+            }
+        }
+        if (!placed) {
+            clusters.append({yMin, yMax, {item}});
+        }
+    }
+    if (clusters.isEmpty()) { return; }
+
+    std::sort(clusters.begin(), clusters.end(),
+              [](const Cluster& a, const Cluster& b) { return a.yMin < b.yMin; });
+
+    // No per-item bandTop to set — reflowStackedItems() detects
+    // the composite band dynamically on every call.
+    for (int i = 0; i < clusters.size(); ++i) {
+        Cluster& c = clusters[i];
+        const float oldYMin  = c.yMin;
+        const float oldSlotH = c.yMax - c.yMin;
+        if (oldSlotH <= 0.0f) { continue; }
+        for (MeterItem* mi : c.members) {
+            const float localY = (mi->y() - oldYMin) / oldSlotH;
+            const float localH = mi->itemHeight() / oldSlotH;
+            mi->setSlotLocalY(qBound(0.0f, localY, 1.0f));
+            mi->setSlotLocalH(qBound(0.0f, localH, 1.0f));
+            mi->setStackSlot(i);
+        }
+    }
+
+    reflowStackedItems();
 }
 
 void MeterWidget::mousePressEvent(QMouseEvent* event)

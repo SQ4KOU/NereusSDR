@@ -44,17 +44,48 @@ public:
                                                const QString& name, QObject* parent = nullptr);
 
     // S-Meter preset: arc-style NeedleItem with full readout.
-    // From AetherSDR SMeterWidget visual style.
+    // From AetherSDR SMeterWidget visual style. Default shape for
+    // Container #0's fixed S-Meter header and the Presets menu
+    // "S-Meter Only" entry. Phase 3G-9 briefly rebuilt this as a
+    // Thetis-style bar (commit 4bba2c2) — reverted because the main
+    // signal meter should stay a needle. Bar-composition port now
+    // lives in createSMeterBarPreset below.
     static ItemGroup* createSMeterPreset(int bindingId, const QString& name,
                                           QObject* parent = nullptr);
+
+    // Thetis addSMeterBar port: SolidColour backdrop + Line BarItem
+    // with 3-point calibration (S0/S9/S9+60) + GeneralScale ScaleItem.
+    // Opt-in — not wired into any UI call site by default. Add to a
+    // new container manually to verify the Thetis calibrated bar.
+    // From Thetis MeterManager.cs:21523-21616 addSMeterBar.
+    static ItemGroup* createSMeterBarPreset(int bindingId, const QString& name,
+                                             QObject* parent = nullptr);
 
     // Power/SWR preset: two stacked horizontal bars.
     // From Thetis MeterManager.cs AddPWRBar/AddSWRBar calibration.
     static ItemGroup* createPowerSwrPreset(const QString& name,
                                             QObject* parent = nullptr);
 
+    // --- Phase E: Thetis-parity per-reading bar rows ---
+    // Shared builder used by every create*BarRowPreset below.
+    // Builds the canonical 5-item composition from Thetis
+    // AddALCBar:23326-23411 (and every sibling Add*Bar that clones the
+    // same layout):
+    //   z=1  SolidColourItem dark gray(32,32,32), full rect
+    //   z=2  BarItem Line style, ShowValue + ShowPeakValue + ShowHistory
+    //         + ShowMarker + 3-point ScaleCalibration
+    //   z=3  ScaleItem ShowType=true with the same bindingId so the row
+    //         labels itself via readingName()
+    // Different readings differ only in: bindingId, 3-point calibration
+    // tuple, and historyColour.
+    static ItemGroup* buildBarRow(int bindingId,
+                                  double lowVal, double midVal, double highVal,
+                                  float midX, float highX,
+                                  const QColor& historyColour,
+                                  QObject* parent);
+
     // ALC preset: horizontal bar for TX ALC level.
-    // From Thetis MeterManager.cs ALC scale (-30 to 0 dB).
+    // From Thetis MeterManager.cs AddALCBar:23326-23411.
     static ItemGroup* createAlcPreset(QObject* parent = nullptr);
 
     // Mic level preset: horizontal bar for TX mic level.
