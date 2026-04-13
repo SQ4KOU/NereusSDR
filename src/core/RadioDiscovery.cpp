@@ -71,8 +71,11 @@ QString RadioDiscovery::macToString(const char* bytes)
 RadioDiscovery::RadioDiscovery(QObject* parent)
     : QObject(parent)
 {
-    connect(&m_continuousTimer, &QTimer::timeout, this, &RadioDiscovery::scanAllNics);
-    connect(&m_staleTimer,      &QTimer::timeout, this, &RadioDiscovery::onStaleCheck);
+    // Stale-sweep timer only. The continuous NIC walker that a 3I-4 subagent
+    // added was blocking the main thread for 15-20s every 5s — removed. Scans
+    // are now one-shot, user-triggered via ConnectionPanel. Async rewrite is
+    // a follow-up.
+    connect(&m_staleTimer, &QTimer::timeout, this, &RadioDiscovery::onStaleCheck);
 }
 
 RadioDiscovery::~RadioDiscovery()
@@ -82,19 +85,16 @@ RadioDiscovery::~RadioDiscovery()
 
 void RadioDiscovery::startDiscovery()
 {
-    if (m_continuousTimer.isActive()) {
-        return;
-    }
-
     emit discoveryStarted();
-    scanAllNics();                              // initial NIC walk
-    m_continuousTimer.start(kContinuousIntervalMs);
-    m_staleTimer.start(kStaleTimeoutMs);
+    scanAllNics();                              // one-shot NIC walk
+    if (!m_staleTimer.isActive()) {
+        m_staleTimer.start(kStaleTimeoutMs);
+    }
+    emit discoveryFinished();
 }
 
 void RadioDiscovery::stopDiscovery()
 {
-    m_continuousTimer.stop();
     m_staleTimer.stop();
     emit discoveryFinished();
 }

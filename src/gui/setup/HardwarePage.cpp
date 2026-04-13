@@ -83,6 +83,17 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
     wire(m_paCalTab,       QStringLiteral("paCalibration"));
     wire(m_hl2IoTab,       QStringLiteral("hl2IoBoard"));
     wire(m_bwMonitorTab,   QStringLiteral("bandwidthMonitor"));
+
+    // ── Listen for live radio connection so sub-tabs populate ─────────────────
+    if (m_model) {
+        connect(m_model, &RadioModel::currentRadioChanged,
+                this, &HardwarePage::onCurrentRadioChanged);
+        // If we're constructed while a radio is already connected, refresh
+        // now. Otherwise we'd show empty fields until the next reconnect.
+        if (m_model->isConnected() && m_model->connection()) {
+            onCurrentRadioChanged(m_model->connection()->radioInfo());
+        }
+    }
 }
 
 HardwarePage::~HardwarePage() = default;

@@ -225,6 +225,15 @@ void RxChannel::processIq(float* inI, float* inQ,
 double RxChannel::getMeter(RxMeterType type) const
 {
 #ifdef HAVE_WDSP
+    // GetRXAMeter reads WDSP channel state that is only valid once
+    // SetChannelState(channel, 1, 0) has been called. Reading before the
+    // channel is active segfaults (seen after P1 connect in Phase 3I,
+    // because the P1 path had not yet called setActive(true) on the
+    // downstream RxChannel the MeterPoller was bound to). Guard here:
+    // the contract is "no meter data until active".
+    if (!m_active.load()) {
+        return -140.0;
+    }
     return GetRXAMeter(m_channelId, static_cast<int>(type));
 #else
     Q_UNUSED(type);

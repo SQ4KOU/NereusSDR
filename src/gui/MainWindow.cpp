@@ -1875,10 +1875,12 @@ void MainWindow::closeEvent(QCloseEvent* event)
     AppSettings::instance().save();
     event->accept();
 
-    // Force process exit. Worker threads and active QObjects can prevent
-    // the Qt event loop from returning. Settings are saved, sockets closed,
-    // and stop command sent to the radio — safe to exit now.
-    std::exit(0);
+    // Ask Qt for an orderly exit from the event loop. Previously called
+    // std::exit(0) which runs C++ static destructors before Qt's thread
+    // cleanup — that caused QThreadStoragePrivate::finish to fire a qWarning
+    // against a destructed QRegularExpression in the PII-redaction message
+    // handler, segfaulting every close (~100 diagnostic reports in one day).
+    QCoreApplication::quit();
 }
 
 } // namespace NereusSDR

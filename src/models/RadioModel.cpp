@@ -563,6 +563,10 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
             s.setLastConnected(m_lastRadioInfo.macAddress);
             s.save();
         }
+        // Phase 3I — fan out to HardwarePage so its sub-tabs populate with
+        // the connected radio's fields (Radio Info labels, sample rate,
+        // capability-gated tab visibility, per-MAC settings restore).
+        emit currentRadioChanged(m_lastRadioInfo);
         break;
     case ConnectionState::Disconnected:
         qCDebug(lcConnection) << "Disconnected from" << m_name;
