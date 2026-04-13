@@ -7,7 +7,7 @@
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Qt6](https://img.shields.io/badge/Qt-6-green.svg)](https://www.qt.io/)
 
-NereusSDR is a ground-up port of [Thetis](https://github.com/ramdor/Thetis) (the Apache Labs / OpenHPSDR SDR console) from C# to C++20 and Qt6. It uses [AetherSDR](https://github.com/ten9876/AetherSDR) as the architectural template. The goal is a modern, cross-platform, GPU-accelerated SDR console that preserves the full feature set of Thetis while dramatically improving the UI, multi-panadapter experience, and waterfall fluidity.
+NereusSDR is an independent cross-platform SDR client deeply informed by the workflow, feature set, and operating style of [Thetis](https://github.com/ramdor/Thetis), reimagined with a new GUI, a modernized architecture, and native support for macOS, Linux, and Windows.
 
 ---
 
