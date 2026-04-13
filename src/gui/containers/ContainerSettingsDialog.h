@@ -45,6 +45,17 @@ public:
                                      ContainerManager* manager = nullptr);
     ~ContainerSettingsDialog() override;
 
+    // Compute the next y-position for an item being appended to a
+    // vertically-stacked layout. Items spanning more than 70% of the
+    // container vertically are treated as background / overlay-style
+    // items (ANANMM's full-container needles, ImageItem backgrounds,
+    // etc.) and excluded from the stack calculation — otherwise an
+    // ANANMM container would clamp every newly-added item to y=0.9
+    // and pile them on top of each other. Public + static so the
+    // tst_container_persistence suite can exercise it without
+    // instantiating the dialog.
+    static float nextStackYPos(const QVector<MeterItem*>& items);
+
 private slots:
     void onItemSelectionChanged();
     void onAddItem();
