@@ -1,5 +1,6 @@
 #include <QtTest/QtTest>
 #include "core/P1RadioConnection.h"
+#include <vector>
 
 using namespace NereusSDR;
 
@@ -129,6 +130,92 @@ private slots:
         P1RadioConnection::composeCcBankAtten(out, 0);
         // Source: networkproto1.c:763 — case 11: C0 |= 0x14 → address = 0x14>>1 = 0x0A
         QCOMPARE(int((out[0] >> 1) & 0x7F), 0x0A);
+    }
+
+    // --- Sample scaling ---
+    // Source: networkproto1.c:367-374 — sign-extend 24-bit BE, scale by 1/2^23
+
+    void scaleSample24PositiveHalfScale() {
+        quint8 be24[3] = {0x40, 0x00, 0x00};  // +0x400000 = 4194304
+        float f = P1RadioConnection::scaleSample24(be24);
+        // 24-bit full scale = 2^23 = 8388608; 4194304 / 8388608 = 0.5
+        QVERIFY(qAbs(f - 0.5f) < 0.0001f);
+    }
+
+    void scaleSample24Zero() {
+        quint8 be24[3] = {0x00, 0x00, 0x00};
+        float f = P1RadioConnection::scaleSample24(be24);
+        QCOMPARE(f, 0.0f);
+    }
+
+    void scaleSample24NegativeHalfScale() {
+        quint8 be24[3] = {0xC0, 0x00, 0x00};  // -0x400000 after sign-extend
+        float f = P1RadioConnection::scaleSample24(be24);
+        QVERIFY(qAbs(f - (-0.5f)) < 0.0001f);
+    }
+
+    void scaleSample24NegativeOne() {
+        quint8 be24[3] = {0x80, 0x00, 0x00};  // -0x800000
+        float f = P1RadioConnection::scaleSample24(be24);
+        QVERIFY(qAbs(f - (-1.0f)) < 0.0001f);
+    }
+
+    // --- ep6 frame parse (1 RX) ---
+    // Source: networkproto1.c:319-415 MetisReadThreadMainLoop
+
+    void parseEp6Frame1RxEmitsCorrectSampleCount() {
+        quint8 frame[1032] = {};
+        // Metis ep6 header: EF FE 01 06 + 4-byte sequence
+        frame[0] = 0xEF; frame[1] = 0xFE; frame[2] = 0x01; frame[3] = 0x06;
+        // Subframe 0 at offset 8: sync 7F 7F 7F + 5-byte C&C (zeros for test)
+        frame[8] = 0x7F; frame[9] = 0x7F; frame[10] = 0x7F;
+        // Subframe 1 at offset 520
+        frame[520] = 0x7F; frame[521] = 0x7F; frame[522] = 0x7F;
+        // Leave samples as zero — parser should emit them
+
+        std::vector<std::vector<float>> perRx;
+        const bool ok = P1RadioConnection::parseEp6Frame(frame, /*numRx=*/1, perRx);
+        QVERIFY(ok);
+        QCOMPARE(perRx.size(), size_t(1));
+        // 1 RX: slot size = 6 (IQ) + 2 (mic) = 8 bytes. 504 / 8 = 63 slots per subframe.
+        // Source: networkproto1.c:361 — spr = 504 / (6 * nddc + 2)
+        // 2 subframes × 63 slots × 2 floats (I,Q) = 252 floats per RX.
+        QCOMPARE(perRx[0].size(), size_t(252));
+        // All samples are zero since frame body is zero
+        for (float v : perRx[0]) { QCOMPARE(v, 0.0f); }
+    }
+
+    void parseEp6FrameRejectsWrongMagic() {
+        quint8 frame[1032] = {};
+        frame[0] = 0xDE; frame[1] = 0xAD;  // not EF FE
+        std::vector<std::vector<float>> perRx;
+        QVERIFY(!P1RadioConnection::parseEp6Frame(frame, 1, perRx));
+    }
+
+    void parseEp6FrameRejectsMissingSync() {
+        quint8 frame[1032] = {};
+        frame[0] = 0xEF; frame[1] = 0xFE; frame[2] = 0x01; frame[3] = 0x06;
+        // No sync bytes at offset 8 — subframe 0 sync check should fail
+        std::vector<std::vector<float>> perRx;
+        QVERIFY(!P1RadioConnection::parseEp6Frame(frame, 1, perRx));
+    }
+
+    void parseEp6Frame1RxWithKnownSample() {
+        quint8 frame[1032] = {};
+        frame[0] = 0xEF; frame[1] = 0xFE; frame[2] = 0x01; frame[3] = 0x06;
+        frame[8] = 0x7F; frame[9] = 0x7F; frame[10] = 0x7F;
+        frame[520] = 0x7F; frame[521] = 0x7F; frame[522] = 0x7F;
+        // First sample slot starts at offset 16 (frame+8 subframe base + 8 for sync+C&C).
+        // Source: networkproto1.c:366 — k = 8 + isample*slotBytes + iddc*6 (relative to bptr)
+        // Place I = +0.5, Q = -0.5 in first slot
+        frame[16] = 0x40; frame[17] = 0x00; frame[18] = 0x00;  // I = +half scale
+        frame[19] = 0xC0; frame[20] = 0x00; frame[21] = 0x00;  // Q = -half scale
+        // frame[22..23] is mic16 (leave zero)
+
+        std::vector<std::vector<float>> perRx;
+        QVERIFY(P1RadioConnection::parseEp6Frame(frame, 1, perRx));
+        QVERIFY(qAbs(perRx[0][0] - 0.5f) < 0.0001f);   // I
+        QVERIFY(qAbs(perRx[0][1] - (-0.5f)) < 0.0001f); // Q
     }
 };
 

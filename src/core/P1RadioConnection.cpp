@@ -9,6 +9,7 @@
 #include "LogCategories.h"
 
 #include <cstring>    // memset
+#include <vector>
 #include <QtEndian>
 
 namespace NereusSDR {
@@ -324,8 +325,99 @@ void P1RadioConnection::hl2SendIoBoardTlv(const QByteArray&) { /* Task 12 */ }
 void P1RadioConnection::hl2CheckBandwidthMonitor() { /* Task 12 */ }
 void P1RadioConnection::checkFirmwareMinimum(int)  { /* Task 11 */ }
 
-// From Thetis networkproto1.c — scale 24-bit big-endian sample to [-1, 1].
-// Task 8 will implement this properly.
-float P1RadioConnection::scaleSample24(const quint8* /*be24*/) { return 0.0f; /* Task 8 */ }
+// ---------------------------------------------------------------------------
+// scaleSample24
+//
+// Source: networkproto1.c:367-374 MetisReadThreadMainLoop — sample extraction
+// uses (bptr[k+0] << 24 | bptr[k+1] << 16 | bptr[k+2] << 8) to sign-extend
+// the 24-bit big-endian value into a 32-bit int, then multiplies by
+// const_1_div_2147483648_ (= 1/2^31). The << 8 fill + divide by 2^31 is
+// mathematically equivalent to our sign-extend then divide by 2^23 (= 8388608).
+// ---------------------------------------------------------------------------
+float P1RadioConnection::scaleSample24(const quint8 be24[3]) noexcept
+{
+    // Sign-extend 24-bit big-endian to qint32 via left-shift trick.
+    // Source: networkproto1.c:368-370 — (bptr[k+0] << 24 | bptr[k+1] << 16 | bptr[k+2] << 8)
+    qint32 v = (qint32(be24[0]) << 24)
+             | (qint32(be24[1]) << 16)
+             | (qint32(be24[2]) << 8);
+    v >>= 8;  // arithmetic right-shift to sign-extend from 24 bits
+    // Source: networkproto1.c:367 — const_1_div_2147483648_ * (shifted value >> 8)
+    // Equivalent: v / 2^23 = v / 8388608
+    return float(v) / 8388608.0f;
+}
+
+// ---------------------------------------------------------------------------
+// parseEp6Frame
+//
+// Source: networkproto1.c:319-415 MetisReadThreadMainLoop — iterates 2 subframes,
+// each 512 bytes. Within each subframe (bptr = FPGAReadBufp + 512*frame, which
+// strips the 8-byte Metis header):
+//   bptr[0..2]  = sync 7F 7F 7F
+//   bptr[3..7]  = C0..C4 (C&C from radio)
+//   samples at  bptr[8 + isample*(6*nddc+2) + iddc*6] (networkproto1.c:366)
+//
+// In our 1032-byte ep6 datagram the 8-byte Metis header is still present:
+//   subframe 0: bptr equivalent starts at frame+8  → samples at frame+16
+//   subframe 1: bptr equivalent starts at frame+520 → samples at frame+528
+//
+// Slot size: 6*numRx + 2  (networkproto1.c:361 — spr = 504 / (6*nddc + 2))
+// Samples per subframe: 504 / slotBytes
+// ---------------------------------------------------------------------------
+bool P1RadioConnection::parseEp6Frame(const quint8 frame[1032],
+                                       int numRx,
+                                       std::vector<std::vector<float>>& perRx) noexcept
+{
+    // Validate numRx range (1..7 — Thetis supports up to 7 DDCs)
+    if (numRx < 1 || numRx > 7) { return false; }
+
+    // Validate Metis ep6 header: EF FE 01 06 + 4-byte sequence
+    // Source: networkproto1.c:326-327 — check first four bytes (after MetisReadDirect strips header)
+    // In our full datagram the magic lives at [0..3]
+    if (frame[0] != 0xEF || frame[1] != 0xFE ||
+        frame[2] != 0x01 || frame[3] != 0x06) {
+        return false;
+    }
+
+    // Validate sync bytes for both USB subframes
+    // Source: networkproto1.c:327 — (bptr[0]==0x7f && bptr[1]==0x7f && bptr[2]==0x7f)
+    if (frame[8]   != 0x7F || frame[9]   != 0x7F || frame[10]  != 0x7F) { return false; }
+    if (frame[520] != 0x7F || frame[521] != 0x7F || frame[522] != 0x7F) { return false; }
+
+    // Source: networkproto1.c:361 — spr = 504 / (6 * nddc + 2)
+    const int slotBytes        = 6 * numRx + 2;  // (I24+Q24)*numRx + Mic16
+    const int samplesPerSubframe = 504 / slotBytes;
+
+    perRx.assign(numRx, std::vector<float>());
+    for (auto& v : perRx) {
+        v.reserve(static_cast<size_t>(samplesPerSubframe * 2 * 2));  // 2 subframes × 2 floats/sample
+    }
+
+    // Parse one 512-byte subframe; sampleStart is the offset of the first sample
+    // slot within the full 1032-byte datagram.
+    // Source: networkproto1.c:366 — k = 8 + isample*(6*nddc+2) + iddc*6
+    //   (where k is relative to bptr which starts at sync bytes)
+    //   In our frame: sampleStart = subframeBase + 8 (sync3 + C&C5)
+    auto parseSubframe = [&](int sampleStart) {
+        for (int s = 0; s < samplesPerSubframe; ++s) {
+            for (int r = 0; r < numRx; ++r) {
+                // Source: networkproto1.c:366 — k = 8 + isample*slotBytes + iddc*6
+                const int off = sampleStart + s * slotBytes + r * 6;
+                const float i = scaleSample24(&frame[off]);
+                const float q = scaleSample24(&frame[off + 3]);
+                perRx[static_cast<size_t>(r)].push_back(i);
+                perRx[static_cast<size_t>(r)].push_back(q);
+            }
+            // Mic16 bytes at offset sampleStart + s*slotBytes + numRx*6 are skipped
+        }
+    };
+
+    // Subframe 0: sync at frame[8..10], C&C at [11..15], samples at [16..]
+    parseSubframe(16);
+    // Subframe 1: sync at frame[520..522], C&C at [523..527], samples at [528..]
+    parseSubframe(528);
+
+    return true;
+}
 
 } // namespace NereusSDR
