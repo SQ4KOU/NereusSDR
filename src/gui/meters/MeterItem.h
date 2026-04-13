@@ -186,7 +186,12 @@ class BarItem : public MeterItem {
     Q_OBJECT
 public:
     enum class Orientation { Horizontal, Vertical };
-    enum class BarStyle { Filled, Edge };
+    // From Thetis clsBarItem.BarStyle (MeterManager.cs:19927-19934):
+    //   None, Line, SolidFilled, GradientFilled, Segments.
+    // NereusSDR maps SolidFilled -> Filled for back-compat with pre-A4
+    // presets and adds Line. Edge is a NereusSDR extension (mapped from
+    // Thetis console.cs edge meters).
+    enum class BarStyle { Filled, Edge, Line };
 
     explicit BarItem(QObject* parent = nullptr) : MeterItem(parent) {}
 
@@ -281,6 +286,27 @@ public:
     void setPeakHoldDecayRatio(float r) { m_peakHoldDecayRatio = r; }
     float peakHoldDecayRatio() const { return m_peakHoldDecayRatio; }
 
+    // --- Phase A4: ScaleCalibration (non-linear value → X map) ---
+    // From Thetis clsBarItem.ScaleCalibration (MeterManager.cs:20192,
+    // 21547-21549 addSMeterBar, 21638-21640 AddADCMaxMag). When calibration
+    // waypoints are set, the bar uses piecewise-linear interpolation
+    // between them instead of the linear minVal..maxVal mapping. Used by
+    // the S-meter to map the non-linear dBm→S-unit curve. When empty,
+    // BarItem falls back to linear range mapping (pre-A4 behavior).
+    void addScaleCalibration(double value, float normalizedX);
+    void clearScaleCalibration() { m_scaleCalibration.clear(); }
+    int scaleCalibrationSize() const
+    {
+        return static_cast<int>(m_scaleCalibration.size());
+    }
+
+    // Map a raw value to a normalized X position in [0, 1]. Uses
+    // ScaleCalibration if populated, otherwise linear range mapping.
+    // Consumed by paint() for bar fill length, live marker, peak marker,
+    // and history polyline — the single source of truth for "where on
+    // the bar does this value sit".
+    float valueToNormalizedX(double value) const;
+
     // Override setValue() for exponential smoothing
     // From Thetis MeterManager.cs — attack/decay smoothing
     void setValue(double v) override;
@@ -325,6 +351,10 @@ private:
     QColor      m_markerColour{Qt::yellow};
     QColor      m_peakHoldMarkerColour{Qt::red};
     float       m_peakHoldDecayRatio{0.0f};        // 0 = hold forever
+    // Phase A4 — non-linear value→X calibration waypoints.
+    // QMap keeps entries sorted by key (value) which is what the
+    // interpolation in valueToNormalizedX() relies on.
+    QMap<double, float> m_scaleCalibration;
 };
 
 // ---------------------------------------------------------------------------

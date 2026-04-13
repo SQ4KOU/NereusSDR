@@ -185,6 +185,51 @@ bool ImageItem::deserialize(const QString& data)
 
 // Override setValue() for exponential smoothing.
 // From Thetis MeterManager.cs — attack when rising, decay when falling.
+// ---------------------------------------------------------------------------
+// BarItem — Phase A4 ScaleCalibration (non-linear value → X map).
+// From Thetis clsBarItem (MeterManager.cs:20192 field, 21547-21549 addSMeterBar
+// 3-point S-meter calibration, 21638-21640 AddADCMaxMag 3-point ADC curve).
+// ---------------------------------------------------------------------------
+void BarItem::addScaleCalibration(double value, float normalizedX)
+{
+    m_scaleCalibration.insert(value, normalizedX);
+}
+
+float BarItem::valueToNormalizedX(double value) const
+{
+    // Empty calibration: fall back to linear minVal..maxVal mapping. This
+    // preserves pre-A4 behavior for every Filled/Edge preset.
+    if (m_scaleCalibration.isEmpty()) {
+        const double range = m_maxVal - m_minVal;
+        if (range <= 0.0) { return 0.0f; }
+        const double frac = std::clamp((value - m_minVal) / range, 0.0, 1.0);
+        return static_cast<float>(frac);
+    }
+
+    // Clamp below the first waypoint.
+    auto itFirst = m_scaleCalibration.constBegin();
+    if (value <= itFirst.key()) {
+        return itFirst.value();
+    }
+    // Clamp above the last waypoint.
+    auto itLast = std::prev(m_scaleCalibration.constEnd());
+    if (value >= itLast.key()) {
+        return itLast.value();
+    }
+
+    // Piecewise-linear interpolation between adjacent waypoints.
+    auto hi = m_scaleCalibration.upperBound(value);
+    auto lo = std::prev(hi);
+    const double k0 = lo.key();
+    const double k1 = hi.key();
+    const float  x0 = lo.value();
+    const float  x1 = hi.value();
+    const double span = k1 - k0;
+    if (span <= 0.0) { return x0; }
+    const double t = (value - k0) / span;
+    return static_cast<float>(x0 + (x1 - x0) * t);
+}
+
 void BarItem::setValue(double v)
 {
     MeterItem::setValue(v);
@@ -350,7 +395,9 @@ QString BarItem::serialize() const
         .arg(m_redThreshold)
         .arg(static_cast<double>(m_attackRatio))
         .arg(static_cast<double>(m_decayRatio))
-        .arg(m_barStyle == BarStyle::Edge ? QStringLiteral("Edge") : QStringLiteral("Filled"))
+        .arg(m_barStyle == BarStyle::Edge ? QStringLiteral("Edge")
+            : (m_barStyle == BarStyle::Line ? QStringLiteral("Line")
+                                            : QStringLiteral("Filled")))
         .arg(m_edgeBgColor.name(QColor::HexArgb))
         .arg(m_edgeLowColor.name(QColor::HexArgb))
         .arg(m_edgeHighColor.name(QColor::HexArgb))
@@ -369,6 +416,19 @@ QString BarItem::serialize() const
     base += QLatin1Char('|') + m_markerColour.name(QColor::HexArgb);
     base += QLatin1Char('|') + m_peakHoldMarkerColour.name(QColor::HexArgb);
     base += QLatin1Char('|') + QString::number(static_cast<double>(m_peakHoldDecayRatio));
+    // Phase A4 tail: scaleCalibration (semicolon-separated value=x pairs).
+    // Empty-calibration BarItems emit an empty string, keeping the parser
+    // identical for pre-A4 saves. The barStyle field (index 15) is already
+    // serialized above — the Line value just joins Filled/Edge in the
+    // existing string slot, so no new slot is needed for the enum itself.
+    QStringList calParts;
+    for (auto it = m_scaleCalibration.constBegin();
+         it != m_scaleCalibration.constEnd(); ++it) {
+        calParts << QStringLiteral("%1=%2")
+                        .arg(it.key())
+                        .arg(static_cast<double>(it.value()));
+    }
+    base += QLatin1Char('|') + calParts.join(QLatin1Char(';'));
     return base;
 }
 
@@ -397,7 +457,14 @@ bool BarItem::deserialize(const QString& data)
     // Optional Edge mode fields (new format, 20 fields total)
     // From Thetis console.cs:12612-12678
     if (parts.size() >= 20) {
-        m_barStyle    = (parts[15] == QLatin1String("Edge")) ? BarStyle::Edge : BarStyle::Filled;
+        // Phase A4: BarStyle is now a 3-way enum (Filled, Edge, Line)
+        if (parts[15] == QLatin1String("Edge")) {
+            m_barStyle = BarStyle::Edge;
+        } else if (parts[15] == QLatin1String("Line")) {
+            m_barStyle = BarStyle::Line;
+        } else {
+            m_barStyle = BarStyle::Filled;
+        }
         QColor ec1 = QColor(parts[16]); if (ec1.isValid()) { m_edgeBgColor   = ec1; }
         QColor ec2 = QColor(parts[17]); if (ec2.isValid()) { m_edgeLowColor  = ec2; }
         QColor ec3 = QColor(parts[18]); if (ec3.isValid()) { m_edgeHighColor = ec3; }
@@ -438,6 +505,27 @@ bool BarItem::deserialize(const QString& data)
         bool okR = true;
         float r = parts[29].toFloat(&okR);
         if (okR) { m_peakHoldDecayRatio = r; }
+    }
+
+    // Phase A4 — ScaleCalibration (semicolon-separated value=x pairs).
+    if (parts.size() >= 31) {
+        m_scaleCalibration.clear();
+        const QString& calStr = parts[30];
+        if (!calStr.isEmpty()) {
+            const QStringList calParts =
+                calStr.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+            for (const QString& p : calParts) {
+                const int eq = p.indexOf(QLatin1Char('='));
+                if (eq <= 0) { continue; }
+                bool okK = true;
+                bool okV = true;
+                const double k = p.left(eq).toDouble(&okK);
+                const float  v = p.mid(eq + 1).toFloat(&okV);
+                if (okK && okV) {
+                    m_scaleCalibration.insert(k, v);
+                }
+            }
+        }
     }
 
     return true;

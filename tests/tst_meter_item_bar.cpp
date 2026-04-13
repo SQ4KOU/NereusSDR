@@ -186,6 +186,83 @@ private slots:
         b.setValue(-70.0);
         QCOMPARE(b.peakValue(), -40.0);
     }
+
+    // ---- Phase A4: BarStyle::Line + ScaleCalibration non-linear map ----
+
+    void barStyle_Line_roundtrip()
+    {
+        // Thetis clsBarItem.BarStyle enum (MeterManager.cs:19927-19934)
+        // has None, Line, SolidFilled, GradientFilled, Segments. addSMeterBar
+        // uses BarStyle.Line (MeterManager.cs:21546). NereusSDR already has
+        // Filled + Edge; A4 adds Line.
+        BarItem b;
+        b.setBarStyle(BarItem::BarStyle::Line);
+        QCOMPARE(b.barStyle(), BarItem::BarStyle::Line);
+    }
+
+    void scaleCalibration_defaults_empty()
+    {
+        BarItem b;
+        QCOMPARE(b.scaleCalibrationSize(), 0);
+    }
+
+    void scaleCalibration_add_and_size()
+    {
+        BarItem b;
+        b.addScaleCalibration(-133.0, 0.0f);
+        b.addScaleCalibration(-73.0, 0.5f);
+        b.addScaleCalibration(-13.0, 0.99f);
+        QCOMPARE(b.scaleCalibrationSize(), 3);
+    }
+
+    void scaleCalibration_interpolates_thetis_SMeter_curve()
+    {
+        // From Thetis addSMeterBar (MeterManager.cs:21547-21549):
+        //   -133 dBm -> x = 0.0    (S0 / bottom of scale)
+        //   -73 dBm  -> x = 0.5    (S9)
+        //   -13 dBm  -> x = 0.99   (S9 + 60 dB)
+        // These are NON-LINEAR waypoints. A calibrated BarItem must
+        // interpolate through them rather than doing linear min..max.
+        BarItem b;
+        b.addScaleCalibration(-133.0, 0.0f);
+        b.addScaleCalibration(-73.0, 0.5f);
+        b.addScaleCalibration(-13.0, 0.99f);
+
+        // Exact waypoints
+        QCOMPARE(b.valueToNormalizedX(-133.0), 0.0f);
+        QCOMPARE(b.valueToNormalizedX(-73.0), 0.5f);
+        QCOMPARE(b.valueToNormalizedX(-13.0), 0.99f);
+
+        // Midpoint of first segment: -133 .. -73, halfway is -103 dBm -> 0.25
+        const float midSeg1 = b.valueToNormalizedX(-103.0);
+        QVERIFY2(std::abs(midSeg1 - 0.25f) < 1e-3f,
+                 "midpoint of first calibration segment should lie at x=0.25");
+
+        // Midpoint of second segment: -73 .. -13, halfway is -43 dBm
+        // -> midway between 0.5 and 0.99 = 0.745
+        const float midSeg2 = b.valueToNormalizedX(-43.0);
+        QVERIFY2(std::abs(midSeg2 - 0.745f) < 1e-3f,
+                 "midpoint of second calibration segment should lie at x=0.745");
+
+        // Below-range clamp
+        QCOMPARE(b.valueToNormalizedX(-200.0), 0.0f);
+        // Above-range clamp (use the last waypoint, 0.99)
+        QCOMPARE(b.valueToNormalizedX(100.0), 0.99f);
+    }
+
+    void scaleCalibration_empty_falls_back_to_linear_range()
+    {
+        // With no calibration waypoints, BarItem should keep its
+        // legacy linear min..max behavior so existing Filled presets
+        // don't regress.
+        BarItem b;
+        b.setRange(-140.0, 0.0);
+        QCOMPARE(b.valueToNormalizedX(-140.0), 0.0f);
+        QCOMPARE(b.valueToNormalizedX(0.0), 1.0f);
+        const float mid = b.valueToNormalizedX(-70.0);
+        QVERIFY2(std::abs(mid - 0.5f) < 1e-3f,
+                 "linear fallback midpoint should be 0.5");
+    }
 };
 
 QTEST_MAIN(TstMeterItemBar)
