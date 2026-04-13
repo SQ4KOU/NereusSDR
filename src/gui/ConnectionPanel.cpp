@@ -16,6 +16,7 @@
 //   NereusSDR maps both sources to QTableWidget with 8 columns per plan §5.2.
 
 #include "ConnectionPanel.h"
+#include "AddCustomRadioDialog.h"
 #include "models/RadioModel.h"
 #include "core/AppSettings.h"
 #include "core/LogCategories.h"
@@ -249,10 +250,11 @@ void ConnectionPanel::buildUI()
 
     btnLayout->addStretch();
 
-    // Add Manually — Task 16 stub
+    // Add Manually — Phase 3I Task 16
+    // Source: frmAddCustomRadio.cs — port of the Thetis "Add Custom Radio" dialog
     m_addManuallyBtn = makeBtn(QStringLiteral("Add Manually"), kSecondaryStyle);
-    m_addManuallyBtn->setEnabled(false);
-    m_addManuallyBtn->setToolTip(QStringLiteral("Coming in Task 16 — TODO(3I-T16)"));
+    m_addManuallyBtn->setToolTip(QStringLiteral("Add a radio that is not on the local subnet"));
+    connect(m_addManuallyBtn, &QPushButton::clicked, this, &ConnectionPanel::onAddManuallyClicked);
     btnLayout->addWidget(m_addManuallyBtn);
 
     // Forget — Phase 3I Task 15
@@ -413,6 +415,39 @@ void ConnectionPanel::populateRow(int row, const RadioInfo& info)
     applyRowColor(row, info);
 }
 
+// Insert or update a row for `info`. If online=false the row uses offline colour.
+// Used by onAddManuallyClicked (Task 16) to show the entry immediately after saving.
+void ConnectionPanel::upsertRowForInfo(const RadioInfo& info, bool online)
+{
+    int row = rowForMac(info.macAddress);
+    if (row < 0) {
+        row = m_radioTable->rowCount();
+        m_radioTable->insertRow(row);
+    }
+    populateRow(row, info);
+
+    if (!online) {
+        // Paint the row offline-grey — manually added radios haven't been seen yet
+        for (int col = 0; col < ColCount; ++col) {
+            QTableWidgetItem* cell = m_radioTable->item(row, col);
+            if (cell) {
+                cell->setBackground(kColorOffline);
+                cell->setForeground(QColor{0x60, 0x60, 0x70});
+            }
+        }
+        if (QTableWidgetItem* inUse = m_radioTable->item(row, ColInUse)) {
+            inUse->setText(QStringLiteral("saved"));
+        }
+    }
+
+    // Auto-select if this is the only row
+    if (m_radioTable->rowCount() == 1) {
+        m_radioTable->selectRow(0);
+    }
+
+    updateButtonStates();
+}
+
 int ConnectionPanel::rowForMac(const QString& mac) const
 {
     for (int r = 0; r < m_radioTable->rowCount(); ++r) {
@@ -570,6 +605,28 @@ void ConnectionPanel::onDisconnectClicked()
 {
     setStatusText(QStringLiteral("Disconnecting..."));
     m_radioModel->disconnectFromRadio();
+}
+
+// Phase 3I Task 16 — Add Manually wired.
+// Opens AddCustomRadioDialog (port of Thetis frmAddCustomRadio.cs).
+// On OK: saves to AppSettings, adds a row to the table immediately.
+void ConnectionPanel::onAddManuallyClicked()
+{
+    AddCustomRadioDialog dlg(this);
+    if (dlg.exec() != QDialog::Accepted) {
+        return;
+    }
+    const RadioInfo info = dlg.result();
+    AppSettings::instance().saveRadio(info, dlg.pinToMac(), dlg.autoConnect());
+    AppSettings::instance().save();
+
+    // Add the row to the table immediately so the user sees their entry.
+    // onRadioDiscovered handles de-duplication via rowForMac.
+    upsertRowForInfo(info, /*online=*/false);
+    setStatusText(QStringLiteral("Added: %1").arg(info.name));
+
+    qCDebug(lcDiscovery) << "ConnectionPanel: manually added radio"
+                         << info.name << info.address.toString();
 }
 
 // Phase 3I Task 15 — Forget wired.

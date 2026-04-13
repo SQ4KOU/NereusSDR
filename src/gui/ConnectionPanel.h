@@ -57,7 +57,8 @@ public slots:
 private slots:
     void onConnectClicked();
     void onDisconnectClicked();
-    void onForgetClicked();    // Phase 3I Task 15 — removes radio from saved list
+    void onForgetClicked();         // Phase 3I Task 15 — removes radio from saved list
+    void onAddManuallyClicked();    // Phase 3I Task 16 — AddCustomRadioDialog
     void onStartDiscoveryClicked();
     void onStopDiscoveryClicked();
     void onRadioSelectionChanged();
@@ -69,6 +70,9 @@ private:
     void updateButtonStates();
     void applyRowColor(int row, const RadioInfo& info);
     void populateRow(int row, const RadioInfo& info);
+    // Insert a new row or update an existing row for `info`.
+    // online=false renders the row with offline colour (manual adds start offline).
+    void upsertRowForInfo(const RadioInfo& info, bool online);
 
     // Get the RadioInfo for the currently selected table row
     RadioInfo selectedRadio() const;
