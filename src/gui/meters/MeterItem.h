@@ -246,6 +246,23 @@ public:
     // by ShowPeakValue text render and (in A3) the peak-hold marker.
     double peakValue() const { return m_peakValue; }
 
+    // --- Phase A2: ShowHistory / HistoryColour / HistoryDuration ---
+    // From Thetis clsBarItem (MeterManager.cs:19938, 19881, 19945-19946,
+    // 20040-20053). History draws a translucent trailing fill behind the
+    // live bar showing recent values. Thetis default HistoryDuration is
+    // 4000ms (see addSMeterBar:21539 and AddADCMaxMag:21633).
+    void setShowHistory(bool on) { m_showHistory = on; }
+    bool showHistory() const { return m_showHistory; }
+
+    void setHistoryColour(const QColor& c) { m_historyColour = c; }
+    QColor historyColour() const { return m_historyColour; }
+
+    void setHistoryDurationMs(int ms) { m_historyDurationMs = ms; }
+    int historyDurationMs() const { return m_historyDurationMs; }
+
+    // Introspection for tests + the render pass.
+    int historySampleCount() const { return static_cast<int>(m_history.size()); }
+
     // Override setValue() for exponential smoothing
     // From Thetis MeterManager.cs — attack/decay smoothing
     void setValue(double v) override;
@@ -280,6 +297,11 @@ private:
     bool        m_showPeakValue{false};
     QColor      m_fontColour{Qt::yellow};
     double      m_peakValue{-std::numeric_limits<double>::infinity()};
+    // Phase A2 — clsBarItem history fields
+    bool        m_showHistory{false};
+    QColor      m_historyColour{255, 0, 0, 128};  // Thetis default Red(128)
+    int         m_historyDurationMs{4000};         // Thetis default
+    QVector<double> m_history;                     // rolling sample buffer
 };
 
 // ---------------------------------------------------------------------------

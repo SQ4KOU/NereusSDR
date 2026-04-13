@@ -202,6 +202,18 @@ void BarItem::setValue(double v)
     if (v > m_peakValue) {
         m_peakValue = v;
     }
+
+    // Phase A2 — history ring buffer. Thetis clsBarItem pushes samples at
+    // UpdateInterval and keeps (HistoryDuration / UpdateInterval) entries.
+    // Without a poll-clock reference at setValue time we bound the buffer
+    // by a conservative upper limit (HistoryDurationMs at 100 Hz = 400).
+    if (m_showHistory) {
+        m_history.append(v);
+        const int maxSamples = qMax(2, m_historyDurationMs / 10);
+        while (m_history.size() > maxSamples) {
+            m_history.removeFirst();
+        }
+    }
 }
 
 void BarItem::paint(QPainter& p, int widgetW, int widgetH)
@@ -344,6 +356,10 @@ QString BarItem::serialize() const
     base += QLatin1Char('|') + (m_showValue     ? QStringLiteral("1") : QStringLiteral("0"));
     base += QLatin1Char('|') + (m_showPeakValue ? QStringLiteral("1") : QStringLiteral("0"));
     base += QLatin1Char('|') + m_fontColour.name(QColor::HexArgb);
+    // Phase A2 tail: showHistory | historyColour | historyDurationMs
+    base += QLatin1Char('|') + (m_showHistory ? QStringLiteral("1") : QStringLiteral("0"));
+    base += QLatin1Char('|') + m_historyColour.name(QColor::HexArgb);
+    base += QLatin1Char('|') + QString::number(m_historyDurationMs);
     return base;
 }
 
@@ -385,6 +401,18 @@ bool BarItem::deserialize(const QString& data)
     if (parts.size() >= 23) {
         QColor fc = QColor(parts[22]);
         if (fc.isValid()) { m_fontColour = fc; }
+    }
+
+    // Phase A2 — ShowHistory / HistoryColour / HistoryDurationMs
+    if (parts.size() >= 24) { m_showHistory = (parts[23] == QLatin1String("1")); }
+    if (parts.size() >= 25) {
+        QColor hc = QColor(parts[24]);
+        if (hc.isValid()) { m_historyColour = hc; }
+    }
+    if (parts.size() >= 26) {
+        bool okDur = true;
+        int dur = parts[25].toInt(&okDur);
+        if (okDur) { m_historyDurationMs = dur; }
     }
 
     return true;

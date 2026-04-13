@@ -60,6 +60,66 @@ private slots:
         b.setValue(-70.0);   // lower — peak should hold
         QVERIFY(b.peakValue() >= -50.0);
     }
+
+    // ---- Phase A2: ShowHistory / HistoryColour / HistoryDuration ----
+
+    void showHistory_default_is_false()
+    {
+        BarItem b;
+        QCOMPARE(b.showHistory(), false);
+    }
+
+    void showHistory_and_historyColour_roundtrip()
+    {
+        // Thetis addSMeterBar default: HistoryColour = Color.FromArgb(128, Red)
+        // (MeterManager.cs:21545).
+        BarItem b;
+        b.setShowHistory(true);
+        const QColor red128(255, 0, 0, 128);
+        b.setHistoryColour(red128);
+        QCOMPARE(b.showHistory(), true);
+        QCOMPARE(b.historyColour(), red128);
+    }
+
+    void historyDuration_default_matches_thetis_4000ms()
+    {
+        // Thetis addSMeterBar / AddADCMaxMag both set HistoryDuration = 4000
+        // (MeterManager.cs:21539, 21633). Use that as the NereusSDR default.
+        BarItem b;
+        QCOMPARE(b.historyDurationMs(), 4000);
+    }
+
+    void historyDuration_roundtrip()
+    {
+        BarItem b;
+        b.setHistoryDurationMs(2500);
+        QCOMPARE(b.historyDurationMs(), 2500);
+    }
+
+    void history_samples_accumulate_when_enabled()
+    {
+        // With ShowHistory=true, setValue() should push samples into a
+        // ring buffer so the render pass can draw the trailing trace.
+        // The buffer length is bounded by HistoryDuration + update rate —
+        // we only assert non-zero on first few pushes here.
+        BarItem b;
+        b.setRange(-140.0, 0.0);
+        b.setShowHistory(true);
+        b.setValue(-90.0);
+        b.setValue(-80.0);
+        b.setValue(-70.0);
+        QVERIFY(b.historySampleCount() >= 3);
+    }
+
+    void history_samples_dont_accumulate_when_disabled()
+    {
+        BarItem b;
+        b.setRange(-140.0, 0.0);
+        // ShowHistory defaults to false
+        b.setValue(-90.0);
+        b.setValue(-80.0);
+        QCOMPARE(b.historySampleCount(), 0);
+    }
 };
 
 QTEST_MAIN(TstMeterItemBar)
