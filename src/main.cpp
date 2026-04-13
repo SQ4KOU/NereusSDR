@@ -4,6 +4,7 @@
 #include "core/LogCategories.h"
 
 #include <QApplication>
+#include <QIcon>
 #include <QStyleFactory>
 #include <QDir>
 #include <QFile>
@@ -82,6 +83,7 @@ int main(int argc, char* argv[])
     app.setApplicationName("NereusSDR");
     app.setApplicationVersion(NEREUSSDR_VERSION);
     app.setOrganizationName("NereusSDR");
+    app.setWindowIcon(QIcon(":/icons/NereusSDR.png"));
 
     // Set up file logging in ~/.config/NereusSDR/
     const QString logDir = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)

@@ -307,6 +307,20 @@ set(GUI_SOURCES
 qt_add_resources(RESOURCES resources.qrc)
 
 # --------------------------------------------------------------------------
+# App icon (per-platform)
+# --------------------------------------------------------------------------
+set(APP_ICON_SOURCES "")
+if(APPLE)
+    set(APP_ICON_MACOS "${CMAKE_SOURCE_DIR}/resources/icons/NereusSDR.icns")
+    set_source_files_properties(${APP_ICON_MACOS} PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources"
+    )
+    list(APPEND APP_ICON_SOURCES ${APP_ICON_MACOS})
+elseif(WIN32)
+    list(APPEND APP_ICON_SOURCES "${CMAKE_SOURCE_DIR}/resources/icons/NereusSDR.rc")
+endif()
+
+# --------------------------------------------------------------------------
 # Executable
 # --------------------------------------------------------------------------
 add_executable(NereusSDR
@@ -315,11 +329,15 @@ add_executable(NereusSDR
     ${MODEL_SOURCES}
     ${GUI_SOURCES}
     ${RESOURCES}
+    ${APP_ICON_SOURCES}
 )
 
 set_target_properties(NereusSDR PROPERTIES
     WIN32_EXECUTABLE TRUE
     MACOSX_BUNDLE TRUE
+    MACOSX_BUNDLE_ICON_FILE "NereusSDR.icns"
+    MACOSX_BUNDLE_BUNDLE_NAME "NereusSDR"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "com.boydsoftprez.NereusSDR"
 )
 
 target_include_directories(NereusSDR PRIVATE
