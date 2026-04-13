@@ -15,6 +15,7 @@
 #include <QColor>
 
 #include "gui/meters/MeterItem.h"
+#include "gui/meters/MeterPoller.h"  // MeterBinding namespace
 
 using namespace NereusSDR;
 
@@ -262,6 +263,105 @@ private slots:
         const float mid = b.valueToNormalizedX(-70.0);
         QVERIFY2(std::abs(mid - 0.5f) < 1e-3f,
                  "linear fallback midpoint should be 0.5");
+    }
+
+    // ---- Phase C: full tail-tolerant round-trip sweep ----
+
+    void full_roundtrip_preserves_every_A_phase_field()
+    {
+        // Populate every field added in Phases A1-A4, serialize, parse
+        // the result back, assert value equality. If any field is
+        // dropped by serialize or misread by deserialize, this test
+        // pinpoints which one.
+        BarItem a;
+        a.setRect(0.1f, 0.2f, 0.5f, 0.3f);
+        a.setBindingId(MeterBinding::TxAlc);
+        a.setZOrder(2);
+        a.setOrientation(BarItem::Orientation::Horizontal);
+        a.setRange(-30.0, 0.0);
+        a.setBarColor(QColor(0x11, 0x22, 0x33));
+        a.setBarRedColor(QColor(0xaa, 0xbb, 0xcc));
+        a.setRedThreshold(-5.0);
+        a.setAttackRatio(0.7f);
+        a.setDecayRatio(0.15f);
+        // Phase A1
+        a.setShowValue(true);
+        a.setShowPeakValue(true);
+        a.setFontColour(QColor(0xff, 0xff, 0x00));
+        // Phase A2
+        a.setShowHistory(true);
+        a.setHistoryColour(QColor(255, 0, 0, 128));
+        a.setHistoryDurationMs(2500);
+        // Phase A3
+        a.setShowMarker(true);
+        a.setMarkerColour(QColor(Qt::cyan));
+        a.setPeakHoldMarkerColour(QColor(Qt::red));
+        a.setPeakHoldDecayRatio(0.25f);
+        // Phase A4
+        a.setBarStyle(BarItem::BarStyle::Line);
+        a.addScaleCalibration(-133.0, 0.0f);
+        a.addScaleCalibration(-73.0, 0.5f);
+        a.addScaleCalibration(-13.0, 0.99f);
+
+        const QString blob = a.serialize();
+
+        BarItem b;
+        QVERIFY(b.deserialize(blob));
+
+        QCOMPARE(b.showValue(),          true);
+        QCOMPARE(b.showPeakValue(),      true);
+        QCOMPARE(b.fontColour(),         QColor(0xff, 0xff, 0x00));
+        QCOMPARE(b.showHistory(),        true);
+        QCOMPARE(b.historyColour(),      QColor(255, 0, 0, 128));
+        QCOMPARE(b.historyDurationMs(),  2500);
+        QCOMPARE(b.showMarker(),         true);
+        QCOMPARE(b.markerColour(),       QColor(Qt::cyan));
+        QCOMPARE(b.peakHoldMarkerColour(), QColor(Qt::red));
+        QCOMPARE(b.peakHoldDecayRatio(), 0.25f);
+        QCOMPARE(b.barStyle(),           BarItem::BarStyle::Line);
+        QCOMPARE(b.scaleCalibrationSize(), 3);
+        QCOMPARE(b.valueToNormalizedX(-73.0), 0.5f);
+    }
+
+    void deserialize_pre_A1_legacy_BAR_payload()
+    {
+        // 20-field legacy BAR (through the A0 Edge mode fields) — the
+        // shape every saved layout in the wild has today. Must load
+        // cleanly and leave every A1-A4 field at its default.
+        const QString legacy = QStringLiteral(
+            "BAR|0.1|0.2|0.5|0.3|105|2|H|-30|0"
+            "|#ff11bbff|#ffff4444|1000|0.8|0.2"
+            "|Filled|#ff000000|#ffffffff|#ffff0000|#ffffff00");
+        BarItem b;
+        QVERIFY(b.deserialize(legacy));
+        // Core fields parsed correctly
+        QCOMPARE(b.bindingId(), MeterBinding::TxAlc);
+        QCOMPARE(b.barStyle(),  BarItem::BarStyle::Filled);
+        // A1-A4 defaults intact
+        QCOMPARE(b.showValue(),          false);
+        QCOMPARE(b.showPeakValue(),      false);
+        QCOMPARE(b.showHistory(),        false);
+        QCOMPARE(b.historyDurationMs(),  4000);
+        QCOMPARE(b.showMarker(),         false);
+        QCOMPARE(b.peakHoldDecayRatio(), 0.0f);
+        QCOMPARE(b.scaleCalibrationSize(), 0);
+    }
+
+    void deserialize_garbled_calibration_field_is_tolerated()
+    {
+        // Malformed calibration pairs are silently dropped — prevents
+        // user-hand-edited AppSettings files from breaking BarItem
+        // load entirely.
+        BarItem a;
+        a.setRange(-140.0, 0.0);
+        const QString blob = a.serialize()
+            .section(QLatin1Char('|'), 0, 29)
+            + QLatin1String("|garbage;not=valid;=;=0.5;-50=bad;-20=0.9");
+        BarItem b;
+        QVERIFY(b.deserialize(blob));
+        // -20 -> 0.9 is the only well-formed pair, so the size is 1
+        QCOMPARE(b.scaleCalibrationSize(), 1);
+        QCOMPARE(b.valueToNormalizedX(-20.0), 0.9f);
     }
 };
 
