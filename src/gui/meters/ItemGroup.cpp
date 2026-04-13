@@ -471,16 +471,43 @@ void ItemGroup::installInto(MeterWidget* widget, float gx, float gy, float gw, f
 // ---------------------------------------------------------------------------
 // createSMeterPreset
 // From AetherSDR SMeterWidget — single NeedleItem handles all rendering.
+// This is the default used by Container #0's fixed S-Meter header
+// (MainWindow) and the Presets menu "S-Meter Only" entry. Phase 3G-9
+// briefly rebuilt this as a Thetis-style bar composition
+// (commit 4bba2c2) but that replaced the main signal meter against
+// the design intent; the revert restores the AetherSDR needle as the
+// default shape. The Thetis addSMeterBar port still lives in
+// createSMeterBarPreset below for opt-in verification/use.
 // ---------------------------------------------------------------------------
-
-// From Thetis MeterManager.cs:21523-21616  addSMeterBar
-// Canonical Thetis S-meter composition: dark gray background +
-// Line-style BarItem with 3-point non-linear calibration (S0 edge
-// to S9+60) + ScaleItem showing the reading title and a two-tone
-// GeneralScale. Accepts SignalPeak / SignalAvg / SignalMaxBin
-// bindings — same composition, different data source.
 ItemGroup* ItemGroup::createSMeterPreset(int bindingId, const QString& name,
                                           QObject* parent)
+{
+    ItemGroup* group = new ItemGroup(name, parent);
+
+    NeedleItem* needle = new NeedleItem();
+    needle->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+    needle->setBindingId(bindingId);
+    needle->setSourceLabel(name);
+    needle->setZOrder(5);
+    group->addItem(needle);
+
+    return group;
+}
+
+// ---------------------------------------------------------------------------
+// createSMeterBarPreset — Thetis addSMeterBar composition (opt-in)
+// ---------------------------------------------------------------------------
+// From Thetis MeterManager.cs:21523-21616 addSMeterBar.
+// Dark gray background + Line-style BarItem with 3-point non-linear
+// calibration (S0 edge to S9+60) + ScaleItem showing the reading
+// title and a two-tone GeneralScale. Accepts SignalPeak / SignalAvg
+// / SignalMaxBin bindings — same composition, different data source.
+//
+// Not wired into any UI call site by default. Exists so the Phase
+// 3G-9 calibrated bar S-meter port is preserved; add to a new
+// container manually if you want to run/verify it.
+ItemGroup* ItemGroup::createSMeterBarPreset(int bindingId, const QString& name,
+                                             QObject* parent)
 {
     ItemGroup* group = new ItemGroup(name, parent);
 
@@ -794,8 +821,9 @@ ItemGroup* ItemGroup::createCompPreset(QObject* parent)
 
 ItemGroup* ItemGroup::createSignalBarPreset(QObject* parent)
 {
-    // Linear -140..0 range for direct dBm signal readout. The S-Meter
-    // calibrated 3-point (S0/S9/S9+60) lives in createSMeterPreset.
+    // Linear -140..0 range for direct dBm signal readout. The Thetis
+    // calibrated 3-point S-meter (S0/S9/S9+60) lives in
+    // createSMeterBarPreset (opt-in, not wired to any UI call site).
     return buildBarRow(MeterBinding::SignalPeak,
                        -140.0, -70.0, 0.0, 0.5f, 0.99f,
                        QColor(255, 0, 0, 128),

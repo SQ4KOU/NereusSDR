@@ -45,28 +45,56 @@ private:
     }
 
 private slots:
-    // ---- Phase D1: createSMeterPreset rebuilt from addSMeterBar ----
+    // ---- createSMeterPreset: default S-Meter shape ----
+    //
+    // Phase 3G-9 D1 briefly rebuilt createSMeterPreset as a Thetis
+    // bar-row composition. That was reverted because the main signal
+    // meter should stay an arc needle (AetherSDR SMeterWidget style);
+    // the Thetis addSMeterBar port now lives in createSMeterBarPreset
+    // and everything downstream of this test block targets that
+    // factory instead.
 
-    void SMeter_preset_is_now_a_bar_not_a_needle()
+    void SMeter_preset_is_a_needle_by_default()
     {
-        // Pre-D1 createSMeterPreset built a single bare NeedleItem.
-        // After D1 it builds the Thetis addSMeterBar composition:
-        // SolidColour bg (z=1), BarItem Line-style with calibration
-        // (z=2), ScaleItem ShowType + GeneralScale (z=3), ClickBoxItem
-        // (z=4). Needle count should be zero.
+        // Guards the revert: createSMeterPreset must stay a single
+        // NeedleItem so Container #0's S-Meter header and the
+        // Presets menu "S-Meter Only" entry keep their needle look.
         ItemGroup* g = ItemGroup::createSMeterPreset(
             MeterBinding::SignalPeak, QStringLiteral("S-Meter"), nullptr);
         QVERIFY(g != nullptr);
 
-        QCOMPARE(countOfType<NeedleItem>(g), 0);
-        QCOMPARE(countOfType<BarItem>(g),    1);
-        QCOMPARE(countOfType<ScaleItem>(g),  1);
+        QCOMPARE(countOfType<NeedleItem>(g),      1);
+        QCOMPARE(countOfType<BarItem>(g),         0);
+        QCOMPARE(countOfType<ScaleItem>(g),       0);
+        QCOMPARE(countOfType<SolidColourItem>(g), 0);
+
+        NeedleItem* needle = findOfType<NeedleItem>(g);
+        QVERIFY(needle != nullptr);
+        QCOMPARE(needle->bindingId(), MeterBinding::SignalPeak);
+
+        delete g;
+    }
+
+    // ---- createSMeterBarPreset: Thetis addSMeterBar opt-in variant ----
+
+    void SMeterBar_preset_is_a_bar_composition()
+    {
+        // createSMeterBarPreset builds the Thetis addSMeterBar
+        // composition: SolidColour bg (z=1), BarItem Line-style with
+        // calibration (z=2), ScaleItem ShowType + GeneralScale (z=3).
+        ItemGroup* g = ItemGroup::createSMeterBarPreset(
+            MeterBinding::SignalPeak, QStringLiteral("S-Meter"), nullptr);
+        QVERIFY(g != nullptr);
+
+        QCOMPARE(countOfType<NeedleItem>(g),      0);
+        QCOMPARE(countOfType<BarItem>(g),         1);
+        QCOMPARE(countOfType<ScaleItem>(g),       1);
         QCOMPARE(countOfType<SolidColourItem>(g), 1);
 
         delete g;
     }
 
-    void SMeter_bar_matches_Thetis_addSMeterBar_calibration()
+    void SMeterBar_matches_Thetis_addSMeterBar_calibration()
     {
         // Thetis addSMeterBar (MeterManager.cs:21529-21555):
         //   Style               = BarStyle.Line
@@ -81,7 +109,7 @@ private slots:
         //   HistoryColour       = Color.FromArgb(128, Red)
         //   FontColour          = Yellow
         //   ScaleCalibration    = { -133->0.00, -73->0.50, -13->0.99 }
-        ItemGroup* g = ItemGroup::createSMeterPreset(
+        ItemGroup* g = ItemGroup::createSMeterBarPreset(
             MeterBinding::SignalPeak, QStringLiteral("S-Meter"), nullptr);
         BarItem* bar = findOfType<BarItem>(g);
         QVERIFY(bar != nullptr);
@@ -108,7 +136,7 @@ private slots:
         delete g;
     }
 
-    void SMeter_scale_has_showType_and_GeneralScale()
+    void SMeterBar_scale_has_showType_and_GeneralScale()
     {
         // Thetis addSMeterBar (MeterManager.cs:21557-21564):
         //   cs.ShowType = true
@@ -118,7 +146,7 @@ private slots:
         // uses generalScale(6, 3, -1, 60, 2, 20, ..., 0.5f, true, true)
         // for SIGNAL_STRENGTH — we port that to the NereusSDR
         // GeneralScale params exactly.
-        ItemGroup* g = ItemGroup::createSMeterPreset(
+        ItemGroup* g = ItemGroup::createSMeterBarPreset(
             MeterBinding::SignalPeak, QStringLiteral("S-Meter"), nullptr);
         ScaleItem* scale = findOfType<ScaleItem>(g);
         QVERIFY(scale != nullptr);
@@ -132,7 +160,7 @@ private slots:
         delete g;
     }
 
-    void SMeter_accepts_alternate_bindings()
+    void SMeterBar_accepts_alternate_bindings()
     {
         // addSMeterBar is parameterised on the reading so the same
         // composition works for SIGNAL_STRENGTH, AVG_SIGNAL_STRENGTH,
@@ -140,7 +168,7 @@ private slots:
         for (int b : {MeterBinding::SignalPeak,
                       MeterBinding::SignalAvg,
                       MeterBinding::SignalMaxBin}) {
-            ItemGroup* g = ItemGroup::createSMeterPreset(
+            ItemGroup* g = ItemGroup::createSMeterBarPreset(
                 b, QStringLiteral("SMeter"), nullptr);
             QVERIFY(g);
             BarItem* bar = findOfType<BarItem>(g);
@@ -266,15 +294,16 @@ private slots:
         delete g;
     }
 
-    // --- Headless visual dump of the full createSMeterPreset composition ---
-    // Renders every item in the preset through its real paint() function
-    // into a shared QImage and writes the result to /tmp/sMeterPreset.png
-    // so the image can be read back out-of-process for debugging. This is
-    // what the container would actually show if a MeterWidget routed its
-    // paint through QPainter instead of QRhi.
-    void SMeter_dump_full_composition_to_png()
+    // --- Headless visual dump of the createSMeterBarPreset composition ---
+    // Renders every item in the Thetis bar-variant preset through its
+    // real paint() function into a shared QImage and writes the result
+    // to /tmp/sMeterPreset.png so the image can be read back out-of-
+    // process for debugging. This is what the container would actually
+    // show if a MeterWidget routed its paint through QPainter instead
+    // of QRhi.
+    void SMeterBar_dump_full_composition_to_png()
     {
-        ItemGroup* g = ItemGroup::createSMeterPreset(
+        ItemGroup* g = ItemGroup::createSMeterBarPreset(
             MeterBinding::SignalPeak, QStringLiteral("S-Meter"), nullptr);
         QVERIFY(g);
 

@@ -44,9 +44,22 @@ public:
                                                const QString& name, QObject* parent = nullptr);
 
     // S-Meter preset: arc-style NeedleItem with full readout.
-    // From AetherSDR SMeterWidget visual style.
+    // From AetherSDR SMeterWidget visual style. Default shape for
+    // Container #0's fixed S-Meter header and the Presets menu
+    // "S-Meter Only" entry. Phase 3G-9 briefly rebuilt this as a
+    // Thetis-style bar (commit 4bba2c2) — reverted because the main
+    // signal meter should stay a needle. Bar-composition port now
+    // lives in createSMeterBarPreset below.
     static ItemGroup* createSMeterPreset(int bindingId, const QString& name,
                                           QObject* parent = nullptr);
+
+    // Thetis addSMeterBar port: SolidColour backdrop + Line BarItem
+    // with 3-point calibration (S0/S9/S9+60) + GeneralScale ScaleItem.
+    // Opt-in — not wired into any UI call site by default. Add to a
+    // new container manually to verify the Thetis calibrated bar.
+    // From Thetis MeterManager.cs:21523-21616 addSMeterBar.
+    static ItemGroup* createSMeterBarPreset(int bindingId, const QString& name,
+                                             QObject* parent = nullptr);
 
     // Power/SWR preset: two stacked horizontal bars.
     // From Thetis MeterManager.cs AddPWRBar/AddSWRBar calibration.
