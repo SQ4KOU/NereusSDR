@@ -22,6 +22,29 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 
 ---
 
+## Releases & Installation
+
+Pre-built binaries for Linux (AppImage, x86_64 + aarch64), macOS (DMG, Apple
+Silicon + Intel), and Windows (NSIS installer + portable ZIP, x64) are
+published as GitHub Releases:
+
+**<https://github.com/boydsoftprez/NereusSDR/releases>**
+
+All artifacts are GPG-signed (`KG4VCF`) via `SHA256SUMS.txt.asc`. To verify:
+
+```bash
+gpg --keyserver keyserver.ubuntu.com --recv-keys KG4VCF
+gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
+sha256sum -c SHA256SUMS.txt
+```
+
+> **Alpha builds:** until Apple Developer ID and Authenticode certificates
+> are obtained, macOS users will need to right-click → Open the DMG on first
+> launch, and Windows users will see a SmartScreen warning to click through.
+> Linux is unaffected. See the per-release notes for details.
+
+---
+
 ## Current Status
 
 **Phase 3G-8 complete — RX1 Display parity: Setup → Display pages fully wired to the renderer.** NereusSDR connects to an ANAN-G2 (Orion MkII) via Protocol 2, receives raw I/Q data, demodulates audio through WDSP, renders a live GPU-accelerated spectrum + waterfall with VFO tuning (CTUN mode), has a full UI skeleton with 12 applets, 150+ control widgets, a complete meter system with 31 item types, and — as of 3G-8 — a fully wired Display setup category where every Spectrum Defaults / Waterfall Defaults / Grid & Scales control routes through to the renderer live on both the QPainter fallback path and the QRhi/Metal GPU path. Per-band grid state persists across all 14 bands (160m–6m + GEN + WWV + XVTR).
