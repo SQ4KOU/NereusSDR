@@ -402,4 +402,6 @@ If at the end of this test you:
 
 **Thank you for testing.** We're trying to build a modern, open, cross-platform replacement for Thetis, and we can't do it without people running the code on real hardware and telling us what breaks. If you send us one usable bug report with logs attached, you've already contributed more than most people ever will to an open-source radio project.
 
-73 de the NereusSDR team
+JJ Boyd ~KG4VCF
+
+🤖 Co-Authored with [Claude Code](https://claude.com/claude-code)
