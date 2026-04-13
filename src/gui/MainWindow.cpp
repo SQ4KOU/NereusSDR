@@ -403,9 +403,36 @@ void MainWindow::resetDefaultLayout()
     for (const QString& id : toRemove) {
         m_containerManager->destroyContainer(id);
     }
+
+    // Also wipe the panel container's MeterWidget items and rebuild
+    // from factories. Before this, a persisted item payload (e.g. a
+    // bar-style S-Meter saved by an earlier build) would survive
+    // Reset because only the non-panel containers were destroyed —
+    // Container #0's MeterWidget was left untouched, so the stale
+    // items reloaded every launch and Reset felt like a no-op for
+    // the main meter column.
+    if (m_meterWidget) {
+        m_meterWidget->clearItems();
+
+        ItemGroup* smeter = ItemGroup::createSMeterPreset(
+            MeterBinding::SignalAvg, QStringLiteral("S-Meter"), m_meterWidget);
+        smeter->installInto(m_meterWidget, 0.0f, 0.0f, 1.0f, 0.45f);
+        delete smeter;
+
+        ItemGroup* pwrSwr = ItemGroup::createPowerSwrPreset(
+            QStringLiteral("Power/SWR"), m_meterWidget);
+        pwrSwr->installInto(m_meterWidget, 0.0f, 0.45f, 1.0f, 0.40f);
+        delete pwrSwr;
+
+        ItemGroup* alc = ItemGroup::createAlcPreset(m_meterWidget);
+        alc->installInto(m_meterWidget, 0.0f, 0.85f, 1.0f, 0.15f);
+        delete alc;
+    }
+
     rebuildEditContainerSubmenu();
     qCInfo(lcContainer) << "Reset default layout: removed"
-                         << toRemove.size() << "non-panel containers";
+                         << toRemove.size() << "non-panel containers"
+                         << "and rebuilt panel meter defaults";
 }
 
 void MainWindow::createDefaultContainers()
