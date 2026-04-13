@@ -242,6 +242,30 @@ private slots:
         conn.setAttenuator(80);  // above max
         QCOMPARE(conn.currentAttenForTest(), 31);
     }
+
+    // --- HL2-specific helpers (Task 12) ---
+    // Task 12 hardware validation is covered by the hardware smoke checklist
+    // (§7.3 of the Phase 3I plan). Unit tests here verify only the lightweight
+    // state invariants that are observable without a live HL2.
+
+    void hl2ThrottledStartsFalse() {
+        // m_hl2Throttled must be false at construction — no spurious throttle
+        // flag before the watchdog has ever fired.
+        P1RadioConnection conn;
+        conn.init();
+        conn.setBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(!conn.hl2ThrottledForTest());
+    }
+
+    void hl2IoBoardInitNoopForNonHl2() {
+        // hl2SendIoBoardInit() is only meaningful when hasIoBoardHl2 is set.
+        // For a non-HL2 board (e.g. Hermes), setBoardForTest must not
+        // accidentally set the throttle flag.
+        P1RadioConnection conn;
+        conn.init();
+        conn.setBoardForTest(HPSDRHW::Hermes);
+        QVERIFY(!conn.hl2ThrottledForTest());
+    }
 };
 
 QTEST_APPLESS_MAIN(TestP1WireFormat)

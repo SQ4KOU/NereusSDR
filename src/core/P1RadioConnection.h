@@ -91,7 +91,25 @@ private:
     // --- Per-board quirks — implemented in Tasks 11 & 12 ---
     void applyBoardQuirks();
     void hl2SendIoBoardTlv(const QByteArray& tlv);
+
+    // HL2-specific helpers (mi0bot Hermes-Lite branch, Task 12).
+    // hl2SendIoBoardInit — issues I2C register reads at startup to detect the
+    //   HL2 I/O board and latch its hardware version.
+    //   Source: mi0bot IoBoardHl2.cs:129-145 IOBoard.readRequest() —
+    //     I2C reads on bus 1 at addr 0x41 (HW version) and 0x1d (registers).
+    //     Full I2C init sequence is deferred (TODO(3I-T12)); the standard
+    //     NetworkIO start path already handles HL2 ep2 init.
+    void hl2SendIoBoardInit();
+
+    // hl2CheckBandwidthMonitor — detects HL2 LAN PHY throttling via ep6
+    //   sequence-gap heuristic; called from onWatchdogTick when hasBandwidthMonitor.
+    //   Source: mi0bot bandwidth_monitor.{c,h} (MW0LGE) — original is a byte-rate
+    //     meter (GetInboundBps/GetOutboundBps) using Windows InterlockedAdd64 and
+    //     GetTickCount64; NereusSDR uses an ep6 sequence-gap approach instead
+    //     (the byte-rate variant requires platform-specific atomics — TODO(3I-T12)).
     void hl2CheckBandwidthMonitor();
+    bool hl2IsThrottled() const { return m_hl2Throttled; }
+
     void checkFirmwareMinimum(int fw);
 
     // --- State ---
@@ -127,11 +145,18 @@ private:
 
     const BoardCapabilities* m_caps{nullptr};
 
+    // --- HL2 bandwidth monitor state (Task 12) ---
+    // Source: mi0bot bandwidth_monitor.{c,h} — adapted to ep6 sequence-gap heuristic.
+    bool      m_hl2Throttled{false};
+    int       m_hl2ThrottleCount{0};
+    QDateTime m_hl2LastThrottleTick;
+
 #ifdef NEREUS_BUILD_TESTS
 public:
     // Test-only helpers — allow unit tests to inject board caps without a live radio.
     void setBoardForTest(HPSDRHW board) { m_caps = &BoardCapsTable::forBoard(board); applyBoardQuirks(); }
     int currentAttenForTest() const { return m_atten; }
+    bool hl2ThrottledForTest() const { return m_hl2Throttled; }
 #endif
 };
 

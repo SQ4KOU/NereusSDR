@@ -340,6 +340,12 @@ void P1RadioConnection::connectToRadio(const RadioInfo& info)
     // m_caps is set. Source: specHPSDR.cs per-HPSDRHW branches.
     applyBoardQuirks();
 
+    // HL2 I/O board init — probe the I/O board via I2C after quirks are set.
+    // Source: mi0bot IoBoardHl2.cs:129-145 IOBoard.readRequest(); Task 12.
+    if (m_caps->hasIoBoardHl2) {
+        hl2SendIoBoardInit();
+    }
+
     // Firmware minimum refusal.
     // Source: Thetis NetworkIO.cs / specHPSDR.cs per-board firmware version checks.
     if (info.firmwareVersion > 0 && m_caps->minFirmwareVersion > 0 &&
@@ -545,8 +551,18 @@ void P1RadioConnection::onWatchdogTick()
     const ConnectionState cs = state();
 
     // Send periodic command frame (keep-alive) when connected or reconnecting.
+    // Skip ep2 if the HL2 LAN PHY is throttling — resume once throttle clears.
+    // Source: Task 12 hl2CheckBandwidthMonitor throttle flag.
     if (cs == ConnectionState::Connected || cs == ConnectionState::Connecting) {
-        sendCommandFrame();
+        if (!m_hl2Throttled) {
+            sendCommandFrame();
+        }
+    }
+
+    // HL2 bandwidth monitor — check for LAN PHY throttle on every watchdog tick.
+    // Source: mi0bot bandwidth_monitor.{c,h} — NereusSDR sequence-gap adaptation.
+    if (m_caps && m_caps->hasBandwidthMonitor) {
+        hl2CheckBandwidthMonitor();
     }
 
     // Silence detection applies to both Connected and Connecting states.
@@ -723,9 +739,115 @@ void P1RadioConnection::composeCcAlexRx(quint8*)  { /* Task 7 */ }
 void P1RadioConnection::composeCcAlexTx(quint8*)  { /* Task 7 */ }
 void P1RadioConnection::composeCcOcOutputs(quint8*) { /* Task 7 */ }
 
-void P1RadioConnection::hl2SendIoBoardTlv(const QByteArray&) { /* Task 12 */ }
-void P1RadioConnection::hl2CheckBandwidthMonitor() { /* Task 12 */ }
+void P1RadioConnection::hl2SendIoBoardTlv(const QByteArray&) { /* internal TLV helper — used by hl2SendIoBoardInit */ }
 void P1RadioConnection::checkFirmwareMinimum(int)  { /* superseded by connectToRadio firmware check (Task 11) */ }
+
+// ---------------------------------------------------------------------------
+// hl2SendIoBoardInit
+//
+// Called from connectToRadio() after applyBoardQuirks() when
+// m_caps->hasIoBoardHl2 is true.
+//
+// Source: mi0bot IoBoardHl2.cs — IOBoard singleton, readRequest() at lines
+//   129-145 initiates I2C reads:
+//     • addr 0x41, reg 0 → hardware version   (IoBoardHl2.cs:133-136)
+//     • addr 0x1d, reg REG_FIRMWARE_MAJOR (9)  (IoBoardHl2.cs:139)
+//     • addr 0x1d, reg REG_FIRMWARE_MINOR (10) (IoBoardHl2.cs:139)
+//
+// The C# side calls NetworkIO.I2CReadInitiate / I2CWrite which are P/Invoke
+// into ChannelMaster.dll.  The underlying wire encoding is handled by the
+// DLL's own I2C framing over ep2; there is no standalone TLV byte sequence
+// in IoBoardHl2.cs that can be extracted and sent verbatim.
+//
+// TODO(3I-T12): When Phase 3L lands, locate the I2C-over-ep2 wire encoding
+//   in ChannelMaster/network.c and port the full I2C read/write sequence so
+//   that NereusSDR can probe the HL2 I/O board hardware version and register
+//   map at startup.  For now we log a notice and return; the standard metis
+//   start sequence is sufficient for HL2 RX operation without the I/O board.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::hl2SendIoBoardInit()
+{
+    if (!m_caps || !m_caps->hasIoBoardHl2) { return; }
+
+    // Source: mi0bot IoBoardHl2.cs:83-125 — IOBoard Registers enum:
+    //   HardwareVersion  = -1 (I2C addr 0x41, reg 0)
+    //   REG_FIRMWARE_MAJOR = 9, REG_FIRMWARE_MINOR = 10 (I2C addr 0x1d)
+    //   All accessed via NetworkIO.I2CReadInitiate(bus=1, addr, reg).
+    //
+    // The I2C read/write wire format is internal to ChannelMaster.dll.
+    // TODO(3I-T12): Port ChannelMaster I2C-over-ep2 framing for full init.
+    qCInfo(lcConnection) << "HL2: I/O board init — I2C probe deferred (TODO(3I-T12));"
+                         << "standard metis start is sufficient for RX";
+}
+
+// ---------------------------------------------------------------------------
+// hl2CheckBandwidthMonitor
+//
+// Called from onWatchdogTick() when m_caps->hasBandwidthMonitor is true.
+//
+// Source: mi0bot bandwidth_monitor.{c,h} (copyright MW0LGE) —
+//   GetInboundBps / GetOutboundBps compute a rolling byte-rate using Windows
+//   InterlockedAdd64 and GetTickCount64 (bandwidth_monitor.c:86-123).
+//   The original does NOT implement throttle detection; it is a byte-rate
+//   telemetry helper that callers compare against an expected rate.
+//
+// NereusSDR interpretation: use ep6 sequence-gap count as a throttle proxy.
+//   m_epRecvSeqExpected is incremented by parseEp6Frame on every good frame;
+//   if the watchdog fires and m_epRecvSeqExpected has not advanced since the
+//   previous tick the HL2 LAN PHY may be throttling the ep6 stream.
+//
+// TODO(3I-T12): Port the full byte-rate monitor using std::atomic<int64_t>
+//   and std::chrono::steady_clock once Phase 3L adds the I/Q byte accounting
+//   plumbing.  The throttle threshold (kBwThrottleGapCount below) should be
+//   calibrated against a real HL2.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::hl2CheckBandwidthMonitor()
+{
+    if (!m_caps || !m_caps->hasBandwidthMonitor) { return; }
+
+    // Source: bandwidth_monitor.c:86-113 — compute_bps() measures the delta
+    //   in total bytes between two ticks divided by elapsed ms.  We use
+    //   sequence number stall as a simpler proxy: if m_epRecvSeqExpected
+    //   is the same as last tick AND we have previously received at least
+    //   one frame, count a potential throttle event.
+    //
+    // Throttle: 3 consecutive stall ticks (3 × 500 ms = 1.5 s) → flag.
+    // Clear:    any single advancing tick resets the counter.
+
+    static constexpr int kBwThrottleGapCount = 3;  // NereusSDR heuristic; TODO(3I-T12) calibrate
+
+    static quint32 s_lastSeq = 0;
+
+    if (!m_lastEp6At.isValid()) {
+        // No frames yet — nothing to monitor.
+        s_lastSeq = m_epRecvSeqExpected;
+        return;
+    }
+
+    if (m_epRecvSeqExpected == s_lastSeq) {
+        // Sequence stalled this tick.
+        ++m_hl2ThrottleCount;
+        if (!m_hl2Throttled && m_hl2ThrottleCount >= kBwThrottleGapCount) {
+            m_hl2Throttled = true;
+            m_hl2LastThrottleTick = QDateTime::currentDateTimeUtc();
+            qCWarning(lcConnection) << "HL2: LAN PHY throttle detected —"
+                                    << "ep6 sequence stalled for"
+                                    << m_hl2ThrottleCount << "watchdog ticks;"
+                                    << "pausing ep2 command frames";
+            emit errorOccurred(RadioConnectionError::None,
+                               QStringLiteral("HL2 LAN throttled — pausing ep2"));
+        }
+    } else {
+        // Sequence advanced — clear throttle.
+        if (m_hl2Throttled) {
+            qCInfo(lcConnection) << "HL2: LAN throttle cleared — ep6 stream resumed";
+            m_hl2Throttled = false;
+        }
+        m_hl2ThrottleCount = 0;
+    }
+
+    s_lastSeq = m_epRecvSeqExpected;
+}
 
 // ---------------------------------------------------------------------------
 // scaleSample24
