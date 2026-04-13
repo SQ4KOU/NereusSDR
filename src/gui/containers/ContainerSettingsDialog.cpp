@@ -622,10 +622,24 @@ void ContainerSettingsDialog::appendPresetRow(const QString& presetName)
     // user can resize the container taller to fit more.
     const float yPos  = nextStackYPos(m_workingItems);
     constexpr float kRowSlotH = 0.10f;
-    const float slotH = qMin(kRowSlotH, 0.95f - yPos);
-    if (slotH < 0.02f) {
+    constexpr float kStackBottom = 0.95f;
+    constexpr float kMinSlotH = 0.02f;
+    const float slotH = qMin(kRowSlotH, kStackBottom - yPos);
+    if (slotH < kMinSlotH) {
         // No room at the bottom — bail out rather than clobbering
-        // existing items.
+        // existing items. This is the path that used to overlap
+        // rows: nextStackYPos would clamp yPos back to 0.9 so
+        // slotH recomputed to 0.05, the guard never fired, and the
+        // new row landed exactly on top of the previous one. With
+        // the unclamped yPos the guard now fires cleanly. Future
+        // polish: surface a "container full — resize taller or
+        // remove a row" hint in the dialog status bar.
+        qWarning("ContainerSettingsDialog: no room to append '%s' "
+                 "(yPos=%.3f, slotH=%.3f < %.2f); stack full",
+                 qPrintable(presetName),
+                 static_cast<double>(yPos),
+                 static_cast<double>(slotH),
+                 static_cast<double>(kMinSlotH));
         delete group;
         return;
     }
@@ -1165,8 +1179,17 @@ float ContainerSettingsDialog::nextStackYPos(const QVector<MeterItem*>& items)
     // Without this filter the next-position math would clamp every
     // newly-added item at y=0.9 the moment a full-container item
     // existed, piling new items on top of each other.
+    //
+    // Return the true bottom-of-stack (unclamped). The caller is
+    // responsible for checking whether there is enough room for a
+    // new row via `slotH = 0.95 - yPos`; an earlier version of this
+    // function clamped the return to 0.9 which caused the NEXT
+    // append to overlap the last row once the stack reached the
+    // bottom — `slotH` became `0.05` again instead of going negative,
+    // and the bail-out at the caller never triggered. Callers now
+    // see a monotonically increasing yPos and refuse the append
+    // cleanly when slotH drops below the threshold.
     constexpr float kBackgroundSpanThreshold = 0.7f;
-    constexpr float kBottomClamp = 0.9f;
     float yPos = 0.0f;
     for (const MeterItem* item : items) {
         if (!item) { continue; }
@@ -1177,9 +1200,6 @@ float ContainerSettingsDialog::nextStackYPos(const QVector<MeterItem*>& items)
         if (bottom > yPos) {
             yPos = bottom;
         }
-    }
-    if (yPos > kBottomClamp) {
-        yPos = kBottomClamp;
     }
     return yPos;
 }
