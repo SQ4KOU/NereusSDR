@@ -535,20 +535,30 @@ void ContainerSettingsDialog::appendPresetRow(const QString& presetName)
     // Container" flow.
     ItemGroup* group = nullptr;
 
+    // Accepts both the short loadPresetByName names (Adc, Agc, Pbsnr,
+    // Cfc, CfcGain) AND the longer "*Bar" names used by the left
+    // "Meter Types" list entries (AdcBar, AgcBar, PbsnrBar, CfcBar,
+    // CfcGainBar). Both map to the same factory.
     if      (presetName == QLatin1String("SignalBar"))    group = ItemGroup::createSignalBarPreset(this);
     else if (presetName == QLatin1String("AvgSignalBar")) group = ItemGroup::createAvgSignalBarPreset(this);
     else if (presetName == QLatin1String("MaxBinBar"))    group = ItemGroup::createMaxBinBarPreset(this);
     else if (presetName == QLatin1String("SignalText"))   group = ItemGroup::createSignalTextPreset(0, this);
-    else if (presetName == QLatin1String("AdcBar"))       group = ItemGroup::createAdcBarPreset(this);
+    else if (presetName == QLatin1String("Adc") ||
+             presetName == QLatin1String("AdcBar"))       group = ItemGroup::createAdcBarPreset(this);
     else if (presetName == QLatin1String("AdcMaxMag"))    group = ItemGroup::createAdcMaxMagPreset(this);
-    else if (presetName == QLatin1String("AgcBar"))       group = ItemGroup::createAgcBarPreset(this);
-    else if (presetName == QLatin1String("AgcGainBar"))   group = ItemGroup::createAgcGainBarPreset(this);
-    else if (presetName == QLatin1String("PbsnrBar"))     group = ItemGroup::createPbsnrBarPreset(this);
+    else if (presetName == QLatin1String("Agc") ||
+             presetName == QLatin1String("AgcBar"))       group = ItemGroup::createAgcBarPreset(this);
+    else if (presetName == QLatin1String("AgcGain") ||
+             presetName == QLatin1String("AgcGainBar"))   group = ItemGroup::createAgcGainBarPreset(this);
+    else if (presetName == QLatin1String("Pbsnr") ||
+             presetName == QLatin1String("PbsnrBar"))     group = ItemGroup::createPbsnrBarPreset(this);
     else if (presetName == QLatin1String("Alc"))          group = ItemGroup::createAlcPreset(this);
     else if (presetName == QLatin1String("AlcGain"))      group = ItemGroup::createAlcGainBarPreset(this);
     else if (presetName == QLatin1String("AlcGroup"))     group = ItemGroup::createAlcGroupBarPreset(this);
-    else if (presetName == QLatin1String("CfcBar"))       group = ItemGroup::createCfcBarPreset(this);
-    else if (presetName == QLatin1String("CfcGainBar"))   group = ItemGroup::createCfcGainBarPreset(this);
+    else if (presetName == QLatin1String("Cfc") ||
+             presetName == QLatin1String("CfcBar"))       group = ItemGroup::createCfcBarPreset(this);
+    else if (presetName == QLatin1String("CfcGain") ||
+             presetName == QLatin1String("CfcGainBar"))   group = ItemGroup::createCfcGainBarPreset(this);
     else if (presetName == QLatin1String("Comp"))         group = ItemGroup::createCompPreset(this);
     else if (presetName == QLatin1String("Eq"))           group = ItemGroup::createEqBarPreset(this);
     else if (presetName == QLatin1String("Leveler"))      group = ItemGroup::createLevelerBarPreset(this);
@@ -1893,6 +1903,28 @@ void ContainerSettingsDialog::onLoadPreset()
 
 void ContainerSettingsDialog::loadPresetByName(const QString& name)
 {
+    // Phase E — bar-row presets append to the current stack instead
+    // of replacing. This matches Thetis's Appearance → Meters/Gadgets
+    // flow where each meter type the user picks adds a new row below
+    // the previous one. Composite presets (ANAN MM, Cross Needle,
+    // Magic Eye, full S-Meter, Power/SWR) still replace on load
+    // because they occupy the entire container.
+    static const QSet<QString> kBarRowPresets = {
+        QStringLiteral("Alc"),       QStringLiteral("AlcGain"),
+        QStringLiteral("AlcGroup"),  QStringLiteral("Mic"),
+        QStringLiteral("Comp"),      QStringLiteral("Eq"),
+        QStringLiteral("Leveler"),   QStringLiteral("LevelerGain"),
+        QStringLiteral("Cfc"),       QStringLiteral("CfcGain"),
+        QStringLiteral("Adc"),       QStringLiteral("AdcMaxMag"),
+        QStringLiteral("Agc"),       QStringLiteral("AgcGain"),
+        QStringLiteral("Pbsnr"),     QStringLiteral("SignalBar"),
+        QStringLiteral("AvgSignalBar"), QStringLiteral("MaxBinBar"),
+    };
+    if (kBarRowPresets.contains(name)) {
+        appendPresetRow(name);
+        return;
+    }
+
     if (!m_workingItems.isEmpty()) {
         const QMessageBox::StandardButton result = QMessageBox::question(
             this,
