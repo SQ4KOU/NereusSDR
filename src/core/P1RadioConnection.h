@@ -25,6 +25,18 @@ public:
     explicit P1RadioConnection(QObject* parent = nullptr);
     ~P1RadioConnection() override;
 
+    // Wire-format compose helpers — static, testable in isolation.
+    // Each implementation cites its Thetis source line.
+    static void composeEp2Frame(quint8 out[1032], quint32 seq, int ccAddress,
+                                int sampleRate, bool mox) noexcept;
+    static void composeCcBank0(quint8 out[5], int sampleRate, bool mox) noexcept;
+    static void composeCcBankRxFreq(quint8 out[5], int rxIndex, quint64 freqHz) noexcept;
+    static void composeCcBankTxFreq(quint8 out[5], quint64 freqHz) noexcept;
+    static void composeCcBankAtten(quint8 out[5], int dB) noexcept;
+    static void composeCcBankAlexRx(quint8 out[5], quint32 alexRxMask) noexcept;
+    static void composeCcBankAlexTx(quint8 out[5], quint32 alexTxMask) noexcept;
+    static void composeCcBankOcOutputs(quint8 out[5], quint8 ocMask) noexcept;
+
 public slots:
     void init() override;
     void connectToRadio(const NereusSDR::RadioInfo& info) override;

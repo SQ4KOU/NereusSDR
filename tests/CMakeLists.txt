@@ -21,3 +21,5 @@ nereus_add_test(tst_radio_discovery_parse)
 target_compile_definitions(tst_radio_discovery_parse PRIVATE
     TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
+
+nereus_add_test(tst_p1_wire_format)
