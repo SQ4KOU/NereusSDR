@@ -2,7 +2,7 @@
 
 ## Context
 
-NereusSDR is a ground-up port of Thetis (OpenHPSDR SDR console) from C# to Qt6/C++20, using AetherSDR as the architectural template. We've completed the scaffolding (Phase 0), architectural analysis (Phase 1), and architecture design (Phase 2). Now moving to Phase 3: Implementation.
+NereusSDR is an independent cross-platform SDR client deeply informed by the workflow, feature set, and operating style of Thetis, reimagined with a new GUI, a modernized architecture, and native support for macOS, Linux, and Windows. We've completed the scaffolding (Phase 0), architectural analysis (Phase 1), and architecture design (Phase 2). Now moving to Phase 3: Implementation.
 
 ---
 
