@@ -1,5 +1,70 @@
 # Changelog
 
+## [0.1.1] - 2026-04-13
+
+**First tagged alpha release.** This is a debugger/developer-tester build. The
+release pipeline (Phase 3N) was shipped in PR #10 and this is its first real
+payload — every future release from this point forward will follow the same
+format (GPG-signed SHA256SUMS, 2×AppImage + macOS DMG + Windows installer +
+portable ZIP + source tarball, draft Release for human publish gate).
+
+### What's in this build
+
+- **Connection:** OpenHPSDR Protocol 2 connection to ANAN-G2 (Orion MkII),
+  discovery, multi-port I/Q reception. Protocol 1 radio connector port
+  complete through Phase 3I-21 (HardwarePage capability gating, saved-radio
+  persistence, auto-reconnect on launch, HL2 init + bandwidth monitor).
+- **DSP:** WDSP v1.29 integration, per-receiver channels, USB/LSB/AM/CW
+  demodulation, AGC, NB1/NB2, bandpass filtering.
+- **Audio:** 48 kHz stereo Int16 output via QAudioSink, FFTW wisdom caching
+  (first run generates ~15 min worth, cached for subsequent launches).
+- **Spectrum & waterfall:** GPU-accelerated via QRhi (Metal/Vulkan/D3D12),
+  VFO tuning, CTUN panadapter with bin-subset zoom, 47 Display setup
+  controls wired (Spectrum / Waterfall / Grid pages), per-band grid storage
+  across 14 bands (160m–6m + GEN + WWV + XVTR).
+- **UI:** Full 12-applet panel, 47-page SetupDialog across 10 categories,
+  Thetis-parity container settings dialog (3-column Available / In-use /
+  Properties), 31 per-item property editors, MMIO Multi-Meter I/O subsystem
+  with 4 transport workers (UDP / TCP listener / TCP client / Serial),
+  Thetis-style bar-row stacked meters with per-reading colours + history +
+  peak hold.
+- **Persistence:** `AppSettings` XML-backed settings (NOT QSettings),
+  radio-authoritative vs client-authoritative policy, per-MAC hardware page
+  state.
+
+### Packaging
+
+Every artifact is detached GPG-signed (key `KG4VCF`, fingerprint
+`4A95F4D22AEE9271D8A3C01B20C284473F97D2B3`). Verify with:
+
+```bash
+gpg --keyserver keyserver.ubuntu.com --recv-keys KG4VCF
+gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
+sha256sum -c SHA256SUMS.txt
+```
+
+### Known limitations
+
+- **macOS Intel DMG not built** — GitHub Actions retired the `macos-13` free
+  runner. Intel Mac users should build from source until the runner is
+  restored or we cross-compile x86_64 on `macos-15` in Phase 3N+1.
+- **Ad-hoc codesigning on macOS** — first launch requires right-click → Open
+  until Apple Developer ID is obtained (Phase 3N+1).
+- **Unsigned Windows installer** — SmartScreen will flag the binary on first
+  run; click *More info → Run anyway*. Azure Trusted Signing deferred to
+  Phase 3N+1.
+- **Transmit (3I-1 through 3I-4) is not yet implemented.** This build is
+  receive-only. Do not key up a radio with this binary.
+
+### Reporting issues
+
+Please file issues at <https://github.com/boydsoftprez/NereusSDR/issues>
+with: OS, radio model, protocol version (P1 or P2), and log file
+(`~/.config/NereusSDR/nereussdr.log` on Linux/macOS, `%APPDATA%\NereusSDR\`
+on Windows).
+
+JJ Boyd ~KG4VCF
+
 ## [Unreleased]
 
 ### Phase 3I — Radio Connector & Radio-Model Port (2026-04-13)
