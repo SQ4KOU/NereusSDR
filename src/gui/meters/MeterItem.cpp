@@ -749,16 +749,26 @@ void ScaleItem::paint(QPainter& p, int widgetW, int widgetH)
         p.setFont(font);
         const QFontMetrics fm(font);
 
+        // Short-row guard: when ShowType eats the top third of the rect
+        // and the rect is under ~40 px, shrink the tick row by half so
+        // the major-tick tops don't collide with the title text.
+        // NereusSDR-original polish — Thetis renders its title outside
+        // the scale rect so doesn't hit this case.
+        const float tickScale =
+            (m_showType && rh < 40.0f) ? 0.5f : 1.0f;
+        const float majorTickFrac = 0.30f * tickScale;
+        const float minorTickFrac = 0.15f * tickScale;
+
         auto drawTick = [&](float tickX, bool isMajor, const QColor& colour) {
             const float topY = fLineBaseY
-                             - (rh * (isMajor ? 0.30f : 0.15f));
+                             - (rh * (isMajor ? majorTickFrac : minorTickFrac));
             p.setPen(QPen(colour, 2));
             p.drawLine(QPointF(tickX, fLineBaseY), QPointF(tickX, topY));
         };
 
         auto drawLabel = [&](float tickX, const QString& text,
                              const QColor& colour, bool rightAligned) {
-            const float topY = fLineBaseY - (rh * 0.30f);
+            const float topY = fLineBaseY - (rh * majorTickFrac);
             const int w = fm.horizontalAdvance(text);
             const int h = fm.height();
             float lx = rightAligned
