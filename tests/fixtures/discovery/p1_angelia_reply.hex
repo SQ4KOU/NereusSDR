@@ -1,0 +1,19 @@
+# Angelia (ANAN-100D) P1 discovery reply — fw 21 (0x15), free (0x02), MAC aa:bb:cc:44:55:66
+# Verified against:
+#   docs/protocols/openhpsdr-protocol1-capture-reference.md §2.2
+#   mi0bot clsRadioDiscovery.cs:1237 (mapP1DeviceType: boardId==4 → HPSDRHW.Angelia)
+#
+# IMPORTANT: the P1 wire byte for Angelia is 0x04 (not the HPSDRHW enum value 3).
+# mapP1DeviceType() maps wire byte 4 → HPSDRHW.Angelia (enum=3).
+#
+# Byte layout (P1 reply = 60 bytes total):
+#   [0-1]  EF FE  — P1 sync / frame marker
+#   [2]    02     — status: 02 = available (clsRadioDiscovery.cs:1158)
+#   [3-8]  AA BB CC 44 55 66  — MAC (cs:1161)
+#   [9]    15     — CodeVersion = 21 decimal (cs:1185)
+#   [10]   04     — board: 04 → Angelia (mapP1DeviceType cs:1237)
+#   [11-59] 00*49 — zero pad
+EFFE02AABBCC44556615040000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+000000000000000000000000
