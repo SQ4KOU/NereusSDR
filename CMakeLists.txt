@@ -55,8 +55,19 @@ if(WIN32)
     if(EXISTS "${FFTW3_ROOT}/include/fftw3.h")
         set(FFTW3_FOUND TRUE)
         set(FFTW3_INCLUDE_DIRS "${FFTW3_ROOT}/include")
-        set(FFTW3_LIBRARIES "${FFTW3_ROOT}/bin/libfftw3-3.dll")
         set(FFTW3_DLL "${FFTW3_ROOT}/bin/libfftw3-3.dll")
+        # Prefer a proper .lib import library when available. MSVC link.exe
+        # refuses to link against a DLL directly (LNK1107 "invalid or
+        # corrupt file"), while MinGW's ld is happy either way. release.yml
+        # generates third_party/fftw3/lib/fftw3.lib from the .def file;
+        # ci.yml (MinGW) skips that and links the DLL directly.
+        if(EXISTS "${FFTW3_ROOT}/lib/fftw3.lib")
+            set(FFTW3_LIBRARIES "${FFTW3_ROOT}/lib/fftw3.lib")
+            message(STATUS "FFTW3: using import library ${FFTW3_ROOT}/lib/fftw3.lib")
+        else()
+            set(FFTW3_LIBRARIES "${FFTW3_ROOT}/bin/libfftw3-3.dll")
+            message(STATUS "FFTW3: linking directly against DLL (no fftw3.lib)")
+        endif()
         # Float precision FFTW3 for FFTEngine display FFT
         if(EXISTS "${FFTW3_ROOT}/lib/libfftw3f-3.a")
             list(APPEND FFTW3_LIBRARIES "${FFTW3_ROOT}/lib/libfftw3f-3.a")
