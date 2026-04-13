@@ -615,114 +615,74 @@ void ContainerSettingsDialog::appendPresetRow(const QString& presetName)
         }
     }
 
-    // Proportional stack layout. The bar-row "band" runs from
-    // bandTop (0.70 if a composite has been compressed, else 0) to
-    // bandBottom=0.95. Cluster every existing non-composite,
-    // non-background item into rows by overlapping y-intervals.
-    // Then pick a slot height that's either the natural default
-    // (0.10) or, if more rows would overflow the band, bandH /
-    // (numExisting + 1) — and shrink every existing row to that
-    // height before appending the new one. On each append the stack
-    // fills as much of the band as needed: first three rows stay at
-    // 0.10 tall, the fourth forces everyone to 0.0625, ten rows
-    // shrink to 0.025 etc. The container's pixel height then
-    // controls how many rows are actually readable — resize it
-    // taller and the normalized 0..1 layout scales automatically.
-    constexpr float kRowSlotH       = 0.10f;
-    constexpr float kStackBottom    = 0.95f;
-    constexpr float kMinSlotH       = 0.015f;
-    constexpr float kBackgroundSpan = 0.7f;
-
+    // Pixel-minimum stack layout (Thetis-parity). Each bar row gets
+    // tagged with a stack slot index + within-slot local rect; the
+    // target MeterWidget's reflowStackedItems() (called on every
+    // resize and right below at append time) projects the slot onto
+    // its current pixel height at the constant MeterWidget::
+    // kBarRowHeightPx (~40 px per row). The container can shrink and
+    // rows clip off the bottom naturally; it can grow and more rows
+    // become visible. No proportional redistribution — the user's
+    // row-height budget is pixel-fixed, matching Thetis Default
+    // Multimeter behaviour.
+    //
+    // Preset items keep their canonical 0..1 layout (SolidBg full
+    // row, BarItem middle band, ScaleItem over the full row) stored
+    // in m_slotLocalY/m_slotLocalH. The outer m_y/m_h are derived
+    // at reflow time, so existing stack rows never need to be
+    // re-positioned by the dialog.
     const float bandTop = hasComposite ? 0.70f : 0.0f;
-    const float bandH   = kStackBottom - bandTop;
 
-    struct RowCluster {
-        float yMin;
-        float yMax;
-        QVector<MeterItem*> items;
-    };
-    QVector<RowCluster> clusters;
-    for (MeterItem* mi : m_workingItems) {
+    // If we just compressed a composite (bandTop=0.7), every already-
+    // stacked item needs its stackBandTop bumped and its stack slot
+    // shifted so the existing rows sit below the new composite band.
+    // Items that were NOT stacked are left alone.
+    if (hasComposite) {
+        for (MeterItem* mi : m_workingItems) {
+            if (!mi) { continue; }
+            if (mi->stackSlot() < 0) { continue; }
+            mi->setStackBandTop(bandTop);
+        }
+    }
+
+    // Next slot index = max existing stack slot + 1.
+    int nextSlot = 0;
+    for (const MeterItem* mi : m_workingItems) {
         if (!mi) { continue; }
-        if (isComposite(mi)) { continue; }
-        if (mi->itemHeight() > kBackgroundSpan) { continue; }
-        const float yMin = mi->y();
-        const float yMax = mi->y() + mi->itemHeight();
-        bool placed = false;
-        for (RowCluster& c : clusters) {
-            if (yMin <= c.yMax && yMax >= c.yMin) {
-                c.yMin = qMin(c.yMin, yMin);
-                c.yMax = qMax(c.yMax, yMax);
-                c.items.append(mi);
-                placed = true;
-                break;
-            }
-        }
-        if (!placed) {
-            clusters.append({yMin, yMax, {mi}});
+        if (mi->stackSlot() >= nextSlot) {
+            nextSlot = mi->stackSlot() + 1;
         }
     }
-    std::sort(clusters.begin(), clusters.end(),
-              [](const RowCluster& a, const RowCluster& b) {
-                  return a.yMin < b.yMin;
-              });
-
-    const int numExisting = clusters.size();
-    const int numAfter    = numExisting + 1;
-    const float newSlotH  = qMin(kRowSlotH, bandH / static_cast<float>(numAfter));
-
-    if (newSlotH < kMinSlotH) {
-        qWarning("ContainerSettingsDialog: no room to append '%s' "
-                 "(newSlotH=%.4f < %.3f, %d existing rows in band %.2f..%.2f); "
-                 "resize container taller or remove a row",
-                 qPrintable(presetName),
-                 static_cast<double>(newSlotH),
-                 static_cast<double>(kMinSlotH),
-                 numExisting,
-                 static_cast<double>(bandTop),
-                 static_cast<double>(kStackBottom));
-        delete group;
-        return;
-    }
-
-    // Redistribute existing rows if the new slot size forces them
-    // to shrink. Each cluster's items are repositioned proportionally
-    // within their new slot so the SolidBg/Bar/Scale relative layout
-    // is preserved.
-    for (int i = 0; i < numExisting; ++i) {
-        RowCluster& c = clusters[i];
-        const float oldYMin  = c.yMin;
-        const float oldSlotH = c.yMax - c.yMin;
-        const float newYMin  = bandTop + static_cast<float>(i) * newSlotH;
-        if (oldSlotH <= 0.0f) { continue; }
-        for (MeterItem* mi : c.items) {
-            const float localY = (mi->y() - oldYMin) / oldSlotH;
-            const float localH = mi->itemHeight() / oldSlotH;
-            mi->setRect(mi->x(),
-                        newYMin + localY * newSlotH,
-                        mi->itemWidth(),
-                        localH * newSlotH);
-        }
-    }
-
-    // Append the new row into its slot at the bottom of the band.
-    const float yPos  = bandTop + static_cast<float>(numExisting) * newSlotH;
-    const float slotH = newSlotH;
 
     for (MeterItem* src : group->items()) {
         MeterItem* clone = createItemFromSerialized(src->serialize());
         if (!clone) { continue; }
-        // Rescale the item's 0..1 rect into [yPos, yPos+slotH].
-        clone->setRect(clone->x(),
-                       yPos + clone->y() * slotH,
-                       clone->itemWidth(),
-                       clone->itemHeight() * slotH);
+        // The preset factory produced items in 0..1 local space
+        // already — snapshot that into the slot-local fields so
+        // the reflow can project them back out.
+        clone->setSlotLocalY(clone->y());
+        clone->setSlotLocalH(clone->itemHeight());
+        clone->setStackBandTop(bandTop);
+        clone->setStackSlot(nextSlot);
         if (src->hasMmioBinding()) {
             clone->setMmioBinding(src->mmioGuid(), src->mmioVariable());
         }
         m_workingItems.append(clone);
     }
     delete group;
+
+    // Reflow immediately so the preview reflects the new stack
+    // layout at the current target-widget size. The widget's own
+    // resizeEvent keeps this in sync going forward.
+    if (MeterWidget* meter = findMeterWidget()) {
+        const int widgetH = meter->height();
+        if (widgetH > 0) {
+            for (MeterItem* mi : m_workingItems) {
+                if (!mi) { continue; }
+                mi->layoutInStackSlot(widgetH, MeterWidget::kBarRowHeightPx);
+            }
+        }
+    }
 
     refreshItemList();
     if (!m_workingItems.isEmpty()) {

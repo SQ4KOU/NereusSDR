@@ -113,6 +113,53 @@ public:
     virtual bool handleMouseMove(QMouseEvent* event, int widgetW, int widgetH);
     virtual bool handleWheel(QWheelEvent* event, int widgetW, int widgetH);
 
+public:
+    // --- Stacked-row metadata (runtime only, not serialized) ---
+    //
+    // When m_stackSlot >= 0 the item is part of a pixel-minimum stack
+    // (e.g. a Thetis Default Multimeter bar row). MeterWidget calls
+    // `layoutInStackSlot` on every resize so each row stays at its
+    // fixed pixel height and overflows past the bottom of the widget
+    // clip naturally. This matches the Thetis Appearance dialog
+    // behaviour where adding a row uses a constant bar height and
+    // a taller container reveals more rows.
+    //
+    // m_slotLocalY/m_slotLocalH are the item's within-slot 0..1
+    // coordinates (the preset factory's canonical layout — e.g.
+    // SolidBg 0..1, BarItem 0.2..0.8, ScaleItem 0..1). After
+    // layoutInStackSlot runs, m_y/m_h hold the effective normalized
+    // coordinates for paint/hitTest; the local-within-slot source of
+    // truth stays in m_slotLocalY/H and is not overwritten.
+    //
+    // m_stackBandTop is the normalized y of the top of the stack
+    // region — 0.0 when no composite is present, or 0.70 after a
+    // composite (ANAN MM, CrossNeedle, etc.) has been compressed to
+    // leave room for stacked rows beneath it.
+    //
+    // These fields are deliberately NOT serialized: on load
+    // MeterWidget::inferStackFromGeometry() walks deserialized items
+    // and rebuilds the stack tagging from geometry, so old containers
+    // keep working without a format bump.
+    int   stackSlot() const { return m_stackSlot; }
+    float slotLocalY() const { return m_slotLocalY; }
+    float slotLocalH() const { return m_slotLocalH; }
+    float stackBandTop() const { return m_stackBandTop; }
+    void  setStackSlot(int s) { m_stackSlot = s; }
+    void  setSlotLocalY(float y) { m_slotLocalY = y; }
+    void  setSlotLocalH(float h) { m_slotLocalH = h; }
+    void  setStackBandTop(float t) { m_stackBandTop = t; }
+    void  clearStackMetadata() {
+        m_stackSlot = -1;
+        m_slotLocalY = 0.0f;
+        m_slotLocalH = 1.0f;
+        m_stackBandTop = 0.0f;
+    }
+
+    // Recompute m_y/m_h from stack metadata + pixel constants.
+    // No-op when m_stackSlot < 0. Called from
+    // MeterWidget::reflowStackedItems() on every resize.
+    void layoutInStackSlot(int widgetHeightPx, int slotHeightPx);
+
 protected:
     QRect pixelRect(int widgetW, int widgetH) const {
         return QRect(
@@ -130,6 +177,12 @@ protected:
     int m_bindingId{-1};
     double m_value{-140.0};
     int m_zOrder{0};
+
+    // Stack metadata (runtime only — see public accessors).
+    int   m_stackSlot{-1};
+    float m_slotLocalY{0.0f};
+    float m_slotLocalH{1.0f};
+    float m_stackBandTop{0.0f};
 
     // Visibility filter (see public accessors above)
     bool m_onlyWhenRx{false};

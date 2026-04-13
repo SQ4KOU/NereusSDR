@@ -97,6 +97,32 @@ bool MeterItem::deserialize(const QString& data)
 }
 
 // ---------------------------------------------------------------------------
+// MeterItem base — stacked-row layout (Phase 3G-9 post-revert)
+// ---------------------------------------------------------------------------
+//
+// When an item is tagged as stacked (m_stackSlot >= 0) its effective
+// m_y / m_h come from a pixel-minimum slot projected onto the
+// widget's current height, not from a saved normalized position.
+// MeterWidget::reflowStackedItems() calls this on every resize so
+// each bar row keeps its kBarRowHeightPx minimum and rows past the
+// bottom of the widget overflow naturally. The within-slot layout
+// (SolidBg fills the row, BarItem takes the middle band, ScaleItem
+// sits at the top) is preserved via m_slotLocalY / m_slotLocalH.
+
+void MeterItem::layoutInStackSlot(int widgetHeightPx, int slotHeightPx)
+{
+    if (m_stackSlot < 0 || widgetHeightPx <= 0 || slotHeightPx <= 0) {
+        return;
+    }
+    const float slotHNorm = static_cast<float>(slotHeightPx)
+                          / static_cast<float>(widgetHeightPx);
+    const float slotYNorm = m_stackBandTop
+                          + static_cast<float>(m_stackSlot) * slotHNorm;
+    m_y = slotYNorm + m_slotLocalY * slotHNorm;
+    m_h = m_slotLocalH * slotHNorm;
+}
+
+// ---------------------------------------------------------------------------
 // MeterItem base — mouse interaction (Phase 3G-5)
 // ---------------------------------------------------------------------------
 

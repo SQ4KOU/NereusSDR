@@ -479,6 +479,11 @@ void MainWindow::populateDefaultMeter()
 
     if (!restoredItems.isEmpty()) {
         m_meterWidget->deserializeItems(restoredItems);
+        // Rebuild the runtime stack metadata from geometry so bar
+        // rows restored from a saved container participate in the
+        // reflow-on-resize path again. No-op for panels that don't
+        // contain a stack.
+        m_meterWidget->inferStackFromGeometry();
         qCDebug(lcContainer) << "Restored" << m_meterWidget->items().size()
                              << "panel meter items from saved state";
     } else {
