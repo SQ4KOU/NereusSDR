@@ -6,6 +6,9 @@
 // factory's source comment.
 
 #include <QtTest/QtTest>
+#include <QDir>
+#include <QImage>
+#include <QPainter>
 
 #include "gui/meters/ItemGroup.h"
 #include "gui/meters/MeterItem.h"
@@ -146,6 +149,56 @@ private slots:
             QCOMPARE(bar->scaleCalibrationSize(), 3);
             delete g;
         }
+    }
+
+    // --- Headless visual dump of the full createSMeterPreset composition ---
+    // Renders every item in the preset through its real paint() function
+    // into a shared QImage and writes the result to /tmp/sMeterPreset.png
+    // so the image can be read back out-of-process for debugging. This is
+    // what the container would actually show if a MeterWidget routed its
+    // paint through QPainter instead of QRhi.
+    void SMeter_dump_full_composition_to_png()
+    {
+        ItemGroup* g = ItemGroup::createSMeterPreset(
+            MeterBinding::SignalPeak, QStringLiteral("S-Meter"), nullptr);
+        QVERIFY(g);
+
+        // Feed a realistic live signal so the bar + markers + text are
+        // visibly populated (-60 dBm sits comfortably between S0 and S9).
+        BarItem* bar = findOfType<BarItem>(g);
+        QVERIFY(bar);
+        for (int i = 0; i < 20; ++i) { bar->setValue(-60.0); }
+        // Push a higher peak to exercise the peak-hold marker.
+        bar->setValue(-30.0);
+        for (int i = 0; i < 10; ++i) { bar->setValue(-60.0); }
+
+        const int W = 480;
+        const int H = 120;
+        QImage img(W, H, QImage::Format_ARGB32);
+        img.fill(QColor(15, 15, 26));  // NereusSDR dark navy
+
+        {
+            QPainter p(&img);
+            p.setRenderHint(QPainter::Antialiasing, true);
+            p.setRenderHint(QPainter::TextAntialiasing, true);
+            // Sort items by zOrder so background paints before bar
+            // paints before scale — matching what MeterWidget does in
+            // its layered render loop.
+            QVector<MeterItem*> ordered = g->items();
+            std::stable_sort(ordered.begin(), ordered.end(),
+                             [](MeterItem* a, MeterItem* b) {
+                return a->zOrder() < b->zOrder();
+            });
+            for (MeterItem* mi : ordered) {
+                mi->paint(p, W, H);
+            }
+        }
+
+        const QString outPath = QStringLiteral("/tmp/sMeterPreset.png");
+        QVERIFY2(img.save(outPath, "PNG"),
+                 "failed to save /tmp/sMeterPreset.png");
+
+        delete g;
     }
 };
 

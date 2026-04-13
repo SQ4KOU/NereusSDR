@@ -318,7 +318,21 @@ public:
     // From Thetis MeterManager.cs — attack/decay smoothing
     void setValue(double v) override;
 
+    // renderLayer() stays at Geometry for legacy code that queries it,
+    // but participatesIn() opts the bar out of the GPU Geometry pass
+    // and into the OverlayDynamic QPainter pass. Phase D1b needs every
+    // A-phase render (history polyline, ShowValue text, ShowMarker +
+    // PeakHold lines, BarStyle::Line baseline, calibrated value
+    // positioning) and none of those can be expressed as a GPU vertex
+    // quad without major shader work. Running through the overlay
+    // QPainter is simpler and matches how ScaleItem + TextItem already
+    // render in the same render cycle. emitVertices() below is kept
+    // as a safety no-op fall-through in case some other code path
+    // still iterates Geometry items directly.
     Layer renderLayer() const override { return Layer::Geometry; }
+    bool participatesIn(Layer layer) const override {
+        return layer == Layer::OverlayDynamic;
+    }
     void paint(QPainter& p, int widgetW, int widgetH) override;
     void emitVertices(QVector<float>& verts, int widgetW, int widgetH) override;
     QString serialize() const override;
