@@ -699,6 +699,16 @@ ItemGroup* ItemGroup::buildBarRow(int bindingId,
 
     // z=2 Line-style bar with ShowValue + ShowPeakValue + ShowHistory
     // + ShowMarker + PeakHoldMarker (Thetis line 23332-23354).
+    //
+    // Colours pinned from the live Thetis dialog at
+    // Setup → Appearance → Meters/Gadgets ("ALC Compression" selected):
+    //   Low          = white
+    //   High         = red
+    //   Indicator    = yellow   (marker)
+    //   Peak Value   = red      (text and peak-hold marker)
+    //   Show History = LemonChiffon(128) — caller-supplied
+    //   Meter Title  = red      (set on the ScaleItem below)
+    //   Current value text = white (same as Low colour)
     BarItem* bar = new BarItem();
     bar->setRect(0.02f, 0.45f, 0.96f, 0.50f);
     bar->setOrientation(BarItem::Orientation::Horizontal);
@@ -713,11 +723,14 @@ ItemGroup* ItemGroup::buildBarRow(int bindingId,
     bar->setShowValue(true);
     bar->setShowPeakValue(true);
     bar->setShowMarker(true);
-    bar->setMarkerColour(QColor(Qt::yellow));           // Thetis 23344
-    bar->setPeakHoldMarkerColour(QColor(Qt::darkGray)); // Thetis 23368
+    bar->setMarkerColour(QColor(Qt::yellow));
+    bar->setPeakHoldMarkerColour(QColor(Qt::red));
     bar->setPeakHoldDecayRatio(0.02f);
-    bar->setFontColour(QColor(0xc8, 0xd8, 0xe8));       // white-ish
-    bar->setBarColor(QColor(0x5f, 0x9e, 0xa0));         // CadetBlue
+    bar->setFontColour(QColor(Qt::white));
+    bar->setPeakFontColour(QColor(Qt::red));
+    bar->setBarColor(QColor(Qt::white));
+    bar->setBarRedColor(QColor(Qt::red));
+    bar->setRedThreshold(midVal);
     // 3-point calibration — maps lowVal -> 0.0, midVal -> midX,
     // highVal -> highX. Matches Thetis per-reading ScaleCalibration
     // calls (AddALCBar line 23347-23349, AddMicBar 23025-23027, etc.).

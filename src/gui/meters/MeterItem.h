@@ -254,6 +254,18 @@ public:
     void setFontColour(const QColor& c) { m_fontColour = c; }
     QColor fontColour() const { return m_fontColour; }
 
+    // ShowPeakValue uses a separate colour so the current-value text
+    // can be white while the peak text is red (Thetis default — see
+    // Setup → Appearance → Meters/Gadgets "Peak Value" swatch, which
+    // ships red). If unset, falls back to m_fontColour for
+    // backward compat with pre-Phase-E BarItems that only had one
+    // font colour.
+    void setPeakFontColour(const QColor& c) { m_peakFontColour = c; }
+    QColor peakFontColour() const
+    {
+        return m_peakFontColour.isValid() ? m_peakFontColour : m_fontColour;
+    }
+
     // Rolling high-water-mark of all values seen via setValue(). Consumed
     // by ShowPeakValue text render and (in A3) the peak-hold marker.
     double peakValue() const { return m_peakValue; }
@@ -361,6 +373,7 @@ private:
     bool        m_showValue{false};
     bool        m_showPeakValue{false};
     QColor      m_fontColour{Qt::yellow};
+    QColor      m_peakFontColour{};  // invalid = use m_fontColour
     double      m_peakValue{-std::numeric_limits<double>::infinity()};
     // Phase A2 — clsBarItem history fields
     bool        m_showHistory{false};

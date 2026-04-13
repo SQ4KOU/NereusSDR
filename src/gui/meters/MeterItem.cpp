@@ -394,25 +394,29 @@ void BarItem::paint(QPainter& p, int widgetW, int widgetH)
         }
     }
 
-    // Phase A1 — ShowValue / ShowPeakValue text labels. ShowValue is
-    // drawn top-left and ShowPeakValue top-right, both in m_fontColour
-    // using a small proportional font. Idle values (−inf) are skipped.
+    // Phase A1 / E — ShowValue / ShowPeakValue text labels. ShowValue
+    // is drawn top-left in m_fontColour (Thetis default white), and
+    // ShowPeakValue top-right in peakFontColour() (Thetis default red
+    // — per Setup → Appearance → Meters/Gadgets Peak Value swatch).
+    // Both use a small proportional bold font. Idle values (−inf)
+    // are skipped.
     if (m_showValue || m_showPeakValue) {
         QFont font = p.font();
         const int fontPx = qMax(9, rect.height() / 3);
         font.setPixelSize(fontPx);
         font.setBold(true);
         p.setFont(font);
-        p.setPen(m_fontColour);
         const QFontMetrics fm(font);
 
         if (m_showValue && std::isfinite(m_smoothedValue)) {
+            p.setPen(m_fontColour);
             const QString s = QString::number(m_smoothedValue, 'f', 1);
             p.drawText(rect.left() + 2,
                        rect.top() + fm.ascent(),
                        s);
         }
         if (m_showPeakValue && std::isfinite(m_peakValue)) {
+            p.setPen(peakFontColour());
             const QString s = QString::number(m_peakValue, 'f', 1);
             const int w = fm.horizontalAdvance(s);
             p.drawText(rect.right() - w - 2,
