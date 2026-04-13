@@ -176,10 +176,12 @@ endif()
 # --------------------------------------------------------------------------
 set(CORE_SOURCES
     src/core/AppSettings.cpp
+    src/core/BoardCapabilities.cpp
     src/core/LogCategories.cpp
     src/core/SupportBundle.cpp
     src/core/RadioDiscovery.cpp
     src/core/RadioConnection.cpp
+    src/core/P1RadioConnection.cpp
     src/core/P2RadioConnection.cpp
     src/core/ReceiverManager.cpp
     src/core/AudioEngine.cpp
@@ -200,6 +202,7 @@ set(MODEL_SOURCES
 set(GUI_SOURCES
     src/gui/MainWindow.cpp
     src/gui/ConnectionPanel.cpp
+    src/gui/AddCustomRadioDialog.cpp
     src/gui/SupportDialog.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/SpectrumOverlayMenu.cpp
@@ -286,7 +289,16 @@ set(GUI_SOURCES
     src/gui/SetupDialog.cpp
     src/gui/SetupPage.cpp
     src/gui/setup/GeneralSetupPages.cpp
-    src/gui/setup/HardwareSetupPages.cpp
+    src/gui/setup/HardwarePage.cpp
+    src/gui/setup/hardware/RadioInfoTab.cpp
+    src/gui/setup/hardware/AntennaAlexTab.cpp
+    src/gui/setup/hardware/OcOutputsTab.cpp
+    src/gui/setup/hardware/XvtrTab.cpp
+    src/gui/setup/hardware/PureSignalTab.cpp
+    src/gui/setup/hardware/DiversityTab.cpp
+    src/gui/setup/hardware/PaCalibrationTab.cpp
+    src/gui/setup/hardware/Hl2IoBoardTab.cpp
+    src/gui/setup/hardware/BandwidthMonitorTab.cpp
     src/gui/setup/AudioSetupPages.cpp
     src/gui/setup/DspSetupPages.cpp
     src/gui/setup/DisplaySetupPages.cpp
@@ -318,7 +330,7 @@ set(GUI_SOURCES
 qt_add_resources(RESOURCES resources.qrc)
 
 # --------------------------------------------------------------------------
-# App icon (per-platform)
+# App icon (per-platform) — from main (PR #11)
 # --------------------------------------------------------------------------
 set(APP_ICON_SOURCES "")
 if(APPLE)
@@ -333,9 +345,11 @@ endif()
 
 # --------------------------------------------------------------------------
 # Object library — shared between the app executable and test targets so
-# the same translation units are compiled once and consumed by both.
-# Properties on NereusSDRObjs propagate to consumers (PUBLIC) via the
-# CMake INTERFACE; the thin executable just links src/main.cpp on top.
+# the same translation units are compiled once and consumed by both
+# (Phase 3I test infrastructure). Properties on NereusSDRObjs propagate
+# to consumers (PUBLIC) via the CMake INTERFACE; the thin executable just
+# links src/main.cpp on top. Bundles the per-platform APP_ICON_SOURCES so
+# the icon lands in both the .app and the test binaries.
 # --------------------------------------------------------------------------
 add_library(NereusSDRObjs OBJECT
     ${CORE_SOURCES}
@@ -458,6 +472,10 @@ install(TARGETS NereusSDR
 # --------------------------------------------------------------------------
 option(NEREUS_BUILD_TESTS "Build NereusSDR test suite" OFF)
 if(NEREUS_BUILD_TESTS)
+    # Propagate the define to the object library so test-guard blocks
+    # (e.g. isTabVisibleForTest) are compiled into NereusSDRObjs and
+    # therefore available for linking into test executables.
+    target_compile_definitions(NereusSDRObjs PUBLIC NEREUS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()

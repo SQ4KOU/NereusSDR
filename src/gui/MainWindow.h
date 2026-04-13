@@ -73,6 +73,10 @@ private:
     // forceHardwareFrequency while frequencyChanged is already retuning the DDC
     bool m_handlingBandJump{false};
 
+    // Task 17: auto-reconnect guard — prevents the background attempt from
+    // interfering with a subsequent user-initiated Start Discovery.
+    bool m_autoReconnectInProgress{false};
+
     // Container infrastructure (Phase 3G-1)
     ContainerManager* m_containerManager{nullptr};
     QSplitter* m_mainSplitter{nullptr};

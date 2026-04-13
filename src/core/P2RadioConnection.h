@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RadioConnection.h"
+#include "BoardCapabilities.h"
 
 #include <QUdpSocket>
 #include <QTimer>
@@ -65,6 +66,9 @@ private:
     static constexpr int kMaxDdc = 7;         // DDC0-DDC6
     static constexpr int kBufLen = 1444;      // Thetis BUFLEN
     static constexpr int kKeepAliveIntervalMs = 500; // network.c:1428
+
+    // --- Board capabilities (set in connectToRadio, used for clamp/dispatch) ---
+    const BoardCapabilities* m_caps{nullptr};
 
     // --- Single socket (Thetis listenSock, network.c:67) ---
     QUdpSocket* m_socket{nullptr};

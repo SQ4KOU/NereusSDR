@@ -124,6 +124,9 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     m_intentionalDisconnect = false;
     m_totalIqPackets = 0;
 
+    // Cache board capabilities — drives attenuator clamp, ADC count, etc.
+    m_caps = &BoardCapsTable::forBoard(info.boardType);
+
     // Reset sequence counters
     m_seqGeneral = 0;
     m_seqRx = 0;
@@ -132,7 +135,10 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     m_ccSeqNo = 0;
 
     // From Thetis create_rnet defaults + Thetis pcap analysis
-    m_numAdc = info.adcCount;
+    // Use m_caps->adcCount instead of info.adcCount for capability-metadata consistency.
+    // Both carry the same value (info.adcCount is populated from adcCountForBoard() which
+    // reads the same BoardCapsTable). m_caps is authoritative.
+    m_numAdc = m_caps->adcCount;
     m_numDac = 1;
     m_wdt = 1;  // Watchdog timer MUST be enabled — radio requires it for streaming
 
@@ -245,8 +251,12 @@ void P2RadioConnection::setTxFrequency(quint64 frequencyHz)
 
 void P2RadioConnection::setActiveReceiverCount(int count)
 {
+    // Clamp to board-reported maximum if caps are available.
+    // kMaxRxStreams (12) is the wire-protocol ceiling; board caps may be lower.
+    const int maxRx = m_caps ? m_caps->maxReceivers : kMaxRxStreams;
+    const int clamped = qBound(1, count, maxRx);
     for (int i = 0; i < kMaxRxStreams; ++i) {
-        m_rx[i].enable = (i < count) ? 1 : 0;
+        m_rx[i].enable = (i < clamped) ? 1 : 0;
     }
     if (m_running) {
         sendCmdRx();
@@ -270,7 +280,12 @@ void P2RadioConnection::setSampleRate(int sampleRate)
 void P2RadioConnection::setAttenuator(int dB)
 {
     // From Thetis: prn->adc[0].rx_step_attn
-    m_adc[0].rxStepAttn = qBound(0, dB, 31);
+    // Clamp to board-specific attenuator range from BoardCapabilities.
+    // Saturn/SaturnMKII: minDb=0, maxDb=31, stepDb=1 (kSaturn in BoardCapabilities.cpp).
+    // Fallback to [0, 31] if m_caps is not yet set (should not occur in normal flow).
+    const int minDb = m_caps ? m_caps->attenuator.minDb : 0;
+    const int maxDb = m_caps ? m_caps->attenuator.maxDb : 31;
+    m_adc[0].rxStepAttn = qBound(minDb, dB, maxDb);
     if (m_running) {
         sendCmdHighPriority();
     }

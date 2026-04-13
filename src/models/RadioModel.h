@@ -86,6 +86,10 @@ public:
 signals:
     void infoChanged();
     void connectionStateChanged();
+    // Fires on each transition to Connected with the RadioInfo of the live
+    // connection. HardwarePage (Phase 3I) listens to this to repopulate
+    // sub-tabs with per-radio fields.
+    void currentRadioChanged(const NereusSDR::RadioInfo& info);
     void sliceAdded(int index);
     void sliceRemoved(int index);
     void activeSliceChanged(int index);

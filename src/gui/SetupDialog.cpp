@@ -4,7 +4,7 @@
 // General
 #include "setup/GeneralSetupPages.h"
 // Hardware
-#include "setup/HardwareSetupPages.h"
+#include "setup/HardwarePage.h"
 // Audio
 #include "setup/AudioSetupPages.h"
 // DSP
@@ -132,13 +132,7 @@ void SetupDialog::buildTree()
 
     // ── Hardware ─────────────────────────────────────────────────────────────
     QTreeWidgetItem* hardware = addCategory("Hardware");
-    add(hardware, "Radio Selection",     new RadioSelectionPage(m_model));
-    add(hardware, "ADC/DDC Config",      new AdcDdcPage(m_model));
-    add(hardware, "Calibration",         new CalibrationPage(m_model));
-    add(hardware, "Alex Filters",        new AlexFiltersPage(m_model));
-    add(hardware, "Penny/Hermes OC",     new PennyHermesPage(m_model));
-    add(hardware, "Firmware",            new FirmwarePage(m_model));
-    add(hardware, "Other H/W",           new OtherHwPage(m_model));
+    add(hardware, "Hardware Config", new HardwarePage(m_model));
 
     // ── Audio ─────────────────────────────────────────────────────────────────
     QTreeWidgetItem* audio = addCategory("Audio");

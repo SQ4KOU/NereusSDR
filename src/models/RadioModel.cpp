@@ -1,6 +1,7 @@
 #include "RadioModel.h"
 #include "core/RadioConnection.h"
 #include "core/RadioDiscovery.h"
+#include "core/BoardCapabilities.h"
 #include "core/ReceiverManager.h"
 #include "core/AudioEngine.h"
 #include "core/WdspEngine.h"
@@ -121,7 +122,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     m_intentionalDisconnect = false;
 
     m_name = info.displayName();
-    m_model = RadioInfo::boardTypeName(info.boardType);
+    m_model = QString::fromLatin1(BoardCapsTable::forBoard(info.boardType).displayName);
     m_version = QString::number(info.firmwareVersion);
     emit infoChanged();
 
@@ -293,7 +294,8 @@ void RadioModel::wireConnectionSignals()
 
     // Error handling
     connect(m_connection, &RadioConnection::errorOccurred,
-            this, [this](const QString& msg) {
+            this, [this](NereusSDR::RadioConnectionError code, const QString& msg) {
+        Q_UNUSED(code);
         qCWarning(lcConnection) << "Connection error:" << msg;
     });
 
@@ -554,6 +556,17 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
     switch (state) {
     case ConnectionState::Connected:
         qCDebug(lcConnection) << "Connected to" << m_name;
+        // Phase 3I Task 17 — record the most recently used radio so
+        // tryAutoReconnect() targets the right entry on next launch.
+        if (!m_lastRadioInfo.macAddress.isEmpty()) {
+            AppSettings& s = AppSettings::instance();
+            s.setLastConnected(m_lastRadioInfo.macAddress);
+            s.save();
+        }
+        // Phase 3I — fan out to HardwarePage so its sub-tabs populate with
+        // the connected radio's fields (Radio Info labels, sample rate,
+        // capability-gated tab visibility, per-MAC settings restore).
+        emit currentRadioChanged(m_lastRadioInfo);
         break;
     case ConnectionState::Disconnected:
         qCDebug(lcConnection) << "Disconnected from" << m_name;
