@@ -98,6 +98,9 @@ private:
     QTimer*     m_watchdogTimer{nullptr};
     QTimer*     m_reconnectTimer{nullptr};
 
+    bool        m_running{false};
+    bool        m_intentionalDisconnect{false};
+
     quint32 m_epSendSeq{0};
     quint32 m_epRecvSeqExpected{0};
     int     m_ccRoundRobinIdx{0};

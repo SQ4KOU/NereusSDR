@@ -11,6 +11,8 @@
 #include <cstring>    // memset
 #include <vector>
 #include <QtEndian>
+#include <QNetworkDatagram>
+#include <QVariant>
 
 namespace NereusSDR {
 
@@ -262,28 +264,130 @@ P1RadioConnection::P1RadioConnection(QObject* parent)
 {
 }
 
-P1RadioConnection::~P1RadioConnection() = default;
+P1RadioConnection::~P1RadioConnection()
+{
+    if (m_running) {
+        disconnect();
+    }
+}
 
+// ---------------------------------------------------------------------------
+// init
+//
+// Creates the UDP socket and watchdog timer on the worker thread.
+// Must be called after moveToThread().
+// Source: P2RadioConnection::init() pattern — socket + timer created here,
+// not in constructor, to ensure thread affinity is correct.
+// ---------------------------------------------------------------------------
 void P1RadioConnection::init()
 {
-    // Sockets and timers created lazily on connect; keep init empty for now.
-    // Tasks 9 & 10 wire up m_socket, m_watchdogTimer, m_reconnectTimer here.
+    // Source: networkproto1.c:203 equivalent — bind to any available port
+    m_socket = new QUdpSocket(this);
+
+    if (!m_socket->bind(QHostAddress::Any, 0)) {
+        qCWarning(lcConnection) << "P1: Failed to bind UDP socket";
+        return;
+    }
+
+    m_socket->setSocketOption(QAbstractSocket::SendBufferSizeSocketOption,
+                              QVariant(0xfa000));
+    m_socket->setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption,
+                              QVariant(0xfa000));
+
+    connect(m_socket, &QUdpSocket::readyRead, this, &P1RadioConnection::onReadyRead);
+
+    // Watchdog timer — 500ms tick, not started until connectToRadio
+    m_watchdogTimer = new QTimer(this);
+    m_watchdogTimer->setInterval(500);
+    connect(m_watchdogTimer, &QTimer::timeout, this, &P1RadioConnection::onWatchdogTick);
+
+    // Reconnect timer — single-shot 3s, for Task 10
+    m_reconnectTimer = new QTimer(this);
+    m_reconnectTimer->setInterval(3000);
+    m_reconnectTimer->setSingleShot(true);
+    connect(m_reconnectTimer, &QTimer::timeout, this, &P1RadioConnection::onReconnectTimeout);
+
+    qCDebug(lcConnection) << "P1: init() socket port:" << m_socket->localPort();
 }
 
+// ---------------------------------------------------------------------------
+// connectToRadio
+//
+// Binds the socket, sends metis-start, transitions to Connected.
+// Source: networkproto1.c:33 SendStartToMetis — sends EF FE 04 01 then
+// waits for the first ep6 frame. For Phase 3I Task 9 we transition to
+// Connected immediately after sending start, matching P2 behavior.
+// ---------------------------------------------------------------------------
 void P1RadioConnection::connectToRadio(const RadioInfo& info)
 {
+    if (m_running) {
+        disconnect();
+    }
+
     m_radioInfo = info;
     m_caps = &BoardCapsTable::forBoard(info.boardType);
-    qCInfo(lcConnection) << "P1RadioConnection::connectToRadio STUB for"
-                         << m_caps->displayName
-                         << "- real wire format coming in Phase 3I Tasks 7-9";
-    setState(ConnectionState::Error);
-    emit errorOccurred(QStringLiteral("P1 connection not yet implemented (Phase 3I Task 6 stub)"));
+    m_intentionalDisconnect = false;
+    m_epSendSeq = 0;
+    m_epRecvSeqExpected = 0;
+
+    // Check firmware minimum — warn but don't block (Task 11 adds hard gate)
+    if (info.firmwareVersion > 0 && m_caps->minFirmwareVersion > 0 &&
+        info.firmwareVersion < m_caps->minFirmwareVersion) {
+        qCWarning(lcConnection) << "P1: firmware" << info.firmwareVersion
+                                << "below minimum" << m_caps->minFirmwareVersion
+                                << "for" << m_caps->displayName;
+    }
+
+    setState(ConnectionState::Connecting);
+    qCDebug(lcConnection) << "P1: Connecting to" << m_caps->displayName
+                          << "at" << info.address.toString() << "port" << info.port
+                          << "from local port" << (m_socket ? m_socket->localPort() : 0);
+
+    // Send initial ep2 command frame so the radio knows our settings
+    // Source: networkproto1.c:597-884 WriteMainLoop context
+    sendCommandFrame();
+
+    // Send metis-start to begin ep6 stream
+    // Source: networkproto1.c:33-68 SendStartToMetis — cmd byte 0x01 = IQ only
+    m_running = true;
+    sendMetisStart(false);
+
+    m_watchdogTimer->start();
+    setState(ConnectionState::Connected);
+
+    qCDebug(lcConnection) << "P1: Connected (metis-start sent)";
 }
 
+// ---------------------------------------------------------------------------
+// disconnect
+//
+// Sends metis-stop and closes the socket.
+// Source: networkproto1.c:72-110 SendStopToMetis — EF FE 04 00
+// ---------------------------------------------------------------------------
 void P1RadioConnection::disconnect()
 {
+    m_intentionalDisconnect = true;
+
+    if (m_watchdogTimer) {
+        m_watchdogTimer->stop();
+    }
+    if (m_reconnectTimer) {
+        m_reconnectTimer->stop();
+    }
+
+    if (m_running && m_socket && !m_radioInfo.address.isNull()) {
+        m_running = false;
+        sendMetisStop();
+        qCDebug(lcConnection) << "P1: metis-stop sent";
+    }
+
+    m_running = false;
+
+    // Don't close the socket — leave it open for re-use in Task 10.
+    // P2 pattern: socket stays bound across reconnect cycles.
+
     setState(ConnectionState::Disconnected);
+    qCDebug(lcConnection) << "P1: Disconnected";
 }
 
 void P1RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequencyHz)
@@ -302,16 +406,139 @@ void P1RadioConnection::setTxDrive(int /*level*/)            { /* stub — Task 
 void P1RadioConnection::setMox(bool enabled)                 { m_mox = enabled; }
 void P1RadioConnection::setAntenna(int antennaIndex)         { m_antennaIdx = antennaIndex; }
 
-void P1RadioConnection::onReadyRead()        { /* stub — Task 8 */ }
-void P1RadioConnection::onWatchdogTick()     { /* stub — Task 9 */ }
+// ---------------------------------------------------------------------------
+// onReadyRead
+//
+// Drains incoming datagrams. For each 1032-byte ep6 frame, calls the static
+// parseEp6Frame helper and emits iqDataReceived for each receiver.
+// Source: networkproto1.c:319-415 MetisReadThreadMainLoop
+// ---------------------------------------------------------------------------
+void P1RadioConnection::onReadyRead()
+{
+    if (!m_socket) { return; }
+
+    while (m_socket->hasPendingDatagrams()) {
+        QNetworkDatagram dg = m_socket->receiveDatagram();
+        const QByteArray& data = dg.data();
+
+        if (data.isEmpty()) { continue; }
+
+        // ep6 frames are exactly 1032 bytes
+        // Source: networkproto1.c:319 — MetisReadThreadMainLoop receives 1032-byte frames
+        if (data.size() == 1032) {
+            parseEp6Frame(data);
+        }
+    }
+}
+
+void P1RadioConnection::onWatchdogTick()
+{
+    // Task 9 scope: send a periodic ep2 command frame to keep the radio alive.
+    // Source: networkproto1.c:597 WriteMainLoop equivalent — periodic command send.
+    if (m_running && m_socket && !m_radioInfo.address.isNull()) {
+        sendCommandFrame();
+    }
+}
+
 void P1RadioConnection::onReconnectTimeout() { /* stub — Task 10 */ }
 
-void P1RadioConnection::sendMetisStart(bool) { /* Task 7 */ }
-void P1RadioConnection::sendMetisStop()      { /* Task 7 */ }
-void P1RadioConnection::sendCommandFrame()   { /* Task 7 */ }
-void P1RadioConnection::parseEp6Frame(const QByteArray&) { /* Task 8 */ }
+// ---------------------------------------------------------------------------
+// sendMetisStart
+//
+// Source: networkproto1.c:33-68 SendStartToMetis
+//   outpacket.packetbuf[0] = 0xef  (line 43)
+//   outpacket.packetbuf[1] = 0xfe  (line 44)
+//   outpacket.packetbuf[2] = 0x04  (line 49)
+//   outpacket.packetbuf[3] = 0x01  (line 50) — start IQ stream
+//   Packet is 64 bytes, padded with zeros.
+//   iqAndMic=true → cmd 0x02 (IQ+mic), false → cmd 0x01 (IQ only)
+// ---------------------------------------------------------------------------
+void P1RadioConnection::sendMetisStart(bool iqAndMic)
+{
+    if (!m_socket) { return; }
 
-void P1RadioConnection::composeCcBank0(quint8*) { /* Task 7 */ }
+    // Source: networkproto1.c:33-68 SendStartToMetis — 64-byte packet
+    QByteArray pkt(64, '\0');
+    pkt[0] = static_cast<char>(0xEF);
+    pkt[1] = static_cast<char>(0xFE);
+    pkt[2] = static_cast<char>(0x04);
+    pkt[3] = iqAndMic ? static_cast<char>(0x02) : static_cast<char>(0x01);
+
+    m_socket->writeDatagram(pkt, m_radioInfo.address, m_radioInfo.port);
+}
+
+// ---------------------------------------------------------------------------
+// sendMetisStop
+//
+// Source: networkproto1.c:72-110 SendStopToMetis
+//   outpacket.packetbuf[2] = 0x04  (line 84)
+//   outpacket.packetbuf[3] = 0x00  (stop command)
+//   Packet is 64 bytes, padded with zeros.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::sendMetisStop()
+{
+    if (!m_socket) { return; }
+
+    // Source: networkproto1.c:72-110 SendStopToMetis — 64-byte packet
+    QByteArray pkt(64, '\0');
+    pkt[0] = static_cast<char>(0xEF);
+    pkt[1] = static_cast<char>(0xFE);
+    pkt[2] = static_cast<char>(0x04);
+    pkt[3] = static_cast<char>(0x00);
+
+    m_socket->writeDatagram(pkt, m_radioInfo.address, m_radioInfo.port);
+}
+
+// ---------------------------------------------------------------------------
+// sendCommandFrame
+//
+// Builds a 1032-byte ep2 frame via composeEp2Frame and sends it to the radio.
+// Source: networkproto1.c:216-236 MetisWriteFrame + :597-884 WriteMainLoop
+// ---------------------------------------------------------------------------
+void P1RadioConnection::sendCommandFrame()
+{
+    if (!m_socket) { return; }
+
+    quint8 frame[1032];
+    memset(frame, 0, sizeof(frame));
+
+    composeEp2Frame(frame, m_epSendSeq++, 0 /* ccAddress */, m_sampleRate, m_mox);
+
+    QByteArray pkt(reinterpret_cast<const char*>(frame), 1032);
+    m_socket->writeDatagram(pkt, m_radioInfo.address, m_radioInfo.port);
+}
+
+// ---------------------------------------------------------------------------
+// parseEp6Frame (instance method)
+//
+// Calls the static parseEp6Frame helper and emits iqDataReceived for each
+// receiver's interleaved I/Q samples.
+// Source: networkproto1.c:319-415 MetisReadThreadMainLoop
+// ---------------------------------------------------------------------------
+void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
+{
+    if (pkt.size() != 1032) { return; }
+
+    std::vector<std::vector<float>> perRx;
+    const auto* frame = reinterpret_cast<const quint8*>(pkt.constData());
+
+    if (!P1RadioConnection::parseEp6Frame(frame, m_activeRxCount, perRx)) {
+        return;
+    }
+
+    // Emit iqDataReceived for each receiver
+    // Contract: hwReceiverIndex (0-based), interleaved float I/Q pairs, [-1, 1]
+    // Source: RadioConnection.h:82 iqDataReceived signal
+    for (int r = 0; r < static_cast<int>(perRx.size()); ++r) {
+        if (!perRx[static_cast<size_t>(r)].empty()) {
+            QVector<float> samples(perRx[static_cast<size_t>(r)].begin(),
+                                   perRx[static_cast<size_t>(r)].end());
+            emit iqDataReceived(r, samples);
+        }
+    }
+}
+
+void P1RadioConnection::composeCcBank0(quint8*) { /* full implementation in Task 7 static helpers */ }
 void P1RadioConnection::composeCcBank1(quint8*) { /* Task 7 */ }
 void P1RadioConnection::composeCcBank2(quint8*) { /* Task 7 */ }
 void P1RadioConnection::composeCcBank3(quint8*) { /* Task 7 */ }

@@ -7,7 +7,8 @@
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
 function(nereus_add_test name)
-    add_executable(${name} ${name}.cpp)
+    # Additional source files may be passed as extra arguments (ARGN).
+    add_executable(${name} ${name}.cpp ${ARGN})
     target_link_libraries(${name} PRIVATE NereusSDRObjs Qt6::Test)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
@@ -23,3 +24,6 @@ target_compile_definitions(tst_radio_discovery_parse PRIVATE
 )
 
 nereus_add_test(tst_p1_wire_format)
+
+# P1 loopback integration test — uses P1FakeRadio from tests/fakes/
+nereus_add_test(tst_p1_loopback_connection fakes/P1FakeRadio.cpp)
