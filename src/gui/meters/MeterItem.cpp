@@ -195,6 +195,13 @@ void BarItem::setValue(double v)
         m_smoothedValue = static_cast<double>(m_decayRatio) * v
                         + (1.0 - static_cast<double>(m_decayRatio)) * m_smoothedValue;
     }
+    // Phase A1 — rolling high-water-mark for ShowPeakValue + peak-hold marker.
+    // From Thetis clsBarItem (MeterManager.cs:21541, 21544) — peak tracks the
+    // highest raw value; decay is handled by a separate peak-hold timer in
+    // Phase A3, not here.
+    if (v > m_peakValue) {
+        m_peakValue = v;
+    }
 }
 
 void BarItem::paint(QPainter& p, int widgetW, int widgetH)
@@ -313,9 +320,11 @@ void BarItem::paintEdge(QPainter& p, int widgetW, int widgetH)
 
 QString BarItem::serialize() const
 {
-    // Fields 0-14: BAR|x|y|w|h|bindingId|zOrder|orientation|min|max|barColor|barRedColor|redThreshold|attack|decay
+    // Fields 0-14:  BAR|x|y|w|h|bindingId|zOrder|orientation|min|max|
+    //               barColor|barRedColor|redThreshold|attack|decay
     // Fields 15-19: barStyle|edgeBgColor|edgeLowColor|edgeHighColor|edgeAvgColor
-    return QStringLiteral("BAR|%1|%2|%3|%4|%5|%6|%7|%8|%9|%10|%11|%12|%13|%14")
+    // Fields 20-22: showValue|showPeakValue|fontColour           (Phase A1)
+    QString base = QStringLiteral("BAR|%1|%2|%3|%4|%5|%6|%7|%8|%9|%10|%11|%12|%13|%14")
         .arg(baseFields(*this))
         .arg(m_orientation == Orientation::Horizontal ? QStringLiteral("H") : QStringLiteral("V"))
         .arg(m_minVal)
@@ -330,6 +339,12 @@ QString BarItem::serialize() const
         .arg(m_edgeLowColor.name(QColor::HexArgb))
         .arg(m_edgeHighColor.name(QColor::HexArgb))
         .arg(m_edgeAvgColor.name(QColor::HexArgb));
+    // Append-only tail (Phase A1). Legacy readers stop at field 19 and
+    // these get the defaults — see tail-tolerant parse below.
+    base += QLatin1Char('|') + (m_showValue     ? QStringLiteral("1") : QStringLiteral("0"));
+    base += QLatin1Char('|') + (m_showPeakValue ? QStringLiteral("1") : QStringLiteral("0"));
+    base += QLatin1Char('|') + m_fontColour.name(QColor::HexArgb);
+    return base;
 }
 
 bool BarItem::deserialize(const QString& data)
@@ -362,6 +377,14 @@ bool BarItem::deserialize(const QString& data)
         QColor ec2 = QColor(parts[17]); if (ec2.isValid()) { m_edgeLowColor  = ec2; }
         QColor ec3 = QColor(parts[18]); if (ec3.isValid()) { m_edgeHighColor = ec3; }
         QColor ec4 = QColor(parts[19]); if (ec4.isValid()) { m_edgeAvgColor  = ec4; }
+    }
+
+    // Phase A1 — ShowValue / ShowPeakValue / FontColour (append-only tail)
+    if (parts.size() >= 21) { m_showValue     = (parts[20] == QLatin1String("1")); }
+    if (parts.size() >= 22) { m_showPeakValue = (parts[21] == QLatin1String("1")); }
+    if (parts.size() >= 23) {
+        QColor fc = QColor(parts[22]);
+        if (fc.isValid()) { m_fontColour = fc; }
     }
 
     return true;

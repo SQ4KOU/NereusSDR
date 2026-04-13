@@ -9,6 +9,7 @@
 #include <QPointF>
 #include <QString>
 #include <QUuid>
+#include <limits>
 
 class QPainter;
 class QMouseEvent;
@@ -227,6 +228,24 @@ public:
     void setEdgeAvgColor(const QColor& c) { m_edgeAvgColor = c; }
     QColor edgeAvgColor() const { return m_edgeAvgColor; }
 
+    // --- Phase A1: ShowValue / ShowPeakValue / FontColour ---
+    // From Thetis clsBarItem (MeterManager.cs:19939-19940, 21541, 21550,
+    // 21706-21708). ShowValue draws the current value as text top-left of
+    // the bar; ShowPeakValue draws the rolling peak top-right. FontColour
+    // is the shared text color (Thetis default Yellow).
+    void setShowValue(bool on) { m_showValue = on; }
+    bool showValue() const { return m_showValue; }
+
+    void setShowPeakValue(bool on) { m_showPeakValue = on; }
+    bool showPeakValue() const { return m_showPeakValue; }
+
+    void setFontColour(const QColor& c) { m_fontColour = c; }
+    QColor fontColour() const { return m_fontColour; }
+
+    // Rolling high-water-mark of all values seen via setValue(). Consumed
+    // by ShowPeakValue text render and (in A3) the peak-hold marker.
+    double peakValue() const { return m_peakValue; }
+
     // Override setValue() for exponential smoothing
     // From Thetis MeterManager.cs — attack/decay smoothing
     void setValue(double v) override;
@@ -256,6 +275,11 @@ private:
     QColor      m_edgeLowColor{Qt::white};
     QColor      m_edgeHighColor{Qt::red};
     QColor      m_edgeAvgColor{Qt::yellow};
+    // Phase A1 — clsBarItem text/peak fields
+    bool        m_showValue{false};
+    bool        m_showPeakValue{false};
+    QColor      m_fontColour{Qt::yellow};
+    double      m_peakValue{-std::numeric_limits<double>::infinity()};
 };
 
 // ---------------------------------------------------------------------------
