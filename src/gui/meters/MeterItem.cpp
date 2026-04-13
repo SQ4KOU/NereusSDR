@@ -589,6 +589,30 @@ void ScaleItem::paint(QPainter& p, int widgetW, int widgetH)
 {
     const QRect rect = pixelRect(widgetW, widgetH);
     const double range = m_maxVal - m_minVal;
+
+    // Phase B2 — ShowType centered title.
+    // From Thetis MeterManager.cs:31879-31886. Thetis draws the title
+    // above the scale rect in the container background area. NereusSDR
+    // draws it inside the top ~25% of the ScaleItem's own rect so the
+    // item owns its title space; presets leave room at the top when
+    // building the row (Phase D1).
+    if (m_showType) {
+        const QString title = readingName(m_bindingId);
+        if (!title.isEmpty()) {
+            const int titleHeight = qMax(8, rect.height() / 3);
+            QFont titleFont = p.font();
+            titleFont.setPixelSize(titleHeight);
+            titleFont.setBold(true);
+            p.setFont(titleFont);
+            p.setPen(m_titleColour);
+            const QRect titleRect(rect.left(),
+                                  rect.top(),
+                                  rect.width(),
+                                  titleHeight);
+            p.drawText(titleRect, Qt::AlignCenter, title);
+        }
+    }
+
     if (range <= 0.0 || m_majorTicks < 2) {
         return;
     }
@@ -663,7 +687,7 @@ void ScaleItem::paint(QPainter& p, int widgetW, int widgetH)
 
 QString ScaleItem::serialize() const
 {
-    return QStringLiteral("SCALE|%1|%2|%3|%4|%5|%6|%7|%8|%9")
+    QString base = QStringLiteral("SCALE|%1|%2|%3|%4|%5|%6|%7|%8|%9")
         .arg(baseFields(*this))
         .arg(m_orientation == Orientation::Horizontal ? QStringLiteral("H") : QStringLiteral("V"))
         .arg(m_minVal)
@@ -673,6 +697,10 @@ QString ScaleItem::serialize() const
         .arg(m_tickColor.name(QColor::HexArgb))
         .arg(m_labelColor.name(QColor::HexArgb))
         .arg(m_fontSize);
+    // Phase B2 tail (append-only): showType | titleColour
+    base += QLatin1Char('|') + (m_showType ? QStringLiteral("1") : QStringLiteral("0"));
+    base += QLatin1Char('|') + m_titleColour.name(QColor::HexArgb);
+    return base;
 }
 
 bool ScaleItem::deserialize(const QString& data)
@@ -695,6 +723,13 @@ bool ScaleItem::deserialize(const QString& data)
     m_tickColor  = QColor(parts[12]);       if (!m_tickColor.isValid()) { return false; }
     m_labelColor = QColor(parts[13]);       if (!m_labelColor.isValid()) { return false; }
     m_fontSize   = parts[14].toInt(&ok);    if (!ok) { return false; }
+
+    // Phase B2 — ShowType / TitleColour (append-only tail)
+    if (parts.size() >= 16) { m_showType = (parts[15] == QLatin1String("1")); }
+    if (parts.size() >= 17) {
+        QColor tc = QColor(parts[16]);
+        if (tc.isValid()) { m_titleColour = tc; }
+    }
 
     return true;
 }

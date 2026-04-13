@@ -396,6 +396,18 @@ public:
     void setFontSize(int sz) { m_fontSize = sz; }
     int fontSize() const { return m_fontSize; }
 
+    // --- Phase B2: ShowType centered title ---
+    // From Thetis clsScaleItem (MeterManager.cs:14827 ShowType property,
+    // 31879-31886 render pass). When true, paint() draws readingName()
+    // of the scale's bindingId centered in the top strip of the scale
+    // rect. Used by every bar-row preset to label its row with the
+    // canonical Thetis reading name in red.
+    void setShowType(bool on) { m_showType = on; }
+    bool showType() const { return m_showType; }
+
+    void setTitleColour(const QColor& c) { m_titleColour = c; }
+    QColor titleColour() const { return m_titleColour; }
+
     Layer renderLayer() const override { return Layer::OverlayStatic; }
     void paint(QPainter& p, int widgetW, int widgetH) override;
     QString serialize() const override;
@@ -411,6 +423,9 @@ private:
     QColor      m_tickColor{0xc8, 0xd8, 0xe8};
     QColor      m_labelColor{0x80, 0x90, 0xa0};
     int         m_fontSize{10};
+    // Phase B2 — ShowType title
+    bool        m_showType{false};
+    QColor      m_titleColour{Qt::red};   // Thetis default per screenshot
 };
 
 // ---------------------------------------------------------------------------
