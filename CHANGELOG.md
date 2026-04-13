@@ -2,6 +2,75 @@
 
 ## [Unreleased]
 
+### Phase 3I — Radio Connector & Radio-Model Port (2026-04-13)
+
+#### Added
+- Full Protocol 1 support across the ANAN/Hermes family: Atlas/Metis (HPSDR),
+  Hermes (ANAN-10/100), HermesII (ANAN-10E/100B), Angelia (ANAN-100D),
+  Orion (ANAN-200D), and Hermes Lite 2. P1 radios now connect, stream I/Q,
+  and feed the existing WDSP demod chain identically to Saturn on P2.
+- `HPSDRModel` + `HPSDRHW` enums ported 1:1 from mi0bot/Thetis@Hermes-Lite
+  `enums.cs`, preserving integer values including the 7..9 reserved gap for
+  wire-format compatibility.
+- `BoardCapabilities` constexpr registry — 10 entries (9 boards + Unknown),
+  pure data, 20+ test invariants, drives both protocol classes and the
+  Hardware setup UI.
+- Discovery rewritten following mi0bot `clsRadioDiscovery.cs`: six tunable
+  timing profiles (UltraFast → VeryTolerant), dual P1+P2 NIC walk with
+  MAC-based de-duplication.
+- `P1RadioConnection` — 24 unit-test slots locking ep2 compose + ep6 parse
+  against Thetis `networkproto1.c`, loopback integration test with
+  `P1FakeRadio`, 2-second watchdog + bounded reconnection state machine.
+- `RadioConnectionError` enum with 9 structured error codes (design §6.1)
+  replacing string-only `errorOccurred` signal.
+- `ConnectionPanel` expanded to a full Thetis-equivalent radio list:
+  sortable columns, color-coded state, right-click context menu,
+  saved-radio persistence keyed by MAC, manual-add dialog ported from
+  `frmAddCustomRadio.cs`, and auto-reconnect on launch via
+  `DiscoveryProfile::Fast` against `radios/lastConnected`.
+- `HardwarePage` with 9 capability-gated nested tabs mirroring Thetis
+  Setup.cs "Hardware Config" sub-tabs: Radio Info, Antenna/ALEX, OC Outputs,
+  XVTR, PureSignal, Diversity, PA Calibration, HL2 I/O Board, Bandwidth
+  Monitor. Each control persists per-MAC under `hardware/<MAC>/*` in
+  `AppSettings` with namespaced round-trip + radio-swap isolation tests.
+- HL2-specific helpers on P1RadioConnection: `hl2SendIoBoardInit` (citation
+  stub pending closed-source ChannelMaster.dll port in Phase 3L) and
+  `hl2CheckBandwidthMonitor` sequence-gap heuristic with ep2 pause-on-throttle.
+
+#### Changed
+- `P2RadioConnection` audited to read from `BoardCapabilities`; now
+  recognises `SaturnMKII`, `ANAN_G2_1K`, and `AnvelinaPro3` via the
+  existing P2 wire path. Saturn regression preserved.
+- `RadioDiscovery::parseP1Reply` / `parseP2Reply` exposed as public
+  statics so they can be unit-tested against captured hex fixtures.
+- Legacy `BoardType` enum removed; all callers migrated to `HPSDRHW`.
+- `HardwareSetupPages` renamed to `HardwarePage` (single class) and
+  rebuilt as a QTabWidget container.
+
+#### Fixed
+- `BoardType::Griffin=2` was a documentation-era mistake; corrected to
+  `HPSDRHW::HermesII=2` matching mi0bot/Thetis `enums.cs:392`. Zero users
+  were on Griffin=2 in practice so no AppSettings migration needed.
+- P2 board sample-rate ceiling raised from 384 kHz to 1536 kHz per
+  `Setup.cs:854`, which the original Phase 2A design doc had wrong.
+- Hermes/HermesII sample-rate ceiling dropped from 384 kHz to 192 kHz —
+  `Setup.cs:850-853` restricts 384k to HL2 among the single-ADC P1 family.
+
+#### Known deferred / future phases
+- **TX IQ producer** — ep2 TX sample slots carry silence. TX DSP wires in
+  the dedicated TX phase.
+- **PureSignal feedback DSP** — toggle persists, tab visible; feedback loop
+  lands in the TX phase.
+- **TCI protocol**, **RedPitaya** (DH1KLM), **sidetone generator**,
+  **firmware flashing** — each is its own phase.
+- **HL2 IoBoardHl2 I2C-over-ep2 wire encoding** — lives in closed
+  `ChannelMaster.dll`; Phase 3L will extract the needed bytes from a live
+  capture.
+- **Bandwidth monitor full port** — currently a sequence-gap heuristic;
+  real byte-rate accounting lands with Phase 3L.
+
+---
+
 ### Phase 3G-8 — RX1 Display Parity (complete)
 
 **Status:** Complete. Branch `feature/phase3g8-rx1-display-parity`

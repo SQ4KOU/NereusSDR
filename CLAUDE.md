@@ -363,7 +363,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | 1B: Thetis Analysis | Dual-thread DSP (RX1/RX2), pre-allocated receivers, one-way protocol, skin system |
 | 1C: WDSP Analysis | 256 API functions, channel-based DSP, fexchange2() for I/Q, PureSignal feedback loop |
 
-### Current Phase: 3I-1 — Basic SSB TX (recommended next after 3G-8 merges)
+### Current Phase: 3I complete — Radio Connector & Radio-Model Port
 
 | Phase | Goal | Status |
 | --- | --- | --- |
@@ -381,15 +381,15 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | **3G-6: Container Settings Dialog (one-shot)** | **3-column dialog, 31 per-item editors, MMIO subsystem (4 transports + JSON/XML/RAW), Edit Container submenu** | **Complete** |
 | **3G-7: Polish** | **MMIO clone-path bug fix + 5 subclass accessor gap fills + NeedleItemEditor QGroupBox grouping** | **Complete** |
 | **3G-8: RX1 Display Parity** | **47 Spectrum/Waterfall/Grid controls wired (Setup → Display), `Band` enum + per-band grid on PanadapterModel, `BandButtonItem` 12→14, GPU polish: overlay cache invalidation, waterfall chrome in overlay texture, peak hold VBO, fill/gradient/cal-offset in vertex gen** | **Complete (PR #8)** |
-| 3I-1: Basic SSB TX | TxChannel, mic input, MOX state machine, I/Q output | Planned |
-| 3I-2: CW TX | Sidetone, firmware keyer, QSK/break-in | Planned |
-| 3I-3: TX Processing | 18-stage TXA chain + RX DSP additions (SNB, peak hold, histogram) | Planned |
-| 3I-4: PureSignal | Feedback DDC, calcc/IQC engine, PSForm, AmpView | Planned |
+| **3I: Radio Connector & Radio-Model Port** | **P1 full family (Atlas/Hermes/HermesII/Angelia/Orion/HL2), BoardCapabilities registry, ConnectionPanel, HardwarePage 9-tab capability-gated, per-MAC persistence, mi0bot RadioDiscovery port, RadioConnectionError taxonomy** | **Complete** |
+| 3I-TX: Basic SSB TX | TxChannel, mic input, MOX state machine, I/Q output | Next |
+| 3I-CW: CW TX | Sidetone, firmware keyer, QSK/break-in | Planned |
+| 3I-PS: PureSignal | Feedback DDC, calcc/IQC engine, PSForm, AmpView | Planned |
 | 3F: Multi-Panadapter | DDC assignment (incl. PS states), FFTRouter, PanadapterStack, enable RX2 | Planned |
 | 3H: Skins | Thetis-inspired skin format, 4-pan, legacy import | Planned |
 | 3J: TCI + Spots | TCI server, DX Cluster/RBN clients, spot overlay | Planned |
 | 3K: CAT/rigctld | 4-channel rigctld, TCP CAT server | Planned |
-| 3L: Protocol 1 | Hermes Lite 2, older ANAN radios | Planned |
+| 3L: HL2 ChannelMaster.dll port | HL2 IoBoardHl2 I2C-over-ep2 wire encoding, bandwidth monitor full port | Planned |
 | 3M: Recording | WAV record/playback, I/Q record, scheduled | Planned |
 | 3N: Packaging | AppImage, NSIS, DMG release builds | Planned |
 

@@ -177,7 +177,7 @@ Byte 0-1:   0xEF 0xFE          (Metis sync)
 Byte 2:     0x02                (Discovery response) — OR 0x03 if radio is in use
 Byte 3-8:   MAC address         (6 bytes, big-endian)
 Byte 9:     Firmware version    (single byte, decimal)
-Byte 10:    Board type          (see BoardType enum)
+Byte 10:    Board type          (see HPSDRHW enum — BoardType removed in 3I-3)
 ```
 
 If byte 2 is `0x03`, the radio is currently in use by another client.
@@ -324,14 +324,17 @@ std::optional<RadioInfo> RadioDiscovery::parseP1Response(
     info.inUse = (raw[2] == 0x03);
     info.macAddress = macToString(data.constData() + 3);  // Bytes 3-8
     info.firmwareVersion = raw[9];
-    info.boardType = static_cast<BoardType>(raw[10]);
+    info.boardType = static_cast<HPSDRHW>(raw[10]);  // BoardType removed in 3I-3
     info.adcCount = RadioInfo::adcCountForBoard(info.boardType);
     info.maxReceivers = RadioInfo::maxReceiversForBoard(info.boardType);
-    info.name = RadioInfo::boardTypeName(info.boardType);
+    // boardTypeName() removed; displayName comes from BoardCapsTable::forBoard()
+    info.name = BoardCapsTable::forBoard(info.boardType).displayName;
     info.hasDiversityReceiver = (info.adcCount >= 2);
-    // PureSignal requires 2+ ADCs for feedback path (Metis and Hermes are single-ADC)
-    // Corrected 2026-04-10: was (boardType != Metis) which wrongly included Hermes
-    info.hasPureSignal = (info.adcCount >= 2);
+    // PureSignal: use BoardCapabilities rather than adcCount >= 2.
+    // HermesII (single ADC) supports PureSignal (console.cs:30276-30277).
+    // Corrected 2026-04-12 (Task 3I-3): capability lookup replaces the
+    // earlier (adcCount >= 2) heuristic which wrongly excluded HermesII.
+    info.hasPureSignal = BoardCapsTable::forBoard(info.boardType).hasPureSignal;
 
     return info;
 }
@@ -435,7 +438,8 @@ public slots:
     // Affects I/Q sample interleaving and available bandwidth.
     virtual void setActiveReceiverCount(int count) = 0;
 
-    // Set sample rate. Valid values: 48000, 96000, 192000, 384000.
+    // Set sample rate. P1 valid values: 48000, 96000, 192000, 384000 (HL2 only).
+    // P2 valid values: 48000, 96000, 192000, 384000, 768000, 1536000 (Setup.cs:854).
     virtual void setSampleRate(int sampleRate) = 0;
 
     // --- Hardware Control ---
@@ -1723,7 +1727,7 @@ Offset  Size  Content
 2       1     0x02 (available) or 0x03 (in use)
 3       6     MAC address
 9       1     Firmware version
-10      1     Board type (see BoardType enum)
+10      1     Board type (HPSDRHW wire value — BoardType removed in 3I-3)
 ```
 
 ---
