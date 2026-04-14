@@ -12,6 +12,7 @@
 #include <vector>
 #include <QtEndian>
 #include <QNetworkDatagram>
+#include <QThread>
 #include <QVariant>
 
 namespace NereusSDR {
@@ -36,7 +37,9 @@ namespace NereusSDR {
 // ---------------------------------------------------------------------------
 void P1RadioConnection::composeEp2Frame(quint8 out[1032], quint32 seq,
                                          int /*ccAddress*/,
-                                         int sampleRate, bool mox) noexcept
+                                         int sampleRate, bool mox,
+                                         quint64 rx1FreqHz,
+                                         int activeRxCount) noexcept
 {
     // Source: networkproto1.c:223-230 — MetisWriteFrame() header + sequence
     out[0] = 0xEF;
@@ -55,14 +58,14 @@ void P1RadioConnection::composeEp2Frame(quint8 out[1032], quint32 seq,
     out[9]  = 0x7F;
     out[10] = 0x7F;
 
-    // C0..C4 for subframe 0 — compose bank 0 (general settings)
-    quint8 cc[5] = {};
-    composeCcBank0(cc, sampleRate, mox);
-    out[11] = cc[0];
-    out[12] = cc[1];
-    out[13] = cc[2];
-    out[14] = cc[3];
-    out[15] = cc[4];
+    // C0..C4 for subframe 0 -- compose bank 0 (general settings)
+    quint8 cc0[5] = {};
+    composeCcBank0(cc0, sampleRate, mox, activeRxCount);
+    out[11] = cc0[0];
+    out[12] = cc0[1];
+    out[13] = cc0[2];
+    out[14] = cc0[3];
+    out[15] = cc0[4];
 
     // Bytes 16..519: TX I/Q + mic data — zeros (RX-only; TX producer added in TX phase)
 
@@ -72,12 +75,18 @@ void P1RadioConnection::composeEp2Frame(quint8 out[1032], quint32 seq,
     out[521] = 0x7F;
     out[522] = 0x7F;
 
-    // C0..C4 for subframe 1 — repeat bank 0 (round-robin comes in later task)
-    out[523] = cc[0];
-    out[524] = cc[1];
-    out[525] = cc[2];
-    out[526] = cc[3];
-    out[527] = cc[4];
+    // C0..C4 for subframe 1 — RX1 frequency bank (address 0x02, Thetis case 2).
+    // Without this, the radio streams ADC data at LO=0 → huge DC spike with no
+    // visible signals. Partial round-robin: bank 0 on subframe 0, RX1 freq on
+    // subframe 1. Remaining banks (TX freq, Alex, atten, OC, RX2+) come with
+    // the full round-robin in the outstanding P1 tasks.
+    quint8 cc1[5] = {};
+    composeCcBankRxFreq(cc1, 0 /* rxIndex */, rx1FreqHz);
+    out[523] = cc1[0];
+    out[524] = cc1[1];
+    out[525] = cc1[2];
+    out[526] = cc1[3];
+    out[527] = cc1[4];
 
     // Bytes 528..1031: TX I/Q + mic data — zeros (RX-only)
 }
@@ -92,13 +101,14 @@ void P1RadioConnection::composeEp2Frame(quint8 out[1032], quint32 seq,
 //   C3 = BPF/atten/preamp flags — zero for stub
 //   C4 = antenna, duplex, NDDCs — zero for stub
 // ---------------------------------------------------------------------------
-void P1RadioConnection::composeCcBank0(quint8 out[5], int sampleRate, bool mox) noexcept
+void P1RadioConnection::composeCcBank0(quint8 out[5], int sampleRate, bool mox,
+                                        int activeRxCount) noexcept
 {
-    // Source: networkproto1.c:615 — C0 = (unsigned char)XmitBit
+    // Source: networkproto1.c:615 -- C0 = (unsigned char)XmitBit
     out[0] = mox ? 0x01 : 0x00;
 
-    // Source: networkproto1.c:620 — C1 = (SampleRateIn2Bits & 3)
-    // 48000→0, 96000→1, 192000→2, 384000→3
+    // Source: networkproto1.c:620 -- C1 = (SampleRateIn2Bits & 3)
+    // 48000->0, 96000->1, 192000->2, 384000->3
     quint8 srBits = 0;
     if      (sampleRate >= 384000) { srBits = 3; }
     else if (sampleRate >= 192000) { srBits = 2; }
@@ -106,11 +116,17 @@ void P1RadioConnection::composeCcBank0(quint8 out[5], int sampleRate, bool mox) 
     else                            { srBits = 0; }
     out[1] = srBits & 0x03;
 
-    // C2..C4: OC outputs, filter bits, antenna — zero for Task 7 scope.
-    // Source: networkproto1.c:621-640 — full encoding in later tasks
+    // C2, C3: OC outputs / filter bits -- zero for Task 7 scope.
     out[2] = 0;
     out[3] = 0;
-    out[4] = 0;
+
+    // C4: number of DDCs to run, encoded as (nddc - 1) << 3
+    // Source: networkproto1.c:470. Thetis sends 0x08 for nddc=2 even on
+    // single-RX setups (diversity pre-allocation). We send the actual
+    // count so 1-RX configurations write 0x00. The Hermes firmware
+    // accepts both.
+    int nddc = (activeRxCount < 1) ? 1 : (activeRxCount > 7 ? 7 : activeRxCount);
+    out[4] = static_cast<quint8>((nddc - 1) << 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -130,21 +146,34 @@ void P1RadioConnection::composeCcBank0(quint8 out[5], int sampleRate, bool mox) 
 void P1RadioConnection::composeCcBankRxFreq(quint8 out[5], int rxIndex, quint64 freqHz) noexcept
 {
     // Address assignments from networkproto1.c:
-    //   rxIndex 0 → case 2: C0 |= 4   (networkproto1.c:654)
-    //   rxIndex 1 → case 3: C0 |= 6   (networkproto1.c:667)
-    //   rxIndex 2 → case 5: C0 |= 8   (networkproto1.c:694)
-    //   rxIndex 3 → case 7: C0 |= 0x0c (networkproto1.c:718)
-    //   rxIndex 4 → case 8: C0 |= 0x0e (networkproto1.c:728)
-    //   rxIndex 5 → case 9: C0 |= 0x10 (networkproto1.c:738)
+    //   rxIndex 0 → case 2: C0 |= 4   (networkproto1.c:485)
+    //   rxIndex 1 → case 3: C0 |= 6   (networkproto1.c:498)
+    //   rxIndex 2 → case 5: C0 |= 8   (networkproto1.c:526)
+    //   rxIndex 3 → case 7: C0 |= 0x0c
+    //   rxIndex 4 → case 8: C0 |= 0x0e
+    //   rxIndex 5 → case 9: C0 |= 0x10
     static const quint8 kRxC0Address[] = { 4, 6, 8, 0x0c, 0x0e, 0x10, 0x12 };
     quint8 addrBits = (rxIndex >= 0 && rxIndex < 7) ? kRxC0Address[rxIndex] : 4;
     out[0] = addrBits;  // MOX=0; address is already left-shifted in the table
 
-    quint32 freq32 = static_cast<quint32>(freqHz & 0xFFFFFFFF);
-    out[1] = static_cast<quint8>((freq32 >> 24) & 0xFF);
-    out[2] = static_cast<quint8>((freq32 >> 16) & 0xFF);
-    out[3] = static_cast<quint8>((freq32 >>  8) & 0xFF);
-    out[4] = static_cast<quint8>( freq32        & 0xFF);
+    // Ethernet P1 radios (ANAN-10/10E/100/100D, Orion, Angelia) tune via an
+    // NCO phase word, NOT raw Hz. Thetis NetworkIO.cs:220-223 branches on
+    // CurrentRadioProtocol: USB -> raw Hz, else -> Freq2PhaseWord. The
+    // converted value is stored in prn->rx[id].frequency (netInterface.c:517)
+    // and networkproto1.c case 2 (:491-494) writes those bytes directly into
+    // C1..C4.
+    //
+    //   Freq2PhaseWord(freq) = (2^32 * freq) / 122880000   (NetworkIO.cs:249-253)
+    //
+    // 122.88 MHz is the only phase-word divisor in Thetis source (searched:
+    // that constant appears only at NetworkIO.cs:251 and one commented-out
+    // duplicate). HL2 uses the same ChannelMaster source path and therefore
+    // the same divisor.
+    quint32 pw32 = static_cast<quint32>((freqHz << 32) / 122880000ull);
+    out[1] = static_cast<quint8>((pw32 >> 24) & 0xFF);
+    out[2] = static_cast<quint8>((pw32 >> 16) & 0xFF);
+    out[3] = static_cast<quint8>((pw32 >>  8) & 0xFF);
+    out[4] = static_cast<quint8>( pw32        & 0xFF);
 }
 
 // ---------------------------------------------------------------------------
@@ -156,14 +185,15 @@ void P1RadioConnection::composeCcBankRxFreq(quint8 out[5], int rxIndex, quint64 
 // ---------------------------------------------------------------------------
 void P1RadioConnection::composeCcBankTxFreq(quint8 out[5], quint64 freqHz) noexcept
 {
-    // Source: networkproto1.c:646 — C0 |= 2
+    // Source: networkproto1.c:477 — C0 |= 2  (case 1 = TX VFO)
     out[0] = 0x02;  // address 0x01, MOX=0
 
-    quint32 freq32 = static_cast<quint32>(freqHz & 0xFFFFFFFF);
-    out[1] = static_cast<quint8>((freq32 >> 24) & 0xFF);
-    out[2] = static_cast<quint8>((freq32 >> 16) & 0xFF);
-    out[3] = static_cast<quint8>((freq32 >>  8) & 0xFF);
-    out[4] = static_cast<quint8>( freq32        & 0xFF);
+    // Same phase-word conversion as RX freq — Ethernet P1 NCO tuning word.
+    quint32 pw32 = static_cast<quint32>((freqHz << 32) / 122880000ull);
+    out[1] = static_cast<quint8>((pw32 >> 24) & 0xFF);
+    out[2] = static_cast<quint8>((pw32 >> 16) & 0xFF);
+    out[3] = static_cast<quint8>((pw32 >>  8) & 0xFF);
+    out[4] = static_cast<quint8>( pw32        & 0xFF);
 }
 
 // ---------------------------------------------------------------------------
@@ -330,11 +360,26 @@ void P1RadioConnection::connectToRadio(const RadioInfo& info)
     m_intentionalDisconnect = false;
     m_epSendSeq = 0;
     m_epRecvSeqExpected = 0;
+    m_ccRoundRobinIdx = 0;
+
+    // Thetis hardcodes nddc=4 for plain Hermes/ANAN10/ANAN100 and nddc=2 for
+    // ANAN10E/100B (HermesII) in console.cs:8378-8454. No current-source P1
+    // path uses nddc=1 for Hermes-class boards. Captured Thetis traffic with
+    // the tester's radio shows nddc=2 on the wire (sub0 C4 = 0x08 bits).
+    // Default m_activeRxCount to 2 for Hermes-class P1 until we have a
+    // model-override setting. parseEp6Frame uses this same value to select
+    // the 14-byte nddc=2 slot layout, so sent and received must agree.
+    if (m_radioInfo.protocol == ProtocolVersion::Protocol1) {
+        m_activeRxCount = 2;
+    }
 
     // Reset reconnect state — fresh connection resets the retry counter.
     // Source: NereusSDR design doc §3.6 — explicit user reconnect clears attempts.
     m_reconnectAttempts = 0;
     m_lastEp6At = QDateTime();
+    m_firstEp6Logged = false;
+    m_parseFailLogged = false;
+    m_firstEmitLogged = false;
 
     // Apply per-board quirks (attenuator clamp, OC zero-force, etc.) now that
     // m_caps is set. Source: specHPSDR.cs per-HPSDRHW branches.
@@ -361,14 +406,28 @@ void P1RadioConnection::connectToRadio(const RadioInfo& info)
                           << "at" << info.address.toString() << "port" << info.port
                           << "from local port" << (m_socket ? m_socket->localPort() : 0);
 
-    // Send initial ep2 command frame so the radio knows our settings
-    // Source: networkproto1.c:597-884 WriteMainLoop context
-    sendCommandFrame();
-
-    // Send metis-start to begin ep6 stream
-    // Source: networkproto1.c:33-68 SendStartToMetis — cmd byte 0x01 = IQ only
+    // Prime the radio with alternating TX-VFO and RX1-VFO ep2 frames BEFORE
+    // metis-start so the DDC initializes with the correct phase words,
+    // sample rate, and nddc. Without priming, the Hermes firmware streams
+    // ADC-idle data (I=DC offset, Q=0) -- confirmed in the tester's pcap
+    // where every sample had Q=0 for 20 seconds.
+    //
+    // Port of Thetis networkproto1.c:35-68 SendStartToMetis + :281
+    // MetisReadThreadMainLoop. Thetis sends up to 16 primed ep2 frames
+    // (5x ForceCandCFrame(1) inside SendStartToMetis + ForceCandCFrame(3)
+    // at the top of MetisReadThreadMainLoop). We collapse that into two
+    // ForceCandCFrame(3) equivalents: 3 TX + 3 RX1 before metis-start, and
+    // 3 TX + 3 RX1 after.
     m_running = true;
+    sendPrimingBurst(3);
+
+    // Send metis-start to begin ep6 stream.
+    // Source: networkproto1.c:33-68 SendStartToMetis -- cmd byte 0x01 = IQ only
     sendMetisStart(false);
+
+    // Second priming burst after start, matching Thetis's ForceCandCFrame(3)
+    // at MetisReadThreadMainLoop:281.
+    sendPrimingBurst(3);
 
     m_watchdogTimer->start();
     setState(ConnectionState::Connected);
@@ -505,6 +564,16 @@ void P1RadioConnection::onReadyRead()
             // Source: NereusSDR design doc §3.6 — successful data resets the retry counter.
             m_lastEp6At = QDateTime::currentDateTimeUtc();
 
+            // Diagnostic: log the first EP6 frame of this session so
+            // remote debugging can tell "connected but no data" apart
+            // from "connected and streaming".
+            if (!m_firstEp6Logged) {
+                m_firstEp6Logged = true;
+                qCInfo(lcConnection) << "P1: first ep6 frame received from"
+                                     << dg.senderAddress().toString()
+                                     << "(1032 bytes)";
+            }
+
             // If we were in a reconnect attempt, the first good frame means recovery.
             // Stop the reconnect timer and transition to Connected.
             if (cs == ConnectionState::Connecting) {
@@ -540,11 +609,18 @@ void P1RadioConnection::onWatchdogTick()
     const ConnectionState cs = state();
 
     // Send periodic command frame (keep-alive) when connected or reconnecting.
-    // Skip ep2 if the HL2 LAN PHY is throttling — resume once throttle clears.
+    // Alternate between TX-VFO bank and RX1-VFO bank on consecutive ticks so
+    // both freq banks get refreshed at ~kWatchdogTickMs cadence. Thetis sends
+    // banks at ~368 fps; we approximate with 25 ms ticks (40 fps) which gives
+    // the radio ~2x per second per bank of freshness -- enough for
+    // single-frequency monitoring.
+    //
+    // Skip ep2 if the HL2 LAN PHY is throttling -- resume once throttle clears.
     // Source: Task 12 hl2CheckBandwidthMonitor throttle flag.
     if (cs == ConnectionState::Connected || cs == ConnectionState::Connecting) {
         if (!m_hl2Throttled) {
-            sendCommandFrame();
+            const bool txBank = (m_ccRoundRobinIdx++ & 1) != 0;
+            sendCommandFrame(txBank);
         }
     }
 
@@ -603,11 +679,15 @@ void P1RadioConnection::onReconnectTimeout()
     // Transition to Connecting for this retry attempt.
     setState(ConnectionState::Connecting);
 
-    // Send stop then start so the radio re-arms its ep6 sender.
-    // Source: networkproto1.c:49-110 SendStopToMetis / SendStartToMetis.
-    // The socket stays bound from the initial connect.
+    // Send stop then prime then start so the radio re-arms its ep6 sender
+    // with the current RX1 frequency latched. Without the primed C&C burst,
+    // the radio comes back up in ADC-idle state (I=DC, Q=0).
+    // Source: networkproto1.c:49-110 SendStopToMetis / SendStartToMetis plus
+    // the ForceCandCFrame bracket pattern from MetisReadThreadMainLoop:281.
     sendMetisStop();
+    sendPrimingBurst(3);
     sendMetisStart(false);
+    sendPrimingBurst(3);
 
     // Re-arm the watchdog so onReadyRead can complete the transition to Connected.
     if (!m_watchdogTimer->isActive()) {
@@ -676,17 +756,84 @@ void P1RadioConnection::sendMetisStop()
 // Builds a 1032-byte ep2 frame via composeEp2Frame and sends it to the radio.
 // Source: networkproto1.c:216-236 MetisWriteFrame + :597-884 WriteMainLoop
 // ---------------------------------------------------------------------------
-void P1RadioConnection::sendCommandFrame()
+void P1RadioConnection::sendCommandFrame(bool sub1TxBank)
 {
     if (!m_socket) { return; }
 
     quint8 frame[1032];
     memset(frame, 0, sizeof(frame));
 
-    composeEp2Frame(frame, m_epSendSeq++, 0 /* ccAddress */, m_sampleRate, m_mox);
+    // ep2 header (magic + seq)
+    frame[0] = 0xEF;
+    frame[1] = 0xFE;
+    frame[2] = 0x01;
+    frame[3] = 0x02;
+    const quint32 seq = m_epSendSeq++;
+    frame[4] = static_cast<quint8>((seq >> 24) & 0xFF);
+    frame[5] = static_cast<quint8>((seq >> 16) & 0xFF);
+    frame[6] = static_cast<quint8>((seq >>  8) & 0xFF);
+    frame[7] = static_cast<quint8>( seq        & 0xFF);
+
+    // Subframe 0: sync + bank 0 (general settings)
+    frame[8]  = 0x7F;
+    frame[9]  = 0x7F;
+    frame[10] = 0x7F;
+    quint8 cc0[5] = {};
+    composeCcBank0(cc0, m_sampleRate, m_mox, m_activeRxCount);
+    frame[11] = cc0[0];
+    frame[12] = cc0[1];
+    frame[13] = cc0[2];
+    frame[14] = cc0[3];
+    frame[15] = cc0[4];
+
+    // Subframe 1: sync + selectable bank (TX freq or RX1 freq).
+    // Match Thetis networkproto1.c:134-139 ForceCandCFrame which sends
+    // alternating TX-VFO (bank 1, C0=0x02) and RX1-VFO (bank 2, C0=0x04)
+    // frames as the C&C priming sequence.
+    frame[520] = 0x7F;
+    frame[521] = 0x7F;
+    frame[522] = 0x7F;
+    quint8 cc1[5] = {};
+    if (sub1TxBank) {
+        composeCcBankTxFreq(cc1, m_txFreqHz);
+    } else {
+        composeCcBankRxFreq(cc1, 0 /* rxIndex */, m_rxFreqHz[0]);
+    }
+    frame[523] = cc1[0];
+    frame[524] = cc1[1];
+    frame[525] = cc1[2];
+    frame[526] = cc1[3];
+    frame[527] = cc1[4];
 
     QByteArray pkt(reinterpret_cast<const char*>(frame), 1032);
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_radioInfo.port);
+}
+
+// ---------------------------------------------------------------------------
+// sendPrimingBurst
+//
+// Port of Thetis networkproto1.c:134-139 ForceCandCFrame(count):
+//   ForceCandCFrames(count, 2, prn->tx[0].frequency);  // TX bank
+//   Sleep(10);
+//   ForceCandCFrames(count, 4, prn->rx[0].frequency);  // RX1 bank
+//   Sleep(10);
+//
+// Thetis calls this with count=1 inside each retry of SendStartToMetis and
+// with count=3 once at the top of MetisReadThreadMainLoop. We call it with
+// count=3 before metis-start and count=3 after, matching the MetisReadThread
+// invocation. The Sleep(10) gap between TX and RX bursts is preserved because
+// some Hermes firmware revisions need a small idle gap between bank changes.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::sendPrimingBurst(int countPerBank)
+{
+    for (int i = 0; i < countPerBank; ++i) {
+        sendCommandFrame(true /* sub1TxBank */);
+    }
+    QThread::msleep(10);
+    for (int i = 0; i < countPerBank; ++i) {
+        sendCommandFrame(false /* sub1TxBank -> RX1 bank */);
+    }
+    QThread::msleep(10);
 }
 
 // ---------------------------------------------------------------------------
@@ -704,6 +851,17 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
     const auto* frame = reinterpret_cast<const quint8*>(pkt.constData());
 
     if (!P1RadioConnection::parseEp6Frame(frame, m_activeRxCount, perRx)) {
+        if (!m_parseFailLogged) {
+            m_parseFailLogged = true;
+            qCWarning(lcConnection) << "P1: parseEp6Frame rejected frame;"
+                                    << "activeRxCount=" << m_activeRxCount
+                                    << "magic=" << QString::asprintf("%02X %02X %02X %02X",
+                                                                     frame[0], frame[1], frame[2], frame[3])
+                                    << "sync0=" << QString::asprintf("%02X %02X %02X",
+                                                                     frame[8], frame[9], frame[10])
+                                    << "sync1=" << QString::asprintf("%02X %02X %02X",
+                                                                     frame[520], frame[521], frame[522]);
+        }
         return;
     }
 
@@ -714,6 +872,11 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
         if (!perRx[static_cast<size_t>(r)].empty()) {
             QVector<float> samples(perRx[static_cast<size_t>(r)].begin(),
                                    perRx[static_cast<size_t>(r)].end());
+            if (!m_firstEmitLogged) {
+                m_firstEmitLogged = true;
+                qCInfo(lcConnection) << "P1: first iqDataReceived emit; rx=" << r
+                                     << "samples=" << samples.size();
+            }
             emit iqDataReceived(r, samples);
         }
     }

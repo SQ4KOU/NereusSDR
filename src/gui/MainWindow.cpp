@@ -262,9 +262,25 @@ void MainWindow::buildUI()
         }
     });
 
-    // Create FFTEngine on a worker thread (spectrum thread from architecture)
+    // Create FFTEngine on a worker thread (spectrum thread from architecture).
+    // Sample rate starts at P2 default (768k); RadioModel::wireSampleRateChanged
+    // updates it to the actual wire rate on each connect (P1=192k, P2=768k).
     m_fftEngine = new FFTEngine(0);  // receiver 0
     m_fftEngine->setSampleRate(768000.0);
+    connect(m_radioModel, &RadioModel::wireSampleRateChanged,
+            this, [this](double rateHz) {
+        if (m_fftEngine) {
+            QMetaObject::invokeMethod(m_fftEngine, [engine = m_fftEngine, rateHz]() {
+                engine->setSampleRate(rateHz);
+            });
+        }
+        if (m_spectrumWidget) {
+            m_spectrumWidget->setSampleRate(rateHz);
+            // Also update the frequency range so the visible span matches.
+            double freq = m_spectrumWidget->centerFrequency();
+            m_spectrumWidget->setFrequencyRange(freq, rateHz);
+        }
+    });
     m_fftEngine->setFftSize(4096);
     m_fftEngine->setOutputFps(30);
 

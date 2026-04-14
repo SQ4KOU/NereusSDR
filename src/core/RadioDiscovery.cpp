@@ -433,6 +433,7 @@ void RadioDiscovery::onStaleCheck()
     QStringList stale;
 
     for (auto it = m_lastSeen.constBegin(); it != m_lastSeen.constEnd(); ++it) {
+        if (it.key() == m_connectedMac) { continue; }
         if (now - it.value() > kStaleTimeoutMs) {
             stale.append(it.key());
         }
