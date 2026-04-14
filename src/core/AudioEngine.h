@@ -5,6 +5,7 @@
 #include <QAudioFormat>
 #include <QAudioDevice>
 #include <QByteArray>
+#include <QMutex>
 
 #include <memory>
 
@@ -69,9 +70,14 @@ private:
     std::unique_ptr<QAudioSink> m_audioSink;
     QIODevice* m_audioIO{nullptr};  // owned by QAudioSink
 
-    // Buffer + timer drain pattern (from AetherSDR)
+    // Buffer + timer drain pattern (from AetherSDR).
+    // m_bufferMutex guards m_rxBuffer because feedAudio() is invoked
+    // from the DSP worker thread (RxDspWorker) while the rx timer drain
+    // runs on this object's thread (main). Held briefly: append in
+    // feedAudio, and remove/write in the timer callback.
     QByteArray m_rxBuffer;
     QTimer* m_rxTimer{nullptr};
+    QMutex m_bufferMutex;
 };
 
 } // namespace NereusSDR

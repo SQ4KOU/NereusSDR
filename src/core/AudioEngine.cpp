@@ -98,18 +98,30 @@ void AudioEngine::start()
             return;
         }
 
-        // Cap buffer at 200ms to prevent latency buildup (from AetherSDR)
-        if (m_rxBuffer.size() > kMaxBufferBytes) {
-            m_rxBuffer.remove(0, m_rxBuffer.size() - kMaxBufferBytes);
+        // Drain step: snapshot the head of the buffer under the lock,
+        // then write to the sink without the lock so feedAudio() (on
+        // the DSP thread) is not blocked waiting on QIODevice I/O.
+        const qsizetype avail = m_audioSink->bytesFree();
+        QByteArray slice;
+        {
+            QMutexLocker locker(&m_bufferMutex);
+            // Cap buffer at 200ms to prevent latency buildup.
+            if (m_rxBuffer.size() > kMaxBufferBytes) {
+                m_rxBuffer.remove(0, m_rxBuffer.size() - kMaxBufferBytes);
+            }
+            const qsizetype len = qMin(avail, m_rxBuffer.size());
+            if (len > 0) {
+                slice = QByteArray(m_rxBuffer.constData(), len);
+                m_rxBuffer.remove(0, len);
+            }
         }
-
-        // Write as much as the sink can accept
-        qsizetype avail = m_audioSink->bytesFree();
-        qsizetype len = qMin(avail, m_rxBuffer.size());
-        if (len > 0) {
-            qsizetype written = m_audioIO->write(m_rxBuffer.constData(), len);
-            if (written > 0) {
-                m_rxBuffer.remove(0, written);
+        if (!slice.isEmpty()) {
+            const qsizetype written = m_audioIO->write(slice.constData(), slice.size());
+            if (written > 0 && written < slice.size()) {
+                // Sink accepted less than offered — push the remainder
+                // back to the front of the buffer so we don't drop it.
+                QMutexLocker locker(&m_bufferMutex);
+                m_rxBuffer.prepend(slice.constData() + written, slice.size() - written);
             }
         }
     });
@@ -140,7 +152,10 @@ void AudioEngine::stop()
 
     m_audioIO = nullptr;
     m_audioSink.reset();
-    m_rxBuffer.clear();
+    {
+        QMutexLocker locker(&m_bufferMutex);
+        m_rxBuffer.clear();
+    }
     m_running = false;
 
     qCInfo(lcAudio) << "Audio output stopped";
@@ -169,8 +184,13 @@ void AudioEngine::feedAudio(int receiverId, const float* leftSamples,
         dst[i * 2 + 1] = static_cast<qint16>(qBound(-1.0f, r, 1.0f) * 32767.0f);
     }
 
-    // Append to buffer — timer drains to QAudioSink
-    m_rxBuffer.append(pcm);
+    // Append to buffer — timer drains to QAudioSink. feedAudio() may
+    // be called from the DSP worker thread, so the append must be
+    // serialized against the timer drain on the main thread.
+    {
+        QMutexLocker locker(&m_bufferMutex);
+        m_rxBuffer.append(pcm);
+    }
 }
 
 void AudioEngine::playTestTone(int durationMs)
@@ -201,7 +221,10 @@ void AudioEngine::playTestTone(int durationMs)
     }
 
     // Append to buffer — timer will drain it
-    m_rxBuffer.append(pcm);
+    {
+        QMutexLocker locker(&m_bufferMutex);
+        m_rxBuffer.append(pcm);
+    }
     qCInfo(lcAudio) << "Test tone queued:" << pcm.size() << "bytes";
 }
 

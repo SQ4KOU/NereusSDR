@@ -17,15 +17,20 @@ namespace NereusSDR {
 class ReceiverManager;
 class AudioEngine;
 class WdspEngine;
+class RxDspWorker;
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
 // and all sub-models. It routes signals between components.
 //
 // Thread architecture:
-//   Main thread: RadioModel, ReceiverManager, all sub-models, GUI
+//   Main thread: RadioModel, ReceiverManager, all sub-models, GUI,
+//                AudioEngine (timer-driven QAudioSink drain)
 //   Connection thread: RadioConnection (sockets, protocol I/O)
-//   Audio thread: AudioEngine + WdspEngine (future)
+//   DSP thread:  RxDspWorker — runs RxChannel::processIq → fexchange2;
+//                kept off main because WDSP fexchange2 with bfo=1 can
+//                block on Sem_OutReady and would otherwise freeze the
+//                Qt event loop, deadlocking against wdspmain.
 class RadioModel : public QObject {
     Q_OBJECT
 
@@ -120,6 +125,11 @@ private:
     RadioConnection* m_connection{nullptr};
     QThread*         m_connThread{nullptr};
 
+    // I/Q DSP worker (owned, lives on m_dspThread). Fed by a queued
+    // connection from ReceiverManager::iqDataForReceiver.
+    RxDspWorker*     m_dspWorker{nullptr};
+    QThread*         m_dspThread{nullptr};
+
     // Sub-models
     MeterModel    m_meterModel;
     TransmitModel m_transmitModel;
@@ -142,14 +152,9 @@ private:
     RadioInfo m_lastRadioInfo;
     bool m_intentionalDisconnect{false};
 
-    // I/Q accumulation buffer for WDSP (accumulates 238-sample P2 packets
-    // until we have in_size samples for one fexchange2 call)
-    // Thetis formula: in_size = 64 * rate / 48000 → 1024 at 768 kHz
-    // WDSP output: out_size = in_size * out_rate / in_rate → 64 at 768k→48k
-    static constexpr int kWdspBufSize = 1024;
-    static constexpr int kWdspOutSize = 64;   // 1024 * 48000 / 768000
-    QVector<float> m_iqAccumI;
-    QVector<float> m_iqAccumQ;
+    // I/Q accumulator and per-batch buffer sizes now live in
+    // RxDspWorker (src/models/RxDspWorker.h) so the DSP thread owns
+    // its own state and the main thread never touches it.
 
     // Settings save coalescing
     bool m_settingsSaveScheduled{false};
