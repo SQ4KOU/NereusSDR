@@ -67,7 +67,7 @@ private:
     bool         m_silent{false};
     int          m_ep2Count{0};
     quint32      m_ep6Seq{0};
-    int          m_firmwareVersion{72};  // default matches HL2 kHermesLite knownGoodFirmware
+    int          m_firmwareVersion{72};  // arbitrary default; any value is now valid
 };
 
 } // namespace NereusSDR::Test
