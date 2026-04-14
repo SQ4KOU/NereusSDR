@@ -107,7 +107,18 @@ sem_t *LinuxCreateSemaphore(int attributes,int initial_count,int maximum_count,c
 #else
         sem=malloc(sizeof(sem_t));
 	int result;
-	result=sem_init(sem, 0, 0);
+	// NereusSDR fix: upstream WDSP linux_port hard-coded the initial
+	// count to 0, ignoring the caller's initial_count parameter. That
+	// silently broke any call site that depends on a pre-signalled
+	// semaphore — most importantly Sem_OutReady in iobuffs.c:416,
+	// which fexchange2(bfo=1) expects to start with n free slots so
+	// the first n calls don't block. On Linux this caused a
+	// deterministic deadlock on the very first fexchange2 call: bfo
+	// wait saw count=0, blocked; wdspmain was waiting for
+	// Sem_BuffReady which only releases after dsp_insize/in_size
+	// fexchange2 calls — circular wait with no escape. The macOS
+	// sem_open path (above) already uses initial_count correctly.
+	result=sem_init(sem, 0, initial_count);
         if (result < 0) {
 	  perror("WDSP:CreateSemaphore");
         }
