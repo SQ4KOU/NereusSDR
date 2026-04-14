@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.1.3] - 2026-04-13
+
+Hotfix for the v0.1.2 Windows artifacts. Linux and macOS builds are
+functionally identical to v0.1.2 — only the Windows installer and
+portable ZIP have changed.
+
+### Fixes
+- fix(release): stage `libfftw3f-3.dll` into the Windows `deploy\` folder.
+  v0.1.2 Windows installer and portable ZIP both shipped without the
+  single-precision FFTW DLL, so `NereusSDR.exe` failed to launch on any
+  clean install with `The code execution cannot proceed because
+  libfftw3f-3.dll was not found`. Root cause: `Deploy Qt` step in
+  `release.yml` only copied `libfftw3-3.dll` (double precision) into
+  `deploy\`. FFTEngine actually imports the single-precision variant,
+  which was committed in-tree at `third_party/fftw3/bin/` and found fine
+  at build time, but never staged into the artifact because `windeployqt`
+  doesn't resolve non-Qt DLLs. Fix copies the DLL explicitly and adds a
+  fail-loud guard so a missing DLL aborts the Windows build instead of
+  silently shipping broken again.
+
+### Workaround for users stuck on v0.1.2
+
+Drop [`libfftw3f-3.dll`](https://github.com/boydsoftprez/NereusSDR/raw/main/third_party/fftw3/bin/libfftw3f-3.dll)
+next to `NereusSDR.exe` (`C:\Program Files\NereusSDR\` for the installer,
+extraction folder for the portable ZIP). No reinstall required.
+
+
 ## [0.1.2] - 2026-04-13
 
 ### Features
