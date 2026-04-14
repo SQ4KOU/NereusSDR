@@ -346,26 +346,15 @@ void P1RadioConnection::connectToRadio(const RadioInfo& info)
         hl2SendIoBoardInit();
     }
 
-    // Firmware minimum refusal.
-    // Source: Thetis NetworkIO.cs / specHPSDR.cs per-board firmware version checks.
-    if (info.firmwareVersion > 0 && m_caps->minFirmwareVersion > 0 &&
-        info.firmwareVersion < m_caps->minFirmwareVersion) {
-        const QString msg = QStringLiteral("Firmware v%1 is too old. Minimum supported is v%2.")
-            .arg(info.firmwareVersion).arg(m_caps->minFirmwareVersion);
-        qCWarning(lcConnection) << msg;
-        setState(ConnectionState::Error);
-        emit errorOccurred(RadioConnectionError::FirmwareTooOld, msg);
-        return;
-    }
-    // Non-fatal stale firmware warning.
-    if (info.firmwareVersion > 0 && m_caps->knownGoodFirmware > 0 &&
-        info.firmwareVersion < m_caps->knownGoodFirmware) {
-        const QString msg = QStringLiteral("Firmware v%1 is older than recommended v%2.")
-            .arg(info.firmwareVersion).arg(m_caps->knownGoodFirmware);
-        qCWarning(lcConnection) << msg;
-        // Non-fatal — still emit but proceed.
-        emit errorOccurred(RadioConnectionError::FirmwareStale, msg);
-    }
+    // Firmware version refusal/stale-warning paths removed 2026-04-13.
+    // Background: Thetis enforces only one firmware refusal in its entire
+    // connect path (NetworkIO.cs:136-143, HermesII < 103 only) and has no
+    // "stale firmware" warning concept at all. The previous per-board
+    // BoardCapabilities thresholds were unattested guesses (see TODO(3I-T2))
+    // and were locking out legitimate radios — most visibly, plain Hermes
+    // running stock v15 firmware which Thetis accepts without complaint.
+    // The RadioConnectionError::FirmwareTooOld / FirmwareStale enum entries
+    // remain defined but are no longer emitted from this path.
 
     setState(ConnectionState::Connecting);
     qCDebug(lcConnection) << "P1: Connecting to" << m_caps->displayName

@@ -36,8 +36,18 @@
 // Alex filters/TX routing: present on all boards with an Alex accessory port
 //   (Setup.cs chkAlexPresent/chkAlexAntCtrl). Not on Atlas or HermesLite.
 //
-// Firmware versions are best-effort from Thetis commit history and wiki;
-//   marked with TODO where not found in source.
+// Firmware versions: ALL boards report minFirmwareVersion = 0 and
+//   knownGoodFirmware = 0. Background: Thetis enforces exactly ONE per-board
+//   firmware refusal in its entire connect path —
+//     NetworkIO.cs:136-143 → if (DeviceType == HermesII && CodeVersion < 103)
+//   No other board has a Thetis-attested firmware floor, and Thetis has no
+//   "stale firmware" warning concept at all. Rather than ship per-board
+//   guessed thresholds (the previous approach, marked TODO(3I-T2)), the
+//   firmware refusal + stale-warning paths in P1RadioConnection were removed
+//   on 2026-04-13. The minFirmwareVersion / knownGoodFirmware fields remain
+//   in the struct for now as dead metadata; they are not consulted by any
+//   connect path. Display format remains CodeVersion / 10.0f
+//   (clsDiscoveredRadioPicker.cs:305 / setup.cs:14008): v15 → "FW v1.5".
 
 #include "BoardCapabilities.h"
 
@@ -51,7 +61,7 @@ namespace {
 // No Alex port on bare Atlas kit; OC outputs via Penny board (not addressable
 //   the same way). Atlas max receivers = 7 (P1 hardware limit), though
 //   typically 3 in practice. maxSampleRate = 192k for P1 standard.
-// TODO(3I-T2): verify firmware versions against Thetis wiki/release notes
+// Firmware floor: none. Thetis NetworkIO.cs has no Atlas firmware check.
 constexpr BoardCapabilities kAtlas = {
     .board            = HPSDRHW::Atlas,
     .protocol         = ProtocolVersion::Protocol1,
@@ -87,7 +97,10 @@ constexpr BoardCapabilities kAtlas = {
 //   Treated as available since the hardware supports it.
 // OC: 7 outputs on Hermes board.
 // maxReceivers: 4 for P1 with single ADC (DDC config slots 0-3).
-// TODO(3I-T2): verify minFirmwareVersion from Thetis release notes
+// Firmware floor: none. NetworkIO.cs:136-143 — the only firmware refusal in
+//   Thetis is HermesII-only (DeviceType == HPSDRHW.HermesII && CodeVersion < 103).
+//   Plain Hermes has no equivalent guard. v15 ("FW v1.5") is a normal
+//   legitimate Hermes firmware that Thetis accepts without complaint.
 constexpr BoardCapabilities kHermes = {
     .board            = HPSDRHW::Hermes,
     .protocol         = ProtocolVersion::Protocol1,
@@ -109,10 +122,11 @@ constexpr BoardCapabilities kHermes = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
-    .minFirmwareVersion = 24,
-    .knownGoodFirmware  = 31,
+    .minFirmwareVersion = 0,   // No Thetis-attested floor for plain Hermes
+    .knownGoodFirmware  = 0,   // No Thetis-attested "known good" reference
     .displayName      = "Hermes (ANAN-10/100)",
-    .sourceCitation   = "network.h:449, enums.cs:391, clsHardwareSpecific.cs:87-93",
+    .sourceCitation   = "network.h:449, enums.cs:391, clsHardwareSpecific.cs:87-93; "
+                        "fw floor: NetworkIO.cs:136-143 (no plain-Hermes check)",
 };
 
 // ─── HermesII (ANAN-10E / ANAN-100B) ────────────────────────────────────────
@@ -144,10 +158,13 @@ constexpr BoardCapabilities kHermesII = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
-    .minFirmwareVersion = 31,
-    .knownGoodFirmware  = 40,
+    .minFirmwareVersion = 0,   // floor check removed; see file header
+    .knownGoodFirmware  = 0,   // Thetis NetworkIO.cs:138 still rejects <103
+                               // for HermesII, but enforcement moved upstream
+                               // (see P1RadioConnection.cpp 2026-04-13)
     .displayName      = "Hermes II (ANAN-10E/100B)",
-    .sourceCitation   = "network.h:450, enums.cs:392, clsHardwareSpecific.cs:108-127",
+    .sourceCitation   = "network.h:450, enums.cs:392, clsHardwareSpecific.cs:108-127; "
+                        "fw refusal in upstream Thetis: NetworkIO.cs:136-143 (<103)",
 };
 
 // ─── Angelia (ANAN-100D) ────────────────────────────────────────────────────
@@ -177,8 +194,8 @@ constexpr BoardCapabilities kAngelia = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
-    .minFirmwareVersion = 10,
-    .knownGoodFirmware  = 21,
+    .minFirmwareVersion = 0,   // floor check removed; see file header
+    .knownGoodFirmware  = 0,
     .displayName      = "ANAN-100D (Angelia)",
     .sourceCitation   = "network.h:451, enums.cs:393, clsHardwareSpecific.cs:129-134",
 };
@@ -211,8 +228,8 @@ constexpr BoardCapabilities kOrion = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
-    .minFirmwareVersion = 10,
-    .knownGoodFirmware  = 21,
+    .minFirmwareVersion = 0,   // floor check removed; see file header
+    .knownGoodFirmware  = 0,
     .displayName      = "ANAN-200D (Orion)",
     .sourceCitation   = "network.h:452, enums.cs:394, clsHardwareSpecific.cs:136-141",
 };
@@ -246,8 +263,8 @@ constexpr BoardCapabilities kOrionMKII = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
-    .minFirmwareVersion = 10,
-    .knownGoodFirmware  = 21,
+    .minFirmwareVersion = 0,   // floor check removed; see file header
+    .knownGoodFirmware  = 0,
     .displayName      = "ANAN-7000DLE/8000DLE (OrionMkII)",
     .sourceCitation   = "network.h:453, enums.cs:395, clsHardwareSpecific.cs:143-190",
 };
@@ -289,8 +306,8 @@ constexpr BoardCapabilities kHermesLite = {
     .hasBandwidthMonitor = true,
     .hasIoBoardHl2    = true,
     .hasSidetoneGenerator = true,
-    .minFirmwareVersion = 70,
-    .knownGoodFirmware  = 72,
+    .minFirmwareVersion = 0,   // floor check removed; see file header
+    .knownGoodFirmware  = 0,
     .displayName      = "Hermes Lite 2",
     .sourceCitation   = "network.h:454, IoBoardHl2.cs, Setup.cs:1082-1093,:16083-16086",
 };
@@ -325,8 +342,8 @@ constexpr BoardCapabilities kSaturn = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
-    .minFirmwareVersion = 1,
-    .knownGoodFirmware  = 10,
+    .minFirmwareVersion = 0,   // floor check removed; see file header
+    .knownGoodFirmware  = 0,
     .displayName      = "ANAN-G2 (Saturn)",
     .sourceCitation   = "network.h:455, enums.cs:397, clsHardwareSpecific.cs:164-176",
 };
@@ -358,8 +375,8 @@ constexpr BoardCapabilities kSaturnMKII = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
-    .minFirmwareVersion = 1,
-    .knownGoodFirmware  = 10,
+    .minFirmwareVersion = 0,   // floor check removed; see file header
+    .knownGoodFirmware  = 0,
     .displayName      = "ANAN-G2 MkII (SaturnMKII)",
     .sourceCitation   = "network.h:456, enums.cs:398 \"ANAN-G2: MKII board?\"",
 };
