@@ -65,3 +65,9 @@ nereus_add_test(tst_hardware_page_persistence)
 # destruction of RadioConnection (and its worker-affined QTimers).
 nereus_add_test(tst_cross_thread_teardown fakes/P1FakeRadio.cpp)
 target_compile_definitions(tst_cross_thread_teardown PRIVATE NEREUS_BUILD_TESTS)
+
+# Regression test for the GUI-thread fexchange2 deadlock — verifies
+# that RxDspWorker::processIqBatch runs on its own QThread when driven
+# via Qt::QueuedConnection, and that posting a burst of batches does
+# not block the sender. See src/models/RxDspWorker.h for the rationale.
+nereus_add_test(tst_rx_dsp_worker_thread)

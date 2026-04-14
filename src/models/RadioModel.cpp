@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include "RxDspWorker.h"
 #include "core/RadioConnection.h"
 #include "core/RadioConnectionTeardown.h"
 #include "core/RadioDiscovery.h"
@@ -12,6 +13,7 @@
 
 #include <QMetaObject>
 #include <QStandardPaths>
+#include <QThread>
 #include <QTimer>
 #include <QVector>
 
@@ -230,59 +232,45 @@ void RadioModel::wireConnectionSignals()
     // Wire active slice property changes to WDSP DSP engine and radio hardware.
     wireSliceSignals();
 
-    // --- I/Q data → ReceiverManager → WDSP → AudioEngine ---
-    // Route through ReceiverManager for DDC-aware mapping.
-    // ReceiverManager maps DDC indices to logical receivers.
-    m_iqAccumI.clear();
-    m_iqAccumQ.clear();
-    m_iqAccumI.reserve(kWdspBufSize);
-    m_iqAccumQ.reserve(kWdspBufSize);
+    // --- I/Q data → ReceiverManager → DSP worker → WDSP → AudioEngine ---
+    // Route through ReceiverManager for DDC-aware mapping, then dispatch
+    // to RxDspWorker on its own thread for fexchange2 processing.
 
-    // Step 1: RadioConnection I/Q → ReceiverManager (DDC routing)
+    // Step 1: RadioConnection I/Q → ReceiverManager (DDC routing).
+    // Auto connection: m_connection is on its worker thread, this is on
+    // main, so the slot is queued onto the main thread.
     connect(m_connection, &RadioConnection::iqDataReceived,
             this, [this](int ddcIndex, const QVector<float>& samples) {
         m_receiverManager->feedIqData(ddcIndex, samples);
     });
 
-    // Step 2: ReceiverManager → processReceiverIq (WDSP + audio + FFT)
+    // Step 2a: ReceiverManager → spectrum fork (main thread, fast).
+    // Kept on the main thread so rawIqData → FFTEngine routing stays
+    // unchanged. FFTEngine lives on its own SpectrumThread and the
+    // signal already crosses threads via queued connection.
     connect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
             this, [this](int receiverIndex, const QVector<float>& samples) {
         Q_UNUSED(receiverIndex);
-
-        // Fork raw I/Q to spectrum display (before WDSP processing)
         emit rawIqData(samples);
-
-        // Deinterleave and append to accumulation buffers
-        int numSamples = samples.size() / 2;
-        for (int i = 0; i < numSamples; ++i) {
-            m_iqAccumI.append(samples[i * 2]);
-            m_iqAccumQ.append(samples[i * 2 + 1]);
-        }
-
-        // Process when we have enough samples
-        while (m_iqAccumI.size() >= kWdspBufSize) {
-            RxChannel* rxCh = m_wdspEngine->rxChannel(0);
-            if (!rxCh) {
-                m_iqAccumI.clear();
-                m_iqAccumQ.clear();
-                return;
-            }
-
-            QVector<float> outI(kWdspBufSize);
-            QVector<float> outQ(kWdspBufSize);
-            rxCh->processIq(m_iqAccumI.data(), m_iqAccumQ.data(),
-                            outI.data(), outQ.data(), kWdspBufSize);
-
-            // WDSP outputs out_size samples (64 at 768k→48k decimation).
-            // outI == outQ because SetRXAPanelBinaural(channel, 0) puts the
-            // RXA patch panel in dual-mono mode in WdspEngine::createRxChannel.
-            m_audioEngine->feedAudio(0, outI.data(), outQ.data(), kWdspOutSize);
-
-            // Remove processed samples
-            m_iqAccumI.remove(0, kWdspBufSize);
-            m_iqAccumQ.remove(0, kWdspBufSize);
-        }
     });
+
+    // Step 2b: ReceiverManager → DSP worker (queued, off the main thread).
+    // RxDspWorker accumulates samples into in_size chunks, runs each
+    // chunk through RxChannel::processIq → fexchange2, then forwards
+    // decoded audio to AudioEngine. fexchange2 must NOT run on the
+    // main/GUI thread — see RxDspWorker.h for the deadlock rationale.
+    Q_ASSERT(m_dspThread == nullptr && m_dspWorker == nullptr);
+    m_dspThread = new QThread(this);
+    m_dspThread->setObjectName(QStringLiteral("DspThread"));
+    m_dspWorker = new RxDspWorker();   // no parent — moved to thread
+    m_dspWorker->setEngines(m_wdspEngine, m_audioEngine);
+    m_dspWorker->moveToThread(m_dspThread);
+    connect(m_dspThread, &QThread::finished,
+            m_dspWorker, &QObject::deleteLater);
+    connect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
+            m_dspWorker, &RxDspWorker::processIqBatch,
+            Qt::QueuedConnection);
+    m_dspThread->start();
 
     // Meter data → MeterModel
     connect(m_connection, &RadioConnection::meterDataReceived,
@@ -517,13 +505,30 @@ void RadioModel::teardownConnection()
         return;
     }
 
+    // Disconnect signals into the DSP worker first so no new I/Q
+    // batches can be posted onto the worker thread, then quit and
+    // join that thread before touching WDSP. The worker is queued
+    // for deletion via QThread::finished (see wireConnectionSignals),
+    // so the m_dspWorker pointer may dangle after wait() returns —
+    // null it out to avoid a use-after-free in any later teardown.
+    if (m_dspWorker != nullptr) {
+        QObject::disconnect(m_receiverManager, nullptr, m_dspWorker, nullptr);
+    }
+    if (m_dspThread != nullptr) {
+        m_dspThread->quit();
+        m_dspThread->wait();
+        delete m_dspThread;
+        m_dspThread = nullptr;
+        m_dspWorker = nullptr;
+    }
+
     // Stop audio output
     m_audioEngine->stop();
 
     // Shutdown WDSP (destroys all channels, saves cache)
     m_wdspEngine->shutdown();
 
-    // Disconnect all signals FIRST (prevents new work being queued)
+    // Disconnect remaining signals (prevents new work being queued)
     QObject::disconnect(m_connection, nullptr, this, nullptr);
     QObject::disconnect(m_connection, nullptr, m_receiverManager, nullptr);
     QObject::disconnect(m_receiverManager, nullptr, this, nullptr);
