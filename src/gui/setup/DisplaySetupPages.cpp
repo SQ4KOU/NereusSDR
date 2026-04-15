@@ -803,6 +803,8 @@ void GridScalesPage::buildUI()
 
     m_gridToggle = new QCheckBox(QStringLiteral("Show grid"), gridGroup);
     m_gridToggle->setChecked(true);
+    // Thetis: setup.designer.cs:52824 (chkGridControl)
+    m_gridToggle->setToolTip(QStringLiteral("Display the Major Grid on the Panadapter including the frequency numbers"));
     connect(m_gridToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setGridEnabled(on);
@@ -818,6 +820,9 @@ void GridScalesPage::buildUI()
     m_dbMaxSpin->setRange(-200, 0);
     m_dbMaxSpin->setValue(-40);
     m_dbMaxSpin->setSuffix(QStringLiteral(" dB"));
+    // Thetis: setup.designer.cs:34745 (udDisplayGridMax) — rewritten
+    // Thetis original: "Signal level at top of display in dB."
+    m_dbMaxSpin->setToolTip(QStringLiteral("Signal level at the top of the display in dB. Edits the current band's grid slot — see the band indicator above."));
     connect(m_dbMaxSpin, qOverload<int>(&QSpinBox::valueChanged),
             this, [this](int v) {
         if (auto* pan = firstPan(model())) {
@@ -830,6 +835,9 @@ void GridScalesPage::buildUI()
     m_dbMinSpin->setRange(-200, 0);
     m_dbMinSpin->setValue(-140);
     m_dbMinSpin->setSuffix(QStringLiteral(" dB"));
+    // Thetis: setup.designer.cs:34714 (udDisplayGridMin) — rewritten
+    // Thetis original: "Signal Level at bottom of display in dB."
+    m_dbMinSpin->setToolTip(QStringLiteral("Signal level at the bottom of the display in dB. Edits the current band's grid slot — see the band indicator above."));
     connect(m_dbMinSpin, qOverload<int>(&QSpinBox::valueChanged),
             this, [this](int v) {
         if (auto* pan = firstPan(model())) {
@@ -842,7 +850,9 @@ void GridScalesPage::buildUI()
     m_dbStepSpin->setRange(1, 40);
     m_dbStepSpin->setValue(10);
     m_dbStepSpin->setSuffix(QStringLiteral(" dB"));
-    m_dbStepSpin->setToolTip(QStringLiteral("Global grid step — Thetis stores this as a single value (not per-band)."));
+    // Thetis: setup.designer.cs:34683 (udDisplayGridStep) — rewritten
+    // Thetis original: "Horizontal Grid Step Size in dB."
+    m_dbStepSpin->setToolTip(QStringLiteral("Horizontal grid step size in dB. Sets the spacing between dB grid lines across all bands (global, not per-band)."));
     connect(m_dbStepSpin, qOverload<int>(&QSpinBox::valueChanged),
             this, [this](int v) {
         if (auto* pan = firstPan(model())) {
@@ -873,6 +883,9 @@ void GridScalesPage::buildUI()
         QStringLiteral("Off")
     });
     m_freqLabelAlignCombo->setCurrentIndex(1);
+    // Thetis: setup.designer.cs:34649 (comboDisplayLabelAlign) — rewritten
+    // Thetis original: "Sets the alignement of the grid callouts on the display."
+    m_freqLabelAlignCombo->setToolTip(QStringLiteral("Sets the alignment of the frequency labels on the grid callouts on the display."));
     connect(m_freqLabelAlignCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int i) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -882,6 +895,9 @@ void GridScalesPage::buildUI()
     lblForm->addRow(QStringLiteral("Freq Label Align:"), m_freqLabelAlignCombo);
 
     m_zeroLineToggle = new QCheckBox(QStringLiteral("Show zero line"), lblGroup);
+    // Thetis: setup.designer.cs:3221 (chkShowZeroLine) — rewritten
+    // Thetis original: (none)
+    m_zeroLineToggle->setToolTip(QStringLiteral("Show a horizontal line at 0 dBm on the panadapter grid."));
     connect(m_zeroLineToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setShowZeroLine(on);
@@ -890,6 +906,8 @@ void GridScalesPage::buildUI()
     lblForm->addRow(QString(), m_zeroLineToggle);
 
     m_showFpsToggle = new QCheckBox(QStringLiteral("Show FPS overlay"), lblGroup);
+    // Thetis: setup.designer.cs:33177 (chkShowFPS)
+    m_showFpsToggle->setToolTip(QStringLiteral("Show FPS reading in top left of spectrum area"));
     connect(m_showFpsToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setShowFps(on);
@@ -917,21 +935,39 @@ void GridScalesPage::buildUI()
     };
 
     m_gridColorBtn     = makeBtn(colGroup, QColor(255, 255, 255, 40), &SpectrumWidget::setGridColor);
+    // Thetis: setup.designer.cs:3202 (clrbtnGrid) — rewritten
+    // Thetis original: (none)
+    m_gridColorBtn->setToolTip(QStringLiteral("Colour of the major vertical grid lines on the panadapter."));
     colForm->addRow(QStringLiteral("Grid Color:"), m_gridColorBtn);
 
     m_gridFineColorBtn = makeBtn(colGroup, QColor(255, 255, 255, 20), &SpectrumWidget::setGridFineColor);
+    // Thetis: setup.designer.cs:3198 (clrbtnGridFine) — rewritten
+    // Thetis original: (none)
+    m_gridFineColorBtn->setToolTip(QStringLiteral("Colour of the minor (fine) grid lines between major grid lines on the panadapter."));
     colForm->addRow(QStringLiteral("Grid Fine Color:"), m_gridFineColorBtn);
 
     m_hGridColorBtn    = makeBtn(colGroup, QColor(255, 255, 255, 40), &SpectrumWidget::setHGridColor);
+    // Thetis: setup.designer.cs:3193 (clrbtnHGridColor) — rewritten
+    // Thetis original: (none)
+    m_hGridColorBtn->setToolTip(QStringLiteral("Colour of the horizontal dB grid lines on the panadapter."));
     colForm->addRow(QStringLiteral("H-Grid Color:"), m_hGridColorBtn);
 
     m_gridTextColorBtn = makeBtn(colGroup, QColor(255, 255, 0), &SpectrumWidget::setGridTextColor);
+    // Thetis: setup.designer.cs:3206 (clrbtnText) — rewritten
+    // Thetis original: (none)
+    m_gridTextColorBtn->setToolTip(QStringLiteral("Colour of the frequency and dB labels drawn on the panadapter grid."));
     colForm->addRow(QStringLiteral("Text Color:"), m_gridTextColorBtn);
 
     m_zeroLineColorBtn = makeBtn(colGroup, QColor(255, 0, 0), &SpectrumWidget::setZeroLineColor);
+    // Thetis: setup.designer.cs:3204 (clrbtnZeroLine) — rewritten
+    // Thetis original: (none)
+    m_zeroLineColorBtn->setToolTip(QStringLiteral("Colour of the zero line (0 dBm marker) drawn on the panadapter when Show zero line is checked."));
     colForm->addRow(QStringLiteral("Zero Line Color:"), m_zeroLineColorBtn);
 
     m_bandEdgeColorBtn = makeBtn(colGroup, QColor(255, 0, 0), &SpectrumWidget::setBandEdgeColor);
+    // Thetis: setup.designer.cs:3232 (clrbtnBandEdge) — rewritten
+    // Thetis original: (none)
+    m_bandEdgeColorBtn->setToolTip(QStringLiteral("Colour of the band edge markers drawn at the amateur band boundaries on the panadapter."));
     colForm->addRow(QStringLiteral("Band Edge Color:"), m_bandEdgeColorBtn);
 
     contentLayout()->addWidget(colGroup);
