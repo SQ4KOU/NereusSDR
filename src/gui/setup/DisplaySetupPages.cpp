@@ -571,8 +571,8 @@ void WaterfallDefaultsPage::buildUI()
         auto row = makeSliderRow(10, 500, 50, QStringLiteral(" ms"), dispGroup);
         m_updatePeriodSlider = row.slider;
         // Thetis: setup.designer.cs:34145 (udDisplayWaterfallUpdatePeriod)
-        m_updatePeriodSlider->setToolTip(QStringLiteral("How often to update (scroll another pixel line) on the waterfall display. Note that this is tamed by the FPS setting."));
-        row.spin->setToolTip(QStringLiteral("How often to update (scroll another pixel line) on the waterfall display. Note that this is tamed by the FPS setting."));
+        m_updatePeriodSlider->setToolTip(QStringLiteral("How often to update (scroll another pixel line) on the waterfall display.  Note that this is tamed by the FPS setting."));
+        row.spin->setToolTip(QStringLiteral("How often to update (scroll another pixel line) on the waterfall display.  Note that this is tamed by the FPS setting."));
         connect(m_updatePeriodSlider, &QSlider::valueChanged, this, [this](int v) {
             if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
                 w->setWfUpdatePeriodMs(v);
