@@ -14,12 +14,38 @@ NereusSDR's DSP stack is **Thetis-lineage**: averaging modes, AGC algorithms, th
 
 ## Context
 
-NereusSDR's display surface was feature-complete after Phase 3G-8 (47 controls wired) but the **default** look — what a fresh install presents to a user who has never touched Setup → Display — was the same high-contrast "Enhanced" rainbow palette that shipped in 3G-4 for meter system development. Side-by-side comparison against AetherSDR v0.8.12 (2026-04-14 and 2026-04-15 reference screenshots in `docs/architecture/waterfall-tuning/`) showed a significant readability gap:
+NereusSDR's display surface was feature-complete after Phase 3G-8 (47 controls wired) but the **default** look — what a fresh install presents to a user who has never touched Setup → Display — was the same high-contrast "Enhanced" rainbow palette that shipped in 3G-4 for meter system development. Side-by-side comparison against AetherSDR v0.8.12 showed a significant readability gap:
 
 - AetherSDR renders noise as uniform near-black and strong signals as a full rainbow gradient (blue → cyan → green → yellow → orange → red → magenta)
 - NereusSDR painted the entire noise floor in saturated reds/greens/cyans, burying signals in visual clutter
 
 This doc is the per-knob rationale for the profile that fixes that.
+
+## Visual comparison
+
+**AetherSDR reference (80m SSB voice, 2026-04-14):**
+
+![AetherSDR reference 80m](waterfall-tuning/aethersdr-reference-80m.png)
+
+*The target look. Noise floor renders as uniform near-black. SSB voice signals show the full rainbow gradient — blue outer edges, cyan, green, yellow, red/magenta at voice formant peaks. High signal readability against a quiet background.*
+
+**AetherSDR reference (40m zoomed, 2026-04-15):**
+
+![AetherSDR reference 40m zoomed](waterfall-tuning/aethersdr-reference-zoomed.png)
+
+*Zoomed view showing the full rainbow per-signal progression. Each strong signal has dark edges → blue → cyan → green → yellow → red/magenta at the core. This is the rainbow palette philosophy in action.*
+
+**NereusSDR before (iter0, pre-tuning PR2):**
+
+![NereusSDR iter0](waterfall-tuning/before-nereussdr-pr2.png)
+
+*The initial PR2 palette attempt: narrow-band navy with near-white peaks. Too blue, trace was saturated cyan, fill-under-trace visible. Functionally wrong premise — AetherSDR isn't narrow-band blue-only.*
+
+**NereusSDR after (iter6, post-tuning):**
+
+![NereusSDR iter6](waterfall-tuning/after-clarity-blue.png)
+
+*After live tuning against the reference. Noise floor near-black, white trace thin and not competing with palette, carriers showing visible colour variety thanks to the widened 12 dB AGC margin. Narrow carriers on 40m can't exercise the full palette middle (only SSB voice content does), but the philosophy now matches the reference.*
 
 ## Key insight (from live iterative tuning)
 
