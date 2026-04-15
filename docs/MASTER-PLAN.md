@@ -508,6 +508,11 @@ Shipped as three sequential PRs off `main`. Strict dependency: PR1 helpers feed 
 
 **Non-goals:** RX2/TX display surface, Spectrum Overlay flyout refactors, skin system, Thetis default-value adoption beyond the seven PR2 recipes. Source-first protocol per CLAUDE.md governs everything else; 3G-8's §10 divergence exception is **not** extended.
 
+### Phase 3G-11: P1 Field-Report Fixes
+**Goal:** Close out the bugs surfaced by alpha testers running Protocol 1 hardware after 3I shipped. Grouped under one phase so each fix doesn't have to claim its own number. Each bullet below lands from its own session / branch.
+
+- **P1 RX/TX VFO frequency encoding** — `P1RadioConnection::composeCcBankRxFreq` / `composeCcBankTxFreq` were pre-converting Hz to an NCO phase word (`freqHz * 2^32 / 122.88e6`). P1 firmware expects raw Hz; Thetis `NetworkIO.cs:215-223` only calls `Freq2PhaseWord` on the P2 (`ETH`) branch, and the native `networkproto1.c:476-494` splats `prn->{tx,rx}[0].frequency` directly into C1..C4 with no conversion. Symptom reproduced in alpha tester pcap4 (2026-04-15, ANAN-10E): 319 consecutive `C0=0x04` frames pinned at phase word `0x080D5555`, aliased waterfall, VFO did not track dial. Fix aligns with pre-existing `tst_p1_wire_format` assertions that had silently drifted unvalidated. Branch `fix/p1-freq-encoding`, confirmed working against live ANAN-10E 2026-04-15.
+
 ### Phase 3I: Radio Connector & Radio-Model Port ✅ COMPLETE
 **Goal:** Full Protocol 1 support across every ANAN/Hermes-family board (Hermes Lite 2, ANAN-10/10E/100/100B/100D/200D, Metis) with feature parity at the wire-format and Hardware-setup-UI level for all supported radios. A P1 radio should behave identically to how ANAN-G2 on P2 behaves today.
 
