@@ -469,6 +469,45 @@ Verification: 47-control matrix at `docs/architecture/phase3g8-verification/READ
 
 **Implementation plan:** `docs/architecture/phase3g8-rx1-display-parity-plan.md` (plan §13 resolutions in commit `0308b1b`, plan §5.3 correction in `b8045cc`).
 
+### Phase 3G-9: Display Refactor (audit · smooth defaults · Clarity)
+**Goal:** Take the 3G-8 wiring from "every control works" to "every control is sourced, well-labeled, well-presented, and the default display looks great without the user touching anything." Close with an adaptive auto-tune feature called **Clarity** that keeps the waterfall dialed in as band conditions and tuning change.
+
+**Motivation:** Side-by-side comparison between NereusSDR v0.1.4 and AetherSDR v0.8.12 on 80m (2026-04-14 reference screenshots) shows a significant readability gap — AetherSDR's narrow-band monochrome palette renders noise as uniform dark navy and signals as bright cyan/white, while NereusSDR's "Enhanced" rainbow spends color contrast on noise. Decomposes into seven specific knob choices, not one mystery setting.
+
+**Design spec:** `docs/architecture/2026-04-15-display-refactor-design.md` (committed `4b0a027`, 2026-04-15).
+
+Shipped as three sequential PRs off `main`. Strict dependency: PR1 helpers feed PR2, PR2 static defaults feed PR3 as the Clarity-off fallback.
+
+#### Phase 3G-9a: Source-First Audit + Tooltips + Slider Readouts (PR1)
+- Per-control Thetis source citation comments on all 47 controls
+- Tooltip port — verbatim where Thetis is substantive, rewritten where weak (annotated with original)
+- `SliderRow` / `SliderRowD` helpers: every numeric slider gets a bidirectional spinbox companion with unit suffix (matches Thetis `udDisplay*` NumericUpDown pattern)
+- Target: 47/47 controls with tooltips (current 10/47), 12 sliders converted
+- No renderer or model changes; ~600 LOC delta
+- Risk: low — mechanical refactor + docs
+
+#### Phase 3G-9b: Smooth Defaults + Clarity Blue Palette (PR2)
+- New `WfColorScheme::ClarityBlue` — narrow-band monochrome (80% dark navy for noise floor, top 15% bright cyan-white for signals) — the AetherSDR readability look
+- `PanadapterModel::applyClaritySmoothDefaults()` with first-launch gate on `"DisplayProfileApplied"` AppSettings key (existing users untouched)
+- "Reset to Smooth Defaults" button on Spectrum Defaults page
+- Wire any stubbed renderer hooks (Waterfall AGC W3, update period W4) — prerequisites for PR3
+- New rationale doc `docs/architecture/waterfall-tuning.md` with before/after screenshots and per-parameter justification
+- The seven recipes: palette, averaging mode, averaging τ, trace color, threshold gap, waterfall AGC, update period
+- ~400 LOC code + ~250 lines doc; Risk: medium — opinionated numbers, may need live-radio iteration
+
+#### Phase 3G-9c: Clarity Adaptive Display Tuning (PR3)
+- **Research-doc gated** — no code until `docs/architecture/clarity-design.md` is written and signed off
+- Flavor C: continuous adaptive thresholds + one-shot "Re-tune now" button
+- New `NoiseFloorEstimator` (percentile-based, TDD unit tests on synthetic FFT bins)
+- New `ClarityController` (2 Hz polling, EWMA τ ≈ 3s smoothing, ±2 dB deadband, TX-pause, manual-override detection)
+- Per-band Clarity memory in `BandGridSettings` — band-switch snaps to last-known good
+- Clarity status badge ("C") on Spectrum Overlay panel — green active / amber paused
+- W3 "Waterfall AGC" checkbox deprecated in favor of Clarity with migration label
+- Prior-art survey in the research doc: Thetis `WaterfallAGC`, WDSP `nob.c`, GQRX / SDR++ auto-range implementations
+- ~250 LOC algorithm + ~400 LOC tests + ~300 LOC UI/wiring + research doc; Risk: high — algorithmic, mitigated by doc-first gate, TDD, clean off switch, PR2 fallback always present
+
+**Non-goals:** RX2/TX display surface, Spectrum Overlay flyout refactors, skin system, Thetis default-value adoption beyond the seven PR2 recipes. Source-first protocol per CLAUDE.md governs everything else; 3G-8's §10 divergence exception is **not** extended.
+
 ### Phase 3I: Radio Connector & Radio-Model Port ✅ COMPLETE
 **Goal:** Full Protocol 1 support across every ANAN/Hermes-family board (Hermes Lite 2, ANAN-10/10E/100/100B/100D/200D, Metis) with feature parity at the wire-format and Hardware-setup-UI level for all supported radios. A P1 radio should behave identically to how ANAN-G2 on P2 behaves today.
 
@@ -700,9 +739,11 @@ CI workflows already in place. Finalize:
 
 ---
 
-## Recommended Next Step: Phase 3M-1 — Basic SSB TX (radio connector port complete)
+## Recommended Next Step: Phase 3G-9 — Display Refactor (PR1 audit + tooltips + slider readouts)
 
-With Phase 3I merged, the entire ANAN/Hermes P1 family is supported end-to-end. The next highest-value phase is TX — taking a working RX-only setup and putting a signal on the air. See Phase 3M-1 below for scope.
+Phase 3I shipped the entire ANAN/Hermes P1 family end-to-end. Before putting RF on the air, **Phase 3G-9** tightens the Display surface we just wired in 3G-8 — source-first audit, verbatim-or-rewritten tooltip port, slider/spinbox refactor, then smooth defaults + Clarity Blue palette, then the Clarity adaptive auto-tune feature. Design spec at `docs/architecture/2026-04-15-display-refactor-design.md`. 3G-9 is three sequential PRs; 3G-9a is mechanical and can start immediately.
+
+After 3G-9 the next highest-value phase is TX — taking a working RX-only setup and putting a signal on the air. See Phase 3M-1 below for scope.
 
 Phases 3A–3E, 3G-1 through 3G-8, and 3-UI are all complete. The radio connects,
 demodulates audio, renders live GPU spectrum + waterfall, supports full VFO tuning with
@@ -713,17 +754,20 @@ wired Display setup category where every Spectrum Defaults / Waterfall Defaults 
 & Scales control routes through to the renderer live on both the QPainter fallback and
 the QRhi/Metal GPU path.
 
-The next meaningful step is getting RF out the door:
+The next meaningful steps:
 
+- **3G-9 (Display Refactor)** — three-PR polish pass on the 3G-8 Display surface: audit + tooltips + slider readouts → smooth defaults + Clarity Blue palette → Clarity adaptive auto-tune. Independent of TX work; can ship in parallel with 3M-1 prep.
 - **3M-1 (Basic SSB TX)** (formerly 3I-1; renumbered after Phase 3I became the radio connector port) — TxChannel WDSP wrapper, mic input, MOX state machine, TX I/Q
   output. Proves the TX path end-to-end and unblocks 3M-2..4, 3F, 3H.
 
-Execution order: **3M-1..4 → 3F → 3H → 3J+**
+Execution order: **3G-9a..c → 3M-1..4 → 3F → 3H → 3J+** (3G-9 can overlap with 3M-1 since they touch disjoint subsystems)
 
 ### Phase Dependencies
 
 ```
 3G-4 → 3G-5 → 3G-6    (meter system, sequential)
+
+3G-8 → 3G-9a → 3G-9b → 3G-9c    (display surface polish, sequential; 3G-9c gated on research doc)
 
 3M-1 → 3M-2 → 3M-3 → 3M-4 → 3F → 3H    (TX then multi-RX)
                                ↑
@@ -731,6 +775,8 @@ Execution order: **3M-1..4 → 3F → 3H → 3J+**
                        UpdateDDCs() state machine includes PS DDC
                        states (DDC0+DDC1 sync at 192kHz)
 ```
+
+3G-9 touches disjoint subsystems from 3M-* and can run in parallel with 3M-1 if desired.
 
 Independent phases (can start anytime): 3J (TCI), 3K (CAT), 3L (P1), 3M (Recording).
 
