@@ -78,6 +78,17 @@ public:
     class FFTEngine* fftEngine() const { return m_fftEngine; }
     void setFftEngine(class FFTEngine* e) { m_fftEngine = e; }
 
+    // Phase 3G-9b: one-shot profile that sets the 7 smooth-default recipe
+    // values on SpectrumWidget. Called from the constructor exactly once
+    // on first launch (gated by AppSettings key "DisplayProfileApplied").
+    // Also callable on demand via the "Reset to Smooth Defaults" button
+    // on SpectrumDefaultsPage, in which case it unconditionally applies
+    // regardless of the gate.
+    //
+    // See docs/architecture/waterfall-tuning.md for the rationale behind
+    // each value.
+    void applyClaritySmoothDefaults();
+
     // Radio info
     QString name() const { return m_name; }
     QString model() const { return m_model; }

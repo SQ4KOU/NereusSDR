@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`Clarity Blue` waterfall palette** — new full-spectrum rainbow palette with a deep-black noise floor, tuned to match AetherSDR/SmartSDR-style readability. Selectable from `Setup → Display → Waterfall Defaults → Color Scheme` as the 8th palette option. (Phase 3G-9b)
+- **`Reset to Smooth Defaults` button** on `Setup → Display → Spectrum Defaults` — one-click opt-in to the NereusSDR smooth-default profile (Clarity Blue palette, log-recursive averaging, pure-white thin trace, pan-fill off, waterfall AGC on, 30 ms update period). Confirmation-dialog-guarded. FFT size, frequency, band stack, and per-band grid slots are not affected. (Phase 3G-9b)
+- **`RadioModel::applyClaritySmoothDefaults()`** — programmatic entry point for the smooth-defaults profile. Reachable from the Reset button; may also be wired into PR3's adaptive `Clarity` controller.
+- **`docs/architecture/waterfall-tuning.md`** — per-recipe rationale for the smooth-defaults profile with before/after/reference screenshots.
+- **`tst_clarity_defaults`** — unit test locking ClarityBlue palette invariants (enum ordinal, deep-black floor, monotonic stops, rainbow progression, vivid peak).
+
+### Changed
+- **Waterfall AGC margin widened from 3 dB to 12 dB** — `SpectrumWidget::pushWaterfallRow` follower now gives the palette more breathing room so strong signals' FFT skirt falloff renders through intermediate colours. Affects all waterfall colour schemes when AGC is enabled. (Phase 3G-9b)
+
 ## [0.1.4] - 2026-04-14
 
 Bug-fix release. Improves Hermes (Protocol 1) startup reliability and

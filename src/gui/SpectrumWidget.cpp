@@ -105,6 +105,27 @@ static const WfGradientStop kCustomFallbackStops[] = {
     {1.00f, 255,   0,   0},
 };
 
+// Phase 3G-9b: Clarity Blue palette — full-spectrum rainbow with a
+// deep-black noise floor. The "blue look" a user sees most of the time
+// comes from the combination of AGC + tight thresholds compressing most
+// signals into the blue/cyan range of the palette; strong signals still
+// cleanly progress through green → yellow → red so peak energy remains
+// distinguishable. Compare to Default/Enhanced which start at dark blue
+// and spread the bright colours across the full range (producing a noisy
+// noise floor). Visual target: 2026-04-14/2026-04-15 AetherSDR reference.
+static const WfGradientStop kClarityBlueStops[] = {
+    {0.00f,  0x00, 0x00, 0x00},  // pure black — noise floor bottom
+    {0.18f,  0x02, 0x08, 0x20},  // very dark blue — noise floor top
+    {0.32f,  0x08, 0x20, 0x58},  // dark blue — weak signal edge
+    {0.46f,  0x10, 0x50, 0xb0},  // medium blue — weak signals
+    {0.58f,  0x10, 0xa0, 0xe0},  // cyan — medium signals
+    {0.70f,  0x10, 0xd0, 0x60},  // green — strong signals
+    {0.80f,  0xf0, 0xe0, 0x10},  // yellow — very strong
+    {0.90f,  0xff, 0x80, 0x00},  // orange — extreme
+    {0.96f,  0xff, 0x20, 0x20},  // red — peak
+    {1.00f,  0xff, 0x40, 0xc0},  // magenta — absolute peak
+};
+
 const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count)
 {
     switch (scheme) {
@@ -126,6 +147,9 @@ const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count)
     case WfColorScheme::Custom:
         count = 7;
         return kCustomFallbackStops;
+    case WfColorScheme::ClarityBlue:
+        count = 10;
+        return kClarityBlueStops;
     case WfColorScheme::Default:
     default:
         count = 7;
@@ -1432,8 +1456,16 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
             m_wfAgcRunMin = kAgcAlpha * mn + (1.0f - kAgcAlpha) * m_wfAgcRunMin;
             m_wfAgcRunMax = kAgcAlpha * mx + (1.0f - kAgcAlpha) * m_wfAgcRunMax;
         }
-        // Expand slightly so the hottest signal doesn't clip.
-        const float margin = 3.0f;
+        // Phase 3G-9b: widened from 3 dB to 12 dB. The previous tight
+        // margin collapsed the threshold window so narrow carriers
+        // pinned the max at the very top of the palette, leaving no
+        // room for intermediate colours across signal falloff. 12 dB
+        // gives the palette breathing room so a strong signal's FFT
+        // sidelobe skirt can render through cyan → green → yellow
+        // → red as amplitude drops from peak to noise floor, which
+        // matches the AetherSDR reference look. Still tighter than the
+        // default -200/0 window so AGC remains useful.
+        const float margin = 12.0f;
         m_wfLowThreshold  = m_wfAgcRunMin - margin;
         m_wfHighThreshold = m_wfAgcRunMax + margin;
     } else if (m_wfUseSpectrumMinMax) {

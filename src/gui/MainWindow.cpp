@@ -304,6 +304,12 @@ void MainWindow::buildUI()
     m_radioModel->setSpectrumWidget(m_spectrumWidget);
     m_radioModel->setFftEngine(m_fftEngine);
 
+    // Phase 3G-9b: no first-launch auto-apply of smooth defaults. Per
+    // user decision 2026-04-15, the out-of-box waterfall stays on
+    // WfColorScheme::Default; ClarityBlue is reachable only via the
+    // "Reset to Smooth Defaults" button on SpectrumDefaultsPage or by
+    // manually selecting "Clarity Blue" from the Waterfall Defaults combo.
+
     // Wire: zoom changes → adjust FFT size for appropriate bin resolution
     // Target: ~500-1000 bins across the visible bandwidth for good detail
     connect(m_spectrumWidget, &SpectrumWidget::bandwidthChangeRequested,
