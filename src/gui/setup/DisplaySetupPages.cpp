@@ -451,25 +451,27 @@ void WaterfallDefaultsPage::buildUI()
     auto* levForm  = new QFormLayout(levGroup);
     levForm->setSpacing(6);
 
-    m_highThresholdSlider = new QSlider(Qt::Horizontal, levGroup);
-    m_highThresholdSlider->setRange(-200, 0);
-    m_highThresholdSlider->setValue(-40);
-    connect(m_highThresholdSlider, &QSlider::valueChanged, this, [this](int v) {
-        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
-            w->setWfHighThreshold(static_cast<float>(v));
-        }
-    });
-    levForm->addRow(QStringLiteral("High Threshold:"), m_highThresholdSlider);
+    {
+        auto row = makeSliderRow(-200, 0, -40, QStringLiteral(" dBm"), levGroup);
+        m_highThresholdSlider = row.slider;
+        connect(m_highThresholdSlider, &QSlider::valueChanged, this, [this](int v) {
+            if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+                w->setWfHighThreshold(static_cast<float>(v));
+            }
+        });
+        levForm->addRow(QStringLiteral("High Threshold:"), row.container);
+    }
 
-    m_lowThresholdSlider = new QSlider(Qt::Horizontal, levGroup);
-    m_lowThresholdSlider->setRange(-200, 0);
-    m_lowThresholdSlider->setValue(-130);
-    connect(m_lowThresholdSlider, &QSlider::valueChanged, this, [this](int v) {
-        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
-            w->setWfLowThreshold(static_cast<float>(v));
-        }
-    });
-    levForm->addRow(QStringLiteral("Low Threshold:"), m_lowThresholdSlider);
+    {
+        auto row = makeSliderRow(-200, 0, -130, QStringLiteral(" dBm"), levGroup);
+        m_lowThresholdSlider = row.slider;
+        connect(m_lowThresholdSlider, &QSlider::valueChanged, this, [this](int v) {
+            if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+                w->setWfLowThreshold(static_cast<float>(v));
+            }
+        });
+        levForm->addRow(QStringLiteral("Low Threshold:"), row.container);
+    }
 
     m_agcToggle = new QCheckBox(QStringLiteral("AGC"), levGroup);
     connect(m_agcToggle, &QCheckBox::toggled, this, [this](bool on) {
@@ -504,15 +506,16 @@ void WaterfallDefaultsPage::buildUI()
     auto* dispForm  = new QFormLayout(dispGroup);
     dispForm->setSpacing(6);
 
-    m_updatePeriodSlider = new QSlider(Qt::Horizontal, dispGroup);
-    m_updatePeriodSlider->setRange(10, 500);
-    m_updatePeriodSlider->setValue(50);
-    connect(m_updatePeriodSlider, &QSlider::valueChanged, this, [this](int v) {
-        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
-            w->setWfUpdatePeriodMs(v);
-        }
-    });
-    dispForm->addRow(QStringLiteral("Update Period (ms):"), m_updatePeriodSlider);
+    {
+        auto row = makeSliderRow(10, 500, 50, QStringLiteral(" ms"), dispGroup);
+        m_updatePeriodSlider = row.slider;
+        connect(m_updatePeriodSlider, &QSlider::valueChanged, this, [this](int v) {
+            if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+                w->setWfUpdatePeriodMs(v);
+            }
+        });
+        dispForm->addRow(QStringLiteral("Update Period:"), row.container);
+    }
 
     m_reverseToggle = new QCheckBox(QStringLiteral("Reverse scroll"), dispGroup);
     connect(m_reverseToggle, &QCheckBox::toggled, this, [this](bool on) {
@@ -522,15 +525,16 @@ void WaterfallDefaultsPage::buildUI()
     });
     dispForm->addRow(QString(), m_reverseToggle);
 
-    m_opacitySlider = new QSlider(Qt::Horizontal, dispGroup);
-    m_opacitySlider->setRange(0, 100);
-    m_opacitySlider->setValue(100);
-    connect(m_opacitySlider, &QSlider::valueChanged, this, [this](int v) {
-        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
-            w->setWfOpacity(v);
-        }
-    });
-    dispForm->addRow(QStringLiteral("Opacity:"), m_opacitySlider);
+    {
+        auto row = makeSliderRow(0, 100, 100, QStringLiteral("%"), dispGroup);
+        m_opacitySlider = row.slider;
+        connect(m_opacitySlider, &QSlider::valueChanged, this, [this](int v) {
+            if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+                w->setWfOpacity(v);
+            }
+        });
+        dispForm->addRow(QStringLiteral("Opacity:"), row.container);
+    }
 
     m_colorSchemeCombo = new QComboBox(dispGroup);
     m_colorSchemeCombo->addItems({
