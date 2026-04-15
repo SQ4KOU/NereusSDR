@@ -160,6 +160,9 @@ void SpectrumDefaultsPage::buildUI()
                               QStringLiteral("4096"), QStringLiteral("8192"),
                               QStringLiteral("16384")});
     m_fftSizeCombo->setCurrentText(QStringLiteral("4096"));
+    // Thetis: setup.designer.cs:35043 (tbDisplayFFTSize) — no upstream tooltip; rewritten
+    // Thetis original: (none)
+    m_fftSizeCombo->setToolTip(QStringLiteral("FFT size used for spectrum analysis. Larger = finer frequency resolution at higher CPU cost."));
     connect(m_fftSizeCombo, &QComboBox::currentTextChanged,
             this, [this](const QString& txt) {
         if (model() && model()->fftEngine()) {
@@ -171,6 +174,8 @@ void SpectrumDefaultsPage::buildUI()
     m_windowCombo = new QComboBox(fftGroup);
     m_windowCombo->addItems({QStringLiteral("Blackman-Harris"), QStringLiteral("Hann"),
                              QStringLiteral("Hamming"),         QStringLiteral("Flat-Top")});
+    // NereusSDR extension — no Thetis equivalent (Thetis hardcodes Blackman-Harris 4-term)
+    m_windowCombo->setToolTip(QStringLiteral("FFT window function. Blackman-Harris offers best sidelobe rejection; Flat-Top is best for amplitude accuracy."));
     connect(m_windowCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int i) {
         if (!model() || !model()->fftEngine()) { return; }
@@ -195,6 +200,9 @@ void SpectrumDefaultsPage::buildUI()
     {
         auto row = makeSliderRow(10, 60, 30, QStringLiteral(" fps"), renderGroup);
         m_fpSlider = row.slider;
+        // Thetis: setup.designer.cs:33856 (udDisplayFPS) — Thetis original: "Frames Per Second (approximate)" (placeholder); rewritten
+        m_fpSlider->setToolTip(QStringLiteral("Spectrum/waterfall redraw rate. Higher = smoother animation at cost of CPU."));
+        row.spin->setToolTip(QStringLiteral("Spectrum/waterfall redraw rate. Higher = smoother animation at cost of CPU."));
         connect(m_fpSlider, &QSlider::valueChanged, this, [this](int v) { pushFps(v); });
         renderForm->addRow(QStringLiteral("FPS:"), row.container);
     }
@@ -202,6 +210,9 @@ void SpectrumDefaultsPage::buildUI()
     m_averagingCombo = new QComboBox(renderGroup);
     m_averagingCombo->addItems({QStringLiteral("None"), QStringLiteral("Weighted"),
                                 QStringLiteral("Logarithmic"), QStringLiteral("Time Window")});
+    // Thetis: setup.designer.cs (comboDispPanAveraging) — no upstream tooltip; rewritten
+    // Thetis original: (none)
+    m_averagingCombo->setToolTip(QStringLiteral("Panadapter spectrum averaging mode. Weighted and Time Window smooth the display; None shows raw FFT output."));
     connect(m_averagingCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int i) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -215,6 +226,8 @@ void SpectrumDefaultsPage::buildUI()
     m_averagingTimeSpin->setSingleStep(10);
     m_averagingTimeSpin->setSuffix(QStringLiteral(" ms"));
     m_averagingTimeSpin->setValue(100);
+    // Thetis: setup.designer.cs:34902 (udDisplayAVGTime)
+    m_averagingTimeSpin->setToolTip(QStringLiteral("When averaging, use this number of buffers to calculate the average."));
     connect(m_averagingTimeSpin, qOverload<int>(&QSpinBox::valueChanged),
             this, [this](int ms) {
         // Translate ms to an alpha between 0.05 (slow) and 0.95 (fast).
@@ -228,11 +241,14 @@ void SpectrumDefaultsPage::buildUI()
     m_decimationSpin = new QSpinBox(renderGroup);
     m_decimationSpin->setRange(1, 32);
     m_decimationSpin->setValue(1);
-    m_decimationSpin->setToolTip(QStringLiteral("Spectrum decimation factor (Thetis udDisplayDecimation parity)"));
+    // Thetis: setup.designer.cs:33732 (udDisplayDecimation)
+    m_decimationSpin->setToolTip(QStringLiteral("Display decimation. Higher the number, the lower the resolution."));
     // Scaffolded only — FFTEngine decimation hook deferred to a future phase.
     renderForm->addRow(QStringLiteral("Decimation:"), m_decimationSpin);
 
     m_fillToggle = new QCheckBox(QStringLiteral("Fill under trace"), renderGroup);
+    // Thetis: setup.designer.cs:33749 (chkDisplayPanFill)
+    m_fillToggle->setToolTip(QStringLiteral("Check to fill the panadapter display line below the data."));
     connect(m_fillToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setPanFillEnabled(on);
@@ -243,6 +259,10 @@ void SpectrumDefaultsPage::buildUI()
     {
         auto row = makeSliderRow(0, 100, 70, QStringLiteral("%"), renderGroup);
         m_fillAlphaSlider = row.slider;
+        // Thetis: setup.designer.cs:3215 (tbDataFillAlpha) — no upstream tooltip; rewritten
+        // Thetis original: (none)
+        m_fillAlphaSlider->setToolTip(QStringLiteral("Opacity of the fill area under the spectrum trace (0 = transparent, 100 = opaque)."));
+        row.spin->setToolTip(QStringLiteral("Opacity of the fill area under the spectrum trace (0 = transparent, 100 = opaque)."));
         connect(m_fillAlphaSlider, &QSlider::valueChanged, this, [this](int v) {
             if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
                 w->setFillAlpha(v / 100.0f);
@@ -254,6 +274,10 @@ void SpectrumDefaultsPage::buildUI()
     {
         auto row = makeSliderRow(1, 3, 1, QStringLiteral(" px"), renderGroup);
         m_lineWidthSlider = row.slider;
+        // Thetis: setup.designer.cs:3228 (udDisplayLineWidth) — no upstream tooltip; rewritten
+        // Thetis original: (none)
+        m_lineWidthSlider->setToolTip(QStringLiteral("Spectrum trace line width in pixels (1–3 px)."));
+        row.spin->setToolTip(QStringLiteral("Spectrum trace line width in pixels (1–3 px)."));
         connect(m_lineWidthSlider, &QSlider::valueChanged, this, [this](int v) {
             if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
                 w->setLineWidth(static_cast<float>(v));
@@ -263,6 +287,8 @@ void SpectrumDefaultsPage::buildUI()
     }
 
     m_gradientToggle = new QCheckBox(QStringLiteral("Trace gradient"), renderGroup);
+    // Thetis: setup.designer.cs:53918 (chkDataLineGradient)
+    m_gradientToggle->setToolTip(QStringLiteral("The data line is also uses the gradient if checked"));
     connect(m_gradientToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setGradientEnabled(on);
@@ -279,6 +305,9 @@ void SpectrumDefaultsPage::buildUI()
 
     const QColor initLine = sw ? sw->fillColor() : QColor(0x00, 0xe5, 0xff);
     m_dataLineColorBtn = new ColorSwatchButton(initLine, colorGroup);
+    // Thetis: setup.designer.cs:3234 (clrbtnDataLine) — no upstream tooltip; rewritten
+    // Thetis original: (none)
+    m_dataLineColorBtn->setToolTip(QStringLiteral("Click to choose the spectrum trace line colour."));
     connect(m_dataLineColorBtn, &ColorSwatchButton::colorChanged,
             this, [this](const QColor& c) {
         // SpectrumWidget currently uses one colour for both line and fill.
@@ -294,6 +323,10 @@ void SpectrumDefaultsPage::buildUI()
     {
         auto row = makeSliderRow(0, 255, 230, QString(), colorGroup);
         m_dataLineAlphaSlider = row.slider;
+        // Thetis: setup.designer.cs:3214 (tbDataLineAlpha) — no upstream tooltip; rewritten
+        // Thetis original: (none)
+        m_dataLineAlphaSlider->setToolTip(QStringLiteral("Opacity of the spectrum trace line (0 = invisible, 255 = fully opaque)."));
+        row.spin->setToolTip(QStringLiteral("Opacity of the spectrum trace line (0 = invisible, 255 = fully opaque)."));
         connect(m_dataLineAlphaSlider, &QSlider::valueChanged, this, [this](int a) {
             if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
                 QColor c = w->fillColor();
@@ -305,6 +338,9 @@ void SpectrumDefaultsPage::buildUI()
     }
 
     m_dataFillColorBtn = new ColorSwatchButton(initLine, colorGroup);
+    // Thetis: setup.designer.cs:3217 (clrbtnDataFill) — no upstream tooltip; rewritten
+    // Thetis original: (none)
+    m_dataFillColorBtn->setToolTip(QStringLiteral("Click to choose the spectrum fill area colour (applied under the trace when Fill is enabled)."));
     connect(m_dataFillColorBtn, &ColorSwatchButton::colorChanged,
             this, [this](const QColor& c) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -325,6 +361,9 @@ void SpectrumDefaultsPage::buildUI()
     m_calOffsetSpin->setSingleStep(0.5);
     m_calOffsetSpin->setSuffix(QStringLiteral(" dBm"));
     m_calOffsetSpin->setValue(0.0);
+    // Thetis: display.cs:1372 (Display.RX1DisplayCalOffset) — programmatic only, no designer tooltip; rewritten
+    // Thetis original: (none — set programmatically via Display.RX1DisplayCalOffset)
+    m_calOffsetSpin->setToolTip(QStringLiteral("dBm calibration offset applied to all displayed signal levels. Use to match a calibrated reference."));
     connect(m_calOffsetSpin, qOverload<double>(&QDoubleSpinBox::valueChanged),
             this, [this](double v) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -334,6 +373,8 @@ void SpectrumDefaultsPage::buildUI()
     calForm->addRow(QStringLiteral("Cal Offset:"), m_calOffsetSpin);
 
     m_peakHoldToggle = new QCheckBox(QStringLiteral("Peak hold"), calGroup);
+    // NereusSDR extension — no Thetis equivalent
+    m_peakHoldToggle->setToolTip(QStringLiteral("When enabled, the highest signal level seen at each frequency bin is held on the display."));
     connect(m_peakHoldToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setPeakHoldEnabled(on);
@@ -346,6 +387,8 @@ void SpectrumDefaultsPage::buildUI()
     m_peakHoldDelaySpin->setSingleStep(100);
     m_peakHoldDelaySpin->setSuffix(QStringLiteral(" ms"));
     m_peakHoldDelaySpin->setValue(2000);
+    // NereusSDR extension — no Thetis equivalent
+    m_peakHoldDelaySpin->setToolTip(QStringLiteral("Time in milliseconds before a held peak begins to decay back toward the live trace."));
     connect(m_peakHoldDelaySpin, qOverload<int>(&QSpinBox::valueChanged),
             this, [this](int v) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -368,6 +411,8 @@ void SpectrumDefaultsPage::buildUI()
         QStringLiteral("Highest")
     });
     m_threadPriorityCombo->setCurrentIndex(3);  // Above Normal (Thetis default)
+    // Thetis: setup.designer.cs:33165 (comboDisplayThreadPriority)
+    m_threadPriorityCombo->setToolTip(QStringLiteral("Set the priority of the display thread"));
     connect(m_threadPriorityCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int i) {
         // Map Thetis 5-item ThreadPriority → QThread::Priority per §13 Q3.
