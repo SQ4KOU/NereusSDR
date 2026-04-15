@@ -35,6 +35,39 @@ class SliceModel : public QObject {
     Q_PROPERTY(bool       active       READ isActive     NOTIFY activeChanged)
     Q_PROPERTY(bool       txSlice      READ isTxSlice    NOTIFY txSliceChanged)
 
+    // ── Phase 3G-10 Stage 1 stubs (DSP state, Stage 2 wires to RxChannel) ──
+    Q_PROPERTY(bool   locked          READ locked          WRITE setLocked          NOTIFY lockedChanged)
+    Q_PROPERTY(bool   muted           READ muted           WRITE setMuted           NOTIFY mutedChanged)
+    Q_PROPERTY(double audioPan        READ audioPan        WRITE setAudioPan        NOTIFY audioPanChanged)
+    Q_PROPERTY(bool   ssqlEnabled     READ ssqlEnabled     WRITE setSsqlEnabled     NOTIFY ssqlEnabledChanged)
+    Q_PROPERTY(double ssqlThresh      READ ssqlThresh      WRITE setSsqlThresh      NOTIFY ssqlThreshChanged)
+    Q_PROPERTY(bool   amsqEnabled     READ amsqEnabled     WRITE setAmsqEnabled     NOTIFY amsqEnabledChanged)
+    Q_PROPERTY(double amsqThresh      READ amsqThresh      WRITE setAmsqThresh      NOTIFY amsqThreshChanged)
+    Q_PROPERTY(bool   fmsqEnabled     READ fmsqEnabled     WRITE setFmsqEnabled     NOTIFY fmsqEnabledChanged)
+    Q_PROPERTY(double fmsqThresh      READ fmsqThresh      WRITE setFmsqThresh      NOTIFY fmsqThreshChanged)
+    Q_PROPERTY(int    agcThreshold    READ agcThreshold    WRITE setAgcThreshold    NOTIFY agcThresholdChanged)
+    Q_PROPERTY(int    agcHang         READ agcHang         WRITE setAgcHang         NOTIFY agcHangChanged)
+    Q_PROPERTY(int    agcSlope        READ agcSlope        WRITE setAgcSlope        NOTIFY agcSlopeChanged)
+    Q_PROPERTY(int    agcAttack       READ agcAttack       WRITE setAgcAttack       NOTIFY agcAttackChanged)
+    Q_PROPERTY(int    agcDecay        READ agcDecay        WRITE setAgcDecay        NOTIFY agcDecayChanged)
+    Q_PROPERTY(bool   ritEnabled      READ ritEnabled      WRITE setRitEnabled      NOTIFY ritEnabledChanged)
+    Q_PROPERTY(int    ritHz           READ ritHz           WRITE setRitHz           NOTIFY ritHzChanged)
+    Q_PROPERTY(bool   xitEnabled      READ xitEnabled      WRITE setXitEnabled      NOTIFY xitEnabledChanged)
+    Q_PROPERTY(int    xitHz           READ xitHz           WRITE setXitHz           NOTIFY xitHzChanged)
+    Q_PROPERTY(bool   emnrEnabled     READ emnrEnabled     WRITE setEmnrEnabled     NOTIFY emnrEnabledChanged)
+    Q_PROPERTY(bool   snbEnabled      READ snbEnabled      WRITE setSnbEnabled      NOTIFY snbEnabledChanged)
+    Q_PROPERTY(bool   apfEnabled      READ apfEnabled      WRITE setApfEnabled      NOTIFY apfEnabledChanged)
+    Q_PROPERTY(int    apfTuneHz       READ apfTuneHz       WRITE setApfTuneHz       NOTIFY apfTuneHzChanged)
+    Q_PROPERTY(bool   binauralEnabled READ binauralEnabled WRITE setBinauralEnabled NOTIFY binauralEnabledChanged)
+    Q_PROPERTY(int    fmCtcssMode     READ fmCtcssMode     WRITE setFmCtcssMode     NOTIFY fmCtcssModeChanged)
+    Q_PROPERTY(double fmCtcssValueHz  READ fmCtcssValueHz  WRITE setFmCtcssValueHz  NOTIFY fmCtcssValueHzChanged)
+    Q_PROPERTY(int    fmOffsetHz      READ fmOffsetHz      WRITE setFmOffsetHz      NOTIFY fmOffsetHzChanged)
+    Q_PROPERTY(bool   fmSimplex       READ fmSimplex       WRITE setFmSimplex       NOTIFY fmSimplexChanged)
+    Q_PROPERTY(bool   fmReverse       READ fmReverse       WRITE setFmReverse       NOTIFY fmReverseChanged)
+    Q_PROPERTY(int    digOffsetHz     READ digOffsetHz     WRITE setDigOffsetHz     NOTIFY digOffsetHzChanged)
+    Q_PROPERTY(int    rttyMarkHz      READ rttyMarkHz      WRITE setRttyMarkHz      NOTIFY rttyMarkHzChanged)
+    Q_PROPERTY(int    rttyShiftHz     READ rttyShiftHz     WRITE setRttyShiftHz     NOTIFY rttyShiftHzChanged)
+
 public:
     explicit SliceModel(QObject* parent = nullptr);
     ~SliceModel() override;
@@ -113,6 +146,101 @@ public:
     int wdspChannelId() const { return m_wdspChannelId; }
     void setWdspChannelId(int id) { m_wdspChannelId = id; }
 
+    // ── Phase 3G-10 Stage 1 stubs (DSP state, Stage 2 wires to RxChannel) ──
+
+    bool   locked()          const { return m_locked; }
+    void   setLocked(bool v);
+
+    bool   muted()           const { return m_muted; }
+    void   setMuted(bool v);
+
+    double audioPan()        const { return m_audioPan; }
+    void   setAudioPan(double pan);
+
+    bool   ssqlEnabled()     const { return m_ssqlEnabled; }
+    void   setSsqlEnabled(bool v);
+
+    double ssqlThresh()      const { return m_ssqlThresh; }
+    void   setSsqlThresh(double dB);
+
+    bool   amsqEnabled()     const { return m_amsqEnabled; }
+    void   setAmsqEnabled(bool v);
+
+    double amsqThresh()      const { return m_amsqThresh; }
+    void   setAmsqThresh(double dB);
+
+    bool   fmsqEnabled()     const { return m_fmsqEnabled; }
+    void   setFmsqEnabled(bool v);
+
+    double fmsqThresh()      const { return m_fmsqThresh; }
+    void   setFmsqThresh(double dB);
+
+    int    agcThreshold()    const { return m_agcThreshold; }
+    void   setAgcThreshold(int dBu);
+
+    int    agcHang()         const { return m_agcHang; }
+    void   setAgcHang(int ms);
+
+    int    agcSlope()        const { return m_agcSlope; }
+    void   setAgcSlope(int dB);
+
+    int    agcAttack()       const { return m_agcAttack; }
+    void   setAgcAttack(int ms);
+
+    int    agcDecay()        const { return m_agcDecay; }
+    void   setAgcDecay(int ms);
+
+    bool   ritEnabled()      const { return m_ritEnabled; }
+    void   setRitEnabled(bool v);
+
+    int    ritHz()           const { return m_ritHz; }
+    void   setRitHz(int hz);
+
+    bool   xitEnabled()      const { return m_xitEnabled; }
+    void   setXitEnabled(bool v);
+
+    int    xitHz()           const { return m_xitHz; }
+    void   setXitHz(int hz);
+
+    bool   emnrEnabled()     const { return m_emnrEnabled; }
+    void   setEmnrEnabled(bool v);
+
+    bool   snbEnabled()      const { return m_snbEnabled; }
+    void   setSnbEnabled(bool v);
+
+    bool   apfEnabled()      const { return m_apfEnabled; }
+    void   setApfEnabled(bool v);
+
+    int    apfTuneHz()       const { return m_apfTuneHz; }
+    void   setApfTuneHz(int hz);
+
+    bool   binauralEnabled() const { return m_binauralEnabled; }
+    void   setBinauralEnabled(bool v);
+
+    int    fmCtcssMode()     const { return m_fmCtcssMode; }
+    void   setFmCtcssMode(int mode);
+
+    double fmCtcssValueHz()  const { return m_fmCtcssValueHz; }
+    void   setFmCtcssValueHz(double hz);
+
+    int    fmOffsetHz()      const { return m_fmOffsetHz; }
+    void   setFmOffsetHz(int hz);
+
+    bool   fmSimplex()       const { return m_fmSimplex; }
+    void   setFmSimplex(bool v);
+
+    bool   fmReverse()       const { return m_fmReverse; }
+    void   setFmReverse(bool v);
+
+    int    digOffsetHz()     const { return m_digOffsetHz; }
+    void   setDigOffsetHz(int hz);
+
+    int    rttyMarkHz()      const { return m_rttyMarkHz; }
+    void   setRttyMarkHz(int hz);
+
+    int    rttyShiftHz()     const { return m_rttyShiftHz; }
+    void   setRttyShiftHz(int hz);
+
     // ---- Per-mode filter defaults ----
     // Returns the F5 (default) filter low/high for a given mode.
     // Ported from Thetis console.cs:5180-5575 InitFilterPresets.
@@ -137,6 +265,39 @@ signals:
     void activeChanged(bool active);
     void txSliceChanged(bool tx);
 
+    // ── Phase 3G-10 Stage 1 stubs ──
+    void lockedChanged(bool v);
+    void mutedChanged(bool v);
+    void audioPanChanged(double pan);
+    void ssqlEnabledChanged(bool v);
+    void ssqlThreshChanged(double dB);
+    void amsqEnabledChanged(bool v);
+    void amsqThreshChanged(double dB);
+    void fmsqEnabledChanged(bool v);
+    void fmsqThreshChanged(double dB);
+    void agcThresholdChanged(int dBu);
+    void agcHangChanged(int ms);
+    void agcSlopeChanged(int dB);
+    void agcAttackChanged(int ms);
+    void agcDecayChanged(int ms);
+    void ritEnabledChanged(bool v);
+    void ritHzChanged(int hz);
+    void xitEnabledChanged(bool v);
+    void xitHzChanged(int hz);
+    void emnrEnabledChanged(bool v);
+    void snbEnabledChanged(bool v);
+    void apfEnabledChanged(bool v);
+    void apfTuneHzChanged(int hz);
+    void binauralEnabledChanged(bool v);
+    void fmCtcssModeChanged(int mode);
+    void fmCtcssValueHzChanged(double hz);
+    void fmOffsetHzChanged(int hz);
+    void fmSimplexChanged(bool v);
+    void fmReverseChanged(bool v);
+    void digOffsetHzChanged(int hz);
+    void rttyMarkHzChanged(int hz);
+    void rttyShiftHzChanged(int hz);
+
 private:
     double  m_frequency{14225000.0};     // Default: 14.225 MHz (20m USB)
     DSPMode m_dspMode{DSPMode::USB};
@@ -154,6 +315,39 @@ private:
     int     m_panId{-1};
     int     m_receiverIndex{-1};
     int     m_wdspChannelId{-1};
+
+    // ── Phase 3G-10 Stage 1 stubs (DSP state, Stage 2 wires to RxChannel) ──
+    bool   m_locked{false};           // Neutral default — no Thetis citation needed
+    bool   m_muted{false};            // Neutral default — no Thetis citation needed
+    double m_audioPan{0.0};           // Neutral default — center pan (−1..+1), no Thetis citation needed
+    bool   m_ssqlEnabled{false};      // Neutral default — feature off at start
+    double m_ssqlThresh{-150.0};      // From Thetis radio.cs:1164-1165 — rx_squelch_threshold = -150.0f
+    bool   m_amsqEnabled{false};      // Neutral default — feature off at start
+    double m_amsqThresh{-150.0};      // From Thetis radio.cs:1164-1165 — rx_squelch_threshold = -150.0f (AM reuses same field)
+    bool   m_fmsqEnabled{false};      // Neutral default — feature off at start
+    double m_fmsqThresh{-150.0};      // Thetis radio.cs:1274-1275 — fm_squelch_threshold = 1.0f (internal scale); plan default -150.0 dB — citation pending Stage 2 gate
+    int    m_agcThreshold{-20};       // Thetis default — citation pending Stage 2 gate (no explicit default found in radio.cs AGCThreshold)
+    int    m_agcHang{250};            // From Thetis radio.cs:1056-1057 — rx_agc_hang = 250 ms
+    int    m_agcSlope{0};             // From Thetis radio.cs:1107-1108 — rx_agc_slope = 0 dB
+    int    m_agcAttack{2};            // Thetis default — citation pending Stage 2 gate (AGC attack not exposed as explicit property in radio.cs)
+    int    m_agcDecay{250};           // From Thetis radio.cs:1037-1038 — rx_agc_decay = 250 ms
+    bool   m_ritEnabled{false};       // Neutral default — no Thetis citation needed
+    int    m_ritHz{0};                // Neutral default — zero offset
+    bool   m_xitEnabled{false};       // Neutral default — no Thetis citation needed
+    int    m_xitHz{0};                // Neutral default — zero offset
+    bool   m_emnrEnabled{false};      // Neutral default — feature off at start
+    bool   m_snbEnabled{false};       // Neutral default — feature off at start
+    bool   m_apfEnabled{false};       // Neutral default — feature off at start
+    int    m_apfTuneHz{0};            // Neutral default — zero tune offset
+    bool   m_binauralEnabled{false};  // Neutral default — feature off at start
+    int    m_fmCtcssMode{0};          // Neutral default — Off (0 = disabled)
+    double m_fmCtcssValueHz{88.5};    // Plan default 88.5 Hz — NOTE: Thetis console.cs:40500 has ctcss_freq = 100.0; mismatch reported to controller, using plan value pending amendment
+    int    m_fmOffsetHz{0};           // Neutral default — zero offset
+    bool   m_fmSimplex{true};         // Neutral default — simplex on at start
+    bool   m_fmReverse{false};        // Neutral default — normal direction
+    int    m_digOffsetHz{0};          // Neutral default — zero offset
+    int    m_rttyMarkHz{2125};        // Plan default 2125 Hz — NOTE: Thetis setup.designer.cs:40635 labels F1=2295 as "RTTY MARK frequency"; F0=2125 is "SPACE"; mismatch reported to controller, using plan value pending amendment
+    int    m_rttyShiftHz{170};        // From Thetis radio.cs:2043-2044 — rx_dolly_freq1 = 2295, rx_dolly_freq0 = 2125 → shift = 2295−2125 = 170 Hz
 };
 
 } // namespace NereusSDR

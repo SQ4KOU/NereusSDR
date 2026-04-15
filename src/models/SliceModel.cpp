@@ -162,6 +162,256 @@ void SliceModel::setTxSlice(bool tx)
     }
 }
 
+// ── Phase 3G-10 Stage 1 stubs (DSP state, Stage 2 wires to RxChannel) ──
+
+void SliceModel::setLocked(bool v)
+{
+    if (m_locked != v) {
+        m_locked = v;
+        emit lockedChanged(v);
+    }
+}
+
+void SliceModel::setMuted(bool v)
+{
+    if (m_muted != v) {
+        m_muted = v;
+        emit mutedChanged(v);
+    }
+}
+
+void SliceModel::setAudioPan(double pan)
+{
+    if (!qFuzzyCompare(m_audioPan, pan)) {
+        m_audioPan = pan;
+        emit audioPanChanged(pan);
+    }
+}
+
+void SliceModel::setSsqlEnabled(bool v)
+{
+    if (m_ssqlEnabled != v) {
+        m_ssqlEnabled = v;
+        emit ssqlEnabledChanged(v);
+    }
+}
+
+void SliceModel::setSsqlThresh(double dB)
+{
+    if (!qFuzzyCompare(m_ssqlThresh, dB)) {
+        m_ssqlThresh = dB;
+        emit ssqlThreshChanged(dB);
+    }
+}
+
+void SliceModel::setAmsqEnabled(bool v)
+{
+    if (m_amsqEnabled != v) {
+        m_amsqEnabled = v;
+        emit amsqEnabledChanged(v);
+    }
+}
+
+void SliceModel::setAmsqThresh(double dB)
+{
+    if (!qFuzzyCompare(m_amsqThresh, dB)) {
+        m_amsqThresh = dB;
+        emit amsqThreshChanged(dB);
+    }
+}
+
+void SliceModel::setFmsqEnabled(bool v)
+{
+    if (m_fmsqEnabled != v) {
+        m_fmsqEnabled = v;
+        emit fmsqEnabledChanged(v);
+    }
+}
+
+void SliceModel::setFmsqThresh(double dB)
+{
+    if (!qFuzzyCompare(m_fmsqThresh, dB)) {
+        m_fmsqThresh = dB;
+        emit fmsqThreshChanged(dB);
+    }
+}
+
+void SliceModel::setAgcThreshold(int dBu)
+{
+    if (m_agcThreshold != dBu) {
+        m_agcThreshold = dBu;
+        emit agcThresholdChanged(dBu);
+    }
+}
+
+void SliceModel::setAgcHang(int ms)
+{
+    if (m_agcHang != ms) {
+        m_agcHang = ms;
+        emit agcHangChanged(ms);
+    }
+}
+
+void SliceModel::setAgcSlope(int dB)
+{
+    if (m_agcSlope != dB) {
+        m_agcSlope = dB;
+        emit agcSlopeChanged(dB);
+    }
+}
+
+void SliceModel::setAgcAttack(int ms)
+{
+    if (m_agcAttack != ms) {
+        m_agcAttack = ms;
+        emit agcAttackChanged(ms);
+    }
+}
+
+void SliceModel::setAgcDecay(int ms)
+{
+    if (m_agcDecay != ms) {
+        m_agcDecay = ms;
+        emit agcDecayChanged(ms);
+    }
+}
+
+void SliceModel::setRitEnabled(bool v)
+{
+    if (m_ritEnabled != v) {
+        m_ritEnabled = v;
+        emit ritEnabledChanged(v);
+    }
+}
+
+void SliceModel::setRitHz(int hz)
+{
+    if (m_ritHz != hz) {
+        m_ritHz = hz;
+        emit ritHzChanged(hz);
+    }
+}
+
+void SliceModel::setXitEnabled(bool v)
+{
+    if (m_xitEnabled != v) {
+        m_xitEnabled = v;
+        emit xitEnabledChanged(v);
+    }
+}
+
+void SliceModel::setXitHz(int hz)
+{
+    if (m_xitHz != hz) {
+        m_xitHz = hz;
+        emit xitHzChanged(hz);
+    }
+}
+
+void SliceModel::setEmnrEnabled(bool v)
+{
+    if (m_emnrEnabled != v) {
+        m_emnrEnabled = v;
+        emit emnrEnabledChanged(v);
+    }
+}
+
+void SliceModel::setSnbEnabled(bool v)
+{
+    if (m_snbEnabled != v) {
+        m_snbEnabled = v;
+        emit snbEnabledChanged(v);
+    }
+}
+
+void SliceModel::setApfEnabled(bool v)
+{
+    if (m_apfEnabled != v) {
+        m_apfEnabled = v;
+        emit apfEnabledChanged(v);
+    }
+}
+
+void SliceModel::setApfTuneHz(int hz)
+{
+    if (m_apfTuneHz != hz) {
+        m_apfTuneHz = hz;
+        emit apfTuneHzChanged(hz);
+    }
+}
+
+void SliceModel::setBinauralEnabled(bool v)
+{
+    if (m_binauralEnabled != v) {
+        m_binauralEnabled = v;
+        emit binauralEnabledChanged(v);
+    }
+}
+
+void SliceModel::setFmCtcssMode(int mode)
+{
+    if (m_fmCtcssMode != mode) {
+        m_fmCtcssMode = mode;
+        emit fmCtcssModeChanged(mode);
+    }
+}
+
+void SliceModel::setFmCtcssValueHz(double hz)
+{
+    if (!qFuzzyCompare(m_fmCtcssValueHz, hz)) {
+        m_fmCtcssValueHz = hz;
+        emit fmCtcssValueHzChanged(hz);
+    }
+}
+
+void SliceModel::setFmOffsetHz(int hz)
+{
+    if (m_fmOffsetHz != hz) {
+        m_fmOffsetHz = hz;
+        emit fmOffsetHzChanged(hz);
+    }
+}
+
+void SliceModel::setFmSimplex(bool v)
+{
+    if (m_fmSimplex != v) {
+        m_fmSimplex = v;
+        emit fmSimplexChanged(v);
+    }
+}
+
+void SliceModel::setFmReverse(bool v)
+{
+    if (m_fmReverse != v) {
+        m_fmReverse = v;
+        emit fmReverseChanged(v);
+    }
+}
+
+void SliceModel::setDigOffsetHz(int hz)
+{
+    if (m_digOffsetHz != hz) {
+        m_digOffsetHz = hz;
+        emit digOffsetHzChanged(hz);
+    }
+}
+
+void SliceModel::setRttyMarkHz(int hz)
+{
+    if (m_rttyMarkHz != hz) {
+        m_rttyMarkHz = hz;
+        emit rttyMarkHzChanged(hz);
+    }
+}
+
+void SliceModel::setRttyShiftHz(int hz)
+{
+    if (m_rttyShiftHz != hz) {
+        m_rttyShiftHz = hz;
+        emit rttyShiftHzChanged(hz);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Per-mode default filter presets
 // ---------------------------------------------------------------------------
