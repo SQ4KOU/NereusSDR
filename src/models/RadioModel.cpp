@@ -10,6 +10,7 @@
 #include "core/RxChannel.h"
 #include "core/AppSettings.h"
 #include "core/LogCategories.h"
+#include "gui/SpectrumWidget.h"
 
 #include <QMetaObject>
 #include <QStandardPaths>
@@ -27,6 +28,23 @@ RadioModel::RadioModel(QObject* parent)
     , m_wdspEngine(new WdspEngine(this))
 {
     // Connection starts null — created by connectToRadio() via factory
+
+    // Phase 3G-9b: first-launch smooth defaults. On the very first run
+    // (or after the user blows away NereusSDR.settings), apply the
+    // Clarity Blue profile so the waterfall looks good out of the box.
+    // Existing users with their own tuned values stay untouched.
+    //
+    // spectrumWidget() is likely null at this point — MainWindow wires
+    // it after construction. applyClaritySmoothDefaults() guards on null
+    // and becomes a no-op; Task 3 adds a MainWindow re-invocation after
+    // the wiring completes, which is what actually applies the profile
+    // on first launch.
+    const QString profileFlag = AppSettings::instance()
+        .value(QStringLiteral("DisplayProfileApplied"),
+               QStringLiteral("False")).toString();
+    if (profileFlag != QStringLiteral("True")) {
+        applyClaritySmoothDefaults();
+    }
 }
 
 RadioModel::~RadioModel()
@@ -587,6 +605,43 @@ void RadioModel::teardownConnection()
     // are thread-affined to the worker and destroying them on any other
     // thread emits cross-thread warnings and can crash on Windows.
     teardownWorkerThreadedConnection(m_connection, m_connThread);
+}
+
+// Phase 3G-9b — 7 smooth-default recipe values. See docs/architecture/waterfall-tuning.md.
+void RadioModel::applyClaritySmoothDefaults()
+{
+    SpectrumWidget* sw = spectrumWidget();
+    if (!sw) { return; }  // not yet wired by MainWindow — Task 3 re-invokes
+
+    // 1. Palette — narrow-band monochrome. See docs/architecture/waterfall-tuning.md §1.
+    sw->setWfColorScheme(WfColorScheme::ClarityBlue);
+
+    // 2. Spectrum averaging mode — log-recursive for heavy smoothing.
+    sw->setAverageMode(AverageMode::Logarithmic);
+
+    // 3. Averaging alpha — very slow exponential (~500 ms perceived smoothing
+    //    at 30 FPS). See waterfall-tuning.md §3.
+    sw->setAverageAlpha(0.05f);
+
+    // 4. Trace colour — neutral light-gray, not saturated. Sits in front of
+    //    the waterfall without competing.
+    QColor traceColor(0xe0, 0xe8, 0xf0, 200);  // #e0e8f0 alpha 200
+    sw->setFillColor(traceColor);
+
+    // 5. Threshold gap — centred on the typical 80m noise floor.
+    sw->setWfLowThreshold(-110.0f);
+    sw->setWfHighThreshold(-70.0f);
+
+    // 6. Waterfall AGC — tracks band conditions automatically.
+    sw->setWfAgcEnabled(true);
+
+    // 7. Waterfall update period — 30 ms for smooth scroll motion.
+    sw->setWfUpdatePeriodMs(30);
+
+    // Mark the profile as applied so the gate short-circuits on next launch.
+    AppSettings::instance().setValue(
+        QStringLiteral("DisplayProfileApplied"),
+        QStringLiteral("True"));
 }
 
 void RadioModel::onConnectionStateChanged(ConnectionState state)
