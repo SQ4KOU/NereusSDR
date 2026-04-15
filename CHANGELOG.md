@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.4] - 2026-04-14
+
+Bug-fix release. Improves Hermes (Protocol 1) startup reliability and
+fixes two Windows-only crashes seen on cold launch / shutdown. Also
+relaxes an over-aggressive board firmware-version gate that rejected
+some legitimate radios.
+
+### Fixes
+- **P1 Hermes DDC priming** — prime the DDC before sending `metis-start`
+  on Hermes-class boards, declare `nddc=2`, and alternate the TX/RX1
+  command banks. Resolves silent RX after connect on Hermes.
+- **Windows startup/shutdown crashes** — fix two latent crashes that
+  surfaced on Windows clean installs (cold-start init order and
+  shutdown teardown ordering).
+- **Connect: drop unattested firmware floors** — remove per-board
+  firmware-version minimums that were never verified against
+  real-world firmware ranges and were blocking valid radios.
+
+
 ## [0.1.3] - 2026-04-13
 
 Hotfix for the v0.1.2 Windows artifacts. Linux and macOS builds are
