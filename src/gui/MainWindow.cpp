@@ -304,6 +304,20 @@ void MainWindow::buildUI()
     m_radioModel->setSpectrumWidget(m_spectrumWidget);
     m_radioModel->setFftEngine(m_fftEngine);
 
+    // Phase 3G-9b: re-invoke the first-launch smooth-defaults check after
+    // the SpectrumWidget pointer is wired. The RadioModel constructor's
+    // own attempt runs too early to see the widget — this is where the
+    // profile actually takes effect on first launch. If the gate has
+    // already been flipped to "True" from a previous run, this is a no-op.
+    {
+        const QString profileFlag = AppSettings::instance()
+            .value(QStringLiteral("DisplayProfileApplied"),
+                   QStringLiteral("False")).toString();
+        if (profileFlag != QStringLiteral("True")) {
+            m_radioModel->applyClaritySmoothDefaults();
+        }
+    }
+
     // Wire: zoom changes → adjust FFT size for appropriate bin resolution
     // Target: ~500-1000 bins across the visible bandwidth for good detail
     connect(m_spectrumWidget, &SpectrumWidget::bandwidthChangeRequested,
