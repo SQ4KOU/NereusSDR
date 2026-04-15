@@ -382,12 +382,11 @@ void SliceModel::setFmOffsetHz(int hz)
     }
 }
 
-void SliceModel::setFmSimplex(bool v)
+void SliceModel::setFmTxMode(FmTxMode mode)
 {
-    if (m_fmSimplex != v) {
-        m_fmSimplex = v;
-        emit fmSimplexChanged(v);
-    }
+    if (m_fmTxMode == mode) { return; }
+    m_fmTxMode = mode;
+    emit fmTxModeChanged(mode);
 }
 
 void SliceModel::setFmReverse(bool v)
@@ -398,12 +397,18 @@ void SliceModel::setFmReverse(bool v)
     }
 }
 
-void SliceModel::setDigOffsetHz(int hz)
+void SliceModel::setDiglOffsetHz(int hz)
 {
-    if (m_digOffsetHz != hz) {
-        m_digOffsetHz = hz;
-        emit digOffsetHzChanged(hz);
-    }
+    if (m_diglOffsetHz == hz) { return; }
+    m_diglOffsetHz = hz;
+    emit diglOffsetHzChanged(hz);
+}
+
+void SliceModel::setDiguOffsetHz(int hz)
+{
+    if (m_diguOffsetHz == hz) { return; }
+    m_diguOffsetHz = hz;
+    emit diguOffsetHzChanged(hz);
 }
 
 void SliceModel::setRttyMarkHz(int hz)

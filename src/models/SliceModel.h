@@ -62,9 +62,10 @@ class SliceModel : public QObject {
     Q_PROPERTY(int    fmCtcssMode     READ fmCtcssMode     WRITE setFmCtcssMode     NOTIFY fmCtcssModeChanged)
     Q_PROPERTY(double fmCtcssValueHz  READ fmCtcssValueHz  WRITE setFmCtcssValueHz  NOTIFY fmCtcssValueHzChanged)
     Q_PROPERTY(int    fmOffsetHz      READ fmOffsetHz      WRITE setFmOffsetHz      NOTIFY fmOffsetHzChanged)
-    Q_PROPERTY(bool   fmSimplex       READ fmSimplex       WRITE setFmSimplex       NOTIFY fmSimplexChanged)
+    Q_PROPERTY(NereusSDR::FmTxMode fmTxMode READ fmTxMode WRITE setFmTxMode NOTIFY fmTxModeChanged)
     Q_PROPERTY(bool   fmReverse       READ fmReverse       WRITE setFmReverse       NOTIFY fmReverseChanged)
-    Q_PROPERTY(int    digOffsetHz     READ digOffsetHz     WRITE setDigOffsetHz     NOTIFY digOffsetHzChanged)
+    Q_PROPERTY(int    diglOffsetHz    READ diglOffsetHz    WRITE setDiglOffsetHz    NOTIFY diglOffsetHzChanged)
+    Q_PROPERTY(int    diguOffsetHz    READ diguOffsetHz    WRITE setDiguOffsetHz    NOTIFY diguOffsetHzChanged)
     Q_PROPERTY(int    rttyMarkHz      READ rttyMarkHz      WRITE setRttyMarkHz      NOTIFY rttyMarkHzChanged)
     Q_PROPERTY(int    rttyShiftHz     READ rttyShiftHz     WRITE setRttyShiftHz     NOTIFY rttyShiftHzChanged)
 
@@ -226,14 +227,17 @@ public:
     int    fmOffsetHz()      const { return m_fmOffsetHz; }
     void   setFmOffsetHz(int hz);
 
-    bool   fmSimplex()       const { return m_fmSimplex; }
-    void   setFmSimplex(bool v);
+    FmTxMode fmTxMode()        const { return m_fmTxMode; }
+    void   setFmTxMode(FmTxMode mode);
 
     bool   fmReverse()       const { return m_fmReverse; }
     void   setFmReverse(bool v);
 
-    int    digOffsetHz()     const { return m_digOffsetHz; }
-    void   setDigOffsetHz(int hz);
+    int    diglOffsetHz()    const { return m_diglOffsetHz; }
+    void   setDiglOffsetHz(int hz);
+
+    int    diguOffsetHz()    const { return m_diguOffsetHz; }
+    void   setDiguOffsetHz(int hz);
 
     int    rttyMarkHz()      const { return m_rttyMarkHz; }
     void   setRttyMarkHz(int hz);
@@ -292,9 +296,10 @@ signals:
     void fmCtcssModeChanged(int mode);
     void fmCtcssValueHzChanged(double hz);
     void fmOffsetHzChanged(int hz);
-    void fmSimplexChanged(bool v);
+    void fmTxModeChanged(NereusSDR::FmTxMode mode);
     void fmReverseChanged(bool v);
-    void digOffsetHzChanged(int hz);
+    void diglOffsetHzChanged(int hz);
+    void diguOffsetHzChanged(int hz);
     void rttyMarkHzChanged(int hz);
     void rttyShiftHzChanged(int hz);
 
@@ -342,10 +347,11 @@ private:
     bool   m_binauralEnabled{false};  // Neutral default — feature off at start
     int    m_fmCtcssMode{0};          // Neutral default — Off (0 = disabled)
     double m_fmCtcssValueHz{100.0};   // From Thetis console.cs:40500 — ctcss_freq = 100.0; radio.cs:2899 — ctcss_freq_hz = 100.0
-    int    m_fmOffsetHz{0};           // Neutral default — zero offset
-    bool   m_fmSimplex{true};         // Neutral default — simplex on at start
-    bool   m_fmReverse{false};        // Neutral default — normal direction
-    int    m_digOffsetHz{0};          // Neutral default — zero offset
+    int      m_fmOffsetHz{0};           // Neutral default — zero offset
+    FmTxMode m_fmTxMode{FmTxMode::Simplex};  // From Thetis console.cs:20873 — current_fm_tx_mode = FMTXMode.Simplex
+    bool     m_fmReverse{false};        // Neutral default — normal direction
+    int      m_diglOffsetHz{0};         // From Thetis console.cs:14672 — DIGLClickTuneOffset default 0 Hz
+    int      m_diguOffsetHz{0};         // From Thetis console.cs:14637 — DIGUClickTuneOffset default 0 Hz
     int    m_rttyMarkHz{2295};        // From Thetis setup.designer.cs:40635 — tooltip "RTTY MARK frequency" on udDSPRX1DollyF1; value 2295 (line 40637). F0=2125 is SPACE (line 40665).
     int    m_rttyShiftHz{170};        // From Thetis radio.cs:2043-2044 — rx_dolly_freq1 = 2295, rx_dolly_freq0 = 2125 → shift = 2295−2125 = 170 Hz
 };

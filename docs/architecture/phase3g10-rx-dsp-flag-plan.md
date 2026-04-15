@@ -597,6 +597,14 @@ Stage 1 SliceModel stubs: property storage + emit changed signal, **no** `RxChan
 
 All three corrections are pure DSP-constant source-first fixes per CLAUDE.md / `feedback_source_first_exceptions.md`. Property names stay unchanged (user-approved Option A).
 
+**Amendment (post-review, 2026-04-15, round 3 — API expansion):** Three S1.6 API surface changes reconciled against Thetis source-of-truth after scouting for Task S1.5 revealed that the original property set couldn't express the semantics the mode containers need:
+
+- `digOffsetHz` split into `diglOffsetHz` + `diguOffsetHz`. Thetis `console.cs:14672` (`DIGLClickTuneOffset`) and `console.cs:14637` (`DIGUClickTuneOffset`) are independent `int` properties, one per digital-sideband variant. The single `digOffsetHz` in the original S1.6 spec was a drift.
+- `fmSimplex{bool}` replaced with `fmTxMode{FmTxMode}` enum. Thetis `enums.cs:380` declares `FMTXMode { High = 0, Simplex = 1, Low = 2 }` (order chosen for memory form per Thetis comment). Thetis `console.cs:20873` uses `FMTXMode { High, Simplex, Low }` — a 3-state enum. A single bool can't express it. New enum class `FmTxMode` added to `WdspTypes.h`. Note: Thetis declares `High = 0`, `Simplex = 1` (implicit), `Low = 2` (implicit) — the task instructions listed a different order; Thetis source-of-truth prevails.
+- `fmReverse{bool}` kept — it's a separate flag (reverse-listen toggle), not part of the repeater-direction enum.
+
+These are pure DSP-constant source-first reconciliations per CLAUDE.md / `feedback_source_first_exceptions.md`. The changes unblock Task S1.5 (VfoModeContainers) to target a Thetis-authoritative API surface.
+
 - [ ] **S1.6.1** Extend `src/core/WdspTypes.h` with new enums:
 
 ```cpp
@@ -604,6 +612,7 @@ enum class NrMode   : int { Off = 0, ANR = 1, EMNR = 2 };
 enum class NbMode   : int { Off = 0, NB1 = 1, NB2 = 2 };
 enum class SquelchMode : int { Off, Voice, AM, FM };
 enum class AgcHangMode : int { Off, Fast, Med, Slow };  // Thetis AGC hang classes
+enum class FmTxMode : int { High = 0, Simplex = 1, Low = 2 };  // From Thetis enums.cs:380 — FMTXMode; added in round-3 fixup
 ```
 
 These are declarations only. Build to confirm nothing references them yet.
@@ -623,7 +632,9 @@ int m_agcThreshold{-20};
 ```
 
 Replicate this shape for each NYI row in spec §6.2. Use exact names:
-`setLocked/setMuted/setAudioPan/setSsqlEnabled/setSsqlThresh/setAmsqEnabled/setAmsqThresh/setFmsqEnabled/setFmsqThresh/setAgcThreshold/setAgcHang/setAgcSlope/setAgcAttack/setAgcDecay/setRitEnabled/setRitHz/setXitEnabled/setXitHz/setEmnrEnabled/setSnbEnabled/setApfEnabled/setApfTuneHz/setBinauralEnabled/setFmCtcssMode/setFmCtcssValueHz/setFmOffsetHz/setFmSimplex/setFmReverse/setDigOffsetHz/setRttyMarkHz/setRttyShiftHz`.
+`setLocked/setMuted/setAudioPan/setSsqlEnabled/setSsqlThresh/setAmsqEnabled/setAmsqThresh/setFmsqEnabled/setFmsqThresh/setAgcThreshold/setAgcHang/setAgcSlope/setAgcAttack/setAgcDecay/setRitEnabled/setRitHz/setXitEnabled/setXitHz/setEmnrEnabled/setSnbEnabled/setApfEnabled/setApfTuneHz/setBinauralEnabled/setFmCtcssMode/setFmCtcssValueHz/setFmOffsetHz/setFmTxMode/setFmReverse/setDiglOffsetHz/setDiguOffsetHz/setRttyMarkHz/setRttyShiftHz`.
+
+*(Round-3 amendment: `setFmSimplex` replaced by `setFmTxMode`; `setDigOffsetHz` split into `setDiglOffsetHz` + `setDiguOffsetHz`.)*
 
 Default values (from Thetis `setup.cs` / `console.cs`):
 - `m_agcThreshold{-20}`, `m_agcHang{250}`, `m_agcSlope{0}`, `m_agcAttack{2}`, `m_agcDecay{250}`
@@ -631,8 +642,8 @@ Default values (from Thetis `setup.cs` / `console.cs`):
 - `m_locked{false}`, `m_muted{false}`, `m_audioPan{0.0}` (−1..+1, 0 = center)
 - `m_emnrEnabled{false}`, `m_snbEnabled{false}`, `m_apfEnabled{false}`, `m_apfTuneHz{0}`
 - `m_binauralEnabled{false}`
-- FM: `m_fmCtcssMode{0}` (Off), `m_fmCtcssValueHz{100.0}`, `m_fmOffsetHz{0}`, `m_fmSimplex{true}`, `m_fmReverse{false}`
-- DIG: `m_digOffsetHz{0}`
+- FM: `m_fmCtcssMode{0}` (Off), `m_fmCtcssValueHz{100.0}`, `m_fmOffsetHz{0}`, `m_fmTxMode{FmTxMode::Simplex}`, `m_fmReverse{false}`
+- DIG: `m_diglOffsetHz{0}`, `m_diguOffsetHz{0}`
 - RTTY: `m_rttyMarkHz{2295}`, `m_rttyShiftHz{170}`
 - Squelch: `m_ssqlEnabled{false}`, `m_ssqlThreshDb{-150.0}`, `m_amsqEnabled{false}`, `m_amsqThreshDb{-150.0}`, `m_fmsqEnabled{false}`, `m_fmsqThreshDb{-150.0}`
 

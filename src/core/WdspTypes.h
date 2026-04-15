@@ -89,4 +89,9 @@ enum class SquelchMode : int { Off, Voice, AM, FM };
 // AGC hang-time class — maps to Thetis custom hang bucket in setup.cs.
 enum class AgcHangMode : int { Off, Fast, Med, Slow };
 
+// FM transmit mode (repeater offset direction).
+// Values match Thetis enums.cs:380 — FMTXMode (order is memory-form; take care before rearranging).
+// From Thetis console.cs:20873 — current_fm_tx_mode = FMTXMode.Simplex
+enum class FmTxMode : int { High = 0, Simplex = 1, Low = 2 };  // High = TX above RX (+), Simplex = no repeater offset (S), Low = TX below RX (-)
+
 } // namespace NereusSDR
