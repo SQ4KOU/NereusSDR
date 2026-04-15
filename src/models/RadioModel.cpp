@@ -10,6 +10,7 @@
 #include "core/RxChannel.h"
 #include "core/AppSettings.h"
 #include "core/LogCategories.h"
+#include "gui/SpectrumWidget.h"
 
 #include <QMetaObject>
 #include <QStandardPaths>
@@ -26,7 +27,13 @@ RadioModel::RadioModel(QObject* parent)
     , m_audioEngine(new AudioEngine(this))
     , m_wdspEngine(new WdspEngine(this))
 {
-    // Connection starts null — created by connectToRadio() via factory
+    // Connection starts null — created by connectToRadio() via factory.
+    //
+    // Phase 3G-9b: the smooth-defaults profile is reachable only via the
+    // "Reset to Smooth Defaults" button on SpectrumDefaultsPage per user
+    // decision 2026-04-15 (Default should stay the out-of-box default).
+    // No first-launch auto-apply here. The `DisplayProfileApplied`
+    // AppSettings key is reserved for PR3 (Clarity) to repurpose.
 }
 
 RadioModel::~RadioModel()
@@ -587,6 +594,45 @@ void RadioModel::teardownConnection()
     // are thread-affined to the worker and destroying them on any other
     // thread emits cross-thread warnings and can crash on Windows.
     teardownWorkerThreadedConnection(m_connection, m_connThread);
+}
+
+// Phase 3G-9b — 7 smooth-default recipe values. See docs/architecture/waterfall-tuning.md.
+void RadioModel::applyClaritySmoothDefaults()
+{
+    SpectrumWidget* sw = spectrumWidget();
+    if (!sw) { return; }  // not yet wired by MainWindow — Task 3 re-invokes
+
+    // 1. Palette — narrow-band monochrome. See docs/architecture/waterfall-tuning.md §1.
+    sw->setWfColorScheme(WfColorScheme::ClarityBlue);
+
+    // 2. Spectrum averaging mode — log-recursive for heavy smoothing.
+    sw->setAverageMode(AverageMode::Logarithmic);
+
+    // 3. Averaging alpha — very slow exponential (~500 ms perceived smoothing
+    //    at 30 FPS). See waterfall-tuning.md §3.
+    sw->setAverageAlpha(0.05f);
+
+    // 4. Trace colour — pure white, thin, sits cleanly in front of the
+    //    waterfall without competing. Visual target: 2026-04-14 reference.
+    sw->setFillColor(QColor(0xff, 0xff, 0xff, 230));
+
+    // 5. Pan fill OFF — trace renders as a thin line, not a filled curve.
+    //    NereusSDR's default is fill-on; turn it off to match the reference.
+    sw->setPanFillEnabled(false);
+
+    // 6. Waterfall AGC — tracks band conditions automatically. With AGC on,
+    //    the Low/High threshold values are continuously overwritten by the
+    //    running min/max of visible FFT bins (see SpectrumWidget.cpp
+    //    pushWaterfallRow), so setting them in this profile is redundant.
+    sw->setWfAgcEnabled(true);
+
+    // 7. Waterfall update period — 30 ms for smooth scroll motion.
+    sw->setWfUpdatePeriodMs(30);
+
+    // Mark the profile as applied so the gate short-circuits on next launch.
+    AppSettings::instance().setValue(
+        QStringLiteral("DisplayProfileApplied"),
+        QStringLiteral("True"));
 }
 
 void RadioModel::onConnectionStateChanged(ConnectionState state)

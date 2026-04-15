@@ -38,6 +38,8 @@ enum class WfColorScheme : int {
     LinLog,         // Linear in low, log in high — Thetis LinLog
     LinRad,         // Linradiance-style cool → hot
     Custom,         // User-defined custom stops (reads from AppSettings)
+    ClarityBlue,    // Phase 3G-9b: narrow-band monochrome (80% navy noise floor,
+                    // top 20% cyan→white signals). AetherSDR-style readability.
     Count
 };
 
