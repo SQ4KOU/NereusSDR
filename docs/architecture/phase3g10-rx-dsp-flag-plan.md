@@ -61,7 +61,7 @@
 | `src/gui/widgets/VfoStyles.h` | Stylesheet constants + color `constexpr`s, verbatim from AetherSDR `VfoWidget.cpp` lines 134–177 with source line citations. Single header, zero runtime. |
 | `src/gui/widgets/VfoLevelBar.h` | Declaration of the S-meter widget: QWidget subclass, `setValue(float dbm)` slot, fixed min-height. |
 | `src/gui/widgets/VfoLevelBar.cpp` | `paintEvent` ports AetherSDR `LevelBar::paintEvent` (`src/gui/VfoWidget.cpp:43-61`) and adds a S-unit tick strip rendered above the bar. |
-| `src/gui/widgets/ScrollableLabel.h` | `QLabel` subclass with wheel-step + double-click inline edit (`QStackedWidget { label \| QLineEdit }`). Ported from AetherSDR usage pattern. |
+| `src/gui/widgets/ScrollableLabel.h` | NereusSDR native `QStackedWidget` subclass with wheel-step + double-click inline edit (`label \| QLineEdit`). Qt skeleton pattern informed by AetherSDR's trivial `ScrollableLabel` in `GuardedSlider.h:81-100`. |
 | `src/gui/widgets/ScrollableLabel.cpp` | Implementation. |
 | `src/gui/widgets/VfoModeContainers.h` | Four `QWidget` subclasses: `FmOptContainer`, `DigOffsetContainer`, `RttyMarkShiftContainer`, `CwAutotuneContainer`. Each with `setSlice(SliceModel*)` + `syncFromSlice()`. |
 | `src/gui/widgets/VfoModeContainers.cpp` | Implementations. |
@@ -322,14 +322,16 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 
 ## Commit S1.3 — ScrollableLabel
 
-### Task S1.3 — Wheel-step + inline-edit label
+### Task S1.3 — NereusSDR native ScrollableLabel widget informed by AetherSDR patterns
 
 **Files:**
 - Create: `src/gui/widgets/ScrollableLabel.h`, `.cpp`
 - Create: `tests/tst_scrollable_label.cpp`
-- Source: usage in `~/AetherSDR/src/gui/VfoWidget.cpp` — search for `ScrollableLabel` to find the class and its wheel/click behavior. This widget is used by RIT/XIT/DIG-offset/FM offset.
+- Reference: `~/AetherSDR/src/gui/GuardedSlider.h:81-100` — base Qt skeleton pattern (QLabel + wheel event handler). NereusSDR's version is a richer native widget, not a port.
 
-- [ ] **S1.3.1** In the AetherSDR clone, locate the `ScrollableLabel` class source. Likely under `~/AetherSDR/src/gui/ScrollableLabel.{h,cpp}` or similar; run `grep -l "class ScrollableLabel" ~/AetherSDR/src/ -r` to find it.
+**Amendment (post-review, 2026-04-15):** Reframed from a "port" to a **NereusSDR native widget informed by AetherSDR patterns**. AetherSDR's `ScrollableLabel` (`~/AetherSDR/src/gui/GuardedSlider.h:81-100`) is a trivial ~20-line `QLabel` that emits `scrolled(±1)` on wheel. NereusSDR's version is a richer composite (QStackedWidget label+editor, range/step/format, inline edit, valueChanged signal, parseValue) per user-approved source-first exception for control surfaces (see `feedback_source_first_ui_vs_dsp.md`). Source-first still fully applies to DSP/radio behavior the widget binds to in Stage 2.
+
+- [ ] **S1.3.1** Read `~/AetherSDR/src/gui/GuardedSlider.h:81-100` to see the base `ScrollableLabel` pattern (QLabel + wheel event handler). NereusSDR's widget will extend this with label/editor composition, range clamping, inline edit, and typed value state.
 
 - [ ] **S1.3.2** Write `tests/tst_scrollable_label.cpp`:
 
@@ -381,7 +383,7 @@ QTEST_MAIN(TestScrollableLabel)
 #include "tst_scrollable_label.moc"
 ```
 
-- [ ] **S1.3.3** Port AetherSDR `ScrollableLabel.h` into `src/gui/widgets/ScrollableLabel.h`. Header responsibilities:
+- [ ] **S1.3.3** Write `src/gui/widgets/ScrollableLabel.h` — NereusSDR native widget. Header responsibilities:
   - Derives from `QStackedWidget` internally (label + QLineEdit).
   - `setRange(int min, int max)`, `setStep(int)`, `setValue(int)`, `value()`, `setFormat(std::function<QString(int)>)` for custom display (e.g. `+0.120 kHz`).
   - Signal: `valueChanged(int)`.
@@ -390,7 +392,7 @@ QTEST_MAIN(TestScrollableLabel)
   - Wheel step sign: up = increment, down = decrement, clamp at range edges.
   - Tooltip: passthrough from parent.
 
-- [ ] **S1.3.4** Port the matching `.cpp`. All paint/stylesheet calls use `VfoStyles.h`.
+- [ ] **S1.3.4** Write the matching `ScrollableLabel.cpp`. All stylesheet calls use `VfoStyles.h`.
 
 - [ ] **S1.3.5** Add to `CMakeLists.txt` (sources + test exe).
 
@@ -402,12 +404,22 @@ QTEST_MAIN(TestScrollableLabel)
 
 - [ ] **S1.3.7** Commit:
   ```
-  git add src/gui/widgets/ScrollableLabel.{h,cpp} tests/tst_scrollable_label.cpp CMakeLists.txt
-  git commit -S -m "phase3g10(widget): add ScrollableLabel + unit test
+  git add src/gui/widgets/ScrollableLabel.{h,cpp} tests/tst_scrollable_label.cpp CMakeLists.txt tests/CMakeLists.txt
+  git commit -S -m "phase3g10(widget): add native ScrollableLabel widget + unit test
 
-Ported from AetherSDR for use in RIT/XIT/DIG-offset/FM-offset labels
-on the VFO flag. Wheel-step + double-click inline edit with range
-clamping. 4-case unit test covers wheel up/down, min clamp, parse.
+NereusSDR native composite widget (QStackedWidget with QLabel + QLineEdit)
+for editable numeric displays: RIT/XIT/DIG-offset/FM-offset on the VFO
+flag. Wheel step with range clamp, double-click inline edit with Enter
+commit / Esc cancel, custom format callback. 4-case unit test covers
+wheel up/down, min clamp, parseValue.
+
+Qt skeleton patterns informed by AetherSDR's trivial ScrollableLabel
+(GuardedSlider.h:81-100); NereusSDR's version is a richer native widget
+per source-first exception for control surfaces (Thetis source-first
+still applies to the DSP/radio behavior wired in Stage 2).
+
+Plan §S1.3 reframed from 'port' to 'native widget informed by AetherSDR
+patterns' with amendment note.
 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
   ```
