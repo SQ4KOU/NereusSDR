@@ -277,6 +277,7 @@ set(GUI_SOURCES
     src/gui/SpectrumOverlayMenu.cpp
     src/gui/widgets/FilterPassbandWidget.cpp
     src/gui/widgets/VfoStyles.h
+    src/gui/widgets/VfoLevelBar.cpp
     src/gui/widgets/VfoWidget.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainer.cpp
