@@ -503,6 +503,9 @@ void WaterfallDefaultsPage::buildUI()
     {
         auto row = makeSliderRow(-200, 0, -40, QStringLiteral(" dBm"), levGroup);
         m_highThresholdSlider = row.slider;
+        // Thetis: setup.designer.cs:34259 (udDisplayWaterfallHighLevel)
+        m_highThresholdSlider->setToolTip(QStringLiteral("Waterfall High Signal - Show High Color above this value (gradient in between)."));
+        row.spin->setToolTip(QStringLiteral("Waterfall High Signal - Show High Color above this value (gradient in between)."));
         connect(m_highThresholdSlider, &QSlider::valueChanged, this, [this](int v) {
             if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
                 w->setWfHighThreshold(static_cast<float>(v));
@@ -514,6 +517,9 @@ void WaterfallDefaultsPage::buildUI()
     {
         auto row = makeSliderRow(-200, 0, -130, QStringLiteral(" dBm"), levGroup);
         m_lowThresholdSlider = row.slider;
+        // Thetis: setup.designer.cs:34219 (udDisplayWaterfallLowLevel)
+        m_lowThresholdSlider->setToolTip(QStringLiteral("Waterfall Low Signal - Show Low Color below this value (gradient in between)."));
+        row.spin->setToolTip(QStringLiteral("Waterfall Low Signal - Show Low Color below this value (gradient in between)."));
         connect(m_lowThresholdSlider, &QSlider::valueChanged, this, [this](int v) {
             if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
                 w->setWfLowThreshold(static_cast<float>(v));
@@ -523,6 +529,8 @@ void WaterfallDefaultsPage::buildUI()
     }
 
     m_agcToggle = new QCheckBox(QStringLiteral("AGC"), levGroup);
+    // Thetis: setup.designer.cs:34069 (chkRX1WaterfallAGC)
+    m_agcToggle->setToolTip(QStringLiteral("Automatically calculates Low Level Threshold for Waterfall."));
     connect(m_agcToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setWfAgcEnabled(on);
@@ -531,6 +539,8 @@ void WaterfallDefaultsPage::buildUI()
     levForm->addRow(QString(), m_agcToggle);
 
     m_useSpectrumMinMaxToggle = new QCheckBox(QStringLiteral("Use spectrum min/max"), levGroup);
+    // Thetis: setup.designer.cs:34054 (chkWaterfallUseRX1SpectrumMinMax)
+    m_useSpectrumMinMaxToggle->setToolTip(QStringLiteral("Spectrum Grid min/max used for low and high level"));
     connect(m_useSpectrumMinMaxToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setWfUseSpectrumMinMax(on);
@@ -539,6 +549,8 @@ void WaterfallDefaultsPage::buildUI()
     levForm->addRow(QString(), m_useSpectrumMinMaxToggle);
 
     m_lowColorBtn = new ColorSwatchButton(QColor(Qt::black), levGroup);
+    // Thetis: setup.designer.cs:34176 (clrbtnWaterfallLow)
+    m_lowColorBtn->setToolTip(QStringLiteral("The Color to use when the signal level is at or below the low level set above."));
     // Waterfall "low" colour is conceptually the 0.0 stop of the gradient —
     // exposed here for plan §4.2 W10 parity. SpectrumWidget currently uses
     // gradient tables from wfSchemeStops() so the user's custom value is
@@ -558,6 +570,9 @@ void WaterfallDefaultsPage::buildUI()
     {
         auto row = makeSliderRow(10, 500, 50, QStringLiteral(" ms"), dispGroup);
         m_updatePeriodSlider = row.slider;
+        // Thetis: setup.designer.cs:34145 (udDisplayWaterfallUpdatePeriod)
+        m_updatePeriodSlider->setToolTip(QStringLiteral("How often to update (scroll another pixel line) on the waterfall display. Note that this is tamed by the FPS setting."));
+        row.spin->setToolTip(QStringLiteral("How often to update (scroll another pixel line) on the waterfall display. Note that this is tamed by the FPS setting."));
         connect(m_updatePeriodSlider, &QSlider::valueChanged, this, [this](int v) {
             if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
                 w->setWfUpdatePeriodMs(v);
@@ -567,6 +582,8 @@ void WaterfallDefaultsPage::buildUI()
     }
 
     m_reverseToggle = new QCheckBox(QStringLiteral("Reverse scroll"), dispGroup);
+    // NereusSDR extension — no Thetis equivalent
+    m_reverseToggle->setToolTip(QStringLiteral("Waterfall normally scrolls top to bottom (newest at top). When checked, scrolls bottom to top (newest at bottom)."));
     connect(m_reverseToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setWfReverseScroll(on);
@@ -577,6 +594,10 @@ void WaterfallDefaultsPage::buildUI()
     {
         auto row = makeSliderRow(0, 100, 100, QStringLiteral("%"), dispGroup);
         m_opacitySlider = row.slider;
+        // Thetis: setup.designer.cs:2056 (tbRX1WaterfallOpacity) — rewritten
+        // Thetis original: (none)
+        m_opacitySlider->setToolTip(QStringLiteral("Waterfall opacity (0 = fully transparent, 100 = fully opaque). Blends the waterfall over the spectrum background."));
+        row.spin->setToolTip(QStringLiteral("Waterfall opacity (0 = fully transparent, 100 = fully opaque). Blends the waterfall over the spectrum background."));
         connect(m_opacitySlider, &QSlider::valueChanged, this, [this](int v) {
             if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
                 w->setWfOpacity(v);
@@ -592,6 +613,9 @@ void WaterfallDefaultsPage::buildUI()
         QStringLiteral("LinLog"),    QStringLiteral("LinRad"),
         QStringLiteral("Custom")
     });
+    // Thetis: setup.designer.cs:34110 (comboColorPalette) — rewritten
+    // Thetis original: "Sets the color scheme"
+    m_colorSchemeCombo->setToolTip(QStringLiteral("Waterfall colour palette. Each scheme maps signal level to a different colour gradient from low (dark) to high (bright)."));
     connect(m_colorSchemeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int i) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -606,6 +630,9 @@ void WaterfallDefaultsPage::buildUI()
         QStringLiteral("None"), QStringLiteral("Weighted"),
         QStringLiteral("Logarithmic"), QStringLiteral("Time Window")
     });
+    // Thetis: setup.designer.cs:2083 (comboDispWFAveraging) — rewritten
+    // Thetis original: (none)
+    m_wfAveragingCombo->setToolTip(QStringLiteral("Waterfall averaging mode. Weighted and Time Window smooth rapid signal changes; None shows raw FFT output per row."));
     connect(m_wfAveragingCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int i) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -622,6 +649,9 @@ void WaterfallDefaultsPage::buildUI()
     ovForm->setSpacing(6);
 
     m_showRxFilterToggle = new QCheckBox(QStringLiteral("Show RX filter on waterfall"), ovGroup);
+    // Thetis: setup.designer.cs:3189 (chkShowRXFilterOnWaterfall) — rewritten
+    // Thetis original: (none)
+    m_showRxFilterToggle->setToolTip(QStringLiteral("Overlay the current RX passband filter boundaries on the waterfall display."));
     connect(m_showRxFilterToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setShowRxFilterOnWaterfall(on);
@@ -630,6 +660,9 @@ void WaterfallDefaultsPage::buildUI()
     ovForm->addRow(QString(), m_showRxFilterToggle);
 
     m_showTxFilterToggle = new QCheckBox(QStringLiteral("Show TX filter on RX waterfall"), ovGroup);
+    // Thetis: setup.designer.cs:3187 (chkShowTXFilterOnRXWaterfall) — rewritten
+    // Thetis original: (none)
+    m_showTxFilterToggle->setToolTip(QStringLiteral("Overlay the TX passband filter boundaries on the RX waterfall display."));
     connect(m_showTxFilterToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setShowTxFilterOnRxWaterfall(on);
@@ -638,6 +671,9 @@ void WaterfallDefaultsPage::buildUI()
     ovForm->addRow(QString(), m_showTxFilterToggle);
 
     m_showRxZeroLineToggle = new QCheckBox(QStringLiteral("Show RX zero line on waterfall"), ovGroup);
+    // Thetis: setup.designer.cs:3188 (chkShowRXZeroLineOnWaterfall) — rewritten
+    // Thetis original: (none)
+    m_showRxZeroLineToggle->setToolTip(QStringLiteral("Draw a line on the waterfall at the RX centre frequency (zero-beat reference)."));
     connect(m_showRxZeroLineToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setShowRxZeroLineOnWaterfall(on);
@@ -646,6 +682,9 @@ void WaterfallDefaultsPage::buildUI()
     ovForm->addRow(QString(), m_showRxZeroLineToggle);
 
     m_showTxZeroLineToggle = new QCheckBox(QStringLiteral("Show TX zero line on waterfall"), ovGroup);
+    // Thetis: setup.designer.cs:3242 (chkShowTXZeroLineOnWaterfall) — rewritten
+    // Thetis original: (none)
+    m_showTxZeroLineToggle->setToolTip(QStringLiteral("Draw a line on the waterfall at the TX centre frequency (zero-beat reference)."));
     connect(m_showTxZeroLineToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setShowTxZeroLineOnWaterfall(on);
@@ -663,6 +702,8 @@ void WaterfallDefaultsPage::buildUI()
     m_timestampPosCombo = new QComboBox(timeGroup);
     m_timestampPosCombo->addItems({QStringLiteral("None"), QStringLiteral("Left"),
                                    QStringLiteral("Right")});
+    // NereusSDR extension — no Thetis equivalent
+    m_timestampPosCombo->setToolTip(QStringLiteral("Position of the time stamp drawn on each waterfall row. None disables timestamps; Left and Right place them at the respective edge."));
     connect(m_timestampPosCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int i) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -675,6 +716,8 @@ void WaterfallDefaultsPage::buildUI()
 
     m_timestampModeCombo = new QComboBox(timeGroup);
     m_timestampModeCombo->addItems({QStringLiteral("UTC"), QStringLiteral("Local")});
+    // NereusSDR extension — no Thetis equivalent
+    m_timestampModeCombo->setToolTip(QStringLiteral("Time zone used for waterfall timestamps. UTC uses Coordinated Universal Time; Local uses the system clock time zone."));
     connect(m_timestampModeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int i) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
