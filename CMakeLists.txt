@@ -370,6 +370,7 @@ set(GUI_SOURCES
     src/gui/setup/AudioSetupPages.cpp
     src/gui/setup/DspSetupPages.cpp
     src/gui/setup/DisplaySetupPages.cpp
+    src/gui/setup/SetupHelpers.cpp
     src/gui/setup/TransmitSetupPages.cpp
     src/gui/setup/AppearanceSetupPages.cpp
     src/gui/setup/CatNetworkSetupPages.cpp
