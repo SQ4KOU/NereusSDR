@@ -182,10 +182,12 @@ void SliceModel::setMuted(bool v)
 
 void SliceModel::setAudioPan(double pan)
 {
-    if (!qFuzzyCompare(m_audioPan, pan)) {
-        m_audioPan = pan;
-        emit audioPanChanged(pan);
+    // qFuzzyCompare is undefined when either arg is 0.0; use the subtraction-to-zero pattern.
+    if (qFuzzyIsNull(m_audioPan - pan)) {
+        return;
     }
+    m_audioPan = pan;
+    emit audioPanChanged(pan);
 }
 
 void SliceModel::setSsqlEnabled(bool v)
@@ -198,10 +200,12 @@ void SliceModel::setSsqlEnabled(bool v)
 
 void SliceModel::setSsqlThresh(double dB)
 {
-    if (!qFuzzyCompare(m_ssqlThresh, dB)) {
-        m_ssqlThresh = dB;
-        emit ssqlThreshChanged(dB);
+    // qFuzzyCompare is undefined when either arg is 0.0; use the subtraction-to-zero pattern.
+    if (qFuzzyIsNull(m_ssqlThresh - dB)) {
+        return;
     }
+    m_ssqlThresh = dB;
+    emit ssqlThreshChanged(dB);
 }
 
 void SliceModel::setAmsqEnabled(bool v)
@@ -214,10 +218,12 @@ void SliceModel::setAmsqEnabled(bool v)
 
 void SliceModel::setAmsqThresh(double dB)
 {
-    if (!qFuzzyCompare(m_amsqThresh, dB)) {
-        m_amsqThresh = dB;
-        emit amsqThreshChanged(dB);
+    // qFuzzyCompare is undefined when either arg is 0.0; use the subtraction-to-zero pattern.
+    if (qFuzzyIsNull(m_amsqThresh - dB)) {
+        return;
     }
+    m_amsqThresh = dB;
+    emit amsqThreshChanged(dB);
 }
 
 void SliceModel::setFmsqEnabled(bool v)
@@ -230,10 +236,12 @@ void SliceModel::setFmsqEnabled(bool v)
 
 void SliceModel::setFmsqThresh(double dB)
 {
-    if (!qFuzzyCompare(m_fmsqThresh, dB)) {
-        m_fmsqThresh = dB;
-        emit fmsqThreshChanged(dB);
+    // qFuzzyCompare is undefined when either arg is 0.0; use the subtraction-to-zero pattern.
+    if (qFuzzyIsNull(m_fmsqThresh - dB)) {
+        return;
     }
+    m_fmsqThresh = dB;
+    emit fmsqThreshChanged(dB);
 }
 
 void SliceModel::setAgcThreshold(int dBu)
@@ -358,10 +366,12 @@ void SliceModel::setFmCtcssMode(int mode)
 
 void SliceModel::setFmCtcssValueHz(double hz)
 {
-    if (!qFuzzyCompare(m_fmCtcssValueHz, hz)) {
-        m_fmCtcssValueHz = hz;
-        emit fmCtcssValueHzChanged(hz);
+    // qFuzzyCompare is undefined when either arg is 0.0; use the subtraction-to-zero pattern.
+    if (qFuzzyIsNull(m_fmCtcssValueHz - hz)) {
+        return;
     }
+    m_fmCtcssValueHz = hz;
+    emit fmCtcssValueHzChanged(hz);
 }
 
 void SliceModel::setFmOffsetHz(int hz)

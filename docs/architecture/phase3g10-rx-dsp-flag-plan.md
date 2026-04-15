@@ -593,8 +593,9 @@ Stage 1 SliceModel stubs: property storage + emit changed signal, **no** `RxChan
 
 - `m_fmCtcssValueHz`: plan specified 88.5 Hz; Thetis `console.cs:40500` and `radio.cs:2899` set `ctcss_freq = 100.0`. Corrected to 100.0 Hz.
 - `m_rttyMarkHz`: plan specified 2125 Hz; Thetis `setup.designer.cs:40635` labels `udDSPRX1DollyF1 = 2295` as "RTTY MARK" and `udDSPRX1DollyF0 = 2125` as "RTTY SPACE". The plan's value was the SPACE tone misfiled as the mark. Corrected to 2295 Hz; `rttyShiftHz = 170` is unchanged.
+- `m_agcHang`: plan specified 0 ms; Thetis `radio.cs:1057` sets `rx_agc_hang = 250 ms`. Corrected to 250 ms. This correction was silently applied during the initial S1.6 commit (`9d2d50f`) along with the other reconciliations; this fixup amends the plan text to match.
 
-Both corrections are pure DSP-constant source-first fixes per CLAUDE.md / `feedback_source_first_exceptions.md`. Property names stay unchanged (user-approved Option A).
+All three corrections are pure DSP-constant source-first fixes per CLAUDE.md / `feedback_source_first_exceptions.md`. Property names stay unchanged (user-approved Option A).
 
 - [ ] **S1.6.1** Extend `src/core/WdspTypes.h` with new enums:
 
@@ -625,7 +626,7 @@ Replicate this shape for each NYI row in spec §6.2. Use exact names:
 `setLocked/setMuted/setAudioPan/setSsqlEnabled/setSsqlThresh/setAmsqEnabled/setAmsqThresh/setFmsqEnabled/setFmsqThresh/setAgcThreshold/setAgcHang/setAgcSlope/setAgcAttack/setAgcDecay/setRitEnabled/setRitHz/setXitEnabled/setXitHz/setEmnrEnabled/setSnbEnabled/setApfEnabled/setApfTuneHz/setBinauralEnabled/setFmCtcssMode/setFmCtcssValueHz/setFmOffsetHz/setFmSimplex/setFmReverse/setDigOffsetHz/setRttyMarkHz/setRttyShiftHz`.
 
 Default values (from Thetis `setup.cs` / `console.cs`):
-- `m_agcThreshold{-20}`, `m_agcHang{0}`, `m_agcSlope{0}`, `m_agcAttack{2}`, `m_agcDecay{250}`
+- `m_agcThreshold{-20}`, `m_agcHang{250}`, `m_agcSlope{0}`, `m_agcAttack{2}`, `m_agcDecay{250}`
 - `m_ritHz{0}`, `m_ritEnabled{false}`, `m_xitHz{0}`, `m_xitEnabled{false}`
 - `m_locked{false}`, `m_muted{false}`, `m_audioPan{0.0}` (−1..+1, 0 = center)
 - `m_emnrEnabled{false}`, `m_snbEnabled{false}`, `m_apfEnabled{false}`, `m_apfTuneHz{0}`
