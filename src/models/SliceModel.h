@@ -341,12 +341,12 @@ private:
     int    m_apfTuneHz{0};            // Neutral default — zero tune offset
     bool   m_binauralEnabled{false};  // Neutral default — feature off at start
     int    m_fmCtcssMode{0};          // Neutral default — Off (0 = disabled)
-    double m_fmCtcssValueHz{88.5};    // Plan default 88.5 Hz — NOTE: Thetis console.cs:40500 has ctcss_freq = 100.0; mismatch reported to controller, using plan value pending amendment
+    double m_fmCtcssValueHz{100.0};   // From Thetis console.cs:40500 — ctcss_freq = 100.0; radio.cs:2899 — ctcss_freq_hz = 100.0
     int    m_fmOffsetHz{0};           // Neutral default — zero offset
     bool   m_fmSimplex{true};         // Neutral default — simplex on at start
     bool   m_fmReverse{false};        // Neutral default — normal direction
     int    m_digOffsetHz{0};          // Neutral default — zero offset
-    int    m_rttyMarkHz{2125};        // Plan default 2125 Hz — NOTE: Thetis setup.designer.cs:40635 labels F1=2295 as "RTTY MARK frequency"; F0=2125 is "SPACE"; mismatch reported to controller, using plan value pending amendment
+    int    m_rttyMarkHz{2295};        // From Thetis setup.designer.cs:40635 — tooltip "RTTY MARK frequency" on udDSPRX1DollyF1; value 2295 (line 40637). F0=2125 is SPACE (line 40665).
     int    m_rttyShiftHz{170};        // From Thetis radio.cs:2043-2044 — rx_dolly_freq1 = 2295, rx_dolly_freq0 = 2125 → shift = 2295−2125 = 170 Hz
 };
 

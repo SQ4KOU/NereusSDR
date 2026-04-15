@@ -589,6 +589,13 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 
 Stage 1 SliceModel stubs: property storage + emit changed signal, **no** `RxChannel` calls. Stage 2 commits replace each stub body with the real WDSP forwarding.
 
+**Amendment (post-review, 2026-04-15):** Two default values reconciled against Thetis source-of-truth after the implementer flagged drift:
+
+- `m_fmCtcssValueHz`: plan specified 88.5 Hz; Thetis `console.cs:40500` and `radio.cs:2899` set `ctcss_freq = 100.0`. Corrected to 100.0 Hz.
+- `m_rttyMarkHz`: plan specified 2125 Hz; Thetis `setup.designer.cs:40635` labels `udDSPRX1DollyF1 = 2295` as "RTTY MARK" and `udDSPRX1DollyF0 = 2125` as "RTTY SPACE". The plan's value was the SPACE tone misfiled as the mark. Corrected to 2295 Hz; `rttyShiftHz = 170` is unchanged.
+
+Both corrections are pure DSP-constant source-first fixes per CLAUDE.md / `feedback_source_first_exceptions.md`. Property names stay unchanged (user-approved Option A).
+
 - [ ] **S1.6.1** Extend `src/core/WdspTypes.h` with new enums:
 
 ```cpp
@@ -623,9 +630,9 @@ Default values (from Thetis `setup.cs` / `console.cs`):
 - `m_locked{false}`, `m_muted{false}`, `m_audioPan{0.0}` (−1..+1, 0 = center)
 - `m_emnrEnabled{false}`, `m_snbEnabled{false}`, `m_apfEnabled{false}`, `m_apfTuneHz{0}`
 - `m_binauralEnabled{false}`
-- FM: `m_fmCtcssMode{0}` (Off), `m_fmCtcssValueHz{88.5}`, `m_fmOffsetHz{0}`, `m_fmSimplex{true}`, `m_fmReverse{false}`
+- FM: `m_fmCtcssMode{0}` (Off), `m_fmCtcssValueHz{100.0}`, `m_fmOffsetHz{0}`, `m_fmSimplex{true}`, `m_fmReverse{false}`
 - DIG: `m_digOffsetHz{0}`
-- RTTY: `m_rttyMarkHz{2125}`, `m_rttyShiftHz{170}`
+- RTTY: `m_rttyMarkHz{2295}`, `m_rttyShiftHz{170}`
 - Squelch: `m_ssqlEnabled{false}`, `m_ssqlThreshDb{-150.0}`, `m_amsqEnabled{false}`, `m_amsqThreshDb{-150.0}`, `m_fmsqEnabled{false}`, `m_fmsqThreshDb{-150.0}`
 
 **Every default gets a `// From Thetis <file>:<line>` comment.** If you can't find the Thetis line number (because Console/ is missing per §5), add a `// Thetis default — citation pending Stage 2 gate` comment. The Stage 2 source-first gate will force a replacement of that comment with a real citation before the feature-slice commit.
