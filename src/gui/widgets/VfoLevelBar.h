@@ -8,7 +8,7 @@ public:
     void setValue(float dbm);   // slot-safe; schedules update()
     float value() const { return m_value; }
     double fillFraction() const;  // 0..1, clamped
-    bool isAboveS9() const { return m_value >= -73.0f; }
+    bool isAboveS9() const { return m_value >= kS9Dbm; }
     QSize sizeHint() const override { return {180, 22}; }
     QSize minimumSizeHint() const override { return {120, 22}; }
 protected:
