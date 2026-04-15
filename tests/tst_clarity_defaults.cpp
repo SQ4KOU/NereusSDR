@@ -1,8 +1,14 @@
 // tst_clarity_defaults.cpp
 //
 // Phase 3G-9b — unit smoke for the Clarity Blue palette registration
-// and narrow-band design invariants. Pure math over wfSchemeStops() —
+// and full-spectrum design invariants. Pure math over wfSchemeStops() —
 // no QWidget event loop, no AppSettings interaction.
+//
+// Design philosophy: Clarity Blue is a full-spectrum rainbow palette
+// (black → blue → cyan → green → yellow → red → magenta) with a deep-
+// black noise-floor region at the bottom. The "blue look" users see
+// comes from AGC + tight thresholds keeping most signals in the blue/
+// cyan range; strong signals still progress cleanly to red/magenta.
 
 #include <QtTest/QtTest>
 
@@ -28,7 +34,7 @@ private slots:
         int count = 0;
         const WfGradientStop* stops = wfSchemeStops(WfColorScheme::ClarityBlue, count);
         QVERIFY(stops != nullptr);
-        QCOMPARE(count, 6);
+        QVERIFY(count >= 6);  // rainbow needs enough stops for smooth progression
 
         // First stop is exactly at 0.0, last at 1.0 — covers the full
         // normalized range.
@@ -40,28 +46,74 @@ private slots:
             QVERIFY2(stops[i].pos > stops[i - 1].pos,
                      "Clarity Blue gradient stops must be monotonic");
         }
-
-        // Narrow-band property: at least 50% of the range must map to
-        // the "dark" region (first two stops). This is the design
-        // invariant — if someone changes the stop positions and the
-        // dark region shrinks below 50%, the "AetherSDR readability"
-        // look is lost.
-        QVERIFY2(stops[1].pos >= 0.50f,
-                 "Clarity Blue must reserve >= 50% of the range for the "
-                 "dark noise-floor region (narrow-band palette invariant)");
     }
 
-    void clarityBlue_topStopIsNearWhite()
+    void clarityBlue_bottomIsDeepBlack()
+    {
+        int count = 0;
+        const WfGradientStop* stops = wfSchemeStops(WfColorScheme::ClarityBlue, count);
+        QVERIFY(count >= 2);
+
+        // First stop must be pure/near-pure black — noise floor renders
+        // as dark background, not navy. This is what separates Clarity
+        // from Default/Enhanced, both of which start at dark blue.
+        QVERIFY2(stops[0].r <= 10 && stops[0].g <= 10 && stops[0].b <= 10,
+                 "Clarity Blue bottom stop must be pure/near-pure black");
+
+        // Second stop must still be in the lower-third (<= 0.33) and
+        // still very dark so the noise floor stays quiet.
+        QVERIFY2(stops[1].pos <= 0.33f,
+                 "Clarity Blue second stop must stay in the dark region "
+                 "(<= 33% of range) to keep the noise floor quiet");
+        const int brightness1 = stops[1].r + stops[1].g + stops[1].b;
+        QVERIFY2(brightness1 <= 80,
+                 "Clarity Blue second stop must be dark (r+g+b <= 80) so "
+                 "noise floor renders as uniform near-black");
+    }
+
+    void clarityBlue_topIsVividRainbowPeak()
     {
         int count = 0;
         const WfGradientStop* stops = wfSchemeStops(WfColorScheme::ClarityBlue, count);
         QVERIFY(count >= 1);
         const WfGradientStop& top = stops[count - 1];
-        // Strong signals should pop as near-white — brightness >= 200
-        // on every channel keeps the "peak" visible.
-        QVERIFY2(top.r >= 200 && top.g >= 200 && top.b >= 200,
-                 "Clarity Blue top stop must be near-white so strong "
-                 "signals pop out");
+
+        // Strong signals should pop with a vivid peak colour — at least
+        // one channel saturated, total brightness high. Rainbow palettes
+        // reach red/orange/magenta at peak, NOT white (unlike a narrow-
+        // band monochrome scheme).
+        const int maxChannel = std::max({top.r, top.g, top.b});
+        QVERIFY2(maxChannel >= 200,
+                 "Clarity Blue top stop must have at least one channel "
+                 "saturated (>= 200) so peak signals are vivid");
+
+        const int totalBrightness = top.r + top.g + top.b;
+        QVERIFY2(totalBrightness >= 300,
+                 "Clarity Blue top stop total brightness must be >= 300");
+    }
+
+    void clarityBlue_hasRainbowProgression()
+    {
+        // The palette must reach at least one warm-colour stop (red or
+        // orange — dominant R channel) somewhere in the upper half.
+        // This is the defining full-spectrum invariant: if someone
+        // replaces the stops with a blue-only ramp, this test fires.
+        int count = 0;
+        const WfGradientStop* stops = wfSchemeStops(WfColorScheme::ClarityBlue, count);
+
+        bool foundWarmStop = false;
+        for (int i = 0; i < count; ++i) {
+            if (stops[i].pos < 0.5f) { continue; }
+            // Warm = red channel dominant and at least 192 intensity.
+            if (stops[i].r >= 192 && stops[i].r > stops[i].b) {
+                foundWarmStop = true;
+                break;
+            }
+        }
+        QVERIFY2(foundWarmStop,
+                 "Clarity Blue must include at least one warm (red-"
+                 "dominant) stop in the upper half of the range — the "
+                 "full-spectrum rainbow invariant");
     }
 };
 

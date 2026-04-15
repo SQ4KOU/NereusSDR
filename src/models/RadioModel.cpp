@@ -623,16 +623,18 @@ void RadioModel::applyClaritySmoothDefaults()
     //    at 30 FPS). See waterfall-tuning.md §3.
     sw->setAverageAlpha(0.05f);
 
-    // 4. Trace colour — neutral light-gray, not saturated. Sits in front of
-    //    the waterfall without competing.
-    QColor traceColor(0xe0, 0xe8, 0xf0, 200);  // #e0e8f0 alpha 200
-    sw->setFillColor(traceColor);
+    // 4. Trace colour — pure white, thin, sits cleanly in front of the
+    //    waterfall without competing. Visual target: 2026-04-14 reference.
+    sw->setFillColor(QColor(0xff, 0xff, 0xff, 230));
 
-    // 5. Threshold gap — centred on the typical 80m noise floor.
-    sw->setWfLowThreshold(-110.0f);
-    sw->setWfHighThreshold(-70.0f);
+    // 5. Pan fill OFF — trace renders as a thin line, not a filled curve.
+    //    NereusSDR's default is fill-on; turn it off to match the reference.
+    sw->setPanFillEnabled(false);
 
-    // 6. Waterfall AGC — tracks band conditions automatically.
+    // 6. Waterfall AGC — tracks band conditions automatically. With AGC on,
+    //    the Low/High threshold values are continuously overwritten by the
+    //    running min/max of visible FFT bins (see SpectrumWidget.cpp
+    //    pushWaterfallRow), so setting them in this profile is redundant.
     sw->setWfAgcEnabled(true);
 
     // 7. Waterfall update period — 30 ms for smooth scroll motion.
