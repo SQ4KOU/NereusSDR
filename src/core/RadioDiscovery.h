@@ -119,6 +119,13 @@ public:
 
     QList<RadioInfo> discoveredRadios() const;
 
+    // Mark a MAC as currently-connected so onStaleCheck will not emit
+    // radioLost for it. Once a radio is streaming (P1 ep6 / P2 DDC),
+    // it stops replying to discovery broadcasts, so the stale timer
+    // would otherwise fire ~15s after every healthy connect.
+    void setConnectedMac(const QString& mac) { m_connectedMac = mac; }
+    void clearConnectedMac() { m_connectedMac.clear(); }
+
     // Public static parsers — exposed for unit-testing in Task 5.
     // Both return true on a valid discovery reply and populate 'out'.
     // From Thetis clsRadioDiscovery.cs parseDiscoveryReply() P1/P2 branches.
@@ -154,6 +161,7 @@ private:
     QTimer m_staleTimer;
     QMap<QString, RadioInfo> m_radios;   // keyed by MAC address
     QMap<QString, qint64> m_lastSeen;    // MAC -> timestamp
+    QString m_connectedMac;              // MAC currently in use by a RadioConnection; exempt from stale-removal
 };
 
 } // namespace NereusSDR

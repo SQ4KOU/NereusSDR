@@ -77,14 +77,7 @@ VfoWidget::VfoWidget(QWidget* parent)
     buildUI();
 }
 
-VfoWidget::~VfoWidget()
-{
-    // Floating buttons are parented to SpectrumWidget, clean them up
-    delete m_closeBtn;
-    delete m_lockBtn;
-    delete m_recBtn;
-    delete m_playBtn;
-}
+VfoWidget::~VfoWidget() = default;
 
 void VfoWidget::buildUI()
 {

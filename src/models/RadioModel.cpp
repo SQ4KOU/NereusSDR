@@ -132,10 +132,17 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // Configure ReceiverManager with hardware capabilities
     m_receiverManager->setMaxReceivers(info.maxReceivers);
 
-    // Create receiver 0 with DDC mapping for ANAN-G2
-    // From Thetis console.cs:8216 UpdateDDCs: DDC2 is the primary RX for 2-ADC boards
+    // Create receiver 0 with protocol-appropriate DDC mapping.
+    // P2 2-ADC boards (ANAN-G2/Saturn) use DDC2 as primary RX per
+    // Thetis console.cs:8216 UpdateDDCs. P1 radios deliver samples on
+    // hardware receiver index 0, so leave the mapping auto-assigned
+    // (which rebuildHardwareMapping resolves to 0 for the first active
+    // receiver). Hardcoding DDC2 for everything dropped every P1 ep6
+    // packet at ReceiverManager::feedIqData on tester hardware.
     int rxIdx = m_receiverManager->createReceiver();
-    m_receiverManager->setDdcMapping(rxIdx, 2);   // DDC2 for ANAN-G2
+    if (info.protocol == ProtocolVersion::Protocol2) {
+        m_receiverManager->setDdcMapping(rxIdx, 2);   // DDC2 for 2-ADC P2 boards
+    }
     m_receiverManager->setAdcForReceiver(rxIdx, 0); // ADC0
 
     // Create slice 0 and load persisted VFO state from AppSettings
@@ -152,14 +159,25 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // Initialize WDSP DSP engine (wisdom runs async — channel creation
     // is deferred until initializedChanged fires)
     QString configDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
-    connect(m_wdspEngine, &WdspEngine::initializedChanged, this, [this](bool ok) {
+    // Protocol-dependent DSP rates. Thetis P1 default is 192 kHz on the
+    // wire (setup.cs: SampleRate1 default = 192000); Saturn/ANAN-G2 P2
+    // streams at 768 kHz. in_size follows the Thetis formula
+    // 64 * input_rate / 48000 so fexchange2 sees 48-kHz output chunks.
+    const bool isP1 = (info.protocol == ProtocolVersion::Protocol1);
+    const int wdspInputRate = isP1 ? 192000 : 768000;
+    const int wdspInSize    = isP1 ? 256    : 1024;
+
+    connect(m_wdspEngine, &WdspEngine::initializedChanged, this,
+            [this, wdspInputRate, wdspInSize](bool ok) {
         if (!ok) {
             return;
         }
-        // Create primary RX channel once WDSP is ready
-        // in_size=1024 at 768k (Thetis formula: 64 * 768000/48000 = 1024)
-        // WDSP decimates 768k→48k internally, outputs 64 samples per exchange
-        RxChannel* rxCh = m_wdspEngine->createRxChannel(0, 1024, 4096, 768000, 48000, 48000);
+        // Create primary RX channel once WDSP is ready. in_size follows
+        // Thetis cmaster.c create_rcvr: 64 * input_rate / 48000. WDSP
+        // decimates input_rate -> 48000 internally and outputs 64 samples
+        // per fexchange2 call.
+        RxChannel* rxCh = m_wdspEngine->createRxChannel(0, wdspInSize, 4096,
+                                                         wdspInputRate, 48000, 48000);
         if (rxCh) {
             // Apply slice state to WDSP channel (no longer hardcoded)
             if (m_activeSlice) {
@@ -203,10 +221,40 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
     m_connThread->start();
 
-    // Dispatch connect command to worker thread
+    // CRITICAL: push sample rate + VFO frequency to the connection BEFORE
+    // dispatching connectToRadio. The worker thread dequeues invokeMethod
+    // calls in FIFO order, so whatever we queue first runs first. If we
+    // queue connectToRadio before the setters, connectToRadio -> sendCommandFrame
+    // -> composeEp2Frame reads m_rxFreqHz[0]=0 and m_sampleRate=48000 defaults
+    // and sends a primed ep2 frame with phase word 0 to the radio just before
+    // metis-start. Result: radio initializes DDC at freq=0 (bypass/idle state)
+    // and streams ADC-pinned data with Q=0 forever. Verified against Thetis
+    // NetworkIO.cs flow: Thetis always sets SetDDCRate + SetVFOfreq BEFORE
+    // SendStartToMetis, so ForceCandCFrame inside SendStartToMetis reads the
+    // correct freq/rate from globals.
+    const int wireSampleRate = wdspInputRate;
+    QMetaObject::invokeMethod(m_connection, [conn = m_connection, wireSampleRate]() {
+        conn->setSampleRate(wireSampleRate);
+    });
+    if (m_activeSlice) {
+        int hwRx = m_receiverManager->receiverConfig(0).hardwareRx;
+        if (hwRx < 0) { hwRx = 0; }
+        quint64 freqHz = m_activeSlice->frequency();
+        QMetaObject::invokeMethod(m_connection, [conn = m_connection, hwRx, freqHz]() {
+            conn->setReceiverFrequency(hwRx, freqHz);
+        });
+    }
+
+    // Now dispatch connectToRadio -- it will find the correct m_rxFreqHz[0]
+    // and m_sampleRate when sendCommandFrame runs inside it.
     QMetaObject::invokeMethod(m_connection, [conn = m_connection, info]() {
         conn->connectToRadio(info);
     });
+
+    // Tell MainWindow / FFTEngine / SpectrumWidget the wire rate so bin math
+    // matches (P1=192k, P2=768k). Without this the FFT thinks 768k and
+    // compresses the real spectrum by 4x on P1.
+    emit wireSampleRateChanged(static_cast<double>(wireSampleRate));
 
     qCDebug(lcConnection) << "Connecting to" << info.displayName()
                           << "P" << static_cast<int>(info.protocol);
@@ -554,6 +602,9 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
             AppSettings& s = AppSettings::instance();
             s.setLastConnected(m_lastRadioInfo.macAddress);
             s.save();
+            // Exempt this MAC from discovery stale-removal — once the
+            // radio is streaming it stops replying to broadcasts.
+            m_discovery->setConnectedMac(m_lastRadioInfo.macAddress);
         }
         // Phase 3I — fan out to HardwarePage so its sub-tabs populate with
         // the connected radio's fields (Radio Info labels, sample rate,
@@ -562,12 +613,14 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
         break;
     case ConnectionState::Disconnected:
         qCDebug(lcConnection) << "Disconnected from" << m_name;
+        m_discovery->clearConnectedMac();
         break;
     case ConnectionState::Connecting:
         qCDebug(lcConnection) << "Connecting to" << m_name << "...";
         break;
     case ConnectionState::Error:
         qCWarning(lcConnection) << "Connection error for" << m_name;
+        m_discovery->clearConnectedMac();
         break;
     }
 }

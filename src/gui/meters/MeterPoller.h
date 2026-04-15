@@ -3,6 +3,7 @@
 #include "core/WdspTypes.h"
 
 #include <QObject>
+#include <QPointer>
 #include <QTimer>
 #include <QVector>
 
@@ -77,7 +78,7 @@ private slots:
 
 private:
     QTimer m_timer;
-    RxChannel* m_rxChannel{nullptr};
+    QPointer<RxChannel> m_rxChannel;
     QVector<MeterWidget*> m_targets;
 };
 

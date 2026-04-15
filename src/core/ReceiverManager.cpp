@@ -181,12 +181,30 @@ void ReceiverManager::feedIqData(int hwReceiverIndex, const QVector<float>& samp
 {
     auto it = m_hwToLogical.constFind(hwReceiverIndex);
     if (it == m_hwToLogical.constEnd()) {
+        if (!m_firstDropLogged) {
+            m_firstDropLogged = true;
+            QStringList mapped;
+            for (auto mi = m_hwToLogical.constBegin(); mi != m_hwToLogical.constEnd(); ++mi) {
+                mapped << QString("hw%1->rx%2").arg(mi.key()).arg(mi.value());
+            }
+            qCWarning(lcReceiver) << "ReceiverManager: first feedIqData dropped;"
+                                  << "hwReceiverIndex=" << hwReceiverIndex
+                                  << "map=" << (mapped.isEmpty() ? QStringLiteral("(empty)") : mapped.join(','));
+        }
         return;
     }
 
     int logicalIndex = it.value();
     auto rxIt = m_receivers.constFind(logicalIndex);
     if (rxIt != m_receivers.constEnd()) {
+        if (!m_firstForwardLogged) {
+            m_firstForwardLogged = true;
+            qCInfo(lcReceiver) << "ReceiverManager: first feedIqData forwarded;"
+                               << "hw=" << hwReceiverIndex
+                               << "logical=" << logicalIndex
+                               << "wdspChannel=" << rxIt->wdspChannel
+                               << "samples=" << samples.size();
+        }
         emit iqDataForReceiver(logicalIndex, samples);
         if (rxIt->wdspChannel >= 0) {
             emit iqDataForChannel(rxIt->wdspChannel, samples);

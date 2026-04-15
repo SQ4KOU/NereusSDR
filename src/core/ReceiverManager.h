@@ -112,6 +112,10 @@ private:
     // Mapping from hardware DDC index to logical receiver index
     QMap<int, int> m_hwToLogical;
 
+    // Diagnostic: one-shot logging of first successful and first dropped feedIqData
+    bool m_firstForwardLogged{false};
+    bool m_firstDropLogged{false};
+
     static const ReceiverConfig kInvalidConfig;
 };
 

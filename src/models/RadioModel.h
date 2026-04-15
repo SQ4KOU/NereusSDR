@@ -91,6 +91,10 @@ public:
 signals:
     void infoChanged();
     void connectionStateChanged();
+    // Emitted when the on-air sample rate for the current connection is
+    // known. MainWindow reacts by updating FFTEngine + SpectrumWidget so
+    // bin math matches the wire rate (P1=192k, P2=768k).
+    void wireSampleRateChanged(double rateHz);
     // Fires on each transition to Connected with the RadioInfo of the live
     // connection. HardwarePage (Phase 3I) listens to this to repopulate
     // sub-tabs with per-radio fields.
