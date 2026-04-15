@@ -672,36 +672,57 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 - Rewrite: `src/gui/widgets/VfoWidget.cpp` — first stage (tabs still wrong in this commit; fixed in S1.8)
 - Source: `~/AetherSDR/src/gui/VfoWidget.cpp:235-520` — `buildUI()` header + freq + meter rows
 
-- [ ] **S1.7.1** Read AetherSDR `VfoWidget.cpp:235-520` and capture the exact layout calls.
+**Amendment (post-review, 2026-04-15):** Scope tightened after scouting the current VfoWidget:
 
-- [ ] **S1.7.2** Rewrite `src/gui/widgets/VfoWidget.h` to match the class map in spec §7.2. Drop all members no longer in the map (current `m_nbBtn`/`m_nrBtn`/`m_anfBtn` single-use members; they will be replaced by the grid in S1.8). Keep the class name and public API surface minimal for now — add only the header/freq/meter members plus a placeholder `QStackedWidget* m_tabStack{nullptr}` that S1.8 will populate.
+1. **MeterPoller has no signals.** The plan referenced `MeterPoller::smeterChanged(double)` but MeterPoller pushes directly to `MeterWidget*` targets via polling — no signals at all. S1.7 does NOT add new MeterPoller wiring; `setSmeter(double)` keeps its existing (zero-caller) shape. Stage 2 builds the real meter pipeline as part of DSP state wiring.
 
-- [ ] **S1.7.3** Rewrite `buildUI()` in `VfoWidget.cpp` for the header + freq + meter rows. For every control:
-  - Use `VfoStyles.h` constants.
-  - Connect `m_rxAntBtn` / `m_txAntBtn` to `SliceModel::setRxAntenna` / `setTxAntenna` via QMenu popup (port AetherSDR pattern).
-  - `m_filterWidthLbl` derives from `SliceModel::filterLow/High` via a helper `formatFilterWidth(int lo, int hi)` that shows `"2.7K"` for 2700 Hz etc.
-  - `m_splitBadge` click toggles `SliceModel::setTxSlice` on the *other* slice — for Stage 1 just emit `splitToggled()` signal; wiring of split semantics happens in a later phase.
-  - `m_txBadge` click toggles `SliceModel::setTxSlice(!isTxSlice())`.
-  - `m_sliceBadge` shows the slice letter (A/B/C/D from `sliceIndex()`).
-  - `m_freqStack` contains `m_freqLabel` (26px bold) and `m_freqEdit` (cyan 22px, editing mode); double-click on label flips to edit.
-  - `m_levelBar` is a `VfoLevelBar*` (from S1.2); connect to meter poller via `MeterPoller::smeterChanged(double)` — if that signal name differs in current code, grep `src/core/MeterPoller*` for the correct name.
+2. **Current VfoWidget already has most expected top-row members.** The existing class already declares `m_rxAntBtn`, `m_txAntBtn`, `m_filterWidthLbl`, `m_txBadge`, `m_sliceBadge`, `m_freqStack`, `m_freqLabel`, `m_freqEdit`. S1.7 is therefore a surgical edit, not a rewrite: replace `m_smeterLabel` with a `VfoLevelBar* m_levelBar`, add `m_splitBadge` as a new hidden label, update `setSmeter` to call `m_levelBar->setValue`. Header and freq rows are not rebuilt.
 
-- [ ] **S1.7.4** Build and launch the app manually:
+3. **`m_nbBtn`/`m_nrBtn`/`m_anfBtn` NOT dropped here.** The plan said to drop them; doing so would break the tab construction code and leave a non-compiling intermediate state. S1.8 drops them when it replaces the DSP grid. This preserves CI-bisectability.
+
+4. **No manual launch verification.** S1.7.4's "launch the app and connect to a radio" step is a human-only verification. Automated verification is: clean build + existing S1.2/S1.3/S1.5 tests still green.
+
+- [x] **S1.7.1** Read AetherSDR `VfoWidget.cpp:235-520` and capture the exact layout calls.
+
+- [x] **S1.7.2** Surgical header edits to `src/gui/widgets/VfoWidget.h`:
+  - Remove `m_smeterLabel`
+  - Add `#include "VfoLevelBar.h"`
+  - Add `VfoLevelBar* m_levelBar{nullptr};`
+  - Add `QLabel* m_splitBadge{nullptr};`
+  - Keep `m_smeterDbm{-127.0}` as cached value
+
+- [x] **S1.7.3** Edit `VfoWidget.cpp`:
+  - `buildSmeterRow()`: replace `m_smeterLabel` construction with `m_levelBar = new VfoLevelBar(this)`
+  - `setSmeter(double dbm)`: update body to `m_levelBar->setValue(float(dbm))`
+  - Construct `m_splitBadge` in the header row, hidden by default, styled like `m_txBadge`
+
+- [x] **S1.7.4** Verify:
   ```
-  cmake --build build -j && ./build/NereusSDR
+  cmake --build build -j
+  ctest --test-dir build -R "tst_vfo_level_bar|tst_scrollable_label|tst_vfo_mode_containers" --output-on-failure
   ```
-  Expected: launches without crash. The tab bar below the meter row is missing or stub (S1.8 fixes). The header/freq/meter rows are present and styled correctly. Live connect to a radio and confirm the S-meter fills.
+  Expected: clean build, S1.2 6/6 + S1.3 4/4 + S1.5 9/9 = 19 test cases pass. Manual UX verification (launch + connect to radio) is a human task for the controller, performed at Stage 1 exit before opening the draft PR.
 
-- [ ] **S1.7.5** Commit:
+- [x] **S1.7.5** Commit:
   ```
-  git add src/gui/widgets/VfoWidget.{h,cpp}
-  git commit -S -m "phase3g10(flag): rewrite VfoWidget header + freq row + meter row
+  git add src/gui/widgets/VfoWidget.h src/gui/widgets/VfoWidget.cpp docs/architecture/phase3g10-rx-dsp-flag-plan.md
+  git commit -S -m "phase3g10(flag): VfoWidget S-meter → VfoLevelBar + split badge
 
-Top third of the flag rebuilt against AetherSDR VfoWidget.cpp:235-520.
-Flat transparent header with colored antenna/filter labels, 26px bold
-frequency display with faint white border, VfoLevelBar S-meter with
-tick strip above. Tab bar is stubbed in this commit and fully built
-in the next.
+Surgical top-row edits replacing the dead m_smeterLabel stub with
+the new VfoLevelBar widget (S1.2), and adding a hidden m_splitBadge
+QLabel for split-mode indication (wired in Stage 2).
+
+setSmeter(double) now forwards to m_levelBar->setValue(float); the
+method still has zero external callers — Stage 2 builds the real
+MeterPoller → VfoWidget pipeline. Current VfoWidget already had the
+correct header/freq row shape, so no rewrite needed there.
+
+NB/NR/ANF members intentionally preserved — S1.8 drops them when it
+replaces the DSP grid, keeping the intermediate commit buildable.
+
+Plan §S1.7 amended with the tightened scope (MeterPoller signal gap,
+surgical edits only, preserved tab-area members, automated-only
+verification).
 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
   ```

@@ -195,6 +195,16 @@ void VfoWidget::buildHeaderRow()
                         "QPushButton:checked { background: #6a3030; border-color: #ff4444; color: #ff8080; }"));
     hdr->addWidget(m_txBadge);
 
+    // Split badge — hidden in Stage 1; wired in Stage 2 when split semantics land
+    m_splitBadge = new QLabel(QStringLiteral("SPLIT"), this);
+    m_splitBadge->setFixedSize(36, 18);
+    m_splitBadge->setAlignment(Qt::AlignCenter);
+    m_splitBadge->setStyleSheet(
+        QStringLiteral("background: #1a2a3a; border: 1px solid #304050;"
+                        "border-radius: 3px; color: #6888a0; font-size: 10px; font-weight: bold;"));
+    m_splitBadge->setVisible(false);
+    hdr->addWidget(m_splitBadge);
+
     // Slice letter badge
     m_sliceBadge = new QLabel(QStringLiteral("A"), this);
     m_sliceBadge->setFixedSize(18, 18);
@@ -259,13 +269,9 @@ void VfoWidget::buildFrequencyRow()
 
 void VfoWidget::buildSmeterRow()
 {
-    // S-meter: custom painted in paintEvent, with dBm label
-    m_smeterLabel = new QLabel(QStringLiteral("-127 dBm"), this);
-    m_smeterLabel->setFixedHeight(20);
-    m_smeterLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_smeterLabel->setStyleSheet(
-        QStringLiteral("color: #6888a0; font-size: 10px; background: transparent;"));
-    static_cast<QVBoxLayout*>(layout())->addWidget(m_smeterLabel);
+    m_levelBar = new VfoLevelBar(this);
+    m_levelBar->setValue(float(m_smeterDbm));  // seed with cached value (default -127)
+    static_cast<QVBoxLayout*>(layout())->addWidget(m_levelBar);
 }
 
 void VfoWidget::buildTabBar()
@@ -739,8 +745,9 @@ void VfoWidget::setAntennaList(const QStringList& ants)
 void VfoWidget::setSmeter(double dbm)
 {
     m_smeterDbm = dbm;
-    m_smeterLabel->setText(QStringLiteral("%1 dBm").arg(dbm, 0, 'f', 0));
-    update();  // repaint S-meter bar
+    if (m_levelBar) {
+        m_levelBar->setValue(float(dbm));
+    }
 }
 
 // ---- Floating control buttons (AetherSDR pattern) ----
