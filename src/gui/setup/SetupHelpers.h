@@ -17,17 +17,17 @@ namespace NereusSDR {
 
 // Integer slider + QSpinBox pair.
 struct SliderRow {
-    QSlider*  slider;
-    QSpinBox* spin;
-    QWidget*  container;  // HBox with slider + spin, ready to drop into a form layout
+    QSlider*  slider    = nullptr;
+    QSpinBox* spin      = nullptr;
+    QWidget*  container = nullptr;  // HBox with slider + spin, ready to drop into a form layout
 };
 
 // Double slider + QDoubleSpinBox pair. Slider operates in integer units
 // scaled by 10^decimals under the hood.
 struct SliderRowD {
-    QSlider*        slider;
-    QDoubleSpinBox* spin;
-    QWidget*        container;
+    QSlider*        slider    = nullptr;
+    QDoubleSpinBox* spin      = nullptr;
+    QWidget*        container = nullptr;  // HBox with slider + spin, ready to drop into a form layout
 };
 
 // Build an int slider+spinbox row. The slider and spinbox are wired
