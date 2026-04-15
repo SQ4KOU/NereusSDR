@@ -30,11 +30,13 @@
   ```
   Expected: zero MISSING lines. All required headers exist.
 
-- [ ] **0.4** Verify the Thetis clone is *full* (has `Project Files/Source/Console/`). This is the Stage 2 gate from spec §5:
+- [x] **0.4** Verify the Thetis clone is *full* (has `Project Files/Source/Console/`). **Resolved during 2026-04-15 handoff** with a fresh clone at `/Users/j.j.boyd/Thetis`. Sanity check:
   ```
-  ls ~/NereusSDR/../Thetis/Project\ Files/Source/Console/console.cs
+  ls ~/Thetis/Project\ Files/Source/Console/console.cs \
+     ~/Thetis/Project\ Files/Source/Console/dsp.cs \
+     ~/Thetis/Project\ Files/Source/Console/setup.cs
   ```
-  Expected: file present. If `ls` prints `No such file or directory`, Stage 2 is blocked and the agent must either re-clone Thetis in full (`rm -rf ~/NereusSDR/../Thetis && git clone --depth 1 https://github.com/ramdor/Thetis ~/NereusSDR/../Thetis`) OR switch to on-demand `raw.githubusercontent.com` fetches with commit-hash citation in every WDSP-wiring commit. This check is allowed to fail at the start of Stage 1 (Stage 1 does not need Thetis Console), but it **must pass** before task **S2.1.1** or the agent must first re-clone.
+  Expected: all three files present. **Filename correction**: the C# P/Invoke declarations are in `dsp.cs`, not `wdsp.cs` as earlier drafts said. Stage 1 does not need Thetis Console; this gate must still pass before Stage 2 task S2.1.1.
 
 - [ ] **0.5** Build clean baseline:
   ```
@@ -120,7 +122,16 @@
 
 - [ ] **S1.1.2** Create `src/gui/widgets/VfoStyles.h`. Use `#pragma once` and place everything inside `namespace NereusSDR {`. Convert each AetherSDR `static const QString kFoo = "..."` into `inline constexpr QStringView kFoo { u"..." }`. Reason: `constexpr QStringView` is zero-overhead, header-safe, and matches NereusSDR's "no `#define` macros for constants" style rule. Each constant must carry a `// From AetherSDR src/gui/VfoWidget.cpp:NN — verbatim port` comment on the line above.
 
-- [ ] **S1.1.3** Add color `constexpr`s drawn from the same region: `kHdrRxBlue = QColor(0x44,0x88,0xff)`, `kHdrTxRed = QColor(0xff,0x44,0x44)`, `kFilterCyan = QColor(0x00,0xc8,0xff)`, `kSliceBadgeBlue = QColor(0x00,0x70,0xc0)`, `kMeterCyan = QColor(0x00,0xb4,0xd8)`, `kMeterGreen = QColor(0x00,0xd8,0x60)`, `kLabelMuted = QColor(0x68,0x88,0xa0)`, `kBodyText = QColor(0xc8,0xd8,0xe8)`. Use `constexpr` where `QColor` allows it (it doesn't in Qt6 — so `inline const QColor k...`).
+- [x] **S1.1.3** Add color constants drawn from the same region (Qt6 `QColor` is not `constexpr`, so `inline const QColor`). Required set — nine colors:
+  - `kHdrRxBlue = QColor(0x44,0x88,0xff)` — RX antenna label
+  - `kHdrTxRed = QColor(0xff,0x44,0x44)` — TX antenna label
+  - `kFilterCyan = QColor(0x00,0xc8,0xff)` — filter-width label
+  - `kSliceBadgeBlue = QColor(0x00,0x70,0xc0)` — slice letter badge background
+  - `kMeterCyan = QColor(0x00,0xb4,0xd8)` — S-meter fill below S9
+  - `kMeterGreen = QColor(0x00,0xd8,0x60)` — S-meter fill at/above S9
+  - `kLabelMuted = QColor(0x68,0x88,0xa0)` — muted label text
+  - `kBodyText = QColor(0xc8,0xd8,0xe8)` — default body text
+  - `kBgDark = QColor(0x10,0x10,0x1c)` — flag dark bg, consumed by `VfoLevelBar::paintEvent` in S1.2
 
 - [ ] **S1.1.4** Add `src/gui/widgets/VfoStyles.h` to `CMakeLists.txt` under `NereusSDRObjs`. It is a header-only file, but adding it to the sources list ensures it is moc-scanned if Qt ever needs to. (It doesn't now; cheap insurance.)
 

@@ -119,25 +119,28 @@ Explicitly out of scope for 3G-10, to be addressed by their owning phases:
 
 ## 5. Critical finding — partial Thetis clone
 
-The local `../Thetis/` clone contains `Project Files/Source/wdsp/` and
-`Project Files/Source/Midi2Cat/` but **the `Project Files/Source/Console/`
-directory is missing**. That directory is where `console.cs`, `setup.cs`,
-and `wdsp.cs` (the C# P/Invoke declarations) live. The source-first
-protocol for Stage 2 requires reading these files to quote the Thetis
-usage pattern for each WDSP call before porting.
+*(Resolved 2026-04-15 during plan handoff.)* The original local
+`../Thetis/` clone was partial — it contained `Project Files/Source/wdsp/`
+and `Project Files/Source/Midi2Cat/` but was missing
+`Project Files/Source/Console/`. A fresh full clone now lives at
+`/Users/j.j.boyd/Thetis` with the entire `Console/` directory present.
+The partial clone was preserved at `Thetis.partial.<epoch>` as a
+safety net.
 
-**Mitigation (pre-Stage-2 gate)**:
+**Filename correction**: the Thetis C# P/Invoke declarations for the
+WDSP API live in `Project Files/Source/Console/dsp.cs`, **not** in a
+file named `wdsp.cs`. Earlier drafts of this design and the project's
+`CLAUDE.md` referenced `wdsp.cs` — that was incorrect. Source-first
+citations for Stage 2 must target `dsp.cs` for P/Invoke signatures
+plus `console.cs` / `setup.cs` / `cmaster.cs` for call-site usage
+patterns.
 
-Before the first Stage 2 commit lands, the executing agent must either:
+**Thetis commit in use**: recorded in
+`docs/architecture/phase3g10-verification/README.md` during the
+Stage 2 pre-gate (§S2.0.2 of the plan).
 
-1. Re-clone Thetis in full with `git clone --depth 1
-   https://github.com/ramdor/Thetis ../Thetis`, OR
-2. Fetch each required `Console/*.cs` file on demand via
-   `https://raw.githubusercontent.com/ramdor/Thetis/master/Project%20Files/Source/Console/<file>.cs`
-   and cite the exact commit hash in every port comment.
-
-Stage 1 is unaffected — its sources are AetherSDR (`~/AetherSDR`, complete
-locally, verified on `main`) and NereusSDR-internal.
+Stage 1 is unaffected — its sources are AetherSDR (`~/AetherSDR`,
+complete locally, verified on `main`) and NereusSDR-internal.
 
 ## 6. Background — current state of the RX DSP surface
 
