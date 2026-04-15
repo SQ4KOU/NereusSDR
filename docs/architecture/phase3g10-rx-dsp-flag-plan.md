@@ -165,6 +165,8 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 - Source: `~/AetherSDR/src/gui/VfoWidget.cpp:38-64` (AetherSDR `LevelBar::paintEvent`)
 - Per spec choice C: ticks rendered *above* the bar (not through it).
 
+**Amendment (post-review, 2026-04-15):** `minimumSizeHint` raised from `{120, 22}` to `{150, 22}` — at 120px the S1 tick label clipped 1px off-screen left. Code-quality review finding applied as a fixup commit on S1.2.
+
 - [ ] **S1.2.1** Write the failing test `tests/tst_vfo_level_bar.cpp`:
 
 ```cpp
@@ -223,7 +225,7 @@ public:
     double fillFraction() const;  // 0..1, clamped
     bool isAboveS9() const { return m_value >= -73.0f; }
     QSize sizeHint() const override { return {180, 22}; }
-    QSize minimumSizeHint() const override { return {120, 22}; }
+    QSize minimumSizeHint() const override { return {150, 22}; }
 protected:
     void paintEvent(QPaintEvent*) override;
 private:
@@ -249,7 +251,7 @@ VfoLevelBar::VfoLevelBar(QWidget* parent) : QWidget(parent) {
     setAttribute(Qt::WA_OpaquePaintEvent, false);
 }
 void VfoLevelBar::setValue(float dbm) {
-    if (dbm == m_value) return;
+    if (dbm == m_value) { return; }
     m_value = dbm;
     update();
 }

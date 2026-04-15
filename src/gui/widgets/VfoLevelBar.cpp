@@ -9,7 +9,7 @@ VfoLevelBar::VfoLevelBar(QWidget* parent) : QWidget(parent) {
     setAttribute(Qt::WA_OpaquePaintEvent, false);
 }
 void VfoLevelBar::setValue(float dbm) {
-    if (dbm == m_value) return;
+    if (dbm == m_value) { return; }
     m_value = dbm;
     update();
 }

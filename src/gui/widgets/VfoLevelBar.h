@@ -10,7 +10,7 @@ public:
     double fillFraction() const;  // 0..1, clamped
     bool isAboveS9() const { return m_value >= kS9Dbm; }
     QSize sizeHint() const override { return {180, 22}; }
-    QSize minimumSizeHint() const override { return {120, 22}; }
+    QSize minimumSizeHint() const override { return {150, 22}; }
 protected:
     void paintEvent(QPaintEvent*) override;
 private:
