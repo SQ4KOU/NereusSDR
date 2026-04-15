@@ -11,6 +11,15 @@
 
 namespace NereusSDR {
 
+// Spinbox widths tuned to fit the widest expected value + suffix without
+// clipping. Int spinboxes handle up to "-200 dBm" in ~80px; double spinboxes
+// reserve an extra 10px for the decimal point and fractional digit.
+// Spinboxes inherit the dark-theme stylesheet from the parent Setup page
+// (see applyDarkStyle() in DisplaySetupPages.cpp) via Qt QSS inheritance,
+// so no per-widget styling is needed in the factory.
+static constexpr int kSetupSpinWidth  = 80;
+static constexpr int kSetupSpinWidthD = 90;
+
 SliderRow makeSliderRow(int min, int max, int initial,
                         const QString& suffix,
                         QWidget* parent)
@@ -28,7 +37,7 @@ SliderRow makeSliderRow(int min, int max, int initial,
     spin->setRange(min, max);
     spin->setValue(initial);
     spin->setSuffix(suffix);
-    spin->setFixedWidth(80);
+    spin->setFixedWidth(kSetupSpinWidth);
     spin->setAlignment(Qt::AlignRight);
 
     // Bidirectional sync. QSignalBlocker on the opposite widget prevents the
@@ -74,7 +83,7 @@ SliderRowD makeDoubleSliderRow(double min, double max, double initial,
     spin->setValue(initial);
     spin->setSuffix(suffix);
     spin->setSingleStep(1.0 / scale);
-    spin->setFixedWidth(90);
+    spin->setFixedWidth(kSetupSpinWidthD);
     spin->setAlignment(Qt::AlignRight);
 
     QObject::connect(slider, &QSlider::valueChanged, spin, [spin, scale](int v) {
