@@ -105,6 +105,22 @@ static const WfGradientStop kCustomFallbackStops[] = {
     {1.00f, 255,   0,   0},
 };
 
+// Phase 3G-9b: Clarity Blue palette — narrow-band monochrome designed to
+// match AetherSDR's readability. The bottom 60% of the dynamic range eats
+// the noise floor as uniform dark navy; 60-85% transitions through mid-blue
+// to cyan for weak signals; the top 15% pops to bright cyan and white for
+// strong signals. Result: signals stand out against a quiet background.
+// Compare to WfColorScheme::Default which spreads colour across the entire
+// range (so the noise floor also appears colourful — high visual clutter).
+static const WfGradientStop kClarityBlueStops[] = {
+    {0.00f,  0x0a, 0x14, 0x28},  // deep navy — noise floor bottom
+    {0.60f,  0x0d, 0x25, 0x40},  // still dark navy — top of noise floor
+    {0.70f,  0x18, 0x50, 0xa0},  // rising mid-blue
+    {0.85f,  0x30, 0x90, 0xe0},  // cyan — weak signals appear
+    {0.95f,  0x80, 0xd0, 0xff},  // bright cyan — medium signals
+    {1.00f,  0xff, 0xff, 0xff},  // white — strongest signals pop out
+};
+
 const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count)
 {
     switch (scheme) {
@@ -126,6 +142,9 @@ const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count)
     case WfColorScheme::Custom:
         count = 7;
         return kCustomFallbackStops;
+    case WfColorScheme::ClarityBlue:
+        count = 6;
+        return kClarityBlueStops;
     case WfColorScheme::Default:
     default:
         count = 7;

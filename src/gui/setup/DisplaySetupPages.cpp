@@ -611,7 +611,8 @@ void WaterfallDefaultsPage::buildUI()
         QStringLiteral("Default"),   QStringLiteral("Enhanced"),
         QStringLiteral("Spectran"),  QStringLiteral("BlackWhite"),
         QStringLiteral("LinLog"),    QStringLiteral("LinRad"),
-        QStringLiteral("Custom")
+        QStringLiteral("Custom"),
+        QStringLiteral("Clarity Blue")   // Phase 3G-9b
     });
     // Thetis: setup.designer.cs:34110 (comboColorPalette) — rewritten
     // Thetis original: "Sets the color scheme"
