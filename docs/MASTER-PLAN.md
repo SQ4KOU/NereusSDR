@@ -772,7 +772,7 @@ the QRhi/Metal GPU path.
 The next meaningful steps:
 
 - **3G-9 (Display Refactor)** — three-PR polish pass on the 3G-8 Display surface: audit + tooltips + slider readouts → smooth defaults + Clarity Blue palette → Clarity adaptive auto-tune. Independent of TX work; can ship in parallel with 3G-10 and 3M-1 prep.
-- **3G-10 (RX DSP Parity + AetherSDR Flag Port)** — two-stage phase: **Stage 1 complete (PRs #28 + #30)** — VfoWidget visual shell with 4×2 DSP grid, mode containers, tooltip coverage test. **Stage 2 next** — wires every RX-side DSP NYI through WDSP with per-slice-per-band bandstack persistence. Parallelizable with 3G-9; no file overlap. Blocks 3M-1 mostly by sharing reviewer attention, not by code dependency.
+- **3G-10 (RX DSP Parity + AetherSDR Flag Port)** — two-stage phase: **Complete.** Stage 1 (PRs #28 + #30): VfoWidget visual shell with 4×2 DSP grid, mode containers, tooltip coverage test. Stage 2: 10 WDSP feature slices wired (AGC-adv, EMNR, SNB, APF, squelch, mute/pan/binaural, NB2 polish, RIT/XIT, frequency lock, mode containers), per-slice-per-band persistence, Thetis-first tooltips. CW autotune deferred (no WDSP API).
 - **3M-1 (Basic SSB TX)** (formerly 3I-1; renumbered after Phase 3I became the radio connector port) — TxChannel WDSP wrapper, mic input, MOX state machine, TX I/Q
   output. Proves the TX path end-to-end and unblocks 3M-2..4, 3F, 3H.
 
