@@ -4,6 +4,8 @@
 // Porting from Thetis console.cs:21290-21763 handleOverload().
 
 #include "StepAttenuatorController.h"
+#include "RadioConnection.h"
+#include "ReceiverManager.h"
 
 #include <QDateTime>
 
@@ -60,7 +62,7 @@ void StepAttenuatorController::setAutoAttMode(AutoAttMode mode)
     m_autoAttMode = mode;
 }
 
-void StepAttenuatorController::setAutoUndoEnabled(bool on)
+void StepAttenuatorController::setAutoAttUndo(bool on)
 {
     m_autoUndoEnabled = on;
 }
@@ -70,9 +72,9 @@ void StepAttenuatorController::setAutoUndoDelaySec(int sec)
     m_autoUndoDelaySec = sec;
 }
 
-void StepAttenuatorController::setAdaptiveHoldMs(int ms)
+void StepAttenuatorController::setAutoAttHoldSeconds(double sec)
 {
-    m_adaptiveHoldMs = ms;
+    m_adaptiveHoldMs = static_cast<int>(sec * 1000.0);
 }
 
 void StepAttenuatorController::setAdaptiveDecayMs(int ms)
@@ -101,7 +103,7 @@ void StepAttenuatorController::setBand(Band band)
     if (it != m_bandState.end()) {
         if (it->second.attDb != m_attDb) {
             m_attDb = it->second.attDb;
-            emit attenuatorChanged(m_attDb);
+            emit attenuationChanged(m_attDb);
         }
         if (it->second.preamp != m_preampMode) {
             m_preampMode = it->second.preamp;
@@ -117,13 +119,23 @@ void StepAttenuatorController::setBand(Band band)
     }
 }
 
-void StepAttenuatorController::setAttenuatorDb(int dB)
+void StepAttenuatorController::setAttenuation(int dB, int rx)
 {
     if (dB < 0) { dB = 0; }
     if (dB > m_maxAttDb) { dB = m_maxAttDb; }
     if (m_attDb == dB) { return; }
     m_attDb = dB;
-    emit attenuatorChanged(m_attDb);
+    emit attenuationChanged(m_attDb);
+
+    // ADC-linked: force the other RX to match.
+    if (m_adcLinked && (rx == 0 || rx == 1)) {
+        // Prevent infinite recursion — only propagate once.
+        int otherRx = (rx == 0) ? 1 : 0;
+        Q_UNUSED(otherRx);
+        // The linked receiver should track this value.
+        // (Full per-RX ATT arrays are a future enhancement;
+        //  for now both share m_attDb.)
+    }
 }
 
 void StepAttenuatorController::setPreampMode(PreampMode mode)
@@ -133,7 +145,7 @@ void StepAttenuatorController::setPreampMode(PreampMode mode)
     emit preampModeChanged(m_preampMode);
 }
 
-void StepAttenuatorController::setMaxAttDb(int dB)
+void StepAttenuatorController::setMaxAttenuation(int dB)
 {
     m_maxAttDb = dB;
 }
@@ -227,7 +239,7 @@ void StepAttenuatorController::applyClassicAutoAtt(int adc)
             }
             m_attDb = newAtt;
             m_lastAutoAttTimeMs = QDateTime::currentMSecsSinceEpoch();
-            emit attenuatorChanged(m_attDb);
+            emit attenuationChanged(m_attDb);
             setAutoAttApplied(true);
         }
     } else {
@@ -267,6 +279,8 @@ void StepAttenuatorController::applyClassicUndo()
         return;
     }
 
+    // Timer-based undo: only gate on hold period when auto-undo is enabled.
+    // The explicit disable path (setAutoAttEnabled(false)) always restores.
     if (m_autoUndoEnabled) {
         qint64 now = QDateTime::currentMSecsSinceEpoch();
         qint64 holdMs = static_cast<qint64>(m_autoUndoDelaySec) * 1000;
@@ -275,13 +289,15 @@ void StepAttenuatorController::applyClassicUndo()
         }
     }
 
+    // Always restore the saved ATT/preamp value — the undo-enabled flag
+    // only gates the timer-based automatic path, not explicit disable.
     if (m_stepAttEnabled && m_classicSavedAttDb >= 0) {
-        if (m_classicSavedAttDb != m_attDb && m_autoUndoEnabled) {
+        if (m_classicSavedAttDb != m_attDb) {
             m_attDb = m_classicSavedAttDb;
-            emit attenuatorChanged(m_attDb);
+            emit attenuationChanged(m_attDb);
         }
     } else if (!m_stepAttEnabled && m_classicSavedAttDb >= 0) {
-        if (m_classicSavedPreamp != m_preampMode && m_autoUndoEnabled) {
+        if (m_classicSavedPreamp != m_preampMode) {
             m_preampMode = m_classicSavedPreamp;
             emit preampModeChanged(m_preampMode);
         }
@@ -306,7 +322,7 @@ void StepAttenuatorController::applyAdaptiveAutoAtt(int adc)
         if (newAtt != m_attDb) {
             m_attDb = newAtt;
             m_adaptiveLastAttackMs = now;
-            emit attenuatorChanged(m_attDb);
+            emit attenuationChanged(m_attDb);
             setAutoAttApplied(true);
         }
     } else {
@@ -328,7 +344,7 @@ void StepAttenuatorController::applyAdaptiveAutoAtt(int adc)
         if (m_attDb > floor) {
             m_attDb--;
             m_adaptiveLastDecayMs = now;
-            emit attenuatorChanged(m_attDb);
+            emit attenuationChanged(m_attDb);
             if (m_attDb <= floor) {
                 setAutoAttApplied(false);
             }
@@ -346,7 +362,7 @@ void StepAttenuatorController::setAutoAttApplied(bool applied)
         return;
     }
     m_autoAttApplied = applied;
-    emit autoAttAppliedChanged(applied);
+    emit autoAttActiveChanged(applied);
 }
 
 OverloadLevel StepAttenuatorController::levelToSeverity(int level) const
@@ -361,6 +377,66 @@ OverloadLevel StepAttenuatorController::levelToSeverity(int level) const
         return OverloadLevel::Yellow;
     }
     return OverloadLevel::None;
+}
+
+// --- RadioConnection wiring ---
+
+void StepAttenuatorController::setRadioConnection(RadioConnection* conn)
+{
+    // Disconnect from old connection.
+    if (m_adcOverflowConn) {
+        disconnect(m_adcOverflowConn);
+        m_adcOverflowConn = {};
+    }
+
+    m_connection = conn;
+
+    if (conn) {
+        m_adcOverflowConn = connect(conn, &RadioConnection::adcOverflow,
+                                    this, &StepAttenuatorController::onAdcOverflow);
+        m_tickTimer.start();
+    } else {
+        m_tickTimer.stop();
+    }
+}
+
+// --- ReceiverManager wiring ---
+
+void StepAttenuatorController::setReceiverManager(ReceiverManager* mgr)
+{
+    m_receiverManager = mgr;
+    // ReceiverManager doesn't currently emit a ddcMappingChanged signal,
+    // so checkAdcLinked() is called explicitly when mapping changes.
+}
+
+// --- ADC-linked synchronization ---
+
+void StepAttenuatorController::checkAdcLinked()
+{
+    if (!m_receiverManager) {
+        if (m_adcLinked) {
+            m_adcLinked = false;
+            emit adcLinkedChanged(false);
+        }
+        return;
+    }
+
+    // Compare ADC assignments for RX0 and RX1.
+    ReceiverConfig cfg0 = m_receiverManager->receiverConfig(0);
+    ReceiverConfig cfg1 = m_receiverManager->receiverConfig(1);
+
+    bool linked = (cfg0.receiverIndex >= 0 && cfg1.receiverIndex >= 0 &&
+                   cfg0.adcIndex == cfg1.adcIndex);
+
+    if (linked != m_adcLinked) {
+        m_adcLinked = linked;
+        emit adcLinkedChanged(linked);
+    }
+}
+
+void StepAttenuatorController::onDdcMappingChanged()
+{
+    checkAdcLinked();
 }
 
 }  // namespace NereusSDR

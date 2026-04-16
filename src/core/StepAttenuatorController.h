@@ -25,12 +25,16 @@
 #include "models/Band.h"
 
 #include <QObject>
+#include <QPointer>
 #include <QTimer>
 
 #include <array>
 #include <unordered_map>
 
 namespace NereusSDR {
+
+class RadioConnection;
+class ReceiverManager;
 
 // --- Enums ---
 
@@ -92,11 +96,11 @@ public:
     void setAutoAttMode(AutoAttMode mode);
 
     // Classic mode: enable timer-based undo of auto-applied attenuation.
-    void setAutoUndoEnabled(bool on);
+    void setAutoAttUndo(bool on);
     void setAutoUndoDelaySec(int sec);
 
     // Adaptive mode tunables.
-    void setAdaptiveHoldMs(int ms);
+    void setAutoAttHoldSeconds(double sec);
     void setAdaptiveDecayMs(int ms);
 
     // Step-att vs preamp mode (Thetis _rx1_step_att_enabled).
@@ -106,13 +110,19 @@ public:
     void setBand(Band band);
 
     // Set ATT value (e.g. from UI or persistence restore).
-    void setAttenuatorDb(int dB);
+    void setAttenuation(int dB, int rx = 0);
 
     // Set preamp mode (e.g. from UI).
     void setPreampMode(PreampMode mode);
 
     // Maximum attenuator value (hardware limit, typically 31 dB).
-    void setMaxAttDb(int dB);
+    void setMaxAttenuation(int dB);
+
+    // Wire to a RadioConnection for adcOverflow signals.
+    void setRadioConnection(RadioConnection* conn);
+
+    // Wire to ReceiverManager for DDC mapping changes.
+    void setReceiverManager(ReceiverManager* mgr);
 
     // --- Tick (public for testability) ---
 
@@ -136,13 +146,16 @@ signals:
     void overloadStatusChanged(int adc, NereusSDR::OverloadLevel level);
 
     // Emitted when auto-att changes the attenuator value.
-    void attenuatorChanged(int dB);
+    void attenuationChanged(int dB);
 
     // Emitted when auto-att changes the preamp mode.
     void preampModeChanged(NereusSDR::PreampMode mode);
 
     // Emitted when auto-att applied/cleared state changes.
-    void autoAttAppliedChanged(bool applied);
+    void autoAttActiveChanged(bool applied);
+
+    // Emitted when ADC-linked state changes (both RX share same ADC).
+    void adcLinkedChanged(bool linked);
 
 private:
     static constexpr int kMaxAdcs = 3;
@@ -201,12 +214,26 @@ private:
     // Internal tick timer.
     QTimer m_tickTimer;
 
+    // RadioConnection for adcOverflow wiring.
+    QPointer<RadioConnection> m_connection;
+    QMetaObject::Connection m_adcOverflowConn;
+
+    // ReceiverManager for DDC mapping.
+    QPointer<ReceiverManager> m_receiverManager;
+
+    // ADC-linked state (both RX0 and RX1 share the same ADC).
+    bool m_adcLinked{false};
+
     // --- Helpers ---
     void applyClassicAutoAtt(int adc);
     void applyClassicUndo();
     void applyAdaptiveAutoAtt(int adc);
     void setAutoAttApplied(bool applied);
     OverloadLevel levelToSeverity(int level) const;
+    void checkAdcLinked();
+
+private slots:
+    void onDdcMappingChanged();
 };
 
 }  // namespace NereusSDR
