@@ -71,6 +71,14 @@ public:
     void setApfEnabled(bool v);
     void setApfTuneHz(int hz);
 
+    // --- Audio tab state setters (S1.8c — guarded against re-emit) ---
+    void setMuted(bool v);
+    void setAudioPan(double pan);      // drives m_panSlider → round(pan * 100)
+    void setSsqlEnabled(bool v);
+    void setSsqlThresh(double dB);     // drives m_sqlSlider → round(dB)
+    void setAgcThreshold(int dBu);
+    void setBinauralEnabled(bool v);
+
     // --- Slice coupling (for mode container binding only) ---
     void setSlice(SliceModel* slice);
 
@@ -111,6 +119,17 @@ signals:
     void snbChanged(bool enabled);
     void apfChanged(bool enabled);
     void apfTuneHzChanged(int hz);
+
+    // --- Audio tab signals (S1.8c) ---
+    void panChanged(double pan);           // -1.0 to 1.0
+    void muteChanged(bool muted);
+    void binauralChanged(bool enabled);
+    void squelchEnabledChanged(bool enabled);
+    void squelchThreshChanged(int thresh);
+    void agcThreshChanged(int dBu);
+
+    // --- Mode tab signals (S1.8c) ---
+    void quickModeRequested(int index);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -176,11 +195,20 @@ private:
     QWidget*            m_filterBtnContainer{nullptr};
     QSlider*            m_rfGainSlider{nullptr};
     QLabel*             m_rfGainLabel{nullptr};
+    QPushButton*        m_quickModeBtns[3]{};    // USB/CW/DIG shortcut slots (NYI)
 
     // --- Audio tab ---
     QSlider*            m_afGainSlider{nullptr};
     QLabel*             m_afGainLabel{nullptr};
-    QComboBox*          m_agcCmb{nullptr};
+    QPushButton*        m_agcBtns[5]{};          // Off/Long/Slow/Med/Fast — replaces m_agcCmb
+    QSlider*            m_panSlider{nullptr};
+    QLabel*             m_panLabel{nullptr};
+    QPushButton*        m_muteBtn{nullptr};
+    QPushButton*        m_binBtn{nullptr};
+    QPushButton*        m_sqlBtn{nullptr};
+    QSlider*            m_sqlSlider{nullptr};
+    QSlider*            m_agcTSlider{nullptr};
+    QLabel*             m_agcTLabel{nullptr};
 
     // --- DSP tab ---
     QPushButton*        m_nb1Toggle{nullptr};

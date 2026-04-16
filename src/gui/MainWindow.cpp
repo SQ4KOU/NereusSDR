@@ -1741,6 +1741,49 @@ void MainWindow::wireSliceToSpectrum()
         slice->setApfTuneHz(hz);
     });
 
+    // --- SliceModel → VfoWidget: Audio tab inbound (S1.8c stubs) ---
+    connect(slice, &SliceModel::mutedChanged, this, [vfo](bool v) {
+        vfo->setMuted(v);
+    });
+    connect(slice, &SliceModel::audioPanChanged, this, [vfo](double p) {
+        vfo->setAudioPan(p);
+    });
+    connect(slice, &SliceModel::ssqlEnabledChanged, this, [vfo](bool v) {
+        vfo->setSsqlEnabled(v);
+    });
+    connect(slice, &SliceModel::ssqlThreshChanged, this, [vfo](double d) {
+        vfo->setSsqlThresh(d);
+    });
+    connect(slice, &SliceModel::agcThresholdChanged, this, [vfo](int v) {
+        vfo->setAgcThreshold(v);
+    });
+    connect(slice, &SliceModel::binauralEnabledChanged, this, [vfo](bool v) {
+        vfo->setBinauralEnabled(v);
+    });
+
+    // --- VfoWidget → SliceModel: Audio tab outbound (S1.8c stubs) ---
+    connect(vfo, &VfoWidget::muteChanged, this, [slice](bool v) {
+        slice->setMuted(v);
+    });
+    connect(vfo, &VfoWidget::panChanged, this, [slice](double p) {
+        slice->setAudioPan(p);
+    });
+    connect(vfo, &VfoWidget::squelchEnabledChanged, this, [slice](bool v) {
+        slice->setSsqlEnabled(v);
+    });
+    connect(vfo, &VfoWidget::squelchThreshChanged, this, [slice](int v) {
+        slice->setSsqlThresh(static_cast<double>(v));
+    });
+    connect(vfo, &VfoWidget::agcThreshChanged, this, [slice](int v) {
+        slice->setAgcThreshold(v);
+    });
+    connect(vfo, &VfoWidget::binauralChanged, this, [slice](bool v) {
+        slice->setBinauralEnabled(v);
+    });
+    connect(vfo, &VfoWidget::quickModeRequested, this, [](int) {
+        // Stage 2: map index → DSPMode and apply
+    });
+
     // --- VfoWidget → SliceModel: RIT/XIT outbound (S1.8a stubs) ---
     connect(vfo, &VfoWidget::ritEnabledChanged, this, [slice](bool on) {
         slice->setRitEnabled(on);
