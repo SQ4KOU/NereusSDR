@@ -78,7 +78,7 @@ public slots:
     virtual void setAntenna(int antennaIndex) = 0;
 
     // --- ADC Mapping ---
-    virtual int getAdcForDdc(int ddc) const { return 0; }
+    virtual int getAdcForDdc(int /*ddc*/) const { return 0; }
 
 signals:
     // --- State ---
