@@ -848,7 +848,7 @@ void VfoWidget::buildXRitTab()
         m_ritBtn->setCheckable(true);
         m_ritBtn->setStyleSheet(kDspToggle);
         m_ritBtn->setFixedHeight(22);
-        m_ritBtn->setToolTip(QStringLiteral("RIT — not yet implemented"));
+        m_ritBtn->setToolTip(QStringLiteral("RIT — Receive Incremental Tuning: shifts demodulation frequency without retuning hardware VFO"));
         row->addWidget(m_ritBtn);
 
         m_ritLabel = new ScrollableLabel(ritWidget);
@@ -864,7 +864,7 @@ void VfoWidget::buildXRitTab()
         m_ritZeroBtn->setFixedWidth(20);
         m_ritZeroBtn->setFlat(true);
         m_ritZeroBtn->setStyleSheet(kZeroBtn);
-        m_ritZeroBtn->setToolTip(QStringLiteral("Zero RIT offset — not yet implemented"));
+        m_ritZeroBtn->setToolTip(QStringLiteral("Zero RIT offset"));
         row->addWidget(m_ritZeroBtn);
 
         vbox->addLayout(row);
@@ -910,7 +910,7 @@ void VfoWidget::buildXRitTab()
         m_xritLockBtn->setCheckable(true);
         m_xritLockBtn->setStyleSheet(kDspToggle);
         m_xritLockBtn->setFixedHeight(22);
-        m_xritLockBtn->setToolTip(QStringLiteral("Lock VFO frequency against tuning changes — not yet implemented"));
+        m_xritLockBtn->setToolTip(QStringLiteral("Lock VFO frequency against tuning changes — wired in S2.9"));
         row->addWidget(m_xritLockBtn);
 
         // Step cycle button — NOT NYI (wires to live SliceModel::setStepHz)
@@ -981,14 +981,12 @@ void VfoWidget::buildXRitTab()
         emit stepCycleRequested();
     });
 
-    // --- NYI badges (all controls except m_stepCycleBtn) ---
-    NyiOverlay::markNyi(m_ritBtn,      QStringLiteral("phase3g10-stage2"));
-    NyiOverlay::markNyi(m_ritLabel,    QStringLiteral("phase3g10-stage2"));
-    NyiOverlay::markNyi(m_ritZeroBtn,  QStringLiteral("phase3g10-stage2"));
-    NyiOverlay::markNyi(m_xitBtn,      QStringLiteral("phase3g10-stage2"));
-    NyiOverlay::markNyi(m_xitLabel,    QStringLiteral("phase3g10-stage2"));
-    NyiOverlay::markNyi(m_xitZeroBtn,  QStringLiteral("phase3g10-stage2"));
-    NyiOverlay::markNyi(m_xritLockBtn, QStringLiteral("phase3g10-stage2"));
+    // RIT controls are live — no NYI badge.
+    // XIT stored for 3M-1 (TX phase); keep NYI badge with TX note.
+    NyiOverlay::markNyi(m_xitBtn,      QStringLiteral("XIT — TX gated by Phase 3M-1"));
+    NyiOverlay::markNyi(m_xitLabel,    QStringLiteral("XIT — TX gated by Phase 3M-1"));
+    NyiOverlay::markNyi(m_xitZeroBtn,  QStringLiteral("XIT — TX gated by Phase 3M-1"));
+    // LOCK badge removed in S2.9 commit
 
     m_tabStack->addWidget(ritWidget);
 }

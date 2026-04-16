@@ -256,6 +256,16 @@ public:
     int    rttyShiftHz()     const { return m_rttyShiftHz; }
     void   setRttyShiftHz(int hz);
 
+    // ---- RIT helper ----
+    // Effective receive frequency = base frequency + RIT offset (when enabled).
+    // This is the frequency fed to the WDSP shift path for demodulation.
+    // RIT is a demodulation offset, NOT a VFO/hardware frequency change.
+    // From Thetis console.cs — RIT applies a receive-side offset without
+    // retuning the hardware VFO.
+    double effectiveRxFrequency() const {
+        return m_frequency + (m_ritEnabled ? static_cast<double>(m_ritHz) : 0.0);
+    }
+
     // ---- Per-mode filter defaults ----
     // Returns the F5 (default) filter low/high for a given mode.
     // Ported from Thetis console.cs:5180-5575 InitFilterPresets.

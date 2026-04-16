@@ -12,6 +12,8 @@
 #include "gui/widgets/FilterPassbandWidget.h"
 #include "models/SliceModel.h"
 
+#include <algorithm>
+
 #include <QAction>
 #include <QComboBox>
 #include <QGridLayout>
@@ -434,8 +436,8 @@ void RxApplet::buildUi()
     rightCol->addStretch(1);
 
     // Control 15: RIT toggle + offset + zero
-    // amberToggle + insetValue + QPushButton("0")
-    // NYI — SliceModel has no setRit() yet
+    // Live-wired in S2.8 — SliceModel::setRitEnabled/setRitHz feed the
+    // existing RxChannel::setShiftFrequency path via RadioModel.
     // From AetherSDR RxApplet.cpp lines 773-823
     {
         auto* row = new QHBoxLayout;
@@ -465,15 +467,36 @@ void RxApplet::buildUi()
         m_ritPlus = new TriBtn(TriBtn::Right, this);
         row->addWidget(m_ritPlus);
 
+        // Wire RIT controls to SliceModel (live in S2.8).
+        // Toggle → enable/disable RIT on the slice.
+        connect(m_ritOnBtn, &QPushButton::toggled, this, [this](bool on) {
+            if (m_updatingFromModel || !m_slice) { return; }
+            m_slice->setRitEnabled(on);
+        });
+        // Minus/Plus → decrement/increment by current step, clamped to ±10000 Hz.
+        connect(m_ritMinus, &QPushButton::clicked, this, [this]() {
+            if (!m_slice) { return; }
+            int step = m_slice->stepHz();
+            m_slice->setRitHz(std::clamp(m_slice->ritHz() - step, -10000, 10000));
+        });
+        connect(m_ritPlus, &QPushButton::clicked, this, [this]() {
+            if (!m_slice) { return; }
+            int step = m_slice->stepHz();
+            m_slice->setRitHz(std::clamp(m_slice->ritHz() + step, -10000, 10000));
+        });
+        // Zero → reset RIT offset to 0.
+        connect(m_ritZero, &QPushButton::clicked, this, [this]() {
+            if (!m_slice) { return; }
+            m_slice->setRitHz(0);
+        });
+
         rightCol->addLayout(row);
 
-        NyiOverlay::markNyi(m_ritOnBtn, QStringLiteral("Phase 3I"));
-        NyiOverlay::markNyi(m_ritMinus, QStringLiteral("Phase 3I"));
-        NyiOverlay::markNyi(m_ritPlus,  QStringLiteral("Phase 3I"));
+        // RIT controls are live — no NYI badge.
     }
 
     // Control 16: XIT toggle + offset + zero
-    // Same structure as RIT. NYI.
+    // Same structure as RIT. XIT stored for 3M-1 (TX phase); keep NYI badge.
     // From AetherSDR RxApplet.cpp lines 825-876
     {
         auto* row = new QHBoxLayout;
@@ -505,9 +528,10 @@ void RxApplet::buildUi()
 
         rightCol->addLayout(row);
 
-        NyiOverlay::markNyi(m_xitOnBtn, QStringLiteral("Phase 3I"));
-        NyiOverlay::markNyi(m_xitMinus, QStringLiteral("Phase 3I"));
-        NyiOverlay::markNyi(m_xitPlus,  QStringLiteral("Phase 3I"));
+        // XIT stored for 3M-1; keep NYI badges.
+        NyiOverlay::markNyi(m_xitOnBtn, QStringLiteral("XIT — TX gated by Phase 3M-1"));
+        NyiOverlay::markNyi(m_xitMinus, QStringLiteral("XIT — TX gated by Phase 3M-1"));
+        NyiOverlay::markNyi(m_xitPlus,  QStringLiteral("XIT — TX gated by Phase 3M-1"));
     }
 
     columns->addLayout(rightCol, 3);
@@ -524,8 +548,8 @@ void RxApplet::buildUi()
     m_afSlider->setToolTip(QStringLiteral("Audio output volume for this slice"));
     m_agcCombo->setToolTip(QStringLiteral("AGC speed: Off/Slow/Med/Fast"));
     m_agcTSlider->setToolTip(QStringLiteral("AGC threshold (dBu) — adjusts the level at which AGC begins to act"));
-    m_ritOnBtn->setToolTip(QStringLiteral("Receive Incremental Tuning (NYI)"));
-    m_xitOnBtn->setToolTip(QStringLiteral("Transmit Incremental Tuning (NYI)"));
+    m_ritOnBtn->setToolTip(QStringLiteral("RIT — Receive Incremental Tuning: shifts demodulation frequency without retuning hardware VFO"));
+    m_xitOnBtn->setToolTip(QStringLiteral("XIT — Transmit Incremental Tuning: TX gated by Phase 3M-1"));
 }
 
 void RxApplet::rebuildFilterButtons()
@@ -716,6 +740,15 @@ void RxApplet::syncFromModel()
     m_filterPassband->setFilter(m_slice->filterLow(), m_slice->filterHigh());
     m_filterPassband->setMode(SliceModel::modeName(m_slice->dspMode()));
 
+    // RIT state (S2.8)
+    m_ritOnBtn->setChecked(m_slice->ritEnabled());
+    {
+        const int hz = m_slice->ritHz();
+        m_ritLabel->setText(QStringLiteral("%1%2 Hz")
+            .arg(hz >= 0 ? QStringLiteral("+") : QString{})
+            .arg(hz));
+    }
+
     m_updatingFromModel = false;
 }
 
@@ -768,6 +801,18 @@ void RxApplet::connectSlice(SliceModel* s)
     });
     connect(s, &SliceModel::txAntennaChanged, this, [this](const QString& ant) {
         m_txAntBtn->setText(ant);
+    });
+
+    // RIT model → UI sync (S2.8)
+    connect(s, &SliceModel::ritEnabledChanged, this, [this](bool on) {
+        m_updatingFromModel = true;
+        m_ritOnBtn->setChecked(on);
+        m_updatingFromModel = false;
+    });
+    connect(s, &SliceModel::ritHzChanged, this, [this](int hz) {
+        m_ritLabel->setText(QStringLiteral("%1%2 Hz")
+            .arg(hz >= 0 ? QStringLiteral("+") : QString{})
+            .arg(hz));
     });
 }
 

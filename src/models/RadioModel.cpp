@@ -614,6 +614,28 @@ void RadioModel::wireSliceSignals()
         }
     });
 
+    // RIT → WDSP shift offset
+    // RIT (Receive Incremental Tuning) is a client-side demodulation offset —
+    // it does NOT retune the hardware VFO. The offset feeds the existing
+    // setShiftFrequency path already used for CTUN pan demodulation.
+    // From Thetis console.cs — RIT adjusts the receive frequency without
+    // moving the hardware DDC center. When CTUN is also active, the combined
+    // shift = CTUN pan offset + RIT offset. For 3G-10 (single RX, no CTUN
+    // active), the shift simplifies to just the RIT offset.
+    // Client-side only — no new WDSP calls beyond the existing shift path.
+    auto updateRitShift = [this, slice]() {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (!rxCh) { return; }
+        double offset = slice->ritEnabled()
+                        ? static_cast<double>(slice->ritHz())
+                        : 0.0;
+        rxCh->setShiftFrequency(offset);
+    };
+    connect(slice, &SliceModel::ritEnabledChanged, this, updateRitShift);
+    connect(slice, &SliceModel::ritHzChanged,      this, updateRitShift);
+
+    // XIT stored for 3M-1 (TX phase) to consume on keydown. No RX effect in 3G-10.
+
     // AF gain → AudioEngine volume
     connect(slice, &SliceModel::afGainChanged, this, [this](int gain) {
         m_audioEngine->setVolume(gain / 100.0f);
