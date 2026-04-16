@@ -585,6 +585,7 @@ void SliceModel::saveToSettings(Band band)
     const QString sp = slicePrefix(m_sliceIndex);
 
     // ── Per-band DSP state ────────────────────────────────────────────────────
+    s.setValue(bp + QStringLiteral("Frequency"),    m_frequency);
     s.setValue(bp + QStringLiteral("AgcThreshold"), m_agcThreshold);
     s.setValue(bp + QStringLiteral("AgcHang"),      m_agcHang);
     s.setValue(bp + QStringLiteral("AgcSlope"),     m_agcSlope);
@@ -618,6 +619,9 @@ void SliceModel::restoreFromSettings(Band band)
     // ── Per-band DSP state ────────────────────────────────────────────────────
     // Each key: if absent, leave the current SliceModel default unchanged.
 
+    if (s.contains(bp + QStringLiteral("Frequency"))) {
+        setFrequency(s.value(bp + QStringLiteral("Frequency")).toDouble());
+    }
     if (s.contains(bp + QStringLiteral("AgcThreshold"))) {
         setAgcThreshold(s.value(bp + QStringLiteral("AgcThreshold")).toInt());
     }
@@ -713,6 +717,8 @@ void SliceModel::migrateLegacyKeys()
     const QString sp = slicePrefix(0);
 
     // Per-band DSP — migrate each key that exists.
+    s.setValue(bp + QStringLiteral("Frequency"), freq);
+
     if (s.contains(QStringLiteral("VfoDspMode"))) {
         s.setValue(bp + QStringLiteral("DspMode"),
                    s.value(QStringLiteral("VfoDspMode")));

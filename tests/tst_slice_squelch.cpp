@@ -64,8 +64,9 @@ private slots:
 
     void ssqlThreshDefaultValue() {
         // From Thetis radio.cs:1187 — _fSSqlThreshold = 0.16f (0..1 linear)
+        // Model stores slider units 0–100; 16 maps to 0.16 at WDSP boundary.
         SliceModel s;
-        QCOMPARE(s.ssqlThresh(), -150.0);  // SliceModel default dB
+        QCOMPARE(s.ssqlThresh(), 16.0);
     }
 
     void setSsqlThreshStoresValue() {

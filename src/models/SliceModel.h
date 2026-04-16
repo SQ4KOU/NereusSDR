@@ -372,7 +372,7 @@ private:
     bool   m_muted{false};            // Neutral default — no Thetis citation needed
     double m_audioPan{0.0};           // Neutral default — center pan (−1..+1), no Thetis citation needed
     bool   m_ssqlEnabled{false};      // Neutral default — feature off at start
-    double m_ssqlThresh{-150.0};      // From Thetis radio.cs:1164-1165 — rx_squelch_threshold = -150.0f
+    double m_ssqlThresh{16.0};        // Slider units 0–100; From Thetis radio.cs:1187 _fSSqlThreshold = 0.16f → 16 in slider scale
     bool   m_amsqEnabled{false};      // Neutral default — feature off at start
     double m_amsqThresh{-150.0};      // From Thetis radio.cs:1164-1165 — rx_squelch_threshold = -150.0f (AM reuses same field)
     bool   m_fmsqEnabled{false};      // Neutral default — feature off at start

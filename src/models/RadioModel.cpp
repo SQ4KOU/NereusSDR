@@ -12,6 +12,7 @@
 #include "core/LogCategories.h"
 #include "gui/SpectrumWidget.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include <QMetaObject>
@@ -240,7 +241,8 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 rxCh->setApfEnabled(m_activeSlice->apfEnabled());
                 // Squelch initial push — From Thetis radio.cs:1185,1164,1274,1293,1312
                 rxCh->setSsqlEnabled(m_activeSlice->ssqlEnabled());
-                rxCh->setSsqlThresh(m_activeSlice->ssqlThresh());
+                // Model stores 0–100 (slider units); WDSP expects 0.0–1.0 linear.
+                rxCh->setSsqlThresh(std::clamp(m_activeSlice->ssqlThresh() / 100.0, 0.0, 1.0));
                 rxCh->setAmsqEnabled(m_activeSlice->amsqEnabled());
                 rxCh->setAmsqThresh(m_activeSlice->amsqThresh());
                 rxCh->setFmsqEnabled(m_activeSlice->fmsqEnabled());
@@ -446,6 +448,14 @@ void RadioModel::wireSliceSignals()
                 conn->setTxFrequency(freqHz);
             });
         }
+        // Track band from VFO frequency so per-band saves target the correct
+        // band even when the panadapter center hasn't crossed the boundary.
+        Band newBand = bandFromFrequency(freq);
+        if (newBand != m_lastBand) {
+            m_activeSlice->saveToSettings(m_lastBand);
+            m_activeSlice->restoreFromSettings(newBand);
+            m_lastBand = newBand;
+        }
         scheduleSettingsSave();
     });
 
@@ -596,7 +606,10 @@ void RadioModel::wireSliceSignals()
     connect(slice, &SliceModel::ssqlThreshChanged, this, [this](double threshold) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
-            rxCh->setSsqlThresh(threshold);
+            // Model stores 0–100 (slider units); WDSP expects 0.0–1.0 linear.
+            // From Thetis radio.cs:1217-1218 — clamped 0..1, default 0.16.
+            double normalized = std::clamp(threshold / 100.0, 0.0, 1.0);
+            rxCh->setSsqlThresh(normalized);
         }
         scheduleSettingsSave();
     });
