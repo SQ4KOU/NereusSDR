@@ -516,7 +516,7 @@ The PR2 design underwent significant iteration during live-radio tuning. What wa
 
 **Non-goals:** RX2/TX display surface, Spectrum Overlay flyout refactors, skin system, Thetis default-value adoption beyond the seven PR2 recipes. Source-first protocol per CLAUDE.md governs everything else; 3G-8's §10 divergence exception is **not** extended.
 
-### Phase 3G-11: P1 Field-Report Fixes
+### Phase 3G-12: P1 Field-Report Fixes
 **Goal:** Close out the bugs surfaced by alpha testers running Protocol 1 hardware after 3I shipped. Grouped under one phase so each fix doesn't have to claim its own number. Each bullet below lands from its own session / branch.
 
 - **P1 RX/TX VFO frequency encoding** — `P1RadioConnection::composeCcBankRxFreq` / `composeCcBankTxFreq` were pre-converting Hz to an NCO phase word (`freqHz * 2^32 / 122.88e6`). P1 firmware expects raw Hz; Thetis `NetworkIO.cs:215-223` only calls `Freq2PhaseWord` on the P2 (`ETH`) branch, and the native `networkproto1.c:476-494` splats `prn->{tx,rx}[0].frequency` directly into C1..C4 with no conversion. Symptom reproduced in alpha tester pcap4 (2026-04-15, ANAN-10E): 319 consecutive `C0=0x04` frames pinned at phase word `0x080D5555`, aliased waterfall, VFO did not track dial. Fix aligns with pre-existing `tst_p1_wire_format` assertions that had silently drifted unvalidated. Branch `fix/p1-freq-encoding`, confirmed working against live ANAN-10E 2026-04-15.
@@ -781,10 +781,11 @@ The next meaningful steps:
 
 - **3G-9 (Display Refactor)** — three-PR polish pass on the 3G-8 Display surface: audit + tooltips + slider readouts → smooth defaults + Clarity Blue palette → Clarity adaptive auto-tune. Independent of TX work; can ship in parallel with 3G-10 and 3M-1 prep.
 - **3G-10 (RX DSP Parity + AetherSDR Flag Port)** — two-stage phase: **Stage 1 complete (PRs #28 + #30)** — VfoWidget visual shell with 4×2 DSP grid, mode containers, tooltip coverage test. **Stage 2 next** — wires every RX-side DSP NYI through WDSP with per-slice-per-band bandstack persistence. Parallelizable with 3G-9; no file overlap. Blocks 3M-1 mostly by sharing reviewer attention, not by code dependency.
+- **3G-12 (Step Attenuator & ADC Overload)** — Setup → General → Options step attenuator port + ADC overload auto-attenuate. StepAttenuatorController with Classic (Thetis 1:1) and Adaptive (NereusSDR-native attack/decay) modes, RxApplet ATT/S-ATT row, ADC OVL status badge, per-band persistence. Design spec + 8-task plan in docs/architecture/. Independent of 3G-9/3G-10/3M-*.
 - **3M-1 (Basic SSB TX)** (formerly 3I-1; renumbered after Phase 3I became the radio connector port) — TxChannel WDSP wrapper, mic input, MOX state machine, TX I/Q
   output. Proves the TX path end-to-end and unblocks 3M-2..4, 3F, 3H.
 
-Execution order: **(3G-9a..c ∥ 3G-10) → 3M-1..4 → 3F → 3H → 3J+** (3G-9 and 3G-10 run in parallel; both land before 3M-1)
+Execution order: **(3G-9a..c ∥ 3G-10 ∥ 3G-12) → 3M-1..4 → 3F → 3H → 3J+** (3G-9, 3G-10, and 3G-12 run in parallel; all land before 3M-1)
 
 ### Phase Dependencies
 
@@ -801,7 +802,7 @@ Execution order: **(3G-9a..c ∥ 3G-10) → 3M-1..4 → 3F → 3H → 3J+** (3G-
                        states (DDC0+DDC1 sync at 192kHz)
 ```
 
-3G-9 and 3G-10 touch disjoint subsystems from each other and from 3M-* — they can all run in parallel if desired. 3G-9 owns the Display setup surface; 3G-10 owns the VFO flag and RX DSP wiring.
+3G-9, 3G-10, and 3G-12 touch disjoint subsystems from each other and from 3M-* — they can all run in parallel if desired. 3G-9 owns the Display setup surface; 3G-10 owns the VFO flag and RX DSP wiring; 3G-12 owns the step attenuator + ADC overload protection (protocol layer + Setup Options + RxApplet ATT row + status bar).
 
 Independent phases (can start anytime): 3J (TCI), 3K (CAT), 3L (P1), 3M (Recording).
 
