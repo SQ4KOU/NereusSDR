@@ -54,6 +54,16 @@ public:
     void setAgcMode(AGCMode mode);
     void setAgcTop(double topdB);
 
+    // Read back AGC top (max gain in dB) from WDSP after threshold change.
+    // From Thetis console.cs:45978 — GetRXAAGCTop after SetRXAAGCThresh
+    // Returns clamped value in -20..120 dB range.
+    double readBackAgcTop() const;
+
+    // Read back AGC threshold from WDSP after top/RF gain change.
+    // From Thetis console.cs:50350 pattern — GetRXAAGCThresh after SetRXAAGCTop
+    // Returns clamped value in -160..0 dB range.
+    double readBackAgcThresh() const;
+
     // AGC advanced parameters
     // From Thetis Project Files/Source/Console/radio.cs:1037-1124
     // From Thetis Project Files/Source/Console/console.cs:45977

@@ -12,6 +12,8 @@
 #include "core/LogCategories.h"
 #include "gui/SpectrumWidget.h"
 
+#include <cmath>
+
 #include <QMetaObject>
 #include <QStandardPaths>
 #include <QThread>
@@ -478,10 +480,26 @@ void RadioModel::wireSliceSignals()
     // From Thetis Project Files/Source/Console/console.cs:45977 — AGCThresh
     // From Thetis Project Files/Source/Console/radio.cs:1037-1124 — Decay/Hang/Slope
     // From Thetis Project Files/Source/Console/dsp.cs:116-120 — P/Invoke decls
+    //
+    // Bidirectional sync: SetRXAAGCThresh and SetRXAAGCTop both write max_gain
+    // in WDSP wcpAGC.c. After either changes, read back the sibling value and
+    // update the paired control. m_syncingAgc guards against A→B→A feedback loops.
+    // From Thetis console.cs:45960-46006 — bidirectional AGC sync pattern.
     connect(slice, &SliceModel::agcThresholdChanged, this, [this](int dBu) {
+        if (m_syncingAgc) { return; }
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
+            m_syncingAgc = true;
             rxCh->setAgcThreshold(dBu);
+            // Read back resulting AGC Top and sync RF Gain display.
+            // From Thetis console.cs:45978 — GetRXAAGCTop after SetRXAAGCThresh
+            double top = rxCh->readBackAgcTop();
+            int rfGain = static_cast<int>(std::round(top));
+            SliceModel* s = m_activeSlice;
+            if (s && s->rfGain() != rfGain) {
+                s->setRfGain(rfGain);
+            }
+            m_syncingAgc = false;
         }
         scheduleSettingsSave();
     });
@@ -718,11 +736,22 @@ void RadioModel::wireSliceSignals()
         scheduleSettingsSave();
     });
 
-    // RF gain → WDSP AGC top
+    // RF gain → WDSP AGC top, with bidirectional sync back to AGC-T.
+    // From Thetis console.cs:50350 pattern — GetRXAAGCThresh after SetRXAAGCTop
     connect(slice, &SliceModel::rfGainChanged, this, [this](int gain) {
+        if (m_syncingAgc) { return; }
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
+            m_syncingAgc = true;
             rxCh->setAgcTop(static_cast<double>(gain));
+            // Read back resulting threshold and sync AGC-T display.
+            double thresh = rxCh->readBackAgcThresh();
+            int threshInt = static_cast<int>(std::round(thresh));
+            SliceModel* s = m_activeSlice;
+            if (s && s->agcThreshold() != threshInt) {
+                s->setAgcThreshold(threshInt);
+            }
+            m_syncingAgc = false;
         }
         scheduleSettingsSave();
     });

@@ -95,6 +95,35 @@ void RxChannel::setAgcTop(double topdB)
 #endif
 }
 
+double RxChannel::readBackAgcTop() const
+{
+#ifdef HAVE_WDSP
+    // Read resulting max_gain after SetRXAAGCThresh modified it.
+    // From Thetis console.cs:45978 — GetRXAAGCTop after SetRXAAGCThresh
+    // Clamp matches Thetis console.cs:45988-45989 guard on RFGain slider range.
+    double top = 0.0;
+    GetRXAAGCTop(m_channelId, &top);
+    return std::clamp(top, -20.0, 120.0);
+#else
+    return 80.0;
+#endif
+}
+
+double RxChannel::readBackAgcThresh() const
+{
+#ifdef HAVE_WDSP
+    // Read resulting threshold after SetRXAAGCTop modified it.
+    // From Thetis console.cs:50350 pattern — GetRXAAGCThresh after SetRXAAGCTop
+    // kDspSize must match the size passed to SetRXAAGCThresh (4096).
+    static constexpr double kDspSize = 4096.0;
+    double thresh = 0.0;
+    GetRXAAGCThresh(m_channelId, &thresh, kDspSize, static_cast<double>(m_sampleRate));
+    return std::clamp(thresh, -160.0, 0.0);
+#else
+    return -20.0;
+#endif
+}
+
 void RxChannel::setAgcThreshold(int dBu)
 {
     if (dBu == m_agcThreshold.load()) {

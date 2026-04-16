@@ -178,6 +178,11 @@ private:
 
     // Settings save coalescing
     bool m_settingsSaveScheduled{false};
+
+    // AGC bidirectional sync guard — prevents infinite feedback loop between
+    // agcThresholdChanged and rfGainChanged handlers.
+    // From Thetis console.cs:45960-46006 — bidirectional sync pattern.
+    bool m_syncingAgc{false};
 };
 
 } // namespace NereusSDR
