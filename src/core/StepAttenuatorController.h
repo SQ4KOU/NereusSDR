@@ -124,6 +124,10 @@ public:
     // Wire to ReceiverManager for DDC mapping changes.
     void setReceiverManager(ReceiverManager* mgr);
 
+    // Per-MAC persistence — save/load all ATT/preamp/auto-att settings.
+    void saveSettings(const QString& mac);
+    void loadSettings(const QString& mac);
+
     // --- Tick (public for testability) ---
 
     // Stop/start the internal tick timer. Tests call setTickTimerEnabled(false)

@@ -18,6 +18,8 @@ class QGridLayout;
 class QHBoxLayout;
 class QLabel;
 class QSlider;
+class QSpinBox;
+class QStackedWidget;
 
 namespace NereusSDR {
 
@@ -117,6 +119,12 @@ private:
     // Control 14: Squelch
     QPushButton* m_sqlBtn      = nullptr;
     QSlider*     m_sqlSlider   = nullptr;
+
+    // ATT/S-ATT row (between Squelch and AGC)
+    QLabel*         m_attLabel{nullptr};
+    QStackedWidget* m_attStack{nullptr};
+    QComboBox*      m_preampCombo{nullptr};   // Page 0: ATT mode
+    QSpinBox*       m_stepAttSpin{nullptr};   // Page 1: S-ATT mode
 
     // Controls 9 + 10: AGC
     QComboBox*   m_agcCombo    = nullptr;   // Control 9

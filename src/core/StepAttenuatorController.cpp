@@ -4,6 +4,7 @@
 // Porting from Thetis console.cs:21290-21763 handleOverload().
 
 #include "StepAttenuatorController.h"
+#include "AppSettings.h"
 #include "RadioConnection.h"
 #include "ReceiverManager.h"
 
@@ -437,6 +438,125 @@ void StepAttenuatorController::checkAdcLinked()
 void StepAttenuatorController::onDdcMappingChanged()
 {
     checkAdcLinked();
+}
+
+// --- Per-MAC persistence ---
+
+void StepAttenuatorController::saveSettings(const QString& mac)
+{
+    auto& s = AppSettings::instance();
+
+    // Step attenuator global config.
+    s.setHardwareValue(mac, QStringLiteral("options/stepAtt/rx1Enabled"),
+                       m_stepAttEnabled ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setHardwareValue(mac, QStringLiteral("options/stepAtt/rx1Value"),
+                       QString::number(m_attDb));
+
+    // Auto-att config.
+    s.setHardwareValue(mac, QStringLiteral("options/autoAtt/rx1Enabled"),
+                       m_autoAttEnabled ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setHardwareValue(mac, QStringLiteral("options/autoAtt/rx1Mode"),
+                       m_autoAttMode == AutoAttMode::Classic
+                           ? QStringLiteral("Classic") : QStringLiteral("Adaptive"));
+    s.setHardwareValue(mac, QStringLiteral("options/autoAtt/rx1Undo"),
+                       m_autoUndoEnabled ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setHardwareValue(mac, QStringLiteral("options/autoAtt/rx1HoldSeconds"),
+                       QString::number(m_adaptiveHoldMs / 1000));
+    s.setHardwareValue(mac, QStringLiteral("options/autoAtt/rx1UndoDelaySec"),
+                       QString::number(m_autoUndoDelaySec));
+
+    // Per-band ATT values and preamp modes.
+    for (int b = 0; b < static_cast<int>(Band::Count); ++b) {
+        Band band = static_cast<Band>(b);
+        QString key = bandKeyName(band);
+        auto it = m_bandState.find(b);
+        if (it != m_bandState.end()) {
+            s.setHardwareValue(mac,
+                QStringLiteral("options/stepAtt/rx1Band/") + key,
+                QString::number(it->second.attDb));
+            s.setHardwareValue(mac,
+                QStringLiteral("options/preamp/rx1Band/") + key,
+                QString::number(static_cast<int>(it->second.preamp)));
+        }
+    }
+
+    // Save current band state (may not yet be stored in m_bandState).
+    {
+        QString key = bandKeyName(m_currentBand);
+        s.setHardwareValue(mac,
+            QStringLiteral("options/stepAtt/rx1Band/") + key,
+            QString::number(m_attDb));
+        s.setHardwareValue(mac,
+            QStringLiteral("options/preamp/rx1Band/") + key,
+            QString::number(static_cast<int>(m_preampMode)));
+    }
+
+    // Adaptive floor.
+    s.setHardwareValue(mac, QStringLiteral("options/autoAtt/rx1AdaptiveFloor"),
+                       QString::number(m_adaptiveFloorDb));
+
+    s.save();
+}
+
+void StepAttenuatorController::loadSettings(const QString& mac)
+{
+    auto& s = AppSettings::instance();
+
+    // Step attenuator global config.
+    m_stepAttEnabled = s.hardwareValue(mac, QStringLiteral("options/stepAtt/rx1Enabled"),
+                                       QStringLiteral("True")).toString() == QStringLiteral("True");
+    m_attDb = s.hardwareValue(mac, QStringLiteral("options/stepAtt/rx1Value"),
+                              0).toInt();
+
+    // Auto-att config.
+    m_autoAttEnabled = s.hardwareValue(mac, QStringLiteral("options/autoAtt/rx1Enabled"),
+                                       QStringLiteral("False")).toString() == QStringLiteral("True");
+    QString modeStr = s.hardwareValue(mac, QStringLiteral("options/autoAtt/rx1Mode"),
+                                      QStringLiteral("Classic")).toString();
+    m_autoAttMode = (modeStr == QStringLiteral("Adaptive"))
+                        ? AutoAttMode::Adaptive : AutoAttMode::Classic;
+    m_autoUndoEnabled = s.hardwareValue(mac, QStringLiteral("options/autoAtt/rx1Undo"),
+                                         QStringLiteral("False")).toString() == QStringLiteral("True");
+    m_adaptiveHoldMs = s.hardwareValue(mac, QStringLiteral("options/autoAtt/rx1HoldSeconds"),
+                                       2).toInt() * 1000;
+    m_autoUndoDelaySec = s.hardwareValue(mac, QStringLiteral("options/autoAtt/rx1UndoDelaySec"),
+                                         5).toInt();
+
+    // Per-band ATT values and preamp modes.
+    for (int b = 0; b < static_cast<int>(Band::Count); ++b) {
+        Band band = static_cast<Band>(b);
+        QString key = bandKeyName(band);
+
+        QVariant attVal = s.hardwareValue(mac,
+            QStringLiteral("options/stepAtt/rx1Band/") + key);
+        QVariant preampVal = s.hardwareValue(mac,
+            QStringLiteral("options/preamp/rx1Band/") + key);
+
+        if (attVal.isValid() || preampVal.isValid()) {
+            BandAttState& st = m_bandState[b];
+            if (attVal.isValid()) {
+                st.attDb = attVal.toInt();
+            }
+            if (preampVal.isValid()) {
+                st.preamp = static_cast<PreampMode>(preampVal.toInt());
+            }
+        }
+    }
+
+    // Restore current band's ATT/preamp from per-band storage.
+    auto it = m_bandState.find(static_cast<int>(m_currentBand));
+    if (it != m_bandState.end()) {
+        m_attDb = it->second.attDb;
+        m_preampMode = it->second.preamp;
+    }
+
+    // Adaptive floor.
+    m_adaptiveFloorDb = s.hardwareValue(mac, QStringLiteral("options/autoAtt/rx1AdaptiveFloor"),
+                                        0).toInt();
+
+    // Notify UI of restored values.
+    emit attenuationChanged(m_attDb);
+    emit preampModeChanged(m_preampMode);
 }
 
 }  // namespace NereusSDR

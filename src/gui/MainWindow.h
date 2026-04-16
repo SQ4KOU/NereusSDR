@@ -70,6 +70,8 @@ private:
     FFTEngine*          m_fftEngine{nullptr};
     QThread*            m_fftThread{nullptr};
     ClarityController*  m_clarityController{nullptr};
+    class StepAttenuatorController* m_stepAttController{nullptr};
+    QLabel* m_adcOvlLabel{nullptr};
 
     // Re-entrancy guard: prevents centerChanged from firing a second
     // forceHardwareFrequency while frequencyChanged is already retuning the DDC

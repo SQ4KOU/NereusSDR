@@ -7,9 +7,11 @@
 
 #include "RxApplet.h"
 #include "NyiOverlay.h"
+#include "core/StepAttenuatorController.h"
 #include "gui/ComboStyle.h"
 #include "gui/StyleConstants.h"
 #include "gui/widgets/FilterPassbandWidget.h"
+#include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 #include <QAction>
@@ -21,6 +23,8 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QSlider>
+#include <QSpinBox>
+#include <QStackedWidget>
 #include <QVBoxLayout>
 
 namespace NereusSDR {
@@ -343,6 +347,45 @@ void RxApplet::buildUi()
         rightCol->addLayout(row);
         NyiOverlay::markNyi(m_sqlBtn,    QStringLiteral("Phase 3I"));
         NyiOverlay::markNyi(m_sqlSlider, QStringLiteral("Phase 3I"));
+    }
+
+    // ATT/S-ATT row — between Squelch and AGC
+    // From Thetis console.cs: comboPreamp / udRX1StepAttData (stacked)
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+        row->setContentsMargins(0, 0, 0, 0);
+
+        m_attLabel = new QLabel(QStringLiteral("ATT"), this);
+        m_attLabel->setFixedWidth(34);
+        m_attLabel->setStyleSheet(QStringLiteral(
+            "QLabel { color: #8aa8c0; font-size: 11px; }"));
+        row->addWidget(m_attLabel);
+
+        m_attStack = new QStackedWidget(this);
+        m_attStack->setFixedHeight(20);
+
+        // Page 0: Preamp combo (ATT mode — step att disabled)
+        m_preampCombo = new QComboBox(this);
+        m_preampCombo->addItems({QStringLiteral("0dB"), QStringLiteral("-10dB"),
+                                 QStringLiteral("-20dB"), QStringLiteral("-30dB")});
+        m_preampCombo->setFixedWidth(70);
+        m_preampCombo->setFixedHeight(20);
+        applyComboStyle(m_preampCombo);
+        m_attStack->addWidget(m_preampCombo);
+
+        // Page 1: Step att spinbox (S-ATT mode — step att enabled)
+        m_stepAttSpin = new QSpinBox(this);
+        m_stepAttSpin->setRange(0, 31);
+        m_stepAttSpin->setSuffix(QStringLiteral(" dB"));
+        m_stepAttSpin->setFixedWidth(70);
+        m_stepAttSpin->setFixedHeight(20);
+        m_attStack->addWidget(m_stepAttSpin);
+
+        m_attStack->setCurrentIndex(0);  // default to preamp combo
+        row->addWidget(m_attStack, 1);
+
+        rightCol->addLayout(row);
     }
 
     // Controls 9 + 10: AGC combo + AGC threshold slider
@@ -728,6 +771,42 @@ void RxApplet::connectSlice(SliceModel* s)
     connect(s, &SliceModel::txAntennaChanged, this, [this](const QString& ant) {
         m_txAntBtn->setText(ant);
     });
+
+    // ATT/S-ATT — wire to StepAttenuatorController if available
+    auto* attCtrl = m_model ? m_model->stepAttController() : nullptr;
+    if (attCtrl) {
+        connect(m_stepAttSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+                this, [attCtrl](int val) {
+            attCtrl->setAttenuation(val);
+        });
+
+        connect(m_preampCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [attCtrl](int idx) {
+            attCtrl->setPreampMode(static_cast<PreampMode>(idx));
+        });
+
+        connect(attCtrl, &StepAttenuatorController::attenuationChanged,
+                this, [this](int dB) {
+            QSignalBlocker blk(m_stepAttSpin);
+            m_stepAttSpin->setValue(dB);
+        });
+
+        connect(attCtrl, &StepAttenuatorController::preampModeChanged,
+                this, [this](PreampMode mode) {
+            QSignalBlocker blk(m_preampCombo);
+            m_preampCombo->setCurrentIndex(static_cast<int>(mode));
+        });
+
+        // Sync initial ATT value from controller
+        {
+            QSignalBlocker blk(m_stepAttSpin);
+            m_stepAttSpin->setValue(attCtrl->attenuatorDb());
+        }
+        {
+            QSignalBlocker blk(m_preampCombo);
+            m_preampCombo->setCurrentIndex(static_cast<int>(attCtrl->preampMode()));
+        }
+    }
 }
 
 void RxApplet::disconnectSlice(SliceModel* s)
