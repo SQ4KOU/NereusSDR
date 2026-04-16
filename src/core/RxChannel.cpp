@@ -95,6 +95,98 @@ void RxChannel::setAgcTop(double topdB)
 #endif
 }
 
+void RxChannel::setAgcThreshold(int dBu)
+{
+    if (dBu == m_agcThreshold.load()) {
+        return;
+    }
+
+    m_agcThreshold.store(dBu);
+
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/console.cs:45977
+    //   WDSP.SetRXAAGCThresh(WDSP.id(0, 0), agc_thresh_point, size, sample_rate_rx1)
+    // WDSP third_party/wdsp/src/wcpAGC.c:504
+    SetRXAAGCThresh(m_channelId, static_cast<double>(dBu),
+                    static_cast<double>(m_bufferSize),
+                    static_cast<double>(m_sampleRate));
+#else
+    Q_UNUSED(dBu);
+#endif
+}
+
+void RxChannel::setAgcHang(int ms)
+{
+    if (ms == m_agcHang.load()) {
+        return;
+    }
+
+    m_agcHang.store(ms);
+
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1056-1073
+    //   WDSP.SetRXAAGCHang(WDSP.id(thread, subrx), value)
+    // WDSP third_party/wdsp/src/wcpAGC.c:436
+    SetRXAAGCHang(m_channelId, ms);
+#else
+    Q_UNUSED(ms);
+#endif
+}
+
+void RxChannel::setAgcSlope(int slope)
+{
+    if (slope == m_agcSlope.load()) {
+        return;
+    }
+
+    m_agcSlope.store(slope);
+
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1107-1124
+    //   WDSP.SetRXAAGCSlope(WDSP.id(thread, subrx), value)
+    // WDSP third_party/wdsp/src/wcpAGC.c:537
+    SetRXAAGCSlope(m_channelId, slope);
+#else
+    Q_UNUSED(slope);
+#endif
+}
+
+void RxChannel::setAgcAttack(int ms)
+{
+    if (ms == m_agcAttack.load()) {
+        return;
+    }
+
+    m_agcAttack.store(ms);
+
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/dsp.cs:116-117
+    //   SetRXAAGCAttack declared; no explicit radio.cs call site (disabled in UI)
+    // WDSP third_party/wdsp/src/wcpAGC.c:418
+    SetRXAAGCAttack(m_channelId, ms);
+#else
+    Q_UNUSED(ms);
+#endif
+}
+
+void RxChannel::setAgcDecay(int ms)
+{
+    if (ms == m_agcDecay.load()) {
+        return;
+    }
+
+    m_agcDecay.store(ms);
+
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1037-1054
+    //   WDSP.SetRXAAGCDecay(WDSP.id(thread, subrx), value)
+    // WDSP third_party/wdsp/src/wcpAGC.c:427
+    SetRXAAGCDecay(m_channelId, ms);
+#else
+    Q_UNUSED(ms);
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // Noise blanker
 // ---------------------------------------------------------------------------

@@ -417,6 +417,41 @@ void RadioModel::wireSliceSignals()
         scheduleSettingsSave();
     });
 
+    // AGC advanced → WDSP
+    // From Thetis Project Files/Source/Console/console.cs:45977 — AGCThresh
+    // From Thetis Project Files/Source/Console/radio.cs:1037-1124 — Decay/Hang/Slope
+    // From Thetis Project Files/Source/Console/dsp.cs:116-120 — P/Invoke decls
+    connect(slice, &SliceModel::agcThresholdChanged, this, [this](int dBu) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setAgcThreshold(dBu);
+        }
+    });
+    connect(slice, &SliceModel::agcHangChanged, this, [this](int ms) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setAgcHang(ms);
+        }
+    });
+    connect(slice, &SliceModel::agcSlopeChanged, this, [this](int slope) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setAgcSlope(slope);
+        }
+    });
+    connect(slice, &SliceModel::agcAttackChanged, this, [this](int ms) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setAgcAttack(ms);
+        }
+    });
+    connect(slice, &SliceModel::agcDecayChanged, this, [this](int ms) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setAgcDecay(ms);
+        }
+    });
+
     // AF gain → AudioEngine volume
     connect(slice, &SliceModel::afGainChanged, this, [this](int gain) {
         m_audioEngine->setVolume(gain / 100.0f);

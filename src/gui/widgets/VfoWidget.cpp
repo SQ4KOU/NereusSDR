@@ -552,7 +552,7 @@ void VfoWidget::buildAudioTab()
         m_agcTSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
-        m_agcTSlider->setToolTip(QStringLiteral("AGC threshold — not yet implemented"));
+        m_agcTSlider->setToolTip(QStringLiteral("AGC threshold (dBu) — adjusts the level at which AGC begins to act"));
         row->addWidget(m_agcTSlider);
 
         m_agcTLabel = new QLabel(QStringLiteral("0"), audioWidget);
@@ -568,7 +568,6 @@ void VfoWidget::buildAudioTab()
             }
         });
         audioLayout->addLayout(row);
-        NyiOverlay::markNyi(m_agcTSlider, QStringLiteral("phase3g10-stage2"));
     }
 
     audioLayout->addStretch();

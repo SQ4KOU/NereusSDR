@@ -415,19 +415,18 @@ void RxApplet::buildUi()
         row->addWidget(m_agcCombo);
 
         // Control 10: AGC threshold slider
-        // NYI — SliceModel has no setAgcThreshold() yet
+        // From Thetis Project Files/Source/Console/console.cs:45977 — agc_thresh_point
         m_agcTSlider = new QSlider(Qt::Horizontal, this);
-        m_agcTSlider->setRange(0, 100);
-        m_agcTSlider->setValue(65);
+        m_agcTSlider->setRange(-160, 0);
+        m_agcTSlider->setValue(-20);
         m_agcTSlider->setFixedHeight(18);
         m_agcTSlider->setStyleSheet(Style::sliderHStyle());
+        m_agcTSlider->setToolTip(QStringLiteral("AGC threshold (dBu) — adjusts the level at which AGC begins to act"));
         connect(m_agcTSlider, &QSlider::valueChanged, this, [this](int v) {
-            m_agcTSlider->setToolTip(
-                QStringLiteral("AGC Threshold: %1").arg(v));
-            // TODO Phase 3I: m_slice->setAgcThreshold(v);
+            if (m_updatingFromModel || !m_slice) { return; }
+            m_slice->setAgcThreshold(v);
         });
         row->addWidget(m_agcTSlider, 1);
-        NyiOverlay::markNyi(m_agcTSlider, QStringLiteral("Phase 3I"));
 
         rightCol->addLayout(row);
     }

@@ -54,6 +54,24 @@ public:
     void setAgcMode(AGCMode mode);
     void setAgcTop(double topdB);
 
+    // AGC advanced parameters
+    // From Thetis Project Files/Source/Console/radio.cs:1037-1124
+    // From Thetis Project Files/Source/Console/console.cs:45977
+    int agcThreshold() const { return m_agcThreshold.load(); }
+    void setAgcThreshold(int dBu);
+
+    int agcHang() const { return m_agcHang.load(); }
+    void setAgcHang(int ms);
+
+    int agcSlope() const { return m_agcSlope.load(); }
+    void setAgcSlope(int slope);
+
+    int agcAttack() const { return m_agcAttack.load(); }
+    void setAgcAttack(int ms);
+
+    int agcDecay() const { return m_agcDecay.load(); }
+    void setAgcDecay(int ms);
+
     // --- Noise blanker ---
 
     bool nb1Enabled() const { return m_nb1Enabled.load(); }
@@ -115,6 +133,19 @@ private:
     std::atomic<bool> m_nrEnabled{false};
     std::atomic<bool> m_anfEnabled{false};
     std::atomic<bool> m_active{false};
+
+    // AGC advanced parameters — atomic for thread-safe reads from audio thread
+    // Defaults from Thetis Project Files/Source/Console/radio.cs:1037-1124
+    // threshold default: From Thetis console.cs:45977 — agc_thresh_point = -20
+    std::atomic<int> m_agcThreshold{-20};
+    // hang: From Thetis radio.cs:1056-1057 — rx_agc_hang = 250 ms
+    std::atomic<int> m_agcHang{250};
+    // slope: From Thetis radio.cs:1107-1108 — rx_agc_slope = 0
+    std::atomic<int> m_agcSlope{0};
+    // attack: From WDSP wcpAGC.c create_wcpagc — tau_attack default 2 ms
+    std::atomic<int> m_agcAttack{2};
+    // decay: From Thetis radio.cs:1037-1038 — rx_agc_decay = 250 ms
+    std::atomic<int> m_agcDecay{250};
 
     // Cached filter state
     double m_filterLow{150.0};
