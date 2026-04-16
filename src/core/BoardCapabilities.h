@@ -21,7 +21,7 @@ struct BoardCapabilities {
 
     int  adcCount;
     int  maxReceivers;
-    std::array<int, 4> sampleRates;  // zero-pad unused slots
+    std::array<int, 6> sampleRates;  // zero-pad unused slots; up to 6 for P2 boards
     int  maxSampleRate;
 
     struct Atten {
