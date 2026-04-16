@@ -245,6 +245,7 @@ endif()
 set(CORE_SOURCES
     src/core/AppSettings.cpp
     src/core/BoardCapabilities.cpp
+    src/core/HardwareProfile.cpp
     src/core/LogCategories.cpp
     src/core/SupportBundle.cpp
     src/core/RadioDiscovery.cpp

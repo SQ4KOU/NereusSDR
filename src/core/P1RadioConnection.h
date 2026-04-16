@@ -80,16 +80,17 @@ private:
     // --- Wire format (networkproto1.c) — implemented in Tasks 7 & 8 ---
     void sendMetisStart(bool iqAndMic);
     void sendMetisStop();
-    // Send one ep2 command frame. `sub1TxBank=true` puts TX VFO (bank 1,
-    // C0=0x02) on subframe 1; false puts RX1 VFO (bank 2, C0=0x04).
-    // The steady-state watchdog and the initial priming burst alternate
-    // between the two, matching Thetis's ForceCandCFrame(N) pattern in
-    // networkproto1.c:134-139.
-    void sendCommandFrame(bool sub1TxBank = false);
-    // Match Thetis ForceCandCFrame(count): send `count` TX-freq ep2 frames
-    // then `count` RX1-freq ep2 frames. Called before and after metis-start
-    // on both the initial connect and watchdog-driven reconnect paths.
+    // Send one ep2 command frame with two C&C subframes drawn from the
+    // round-robin bank sequence (0-17). Each call advances m_ccRoundRobinIdx
+    // by 2 (one per subframe). Source: networkproto1.c:597-884 WriteMainLoop.
+    void sendCommandFrame();
+    // Send `countPerBank` ep2 command frames in two bursts with a 10ms gap.
+    // Replaces the old ForceCandCFrame pattern — now simply drives the
+    // round-robin forward, ensuring all banks get primed.
     void sendPrimingBurst(int countPerBank);
+    // Compose 5 C&C bytes for any bank index 0-17.
+    // Dispatcher ported from Thetis networkproto1.c WriteMainLoop cases 0-17.
+    void composeCcForBank(int bankIdx, quint8 out[5]) const;
     void parseEp6Frame(const QByteArray& pkt);
 
     // --- Command & Control banks (NetworkIO.cs SetC0..SetC4) ---
@@ -101,6 +102,7 @@ private:
     void composeCcAlexRx(quint8* out);
     void composeCcAlexTx(quint8* out);
     void composeCcOcOutputs(quint8* out);
+    void composeCcBank0Full(quint8 out[5]) const;
 
     // --- Per-board quirks — implemented in Tasks 11 & 12 ---
     void applyBoardQuirks();
@@ -144,10 +146,9 @@ private:
     int         m_reconnectAttempts{0};                         // how many retries so far this cycle
     // 25 ms (= 40 fps) is enough to keep the radio's ep2 command pipe fed
     // without matching Thetis's full ~368 fps audio-drain cadence. Each tick
-    // sends one ep2 command frame, alternating the subframe-1 bank between
-    // TX VFO and RX1 VFO so both frequency banks are refreshed every ~50 ms.
-    // The previous 500 ms interval was a keep-alive tick, not a command
-    // stream, which left the radio's DDC stuck in its pre-primed idle state.
+    // sends one ep2 command frame containing two subframes, each carrying the
+    // next bank in the 0-16 (or 0-17 for AnvelinaPro3) round-robin. At 40 fps
+    // × 2 banks/frame, all 17 banks are refreshed every ~213 ms.
     static constexpr int kWatchdogTickMs       = 25;            // watchdog + ep2 command cadence
     static constexpr int kWatchdogSilenceMs    = 2000;          // silence → Error threshold
     static constexpr int kReconnectIntervalMs  = 5000;          // delay between retry attempts
@@ -161,10 +162,30 @@ private:
     int     m_activeRxCount{1};
     quint64 m_rxFreqHz[7]{};
     quint64 m_txFreqHz{0};
-    int     m_atten{0};
-    bool    m_preamp{false};
     bool    m_mox{false};
     int     m_antennaIdx{0};
+
+    // Per-ADC state — initialized from HardwareProfile at connect time
+    bool    m_dither[3]{true, true, true};
+    bool    m_random[3]{true, true, true};
+    bool    m_rxPreamp[3]{};
+    int     m_stepAttn[3]{};      // per-ADC step attenuator (0-31)
+    int     m_txStepAttn{0};
+
+    // Alex filter state — computed from frequency
+    quint8  m_alexHpfBits{0};     // Bank 10 C3: HPF select bits
+    quint8  m_alexLpfBits{0};     // Bank 10 C4: LPF select bits
+
+    // Hardware config from profile
+    int     m_txDrive{0};
+    bool    m_paEnabled{false};
+    bool    m_duplex{true};
+    bool    m_diversity{false};
+    quint8  m_ocOutput{0};
+    quint16 m_adcCtrl{0};          // ADC-to-DDC assignment bits
+
+    // Reconnect log guard
+    bool    m_reconnectedLogged{false};
 
     const BoardCapabilities* m_caps{nullptr};
 
@@ -178,7 +199,7 @@ private:
 public:
     // Test-only helpers — allow unit tests to inject board caps without a live radio.
     void setBoardForTest(HPSDRHW board) { m_caps = &BoardCapsTable::forBoard(board); applyBoardQuirks(); }
-    int currentAttenForTest() const { return m_atten; }
+    int currentAttenForTest() const { return m_stepAttn[0]; }
     bool hl2ThrottledForTest() const { return m_hl2Throttled; }
 #endif
 };

@@ -717,11 +717,13 @@ void MainWindow::buildMenuBar()
 
     radioMenu->addSeparator();
 
-    {
-        QAction* radioSetupAction = radioMenu->addAction(QStringLiteral("&Radio Setup..."));
-        radioSetupAction->setEnabled(false);
-        radioSetupAction->setToolTip(QStringLiteral("NYI — Phase X"));
-    }
+    radioMenu->addAction(QStringLiteral("&Radio Setup..."), this, [this]() {
+        if (!m_radioModel->isConnected()) {
+            showConnectionPanel();
+            return;
+        }
+        showConnectionPanel();
+    });
     {
         QAction* antennaSetupAction = radioMenu->addAction(QStringLiteral("&Antenna Setup..."));
         antennaSetupAction->setEnabled(false);
@@ -2331,7 +2333,13 @@ void MainWindow::tryAutoReconnect()
             QObject::disconnect(*connPtr);
             delete connPtr;
             m_autoReconnectInProgress = false;
-            m_radioModel->connectToRadio(found);
+            // Load persisted model override for auto-reconnect (Phase 3I-RP)
+            RadioInfo ri = found;
+            HPSDRModel mo = AppSettings::instance().modelOverride(ri.macAddress);
+            if (mo != HPSDRModel::FIRST) {
+                ri.modelOverride = mo;
+            }
+            m_radioModel->connectToRadio(ri);
         });
 
         // Kick off the Fast-profile discovery
@@ -2358,7 +2366,13 @@ void MainWindow::tryAutoReconnect()
         // Silent failure: if the radio doesn't respond, RadioConnection's
         // internal state machine eventually times out without any popup.
         if (!m_radioModel->isConnected()) {
-            m_radioModel->connectToRadio(saved->info);
+            // Load persisted model override for auto-reconnect (Phase 3I-RP)
+            RadioInfo ri = saved->info;
+            HPSDRModel mo = AppSettings::instance().modelOverride(ri.macAddress);
+            if (mo != HPSDRModel::FIRST) {
+                ri.modelOverride = mo;
+            }
+            m_radioModel->connectToRadio(ri);
         }
     }
 }

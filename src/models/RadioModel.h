@@ -7,6 +7,7 @@
 #include "TransmitModel.h"
 #include "core/RadioDiscovery.h"
 #include "core/RadioConnection.h"
+#include "core/HardwareProfile.h"
 
 #include <QObject>
 #include <QString>
@@ -98,6 +99,7 @@ public:
     QString name() const { return m_name; }
     QString model() const { return m_model; }
     QString version() const { return m_version; }
+    const HardwareProfile& hardwareProfile() const { return m_hardwareProfile; }
     bool isConnected() const;
 
     // Connection
@@ -169,6 +171,7 @@ private:
     QString m_name;
     QString m_model;
     QString m_version;
+    HardwareProfile m_hardwareProfile;
 
     // Reconnect state
     RadioInfo m_lastRadioInfo;
