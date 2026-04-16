@@ -191,9 +191,14 @@ Badge visible as long as any ADC has level > 0. No separate display timer.
 never emitted. Wire it up:
 
 **P1 (Protocol 1):** In the EP6 (RX data) frame handler in `P1RadioConnection`,
-parse the ADC overflow bit from C0 status byte. Emit `adcOverflow(0)` when set.
-- From Thetis: C0 bit 0 = LT2208 overflow (ADC0)
-- Reference: `radio-abstraction.md` C&C register map
+parse the ADC overflow bit from the C1 byte when C0 address = 0x00.
+Emit `adcOverflow(0)` when C1 bit 0 is set.
+- C0 bit 0 at address 0x00 is PTT/MOX — NOT overflow
+- C1 bit 0 at address 0x00 = LT2208 overflow (ADC0)
+- Reference: `openhpsdr-protocol1-capture-reference.md` §3.3, §A.11;
+  `radio-abstraction.md` C&C byte format table
+- **Note:** existing `P1RadioConnection.cpp:872-878` checks C0 (frame[11])
+  instead of C1 (frame[12]) — pre-existing bug to fix during implementation
 
 **P2 (Protocol 2):** In the high-priority status frame handler in
 `P2RadioConnection`, parse per-ADC overflow bits. Emit `adcOverflow(adcIndex)`
@@ -203,10 +208,19 @@ for each flagged ADC (up to 3 ADCs: ADC0, ADC1, ADC2).
 
 The controller needs to know which ADC serves each RX to route overloads correctly.
 
-**From Thetis (`GetADCInUse(int ddc)`):**
-- P2: Uses `RXADCCtrl1`/`RXADCCtrl2` registers (2 bits per DDC)
+**From Thetis (`GetADCInUse(int ddc)` — console.cs:15083):**
+- P2: Uses `RXADCCtrl1` (DDC 0–3) / `RXADCCtrl2` (DDC 4–7), 2 bits per DDC
 - P1: Uses `RXADCCtrl_P1` (14-bit int, 2 bits per DDC)
-- Bit masking: `(adcControl & (3 << (ddc * 2))) >> (ddc * 2)`
+- Register selection + index remap required for P2:
+  ```
+  adcControl = (ddc < 4) ? RXADCCtrl1 : RXADCCtrl2;
+  if (ddc >= 4) ddc -= 4;   // remap to local index within ctrl2
+  return (adcControl & (3 << (ddc * 2))) >> (ddc * 2);
+  ```
+- Without the remap, DDC 4+ shifts beyond the 8-bit register width
+- Reference: `adc-ddc-panadapter-mapping.md` §4.1–4.3
+- **Note:** existing `P2RadioConnection::getAdcForDdc()` (line 759) always
+  reads `m_rxAdcCtrl1` and lacks `m_rxAdcCtrl2` — pre-existing bug to fix
 
 **NereusSDR approach:** Add `int getAdcForDdc(int ddc)` to RadioConnection
 (virtual, implemented in P1/P2). Controller calls this to resolve the mapping.
@@ -219,7 +233,8 @@ list (ANAN-10, ANAN-10E, ANAN-7000D, ANAN-8000D, OrionMkII, G2, G2-1K,
 AnvelinaPro3, RedPitaya):
 
 - **0–31 dB:** Direct to ADC step attenuator, ALEX atten = 0
-- **32–61 dB:** ALEX atten set to -30 dB, ADC step atten = value + 2
+- **32–61 dB:** ALEX atten set to -30 dB, ADC step atten = value - 30
+  (maps 32→2 through 61→31, keeping ADC within its 0–31 range)
 
 This logic lives in `StepAttenuatorController`, not the protocol layer.
 
