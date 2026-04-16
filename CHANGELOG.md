@@ -2,7 +2,8 @@
 
 ## [0.1.8] - 2026-04-16
 
-RedPitaya / Hermes P1 protocol fixes driven by pcap analysis in issue #38.
+RedPitaya / Hermes P1 protocol fixes driven by pcap analysis in issue #38,
+plus Windows D3D11 container lifecycle fixes from issue #42.
 
 ### Fixed
 - **P1 RedPitaya / Hermes family (#38):** restore DDC3 NCO command on the wire.
@@ -15,6 +16,39 @@ RedPitaya / Hermes P1 protocol fixes driven by pcap analysis in issue #38.
   loop, yielding ~200-400 pps (target: Thetis' 380.95 pps from its 48 kHz
   audio clock). Previously we ran ~40 pps, starving the radio's audio DAC
   and stretching the 17-bank C&C round-robin to ~213 ms per cycle.
+- **Windows container float/dock rendering** — five interlocking issues in
+  the meter container lifecycle on Windows D3D11 QRhi (#42):
+  - HWND collision on reparent — `E_ACCESSDENIED` →
+    `DXGI_ERROR_DEVICE_REMOVED` cascade from the old `MeterWidget`
+    lingering under the parent HWND during `setParent()`. Old widget now
+    detaches synchronously (`hide()` + `setParent(nullptr)`) before
+    `deleteLater`; `ContainerManager` swaps the meter around each reparent
+    so no `WA_NativeWindow` child is reparented.
+  - First float landed at `(0,0)` behind the main window —
+    `FloatingContainer::ensureVisiblePosition()` centers the form on the
+    anchor's screen when saved geometry is missing, at origin, or
+    off every connected screen.
+  - Use-after-free in `MeterPoller` — raw `MeterWidget*` targets dangled
+    when the reparent-swap destroyed them. Switched to
+    `QVector<QPointer<MeterWidget>>` with null-guarded `poll()`.
+  - Progressive stack compression across reparent cycles —
+    `inferStackFromGeometry` merged touching row intervals into one
+    cluster, collapsing N bar rows onto stack slot 0. Require strict
+    overlap > 0.002 before merging.
+  - Empty band below the meter stack on resizable containers — Thetis's
+    fixed `kNormalRowHNorm = 0.05` assumes fixed-aspect containers; stack
+    now shares `(1 − bandTop)` equally among rows. 24 px floor preserved
+    for small widgets.
+
+### Known issues
+- **ANAN MM preset** still shows empty space below the needle panel when
+  no bar rows are added. Thetis-faithful fix (per-container `AutoHeight`)
+  is scoped in
+  [`docs/architecture/meter-autoheight-plan.md`](docs/architecture/meter-autoheight-plan.md).
+- Exit-time segfault (exit 139) reproducible on close; root cause still
+  unknown, not implicated by the #42 changes.
+- One `QRhiWidget: No QRhi` warning per meter install cycle; benign,
+  under investigation.
 
 ## [0.1.7-rc1] - 2026-04-16
 

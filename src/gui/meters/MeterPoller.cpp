@@ -26,14 +26,20 @@ void MeterPoller::setRxChannel(RxChannel* channel)
 
 void MeterPoller::addTarget(MeterWidget* widget)
 {
-    if (widget && !m_targets.contains(widget)) {
-        m_targets.append(widget);
+    if (!widget) { return; }
+    // Drop any stale entries whose widgets have been destroyed, then add
+    // only if not already present.
+    m_targets.removeAll(QPointer<MeterWidget>(nullptr));
+    for (const auto& p : m_targets) {
+        if (p.data() == widget) { return; }
     }
+    m_targets.append(QPointer<MeterWidget>(widget));
 }
 
 void MeterPoller::removeTarget(MeterWidget* widget)
 {
-    m_targets.removeAll(widget);
+    m_targets.removeAll(QPointer<MeterWidget>(widget));
+    m_targets.removeAll(QPointer<MeterWidget>(nullptr));
 }
 
 void MeterPoller::setInterval(int ms)
@@ -69,7 +75,8 @@ void MeterPoller::poll()
     // endpoint's variable cache into each item with an MMIO
     // binding.
     auto& engine = ExternalVariableEngine::instance();
-    for (MeterWidget* target : m_targets) {
+    for (auto& guarded : m_targets) {
+        MeterWidget* target = guarded.data();
         if (!target) { continue; }
         for (MeterItem* item : target->items()) {
             if (!item || !item->hasMmioBinding()) { continue; }
@@ -95,7 +102,9 @@ void MeterPoller::poll()
         if (bindingId == MeterBinding::SignalAvg) {
             smeterDbm = value;
         }
-        for (MeterWidget* target : m_targets) {
+        for (auto& guarded : m_targets) {
+            MeterWidget* target = guarded.data();
+            if (!target) { continue; }
             target->updateMeterValue(bindingId, value);
         }
     }
