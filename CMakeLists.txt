@@ -284,6 +284,7 @@ set(GUI_SOURCES
     src/gui/widgets/ResetSlider.h
     src/gui/widgets/ScrollableLabel.cpp
     src/gui/widgets/TriBtn.h
+    src/gui/widgets/TriBtn.cpp
     src/gui/widgets/VfoLevelBar.cpp
     src/gui/widgets/VfoModeContainers.cpp
     src/gui/widgets/VfoModeContainers.h
