@@ -18,8 +18,10 @@
 #include <QClipboard>
 #include <QComboBox>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGuiApplication>
 #include <QGroupBox>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QSpinBox>
@@ -97,6 +99,24 @@ RadioInfoTab::RadioInfoTab(RadioModel* model, QWidget* parent)
 
     outerLayout->addWidget(paramGroup);
 
+    // Pending-reconnect banner — hidden by default. Shown when the combo
+    // value differs from the active wire rate AND a radio is connected.
+    // Removed when Phase C live-apply lands (PR #36); until then, users
+    // must reconnect for rate changes to take effect.
+    m_reconnectBanner = new QFrame(this);
+    m_reconnectBanner->setFrameShape(QFrame::StyledPanel);
+    m_reconnectBanner->setStyleSheet(QStringLiteral(
+        "QFrame { background-color: #3a2a10; border: 1px solid #a07020; "
+        "border-radius: 3px; padding: 4px; }"));
+    auto* bannerLayout = new QHBoxLayout(m_reconnectBanner);
+    bannerLayout->setContentsMargins(6, 4, 6, 4);
+    m_reconnectBannerLabel = new QLabel(m_reconnectBanner);
+    m_reconnectBannerLabel->setStyleSheet(QStringLiteral("color: #ffcc66;"));
+    m_reconnectBannerLabel->setWordWrap(true);
+    bannerLayout->addWidget(m_reconnectBannerLabel);
+    m_reconnectBanner->setVisible(false);
+    outerLayout->addWidget(m_reconnectBanner);
+
     // ── Support info button ───────────────────────────────────────────────────
     m_copySupportInfoButton = new QPushButton(tr("Copy Support Info to Clipboard"), this);
     m_copySupportInfoButton->setToolTip(
@@ -110,6 +130,11 @@ RadioInfoTab::RadioInfoTab(RadioModel* model, QWidget* parent)
 
     connect(m_activeRxSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &RadioInfoTab::onActiveRxCountChanged);
+
+    if (m_model) {
+        connect(m_model, &RadioModel::wireSampleRateChanged,
+                this, &RadioInfoTab::onWireSampleRateChanged);
+    }
 
     connect(m_copySupportInfoButton, &QPushButton::clicked, this, [this]() {
         QGuiApplication::clipboard()->setText(m_currentInfo);
@@ -218,6 +243,10 @@ void RadioInfoTab::onSampleRateChanged(int index)
     int rate = m_sampleRateRx1Combo->itemData(index).toInt();
     if (rate > 0) {
         emit settingChanged(QStringLiteral("radioInfo/sampleRate"), rate);
+        // Mirror into RX2 stub visually.
+        QSignalBlocker blocker(m_sampleRateRx2Combo);
+        m_sampleRateRx2Combo->setCurrentIndex(index);
+        updateReconnectBanner();
     }
 }
 
@@ -225,6 +254,33 @@ void RadioInfoTab::onActiveRxCountChanged(int count)
 {
     if (count < 1) { return; }
     emit settingChanged(QStringLiteral("radioInfo/activeRxCount"), count);
+}
+
+void RadioInfoTab::onWireSampleRateChanged(double hz)
+{
+    m_activeWireRate = static_cast<int>(hz);
+    updateReconnectBanner();
+}
+
+void RadioInfoTab::updateReconnectBanner()
+{
+    // Banner shows only when a radio is connected AND the combo's selected
+    // rate differs from the active wire rate. m_activeWireRate is 0 when
+    // no radio has ever connected this session — hide the banner then.
+    if (!m_model || !m_model->isConnected() || m_activeWireRate <= 0) {
+        m_reconnectBanner->setVisible(false);
+        return;
+    }
+    const int selected = m_sampleRateRx1Combo->currentData().toInt();
+    if (selected <= 0 || selected == m_activeWireRate) {
+        m_reconnectBanner->setVisible(false);
+        return;
+    }
+    m_reconnectBannerLabel->setText(
+        tr("⚠ Reconnect to apply new sample rate (pending: %1 kHz, active: %2 kHz)")
+            .arg(selected / 1000)
+            .arg(m_activeWireRate / 1000));
+    m_reconnectBanner->setVisible(true);
 }
 
 // ── restoreSettings ───────────────────────────────────────────────────────────
