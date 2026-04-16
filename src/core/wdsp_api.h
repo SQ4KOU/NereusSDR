@@ -208,7 +208,23 @@ void SetRXASPCWBandwidth(int channel, double bandwidth);
 void SetRXASPCWGain(int channel, double gain);
 
 // ---------------------------------------------------------------------------
-// Squelch (amsq.h)
+// Squelch — SSB (ssql.c / ssql.h)
+//
+// From Thetis Project Files/Source/Console/radio.cs:1185-1229
+// WDSP: third_party/wdsp/src/ssql.c:331,339
+// threshold: 0.0..1.0 linear (Thetis default _fSSqlThreshold = 0.16f)
+// ---------------------------------------------------------------------------
+
+void SetRXASSQLRun(int channel, int run);
+
+void SetRXASSQLThreshold(int channel, double threshold);
+
+// ---------------------------------------------------------------------------
+// Squelch — AM (amsq.h)
+//
+// From Thetis Project Files/Source/Console/radio.cs:1164-1178, 1293-1310
+// WDSP: third_party/wdsp/src/amsq.c — threshold in dB (pow(10,t/20) applied internally)
+// threshold: rx_squelch_threshold default = -150.0 dB
 // ---------------------------------------------------------------------------
 
 void SetRXAAMSQRun(int channel, int run);
@@ -216,6 +232,19 @@ void SetRXAAMSQRun(int channel, int run);
 void SetRXAAMSQThreshold(int channel, double threshold);
 
 void SetRXAAMSQMaxTail(int channel, double tail);
+
+// ---------------------------------------------------------------------------
+// Squelch — FM (fmsq.c / fmsq.h)
+//
+// From Thetis Project Files/Source/Console/radio.cs:1274-1329
+// WDSP: third_party/wdsp/src/fmsq.c:236,244
+// SetRXAFMSQRun is NOT declared in fmsq.h but is exported from fmsq.c.
+// threshold: linear 0..1 scale (Thetis fm_squelch_threshold = 1.0f, not dB)
+// ---------------------------------------------------------------------------
+
+void SetRXAFMSQRun(int channel, int run);
+
+void SetRXAFMSQThreshold(int channel, double threshold);
 
 // ---------------------------------------------------------------------------
 // Metering (meter.h)

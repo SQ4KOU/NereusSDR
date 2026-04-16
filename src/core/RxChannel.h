@@ -109,6 +109,32 @@ public:
     void setApfGain(double gain);
     void setApfSelection(int selection);
 
+    // Squelch — SSB (syllabic squelch, WDSP SSQL module)
+    // From Thetis Project Files/Source/Console/radio.cs:1185-1229
+    // WDSP: third_party/wdsp/src/ssql.c:331,339
+    // threshold: 0.0..1.0 linear (Thetis default _fSSqlThreshold = 0.16f)
+    bool ssqlEnabled() const { return m_ssqlEnabled.load(); }
+    void setSsqlEnabled(bool enabled);
+    void setSsqlThresh(double threshold);  // 0.0..1.0 linear
+
+    // Squelch — AM (WDSP AMSQ module)
+    // From Thetis Project Files/Source/Console/radio.cs:1164-1178, 1293-1310
+    // WDSP: third_party/wdsp/src/amsq.c — threshold in dB
+    // threshold: dB domain; WDSP applies pow(10.0, t/20.0) internally
+    bool amsqEnabled() const { return m_amsqEnabled.load(); }
+    void setAmsqEnabled(bool enabled);
+    void setAmsqThresh(double dB);
+
+    // Squelch — FM (WDSP FMSQ module)
+    // From Thetis Project Files/Source/Console/radio.cs:1274-1329
+    // WDSP: third_party/wdsp/src/fmsq.c:236,244
+    // threshold: linear 0..1 (Thetis fm_squelch_threshold = 1.0f, NOT dB)
+    // SliceModel m_fmsqThresh{-150.0} is in dB and must be converted:
+    //   linear = pow(10.0, dB / 20.0)
+    bool fmsqEnabled() const { return m_fmsqEnabled.load(); }
+    void setFmsqEnabled(bool enabled);
+    void setFmsqThresh(double dB);  // converts dB → linear before WDSP call
+
     // --- Frequency shift (for pan offset from VFO) ---
 
     void setShiftFrequency(double offsetHz);
@@ -163,6 +189,15 @@ private:
     // apf: Audio Peak Filter — off by default
     // From Thetis radio.cs:1910 — rx_apf_run default = false
     std::atomic<bool> m_apfEnabled{false};
+    // ssql: SSB syllabic squelch — off by default
+    // From Thetis radio.cs:1185 — _bSSqlOn default = false
+    std::atomic<bool> m_ssqlEnabled{false};
+    // amsq: AM squelch — off by default
+    // From Thetis radio.cs:1293 — rx_am_squelch_on default = false
+    std::atomic<bool> m_amsqEnabled{false};
+    // fmsq: FM squelch — off by default
+    // From Thetis radio.cs:1312 — rx_fm_squelch_on default = false
+    std::atomic<bool> m_fmsqEnabled{false};
     std::atomic<bool> m_active{false};
 
     // AGC advanced parameters — atomic for thread-safe reads from audio thread

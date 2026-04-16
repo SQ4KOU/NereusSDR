@@ -215,6 +215,13 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 rxCh->setApfGain(1.0);          // radio.cs:1967 rx_apf_gain = 1.0
                 rxCh->setApfFreq(600.0);        // radio.cs:1929 rx_apf_freq = 600.0 Hz
                 rxCh->setApfEnabled(m_activeSlice->apfEnabled());
+                // Squelch initial push — From Thetis radio.cs:1185,1164,1274,1293,1312
+                rxCh->setSsqlEnabled(m_activeSlice->ssqlEnabled());
+                rxCh->setSsqlThresh(m_activeSlice->ssqlThresh());
+                rxCh->setAmsqEnabled(m_activeSlice->amsqEnabled());
+                rxCh->setAmsqThresh(m_activeSlice->amsqThresh());
+                rxCh->setFmsqEnabled(m_activeSlice->fmsqEnabled());
+                rxCh->setFmsqThresh(m_activeSlice->fmsqThresh());
             }
             rxCh->setActive(true);
         }
@@ -518,6 +525,55 @@ void RadioModel::wireSliceSignals()
             // CW pitch default 600 Hz from Thetis console.cs
             static constexpr double kCwPitchHz = 600.0;
             rxCh->setApfFreq(kCwPitchHz + static_cast<double>(hz));
+        }
+    });
+
+    // Squelch — SSB → WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1185-1229
+    // WDSP: third_party/wdsp/src/ssql.c:331,339
+    connect(slice, &SliceModel::ssqlEnabledChanged, this, [this](bool on) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setSsqlEnabled(on);
+        }
+    });
+    connect(slice, &SliceModel::ssqlThreshChanged, this, [this](double threshold) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setSsqlThresh(threshold);
+        }
+    });
+
+    // Squelch — AM → WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1164-1178, 1293-1310
+    // WDSP: third_party/wdsp/src/amsq.c (SetRXAAMSQRun, SetRXAAMSQThreshold)
+    connect(slice, &SliceModel::amsqEnabledChanged, this, [this](bool on) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setAmsqEnabled(on);
+        }
+    });
+    connect(slice, &SliceModel::amsqThreshChanged, this, [this](double dB) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setAmsqThresh(dB);
+        }
+    });
+
+    // Squelch — FM → WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1274-1329
+    // WDSP: third_party/wdsp/src/fmsq.c:236,244
+    // SliceModel stores fmsqThresh in dB; RxChannel::setFmsqThresh converts to linear
+    connect(slice, &SliceModel::fmsqEnabledChanged, this, [this](bool on) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setFmsqEnabled(on);
+        }
+    });
+    connect(slice, &SliceModel::fmsqThreshChanged, this, [this](double dB) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setFmsqThresh(dB);
         }
     });
 

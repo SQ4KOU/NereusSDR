@@ -509,7 +509,7 @@ void VfoWidget::buildAudioTab()
         m_sqlBtn->setCheckable(true);
         m_sqlBtn->setStyleSheet(kDspToggle);
         m_sqlBtn->setFixedWidth(40);
-        m_sqlBtn->setToolTip(QStringLiteral("Squelch — not yet implemented"));
+        m_sqlBtn->setToolTip(QStringLiteral("Toggle squelch. SSB uses syllabic squelch; AM/FM use separate squelch engines."));
         row->addWidget(m_sqlBtn);
 
         m_sqlSlider = new QSlider(Qt::Horizontal, audioWidget);
@@ -519,7 +519,7 @@ void VfoWidget::buildAudioTab()
         m_sqlSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
-        m_sqlSlider->setToolTip(QStringLiteral("Squelch threshold — not yet implemented"));
+        m_sqlSlider->setToolTip(QStringLiteral("Squelch threshold. SSB: 0–100 maps to 0.0–1.0 linear. AM: dB scale. FM: linear 0–1."));
         row->addWidget(m_sqlSlider);
 
         connect(m_sqlBtn, &QPushButton::toggled, this, [this](bool on) {
@@ -533,8 +533,7 @@ void VfoWidget::buildAudioTab()
             }
         });
         audioLayout->addLayout(row);
-        NyiOverlay::markNyi(m_sqlBtn,    QStringLiteral("phase3g10-stage2"));
-        NyiOverlay::markNyi(m_sqlSlider, QStringLiteral("phase3g10-stage2"));
+        // Squelch button and slider are live-wired — no NYI badge
     }
 
     // 6. AGC threshold slider row

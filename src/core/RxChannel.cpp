@@ -400,6 +400,117 @@ void RxChannel::setApfSelection(int selection)
 }
 
 // ---------------------------------------------------------------------------
+// Squelch — SSB (syllabic squelch)
+// ---------------------------------------------------------------------------
+
+void RxChannel::setSsqlEnabled(bool enabled)
+{
+    if (enabled == m_ssqlEnabled.load()) {
+        return;
+    }
+
+    m_ssqlEnabled.store(enabled);
+
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1185-1207
+    //   WDSP.SetRXASSQLRun(WDSP.id(thread, subrx), value)
+    // WDSP third_party/wdsp/src/ssql.c:331
+    SetRXASSQLRun(m_channelId, enabled ? 1 : 0);
+#else
+    Q_UNUSED(enabled);
+#endif
+}
+
+void RxChannel::setSsqlThresh(double threshold)
+{
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1209-1228
+    //   WDSP.SetRXASSQLThreshold(WDSP.id(thread, subrx), _fSSqlThreshold)
+    //   threshold range clamped 0.0..1.0 as per ssql.c
+    //   Thetis default _fSSqlThreshold = 0.16f
+    // WDSP third_party/wdsp/src/ssql.c:339
+    SetRXASSQLThreshold(m_channelId, threshold);
+#else
+    Q_UNUSED(threshold);
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Squelch — AM
+// ---------------------------------------------------------------------------
+
+void RxChannel::setAmsqEnabled(bool enabled)
+{
+    if (enabled == m_amsqEnabled.load()) {
+        return;
+    }
+
+    m_amsqEnabled.store(enabled);
+
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1293-1310
+    //   WDSP.SetRXAAMSQRun(WDSP.id(thread, subrx), value)
+    // WDSP third_party/wdsp/src/amsq.c (SetRXAAMSQRun)
+    SetRXAAMSQRun(m_channelId, enabled ? 1 : 0);
+#else
+    Q_UNUSED(enabled);
+#endif
+}
+
+void RxChannel::setAmsqThresh(double dB)
+{
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1164-1178
+    //   WDSP.SetRXAAMSQThreshold(WDSP.id(thread, subrx), value)
+    //   value is in dB; WDSP amsq.c applies pow(10.0, threshold/20.0) internally
+    //   Thetis default rx_squelch_threshold = -150.0f dB
+    // WDSP third_party/wdsp/src/amsq.c (SetRXAAMSQThreshold)
+    SetRXAAMSQThreshold(m_channelId, dB);
+#else
+    Q_UNUSED(dB);
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Squelch — FM
+// ---------------------------------------------------------------------------
+
+void RxChannel::setFmsqEnabled(bool enabled)
+{
+    if (enabled == m_fmsqEnabled.load()) {
+        return;
+    }
+
+    m_fmsqEnabled.store(enabled);
+
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1312-1329
+    //   WDSP.SetRXAFMSQRun(WDSP.id(thread, subrx), value)
+    // WDSP third_party/wdsp/src/fmsq.c:236
+    SetRXAFMSQRun(m_channelId, enabled ? 1 : 0);
+#else
+    Q_UNUSED(enabled);
+#endif
+}
+
+void RxChannel::setFmsqThresh(double dB)
+{
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1274-1291
+    //   WDSP.SetRXAFMSQThreshold(WDSP.id(thread, subrx), value)
+    //   Thetis fm_squelch_threshold = 1.0f is LINEAR (0..1 scale).
+    //   SliceModel stores in dB domain (m_fmsqThresh = -150.0 default).
+    //   Convert dB → linear before passing to WDSP.
+    //   -150.0 dB → ~3.16e-8 (effectively muted = squelch open on FM)
+    // WDSP third_party/wdsp/src/fmsq.c:244 — assigns threshold directly to tail_thresh (linear)
+    const double linear = std::pow(10.0, dB / 20.0);
+    SetRXAFMSQThreshold(m_channelId, linear);
+#else
+    Q_UNUSED(dB);
+#endif
+}
+
+// ---------------------------------------------------------------------------
 // Frequency shift (pan offset from VFO)
 // ---------------------------------------------------------------------------
 
