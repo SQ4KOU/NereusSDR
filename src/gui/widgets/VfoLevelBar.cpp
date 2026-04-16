@@ -23,7 +23,10 @@ void VfoLevelBar::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, false);
     const int tickH = 8;
-    const QRect barRect(0, tickH, width(), height() - tickH);
+
+    // ── dBm readout width reservation ──────────────────────────────────
+    static constexpr int kDbmWidth = 42;
+    const int barW = width() - kDbmWidth - 2;
 
     // ── Tick strip above the bar ───────────────────────────────────────
     // Tick labels for S1, S3, S5, S7, S9, +20, +40
@@ -33,11 +36,12 @@ void VfoLevelBar::paintEvent(QPaintEvent*) {
     QFont f = p.font(); f.setPixelSize(8); p.setFont(f);
     for (int i = 0; i < 7; ++i) {
         double frac = (kTickDbm[i] - kFloorDbm) / (kCeilingDbm - kFloorDbm);
-        int x = static_cast<int>(frac * (width() - 1));
+        int x = static_cast<int>(frac * (barW - 1));
         p.drawLine(x, tickH - 2, x, tickH);  // tick mark
         p.drawText(QRect(x - 10, 0, 20, tickH - 2),
                    Qt::AlignCenter, QString::fromLatin1(kTickTxt[i]));
     }
+    const QRect barRect(0, tickH, width() - kDbmWidth - 2, height() - tickH);
 
     // ── Bar itself (ported from AetherSDR LevelBar::paintEvent) ────────
     p.fillRect(barRect, QColor(0x10, 0x10, 0x1c));
@@ -49,5 +53,17 @@ void VfoLevelBar::paintEvent(QPaintEvent*) {
         p.fillRect(barRect.x() + 1, barRect.y() + 1,
                    fillW, barRect.height() - 2, color);
     }
+
+    // ── dBm text to the right of the bar ──────────────────────────────
+    const QRect dbmRect(barRect.right() + 4, barRect.y(),
+                        kDbmWidth, barRect.height());
+    p.setPen(isAboveS9() ? kMeterGreen : kMeterCyan);
+    QFont dbmFont = p.font();
+    dbmFont.setPixelSize(10);
+    dbmFont.setBold(true);
+    p.setFont(dbmFont);
+    p.drawText(dbmRect, Qt::AlignVCenter | Qt::AlignLeft,
+               QString::number(static_cast<int>(std::round(m_value)))
+               + QStringLiteral(" dBm"));
 }
 }
