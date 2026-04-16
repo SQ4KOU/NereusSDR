@@ -717,11 +717,13 @@ void MainWindow::buildMenuBar()
 
     radioMenu->addSeparator();
 
-    {
-        QAction* radioSetupAction = radioMenu->addAction(QStringLiteral("&Radio Setup..."));
-        radioSetupAction->setEnabled(false);
-        radioSetupAction->setToolTip(QStringLiteral("NYI — Phase X"));
-    }
+    radioMenu->addAction(QStringLiteral("&Radio Setup..."), this, [this]() {
+        if (!m_radioModel->isConnected()) {
+            showConnectionPanel();
+            return;
+        }
+        showConnectionPanel();
+    });
     {
         QAction* antennaSetupAction = radioMenu->addAction(QStringLiteral("&Antenna Setup..."));
         antennaSetupAction->setEnabled(false);

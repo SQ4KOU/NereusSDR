@@ -20,6 +20,7 @@
 
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
+#include "core/HardwareProfile.h"
 #include "core/RadioDiscovery.h"
 #include "models/RadioModel.h"
 
@@ -142,7 +143,8 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
 {
     m_currentMac = info.macAddress;
 
-    const BoardCapabilities& caps = BoardCapsTable::forBoard(info.boardType);
+    // Use HardwareProfile for capability lookup (Phase 3I-RP).
+    const BoardCapabilities& caps = *m_model->hardwareProfile().caps;
 
     // Radio Info is always visible.
     // Remaining tabs are shown only when the connected board supports them.
