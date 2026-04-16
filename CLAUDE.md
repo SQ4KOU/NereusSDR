@@ -61,7 +61,7 @@ static constexpr float kAgcDecayFactor = 0.98f;
 
 - Every WDSP function call must match the exact name, parameter order, and
   types from `Project Files/Source/wdsp/` in the Thetis repo
-- Cross-reference against `Project Files/Source/Console/wdsp.cs` (the C#
+- Cross-reference against `Project Files/Source/Console/dsp.cs` (the C#
   P/Invoke declarations) for the managed-side signatures
 - DSP parameter ranges, defaults, and scaling come from Thetis code, not
   from general knowledge or WDSP documentation
@@ -96,7 +96,7 @@ constants, protocol handling, DSP flow, feature behavior).
 │       │   ├── display.cs    ← Spectrum/waterfall rendering
 │       │   ├── audio.cs      ← Audio engine, VAC, portaudio
 │       │   ├── cmaster.cs    ← Channel master (WDSP channel management)
-│       │   ├── wdsp.cs       ← WDSP P/Invoke declarations
+│       │   ├── dsp.cs        ← WDSP P/Invoke declarations
 │       │   ├── NetworkIO.cs  ← Protocol 1/2 network I/O
 │       │   ├── protocol2.cs  ← Protocol 2 specific handling
 │       │   └── ...
@@ -382,9 +382,12 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | **3G-7: Polish** | **MMIO clone-path bug fix + 5 subclass accessor gap fills + NeedleItemEditor QGroupBox grouping** | **Complete** |
 | **3G-8: RX1 Display Parity** | **47 Spectrum/Waterfall/Grid controls wired (Setup → Display), `Band` enum + per-band grid on PanadapterModel, `BandButtonItem` 12→14, GPU polish: overlay cache invalidation, waterfall chrome in overlay texture, peak hold VBO, fill/gradient/cal-offset in vertex gen** | **Complete (PR #8)** |
 | **3I: Radio Connector & Radio-Model Port** | **P1 full family (Atlas/Hermes/HermesII/Angelia/Orion/HL2), BoardCapabilities registry, ConnectionPanel, HardwarePage 9-tab capability-gated, per-MAC persistence, mi0bot RadioDiscovery port, RadioConnectionError taxonomy** | **Complete** |
-| 3I-TX: Basic SSB TX | TxChannel, mic input, MOX state machine, I/Q output | Next |
-| 3I-CW: CW TX | Sidetone, firmware keyer, QSK/break-in | Planned |
-| 3I-PS: PureSignal | Feedback DDC, calcc/IQC engine, PSForm, AmpView | Planned |
+| 3G-9: Display Refactor | Source-first audit + Thetis-first tooltip port + slider/spinbox refactor (3G-9a merged as PR #25); 3G-9b smooth defaults + Clarity palette and 3G-9c adaptive auto-tune planned | **3G-9a Complete** |
+| **3G-10: RX DSP Parity + AetherSDR Flag Port** | **Stage 1 partial (widget library + SliceModel stubs + VfoWidget S-meter) shipped as PR #28 draft on `feature/phase3g10-stage1-widgets`. Stage 1 tail (tab rewrite, mode visibility, tooltip coverage) deferred to follow-up branch `feature/phase3g10-stage1-tabs`. Stage 2 (WDSP wiring + per-slice-per-band persistence) not yet started.** | **In flight** |
+| 3M-1: Basic SSB TX (was 3I-TX) | TxChannel, mic input, MOX state machine, I/Q output | Next |
+| 3M-2: CW TX (was 3I-CW) | Sidetone, firmware keyer, QSK/break-in | Planned |
+| 3M-3: TX Processing | 18-stage TXA chain + TX-side RX DSP additions | Planned |
+| 3M-4: PureSignal (was 3I-PS) | Feedback DDC, calcc/IQC engine, PSForm, AmpView | Planned |
 | 3F: Multi-Panadapter | DDC assignment (incl. PS states), FFTRouter, PanadapterStack, enable RX2 | Planned |
 | 3H: Skins | Thetis-inspired skin format, 4-pan, legacy import | Planned |
 | 3J: TCI + Spots | TCI server, DX Cluster/RBN clients, spot overlay | Planned |
