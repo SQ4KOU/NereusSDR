@@ -120,3 +120,6 @@ nereus_add_test(tst_fm_opt_container_wire)
 
 # ── Phase 3G-10 Stage 2: DIG offset + RTTY mark/shift (S2.10b) ──────────────
 nereus_add_test(tst_dig_rtty_wire)
+
+# ── Phase 3G-10 Stage 2: per-slice-per-band DSP persistence (S2.P) ───────────
+nereus_add_test(tst_slice_persistence_per_band)

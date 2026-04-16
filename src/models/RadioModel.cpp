@@ -105,6 +105,20 @@ int RadioModel::addPanadapter()
     auto* pan = new PanadapterModel(this);
     int index = m_panadapters.size();
     m_panadapters.append(pan);
+
+    // Wire bandChanged for per-band DSP bandstack persistence.
+    // This fires whenever the VFO crosses a band boundary: save the old
+    // band's DSP state then restore the new band's DSP state.
+    // Only the first panadapter drives the active slice; additional pans
+    // are wired the same way for completeness (multi-pan is 3F scope).
+    connect(pan, &PanadapterModel::bandChanged, this, [this](Band newBand) {
+        if (m_activeSlice) {
+            m_activeSlice->saveToSettings(m_lastBand);
+            m_activeSlice->restoreFromSettings(newBand);
+            m_lastBand = newBand;
+        }
+    });
+
     emit panadapterAdded(index);
     return index;
 }
@@ -469,30 +483,35 @@ void RadioModel::wireSliceSignals()
         if (rxCh) {
             rxCh->setAgcThreshold(dBu);
         }
+        scheduleSettingsSave();
     });
     connect(slice, &SliceModel::agcHangChanged, this, [this](int ms) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setAgcHang(ms);
         }
+        scheduleSettingsSave();
     });
     connect(slice, &SliceModel::agcSlopeChanged, this, [this](int slope) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setAgcSlope(slope);
         }
+        scheduleSettingsSave();
     });
     connect(slice, &SliceModel::agcAttackChanged, this, [this](int ms) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setAgcAttack(ms);
         }
+        scheduleSettingsSave();
     });
     connect(slice, &SliceModel::agcDecayChanged, this, [this](int ms) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setAgcDecay(ms);
         }
+        scheduleSettingsSave();
     });
 
     // EMNR (NR2) → WDSP
@@ -503,6 +522,7 @@ void RadioModel::wireSliceSignals()
         if (rxCh) {
             rxCh->setEmnrEnabled(on);
         }
+        scheduleSettingsSave();
     });
 
     // SNB → WDSP
@@ -514,6 +534,7 @@ void RadioModel::wireSliceSignals()
         if (rxCh) {
             rxCh->setSnbEnabled(on);
         }
+        scheduleSettingsSave();
     });
 
     // APF → WDSP
@@ -525,6 +546,7 @@ void RadioModel::wireSliceSignals()
         if (rxCh) {
             rxCh->setApfEnabled(on);
         }
+        scheduleSettingsSave();
     });
 
     // APF tune offset → WDSP freq
@@ -540,6 +562,7 @@ void RadioModel::wireSliceSignals()
             static constexpr double kCwPitchHz = 600.0;
             rxCh->setApfFreq(kCwPitchHz + static_cast<double>(hz));
         }
+        scheduleSettingsSave();
     });
 
     // Squelch — SSB → WDSP
@@ -550,12 +573,14 @@ void RadioModel::wireSliceSignals()
         if (rxCh) {
             rxCh->setSsqlEnabled(on);
         }
+        scheduleSettingsSave();
     });
     connect(slice, &SliceModel::ssqlThreshChanged, this, [this](double threshold) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setSsqlThresh(threshold);
         }
+        scheduleSettingsSave();
     });
 
     // Squelch — AM → WDSP
@@ -566,12 +591,14 @@ void RadioModel::wireSliceSignals()
         if (rxCh) {
             rxCh->setAmsqEnabled(on);
         }
+        scheduleSettingsSave();
     });
     connect(slice, &SliceModel::amsqThreshChanged, this, [this](double dB) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setAmsqThresh(dB);
         }
+        scheduleSettingsSave();
     });
 
     // Squelch — FM → WDSP
@@ -583,12 +610,14 @@ void RadioModel::wireSliceSignals()
         if (rxCh) {
             rxCh->setFmsqEnabled(on);
         }
+        scheduleSettingsSave();
     });
     connect(slice, &SliceModel::fmsqThreshChanged, this, [this](double dB) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setFmsqThresh(dB);
         }
+        scheduleSettingsSave();
     });
 
     // Audio panel — mute / pan / binaural → WDSP PatchPanel
@@ -600,18 +629,21 @@ void RadioModel::wireSliceSignals()
         if (rxCh) {
             rxCh->setMuted(v);
         }
+        scheduleSettingsSave();
     });
     connect(slice, &SliceModel::audioPanChanged, this, [this](double pan) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setAudioPan(pan);
         }
+        scheduleSettingsSave();
     });
     connect(slice, &SliceModel::binauralEnabledChanged, this, [this](bool v) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setBinauralEnabled(v);
         }
+        scheduleSettingsSave();
     });
 
     // RIT + DIG offset → WDSP shift frequency
@@ -730,58 +762,36 @@ void RadioModel::wireSliceSignals()
 }
 
 // Load persisted VFO state from AppSettings into a slice.
+// Migrates legacy flat keys first, then restores per-band state for the
+// current band (derived from the panadapter center frequency or the slice
+// default frequency).
 void RadioModel::loadSliceState(SliceModel* slice)
 {
     if (!slice) {
         return;
     }
 
-    auto& s = AppSettings::instance();
+    // One-shot migration of legacy Vfo* flat keys. No-op if already migrated.
+    SliceModel::migrateLegacyKeys();
 
-    double freq = s.value(QStringLiteral("VfoFrequency"), 14225000.0).toDouble();
-    slice->setFrequency(freq);
-
-    int modeInt = s.value(QStringLiteral("VfoDspMode"),
-                          static_cast<int>(DSPMode::USB)).toInt();
-    DSPMode mode = static_cast<DSPMode>(modeInt);
-    // Set mode without auto-applying default filter (load persisted filter instead)
-    // We need to set the mode field directly and then load filter separately
-    slice->setDspMode(mode);
-
-    // Override filter with persisted values if they exist
-    if (s.contains(QStringLiteral("VfoFilterLow")) &&
-        s.contains(QStringLiteral("VfoFilterHigh"))) {
-        int low = s.value(QStringLiteral("VfoFilterLow")).toInt();
-        int high = s.value(QStringLiteral("VfoFilterHigh")).toInt();
-        slice->setFilter(low, high);
+    // Derive current band. Use the first panadapter's band if available;
+    // otherwise fall back to bandFromFrequency on the slice's default freq.
+    Band currentBand = Band::Band20m;
+    if (!m_panadapters.isEmpty()) {
+        currentBand = m_panadapters.first()->band();
+    } else {
+        currentBand = bandFromFrequency(slice->frequency());
     }
+    m_lastBand = currentBand;
 
-    int agcInt = s.value(QStringLiteral("VfoAgcMode"),
-                         static_cast<int>(AGCMode::Med)).toInt();
-    slice->setAgcMode(static_cast<AGCMode>(agcInt));
+    slice->restoreFromSettings(currentBand);
 
-    int stepHz = s.value(QStringLiteral("VfoStepHz"), 100).toInt();
-    slice->setStepHz(stepHz);
-
-    int afGain = s.value(QStringLiteral("VfoAfGain"), 50).toInt();
-    slice->setAfGain(afGain);
-
-    int rfGain = s.value(QStringLiteral("VfoRfGain"), 80).toInt();
-    slice->setRfGain(rfGain);
-
-    QString rxAnt = s.value(QStringLiteral("VfoRxAntenna"),
-                            QStringLiteral("ANT1")).toString();
-    slice->setRxAntenna(rxAnt);
-
-    QString txAnt = s.value(QStringLiteral("VfoTxAntenna"),
-                            QStringLiteral("ANT1")).toString();
-    slice->setTxAntenna(txAnt);
-
-    qCInfo(lcDsp) << "Loaded VFO state:"
-                  << SliceModel::modeName(mode)
-                  << freq / 1e6 << "MHz"
-                  << "AGC:" << agcInt
-                  << "AF:" << afGain << "RF:" << rfGain;
+    qCInfo(lcDsp) << "Loaded slice state for band:"
+                  << bandKeyName(currentBand)
+                  << SliceModel::modeName(slice->dspMode())
+                  << slice->frequency() / 1e6 << "MHz"
+                  << "AGC:" << static_cast<int>(slice->agcMode())
+                  << "AF:" << slice->afGain() << "RF:" << slice->rfGain();
 }
 
 // Coalesce settings saves to avoid writing on every scroll tick.
@@ -797,24 +807,14 @@ void RadioModel::scheduleSettingsSave()
     });
 }
 
-// Persist current slice state to AppSettings.
+// Persist current slice state to AppSettings (per-band + session state).
 void RadioModel::saveSliceState(SliceModel* slice)
 {
     if (!slice) {
         return;
     }
 
-    auto& s = AppSettings::instance();
-    s.setValue(QStringLiteral("VfoFrequency"), slice->frequency());
-    s.setValue(QStringLiteral("VfoDspMode"), static_cast<int>(slice->dspMode()));
-    s.setValue(QStringLiteral("VfoFilterLow"), slice->filterLow());
-    s.setValue(QStringLiteral("VfoFilterHigh"), slice->filterHigh());
-    s.setValue(QStringLiteral("VfoAgcMode"), static_cast<int>(slice->agcMode()));
-    s.setValue(QStringLiteral("VfoStepHz"), slice->stepHz());
-    s.setValue(QStringLiteral("VfoAfGain"), slice->afGain());
-    s.setValue(QStringLiteral("VfoRfGain"), slice->rfGain());
-    s.setValue(QStringLiteral("VfoRxAntenna"), slice->rxAntenna());
-    s.setValue(QStringLiteral("VfoTxAntenna"), slice->txAntenna());
+    slice->saveToSettings(m_lastBand);
 }
 
 void RadioModel::teardownConnection()

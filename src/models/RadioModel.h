@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Band.h"
 #include "SliceModel.h"
 #include "PanadapterModel.h"
 #include "MeterModel.h"
@@ -170,6 +171,10 @@ private:
     // I/Q accumulator and per-batch buffer sizes now live in
     // RxDspWorker (src/models/RxDspWorker.h) so the DSP thread owns
     // its own state and the main thread never touches it.
+
+    // Per-slice-per-band persistence: track the last-known band so
+    // bandChanged can save the old band's state before restoring the new one.
+    Band m_lastBand{Band::Band20m};
 
     // Settings save coalescing
     bool m_settingsSaveScheduled{false};

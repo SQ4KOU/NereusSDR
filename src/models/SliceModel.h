@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Band.h"
 #include "core/WdspTypes.h"
 
 #include <QObject>
@@ -276,6 +277,29 @@ public:
 
     // Returns DSPMode from name string (e.g., "LSB" → DSPMode::LSB)
     static DSPMode modeFromName(const QString& name);
+
+    // ── Phase 3G-10 Stage 2: per-slice-per-band persistence ──────────────────
+    //
+    // Key namespace (see AppSettings.h §Per-slice-per-band DSP state):
+    //   Per-band DSP: Slice<N>/Band<key>/AgcThreshold  etc.
+    //   Session state: Slice<N>/Locked  etc.
+    //
+    // saveToSettings(band):
+    //   Writes per-band DSP keys and session-state keys to AppSettings.
+    //   Does NOT call AppSettings::save() — caller is responsible for flushing.
+    //
+    // restoreFromSettings(band):
+    //   Reads per-band DSP keys and session-state keys from AppSettings.
+    //   Missing keys fall back to current SliceModel defaults (no change).
+    //
+    // migrateLegacyKeys():
+    //   One-shot migration. Checks for the legacy "VfoFrequency" flat key.
+    //   If found, migrates to Slice0/Band<current>/... using the persisted
+    //   frequency to derive the band. Then removes all legacy Vfo* keys.
+    //   Call once on startup, before restoreFromSettings().
+    void saveToSettings(NereusSDR::Band band);
+    void restoreFromSettings(NereusSDR::Band band);
+    static void migrateLegacyKeys();
 
 signals:
     void frequencyChanged(double freq);
