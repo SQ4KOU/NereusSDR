@@ -105,6 +105,38 @@ private slots:
 
         fake.stop();
     }
+
+    // Verifies EP2 (host→radio) cadence matches the spec's 48 kHz / 126
+    // samples-per-packet rate of ~381 pps. Before the pacer fix the rate
+    // was ~40 pps (once per 25 ms watchdog tick), starving the radio's
+    // audio DAC. See issue #38 pcap analysis.
+    void ep2PaceRateMatchesAudioClock() {
+        P1FakeRadio fake;
+        fake.start();
+
+        P1RadioConnection conn;
+        conn.init();
+        conn.connectToRadio(makeInfo(fake));
+        QTRY_COMPARE_WITH_TIMEOUT(conn.state(), ConnectionState::Connected, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(fake.isRunning(), 3000);
+
+        // Baseline count after connection is up — discard discovery/start framing.
+        const int baseline = fake.ep2FramesReceived();
+
+        // Sample for 500 ms.
+        QTest::qWait(500);
+
+        const int delta = fake.ep2FramesReceived() - baseline;
+        // At 381 pps ideal we expect ~190 packets in 500 ms. Windows QTimer
+        // jitter is ~±30 %, so assert a floor of 100 packets (200 pps) which
+        // is still 5× the broken 40 pps watchdog cadence.
+        QVERIFY2(delta >= 100,
+            qPrintable(QString("EP2 rate too slow: %1 packets in 500 ms (=%2 pps)")
+                .arg(delta).arg(delta * 2)));
+
+        conn.disconnect();
+        fake.stop();
+    }
 };
 
 QTEST_MAIN(TestP1LoopbackConnection)
