@@ -56,12 +56,26 @@ private slots:
         QCOMPARE(got, std::vector<int>({48000, 96000, 192000}));
     }
 
+    void p2_redpitaya_gets_full_p2_list()
+    {
+        // RedPitaya is P1-special (extra 384k per setup.cs:847) but on
+        // Protocol 2 it falls through to the generic P2 list (setup.cs:850).
+        // Hand-build caps rather than relying on registry mapping, since
+        // REDPITAYA shares HPSDRHW with OrionMKII.
+        BoardCapabilities caps{};
+        caps.sampleRates  = {48000, 96000, 192000, 384000, 768000, 1536000};
+        caps.maxReceivers = 2;
+        caps.maxSampleRate = 1536000;
+        const auto got = allowedSampleRates(ProtocolVersion::Protocol2, caps, HPSDRModel::REDPITAYA);
+        QCOMPARE(got, std::vector<int>({48000, 96000, 192000, 384000, 768000, 1536000}));
+    }
+
     void caps_sample_rates_intersect_with_master_list()
     {
         // Hand-built caps with only 48k and 192k populated; should drop
         // 96k even though the master P1 list has it.
         BoardCapabilities caps{};
-        caps.sampleRates  = {48000, 192000, 0, 0};
+        caps.sampleRates  = {48000, 192000, 0, 0, 0, 0};
         caps.maxReceivers = 1;
         caps.maxSampleRate = 192000;
         const auto got = allowedSampleRates(ProtocolVersion::Protocol1, caps, HPSDRModel::HERMES);
@@ -71,7 +85,7 @@ private slots:
     void empty_caps_sample_rates_returns_empty()
     {
         BoardCapabilities caps{};
-        caps.sampleRates = {0, 0, 0, 0};
+        caps.sampleRates = {0, 0, 0, 0, 0, 0};
         const auto got = allowedSampleRates(ProtocolVersion::Protocol2, caps, HPSDRModel::ANAN_G2);
         QVERIFY(got.empty());
     }
@@ -87,7 +101,7 @@ private slots:
     void default_falls_back_to_first_when_192k_missing()
     {
         BoardCapabilities caps{};
-        caps.sampleRates = {48000, 96000, 0, 0};
+        caps.sampleRates = {48000, 96000, 0, 0, 0, 0};
         const auto got = defaultSampleRate(ProtocolVersion::Protocol1, caps, HPSDRModel::HERMES);
         QCOMPARE(got, 48000);
     }
