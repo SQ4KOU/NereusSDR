@@ -1,4 +1,5 @@
 #include "VfoWidget.h"
+#include "gui/applets/NyiOverlay.h"
 
 #include <QPainter>
 #include <QMouseEvent>
@@ -98,14 +99,7 @@ void VfoWidget::buildUI()
     buildDspTab();
     buildModeTab();
 
-    // Stub X/RIT tab
-    auto* ritWidget = new QWidget;
-    auto* ritLayout = new QVBoxLayout(ritWidget);
-    ritLayout->setContentsMargins(4, 4, 4, 4);
-    auto* ritLabel = new QLabel(QStringLiteral("RIT/XIT"), ritWidget);
-    ritLabel->setStyleSheet(QStringLiteral("color: #6888a0; font-size: 11px;"));
-    ritLayout->addWidget(ritLabel);
-    m_tabStack->addWidget(ritWidget);
+    buildXRitTab();
 
     // Stub DAX tab
     auto* daxWidget = new QWidget;
@@ -531,6 +525,171 @@ void VfoWidget::buildModeTab()
     m_tabStack->addWidget(modeWidget);
 }
 
+void VfoWidget::buildXRitTab()
+{
+    // NereusSDR native X/RIT tab — AetherSDR pattern, control surfaces are native
+    // (per feedback_source_first_ui_vs_dsp.md). DSP state is all stubs from S1.6;
+    // Stage 2 wires the WDSP/SliceModel calls and removes NYI badges.
+    auto* ritWidget = new QWidget;
+    auto* vbox = new QVBoxLayout(ritWidget);
+    vbox->setContentsMargins(4, 4, 4, 4);
+    vbox->setSpacing(2);
+
+    static const char* kZeroBtn =
+        "QPushButton {"
+        "  background: #1a2a3a; border: 1px solid #304050; border-radius: 2px;"
+        "  color: #c8d8e8; font-size: 12px; font-weight: bold; padding: 1px;"
+        "}"
+        "QPushButton:hover { border: 1px solid #0090e0; }";
+
+    // --- RIT row ---
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        m_ritBtn = new QPushButton(QStringLiteral("RIT"), ritWidget);
+        m_ritBtn->setCheckable(true);
+        m_ritBtn->setStyleSheet(kDspToggle);
+        m_ritBtn->setFixedHeight(22);
+        row->addWidget(m_ritBtn);
+
+        m_ritLabel = new ScrollableLabel(ritWidget);
+        m_ritLabel->setRange(-10000, 10000);
+        m_ritLabel->setStep(m_stepHz);
+        m_ritLabel->setValue(0);
+        m_ritLabel->setFormat([](int v) {
+            return QString::asprintf("%+d Hz", v);
+        });
+        row->addWidget(m_ritLabel, 1);
+
+        m_ritZeroBtn = new QPushButton(QStringLiteral("0"), ritWidget);
+        m_ritZeroBtn->setFixedWidth(20);
+        m_ritZeroBtn->setFlat(true);
+        m_ritZeroBtn->setStyleSheet(kZeroBtn);
+        row->addWidget(m_ritZeroBtn);
+
+        vbox->addLayout(row);
+    }
+
+    // --- XIT row ---
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        m_xitBtn = new QPushButton(QStringLiteral("XIT"), ritWidget);
+        m_xitBtn->setCheckable(true);
+        m_xitBtn->setStyleSheet(kDspToggle);
+        m_xitBtn->setFixedHeight(22);
+        row->addWidget(m_xitBtn);
+
+        m_xitLabel = new ScrollableLabel(ritWidget);
+        m_xitLabel->setRange(-10000, 10000);
+        m_xitLabel->setStep(m_stepHz);
+        m_xitLabel->setValue(0);
+        m_xitLabel->setFormat([](int v) {
+            return QString::asprintf("%+d Hz", v);
+        });
+        row->addWidget(m_xitLabel, 1);
+
+        m_xitZeroBtn = new QPushButton(QStringLiteral("0"), ritWidget);
+        m_xitZeroBtn->setFixedWidth(20);
+        m_xitZeroBtn->setFlat(true);
+        m_xitZeroBtn->setStyleSheet(kZeroBtn);
+        row->addWidget(m_xitZeroBtn);
+
+        vbox->addLayout(row);
+    }
+
+    // --- Bottom row: LOCK + STEP cycle ---
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        m_xritLockBtn = new QPushButton(QStringLiteral("LOCK"), ritWidget);
+        m_xritLockBtn->setCheckable(true);
+        m_xritLockBtn->setStyleSheet(kDspToggle);
+        m_xritLockBtn->setFixedHeight(22);
+        row->addWidget(m_xritLockBtn);
+
+        // Step cycle button — NOT NYI (wires to live SliceModel::setStepHz)
+        m_stepCycleBtn = new QPushButton(
+            QStringLiteral("%1 Hz").arg(m_stepHz), ritWidget);
+        m_stepCycleBtn->setFlat(true);
+        m_stepCycleBtn->setStyleSheet(
+            QStringLiteral("QPushButton {"
+                           "  background: #1a2a3a; border: 1px solid #304050; border-radius: 2px;"
+                           "  color: #c8d8e8; font-size: 11px; font-weight: bold; padding: 2px 4px;"
+                           "}"
+                           "QPushButton:hover { border: 1px solid #0090e0; }"));
+        m_stepCycleBtn->setFixedHeight(22);
+        row->addWidget(m_stepCycleBtn, 1);
+
+        vbox->addLayout(row);
+    }
+
+    vbox->addStretch();
+
+    // --- Signal wiring ---
+    connect(m_ritBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) {
+            emit ritEnabledChanged(on);
+        }
+    });
+
+    connect(m_ritLabel, &ScrollableLabel::valueChanged, this, [this](int hz) {
+        if (!m_updatingFromModel) {
+            emit ritHzChanged(hz);
+        }
+    });
+
+    connect(m_ritZeroBtn, &QPushButton::clicked, this, [this]() {
+        m_ritLabel->setValue(0);
+        if (!m_updatingFromModel) {
+            emit ritHzChanged(0);
+        }
+    });
+
+    connect(m_xitBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) {
+            emit xitEnabledChanged(on);
+        }
+    });
+
+    connect(m_xitLabel, &ScrollableLabel::valueChanged, this, [this](int hz) {
+        if (!m_updatingFromModel) {
+            emit xitHzChanged(hz);
+        }
+    });
+
+    connect(m_xitZeroBtn, &QPushButton::clicked, this, [this]() {
+        m_xitLabel->setValue(0);
+        if (!m_updatingFromModel) {
+            emit xitHzChanged(0);
+        }
+    });
+
+    connect(m_xritLockBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) {
+            emit lockChanged(on);
+        }
+    });
+
+    connect(m_stepCycleBtn, &QPushButton::clicked, this, [this]() {
+        emit stepCycleRequested();
+    });
+
+    // --- NYI badges (all controls except m_stepCycleBtn) ---
+    NyiOverlay::markNyi(m_ritBtn,      QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_ritLabel,    QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_ritZeroBtn,  QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_xitBtn,      QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_xitLabel,    QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_xitZeroBtn,  QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_xritLockBtn, QStringLiteral("phase3g10-stage2"));
+
+    m_tabStack->addWidget(ritWidget);
+}
+
 void VfoWidget::rebuildFilterButtons(DSPMode mode)
 {
     // Remove old layout and buttons
@@ -717,6 +876,15 @@ void VfoWidget::setTxAntenna(const QString& ant)
 void VfoWidget::setStepHz(int hz)
 {
     m_stepHz = hz;
+    if (m_ritLabel) {
+        m_ritLabel->setStep(hz);
+    }
+    if (m_xitLabel) {
+        m_xitLabel->setStep(hz);
+    }
+    if (m_stepCycleBtn) {
+        m_stepCycleBtn->setText(QStringLiteral("%1 Hz").arg(hz));
+    }
 }
 
 void VfoWidget::setSliceIndex(int index)
@@ -747,6 +915,42 @@ void VfoWidget::setSmeter(double dbm)
     m_smeterDbm = dbm;
     if (m_levelBar) {
         m_levelBar->setValue(float(dbm));
+    }
+}
+
+void VfoWidget::setRitEnabled(bool v)
+{
+    if (m_ritBtn && m_ritBtn->isChecked() != v) {
+        m_updatingFromModel = true;
+        m_ritBtn->setChecked(v);
+        m_updatingFromModel = false;
+    }
+}
+
+void VfoWidget::setRitHz(int hz)
+{
+    if (m_ritLabel && m_ritLabel->value() != hz) {
+        m_updatingFromModel = true;
+        m_ritLabel->setValue(hz);
+        m_updatingFromModel = false;
+    }
+}
+
+void VfoWidget::setXitEnabled(bool v)
+{
+    if (m_xitBtn && m_xitBtn->isChecked() != v) {
+        m_updatingFromModel = true;
+        m_xitBtn->setChecked(v);
+        m_updatingFromModel = false;
+    }
+}
+
+void VfoWidget::setXitHz(int hz)
+{
+    if (m_xitLabel && m_xitLabel->value() != hz) {
+        m_updatingFromModel = true;
+        m_xitLabel->setValue(hz);
+        m_updatingFromModel = false;
     }
 }
 

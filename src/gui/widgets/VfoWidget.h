@@ -3,6 +3,7 @@
 #include "core/WdspTypes.h"
 #include "models/SliceModel.h"
 #include "VfoLevelBar.h"
+#include "ScrollableLabel.h"
 
 #include <QWidget>
 #include <QLabel>
@@ -53,6 +54,12 @@ public:
     void setAntennaList(const QStringList& ants);
     void setSmeter(double dbm);
 
+    // --- RIT/XIT state setters (S1.8a — guarded against re-emit) ---
+    void setRitEnabled(bool v);
+    void setRitHz(int hz);
+    void setXitEnabled(bool v);
+    void setXitHz(int hz);
+
     // --- Positioning ---
 
     // Reposition the flag at the given pixel x of the VFO marker.
@@ -77,6 +84,13 @@ signals:
     void closeRequested(int sliceIndex);
     void lockChanged(bool locked);
 
+    // --- X/RIT tab signals (S1.8a) ---
+    void ritEnabledChanged(bool enabled);
+    void ritHzChanged(int hz);
+    void xitEnabledChanged(bool enabled);
+    void xitHzChanged(int hz);
+    void stepCycleRequested();
+
 protected:
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
@@ -91,6 +105,7 @@ private:
     void buildAudioTab();
     void buildDspTab();
     void buildModeTab();
+    void buildXRitTab();
     void rebuildFilterButtons(DSPMode mode);
     void updateFreqLabel();
     QString formatFilterWidth(int low, int high) const;
@@ -145,6 +160,16 @@ private:
     QPushButton*        m_nbBtn{nullptr};
     QPushButton*        m_nrBtn{nullptr};
     QPushButton*        m_anfBtn{nullptr};
+
+    // --- X/RIT tab ---
+    QPushButton*   m_ritBtn{nullptr};
+    ScrollableLabel* m_ritLabel{nullptr};
+    QPushButton*   m_ritZeroBtn{nullptr};
+    QPushButton*   m_xitBtn{nullptr};
+    ScrollableLabel* m_xitLabel{nullptr};
+    QPushButton*   m_xitZeroBtn{nullptr};
+    QPushButton*   m_xritLockBtn{nullptr};
+    QPushButton*   m_stepCycleBtn{nullptr};
 
     // --- Floating control buttons (AetherSDR pattern) ---
     // Rendered as children of parent widget, positioned beside the VFO flag.

@@ -1636,6 +1636,23 @@ void MainWindow::wireSliceToSpectrum()
         vfo->setTxAntenna(ant);
     });
 
+    // --- SliceModel → VfoWidget: RIT/XIT inbound (S1.8a stubs) ---
+    connect(slice, &SliceModel::ritEnabledChanged, this, [vfo](bool on) {
+        vfo->setRitEnabled(on);
+    });
+
+    connect(slice, &SliceModel::ritHzChanged, this, [vfo](int hz) {
+        vfo->setRitHz(hz);
+    });
+
+    connect(slice, &SliceModel::xitEnabledChanged, this, [vfo](bool on) {
+        vfo->setXitEnabled(on);
+    });
+
+    connect(slice, &SliceModel::xitHzChanged, this, [vfo](int hz) {
+        vfo->setXitHz(hz);
+    });
+
     // --- VFO flag → slice ---
 
     connect(vfo, &VfoWidget::frequencyChanged, this, [slice](double hz) {
@@ -1682,6 +1699,50 @@ void MainWindow::wireSliceToSpectrum()
     connect(vfo, &VfoWidget::anfChanged, this, [this](bool on) {
         RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
         if (rxCh) { rxCh->setAnfEnabled(on); }
+    });
+
+    // --- VfoWidget → SliceModel: RIT/XIT outbound (S1.8a stubs) ---
+    connect(vfo, &VfoWidget::ritEnabledChanged, this, [slice](bool on) {
+        slice->setRitEnabled(on);
+    });
+
+    connect(vfo, &VfoWidget::ritHzChanged, this, [slice](int hz) {
+        slice->setRitHz(hz);
+    });
+
+    connect(vfo, &VfoWidget::xitEnabledChanged, this, [slice](bool on) {
+        slice->setXitEnabled(on);
+    });
+
+    connect(vfo, &VfoWidget::xitHzChanged, this, [slice](int hz) {
+        slice->setXitHz(hz);
+    });
+
+    // --- VfoWidget → SliceModel: STEP cycle (S1.8a — wires to live setStepHz) ---
+    connect(vfo, &VfoWidget::stepCycleRequested, this, [this, slice, vfo]() {
+        static constexpr int kSteps[] = {1, 10, 100, 1000, 10000};
+        static constexpr int kNumSteps = static_cast<int>(std::size(kSteps));
+        int current = slice->stepHz();
+        int next = kSteps[0];
+        for (int i = 0; i < kNumSteps; ++i) {
+            if (kSteps[i] == current) {
+                next = kSteps[(i + 1) % kNumSteps];
+                break;
+            }
+        }
+        slice->setStepHz(next);
+        m_spectrumWidget->setStepSize(next);
+        vfo->setStepHz(next);
+    });
+
+    // --- VfoWidget → SliceModel: lock state (S1.8a — verifying edge exists) ---
+    connect(vfo, &VfoWidget::lockChanged, this, [slice](bool locked) {
+        slice->setLocked(locked);
+    });
+
+    // --- VfoWidget: close request → remove slice ---
+    connect(vfo, &VfoWidget::closeRequested, this, [this](int index) {
+        m_radioModel->removeSlice(index);
     });
 
     connect(vfo, &VfoWidget::sliceActivationRequested, this, [this](int index) {
