@@ -1,13 +1,12 @@
 // src/gui/AboutDialog.cpp
 #include "AboutDialog.h"
+#include "StyleConstants.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QFrame>
 #include <QApplication>
-#include <QDesktopServices>
-#include <QUrl>
 #include <QPixmap>
 #include <QPushButton>
 
@@ -32,11 +31,11 @@ void AboutDialog::buildUI()
     mainLayout->setSpacing(0);
     mainLayout->setContentsMargins(24, 20, 24, 20);
 
-    setStyleSheet(QStringLiteral(
-        "QDialog { background: #0f0f1a; }"
-        "QLabel { color: #c8d8e8; }"
-        "QLabel a { color: #00b4d8; text-decoration: none; }"
-    ));
+    setStyleSheet(
+        QStringLiteral("QDialog { background: %1; }"
+                       "QLabel { color: %2; }"
+                       "QLabel a { color: %3; text-decoration: none; }")
+            .arg(Style::kAppBg, Style::kTextPrimary, Style::kAccent));
 
     // ── Header ──────────────────────────────────────────────────────────
     auto* icon = new QLabel(this);
@@ -49,8 +48,9 @@ void AboutDialog::buildUI()
 
     auto* title = new QLabel(QStringLiteral("NereusSDR"), this);
     title->setAlignment(Qt::AlignCenter);
-    title->setStyleSheet(QStringLiteral(
-        "font-size: 22px; font-weight: bold; color: #00b4d8;"));
+    title->setStyleSheet(
+        QStringLiteral("font-size: 22px; font-weight: bold; color: %1;")
+            .arg(Style::kAccent));
     mainLayout->addWidget(title);
 
     auto* version = new QLabel(
@@ -87,8 +87,9 @@ void AboutDialog::buildUI()
     // ── Standing on the Shoulders of Giants ─────────────────────────────
     auto* giantsHeading = new QLabel(
         QStringLiteral("Standing on the Shoulders of Giants"), this);
-    giantsHeading->setStyleSheet(QStringLiteral(
-        "color: #00b4d8; font-size: 13px; font-weight: 600;"));
+    giantsHeading->setStyleSheet(
+        QStringLiteral("color: %1; font-size: 13px; font-weight: 600;")
+            .arg(Style::kAccent));
     mainLayout->addWidget(giantsHeading);
     mainLayout->addSpacing(6);
 
@@ -145,8 +146,9 @@ void AboutDialog::buildUI()
 
     // ── Built With ──────────────────────────────────────────────────────
     auto* builtHeading = new QLabel(QStringLiteral("Built With"), this);
-    builtHeading->setStyleSheet(QStringLiteral(
-        "color: #00b4d8; font-size: 13px; font-weight: 600;"));
+    builtHeading->setStyleSheet(
+        QStringLiteral("color: %1; font-size: 13px; font-weight: 600;")
+            .arg(Style::kAccent));
     mainLayout->addWidget(builtHeading);
     mainLayout->addSpacing(6);
 
@@ -171,9 +173,10 @@ void AboutDialog::buildUI()
                      QString::fromUtf8(lib.desc)),
             this);
         card->setAlignment(Qt::AlignCenter);
-        card->setStyleSheet(QStringLiteral(
-            "background: #1a2a3a; border-radius: 6px; padding: 10px 8px;"
-            " font-size: 11px; color: #c8d8e8;"));
+        card->setStyleSheet(
+            QStringLiteral("background: %1; border-radius: 6px; padding: 10px 8px;"
+                           " font-size: 11px; color: %2;")
+                .arg(Style::kButtonBg, Style::kTextPrimary));
         card->setMinimumWidth(110);
         cardRow->addWidget(card);
     }
@@ -223,11 +226,13 @@ void AboutDialog::buildUI()
     // ── OK button ───────────────────────────────────────────────────────
     auto* okBtn = new QPushButton(QStringLiteral("OK"), this);
     okBtn->setDefault(true);
+    okBtn->setAutoDefault(false);
     okBtn->setFixedWidth(80);
-    okBtn->setStyleSheet(QStringLiteral(
-        "QPushButton { background: #00b4d8; color: #0f0f1a; border-radius: 4px;"
-        " padding: 6px 16px; font-weight: bold; }"
-        "QPushButton:hover { background: #33c8e8; }"));
+    okBtn->setStyleSheet(
+        QStringLiteral("QPushButton { background: %1; color: %2; border-radius: 4px;"
+                       " padding: 6px 16px; font-weight: bold; }"
+                       "QPushButton:hover { background: #33c8e8; }")
+            .arg(Style::kAccent, Style::kAppBg));
     connect(okBtn, &QPushButton::clicked, this, &QDialog::accept);
 
     auto* btnLayout = new QHBoxLayout();
