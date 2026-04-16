@@ -614,25 +614,69 @@ void RadioModel::wireSliceSignals()
         }
     });
 
-    // RIT → WDSP shift offset
-    // RIT (Receive Incremental Tuning) is a client-side demodulation offset —
-    // it does NOT retune the hardware VFO. The offset feeds the existing
-    // setShiftFrequency path already used for CTUN pan demodulation.
-    // From Thetis console.cs — RIT adjusts the receive frequency without
-    // moving the hardware DDC center. When CTUN is also active, the combined
-    // shift = CTUN pan offset + RIT offset. For 3G-10 (single RX, no CTUN
-    // active), the shift simplifies to just the RIT offset.
-    // Client-side only — no new WDSP calls beyond the existing shift path.
-    auto updateRitShift = [this, slice]() {
+    // RIT + DIG offset → WDSP shift frequency
+    //
+    // RIT (Receive Incremental Tuning): client-side demodulation offset that
+    // does NOT retune the hardware VFO.
+    // From Thetis console.cs — RIT adjusts receive demodulation without moving
+    // the hardware DDC center.
+    //
+    // DIG offset: per-mode click-tune demodulation offset for DIGL/DIGU.
+    // From Thetis console.cs:14637 (DIGUClickTuneOffset) and :14672
+    // (DIGLClickTuneOffset). Both are int offsets in Hz; Thetis uses per-mode
+    // filter re-centering internally, but NereusSDR implements DIG offset as
+    // an additive shift on the same setShiftFrequency path as RIT.
+    //
+    // Combined: shift = ritOffset + digOffset (where digOffset is mode-gated).
+    // For 3G-10 (single RX, no CTUN), the shift = these two terms only.
+    auto updateShiftFrequency = [this, slice]() {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (!rxCh) { return; }
         double offset = slice->ritEnabled()
                         ? static_cast<double>(slice->ritHz())
                         : 0.0;
+        // DIG offset per mode — Thetis console.cs:14637,14672
+        if (slice->dspMode() == DSPMode::DIGL) {
+            offset += static_cast<double>(slice->diglOffsetHz());
+        } else if (slice->dspMode() == DSPMode::DIGU) {
+            offset += static_cast<double>(slice->diguOffsetHz());
+        }
         rxCh->setShiftFrequency(offset);
     };
-    connect(slice, &SliceModel::ritEnabledChanged, this, updateRitShift);
-    connect(slice, &SliceModel::ritHzChanged,      this, updateRitShift);
+    connect(slice, &SliceModel::ritEnabledChanged,  this, updateShiftFrequency);
+    connect(slice, &SliceModel::ritHzChanged,        this, updateShiftFrequency);
+    connect(slice, &SliceModel::diglOffsetHzChanged, this, updateShiftFrequency);
+    connect(slice, &SliceModel::diguOffsetHzChanged, this, updateShiftFrequency);
+    connect(slice, &SliceModel::dspModeChanged,      this, updateShiftFrequency);
+
+    // RTTY mark + shift → bandpass filter
+    //
+    // RTTY uses two audio tones: mark (freq1 = 2295 Hz) and space (freq0 = 2125 Hz).
+    // From Thetis radio.cs:2024-2060 — rx_dolly_freq0/freq1 are stored and fed to
+    // SetRXAmpeakFilFreq (the IIR audio peak filter / "dolly" filter). NereusSDR
+    // does not yet implement the ampeak dolly filter (it is not in RxChannel),
+    // so the mark/shift values are used to compute a bandpass window that covers
+    // both tones:
+    //   filterLow  = markHz − shiftHz/2 − 100
+    //   filterHigh = markHz + shiftHz/2 + 100
+    // The ±100 Hz guard band keeps both tones well inside the passband.
+    //
+    // Note: Thetis uses DIGU/DIGL DSP modes for RTTY (there is no DSPMode::RTTY
+    // in WDSP — see Thetis enums.cs:252-268). The bandpass update fires whenever
+    // mark or shift changes, matching Thetis setup.cs:17203 (udDSPRX1DollyF0_ValueChanged)
+    // which fires unconditionally on control change.
+    //
+    // Full dolly-filter support (SetRXAmpeakFilFreq wiring) is deferred to a later
+    // phase when the ampeak API is added to RxChannel.
+    auto updateRttyFilter = [this, slice]() {
+        const int mark  = slice->rttyMarkHz();
+        const int shift = slice->rttyShiftHz();
+        const int low   = mark - shift / 2 - 100;
+        const int high  = mark + shift / 2 + 100;
+        slice->setFilter(low, high);
+    };
+    connect(slice, &SliceModel::rttyMarkHzChanged,  this, updateRttyFilter);
+    connect(slice, &SliceModel::rttyShiftHzChanged, this, updateRttyFilter);
 
     // XIT stored for 3M-1 (TX phase) to consume on keydown. No RX effect in 3G-10.
 
