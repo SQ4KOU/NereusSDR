@@ -185,7 +185,7 @@ Items A and B both turned out dramatically smaller than the original handoff sco
 | **3G-7: Polish** | **MMIO clone-path bug fix + 5 subclass accessor gap fills + NeedleItemEditor QGroupBox grouping** | **Complete** |
 | **3G-8: RX1 Display Parity** | **47 Spectrum/Waterfall/Grid controls wired, `Band` enum + per-band grid on `PanadapterModel`, `BandButtonItem` 12→14, GPU path polish for live overlay / waterfall chrome / peak hold / fill / gradient / cal offset** | **Complete** |
 | 3G-9: Display Refactor | Source-first audit, Thetis-first tooltip port, slider/spinbox refactor (3G-9a merged as PR #25); smooth defaults + Clarity Blue palette (3G-9b) and Clarity adaptive auto-tune (3G-9c) planned | 3G-9a Complete |
-| 3G-10: RX DSP Parity + AetherSDR Flag Port | Stage 1: AetherSDR VfoWidget visual port (flag shell, tabs, mode containers, S-meter). Stage 2: wire every RX-side DSP NYI (AGC threshold/hang/slope/attack/decay, squelch SSB/AM/FM, EMNR, SNB, APF, RIT/XIT, mute, pan, binaural, lock, FM/DIG/RTTY/CW mode containers) with per-slice-per-band persistence | Stage 1 partial — PR #28 draft |
+| **3G-10: RX DSP Parity + AetherSDR Flag Port** | **Stage 1: AetherSDR VfoWidget visual port (flag shell, 4×2 DSP grid, AudioTab AGC 5-button row, mode containers with visibility rules, tooltip coverage test). Stage 2: wire every RX-side DSP NYI through WDSP with per-slice-per-band persistence** | **Stage 1 Complete (PRs #28 + #30)** |
 | 3M-1: Basic SSB TX (was 3I-1) | TxChannel, MOX state machine, RF output | Planned |
 | 3M-2: CW TX (was 3I-2) | Sidetone, firmware keyer, QSK/break-in | Planned |
 | 3M-3: TX Processing (was 3I-3) | 18-stage TXA chain + TX-side RX DSP additions | Planned |
@@ -196,7 +196,7 @@ Items A and B both turned out dramatically smaller than the original handoff sco
 | 3K: CAT/rigctld | 4-channel rigctld, TCP CAT server | Planned |
 | 3L: Protocol 1 | P1 support for Hermes Lite 2 / older ANAN | Planned |
 | 3M: Recording | WAV record/playback, I/Q record, scheduled | Planned |
-| 3N: Packaging | AppImage, Windows installer, macOS DMG | Planned |
+| **3N: Packaging** | **AppImage ×2 archs, macOS DMG, Windows ZIP + NSIS installer** | **Complete** |
 
 See [docs/MASTER-PLAN.md](docs/MASTER-PLAN.md) for the full implementation plan.
 
