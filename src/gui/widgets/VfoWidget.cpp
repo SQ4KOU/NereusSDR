@@ -746,19 +746,8 @@ void VfoWidget::buildModeTab()
     modeLayout->setContentsMargins(4, 4, 4, 4);
     modeLayout->setSpacing(4);
 
-    // Mode combo + quick-mode buttons on one row — matches AetherSDR VfoWidget.cpp:1401-1403
-    // [mode combo (stretch)] [USB] [CW] [DIG]
+    // Mode combo row
     {
-        static const char* kQmLabels[] = { "USB", "CW", "DIG" };
-        // NereusSDR native — Thetis uses individual radio buttons per mode (radModeUSB etc.)
-        // Quick-mode buttons are a NereusSDR shortcut for frequently used modes.
-        // Wiring deferred to Stage 2 (quickModeRequested signal exists).
-        static const char* kQmTooltips[] = {
-            "Quick-select USB mode",
-            "Quick-select CW mode",
-            "Quick-select DIG mode"
-        };
-
         auto* modeRow = new QHBoxLayout;
         modeRow->setSpacing(2);
         modeRow->setContentsMargins(0, 0, 0, 0);
@@ -798,20 +787,6 @@ void VfoWidget::buildModeTab()
             }
         });
         modeRow->addWidget(m_modeCmb, 1);  // stretch — combo fills available space
-
-        for (int i = 0; i < 3; ++i) {
-            m_quickModeBtns[i] = new QPushButton(
-                QString::fromLatin1(kQmLabels[i]), modeWidget);
-            m_quickModeBtns[i]->setCheckable(true);
-            m_quickModeBtns[i]->setStyleSheet(kModeBtn);
-            m_quickModeBtns[i]->setToolTip(QString::fromLatin1(kQmTooltips[i]));
-            connect(m_quickModeBtns[i], &QPushButton::clicked, this, [this, i]() {
-                if (!m_updatingFromModel) {
-                    emit quickModeRequested(i);
-                }
-            });
-            modeRow->addWidget(m_quickModeBtns[i]);
-        }
         modeLayout->addLayout(modeRow);
     }
 
