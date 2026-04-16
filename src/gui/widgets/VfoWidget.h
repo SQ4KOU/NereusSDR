@@ -2,6 +2,7 @@
 
 #include "core/WdspTypes.h"
 #include "models/SliceModel.h"
+#include "VfoLevelBar.h"
 
 #include <QWidget>
 #include <QLabel>
@@ -112,6 +113,7 @@ private:
     QPushButton* m_txAntBtn{nullptr};
     QLabel*      m_filterWidthLbl{nullptr};
     QPushButton* m_txBadge{nullptr};
+    QLabel*      m_splitBadge{nullptr};
     QLabel*      m_sliceBadge{nullptr};
     QStringList  m_antennaList{QStringLiteral("ANT1"), QStringLiteral("ANT2"), QStringLiteral("ANT3")};
 
@@ -121,7 +123,7 @@ private:
     QLineEdit*      m_freqEdit{nullptr};
 
     // --- S-meter row ---
-    QLabel* m_smeterLabel{nullptr};
+    VfoLevelBar* m_levelBar{nullptr};
 
     // --- Tab bar ---
     QList<QPushButton*> m_tabButtons;

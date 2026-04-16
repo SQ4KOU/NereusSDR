@@ -141,6 +141,7 @@ Items A and B both turned out dramatically smaller than the original handoff sco
 - TCI protocol server, DX Cluster/RBN spots (Phase 3J)
 - CAT/rigctld for logging and contest software (Phase 3K)
 - HL2 `IoBoardHl2` I2C-over-ep2 wire encoding (Phase 3L — extraction from closed `ChannelMaster.dll`)
+- **Phase 3G-9 (Display Refactor)** and **Phase 3G-10 (RX DSP Parity + AetherSDR Flag Port)** — twin polish phases running in parallel before 3M-1 (TX). 3G-9 tightens the Display setup surface (audit + Thetis-first tooltips + slider readouts + Clarity Blue palette + Clarity adaptive auto-tune). 3G-10 ports the AetherSDR VfoWidget visual shell and wires every RX-side DSP NYI stub through WDSP with per-slice-per-band bandstack persistence. See `docs/architecture/2026-04-15-display-refactor-design.md` and `docs/architecture/2026-04-15-phase3g10-rx-dsp-flag-design.md`.
 
 ---
 
@@ -183,10 +184,12 @@ Items A and B both turned out dramatically smaller than the original handoff sco
 | **3G-6: Container Settings Dialog (one-shot)** | **3-column Thetis layout + per-item editors for all ~30 types + in-place editing + MMIO external-data subsystem + container-level parity + menu submenu** | **Complete** |
 | **3G-7: Polish** | **MMIO clone-path bug fix + 5 subclass accessor gap fills + NeedleItemEditor QGroupBox grouping** | **Complete** |
 | **3G-8: RX1 Display Parity** | **47 Spectrum/Waterfall/Grid controls wired, `Band` enum + per-band grid on `PanadapterModel`, `BandButtonItem` 12→14, GPU path polish for live overlay / waterfall chrome / peak hold / fill / gradient / cal offset** | **Complete** |
-| 3I-1: Basic SSB TX | TxChannel, MOX state machine, RF output | Planned |
-| 3I-2: CW TX | Sidetone, firmware keyer, QSK/break-in | Planned |
-| 3I-3: TX Processing | 18-stage TXA chain + RX DSP additions | Planned |
-| 3I-4: PureSignal | Feedback DDC, calcc/IQC engine, PA linearization | Planned |
+| 3G-9: Display Refactor | Source-first audit, Thetis-first tooltip port, slider/spinbox refactor (3G-9a merged as PR #25); smooth defaults + Clarity Blue palette (3G-9b) and Clarity adaptive auto-tune (3G-9c) planned | 3G-9a Complete |
+| 3G-10: RX DSP Parity + AetherSDR Flag Port | Stage 1: AetherSDR VfoWidget visual port (flag shell, tabs, mode containers, S-meter). Stage 2: wire every RX-side DSP NYI (AGC threshold/hang/slope/attack/decay, squelch SSB/AM/FM, EMNR, SNB, APF, RIT/XIT, mute, pan, binaural, lock, FM/DIG/RTTY/CW mode containers) with per-slice-per-band persistence | Stage 1 partial — PR #28 draft |
+| 3M-1: Basic SSB TX (was 3I-1) | TxChannel, MOX state machine, RF output | Planned |
+| 3M-2: CW TX (was 3I-2) | Sidetone, firmware keyer, QSK/break-in | Planned |
+| 3M-3: TX Processing (was 3I-3) | 18-stage TXA chain + TX-side RX DSP additions | Planned |
+| 3M-4: PureSignal (was 3I-4) | Feedback DDC, calcc/IQC engine, PA linearization | Planned |
 | 3F: Multi-Panadapter | DDC assignment, FFTRouter, PanadapterStack, enable RX2 | Planned |
 | 3H: Skin System | Thetis-inspired skins with 4-pan support | Planned |
 | 3J: TCI + Spots | TCI v2.0 WebSocket, DX Cluster/RBN clients, spot overlay | Planned |

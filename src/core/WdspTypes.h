@@ -75,4 +75,23 @@ enum class ChannelType : int {
     TX = 1
 };
 
+// Noise-reduction mode for the NR/NR2 stage.
+// Off = disabled, ANR = classic noise reduction, EMNR = enhanced NR2.
+enum class NrMode      : int { Off = 0, ANR = 1, EMNR = 2 };
+
+// Noise-blanker mode.
+// Off = disabled, NB1 = classic blanker, NB2 = adaptive blanker.
+enum class NbMode      : int { Off = 0, NB1 = 1, NB2 = 2 };
+
+// Squelch type active on a slice.
+enum class SquelchMode : int { Off, Voice, AM, FM };
+
+// AGC hang-time class — maps to Thetis custom hang bucket in setup.cs.
+enum class AgcHangMode : int { Off, Fast, Med, Slow };
+
+// FM transmit mode (repeater offset direction).
+// Values match Thetis enums.cs:380 — FMTXMode (order is memory-form; take care before rearranging).
+// From Thetis console.cs:20873 — current_fm_tx_mode = FMTXMode.Simplex
+enum class FmTxMode : int { High = 0, Simplex = 1, Low = 2 };  // High = TX above RX (+), Simplex = no repeater offset (S), Low = TX below RX (-)
+
 } // namespace NereusSDR

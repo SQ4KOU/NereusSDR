@@ -162,6 +162,271 @@ void SliceModel::setTxSlice(bool tx)
     }
 }
 
+// ── Phase 3G-10 Stage 1 stubs (DSP state, Stage 2 wires to RxChannel) ──
+
+void SliceModel::setLocked(bool v)
+{
+    if (m_locked != v) {
+        m_locked = v;
+        emit lockedChanged(v);
+    }
+}
+
+void SliceModel::setMuted(bool v)
+{
+    if (m_muted != v) {
+        m_muted = v;
+        emit mutedChanged(v);
+    }
+}
+
+void SliceModel::setAudioPan(double pan)
+{
+    // qFuzzyCompare is undefined when either arg is 0.0; use the subtraction-to-zero pattern.
+    if (qFuzzyIsNull(m_audioPan - pan)) {
+        return;
+    }
+    m_audioPan = pan;
+    emit audioPanChanged(pan);
+}
+
+void SliceModel::setSsqlEnabled(bool v)
+{
+    if (m_ssqlEnabled != v) {
+        m_ssqlEnabled = v;
+        emit ssqlEnabledChanged(v);
+    }
+}
+
+void SliceModel::setSsqlThresh(double dB)
+{
+    // qFuzzyCompare is undefined when either arg is 0.0; use the subtraction-to-zero pattern.
+    if (qFuzzyIsNull(m_ssqlThresh - dB)) {
+        return;
+    }
+    m_ssqlThresh = dB;
+    emit ssqlThreshChanged(dB);
+}
+
+void SliceModel::setAmsqEnabled(bool v)
+{
+    if (m_amsqEnabled != v) {
+        m_amsqEnabled = v;
+        emit amsqEnabledChanged(v);
+    }
+}
+
+void SliceModel::setAmsqThresh(double dB)
+{
+    // qFuzzyCompare is undefined when either arg is 0.0; use the subtraction-to-zero pattern.
+    if (qFuzzyIsNull(m_amsqThresh - dB)) {
+        return;
+    }
+    m_amsqThresh = dB;
+    emit amsqThreshChanged(dB);
+}
+
+void SliceModel::setFmsqEnabled(bool v)
+{
+    if (m_fmsqEnabled != v) {
+        m_fmsqEnabled = v;
+        emit fmsqEnabledChanged(v);
+    }
+}
+
+void SliceModel::setFmsqThresh(double dB)
+{
+    // qFuzzyCompare is undefined when either arg is 0.0; use the subtraction-to-zero pattern.
+    if (qFuzzyIsNull(m_fmsqThresh - dB)) {
+        return;
+    }
+    m_fmsqThresh = dB;
+    emit fmsqThreshChanged(dB);
+}
+
+void SliceModel::setAgcThreshold(int dBu)
+{
+    if (m_agcThreshold != dBu) {
+        m_agcThreshold = dBu;
+        emit agcThresholdChanged(dBu);
+    }
+}
+
+void SliceModel::setAgcHang(int ms)
+{
+    if (m_agcHang != ms) {
+        m_agcHang = ms;
+        emit agcHangChanged(ms);
+    }
+}
+
+void SliceModel::setAgcSlope(int dB)
+{
+    if (m_agcSlope != dB) {
+        m_agcSlope = dB;
+        emit agcSlopeChanged(dB);
+    }
+}
+
+void SliceModel::setAgcAttack(int ms)
+{
+    if (m_agcAttack != ms) {
+        m_agcAttack = ms;
+        emit agcAttackChanged(ms);
+    }
+}
+
+void SliceModel::setAgcDecay(int ms)
+{
+    if (m_agcDecay != ms) {
+        m_agcDecay = ms;
+        emit agcDecayChanged(ms);
+    }
+}
+
+void SliceModel::setRitEnabled(bool v)
+{
+    if (m_ritEnabled != v) {
+        m_ritEnabled = v;
+        emit ritEnabledChanged(v);
+    }
+}
+
+void SliceModel::setRitHz(int hz)
+{
+    if (m_ritHz != hz) {
+        m_ritHz = hz;
+        emit ritHzChanged(hz);
+    }
+}
+
+void SliceModel::setXitEnabled(bool v)
+{
+    if (m_xitEnabled != v) {
+        m_xitEnabled = v;
+        emit xitEnabledChanged(v);
+    }
+}
+
+void SliceModel::setXitHz(int hz)
+{
+    if (m_xitHz != hz) {
+        m_xitHz = hz;
+        emit xitHzChanged(hz);
+    }
+}
+
+void SliceModel::setEmnrEnabled(bool v)
+{
+    if (m_emnrEnabled != v) {
+        m_emnrEnabled = v;
+        emit emnrEnabledChanged(v);
+    }
+}
+
+void SliceModel::setSnbEnabled(bool v)
+{
+    if (m_snbEnabled != v) {
+        m_snbEnabled = v;
+        emit snbEnabledChanged(v);
+    }
+}
+
+void SliceModel::setApfEnabled(bool v)
+{
+    if (m_apfEnabled != v) {
+        m_apfEnabled = v;
+        emit apfEnabledChanged(v);
+    }
+}
+
+void SliceModel::setApfTuneHz(int hz)
+{
+    if (m_apfTuneHz != hz) {
+        m_apfTuneHz = hz;
+        emit apfTuneHzChanged(hz);
+    }
+}
+
+void SliceModel::setBinauralEnabled(bool v)
+{
+    if (m_binauralEnabled != v) {
+        m_binauralEnabled = v;
+        emit binauralEnabledChanged(v);
+    }
+}
+
+void SliceModel::setFmCtcssMode(int mode)
+{
+    if (m_fmCtcssMode != mode) {
+        m_fmCtcssMode = mode;
+        emit fmCtcssModeChanged(mode);
+    }
+}
+
+void SliceModel::setFmCtcssValueHz(double hz)
+{
+    // qFuzzyCompare is undefined when either arg is 0.0; use the subtraction-to-zero pattern.
+    if (qFuzzyIsNull(m_fmCtcssValueHz - hz)) {
+        return;
+    }
+    m_fmCtcssValueHz = hz;
+    emit fmCtcssValueHzChanged(hz);
+}
+
+void SliceModel::setFmOffsetHz(int hz)
+{
+    if (m_fmOffsetHz != hz) {
+        m_fmOffsetHz = hz;
+        emit fmOffsetHzChanged(hz);
+    }
+}
+
+void SliceModel::setFmTxMode(FmTxMode mode)
+{
+    if (m_fmTxMode == mode) { return; }
+    m_fmTxMode = mode;
+    emit fmTxModeChanged(mode);
+}
+
+void SliceModel::setFmReverse(bool v)
+{
+    if (m_fmReverse != v) {
+        m_fmReverse = v;
+        emit fmReverseChanged(v);
+    }
+}
+
+void SliceModel::setDiglOffsetHz(int hz)
+{
+    if (m_diglOffsetHz == hz) { return; }
+    m_diglOffsetHz = hz;
+    emit diglOffsetHzChanged(hz);
+}
+
+void SliceModel::setDiguOffsetHz(int hz)
+{
+    if (m_diguOffsetHz == hz) { return; }
+    m_diguOffsetHz = hz;
+    emit diguOffsetHzChanged(hz);
+}
+
+void SliceModel::setRttyMarkHz(int hz)
+{
+    if (m_rttyMarkHz != hz) {
+        m_rttyMarkHz = hz;
+        emit rttyMarkHzChanged(hz);
+    }
+}
+
+void SliceModel::setRttyShiftHz(int hz)
+{
+    if (m_rttyShiftHz != hz) {
+        m_rttyShiftHz = hz;
+        emit rttyShiftHzChanged(hz);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Per-mode default filter presets
 // ---------------------------------------------------------------------------

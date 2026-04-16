@@ -75,3 +75,8 @@ target_compile_definitions(tst_cross_thread_teardown PRIVATE NEREUS_BUILD_TESTS)
 # via Qt::QueuedConnection, and that posting a burst of batches does
 # not block the sender. See src/models/RxDspWorker.h for the rationale.
 nereus_add_test(tst_rx_dsp_worker_thread)
+
+# ── Phase 3G-10 VFO DSP parity + AetherSDR flag port ─────────────────────
+nereus_add_test(tst_vfo_level_bar)
+nereus_add_test(tst_scrollable_label)
+nereus_add_test(tst_vfo_mode_containers)

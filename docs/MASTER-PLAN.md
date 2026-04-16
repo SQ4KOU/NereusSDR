@@ -749,11 +749,16 @@ CI workflows already in place. Finalize:
 
 ---
 
-## Recommended Next Step: Phase 3G-9 — Display Refactor (PR1 audit + tooltips + slider readouts)
+## Recommended Next Steps: Phase 3G-9 + Phase 3G-10 (parallel polish pair before 3M-1)
 
-Phase 3I shipped the entire ANAN/Hermes P1 family end-to-end. Before putting RF on the air, **Phase 3G-9** tightens the Display surface we just wired in 3G-8 — source-first audit, verbatim-or-rewritten tooltip port, slider/spinbox refactor, then smooth defaults + Clarity Blue palette, then the Clarity adaptive auto-tune feature. Design spec at `docs/architecture/2026-04-15-display-refactor-design.md`. 3G-9 is three sequential PRs; 3G-9a is mechanical and can start immediately.
+Phase 3I shipped the entire ANAN/Hermes P1 family end-to-end. Before putting RF on the air, two polish phases tighten the RX surface in parallel:
 
-After 3G-9 the next highest-value phase is TX — taking a working RX-only setup and putting a signal on the air. See Phase 3M-1 below for scope.
+- **Phase 3G-9 — Display Refactor.** Source-first audit, verbatim-or-rewritten tooltip port, slider/spinbox refactor, then smooth defaults + Clarity Blue palette, then the Clarity adaptive auto-tune feature. Design spec at `docs/architecture/2026-04-15-display-refactor-design.md`. 3G-9 is three sequential PRs; 3G-9a is mechanical and can start immediately.
+- **Phase 3G-10 — RX DSP Parity + AetherSDR Flag Port.** Two-stage single-branch phase: Stage 1 ports the AetherSDR `VfoWidget` visual shell into NereusSDR with faithful color/font/layout fidelity; Stage 2 wires every RX-side DSP NYI stub (AGC threshold/hang/slope/attack/decay, squelch SSB/AM/FM, EMNR, SNB, APF, RIT/XIT, mute, pan, binaural, lock, and the FM/DIG/RTTY/CW mode-specific flag containers) through `SliceModel → RxChannel → WDSP`. Introduces per-slice-per-band bandstack persistence for DSP state. Design spec at `docs/architecture/2026-04-15-phase3g10-rx-dsp-flag-design.md`.
+
+3G-9 touches the Display category; 3G-10 touches the VFO flag and RX DSP wiring. The two phases have no file-level overlap and ship in parallel.
+
+After 3G-9 + 3G-10 the next highest-value phase is TX — taking a working RX-only setup and putting a signal on the air. See Phase 3M-1 below for scope.
 
 Phases 3A–3E, 3G-1 through 3G-8, and 3-UI are all complete. The radio connects,
 demodulates audio, renders live GPU spectrum + waterfall, supports full VFO tuning with
@@ -766,11 +771,12 @@ the QRhi/Metal GPU path.
 
 The next meaningful steps:
 
-- **3G-9 (Display Refactor)** — three-PR polish pass on the 3G-8 Display surface: audit + tooltips + slider readouts → smooth defaults + Clarity Blue palette → Clarity adaptive auto-tune. Independent of TX work; can ship in parallel with 3M-1 prep.
+- **3G-9 (Display Refactor)** — three-PR polish pass on the 3G-8 Display surface: audit + tooltips + slider readouts → smooth defaults + Clarity Blue palette → Clarity adaptive auto-tune. Independent of TX work; can ship in parallel with 3G-10 and 3M-1 prep.
+- **3G-10 (RX DSP Parity + AetherSDR Flag Port)** — two-stage phase: Stage 1 ports the AetherSDR VfoWidget visual shell; Stage 2 wires every RX-side DSP NYI through WDSP with per-slice-per-band bandstack persistence. Parallelizable with 3G-9; no file overlap. Blocks 3M-1 mostly by sharing reviewer attention, not by code dependency.
 - **3M-1 (Basic SSB TX)** (formerly 3I-1; renumbered after Phase 3I became the radio connector port) — TxChannel WDSP wrapper, mic input, MOX state machine, TX I/Q
   output. Proves the TX path end-to-end and unblocks 3M-2..4, 3F, 3H.
 
-Execution order: **3G-9a..c → 3M-1..4 → 3F → 3H → 3J+** (3G-9 can overlap with 3M-1 since they touch disjoint subsystems)
+Execution order: **(3G-9a..c ∥ 3G-10) → 3M-1..4 → 3F → 3H → 3J+** (3G-9 and 3G-10 run in parallel; both land before 3M-1)
 
 ### Phase Dependencies
 
@@ -778,6 +784,7 @@ Execution order: **3G-9a..c → 3M-1..4 → 3F → 3H → 3J+** (3G-9 can overla
 3G-4 → 3G-5 → 3G-6    (meter system, sequential)
 
 3G-8 → 3G-9a → 3G-9b → 3G-9c    (display surface polish, sequential; 3G-9c gated on research doc)
+3G-8 → 3G-10 Stage1 → 3G-10 Stage2    (RX DSP + AetherSDR flag port; parallel with 3G-9)
 
 3M-1 → 3M-2 → 3M-3 → 3M-4 → 3F → 3H    (TX then multi-RX)
                                ↑
@@ -786,7 +793,7 @@ Execution order: **3G-9a..c → 3M-1..4 → 3F → 3H → 3J+** (3G-9 can overla
                        states (DDC0+DDC1 sync at 192kHz)
 ```
 
-3G-9 touches disjoint subsystems from 3M-* and can run in parallel with 3M-1 if desired.
+3G-9 and 3G-10 touch disjoint subsystems from each other and from 3M-* — they can all run in parallel if desired. 3G-9 owns the Display setup surface; 3G-10 owns the VFO flag and RX DSP wiring.
 
 Independent phases (can start anytime): 3J (TCI), 3K (CAT), 3L (P1), 3M (Recording).
 
