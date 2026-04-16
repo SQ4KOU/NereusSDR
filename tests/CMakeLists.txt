@@ -30,6 +30,9 @@ nereus_add_test(tst_reading_name)
 nereus_add_test(tst_meter_item_scale)
 nereus_add_test(tst_meter_presets)
 
+# ── Phase 3G-9b clarity defaults invariants ───────────────────────────────
+nereus_add_test(tst_clarity_defaults)
+
 # ── Phase 3I radio-connector tests ────────────────────────────────────────
 nereus_add_test(tst_hpsdr_enums)
 nereus_add_test(tst_board_capabilities)

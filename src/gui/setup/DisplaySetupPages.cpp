@@ -19,6 +19,8 @@
 #include <QDoubleSpinBox>
 #include <QCheckBox>
 #include <QThread>
+#include <QPushButton>
+#include <QMessageBox>
 
 namespace NereusSDR {
 
@@ -146,6 +148,41 @@ void SpectrumDefaultsPage::loadFromRenderer()
 void SpectrumDefaultsPage::buildUI()
 {
     applyDarkStyle(this);
+
+    // Phase 3G-9b: Reset to Smooth Defaults button. Destructive — shows
+    // a confirmation dialog before overwriting because it resets the
+    // Spectrum / Waterfall display state.
+    auto* resetBtn = new QPushButton(QStringLiteral("Reset to Smooth Defaults"), this);
+    resetBtn->setToolTip(QStringLiteral(
+        "Overwrite the Spectrum and Waterfall display settings with the "
+        "NereusSDR smooth-default profile (Clarity Blue palette, "
+        "log-recursive averaging, tight threshold gap, waterfall AGC on). "
+        "Intended to recover the out-of-box look after experimentation. "
+        "FFT size, frequency, band stack, and per-band grid slots are "
+        "not affected."));
+    connect(resetBtn, &QPushButton::clicked, this, [this]() {
+        const auto rc = QMessageBox::question(
+            this,
+            QStringLiteral("Reset to Smooth Defaults"),
+            QStringLiteral(
+                "This will overwrite your current Spectrum and Waterfall "
+                "display settings with the NereusSDR smooth-default profile.\n\n"
+                "Your FFT size, frequency, band stack, and per-band grid "
+                "slots are NOT affected.\n\n"
+                "Continue?"),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (rc != QMessageBox::Yes) { return; }
+        if (model()) {
+            model()->applyClaritySmoothDefaults();
+            // Reload this page so the controls immediately reflect the
+            // new model state. Sibling pages (Waterfall Defaults, Grid &
+            // Scales) will update on their next SetupDialog repaint
+            // because their loadFromRenderer() reads from the model.
+            loadFromRenderer();
+        }
+    });
+    contentLayout()->addWidget(resetBtn);
 
     auto* sw = model() ? model()->spectrumWidget() : nullptr;
     auto* fe = model() ? model()->fftEngine() : nullptr;
@@ -611,7 +648,8 @@ void WaterfallDefaultsPage::buildUI()
         QStringLiteral("Default"),   QStringLiteral("Enhanced"),
         QStringLiteral("Spectran"),  QStringLiteral("BlackWhite"),
         QStringLiteral("LinLog"),    QStringLiteral("LinRad"),
-        QStringLiteral("Custom")
+        QStringLiteral("Custom"),
+        QStringLiteral("Clarity Blue")   // Phase 3G-9b
     });
     // Thetis: setup.designer.cs:34110 (comboColorPalette) — rewritten
     // Thetis original: "Sets the color scheme"

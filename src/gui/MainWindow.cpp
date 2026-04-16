@@ -276,9 +276,14 @@ void MainWindow::buildUI()
         }
         if (m_spectrumWidget) {
             m_spectrumWidget->setSampleRate(rateHz);
-            // Also update the frequency range so the visible span matches.
-            double freq = m_spectrumWidget->centerFrequency();
-            m_spectrumWidget->setFrequencyRange(freq, rateHz);
+            // Phase 3G-12: preserve the user's current zoom level across
+            // sample rate changes. Only reset the visible span if the
+            // current bandwidth would now exceed the new DDC sample rate
+            // (in which case we clamp to full-span).
+            const double freq = m_spectrumWidget->centerFrequency();
+            const double currentBw = m_spectrumWidget->bandwidth();
+            const double clampedBw = (currentBw > rateHz) ? rateHz : currentBw;
+            m_spectrumWidget->setFrequencyRange(freq, clampedBw);
         }
     });
     m_fftEngine->setFftSize(4096);
@@ -303,6 +308,12 @@ void MainWindow::buildUI()
     // reach the renderer / FFT engine without depending on MainWindow.
     m_radioModel->setSpectrumWidget(m_spectrumWidget);
     m_radioModel->setFftEngine(m_fftEngine);
+
+    // Phase 3G-9b: no first-launch auto-apply of smooth defaults. Per
+    // user decision 2026-04-15, the out-of-box waterfall stays on
+    // WfColorScheme::Default; ClarityBlue is reachable only via the
+    // "Reset to Smooth Defaults" button on SpectrumDefaultsPage or by
+    // manually selecting "Clarity Blue" from the Waterfall Defaults combo.
 
     // Wire: zoom changes → adjust FFT size for appropriate bin resolution
     // Target: ~500-1000 bins across the visible bandwidth for good detail
@@ -1495,10 +1506,17 @@ void MainWindow::wireSliceToSpectrum()
         return;
     }
 
-    // Set initial spectrum display — 48 kHz centered on VFO.
-    // With N/2 FFT, only positive frequencies (right half) show real signals.
+    // Set initial spectrum display. Phase 3G-12: preserve the user's
+    // persisted zoom level if present. SpectrumWidget::loadSettings()
+    // has already read "DisplayBandwidth" from AppSettings into
+    // m_bandwidthHz by this point. If the loaded value is sensible
+    // (between 10 kHz and the DDC sample rate), keep it; otherwise
+    // fall back to the full-span default (768 kHz = sample rate).
     double freq = slice->frequency();
-    m_spectrumWidget->setFrequencyRange(freq, 768000.0);
+    const double loadedBw = m_spectrumWidget->bandwidth();
+    const double initialBw = (loadedBw >= 10000.0 && loadedBw <= 768000.0)
+                             ? loadedBw : 768000.0;
+    m_spectrumWidget->setFrequencyRange(freq, initialBw);
     m_spectrumWidget->setDdcCenterFrequency(freq);
     m_spectrumWidget->setSampleRate(768000.0);
     m_spectrumWidget->setVfoFrequency(freq);
