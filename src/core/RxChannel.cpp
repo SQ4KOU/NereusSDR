@@ -302,6 +302,29 @@ void RxChannel::setEmnrPosition(int position)
 }
 
 // ---------------------------------------------------------------------------
+// SNB (Spectral Noise Blanker)
+// ---------------------------------------------------------------------------
+
+void RxChannel::setSnbEnabled(bool enabled)
+{
+    if (enabled == m_snbEnabled.load()) {
+        return;
+    }
+
+    m_snbEnabled.store(enabled);
+
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/console.cs:36347
+    //   WDSP.SetRXASNBARun(WDSP.id(0, 0), chkDSPNB2.Checked)
+    // Thetis dsp.cs:692-693 — P/Invoke declaration
+    // WDSP third_party/wdsp/src/snb.c:579
+    SetRXASNBARun(m_channelId, enabled ? 1 : 0);
+#else
+    Q_UNUSED(enabled);
+#endif
+}
+
+// ---------------------------------------------------------------------------
 // Frequency shift (pan offset from VFO)
 // ---------------------------------------------------------------------------
 

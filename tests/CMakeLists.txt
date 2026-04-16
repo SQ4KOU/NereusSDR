@@ -89,3 +89,7 @@ nereus_add_test(tst_slice_agc_advanced)
 # ── Phase 3G-10 Stage 2: WDSP wiring — EMNR (NR2) ────────────────────────
 nereus_add_test(tst_rxchannel_emnr)
 nereus_add_test(tst_slice_emnr)
+
+# ── Phase 3G-10 Stage 2: WDSP wiring — SNB ───────────────────────────────
+nereus_add_test(tst_rxchannel_snb)
+nereus_add_test(tst_slice_snb)

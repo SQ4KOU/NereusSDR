@@ -206,6 +206,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 rxCh->setEmnrAeRun(true);     // radio.cs:2101 rx_nr2_ae_run = 1
                 rxCh->setEmnrPosition(1);     // radio.cs:2235 rx_nr2_position = 1 (post-AGC)
                 rxCh->setEmnrEnabled(m_activeSlice->emnrEnabled());
+                rxCh->setSnbEnabled(m_activeSlice->snbEnabled());
             }
             rxCh->setActive(true);
         }
@@ -472,6 +473,17 @@ void RadioModel::wireSliceSignals()
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setEmnrEnabled(on);
+        }
+    });
+
+    // SNB → WDSP
+    // From Thetis Project Files/Source/Console/console.cs:36347
+    //   WDSP.SetRXASNBARun(WDSP.id(0, 0), chkDSPNB2.Checked)
+    // WDSP: third_party/wdsp/src/snb.c:579
+    connect(slice, &SliceModel::snbEnabledChanged, this, [this](bool on) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setSnbEnabled(on);
         }
     });
 

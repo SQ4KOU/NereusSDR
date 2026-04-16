@@ -612,7 +612,7 @@ void VfoWidget::buildDspTab()
     m_anfToggle = makeToggle(QStringLiteral("ANF"));
     m_anfToggle->setToolTip(QStringLiteral("Toggle automatic notch filter (ANF)"));
     m_snbToggle = makeToggle(QStringLiteral("SNB"));
-    m_snbToggle->setToolTip(QStringLiteral("SNB — not yet implemented"));
+    m_snbToggle->setToolTip(QStringLiteral("Toggle spectral noise blanker (SNB)"));
     m_apfToggle = makeToggle(QStringLiteral("APF"));
     m_apfToggle->setToolTip(QStringLiteral("APF — not yet implemented"));
     grid->addWidget(m_anfToggle, 1, 0);
@@ -698,9 +698,8 @@ void VfoWidget::buildDspTab()
         if (!m_updatingFromModel) { emit apfTuneHzChanged(hz); }
     });
 
-    // NYI badges — NB1, NR, ANF, NR2 are live-wired (no badge); remaining controls get badges
+    // NYI badges — NB1, NR, ANF, NR2, SNB are live-wired (no badge); remaining controls get badges
     NyiOverlay::markNyi(m_nb2Toggle,      QStringLiteral("phase3g10-stage2"));
-    NyiOverlay::markNyi(m_snbToggle,      QStringLiteral("phase3g10-stage2"));
     NyiOverlay::markNyi(m_apfToggle,      QStringLiteral("phase3g10-stage2"));
     NyiOverlay::markNyi(m_apfTuneSlider,  QStringLiteral("phase3g10-stage2"));
     NyiOverlay::markNyi(m_fmContainer,    QStringLiteral("phase3g10-stage2"));

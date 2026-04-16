@@ -94,6 +94,11 @@ public:
     void setEmnrAeRun(bool run);
     void setEmnrPosition(int position);
 
+    // SNB — Spectral Noise Blanker
+    // From Thetis Project Files/Source/Console/radio.cs (SetRXASNBARun call site)
+    bool snbEnabled() const { return m_snbEnabled.load(); }
+    void setSnbEnabled(bool enabled);
+
     // --- Frequency shift (for pan offset from VFO) ---
 
     void setShiftFrequency(double offsetHz);
@@ -143,6 +148,8 @@ private:
     std::atomic<bool> m_anfEnabled{false};
     // emnr: From Thetis radio.cs:2216 — rx_nr2_run default = 0
     std::atomic<bool> m_emnrEnabled{false};
+    // snb: Spectral Noise Blanker — off by default
+    std::atomic<bool> m_snbEnabled{false};
     std::atomic<bool> m_active{false};
 
     // AGC advanced parameters — atomic for thread-safe reads from audio thread
