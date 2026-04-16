@@ -206,6 +206,12 @@ void SpectrumDefaultsPage::buildUI()
                     QStringLiteral("ClarityEnabled"),
                     on ? QStringLiteral("True") : QStringLiteral("False"));
             }
+            // Sync the clarityActive flag so legacy AGC knows whether
+            // to stand down. Off = AGC free to run, On = AGC yields
+            // once Clarity emits its first threshold update.
+            if (auto* sw2 = model() ? model()->spectrumWidget() : nullptr) {
+                if (!on) { sw2->setClarityActive(false); }
+            }
         });
     }
     contentLayout()->addWidget(clarityToggle);
@@ -521,6 +527,7 @@ void WaterfallDefaultsPage::loadFromRenderer()
     if (!sw) { return; }
     QSignalBlocker b1(m_highThresholdSlider);
     QSignalBlocker b2(m_lowThresholdSlider);
+    QSignalBlocker b3(m_agcToggle);
     QSignalBlocker b4(m_useSpectrumMinMaxToggle);
     QSignalBlocker b5(m_updatePeriodSlider);
     QSignalBlocker b6(m_reverseToggle);
@@ -536,6 +543,7 @@ void WaterfallDefaultsPage::loadFromRenderer()
 
     m_highThresholdSlider->setValue(static_cast<int>(sw->wfHighThreshold()));
     m_lowThresholdSlider->setValue(static_cast<int>(sw->wfLowThreshold()));
+    m_agcToggle->setChecked(sw->wfAgcEnabled());
     m_useSpectrumMinMaxToggle->setChecked(sw->wfUseSpectrumMinMax());
     m_updatePeriodSlider->setValue(sw->wfUpdatePeriodMs());
     m_reverseToggle->setChecked(sw->wfReverseScroll());
@@ -589,15 +597,15 @@ void WaterfallDefaultsPage::buildUI()
         levForm->addRow(QStringLiteral("Low Threshold:"), row.container);
     }
 
-    // Phase 3G-9c: legacy Waterfall AGC checkbox replaced by inert label.
-    // ClarityController supersedes the running-min/max AGC — its
-    // percentile-based estimator is more robust against strong carriers.
-    // Thetis origin: setup.designer.cs:34069 (chkRX1WaterfallAGC).
-    m_agcDeprecationLabel = new QLabel(
-        QStringLiteral("AGC — superseded by Clarity (see Spectrum Defaults)"),
-        levGroup);
-    m_agcDeprecationLabel->setEnabled(false);
-    levForm->addRow(QString(), m_agcDeprecationLabel);
+    m_agcToggle = new QCheckBox(QStringLiteral("AGC"), levGroup);
+    // Thetis: setup.designer.cs:34069 (chkRX1WaterfallAGC)
+    m_agcToggle->setToolTip(QStringLiteral("Automatically calculates Low Level Threshold for Waterfall."));
+    connect(m_agcToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWfAgcEnabled(on);
+        }
+    });
+    levForm->addRow(QString(), m_agcToggle);
 
     m_useSpectrumMinMaxToggle = new QCheckBox(QStringLiteral("Use spectrum min/max"), levGroup);
     // Thetis: setup.designer.cs:34054 (chkWaterfallUseRX1SpectrumMinMax)
