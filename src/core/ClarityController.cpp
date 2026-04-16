@@ -14,12 +14,27 @@ ClarityController::ClarityController(QObject* parent)
 
 void ClarityController::setEnabled(bool on)
 {
+    if (m_enabled == on) { return; }
     m_enabled = on;
+    if (on) {
+        // P1 fix: reset deadband state so the next frame unconditionally
+        // emits — otherwise an off→on cycle on a stable band leaves
+        // m_clarityActive false because the deadband suppresses re-emission.
+        m_hasEmitted  = false;
+        m_hasSmoothed = false;
+    }
 }
 
 void ClarityController::setTransmitting(bool tx)
 {
+    if (m_transmitting == tx) { return; }
     m_transmitting = tx;
+    // P2 fix: emit pausedChanged so MainWindow can clear m_clarityActive
+    // on TX and let legacy AGC resume. Without this, setTransmitting
+    // silently suppresses feedBins but nothing tells SpectrumWidget.
+    if (m_enabled) {
+        emit pausedChanged(tx);
+    }
 }
 
 void ClarityController::notifyManualOverride()
