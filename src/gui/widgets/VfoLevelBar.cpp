@@ -47,11 +47,23 @@ void VfoLevelBar::paintEvent(QPaintEvent*) {
     p.fillRect(barRect, QColor(0x10, 0x10, 0x1c));
     p.setPen(QColor(0x30, 0x40, 0x50));
     p.drawRect(barRect.adjusted(0, 0, -1, -1));
-    const int fillW = static_cast<int>(fillFraction() * (barRect.width() - 2));
+    const int innerW = barRect.width() - 2;
+    const int fillW = static_cast<int>(fillFraction() * innerW);
     if (fillW > 0) {
-        const QColor color = isAboveS9() ? kMeterGreen : kMeterCyan;
-        p.fillRect(barRect.x() + 1, barRect.y() + 1,
-                   fillW, barRect.height() - 2, color);
+        const int x0 = barRect.x() + 1;
+        const int y0 = barRect.y() + 1;
+        const int h  = barRect.height() - 2;
+        // S9 boundary pixel position within the bar
+        const double s9Frac = (kS9Dbm - kFloorDbm) / (kCeilingDbm - kFloorDbm);
+        const int s9Px = static_cast<int>(s9Frac * innerW);
+        if (fillW <= s9Px) {
+            // Entirely below S9 — all cyan
+            p.fillRect(x0, y0, fillW, h, kMeterCyan);
+        } else {
+            // Cyan segment up to S9, green segment above S9
+            p.fillRect(x0, y0, s9Px, h, kMeterCyan);
+            p.fillRect(x0 + s9Px, y0, fillW - s9Px, h, kMeterGreen);
+        }
     }
 
     // ── dBm text to the right of the bar ──────────────────────────────
