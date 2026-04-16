@@ -602,7 +602,7 @@ void VfoWidget::buildDspTab()
     m_nrToggle  = makeToggle(QStringLiteral("NR"));
     m_nrToggle->setToolTip(QStringLiteral("Toggle noise reduction (NR)"));
     m_nr2Toggle = makeToggle(QStringLiteral("NR2"));
-    m_nr2Toggle->setToolTip(QStringLiteral("NR2 — not yet implemented"));
+    m_nr2Toggle->setToolTip(QStringLiteral("Toggle enhanced multiband noise reduction (NR2/EMNR)"));
     grid->addWidget(m_nb1Toggle, 0, 0);
     grid->addWidget(m_nb2Toggle, 0, 1);
     grid->addWidget(m_nrToggle,  0, 2);
@@ -698,9 +698,8 @@ void VfoWidget::buildDspTab()
         if (!m_updatingFromModel) { emit apfTuneHzChanged(hz); }
     });
 
-    // NYI badges — NB1, NR, ANF are live-wired (no badge); new controls get badges
+    // NYI badges — NB1, NR, ANF, NR2 are live-wired (no badge); remaining controls get badges
     NyiOverlay::markNyi(m_nb2Toggle,      QStringLiteral("phase3g10-stage2"));
-    NyiOverlay::markNyi(m_nr2Toggle,      QStringLiteral("phase3g10-stage2"));
     NyiOverlay::markNyi(m_snbToggle,      QStringLiteral("phase3g10-stage2"));
     NyiOverlay::markNyi(m_apfToggle,      QStringLiteral("phase3g10-stage2"));
     NyiOverlay::markNyi(m_apfTuneSlider,  QStringLiteral("phase3g10-stage2"));

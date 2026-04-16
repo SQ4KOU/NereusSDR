@@ -85,3 +85,7 @@ nereus_add_test(tst_vfo_tooltip_coverage)
 # ── Phase 3G-10 Stage 2: WDSP wiring — AGC advanced ──────────────────────
 nereus_add_test(tst_rxchannel_agc_advanced)
 nereus_add_test(tst_slice_agc_advanced)
+
+# ── Phase 3G-10 Stage 2: WDSP wiring — EMNR (NR2) ────────────────────────
+nereus_add_test(tst_rxchannel_emnr)
+nereus_add_test(tst_slice_emnr)

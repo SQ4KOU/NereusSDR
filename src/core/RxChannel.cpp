@@ -231,6 +231,77 @@ void RxChannel::setAnfEnabled(bool enabled)
 }
 
 // ---------------------------------------------------------------------------
+// EMNR (NR2)
+// ---------------------------------------------------------------------------
+
+void RxChannel::setEmnrEnabled(bool enabled)
+{
+    if (enabled == m_emnrEnabled.load()) {
+        return;
+    }
+
+    m_emnrEnabled.store(enabled);
+
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:2216-2232
+    //   WDSP.SetRXAEMNRRun(WDSP.id(thread, subrx), value)
+    // WDSP third_party/wdsp/src/emnr.c:1283
+    SetRXAEMNRRun(m_channelId, enabled ? 1 : 0);
+#else
+    Q_UNUSED(enabled);
+#endif
+}
+
+void RxChannel::setEmnrGainMethod(int method)
+{
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:2062-2078
+    //   WDSP.SetRXAEMNRgainMethod(WDSP.id(thread, subrx), value)
+    // WDSP third_party/wdsp/src/emnr.c:1298
+    SetRXAEMNRgainMethod(m_channelId, method);
+#else
+    Q_UNUSED(method);
+#endif
+}
+
+void RxChannel::setEmnrNpeMethod(int method)
+{
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:2081-2097
+    //   WDSP.SetRXAEMNRnpeMethod(WDSP.id(thread, subrx), value)
+    // WDSP third_party/wdsp/src/emnr.c:1306
+    SetRXAEMNRnpeMethod(m_channelId, method);
+#else
+    Q_UNUSED(method);
+#endif
+}
+
+void RxChannel::setEmnrAeRun(bool run)
+{
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:2101-2117
+    //   WDSP.SetRXAEMNRaeRun(WDSP.id(thread, subrx), value)
+    // WDSP third_party/wdsp/src/emnr.c:1314
+    SetRXAEMNRaeRun(m_channelId, run ? 1 : 0);
+#else
+    Q_UNUSED(run);
+#endif
+}
+
+void RxChannel::setEmnrPosition(int position)
+{
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:2235-2251
+    //   WDSP.SetRXAEMNRPosition(WDSP.id(thread, subrx), value)
+    // WDSP third_party/wdsp/src/emnr.c:1322
+    // position=1 → post-AGC placement (Thetis default rx_nr2_position=1)
+    SetRXAEMNRPosition(m_channelId, position);
+#else
+    Q_UNUSED(position);
+#endif
+}
+
+// ---------------------------------------------------------------------------
 // Frequency shift (pan offset from VFO)
 // ---------------------------------------------------------------------------
 

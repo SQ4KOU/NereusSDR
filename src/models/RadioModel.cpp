@@ -199,6 +199,13 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 rxCh->setAgcSlope(m_activeSlice->agcSlope());
                 rxCh->setAgcAttack(m_activeSlice->agcAttack());
                 rxCh->setAgcDecay(m_activeSlice->agcDecay());
+                // EMNR sub-parameter defaults — From Thetis radio.cs:2062,2081,2101,2235
+                // These are set-and-forget on channel creation; run flag follows slice.
+                rxCh->setEmnrGainMethod(2);   // radio.cs:2062 rx_nr2_gain_method = 2
+                rxCh->setEmnrNpeMethod(0);    // radio.cs:2081 rx_nr2_npe_method = 0
+                rxCh->setEmnrAeRun(true);     // radio.cs:2101 rx_nr2_ae_run = 1
+                rxCh->setEmnrPosition(1);     // radio.cs:2235 rx_nr2_position = 1 (post-AGC)
+                rxCh->setEmnrEnabled(m_activeSlice->emnrEnabled());
             }
             rxCh->setActive(true);
         }
@@ -455,6 +462,16 @@ void RadioModel::wireSliceSignals()
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setAgcDecay(ms);
+        }
+    });
+
+    // EMNR (NR2) → WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:2216-2232
+    // WDSP: third_party/wdsp/src/emnr.c:1283
+    connect(slice, &SliceModel::emnrEnabledChanged, this, [this](bool on) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setEmnrEnabled(on);
         }
     });
 

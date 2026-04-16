@@ -85,6 +85,15 @@ public:
     void setNrEnabled(bool enabled);
     void setAnfEnabled(bool enabled);
 
+    // EMNR (NR2) — Enhanced Multiband Noise Reduction
+    // From Thetis Project Files/Source/Console/radio.cs:2216-2251
+    bool emnrEnabled() const { return m_emnrEnabled.load(); }
+    void setEmnrEnabled(bool enabled);
+    void setEmnrGainMethod(int method);
+    void setEmnrNpeMethod(int method);
+    void setEmnrAeRun(bool run);
+    void setEmnrPosition(int position);
+
     // --- Frequency shift (for pan offset from VFO) ---
 
     void setShiftFrequency(double offsetHz);
@@ -132,6 +141,8 @@ private:
     std::atomic<bool> m_nb2Enabled{false};
     std::atomic<bool> m_nrEnabled{false};
     std::atomic<bool> m_anfEnabled{false};
+    // emnr: From Thetis radio.cs:2216 — rx_nr2_run default = 0
+    std::atomic<bool> m_emnrEnabled{false};
     std::atomic<bool> m_active{false};
 
     // AGC advanced parameters — atomic for thread-safe reads from audio thread

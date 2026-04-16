@@ -131,6 +131,20 @@ void SetRXAANFRun(int channel, int setit);
 
 void SetRXAEMNRRun(int channel, int run);
 
+// EMNR sub-parameters — From Thetis dsp.cs:243-297 P/Invoke declarations
+// WDSP: third_party/wdsp/src/emnr.c:1298,1306,1314,1322
+void SetRXAEMNRgainMethod(int channel, int method);
+void SetRXAEMNRnpeMethod(int channel, int method);
+void SetRXAEMNRaeRun(int channel, int run);
+void SetRXAEMNRPosition(int channel, int position);
+
+// ---------------------------------------------------------------------------
+// Spectral noise blanker (snb.h) — From Thetis dsp.cs P/Invoke declarations
+// ---------------------------------------------------------------------------
+
+// WDSP: third_party/wdsp/src/snb.c:579
+void SetRXASNBARun(int channel, int run);
+
 // ---------------------------------------------------------------------------
 // Noise blanker — external (nob.h, nob.c)
 // ---------------------------------------------------------------------------
