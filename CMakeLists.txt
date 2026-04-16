@@ -258,6 +258,7 @@ set(CORE_SOURCES
     src/core/FFTEngine.cpp
     src/core/NoiseFloorEstimator.cpp
     src/core/ClarityController.cpp
+    src/core/StepAttenuatorController.cpp
 )
 
 set(MODEL_SOURCES
@@ -371,6 +372,7 @@ set(GUI_SOURCES
     src/gui/SetupDialog.cpp
     src/gui/SetupPage.cpp
     src/gui/setup/GeneralSetupPages.cpp
+    src/gui/setup/GeneralOptionsPage.cpp
     src/gui/setup/HardwarePage.cpp
     src/gui/setup/hardware/RadioInfoTab.cpp
     src/gui/setup/hardware/AntennaAlexTab.cpp

@@ -85,3 +85,6 @@ nereus_add_test(tst_vfo_level_bar)
 nereus_add_test(tst_scrollable_label)
 nereus_add_test(tst_vfo_mode_containers)
 nereus_add_test(tst_vfo_tooltip_coverage)
+
+# ── Step attenuator / ADC overload detection ─────────────────────────────
+nereus_add_test(tst_step_attenuator_controller)

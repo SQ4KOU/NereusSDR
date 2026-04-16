@@ -7,9 +7,13 @@
 
 #include "RxApplet.h"
 #include "NyiOverlay.h"
+#include "core/BoardCapabilities.h"
+#include "core/RadioConnection.h"
+#include "core/StepAttenuatorController.h"
 #include "gui/ComboStyle.h"
 #include "gui/StyleConstants.h"
 #include "gui/widgets/FilterPassbandWidget.h"
+#include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 #include <QAction>
@@ -21,6 +25,8 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QSlider>
+#include <QSpinBox>
+#include <QStackedWidget>
 #include <QVBoxLayout>
 
 namespace NereusSDR {
@@ -343,6 +349,45 @@ void RxApplet::buildUi()
         rightCol->addLayout(row);
         NyiOverlay::markNyi(m_sqlBtn,    QStringLiteral("Phase 3I"));
         NyiOverlay::markNyi(m_sqlSlider, QStringLiteral("Phase 3I"));
+    }
+
+    // ATT/S-ATT row — between Squelch and AGC
+    // From Thetis console.cs: comboPreamp / udRX1StepAttData (stacked)
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+        row->setContentsMargins(0, 0, 0, 0);
+
+        m_attLabel = new QLabel(QStringLiteral("ATT"), this);
+        m_attLabel->setFixedWidth(34);
+        m_attLabel->setStyleSheet(QStringLiteral(
+            "QLabel { color: #8aa8c0; font-size: 11px; }"));
+        row->addWidget(m_attLabel);
+
+        m_attStack = new QStackedWidget(this);
+        m_attStack->setFixedHeight(20);
+
+        // Page 0: Preamp combo (ATT mode — step att disabled)
+        m_preampCombo = new QComboBox(this);
+        m_preampCombo->addItems({QStringLiteral("0dB"), QStringLiteral("-10dB"),
+                                 QStringLiteral("-20dB"), QStringLiteral("-30dB")});
+        m_preampCombo->setFixedWidth(70);
+        m_preampCombo->setFixedHeight(20);
+        applyComboStyle(m_preampCombo);
+        m_attStack->addWidget(m_preampCombo);
+
+        // Page 1: Step att spinbox (S-ATT mode — step att enabled)
+        m_stepAttSpin = new QSpinBox(this);
+        m_stepAttSpin->setRange(0, 31);
+        m_stepAttSpin->setSuffix(QStringLiteral(" dB"));
+        m_stepAttSpin->setFixedWidth(70);
+        m_stepAttSpin->setFixedHeight(20);
+        m_attStack->addWidget(m_stepAttSpin);
+
+        m_attStack->setCurrentIndex(0);  // default to preamp combo
+        row->addWidget(m_attStack, 1);
+
+        rightCol->addLayout(row);
     }
 
     // Controls 9 + 10: AGC combo + AGC threshold slider
@@ -728,6 +773,89 @@ void RxApplet::connectSlice(SliceModel* s)
     connect(s, &SliceModel::txAntennaChanged, this, [this](const QString& ant) {
         m_txAntBtn->setText(ant);
     });
+
+    // ATT/S-ATT — wire to StepAttenuatorController if available
+    auto* attCtrl = m_model ? m_model->stepAttController() : nullptr;
+    if (attCtrl) {
+        // Populate preamp combo from board capabilities when radio is connected.
+        // From Thetis console.cs:40755 SetComboPreampForHPSDR().
+        if (m_model->connection() && m_model->connection()->isConnected()) {
+            const auto& info = m_model->connection()->radioInfo();
+            const auto& caps = BoardCapsTable::forBoard(info.boardType);
+            const auto preampItems = BoardCapsTable::preampItemsForBoard(
+                info.boardType, caps.hasAlexFilters);
+
+            QSignalBlocker blk(m_preampCombo);
+            m_preampCombo->clear();
+            for (const auto& item : preampItems) {
+                m_preampCombo->addItem(QString::fromLatin1(item.label), item.modeInt);
+            }
+
+            // Set step att spinbox range from board capabilities.
+            // From Thetis setup.cs:15765 udHermesStepAttenuatorData max.
+            const int maxDb = BoardCapsTable::stepAttMaxDb(
+                info.boardType, caps.hasAlexFilters);
+            m_stepAttSpin->setRange(0, maxDb);
+            attCtrl->setMaxAttenuation(maxDb);
+        }
+
+        connect(m_stepAttSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+                this, [attCtrl](int val) {
+            attCtrl->setAttenuation(val);
+        });
+
+        connect(m_preampCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this, attCtrl](int idx) {
+            if (idx < 0) { return; }  // guard during clear/repopulate
+            int modeInt = m_preampCombo->itemData(idx).toInt();
+            attCtrl->setPreampMode(static_cast<PreampMode>(modeInt));
+        });
+
+        connect(attCtrl, &StepAttenuatorController::attenuationChanged,
+                this, [this](int dB) {
+            QSignalBlocker blk(m_stepAttSpin);
+            m_stepAttSpin->setValue(dB);
+        });
+
+        connect(attCtrl, &StepAttenuatorController::preampModeChanged,
+                this, [this](PreampMode mode) {
+            QSignalBlocker blk(m_preampCombo);
+            int modeInt = static_cast<int>(mode);
+            for (int i = 0; i < m_preampCombo->count(); ++i) {
+                if (m_preampCombo->itemData(i).toInt() == modeInt) {
+                    m_preampCombo->setCurrentIndex(i);
+                    return;
+                }
+            }
+        });
+
+        // React to step-att-enabled changes (ATT ↔ S-ATT mode switch)
+        connect(attCtrl, &StepAttenuatorController::stepAttEnabledChanged,
+                this, [this](bool stepOn) {
+            m_attLabel->setText(stepOn ? QStringLiteral("S-ATT")
+                                      : QStringLiteral("ATT"));
+            m_attStack->setCurrentIndex(stepOn ? 1 : 0);
+        });
+
+        // Sync initial state from controller
+        const bool stepOn = attCtrl->stepAttEnabled();
+        m_attLabel->setText(stepOn ? QStringLiteral("S-ATT") : QStringLiteral("ATT"));
+        m_attStack->setCurrentIndex(stepOn ? 1 : 0);
+        {
+            QSignalBlocker blk(m_stepAttSpin);
+            m_stepAttSpin->setValue(attCtrl->attenuatorDb());
+        }
+        {
+            QSignalBlocker blk(m_preampCombo);
+            int modeInt = static_cast<int>(attCtrl->preampMode());
+            for (int i = 0; i < m_preampCombo->count(); ++i) {
+                if (m_preampCombo->itemData(i).toInt() == modeInt) {
+                    m_preampCombo->setCurrentIndex(i);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 void RxApplet::disconnectSlice(SliceModel* s)
