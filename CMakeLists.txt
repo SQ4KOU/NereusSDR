@@ -257,6 +257,7 @@ set(CORE_SOURCES
     src/core/RxChannel.cpp
     src/core/FFTEngine.cpp
     src/core/NoiseFloorEstimator.cpp
+    src/core/ClarityController.cpp
 )
 
 set(MODEL_SOURCES
