@@ -258,6 +258,7 @@ set(CORE_SOURCES
     src/core/FFTEngine.cpp
     src/core/NoiseFloorEstimator.cpp
     src/core/ClarityController.cpp
+    src/core/StepAttenuatorController.cpp
 )
 
 set(MODEL_SOURCES
