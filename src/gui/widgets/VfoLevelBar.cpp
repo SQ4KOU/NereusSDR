@@ -1,5 +1,6 @@
 #include "VfoLevelBar.h"
 #include "VfoStyles.h"
+#include <QLinearGradient>
 #include <QPainter>
 #include <algorithm>
 namespace NereusSDR {
@@ -53,17 +54,14 @@ void VfoLevelBar::paintEvent(QPaintEvent*) {
         const int x0 = barRect.x() + 1;
         const int y0 = barRect.y() + 1;
         const int h  = barRect.height() - 2;
-        // S9 boundary pixel position within the bar
+        // Continuous gradient: cyan → green across the S9 boundary
         const double s9Frac = (kS9Dbm - kFloorDbm) / (kCeilingDbm - kFloorDbm);
-        const int s9Px = static_cast<int>(s9Frac * innerW);
-        if (fillW <= s9Px) {
-            // Entirely below S9 — all cyan
-            p.fillRect(x0, y0, fillW, h, kMeterCyan);
-        } else {
-            // Cyan segment up to S9, green segment above S9
-            p.fillRect(x0, y0, s9Px, h, kMeterCyan);
-            p.fillRect(x0 + s9Px, y0, fillW - s9Px, h, kMeterGreen);
-        }
+        QLinearGradient grad(x0, 0, x0 + innerW, 0);
+        grad.setColorAt(0.0, kMeterCyan);
+        grad.setColorAt(s9Frac, kMeterCyan);
+        grad.setColorAt(std::min(s9Frac + 0.15, 1.0), kMeterGreen);
+        grad.setColorAt(1.0, kMeterGreen);
+        p.fillRect(x0, y0, fillW, h, QBrush(grad));
     }
 
     // ── dBm text to the right of the bar ──────────────────────────────
