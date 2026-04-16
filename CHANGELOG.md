@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.1.6] - 2026-04-16
+
+About dialog and built-in issue reporter.
+
+### Added
+- **About dialog** (Help → About NereusSDR) — version, build info, Qt/WDSP
+  versions, heritage credits, license text, GPG fingerprint. Accessible from
+  the menu bar and wired into the build.
+- **AI-assisted issue reporter** — click the lightbulb (💡) in the menu bar
+  corner to file a bug report or feature request directly from NereusSDR.
+  Structured prompts guide you through the fields; submits to the GitHub
+  issue tracker using the `bug_report.yml` and `feature_request.yml`
+  templates.
+
+### Tests
+- AboutDialog content verification tests
+
+
 ## [0.1.5] - 2026-04-16
 
 Major feature release: RX DSP parity, step attenuator, Clarity adaptive display.
