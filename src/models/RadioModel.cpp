@@ -199,6 +199,13 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 rxCh->setAgcSlope(m_activeSlice->agcSlope());
                 rxCh->setAgcAttack(m_activeSlice->agcAttack());
                 rxCh->setAgcDecay(m_activeSlice->agcDecay());
+                // NB2 sub-parameter defaults — From Thetis cmaster.c:55-68 (create_nobEXT)
+                // These are set-and-forget; the run flag is gated by processIq() atomics.
+                // Declared in specHPSDR.cs:922-937; WDSP nobII.c:658,686,697,707
+                rxCh->setNb2Mode(0);         // cmaster.c:61  mode=0 (zero)
+                rxCh->setNb2Tau(0.0001);     // cmaster.c:62  slewtime=0.0001 s
+                rxCh->setNb2LeadTime(0.0001);// cmaster.c:63  advtime=0.0001 s
+                rxCh->setNb2HangTime(0.0001);// cmaster.c:65  hangtime=0.0001 s
                 // EMNR sub-parameter defaults — From Thetis radio.cs:2062,2081,2101,2235
                 // These are set-and-forget on channel creation; run flag follows slice.
                 rxCh->setEmnrGainMethod(2);   // radio.cs:2062 rx_nr2_gain_method = 2

@@ -208,6 +208,59 @@ void RxChannel::setNb2Enabled(bool enabled)
     // NB2 is applied in processIq() — same pattern as NB1.
 }
 
+void RxChannel::setNb2Mode(int mode)
+{
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/HPSDR/specHPSDR.cs:937
+    //   SetEXTNOBMode(int id, int mode)
+    //   mode: 0=zero, 1=sample-hold, 2=mean-hold, 3=hold-sample, 4=interpolate
+    // Thetis cmaster.c default: mode=0 (zero)
+    // WDSP: third_party/wdsp/src/nobII.c:658
+    SetEXTNOBMode(m_channelId, mode);
+#else
+    Q_UNUSED(mode);
+#endif
+}
+
+void RxChannel::setNb2Tau(double tau)
+{
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/HPSDR/specHPSDR.cs:922
+    //   SetEXTNOBTau(int id, double tau) — sets advslewtime + hangslewtime
+    // Thetis cmaster.c default: slewtime=0.0001 s
+    // WDSP: third_party/wdsp/src/nobII.c:686
+    SetEXTNOBTau(m_channelId, tau);
+#else
+    Q_UNUSED(tau);
+#endif
+}
+
+void RxChannel::setNb2LeadTime(double time)
+{
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/HPSDR/specHPSDR.cs:928
+    //   SetEXTNOBAdvtime(int id, double time) — advance/lead time
+    // Thetis cmaster.c default: advtime=0.0001 s
+    // WDSP: third_party/wdsp/src/nobII.c:707
+    SetEXTNOBAdvtime(m_channelId, time);
+#else
+    Q_UNUSED(time);
+#endif
+}
+
+void RxChannel::setNb2HangTime(double time)
+{
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/HPSDR/specHPSDR.cs:925
+    //   SetEXTNOBHangtime(int id, double time) — hang time
+    // Thetis cmaster.c default: hangtime=0.0001 s
+    // WDSP: third_party/wdsp/src/nobII.c:697
+    SetEXTNOBHangtime(m_channelId, time);
+#else
+    Q_UNUSED(time);
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // Noise reduction
 // ---------------------------------------------------------------------------

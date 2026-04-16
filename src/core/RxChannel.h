@@ -80,6 +80,23 @@ public:
     bool nb2Enabled() const { return m_nb2Enabled.load(); }
     void setNb2Enabled(bool enabled);
 
+    // NB2 advanced sub-parameters — set-and-forget on init from Thetis defaults.
+    // Declared in Thetis Project Files/Source/Console/HPSDR/specHPSDR.cs:922-937
+    // WDSP: third_party/wdsp/src/nobII.c:658,686,697,707
+    //
+    // mode: 0=zero, 1=sample-hold, 2=mean-hold, 3=hold-sample, 4=interpolate
+    // Thetis cmaster.c default: mode=0 (zero — blank to zero on impulse)
+    void setNb2Mode(int mode);
+    // tau: slew time constant in seconds (advslewtime + hangslewtime)
+    // Thetis cmaster.c default: 0.0001 s
+    void setNb2Tau(double tau);
+    // leadTime (advtime): advance time in seconds before detected impulse
+    // Thetis cmaster.c default: 0.0001 s
+    void setNb2LeadTime(double time);
+    // hangTime: hang time in seconds after blanked impulse
+    // Thetis cmaster.c default: 0.0001 s
+    void setNb2HangTime(double time);
+
     // --- Noise reduction ---
 
     void setNrEnabled(bool enabled);

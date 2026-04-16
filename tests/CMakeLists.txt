@@ -105,3 +105,6 @@ nereus_add_test(tst_slice_squelch)
 # ── Phase 3G-10 Stage 2: WDSP wiring — Mute / Audio Pan / Binaural (S2.6) ──
 nereus_add_test(tst_rxchannel_audio_panel)
 nereus_add_test(tst_slice_audio_panel)
+
+# ── Phase 3G-10 Stage 2: WDSP wiring — NB2 polish (S2.7) ───────────────────
+nereus_add_test(tst_rxchannel_nb2_polish)

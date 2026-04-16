@@ -594,7 +594,7 @@ void VfoWidget::buildDspTab()
     m_nb1Toggle = makeToggle(QStringLiteral("NB"));
     m_nb1Toggle->setToolTip(QStringLiteral("Toggle noise blanker (NB1)"));
     m_nb2Toggle = makeToggle(QStringLiteral("NB2"));
-    m_nb2Toggle->setToolTip(QStringLiteral("NB2 — not yet implemented"));
+    m_nb2Toggle->setToolTip(QStringLiteral("NB2: Impulse Noise Blanker (xnobEXTF — pre-WDSP chain)\nFrom Thetis specHPSDR.cs:937 — WDSP nobII.c:649"));
     m_nrToggle  = makeToggle(QStringLiteral("NR"));
     m_nrToggle->setToolTip(QStringLiteral("Toggle noise reduction (NR)"));
     m_nr2Toggle = makeToggle(QStringLiteral("NR2"));
@@ -694,8 +694,7 @@ void VfoWidget::buildDspTab()
         if (!m_updatingFromModel) { emit apfTuneHzChanged(hz); }
     });
 
-    // NYI badges — NB1, NR, ANF, NR2, SNB, APF are live-wired (no badge); remaining controls get badges
-    NyiOverlay::markNyi(m_nb2Toggle,      QStringLiteral("phase3g10-stage2"));
+    // NYI badges — NB1, NB2, NR, ANF, NR2, SNB, APF are live-wired (no badge); remaining controls get badges
     NyiOverlay::markNyi(m_fmContainer,    QStringLiteral("phase3g10-stage2"));
     NyiOverlay::markNyi(m_digContainer,   QStringLiteral("phase3g10-stage2"));
     NyiOverlay::markNyi(m_rttyContainer,  QStringLiteral("phase3g10-stage2"));
