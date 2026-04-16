@@ -426,7 +426,8 @@ void RxApplet::buildUi()
         m_agcTSlider->setValue(-20);
         m_agcTSlider->setFixedHeight(18);
         m_agcTSlider->setStyleSheet(Style::sliderHStyle());
-        m_agcTSlider->setToolTip(QStringLiteral("AGC threshold (dBu) — adjusts the level at which AGC begins to act"));
+        // From Thetis console.resx:8397 — ptbRF.ToolTip (ptbRF is the AGC-T slider)
+        m_agcTSlider->setToolTip(QStringLiteral("AGC Max Gain - Operates similarly to traditional RF Gain. Right click AUTO based on noise floor."));
         connect(m_agcTSlider, &QSlider::valueChanged, this, [this](int v) {
             if (m_updatingFromModel || !m_slice) { return; }
             m_slice->setAgcThreshold(v);
@@ -541,18 +542,30 @@ void RxApplet::buildUi()
     root->addLayout(columns);
 
     // ── Tooltips ──────────────────────────────────────────────────────────
+    // NereusSDR native — no Thetis per-slice badge equivalent
     m_sliceBadge->setToolTip(QStringLiteral("Slice identifier"));
-    m_lockBtn->setToolTip(QStringLiteral("Lock VFO frequency to prevent accidental tuning"));
-    m_rxAntBtn->setToolTip(QStringLiteral("Select the receive antenna port"));
+    // From Thetis console.resx:5787 — chkVFOLock.ToolTip
+    m_lockBtn->setToolTip(QStringLiteral("Keeps the VFO from changing while in the middle of a QSO."));
+    // From Thetis console.resx:8277 — chkRxAnt.ToolTip
+    m_rxAntBtn->setToolTip(QStringLiteral("Toggles receive antenna between RX and TX antennas for RX1"));
+    // NereusSDR native — no single Thetis TX-antenna tooltip
     m_txAntBtn->setToolTip(QStringLiteral("Select the transmit antenna port"));
+    // NereusSDR native — filter width label, no Thetis equivalent control
     m_filterWidthLbl->setToolTip(QStringLiteral("Current filter passband width"));
+    // NereusSDR native — Thetis uses discrete radio buttons per mode
     m_modeCombo->setToolTip(QStringLiteral("Select operating mode"));
-    m_muteBtn->setToolTip(QStringLiteral("Mute this slice audio output"));
-    m_afSlider->setToolTip(QStringLiteral("Audio output volume for this slice"));
-    m_agcCombo->setToolTip(QStringLiteral("AGC speed: Off/Slow/Med/Fast"));
-    m_agcTSlider->setToolTip(QStringLiteral("AGC threshold (dBu) — adjusts the level at which AGC begins to act"));
-    m_ritOnBtn->setToolTip(QStringLiteral("RIT — Receive Incremental Tuning: shifts demodulation frequency without retuning hardware VFO"));
-    m_xitOnBtn->setToolTip(QStringLiteral("XIT — Transmit Incremental Tuning: TX gated by Phase 3M-1"));
+    // From Thetis console.resx:1560 — chkRX2Mute.ToolTip (same text for RX1)
+    m_muteBtn->setToolTip(QStringLiteral("Mute - Mutes the output to the speaker."));
+    // From Thetis console.resx:8433 — ptbAF.ToolTip
+    m_afSlider->setToolTip(QStringLiteral("AF Gain - Monitor Volume for RX/TX"));
+    // From Thetis console.resx:4554 — comboAGC.ToolTip
+    m_agcCombo->setToolTip(QStringLiteral("Automatic Gain Control Mode Setting"));
+    // From Thetis console.resx:8397 — ptbRF.ToolTip (ptbRF is the AGC-T slider)
+    m_agcTSlider->setToolTip(QStringLiteral("AGC Max Gain - Operates similarly to traditional RF Gain. Right click AUTO based on noise floor."));
+    // From Thetis console.resx:4335 — chkRIT.ToolTip
+    m_ritOnBtn->setToolTip(QStringLiteral("Receive Incremental Tuning - offset RX frequency by value below in Hz."));
+    // From Thetis console.resx:4416 — chkXIT.ToolTip (TX gated by Phase 3M-1)
+    m_xitOnBtn->setToolTip(QStringLiteral("Transmit Incremental Tuning - offset TX frequency by the value below in Hz."));
 }
 
 void RxApplet::rebuildFilterButtons()

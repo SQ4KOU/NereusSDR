@@ -140,7 +140,8 @@ void VfoWidget::buildHeaderRow()
     m_rxAntBtn->setStyleSheet(QString(kFlatBtn) +
         QStringLiteral("QPushButton { color: #4488ff; }"));
     m_rxAntBtn->setFixedHeight(18);
-    m_rxAntBtn->setToolTip(QStringLiteral("Select RX antenna"));
+    // From Thetis console.resx:8277 — chkRxAnt.ToolTip
+    m_rxAntBtn->setToolTip(QStringLiteral("Toggles receive antenna between RX and TX antennas for RX1"));
     connect(m_rxAntBtn, &QPushButton::clicked, this, [this]() {
         QMenu menu(this);
         for (const QString& ant : m_antennaList) {
@@ -162,6 +163,8 @@ void VfoWidget::buildHeaderRow()
     m_txAntBtn->setStyleSheet(QString(kFlatBtn) +
         QStringLiteral("QPushButton { color: #ff4444; }"));
     m_txAntBtn->setFixedHeight(18);
+    // NereusSDR native — no single Thetis TX-antenna tooltip (TX ant is configured
+    // via Alex board setup in Setup dialog, not via a main-window toggle)
     m_txAntBtn->setToolTip(QStringLiteral("Select TX antenna"));
     connect(m_txAntBtn, &QPushButton::clicked, this, [this]() {
         QMenu menu(this);
@@ -196,6 +199,7 @@ void VfoWidget::buildHeaderRow()
         QStringLiteral("QPushButton { background: #1a2a3a; border: 1px solid #304050;"
                         "border-radius: 3px; color: #6888a0; font-size: 10px; font-weight: bold; }"
                         "QPushButton:checked { background: #6a3030; border-color: #ff4444; color: #ff8080; }"));
+    // NereusSDR native — Thetis has no per-slice TX badge (it uses chkMOX for TX state)
     m_txBadge->setToolTip(QStringLiteral("Indicates this slice is the TX slice"));
     hdr->addWidget(m_txBadge);
 
@@ -294,7 +298,8 @@ void VfoWidget::buildTabBar()
         QStringLiteral("DAX")
     };
 
-    // Tooltips for each tab button (order matches tabLabels)
+    // NereusSDR native — Thetis has a fixed single-panel layout with all controls
+    // visible simultaneously. The tabbed sub-panel is a NereusSDR UX pattern.
     static const char* kTabTooltips[] = {
         "Show/hide audio controls (AF gain, AGC, pan, mute, squelch)",
         "Show/hide DSP controls (NB, NR, ANF, SNB, APF)",
@@ -368,7 +373,8 @@ void VfoWidget::buildAudioTab()
         m_afGainSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
-        m_afGainSlider->setToolTip(QStringLiteral("Adjust AF gain (audio volume)"));
+        // From Thetis console.resx:8433 — ptbAF.ToolTip
+        m_afGainSlider->setToolTip(QStringLiteral("AF Gain - Monitor Volume for RX/TX"));
         row->addWidget(m_afGainSlider);
 
         m_afGainLabel = new QLabel(QStringLiteral("50"), audioWidget);
@@ -389,12 +395,14 @@ void VfoWidget::buildAudioTab()
     // 2. AGC 5-button row — replaces m_agcCmb (live-wired, no NYI badge)
     {
         static const char* kAgcLabels[] = { "Off", "Long", "Slow", "Med", "Fast" };
+        // From Thetis console.resx:4554 (comboAGC.ToolTip) + console.cs:27987-28041
+        // Thetis sets dynamic tooltip per AGC mode change; we use static variants.
         static const char* kAgcTooltips[] = {
-            "Select AGC mode: Off (no automatic gain control)",
-            "Select AGC mode: Long attack/decay",
-            "Select AGC mode: Slow attack/decay",
-            "Select AGC mode: Medium attack/decay",
-            "Select AGC mode: Fast attack/decay"
+            "Automatic Gain Control Mode Setting:\nFixed - Set gain with AGC-T control",
+            "Automatic Gain Control Mode Setting:\nLong (Attack 2ms, Hang 2000ms, Decay 2000ms)",
+            "Automatic Gain Control Mode Setting:\nSlow (Attack 2ms, Hang 1000ms, Decay 500ms)",
+            "Automatic Gain Control Mode Setting:\nMedium (Attack 2ms, Hang OFF, Decay 250ms)",
+            "Automatic Gain Control Mode Setting:\nFast (Attack 2ms, Hang OFF, Decay 50ms)"
         };
         auto* row = new QHBoxLayout;
         row->setSpacing(2);
@@ -506,7 +514,8 @@ void VfoWidget::buildAudioTab()
         m_sqlBtn->setCheckable(true);
         m_sqlBtn->setStyleSheet(kDspToggle);
         m_sqlBtn->setFixedWidth(40);
-        m_sqlBtn->setToolTip(QStringLiteral("Toggle squelch. SSB uses syllabic squelch; AM/FM use separate squelch engines."));
+        // From Thetis console.resx:5631 — chkSquelch.ToolTip
+        m_sqlBtn->setToolTip(QStringLiteral("Squelch Enable"));
         row->addWidget(m_sqlBtn);
 
         m_sqlSlider = new QSlider(Qt::Horizontal, audioWidget);
@@ -516,6 +525,7 @@ void VfoWidget::buildAudioTab()
         m_sqlSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
+        // NereusSDR native — Thetis ptbSquelch has no ToolTip entry in console.resx
         m_sqlSlider->setToolTip(QStringLiteral("Squelch threshold. SSB: 0–100 maps to 0.0–1.0 linear. AM: dB scale. FM: linear 0–1."));
         row->addWidget(m_sqlSlider);
 
@@ -549,7 +559,8 @@ void VfoWidget::buildAudioTab()
         m_agcTSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
-        m_agcTSlider->setToolTip(QStringLiteral("AGC threshold (dBu) — adjusts the level at which AGC begins to act"));
+        // From Thetis console.resx:8397 — ptbRF.ToolTip (ptbRF is the AGC-T slider)
+        m_agcTSlider->setToolTip(QStringLiteral("AGC Max Gain - Operates similarly to traditional RF Gain. Right click AUTO based on noise floor."));
         row->addWidget(m_agcTSlider);
 
         m_agcTLabel = new QLabel(QStringLiteral("-20"), audioWidget);
@@ -592,13 +603,18 @@ void VfoWidget::buildDspTab()
 
     // Row 0: NB | NB2 | NR | NR2
     m_nb1Toggle = makeToggle(QStringLiteral("NB"));
-    m_nb1Toggle->setToolTip(QStringLiteral("Toggle noise blanker (NB1)"));
+    // From Thetis console.resx:4017 — chkNB.ToolTip
+    m_nb1Toggle->setToolTip(QStringLiteral("Noise Blanker"));
     m_nb2Toggle = makeToggle(QStringLiteral("NB2"));
     m_nb2Toggle->setToolTip(QStringLiteral("NB2: Impulse Noise Blanker (xnobEXTF — pre-WDSP chain)\nFrom Thetis specHPSDR.cs:937 — WDSP nobII.c:649"));
     m_nrToggle  = makeToggle(QStringLiteral("NR"));
-    m_nrToggle->setToolTip(QStringLiteral("Toggle noise reduction (NR)"));
+    // From Thetis console.resx:3879 — chkNR.ToolTip
+    m_nrToggle->setToolTip(QStringLiteral("Noise Reduction"));
     m_nr2Toggle = makeToggle(QStringLiteral("NR2"));
-    m_nr2Toggle->setToolTip(QStringLiteral("Toggle enhanced multiband noise reduction (NR2/EMNR)"));
+    // NereusSDR native — Thetis has no separate NR2 button; NR2 is selected via
+    // a context menu on chkNR which relabels that same checkbox to "NR2".
+    // NereusSDR exposes NR2 as a separate dedicated toggle.
+    m_nr2Toggle->setToolTip(QStringLiteral("Enhanced Multiband Noise Reduction (EMNR/NR2) — activates SetRXAEMNRRun"));
     grid->addWidget(m_nb1Toggle, 0, 0);
     grid->addWidget(m_nb2Toggle, 0, 1);
     grid->addWidget(m_nrToggle,  0, 2);
@@ -606,11 +622,14 @@ void VfoWidget::buildDspTab()
 
     // Row 1: ANF | SNB | APF | (spacer — col 3 intentionally empty per plan §S1.8.4)
     m_anfToggle = makeToggle(QStringLiteral("ANF"));
-    m_anfToggle->setToolTip(QStringLiteral("Toggle automatic notch filter (ANF)"));
+    // From Thetis console.resx:4062 — chkANF.ToolTip
+    m_anfToggle->setToolTip(QStringLiteral("Automatic Notch Filter"));
     m_snbToggle = makeToggle(QStringLiteral("SNB"));
-    m_snbToggle->setToolTip(QStringLiteral("Toggle spectral noise blanker (SNB)"));
+    // From Thetis console.resx:3927 — chkDSPNB2.ToolTip (labeled "SNB" in Thetis UI)
+    m_snbToggle->setToolTip(QStringLiteral("Spectral Noise Blanker"));
     m_apfToggle = makeToggle(QStringLiteral("APF"));
-    m_apfToggle->setToolTip(QStringLiteral("Toggle audio peak filter (APF) — CW narrow-peak filter"));
+    // From Thetis console.resx:348 — chkCWAPFEnabled.ToolTip
+    m_apfToggle->setToolTip(QStringLiteral("Enables APF"));
     grid->addWidget(m_anfToggle, 1, 0);
     grid->addWidget(m_snbToggle, 1, 1);
     grid->addWidget(m_apfToggle, 1, 2);
@@ -631,7 +650,8 @@ void VfoWidget::buildDspTab()
         m_apfTuneSlider->setRange(-500, 500);
         m_apfTuneSlider->setSingleStep(1);
         m_apfTuneSlider->setValue(0);
-        m_apfTuneSlider->setToolTip(QStringLiteral("APF tune offset from CW pitch (600 Hz ± offset). From Thetis setup.cs:17068"));
+        // From Thetis console.resx:303 — ptbCWAPFFreq.ToolTip
+        m_apfTuneSlider->setToolTip(QStringLiteral("Sets the CW APF Frequency."));
         apfRow->addWidget(m_apfTuneSlider);
 
         m_apfTuneLabel = new QLabel(QStringLiteral("0 Hz"), dspWidget);
@@ -718,6 +738,8 @@ void VfoWidget::buildModeTab()
         row->addWidget(label);
 
         m_modeCmb = new QComboBox(modeWidget);
+        // NereusSDR native — Thetis uses discrete radio buttons (radModeUSB, radModeLSB, ...)
+        // rather than a combo box. No single Thetis control has an equivalent tooltip.
         m_modeCmb->setToolTip(QStringLiteral("Select demodulation mode"));
         // From Thetis enums.cs DSPMode — common modes
         m_modeCmb->addItems({
@@ -756,10 +778,13 @@ void VfoWidget::buildModeTab()
     // Quick-mode shortcut buttons (NYI — Stage 2 maps index → configurable DSPMode)
     {
         static const char* kQmLabels[] = { "USB", "CW", "DIG" };
+        // NereusSDR native — Thetis uses individual radio buttons per mode (radModeUSB etc.)
+        // Quick-mode buttons are a NereusSDR shortcut for frequently used modes.
+        // Wiring deferred to Stage 2 (quickModeRequested signal exists).
         static const char* kQmTooltips[] = {
-            "Quick-select USB mode — not yet implemented",
-            "Quick-select CW mode — not yet implemented",
-            "Quick-select DIG mode — not yet implemented"
+            "Quick-select USB mode",
+            "Quick-select CW mode",
+            "Quick-select DIG mode"
         };
         auto* row = new QHBoxLayout;
         row->setSpacing(2);
@@ -800,7 +825,8 @@ void VfoWidget::buildModeTab()
         m_rfGainSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
-        m_rfGainSlider->setToolTip(QStringLiteral("Adjust RF gain"));
+        // From Thetis console.resx:8397 — ptbRF.ToolTip (Thetis RF gain = AGC Max Gain slider)
+        m_rfGainSlider->setToolTip(QStringLiteral("AGC Max Gain - Operates similarly to traditional RF Gain. Right click AUTO based on noise floor."));
         row->addWidget(m_rfGainSlider);
 
         m_rfGainLabel = new QLabel(QStringLiteral("80"), modeWidget);
@@ -848,7 +874,8 @@ void VfoWidget::buildXRitTab()
         m_ritBtn->setCheckable(true);
         m_ritBtn->setStyleSheet(kDspToggle);
         m_ritBtn->setFixedHeight(22);
-        m_ritBtn->setToolTip(QStringLiteral("RIT — Receive Incremental Tuning: shifts demodulation frequency without retuning hardware VFO"));
+        // From Thetis console.resx:4335 — chkRIT.ToolTip
+        m_ritBtn->setToolTip(QStringLiteral("Receive Incremental Tuning - offset RX frequency by value below in Hz."));
         row->addWidget(m_ritBtn);
 
         m_ritLabel = new ScrollableLabel(ritWidget);
@@ -864,7 +891,8 @@ void VfoWidget::buildXRitTab()
         m_ritZeroBtn->setFixedWidth(20);
         m_ritZeroBtn->setFlat(true);
         m_ritZeroBtn->setStyleSheet(kZeroBtn);
-        m_ritZeroBtn->setToolTip(QStringLiteral("Zero RIT offset"));
+        // From Thetis console.resx:4185 — btnRITReset.ToolTip
+        m_ritZeroBtn->setToolTip(QStringLiteral("Clear RIT"));
         row->addWidget(m_ritZeroBtn);
 
         vbox->addLayout(row);
@@ -879,7 +907,9 @@ void VfoWidget::buildXRitTab()
         m_xitBtn->setCheckable(true);
         m_xitBtn->setStyleSheet(kDspToggle);
         m_xitBtn->setFixedHeight(22);
-        m_xitBtn->setToolTip(QStringLiteral("XIT — not yet implemented"));
+        // From Thetis console.resx:4416 — chkXIT.ToolTip
+        // XIT stored in SliceModel for Phase 3M-1 TX use; client offset displayed now.
+        m_xitBtn->setToolTip(QStringLiteral("Transmit Incremental Tuning - offset TX frequency by the value below in Hz."));
         row->addWidget(m_xitBtn);
 
         m_xitLabel = new ScrollableLabel(ritWidget);
@@ -895,7 +925,8 @@ void VfoWidget::buildXRitTab()
         m_xitZeroBtn->setFixedWidth(20);
         m_xitZeroBtn->setFlat(true);
         m_xitZeroBtn->setStyleSheet(kZeroBtn);
-        m_xitZeroBtn->setToolTip(QStringLiteral("Zero XIT offset — not yet implemented"));
+        // From Thetis console.resx:4224 — btnXITReset.ToolTip
+        m_xitZeroBtn->setToolTip(QStringLiteral("Clear XIT"));
         row->addWidget(m_xitZeroBtn);
 
         vbox->addLayout(row);
@@ -910,7 +941,8 @@ void VfoWidget::buildXRitTab()
         m_xritLockBtn->setCheckable(true);
         m_xritLockBtn->setStyleSheet(kDspToggle);
         m_xritLockBtn->setFixedHeight(22);
-        m_xritLockBtn->setToolTip(QStringLiteral("Lock VFO frequency to prevent accidental tuning"));
+        // From Thetis console.resx:5787 — chkVFOLock.ToolTip
+        m_xritLockBtn->setToolTip(QStringLiteral("Keeps the VFO from changing while in the middle of a QSO."));
         row->addWidget(m_xritLockBtn);
 
         // Step cycle button — NOT NYI (wires to live SliceModel::setStepHz)
@@ -924,6 +956,8 @@ void VfoWidget::buildXRitTab()
                            "}"
                            "QPushButton:hover { border: 1px solid #0090e0; }"));
         m_stepCycleBtn->setFixedHeight(22);
+        // NereusSDR native — Thetis has no equivalent step-cycle button
+        // (Thetis uses wheel on the VFO display directly; step size is implicit)
         m_stepCycleBtn->setToolTip(QStringLiteral("Cycle tuning step size (click to advance to next step)"));
         row->addWidget(m_stepCycleBtn, 1);
 
@@ -1468,6 +1502,7 @@ void VfoWidget::buildFloatingButtons()
 
     // Close button — wired
     m_closeBtn = makeBtn(QStringLiteral("\u2715"), kFloatingBtnClose);
+    // NereusSDR native — Thetis has no per-slice close button
     m_closeBtn->setToolTip(QStringLiteral("Close slice"));
     connect(m_closeBtn, &QPushButton::clicked, this, [this]() {
         emit closeRequested(m_sliceIndex);
@@ -1475,7 +1510,8 @@ void VfoWidget::buildFloatingButtons()
 
     // Lock button — wired
     m_lockBtn = makeBtn(QStringLiteral("\U0001F513"), kFloatingBtn);
-    m_lockBtn->setToolTip(QStringLiteral("Lock VFO frequency"));
+    // From Thetis console.resx:5787 — chkVFOLock.ToolTip
+    m_lockBtn->setToolTip(QStringLiteral("Keeps the VFO from changing while in the middle of a QSO."));
     m_lockBtn->setCheckable(true);
     connect(m_lockBtn, &QPushButton::toggled, this, [this](bool locked) {
         if (!m_updatingFromModel) {
@@ -1485,7 +1521,8 @@ void VfoWidget::buildFloatingButtons()
 
     // Record button — checkable, NYI-badged (no consumer in Stage 1)
     m_recBtn = makeBtn(QStringLiteral("\u23FA"), kFloatingBtn);
-    m_recBtn->setToolTip(QStringLiteral("Record audio"));
+    // From Thetis console.resx:2028 — ckQuickRec.ToolTip
+    m_recBtn->setToolTip(QStringLiteral("Quick Record of \"off the air\" signals"));
     m_recBtn->setCheckable(true);
     connect(m_recBtn, &QPushButton::toggled, this, [this](bool on) {
         if (!m_updatingFromModel) {
@@ -1496,7 +1533,8 @@ void VfoWidget::buildFloatingButtons()
 
     // Play button — checkable, NYI-badged (no consumer in Stage 1)
     m_playBtn = makeBtn(QStringLiteral("\u25B6"), kFloatingBtn);
-    m_playBtn->setToolTip(QStringLiteral("Play recording"));
+    // From Thetis console.resx:1941 — ckQuickPlay.ToolTip
+    m_playBtn->setToolTip(QStringLiteral("Quick Playback of signals recorded \"off the air\""));
     m_playBtn->setCheckable(true);
     connect(m_playBtn, &QPushButton::toggled, this, [this](bool on) {
         if (!m_updatingFromModel) {
