@@ -124,8 +124,8 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     m_intentionalDisconnect = false;
     m_totalIqPackets = 0;
 
-    // Cache board capabilities — drives attenuator clamp, ADC count, etc.
-    m_caps = &BoardCapsTable::forBoard(info.boardType);
+    // Use HardwareProfile for capability lookup (Phase 3I-RP).
+    m_caps = m_hardwareProfile.caps;
 
     // Reset sequence counters
     m_seqGeneral = 0;
@@ -138,7 +138,7 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // Use m_caps->adcCount instead of info.adcCount for capability-metadata consistency.
     // Both carry the same value (info.adcCount is populated from adcCountForBoard() which
     // reads the same BoardCapsTable). m_caps is authoritative.
-    m_numAdc = m_caps->adcCount;
+    m_numAdc = m_hardwareProfile.adcCount;
     m_numDac = 1;
     m_wdt = 1;  // Watchdog timer MUST be enabled — radio requires it for streaming
 
