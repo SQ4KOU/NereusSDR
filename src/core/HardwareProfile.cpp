@@ -144,6 +144,13 @@ HPSDRModel defaultModelForBoard(HPSDRHW board)
             return m;
         }
     }
+
+    // SaturnMKII (0x0B) has no dedicated HPSDRModel enum entry yet.
+    // Map it to ANAN_G2 so it gets Saturn-family capabilities (2 ADC, P2).
+    if (board == HPSDRHW::SaturnMKII) {
+        return HPSDRModel::ANAN_G2;
+    }
+
     return HPSDRModel::HERMES;
 }
 
@@ -182,6 +189,13 @@ QList<HPSDRModel> compatibleModels(HPSDRHW board)
             case HPSDRModel::ANAN100B:
                 // ANAN-10E/100B are compatible with Hermes or HermesII
                 if (board == HPSDRHW::Hermes || board == HPSDRHW::HermesII) {
+                    result.append(m);
+                }
+                break;
+            case HPSDRModel::ANAN_G2:
+            case HPSDRModel::ANAN_G2_1K:
+                // Saturn-family models also match SaturnMKII board byte
+                if (board == HPSDRHW::SaturnMKII) {
                     result.append(m);
                 }
                 break;

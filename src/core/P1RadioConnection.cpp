@@ -360,8 +360,12 @@ void P1RadioConnection::connectToRadio(const RadioInfo& info)
     }
 
     m_radioInfo = info;
-    // Use HardwareProfile for caps (Phase 3I-RP)
-    m_caps = m_hardwareProfile.caps;
+    // Use HardwareProfile for caps (Phase 3I-RP).
+    // Fall back to board-byte lookup if setHardwareProfile() was never called
+    // (e.g. direct construction in tests without RadioModel).
+    m_caps = m_hardwareProfile.caps
+             ? m_hardwareProfile.caps
+             : &BoardCapsTable::forBoard(info.boardType);
 
     // Initialize per-ADC state from profile
     for (int i = 0; i < 3; ++i) {
@@ -371,7 +375,7 @@ void P1RadioConnection::connectToRadio(const RadioInfo& info)
         m_stepAttn[i] = 0;
     }
     m_txStepAttn = 0;
-    m_paEnabled = m_hardwareProfile.caps->hasPaProfile;
+    m_paEnabled = m_caps->hasPaProfile;
     m_duplex = true;
     m_reconnectedLogged = false;
 
