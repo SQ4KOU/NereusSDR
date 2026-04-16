@@ -404,34 +404,125 @@ void VfoWidget::buildAudioTab()
 void VfoWidget::buildDspTab()
 {
     auto* dspWidget = new QWidget;
-    auto* dspLayout = new QHBoxLayout(dspWidget);
+    auto* dspLayout = new QVBoxLayout(dspWidget);
     dspLayout->setContentsMargins(4, 4, 4, 4);
     dspLayout->setSpacing(4);
 
-    auto makeToggle = [&](const QString& label) -> QPushButton* {
+    // 4×2 grid of DSP toggles
+    auto* grid = new QGridLayout;
+    grid->setContentsMargins(0, 0, 0, 0);
+    grid->setSpacing(2);
+
+    auto makeToggle = [dspWidget](const QString& label) -> QPushButton* {
         auto* btn = new QPushButton(label, dspWidget);
         btn->setCheckable(true);
         btn->setStyleSheet(kDspToggle);
-        dspLayout->addWidget(btn);
         return btn;
     };
 
-    m_nbBtn = makeToggle(QStringLiteral("NB"));
-    connect(m_nbBtn, &QPushButton::toggled, this, [this](bool on) {
+    // Row 0: NB | NB2 | NR | NR2
+    m_nb1Toggle = makeToggle(QStringLiteral("NB"));
+    m_nb2Toggle = makeToggle(QStringLiteral("NB2"));
+    m_nrToggle  = makeToggle(QStringLiteral("NR"));
+    m_nr2Toggle = makeToggle(QStringLiteral("NR2"));
+    grid->addWidget(m_nb1Toggle, 0, 0);
+    grid->addWidget(m_nb2Toggle, 0, 1);
+    grid->addWidget(m_nrToggle,  0, 2);
+    grid->addWidget(m_nr2Toggle, 0, 3);
+
+    // Row 1: ANF | SNB | APF | (spacer — col 3 intentionally empty per plan §S1.8.4)
+    m_anfToggle = makeToggle(QStringLiteral("ANF"));
+    m_snbToggle = makeToggle(QStringLiteral("SNB"));
+    m_apfToggle = makeToggle(QStringLiteral("APF"));
+    grid->addWidget(m_anfToggle, 1, 0);
+    grid->addWidget(m_snbToggle, 1, 1);
+    grid->addWidget(m_apfToggle, 1, 2);
+
+    dspLayout->addLayout(grid);
+
+    // APF tune slider row — below the grid
+    {
+        auto* apfRow = new QHBoxLayout;
+        apfRow->setSpacing(4);
+
+        auto* apfLabel = new QLabel(QStringLiteral("APF"), dspWidget);
+        apfLabel->setStyleSheet(QStringLiteral("color: #8899aa; font-size: 11px;"));
+        apfLabel->setFixedWidth(24);
+        apfRow->addWidget(apfLabel);
+
+        m_apfTuneSlider = new QSlider(Qt::Horizontal, dspWidget);
+        m_apfTuneSlider->setRange(-500, 500);
+        m_apfTuneSlider->setSingleStep(1);
+        m_apfTuneSlider->setValue(0);
+        apfRow->addWidget(m_apfTuneSlider);
+
+        m_apfTuneLabel = new QLabel(QStringLiteral("0 Hz"), dspWidget);
+        m_apfTuneLabel->setStyleSheet(QStringLiteral("color: #8899aa; font-size: 11px;"));
+        m_apfTuneLabel->setFixedWidth(44);
+        m_apfTuneLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        apfRow->addWidget(m_apfTuneLabel);
+
+        dspLayout->addLayout(apfRow);
+    }
+
+    // Mode containers — embedded, hidden by default (S1.9 wires visibility)
+    m_fmContainer = new FmOptContainer(dspWidget);
+    m_fmContainer->setVisible(false);
+    dspLayout->addWidget(m_fmContainer);
+
+    m_digContainer = new DigOffsetContainer(dspWidget);
+    m_digContainer->setVisible(false);
+    dspLayout->addWidget(m_digContainer);
+
+    m_rttyContainer = new RttyMarkShiftContainer(dspWidget);
+    m_rttyContainer->setVisible(false);
+    dspLayout->addWidget(m_rttyContainer);
+
+    // If m_slice was set before buildUI ran, forward it to the containers now.
+    if (m_slice) {
+        m_fmContainer->setSlice(m_slice.data());
+        m_digContainer->setSlice(m_slice.data());
+        m_rttyContainer->setSlice(m_slice.data());
+    }
+
+    // Signal wiring for the 7 toggles
+    connect(m_nb1Toggle, &QPushButton::toggled, this, [this](bool on) {
         if (!m_updatingFromModel) { emit nb1Changed(on); }
     });
-
-    m_nrBtn = makeToggle(QStringLiteral("NR"));
-    connect(m_nrBtn, &QPushButton::toggled, this, [this](bool on) {
+    connect(m_nb2Toggle, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) { emit nb2Changed(on); }
+    });
+    connect(m_nrToggle, &QPushButton::toggled, this, [this](bool on) {
         if (!m_updatingFromModel) { emit nrChanged(on); }
     });
-
-    m_anfBtn = makeToggle(QStringLiteral("ANF"));
-    connect(m_anfBtn, &QPushButton::toggled, this, [this](bool on) {
+    connect(m_nr2Toggle, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) { emit nr2Changed(on); }
+    });
+    connect(m_anfToggle, &QPushButton::toggled, this, [this](bool on) {
         if (!m_updatingFromModel) { emit anfChanged(on); }
     });
+    connect(m_snbToggle, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) { emit snbChanged(on); }
+    });
+    connect(m_apfToggle, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) { emit apfChanged(on); }
+    });
 
-    dspLayout->addStretch();
+    // APF tune slider — label updates always; emit only when user-driven
+    connect(m_apfTuneSlider, &QSlider::valueChanged, this, [this](int hz) {
+        m_apfTuneLabel->setText(QString::number(hz) + QStringLiteral(" Hz"));
+        if (!m_updatingFromModel) { emit apfTuneHzChanged(hz); }
+    });
+
+    // NYI badges — NB1, NR, ANF are live-wired (no badge); new controls get badges
+    NyiOverlay::markNyi(m_nb2Toggle,      QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_nr2Toggle,      QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_snbToggle,      QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_apfToggle,      QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_apfTuneSlider,  QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_fmContainer,    QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_digContainer,   QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_rttyContainer,  QStringLiteral("phase3g10-stage2"));
 
     m_tabStack->addWidget(dspWidget);
 }
@@ -951,6 +1042,69 @@ void VfoWidget::setXitHz(int hz)
         m_updatingFromModel = true;
         m_xitLabel->setValue(hz);
         m_updatingFromModel = false;
+    }
+}
+
+// ---- DSP tab state setters (S1.8b) ----
+
+void VfoWidget::setNb2Enabled(bool v)
+{
+    if (m_nb2Toggle && m_nb2Toggle->isChecked() != v) {
+        m_updatingFromModel = true;
+        m_nb2Toggle->setChecked(v);
+        m_updatingFromModel = false;
+    }
+}
+
+void VfoWidget::setNr2Enabled(bool v)
+{
+    if (m_nr2Toggle && m_nr2Toggle->isChecked() != v) {
+        m_updatingFromModel = true;
+        m_nr2Toggle->setChecked(v);
+        m_updatingFromModel = false;
+    }
+}
+
+void VfoWidget::setSnbEnabled(bool v)
+{
+    if (m_snbToggle && m_snbToggle->isChecked() != v) {
+        m_updatingFromModel = true;
+        m_snbToggle->setChecked(v);
+        m_updatingFromModel = false;
+    }
+}
+
+void VfoWidget::setApfEnabled(bool v)
+{
+    if (m_apfToggle && m_apfToggle->isChecked() != v) {
+        m_updatingFromModel = true;
+        m_apfToggle->setChecked(v);
+        m_updatingFromModel = false;
+    }
+}
+
+void VfoWidget::setApfTuneHz(int hz)
+{
+    if (m_apfTuneSlider && m_apfTuneSlider->value() != hz) {
+        m_updatingFromModel = true;
+        m_apfTuneSlider->setValue(hz);
+        m_updatingFromModel = false;
+    }
+}
+
+// ---- Slice coupling (for mode container binding only) ----
+
+void VfoWidget::setSlice(SliceModel* slice)
+{
+    m_slice = QPointer<SliceModel>(slice);
+    if (m_fmContainer) {
+        m_fmContainer->setSlice(slice);
+    }
+    if (m_digContainer) {
+        m_digContainer->setSlice(slice);
+    }
+    if (m_rttyContainer) {
+        m_rttyContainer->setSlice(slice);
     }
 }
 

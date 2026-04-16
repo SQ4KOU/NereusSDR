@@ -1525,6 +1525,7 @@ void MainWindow::wireSliceToSpectrum()
 
     // --- Create floating VFO flag widget (AetherSDR pattern) ---
     VfoWidget* vfo = m_spectrumWidget->addVfoWidget(0);
+    vfo->setSlice(slice);
     vfo->setFrequency(freq);
     vfo->setMode(slice->dspMode());
     vfo->setFilter(slice->filterLow(), slice->filterHigh());
@@ -1653,6 +1654,27 @@ void MainWindow::wireSliceToSpectrum()
         vfo->setXitHz(hz);
     });
 
+    // --- SliceModel → VfoWidget: DSP tab inbound (S1.8b stubs) ---
+    connect(slice, &SliceModel::nb2EnabledChanged, this, [vfo](bool v) {
+        vfo->setNb2Enabled(v);
+    });
+
+    connect(slice, &SliceModel::emnrEnabledChanged, this, [vfo](bool v) {
+        vfo->setNr2Enabled(v);
+    });
+
+    connect(slice, &SliceModel::snbEnabledChanged, this, [vfo](bool v) {
+        vfo->setSnbEnabled(v);
+    });
+
+    connect(slice, &SliceModel::apfEnabledChanged, this, [vfo](bool v) {
+        vfo->setApfEnabled(v);
+    });
+
+    connect(slice, &SliceModel::apfTuneHzChanged, this, [vfo](int hz) {
+        vfo->setApfTuneHz(hz);
+    });
+
     // --- VFO flag → slice ---
 
     connect(vfo, &VfoWidget::frequencyChanged, this, [slice](double hz) {
@@ -1699,6 +1721,24 @@ void MainWindow::wireSliceToSpectrum()
     connect(vfo, &VfoWidget::anfChanged, this, [this](bool on) {
         RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
         if (rxCh) { rxCh->setAnfEnabled(on); }
+    });
+
+    // --- VfoWidget → SliceModel: DSP tab outbound (S1.8b stubs) ---
+    connect(vfo, &VfoWidget::nb2Changed, this, [slice](bool on) {
+        slice->setNb2Enabled(on);
+    });
+    connect(vfo, &VfoWidget::nr2Changed, this, [slice](bool on) {
+        // NR2 = EMNR in Thetis naming
+        slice->setEmnrEnabled(on);
+    });
+    connect(vfo, &VfoWidget::snbChanged, this, [slice](bool on) {
+        slice->setSnbEnabled(on);
+    });
+    connect(vfo, &VfoWidget::apfChanged, this, [slice](bool on) {
+        slice->setApfEnabled(on);
+    });
+    connect(vfo, &VfoWidget::apfTuneHzChanged, this, [slice](int hz) {
+        slice->setApfTuneHz(hz);
     });
 
     // --- VfoWidget → SliceModel: RIT/XIT outbound (S1.8a stubs) ---

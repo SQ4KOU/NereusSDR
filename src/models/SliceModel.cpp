@@ -316,6 +316,14 @@ void SliceModel::setXitHz(int hz)
     }
 }
 
+void SliceModel::setNb2Enabled(bool v)
+{
+    if (m_nb2Enabled != v) {
+        m_nb2Enabled = v;
+        emit nb2EnabledChanged(v);
+    }
+}
+
 void SliceModel::setEmnrEnabled(bool v)
 {
     if (m_emnrEnabled != v) {

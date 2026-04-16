@@ -4,6 +4,7 @@
 #include "models/SliceModel.h"
 #include "VfoLevelBar.h"
 #include "ScrollableLabel.h"
+#include "VfoModeContainers.h"
 
 #include <QWidget>
 #include <QLabel>
@@ -63,6 +64,16 @@ public:
     // --- Lock state setter (S1.8a review — syncs both m_lockBtn and m_xritLockBtn) ---
     void setLocked(bool v);
 
+    // --- DSP tab state setters (S1.8b — guarded against re-emit) ---
+    void setNb2Enabled(bool v);
+    void setNr2Enabled(bool v);
+    void setSnbEnabled(bool v);
+    void setApfEnabled(bool v);
+    void setApfTuneHz(int hz);
+
+    // --- Slice coupling (for mode container binding only) ---
+    void setSlice(SliceModel* slice);
+
     // --- Positioning ---
 
     // Reposition the flag at the given pixel x of the VFO marker.
@@ -93,6 +104,13 @@ signals:
     void xitEnabledChanged(bool enabled);
     void xitHzChanged(int hz);
     void stepCycleRequested();
+
+    // --- DSP tab signals (S1.8b) ---
+    void nb2Changed(bool enabled);
+    void nr2Changed(bool enabled);    // maps to emnrEnabled in SliceModel
+    void snbChanged(bool enabled);
+    void apfChanged(bool enabled);
+    void apfTuneHzChanged(int hz);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -165,9 +183,21 @@ private:
     QComboBox*          m_agcCmb{nullptr};
 
     // --- DSP tab ---
-    QPushButton*        m_nbBtn{nullptr};
-    QPushButton*        m_nrBtn{nullptr};
-    QPushButton*        m_anfBtn{nullptr};
+    QPushButton*        m_nb1Toggle{nullptr};
+    QPushButton*        m_nb2Toggle{nullptr};
+    QPushButton*        m_nrToggle{nullptr};
+    QPushButton*        m_nr2Toggle{nullptr};
+    QPushButton*        m_anfToggle{nullptr};
+    QPushButton*        m_snbToggle{nullptr};
+    QPushButton*        m_apfToggle{nullptr};
+    QSlider*            m_apfTuneSlider{nullptr};
+    QLabel*             m_apfTuneLabel{nullptr};
+    FmOptContainer*        m_fmContainer{nullptr};
+    DigOffsetContainer*    m_digContainer{nullptr};
+    RttyMarkShiftContainer* m_rttyContainer{nullptr};
+
+    // --- Slice coupling (for mode container binding only) ---
+    QPointer<SliceModel> m_slice;
 
     // --- X/RIT tab ---
     QPushButton*   m_ritBtn{nullptr};
