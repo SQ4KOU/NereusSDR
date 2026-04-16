@@ -1409,13 +1409,6 @@ static const char* kFloatingBtnClose =
     "  background: rgba(204,32,32,180); color: #ffffff;"
     "}";
 
-// Not wired up yet — show red X overlay
-static const char* kFloatingBtnDisabled =
-    "QPushButton {"
-    "  background: rgba(255,255,255,8); border: none;"
-    "  border-radius: 10px; color: #556070; font-size: 11px; padding: 0;"
-    "}";
-
 void VfoWidget::buildFloatingButtons()
 {
     QWidget* parent = parentWidget();
