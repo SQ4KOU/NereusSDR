@@ -7,6 +7,8 @@
 
 #include "RxApplet.h"
 #include "NyiOverlay.h"
+#include "core/BoardCapabilities.h"
+#include "core/RadioConnection.h"
 #include "core/StepAttenuatorController.h"
 #include "gui/ComboStyle.h"
 #include "gui/StyleConstants.h"
@@ -775,6 +777,28 @@ void RxApplet::connectSlice(SliceModel* s)
     // ATT/S-ATT — wire to StepAttenuatorController if available
     auto* attCtrl = m_model ? m_model->stepAttController() : nullptr;
     if (attCtrl) {
+        // Populate preamp combo from board capabilities when radio is connected.
+        // From Thetis console.cs:40755 SetComboPreampForHPSDR().
+        if (m_model->connection() && m_model->connection()->isConnected()) {
+            const auto& info = m_model->connection()->radioInfo();
+            const auto& caps = BoardCapsTable::forBoard(info.boardType);
+            const auto preampItems = BoardCapsTable::preampItemsForBoard(
+                info.boardType, caps.hasAlexFilters);
+
+            QSignalBlocker blk(m_preampCombo);
+            m_preampCombo->clear();
+            for (const auto& item : preampItems) {
+                m_preampCombo->addItem(QString::fromLatin1(item.label), item.modeInt);
+            }
+
+            // Set step att spinbox range from board capabilities.
+            // From Thetis setup.cs:15765 udHermesStepAttenuatorData max.
+            const int maxDb = BoardCapsTable::stepAttMaxDb(
+                info.boardType, caps.hasAlexFilters);
+            m_stepAttSpin->setRange(0, maxDb);
+            attCtrl->setMaxAttenuation(maxDb);
+        }
+
         connect(m_stepAttSpin, QOverload<int>::of(&QSpinBox::valueChanged),
                 this, [attCtrl](int val) {
             attCtrl->setAttenuation(val);
@@ -782,6 +806,7 @@ void RxApplet::connectSlice(SliceModel* s)
 
         connect(m_preampCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [attCtrl](int idx) {
+            if (idx < 0) { return; }  // guard during clear/repopulate
             attCtrl->setPreampMode(static_cast<PreampMode>(idx));
         });
 
