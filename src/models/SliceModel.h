@@ -9,6 +9,13 @@
 
 namespace NereusSDR {
 
+// Stage 1 stub ladder — Stage 2 replaces with Thetis tune_step_list
+// (console.cs tune_step_list has 11 entries; Stage 1 uses this 5-entry
+// subset only for the X/RIT STEP cycle button).
+inline constexpr int kStageOneStepLadder[] = {1, 10, 100, 1000, 10000};
+inline constexpr int kStageOneStepLadderSize =
+    static_cast<int>(sizeof(kStageOneStepLadder) / sizeof(kStageOneStepLadder[0]));
+
 // Represents a single receiver slice.
 // In NereusSDR, slices are a client-side abstraction — the radio has
 // no concept of slices. Each slice owns a WDSP channel for independent

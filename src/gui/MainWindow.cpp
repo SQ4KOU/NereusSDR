@@ -1719,20 +1719,18 @@ void MainWindow::wireSliceToSpectrum()
     });
 
     // --- VfoWidget → SliceModel: STEP cycle (S1.8a — wires to live setStepHz) ---
-    connect(vfo, &VfoWidget::stepCycleRequested, this, [this, slice, vfo]() {
-        static constexpr int kSteps[] = {1, 10, 100, 1000, 10000};
-        static constexpr int kNumSteps = static_cast<int>(std::size(kSteps));
+    connect(vfo, &VfoWidget::stepCycleRequested, this, [slice]() {
         int current = slice->stepHz();
-        int next = kSteps[0];
-        for (int i = 0; i < kNumSteps; ++i) {
-            if (kSteps[i] == current) {
-                next = kSteps[(i + 1) % kNumSteps];
+        int next = kStageOneStepLadder[0];
+        for (int i = 0; i < kStageOneStepLadderSize; ++i) {
+            if (kStageOneStepLadder[i] == current) {
+                next = kStageOneStepLadder[(i + 1) % kStageOneStepLadderSize];
                 break;
             }
         }
+        // setStepHz emits stepHzChanged which the :1626-1629 handler uses to
+        // propagate to m_spectrumWidget->setStepSize and vfo->setStepHz.
         slice->setStepHz(next);
-        m_spectrumWidget->setStepSize(next);
-        vfo->setStepHz(next);
     });
 
     // --- VfoWidget → SliceModel: lock state (S1.8a — verifying edge exists) ---
@@ -1740,10 +1738,16 @@ void MainWindow::wireSliceToSpectrum()
         slice->setLocked(locked);
     });
 
-    // --- VfoWidget: close request → remove slice ---
-    connect(vfo, &VfoWidget::closeRequested, this, [this](int index) {
-        m_radioModel->removeSlice(index);
+    // --- SliceModel → VfoWidget: lock state inbound (S1.8a review — I3) ---
+    // Without this edge, programmatic changes to SliceModel::locked (e.g. from
+    // a future CAT/TCI command) would not be reflected in either lock button.
+    connect(slice, &SliceModel::lockedChanged, this, [vfo](bool v) {
+        vfo->setLocked(v);
     });
+
+    // closeRequested → removeSlice wiring deferred to S1.10 — Stage 1
+    // has no sliceRemoved cleanup path yet, so calling removeSlice leaves
+    // dangling VfoWidget + lambda captures. See code review findings.
 
     connect(vfo, &VfoWidget::sliceActivationRequested, this, [this](int index) {
         m_radioModel->setActiveSlice(index);

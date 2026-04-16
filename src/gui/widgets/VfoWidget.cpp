@@ -670,7 +670,7 @@ void VfoWidget::buildXRitTab()
 
     connect(m_xritLockBtn, &QPushButton::toggled, this, [this](bool on) {
         if (!m_updatingFromModel) {
-            emit lockChanged(on);
+            applyLockedState(on);
         }
     });
 
@@ -1009,17 +1009,9 @@ void VfoWidget::buildFloatingButtons()
     m_lockBtn->setToolTip(QStringLiteral("Lock VFO frequency"));
     m_lockBtn->setCheckable(true);
     connect(m_lockBtn, &QPushButton::toggled, this, [this](bool locked) {
-        m_locked = locked;
-        m_lockBtn->setText(locked ? QStringLiteral("\U0001F512") : QStringLiteral("\U0001F513"));
-        if (locked) {
-            m_lockBtn->setStyleSheet(QStringLiteral(
-                "QPushButton { background: rgba(255,100,100,80); border: none;"
-                "  border-radius: 10px; color: #c8d8e8; font-size: 11px; padding: 0; }"
-                "QPushButton:hover { background: rgba(255,100,100,120); }"));
-        } else {
-            m_lockBtn->setStyleSheet(kFloatingBtn);
+        if (!m_updatingFromModel) {
+            applyLockedState(locked);
         }
-        emit lockChanged(locked);
     });
 
     // Record button — not wired yet
@@ -1029,6 +1021,65 @@ void VfoWidget::buildFloatingButtons()
     // Play button — not wired yet
     m_playBtn = makeBtn(QStringLiteral("\u25B6"), kFloatingBtnDisabled);
     m_playBtn->setToolTip(QStringLiteral("Play (not implemented)"));
+}
+
+// ---- Lock state: applyLockedState + setLocked (S1.8a review — I3) ----
+// applyLockedState is the single path for all lock changes — called by both
+// the floating m_lockBtn toggled lambda and the X/RIT m_xritLockBtn toggled
+// lambda.  setLocked is the inbound edge driven by SliceModel::lockedChanged.
+
+void VfoWidget::applyLockedState(bool on)
+{
+    // Snapshot the incoming guard state so we can restore it around each
+    // button update and correctly decide whether to emit at the end.
+    const bool wasUpdating = m_updatingFromModel;
+
+    // Update state
+    m_locked = on;
+
+    // Drive floating lock button — set guard while calling setChecked so its
+    // toggled signal does not re-enter applyLockedState.
+    if (m_lockBtn) {
+        m_updatingFromModel = true;
+        m_lockBtn->setChecked(on);
+        m_lockBtn->setText(on ? QStringLiteral("\U0001F512") : QStringLiteral("\U0001F513"));
+        if (on) {
+            m_lockBtn->setStyleSheet(QStringLiteral(
+                "QPushButton { background: rgba(255,100,100,80); border: none;"
+                "  border-radius: 10px; color: #c8d8e8; font-size: 11px; padding: 0; }"
+                "QPushButton:hover { background: rgba(255,100,100,120); }"));
+        } else {
+            m_lockBtn->setStyleSheet(kFloatingBtn);
+        }
+        m_updatingFromModel = wasUpdating;
+    }
+
+    // Drive X/RIT lock button — same pattern.
+    if (m_xritLockBtn) {
+        m_updatingFromModel = true;
+        m_xritLockBtn->setChecked(on);
+        m_updatingFromModel = wasUpdating;
+    }
+
+    // Only emit lockChanged when the change originates from a user action
+    // (i.e., guard was false when this call began).  When called from
+    // setLocked() the guard is set true and we skip the emit, preventing
+    // a model → widget → model feedback loop.
+    if (!wasUpdating) {
+        emit lockChanged(on);
+    }
+}
+
+void VfoWidget::setLocked(bool v)
+{
+    if (m_locked == v) {
+        return;
+    }
+    // Guard true → applyLockedState will update both buttons but will NOT
+    // emit lockChanged back toward the model.
+    m_updatingFromModel = true;
+    applyLockedState(v);
+    m_updatingFromModel = false;
 }
 
 void VfoWidget::positionFloatingButtons()
