@@ -9,6 +9,8 @@
 
 NereusSDR is an independent cross-platform SDR client deeply informed by the workflow, feature set, and operating style of [Thetis](https://github.com/ramdor/Thetis), reimagined with a new GUI, a modernized architecture, and native support for macOS, Linux, and Windows.
 
+![NereusSDR v0.1.6 — ANAN-G2 on 40m LSB](docs/images/nereussdr-v016-screenshot.jpg)
+
 ---
 
 ## Supported Radios
