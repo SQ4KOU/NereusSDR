@@ -809,8 +809,11 @@ void MainWindow::buildMenuBar()
 
     QAction* nr2Action = dspMenu->addAction(QStringLiteral("NR&2"));
     nr2Action->setCheckable(true);
-    nr2Action->setEnabled(false);
-    nr2Action->setToolTip(QStringLiteral("NYI — Phase X"));
+    nr2Action->setToolTip(QStringLiteral("Toggle enhanced multiband noise reduction (NR2/EMNR)"));
+    connect(nr2Action, &QAction::toggled, this, [this](bool on) {
+        SliceModel* slice = m_radioModel->activeSlice();
+        if (slice) { slice->setEmnrEnabled(on); }
+    });
 
     m_nbAction = dspMenu->addAction(QStringLiteral("N&B"));
     m_nbAction->setCheckable(true);
