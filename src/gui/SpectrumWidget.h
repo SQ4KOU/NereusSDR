@@ -174,6 +174,10 @@ public:
     float wfHighThreshold() const { return m_wfHighThreshold; }
     void setWfLowThreshold(float dbm);
     float wfLowThreshold() const { return m_wfLowThreshold; }
+    void setWfAgcEnabled(bool on);
+    bool wfAgcEnabled() const { return m_wfAgcEnabled; }
+    void setClarityActive(bool on);
+    bool clarityActive() const { return m_clarityActive; }
     void setWfReverseScroll(bool on);
     bool wfReverseScroll() const { return m_wfReverseScroll; }
     void setWfOpacity(int percent);          // 0..100
@@ -391,6 +395,8 @@ private:
 
     // ---- Phase 3G-8 commit 4: waterfall renderer state ----
 
+    bool  m_wfAgcEnabled{false};
+    bool  m_clarityActive{false};     // Phase 3G-9c: suppresses legacy AGC when Clarity drives thresholds
     bool  m_wfReverseScroll{false};
     int   m_wfOpacity{100};           // 0..100
     int   m_wfUpdatePeriodMs{50};     // NereusSDR default per §10 divergence
@@ -405,6 +411,11 @@ private:
     bool  m_showTxFilterOnRxWaterfall{false};
     bool  m_showRxZeroLineOnWaterfall{false};
     bool  m_showTxZeroLineOnWaterfall{false};
+
+    // AGC rolling envelope (tracked across waterfall rows).
+    float m_wfAgcRunMin{0.0f};
+    float m_wfAgcRunMax{0.0f};
+    bool  m_wfAgcPrimed{false};
 
     // Rate-limit waterfall pushes per m_wfUpdatePeriodMs.
     qint64 m_wfLastPushMs{0};

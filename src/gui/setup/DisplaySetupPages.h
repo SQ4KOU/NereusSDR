@@ -73,7 +73,7 @@ private:
     // Section: Levels
     QSlider*           m_highThresholdSlider{nullptr};
     QSlider*           m_lowThresholdSlider{nullptr};
-    QLabel*            m_agcDeprecationLabel{nullptr};
+    QCheckBox*         m_agcToggle{nullptr};
     ColorSwatchButton* m_lowColorBtn{nullptr};                // W10
     QCheckBox*         m_useSpectrumMinMaxToggle{nullptr};    // W15
 

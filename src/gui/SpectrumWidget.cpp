@@ -279,7 +279,8 @@ void SpectrumWidget::loadSettings()
     }
 
     // Phase 3G-8 commit 4: waterfall renderer state.
-    // m_wfAgcEnabled removed in Phase 3G-9c — Clarity supersedes.
+    m_wfAgcEnabled = s.value(settingsKey(QStringLiteral("DisplayWfAgc"), m_panIndex),
+                             QStringLiteral("False")).toString() == QStringLiteral("True");
     m_wfReverseScroll = s.value(settingsKey(QStringLiteral("DisplayWfReverseScroll"), m_panIndex),
                                 QStringLiteral("False")).toString() == QStringLiteral("True");
     m_wfOpacity          = readInt(QStringLiteral("DisplayWfOpacity"), 100);
@@ -371,7 +372,8 @@ void SpectrumWidget::saveSettings()
               m_gradientEnabled ? QStringLiteral("True") : QStringLiteral("False"));
 
     // Phase 3G-8 commit 4: waterfall renderer state.
-    // DisplayWfAgc persistence removed in Phase 3G-9c — Clarity supersedes.
+    s.setValue(settingsKey(QStringLiteral("DisplayWfAgc"), m_panIndex),
+              m_wfAgcEnabled ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(settingsKey(QStringLiteral("DisplayWfReverseScroll"), m_panIndex),
               m_wfReverseScroll ? QStringLiteral("True") : QStringLiteral("False"));
     writeInt(QStringLiteral("DisplayWfOpacity"), m_wfOpacity);
@@ -641,6 +643,20 @@ void SpectrumWidget::setWfLowThreshold(float dbm)
     m_wfLowThreshold = dbm;
     scheduleSettingsSave();
     update();
+}
+
+void SpectrumWidget::setWfAgcEnabled(bool on)
+{
+    if (m_wfAgcEnabled == on) { return; }
+    m_wfAgcEnabled = on;
+    m_wfAgcPrimed = false;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setClarityActive(bool on)
+{
+    m_clarityActive = on;
 }
 
 void SpectrumWidget::setWfReverseScroll(bool on)
@@ -1443,10 +1459,32 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
         src = &wfLocal;
     }
 
-    // Phase 3G-9c: legacy running-min/max AGC removed — ClarityController
-    // now drives m_wfLowThreshold / m_wfHighThreshold via its
-    // waterfallThresholdsChanged signal wired in MainWindow.
-    if (m_wfUseSpectrumMinMax) {
+    // AGC: track a slow envelope of visible-range min/max and bias the
+    // effective thresholds toward it. Simple one-pole follower.
+    // Phase 3G-9c: skipped when Clarity is actively driving thresholds —
+    // both can be enabled but Clarity takes priority when active.
+    if (m_wfAgcEnabled && !m_clarityActive) {
+        float mn = (*src)[firstBin];
+        float mx = mn;
+        for (int i = firstBin + 1; i <= lastBin; ++i) {
+            const float v = (*src)[i];
+            if (v < mn) { mn = v; }
+            if (v > mx) { mx = v; }
+        }
+        if (!m_wfAgcPrimed) {
+            m_wfAgcRunMin = mn;
+            m_wfAgcRunMax = mx;
+            m_wfAgcPrimed = true;
+        } else {
+            constexpr float kAgcAlpha = 0.05f;
+            m_wfAgcRunMin = kAgcAlpha * mn + (1.0f - kAgcAlpha) * m_wfAgcRunMin;
+            m_wfAgcRunMax = kAgcAlpha * mx + (1.0f - kAgcAlpha) * m_wfAgcRunMax;
+        }
+        // Phase 3G-9b: 12 dB margin for palette breathing room.
+        const float margin = 12.0f;
+        m_wfLowThreshold  = m_wfAgcRunMin - margin;
+        m_wfHighThreshold = m_wfAgcRunMax + margin;
+    } else if (m_wfUseSpectrumMinMax) {
         // Borrow spectrum grid thresholds.
         m_wfHighThreshold = m_refLevel;
         m_wfLowThreshold  = m_refLevel - m_dynamicRange;

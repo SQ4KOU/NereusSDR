@@ -323,12 +323,14 @@ void MainWindow::buildUI()
     m_clarityController = new ClarityController(this);
     m_radioModel->setClarityController(m_clarityController);
 
-    // Restore enabled state from AppSettings
+    // Restore enabled state from AppSettings + sync the clarityActive
+    // flag on SpectrumWidget so legacy AGC knows to stand down.
     {
         auto& s = AppSettings::instance();
         bool clarityOn = s.value(QStringLiteral("ClarityEnabled"), QStringLiteral("False"))
                             .toString() == QStringLiteral("True");
         m_clarityController->setEnabled(clarityOn);
+        m_spectrumWidget->setClarityActive(clarityOn);
     }
 
     // Feed FFT bins to Clarity (auto-queued: spectrum thread → main)
@@ -341,12 +343,37 @@ void MainWindow::buildUI()
     connect(&m_radioModel->transmitModel(), &TransmitModel::moxChanged,
             m_clarityController, &ClarityController::setTransmitting);
 
-    // Clarity → SpectrumWidget threshold update
+    // Clarity → SpectrumWidget threshold update + clarityActive flag
     connect(m_clarityController, &ClarityController::waterfallThresholdsChanged,
             m_spectrumWidget, [this](float low, float high) {
+        m_spectrumWidget->setClarityActive(true);
         m_spectrumWidget->setWfLowThreshold(low);
         m_spectrumWidget->setWfHighThreshold(high);
     });
+
+    // When Clarity pauses or is disabled, let legacy AGC resume.
+    connect(m_clarityController, &ClarityController::pausedChanged,
+            m_spectrumWidget, [this](bool paused) {
+        if (paused) {
+            m_spectrumWidget->setClarityActive(false);
+        }
+    });
+
+    // Clarity ↔ overlay panel: badge + Re-tune button (wired after
+    // m_overlayPanel creation in buildUI, which runs before this point).
+    if (m_overlayPanel) {
+        connect(m_clarityController, &ClarityController::waterfallThresholdsChanged,
+                m_overlayPanel, [this](float, float) {
+            m_overlayPanel->setClarityStatus(/*active=*/true, /*paused=*/false);
+        });
+        connect(m_clarityController, &ClarityController::pausedChanged,
+                m_overlayPanel, [this](bool paused) {
+            bool enabled = m_clarityController->isEnabled();
+            m_overlayPanel->setClarityStatus(enabled, paused);
+        });
+        connect(m_overlayPanel, &SpectrumOverlayPanel::clarityRetuneRequested,
+                m_clarityController, &ClarityController::retuneNow);
+    }
 
     // Wire: zoom changes → adjust FFT size for appropriate bin resolution
     // Target: ~500-1000 bins across the visible bandwidth for good detail
