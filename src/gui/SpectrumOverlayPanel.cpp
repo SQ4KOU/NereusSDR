@@ -907,7 +907,7 @@ void SpectrumOverlayPanel::buildDisplayFlyout()
         m_clarityBadge->setFixedSize(18, 18);
         m_clarityBadge->setAlignment(Qt::AlignCenter);
         m_clarityBadge->setToolTip("Clarity status: green = active, amber = paused");
-        m_clarityBadge->hide();  // hidden until Clarity is enabled
+        m_clarityBadge->hide();
         grid->addWidget(m_clarityBadge, row, 1);
 
         m_clarityRetuneBtn = new QPushButton("Re-tune");
