@@ -39,6 +39,7 @@ signals:
 
 private slots:
     void onSampleRateChanged(int index);
+    void onActiveRxCountChanged(int count);
 
 private:
     RadioModel*  m_model{nullptr};

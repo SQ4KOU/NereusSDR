@@ -81,6 +81,18 @@ private slots:
         QVERIFY(all.contains(QStringLiteral("ocOutputs/txMask[20m][0]")));
         QCOMPARE(all.size(), 2);
     }
+
+    void activeRxCountRoundTrip()
+    {
+        AppSettings s(m_dir.filePath(QStringLiteral("hw4.xml")));
+        const QString mac = QStringLiteral("aa:bb:cc:11:22:33");
+        s.setHardwareValue(mac, QStringLiteral("radioInfo/activeRxCount"), 3);
+        s.save();
+
+        AppSettings s2(m_dir.filePath(QStringLiteral("hw4.xml")));
+        s2.load();
+        QCOMPARE(s2.hardwareValue(mac, QStringLiteral("radioInfo/activeRxCount")).toInt(), 3);
+    }
 };
 
 QTEST_MAIN(TestHardwarePagePersistence)

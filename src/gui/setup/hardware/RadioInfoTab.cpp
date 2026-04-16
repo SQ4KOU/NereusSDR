@@ -108,6 +108,9 @@ RadioInfoTab::RadioInfoTab(RadioModel* model, QWidget* parent)
     connect(m_sampleRateRx1Combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &RadioInfoTab::onSampleRateChanged);
 
+    connect(m_activeRxSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &RadioInfoTab::onActiveRxCountChanged);
+
     connect(m_copySupportInfoButton, &QPushButton::clicked, this, [this]() {
         QGuiApplication::clipboard()->setText(m_currentInfo);
     });
@@ -216,6 +219,12 @@ void RadioInfoTab::onSampleRateChanged(int index)
     if (rate > 0) {
         emit settingChanged(QStringLiteral("radioInfo/sampleRate"), rate);
     }
+}
+
+void RadioInfoTab::onActiveRxCountChanged(int count)
+{
+    if (count < 1) { return; }
+    emit settingChanged(QStringLiteral("radioInfo/activeRxCount"), count);
 }
 
 // ── restoreSettings ───────────────────────────────────────────────────────────
