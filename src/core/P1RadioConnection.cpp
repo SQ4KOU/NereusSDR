@@ -342,6 +342,14 @@ void P1RadioConnection::init()
     m_watchdogTimer->setInterval(kWatchdogTickMs);
     connect(m_watchdogTimer, &QTimer::timeout, this, &P1RadioConnection::onWatchdogTick);
 
+    // EP2 pacer — dedicated high-resolution timer that feeds the radio's
+    // 48 kHz audio DAC. Kept separate from the watchdog so silence detection
+    // cadence (25 ms) and EP2 cadence (2 ms) can evolve independently.
+    m_ep2PacerTimer = new QTimer(this);
+    m_ep2PacerTimer->setInterval(kEp2PacerIntervalMs);
+    m_ep2PacerTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_ep2PacerTimer, &QTimer::timeout, this, &P1RadioConnection::onEp2PacerTick);
+
     // Reconnect timer — single-shot; fires kReconnectIntervalMs after watchdog trips.
     // Source: NereusSDR design doc §3.6 — 5-second reconnect interval, max 3 retries.
     m_reconnectTimer = new QTimer(this);
@@ -458,6 +466,7 @@ void P1RadioConnection::connectToRadio(const RadioInfo& info)
     sendPrimingBurst(3);
 
     m_watchdogTimer->start();
+    m_ep2PacerTimer->start();
     setState(ConnectionState::Connected);
 
     qCDebug(lcConnection) << "P1: Connected (metis-start sent)";
@@ -475,6 +484,9 @@ void P1RadioConnection::disconnect()
 
     if (m_watchdogTimer) {
         m_watchdogTimer->stop();
+    }
+    if (m_ep2PacerTimer) {
+        m_ep2PacerTimer->stop();
     }
     if (m_reconnectTimer) {
         m_reconnectTimer->stop();
@@ -625,14 +637,14 @@ void P1RadioConnection::onReadyRead()
 // onWatchdogTick
 //
 // Fires every kWatchdogTickMs ms while connected or reconnecting.
-// Dual role:
-//   1. Sends a periodic ep2 command frame to keep the radio alive.
-//      Source: networkproto1.c:597 WriteMainLoop equivalent.
-//   2. Detects ep6 silence: if no frame has arrived for kWatchdogSilenceMs,
-//      transitions to Error and arms the reconnect timer.
-//      Applies to both Connected (initial silence detection) and Connecting
-//      (reconnect attempt timed out — the retry got no response).
-//      Source: NereusSDR design doc §3.6.
+// Silence-detection only — EP2 pacing lives on m_ep2PacerTimer
+// (onEp2PacerTick) to match Thetis' 381 pps audio-clock cadence.
+//
+// Detects ep6 silence: if no frame has arrived for kWatchdogSilenceMs,
+// transitions to Error and arms the reconnect timer.
+// Applies to both Connected (initial silence detection) and Connecting
+// (reconnect attempt timed out — the retry got no response).
+// Source: NereusSDR design doc §3.6.
 // ---------------------------------------------------------------------------
 void P1RadioConnection::onWatchdogTick()
 {
@@ -640,20 +652,9 @@ void P1RadioConnection::onWatchdogTick()
 
     const ConnectionState cs = state();
 
-    // Send periodic command frame (keep-alive) when connected or reconnecting.
-    // Alternate between TX-VFO bank and RX1-VFO bank on consecutive ticks so
-    // both freq banks get refreshed at ~kWatchdogTickMs cadence. Thetis sends
-    // banks at ~368 fps; we approximate with 25 ms ticks (40 fps) which gives
-    // the radio ~2x per second per bank of freshness -- enough for
-    // single-frequency monitoring.
-    //
-    // Skip ep2 if the HL2 LAN PHY is throttling -- resume once throttle clears.
-    // Source: Task 12 hl2CheckBandwidthMonitor throttle flag.
-    if (cs == ConnectionState::Connected || cs == ConnectionState::Connecting) {
-        if (!m_hl2Throttled) {
-            sendCommandFrame();
-        }
-    }
+    // Watchdog is silence-detection only. EP2 pacing lives on m_ep2PacerTimer
+    // (onEp2PacerTick) to match Thetis' 381 pps audio-clock cadence. See
+    // kEp2PacerIntervalMs.
 
     // HL2 bandwidth monitor — check for LAN PHY throttle on every watchdog tick.
     // Source: mi0bot bandwidth_monitor.{c,h} — NereusSDR sequence-gap adaptation.
@@ -674,6 +675,9 @@ void P1RadioConnection::onWatchdogTick()
                                 << "ms (state=" << static_cast<int>(cs)
                                 << "); transitioning to Error and scheduling reconnect";
         m_watchdogTimer->stop();
+        if (m_ep2PacerTimer) {
+            m_ep2PacerTimer->stop();
+        }
         m_reconnectedLogged = false;
         setState(ConnectionState::Error);
         emit errorOccurred(RadioConnectionError::NoDataTimeout,
@@ -683,6 +687,30 @@ void P1RadioConnection::onWatchdogTick()
         // Source: NereusSDR design doc §3.6 — 5-second reconnect interval.
         m_reconnectTimer->start(kReconnectIntervalMs);
     }
+}
+
+// ---------------------------------------------------------------------------
+// onEp2PacerTick
+//
+// Fires every kEp2PacerIntervalMs ms while connected. Sends one EP2 frame
+// per tick so the host→radio rate tracks the radio's 48 kHz audio clock
+// (Thetis emits ~381 pps from sendProtocol1Samples; we aim for the same
+// ballpark to feed its audio DAC and advance the 17-bank round-robin).
+//
+// Unlike the watchdog's former EP2 send, this path intentionally does NOT
+// consult m_hl2Throttled. Thetis never pauses sends, and pausing egress is
+// a weak remedy for an HL2 ingress PHY stall — we'd rather feed the audio
+// clock and keep the C&C round-robin advancing. If real-world HL2 users
+// report issues we can add smarter backoff later.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::onEp2PacerTick()
+{
+    if (!m_running || !m_socket || m_radioInfo.address.isNull()) { return; }
+
+    const ConnectionState cs = state();
+    if (cs != ConnectionState::Connected && cs != ConnectionState::Connecting) { return; }
+
+    sendCommandFrame();
 }
 
 // ---------------------------------------------------------------------------
@@ -724,6 +752,9 @@ void P1RadioConnection::onReconnectTimeout()
     // Re-arm the watchdog so onReadyRead can complete the transition to Connected.
     if (!m_watchdogTimer->isActive()) {
         m_watchdogTimer->start();
+    }
+    if (m_ep2PacerTimer && !m_ep2PacerTimer->isActive()) {
+        m_ep2PacerTimer->start();
     }
 
     // Re-arm the reconnect timer so if this attempt also fails, the next retry
