@@ -71,6 +71,11 @@ public:
     void setApfEnabled(bool v);
     void setApfTuneHz(int hz);
 
+    // --- Mode container visibility (S1.9) ---
+    // Shows/hides the three mode containers embedded in DspTab based on the
+    // current demodulation mode, and re-evaluates the APF tune slider visibility.
+    void applyModeVisibility(DSPMode mode);
+
     // --- Audio tab state setters (S1.8c — guarded against re-emit) ---
     void setMuted(bool v);
     void setAudioPan(double pan);      // drives m_panSlider → round(pan * 100)
@@ -218,6 +223,7 @@ private:
     QPushButton*        m_anfToggle{nullptr};
     QPushButton*        m_snbToggle{nullptr};
     QPushButton*        m_apfToggle{nullptr};
+    QLabel*             m_apfLabel{nullptr};        // "APF" row label (S1.9 — promoted from local)
     QSlider*            m_apfTuneSlider{nullptr};
     QLabel*             m_apfTuneLabel{nullptr};
     FmOptContainer*        m_fmContainer{nullptr};

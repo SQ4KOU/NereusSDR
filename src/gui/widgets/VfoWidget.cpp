@@ -580,10 +580,10 @@ void VfoWidget::buildDspTab()
         auto* apfRow = new QHBoxLayout;
         apfRow->setSpacing(4);
 
-        auto* apfLabel = new QLabel(QStringLiteral("APF"), dspWidget);
-        apfLabel->setStyleSheet(QStringLiteral("color: #8899aa; font-size: 11px;"));
-        apfLabel->setFixedWidth(24);
-        apfRow->addWidget(apfLabel);
+        m_apfLabel = new QLabel(QStringLiteral("APF"), dspWidget);
+        m_apfLabel->setStyleSheet(QStringLiteral("color: #8899aa; font-size: 11px;"));
+        m_apfLabel->setFixedWidth(24);
+        apfRow->addWidget(m_apfLabel);
 
         m_apfTuneSlider = new QSlider(Qt::Horizontal, dspWidget);
         m_apfTuneSlider->setRange(-500, 500);
@@ -641,6 +641,8 @@ void VfoWidget::buildDspTab()
     });
     connect(m_apfToggle, &QPushButton::toggled, this, [this](bool on) {
         if (!m_updatingFromModel) { emit apfChanged(on); }
+        // Re-evaluate APF slider visibility regardless of source (S1.9)
+        applyModeVisibility(m_currentMode);
     });
 
     // APF tune slider — label updates always; emit only when user-driven
@@ -699,6 +701,7 @@ void VfoWidget::buildModeTab()
             if (!m_updatingFromModel) {
                 DSPMode mode = SliceModel::modeFromName(text);
                 m_currentMode = mode;
+                applyModeVisibility(mode);    // S1.9 — user-driven mode change
                 rebuildFilterButtons(mode);
                 // Update mode tab label
                 if (m_tabButtons.size() > 2) {
@@ -1068,6 +1071,7 @@ void VfoWidget::setMode(DSPMode mode)
         m_tabButtons[2]->setText(name);
     }
     rebuildFilterButtons(mode);
+    applyModeVisibility(mode);    // S1.9 — model-driven mode change
     m_updatingFromModel = false;
 }
 
@@ -1251,6 +1255,37 @@ void VfoWidget::setApfTuneHz(int hz)
         m_updatingFromModel = true;
         m_apfTuneSlider->setValue(hz);
         m_updatingFromModel = false;
+    }
+}
+
+// ---- Mode container visibility (S1.9) ----
+
+void VfoWidget::applyModeVisibility(DSPMode mode)
+{
+    // Mode containers embedded in DspTab — show only the one matching
+    // the active demodulation mode.
+    if (m_fmContainer) {
+        m_fmContainer->setVisible(mode == DSPMode::FM);
+    }
+    if (m_digContainer) {
+        m_digContainer->setVisible(mode == DSPMode::DIGL || mode == DSPMode::DIGU);
+    }
+    if (m_rttyContainer) {
+        // RTTY is a DIGL sub-mode — mark/shift controls shown alongside DIG offset
+        m_rttyContainer->setVisible(mode == DSPMode::DIGL);
+    }
+
+    // APF tune slider + row label — visible only when APF is enabled AND mode is CW
+    bool apfVisible = (m_apfToggle && m_apfToggle->isChecked())
+                      && (mode == DSPMode::CWL || mode == DSPMode::CWU);
+    if (m_apfLabel) {
+        m_apfLabel->setVisible(apfVisible);
+    }
+    if (m_apfTuneSlider) {
+        m_apfTuneSlider->setVisible(apfVisible);
+    }
+    if (m_apfTuneLabel) {
+        m_apfTuneLabel->setVisible(apfVisible);
     }
 }
 
