@@ -737,6 +737,32 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 
 ### Task S1.8 — Build the tab bar and all four tab contents
 
+**Amendment (S1 tail resumption, 2026-04-16):** Scope and mechanics reconciled against `origin/main` after PR #28 merged at `e1939fb`. The current VfoWidget already has more structure in place than the plan assumed. Key corrections (read these *before* starting S1.8):
+
+1. **Tab bar already has 5 checkable buttons, not 4 `QLabel`s via `eventFilter`.** `VfoWidget::buildTabBar()` at `src/gui/widgets/VfoWidget.cpp:277-334` constructs `🔊 | DSP | USB | X/RIT | DAX` as `QPushButton`s wired to `QStackedWidget::setCurrentIndex`. The `eventFilter`+`QLabel` approach from S1.8.2 is superseded by the existing code. **DAX stub tab (VfoWidget.cpp:110-117) stays untouched — out of Stage 1 scope.**
+2. **X/RIT stub widget already exists.** VfoWidget.cpp:101-108 builds a `ritWidget` with a single `QLabel("RIT/XIT")` placeholder and adds it at stack index 3. S1.8.6's XRitTab work **replaces that stub in place** rather than adding a new tab slot.
+3. **Decoupled signal routing — no `wireVfoWidget()` method.** VfoWidget has no `SliceModel*` member; the existing pattern is `VfoWidget::xxxChanged` → MainWindow lambda → `slice->setXxx(...)`, wired inline in `MainWindow::createSliceWidgets` around `MainWindow.cpp:1544-1705` (`SliceModel`→VfoWidget lambdas first, VfoWidget→`SliceModel` lambdas second). New connects are added inline in that block, not in a helper.
+4. **NyiOverlay lives at `src/gui/applets/NyiOverlay.h`, not `widgets/`.** API is `static NyiOverlay* markNyi(QWidget* target, const QString& phaseHint)`. Use `QStringLiteral("phase3g10-stage2")` as the phase hint for Stage 2 NYI controls.
+5. **`SliceModel` already carries every setter S1.8 needs** (S1.6 delivery): `setLocked`, `setMuted`, `setRitEnabled`/`setRitHz`, `setXitEnabled`/`setXitHz`, `setSnbEnabled`, `setApfEnabled`/`setApfTuneHz`, `setBinauralEnabled`, `setAgcThreshold`, plus the mode-container family. No new setters are added in S1.8.
+6. **`CwAutotuneContainer` was dropped from S1.5** — no Thetis source (neither `ctcss_on` nor Apollo-tuner matches the AetherSDR pattern). S1.8.5's `m_cwAutotune` reference is **deleted** from the ModeTab. §S1.9's mode-visibility rule drops the `m_cwAutotune->setVisible(...)` line.
+
+**Dispatch decomposition (S1.8a → S1.8b → S1.8c):** S1.8 lands as three sub-commits for reviewability. Subagents execute them in order:
+
+- **S1.8a — X/RIT tab populate + MainWindow signal stubs.** All-new surface; no existing-tab touches. Replaces `ritWidget` stub at VfoWidget.cpp:101-108 with a new `buildXRitTab()` method containing:
+  - RIT row: RIT toggle button (`kDspToggle` style), RIT offset `ScrollableLabel` (range ±10 kHz, step from `SliceModel::stepHz()`), RIT zero button
+  - XIT row: same shape (XIT toggle, XIT offset, XIT zero)
+  - LOCK button (reuses existing `lockChanged` signal from the floating lock button — Qt signals/slots share fine) + STEP cycle button
+  - New VfoWidget signals: `ritEnabledChanged(bool)`, `ritHzChanged(int)`, `xitEnabledChanged(bool)`, `xitHzChanged(int)`, `stepCycleRequested()`. (LOCK already emits `lockChanged`.)
+  - All controls NYI-badged via `NyiOverlay::markNyi` except STEP (wires inline to `slice->setStepHz(nextStep)` — STEP cycles through `{1,10,100,1000,10000}` Hz).
+  - Inline MainWindow connect stubs added in `createSliceWidgets` next to the existing VFO↔slice block: model→VfoWidget half gets `ritEnabledChanged`/`ritHzChanged`/`xitEnabledChanged`/`xitHzChanged` incoming lambdas; VfoWidget→model half gets matching outbound lambdas. Also add the missing `vfo::lockChanged → slice->setLocked` edge if not already present.
+  - **Commit message:** `phase3g10(flag): populate X/RIT stub tab + MainWindow signal stubs`
+
+- **S1.8b — DspTab rewrite + containers embed.** Replaces existing `buildDspTab()` body (VfoWidget.cpp:410-442) with the 4×2 grid (NB/NB2/NR/NR2/ANF/SNB/APF/spacer) + APF tune slider + embedded `FmOptContainer`/`DigOffsetContainer`/`RttyMarkShiftContainer` (hidden by default; S1.9 wires visibility). **This is the commit that finally drops `m_nbBtn`/`m_nrBtn`/`m_anfBtn` members** per the S1.7 baton-pass — grid buttons are renamed `m_nb1Toggle`/`m_nrToggle`/`m_anfToggle` (re-using the same signal names `nb1Changed`/`nrChanged`/`anfChanged` so MainWindow connects at :1674-1687 keep working). New DSP stubs (NB2/NR2/SNB/APF/APF-tune) get NYI overlays and new signals connected to the existing SliceModel stub setters. **Commit message:** `phase3g10(flag): rewrite DspTab as 4×2 grid + embed mode containers`
+
+- **S1.8c — AudioTab rewrite + ModeTab polish.** Replaces `buildAudioTab()` body (VfoWidget.cpp:336-407) with pan/mute/bin/squelch/squelch-threshold/AGC-threshold controls (all NYI-badged) + AGC 5-button row (Off/Long/Slow/Med/Fast) replacing the existing `m_agcCmb` — preserves `agcModeChanged` behavior by emitting the same signal from whichever button in the row is checked. AF gain slider is unchanged. ModeTab polish (`buildModeTab` at :445-531): introduces `m_quickModeBtns[3]` NYI array under the mode combo, re-styles the existing filter grid with `kModeBtn` from VfoStyles.h. **Commit message:** `phase3g10(flag): rewrite AudioTab + ModeTab polish`
+
+**Already-wired members that MUST NOT be dropped across any sub-commit:** `m_rxAntBtn`, `m_txAntBtn`, `m_filterWidthLbl`, `m_txBadge`, `m_splitBadge`, `m_sliceBadge`, `m_freqStack`/`m_freqLabel`/`m_freqEdit`, `m_levelBar` (S-meter), `m_modeCmb`, `m_filterBtnContainer`, `m_rfGainSlider`/`m_rfGainLabel`, `m_afGainSlider`/`m_afGainLabel`, floating button quartet `m_closeBtn`/`m_lockBtn`/`m_recBtn`/`m_playBtn`. Breaking any of these fails pre-3G-10 behavior parity.
+
 **Files:**
 - Modify: `src/gui/widgets/VfoWidget.{h,cpp}`
 - Source: `~/AetherSDR/src/gui/VfoWidget.cpp:553-1500` (the `buildTabContent` block and its per-tab subroutines)
@@ -802,6 +828,12 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 
 ### Task S1.9 — Show/hide mode containers on mode change
 
+**Amendment (S1 tail resumption, 2026-04-16):**
+
+1. **`CwAutotuneContainer` was dropped from S1.5** (no Thetis source). The `m_cwAutotune->setVisible(...)` line in S1.9.2 below is **deleted**. CWL/CWU modes hide all mode containers (same as USB/LSB/AM).
+2. **No `m_slice` member — use MainWindow plumbing.** VfoWidget has no `SliceModel*`. The mode-change connection is made in MainWindow (existing `SliceModel::dspModeChanged` → `vfo->setMode(mode)` lambda at MainWindow.cpp:1595-1597). S1.9 extends that lambda to also call a new public `VfoWidget::applyModeVisibility(DSPMode)` method that toggles the three containers. The public method also gets called once from `createSliceWidgets` after the containers are built so initial state is correct.
+3. **APF-tune visibility uses the S1.6 stub getter.** `SliceModel::apfEnabled()` exists post-S1.6; VfoWidget reads it through a cached bool updated by the `apfEnabledChanged` inbound lambda (or directly from a new `VfoWidget::setApfEnabled(bool)` slot added in S1.8b). The visibility predicate becomes `m_apfEnabledCache && (mode == DSPMode::CWL || mode == DSPMode::CWU)`.
+
 - [ ] **S1.9.1** In `VfoWidget::buildUI()` final setup, connect `m_slice->dspModeChanged` (or however `SliceModel` signals mode changes) to `VfoWidget::onModeChanged(DSPMode)`.
 
 - [ ] **S1.9.2** Implement `onModeChanged`:
@@ -846,9 +878,18 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 
 ### Task S1.10 — Port the floating sibling buttons
 
+**Amendment (S1 tail resumption, 2026-04-16):** ~85% of this task is already shipped in the pre-3G-10 VfoWidget. `VfoWidget::buildFloatingButtons()` at VfoWidget.cpp:781-830 already defines the quartet, wires clicks (`closeRequested(int)` + `lockChanged(bool)`), and `positionFloatingButtons()` at :830+ handles `m_onLeft` side-aware layout driven by `updatePosition()` at :869-910. What remains for S1.10:
+
+1. **Add `recordToggled(bool)` + `playToggled(bool)` signals** to the VfoWidget header; wire `m_recBtn::toggled` / `m_playBtn::toggled` to them (Stage 1 has no caller — signals are stubbed for the future recording subsystem). Remove the `(not implemented)` tooltip suffix and switch the style from `kFloatingBtnDisabled` to `kFloatingBtn`.
+2. **Verify `~VfoWidget()` deletes the floating buttons** (they're parented to `parentWidget()`, not `this`, so the Qt parent chain won't reclaim them when the flag is destroyed). Add the destructor with `QPointer`-guarded deletes per AetherSDR VfoWidget.cpp:223-233 if missing.
+3. **Verify `vfo::closeRequested` is wired in MainWindow** for the active slice-removal flow. If missing, add the connect in S1.10 (or roll into S1.8a's signal-stub batch).
+4. **`m_lockBtn` already emits `lockChanged(bool)`** — verify the MainWindow connect `vfo::lockChanged → slice->setLocked` exists; add if missing (post-S1.6 `SliceModel::setLocked` is ready).
+
+**What S1.10 does NOT do:** re-port AetherSDR's construction block — the current code already matches the `QPointer`-guarded sibling-button pattern. This task's final diff is small.
+
 **Files:**
 - Modify: `src/gui/widgets/VfoWidget.{h,cpp}`
-- Source: `~/AetherSDR/src/gui/VfoWidget.cpp:322-398` (close/lock/rec/play sibling button construction)
+- Source: `~/AetherSDR/src/gui/VfoWidget.cpp:322-398` (close/lock/rec/play sibling button construction — reference only, most of this is already ported)
 
 - [ ] **S1.10.1** Port the four sibling-button constructions. Each is parented to `parentWidget()` (the SpectrumWidget), not `this`, and positioned by `updatePosition()` to sit to the left or right of the flag based on `m_onLeft`.
 

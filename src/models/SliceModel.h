@@ -9,6 +9,13 @@
 
 namespace NereusSDR {
 
+// Stage 1 stub ladder — Stage 2 replaces with Thetis tune_step_list
+// (console.cs tune_step_list has 11 entries; Stage 1 uses this 5-entry
+// subset only for the X/RIT STEP cycle button).
+inline constexpr int kStageOneStepLadder[] = {1, 10, 100, 1000, 10000};
+inline constexpr int kStageOneStepLadderSize =
+    static_cast<int>(sizeof(kStageOneStepLadder) / sizeof(kStageOneStepLadder[0]));
+
 // Represents a single receiver slice.
 // In NereusSDR, slices are a client-side abstraction — the radio has
 // no concept of slices. Each slice owns a WDSP channel for independent
@@ -54,6 +61,7 @@ class SliceModel : public QObject {
     Q_PROPERTY(int    ritHz           READ ritHz           WRITE setRitHz           NOTIFY ritHzChanged)
     Q_PROPERTY(bool   xitEnabled      READ xitEnabled      WRITE setXitEnabled      NOTIFY xitEnabledChanged)
     Q_PROPERTY(int    xitHz           READ xitHz           WRITE setXitHz           NOTIFY xitHzChanged)
+    Q_PROPERTY(bool   nb2Enabled      READ nb2Enabled      WRITE setNb2Enabled      NOTIFY nb2EnabledChanged)
     Q_PROPERTY(bool   emnrEnabled     READ emnrEnabled     WRITE setEmnrEnabled     NOTIFY emnrEnabledChanged)
     Q_PROPERTY(bool   snbEnabled      READ snbEnabled      WRITE setSnbEnabled      NOTIFY snbEnabledChanged)
     Q_PROPERTY(bool   apfEnabled      READ apfEnabled      WRITE setApfEnabled      NOTIFY apfEnabledChanged)
@@ -203,6 +211,9 @@ public:
     int    xitHz()           const { return m_xitHz; }
     void   setXitHz(int hz);
 
+    bool   nb2Enabled()      const { return m_nb2Enabled; }
+    void   setNb2Enabled(bool v);
+
     bool   emnrEnabled()     const { return m_emnrEnabled; }
     void   setEmnrEnabled(bool v);
 
@@ -288,6 +299,7 @@ signals:
     void ritHzChanged(int hz);
     void xitEnabledChanged(bool v);
     void xitHzChanged(int hz);
+    void nb2EnabledChanged(bool v);
     void emnrEnabledChanged(bool v);
     void snbEnabledChanged(bool v);
     void apfEnabledChanged(bool v);
@@ -340,6 +352,7 @@ private:
     int    m_ritHz{0};                // Neutral default — zero offset
     bool   m_xitEnabled{false};       // Neutral default — no Thetis citation needed
     int    m_xitHz{0};                // Neutral default — zero offset
+    bool   m_nb2Enabled{false};       // Neutral default — feature off at start (S1.6 gap-fill)
     bool   m_emnrEnabled{false};      // Neutral default — feature off at start
     bool   m_snbEnabled{false};       // Neutral default — feature off at start
     bool   m_apfEnabled{false};       // Neutral default — feature off at start

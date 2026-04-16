@@ -1558,6 +1558,7 @@ void MainWindow::wireSliceToSpectrum()
 
     // --- Create floating VFO flag widget (AetherSDR pattern) ---
     VfoWidget* vfo = m_spectrumWidget->addVfoWidget(0);
+    vfo->setSlice(slice);
     vfo->setFrequency(freq);
     vfo->setMode(slice->dspMode());
     vfo->setFilter(slice->filterLow(), slice->filterHigh());
@@ -1669,6 +1670,44 @@ void MainWindow::wireSliceToSpectrum()
         vfo->setTxAntenna(ant);
     });
 
+    // --- SliceModel → VfoWidget: RIT/XIT inbound (S1.8a stubs) ---
+    connect(slice, &SliceModel::ritEnabledChanged, this, [vfo](bool on) {
+        vfo->setRitEnabled(on);
+    });
+
+    connect(slice, &SliceModel::ritHzChanged, this, [vfo](int hz) {
+        vfo->setRitHz(hz);
+    });
+
+    connect(slice, &SliceModel::xitEnabledChanged, this, [vfo](bool on) {
+        vfo->setXitEnabled(on);
+    });
+
+    connect(slice, &SliceModel::xitHzChanged, this, [vfo](int hz) {
+        vfo->setXitHz(hz);
+    });
+
+    // --- SliceModel → VfoWidget: DSP tab inbound (S1.8b stubs) ---
+    connect(slice, &SliceModel::nb2EnabledChanged, this, [vfo](bool v) {
+        vfo->setNb2Enabled(v);
+    });
+
+    connect(slice, &SliceModel::emnrEnabledChanged, this, [vfo](bool v) {
+        vfo->setNr2Enabled(v);
+    });
+
+    connect(slice, &SliceModel::snbEnabledChanged, this, [vfo](bool v) {
+        vfo->setSnbEnabled(v);
+    });
+
+    connect(slice, &SliceModel::apfEnabledChanged, this, [vfo](bool v) {
+        vfo->setApfEnabled(v);
+    });
+
+    connect(slice, &SliceModel::apfTuneHzChanged, this, [vfo](int hz) {
+        vfo->setApfTuneHz(hz);
+    });
+
     // --- VFO flag → slice ---
 
     connect(vfo, &VfoWidget::frequencyChanged, this, [slice](double hz) {
@@ -1716,6 +1755,115 @@ void MainWindow::wireSliceToSpectrum()
         RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
         if (rxCh) { rxCh->setAnfEnabled(on); }
     });
+
+    // --- VfoWidget → SliceModel: DSP tab outbound (S1.8b stubs) ---
+    connect(vfo, &VfoWidget::nb2Changed, this, [slice](bool on) {
+        slice->setNb2Enabled(on);
+    });
+    connect(vfo, &VfoWidget::nr2Changed, this, [slice](bool on) {
+        // NR2 = EMNR in Thetis naming
+        slice->setEmnrEnabled(on);
+    });
+    connect(vfo, &VfoWidget::snbChanged, this, [slice](bool on) {
+        slice->setSnbEnabled(on);
+    });
+    connect(vfo, &VfoWidget::apfChanged, this, [slice](bool on) {
+        slice->setApfEnabled(on);
+    });
+    connect(vfo, &VfoWidget::apfTuneHzChanged, this, [slice](int hz) {
+        slice->setApfTuneHz(hz);
+    });
+
+    // --- SliceModel → VfoWidget: Audio tab inbound (S1.8c stubs) ---
+    connect(slice, &SliceModel::mutedChanged, this, [vfo](bool v) {
+        vfo->setMuted(v);
+    });
+    connect(slice, &SliceModel::audioPanChanged, this, [vfo](double p) {
+        vfo->setAudioPan(p);
+    });
+    connect(slice, &SliceModel::ssqlEnabledChanged, this, [vfo](bool v) {
+        vfo->setSsqlEnabled(v);
+    });
+    connect(slice, &SliceModel::ssqlThreshChanged, this, [vfo](double d) {
+        vfo->setSsqlThresh(d);
+    });
+    connect(slice, &SliceModel::agcThresholdChanged, this, [vfo](int v) {
+        vfo->setAgcThreshold(v);
+    });
+    connect(slice, &SliceModel::binauralEnabledChanged, this, [vfo](bool v) {
+        vfo->setBinauralEnabled(v);
+    });
+
+    // --- VfoWidget → SliceModel: Audio tab outbound (S1.8c stubs) ---
+    connect(vfo, &VfoWidget::muteChanged, this, [slice](bool v) {
+        slice->setMuted(v);
+    });
+    connect(vfo, &VfoWidget::panChanged, this, [slice](double p) {
+        slice->setAudioPan(p);
+    });
+    connect(vfo, &VfoWidget::squelchEnabledChanged, this, [slice](bool v) {
+        slice->setSsqlEnabled(v);
+    });
+    connect(vfo, &VfoWidget::squelchThreshChanged, this, [slice](int v) {
+        slice->setSsqlThresh(static_cast<double>(v));
+    });
+    connect(vfo, &VfoWidget::agcThreshChanged, this, [slice](int v) {
+        slice->setAgcThreshold(v);
+    });
+    connect(vfo, &VfoWidget::binauralChanged, this, [slice](bool v) {
+        slice->setBinauralEnabled(v);
+    });
+    connect(vfo, &VfoWidget::quickModeRequested, this, [](int) {
+        // Stage 2: map index → DSPMode and apply
+    });
+
+    // --- VfoWidget → SliceModel: RIT/XIT outbound (S1.8a stubs) ---
+    connect(vfo, &VfoWidget::ritEnabledChanged, this, [slice](bool on) {
+        slice->setRitEnabled(on);
+    });
+
+    connect(vfo, &VfoWidget::ritHzChanged, this, [slice](int hz) {
+        slice->setRitHz(hz);
+    });
+
+    connect(vfo, &VfoWidget::xitEnabledChanged, this, [slice](bool on) {
+        slice->setXitEnabled(on);
+    });
+
+    connect(vfo, &VfoWidget::xitHzChanged, this, [slice](int hz) {
+        slice->setXitHz(hz);
+    });
+
+    // --- VfoWidget → SliceModel: STEP cycle (S1.8a — wires to live setStepHz) ---
+    connect(vfo, &VfoWidget::stepCycleRequested, this, [slice]() {
+        int current = slice->stepHz();
+        int next = kStageOneStepLadder[0];
+        for (int i = 0; i < kStageOneStepLadderSize; ++i) {
+            if (kStageOneStepLadder[i] == current) {
+                next = kStageOneStepLadder[(i + 1) % kStageOneStepLadderSize];
+                break;
+            }
+        }
+        // setStepHz emits stepHzChanged which the :1626-1629 handler uses to
+        // propagate to m_spectrumWidget->setStepSize and vfo->setStepHz.
+        slice->setStepHz(next);
+    });
+
+    // --- VfoWidget → SliceModel: lock state (S1.8a — verifying edge exists) ---
+    connect(vfo, &VfoWidget::lockChanged, this, [slice](bool locked) {
+        slice->setLocked(locked);
+    });
+
+    // --- SliceModel → VfoWidget: lock state inbound (S1.8a review — I3) ---
+    // Without this edge, programmatic changes to SliceModel::locked (e.g. from
+    // a future CAT/TCI command) would not be reflected in either lock button.
+    connect(slice, &SliceModel::lockedChanged, this, [vfo](bool v) {
+        vfo->setLocked(v);
+    });
+
+    // closeRequested → removeSlice wiring deferred to S1.10 — Stage 1
+    // has no sliceRemoved cleanup path yet, so calling removeSlice leaves
+    // dangling VfoWidget + lambda captures. See code review findings.
 
     connect(vfo, &VfoWidget::sliceActivationRequested, this, [this](int index) {
         m_radioModel->setActiveSlice(index);

@@ -3,6 +3,16 @@
 ## Unreleased
 
 ### Added
+- **Phase 3G-10 Stage 1 tail — VfoWidget tab rewrite** (PR #30):
+  - X/RIT tab populated with RIT/XIT toggle + offset ScrollableLabels, LOCK button, STEP cycle button
+  - DspTab rewritten as 4×2 toggle grid (NB/NB2/NR/NR2/ANF/SNB/APF) with APF tune slider and embedded FmOptContainer/DigOffsetContainer/RttyMarkShiftContainer (mode-driven visibility)
+  - AudioTab AGC 5-button row (Off/Long/Slow/Med/Fast) replacing the combo, plus pan/mute/BIN/squelch/AGC-threshold controls (NYI-badged for Stage 2 WDSP wiring)
+  - ModeTab quick-mode shortcut buttons (USB/CW/DIG), filter preset buttons restyled with `kModeBtn`
+  - `SliceModel::nb2Enabled` stub (S1.6 gap-fill)
+  - `VfoWidget::applyModeVisibility(DSPMode)` for container show/hide on mode change
+  - `VfoWidget::setSlice(SliceModel*)` coupling for mode container binding
+  - Proper `~VfoWidget()` destructor for floating sibling buttons
+  - `tst_vfo_tooltip_coverage` — asserts every enabled QPushButton/QSlider/QComboBox in VfoWidget has a tooltip; 35 tooltips populated
 - **`Clarity Blue` waterfall palette** — new full-spectrum rainbow palette with a deep-black noise floor, tuned to match AetherSDR/SmartSDR-style readability. Selectable from `Setup → Display → Waterfall Defaults → Color Scheme` as the 8th palette option. (Phase 3G-9b)
 - **`Reset to Smooth Defaults` button** on `Setup → Display → Spectrum Defaults` — one-click opt-in to the NereusSDR smooth-default profile (Clarity Blue palette, log-recursive averaging, pure-white thin trace, pan-fill off, waterfall AGC on, 30 ms update period). Confirmation-dialog-guarded. FFT size, frequency, band stack, and per-band grid slots are not affected. (Phase 3G-9b)
 - **`RadioModel::applyClaritySmoothDefaults()`** — programmatic entry point for the smooth-defaults profile. Reachable from the Reset button; may also be wired into PR3's adaptive `Clarity` controller.

@@ -1,4 +1,5 @@
 #include "VfoWidget.h"
+#include "gui/applets/NyiOverlay.h"
 
 #include <QPainter>
 #include <QMouseEvent>
@@ -49,20 +50,16 @@ static const char* kDspToggle =
     "  border: 1px solid #0090e0;"
     "}";
 
-// Same green toggle style as DSP tab for consistency
-static const char* kFilterBtn =
+// From VfoStyles.h kModeBtn — blue-checked mode/filter button (AetherSDR pattern)
+static const char* kModeBtn =
     "QPushButton {"
-    "  background: #1a2a3a; border: 1px solid #304050;"
-    "  border-radius: 2px; color: #c8d8e8;"
-    "  font-size: 13px; font-weight: bold; padding: 3px;"
+    "  background: #1a2a3a; border: 1px solid #304050; border-radius: 2px;"
+    "  color: #c8d8e8; font-size: 13px; font-weight: bold; padding: 3px;"
     "}"
     "QPushButton:checked {"
-    "  background: #1a6030; color: #ffffff;"
-    "  border: 1px solid #20a040;"
+    "  background: #0070c0; color: #ffffff; border: 1px solid #0090e0;"
     "}"
-    "QPushButton:hover {"
-    "  border: 1px solid #0090e0;"
-    "}";
+    "QPushButton:hover { border: 1px solid #0090e0; }";
 
 // ---- Construction ----
 
@@ -77,7 +74,18 @@ VfoWidget::VfoWidget(QWidget* parent)
     buildUI();
 }
 
-VfoWidget::~VfoWidget() = default;
+VfoWidget::~VfoWidget()
+{
+    // Floating buttons are parented to parentWidget() (SpectrumWidget),
+    // not to this widget, so Qt's parent chain won't auto-delete them.
+    // AetherSDR VfoWidget.cpp:223-233 pattern: explicit delete on destruction.
+    // All four pointers are initialized to nullptr in the header, so deletes
+    // are safe even if buildFloatingButtons() was never called.
+    delete m_closeBtn;
+    delete m_lockBtn;
+    delete m_recBtn;
+    delete m_playBtn;
+}
 
 void VfoWidget::buildUI()
 {
@@ -98,14 +106,7 @@ void VfoWidget::buildUI()
     buildDspTab();
     buildModeTab();
 
-    // Stub X/RIT tab
-    auto* ritWidget = new QWidget;
-    auto* ritLayout = new QVBoxLayout(ritWidget);
-    ritLayout->setContentsMargins(4, 4, 4, 4);
-    auto* ritLabel = new QLabel(QStringLiteral("RIT/XIT"), ritWidget);
-    ritLabel->setStyleSheet(QStringLiteral("color: #6888a0; font-size: 11px;"));
-    ritLayout->addWidget(ritLabel);
-    m_tabStack->addWidget(ritWidget);
+    buildXRitTab();
 
     // Stub DAX tab
     auto* daxWidget = new QWidget;
@@ -139,6 +140,7 @@ void VfoWidget::buildHeaderRow()
     m_rxAntBtn->setStyleSheet(QString(kFlatBtn) +
         QStringLiteral("QPushButton { color: #4488ff; }"));
     m_rxAntBtn->setFixedHeight(18);
+    m_rxAntBtn->setToolTip(QStringLiteral("Select RX antenna"));
     connect(m_rxAntBtn, &QPushButton::clicked, this, [this]() {
         QMenu menu(this);
         for (const QString& ant : m_antennaList) {
@@ -160,6 +162,7 @@ void VfoWidget::buildHeaderRow()
     m_txAntBtn->setStyleSheet(QString(kFlatBtn) +
         QStringLiteral("QPushButton { color: #ff4444; }"));
     m_txAntBtn->setFixedHeight(18);
+    m_txAntBtn->setToolTip(QStringLiteral("Select TX antenna"));
     connect(m_txAntBtn, &QPushButton::clicked, this, [this]() {
         QMenu menu(this);
         for (const QString& ant : m_antennaList) {
@@ -193,6 +196,7 @@ void VfoWidget::buildHeaderRow()
         QStringLiteral("QPushButton { background: #1a2a3a; border: 1px solid #304050;"
                         "border-radius: 3px; color: #6888a0; font-size: 10px; font-weight: bold; }"
                         "QPushButton:checked { background: #6a3030; border-color: #ff4444; color: #ff8080; }"));
+    m_txBadge->setToolTip(QStringLiteral("Indicates this slice is the TX slice"));
     hdr->addWidget(m_txBadge);
 
     // Split badge — hidden in Stage 1; wired in Stage 2 when split semantics land
@@ -290,6 +294,15 @@ void VfoWidget::buildTabBar()
         QStringLiteral("DAX")
     };
 
+    // Tooltips for each tab button (order matches tabLabels)
+    static const char* kTabTooltips[] = {
+        "Show/hide audio controls (AF gain, AGC, pan, mute, squelch)",
+        "Show/hide DSP controls (NB, NR, ANF, SNB, APF)",
+        "Show/hide mode and filter controls",
+        "Show/hide RIT/XIT and frequency-lock controls",
+        "Show/hide DAX audio routing controls"
+    };
+
     for (int i = 0; i < tabLabels.size(); ++i) {
         // Add separator before each tab except the first
         // From AetherSDR VfoWidget.cpp:523-530
@@ -306,6 +319,7 @@ void VfoWidget::buildTabBar()
         btn->setCheckable(true);
         btn->setStyleSheet(kTabBtn);
         btn->setFixedHeight(24);  // 24px from AetherSDR
+        btn->setToolTip(QString::fromLatin1(kTabTooltips[i]));
         connect(btn, &QPushButton::clicked, this, [this, i]() {
             if (m_activeTab == i) {
                 // Toggle: clicking active tab hides content
@@ -340,7 +354,7 @@ void VfoWidget::buildAudioTab()
     audioLayout->setContentsMargins(4, 4, 4, 4);
     audioLayout->setSpacing(4);
 
-    // AF Gain slider
+    // 1. AF Gain slider (preserved exactly as-is — already live-wired)
     {
         auto* row = new QHBoxLayout;
         auto* label = new QLabel(QStringLiteral("AF"), audioWidget);
@@ -354,6 +368,7 @@ void VfoWidget::buildAudioTab()
         m_afGainSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
+        m_afGainSlider->setToolTip(QStringLiteral("Adjust AF gain (audio volume)"));
         row->addWidget(m_afGainSlider);
 
         m_afGainLabel = new QLabel(QStringLiteral("50"), audioWidget);
@@ -371,36 +386,189 @@ void VfoWidget::buildAudioTab()
         audioLayout->addLayout(row);
     }
 
-    // AGC combo
+    // 2. AGC 5-button row — replaces m_agcCmb (live-wired, no NYI badge)
+    {
+        static const char* kAgcLabels[] = { "Off", "Long", "Slow", "Med", "Fast" };
+        static const char* kAgcTooltips[] = {
+            "Select AGC mode: Off (no automatic gain control)",
+            "Select AGC mode: Long attack/decay",
+            "Select AGC mode: Slow attack/decay",
+            "Select AGC mode: Medium attack/decay",
+            "Select AGC mode: Fast attack/decay"
+        };
+        auto* row = new QHBoxLayout;
+        row->setSpacing(2);
+        row->setContentsMargins(0, 0, 0, 0);
+        for (int i = 0; i < 5; ++i) {
+            m_agcBtns[i] = new QPushButton(
+                QString::fromLatin1(kAgcLabels[i]), audioWidget);
+            m_agcBtns[i]->setCheckable(true);
+            m_agcBtns[i]->setStyleSheet(kDspToggle);
+            m_agcBtns[i]->setToolTip(QString::fromLatin1(kAgcTooltips[i]));
+            row->addWidget(m_agcBtns[i]);
+        }
+        // Default: Med (index 3) — matches AGCMode::Med
+        m_agcBtns[3]->setChecked(true);
+
+        // Exclusive toggle: clicking one un-checks the others, emits agcModeChanged
+        for (int i = 0; i < 5; ++i) {
+            connect(m_agcBtns[i], &QPushButton::clicked, this, [this, i](bool checked) {
+                if (!checked) {
+                    // Don't allow unchecking; keep it checked
+                    m_agcBtns[i]->setChecked(true);
+                    return;
+                }
+                // Uncheck siblings
+                for (int j = 0; j < 5; ++j) {
+                    if (j != i) {
+                        m_agcBtns[j]->setChecked(false);
+                    }
+                }
+                if (!m_updatingFromModel) {
+                    emit agcModeChanged(static_cast<AGCMode>(i));
+                }
+            });
+        }
+        audioLayout->addLayout(row);
+    }
+
+    // 3. Audio pan slider row (NYI)
     {
         auto* row = new QHBoxLayout;
-        auto* label = new QLabel(QStringLiteral("AGC"), audioWidget);
+        auto* label = new QLabel(QStringLiteral("Pan"), audioWidget);
         label->setStyleSheet(QStringLiteral("color: #8899aa; font-size: 11px;"));
         label->setFixedWidth(24);
         row->addWidget(label);
 
-        m_agcCmb = new QComboBox(audioWidget);
-        m_agcCmb->addItems({
-            QStringLiteral("Off"), QStringLiteral("Long"),
-            QStringLiteral("Slow"), QStringLiteral("Med"),
-            QStringLiteral("Fast")
-        });
-        m_agcCmb->setCurrentIndex(3);  // Med
-        m_agcCmb->setStyleSheet(
-            QStringLiteral("QComboBox { background: #1a2a3a; color: #c8d8e8;"
-                            "border: 1px solid #304050; border-radius: 3px;"
-                            "padding: 1px 4px; font-size: 11px; }"
-                            "QComboBox::drop-down { border: none; }"
-                            "QComboBox QAbstractItemView { background: #1a2a3a; color: #c8d8e8;"
-                            "selection-background-color: #0070c0; }"));
-        connect(m_agcCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                this, [this](int index) {
-            if (!m_updatingFromModel && index >= 0) {
-                emit agcModeChanged(static_cast<AGCMode>(index));
+        m_panSlider = new QSlider(Qt::Horizontal, audioWidget);
+        m_panSlider->setRange(-100, 100);
+        m_panSlider->setSingleStep(1);
+        m_panSlider->setValue(0);
+        m_panSlider->setStyleSheet(
+            QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
+                            "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
+        m_panSlider->setToolTip(QStringLiteral("Audio pan — not yet implemented"));
+        row->addWidget(m_panSlider);
+
+        m_panLabel = new QLabel(QStringLiteral("0"), audioWidget);
+        m_panLabel->setStyleSheet(QStringLiteral("color: #c8d8e8; font-size: 11px;"));
+        m_panLabel->setFixedWidth(24);
+        m_panLabel->setAlignment(Qt::AlignRight);
+        row->addWidget(m_panLabel);
+
+        connect(m_panSlider, &QSlider::valueChanged, this, [this](int val) {
+            m_panLabel->setText(QString::number(val));
+            if (!m_updatingFromModel) {
+                emit panChanged(val / 100.0);
             }
         });
-        row->addWidget(m_agcCmb);
         audioLayout->addLayout(row);
+        NyiOverlay::markNyi(m_panSlider, QStringLiteral("phase3g10-stage2"));
+    }
+
+    // 4. Mute + BIN row (NYI)
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        m_muteBtn = new QPushButton(QStringLiteral("Mute"), audioWidget);
+        m_muteBtn->setCheckable(true);
+        m_muteBtn->setStyleSheet(kDspToggle);
+        m_muteBtn->setToolTip(QStringLiteral("Mute — not yet implemented"));
+        row->addWidget(m_muteBtn);
+
+        m_binBtn = new QPushButton(QStringLiteral("BIN"), audioWidget);
+        m_binBtn->setCheckable(true);
+        m_binBtn->setStyleSheet(kDspToggle);
+        m_binBtn->setToolTip(QStringLiteral("Binaural audio — not yet implemented"));
+        row->addWidget(m_binBtn);
+
+        row->addStretch();
+
+        connect(m_muteBtn, &QPushButton::toggled, this, [this](bool on) {
+            if (!m_updatingFromModel) {
+                emit muteChanged(on);
+            }
+        });
+        connect(m_binBtn, &QPushButton::toggled, this, [this](bool on) {
+            if (!m_updatingFromModel) {
+                emit binauralChanged(on);
+            }
+        });
+        audioLayout->addLayout(row);
+        NyiOverlay::markNyi(m_muteBtn, QStringLiteral("phase3g10-stage2"));
+        NyiOverlay::markNyi(m_binBtn,  QStringLiteral("phase3g10-stage2"));
+    }
+
+    // 5. Squelch row — SQL toggle + SQL threshold slider (NYI)
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        m_sqlBtn = new QPushButton(QStringLiteral("SQL"), audioWidget);
+        m_sqlBtn->setCheckable(true);
+        m_sqlBtn->setStyleSheet(kDspToggle);
+        m_sqlBtn->setFixedWidth(40);
+        m_sqlBtn->setToolTip(QStringLiteral("Squelch — not yet implemented"));
+        row->addWidget(m_sqlBtn);
+
+        m_sqlSlider = new QSlider(Qt::Horizontal, audioWidget);
+        m_sqlSlider->setRange(0, 100);
+        m_sqlSlider->setSingleStep(1);
+        m_sqlSlider->setValue(0);
+        m_sqlSlider->setStyleSheet(
+            QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
+                            "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
+        m_sqlSlider->setToolTip(QStringLiteral("Squelch threshold — not yet implemented"));
+        row->addWidget(m_sqlSlider);
+
+        connect(m_sqlBtn, &QPushButton::toggled, this, [this](bool on) {
+            if (!m_updatingFromModel) {
+                emit squelchEnabledChanged(on);
+            }
+        });
+        connect(m_sqlSlider, &QSlider::valueChanged, this, [this](int val) {
+            if (!m_updatingFromModel) {
+                emit squelchThreshChanged(val);
+            }
+        });
+        audioLayout->addLayout(row);
+        NyiOverlay::markNyi(m_sqlBtn,    QStringLiteral("phase3g10-stage2"));
+        NyiOverlay::markNyi(m_sqlSlider, QStringLiteral("phase3g10-stage2"));
+    }
+
+    // 6. AGC threshold slider row (NYI)
+    {
+        auto* row = new QHBoxLayout;
+        auto* label = new QLabel(QStringLiteral("AGC-T"), audioWidget);
+        label->setStyleSheet(QStringLiteral("color: #8899aa; font-size: 11px;"));
+        label->setFixedWidth(40);
+        row->addWidget(label);
+
+        m_agcTSlider = new QSlider(Qt::Horizontal, audioWidget);
+        m_agcTSlider->setRange(0, 100);
+        m_agcTSlider->setSingleStep(1);
+        m_agcTSlider->setValue(0);
+        m_agcTSlider->setStyleSheet(
+            QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
+                            "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
+        m_agcTSlider->setToolTip(QStringLiteral("AGC threshold — not yet implemented"));
+        row->addWidget(m_agcTSlider);
+
+        m_agcTLabel = new QLabel(QStringLiteral("0"), audioWidget);
+        m_agcTLabel->setStyleSheet(QStringLiteral("color: #c8d8e8; font-size: 11px;"));
+        m_agcTLabel->setFixedWidth(24);
+        m_agcTLabel->setAlignment(Qt::AlignRight);
+        row->addWidget(m_agcTLabel);
+
+        connect(m_agcTSlider, &QSlider::valueChanged, this, [this](int val) {
+            m_agcTLabel->setText(QString::number(val));
+            if (!m_updatingFromModel) {
+                emit agcThreshChanged(val);
+            }
+        });
+        audioLayout->addLayout(row);
+        NyiOverlay::markNyi(m_agcTSlider, QStringLiteral("phase3g10-stage2"));
     }
 
     audioLayout->addStretch();
@@ -410,34 +578,135 @@ void VfoWidget::buildAudioTab()
 void VfoWidget::buildDspTab()
 {
     auto* dspWidget = new QWidget;
-    auto* dspLayout = new QHBoxLayout(dspWidget);
+    auto* dspLayout = new QVBoxLayout(dspWidget);
     dspLayout->setContentsMargins(4, 4, 4, 4);
     dspLayout->setSpacing(4);
 
-    auto makeToggle = [&](const QString& label) -> QPushButton* {
+    // 4×2 grid of DSP toggles
+    auto* grid = new QGridLayout;
+    grid->setContentsMargins(0, 0, 0, 0);
+    grid->setSpacing(2);
+
+    auto makeToggle = [dspWidget](const QString& label) -> QPushButton* {
         auto* btn = new QPushButton(label, dspWidget);
         btn->setCheckable(true);
         btn->setStyleSheet(kDspToggle);
-        dspLayout->addWidget(btn);
         return btn;
     };
 
-    m_nbBtn = makeToggle(QStringLiteral("NB"));
-    connect(m_nbBtn, &QPushButton::toggled, this, [this](bool on) {
+    // Row 0: NB | NB2 | NR | NR2
+    m_nb1Toggle = makeToggle(QStringLiteral("NB"));
+    m_nb1Toggle->setToolTip(QStringLiteral("Toggle noise blanker (NB1)"));
+    m_nb2Toggle = makeToggle(QStringLiteral("NB2"));
+    m_nb2Toggle->setToolTip(QStringLiteral("NB2 — not yet implemented"));
+    m_nrToggle  = makeToggle(QStringLiteral("NR"));
+    m_nrToggle->setToolTip(QStringLiteral("Toggle noise reduction (NR)"));
+    m_nr2Toggle = makeToggle(QStringLiteral("NR2"));
+    m_nr2Toggle->setToolTip(QStringLiteral("NR2 — not yet implemented"));
+    grid->addWidget(m_nb1Toggle, 0, 0);
+    grid->addWidget(m_nb2Toggle, 0, 1);
+    grid->addWidget(m_nrToggle,  0, 2);
+    grid->addWidget(m_nr2Toggle, 0, 3);
+
+    // Row 1: ANF | SNB | APF | (spacer — col 3 intentionally empty per plan §S1.8.4)
+    m_anfToggle = makeToggle(QStringLiteral("ANF"));
+    m_anfToggle->setToolTip(QStringLiteral("Toggle automatic notch filter (ANF)"));
+    m_snbToggle = makeToggle(QStringLiteral("SNB"));
+    m_snbToggle->setToolTip(QStringLiteral("SNB — not yet implemented"));
+    m_apfToggle = makeToggle(QStringLiteral("APF"));
+    m_apfToggle->setToolTip(QStringLiteral("APF — not yet implemented"));
+    grid->addWidget(m_anfToggle, 1, 0);
+    grid->addWidget(m_snbToggle, 1, 1);
+    grid->addWidget(m_apfToggle, 1, 2);
+
+    dspLayout->addLayout(grid);
+
+    // APF tune slider row — below the grid
+    {
+        auto* apfRow = new QHBoxLayout;
+        apfRow->setSpacing(4);
+
+        m_apfLabel = new QLabel(QStringLiteral("APF"), dspWidget);
+        m_apfLabel->setStyleSheet(QStringLiteral("color: #8899aa; font-size: 11px;"));
+        m_apfLabel->setFixedWidth(24);
+        apfRow->addWidget(m_apfLabel);
+
+        m_apfTuneSlider = new QSlider(Qt::Horizontal, dspWidget);
+        m_apfTuneSlider->setRange(-500, 500);
+        m_apfTuneSlider->setSingleStep(1);
+        m_apfTuneSlider->setValue(0);
+        m_apfTuneSlider->setToolTip(QStringLiteral("APF tune offset — not yet implemented"));
+        apfRow->addWidget(m_apfTuneSlider);
+
+        m_apfTuneLabel = new QLabel(QStringLiteral("0 Hz"), dspWidget);
+        m_apfTuneLabel->setStyleSheet(QStringLiteral("color: #8899aa; font-size: 11px;"));
+        m_apfTuneLabel->setFixedWidth(44);
+        m_apfTuneLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        apfRow->addWidget(m_apfTuneLabel);
+
+        dspLayout->addLayout(apfRow);
+    }
+
+    // Mode containers — embedded, hidden by default (S1.9 wires visibility)
+    m_fmContainer = new FmOptContainer(dspWidget);
+    m_fmContainer->setVisible(false);
+    dspLayout->addWidget(m_fmContainer);
+
+    m_digContainer = new DigOffsetContainer(dspWidget);
+    m_digContainer->setVisible(false);
+    dspLayout->addWidget(m_digContainer);
+
+    m_rttyContainer = new RttyMarkShiftContainer(dspWidget);
+    m_rttyContainer->setVisible(false);
+    dspLayout->addWidget(m_rttyContainer);
+
+    // If m_slice was set before buildUI ran, forward it to the containers now.
+    if (m_slice) {
+        m_fmContainer->setSlice(m_slice.data());
+        m_digContainer->setSlice(m_slice.data());
+        m_rttyContainer->setSlice(m_slice.data());
+    }
+
+    // Signal wiring for the 7 toggles
+    connect(m_nb1Toggle, &QPushButton::toggled, this, [this](bool on) {
         if (!m_updatingFromModel) { emit nb1Changed(on); }
     });
-
-    m_nrBtn = makeToggle(QStringLiteral("NR"));
-    connect(m_nrBtn, &QPushButton::toggled, this, [this](bool on) {
+    connect(m_nb2Toggle, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) { emit nb2Changed(on); }
+    });
+    connect(m_nrToggle, &QPushButton::toggled, this, [this](bool on) {
         if (!m_updatingFromModel) { emit nrChanged(on); }
     });
-
-    m_anfBtn = makeToggle(QStringLiteral("ANF"));
-    connect(m_anfBtn, &QPushButton::toggled, this, [this](bool on) {
+    connect(m_nr2Toggle, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) { emit nr2Changed(on); }
+    });
+    connect(m_anfToggle, &QPushButton::toggled, this, [this](bool on) {
         if (!m_updatingFromModel) { emit anfChanged(on); }
     });
+    connect(m_snbToggle, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) { emit snbChanged(on); }
+    });
+    connect(m_apfToggle, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) { emit apfChanged(on); }
+        // Re-evaluate APF slider visibility regardless of source (S1.9)
+        applyModeVisibility(m_currentMode);
+    });
 
-    dspLayout->addStretch();
+    // APF tune slider — label updates always; emit only when user-driven
+    connect(m_apfTuneSlider, &QSlider::valueChanged, this, [this](int hz) {
+        m_apfTuneLabel->setText(QString::number(hz) + QStringLiteral(" Hz"));
+        if (!m_updatingFromModel) { emit apfTuneHzChanged(hz); }
+    });
+
+    // NYI badges — NB1, NR, ANF are live-wired (no badge); new controls get badges
+    NyiOverlay::markNyi(m_nb2Toggle,      QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_nr2Toggle,      QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_snbToggle,      QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_apfToggle,      QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_apfTuneSlider,  QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_fmContainer,    QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_digContainer,   QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_rttyContainer,  QStringLiteral("phase3g10-stage2"));
 
     m_tabStack->addWidget(dspWidget);
 }
@@ -458,6 +727,7 @@ void VfoWidget::buildModeTab()
         row->addWidget(label);
 
         m_modeCmb = new QComboBox(modeWidget);
+        m_modeCmb->setToolTip(QStringLiteral("Select demodulation mode"));
         // From Thetis enums.cs DSPMode — common modes
         m_modeCmb->addItems({
             QStringLiteral("LSB"), QStringLiteral("USB"),
@@ -479,6 +749,7 @@ void VfoWidget::buildModeTab()
             if (!m_updatingFromModel) {
                 DSPMode mode = SliceModel::modeFromName(text);
                 m_currentMode = mode;
+                applyModeVisibility(mode);    // S1.9 — user-driven mode change
                 rebuildFilterButtons(mode);
                 // Update mode tab label
                 if (m_tabButtons.size() > 2) {
@@ -488,6 +759,34 @@ void VfoWidget::buildModeTab()
             }
         });
         row->addWidget(m_modeCmb);
+        modeLayout->addLayout(row);
+    }
+
+    // Quick-mode shortcut buttons (NYI — Stage 2 maps index → configurable DSPMode)
+    {
+        static const char* kQmLabels[] = { "USB", "CW", "DIG" };
+        static const char* kQmTooltips[] = {
+            "Quick-select USB mode — not yet implemented",
+            "Quick-select CW mode — not yet implemented",
+            "Quick-select DIG mode — not yet implemented"
+        };
+        auto* row = new QHBoxLayout;
+        row->setSpacing(2);
+        row->setContentsMargins(0, 0, 0, 0);
+        for (int i = 0; i < 3; ++i) {
+            m_quickModeBtns[i] = new QPushButton(
+                QString::fromLatin1(kQmLabels[i]), modeWidget);
+            m_quickModeBtns[i]->setCheckable(true);
+            m_quickModeBtns[i]->setStyleSheet(kModeBtn);
+            m_quickModeBtns[i]->setToolTip(QString::fromLatin1(kQmTooltips[i]));
+            connect(m_quickModeBtns[i], &QPushButton::clicked, this, [this, i]() {
+                if (!m_updatingFromModel) {
+                    emit quickModeRequested(i);
+                }
+            });
+            row->addWidget(m_quickModeBtns[i]);
+            NyiOverlay::markNyi(m_quickModeBtns[i], QStringLiteral("phase3g10-stage2"));
+        }
         modeLayout->addLayout(row);
     }
 
@@ -510,6 +809,7 @@ void VfoWidget::buildModeTab()
         m_rfGainSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
+        m_rfGainSlider->setToolTip(QStringLiteral("Adjust RF gain"));
         row->addWidget(m_rfGainSlider);
 
         m_rfGainLabel = new QLabel(QStringLiteral("80"), modeWidget);
@@ -529,6 +829,177 @@ void VfoWidget::buildModeTab()
 
     modeLayout->addStretch();
     m_tabStack->addWidget(modeWidget);
+}
+
+void VfoWidget::buildXRitTab()
+{
+    // NereusSDR native X/RIT tab — AetherSDR pattern, control surfaces are native
+    // (per feedback_source_first_ui_vs_dsp.md). DSP state is all stubs from S1.6;
+    // Stage 2 wires the WDSP/SliceModel calls and removes NYI badges.
+    auto* ritWidget = new QWidget;
+    auto* vbox = new QVBoxLayout(ritWidget);
+    vbox->setContentsMargins(4, 4, 4, 4);
+    vbox->setSpacing(2);
+
+    static const char* kZeroBtn =
+        "QPushButton {"
+        "  background: #1a2a3a; border: 1px solid #304050; border-radius: 2px;"
+        "  color: #c8d8e8; font-size: 12px; font-weight: bold; padding: 1px;"
+        "}"
+        "QPushButton:hover { border: 1px solid #0090e0; }";
+
+    // --- RIT row ---
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        m_ritBtn = new QPushButton(QStringLiteral("RIT"), ritWidget);
+        m_ritBtn->setCheckable(true);
+        m_ritBtn->setStyleSheet(kDspToggle);
+        m_ritBtn->setFixedHeight(22);
+        m_ritBtn->setToolTip(QStringLiteral("RIT — not yet implemented"));
+        row->addWidget(m_ritBtn);
+
+        m_ritLabel = new ScrollableLabel(ritWidget);
+        m_ritLabel->setRange(-10000, 10000);
+        m_ritLabel->setStep(m_stepHz);
+        m_ritLabel->setValue(0);
+        m_ritLabel->setFormat([](int v) {
+            return QString::asprintf("%+d Hz", v);
+        });
+        row->addWidget(m_ritLabel, 1);
+
+        m_ritZeroBtn = new QPushButton(QStringLiteral("0"), ritWidget);
+        m_ritZeroBtn->setFixedWidth(20);
+        m_ritZeroBtn->setFlat(true);
+        m_ritZeroBtn->setStyleSheet(kZeroBtn);
+        m_ritZeroBtn->setToolTip(QStringLiteral("Zero RIT offset — not yet implemented"));
+        row->addWidget(m_ritZeroBtn);
+
+        vbox->addLayout(row);
+    }
+
+    // --- XIT row ---
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        m_xitBtn = new QPushButton(QStringLiteral("XIT"), ritWidget);
+        m_xitBtn->setCheckable(true);
+        m_xitBtn->setStyleSheet(kDspToggle);
+        m_xitBtn->setFixedHeight(22);
+        m_xitBtn->setToolTip(QStringLiteral("XIT — not yet implemented"));
+        row->addWidget(m_xitBtn);
+
+        m_xitLabel = new ScrollableLabel(ritWidget);
+        m_xitLabel->setRange(-10000, 10000);
+        m_xitLabel->setStep(m_stepHz);
+        m_xitLabel->setValue(0);
+        m_xitLabel->setFormat([](int v) {
+            return QString::asprintf("%+d Hz", v);
+        });
+        row->addWidget(m_xitLabel, 1);
+
+        m_xitZeroBtn = new QPushButton(QStringLiteral("0"), ritWidget);
+        m_xitZeroBtn->setFixedWidth(20);
+        m_xitZeroBtn->setFlat(true);
+        m_xitZeroBtn->setStyleSheet(kZeroBtn);
+        m_xitZeroBtn->setToolTip(QStringLiteral("Zero XIT offset — not yet implemented"));
+        row->addWidget(m_xitZeroBtn);
+
+        vbox->addLayout(row);
+    }
+
+    // --- Bottom row: LOCK + STEP cycle ---
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        m_xritLockBtn = new QPushButton(QStringLiteral("LOCK"), ritWidget);
+        m_xritLockBtn->setCheckable(true);
+        m_xritLockBtn->setStyleSheet(kDspToggle);
+        m_xritLockBtn->setFixedHeight(22);
+        m_xritLockBtn->setToolTip(QStringLiteral("Lock VFO frequency against tuning changes — not yet implemented"));
+        row->addWidget(m_xritLockBtn);
+
+        // Step cycle button — NOT NYI (wires to live SliceModel::setStepHz)
+        m_stepCycleBtn = new QPushButton(
+            QStringLiteral("%1 Hz").arg(m_stepHz), ritWidget);
+        m_stepCycleBtn->setFlat(true);
+        m_stepCycleBtn->setStyleSheet(
+            QStringLiteral("QPushButton {"
+                           "  background: #1a2a3a; border: 1px solid #304050; border-radius: 2px;"
+                           "  color: #c8d8e8; font-size: 11px; font-weight: bold; padding: 2px 4px;"
+                           "}"
+                           "QPushButton:hover { border: 1px solid #0090e0; }"));
+        m_stepCycleBtn->setFixedHeight(22);
+        m_stepCycleBtn->setToolTip(QStringLiteral("Cycle tuning step size (click to advance to next step)"));
+        row->addWidget(m_stepCycleBtn, 1);
+
+        vbox->addLayout(row);
+    }
+
+    vbox->addStretch();
+
+    // --- Signal wiring ---
+    connect(m_ritBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) {
+            emit ritEnabledChanged(on);
+        }
+    });
+
+    connect(m_ritLabel, &ScrollableLabel::valueChanged, this, [this](int hz) {
+        if (!m_updatingFromModel) {
+            emit ritHzChanged(hz);
+        }
+    });
+
+    connect(m_ritZeroBtn, &QPushButton::clicked, this, [this]() {
+        m_ritLabel->setValue(0);
+        if (!m_updatingFromModel) {
+            emit ritHzChanged(0);
+        }
+    });
+
+    connect(m_xitBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) {
+            emit xitEnabledChanged(on);
+        }
+    });
+
+    connect(m_xitLabel, &ScrollableLabel::valueChanged, this, [this](int hz) {
+        if (!m_updatingFromModel) {
+            emit xitHzChanged(hz);
+        }
+    });
+
+    connect(m_xitZeroBtn, &QPushButton::clicked, this, [this]() {
+        m_xitLabel->setValue(0);
+        if (!m_updatingFromModel) {
+            emit xitHzChanged(0);
+        }
+    });
+
+    connect(m_xritLockBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) {
+            applyLockedState(on);
+        }
+    });
+
+    connect(m_stepCycleBtn, &QPushButton::clicked, this, [this]() {
+        emit stepCycleRequested();
+    });
+
+    // --- NYI badges (all controls except m_stepCycleBtn) ---
+    NyiOverlay::markNyi(m_ritBtn,      QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_ritLabel,    QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_ritZeroBtn,  QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_xitBtn,      QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_xitLabel,    QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_xitZeroBtn,  QStringLiteral("phase3g10-stage2"));
+    NyiOverlay::markNyi(m_xritLockBtn, QStringLiteral("phase3g10-stage2"));
+
+    m_tabStack->addWidget(ritWidget);
 }
 
 void VfoWidget::rebuildFilterButtons(DSPMode mode)
@@ -608,12 +1079,15 @@ void VfoWidget::rebuildFilterButtons(DSPMode mode)
     for (const auto& p : presets) {
         auto* btn = new QPushButton(QString::fromLatin1(p.label), m_filterBtnContainer);
         btn->setCheckable(true);
-        btn->setStyleSheet(kFilterBtn);
+        btn->setStyleSheet(kModeBtn);
         btn->setFixedHeight(26);
         int low = p.low;
         int high = p.high;
         btn->setProperty("filterLow", low);
         btn->setProperty("filterHigh", high);
+        // Tooltip: show the filter edges so the user knows what they're selecting
+        btn->setToolTip(QStringLiteral("Select filter preset: %1 Hz to %2 Hz")
+            .arg(low).arg(high));
         // Check if this matches current filter
         if (low == defLow && high == defHigh) {
             btn->setChecked(true);
@@ -661,6 +1135,7 @@ void VfoWidget::setMode(DSPMode mode)
         m_tabButtons[2]->setText(name);
     }
     rebuildFilterButtons(mode);
+    applyModeVisibility(mode);    // S1.9 — model-driven mode change
     m_updatingFromModel = false;
 }
 
@@ -680,7 +1155,12 @@ void VfoWidget::setFilter(int low, int high)
 void VfoWidget::setAgcMode(AGCMode mode)
 {
     m_updatingFromModel = true;
-    m_agcCmb->setCurrentIndex(static_cast<int>(mode));
+    int idx = static_cast<int>(mode);
+    for (int i = 0; i < 5; ++i) {
+        if (m_agcBtns[i]) {
+            m_agcBtns[i]->setChecked(i == idx);
+        }
+    }
     m_updatingFromModel = false;
 }
 
@@ -717,6 +1197,15 @@ void VfoWidget::setTxAntenna(const QString& ant)
 void VfoWidget::setStepHz(int hz)
 {
     m_stepHz = hz;
+    if (m_ritLabel) {
+        m_ritLabel->setStep(hz);
+    }
+    if (m_xitLabel) {
+        m_xitLabel->setStep(hz);
+    }
+    if (m_stepCycleBtn) {
+        m_stepCycleBtn->setText(QStringLiteral("%1 Hz").arg(hz));
+    }
 }
 
 void VfoWidget::setSliceIndex(int index)
@@ -750,6 +1239,208 @@ void VfoWidget::setSmeter(double dbm)
     }
 }
 
+void VfoWidget::setRitEnabled(bool v)
+{
+    if (m_ritBtn && m_ritBtn->isChecked() != v) {
+        m_updatingFromModel = true;
+        m_ritBtn->setChecked(v);
+        m_updatingFromModel = false;
+    }
+}
+
+void VfoWidget::setRitHz(int hz)
+{
+    if (m_ritLabel && m_ritLabel->value() != hz) {
+        m_updatingFromModel = true;
+        m_ritLabel->setValue(hz);
+        m_updatingFromModel = false;
+    }
+}
+
+void VfoWidget::setXitEnabled(bool v)
+{
+    if (m_xitBtn && m_xitBtn->isChecked() != v) {
+        m_updatingFromModel = true;
+        m_xitBtn->setChecked(v);
+        m_updatingFromModel = false;
+    }
+}
+
+void VfoWidget::setXitHz(int hz)
+{
+    if (m_xitLabel && m_xitLabel->value() != hz) {
+        m_updatingFromModel = true;
+        m_xitLabel->setValue(hz);
+        m_updatingFromModel = false;
+    }
+}
+
+// ---- DSP tab state setters (S1.8b) ----
+
+void VfoWidget::setNb2Enabled(bool v)
+{
+    if (m_nb2Toggle && m_nb2Toggle->isChecked() != v) {
+        m_updatingFromModel = true;
+        m_nb2Toggle->setChecked(v);
+        m_updatingFromModel = false;
+    }
+}
+
+void VfoWidget::setNr2Enabled(bool v)
+{
+    if (m_nr2Toggle && m_nr2Toggle->isChecked() != v) {
+        m_updatingFromModel = true;
+        m_nr2Toggle->setChecked(v);
+        m_updatingFromModel = false;
+    }
+}
+
+void VfoWidget::setSnbEnabled(bool v)
+{
+    if (m_snbToggle && m_snbToggle->isChecked() != v) {
+        m_updatingFromModel = true;
+        m_snbToggle->setChecked(v);
+        m_updatingFromModel = false;
+    }
+}
+
+void VfoWidget::setApfEnabled(bool v)
+{
+    if (m_apfToggle && m_apfToggle->isChecked() != v) {
+        m_updatingFromModel = true;
+        m_apfToggle->setChecked(v);
+        m_updatingFromModel = false;
+    }
+}
+
+void VfoWidget::setApfTuneHz(int hz)
+{
+    if (m_apfTuneSlider && m_apfTuneSlider->value() != hz) {
+        m_updatingFromModel = true;
+        m_apfTuneSlider->setValue(hz);
+        m_updatingFromModel = false;
+    }
+}
+
+// ---- Mode container visibility (S1.9) ----
+
+void VfoWidget::applyModeVisibility(DSPMode mode)
+{
+    // Mode containers embedded in DspTab — show only the one matching
+    // the active demodulation mode.
+    if (m_fmContainer) {
+        m_fmContainer->setVisible(mode == DSPMode::FM);
+    }
+    if (m_digContainer) {
+        m_digContainer->setVisible(mode == DSPMode::DIGL || mode == DSPMode::DIGU);
+    }
+    if (m_rttyContainer) {
+        // RTTY is a DIGL sub-mode — mark/shift controls shown alongside DIG offset
+        m_rttyContainer->setVisible(mode == DSPMode::DIGL);
+    }
+
+    // APF tune slider + row label — visible only when APF is enabled AND mode is CW
+    bool apfVisible = (m_apfToggle && m_apfToggle->isChecked())
+                      && (mode == DSPMode::CWL || mode == DSPMode::CWU);
+    if (m_apfLabel) {
+        m_apfLabel->setVisible(apfVisible);
+    }
+    if (m_apfTuneSlider) {
+        m_apfTuneSlider->setVisible(apfVisible);
+    }
+    if (m_apfTuneLabel) {
+        m_apfTuneLabel->setVisible(apfVisible);
+    }
+}
+
+// ---- Audio tab state setters (S1.8c — guarded against re-emit) ----
+
+void VfoWidget::setMuted(bool v)
+{
+    if (m_muteBtn && m_muteBtn->isChecked() != v) {
+        m_updatingFromModel = true;
+        m_muteBtn->setChecked(v);
+        m_updatingFromModel = false;
+    }
+}
+
+void VfoWidget::setAudioPan(double pan)
+{
+    if (m_panSlider) {
+        int val = static_cast<int>(std::round(pan * 100.0));
+        if (m_panSlider->value() != val) {
+            m_updatingFromModel = true;
+            m_panSlider->setValue(val);
+            if (m_panLabel) {
+                m_panLabel->setText(QString::number(val));
+            }
+            m_updatingFromModel = false;
+        }
+    }
+}
+
+void VfoWidget::setSsqlEnabled(bool v)
+{
+    if (m_sqlBtn && m_sqlBtn->isChecked() != v) {
+        m_updatingFromModel = true;
+        m_sqlBtn->setChecked(v);
+        m_updatingFromModel = false;
+    }
+}
+
+void VfoWidget::setSsqlThresh(double dB)
+{
+    if (m_sqlSlider) {
+        int val = static_cast<int>(std::round(dB));
+        val = std::max(0, std::min(100, val));
+        if (m_sqlSlider->value() != val) {
+            m_updatingFromModel = true;
+            m_sqlSlider->setValue(val);
+            m_updatingFromModel = false;
+        }
+    }
+}
+
+void VfoWidget::setAgcThreshold(int dBu)
+{
+    if (m_agcTSlider) {
+        int val = std::max(0, std::min(100, dBu));
+        if (m_agcTSlider->value() != val) {
+            m_updatingFromModel = true;
+            m_agcTSlider->setValue(val);
+            if (m_agcTLabel) {
+                m_agcTLabel->setText(QString::number(val));
+            }
+            m_updatingFromModel = false;
+        }
+    }
+}
+
+void VfoWidget::setBinauralEnabled(bool v)
+{
+    if (m_binBtn && m_binBtn->isChecked() != v) {
+        m_updatingFromModel = true;
+        m_binBtn->setChecked(v);
+        m_updatingFromModel = false;
+    }
+}
+
+// ---- Slice coupling (for mode container binding only) ----
+
+void VfoWidget::setSlice(SliceModel* slice)
+{
+    m_slice = QPointer<SliceModel>(slice);
+    if (m_fmContainer) {
+        m_fmContainer->setSlice(slice);
+    }
+    if (m_digContainer) {
+        m_digContainer->setSlice(slice);
+    }
+    if (m_rttyContainer) {
+        m_rttyContainer->setSlice(slice);
+    }
+}
+
 // ---- Floating control buttons (AetherSDR pattern) ----
 // Close, Lock, Record, Play — rendered on parent SpectrumWidget
 
@@ -769,13 +1460,6 @@ static const char* kFloatingBtnClose =
     "}"
     "QPushButton:hover {"
     "  background: rgba(204,32,32,180); color: #ffffff;"
-    "}";
-
-// Not wired up yet — show red X overlay
-static const char* kFloatingBtnDisabled =
-    "QPushButton {"
-    "  background: rgba(255,255,255,8); border: none;"
-    "  border-radius: 10px; color: #556070; font-size: 11px; padding: 0;"
     "}";
 
 void VfoWidget::buildFloatingButtons()
@@ -805,9 +1489,55 @@ void VfoWidget::buildFloatingButtons()
     m_lockBtn->setToolTip(QStringLiteral("Lock VFO frequency"));
     m_lockBtn->setCheckable(true);
     connect(m_lockBtn, &QPushButton::toggled, this, [this](bool locked) {
-        m_locked = locked;
-        m_lockBtn->setText(locked ? QStringLiteral("\U0001F512") : QStringLiteral("\U0001F513"));
-        if (locked) {
+        if (!m_updatingFromModel) {
+            applyLockedState(locked);
+        }
+    });
+
+    // Record button — checkable, NYI-badged (no consumer in Stage 1)
+    m_recBtn = makeBtn(QStringLiteral("\u23FA"), kFloatingBtn);
+    m_recBtn->setToolTip(QStringLiteral("Record audio"));
+    m_recBtn->setCheckable(true);
+    connect(m_recBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) {
+            emit recordToggled(on);
+        }
+    });
+    NyiOverlay::markNyi(m_recBtn, QStringLiteral("phase3g10-stage2"));
+
+    // Play button — checkable, NYI-badged (no consumer in Stage 1)
+    m_playBtn = makeBtn(QStringLiteral("\u25B6"), kFloatingBtn);
+    m_playBtn->setToolTip(QStringLiteral("Play recording"));
+    m_playBtn->setCheckable(true);
+    connect(m_playBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel) {
+            emit playToggled(on);
+        }
+    });
+    NyiOverlay::markNyi(m_playBtn, QStringLiteral("phase3g10-stage2"));
+}
+
+// ---- Lock state: applyLockedState + setLocked (S1.8a review — I3) ----
+// applyLockedState is the single path for all lock changes — called by both
+// the floating m_lockBtn toggled lambda and the X/RIT m_xritLockBtn toggled
+// lambda.  setLocked is the inbound edge driven by SliceModel::lockedChanged.
+
+void VfoWidget::applyLockedState(bool on)
+{
+    // Snapshot the incoming guard state so we can restore it around each
+    // button update and correctly decide whether to emit at the end.
+    const bool wasUpdating = m_updatingFromModel;
+
+    // Update state
+    m_locked = on;
+
+    // Drive floating lock button — set guard while calling setChecked so its
+    // toggled signal does not re-enter applyLockedState.
+    if (m_lockBtn) {
+        m_updatingFromModel = true;
+        m_lockBtn->setChecked(on);
+        m_lockBtn->setText(on ? QStringLiteral("\U0001F512") : QStringLiteral("\U0001F513"));
+        if (on) {
             m_lockBtn->setStyleSheet(QStringLiteral(
                 "QPushButton { background: rgba(255,100,100,80); border: none;"
                 "  border-radius: 10px; color: #c8d8e8; font-size: 11px; padding: 0; }"
@@ -815,16 +1545,35 @@ void VfoWidget::buildFloatingButtons()
         } else {
             m_lockBtn->setStyleSheet(kFloatingBtn);
         }
-        emit lockChanged(locked);
-    });
+        m_updatingFromModel = wasUpdating;
+    }
 
-    // Record button — not wired yet
-    m_recBtn = makeBtn(QStringLiteral("\u23FA"), kFloatingBtnDisabled);
-    m_recBtn->setToolTip(QStringLiteral("Record (not implemented)"));
+    // Drive X/RIT lock button — same pattern.
+    if (m_xritLockBtn) {
+        m_updatingFromModel = true;
+        m_xritLockBtn->setChecked(on);
+        m_updatingFromModel = wasUpdating;
+    }
 
-    // Play button — not wired yet
-    m_playBtn = makeBtn(QStringLiteral("\u25B6"), kFloatingBtnDisabled);
-    m_playBtn->setToolTip(QStringLiteral("Play (not implemented)"));
+    // Only emit lockChanged when the change originates from a user action
+    // (i.e., guard was false when this call began).  When called from
+    // setLocked() the guard is set true and we skip the emit, preventing
+    // a model → widget → model feedback loop.
+    if (!wasUpdating) {
+        emit lockChanged(on);
+    }
+}
+
+void VfoWidget::setLocked(bool v)
+{
+    if (m_locked == v) {
+        return;
+    }
+    // Guard true → applyLockedState will update both buttons but will NOT
+    // emit lockChanged back toward the model.
+    m_updatingFromModel = true;
+    applyLockedState(v);
+    m_updatingFromModel = false;
 }
 
 void VfoWidget::positionFloatingButtons()
