@@ -93,3 +93,7 @@ nereus_add_test(tst_slice_emnr)
 # ── Phase 3G-10 Stage 2: WDSP wiring — SNB ───────────────────────────────
 nereus_add_test(tst_rxchannel_snb)
 nereus_add_test(tst_slice_snb)
+
+# ── Phase 3G-10 Stage 2: WDSP wiring — APF (Audio Peak Filter) ───────────
+nereus_add_test(tst_rxchannel_apf)
+nereus_add_test(tst_slice_apf)

@@ -207,6 +207,14 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 rxCh->setEmnrPosition(1);     // radio.cs:2235 rx_nr2_position = 1 (post-AGC)
                 rxCh->setEmnrEnabled(m_activeSlice->emnrEnabled());
                 rxCh->setSnbEnabled(m_activeSlice->snbEnabled());
+                // APF sub-parameter defaults — From Thetis radio.cs:1986,1948,1967,1929
+                // These are set-and-forget on channel creation; run flag follows slice.
+                // selection=3 (bi-quad), bw=600Hz, gain=1.0, freq=600.0Hz
+                rxCh->setApfSelection(3);       // radio.cs:1986 _rx_apf_type = 3 (bi-quad)
+                rxCh->setApfBandwidth(600.0);   // radio.cs:1948 rx_apf_bw = 600.0 Hz
+                rxCh->setApfGain(1.0);          // radio.cs:1967 rx_apf_gain = 1.0
+                rxCh->setApfFreq(600.0);        // radio.cs:1929 rx_apf_freq = 600.0 Hz
+                rxCh->setApfEnabled(m_activeSlice->apfEnabled());
             }
             rxCh->setActive(true);
         }
@@ -484,6 +492,32 @@ void RadioModel::wireSliceSignals()
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setSnbEnabled(on);
+        }
+    });
+
+    // APF → WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1910-1927
+    //   WDSP.SetRXASPCWRun(WDSP.id(thread, subrx), value)
+    // WDSP: third_party/wdsp/src/apfshadow.c:93
+    connect(slice, &SliceModel::apfEnabledChanged, this, [this](bool on) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setApfEnabled(on);
+        }
+    });
+
+    // APF tune offset → WDSP freq
+    // From Thetis Project Files/Source/Console/setup.cs:17068-17073
+    //   freq = CWPitch + tuneOffset; slider offset range -250..+250
+    //   CW pitch default 600 Hz from Thetis console.cs
+    // WDSP: third_party/wdsp/src/apfshadow.c:117
+    connect(slice, &SliceModel::apfTuneHzChanged, this, [this](int hz) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            // From Thetis setup.cs:17071 — freq = CWPitch + tuneOffset
+            // CW pitch default 600 Hz from Thetis console.cs
+            static constexpr double kCwPitchHz = 600.0;
+            rxCh->setApfFreq(kCwPitchHz + static_cast<double>(hz));
         }
     });
 

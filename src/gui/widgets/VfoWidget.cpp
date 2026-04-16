@@ -614,7 +614,7 @@ void VfoWidget::buildDspTab()
     m_snbToggle = makeToggle(QStringLiteral("SNB"));
     m_snbToggle->setToolTip(QStringLiteral("Toggle spectral noise blanker (SNB)"));
     m_apfToggle = makeToggle(QStringLiteral("APF"));
-    m_apfToggle->setToolTip(QStringLiteral("APF — not yet implemented"));
+    m_apfToggle->setToolTip(QStringLiteral("Toggle audio peak filter (APF) — CW narrow-peak filter"));
     grid->addWidget(m_anfToggle, 1, 0);
     grid->addWidget(m_snbToggle, 1, 1);
     grid->addWidget(m_apfToggle, 1, 2);
@@ -635,7 +635,7 @@ void VfoWidget::buildDspTab()
         m_apfTuneSlider->setRange(-500, 500);
         m_apfTuneSlider->setSingleStep(1);
         m_apfTuneSlider->setValue(0);
-        m_apfTuneSlider->setToolTip(QStringLiteral("APF tune offset — not yet implemented"));
+        m_apfTuneSlider->setToolTip(QStringLiteral("APF tune offset from CW pitch (600 Hz ± offset). From Thetis setup.cs:17068"));
         apfRow->addWidget(m_apfTuneSlider);
 
         m_apfTuneLabel = new QLabel(QStringLiteral("0 Hz"), dspWidget);
@@ -698,10 +698,8 @@ void VfoWidget::buildDspTab()
         if (!m_updatingFromModel) { emit apfTuneHzChanged(hz); }
     });
 
-    // NYI badges — NB1, NR, ANF, NR2, SNB are live-wired (no badge); remaining controls get badges
+    // NYI badges — NB1, NR, ANF, NR2, SNB, APF are live-wired (no badge); remaining controls get badges
     NyiOverlay::markNyi(m_nb2Toggle,      QStringLiteral("phase3g10-stage2"));
-    NyiOverlay::markNyi(m_apfToggle,      QStringLiteral("phase3g10-stage2"));
-    NyiOverlay::markNyi(m_apfTuneSlider,  QStringLiteral("phase3g10-stage2"));
     NyiOverlay::markNyi(m_fmContainer,    QStringLiteral("phase3g10-stage2"));
     NyiOverlay::markNyi(m_digContainer,   QStringLiteral("phase3g10-stage2"));
     NyiOverlay::markNyi(m_rttyContainer,  QStringLiteral("phase3g10-stage2"));

@@ -99,6 +99,16 @@ public:
     bool snbEnabled() const { return m_snbEnabled.load(); }
     void setSnbEnabled(bool enabled);
 
+    // APF — Audio Peak Filter (CW narrow-peak filter via WDSP SPCW module)
+    // From Thetis Project Files/Source/Console/radio.cs:1910-2008
+    // WDSP: third_party/wdsp/src/apfshadow.c
+    bool apfEnabled() const { return m_apfEnabled.load(); }
+    void setApfEnabled(bool enabled);
+    void setApfFreq(double hz);
+    void setApfBandwidth(double hz);
+    void setApfGain(double gain);
+    void setApfSelection(int selection);
+
     // --- Frequency shift (for pan offset from VFO) ---
 
     void setShiftFrequency(double offsetHz);
@@ -150,6 +160,9 @@ private:
     std::atomic<bool> m_emnrEnabled{false};
     // snb: Spectral Noise Blanker — off by default
     std::atomic<bool> m_snbEnabled{false};
+    // apf: Audio Peak Filter — off by default
+    // From Thetis radio.cs:1910 — rx_apf_run default = false
+    std::atomic<bool> m_apfEnabled{false};
     std::atomic<bool> m_active{false};
 
     // AGC advanced parameters — atomic for thread-safe reads from audio thread

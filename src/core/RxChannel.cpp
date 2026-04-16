@@ -325,6 +325,81 @@ void RxChannel::setSnbEnabled(bool enabled)
 }
 
 // ---------------------------------------------------------------------------
+// APF — Audio Peak Filter
+// ---------------------------------------------------------------------------
+
+void RxChannel::setApfEnabled(bool enabled)
+{
+    if (enabled == m_apfEnabled.load()) {
+        return;
+    }
+
+    m_apfEnabled.store(enabled);
+
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1910-1927
+    //   WDSP.SetRXASPCWRun(WDSP.id(thread, subrx), value)
+    // WDSP third_party/wdsp/src/apfshadow.c:93
+    SetRXASPCWRun(m_channelId, enabled ? 1 : 0);
+#else
+    Q_UNUSED(enabled);
+#endif
+}
+
+void RxChannel::setApfFreq(double hz)
+{
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1929-1946
+    //   WDSP.SetRXASPCWFreq(WDSP.id(thread, subrx), value)
+    //   Freq = CWPitch + tuneOffset (setup.cs:17071)
+    // WDSP third_party/wdsp/src/apfshadow.c:117
+    SetRXASPCWFreq(m_channelId, hz);
+#else
+    Q_UNUSED(hz);
+#endif
+}
+
+void RxChannel::setApfBandwidth(double hz)
+{
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1948-1965
+    //   WDSP.SetRXASPCWBandwidth(WDSP.id(thread, subrx), value)
+    //   Default rx_apf_bw = 600.0 Hz
+    // WDSP third_party/wdsp/src/apfshadow.c:141
+    SetRXASPCWBandwidth(m_channelId, hz);
+#else
+    Q_UNUSED(hz);
+#endif
+}
+
+void RxChannel::setApfGain(double gain)
+{
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1967-1984
+    //   WDSP.SetRXASPCWGain(WDSP.id(thread, subrx), value)
+    //   Default rx_apf_gain = 1.0 (linear)
+    // WDSP third_party/wdsp/src/apfshadow.c:165
+    SetRXASPCWGain(m_channelId, gain);
+#else
+    Q_UNUSED(gain);
+#endif
+}
+
+void RxChannel::setApfSelection(int selection)
+{
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1986-2008
+    //   WDSP.SetRXASPCWSelection(WDSP.id(thread, subrx), value)
+    //   Default _rx_apf_type = 3 (bi-quad)
+    //   0=double-pole, 1=matched, 2=gaussian, 3=bi-quad
+    // WDSP third_party/wdsp/src/apfshadow.c:45
+    SetRXASPCWSelection(m_channelId, selection);
+#else
+    Q_UNUSED(selection);
+#endif
+}
+
+// ---------------------------------------------------------------------------
 // Frequency shift (pan offset from VFO)
 // ---------------------------------------------------------------------------
 

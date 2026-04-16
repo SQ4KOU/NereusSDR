@@ -180,6 +180,34 @@ void xnobEXT(int id, double* in, double* out);
 void xnobEXTF(int id, float* I, float* Q);
 
 // ---------------------------------------------------------------------------
+// APF — Audio Peak Filter (apfshadow.c / apfshadow.h)
+//
+// The APF shadow coordinates 4 underlying filter types via a single facade.
+// From Thetis Project Files/Source/Console/radio.cs:1910-2008
+// WDSP: third_party/wdsp/src/apfshadow.c:45,93,117,141,165
+// ---------------------------------------------------------------------------
+
+// Select filter type: 0=double-pole, 1=matched, 2=gaussian, 3=bi-quad
+// From Thetis radio.cs:1986 — _rx_apf_type = 3 (bi-quad)
+void SetRXASPCWSelection(int channel, int selection);
+
+// Enable/disable APF processing
+// From Thetis radio.cs:1910 — rx_apf_run default = false
+void SetRXASPCWRun(int channel, int run);
+
+// Set center frequency in Hz
+// From Thetis radio.cs:1929 — rx_apf_freq default = 600.0 Hz
+void SetRXASPCWFreq(int channel, double f_center);
+
+// Set bandwidth in Hz
+// From Thetis radio.cs:1948 — rx_apf_bw default = 600.0 Hz
+void SetRXASPCWBandwidth(int channel, double bandwidth);
+
+// Set gain (linear scale)
+// From Thetis radio.cs:1967 — rx_apf_gain default = 1.0
+void SetRXASPCWGain(int channel, double gain);
+
+// ---------------------------------------------------------------------------
 // Squelch (amsq.h)
 // ---------------------------------------------------------------------------
 
