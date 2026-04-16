@@ -160,6 +160,12 @@ void ContainerWidget::setContent(QWidget* widget)
     QLayout* layout = m_contentHolder->layout();
     if (m_content) {
         layout->removeWidget(m_content);
+        // Detach SYNCHRONOUSLY before deleteLater. When the content is a
+        // MeterWidget (WA_NativeWindow QRhiWidget), leaving it under this
+        // container's HWND through an upcoming reparent blocks the fresh
+        // MeterWidget's D3D11 swapchain with E_ACCESSDENIED on Windows.
+        m_content->hide();
+        m_content->setParent(nullptr);
         m_content->deleteLater();
     }
     m_content = widget;

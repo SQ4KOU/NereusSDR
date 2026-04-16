@@ -4,6 +4,8 @@
 #include "FloatingContainer.h"
 #include "core/AppSettings.h"
 #include "core/LogCategories.h"
+#include "gui/applets/AppletPanelWidget.h"
+#include "gui/meters/MeterItem.h"
 #include "gui/meters/MeterWidget.h"
 
 #include <QSplitter>
@@ -71,6 +73,53 @@ void ContainerManager::wireContainer(ContainerWidget* container)
             emit meterReadyForPolling(meter);
         }
     });
+}
+
+QString ContainerManager::extractMeterItems(ContainerWidget* container)
+{
+    if (!container) { return {}; }
+    QWidget* content = container->content();
+    MeterWidget* meter = innerMeterWidget(content);
+    if (!meter) { return {}; }
+
+    const QString payload = meter->serializeItems();
+
+    if (qobject_cast<MeterWidget*>(content) == meter) {
+        // Bare MeterWidget as content — clear via setContent(nullptr) so
+        // the content holder layout is empty during the upcoming reparent.
+        container->setContent(nullptr);
+    } else if (auto* panel = qobject_cast<AppletPanelWidget*>(content)) {
+        // AppletPanelWidget header — detach the MeterWidget so the panel
+        // can reparent with no native-window child.
+        panel->clearHeaderWidget();
+    }
+    qCDebug(lcContainer) << "Extracted meter items from" << container->id()
+                          << "bytes:" << payload.size();
+    return payload;
+}
+
+void ContainerManager::installFreshMeter(ContainerWidget* container, const QString& payload)
+{
+    if (!container || payload.isEmpty()) { return; }
+
+    auto* fresh = new MeterWidget();
+    fresh->deserializeItems(payload);
+    fresh->inferStackFromGeometry();
+    for (MeterItem* item : fresh->items()) {
+        container->wireInteractiveItem(item);
+    }
+
+    QWidget* content = container->content();
+    if (auto* panel = qobject_cast<AppletPanelWidget*>(content)) {
+        panel->setHeaderWidget(fresh, QStringLiteral("Meters"), 1.3f);
+        emit meterReadyForPolling(fresh);
+    } else {
+        // Bare content path (user-created containers) — setContent emits
+        // contentChanged which routes into meterReadyForPolling.
+        container->setContent(fresh);
+    }
+    qCDebug(lcContainer) << "Installed fresh meter for" << container->id()
+                          << "items:" << fresh->items().size();
 }
 
 ContainerWidget* ContainerManager::duplicateContainer(const QString& sourceId)
@@ -203,10 +252,12 @@ void ContainerManager::panelDockContainer(const QString& id)
     form->setContainerFloating(false);
     form->hide();
     container->hide();
+    const QString payload = extractMeterItems(container);
     container->setParent(m_splitter);
     m_splitter->addWidget(container);
     container->setDockMode(DockMode::PanelDocked);
     container->show();
+    installFreshMeter(container, payload);
     m_panelContainerId = id;
 
     qCDebug(lcContainer) << "Panel-docked container:" << id;
@@ -224,11 +275,13 @@ void ContainerManager::overlayDockContainer(const QString& id)
     form->setContainerFloating(false);
     form->hide();
     container->hide();
+    const QString payload = extractMeterItems(container);
     container->setParent(m_dockParent);
     container->setDockMode(DockMode::OverlayDocked);
     container->restoreLocation();
     container->show();
     container->raise();
+    installFreshMeter(container, payload);
 
     qCDebug(lcContainer) << "Overlay-docked container:" << id;
 }
@@ -237,11 +290,14 @@ void ContainerManager::setMeterFloating(ContainerWidget* container, FloatingCont
 {
     // From Thetis MeterManager.cs:5894-5918
     container->hide();
+    const QString payload = extractMeterItems(container);
     form->takeOwner(container);
     form->setContainerFloating(true);
     container->setDockMode(DockMode::Floating);
     container->setTopMost();  // Re-apply pin-on-top now that parent is set
+    form->ensureVisiblePosition(m_dockParent);
     form->show();
+    installFreshMeter(container, payload);
     qCDebug(lcContainer) << "Floated container:" << container->id();
 }
 
@@ -251,11 +307,13 @@ void ContainerManager::returnMeterFromFloating(ContainerWidget* container, Float
     form->setContainerFloating(false);
     form->hide();
     container->hide();
+    const QString payload = extractMeterItems(container);
     container->setParent(m_dockParent);
     container->setDockMode(DockMode::OverlayDocked);
     container->restoreLocation();
     container->show();
     container->raise();
+    installFreshMeter(container, payload);
     qCDebug(lcContainer) << "Docked container:" << container->id();
 }
 

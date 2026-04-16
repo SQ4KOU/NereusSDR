@@ -270,23 +270,37 @@ void MeterWidget::reflowStackedItems()
     const int h = height();
     if (h <= 0) { return; }
 
-    // Thetis-parity stack layout with NereusSDR pixel floor:
-    //   slotHpx = max(kNormalRowHNorm * widgetH, kMinRowHeightPx)
-    //   bandTop = max(y + itemHeight) over items with itemHeight > 0.30
-    // Re-lays every stacked item from those two values so adding,
-    // removing, or resizing a composite shifts the stack without
-    // touching any per-item metadata.
-    constexpr float kNormalRowHNorm = 0.05f;  // Thetis _fHeight @ MeterManager.cs:21266
-    constexpr int   kMinRowHeightPx = 24;     // NereusSDR pixel floor
-    const int normalRowPx = static_cast<int>(kNormalRowHNorm * static_cast<float>(h));
-    const int slotHeightPx = qMax(normalRowPx, kMinRowHeightPx);
+    // Stack rows share the vertical band (bandTop .. 1.0) equally,
+    // so N stacked rows always fill the available space under the
+    // composite band. Thetis uses a fixed 5% per row because its
+    // meter containers are fixed-aspect (MeterManager.cs:21266) —
+    // NereusSDR's containers are freely resizable, so a fixed 5%
+    // would leave an empty gap below the stack whenever the user
+    // sizes the container larger than N × 5%. A 24px pixel floor
+    // keeps rows readable when the container is small enough that
+    // the per-slot share would otherwise drop below that; in that
+    // case the bottom rows overflow the widget (same as Thetis).
+    constexpr int kMinRowHeightPx = 24;
 
     float bandTop = 0.0f;
+    int maxSlot = -1;
     for (const MeterItem* item : m_items) {
         if (!item) { continue; }
-        if (item->itemHeight() <= 0.30f) { continue; }
-        const float bottom = item->y() + item->itemHeight();
-        if (bottom > bandTop) { bandTop = bottom; }
+        if (item->itemHeight() > 0.30f) {
+            const float bottom = item->y() + item->itemHeight();
+            if (bottom > bandTop) { bandTop = bottom; }
+        }
+        if (item->stackSlot() >= 0) {
+            maxSlot = qMax(maxSlot, item->stackSlot());
+        }
+    }
+
+    const int numSlots = maxSlot + 1;
+    int slotHeightPx = kMinRowHeightPx;
+    if (numSlots > 0) {
+        const int availablePx = static_cast<int>((1.0f - bandTop)
+                                                 * static_cast<float>(h));
+        slotHeightPx = qMax(availablePx / numSlots, kMinRowHeightPx);
     }
 
     for (MeterItem* item : m_items) {
@@ -321,6 +335,14 @@ void MeterWidget::inferStackFromGeometry()
         float yMax;
         QVector<MeterItem*> members;
     };
+    // Cluster only when y-intervals genuinely OVERLAP by more than an
+    // epsilon. Touching boundaries (yMax of row N == yMin of row N+1,
+    // the normal stack-row layout) or sub-ULP floating-point drift from
+    // repeated serialize/deserialize cycles must NOT merge: if adjacent
+    // rows collapse into one cluster they all collapse onto stack slot
+    // 0, cramming N rows into one row's height and visibly compressing
+    // the meter a little more on every reparent trip.
+    constexpr float kOverlapEps = 0.002f;
     QVector<Cluster> clusters;
     for (MeterItem* item : m_items) {
         if (!item) { continue; }
@@ -330,7 +352,7 @@ void MeterWidget::inferStackFromGeometry()
         const float yMax = item->y() + h;
         bool placed = false;
         for (Cluster& c : clusters) {
-            if (yMin <= c.yMax && yMax >= c.yMin) {
+            if (yMin + kOverlapEps < c.yMax && yMax > c.yMin + kOverlapEps) {
                 c.yMin = qMin(c.yMin, yMin);
                 c.yMax = qMax(c.yMax, yMax);
                 c.members.append(item);

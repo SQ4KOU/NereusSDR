@@ -66,6 +66,8 @@ void AppletPanelWidget::setHeaderWidget(QWidget* widget, const QString& title,
                                          float aspectRatio)
 {
     if (!widget) { return; }
+    clearHeaderWidget();
+
     m_headerAspect = aspectRatio;
     m_headerWidget = widget;
 
@@ -74,11 +76,32 @@ void AppletPanelWidget::setHeaderWidget(QWidget* widget, const QString& title,
 
     QWidget* wrapped = wrapWithTitleBar(widget, title);
     wrapped->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_headerWrapper = wrapped;
     m_headerLayout->addWidget(wrapped);
 
     // Set initial height based on current width
     int h = qMax(80, static_cast<int>(width() / aspectRatio));
     widget->setFixedHeight(h);
+}
+
+void AppletPanelWidget::clearHeaderWidget()
+{
+    if (m_headerWrapper) {
+        m_headerLayout->removeWidget(m_headerWrapper);
+        // Detach from the widget tree SYNCHRONOUSLY before deleteLater.
+        // The wrapper's MeterWidget child is a WA_NativeWindow QRhiWidget
+        // with a live D3D11 swapchain. If the wrapper lingers in this
+        // panel's parent chain across an upcoming container reparent, the
+        // new MeterWidget's CreateSwapChainForHwnd returns E_ACCESSDENIED
+        // — Windows refuses to attach a second swapchain while the old
+        // native child is still under the parent HWND.
+        m_headerWrapper->hide();
+        m_headerWrapper->setParent(nullptr);
+        m_headerWrapper->deleteLater();
+        m_headerWrapper = nullptr;
+    }
+    m_headerWidget = nullptr;
+    m_headerAspect = 0.0f;
 }
 
 void AppletPanelWidget::resizeEvent(QResizeEvent* event)
