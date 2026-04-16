@@ -258,6 +258,34 @@ private slots:
         ctrl.feedBins(empty, 0);
         QCOMPARE(spy.count(), 0);
     }
+
+    void snapToFloor_emitsImmediately()
+    {
+        // Band-switch path: PanadapterModel feeds the stored floor for
+        // the new band into ClarityController::snapToFloor(). The
+        // controller sets its EWMA anchor and emits thresholds right
+        // away so the waterfall snaps to the remembered state, then
+        // Clarity refines from there (spec §6.2.4 "band switch").
+        ClarityController ctrl;
+        ctrl.setEnabled(true);
+        QSignalSpy spy(&ctrl, &ClarityController::waterfallThresholdsChanged);
+
+        ctrl.snapToFloor(-100.0f);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).toFloat(), -105.0f);  // -100 + (-5)
+        QCOMPARE(spy.first().at(1).toFloat(),  -45.0f);  // -100 + 55
+    }
+
+    void snapToFloor_nan_isIgnored()
+    {
+        // Band has no stored Clarity data — snap with NaN does nothing.
+        ClarityController ctrl;
+        ctrl.setEnabled(true);
+        QSignalSpy spy(&ctrl, &ClarityController::waterfallThresholdsChanged);
+
+        ctrl.snapToFloor(qQNaN());
+        QCOMPARE(spy.count(), 0);
+    }
 };
 
 QTEST_MAIN(TestClarityController)

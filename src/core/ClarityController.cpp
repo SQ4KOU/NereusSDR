@@ -43,6 +43,29 @@ void ClarityController::retuneNow()
     m_hasEmitted  = false;
 }
 
+void ClarityController::snapToFloor(float floorDbm)
+{
+    if (qIsNaN(floorDbm) || !m_enabled) {
+        return;
+    }
+    m_smoothedFloor    = floorDbm;
+    m_hasSmoothed      = true;
+
+    float low  = floorDbm + m_lowMarginDb;
+    float high = floorDbm + m_highMarginDb;
+    if ((high - low) < m_minGapDb) {
+        const float center = (low + high) / 2.0f;
+        low  = center - m_minGapDb / 2.0f;
+        high = center + m_minGapDb / 2.0f;
+    }
+
+    m_lastLow          = low;
+    m_lastHigh         = high;
+    m_lastEmittedFloor = floorDbm;
+    m_hasEmitted       = true;
+    emit waterfallThresholdsChanged(low, high);
+}
+
 void ClarityController::setPollIntervalMs(int ms)      { m_pollIntervalMs = ms; }
 void ClarityController::setSmoothingTauSec(float sec)  { m_tauSec = sec; }
 void ClarityController::setDeadbandDb(float db)        { m_deadbandDb = db; }

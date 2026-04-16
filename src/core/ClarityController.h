@@ -70,6 +70,12 @@ public slots:
     // snaps smoothing to the latest estimate.
     void retuneNow();
 
+    // Band-switch snap — PanadapterModel feeds the stored floor for the
+    // new band. EWMA state re-anchors at this value and thresholds are
+    // emitted immediately so the waterfall snaps to the remembered state.
+    // NaN input is ignored (band has no stored Clarity data).
+    void snapToFloor(float floorDbm);
+
     // Per-frame FFT bin vector (dB) from FFTEngine. The controller may
     // no-op if disabled, paused, transmitting, or inside the poll window.
     //
