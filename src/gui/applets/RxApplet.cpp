@@ -797,7 +797,18 @@ void RxApplet::connectSlice(SliceModel* s)
             m_preampCombo->setCurrentIndex(static_cast<int>(mode));
         });
 
-        // Sync initial ATT value from controller
+        // React to step-att-enabled changes (ATT ↔ S-ATT mode switch)
+        connect(attCtrl, &StepAttenuatorController::stepAttEnabledChanged,
+                this, [this](bool stepOn) {
+            m_attLabel->setText(stepOn ? QStringLiteral("S-ATT")
+                                      : QStringLiteral("ATT"));
+            m_attStack->setCurrentIndex(stepOn ? 1 : 0);
+        });
+
+        // Sync initial state from controller
+        const bool stepOn = attCtrl->stepAttEnabled();
+        m_attLabel->setText(stepOn ? QStringLiteral("S-ATT") : QStringLiteral("ATT"));
+        m_attStack->setCurrentIndex(stepOn ? 1 : 0);
         {
             QSignalBlocker blk(m_stepAttSpin);
             m_stepAttSpin->setValue(attCtrl->attenuatorDb());

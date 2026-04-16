@@ -85,7 +85,9 @@ void StepAttenuatorController::setAdaptiveDecayMs(int ms)
 
 void StepAttenuatorController::setStepAttEnabled(bool on)
 {
+    if (m_stepAttEnabled == on) { return; }
     m_stepAttEnabled = on;
+    emit stepAttEnabledChanged(on);
 }
 
 void StepAttenuatorController::setBand(Band band)
@@ -126,6 +128,12 @@ void StepAttenuatorController::setAttenuation(int dB, int rx)
     if (dB > m_maxAttDb) { dB = m_maxAttDb; }
     if (m_attDb == dB) { return; }
     m_attDb = dB;
+
+    // Send to hardware — from Thetis console.cs RX1AttenuatorData property.
+    if (m_connection) {
+        m_connection->setAttenuator(dB);
+    }
+
     emit attenuationChanged(m_attDb);
 
     // ADC-linked: force the other RX to match.
@@ -143,6 +151,12 @@ void StepAttenuatorController::setPreampMode(PreampMode mode)
 {
     if (m_preampMode == mode) { return; }
     m_preampMode = mode;
+
+    // Send to hardware — from Thetis console.cs comboPreamp_SelectedIndexChanged.
+    if (m_connection) {
+        m_connection->setPreamp(mode != PreampMode::Off);
+    }
+
     emit preampModeChanged(m_preampMode);
 }
 

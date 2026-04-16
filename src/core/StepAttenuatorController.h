@@ -85,6 +85,9 @@ public:
     // Current preamp mode.
     PreampMode preampMode() const noexcept { return m_preampMode; }
 
+    // Step-att enabled (S-ATT mode vs ATT preamp combo mode).
+    bool stepAttEnabled() const noexcept { return m_stepAttEnabled; }
+
     // Auto-att state.
     AutoAttMode autoAttMode() const noexcept { return m_autoAttMode; }
     bool autoAttEnabled() const noexcept { return m_autoAttEnabled; }
@@ -157,6 +160,9 @@ signals:
 
     // Emitted when auto-att applied/cleared state changes.
     void autoAttActiveChanged(bool applied);
+
+    // Emitted when step-att-enabled changes (ATT ↔ S-ATT mode switch).
+    void stepAttEnabledChanged(bool enabled);
 
     // Emitted when ADC-linked state changes (both RX share same ADC).
     void adcLinkedChanged(bool linked);
