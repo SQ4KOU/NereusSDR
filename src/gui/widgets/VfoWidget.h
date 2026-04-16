@@ -205,9 +205,6 @@ private:
     // --- Mode tab ---
     QComboBox*          m_modeCmb{nullptr};
     QWidget*            m_filterBtnContainer{nullptr};
-    QSlider*            m_rfGainSlider{nullptr};
-    QLabel*             m_rfGainLabel{nullptr};
-    QPushButton*        m_quickModeBtns[3]{};    // USB/CW/DIG shortcut slots (NYI)
 
     // --- Audio tab ---
     QSlider*            m_afGainSlider{nullptr};

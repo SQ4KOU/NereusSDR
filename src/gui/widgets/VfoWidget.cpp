@@ -795,38 +795,8 @@ void VfoWidget::buildModeTab()
     modeLayout->addWidget(m_filterBtnContainer);
     rebuildFilterButtons(DSPMode::USB);
 
-    // RF Gain slider
-    {
-        auto* row = new QHBoxLayout;
-        auto* label = new QLabel(QStringLiteral("RF"), modeWidget);
-        label->setStyleSheet(QStringLiteral("color: #8899aa; font-size: 11px;"));
-        label->setFixedWidth(24);
-        row->addWidget(label);
-
-        m_rfGainSlider = new QSlider(Qt::Horizontal, modeWidget);
-        m_rfGainSlider->setRange(0, 100);
-        m_rfGainSlider->setValue(80);
-        m_rfGainSlider->setStyleSheet(
-            QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
-                            "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
-        // From Thetis console.resx:8397 — ptbRF.ToolTip (Thetis RF gain = AGC Max Gain slider)
-        m_rfGainSlider->setToolTip(QStringLiteral("AGC Max Gain - Operates similarly to traditional RF Gain. Right click AUTO based on noise floor."));
-        row->addWidget(m_rfGainSlider);
-
-        m_rfGainLabel = new QLabel(QStringLiteral("80"), modeWidget);
-        m_rfGainLabel->setStyleSheet(QStringLiteral("color: #c8d8e8; font-size: 11px;"));
-        m_rfGainLabel->setFixedWidth(24);
-        m_rfGainLabel->setAlignment(Qt::AlignRight);
-        row->addWidget(m_rfGainLabel);
-
-        connect(m_rfGainSlider, &QSlider::valueChanged, this, [this](int val) {
-            m_rfGainLabel->setText(QString::number(val));
-            if (!m_updatingFromModel) {
-                emit rfGainChanged(val);
-            }
-        });
-        modeLayout->addLayout(row);
-    }
+    // RF Gain slider removed — AGC-T (Audio tab) controls the same WDSP
+    // max_gain parameter. Revisit when spectrum-overlay AGC-T line lands.
 
     modeLayout->addStretch();
     m_tabStack->addWidget(modeWidget);
@@ -1179,12 +1149,9 @@ void VfoWidget::setAfGain(int gain)
     m_updatingFromModel = false;
 }
 
-void VfoWidget::setRfGain(int gain)
+void VfoWidget::setRfGain(int)
 {
-    m_updatingFromModel = true;
-    m_rfGainSlider->setValue(gain);
-    m_rfGainLabel->setText(QString::number(gain));
-    m_updatingFromModel = false;
+    // RF Gain slider removed — AGC-T controls the same parameter.
 }
 
 void VfoWidget::setRxAntenna(const QString& ant)
