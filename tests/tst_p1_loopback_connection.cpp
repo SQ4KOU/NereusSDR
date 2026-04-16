@@ -123,21 +123,17 @@ private slots:
         // Baseline count after connection is up — discard discovery/start framing.
         const int baseline = fake.ep2FramesReceived();
 
-        // Sample for 1000 ms.
-        // Note: Windows Qt::PreciseTimer effective resolution is ~10-15 ms even
-        // with timeBeginPeriod(1), yielding ~70-100 pps observed on this platform
-        // rather than the ideal 381 pps. The floor of 60 packets in 1000 ms (60
-        // pps) is still 1.5× the broken 40 pps watchdog cadence and proves the
-        // pacer is driving EP2 rather than the watchdog.
-        QTest::qWait(1000);
+        // Sample for 500 ms.
+        QTest::qWait(500);
 
         const int delta = fake.ep2FramesReceived() - baseline;
-        // At 381 pps ideal we expect ~381 packets in 1000 ms. Windows QTimer
-        // effective jitter gives ~70-100 pps, so assert a floor of 60 packets
-        // which is still > the broken 40 pps watchdog's ~40 packets per second.
-        QVERIFY2(delta >= 60,
-            qPrintable(QString("EP2 rate too slow: %1 packets in 1000 ms (=%2 pps)")
-                .arg(delta).arg(delta)));
+        // At 380.95 pps ideal we expect ~190 packets in 500 ms. Windows QTimer
+        // jitter + catch-up loop settle the observed rate around 300-400 pps,
+        // so assert a floor of 100 packets (200 pps) which is still 5x the
+        // broken 40 pps watchdog cadence.
+        QVERIFY2(delta >= 100,
+            qPrintable(QString("EP2 rate too slow: %1 packets in 500 ms (=%2 pps)")
+                .arg(delta).arg(delta * 2)));
 
         conn.disconnect();
         fake.stop();

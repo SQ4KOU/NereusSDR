@@ -466,6 +466,8 @@ void P1RadioConnection::connectToRadio(const RadioInfo& info)
     sendPrimingBurst(3);
 
     m_watchdogTimer->start();
+    m_ep2PacerClock.restart();
+    m_ep2PacketsSent = 0;
     m_ep2PacerTimer->start();
     setState(ConnectionState::Connected);
 
@@ -692,16 +694,19 @@ void P1RadioConnection::onWatchdogTick()
 // ---------------------------------------------------------------------------
 // onEp2PacerTick
 //
-// Fires every kEp2PacerIntervalMs ms while connected. Sends one EP2 frame
-// per tick so the host→radio rate tracks the radio's 48 kHz audio clock
-// (Thetis emits ~381 pps from sendProtocol1Samples; we aim for the same
-// ballpark to feed its audio DAC and advance the 17-bank round-robin).
+// Fires every kEp2PacerIntervalMs ms while connected. Uses a catch-up loop
+// against m_ep2PacerClock so the aggregate send rate tracks 380.95 pps
+// (48 kHz audio / 126 samples per EP2 frame) even when Qt's PreciseTimer
+// under-delivers on Windows (10-15 ms resolution). Each tick emits a small
+// burst to make up the deficit, capped at kEp2MaxBurstPerTick for safety.
+//
+// This matches Thetis sendProtocol1Samples (networkproto1.c:700-747), which
+// is driven by a 48 kHz audio-semaphore clock — not by timer precision.
 //
 // Unlike the watchdog's former EP2 send, this path intentionally does NOT
 // consult m_hl2Throttled. Thetis never pauses sends, and pausing egress is
-// a weak remedy for an HL2 ingress PHY stall — we'd rather feed the audio
-// clock and keep the C&C round-robin advancing. If real-world HL2 users
-// report issues we can add smarter backoff later.
+// a weak remedy for an HL2 ingress PHY stall. The throttle flag and
+// bandwidth monitor logic remain in place for future use.
 // ---------------------------------------------------------------------------
 void P1RadioConnection::onEp2PacerTick()
 {
@@ -710,7 +715,25 @@ void P1RadioConnection::onEp2PacerTick()
     const ConnectionState cs = state();
     if (cs != ConnectionState::Connected && cs != ConnectionState::Connecting) { return; }
 
-    sendCommandFrame();
+    // Catch-up loop: compute how many packets should have been sent by now at
+    // the 380.95 pps target, and emit the missing ones. On Windows the Qt
+    // PreciseTimer only delivers ~10 ms ticks (multimedia timer floor), so
+    // each tick typically emits a burst of 3-5 packets. This matches Thetis'
+    // sendProtocol1Samples pacing (networkproto1.c:700-747), which is driven
+    // by a 48 kHz audio-subsystem semaphore rather than timer precision.
+    if (!m_ep2PacerClock.isValid()) {
+        m_ep2PacerClock.start();
+        m_ep2PacketsSent = 0;
+    }
+
+    const qint64 elapsedUs = m_ep2PacerClock.nsecsElapsed() / 1000;
+    const qint64 due       = elapsedUs / kEp2PacketIntervalUs;
+    int burst = 0;
+    while (m_ep2PacketsSent < due && burst < kEp2MaxBurstPerTick) {
+        sendCommandFrame();
+        ++m_ep2PacketsSent;
+        ++burst;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -754,6 +777,8 @@ void P1RadioConnection::onReconnectTimeout()
         m_watchdogTimer->start();
     }
     if (m_ep2PacerTimer && !m_ep2PacerTimer->isActive()) {
+        m_ep2PacerClock.restart();
+        m_ep2PacketsSent = 0;
         m_ep2PacerTimer->start();
     }
 
