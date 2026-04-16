@@ -84,7 +84,10 @@ private slots:
 private:
     QTimer m_timer;
     QPointer<RxChannel> m_rxChannel;
-    QVector<MeterWidget*> m_targets;
+    // QPointer auto-clears to nullptr when the MeterWidget is destroyed.
+    // ContainerManager's float/dock swap replaces MeterWidgets mid-session;
+    // without QPointer, poll() would dereference the deleted old widgets.
+    QVector<QPointer<MeterWidget>> m_targets;
 };
 
 } // namespace NereusSDR

@@ -42,6 +42,14 @@ public:
     void saveGeometry();
     void restoreGeometry();
 
+    // Ensure the form will be shown on a visible screen. Repositions the
+    // form when (a) no geometry was saved, or (b) saved geometry lands at
+    // the (0,0) origin or outside every connected screen. Pass the main
+    // window (or any widget on the target screen) as anchor; the form is
+    // centered on the anchor's screen. No-op when geometry is already on
+    // a screen and not at (0,0).
+    void ensureVisiblePosition(QWidget* anchor);
+
 signals:
     void aboutToClose();
 

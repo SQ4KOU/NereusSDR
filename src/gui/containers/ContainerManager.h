@@ -97,6 +97,15 @@ private:
     void returnMeterFromFloating(ContainerWidget* container, FloatingContainer* form);
     void wireContainer(ContainerWidget* container);
 
+    // Windows D3D11 QRhiWidget (WA_NativeWindow) cannot survive the HWND
+    // recreation that setParent() triggers when moving a container between
+    // top-level windows. Call extractMeterItems() before a reparent to
+    // serialize and detach the MeterWidget, then installFreshMeter() after
+    // the reparent to rebuild meter content in the new parent's HWND
+    // context. No-op when the container holds placeholder content.
+    QString extractMeterItems(ContainerWidget* container);
+    void    installFreshMeter(ContainerWidget* container, const QString& payload);
+
     QWidget* m_dockParent{nullptr};
     QSplitter* m_splitter{nullptr};
     QMap<QString, ContainerWidget*> m_containers;
