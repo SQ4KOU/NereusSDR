@@ -4,6 +4,7 @@
 #include "core/RadioConnectionTeardown.h"
 #include "core/RadioDiscovery.h"
 #include "core/BoardCapabilities.h"
+#include "core/HardwareProfile.h"
 #include "core/ReceiverManager.h"
 #include "core/AudioEngine.h"
 #include "core/WdspEngine.h"
@@ -148,8 +149,19 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     m_lastRadioInfo = info;
     m_intentionalDisconnect = false;
 
+    // Compute HardwareProfile from model override (Phase 3I-RP).
+    HPSDRModel selectedModel = info.modelOverride;
+    if (selectedModel == HPSDRModel::FIRST) {
+        selectedModel = defaultModelForBoard(info.boardType);
+    }
+    m_hardwareProfile = profileForModel(selectedModel);
+
+    qCDebug(lcConnection) << "HardwareProfile: model=" << displayName(m_hardwareProfile.model)
+                          << "effectiveBoard=" << static_cast<int>(m_hardwareProfile.effectiveBoard)
+                          << "adcCount=" << m_hardwareProfile.adcCount;
+
     m_name = info.displayName();
-    m_model = QString::fromLatin1(BoardCapsTable::forBoard(info.boardType).displayName);
+    m_model = QString::fromLatin1(m_hardwareProfile.caps->displayName);
     m_version = QString::number(info.firmwareVersion);
     emit infoChanged();
 
@@ -274,6 +286,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         return;
     }
     m_connection = conn.release();
+    m_connection->setHardwareProfile(m_hardwareProfile);
 
     // Create worker thread
     m_connThread = new QThread(this);

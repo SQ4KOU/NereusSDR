@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RadioDiscovery.h"
+#include "HardwareProfile.h"
 
 #include <QObject>
 #include <QVector>
@@ -50,6 +51,9 @@ public:
     ConnectionState state() const { return m_state.load(); }
     bool isConnected() const { return m_state.load() == ConnectionState::Connected; }
     const RadioInfo& radioInfo() const { return m_radioInfo; }
+
+    void setHardwareProfile(const HardwareProfile& profile) { m_hardwareProfile = profile; }
+    const HardwareProfile& hardwareProfile() const { return m_hardwareProfile; }
 
 public slots:
     // Must be called on the worker thread after moveToThread().
@@ -109,6 +113,7 @@ protected:
 
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};
     RadioInfo m_radioInfo;
+    HardwareProfile m_hardwareProfile;
 };
 
 } // namespace NereusSDR
