@@ -140,6 +140,7 @@ void VfoWidget::buildHeaderRow()
     m_rxAntBtn->setStyleSheet(QString(kFlatBtn) +
         QStringLiteral("QPushButton { color: #4488ff; }"));
     m_rxAntBtn->setFixedHeight(18);
+    m_rxAntBtn->setToolTip(QStringLiteral("Select RX antenna"));
     connect(m_rxAntBtn, &QPushButton::clicked, this, [this]() {
         QMenu menu(this);
         for (const QString& ant : m_antennaList) {
@@ -161,6 +162,7 @@ void VfoWidget::buildHeaderRow()
     m_txAntBtn->setStyleSheet(QString(kFlatBtn) +
         QStringLiteral("QPushButton { color: #ff4444; }"));
     m_txAntBtn->setFixedHeight(18);
+    m_txAntBtn->setToolTip(QStringLiteral("Select TX antenna"));
     connect(m_txAntBtn, &QPushButton::clicked, this, [this]() {
         QMenu menu(this);
         for (const QString& ant : m_antennaList) {
@@ -194,6 +196,7 @@ void VfoWidget::buildHeaderRow()
         QStringLiteral("QPushButton { background: #1a2a3a; border: 1px solid #304050;"
                         "border-radius: 3px; color: #6888a0; font-size: 10px; font-weight: bold; }"
                         "QPushButton:checked { background: #6a3030; border-color: #ff4444; color: #ff8080; }"));
+    m_txBadge->setToolTip(QStringLiteral("Indicates this slice is the TX slice"));
     hdr->addWidget(m_txBadge);
 
     // Split badge — hidden in Stage 1; wired in Stage 2 when split semantics land
@@ -291,6 +294,15 @@ void VfoWidget::buildTabBar()
         QStringLiteral("DAX")
     };
 
+    // Tooltips for each tab button (order matches tabLabels)
+    static const char* kTabTooltips[] = {
+        "Show/hide audio controls (AF gain, AGC, pan, mute, squelch)",
+        "Show/hide DSP controls (NB, NR, ANF, SNB, APF)",
+        "Show/hide mode and filter controls",
+        "Show/hide RIT/XIT and frequency-lock controls",
+        "Show/hide DAX audio routing controls"
+    };
+
     for (int i = 0; i < tabLabels.size(); ++i) {
         // Add separator before each tab except the first
         // From AetherSDR VfoWidget.cpp:523-530
@@ -307,6 +319,7 @@ void VfoWidget::buildTabBar()
         btn->setCheckable(true);
         btn->setStyleSheet(kTabBtn);
         btn->setFixedHeight(24);  // 24px from AetherSDR
+        btn->setToolTip(QString::fromLatin1(kTabTooltips[i]));
         connect(btn, &QPushButton::clicked, this, [this, i]() {
             if (m_activeTab == i) {
                 // Toggle: clicking active tab hides content
@@ -355,6 +368,7 @@ void VfoWidget::buildAudioTab()
         m_afGainSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
+        m_afGainSlider->setToolTip(QStringLiteral("Adjust AF gain (audio volume)"));
         row->addWidget(m_afGainSlider);
 
         m_afGainLabel = new QLabel(QStringLiteral("50"), audioWidget);
@@ -375,6 +389,13 @@ void VfoWidget::buildAudioTab()
     // 2. AGC 5-button row — replaces m_agcCmb (live-wired, no NYI badge)
     {
         static const char* kAgcLabels[] = { "Off", "Long", "Slow", "Med", "Fast" };
+        static const char* kAgcTooltips[] = {
+            "Select AGC mode: Off (no automatic gain control)",
+            "Select AGC mode: Long attack/decay",
+            "Select AGC mode: Slow attack/decay",
+            "Select AGC mode: Medium attack/decay",
+            "Select AGC mode: Fast attack/decay"
+        };
         auto* row = new QHBoxLayout;
         row->setSpacing(2);
         row->setContentsMargins(0, 0, 0, 0);
@@ -383,6 +404,7 @@ void VfoWidget::buildAudioTab()
                 QString::fromLatin1(kAgcLabels[i]), audioWidget);
             m_agcBtns[i]->setCheckable(true);
             m_agcBtns[i]->setStyleSheet(kDspToggle);
+            m_agcBtns[i]->setToolTip(QString::fromLatin1(kAgcTooltips[i]));
             row->addWidget(m_agcBtns[i]);
         }
         // Default: Med (index 3) — matches AGCMode::Med
@@ -425,6 +447,7 @@ void VfoWidget::buildAudioTab()
         m_panSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
+        m_panSlider->setToolTip(QStringLiteral("Audio pan — not yet implemented"));
         row->addWidget(m_panSlider);
 
         m_panLabel = new QLabel(QStringLiteral("0"), audioWidget);
@@ -451,11 +474,13 @@ void VfoWidget::buildAudioTab()
         m_muteBtn = new QPushButton(QStringLiteral("Mute"), audioWidget);
         m_muteBtn->setCheckable(true);
         m_muteBtn->setStyleSheet(kDspToggle);
+        m_muteBtn->setToolTip(QStringLiteral("Mute — not yet implemented"));
         row->addWidget(m_muteBtn);
 
         m_binBtn = new QPushButton(QStringLiteral("BIN"), audioWidget);
         m_binBtn->setCheckable(true);
         m_binBtn->setStyleSheet(kDspToggle);
+        m_binBtn->setToolTip(QStringLiteral("Binaural audio — not yet implemented"));
         row->addWidget(m_binBtn);
 
         row->addStretch();
@@ -484,6 +509,7 @@ void VfoWidget::buildAudioTab()
         m_sqlBtn->setCheckable(true);
         m_sqlBtn->setStyleSheet(kDspToggle);
         m_sqlBtn->setFixedWidth(40);
+        m_sqlBtn->setToolTip(QStringLiteral("Squelch — not yet implemented"));
         row->addWidget(m_sqlBtn);
 
         m_sqlSlider = new QSlider(Qt::Horizontal, audioWidget);
@@ -493,6 +519,7 @@ void VfoWidget::buildAudioTab()
         m_sqlSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
+        m_sqlSlider->setToolTip(QStringLiteral("Squelch threshold — not yet implemented"));
         row->addWidget(m_sqlSlider);
 
         connect(m_sqlBtn, &QPushButton::toggled, this, [this](bool on) {
@@ -525,6 +552,7 @@ void VfoWidget::buildAudioTab()
         m_agcTSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
+        m_agcTSlider->setToolTip(QStringLiteral("AGC threshold — not yet implemented"));
         row->addWidget(m_agcTSlider);
 
         m_agcTLabel = new QLabel(QStringLiteral("0"), audioWidget);
@@ -568,9 +596,13 @@ void VfoWidget::buildDspTab()
 
     // Row 0: NB | NB2 | NR | NR2
     m_nb1Toggle = makeToggle(QStringLiteral("NB"));
+    m_nb1Toggle->setToolTip(QStringLiteral("Toggle noise blanker (NB1)"));
     m_nb2Toggle = makeToggle(QStringLiteral("NB2"));
+    m_nb2Toggle->setToolTip(QStringLiteral("NB2 — not yet implemented"));
     m_nrToggle  = makeToggle(QStringLiteral("NR"));
+    m_nrToggle->setToolTip(QStringLiteral("Toggle noise reduction (NR)"));
     m_nr2Toggle = makeToggle(QStringLiteral("NR2"));
+    m_nr2Toggle->setToolTip(QStringLiteral("NR2 — not yet implemented"));
     grid->addWidget(m_nb1Toggle, 0, 0);
     grid->addWidget(m_nb2Toggle, 0, 1);
     grid->addWidget(m_nrToggle,  0, 2);
@@ -578,8 +610,11 @@ void VfoWidget::buildDspTab()
 
     // Row 1: ANF | SNB | APF | (spacer — col 3 intentionally empty per plan §S1.8.4)
     m_anfToggle = makeToggle(QStringLiteral("ANF"));
+    m_anfToggle->setToolTip(QStringLiteral("Toggle automatic notch filter (ANF)"));
     m_snbToggle = makeToggle(QStringLiteral("SNB"));
+    m_snbToggle->setToolTip(QStringLiteral("SNB — not yet implemented"));
     m_apfToggle = makeToggle(QStringLiteral("APF"));
+    m_apfToggle->setToolTip(QStringLiteral("APF — not yet implemented"));
     grid->addWidget(m_anfToggle, 1, 0);
     grid->addWidget(m_snbToggle, 1, 1);
     grid->addWidget(m_apfToggle, 1, 2);
@@ -600,6 +635,7 @@ void VfoWidget::buildDspTab()
         m_apfTuneSlider->setRange(-500, 500);
         m_apfTuneSlider->setSingleStep(1);
         m_apfTuneSlider->setValue(0);
+        m_apfTuneSlider->setToolTip(QStringLiteral("APF tune offset — not yet implemented"));
         apfRow->addWidget(m_apfTuneSlider);
 
         m_apfTuneLabel = new QLabel(QStringLiteral("0 Hz"), dspWidget);
@@ -691,6 +727,7 @@ void VfoWidget::buildModeTab()
         row->addWidget(label);
 
         m_modeCmb = new QComboBox(modeWidget);
+        m_modeCmb->setToolTip(QStringLiteral("Select demodulation mode"));
         // From Thetis enums.cs DSPMode — common modes
         m_modeCmb->addItems({
             QStringLiteral("LSB"), QStringLiteral("USB"),
@@ -728,6 +765,11 @@ void VfoWidget::buildModeTab()
     // Quick-mode shortcut buttons (NYI — Stage 2 maps index → configurable DSPMode)
     {
         static const char* kQmLabels[] = { "USB", "CW", "DIG" };
+        static const char* kQmTooltips[] = {
+            "Quick-select USB mode — not yet implemented",
+            "Quick-select CW mode — not yet implemented",
+            "Quick-select DIG mode — not yet implemented"
+        };
         auto* row = new QHBoxLayout;
         row->setSpacing(2);
         row->setContentsMargins(0, 0, 0, 0);
@@ -736,6 +778,7 @@ void VfoWidget::buildModeTab()
                 QString::fromLatin1(kQmLabels[i]), modeWidget);
             m_quickModeBtns[i]->setCheckable(true);
             m_quickModeBtns[i]->setStyleSheet(kModeBtn);
+            m_quickModeBtns[i]->setToolTip(QString::fromLatin1(kQmTooltips[i]));
             connect(m_quickModeBtns[i], &QPushButton::clicked, this, [this, i]() {
                 if (!m_updatingFromModel) {
                     emit quickModeRequested(i);
@@ -766,6 +809,7 @@ void VfoWidget::buildModeTab()
         m_rfGainSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
+        m_rfGainSlider->setToolTip(QStringLiteral("Adjust RF gain"));
         row->addWidget(m_rfGainSlider);
 
         m_rfGainLabel = new QLabel(QStringLiteral("80"), modeWidget);
@@ -813,6 +857,7 @@ void VfoWidget::buildXRitTab()
         m_ritBtn->setCheckable(true);
         m_ritBtn->setStyleSheet(kDspToggle);
         m_ritBtn->setFixedHeight(22);
+        m_ritBtn->setToolTip(QStringLiteral("RIT — not yet implemented"));
         row->addWidget(m_ritBtn);
 
         m_ritLabel = new ScrollableLabel(ritWidget);
@@ -828,6 +873,7 @@ void VfoWidget::buildXRitTab()
         m_ritZeroBtn->setFixedWidth(20);
         m_ritZeroBtn->setFlat(true);
         m_ritZeroBtn->setStyleSheet(kZeroBtn);
+        m_ritZeroBtn->setToolTip(QStringLiteral("Zero RIT offset — not yet implemented"));
         row->addWidget(m_ritZeroBtn);
 
         vbox->addLayout(row);
@@ -842,6 +888,7 @@ void VfoWidget::buildXRitTab()
         m_xitBtn->setCheckable(true);
         m_xitBtn->setStyleSheet(kDspToggle);
         m_xitBtn->setFixedHeight(22);
+        m_xitBtn->setToolTip(QStringLiteral("XIT — not yet implemented"));
         row->addWidget(m_xitBtn);
 
         m_xitLabel = new ScrollableLabel(ritWidget);
@@ -857,6 +904,7 @@ void VfoWidget::buildXRitTab()
         m_xitZeroBtn->setFixedWidth(20);
         m_xitZeroBtn->setFlat(true);
         m_xitZeroBtn->setStyleSheet(kZeroBtn);
+        m_xitZeroBtn->setToolTip(QStringLiteral("Zero XIT offset — not yet implemented"));
         row->addWidget(m_xitZeroBtn);
 
         vbox->addLayout(row);
@@ -871,6 +919,7 @@ void VfoWidget::buildXRitTab()
         m_xritLockBtn->setCheckable(true);
         m_xritLockBtn->setStyleSheet(kDspToggle);
         m_xritLockBtn->setFixedHeight(22);
+        m_xritLockBtn->setToolTip(QStringLiteral("Lock VFO frequency against tuning changes — not yet implemented"));
         row->addWidget(m_xritLockBtn);
 
         // Step cycle button — NOT NYI (wires to live SliceModel::setStepHz)
@@ -884,6 +933,7 @@ void VfoWidget::buildXRitTab()
                            "}"
                            "QPushButton:hover { border: 1px solid #0090e0; }"));
         m_stepCycleBtn->setFixedHeight(22);
+        m_stepCycleBtn->setToolTip(QStringLiteral("Cycle tuning step size (click to advance to next step)"));
         row->addWidget(m_stepCycleBtn, 1);
 
         vbox->addLayout(row);
@@ -1035,6 +1085,9 @@ void VfoWidget::rebuildFilterButtons(DSPMode mode)
         int high = p.high;
         btn->setProperty("filterLow", low);
         btn->setProperty("filterHigh", high);
+        // Tooltip: show the filter edges so the user knows what they're selecting
+        btn->setToolTip(QStringLiteral("Select filter preset: %1 Hz to %2 Hz")
+            .arg(low).arg(high));
         // Check if this matches current filter
         if (low == defLow && high == defHigh) {
             btn->setChecked(true);
