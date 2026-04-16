@@ -9,7 +9,10 @@
 #include "RadioInfoTab.h"
 
 #include "core/BoardCapabilities.h"
+#include "core/HardwareProfile.h"
+#include "core/HpsdrModel.h"
 #include "core/RadioDiscovery.h"
+#include "core/SampleRateCatalog.h"
 #include "models/RadioModel.h"
 
 #include <QClipboard>
@@ -63,11 +66,23 @@ RadioInfoTab::RadioInfoTab(RadioModel* model, QWidget* parent)
     auto* paramForm  = new QFormLayout(paramGroup);
     paramForm->setLabelAlignment(Qt::AlignRight);
 
-    // Sample rate combo — entries populated in populate() from caps.sampleRates
-    // Source: Thetis Setup.cs:847 — include_extra_p1_rate; sample rates filtered
-    // per-model and listed in comboGeneralSampleRate.
-    m_sampleRateCombo = new QComboBox(paramGroup);
-    m_sampleRateCombo->setMinimumWidth(120);
+    // RX1 sample rate combo — entries populated in populate() from
+    // allowedSampleRates(proto, caps, model). Matches Thetis setup.cs:847-852.
+    m_sampleRateRx1Combo = new QComboBox(paramGroup);
+    m_sampleRateRx1Combo->setMinimumWidth(120);
+
+    // RX2 sample rate combo — disabled stub in PR #35. Thetis exposes an
+    // independent RX2 rate (setup.cs comboAudioSampleRateRX2). When Phase 3F
+    // multi-panadapter lands, this combo becomes live with these gating rules
+    // (from setup.cs:7065-7073 and 7155-7156):
+    //   • P1 (all boards): RX2 forced equal to RX1, combo disabled.
+    //   • P2 ANAN-10E / ANAN-100B: RX2 forced equal to RX1 (single-ADC).
+    //   • P2 other boards: RX2 independent.
+    m_sampleRateRx2Combo = new QComboBox(paramGroup);
+    m_sampleRateRx2Combo->setMinimumWidth(120);
+    m_sampleRateRx2Combo->setEnabled(false);
+    m_sampleRateRx2Combo->setToolTip(
+        tr("Enabled when Phase 3F multi-panadapter support lands."));
 
     // Active RX count spinbox — capped at caps.maxReceivers in populate()
     // Source: Thetis Setup.cs numericUpDownNr, range 1..board_max_rx
@@ -76,7 +91,8 @@ RadioInfoTab::RadioInfoTab(RadioModel* model, QWidget* parent)
     m_activeRxSpin->setValue(1);
     m_activeRxSpin->setEnabled(false); // enabled when a radio is present
 
-    paramForm->addRow(tr("Sample rate (Hz):"), m_sampleRateCombo);
+    paramForm->addRow(tr("RX1 sample rate (Hz):"), m_sampleRateRx1Combo);
+    paramForm->addRow(tr("RX2 sample rate (Hz):"), m_sampleRateRx2Combo);
     paramForm->addRow(tr("Active RX count:"),  m_activeRxSpin);
 
     outerLayout->addWidget(paramGroup);
@@ -89,7 +105,7 @@ RadioInfoTab::RadioInfoTab(RadioModel* model, QWidget* parent)
     outerLayout->addStretch();
 
     // ── Connections ───────────────────────────────────────────────────────────
-    connect(m_sampleRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    connect(m_sampleRateRx1Combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &RadioInfoTab::onSampleRateChanged);
 
     connect(m_copySupportInfoButton, &QPushButton::clicked, this, [this]() {
@@ -120,21 +136,46 @@ void RadioInfoTab::populate(const RadioInfo& info, const BoardCapabilities& caps
         ? QStringLiteral("—")
         : info.address.toString());
 
-    // Rebuild sample-rate combo from caps.sampleRates (zero = unused slot)
-    // Source: Thetis Setup.cs:847-850 — rate list filtered per model
+    // Rebuild RX1 combo from allowedSampleRates(proto, caps, model) — matches
+    // Thetis setup.cs:847-852 filtering (per-protocol list ∩ caps.sampleRates,
+    // with the RedPitaya extra-384k exception). Default selection is 192000
+    // per setup.cs:866; if absent, first allowed entry.
+    HPSDRModel model = HPSDRModel::HERMES;
+    if (m_model) {
+        model = m_model->hardwareProfile().model;
+    }
+    const auto allowed = allowedSampleRates(info.protocol, caps, model);
+    const int fallbackRate = defaultSampleRate(info.protocol, caps, model);
     {
-        QSignalBlocker blocker(m_sampleRateCombo);
-        m_sampleRateCombo->clear();
-        for (int rate : caps.sampleRates) {
-            if (rate > 0) {
-                m_sampleRateCombo->addItem(
-                    QStringLiteral("%1").arg(rate), rate);
+        QSignalBlocker blocker(m_sampleRateRx1Combo);
+        m_sampleRateRx1Combo->clear();
+        for (int rate : allowed) {
+            m_sampleRateRx1Combo->addItem(QStringLiteral("%1").arg(rate), rate);
+        }
+        // Default selection — 192000 (setup.cs:866).
+        int idx = -1;
+        for (int i = 0; i < m_sampleRateRx1Combo->count(); ++i) {
+            if (m_sampleRateRx1Combo->itemData(i).toInt() == fallbackRate) {
+                idx = i;
+                break;
             }
         }
-        // Select the max-rate entry by default (last non-zero slot)
-        if (m_sampleRateCombo->count() > 0) {
-            m_sampleRateCombo->setCurrentIndex(m_sampleRateCombo->count() - 1);
+        if (idx < 0 && m_sampleRateRx1Combo->count() > 0) {
+            idx = 0;
         }
+        if (idx >= 0) {
+            m_sampleRateRx1Combo->setCurrentIndex(idx);
+        }
+    }
+
+    // RX2 combo mirrors RX1 items and selection (disabled stub).
+    {
+        QSignalBlocker blocker(m_sampleRateRx2Combo);
+        m_sampleRateRx2Combo->clear();
+        for (int rate : allowed) {
+            m_sampleRateRx2Combo->addItem(QStringLiteral("%1").arg(rate), rate);
+        }
+        m_sampleRateRx2Combo->setCurrentIndex(m_sampleRateRx1Combo->currentIndex());
     }
 
     // Active-RX spinbox range 1..caps.maxReceivers
@@ -171,7 +212,7 @@ void RadioInfoTab::populate(const RadioInfo& info, const BoardCapabilities& caps
 void RadioInfoTab::onSampleRateChanged(int index)
 {
     if (index < 0) { return; }
-    int rate = m_sampleRateCombo->itemData(index).toInt();
+    int rate = m_sampleRateRx1Combo->itemData(index).toInt();
     if (rate > 0) {
         emit settingChanged(QStringLiteral("radioInfo/sampleRate"), rate);
     }
@@ -185,10 +226,13 @@ void RadioInfoTab::restoreSettings(const QMap<QString, QVariant>& settings)
     auto srIt = settings.constFind(QStringLiteral("sampleRate"));
     if (srIt != settings.constEnd()) {
         const int rate = srIt.value().toInt();
-        QSignalBlocker blocker(m_sampleRateCombo);
-        for (int i = 0; i < m_sampleRateCombo->count(); ++i) {
-            if (m_sampleRateCombo->itemData(i).toInt() == rate) {
-                m_sampleRateCombo->setCurrentIndex(i);
+        QSignalBlocker blocker(m_sampleRateRx1Combo);
+        for (int i = 0; i < m_sampleRateRx1Combo->count(); ++i) {
+            if (m_sampleRateRx1Combo->itemData(i).toInt() == rate) {
+                m_sampleRateRx1Combo->setCurrentIndex(i);
+                // Mirror into RX2 stub so it stays visually aligned.
+                QSignalBlocker b2(m_sampleRateRx2Combo);
+                m_sampleRateRx2Combo->setCurrentIndex(i);
                 break;
             }
         }

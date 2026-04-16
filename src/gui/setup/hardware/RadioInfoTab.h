@@ -50,7 +50,8 @@ private:
     QLabel*      m_firmwareLabel{nullptr};
     QLabel*      m_macLabel{nullptr};
     QLabel*      m_ipLabel{nullptr};
-    QComboBox*   m_sampleRateCombo{nullptr};
+    QComboBox*   m_sampleRateRx1Combo{nullptr};
+    QComboBox*   m_sampleRateRx2Combo{nullptr};   // disabled in PR #35; activates with Phase 3F multi-panadapter.
     QSpinBox*    m_activeRxSpin{nullptr};
     QPushButton* m_copySupportInfoButton{nullptr};
 
