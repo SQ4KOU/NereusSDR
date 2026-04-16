@@ -290,7 +290,15 @@ bool on = s.value("MyFeatureEnabled", "False").toString() == "True";
 ### Radio-Authoritative Settings Policy
 
 **Radio-authoritative (do NOT persist):** ADC attenuation, preamp, TX power,
-antenna selection, hardware sample rate.
+antenna selection.
+
+**Hardware sample rate and active RX count:** persisted per-MAC in AppSettings
+under `hardware/<mac>/radioInfo/sampleRate` and `.../activeRxCount`. Applied
+on next connect. This matches Thetis, which persists rate globally via
+`DB.SaveVarsDictionary("Options", ...)` (setup.cs:1627). NereusSDR scopes
+per-MAC so users with multiple radios retain per-radio selections. Live-apply
+of rate changes to a running connection is deferred to the follow-up PR that
+adds WDSP channel teardown/rebuild infrastructure.
 
 **Client-authoritative (persist in AppSettings):** VFO frequency, mode, filter,
 DSP settings (AGC, NR, NB, ANF), layout arrangement, UI preferences, display
