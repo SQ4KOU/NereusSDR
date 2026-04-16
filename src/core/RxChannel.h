@@ -135,6 +135,30 @@ public:
     void setFmsqEnabled(bool enabled);
     void setFmsqThresh(double dB);  // converts dB → linear before WDSP call
 
+    // --- Audio panel (mute / pan / binaural) ---
+
+    // Mute: run=0 silences the audio panel output; run=1 restores it.
+    // Maps to SetRXAPanelRun. Default: unmuted (panel runs).
+    // From Thetis Project Files/Source/Console/dsp.cs:393-394
+    // WDSP: third_party/wdsp/src/patchpanel.c:126
+    bool muted() const { return m_muted.load(); }
+    void setMuted(bool muted);
+
+    // Audio pan: NereusSDR range -1.0..+1.0 (0.0 = center).
+    // Converted to WDSP 0.0..1.0 via wdsp_pan = (pan + 1.0) / 2.0.
+    // From Thetis Project Files/Source/Console/radio.cs:1386-1403
+    //   Thetis default pan = 0.5f (center in 0..1 scale)
+    // WDSP: third_party/wdsp/src/patchpanel.c:159
+    void setAudioPan(double pan);  // pan in -1.0..+1.0
+
+    // Binaural mode: enabled → I and Q carry separate headphone channels.
+    // Disabled (default) → dual-mono (Q copies I).
+    // From Thetis Project Files/Source/Console/radio.cs:1145-1162
+    //   Thetis default bin_on = false
+    // WDSP: third_party/wdsp/src/patchpanel.c:187
+    bool binauralEnabled() const { return m_binauralEnabled.load(); }
+    void setBinauralEnabled(bool enabled);
+
     // --- Frequency shift (for pan offset from VFO) ---
 
     void setShiftFrequency(double offsetHz);
@@ -198,6 +222,12 @@ private:
     // fmsq: FM squelch — off by default
     // From Thetis radio.cs:1312 — rx_fm_squelch_on default = false
     std::atomic<bool> m_fmsqEnabled{false};
+    // muted: audio panel mute — off by default (panel runs)
+    // From Thetis Project Files/Source/Console/dsp.cs:393-394
+    std::atomic<bool> m_muted{false};
+    // binauralEnabled: binaural audio — off by default (dual-mono)
+    // From Thetis radio.cs:1145-1162 — bin_on = false
+    std::atomic<bool> m_binauralEnabled{false};
     std::atomic<bool> m_active{false};
 
     // AGC advanced parameters — atomic for thread-safe reads from audio thread

@@ -222,6 +222,13 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 rxCh->setAmsqThresh(m_activeSlice->amsqThresh());
                 rxCh->setFmsqEnabled(m_activeSlice->fmsqEnabled());
                 rxCh->setFmsqThresh(m_activeSlice->fmsqThresh());
+                // Audio panel initial push
+                // Mute: From Thetis dsp.cs:393-394 — panel runs by default (unmuted)
+                // Pan: From Thetis radio.cs:1386 — pan = 0.5f (center); NereusSDR 0.0 center
+                // Binaural: From Thetis radio.cs:1145 — bin_on = false (dual-mono)
+                rxCh->setMuted(m_activeSlice->muted());
+                rxCh->setAudioPan(m_activeSlice->audioPan());
+                rxCh->setBinauralEnabled(m_activeSlice->binauralEnabled());
             }
             rxCh->setActive(true);
         }
@@ -574,6 +581,29 @@ void RadioModel::wireSliceSignals()
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setFmsqThresh(dB);
+        }
+    });
+
+    // Audio panel — mute / pan / binaural → WDSP PatchPanel
+    // From Thetis Project Files/Source/Console/radio.cs:1386-1403 (pan)
+    // From Thetis Project Files/Source/Console/radio.cs:1145-1162 (binaural)
+    // WDSP: third_party/wdsp/src/patchpanel.c:126,159,187
+    connect(slice, &SliceModel::mutedChanged, this, [this](bool v) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setMuted(v);
+        }
+    });
+    connect(slice, &SliceModel::audioPanChanged, this, [this](double pan) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setAudioPan(pan);
+        }
+    });
+    connect(slice, &SliceModel::binauralEnabledChanged, this, [this](bool v) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setBinauralEnabled(v);
         }
     });
 

@@ -511,6 +511,65 @@ void RxChannel::setFmsqThresh(double dB)
 }
 
 // ---------------------------------------------------------------------------
+// Audio panel — mute / pan / binaural
+// ---------------------------------------------------------------------------
+
+void RxChannel::setMuted(bool muted)
+{
+    if (muted == m_muted.load()) {
+        return;
+    }
+
+    m_muted.store(muted);
+
+#ifdef HAVE_WDSP
+    // Mute → run=0 (panel disabled), unmute → run=1 (panel enabled).
+    // From Thetis Project Files/Source/Console/dsp.cs:393-394 — P/Invoke decl
+    // WDSP: third_party/wdsp/src/patchpanel.c:126
+    SetRXAPanelRun(m_channelId, muted ? 0 : 1);
+#else
+    Q_UNUSED(muted);
+#endif
+}
+
+void RxChannel::setAudioPan(double pan)
+{
+#ifdef HAVE_WDSP
+    // Convert NereusSDR -1.0..+1.0 to WDSP 0.0..1.0:
+    //   wdsp_pan = (nereus_pan + 1.0) / 2.0
+    //   -1.0 → 0.0 (full left), 0.0 → 0.5 (center), +1.0 → 1.0 (full right)
+    // WDSP applies sin-law: gain2I = sin(pan*PI), gain2Q = 1 when pan>0.5
+    // From Thetis Project Files/Source/Console/radio.cs:1386-1403
+    //   default pan = 0.5f (center in WDSP 0..1 scale → NereusSDR 0.0)
+    // WDSP: third_party/wdsp/src/patchpanel.c:159
+    const double wdspPan = (pan + 1.0) / 2.0;
+    SetRXAPanelPan(m_channelId, wdspPan);
+#else
+    Q_UNUSED(pan);
+#endif
+}
+
+void RxChannel::setBinauralEnabled(bool enabled)
+{
+    if (enabled == m_binauralEnabled.load()) {
+        return;
+    }
+
+    m_binauralEnabled.store(enabled);
+
+#ifdef HAVE_WDSP
+    // bin=1 → copy=0 → binaural (I/Q separate headphone stereo image)
+    // bin=0 → copy=1 → dual-mono (Q := I, same audio on both channels)
+    // From Thetis Project Files/Source/Console/radio.cs:1145-1162
+    //   default bin_on = false → dual-mono
+    // WDSP: third_party/wdsp/src/patchpanel.c:187
+    SetRXAPanelBinaural(m_channelId, enabled ? 1 : 0);
+#else
+    Q_UNUSED(enabled);
+#endif
+}
+
+// ---------------------------------------------------------------------------
 // Frequency shift (pan offset from VFO)
 // ---------------------------------------------------------------------------
 

@@ -86,9 +86,23 @@ void RXANBPSetShiftFrequency(int channel, double shift);
 // Patch panel (patchpanel.h) — final mix stage in RXA pipeline
 // ---------------------------------------------------------------------------
 
+// Enable/disable the audio panel (mute when run=0, unmute when run=1).
+// From Thetis Project Files/Source/Console/dsp.cs:393-394 — P/Invoke decl
+// WDSP: third_party/wdsp/src/patchpanel.c:126
+void SetRXAPanelRun(int channel, int run);
+
+// Set stereo pan position. pan=0.0 → full left, pan=0.5 → center, pan=1.0 → full right.
+// WDSP applies sin-law panning: adjusts gain2I/gain2Q via sin(pan*PI).
+// NereusSDR uses -1..+1 range; convert with wdsp_pan = (nereus_pan + 1.0) / 2.0.
+// From Thetis Project Files/Source/Console/radio.cs:1386-1403
+//   pan default = 0.5f (center), dsp.cs:402-403 P/Invoke decl
+// WDSP: third_party/wdsp/src/patchpanel.c:159
+void SetRXAPanelPan(int channel, double pan);
+
 // bin=0 → copy=1 → dual mono (Q := I, same audio on both channels)
 // bin=1 → copy=0 → binaural (I and Q separate, for headphone stereo image)
 // From Thetis radio.cs:1157 — Thetis default BinOn=false → dual mono
+// WDSP: third_party/wdsp/src/patchpanel.c:187
 void SetRXAPanelBinaural(int channel, int bin);
 
 // ---------------------------------------------------------------------------

@@ -447,7 +447,7 @@ void VfoWidget::buildAudioTab()
         m_panSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
-        m_panSlider->setToolTip(QStringLiteral("Audio pan — not yet implemented"));
+        m_panSlider->setToolTip(QStringLiteral("Audio pan: left/right stereo balance (−100 = full left, 0 = center, +100 = full right)\nFrom Thetis radio.cs:1386 — WDSP patchpanel.c:159"));
         row->addWidget(m_panSlider);
 
         m_panLabel = new QLabel(QStringLiteral("0"), audioWidget);
@@ -463,7 +463,6 @@ void VfoWidget::buildAudioTab()
             }
         });
         audioLayout->addLayout(row);
-        NyiOverlay::markNyi(m_panSlider, QStringLiteral("phase3g10-stage2"));
     }
 
     // 4. Mute + BIN row (NYI)
@@ -474,13 +473,13 @@ void VfoWidget::buildAudioTab()
         m_muteBtn = new QPushButton(QStringLiteral("Mute"), audioWidget);
         m_muteBtn->setCheckable(true);
         m_muteBtn->setStyleSheet(kDspToggle);
-        m_muteBtn->setToolTip(QStringLiteral("Mute — not yet implemented"));
+        m_muteBtn->setToolTip(QStringLiteral("Mute RX audio output (SetRXAPanelRun)\nFrom Thetis dsp.cs:393 — WDSP patchpanel.c:126"));
         row->addWidget(m_muteBtn);
 
         m_binBtn = new QPushButton(QStringLiteral("BIN"), audioWidget);
         m_binBtn->setCheckable(true);
         m_binBtn->setStyleSheet(kDspToggle);
-        m_binBtn->setToolTip(QStringLiteral("Binaural audio — not yet implemented"));
+        m_binBtn->setToolTip(QStringLiteral("Binaural audio: I/Q channels separate for headphone stereo image (SetRXAPanelBinaural)\nFrom Thetis radio.cs:1145 — WDSP patchpanel.c:187"));
         row->addWidget(m_binBtn);
 
         row->addStretch();
@@ -496,8 +495,6 @@ void VfoWidget::buildAudioTab()
             }
         });
         audioLayout->addLayout(row);
-        NyiOverlay::markNyi(m_muteBtn, QStringLiteral("phase3g10-stage2"));
-        NyiOverlay::markNyi(m_binBtn,  QStringLiteral("phase3g10-stage2"));
     }
 
     // 5. Squelch row — SQL toggle + SQL threshold slider (NYI)
