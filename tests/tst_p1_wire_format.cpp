@@ -101,6 +101,66 @@ private slots:
         QCOMPARE(int((out[0] >> 1) & 0x7F), 0x02);
     }
 
+    void rxFrequencyC0AddressForRx1() {
+        quint8 out[5] = {};
+        P1RadioConnection::composeCcBankRxFreq(out, 1, 14200000);
+        // Source: networkproto1.c:498 — case 3: C0 |= 6 → address = 6>>1 = 0x03
+        QCOMPARE(int((out[0] >> 1) & 0x7F), 0x03);
+    }
+
+    void rxFrequencyC0AddressForRx2() {
+        quint8 out[5] = {};
+        P1RadioConnection::composeCcBankRxFreq(out, 2, 14200000);
+        // Source: networkproto1.c:526 — case 5: C0 |= 0x08 → address = 0x08>>1 = 0x04
+        QCOMPARE(int((out[0] >> 1) & 0x7F), 0x04);
+    }
+
+    void rxFrequencyC0AddressForRx3() {
+        quint8 out[5] = {};
+        P1RadioConnection::composeCcBankRxFreq(out, 3, 14200000);
+        // Source: networkproto1.c:539 — case 6: C0 |= 0x0A → address = 0x0A>>1 = 0x05
+        QCOMPARE(int((out[0] >> 1) & 0x7F), 0x05);
+    }
+
+    void rxFrequencyC0AddressForRx4() {
+        quint8 out[5] = {};
+        P1RadioConnection::composeCcBankRxFreq(out, 4, 14200000);
+        // Source: networkproto1.c:549 — case 7: C0 |= 0x0C → address = 0x0C>>1 = 0x06
+        QCOMPARE(int((out[0] >> 1) & 0x7F), 0x06);
+    }
+
+    void rxFrequencyC0AddressForRx5() {
+        quint8 out[5] = {};
+        P1RadioConnection::composeCcBankRxFreq(out, 5, 14200000);
+        // Source: networkproto1.c:~560 — case 8: C0 |= 0x0E → address = 0x0E>>1 = 0x07
+        QCOMPARE(int((out[0] >> 1) & 0x7F), 0x07);
+    }
+
+    void rxFrequencyC0AddressForRx6() {
+        quint8 out[5] = {};
+        P1RadioConnection::composeCcBankRxFreq(out, 6, 14200000);
+        // Source: networkproto1.c:569 — case 9: C0 |= 0x10 → address = 0x10>>1 = 0x08
+        QCOMPARE(int((out[0] >> 1) & 0x7F), 0x08);
+    }
+
+    void rxFrequencyAddressesAreAllDistinct() {
+        // Bug guard: the 7 DDC NCO banks must each emit a different C0 byte,
+        // else the round-robin collides two banks onto one bus slot.
+        quint8 bytes[7] = {};
+        for (int i = 0; i < 7; ++i) {
+            quint8 out[5] = {};
+            P1RadioConnection::composeCcBankRxFreq(out, i, 14200000);
+            bytes[i] = out[0];
+        }
+        for (int a = 0; a < 7; ++a) {
+            for (int b = a + 1; b < 7; ++b) {
+                QVERIFY2(bytes[a] != bytes[b],
+                    qPrintable(QString("kRxC0Address[%1]==kRxC0Address[%2]==0x%3")
+                        .arg(a).arg(b).arg(bytes[a], 2, 16, QChar('0'))));
+            }
+        }
+    }
+
     void txFrequencyEncodedBigEndian32() {
         quint8 out[5] = {};
         quint64 freqHz = 7100000ULL;

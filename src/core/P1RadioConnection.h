@@ -16,6 +16,7 @@
 
 #include <QUdpSocket>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QDateTime>
 #include <vector>
 
@@ -74,6 +75,7 @@ public slots:
 private slots:
     void onReadyRead();
     void onWatchdogTick();
+    void onEp2PacerTick();
     void onReconnectTimeout();
 
 private:
@@ -131,7 +133,10 @@ private:
     // --- State ---
     QUdpSocket* m_socket{nullptr};
     QTimer*     m_watchdogTimer{nullptr};
-    QTimer*     m_reconnectTimer{nullptr};
+    QTimer*       m_ep2PacerTimer{nullptr};
+    QElapsedTimer m_ep2PacerClock;
+    qint64        m_ep2PacketsSent{0};
+    QTimer*       m_reconnectTimer{nullptr};
 
     bool        m_running{false};
     bool        m_intentionalDisconnect{false};
@@ -144,12 +149,27 @@ private:
     bool        m_parseFailLogged{false};                       // diagnostic: log once if first ep6 parse fails
     bool        m_firstEmitLogged{false};                       // diagnostic: log once on first iqDataReceived emit
     int         m_reconnectAttempts{0};                         // how many retries so far this cycle
-    // 25 ms (= 40 fps) is enough to keep the radio's ep2 command pipe fed
-    // without matching Thetis's full ~368 fps audio-drain cadence. Each tick
-    // sends one ep2 command frame containing two subframes, each carrying the
-    // next bank in the 0-16 (or 0-17 for AnvelinaPro3) round-robin. At 40 fps
-    // × 2 banks/frame, all 17 banks are refreshed every ~213 ms.
-    static constexpr int kWatchdogTickMs       = 25;            // watchdog + ep2 command cadence
+    // 25 ms watchdog tick for silence detection only. EP2 pacing has moved
+    // to m_ep2PacerTimer (kEp2PacerIntervalMs) — see onEp2PacerTick.
+    static constexpr int kWatchdogTickMs       = 25;            // watchdog silence-detection cadence
+    // EP2 send cadence — target 381 pps (48 kHz audio / 126 samples per
+    // EP2 frame) to match Thetis' sendProtocol1Samples semaphore-driven
+    // audio clock. 2 ms PreciseTimer yields ~350-500 pps on Windows under
+    // normal scheduling jitter. Source: networkproto1.c:700-747.
+    static constexpr int kEp2PacerIntervalMs  = 2;
+
+    // Spec rate: 48000 samples/s / 126 samples per EP2 packet = 380.95 pps
+    //   → one packet every 2625 microseconds. Integer math keeps the catch-up
+    //   loop simple and exact. Source: networkproto1.c:700-747 (48 kHz audio
+    //   clock on sendProtocol1Samples).
+    static constexpr qint64 kEp2PacketIntervalUs = 2625;
+
+    // Safety cap on bursts per tick. Under normal Windows scheduling the
+    // pacer fires every 10-15 ms, so a typical catch-up burst is 4-6 packets.
+    // This cap protects against pathological scheduler stalls where a single
+    // tick covers 100+ ms; without it one tick could dump 40+ packets into
+    // the socket and overrun the radio's UDP receive buffer.
+    static constexpr int kEp2MaxBurstPerTick = 16;
     static constexpr int kWatchdogSilenceMs    = 2000;          // silence → Error threshold
     static constexpr int kReconnectIntervalMs  = 5000;          // delay between retry attempts
     static constexpr int kMaxReconnectAttempts = 3;             // max retries before staying in Error
