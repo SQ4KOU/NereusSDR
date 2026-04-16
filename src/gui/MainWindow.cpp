@@ -359,6 +359,22 @@ void MainWindow::buildUI()
         }
     });
 
+    // Clarity ↔ overlay panel: badge + Re-tune button (wired after
+    // m_overlayPanel creation in buildUI, which runs before this point).
+    if (m_overlayPanel) {
+        connect(m_clarityController, &ClarityController::waterfallThresholdsChanged,
+                m_overlayPanel, [this](float, float) {
+            m_overlayPanel->setClarityStatus(/*active=*/true, /*paused=*/false);
+        });
+        connect(m_clarityController, &ClarityController::pausedChanged,
+                m_overlayPanel, [this](bool paused) {
+            bool enabled = m_clarityController->isEnabled();
+            m_overlayPanel->setClarityStatus(enabled, paused);
+        });
+        connect(m_overlayPanel, &SpectrumOverlayPanel::clarityRetuneRequested,
+                m_clarityController, &ClarityController::retuneNow);
+    }
+
     // Wire: zoom changes → adjust FFT size for appropriate bin resolution
     // Target: ~500-1000 bins across the visible bandwidth for good detail
     connect(m_spectrumWidget, &SpectrumWidget::bandwidthChangeRequested,
