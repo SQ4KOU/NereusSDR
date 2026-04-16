@@ -40,6 +40,7 @@ public:
     bool isEnabled() const noexcept     { return m_enabled;     }
     bool isPaused() const noexcept      { return m_paused;      }
     bool isTransmitting() const noexcept{ return m_transmitting;}
+    float smoothedFloor() const noexcept{ return m_smoothedFloor;}
 
     // Last emitted thresholds (qQNaN() before any emission).
     float lastLow() const noexcept  { return m_lastLow;  }
