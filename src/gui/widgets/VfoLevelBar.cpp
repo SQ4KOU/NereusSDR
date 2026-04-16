@@ -25,7 +25,7 @@ void VfoLevelBar::paintEvent(QPaintEvent*) {
     const int tickH = 8;
 
     // ── dBm readout width reservation ──────────────────────────────────
-    static constexpr int kDbmWidth = 42;
+    static constexpr int kDbmWidth = 52;
     const int barW = width() - kDbmWidth - 2;
 
     // ── Tick strip above the bar ───────────────────────────────────────
