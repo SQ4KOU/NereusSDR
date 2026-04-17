@@ -558,10 +558,14 @@ install(TARGETS NereusSDR
 )
 
 # Bundle third-party license notices + NereusSDR's LICENSE into release artifacts.
+# LICENSE-DUAL-LICENSING is shipped alongside LICENSE because Thetis maintains
+# both at project root and GPL §1 "keep intact all notices that refer to this
+# License" extends to every license-related file upstream, not only the main
+# LICENSE text. A binary recipient obtaining the source is owed both files.
 install(DIRECTORY packaging/third-party-licenses/
         DESTINATION share/doc/nereussdr/licenses
         COMPONENT licenses)
-install(FILES LICENSE
+install(FILES LICENSE LICENSE-DUAL-LICENSING
         DESTINATION share/doc/nereussdr
         COMPONENT licenses)
 
