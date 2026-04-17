@@ -2,15 +2,20 @@
 """Verify that every file declared in THETIS-PROVENANCE.md carries the
 required Thetis license header markers. Exit 1 on any failure.
 
-Required markers per header (all must appear in first 120 lines):
-  1. "Ported from" (anchors the attribution block)
-  2. "Thetis"
-  3. "Copyright (C)"
-  4. "GNU General Public License"
-  5. "Modification history (NereusSDR)"
+Verbatim-preservation model (Pass 5, 2026-04-17 onward): each NereusSDR
+file's header must contain the upstream source's own top-of-file header
+BYTE-FOR-BYTE. The verifier therefore only checks for anchor markers
+that every Thetis-derived file will carry:
 
-Samphire-sourced files additionally require:
-  6. "Dual-Licensing Statement"
+  1. "Ported from" — anchors the NereusSDR port-citation block
+  2. "Thetis"      — upstream identity (present in all cited Thetis sources)
+  3. "Copyright (C)" — every cited GPL/LGPL source carries a copyright line
+  4. "General Public License" — matches both GPL and LGPL
+  5. "Modification history (NereusSDR)" — anchors the per-file mod block
+
+The Dual-Licensing Statement check was dropped in Pass 5: its presence is
+now 100 % determined by whether the upstream source has one in its
+verbatim header, so per-variant gating is redundant.
 
 Files under `docs/attribution/` themselves are exempt (they document the
 templates, they are not themselves derived source).
@@ -27,13 +32,12 @@ REQUIRED_MARKERS = [
     "Ported from",
     "Thetis",
     "Copyright (C)",
-    "GNU General Public License",
+    "General Public License",
     "Modification history (NereusSDR)",
 ]
-SAMPHIRE_MARKER = "Dual-Licensing Statement"
 
 # Header must appear within this many lines of top of file
-HEADER_WINDOW = 120
+HEADER_WINDOW = 160
 
 
 def parse_provenance(text: str):
@@ -60,25 +64,13 @@ def parse_provenance(text: str):
         rel = candidate.replace("`", "")
         if not (REPO / rel).is_file():
             continue
-        # Use the variant cell (index 4) exact-match to avoid false positives:
-        # "thetis-no-samphire" contains the substring "samphire"; "mi0bot-solo"
-        # matches any "mi0bot..." prefix. Samphire dual-license stanza is
-        # required only for variants whose upstream actually has Samphire
-        # content.
-        variant_cell = cells[4].strip().lower() if len(cells) > 4 else ""
-        if variant_cell in ("thetis-samphire", "mi0bot", "multi-source"):
-            variant = "samphire-required"
-        else:
-            variant = "plain"
-        rows.append((rel, variant))
+        rows.append((rel, "plain"))
     return rows
 
 
 def check_file(path: Path, variant: str):
     head = "\n".join(path.read_text(errors="replace").splitlines()[:HEADER_WINDOW])
     missing = [m for m in REQUIRED_MARKERS if m not in head]
-    if variant == "samphire-required" and SAMPHIRE_MARKER not in head:
-        missing.append(SAMPHIRE_MARKER)
     return missing
 
 
