@@ -26,15 +26,17 @@ the font credit does not propagate to this derivative work.
 
 | File | Origin | Author | License | Added |
 | --- | --- | --- | --- | --- |
-| `ananMM.png` | Original NereusSDR artwork, hand-designed by J.J. Boyd (KG4VCF). 1360×768 PNG drawn from scratch for NereusSDR; no ANAN / Apache Labs / OE3IDE bitmap was copied, traced, or otherwise derived; no Ernst-style (Digital-7) typography is used. | J.J. Boyd (KG4VCF) | GPL-2.0-or-later | 2026-04-17 |
-| `cross-needle.png` | Original NereusSDR artwork, hand-designed by J.J. Boyd (KG4VCF). 1104×928 PNG. Prior to the compliance remediation this file was a byte-identical placeholder copy of `ananMM.png` (commit `84f77e8`, 2026-04-11); the placeholder was never shipped in a release and has been replaced with wholly original artwork. No Thetis / OE3IDE skin image was copied or derived. | J.J. Boyd (KG4VCF) | GPL-2.0-or-later | 2026-04-17 |
-| `cross-needle-bg.png` | Original NereusSDR artwork, hand-designed by J.J. Boyd (KG4VCF). 1104×928 PNG, same source as `cross-needle.png`; the two files exist so the rendering code's two-layer image path continues to function. | J.J. Boyd (KG4VCF) | GPL-2.0-or-later | 2026-04-17 |
+| `ananMM.png` | Original NereusSDR artwork designed by J.J. Boyd (KG4VCF) using AI image-generation tooling. 1360×768 PNG produced specifically for NereusSDR; no ANAN / Apache Labs / OE3IDE bitmap was used as input, reference, or training material; no Ernst-style (Digital-7) typography is present. | J.J. Boyd (KG4VCF) | GPL-2.0-or-later | 2026-04-17 |
+| `cross-needle.png` | Original NereusSDR artwork designed by J.J. Boyd (KG4VCF) using AI image-generation tooling. 1104×928 PNG. Prior to the compliance remediation this file was a byte-identical placeholder copy of `ananMM.png` (commit `84f77e8`, 2026-04-11); the placeholder was never shipped in a release and has been replaced with this original artwork. No Thetis / OE3IDE skin image was used as input or reference. | J.J. Boyd (KG4VCF) | GPL-2.0-or-later | 2026-04-17 |
+| `cross-needle-bg.png` | Original NereusSDR artwork designed by J.J. Boyd (KG4VCF) using AI image-generation tooling. 1104×928 PNG, same source as `cross-needle.png`; the two files exist so the rendering code's two-layer image path continues to function. | J.J. Boyd (KG4VCF) | GPL-2.0-or-later | 2026-04-17 |
 
 ### Source artwork files
 
-The original hand-designed JPG masters from which the shipping PNGs
-were exported are committed alongside for reference and for direct
-byte-for-byte inspection:
+The JPG masters from which the shipping PNGs were exported are
+committed alongside for reference and direct byte-for-byte inspection.
+Both were designed by J.J. Boyd (KG4VCF) using AI image-generation
+tooling, specifically for NereusSDR; neither derives from, references,
+or reproduces any ANAN / Apache Labs / OE3IDE / Thetis-skin asset:
 
 - `docs/attribution/source-artwork/NereusMeter.jpg` — 1360×768 JPG master for `ananMM.png`
 - `docs/attribution/source-artwork/NereusMeter-Dual.jpg` — 1104×928 JPG master for `cross-needle.png` and `cross-needle-bg.png`
@@ -48,9 +50,9 @@ exact shipping PNG byte-for-byte.
 
 Interim programmatic generators (`tools/generate-meter-face.py`,
 `tools/generate-cross-needle.py`) were used during the compliance sweep
-before the hand-designed artwork was final. They have been removed
-from the repository now that the hand-designed artwork is in place;
-the shipping artwork above is authoritative.
+before the AI-designed artwork was final. They have been removed from
+the repository now that the AI-designed artwork is in place; the
+shipping artwork above is authoritative.
 
 ---
 

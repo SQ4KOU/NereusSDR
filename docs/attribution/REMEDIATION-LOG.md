@@ -235,4 +235,16 @@ Both of these are now part of the release pipeline and will stay consistent auto
 
 ---
 
+## 2026-04-17 — ASSETS.md mischaracterized AI-generated meter artwork as "hand-designed"
+
+**Discovered by:** J.J. Boyd (maintainer self-review while reading the branch on GitHub)
+**Reported via:** Direct notice to assistant
+**Affected files:** `docs/attribution/ASSETS.md` (6 mentions across the `resources/meters/` section)
+**Gap:** ASSETS.md described `ananMM.png`, `cross-needle.png`, `cross-needle-bg.png`, and the JPG masters under `docs/attribution/source-artwork/` as "hand-designed by J.J. Boyd." The artwork was actually designed by J.J. Boyd using AI image-generation tooling. The description was inaccurate and conflicted with the broader compliance posture of disclosing AI-assisted work explicitly (compare the per-file source-code Modification-History blocks that read "AI-assisted transformation via Anthropic Claude Code").
+**Root cause:** When the user supplied the final JPG masters (`NereusMeter.jpg` / `NereusMeter-Dual.jpg`) during Task 12's artwork swap, the commit that swapped them in described the artwork as "hand-designed" — the assistant carried that phrasing into ASSETS.md without confirming the generation method. Richie's formal notice §7 already flagged AI-assisted development as a disclosure requirement, so the omission was a missed opportunity to be transparent by default.
+**Fix:** Commit `<pending>` — rewrote the three `resources/meters/` table rows and the "Source artwork files" prose to describe the artwork as "Original NereusSDR artwork designed by J.J. Boyd (KG4VCF) using AI image-generation tooling" and tightened the non-derivation claim ("no ANAN / Apache Labs / OE3IDE bitmap was used as input, reference, or training material"). Removed "drawn from scratch" language that conflicted with the AI-tool disclosure.
+**Process improvement:** When the user supplies artwork or content during a task, confirm the generation method explicitly before writing the attribution prose. "Hand-designed" / "drawn" / "composed" are factual claims — ask if unsure.
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
