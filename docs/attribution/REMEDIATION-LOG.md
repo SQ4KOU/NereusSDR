@@ -170,4 +170,33 @@ unaudited until the Phase 4 deep-dive.
 
 ---
 
+## 2026-04-17 — AetherSDR provenance audit (Phase 4 Task 25)
+
+**Discovered by:** Internal Phase 4 deep-dive — the three earlier passes had audited only Thetis / mi0bot derivation. ~170 Modification-History blocks in the compliance-branch tree cited AetherSDR (ten9876/AetherSDR) as the structural template, but AetherSDR itself had never been checked. Direct parallel to the original Thetis omission Richie flagged.
+**Reported via:** Self-initiated Phase 4 audit
+**Affected files:** 176 NereusSDR files (142 source + 18 tests + 16 with only inline AetherSDR references)
+**Gaps:**
+
+1. **AetherSDR attribution missing where the derivation is real.** 33 NereusSDR files genuinely port an AetherSDR counterpart (SpectrumWidget, VfoWidget + mode containers, RadioModel/SliceModel/PanadapterModel, MainWindow signal-routing hub, ConnectionPanel, FloatingContainer/ContainerManager, AudioEngine, etc.) — these carried no AetherSDR Copyright line until now.
+2. **False AetherSDR citations.** 126 files claimed "Structural template follows AetherSDR (ten9876/AetherSDR) Qt6 conventions" in their Modification-History block but have no actual AetherSDR counterpart — they are Thetis-derived or NereusSDR-native. Over-attribution.
+3. **Mixed-lineage files under-cited.** 10-12 files genuinely have both Thetis and AetherSDR contributions (pattern-inspired) but the citation was unspecific.
+
+**Root cause:**
+- Task 25a audit found AetherSDR has **zero per-file copyright headers** — all attribution is centralised in the LICENSE file and About dialog (primary author Jeremy/KK7GWY). Because there was no per-file source-verbatim mandate (nothing to "keep intact" at the file level), Phase 1's templates didn't know how to attribute AetherSDR and defaulted to either the generic boilerplate (overused) or omission (underused).
+- AetherSDR is GPLv3 (full compatibility with NereusSDR root) — no license incompatibility; just an attribution gap.
+
+**Fix (4 commits):**
+- `e1c95ec` — Task 25a: `docs/attribution/aethersdr-contributor-index.md` — upstream survey catalogues the 235 AetherSDR sources, confirms Jeremy/KK7GWY primary authorship, GPLv3 licensing, and no per-file headers
+- `4fff136` — Task 25b: `docs/attribution/aethersdr-reconciliation.md` — per-file classification (A/B/C/D buckets)
+- `d9f9e79` — Task 25c commit A: add AetherSDR Copyright line to 33 genuine-derivation files
+- `aed081a` — Task 25c commit B: remove false boilerplate AetherSDR line from 126 files
+- `7c041bf` — Task 25c commit C: tighten AetherSDR citation on 10 mixed-lineage files (specific counterparts named)
+- `e0142e6` — Task 25c commit D: defer 5 files to human review (MainWindow.h/.cpp have no formal port header, WdspEngine/AboutDialog test files are incidental)
+
+**Process improvement:**
+- Upstream projects with no per-file headers still need an attribution decision documented at the project level — `HEADER-TEMPLATES.md` now has guidance for AetherSDR-derived work (project-level reference only, not per-file header mirroring).
+- Lesson: any future upstream dependency audit should first check whether upstream has per-file headers before deciding on the form of preservation. A project-level LICENSE + central About attribution is the minimum strong reference when per-file headers don't exist.
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
