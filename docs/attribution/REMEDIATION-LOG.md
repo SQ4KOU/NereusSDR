@@ -103,4 +103,71 @@ Reporting a new omission? See
 
 ---
 
+## 2026-04-17 — Phase 4 deep-audit pass (Tasks 24, 26, 27, 30, 31)
+
+**Discovered by:** Internal deep-dive review after third pass
+**Reported via:** Self-initiated Phase 4 audit covering GPL notice completeness, non-Thetis upstream provenance, binary-level surfaces, and process hardening
+**Gaps addressed in this wave:**
+
+1. **Permission-notice 3rd paragraph missing** (GPL §1 "keep intact") —
+   Phase 1's templates included only paragraphs 1–2 of the standard GPL
+   permission notice. Paragraph 3 ("You should have received a copy…")
+   was omitted across ~170 derivative files; only `Hl2IoBoardTab.*`
+   (hand-written verbatim from `IoBoardHl2.cs`) had the full form.
+   Task 24a audit of the 27 cited Thetis sources found 60/40 variance
+   between old (59 Temple Place) and current (51 Franklin Street) FSF
+   addresses. Picked the current FSF-canonical form for tree-wide
+   consistency (documented decision, not an arbitrary pick). Fix:
+   commit `d53976c` — 169 files updated + 4 templates extended; 2 files
+   (Hl2IoBoardTab.cpp/.h) preserved verbatim from source (59 Temple
+   Place) as a documented source-verbatim exception.
+
+2. **WDSP license specificity unverified** — `third_party/wdsp/` had
+   never been grepped to confirm GPLv2-or-later vs v2-only. If v2-only,
+   our GPLv3 wrappers would have been incompatible. Task 26 survey:
+   128/138 files GPLv2-or-later, zero v2-only, 10 files no header
+   (data tables / generated). Fully compatible with root GPLv3
+   distribution. Documented in `docs/attribution/WDSP-PROVENANCE.md`.
+   Fix: commit `0e8ef76`.
+
+3. **Style-7 / Digital-7 font credit** — Thetis `console.cs` credits
+   Sizenko Alexander / Style-7 for the Digital-7 font. If NereusSDR
+   used the font, the credit would need to propagate. Task 27 grep:
+   zero hits for font name/author; zero `.ttf`/`.otf` files. Font is
+   not used. Documented absence in `docs/attribution/ASSETS.md` so
+   the attribution record is explicit. Fix: commit `1c1e664`.
+
+4. **CI verifier not enforced** — `scripts/verify-thetis-headers.py`
+   ran only via manual invocation. Any PR could introduce a ported
+   file without a proper header and nothing would catch it until the
+   next manual sweep. Task 30 wired the verifier into the Ubuntu job
+   of `.github/workflows/ci.yml`, runs post-checkout and pre-compile
+   so failures happen fast. Fix: commit `0088a0a`.
+
+5. **No reverse-sync check between tree and PROVENANCE** — tree could
+   drift out of sync with `THETIS-PROVENANCE.md` (file renamed or new
+   port added without updating PROVENANCE). Task 31 added
+   `scripts/verify-provenance-sync.py` — detects files with "Ported
+   from Thetis" marker not listed in PROVENANCE, and PROVENANCE rows
+   pointing to files no longer on disk. Current tree: 148/148 clean.
+   Fix: commit `acf85d7`.
+
+**Root cause (shared across #1–#3):** Phase 1's audit was scoped to
+contributor-identity and per-file header presence. Ancillary
+completeness questions (full permission notice, third-party license
+specifics, font credits) were not part of that scope and remained
+unaudited until the Phase 4 deep-dive.
+
+**Process improvements:**
+- Task 30: CI now catches missing-header regressions at PR time.
+- Task 31: CI can also catch PROVENANCE drift (wiring into CI will
+  happen alongside Task 30's follow-up).
+- Task 26: WDSP-PROVENANCE.md now serves as reference for the
+  third_party upstream we incorporate by vendoring.
+- Phase 4 plan in `docs/architecture/2026-04-17-gpl-compliance-remediation-plan.md`
+  documents the remaining Phase 4 tasks (AetherSDR audit at Task 25,
+  binary metadata at Task 28, third-party license bundle at Task 29).
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
