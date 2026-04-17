@@ -247,4 +247,38 @@ Both of these are now part of the release pipeline and will stay consistent auto
 
 ---
 
+## 2026-04-17 — Pass 5: strict verbatim header rewrite per MW0LGE feedback
+
+**Discovered by:** Richard Samphire (MW0LGE), Thetis principal contributor
+**Reported via:** Discord message providing an explicit FFTEngine.cpp template and the rule "the text and licence must remain exactly the same as they are in Thetis ... nothing in the licence or attribution text should be changed in any way"
+**Affected files:** 169 derivative files across `src/` and `tests/` (the full PROVENANCE derivative-table inventory minus the 2 `Hl2IoBoardTab.*` files already in correct form from Phase 3)
+**Gap:** Phases 1–4 built headers using a 5-variant templated system with normalized contributor lists. Richie's strict reading of GPL §1 ("keep intact all the notices") requires each source file's header to be copied byte-for-byte, not extracted/paraphrased/normalized. Specifically:
+- Our "Original Thetis copyright and license (preserved per GNU GPL)" wrapper prose — our paraphrase, not source text
+- Extracted copyright lines reassembled into a canonical order — not how source presented them
+- Phase 2's added contributor-union lines (W2PA/G8NJJ/NR0V/WD5Y/W4WMT/KD5TFD) in file headers — those contributors appear in inline body markers in Thetis source, not in the file-header copyright block; they did not belong in our copyright block
+- Phase 4 Task 24's "51 Franklin Street" FSF-address normalization — substituted current address for the address each source actually uses (many use "59 Temple Place")
+- Paraphrased "Dual-Licensing Statement (applies ONLY to Richard Samphire MW0LGE's contributions — preserved verbatim from Thetis LICENSE-DUAL-LICENSING):" intro wrapper — our words, not source's; the source's dual-license statement has its own ASCII-box formatting that was flattened
+- Stripped FlexRadio postal-address block, VK6APH Waterfall AGC mod line, MW0LGE "Transitions to directX" line from headers — all present in display.cs source but dropped from our `FFTEngine.cpp` header
+
+**Root cause:** Early Phase 1 design prioritized consistency and readability across the tree over strict source fidelity. The templating approach inherently normalizes; verbatim preservation refuses normalization. We read GPL §1 as "preserve the notice's substance" when Richie's reading (and the strict textual reading) is "preserve the notice's characters."
+
+**Fix (4 commits):**
+- `74001f0` — new `scripts/rewrite-verbatim-headers.py` + `git rm` of obsolete `HEADER-TEMPLATES.md` and `scripts/insert-thetis-headers.py`
+- `1a63dbc` — mass rewrite of 169 derivative files: NereusSDR port-citation block + NereusSDR Modification-History block + full verbatim Thetis (or mi0bot/Thetis-HL2) source header(s), stacked for multi-source files
+- `0eaa91d` — verifier classifier tightened: dropped per-variant Samphire dual-license gate (verbatim preservation means it appears iff the source had it; no mismatch possible); widened "GNU General Public License" to "General Public License" to accept LGPL upstream files (networkproto1.c etc.)
+- `11d964b` — new `docs/attribution/HOW-TO-PORT.md` documenting the verbatim-preservation rule for future ports
+
+**Process improvement:**
+- `HEADER-TEMPLATES.md` is gone. The rule is now "copy the source's header verbatim; do not template."
+- `HOW-TO-PORT.md` is the canonical reference for how to port a file: copy the upstream source header byte-for-byte, prepend NereusSDR port-citation + Modification-History blocks, nothing else.
+- Future AI-assisted ports that hit the CLAUDE.md source-first protocol are told explicitly to preserve verbatim, not extract-and-reassemble.
+- A second pass (Pass 6) is queued to preserve inline mod attributions at block-level within ported code bodies — the `//-W2PA` / `//MW0LGE [x.y.z]` / `// added G8NJJ for X` markers that sit inline in Thetis source and attach to specific functions or blocks. Pass 5 covers file-header preservation; Pass 6 covers per-part preservation.
+
+**Spot-check results (5 files byte-for-byte against sources):**
+`FFTEngine.cpp` (vs display.cs, 2676 bytes embedded, exact match), `MeterWidget.cpp` (vs MeterManager.cs), `WdspEngine.cpp` (vs cmaster.c NR0V-only), `RadioDiscovery.cpp` (vs mi0bot/clsRadioDiscovery.cs), `BoardCapabilities.cpp` (7 sources stacked, NetworkIO.cs noted as no-header per spec).
+
+Verifier post-rewrite: 171/171 pass. Provenance sync: 169/169 pass. Build: clean.
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
