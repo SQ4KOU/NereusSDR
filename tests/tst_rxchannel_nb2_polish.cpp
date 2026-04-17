@@ -1,3 +1,34 @@
+// =================================================================
+// tests/tst_rxchannel_nb2_polish.cpp  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis source:
+//   Project Files/Source/Console/HPSDR/specHPSDR.cs
+//   Project Files/Source/ChannelMaster/cmaster.c
+//
+// Original Thetis copyright and license (preserved per GNU GPL):
+//
+//   Thetis is a C# implementation of a Software Defined Radio.
+//   Copyright (C) 2004-2009  FlexRadio Systems
+//   Copyright (C) 2010-2020  Doug Wigley (W5WC)
+//
+//   This program is free software; you can redistribute it and/or
+//   modify it under the terms of the GNU General Public License
+//   as published by the Free Software Foundation; either version 2
+//   of the License, or (at your option) any later version.
+//
+//   This program is distributed in the hope that it will be useful,
+//   but WITHOUT ANY WARRANTY; without even the implied warranty of
+//   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+//   GNU General Public License for more details.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via Anthropic
+//                 Claude Code.
+// =================================================================
+
 // tst_rxchannel_nb2_polish.cpp
 //
 // Verifies RxChannel NB2 advanced sub-parameter methods (mode/tau/lead/hang)

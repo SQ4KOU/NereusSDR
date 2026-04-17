@@ -60,8 +60,11 @@ def parse_provenance(text: str):
         rel = candidate.replace("`", "")
         if not (REPO / rel).is_file():
             continue
+        # Use the variant cell (index 4) directly to avoid false positives
+        # (e.g. "thetis-no-samphire" contains the word "samphire").
+        variant_cell = cells[4].lower() if len(cells) > 4 else ""
         joined = " ".join(c.lower() for c in cells)
-        if "samphire" in joined or "mi0bot" in joined or "multi-source" in joined:
+        if variant_cell == "thetis-samphire" or "mi0bot" in joined or "multi-source" in joined:
             variant = "samphire-required"
         else:
             variant = "plain"
