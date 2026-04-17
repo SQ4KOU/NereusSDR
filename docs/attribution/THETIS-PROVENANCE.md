@@ -199,7 +199,7 @@ Discovery-reply hex fixtures are covered by `tests/fixtures/discovery/README.md`
 
 | NereusSDR file | mi0bot source | Line ranges | Type | Variant | Notes |
 | --- | --- | --- | --- | --- | --- |
-| src/core/RadioDiscovery.cpp | HPSDR/clsRadioDiscovery.cs | 1145-1195; 1201-1226; 49-70 | port | mi0bot | mi0bot fork not locally cloned; copyright chain via ramdor/Thetis (Samphire sole author upstream) + Reid Campbell MI0BOT for fork contributions |
+| src/core/RadioDiscovery.cpp | HPSDR/clsRadioDiscovery.cs | 1145-1195; 1201-1226; 49-70 | port | mi0bot | mi0bot fork not locally cloned; copyright chain via ramdor/Thetis (Samphire sole author upstream) + MI0BOT callsign for fork contributions (Thetis source writes no surname) |
 | src/core/RadioDiscovery.h | HPSDR/clsRadioDiscovery.cs | 49-70 | port | mi0bot | mi0bot fork not locally cloned; ramdor/Thetis upstream used as copyright reference |
 | src/gui/setup/hardware/Hl2IoBoardTab.cpp | HPSDR/IoBoardHl2.cs | 79; 139; 194-198 | port | mi0bot | IoBoardHl2.cs does NOT exist in ramdor/Thetis — mi0bot/Thetis-HL2 fork addition; copyright not directly extractable |
 | src/gui/setup/hardware/Hl2IoBoardTab.h | HPSDR/IoBoardHl2.cs | 79; 139; 194-198 | port | mi0bot | mi0bot fork file, not available locally |

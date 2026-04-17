@@ -117,8 +117,9 @@ dual-licensing block; keep the two-copyright-line form.
 ## Variant 3 — `mi0bot`
 
 **Use when:** the source file comes from the mi0bot/Thetis-HL2 fork. Adds
-Reid Campbell's attribution and keeps the upstream Thetis chain the fork
-itself descends from.
+the mi0bot fork maintainer's attribution (callsign `MI0BOT`; Thetis source
+writes only the callsign, no full name) and keeps the upstream Thetis
+chain the fork itself descends from.
 
 ```cpp
 // =================================================================
@@ -134,7 +135,7 @@ itself descends from.
 //   Copyright (C) 2004-2009  FlexRadio Systems
 //   Copyright (C) 2010-2020  Doug Wigley (W5WC)
 //   Copyright (C) 2019-2026  Richard Samphire (MW0LGE) — Thetis heavy modifications
-//   Copyright (C) <YEAR_RANGE>  Reid Campbell (MI0BOT) — Hermes-Lite fork contributions
+//   Copyright (C) <YEAR_RANGE>  MI0BOT — Hermes-Lite fork contributions
 //
 //   This program is free software; you can redistribute it and/or
 //   modify it under the terms of the GNU General Public License
