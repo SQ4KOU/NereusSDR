@@ -866,6 +866,7 @@ void P2RadioConnection::processHighPriorityStatus(const QByteArray& data)
     // These offsets are from the Thetis high-priority status parsing
     // (varies by firmware; basic fields for now)
 
+    //[2.10.3.13]MW0LGE adc_overload bits accumulated across status frames; reset-on-read pattern preserved [Thetis network.c:708]
     // From Thetis network.c:getAndResetADC_Overload — bit 0=ADC0, bit 1=ADC1, bit 2=ADC2.
     const quint8 adcOverloadBits = raw[4];
     for (int i = 0; i < 3; ++i) {

@@ -1068,6 +1068,7 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
         return;
     }
 
+    //[2.10.3.13]MW0LGE adc_overload accumulated (or'd) across EP6 frames, cleared only by reader [Thetis networkproto1.c:335]
     // From Thetis networkproto1.c — ADC overflow in C&C status bytes.
     // C0[0] bit 0 = LT2208 overflow (ADC0).
     const quint8 c0_sub0 = frame[11];

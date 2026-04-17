@@ -189,8 +189,8 @@ enum class RxMeterType : int {
     AdcPeak      = 2,   // RXA_ADC_PK
     AdcAvg       = 3,   // RXA_ADC_AV
     AgcGain      = 4,   // RXA_AGC_GAIN
-    AgcPeak      = 5,   // RXA_AGC_PK
-    AgcAvg       = 6    // RXA_AGC_AV
+    AgcPeak      = 5,   // RXA_AGC_PK — MW0LGE [2.9.0.7] added pk + av + last [Thetis dsp.cs:881]
+    AgcAvg       = 6    // RXA_AGC_AV — MW0LGE [2.9.0.7] added av [Thetis dsp.cs:882]
 };
 
 // TX meter types. Values match WDSP GetTXAMeter 'mt' argument.
@@ -201,7 +201,7 @@ enum class TxMeterType : int {
     EqPeak       = 2,
     EqAvg        = 3,
     CfcPeak      = 4,
-    CfcAvg       = 5,
+    CfcAvg       = 5,   // CFC_AV — MW0LGE [2.9.0.7] added av [Thetis dsp.cs:883]
     CfcGain      = 6,
     CompPeak     = 7,
     CompAvg      = 8,

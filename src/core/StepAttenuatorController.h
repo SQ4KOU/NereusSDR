@@ -101,7 +101,7 @@ enum class PreampMode {
     Off,
     On,
     Minus10,
-    Minus20,
+    Minus20,    // MW0LGE_21d step atten [Thetis enums.cs:246]
     Minus30,
     Minus40,
     Minus50

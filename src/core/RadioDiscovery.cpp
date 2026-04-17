@@ -220,7 +220,7 @@ bool RadioDiscovery::parseP1Reply(const QByteArray& bytes, const QHostAddress& s
     case 2:  out.boardType = HPSDRHW::HermesII;   break;
     case 4:  out.boardType = HPSDRHW::Angelia;    break;
     case 5:  out.boardType = HPSDRHW::Orion;      break;
-    case 6:  out.boardType = HPSDRHW::HermesLite; break;  // MI0BOT: HL2 added
+    case 6:  out.boardType = HPSDRHW::HermesLite; break;  // MI0BOT: HL2 added [Thetis clsRadioDiscovery.cs:1239]
     case 10: out.boardType = HPSDRHW::OrionMKII;  break;
     default: out.boardType = static_cast<HPSDRHW>(boardByte); break;
     }
