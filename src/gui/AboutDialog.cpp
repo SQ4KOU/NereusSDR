@@ -198,22 +198,28 @@ void AboutDialog::buildUI()
     // §2(c) obligation but our source files preserve GPLv2-or-later
     // headers, so recipients using the v2 grant are still owed §2(c)-form
     // wording. Hence the full four-element block below.
-    // The copyright line names the major contributor groups whose code
-    // appears in the running binary. NereusSDR is a derivative work; the
-    // full contributor chain — including per-file copyright lines from
-    // every upstream Thetis / mi0bot / AetherSDR / WDSP source file — is
-    // carried in the source tree's file headers and summarized in LICENSE
-    // + docs/attribution/THETIS-PROVENANCE.md. The names here identify
-    // the principal copyright-holding groups; the "see LICENSE" pointer
-    // routes the interested reader to the full chain.
+    // The copyright line names the principal copyright-holding individuals
+    // whose code appears in the running binary. NereusSDR is a derivative
+    // work; the full per-file contributor chain — including inline-mod
+    // attributions — is carried in the source tree's file headers and
+    // summarized in docs/attribution/ (THETIS-PROVENANCE.md,
+    // aethersdr-contributor-index.md, WDSP-PROVENANCE.md, etc.). The
+    // pointer routes interested readers to the authoritative chain.
     auto* copyright = new QLabel(
-        QStringLiteral("Copyright © 2004-2026 FlexRadio Systems, Doug Wigley (W5WC), "
-                       "Richard Samphire (MW0LGE), the Thetis / mi0bot / AetherSDR / "
-                       "WDSP contributors, and J.J. Boyd (KG4VCF). "
-                       "See LICENSE for the full contributor chain."),
+        QStringLiteral(
+            "Copyright © 2004-2026 FlexRadio Systems, Doug Wigley (W5WC), "
+            "Richard Samphire (MW0LGE), Warren Pratt (NR0V), "
+            "Phil Harman (VK6APH), Chris Codella (W2PA), "
+            "Laurence Barker (G8NJJ), Reid Campbell (MI0BOT), "
+            "Jeremy (KK7GWY), other Thetis / mi0bot / AetherSDR / WDSP / "
+            "OpenHPSDR contributors, and J.J. Boyd (KG4VCF). "
+            "See source file headers and "
+            "<a href=\"https://github.com/boydsoftprez/NereusSDR/tree/main/docs/attribution\">"
+            "docs/attribution</a> for the full contributor chain."),
         this);
     copyright->setAlignment(Qt::AlignCenter);
     copyright->setWordWrap(true);
+    copyright->setOpenExternalLinks(true);
     copyright->setStyleSheet(QStringLiteral("color: #667788; font-size: 11px;"));
     mainLayout->addWidget(copyright);
 

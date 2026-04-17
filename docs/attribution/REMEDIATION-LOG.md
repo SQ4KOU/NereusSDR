@@ -427,4 +427,28 @@ Verifier: 171/171. Build: clean.
 
 ---
 
+## 2026-04-17 — About-dialog copyright line and pointer refinements
+
+**Discovered by:** J.J. Boyd (second adversarial self-review of the About-dialog §2(c) announcement + upstream-LICENSE file-survey)
+**Reported via:** Stricter reading of GPL §1 "appropriate copyright notice" — the fix applied earlier today named three principal individuals (Wigley, Samphire, Boyd) and routed with "See LICENSE"; an adversarial reviewer would notice (a) WDSP's Warren Pratt and AetherSDR's Jeremy (KK7GWY) are project principals grouped under "contributors" rather than named individually, (b) "See LICENSE" misdirects — our LICENSE file is GPLv3 text, not a contributor list; the actual chain lives in docs/attribution/.
+**Affected files:** `src/gui/AboutDialog.cpp`
+**Gap:**
+1. Omitted individual-naming of Warren Pratt (NR0V, WDSP primary author), Phil Harman (VK6APH), Chris Codella (W2PA), Laurence Barker (G8NJJ), Reid Campbell (MI0BOT), Jeremy (KK7GWY, AetherSDR primary author) — all named in upstream source with verifiable copyright/attribution lines
+2. "See LICENSE" pointer routes to the wrong file — users following it find GPLv3 text, not the contributor chain
+
+**Fix (commit `<pending>`):** Expanded the About-dialog copyright line to name each principal individually in chronological order of their contribution era; pointer updated to `<a href="...tree/main/docs/attribution">docs/attribution</a>` which is an actual directory with the THETIS-PROVENANCE / aethersdr-contributor-index / WDSP-PROVENANCE / REMEDIATION-LOG / HOW-TO-PORT indices. `setOpenExternalLinks(true)` added so the link is clickable in the running dialog. Each name was verified against actual upstream source before inclusion — no fabrication.
+
+**Accompanying upstream-LICENSE survey** confirmed no further file-mirroring needed:
+- `mi0bot/LICENSE` byte-identical to `ramdor/Thetis/LICENSE` — already covered via root LICENSE (GPLv3 upgrade)
+- `mi0bot/LICENSE-DUAL-LICENSING` byte-identical to Thetis's — already mirrored at our repo root
+- `Thetis/Project Files/LICENSE-DUAL-LICENSING.rtf` is a Windows-RTF duplicate of the text version (no additional legal content)
+- AetherSDR root LICENSE is GPLv3 (matches our root)
+- Third-party library LICENSE files in upstream `lib/` or `packages/` are the upstreams' own bundled deps, not code NereusSDR ports; NereusSDR ships its own `third_party/` license bundle via Phase 4 Task 29
+
+**Process improvement:** When citing a "see X for details" pointer in public-facing text, verify X actually contains the details. "See LICENSE" is a common shorthand but misleading when LICENSE is just the terms and not a contributor list.
+
+Verifier: 171/171. Build: clean.
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
