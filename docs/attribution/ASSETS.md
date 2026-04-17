@@ -7,6 +7,21 @@ All assets listed here are GPL-2.0-or-later unless noted otherwise.
 
 ---
 
+## Fonts
+
+### Style-7 Digital-7 Font (Not Used)
+
+Thetis `console.cs` credits "Sizenko Alexander of Style-7 (http://www.styleseven.com/) for the Digital-7 font."
+
+**Status in NereusSDR:** The Digital-7 / Style-7 font is **NOT used** anywhere in NereusSDR.
+All meter labels, VFO displays, clocks, and textual overlays use native Qt font rendering
+with system or built-in typefaces. No `.ttf` or `.otf` files are present in `resources/`.
+
+Therefore, preservation of the Thetis Style-7 credit is not required for NereusSDR;
+the font credit does not propagate to this derivative work.
+
+---
+
 ## resources/meters/
 
 | File | Origin | Author | License | Added |
