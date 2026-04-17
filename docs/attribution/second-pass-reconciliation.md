@@ -36,12 +36,12 @@ of which names to expect to add most.
 
 | Contributor | Files needing addition | Typical Thetis source(s) where they appear |
 | --- | --- | --- |
-| John Melton (G8NJJ) | 60+ | console.cs (inline), setup.cs (inline), DiversityForm.cs, enums.cs (inline), clsHardwareSpecific.cs (inline), specHPSDR.cs (inline) |
+| Laurence Barker (G8NJJ) | 60+ | console.cs (inline), setup.cs (inline), DiversityForm.cs, enums.cs (inline), clsHardwareSpecific.cs (inline), specHPSDR.cs (inline) |
 | Chris Codella (W2PA) | 40+ | console.cs (inline), setup.cs (inline), NetworkIO.cs (inline) |
 | Warren Pratt (NR0V) | 15 | setup.cs (inline resampler comments), dsp.cs, cmaster.c |
 | Phil Harman (VK6APH) | 4 | display.cs (Waterfall AGC 2013) |
-| Ron Holcomb (WD5Y) | 10+ | console.cs (inline via MW0LGE [2.10.1.0] credits) |
-| Bob Tracy (W4WMT) | 10+ | setup.cs (inline [2.10.3.5] issue #87) |
+| Joe (WD5Y) | 10+ | console.cs (inline via MW0LGE [2.10.1.0] credits) |
+| Bryan Rambo (W4WMT) | 10+ | setup.cs (inline [2.10.3.5] issue #87) |
 | Simon Brown (MI0BOT) | 5 | enums.cs (HermesLite entry) |
 | Bill Tracey (KD5TFD) | 4 | NetworkIO.cs (commented-out historical), netInterface.c (P2 files already cover via explicit line) |
 
@@ -76,9 +76,9 @@ lists either the callsign or the full name.
 - **Proposed addition lines:**
   - `Copyright (C) 2013-2017  Warren Pratt (NR0V) — setup.cs resampler guidance`
   - `Copyright (C) 2017-2019  Chris Codella (W2PA) — MIDI / Behringer / QSK`
-  - `Copyright (C) 2018-2025  John Melton (G8NJJ) — Andromeda / Aries / Saturn / ANAN-G2`
-  - `Copyright (C) 2020-2025  Ron Holcomb (WD5Y) — RX2 mute/ForeColor ideas`
-  - `Copyright (C) 2024-2025  Bob Tracy (W4WMT) — setup.cs [2.10.3.5] issue #87`
+  - `Copyright (C) 2018-2025  Laurence Barker (G8NJJ) — Andromeda / Aries / Saturn / ANAN-G2`
+  - `Copyright (C) 2020-2025  Joe (WD5Y) — RX2 mute/ForeColor ideas`
+  - `Copyright (C) 2024-2025  Bryan Rambo (W4WMT) — setup.cs [2.10.3.5] issue #87`
   - `Copyright (C) 2020-2025  Simon Brown (MI0BOT) — HermesLite enum entry`
   - `Copyright (C) 2006-2007  Bill Tracey (KD5TFD) — NetworkIO.cs historical`
 - **Variant:** multi-source
@@ -125,7 +125,7 @@ not needed here (only cited in console.cs which this .h does not cite).
   KD5TFD historical, W2PA inline)
 - **Missing:** G8NJJ, W2PA, KD5TFD
 - **Proposed additions:**
-  - `Copyright (C) 2018-2025  John Melton (G8NJJ) — clsHardwareSpecific.cs PA comment`
+  - `Copyright (C) 2018-2025  Laurence Barker (G8NJJ) — clsHardwareSpecific.cs PA comment`
   - `Copyright (C) 2017-2019  Chris Codella (W2PA) — NetworkIO.cs CAT capability`
   - `Copyright (C) 2006-2007  Bill Tracey (KD5TFD) — NetworkIO.cs historical block`
 - **Variant:** thetis-samphire (promoted to multi-source acceptable)
@@ -224,8 +224,8 @@ Same. **STATUS: already complete.**
 - **Missing:** W2PA, G8NJJ, WD5Y, KD5TFD
 - **Proposed additions:**
   - `Copyright (C) 2017-2019  Chris Codella (W2PA)`
-  - `Copyright (C) 2018-2025  John Melton (G8NJJ)`
-  - `Copyright (C) 2020-2025  Ron Holcomb (WD5Y)`
+  - `Copyright (C) 2018-2025  Laurence Barker (G8NJJ)`
+  - `Copyright (C) 2020-2025  Joe (WD5Y)`
   - `Copyright (C) 2006-2007  Bill Tracey (KD5TFD)`
 - **Variant:** multi-source
 
@@ -259,8 +259,8 @@ Same. **STATUS: already complete.**
 - **Proposed additions:**
   - `Copyright (C) 2019-2026  Richard Samphire (MW0LGE) — heavily modified`
   - `Copyright (C) 2017-2019  Chris Codella (W2PA)`
-  - `Copyright (C) 2018-2025  John Melton (G8NJJ)`
-  - `Copyright (C) 2020-2025  Ron Holcomb (WD5Y)`
+  - `Copyright (C) 2018-2025  Laurence Barker (G8NJJ)`
+  - `Copyright (C) 2020-2025  Joe (WD5Y)`
 - **Variant:** multi-source
 
 ### src/core/P2RadioConnection.h
@@ -276,8 +276,8 @@ Same as `.cpp`. Missing MW0LGE, W2PA, G8NJJ, WD5Y.
 - **Missing:** W2PA, G8NJJ, WD5Y
 - **Proposed additions:**
   - `Copyright (C) 2017-2019  Chris Codella (W2PA)`
-  - `Copyright (C) 2018-2025  John Melton (G8NJJ)`
-  - `Copyright (C) 2020-2025  Ron Holcomb (WD5Y)`
+  - `Copyright (C) 2018-2025  Laurence Barker (G8NJJ)`
+  - `Copyright (C) 2020-2025  Joe (WD5Y)`
 - **Variant:** thetis-samphire
 
 ### src/core/ReceiverManager.h
@@ -295,9 +295,9 @@ Same as `.cpp`. Missing W2PA, G8NJJ, WD5Y.
 - **Missing:** W2PA, G8NJJ, WD5Y, W4WMT
 - **Proposed additions:**
   - `Copyright (C) 2017-2019  Chris Codella (W2PA)`
-  - `Copyright (C) 2018-2025  John Melton (G8NJJ)`
-  - `Copyright (C) 2020-2025  Ron Holcomb (WD5Y)`
-  - `Copyright (C) 2024-2025  Bob Tracy (W4WMT)`
+  - `Copyright (C) 2018-2025  Laurence Barker (G8NJJ)`
+  - `Copyright (C) 2020-2025  Joe (WD5Y)`
+  - `Copyright (C) 2024-2025  Bryan Rambo (W4WMT)`
 - **Variant:** multi-source
 
 ### src/core/RxChannel.h
@@ -329,7 +329,7 @@ Same as `.cpp`. Missing W2PA, G8NJJ, WD5Y.
 - **Missing:** FlexRadio, G8NJJ
 - **Proposed additions:**
   - `Copyright (C) 2004-2009  FlexRadio Systems`
-  - `Copyright (C) 2018-2025  John Melton (G8NJJ)`
+  - `Copyright (C) 2018-2025  Laurence Barker (G8NJJ)`
 - **Variant:** multi-source
 
 ### src/core/WdspEngine.cpp
@@ -756,7 +756,7 @@ Same. Missing NR0V, G8NJJ, W2PA, W4WMT.
 - **Current:** FlexRadio, W5WC, MW0LGE
 - **Expected:** FlexRadio, G8NJJ (inline)
 - **Missing:** G8NJJ
-- **Proposed addition:** `Copyright (C) 2018-2025  John Melton (G8NJJ) — Diversity CAT / gain setter`
+- **Proposed addition:** `Copyright (C) 2018-2025  Laurence Barker (G8NJJ) — Diversity CAT / gain setter`
 - **Note:** Per index, DiversityForm.cs block is FlexRadio-only (no
   W5WC, no MW0LGE copyright line despite dual-license stanza). W5WC +
   MW0LGE in current header are over-attribution; keeping them is
@@ -851,8 +851,8 @@ Same. Missing NR0V, G8NJJ, W2PA, W4WMT.
 - **Proposed additions:**
   - `Copyright (C) 2019-2026  Richard Samphire (MW0LGE) — heavily modified`
   - `Copyright (C) 2017-2019  Chris Codella (W2PA)`
-  - `Copyright (C) 2018-2025  John Melton (G8NJJ)`
-  - `Copyright (C) 2020-2025  Ron Holcomb (WD5Y)`
+  - `Copyright (C) 2018-2025  Laurence Barker (G8NJJ)`
+  - `Copyright (C) 2020-2025  Joe (WD5Y)`
 - **Variant:** multi-source
 - **Note:** .cpp appears to have lost the MW0LGE copyright line somewhere
   along the way (dual-license stanza is still there). Phase 2 must add
@@ -869,9 +869,9 @@ Same. Missing NR0V, G8NJJ, W2PA, W4WMT.
   - `Copyright (C) 2000-2025  "Original authors" [enums.cs]`
   - `Copyright (C) 2013-2017  Warren Pratt (NR0V)`
   - `Copyright (C) 2017-2019  Chris Codella (W2PA)`
-  - `Copyright (C) 2018-2025  John Melton (G8NJJ)`
+  - `Copyright (C) 2018-2025  Laurence Barker (G8NJJ)`
   - `Copyright (C) 2020-2025  Simon Brown (MI0BOT) — HermesLite`
-  - `Copyright (C) 2024-2025  Bob Tracy (W4WMT)`
+  - `Copyright (C) 2024-2025  Bryan Rambo (W4WMT)`
 - **Variant:** multi-source
 
 ### src/gui/widgets/VfoModeContainers.cpp
@@ -900,8 +900,8 @@ Same. Missing NR0V, G8NJJ, W2PA, W4WMT.
 - **Proposed additions:**
   - `Copyright (C) 2000-2025  "Original authors" [enums.cs]`
   - `Copyright (C) 2017-2019  Chris Codella (W2PA)`
-  - `Copyright (C) 2018-2025  John Melton (G8NJJ)`
-  - `Copyright (C) 2020-2025  Ron Holcomb (WD5Y)`
+  - `Copyright (C) 2018-2025  Laurence Barker (G8NJJ)`
+  - `Copyright (C) 2020-2025  Joe (WD5Y)`
   - `Copyright (C) 2020-2025  Simon Brown (MI0BOT) — HermesLite`
 - **Variant:** multi-source
 
@@ -951,8 +951,8 @@ Same. Missing W2PA, G8NJJ, WD5Y.
   - `Copyright (C) 2019-2026  Richard Samphire (MW0LGE) — heavily modified`
   - `Waterfall AGC Modifications Copyright (C) 2013  Phil Harman (VK6APH)`
   - `Copyright (C) 2017-2019  Chris Codella (W2PA)`
-  - `Copyright (C) 2018-2025  John Melton (G8NJJ)`
-  - `Copyright (C) 2020-2025  Ron Holcomb (WD5Y)`
+  - `Copyright (C) 2018-2025  Laurence Barker (G8NJJ)`
+  - `Copyright (C) 2020-2025  Joe (WD5Y)`
 - **Phase 2 critical:** this file is the other instance where the
   block-level MW0LGE line is missing despite the dual-license stanza
   being present. Must be fixed.
@@ -1049,7 +1049,7 @@ Same. **STATUS: already complete.**
   keeping over-attribution)
 - **Proposed additions:**
   - `Copyright (C) 2014-2019  Warren Pratt (NR0V) — ChannelMaster cmaster.c`
-  - `Copyright (C) 2018-2025  John Melton (G8NJJ) — specHPSDR.cs`
+  - `Copyright (C) 2018-2025  Laurence Barker (G8NJJ) — specHPSDR.cs`
 - **Variant:** thetis-no-samphire (confirmed)
 
 ### tests/tst_rxchannel_snb.cpp
@@ -1253,16 +1253,16 @@ applying:
    Proposed defaults:
    - `W2PA (Chris Codella) 2017-2019` — per index: MIDI + DB import +
      QSK for Protocol-2 v1.7 spanned May 2017 to April 2019
-   - `G8NJJ (John Melton) 2018-2025` — per index: Diversity CAT was
+   - `G8NJJ (Laurence Barker) 2018-2025` — per index: Diversity CAT was
      2018, RIT/XIT UI, ANAN-G2 wiring etc. ongoing through Thetis
      2.10.x
    - `VK6APH (Phil Harman) 2013` — index gives explicit 2013 for
      Waterfall AGC
    - `NR0V (Warren Pratt) 2013-2017` for dsp.cs; `2014-2019` for
      cmaster.c — index-exact; matches existing Wigley range mix
-   - `WD5Y (Ron Holcomb) 2020-2025` — ideas credited via MW0LGE [2.10.1.0]
+   - `WD5Y (Joe) 2020-2025` — ideas credited via MW0LGE [2.10.1.0]
      which landed in 2024
-   - `W4WMT (Bob Tracy) 2024-2025` — [2.10.3.5] issue #87 implementation
+   - `W4WMT (Bryan Rambo) 2024-2025` — [2.10.3.5] issue #87 implementation
    - `MI0BOT (Simon Brown) 2020-2025` — HermesLite support was added in
      the mi0bot fork era
    - `KD5TFD (Bill Tracey) 2006-2007` — NetworkIO.cs historical /

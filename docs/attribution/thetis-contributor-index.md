@@ -14,9 +14,9 @@ Scope: the 27 Thetis sources cited in `THETIS-PROVENANCE.md`.
   markers in the body of the file. Years reflect what the file states;
   "n.d." means the file gives no date for that contribution.
 - Callsign glossary: W2PA=Chris Codella, W5WC=Doug Wigley, MW0LGE=Richard
-  Samphire, NR0V=Warren Pratt, VK6APH=Phil Harman, G8NJJ=John Melton,
-  KD5TFD=Bill Tracey, N1GP=Rick Koch, W4WMT=Bob Tracy, W5SD=Scott McKee,
-  WD5Y=Ron Holcomb, M0YGG=Paul M, MI0BOT=Simon Brown,
+  Samphire, NR0V=Warren Pratt, VK6APH=Phil Harman, G8NJJ=Laurence Barker,
+  KD5TFD=Bill Tracey, N1GP=Rick Koch, W4WMT=Bryan Rambo, W5SD=Scott McKee,
+  WD5Y=Joe, M0YGG=Paul M, MI0BOT=Simon Brown,
   FlexRadio=FlexRadio Systems (PowerSDR origin).
 
 ## Index
@@ -47,7 +47,7 @@ Scope: the 27 Thetis sources cited in `THETIS-PROVENANCE.md`.
 
 ### `Project Files/Source/Console/clsHardwareSpecific.cs`
 - Block: Richard Samphire (MW0LGE) 2020-2025
-- Inline: G8NJJ (John Melton) n.d. - ANAN_G2_1K PA comment
+- Inline: G8NJJ (Laurence Barker) n.d. - ANAN_G2_1K PA comment
 
 ### `Project Files/Source/Console/cmaster.cs`
 - Block: "Original authors" 2000-2025; Richard Samphire (MW0LGE) 2020-2025
@@ -57,9 +57,9 @@ Scope: the 27 Thetis sources cited in `THETIS-PROVENANCE.md`.
 - Block: FlexRadio Systems 2004-2009; Doug Wigley (W5WC) 2010-2020;
   Richard Samphire (MW0LGE) 2019-2026 "Modified heavily"
 - Inline: Chris Codella (W2PA) May 2017-April 2019 - Behringer MIDI
-  support, DB import, QSK for Protocol-2 v1.7; John Melton (G8NJJ)
+  support, DB import, QSK for Protocol-2 v1.7; Laurence Barker (G8NJJ)
   n.d. - Andromeda/Aries/Saturn/ANAN-G2 support, Diversity CAT,
-  RIT/XIT UI, filter popup, button bar; WD5Y (Ron Holcomb) n.d. -
+  RIT/XIT UI, filter popup, button bar; WD5Y (Joe) n.d. -
   RX2 mute/ForeColor ideas credited via MW0LGE [2.10.1.0]
 - Note: credit line "Sizenko Alexander of Style-7 ... Digital-7 font"
   at line 7 (font credit, not code contribution)
@@ -74,7 +74,7 @@ Scope: the 27 Thetis sources cited in `THETIS-PROVENANCE.md`.
 ### `Project Files/Source/Console/DiversityForm.cs`
 - Block: FlexRadio Systems 2004-2009 (MW0LGE dual-licensing stanza
   appended, but no MW0LGE copyright line added)
-- Inline: G8NJJ (John Melton) 31/3/2018, 6/8/2019 - Diversity CAT
+- Inline: G8NJJ (Laurence Barker) 31/3/2018, 6/8/2019 - Diversity CAT
   access, gain setter for Andromeda
 
 ### `Project Files/Source/Console/dsp.cs`
@@ -83,7 +83,7 @@ Scope: the 27 Thetis sources cited in `THETIS-PROVENANCE.md`.
 
 ### `Project Files/Source/Console/enums.cs`
 - Block: "Original authors" 2000-2025; Richard Samphire (MW0LGE) 2020-2025
-- Inline: G8NJJ (John Melton) n.d. - ANAN_G2, ANAN_G2_1K, Saturn enum
+- Inline: G8NJJ (Laurence Barker) n.d. - ANAN_G2, ANAN_G2_1K, Saturn enum
   entries; MI0BOT (Simon Brown) n.d. - HermesLite enum entry
 
 ### `Project Files/Source/Console/frmAddCustomRadio.cs`
@@ -110,7 +110,7 @@ Scope: the 27 Thetis sources cited in `THETIS-PROVENANCE.md`.
 
 ### `Project Files/Source/Console/HPSDR/specHPSDR.cs`
 - Block: Doug Wigley (W5WC) 2010-2018
-- Inline: G8NJJ (John Melton) n.d. - ANAN_G2_1K PA note
+- Inline: G8NJJ (Laurence Barker) n.d. - ANAN_G2_1K PA note
 
 ### `Project Files/Source/Console/MeterManager.cs`
 - Block: Richard Samphire (MW0LGE) 2020-2026
@@ -136,10 +136,10 @@ Scope: the 27 Thetis sources cited in `THETIS-PROVENANCE.md`.
 - Block: FlexRadio Systems 2004-2009; Doug Wigley (W5WC) 2010-2020;
   Richard Samphire (MW0LGE) 2019-2026 "Continual modifications"
 - Inline: Warren Pratt (NR0V) n.d. - resampler tuning guidance
-  comments (lines ~233-268); John Melton (G8NJJ) n.d. - Andromeda /
+  comments (lines ~233-268); Laurence Barker (G8NJJ) n.d. - Andromeda /
   Aries / Ganymede setup controls, Alex block-TX toggles, VAC rate
   logic, ANAN_G2 / G2_1K wiring; Chris Codella (W2PA) n.d. - MIDI VFO
-  sensitivity, single-TX-profile export; Bob Tracy (W4WMT) n.d. -
+  sensitivity, single-TX-profile export; Bryan Rambo (W4WMT) n.d. -
   [2.10.3.5] implements issue #87
 
 ### `Project Files/Source/Console/setup.designer.cs`
@@ -184,12 +184,12 @@ Files attributed to each contributor (block-level only):
 Files with inline mods attributed to each contributor:
 
 - **W2PA (Chris Codella)**: console.cs, setup.cs, NetworkIO.cs
-- **G8NJJ (John Melton)**: console.cs, setup.cs, DiversityForm.cs,
+- **G8NJJ (Laurence Barker)**: console.cs, setup.cs, DiversityForm.cs,
   enums.cs, clsHardwareSpecific.cs, specHPSDR.cs, network.c (spotted-by
   credit)
-- **WD5Y (Ron Holcomb)**: console.cs (via MW0LGE [2.10.1.0] credits)
+- **WD5Y (Joe)**: console.cs (via MW0LGE [2.10.1.0] credits)
 - **MI0BOT (Simon Brown)**: enums.cs (HermesLite)
-- **W4WMT (Bob Tracy)**: setup.cs ([2.10.3.5] implements #87)
+- **W4WMT (Bryan Rambo)**: setup.cs ([2.10.3.5] implements #87)
 - **NR0V (Warren Pratt)**: setup.cs (resampler guidance comments)
 
 ## Files worth flagging for the next phase
