@@ -52,6 +52,10 @@ Richard Samphire (MW0LGE). His per-file header line reads
 //   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 //   GNU General Public License for more details.
 //
+//   You should have received a copy of the GNU General Public License
+//   along with this program; if not, write to the Free Software
+//   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+//
 // Dual-Licensing Statement (applies ONLY to Richard Samphire MW0LGE's
 // contributions — preserved verbatim from Thetis LICENSE-DUAL-LICENSING):
 //
@@ -104,6 +108,10 @@ dual-licensing block; keep the two-copyright-line form.
 //   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 //   GNU General Public License for more details.
 //
+//   You should have received a copy of the GNU General Public License
+//   along with this program; if not, write to the Free Software
+//   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   <PORT_DATE> — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
@@ -155,6 +163,10 @@ contributions), use **Variant 5** instead.
 //   but WITHOUT ANY WARRANTY; without even the implied warranty of
 //   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 //   GNU General Public License for more details.
+//
+//   You should have received a copy of the GNU General Public License
+//   along with this program; if not, write to the Free Software
+//   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //
 // Dual-Licensing Statement (applies ONLY to Richard Samphire MW0LGE's
 // contributions in the upstream Thetis source — preserved verbatim from
@@ -255,6 +267,10 @@ derivatives of `Project Files/Source/Console/HPSDR/IoBoardHl2.cs`.
 //   but WITHOUT ANY WARRANTY; without even the implied warranty of
 //   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 //   GNU General Public License for more details.
+//
+//   You should have received a copy of the GNU General Public License
+//   along with this program; if not, write to the Free Software
+//   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //
 //   You should have received a copy of the GNU General Public License
 //   along with this program; if not, write to the Free Software
