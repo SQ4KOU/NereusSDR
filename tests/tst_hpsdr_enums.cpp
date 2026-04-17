@@ -112,8 +112,8 @@ private slots:
         QCOMPARE(static_cast<int>(HPSDRHW::Angelia),      3);
         QCOMPARE(static_cast<int>(HPSDRHW::Orion),        4);
         QCOMPARE(static_cast<int>(HPSDRHW::OrionMKII),    5);
-        QCOMPARE(static_cast<int>(HPSDRHW::HermesLite),   6);
-        QCOMPARE(static_cast<int>(HPSDRHW::Saturn),      10);
+        QCOMPARE(static_cast<int>(HPSDRHW::HermesLite),   6);  // MI0BOT: HL2 allocated number [Thetis network.h:422 / enums.cs:396]
+        QCOMPARE(static_cast<int>(HPSDRHW::Saturn),      10);  // ANAN-G2: added G8NJJ [Thetis network.h:423 / enums.cs:397]
         QCOMPARE(static_cast<int>(HPSDRHW::SaturnMKII),  11);
         QCOMPARE(static_cast<int>(HPSDRHW::Unknown),    999);
     }

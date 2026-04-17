@@ -106,7 +106,7 @@ private slots:
             bytes, QHostAddress(QStringLiteral("192.168.1.42")), info);
 
         QVERIFY2(ok, "parseP1Reply returned false on valid HL2 reply");
-        QCOMPARE(info.boardType,       HPSDRHW::HermesLite);
+        QCOMPARE(info.boardType,       HPSDRHW::HermesLite);  // MI0BOT: HL2 board-ID 6 — NereusSDR parity test [Thetis clsRadioDiscovery.cs:1239]
         QCOMPARE(info.firmwareVersion, 72);
         QCOMPARE(info.protocol,        ProtocolVersion::Protocol1);
         // MAC formatted by macToString() — upper-case hex with colons
