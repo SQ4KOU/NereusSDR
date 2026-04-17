@@ -199,4 +199,40 @@ unaudited until the Phase 4 deep-dive.
 
 ---
 
+## 2026-04-17 — Binary metadata and release-artifact attribution (Phase 4 Tasks 28 + 29)
+
+**Discovered by:** Internal Phase 4 deep-dive
+**Reported via:** Self-initiated Phase 4 audit
+**Affected surfaces:** binary-metadata slots (macOS Info.plist, Windows installer, Linux AppImage desktop file) + release artifact contents (license texts shipped to end users)
+
+**Gap 1 — Binary metadata under-attributed (Task 28):**
+Release binaries historically embedded NereusSDR-only copyright strings at the OS level. A user inspecting the macOS bundle's Info.plist, the Windows installer's LegalCopyright, or the Linux desktop file's Comment would see no hint of the Thetis / FlexRadio / OpenHPSDR lineage. Over 35 derivative attribution work at the source-file level was strong, but the binary-side attribution didn't match.
+
+**Fix (Task 28 — commit `0871935`):**
+- `CMakeLists.txt`: added `MACOSX_BUNDLE_COPYRIGHT` (Thetis-lineage string), `MACOSX_BUNDLE_SHORT_VERSION_STRING`, `MACOSX_BUNDLE_BUNDLE_VERSION` (previously unset)
+- `scripts/windows/installer.nsi`: updated `VIAddVersionKey LegalCopyright`, added `CompanyName`, updated `Publisher` registry key
+- `.github/workflows/release.yml`: extended Linux AppImage `.desktop` `Comment=` field with GPLv3 / Thetis / FlexRadio lineage parenthetical
+- Locally verified: `defaults read build/NereusSDR.app/Contents/Info.plist NSHumanReadableCopyright` returns the Thetis-lineage string
+
+**Gap 2 — Release artifacts didn't ship third-party license texts (Task 29):**
+Binary aggregation of GPL-covered dependencies (Qt6 LGPLv3, FFTW3 GPLv2-or-later, WDSP GPLv2-or-later) requires that the recipient receive the applicable license texts. NereusSDR release artifacts shipped none of these — a downstream user unpacking an AppImage, DMG, or Windows installer would see only NereusSDR's own LICENSE, not the dependencies' licenses.
+
+**Fix (Task 29 — commit `5ba06e0`):**
+- New `packaging/third-party-licenses/` directory with pointer files for Qt6, FFTW3, WDSP, plus an index `README.md` naming each dependency, its role, its license, and the file where its license text lives
+- `CMakeLists.txt`: new `install(DIRECTORY ...)` rule places the directory at `share/doc/nereussdr/licenses/` in any install prefix; new `install(FILES LICENSE ...)` rule also installs NereusSDR's own LICENSE at `share/doc/nereussdr/`
+- `.github/workflows/release.yml`: macOS step copies licenses into `NereusSDR.app/Contents/Resources/licenses/` before codesign; Windows Deploy-Qt step copies licenses into the ZIP-and-NSIS root alongside `NereusSDR.exe`
+- `scripts/windows/installer.nsi`: `SecMain` now installs licenses to `$INSTDIR\licenses\`
+- Linux AppImage: no workflow edit needed — the CMake install rule places files under `AppDir/usr/share/doc/nereussdr/licenses/` and linuxdeploy preserves that path automatically
+- Locally verified: `cmake --install build --prefix /tmp/nereus-install` places all 5 files correctly
+
+**Current pointer-file choice:** each of `qt6.txt`, `fftw3.txt`, `wdsp.txt` points to the canonical upstream URL for the full license text rather than embedding multi-page GPL/LGPL bodies. This meets the GPL obligation (the recipient can obtain the license) while keeping the repository readable. If a compliance reviewer prefers full-text bodies shipped in-tree, follow-up commit can drop the canonical texts into these files without structural changes.
+
+**Root cause (shared across Tasks 28 + 29):**
+Release-pipeline infrastructure was built before the compliance-lineage was explicitly scoped. Binary-metadata and third-party-license bundling were never specified as release requirements because the project framed itself as "independent" at the time.
+
+**Process improvement:**
+Both of these are now part of the release pipeline and will stay consistent automatically for all future releases. Future additions to `third_party/` should also add a pointer file in `packaging/third-party-licenses/` and confirm the install rule reaches it.
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
