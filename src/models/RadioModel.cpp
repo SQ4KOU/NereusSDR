@@ -326,14 +326,18 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     QMetaObject::invokeMethod(m_connection, [conn = m_connection, wireSampleRate]() {
         conn->setSampleRate(wireSampleRate);
     });
-    // Push active receiver count from Hardware Config. P1 uses this to
-    // encode nrx bits in the C&C bank 0 frame; P2 uses it to select DDC
-    // assignments. The connection's base class declares the setter, so
-    // both protocols receive the call (P2 implementation may be a no-op
-    // for now).
-    QMetaObject::invokeMethod(m_connection, [conn = m_connection, activeRxCount]() {
-        conn->setActiveReceiverCount(activeRxCount);
-    });
+    // Push active receiver count to the connection. P1 uses this to encode
+    // nrx bits in the C&C bank 0 frame. P2 DDC assignment is more complex
+    // (Thetis console.cs:8216 UpdateDDCs — DDC2 is primary, not DDC0) and
+    // is handled inside P2RadioConnection::connectToRadio. Calling
+    // setActiveReceiverCount on P2 here would enable DDC0..N-1 on top of
+    // the DDC2 enable that connectToRadio sets, leaving extra DDCs active.
+    // Deferred to Phase 3F (multi-panadapter) which ports UpdateDDCs().
+    if (info.protocol == ProtocolVersion::Protocol1) {
+        QMetaObject::invokeMethod(m_connection, [conn = m_connection, activeRxCount]() {
+            conn->setActiveReceiverCount(activeRxCount);
+        });
+    }
     if (m_activeSlice) {
         int hwRx = m_receiverManager->receiverConfig(0).hardwareRx;
         if (hwRx < 0) { hwRx = 0; }

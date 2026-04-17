@@ -151,10 +151,10 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // This means DDC2 is the primary receiver, not DDC0!
     // From Thetis console.cs:8234-8241
     m_rx[2].enable = 1;
-    m_rx[2].frequency = 3865000;   // 80m LSB — matching Phase 3D verified config
-    m_rx[2].samplingRate = 768;
-    // Note: pcap shows Thetis uses 768 kHz for wider spectrum. To enable that,
-    // WDSP must also be configured for 768 kHz input (future work).
+    m_rx[2].frequency = 3865000;   // 80m LSB — overridden by setReceiverFrequency
+    // DDC2 samplingRate is set by setSampleRate() which RadioModel queues
+    // before connectToRadio in the FIFO (see RadioModel::connectToRadio).
+    // Do NOT hardcode a rate here — it would stomp the user-selected value.
 
     // From pcap: Thetis enables dither and random on all ADCs
     m_adc[0].dither = 1;
