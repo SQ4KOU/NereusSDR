@@ -1782,3 +1782,151 @@ gh issue close 46 --comment "Resolved by v0.2.0 release."
   touching a file that already received a Thetis header (likely
   `NeedleItem.cpp`), the header must not be disturbed — the paint change
   goes in the function body only. The task step explicitly flags this.
+
+---
+
+# Phase 4 — Deep-audit pass (added 2026-04-17 during second/third-pass self-review)
+
+Phases 1–3 (initial compliance sweep, second-pass contributor reconciliation, third-pass mi0bot-fork verification) landed 35+ commits on `compliance/v0.2.0-remediation`. This addendum documents the additional gaps surfaced by a late deep-dive review and the tasks to close them.
+
+Rationale: the first three passes focused on Thetis-source derivation. Phase 4 widens the aperture to cover (a) standard GPL notice completeness, (b) non-Thetis upstream provenance (AetherSDR, WDSP license specifics, Style-7 font), (c) binary-level attribution surfaces, and (d) process hardening so future omissions can be caught or cured mechanically.
+
+## Task 24 — Permission-notice third paragraph
+
+**Gap:** Headers applied in Phases 1–3 include the first two paragraphs of the standard GPLv2-or-later permission notice (redistribute-rights + warranty disclaimer) but omit the third ("You should have received a copy of the GNU General Public License…"). Thetis source files include all three. Our `Hl2IoBoardTab.*` files (written by hand in Phase 3) include all three; the ~170 template-applied files do not. This is a GPL §1 "keep intact" deficiency and creates an internal inconsistency.
+
+**Files:** `docs/attribution/HEADER-TEMPLATES.md` (all 5 variant templates) + every file currently in `THETIS-PROVENANCE.md`'s derivative tables (~170).
+
+**Steps:**
+- [ ] Edit HEADER-TEMPLATES.md — append the "You should have received a copy" paragraph to variants 1, 2, 3, 4, 5 (each variant's permission block).
+- [ ] Re-run `scripts/insert-thetis-headers.py` with an idempotency-safe mode OR write a small back-fill script that locates existing headers missing the third paragraph and inserts it in place. Must not double-insert.
+- [ ] Run verifier (171/171 unchanged; markers are structural, third-paragraph isn't checked).
+- [ ] Consider extending verifier to check for "Foundation, Inc., 51 Franklin Street" as a third-paragraph marker (optional).
+- [ ] Build smoke.
+- [ ] Commit batched: `fix(compliance): extend header templates with FSF address / third paragraph of permission notice`.
+
+## Task 25 — AetherSDR provenance audit
+
+**Gap:** CLAUDE.md source-first protocol explicitly says *"AetherSDR provides the skeleton — class structure, signals/slots, threading, state management patterns"*. ~170 Modification-History blocks in our compliance-branch files name AetherSDR (ten9876/AetherSDR) as the structural template. AetherSDR itself is GPL. We have done **zero** provenance work on it — no contributor index, no per-file audit, no attribution. This parallels the original Thetis omission Richie flagged and is the biggest remaining hole.
+
+**Files:** potentially up to ~170 NereusSDR files (the ones whose Modification-History currently cites AetherSDR).
+
+**Steps:**
+- [ ] Clone `ten9876/AetherSDR` to `~/AetherSDR/`.
+- [ ] Extract contributor blocks from every AetherSDR source file. Build `docs/attribution/aethersdr-contributor-index.md` (parallel structure to `thetis-contributor-index.md`).
+- [ ] For each NereusSDR file whose Modification-History cites AetherSDR as structural template, judge:
+  - *Material structural derivation* — file architecture / class layout / signal-slot plumbing was taken from a specific AetherSDR counterpart → add AetherSDR contributor attribution to the file's Copyright block
+  - *Generic Qt6 convention inspiration only* — no file-level derivation; the citation in Modification-History is more a "we looked at AetherSDR for general Qt patterns" acknowledgment → leave as-is, possibly soften the modification-history line
+- [ ] Produce `docs/attribution/AETHERSDR-PROVENANCE.md` listing every derivative file (if any) + justification for each "not derived" judgment.
+- [ ] Update HEADER-TEMPLATES.md with a sixth variant `aethersdr` (or fold into `multi-source` where Thetis + AetherSDR both contribute).
+- [ ] Apply headers to files needing AetherSDR attribution.
+- [ ] Verify, build, commit.
+
+**Expected cost:** comparable to Phase 1 + Phase 2 for Thetis — this is the heaviest Phase 4 task. Budget: one opus subagent for the index, another for the per-file diff, a third for application.
+
+## Task 26 — WDSP license specificity
+
+**Gap:** WDSP files in `third_party/wdsp/` may be licensed **GPLv2-only** (not GPLv2-or-later) by Warren Pratt (NR0V). If so, our wrapper files in `src/core/` (e.g. `WdspEngine.cpp`, `RxChannel.cpp`) that link against WDSP must be distributable as GPLv2-only — not GPLv3-only. NereusSDR as a whole currently claims GPLv3 via root LICENSE.
+
+**Files:** `third_party/wdsp/*.c`, `third_party/wdsp/*.h`, `third_party/wdsp/LICENSE` (if present), plus NereusSDR wrappers.
+
+**Steps:**
+- [ ] Grep `third_party/wdsp/` for `"either version 2"`, `"version 2 only"`, `"or (at your option) any later version"`. Classify each WDSP file.
+- [ ] If any WDSP file is GPLv2-only: document in `docs/attribution/WDSP-PROVENANCE.md`; verify that NereusSDR's root LICENSE strategy is compatible. (GPLv3 aggregating GPLv2-only code is NOT compatible — would require relicensing root to GPLv2 or negotiating with NR0V.)
+- [ ] If WDSP is consistently GPLv2-or-later: document and move on.
+- [ ] Verify every WDSP file's copyright block is intact (NR0V attribution preserved per Richie's §6.1 already-OK finding).
+- [ ] Commit the WDSP provenance document.
+
+**Expected outcome:** most likely WDSP is v2-or-later (consistent with Thetis), and this task closes as a simple documentation commit. If not, we have a larger licensing decision.
+
+## Task 27 — Style-7 / Digital-7 font credit
+
+**Gap:** Thetis `console.cs` explicitly credits *"Sizenko Alexander of Style-7 (http://www.styleseven.com/) for the Digital-7 font"*. If NereusSDR uses that font (in widgets, meter labels, clocks, VFO displays), the credit should be preserved in any file that uses or references it, per GPL attribution-preservation.
+
+**Files:** grep the tree for "Digital-7", "digital7", "Style-7", "styleseven", also check `resources/` for any `.ttf`/`.otf`.
+
+**Steps:**
+- [ ] Grep: `rg -i "digital-?7|style-?7|styleseven|sizenko" src/ resources/ docs/`
+- [ ] If the font is used: add a credit line to the source files that reference it, and to `docs/attribution/ASSETS.md`. Include the Style-7 URL.
+- [ ] If the font is NOT used: document the absence in `ASSETS.md` for clarity.
+- [ ] Commit.
+
+## Task 28 — Binary-metadata attribution
+
+**Gap:** v0.2.0 binaries will embed copyright strings in platform-specific metadata. Currently these strings reflect NereusSDR-only copyright (from `CMakeLists.txt` project() declaration and `resources/icons/NereusSDR.rc`). For compliance they should acknowledge the Thetis lineage at the metadata level.
+
+**Files:** `CMakeLists.txt`, `resources/icons/NereusSDR.rc`, macOS `Info.plist` template (if any — may be generated by CMake), Linux AppStream metadata (if any).
+
+**Steps:**
+- [ ] Grep for any existing copyright strings in build artifacts: `rg -i "copyright|legalcopyright|cfbundlecopyright" CMakeLists.txt resources/ .github/`.
+- [ ] Propose a short binary-metadata copyright string: `"© 2026 J.J. Boyd (KG4VCF); NereusSDR is a GPL port of Thetis (ramdor/Thetis) within the OpenHPSDR / FlexRadio lineage"` or similar compact form.
+- [ ] Wire into Windows `.rc`, macOS bundle (via CMake), any AppImage desktop file.
+- [ ] Build and inspect a produced binary's metadata to confirm the string is embedded.
+- [ ] Commit.
+
+## Task 29 — Third-party license bundle in release artifacts
+
+**Gap:** v0.2.0 binaries will bundle Qt6 (LGPL), FFTW3 (GPL), and WDSP (GPL). Distributable binaries of GPL-aggregating software should ship a `THIRD_PARTY_LICENSES.txt` (or similar) documenting each bundled dependency's license and full text.
+
+**Files:** `release.yml` packaging step, new `packaging/THIRD_PARTY_LICENSES.txt.in` or generation script, `CMakeLists.txt` install rules.
+
+**Steps:**
+- [ ] Review current `release.yml` — does it include any license-bundling step? (Most likely no.)
+- [ ] Create `packaging/third-party-licenses/` with one text file per dependency: `qt6.txt`, `fftw3.txt`, `wdsp.txt`. Include the full license text for each.
+- [ ] Add CMake install rule(s) to copy the combined text into release packages (AppImage, DMG, NSIS installer).
+- [ ] Rebuild + inspect a release artifact to confirm the file is present and readable.
+- [ ] Commit.
+
+## Task 30 — CI verifier enforcement
+
+**Gap:** `scripts/verify-thetis-headers.py` runs manually. If a PR adds a Thetis-derived file without a proper header, nothing automated catches it.
+
+**Files:** `.github/workflows/ci.yml`.
+
+**Steps:**
+- [ ] Add a job step to `ci.yml`: `python3 scripts/verify-thetis-headers.py` — fails the CI build if the verifier exits non-zero.
+- [ ] Optionally add a reverse-sync check: every file that appears in the `src/` tree AND has a Thetis-like `// Ported from` / `// From Thetis` marker should appear in `THETIS-PROVENANCE.md`. This catches the case where someone adds a ported file but forgets to update PROVENANCE.
+- [ ] Test the new CI step by running the workflow on a test PR that deliberately omits a header.
+- [ ] Commit.
+
+## Task 31 — Reverse-sync PROVENANCE check
+
+**Gap:** `THETIS-PROVENANCE.md` is trusted as authoritative but nothing verifies that every ported file in the tree is actually listed in it. A file could be ported, headered, and shipping — but missing from PROVENANCE — and the verifier would never flag it.
+
+**Files:** `scripts/verify-thetis-headers.py` (extend) OR new `scripts/verify-provenance-sync.py`.
+
+**Steps:**
+- [ ] Scan `src/` and `tests/` for files containing the "Ported from" or "From Thetis" marker that are NOT listed in PROVENANCE.
+- [ ] Also scan PROVENANCE for paths that no longer exist on disk (stale rows).
+- [ ] Exit non-zero on any finding.
+- [ ] Wire into CI alongside Task 30.
+- [ ] Commit.
+
+## Optional cleanup tasks (deferred from decisions log; execute only if time permits)
+
+- **Task 32:** `P1RadioConnection.h` — reclassify variant to `thetis-no-samphire` in PROVENANCE and drop the Samphire dual-license stanza (currently retained as Phase 2 option B). Commit: `cleanup(compliance): tighten P1RadioConnection.h attribution`.
+- **Task 33:** `tst_rxchannel_nb2_polish.cpp` — remove FlexRadio copyright line (cited sources are Wigley-only + NR0V-only, no FlexRadio).
+- **Task 34:** Strip FlexRadio + Wigley from MeterManager.cs-only derivatives (the meter files where MW0LGE is sole author of the cited source). Under-attribution risk is low; this is precision-only cleanup.
+- **Task 35:** Reclassify ~20 thetis-samphire files to `multi-source` in PROVENANCE where Phase 2 added non-Samphire contributors (nomenclature only, no functional impact).
+
+## Execution order recommendation
+
+Serial:
+1. Task 24 (3rd paragraph) — mechanical, unblocks consistent template for all subsequent work
+2. Task 27 (Style-7 grep) — quick scan, may close immediately
+3. Task 26 (WDSP license check) — documentation task, probably closes as clean
+4. Task 25 (AetherSDR audit) — heaviest; opus subagents
+5. Task 28 (binary metadata) — needs build verification
+6. Task 29 (third-party licenses bundle) — ships alongside release pipeline
+7. Task 30 + 31 (CI hardening) — last; benefits from everything being green first
+
+Tasks 32–35 run opportunistically; none are blocking for Richie's review or v0.2.0 release.
+
+## Exit criteria for Phase 4
+
+- All Phase 4 tasks 24–31 committed on `compliance/v0.2.0-remediation`
+- Verifier still 171/171 (or whatever the AetherSDR audit brings us to)
+- Build clean on all three platforms
+- `docs/attribution/REMEDIATION-LOG.md` has one entry per Phase 4 finding
+- Richie informed of the Phase 4 additions (update to the courtesy bundle or a short follow-up message)
+
