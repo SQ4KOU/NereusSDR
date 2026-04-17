@@ -15,13 +15,27 @@ All assets listed here are GPL-2.0-or-later unless noted otherwise.
 | `cross-needle.png` | Original NereusSDR artwork, hand-designed by J.J. Boyd (KG4VCF). 1104×928 PNG. Prior to the compliance remediation this file was a byte-identical placeholder copy of `ananMM.png` (commit `84f77e8`, 2026-04-11); the placeholder was never shipped in a release and has been replaced with wholly original artwork. No Thetis / OE3IDE skin image was copied or derived. | J.J. Boyd (KG4VCF) | GPL-2.0-or-later | 2026-04-17 |
 | `cross-needle-bg.png` | Original NereusSDR artwork, hand-designed by J.J. Boyd (KG4VCF). 1104×928 PNG, same source as `cross-needle.png`; the two files exist so the rendering code's two-layer image path continues to function. | J.J. Boyd (KG4VCF) | GPL-2.0-or-later | 2026-04-17 |
 
+### Source artwork files
+
+The original hand-designed JPG masters from which the shipping PNGs
+were exported are committed alongside for reference and for direct
+byte-for-byte inspection:
+
+- `docs/attribution/source-artwork/NereusMeter.jpg` — 1360×768 JPG master for `ananMM.png`
+- `docs/attribution/source-artwork/NereusMeter-Dual.jpg` — 1104×928 JPG master for `cross-needle.png` and `cross-needle-bg.png`
+
+The PNGs under `resources/meters/` are deterministic `sips` exports of
+these JPG masters (lossless pixel-for-pixel conversion); re-running
+`sips -s format png <source.jpg> --out <target.png>` reproduces the
+exact shipping PNG byte-for-byte.
+
 ### Provenance of earlier placeholders
 
 Interim programmatic generators (`tools/generate-meter-face.py`,
 `tools/generate-cross-needle.py`) were used during the compliance sweep
-before the hand-designed artwork was final. They are retained in the
-repository for history; the shipping artwork is the hand-designed
-version authored by J.J. Boyd and listed above.
+before the hand-designed artwork was final. They have been removed
+from the repository now that the hand-designed artwork is in place;
+the shipping artwork above is authoritative.
 
 ---
 
