@@ -2,9 +2,11 @@
 
 This directory holds the public-facing attribution record for NereusSDR:
 
-- [`HEADER-TEMPLATES.md`](HEADER-TEMPLATES.md) — Canonical header-block
-  templates applied to every file derived from Thetis, mi0bot/Thetis-HL2,
-  or other upstream GPL code. Any new port must use one of these templates.
+- [`HOW-TO-PORT.md`](HOW-TO-PORT.md) — Authoritative porting protocol.
+  Every file ported from Thetis, mi0bot/Thetis-HL2, or any other upstream
+  GPL source must carry that source's verbatim top-of-file header plus a
+  NereusSDR port-citation and Modification-History block. Verbatim
+  preservation supersedes the earlier template model.
 - [`THETIS-PROVENANCE.md`](THETIS-PROVENANCE.md) — File-by-file inventory
   mapping each NereusSDR derived source file to its Thetis upstream source,
   line ranges, derivation type, and contributor set.
