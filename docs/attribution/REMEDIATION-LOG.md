@@ -403,4 +403,28 @@ Verifier: 171/171. Build: clean.
 
 ---
 
+## 2026-04-17 — About-dialog copyright line names only J.J. Boyd despite multi-contributor program
+
+**Discovered by:** J.J. Boyd (maintainer adversarial self-review)
+**Reported via:** Audit of the About dialog's §2(c) announcement against GPL §1's "appropriate copyright notice" requirement
+**Affected files:** `src/gui/AboutDialog.cpp`
+**Gap:** Pass 8 added the §2(c) four-element announcement, but the copyright line read `Copyright © 2026 J.J. Boyd (KG4VCF)` — singular, implying sole authorship of the running binary. NereusSDR is a derivative work: the binary contains code owned by FlexRadio Systems, Doug Wigley (W5WC), Richard Samphire (MW0LGE), the Thetis / mi0bot / AetherSDR / WDSP contributor chains, Warren Pratt (NR0V), Qt / FFTW authors, etc. A reasonable end user reading the singular line would infer that J.J. Boyd is the sole copyright holder — misrepresenting authorship in the same class of failure Pass 1 of the original remediation was called out for (independent-framing).
+
+**Fix:** Expanded the About-dialog footer copyright line to name the principal copyright-holding groups and route the reader to LICENSE for the full chain:
+
+```
+Copyright © 2004-2026 FlexRadio Systems, Doug Wigley (W5WC),
+Richard Samphire (MW0LGE), the Thetis / mi0bot / AetherSDR / WDSP
+contributors, and J.J. Boyd (KG4VCF).
+See LICENSE for the full contributor chain.
+```
+
+Year range 2004-2026 spans the full copyright lifecycle (FlexRadio PowerSDR's earliest date through current NereusSDR). The phrasing names individual persons where Thetis identifies them explicitly, and uses "contributors" group-form for the project-scope attributions whose individual contributor lists are preserved in source-file headers and PROVENANCE.md. Code comment above the Qt widget documents the reasoning for future maintainers.
+
+**Process improvement:** About-dialog refactors in future must not collapse this line to a singular-author form. The derivative-work framing is load-bearing for GPL §1 compliance.
+
+Verifier: 171/171. Build: clean.
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
