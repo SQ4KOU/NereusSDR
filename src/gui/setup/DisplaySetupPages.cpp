@@ -11,6 +11,7 @@
 //   Copyright (C) 2004-2009  FlexRadio Systems
 //   Copyright (C) 2010-2020  Doug Wigley (W5WC)
 //   Copyright (C) 2019-2026  Richard Samphire (MW0LGE) — heavily modified
+//   Waterfall AGC Modifications Copyright (C) 2013  Phil Harman (VK6APH)
 //
 //   This program is free software; you can redistribute it and/or
 //   modify it under the terms of the GNU General Public License
