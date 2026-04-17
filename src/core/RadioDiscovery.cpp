@@ -6,6 +6,11 @@
 //   HPSDR/clsRadioDiscovery.cs, original licence from Thetis source is included below
 //
 // =================================================================
+// Additional copyright holders whose code is preserved in this file via
+// inline markers (upstream file-header block does not name them):
+//   Reid Campbell (MI0BOT) — HermesLite 2 board-ID 6 discovery mapping
+//     (preserved via inline marker on case 6 branch in parseDiscoveryReply)
+// =================================================================
 // Modification history (NereusSDR):
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic

@@ -7,6 +7,13 @@
 //   Project Files/Source/ChannelMaster/network.h, original licence from Thetis source is included below
 //
 // =================================================================
+// Additional copyright holders whose code is preserved in this file via
+// inline markers (upstream file-header blocks do not name them):
+//   Laurence Barker (G8NJJ) — ANAN-G2 / Saturn hardware support (preserved
+//     via inline markers on HPSDRHW::Saturn enum and HPSDRModel::ANAN_G2/ANAN_G2_1K)
+//   Reid Campbell (MI0BOT) — HermesLite 2 enum mappings (preserved via
+//     inline markers on HPSDRModel::HERMESLITE and HPSDRHW::HermesLite)
+// =================================================================
 // Modification history (NereusSDR):
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic

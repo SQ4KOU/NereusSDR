@@ -7,6 +7,11 @@
 //   Project Files/Source/Console/HPSDR/NetworkIO.cs (upstream has no top-of-file header — project-level LICENSE applies)
 //
 // =================================================================
+// Additional copyright holders whose code is preserved in this file via
+// inline markers (upstream file-header block does not name them):
+//   Laurence Barker (G8NJJ) — ANAN-G2 / Saturn capability note (preserved
+//     via inline marker on HPSDRModel::ANAN_G2_1K branch in profileForModel)
+// =================================================================
 // Modification history (NereusSDR):
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
