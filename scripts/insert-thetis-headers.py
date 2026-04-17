@@ -36,7 +36,7 @@ def load_templates():
     current_block = []
     in_code = False
     for line in text.splitlines():
-        m = re.match(r"^## Variant \d+ — `([a-z\-]+)`", line)
+        m = re.match(r"^## Variant \d+ — `([a-z0-9\-]+)`", line)
         if m:
             if current and current_block:
                 variants[current] = "\n".join(current_block).rstrip() + "\n"
