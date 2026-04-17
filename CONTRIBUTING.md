@@ -190,6 +190,18 @@ and proposed fix.
 
 ---
 
+## License Preservation on Derived Code
+
+Any PR that ports, translates, or materially adapts Thetis source code
+into NereusSDR must preserve the original license header, copyright
+lines, and dual-licensing notices from the Thetis source file, and append
+a dated modification note to the NereusSDR file. See
+[docs/attribution/HEADER-TEMPLATES.md](docs/attribution/HEADER-TEMPLATES.md)
+for templates and [docs/attribution/THETIS-PROVENANCE.md](docs/attribution/THETIS-PROVENANCE.md)
+for the existing provenance inventory.
+
+This is a merge-blocking requirement, not a style preference.
+
 ## Code of Conduct
 
 Be respectful, constructive, and patient. Ham radio has a long tradition
