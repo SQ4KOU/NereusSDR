@@ -42,8 +42,7 @@
 // Modification history (NereusSDR):
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
-//                 Claude Code. Structural template follows AetherSDR
-//                 (ten9876/AetherSDR) Qt6 conventions.
+//                 Claude Code.
 // =================================================================
 
 // Phase 3G-6 block 5 — TCP client transport worker.
