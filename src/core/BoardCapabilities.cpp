@@ -2,114 +2,268 @@
 // src/core/BoardCapabilities.cpp  (NereusSDR)
 // =================================================================
 //
-// Ported from multiple Thetis sources:
-//   Project Files/Source/Console/clsHardwareSpecific.cs
-//   Project Files/Source/Console/setup.cs
-//   Project Files/Source/Console/console.cs
-//   Project Files/Source/Console/enums.cs
-//   Project Files/Source/Console/HPSDR/NetworkIO.cs
-//   Project Files/Source/Console/clsDiscoveredRadioPicker.cs
-//   Project Files/Source/ChannelMaster/network.h
-//
-// Original Thetis copyright and license (preserved per GNU GPL,
-// representing the union of contributors across all cited sources):
-//
-//   Thetis is a C# implementation of a Software Defined Radio.
-//   Copyright (C) 2004-2009  FlexRadio Systems
-//   Copyright (C) 2010-2020  Doug Wigley (W5WC)
-//   Copyright (C) 2015-2020  Doug Wigley (W5WC) [ChannelMaster — LGPL]
-//   Copyright (C) 2019-2026  Richard Samphire (MW0LGE) — heavily modified
-//   Copyright (C) 2013-2019  Warren Pratt (NR0V) — dsp.cs / cmaster.c / setup.cs resampler
-//   Copyright (C) 2017-2019  Chris Codella (W2PA) — console.cs / setup.cs / NetworkIO.cs inline mods
-//   Copyright (C) 2018-2025  Laurence Barker (G8NJJ) — Andromeda / Aries / Saturn / ANAN-G2
-//   Copyright (C) 2020-2025  Joe (WD5Y) — console.cs UI tweaks / mute / ForeColor
-//   Copyright (C) 2023-2025  Bryan Rambo (W4WMT) — Resampler / VAC / cmASIO / setup.cs [2.10.3.5]
-//   Copyright (C) 2020-2025  MI0BOT — Hermes-Lite 2 fork contributions
-//   Copyright (C) 2006-2007  Bill Tracey (KD5TFD) — NetworkIO.cs / netInterface.c historical
-//
-//   This program is free software; you can redistribute it and/or
-//   modify it under the terms of the GNU General Public License
-//   as published by the Free Software Foundation; either version 2
-//   of the License, or (at your option) any later version.
-//
-//   This program is distributed in the hope that it will be useful,
-//   but WITHOUT ANY WARRANTY; without even the implied warranty of
-//   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//   GNU General Public License for more details.
-//
-//   You should have received a copy of the GNU General Public License
-//   along with this program; if not, write to the Free Software
-//   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
-//
-// Dual-Licensing Statement (applies ONLY to Richard Samphire MW0LGE's
-// contributions — preserved verbatim from Thetis LICENSE-DUAL-LICENSING):
-//
-//   For any code originally written by Richard Samphire MW0LGE, or for
-//   any modifications made by him, the copyright holder for those
-//   portions (Richard Samphire) reserves the right to use, license, and
-//   distribute such code under different terms, including closed-source
-//   and proprietary licences, in addition to the GNU General Public
-//   License granted in LICENCE. Nothing in this statement restricts any
-//   rights granted to recipients under the GNU GPL.
+// Ported from Thetis sources:
+//   Project Files/Source/Console/clsHardwareSpecific.cs, original licence from Thetis source is included below
+//   Project Files/Source/Console/setup.cs, original licence from Thetis source is included below
+//   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
+//   Project Files/Source/Console/enums.cs, original licence from Thetis source is included below
+//   Project Files/Source/Console/HPSDR/NetworkIO.cs (upstream has no top-of-file header — project-level LICENSE applies)
+//   Project Files/Source/Console/clsDiscoveredRadioPicker.cs, original licence from Thetis source is included below
+//   Project Files/Source/ChannelMaster/network.h, original licence from Thetis source is included below
 //
 // =================================================================
 // Modification history (NereusSDR):
-//   2026-04-17 — Synthesized in C++20/Qt6 for NereusSDR by J.J. Boyd
+//   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
-//                 Claude Code. Combines logic from the Thetis sources
-//                 listed above.
+//                 Claude Code.
 // =================================================================
 
-// src/core/BoardCapabilities.cpp
+/*  clsHardwareSpecific.cs
+
+This file is part of a program that implements a Software-Defined Radio.
+
+This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+
+Copyright (C) 2020-2025 Richard Samphire MW0LGE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+mw0lge@grange-lane.co.uk
+*/
 //
-// Per-board capability entries, verified against mi0bot/Thetis-HL2:
-//   clsHardwareSpecific.cs  — ADC counts (SetRxADC), model→hardware mapping
-//   Setup.cs                — attenuator ranges, sample rates, HL2 specifics
-//   console.cs              — DDC config, P1/P2 routing per board, PS/diversity
-//   HPSDR/NetworkIO.cs      — protocol, board discovery
-//   ChannelMaster/network.h — HPSDRHW enum values :446-456
-//   enums.cs                — HPSDRModel / HPSDRHW integer values :388-398
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
 //
-// ADC counts sourced from clsHardwareSpecific.cs SetRxADC() calls:
-//   HERMES/HERMESLITE/ANAN10/10E/100/100B → SetRxADC(1)  (single ADC)
-//   ANAN100D/200D/ORIONMKII/7000D/8000D/G2/G2_1K/ANVELINAPRO3/REDPITAYA
-//                                          → SetRxADC(2)  (dual ADC)
+// WORK IN PROGRESS
 //
-// Protocol sourced from clsHardwareSpecific.cs "IsProtocol2" / HasAudioAmplifier:
-//   P1: Atlas, Hermes, HermesII, Angelia, Orion, HermesLite
-//   P2: OrionMKII, Saturn, SaturnMKII
+
+//=================================================================
+// setup.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
 //
-// P1 sample rates: {48k,96k,192k} standard; HermesLite also supports 384k
-//   (Setup.cs:850-853 — "The HL supports 384K")
-// P2 sample rates: {48k,96k,192k,384k,768k,1536k} (Setup.cs:854)
-//   Only 4 slots in the array; first 4 P2 rates listed, maxSampleRate=1536000
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
 //
-// Step attenuator:
-//   Standard boards: 0..31 dB step 1 (Setup.cs:16099 "Maximum = 31")
-//   HL2: -28..+32 span = 60 dB step 1 (Setup.cs:16085-16086, PerformDelayedInit:1084-1088)
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
 //
-// Diversity/PureSignal: all 2-ADC boards support both (console.cs DDC config)
-//   HermesII (single ADC) does NOT have diversity; it does support PureSignal
-//   (console.cs:30276-30277 — HL2 ANAN10E psform.PSEnabled reference)
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //
-// OC outputs: Hermes and newer ANAN (non-HL2, non-Atlas) have 7 OC outputs
-//   HL2 and Atlas: 0 OC outputs
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to: 
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
 //
-// Alex filters/TX routing: present on all boards with an Alex accessory port
-//   (Setup.cs chkAlexPresent/chkAlexAntCtrl). Not on Atlas or HermesLite.
+//=================================================================
+// Continual modifications Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//=================================================================
 //
-// Firmware versions: ALL boards report minFirmwareVersion = 0 and
-//   knownGoodFirmware = 0. Background: Thetis enforces exactly ONE per-board
-//   firmware refusal in its entire connect path —
-//     NetworkIO.cs:136-143 → if (DeviceType == HermesII && CodeVersion < 103)
-//   No other board has a Thetis-attested firmware floor, and Thetis has no
-//   "stale firmware" warning concept at all. Rather than ship per-board
-//   guessed thresholds (the previous approach, marked TODO(3I-T2)), the
-//   firmware refusal + stale-warning paths in P1RadioConnection were removed
-//   on 2026-04-13. The minFirmwareVersion / knownGoodFirmware fields remain
-//   in the struct for now as dead metadata; they are not consulted by any
-//   connect path. Display format remains CodeVersion / 10.0f
-//   (clsDiscoveredRadioPicker.cs:305 / setup.cs:14008): v15 → "FW v1.5".
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+//=================================================================
+// console.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems 
+// Copyright (C) 2010-2020  Doug Wigley
+// Credit is given to Sizenko Alexander of Style-7 (http://www.styleseven.com/) for the Digital-7 font.
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to: 
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Modifications to support the Behringer Midi controllers
+// by Chris Codella, W2PA, May 2017.  Indicated by //-W2PA comment lines. 
+// Modifications for using the new database import function.  W2PA, 29 May 2017
+// Support QSK, possible with Protocol-2 firmware v1.7 (Orion-MkI and Orion-MkII), and later.  W2PA, 5 April 2019 
+// Modfied heavily - Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+// Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
+
+/*  enums.cs
+
+This file is part of a program that implements a Software-Defined Radio.
+
+This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+
+Copyright (C) 2000-2025 Original authors
+Copyright (C) 2020-2025 Richard Samphire MW0LGE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+mw0lge@grange-lane.co.uk
+*/
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+//
+// Upstream source 'Project Files/Source/Console/HPSDR/NetworkIO.cs' has no top-of-file GPL header —
+// project-level Thetis LICENSE applies.
+
+/*  clsDiscoveredRadioPicker.cs
+
+This file is part of a program that implements a Software-Defined Radio.
+
+This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+
+Copyright (C) 2020-2026 Richard Samphire MW0LGE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+mw0lge@grange-lane.co.uk
+*/
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+/*  network.h
+
+This file is part of a program that implements a Software-Defined Radio.
+
+Copyright (C) 2015-2020 Doug Wigley, W5WC
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+*/
 
 #include "BoardCapabilities.h"
 

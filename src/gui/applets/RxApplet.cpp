@@ -2,68 +2,119 @@
 // src/gui/applets/RxApplet.cpp  (NereusSDR)
 // =================================================================
 //
-// Ported from Thetis source:
-//   Project Files/Source/Console/console.cs
-//   Project Files/Source/Console/console.resx
-//   Project Files/Source/Console/setup.cs
-//
-// Original Thetis copyright and license (preserved per GNU GPL):
-//
-//   Thetis is a C# implementation of a Software Defined Radio.
-//   Copyright (C) 2004-2009  FlexRadio Systems
-//   Copyright (C) 2010-2020  Doug Wigley (W5WC)
-//   Copyright (C) 2019-2026  Richard Samphire (MW0LGE) — heavily modified
-//   Copyright (C) 2017-2019  Chris Codella (W2PA) — console.cs / setup.cs / NetworkIO.cs inline mods
-//   Copyright (C) 2018-2025  Laurence Barker (G8NJJ) — Andromeda / Aries / Saturn / ANAN-G2
-//   Copyright (C) 2020-2025  Joe (WD5Y) — console.cs UI tweaks / mute / ForeColor
-//   Copyright (C) 2013-2019  Warren Pratt (NR0V) — dsp.cs / cmaster.c / setup.cs resampler
-//   Copyright (C) 2023-2025  Bryan Rambo (W4WMT) — Resampler / VAC / cmASIO / setup.cs [2.10.3.5]
-//
-//   Copyright (C) 2024-2026  Jeremy (KK7GWY) / AetherSDR contributors
-//       — per https://github.com/ten9876/AetherSDR (GPLv3; see LICENSE
-//       and About dialog for the live contributor list)
-//
-//   This program is free software; you can redistribute it and/or
-//   modify it under the terms of the GNU General Public License
-//   as published by the Free Software Foundation; either version 2
-//   of the License, or (at your option) any later version.
-//
-//   This program is distributed in the hope that it will be useful,
-//   but WITHOUT ANY WARRANTY; without even the implied warranty of
-//   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//   GNU General Public License for more details.
-//
-//   You should have received a copy of the GNU General Public License
-//   along with this program; if not, write to the Free Software
-//   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
-//
-// Dual-Licensing Statement (applies ONLY to Richard Samphire MW0LGE's
-// contributions — preserved verbatim from Thetis LICENSE-DUAL-LICENSING):
-//
-//   For any code originally written by Richard Samphire MW0LGE, or for
-//   any modifications made by him, the copyright holder for those
-//   portions (Richard Samphire) reserves the right to use, license, and
-//   distribute such code under different terms, including closed-source
-//   and proprietary licences, in addition to the GNU General Public
-//   License granted in LICENCE. Nothing in this statement restricts any
-//   rights granted to recipients under the GNU GPL.
+// Ported from Thetis sources:
+//   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
+//   Project Files/Source/Console/console.resx (upstream has no top-of-file header — project-level LICENSE applies)
+//   Project Files/Source/Console/setup.cs, original licence from Thetis source is included below
 //
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
-//                 Claude Code. Layout adapted from AetherSDR `src/gui/RxApplet.{h,cpp}`
-//                 (18-control RX panel). Tier-1 SliceModel wiring
-//                 follows AetherSDR GUI↔model pattern; DSP behaviour
-//                 is Thetis.
+//                 Claude Code.
+//                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
+//                 GPLv3).
 // =================================================================
 
-// src/gui/applets/RxApplet.cpp
-// Per-slice RX controls applet — all 17 controls from spec.
+//=================================================================
+// console.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems 
+// Copyright (C) 2010-2020  Doug Wigley
+// Credit is given to Sizenko Alexander of Style-7 (http://www.styleseven.com/) for the Digital-7 font.
 //
-// Layout adapted from AetherSDR RxApplet.cpp (buildUI()).
-// Tier 1 wiring to SliceModel follows AetherSDR GUI↔model sync pattern.
-// NYI controls marked with NyiOverlay::markNyi() pending Phase 3I.
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to: 
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Modifications to support the Behringer Midi controllers
+// by Chris Codella, W2PA, May 2017.  Indicated by //-W2PA comment lines. 
+// Modifications for using the new database import function.  W2PA, 29 May 2017
+// Support QSK, possible with Protocol-2 firmware v1.7 (Orion-MkI and Orion-MkII), and later.  W2PA, 5 April 2019 
+// Modfied heavily - Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+// Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
+
+//
+// Upstream source 'Project Files/Source/Console/console.resx' has no top-of-file GPL header —
+// project-level Thetis LICENSE applies.
+
+//=================================================================
+// setup.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to: 
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Continual modifications Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//=================================================================
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
 
 #include "RxApplet.h"
 #include "NyiOverlay.h"

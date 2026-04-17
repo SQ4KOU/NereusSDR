@@ -2,63 +2,40 @@
 // src/core/P1RadioConnection.h  (NereusSDR)
 // =================================================================
 //
-// Ported from multiple Thetis sources:
-//   Project Files/Source/ChannelMaster/networkproto1.c
-//   Project Files/Source/Console/HPSDR/NetworkIO.cs
-//
-// Original Thetis copyright and license (preserved per GNU GPL,
-// representing the union of contributors across all cited sources):
-//
-//   Thetis is a C# implementation of a Software Defined Radio.
-//   Copyright (C) 2010-2020  Doug Wigley (W5WC)
-//   Copyright (C) 2020  Doug Wigley (W5WC) [ChannelMaster networkproto1.c — LGPL]
-//   Copyright (C) 2019-2026  Richard Samphire (MW0LGE) — rationalises dual-license stanza
-//   Copyright (C) 2004-2009  FlexRadio Systems
-//   Copyright (C) 2006-2007  Bill Tracey (KD5TFD) — NetworkIO.cs / netInterface.c historical
-//   Copyright (C) 2017-2019  Chris Codella (W2PA) — console.cs / setup.cs / NetworkIO.cs inline mods
-//
-//   This program is free software; you can redistribute it and/or
-//   modify it under the terms of the GNU General Public License
-//   as published by the Free Software Foundation; either version 2
-//   of the License, or (at your option) any later version.
-//
-//   This program is distributed in the hope that it will be useful,
-//   but WITHOUT ANY WARRANTY; without even the implied warranty of
-//   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//   GNU General Public License for more details.
-//
-//   You should have received a copy of the GNU General Public License
-//   along with this program; if not, write to the Free Software
-//   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
-
-// Dual-Licensing Statement (applies ONLY to Richard Samphire MW0LGE's
-// contributions — preserved verbatim from Thetis LICENSE-DUAL-LICENSING):
-//
-//   For any code originally written by Richard Samphire MW0LGE, or for
-//   any modifications made by him, the copyright holder for those
-//   portions (Richard Samphire) reserves the right to use, license, and
-//   distribute such code under different terms, including closed-source
-//   and proprietary licences, in addition to the GNU General Public
-//   License granted in LICENCE. Nothing in this statement restricts any
-//   rights granted to recipients under the GNU GPL.
+// Ported from Thetis sources:
+//   Project Files/Source/ChannelMaster/networkproto1.c, original licence from Thetis source is included below
+//   Project Files/Source/Console/HPSDR/NetworkIO.cs (upstream has no top-of-file header — project-level LICENSE applies)
 //
 // =================================================================
 // Modification history (NereusSDR):
-//   2026-04-17 — Synthesized in C++20/Qt6 for NereusSDR by J.J. Boyd
+//   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
-//                 Claude Code. Combines logic from the Thetis sources
-//                 listed above.
+//                 Claude Code.
 // =================================================================
 
-// src/core/P1RadioConnection.h
+/*
+ * networkprot1.c
+ * Copyright (C) 2020 Doug Wigley (W5WC)
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ */
+
 //
-// Protocol 1 connection for Atlas/Hermes/HermesII/Angelia/Orion/HermesLite.
-// Faithfully ported from Thetis networkproto1.c + NetworkIO.cs +
-// mi0bot IoBoardHl2.cs + bandwidth_monitor.{c,h}.
-//
-// Follows the same pattern as P2RadioConnection (which ports network.c).
-// Instances live on the Connection worker thread.
-// Call init() after moveToThread() to create sockets/timers on the worker.
+// Upstream source 'Project Files/Source/Console/HPSDR/NetworkIO.cs' has no top-of-file GPL header —
+// project-level Thetis LICENSE applies.
 
 #pragma once
 
