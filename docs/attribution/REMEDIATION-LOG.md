@@ -656,4 +656,44 @@ Verifier: 182/182. Build: clean.
 
 ---
 
+## 2026-04-17 — Compliance Plan Task 5: GPL §6 source for FFTW3 + Qt
+
+**Discovered by:** Adversarial GPL compliance audit. The Windows
+installer + portable ZIP bundle a prebuilt `libfftw3f-3.dll` (FFTW is
+GPLv2-or-later), but neither the release artifacts nor the
+`release-notes-template.md` provided the §3(a)/§6(a) "accompanied by
+corresponding source on the same medium" or a §3(b)/§6(b) written
+3-year offer. Same problem for Qt6 (LGPLv3) — dynamically linked, but
+no upstream-source pointer in the release notes.
+
+**Affected files:**
+- `.github/workflows/release.yml` — added a "Fetch FFTW3 corresponding
+  source" step in the `sign-and-publish` job, between source-tarball
+  generation and SHA256SUMS, that downloads the exact upstream
+  `fftw-3.3.5.tar.gz` archive used to build the bundled DLL. The
+  existing artifact globs (`*.tar.gz` in Sign artifacts, SHA256SUMS,
+  and the GitHub Release upload step) auto-include it without further
+  changes — minimal-blast-radius edit.
+- `.github/release-notes-template.md` — new "## Source for bundled
+  binaries (GPL §6 corresponding source)" section above
+  "## Reporting Issues". Names every bundled GPL/LGPL component
+  (NereusSDR itself, FFTW3, Qt6, WDSP) with its license, the
+  corresponding source location (release asset or upstream URL), and
+  per-platform Qt-replacement hints. Closes with a §3(b)/§6(b) written
+  offer for 3-year availability via email.
+
+**Fix (commit `<pending>`):** Implements **option (a)** from the plan
+— ship corresponding source on the same medium. Cheaper and cleaner
+than option (b) (a written-offer-only approach), since the GitHub
+Release IS the medium and a single CI step closes the obligation
+atomically per release. Estimated impact on release size: ~5MB (FFTW
+source archive).
+
+YAML validity confirmed via `python3 -c yaml.safe_load`. No build to
+run (CI workflow change).
+
+Verifier: 182/182.
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
