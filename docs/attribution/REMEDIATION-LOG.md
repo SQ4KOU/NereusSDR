@@ -485,4 +485,34 @@ Verifier: 172/172 (was 171; +1 for the new `MainWindow.h` PROVENANCE row).
 
 ---
 
+## 2026-04-17 — Compliance Plan Task 2A: MeterManager.cs `.cpp` orphans + bare-pair editors
+
+**Discovered by:** Adversarial GPL compliance audit, file-pair survey
+revealed seven Samphire-MeterManager-derived files shipping without
+attribution headers — the same defect class Samphire previously caught
+on `MeterManager.cs` itself. Three were sibling-orphans (their `.h` was
+in PROVENANCE; the `.cpp` implementation was bare). Two file pairs
+(`BaseItemEditor.{h,cpp}`, `MmioEndpointsDialog.{h,cpp}`) were entirely
+missing from PROVENANCE despite implementing Samphire's binding /
+endpoint-editor patterns.
+
+**Affected files (7 source + 1 PROVENANCE):**
+- `src/core/mmio/ExternalVariableEngine.cpp` (sibling-orphan)
+- `src/gui/containers/meter_property_editors/NeedleItemEditor.cpp` (sibling-orphan)
+- `src/gui/containers/meter_property_editors/NeedleScalePwrItemEditor.cpp` (sibling-orphan)
+- `src/gui/containers/meter_property_editors/BaseItemEditor.{h,cpp}` (bare pair)
+- `src/gui/containers/MmioEndpointsDialog.{h,cpp}` (bare pair — UI port of
+  Samphire's `frmMmioEndpoints`; transport enum mirrors clsMMIO Transport
+  values UdpListener/TcpListener/TcpClient/Serial)
+- `docs/attribution/THETIS-PROVENANCE.md` — 7 new rows added
+
+**Fix (commit `<pending>`):** Each file now carries the standard NereusSDR
+port-citation block + verbatim Thetis MeterManager.cs Samphire copyright +
+GPLv2-or-later block + dual-licensing statement, byte-identical to the
+canonical block already present in `NeedleItemEditor.h` etc.
+
+Verifier: 179/179 (was 172; +7 for new PROVENANCE rows).
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
