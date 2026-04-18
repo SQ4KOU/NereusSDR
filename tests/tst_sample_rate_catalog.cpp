@@ -1,6 +1,12 @@
-// tests/tst_sample_rate_catalog.cpp
+// =================================================================
+// tests/tst_sample_rate_catalog.cpp  (NereusSDR)
+// =================================================================
 //
-// Unit tests for SampleRateCatalog rate lists and resolvers.
+// Independently implemented from setup.cs — this test file exercises
+// NereusSDR's SampleRateCatalog API; Thetis has no equivalent test
+// suite, so no upstream header is preserved. The constants asserted
+// here are documented in the SampleRateCatalog header's verbatim cite.
+// =================================================================
 
 #include <QtTest/QtTest>
 #include <QTemporaryDir>
