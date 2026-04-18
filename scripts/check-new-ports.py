@@ -163,6 +163,33 @@ def diffed_files():
     return [line for line in diff.stdout.splitlines() if line]
 
 
+def diffed_lines(rel):
+    """Return set of 1-based line numbers added/modified in BASE_REF..HEAD for this file.
+
+    Parses unified-diff hunk headers like `@@ -45,0 +46,3 @@` (meaning
+    3 lines starting at new line 46 were added). Pure deletions
+    (new-count == 0) contribute nothing. Returns an empty set if the
+    file has no diff hunks on the NEW side.
+    """
+    mb = run(["git", "merge-base", BASE_REF, "HEAD"])
+    base = mb.stdout.strip() if mb.returncode == 0 else BASE_REF
+    diff = run(["git", "diff", "-U0", f"{base}..HEAD", "--", rel])
+    if diff.returncode != 0:
+        return set()
+    lines = set()
+    for raw in diff.stdout.splitlines():
+        m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", raw)
+        if not m:
+            continue
+        start = int(m.group(1))
+        count = int(m.group(2)) if m.group(2) is not None else 1
+        if count == 0:
+            continue
+        for i in range(start, start + count):
+            lines.add(i)
+    return lines
+
+
 def parse_provenance_paths(*doc_paths):
     """Return union of *first-column* file paths listed in provenance tables.
 
@@ -221,7 +248,7 @@ def all_src_files():
     return sorted(out)
 
 
-def check_file(rel, listed):
+def check_file(rel, listed, diff_lines=None):
     """Return list of (line_num, label, match_text) findings, or [] if OK."""
     path = REPO / rel
     if not path.is_file():
@@ -260,12 +287,15 @@ def check_file(rel, listed):
                 findings.append((i, label, m.group(0)))
                 break  # one finding per line — keeps output readable
 
-    # Cite-versioning scan (diff mode only — grandfathers pre-policy
-    # cites by never running in full-tree mode). Runs INDEPENDENTLY of
-    # the heuristic match above: a line can carry a Thetis cite AND a
-    # separate Thetis tell; we want to report both if both apply.
-    if not FULL_TREE:
+    # Cite-versioning scan runs only in diff mode AND only on lines that
+    # the PR actually added/modified. Whole-file scanning would regress
+    # ~250 existing unstamped cites in the current tree the moment
+    # anyone touches a Thetis-derived file — see HOW-TO-PORT.md
+    # §Inline cite versioning "cost proportional to churn" promise.
+    if not FULL_TREE and diff_lines is not None:
         for i, line in enumerate(text.splitlines(), start=1):
+            if i not in diff_lines:
+                continue
             m = RE_THETIS_CITE.search(line)
             if not m:
                 continue
@@ -303,7 +333,8 @@ def main():
         if ext not in EXTENSIONS:
             continue
         checked += 1
-        findings = check_file(rel, listed)
+        dlines = diffed_lines(rel) if not FULL_TREE else None
+        findings = check_file(rel, listed, diff_lines=dlines)
         if not findings:
             continue
         failures += 1

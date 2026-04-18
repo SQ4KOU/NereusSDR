@@ -84,6 +84,12 @@ The stamp takes one of three forms:
 | `[@shortsha]` | The port was verified against a between-tags commit. Grab from `git -C ../Thetis rev-parse --short HEAD`. Example: `[@abc1234]`. Minimum seven hex chars. |
 | `[vX.Y.Z.W+shortsha]` | Rare: a tagged release has post-release fixes you pulled before the next tag landed. Example: `[v2.10.3.13+abc1234]`. |
 
+The verifier enforces stamps on cites whose upstream file ends in
+`.cs`, `.c`, `.h`, or `.cpp` — code sources where upstream drift
+meaningfully affects NereusSDR logic. `.resx` cites (Thetis resource
+strings, e.g. tooltip copy) are deliberately out of scope; they
+reference display text that doesn't drift the same way.
+
 ### Placement
 
 The stamp goes **immediately after the line number(s)**, before the

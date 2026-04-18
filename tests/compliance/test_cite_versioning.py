@@ -62,7 +62,10 @@ def test_case(cnp, body: str, expect_flag: bool) -> bool:
     tmp = write_tmp(body)
     try:
         rel = str(tmp.relative_to(REPO))
-        findings = cnp.check_file(rel, listed=set())
+        # Simulate "every line in the fixture was added in the PR"
+        line_count = len(body.splitlines())
+        diff_lines = set(range(1, line_count + 1))
+        findings = cnp.check_file(rel, listed=set(), diff_lines=diff_lines)
         has_cite_finding = any(
             "cite missing version stamp" in label
             for _line, label, _m in findings
