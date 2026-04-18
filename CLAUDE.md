@@ -48,9 +48,40 @@ file's header comment:
 4. A trailing "Modification history (NereusSDR)" block with the port date,
    human author, and AI tooling disclosure
 
-Templates live in `docs/attribution/HEADER-TEMPLATES.md`. Failure to
+Templates live in `docs/attribution/HOW-TO-PORT.md`. Failure to
 preserve these notices on a new port is a GPL compliance bug, not a style
 nit — reject the PR.
+
+### Pre-port checklist (Ring 1 — authoring-time)
+
+Before reading any Thetis source file (`../Thetis/...`), state out loud:
+
+1. **Thetis file** you're about to read.
+2. **NereusSDR file(s)** the port will touch (new or existing).
+3. **Provenance status** of each NereusSDR file — run:
+    ```
+    grep -l "<nereussdr-path>" docs/attribution/THETIS-PROVENANCE.md
+    ```
+   If the file is not registered, the port is a **new attribution event**.
+4. **Plan**: if (3) returned nothing, you will add the verbatim upstream
+   header AND a PROVENANCE row in the same commit that introduces the
+   ported logic. Use `docs/attribution/HOW-TO-PORT.md` for the format.
+
+If you cannot answer (3) confidently, **stop and grep** before continuing.
+The cost of asking is one shell command; the cost of skipping is a
+merge-blocking CI failure (or worse, a missed gap that ships to main).
+
+This applies equally to:
+- New files that port Thetis logic.
+- Edits to NereusSDR-original files that **add** new ported logic
+  (e.g. wiring in a new Thetis-derived constant or formula).
+- Ports from non-Thetis upstreams (`../mi0bot-Thetis/`, `../AetherSDR/`,
+  WDSP) — same protocol, different PROVENANCE table / variant.
+
+Verifier scripts (`scripts/verify-thetis-headers.py`,
+`scripts/check-new-ports.py`) are the safety net (Ring 3, in CI). The
+local pre-commit hook installed via `scripts/install-hooks.sh` runs the
+same scripts pre-push (Ring 2). The primary control is this checklist.
 
 ### What Counts As "Guessing" (NEVER Do These)
 
