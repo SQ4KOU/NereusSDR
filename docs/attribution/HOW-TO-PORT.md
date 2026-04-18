@@ -60,3 +60,91 @@ automatically for all files listed in the PROVENANCE derivative tables.
 confirms each file carries the required anchor markers (`Ported from`,
 `Thetis`, `Copyright (C)`, `General Public License`, `Modification
 history (NereusSDR)`).
+
+## Inline cite versioning
+
+Every new or modified `// From Thetis <file>:<line>` comment in a
+NereusSDR source file must carry a bracketed version stamp. This gives
+upstream drift a visible anchor at the point of use — if Samphire
+later changes the ported constant, function body, or behaviour, the
+diff between our stamp and the latest Thetis release tells you exactly
+how far behind we are.
+
+### Grammar
+
+```
+// From Thetis <path>.<ext>:<line[, line…]> [<stamp>] — <explanation>
+```
+
+The stamp takes one of three forms:
+
+| Form | When to use |
+|---|---|
+| `[vX.Y.Z.W]` | The port was verified against a tagged Thetis release. Grab from `git -C ../Thetis describe --tags`. Example: `[v2.10.3.13]`. |
+| `[@shortsha]` | The port was verified against a between-tags commit. Grab from `git -C ../Thetis rev-parse --short HEAD`. Example: `[@abc1234]`. Minimum seven hex chars. |
+| `[vX.Y.Z.W+shortsha]` | Rare: a tagged release has post-release fixes you pulled before the next tag landed. Example: `[v2.10.3.13+abc1234]`. |
+
+The verifier enforces stamps on cites whose upstream file ends in
+`.cs`, `.c`, `.h`, or `.cpp` — code sources where upstream drift
+meaningfully affects NereusSDR logic. `.resx` cites (Thetis resource
+strings, e.g. tooltip copy) are deliberately out of scope; they
+reference display text that doesn't drift the same way.
+
+### Placement
+
+The stamp goes **immediately after the line number(s)**, before the
+em-dash that introduces the explanation.
+
+Correct:
+
+```cpp
+// From Thetis console.cs:4821 [v2.10.3.13] — original value 0.98f
+static constexpr float kAgcDecay = 0.98f;
+```
+
+Wrong (stamp in explanation — verifier won't parse it):
+
+```cpp
+// From Thetis console.cs:4821 — v2.10.3.13 original 0.98f
+```
+
+Wrong (stamp before cite body):
+
+```cpp
+// From Thetis [v2.10.3.13] console.cs:4821 — original value 0.98f
+```
+
+### Multi-file cites
+
+If a single cite references multiple Thetis files pulled at the same
+version, one stamp applies to all of them:
+
+```cpp
+// From Thetis console.cs:4821, setup.cs:847 [v2.10.3.13] — …
+```
+
+If the files were pulled at **different** versions, split into two
+cites — one per version — on consecutive lines:
+
+```cpp
+// From Thetis console.cs:4821 [v2.10.3.13] — original value 0.98f
+// From Thetis setup.cs:847 [v2.10.3.15] — refreshed when rate-list
+//    picked up the 44.1 kHz entry
+static constexpr float kAgcDecay = 0.98f;
+```
+
+### Grandfathering
+
+Pre-policy cites (shipped before this rule existed) are NOT rewritten
+as a sweep — the verifier runs only on files changed in a PR, so
+untouched cites stay as-is. When a file is edited for any reason, any
+cite on a modified line must be stamped before the PR merges. This
+keeps the cost proportional to churn.
+
+### Header vs cite
+
+The file's top-of-file header mod-history block does NOT carry a
+version stamp. Headers record who/when/what-capability ("Reimplemented
+in C++20/Qt6 … layout ports FM tab"); versions live on the cites so
+per-function fidelity is preserved even when one file draws from
+multiple Thetis versions over its lifetime.

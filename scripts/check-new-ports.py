@@ -30,6 +30,14 @@ Skip conditions (file is not flagged):
 Diff range: `git merge-base BASE_REF HEAD`..HEAD, computed once. Override
 BASE_REF via the CHECK_NEW_PORTS_BASE_REF env var (default: origin/main).
 
+Full-tree mode: set `CHECK_NEW_PORTS_FULL=1` (or pass `--full-tree` on the
+CLI) to walk every `src/**/*.{cpp,h,...}` instead of the diff. This closes
+the historical-gap case: files committed before the heuristic check
+existed that slipped through the diff-only gate. The cure is the same —
+PROVENANCE/reconciliation row, `Independently implemented from` marker,
+or `no-port-check:` escape hatch. Full-tree mode also consults the
+AetherSDR and WDSP provenance docs when computing the "listed" set.
+
 Exit 0 on clean, 1 on any flagged file.
 """
 
@@ -41,7 +49,13 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 PROVENANCE = REPO / "docs" / "attribution" / "THETIS-PROVENANCE.md"
+WDSP_PROVENANCE = REPO / "docs" / "attribution" / "WDSP-PROVENANCE.md"
+AETHER_RECONCILIATION = REPO / "docs" / "attribution" / "aethersdr-reconciliation.md"
 BASE_REF = os.environ.get("CHECK_NEW_PORTS_BASE_REF", "origin/main")
+FULL_TREE = (
+    os.environ.get("CHECK_NEW_PORTS_FULL") == "1"
+    or "--full-tree" in sys.argv
+)
 
 # C/C++ source extensions only — scripts/, docs/, tests/ Python, YAML,
 # Markdown all skipped automatically.
@@ -54,13 +68,23 @@ OPT_OUT_MARKER = "Independently implemented from"
 NO_PORT_CHECK_MARKER = "no-port-check:"
 
 CALLSIGNS = [
-    # Thetis (and Thetis-fork) contributors only. KK7GWY is the AetherSDR
-    # primary author and is NOT included here — AetherSDR provenance is
-    # tracked separately in `aethersdr-reconciliation.md`, not
-    # `THETIS-PROVENANCE.md`.
+    # Thetis (and Thetis-fork) contributors. KK7GWY is AetherSDR's primary
+    # author and is listed in full-tree mode only — see AETHER_CALLSIGNS.
     "MW0LGE", "W2PA", "W5WC", "VK6APH", "MI0BOT", "G8NJJ", "NR0V",
     "G0ORX", "KD5TFD", "DH1KLM", "W4WMT", "N1GP", "KE9NS", "K5SO",
     "OE3IDE", "KD0OSS", "AA6E",
+]
+
+# Extra tells that mark a file as AetherSDR-derived. Only consulted in
+# full-tree mode because AetherSDR provenance lives in
+# `aethersdr-reconciliation.md`, which diff-mode doesn't consult.
+AETHER_CALLSIGNS = ["KK7GWY"]
+AETHER_FILES = [
+    "AppletPanel", "CatApplet", "CwxPanel", "DvkPanel", "TunerApplet",
+    "EqApplet", "PhoneApplet", "PhoneCwApplet", "RxApplet", "TxApplet",
+    "VfoWidget", "SpectrumOverlayMenu", "SpectrumWidget", "FilterPassbandWidget",
+    "GuardedSlider", "AudioEngine", "RadioSetupDialog", "RadioDiscovery",
+    "RadioModel", "SliceModel", "PanadapterModel",
 ]
 
 # Distinctive Thetis source filenames. Limited to bases that are unlikely
@@ -86,6 +110,35 @@ RE_SOURCE_COMMENT = re.compile(
     r"//\s*(Source|From|Ported from)\s*[:\-]?\s*.*\b(thetis|MeterManager|console\.cs|cmaster\.cs|bandwidth_monitor|IoBoardHl2)\b",
     re.IGNORECASE,
 )
+# AetherSDR tells (full-tree only). AETHER_FILE names overlap with NereusSDR's
+# own class names (`RadioModel`, `SliceModel`, `AudioEngine`, …), so the bare
+# filename match would fire on every downstream user. Require the word
+# "AetherSDR" on the same line.
+RE_AETHER_CALLSIGN = re.compile(r"\b(" + "|".join(AETHER_CALLSIGNS) + r")\b")
+RE_AETHER_FILE_NEAR_MARKER = re.compile(
+    r"\bAetherSDR\b.*\b("
+    + "|".join(re.escape(f) for f in AETHER_FILES)
+    + r")\b|\b("
+    + "|".join(re.escape(f) for f in AETHER_FILES)
+    + r")\b.*\bAetherSDR\b",
+    re.IGNORECASE,
+)
+RE_AETHER_COMMENT = re.compile(
+    r"//\s*(Source|From|Ported from|Layout from|Pattern from).*\bAetherSDR\b",
+    re.IGNORECASE,
+)
+
+# Diff-mode-only: enforce that every new/modified `// From Thetis
+# <file>.<ext>:<line>` cite carries a version stamp — either a Thetis
+# release tag `[v2.10.3.13]` or a short SHA `[@abc1234]` (optionally
+# combined `[v2.10.3.13+abc1234]` for post-tag fixes pulled before the
+# next release).
+RE_THETIS_CITE = re.compile(
+    r"//\s*From\s+Thetis\s+[\w./-]+\.(?:cs|c|h|cpp)(?::\d+(?:[,\s]+\d+)*)"
+)
+RE_HAS_VERSION_STAMP = re.compile(
+    r"\[(?:v\d+(?:\.\d+)+(?:\+[0-9a-f]{7,})?|@[0-9a-f]{7,})\]"
+)
 
 
 def run(cmd):
@@ -110,25 +163,92 @@ def diffed_files():
     return [line for line in diff.stdout.splitlines() if line]
 
 
-def parse_provenance_paths():
-    """Return set of file paths listed in THETIS-PROVENANCE.md tables."""
+def diffed_lines(rel):
+    """Return set of 1-based line numbers added/modified in BASE_REF..HEAD for this file.
+
+    Parses unified-diff hunk headers like `@@ -45,0 +46,3 @@` (meaning
+    3 lines starting at new line 46 were added). Pure deletions
+    (new-count == 0) contribute nothing. Returns an empty set if the
+    file has no diff hunks on the NEW side.
+    """
+    mb = run(["git", "merge-base", BASE_REF, "HEAD"])
+    base = mb.stdout.strip() if mb.returncode == 0 else BASE_REF
+    diff = run(["git", "diff", "-U0", f"{base}..HEAD", "--", rel])
+    if diff.returncode != 0:
+        return set()
+    lines = set()
+    for raw in diff.stdout.splitlines():
+        m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", raw)
+        if not m:
+            continue
+        start = int(m.group(1))
+        count = int(m.group(2)) if m.group(2) is not None else 1
+        if count == 0:
+            continue
+        for i in range(start, start + count):
+            lines.add(i)
+    return lines
+
+
+def parse_provenance_paths(*doc_paths):
+    """Return union of *first-column* file paths listed in provenance tables.
+
+    Default (no args): just THETIS-PROVENANCE.md (diff-mode contract).
+
+    Full-tree mode passes (PROVENANCE, WDSP_PROVENANCE, AETHER_RECONCILIATION)
+    to get the complete "registered somewhere" set. All three docs use the
+    same markdown-table convention: the first cell of each data row is the
+    registered NereusSDR file path. Counterpart / source / prose cells
+    sometimes contain `src/...` strings too (e.g. reconciliation cites
+    AetherSDR upstream paths that happen to share a filename with a
+    NereusSDR file), so we MUST NOT pull paths from anywhere else in the
+    row — doing so allowlists files that aren't actually registered and
+    creates a false-negative loophole for future ports.
+
+    Backtick wrapping (``| `src/foo.h` |``) is handled. The `.{h,cpp}`
+    shorthand is only recognised in the first cell (it is, in practice,
+    never used there today — the shorthand is only used in the counterpart
+    column — but we support it for robustness).
+    """
+    if not doc_paths:
+        doc_paths = (PROVENANCE,)
     paths = set()
-    if not PROVENANCE.is_file():
-        return paths
-    for line in PROVENANCE.read_text().splitlines():
-        line = line.strip()
-        if not line.startswith("|") or line.startswith("|---"):
+    for doc in doc_paths:
+        if not doc.is_file():
             continue
-        cells = [c.strip() for c in line.strip("|").split("|")]
-        if not cells:
-            continue
-        first = cells[0].replace("`", "")
-        if first and first.lower() not in ("nereussdr file", "file"):
-            paths.add(first)
+        for line in doc.read_text().splitlines():
+            line = line.strip()
+            if not line.startswith("|") or line.startswith("|---"):
+                continue
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            if not cells:
+                continue
+            first = cells[0].strip("`").strip()
+            if not first or first.lower() in ("nereussdr file", "file"):
+                continue
+            # Expand `.{h,cpp}` shorthand if it somehow appears in column 1.
+            m = re.match(r"(src/.+)\.\{h,cpp\}$", first)
+            if m:
+                paths.add(f"{m.group(1)}.h")
+                paths.add(f"{m.group(1)}.cpp")
+            else:
+                paths.add(first)
     return paths
 
 
-def check_file(rel, listed):
+def all_src_files():
+    """Yield repo-relative paths for every C/C++ source file under src/."""
+    src = REPO / "src"
+    if not src.is_dir():
+        return []
+    out = []
+    for path in src.rglob("*"):
+        if path.is_file() and path.suffix in EXTENSIONS:
+            out.append(str(path.relative_to(REPO)))
+    return sorted(out)
+
+
+def check_file(rel, listed, diff_lines=None):
     """Return list of (line_num, label, match_text) findings, or [] if OK."""
     path = REPO / rel
     if not path.is_file():
@@ -147,28 +267,64 @@ def check_file(rel, listed):
     if NO_PORT_CHECK_MARKER in head:
         return []
 
+    patterns = [
+        (RE_SOURCE_COMMENT, "Source: comment citing Thetis"),
+        (RE_THETIS_FILE, "Thetis filename reference"),
+        (RE_CALLSIGN, "Thetis contributor callsign"),
+        (RE_THETIS_CLASS, "Thetis-style C# class name (cls*/uc*/frm*)"),
+    ]
+    if FULL_TREE:
+        patterns.extend([
+            (RE_AETHER_COMMENT, "Source: comment citing AetherSDR"),
+            (RE_AETHER_CALLSIGN, "AetherSDR contributor callsign"),
+            (RE_AETHER_FILE_NEAR_MARKER, "AetherSDR filename adjacent to 'AetherSDR' marker"),
+        ])
     findings = []
     for i, line in enumerate(text.splitlines(), start=1):
-        for pattern, label in [
-            (RE_SOURCE_COMMENT, "Source: comment citing Thetis"),
-            (RE_THETIS_FILE, "Thetis filename reference"),
-            (RE_CALLSIGN, "Thetis contributor callsign"),
-            (RE_THETIS_CLASS, "Thetis-style C# class name (cls*/uc*/frm*)"),
-        ]:
+        for pattern, label in patterns:
             m = pattern.search(line)
             if m:
                 findings.append((i, label, m.group(0)))
                 break  # one finding per line — keeps output readable
+
+    # Cite-versioning scan runs only in diff mode AND only on lines that
+    # the PR actually added/modified. Whole-file scanning would regress
+    # ~250 existing unstamped cites in the current tree the moment
+    # anyone touches a Thetis-derived file — see HOW-TO-PORT.md
+    # §Inline cite versioning "cost proportional to churn" promise.
+    if not FULL_TREE and diff_lines is not None:
+        for i, line in enumerate(text.splitlines(), start=1):
+            if i not in diff_lines:
+                continue
+            m = RE_THETIS_CITE.search(line)
+            if not m:
+                continue
+            if RE_HAS_VERSION_STAMP.search(line):
+                continue
+            findings.append((
+                i,
+                "Thetis cite missing version stamp",
+                m.group(0).strip(),
+            ))
+
     return findings
 
 
 def main():
-    files = diffed_files()
+    if FULL_TREE:
+        files = all_src_files()
+        listed = parse_provenance_paths(
+            PROVENANCE, WDSP_PROVENANCE, AETHER_RECONCILIATION
+        )
+        mode_label = "full-tree"
+    else:
+        files = diffed_files()
+        listed = parse_provenance_paths()
+        mode_label = "diff"
     if not files:
         print("No added/modified files in diff range — nothing to check.")
         return 0
 
-    listed = parse_provenance_paths()
     failures = 0
     checked = 0
 
@@ -177,7 +333,8 @@ def main():
         if ext not in EXTENSIONS:
             continue
         checked += 1
-        findings = check_file(rel, listed)
+        dlines = diffed_lines(rel) if not FULL_TREE else None
+        findings = check_file(rel, listed, diff_lines=dlines)
         if not findings:
             continue
         failures += 1
@@ -186,23 +343,39 @@ def main():
             print(f"  L{line_num} [{label}]: {match}")
         if len(findings) > 5:
             print(f"  ... and {len(findings) - 5} more matches")
+        has_cite_issue = any(
+            "cite missing version stamp" in label
+            for _i, label, _m in findings
+        )
+        if has_cite_issue:
+            print(
+                f"  Cite cure: append `[vX.Y.Z.W]` (e.g. [v2.10.3.13])"
+                f" or `[@shortsha]` (e.g. [@abc1234]) to the cite line"
+                f" — see docs/attribution/HOW-TO-PORT.md §Inline cite"
+                f" versioning. Run `git -C ../Thetis describe --tags`"
+                f" or `git -C ../Thetis rev-parse --short HEAD` to get"
+                f" the stamp."
+            )
         print(
-            f"  Cure: add a PROVENANCE row + verbatim header per "
-            f"docs/attribution/HOW-TO-PORT.md, OR add a "
-            f"`// {OPT_OUT_MARKER} <X>.h interface` comment if "
-            f"genuinely independent, OR add `// {NO_PORT_CHECK_MARKER} "
-            f"<reason>` in the file head to suppress this check for a "
-            f"legitimate false positive."
+            f"  Attribution cure: add a PROVENANCE row + verbatim"
+            f" header per docs/attribution/HOW-TO-PORT.md, OR add a"
+            f" `// {OPT_OUT_MARKER} <X>.h interface` comment if"
+            f" genuinely independent, OR add `// {NO_PORT_CHECK_MARKER}"
+            f" <reason>` in the file head to suppress this check for a"
+            f" legitimate false positive."
         )
         print()
 
     if failures == 0:
         print(
-            f"OK: {checked} added/modified C/C++ file(s) checked, "
+            f"OK [{mode_label}]: {checked} C/C++ file(s) checked, "
             f"all properly attributed or skip-marked."
         )
         return 0
-    print(f"{failures} of {checked} file(s) flagged for missing attribution.")
+    print(
+        f"[{mode_label}] {failures} of {checked} file(s) "
+        f"flagged for missing attribution."
+    )
     return 1
 
 
