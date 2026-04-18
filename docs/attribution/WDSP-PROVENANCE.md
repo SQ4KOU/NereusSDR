@@ -24,7 +24,7 @@ All 138 source files in `third_party/wdsp/src/` were examined:
   - Data tables: `calculus.c`, `FDnoiseIQ.c` (noise lookup tables)
   - Generated files: `resource.h`, `resource1.h` (MSVC IDE artifacts)
   - Minimal wrappers: `version.c`, `version.h`, `fastmath.h` (empty), `calculus.h` (empty)
-  - Third-party library: `fftw3.h` (FFTW3 header, BSD license)
+  - Third-party library: `fftw3.h` (FFTW3 header, GPLv2-or-later — same terms as the FFTW3 source upstream; the "BSD license" label in earlier versions of this doc was incorrect)
   - **Conclusion: Non-GPL sources or utility stubs; not blocking GPL compatibility**
 
 - **No files** carry GPLv2-only language (`"version 2 only"`, `"GPLv2-only"`)

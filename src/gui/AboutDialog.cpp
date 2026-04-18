@@ -210,13 +210,13 @@ void AboutDialog::buildUI()
     mainLayout->addWidget(div3);
 
     // ── Footer ──────────────────────────────────────────────────────────
-    // GPLv2 §2(c) compliance: interactive programs must, on startup or via
-    // an equivalent About announcement, display the copyright notice, an
-    // absence-of-warranty statement, a redistribute-under-these-conditions
-    // notice, and tell the user how to view the License. GPLv3 dropped the
-    // §2(c) obligation but our source files preserve GPLv2-or-later
-    // headers, so recipients using the v2 grant are still owed §2(c)-form
-    // wording. Hence the full four-element block below.
+    // GPLv3 §5(d) "Appropriate Legal Notices" compliance: interactive
+    // programs must display copyright, no-warranty, redistribute-under-
+    // these-conditions, and a how-to-view-the-License notice. The four-
+    // element block below satisfies §5(d) directly; it also satisfies
+    // GPLv2 §2(c) for downstream recipients who elect the v2 grant
+    // available via the "or later" clause in upstream Thetis source-file
+    // headers. Hence the full four-element block below.
     // The copyright line names the principal copyright-holding individuals
     // whose code appears in the running binary. NereusSDR is a derivative
     // work; the full per-file contributor chain — including inline-mod
@@ -244,7 +244,8 @@ void AboutDialog::buildUI()
     mainLayout->addWidget(copyright);
 
     auto* warranty = new QLabel(
-        QStringLiteral("This program comes with ABSOLUTELY NO WARRANTY."),
+        QStringLiteral("This program comes with ABSOLUTELY NO WARRANTY; "
+                       "see sections 15-16 of the License for details."),
         this);
     warranty->setAlignment(Qt::AlignCenter);
     warranty->setStyleSheet(QStringLiteral("color: #667788; font-size: 11px;"));

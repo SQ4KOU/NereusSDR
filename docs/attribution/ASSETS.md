@@ -106,6 +106,16 @@ source was ported from Thetis (which uses GDI+/WinForms rendering).
 
 ---
 
+## resources/help/
+
+In-app help content shipped through the Qt resource bundle (`qrc:/help/`).
+
+| File | Purpose | License |
+| --- | --- | --- |
+| `getting-started.md` | First-launch help text shown via the Help menu / Welcome flow | GPL-2.0-or-later (NereusSDR original work) |
+
+---
+
 ## resources/bandplans/
 
 Band-plan data files are derived from publicly published IARU and ARRL band-plan

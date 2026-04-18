@@ -915,4 +915,63 @@ opt-out documentation.
 
 ---
 
+## 2026-04-17 — Compliance Plan Task 13: LOW-severity batch cleanup (7 items)
+
+**Discovered by:** Adversarial GPL compliance audit. Eight LOW-severity
+items batched. L1 was completed inline as part of T12 (verifier
+hardening); the remaining 7 are folded into one commit here.
+
+**Affected files (7 fixes):**
+
+- **L2** — `docs/attribution/WDSP-PROVENANCE.md:27` — `fftw3.h` license
+  label corrected from "BSD" to "GPLv2-or-later" (FFTW headers carry
+  the same terms as the FFTW source upstream). Note in the new wording
+  acknowledges the prior label was incorrect.
+
+- **L3** — `src/gui/AboutDialog.cpp` warranty line — appended
+  "see sections 15-16 of the License for details." per GPLv3's
+  canonical "comes with ABSOLUTELY NO WARRANTY; for details type
+  'show w'." pattern.
+
+- **L4** — `docs/attribution/ASSETS.md` — added new
+  `## resources/help/` section listing `getting-started.md` (the in-app
+  help content shipped via Qt resource bundle) as GPL-2.0-or-later
+  NereusSDR original work. Closes the "asset shipped in binary but not
+  in ASSETS.md" gap.
+
+- **L5** — `src/gui/AboutDialog.cpp:195-202` comment block — rewritten
+  to reference GPLv3 §5(d) "Appropriate Legal Notices" as the primary
+  obligation; previous text mislabeled this as a "GPLv2 §2(c) holdover"
+  which an adversarial reader could cite as evidence the project didn't
+  think §5(d) applied. The new text states the four-element block
+  satisfies §5(d) directly and additionally satisfies §2(c) for
+  downstream recipients who elect the v2 grant.
+
+- **L6** — `xattr -c resources/meters/ananMM.png` — cleared
+  `com.apple.quarantine` and `com.apple.lastuseddate#PS` extended
+  attributes that were forensic evidence the file was downloaded from
+  the internet on a Mac, contradicting the ASSETS.md "AI-generated
+  locally" claim.
+
+- **L7** — `docs/attribution/LICENSE-GPLv2` — added (verbatim FSF text
+  fetched from `https://www.gnu.org/licenses/gpl-2.0.txt`, 338 lines).
+  README amended to note that GPLv3 was elected under the Thetis
+  source-file "or later" grant and that GPLv2 ships at this path for
+  reference since several WDSP and ChannelMaster source files
+  explicitly reference v2.
+
+- **L8** — `CONTRIBUTING.md` GPG-signing language reworded at lines 44
+  and 144 to scope the requirement to "this repository's `main` branch
+  branch protection" (project policy, not a license contribution
+  prerequisite). Explicit carve-out: "downstream forks and
+  redistributions are not required to sign." Closes the GPLv3 §7
+  additional-restriction attack surface.
+
+**Fix (commit `<pending>`):** Each item is a small text edit; no
+runtime behavior changes.
+
+Verifier: 193/193. Build: clean.
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
