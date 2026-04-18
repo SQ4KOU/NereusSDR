@@ -531,8 +531,10 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // Move connection to worker thread BEFORE wiring signals
     m_connection->moveToThread(m_connThread);
 
-    // Wire signals (auto-queued across threads)
-    wireConnectionSignals();
+    // Wire signals (auto-queued across threads). Pass wdspInSize so the
+    // DSP worker's accumulator drains in chunks that match the in_size
+    // we just opened the WDSP channel with.
+    wireConnectionSignals(wdspInSize);
 
     // Start thread — init() will be called on the worker thread
     connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
@@ -595,7 +597,7 @@ void RadioModel::disconnectFromRadio()
     teardownConnection();
 }
 
-void RadioModel::wireConnectionSignals()
+void RadioModel::wireConnectionSignals(int wdspInSize)
 {
     if (!m_connection) {
         return;
@@ -641,6 +643,13 @@ void RadioModel::wireConnectionSignals()
     m_dspThread->setObjectName(QStringLiteral("DspThread"));
     m_dspWorker = new RxDspWorker();   // no parent — moved to thread
     m_dspWorker->setEngines(m_wdspEngine, m_audioEngine);
+    // Per-rate accumulator drain size. Must match the in_size that
+    // WdspEngine::createRxChannel was called with above (line ~452),
+    // otherwise fexchange2 sees the wrong sample count per call and
+    // produces glitchy / jittery audio. WDSP RX output is always 64
+    // samples per call (input_rate → 48000 decimation, dual-mono
+    // panel via SetRXAPanelBinaural).
+    m_dspWorker->setBufferSizes(wdspInSize, 64);
     m_dspWorker->moveToThread(m_dspThread);
     connect(m_dspThread, &QThread::finished,
             m_dspWorker, &QObject::deleteLater);

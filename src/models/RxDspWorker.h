@@ -96,11 +96,15 @@ class RxDspWorker : public QObject {
     Q_OBJECT
 
 public:
-    // From RadioModel — Thetis formula: in_size = 64 * rate / 48000
-    // → 1024 at 768 kHz; out_size = in_size * out_rate / in_rate
-    // → 64 at 768k→48k. Kept here so the worker is self-contained.
-    static constexpr int kWdspBufSize = 1024;
-    static constexpr int kWdspOutSize = 64;
+    // Default buffer sizes match the historical hardcoded values that
+    // were correct for a 768 kHz wire rate (Thetis formula
+    // in_size = 64 * rate / 48000 → 1024 at 768 kHz, out_size always 64
+    // because WDSP decimates input_rate → 48000 internally). Real call
+    // sites override these via setBufferSizes() once the wire rate is
+    // known; the defaults exist so test fixtures and code paths that
+    // predate setBufferSizes() keep working.
+    static constexpr int kDefaultInSize  = 1024;
+    static constexpr int kDefaultOutSize = 64;
 
     explicit RxDspWorker(QObject* parent = nullptr);
     ~RxDspWorker() override;
@@ -110,6 +114,20 @@ public:
     // worker — RadioModel guarantees this by tearing the worker down
     // before destroying the engines.
     void setEngines(WdspEngine* wdsp, AudioEngine* audio);
+
+    // Configure the per-rate accumulator drain size. Must match the
+    // in_size and out_size that RadioModel passed to
+    // WdspEngine::createRxChannel for the same connect cycle, otherwise
+    // fexchange2 receives the wrong number of samples per call and
+    // produces glitchy / jittery audio output. The Thetis formula is
+    // in_size = 64 * rate / 48000; out_size is always 64 in the current
+    // RX path (input_rate → 48000 decimation). Safe to call from any
+    // thread — the assignment is atomic-equivalent for ints in practice
+    // and only takes effect at the start of the next processIqBatch.
+    void setBufferSizes(int inSize, int outSize);
+
+    int inSize() const { return m_inSize; }
+    int outSize() const { return m_outSize; }
 
 public slots:
     // Receive a batch of interleaved I/Q from ReceiverManager. Runs
@@ -130,11 +148,20 @@ signals:
     // main thread without requiring a real WDSP build.
     void batchProcessed();
 
+    // Emitted once per drained chunk, regardless of whether the WDSP
+    // engine is wired. Carries the chunk's sample count so tests can
+    // verify the drain size matches setBufferSizes(). Production code
+    // does not need to listen to this — it exists for the regression
+    // test that pins the per-rate accumulator-drain contract.
+    void chunkDrained(int sampleCount);
+
 private:
     WdspEngine*    m_wdspEngine{nullptr};
     AudioEngine*   m_audioEngine{nullptr};
     QVector<float> m_iqAccumI;
     QVector<float> m_iqAccumQ;
+    int            m_inSize{kDefaultInSize};
+    int            m_outSize{kDefaultOutSize};
 };
 
 } // namespace NereusSDR
