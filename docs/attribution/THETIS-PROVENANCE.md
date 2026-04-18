@@ -65,7 +65,9 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/gui/AddCustomRadioDialog.cpp | Project Files/Source/Console/frmAddCustomRadio.cs; Project Files/Source/Console/frmAddCustomRadio.Designer.cs | 60; 64; 81-82 | port | thetis-samphire | |
 | src/gui/AddCustomRadioDialog.h | Project Files/Source/Console/frmAddCustomRadio.cs; Project Files/Source/Console/frmAddCustomRadio.Designer.cs | full | port | thetis-samphire | .h orphan pair; .cpp was already in outbound audit |
 | src/gui/applets/PhoneCwApplet.cpp | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | 38-tone CTCSS standard list |
+| src/gui/applets/PhoneCwApplet.h | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | applet declaration; pairs with PhoneCwApplet.cpp |
 | src/gui/applets/RxApplet.cpp | Project Files/Source/Console/console.cs; Project Files/Source/Console/console.resx; Project Files/Source/Console/setup.cs | full | port | thetis-samphire | comboPreamp, AGC thresh, step attenuator, tooltips |
+| src/gui/applets/RxApplet.h | Project Files/Source/Console/console.cs; Project Files/Source/Console/console.resx; Project Files/Source/Console/setup.cs | full | port | multi-source | applet declaration; pairs with RxApplet.cpp |
 | src/gui/ConnectionPanel.cpp | Project Files/Source/Console/ucRadioList.cs; Project Files/Source/Console/clsDiscoveredRadioPicker.cs | full | port | thetis-samphire | Thetis ucRadioList port — radio list UI; both sources are Samphire-maintained |
 | src/gui/ConnectionPanel.h | Project Files/Source/Console/ucRadioList.cs | full | port | thetis-samphire | |
 | src/gui/containers/ContainerManager.cpp | Project Files/Source/Console/MeterManager.cs | 5613-5673; 5812-5918; 6012-6105; 6391-6447; 6514-6579 | port | thetis-samphire | container lifecycle |
@@ -87,6 +89,7 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/gui/containers/MmioEndpointsDialog.cpp | Project Files/Source/Console/MeterManager.cs | full | port | thetis-samphire | Qt-native UI port of Samphire's MMIO endpoint editor; transport enum mirrors clsMMIO Transport (UdpListener/TcpListener/TcpClient/Serial) |
 | src/gui/containers/MmioEndpointsDialog.h | Project Files/Source/Console/MeterManager.cs | full | port | thetis-samphire | dialog declaration; pairs with MmioEndpointsDialog.cpp |
 | src/gui/containers/MmioVariablePickerPopup.h | Project Files/Source/Console/MeterManager.cs | full | port | thetis-samphire | matches Thetis frmVariablePicker; --DEFAULT-- sentinel; Cancel-preserves-caller behavior |
+| src/gui/containers/MmioVariablePickerPopup.cpp | Project Files/Source/Console/MeterManager.cs | full | port | thetis-samphire | frmVariablePicker implementation; pairs with MmioVariablePickerPopup.h |
 | src/gui/MainWindow.cpp | Project Files/Source/Console/MeterManager.cs; Project Files/Source/Console/dsp.cs; Project Files/Source/Console/console.cs; Project Files/Source/Console/setup.cs; Project Files/Source/Console/radio.cs | full | port | multi-source | AVG_SIGNAL_STRENGTH, AGCMode/DSPMode, band defs, pbAutoAttWarningRX1, SetupForm attenuator init; mixed-lineage with AetherSDR signal-routing hub / status bar / TitleBar feature-request dialog (see aethersdr-reconciliation.md D.2) |
 | src/gui/MainWindow.h | Project Files/Source/Console/console.cs | full | port | thetis-samphire | mixed-lineage with AetherSDR per .cpp row; class shape + signal slots ported from AetherSDR MainWindow.h (see aethersdr-reconciliation.md D.2) |
 | src/gui/meters/AntennaButtonItem.cpp | Project Files/Source/Console/MeterManager.cs | 9502+ | port | thetis-samphire | clsAntennaButtonBox |
@@ -96,11 +99,15 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/gui/meters/ButtonBoxItem.cpp | Project Files/Source/Console/MeterManager.cs | 12307+ | port | thetis-samphire | clsButtonBox, layout constants |
 | src/gui/meters/ButtonBoxItem.h | Project Files/Source/Console/MeterManager.cs | 12307+; 12309-12327 | port | thetis-samphire | clsButtonBox, IndicatorType enum |
 | src/gui/meters/ClickBoxItem.h | Project Files/Source/Console/MeterManager.cs | 7571+ | port | thetis-samphire | clsClickBox |
+| src/gui/meters/ClickBoxItem.cpp | Project Files/Source/Console/MeterManager.cs | full | port | thetis-samphire | clsClickBoxItem implementation; pairs with ClickBoxItem.h |
 | src/gui/meters/ClockItem.h | Project Files/Source/Console/MeterManager.cs | 14075+ | port | thetis-samphire | clsClock |
+| src/gui/meters/ClockItem.cpp | Project Files/Source/Console/MeterManager.cs | full | port | thetis-samphire | clsClockItem implementation; pairs with ClockItem.h |
 | src/gui/meters/DataOutItem.h | Project Files/Source/Console/MeterManager.cs | 16047+ | port | thetis-samphire | clsDataOut |
+| src/gui/meters/DataOutItem.cpp | Project Files/Source/Console/MeterManager.cs | full | port | thetis-samphire | clsDataOutItem implementation; pairs with DataOutItem.h |
 | src/gui/meters/DialItem.cpp | Project Files/Source/Console/MeterManager.cs | 15399+; 33750-33899 | port | thetis-samphire | clsDialDisplay, renderDialDisplay |
 | src/gui/meters/DialItem.h | Project Files/Source/Console/MeterManager.cs | 15399+ | port | thetis-samphire | clsDialDisplay |
 | src/gui/meters/DiscordButtonItem.h | Project Files/Source/Console/MeterManager.cs | 11983+ | port | thetis-samphire | clsDiscordButtonBox |
+| src/gui/meters/DiscordButtonItem.cpp | Project Files/Source/Console/MeterManager.cs | full | port | thetis-samphire | clsDiscordButtonItem implementation; pairs with DiscordButtonItem.h |
 | src/gui/meters/FadeCoverItem.cpp | Project Files/Source/Console/MeterManager.cs | 7665+; 36292; 7887-7888; 1900 | port | thetis-samphire | clsFadeCover, renderFadeCover, FadeOnRx/Tx |
 | src/gui/meters/FadeCoverItem.h | Project Files/Source/Console/MeterManager.cs | 7665+; 1900 | port | thetis-samphire | clsFadeCover, FadeOnRx/Tx |
 | src/gui/meters/FilterButtonItem.cpp | Project Files/Source/Console/MeterManager.cs | 7674+ | port | thetis-samphire | clsFilterButtonBox |
@@ -140,11 +147,13 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/gui/meters/VfoDisplayItem.cpp | Project Files/Source/Console/MeterManager.cs | full | port | thetis-samphire | clsVfoDisplay digit handling |
 | src/gui/meters/VfoDisplayItem.h | Project Files/Source/Console/MeterManager.cs | 12881+ | port | thetis-samphire | clsVfoDisplay |
 | src/gui/meters/VoiceRecordPlayItem.h | Project Files/Source/Console/MeterManager.cs | 10222+ | port | thetis-samphire | clsVoiceRecordPlay |
+| src/gui/meters/VoiceRecordPlayItem.cpp | Project Files/Source/Console/MeterManager.cs | full | port | thetis-samphire | clsVoiceRecordPlayItem implementation; pairs with VoiceRecordPlayItem.h |
 | src/gui/meters/WebImageItem.cpp | Project Files/Source/Console/MeterManager.cs | 14165+ | port | thetis-samphire | clsWebImage |
 | src/gui/meters/WebImageItem.h | Project Files/Source/Console/MeterManager.cs | 14165+ | port | thetis-samphire | clsWebImage |
 | src/gui/setup/DisplaySetupPages.cpp | Project Files/Source/Console/display.cs | 1372 | port | thetis-samphire | RX1DisplayCalOffset |
 | src/gui/setup/DisplaySetupPages.h | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | Display tab sections |
 | src/gui/setup/DspSetupPages.cpp | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | tabDSP AGC/Noise/NoiseBlanker/CW/AMSAM/FM/VOX/CFC/MNF controls |
+| src/gui/setup/DspSetupPages.h | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | DSP setup page declarations; pairs with DspSetupPages.cpp |
 | src/gui/setup/GeneralOptionsPage.cpp | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | grpHermesStepAttenuator, groupBoxTS47, chkAutoATTRx1/2 |
 | src/gui/setup/GeneralOptionsPage.h | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | grpHermesStepAttenuator, groupBoxTS47 |
 | src/gui/setup/hardware/AntennaAlexTab.cpp | Project Files/Source/Console/setup.cs | 13393-13478; 6185-6246; 2892-2898; 18639 | port | thetis-samphire | InitAlexAntTables(), radAlexR/T enable, chkRxOutOnTx, chkEnableXVTRHF |
@@ -172,7 +181,9 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/gui/widgets/VfoModeContainers.cpp | Project Files/Source/Console/console.cs; Project Files/Source/Console/setup.designer.cs; Project Files/Source/Console/radio.cs | 40412; 40635; 2043-2044 | port | multi-source | FM TX simplex, RTTY mark default, rx_dolly defaults |
 | src/gui/widgets/VfoModeContainers.h | Project Files/Source/Console/console.cs; Project Files/Source/Console/dsp.cs | full | port | multi-source | per-sideband DIGU/DIGL offset model; .cpp is in outbound audit |
 | src/gui/widgets/VfoWidget.cpp | Project Files/Source/Console/console.cs; Project Files/Source/Console/console.resx; Project Files/Source/Console/display.cs; Project Files/Source/Console/enums.cs; Project Files/Source/Console/radio.cs; Project Files/Source/Console/dsp.cs; Project Files/Source/Console/HPSDR/specHPSDR.cs | full | port | multi-source | filter presets, AGC thresh, FM TX, many tooltips, cw_pitch, DSPMode, NB2 |
+| src/gui/widgets/VfoWidget.h | Project Files/Source/Console/console.cs; Project Files/Source/Console/console.resx; Project Files/Source/Console/display.cs; Project Files/Source/Console/enums.cs; Project Files/Source/Console/radio.cs; Project Files/Source/Console/dsp.cs; Project Files/Source/Console/HPSDR/specHPSDR.cs | full | port | multi-source | VFO widget declaration; pairs with VfoWidget.cpp |
 | src/models/Band.h | Project Files/Source/Console/console.cs | 6443 | port | thetis-samphire | BandByFreq; Band.cpp is independently implemented (IARU Region 2 spec) |
+| src/models/Band.cpp | Project Files/Source/Console/console.cs | full | port | thetis-samphire | 14-band enum implementation; pairs with Band.h |
 | src/models/PanadapterModel.cpp | Project Files/Source/Console/console.cs | 14242-14436 | port | thetis-samphire | uniform per-band defaults |
 | src/models/PanadapterModel.h | Project Files/Source/Console/console.cs | 14242-14436 | port | thetis-samphire | per-band defaults |
 | src/models/RadioModel.cpp | Project Files/Source/Console/console.cs; Project Files/Source/Console/setup.cs; Project Files/Source/Console/radio.cs; Project Files/Source/Console/dsp.cs; Project Files/Source/Console/HPSDR/NetworkIO.cs; Project Files/Source/ChannelMaster/cmaster.c | full | port | multi-source | UpdateDDCs, band defaults, CW pitch, AGC sync, filter presets, DIGL/DIGU offsets |

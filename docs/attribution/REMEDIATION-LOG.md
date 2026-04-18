@@ -845,4 +845,74 @@ Verifier: 182/182. Build: clean.
 
 ---
 
+## 2026-04-17 — Compliance Plan Task 12 + T2D follow-up: hardened verifier + 14 surfaced orphans
+
+**Discovered by:** Compliance Plan Task 12 set out to harden
+`scripts/verify-thetis-headers.py` against the orphan-pair defect class
+that Samphire previously caught on MeterManager.cs. The hardened
+verifier — on its very first run against the post-T11 tree — surfaced
+**14 hidden orphan-pair gaps** that the T2 sweep had missed.
+
+**Verifier hardening (T12):**
+- New **Check A** (orphan-pair): for every PROVENANCE-listed `.h`,
+  require its sibling `.cpp`/`.cc`/`.c` (if it exists on disk) to either
+  be listed in PROVENANCE too or carry an explicit opt-out marker
+  `// Independently implemented from <upstream> interface`. Same in
+  reverse.
+- New **Check B** (Samphire-marker consistency): if a file's PROVENANCE
+  source-list cell cites a known Samphire-authored Thetis source
+  (MeterManager.cs, console.cs, cmaster.cs, bandwidth_monitor.{c,h},
+  ucMeter.cs, ucRadioList.cs, frmMeterDisplay.cs, frmAddCustomRadio.cs,
+  clsHardwareSpecific.cs, clsDiscoveredRadioPicker.cs,
+  clsRadioDiscovery.cs, DiversityForm.cs, PSForm.cs), the file's
+  header must contain `MW0LGE` — proves the verbatim Samphire
+  copyright/dual-license block was actually transcribed.
+- Regression-tested: temporarily stripped the `MainWindow.h` header,
+  confirmed verifier flagged both missing-markers AND missing-Samphire-
+  marker; restored.
+
+**T2D follow-up — 14 orphans surfaced and fixed:**
+
+11 got sibling-cloned Thetis port-citation headers (the standard T2A/B/C
+pattern):
+- `src/gui/meters/ClickBoxItem.cpp` ← .h cited MeterManager.cs
+- `src/gui/meters/ClockItem.cpp` ← .h cited MeterManager.cs
+- `src/gui/meters/DataOutItem.cpp` ← .h cited MeterManager.cs
+- `src/gui/meters/DiscordButtonItem.cpp` ← .h cited MeterManager.cs
+- `src/gui/meters/VoiceRecordPlayItem.cpp` ← .h cited MeterManager.cs
+- `src/models/Band.cpp` ← .h cited console.cs
+- `src/gui/setup/DspSetupPages.h` ← .cpp cited setup.cs
+- `src/gui/widgets/VfoWidget.h` ← .cpp cited multi-source console.cs cluster
+- `src/gui/applets/PhoneCwApplet.h` ← .cpp cited setup.cs
+- `src/gui/applets/RxApplet.h` ← .cpp cited multi-source
+- `src/gui/containers/MmioVariablePickerPopup.cpp` ← .h cited MeterManager.cs
+
+3 got opt-out markers (genuinely independent NereusSDR implementations
+where the .h carries the Thetis lineage citation but the .cpp is
+original NereusSDR algorithm/scaffolding):
+- `src/core/NoiseFloorEstimator.cpp` — percentile-based estimator
+  (replaces, not ports, Thetis processNoiseFloor)
+- `src/core/mmio/MmioEndpoint.cpp` — Qt QObject lifecycle scaffolding
+  around the .h's MeterManager-derived enum
+- `src/core/ClarityController.cpp` — same percentile-based pattern as
+  NoiseFloorEstimator
+
+**Affected files in this commit:**
+- `scripts/verify-thetis-headers.py` — full rewrite of `parse_provenance`
+  to capture source-cell text; new `check_orphan_pair` and
+  `check_samphire_marker` functions; per-file failure reporting now
+  emits all defects, not just the first.
+- 14 source files (11 cloned headers + 3 opt-out markers).
+- `docs/attribution/THETIS-PROVENANCE.md` — 11 new rows for the
+  cloned-header files (the 3 opt-out files do NOT get PROVENANCE rows
+  by design — they aren't Thetis-derived).
+
+Verifier: 193/193 (was 182/182; +11 PROVENANCE rows). Build: clean.
+
+The verifier is now a structural merge gate: future ports cannot ship
+a sibling-orphan or a Samphire-cite-without-MW0LGE without explicit
+opt-out documentation.
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
