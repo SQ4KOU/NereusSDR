@@ -547,4 +547,41 @@ Verifier: 182/182 (was 179; +3 for new PROVENANCE rows).
 
 ---
 
+## 2026-04-17 — Compliance Plan Task 2C: P1RadioConnection.cpp mi0bot header expansion
+
+**Discovered by:** Same audit pass. The file's body carried admission-style
+`// Source: mi0bot bandwidth_monitor.{c,h}` comments at lines 788, 1302
+and `// Source: mi0bot IoBoardHl2.cs:N-N` at lines 551, 1265-1274 — but
+the file's "Ported from Thetis sources:" header list named only 4 sources
+(networkproto1.c, NetworkIO.cs, cmaster.cs, console.cs). The three
+mi0bot-cited sources were never reflected in the verbatim header stack
+— Samphire's MeterManager pattern repeating in the P1 path.
+
+**Affected files:**
+- `src/core/P1RadioConnection.cpp` — added 3 verbatim upstream blocks:
+  - `bandwidth_monitor.c` (Samphire 2025, fetched from
+    ramdor/Thetis/master, byte-identical)
+  - `bandwidth_monitor.h` (Samphire 2025, same upstream, byte-identical)
+  - `IoBoardHl2.cs` (Reid Campbell MI0BOT 2025, fetched from
+    mi0bot/OpenHPSDR-Thetis/master/Project Files/Source/Console/HPSDR/,
+    byte-identical including the trailing space on the email line)
+  Also expanded the "Ported from Thetis sources:" list at the top from
+  4 to 7 entries naming all upstream files.
+- `docs/attribution/THETIS-PROVENANCE.md` — expanded P1RadioConnection.cpp
+  row's source column to enumerate all 7 upstream files (was: notes-only
+  mention) and updated the variant note.
+
+**Fix (commit `<pending>`):** New verbatim blocks inserted between the
+last existing dual-license closing `//===//` line (130) and the
+NereusSDR-side "Migrated to VS2026" developer-note (132), so the
+upstream blocks remain contiguous and the NereusSDR commentary stays
+below them. Path discovery: an initial cite of `mi0bot/Thetis-HL2`
+404'd; the actual upstream is `mi0bot/OpenHPSDR-Thetis` under the
+`HPSDR/` subdirectory, located via `gh api` enumeration.
+
+Verifier: 182/182 (no row count change; the 3 new sources are stacked
+within an existing PROVENANCE row).
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
