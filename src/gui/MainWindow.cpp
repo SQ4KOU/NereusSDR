@@ -621,6 +621,24 @@ void MainWindow::buildUI()
         nfTracker->triggerFastAttack();
     });
 
+    // Periodic visual update: auto-AGC timer → refresh NF visuals on both widgets
+    if (m_radioModel->autoAgcTimer()) {
+        connect(m_radioModel->autoAgcTimer(), &QTimer::timeout, this, [this]() {
+            SliceModel* s = m_radioModel->activeSlice();
+            auto* nft = m_radioModel->noiseFloorTracker();
+            if (s && s->autoAgcEnabled() && nft) {
+                float nf = nft->noiseFloor();
+                double offset = s->autoAgcOffset();
+                if (m_vfoWidget) {
+                    m_vfoWidget->updateAgcAutoVisuals(true, nf, offset);
+                }
+                if (m_rxApplet) {
+                    m_rxApplet->updateAgcAutoVisuals(true, nf, offset);
+                }
+            }
+        });
+    }
+
     // TX pause: MOX signal → ClarityController
     connect(&m_radioModel->transmitModel(), &TransmitModel::moxChanged,
             m_clarityController, &ClarityController::setTransmitting);
@@ -1995,6 +2013,7 @@ void MainWindow::wireSliceToSpectrum()
 
     // --- Create floating VFO flag widget (AetherSDR pattern) ---
     VfoWidget* vfo = m_spectrumWidget->addVfoWidget(0);
+    m_vfoWidget = vfo;
     vfo->setSlice(slice);
     vfo->setFrequency(freq);
     vfo->setMode(slice->dspMode());
@@ -2268,6 +2287,17 @@ void MainWindow::wireSliceToSpectrum()
     // --- VfoWidget AUTO button → SliceModel auto-AGC toggle ---
     connect(vfo, &VfoWidget::autoAgcToggled,
             slice, &SliceModel::setAutoAgcEnabled);
+
+    // --- SliceModel auto-AGC state → update visuals on both widgets ---
+    connect(slice, &SliceModel::autoAgcEnabledChanged, this, [this, vfo, slice](bool on) {
+        auto* nft = m_radioModel->noiseFloorTracker();
+        float nf = nft ? nft->noiseFloor() : -200.0f;
+        double offset = slice->autoAgcOffset();
+        vfo->updateAgcAutoVisuals(on, nf, offset);
+        if (m_rxApplet) {
+            m_rxApplet->updateAgcAutoVisuals(on, nf, offset);
+        }
+    });
 
     // --- VfoWidget → SliceModel: RIT/XIT outbound (S1.8a stubs) ---
     connect(vfo, &VfoWidget::ritEnabledChanged, this, [slice](bool on) {
