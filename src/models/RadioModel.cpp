@@ -851,13 +851,27 @@ void RadioModel::wireSliceSignals()
         if (!m_connection || !m_connection->isConnected()) {
             return;
         }
+        // From Thetis v2.10.3.13 console.cs:46059 — if (!chkPower.Checked || _mox) return;
+        if (m_transmitModel.isMox()) {
+            return;
+        }
         if (!m_noiseFloorTracker || !m_noiseFloorTracker->isGood()) {
             return;
         }
 
         // From Thetis v2.10.3.13 console.cs:46107-46115
         const double noiseFloor = static_cast<double>(m_noiseFloorTracker->noiseFloor());
-        const double threshold = noiseFloor + slice->autoAgcOffset();
+
+        // From Thetis v2.10.3.13 console.cs:33292-33319 — agcCalOffset(rx)
+        // Simplified: 0.0f for FIXD (NereusSDR AGCMode::Off), 2.0f for others
+        // Full formula: 2.0f + (DisplayCalOffset + PreampOffset - AlexPreampOffset - FFTSizeOffset)
+        // Alex/preamp/FFT-size offsets land with spectrum knee line overlay
+        const float calOffset = (slice->agcMode() == AGCMode::Off)
+            ? 0.0f : 2.0f;
+
+        // From Thetis v2.10.3.13 console.cs:45965-45968 — apply cal offset
+        const double threshold = (noiseFloor + slice->autoAgcOffset())
+                                 - static_cast<double>(calOffset);
 
         // From Thetis v2.10.3.13 console.cs:45969-45970 — clamp [-160, +2]
         const double clamped = std::clamp(threshold, -160.0, 2.0);
