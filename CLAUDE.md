@@ -52,6 +52,37 @@ Templates live in `docs/attribution/HOW-TO-PORT.md`. Failure to
 preserve these notices on a new port is a GPL compliance bug, not a style
 nit — reject the PR.
 
+### Byte-for-byte headers and multi-file attribution
+
+Each Thetis source file has its own distinct header with different copyright
+holders and modification credits (e.g. `console.cs` credits W2PA and
+Samphire; `display.cs` credits VK6APH and Samphire). These headers are NOT
+interchangeable.
+
+- Copy each source file's header **byte-for-byte** — do not paraphrase,
+  summarize, or merge headers from different files.
+- If a NereusSDR file ports from **multiple** Thetis files, include **every**
+  relevant header, separated by `// --- From [filename] ---` markers.
+- Include the Thetis version (`v2.10.3.13`) and commit (`501e3f5`) in the
+  "Ported from" line.
+
+### Inline comment preservation
+
+All inline comments from Thetis source code within ported logic **must be
+preserved verbatim** in the C++ translation. This includes:
+
+- `// MW0LGE` tags and explanatory notes
+- `// TODO` and `// FIXME` annotations
+- Developer attribution comments (e.g. `// -W2PA`)
+- Behavioral notes (e.g. `// MW0LGE_21k5 change to rx2`)
+- Any `//` comment on or above a ported line of logic
+
+When the C++ translation restructures the code so that the comment no longer
+sits on the same line, place it on the nearest equivalent line with a note:
+```cpp
+// MW0LGE_21k5 change to rx2  [original inline comment from display.cs:10079]
+```
+
 ### Pre-port checklist (Ring 1 — authoring-time)
 
 Before reading any Thetis source file (`../Thetis/...`), state out loud:
