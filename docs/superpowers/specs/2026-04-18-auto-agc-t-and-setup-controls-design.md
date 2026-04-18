@@ -251,41 +251,216 @@ NereusSDR's port of Thetis logic constitutes a derivative work under the GPL.
 
 - **Thetis version:** v2.10.3.13 (Assembly `2.10.3.13`)
 - **Thetis commit:** `501e3f5` (ramdor/Thetis, archived)
-- **Copyright holders:** FlexRadio Systems (2004–2009), Doug Wigley (2010–2020),
-  Richard Samphire MW0LGE (dual-licensed portions)
 - **License:** GPL-2.0-or-later
 
-### Attribution Format
+### Byte-for-Byte Source File Headers
+
+Each Thetis source file has its own distinct header with different copyright
+holders and modification credits. When porting logic from a file, the NereusSDR
+file's header must reproduce the **exact** header from each Thetis source file
+it ports from. If a NereusSDR file ports from multiple Thetis files, all
+relevant headers must be included.
+
+**console.cs header:**
+```
+//=================================================================
+// console.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems 
+// Copyright (C) 2010-2020  Doug Wigley
+// Credit is given to Sizenko Alexander of Style-7 (http://www.styleseven.com/) for the Digital-7 font.
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to: 
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Modifications to support the Behringer Midi controllers
+// by Chris Codella, W2PA, May 2017.  Indicated by //-W2PA comment lines. 
+// Modifications for using the new database import function.  W2PA, 29 May 2017
+// Support QSK, possible with Protocol-2 firmware v1.7 (Orion-MkI and Orion-MkII), and later.  W2PA, 5 April 2019 
+// Modfied heavily - Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+```
+
+**display.cs header:**
+```
+//=================================================================
+// display.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley (W5WC)
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to: 
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Waterfall AGC Modifications Copyright (C) 2013 Phil Harman (VK6APH)
+// Transitions to directX and continual modifications Copyright (C) 2020-2025 Richard Samphire (MW0LGE)
+//=================================================================
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+```
+
+**setup.cs header:**
+```
+//=================================================================
+// setup.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to: 
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Continual modifications Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//=================================================================
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+```
+
+### NereusSDR File Header Format
+
+Each new NereusSDR file that ports Thetis logic includes:
+
+1. NereusSDR's own copyright line
+2. "Ported from" line with Thetis version and commit
+3. The **exact** header block(s) from each Thetis source file ported from,
+   converted from `//` to C++ `//` (already matching)
+
+Example for a file porting from both `console.cs` and `display.cs`:
+
+```cpp
+// NereusSDR — Cross-platform OpenHPSDR client
+// Copyright (C) 2026 NereusSDR contributors
+//
+// Portions ported from Thetis v2.10.3.13 (commit 501e3f5)
+// Original Thetis source headers follow:
+//
+// --- From console.cs ---
+// [exact console.cs header block]
+//
+// --- From display.cs ---
+// [exact display.cs header block]
+```
+
+### Inline Comment Preservation
+
+All inline comments from the Thetis source code that appear within ported logic
+**must be preserved byte-for-byte** in the C++ translation. This includes:
+
+- `// MW0LGE` tags and explanatory notes
+- `// TODO` and `// FIXME` annotations
+- Developer attribution comments (e.g., `// -W2PA`)
+- Behavioral notes (e.g., `// MW0LGE_21k5 change to rx2`)
+- Any `//` comment on or above a ported line of logic
+
+When the C++ translation changes the structure enough that the comment no longer
+sits on the same line, place it on the nearest equivalent line with a note:
+
+```cpp
+// MW0LGE_21k5 change to rx2  [original inline comment from display.cs:10079]
+```
+
+### Per-Line Attribution
 
 Every ported function, constant, range, default, and behavioral rule includes a
-comment with Thetis version and file attribution:
+`// From Thetis v2.10.3.13 [file]:[line]` comment:
 
 ```cpp
 // From Thetis v2.10.3.13 console.cs:45977 — agc_thresh_point default
-// GPL-2.0 · Copyright (C) FlexRadio Systems / Doug Wigley
 static constexpr int kDefaultAgcThreshold = -20;
-```
-
-For inline logic ports, the shorter form is acceptable when the GPL header is
-already present in the file's top-of-file comment block:
-
-```cpp
-// From Thetis v2.10.3.13 display.cs:4635 — noise floor lerp
-float alpha = 1.0f - std::exp(-frameIntervalMs / attackTimeMs);
-```
-
-### File-Level GPL Header
-
-Any new `.cpp`/`.h` file that contains ported Thetis logic must include a
-GPL-2.0 header block at the top referencing both NereusSDR and Thetis:
-
-```cpp
-// SPDX-License-Identifier: GPL-2.0-or-later
-// NereusSDR — Cross-platform OpenHPSDR client
-// Portions ported from Thetis v2.10.3.13 (GPL-2.0)
-// Copyright (C) 2004-2009 FlexRadio Systems
-// Copyright (C) 2010-2020 Doug Wigley
-// Copyright (C) 2026 NereusSDR contributors
 ```
 
 ### Key Attributions
