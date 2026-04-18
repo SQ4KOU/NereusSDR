@@ -843,12 +843,17 @@ void VfoWidget::buildAudioTab()
         m_agcTLabel->setAlignment(Qt::AlignRight);
         row->addWidget(m_agcTLabel);
 
-        m_agcAutoLabel = new QLabel(QStringLiteral("AUTO"), m_agcTContainer);
+        m_agcAutoLabel = new QPushButton(QStringLiteral("AUTO"), m_agcTContainer);
         m_agcAutoLabel->setStyleSheet(
-            QStringLiteral("background: #1a2a1a; border: 1px solid #adff2f;"
-                            "color: #adff2f; font-size: 7px; padding: 0 3px; border-radius: 2px;"));
+            QStringLiteral("QPushButton { background: #1a1a1a; border: 1px solid #445;"
+                            "color: #556; font-size: 7px; padding: 0 3px; border-radius: 2px; }"
+                            "QPushButton:hover { border-color: #adff2f; }"));
         m_agcAutoLabel->setFixedHeight(14);
-        m_agcAutoLabel->hide();
+        m_agcAutoLabel->setFixedWidth(30);
+        m_agcAutoLabel->setCursor(Qt::PointingHandCursor);
+        connect(m_agcAutoLabel, &QPushButton::clicked, this, [this]() {
+            emit autoAgcToggled(!m_autoAgcActive);
+        });
         row->addWidget(m_agcAutoLabel);
 
         containerLayout->addLayout(row);
@@ -866,12 +871,15 @@ void VfoWidget::buildAudioTab()
             }
         });
 
-        // Right-click on AGC-T slider → instant auto-AGC toggle
-        // From Thetis console.cs:46119-46122 — ptbRF right-click invokes auto-threshold
+        // Right-click on AGC-T slider → open Setup dialog to AGC/ALC page
         m_agcTSlider->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(m_agcTSlider, &QWidget::customContextMenuRequested,
-                this, [this](const QPoint& /*pos*/) {
-            emit autoAgcToggled(!m_autoAgcActive);
+                this, [this](const QPoint& pos) {
+            QMenu menu(m_agcTSlider);
+            menu.addAction(QStringLiteral("AGC Settings..."), this, [this]() {
+                emit openSetupRequested();
+            });
+            menu.exec(m_agcTSlider->mapToGlobal(pos));
         });
 
         audioLayout->addWidget(m_agcTContainer);
@@ -1709,15 +1717,18 @@ void VfoWidget::updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double of
             m_agcTLabel->setStyleSheet(QStringLiteral("color: #adff2f; font-size: 11px;"));
         }
 
-        // Show AUTO badge
+        // AUTO badge → bright green (active)
         if (m_agcAutoLabel) {
-            m_agcAutoLabel->show();
+            m_agcAutoLabel->setStyleSheet(
+                QStringLiteral("QPushButton { background: #1a2a1a; border: 1px solid #adff2f;"
+                                "color: #adff2f; font-size: 7px; padding: 0 3px; border-radius: 2px; }"
+                                "QPushButton:hover { background: #2a3a2a; }"));
         }
 
         // Show info sub-line
         if (m_agcInfoLabel) {
             m_agcInfoLabel->setText(
-                QStringLiteral("NF %1 dB \u00b7 offset +%2 \u00b7 right-click to disable")
+                QStringLiteral("NF %1 dB \u00b7 offset +%2")
                     .arg(static_cast<int>(noiseFloorDbm))
                     .arg(static_cast<int>(offset)));
             m_agcInfoLabel->show();
@@ -1741,10 +1752,14 @@ void VfoWidget::updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double of
             m_agcTLabel->setStyleSheet(QStringLiteral("color: #c8d8e8; font-size: 11px;"));
         }
 
-        // Hide AUTO badge and info sub-line
+        // AUTO badge → dim gray (inactive)
         if (m_agcAutoLabel) {
-            m_agcAutoLabel->hide();
+            m_agcAutoLabel->setStyleSheet(
+                QStringLiteral("QPushButton { background: #1a1a1a; border: 1px solid #445;"
+                                "color: #556; font-size: 7px; padding: 0 3px; border-radius: 2px; }"
+                                "QPushButton:hover { border-color: #adff2f; }"));
         }
+        // Hide info sub-line
         if (m_agcInfoLabel) {
             m_agcInfoLabel->hide();
         }

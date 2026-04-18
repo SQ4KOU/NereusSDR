@@ -185,6 +185,7 @@ public:
 
 signals:
     void autoAgcToggled(bool on);
+    void openSetupRequested();
 
 private:
     void buildUi();
@@ -253,7 +254,7 @@ private:
     QWidget*     m_agcTContainer{nullptr};
     QLabel*      m_agcTLabelWidget{nullptr};
     QLabel*      m_agcTLabel{nullptr};       // dB value readout
-    QLabel*      m_agcAutoLabel{nullptr};
+    QPushButton* m_agcAutoLabel{nullptr};  // clickable AUTO toggle
     QLabel*      m_agcInfoLabel{nullptr};
     bool         m_autoAgcActive{false};
     float        m_noiseFloorDbm{-200.0f};

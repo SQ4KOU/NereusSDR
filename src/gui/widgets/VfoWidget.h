@@ -516,7 +516,7 @@ private:
     QLabel*             m_agcTLabel{nullptr};
     QWidget*            m_agcTContainer{nullptr};   // wraps the entire AGC-T row
     QLabel*             m_agcTLabelWidget{nullptr}; // "AGC-T" text label
-    QLabel*             m_agcAutoLabel{nullptr};    // "AUTO" badge
+    QPushButton*        m_agcAutoLabel{nullptr};    // "AUTO" badge — clickable toggle
     QLabel*             m_agcInfoLabel{nullptr};    // info sub-line
     bool                m_autoAgcActive{false};
     float               m_noiseFloorDbm{-200.0f};
