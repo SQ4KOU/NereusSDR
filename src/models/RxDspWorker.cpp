@@ -86,8 +86,8 @@ void RxDspWorker::setEngines(WdspEngine* wdsp, AudioEngine* audio)
 
 void RxDspWorker::setBufferSizes(int inSize, int outSize)
 {
-    m_inSize = inSize;
-    m_outSize = outSize;
+    m_inSize.store(inSize, std::memory_order_relaxed);
+    m_outSize.store(outSize, std::memory_order_relaxed);
 }
 
 void RxDspWorker::processIqBatch(int receiverIndex,
@@ -97,9 +97,11 @@ void RxDspWorker::processIqBatch(int receiverIndex,
 
     // Snapshot the sizing for this batch so a concurrent
     // setBufferSizes() (e.g. mid-batch reconfigure) can't split a
-    // single drain across two values.
-    const int inSize  = m_inSize;
-    const int outSize = m_outSize;
+    // single drain across two values. The fields are std::atomic<int>
+    // to avoid the C++ data race that a plain int read would hit; the
+    // local snapshot then gives a stable pair for the rest of the batch.
+    const int inSize  = m_inSize.load(std::memory_order_relaxed);
+    const int outSize = m_outSize.load(std::memory_order_relaxed);
 
     // Deinterleave and append to accumulation buffers. Done regardless
     // of WDSP wiring so the chunkDrained signal can be observed in

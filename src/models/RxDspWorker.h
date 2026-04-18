@@ -65,6 +65,8 @@
 
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
+#include <atomic>
+
 #include <QObject>
 #include <QVector>
 
@@ -122,12 +124,13 @@ public:
     // produces glitchy / jittery audio output. The Thetis formula is
     // in_size = 64 * rate / 48000; out_size is always 64 in the current
     // RX path (input_rate → 48000 decimation). Safe to call from any
-    // thread — the assignment is atomic-equivalent for ints in practice
-    // and only takes effect at the start of the next processIqBatch.
+    // thread — m_inSize/m_outSize are std::atomic<int>, and
+    // processIqBatch snapshots both at batch start so a concurrent
+    // setBufferSizes() takes effect no earlier than the next batch.
     void setBufferSizes(int inSize, int outSize);
 
-    int inSize() const { return m_inSize; }
-    int outSize() const { return m_outSize; }
+    int inSize() const { return m_inSize.load(std::memory_order_relaxed); }
+    int outSize() const { return m_outSize.load(std::memory_order_relaxed); }
 
 public slots:
     // Receive a batch of interleaved I/Q from ReceiverManager. Runs
@@ -156,12 +159,17 @@ signals:
     void chunkDrained(int sampleCount);
 
 private:
-    WdspEngine*    m_wdspEngine{nullptr};
-    AudioEngine*   m_audioEngine{nullptr};
-    QVector<float> m_iqAccumI;
-    QVector<float> m_iqAccumQ;
-    int            m_inSize{kDefaultInSize};
-    int            m_outSize{kDefaultOutSize};
+    WdspEngine*      m_wdspEngine{nullptr};
+    AudioEngine*     m_audioEngine{nullptr};
+    QVector<float>   m_iqAccumI;
+    QVector<float>   m_iqAccumQ;
+    // Written by setBufferSizes() (typically on the main thread when the
+    // wire rate changes) and read by processIqBatch() on the DSP thread.
+    // std::atomic<int> prevents the C++ data race that plain int reads
+    // would exhibit. Relaxed ordering is sufficient: no other state is
+    // published alongside these values.
+    std::atomic<int> m_inSize{kDefaultInSize};
+    std::atomic<int> m_outSize{kDefaultOutSize};
 };
 
 } // namespace NereusSDR
