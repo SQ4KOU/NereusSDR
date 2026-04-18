@@ -81,9 +81,12 @@
 
 #include "gui/SetupPage.h"
 
+#include <QCheckBox>
+
 namespace NereusSDR {
 
 class RadioModel;
+enum class AGCMode : int;
 
 // ── AGC / ALC ─────────────────────────────────────────────────────────────────
 
@@ -91,6 +94,20 @@ class AgcAlcSetupPage : public SetupPage {
     Q_OBJECT
 public:
     explicit AgcAlcSetupPage(RadioModel* model, QWidget* parent = nullptr);
+
+private:
+    void updateCustomGating(AGCMode mode);
+
+    QComboBox*  m_agcModeCombo{nullptr};
+    QSpinBox*   m_agcAttack{nullptr};
+    QSpinBox*   m_agcDecay{nullptr};
+    QSpinBox*   m_agcHang{nullptr};
+    QSlider*    m_agcSlope{nullptr};
+    QSpinBox*   m_agcMaxGain{nullptr};
+    QSpinBox*   m_agcFixedGain{nullptr};
+    QSlider*    m_agcHangThresh{nullptr};
+    QCheckBox*  m_autoAgcChk{nullptr};
+    QSpinBox*   m_autoAgcOffset{nullptr};
 };
 
 // ── NR / ANF ──────────────────────────────────────────────────────────────────

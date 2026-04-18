@@ -59,6 +59,10 @@
 
 #include "DspSetupPages.h"
 
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
+
+#include <QCheckBox>
 #include <QComboBox>
 #include <QGroupBox>
 #include <QLabel>
@@ -89,43 +93,116 @@ static void disableGroup(QGroupBox* grp)
 AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     : SetupPage("AGC/ALC", model, parent)
 {
+    SliceModel* slice = model->activeSlice();
+
     // ── RX1 AGC ──────────────────────────────────────────────────────────────
     QGroupBox* agcGrp = addSection("RX1 AGC");
     QVBoxLayout* agcLay = qobject_cast<QVBoxLayout*>(agcGrp->layout());
 
-    auto* agcMode = new QComboBox;
-    agcMode->addItems({"Off", "Long", "Slow", "Med", "Fast", "Custom"});
-    addLabeledCombo(agcLay, "Mode", agcMode);
+    m_agcModeCombo = new QComboBox;
+    m_agcModeCombo->addItems({"Off", "Long", "Slow", "Med", "Fast", "Custom"});
+    m_agcModeCombo->setCurrentIndex(static_cast<int>(slice->agcMode()));
+    addLabeledCombo(agcLay, "Mode", m_agcModeCombo);
 
-    auto* agcAttack = new QSpinBox;
-    agcAttack->setRange(1, 1000);
-    agcAttack->setSuffix(" ms");
-    addLabeledSpinner(agcLay, "Attack", agcAttack);
+    m_agcAttack = new QSpinBox;
+    m_agcAttack->setRange(1, 1000);
+    m_agcAttack->setSuffix(" ms");
+    m_agcAttack->setValue(slice->agcAttack());
+    addLabeledSpinner(agcLay, "Attack", m_agcAttack);
 
-    auto* agcDecay = new QSpinBox;
-    agcDecay->setRange(1, 5000);
-    agcDecay->setSuffix(" ms");
-    addLabeledSpinner(agcLay, "Decay", agcDecay);
+    m_agcDecay = new QSpinBox;
+    m_agcDecay->setRange(1, 5000);
+    m_agcDecay->setSuffix(" ms");
+    m_agcDecay->setValue(slice->agcDecay());
+    addLabeledSpinner(agcLay, "Decay", m_agcDecay);
 
-    auto* agcHang = new QSpinBox;
-    agcHang->setRange(0, 5000);
-    agcHang->setSuffix(" ms");
-    addLabeledSpinner(agcLay, "Hang", agcHang);
+    m_agcHang = new QSpinBox;
+    m_agcHang->setRange(10, 5000);
+    m_agcHang->setSuffix(" ms");
+    m_agcHang->setValue(slice->agcHang());
+    addLabeledSpinner(agcLay, "Hang", m_agcHang);
 
-    auto* agcSlope = new QSlider(Qt::Horizontal);
-    agcSlope->setRange(0, 10);
-    addLabeledSlider(agcLay, "Slope", agcSlope);
+    m_agcSlope = new QSlider(Qt::Horizontal);
+    m_agcSlope->setRange(0, 20);
+    m_agcSlope->setValue(slice->agcSlope() / 10);
+    addLabeledSlider(agcLay, "Slope", m_agcSlope);
 
-    auto* agcMaxGain = new QSpinBox;
-    agcMaxGain->setRange(0, 120);
-    agcMaxGain->setSuffix(" dB");
-    addLabeledSpinner(agcLay, "Max Gain", agcMaxGain);
+    m_agcMaxGain = new QSpinBox;
+    m_agcMaxGain->setRange(-20, 120);
+    m_agcMaxGain->setSuffix(" dB");
+    m_agcMaxGain->setValue(slice->agcMaxGain());
+    addLabeledSpinner(agcLay, "Max Gain", m_agcMaxGain);
 
-    auto* agcHangThresh = new QSlider(Qt::Horizontal);
-    agcHangThresh->setRange(0, 100);
-    addLabeledSlider(agcLay, "Hang Threshold", agcHangThresh);
+    m_agcFixedGain = new QSpinBox;
+    m_agcFixedGain->setRange(-20, 120);
+    m_agcFixedGain->setSuffix(" dB");
+    m_agcFixedGain->setValue(slice->agcFixedGain());
+    addLabeledSpinner(agcLay, "Fixed Gain", m_agcFixedGain);
 
-    disableGroup(agcGrp);
+    m_agcHangThresh = new QSlider(Qt::Horizontal);
+    m_agcHangThresh->setRange(0, 100);
+    m_agcHangThresh->setValue(slice->agcHangThreshold());
+    addLabeledSlider(agcLay, "Hang Threshold", m_agcHangThresh);
+
+    // ── Wire AGC controls to SliceModel ──────────────────────────────────────
+
+    connect(m_agcModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [slice](int idx) {
+        slice->setAgcMode(static_cast<AGCMode>(idx));
+    });
+    connect(m_agcModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int idx) {
+        updateCustomGating(static_cast<AGCMode>(idx));
+    });
+
+    connect(m_agcAttack, QOverload<int>::of(&QSpinBox::valueChanged),
+            slice, &SliceModel::setAgcAttack);
+
+    connect(m_agcDecay, QOverload<int>::of(&QSpinBox::valueChanged),
+            slice, &SliceModel::setAgcDecay);
+
+    connect(m_agcHang, QOverload<int>::of(&QSpinBox::valueChanged),
+            slice, &SliceModel::setAgcHang);
+
+    connect(m_agcSlope, &QSlider::valueChanged,
+            this, [slice](int val) {
+        slice->setAgcSlope(val * 10);  // UI 0-20, WDSP gets ×10
+    });
+
+    connect(m_agcMaxGain, QOverload<int>::of(&QSpinBox::valueChanged),
+            slice, &SliceModel::setAgcMaxGain);
+
+    connect(m_agcFixedGain, QOverload<int>::of(&QSpinBox::valueChanged),
+            slice, &SliceModel::setAgcFixedGain);
+
+    connect(m_agcHangThresh, &QSlider::valueChanged,
+            slice, &SliceModel::setAgcHangThreshold);
+
+    // ── Auto AGC ─────────────────────────────────────────────────────────────
+    QGroupBox* autoAgcGrp = addSection("Auto AGC");
+    QVBoxLayout* autoAgcLay = qobject_cast<QVBoxLayout*>(autoAgcGrp->layout());
+
+    m_autoAgcChk = new QCheckBox("Auto AGC RX1");
+    m_autoAgcChk->setChecked(slice->autoAgcEnabled());
+    autoAgcLay->addWidget(m_autoAgcChk);
+
+    m_autoAgcOffset = new QSpinBox;
+    m_autoAgcOffset->setRange(-60, 60);
+    m_autoAgcOffset->setSuffix(" dB");
+    m_autoAgcOffset->setValue(static_cast<int>(slice->autoAgcOffset()));
+    addLabeledSpinner(autoAgcLay, "± Offset", m_autoAgcOffset);
+
+    connect(m_autoAgcChk, &QCheckBox::toggled,
+            slice, &SliceModel::setAutoAgcEnabled);
+
+    connect(m_autoAgcOffset, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, [slice](int val) {
+        slice->setAutoAgcOffset(static_cast<double>(val));
+    });
+
+    // ── Custom-mode gating ───────────────────────────────────────────────────
+    // From Thetis v2.10.3.13 setup.cs:5046-5076 — CustomRXAGCEnabled
+    updateCustomGating(slice->agcMode());
 
     // ── ALC ──────────────────────────────────────────────────────────────────
     QGroupBox* alcGrp = addSection("ALC");
@@ -161,6 +238,14 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     addLabeledSpinner(levLay, "Decay", levDecay);
 
     disableGroup(levGrp);
+}
+
+// From Thetis v2.10.3.13 setup.cs:5046-5076 — CustomRXAGCEnabled
+void AgcAlcSetupPage::updateCustomGating(AGCMode mode)
+{
+    const bool custom = (mode == AGCMode::Custom);
+    m_agcDecay->setEnabled(custom);
+    m_agcHang->setEnabled(custom);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
