@@ -83,6 +83,13 @@ target_compile_definitions(tst_cross_thread_teardown PRIVATE NEREUS_BUILD_TESTS)
 # not block the sender. See src/models/RxDspWorker.h for the rationale.
 nereus_add_test(tst_rx_dsp_worker_thread)
 
+# Regression test for rate-dependent audio jitter: RxDspWorker's drain
+# chunk size must follow setBufferSizes() (per-rate Thetis formula
+# in_size = 64 * rate / 48000), not a hardcoded 1024 that was correct
+# only for 768 kHz and produced fexchange2 size mismatches at every
+# other rate after PR #44 changed the default to 192 kHz.
+nereus_add_test(tst_rx_dsp_worker_buffer_sizing)
+
 # ── Phase 3G-10 VFO DSP parity + AetherSDR flag port ─────────────────────
 nereus_add_test(tst_vfo_level_bar)
 nereus_add_test(tst_scrollable_label)
