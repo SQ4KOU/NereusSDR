@@ -730,4 +730,28 @@ Verifier: 182/182.
 
 ---
 
+## 2026-04-17 — Compliance Plan Task 7: §5(d) startup notice — DECISION TO SKIP
+
+**Discovered by:** Adversarial GPL compliance audit (this same audit pass)
+flagged the About dialog as "buried two clicks deep" under Help → About
+and proposed a startup `qInfo()` banner + first-run About auto-popup.
+
+**Decision:** Skip. The audit framing overstated this as MEDIUM. GPLv3
+§5(d) requires interactive UIs to "display Appropriate Legal Notices" —
+it does not specify "on startup." The four required elements (copyright,
+no-warranty, redistribution permission, license pointer) are all present
+in `src/gui/AboutDialog.cpp:208-246`. Convention across GPL'd GUI apps
+(Inkscape, GIMP, Audacity, KiCad, Krita, Blender, and Thetis itself)
+places the §5(d) notice in the About dialog only — no startup banner,
+no first-run auto-popup. The FSF's GPLv3 FAQ accepts About dialog as the
+conventional location.
+
+NereusSDR's posture without a startup banner is already stronger than
+Thetis upstream's. If Samphire or anyone else raises it later, the fix
+is one commit (banner-only, no popup), not a release block.
+
+No file changes for this task.
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
