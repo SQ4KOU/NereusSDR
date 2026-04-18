@@ -196,11 +196,26 @@ Any PR that ports, translates, or materially adapts Thetis source code
 into NereusSDR must preserve the original license header, copyright
 lines, and dual-licensing notices from the Thetis source file, and append
 a dated modification note to the NereusSDR file. See
-[docs/attribution/HEADER-TEMPLATES.md](docs/attribution/HEADER-TEMPLATES.md)
+[docs/attribution/HOW-TO-PORT.md](docs/attribution/HOW-TO-PORT.md)
 for templates and [docs/attribution/THETIS-PROVENANCE.md](docs/attribution/THETIS-PROVENANCE.md)
 for the existing provenance inventory.
 
 This is a merge-blocking requirement, not a style preference.
+
+### Install the attribution pre-commit hook
+
+After cloning, run once:
+
+```bash
+bash scripts/install-hooks.sh
+```
+
+This points `git config core.hooksPath` at `scripts/git-hooks/` so the
+attribution verifiers (`verify-thetis-headers.py` + `check-new-ports.py`)
+run before every commit. Same scripts CI runs, but locally — catches
+missing headers and unregistered ports before push, not after a 7-minute
+CI cycle. Do not bypass the hook with `--no-verify`; fix the attribution
+instead.
 
 ## Code of Conduct
 
