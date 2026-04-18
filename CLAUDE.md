@@ -26,7 +26,11 @@ For every piece of logic you write that has a Thetis equivalent:
 
 1. **READ** the relevant Thetis source file(s). Use `find`, `grep`, or `rg`
    to locate the C# code. The Thetis repo should be cloned at
-   `../Thetis/` (relative to the NereusSDR root).
+   `../Thetis/` (relative to the NereusSDR root). Capture the Thetis
+   version tag once at the start of the session — `git -C ../Thetis
+   describe --tags` (release) or `git -C ../Thetis rev-parse --short
+   HEAD` (between releases) — every inline cite you write in this
+   session gets that stamp.
 2. **SHOW** the original code before writing anything. State:
    `"Porting from [file]:[function/line range] — original C# logic:"` and
    quote or summarize the relevant section.
@@ -131,12 +135,18 @@ same scripts pre-push (Ring 2). The primary control is this checklist.
 Preserve ALL constants, thresholds, scaling factors, and magic numbers exactly
 as they appear in Thetis. If Thetis uses `0.98f`, NereusSDR uses `0.98f`. If
 Thetis uses `2048` as a buffer size, document where it came from and keep it.
-Give constants a `constexpr` name but note the Thetis origin in a comment:
+Give constants a `constexpr` name but note the Thetis origin — with a
+version stamp — in a comment:
 
 ```cpp
-// From Thetis console.cs:4821 — original value 0.98f
+// From Thetis console.cs:4821 [v2.10.3.13] — original value 0.98f
 static constexpr float kAgcDecayFactor = 0.98f;
 ```
+
+The `[v2.10.3.13]` tag records the Thetis release the value was verified
+against. Use `[@shortsha]` when no tagged release applies, and refresh the
+stamp whenever you re-port from a newer upstream. Full grammar:
+`docs/attribution/HOW-TO-PORT.md` §Inline cite versioning.
 
 ### WDSP Calls — Extra Caution
 
@@ -239,7 +249,7 @@ maintainer review.
 * **Don't remove code you didn't add** — review the diff before submitting
 * **Atomic parameters for cross-thread DSP** — main thread writes via `std::atomic`, audio thread reads. Never hold a mutex in the audio callback.
 * **Error handling**: log with `qCWarning(lcCategory)`, don't throw exceptions
-* **Thetis origin comments**: when porting logic, add `// From Thetis [file]:[line or function]` comments
+* **Thetis origin comments**: when porting logic, add `// From Thetis [file]:[line or function] [v<version>|@<shortsha>]` comments. The bracketed stamp records the upstream release or commit the port was verified against; grab it from `git -C ../Thetis describe --tags` (or `rev-parse --short HEAD`) at the moment of porting. Full grammar and placement rules: `docs/attribution/HOW-TO-PORT.md` §Inline cite versioning
 
 ---
 
