@@ -94,6 +94,12 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     : SetupPage("AGC/ALC", model, parent)
 {
     SliceModel* slice = model->activeSlice();
+    if (!slice) {
+        // No active slice (disconnected) — show disabled placeholder
+        QGroupBox* grp = addSection("RX1 AGC");
+        disableGroup(grp);
+        return;
+    }
 
     // ── RX1 AGC ──────────────────────────────────────────────────────────────
     QGroupBox* agcGrp = addSection("RX1 AGC");

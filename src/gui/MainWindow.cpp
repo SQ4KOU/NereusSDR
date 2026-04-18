@@ -610,16 +610,10 @@ void MainWindow::buildUI()
         nfTracker->feed(binsDbm, kFrameIntervalMs);
     });
 
-    // Fast-attack triggers
+    // Fast-attack triggers — deferred until slice exists
     // From Thetis v2.10.3.13 display.cs:905 — freq change triggers fast attack
-    connect(m_radioModel->activeSlice(), &SliceModel::frequencyChanged,
-            this, [nfTracker](double /*hz*/) {
-        nfTracker->triggerFastAttack();
-    });
-    connect(m_radioModel->activeSlice(), &SliceModel::dspModeChanged,
-            this, [nfTracker](NereusSDR::DSPMode /*mode*/) {
-        nfTracker->triggerFastAttack();
-    });
+    // From Thetis v2.10.3.13 display.cs:880 — mode change triggers fast attack
+    // Connected in wireSliceToSpectrum() where activeSlice() is guaranteed non-null
     // From Thetis v2.10.3.13 display.cs:890 — OnAttenuatorDataChanged
     if (m_stepAttController) {
         connect(m_stepAttController, &StepAttenuatorController::attenuationChanged,
@@ -2306,6 +2300,23 @@ void MainWindow::wireSliceToSpectrum()
             m_rxApplet->updateAgcAutoVisuals(on, nf, offset);
         }
     });
+
+    // --- Noise floor fast-attack triggers (slice is guaranteed non-null here) ---
+    {
+        auto* nfTracker = m_radioModel->noiseFloorTracker();
+        if (nfTracker) {
+            // From Thetis v2.10.3.13 display.cs:905 — freq change > 0.5
+            connect(slice, &SliceModel::frequencyChanged,
+                    this, [nfTracker](double /*hz*/) {
+                nfTracker->triggerFastAttack();
+            });
+            // From Thetis v2.10.3.13 display.cs:880 — mode change
+            connect(slice, &SliceModel::dspModeChanged,
+                    this, [nfTracker](NereusSDR::DSPMode /*mode*/) {
+                nfTracker->triggerFastAttack();
+            });
+        }
+    }
 
     // --- VfoWidget → SliceModel: RIT/XIT outbound (S1.8a stubs) ---
     connect(vfo, &VfoWidget::ritEnabledChanged, this, [slice](bool on) {

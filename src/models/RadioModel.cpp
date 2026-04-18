@@ -465,6 +465,9 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 rxCh->setAgcSlope(m_activeSlice->agcSlope());
                 rxCh->setAgcAttack(m_activeSlice->agcAttack());
                 rxCh->setAgcDecay(m_activeSlice->agcDecay());
+                rxCh->setAgcHangThreshold(m_activeSlice->agcHangThreshold());
+                rxCh->setAgcFixedGain(m_activeSlice->agcFixedGain());
+                rxCh->setAgcMaxGain(m_activeSlice->agcMaxGain());
                 // NB2 sub-parameter defaults — From Thetis cmaster.c:55-68 (create_nobEXT)
                 // These are set-and-forget; the run flag is gated by processIq() atomics.
                 // Declared in specHPSDR.cs:922-937; WDSP nobII.c:658,686,697,707
@@ -877,9 +880,25 @@ void RadioModel::wireSliceSignals()
         const double clamped = std::clamp(threshold, -160.0, 2.0);
         const int threshInt = static_cast<int>(std::round(clamped));
 
-        // Use m_syncingAgc so the agcThresholdChanged handler doesn't disable auto
+        // Update both WDSP and model. m_syncingAgc prevents the
+        // agcThresholdChanged handler from disabling auto mode AND from
+        // re-entering the WDSP call, so we must call RxChannel directly.
         if (slice->agcThreshold() != threshInt) {
             m_syncingAgc = true;
+
+            // Direct WDSP update — the signal handler is blocked by m_syncingAgc
+            RxChannel* rxCh = m_wdspEngine ? m_wdspEngine->rxChannel(0) : nullptr;
+            if (rxCh) {
+                rxCh->setAgcThreshold(threshInt);
+                // From Thetis v2.10.3.13 console.cs:45978 — readback AGC top
+                double top = rxCh->readBackAgcTop();
+                int rfGain = static_cast<int>(std::round(top));
+                if (slice->rfGain() != rfGain) {
+                    slice->setRfGain(rfGain);
+                }
+            }
+
+            // Update model (UI sync) — handler won't re-enter WDSP
             slice->setAgcThreshold(threshInt);
             m_syncingAgc = false;
         }
