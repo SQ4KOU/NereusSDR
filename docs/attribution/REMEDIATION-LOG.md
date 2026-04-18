@@ -696,4 +696,38 @@ Verifier: 182/182.
 
 ---
 
+## 2026-04-17 — Compliance Plan Task 6: LICENSE-DUAL-LICENSING preamble
+
+**Discovered by:** Adversarial GPL compliance audit. The byte-identical
+upstream `LICENSE-DUAL-LICENSING` references "the GNU General Public
+License granted in LICENCE" — but NereusSDR's root file is `LICENSE`
+(not "LICENCE"), and now contains GPLv3, not the GPLv2 Samphire's
+reservation was originally paired against. A hostile reading: Samphire's
+reservation attaches only to the GPLv2 pairing and does not survive the
+v3 relicense. Separately, the C++/Qt6 ports of Samphire-authored C# code
+raised an unaddressed translation-rights ambiguity (audit Finding 2.3).
+
+**Affected files:**
+- `LICENSE-DUAL-LICENSING` — prepended a 22-line NereusSDR-specific
+  preamble dated 2026-04-17. Preamble has two numbered points:
+  (1) "LICENCE" should be read as the project's LICENSE (GPLv3);
+  GPLv3 was elected under the upstream "or later" grant; Samphire's
+  reservation continues to apply regardless of GPL version downstream.
+  (2) Samphire retains dual-licensing over his original C# work;
+  NereusSDR contributors' C++ ports are GPLv3 from the NereusSDR side.
+  Closing line: "The byte-identical upstream text from ramdor/Thetis
+  follows below." The upstream block is preserved unchanged below the
+  preamble (`diff` confirmed byte-identical to ramdor/Thetis/master).
+
+**Fix (commit `<pending>`):** Additive only — preamble is clearly
+NereusSDR-specific (date-stamped, headed with project name); upstream
+block is byte-preserved. The structural form (two `=` rule blocks
+stacked, same 90-char width as upstream) makes the boundary visually
+obvious so readers know which text is upstream versus NereusSDR
+commentary.
+
+Verifier: 182/182.
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
