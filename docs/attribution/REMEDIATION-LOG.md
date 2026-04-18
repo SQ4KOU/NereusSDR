@@ -451,4 +451,38 @@ Verifier: 171/171. Build: clean.
 
 ---
 
+## 2026-04-17 — Compliance Plan Task 1: MainWindow attribution headers
+
+**Discovered by:** Adversarial GPL compliance audit (fresh-eyes review)
+documented at `docs/architecture/2026-04-17-gpl-compliance-v020-remediation-plan.md`.
+**Reported via:** Bucket D.2 of `docs/attribution/aethersdr-reconciliation.md`
+flagged `src/gui/MainWindow.{h,cpp}` as the most-visible GUI files in the
+tree shipping without a formal AetherSDR citation. `MainWindow.cpp` already
+carried the multi-source Thetis verbatim header; `MainWindow.h` was bare
+(`#pragma once` + Qt includes only). Both files have load-bearing AetherSDR
+debt: signal-routing hub, double-height status-bar layout, and TitleBar
+feature-request dialog — verified by 8 inline `MainWindow:<line>` AetherSDR
+citations in the .cpp body.
+
+**Affected files:**
+- `src/gui/MainWindow.cpp` — added AetherSDR project-level citation to the
+  Modification-History block; existing Thetis verbatim headers untouched.
+- `src/gui/MainWindow.h` — added full new header: NereusSDR port-citation
+  block + Thetis `console.cs` verbatim block (byte-identical to .cpp,
+  trailing whitespace preserved) + AetherSDR project-level citation.
+- `docs/attribution/THETIS-PROVENANCE.md` — added `MainWindow.h` row;
+  expanded `MainWindow.cpp` row with mixed-lineage note pointing to D.2.
+- `docs/attribution/aethersdr-reconciliation.md` — appended Resolution
+  block to D.2 confirming all three follow-up actions complete.
+
+**Fix (commit `<pending>`):** AetherSDR citation form follows
+`docs/attribution/HOW-TO-PORT.md` rule 6 (project-level reference, since
+AetherSDR has no per-file headers to copy verbatim). The .cpp's existing
+verbatim Thetis blocks were not modified — only the Modification-History
+block at the top was extended with the AetherSDR lines.
+
+Verifier: 172/172 (was 171; +1 for the new `MainWindow.h` PROVENANCE row).
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*

@@ -14,6 +14,12 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//                 Signal-routing hub, double-height status-bar layout, and
+//                 TitleBar feature-request dialog ported from AetherSDR
+//                 (ten9876/AetherSDR, GPLv3) src/gui/MainWindow.{h,cpp} and
+//                 src/gui/TitleBar.{h,cpp}. AetherSDR has no per-file
+//                 headers; project-level citation per docs/attribution/
+//                 HOW-TO-PORT.md rule 6.
 // =================================================================
 
 /*  MeterManager.cs

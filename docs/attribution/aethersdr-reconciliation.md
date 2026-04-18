@@ -472,3 +472,25 @@ Until then, the files are compliant with the verifier (they are not
 listed in `THETIS-PROVENANCE.md`) but carry no formal attribution.
 
 End of Task 25c deferral note.
+
+---
+
+**Resolution (2026-04-17, GPL Compliance Plan Task 1):**
+
+All three follow-up actions are complete:
+
+1. `src/gui/MainWindow.cpp` already carried the multi-source Thetis
+   verbatim header (MeterManager.cs / dsp.cs / console.cs / setup.cs /
+   radio.cs); the Modification-History block was extended with an
+   AetherSDR project-level citation naming the signal-routing hub,
+   double-height status-bar layout, and TitleBar feature-request dialog
+   ports.
+2. `src/gui/MainWindow.h` received a full new header: NereusSDR
+   port-citation block + Thetis `console.cs` verbatim block (byte-identical
+   to the `.cpp` block, trailing whitespace preserved) + AetherSDR
+   project-level citation in the Modification-History block.
+3. Both files are now registered in `docs/attribution/THETIS-PROVENANCE.md`.
+
+The AetherSDR citation form follows `docs/attribution/HOW-TO-PORT.md`
+rule 6 (project-level reference, since AetherSDR has no per-file headers
+to copy verbatim). Bucket D.2 closed.
