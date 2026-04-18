@@ -2,22 +2,69 @@
 // src/gui/AboutDialog.cpp  (NereusSDR)
 // =================================================================
 //
-// Design and layout inspired by AetherSDR (ten9876/AetherSDR, GPLv3):
-//   src/gui/MainWindow.cpp (about-box section) and
+// Ported from Thetis source:
+//   Project Files/Source/Console/frmAbout.cs — original licence from
+//     Thetis source is included below (paired file for the About
+//     dialog class; carries the copyright / GPL / dual-licensing
+//     header that governs this About-dialog content).
+//   Project Files/Source/Console/frmAbout.Designer.cs:57-81 —
+//     reproduces the lstContributors .Items.AddRange roster verbatim
+//     in the kRoster array below. Upstream frmAbout.Designer.cs has
+//     no top-of-file GPL header — project-level Thetis LICENSE
+//     (GPLv2-or-later, Richard Samphire MW0LGE) applies via the
+//     paired frmAbout.cs header reproduced below.
+//
+// Thetis version pin: [@501e3f5] (ramdor/Thetis archive commit
+//   501e3f513f73f07742d7e1b85a0e9528bd14977d, "Archive project and
+//   end active development"). Thetis has no tag at HEAD; cite uses
+//   the seven-hex commit form per HOW-TO-PORT.md inline-cite rules.
+//
+// Design and layout patterns from AetherSDR (ten9876/AetherSDR,
+//   GPLv3): src/gui/MainWindow.cpp (about-box section) and
 //   src/gui/TitleBar.{h,cpp}. AetherSDR has no per-file headers;
-//   project-level citation per docs/attribution/HOW-TO-PORT.md rule 6.
+//   project-level citation per HOW-TO-PORT.md rule 6.
 //
-// Thetis lineage: the scrollable contributor list (kRoster, below)
-// reproduces the roster from Thetis
-// Project Files/Source/Console/frmAbout.Designer.cs:57-81 (the
-// lstContributors .Items.AddRange block) verbatim. Reproducing a
-// contributor roster is a data / attribution carry-forward, not a
-// code port — the surrounding Qt6 dialog code is NereusSDR-original
-// with layout patterns from AetherSDR (see citation above).
+// --- From Thetis Project Files/Source/Console/frmAbout.cs (verbatim header) ---
+/*  frmAbout.cs
+
+This file is part of a program that implements a Software-Defined Radio.
+
+This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+
+Copyright (C) 2020-2025 Richard Samphire MW0LGE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+mw0lge@grange-lane.co.uk
+*/
 //
-// no-port-check: contributor callsigns appear only as data in the
-// displayed list; no Thetis code is translated here. AetherSDR
-// design lineage is cited above per HOW-TO-PORT.md rule 6.
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+// --- End Thetis frmAbout.cs verbatim header ---
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -39,6 +86,16 @@
 //                 M0YGG to the copyright line, plus a DttSP→WDSP lineage
 //                 sub-section in the roster. J.J. Boyd (KG4VCF),
 //                 AI-assisted authoring via Anthropic Claude Code.
+//   2026-04-18 — Promoted AboutDialog.cpp from the PROVENANCE
+//                 "independently implemented" exclusion list into the
+//                 derived-file table: the kRoster array reproduces
+//                 Thetis's lstContributors expressive content verbatim
+//                 (phrasings, order, blank-line separators, closing
+//                 line), which is a creative-compilation carry-forward
+//                 rather than plain factual attribution. Added Thetis
+//                 frmAbout.cs verbatim header, version pin [@501e3f5],
+//                 canonical inline cite above kRoster. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "AboutDialog.h"
@@ -157,12 +214,14 @@ void AboutDialog::buildUI()
         "color: #99aabb; font-size: 11px; padding-bottom: 6px;"));
     mainLayout->addWidget(origin);
 
-    // Contributor list — reproduced verbatim from Thetis
-    // Project Files/Source/Console/frmAbout.Designer.cs:57-81 (the
-    // lstContributors .Items.AddRange block). Listing names is data, not
-    // code; Thetis's own About presents the same roster. NereusSDR-scoped
-    // contributors are appended after the upstream block, separated by a
-    // blank line.
+    // From Thetis Project Files/Source/Console/frmAbout.Designer.cs:57-81 [@501e3f5] —
+    // lstContributors .Items.AddRange block, reproduced verbatim in kRoster
+    // below (each entry prefixed with two spaces for NereusSDR presentation
+    // hierarchy; content after the indent matches byte-for-byte). Thetis
+    // frmAbout.cs verbatim header is at top of this file per HOW-TO-PORT.md
+    // rule 2; frmAbout.Designer.cs itself has no per-file header.
+    // NereusSDR-scoped contributors are appended after the upstream block,
+    // separated by a blank line.
     auto* contribList = new QListWidget(this);
     contribList->setSelectionMode(QAbstractItemView::NoSelection);
     contribList->setFocusPolicy(Qt::NoFocus);
