@@ -128,6 +128,18 @@ RE_AETHER_COMMENT = re.compile(
     re.IGNORECASE,
 )
 
+# Diff-mode-only: enforce that every new/modified `// From Thetis
+# <file>.<ext>:<line>` cite carries a version stamp — either a Thetis
+# release tag `[v2.10.3.13]` or a short SHA `[@abc1234]` (optionally
+# combined `[v2.10.3.13+abc1234]` for post-tag fixes pulled before the
+# next release).
+RE_THETIS_CITE = re.compile(
+    r"//\s*From\s+Thetis\s+[\w./-]+\.(?:cs|c|h|cpp)(?::\d+(?:[,\s]+\d+)*)"
+)
+RE_HAS_VERSION_STAMP = re.compile(
+    r"\[(?:v\d+(?:\.\d+)+(?:\+[0-9a-f]{7,})?|@[0-9a-f]{7,})\]"
+)
+
 
 def run(cmd):
     return subprocess.run(cmd, capture_output=True, text=True, cwd=REPO)
@@ -149,6 +161,33 @@ def diffed_files():
         print(f"WARN: git diff failed: {diff.stderr}", file=sys.stderr)
         return []
     return [line for line in diff.stdout.splitlines() if line]
+
+
+def diffed_lines(rel):
+    """Return set of 1-based line numbers added/modified in BASE_REF..HEAD for this file.
+
+    Parses unified-diff hunk headers like `@@ -45,0 +46,3 @@` (meaning
+    3 lines starting at new line 46 were added). Pure deletions
+    (new-count == 0) contribute nothing. Returns an empty set if the
+    file has no diff hunks on the NEW side.
+    """
+    mb = run(["git", "merge-base", BASE_REF, "HEAD"])
+    base = mb.stdout.strip() if mb.returncode == 0 else BASE_REF
+    diff = run(["git", "diff", "-U0", f"{base}..HEAD", "--", rel])
+    if diff.returncode != 0:
+        return set()
+    lines = set()
+    for raw in diff.stdout.splitlines():
+        m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", raw)
+        if not m:
+            continue
+        start = int(m.group(1))
+        count = int(m.group(2)) if m.group(2) is not None else 1
+        if count == 0:
+            continue
+        for i in range(start, start + count):
+            lines.add(i)
+    return lines
 
 
 def parse_provenance_paths(*doc_paths):
@@ -209,7 +248,7 @@ def all_src_files():
     return sorted(out)
 
 
-def check_file(rel, listed):
+def check_file(rel, listed, diff_lines=None):
     """Return list of (line_num, label, match_text) findings, or [] if OK."""
     path = REPO / rel
     if not path.is_file():
@@ -247,6 +286,27 @@ def check_file(rel, listed):
             if m:
                 findings.append((i, label, m.group(0)))
                 break  # one finding per line — keeps output readable
+
+    # Cite-versioning scan runs only in diff mode AND only on lines that
+    # the PR actually added/modified. Whole-file scanning would regress
+    # ~250 existing unstamped cites in the current tree the moment
+    # anyone touches a Thetis-derived file — see HOW-TO-PORT.md
+    # §Inline cite versioning "cost proportional to churn" promise.
+    if not FULL_TREE and diff_lines is not None:
+        for i, line in enumerate(text.splitlines(), start=1):
+            if i not in diff_lines:
+                continue
+            m = RE_THETIS_CITE.search(line)
+            if not m:
+                continue
+            if RE_HAS_VERSION_STAMP.search(line):
+                continue
+            findings.append((
+                i,
+                "Thetis cite missing version stamp",
+                m.group(0).strip(),
+            ))
+
     return findings
 
 
@@ -273,7 +333,8 @@ def main():
         if ext not in EXTENSIONS:
             continue
         checked += 1
-        findings = check_file(rel, listed)
+        dlines = diffed_lines(rel) if not FULL_TREE else None
+        findings = check_file(rel, listed, diff_lines=dlines)
         if not findings:
             continue
         failures += 1
@@ -282,13 +343,26 @@ def main():
             print(f"  L{line_num} [{label}]: {match}")
         if len(findings) > 5:
             print(f"  ... and {len(findings) - 5} more matches")
+        has_cite_issue = any(
+            "cite missing version stamp" in label
+            for _i, label, _m in findings
+        )
+        if has_cite_issue:
+            print(
+                f"  Cite cure: append `[vX.Y.Z.W]` (e.g. [v2.10.3.13])"
+                f" or `[@shortsha]` (e.g. [@abc1234]) to the cite line"
+                f" — see docs/attribution/HOW-TO-PORT.md §Inline cite"
+                f" versioning. Run `git -C ../Thetis describe --tags`"
+                f" or `git -C ../Thetis rev-parse --short HEAD` to get"
+                f" the stamp."
+            )
         print(
-            f"  Cure: add a PROVENANCE row + verbatim header per "
-            f"docs/attribution/HOW-TO-PORT.md, OR add a "
-            f"`// {OPT_OUT_MARKER} <X>.h interface` comment if "
-            f"genuinely independent, OR add `// {NO_PORT_CHECK_MARKER} "
-            f"<reason>` in the file head to suppress this check for a "
-            f"legitimate false positive."
+            f"  Attribution cure: add a PROVENANCE row + verbatim"
+            f" header per docs/attribution/HOW-TO-PORT.md, OR add a"
+            f" `// {OPT_OUT_MARKER} <X>.h interface` comment if"
+            f" genuinely independent, OR add `// {NO_PORT_CHECK_MARKER}"
+            f" <reason>` in the file head to suppress this check for a"
+            f" legitimate false positive."
         )
         print()
 
