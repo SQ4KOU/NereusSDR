@@ -201,7 +201,7 @@ private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
 
 private:
-    void wireConnectionSignals();
+    void wireConnectionSignals(int wdspInSize);
     void wireSliceSignals();
     void teardownConnection();
     void loadSliceState(SliceModel* slice);
