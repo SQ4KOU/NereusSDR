@@ -1,5 +1,9 @@
 // tests/tst_rx_dsp_worker_buffer_sizing.cpp
 //
+// no-port-check: NereusSDR-original test. The setup.cs reference below is
+// contextual only (explains the bug's history), not a derivation. Thetis
+// has no equivalent unit test for the fexchange2 input-sizing contract.
+//
 // Regression test for the rate-dependent buffer-sizing bug. Prior to this
 // fix, RxDspWorker hardcoded its accumulator drain size to 1024 samples
 // (the in_size for a 768 kHz wire rate via the Thetis formula
