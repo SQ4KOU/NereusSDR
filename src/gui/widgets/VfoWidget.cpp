@@ -1687,33 +1687,7 @@ void VfoWidget::updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double of
     }
 
     if (autoOn) {
-        // Green handle + NF fill gradient on groove
-        double nfFrac = qBound(0.0, (static_cast<double>(noiseFloorDbm) + 160.0) / 160.0, 1.0);
-        m_agcTSlider->setStyleSheet(
-            QString::fromLatin1(
-                "QSlider::groove:horizontal { background: qlineargradient("
-                "x1:0,y1:0,x2:1,y2:0, stop:0 #0a1a0a, stop:%1 #1a3a1a, "
-                "stop:%2 #1a2a3a, stop:1 #1a2a3a); height: 6px; border-radius: 3px; }"
-                "QSlider::handle:horizontal { background: #adff2f; width: 12px;"
-                " margin: -3px 0; border-radius: 6px; }")
-                .arg(nfFrac, 0, 'f', 3)
-                .arg(qBound(0.0, nfFrac + 0.01, 1.0), 0, 'f', 3));
-
-        // AGC-T label → green bold
-        if (m_agcTLabelWidget) {
-            m_agcTLabelWidget->setStyleSheet(QStringLiteral("color: #adff2f; font-size: 11px; font-weight: bold;"));
-        }
-
-        // Container border → green tint
-        m_agcTContainer->setStyleSheet(
-            QStringLiteral("border: 1px solid rgba(173,255,47,0.25); background: #0a100a; border-radius: 3px;"));
-
-        // dB value label → green
-        if (m_agcTLabel) {
-            m_agcTLabel->setStyleSheet(QStringLiteral("color: #adff2f; font-size: 11px;"));
-        }
-
-        // AUTO badge → bright green (active)
+        // AUTO badge → bright green (active) — only the button illuminates
         if (m_agcAutoLabel) {
             m_agcAutoLabel->setStyleSheet(
                 QStringLiteral("QPushButton { background: #1a2a1a; border: 1px solid #adff2f;"
@@ -1730,24 +1704,6 @@ void VfoWidget::updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double of
             m_agcInfoLabel->show();
         }
     } else {
-        // Restore cyan handle + plain groove
-        m_agcTSlider->setStyleSheet(
-            QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
-                            "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
-
-        // AGC-T label → gray
-        if (m_agcTLabelWidget) {
-            m_agcTLabelWidget->setStyleSheet(QStringLiteral("color: #8899aa; font-size: 11px;"));
-        }
-
-        // Clear container styling
-        m_agcTContainer->setStyleSheet(QString());
-
-        // dB value label → default
-        if (m_agcTLabel) {
-            m_agcTLabel->setStyleSheet(QStringLiteral("color: #c8d8e8; font-size: 11px;"));
-        }
-
         // AUTO badge → dim gray (inactive)
         if (m_agcAutoLabel) {
             m_agcAutoLabel->setStyleSheet(
