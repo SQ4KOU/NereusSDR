@@ -811,4 +811,38 @@ No file changes for this task.
 
 ---
 
+## 2026-04-17 — Compliance Plan Task 11: AetherSDR cite on AboutDialog
+
+**Discovered by:** Adversarial GPL compliance audit. `aethersdr-
+reconciliation.md` Bucket D.1 noted `AboutDialog.cpp` mentions AetherSDR
+in the contributor-table data (lines 106-107) but the file's own header
+carried no AetherSDR citation. 25a Flag #11 separately recorded that the
+dialog's design is inspired by AetherSDR's `MainWindow` about-box. Both
+files (`AboutDialog.h` and `AboutDialog.cpp`) opened with only a single-
+line `// path` comment — bare otherwise.
+
+**Affected files:**
+- `src/gui/AboutDialog.h` — added a NereusSDR port-citation header
+  citing AetherSDR `src/gui/MainWindow.cpp` (about-box section) and
+  `src/gui/TitleBar.{h,cpp}` at project level per HOW-TO-PORT.md rule 6.
+  Explicit "no Thetis-derived code" line — Thetis's About lives in
+  `console.cs` and was not used as a source for this dialog.
+- `src/gui/AboutDialog.cpp` — same header.
+- `docs/attribution/aethersdr-reconciliation.md` — both occurrences of
+  the AboutDialog.cpp row (Phase 4 audit table at line 355 and Bucket
+  D.1 table at line 445) updated with "**Resolved 2026-04-17 (Compliance
+  Plan T11)**" notes; full resolution detail kept in the D.1 entry.
+  The other 4 D.1 files (`WdspEngine.cpp`, `tst_about_dialog.cpp`,
+  `tst_container_persistence.cpp`, `tests/CMakeLists.txt`) stay
+  "leave as-is" per their own per-row analyses (incidental mentions
+  not warranting full headers).
+
+**Fix (commit `<pending>`):** No PROVENANCE row added — AboutDialog has
+no Thetis derivation, so it does not belong in `THETIS-PROVENANCE.md`.
+The AetherSDR-only citation is documentary/source-level only.
+
+Verifier: 182/182. Build: clean.
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
