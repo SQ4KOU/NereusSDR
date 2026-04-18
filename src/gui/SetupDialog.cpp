@@ -90,13 +90,15 @@ void SetupDialog::showEvent(QShowEvent* event)
 {
     QDialog::showEvent(event);
 
-    // Select the first leaf item so the stack shows a valid page.
-    QTreeWidgetItem* first = m_tree->topLevelItem(0);
-    if (first != nullptr && first->childCount() > 0) {
-        first = first->child(0);
-    }
-    if (first != nullptr) {
-        m_tree->setCurrentItem(first);
+    // Only default to the first leaf if no page was pre-selected via selectPage()
+    if (m_tree->currentItem() == nullptr) {
+        QTreeWidgetItem* first = m_tree->topLevelItem(0);
+        if (first != nullptr && first->childCount() > 0) {
+            first = first->child(0);
+        }
+        if (first != nullptr) {
+            m_tree->setCurrentItem(first);
+        }
     }
 }
 
