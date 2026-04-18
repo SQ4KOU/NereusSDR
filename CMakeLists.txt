@@ -259,6 +259,7 @@ set(CORE_SOURCES
     src/core/RxChannel.cpp
     src/core/FFTEngine.cpp
     src/core/NoiseFloorEstimator.cpp
+    src/core/NoiseFloorTracker.cpp
     src/core/ClarityController.cpp
     src/core/StepAttenuatorController.cpp
 )
