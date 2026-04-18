@@ -10,6 +10,11 @@
 // No Thetis-derived code — Thetis's About is in console.cs and was not
 // used as a source for this dialog.
 //
+// no-port-check: this file mentions Thetis sources (console.cs) and
+// contributor callsigns only as data in the displayed contributor list;
+// no Thetis code is ported here. AetherSDR design lineage is cited
+// above per HOW-TO-PORT.md rule 6.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-04-17 — Implemented in C++20/Qt6 for NereusSDR by J.J. Boyd

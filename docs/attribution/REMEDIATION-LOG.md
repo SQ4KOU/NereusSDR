@@ -974,4 +974,51 @@ Verifier: 193/193. Build: clean.
 
 ---
 
+## 2026-04-17 — Post-T13: reverse-attribution check (`scripts/check-new-ports.py`)
+
+**Discovered by:** Self-audit of the post-T13 enforcement posture
+identified a known gap: `verify-thetis-headers.py` (T12) only checks
+files already in PROVENANCE.md. A contributor could write a brand-new
+file porting Thetis code, leave it out of PROVENANCE, and the existing
+verifier would never see it. That is exactly the defect class Samphire
+flagged on MeterManager.cs in v0.1.x.
+
+**Affected files:**
+- `scripts/check-new-ports.py` — new reverse-attribution checker. For
+  every added or modified C/C++ file in the PR diff (`origin/main`..HEAD,
+  diff-filter=AM), greps for Thetis-style markers:
+  - Thetis contributor callsigns (MW0LGE, W2PA, W5WC, VK6APH, MI0BOT,
+    G8NJJ, NR0V, G0ORX, KD5TFD, DH1KLM, OE3IDE, …; KK7GWY explicitly
+    excluded as the AetherSDR primary author, not Thetis)
+  - Thetis source filename references with `.cs|.c|.h|.cpp` extension
+  - `cls*/uc*/frm*` C# class-naming patterns (Samphire's convention)
+  - Explicit `// Source:` / `// From <thetis-file>` citation comments
+  Skip conditions: file is in PROVENANCE, file head contains the T12
+  opt-out marker (`Independently implemented from`), or file head
+  contains `no-port-check: <reason>` per-file escape hatch.
+- `.github/workflows/ci.yml` — wired in as a separate step after the
+  existing verifier, gated on `github.event_name == 'pull_request'` so
+  it only runs on PRs (where the diff range is meaningful). Fetches
+  `origin/${{ github.base_ref }}` first so the diff base exists.
+- `src/gui/AboutDialog.{h,cpp}` — added `no-port-check:` escape hatches
+  to the existing T11 headers. The dialog mentions `console.cs` in its
+  "no Thetis derivation" disclaimer and contains contributor callsigns
+  in the displayed contributor list — both legitimate non-derivation
+  uses that the per-file escape hatch correctly handles.
+
+**Fix (commit `<pending>`):** Closes the highest-priority enforcement
+gap identified in the post-T13 self-audit. Combined with T12's
+in-PROVENANCE checks, NereusSDR's CI now enforces both directions:
+"every cited file is properly attributed" (T12) AND "every newly-added
+file with Thetis markers is properly cited" (this commit). The
+remaining unmechanized gaps (paraphrased ports without callsigns or
+filename refs; dishonest opt-out claims) are documentation/culture, not
+mechanical detection problems.
+
+Local test: `CHECK_NEW_PORTS_BASE_REF=origin/main python3
+scripts/check-new-ports.py` → "OK: 222 added/modified C/C++ file(s)
+checked, all properly attributed or skip-marked." Build: clean.
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
