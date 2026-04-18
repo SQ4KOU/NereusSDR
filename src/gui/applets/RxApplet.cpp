@@ -509,8 +509,8 @@ void RxApplet::buildUi()
     // Controls 9 + 10: AGC combo + AGC threshold slider
     // From AetherSDR RxApplet.cpp lines 738-768
     {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
+        auto* agcRow = new QHBoxLayout;
+        agcRow->setSpacing(4);
 
         // Control 9: AGC combo (fixedWidth 52), items: Off/Slow/Med/Fast
         // Tier 1 wired → SliceModel::setAgcMode()
@@ -531,24 +531,73 @@ void RxApplet::buildUi()
                 m_agcCombo->itemData(idx).toInt());
             m_slice->setAgcMode(mode);
         });
-        row->addWidget(m_agcCombo);
+        agcRow->addWidget(m_agcCombo);
 
-        // Control 10: AGC threshold slider
+        // Control 10: AGC threshold slider — wrapped in container with
+        // AUTO badge, dB readout, info sub-line (matches VfoWidget Task 6)
+        m_agcTContainer = new QWidget(this);
+        auto* containerLayout = new QVBoxLayout(m_agcTContainer);
+        containerLayout->setContentsMargins(0, 0, 0, 0);
+        containerLayout->setSpacing(1);
+
+        // First row: AGC-T label + slider + dB value + AUTO badge
+        auto* sliderRow = new QHBoxLayout;
+        m_agcTLabelWidget = new QLabel(QStringLiteral("AGC-T"), m_agcTContainer);
+        m_agcTLabelWidget->setStyleSheet(QStringLiteral("color: #8899aa; font-size: 11px;"));
+        m_agcTLabelWidget->setFixedWidth(40);
+        sliderRow->addWidget(m_agcTLabelWidget);
+
         // From Thetis Project Files/Source/Console/console.cs:45977 — agc_thresh_point
-        m_agcTSlider = new QSlider(Qt::Horizontal, this);
+        m_agcTSlider = new QSlider(Qt::Horizontal, m_agcTContainer);
         m_agcTSlider->setRange(-160, 0);
         m_agcTSlider->setValue(-20);
         m_agcTSlider->setFixedHeight(18);
-        m_agcTSlider->setStyleSheet(Style::sliderHStyle());
+        m_agcTSlider->setStyleSheet(
+            QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
+                            "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
         // From Thetis console.resx:8397 — ptbRF.ToolTip (ptbRF is the AGC-T slider)
         m_agcTSlider->setToolTip(QStringLiteral("AGC Max Gain - Operates similarly to traditional RF Gain. Right click AUTO based on noise floor."));
+        sliderRow->addWidget(m_agcTSlider);
+
+        m_agcTLabel = new QLabel(QStringLiteral("-20"), m_agcTContainer);
+        m_agcTLabel->setStyleSheet(QStringLiteral("color: #c8d8e8; font-size: 11px;"));
+        m_agcTLabel->setFixedWidth(32);
+        m_agcTLabel->setAlignment(Qt::AlignRight);
+        sliderRow->addWidget(m_agcTLabel);
+
+        m_agcAutoLabel = new QLabel(QStringLiteral("AUTO"), m_agcTContainer);
+        m_agcAutoLabel->setStyleSheet(
+            QStringLiteral("background: #1a2a1a; border: 1px solid #adff2f;"
+                            "color: #adff2f; font-size: 7px; padding: 0 3px; border-radius: 2px;"));
+        m_agcAutoLabel->setFixedHeight(14);
+        m_agcAutoLabel->hide();
+        sliderRow->addWidget(m_agcAutoLabel);
+
+        containerLayout->addLayout(sliderRow);
+
+        // Second row: info sub-line (hidden by default)
+        m_agcInfoLabel = new QLabel(m_agcTContainer);
+        m_agcInfoLabel->setStyleSheet(QStringLiteral("color: #33aa33; font-size: 7px; padding: 0 2px;"));
+        m_agcInfoLabel->hide();
+        containerLayout->addWidget(m_agcInfoLabel);
+
         connect(m_agcTSlider, &QSlider::valueChanged, this, [this](int v) {
+            m_agcTLabel->setText(QString::number(v));
             if (m_updatingFromModel || !m_slice) { return; }
             m_slice->setAgcThreshold(v);
         });
-        row->addWidget(m_agcTSlider, 1);
 
-        rightCol->addLayout(row);
+        // Right-click on AGC-T slider → instant auto-AGC toggle
+        // From Thetis console.cs:46119-46122 — ptbRF right-click invokes auto-threshold
+        m_agcTSlider->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(m_agcTSlider, &QWidget::customContextMenuRequested,
+                this, [this](const QPoint& /*pos*/) {
+            emit autoAgcToggled(!m_autoAgcActive);
+        });
+
+        agcRow->addWidget(m_agcTContainer, 1);
+
+        rightCol->addLayout(agcRow);
     }
 
     rightCol->addStretch(1);
@@ -1049,6 +1098,85 @@ void RxApplet::disconnectSlice(SliceModel* s)
 {
     if (!s) { return; }
     s->disconnect(this);
+}
+
+// --- Auto AGC-T visual update (Task 7 — exact match of VfoWidget) ---
+void RxApplet::updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double offset)
+{
+    m_autoAgcActive = autoOn;
+    m_noiseFloorDbm = noiseFloorDbm;
+
+    if (!m_agcTSlider || !m_agcTContainer) {
+        return;
+    }
+
+    if (autoOn) {
+        // Green handle + NF fill gradient on groove
+        double nfFrac = qBound(0.0, (static_cast<double>(noiseFloorDbm) + 160.0) / 160.0, 1.0);
+        m_agcTSlider->setStyleSheet(
+            QString::fromLatin1(
+                "QSlider::groove:horizontal { background: qlineargradient("
+                "x1:0,y1:0,x2:1,y2:0, stop:0 #0a1a0a, stop:%1 #1a3a1a, "
+                "stop:%2 #1a2a3a, stop:1 #1a2a3a); height: 6px; border-radius: 3px; }"
+                "QSlider::handle:horizontal { background: #adff2f; width: 12px;"
+                " margin: -3px 0; border-radius: 6px; }")
+                .arg(nfFrac, 0, 'f', 3)
+                .arg(qBound(0.0, nfFrac + 0.01, 1.0), 0, 'f', 3));
+
+        // AGC-T label → green bold
+        if (m_agcTLabelWidget) {
+            m_agcTLabelWidget->setStyleSheet(QStringLiteral("color: #adff2f; font-size: 11px; font-weight: bold;"));
+        }
+
+        // Container border → green tint
+        m_agcTContainer->setStyleSheet(
+            QStringLiteral("border: 1px solid rgba(173,255,47,0.25); background: #0a100a; border-radius: 3px;"));
+
+        // dB value label → green
+        if (m_agcTLabel) {
+            m_agcTLabel->setStyleSheet(QStringLiteral("color: #adff2f; font-size: 11px;"));
+        }
+
+        // Show AUTO badge
+        if (m_agcAutoLabel) {
+            m_agcAutoLabel->show();
+        }
+
+        // Show info sub-line
+        if (m_agcInfoLabel) {
+            m_agcInfoLabel->setText(
+                QStringLiteral("NF %1 dB \u00b7 offset +%2 \u00b7 right-click to disable")
+                    .arg(static_cast<int>(noiseFloorDbm))
+                    .arg(static_cast<int>(offset)));
+            m_agcInfoLabel->show();
+        }
+    } else {
+        // Restore cyan handle + plain groove
+        m_agcTSlider->setStyleSheet(
+            QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
+                            "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
+
+        // AGC-T label → gray
+        if (m_agcTLabelWidget) {
+            m_agcTLabelWidget->setStyleSheet(QStringLiteral("color: #8899aa; font-size: 11px;"));
+        }
+
+        // Clear container styling
+        m_agcTContainer->setStyleSheet(QString());
+
+        // dB value label → default
+        if (m_agcTLabel) {
+            m_agcTLabel->setStyleSheet(QStringLiteral("color: #c8d8e8; font-size: 11px;"));
+        }
+
+        // Hide AUTO badge and info sub-line
+        if (m_agcAutoLabel) {
+            m_agcAutoLabel->hide();
+        }
+        if (m_agcInfoLabel) {
+            m_agcInfoLabel->hide();
+        }
+    }
 }
 
 } // namespace NereusSDR

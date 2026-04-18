@@ -177,8 +177,14 @@ public:
     // Set the slice letter badge (0=A, 1=B, 2=C, 3=D)
     void setSliceIndex(int idx);
 
+    // --- Auto AGC-T visual update (Task 7 — matches VfoWidget) ---
+    void updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double offset);
+
     // Set the antenna list shown in the RX/TX antenna menus.
     void setAntennaList(const QStringList& ants);
+
+signals:
+    void autoAgcToggled(bool on);
 
 private:
     void buildUi();
@@ -244,6 +250,13 @@ private:
     // Controls 9 + 10: AGC
     QComboBox*   m_agcCombo    = nullptr;   // Control 9
     QSlider*     m_agcTSlider  = nullptr;   // Control 10
+    QWidget*     m_agcTContainer{nullptr};
+    QLabel*      m_agcTLabelWidget{nullptr};
+    QLabel*      m_agcTLabel{nullptr};       // dB value readout
+    QLabel*      m_agcAutoLabel{nullptr};
+    QLabel*      m_agcInfoLabel{nullptr};
+    bool         m_autoAgcActive{false};
+    float        m_noiseFloorDbm{-200.0f};
 
     // Control 15: RIT
     QPushButton* m_ritOnBtn    = nullptr;
