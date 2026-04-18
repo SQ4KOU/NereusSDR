@@ -151,20 +151,25 @@ def diffed_files():
     return [line for line in diff.stdout.splitlines() if line]
 
 
-RE_PATH_IN_CELL = re.compile(r"`?(src/[^ `|]+\.(?:cpp|h|hpp|c|cc|hxx))`?")
-
-
 def parse_provenance_paths(*doc_paths):
-    """Return union of file paths listed in the given provenance / reconciliation docs.
+    """Return union of *first-column* file paths listed in provenance tables.
 
-    Default (no args): just THETIS-PROVENANCE.md table (diff-mode behaviour
-    preserved — the heuristic owner is still Thetis).
+    Default (no args): just THETIS-PROVENANCE.md (diff-mode contract).
 
-    Full-tree mode calls with (PROVENANCE, WDSP_PROVENANCE,
-    AETHER_RECONCILIATION) to get the complete "registered somewhere" set.
-    Reconciliation doc cells sometimes wrap paths in backticks and list
-    the `.{h,cpp}` shorthand, so we extract paths with a regex instead of
-    relying on the first-cell convention.
+    Full-tree mode passes (PROVENANCE, WDSP_PROVENANCE, AETHER_RECONCILIATION)
+    to get the complete "registered somewhere" set. All three docs use the
+    same markdown-table convention: the first cell of each data row is the
+    registered NereusSDR file path. Counterpart / source / prose cells
+    sometimes contain `src/...` strings too (e.g. reconciliation cites
+    AetherSDR upstream paths that happen to share a filename with a
+    NereusSDR file), so we MUST NOT pull paths from anywhere else in the
+    row — doing so allowlists files that aren't actually registered and
+    creates a false-negative loophole for future ports.
+
+    Backtick wrapping (``| `src/foo.h` |``) is handled. The `.{h,cpp}`
+    shorthand is only recognised in the first cell (it is, in practice,
+    never used there today — the shorthand is only used in the counterpart
+    column — but we support it for robustness).
     """
     if not doc_paths:
         doc_paths = (PROVENANCE,)
@@ -172,28 +177,23 @@ def parse_provenance_paths(*doc_paths):
     for doc in doc_paths:
         if not doc.is_file():
             continue
-        text = doc.read_text()
-        if doc == PROVENANCE:
-            # Strict first-cell parse preserves original diff-mode contract.
-            for line in text.splitlines():
-                line = line.strip()
-                if not line.startswith("|") or line.startswith("|---"):
-                    continue
-                cells = [c.strip() for c in line.strip("|").split("|")]
-                if not cells:
-                    continue
-                first = cells[0].replace("`", "")
-                if first and first.lower() not in ("nereussdr file", "file"):
-                    paths.add(first)
-        else:
-            # Reconciliation doc uses backtick-wrapped paths anywhere in a
-            # row; some rows enumerate .{h,cpp} shorthand which we expand.
-            for m in RE_PATH_IN_CELL.finditer(text):
-                paths.add(m.group(1))
-            for m in re.finditer(r"`(src/[^`]+)\.\{h,cpp\}`", text):
-                base = m.group(1)
-                paths.add(f"{base}.h")
-                paths.add(f"{base}.cpp")
+        for line in doc.read_text().splitlines():
+            line = line.strip()
+            if not line.startswith("|") or line.startswith("|---"):
+                continue
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            if not cells:
+                continue
+            first = cells[0].strip("`").strip()
+            if not first or first.lower() in ("nereussdr file", "file"):
+                continue
+            # Expand `.{h,cpp}` shorthand if it somehow appears in column 1.
+            m = re.match(r"(src/.+)\.\{h,cpp\}$", first)
+            if m:
+                paths.add(f"{m.group(1)}.h")
+                paths.add(f"{m.group(1)}.cpp")
+            else:
+                paths.add(first)
     return paths
 
 
