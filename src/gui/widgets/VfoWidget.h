@@ -376,6 +376,9 @@ public:
     void setAgcThreshold(int dBu);
     void setBinauralEnabled(bool v);
 
+    // --- Auto AGC-T visual update (Task 6) ---
+    void updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double offset);
+
     // --- Slice coupling (for mode container binding only) ---
     void setSlice(SliceModel* slice);
 
@@ -424,6 +427,7 @@ signals:
     void squelchEnabledChanged(bool enabled);
     void squelchThreshChanged(int thresh);
     void agcThreshChanged(int dBu);
+    void autoAgcToggled(bool on);
 
     // --- Mode tab signals (S1.8c) ---
     void quickModeRequested(int index);
@@ -510,6 +514,12 @@ private:
     QSlider*            m_sqlSlider{nullptr};
     QSlider*            m_agcTSlider{nullptr};
     QLabel*             m_agcTLabel{nullptr};
+    QWidget*            m_agcTContainer{nullptr};   // wraps the entire AGC-T row
+    QLabel*             m_agcTLabelWidget{nullptr}; // "AGC-T" text label
+    QPushButton*        m_agcAutoLabel{nullptr};    // "AUTO" badge — clickable toggle
+    QLabel*             m_agcInfoLabel{nullptr};    // info sub-line
+    bool                m_autoAgcActive{false};
+    float               m_noiseFloorDbm{-200.0f};
 
     // --- DSP tab ---
     QPushButton*        m_nb1Toggle{nullptr};

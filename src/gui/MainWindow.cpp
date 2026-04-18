@@ -256,6 +256,7 @@ warren@wpratt.com
 #include "core/FFTEngine.h"
 #include "core/ClarityController.h"
 #include "core/StepAttenuatorController.h"
+#include "core/NoiseFloorTracker.h"
 #include "core/BoardCapabilities.h"
 #include "models/PanadapterModel.h"
 #include "models/Band.h"
@@ -598,6 +599,46 @@ void MainWindow::buildUI()
             m_clarityController, [this](int /*rxId*/, const QVector<float>& binsDbm) {
         m_clarityController->feedBins(binsDbm);
     });
+
+    // ── NoiseFloorTracker for Auto AGC-T ────────────────────────────────
+    auto* nfTracker = new NoiseFloorTracker;
+    m_radioModel->setNoiseFloorTracker(nfTracker);
+
+    connect(m_fftEngine, &FFTEngine::fftReady,
+            this, [nfTracker](int /*rxId*/, const QVector<float>& binsDbm) {
+        static constexpr float kFrameIntervalMs = 33.0f;
+        nfTracker->feed(binsDbm, kFrameIntervalMs);
+    });
+
+    // Fast-attack triggers — deferred until slice exists
+    // From Thetis v2.10.3.13 display.cs:905 — freq change triggers fast attack
+    // From Thetis v2.10.3.13 display.cs:880 — mode change triggers fast attack
+    // Connected in wireSliceToSpectrum() where activeSlice() is guaranteed non-null
+    // From Thetis v2.10.3.13 display.cs:890 — OnAttenuatorDataChanged
+    if (m_stepAttController) {
+        connect(m_stepAttController, &StepAttenuatorController::attenuationChanged,
+                this, [nfTracker](int /*dB*/) {
+            nfTracker->triggerFastAttack();
+        });
+    }
+
+    // Periodic visual update: auto-AGC timer → refresh NF visuals on both widgets
+    if (m_radioModel->autoAgcTimer()) {
+        connect(m_radioModel->autoAgcTimer(), &QTimer::timeout, this, [this]() {
+            SliceModel* s = m_radioModel->activeSlice();
+            auto* nft = m_radioModel->noiseFloorTracker();
+            if (s && s->autoAgcEnabled() && nft) {
+                float nf = nft->noiseFloor();
+                double offset = s->autoAgcOffset();
+                if (m_vfoWidget) {
+                    m_vfoWidget->updateAgcAutoVisuals(true, nf, offset);
+                }
+                if (m_rxApplet) {
+                    m_rxApplet->updateAgcAutoVisuals(true, nf, offset);
+                }
+            }
+        });
+    }
 
     // TX pause: MOX signal → ClarityController
     connect(&m_radioModel->transmitModel(), &TransmitModel::moxChanged,
@@ -1973,6 +2014,7 @@ void MainWindow::wireSliceToSpectrum()
 
     // --- Create floating VFO flag widget (AetherSDR pattern) ---
     VfoWidget* vfo = m_spectrumWidget->addVfoWidget(0);
+    m_vfoWidget = vfo;
     vfo->setSlice(slice);
     vfo->setFrequency(freq);
     vfo->setMode(slice->dspMode());
@@ -2236,12 +2278,45 @@ void MainWindow::wireSliceToSpectrum()
         }
     });
 
-    // --- VfoWidget → MainWindow: open Setup dialog (e.g. AGC-T right-click) ---
+    // --- VfoWidget → MainWindow: open Setup dialog to AGC/ALC page ---
     connect(vfo, &VfoWidget::openSetupRequested, this, [this]() {
         auto* dialog = new SetupDialog(m_radioModel, this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->selectPage(QStringLiteral("AGC/ALC"));
         dialog->show();
     });
+
+    // --- VfoWidget AUTO button → SliceModel auto-AGC toggle ---
+    connect(vfo, &VfoWidget::autoAgcToggled,
+            slice, &SliceModel::setAutoAgcEnabled);
+
+    // --- SliceModel auto-AGC state → update visuals on both widgets ---
+    connect(slice, &SliceModel::autoAgcEnabledChanged, this, [this, vfo, slice](bool on) {
+        auto* nft = m_radioModel->noiseFloorTracker();
+        float nf = nft ? nft->noiseFloor() : -200.0f;
+        double offset = slice->autoAgcOffset();
+        vfo->updateAgcAutoVisuals(on, nf, offset);
+        if (m_rxApplet) {
+            m_rxApplet->updateAgcAutoVisuals(on, nf, offset);
+        }
+    });
+
+    // --- Noise floor fast-attack triggers (slice is guaranteed non-null here) ---
+    {
+        auto* nfTracker = m_radioModel->noiseFloorTracker();
+        if (nfTracker) {
+            // From Thetis v2.10.3.13 display.cs:905 — freq change > 0.5
+            connect(slice, &SliceModel::frequencyChanged,
+                    this, [nfTracker](double /*hz*/) {
+                nfTracker->triggerFastAttack();
+            });
+            // From Thetis v2.10.3.13 display.cs:880 — mode change
+            connect(slice, &SliceModel::dspModeChanged,
+                    this, [nfTracker](NereusSDR::DSPMode /*mode*/) {
+                nfTracker->triggerFastAttack();
+            });
+        }
+    }
 
     // --- VfoWidget → SliceModel: RIT/XIT outbound (S1.8a stubs) ---
     connect(vfo, &VfoWidget::ritEnabledChanged, this, [slice](bool on) {
@@ -2366,6 +2441,18 @@ void MainWindow::wireSliceToSpectrum()
     // --- Wire RxApplet to active slice ---
     if (m_rxApplet) {
         m_rxApplet->setSlice(slice);
+
+        // AUTO button toggle → SliceModel
+        connect(m_rxApplet, &RxApplet::autoAgcToggled,
+                slice, &SliceModel::setAutoAgcEnabled);
+
+        // Right-click AGC-T slider → open Setup dialog to AGC/ALC page
+        connect(m_rxApplet, &RxApplet::openSetupRequested, this, [this]() {
+            auto* dialog = new SetupDialog(m_radioModel, this);
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            dialog->selectPage(QStringLiteral("AGC/ALC"));
+            dialog->show();
+        });
     }
 
     // --- Wire overlay Band flyout to slice ---

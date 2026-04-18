@@ -174,6 +174,11 @@ class SliceModel : public QObject {
     Q_PROPERTY(int    agcSlope        READ agcSlope        WRITE setAgcSlope        NOTIFY agcSlopeChanged)
     Q_PROPERTY(int    agcAttack       READ agcAttack       WRITE setAgcAttack       NOTIFY agcAttackChanged)
     Q_PROPERTY(int    agcDecay        READ agcDecay        WRITE setAgcDecay        NOTIFY agcDecayChanged)
+    Q_PROPERTY(bool   autoAgcEnabled  READ autoAgcEnabled  WRITE setAutoAgcEnabled  NOTIFY autoAgcEnabledChanged)
+    Q_PROPERTY(double autoAgcOffset   READ autoAgcOffset   WRITE setAutoAgcOffset   NOTIFY autoAgcOffsetChanged)
+    Q_PROPERTY(int    agcFixedGain    READ agcFixedGain    WRITE setAgcFixedGain    NOTIFY agcFixedGainChanged)
+    Q_PROPERTY(int    agcHangThreshold READ agcHangThreshold WRITE setAgcHangThreshold NOTIFY agcHangThresholdChanged)
+    Q_PROPERTY(int    agcMaxGain      READ agcMaxGain      WRITE setAgcMaxGain      NOTIFY agcMaxGainChanged)
     Q_PROPERTY(bool   ritEnabled      READ ritEnabled      WRITE setRitEnabled      NOTIFY ritEnabledChanged)
     Q_PROPERTY(int    ritHz           READ ritHz           WRITE setRitHz           NOTIFY ritHzChanged)
     Q_PROPERTY(bool   xitEnabled      READ xitEnabled      WRITE setXitEnabled      NOTIFY xitEnabledChanged)
@@ -316,6 +321,26 @@ public:
     int    agcDecay()        const { return m_agcDecay; }
     void   setAgcDecay(int ms);
 
+    // From Thetis v2.10.3.13 console.cs:45926 — m_bAutoAGCRX1
+    bool   autoAgcEnabled()  const { return m_autoAgcEnabled; }
+    void   setAutoAgcEnabled(bool on);
+
+    // From Thetis v2.10.3.13 console.cs:45913 — m_dAutoAGCOffsetRX1
+    double autoAgcOffset()   const { return m_autoAgcOffset; }
+    void   setAutoAgcOffset(double dB);
+
+    // From Thetis v2.10.3.13 setup.designer.cs:39320 — udDSPAGCFixedGaindB
+    int    agcFixedGain()    const { return m_agcFixedGain; }
+    void   setAgcFixedGain(int dB);
+
+    // From Thetis v2.10.3.13 setup.designer.cs:39418 — tbDSPAGCHangThreshold
+    int    agcHangThreshold() const { return m_agcHangThreshold; }
+    void   setAgcHangThreshold(int val);
+
+    // From Thetis v2.10.3.13 setup.designer.cs:39245 — udDSPAGCMaxGaindB
+    int    agcMaxGain()      const { return m_agcMaxGain; }
+    void   setAgcMaxGain(int dB);
+
     bool   ritEnabled()      const { return m_ritEnabled; }
     void   setRitEnabled(bool v);
 
@@ -445,6 +470,11 @@ signals:
     void agcSlopeChanged(int dB);
     void agcAttackChanged(int ms);
     void agcDecayChanged(int ms);
+    void autoAgcEnabledChanged(bool on);
+    void autoAgcOffsetChanged(double dB);
+    void agcFixedGainChanged(int dB);
+    void agcHangThresholdChanged(int val);
+    void agcMaxGainChanged(int dB);
     void ritEnabledChanged(bool v);
     void ritHzChanged(int hz);
     void xitEnabledChanged(bool v);
@@ -498,6 +528,11 @@ private:
     int    m_agcSlope{0};             // From Thetis radio.cs:1107-1108 — rx_agc_slope = 0 dB
     int    m_agcAttack{2};            // Thetis default — citation pending Stage 2 gate (AGC attack not exposed as explicit property in radio.cs)
     int    m_agcDecay{250};           // From Thetis radio.cs:1037-1038 — rx_agc_decay = 250 ms
+    bool   m_autoAgcEnabled{false};   // From Thetis v2.10.3.13 console.cs:45926 — m_bAutoAGCRX1
+    double m_autoAgcOffset{20.0};     // From Thetis v2.10.3.13 setup.designer.cs:38630 — udRX1AutoAGCOffset
+    int    m_agcFixedGain{20};        // From Thetis v2.10.3.13 setup.designer.cs:39320 — udDSPAGCFixedGaindB
+    int    m_agcHangThreshold{0};     // From Thetis v2.10.3.13 setup.designer.cs:39418 — tbDSPAGCHangThreshold
+    int    m_agcMaxGain{90};          // From Thetis v2.10.3.13 setup.designer.cs:39245 — udDSPAGCMaxGaindB
     bool   m_ritEnabled{false};       // Neutral default — no Thetis citation needed
     int    m_ritHz{0};                // Neutral default — zero offset
     bool   m_xitEnabled{false};       // Neutral default — no Thetis citation needed

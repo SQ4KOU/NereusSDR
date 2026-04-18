@@ -196,6 +196,9 @@ private:
     QTimer*  m_cpuTimer{nullptr};
     QVector<int> m_splitterSizesBeforeHide;  // saved splitter sizes for ☰ toggle
 
+    // VFO flag widget (Phase 3E)
+    class VfoWidget* m_vfoWidget{nullptr};
+
     // Applets (Phase 3-UI)
     class RxApplet* m_rxApplet{nullptr};
     class PhoneCwApplet* m_phoneCwApplet{nullptr};

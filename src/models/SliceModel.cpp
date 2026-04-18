@@ -402,6 +402,46 @@ void SliceModel::setAgcDecay(int ms)
     }
 }
 
+void SliceModel::setAutoAgcEnabled(bool on)
+{
+    if (m_autoAgcEnabled != on) {
+        m_autoAgcEnabled = on;
+        emit autoAgcEnabledChanged(on);
+    }
+}
+
+void SliceModel::setAutoAgcOffset(double dB)
+{
+    if (!qFuzzyCompare(m_autoAgcOffset, dB)) {
+        m_autoAgcOffset = dB;
+        emit autoAgcOffsetChanged(dB);
+    }
+}
+
+void SliceModel::setAgcFixedGain(int dB)
+{
+    if (m_agcFixedGain != dB) {
+        m_agcFixedGain = dB;
+        emit agcFixedGainChanged(dB);
+    }
+}
+
+void SliceModel::setAgcHangThreshold(int val)
+{
+    if (m_agcHangThreshold != val) {
+        m_agcHangThreshold = val;
+        emit agcHangThresholdChanged(val);
+    }
+}
+
+void SliceModel::setAgcMaxGain(int dB)
+{
+    if (m_agcMaxGain != dB) {
+        m_agcMaxGain = dB;
+        emit agcMaxGainChanged(dB);
+    }
+}
+
 void SliceModel::setRitEnabled(bool v)
 {
     if (m_ritEnabled != v) {
@@ -703,6 +743,11 @@ void SliceModel::saveToSettings(Band band)
     s.setValue(bp + QStringLiteral("AgcSlope"),     m_agcSlope);
     s.setValue(bp + QStringLiteral("AgcAttack"),    m_agcAttack);
     s.setValue(bp + QStringLiteral("AgcDecay"),     m_agcDecay);
+    s.setValue(bp + QStringLiteral("AgcAutoEnabled"), m_autoAgcEnabled ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(bp + QStringLiteral("AgcAutoOffset"), m_autoAgcOffset);
+    s.setValue(bp + QStringLiteral("AgcFixedGain"), m_agcFixedGain);
+    s.setValue(bp + QStringLiteral("AgcHangThreshold"), m_agcHangThreshold);
+    s.setValue(bp + QStringLiteral("AgcMaxGain"),   m_agcMaxGain);
     s.setValue(bp + QStringLiteral("FilterLow"),    m_filterLow);
     s.setValue(bp + QStringLiteral("FilterHigh"),   m_filterHigh);
     s.setValue(bp + QStringLiteral("DspMode"),      static_cast<int>(m_dspMode));
@@ -748,6 +793,21 @@ void SliceModel::restoreFromSettings(Band band)
     }
     if (s.contains(bp + QStringLiteral("AgcDecay"))) {
         setAgcDecay(s.value(bp + QStringLiteral("AgcDecay")).toInt());
+    }
+    if (s.contains(bp + QStringLiteral("AgcAutoEnabled"))) {
+        setAutoAgcEnabled(s.value(bp + QStringLiteral("AgcAutoEnabled")).toString() == QLatin1String("True"));
+    }
+    if (s.contains(bp + QStringLiteral("AgcAutoOffset"))) {
+        setAutoAgcOffset(s.value(bp + QStringLiteral("AgcAutoOffset")).toDouble());
+    }
+    if (s.contains(bp + QStringLiteral("AgcFixedGain"))) {
+        setAgcFixedGain(s.value(bp + QStringLiteral("AgcFixedGain")).toInt());
+    }
+    if (s.contains(bp + QStringLiteral("AgcHangThreshold"))) {
+        setAgcHangThreshold(s.value(bp + QStringLiteral("AgcHangThreshold")).toInt());
+    }
+    if (s.contains(bp + QStringLiteral("AgcMaxGain"))) {
+        setAgcMaxGain(s.value(bp + QStringLiteral("AgcMaxGain")).toInt());
     }
     if (s.contains(bp + QStringLiteral("DspMode"))) {
         // Set mode WITHOUT applying the default filter — filter follows below.

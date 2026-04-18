@@ -35,6 +35,7 @@ nereus_add_test(tst_clarity_defaults)
 
 # ── Phase 3G-9c Clarity adaptive display tuning ──────────────────────────
 nereus_add_test(tst_noise_floor_estimator)
+nereus_add_test(tst_noise_floor_tracker)
 nereus_add_test(tst_clarity_controller)
 
 # ── Phase 3I radio-connector tests ────────────────────────────────────────

@@ -239,6 +239,7 @@ warren@wpratt.com
 #include "core/AppSettings.h"
 #include "core/SampleRateCatalog.h"
 #include "core/LogCategories.h"
+#include "core/NoiseFloorTracker.h"
 #include "gui/SpectrumWidget.h"
 
 #include <algorithm>
@@ -464,6 +465,9 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 rxCh->setAgcSlope(m_activeSlice->agcSlope());
                 rxCh->setAgcAttack(m_activeSlice->agcAttack());
                 rxCh->setAgcDecay(m_activeSlice->agcDecay());
+                rxCh->setAgcHangThreshold(m_activeSlice->agcHangThreshold());
+                rxCh->setAgcFixedGain(m_activeSlice->agcFixedGain());
+                rxCh->setAgcMaxGain(m_activeSlice->agcMaxGain());
                 // NB2 sub-parameter defaults — From Thetis cmaster.c:55-68 (create_nobEXT)
                 // These are set-and-forget; the run flag is gated by processIq() atomics.
                 // Declared in specHPSDR.cs:922-937; WDSP nobII.c:658,686,697,707
@@ -767,6 +771,13 @@ void RadioModel::wireSliceSignals()
     // From Thetis console.cs:45960-46006 — bidirectional AGC sync pattern.
     connect(slice, &SliceModel::agcThresholdChanged, this, [this](int dBu) {
         if (m_syncingAgc) { return; }
+
+        // From Thetis v2.10.3.13 console.cs:49129-49130 — manual drag disables auto
+        SliceModel* s = m_activeSlice;
+        if (s && s->autoAgcEnabled()) {
+            s->setAutoAgcEnabled(false);
+        }
+
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             m_syncingAgc = true;
@@ -811,6 +822,97 @@ void RadioModel::wireSliceSignals()
         }
         scheduleSettingsSave();
     });
+
+    // From Thetis v2.10.3.13 setup.cs:9081 — hang threshold
+    connect(slice, &SliceModel::agcHangThresholdChanged, this, [this](int val) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setAgcHangThreshold(val);
+        }
+        scheduleSettingsSave();
+    });
+
+    // From Thetis v2.10.3.13 setup.cs:9001 — fixed gain
+    connect(slice, &SliceModel::agcFixedGainChanged, this, [this](int dB) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setAgcFixedGain(dB);
+        }
+        scheduleSettingsSave();
+    });
+
+    // From Thetis v2.10.3.13 setup.cs:9011 — max gain
+    connect(slice, &SliceModel::agcMaxGainChanged, this, [this](int dB) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setAgcMaxGain(dB);
+        }
+        scheduleSettingsSave();
+    });
+
+    // ── Auto AGC-T timer ────────────────────────────────────────────────
+    // From Thetis v2.10.3.13 console.cs:46057 — tmrAutoAGC_Tick, 500ms interval
+    m_autoAgcTimer = new QTimer(this);
+    m_autoAgcTimer->setInterval(500);
+    connect(m_autoAgcTimer, &QTimer::timeout, this, [this]() {
+        SliceModel* slice = m_activeSlice;
+        if (!slice || !slice->autoAgcEnabled()) {
+            return;
+        }
+        // From Thetis v2.10.3.13 console.cs:46059 — guard: skip if not connected or MOX
+        if (!m_connection || !m_connection->isConnected()) {
+            return;
+        }
+        // From Thetis v2.10.3.13 console.cs:46059 — if (!chkPower.Checked || _mox) return;
+        if (m_transmitModel.isMox()) {
+            return;
+        }
+        if (!m_noiseFloorTracker || !m_noiseFloorTracker->isGood()) {
+            return;
+        }
+
+        // From Thetis v2.10.3.13 console.cs:46107-46115
+        const double noiseFloor = static_cast<double>(m_noiseFloorTracker->noiseFloor());
+
+        // From Thetis v2.10.3.13 console.cs:33292-33319 — agcCalOffset(rx)
+        // Simplified: 0.0f for FIXD (NereusSDR AGCMode::Off), 2.0f for others
+        // Full formula: 2.0f + (DisplayCalOffset + PreampOffset - AlexPreampOffset - FFTSizeOffset)
+        // Alex/preamp/FFT-size offsets land with spectrum knee line overlay
+        const float calOffset = (slice->agcMode() == AGCMode::Off)
+            ? 0.0f : 2.0f;
+
+        // From Thetis v2.10.3.13 console.cs:45965-45968 — apply cal offset
+        const double threshold = (noiseFloor + slice->autoAgcOffset())
+                                 - static_cast<double>(calOffset);
+
+        // From Thetis v2.10.3.13 console.cs:45969-45970 — clamp [-160, +2]
+        const double clamped = std::clamp(threshold, -160.0, 2.0);
+        const int threshInt = static_cast<int>(std::round(clamped));
+
+        // Update both WDSP and model. m_syncingAgc prevents the
+        // agcThresholdChanged handler from disabling auto mode AND from
+        // re-entering the WDSP call, so we must call RxChannel directly.
+        if (slice->agcThreshold() != threshInt) {
+            m_syncingAgc = true;
+
+            // Direct WDSP update — the signal handler is blocked by m_syncingAgc
+            RxChannel* rxCh = m_wdspEngine ? m_wdspEngine->rxChannel(0) : nullptr;
+            if (rxCh) {
+                rxCh->setAgcThreshold(threshInt);
+                // From Thetis v2.10.3.13 console.cs:45978 — readback AGC top
+                double top = rxCh->readBackAgcTop();
+                int rfGain = static_cast<int>(std::round(top));
+                if (slice->rfGain() != rfGain) {
+                    slice->setRfGain(rfGain);
+                }
+            }
+
+            // Update model (UI sync) — handler won't re-enter WDSP
+            slice->setAgcThreshold(threshInt);
+            m_syncingAgc = false;
+        }
+    });
+    m_autoAgcTimer->start();
 
     // EMNR (NR2) → WDSP
     // From Thetis Project Files/Source/Console/radio.cs:2216-2232

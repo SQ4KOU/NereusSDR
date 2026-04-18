@@ -90,13 +90,30 @@ void SetupDialog::showEvent(QShowEvent* event)
 {
     QDialog::showEvent(event);
 
-    // Select the first leaf item so the stack shows a valid page.
-    QTreeWidgetItem* first = m_tree->topLevelItem(0);
-    if (first != nullptr && first->childCount() > 0) {
-        first = first->child(0);
+    // Only default to the first leaf if no page was pre-selected via selectPage()
+    if (m_tree->currentItem() == nullptr) {
+        QTreeWidgetItem* first = m_tree->topLevelItem(0);
+        if (first != nullptr && first->childCount() > 0) {
+            first = first->child(0);
+        }
+        if (first != nullptr) {
+            m_tree->setCurrentItem(first);
+        }
     }
-    if (first != nullptr) {
-        m_tree->setCurrentItem(first);
+}
+
+void SetupDialog::selectPage(const QString& label)
+{
+    // Search all tree items (top-level categories + children) for matching text
+    for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
+        QTreeWidgetItem* cat = m_tree->topLevelItem(i);
+        for (int j = 0; j < cat->childCount(); ++j) {
+            QTreeWidgetItem* child = cat->child(j);
+            if (child->text(0) == label) {
+                m_tree->setCurrentItem(child);
+                return;
+            }
+        }
     }
 }
 
