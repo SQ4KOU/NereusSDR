@@ -775,4 +775,23 @@ No file changes for this task.
 
 ---
 
+## 2026-04-17 — Compliance Plan Task 9: cross-needle-bg duplicate — DECISION TO SKIP
+
+**Discovered by:** Adversarial GPL compliance audit. `resources/meters/
+cross-needle.png` and `cross-needle-bg.png` have identical MD5
+(`2e9762458582b47d0f370bc7d8af3ea6`). ASSETS.md honestly discloses the
+duplication but the disclosure undermines the "original layered
+artwork" claim.
+
+**Decision:** Skip. Not a GPL violation — a self-credibility issue,
+already honestly disclosed in ASSETS.md. The only fix paths
+(programmatic solid-fill in the renderer, or producing a real
+background image) touch rendering code with non-zero regression risk
+on the cross-needle gauge. Risk-vs-reward favors leaving the disclosed
+duplicate in place. Worth revisiting if Samphire pushes on it.
+
+No file changes for this task.
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
