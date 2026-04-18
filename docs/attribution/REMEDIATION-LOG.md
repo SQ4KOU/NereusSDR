@@ -794,4 +794,21 @@ No file changes for this task.
 
 ---
 
+## 2026-04-17 — Compliance Plan Task 10: Third-Party Notices link in About — DECISION TO SKIP
+
+**Discovered by:** Adversarial GPL compliance audit. AboutDialog names
+Qt6 / FFTW3 / WDSP in a "Built With" section but doesn't link to the
+bundled `packaging/third-party-licenses/` directory; LGPLv3 §4(d)
+implicitly wants the LGPL text discoverable from the running program.
+
+**Decision:** Skip. The licenses directory ships in the install tree
+on all three platforms (release.yml stages it explicitly on Windows
+and via deploy steps on Linux/macOS). Users who care can navigate to
+it. Common practice across LGPL-Qt apps is loose here. Worth doing
+later as a UX polish; not worth blocking v0.2.0 over.
+
+No file changes for this task.
+
+---
+
 *(Subsequent entries will be appended as omissions are discovered and cured.)*
