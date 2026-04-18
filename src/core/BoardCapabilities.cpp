@@ -59,7 +59,9 @@ mw0lge@grange-lane.co.uk
 //============================================================================================//
 
 //
-// WORK IN PROGRESS
+// P1 sample rates: {48k,96k,192k} standard; HermesLite also supports 384k
+//   (Setup.cs:850-853 — "The HL supports 384K")
+// P2 sample rates: {48k,96k,192k,384k,768k,1536k} all six, per Setup.cs:854
 //
 
 //=================================================================
@@ -283,7 +285,7 @@ constexpr BoardCapabilities kAtlas = {
     .protocol         = ProtocolVersion::Protocol1,
     .adcCount         = 1,
     .maxReceivers     = 3,
-    .sampleRates      = {48000, 96000, 192000, 0},
+    .sampleRates      = {48000, 96000, 192000, 0, 0, 0},
     .maxSampleRate    = 192000,
     .attenuator       = {0, 0, 0, false},
     .preamp           = {false, false},
@@ -322,7 +324,7 @@ constexpr BoardCapabilities kHermes = {
     .protocol         = ProtocolVersion::Protocol1,
     .adcCount         = 1,
     .maxReceivers     = 4,
-    .sampleRates      = {48000, 96000, 192000, 0},
+    .sampleRates      = {48000, 96000, 192000, 0, 0, 0},
     .maxSampleRate    = 192000,
     .attenuator       = {0, 31, 1, true},
     .preamp           = {true, false},
@@ -358,7 +360,7 @@ constexpr BoardCapabilities kHermesII = {
     .protocol         = ProtocolVersion::Protocol1,
     .adcCount         = 1,
     .maxReceivers     = 4,
-    .sampleRates      = {48000, 96000, 192000, 0},
+    .sampleRates      = {48000, 96000, 192000, 0, 0, 0},
     .maxSampleRate    = 192000,
     .attenuator       = {0, 31, 1, true},
     .preamp           = {true, false},
@@ -394,7 +396,7 @@ constexpr BoardCapabilities kAngelia = {
     .protocol         = ProtocolVersion::Protocol1,
     .adcCount         = 2,
     .maxReceivers     = 7,
-    .sampleRates      = {48000, 96000, 192000, 384000},
+    .sampleRates      = {48000, 96000, 192000, 384000, 0, 0},
     .maxSampleRate    = 384000,
     .attenuator       = {0, 31, 1, true},
     .preamp           = {true, false},
@@ -428,7 +430,7 @@ constexpr BoardCapabilities kOrion = {
     .protocol         = ProtocolVersion::Protocol1,
     .adcCount         = 2,
     .maxReceivers     = 7,
-    .sampleRates      = {48000, 96000, 192000, 384000},
+    .sampleRates      = {48000, 96000, 192000, 384000, 0, 0},
     .maxSampleRate    = 384000,
     .attenuator       = {0, 31, 1, true},
     .preamp           = {true, true},
@@ -454,8 +456,7 @@ constexpr BoardCapabilities kOrion = {
 // Source: network.h:453 (OrionMKII=5), clsHardwareSpecific.cs:143-190
 // ADC: SetRxADC(2) — dual ADC. Protocol 2 (clsHardwareSpecific.cs HasAudioAmplifier
 //   check: "protocol 2 only for 7000D/8000D/AnvelinaPro3/RedPitaya").
-// P2 sample rates: 48k/96k/192k/384k/768k/1536k (Setup.cs:854);
-//   array stores first 4, maxSampleRate = 1536000.
+// P2 sample rates: 48k/96k/192k/384k/768k/1536k all six (Setup.cs:854).
 // Correction vs plan baseline: maxSampleRate updated to 1536000 (P2 boards)
 // TODO(3I-T2): verify firmware versions for OrionMKII
 constexpr BoardCapabilities kOrionMKII = {
@@ -463,7 +464,7 @@ constexpr BoardCapabilities kOrionMKII = {
     .protocol         = ProtocolVersion::Protocol2,
     .adcCount         = 2,
     .maxReceivers     = 7,
-    .sampleRates      = {48000, 96000, 192000, 384000},
+    .sampleRates      = {48000, 96000, 192000, 384000, 768000, 1536000},
     .maxSampleRate    = 1536000,
     .attenuator       = {0, 31, 1, true},
     .preamp           = {true, true},
@@ -506,7 +507,7 @@ constexpr BoardCapabilities kHermesLite = {
     .protocol         = ProtocolVersion::Protocol1,
     .adcCount         = 1,
     .maxReceivers     = 4,
-    .sampleRates      = {48000, 96000, 192000, 384000},
+    .sampleRates      = {48000, 96000, 192000, 384000, 0, 0},
     .maxSampleRate    = 384000,
     .attenuator       = {0, 60, 1, true},
     .preamp           = {false, false},
@@ -532,7 +533,7 @@ constexpr BoardCapabilities kHermesLite = {
 // Source: network.h:455 (Saturn=10), enums.cs:397, clsHardwareSpecific.cs:164-176
 // ADC: SetRxADC(2) — dual ADC. Protocol 2.
 //   (clsHardwareSpecific.cs HasAudioAmplifier: Saturn = P2 protocol)
-// P2 sample rates: up to 1536k (Setup.cs:854)
+// P2 sample rates: all six (Setup.cs:854)
 // Diversity + PureSignal: yes (console.cs GetDDC P2 Saturn branch:8598)
 // PSDefaultPeak = 0.6121 for Saturn (clsHardwareSpecific.cs:323-324 P2 switch)
 // Correction vs plan baseline: maxSampleRate updated to 1536000 (P2 board)
@@ -542,7 +543,7 @@ constexpr BoardCapabilities kSaturn = {
     .protocol         = ProtocolVersion::Protocol2,
     .adcCount         = 2,
     .maxReceivers     = 7,
-    .sampleRates      = {48000, 96000, 192000, 384000},
+    .sampleRates      = {48000, 96000, 192000, 384000, 768000, 1536000},
     .maxSampleRate    = 1536000,
     .attenuator       = {0, 31, 1, true},
     .preamp           = {true, true},
@@ -575,7 +576,7 @@ constexpr BoardCapabilities kSaturnMKII = {
     .protocol         = ProtocolVersion::Protocol2,
     .adcCount         = 2,
     .maxReceivers     = 7,
-    .sampleRates      = {48000, 96000, 192000, 384000},
+    .sampleRates      = {48000, 96000, 192000, 384000, 768000, 1536000},
     .maxSampleRate    = 1536000,
     .attenuator       = {0, 31, 1, true},
     .preamp           = {true, true},
@@ -604,7 +605,7 @@ constexpr BoardCapabilities kUnknown = {
     .protocol         = ProtocolVersion::Protocol1,
     .adcCount         = 1,
     .maxReceivers     = 1,
-    .sampleRates      = {48000, 0, 0, 0},
+    .sampleRates      = {48000, 0, 0, 0, 0, 0},
     .maxSampleRate    = 48000,
     .attenuator       = {0, 0, 0, false},
     .preamp           = {false, false},

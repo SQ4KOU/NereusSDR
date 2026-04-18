@@ -237,6 +237,7 @@ warren@wpratt.com
 #include "core/WdspEngine.h"
 #include "core/RxChannel.h"
 #include "core/AppSettings.h"
+#include "core/SampleRateCatalog.h"
 #include "core/LogCategories.h"
 #include "gui/SpectrumWidget.h"
 
@@ -422,13 +423,21 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // Initialize WDSP DSP engine (wisdom runs async — channel creation
     // is deferred until initializedChanged fires)
     QString configDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
-    // Protocol-dependent DSP rates. Thetis P1 default is 192 kHz on the
-    // wire (setup.cs: SampleRate1 default = 192000); Saturn/ANAN-G2 P2
-    // streams at 768 kHz. in_size follows the Thetis formula
-    // 64 * input_rate / 48000 so fexchange2 sees 48-kHz output chunks.
-    const bool isP1 = (info.protocol == ProtocolVersion::Protocol1);
-    const int wdspInputRate = isP1 ? 192000 : 768000;
-    const int wdspInSize    = isP1 ? 256    : 1024;
+    // Sample rate + active RX count come from Hardware Config (per-MAC).
+    // Falls back to Thetis default (192000, setup.cs:866) when nothing
+    // is persisted, and to the board-cap first-entry if 192000 isn't
+    // in the allowed list. wdspInSize follows the Thetis formula
+    // 64 * rate / 48000 from ChannelMaster/cmsetup.c:104-111.
+    const auto& caps = *m_hardwareProfile.caps;
+    const HPSDRModel model = m_hardwareProfile.model;
+    const int wdspInputRate = resolveSampleRate(
+        AppSettings::instance(), info.macAddress, info.protocol, caps, model);
+    const int wdspInSize = bufferSizeForRate(wdspInputRate);
+    const int activeRxCount = resolveActiveRxCount(
+        AppSettings::instance(), info.macAddress, caps);
+    qCInfo(lcConnection) << "Connecting with sampleRate=" << wdspInputRate
+                         << "inSize=" << wdspInSize
+                         << "activeRxCount=" << activeRxCount;
 
     connect(m_wdspEngine, &WdspEngine::initializedChanged, this,
             [this, wdspInputRate, wdspInSize](bool ok) {
@@ -544,6 +553,18 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     QMetaObject::invokeMethod(m_connection, [conn = m_connection, wireSampleRate]() {
         conn->setSampleRate(wireSampleRate);
     });
+    // Push active receiver count to the connection. P1 uses this to encode
+    // nrx bits in the C&C bank 0 frame. P2 DDC assignment is more complex
+    // (Thetis console.cs:8216 UpdateDDCs — DDC2 is primary, not DDC0) and
+    // is handled inside P2RadioConnection::connectToRadio. Calling
+    // setActiveReceiverCount on P2 here would enable DDC0..N-1 on top of
+    // the DDC2 enable that connectToRadio sets, leaving extra DDCs active.
+    // Deferred to Phase 3F (multi-panadapter) which ports UpdateDDCs().
+    if (info.protocol == ProtocolVersion::Protocol1) {
+        QMetaObject::invokeMethod(m_connection, [conn = m_connection, activeRxCount]() {
+            conn->setActiveReceiverCount(activeRxCount);
+        });
+    }
     if (m_activeSlice) {
         int hwRx = m_receiverManager->receiverConfig(0).hardwareRx;
         if (hwRx < 0) { hwRx = 0; }
@@ -560,8 +581,8 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     });
 
     // Tell MainWindow / FFTEngine / SpectrumWidget the wire rate so bin math
-    // matches (P1=192k, P2=768k). Without this the FFT thinks 768k and
-    // compresses the real spectrum by 4x on P1.
+    // matches the persisted hardware rate. Without this the FFT uses a stale
+    // rate and compresses/expands the spectrum incorrectly.
     emit wireSampleRateChanged(static_cast<double>(wireSampleRate));
 
     qCDebug(lcConnection) << "Connecting to" << info.displayName()

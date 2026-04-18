@@ -67,6 +67,7 @@ class QComboBox;
 class QSpinBox;
 class QPushButton;
 class QFormLayout;
+class QFrame;
 
 namespace NereusSDR {
 
@@ -88,8 +89,12 @@ signals:
 
 private slots:
     void onSampleRateChanged(int index);
+    void onActiveRxCountChanged(int count);
+    void onWireSampleRateChanged(double hz);
 
 private:
+    void updateReconnectBanner();
+
     RadioModel*  m_model{nullptr};
 
     QLabel*      m_boardLabel{nullptr};
@@ -99,7 +104,11 @@ private:
     QLabel*      m_firmwareLabel{nullptr};
     QLabel*      m_macLabel{nullptr};
     QLabel*      m_ipLabel{nullptr};
-    QComboBox*   m_sampleRateCombo{nullptr};
+    QComboBox*   m_sampleRateRx1Combo{nullptr};
+    QComboBox*   m_sampleRateRx2Combo{nullptr};   // disabled in PR #35; activates with Phase 3F multi-panadapter.
+    QFrame*      m_reconnectBanner{nullptr};
+    QLabel*      m_reconnectBannerLabel{nullptr};
+    int          m_activeWireRate{0}; // last rate reported via wireSampleRateChanged
     QSpinBox*    m_activeRxSpin{nullptr};
     QPushButton* m_copySupportInfoButton{nullptr};
 
