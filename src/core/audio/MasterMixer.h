@@ -35,7 +35,10 @@ public:
     // interleaved L/R float32. frames = sample pairs.
     void accumulate(int sliceId, const float* samples, int frames);
 
-    // Audio thread: flush the accumulated mix into out and reset.
+    // Audio thread: flush the accumulated mix into out and reset. Always
+    // drains the accumulator — if the block size shrank below the
+    // accumulator's current size, out is zeroed and the accumulator is
+    // fully cleared so no stale tail can leak into a future call.
     // out is interleaved L/R float32, length = frames * 2.
     void mixInto(float* out, int frames);
 

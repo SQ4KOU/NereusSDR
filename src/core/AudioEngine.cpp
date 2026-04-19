@@ -274,12 +274,25 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         m_masterMix.accumulate(sliceId, samples, frames);
     }
 
+    // VAX tap receives raw demodulated audio — pre-MasterMixer gain/pan,
+    // pre-master-volume — matching Thetis VAC behavior and the spec §3.4
+    // pseudocode (`m_vaxBus[vaxCh-1]->push(samples, …)`, not the mixed
+    // output). Per-channel rx gain for VAX is applied inside the bus
+    // implementation (Sub-Phase 9+). See
+    // docs/architecture/2026-04-19-vax-design.md.
     const int vaxCh = slice->vaxChannel();
-    if (vaxCh >= 1 && vaxCh <= 4
-        && m_vaxBus[vaxCh - 1] && m_vaxBus[vaxCh - 1]->isOpen()) {
-        m_vaxBus[vaxCh - 1]->push(
-            reinterpret_cast<const char*>(samples),
-            static_cast<qint64>(frames) * 2 * sizeof(float));
+    if (vaxCh >= 1 && vaxCh <= 4) {
+        // Snapshot the bus pointer into a local so the isOpen() check and
+        // the push() below observe the same IAudioBus instance. The
+        // live-reconfig contract (AudioEngine.h) forbids setVaxConfig /
+        // setVaxEnabled mid-block, but the snapshot eliminates any
+        // torn-read window should a caller violate that contract.
+        IAudioBus* vaxBus = m_vaxBus[vaxCh - 1].get();
+        if (vaxBus != nullptr && vaxBus->isOpen()) {
+            vaxBus->push(
+                reinterpret_cast<const char*>(samples),
+                static_cast<qint64>(frames) * 2 * sizeof(float));
+        }
     }
 
     // Flush synchronously on the DSP thread. thread_local scratch so the
@@ -300,8 +313,11 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         }
     }
 
-    if (m_speakersBus && m_speakersBus->isOpen()) {
-        m_speakersBus->push(
+    // Same snapshot idiom as the VAX tap: one load into a local so the
+    // isOpen() guard and the push() observe the same IAudioBus.
+    IAudioBus* speakersBus = m_speakersBus.get();
+    if (speakersBus != nullptr && speakersBus->isOpen()) {
+        speakersBus->push(
             reinterpret_cast<const char*>(mix.data()),
             static_cast<qint64>(stereoFloats) * sizeof(float));
     }
@@ -310,7 +326,10 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
 void AudioEngine::setVolume(float volume)
 {
     volume = std::clamp(volume, 0.0f, 1.0f);
-    const float prev = m_masterVolume.exchange(volume, std::memory_order_release);
+    // acq_rel pairs with the DSP-thread acquire load in rxBlockReady on
+    // weak memory models (ARM / Apple Silicon); release alone would not
+    // synchronize the read-side observation order here.
+    const float prev = m_masterVolume.exchange(volume, std::memory_order_acq_rel);
     if (prev != volume) {
         emit volumeChanged(volume);
     }

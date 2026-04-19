@@ -82,6 +82,17 @@ public:
     bool isRunning() const { return m_running; }
 
     // Phase 3O: per-endpoint IAudioBus ownership.
+    //
+    // Live-reconfig contract: each of these setters destroys and
+    // reconstructs the underlying IAudioBus. That is NOT safe while the
+    // DSP thread is inside rxBlockReady(). Caller must ensure one of:
+    //   - AudioEngine::isRunning() == false (before start() or after
+    //     stop()), or
+    //   - the DSP thread feeding rxBlockReady() is quiesced for the
+    //     duration of the call.
+    // Live device switching while audio is streaming is the
+    // responsibility of a higher layer (Phase 3O Sub-Phase 8, Setup →
+    // Audio → Devices) and is not provided by this class.
     void setSpeakersConfig(const AudioDeviceConfig& cfg);
     void setTxInputConfig(const AudioDeviceConfig& cfg);
     void setVaxConfig(int channel, const AudioDeviceConfig& cfg);  // 1..4

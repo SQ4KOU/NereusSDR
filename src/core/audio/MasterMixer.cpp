@@ -58,9 +58,16 @@ void MasterMixer::accumulate(int sliceId, const float* samples, int frames) {
 
 void MasterMixer::mixInto(float* out, int frames) {
     const int n = frames * 2;
-    if (static_cast<int>(m_acc.size()) < n) {
-        // No one accumulated this block — output silence.
+    const int have = static_cast<int>(m_acc.size());
+    if (have < n) {
+        // Block size shrank (or no one accumulated yet) — output silence
+        // AND drain whatever the accumulator does have so a stale tail
+        // from a prior larger block cannot leak into a future mixInto
+        // call.
         std::fill(out, out + n, 0.0f);
+        if (have > 0) {
+            std::fill(m_acc.begin(), m_acc.end(), 0.0f);
+        }
         return;
     }
     std::copy(m_acc.begin(), m_acc.begin() + n, out);
