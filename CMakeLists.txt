@@ -341,6 +341,15 @@ if(APPLE)
     list(APPEND CORE_SOURCES src/core/audio/CoreAudioHalBus.cpp)
 endif()
 
+# LinuxPipeBus — Linux-only IAudioBus implementation bridging to PulseAudio /
+# PipeWire virtual audio nodes via named FIFOs and pactl module-pipe-source /
+# module-pipe-sink. The header compiles on all platforms (falls through to
+# error stubs off Linux) but the .cpp uses mkfifo / QProcess(pactl), so only
+# compile it on Linux targets. Phase 3O Sub-Phase 6 Task 6.1.
+if(UNIX AND NOT APPLE)
+    list(APPEND CORE_SOURCES src/core/audio/LinuxPipeBus.cpp)
+endif()
+
 set(MODEL_SOURCES
     src/models/RadioModel.cpp
     src/models/RxDspWorker.cpp
