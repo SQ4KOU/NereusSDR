@@ -264,6 +264,7 @@ warren@wpratt.com
 */
 
 #include "VfoWidget.h"
+#include "VaxChannelSelector.h"
 #include "gui/applets/NyiOverlay.h"
 
 #include <QPainter>
@@ -385,6 +386,19 @@ void VfoWidget::buildUI()
     mainLayout->addWidget(m_tabStack);
     m_tabStack->hide();  // Hidden by default — click tab to expand
     m_activeTab = -1;    // No tab active initially
+
+    // VAX channel selector row — Phase 3O Sub-Phase 8 Task 8.2
+    m_vaxRow = new QWidget(this);
+    auto* vaxLayout = new QHBoxLayout(m_vaxRow);
+    vaxLayout->setContentsMargins(10, 4, 10, 4);
+    vaxLayout->setSpacing(3);
+    auto* vaxLbl = new QLabel(QStringLiteral("VAX"), m_vaxRow);
+    vaxLbl->setStyleSheet(QStringLiteral("color:#8090a0;font-size:10px;"));
+    vaxLayout->addWidget(vaxLbl);
+    m_vaxSelector = new VaxChannelSelector(m_vaxRow);
+    vaxLayout->addWidget(m_vaxSelector);
+    vaxLayout->addStretch(1);
+    mainLayout->addWidget(m_vaxRow);
 
     setLayout(mainLayout);
     adjustSize();
@@ -1742,6 +1756,20 @@ void VfoWidget::setSlice(SliceModel* slice)
     }
     if (m_rttyContainer) {
         m_rttyContainer->setSlice(slice);
+    }
+
+    // VAX selector — bidirectional wiring (Phase 3O Sub-Phase 8 Task 8.2)
+    if (m_vaxSelector && slice) {
+        connect(m_vaxSelector, &VaxChannelSelector::valueChanged,
+                this, [this](int ch) {
+            if (m_slice) {
+                m_slice->setVaxChannel(ch);
+            }
+        });
+        connect(slice, &SliceModel::vaxChannelChanged,
+                m_vaxSelector, &VaxChannelSelector::setValue);
+        // Sync widget to current model state (e.g. restored from AppSettings)
+        m_vaxSelector->setValue(slice->vaxChannel());
     }
 }
 

@@ -309,6 +309,8 @@ warren@wpratt.com
 
 namespace NereusSDR {
 
+class VaxChannelSelector;  // forward declaration — full include in VfoWidget.cpp
+
 // Floating VFO flag widget — AetherSDR pattern.
 // Each slice gets one VfoWidget, parented to SpectrumWidget.
 // Positioned at the VFO marker via move() from updatePosition().
@@ -535,6 +537,10 @@ private:
     FmOptContainer*        m_fmContainer{nullptr};
     DigOffsetContainer*    m_digContainer{nullptr};
     RttyMarkShiftContainer* m_rttyContainer{nullptr};
+
+    // --- VAX channel selector row (Phase 3O Sub-Phase 8) ---
+    QWidget*             m_vaxRow{nullptr};
+    VaxChannelSelector*  m_vaxSelector{nullptr};
 
     // --- Slice coupling (for mode container binding only) ---
     QPointer<SliceModel> m_slice;
