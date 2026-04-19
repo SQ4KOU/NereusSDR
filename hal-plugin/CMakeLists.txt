@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(NereusSDRVAX LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+# NereusSDR project-wide C++20 policy (CLAUDE.md); keep the HAL plugin aligned.
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Fetch libASPL

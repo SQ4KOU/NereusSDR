@@ -46,24 +46,36 @@
 
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <atomic>
 #include <chrono>
 #include <cstring>
 #include <cmath>
 
-// ── Shared memory layout — must match VirtualAudioBridge.h ──────────────────
+// ── Shared memory layout — must match src/core/audio/CoreAudioHalBus.h
+//    (Sub-Phase 5.3; not yet landed). Any field change here requires the
+//    matching change in CoreAudioHalBus or the shm contract breaks.
 
 struct VaxShmBlock {
     std::atomic<uint32_t> writePos;
     std::atomic<uint32_t> readPos;
-    uint32_t sampleRate;
-    uint32_t channels;
-    uint32_t active;
-    uint32_t reserved[3];
+    uint32_t sampleRate;             // written by producer (CoreAudioHalBus); plugin does not read
+    uint32_t channels;               // written by producer (CoreAudioHalBus); plugin does not read
+    std::atomic<uint32_t> active;
+    uint32_t reserved[3];            // reserved — DO NOT REMOVE; preserves layout alignment with CoreAudioHalBus
     static constexpr uint32_t RING_SIZE = 48000 * 2 * 2;  // ~2 sec @ 48kHz stereo
     float ringBuffer[RING_SIZE];
 };
+
+static_assert(
+    sizeof(VaxShmBlock) ==
+        2 * sizeof(std::atomic<uint32_t>)   // writePos, readPos
+      + 1 * sizeof(std::atomic<uint32_t>)   // active (FIX 1: atomic with acquire/release)
+      + 2 * sizeof(uint32_t)                // sampleRate, channels
+      + 3 * sizeof(uint32_t)                // reserved[3]
+      + VaxShmBlock::RING_SIZE * sizeof(float),
+    "VaxShmBlock layout changed — update CoreAudioHalBus.h to match");
 
 // ── VAX RX Handler: reads from shared memory → output to apps ───────────────
 
@@ -94,7 +106,7 @@ public:
         }
 
         auto* block = m_shmBlock;
-        if (!block->active) {
+        if (!block->active.load(std::memory_order_acquire)) {
             std::memset(dst, 0, bytesCount);
             return;
         }
@@ -132,6 +144,14 @@ private:
 
         int fd = shm_open(name, O_RDWR, 0666);
         if (fd < 0) return false;
+
+        struct stat st;
+        if (fstat(fd, &st) != 0 || static_cast<size_t>(st.st_size) < sizeof(VaxShmBlock)) {
+            // Stale or undersized segment — refuse to mmap past the end.
+            // A SIGBUS here would crash coreaudiod. Try again next retry cycle.
+            ::close(fd);
+            return false;
+        }
 
         void* ptr = mmap(nullptr, sizeof(VaxShmBlock), PROT_READ | PROT_WRITE,
                          MAP_SHARED, fd, 0);
@@ -187,7 +207,7 @@ public:
         }
 
         block->writePos.store(wp, std::memory_order_release);
-        block->active = 1;
+        block->active.store(1, std::memory_order_release);
     }
 
 private:
@@ -201,6 +221,14 @@ private:
 
         int fd = shm_open("/nereussdr-vax-tx", O_RDWR, 0666);
         if (fd < 0) return false;
+
+        struct stat st;
+        if (fstat(fd, &st) != 0 || static_cast<size_t>(st.st_size) < sizeof(VaxShmBlock)) {
+            // Stale or undersized segment — refuse to mmap past the end.
+            // A SIGBUS here would crash coreaudiod. Try again next retry cycle.
+            ::close(fd);
+            return false;
+        }
 
         void* ptr = mmap(nullptr, sizeof(VaxShmBlock), PROT_READ | PROT_WRITE,
                          MAP_SHARED, fd, 0);
