@@ -57,6 +57,13 @@ namespace NereusSDR {
 //            close() closes the fd, unloads the module, and unlinks the FIFO.
 //            Stale module cleanup runs once per process (std::once_flag).
 //
+// Thread-ownership: open(), close(), and the destructor must all run on the
+//            main (GUI) thread. Internally they invoke QProcess to drive pactl,
+//            which requires a running event loop on the calling thread. Qt will
+//            assert in debug builds if QProcess is used on a thread without an
+//            event loop. push() and pull() are audio-thread-safe — they only
+//            perform ::write()/::read() and atomic stores.
+//
 // TODO(phase3M): TX-side poll timer — on Role::TxInput, pull() is driven on
 //                demand from the caller. The AetherSDR PipeWireAudioBridge
 //                polled the TX pipe every 5 ms via QTimer::timeout. Re-add
@@ -130,6 +137,12 @@ private:
     bool         m_open{false};
     int          m_pipeFd{-1};
     uint32_t     m_moduleIndex{0};
+    // True iff a pactl load-module call succeeded and the module has not yet
+    // been unloaded. Guards the unload in close() instead of "moduleIndex > 0"
+    // so that module index 0 (valid on a freshly-started daemon) is handled
+    // correctly. Defaults to false so the destructor's close() is a no-op when
+    // open() was never called or failed before the module was loaded.
+    bool         m_moduleLoaded{false};
 
     AudioFormat  m_negFormat;
     QString      m_backendName;

@@ -39,6 +39,7 @@
 #endif
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstring>
 #include <mutex>
@@ -235,7 +236,10 @@ bool LinuxPipeBus::open(const AudioFormat& format) {
 
     bool ok = false;
     const uint32_t modIdx = modIdxBytes.toUInt(&ok);
-    if (!ok || modIdx == 0) {
+    // Only the 'ok' bool gates validity — index 0 is a legitimate module index
+    // on a freshly-started PulseAudio / PipeWire-pulse daemon. The old guard
+    // "!ok || modIdx == 0" would incorrectly reject a valid module-0 assignment.
+    if (!ok) {
         m_err = QStringLiteral("pactl returned unexpected module index '%1' for %2")
                     .arg(QString::fromUtf8(modIdxBytes))
                     .arg(QString::fromUtf8(m_pipePath));
@@ -262,10 +266,11 @@ bool LinuxPipeBus::open(const AudioFormat& format) {
         return false;
     }
 
-    m_pipeFd      = fd;
-    m_moduleIndex = modIdx;
-    m_negFormat   = format;
-    m_open        = true;
+    m_pipeFd       = fd;
+    m_moduleIndex  = modIdx;
+    m_moduleLoaded = true;   // arm close() to unload; index 0 is valid here
+    m_negFormat    = format;
+    m_open         = true;
     m_err.clear();
 
     qCInfo(lcAudio) << "LinuxPipeBus: opened" << m_pipePath
@@ -283,9 +288,10 @@ void LinuxPipeBus::close() {
         ::close(m_pipeFd);
         m_pipeFd = -1;
     }
-    if (m_moduleIndex > 0) {
+    if (m_moduleLoaded) {
         runPactl({QStringLiteral("unload-module"), QString::number(m_moduleIndex)});
-        m_moduleIndex = 0;
+        m_moduleLoaded = false;
+        m_moduleIndex  = 0;
     }
     if (m_open) {
         ::unlink(m_pipePath);
@@ -313,10 +319,20 @@ qint64 LinuxPipeBus::push(const char* data, qint64 bytes) {
 #ifdef Q_OS_LINUX
     // Write float32 stereo PCM directly to the FIFO — pactl module-pipe-source
     // reads it as-is (format=float32le rate=48000 channels=2).
-    // Non-blocking write: EAGAIN means the pipe is full (reader not keeping up);
-    // we drop the block rather than stall the audio thread.
+    // Non-blocking write: EAGAIN/EWOULDBLOCK means the pipe is full (reader not
+    // keeping up); we drop the block rather than stall the audio thread.
+    // Other errors (EBADF, EIO, EPIPE) are genuine failures and are logged.
     const ssize_t written = ::write(m_pipeFd, data, static_cast<size_t>(bytes));
-    const qint64 actualBytes = (written > 0) ? static_cast<qint64>(written) : 0;
+    if (written < 0) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            qCWarning(lcAudio) << "LinuxPipeBus: write error on"
+                               << m_pipePath
+                               << "errno=" << errno
+                               << "(" << strerror(errno) << ")";
+        }
+        return 0;
+    }
+    const qint64 actualBytes = static_cast<qint64>(written);
 
     // RMS meter on the left channel (indices 0, 2, 4, …). Strided so the hot
     // path doesn't walk the full block every call.
@@ -354,12 +370,23 @@ qint64 LinuxPipeBus::pull(char* data, qint64 maxBytes) {
     }
 
 #ifdef Q_OS_LINUX
-    // Non-blocking read from the FIFO — EAGAIN means no TX audio available yet.
+    // Non-blocking read from the FIFO — EAGAIN/EWOULDBLOCK means no TX audio
+    // available yet; caller should retry. Other errors (EBADF, EIO) are genuine
+    // failures and are logged.
     // Ported from AetherSDR PipeWireAudioBridge::readTxPipe(), adapted for the
     // on-demand pull() contract (no internal loop here; caller may loop).
     const ssize_t n = ::read(m_pipeFd, data, static_cast<size_t>(maxBytes));
-    if (n <= 0) {
+    if (n < 0) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            qCWarning(lcAudio) << "LinuxPipeBus: read error on"
+                               << m_pipePath
+                               << "errno=" << errno
+                               << "(" << strerror(errno) << ")";
+        }
         return 0;
+    }
+    if (n == 0) {
+        return 0;  // EOF / pipe writer closed; treat as no data
     }
 
     const qint64 actualBytes = static_cast<qint64>(n);
