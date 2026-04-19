@@ -260,6 +260,13 @@ RadioModel::RadioModel(QObject* parent)
     , m_audioEngine(new AudioEngine(this))
     , m_wdspEngine(new WdspEngine(this))
 {
+    // Phase 3O: give AudioEngine a non-owning back-pointer to this model
+    // so rxBlockReady() can look up per-slice mute / VAX state. Wired
+    // immediately after construction; AudioEngine caches the pointer and
+    // treats a null as a safe no-op (tests that build AudioEngine
+    // standalone).
+    m_audioEngine->setRadioModel(this);
+
     // Connection starts null — created by connectToRadio() via factory.
     //
     // Phase 3G-9b: the smooth-defaults profile is reachable only via the
