@@ -246,6 +246,11 @@ QStringList AppSettings::allKeys() const
     return m_settings.keys();
 }
 
+void AppSettings::clear()
+{
+    m_settings.clear();
+}
+
 QVariant AppSettings::stationValue(const QString& key, const QVariant& defaultValue) const
 {
     auto it = m_stationSettings.constFind(key);
@@ -520,6 +525,39 @@ void AppSettings::setModelOverride(const QString& macKey, HPSDRModel model)
     const QString prefix = radioKeyPrefix(macKey);
     m_settings.insert(prefix + QStringLiteral("modelOverride"),
                       QString::number(static_cast<int>(model)));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3O VAX schema migration
+// ---------------------------------------------------------------------------
+
+void AppSettings::migrateVaxSchemaV1ToV2()
+{
+    auto& s = instance();
+    if (!s.contains(QStringLiteral("audio/OutputDevice"))) { return; }
+    if (s.contains(QStringLiteral("audio/Speakers/DeviceName"))) { return; }
+
+    const QString dev = s.value(QStringLiteral("audio/OutputDevice")).toString();
+    s.setValue(QStringLiteral("audio/Speakers/DeviceName"), dev);
+
+    // Platform-default driver API. Conservative; user can tune later.
+#if defined(Q_OS_WIN)
+    s.setValue(QStringLiteral("audio/Speakers/DriverApi"), QStringLiteral("WASAPI"));
+#elif defined(Q_OS_MAC)
+    s.setValue(QStringLiteral("audio/Speakers/DriverApi"), QStringLiteral("CoreAudio"));
+#else
+    s.setValue(QStringLiteral("audio/Speakers/DriverApi"), QStringLiteral("Pulse"));
+#endif
+    s.setValue(QStringLiteral("audio/Speakers/SampleRate"),    QStringLiteral("48000"));
+    s.setValue(QStringLiteral("audio/Speakers/BitDepth"),      QStringLiteral("24"));
+    s.setValue(QStringLiteral("audio/Speakers/Channels"),      QStringLiteral("2"));
+    s.setValue(QStringLiteral("audio/Speakers/BufferSamples"), QStringLiteral("256"));
+
+    // Trigger first-run dialog on next launch.
+    s.setValue(QStringLiteral("audio/FirstRunComplete"), QStringLiteral("False"));
+
+    s.remove(QStringLiteral("audio/OutputDevice"));
+    s.save();
 }
 
 } // namespace NereusSDR

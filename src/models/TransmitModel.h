@@ -1,8 +1,24 @@
 #pragma once
 
 #include <QObject>
+#include <QString>
+#include <atomic>
 
 namespace NereusSDR {
+
+// VAX slot: which audio source owns the transmitter.
+// MicDirect = hardware mic, Vax1–Vax4 = virtual audio crossbar slots.
+enum class VaxSlot {
+    None = 0,
+    MicDirect,
+    Vax1,
+    Vax2,
+    Vax3,
+    Vax4
+};
+
+QString vaxSlotToString(VaxSlot s);
+VaxSlot vaxSlotFromString(const QString& s);
 
 // Transmit state management.
 // Includes MOX, tune, TX frequency, power, mic gain, and PureSignal state.
@@ -34,12 +50,18 @@ public:
     bool pureSigEnabled() const { return m_pureSigEnabled; }
     void setPureSigEnabled(bool enabled);
 
+    VaxSlot txOwnerSlot() const { return m_txOwnerSlot.load(std::memory_order_acquire); }
+    void setTxOwnerSlot(VaxSlot s);
+
+    void loadFromSettings();
+
 signals:
     void moxChanged(bool mox);
     void tuneChanged(bool tune);
     void powerChanged(int power);
     void micGainChanged(float gain);
     void pureSigChanged(bool enabled);
+    void txOwnerSlotChanged(VaxSlot s);
 
 private:
     bool m_mox{false};
@@ -47,6 +69,7 @@ private:
     int m_power{100};
     float m_micGain{0.0f};
     bool m_pureSigEnabled{false};
+    std::atomic<VaxSlot> m_txOwnerSlot{VaxSlot::MicDirect};  // Atomic for lock-free reads from the audio thread.
 };
 
 } // namespace NereusSDR

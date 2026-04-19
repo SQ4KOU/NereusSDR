@@ -48,6 +48,36 @@ else()
 endif()
 
 # --------------------------------------------------------------------------
+# PortAudio v19 (Phase 3O VAX — PortAudioBus fallback for IAudioBus)
+# --------------------------------------------------------------------------
+include(FetchContent)
+
+FetchContent_Declare(
+    portaudio
+    GIT_REPOSITORY https://github.com/PortAudio/portaudio.git
+    GIT_TAG        v19.7.0  # verified cmake-clean release
+)
+
+# PortAudio build options — turn off ASIO. Direct ASIO support was
+# dropped during the 2026-04-19 GPL compliance review (see plan §"GPL
+# Compliance Review"); PortAudio's built-in ASIO host API is gated off
+# for the same reason (the Steinberg ASIO SDK license is
+# GPL-incompatible). All other PortAudio host APIs remain enabled:
+# MME / DS / WDM-KS / WASAPI on Windows, CoreAudio on macOS,
+# ALSA / Pulse / PipeWire / JACK on Linux.
+set(PA_BUILD_SHARED OFF CACHE BOOL "PortAudio static" FORCE)
+set(PA_BUILD_STATIC ON  CACHE BOOL "PortAudio static" FORCE)
+set(PA_USE_ASIO    OFF CACHE BOOL "PortAudio ASIO host API — forced OFF for GPL compliance (Steinberg SDK incompatible)" FORCE)
+
+# PortAudio v19.7.0 uses `cmake_minimum_required(VERSION 2.8)`, which CMake
+# 4.x rejects because compatibility with CMake < 3.5 has been removed. Pin
+# the minimum policy version for the nested project so FetchContent can
+# configure it under modern CMake without touching the vendored source.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum CMake policy version for vendored subprojects" FORCE)
+
+FetchContent_MakeAvailable(portaudio)
+
+# --------------------------------------------------------------------------
 # FFTW3 (for client-side FFT — spectrum and waterfall)
 # --------------------------------------------------------------------------
 find_package(PkgConfig QUIET)
@@ -299,6 +329,8 @@ set(CORE_SOURCES
     src/core/NoiseFloorTracker.cpp
     src/core/ClarityController.cpp
     src/core/StepAttenuatorController.cpp
+    src/core/audio/MasterMixer.cpp
+    src/core/audio/PortAudioBus.cpp
 )
 
 set(MODEL_SOURCES
@@ -539,6 +571,11 @@ if(WDSP_FOUND)
     target_link_libraries(NereusSDRObjs PUBLIC wdsp_static)
     target_compile_definitions(NereusSDRObjs PUBLIC HAVE_WDSP)
 endif()
+
+# PortAudio (Phase 3O VAX) — always linked; PortAudioBus is the cross-platform
+# IAudioBus fallback when no native low-latency backend is available.
+target_link_libraries(NereusSDRObjs PRIVATE portaudio_static)
+target_include_directories(NereusSDRObjs PUBLIC ${portaudio_SOURCE_DIR}/include)
 
 if(NEREUS_GPU_SPECTRUM)
     target_link_libraries(NereusSDRObjs PUBLIC Qt6::GuiPrivate)

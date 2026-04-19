@@ -163,6 +163,10 @@ private:
     AudioEngine*     m_audioEngine{nullptr};
     QVector<float>   m_iqAccumI;
     QVector<float>   m_iqAccumQ;
+    // Reusable interleaved stereo scratch handed to AudioEngine::rxBlockReady.
+    // Sized to outSize*2 on first use and reused in-place per batch so the
+    // DSP thread never allocates in the hot path after warmup.
+    QVector<float>   m_interleavedOut;
     // Written by setBufferSizes() (typically on the main thread when the
     // wire rate changes) and read by processIqBatch() on the DSP thread.
     // std::atomic<int> prevents the C++ data race that plain int reads

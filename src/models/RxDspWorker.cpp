@@ -136,7 +136,22 @@ void RxDspWorker::processIqBatch(int receiverIndex,
             // outI == outQ because SetRXAPanelBinaural(channel, 0) puts
             // the RXA patch panel in dual-mono mode (set in
             // WdspEngine::createRxChannel).
-            m_audioEngine->feedAudio(0, outI.data(), outQ.data(), outSize);
+            //
+            // Phase 3O: interleave L/R into a reusable stereo buffer
+            // and hand it to AudioEngine::rxBlockReady, which routes
+            // through MasterMixer → speakers IAudioBus + per-slice VAX.
+            // sliceId = 0 because ReceiverManager maps hardware DDC2 →
+            // receiver index 0 for the single-RX live path (3O
+            // Sub-Phase 4; multi-slice enrollment lands in Sub-Phase 9+).
+            if (m_interleavedOut.size() < outSize * 2) {
+                m_interleavedOut.resize(outSize * 2);
+            }
+            float* interleaved = m_interleavedOut.data();
+            for (int i = 0; i < outSize; ++i) {
+                interleaved[i * 2 + 0] = outI[i];
+                interleaved[i * 2 + 1] = outQ[i];
+            }
+            m_audioEngine->rxBlockReady(0, interleaved, outSize);
         }
 
         m_iqAccumI.remove(0, inSize);

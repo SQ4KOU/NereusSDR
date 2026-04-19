@@ -147,3 +147,16 @@ nereus_add_test(tst_step_attenuator_controller)
 
 # ── About dialog ─────────────────────────────────────────────────────────
 nereus_add_test(tst_about_dialog)
+
+# ── Phase 3O VAX routing ──────────────────────────────────────────────────
+nereus_add_test(tst_slice_model_vax)
+nereus_add_test(tst_transmit_model_tx_owner)
+
+# ── Phase 3O VAX schema migration ─────────────────────────────────────────
+nereus_add_test(tst_app_settings_vax_migration)
+
+# ── Phase 3O Sub-Phase 2: MasterMixer ─────────────────────────────────────
+nereus_add_test(tst_master_mixer)
+
+# ── Phase 3O Sub-Phase 3: PortAudioBus ────────────────────────────────────
+nereus_add_test(tst_port_audio_bus)

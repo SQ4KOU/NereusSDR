@@ -129,6 +129,10 @@ public:
     // prefix at app startup.
     QStringList allKeys() const;
 
+    // Remove ALL top-level keys from the in-memory store.
+    // Intended for test isolation. Does NOT call save().
+    void clear();
+
     // Per-station settings (nested under <StationName> element).
     QVariant stationValue(const QString& key, const QVariant& defaultValue = {}) const;
     void setStationValue(const QString& key, const QVariant& val);
@@ -243,6 +247,13 @@ public:
     // "radioInfo/sampleRate".
     QMap<QString, QVariant> hardwareValues(const QString& mac) const;
     void    clearHardwareValues(const QString& mac);
+
+    // Phase 3O VAX schema migration. Call once at app startup. Idempotent.
+    // Migrates legacy audio/OutputDevice → audio/Speakers/DeviceName with
+    // sensible platform defaults, and flags the first-run dialog to show
+    // (audio/FirstRunComplete = "False").
+    // See docs/architecture/2026-04-19-vax-design.md §5.5.
+    static void migrateVaxSchemaV1ToV2();
 
 private:
     // Private default constructor — used only by instance().
