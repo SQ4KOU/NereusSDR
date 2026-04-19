@@ -18,3 +18,9 @@ directory is the index.
 
 NereusSDR as a whole is licensed under GPLv3 (see root `LICENSE`), which
 is compatible with Thetis's GPLv2-or-later terms.
+
+## Per-component provenance
+
+- [WDSP-PROVENANCE.md](WDSP-PROVENANCE.md) — WDSP v1.29 vendored at `third_party/wdsp/`
+- [FFTW3-PROVENANCE.md](FFTW3-PROVENANCE.md) — FFTW3 3.3.5 binaries vendored at `third_party/fftw3/` (Windows only)
+- [THETIS-PROVENANCE.md](THETIS-PROVENANCE.md) — NereusSDR files derived from Thetis
