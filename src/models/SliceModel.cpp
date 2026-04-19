@@ -124,6 +124,12 @@ SliceModel::SliceModel(QObject* parent)
 {
 }
 
+SliceModel::SliceModel(int sliceId, QObject* parent)
+    : QObject(parent)
+    , m_sliceIndex(sliceId)
+{
+}
+
 SliceModel::~SliceModel() = default;
 
 // ---------------------------------------------------------------------------
@@ -941,6 +947,40 @@ void SliceModel::migrateLegacyKeys()
     s.remove(QStringLiteral("VfoRfGain"));
     s.remove(QStringLiteral("VfoRxAntenna"));
     s.remove(QStringLiteral("VfoTxAntenna"));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3O — VAX routing
+// ---------------------------------------------------------------------------
+
+void SliceModel::setVaxChannel(int ch)
+{
+    // Clamp to valid range.
+    if (ch < 0 || ch > 4) { ch = 0; }
+
+    const int prev = m_vaxChannel.exchange(ch, std::memory_order_acq_rel);
+    if (prev == ch) { return; }
+
+    AppSettings::instance().setValue(
+        QStringLiteral("slice/%1/VaxChannel").arg(m_sliceIndex),
+        QString::number(ch));
+    AppSettings::instance().save();
+
+    emit vaxChannelChanged(ch);
+}
+
+void SliceModel::loadFromSettings()
+{
+    auto& s = AppSettings::instance();
+
+    // ── VAX channel (Phase 3O) ────────────────────────────────────────────────
+    const int vaxCh = s.value(
+        QStringLiteral("slice/%1/VaxChannel").arg(m_sliceIndex), "0")
+        .toString().toInt();
+    if (vaxCh != m_vaxChannel.load()) {
+        m_vaxChannel.store(vaxCh, std::memory_order_release);
+        emit vaxChannelChanged(vaxCh);
+    }
 }
 
 } // namespace NereusSDR

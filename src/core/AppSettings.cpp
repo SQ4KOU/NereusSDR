@@ -246,6 +246,11 @@ QStringList AppSettings::allKeys() const
     return m_settings.keys();
 }
 
+void AppSettings::clear()
+{
+    m_settings.clear();
+}
+
 QVariant AppSettings::stationValue(const QString& key, const QVariant& defaultValue) const
 {
     auto it = m_stationSettings.constFind(key);

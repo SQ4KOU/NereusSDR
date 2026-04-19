@@ -147,3 +147,6 @@ nereus_add_test(tst_step_attenuator_controller)
 
 # ── About dialog ─────────────────────────────────────────────────────────
 nereus_add_test(tst_about_dialog)
+
+# ── Phase 3O VAX routing ──────────────────────────────────────────────────
+nereus_add_test(tst_slice_model_vax)

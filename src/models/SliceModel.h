@@ -122,6 +122,7 @@
 #include <QObject>
 #include <QString>
 
+#include <atomic>
 #include <utility>
 
 namespace NereusSDR {
@@ -201,6 +202,8 @@ class SliceModel : public QObject {
 
 public:
     explicit SliceModel(QObject* parent = nullptr);
+    // Convenience constructor that initialises m_sliceIndex directly.
+    explicit SliceModel(int sliceId, QObject* parent = nullptr);
     ~SliceModel() override;
 
     // ---- Frequency ----
@@ -442,6 +445,16 @@ public:
     void restoreFromSettings(NereusSDR::Band band);
     static void migrateLegacyKeys();
 
+    // Load band-agnostic slice settings (e.g. VAX channel) from AppSettings.
+    // Called on startup when no specific band context is needed. Does NOT
+    // restore per-band DSP state — use restoreFromSettings(band) for that.
+    void loadFromSettings();
+
+    // ── Phase 3O VAX routing ──────────────────────────────────────────────────
+    // VAX routing (Phase 3O) — 0=Off, 1..4=VAX channel.
+    int vaxChannel() const { return m_vaxChannel.load(std::memory_order_acquire); }
+    void setVaxChannel(int ch);
+
 signals:
     void frequencyChanged(double freq);
     void dspModeChanged(NereusSDR::DSPMode mode);
@@ -494,6 +507,9 @@ signals:
     void diguOffsetHzChanged(int hz);
     void rttyMarkHzChanged(int hz);
     void rttyShiftHzChanged(int hz);
+
+    // ── Phase 3O VAX routing ──────────────────────────────────────────────────
+    void vaxChannelChanged(int ch);
 
 private:
     double  m_frequency{14225000.0};     // Default: 14.225 MHz (20m USB)
@@ -552,6 +568,9 @@ private:
     int      m_diguOffsetHz{0};         // From Thetis console.cs:14637 — DIGUClickTuneOffset default 0 Hz
     int    m_rttyMarkHz{2295};        // From Thetis setup.designer.cs:40635 — tooltip "RTTY MARK frequency" on udDSPRX1DollyF1; value 2295 (line 40637). F0=2125 is SPACE (line 40665).
     int    m_rttyShiftHz{170};        // From Thetis radio.cs:2043-2044 — rx_dolly_freq1 = 2295, rx_dolly_freq0 = 2125 → shift = 2295−2125 = 170 Hz
+
+    // ── Phase 3O VAX routing ──────────────────────────────────────────────────
+    std::atomic<int> m_vaxChannel{0};  // 0=Off, 1..4=VAX N. Atomic for audio-thread-safe reads.
 };
 
 } // namespace NereusSDR

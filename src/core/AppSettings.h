@@ -129,6 +129,10 @@ public:
     // prefix at app startup.
     QStringList allKeys() const;
 
+    // Remove ALL top-level keys from the in-memory store.
+    // Intended for test isolation. Does NOT call save().
+    void clear();
+
     // Per-station settings (nested under <StationName> element).
     QVariant stationValue(const QString& key, const QVariant& defaultValue = {}) const;
     void setStationValue(const QString& key, const QVariant& val);
