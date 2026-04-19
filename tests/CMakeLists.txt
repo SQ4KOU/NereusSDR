@@ -169,3 +169,14 @@ nereus_add_test(tst_port_audio_bus)
 if(APPLE)
     nereus_add_test(tst_core_audio_hal_bus)
 endif()
+
+# ── Phase 3O Sub-Phase 6: LinuxPipeBus (Linux-only) ──────────────────────────
+# Exercises FIFO lifecycle + pactl module load/unload + push/pull round-trip +
+# role policing + format validation + stale-cleanup idempotency.
+# The impl is guarded by Q_OS_LINUX; the test binary is only built on Linux
+# to match. Tests that call pactl QSKIP when pactl is not in PATH (CI runners
+# do not install pulseaudio-utils; run on a developer Linux box for lifecycle
+# and metering coverage).
+if(UNIX AND NOT APPLE)
+    nereus_add_test(tst_linux_pipe_bus)
+endif()
