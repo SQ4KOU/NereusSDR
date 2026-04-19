@@ -29,6 +29,7 @@
 #include "core/IAudioBus.h"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 namespace NereusSDR {
@@ -55,14 +56,18 @@ namespace NereusSDR {
 // error rather than a runtime shm-format mismatch.
 
 struct VaxShmBlock {
-    std::atomic<uint32_t> writePos;
-    std::atomic<uint32_t> readPos;
-    std::atomic<uint32_t> active;
-    uint32_t sampleRate;             // producer-written, consumer does not read
-    uint32_t channels;               // producer-written, consumer does not read
-    uint32_t reserved[3];            // reserved — DO NOT REMOVE; preserves layout alignment
+    // Field ORDER is the shm wire contract with hal-plugin/NereusSDRVAX.cpp.
+    // Both sides must declare these fields in the same sequence so offsetof
+    // values agree. DO NOT REORDER without updating the plugin in lockstep.
+    // The static_asserts below pin the layout at compile time on both sides.
+    std::atomic<uint32_t> writePos;   // offset 0
+    std::atomic<uint32_t> readPos;    // offset 4
+    uint32_t sampleRate;              // offset 8  — producer-written; consumer does not read
+    uint32_t channels;                // offset 12 — producer-written; consumer does not read
+    std::atomic<uint32_t> active;     // offset 16 — SPSC gate; writer stores release, reader loads acquire
+    uint32_t reserved[3];             // offset 20 — reserved; DO NOT REMOVE (preserves layout)
     static constexpr uint32_t RING_SIZE = 48000 * 2 * 2;  // ~2 sec @ 48 kHz stereo
-    float ringBuffer[RING_SIZE];
+    float ringBuffer[RING_SIZE];      // offset 32
 };
 
 static_assert(
@@ -73,6 +78,14 @@ static_assert(
       + 3 * sizeof(uint32_t)                // reserved[3]
       + VaxShmBlock::RING_SIZE * sizeof(float),
     "VaxShmBlock layout changed — update hal-plugin/NereusSDRVAX.cpp to match");
+
+static_assert(offsetof(VaxShmBlock, writePos)    == 0,  "VaxShmBlock.writePos offset changed");
+static_assert(offsetof(VaxShmBlock, readPos)     == 4,  "VaxShmBlock.readPos offset changed");
+static_assert(offsetof(VaxShmBlock, sampleRate)  == 8,  "VaxShmBlock.sampleRate offset changed");
+static_assert(offsetof(VaxShmBlock, channels)    == 12, "VaxShmBlock.channels offset changed");
+static_assert(offsetof(VaxShmBlock, active)      == 16, "VaxShmBlock.active offset changed");
+static_assert(offsetof(VaxShmBlock, reserved)    == 20, "VaxShmBlock.reserved offset changed");
+static_assert(offsetof(VaxShmBlock, ringBuffer)  == 32, "VaxShmBlock.ringBuffer offset changed");
 
 // ── CoreAudioHalBus ─────────────────────────────────────────────────────────
 //

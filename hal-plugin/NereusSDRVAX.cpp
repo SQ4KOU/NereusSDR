@@ -50,6 +50,7 @@
 #include <unistd.h>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstring>
 #include <cmath>
 
@@ -76,6 +77,14 @@ static_assert(
       + 3 * sizeof(uint32_t)                // reserved[3]
       + VaxShmBlock::RING_SIZE * sizeof(float),
     "VaxShmBlock layout changed — update CoreAudioHalBus.h to match");
+
+static_assert(offsetof(VaxShmBlock, writePos)    == 0,  "VaxShmBlock.writePos offset changed");
+static_assert(offsetof(VaxShmBlock, readPos)     == 4,  "VaxShmBlock.readPos offset changed");
+static_assert(offsetof(VaxShmBlock, sampleRate)  == 8,  "VaxShmBlock.sampleRate offset changed");
+static_assert(offsetof(VaxShmBlock, channels)    == 12, "VaxShmBlock.channels offset changed");
+static_assert(offsetof(VaxShmBlock, active)      == 16, "VaxShmBlock.active offset changed");
+static_assert(offsetof(VaxShmBlock, reserved)    == 20, "VaxShmBlock.reserved offset changed");
+static_assert(offsetof(VaxShmBlock, ringBuffer)  == 32, "VaxShmBlock.ringBuffer offset changed");
 
 // ── VAX RX Handler: reads from shared memory → output to apps ───────────────
 

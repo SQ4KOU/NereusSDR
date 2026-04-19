@@ -214,6 +214,10 @@ qint64 CoreAudioHalBus::push(const char* data, qint64 bytes) {
     const auto* samples = reinterpret_cast<const float*>(data);
     const int numSamples = static_cast<int>(bytes / sizeof(float));
 
+    // SPSC invariant: this thread is the sole writer, so a relaxed load of
+    // our own previously-released store is sound (program order provides
+    // the necessary dependency). The release store below is what the plugin's
+    // acquire load synchronizes against.
     uint32_t wp = m_block->writePos.load(std::memory_order_relaxed);
     for (int i = 0; i < numSamples; ++i) {
         m_block->ringBuffer[wp % VaxShmBlock::RING_SIZE] = samples[i];
@@ -261,7 +265,12 @@ qint64 CoreAudioHalBus::pull(char* data, qint64 maxBytes) {
         return 0;
     }
 
-    // If writer has lapped the reader, skip ahead to avoid stale data.
+    // Defense against 32-bit counter wraparound: wp/rp are uint32 and wrap
+    // after ~12 hours of 48 kHz stereo float pushes. If only one side wraps,
+    // the unsigned `wp - rp` subtraction can produce a bogus huge "available"
+    // value. Skip ahead to a recent window. The MAX/TARGET backlog guard
+    // below usually fires first under any realistic timing; this branch is
+    // the belt-and-suspenders against the pathological wrap case.
     if (available > VaxShmBlock::RING_SIZE) {
         rp = wp - VaxShmBlock::RING_SIZE / 2;  // jump to recent data
         available = wp - rp;
