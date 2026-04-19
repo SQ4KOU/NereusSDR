@@ -60,6 +60,14 @@ private slots:
         s.loadFromSettings();
         QCOMPARE(s.vaxChannel(), 3);
     }
+
+    void clampsCorruptValueOnLoad() {
+        AppSettings::instance().clear();
+        AppSettings::instance().setValue("slice/7/VaxChannel", "99");
+        SliceModel s(7);
+        s.loadFromSettings();
+        QCOMPARE(s.vaxChannel(), 0);
+    }
 };
 
 QTEST_APPLESS_MAIN(TstSliceModelVax)
