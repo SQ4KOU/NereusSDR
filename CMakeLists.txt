@@ -333,6 +333,14 @@ set(CORE_SOURCES
     src/core/audio/PortAudioBus.cpp
 )
 
+# CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the
+# NereusSDRVAX HAL plugin via POSIX shared memory. The header is
+# cross-platform-safe (falls through to error stubs off macOS) but the .cpp
+# pulls in <sys/mman.h> / shm_open, so only compile it on Apple targets.
+if(APPLE)
+    list(APPEND CORE_SOURCES src/core/audio/CoreAudioHalBus.cpp)
+endif()
+
 set(MODEL_SOURCES
     src/models/RadioModel.cpp
     src/models/RxDspWorker.cpp

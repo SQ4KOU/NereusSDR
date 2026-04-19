@@ -14,7 +14,7 @@ the AetherSDR clone at `/Users/j.j.boyd/AetherSDR/`.
 
 | Bucket | Meaning | Count | 25c action |
 |---|---|---:|---|
-| **A** | Genuine AetherSDR derivation — add project-level attribution | 45 | Insert AetherSDR copyright line + specify source file(s) in mod-history |
+| **A** | Genuine AetherSDR derivation — add project-level attribution | 47 | Insert AetherSDR copyright line + specify source file(s) in mod-history |
 | **B** | False citation (boilerplate "Structural template follows AetherSDR" with no real counterpart) — remove line | 126 | Delete the two "Structural template follows AetherSDR (ten9876/AetherSDR) Qt6 conventions." lines from Modification-History |
 | **C** | Mixed lineage — keep both citations, tighten wording | 12 | Keep Thetis block + AetherSDR line, but say what came from where |
 | **D** | Uncertain — human review | 5 | Flag for human judgement; do not auto-edit |
@@ -64,7 +64,7 @@ claim), or when 25a couldn't positively disprove the claim.
 
 ---
 
-## Bucket A — Genuine AetherSDR derivations (45 files)
+## Bucket A — Genuine AetherSDR derivations (47 files)
 
 25c action for every file below:
 1. Add a project-level attribution line to the Copyright block (after
@@ -148,6 +148,17 @@ claim), or when 25a couldn't positively disprove the claim.
 | `src/gui/StyleConstants.h` | `src/gui/ComboStyle.h` / `HGauge.h` / `SliceColors.h` / misc inline palette | Line 7 "Core Theme (from AetherSDR source + STYLEGUIDE.md)". | "Theme palette imported from AetherSDR `src/gui/ComboStyle.h` / `HGauge.h` / `SliceColors.h` and inline QColor calls in `MainWindow.cpp` / `VfoWidget.cpp`." |
 | `src/core/AudioEngine.h` | `src/core/AudioEngine.{h,cpp}` | Line 23 "Pattern from AetherSDR AudioEngine:" (four specific bullets on feedAudio/drain/Int16 format/buffer cap). Line 73 "Buffer + timer drain pattern (from AetherSDR)". | "QAudioSink feed-and-drain pattern ported from AetherSDR `src/core/AudioEngine.{h,cpp}` (48 kHz Int16 stereo, 10 ms timer drain, 200 ms buffer cap)." |
 | `src/core/AudioEngine.cpp` | Same | Lines 14, 24, 91, 274 inline "From AetherSDR AudioEngine::makeFormat()", "RX timer pattern", "on Windows, don't trust isFormatSupported()". | Same. |
+
+### Phase 3O VAX — CoreAudio HAL bridge
+
+Added 2026-04-19 (Sub-Phase 5 Task 5.3). Both files carry a NereusSDR
+port-citation header (HOW-TO-PORT.md rule 6 form — AetherSDR has no
+per-file GPL header to copy verbatim) naming the upstream source file.
+
+| NereusSDR file | AetherSDR counterpart | Evidence | Specific mod-history wording |
+|---|---|---|---|
+| `src/core/audio/CoreAudioHalBus.h` | `src/core/VirtualAudioBridge.h` | Port-citation header lines 5-6 name `src/core/VirtualAudioBridge.h`. Modification-history lines 18-27 record the decomposition (monolithic → per-endpoint Role), QObject drop, silence-fill/TX-poll-timer deferral, shm-path rebrand, and 24 kHz → 48 kHz rate bump. | "Ported from AetherSDR `src/core/VirtualAudioBridge.{h,cpp}` with the monolithic 4-RX + 1-TX bridge decomposed into per-endpoint IAudioBus instances (Role enum for Vax1..4 / TxInput). QObject/signals dropped in favour of atomic metering; silence-fill and TX-poll timers deferred to Phase 3M. Shm paths rebranded /aethersdr-dax-\* → /nereussdr-vax-\*; native rate lifted 24 kHz → 48 kHz per spec §8.1." |
+| `src/core/audio/CoreAudioHalBus.cpp` | `src/core/VirtualAudioBridge.cpp` | Same header + TX drain loop (`pull()`) is a line-for-line port of `VirtualAudioBridge::readTxAudio` (acquire loads, writer-lapped skip, MAX/TARGET backlog guards, strided RMS meter). | Same. |
 
 ### Setup shared-style
 

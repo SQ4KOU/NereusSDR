@@ -160,3 +160,12 @@ nereus_add_test(tst_master_mixer)
 
 # ── Phase 3O Sub-Phase 3: PortAudioBus ────────────────────────────────────
 nereus_add_test(tst_port_audio_bus)
+
+# ── Phase 3O Sub-Phase 5.3: CoreAudioHalBus (macOS-only) ──────────────────
+# Exercises shm-segment lifecycle + push/pull round-trip against the shared
+# memory ring the HAL plugin consumes. shm_open / mmap are macOS-specific
+# in the bus impl (Q_OS_MAC guard) — the test executable is only built on
+# Apple targets to match.
+if(APPLE)
+    nereus_add_test(tst_core_audio_hal_bus)
+endif()
