@@ -197,14 +197,16 @@ NereusSDR is an independent cross-platform SDR client deeply informed by the wor
 | Legacy skin compatibility | Extended skin format + Thetis import (2D) | Design done |
 | Configurable containers (Thetis multi-meter) | Unified container system (float/dock/axis-lock) | Design done |
 | PureSignal PA linearization | Feedback RX channel + pscc() loop designed (2E), DDC sync (2F) | Design done |
-| TCI protocol | Planned as Phase 3J | Not started |
-| Cross-platform packaging | CI workflows in place (AppImage, Windows, macOS) | CI done |
+| TCI protocol | Planned as Phase 3J | Not started (integration points reserved in 3O) |
+| Cross-platform packaging | CI workflows in place (AppImage, Windows, macOS) | **3N complete** — `release.yml` + `/release` skill; v0.2.1 shipped GPG-signed across all three platforms |
 | AetherSDR architecture patterns | RadioModel hub, signal/slot, worker threads, AppSettings | Adopted |
 | Radio-authoritative state | Designed per AetherSDR pattern | Adopted |
 | Multi-receiver ADC/DDC mapping | Full signal chain analyzed (2F), UpdateDDCs() porting needed | Design done |
+| **VAX audio routing + Thetis VAC/cmASIO parity** | **Phase 3O spec at `docs/architecture/2026-04-19-vax-design.md`** | **Designed 2026-04-19, impl planned** |
 
 **All project brief objectives are covered.** Feature gap analysis completed 2026-04-10
-(see `docs/architecture/reviews/2026-04-10-plan-review.md` for full audit).
+(see `docs/architecture/reviews/2026-04-10-plan-review.md` for full audit). Phase 3O
+VAX design added 2026-04-19.
 
 ---
 
@@ -762,13 +764,58 @@ Scope:
 - I/Q recording — raw I/Q samples for offline analysis
 - Recording controls wired to VfoWidget (existing button stubs)
 
-### Phase 3N: Cross-Platform Packaging
+### Phase 3N: Cross-Platform Packaging ✅ COMPLETE
 **Goal:** Release builds for Linux, Windows, macOS.
 
-CI workflows already in place. Finalize:
-- AppImage (Linux x86_64 + ARM)
-- Windows NSIS installer + portable ZIP
-- macOS DMG (Apple Silicon)
+Shipped: consolidated `release.yml` (prepare → build×3 → sign-and-publish), `/release` skill, GPG-signed alpha builds across Linux AppImage ×2 archs, macOS Apple Silicon DMG, Windows portable ZIP + NSIS installer. v0.1.2 → v0.1.4 → v0.1.7 → v0.2.0 → v0.2.1 all shipped via this pipeline.
+
+### Phase 3O: VAX — Audio Routing & Cross-Platform Audio Engine
+**Goal:** Ship NereusSDR's complete RX audio routing story — per-receiver VAX assignment, Thetis-grade Setup → Audio power-user surface, native VAX drivers on macOS/Linux, auto-detect for user-installed Windows virtual cables, optional Direct ASIO (cmASIO parity) engine.
+
+**Design spec:** `docs/architecture/2026-04-19-vax-design.md` (brainstormed 2026-04-19, ready for implementation plan)
+
+Scope:
+- **`IAudioBus` abstraction** with five platform backends: `CoreAudioHalBus` (macOS HAL plugin, port of AetherSDR `VirtualAudioBridge`), `LinuxPipeBus` (PulseAudio module-pipe, port of AetherSDR `PipeWireAudioBridge`), `PortAudioBus` (Windows default + Mac/Linux fallback), `DirectAsioBus` (Windows opt-in, Thetis `cmasio.c` port with Thetis attribution), `CoreAudioBus` (Mac fallback).
+- **macOS HAL plugin** at `hal-plugin/NereusSDRVAX.cpp` — 4 VAX outputs + 1 TX input as native CoreAudio devices. libASPL-based, POSIX shm IPC. Dev-ID-signed + notarized `.pkg` installer with macOS 14.4+ `killall coreaudiod` fallback.
+- **Linux bridge** — `pactl`-loaded `module-pipe-source` × 4 + `module-pipe-sink` × 1, rebranded to `nereussdr-vax-*`. Works on both Pulse and PipeWire-via-pipewire-pulse. Stale-module cleanup on startup.
+- **Windows BYO path** — `VirtualCableDetector` regex-matches VB-Audio family, VAC, Voicemeeter, Dante, FlexRadio DAX. First-run dialog pre-fills bindings; links to vendor install pages when none detected.
+- **Optional Direct ASIO engine** (Windows) — full Thetis `cmASIO` parity: ASIO driver picker, Control Panel launcher, base in/out channel selection, input mode L/R/Both, lock mode, block size. Gated behind an Engine radio button on the Devices tab — no callsign allowlist, no runtime flag.
+- **Routing model** — SmartSDR-style: `SliceModel.vaxChannel` (0..4) set via new `VaxChannelSelector` row on `VfoWidget`; speakers always-on unless muted; one VAX owns TX at a time (`TransmitModel.txOwnerSlot`).
+- **`VaxApplet` (docked, ported from AetherSDR `DaxApplet`, renamed DAX→VAX)** — 4 channel strips with meter + gain + mute + device picker + assigned-slice tags; TX row with gain + meter.
+- **Menu-bar `MasterOutputWidget`** — global volume + mute + right-click device picker; scroll-wheel fine-tune.
+- **Setup → Audio page** — sub-tabs Devices / VAX / TCI (disabled placeholder) / Advanced. Per-device Driver API dropdown exposes MME / DirectSound / WDM-KS / WASAPI-shared / WASAPI-exclusive / ASIO on Windows; CoreAudio on Mac; ALSA / Pulse / PipeWire / JACK on Linux. Buffer size with derived ms; manual latency override; exclusive mode + event-driven + bypass-mixer options per WASAPI; full cmASIO control surface behind Engine radio.
+- **First-run auto-detect dialog** — 5 scenarios per-platform (Windows cables-found / Windows none-found / Mac native / Linux native / rescan-on-new-cable).
+- **AppSettings schema additions** — per-device driver API + format + buffer; per-VAX enabled + device + gain + mute; per-slice VAX channel; TX owner slot; master volume/mute/device; IVAC feedback parity controls (gain/slew/ring min-max/alpha); global toggles for IQ-to-VAX (reserved), mute-VAX-during-TX-on-other-slice, first-run-complete.
+- **Settings migration** — single legacy `audio/OutputDevice` key migrates to `audio/Speakers/DeviceName` with sensible defaults; first-run dialog triggers.
+- **Audio engine refactor** — replaces `QAudioSink`-only output with the `IAudioBus` model routing per-slice through `MasterMixer` + per-VAX taps.
+- **Full end-to-end wiring** — every widget listed in spec §6 has its round-trip wiring (widget → model → action → persistence → feedback guard) specified before implementation. Zero unwired controls; this is a spec-enforced bar per the design doc.
+
+Attribution (per `docs/attribution/HOW-TO-PORT.md`):
+- AetherSDR-ported files (`VirtualAudioBridge`, `PipeWireAudioBridge`, `hal-plugin/AetherSDRDAX.cpp`, `DaxApplet`, `MeterSlider`) get NereusSDR port-citation + modification-history headers per rule 6 (AetherSDR has no per-file GPL headers; cite at project URL + primary author level).
+- Thetis-ported files (`DirectAsioBus`, `AsioSdkHost` from `ChannelMaster/cmasio.{h,c}` + `Console/clsCMASIOConfig.cs`) get byte-for-byte Thetis headers stacked per rule 4, inline markers preserved, `[v2.10.3.13]` version stamps on all cites.
+- PROVENANCE rows added in the same commits that introduce the ports.
+
+Dependencies:
+- Phase 3B (AudioEngine skeleton) — ✓
+- Phase 3G-10 Stage 2 (`VfoWidget` tab structure and per-slice persistence) — ✓
+- Phase 3G-8 (`SetupPage` base + STYLEGUIDE.md) — ✓
+
+Reserves integration points for:
+- **Phase 3J (TCI):** `IAudioBus` tap contract lets TCI subscribe to the same RX taps with no refactor.
+- **Future:** NereusSDR-owned Windows signed driver can replace BYO cables transparently via `VirtualCableDetector`'s reserved "NereusSDR VAX N" pattern.
+
+Explicitly out of scope (in this phase):
+- TCI server and TCI audio streams (Phase 3J).
+- TX mic DSP chain — compressor, TX EQ, leveler (Phase 3M-3).
+- IQ-to-VAX activation (setting persisted but logs-and-ignores until future phase).
+- NereusSDR-owned Windows virtual audio driver.
+
+Success criteria (subset, see spec §14 for full list):
+- All controls round-trip wired; zero unwired buttons.
+- Thetis migrator can configure equivalent VAC1/VAC2 in Setup → Audio in under 5 minutes on Windows.
+- Mac/Linux users see "NereusSDR VAX 1–4" + "NereusSDR TX" in WSJT-X audio picker with zero extra install.
+- Windows user with VB-CABLE installed sees auto-detect suggestions on first launch.
+- `scripts/verify-thetis-headers.py` + `scripts/check-new-ports.py` pass on all ported files.
 
 ---
 
@@ -819,7 +866,7 @@ Execution order: **(3G-9a..c ∥ 3G-10 ∥ 3G-13) → 3M-1..4 → 3F → 3H → 
 
 3G-9, 3G-10, 3G-13, and 3G-14 touch disjoint subsystems from each other and from 3M-* — they can all run in parallel if desired. 3G-9 owns the Display setup surface; 3G-10 owns the VFO flag and RX DSP wiring; 3G-13 owns the step attenuator + ADC overload protection (protocol layer + Setup Options + RxApplet ATT row + status bar); 3G-14 owns the 💡 issue reporter (menu bar corner widget + dialog).
 
-Independent phases (can start anytime): 3G-14 (issue reporter), 3J (TCI), 3K (CAT), 3L (P1), 3M (Recording).
+Independent phases (can start anytime): 3G-14 (issue reporter), 3J (TCI — depends on 3O IAudioBus contract), 3K (CAT), 3L (P1), 3M (Recording), **3O (VAX audio routing — depends on 3B, 3G-8, 3G-10 Stage 2; all complete)**.
 
 ---
 
@@ -850,6 +897,7 @@ prerequisite infrastructure exists.
 | Date | Scope | Document |
 |---|---|---|
 | 2026-04-10 | Full plan review: Thetis/AetherSDR deep-dive, feature gap analysis, phase restructuring, container/PureSignal/TX architecture | [2026-04-10-plan-review.md](architecture/reviews/2026-04-10-plan-review.md) |
+| 2026-04-19 | Added Phase 3O (VAX — Audio Routing & Cross-Platform Audio Engine). Design brainstormed against Thetis VAC/cmASIO, AetherSDR DaxApplet/VirtualAudioBridge/PipeWireAudioBridge, and reference UIs (Rogue Amoeba Loopback, Dante Controller, RME TotalMix, qpwgraph). Chose SmartSDR-style routing + VFO-flag VAX selector + docked VaxApplet over patchbay/matrix alternatives. Windows BYO-with-auto-detect chosen over signed-kernel-driver for v1; TCI scoped out to Phase 3J with integration points reserved. Also audited status of 3N (marked complete) and added VAX row to Objective Cross-Check. | [2026-04-19-vax-design.md](architecture/2026-04-19-vax-design.md) |
 
 ---
 
