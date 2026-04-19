@@ -1,79 +1,36 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.0] - 2026-04-19
 
-### License compliance (2026-04-18 binary-distribution sweep)
+### Auto AGC-T (PR #53)
 
-- **Bundled full licence text with the binary.** Added `GPLv2.txt`,
-  `GPLv3.txt`, and `LGPLv3.txt` (verbatim upstream copies) under
-  `packaging/third-party-licenses/`. Previously the per-dependency
-  notice files (`fftw3.txt`, `qt6.txt`, `wdsp.txt`) pointed at gnu.org
-  URLs; GPLv2 §1 / LGPLv3 §4 require the text to *accompany* the
-  binary, not merely be linked. These three files are installed into
-  every release artifact via the existing CMake install rule.
-- **Upstream-project notice files.** Added `thetis.txt` (Thetis
-  ramdor/Thetis upstream), `mi0bot-thetis.txt` (mi0bot/Thetis-HL2 fork),
-  and `aethersdr.txt` (ten9876/AetherSDR template) — so binary-only
-  recipients see the upstream copyright chain for code compiled into
-  NereusSDR, not just the runtime-linked dependencies. Per-file
-  attribution remains in the source-file headers and
-  `docs/attribution/`.
-- **Written source offer.** Added `SOURCE-OFFER.txt` formalising
-  GPLv3 §6(d) + §6(b): primary corresponding source at the tagged
-  GitHub release, plus a three-year written offer; plus LGPLv3 §4
-  Qt-upstream source pointer.
-- **Refreshed per-dependency notices.** `fftw3.txt`, `qt6.txt`,
-  `wdsp.txt` now point at the bundled full texts instead of URLs, and
-  name the §5(b) upgrade / dynamic-link mechanism explicitly.
-- **Expanded README index.** `packaging/third-party-licenses/README.md`
-  now enumerates every file, the two dependency categories
-  (linked-in vs. ported-from), and where the directory lands in each
-  release artifact.
+- `NoiseFloorTracker` — lerp-based noise-floor estimator feeding the
+  Auto-threshold timer with MOX guard and `agcCalOffset`.
+- AUTO button on the AGC-T slider row (VfoWidget + RxApplet) toggles
+  auto-mode; periodic NF update keeps the threshold tracking.
+- Right-click on the AGC-T slider opens Setup directly on the AGC/ALC
+  page; Setup page controls wired to SliceModel.
+- Thetis-source tooltips on all four AGC controls + attenuator
+  fast-attack.
 
-### Fixed
-- **Hardware Config → Radio Info sample-rate wiring (#35):** sample-rate combo
-  now actually drives the wire rate used on the next connection (previously
-  emitted to AppSettings but was never read back; `RadioModel::connectToRadio`
-  hardcoded `isP1 ? 192000 : 768000`). Active-RX count spinbox now emits on
-  change (its `valueChanged` signal was not connected).
+### Sample-rate wiring (PR #35)
 
-### Changed
-- **Sample-rate combo full Thetis-parity rates (#35):** per-protocol selections
-  now match Thetis setup.cs:866. P1 = 48/96/192 kHz (plus 384 on RedPitaya),
-  P2 = 48/96/192/384/768/1536 kHz. Default is 192 kHz instead of the previous
-  "always max rate" UX.
-- **Hardware Config RX2 sample-rate stub (#35):** RX2 combo added as a disabled
-  control for Phase 3F multi-panadapter. Thetis force-equal rules (setup.cs:7065-7073,
-  7155-7156) documented at the combo creation site.
-- **RadioInfoTab reconnect banner (#35):** shows a "⚠ Reconnect to apply new
-  sample rate" warning when the combo differs from the active wire rate. Disappears
-  when live-apply lands in the follow-up PR.
+- Per-MAC persistence of hardware sample rate + active-RX count under
+  `hardware/<mac>/radioInfo/`.
+- Full Thetis-parity rate lists: P1 = 48/96/192 kHz (plus 384 on
+  RedPitaya); P2 = 48/96/192/384/768/1536 kHz. Default 192 kHz.
+- RX2 sample-rate combo stub (disabled, for Phase 3F).
+- Inline reconnect banner on RadioInfoTab when the selected rate
+  differs from the active wire rate.
 
-## [0.2.0] - 2026-04-17
+### Fixes
 
-### License compliance remediation
-
-- Restored Thetis copyright, GPLv2-or-later permission, per-contributor
-  attribution, and Samphire dual-licensing notices across all derived
-  source files.
-- Added per-file modification history blocks disclosing reimplementation
-  date, author, and AI-assisted transformation, per GPL notice-preservation
-  requirements.
-- Published `docs/attribution/THETIS-PROVENANCE.md` — complete
-  file-by-file provenance inventory covering ramdor/Thetis,
-  mi0bot/Thetis-HL2, and TAPR WDSP derivations.
-- Replaced `resources/meters/ananMM.png` and `cross-needle*.png` with
-  original NereusSDR artwork (generators committed under `tools/`);
-  audited remaining assets and documented in
-  `docs/attribution/ASSETS.md`.
-- Re-framed README to accurately describe NereusSDR as a C++20/Qt6 port
-  of Thetis within the FlexRadio / OpenHPSDR / Thetis lineage.
-- Added non-negotiable license-preservation rule to the source-first
-  porting protocol in CLAUDE.md and to CONTRIBUTING.md.
-- No functional changes.
-
-**Binaries from v0.1.1–v0.1.7 remain withdrawn and should not be
-redistributed.**
+- **RxDspWorker thread-safety:** buffer-size fields now atomic; audio
+  thread no longer races the main-thread control path.
+- **RxDspWorker accumulator drain** scaled to per-rate `in_size` so
+  DDC sample-rate changes don't starve the WDSP feed.
+- **Setup dialog** no longer overrides `selectPage()` in `showEvent`,
+  so right-click-to-page works as intended.
 
 ## [0.1.7] - 2026-04-16
 

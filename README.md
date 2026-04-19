@@ -2,13 +2,12 @@
 
 **A cross-platform SDR console for OpenHPSDR radios**
 
-> ⚠ **NereusSDR v0.1.x alpha builds withdrawn**
+> ℹ **NereusSDR v0.1.x alpha builds were withdrawn**
 >
-> An unforeseen issue was identified in the v0.1.x alpha builds that needs
-> to be addressed before further public distribution. All v0.1.x binaries
-> have been withdrawn from the Releases page. **If you installed a v0.1.x
-> build, please uninstall it.** A fresh v0.2.0 will follow once the work
-> is complete; we'll announce it here when it's ready.
+> The v0.1.x alpha binaries were withdrawn from the Releases page while
+> an issue was addressed. **If you installed a v0.1.x build, please
+> uninstall it and upgrade to v0.2.0.** v0.2.0 is the fresh starting
+> point going forward.
 >
 > — J.J. Boyd ~ KG4VCF
 
