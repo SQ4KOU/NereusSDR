@@ -657,3 +657,19 @@ if(NEREUS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+
+# --------------------------------------------------------------------------
+# macOS HAL Audio Server Plug-In (Phase 3O VAX — Sub-Phase 5)
+#
+# Builds NereusSDRVAX.driver, a standalone CoreAudio HAL plugin that
+# exposes 4 virtual RX devices ("NereusSDR VAX 1..4") plus 1 TX device
+# ("NereusSDR TX"). Off by default because the plugin pulls libASPL via
+# FetchContent and its preferred build is a separate cmake tree
+# (`cmake -B build-hal -S hal-plugin`) — see docs/architecture/
+# 2026-04-19-vax-design.md §8.1. Enable here only when you want the
+# driver target wired into the main configure for IDE integration.
+# --------------------------------------------------------------------------
+option(NEREUSSDR_BUILD_HAL_PLUGIN "Build macOS CoreAudio HAL Audio Server plug-in" OFF)
+if(APPLE AND NEREUSSDR_BUILD_HAL_PLUGIN)
+    add_subdirectory(hal-plugin)
+endif()
