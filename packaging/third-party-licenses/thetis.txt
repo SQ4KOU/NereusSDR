@@ -26,15 +26,14 @@ source files under `src/`. The authoritative per-file attribution is in
 `docs/attribution/THETIS-PROVENANCE.md` and in the top-of-file headers
 of each ported source file.
 
-  Copyright (C)  FlexRadio Systems (PowerSDR lineage)
-  Copyright (C)  Bob McGwier, N4HY (original PowerSDR DSP work)
-  Copyright (C)  Frank Brickle, AB2KT (original PowerSDR DSP work)
+  Copyright (C)  FlexRadio Systems (PowerSDR lineage that Thetis forked)
   Copyright (C)  Doug Wigley, W5WC (Thetis maintainer)
   Copyright (C)  Warren Pratt, NR0V (WDSP author; Thetis DSP integration)
   Copyright (C)  Richard Samphire, MW0LGE (Thetis contributions)
   Copyright (C)  Chris Codella, W2PA (Thetis contributions)
   Copyright (C)  Phil Harman, VK6APH (HPSDR contributions)
-  Copyright (C)  John Melton, G0ORX (HPSDR contributions)
+  Copyright (C)  John Melton, G0ORX/N6LYT (HPSDR contributions;
+                                           WDSP linux_port co-author)
   Copyright (C)  Laurence Barker, G8NJJ (Thetis contributions)
   Copyright (C)  Bill Tracey, KD5TFD (HPSDR contributions)
 
