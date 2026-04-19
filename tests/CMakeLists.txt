@@ -139,6 +139,9 @@ nereus_add_test(tst_dig_rtty_wire)
 # ── Phase 3G-10 Stage 2: per-slice-per-band DSP persistence (S2.P) ───────────
 nereus_add_test(tst_slice_persistence_per_band)
 
+# ── v0.2.0 regression: band-change lambda reentrancy guard ───────────────────
+nereus_add_test(tst_band_change_recursion_guard)
+
 # ── Step attenuator / ADC overload detection ─────────────────────────────
 nereus_add_test(tst_step_attenuator_controller)
 

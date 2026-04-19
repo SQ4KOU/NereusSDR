@@ -256,6 +256,15 @@ private:
     // bandChanged can save the old band's state before restoring the new one.
     Band m_lastBand{Band::Band20m};
 
+    // Reentrancy guard for the per-band save/restore block. restoreFromSettings
+    // drives setFrequency, which emits frequencyChanged and can re-enter the
+    // same lambda; without the guard, corrupt per-band Frequency values (freq
+    // stored for band X actually in band Y) cascade through the band lookup
+    // indefinitely until the main-thread stack dies inside the downstream
+    // SpectrumWidget::updateVfoPositions layout. See v0.2.0 crash report
+    // 2026-04-19 015055 (depth 10,405).
+    bool m_inBandSwitch{false};
+
     // Settings save coalescing
     bool m_settingsSaveScheduled{false};
 

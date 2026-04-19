@@ -344,11 +344,20 @@ int RadioModel::addPanadapter()
     // band's DSP state then restore the new band's DSP state.
     // Only the first panadapter drives the active slice; additional pans
     // are wired the same way for completeness (multi-pan is 3F scope).
+    //
+    // m_lastBand MUST be updated before restoreFromSettings() for the same
+    // reason as the frequencyChanged lambda below: restoreFromSettings emits
+    // frequencyChanged, which re-enters that lambda; if m_lastBand is still
+    // the old band there, it will saveToSettings(old_band, new_band_freq)
+    // and corrupt the old band's persisted frequency.
     connect(pan, &PanadapterModel::bandChanged, this, [this](Band newBand) {
-        if (m_activeSlice) {
-            m_activeSlice->saveToSettings(m_lastBand);
-            m_activeSlice->restoreFromSettings(newBand);
+        if (m_activeSlice && !m_inBandSwitch) {
+            m_inBandSwitch = true;
+            const Band oldBand = m_lastBand;
             m_lastBand = newBand;
+            m_activeSlice->saveToSettings(oldBand);
+            m_activeSlice->restoreFromSettings(newBand);
+            m_inBandSwitch = false;
         }
     });
 
@@ -724,11 +733,23 @@ void RadioModel::wireSliceSignals()
         }
         // Track band from VFO frequency so per-band saves target the correct
         // band even when the panadapter center hasn't crossed the boundary.
+        //
+        // m_lastBand MUST be updated before restoreFromSettings(). Restoring a
+        // band calls SliceModel::setFrequency(savedFreq), which emits
+        // frequencyChanged and re-enters this lambda. If m_lastBand were still
+        // the old band at that point, the reentrant call would run the
+        // save/restore branch again — infinite recursion that blows the main
+        // stack via the downstream QWidget::show() cascade in
+        // SpectrumWidget::updateVfoPositions. It would also clobber the old
+        // band's persisted frequency with the new band's value.
         Band newBand = bandFromFrequency(freq);
-        if (newBand != m_lastBand) {
-            m_activeSlice->saveToSettings(m_lastBand);
-            m_activeSlice->restoreFromSettings(newBand);
+        if (newBand != m_lastBand && !m_inBandSwitch) {
+            m_inBandSwitch = true;
+            const Band oldBand = m_lastBand;
             m_lastBand = newBand;
+            m_activeSlice->saveToSettings(oldBand);
+            m_activeSlice->restoreFromSettings(newBand);
+            m_inBandSwitch = false;
         }
         scheduleSettingsSave();
     });
