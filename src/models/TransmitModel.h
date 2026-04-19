@@ -69,7 +69,7 @@ private:
     int m_power{100};
     float m_micGain{0.0f};
     bool m_pureSigEnabled{false};
-    std::atomic<VaxSlot> m_txOwnerSlot{VaxSlot::MicDirect};
+    std::atomic<VaxSlot> m_txOwnerSlot{VaxSlot::MicDirect};  // Atomic for lock-free reads from the audio thread.
 };
 
 } // namespace NereusSDR

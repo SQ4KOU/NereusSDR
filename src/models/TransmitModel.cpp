@@ -23,7 +23,8 @@ VaxSlot vaxSlotFromString(const QString& s)
     if (s == QLatin1String("Vax2"))      { return VaxSlot::Vax2; }
     if (s == QLatin1String("Vax3"))      { return VaxSlot::Vax3; }
     if (s == QLatin1String("Vax4"))      { return VaxSlot::Vax4; }
-    return VaxSlot::MicDirect;  // default + unknown-string fallback
+    if (s == QLatin1String("MicDirect")) { return VaxSlot::MicDirect; }
+    return VaxSlot::MicDirect;  // unknown-string fallback
 }
 
 TransmitModel::TransmitModel(QObject* parent)

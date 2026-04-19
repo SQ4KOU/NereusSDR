@@ -55,6 +55,14 @@ private slots:
         t.loadFromSettings();
         QCOMPARE(t.txOwnerSlot(), VaxSlot::MicDirect);
     }
+
+    void vaxSlotRoundTrip() {
+        for (const auto slot : {VaxSlot::None, VaxSlot::MicDirect,
+                                VaxSlot::Vax1, VaxSlot::Vax2,
+                                VaxSlot::Vax3, VaxSlot::Vax4}) {
+            QCOMPARE(vaxSlotFromString(vaxSlotToString(slot)), slot);
+        }
+    }
 };
 
 QTEST_APPLESS_MAIN(TstTransmitModelTxOwner)
