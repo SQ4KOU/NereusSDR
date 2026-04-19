@@ -262,6 +262,7 @@ set(CORE_SOURCES
     src/core/NoiseFloorTracker.cpp
     src/core/ClarityController.cpp
     src/core/StepAttenuatorController.cpp
+    src/core/audio/MasterMixer.cpp
 )
 
 set(MODEL_SOURCES
