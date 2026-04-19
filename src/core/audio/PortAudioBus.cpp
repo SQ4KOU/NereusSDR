@@ -61,6 +61,8 @@ bool PortAudioBus::open(const AudioFormat& format) {
     if (err != paNoError) {
         m_err = QString::fromUtf8(Pa_GetErrorText(err));
         m_stream = nullptr;
+        m_negFormat = {};
+        m_backendName.clear();
         return false;
     }
 
@@ -89,6 +91,7 @@ void PortAudioBus::close() {
 }
 
 qint64 PortAudioBus::push(const char* data, qint64 bytes) {
+    if (!m_stream) { return 0; }
     const int floatCount = static_cast<int>(bytes / sizeof(float));
     const qint64 ringSize = static_cast<qint64>(m_ring.size());
     qint64 w = m_ringWrite.load(std::memory_order_relaxed);
@@ -132,6 +135,46 @@ int PortAudioBus::paCallback(const void* /*in*/, void* out,
     }
     self->m_ringRead.store(r, std::memory_order_release);
     return paContinue;
+}
+
+QVector<PortAudioBus::HostApiInfo> PortAudioBus::hostApis() {
+    QVector<HostApiInfo> out;
+    const int n = Pa_GetHostApiCount();
+    for (int i = 0; i < n; ++i) {
+        const PaHostApiInfo* h = Pa_GetHostApiInfo(i);
+        if (h) { out.push_back({i, QString::fromUtf8(h->name)}); }
+    }
+    return out;
+}
+
+QVector<PortAudioBus::DeviceInfo> PortAudioBus::outputDevicesFor(int hostApiIndex) {
+    QVector<DeviceInfo> out;
+    const int n = Pa_GetDeviceCount();
+    for (int i = 0; i < n; ++i) {
+        const PaDeviceInfo* d = Pa_GetDeviceInfo(i);
+        if (!d || d->hostApi != hostApiIndex || d->maxOutputChannels <= 0) { continue; }
+        out.push_back({
+            i, QString::fromUtf8(d->name),
+            d->maxOutputChannels, d->maxInputChannels,
+            (int)d->defaultSampleRate, d->hostApi
+        });
+    }
+    return out;
+}
+
+QVector<PortAudioBus::DeviceInfo> PortAudioBus::inputDevicesFor(int hostApiIndex) {
+    QVector<DeviceInfo> out;
+    const int n = Pa_GetDeviceCount();
+    for (int i = 0; i < n; ++i) {
+        const PaDeviceInfo* d = Pa_GetDeviceInfo(i);
+        if (!d || d->hostApi != hostApiIndex || d->maxInputChannels <= 0) { continue; }
+        out.push_back({
+            i, QString::fromUtf8(d->name),
+            d->maxOutputChannels, d->maxInputChannels,
+            (int)d->defaultSampleRate, d->hostApi
+        });
+    }
+    return out;
 }
 
 } // namespace NereusSDR

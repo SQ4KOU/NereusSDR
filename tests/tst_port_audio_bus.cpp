@@ -45,6 +45,19 @@ private slots:
         QVERIFY(!n.isEmpty());
         bus.close();
     }
+
+    void hostApisEnumerateNonEmpty() {
+        const auto apis = PortAudioBus::hostApis();
+        QVERIFY(!apis.isEmpty());
+    }
+
+    void outputDevicesEnumerateForFirstApi() {
+        const auto apis = PortAudioBus::hostApis();
+        QVERIFY(!apis.isEmpty());
+        const auto devices = PortAudioBus::outputDevicesFor(apis.first().index);
+        // Host system should have at least one output; skip if headless CI.
+        if (devices.isEmpty()) { QSKIP("No output devices on test host"); }
+    }
 };
 
 QTEST_APPLESS_MAIN(TstPortAudioBus)

@@ -18,8 +18,9 @@
 #include "core/IAudioBus.h"
 
 #include <atomic>
-#include <mutex>
 #include <vector>
+
+#include <QVector>
 
 // Forward declarations so consumers of this header don't have to drag
 // in <portaudio.h>. The concrete type is typedef'd the same way by
@@ -43,7 +44,25 @@ public:
     PortAudioBus();
     ~PortAudioBus() override;
 
+    // Call before open(). m_cfg is read on the main thread in open() only.
     void setConfig(const PortAudioConfig& cfg);
+
+    struct HostApiInfo {
+        int     index;
+        QString name;
+    };
+    struct DeviceInfo {
+        int     index;
+        QString name;
+        int     maxOutputChannels;
+        int     maxInputChannels;
+        int     defaultSampleRate;
+        int     hostApiIndex;
+    };
+
+    static QVector<HostApiInfo> hostApis();
+    static QVector<DeviceInfo>  outputDevicesFor(int hostApiIndex);
+    static QVector<DeviceInfo>  inputDevicesFor(int hostApiIndex);
 
     bool open(const AudioFormat& format) override;
     void close() override;
