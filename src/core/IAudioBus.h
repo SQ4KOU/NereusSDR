@@ -12,7 +12,6 @@
 #pragma once
 
 #include <QString>
-#include <cstdint>
 
 namespace NereusSDR {
 
