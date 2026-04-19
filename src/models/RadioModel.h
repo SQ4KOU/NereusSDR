@@ -252,18 +252,13 @@ private:
     // RxDspWorker (src/models/RxDspWorker.h) so the DSP thread owns
     // its own state and the main thread never touches it.
 
-    // Per-slice-per-band persistence: track the last-known band so
-    // bandChanged can save the old band's state before restoring the new one.
+    // Per-slice-per-band persistence: tracks which band the VFO is currently
+    // on so the coalesced scheduleSettingsSave() timer writes to the right
+    // per-band slot. From Thetis console.cs:45312 handleBSFChange
+    // [v2.10.3.13 @501e3f5] — bandstack state is recalled via band-button
+    // press, not via VFO tune, so this lambda only tracks; it does NOT
+    // save or restore at the boundary.
     Band m_lastBand{Band::Band20m};
-
-    // Reentrancy guard for the per-band save/restore block. restoreFromSettings
-    // drives setFrequency, which emits frequencyChanged and can re-enter the
-    // same lambda; without the guard, corrupt per-band Frequency values (freq
-    // stored for band X actually in band Y) cascade through the band lookup
-    // indefinitely until the main-thread stack dies inside the downstream
-    // SpectrumWidget::updateVfoPositions layout. See v0.2.0 crash report
-    // 2026-04-19 015055 (depth 10,405).
-    bool m_inBandSwitch{false};
 
     // Settings save coalescing
     bool m_settingsSaveScheduled{false};

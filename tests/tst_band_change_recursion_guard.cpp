@@ -1,35 +1,36 @@
 // tst_band_change_recursion_guard.cpp
 //
-// Regression test for v0.2.0 crash: infinite recursion in the per-band
-// DSP save/restore lambda when a cross-band tune causes restoreFromSettings
-// to drive a setFrequency that re-enters the lambda.
+// no-port-check: Test file references Thetis behavior in commentary only;
+// no Thetis source is translated here.
 //
-// Crash signature (macOS, 2026-04-18/19, 7 reports):
+// Regression test for two v0.2.0 bugs exposed by wheel-tuning across a band
+// boundary:
+//
+// Bug 1 (crash, reported 2026-04-18/19, 7 reports):
 //   EXC_BAD_ACCESS — "Thread stack size exceeded due to excessive recursion"
-//   recursion depth: 10,405 frames
-//   key frame: void doActivate<false>(QObject*, int, void**)
-//   loop pattern:
-//     SliceModel::frequencyChanged
-//       → RadioModel::wireSliceSignals() lambda (src/models/RadioModel.cpp:713)
-//       → SliceModel::restoreFromSettings(Band)
-//       → SliceModel::setFrequency(savedFreq)
-//       → SliceModel::frequencyChanged  (recurses)
+//   recursion depth 10,405. The wireSliceSignals()/addPanadapter() band-
+//   switch lambdas called restoreFromSettings(newBand) synchronously;
+//   that emitted frequencyChanged and re-entered the same lambda
+//   indefinitely when per-band Frequency values were cross-referenced.
 //
-// Root cause: the lambda's guard `if (newBand != m_lastBand)` was not
-// reentrancy-safe. Re-entry via the synchronous frequencyChanged signal
-// observed m_lastBand in its pre-update state and re-ran the save/restore
-// branch. With corrupt per-band Frequency values (each band's stored freq
-// living in a different band), the cascade continues through the band
-// lookup until the main thread's stack guard triggers.
+// Bug 2 (VFO jump): with the recursion fixed via a guard in an interim
+//   commit, wheel-tuning across a band boundary snapped the VFO to the
+//   new band's stored frequency instead of the user-tuned value. That was
+//   divergence from Thetis console.cs:45312 handleBSFChange [v2.10.3.13
+//   @501e3f5], which updates the bandstack LastVisited record on a
+//   VFO-driven crossing but does NOT restore state. Restore is reserved
+//   for the explicit band-button press path.
 //
-// Fix: a reentrancy flag (m_inBandSwitch) plus updating m_lastBand BEFORE
-// calling restoreFromSettings. See src/models/RadioModel.h §m_inBandSwitch
-// and the lambdas in src/models/RadioModel.cpp.
+// Fix: the VFO-tune lambda only tracks m_lastBand; no save or restore at
+// the boundary. Per-band state is flushed via the coalesced
+// scheduleSettingsSave() timer, which targets m_lastBand. This test
+// replicates the lambda's topology and asserts:
 //
-// This test replicates the lambda's topology in isolation and verifies
-// both invariants:
-//   1. The reentrancy guard observes re-entry (proving it is firing).
-//   2. The total number of lambda invocations is bounded.
+//   1. A wheel-tune that crosses a band boundary leaves SliceModel's
+//      frequency equal to the user-tuned value (no snap-back).
+//   2. The lambda is invoked exactly once per setFrequency call — no
+//      recursion through frequencyChanged, even with cross-referenced
+//      per-band Frequency values seeded into AppSettings.
 
 #include <QtTest/QtTest>
 
@@ -43,7 +44,6 @@ class TestBandChangeRecursionGuard : public QObject {
     Q_OBJECT
 
 private:
-    // Strip every per-band and session key we write so each test starts clean.
     static void resetPersistenceKeys() {
         auto& s = AppSettings::instance();
         for (const QString& band : {
@@ -76,107 +76,82 @@ private slots:
     void init()    { resetPersistenceKeys(); }
     void cleanup() { resetPersistenceKeys(); }
 
-    // ── Invariant 1: The guard fires on re-entry. ─────────────────────────────
-    //
-    // Pre-seed per-band Frequency values that cross-reference each other so
-    // a band crossing drives setFrequency → frequencyChanged and would
-    // otherwise re-enter the save/restore block. The guard must observe
-    // inBandSwitch=true on re-entry and skip the branch.
+    // ── Invariant 1: wheel-tune across a band boundary leaves the VFO at the
+    // user-tuned frequency (no snap-back to the new band's stored value).
 
-    void guardBlocksReentryOnBandCrossing() {
+    void wheelTuneAcrossBoundaryPreservesFrequency() {
         auto& s = AppSettings::instance();
 
-        // Corrupt-data scenario that reproduces the v0.2.0 crash shape:
-        // each band's stored frequency lies in a different band.
-        s.setValue(QStringLiteral("Slice0/Band20m/Frequency"),  7100000.0);    // → 40m
-        s.setValue(QStringLiteral("Slice0/Band40m/Frequency"),  3700000.0);    // → 80m
-        s.setValue(QStringLiteral("Slice0/Band80m/Frequency"),  14225000.0);   // → 20m (cycle)
+        // Seed a stored frequency for 40m that differs from the value the
+        // user will wheel-tune to. If bandstack recall were still happening
+        // on the crossing, m_frequency would snap to 7150000 instead of
+        // staying at the user-tuned 7100000.
+        s.setValue(QStringLiteral("Slice0/Band40m/Frequency"), 7150000.0);
 
         SliceModel slice;
         slice.setSliceIndex(0);
         slice.setFrequency(14225000.0);
 
         Band lastBand = Band::Band20m;
-        bool inBandSwitch = false;
         int  enterCount = 0;
-        int  guardFired = 0;
+
+        QObject::connect(&slice, &SliceModel::frequencyChanged,
+            [&](double freq) {
+                ++enterCount;
+                const Band newBand = bandFromFrequency(freq);
+                if (newBand != lastBand) {
+                    lastBand = newBand;
+                }
+                // No saveToSettings / restoreFromSettings — Thetis parity.
+                // scheduleSettingsSave() in the real lambda is a production-
+                // only timer dispatch; not relevant for this signal-topology
+                // invariant check.
+            });
+
+        slice.setFrequency(7100000.0);  // wheel-tune from 20m into 40m
+
+        QCOMPARE(slice.frequency(), 7100000.0);  // stays where the user tuned
+        QCOMPARE(lastBand,          Band::Band40m);
+        QCOMPARE(enterCount,        1);  // single invocation, no recursion
+    }
+
+    // ── Invariant 2: even with the corrupt cross-referencing per-band
+    // Frequency values that reproduced the v0.2.0 cascade, the lambda must
+    // not recurse. With save/restore removed from the lambda, the recursion
+    // surface is simply gone.
+
+    void corruptPerBandFrequenciesDoNotCascade() {
+        auto& s = AppSettings::instance();
+
+        s.setValue(QStringLiteral("Slice0/Band20m/Frequency"),  7100000.0);    // value is in 40m
+        s.setValue(QStringLiteral("Slice0/Band40m/Frequency"),  3700000.0);    // value is in 80m
+        s.setValue(QStringLiteral("Slice0/Band80m/Frequency"),  14225000.0);   // value is in 20m (cycle)
+
+        SliceModel slice;
+        slice.setSliceIndex(0);
+        slice.setFrequency(14225000.0);
+
+        Band lastBand = Band::Band20m;
+        int  enterCount = 0;
         constexpr int kSafetyLimit = 50;
 
         QObject::connect(&slice, &SliceModel::frequencyChanged,
             [&](double freq) {
                 ++enterCount;
                 if (enterCount > kSafetyLimit) {
-                    // Belt-and-suspenders: prevents this test itself from
-                    // blowing the stack if the guard were ever removed.
-                    return;
+                    return;  // belt-and-suspenders guard for the test itself
                 }
                 const Band newBand = bandFromFrequency(freq);
-                if (inBandSwitch) {
-                    ++guardFired;
-                    return;
-                }
                 if (newBand != lastBand) {
-                    inBandSwitch = true;
-                    const Band oldBand = lastBand;
                     lastBand = newBand;
-                    slice.saveToSettings(oldBand);
-                    slice.restoreFromSettings(newBand);
-                    inBandSwitch = false;
                 }
             });
 
-        // Wheel-tune from 20m (14.225 MHz) to 40m (7.1 MHz).
         slice.setFrequency(7100000.0);
 
-        QVERIFY2(enterCount < kSafetyLimit,
-                 qPrintable(QStringLiteral(
-                     "Lambda invoked %1 times — recursion guard not firing "
-                     "(regression of v0.2.0 crash 2026-04-19 015055).")
-                     .arg(enterCount)));
-
-        QVERIFY2(guardFired >= 1,
-                 "Guard should have blocked at least one re-entry through "
-                 "restoreFromSettings → setFrequency.");
-    }
-
-    // ── Invariant 2: Clean cross without corrupt data converges without
-    // extra recursion (baseline — the common case). ───────────────────────────
-
-    void cleanCrossConvergesInOneIteration() {
-        auto& s = AppSettings::instance();
-        s.setValue(QStringLiteral("Slice0/Band40m/Frequency"), 7150000.0);  // in 40m
-
-        SliceModel slice;
-        slice.setSliceIndex(0);
-        slice.setFrequency(14225000.0);
-
-        Band lastBand = Band::Band20m;
-        bool inBandSwitch = false;
-        int  enterCount = 0;
-        int  guardFired = 0;
-
-        QObject::connect(&slice, &SliceModel::frequencyChanged,
-            [&](double freq) {
-                ++enterCount;
-                const Band newBand = bandFromFrequency(freq);
-                if (inBandSwitch) { ++guardFired; return; }
-                if (newBand != lastBand) {
-                    inBandSwitch = true;
-                    const Band oldBand = lastBand;
-                    lastBand = newBand;
-                    slice.saveToSettings(oldBand);
-                    slice.restoreFromSettings(newBand);
-                    inBandSwitch = false;
-                }
-            });
-
-        slice.setFrequency(7100000.0);  // 40m — stored freq for 40m is 7.15 MHz
-
+        QCOMPARE(enterCount, 1);
+        QCOMPARE(slice.frequency(), 7100000.0);
         QCOMPARE(lastBand, Band::Band40m);
-        QVERIFY2(enterCount <= 3,
-                 qPrintable(QStringLiteral(
-                     "enterCount=%1 — clean band cross should not cascade")
-                     .arg(enterCount)));
     }
 };
 

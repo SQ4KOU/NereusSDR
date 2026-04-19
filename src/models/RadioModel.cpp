@@ -339,27 +339,15 @@ int RadioModel::addPanadapter()
     int index = m_panadapters.size();
     m_panadapters.append(pan);
 
-    // Wire bandChanged for per-band DSP bandstack persistence.
-    // This fires whenever the VFO crosses a band boundary: save the old
-    // band's DSP state then restore the new band's DSP state.
-    // Only the first panadapter drives the active slice; additional pans
-    // are wired the same way for completeness (multi-pan is 3F scope).
-    //
-    // m_lastBand MUST be updated before restoreFromSettings() for the same
-    // reason as the frequencyChanged lambda below: restoreFromSettings emits
-    // frequencyChanged, which re-enters that lambda; if m_lastBand is still
-    // the old band there, it will saveToSettings(old_band, new_band_freq)
-    // and corrupt the old band's persisted frequency.
-    connect(pan, &PanadapterModel::bandChanged, this, [this](Band newBand) {
-        if (m_activeSlice && !m_inBandSwitch) {
-            m_inBandSwitch = true;
-            const Band oldBand = m_lastBand;
-            m_lastBand = newBand;
-            m_activeSlice->saveToSettings(oldBand);
-            m_activeSlice->restoreFromSettings(newBand);
-            m_inBandSwitch = false;
-        }
-    });
+    // PanadapterModel::bandChanged fires when the pan center crosses a band
+    // boundary. In NereusSDR's design m_lastBand tracks the VFO, not the pan
+    // (see comment on the frequencyChanged lambda in wireSliceSignals), so
+    // there is nothing to do here on a pan-centered crossing — per-band saves
+    // flow from the VFO path and the coalesced scheduleSettingsSave() timer.
+    // Intentionally left as a no-op hook so the connection survives future
+    // per-pan band-aware behavior without re-adding the recursion/corruption
+    // path that existed in v0.2.0.
+    connect(pan, &PanadapterModel::bandChanged, this, [](Band /*newBand*/) {});
 
     emit panadapterAdded(index);
     return index;
@@ -734,22 +722,21 @@ void RadioModel::wireSliceSignals()
         // Track band from VFO frequency so per-band saves target the correct
         // band even when the panadapter center hasn't crossed the boundary.
         //
-        // m_lastBand MUST be updated before restoreFromSettings(). Restoring a
-        // band calls SliceModel::setFrequency(savedFreq), which emits
-        // frequencyChanged and re-enters this lambda. If m_lastBand were still
-        // the old band at that point, the reentrant call would run the
-        // save/restore branch again — infinite recursion that blows the main
-        // stack via the downstream QWidget::show() cascade in
-        // SpectrumWidget::updateVfoPositions. It would also clobber the old
-        // band's persisted frequency with the new band's value.
+        // Do NOT recall bandstack state on a VFO-driven band crossing. From
+        // Thetis console.cs:45312 handleBSFChange [v2.10.3.13 @501e3f5]:
+        // on an oldBand != newBand transition, Thetis only updates the old
+        // and new band's LastVisited records — it does not restore saved
+        // DSP state. Bandstack recall is reserved for the explicit
+        // band-button press path. Trying to recall here on every wheel-tune
+        // caused two bugs in v0.2.0: (1) the VFO snaps to the newBand's
+        // stored frequency, breaking smooth wheel-tune across boundaries;
+        // (2) saveToSettings(oldBand) wrote the current (now post-tune)
+        // frequency into the oldBand slot — corrupting the stored value
+        // for that band. Letting the coalesced scheduleSettingsSave() flush
+        // keeps the CURRENT band's slot up to date without either bug.
         Band newBand = bandFromFrequency(freq);
-        if (newBand != m_lastBand && !m_inBandSwitch) {
-            m_inBandSwitch = true;
-            const Band oldBand = m_lastBand;
+        if (newBand != m_lastBand) {
             m_lastBand = newBand;
-            m_activeSlice->saveToSettings(oldBand);
-            m_activeSlice->restoreFromSettings(newBand);
-            m_inBandSwitch = false;
         }
         scheduleSettingsSave();
     });
