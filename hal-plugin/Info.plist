@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>NereusSDRVAX</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.nereussdr.vax</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>NereusSDR VAX</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>AudioServerPlugIn_BundleResourceID</key>
+    <string>com.nereussdr.vax</string>
+    <key>CFPlugInFactories</key>
+    <dict>
+        <key>F58308D0-1ABD-4D44-845B-F308A64CDA16</key>
+        <string>NereusSDRVAX_Create</string>
+    </dict>
+    <key>CFPlugInTypes</key>
+    <dict>
+        <key>443ABAB8-E7B3-491A-B985-BEB9187030DB</key>
+        <array>
+            <string>F58308D0-1ABD-4D44-845B-F308A64CDA16</string>
+        </array>
+    </dict>
+</dict>
+</plist>

@@ -333,6 +333,14 @@ set(CORE_SOURCES
     src/core/audio/PortAudioBus.cpp
 )
 
+# CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the
+# NereusSDRVAX HAL plugin via POSIX shared memory. The header is
+# cross-platform-safe (falls through to error stubs off macOS) but the .cpp
+# pulls in <sys/mman.h> / shm_open, so only compile it on Apple targets.
+if(APPLE)
+    list(APPEND CORE_SOURCES src/core/audio/CoreAudioHalBus.cpp)
+endif()
+
 set(MODEL_SOURCES
     src/models/RadioModel.cpp
     src/models/RxDspWorker.cpp
@@ -656,4 +664,20 @@ if(NEREUS_BUILD_TESTS)
     target_compile_definitions(NereusSDRObjs PUBLIC NEREUS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+# --------------------------------------------------------------------------
+# macOS HAL Audio Server Plug-In (Phase 3O VAX — Sub-Phase 5)
+#
+# Builds NereusSDRVAX.driver, a standalone CoreAudio HAL plugin that
+# exposes 4 virtual RX devices ("NereusSDR VAX 1..4") plus 1 TX device
+# ("NereusSDR TX"). Off by default because the plugin pulls libASPL via
+# FetchContent and its preferred build is a separate cmake tree
+# (`cmake -B build-hal -S hal-plugin`) — see docs/architecture/
+# 2026-04-19-vax-design.md §8.1. Enable here only when you want the
+# driver target wired into the main configure for IDE integration.
+# --------------------------------------------------------------------------
+option(NEREUSSDR_BUILD_HAL_PLUGIN "Build macOS CoreAudio HAL Audio Server plug-in" OFF)
+if(APPLE AND NEREUSSDR_BUILD_HAL_PLUGIN)
+    add_subdirectory(hal-plugin)
 endif()
