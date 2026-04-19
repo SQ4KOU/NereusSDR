@@ -67,7 +67,7 @@ FetchContent_Declare(
 # ALSA / Pulse / PipeWire / JACK on Linux.
 set(PA_BUILD_SHARED OFF CACHE BOOL "PortAudio static" FORCE)
 set(PA_BUILD_STATIC ON  CACHE BOOL "PortAudio static" FORCE)
-set(PA_USE_ASIO    OFF CACHE BOOL "PortAudio disable ASIO host API (GPL review drop)" FORCE)
+set(PA_USE_ASIO    OFF CACHE BOOL "PortAudio ASIO host API — forced OFF for GPL compliance (Steinberg SDK incompatible)" FORCE)
 
 # PortAudio v19.7.0 uses `cmake_minimum_required(VERSION 2.8)`, which CMake
 # 4.x rejects because compatibility with CMake < 3.5 has been removed. Pin
@@ -537,7 +537,7 @@ endif()
 # PortAudio (Phase 3O VAX) — always linked; PortAudioBus is the cross-platform
 # IAudioBus fallback when no native low-latency backend is available.
 target_link_libraries(NereusSDRObjs PRIVATE portaudio_static)
-target_include_directories(NereusSDRObjs PRIVATE ${portaudio_SOURCE_DIR}/include)
+target_include_directories(NereusSDRObjs PUBLIC ${portaudio_SOURCE_DIR}/include)
 
 if(NEREUS_GPU_SPECTRUM)
     target_link_libraries(NereusSDRObjs PUBLIC Qt6::GuiPrivate)
