@@ -157,6 +157,30 @@ private slots:
                  static_cast<qint64>(-1));
     }
 
+    // push() returns positive bytes on a Vax role when the FIFO is open
+    // and a reader is present (the pactl pipe-sink module opens the read end).
+    void pushOnVax1ReturnsBytesWhenPipeReadable()
+    {
+        if (!pactlAvailable()) {
+            QSKIP("pactl not available in this environment");
+        }
+        LinuxPipeBus bus(LinuxPipeBus::Role::Vax1);
+        AudioFormat fmt;
+        fmt.sampleRate = 48000;
+        fmt.channels   = 2;
+        fmt.sample     = AudioFormat::Sample::Float32;
+        QVERIFY2(bus.open(fmt), qPrintable(bus.errorString()));
+
+        // One 10 ms block at 48 kHz stereo float32 = 480 * 2 * 4 = 3840 bytes
+        std::vector<float> block(480 * 2, 0.25f);
+        const qint64 bytes = bus.push(
+            reinterpret_cast<const char*>(block.data()),
+            static_cast<qint64>(block.size() * sizeof(float)));
+        QVERIFY2(bytes > 0, qPrintable(QString("push returned %1; errorString=%2")
+                                        .arg(bytes).arg(bus.errorString())));
+        bus.close();
+    }
+
     // ── 3. Consumer role policing (with open, needs pactl) ──────────────────
 
     void txInputPullReturnsBytesWhenDataAvailable()
@@ -296,6 +320,54 @@ private slots:
         // Left-channel RMS of 0.5 constant signal = 0.5.
         QVERIFY2(lvl > 0.4f && lvl < 0.6f,
                  qPrintable(QStringLiteral("rxLevel=%1, expected near 0.5").arg(lvl)));
+
+        bus.close();
+    }
+
+    void txLevelUpdatesAfterPull()
+    {
+        if (!pactlAvailable()) {
+            QSKIP("pactl not found — skipping TX metering test");
+        }
+
+        LinuxPipeBus bus(LinuxPipeBus::Role::TxInput);
+        AudioFormat fmt;
+        fmt.sampleRate = 48000;
+        fmt.channels   = 2;
+        fmt.sample     = AudioFormat::Sample::Float32;
+
+        QVERIFY2(bus.open(fmt), qPrintable(bus.errorString()));
+        QCOMPARE(bus.txLevel(), 0.0f);
+
+        // Write non-zero float32 stereo samples directly to the TX FIFO,
+        // simulating a TX audio app writing into the PulseAudio sink.
+        const int wrFd = ::open("/tmp/nereussdr-vax-tx.pipe", O_WRONLY | O_NONBLOCK);
+        if (wrFd < 0) {
+            QSKIP("Could not open TX FIFO for writing — pactl module may not have opened its end yet");
+        }
+
+        // Push enough samples to trigger at least kMeterStride (10) pull() calls.
+        // Use 128 floats per write × 12 writes = 1536 floats total (well above stride).
+        constexpr int kFloatsPerWrite = 128;
+        std::vector<float> payload(kFloatsPerWrite, 0.5f);
+        for (int i = 0; i < 12; ++i) {
+            ::write(wrFd, payload.data(),
+                    kFloatsPerWrite * static_cast<int>(sizeof(float)));
+        }
+        ::close(wrFd);
+
+        QTest::qWait(20);
+
+        // Drain via pull() — repeat enough times to cross the meter stride.
+        std::vector<float> drained(kFloatsPerWrite, -999.0f);
+        for (int i = 0; i < 12; ++i) {
+            bus.pull(reinterpret_cast<char*>(drained.data()),
+                     static_cast<qint64>(kFloatsPerWrite) * sizeof(float));
+        }
+
+        const float txLvl = bus.txLevel();
+        QVERIFY2(txLvl > 0.0f,
+                 qPrintable(QStringLiteral("txLevel=%1, expected > 0 after pulling non-zero samples").arg(txLvl)));
 
         bus.close();
     }

@@ -72,6 +72,16 @@ namespace NereusSDR {
 // TODO(phase3M): Flatpak/Snap sandboxing blocks virtual-audio-node publication.
 //                pactl is unreachable inside the sandbox; a D-Bus portal will
 //                be required.
+//
+// TODO(phase3M): QObject inheritance + signals — the AetherSDR PipeWireAudioBridge
+//                emitted txAudioReady / daxRxLevel / daxTxLevel signals. Dropped
+//                here in favour of atomic rxLevel()/txLevel() getters per the
+//                IAudioBus contract. Re-add signal emission if/when AudioEngine
+//                needs push notification of meter changes.
+//
+// TODO(phase3M): setTransmitting(bool) slot — gates the silence-fill timer on
+//                TX state. Dropped with the silence timer itself. Re-add as
+//                part of the silence-fill restoration.
 
 class LinuxPipeBus : public IAudioBus {
 public:
