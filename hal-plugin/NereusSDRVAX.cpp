@@ -124,6 +124,19 @@ public:
         uint32_t wp = block->writePos.load(std::memory_order_acquire);
 
         uint32_t available = wp - rp;
+
+        // Lap protection: if the app-side producer has written more than
+        // RING_SIZE samples without our reader advancing (e.g. app pushing
+        // VAX audio before any CoreAudio client connected), jump rp forward
+        // to a recent window. Without this, the loop below reads from
+        // already-overwritten ring slots and playback stays permanently
+        // garbled until the client reconnects. Mirrors the pattern in
+        // CoreAudioHalBus::pull().
+        if (available > VaxShmBlock::RING_SIZE) {
+            rp = wp - VaxShmBlock::RING_SIZE / 2;
+            available = wp - rp;
+        }
+
         uint32_t toRead = std::min(available, totalSamples);
 
         for (uint32_t i = 0; i < toRead; ++i) {
