@@ -6,11 +6,13 @@
 // v19.7.0. NereusSDR-original.
 //
 // Design spec: docs/architecture/2026-04-19-vax-design.md §3.2
-// Plan:        docs/architecture/2026-04-19-phase3o-vax-plan.md (3.2)
+// Plan:        docs/architecture/2026-04-19-phase3o-vax-plan.md (3.2–3.4)
 //
-// This task (3.2) implements render-only (output) minimal lifecycle
-// against the PortAudio default device. Host-API / device enumeration
-// (3.3) and TX capture via pull() (3.4) land in follow-up tasks.
+// Supports both render (Output) and capture (Input) modes via
+// PortAudioConfig::direction. Output: push() feeds the ring, the audio
+// callback drains it to the device. Input: the audio callback captures
+// from the device into the ring, pull() drains it. Host-API / device
+// enumeration helpers are available statically (Task 3.3).
 // =================================================================
 
 #pragma once
@@ -31,12 +33,14 @@ struct PaStreamCallbackTimeInfo;
 
 namespace NereusSDR {
 
+enum class AudioDirection { Output, Input };
+
 struct PortAudioConfig {
+    AudioDirection direction = AudioDirection::Output;  // Output = render; Input = capture
     int     hostApiIndex  = -1;     // -1 = PortAudio default
     QString deviceName;             // empty = default
     int     bufferSamples = 256;
     bool    exclusiveMode = false;  // WASAPI only
-    // Additional fields added in Tasks 3.3 / 3.4.
 };
 
 class PortAudioBus : public IAudioBus {
@@ -60,6 +64,8 @@ public:
         int     hostApiIndex;
     };
 
+    // Enumeration helpers require Pa_Initialize() to have been called
+    // (owned by the application lifecycle, not this class).
     static QVector<HostApiInfo> hostApis();
     static QVector<DeviceInfo>  outputDevicesFor(int hostApiIndex);
     static QVector<DeviceInfo>  inputDevicesFor(int hostApiIndex);
@@ -85,9 +91,9 @@ private:
     QString         m_backendName;
     QString         m_err;
 
-    // Ring buffer for push/pull. The audio callback drains from here
-    // on the audio thread; push() writes from the main/DSP thread.
-    // Single-producer / single-consumer, lock-free via std::atomic.
+    // Ring buffer for push/pull. SPSC, lock-free via std::atomic.
+    // Output mode: push() (DSP thread) writes, audio callback reads.
+    // Input mode:  audio callback writes, pull() (caller thread) reads.
     std::vector<float>  m_ring;
     std::atomic<qint64> m_ringRead{0};
     std::atomic<qint64> m_ringWrite{0};

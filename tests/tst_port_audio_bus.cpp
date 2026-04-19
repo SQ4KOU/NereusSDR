@@ -58,6 +58,22 @@ private slots:
         // Host system should have at least one output; skip if headless CI.
         if (devices.isEmpty()) { QSKIP("No output devices on test host"); }
     }
+
+    void openInputSucceedsOnDefaultDevice() {
+        PortAudioBus bus;
+        PortAudioConfig cfg;
+        cfg.direction = AudioDirection::Input;
+        bus.setConfig(cfg);
+        AudioFormat f;
+        if (!bus.open(f)) {
+            QSKIP(qPrintable(QStringLiteral("No default input device: ") + bus.errorString()));
+        }
+        QVERIFY(bus.isOpen());
+        QVERIFY(bus.negotiatedFormat().sampleRate > 0);
+        QVERIFY(!bus.backendName().isEmpty());
+        bus.close();
+        QVERIFY(!bus.isOpen());
+    }
 };
 
 QTEST_APPLESS_MAIN(TstPortAudioBus)
