@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.2.1] - 2026-04-19
+
+### Features
+- (none)
+
+### Fixes
+- fix(radio-model): stop recalling bandstack on VFO-tune crossings
+- fix(radio-model): guard per-band save/restore lambdas against reentrancy
+
+### Docs
+- (none)
+
+### CI / Build
+- (none)
+
+### Other
+- (none)
+
+### Tests
+- (none)
+
+### Refactors
+- (none)
+
+
 ## [0.2.0] - 2026-04-19
 
 ### Auto AGC-T (PR #53)
