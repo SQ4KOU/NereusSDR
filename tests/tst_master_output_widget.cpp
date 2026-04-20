@@ -220,6 +220,30 @@ private slots:
         QVERIFY(std::abs(engine.volume() - 0.60f) < 1e-3f);
         QCOMPARE(engine.masterMuted(), true);
     }
+
+    // ── 10. Saved device name applies at construction (smoke) ─────────────
+    //
+    // Regression for the gap where audio/Speakers/DeviceName was read but
+    // never pushed into AudioEngine on startup, leaving the engine on the
+    // platform default until the user reopened the picker. AudioEngine
+    // exposes no "current device" getter, so this covers the construction
+    // path running cleanly with a non-empty saved device and seeding the
+    // same value into the picker anchor.
+
+    void restoresSavedDeviceOnConstruction() {
+        AppSettings::instance().setValue(
+            QStringLiteral("audio/Speakers/DeviceName"),
+            QStringLiteral("SomeDevice"));
+
+        AudioEngine engine;
+        MasterOutputWidget w(&engine);
+
+        // Picker anchor round-trip: setCurrentOutputDevice re-setting the
+        // value the constructor already stored must not re-emit.
+        QSignalSpy spy(&w, &MasterOutputWidget::outputDeviceChanged);
+        w.setCurrentOutputDevice(QStringLiteral("SomeDevice"));
+        QCOMPARE(spy.count(), 0);
+    }
 };
 
 QTEST_MAIN(TstMasterOutputWidget)

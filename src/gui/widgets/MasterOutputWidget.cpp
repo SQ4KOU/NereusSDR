@@ -128,10 +128,19 @@ MasterOutputWidget::MasterOutputWidget(AudioEngine* audio, QWidget* parent)
 
     // ── Seed the engine with the saved values BEFORE wiring widget→model ──
     // so the engine matches the UI state at startup (same contract as
-    // the in-session echo path — engine and widget agree).
+    // the in-session echo path — engine and widget agree). The saved
+    // speakers device is applied too so a restart honors the device the
+    // user last picked from the right-click menu; without this the
+    // engine defaults to the platform default output until the user
+    // reselects.
     if (m_audio) {
         m_audio->setVolume(savedVolume);
         m_audio->setMasterMuted(savedMuted);
+        if (!savedDevice.isEmpty()) {
+            AudioDeviceConfig cfg;
+            cfg.deviceName = savedDevice;
+            m_audio->setSpeakersConfig(cfg);
+        }
     }
 
     // ── Widget → Model: slider drives engine volume + persists ─────────────
