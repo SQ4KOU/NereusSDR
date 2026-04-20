@@ -58,6 +58,9 @@ target_compile_definitions(tst_p1_wire_format PRIVATE NEREUS_BUILD_TESTS)
 # ── Phase 3P-A AlexFilterMap shared freq→bits helpers (Task 3+4) ──
 nereus_add_test(tst_alex_filter_map)
 
+# ── Phase 3P-A P1CodecStandard ramdor WriteMainLoop port (Task 5+6) ──
+nereus_add_test(tst_p1_codec_standard)
+
 # ── Phase 3P-A regression freeze capture (temporary; removed in Task 16) ──
 nereus_add_test(tst_p1_regression_freeze_capture)
 target_compile_definitions(tst_p1_regression_freeze_capture PRIVATE

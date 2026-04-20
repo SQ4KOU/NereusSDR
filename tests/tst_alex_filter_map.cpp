@@ -1,3 +1,6 @@
+// no-port-check: test file — exercises AlexFilterMap (which is the port);
+// the "From Thetis" comments cite the source of the expected values, not
+// a direct code port in this file.
 #include <QtTest/QtTest>
 #include "core/codec/AlexFilterMap.h"
 

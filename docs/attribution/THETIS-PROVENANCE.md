@@ -32,6 +32,8 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/core/BoardCapabilities.h | Project Files/Source/Console/clsHardwareSpecific.cs; Project Files/Source/Console/setup.cs; Project Files/Source/Console/console.cs; Project Files/Source/Console/HPSDR/specHPSDR.cs; Project Files/Source/ChannelMaster/network.h | full | port | multi-source | header mirrors .cpp multi-source mix |
 | src/core/codec/AlexFilterMap.cpp | Project Files/Source/Console/console.cs | 6830-6942; 7168-7234 | port | thetis-samphire | freq→Alex HPF/LPF bits, lifted from P2RadioConnection inline copy into shared header so P1 can call it too |
 | src/core/codec/AlexFilterMap.h | Project Files/Source/Console/console.cs | 6830-6942; 7168-7234 | port | thetis-samphire | header mirrors .cpp |
+| src/core/codec/P1CodecStandard.cpp | Project Files/Source/ChannelMaster/networkproto1.c | 419-698 | port | thetis-no-samphire | ramdor WriteMainLoop port; lifted from P1RadioConnection::composeCcForBank |
+| src/core/codec/P1CodecStandard.h | Project Files/Source/ChannelMaster/networkproto1.c | 419-698 | port | thetis-no-samphire | header mirrors .cpp |
 | src/core/ClarityController.h | Project Files/Source/Console/display.cs | 5866 | port | thetis-samphire | replaces Thetis processNoiseFloor with percentile-based estimator; cites Thetis as lineage |
 | src/core/FFTEngine.cpp | Project Files/Source/Console/display.cs | 2842 | port | thetis-samphire | constant reference only (-200 dBm initial value) |
 | src/core/FFTEngine.h | Project Files/Source/Console/display.cs | 215 | port | thetis-samphire | BUFFER_SIZE = 16384 constant + enum mapping |
