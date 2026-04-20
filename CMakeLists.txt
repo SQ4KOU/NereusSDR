@@ -485,7 +485,10 @@ set(GUI_SOURCES
     src/gui/setup/hardware/PaCalibrationTab.cpp
     src/gui/setup/hardware/Hl2IoBoardTab.cpp
     src/gui/setup/hardware/BandwidthMonitorTab.cpp
-    src/gui/setup/AudioSetupPages.cpp
+    src/gui/setup/AudioAdvancedPage.cpp
+    src/gui/setup/AudioDevicesPage.cpp
+    src/gui/setup/AudioTciPage.cpp
+    src/gui/setup/AudioVaxPage.cpp
     src/gui/setup/DspSetupPages.cpp
     src/gui/setup/DisplaySetupPages.cpp
     src/gui/setup/SetupHelpers.cpp
