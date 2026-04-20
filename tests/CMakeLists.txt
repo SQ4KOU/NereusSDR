@@ -156,3 +156,6 @@ nereus_add_test(tst_cross_needle_item)
 
 # ── Edit Container refactor: Task 3 — SMeterPresetItem ───────────────────
 nereus_add_test(tst_smeter_preset_item)
+
+# ── Edit Container refactor: Task 4 — PowerSwrPresetItem ─────────────────
+nereus_add_test(tst_power_swr_preset_item)
