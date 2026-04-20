@@ -177,3 +177,6 @@ nereus_add_test(tst_clock_preset_item)
 
 # ── Edit Container refactor: Task 9b — ContestPresetItem (local) ─────────
 nereus_add_test(tst_contest_preset_item)
+
+# ── Edit Container refactor: Task 10 — BarPresetItem (18 flavours) ──────
+nereus_add_test(tst_bar_preset_item)
