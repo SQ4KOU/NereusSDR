@@ -274,6 +274,7 @@ warren@wpratt.com
 #include "applets/TxApplet.h"
 #include "applets/PhoneCwApplet.h"
 #include "applets/EqApplet.h"
+#include "applets/VaxApplet.h"
 #include "applets/DigitalApplet.h"
 #include "applets/PureSignalApplet.h"
 #include "applets/DiversityApplet.h"
@@ -918,6 +919,12 @@ void MainWindow::populateDefaultMeter()
     // EqApplet — 10-band EQ, NYI (Phase 3I-3)
     m_eqApplet = new EqApplet(m_radioModel, nullptr);
     panel->addApplet(m_eqApplet);
+
+    // VaxApplet — per-VAX-channel gain + mute + level meters
+    // (Phase 3O Sub-Phase 9 Task 9.2b).
+    m_vaxApplet = new VaxApplet(m_radioModel,
+                                m_radioModel->audioEngine(), nullptr);
+    panel->addApplet(m_vaxApplet);
 
     // Tasks 7-10: NYI applets created but NOT added to the container.
     // Task 15 (final assembly) will wire these via the Containers menu.

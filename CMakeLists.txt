@@ -493,6 +493,7 @@ set(GUI_SOURCES
     src/gui/applets/TxApplet.cpp
     src/gui/applets/PhoneCwApplet.cpp
     src/gui/applets/EqApplet.cpp
+    src/gui/applets/VaxApplet.cpp
     src/gui/applets/FmApplet.cpp
     src/gui/applets/DigitalApplet.cpp
     src/gui/applets/PureSignalApplet.cpp

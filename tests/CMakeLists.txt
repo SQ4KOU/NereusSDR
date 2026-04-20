@@ -200,3 +200,7 @@ nereus_add_test(tst_audio_engine_vax_tee)
 # emission, clamp-to-range, invalid-channel no-op. Same FakeAudioBus harness
 # as tst_audio_engine_vax_tee.
 nereus_add_test(tst_audio_engine_vax_gain)
+
+# ── Phase 3O Sub-Phase 9 Task 9.2b: VaxApplet smoke tests ────────────────────
+# Widget-level construction, signal plumbing, AppSettings round-trip.
+nereus_add_test(tst_vax_applet)
