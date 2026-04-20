@@ -199,3 +199,11 @@ nereus_add_test(tst_audio_engine_vax_tee)
 # rxBlockReady mute check gates ONLY the speakers push (VAX taps must keep
 # running so 3rd-party consumer apps don't hear the local monitor mute).
 nereus_add_test(tst_audio_engine_master_mute)
+
+# ── Phase 3O Sub-Phase 10 Task 10b: MasterOutputWidget ──────────────────────
+# Menu-bar composite: speaker-mute button, master-volume slider (0–100),
+# inset percent readout, right-click output-device picker. Verifies the
+# widget→AudioEngine user path, the AudioEngine→widget echo path with
+# re-entry prevention, AppSettings round-trip (audio/Master/Volume,
+# audio/Master/Muted), and construction-time restore of saved values.
+nereus_add_test(tst_master_output_widget)
