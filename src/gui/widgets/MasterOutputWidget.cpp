@@ -153,10 +153,10 @@ MasterOutputWidget::MasterOutputWidget(AudioEngine* audio, QWidget* parent)
 
     // ── Widget → Model: speaker button drives engine mute + persists ───────
     connect(m_speakerBtn, &QPushButton::toggled, this, [this](bool muted) {
-        m_speakerBtn->setText(QString::fromUtf8(muted ? kSpeakerOff : kSpeakerOn));
         if (m_updatingFromModel) {
             return;
         }
+        m_speakerBtn->setText(QString::fromUtf8(muted ? kSpeakerOff : kSpeakerOn));
         if (m_audio) {
             m_audio->setMasterMuted(muted);
         }
@@ -219,6 +219,9 @@ void MasterOutputWidget::onSpeakerContextMenu(const QPoint& pos)
             group->addAction(act);
             const QString devName = dev.name;
             connect(act, &QAction::triggered, this, [this, devName]() {
+                if (devName == m_currentDeviceName) {
+                    return;
+                }
                 m_currentDeviceName = devName;
                 emit outputDeviceChanged(devName);
                 auto& ss = AppSettings::instance();
