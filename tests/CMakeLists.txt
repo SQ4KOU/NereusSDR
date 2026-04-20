@@ -198,3 +198,7 @@ nereus_add_test(tst_container_widget_access)
 
 # ── Edit Container refactor: Task 16 — FloatingContainer forwarding ─────
 nereus_add_test(tst_floating_container_access)
+
+# ── Edit Container refactor: Task 17 — auto-name + menu reorg ───────────
+nereus_add_test(tst_container_manager_autoname)
+nereus_add_test(tst_mainwindow_menu_layout)

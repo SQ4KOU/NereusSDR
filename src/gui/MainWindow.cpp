@@ -748,21 +748,17 @@ void MainWindow::rebuildEditContainerSubmenu()
     }
 
     // Alphabetical by title so the menu order is predictable even
-    // when containers are created in different orders.
+    // when containers are created in different orders. Task 17 —
+    // auto-name guarantees notes() is always populated so the
+    // (unnamed) + id.left(8) fallback is no longer reachable.
     QList<ContainerWidget*> sorted = all;
     std::sort(sorted.begin(), sorted.end(),
               [](ContainerWidget* a, ContainerWidget* b) {
-        const QString na = a->notes().isEmpty()
-            ? a->id().left(8) : a->notes();
-        const QString nb = b->notes().isEmpty()
-            ? b->id().left(8) : b->notes();
-        return na.localeAwareCompare(nb) < 0;
+        return a->notes().localeAwareCompare(b->notes()) < 0;
     });
 
     for (ContainerWidget* c : sorted) {
-        const QString label = c->notes().isEmpty()
-            ? (QStringLiteral("(unnamed) ") + c->id().left(8))
-            : c->notes();
+        const QString label = c->notes();
         QAction* act = m_editContainerMenu->addAction(label);
         const QString id = c->id();
         connect(act, &QAction::triggered, this, [this, id]() {
@@ -1151,6 +1147,38 @@ void MainWindow::buildMenuBar()
 
     viewMenu->addSeparator();
 
+    // Task 17 — View > Applets submenu, migrated out of the Containers
+    // menu. These toggles show/hide content inside the fixed applet
+    // panel (Container #0), not containers themselves, so they live
+    // under View alongside the other visibility controls.
+    {
+        QMenu* appletsMenu = viewMenu->addMenu(QStringLiteral("&Applets"));
+        auto addAppletToggle = [this, appletsMenu](const QString& name,
+                                                    AppletWidget* applet,
+                                                    bool defaultVisible) {
+            auto* action = appletsMenu->addAction(name);
+            action->setCheckable(true);
+            action->setChecked(defaultVisible);
+            connect(action, &QAction::toggled, this, [this, applet](bool show) {
+                if (!m_appletPanel) { return; }
+                if (show) {
+                    m_appletPanel->addApplet(applet);
+                } else {
+                    m_appletPanel->removeApplet(applet);
+                }
+            });
+        };
+        addAppletToggle(tr("Digital / VAC"), m_digitalApplet,    false);
+        addAppletToggle(tr("PureSignal"),    m_pureSignalApplet, false);
+        addAppletToggle(tr("Diversity"),     m_diversityApplet,  false);
+        addAppletToggle(tr("CW Keyer"),      m_cwxApplet,        false);
+        addAppletToggle(tr("Voice Keyer"),   m_dvkApplet,        false);
+        addAppletToggle(tr("CAT / TCI"),     m_catApplet,        false);
+        addAppletToggle(tr("ATU Control"),   m_tunerApplet,      false);
+    }
+
+    viewMenu->addSeparator();
+
     {
         QAction* kbAction = viewMenu->addAction(QStringLiteral("&Keyboard Shortcuts..."));
         kbAction->setEnabled(false);
@@ -1402,7 +1430,10 @@ void MainWindow::buildMenuBar()
             if (!m_containerManager) { return; }
 
             ContainerWidget* c = m_containerManager->createContainer(1, DockMode::Floating);
-            c->setNotes(QStringLiteral("Meter"));
+            // Task 17 — shared auto-name helper; was a hardcoded "Meter"
+            // that produced duplicate labels and relied on the Edit
+            // Container submenu's (unnamed) id.left(8) fallback.
+            c->setNotes(m_containerManager->nextMeterAutoName());
 
             // Give it a MeterWidget as content (replaces the default placeholder label)
             MeterWidget* meter = new MeterWidget();
@@ -1447,32 +1478,9 @@ void MainWindow::buildMenuBar()
                 &MainWindow::resetDefaultLayout);
     }
 
-    containersMenu->addSeparator();
-
-    // Dynamic show/hide toggles for the 7 optional applets in Container #0.
-    // Checked = visible in panel; unchecked = hidden/removed.
-    // All 7 are hidden by default; user enables as needed.
-    auto addContainerToggle = [&](const QString& name, AppletWidget* applet, bool defaultVisible) {
-        auto* action = containersMenu->addAction(name);
-        action->setCheckable(true);
-        action->setChecked(defaultVisible);
-        connect(action, &QAction::toggled, this, [this, applet](bool show) {
-            if (!m_appletPanel) { return; }
-            if (show) {
-                m_appletPanel->addApplet(applet);
-            } else {
-                m_appletPanel->removeApplet(applet);
-            }
-        });
-    };
-
-    addContainerToggle(QStringLiteral("Digital / VAC"), m_digitalApplet,    false);
-    addContainerToggle(QStringLiteral("PureSignal"),    m_pureSignalApplet, false);
-    addContainerToggle(QStringLiteral("Diversity"),     m_diversityApplet,  false);
-    addContainerToggle(QStringLiteral("CW Keyer"),      m_cwxApplet,        false);
-    addContainerToggle(QStringLiteral("Voice Keyer"),   m_dvkApplet,        false);
-    addContainerToggle(QStringLiteral("CAT / TCI"),     m_catApplet,        false);
-    addContainerToggle(QStringLiteral("ATU Control"),   m_tunerApplet,      false);
+    // Task 17 — the 7 applet show/hide toggles that used to live here
+    // moved to View > Applets. The Containers menu now only holds
+    // container lifecycle entries (New, Edit Container, Reset).
 
     // =========================================================================
     // TOOLS
