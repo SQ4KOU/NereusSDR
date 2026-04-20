@@ -1739,6 +1739,19 @@ void VfoWidget::setBinauralEnabled(bool v)
 
 void VfoWidget::setSlice(SliceModel* slice)
 {
+    // Drop prior VAX bindings before m_slice is reassigned — otherwise a
+    // repeat setSlice() leaks connections: each click would re-invoke the
+    // old lambda, and vaxChannelChanged from a stale SliceModel could
+    // clobber the selector away from the currently bound slice.
+    if (m_vaxSelector) {
+        if (m_slice) {
+            disconnect(m_slice, &SliceModel::vaxChannelChanged,
+                       m_vaxSelector, &VaxChannelSelector::setValue);
+        }
+        disconnect(m_vaxSelector, &VaxChannelSelector::valueChanged,
+                   this, nullptr);
+    }
+
     m_slice = QPointer<SliceModel>(slice);
     if (m_fmContainer) {
         m_fmContainer->setSlice(slice);
