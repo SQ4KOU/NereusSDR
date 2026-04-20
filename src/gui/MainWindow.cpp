@@ -334,6 +334,28 @@ warren@wpratt.com
 
 namespace NereusSDR {
 
+namespace {
+// First-run/rescan wants the "relevant" virtual cables for the current
+// platform — 3rd-party cables on Windows (BYO), our own NereusSdrVax
+// entries on Mac/Linux (native HAL plugin / pipe-source). Centralising
+// the platform split here keeps checkVaxFirstRun() focused on
+// scenario-selection + dialog wiring.
+QVector<DetectedCable> detectedForFirstRun()
+{
+#if defined(Q_OS_WIN)
+    return VirtualCableDetector::scanThirdPartyOnly();
+#else
+    QVector<DetectedCable> out;
+    for (const auto& c : VirtualCableDetector::scan()) {
+        if (c.product == VirtualCableProduct::NereusSdrVax) {
+            out.push_back(c);
+        }
+    }
+    return out;
+#endif
+}
+} // namespace
+
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
     , m_radioModel(new RadioModel(this))
@@ -2707,21 +2729,9 @@ void MainWindow::checkVaxFirstRun()
         (s.value(QStringLiteral("audio/FirstRunComplete"),
                  QStringLiteral("False")).toString() == QStringLiteral("True"));
 
-    // Platform-specific scan. Windows surfaces only 3rd-party installable
-    // cables (the NereusSdrVax enum is reserved for a future native driver
-    // and must never be offered as a user binding target). Mac/Linux filter
-    // the raw scan down to NereusSdrVax — those entries represent the HAL
-    // plugin / pipe-source devices that the native buses create on start().
-    QVector<DetectedCable> detected;
-#if defined(Q_OS_WIN)
-    detected = VirtualCableDetector::scanThirdPartyOnly();
-#else
-    for (const auto& c : VirtualCableDetector::scan()) {
-        if (c.product == VirtualCableProduct::NereusSdrVax) {
-            detected.push_back(c);
-        }
-    }
-#endif
+    // Platform-specific scan — see detectedForFirstRun() in the anonymous
+    // namespace at the top of this file for the platform split rationale.
+    const QVector<DetectedCable> detected = detectedForFirstRun();
 
     // Always refresh the stored fingerprint so a cable being removed +
     // later reinstalled doesn't permanently re-flag itself as "new".

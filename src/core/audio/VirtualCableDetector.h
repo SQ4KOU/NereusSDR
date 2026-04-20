@@ -34,9 +34,14 @@ public:
     // Enumerates OS audio devices via PortAudio and returns matches.
     static QVector<DetectedCable> scan();
 
-    // Test-friendly pure filter — drops NereusSdrVax entries from the input.
-    // Used by scanThirdPartyOnly() and exposed as a seam so unit tests can
-    // exercise the filter without standing up a PortAudio enumeration.
+    // Test-friendly pure filter — drops NereusSdrVax entries from an
+    // arbitrary DetectedCable vector. Used by scanThirdPartyOnly() and
+    // exposed as a seam so unit tests can exercise the filter without
+    // standing up a PortAudio enumeration. Exposed as a public static
+    // helper (not gated behind NEREUS_BUILD_TESTS like AudioEngine::*ForTest
+    // seams) because it has no hidden invariants: it's a pure function on
+    // its input with no side effects, so external callers can't violate
+    // any class state by using it.
     static QVector<DetectedCable> filterThirdParty(const QVector<DetectedCable>& all);
 
     // Same as scan() but drops NereusSdrVax entries. Windows first-run path
@@ -55,6 +60,12 @@ public:
     // Empty string for an empty input; no trailing comma. SHA-256 is chosen
     // over qHash so the tag is stable across processes — qHash is randomized
     // per run and would spuriously flag every cable as "new" on every launch.
+    // 8 hex chars = 32 bits of key space. At the expected population
+    // (<50 audio device names on any realistic system), the birthday-
+    // paradox collision probability is under 5e-7 — well below the
+    // noise floor of the UX affordance this feature gates ("suggest
+    // binding new cables" dialog). If we ever need to scale this to
+    // thousands of entries, bump to 12-16 hex chars.
     //
     // diffNewCables() returns the cables in `current` whose fingerprint is
     // NOT present in `lastCsv`. Used by MainWindow::checkVaxFirstRun() to
