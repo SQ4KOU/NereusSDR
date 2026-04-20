@@ -43,10 +43,10 @@ constexpr const char* kBtnInstallPrefix  = "btnInstall_";
 constexpr const char* kBtnRescanNow      = "btnRescanNow";
 constexpr const char* kBtnWhyNeeded      = "btnWhyNeeded";
 
-// Platform-badge colours per mockup CSS (.plat / .plat.mac / .plat.linux).
-constexpr const char* kBadgeWinColor     = "#00b4d8";
-constexpr const char* kBadgeMacColor     = "#00ff88";
-constexpr const char* kBadgeLinuxColor   = "#ddbb00";
+// Platform-badge colours — mockup CSS (.plat / .plat.mac / .plat.linux)
+// maps byte-for-byte to the shared palette: #00b4d8=kAccent (Windows),
+// #00ff88=kGreenText (Mac), #ddbb00=kAmberWarn (Linux). See
+// platformBadgeColor() below for the scenario → palette-slot mapping.
 
 // Row styling for the detection list (.det-list / .det-row).
 QString detListFrameStyle()
@@ -99,8 +99,9 @@ QString primaryButtonStyle()
         "QPushButton { background: %1; border: 1px solid %2; color: %3;"
         " padding: 5px 14px; font-size: 11px; font-weight: bold;"
         " border-radius: 3px; }"
-        "QPushButton:hover { background: #0088d8; }")
-        .arg(Style::kBlueBg, Style::kBlueBorder, Style::kBlueText);
+        "QPushButton:hover { background: %4; }")
+        .arg(Style::kBlueBg, Style::kBlueBorder, Style::kBlueText,
+             Style::kBlueHover);
 }
 
 QString neutralButtonStyle()
@@ -230,6 +231,30 @@ QString productDisplayName(VirtualCableProduct p)
         default:
             return QStringLiteral("virtual cable");
     }
+}
+
+// Shared detection-row builder for scenarios A (WindowsCablesFound) and
+// E (RescanNewCables). Both flow raw `DetectedCable::deviceName` into
+// the rich-text QLabel built by makeDetRow(); HTML-escape the
+// user-controlled name here so ampersands and angle brackets in vendor
+// product names (e.g. FlexRadio's "FLEX-6500 DAX RX1 IN & OUT") don't
+// corrupt rendering. `productLineSuffix` is the per-scenario trailing
+// text appended after the product-family name (e.g. "auto-detected" for
+// A, "newly installed" for E). `pillText` / `pillStyle` encode the
+// per-scenario badge (Suggested vs New).
+QWidget* makeDetRowForCable(int slot,
+                            const DetectedCable& cable,
+                            const QString& productLineSuffix,
+                            const QString& pillText,
+                            const QString& pillStyle,
+                            QWidget* parent)
+{
+    const QString deviceLine = cable.deviceName.toHtmlEscaped();
+    const QString prodText = QStringLiteral("%1 \u2022 %2")
+        .arg(productDisplayName(cable.product), productLineSuffix);
+    return makeDetRow(slot, deviceLine, prodText,
+                      pillText, pillStyle,
+                      QString(), parent);
 }
 
 } // namespace
@@ -408,14 +433,11 @@ void VaxFirstRunDialog::buildBodyWindowsCablesFound(QVBoxLayout* bodyLayout)
         if (!cable.isInput) {
             continue;
         }
-        const QString deviceLine = cable.deviceName;
-        const QString prodText =
-            QStringLiteral("%1 • auto-detected")
-                .arg(productDisplayName(cable.product));
-        listLayout->addWidget(makeDetRow(
-            slot, deviceLine, prodText,
+        listLayout->addWidget(makeDetRowForCable(
+            slot, cable,
+            QStringLiteral("auto-detected"),
             QStringLiteral("Suggested"), pillSuggestedStyle(),
-            QString(), listFrame));
+            listFrame));
         ++slot;
     }
 
@@ -821,13 +843,11 @@ void VaxFirstRunDialog::buildBodyRescanNewCables(QVBoxLayout* bodyLayout)
         if (!cable.isInput) {
             continue;
         }
-        const QString prodText =
-            QStringLiteral("%1 \u2022 newly installed")
-                .arg(productDisplayName(cable.product));
-        listLayout->addWidget(makeDetRow(
-            slot, cable.deviceName, prodText,
+        listLayout->addWidget(makeDetRowForCable(
+            slot, cable,
+            QStringLiteral("newly installed"),
             QStringLiteral("New"), pillNewStyle(),
-            QString(), listFrame));
+            listFrame));
         ++slot;
     }
     bodyLayout->addWidget(listFrame);
@@ -916,9 +936,18 @@ QWidget* VaxFirstRunDialog::buildFooter()
                 QStringLiteral("Why do I need this?"), footer);
             whyBtn->setObjectName(QString::fromUtf8(kBtnWhyNeeded));
             whyBtn->setStyleSheet(linkButtonStyle());
-            // "Why do I need this?" opens the Setup→Audio→VAX tab in
-            // Sub-Phase 12; for Sub-Phase 11 it's a no-op (the explain
-            // block below the cards already answers the question).
+            connect(whyBtn, &QPushButton::clicked, this, [this]() {
+                // TODO(sub-phase-12): Setup → Audio → VAX tab will host
+                // the full "Why do I need virtual audio cables?"
+                // explanation. Sub-Phase 11 MainWindow hook logs-and-
+                // ignores this signal uniformly with the "Customize…"
+                // link; the dialog emits and closes either way.
+                emit openSetupAudioTab();
+                // reject() (not accept()) — the user hasn't completed
+                // first-run; they're going to Setup for more info, same
+                // semantics as Customize…
+                reject();
+            });
             layout->addWidget(whyBtn);
 
             auto* continueBtn = new QPushButton(
@@ -1033,14 +1062,14 @@ QString VaxFirstRunDialog::platformBadgeColor() const
 {
     switch (m_scenario) {
         case FirstRunScenario::MacNative:
-            return QString::fromUtf8(kBadgeMacColor);
+            return QString::fromUtf8(Style::kGreenText);
         case FirstRunScenario::LinuxNative:
-            return QString::fromUtf8(kBadgeLinuxColor);
+            return QString::fromUtf8(Style::kAmberWarn);
         case FirstRunScenario::WindowsCablesFound:
         case FirstRunScenario::WindowsNoCables:
         case FirstRunScenario::RescanNewCables:
         default:
-            return QString::fromUtf8(kBadgeWinColor);
+            return QString::fromUtf8(Style::kAccent);
     }
 }
 

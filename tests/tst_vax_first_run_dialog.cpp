@@ -19,6 +19,7 @@
 #include <QtTest/QtTest>
 
 #include <QKeyEvent>
+#include <QLabel>
 #include <QPair>
 #include <QPushButton>
 #include <QSignalSpy>
@@ -291,6 +292,36 @@ private slots:
             args.at(0).value<QVector<QPair<int, QString>>>();
         QCOMPARE(bindings.size(), 2);
         QCOMPARE(dlg.result(), static_cast<int>(QDialog::Accepted));
+    }
+
+    // ── 9. Device names with HTML special chars are escaped ────────────
+    //
+    // Regression test for I2: makeDetRow() renders the device-name QLabel
+    // as Qt::RichText, so raw `&`, `<`, `>` in DetectedCable::deviceName
+    // (realistic — e.g. FlexRadio uses ampersands in "FLEX-6500 DAX RX1
+    // IN & OUT") would corrupt rendering. Confirm the label text() has
+    // been HTML-escaped before being handed to Qt.
+    void deviceNameHtmlIsEscaped()
+    {
+        QVector<DetectedCable> payload;
+        payload.push_back({VirtualCableProduct::VbCable,
+                           QStringLiteral("A & B <C>"),
+                           /*isInput=*/true, 0});
+        VaxFirstRunDialog dlg(FirstRunScenario::WindowsCablesFound, payload);
+
+        const auto labels = dlg.findChildren<QLabel*>();
+        bool found = false;
+        for (const auto* label : labels) {
+            if (label->textFormat() == Qt::RichText
+                && label->text().contains(QStringLiteral("&amp;"))
+                && label->text().contains(QStringLiteral("&lt;C&gt;"))) {
+                found = true;
+                break;
+            }
+        }
+        QVERIFY2(found,
+                 "Device name with HTML special chars was not escaped"
+                 " before rich-text injection");
     }
 };
 
