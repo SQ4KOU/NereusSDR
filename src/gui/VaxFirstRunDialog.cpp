@@ -256,7 +256,7 @@ VaxFirstRunDialog::VaxFirstRunDialog(FirstRunScenario scenario,
     layout()->setSizeConstraint(QLayout::SetFixedSize);
 }
 
-QVector<QPair<int, QString>> VaxFirstRunDialog::suggestedBindings() const
+QVector<QPair<int, QString>> VaxFirstRunDialog::computeSuggestedBindings() const
 {
     QVector<QPair<int, QString>> bindings;
 
@@ -474,6 +474,11 @@ void VaxFirstRunDialog::buildBodyWindowsNoCables(QVBoxLayout* bodyLayout)
     bodyLayout->addWidget(intro);
 
     // Install-cards grid — 2x2 layout per mockup.
+    // TODO(sub-phase-12): per-vendor "Installation guide" link not yet wired.
+    // Mockup (mockup-firstrun.html:129,135) shows a secondary link button on
+    // the VB-CABLE and VAC cards pointing at an in-app installation
+    // walkthrough. Sub-Phase 12's Setup → Audio → VAX page will host the
+    // target content; wire this button when that page lands.
     struct VendorCard {
         VirtualCableProduct product;
         const char* title;
@@ -949,7 +954,7 @@ QWidget* VaxFirstRunDialog::buildFooter()
             // "Apply to VAX N & M" — synthesize the slot range label from
             // the suggested binding payload so the button text doesn't
             // lie when only one cable was new.
-            const auto bindings = suggestedBindings();
+            const auto bindings = computeSuggestedBindings();
             QString applyLabel;
             if (bindings.size() == 1) {
                 applyLabel = QStringLiteral("Apply to VAX %1")
@@ -981,7 +986,7 @@ QWidget* VaxFirstRunDialog::buildFooter()
 
 void VaxFirstRunDialog::onApplySuggested()
 {
-    emit applySuggested(suggestedBindings());
+    emit applySuggested(computeSuggestedBindings());
     accept();
 }
 

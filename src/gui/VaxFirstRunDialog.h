@@ -49,14 +49,20 @@ public:
                       const QVector<DetectedCable>& detected,
                       QWidget* parent = nullptr);
 
-    // Test helper — returns the scenario this dialog was constructed for.
-    FirstRunScenario scenario() const { return m_scenario; }
+#ifdef NEREUS_BUILD_TESTS
+    // Test seam — returns the scenario this dialog was constructed for.
+    // Gated behind NEREUS_BUILD_TESTS so production builds don't expose
+    // the getter. Matches the AudioEngine::setVaxBusForTest pattern.
+    FirstRunScenario scenarioForTest() const { return m_scenario; }
 
-    // Test helper — computes the {channel, deviceName} pairs that would
-    // be emitted by "Apply suggested" / "Apply to VAX 3 & 4". Pure
-    // function of m_scenario + m_detected; safe to call without
-    // triggering signal emission.
-    QVector<QPair<int, QString>> suggestedBindings() const;
+    // Test seam — forwards to the private computeSuggestedBindings()
+    // helper so unit tests can assert the {channel, deviceName} payload
+    // without having to click the Apply button and snoop the signal.
+    QVector<QPair<int, QString>> suggestedBindingsForTest() const
+    {
+        return computeSuggestedBindings();
+    }
+#endif
 
 signals:
     // Scenario A, E: user clicked "Apply suggested" / "Apply to VAX 3 & 4".
@@ -71,6 +77,14 @@ signals:
     void openInstallUrl(const QString& url);
 
 private:
+    // Computes the {channel, deviceName} pairs that would be emitted by
+    // "Apply suggested" / "Apply to VAX 3 & 4". Pure function of
+    // m_scenario + m_detected; used internally by onApplySuggested() and
+    // by the Scenario E footer label synthesis in buildFooter(). Exposed
+    // to tests via the NEREUS_BUILD_TESTS-gated suggestedBindingsForTest()
+    // forwarder above.
+    QVector<QPair<int, QString>> computeSuggestedBindings() const;
+
     void buildUI();  // dispatches by m_scenario to the 5 layouts
 
     // Per-scenario body builders. Each appends its widgets to `bodyLayout`

@@ -99,7 +99,7 @@ private slots:
         }
 
         VaxFirstRunDialog dlg(scenario, payload);
-        QCOMPARE(dlg.scenario(), scenario);
+        QCOMPARE(dlg.scenarioForTest(), scenario);
         QVERIFY(dlg.width() == 560);
     }
 
