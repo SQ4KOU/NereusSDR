@@ -195,3 +195,6 @@ nereus_add_test(tst_dialog_add_container)
 
 # ── Edit Container refactor: Task 15 — on-container edit affordances ────
 nereus_add_test(tst_container_widget_access)
+
+# ── Edit Container refactor: Task 16 — FloatingContainer forwarding ─────
+nereus_add_test(tst_floating_container_access)
