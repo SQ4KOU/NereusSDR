@@ -193,3 +193,9 @@ nereus_add_test(tst_virtual_cable_detector)
 # seam on AudioEngine. No real CoreAudioHalBus / LinuxPipeBus / PortAudio
 # backend required — runs on every platform.
 nereus_add_test(tst_audio_engine_vax_tee)
+
+# ── Phase 3O Sub-Phase 10 Task 10a: AudioEngine master-mute API ──────────────
+# Covers setMasterMuted / masterMuted / masterMutedChanged. Verifies the
+# rxBlockReady mute check gates ONLY the speakers push (VAX taps must keep
+# running so 3rd-party consumer apps don't hear the local monitor mute).
+nereus_add_test(tst_audio_engine_master_mute)

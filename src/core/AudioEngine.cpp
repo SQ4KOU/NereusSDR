@@ -35,6 +35,16 @@
 //                 degrades to silence on that channel; surviving slots
 //                 stay live. Windows path stays null pending Sub-Phase 9
 //                 BYO wiring.
+//   2026-04-20 — Sub-Phase 10 Task 10a master-mute API by J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code. Adds
+//                 setMasterMuted implementation (acq_rel exchange +
+//                 masterMutedChanged emission on distinct state), and a
+//                 single-atomic-load mute gate around the speakers push in
+//                 rxBlockReady. Gate covers the speakers bus ONLY — VAX
+//                 tap path and master-mix accumulation remain unconditional
+//                 so 3rd-party consumers of VAX aren't silenced by the
+//                 local monitor mute. No alloc, no lock, no logging —
+//                 RT-safety preserved.
 // =================================================================
 
 #include "AudioEngine.h"
@@ -512,11 +522,20 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
 
     // Same snapshot idiom as the VAX tap: one load into a local so the
     // isOpen() guard and the push() observe the same IAudioBus.
-    IAudioBus* speakersBus = m_speakersBus.get();
-    if (speakersBus != nullptr && speakersBus->isOpen()) {
-        speakersBus->push(
-            reinterpret_cast<const char*>(mix.data()),
-            static_cast<qint64>(stereoFloats) * sizeof(float));
+    //
+    // Master-mute gate (Sub-Phase 10 Task 10a): single atomic acquire
+    // load per block. Gates the speakers push ONLY — the master-mix
+    // accumulate() above and the VAX tap earlier in this method run
+    // unconditionally, so 3rd-party apps consuming a VAX channel keep
+    // receiving audio while the local monitor is muted. No alloc, no
+    // lock, no logging — RT-safety preserved.
+    if (!m_masterMuted.load(std::memory_order_acquire)) {
+        IAudioBus* speakersBus = m_speakersBus.get();
+        if (speakersBus != nullptr && speakersBus->isOpen()) {
+            speakersBus->push(
+                reinterpret_cast<const char*>(mix.data()),
+                static_cast<qint64>(stereoFloats) * sizeof(float));
+        }
     }
 }
 
@@ -529,6 +548,18 @@ void AudioEngine::setVolume(float volume)
     const float prev = m_masterVolume.exchange(volume, std::memory_order_acq_rel);
     if (prev != volume) {
         emit volumeChanged(volume);
+    }
+}
+
+void AudioEngine::setMasterMuted(bool muted)
+{
+    // Same acq_rel / acquire pairing as setVolume above — the
+    // DSP-thread read in rxBlockReady uses acquire; a plain release
+    // would not synchronize the read-side observation order on weak
+    // memory models.
+    const bool prev = m_masterMuted.exchange(muted, std::memory_order_acq_rel);
+    if (prev != muted) {
+        emit masterMutedChanged(muted);
     }
 }
 
