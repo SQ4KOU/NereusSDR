@@ -196,3 +196,24 @@ nereus_add_test(tst_virtual_cable_detector)
 # seam on AudioEngine. No real CoreAudioHalBus / LinuxPipeBus / PortAudio
 # backend required — runs on every platform.
 nereus_add_test(tst_audio_engine_vax_tee)
+
+# ── Phase 3O Sub-Phase 10 Task 10a: AudioEngine master-mute API ──────────────
+# Covers setMasterMuted / masterMuted / masterMutedChanged. Verifies the
+# rxBlockReady mute check gates ONLY the speakers push (VAX taps must keep
+# running so 3rd-party consumer apps don't hear the local monitor mute).
+nereus_add_test(tst_audio_engine_master_mute)
+
+# ── Phase 3O Sub-Phase 10 Task 10b: MasterOutputWidget ──────────────────────
+# Menu-bar composite: speaker-mute button, master-volume slider (0–100),
+# inset percent readout, right-click output-device picker. Verifies the
+# widget→AudioEngine user path, the AudioEngine→widget echo path with
+# re-entry prevention, AppSettings round-trip (audio/Master/Volume,
+# audio/Master/Muted), and construction-time restore of saved values.
+nereus_add_test(tst_master_output_widget)
+
+# ── Phase 3O Sub-Phase 10 Task 10c: TitleBar host strip ─────────────────────
+# 32 px strip that hosts the QMenuBar + MasterOutputWidget. Smoke only:
+# construction, setMenuBar() re-parenting, masterOutput() accessor, and
+# the fixed 32 px height. Live UI verification is the canonical check for
+# the menu-re-parent + in-window render on macOS.
+nereus_add_test(tst_title_bar)

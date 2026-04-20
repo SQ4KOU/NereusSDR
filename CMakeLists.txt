@@ -363,6 +363,7 @@ set(MODEL_SOURCES
 
 set(GUI_SOURCES
     src/gui/MainWindow.cpp
+    src/gui/TitleBar.cpp
     src/gui/ConnectionPanel.cpp
     src/gui/AddCustomRadioDialog.cpp
     src/gui/SupportDialog.cpp
@@ -381,6 +382,7 @@ set(GUI_SOURCES
     src/gui/widgets/VfoModeContainers.cpp
     src/gui/widgets/VfoModeContainers.h
     src/gui/widgets/VaxChannelSelector.cpp
+    src/gui/widgets/MasterOutputWidget.cpp
     src/gui/widgets/VfoStyles.h
     src/gui/widgets/VfoWidget.cpp
     src/gui/containers/ContainerWidget.cpp
