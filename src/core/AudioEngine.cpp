@@ -55,6 +55,16 @@
 //                 setVaxMuted / setVaxTxGain follow the acq_rel exchange
 //                 pattern from setVolume, and change-signals fire only
 //                 when the stored value differs from the new one.
+//   2026-04-20 — Sub-Phase 12 Task 12.2 by J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code. Adds per-endpoint config-changed
+//                 signals (speakersConfigChanged / headphonesConfigChanged /
+//                 txInputConfigChanged / vaxConfigChanged), m_speakersBusMutex
+//                 live-reconfig safety (try_lock in rxBlockReady + exclusive
+//                 lock in setSpeakersConfig), 200ms intra-control debounce
+//                 timer in setSpeakersConfig, ensureSpeakersOpen() now reads
+//                 AudioDeviceConfig::loadFromSettings("audio/Speakers"),
+//                 setHeadphonesConfig() added, and MasterOutputWidget wired
+//                 to speakersConfigChanged for live device-label sync.
 // =================================================================
 
 #include "AudioEngine.h"
@@ -213,6 +223,7 @@ void AudioEngine::stop()
     // → ~LinuxPipeBus → close()). The CoreAudioHalBus / PortAudioBus dtors
     // have no main-thread requirement.
     m_speakersBus.reset();
+    m_headphonesBus.reset();
     m_txInputBus.reset();
     // Reset VAX TX before iterating m_vaxBus so the close ordering is
     // TX-first then RX-1..4 — symmetric with the start() construction
@@ -350,32 +361,93 @@ void AudioEngine::ensureSpeakersOpen()
         return;
     }
 
-    AudioDeviceConfig defaults;
-    // defaults: empty deviceName (platform default), 48 kHz, stereo,
-    // 256-frame buffer — matches what the DSP path produces.
-    m_speakersBus = makeBus(defaults, /*capture=*/false);
+    // Sub-Phase 12 Task 12.2: read persisted config instead of hardcoded
+    // defaults. On a fresh install with no audio/Speakers/* keys,
+    // loadFromSettings returns a default-constructed AudioDeviceConfig
+    // (empty deviceName) → makeBus treats it as "platform default" —
+    // same behavior as the pre-Sub-Phase-12 code.
+    const AudioDeviceConfig cfg =
+        AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/Speakers"));
+
+    m_speakersBus = makeBus(cfg, /*capture=*/false);
     if (m_speakersBus) {
         m_speakersFormat = m_speakersBus->negotiatedFormat();
         qCInfo(lcAudio) << "Speakers bus opened @"
                         << m_speakersFormat.sampleRate << "Hz /"
                         << m_speakersFormat.channels << "ch"
                         << "[" << m_speakersBus->backendName() << "]";
+        emit speakersConfigChanged(cfg);
     }
 }
 
 void AudioEngine::setSpeakersConfig(const AudioDeviceConfig& cfg)
 {
-    m_speakersBus.reset();
+    // Sub-Phase 12 Task 12.2: 200ms intra-control debounce for rapid
+    // buffer-size scrub. Store the pending config; the single-shot timer
+    // fires the actual rebuild after the UI settles.
+    m_pendingSpeakersConfig = cfg;
+
+#ifdef NEREUS_BUILD_TESTS
+    if (m_speakersDebounceDisabled) {
+        // Test path: apply synchronously, skip the timer.
+        applySpeakersConfig(m_pendingSpeakersConfig);
+        return;
+    }
+#endif
+
+    if (!m_speakersDebounceTimer) {
+        m_speakersDebounceTimer = std::make_unique<QTimer>(this);
+        m_speakersDebounceTimer->setSingleShot(true);
+        connect(m_speakersDebounceTimer.get(), &QTimer::timeout, this, [this]() {
+            applySpeakersConfig(m_pendingSpeakersConfig);
+        });
+    }
+    // Restart the timer each call — coalesces rapid scrub changes.
+    m_speakersDebounceTimer->start(200);
+}
+
+void AudioEngine::applySpeakersConfig(const AudioDeviceConfig& cfg)
+{
     if (!m_paInitialized) {
         return;
     }
+
+    // Hold the mutex during tear-down + rebuild. rxBlockReady uses
+    // try_lock and drops the block if it can't acquire (≤1 ms of silence
+    // is inaudible vs. a use-after-free on the old bus pointer).
+    std::unique_lock<std::mutex> lk(m_speakersBusMutex);
+
+    m_speakersBus.reset();
     m_speakersBus = makeBus(cfg, /*capture=*/false);
+
+    AudioDeviceConfig negotiated = cfg;  // carry non-bus fields through
     if (m_speakersBus) {
         m_speakersFormat = m_speakersBus->negotiatedFormat();
         qCInfo(lcAudio) << "Speakers bus reconfigured @"
                         << m_speakersFormat.sampleRate << "Hz /"
                         << m_speakersFormat.channels << "ch";
+    } else {
+        qCWarning(lcAudio) << "setSpeakersConfig: bus open failed for device"
+                           << cfg.deviceName << "— audio silenced on speakers";
     }
+
+    lk.unlock();  // release before emitting so signal handlers can call
+                  // setSpeakersConfig without deadlocking
+    emit speakersConfigChanged(negotiated);
+}
+
+void AudioEngine::setHeadphonesConfig(const AudioDeviceConfig& cfg)
+{
+    m_headphonesBus.reset();
+    if (!m_paInitialized) {
+        return;
+    }
+    m_headphonesBus = makeBus(cfg, /*capture=*/false);
+    if (m_headphonesBus) {
+        qCInfo(lcAudio) << "Headphones bus opened"
+                        << "[" << m_headphonesBus->backendName() << "]";
+    }
+    emit headphonesConfigChanged(cfg);
 }
 
 void AudioEngine::setTxInputConfig(const AudioDeviceConfig& cfg)
@@ -392,6 +464,7 @@ void AudioEngine::setTxInputConfig(const AudioDeviceConfig& cfg)
         qCInfo(lcAudio) << "TX input bus opened"
                         << "[" << m_txInputBus->backendName() << "]";
     }
+    emit txInputConfigChanged(cfg);
 }
 
 void AudioEngine::setVaxConfig(int channel, const AudioDeviceConfig& cfg)
@@ -415,6 +488,7 @@ void AudioEngine::setVaxConfig(int channel, const AudioDeviceConfig& cfg)
         qCInfo(lcAudio) << "VAX" << channel << "bus reconfigured (BYO)"
                         << "[" << m_vaxBus[idx]->backendName() << "]";
     }
+    emit vaxConfigChanged(channel, cfg);
 }
 
 void AudioEngine::setVaxEnabled(int channel, bool on)
@@ -469,6 +543,16 @@ void AudioEngine::setSpeakersBusForTest(std::unique_ptr<IAudioBus> bus)
 {
     m_speakersBus = std::move(bus);
 }
+
+void AudioEngine::setHeadphonesBusForTest(std::unique_ptr<IAudioBus> bus)
+{
+    m_headphonesBus = std::move(bus);
+}
+
+void AudioEngine::setSpeakersDebounceDisabledForTest(bool disabled)
+{
+    m_speakersDebounceDisabled = disabled;
+}
 #endif
 
 void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
@@ -476,6 +560,15 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     if (!m_radio || samples == nullptr || frames <= 0) {
         return;
     }
+
+    // Sub-Phase 12 Task 12.2 — live-reconfig safety: try to acquire the
+    // speakers bus mutex. If setSpeakersConfig is currently tearing down and
+    // rebuilding the bus, we can't safely use m_speakersBus — drop the block.
+    // ≤1 ms of silence is inaudible vs. a use-after-free on the old pointer.
+    // NOTE: this lock is only tried for the speakers push path at the bottom of
+    // this function; it must be held for the duration of the speakers push.
+    std::unique_lock<std::mutex> speakersLk(m_speakersBusMutex, std::try_to_lock);
+    const bool hasSpeakersLock = speakersLk.owns_lock();
 
     // SliceModel exposes muted() / setMuted() plus vaxChannel(). The
     // design spec uses audioMuted() as shorthand for the same property;
@@ -569,8 +662,12 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // accumulate() above and the VAX tap earlier in this method run
     // unconditionally, so 3rd-party apps consuming a VAX channel keep
     // receiving audio while the local monitor is muted. No alloc, no
-    // lock, no logging — RT-safety preserved.
-    if (!m_masterMuted.load(std::memory_order_acquire)) {
+    // logging — RT-safety preserved.
+    //
+    // Sub-Phase 12 live-reconfig: hasSpeakersLock guards against using
+    // m_speakersBus while setSpeakersConfig is rebuilding it. If we
+    // couldn't acquire the mutex (try_lock returned false), drop the block.
+    if (hasSpeakersLock && !m_masterMuted.load(std::memory_order_acquire)) {
         IAudioBus* speakersBus = m_speakersBus.get();
         if (speakersBus != nullptr && speakersBus->isOpen()) {
             speakersBus->push(

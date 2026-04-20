@@ -312,6 +312,7 @@ endif()
 set(CORE_SOURCES
     src/core/AppSettings.cpp
     src/core/BoardCapabilities.cpp
+    src/core/AudioDeviceConfig.cpp
     src/core/SampleRateCatalog.cpp
     src/core/HardwareProfile.cpp
     src/core/LogCategories.cpp
@@ -489,6 +490,7 @@ set(GUI_SOURCES
     src/gui/setup/AudioDevicesPage.cpp
     src/gui/setup/AudioTciPage.cpp
     src/gui/setup/AudioVaxPage.cpp
+    src/gui/setup/DeviceCard.cpp
     src/gui/setup/DspSetupPages.cpp
     src/gui/setup/DisplaySetupPages.cpp
     src/gui/setup/SetupHelpers.cpp

@@ -267,3 +267,29 @@ nereus_add_test(tst_spectrum_overlay_panel)
 # BoardCapabilities::attenuator.maxDb at construction time, not hardcoded.
 nereus_add_test(tst_rxapplet_att_range)
 target_compile_definitions(tst_rxapplet_att_range PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3O Sub-Phase 12 Task 12.2 Step 0: AudioDeviceConfig round-trip ──────
+# Verifies loadFromSettings / saveToSettings preserve all 10 fields, including
+# edge cases: empty driverApi, manualLatencyMs=0, bitDepth=16/24/32, boolean
+# combinations, and prefix independence (Speakers vs Headphones).
+nereus_add_test(tst_audio_device_config_roundtrip)
+
+# ── Phase 3O Sub-Phase 12 Task 12.2 Step 0: AudioEngine speakers live-reconfig ─
+# Verifies speakersConfigChanged / headphonesConfigChanged / txInputConfigChanged
+# / vaxConfigChanged signals, mutex safety in rxBlockReady (try_lock), and
+# setSpeakersConfig no-crash while audio is simulated. Uses NEREUS_BUILD_TESTS
+# seam for debounce bypass and fake bus injection.
+nereus_add_test(tst_audio_engine_speakers_live_reconfig)
+target_compile_definitions(tst_audio_engine_speakers_live_reconfig PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3O Sub-Phase 12 Task 12.2 Step 0: MasterOutputWidget signal refresh ──
+# Verifies that speakersConfigChanged → onSpeakersConfigChanged syncs the widget's
+# device-name anchor without emitting outputDeviceChanged (sync-from-engine path,
+# not a user action). 5 test cases; runs on all platforms.
+nereus_add_test(tst_master_output_widget_signal_refresh)
+
+# ── Phase 3O Sub-Phase 12 Task 12.2: DeviceCard widget ─────────────────────────
+# Verifies construction (Output, Input, enableCheckbox), currentConfig(),
+# updateNegotiatedPill(), AppSettings round-trip, configChanged emission,
+# and enabledChanged emission. 10 test cases.
+nereus_add_test(tst_device_card)
