@@ -36,6 +36,16 @@
 //                 (m_vaxTxBus) so 3rd-party apps see the virtual devices the
 //                 moment audio is running. Windows BYO wiring deferred to
 //                 Sub-Phase 9.
+//   2026-04-20 — Sub-Phase 10 Task 10a master-mute API by J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code. Adds
+//                 setMasterMuted / masterMuted / masterMutedChanged
+//                 mirroring the existing setVolume pattern. Mute gates the
+//                 speakers push in rxBlockReady ONLY — VAX taps continue to
+//                 run regardless (per-channel VAX mute lives in the VAX
+//                 applet; the local monitor mute must not silence 3rd-party
+//                 apps consuming VAX). Persistence + UI (MasterOutputWidget)
+//                 land in Task 10b. Design spec:
+//                 docs/architecture/2026-04-19-vax-design.md §5.4 and §6.3.
 //   2026-04-20 — Sub-Phase 9 Task 9.2a per-channel VAX rx gain + mute + tx
 //                 gain by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code. Adds std::atomic storage for m_vaxRxGain[1..4],
@@ -148,6 +158,14 @@ public:
     void setVolume(float volume);
     float volume() const { return m_masterVolume.load(std::memory_order_acquire); }
 
+    // Master mute. Read on the DSP thread, written on the main thread.
+    // Gates the speakers push in rxBlockReady ONLY — VAX taps run
+    // regardless (per-channel VAX mute is owned by the VAX applet, not
+    // AudioEngine). Sub-Phase 10 Task 10a; persistence + menu-bar
+    // MasterOutputWidget wiring land in Task 10b.
+    void setMasterMuted(bool muted);
+    bool masterMuted() const { return m_masterMuted.load(std::memory_order_acquire); }
+
     // Per-channel VAX controls (Sub-Phase 9 Task 9.2a). Main-thread writes,
     // audio-thread reads, via std::atomic — matches the setVolume /
     // m_masterVolume handshake. `channel` is 1..4; out-of-range calls are
@@ -170,6 +188,7 @@ public:
 
 signals:
     void volumeChanged(float volume);
+    void masterMutedChanged(bool muted);
     void vaxRxGainChanged(int channel, float gain);
     void vaxMutedChanged(int channel, bool muted);
     void vaxTxGainChanged(float gain);
@@ -218,6 +237,11 @@ private:
     // the DSP thread. Atomic for the cross-thread handshake per
     // CLAUDE.md C++ style guide.
     std::atomic<float> m_masterVolume{0.5f};
+
+    // Written by setMasterMuted() on the UI thread, read by
+    // rxBlockReady() on the DSP thread. Same acq_rel / acquire pairing
+    // as m_masterVolume above.
+    std::atomic<bool> m_masterMuted{false};
 
     // Sub-Phase 9 Task 9.2a — per-channel VAX rx gain / mute and master
     // VAX tx gain. Main-thread writes via set*() setters, DSP-thread
