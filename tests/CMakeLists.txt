@@ -204,3 +204,9 @@ nereus_add_test(tst_audio_engine_vax_gain)
 # ── Phase 3O Sub-Phase 9 Task 9.2b: VaxApplet smoke tests ────────────────────
 # Widget-level construction, signal plumbing, AppSettings round-trip.
 nereus_add_test(tst_vax_applet)
+
+# ── Phase 3O Sub-Phase 9 Task 9.2c: SpectrumOverlayPanel VAX Ch wiring ───────
+# setRadioModel() binds the left-edge overlay's VAX Ch combo to slice 0's
+# vaxChannel() bidirectionally; IQ Ch stays disabled (feature-flagged per
+# design spec §6.7/§11.3).
+nereus_add_test(tst_spectrum_overlay_panel)

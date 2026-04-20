@@ -26,9 +26,20 @@
 //                 via Anthropic Claude Code.
 //                 Ported from AetherSDR `src/gui/SpectrumOverlayMenu.{h,cpp}`
 //                 (left button strip + 5 flyout panels).
+//   2026-04-20 — Phase 3O Sub-Phase 9 Task 9.2c (issue #70 fold-in):
+//                 added setRadioModel() so the previously-disabled VAX Ch
+//                 combo on the left-edge overlay is now wired bidirectionally
+//                 to slice 0's vaxChannel() with echo prevention. IQ Ch
+//                 stays feature-flagged off (design spec §6.7/§11.3 —
+//                 audio/SendIqToVax stored-but-not-active). J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "SpectrumOverlayPanel.h"
+
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 #include <QPushButton>
 #include <QComboBox>
@@ -1013,14 +1024,33 @@ void SpectrumOverlayPanel::buildVaxFlyout()
         lbl->setStyleSheet(kLabelStyle);
         row->addWidget(lbl);
         m_vaxCmb = new QComboBox;
+        m_vaxCmb->setObjectName(QStringLiteral("vaxCombo"));
         m_vaxCmb->addItems({"Off", "1", "2", "3", "4"});
+        // Disabled until setRadioModel() binds slice 0; retains the
+        // pre-3O tooltip in that transient state.
         m_vaxCmb->setEnabled(false);
-        m_vaxCmb->setToolTip("VAX channel (NYI Phase 3-VAX)");
+        m_vaxCmb->setToolTip("VAX channel (not yet bound to a radio model)");
         row->addWidget(m_vaxCmb, 1);
         vb->addLayout(row);
+
+        // Widget → Model: user picks a channel → slice 0 setVaxChannel.
+        // Combo index 0 = "Off" = vaxChannel 0; indices 1..4 = VAX 1..4
+        // (1:1 mapping, matches the header ordering above).
+        connect(m_vaxCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this](int idx) {
+            if (m_updatingFromModel || !m_radioModel) {
+                return;
+            }
+            SliceModel* s = m_radioModel->sliceAt(0);
+            if (s) {
+                s->setVaxChannel(idx);
+            }
+        });
     }
 
-    // IQ Ch combo
+    // IQ Ch combo — reserved for a future phase (design spec §11.3).
+    // audio/SendIqToVax is stored-but-not-active per spec §6.7; the combo
+    // stays disabled until a consumer of the I/Q-to-VAX path exists.
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
@@ -1028,15 +1058,95 @@ void SpectrumOverlayPanel::buildVaxFlyout()
         lbl->setStyleSheet(kLabelStyle);
         row->addWidget(lbl);
         m_vaxIqCmb = new QComboBox;
+        m_vaxIqCmb->setObjectName(QStringLiteral("vaxIqCombo"));
         m_vaxIqCmb->addItems({"None", "1", "2", "3", "4"});
         m_vaxIqCmb->setEnabled(false);
-        m_vaxIqCmb->setToolTip("VAX IQ channel (NYI Phase 3-VAX)");
+        m_vaxIqCmb->setToolTip("IQ-stream to VAX \u2014 reserved for future phase (design spec \u00a711.3)");
         row->addWidget(m_vaxIqCmb, 1);
         vb->addLayout(row);
     }
 
     m_vaxFlyout->setFixedWidth(140);
     m_vaxFlyout->adjustSize();
+}
+
+// Phase 3O Sub-Phase 9 Task 9.2c — bind the VAX Ch combo to slice 0.
+//
+// Widget → Model: the QComboBox::currentIndexChanged lambda installed in
+// buildVaxFlyout() calls slice 0's setVaxChannel() (and gates on
+// m_updatingFromModel to suppress the echo).
+// Model → Widget: this function stores the vaxChannelChanged connection in
+// m_vaxChannelConn so a rebind can cleanly disconnect before reconnecting
+// to a new slice. QObject auto-disconnect handles the model-destroyed case
+// for free; a live-to-live rebind needs the explicit disconnect we do here.
+void SpectrumOverlayPanel::setRadioModel(RadioModel* model)
+{
+    if (m_radioModel == model) {
+        return;
+    }
+
+    // Drop any prior Model→Widget subscription. Safe when the stored
+    // connection is default-constructed (QObject::disconnect() no-ops on
+    // an invalid Connection handle).
+    if (m_vaxChannelConn) {
+        QObject::disconnect(m_vaxChannelConn);
+        m_vaxChannelConn = {};
+    }
+
+    m_radioModel = model;
+
+    if (!m_vaxCmb) {
+        return;  // defensive: flyout builder has not run yet
+    }
+
+    if (!m_radioModel) {
+        // Unbound — revert to the pre-3O disabled state.
+        m_vaxCmb->setEnabled(false);
+        m_vaxCmb->setToolTip("VAX channel (not yet bound to a radio model)");
+        return;
+    }
+
+    SliceModel* s = m_radioModel->sliceAt(0);
+    if (s) {
+        // Seed the combo with the current model value before wiring up
+        // the listener, using the flag pattern so no spurious setVaxChannel
+        // is issued back to the slice.
+        m_updatingFromModel = true;
+        m_vaxCmb->setCurrentIndex(s->vaxChannel());
+        m_updatingFromModel = false;
+
+        m_vaxChannelConn = connect(s, &SliceModel::vaxChannelChanged,
+                                   this, [this](int ch) {
+            if (!m_vaxCmb) {
+                return;
+            }
+            m_updatingFromModel = true;
+            m_vaxCmb->setCurrentIndex(ch);
+            m_updatingFromModel = false;
+        });
+
+        m_vaxCmb->setEnabled(true);
+        m_vaxCmb->setToolTip("Route this slice's RX audio to a VAX channel");
+    } else {
+        // Slice 0 has not been created yet (typically because
+        // RadioModel::connectToRadio() has not run). Defer enabling the
+        // combo until sliceAdded fires for index 0, then re-run this
+        // function so the bind path above catches it.
+        m_vaxCmb->setEnabled(false);
+        m_vaxCmb->setToolTip("VAX channel (waiting for slice 0)");
+        connect(m_radioModel, &RadioModel::sliceAdded, this,
+                [this](int index) {
+            if (index != 0 || !m_radioModel) {
+                return;
+            }
+            // Re-entry guard: setRadioModel() no-ops when model is already
+            // bound, so force a rebind by temporarily clearing the cached
+            // pointer. Simpler than duplicating the bind logic here.
+            RadioModel* model = m_radioModel;
+            m_radioModel = nullptr;
+            setRadioModel(model);
+        });
+    }
 }
 
 void SpectrumOverlayPanel::toggleVaxFlyout()

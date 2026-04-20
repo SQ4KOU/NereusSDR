@@ -450,6 +450,11 @@ void MainWindow::buildUI()
     m_overlayPanel->move(4, 4);
     m_overlayPanel->show();
 
+    // Phase 3O Sub-Phase 9 Task 9.2c — bind the overlay's VAX Ch combo to
+    // the RadioModel. The combo stays disabled until slice 0 exists
+    // (setRadioModel listens to sliceAdded), then flips live.
+    m_overlayPanel->setRadioModel(m_radioModel);
+
     // Zoom slider bar below spectrum
     auto* zoomBar = new QSlider(Qt::Horizontal, spectrumPane);
     zoomBar->setRange(1, 768);
