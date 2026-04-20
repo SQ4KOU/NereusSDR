@@ -193,3 +193,10 @@ nereus_add_test(tst_virtual_cable_detector)
 # seam on AudioEngine. No real CoreAudioHalBus / LinuxPipeBus / PortAudio
 # backend required — runs on every platform.
 nereus_add_test(tst_audio_engine_vax_tee)
+
+# ── Phase 3O Sub-Phase 9 Task 9.2a: AudioEngine VAX gain/mute/tx-gain ────────
+# Exercises setVaxRxGain / setVaxMuted / setVaxTxGain and their effect on the
+# rxBlockReady tee — unity passthrough, half-gain scaling, muted-skip, signal
+# emission, clamp-to-range, invalid-channel no-op. Same FakeAudioBus harness
+# as tst_audio_engine_vax_tee.
+nereus_add_test(tst_audio_engine_vax_gain)
