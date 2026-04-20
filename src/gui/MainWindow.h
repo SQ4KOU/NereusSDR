@@ -75,7 +75,6 @@
 #include <QActionGroup>
 #include <QTimer>
 
-class QPushButton;
 class QProgressDialog;
 class QThread;
 class QSplitter;
@@ -93,6 +92,7 @@ class ClarityController;
 class ContainerManager;
 class MeterWidget;
 class MeterPoller;
+class TitleBar;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -216,11 +216,12 @@ private:
     // Spectrum overlay panel
     class SpectrumOverlayPanel* m_overlayPanel{nullptr};
 
-    // Phase 3G-14: Issue reporter corner widget
-    QPushButton* m_featureBtn{nullptr};
-
     // Applet panel — scrollable content widget inside Container #0
     class AppletPanelWidget* m_appletPanel{nullptr};
+
+    // Phase 3O Sub-Phase 10 Task 10c: host strip for the menu bar +
+    // MasterOutputWidget. Owned by QMainWindow via setMenuWidget().
+    TitleBar* m_titleBar{nullptr};
 };
 
 } // namespace NereusSDR
