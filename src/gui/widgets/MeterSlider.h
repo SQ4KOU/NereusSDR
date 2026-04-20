@@ -130,8 +130,9 @@ protected:
     }
 
     void mouseReleaseEvent(QMouseEvent* e) override {
-        if (e->button() == Qt::LeftButton)
+        if (e->button() == Qt::LeftButton) {
             m_dragging = false;
+        }
     }
 
 private:
