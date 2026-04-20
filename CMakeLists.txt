@@ -373,6 +373,8 @@ set(GUI_SOURCES
     src/gui/widgets/FilterPassbandWidget.cpp
     src/gui/widgets/GuardedComboBox.h
     src/gui/widgets/GuardedSlider.h
+    src/gui/widgets/MeterSlider.h
+    src/gui/widgets/MeterSlider.cpp
     src/gui/widgets/ResetSlider.h
     src/gui/widgets/ScrollableLabel.cpp
     src/gui/widgets/TriBtn.h

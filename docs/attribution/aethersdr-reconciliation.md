@@ -113,6 +113,8 @@ claim), or when 25a couldn't positively disprove the claim.
 | `src/gui/widgets/ScrollableLabel.cpp` | Same | Inline lines 1-2 cite the same AetherSDR file/lines. | Same. |
 | `src/gui/widgets/FilterPassbandWidget.h` | `src/gui/FilterPassbandWidget.h` | File header line 3: "Ported from AetherSDR src/gui/FilterPassbandWidget.h". | "Ported from AetherSDR `src/gui/FilterPassbandWidget.h`." |
 | `src/gui/widgets/FilterPassbandWidget.cpp` | `src/gui/FilterPassbandWidget.cpp` | File header line 2: "Ported from AetherSDR src/gui/FilterPassbandWidget.cpp". 14 inline `// From AetherSDR FilterPassbandWidget.cpp lines X-Y` citations. | "Ported from AetherSDR `src/gui/FilterPassbandWidget.cpp` (filter low/high drag + shift-band visualisation)." |
+| `src/gui/widgets/MeterSlider.h` | `src/gui/MeterSlider.h` | File header port-citation block: "Ported from AetherSDR source: src/gui/MeterSlider.h". Composite horizontal level-meter + gain-slider; logic is header-inline, `.cpp` is the MOC trigger only. Phase 3O Sub-Phase 9 Task 9.1; dependency of VaxApplet. | "Composite level-meter + gain-slider widget ported from AetherSDR `src/gui/MeterSlider.{h,cpp}` (pure paint + mouse; logic header-inline, `.cpp` is MOC trigger). Used by `VaxApplet`." |
+| `src/gui/widgets/MeterSlider.cpp` | `src/gui/MeterSlider.cpp` | File header port-citation: "Ported from AetherSDR src/gui/MeterSlider.cpp". MOC trigger only — matches the AetherSDR shape (single `#include "MeterSlider.h"`). | Same as `MeterSlider.h`. |
 
 ### Applet layouts (style/geometry borrowed, DSP wiring native)
 
