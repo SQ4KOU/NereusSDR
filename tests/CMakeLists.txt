@@ -168,3 +168,6 @@ nereus_add_test(tst_signal_text_preset_item)
 
 # ── Edit Container refactor: Task 7 — HistoryGraphPresetItem (local) ─────
 nereus_add_test(tst_history_graph_preset_item)
+
+# ── Edit Container refactor: Task 8 — VfoDisplayPresetItem (local) ───────
+nereus_add_test(tst_vfo_display_preset_item)
