@@ -207,6 +207,12 @@ private:
     QMetaObject::Connection  m_vaxChannelConn;
     bool                     m_updatingFromModel{false};
 
+    // Seat (or re-seat) the Model→Widget subscription onto whichever
+    // SliceModel currently occupies index 0. Called from setRadioModel()
+    // at bind time AND from the sliceAdded/sliceRemoved listeners so a
+    // late-arriving or reshuffled slice 0 rebinds cleanly.
+    void bindToSliceZero();
+
     // ── Waterfall zoom buttons (bottom-left of spectrum widget) ──────────
     QWidget*     m_zoomStrip{nullptr};   // container for the 4 zoom buttons
     QPushButton* m_zoomSegBtn{nullptr};

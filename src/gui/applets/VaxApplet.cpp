@@ -318,6 +318,13 @@ void VaxApplet::connectSliceTagsTracking()
         updateTagsLabels();
     });
 
+    // Slice removal drops all per-slice signals (QObject auto-disconnect),
+    // but the tag view still references the old sliceIndex letters until a
+    // subsequent vaxChannelChanged / txSliceChanged fires elsewhere. Refresh
+    // on removal so deleted slices clear out of the tag row immediately.
+    connect(m_model, &RadioModel::sliceRemoved, this,
+            [this](int) { updateTagsLabels(); });
+
     // Also scan existing slices so tags populate correctly when the
     // applet is constructed after slices already exist (e.g. restored
     // from persistence on app start).

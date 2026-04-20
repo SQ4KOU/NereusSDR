@@ -147,7 +147,43 @@ private slots:
                                        Qt::CaseInsensitive));
     }
 
-    // ── 6. setRadioModel before any slice exists defers the bind ───────
+    // ── 6. Removing slice 0 disables the combo; replacing it rebinds ───
+    void sliceZeroReplacedRebindsCombo() {
+        RadioModel radio;
+        radio.addSlice();  // slice 0 (A)
+        SliceModel* first = radio.sliceAt(0);
+        QVERIFY(first);
+        first->setVaxChannel(2);
+
+        PanelHarness h;
+        h.panel->setRadioModel(&radio);
+
+        QComboBox* combo = vaxCombo(h);
+        QVERIFY(combo);
+        QCOMPARE(combo->currentIndex(), 2);
+        QVERIFY(combo->isEnabled());
+
+        // Remove slice 0. The combo should reset to Off and disable.
+        // `first` is now dangling — do not dereference it below.
+        radio.removeSlice(0);
+        QCOMPARE(combo->currentIndex(), 0);
+        QVERIFY(!combo->isEnabled());
+
+        // Add a replacement slice; the combo must rebind to the new
+        // slice (Model→Widget) and route writes back (Widget→Model).
+        radio.addSlice();
+        SliceModel* second = radio.sliceAt(0);
+        QVERIFY(second);
+        QVERIFY(combo->isEnabled());
+
+        second->setVaxChannel(4);
+        QCOMPARE(combo->currentIndex(), 4);
+
+        combo->setCurrentIndex(1);
+        QCOMPARE(second->vaxChannel(), 1);
+    }
+
+    // ── 7. setRadioModel before any slice exists defers the bind ───────
     void setRadioModelDefersWhenNoSlice() {
         RadioModel radio;  // no slices yet
 

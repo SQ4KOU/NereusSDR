@@ -1106,6 +1106,38 @@ void SpectrumOverlayPanel::setRadioModel(RadioModel* model)
         return;
     }
 
+    // Always listen for slice 0 add/remove so a later lifecycle event —
+    // slice 0 created after bind, or slice 0 destroyed and another slice
+    // promoted into index 0 — can re-seat the Model→Widget connection.
+    // The lambdas call bindToSliceZero(), which is the same bind logic
+    // used below for the initial seating.
+    const auto rebindOnSliceZero = [this](int index) {
+        if (index != 0) {
+            return;
+        }
+        bindToSliceZero();
+    };
+    connect(m_radioModel, &RadioModel::sliceAdded,   this, rebindOnSliceZero);
+    connect(m_radioModel, &RadioModel::sliceRemoved, this, rebindOnSliceZero);
+
+    bindToSliceZero();
+}
+
+void SpectrumOverlayPanel::bindToSliceZero()
+{
+    if (!m_vaxCmb || !m_radioModel) {
+        return;
+    }
+
+    // Drop any prior Model→Widget subscription. QObject auto-disconnect
+    // already handles the destroyed-slice case, but a live slice that is
+    // no longer index 0 (after a sliceRemoved shuffle) needs the explicit
+    // disconnect.
+    if (m_vaxChannelConn) {
+        QObject::disconnect(m_vaxChannelConn);
+        m_vaxChannelConn = {};
+    }
+
     SliceModel* s = m_radioModel->sliceAt(0);
     if (s) {
         // Seed the combo with the current model value before wiring up
@@ -1128,24 +1160,15 @@ void SpectrumOverlayPanel::setRadioModel(RadioModel* model)
         m_vaxCmb->setEnabled(true);
         m_vaxCmb->setToolTip("Route this slice's RX audio to a VAX channel");
     } else {
-        // Slice 0 has not been created yet (typically because
-        // RadioModel::connectToRadio() has not run). Defer enabling the
-        // combo until sliceAdded fires for index 0, then re-run this
-        // function so the bind path above catches it.
+        // No slice 0 — typically the pre-connectToRadio() state, or a
+        // transient window during slice teardown. The sliceAdded listener
+        // installed by setRadioModel() will call us again when slice 0
+        // comes (back) online.
+        m_updatingFromModel = true;
+        m_vaxCmb->setCurrentIndex(0);
+        m_updatingFromModel = false;
         m_vaxCmb->setEnabled(false);
         m_vaxCmb->setToolTip("VAX channel (waiting for slice 0)");
-        connect(m_radioModel, &RadioModel::sliceAdded, this,
-                [this](int index) {
-            if (index != 0 || !m_radioModel) {
-                return;
-            }
-            // Re-entry guard: setRadioModel() no-ops when model is already
-            // bound, so force a rebind by temporarily clearing the cached
-            // pointer. Simpler than duplicating the bind logic here.
-            RadioModel* model = m_radioModel;
-            m_radioModel = nullptr;
-            setRadioModel(model);
-        });
     }
 }
 

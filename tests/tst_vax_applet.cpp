@@ -179,6 +179,31 @@ private slots:
         }
         QVERIFY2(found, "No label contained 'Slice A' after assignment to VAX 2");
     }
+
+    // ── 7. Removing a slice refreshes the tag row back to placeholders ──
+    void sliceRemovedClearsTagLabel() {
+        Harness h = makeHarness();
+
+        const int idx = h.radio->addSlice();
+        SliceModel* s = h.radio->sliceAt(idx);
+        QVERIFY(s);
+        s->setSliceIndex(0);
+        s->setVaxChannel(3);
+
+        auto hasSliceA = [&]() {
+            for (QLabel* l : h.applet->findChildren<QLabel*>()) {
+                if (l->text().contains(QStringLiteral("Slice A"))) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        QVERIFY(hasSliceA());
+
+        h.radio->removeSlice(idx);
+        QVERIFY2(!hasSliceA(),
+                 "Tag label still shows 'Slice A' after the slice was removed");
+    }
 };
 
 QTEST_MAIN(TstVaxApplet)
