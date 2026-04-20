@@ -264,6 +264,7 @@ warren@wpratt.com
 */
 
 #include "VfoWidget.h"
+#include "VaxChannelSelector.h"
 #include "gui/applets/NyiOverlay.h"
 
 #include <QPainter>
@@ -373,14 +374,19 @@ void VfoWidget::buildUI()
 
     buildXRitTab();
 
-    // Stub VAX tab
-    auto* vaxWidget = new QWidget;
-    auto* vaxLayout = new QVBoxLayout(vaxWidget);
-    vaxLayout->setContentsMargins(4, 4, 4, 4);
-    auto* vaxLabel = new QLabel(QStringLiteral("VAX"), vaxWidget);
-    vaxLabel->setStyleSheet(QStringLiteral("color: #6888a0; font-size: 11px;"));
-    vaxLayout->addWidget(vaxLabel);
-    m_tabStack->addWidget(vaxWidget);
+    // VAX tab — Phase 3O Sub-Phase 8 Task 8.2. Hosts VaxChannelSelector
+    // (visible only when the VAX tab is active, same as every other mode tab).
+    auto* vaxTabWidget = new QWidget;
+    auto* vaxTabLayout = new QHBoxLayout(vaxTabWidget);
+    vaxTabLayout->setContentsMargins(10, 4, 10, 4);
+    vaxTabLayout->setSpacing(3);
+    auto* vaxTabLbl = new QLabel(QStringLiteral("VAX"), vaxTabWidget);
+    vaxTabLbl->setStyleSheet(QStringLiteral("color:#8090a0;font-size:10px;"));
+    vaxTabLayout->addWidget(vaxTabLbl);
+    m_vaxSelector = new VaxChannelSelector(vaxTabWidget);
+    vaxTabLayout->addWidget(m_vaxSelector);
+    vaxTabLayout->addStretch(1);
+    m_tabStack->addWidget(vaxTabWidget);
 
     mainLayout->addWidget(m_tabStack);
     m_tabStack->hide();  // Hidden by default — click tab to expand
@@ -1733,6 +1739,19 @@ void VfoWidget::setBinauralEnabled(bool v)
 
 void VfoWidget::setSlice(SliceModel* slice)
 {
+    // Drop prior VAX bindings before m_slice is reassigned — otherwise a
+    // repeat setSlice() leaks connections: each click would re-invoke the
+    // old lambda, and vaxChannelChanged from a stale SliceModel could
+    // clobber the selector away from the currently bound slice.
+    if (m_vaxSelector) {
+        if (m_slice) {
+            disconnect(m_slice, &SliceModel::vaxChannelChanged,
+                       m_vaxSelector, &VaxChannelSelector::setValue);
+        }
+        disconnect(m_vaxSelector, &VaxChannelSelector::valueChanged,
+                   this, nullptr);
+    }
+
     m_slice = QPointer<SliceModel>(slice);
     if (m_fmContainer) {
         m_fmContainer->setSlice(slice);
@@ -1742,6 +1761,20 @@ void VfoWidget::setSlice(SliceModel* slice)
     }
     if (m_rttyContainer) {
         m_rttyContainer->setSlice(slice);
+    }
+
+    // VAX selector — bidirectional wiring (Phase 3O Sub-Phase 8 Task 8.2)
+    if (m_vaxSelector && slice) {
+        connect(m_vaxSelector, &VaxChannelSelector::valueChanged,
+                this, [this](int ch) {
+            if (m_slice) {
+                m_slice->setVaxChannel(ch);
+            }
+        });
+        connect(slice, &SliceModel::vaxChannelChanged,
+                m_vaxSelector, &VaxChannelSelector::setValue);
+        // Sync widget to current model state (e.g. restored from AppSettings)
+        m_vaxSelector->setValue(slice->vaxChannel());
     }
 }
 
