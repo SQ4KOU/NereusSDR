@@ -147,3 +147,6 @@ nereus_add_test(tst_step_attenuator_controller)
 
 # ── About dialog ─────────────────────────────────────────────────────────
 nereus_add_test(tst_about_dialog)
+
+# ── Edit Container refactor: Task 1 — AnanMultiMeterItem ─────────────────
+nereus_add_test(tst_anan_multi_meter_item)
