@@ -124,8 +124,9 @@ protected:
     }
 
     void mouseMoveEvent(QMouseEvent* e) override {
-        if (m_dragging)
+        if (m_dragging) {
             updateGainFromMouse(e->pos().x());
+        }
     }
 
     void mouseReleaseEvent(QMouseEvent* e) override {
