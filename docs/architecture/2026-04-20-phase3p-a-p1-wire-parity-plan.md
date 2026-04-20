@@ -10,7 +10,7 @@
 
 **Spec:** [`docs/architecture/2026-04-20-all-board-radio-control-parity-spec.md`](2026-04-20-all-board-radio-control-parity-spec.md) §6 (Phase A in full).
 
-**Upstream version stamps used in this plan:** `[ramdor 501e3f5]` · `[mi0bot c26a8a4]`
+**Upstream version stamps used in this plan:** `[@501e3f5]` · `[@c26a8a4]`
 
 ---
 
@@ -23,7 +23,7 @@
 5. Byte-identical output vs pre-refactor main for every non-HL2 board (regression-freeze test green).
 6. `verify-thetis-headers.py` + `check-new-ports.py` + `verify-inline-cites.py` pass.
 7. 5 new rows in `docs/attribution/THETIS-PROVENANCE.md`.
-8. Every ported logic block in the 6 new files has a `[ramdor 501e3f5]` and/or `[mi0bot c26a8a4]` stamp.
+8. Every ported logic block in the 6 new files has a `[@501e3f5]` and/or `[@c26a8a4]` stamp.
 9. No regression in existing P1 test suite (especially `tst_p1_wire_format`, `tst_p1_loopback_connection`, `tst_reconnect_on_silence`).
 10. `CHANGELOG.md` entry under unreleased.
 
@@ -34,11 +34,11 @@
 **Created:**
 - `src/core/codec/CodecContext.h` — POD: MOX bit, per-ADC step ATT (RX + TX), per-ADC preamp, Alex HPF/LPF bits, TX drive, freq words, OC byte. NereusSDR-original; no attribution row.
 - `src/core/codec/IP1Codec.h` — interface with `composeCcForBank`, `maxBank`, `usesI2cIntercept`. NereusSDR-original; no attribution row.
-- `src/core/codec/AlexFilterMap.{h,cpp}` — pure functions `computeHpf(freqMhz)` / `computeLpf(freqMhz)`. Ports `Console/console.cs:6830-6942, 7168-7234` `[ramdor 501e3f5]`. Variant `thetis-samphire`.
-- `src/core/codec/P1CodecStandard.{h,cpp}` — ramdor `WriteMainLoop`. Ports `ChannelMaster/networkproto1.c:419-698` `[ramdor 501e3f5]`. Variant `thetis-no-samphire`.
-- `src/core/codec/P1CodecAnvelinaPro3.{h,cpp}` — extends Standard with bank 17 extra OC. Ports `networkproto1.c:668-674, 682` `[ramdor 501e3f5]`. Variant `thetis-no-samphire`.
-- `src/core/codec/P1CodecRedPitaya.{h,cpp}` — extends Standard with bank 12 ADC1 MOX carve-out. Ports `networkproto1.c:606-616` `[ramdor 501e3f5]` (DH1KLM contribution). Variant `thetis-no-samphire`.
-- `src/core/codec/P1CodecHl2.{h,cpp}` — mi0bot `WriteMainLoop_HL2`. Ports `mi0bot-Thetis/ChannelMaster/networkproto1.c:869-1201` `[mi0bot c26a8a4]`. Variant `mi0bot`.
+- `src/core/codec/AlexFilterMap.{h,cpp}` — pure functions `computeHpf(freqMhz)` / `computeLpf(freqMhz)`. Ports `Console/console.cs:6830-6942, 7168-7234` `[@501e3f5]`. Variant `thetis-samphire`.
+- `src/core/codec/P1CodecStandard.{h,cpp}` — ramdor `WriteMainLoop`. Ports `ChannelMaster/networkproto1.c:419-698` `[@501e3f5]`. Variant `thetis-no-samphire`.
+- `src/core/codec/P1CodecAnvelinaPro3.{h,cpp}` — extends Standard with bank 17 extra OC. Ports `networkproto1.c:668-674, 682` `[@501e3f5]`. Variant `thetis-no-samphire`.
+- `src/core/codec/P1CodecRedPitaya.{h,cpp}` — extends Standard with bank 12 ADC1 MOX carve-out. Ports `networkproto1.c:606-616` `[@501e3f5]` (DH1KLM contribution). Variant `thetis-no-samphire`.
+- `src/core/codec/P1CodecHl2.{h,cpp}` — mi0bot `WriteMainLoop_HL2`. Ports `mi0bot-Thetis/ChannelMaster/networkproto1.c:869-1201` `[@c26a8a4]`. Variant `mi0bot`.
 - `tests/tst_alex_filter_map.cpp` — frequency→bits assertions per spec §6.4.
 - `tests/tst_p1_codec_standard.cpp` — table-driven byte assertions for ramdor encoding.
 - `tests/tst_p1_codec_anvelina_pro3.cpp` — bank 17 extra OC.
@@ -370,7 +370,7 @@ using namespace NereusSDR::codec::alex;
 class TestAlexFilterMap : public QObject {
     Q_OBJECT
 private slots:
-    // From Thetis console.cs:6830-6942 [ramdor 501e3f5]
+    // From Thetis console.cs:6830-6942 [@501e3f5]
     void hpfBypass_under_1_5MHz()       { QCOMPARE(computeHpf(1.0),  quint8(0x20)); }
     void hpf_1_5_to_6_5_MHz()           { QCOMPARE(computeHpf(3.5),  quint8(0x10)); }
     void hpf_6_5_to_9_5_MHz()           { QCOMPARE(computeHpf(7.0),  quint8(0x08)); }
@@ -379,7 +379,7 @@ private slots:
     void hpf_20_to_50_MHz()             { QCOMPARE(computeHpf(28.0), quint8(0x02)); }
     void hpf_6m_preamp_50_MHz_and_up()  { QCOMPARE(computeHpf(50.0), quint8(0x40)); }
 
-    // From Thetis console.cs:7168-7234 [ramdor 501e3f5]
+    // From Thetis console.cs:7168-7234 [@501e3f5]
     void lpf_160m_under_2MHz()  { QCOMPARE(computeLpf(1.9),   quint8(0x08)); }
     void lpf_80m_2_to_4_MHz()   { QCOMPARE(computeLpf(3.8),   quint8(0x04)); }
     void lpf_60_40m()           { QCOMPARE(computeLpf(7.1),   quint8(0x02)); }
@@ -471,13 +471,13 @@ namespace NereusSDR::codec::alex {
 // Frequency → Alex HPF select bits (bank 10 C3 in the P1 packet,
 // or bytes 1432-1435 in the P2 CmdHighPriority packet).
 //
-// From Thetis console.cs:6830-6942 [ramdor 501e3f5]
+// From Thetis console.cs:6830-6942 [@501e3f5]
 quint8 computeHpf(double freqMhz);
 
 // Frequency → Alex LPF select bits (bank 10 C4 in the P1 packet,
 // or bytes 1428-1431 in the P2 CmdHighPriority packet).
 //
-// From Thetis console.cs:7168-7234 [ramdor 501e3f5]
+// From Thetis console.cs:7168-7234 [@501e3f5]
 quint8 computeLpf(double freqMhz);
 
 } // namespace NereusSDR::codec::alex
@@ -499,7 +499,7 @@ quint8 computeLpf(double freqMhz);
 
 namespace NereusSDR::codec::alex {
 
-// From Thetis console.cs:6830-6942 [ramdor 501e3f5]
+// From Thetis console.cs:6830-6942 [@501e3f5]
 // Decision rationale: spec §6.3.1
 quint8 computeHpf(double freqMhz)
 {
@@ -512,7 +512,7 @@ quint8 computeHpf(double freqMhz)
     return 0x40;                             // 6m preamp
 }
 
-// From Thetis console.cs:7168-7234 [ramdor 501e3f5]
+// From Thetis console.cs:7168-7234 [@501e3f5]
 // Decision rationale: spec §6.3.1
 quint8 computeLpf(double freqMhz)
 {
@@ -578,7 +578,7 @@ correctly ported but only used by P2) into src/core/codec/ so P1 can
 share the same Thetis-canonical math. Per spec §6.4. P2 still gets
 byte-identical output (verified in Task 14).
 
-Ports console.cs:6830-6942 + 7168-7234 [ramdor 501e3f5]. Verbatim
+Ports console.cs:6830-6942 + 7168-7234 [@501e3f5]. Verbatim
 upstream header preserved. PROVENANCE row added.
 
 Tests: tst_alex_filter_map covers all 7 HPF buckets, all 7 LPF buckets,
@@ -623,7 +623,7 @@ private slots:
     }
 
     // Table-driven: every (bank × scenario) row asserts the 5-byte output.
-    // Citations on each row reference networkproto1.c [ramdor 501e3f5]
+    // Citations on each row reference networkproto1.c [@501e3f5]
     // unless explicitly noted.
     void compose_data() {
         QTest::addColumn<int>("bank");
@@ -636,42 +636,42 @@ private slots:
         QTest::addColumn<QByteArray>("ctx_overrides_json");
 
         // Bank 0 — sample rate 48k, no MOX, NDDC=1, antenna 0
-        // Source: networkproto1.c:446-471 [ramdor 501e3f5]
+        // Source: networkproto1.c:446-471 [@501e3f5]
         QTest::newRow("bank0_rx_48k_ant0")
             << 0 << false
             << 0x00 << 0x00 << 0x00 << 0x00 << 0x04
             << QByteArray(R"({"sampleRateCode":0,"activeRxCount":1,"antennaIdx":0})");
 
         // Bank 11 — RX ATT 20 dB, no MOX (5-bit mask + 0x20 enable)
-        // Source: networkproto1.c:601 [ramdor 501e3f5]
+        // Source: networkproto1.c:601 [@501e3f5]
         QTest::newRow("bank11_rx_att_20dB_ramdor_encoding")
             << 11 << false
             << 0x14 << 0x00 << 0x00 << 0x00 << ((20 & 0x1F) | 0x20)
             << QByteArray(R"({"rxStepAttn":[20,0,0]})");
 
         // Bank 11 — RX ATT 31 dB max
-        // Source: networkproto1.c:601 [ramdor 501e3f5]
+        // Source: networkproto1.c:601 [@501e3f5]
         QTest::newRow("bank11_rx_att_31dB_max")
             << 11 << false
             << 0x14 << 0x00 << 0x00 << 0x00 << ((31 & 0x1F) | 0x20)
             << QByteArray(R"({"rxStepAttn":[31,0,0]})");
 
         // Bank 12 — ADC1 ATT during RX (no MOX), value 7
-        // Source: networkproto1.c:606-616 [ramdor 501e3f5]
+        // Source: networkproto1.c:606-616 [@501e3f5]
         QTest::newRow("bank12_rx_adc1_att_7dB")
             << 12 << false
             << 0x16 << ((7 & 0xFF) | 0x20) << ((0 & 0x1F) | 0x20) << 0x00 << 0x00
             << QByteArray(R"({"rxStepAttn":[0,7,0]})");
 
         // Bank 12 — ADC1 forced to 31 dB during MOX (Standard codec — non-RedPitaya)
-        // Source: networkproto1.c:609 [ramdor 501e3f5]
+        // Source: networkproto1.c:609 [@501e3f5]
         QTest::newRow("bank12_mox_adc1_forced_31dB")
             << 12 << true
             << 0x17 << (0x1F | 0x20) << (0x00 | 0x20) << 0x00 << 0x00
             << QByteArray(R"({"rxStepAttn":[0,12,0]})");  // 12 ignored under MOX
 
         // Bank 10 — Alex HPF/LPF passthrough, PA enabled
-        // Source: networkproto1.c:583-590 [ramdor 501e3f5]
+        // Source: networkproto1.c:583-590 [@501e3f5]
         QTest::newRow("bank10_alex_passthrough_pa_on")
             << 10 << false
             << 0x12 << 0x00 << 0x40 << (0x01 | 0x80) << 0x01
@@ -847,7 +847,7 @@ void P1CodecStandard::composeCcForBank(int bank, const CodecContext& ctx,
         case 12: bank12(ctx, out); return;
 
         // Bank 1 — TX VFO
-        // Source: networkproto1.c:477-481 [ramdor 501e3f5]
+        // Source: networkproto1.c:477-481 [@501e3f5]
         case 1:
             out[0] = C0base | 0x02;
             out[1] = quint8((ctx.txFreqHz >> 24) & 0xFF);
@@ -857,7 +857,7 @@ void P1CodecStandard::composeCcForBank(int bank, const CodecContext& ctx,
             return;
 
         // Banks 2-9 — RX VFOs (0..7), one per bank
-        // Source: networkproto1.c:485-576 [ramdor 501e3f5]
+        // Source: networkproto1.c:485-576 [@501e3f5]
         case 2: case 3: case 4: case 5: case 6: case 7: case 8: case 9: {
             out[0] = C0base | quint8(0x04 + (bank - 2) * 2);
             const int rxIdx = bank - 2;
@@ -872,19 +872,19 @@ void P1CodecStandard::composeCcForBank(int bank, const CodecContext& ctx,
         }
 
         // Bank 13 — CW enable / sidetone level
-        // Source: networkproto1.c:634-638 [ramdor 501e3f5]
+        // Source: networkproto1.c:634-638 [@501e3f5]
         case 13: out[0] = C0base | 0x1E; return;
 
         // Bank 14 — CW hang / sidetone freq
-        // Source: networkproto1.c:642-646 [ramdor 501e3f5]
+        // Source: networkproto1.c:642-646 [@501e3f5]
         case 14: out[0] = C0base | 0x20; return;
 
         // Bank 15 — EER PWM
-        // Source: networkproto1.c:650-654 [ramdor 501e3f5]
+        // Source: networkproto1.c:650-654 [@501e3f5]
         case 15: out[0] = C0base | 0x22; return;
 
         // Bank 16 — BPF2
-        // Source: networkproto1.c:658-665 [ramdor 501e3f5]
+        // Source: networkproto1.c:658-665 [@501e3f5]
         case 16: out[0] = C0base | 0x24; return;
 
         default:
@@ -898,7 +898,7 @@ void P1CodecStandard::composeCcForBank(int bank, const CodecContext& ctx,
 
 // Bank 0 — General settings: sample rate, OC, preamp/dither/random,
 // antenna, duplex, NDDC, diversity.
-// Source: networkproto1.c:446-471 [ramdor 501e3f5 / mi0bot c26a8a4 — identical]
+// Source: networkproto1.c:446-471 [@501e3f5/@c26a8a4 — identical]
 void P1CodecStandard::bank0(const CodecContext& ctx, quint8 out[5]) const
 {
     out[0] = (ctx.mox ? 0x01 : 0x00) | 0x00;
@@ -916,7 +916,7 @@ void P1CodecStandard::bank0(const CodecContext& ctx, quint8 out[5]) const
 }
 
 // Bank 10 — TX drive, mic, Alex HPF/LPF, PA enable
-// Source: networkproto1.c:579-590 [ramdor 501e3f5]
+// Source: networkproto1.c:579-590 [@501e3f5]
 void P1CodecStandard::bank10(const CodecContext& ctx, quint8 out[5]) const
 {
     out[0] = (ctx.mox ? 0x01 : 0x00) | 0x12;
@@ -927,7 +927,7 @@ void P1CodecStandard::bank10(const CodecContext& ctx, quint8 out[5]) const
 }
 
 // Bank 11 — Preamp + RX step ATT ADC0 (5-bit mask + 0x20 enable)
-// Source: networkproto1.c:594-601 [ramdor 501e3f5]
+// Source: networkproto1.c:594-601 [@501e3f5]
 void P1CodecStandard::bank11(const CodecContext& ctx, quint8 out[5]) const
 {
     out[0] = (ctx.mox ? 0x01 : 0x00) | 0x14;
@@ -942,7 +942,7 @@ void P1CodecStandard::bank11(const CodecContext& ctx, quint8 out[5]) const
 }
 
 // Bank 12 — Step ATT ADC1/2 + CW keyer
-// Source: networkproto1.c:606-628 [ramdor 501e3f5]
+// Source: networkproto1.c:606-628 [@501e3f5]
 //
 // ADC1 carve-out: during MOX, force 0x1F UNLESS RedPitaya. Standard
 // codec is non-RedPitaya; RedPitaya subclass overrides this method.
@@ -1009,7 +1009,7 @@ table-driven tests covering bank 0, 10, 11, 12 (RX + MOX), and 13-16.
 Full regression-freeze gate against tests/data/p1_baseline_bytes.json
 lands in Task 15.
 
-Ports networkproto1.c:419-698 [ramdor 501e3f5]. Verbatim upstream header
+Ports networkproto1.c:419-698 [@501e3f5]. Verbatim upstream header
 preserved. PROVENANCE row added.
 
 P1RadioConnection still owns its own composeCcForBank for now; Task 11
@@ -1049,7 +1049,7 @@ private slots:
     }
 
     // Bank 17 — extra OC outputs, AnvelinaPro3 only.
-    // Source: networkproto1.c:668-674 [ramdor 501e3f5]
+    // Source: networkproto1.c:668-674 [@501e3f5]
     void bank17_extra_oc() {
         P1CodecAnvelinaPro3 codec;
         CodecContext ctx;
@@ -1114,7 +1114,7 @@ namespace NereusSDR {
 // with a 17th bank carrying extra OC pin outputs (5 additional pins
 // beyond the standard 7).
 //
-// Source: networkproto1.c:668-674 + 682 [ramdor 501e3f5]
+// Source: networkproto1.c:668-674 + 682 [@501e3f5]
 class P1CodecAnvelinaPro3 : public P1CodecStandard {
 public:
     void composeCcForBank(int bank, const CodecContext& ctx, quint8 out[5]) const override;
@@ -1138,7 +1138,7 @@ void P1CodecAnvelinaPro3::composeCcForBank(int bank, const CodecContext& ctx,
 {
     if (bank == 17) {
         // Bank 17 — AnvelinaPro3 extra OC outputs (4 bits in C1)
-        // Source: networkproto1.c:668-674 [ramdor 501e3f5]
+        // Source: networkproto1.c:668-674 [@501e3f5]
         out[0] = (ctx.mox ? 0x01 : 0x00) | 0x26;
         out[1] = quint8(ctx.ocByte & 0x0F);
         out[2] = 0;
@@ -1187,7 +1187,7 @@ ANAN-8000DLE adds a 17th C&C bank carrying extra OC pin outputs.
 Subclass of P1CodecStandard; only overrides composeCcForBank to
 intercept bank 17, delegates 0-16 to parent.
 
-Ports networkproto1.c:668-674 + 682 (end_frame logic) [ramdor 501e3f5].
+Ports networkproto1.c:668-674 + 682 (end_frame logic) [@501e3f5].
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -1224,7 +1224,7 @@ private slots:
 
     // Bank 12 — RedPitaya does NOT force 0x1F during MOX. It uses the
     // user-set rxStepAttn[1] masked to 5 bits.
-    // Source: networkproto1.c:611-613 [ramdor 501e3f5] (DH1KLM contribution)
+    // Source: networkproto1.c:611-613 [@501e3f5] (DH1KLM contribution)
     void bank12_mox_uses_user_attn_not_forced_max() {
         P1CodecRedPitaya codec;
         CodecContext ctx;
@@ -1288,7 +1288,7 @@ namespace NereusSDR {
 // During MOX, RedPitaya does NOT force ADC1 to 0x1F like other boards;
 // it respects the user-set rxStepAttn[1] masked to 5 bits.
 //
-// Source: networkproto1.c:611-613 [ramdor 501e3f5] (DH1KLM contribution)
+// Source: networkproto1.c:611-613 [@501e3f5] (DH1KLM contribution)
 class P1CodecRedPitaya : public P1CodecStandard {
 protected:
     void bank12(const CodecContext& ctx, quint8 out[5]) const override;
@@ -1308,7 +1308,7 @@ namespace NereusSDR {
 
 // Bank 12 ADC1 — RedPitaya carve-out: respect user attn even under MOX,
 // mask to 5 bits.
-// Source: networkproto1.c:611-613 [ramdor 501e3f5]
+// Source: networkproto1.c:611-613 [@501e3f5]
 //
 // "unsure why this was forced, but left as-is for all radios other than
 //  Red Pitaya" [original inline comment from networkproto1.c:607-608]
@@ -1351,7 +1351,7 @@ RedPitaya (DH1KLM port) needs different bank 12 ADC1 encoding under
 MOX — respects user-set attn instead of forcing 0x1F like other boards.
 Subclass of P1CodecStandard, overrides only the bank12() helper.
 
-Ports networkproto1.c:611-613 [ramdor 501e3f5]. Inline comment from
+Ports networkproto1.c:611-613 [@501e3f5]. Inline comment from
 upstream preserved.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
@@ -1391,7 +1391,7 @@ private slots:
     }
 
     // Bank 11 C4 — RX path: 6-bit mask + 0x40 enable
-    // Source: mi0bot networkproto1.c:1102 [mi0bot c26a8a4]
+    // Source: mi0bot networkproto1.c:1102 [@c26a8a4]
     void bank11_rx_att_20dB_hl2_encoding() {
         P1CodecHl2 codec;
         CodecContext ctx;
@@ -1404,7 +1404,7 @@ private slots:
     }
 
     // Bank 11 C4 — TX path: uses txStepAttn[0] not rxStepAttn[0]
-    // Source: mi0bot networkproto1.c:1099 [mi0bot c26a8a4]
+    // Source: mi0bot networkproto1.c:1099 [@c26a8a4]
     void bank11_tx_att_uses_tx_value() {
         P1CodecHl2 codec;
         CodecContext ctx;
@@ -1440,7 +1440,7 @@ private slots:
     }
 
     // Bank 17 — HL2 TX latency / PTT hang (NOT AnvelinaPro3 extra OC)
-    // Source: mi0bot networkproto1.c:1162-1168 [mi0bot c26a8a4]
+    // Source: mi0bot networkproto1.c:1162-1168 [@c26a8a4]
     void bank17_hl2_tx_latency_and_ptt_hang() {
         P1CodecHl2 codec;
         CodecContext ctx;
@@ -1456,7 +1456,7 @@ private slots:
     }
 
     // Bank 18 — HL2 reset on disconnect
-    // Source: mi0bot networkproto1.c:1170-1176 [mi0bot c26a8a4]
+    // Source: mi0bot networkproto1.c:1170-1176 [@c26a8a4]
     void bank18_hl2_reset_on_disconnect_set() {
         P1CodecHl2 codec;
         CodecContext ctx;
@@ -1595,7 +1595,7 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
 
     switch (bank) {
         // Bank 0 — General settings (identical to Standard / ramdor)
-        // Source: mi0bot networkproto1.c:614-639 [mi0bot c26a8a4 / matches ramdor]
+        // Source: mi0bot networkproto1.c:614-639 [@c26a8a4 / matches @501e3f5]
         case 0:
             out[0] = C0base | 0x00;
             out[1] = quint8(ctx.sampleRateCode & 0x03);
@@ -1608,7 +1608,7 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
             return;
 
         // Bank 1 — TX VFO
-        // Source: mi0bot networkproto1.c:646-650 [mi0bot c26a8a4]
+        // Source: mi0bot networkproto1.c:646-650 [@c26a8a4]
         case 1:
             out[0] = C0base | 0x02;
             out[1] = quint8((ctx.txFreqHz >> 24) & 0xFF);
@@ -1632,7 +1632,7 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
         }
 
         // Bank 10 — TX drive, mic, Alex HPF/LPF, PA (identical to Standard)
-        // Source: mi0bot networkproto1.c:748-759 [mi0bot c26a8a4]
+        // Source: mi0bot networkproto1.c:748-759 [@c26a8a4]
         case 10:
             out[0] = C0base | 0x12;
             out[1] = quint8(ctx.txDrive & 0xFF);
@@ -1642,7 +1642,7 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
             return;
 
         // Bank 11 — Preamp + RX/TX step ATT ADC0 (HL2 6-bit + MOX branch)
-        // Source: mi0bot networkproto1.c:763-769, 1099-1102 [mi0bot c26a8a4]
+        // Source: mi0bot networkproto1.c:763-769, 1099-1102 [@c26a8a4]
         case 11: {
             out[0] = C0base | 0x14;
             out[1] = quint8((ctx.rxPreamp[0] ? 0x01 : 0)
@@ -1658,7 +1658,7 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
         }
 
         // Bank 12 — Step ATT ADC1/2 (HL2 drops the RedPitaya gate)
-        // Source: mi0bot networkproto1.c:1107-1111 [mi0bot c26a8a4]
+        // Source: mi0bot networkproto1.c:1107-1111 [@c26a8a4]
         case 12:
             out[0] = C0base | 0x16;
             // HL2: ADC1 uses user attn unmasked under MOX too
@@ -1675,7 +1675,7 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
         case 16: out[0] = C0base | 0x24; return;
 
         // Bank 17 — TX latency + PTT hang (HL2-only)
-        // Source: mi0bot networkproto1.c:1162-1168 [mi0bot c26a8a4]
+        // Source: mi0bot networkproto1.c:1162-1168 [@c26a8a4]
         case 17:
             out[0] = C0base | 0x2E;
             out[3] = quint8(ctx.hl2PttHang & 0x1F);
@@ -1683,7 +1683,7 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
             return;
 
         // Bank 18 — Reset on disconnect (HL2-only)
-        // Source: mi0bot networkproto1.c:1170-1176 [mi0bot c26a8a4]
+        // Source: mi0bot networkproto1.c:1170-1176 [@c26a8a4]
         case 18:
             out[0] = C0base | 0x74;
             out[4] = quint8(ctx.hl2ResetOnDisconnect ? 0x01 : 0x00);
@@ -1756,7 +1756,7 @@ P1RadioConnection still uses its legacy composeCcForBank — Task 11
 swaps it to delegate to this codec for HL2 boards. Bug isn't actually
 fixed in userland until Task 11 lands.
 
-Ports mi0bot-Thetis networkproto1.c:869-1201 [mi0bot c26a8a4]. Verbatim
+Ports mi0bot-Thetis networkproto1.c:869-1201 [@c26a8a4]. Verbatim
 mi0bot upstream header preserved. PROVENANCE row added.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
@@ -2513,7 +2513,7 @@ Create `.github/PULL_REQUEST_TEMPLATE.md`:
 ## Attribution checklist (required for any PR adding ported code)
 - [ ] New `.h`/`.cpp` files have verbatim upstream header(s) (multi-source if applicable)
 - [ ] `docs/attribution/THETIS-PROVENANCE.md` updated in this PR
-- [ ] Every ported logic block has `[ramdor <sha>]` and/or `[mi0bot <sha>]` stamp
+- [ ] Every ported logic block has `[@<shortsha>]` (ramdor or mi0bot)` stamp
 - [ ] `python3 scripts/verify-thetis-headers.py` passes
 - [ ] `python3 scripts/check-new-ports.py` passes
 - [ ] `python3 scripts/verify-inline-cites.py` passes
@@ -2625,7 +2625,7 @@ gh pr create --title "Phase 3P-A: P1 wire-bytes parity foundation + HL2 bug fixe
 ## Attribution checklist
 - [x] New files have verbatim upstream headers (multi-source where applicable)
 - [x] THETIS-PROVENANCE.md updated in same commits
-- [x] Every ported line has `[ramdor 501e3f5]` / `[mi0bot c26a8a4]` stamp
+- [x] Every ported line has `[@501e3f5]` / `[@c26a8a4]` stamp
 - [x] verify-thetis-headers.py + check-new-ports.py + verify-inline-cites.py pass
 
 Spec: `docs/architecture/2026-04-20-all-board-radio-control-parity-spec.md` §6 (this PR implements all of Phase A)
