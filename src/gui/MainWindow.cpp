@@ -285,9 +285,11 @@ warren@wpratt.com
 #include "SpectrumOverlayPanel.h"
 #include "SetupDialog.h"
 #include "TitleBar.h"
+#include "VaxFirstRunDialog.h"
 #include "widgets/MasterOutputWidget.h"
 #include "core/AudioDeviceConfig.h"
 #include "core/AudioEngine.h"
+#include "core/audio/VirtualCableDetector.h"
 
 #include <cmath>
 
@@ -436,6 +438,15 @@ MainWindow::MainWindow(QWidget* parent)
     // Auto-reconnect to last radio — deferred so the event loop is running
     // before any signal/slot activity (e.g. discovery radioDiscovered).
     QTimer::singleShot(0, this, &MainWindow::tryAutoReconnect);
+
+    // Phase 3O Sub-Phase 11 Task 11b — VAX first-run / startup rescan.
+    // TODO(sub-phase-12-release-blocker): this hook is incomplete without
+    // Sub-Phase 12. Users who click "Skip" on the first-run dialog set
+    // audio/FirstRunComplete=True and have no in-app way back to cable
+    // binding until the Setup → Audio → VAX tab lands. See the release-
+    // gate callout in docs/architecture/2026-04-19-phase3o-vax-plan.md.
+    // Deferred via singleShot(0, ...) so the UI is fully built first.
+    QTimer::singleShot(0, this, &MainWindow::checkVaxFirstRun);
 
     // Defensive save on aboutToQuit. closeEvent is fine for ⌘Q but
     // does NOT run when the process is signaled (SIGTERM from pkill,
@@ -2675,6 +2686,126 @@ void MainWindow::tryAutoReconnect()
             m_radioModel->connectToRadio(ri);
         }
     }
+}
+
+// =============================================================================
+// Phase 3O Sub-Phase 11 Task 11b — VAX first-run / rescan hook
+// =============================================================================
+//
+// Called once from the constructor via QTimer::singleShot(0, ...). Decides
+// whether to show the VaxFirstRunDialog based on audio/FirstRunComplete
+// and a SHA-256 diff of the current detected-cable set against the stored
+// audio/LastDetectedCables fingerprint. The fingerprint is refreshed on
+// every launch regardless of whether the dialog shows, so uninstall +
+// reinstall of the same cable doesn't flag it as "new" forever.
+//
+// NereusSDR-original; no Thetis equivalent.
+void MainWindow::checkVaxFirstRun()
+{
+    auto& s = AppSettings::instance();
+    const bool firstRunDone =
+        (s.value(QStringLiteral("audio/FirstRunComplete"),
+                 QStringLiteral("False")).toString() == QStringLiteral("True"));
+
+    // Platform-specific scan. Windows surfaces only 3rd-party installable
+    // cables (the NereusSdrVax enum is reserved for a future native driver
+    // and must never be offered as a user binding target). Mac/Linux filter
+    // the raw scan down to NereusSdrVax — those entries represent the HAL
+    // plugin / pipe-source devices that the native buses create on start().
+    QVector<DetectedCable> detected;
+#if defined(Q_OS_WIN)
+    detected = VirtualCableDetector::scanThirdPartyOnly();
+#else
+    for (const auto& c : VirtualCableDetector::scan()) {
+        if (c.product == VirtualCableProduct::NereusSdrVax) {
+            detected.push_back(c);
+        }
+    }
+#endif
+
+    // Always refresh the stored fingerprint so a cable being removed +
+    // later reinstalled doesn't permanently re-flag itself as "new".
+    const QString newCsv = VirtualCableDetector::fingerprintCsv(detected);
+    const QString lastCsv = s.value(QStringLiteral("audio/LastDetectedCables"),
+                                    QString()).toString();
+    s.setValue(QStringLiteral("audio/LastDetectedCables"), newCsv);
+    s.save();
+
+    FirstRunScenario scenario;
+    QVector<DetectedCable> payload;
+
+    if (!firstRunDone) {
+#if defined(Q_OS_WIN)
+        scenario = detected.isEmpty() ? FirstRunScenario::WindowsNoCables
+                                       : FirstRunScenario::WindowsCablesFound;
+#elif defined(Q_OS_MAC)
+        scenario = FirstRunScenario::MacNative;
+#else
+        scenario = FirstRunScenario::LinuxNative;
+#endif
+        payload = detected;
+    } else {
+        // First-run already complete — only pop the dialog if NEW cables
+        // have appeared since the last launch.
+        const auto fresh = VirtualCableDetector::diffNewCables(detected, lastCsv);
+        if (fresh.isEmpty()) {
+            return;
+        }
+        scenario = FirstRunScenario::RescanNewCables;
+        payload = fresh;
+    }
+
+    auto* dlg = new VaxFirstRunDialog(scenario, payload, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+
+    // "Apply suggested" / "Apply to VAX 3 & 4" — user accepted the
+    // recommended bindings. Log-but-ignore any AudioEngine wiring failure;
+    // the design interview explicitly settled that we still mark the
+    // first-run complete so the user isn't re-ambushed on next launch.
+    connect(dlg, &VaxFirstRunDialog::applySuggested, this,
+            [this](const QVector<QPair<int, QString>>& bindings) {
+        auto* engine = m_radioModel->audioEngine();
+        if (!engine) {
+            qCWarning(lcAudio)
+                << "VAX first-run: applySuggested with no AudioEngine; "
+                   "bindings dropped" << bindings.size();
+            return;
+        }
+        for (const auto& b : bindings) {
+            AudioDeviceConfig cfg;
+            cfg.deviceName = b.second;
+            engine->setVaxConfig(b.first, cfg);
+            engine->setVaxEnabled(b.first, true);
+        }
+    });
+
+    // TODO(sub-phase-12-open-setup-audio): wire to Setup → Audio → VAX tab.
+    // Until Sub-Phase 12 lands, log-and-ignore so the dialog's
+    // "Customize…" / "Why do I need this?" affordance is at least visible
+    // in the logs when clicked.
+    connect(dlg, &VaxFirstRunDialog::openSetupAudioTab, this, []() {
+        qCInfo(lcAudio) << "VAX first-run: Customize clicked; "
+                           "Setup -> Audio -> VAX tab lands in Sub-Phase 12";
+    });
+
+    connect(dlg, &VaxFirstRunDialog::openInstallUrl, this,
+            [](const QString& url) {
+        QDesktopServices::openUrl(QUrl(url));
+    });
+
+    // Persist audio/FirstRunComplete on Accepted only (Apply / Skip /
+    // Got-it). Rejected covers Escape, window-close, and Customize — none
+    // of those should silence the dialog on next launch.
+    connect(dlg, &QDialog::finished, this, [](int result) {
+        if (result == QDialog::Accepted) {
+            auto& settings = AppSettings::instance();
+            settings.setValue(QStringLiteral("audio/FirstRunComplete"),
+                              QStringLiteral("True"));
+            settings.save();
+        }
+    });
+
+    dlg->show();
 }
 
 void MainWindow::closeEvent(QCloseEvent* event)
