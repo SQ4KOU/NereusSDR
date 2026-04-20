@@ -66,6 +66,17 @@ private slots:
         // "7.230.000 Hz" — dots are thousand seps, unit wins.
         QCOMPARE(VfoWidget::parseUserFrequency(QStringLiteral("7.230.000 Hz")), 7230000.0);
     }
+    void singleCommaWithUnitIsThousands() {
+        // "7,230 kHz" — single comma + explicit unit + 3-digit tail reads
+        // as US thousands, so this is 7,230 kHz = 7.23 MHz, not 7.23 kHz.
+        QCOMPARE(VfoWidget::parseUserFrequency(QStringLiteral("7,230 kHz")), 7230000.0);
+        QCOMPARE(VfoWidget::parseUserFrequency(QStringLiteral("7,230 Hz")), 7230.0);
+    }
+    void singleCommaWithUnitIsDecimal() {
+        // "7,23 MHz" — single comma + explicit unit + 2-digit tail reads
+        // as EU decimal: 7.23 MHz.
+        QCOMPARE(VfoWidget::parseUserFrequency(QStringLiteral("7,23 MHz")), 7230000.0);
+    }
 
     // --- Existing display-format round-trip -------------------------------
 

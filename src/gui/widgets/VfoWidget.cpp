@@ -2116,8 +2116,20 @@ double VfoWidget::parseUserFrequency(const QString& raw)
         }
         if (!hasUnit) { mult = 1.0; }
     } else if (nCommas == 1 && nDots == 0) {
-        // "7,23" — EU decimal.
-        s.replace(QLatin1Char(','), QLatin1Char('.'));
+        // Single comma — ambiguous. If a unit suffix was already parsed, a
+        // three-digit tail is a US-style thousands separator
+        // (e.g. "7,230 kHz" → 7,230 kHz), anything else is EU decimal
+        // ("7,23 MHz" → 7.23 MHz). Without a unit, fall through to EU
+        // decimal — the historical behavior — because a bare "7,23" with
+        // no grouping context reads as a decimal in every locale that
+        // writes it that way.
+        const int commaIdx  = s.indexOf(QLatin1Char(','));
+        const int tailCount = s.size() - commaIdx - 1;
+        if (hasUnit && tailCount == 3) {
+            s.remove(QLatin1Char(','));
+        } else {
+            s.replace(QLatin1Char(','), QLatin1Char('.'));
+        }
     }
     // else: at most a single '.' (C-locale ready) or a plain integer.
 
