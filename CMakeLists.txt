@@ -510,6 +510,7 @@ set(GUI_SOURCES
     src/gui/setup/KeyboardSetupPages.cpp
     src/gui/setup/DiagnosticsSetupPages.cpp
     src/gui/diagnostics/RadioStatusPage.cpp
+    src/gui/diagnostics/DiagnosticsPhaseHPages.cpp
     src/gui/applets/AppletWidget.cpp
     src/gui/applets/NyiOverlay.cpp
     src/gui/applets/AppletPanelWidget.cpp

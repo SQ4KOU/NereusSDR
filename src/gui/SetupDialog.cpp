@@ -23,6 +23,7 @@
 // Diagnostics
 #include "setup/DiagnosticsSetupPages.h"
 #include "diagnostics/RadioStatusPage.h"
+#include "diagnostics/DiagnosticsPhaseHPages.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -211,10 +212,14 @@ void SetupDialog::buildTree()
 
     // ── Diagnostics ───────────────────────────────────────────────────────────
     QTreeWidgetItem* diagnostics = addCategory("Diagnostics");
-    add(diagnostics, "Radio Status",     new RadioStatusPage(m_model));
-    add(diagnostics, "Signal Generator", new DiagSignalGeneratorPage);
-    add(diagnostics, "Hardware Tests",   new DiagHardwareTestsPage);
-    add(diagnostics, "Logging",          new DiagLoggingPage);
+    add(diagnostics, "Radio Status",       new RadioStatusPage(m_model));
+    add(diagnostics, "Connection Quality", new ConnectionQualityPage(m_model));
+    add(diagnostics, "Settings Validation",new SettingsValidationPage(m_model));
+    add(diagnostics, "Export / Import",    new ExportImportConfigPage(m_model));
+    add(diagnostics, "Logs",               new LogsPage);
+    add(diagnostics, "Signal Generator",   new DiagSignalGeneratorPage);
+    add(diagnostics, "Hardware Tests",     new DiagHardwareTestsPage);
+    add(diagnostics, "Logging",            new DiagLoggingPage);
 
     m_tree->expandAll();
 }
