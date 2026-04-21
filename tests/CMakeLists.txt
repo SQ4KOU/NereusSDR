@@ -364,3 +364,12 @@ nereus_add_test(tst_hermes_lite_bandwidth_monitor)
 # without crashes. Auto-hide for non-HL2 boards verified via construction.
 nereus_add_test(tst_hl2_io_board_tab)
 target_compile_definitions(tst_hl2_io_board_tab PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-F Task 1: AlexController model — per-band antennas + Block-TX ───
+# Verifies per-band TX/RX/RX-only antenna arrays (14 bands, default Ant 1),
+# isolation (one band's assignment doesn't affect others), Block-TX safety
+# (blockTxAnt2/3 rejects setTxAnt to that port but not setRxAnt),
+# clamping (values outside 1..3 clamped to 1 or 3), setAntennasTo1 force-mode,
+# antennaChanged signal emission, and per-MAC AppSettings persistence round-trip.
+# Ports HPSDR/Alex.cs:30-106 [@501e3f5].
+nereus_add_test(tst_alex_controller)
