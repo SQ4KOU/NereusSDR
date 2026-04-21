@@ -318,6 +318,11 @@ set(CORE_SOURCES
     src/core/SupportBundle.cpp
     src/core/RadioDiscovery.cpp
     src/core/RadioConnection.cpp
+    src/core/codec/AlexFilterMap.cpp
+    src/core/codec/P1CodecStandard.cpp
+    src/core/codec/P1CodecAnvelinaPro3.cpp
+    src/core/codec/P1CodecRedPitaya.cpp
+    src/core/codec/P1CodecHl2.cpp
     src/core/P1RadioConnection.cpp
     src/core/P2RadioConnection.cpp
     src/core/ReceiverManager.cpp

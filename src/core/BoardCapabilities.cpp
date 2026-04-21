@@ -287,7 +287,7 @@ constexpr BoardCapabilities kAtlas = {
     .maxReceivers     = 3,
     .sampleRates      = {48000, 96000, 192000, 0, 0, 0},
     .maxSampleRate    = 192000,
-    .attenuator       = {0, 0, 0, false},
+    .attenuator       = {0, 0, 0, false, 0x1F, 0x20, false},
     .preamp           = {false, false},
     .ocOutputCount    = 0,
     .hasAlexFilters   = false,
@@ -326,7 +326,7 @@ constexpr BoardCapabilities kHermes = {
     .maxReceivers     = 4,
     .sampleRates      = {48000, 96000, 192000, 0, 0, 0},
     .maxSampleRate    = 192000,
-    .attenuator       = {0, 31, 1, true},
+    .attenuator       = {0, 31, 1, true, 0x1F, 0x20, false},
     .preamp           = {true, false},
     .ocOutputCount    = 7,
     .hasAlexFilters   = true,
@@ -362,7 +362,7 @@ constexpr BoardCapabilities kHermesII = {
     .maxReceivers     = 4,
     .sampleRates      = {48000, 96000, 192000, 0, 0, 0},
     .maxSampleRate    = 192000,
-    .attenuator       = {0, 31, 1, true},
+    .attenuator       = {0, 31, 1, true, 0x1F, 0x20, false},
     .preamp           = {true, false},
     .ocOutputCount    = 7,
     .hasAlexFilters   = true,
@@ -398,7 +398,7 @@ constexpr BoardCapabilities kAngelia = {
     .maxReceivers     = 7,
     .sampleRates      = {48000, 96000, 192000, 384000, 0, 0},
     .maxSampleRate    = 384000,
-    .attenuator       = {0, 31, 1, true},
+    .attenuator       = {0, 31, 1, true, 0x1F, 0x20, false},
     .preamp           = {true, false},
     .ocOutputCount    = 7,
     .hasAlexFilters   = true,
@@ -432,7 +432,7 @@ constexpr BoardCapabilities kOrion = {
     .maxReceivers     = 7,
     .sampleRates      = {48000, 96000, 192000, 384000, 0, 0},
     .maxSampleRate    = 384000,
-    .attenuator       = {0, 31, 1, true},
+    .attenuator       = {0, 31, 1, true, 0x1F, 0x20, false},
     .preamp           = {true, true},
     .ocOutputCount    = 7,
     .hasAlexFilters   = true,
@@ -466,7 +466,7 @@ constexpr BoardCapabilities kOrionMKII = {
     .maxReceivers     = 7,
     .sampleRates      = {48000, 96000, 192000, 384000, 768000, 1536000},
     .maxSampleRate    = 1536000,
-    .attenuator       = {0, 31, 1, true},
+    .attenuator       = {0, 31, 1, true, 0x1F, 0x20, false},
     .preamp           = {true, true},
     .ocOutputCount    = 7,
     .hasAlexFilters   = true,
@@ -509,7 +509,9 @@ constexpr BoardCapabilities kHermesLite = {
     .maxReceivers     = 4,
     .sampleRates      = {48000, 96000, 192000, 384000, 0, 0},
     .maxSampleRate    = 384000,
-    .attenuator       = {0, 60, 1, true},
+    // HL2: 6-bit range (mi0bot WriteMainLoop_HL2 [@c26a8a4]).
+    // maxDb=63 (0x3F full 6-bit range); mask=0x3F; enableBit=0x40; MOX branches ATT.
+    .attenuator       = {0, 63, 1, true, 0x3F, 0x40, true},
     .preamp           = {false, false},
     .ocOutputCount    = 0,
     .hasAlexFilters   = false,
@@ -545,7 +547,7 @@ constexpr BoardCapabilities kSaturn = {
     .maxReceivers     = 7,
     .sampleRates      = {48000, 96000, 192000, 384000, 768000, 1536000},
     .maxSampleRate    = 1536000,
-    .attenuator       = {0, 31, 1, true},
+    .attenuator       = {0, 31, 1, true, 0x1F, 0x20, false},
     .preamp           = {true, true},
     .ocOutputCount    = 7,
     .hasAlexFilters   = true,
@@ -578,7 +580,7 @@ constexpr BoardCapabilities kSaturnMKII = {
     .maxReceivers     = 7,
     .sampleRates      = {48000, 96000, 192000, 384000, 768000, 1536000},
     .maxSampleRate    = 1536000,
-    .attenuator       = {0, 31, 1, true},
+    .attenuator       = {0, 31, 1, true, 0x1F, 0x20, false},
     .preamp           = {true, true},
     .ocOutputCount    = 7,
     .hasAlexFilters   = true,
@@ -607,7 +609,7 @@ constexpr BoardCapabilities kUnknown = {
     .maxReceivers     = 1,
     .sampleRates      = {48000, 0, 0, 0, 0, 0},
     .maxSampleRate    = 48000,
-    .attenuator       = {0, 0, 0, false},
+    .attenuator       = {0, 0, 0, false, 0x1F, 0x20, false},
     .preamp           = {false, false},
     .ocOutputCount    = 0,
     .hasAlexFilters   = false,
@@ -757,11 +759,26 @@ std::span<const PreampItem> rx2PreampItemsForBoard(HPSDRHW hw) noexcept
 
 int stepAttMaxDb(HPSDRHW hw, bool alexPresent) noexcept
 {
-    // From Thetis setup.cs:15765 — 61 dB when ALEX present and board is NOT
-    // in the exclusion list (ANAN-10/10E/7000D/8000D/OrionMkII/G2/G2-1K/
-    // AnvelinaPro3/RedPitaya). NereusSDR maps by HPSDRHW, not HPSDRModel.
-    // Exclusion list boards: OrionMKII, Saturn (G2/G2-1K), HermesLite.
-    // Boards that CAN reach 61: Atlas, Hermes, HermesII, Angelia, Orion.
+    // Phase 3P-A Task 15: delegate to BoardCapabilities::attenuator.maxDb
+    // as the single source of truth.
+    //
+    // HL2 stores maxDb=63 (mi0bot [@c26a8a4] 6-bit LNA range); all
+    // standard boards store 31. Alex-equipped boards that are not in the
+    // Thetis exclusion list (setup.cs:15765 [v2.10.3.13]) can reach 61
+    // via the Alex relay — that is captured by hasAlexRelayAttMax in the
+    // caps table and applied below.
+    const BoardCapabilities& caps = forBoard(hw);
+    if (!caps.attenuator.present) { return 0; }
+
+    // HL2 (and any future board with a custom maxDb) bypasses Alex logic:
+    // its native range is already encoded in attenuator.maxDb.
+    if (caps.attenuator.maxDb != 31) { return caps.attenuator.maxDb; }
+
+    // Standard 31 dB boards: Alex presence can extend to 61 for boards
+    // that are NOT in Thetis's exclusion list. The exclusion list in
+    // Thetis setup.cs:15765 excludes OrionMKII, Saturn (G2/G2-1K),
+    // HermesLite, AnvelinaPro3, and RedPitaya. We map by HPSDRHW.
+    // From Thetis setup.cs:15765 [v2.10.3.13].
     if (!alexPresent) { return 31; }
 
     switch (hw) {

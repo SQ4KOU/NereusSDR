@@ -96,7 +96,34 @@ private slots:
         QVERIFY(caps.hasIoBoardHl2);
         QVERIFY(!caps.hasAlexFilters);
         QCOMPARE(caps.ocOutputCount, 0);
-        QCOMPARE(caps.attenuator.maxDb, 60);
+        // HL2 maxDb bumped to 63 (6-bit range) — Phase 3P-A Task 11
+        QCOMPARE(caps.attenuator.maxDb, 63);
+    }
+
+    // Phase 3P-A Task 11: Attenuator encoding parameters —
+    // mask + enableBit + moxBranchesAtt per board.
+    // From spec §6.3.2 (HL2 vs Standard) and §6.3.3 (RedPitaya gate).
+    void hermes_attenuator_5bit_ramdor_encoding() {
+        const auto& caps = BoardCapsTable::forBoard(HPSDRHW::Hermes);
+        QCOMPARE(int(caps.attenuator.mask),       0x1F);
+        QCOMPARE(int(caps.attenuator.enableBit),  0x20);
+        QVERIFY(!caps.attenuator.moxBranchesAtt);
+        QCOMPARE(caps.attenuator.maxDb, 31);
+    }
+
+    void hl2_attenuator_6bit_mi0bot_encoding() {
+        const auto& caps = BoardCapsTable::forBoard(HPSDRHW::HermesLite);
+        QCOMPARE(int(caps.attenuator.mask),       0x3F);
+        QCOMPARE(int(caps.attenuator.enableBit),  0x40);
+        QVERIFY(caps.attenuator.moxBranchesAtt);
+        QCOMPARE(caps.attenuator.maxDb, 63);
+    }
+
+    void orionmkii_attenuator_5bit_no_mox_branch() {
+        const auto& caps = BoardCapsTable::forBoard(HPSDRHW::OrionMKII);
+        QCOMPARE(int(caps.attenuator.mask),       0x1F);
+        QCOMPARE(int(caps.attenuator.enableBit),  0x20);
+        QVERIFY(!caps.attenuator.moxBranchesAtt);
     }
 
     void angeliaHasDiversityAndPureSignal() {

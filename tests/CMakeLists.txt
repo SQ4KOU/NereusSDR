@@ -55,6 +55,27 @@ target_compile_definitions(tst_radio_discovery_parse PRIVATE
 nereus_add_test(tst_p1_wire_format)
 target_compile_definitions(tst_p1_wire_format PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3P-A AlexFilterMap shared freq→bits helpers (Task 3+4) ──
+nereus_add_test(tst_alex_filter_map)
+
+# ── Phase 3P-A P1CodecStandard ramdor WriteMainLoop port (Task 5+6) ──
+nereus_add_test(tst_p1_codec_standard)
+
+# ── Phase 3P-A P1CodecAnvelinaPro3 bank 17 extra OC (Task 7) ──
+nereus_add_test(tst_p1_codec_anvelina_pro3)
+
+# ── Phase 3P-A P1CodecRedPitaya bank 12 ADC1 MOX carve-out (Task 8) ──
+nereus_add_test(tst_p1_codec_redpitaya)
+
+# ── Phase 3P-A P1CodecHl2 mi0bot WriteMainLoop_HL2 port (Tasks 9+10) ──
+nereus_add_test(tst_p1_codec_hl2)
+
+# ── Phase 3P-A regression-freeze gate (Task 16) ──
+nereus_add_test(tst_p1_regression_freeze)
+target_compile_definitions(tst_p1_regression_freeze PRIVATE
+    NEREUS_BUILD_TESTS
+    NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
+
 # P1 loopback integration test — uses P1FakeRadio from tests/fakes/
 nereus_add_test(tst_p1_loopback_connection fakes/P1FakeRadio.cpp)
 target_compile_definitions(tst_p1_loopback_connection PRIVATE NEREUS_BUILD_TESTS)
@@ -240,3 +261,9 @@ nereus_add_test(tst_vax_applet)
 # vaxChannel() bidirectionally; IQ Ch stays disabled (feature-flagged per
 # design spec §6.7/§11.3).
 nereus_add_test(tst_spectrum_overlay_panel)
+
+# ── Phase 3P-A Task 15: RxApplet S-ATT slider range from BoardCapabilities ───
+# HL2 → 0-63 dB; Hermes → 0-31 dB. Verifies the spinbox max is sourced from
+# BoardCapabilities::attenuator.maxDb at construction time, not hardcoded.
+nereus_add_test(tst_rxapplet_att_range)
+target_compile_definitions(tst_rxapplet_att_range PRIVATE NEREUS_BUILD_TESTS)

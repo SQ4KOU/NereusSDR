@@ -183,6 +183,14 @@ public:
     // Set the antenna list shown in the RX/TX antenna menus.
     void setAntennaList(const QStringList& ants);
 
+#ifdef NEREUS_BUILD_TESTS
+public:
+    // Test-only: returns current step-att spinbox maximum (for range assertions).
+    // Phase 3P-A Task 15.
+    int stepAttMaxForTest() const;
+private:
+#endif
+
 signals:
     void autoAgcToggled(bool on);
     void openSetupRequested();

@@ -238,13 +238,20 @@ mw0lge@grange-lane.co.uk
 
 #include "P1RadioConnection.h"
 #include "LogCategories.h"
+#include "codec/P1CodecStandard.h"
+#include "codec/P1CodecAnvelinaPro3.h"
+#include "codec/P1CodecRedPitaya.h"
+#include "codec/P1CodecHl2.h"
+#include "codec/AlexFilterMap.h"
 
+#include <cstdlib>
 #include <cstring>    // memset
 #include <vector>
 #include <QtEndian>
 #include <QNetworkDatagram>
 #include <QThread>
 #include <QVariant>
+#include <QCoreApplication>
 
 namespace NereusSDR {
 
@@ -748,12 +755,24 @@ void P1RadioConnection::disconnect()
 
 void P1RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequencyHz)
 {
-    if (receiverIndex >= 0 && receiverIndex < 7) {
-        m_rxFreqHz[receiverIndex] = frequencyHz;
+    if (receiverIndex < 0 || receiverIndex >= 7) { return; }
+    m_rxFreqHz[receiverIndex] = frequencyHz;
+    // RX0 drives the Alex HPF bank — recompute on every change.
+    // Source: console.cs:6830-6942 [@501e3f5]
+    if (receiverIndex == 0 && m_caps && m_caps->hasAlexFilters) {
+        m_alexHpfBits = codec::alex::computeHpf(double(frequencyHz) / 1e6);
     }
 }
 
-void P1RadioConnection::setTxFrequency(quint64 frequencyHz)  { m_txFreqHz = frequencyHz; }
+void P1RadioConnection::setTxFrequency(quint64 frequencyHz)
+{
+    m_txFreqHz = frequencyHz;
+    // TX freq drives Alex LPF — recompute on every change.
+    // Source: console.cs:7168-7234 [@501e3f5]
+    if (m_caps && m_caps->hasAlexFilters) {
+        m_alexLpfBits = codec::alex::computeLpf(double(frequencyHz) / 1e6);
+    }
+}
 void P1RadioConnection::setActiveReceiverCount(int count)    { m_activeRxCount = count; }
 void P1RadioConnection::setSampleRate(int sampleRate)        { m_sampleRate = sampleRate; }
 void P1RadioConnection::setAttenuator(int dB)
@@ -798,6 +817,80 @@ void P1RadioConnection::applyBoardQuirks()
     } else {
         m_stepAttn[0] = 0;
     }
+
+    selectCodec();
+}
+
+// ---------------------------------------------------------------------------
+// selectCodec
+//
+// Builds m_codec from m_hardwareProfile.model. Called from applyBoardQuirks().
+// Phase 3P-A Task 12.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::selectCodec()
+{
+    m_codec.reset();
+    m_useLegacyCodec = (qEnvironmentVariableIntValue("NEREUS_USE_LEGACY_P1_CODEC") == 1);
+    if (m_useLegacyCodec) {
+        qCInfo(lcConnection) << "P1: NEREUS_USE_LEGACY_P1_CODEC=1 — using pre-refactor compose path";
+        return;
+    }
+    if (!m_caps) {
+        qCWarning(lcConnection) << "P1: no caps; codec selection deferred";
+        return;
+    }
+    // Note: the per-board codec is keyed off the **logical** HPSDRModel
+    // (which distinguishes HermesLite from Hermes-family even though they
+    // share the same physical HPSDRHW::HermesLite wire dialect), not the
+    // physical HPSDRHW. Use m_hardwareProfile.model for codec selection.
+    // RedPitaya and AnvelinaPro3 are HPSDRModel values that map to physical
+    // OrionMKII at the wire layer but need different bank-12/bank-17
+    // encoding — that's why they get their own codec subclasses.
+    using HPM = HPSDRModel;
+    switch (m_hardwareProfile.model) {
+        case HPM::HERMESLITE:   m_codec = std::make_unique<P1CodecHl2>();          break;
+        case HPM::ANVELINAPRO3: m_codec = std::make_unique<P1CodecAnvelinaPro3>(); break;
+        case HPM::REDPITAYA:    m_codec = std::make_unique<P1CodecRedPitaya>();    break;
+        default:                m_codec = std::make_unique<P1CodecStandard>();     break;
+    }
+    qCInfo(lcConnection) << "P1: selected codec for HPSDRModel" << int(m_hardwareProfile.model);
+}
+
+// ---------------------------------------------------------------------------
+// buildCodecContext
+//
+// Snapshot all live state into a CodecContext for the codec call.
+// Phase 3P-A Task 12.
+// ---------------------------------------------------------------------------
+CodecContext P1RadioConnection::buildCodecContext() const
+{
+    CodecContext ctx;
+    ctx.mox            = m_mox;
+    ctx.sampleRateCode = (m_sampleRate >= 384000) ? 3
+                       : (m_sampleRate >= 192000) ? 2
+                       : (m_sampleRate >=  96000) ? 1 : 0;
+    ctx.activeRxCount  = m_activeRxCount;
+    ctx.txDrive        = m_txDrive;
+    ctx.paEnabled      = m_paEnabled;
+    ctx.duplex         = m_duplex;
+    ctx.diversity      = m_diversity;
+    ctx.antennaIdx     = m_antennaIdx;
+    ctx.ocByte         = m_ocOutput;
+    ctx.adcCtrl        = m_adcCtrl;
+    ctx.alexHpfBits    = m_alexHpfBits;
+    ctx.alexLpfBits    = m_alexLpfBits;
+    ctx.txFreqHz       = m_txFreqHz;
+    for (int i = 0; i < 7; ++i) { ctx.rxFreqHz[i]   = m_rxFreqHz[i]; }
+    for (int i = 0; i < 3; ++i) { ctx.rxStepAttn[i] = m_stepAttn[i]; }
+    // m_txStepAttn is a single int; broadcast to all 3 ADCs (HL2 codec
+    // only uses index 0). Standard codec uses a separate path for
+    // bank 4 TX drive — txStepAttn array isn't read there.
+    for (int i = 0; i < 3; ++i) { ctx.txStepAttn[i] = m_txStepAttn; }
+    for (int i = 0; i < 3; ++i) { ctx.rxPreamp[i]   = m_rxPreamp[i]; }
+    for (int i = 0; i < 3; ++i) { ctx.dither[i]     = m_dither[i]; }
+    for (int i = 0; i < 3; ++i) { ctx.random[i]     = m_random[i]; }
+    // HL2-only fields default to 0 / false; populated by Phase E.
+    return ctx;
 }
 
 // ---------------------------------------------------------------------------
@@ -1200,13 +1293,13 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
 }
 
 // ---------------------------------------------------------------------------
-// composeCcForBank — dispatcher for all 18 C&C banks (0-17)
+// composeCcForBankLegacy — pre-refactor compose path (kept for rollback hatch)
 //
+// Identical to the original composeCcForBank body. Preserved for one release
+// cycle until Task 16 drops the dual-call diagnostic. Do not edit.
 // Ported from Thetis networkproto1.c WriteMainLoop cases 0-17.
-// Each bank sets C0 address bits and C1-C4 payload per the OpenHPSDR
-// Protocol 1 specification.
 // ---------------------------------------------------------------------------
-void P1RadioConnection::composeCcForBank(int bankIdx, quint8 out[5]) const
+void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
 {
     memset(out, 0, 5);
     const quint8 C0base = m_mox ? 0x01 : 0x00;
@@ -1312,6 +1405,28 @@ void P1RadioConnection::composeCcForBank(int bankIdx, quint8 out[5]) const
     default:
         return;
     }
+}
+
+// ---------------------------------------------------------------------------
+// composeCcForBank — dispatcher for all 18 C&C banks (0-17)
+//
+// Phase 3P-A Task 12: delegates to per-board IP1Codec subclass chosen at
+// applyBoardQuirks() time. Falls back to legacy path when:
+//   - NEREUS_USE_LEGACY_P1_CODEC=1 env var is set, or
+//   - m_codec is null (pre-connect).
+//
+// Regression-freeze gate (Task 16) proved codec and legacy agree byte-for-byte
+// on all non-HL2 boards. Dual-call diagnostic dropped. Legacy path still
+// reachable via NEREUS_USE_LEGACY_P1_CODEC=1 env var until Phase B merges.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::composeCcForBank(int bankIdx, quint8 out[5]) const
+{
+    if (m_useLegacyCodec || !m_codec) {
+        composeCcForBankLegacy(bankIdx, out);
+        return;
+    }
+    const CodecContext ctx = buildCodecContext();
+    m_codec->composeCcForBank(bankIdx, ctx, out);
 }
 
 // ---------------------------------------------------------------------------

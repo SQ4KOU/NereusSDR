@@ -1,3 +1,6 @@
+// no-port-check: test-only — Thetis file names (networkproto1.c) appear only
+// in source-cite comments that document which upstream line each assertion
+// verifies. No Thetis logic is ported here; this file is NereusSDR-original.
 #include <QtTest/QtTest>
 #include "core/P1RadioConnection.h"
 #include "core/HpsdrModel.h"
@@ -281,14 +284,14 @@ private slots:
 
     // --- Per-board quirks (Task 11) ---
 
-    void hermesLiteAttenClampsTo60() {
-        // HL2 range is 0..60 per BoardCapabilities.cpp kHermesLite.
-        // Source: specHPSDR.cs per-HPSDRHW atten limits.
+    void hermesLiteAttenClampsTo63() {
+        // HL2 range is 0..63 per BoardCapabilities.cpp kHermesLite (6-bit, Task 11).
+        // Source: mi0bot WriteMainLoop_HL2 [@c26a8a4] — 6-bit range (0x3F mask).
         P1RadioConnection conn;
         conn.init();
         conn.setBoardForTest(HPSDRHW::HermesLite);
         conn.setAttenuator(80);  // above max
-        QCOMPARE(conn.currentAttenForTest(), 60);
+        QCOMPARE(conn.currentAttenForTest(), 63);
         conn.setAttenuator(-5);  // below min
         QCOMPARE(conn.currentAttenForTest(), 0);
     }
@@ -325,6 +328,32 @@ private slots:
         conn.init();
         conn.setBoardForTest(HPSDRHW::Hermes);
         QVERIFY(!conn.hl2ThrottledForTest());
+    }
+
+    // Phase 3P-A Task 13: setReceiverFrequency must update Alex HPF bits.
+    // Source: console.cs:6830-6942 [@501e3f5]
+    void setReceiverFrequency_updates_alex_hpf_bits() {
+        P1RadioConnection conn(nullptr);
+        conn.init();
+        conn.setBoardForTest(HPSDRHW::Hermes);  // hasAlexFilters = true
+        conn.setReceiverFrequency(0, 14'100'000ULL);  // 20m → 13 MHz HPF (0x01)
+        quint8 out[5] = {};
+        conn.composeCcForBankForTest(10, out);  // bank 10 carries Alex bits
+        // C3 low 7 bits = HPF select
+        QCOMPARE(int(out[3] & 0x7F), 0x01);
+    }
+
+    // Phase 3P-A Task 13: setTxFrequency must update Alex LPF bits.
+    // Source: console.cs:7168-7234 [@501e3f5]
+    void setTxFrequency_updates_alex_lpf_bits() {
+        P1RadioConnection conn(nullptr);
+        conn.init();
+        conn.setBoardForTest(HPSDRHW::Hermes);
+        conn.setTxFrequency(14'100'000ULL);  // 30/20m LPF (0x01)
+        quint8 out[5] = {};
+        conn.composeCcForBankForTest(10, out);
+        // C4 = LPF select
+        QCOMPARE(int(out[4]), 0x01);
     }
 };
 

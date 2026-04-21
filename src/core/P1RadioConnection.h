@@ -42,7 +42,10 @@
 #include "RadioConnection.h"
 #include "BoardCapabilities.h"
 #include "HpsdrModel.h"
+#include "codec/IP1Codec.h"
+#include "codec/CodecContext.h"
 
+#include <memory>
 #include <QUdpSocket>
 #include <QTimer>
 #include <QElapsedTimer>
@@ -139,6 +142,16 @@ private:
     void applyBoardQuirks();
     void hl2SendIoBoardTlv(const QByteArray& tlv);
 
+    // Build m_codec from m_hardwareProfile.model. Called from applyBoardQuirks().
+    void selectCodec();
+
+    // Legacy compose path — preserved for the rollback feature flag for
+    // one release cycle. Identical to the pre-refactor composeCcForBank.
+    void composeCcForBankLegacy(int bankIdx, quint8 out[5]) const;
+
+    // Snapshot all live state into a CodecContext for the codec call.
+    CodecContext buildCodecContext() const;
+
     // HL2-specific helpers (mi0bot Hermes-Lite branch, Task 12).
     // hl2SendIoBoardInit — issues I2C register reads at startup to detect the
     //   HL2 I/O board and latch its hardware version.
@@ -207,6 +220,12 @@ private:
     quint32 m_epRecvSeqExpected{0};
     int     m_ccRoundRobinIdx{0};
 
+    // Phase 3P-A: per-board codec chosen at applyBoardQuirks() time.
+    // Null when m_caps is null (pre-connect) or env var
+    // NEREUS_USE_LEGACY_P1_CODEC=1 forces legacy compose path.
+    std::unique_ptr<IP1Codec> m_codec;
+    bool m_useLegacyCodec{false};
+
     int     m_sampleRate{48000};
     int     m_activeRxCount{1};
     quint64 m_rxFreqHz[7]{};
@@ -247,9 +266,25 @@ private:
 #ifdef NEREUS_BUILD_TESTS
 public:
     // Test-only helpers — allow unit tests to inject board caps without a live radio.
-    void setBoardForTest(HPSDRHW board) { m_caps = &BoardCapsTable::forBoard(board); applyBoardQuirks(); }
+    void setBoardForTest(HPSDRHW board) {
+        m_caps = &BoardCapsTable::forBoard(board);
+        // Map HPSDRHW → canonical HPSDRModel so selectCodec() picks the right subclass.
+        switch (board) {
+            case HPSDRHW::HermesLite: m_hardwareProfile.model = HPSDRModel::HERMESLITE;   break;
+            case HPSDRHW::OrionMKII:  m_hardwareProfile.model = HPSDRModel::ORIONMKII;    break;
+            case HPSDRHW::Angelia:    m_hardwareProfile.model = HPSDRModel::ANAN100D;      break;
+            case HPSDRHW::Orion:      m_hardwareProfile.model = HPSDRModel::ANAN200D;      break;
+            case HPSDRHW::HermesII:   m_hardwareProfile.model = HPSDRModel::ANAN10E;       break;
+            case HPSDRHW::Saturn:     m_hardwareProfile.model = HPSDRModel::ANAN_G2;       break;
+            default:                  m_hardwareProfile.model = HPSDRModel::HERMES;        break;
+        }
+        applyBoardQuirks();
+    }
     int currentAttenForTest() const { return m_stepAttn[0]; }
     bool hl2ThrottledForTest() const { return m_hl2Throttled; }
+    // Expose private composeCcForBank for regression-freeze capture (Task 1) and
+    // byte-table assertion tests (Task 16).
+    void composeCcForBankForTest(int bankIdx, quint8 out[5]) const { composeCcForBank(bankIdx, out); }
 #endif
 };
 
