@@ -488,7 +488,16 @@ MainWindow::~MainWindow() = default;
 
 void MainWindow::buildUI()
 {
-    setWindowTitle(QStringLiteral("NereusSDR %1").arg(NEREUSSDR_VERSION));
+    // Issue #100: suffix the title with the active profile so users
+    // running two instances against different radios can tell the
+    // windows apart.
+    const QString profile = AppSettings::profileOverride();
+    if (profile.isEmpty()) {
+        setWindowTitle(QStringLiteral("NereusSDR %1").arg(NEREUSSDR_VERSION));
+    } else {
+        setWindowTitle(QStringLiteral("NereusSDR %1 [%2]")
+                           .arg(NEREUSSDR_VERSION, profile));
+    }
     setMinimumSize(800, 600);
     resize(1280, 800);
 
