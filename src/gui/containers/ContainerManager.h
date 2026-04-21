@@ -166,6 +166,18 @@ private:
     QMap<QString, FloatingContainer*> m_floatingForms;
     QString m_panelContainerId;
     ContainerContentFactory m_contentFactory;
+
+    // Restore path guard. During restoreState() a Floating container
+    // goes through setContent(placeholder) + setMeterFloating (which
+    // does extractMeterItems/installFreshMeter to survive the native-
+    // window reparent), triggering contentChanged → meterReadyForPolling
+    // twice: once for the soon-to-be-discarded placeholder, once for
+    // the final fresh meter. Listeners (MeterPoller) ended up tracking
+    // the placeholder and the real meter, with the placeholder dangling
+    // after setMeterFloating destroyed it. Setting this flag suppresses
+    // the interim announcements; restoreState emits exactly one manual
+    // announcement per container after the final content is in place.
+    bool m_suppressMeterAnnouncements{false};
 };
 
 } // namespace NereusSDR
