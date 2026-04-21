@@ -220,6 +220,13 @@ struct BoardCapabilities {
         int maxDb;
         int stepDb;
         bool present;
+        // Phase 3P-A Task 11: per-board wire-byte encoding parameters.
+        // From spec §6.3.2 (HL2 vs Standard) and §6.3.3 (RedPitaya gate).
+        // Standard (ramdor [@501e3f5]): 5-bit mask 0x1F, enable bit 0x20.
+        // HL2 (mi0bot [@c26a8a4]):      6-bit mask 0x3F, enable bit 0x40, MOX branch.
+        quint8 mask;           // 0x1F (5-bit std) or 0x3F (6-bit HL2)
+        quint8 enableBit;      // 0x20 (std) or 0x40 (HL2)
+        bool   moxBranchesAtt; // true → send txStepAttn under MOX (HL2 only)
     } attenuator;
 
     struct Preamp {
