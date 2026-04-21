@@ -171,7 +171,24 @@ public:
     QString model() const { return m_model; }
     QString version() const { return m_version; }
     const HardwareProfile& hardwareProfile() const { return m_hardwareProfile; }
+
+    // Returns the BoardCapabilities for the current (or last) board.
+    // Falls back to the Unknown board caps when no radio has ever connected.
+    // Phase 3P-A Task 15: exposes caps so RxApplet can set slider range at
+    // construction time, not only after a connection is established.
+    const BoardCapabilities& boardCapabilities() const;
+
     bool isConnected() const;
+
+#ifdef NEREUS_BUILD_TESTS
+public:
+    // Test-only: inject board caps without a live radio connection.
+    // Mirrors P1RadioConnection::setBoardForTest pattern.
+    void setBoardForTest(HPSDRHW board) {
+        m_hardwareProfile = ::NereusSDR::profileForModel(
+            defaultModelForBoard(board));
+    }
+#endif
 
     // Connection
     void connectToRadio(const RadioInfo& info);

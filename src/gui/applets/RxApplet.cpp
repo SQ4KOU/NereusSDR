@@ -516,8 +516,16 @@ void RxApplet::buildUi()
         m_attStack->addWidget(m_preampCombo);
 
         // Page 1: Step att spinbox (S-ATT mode — step att enabled)
-        m_stepAttSpin = new QSpinBox(this);
-        m_stepAttSpin->setRange(0, 31);
+        // Phase 3P-A Task 15: initialize max from BoardCapabilities so HL2
+        // (maxDb=63) is correct at widget creation, not only after connect.
+        // From Thetis setup.cs:15765 [v2.10.3.13].
+        {
+            const int initMax = (m_model && m_model->boardCapabilities().attenuator.present)
+                ? m_model->boardCapabilities().attenuator.maxDb
+                : 31;
+            m_stepAttSpin = new QSpinBox(this);
+            m_stepAttSpin->setRange(0, initMax);
+        }
         m_stepAttSpin->setSuffix(QStringLiteral(" dB"));
         m_stepAttSpin->setFixedWidth(70);
         m_stepAttSpin->setFixedHeight(20);
@@ -1177,5 +1185,12 @@ void RxApplet::updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double off
         }
     }
 }
+
+#ifdef NEREUS_BUILD_TESTS
+int RxApplet::stepAttMaxForTest() const
+{
+    return m_stepAttSpin ? m_stepAttSpin->maximum() : -1;
+}
+#endif
 
 } // namespace NereusSDR

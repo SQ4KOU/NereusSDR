@@ -288,6 +288,12 @@ bool RadioModel::isConnected() const
     return m_connection && m_connection->isConnected();
 }
 
+const BoardCapabilities& RadioModel::boardCapabilities() const
+{
+    if (m_hardwareProfile.caps) { return *m_hardwareProfile.caps; }
+    return BoardCapsTable::forBoard(HPSDRHW::Unknown);
+}
+
 // --- Slice Management ---
 
 SliceModel* RadioModel::sliceAt(int index) const

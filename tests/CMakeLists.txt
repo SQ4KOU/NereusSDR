@@ -261,3 +261,9 @@ nereus_add_test(tst_vax_applet)
 # vaxChannel() bidirectionally; IQ Ch stays disabled (feature-flagged per
 # design spec §6.7/§11.3).
 nereus_add_test(tst_spectrum_overlay_panel)
+
+# ── Phase 3P-A Task 15: RxApplet S-ATT slider range from BoardCapabilities ───
+# HL2 → 0-63 dB; Hermes → 0-31 dB. Verifies the spinbox max is sourced from
+# BoardCapabilities::attenuator.maxDb at construction time, not hardcoded.
+nereus_add_test(tst_rxapplet_att_range)
+target_compile_definitions(tst_rxapplet_att_range PRIVATE NEREUS_BUILD_TESTS)
