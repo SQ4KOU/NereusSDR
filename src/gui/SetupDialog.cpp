@@ -22,6 +22,7 @@
 #include "setup/KeyboardSetupPages.h"
 // Diagnostics
 #include "setup/DiagnosticsSetupPages.h"
+#include "diagnostics/RadioStatusPage.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -210,6 +211,7 @@ void SetupDialog::buildTree()
 
     // ── Diagnostics ───────────────────────────────────────────────────────────
     QTreeWidgetItem* diagnostics = addCategory("Diagnostics");
+    add(diagnostics, "Radio Status",     new RadioStatusPage(m_model));
     add(diagnostics, "Signal Generator", new DiagSignalGeneratorPage);
     add(diagnostics, "Hardware Tests",   new DiagHardwareTestsPage);
     add(diagnostics, "Logging",          new DiagLoggingPage);
