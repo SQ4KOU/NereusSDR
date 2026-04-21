@@ -468,13 +468,19 @@ AudioDeviceConfig DeviceCard::currentConfig() const
         ? m_driverApiCombo->currentData().toInt()
         : -1;
 
-    if (m_autoMatchSampleRate && m_autoMatchSampleRate->isChecked()) {
-        cfg.sampleRate = 0;  // 0 = auto; engine resolves from device default
-    } else {
-        cfg.sampleRate = m_sampleRateCombo
-            ? m_sampleRateCombo->currentData().toInt()
-            : 48000;
-    }
+    // Auto-match is a UI preference (session-only) meant to signal "use the
+    // device's own default sample rate".  That resolution isn't wired yet —
+    // the engine does NOT treat sampleRate=0 as "device default" and would
+    // pass it straight to makeBus → stream-open fails at 0 Hz.  Until the
+    // PortAudio device-enumeration is threaded through this card, always
+    // emit the combo's current rate so the bus always opens cleanly; the
+    // auto-match checkbox state remains session-only UI.
+    // TODO(sub-phase-12-automatch-resolve): when device-default-rate
+    // lookup lands, set cfg.sampleRate to the device default here when
+    // auto-match is checked.
+    cfg.sampleRate = m_sampleRateCombo
+        ? m_sampleRateCombo->currentData().toInt()
+        : 48000;
 
     cfg.bitDepth      = m_bitDepthCombo  ? m_bitDepthCombo->currentData().toInt()  : 32;
     cfg.channels      = m_channelsCombo  ? m_channelsCombo->currentData().toInt()  : 2;

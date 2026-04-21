@@ -852,12 +852,33 @@ void AudioEngine::resetAudioSettings()
         }
     }
 
-    // Rebuild buses from seeded defaults (calls ensureSpeakersOpen which
-    // emits speakersConfigChanged after opening the default bus).
-    ensureSpeakersOpen();
+    // Force a speakers-bus rebuild from defaults.  ensureSpeakersOpen()
+    // early-exits when the bus is already open, so the previous call here
+    // left the pre-reset device/config live at runtime until the next app
+    // restart.  setSpeakersConfig(empty) goes through applySpeakersConfig
+    // which tears down and rebuilds under m_speakersBusMutex, and emits
+    // speakersConfigChanged so MasterOutputWidget + AudioDevicesPage
+    // refresh.  Empty deviceName → makeBus opens PortAudio's platform
+    // default, matching addendum §2.5 "rebuild buses from seeded defaults".
+    setSpeakersConfig(AudioDeviceConfig{});
 
-    // Emit per-VAX config-changed signals so VAX-page cards refresh.
+    // Rebuild each VAX bus as well — previously we only emitted the config-
+    // changed signal, but rxBlockReady kept pushing audio to whatever bus
+    // was live pre-reset (stale BYO PortAudio bus, or the prior native HAL
+    // bus tied to the wiped settings).  Mirror the setVaxConfig native-HAL
+    // fallback contract: on Mac/Linux re-mint the platform HAL bus; on
+    // Windows leave the slot null until the user picks a device.
     for (int ch = 1; ch <= 4; ++ch) {
+        const int idx = ch - 1;
+        m_vaxBus[idx].reset();
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
+        m_vaxBus[idx] = makeVaxBus(ch);
+        if (m_vaxBus[idx]) {
+            qCInfo(lcAudio) << "VAX" << ch
+                            << "bus restored to native HAL (reset)"
+                            << "[" << m_vaxBus[idx]->backendName() << "]";
+        }
+#endif
         emit vaxConfigChanged(ch, AudioDeviceConfig{});
     }
 
