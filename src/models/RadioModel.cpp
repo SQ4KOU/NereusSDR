@@ -297,8 +297,8 @@ double scaleFwdPowerWatts(quint16 adcRaw, HPSDRModel model)
     case HPSDRModel::ANAN7000D:
     case HPSDRModel::ANVELINAPRO3:
     case HPSDRModel::ANAN_G2:
-    case HPSDRModel::ANAN_G2_1K:
-    case HPSDRModel::REDPITAYA:
+    case HPSDRModel::ANAN_G2_1K:             // !K will need different scaling
+    case HPSDRModel::REDPITAYA: //DH1KLM
         bridge_volt = 0.12;  refvoltage = 5.0; adc_cal_offset = 32;
         break;
     case HPSDRModel::ORIONMKII:
@@ -343,8 +343,8 @@ double scaleRevPowerWatts(quint16 adcRaw, HPSDRModel model)
     case HPSDRModel::ANAN7000D:
     case HPSDRModel::ANVELINAPRO3:
     case HPSDRModel::ANAN_G2:
-    case HPSDRModel::ANAN_G2_1K:
-    case HPSDRModel::REDPITAYA:
+    case HPSDRModel::ANAN_G2_1K:                 // will need to be edited for scaling
+    case HPSDRModel::REDPITAYA: //DH1KLM
         bridge_volt = 0.15;  refvoltage = 5.0; adc_cal_offset = 28;
         break;
     case HPSDRModel::ORIONMKII:
