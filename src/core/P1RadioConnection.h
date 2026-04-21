@@ -45,7 +45,8 @@
 #include "codec/IP1Codec.h"
 #include "codec/CodecContext.h"
 
-namespace NereusSDR { class OcMatrix; }  // forward decl — full header in .cpp
+namespace NereusSDR { class OcMatrix; }     // forward decl — full header in .cpp
+namespace NereusSDR { class IoBoardHl2; }   // forward decl — full header in .cpp
 
 #include <memory>
 #include <QUdpSocket>
@@ -95,6 +96,12 @@ public:
     // byte from maskFor(currentBand, mox) at C&C compose time.
     // Phase 3P-D Task 3 — called by RadioModel::connectToRadio().
     void setOcMatrix(const OcMatrix* matrix);
+
+    // Phase 3P-E Task 2: wire IoBoardHl2 for I2C intercept (HL2 only).
+    // On HL2, pushes the pointer into P1CodecHl2 and stores it locally for
+    // the ep6 response parser.  On non-HL2 boards this is a noop.
+    // Called by RadioModel::connectToRadio() after selectCodec().
+    void setIoBoard(IoBoardHl2* io);
 
 public slots:
     void init() override;
@@ -176,6 +183,12 @@ private:
     //     (the byte-rate variant requires platform-specific atomics — TODO(3I-T12)).
     void hl2CheckBandwidthMonitor();
     bool hl2IsThrottled() const { return m_hl2Throttled; }
+
+    // Phase 3P-E Task 2: ep6 I2C response parsing.
+    // Called from the instance parseEp6Frame() when C0 bit 7 is set.
+    // Routes read data (C1-C4) back into the IoBoardHl2 register mirror.
+    // Source: mi0bot networkproto1.c:478-493 [@c26a8a4]
+    void parseI2cResponse(quint8 c0, quint8 c1, quint8 c2, quint8 c3, quint8 c4);
 
     void checkFirmwareMinimum(int fw);
 
@@ -271,6 +284,12 @@ private:
     // RadioModel (falls back to m_ocOutput == 0).  Phase 3P-D Task 3.
     const OcMatrix* m_ocMatrix{nullptr};
 
+    // Non-owning pointer to RadioModel's IoBoardHl2.  Set via setIoBoard()
+    // at connect time; null on non-HL2 boards and in tests that don't wire
+    // RadioModel.  Used by the ep6 read path to route I2C response bytes
+    // back into the register mirror.  Phase 3P-E Task 2.
+    IoBoardHl2* m_ioBoard{nullptr};
+
     // --- HL2 bandwidth monitor state (Task 12) ---
     // Source: mi0bot bandwidth_monitor.{c,h} — adapted to ep6 sequence-gap heuristic.
     bool      m_hl2Throttled{false};
@@ -299,6 +318,10 @@ public:
     // Expose private composeCcForBank for regression-freeze capture (Task 1) and
     // byte-table assertion tests (Task 16).
     void composeCcForBankForTest(int bankIdx, quint8 out[5]) const { composeCcForBank(bankIdx, out); }
+    // Expose parseI2cResponse for ep6 read path unit tests (Phase 3P-E Task 2).
+    void parseI2cResponseForTest(quint8 c0, quint8 c1, quint8 c2, quint8 c3, quint8 c4) {
+        parseI2cResponse(c0, c1, c2, c3, c4);
+    }
 #endif
 };
 

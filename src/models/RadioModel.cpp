@@ -557,6 +557,14 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         p2->setOcMatrix(&m_ocMatrix);
     }
 
+    // Wire IoBoardHl2 so P1CodecHl2 can dequeue I2C transactions into C&C
+    // frames and the ep6 read path can route responses back to the register
+    // mirror.  On non-HL2 boards, setIoBoard() is a noop (selectCodec()
+    // won't have installed a P1CodecHl2).  Phase 3P-E Task 2.
+    if (auto* p1 = qobject_cast<class P1RadioConnection*>(m_connection)) {
+        p1->setIoBoard(&m_ioBoard);
+    }
+
     // Create worker thread
     m_connThread = new QThread(this);
     m_connThread->setObjectName(QStringLiteral("ConnectionThread"));

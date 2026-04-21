@@ -333,3 +333,12 @@ target_compile_definitions(tst_p1_oc_matrix_wiring PRIVATE NEREUS_BUILD_TESTS)
 # mirror (256-byte array, HardwareVersion stored separately), and
 # detection bool (idempotent setter, signal on change).
 nereus_add_test(tst_io_board_hl2)
+
+# ── Phase 3P-E Task 2: HL2 I2C intercept + ep6 read parsing ─────────────────
+# Verifies that P1CodecHl2::tryComposeI2cFrame() encodes the I2C TLV frame
+# (bus, address, control, write_data) into the 5 C&C bytes per
+# mi0bot networkproto1.c:895-943 [@c26a8a4], that the queue is dequeued after
+# compose, that non-HL2 boards noop, and that the ep6 I2C response test seam
+# compiles and runs without crash.
+nereus_add_test(tst_p1_hl2_i2c_wiring)
+target_compile_definitions(tst_p1_hl2_i2c_wiring PRIVATE NEREUS_BUILD_TESTS)

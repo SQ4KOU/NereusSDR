@@ -73,6 +73,7 @@
 #include "MeterModel.h"
 #include "TransmitModel.h"
 #include "core/OcMatrix.h"
+#include "core/IoBoardHl2.h"
 #include "core/RadioDiscovery.h"
 #include "core/RadioConnection.h"
 #include "core/HardwareProfile.h"
@@ -127,6 +128,12 @@ public:
     // Phase 3P-D Task 3.
     const OcMatrix& ocMatrix()        const { return m_ocMatrix; }
     OcMatrix&       ocMatrixMutable()       { return m_ocMatrix; }
+
+    // HL2 I/O board model — single instance; non-null on any HL2 connection.
+    // Pushed into P1RadioConnection::setIoBoard() at connect time so the
+    // codec layer can dequeue I2C transactions.  Phase 3P-E Task 2.
+    const IoBoardHl2& ioBoard()        const { return m_ioBoard; }
+    IoBoardHl2&       ioBoardMutable()       { return m_ioBoard; }
 
     // Sub-models
     MeterModel&       meterModel()       { return m_meterModel; }
@@ -256,6 +263,11 @@ private:
     // the same instance. MAC and load() are called on connect.
     // Phase 3P-D Task 3.
     OcMatrix      m_ocMatrix;
+
+    // HL2 I/O board model — owns I2C queue and register mirror.
+    // Shared with P1RadioConnection::setIoBoard() at connect time.
+    // Phase 3P-E Task 2.
+    IoBoardHl2    m_ioBoard;
 
     // Slices and panadapters (client-managed)
     QList<SliceModel*> m_slices;
