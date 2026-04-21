@@ -340,7 +340,7 @@ void AudioAdvancedPage::buildFeatureFlagsSection()
         layout->addLayout(row);
 
         connect(m_sendIqToVaxCheck, &QCheckBox::toggled,
-                this, [this](bool checked) {
+                this, [](bool checked) {
                     AppSettings::instance().setValue(
                         QStringLiteral("audio/SendIqToVax"),
                         checked ? QStringLiteral("True") : QStringLiteral("False"));
@@ -368,7 +368,7 @@ void AudioAdvancedPage::buildFeatureFlagsSection()
         layout->addLayout(row);
 
         connect(m_txMonitorToVaxCheck, &QCheckBox::toggled,
-                this, [this](bool checked) {
+                this, [](bool checked) {
                     AppSettings::instance().setValue(
                         QStringLiteral("audio/TxMonitorToVax"),
                         checked ? QStringLiteral("True") : QStringLiteral("False"));
@@ -522,14 +522,12 @@ void AudioAdvancedPage::onResetClicked()
             "The first-run setup will re-appear on next launch."));
     dlg.setIcon(QMessageBox::Warning);
 
+    QPushButton* cancelBtn =
+        dlg.addButton(tr("Cancel"), QMessageBox::RejectRole);
     QPushButton* resetBtn =
-        dlg.addButton(QStringLiteral("Reset all audio"), QMessageBox::AcceptRole);
+        dlg.addButton(tr("Reset all audio"), QMessageBox::DestructiveRole);
     resetBtn->setStyleSheet(QLatin1String(kAmberButtonStyle));
-    dlg.addButton(QStringLiteral("Cancel"), QMessageBox::RejectRole);
-    dlg.setDefaultButton(
-        dlg.button(QMessageBox::Cancel)
-            ? static_cast<QPushButton*>(dlg.button(QMessageBox::Cancel))
-            : nullptr);
+    dlg.setDefaultButton(cancelBtn);
 
     dlg.exec();
 
@@ -541,34 +539,46 @@ void AudioAdvancedPage::onResetClicked()
         m_engine->resetAudioSettings();
     } else {
         // Engine not wired — do a direct settings clear (test or early-init path).
+        // Delete all audio/* keys; slice/<N>/VaxChannel and tx/OwnerSlot are
+        // implicitly safe because they live under different namespaces.
         auto& s = AppSettings::instance();
         const QStringList keys = s.allKeys();
         for (const QString& key : keys) {
-            if (key.startsWith(QStringLiteral("audio/"))
-                && !key.startsWith(QStringLiteral("slice/"))
-                && key != QStringLiteral("tx/OwnerSlot")) {
+            if (key.startsWith(QStringLiteral("audio/"))) {
                 s.remove(key);
             }
         }
     }
 
     // Reload UI from (now-cleared) settings.
-    loadDspSettings();
+    // Block widget signals during the reload so combo currentIndexChanged and
+    // checkbox toggled handlers don't fire and re-persist the defaults we just
+    // cleared (avoids spurious "change queued" log spam and write-back cascade).
+    {
+        QSignalBlocker ba(m_dspRateCombo);
+        QSignalBlocker bb(m_dspBlockCombo);
+        loadDspSettings();
+    }
     loadVacFeedbackSettings(m_currentVacChannel);
 
     auto& s = AppSettings::instance();
-    const bool sendIq =
-        s.value(QStringLiteral("audio/SendIqToVax"),
-                QStringLiteral("False")).toString() == QStringLiteral("True");
-    m_sendIqToVaxCheck->setChecked(sendIq);
-    const bool txMon =
-        s.value(QStringLiteral("audio/TxMonitorToVax"),
-                QStringLiteral("False")).toString() == QStringLiteral("True");
-    m_txMonitorToVaxCheck->setChecked(txMon);
-    const bool muteVax =
-        s.value(QStringLiteral("audio/MuteVaxDuringTxOnOtherSlice"),
-                QStringLiteral("False")).toString() == QStringLiteral("True");
-    m_muteVaxDuringTxOtherCheck->setChecked(muteVax);
+    {
+        QSignalBlocker bc(m_sendIqToVaxCheck);
+        QSignalBlocker bd(m_txMonitorToVaxCheck);
+        QSignalBlocker be(m_muteVaxDuringTxOtherCheck);
+        const bool sendIq =
+            s.value(QStringLiteral("audio/SendIqToVax"),
+                    QStringLiteral("False")).toString() == QStringLiteral("True");
+        m_sendIqToVaxCheck->setChecked(sendIq);
+        const bool txMon =
+            s.value(QStringLiteral("audio/TxMonitorToVax"),
+                    QStringLiteral("False")).toString() == QStringLiteral("True");
+        m_txMonitorToVaxCheck->setChecked(txMon);
+        const bool muteVax =
+            s.value(QStringLiteral("audio/MuteVaxDuringTxOnOtherSlice"),
+                    QStringLiteral("False")).toString() == QStringLiteral("True");
+        m_muteVaxDuringTxOtherCheck->setChecked(muteVax);
+    }
 
     // Refresh cable readout.
     updateCablesLabel(VirtualCableDetector::scan());

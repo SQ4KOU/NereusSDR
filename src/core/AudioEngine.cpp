@@ -821,24 +821,13 @@ void AudioEngine::resetAudioSettings()
     auto& s = AppSettings::instance();
     const QStringList keys = s.allKeys();
 
-    // Keys to PRESERVE (per addendum §2.5): slice/<N>/VaxChannel and
-    // tx/OwnerSlot. All other audio/* keys are cleared.
-    static const QStringList kPreservePrefixes = {
-        QStringLiteral("slice/"),
-        QStringLiteral("tx/OwnerSlot"),
-    };
-
-    auto shouldPreserve = [&](const QString& key) -> bool {
-        for (const QString& prefix : kPreservePrefixes) {
-            if (key.startsWith(prefix)) {
-                return true;
-            }
-        }
-        return false;
-    };
-
+    // Delete all audio/* keys (addendum §2.5).
+    // slice/<N>/VaxChannel and tx/OwnerSlot are implicitly preserved because
+    // they live under the "slice/" and "tx/" namespaces — no key can start
+    // with both "audio/" and "slice/" simultaneously, so no explicit exclusion
+    // guard is needed here.
     for (const QString& key : keys) {
-        if (key.startsWith(QStringLiteral("audio/")) && !shouldPreserve(key)) {
+        if (key.startsWith(QStringLiteral("audio/"))) {
             s.remove(key);
         }
     }
@@ -854,8 +843,7 @@ void AudioEngine::resetAudioSettings()
 
     emit audioSettingsReset();
 
-    qCInfo(lcAudio) << "Audio settings reset to defaults (audio/* cleared;"
-                    << "slice/*/VaxChannel + tx/OwnerSlot preserved)";
+    qCInfo(lcAudio) << "Audio settings reset to defaults (all audio/* keys cleared)";
 }
 
 } // namespace NereusSDR

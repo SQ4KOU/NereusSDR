@@ -310,6 +310,6 @@ target_compile_definitions(tst_audio_vax_page_auto_detect PRIVATE NEREUS_BUILD_T
 #            FirstRunComplete, LastDetectedCables.
 #   Preserved: slice/<N>/VaxChannel, tx/OwnerSlot.
 # Also verifies signal cascade: speakersConfigChanged, vaxConfigChanged(1..4),
-# audioSettingsReset. 13 test cases.
+# audioSettingsReset. 12 test cases.
 nereus_add_test(tst_audio_engine_reset_audio_settings)
 target_compile_definitions(tst_audio_engine_reset_audio_settings PRIVATE NEREUS_BUILD_TESTS)
