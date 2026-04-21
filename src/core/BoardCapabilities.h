@@ -261,6 +261,20 @@ struct BoardCapabilities {
     bool hasIoBoardHl2;
     bool hasSidetoneGenerator;
 
+    // Phase 3P-F Task 2: accessory board enable rules.
+    // Source: setup.cs:19834-20310 RadioModelChanged() per-model if-ladder [@501e3f5]
+    //         setup.cs:6338 AddHPSDRPages() for tpPennyCtrl / tpAlexControl visibility.
+    //
+    // hasApollo:    chkApolloPresent.Enabled = true only for HPSDRModel.HERMES (bare HPSDR kit).
+    //               All ANAN family boards set chkApolloPresent.Enabled=false + Checked=false.
+    // hasAlex:      chkAlexPresent shown for all HPSDR family; absent on HermesLite (no Alex port).
+    // hasPennyLane: tpPennyCtrl inserted by AddHPSDRPages() for all HPSDR boards; absent on HL2
+    //               (ocOutputCount=0, no Penny/OC ext-ctrl). For HERMES, tab is labeled "Hermes Ctrl";
+    //               for all other boards it is labeled "OC Control".
+    bool hasApollo{false};
+    bool hasAlex{false};
+    bool hasPennyLane{false};
+
     int  minFirmwareVersion;
     int  knownGoodFirmware;
 
