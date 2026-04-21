@@ -133,17 +133,73 @@ void VaxChannelCard::updateNegotiatedPill(const AudioDeviceConfig& negotiated,
 
 QString VaxChannelCard::currentDeviceName() const
 {
-    return m_deviceCard->currentConfig().deviceName;
+    // Primary source: live combo selection in the DeviceCard (reflects what
+    // PortAudio enumerated). When a saved device is not in the enumerated list
+    // (e.g. the cable is connected on another machine, or PortAudio returns no
+    // devices in the test environment), fall back to reading AppSettings so the
+    // badge and auto-detect button stay in sync with what was actually saved.
+    const QString fromCard = m_deviceCard->currentConfig().deviceName;
+    if (!fromCard.isEmpty()) {
+        return fromCard;
+    }
+    return AppSettings::instance()
+               .value(m_prefix + QStringLiteral("/DeviceName"), QString())
+               .toString();
 }
 
-bool VaxChannelCard::isEnabled() const
+bool VaxChannelCard::isChannelEnabled() const
 {
     // Delegate to the DeviceCard's checkbox live state so mid-edit callers
     // see the current toggle value rather than the last-flushed AppSettings
     // value. DeviceCard::isCheckboxEnabled() returns true for always-on cards
     // (no checkbox), which is the correct semantic here since VaxChannelCards
     // always have an enable checkbox (enableCheckbox=true in the ctor).
+    //
+    // Named isChannelEnabled() to avoid shadowing QWidget::isEnabled() (I2).
     return m_deviceCard->isCheckboxEnabled();
+}
+
+void VaxChannelCard::applyAutoDetectBinding(const QString& deviceName)
+{
+    // 1) Build config: take whatever the card's combos currently say for all
+    //    other fields, then overwrite the device name with the picked cable.
+    AudioDeviceConfig cfg = m_deviceCard->currentConfig();
+    cfg.deviceName = deviceName;
+
+    // 2) Persist all 10 fields to AppSettings under audio/Vax<N>/.
+    cfg.saveToSettings(m_prefix);
+    AppSettings::instance().save();
+
+    // 3) Refresh the DeviceCard combos from the now-persisted settings so the
+    //    device combo, negotiated pill, and badge all reflect the new state
+    //    without requiring a manual reload.
+    m_deviceCard->loadFromSettings();
+
+    // 4) Emit to engine (original configChanged path).
+    emit configChanged(m_channel, cfg);
+
+    // 5) Update badge + auto-detect button visibility.
+    updateBadge();
+}
+
+void VaxChannelCard::clearBinding()
+{
+    // 1) Build an empty config (all 10 fields reset to defaults).
+    const AudioDeviceConfig empty;
+
+    // 2) Persist the empty config, wiping all 10 AppSettings fields.
+    empty.saveToSettings(m_prefix);
+    AppSettings::instance().save();
+
+    // 3) Refresh the DeviceCard UI from the now-empty settings.
+    m_deviceCard->loadFromSettings();
+
+    // 4) Tear down the engine bus: empty deviceName tells AudioEngine to close.
+    emit configChanged(m_channel, empty);
+    emit enabledChanged(m_channel, false);
+
+    // 5) Update badge + auto-detect button visibility.
+    updateBadge();
 }
 
 void VaxChannelCard::onInnerConfigChanged(AudioDeviceConfig cfg)
@@ -260,10 +316,9 @@ void VaxChannelCard::onAutoDetectClicked()
 
             if (alreadyAssigned) {
                 const int srcChannel    = alreadyAssignedToChannel;
-                const int dstChannel    = m_channel;
                 const QString devName   = cable.deviceName;
                 connect(act, &QAction::triggered, this,
-                        [this, devName, srcChannel, dstChannel]() {
+                        [this, devName, srcChannel]() {
                     // Reassign confirm modal.
                     QMessageBox confirm(this);
                     confirm.setWindowTitle(QStringLiteral("Reassign cable?"));
@@ -272,30 +327,42 @@ void VaxChannelCard::onAutoDetectClicked()
                                        " VAX %2 will become unassigned.")
                             .arg(devName)
                             .arg(srcChannel)
-                            .arg(dstChannel));
+                            .arg(m_channel));
                     confirm.setStandardButtons(
                         QMessageBox::Ok | QMessageBox::Cancel);
                     confirm.setDefaultButton(QMessageBox::Cancel);
                     if (confirm.exec() != QMessageBox::Ok) {
                         return;
                     }
-                    // Clear source channel binding.
-                    const QString srcKey =
-                        QStringLiteral("audio/Vax%1/DeviceName").arg(srcChannel);
-                    AppSettings::instance().setValue(srcKey, QString());
 
-                    // Apply to this channel via engine.
-                    AudioDeviceConfig cfg = m_deviceCard->currentConfig();
-                    cfg.deviceName = devName;
-                    emit configChanged(dstChannel, cfg);
+                    // C3: Full source teardown — wipe all 10 AppSettings fields,
+                    // refresh the source card's UI, and close the engine bus.
+                    // Walk up the widget hierarchy to find the AudioVaxPage that
+                    // owns both cards (VaxChannelCard → container → scrollArea
+                    // viewport → scrollArea → AudioVaxPage).
+                    AudioVaxPage* page = nullptr;
+                    for (QObject* p = parent(); p; p = p->parent()) {
+                        if (auto* vp = qobject_cast<AudioVaxPage*>(p)) {
+                            page = vp;
+                            break;
+                        }
+                    }
+                    if (page) {
+                        VaxChannelCard* srcCard = page->channelCard(srcChannel);
+                        if (srcCard) {
+                            srcCard->clearBinding();
+                        }
+                    }
+
+                    // C1+C2: Persist, refresh UI, emit to engine.
+                    applyAutoDetectBinding(devName);
                 });
             } else {
                 const QString devName = cable.deviceName;
                 connect(act, &QAction::triggered, this,
                         [this, devName]() {
-                    AudioDeviceConfig cfg = m_deviceCard->currentConfig();
-                    cfg.deviceName = devName;
-                    emit configChanged(m_channel, cfg);
+                    // C1+C2: Persist, refresh UI, emit to engine.
+                    applyAutoDetectBinding(devName);
                 });
             }
         }

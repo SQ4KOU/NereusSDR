@@ -61,7 +61,18 @@ public:
     QString currentDeviceName() const;
 
     // Returns true if the enable checkbox is checked.
-    bool isEnabled() const;
+    // Named isChannelEnabled() to avoid shadowing QWidget::isEnabled().
+    bool isChannelEnabled() const;
+
+    // Apply an auto-detected cable binding in one atomic operation:
+    // persists all 10 AppSettings fields, refreshes DeviceCard UI,
+    // emits configChanged to the engine, and updates badge visibility.
+    void applyAutoDetectBinding(const QString& deviceName);
+
+    // Tear down this channel completely: wipes all 10 AppSettings fields,
+    // refreshes DeviceCard UI, emits configChanged({}) + enabledChanged(false)
+    // to close the engine bus, and updates badge visibility.
+    void clearBinding();
 
 #ifdef NEREUS_BUILD_TESTS
     // Test seam — override the cable vector used by onAutoDetectClicked()
@@ -75,14 +86,12 @@ public:
     void clearDetectedCablesForTest() { m_useTestCables = false; }
 
     // Simulate the user binding a device via the Auto-detect menu, without
-    // going through QMenu::exec(). Emits configChanged(channel, cfg) with
-    // the provided deviceName. Used by tests that verify the signal path
-    // without relying on modal menu interaction.
+    // going through QMenu::exec(). Exercises the full applyAutoDetectBinding()
+    // path (persist + UI refresh + engine emit). Used by tests that verify
+    // persistence and UI-refresh contracts without relying on modal interaction.
     void bindDeviceNameForTest(const QString& deviceName)
     {
-        AudioDeviceConfig cfg;
-        cfg.deviceName = deviceName;
-        emit configChanged(m_channel, cfg);
+        applyAutoDetectBinding(deviceName);
     }
 
     // Returns the menu label text that would be generated for a free (unassigned)
@@ -132,6 +141,18 @@ class AudioVaxPage : public SetupPage {
     Q_OBJECT
 public:
     explicit AudioVaxPage(RadioModel* model, QWidget* parent = nullptr);
+
+    // Returns the VaxChannelCard for the given 1-based channel index,
+    // or nullptr if out of range. Used by reassign path in VaxChannelCard
+    // to reach the source slot for clearBinding().
+    VaxChannelCard* channelCard(int channel) const
+    {
+        const int idx = channel - 1;
+        if (idx >= 0 && idx < m_channelCards.size()) {
+            return m_channelCards[idx];
+        }
+        return nullptr;
+    }
 
 private:
     void buildPage();

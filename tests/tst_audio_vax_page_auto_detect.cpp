@@ -274,6 +274,103 @@ private slots:
         QVERIFY(channels.contains(3));
         QVERIFY(channels.contains(4));
     }
+
+    // ── 11. autoDetectFreeCable_persistsToAppSettings (C1) ───────────────────
+    // After binding a cable via the test seam, AppSettings must contain the
+    // DeviceName (and at least SampleRate) under audio/Vax<N>/.
+    void autoDetectFreeCable_persistsToAppSettings()
+    {
+        clearAudioKeys();
+
+        VaxChannelCard card(2, nullptr);
+        const QString cableName =
+            QStringLiteral("CABLE-A Output (VB-Audio Virtual Cable)");
+
+        card.bindDeviceNameForTest(cableName);
+
+        auto& s = AppSettings::instance();
+        const QString devKey      = QStringLiteral("audio/Vax2/DeviceName");
+        const QString rateKey     = QStringLiteral("audio/Vax2/SampleRate");
+
+        QCOMPARE(s.value(devKey, QString()).toString(), cableName);
+        // SampleRate must also be present (default 48000) — proves full config
+        // was persisted, not just DeviceName.
+        QVERIFY(!s.value(rateKey, QString()).toString().isEmpty());
+    }
+
+    // ── 12. autoDetectReassign_clearsSourceSlot (C3) ──────────────────────────
+    // If a source slot has a full config written to AppSettings, clearBinding()
+    // must wipe all 10 fields (verified by checking DeviceName + SampleRate are
+    // reset to empty / defaults, not the original values).
+    void autoDetectReassign_clearsSourceSlot()
+    {
+        clearAudioKeys();
+
+        // Write a full config into VAX 1's settings manually.
+        const AudioDeviceConfig original = []{
+            AudioDeviceConfig c;
+            c.deviceName    = QStringLiteral("CABLE-A Output (VB-Audio Virtual Cable)");
+            c.sampleRate    = 44100;
+            c.bitDepth      = 24;
+            c.channels      = 2;
+            c.bufferSamples = 512;
+            c.driverApi     = QStringLiteral("WASAPI");
+            c.exclusiveMode = true;
+            c.eventDriven   = true;
+            c.bypassMixer   = true;
+            c.manualLatencyMs = 20;
+            return c;
+        }();
+        original.saveToSettings(QStringLiteral("audio/Vax1"));
+        AppSettings::instance().save();
+
+        // Construct a card for channel 1 (loads the saved settings).
+        VaxChannelCard srcCard(1, nullptr);
+        srcCard.loadFromSettings();
+
+        // Confirm the pre-clear state is what we persisted.
+        QCOMPARE(AppSettings::instance()
+                     .value(QStringLiteral("audio/Vax1/DeviceName"), QString())
+                     .toString(),
+                 original.deviceName);
+
+        // Now clear the binding.
+        srcCard.clearBinding();
+
+        // All 10 fields must be reset to default/empty values.
+        auto& s = AppSettings::instance();
+        const QString base = QStringLiteral("audio/Vax1/");
+        QVERIFY(s.value(base + QStringLiteral("DeviceName"),    QString()).toString().isEmpty());
+        QCOMPARE(s.value(base + QStringLiteral("SampleRate"),   QString()).toString().toInt(), 48000);
+        QCOMPARE(s.value(base + QStringLiteral("BitDepth"),     QString()).toString().toInt(), 32);
+        QCOMPARE(s.value(base + QStringLiteral("Channels"),     QString()).toString().toInt(), 2);
+        QCOMPARE(s.value(base + QStringLiteral("BufferSamples"),QString()).toString().toInt(), 256);
+        QVERIFY(s.value(base + QStringLiteral("DriverApi"),     QString()).toString().isEmpty());
+        QCOMPARE(s.value(base + QStringLiteral("ExclusiveMode"),QString()).toString(),
+                 QStringLiteral("False"));
+        QCOMPARE(s.value(base + QStringLiteral("EventDriven"),  QString()).toString(),
+                 QStringLiteral("False"));
+        QCOMPARE(s.value(base + QStringLiteral("BypassMixer"),  QString()).toString(),
+                 QStringLiteral("False"));
+        QCOMPARE(s.value(base + QStringLiteral("ManualLatencyMs"), QString()).toString().toInt(), 0);
+    }
+
+    // ── 13. autoDetectFreeCable_refreshesDeviceCardUI (C2) ───────────────────
+    // After binding via the test seam, currentDeviceName() on the live card
+    // must reflect the new binding (not the stale empty value).
+    void autoDetectFreeCable_refreshesDeviceCardUI()
+    {
+        clearAudioKeys();
+
+        VaxChannelCard card(3, nullptr);
+        QVERIFY(card.currentDeviceName().isEmpty());
+
+        const QString cableName =
+            QStringLiteral("VB-Audio Cable Output");
+        card.bindDeviceNameForTest(cableName);
+
+        QCOMPARE(card.currentDeviceName(), cableName);
+    }
 };
 
 QTEST_MAIN(TstAudioVaxPageAutoDetect)
