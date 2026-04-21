@@ -310,3 +310,9 @@ target_compile_definitions(tst_preamp_combo PRIVATE NEREUS_BUILD_TESTS)
 # (Thetis enums.cs:443 TXPinActions [@501e3f5]), and AppSettings round-trip
 # under hardware/<mac>/oc/{rx,tx}/<band>/pin<n> and .../actions/pin<n>/action.
 nereus_add_test(tst_oc_matrix)
+
+# ── Phase 3P-D Task 2: OC Outputs HF sub-sub-tab UI + matrix wiring ──────────
+# Smoke-tests construction, RX/TX pin sync (matrix→UI via changed()), reset
+# flow, GEN band row disabled state, and default TXPinAction (MoxTuneTwoTone).
+nereus_add_test(tst_oc_outputs_hf_tab)
+target_compile_definitions(tst_oc_outputs_hf_tab PRIVATE NEREUS_BUILD_TESTS)

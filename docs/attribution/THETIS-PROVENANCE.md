@@ -198,8 +198,10 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/gui/setup/hardware/AntennaAlexTab.h | Project Files/Source/Console/setup.cs; Project Files/Source/Console/setup.designer.cs | 13393; 2892-2898; 23385-23395 | port | thetis-samphire | InitAlexAntTables() + per-band row structure; refactored as tcAlexControl parent |
 | src/gui/setup/hardware/DiversityTab.cpp | Project Files/Source/Console/DiversityForm.cs | full | port | thetis-samphire | |
 | src/gui/setup/hardware/DiversityTab.h | Project Files/Source/Console/DiversityForm.cs | 1216; 1228 | port | thetis-samphire | chkLockAngle, chkLockR |
-| src/gui/setup/hardware/OcOutputsTab.cpp | Project Files/Source/Console/setup.cs | 12877-12934 | port | thetis-samphire | UpdateOCBits, chkPenOCrcv/xmit pattern |
-| src/gui/setup/hardware/OcOutputsTab.h | Project Files/Source/Console/setup.cs | 12877-12934 | port | thetis-samphire | UpdateOCBits() |
+| src/gui/setup/hardware/OcOutputsHfTab.cpp | Project Files/Source/Console/setup.designer.cs | 13658-13670+ (tpOCHFControl + nested groupboxes for chkPenOCrcv/xmit, grpTransmitPinActionHF, grpUSBBCD, grpExtPAControlHF) | port | thetis-samphire | OC Outputs HF sub-sub-tab UI — RX/TX 14×7 matrix + pin actions + USB BCD + ext PA + master toggles + live OC pin state stubs |
+| src/gui/setup/hardware/OcOutputsHfTab.h | Project Files/Source/Console/setup.designer.cs | 13658-13670+ | port | thetis-samphire | header mirrors OcOutputsHfTab.cpp |
+| src/gui/setup/hardware/OcOutputsTab.cpp | Project Files/Source/Console/setup.designer.cs | tpOCHFControl + tpOCSWLControl (tcOCOutputs parent) | port | thetis-samphire | Parent QTabWidget hosting OC Outputs HF and SWL sub-sub-tabs; routes state via OcMatrix |
+| src/gui/setup/hardware/OcOutputsTab.h | Project Files/Source/Console/setup.designer.cs | tpOCHFControl + tpOCSWLControl | port | thetis-samphire | Parent tab header |
 | src/gui/setup/hardware/PaCalibrationTab.cpp | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | PA calibration per-band gain arrays |
 | src/gui/setup/hardware/PaCalibrationTab.h | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | PA calibration page |
 | src/gui/setup/hardware/PureSignalTab.cpp | Project Files/Source/Console/PSForm.cs | full | port | thetis-samphire | |
