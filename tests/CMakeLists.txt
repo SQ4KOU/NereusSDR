@@ -378,3 +378,11 @@ nereus_add_test(tst_alex_controller)
 # Widget construction + AlexController wiring + Block-TX safety rejection.
 nereus_add_test(tst_antenna_control_tab)
 target_compile_definitions(tst_antenna_control_tab PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-F Task 4: RxApplet antenna buttons per-band wiring ───────────────
+# Verifies that RxApplet's RX/TX antenna buttons (m_rxAntBtn / m_txAntBtn)
+# populate from AlexController at construction time for the current band,
+# auto-switch when PanadapterModel::bandChanged fires, and repopulate when
+# AlexController::antennaChanged fires for the current band.
+nereus_add_test(tst_rxapplet_antenna_buttons)
+target_compile_definitions(tst_rxapplet_antenna_buttons PRIVATE NEREUS_BUILD_TESTS)
