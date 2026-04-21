@@ -48,6 +48,7 @@
 #pragma once
 
 #include <QObject>
+#include <QReadWriteLock>
 #include <QString>
 #include <array>
 #include "models/Band.h"
@@ -118,6 +119,14 @@ private:
     std::array<TXPinAction, kPinCount> m_pinActions{};
 
     QString m_mac;
+
+    // Guards m_pins / m_pinActions. Connection thread reads (maskFor,
+    // pinEnabled, pinAction) take a read lock; GUI-thread writes (setPin,
+    // setPinAction, load, resetDefaults) take a write lock. Writers release
+    // the lock before emitting changed() so slot handlers cannot re-enter
+    // under the write lock. (Codex PR #94 review: data race between
+    // buildCodecContext()'s maskFor() and OcOutputsHfTab's setPin().)
+    mutable QReadWriteLock m_lock;
 
     QString persistenceKey() const;  // "hardware/<mac>/oc"
 
