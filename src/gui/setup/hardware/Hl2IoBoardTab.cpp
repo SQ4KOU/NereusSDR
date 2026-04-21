@@ -219,6 +219,16 @@ Hl2IoBoardTab::Hl2IoBoardTab(RadioModel* model, QWidget* parent)
     connect(m_bwTimer, &QTimer::timeout, this, &Hl2IoBoardTab::onBwTimerTick);
     m_bwTimer->start();
 
+    // Phase 3P-H Task 5c — 40 ms register-table poller.
+    // Matches the group-box title "Register state  (polled @ 40 ms)" and
+    // supplements push-based IoBoardHl2::registerChanged so a coalesced
+    // write still surfaces within one frame.
+    m_regPollTimer = new QTimer(this);
+    m_regPollTimer->setInterval(kRegisterPollMs);
+    connect(m_regPollTimer, &QTimer::timeout,
+            this, &Hl2IoBoardTab::onRegisterPollTick);
+    m_regPollTimer->start();
+
     // ── Auto-hide for non-HL2 boards ──────────────────────────────────────────
     // From mi0bot setup.cs:20234 chkHERCULES — only visible for HermesLite [@c26a8a4]
     const bool isHl2 =
@@ -801,6 +811,15 @@ void Hl2IoBoardTab::onBwTimerTick()
     updateBwDisplay();
 }
 
+// Phase 3P-H Task 5c — 40 ms register-table poll.
+// Reads every principal register via IoBoardHl2::registerValue(reg) and
+// writes the hex + decoded strings into the table cells. Cheap enough
+// to run every 40 ms (8 register reads + 8 cell updates per tick).
+void Hl2IoBoardTab::onRegisterPollTick()
+{
+    refreshAllRegisters();
+}
+
 // From mi0bot setup.cs:20234-20238 — chkHERCULES_CheckedChanged [@c26a8a4]
 // N2ADR Filter board enable persisted to AppSettings.
 void Hl2IoBoardTab::onN2adrToggled(bool checked)
@@ -859,6 +878,55 @@ void Hl2IoBoardTab::restoreSettings(const QMap<QString, QVariant>& settings)
         QSignalBlocker blocker(m_n2adrFilter);
         m_n2adrFilter->setChecked(checked);
     }
+}
+
+// ── Phase 3P-H Task 5c test seams ────────────────────────────────────────────
+
+int Hl2IoBoardTab::registerPollIntervalMsForTest() const
+{
+    return m_regPollTimer ? m_regPollTimer->interval() : -1;
+}
+
+void Hl2IoBoardTab::pollRegistersNowForTest()
+{
+    refreshAllRegisters();
+}
+
+QString Hl2IoBoardTab::registerCellTextForTest(int row) const
+{
+    if (!m_registerTable || row < 0 || row >= kRegRowCount) { return {}; }
+    auto* item = m_registerTable->item(row, 2);
+    return item ? item->text() : QString();
+}
+
+int Hl2IoBoardTab::bandwidthPollIntervalMsForTest() const
+{
+    return m_bwTimer ? m_bwTimer->interval() : -1;
+}
+
+QString Hl2IoBoardTab::ep6RateTextForTest() const
+{
+    return m_ep6RateLabel ? m_ep6RateLabel->text() : QString();
+}
+
+QString Hl2IoBoardTab::ep2RateTextForTest() const
+{
+    return m_ep2RateLabel ? m_ep2RateLabel->text() : QString();
+}
+
+QString Hl2IoBoardTab::throttleStatusTextForTest() const
+{
+    return m_throttleStatusLabel ? m_throttleStatusLabel->text() : QString();
+}
+
+QString Hl2IoBoardTab::throttleEventTextForTest() const
+{
+    return m_throttleEventLabel ? m_throttleEventLabel->text() : QString();
+}
+
+void Hl2IoBoardTab::pollBandwidthNowForTest()
+{
+    updateBwDisplay();
 }
 
 } // namespace NereusSDR

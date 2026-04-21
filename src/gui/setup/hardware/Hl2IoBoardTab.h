@@ -20,6 +20,12 @@
 //                transaction log + state-machine viz + bandwidth mini are
 //                pure NereusSDR diagnostic surfaces (mi0bot doesn't expose
 //                them in the Thetis UI).
+//   2026-04-21 — Phase 3P-H Task 5c: added 40 ms register-table poller
+//                (supplements the push-based IoBoardHl2::registerChanged
+//                signal so the table stays current when a signal is
+//                coalesced away).  Bandwidth meter was already live from
+//                Task E3's 250 ms m_bwTimer — reuses HermesLiteBandwidthMonitor
+//                ep6/ep2/throttle accessors.
 // =================================================================
 //
 // === Verbatim mi0bot Console/setup.cs header (lines 1-50) ===
@@ -128,6 +134,26 @@ public:
     void populate(const RadioInfo& info, const BoardCapabilities& caps);
     void restoreSettings(const QMap<QString, QVariant>& settings);
 
+    // Phase 3P-H Task 5c test seams.
+    // Register-table poll interval, in ms.  Matches spec §13 "register state
+    // table polls @ 40 ms".
+    static constexpr int kRegisterPollMs = 40;
+    int  registerPollIntervalMsForTest() const;
+    // Triggers one manual pass through refreshAllRegisters() — equivalent
+    // to the 40 ms timer firing.
+    void pollRegistersNowForTest();
+    // Returns the Register-cell hex text ("0x1F" style) for the given row.
+    QString registerCellTextForTest(int row) const;
+    // Bandwidth-cell test seams — expose the live labels as driven by the
+    // 250 ms m_bwTimer (HermesLiteBandwidthMonitor::ep6/ep2/throttle).
+    int bandwidthPollIntervalMsForTest() const;
+    QString ep6RateTextForTest() const;
+    QString ep2RateTextForTest() const;
+    QString throttleStatusTextForTest() const;
+    QString throttleEventTextForTest() const;
+    // Triggers one manual pass through updateBwDisplay().
+    void pollBandwidthNowForTest();
+
 signals:
     void settingChanged(const QString& key, const QVariant& value);
 
@@ -138,6 +164,7 @@ private slots:
     void onI2cQueueChanged();
     void onThrottledChanged(bool throttled);
     void onBwTimerTick();
+    void onRegisterPollTick();  // Phase 3P-H Task 5c — 40 ms register poll
     void onN2adrToggled(bool checked);
     void onProbeClicked();
     void onResetClicked();
@@ -202,8 +229,13 @@ private:
     QLabel*       m_throttleStatusLabel{nullptr};
     QLabel*       m_throttleEventLabel{nullptr};
 
-    // 250 ms timer for live bandwidth readout
+    // 250 ms timer for live bandwidth readout (Task E3/E4).
     QTimer* m_bwTimer{nullptr};
+
+    // 40 ms timer polling the register table (Phase 3P-H Task 5c).
+    // Supplements the push-based IoBoardHl2::registerChanged signal so
+    // the table stays current when a write is coalesced away.
+    QTimer* m_regPollTimer{nullptr};
 
     // Principal registers shown in the table (in display order).
     struct RegRow {

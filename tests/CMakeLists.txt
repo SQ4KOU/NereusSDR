@@ -453,4 +453,13 @@ target_compile_definitions(tst_alex2_live_leds PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_oc_outputs_live_pins)
 target_compile_definitions(tst_oc_outputs_live_pins PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3P-H Task 5c: HL2 I/O live register polling + bandwidth meter ───────
+# Verifies Hl2IoBoardTab spins a 40 ms register-table QTimer (matching
+# the group-box title "Register state  (polled @ 40 ms)") that refreshes
+# each cell from IoBoardHl2::registerValue, plus the 250 ms bandwidth
+# QTimer (Task E3) driving ep6/ep2 Mbps labels + throttle status from
+# HermesLiteBandwidthMonitor.
+nereus_add_test(tst_hl2_live_polling)
+target_compile_definitions(tst_hl2_live_polling PRIVATE NEREUS_BUILD_TESTS)
+
 
