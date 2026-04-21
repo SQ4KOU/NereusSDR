@@ -6,6 +6,8 @@
 #include "core/LogCategories.h"
 
 #include <QApplication>
+#include <QCommandLineOption>
+#include <QCommandLineParser>
 #include <QIcon>
 #include <QStyleFactory>
 #include <QDir>
@@ -14,6 +16,7 @@
 #include <QTextStream>
 #include <QStandardPaths>
 #include <QRegularExpression>
+#include <QStringList>
 
 static QFile* s_logFile = nullptr;
 
@@ -64,15 +67,49 @@ static void messageHandler(QtMsgType type, const QMessageLogContext& ctx, const 
     fprintf(stderr, "%s", line.toLocal8Bit().constData());
 }
 
+// Parse --profile <name> out of argv *before* constructing QApplication so
+// AppSettings can pin the right path on first access. QCommandLineParser
+// wants a QCoreApplication instance, so we do a cheap manual scan here and
+// re-parse properly inside main() once the app is built (for --help / error
+// diagnostics).
+//
+// Issue #100 — multiple NereusSDR instances against different radios.
+static QString extractProfileFromArgv(int argc, char* argv[])
+{
+    for (int i = 1; i < argc; ++i) {
+        const QString a = QString::fromLocal8Bit(argv[i]);
+        if (a == QLatin1String("--profile") || a == QLatin1String("-p")) {
+            if (i + 1 < argc) {
+                return QString::fromLocal8Bit(argv[i + 1]);
+            }
+        } else if (a.startsWith(QLatin1String("--profile="))) {
+            return a.mid(QLatin1String("--profile=").size());
+        }
+    }
+    return {};
+}
+
 int main(int argc, char* argv[])
 {
+    // Resolve profile name first — downstream path lookups (AppSettings,
+    // log dir, pre-QApplication UI scale read) all consult it.
+    const QString earlyProfile = extractProfileFromArgv(argc, argv);
+    if (!earlyProfile.isEmpty()) {
+        if (NereusSDR::AppSettings::isValidProfileName(earlyProfile)) {
+            NereusSDR::AppSettings::setProfileOverride(earlyProfile);
+        } else {
+            fprintf(stderr,
+                    "NereusSDR: ignoring invalid --profile '%s' "
+                    "(allowed: [A-Za-z0-9_-]+)\n",
+                    earlyProfile.toLocal8Bit().constData());
+        }
+    }
+    const QString activeProfile = NereusSDR::AppSettings::profileOverride();
+
     // Apply saved UI scale factor BEFORE QApplication is created.
     {
-#ifdef Q_OS_MAC
-        QString settingsPath = QDir::homePath() + "/Library/Preferences/NereusSDR/NereusSDR.settings";
-#else
-        QString settingsPath = QDir::homePath() + "/.config/NereusSDR/NereusSDR.settings";
-#endif
+        const QString settingsPath =
+            NereusSDR::AppSettings::resolveSettingsPath(activeProfile);
         QFile f(settingsPath);
         if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
             QByteArray data = f.readAll();
@@ -97,9 +134,29 @@ int main(int argc, char* argv[])
     app.setOrganizationName("NereusSDR");
     app.setWindowIcon(QIcon(":/icons/NereusSDR.png"));
 
-    // Set up file logging in ~/.config/NereusSDR/
-    const QString logDir = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-                           + "/NereusSDR";
+    // Re-parse properly so --help / --version / unknown options surface
+    // via Qt's standard machinery. The earlyProfile pass above already
+    // pinned AppSettings; this second pass is purely for user-facing UX.
+    {
+        QCommandLineParser parser;
+        parser.setApplicationDescription(
+            QStringLiteral("NereusSDR — cross-platform OpenHPSDR client."));
+        parser.addHelpOption();
+        parser.addVersionOption();
+        QCommandLineOption profileOpt(
+            QStringList() << QStringLiteral("p") << QStringLiteral("profile"),
+            QStringLiteral(
+                "Run in an isolated profile (separate settings + logs). "
+                "Lets two instances drive two radios without clobbering "
+                "each other. Name must match [A-Za-z0-9_-]+."),
+            QStringLiteral("name"));
+        parser.addOption(profileOpt);
+        parser.process(app);
+    }
+
+    // Set up file logging in ~/.config/NereusSDR/ (or the profile's
+    // isolated config dir when --profile is set).
+    const QString logDir = NereusSDR::AppSettings::resolveConfigDir(activeProfile);
     QDir().mkpath(logDir);
 
     const QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss");
@@ -145,6 +202,10 @@ int main(int argc, char* argv[])
     NereusSDR::LogManager::instance().loadSettings();
 
     qDebug() << "Starting NereusSDR" << app.applicationVersion();
+    if (!activeProfile.isEmpty()) {
+        qDebug() << "Profile:" << activeProfile
+                 << "config dir:" << logDir;
+    }
 
     // Phase 3G-6 block 5: bring up the MMIO subsystem so persisted
     // endpoints (under AppSettings MmioEndpoints/<guid>/*) start

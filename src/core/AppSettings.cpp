@@ -65,6 +65,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSet>
 #include <QStandardPaths>
 #include <QXmlStreamReader>
@@ -72,6 +73,49 @@
 #include <QDebug>
 
 namespace NereusSDR {
+
+// Profile override set by main() from --profile CLI (Issue #100).
+// Scoped to the AppSettings singleton's file path + main.cpp's log dir.
+// Empty string (default) preserves legacy single-profile behavior.
+static QString s_profileOverride;
+
+void AppSettings::setProfileOverride(const QString& profile)
+{
+    s_profileOverride = profile;
+}
+
+QString AppSettings::profileOverride()
+{
+    return s_profileOverride;
+}
+
+bool AppSettings::isValidProfileName(const QString& profile)
+{
+    if (profile.isEmpty()) {
+        return false;
+    }
+    static const QRegularExpression re(QStringLiteral("^[A-Za-z0-9_-]+$"));
+    return re.match(profile).hasMatch();
+}
+
+QString AppSettings::resolveConfigDir(const QString& profile)
+{
+#ifdef Q_OS_MAC
+    const QString root = QDir::homePath() + QStringLiteral("/Library/Preferences/NereusSDR");
+#else
+    const QString root = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
+                         + QStringLiteral("/NereusSDR");
+#endif
+    if (!isValidProfileName(profile)) {
+        return root;
+    }
+    return root + QStringLiteral("/profiles/") + profile;
+}
+
+QString AppSettings::resolveSettingsPath(const QString& profile)
+{
+    return resolveConfigDir(profile) + QStringLiteral("/NereusSDR.settings");
+}
 
 AppSettings& AppSettings::instance()
 {
@@ -92,12 +136,7 @@ AppSettings::AppSettings(const QString& filePath)
 
 void AppSettings::initFilePath()
 {
-#ifdef Q_OS_MAC
-    m_filePath = QDir::homePath() + "/Library/Preferences/NereusSDR/NereusSDR.settings";
-#else
-    m_filePath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-                 + "/NereusSDR/NereusSDR.settings";
-#endif
+    m_filePath = resolveSettingsPath(s_profileOverride);
 }
 
 // ---------------------------------------------------------------------------

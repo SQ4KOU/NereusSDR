@@ -144,6 +144,33 @@ public:
     // File path for the settings file.
     QString filePath() const { return m_filePath; }
 
+    // ------------------------------------------------------------------
+    // Profile support (Issue #100) — multiple concurrent NereusSDR
+    // instances against different radios. A profile name scopes the
+    // settings file (and the log dir, in main.cpp) to a per-profile
+    // subdirectory so two instances don't clobber each other's XML.
+    //
+    //   (default / empty profile) → <config>/NereusSDR/NereusSDR.settings
+    //   profile = "hf"            → <config>/NereusSDR/profiles/hf/NereusSDR.settings
+    //
+    // Call setProfileOverride() from main() BEFORE the first
+    // AppSettings::instance() call; the singleton resolves its file
+    // path once in its default constructor.
+    // ------------------------------------------------------------------
+    static void    setProfileOverride(const QString& profile);
+    static QString profileOverride();
+
+    // Path resolvers — pure functions, safe to call before/without the
+    // singleton. main.cpp uses resolveConfigDir() to scope the log dir
+    // and the pre-QApplication UiScalePercent read.
+    static QString resolveSettingsPath(const QString& profile);
+    static QString resolveConfigDir(const QString& profile);
+
+    // Profile names are restricted to [A-Za-z0-9_-] and non-empty.
+    // Anything else (path traversal, whitespace, separators) falls back
+    // to the default/empty profile in the resolvers above.
+    static bool isValidProfileName(const QString& profile);
+
     // -------------------------------------------------------------------------
     // Saved-radio management (Phase 3I Task 15).
     //
