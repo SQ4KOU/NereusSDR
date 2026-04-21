@@ -57,7 +57,6 @@ private slots:
     void outputCardConstructs() {
         DeviceCard card(QStringLiteral("audio/Speakers"),
                         DeviceCard::Role::Output,
-                        nullptr,   // no engine — enumeration returns empty lists
                         false);
         QVERIFY(true);
     }
@@ -67,7 +66,6 @@ private slots:
     void inputCardConstructs() {
         DeviceCard card(QStringLiteral("audio/TxInput"),
                         DeviceCard::Role::Input,
-                        nullptr,
                         false);
         QVERIFY(true);
     }
@@ -77,7 +75,6 @@ private slots:
     void headphonesCardIsCheckable() {
         DeviceCard card(QStringLiteral("audio/Headphones"),
                         DeviceCard::Role::Output,
-                        nullptr,
                         true);  // enableCheckbox
         QVERIFY(card.isCheckable());
     }
@@ -87,7 +84,7 @@ private slots:
     void currentConfigIsValid() {
         DeviceCard card(QStringLiteral("audio/Speakers"),
                         DeviceCard::Role::Output,
-                        nullptr, false);
+                        false);
 
         const AudioDeviceConfig cfg = card.currentConfig();
         // Channels should be 1 or 2; sampleRate should be > 0.
@@ -101,7 +98,7 @@ private slots:
     void updatePillValidConfig() {
         DeviceCard card(QStringLiteral("audio/Speakers"),
                         DeviceCard::Role::Output,
-                        nullptr, false);
+                        false);
 
         AudioDeviceConfig cfg;
         cfg.deviceName  = QStringLiteral("Test Device");
@@ -117,7 +114,7 @@ private slots:
     void updatePillErrorString() {
         DeviceCard card(QStringLiteral("audio/Speakers"),
                         DeviceCard::Role::Output,
-                        nullptr, false);
+                        false);
 
         AudioDeviceConfig cfg;
         card.updateNegotiatedPill(cfg, QStringLiteral("Sample rate not supported"));
@@ -129,7 +126,7 @@ private slots:
     void loadFromSettingsFreshInstall() {
         DeviceCard card(QStringLiteral("audio/Speakers"),
                         DeviceCard::Role::Output,
-                        nullptr, false);
+                        false);
 
         // loadFromSettings was called in the constructor.  Verify the
         // combo for sample rate landed on a valid entry.
@@ -146,7 +143,7 @@ private slots:
     void configChangedEmitsOnDriverApiChange() {
         DeviceCard card(QStringLiteral("audio/Speakers"),
                         DeviceCard::Role::Output,
-                        nullptr, false);
+                        false);
 
         QSignalSpy spy(&card, &DeviceCard::configChanged);
 
@@ -180,7 +177,7 @@ private slots:
 
         DeviceCard card(QStringLiteral("audio/Speakers"),
                         DeviceCard::Role::Output,
-                        nullptr, false);
+                        false);
 
         // After loadFromSettings, the combo should reflect 96000.
         const AudioDeviceConfig cfg = card.currentConfig();
@@ -194,7 +191,6 @@ private slots:
     void headphonesEnabledChangedFires() {
         DeviceCard card(QStringLiteral("audio/Headphones"),
                         DeviceCard::Role::Output,
-                        nullptr,
                         true);  // enableCheckbox
 
         QSignalSpy spy(&card, &DeviceCard::enabledChanged);

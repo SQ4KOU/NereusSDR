@@ -12,7 +12,6 @@
 #include "DeviceCard.h"
 
 #include "core/AppSettings.h"
-#include "core/AudioEngine.h"
 #include "core/AudioDeviceConfig.h"
 #include "core/audio/PortAudioBus.h"
 
@@ -139,13 +138,11 @@ static QString bufferMs(int samples, int sampleRate)
 
 DeviceCard::DeviceCard(const QString& prefix,
                        Role role,
-                       AudioEngine* engine,
                        bool enableCheckbox,
                        QWidget* parent)
     : QGroupBox(parent)
     , m_prefix(prefix)
     , m_role(role)
-    , m_engine(engine)
 {
     setStyleSheet(QLatin1String(kGroupStyle));
     buildLayout();

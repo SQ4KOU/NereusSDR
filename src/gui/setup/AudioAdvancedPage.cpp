@@ -95,11 +95,6 @@ AudioAdvancedPage::AudioAdvancedPage(RadioModel* model, QWidget* parent)
     buildResetSection();
 }
 
-void AudioAdvancedPage::setAudioEngine(AudioEngine* engine)
-{
-    m_engine = engine;
-}
-
 // ---------------------------------------------------------------------------
 // Section 1 — DSP sample-rate + block-size
 // ---------------------------------------------------------------------------

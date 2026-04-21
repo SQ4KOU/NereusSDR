@@ -14,6 +14,7 @@
 
 #include "core/AudioDeviceConfig.h"
 #include "core/AudioEngine.h"
+#include "models/RadioModel.h"
 
 #include <QSignalBlocker>
 #include <QVBoxLayout>
@@ -22,12 +23,12 @@ namespace NereusSDR {
 
 AudioDevicesPage::AudioDevicesPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("Devices"), model, parent)
+    , m_engine(model ? model->audioEngine() : nullptr)
 {
     // ── Speakers card ────────────────────────────────────────────────────
     m_speakersCard = new DeviceCard(
         QStringLiteral("audio/Speakers"),
         DeviceCard::Role::Output,
-        nullptr,       // engine not yet available; see setAudioEngine()
         false,         // no enable checkbox
         this);
     m_speakersCard->setTitle(QStringLiteral("Speakers"));
@@ -37,7 +38,6 @@ AudioDevicesPage::AudioDevicesPage(RadioModel* model, QWidget* parent)
     m_headphonesCard = new DeviceCard(
         QStringLiteral("audio/Headphones"),
         DeviceCard::Role::Output,
-        nullptr,
         true,          // enable checkbox in title bar
         this);
     m_headphonesCard->setTitle(QStringLiteral("Headphones"));
@@ -47,20 +47,18 @@ AudioDevicesPage::AudioDevicesPage(RadioModel* model, QWidget* parent)
     m_txInputCard = new DeviceCard(
         QStringLiteral("audio/TxInput"),
         DeviceCard::Role::Input,
-        nullptr,
         false,
         this);
     m_txInputCard->setTitle(QStringLiteral("TX Input (Microphone)"));
     contentLayout()->insertWidget(2, m_txInputCard);
+
+    if (m_engine) {
+        wireEngineConnections();
+    }
 }
 
-void AudioDevicesPage::setAudioEngine(AudioEngine* engine)
+void AudioDevicesPage::wireEngineConnections()
 {
-    m_engine = engine;
-    if (!engine) {
-        return;
-    }
-
     // ── Speakers card → engine ────────────────────────────────────────────
     connect(m_speakersCard, &DeviceCard::configChanged,
             this, [this](const AudioDeviceConfig& cfg) {
@@ -69,7 +67,7 @@ void AudioDevicesPage::setAudioEngine(AudioEngine* engine)
             });
 
     // Engine → Speakers pill (QSignalBlocker prevents echo).
-    connect(engine, &AudioEngine::speakersConfigChanged,
+    connect(m_engine, &AudioEngine::speakersConfigChanged,
             this, [this](const AudioDeviceConfig& cfg) {
                 m_updatingFromEngine = true;
                 QSignalBlocker blocker(m_speakersCard);
@@ -84,7 +82,7 @@ void AudioDevicesPage::setAudioEngine(AudioEngine* engine)
                 m_engine->setHeadphonesConfig(cfg);
             });
 
-    connect(engine, &AudioEngine::headphonesConfigChanged,
+    connect(m_engine, &AudioEngine::headphonesConfigChanged,
             this, [this](const AudioDeviceConfig& cfg) {
                 m_updatingFromEngine = true;
                 QSignalBlocker blocker(m_headphonesCard);
@@ -99,7 +97,7 @@ void AudioDevicesPage::setAudioEngine(AudioEngine* engine)
                 m_engine->setTxInputConfig(cfg);
             });
 
-    connect(engine, &AudioEngine::txInputConfigChanged,
+    connect(m_engine, &AudioEngine::txInputConfigChanged,
             this, [this](const AudioDeviceConfig& cfg) {
                 m_updatingFromEngine = true;
                 QSignalBlocker blocker(m_txInputCard);

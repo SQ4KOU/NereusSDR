@@ -45,9 +45,7 @@ class VaxChannelCard : public QGroupBox {
     Q_OBJECT
 public:
     // channel — 1..4. prefix — e.g. "audio/Vax1".
-    // engine — non-owning; passed through to the inner DeviceCard.
     explicit VaxChannelCard(int channel,
-                            AudioEngine* engine,
                             QWidget* parent = nullptr);
 
     // Load saved settings without emitting configChanged.

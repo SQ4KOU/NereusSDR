@@ -44,8 +44,6 @@ class AudioAdvancedPage : public SetupPage {
 public:
     explicit AudioAdvancedPage(RadioModel* model, QWidget* parent = nullptr);
 
-    void setAudioEngine(AudioEngine* engine);
-
     // Event filter — blocks wheel events on un-focused combo boxes inside
     // the scroll area (same pattern as DeviceCard).
     bool eventFilter(QObject* obj, QEvent* event) override;

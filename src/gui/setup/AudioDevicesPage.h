@@ -43,12 +43,9 @@ class AudioDevicesPage : public SetupPage {
 public:
     explicit AudioDevicesPage(RadioModel* model, QWidget* parent = nullptr);
 
-    // Called by MainWindow / SetupDialog to inject the AudioEngine pointer
-    // after construction (the page may be constructed before the engine
-    // is available). Also connects the engine signals for pill updates.
-    void setAudioEngine(AudioEngine* engine);
-
 private:
+    void wireEngineConnections();
+
     AudioEngine* m_engine{nullptr};
 
     DeviceCard* m_speakersCard{nullptr};

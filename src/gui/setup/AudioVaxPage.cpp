@@ -74,7 +74,7 @@ static const char* kAutoDetectStyle =
 // ---------------------------------------------------------------------------
 // VaxChannelCard
 // ---------------------------------------------------------------------------
-VaxChannelCard::VaxChannelCard(int channel, AudioEngine* engine, QWidget* parent)
+VaxChannelCard::VaxChannelCard(int channel, QWidget* parent)
     : QGroupBox(QStringLiteral("VAX %1").arg(channel), parent)
     , m_channel(channel)
     , m_prefix(QStringLiteral("audio/Vax%1").arg(channel))
@@ -86,7 +86,7 @@ VaxChannelCard::VaxChannelCard(int channel, AudioEngine* engine, QWidget* parent
     outerLayout->setSpacing(6);
 
     // Inner DeviceCard (7-row form + enable checkbox in title).
-    m_deviceCard = new DeviceCard(m_prefix, DeviceCard::Role::Output, engine,
+    m_deviceCard = new DeviceCard(m_prefix, DeviceCard::Role::Output,
                                   /*enableCheckbox=*/true, this);
     outerLayout->addWidget(m_deviceCard);
 
@@ -430,7 +430,7 @@ void AudioVaxPage::buildPage()
     // Tracked by TODO(sub-phase-12-native-hal-default).
     m_channelCards.reserve(4);
     for (int ch = 1; ch <= 4; ++ch) {
-        auto* card = new VaxChannelCard(ch, m_engine, container);
+        auto* card = new VaxChannelCard(ch, container);
         card->loadFromSettings();
         m_channelCards.append(card);
         vLayout->addWidget(card);

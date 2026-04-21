@@ -33,8 +33,6 @@ class QTimer;
 
 namespace NereusSDR {
 
-class AudioEngine;
-
 // DeviceCard — one audio-endpoint group box.
 //
 // Emits configChanged(AudioDeviceConfig) whenever any control changes
@@ -52,12 +50,10 @@ public:
 
     // prefix — "audio/Speakers", "audio/Headphones", or "audio/TxInput".
     // role   — Output or Input (determines capture direction + extras).
-    // engine — non-owning pointer used for device enumeration.
     // enableCheckbox — if true, a checkbox in the group box title enables
     //   or disables the card (used for Headphones).
     explicit DeviceCard(const QString& prefix,
                         Role role,
-                        AudioEngine* engine,
                         bool enableCheckbox = false,
                         QWidget* parent = nullptr);
 
@@ -102,7 +98,6 @@ private:
 
     QString       m_prefix;
     Role          m_role;
-    AudioEngine*  m_engine{nullptr};
     bool          m_suppressSignals{false};
 
     // Controls
