@@ -466,6 +466,26 @@ void AudioEngine::setVaxConfig(int channel, const AudioDeviceConfig& cfg)
     }
     const int idx = channel - 1;
     m_vaxBus[idx].reset();
+
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
+    // Empty deviceName = user has not picked a BYO override. Fall back to
+    // the platform-native HAL bus (shmem bridge) rather than PortAudio's
+    // platform default — the latter resolves to the speakers device on a
+    // machine with no virtual cable installed and causes raw VAX audio to
+    // bleed through the speakers (pre-master-volume tee, uncontrollable).
+    // Matches the addendum §2.2 default-on-Mac/Linux contract.
+    if (cfg.deviceName.isEmpty()) {
+        m_vaxBus[idx] = makeVaxBus(channel);
+        if (m_vaxBus[idx]) {
+            qCInfo(lcAudio) << "VAX" << channel
+                            << "bus restored (native HAL fallback)"
+                            << "[" << m_vaxBus[idx]->backendName() << "]";
+        }
+        emit vaxConfigChanged(channel, cfg);
+        return;
+    }
+#endif
+
     if (!m_paInitialized) {
         return;
     }

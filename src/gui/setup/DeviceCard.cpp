@@ -147,21 +147,32 @@ DeviceCard::DeviceCard(const QString& prefix,
     setStyleSheet(QLatin1String(kGroupStyle));
     buildLayout();
 
-    // Title-bar enable checkbox (Headphones).
+    // Enable checkbox (Headphones + VAX channels).  Inserted as the first
+    // visible row of the card rather than using QGroupBox::setCheckable(true),
+    // which clips the group title on platforms whose native checkable-title
+    // indicator eats part of the title padding.  The checkbox persists via
+    // audio/<prefix>/Enabled (separate from the 10-field AudioDeviceConfig
+    // round-trip, since "enabled" is a bus-open decision, not a device param).
     if (enableCheckbox) {
         m_enableChk = new QCheckBox(QStringLiteral("Enabled"), this);
         m_enableChk->setStyleSheet(QLatin1String(kCheckStyle));
-        // The checkbox sits in the group-box title via a title widget.
-        // QGroupBox doesn't natively support title widgets; we use the
-        // group's own checkable mode instead — simpler and Qt-native.
-        setCheckable(true);
-        setChecked(false);
-        // Connect the built-in checkable toggle to our enabledChanged signal.
-        connect(this, &QGroupBox::toggled, this, [this](bool on) {
-            if (!m_suppressSignals) {
-                emit enabledChanged(on);
-                onAnyControlChanged();
+        auto* outer = qobject_cast<QVBoxLayout*>(layout());
+        if (outer) {
+            auto* headerRow = new QHBoxLayout;
+            headerRow->setSpacing(4);
+            headerRow->addWidget(m_enableChk);
+            headerRow->addStretch(1);
+            outer->insertLayout(0, headerRow);
+        }
+        connect(m_enableChk, &QCheckBox::toggled, this, [this](bool on) {
+            if (m_suppressSignals) {
+                return;
             }
+            AppSettings::instance().setValue(
+                m_prefix + QStringLiteral("/Enabled"),
+                on ? QStringLiteral("True") : QStringLiteral("False"));
+            AppSettings::instance().save();
+            emit enabledChanged(on);
         });
     }
 
@@ -581,6 +592,17 @@ void DeviceCard::loadFromSettings()
     if (m_exclusiveChk)   { m_exclusiveChk->setChecked(cfg.exclusiveMode); }
     if (m_eventDrivenChk) { m_eventDrivenChk->setChecked(cfg.eventDriven); }
     if (m_bypassMixerChk) { m_bypassMixerChk->setChecked(cfg.bypassMixer); }
+
+    // Enable checkbox (Headphones + VAX channels) — restored from
+    // audio/<prefix>/Enabled.  Default is unchecked on fresh install so the
+    // bus only opens after explicit user consent.
+    if (m_enableChk) {
+        const bool on = AppSettings::instance()
+                            .value(m_prefix + QStringLiteral("/Enabled"),
+                                   QStringLiteral("False"))
+                            .toString() == QStringLiteral("True");
+        m_enableChk->setChecked(on);
+    }
 
     m_suppressSignals = false;
 }

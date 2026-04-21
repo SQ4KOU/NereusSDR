@@ -77,6 +77,21 @@ public:
         return m_enableChk ? m_enableChk->isChecked() : true;
     }
 
+    // Grey out the enable checkbox (e.g. VaxChannelCard on Windows when no
+    // BYO device has been picked, so the user can't toggle Enabled into the
+    // "open platform default = speakers" footgun). No-op when there is no
+    // enable checkbox on this card.
+    void setEnableAllowed(bool allowed)
+    {
+        if (m_enableChk) {
+            m_enableChk->setEnabled(allowed);
+            m_enableChk->setToolTip(
+                allowed
+                    ? QString()
+                    : QStringLiteral("Pick a device first"));
+        }
+    }
+
 signals:
     // Emitted on any control edit (excluding loadFromSettings).
     // Carries the card's current AudioDeviceConfig.

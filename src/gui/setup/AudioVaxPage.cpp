@@ -25,7 +25,6 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
-#include <QScrollArea>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -219,6 +218,16 @@ void VaxChannelCard::updateBadge()
     const bool hasDevice = !currentDeviceName().isEmpty();
     m_autoDetectBtn->setVisible(!hasDevice);
 
+#if defined(Q_OS_WIN)
+    // Windows has no native HAL fallback — empty deviceName on setVaxConfig
+    // resolves to PortAudio's platform default, which on a box without a
+    // virtual cable is the speakers device (raw pre-master-volume bleed).
+    // Gate the Enabled checkbox until the user picks a real device.  On
+    // Mac/Linux the engine falls back to the native HAL bus automatically
+    // (AudioEngine::setVaxConfig), so no gate is needed there.
+    m_deviceCard->setEnableAllowed(hasDevice);
+#endif
+
 #if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
     // Amber badge: show only when bound to non-native and consumerCount == 0.
     // The native device name contains "NereusSDR" (reserved for the NereusSDR
@@ -394,28 +403,21 @@ AudioVaxPage::AudioVaxPage(RadioModel* model, QWidget* parent)
 
 void AudioVaxPage::buildPage()
 {
-    // Scrollable content area so the page fits on small screens.
-    auto* scrollArea = new QScrollArea(this);
-    scrollArea->setWidgetResizable(true);
-    scrollArea->setFrameShape(QFrame::NoFrame);
-    scrollArea->setStyleSheet(
-        "QScrollArea { background: transparent; }"
-        "QScrollBar:vertical { background: #0f0f1a; width: 8px; }"
-        "QScrollBar::handle:vertical { background: #203040; border-radius: 4px; }"
-        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
-
-    auto* container = new QWidget;
-    container->setStyleSheet(QStringLiteral("background: transparent;"));
-    auto* vLayout = new QVBoxLayout(container);
-    vLayout->setContentsMargins(0, 0, 0, 0);
-    vLayout->setSpacing(8);
+    // SetupPage base already wraps contentLayout() in a QScrollArea with a
+    // trailing addStretch(1) — insert widgets before that stretch so the
+    // content stacks from the top of the viewport (pattern from
+    // SetupPage::addSection).
+    auto insertBeforeStretch = [this](QWidget* w) {
+        const int stretchIndex = contentLayout()->count() - 1;
+        contentLayout()->insertWidget(stretchIndex, w);
+    };
 
     // Section header.
     auto* headerLabel = new QLabel(
-        QStringLiteral("Virtual Audio eXchange — channel bindings"), container);
+        QStringLiteral("Virtual Audio eXchange — channel bindings"), this);
     headerLabel->setStyleSheet(
         QStringLiteral("QLabel { color: #8aa8c0; font-size: 12px; }"));
-    vLayout->addWidget(headerLabel);
+    insertBeforeStretch(headerLabel);
 
     // Four VAX channel cards (1–4).
     //
@@ -430,10 +432,10 @@ void AudioVaxPage::buildPage()
     // Tracked by TODO(sub-phase-12-native-hal-default).
     m_channelCards.reserve(4);
     for (int ch = 1; ch <= 4; ++ch) {
-        auto* card = new VaxChannelCard(ch, container);
+        auto* card = new VaxChannelCard(ch, this);
         card->loadFromSettings();
         m_channelCards.append(card);
-        vLayout->addWidget(card);
+        insertBeforeStretch(card);
 
         // Wire configChanged to AudioEngine.
         if (m_engine) {
@@ -449,7 +451,7 @@ void AudioVaxPage::buildPage()
     }
 
     // TX row — informational; actual TX → VAX routing lands in Phase 3M.
-    auto* txGroup = new QGroupBox(QStringLiteral("TX Monitor"), container);
+    auto* txGroup = new QGroupBox(QStringLiteral("TX Monitor"), this);
     txGroup->setStyleSheet(QLatin1String(kGroupStyle));
     auto* txLayout = new QVBoxLayout(txGroup);
     auto* txLabel = new QLabel(
@@ -460,14 +462,7 @@ void AudioVaxPage::buildPage()
     txLabel->setStyleSheet(QStringLiteral("QLabel { color: #607080; font-size: 11px; }"));
     txLabel->setWordWrap(true);
     txLayout->addWidget(txLabel);
-    vLayout->addWidget(txGroup);
-
-    vLayout->addStretch(1);
-
-    scrollArea->setWidget(container);
-
-    // Insert the scroll area into this SetupPage's contentLayout.
-    contentLayout()->addWidget(scrollArea);
+    insertBeforeStretch(txGroup);
 }
 
 void AudioVaxPage::wirePillFeedback()

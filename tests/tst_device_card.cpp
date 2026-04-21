@@ -70,13 +70,25 @@ private slots:
         QVERIFY(true);
     }
 
-    // ── 3. Card with enableCheckbox is checkable ──────────────────────────
+    // ── 3. Card with enableCheckbox exposes an "Enabled" QCheckBox ────────
 
-    void headphonesCardIsCheckable() {
+    void headphonesCardHasEnableCheckbox() {
         DeviceCard card(QStringLiteral("audio/Headphones"),
                         DeviceCard::Role::Output,
                         true);  // enableCheckbox
-        QVERIFY(card.isCheckable());
+        // The card no longer uses QGroupBox::setCheckable (the native title-
+        // bar indicator clips on some platforms and forces awkward interior-
+        // disabled semantics).  Instead there is a real "Enabled" QCheckBox
+        // laid out as the first visible row.  Verify it exists.
+        bool foundEnabled = false;
+        for (auto* c : card.findChildren<QCheckBox*>()) {
+            if (c->text() == QStringLiteral("Enabled")) {
+                foundEnabled = true;
+                break;
+            }
+        }
+        QVERIFY2(foundEnabled,
+                 "enableCheckbox=true should add a QCheckBox labelled Enabled");
     }
 
     // ── 4. currentConfig() returns non-default AudioDeviceConfig ──────────
@@ -193,10 +205,19 @@ private slots:
                         DeviceCard::Role::Output,
                         true);  // enableCheckbox
 
-        QSignalSpy spy(&card, &DeviceCard::enabledChanged);
+        // Locate the "Enabled" checkbox (first visible row of the card).
+        QCheckBox* enableChk = nullptr;
+        for (auto* c : card.findChildren<QCheckBox*>()) {
+            if (c->text() == QStringLiteral("Enabled")) {
+                enableChk = c;
+                break;
+            }
+        }
+        QVERIFY(enableChk != nullptr);
 
-        const bool before = card.isChecked();
-        card.setChecked(!before);
+        QSignalSpy spy(&card, &DeviceCard::enabledChanged);
+        const bool before = enableChk->isChecked();
+        enableChk->setChecked(!before);
 
         QVERIFY2(spy.count() >= 1, "enabledChanged not emitted on toggle");
     }
