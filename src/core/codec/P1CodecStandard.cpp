@@ -65,14 +65,44 @@ void P1CodecStandard::composeCcForBank(int bank, const CodecContext& ctx,
             out[4] = quint8( ctx.txFreqHz        & 0xFF);
             return;
 
-        // Banks 2-9 — RX VFOs (0..7), one per bank
-        // Source: networkproto1.c:485-576 [@501e3f5]
-        case 2: case 3: case 4: case 5: case 6: case 7: case 8: case 9: {
-            out[0] = C0base | quint8(0x04 + (bank - 2) * 2);
+        // Banks 2-3 — RX1/RX2 VFOs (DDC0/DDC1)
+        // Source: networkproto1.c:485-511 [@501e3f5]
+        case 2: case 3: {
+            // bank 2 → rxIdx 0 (C0 |= 0x04), bank 3 → rxIdx 1 (C0 |= 0x06)
             const int rxIdx = bank - 2;
+            out[0] = C0base | quint8(0x04 + rxIdx * 2);
             const quint64 freq = (rxIdx < ctx.activeRxCount)
                                   ? ctx.rxFreqHz[rxIdx]
                                   : ctx.txFreqHz;  // unused DDCs default to TX freq
+            out[1] = quint8((freq >> 24) & 0xFF);
+            out[2] = quint8((freq >> 16) & 0xFF);
+            out[3] = quint8((freq >>  8) & 0xFF);
+            out[4] = quint8( freq        & 0xFF);
+            return;
+        }
+
+        // Bank 4 — ADC-to-DDC routing + TX step attenuator
+        // Source: networkproto1.c:517-523 [@501e3f5]
+        case 4:
+            out[0] = C0base | 0x1C;
+            out[1] = quint8(ctx.adcCtrl & 0xFF);
+            out[2] = quint8((ctx.adcCtrl >> 8) & 0x3F);
+            out[3] = quint8(ctx.txStepAttn[0] & 0x1F);
+            out[4] = 0;
+            return;
+
+        // Banks 5-9 — RX3-RX7 VFOs (DDC2-DDC6)
+        // Source: networkproto1.c:525-576 [@501e3f5]
+        // Unused DDCs get TX freq as a safe default.
+        case 5: case 6: case 7: case 8: case 9: {
+            // bank 5 → rxIdx 2 (C0 |= 0x08), ..., bank 9 → rxIdx 6 (C0 |= 0x10)
+            // Address table: rxIdx 2=0x08, 3=0x0A, 4=0x0C, 5=0x0E, 6=0x10
+            static const quint8 kRxC0Addr[] = { 0x08, 0x0A, 0x0C, 0x0E, 0x10 };
+            const int rxIdx = bank - 3;  // bank 5 → rxIdx 2, bank 9 → rxIdx 6
+            out[0] = C0base | kRxC0Addr[bank - 5];
+            const quint64 freq = (rxIdx < ctx.activeRxCount)
+                                  ? ctx.rxFreqHz[rxIdx]
+                                  : ctx.txFreqHz;
             out[1] = quint8((freq >> 24) & 0xFF);
             out[2] = quint8((freq >> 16) & 0xFF);
             out[3] = quint8((freq >>  8) & 0xFF);
