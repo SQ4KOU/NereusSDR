@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.1-issue83] - 2026-04-21
+
+Diagnostic-only build off `v0.2.1` for GitHub issue #83 (HL2 close-crash
+on Windows). **Do not install over a general 0.2.1 deployment** — it is
+intended for the reporter's repro only.
+
+### Diagnostics
+- `std::set_terminate` handler in `main.cpp` that logs the escaping
+  exception's type and `what()` via `qCritical`, flushes the log, then
+  calls `std::abort` (preserving the `FAST_FAIL_FATAL_APP_EXIT` minidump
+  signature).
+- `qCInfo` bookends through every step of `RadioModel::teardownConnection`,
+  `P1RadioConnection::disconnect`, and `teardownWorkerThreadedConnection`.
+  Pinpoints the last shutdown step reached before `std::terminate` fires.
+- Startup log line tagged `[debug/issue-83-shutdown-diagnostic]` for build
+  identification.
+
+Behaviour is otherwise identical to `v0.2.1`.
+
+
 ## [0.2.1] - 2026-04-19
 
 ### Features
