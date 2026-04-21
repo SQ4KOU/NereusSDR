@@ -40,6 +40,8 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/core/codec/P1CodecRedPitaya.h | Project Files/Source/ChannelMaster/networkproto1.c | 606-616 | port | thetis-no-samphire | header mirrors .cpp |
 | src/core/codec/P1CodecHl2.cpp | Project Files/Source/ChannelMaster/networkproto1.c | 869-1201 | port | mi0bot | mi0bot WriteMainLoop_HL2 port; HL2-only codec; bank 11 6-bit ATT (0x3F) + 0x40 enable + MOX branch fixes the reported S-ATT bug; banks 17-18 HL2-specific |
 | src/core/codec/P1CodecHl2.h | Project Files/Source/ChannelMaster/networkproto1.c | 869-1201 | port | mi0bot | header mirrors .cpp |
+| src/core/codec/P2CodecOrionMkII.cpp | Project Files/Source/ChannelMaster/network.c | 821-1248 | port | thetis-no-samphire | base P2 codec for OrionMKII / 7000D / 8000D / AnvelinaPro3; lifted from P2RadioConnection inline compose helpers |
+| src/core/codec/P2CodecOrionMkII.h | Project Files/Source/ChannelMaster/network.c | 821-1248 | port | thetis-no-samphire | header mirrors .cpp |
 | src/core/ClarityController.h | Project Files/Source/Console/display.cs | 5866 | port | thetis-samphire | replaces Thetis processNoiseFloor with percentile-based estimator; cites Thetis as lineage |
 | src/core/FFTEngine.cpp | Project Files/Source/Console/display.cs | 2842 | port | thetis-samphire | constant reference only (-200 dBm initial value) |
 | src/core/FFTEngine.h | Project Files/Source/Console/display.cs | 215 | port | thetis-samphire | BUFFER_SIZE = 16384 constant + enum mapping |
