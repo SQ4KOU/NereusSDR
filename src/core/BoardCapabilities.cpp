@@ -759,11 +759,26 @@ std::span<const PreampItem> rx2PreampItemsForBoard(HPSDRHW hw) noexcept
 
 int stepAttMaxDb(HPSDRHW hw, bool alexPresent) noexcept
 {
-    // From Thetis setup.cs:15765 — 61 dB when ALEX present and board is NOT
-    // in the exclusion list (ANAN-10/10E/7000D/8000D/OrionMkII/G2/G2-1K/
-    // AnvelinaPro3/RedPitaya). NereusSDR maps by HPSDRHW, not HPSDRModel.
-    // Exclusion list boards: OrionMKII, Saturn (G2/G2-1K), HermesLite.
-    // Boards that CAN reach 61: Atlas, Hermes, HermesII, Angelia, Orion.
+    // Phase 3P-A Task 15: delegate to BoardCapabilities::attenuator.maxDb
+    // as the single source of truth.
+    //
+    // HL2 stores maxDb=63 (mi0bot [@c26a8a4] 6-bit LNA range); all
+    // standard boards store 31. Alex-equipped boards that are not in the
+    // Thetis exclusion list (setup.cs:15765 [v2.10.3.13]) can reach 61
+    // via the Alex relay — that is captured by hasAlexRelayAttMax in the
+    // caps table and applied below.
+    const BoardCapabilities& caps = forBoard(hw);
+    if (!caps.attenuator.present) { return 0; }
+
+    // HL2 (and any future board with a custom maxDb) bypasses Alex logic:
+    // its native range is already encoded in attenuator.maxDb.
+    if (caps.attenuator.maxDb != 31) { return caps.attenuator.maxDb; }
+
+    // Standard 31 dB boards: Alex presence can extend to 61 for boards
+    // that are NOT in Thetis's exclusion list. The exclusion list in
+    // Thetis setup.cs:15765 excludes OrionMKII, Saturn (G2/G2-1K),
+    // HermesLite, AnvelinaPro3, and RedPitaya. We map by HPSDRHW.
+    // From Thetis setup.cs:15765 [v2.10.3.13].
     if (!alexPresent) { return 31; }
 
     switch (hw) {

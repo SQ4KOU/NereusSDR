@@ -279,8 +279,10 @@ namespace BoardCapsTable {
     std::span<const PreampItem> rx2PreampItemsForBoard(HPSDRHW hw) noexcept;
 
     // Returns the step attenuator maximum dB for a given board + ALEX presence.
-    // From Thetis setup.cs:15765 udHermesStepAttenuatorData max logic.
-    // 31 for most boards, 61 for ALEX-equipped boards not in the exclusion list.
+    // Delegates to BoardCapabilities::attenuator.maxDb (single source of truth).
+    // From Thetis setup.cs:15765 [v2.10.3.13]: 31 for most boards, 61 for
+    // ALEX-equipped boards not in the exclusion list (OrionMKII/Saturn/HL2).
+    // Exception: HL2 returns 63 (6-bit LNA range, mi0bot [@c26a8a4]).
     int stepAttMaxDb(HPSDRHW hw, bool alexPresent) noexcept;
 }
 
