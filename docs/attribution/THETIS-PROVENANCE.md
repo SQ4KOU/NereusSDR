@@ -266,6 +266,8 @@ Discovery-reply hex fixtures are covered by `tests/fixtures/discovery/README.md`
 | src/gui/setup/hardware/Hl2IoBoardTab.cpp | HPSDR/IoBoardHl2.cs | 79; 139; 194-198 | port | mi0bot-solo | IoBoardHl2.cs is fork-unique: authored solely by Reid Campbell (MI0BOT), `Copyright (C) 2025 Reid Campbell, MI0BOT, mi0bot@trom.uk`, no FlexRadio/Wigley/Samphire contributions, no dual-license stanza |
 | src/gui/setup/hardware/Hl2IoBoardTab.h | HPSDR/IoBoardHl2.cs | 79; 139; 194-198 | port | mi0bot-solo | same attribution as Hl2IoBoardTab.cpp — Reid Campbell (MI0BOT) solo |
 | tests/tst_radio_discovery_parse.cpp | HPSDR/clsRadioDiscovery.cs | 1145-1195; 1201-1226 | port | mi0bot | tests the mi0bot-added HL2 discovery parsing; attribution matches RadioDiscovery.cpp |
+| src/core/IoBoardHl2.cpp | HPSDR/IoBoardHl2.cs; ChannelMaster/network.h; Console/console.cs | full; 112-148; 25781-25945 | port | mi0bot | IOBoard Registers enum (verbatim integer values), HardwareVersion enum, 256-byte register mirror, 32-slot I2C FIFO (MAX_I2C_QUEUE=32 from network.h), 12-step UpdateIOBoard state machine (switch(state++) from console.cs); closes Phase 3I-T12 |
+| src/core/IoBoardHl2.h | HPSDR/IoBoardHl2.cs; ChannelMaster/network.h; Console/console.cs | full; 112-148; 25781-25945 | port | mi0bot | header mirrors IoBoardHl2.cpp |
 
 ## Files derived from TAPR WDSP
 

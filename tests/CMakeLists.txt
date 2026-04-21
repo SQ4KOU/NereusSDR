@@ -325,3 +325,11 @@ target_compile_definitions(tst_oc_outputs_hf_tab PRIVATE NEREUS_BUILD_TESTS)
 #   - Detaching matrix (setOcMatrix(nullptr)) reverts to legacy 0.
 nereus_add_test(tst_p1_oc_matrix_wiring)
 target_compile_definitions(tst_p1_oc_matrix_wiring PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-E Task 1: IoBoardHl2 model ──────────────────────────────────────
+# Verifies the 32-slot circular I2C FIFO (enqueue/dequeue/depth/clear/overflow),
+# 12-step UpdateIOBoard state machine cycle (advance wraps 11→0, all step
+# descriptor strings match mi0bot console.cs:25844-25928 [@c26a8a4]), register
+# mirror (256-byte array, HardwareVersion stored separately), and
+# detection bool (idempotent setter, signal on change).
+nereus_add_test(tst_io_board_hl2)
