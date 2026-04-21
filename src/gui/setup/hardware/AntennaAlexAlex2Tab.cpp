@@ -68,7 +68,7 @@
 
 #include "core/AppSettings.h"
 #include "core/HpsdrModel.h"
-#include "models/PanadapterModel.h"
+#include "models/SliceModel.h"
 #include "models/RadioModel.h"
 
 #include <QCheckBox>
@@ -398,19 +398,30 @@ AntennaAlexAlex2Tab::AntennaAlexAlex2Tab(RadioModel* model, QWidget* parent)
     contentLayout->addStretch();
 
     // ── Live LED driver (Phase 3P-H Task 5a) ─────────────────────────────────
-    // PanadapterModel is the single source of truth for the current RX
-    // frequency (see PanadapterModel::setCenterFrequency).  The first
-    // panadapter's centerFrequencyChanged drives LED selection.
-    // Source: Thetis console.cs:setAlex2HPF / setAlex2LPF dispatch from
-    // Console.UpdateAlexRX/TX on frequency change [@501e3f5].
+    // Thetis's setAlex2HPF / setAlex2LPF dispatch on the active RX VFO
+    // frequency (not the panadapter center). In CTUN mode the pan centre
+    // stays put while the slice tunes, so subscribing to PanadapterModel::
+    // centerFrequencyChanged misses edge crossings. Use SliceModel::
+    // frequencyChanged. Subscribe to every current + future slice so
+    // post-connect addSlice() events don't leave us unwired.
+    // Source: Thetis console.cs:setAlex2HPF / setAlex2LPF [@501e3f5].
     if (m_model) {
-        const auto pans = m_model->panadapters();
-        if (!pans.isEmpty()) {
-            PanadapterModel* pan = pans.first();
-            m_currentFreqHz = pan->centerFrequency();
-            connect(pan, &PanadapterModel::centerFrequencyChanged,
+        auto subscribeToSlice = [this](SliceModel* slice) {
+            if (!slice) { return; }
+            m_currentFreqHz = slice->frequency();
+            connect(slice, &SliceModel::frequencyChanged,
                     this, &AntennaAlexAlex2Tab::setCurrentFrequencyHz);
+        };
+        for (SliceModel* slice : m_model->slices()) {
+            subscribeToSlice(slice);
         }
+        connect(m_model, &RadioModel::sliceAdded, this,
+                [this, subscribeToSlice](int index) {
+                    const auto slices = m_model->slices();
+                    if (index >= 0 && index < slices.size()) {
+                        subscribeToSlice(slices[index]);
+                    }
+                });
     }
 
     // Master bypass toggle changes flip every HPF row to the bypass LED.

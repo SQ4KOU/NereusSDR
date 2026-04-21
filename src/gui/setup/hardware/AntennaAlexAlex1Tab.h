@@ -85,6 +85,7 @@
 
 class QCheckBox;
 class QDoubleSpinBox;
+class QFrame;
 class QGroupBox;
 class QLabel;
 
@@ -120,6 +121,19 @@ public:
     // Always compiled (NEREUS_BUILD_TESTS is set on NereusSDRObjs globally). Used by
     // tst_alex1_filters_tab to verify the Saturn/non-Saturn capability gate.
     bool isSaturnBpf1Visible() const;
+
+    // Live-LED test seams — mirrors AntennaAlexAlex2Tab.
+    // Returns the index of the currently-highlighted HPF / LPF row, or -1
+    // when no row matches. HPF index 5 (the 6m-bypass row) doubles as the
+    // Thetis setAlexHPF fallback when master bypass is engaged or no band
+    // row matches.
+    int  activeHpfLedForTest() const { return m_activeHpfIndex; }
+    int  activeLpfLedForTest() const { return m_activeLpfIndex; }
+
+    // Drives the LED selection from a frequency (Hz). Exposed for unit
+    // tests and called internally on SliceModel::frequencyChanged.
+    // Source: Thetis console.cs:setAlexHPF / setAlexLPF range match [@501e3f5]
+    void setCurrentFrequencyHz(double freqHz);
 
 signals:
     void settingChanged(const QString& key, const QVariant& value);
@@ -194,6 +208,30 @@ private:
     // Column 3 — Saturn BPF1 rows (same 6-row shape as HPF)
     QGroupBox*                 m_bpf1Group{nullptr};
     std::vector<HpfRowWidgets> m_bpf1Rows;
+
+    // Live-LED indicators, one per HPF/LPF row (same ordering as
+    // hpfBands() / lpfBands()). Added 2026-04-21 for UX parity with
+    // Alex-2. BPF1 rows intentionally get no LED — that panel is
+    // Saturn-only and is wired by the same codec path as Alex-1 HPF.
+    std::vector<QFrame*> m_hpfLeds;
+    std::vector<QFrame*> m_lpfLeds;
+
+    // Latest-known RX frequency (Hz). Used by updateActiveLeds() and
+    // also when a spinbox mutates so range-edits re-highlight without
+    // waiting for the next frequencyChanged emission.
+    double m_currentFreqHz{0.0};
+
+    // Cached indices of currently-highlighted rows (-1 = none lit).
+    int m_activeHpfIndex{-1};
+    int m_activeLpfIndex{-1};
+
+    // Recompute LED highlight from m_currentFreqHz and current spinbox
+    // values. Source: Thetis console.cs:setAlexHPF / setAlexLPF —
+    // master-bypass fallback → per-band bypass → first-match range [@501e3f5]
+    void updateActiveLeds();
+
+    // Restyle an LED frame lit / unlit.
+    static void setLedLit(QFrame* led, bool lit);
 
     // Static band tables
     static const std::vector<HpfBandEntry>& hpfBands();

@@ -12,8 +12,8 @@
 #include <QApplication>
 
 #include "gui/setup/hardware/AntennaAlexAlex2Tab.h"
-#include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 using namespace NereusSDR;
 
@@ -77,19 +77,23 @@ private slots:
         QCOMPARE(tab.activeLpfLedForTest(), -1);
     }
 
-    // LED select updates on centerFrequencyChanged from the first panadapter.
-    void centerFrequencyChanged_signal_drives_leds()
+    // LED select updates on SliceModel::frequencyChanged from slice 0.
+    // 2026-04-21: ported from PanadapterModel::centerFrequencyChanged —
+    // in CTUN mode the pan centre stays put while the slice tunes, so
+    // subscribing to the pan missed edge crossings. See commit message
+    // for AntennaAlexAlex2Tab wiring change.
+    void sliceFrequencyChanged_signal_drives_leds()
     {
         RadioModel model;
-        model.addPanadapter();
-        QVERIFY(!model.panadapters().isEmpty());
-        PanadapterModel* pan = model.panadapters().first();
+        model.addSlice();
+        QVERIFY(!model.slices().isEmpty());
+        SliceModel* slice = model.slices().first();
         AntennaAlexAlex2Tab tab(&model);
 
-        pan->setCenterFrequency(7.150e6);    // 40m — LPF row 2 (60/40m).
+        slice->setFrequency(7.150e6);    // 40m — LPF row 2 (60/40m).
         QCOMPARE(tab.activeLpfLedForTest(), 2);
 
-        pan->setCenterFrequency(28.500e6);   // 10m — LPF row 5 (12/10m).
+        slice->setFrequency(28.500e6);   // 10m — LPF row 5 (12/10m).
         QCOMPARE(tab.activeLpfLedForTest(), 5);
     }
 };

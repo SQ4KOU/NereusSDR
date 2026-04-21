@@ -444,6 +444,16 @@ target_compile_definitions(tst_calibration_tab PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_alex2_live_leds)
 target_compile_definitions(tst_alex2_live_leds PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Alex-1 Filters live LED (UX parity follow-up, 2026-04-21) ─────────────────
+# Mirrors tst_alex2_live_leds for the Alex-1 Filters sub-sub-tab. Verifies
+# AntennaAlexAlex1Tab::updateActiveLeds() lights the correct HPF/LPF row
+# for the current SliceModel frequency per Thetis console.cs:setAlexHPF /
+# setAlexLPF [@501e3f5]. Does not cover the Saturn BPF1 column — that is a
+# separate panel with its own edge table and needs its own LED work if
+# Saturn-mode BPF1 is enabled.
+nereus_add_test(tst_alex1_live_leds)
+target_compile_definitions(tst_alex1_live_leds PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3P-H Task 5b: OC Outputs live pin-state LED row ─────────────────────
 # Verifies OcOutputsHfTab::onLiveStateChanged() computes the displayed OC
 # byte = OcMatrix::maskFor(currentBand, isTx) via RadioModel's first
