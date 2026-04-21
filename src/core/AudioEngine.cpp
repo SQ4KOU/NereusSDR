@@ -562,15 +562,6 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         return;
     }
 
-    // Sub-Phase 12 Task 12.2 — live-reconfig safety: try to acquire the
-    // speakers bus mutex. If setSpeakersConfig is currently tearing down and
-    // rebuilding the bus, we can't safely use m_speakersBus — drop the block.
-    // ≤1 ms of silence is inaudible vs. a use-after-free on the old pointer.
-    // NOTE: this lock is only tried for the speakers push path at the bottom of
-    // this function; it must be held for the duration of the speakers push.
-    std::unique_lock<std::mutex> speakersLk(m_speakersBusMutex, std::try_to_lock);
-    const bool hasSpeakersLock = speakersLk.owns_lock();
-
     // SliceModel exposes muted() / setMuted() plus vaxChannel(). The
     // design spec uses audioMuted() as shorthand for the same property;
     // the alias is intentionally not introduced here (design-decision D5,
@@ -665,15 +656,24 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // receiving audio while the local monitor is muted. No alloc, no
     // logging — RT-safety preserved.
     //
-    // Sub-Phase 12 live-reconfig: hasSpeakersLock guards against using
-    // m_speakersBus while setSpeakersConfig is rebuilding it. If we
-    // couldn't acquire the mutex (try_lock returned false), drop the block.
-    if (hasSpeakersLock && !m_masterMuted.load(std::memory_order_acquire)) {
-        IAudioBus* speakersBus = m_speakersBus.get();
-        if (speakersBus != nullptr && speakersBus->isOpen()) {
-            speakersBus->push(
-                reinterpret_cast<const char*>(mix.data()),
-                static_cast<qint64>(stereoFloats) * sizeof(float));
+    // Sub-Phase 12 live-reconfig: try_lock the speakers bus mutex only
+    // around the push itself.  Previously this was held for the entire
+    // rxBlockReady (including master-mix accumulate + VAX tap + volume
+    // multiply), which meant a contending setSpeakersConfig on the GUI
+    // thread dropped the whole block (~1.3 ms of audio) — audible pops.
+    // Scoping down to just the push means a contending reconfig drops
+    // at most the speakers-push step; the VAX tap and master-mix
+    // accumulate keep running uninterrupted.
+    if (!m_masterMuted.load(std::memory_order_acquire)) {
+        std::unique_lock<std::mutex> speakersLk(m_speakersBusMutex,
+                                                std::try_to_lock);
+        if (speakersLk.owns_lock()) {
+            IAudioBus* speakersBus = m_speakersBus.get();
+            if (speakersBus != nullptr && speakersBus->isOpen()) {
+                speakersBus->push(
+                    reinterpret_cast<const char*>(mix.data()),
+                    static_cast<qint64>(stereoFloats) * sizeof(float));
+            }
         }
     }
 }
