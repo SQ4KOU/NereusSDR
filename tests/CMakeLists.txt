@@ -342,3 +342,18 @@ nereus_add_test(tst_io_board_hl2)
 # compiles and runs without crash.
 nereus_add_test(tst_p1_hl2_i2c_wiring)
 target_compile_definitions(tst_p1_hl2_i2c_wiring PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-E Task 3: HermesLiteBandwidthMonitor ────────────────────────────
+# Verifies the port of mi0bot bandwidth_monitor.{c,h} (MW0LGE [@c26a8a4]):
+#   - initial state (zero rates, not throttled, zero event count)
+#   - first-tick zero return (prev_ms == 0 branch in compute_bps)
+#   - bytes <= 0 are silently ignored (upstream if (bytes > 0) guard)
+#   - positive ingress rate after two real-clock ticks (delta path)
+#   - throttle requires ep2 to be active (not just ep6 silence)
+#   - throttle asserted after kThrottleTickThreshold consecutive silent ticks
+#   - throttle clears when ep6 resumes
+#   - throttle event count increments per throttle assertion
+#   - liveStatsUpdated emitted on every tick()
+#   - reset() clears all state (upstream bandwidth_monitor_reset() parity)
+#   - reset() emits throttledChanged(false) when previously throttled
+nereus_add_test(tst_hermes_lite_bandwidth_monitor)

@@ -565,6 +565,15 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         p1->setIoBoard(&m_ioBoard);
     }
 
+    // Wire HermesLiteBandwidthMonitor so P1RadioConnection can record ep6/ep2
+    // byte counts and drive the throttle-detection tick from onWatchdogTick().
+    // The monitor is owned by RadioModel; the connection holds a non-owning ptr.
+    // Phase 3P-E Task 3.
+    if (auto* p1 = qobject_cast<class P1RadioConnection*>(m_connection)) {
+        m_bwMonitor.reset();
+        p1->setBandwidthMonitor(&m_bwMonitor);
+    }
+
     // Create worker thread
     m_connThread = new QThread(this);
     m_connThread->setObjectName(QStringLiteral("ConnectionThread"));

@@ -240,6 +240,7 @@ mw0lge@grange-lane.co.uk
 #include "LogCategories.h"
 #include "OcMatrix.h"
 #include "IoBoardHl2.h"
+#include "HermesLiteBandwidthMonitor.h"
 #include "codec/P1CodecStandard.h"
 #include "codec/P1CodecAnvelinaPro3.h"
 #include "codec/P1CodecRedPitaya.h"
@@ -893,6 +894,18 @@ void P1RadioConnection::setIoBoard(IoBoardHl2* io)
 }
 
 // ---------------------------------------------------------------------------
+// setBandwidthMonitor — Phase 3P-E Task 3
+//
+// Wires the RadioModel-owned HermesLiteBandwidthMonitor into the connection.
+// Called by RadioModel::connectToRadio() when m_caps->hasBandwidthMonitor.
+// The pointer is non-owning — lifetime is managed by RadioModel.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setBandwidthMonitor(HermesLiteBandwidthMonitor* monitor)
+{
+    m_bwMonitor = monitor;
+}
+
+// ---------------------------------------------------------------------------
 // parseI2cResponse — Phase 3P-E Task 2
 //
 // Called from the instance parseEp6Frame() when incoming C&C status byte C0
@@ -1042,6 +1055,10 @@ void P1RadioConnection::onReadyRead()
                     m_reconnectedLogged = true;
                 }
             }
+
+            // Phase 3P-E Task 3: record ep6 ingress bytes for bandwidth monitor.
+            // Source: mi0bot bandwidth_monitor.c:74-78 bandwidth_monitor_in() [@c26a8a4]
+            if (m_bwMonitor) { m_bwMonitor->recordEp6Bytes(data.size()); }
 
             parseEp6Frame(data);
         }
@@ -1297,6 +1314,10 @@ void P1RadioConnection::sendCommandFrame()
 
     QByteArray pkt(reinterpret_cast<const char*>(frame), 1032);
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_radioInfo.port);
+
+    // Phase 3P-E Task 3: record ep2 egress bytes for bandwidth monitor.
+    // Source: mi0bot bandwidth_monitor.c:80-84 bandwidth_monitor_out() [@c26a8a4]
+    if (m_bwMonitor) { m_bwMonitor->recordEp2Bytes(pkt.size()); }
 }
 
 // ---------------------------------------------------------------------------
@@ -1661,17 +1682,39 @@ void P1RadioConnection::hl2CheckBandwidthMonitor()
 {
     if (!m_caps || !m_caps->hasBandwidthMonitor) { return; }
 
-    // Source: bandwidth_monitor.c:86-113 — compute_bps() measures the delta
-    //   in total bytes between two ticks divided by elapsed ms.  We use
-    //   sequence number stall as a simpler proxy: if m_epRecvSeqExpected
-    //   is the same as last tick AND we have previously received at least
-    //   one frame, count a potential throttle event.
-    //
-    // Throttle: 3 consecutive stall ticks (3 × 500 ms = 1.5 s) → flag.
-    // Clear:    any single advancing tick resets the counter.
+    // Phase 3P-E Task 3: delegate to HermesLiteBandwidthMonitor when wired.
+    // The monitor records ep6/ep2 bytes via recordEp6Bytes()/recordEp2Bytes()
+    // in onReadyRead()/sendCommandFrame() respectively, then tick() here runs
+    // the upstream compute_bps() algorithm (mi0bot bandwidth_monitor.c:86-113
+    // [@c26a8a4]) and the NereusSDR throttle-detection layer.
+    if (m_bwMonitor) {
+        m_bwMonitor->tick();
+        // Mirror throttle state into the legacy m_hl2Throttled flag so that
+        // hl2IsThrottled() and the test seam hl2ThrottledForTest() remain valid.
+        const bool nowThrottled = m_bwMonitor->isThrottled();
+        if (nowThrottled && !m_hl2Throttled) {
+            m_hl2Throttled = true;
+            m_hl2LastThrottleTick = QDateTime::currentDateTimeUtc();
+            qCWarning(lcConnection) << "HL2: LAN PHY throttle detected via byte-rate monitor —"
+                                    << "ep6 ingress silent for"
+                                    << HermesLiteBandwidthMonitor::kThrottleTickThreshold
+                                    << "watchdog ticks;"
+                                    << "throttle events:" << m_bwMonitor->throttleEventCount();
+            emit errorOccurred(RadioConnectionError::None,
+                               QStringLiteral("HL2 LAN throttled — pausing ep2"));
+        } else if (!nowThrottled && m_hl2Throttled) {
+            m_hl2Throttled = false;
+            qCInfo(lcConnection) << "HL2: LAN throttle cleared — ep6 stream resumed";
+        }
+        return;
+    }
 
-    static constexpr int kBwThrottleGapCount = 3;  // NereusSDR heuristic; TODO(3I-T12) calibrate
-
+    // Fallback: legacy sequence-gap heuristic used when m_bwMonitor is not wired
+    // (non-HL2 board or test seam without RadioModel).
+    // Source: NereusSDR design — sequence-gap proxy for byte-rate throttle detect.
+    // The upstream bandwidth_monitor.{c,h} (MW0LGE [@c26a8a4]) is a byte-rate
+    // telemetry helper; throttle detection is a NereusSDR addition.
+    static constexpr int kBwThrottleGapCount = 3;  // NereusSDR heuristic
     static quint32 s_lastSeq = 0;
 
     if (!m_lastEp6At.isValid()) {
@@ -1686,7 +1729,7 @@ void P1RadioConnection::hl2CheckBandwidthMonitor()
         if (!m_hl2Throttled && m_hl2ThrottleCount >= kBwThrottleGapCount) {
             m_hl2Throttled = true;
             m_hl2LastThrottleTick = QDateTime::currentDateTimeUtc();
-            qCWarning(lcConnection) << "HL2: LAN PHY throttle detected —"
+            qCWarning(lcConnection) << "HL2: LAN PHY throttle detected (seq-gap fallback) —"
                                     << "ep6 sequence stalled for"
                                     << m_hl2ThrottleCount << "watchdog ticks;"
                                     << "pausing ep2 command frames";
@@ -1696,7 +1739,7 @@ void P1RadioConnection::hl2CheckBandwidthMonitor()
     } else {
         // Sequence advanced — clear throttle.
         if (m_hl2Throttled) {
-            qCInfo(lcConnection) << "HL2: LAN throttle cleared — ep6 stream resumed";
+            qCInfo(lcConnection) << "HL2: LAN throttle cleared (seq-gap fallback) — ep6 stream resumed";
             m_hl2Throttled = false;
         }
         m_hl2ThrottleCount = 0;

@@ -268,6 +268,8 @@ Discovery-reply hex fixtures are covered by `tests/fixtures/discovery/README.md`
 | tests/tst_radio_discovery_parse.cpp | HPSDR/clsRadioDiscovery.cs | 1145-1195; 1201-1226 | port | mi0bot | tests the mi0bot-added HL2 discovery parsing; attribution matches RadioDiscovery.cpp |
 | src/core/IoBoardHl2.cpp | HPSDR/IoBoardHl2.cs; ChannelMaster/network.h; Console/console.cs | full; 112-148; 25781-25945 | port | mi0bot | IOBoard Registers enum (verbatim integer values), HardwareVersion enum, 256-byte register mirror, 32-slot I2C FIFO (MAX_I2C_QUEUE=32 from network.h), 12-step UpdateIOBoard state machine (switch(state++) from console.cs); closes Phase 3I-T12 |
 | src/core/IoBoardHl2.h | HPSDR/IoBoardHl2.cs; ChannelMaster/network.h; Console/console.cs | full; 112-148; 25781-25945 | port | mi0bot | header mirrors IoBoardHl2.cpp |
+| src/core/HermesLiteBandwidthMonitor.cpp | ChannelMaster/bandwidth_monitor.h; ChannelMaster/bandwidth_monitor.c | full | port | mi0bot | ports bandwidth_monitor_in/out/reset (byte accumulators) + compute_bps() (rolling byte-rate) from InterlockedAdd64/GetTickCount64 to std::atomic<int64_t>/std::chrono::steady_clock; adds NereusSDR throttle-detection layer (ep6 silent + ep2 active for N ticks); closes Phase 3I-T12 bandwidth-monitor piece [@c26a8a4] |
+| src/core/HermesLiteBandwidthMonitor.h | ChannelMaster/bandwidth_monitor.h; ChannelMaster/bandwidth_monitor.c | full | port | mi0bot | header mirrors HermesLiteBandwidthMonitor.cpp |
 
 ## Files derived from TAPR WDSP
 
