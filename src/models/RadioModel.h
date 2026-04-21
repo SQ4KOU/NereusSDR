@@ -76,6 +76,8 @@
 #include "core/IoBoardHl2.h"
 #include "core/HermesLiteBandwidthMonitor.h"
 #include "core/accessories/AlexController.h"
+#include "core/accessories/ApolloController.h"
+#include "core/accessories/PennyLaneController.h"
 #include "core/RadioDiscovery.h"
 #include "core/RadioConnection.h"
 #include "core/HardwareProfile.h"
@@ -148,6 +150,17 @@ public:
     // (AntennaAlexAntennaControlTab — Phase 3P-F Task 3).
     const AlexController& alexController()        const { return m_alexController; }
     AlexController&       alexControllerMutable()       { return m_alexController; }
+
+    // Apollo PA + ATU + LPF accessory controller — present/filter/tuner enable flags.
+    // Loaded per-MAC at connect time. Setup UI deferred (Phase 3P-F Task 5a).
+    const ApolloController& apolloController()        const { return m_apolloController; }
+    ApolloController&       apolloControllerMutable()       { return m_apolloController; }
+
+    // PennyLane / Penelope external-control master toggle.
+    // Loaded per-MAC at connect time. OC bitmask logic lives in OcMatrix (Phase 3P-D).
+    // Setup UI deferred (Phase 3P-F Task 5b).
+    const PennyLaneController& pennyLaneController()        const { return m_pennyLaneController; }
+    PennyLaneController&       pennyLaneControllerMutable()       { return m_pennyLaneController; }
 
     // Sub-models
     MeterModel&       meterModel()       { return m_meterModel; }
@@ -292,6 +305,14 @@ private:
     // MAC and load() are called on connect, matching OcMatrix ownership pattern.
     // Phase 3P-F Task 3.
     AlexController m_alexController;
+
+    // Apollo PA + ATU + LPF accessory state (present/filter/tuner enable bools).
+    // MAC and load() are called on connect. Phase 3P-F Task 5a.
+    ApolloController m_apolloController;
+
+    // PennyLane external-control master toggle. Composes with OcMatrix (Phase 3P-D).
+    // MAC and load() are called on connect. Phase 3P-F Task 5b.
+    PennyLaneController m_pennyLaneController;
 
     // Slices and panadapters (client-managed)
     QList<SliceModel*> m_slices;

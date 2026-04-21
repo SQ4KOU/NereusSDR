@@ -413,6 +413,16 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // Phase 3P-F Task 3. Pattern mirrors OcMatrix above.
         m_alexController.setMacAddress(info.macAddress);
         m_alexController.load();
+
+        // Load per-MAC Apollo accessory state (present/filter/tuner bools).
+        // Phase 3P-F Task 5a.
+        m_apolloController.setMacAddress(info.macAddress);
+        m_apolloController.load();
+
+        // Load per-MAC PennyLane ext-ctrl master toggle.
+        // Phase 3P-F Task 5b.
+        m_pennyLaneController.setMacAddress(info.macAddress);
+        m_pennyLaneController.load();
     }
 
     m_name = info.displayName();
