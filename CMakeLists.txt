@@ -337,6 +337,8 @@ set(CORE_SOURCES
     src/core/ClarityController.cpp
     src/core/StepAttenuatorController.cpp
     src/core/OcMatrix.cpp
+    src/core/IoBoardHl2.cpp
+    src/core/HermesLiteBandwidthMonitor.cpp
     src/core/audio/MasterMixer.cpp
     src/core/audio/PortAudioBus.cpp
     src/core/audio/VirtualCableDetector.cpp
