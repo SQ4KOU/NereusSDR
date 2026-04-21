@@ -60,7 +60,9 @@
 #include "core/AppSettings.h"
 #include "core/OcMatrix.h"
 #include "models/Band.h"
+#include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
+#include "models/TransmitModel.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -365,6 +367,24 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
                 this, &OcOutputsHfTab::onMatrixChanged);
         syncFromMatrix();
     }
+
+    // ── Phase 3P-H Task 5b: live OC pin state wiring ────────────────────────
+    // Recompute the 7-bit OC byte = OcMatrix::maskFor(currentBand, isTx)
+    // whenever: the matrix mutates, the panadapter crosses a band
+    // boundary, or MOX toggles. Thetis sends this byte via
+    // console.cs UpdateOCBits (grep reveals it is called from each of
+    // the above state transitions at [@501e3f5]).
+    if (m_model) {
+        const auto pans = m_model->panadapters();
+        if (!pans.isEmpty()) {
+            connect(pans.first(), &PanadapterModel::bandChanged,
+                    this, &OcOutputsHfTab::onLiveStateChanged);
+        }
+        connect(&m_model->transmitModel(), &TransmitModel::moxChanged,
+                this, &OcOutputsHfTab::onLiveStateChanged);
+    }
+    // Initial paint.
+    onLiveStateChanged();
 }
 
 // ── buildMatrixGrid ───────────────────────────────────────────────────────────
@@ -484,6 +504,62 @@ void OcOutputsHfTab::syncFromMatrix()
 void OcOutputsHfTab::onMatrixChanged()
 {
     syncFromMatrix();
+    // Phase 3P-H Task 5b: the mask for the current band may have changed.
+    onLiveStateChanged();
+}
+
+// ── onLiveStateChanged (Phase 3P-H Task 5b) ──────────────────────────────────
+
+// Recomputes the OC byte from OcMatrix::maskFor(currentBand, isTx) for
+// the active panadapter band and the current MOX state. Mirrors the
+// dispatch in Thetis console.cs UpdateOCBits: band change, MOX change,
+// and OcMatrix mutation all feed into the same 7-bit output [@501e3f5].
+void OcOutputsHfTab::onLiveStateChanged()
+{
+    if (!m_ocMatrix || !m_model) { setCurrentOcByte(0); return; }
+
+    // Current band: first panadapter is the RX1 source of truth (see
+    // PanadapterModel::setCenterFrequency → bandFromFrequency()).
+    Band band = Band::Band20m;  // harmless default if no panadapter yet
+    const auto pans = m_model->panadapters();
+    if (!pans.isEmpty()) {
+        band = pans.first()->band();
+    }
+    const bool isTx = m_model->transmitModel().isMox();
+    setCurrentOcByte(m_ocMatrix->maskFor(band, isTx));
+}
+
+// ── setCurrentOcByte / repaintLiveLeds (Phase 3P-H Task 5b) ──────────────────
+
+void OcOutputsHfTab::setCurrentOcByte(quint8 byte)
+{
+    m_currentOcByte = byte;
+    repaintLiveLeds();
+}
+
+bool OcOutputsHfTab::livePinLitForTest(int pin) const
+{
+    if (pin < 0 || pin >= kPinCount) { return false; }
+    return (m_currentOcByte >> pin) & 0x01;
+}
+
+void OcOutputsHfTab::repaintLiveLeds()
+{
+    for (int pin = 0; pin < kPinCount; ++pin) {
+        if (!m_leds[pin]) { continue; }
+        const bool lit = (m_currentOcByte >> pin) & 0x01;
+        if (lit) {
+            m_leds[pin]->setStyleSheet(QStringLiteral(
+                "background: #00cc44;"
+                "border: 1px solid #33dd55;"
+                "border-radius: 6px;"));
+        } else {
+            m_leds[pin]->setStyleSheet(QStringLiteral(
+                "background: rgba(255,255,255,0.1);"
+                "border: 1px solid rgba(255,255,255,0.2);"
+                "border-radius: 6px;"));
+        }
+    }
 }
 
 // ── onResetClicked ────────────────────────────────────────────────────────────

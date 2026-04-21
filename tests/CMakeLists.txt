@@ -444,4 +444,13 @@ target_compile_definitions(tst_calibration_tab PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_alex2_live_leds)
 target_compile_definitions(tst_alex2_live_leds PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3P-H Task 5b: OC Outputs live pin-state LED row ─────────────────────
+# Verifies OcOutputsHfTab::onLiveStateChanged() computes the displayed OC
+# byte = OcMatrix::maskFor(currentBand, isTx) via RadioModel's first
+# panadapter + TransmitModel MOX state. Covers empty matrix, RX pin set
+# for 20m, band-change recompute, MOX-driven RX↔TX matrix flip, and
+# direct setCurrentOcByte path.
+nereus_add_test(tst_oc_outputs_live_pins)
+target_compile_definitions(tst_oc_outputs_live_pins PRIVATE NEREUS_BUILD_TESTS)
+
 

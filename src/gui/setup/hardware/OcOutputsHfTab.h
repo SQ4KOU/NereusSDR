@@ -17,6 +17,10 @@
 //                Persistence via OcMatrix model (Phase 3P-D Task 1).
 //                NereusSDR spin: 14 bands (incl. GEN/WWV/XVTR) vs
 //                Thetis's 12; GEN/WWV rows greyed by default.
+//   2026-04-21 — Phase 3P-H Task 5b: Live OC pin-state LED row now
+//                reflects OcMatrix::maskFor(currentBand, isTx) for
+//                the current PanadapterModel band and TransmitModel
+//                MOX state.
 // =================================================================
 //
 // === Verbatim Thetis Console/setup.designer.cs header (lines 1-50) ===
@@ -130,13 +134,28 @@ public:
     bool rxPinCheckedForTest(int bandIdx, int pin) const;
     bool txPinCheckedForTest(int bandIdx, int pin) const;
 
+    // Phase 3P-H Task 5b test seams.
+    // Current OC byte displayed by the live LED row — mirrors the last
+    // OcMatrix::maskFor(currentBand, isTx) passed to updateLiveLeds().
+    quint8 currentOcByteForTest() const { return m_currentOcByte; }
+    bool   livePinLitForTest(int pin) const;
+
+    // Drives the live-LED row with an explicit OC byte; used by tests and
+    // internally from onLiveStateChanged(). Exposed so test fixtures can
+    // inject a byte without spinning a full RadioModel + band change.
+    void setCurrentOcByte(quint8 byte);
+
 private slots:
     void onMatrixChanged();
     void onResetClicked();
+    // Phase 3P-H Task 5b: recompute OC byte from current band + MOX state.
+    void onLiveStateChanged();
 
 private:
     void buildMatrixGrid(QGroupBox* group, bool tx);
     void syncFromMatrix();
+    // Phase 3P-H Task 5b: repaint the 7 pin-state LEDs from m_currentOcByte.
+    void repaintLiveLeds();
 
     RadioModel* m_model{nullptr};
     OcMatrix*   m_ocMatrix{nullptr};
@@ -172,6 +191,11 @@ private:
 
     // Guard against feedback loops between matrix changed() and checkbox toggled()
     bool m_syncing{false};
+
+    // Phase 3P-H Task 5b: last computed OC byte for the live-LED row.
+    // bit N == 1 means pin N lit. Recomputed on OcMatrix::changed,
+    // PanadapterModel::bandChanged, and TransmitModel::moxChanged.
+    quint8 m_currentOcByte{0};
 };
 
 } // namespace NereusSDR
