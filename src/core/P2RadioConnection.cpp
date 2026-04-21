@@ -559,15 +559,14 @@ void P2RadioConnection::onReconnectTimeout()
     }
 }
 
-// --- Command Senders ---
-// Each ported byte-for-byte from Thetis CmdGeneral/CmdRx/CmdTx/CmdHighPriority
+// --- Command Composers ---
+// Each fills the packet buffer from current state. sendCmd* calls compose + UDP dispatch.
+// Extracting compose from send allows test seams (composeCmdGeneralForTest etc.) to
+// capture the exact bytes that would be sent, without requiring a live UDP socket.
 
 // Porting from Thetis CmdGeneral() network.c:821-911
-void P2RadioConnection::sendCmdGeneral()
+void P2RadioConnection::composeCmdGeneral(char buf[60]) const
 {
-    char buf[60];
-    memset(buf, 0, sizeof(buf));
-
     // From Thetis network.c:826
     buf[4] = 0x00;  // Command
 
@@ -621,25 +620,14 @@ void P2RadioConnection::sendCmdGeneral()
     // prbpfilter->enable | prbpfilter2->enable
     buf[59] = 0x03;  // Enable both Alex0 and Alex1
 
-    // Sequence number (bytes 0-3 big-endian)
-    // From Thetis sendPacket — seq is in the packet buffer
-    writeBE32(buf, 0, m_seqGeneral++);
-
-    // From Thetis network.c:910
-    // sendPacket(listenSock, packetbuf, sizeof(packetbuf), prn->base_outbound_port);
-    QByteArray pkt(buf, sizeof(buf));
-    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort);
+    // Note: sequence number NOT written here — sendCmdGeneral() stamps it just
+    // before transmission so composeCmdGeneralForTest() captures a deterministic
+    // zero-sequence snapshot for regression baseline purposes.
 }
 
 // Porting from Thetis CmdHighPriority() network.c:913-1063
-void P2RadioConnection::sendCmdHighPriority()
+void P2RadioConnection::composeCmdHighPriority(char buf[kBufLen]) const
 {
-    char buf[kBufLen];
-    memset(buf, 0, sizeof(buf));
-
-    // Sequence number
-    writeBE32(buf, 0, m_seqHighPri++);
-
     // From Thetis network.c:924-925
     // packetbuf[4] = (prn->tx[0].ptt_out << 1 | prn->run) & 0xff;
     buf[4] = (m_tx[0].pttOut << 1 | (m_running ? 1 : 0)) & 0xff;
@@ -679,21 +667,11 @@ void P2RadioConnection::sendCmdHighPriority()
     // Alex1 (bytes 1428-1431): TX antenna + HPF + LPF
     writeBE32(buf, 1432, buildAlex0());
     writeBE32(buf, 1428, buildAlex1());
-
-    // From Thetis network.c:1062
-    // sendPacket(listenSock, packetbuf, BUFLEN, prn->base_outbound_port + 3);
-    QByteArray pkt(buf, sizeof(buf));
-    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 3);
 }
 
 // Porting from Thetis CmdRx() network.c:1066-1179
-void P2RadioConnection::sendCmdRx()
+void P2RadioConnection::composeCmdRx(char buf[kBufLen]) const
 {
-    char buf[kBufLen];
-    memset(buf, 0, sizeof(buf));
-
-    writeBE32(buf, 0, m_seqRx++);
-
     // From Thetis network.c:1074
     buf[4] = m_numAdc;
 
@@ -722,20 +700,11 @@ void P2RadioConnection::sendCmdRx()
 
     // From Thetis network.c:1172
     buf[1363] = m_rx[0].sync;
-
-    // From Thetis network.c:1178
-    QByteArray pkt(buf, sizeof(buf));
-    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 1);
 }
 
 // Porting from Thetis CmdTx() network.c:1181-1248
-void P2RadioConnection::sendCmdTx()
+void P2RadioConnection::composeCmdTx(char buf[60]) const
 {
-    char buf[60];
-    memset(buf, 0, sizeof(buf));
-
-    writeBE32(buf, 0, m_seqTx++);
-
     // From Thetis network.c:1188
     buf[4] = m_numDac;
 
@@ -773,7 +742,52 @@ void P2RadioConnection::sendCmdTx()
     buf[57] = m_adc[2].txStepAttn;
     buf[58] = m_adc[1].txStepAttn;
     buf[59] = m_adc[0].txStepAttn;
+}
 
+// --- Command Senders (compose + UDP dispatch) ---
+
+void P2RadioConnection::sendCmdGeneral()
+{
+    char buf[60];
+    memset(buf, 0, sizeof(buf));
+    // Stamp sequence number before compose so wire bytes include it.
+    writeBE32(buf, 0, m_seqGeneral++);
+    composeCmdGeneral(buf);
+    // From Thetis network.c:910
+    // sendPacket(listenSock, packetbuf, sizeof(packetbuf), prn->base_outbound_port);
+    QByteArray pkt(buf, sizeof(buf));
+    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort);
+}
+
+void P2RadioConnection::sendCmdHighPriority()
+{
+    char buf[kBufLen];
+    memset(buf, 0, sizeof(buf));
+    writeBE32(buf, 0, m_seqHighPri++);
+    composeCmdHighPriority(buf);
+    // From Thetis network.c:1062
+    // sendPacket(listenSock, packetbuf, BUFLEN, prn->base_outbound_port + 3);
+    QByteArray pkt(buf, sizeof(buf));
+    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 3);
+}
+
+void P2RadioConnection::sendCmdRx()
+{
+    char buf[kBufLen];
+    memset(buf, 0, sizeof(buf));
+    writeBE32(buf, 0, m_seqRx++);
+    composeCmdRx(buf);
+    // From Thetis network.c:1178
+    QByteArray pkt(buf, sizeof(buf));
+    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 1);
+}
+
+void P2RadioConnection::sendCmdTx()
+{
+    char buf[60];
+    memset(buf, 0, sizeof(buf));
+    writeBE32(buf, 0, m_seqTx++);
+    composeCmdTx(buf);
     // From Thetis network.c:1247
     QByteArray pkt(buf, sizeof(buf));
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 2);

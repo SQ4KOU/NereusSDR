@@ -76,6 +76,12 @@ target_compile_definitions(tst_p1_regression_freeze PRIVATE
     NEREUS_BUILD_TESTS
     NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
 
+# ── Phase 3P-B regression-freeze capture (temporary; removed in Task 7) ──
+nereus_add_test(tst_p2_regression_freeze_capture)
+target_compile_definitions(tst_p2_regression_freeze_capture PRIVATE
+    NEREUS_BUILD_TESTS
+    NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
+
 # P1 loopback integration test — uses P1FakeRadio from tests/fakes/
 nereus_add_test(tst_p1_loopback_connection fakes/P1FakeRadio.cpp)
 target_compile_definitions(tst_p1_loopback_connection PRIVATE NEREUS_BUILD_TESTS)
