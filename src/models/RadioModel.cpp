@@ -407,6 +407,27 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     if (!info.macAddress.isEmpty()) {
         m_ocMatrix.setMacAddress(info.macAddress);
         m_ocMatrix.load();
+
+        // Load per-MAC Alex antenna controller state so Antenna Control UI
+        // and future protocol codecs read the correct per-band antenna assignments.
+        // Phase 3P-F Task 3. Pattern mirrors OcMatrix above.
+        m_alexController.setMacAddress(info.macAddress);
+        m_alexController.load();
+
+        // Load per-MAC Apollo accessory state (present/filter/tuner bools).
+        // Phase 3P-F Task 5a.
+        m_apolloController.setMacAddress(info.macAddress);
+        m_apolloController.load();
+
+        // Load per-MAC PennyLane ext-ctrl master toggle.
+        // Phase 3P-F Task 5b.
+        m_pennyLaneController.setMacAddress(info.macAddress);
+        m_pennyLaneController.load();
+
+        // Load per-MAC calibration state (freq correction factor, level offsets, etc.).
+        // Phase 3P-G. Pushed to P2RadioConnection via setCalibrationController() below.
+        m_calController.setMacAddress(info.macAddress);
+        m_calController.load();
     }
 
     m_name = info.displayName();
@@ -555,6 +576,13 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         p1->setOcMatrix(&m_ocMatrix);
     } else if (auto* p2 = qobject_cast<class P2RadioConnection*>(m_connection)) {
         p2->setOcMatrix(&m_ocMatrix);
+    }
+
+    // Wire CalibrationController to P2RadioConnection so hzToPhaseWord()
+    // applies effectiveFreqCorrectionFactor(). P1 uses raw Hz (not phase words),
+    // so P1 doesn't need this. Phase 3P-G.
+    if (auto* p2 = qobject_cast<class P2RadioConnection*>(m_connection)) {
+        p2->setCalibrationController(&m_calController);
     }
 
     // Wire IoBoardHl2 so P1CodecHl2 can dequeue I2C transactions into C&C

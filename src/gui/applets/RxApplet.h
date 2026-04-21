@@ -122,6 +122,7 @@
 
 #include "AppletWidget.h"
 #include "gui/widgets/TriBtn.h"
+#include "models/Band.h"
 
 #include <QPushButton>
 #include <QStringList>
@@ -140,6 +141,7 @@ class QStackedWidget;
 namespace NereusSDR {
 
 class FilterPassbandWidget;
+class PanadapterModel;
 class SliceModel;
 
 // RxApplet — per-slice RX controls applet.
@@ -197,6 +199,11 @@ public:
     // Test-only: returns the item count in the preamp combo at construction.
     // Phase 3P-C Step 3: verifies per-board populate from BoardCapabilities.
     int preampComboItemCountForTest() const;
+
+    // Test-only: returns antenna number (1/2/3) shown by each button.
+    // Phase 3P-F Task 4: verifies per-band wiring to AlexController.
+    int activeRxAntennaForTest() const;
+    int activeTxAntennaForTest() const;
 private:
 #endif
 
@@ -213,11 +220,16 @@ private:
     void updateFilterButtons();
     void applyFilterPreset(int widthHz);
 
+    // Phase 3P-F Task 4: read AlexController per-band assignments and push
+    // them into SliceModel so the antenna buttons reflect the active band.
+    void populateAntennaButtons(NereusSDR::Band band);
+
     static QString formatFilterWidth(int low, int high);
 
     // ── Model ──────────────────────────────────────────────────────────────
-    SliceModel* m_slice = nullptr;
-    QStringList m_antList{QStringLiteral("ANT1"), QStringLiteral("ANT2")};
+    SliceModel*      m_slice = nullptr;
+    PanadapterModel* m_pan   = nullptr;  // observed for bandChanged (Phase 3P-F Task 4)
+    QStringList m_antList{QStringLiteral("ANT1"), QStringLiteral("ANT2"), QStringLiteral("ANT3")};
 
     // Filter preset widths by mode (USB default)
     QVector<int> m_filterWidths{1800, 2100, 2400, 2700, 2900, 3300,

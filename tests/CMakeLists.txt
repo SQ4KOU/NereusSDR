@@ -364,3 +364,54 @@ nereus_add_test(tst_hermes_lite_bandwidth_monitor)
 # without crashes. Auto-hide for non-HL2 boards verified via construction.
 nereus_add_test(tst_hl2_io_board_tab)
 target_compile_definitions(tst_hl2_io_board_tab PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-F Task 1: AlexController model — per-band antennas + Block-TX ───
+# Verifies per-band TX/RX/RX-only antenna arrays (14 bands, default Ant 1),
+# isolation (one band's assignment doesn't affect others), Block-TX safety
+# (blockTxAnt2/3 rejects setTxAnt to that port but not setRxAnt),
+# clamping (values outside 1..3 clamped to 1 or 3), setAntennasTo1 force-mode,
+# antennaChanged signal emission, and per-MAC AppSettings persistence round-trip.
+# Ports HPSDR/Alex.cs:30-106 [@501e3f5].
+nereus_add_test(tst_alex_controller)
+
+# Smoke test for Antenna Control sub-sub-tab UI (Phase 3P-F Task 3):
+# Widget construction + AlexController wiring + Block-TX safety rejection.
+nereus_add_test(tst_antenna_control_tab)
+target_compile_definitions(tst_antenna_control_tab PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-F Task 4: RxApplet antenna buttons per-band wiring ───────────────
+# Verifies that RxApplet's RX/TX antenna buttons (m_rxAntBtn / m_txAntBtn)
+# populate from AlexController at construction time for the current band,
+# auto-switch when PanadapterModel::bandChanged fires, and repopulate when
+# AlexController::antennaChanged fires for the current band.
+nereus_add_test(tst_rxapplet_antenna_buttons)
+target_compile_definitions(tst_rxapplet_antenna_buttons PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-F Task 5a: ApolloController model ───────────────────────────────
+# Smoke test: defaults all-off (present/filter/tuner = false), individual setter
+# signal emission (idempotent no-fire), and per-MAC AppSettings persistence round-trip.
+# Ports setup.cs:15566-15590 + console.cs:19060-19105 [@501e3f5].
+nereus_add_test(tst_apollo_controller)
+
+# ── Phase 3P-F Task 5b: PennyLaneController model ────────────────────────────
+# Smoke test: default extCtrlEnabled = true (matches Thetis penny_ext_ctrl_enabled=true),
+# setter signal emission (idempotent no-fire), and per-MAC AppSettings persistence.
+# Ports HPSDR/Penny.cs (full) + console.cs:14899 + setup.cs:12679 [@501e3f5].
+nereus_add_test(tst_penny_lane_controller)
+
+# ── Phase 3P-G commit 1: CalibrationController model ─────────────────────────
+# Verifies defaults (freqFactor=1.0, all offsets=0), setter signal emission
+# (idempotent no-fire), effectiveFreqCorrectionFactor() toggle between normal
+# and 10 MHz ref factor, and per-MAC AppSettings persistence round-trip.
+# Ports setup.cs:5137-5144; 14036-14050; 22690-22706; 14325; 17243; 18315 +
+# console.cs:9766-9844; 21022-21086 [@501e3f5].
+nereus_add_test(tst_calibration_controller)
+
+# ── Phase 3P-G commit 2: CalibrationTab UI smoke tests ───────────────────────
+# Verifies construction doesn't crash, 5 group boxes present
+# (Freq Cal / Level Cal / HPSDR Freq Cal Diagnostic / TX Display Cal /
+# PA Current), controller->UI sync, and UI->controller write-back.
+nereus_add_test(tst_calibration_tab)
+target_compile_definitions(tst_calibration_tab PRIVATE NEREUS_BUILD_TESTS)
+
+

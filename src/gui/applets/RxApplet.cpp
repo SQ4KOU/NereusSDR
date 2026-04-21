@@ -122,9 +122,11 @@
 #include "core/P2RadioConnection.h"
 #include "core/RadioConnection.h"
 #include "core/StepAttenuatorController.h"
+#include "core/accessories/AlexController.h"
 #include "gui/ComboStyle.h"
 #include "gui/StyleConstants.h"
 #include "gui/widgets/FilterPassbandWidget.h"
+#include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -153,6 +155,27 @@ RxApplet::RxApplet(SliceModel* slice, RadioModel* model, QWidget* parent)
     , m_slice(slice)
 {
     buildUi();
+
+    // Phase 3P-F Task 4: observe the first panadapter for band changes so the
+    // antenna buttons repopulate when the user QSYs across a band boundary.
+    // Also do an initial populate at construction time.
+    if (m_model && !m_model->panadapters().isEmpty()) {
+        m_pan = m_model->panadapters().first();
+        connect(m_pan, &PanadapterModel::bandChanged,
+                this, &RxApplet::populateAntennaButtons);
+        populateAntennaButtons(m_pan->band());
+    }
+
+    // Also repopulate when AlexController antennaChanged fires for the current band.
+    if (m_model) {
+        connect(&m_model->alexControllerMutable(), &AlexController::antennaChanged,
+                this, [this](Band band) {
+            if (m_pan && band == m_pan->band()) {
+                populateAntennaButtons(band);
+            }
+        });
+    }
+
     syncFromModel();
 }
 
@@ -234,6 +257,14 @@ void RxApplet::buildUi()
                 m_rxAntBtn->mapToGlobal(QPoint(0, m_rxAntBtn->height())));
             if (sel && m_slice) {
                 m_slice->setRxAntenna(sel->text());
+                // Phase 3P-F Task 4: persist per-band assignment in AlexController.
+                if (m_model && m_pan) {
+                    const QString& text = sel->text();
+                    int antNum = 1;
+                    if (text == QStringLiteral("ANT2")) { antNum = 2; }
+                    else if (text == QStringLiteral("ANT3")) { antNum = 3; }
+                    m_model->alexControllerMutable().setRxAnt(m_pan->band(), antNum);
+                }
             }
         });
         row->addWidget(m_rxAntBtn);
@@ -261,6 +292,15 @@ void RxApplet::buildUi()
                 m_txAntBtn->mapToGlobal(QPoint(0, m_txAntBtn->height())));
             if (sel && m_slice) {
                 m_slice->setTxAntenna(sel->text());
+                // Phase 3P-F Task 4: persist per-band TX assignment in AlexController.
+                // setTxAnt() respects blockTxAnt2/3 safety guards from Task 1.
+                if (m_model && m_pan) {
+                    const QString& text = sel->text();
+                    int antNum = 1;
+                    if (text == QStringLiteral("ANT2")) { antNum = 2; }
+                    else if (text == QStringLiteral("ANT3")) { antNum = 3; }
+                    m_model->alexControllerMutable().setTxAnt(m_pan->band(), antNum);
+                }
             }
         });
         row->addWidget(m_txAntBtn);
@@ -1290,6 +1330,45 @@ void RxApplet::updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double off
     }
 }
 
+// Phase 3P-F Task 4: Per-band antenna populate from AlexController.
+//
+// Reads the per-band RX and TX antenna assignments from AlexController and
+// pushes them into SliceModel so the applet buttons reflect the active band.
+// Called at construction and on every PanadapterModel::bandChanged() crossing.
+//
+// We update the button text directly (in addition to the SliceModel setter)
+// because connectSlice() may not have been called yet at construction time —
+// the ctor wires the panadapter and populates before setSlice() is called by
+// the host widget (which is what drives connectSlice / signal subscriptions).
+void RxApplet::populateAntennaButtons(Band band)
+{
+    if (!m_model || !m_slice) { return; }
+
+    const AlexController& alex = m_model->alexController();
+
+    // RX antenna: AlexController stores 1/2/3; map to "ANT1"/"ANT2"/"ANT3".
+    const int rxNum = alex.rxAnt(band);
+    const QString rxLabel = QStringLiteral("ANT") + QString::number(rxNum);
+
+    // TX antenna: same mapping. setTxAnt() honours blockTxAnt2/3 safety guards.
+    const int txNum = alex.txAnt(band);
+    const QString txLabel = QStringLiteral("ANT") + QString::number(txNum);
+
+    // Update button text directly — bypasses the connectSlice() signal chain
+    // so the change is immediate regardless of whether the slice is "connected".
+    m_rxAntBtn->setText(rxLabel);
+    m_txAntBtn->setText(txLabel);
+
+    // Also push into SliceModel so the model stays in sync with the UI.
+    // Use setters only when the value actually differs to avoid spurious signals.
+    if (m_slice->rxAntenna() != rxLabel) {
+        m_slice->setRxAntenna(rxLabel);
+    }
+    if (m_slice->txAntenna() != txLabel) {
+        m_slice->setTxAntenna(txLabel);
+    }
+}
+
 #ifdef NEREUS_BUILD_TESTS
 int RxApplet::stepAttMaxForTest() const
 {
@@ -1308,6 +1387,28 @@ int RxApplet::visibleOvlBadgeCountForTest() const
 int RxApplet::preampComboItemCountForTest() const
 {
     return m_preampCombo ? m_preampCombo->count() : -1;
+}
+
+// Phase 3P-F Task 4: parse ANT<n> label from the button text and return n.
+// Returns -1 if the button is null or the label does not match "ANT[123]".
+int RxApplet::activeRxAntennaForTest() const
+{
+    if (!m_rxAntBtn) { return -1; }
+    const QString text = m_rxAntBtn->text();
+    if (text == QStringLiteral("ANT1")) { return 1; }
+    if (text == QStringLiteral("ANT2")) { return 2; }
+    if (text == QStringLiteral("ANT3")) { return 3; }
+    return -1;
+}
+
+int RxApplet::activeTxAntennaForTest() const
+{
+    if (!m_txAntBtn) { return -1; }
+    const QString text = m_txAntBtn->text();
+    if (text == QStringLiteral("ANT1")) { return 1; }
+    if (text == QStringLiteral("ANT2")) { return 2; }
+    if (text == QStringLiteral("ANT3")) { return 3; }
+    return -1;
 }
 #endif
 

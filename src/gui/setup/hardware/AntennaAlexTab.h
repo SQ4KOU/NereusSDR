@@ -68,28 +68,22 @@
 #include <QVariant>
 #include <QWidget>
 
-class QCheckBox;
-class QComboBox;
-class QGroupBox;
-class QLabel;
-class QScrollArea;
 class QTabWidget;
-class QTableWidget;
-class QTableWidgetItem;
 
 namespace NereusSDR {
 
 class RadioModel;
 struct RadioInfo;
 struct BoardCapabilities;
+class AntennaAlexAntennaControlTab;
 class AntennaAlexAlex1Tab;
 class AntennaAlexAlex2Tab;
 
 // AntennaAlexTab — parent "Antenna / ALEX" tab in Hardware Config.
 //
 // Hosts three sub-sub-tabs that mirror Thetis tcAlexControl:
-//   0. Antenna Control — per-band RX/TX antenna selection + relay options
-//      (Thetis tpAlexAntCtrl; Phase F will add proper antenna routing here)
+//   0. Antenna Control — per-band TX/RX/RX-only antenna selection + Block-TX safety
+//      (Thetis tpAlexAntCtrl; Phase 3P-F Task 3 — AntennaAlexAntennaControlTab)
 //   1. Alex-1 Filters  — HPF + LPF + Saturn BPF1 band-edge editors (Task 8)
 //   2. Alex-2 Filters  — RX2 board HPF + LPF panels with LED status stubs (Task 9)
 //
@@ -104,40 +98,16 @@ public:
 signals:
     void settingChanged(const QString& key, const QVariant& value);
 
-private slots:
-    void onRxAntTableChanged(QTableWidgetItem* item);
-    void onTxAntTableChanged(QTableWidgetItem* item);
-
 private:
-    void buildAntennaTable(QTableWidget* table,
-                           const QStringList& colHeaders,
-                           const QString& signalKeyPrefix);
-
     RadioModel*   m_model{nullptr};
 
     // Sub-sub-tab host
     // Source: Thetis tcAlexControl (setup.designer.cs:23385-23395) [@501e3f5]
-    QTabWidget*          m_subTabs{nullptr};
+    QTabWidget*   m_subTabs{nullptr};
 
-    // Tab 0: Antenna Control
-    QWidget*             m_antennaControlTab{nullptr};
-
-    // Per-band RX antenna: 14 rows × 3 columns (ANT1 / ANT2 / ANT3)
-    // Each cell is a radio-button-like exclusive selection stored via
-    // Qt::CheckStateRole. We use QTableWidget + exclusive logic in itemChanged.
-    QTableWidget* m_rxAntTable{nullptr};
-
-    // Per-band TX antenna: same shape
-    QTableWidget* m_txAntTable{nullptr};
-
-    // ALEX bypass / relay checkboxes
-    // Source: Thetis Setup.cs:2892-2898
-    QCheckBox*    m_rxOutOnTx{nullptr};
-    QCheckBox*    m_ext1OutOnTx{nullptr};
-    QCheckBox*    m_ext2OutOnTx{nullptr};
-    QCheckBox*    m_hfTrRelay{nullptr};
-    QCheckBox*    m_bpf2Gnd{nullptr};
-    QCheckBox*    m_enableXvtrHf{nullptr};
+    // Tab 0: Antenna Control (real impl — Phase 3P-F Task 3)
+    // Source: Thetis tpAlexAntCtrl (setup.designer.cs:5981-7000) [@501e3f5]
+    AntennaAlexAntennaControlTab* m_antennaControlTab{nullptr};
 
     // Tab 1: Alex-1 Filters
     // Source: Thetis tpAlexFilterControl (setup.designer.cs:23399-25538) [@501e3f5]
@@ -147,9 +117,7 @@ private:
     // Source: Thetis tpAlex2FilterControl (setup.designer.cs:25539-26857) [@501e3f5]
     AntennaAlexAlex2Tab* m_alex2FiltersTab{nullptr};
 
-    bool m_updating{false};
-
-    // Last seen capabilities — needed to route populate() to sub-tabs
+    // Last seen MAC — passed to sub-tabs in populate() for per-MAC settings restore.
     QString m_lastMac;
 };
 
