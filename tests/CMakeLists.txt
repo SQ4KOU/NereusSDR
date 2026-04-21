@@ -67,6 +67,9 @@ nereus_add_test(tst_p1_codec_anvelina_pro3)
 # ── Phase 3P-A P1CodecRedPitaya bank 12 ADC1 MOX carve-out (Task 8) ──
 nereus_add_test(tst_p1_codec_redpitaya)
 
+# ── Phase 3P-A P1CodecHl2 mi0bot WriteMainLoop_HL2 port (Tasks 9+10) ──
+nereus_add_test(tst_p1_codec_hl2)
+
 # ── Phase 3P-A regression freeze capture (temporary; removed in Task 16) ──
 nereus_add_test(tst_p1_regression_freeze_capture)
 target_compile_definitions(tst_p1_regression_freeze_capture PRIVATE
