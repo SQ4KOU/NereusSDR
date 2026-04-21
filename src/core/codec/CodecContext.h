@@ -64,6 +64,75 @@ struct CodecContext {
     quint8  alexHpfBits{0};
     quint8  alexLpfBits{0};
 
+    // P2 run state — prn->run. Set by P2RadioConnection on start/stop.
+    bool    p2Running{false};
+
+    // P2 PTT out + CW keying bits — prn->tx[0].ptt_out / cwx / dot / dash.
+    // Mapped to CmdHighPriority byte 4 (PTT/run) and byte 5 (CW bits).
+    int     p2PttOut{0};
+    int     p2Cwx{0};
+    int     p2Dot{0};
+    int     p2Dash{0};
+
+    // P2 TX drive level — prn->tx[0].drive_level. Byte 345 of CmdHighPriority.
+    int     p2DriveLevel{0};
+
+    // P2 TX PA enable — prn->tx[0].pa. Byte 58 of CmdGeneral (inverted).
+    // Default 1 = PA enabled → byte 58 = 0 ((!pa) & 0x01).
+    int     p2TxPa{1};
+
+    // P2 TX phase shift — prn->tx[0].phase_shift. Bytes 26-27 of CmdTx.
+    int     p2TxPhaseShift{0};
+
+    // P2 TX sampling rate — prn->tx[0].sampling_rate (kHz). Bytes 14-15 CmdTx.
+    // Default 192 per Thetis create_rnet (netInterface.c:1513).
+    int     p2TxSamplingRate{192};
+
+    // P2 number of ADCs / DACs — prn->num_adc / num_dac. Byte 4 of CmdRx/CmdTx.
+    int     p2NumAdc{1};
+    int     p2NumDac{1};
+
+    // P2 RX per-DDC state (up to 7 DDCs). Mapped from m_rx[] in composeCmdRx.
+    // p2RxEnable: enable bit per DDC.  p2RxAdc: ADC assignment.
+    // p2RxSamplingRate: rate in kHz. p2RxBitDepth: bit depth (24 default).
+    int     p2RxEnable[7]{0, 0, 0, 0, 0, 0, 0};
+    int     p2RxAdcAssign[7]{0, 0, 0, 0, 0, 0, 0};
+    int     p2RxSamplingRate[7]{48, 48, 48, 48, 48, 48, 48};
+    int     p2RxBitDepth[7]{24, 24, 24, 24, 24, 24, 24};
+    int     p2RxSync{0};  // prn->rx[0].sync — byte 1363 of CmdRx
+
+    // P2 custom port base — prn->p2_custom_port_base. Default 1025.
+    int     p2CustomPortBase{1025};
+
+    // P2 wideband settings — prn->wb_samples_per_packet / wb_sample_size /
+    // wb_update_rate / wb_packets_per_frame. From Thetis create_rnet defaults.
+    int     p2WbSamplesPerPacket{512};
+    int     p2WbSampleSize{16};
+    int     p2WbUpdateRate{70};
+    int     p2WbPacketsPerFrame{32};
+
+    // P2 watchdog timer — prn->wdt. 0 = disabled. Byte 38 of CmdGeneral.
+    int     p2Wdt{0};
+
+    // P2 CW state — prn->cw.*. Used in CmdTx bytes 5-13, 17.
+    unsigned char p2CwModeControl{0};
+    int     p2CwSidetoneLevel{0};
+    int     p2CwSidetoneFreq{0};
+    int     p2CwKeyerSpeed{0};
+    int     p2CwKeyerWeight{0};
+    int     p2CwHangDelay{0};
+    int     p2CwRfDelay{0};
+    int     p2CwEdgeLength{7};  // From Thetis create_rnet:1454
+
+    // P2 Mic state — prn->mic.*. Used in CmdTx bytes 50-51.
+    unsigned char p2MicControl{0};
+    int     p2MicLineInGain{0};
+
+    // P2 Alex antenna selection — rxAnt/txAnt for Alex0/Alex1 register.
+    // 1=ANT1, 2=ANT2, 3=ANT3. Default 1.
+    int     p2AlexRxAnt{1};
+    int     p2AlexTxAnt{1};
+
     // TX drive level (0-255).
     int     txDrive{0};
 
