@@ -750,6 +750,10 @@ std::span<const BoardCapabilities> all() noexcept {
 // From Thetis console.cs:40755-40825 SetComboPreampForHPSDR().
 // PreampMode mapping: 0=Off(-20dB HPSDR), 1=On(0dB), 2=Minus10, 3=Minus20,
 //                     4=Minus30, 5=Minus40, 6=Minus50.
+// Upstream inline attribution preserved verbatim:
+//   :40790  case HPSDRModel.REDPITAYA: // DH1KLM: changed to enable on_off_preamp_settings for OpenHPSDR compat. DIY PA/Filter boards
+//   :40805  // case HPSDRModel.REDPITAYA: // DH1KLM: removed for compatibility reasons
+//   :40813  ... HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
 
 // on_off_preamp_settings = { "0dB", "-20dB" }
 static constexpr PreampItem kOnOff[] = {
@@ -842,6 +846,8 @@ std::span<const PreampItem> preampItemsForBoard(HPSDRHW hw, bool alexPresent) no
 std::span<const PreampItem> rx2PreampItemsForBoard(HPSDRHW hw) noexcept
 {
     // From Thetis console.cs:40815 — RX2 always uses either on_off or anan100d.
+    // Upstream inline attribution preserved verbatim (console.cs:40813):
+    //   ... HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
     switch (hw) {
     case HPSDRHW::Angelia:
     case HPSDRHW::Orion:
