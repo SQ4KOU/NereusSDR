@@ -208,6 +208,8 @@ void P1CodecStandard::bank11(const CodecContext& ctx, quint8 out[5]) const
 //
 // ADC1 carve-out: during MOX, force 0x1F UNLESS RedPitaya. Standard
 // codec is non-RedPitaya; RedPitaya subclass overrides this method.
+// Upstream inline attribution (networkproto1.c:612, preserved verbatim):
+//   if (HPSDRModel == HPSDRModel_REDPITAYA) //[2.10.3.9]DH1KLM  //model needed as board type (prn->discovery.BoardType) is an OrionII
 void P1CodecStandard::bank12(const CodecContext& ctx, quint8 out[5]) const
 {
     out[0] = (ctx.mox ? 0x01 : 0x00) | 0x16;

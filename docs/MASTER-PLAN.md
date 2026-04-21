@@ -764,6 +764,30 @@ Scope:
 - I/Q recording — raw I/Q samples for offline analysis
 - Recording controls wired to VfoWidget (existing button stubs)
 
+### Phase 3P: All-Board Radio-Control Parity ✅ COMPLETE (H in flight — Apr 2026)
+**Goal:** Take every Setup page a Thetis user reaches for and give it a NereusSDR equivalent; take every radio-state readout a Thetis user expects and expose it in the UI. After Phase 3P merges, NereusSDR's hardware / radio-control surface is **userland-complete** vs Thetis.
+
+**Sub-phase stack (each a PR, stacked bottom-up):**
+
+| Sub | Branch | PR | Status |
+|---|---|---|---|
+| **A** | `phase3p-a-p1-wire-parity` | #85 | Merged — P1 wire-bytes parity + **HL2 BPF + S-ATT bug fixes**. Per-board codec subclasses (`P1CodecStandard` for Hermes/Orion; `P1CodecHl2` for HL2 with mi0bot 6-bit mask + 0x40 enable + MOX TX/RX branch). Regression-freeze gate against pre-refactor JSON baseline proves 288 tuples byte-identical. |
+| **B** | `phase3p-b-p2-wire-parity` | #91 | Merged — P2 wire-bytes parity with `P2CodecOrionMkII` / `P2CodecSaturn` subclasses (G8NJJ BPF1 override). `AlexFilterMap` shared with P1. New Hardware → Antenna/ALEX → Alex-1 / Alex-2 Filters sub-sub-tabs. ADC OVL per-ADC split in RxApplet. RX1 preamp toggle for OrionMKII family. Regression-freeze 36 P2 tuples byte-identical. |
+| **C** | `phase3p-c-preamp-combo` | #92 | Merged — `RxApplet` preamp combo populates from `BoardCapabilities::preampItemsForBoard()` at construction + repopulates on connect. HL2 preamp corrected from 1-item to 4-item (anan100d set). `tst_preamp_combo` 17-assertion lock. |
+| **D** | `phase3p-d-oc-matrix` | #94 | Merged — `OcMatrix` model (per-band × per-pin × per-mode bit storage + TX pin actions) + Hardware → OC Outputs Setup page (master toggles, per-band RX/TX matrices, TX pin action grid, USB BCD, external PA control, live pin-state LED stubs). Codec ocByte routing wired. Per-MAC persistence. |
+| **E** | `phase3p-e-hl2-ioboard` | #95 | Merged — Closes long-deferred Phase 3I-T12 work. `IoBoardHl2` (33-register enum, I2C TLV queue, 12-step state machine) + `HermesLiteBandwidthMonitor` (mi0bot two-pointer byte-rate compute + NereusSDR throttle detection layer) + Hardware → HL2 I/O Setup page. `P1CodecHl2` I2C intercept on C&C compose. This supersedes the old Phase 3L placeholder. |
+| **F** | `phase3p-f-accessories` | #96 | Merged — `AlexController` / `ApolloController` / `PennyLaneController` accessory models. Hardware → Antenna/ALEX → Antenna Control sub-sub-tab (14×3 per-band antenna grid + Block-TX safety). `RxApplet` antenna buttons auto-populate per band. `BoardCapabilities` `hasApollo` / `hasAlex` / `hasPennyLane` per-board gates (source-first corrected — only HPSDR-kit enables Apollo, not all ANAN family). |
+| **G** | `phase3p-g-calibration` | #97 | Merged — Hardware → Calibration page (renamed from PA Calibration). 5 Thetis-1:1 group boxes (Freq Cal, Level Cal, HPSDR Freq Cal Diagnostic with 9-decimal correction factor + 10 MHz ref, TX Display Cal, existing PA Current). `CalibrationController` with `effectiveFreqCorrectionFactor()` wired into `P2RadioConnection` Hz→phase-word conversion. |
+| **H** | `phase3p-h-status-hygiene` | in flight | Diagnostics → Radio Status dashboard (PA Status, Forward/Reflected/SWR, PTT Source, Connection Quality, Settings Hygiene) + 4 sibling sub-tabs (Connection Quality / Settings Validation / Export / Import / Logs). `RadioStatus` + `SettingsHygiene` + `PttSource` models owned by `RadioModel`. PA telemetry parsed from both P1 (parseEp6Frame C0 cases 0x08/0x10/0x18) and P2 (processHighPriorityStatus), scaled via Thetis per-board formulas. Live LED wire-up across Alex-1 / Alex-2 Filters (SliceModel-driven), OC Outputs pin-state, HL2 I/O register-table 40 ms poll. ADC Overload status-bar label left of STATION (Thetis ucInfoBar parity, 2 s auto-hide, yellow/red by hysteresis level). Dark-theme checkbox + radio-button fix in `SetupPage`. |
+
+**Phase 3P attribution infrastructure (added mid-flight after a `//DH1KLM` drop was caught during Phase H review):**
+- `scripts/discover-thetis-author-tags.py` + `docs/attribution/thetis-author-tags.json` — discovery-driven contributor corpus, 19 authors, drift-detected in CI.
+- `scripts/verify-inline-tag-preservation.py` — every cite must carry verbatim source tags; pre-commit + CI gated.
+- `scripts/generate-contributor-indexes.py` — regenerates `thetis-contributor-index.md` + `thetis-inline-mods-index.md` mechanically (151 files / 2947 markers indexed).
+- Attribution sweep closed 74 historical tag drops (`//DH1KLM`, `//MW0LGE`, `//G8NJJ`, `//W2PA`) across 22 files.
+
+**User-facing outcome:** a Thetis user switching to NereusSDR sees every Setup page they expect (including Calibration, OC Outputs, Antenna Control, Alex-1/2 Filters, HL2 I/O, Hardware Config all 9 tabs), every status readout they're used to (PA temp/current/SWR, PTT source, connection quality, ADC overload warning), and every persistence boundary scoped per-MAC. HL2 bandpass filter switching and step attenuator both now work correctly per mi0bot's wire encoding.
+
 ### Phase 3N: Cross-Platform Packaging ✅ COMPLETE
 **Goal:** Release builds for Linux, Windows, macOS.
 

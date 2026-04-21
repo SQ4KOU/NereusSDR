@@ -76,6 +76,24 @@ target_compile_definitions(tst_p1_regression_freeze PRIVATE
     NEREUS_BUILD_TESTS
     NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
 
+# ── Phase 3P-B P2 codec tests ──
+nereus_add_test(tst_p2_codec_orionmkii)
+
+# ── Phase 3P-B Task 5: P2CodecSaturn — Saturn BPF1 band-edge override ──
+nereus_add_test(tst_p2_codec_saturn)
+
+# ── Phase 3P-B Task 7: regression-freeze gate ────────────────────────────
+nereus_add_test(tst_p2_regression_freeze)
+
+# ── Phase 3P-B Task 8: Alex-1 Filters sub-sub-tab smoke test ─────────────
+nereus_add_test(tst_alex1_filters_tab)
+
+# ── Phase 3P-B Task 9: Alex-2 Filters sub-sub-tab smoke test ─────────────
+nereus_add_test(tst_alex2_filters_tab)
+target_compile_definitions(tst_p2_regression_freeze PRIVATE
+    NEREUS_BUILD_TESTS
+    NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
+
 # P1 loopback integration test — uses P1FakeRadio from tests/fakes/
 nereus_add_test(tst_p1_loopback_connection fakes/P1FakeRadio.cpp)
 target_compile_definitions(tst_p1_loopback_connection PRIVATE NEREUS_BUILD_TESTS)
@@ -316,3 +334,191 @@ target_compile_definitions(tst_audio_vax_page_auto_detect PRIVATE NEREUS_BUILD_T
 # audioSettingsReset. 12 test cases.
 nereus_add_test(tst_audio_engine_reset_audio_settings)
 target_compile_definitions(tst_audio_engine_reset_audio_settings PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-B Task 10: per-ADC OVL split + RX1 preamp byte 1403 bit 1 ─────
+# Single-ADC boards (HL2/Hermes): 1 OVL badge.
+# Dual-ADC boards (OrionMKII, p2PreampPerAdc=true): 2 OVL badges.
+# P2RadioConnection::setRx1Preamp(bool) routes to byte 1403 bit 1 via codec.
+# Default state (rx1Preamp=false) leaves bit 1 clear → regression-freeze safe.
+nereus_add_test(tst_rxapplet_adc_ovl)
+target_compile_definitions(tst_rxapplet_adc_ovl PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-C Step 2+3: preamp combo per-board contents contract ─────────────
+# Locks BoardCapabilities::preampItemsForBoard() output 1:1 with Thetis
+# SetComboPreampForHPSDR console.cs:40755-40825 [@501e3f5]:
+#   Atlas no-Alex → 2 items (on_off); Atlas with Alex → 7 items (on_off+alex)
+#   Hermes no-Alex → 4 items (anan100d); Hermes with Alex → 7 items
+#   OrionMKII/Saturn → 4 items always; HL2 → 4 items (anan100d, Phase 3P-C fix)
+# Also verifies RxApplet.preampComboItemCountForTest() reflects board caps at
+# construction (Phase 3P-C Step 3: no more hardcoded "0dB/-10dB/-20dB/-30dB").
+nereus_add_test(tst_preamp_combo)
+target_compile_definitions(tst_preamp_combo PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-D Task 1: OcMatrix model + per-MAC persistence ──────────────────
+# Verifies per-band × per-pin × {RX,TX} bit assignments, TXPinAction mapping
+# (Thetis enums.cs:443 TXPinActions [@501e3f5]), and AppSettings round-trip
+# under hardware/<mac>/oc/{rx,tx}/<band>/pin<n> and .../actions/pin<n>/action.
+nereus_add_test(tst_oc_matrix)
+
+# ── Phase 3P-D Task 2: OC Outputs HF sub-sub-tab UI + matrix wiring ──────────
+# Smoke-tests construction, RX/TX pin sync (matrix→UI via changed()), reset
+# flow, GEN band row disabled state, and default TXPinAction (MoxTuneTwoTone).
+nereus_add_test(tst_oc_outputs_hf_tab)
+target_compile_definitions(tst_oc_outputs_hf_tab PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-D Task 3: P1RadioConnection ↔ OcMatrix codec wiring ─────────────
+# Verifies:
+#   - Without OcMatrix wired: bank 0 C2 = 0 (legacy m_ocOutput fallback).
+#   - Matrix with pin 0 set for 20m RX: C2 = 0x02 ((mask=0x01) << 1).
+#   - MOX selects TX matrix path: pin 1 for 40m TX → C2 = 0x04.
+#   - Detaching matrix (setOcMatrix(nullptr)) reverts to legacy 0.
+nereus_add_test(tst_p1_oc_matrix_wiring)
+target_compile_definitions(tst_p1_oc_matrix_wiring PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-E Task 1: IoBoardHl2 model ──────────────────────────────────────
+# Verifies the 32-slot circular I2C FIFO (enqueue/dequeue/depth/clear/overflow),
+# 12-step UpdateIOBoard state machine cycle (advance wraps 11→0, all step
+# descriptor strings match mi0bot console.cs:25844-25928 [@c26a8a4]), register
+# mirror (256-byte array, HardwareVersion stored separately), and
+# detection bool (idempotent setter, signal on change).
+nereus_add_test(tst_io_board_hl2)
+
+# ── Phase 3P-E Task 2: HL2 I2C intercept + ep6 read parsing ─────────────────
+# Verifies that P1CodecHl2::tryComposeI2cFrame() encodes the I2C TLV frame
+# (bus, address, control, write_data) into the 5 C&C bytes per
+# mi0bot networkproto1.c:895-943 [@c26a8a4], that the queue is dequeued after
+# compose, that non-HL2 boards noop, and that the ep6 I2C response test seam
+# compiles and runs without crash.
+nereus_add_test(tst_p1_hl2_i2c_wiring)
+target_compile_definitions(tst_p1_hl2_i2c_wiring PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-E Task 3: HermesLiteBandwidthMonitor ────────────────────────────
+# Verifies the port of mi0bot bandwidth_monitor.{c,h} (MW0LGE [@c26a8a4]):
+#   - initial state (zero rates, not throttled, zero event count)
+#   - first-tick zero return (prev_ms == 0 branch in compute_bps)
+#   - bytes <= 0 are silently ignored (upstream if (bytes > 0) guard)
+#   - positive ingress rate after two real-clock ticks (delta path)
+#   - throttle requires ep2 to be active (not just ep6 silence)
+#   - throttle asserted after kThrottleTickThreshold consecutive silent ticks
+#   - throttle clears when ep6 resumes
+#   - throttle event count increments per throttle assertion
+#   - liveStatsUpdated emitted on every tick()
+#   - reset() clears all state (upstream bandwidth_monitor_reset() parity)
+#   - reset() emits throttledChanged(false) when previously throttled
+nereus_add_test(tst_hermes_lite_bandwidth_monitor)
+
+# ── Phase 3P-E Task 4: Hardware → HL2 I/O Setup page UI ──────────────────────
+# Smoke-tests construction for HL2 and non-HL2 boards, signal-driven UI
+# updates (register change, step advance, detection, throttle, I2C queue)
+# without crashes. Auto-hide for non-HL2 boards verified via construction.
+nereus_add_test(tst_hl2_io_board_tab)
+target_compile_definitions(tst_hl2_io_board_tab PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-F Task 1: AlexController model — per-band antennas + Block-TX ───
+# Verifies per-band TX/RX/RX-only antenna arrays (14 bands, default Ant 1),
+# isolation (one band's assignment doesn't affect others), Block-TX safety
+# (blockTxAnt2/3 rejects setTxAnt to that port but not setRxAnt),
+# clamping (values outside 1..3 clamped to 1 or 3), setAntennasTo1 force-mode,
+# antennaChanged signal emission, and per-MAC AppSettings persistence round-trip.
+# Ports HPSDR/Alex.cs:30-106 [@501e3f5].
+nereus_add_test(tst_alex_controller)
+
+# Smoke test for Antenna Control sub-sub-tab UI (Phase 3P-F Task 3):
+# Widget construction + AlexController wiring + Block-TX safety rejection.
+nereus_add_test(tst_antenna_control_tab)
+target_compile_definitions(tst_antenna_control_tab PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-F Task 4: RxApplet antenna buttons per-band wiring ───────────────
+# Verifies that RxApplet's RX/TX antenna buttons (m_rxAntBtn / m_txAntBtn)
+# populate from AlexController at construction time for the current band,
+# auto-switch when PanadapterModel::bandChanged fires, and repopulate when
+# AlexController::antennaChanged fires for the current band.
+nereus_add_test(tst_rxapplet_antenna_buttons)
+target_compile_definitions(tst_rxapplet_antenna_buttons PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-F Task 5a: ApolloController model ───────────────────────────────
+# Smoke test: defaults all-off (present/filter/tuner = false), individual setter
+# signal emission (idempotent no-fire), and per-MAC AppSettings persistence round-trip.
+# Ports setup.cs:15566-15590 + console.cs:19060-19105 [@501e3f5].
+nereus_add_test(tst_apollo_controller)
+
+# ── Phase 3P-F Task 5b: PennyLaneController model ────────────────────────────
+# Smoke test: default extCtrlEnabled = true (matches Thetis penny_ext_ctrl_enabled=true),
+# setter signal emission (idempotent no-fire), and per-MAC AppSettings persistence.
+# Ports HPSDR/Penny.cs (full) + console.cs:14899 + setup.cs:12679 [@501e3f5].
+nereus_add_test(tst_penny_lane_controller)
+
+# ── Phase 3P-H Task 1: RadioStatus + SettingsHygiene + PttSource models ──────
+nereus_add_test(tst_ptt_source)
+nereus_add_test(tst_radio_status)
+nereus_add_test(tst_settings_hygiene)
+
+# ── Phase 3P-H Task 4: status-packet parsing + RadioModel ownership ──────────
+# tst_p1_status_telemetry: feeds a hand-crafted 1032-byte ep6 datagram
+#   into P1RadioConnection::parseEp6FrameForTest and asserts the new
+#   paTelemetryUpdated() signal carries the C0=0x08/0x10/0x18 raw values
+#   per Thetis networkproto1.c:332-356 [@501e3f5].
+# tst_p2_status_telemetry: same for P2's 60-byte High-Priority status
+#   packet at byte offsets 2-3, 10-11, 18-19, 45-46, 51-52, 53-54
+#   per Thetis network.c:711-748 [@501e3f5].
+# tst_radio_model_status_wiring: verifies RadioModel owns RadioStatus +
+#   SettingsHygiene as single instances, that the public radioStatus()
+#   accessor surfaces signals to the embedded sub-model, and that
+#   settingsHygiene().validate() (called from onConnectionStateChanged
+#   on Connected) populates issues for an out-of-range persisted S-ATT.
+nereus_add_test(tst_p1_status_telemetry)
+nereus_add_test(tst_p2_status_telemetry)
+nereus_add_test(tst_radio_model_status_wiring)
+
+# ── Phase 3P-G commit 1: CalibrationController model ─────────────────────────
+# Verifies defaults (freqFactor=1.0, all offsets=0), setter signal emission
+# (idempotent no-fire), effectiveFreqCorrectionFactor() toggle between normal
+# and 10 MHz ref factor, and per-MAC AppSettings persistence round-trip.
+# Ports setup.cs:5137-5144; 14036-14050; 22690-22706; 14325; 17243; 18315 +
+# console.cs:9766-9844; 21022-21086 [@501e3f5].
+nereus_add_test(tst_calibration_controller)
+
+# ── Phase 3P-G commit 2: CalibrationTab UI smoke tests ───────────────────────
+# Verifies construction doesn't crash, 5 group boxes present
+# (Freq Cal / Level Cal / HPSDR Freq Cal Diagnostic / TX Display Cal /
+# PA Current), controller->UI sync, and UI->controller write-back.
+nereus_add_test(tst_calibration_tab)
+target_compile_definitions(tst_calibration_tab PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-H Task 5a: Alex-2 Filters live LED selection ────────────────────
+# Verifies AntennaAlexAlex2Tab::updateActiveLeds() follows Thetis
+# console.cs:setAlex2HPF / setAlex2LPF (7060-7299) first-match range logic
+# [@501e3f5], tracks PanadapterModel::centerFrequencyChanged, and
+# surfaces the BP bypass fallback on no-row-match + master toggle.
+nereus_add_test(tst_alex2_live_leds)
+target_compile_definitions(tst_alex2_live_leds PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Alex-1 Filters live LED (UX parity follow-up, 2026-04-21) ─────────────────
+# Mirrors tst_alex2_live_leds for the Alex-1 Filters sub-sub-tab. Verifies
+# AntennaAlexAlex1Tab::updateActiveLeds() lights the correct HPF/LPF row
+# for the current SliceModel frequency per Thetis console.cs:setAlexHPF /
+# setAlexLPF [@501e3f5]. Does not cover the Saturn BPF1 column — that is a
+# separate panel with its own edge table and needs its own LED work if
+# Saturn-mode BPF1 is enabled.
+nereus_add_test(tst_alex1_live_leds)
+target_compile_definitions(tst_alex1_live_leds PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-H Task 5b: OC Outputs live pin-state LED row ─────────────────────
+# Verifies OcOutputsHfTab::onLiveStateChanged() computes the displayed OC
+# byte = OcMatrix::maskFor(currentBand, isTx) via RadioModel's first
+# panadapter + TransmitModel MOX state. Covers empty matrix, RX pin set
+# for 20m, band-change recompute, MOX-driven RX↔TX matrix flip, and
+# direct setCurrentOcByte path.
+nereus_add_test(tst_oc_outputs_live_pins)
+target_compile_definitions(tst_oc_outputs_live_pins PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-H Task 5c: HL2 I/O live register polling + bandwidth meter ───────
+# Verifies Hl2IoBoardTab spins a 40 ms register-table QTimer (matching
+# the group-box title "Register state  (polled @ 40 ms)") that refreshes
+# each cell from IoBoardHl2::registerValue, plus the 250 ms bandwidth
+# QTimer (Task E3) driving ep6/ep2 Mbps labels + throttle status from
+# HermesLiteBandwidthMonitor.
+nereus_add_test(tst_hl2_live_polling)
+target_compile_definitions(tst_hl2_live_polling PRIVATE NEREUS_BUILD_TESTS)
+
+

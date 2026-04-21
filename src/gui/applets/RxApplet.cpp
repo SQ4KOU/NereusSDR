@@ -119,17 +119,21 @@
 #include "RxApplet.h"
 #include "NyiOverlay.h"
 #include "core/BoardCapabilities.h"
+#include "core/P2RadioConnection.h"
 #include "core/RadioConnection.h"
 #include "core/StepAttenuatorController.h"
+#include "core/accessories/AlexController.h"
 #include "gui/ComboStyle.h"
 #include "gui/StyleConstants.h"
 #include "gui/widgets/FilterPassbandWidget.h"
+#include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 #include <algorithm>
 
 #include <QAction>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -151,6 +155,27 @@ RxApplet::RxApplet(SliceModel* slice, RadioModel* model, QWidget* parent)
     , m_slice(slice)
 {
     buildUi();
+
+    // Phase 3P-F Task 4: observe the first panadapter for band changes so the
+    // antenna buttons repopulate when the user QSYs across a band boundary.
+    // Also do an initial populate at construction time.
+    if (m_model && !m_model->panadapters().isEmpty()) {
+        m_pan = m_model->panadapters().first();
+        connect(m_pan, &PanadapterModel::bandChanged,
+                this, &RxApplet::populateAntennaButtons);
+        populateAntennaButtons(m_pan->band());
+    }
+
+    // Also repopulate when AlexController antennaChanged fires for the current band.
+    if (m_model) {
+        connect(&m_model->alexControllerMutable(), &AlexController::antennaChanged,
+                this, [this](Band band) {
+            if (m_pan && band == m_pan->band()) {
+                populateAntennaButtons(band);
+            }
+        });
+    }
+
     syncFromModel();
 }
 
@@ -232,6 +257,14 @@ void RxApplet::buildUi()
                 m_rxAntBtn->mapToGlobal(QPoint(0, m_rxAntBtn->height())));
             if (sel && m_slice) {
                 m_slice->setRxAntenna(sel->text());
+                // Phase 3P-F Task 4: persist per-band assignment in AlexController.
+                if (m_model && m_pan) {
+                    const QString& text = sel->text();
+                    int antNum = 1;
+                    if (text == QStringLiteral("ANT2")) { antNum = 2; }
+                    else if (text == QStringLiteral("ANT3")) { antNum = 3; }
+                    m_model->alexControllerMutable().setRxAnt(m_pan->band(), antNum);
+                }
             }
         });
         row->addWidget(m_rxAntBtn);
@@ -259,6 +292,15 @@ void RxApplet::buildUi()
                 m_txAntBtn->mapToGlobal(QPoint(0, m_txAntBtn->height())));
             if (sel && m_slice) {
                 m_slice->setTxAntenna(sel->text());
+                // Phase 3P-F Task 4: persist per-band TX assignment in AlexController.
+                // setTxAnt() respects blockTxAnt2/3 safety guards from Task 1.
+                if (m_model && m_pan) {
+                    const QString& text = sel->text();
+                    int antNum = 1;
+                    if (text == QStringLiteral("ANT2")) { antNum = 2; }
+                    else if (text == QStringLiteral("ANT3")) { antNum = 3; }
+                    m_model->alexControllerMutable().setTxAnt(m_pan->band(), antNum);
+                }
             }
         });
         row->addWidget(m_txAntBtn);
@@ -506,10 +548,23 @@ void RxApplet::buildUi()
         m_attStack = new QStackedWidget(this);
         m_attStack->setFixedHeight(20);
 
-        // Page 0: Preamp combo (ATT mode — step att disabled)
+        // Page 0: Preamp combo (ATT mode — step att disabled).
+        // Phase 3P-C Step 3: populate from BoardCapabilities::preampItemsForBoard()
+        // at construction, not hardcoded. Matches Thetis SetComboPreampForHPSDR
+        // console.cs:40755-40825 [@501e3f5] — per board at init time.
         m_preampCombo = new QComboBox(this);
-        m_preampCombo->addItems({QStringLiteral("0dB"), QStringLiteral("-10dB"),
-                                 QStringLiteral("-20dB"), QStringLiteral("-30dB")});
+        {
+            const HPSDRHW initBoard = m_model
+                ? m_model->hardwareProfile().effectiveBoard
+                : HPSDRHW::Hermes;
+            const bool initAlex = m_model
+                ? m_model->boardCapabilities().hasAlexFilters
+                : false;
+            const auto initItems = BoardCapsTable::preampItemsForBoard(initBoard, initAlex);
+            for (const auto& item : initItems) {
+                m_preampCombo->addItem(QString::fromLatin1(item.label), item.modeInt);
+            }
+        }
         m_preampCombo->setFixedWidth(70);
         m_preampCombo->setFixedHeight(20);
         applyComboStyle(m_preampCombo);
@@ -740,6 +795,69 @@ void RxApplet::buildUi()
 
     columns->addLayout(rightCol, 3);
     root->addLayout(columns);
+
+    // Phase 3P-B Task 10: ADC OVL badge row + RX1 preamp toggle.
+    //
+    // Number of badges depends on BoardCapabilities::adcCount.  We gate on
+    // p2PreampPerAdc (added Task 6) as the "dual-ADC board" proxy — it's
+    // true for OrionMKII family (ANAN-7000DLE / 8000DLE / AnvelinaPro3) and
+    // false for Saturn (single-ADC at the wire layer) and all P1 boards.
+    {
+        const bool dualAdc = m_model
+            && m_model->boardCapabilities().p2PreampPerAdc;
+        const int  adcCount = dualAdc ? 2 : 1;
+
+        // OVL badge row ────────────────────────────────────────────────────
+        m_ovlRow = new QHBoxLayout;
+        m_ovlRow->setSpacing(4);
+        m_ovlRow->setContentsMargins(0, 2, 0, 0);
+
+        static const char* kOvlStyleNormal =
+            "QLabel { background: rgba(255,255,255,0.06);"
+            " color: rgba(255,255,255,0.45);"
+            " border: 1px solid rgba(255,255,255,0.12);"
+            " border-radius: 3px; font-size: 9px; font-weight: bold;"
+            " padding: 1px 4px; }";
+
+        // 2026-04-21: OVL badges are retained as backing state for the
+        // StepAttenuatorController signal target and for
+        // tst_rxapplet_adc_ovl's visibleOvlBadgeCountForTest() (which
+        // only checks badge existence, not layout visibility). They are
+        // NOT added to the visible row — the authoritative ADC-overload
+        // indicator now lives on the MainWindow status bar, left of
+        // STATION, mirroring Thetis's ucInfoBar Warning() placement.
+        for (int i = 0; i < adcCount; ++i) {
+            QString label = (adcCount == 1)
+                ? QStringLiteral("OVL")
+                : QStringLiteral("OVL") + QString(i == 0 ? "\u2080" : "\u2081");
+            m_ovlBadges[i] = new QLabel(label, this);
+            m_ovlBadges[i]->setStyleSheet(QString::fromLatin1(kOvlStyleNormal));
+            m_ovlBadges[i]->setAlignment(Qt::AlignCenter);
+            m_ovlBadges[i]->hide();  // not added to m_ovlRow; hidden
+        }
+
+        m_ovlRow->addStretch(1);
+
+        // RX1 preamp toggle (dual-ADC boards only) ────────────────────────
+        if (dualAdc) {
+            m_rx1PreampToggle = new QCheckBox(QStringLiteral("RX1 preamp"), this);
+            m_rx1PreampToggle->setStyleSheet(QStringLiteral(
+                "QCheckBox { color: #8aa8c0; font-size: 10px; }"
+                "QCheckBox::indicator { width: 12px; height: 12px; }"));
+            // Phase 3P-B Task 10: RX1 preamp wires to P2RadioConnection::setRx1Preamp
+            // which routes to CodecContext.p2Rx1Preamp → byte 1403 bit 1.
+            connect(m_rx1PreampToggle, &QCheckBox::toggled, this, [this](bool on) {
+                if (m_model) {
+                    auto* conn = qobject_cast<class P2RadioConnection*>(
+                        m_model->connection());
+                    if (conn) { conn->setRx1Preamp(on); }
+                }
+            });
+            m_ovlRow->addWidget(m_rx1PreampToggle);
+        }
+
+        root->addLayout(m_ovlRow);
+    }
 
     // ── Tooltips ──────────────────────────────────────────────────────────
     // NereusSDR native — no Thetis per-slice badge equivalent
@@ -1136,6 +1254,38 @@ void RxApplet::connectSlice(SliceModel* s)
                 }
             }
         }
+
+        // Phase 3P-B Task 10: wire per-ADC OVL badges to overloadStatusChanged.
+        // The signal is already per-ADC (index 0..2); we drive each badge
+        // independently so dual-ADC boards show two discrete indicators.
+        connect(attCtrl, &StepAttenuatorController::overloadStatusChanged,
+                this, [this](int adcIndex, OverloadLevel level) {
+            if (adcIndex < 0 || adcIndex >= 3) { return; }
+            QLabel* badge = m_ovlBadges[adcIndex];
+            if (!badge) { return; }  // not populated on single-ADC boards
+            if (level == OverloadLevel::None) {
+                badge->setStyleSheet(QStringLiteral(
+                    "QLabel { background: rgba(255,255,255,0.06);"
+                    " color: rgba(255,255,255,0.45);"
+                    " border: 1px solid rgba(255,255,255,0.12);"
+                    " border-radius: 3px; font-size: 9px; font-weight: bold;"
+                    " padding: 1px 4px; }"));
+            } else if (level == OverloadLevel::Yellow) {
+                badge->setStyleSheet(QStringLiteral(
+                    "QLabel { background: rgba(255,200,0,0.20);"
+                    " color: #FFD700;"
+                    " border: 1px solid rgba(255,200,0,0.40);"
+                    " border-radius: 3px; font-size: 9px; font-weight: bold;"
+                    " padding: 1px 4px; }"));
+            } else {  // Red
+                badge->setStyleSheet(QStringLiteral(
+                    "QLabel { background: rgba(255,90,90,0.25);"
+                    " color: #FF6868;"
+                    " border: 1px solid rgba(255,90,90,0.50);"
+                    " border-radius: 3px; font-size: 9px; font-weight: bold;"
+                    " padding: 1px 4px; }"));
+            }
+        });
     }
 }
 
@@ -1186,10 +1336,85 @@ void RxApplet::updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double off
     }
 }
 
+// Phase 3P-F Task 4: Per-band antenna populate from AlexController.
+//
+// Reads the per-band RX and TX antenna assignments from AlexController and
+// pushes them into SliceModel so the applet buttons reflect the active band.
+// Called at construction and on every PanadapterModel::bandChanged() crossing.
+//
+// We update the button text directly (in addition to the SliceModel setter)
+// because connectSlice() may not have been called yet at construction time —
+// the ctor wires the panadapter and populates before setSlice() is called by
+// the host widget (which is what drives connectSlice / signal subscriptions).
+void RxApplet::populateAntennaButtons(Band band)
+{
+    if (!m_model || !m_slice) { return; }
+
+    const AlexController& alex = m_model->alexController();
+
+    // RX antenna: AlexController stores 1/2/3; map to "ANT1"/"ANT2"/"ANT3".
+    const int rxNum = alex.rxAnt(band);
+    const QString rxLabel = QStringLiteral("ANT") + QString::number(rxNum);
+
+    // TX antenna: same mapping. setTxAnt() honours blockTxAnt2/3 safety guards.
+    const int txNum = alex.txAnt(band);
+    const QString txLabel = QStringLiteral("ANT") + QString::number(txNum);
+
+    // Update button text directly — bypasses the connectSlice() signal chain
+    // so the change is immediate regardless of whether the slice is "connected".
+    m_rxAntBtn->setText(rxLabel);
+    m_txAntBtn->setText(txLabel);
+
+    // Also push into SliceModel so the model stays in sync with the UI.
+    // Use setters only when the value actually differs to avoid spurious signals.
+    if (m_slice->rxAntenna() != rxLabel) {
+        m_slice->setRxAntenna(rxLabel);
+    }
+    if (m_slice->txAntenna() != txLabel) {
+        m_slice->setTxAntenna(txLabel);
+    }
+}
+
 #ifdef NEREUS_BUILD_TESTS
 int RxApplet::stepAttMaxForTest() const
 {
     return m_stepAttSpin ? m_stepAttSpin->maximum() : -1;
+}
+
+int RxApplet::visibleOvlBadgeCountForTest() const
+{
+    int count = 0;
+    for (int i = 0; i < 3; ++i) {
+        if (m_ovlBadges[i]) { ++count; }
+    }
+    return count;
+}
+
+int RxApplet::preampComboItemCountForTest() const
+{
+    return m_preampCombo ? m_preampCombo->count() : -1;
+}
+
+// Phase 3P-F Task 4: parse ANT<n> label from the button text and return n.
+// Returns -1 if the button is null or the label does not match "ANT[123]".
+int RxApplet::activeRxAntennaForTest() const
+{
+    if (!m_rxAntBtn) { return -1; }
+    const QString text = m_rxAntBtn->text();
+    if (text == QStringLiteral("ANT1")) { return 1; }
+    if (text == QStringLiteral("ANT2")) { return 2; }
+    if (text == QStringLiteral("ANT3")) { return 3; }
+    return -1;
+}
+
+int RxApplet::activeTxAntennaForTest() const
+{
+    if (!m_txAntBtn) { return -1; }
+    const QString text = m_txAntBtn->text();
+    if (text == QStringLiteral("ANT1")) { return 1; }
+    if (text == QStringLiteral("ANT2")) { return 2; }
+    if (text == QStringLiteral("ANT3")) { return 3; }
+    return -1;
 }
 #endif
 

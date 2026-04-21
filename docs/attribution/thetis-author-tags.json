@@ -1,0 +1,318 @@
+{
+  "generated_utc": "2026-04-21T13:03:44+00:00",
+  "thetis_sha": "501e3f5",
+  "mi0bot_sha": "c26a8a4",
+  "callsign_tags": {
+    "MW0LGE": {
+      "count": 3070,
+      "first_seen": "version.cpp:13",
+      "files": [
+        "Alex.cs",
+        "AmpView.cs",
+        "Andromeda.cs",
+        "CATCommands.cs",
+        "CATParser.cs",
+        "CATTester.cs",
+        "CatCmdDb.cs",
+        "ColorButton.cs",
+        "DiversityForm.cs",
+        "FilterForm.cs",
+        "GlobalMouseHandler.cs",
+        "MemoryForm.cs",
+        "MeterManager.cs",
+        "Midi2CatCommands.cs",
+        "MidiDevice.cs",
+        "MidiDeviceSetup.cs",
+        "N1MM.cs",
+        "NetworkIO.cs",
+        "PSForm.cs",
+        "Penny.cs",
+        "PrettyTrackBar.cs",
+        "RAForm.cs",
+        "RXA.c",
+        "RawInput.cs",
+        "SDRSerialPortII.cs",
+        "SIOListenerII.cs",
+        "Skin.cs",
+        "SliderSettingsForm.cs",
+        "TCIServer.cs",
+        "TCPIPcatServer.cs",
+        "aamix.c",
+        "analyzer.c",
+        "analyzer.h",
+        "audio.cs",
+        "clsBandStackManager.cs",
+        "clsDBMan.cs",
+        "cmUtilities.c",
+        "cmasio.c",
+        "cmasio.h",
+        "cmaster.cs",
+        "cmbuffs.c",
+        "common.cs",
+        "console.cs",
+        "cwx.cs",
+        "database.cs",
+        "display.cs",
+        "dsp.cs",
+        "enums.cs",
+        "eqform.cs",
+        "frmMeterDisplay.cs",
+        "frmNotchPopup.cs",
+        "hostsample.cpp",
+        "ivac.c",
+        "ivac.h",
+        "netInterface.c",
+        "network.c",
+        "network.h",
+        "networkproto1.c",
+        "numericupdownts.cs",
+        "pa_asio.cpp",
+        "pa_converters.c",
+        "pa_converters.h",
+        "pa_front.c",
+        "pa_win_wasapi.c",
+        "pipe.c",
+        "portaudio.h",
+        "radio.cs",
+        "setup.cs",
+        "specHPSDR.cs",
+        "splash.cs",
+        "titlebar.cs",
+        "ucInfoBar.cs",
+        "ucMeter.cs",
+        "version.c",
+        "version.cpp",
+        "wideband.cs"
+      ],
+      "name": "Richard Samphire",
+      "role": "Thetis lead maintainer; UI, various; goes by 'Richie'"
+    },
+    "W2PA": {
+      "count": 460,
+      "first_seen": "MidiMessageManager.cs:24",
+      "files": [
+        "CATCommands.cs",
+        "CatCmdDb.cs",
+        "ControllerMapping.cs",
+        "Database.cs",
+        "Midi2CatCommands.cs",
+        "MidiDevice.cs",
+        "MidiDeviceSetup.cs",
+        "MidiMessageManager.cs",
+        "PSForm.cs",
+        "console.cs",
+        "cwx.cs",
+        "database.cs",
+        "setup.cs"
+      ],
+      "name": "Chris Codella",
+      "role": "Behringer MIDI, QSK for Protocol-2, DB import"
+    },
+    "DH1KLM": {
+      "count": 267,
+      "first_seen": "CatCmdDb.cs:434",
+      "files": [
+        "CATCommands.cs",
+        "CatCmdDb.cs",
+        "Midi2CatCommands.cs",
+        "clsHardwareSpecific.cs",
+        "cmaster.cs",
+        "console.cs",
+        "enums.cs",
+        "networkproto1.c",
+        "setup.cs"
+      ],
+      "name": "Sigi",
+      "role": "MIDI, skins & UI improvements; RedPitaya enum slot contribution"
+    },
+    "MI0BOT": {
+      "count": 222,
+      "first_seen": "network.h:422",
+      "files": [
+        "Alex.cs",
+        "Andromeda.cs",
+        "CATCommands.cs",
+        "CATParser.cs",
+        "CatCmdDb.cs",
+        "Midi2CatCommands.cs",
+        "NetworkIOImports.cs",
+        "PSForm.cs",
+        "Penny.cs",
+        "clsRadioDiscovery.cs",
+        "cmaster.cs",
+        "console.cs",
+        "enums.cs",
+        "netInterface.c",
+        "network.c",
+        "network.h",
+        "networkproto1.c",
+        "setup.cs",
+        "xvtr.cs"
+      ],
+      "name": "Reid Campbell",
+      "role": "Hermes Lite 2 fork maintainer; HL2 I/O, bandwidth monitor, I2C TLV"
+    },
+    "G8NJJ": {
+      "count": 132,
+      "first_seen": "console.cs:141",
+      "files": [
+        "Alex.cs",
+        "Andromeda.cs",
+        "clsHardwareSpecific.cs",
+        "console.Designer.cs",
+        "console.cs",
+        "displaysettingsform.cs",
+        "enums.cs",
+        "setup.cs"
+      ],
+      "name": "Laurence Barker",
+      "role": "G2, Andromeda, protocols; ANAN_G2_1K PA wiring"
+    },
+    "W4TME": {
+      "count": 18,
+      "first_seen": "database.cs:5005",
+      "files": [
+        "FilterForm.cs",
+        "MemoryForm.cs",
+        "console.cs",
+        "database.cs"
+      ],
+      "name": "Ke Chen",
+      "role": "FlexRadio Systems contributor; database/memory form tweaks"
+    },
+    "W4WMT": {
+      "count": 16,
+      "first_seen": "hostsample.cpp:506",
+      "files": [
+        "cmasio.c",
+        "cmasio.h",
+        "hostsample.cpp",
+        "ring.c",
+        "ring.h",
+        "setup.cs"
+      ],
+      "name": "Bryan Rambo",
+      "role": "Resampler, VAC & cmASIO"
+    },
+    "MI0BIT": {
+      "count": 8,
+      "first_seen": "NetworkIOImports.cs:384",
+      "files": [
+        "NetworkIOImports.cs"
+      ],
+      "name": "Unknown",
+      "role": "mi0bot fork HL2 contributions (TX latency, PTT hang, I2C, channel swap); identity unconfirmed \u2014 possible alt callsign for MI0BOT"
+    },
+    "G7KLJ": {
+      "count": 6,
+      "first_seen": "console.cs:1221",
+      "files": [
+        "console.cs",
+        "setup.cs"
+      ],
+      "name": "Unknown",
+      "role": "console.cs PA init thread + setup-instance singleton pattern; identity to be researched"
+    },
+    "VK6APH": {
+      "count": 6,
+      "first_seen": "display.cs:30",
+      "files": [
+        "PanDisplay.cs",
+        "display.cs",
+        "wbDisplay.cs"
+      ],
+      "name": "Phil Harman",
+      "role": "HPSDR firmware and protocol co-originator (About dialog uses alternate callsign VK6PH)"
+    },
+    "W5WC": {
+      "count": 6,
+      "first_seen": "display.cs:6",
+      "files": [
+        "PanDisplay.cs",
+        "display.cs",
+        "wbDisplay.cs"
+      ],
+      "name": "Doug Wigley",
+      "role": "UI, ChannelMaster, various; naming of 'Thetis'"
+    },
+    "WU2O": {
+      "count": 6,
+      "first_seen": "ssql.c:342",
+      "files": [
+        "ssql.c"
+      ],
+      "name": "Scott",
+      "role": "Forum admin; WDSP SSQL default-threshold tuning"
+    },
+    "IK4JPN": {
+      "count": 4,
+      "first_seen": "console.cs:26345",
+      "files": [
+        "console.cs"
+      ],
+      "name": "Unknown",
+      "role": "2014 console.cs modification (region marked IK4JPN+/IK4JPN-); identity to be researched"
+    },
+    "MW0GLE": {
+      "count": 4,
+      "first_seen": "setup.cs:2740",
+      "files": [
+        "setup.cs"
+      ],
+      "name": "Richard Samphire",
+      "role": "Typo of MW0LGE (Richie Samphire) in setup.cs:2740 version tag [2.10.3.6_dev4]; preserved verbatim"
+    },
+    "DK1HLM": {
+      "count": 2,
+      "first_seen": "console.cs:6821",
+      "files": [
+        "console.cs"
+      ],
+      "name": "Unknown",
+      "role": "OrionMKII/Saturn PA handling contribution; identity to be researched"
+    },
+    "K2UE": {
+      "count": 2,
+      "first_seen": "console.cs:26064",
+      "files": [
+        "console.cs"
+      ],
+      "name": "George Donadio",
+      "role": "EME/antenna authority; ANAN-8000D Hi-Z/Lo-Z load detection idea"
+    },
+    "KE9NS": {
+      "count": 2,
+      "first_seen": "MemoryForm.cs:662",
+      "files": [
+        "MemoryForm.cs"
+      ],
+      "name": "Darrin",
+      "role": "Various contributions including SunTracking and memory-form URL drag-drop"
+    },
+    "MW0GE": {
+      "count": 2,
+      "first_seen": "Midi2CatCommands.cs:264",
+      "files": [
+        "Midi2CatCommands.cs"
+      ],
+      "name": "Richard Samphire",
+      "role": "Typo of MW0LGE (Richie Samphire) in Midi2CatCommands.cs:264 version tag [2.10.3.6]; preserved verbatim"
+    },
+    "W1CEG": {
+      "count": 2,
+      "first_seen": "console.cs:42364",
+      "files": [
+        "console.cs"
+      ],
+      "name": "Unknown",
+      "role": "console.cs contribution (region marked :W1CEG: / W1CEG:  End); identity to be researched"
+    }
+  },
+  "named_tags": {
+    "Thomas Ascher": {
+      "count": 2,
+      "first_seen": "ColorButton.cs:32",
+      "role": null
+    }
+  }
+}

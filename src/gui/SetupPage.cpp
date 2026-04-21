@@ -22,6 +22,7 @@
 // =================================================================
 
 #include "SetupPage.h"
+#include "StyleConstants.h"
 
 #include <QScrollArea>
 #include <QFrame>
@@ -54,6 +55,15 @@ SetupPage::SetupPage(const QString& title, QWidget* parent)
 
 void SetupPage::init(const QString& title)
 {
+    // Apply dark-theme checkbox + radio-button styles at the page root
+    // so every QCheckBox / QRadioButton in any derived SetupPage
+    // inherits visible indicators over the #0f0f1a background.
+    // Without this, system-default indicators render black-on-dark
+    // and are invisible to users. Fixes regression reported
+    // 2026-04-21 on Phase 3P-H pre-PR debug.
+    setStyleSheet(QString("%1 %2").arg(Style::kCheckBoxStyle,
+                                       Style::kRadioButtonStyle));
+
     auto* rootLayout = new QVBoxLayout(this);
     rootLayout->setContentsMargins(12, 8, 12, 8);
     rootLayout->setSpacing(6);

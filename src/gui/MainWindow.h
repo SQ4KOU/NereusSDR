@@ -153,6 +153,11 @@ private:
     ClarityController*  m_clarityController{nullptr};
     class StepAttenuatorController* m_stepAttController{nullptr};
     QLabel* m_adcOvlLabel{nullptr};
+    // 2-second auto-hide timer for the ADC-overload label. Mirrors Thetis's
+    // ucInfoBar._warningTimer: restarts on each overload event, hides the
+    // label when elapsed — independent of the level-decay state tracked in
+    // StepAttenuatorController. Source: Thetis ucInfoBar.cs:927-932 [@501e3f5]
+    QTimer* m_adcOvlHideTimer{nullptr};
 
     // Re-entrancy guard: prevents centerChanged from firing a second
     // forceHardwareFrequency while frequencyChanged is already retuning the DDC
