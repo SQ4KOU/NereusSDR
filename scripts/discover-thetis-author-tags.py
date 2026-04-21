@@ -208,6 +208,38 @@ def main() -> int:
 
     callsigns, named = discover()
 
+    # Merge with existing corpus so human-edited fields (name, role) on
+    # already-known callsigns are preserved across re-runs. Only the
+    # mechanical fields (count, first_seen, files) get refreshed from
+    # the upstream walk. New callsigns arrive with name/role = null
+    # and must be filled in before `--drift` passes.
+    existing = {}
+    if CORPUS_PATH.is_file():
+        try:
+            existing = json.loads(CORPUS_PATH.read_text())
+        except Exception:
+            existing = {}
+    existing_cs = existing.get("callsign_tags", {})
+    existing_named = existing.get("named_tags", {})
+
+    for cs, meta in callsigns.items():
+        prev = existing_cs.get(cs, {})
+        if "name" in prev:
+            meta["name"] = prev["name"]
+        else:
+            meta["name"] = None
+        if "role" in prev:
+            meta["role"] = prev["role"]
+        else:
+            meta["role"] = None
+
+    for nm, meta in named.items():
+        prev = existing_named.get(nm, {})
+        if "role" in prev:
+            meta["role"] = prev["role"]
+        else:
+            meta.setdefault("role", None)
+
     corpus = {
         "generated_utc": datetime.now(timezone.utc).isoformat(
             timespec="seconds"),
@@ -244,9 +276,28 @@ def main() -> int:
             for t in sorted(new_tags):
                 print(f"  {t}: {corpus['callsign_tags'][t]['first_seen']}")
             print("Run scripts/discover-thetis-author-tags.py and commit "
-                  "the refreshed corpus.")
+                  "the refreshed corpus (don't forget to populate the "
+                  "name/role fields).")
             return 1
-        print("[drift] no new author tags; corpus is current")
+        # Also fail if any committed callsign still has name=null —
+        # means someone added a new contributor via discovery but never
+        # went back to research and fill in the identity. This is the
+        # gate that would have forced human-in-the-loop on the DH1KLM
+        # drop had it been missing from our initial corpus.
+        unnamed = sorted(cs for cs, meta in committed["callsign_tags"].items()
+                         if meta.get("name") in (None, ""))
+        if unnamed:
+            print(f"DRIFT: {len(unnamed)} callsign(s) in corpus have "
+                  f"name=null:")
+            for cs in unnamed:
+                meta = committed["callsign_tags"][cs]
+                print(f"  {cs}: {meta['first_seen']} "
+                      f"(role: {meta.get('role') or '(null)'})")
+            print("Populate the name field in "
+                  "docs/attribution/thetis-author-tags.json and commit.")
+            return 1
+        print("[drift] no new author tags; all callsigns have names; "
+              "corpus is current")
         return 0
 
     CORPUS_PATH.parent.mkdir(parents=True, exist_ok=True)
