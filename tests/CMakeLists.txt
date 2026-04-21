@@ -407,3 +407,11 @@ nereus_add_test(tst_penny_lane_controller)
 # console.cs:9766-9844; 21022-21086 [@501e3f5].
 nereus_add_test(tst_calibration_controller)
 
+# ── Phase 3P-G commit 2: CalibrationTab UI smoke tests ───────────────────────
+# Verifies construction doesn't crash, 5 group boxes present
+# (Freq Cal / Level Cal / HPSDR Freq Cal Diagnostic / TX Display Cal /
+# PA Current), controller->UI sync, and UI->controller write-back.
+nereus_add_test(tst_calibration_tab)
+target_compile_definitions(tst_calibration_tab PRIVATE NEREUS_BUILD_TESTS)
+
+

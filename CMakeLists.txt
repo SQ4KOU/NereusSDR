@@ -495,7 +495,7 @@ set(GUI_SOURCES
     src/gui/setup/hardware/XvtrTab.cpp
     src/gui/setup/hardware/PureSignalTab.cpp
     src/gui/setup/hardware/DiversityTab.cpp
-    src/gui/setup/hardware/PaCalibrationTab.cpp
+    src/gui/setup/hardware/CalibrationTab.cpp
     src/gui/setup/hardware/Hl2IoBoardTab.cpp
     src/gui/setup/hardware/BandwidthMonitorTab.cpp
     src/gui/setup/AudioSetupPages.cpp

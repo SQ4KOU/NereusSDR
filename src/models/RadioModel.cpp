@@ -423,6 +423,11 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // Phase 3P-F Task 5b.
         m_pennyLaneController.setMacAddress(info.macAddress);
         m_pennyLaneController.load();
+
+        // Load per-MAC calibration state (freq correction factor, level offsets, etc.).
+        // Phase 3P-G. Pushed to P2RadioConnection via setCalibrationController() below.
+        m_calController.setMacAddress(info.macAddress);
+        m_calController.load();
     }
 
     m_name = info.displayName();

@@ -212,8 +212,8 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/gui/setup/hardware/OcOutputsHfTab.h | Project Files/Source/Console/setup.designer.cs | 13658-13670+ | port | thetis-samphire | header mirrors OcOutputsHfTab.cpp |
 | src/gui/setup/hardware/OcOutputsTab.cpp | Project Files/Source/Console/setup.designer.cs | tpOCHFControl + tpOCSWLControl (tcOCOutputs parent) | port | thetis-samphire | Parent QTabWidget hosting OC Outputs HF and SWL sub-sub-tabs; routes state via OcMatrix |
 | src/gui/setup/hardware/OcOutputsTab.h | Project Files/Source/Console/setup.designer.cs | tpOCHFControl + tpOCSWLControl | port | thetis-samphire | Parent tab header |
-| src/gui/setup/hardware/PaCalibrationTab.cpp | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | PA calibration per-band gain arrays |
-| src/gui/setup/hardware/PaCalibrationTab.h | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | PA calibration page |
+| src/gui/setup/hardware/CalibrationTab.cpp | Project Files/Source/Console/setup.cs; Project Files/Source/Console/console.cs | 5137-5144; 6470-6525; 14036-14050; 14325-14333; 17243-17248; 18315-18317; 22690-22706; 9764-9844; 21022-21086 | port | thetis-samphire | Renamed from PaCalibrationTab (Phase 3P-G); 5 group boxes: Freq Cal / Level Cal / HPSDR Freq Cal Diagnostic / TX Display Cal / PA Current (A) calculation; backed by CalibrationController; per-MAC persistence |
+| src/gui/setup/hardware/CalibrationTab.h | Project Files/Source/Console/setup.cs; Project Files/Source/Console/console.cs | 5137-5144; 6470-6525; 14036-14050; 14325-14333; 17243-17248; 18315-18317; 22690-22706; 9764-9844; 21022-21086 | port | thetis-samphire | header mirrors CalibrationTab.cpp |
 | src/gui/setup/hardware/PureSignalTab.cpp | Project Files/Source/Console/PSForm.cs | full | port | thetis-samphire | |
 | src/gui/setup/hardware/PureSignalTab.h | Project Files/Source/Console/PSForm.cs | 841 | port | thetis-samphire | chkPSAutoAttenuate |
 | src/gui/setup/hardware/RadioInfoTab.cpp | Project Files/Source/Console/setup.cs | 847; 848-850+ | port | thetis-samphire | Hardware Config / General, include_extra_p1_rate, numericUpDownNr |
