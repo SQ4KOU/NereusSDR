@@ -63,8 +63,14 @@ private slots:
         // Wait for first iqDataReceived emission
         QTRY_VERIFY_WITH_TIMEOUT(dataSpy.count() >= 1, 3000);
 
-        // Verify sample format — hwReceiverIndex=0, interleaved I/Q floats
-        auto args    = dataSpy.last();
+        // Verify sample format — hwReceiverIndex=0, interleaved I/Q floats.
+        // Use first() rather than last(): the fake streams 10 ep6 frames and
+        // dataSpy may have captured additional emissions between QTRY_VERIFY
+        // returning and this line running (e.g. rx=1 from a subsequent frame
+        // if the connection ever fans out to multiple DDCs). The invariant
+        // the test checks is "the first iqDataReceived emission is rx=0 with
+        // the I=0.5 / Q=0 fake payload," which first() encodes unambiguously.
+        auto args    = dataSpy.first();
         int  rxIdx   = args.at(0).toInt();
         QCOMPARE(rxIdx, 0);
 
