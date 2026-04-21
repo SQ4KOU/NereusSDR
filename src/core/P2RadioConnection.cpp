@@ -132,6 +132,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "P2RadioConnection.h"
 #include "LogCategories.h"
 #include "codec/AlexFilterMap.h"
+#include "codec/P2CodecOrionMkII.h"
+#include "codec/P2CodecSaturn.h"
 
 #include <QNetworkDatagram>
 #include <QVariant>
@@ -254,6 +256,9 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     m_caps = m_hardwareProfile.caps
              ? m_hardwareProfile.caps
              : &BoardCapsTable::forBoard(info.boardType);
+
+    // Phase 3P-B Task 7: select per-board codec now that m_caps is available.
+    selectCodec();
 
     // Reset sequence counters
     m_seqGeneral = 0;
@@ -428,6 +433,19 @@ void P2RadioConnection::setPreamp(bool enabled)
     }
 }
 
+void P2RadioConnection::setRx1Preamp(bool enabled)
+{
+    // Phase 3P-B Task 10: per-ADC RX1 preamp for OrionMKII family.
+    // Routes to byte 1403 bit 1 in CmdHighPriority via buildCodecContext():
+    //   ctx.p2Rx1Preamp = (m_rx[1].preamp != 0)
+    // P2CodecOrionMkII::composeCmdHighPriority:
+    //   buf[1403] = p2Rx1Preamp << 1 | rxPreamp[0]
+    m_rx[1].preamp = enabled ? 1 : 0;
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
 void P2RadioConnection::setTxDrive(int level)
 {
     // From Thetis: prn->tx[0].drive_level
@@ -559,15 +577,215 @@ void P2RadioConnection::onReconnectTimeout()
     }
 }
 
-// --- Command Senders ---
-// Each ported byte-for-byte from Thetis CmdGeneral/CmdRx/CmdTx/CmdHighPriority
+// --- Command Composers ---
+// Each fills the packet buffer from current state. sendCmd* calls compose + UDP dispatch.
+// Extracting compose from send allows test seams (composeCmdGeneralForTest etc.) to
+// capture the exact bytes that would be sent, without requiring a live UDP socket.
+
+// ---------------------------------------------------------------------------
+// selectCodec — Phase 3P-B Task 7
+//
+// Builds m_codec from the physical board type. Called from connectToRadio()
+// after m_caps is set, and from setBoardForTest() in unit tests.
+//
+// For P2, codec dispatch is on the physical board (HPSDRHW), not the logical
+// model, because the wire dialect differences (Saturn BPF1 override) are
+// physical-board-specific, unlike P1 where codec dispatch is on HPSDRModel.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::selectCodec()
+{
+    m_codec.reset();
+    m_useLegacyP2Codec = (qEnvironmentVariableIntValue("NEREUS_USE_LEGACY_P2_CODEC") == 1);
+    if (m_useLegacyP2Codec) {
+        qCInfo(lcConnection) << "P2: NEREUS_USE_LEGACY_P2_CODEC=1 — using pre-refactor compose path";
+        return;
+    }
+    if (!m_caps) {
+        qCWarning(lcConnection) << "P2: no caps; codec selection deferred";
+        return;
+    }
+    using HW = HPSDRHW;
+    switch (m_hardwareProfile.effectiveBoard) {
+        case HW::Saturn:
+        case HW::SaturnMKII:
+            m_codec = std::make_unique<P2CodecSaturn>();
+            break;
+        default:
+            m_codec = std::make_unique<P2CodecOrionMkII>();
+            break;
+    }
+    qCInfo(lcConnection) << "P2: selected codec for board"
+                         << int(m_hardwareProfile.effectiveBoard);
+}
+
+// ---------------------------------------------------------------------------
+// buildCodecContext — Phase 3P-B Task 7
+//
+// Snapshots all live P2RadioConnection state into a CodecContext so the
+// codec compose methods are pure functions of (ctx × packet-type).
+// ---------------------------------------------------------------------------
+CodecContext P2RadioConnection::buildCodecContext() const
+{
+    CodecContext ctx;
+
+    // Run/PTT state
+    ctx.p2Running  = m_running;
+    ctx.p2PttOut   = m_tx[0].pttOut;
+    ctx.p2Cwx      = m_tx[0].cwx;
+    ctx.p2Dot      = m_tx[0].dot;
+    ctx.p2Dash     = m_tx[0].dash;
+
+    // ADC / DAC counts
+    ctx.p2NumAdc   = m_numAdc;
+    ctx.p2NumDac   = m_numDac;
+
+    // Per-ADC dither + random
+    for (int i = 0; i < 3; ++i) {
+        ctx.dither[i] = (m_adc[i].dither != 0);
+        ctx.random[i] = (m_adc[i].random != 0);
+    }
+
+    // Per-ADC step attenuators
+    for (int i = 0; i < 3; ++i) {
+        ctx.rxStepAttn[i] = m_adc[i].rxStepAttn;
+        ctx.txStepAttn[i] = m_adc[i].txStepAttn;
+    }
+
+    // Per-RX preamp (index 0 = RX1 preamp at byte 1403 bit 0,
+    // m_rx[1].preamp = RX2 preamp at byte 1403 bit 1)
+    ctx.rxPreamp[0]  = (m_rx[0].preamp != 0);
+    ctx.p2Rx1Preamp  = (m_rx[1].preamp != 0);  // "Mercury Attenuator" byte bit 1
+
+    // RX per-DDC state (up to 7 DDCs)
+    for (int i = 0; i < 7; ++i) {
+        ctx.p2RxEnable[i]      = m_rx[i].enable;
+        ctx.p2RxAdcAssign[i]   = m_rx[i].rxAdc;
+        ctx.p2RxSamplingRate[i]= m_rx[i].samplingRate;
+        ctx.p2RxBitDepth[i]    = m_rx[i].bitDepth;
+        ctx.rxFreqHz[i]        = static_cast<quint64>(m_rx[i].frequency);
+    }
+    ctx.p2RxSync = m_rx[0].sync;
+
+    // TX frequency + drive + PA + sampling rate + phase shift
+    ctx.txFreqHz         = static_cast<quint64>(m_tx[0].frequency);
+    ctx.p2DriveLevel     = m_tx[0].driveLevel;
+    ctx.p2TxPa           = m_tx[0].pa;
+    ctx.p2TxSamplingRate = m_tx[0].samplingRate;
+    ctx.p2TxPhaseShift   = m_tx[0].phaseShift;
+
+    // CW state
+    ctx.p2CwModeControl   = m_cw.modeControl;
+    ctx.p2CwSidetoneLevel = m_cw.sidetoneLevel;
+    ctx.p2CwSidetoneFreq  = m_cw.sidetoneFreq;
+    ctx.p2CwKeyerSpeed    = m_cw.keyerSpeed;
+    ctx.p2CwKeyerWeight   = m_cw.keyerWeight;
+    ctx.p2CwHangDelay     = m_cw.hangDelay;
+    ctx.p2CwRfDelay       = m_cw.rfDelay;
+    ctx.p2CwEdgeLength    = m_cw.edgeLength;
+
+    // Mic state
+    ctx.p2MicControl    = m_mic.micControl;
+    ctx.p2MicLineInGain = m_mic.lineInGain;
+
+    // Alex antenna selection (1-based)
+    ctx.p2AlexRxAnt = m_alex.rxAnt;
+    ctx.p2AlexTxAnt = m_alex.txAnt;
+
+    // Alex HPF / LPF bits (recomputed by setReceiverFrequency on freq change)
+    ctx.alexHpfBits = static_cast<quint8>(m_alex.hpfBits);
+    ctx.alexLpfBits = static_cast<quint8>(m_alex.lpfBits);
+
+    // Port / wideband config
+    ctx.p2CustomPortBase     = m_p2CustomPortBase;
+    ctx.p2WbSamplesPerPacket = m_wbSamplesPerPacket;
+    ctx.p2WbSampleSize       = m_wbSampleSize;
+    ctx.p2WbUpdateRate       = m_wbUpdateRate;
+    ctx.p2WbPacketsPerFrame  = m_wbPacketsPerFrame;
+
+    // Watchdog timer
+    ctx.p2Wdt = m_wdt;
+
+    // Saturn BPF1 override bits — left at default 0 until Phase F
+    // configures them via user-entered band-edge table.
+    ctx.p2SaturnBpfHpfBits = 0;
+    ctx.p2SaturnBpfLpfBits = 0;
+
+    return ctx;
+}
+
+// ---------------------------------------------------------------------------
+// composeCmd* wrappers — Phase 3P-B Task 7
+//
+// Each wrapper delegates to the per-board codec (m_codec) unless the
+// NEREUS_USE_LEGACY_P2_CODEC=1 env-var is set (rollback hatch).
+// Legacy compose bodies are preserved as composeCmd*Legacy for one release.
+// ---------------------------------------------------------------------------
+
+// Copy only payload bytes (offset 4+) from the codec's zeroed temporary
+// back into the caller's buffer.  sendCmd* stamps an incrementing P2
+// sequence number into buf[0..3] BEFORE calling composeCmd*, so a full
+// memcpy(buf, tmp, SIZE) would overwrite the sequence with zeros and
+// every P2 command packet would ship with sequence = 0.  The codec
+// implementations only write to offsets ≥ 4 (grep confirmed: no
+// writeBE32(buf, 0, ...) in any P2Codec* compose method), so copying
+// from offset 4 leaves the stamped sequence bytes untouched.
+
+void P2RadioConnection::composeCmdGeneral(char buf[60]) const
+{
+    if (m_useLegacyP2Codec || !m_codec) {
+        composeCmdGeneralLegacy(buf);
+        return;
+    }
+    const CodecContext ctx = buildCodecContext();
+    quint8 tmp[60] = {};
+    m_codec->composeCmdGeneral(ctx, tmp);
+    memcpy(buf + 4, tmp + 4, 60 - 4);
+}
+
+void P2RadioConnection::composeCmdHighPriority(char buf[kBufLen]) const
+{
+    if (m_useLegacyP2Codec || !m_codec) {
+        composeCmdHighPriorityLegacy(buf);
+        return;
+    }
+    const CodecContext ctx = buildCodecContext();
+    quint8 tmp[kBufLen] = {};
+    m_codec->composeCmdHighPriority(ctx, tmp);
+    memcpy(buf + 4, tmp + 4, kBufLen - 4);
+}
+
+void P2RadioConnection::composeCmdRx(char buf[kBufLen]) const
+{
+    if (m_useLegacyP2Codec || !m_codec) {
+        composeCmdRxLegacy(buf);
+        return;
+    }
+    const CodecContext ctx = buildCodecContext();
+    quint8 tmp[kBufLen] = {};
+    m_codec->composeCmdRx(ctx, tmp);
+    memcpy(buf + 4, tmp + 4, kBufLen - 4);
+}
+
+void P2RadioConnection::composeCmdTx(char buf[60]) const
+{
+    if (m_useLegacyP2Codec || !m_codec) {
+        composeCmdTxLegacy(buf);
+        return;
+    }
+    const CodecContext ctx = buildCodecContext();
+    quint8 tmp[60] = {};
+    m_codec->composeCmdTx(ctx, tmp);
+    memcpy(buf + 4, tmp + 4, 60 - 4);
+}
+
+// ---------------------------------------------------------------------------
+// Legacy compose implementations — preserved for NEREUS_USE_LEGACY_P2_CODEC
+// rollback hatch. These are byte-for-byte the pre-Task-7 bodies.
+// ---------------------------------------------------------------------------
 
 // Porting from Thetis CmdGeneral() network.c:821-911
-void P2RadioConnection::sendCmdGeneral()
+void P2RadioConnection::composeCmdGeneralLegacy(char buf[60]) const
 {
-    char buf[60];
-    memset(buf, 0, sizeof(buf));
-
     // From Thetis network.c:826
     buf[4] = 0x00;  // Command
 
@@ -621,25 +839,14 @@ void P2RadioConnection::sendCmdGeneral()
     // prbpfilter->enable | prbpfilter2->enable
     buf[59] = 0x03;  // Enable both Alex0 and Alex1
 
-    // Sequence number (bytes 0-3 big-endian)
-    // From Thetis sendPacket — seq is in the packet buffer
-    writeBE32(buf, 0, m_seqGeneral++);
-
-    // From Thetis network.c:910
-    // sendPacket(listenSock, packetbuf, sizeof(packetbuf), prn->base_outbound_port);
-    QByteArray pkt(buf, sizeof(buf));
-    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort);
+    // Note: sequence number NOT written here — sendCmdGeneral() stamps it just
+    // before transmission so composeCmdGeneralForTest() captures a deterministic
+    // zero-sequence snapshot for regression baseline purposes.
 }
 
 // Porting from Thetis CmdHighPriority() network.c:913-1063
-void P2RadioConnection::sendCmdHighPriority()
+void P2RadioConnection::composeCmdHighPriorityLegacy(char buf[kBufLen]) const
 {
-    char buf[kBufLen];
-    memset(buf, 0, sizeof(buf));
-
-    // Sequence number
-    writeBE32(buf, 0, m_seqHighPri++);
-
     // From Thetis network.c:924-925
     // packetbuf[4] = (prn->tx[0].ptt_out << 1 | prn->run) & 0xff;
     buf[4] = (m_tx[0].pttOut << 1 | (m_running ? 1 : 0)) & 0xff;
@@ -679,21 +886,11 @@ void P2RadioConnection::sendCmdHighPriority()
     // Alex1 (bytes 1428-1431): TX antenna + HPF + LPF
     writeBE32(buf, 1432, buildAlex0());
     writeBE32(buf, 1428, buildAlex1());
-
-    // From Thetis network.c:1062
-    // sendPacket(listenSock, packetbuf, BUFLEN, prn->base_outbound_port + 3);
-    QByteArray pkt(buf, sizeof(buf));
-    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 3);
 }
 
 // Porting from Thetis CmdRx() network.c:1066-1179
-void P2RadioConnection::sendCmdRx()
+void P2RadioConnection::composeCmdRxLegacy(char buf[kBufLen]) const
 {
-    char buf[kBufLen];
-    memset(buf, 0, sizeof(buf));
-
-    writeBE32(buf, 0, m_seqRx++);
-
     // From Thetis network.c:1074
     buf[4] = m_numAdc;
 
@@ -722,20 +919,11 @@ void P2RadioConnection::sendCmdRx()
 
     // From Thetis network.c:1172
     buf[1363] = m_rx[0].sync;
-
-    // From Thetis network.c:1178
-    QByteArray pkt(buf, sizeof(buf));
-    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 1);
 }
 
 // Porting from Thetis CmdTx() network.c:1181-1248
-void P2RadioConnection::sendCmdTx()
+void P2RadioConnection::composeCmdTxLegacy(char buf[60]) const
 {
-    char buf[60];
-    memset(buf, 0, sizeof(buf));
-
-    writeBE32(buf, 0, m_seqTx++);
-
     // From Thetis network.c:1188
     buf[4] = m_numDac;
 
@@ -773,7 +961,52 @@ void P2RadioConnection::sendCmdTx()
     buf[57] = m_adc[2].txStepAttn;
     buf[58] = m_adc[1].txStepAttn;
     buf[59] = m_adc[0].txStepAttn;
+}
 
+// --- Command Senders (compose + UDP dispatch) ---
+
+void P2RadioConnection::sendCmdGeneral()
+{
+    char buf[60];
+    memset(buf, 0, sizeof(buf));
+    // Stamp sequence number before compose so wire bytes include it.
+    writeBE32(buf, 0, m_seqGeneral++);
+    composeCmdGeneral(buf);
+    // From Thetis network.c:910
+    // sendPacket(listenSock, packetbuf, sizeof(packetbuf), prn->base_outbound_port);
+    QByteArray pkt(buf, sizeof(buf));
+    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort);
+}
+
+void P2RadioConnection::sendCmdHighPriority()
+{
+    char buf[kBufLen];
+    memset(buf, 0, sizeof(buf));
+    writeBE32(buf, 0, m_seqHighPri++);
+    composeCmdHighPriority(buf);
+    // From Thetis network.c:1062
+    // sendPacket(listenSock, packetbuf, BUFLEN, prn->base_outbound_port + 3);
+    QByteArray pkt(buf, sizeof(buf));
+    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 3);
+}
+
+void P2RadioConnection::sendCmdRx()
+{
+    char buf[kBufLen];
+    memset(buf, 0, sizeof(buf));
+    writeBE32(buf, 0, m_seqRx++);
+    composeCmdRx(buf);
+    // From Thetis network.c:1178
+    QByteArray pkt(buf, sizeof(buf));
+    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 1);
+}
+
+void P2RadioConnection::sendCmdTx()
+{
+    char buf[60];
+    memset(buf, 0, sizeof(buf));
+    writeBE32(buf, 0, m_seqTx++);
+    composeCmdTx(buf);
     // From Thetis network.c:1247
     QByteArray pkt(buf, sizeof(buf));
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 2);

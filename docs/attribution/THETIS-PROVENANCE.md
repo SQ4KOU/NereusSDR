@@ -40,6 +40,10 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/core/codec/P1CodecRedPitaya.h | Project Files/Source/ChannelMaster/networkproto1.c | 606-616 | port | thetis-no-samphire | header mirrors .cpp |
 | src/core/codec/P1CodecHl2.cpp | Project Files/Source/ChannelMaster/networkproto1.c | 869-1201 | port | mi0bot | mi0bot WriteMainLoop_HL2 port; HL2-only codec; bank 11 6-bit ATT (0x3F) + 0x40 enable + MOX branch fixes the reported S-ATT bug; banks 17-18 HL2-specific |
 | src/core/codec/P1CodecHl2.h | Project Files/Source/ChannelMaster/networkproto1.c | 869-1201 | port | mi0bot | header mirrors .cpp |
+| src/core/codec/P2CodecOrionMkII.cpp | Project Files/Source/ChannelMaster/network.c | 821-1248 | port | thetis-no-samphire | base P2 codec for OrionMKII / 7000D / 8000D / AnvelinaPro3; lifted from P2RadioConnection inline compose helpers |
+| src/core/codec/P2CodecOrionMkII.h | Project Files/Source/ChannelMaster/network.c | 821-1248 | port | thetis-no-samphire | header mirrors .cpp |
+| src/core/codec/P2CodecSaturn.cpp | Project Files/Source/ChannelMaster/network.c; Project Files/Source/Console/console.cs | 821-1248; 6944-7040 | port | multi-source | extends P2CodecOrionMkII with G8NJJ Saturn BPF1 band-edge override (setBPF1ForOrionIISaturn); console.cs has Samphire dual-license stanza |
+| src/core/codec/P2CodecSaturn.h | Project Files/Source/ChannelMaster/network.c; Project Files/Source/Console/console.cs | 821-1248; 6944-7040 | port | multi-source | header mirrors .cpp |
 | src/core/ClarityController.h | Project Files/Source/Console/display.cs | 5866 | port | thetis-samphire | replaces Thetis processNoiseFloor with percentile-based estimator; cites Thetis as lineage |
 | src/core/FFTEngine.cpp | Project Files/Source/Console/display.cs | 2842 | port | thetis-samphire | constant reference only (-200 dBm initial value) |
 | src/core/FFTEngine.h | Project Files/Source/Console/display.cs | 215 | port | thetis-samphire | BUFFER_SIZE = 16384 constant + enum mapping |
@@ -182,10 +186,14 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/gui/setup/DspSetupPages.h | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | DSP setup page declarations; pairs with DspSetupPages.cpp |
 | src/gui/setup/GeneralOptionsPage.cpp | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | grpHermesStepAttenuator, groupBoxTS47, chkAutoATTRx1/2 |
 | src/gui/setup/GeneralOptionsPage.h | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | grpHermesStepAttenuator, groupBoxTS47 |
-| src/gui/setup/hardware/AntennaAlexTab.cpp | Project Files/Source/Console/setup.cs | 13393-13478; 6185-6246; 2892-2898; 18639 | port | thetis-samphire | InitAlexAntTables(), radAlexR/T enable, chkRxOutOnTx, chkEnableXVTRHF |
+| src/gui/setup/hardware/AntennaAlexTab.cpp | Project Files/Source/Console/setup.cs; Project Files/Source/Console/setup.designer.cs | 13393-13478; 6185-6246; 2892-2898; 18639; 23385-23395 | port | thetis-samphire | InitAlexAntTables(), radAlexR/T enable, chkRxOutOnTx, chkEnableXVTRHF; refactored into tcAlexControl parent QTabWidget |
+| src/gui/setup/hardware/AntennaAlexAlex1Tab.cpp | Project Files/Source/Console/setup.designer.cs | 23385-25538 | port | thetis-samphire | Alex-1 Filters sub-sub-tab — HPF + LPF + Saturn BPF1 panels |
+| src/gui/setup/hardware/AntennaAlexAlex1Tab.h | Project Files/Source/Console/setup.designer.cs | 23385-25538 | port | thetis-samphire | header mirrors .cpp |
+| src/gui/setup/hardware/AntennaAlexAlex2Tab.cpp | Project Files/Source/Console/setup.designer.cs | 25539-26857 | port | thetis-samphire | Alex-2 Filters sub-sub-tab — RX2 board HPF + LPF panels with LED status stubs |
+| src/gui/setup/hardware/AntennaAlexAlex2Tab.h | Project Files/Source/Console/setup.designer.cs | 25539-26857 | port | thetis-samphire | header mirrors .cpp |
 | src/gui/setup/hardware/BandwidthMonitorTab.cpp | Project Files/Source/ChannelMaster/bandwidth_monitor.h | full | port | thetis-samphire | Qt sub-tab around Samphire's C byte-accounting API; wires static controls only — live feed deferred to Phase 3L |
 | src/gui/setup/hardware/BandwidthMonitorTab.h | Project Files/Source/ChannelMaster/bandwidth_monitor.h | full | port | thetis-samphire | sub-tab declaration; pairs with BandwidthMonitorTab.cpp |
-| src/gui/setup/hardware/AntennaAlexTab.h | Project Files/Source/Console/setup.cs | 13393; 2892-2898 | port | thetis-samphire | InitAlexAntTables() + per-band row structure |
+| src/gui/setup/hardware/AntennaAlexTab.h | Project Files/Source/Console/setup.cs; Project Files/Source/Console/setup.designer.cs | 13393; 2892-2898; 23385-23395 | port | thetis-samphire | InitAlexAntTables() + per-band row structure; refactored as tcAlexControl parent |
 | src/gui/setup/hardware/DiversityTab.cpp | Project Files/Source/Console/DiversityForm.cs | full | port | thetis-samphire | |
 | src/gui/setup/hardware/DiversityTab.h | Project Files/Source/Console/DiversityForm.cs | 1216; 1228 | port | thetis-samphire | chkLockAngle, chkLockR |
 | src/gui/setup/hardware/OcOutputsTab.cpp | Project Files/Source/Console/setup.cs | 12877-12934 | port | thetis-samphire | UpdateOCBits, chkPenOCrcv/xmit pattern |

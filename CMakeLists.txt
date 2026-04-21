@@ -323,6 +323,8 @@ set(CORE_SOURCES
     src/core/codec/P1CodecAnvelinaPro3.cpp
     src/core/codec/P1CodecRedPitaya.cpp
     src/core/codec/P1CodecHl2.cpp
+    src/core/codec/P2CodecOrionMkII.cpp
+    src/core/codec/P2CodecSaturn.cpp
     src/core/P1RadioConnection.cpp
     src/core/P2RadioConnection.cpp
     src/core/ReceiverManager.cpp
@@ -478,6 +480,8 @@ set(GUI_SOURCES
     src/gui/setup/HardwarePage.cpp
     src/gui/setup/hardware/RadioInfoTab.cpp
     src/gui/setup/hardware/AntennaAlexTab.cpp
+    src/gui/setup/hardware/AntennaAlexAlex1Tab.cpp
+    src/gui/setup/hardware/AntennaAlexAlex2Tab.cpp
     src/gui/setup/hardware/OcOutputsTab.cpp
     src/gui/setup/hardware/XvtrTab.cpp
     src/gui/setup/hardware/PureSignalTab.cpp

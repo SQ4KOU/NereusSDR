@@ -76,6 +76,24 @@ target_compile_definitions(tst_p1_regression_freeze PRIVATE
     NEREUS_BUILD_TESTS
     NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
 
+# ── Phase 3P-B P2 codec tests ──
+nereus_add_test(tst_p2_codec_orionmkii)
+
+# ── Phase 3P-B Task 5: P2CodecSaturn — Saturn BPF1 band-edge override ──
+nereus_add_test(tst_p2_codec_saturn)
+
+# ── Phase 3P-B Task 7: regression-freeze gate ────────────────────────────
+nereus_add_test(tst_p2_regression_freeze)
+
+# ── Phase 3P-B Task 8: Alex-1 Filters sub-sub-tab smoke test ─────────────
+nereus_add_test(tst_alex1_filters_tab)
+
+# ── Phase 3P-B Task 9: Alex-2 Filters sub-sub-tab smoke test ─────────────
+nereus_add_test(tst_alex2_filters_tab)
+target_compile_definitions(tst_p2_regression_freeze PRIVATE
+    NEREUS_BUILD_TESTS
+    NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
+
 # P1 loopback integration test — uses P1FakeRadio from tests/fakes/
 nereus_add_test(tst_p1_loopback_connection fakes/P1FakeRadio.cpp)
 target_compile_definitions(tst_p1_loopback_connection PRIVATE NEREUS_BUILD_TESTS)
@@ -267,3 +285,11 @@ nereus_add_test(tst_spectrum_overlay_panel)
 # BoardCapabilities::attenuator.maxDb at construction time, not hardcoded.
 nereus_add_test(tst_rxapplet_att_range)
 target_compile_definitions(tst_rxapplet_att_range PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-B Task 10: per-ADC OVL split + RX1 preamp byte 1403 bit 1 ─────
+# Single-ADC boards (HL2/Hermes): 1 OVL badge.
+# Dual-ADC boards (OrionMKII, p2PreampPerAdc=true): 2 OVL badges.
+# P2RadioConnection::setRx1Preamp(bool) routes to byte 1403 bit 1 via codec.
+# Default state (rx1Preamp=false) leaves bit 1 clear → regression-freeze safe.
+nereus_add_test(tst_rxapplet_adc_ovl)
+target_compile_definitions(tst_rxapplet_adc_ovl PRIVATE NEREUS_BUILD_TESTS)

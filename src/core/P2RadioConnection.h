@@ -139,6 +139,10 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <QVector>
 
 #include <array>
+#include <memory>
+
+#include "codec/IP2Codec.h"
+#include "codec/CodecContext.h"
 
 namespace NereusSDR {
 
@@ -171,13 +175,38 @@ public slots:
     void setMox(bool enabled) override;
     void setAntenna(int antennaIndex) override;
 
+    // Phase 3P-B Task 10: per-ADC RX1 preamp control for OrionMKII family.
+    // Routes to m_rx[1].preamp → CodecContext.p2Rx1Preamp →
+    // P2CodecOrionMkII::composeCmdHighPriority byte 1403 bit 1.
+    // ADC0 preamp uses the existing setPreamp(bool) (byte 1403 bit 0).
+    void setRx1Preamp(bool enabled);
+
 private slots:
     void onReadyRead();
     void onKeepAliveTick();
     void onReconnectTimeout();
 
 private:
-    // --- Command senders (ported from Thetis network.c) ---
+    // --- Phase 3P-B: per-board codec chosen at connectToRadio() time ---
+    std::unique_ptr<IP2Codec> m_codec;
+    bool m_useLegacyP2Codec{false};
+
+    void selectCodec();
+    CodecContext buildCodecContext() const;
+
+    // Legacy compose paths — preserved for the NEREUS_USE_LEGACY_P2_CODEC rollback flag.
+    void composeCmdGeneralLegacy     (char buf[60])   const;
+    void composeCmdHighPriorityLegacy(char buf[1444]) const;
+    void composeCmdRxLegacy          (char buf[1444]) const;
+    void composeCmdTxLegacy          (char buf[60])   const;
+
+    // --- Command composers (extract buffer-fill logic; sendCmd* calls these then UDP-sends) ---
+    void composeCmdGeneral(char buf[60]) const;               // network.c:821
+    void composeCmdHighPriority(char buf[1444]) const;        // network.c:913  (1444 == kBufLen)
+    void composeCmdRx(char buf[1444]) const;                  // network.c:1066 (1444 == kBufLen)
+    void composeCmdTx(char buf[60]) const;                    // network.c:1181
+
+    // --- Command senders (compose + UDP dispatch) ---
     void sendCmdGeneral();       // network.c:821 → port 1024
     void sendCmdHighPriority();  // network.c:913 → port 1027
     void sendCmdRx();            // network.c:1066 → port 1025
@@ -329,6 +358,47 @@ private:
     // --- I/Q buffers and packet counters ---
     std::array<QVector<float>, kMaxDdc> m_iqBuffers;
     int m_totalIqPackets{0};
+
+#ifdef NEREUS_BUILD_TESTS
+public:
+    // Test-only helpers — allow unit tests to inject board state without a live radio.
+    void setBoardForTest(HPSDRHW board) {
+        m_caps = &BoardCapsTable::forBoard(board);
+        switch (board) {
+            case HPSDRHW::OrionMKII:  m_hardwareProfile.model = HPSDRModel::ORIONMKII; break;
+            case HPSDRHW::Saturn:     m_hardwareProfile.model = HPSDRModel::ANAN_G2;   break;
+            case HPSDRHW::SaturnMKII: m_hardwareProfile.model = HPSDRModel::ANAN_G2;   break;
+            default:                  m_hardwareProfile.model = HPSDRModel::ORIONMKII; break;
+        }
+        m_hardwareProfile.effectiveBoard = board;
+        selectCodec();
+    }
+    // Expose compose methods for regression-freeze capture (Task 1) and gate test (Task 7).
+    void composeCmdGeneralForTest(quint8 buf[60]) const {
+        char tmp[60];
+        memset(tmp, 0, sizeof(tmp));
+        composeCmdGeneral(tmp);
+        memcpy(buf, tmp, 60);
+    }
+    void composeCmdHighPriorityForTest(quint8 buf[kBufLen]) const {
+        char tmp[kBufLen];
+        memset(tmp, 0, sizeof(tmp));
+        composeCmdHighPriority(tmp);
+        memcpy(buf, tmp, kBufLen);
+    }
+    void composeCmdRxForTest(quint8 buf[kBufLen]) const {
+        char tmp[kBufLen];
+        memset(tmp, 0, sizeof(tmp));
+        composeCmdRx(tmp);
+        memcpy(buf, tmp, kBufLen);
+    }
+    void composeCmdTxForTest(quint8 buf[60]) const {
+        char tmp[60];
+        memset(tmp, 0, sizeof(tmp));
+        composeCmdTx(tmp);
+        memcpy(buf, tmp, 60);
+    }
+#endif
 };
 
 } // namespace NereusSDR
