@@ -357,3 +357,10 @@ target_compile_definitions(tst_p1_hl2_i2c_wiring PRIVATE NEREUS_BUILD_TESTS)
 #   - reset() clears all state (upstream bandwidth_monitor_reset() parity)
 #   - reset() emits throttledChanged(false) when previously throttled
 nereus_add_test(tst_hermes_lite_bandwidth_monitor)
+
+# ── Phase 3P-E Task 4: Hardware → HL2 I/O Setup page UI ──────────────────────
+# Smoke-tests construction for HL2 and non-HL2 boards, signal-driven UI
+# updates (register change, step advance, detection, throttle, I2C queue)
+# without crashes. Auto-hide for non-HL2 boards verified via construction.
+nereus_add_test(tst_hl2_io_board_tab)
+target_compile_definitions(tst_hl2_io_board_tab PRIVATE NEREUS_BUILD_TESTS)
