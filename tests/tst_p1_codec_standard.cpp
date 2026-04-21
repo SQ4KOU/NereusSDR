@@ -1,3 +1,6 @@
+// no-port-check: test file — exercises P1CodecStandard (which is the port);
+// the networkproto1.c cites in test-row comments reference the expected
+// byte values only, not a direct code port in this file.
 #include <QtTest/QtTest>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -33,11 +36,18 @@ private slots:
         QTest::addColumn<QByteArray>("ctx_overrides_json");
 
         // Bank 0 — sample rate 48k, no MOX, NDDC=1, antenna 0
+        // dither[0]=random[0]=true (default), so C3 = 0x08|0x10|0x20 = 0x38
         // Source: networkproto1.c:446-471 [@501e3f5]
         QTest::newRow("bank0_rx_48k_ant0")
             << 0 << false
-            << 0x00 << 0x00 << 0x00 << 0x00 << 0x04
+            << 0x00 << 0x00 << 0x00 << 0x38 << 0x04
             << QByteArray(R"({"sampleRateCode":0,"activeRxCount":1,"antennaIdx":0})");
+
+        // Bank 0 with dither + random both off → C3 just has the 0x20 RX-in-mux
+        QTest::newRow("bank0_dither_random_off")
+            << 0 << false
+            << 0x00 << 0x00 << 0x00 << 0x20 << 0x04
+            << QByteArray(R"({"sampleRateCode":0,"activeRxCount":1,"antennaIdx":0,"dither":[false,false,false],"random":[false,false,false]})");
 
         // Bank 11 — RX ATT 20 dB, no MOX (5-bit mask + 0x20 enable)
         // Source: networkproto1.c:601 [@501e3f5]
@@ -123,6 +133,14 @@ void TestP1CodecStandard::applyOverrides(CodecContext& ctx, const QByteArray& js
     if (o.contains("txStepAttn")) {
         auto arr = o["txStepAttn"].toArray();
         for (int i = 0; i < 3 && i < arr.size(); ++i) { ctx.txStepAttn[i] = arr[i].toInt(); }
+    }
+    if (o.contains("dither")) {
+        auto arr = o["dither"].toArray();
+        for (int i = 0; i < 3 && i < arr.size(); ++i) { ctx.dither[i] = arr[i].toBool(); }
+    }
+    if (o.contains("random")) {
+        auto arr = o["random"].toArray();
+        for (int i = 0; i < 3 && i < arr.size(); ++i) { ctx.random[i] = arr[i].toBool(); }
     }
 }
 

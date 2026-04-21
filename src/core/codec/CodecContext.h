@@ -31,6 +31,12 @@ struct CodecContext {
     // Per-RX preamp enable bits.
     bool    rxPreamp[3]{};
 
+    // Per-ADC dither + random bits — default ON to match
+    // P1RadioConnection legacy state (m_dither[3]{true,true,true},
+    // m_random[3]{true,true,true}). Bank 0 C3 bits 3 + 4.
+    bool    dither[3]{true, true, true};
+    bool    random[3]{true, true, true};
+
     // Alex HPF / LPF bits — recomputed by P1RadioConnection on freq change
     // via AlexFilterMap. Codec only emits them.
     quint8  alexHpfBits{0};
