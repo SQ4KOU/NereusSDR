@@ -336,6 +336,7 @@ set(CORE_SOURCES
     src/core/NoiseFloorTracker.cpp
     src/core/ClarityController.cpp
     src/core/StepAttenuatorController.cpp
+    src/core/OcMatrix.cpp
     src/core/audio/MasterMixer.cpp
     src/core/audio/PortAudioBus.cpp
     src/core/audio/VirtualCableDetector.cpp

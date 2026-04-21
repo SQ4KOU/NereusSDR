@@ -304,3 +304,9 @@ target_compile_definitions(tst_rxapplet_adc_ovl PRIVATE NEREUS_BUILD_TESTS)
 # construction (Phase 3P-C Step 3: no more hardcoded "0dB/-10dB/-20dB/-30dB").
 nereus_add_test(tst_preamp_combo)
 target_compile_definitions(tst_preamp_combo PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-D Task 1: OcMatrix model + per-MAC persistence ──────────────────
+# Verifies per-band × per-pin × {RX,TX} bit assignments, TXPinAction mapping
+# (Thetis enums.cs:443 TXPinActions [@501e3f5]), and AppSettings round-trip
+# under hardware/<mac>/oc/{rx,tx}/<band>/pin<n> and .../actions/pin<n>/action.
+nereus_add_test(tst_oc_matrix)
