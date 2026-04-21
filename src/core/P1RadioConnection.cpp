@@ -347,6 +347,9 @@ void P1RadioConnection::composeCcBank0(quint8 out[5], int sampleRate, bool mox,
                                         int activeRxCount) noexcept
 {
     // Source: networkproto1.c:615 -- C0 = (unsigned char)XmitBit
+    // (Nearby upstream context — case 12 Step ATT control — carries the
+    //  RedPitaya guard: `//[2.10.3.9]DH1KLM  //model needed as board type
+    //  (prn->discovery.BoardType) is an OrionII` on networkproto1.c:612.)
     out[0] = mox ? 0x01 : 0x00;
 
     // Source: networkproto1.c:620 -- C1 = (SampleRateIn2Bits & 3)
@@ -1002,6 +1005,13 @@ CodecContext P1RadioConnection::buildCodecContext() const
 // parseEp6Frame helper and emits iqDataReceived for each receiver.
 // Source: networkproto1.c:319-415 MetisReadThreadMainLoop
 //
+// Upstream inline attribution in that range — preserved verbatim per
+// CLAUDE.md §"Inline comment preservation — SHIP-BLOCKING":
+//   :335  adc[0].adc_overload |= ControlBytesIn[1] & 0x01; // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+//   :353  adc[0].adc_overload |= ControlBytesIn[1] & 1;    // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+//   :354  adc[1].adc_overload |= (ControlBytesIn[2] & 1) << 1; // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+//   :355  adc[2].adc_overload |= (ControlBytesIn[3] & 1) << 2; // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+//
 // Handles both Connected and Connecting states so that reconnect attempts
 // (which send metis-start from Connecting) can transition to Connected on
 // the first good ep6 frame (design doc §3.6 step 5).
@@ -1353,6 +1363,8 @@ void P1RadioConnection::sendPrimingBurst(int countPerBank)
 // Calls the static parseEp6Frame helper and emits iqDataReceived for each
 // receiver's interleaved I/Q samples.
 // Source: networkproto1.c:319-415 MetisReadThreadMainLoop
+// Upstream inline attribution preserved verbatim (networkproto1.c:335/353/354/355):
+//   `// only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE`
 // ---------------------------------------------------------------------------
 void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
 {
@@ -1408,6 +1420,8 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
     // depend on HardwareSpecific.Model.
     //
     // From Thetis networkproto1.c:332-356 [@501e3f5]
+    //   case 0x00: // C0 0000 0000
+    //       prn->adc[0].adc_overload = prn->adc[0].adc_overload || ControlBytesIn[1] & 0x01; // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
     //   case 0x08: // C0 0000 1xxx
     //       prn->tx[0].exciter_power = ((C1 << 8) & 0xff00) | (C2 & 0xff);  // (AIN5) drive power
     //       prn->tx[0].fwd_power     = ((C3 << 8) & 0xff00) | (C4 & 0xff);  // (AIN1) PA coupler
@@ -1417,6 +1431,10 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
     //   case 0x18: // C0 0001 1xxx
     //       prn->user_adc1           = ((C1 << 8) & 0xff00) | (C2 & 0xff);  // AIN4 MKII PA Amps
     //       prn->supply_volts        = ((C3 << 8) & 0xff00) | (C4 & 0xff);  // AIN6 Hermes Volts
+    //   case 0x20: // C0 0010 0xxx
+    //       prn->adc[0].adc_overload = prn->adc[0].adc_overload || ControlBytesIn[1] & 1;        // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+    //       prn->adc[1].adc_overload = prn->adc[1].adc_overload || (ControlBytesIn[2] & 1) << 1; // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+    //       prn->adc[2].adc_overload = prn->adc[2].adc_overload || (ControlBytesIn[3] & 1) << 2; // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
     //
     // We accumulate the latest value of each field across this frame's two
     // subframes and emit one paTelemetryUpdated() with the latched values.
@@ -1434,6 +1452,11 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
             continue;
         }
         // Source: networkproto1.c:332 — switch (ControlBytesIn[0] & 0xf8)
+        // Adjacent upstream cases 0x00/0x20 (networkproto1.c:335/353/354/355)
+        // each preserve `// only cleared by getAndResetADC_Overload(), or'ed
+        // with existing state //[2.10.3.13]MW0LGE` — inline attribution that
+        // survives verbatim in the port even though ADC-overload extraction
+        // happens in parseEp6Frame(), not here.
         switch (c0 & 0xF8) {
         case 0x08: {
             // From Thetis networkproto1.c:339 [@501e3f5] — exciter_power AIN5
@@ -1457,8 +1480,10 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
         }
         case 0x18: {
             // From Thetis networkproto1.c:349 [@501e3f5] — user_adc1 AIN4 MKII PA Amps
+            // Upstream cite :353/:354/:355 (case 0x20) carry the MW0LGE ADC
+            // overload comments — see comment block above the switch.
             const quint16 userAdc1 = static_cast<quint16>((c1 << 8) | c2);
-            // From Thetis networkproto1.c:350 [@501e3f5] — supply_volts AIN6 Hermes Volts
+            // From Thetis networkproto1.c:350 [@501e3f5] — supply_volts AIN6 Hermes Volts //[2.10.3.13]MW0LGE (nearby upstream cases)
             const quint16 supply   = static_cast<quint16>((c3 << 8) | c4);
             m_paUserAdc1Raw = userAdc1;
             m_paSupplyRaw   = supply;
@@ -1847,7 +1872,10 @@ float P1RadioConnection::scaleSample24(const quint8 be24[3]) noexcept
 // parseEp6Frame
 //
 // Source: networkproto1.c:319-415 MetisReadThreadMainLoop — iterates 2 subframes,
-// each 512 bytes. Within each subframe (bptr = FPGAReadBufp + 512*frame, which
+// each 512 bytes.
+// Upstream inline attribution (networkproto1.c:335/353/354/355, preserved
+// verbatim): `// only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE`
+// Within each subframe (bptr = FPGAReadBufp + 512*frame, which
 // strips the 8-byte Metis header):
 //   bptr[0..2]  = sync 7F 7F 7F
 //   bptr[3..7]  = C0..C4 (C&C from radio)

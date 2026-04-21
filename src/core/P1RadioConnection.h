@@ -312,6 +312,10 @@ private:
     // hold the most recent value of each between subframes and emit one
     // paTelemetryUpdated() per parsed frame.
     // Source: networkproto1.c:332-356 [@501e3f5]
+    // C0 0x00/0x20 carry the ADC overflow flags — upstream cases at lines
+    // 335/353/354/355 each read:
+    //   adc[n].adc_overload = adc[n].adc_overload || (...);
+    //   // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
     quint16 m_paFwdRaw{0};
     quint16 m_paRevRaw{0};
     quint16 m_paExciterRaw{0};
