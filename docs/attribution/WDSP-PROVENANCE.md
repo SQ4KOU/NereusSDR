@@ -20,6 +20,17 @@ All 138 source files in `third_party/wdsp/src/` were examined:
   - All authored by Warren Pratt, NR0V, Copyright 2012–2025
   - **Conclusion: GPLv2-or-later**
 
+- **2 files** are the POSIX portability shim — authored jointly with John Melton:
+  - `linux_port.c` / `linux_port.h`
+  - Header: `Copyright (C) 2013 Warren Pratt, NR0V and John Melton, G0ORX/N6LYT`
+  - These files translate Win32 synchronization primitives (`CRITICAL_SECTION`,
+    `CreateSemaphore`, `WaitForSingleObject`, `InterlockedIncrement`, etc.) to
+    POSIX equivalents so WDSP builds on Linux and macOS. They are co-authored
+    by Warren Pratt (NR0V) and John Melton (G0ORX/N6LYT), with a subsequent
+    macOS recursive-mutex fix contributed by Christoph van Wullen (DL1YCF) —
+    see inline `// DL1YCF:` comment at `linux_port.c:49`.
+  - **Conclusion: GPLv2-or-later** (same permission block as the rest of WDSP)
+
 - **10 files** have no license headers (non-copyrightable or build infrastructure):
   - Data tables: `calculus.c`, `FDnoiseIQ.c` (noise lookup tables)
   - Generated files: `resource.h`, `resource1.h` (MSVC IDE artifacts)
@@ -76,7 +87,8 @@ These wrappers are authored by NereusSDR contributors and carry NereusSDR (GPLv3
 ## Attribution Chain
 
 1. **WDSP original** ← Warren Pratt NR0V, TAPR, GPLv2-or-later
-2. **Thetis port** ← ramdor + contributors, GPLv2-or-later (Thetis itself includes WDSP)
-3. **NereusSDR port** ← JJ Boyd KG4VCF + contributors, GPLv3 (with Thetis upstream attribution preserved in source headers)
+2. **WDSP POSIX shim** (`linux_port.{c,h}`) ← Warren Pratt NR0V + John Melton G0ORX/N6LYT (co-authors, 2013), with macOS mutex fix from Christoph van Wullen DL1YCF; GPLv2-or-later; distributed via both `TAPR/OpenHPSDR-wdsp` and `g0orx/wdsp`
+3. **Thetis port** ← ramdor + contributors, GPLv2-or-later (Thetis itself includes WDSP)
+4. **NereusSDR port** ← JJ Boyd KG4VCF + contributors, GPLv3 (with Thetis upstream attribution preserved in source headers)
 
 Per compliance notice §6.1, the WDSP attribution is already preserved in the source tree headers and in NereusSDR wrapper source comments pointing to the Thetis contributor chain.

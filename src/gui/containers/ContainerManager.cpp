@@ -121,8 +121,13 @@ void ContainerManager::wireContainer(ContainerWidget* container)
     // container's content. Listens for both the create path
     // (createContainer + caller setContent) and the restore path
     // (ContainerManager itself calls setContent after wireContainer).
+    // During restoreState() m_suppressMeterAnnouncements is set so
+    // the placeholder → setMeterFloating → fresh-meter cascade
+    // doesn't emit twice; restoreState emits one manual announcement
+    // after the final content is in place.
     connect(container, &ContainerWidget::contentChanged, this,
             [this](QWidget* content) {
+        if (m_suppressMeterAnnouncements) { return; }
         if (auto* meter = innerMeterWidget(content)) {
             emit meterReadyForPolling(meter);
         }
@@ -166,7 +171,12 @@ void ContainerManager::installFreshMeter(ContainerWidget* container, const QStri
     QWidget* content = container->content();
     if (auto* panel = qobject_cast<AppletPanelWidget*>(content)) {
         panel->setHeaderWidget(fresh, QStringLiteral("Meters"), 1.3f);
-        emit meterReadyForPolling(fresh);
+        // Same gate as the wireContainer contentChanged listener below
+        // — restoreState emits one manual announcement per container
+        // once the final content is in place.
+        if (!m_suppressMeterAnnouncements) {
+            emit meterReadyForPolling(fresh);
+        }
     } else {
         // Bare content path (user-created containers) — setContent emits
         // contentChanged which routes into meterReadyForPolling.
@@ -600,6 +610,14 @@ void ContainerManager::restoreState()
         // and listeners missed the announcement.)
         wireContainer(container);
 
+        // Suppress interim meterReadyForPolling emissions. The
+        // setContent below + setMeterFloating's extract/install cycle
+        // would otherwise emit twice for a Floating container (once for
+        // the placeholder meter, once for the fresh meter after
+        // reparent); a single manual emit is sent at the end of this
+        // iteration once the final content is in place.
+        m_suppressMeterAnnouncements = true;
+
         // Materialize the inner content widget. MainWindow registers a
         // factory so the panel container gets an AppletPanelWidget;
         // when no factory is set (tests, headless tools) we default to
@@ -658,6 +676,14 @@ void ContainerManager::restoreState()
                 floatingForm->show();
             }
             break;
+        }
+
+        // Interim emissions are done. Announce the final meter (if the
+        // container has one) exactly once, then clear the guard so
+        // post-restore user interactions announce normally.
+        m_suppressMeterAnnouncements = false;
+        if (auto* meter = innerMeterWidget(container->content())) {
+            emit meterReadyForPolling(meter);
         }
 
         restored++;
