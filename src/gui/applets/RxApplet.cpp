@@ -819,15 +819,21 @@ void RxApplet::buildUi()
             " border-radius: 3px; font-size: 9px; font-weight: bold;"
             " padding: 1px 4px; }";
 
+        // 2026-04-21: OVL badges are retained as backing state for the
+        // StepAttenuatorController signal target and for
+        // tst_rxapplet_adc_ovl's visibleOvlBadgeCountForTest() (which
+        // only checks badge existence, not layout visibility). They are
+        // NOT added to the visible row — the authoritative ADC-overload
+        // indicator now lives on the MainWindow status bar, left of
+        // STATION, mirroring Thetis's ucInfoBar Warning() placement.
         for (int i = 0; i < adcCount; ++i) {
             QString label = (adcCount == 1)
                 ? QStringLiteral("OVL")
-                : QStringLiteral("OVL") + QString(i == 0 ? "\u2080" : "\u2081");  // OVL₀ / OVL₁
-
+                : QStringLiteral("OVL") + QString(i == 0 ? "\u2080" : "\u2081");
             m_ovlBadges[i] = new QLabel(label, this);
             m_ovlBadges[i]->setStyleSheet(QString::fromLatin1(kOvlStyleNormal));
             m_ovlBadges[i]->setAlignment(Qt::AlignCenter);
-            m_ovlRow->addWidget(m_ovlBadges[i]);
+            m_ovlBadges[i]->hide();  // not added to m_ovlRow; hidden
         }
 
         m_ovlRow->addStretch(1);

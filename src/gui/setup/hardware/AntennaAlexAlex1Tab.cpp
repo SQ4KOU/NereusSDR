@@ -68,15 +68,18 @@
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 #include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace NereusSDR {
@@ -345,16 +348,25 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
     hpfFormLayout->setVerticalSpacing(4);
 
     m_hpfRows.reserve(hpfBands().size());
+    m_hpfLeds.reserve(hpfBands().size());
     for (const HpfBandEntry& band : hpfBands()) {
         HpfRowWidgets w;
         w.bypass = new QCheckBox(hpfFormWidget);
         w.start  = makeFreqSpin(band.startMhz, hpfFormWidget);
         w.end    = makeFreqSpin(band.endMhz,   hpfFormWidget);
 
+        // Live-filter-active LED — lit when the current RX frequency
+        // falls in this row's [start, end] range.
+        auto* led = new QFrame(hpfFormWidget);
+        led->setFixedSize(12, 12);
+        setLedLit(led, false);
+        m_hpfLeds.push_back(led);
+
         auto* rowWidget = new QWidget(hpfFormWidget);
         auto* rowLayout = new QHBoxLayout(rowWidget);
         rowLayout->setContentsMargins(0, 0, 0, 0);
         rowLayout->setSpacing(4);
+        rowLayout->addWidget(led);
         rowLayout->addWidget(w.bypass);
         rowLayout->addWidget(w.start);
         rowLayout->addWidget(w.end);
@@ -400,15 +412,22 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
     lpfFormLayout->setVerticalSpacing(4);
 
     m_lpfRows.reserve(lpfBands().size());
+    m_lpfLeds.reserve(lpfBands().size());
     for (const LpfBandEntry& band : lpfBands()) {
         LpfRowWidgets w;
         w.start = makeFreqSpin(band.startMhz, lpfFormWidget);
         w.end   = makeFreqSpin(band.endMhz,   lpfFormWidget);
 
+        auto* led = new QFrame(lpfFormWidget);
+        led->setFixedSize(12, 12);
+        setLedLit(led, false);
+        m_lpfLeds.push_back(led);
+
         auto* rowWidget = new QWidget(lpfFormWidget);
         auto* rowLayout = new QHBoxLayout(rowWidget);
         rowLayout->setContentsMargins(0, 0, 0, 0);
         rowLayout->setSpacing(4);
+        rowLayout->addWidget(led);
         rowLayout->addWidget(w.start);
         rowLayout->addWidget(w.end);
 
@@ -495,6 +514,176 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
     colLayout->setStretchFactor(hpfGroup, 1);
     colLayout->setStretchFactor(lpfGroup, 1);
     colLayout->setStretchFactor(m_bpf1Group, 1);
+
+    // ── Live LED driver ───────────────────────────────────────────────────
+    // Subscribe to SliceModel::frequencyChanged on every current + future
+    // slice so the LED tracks the active RX frequency. Thetis's Alex HPF /
+    // LPF selection switches on the active RX VFO. Because slices can be
+    // added after this tab is constructed (addSlice() fires on connect),
+    // subscribe to sliceAdded too and attach a fresh subscription as new
+    // slices arrive.
+    // Source: Thetis console.cs:setAlexHPF / setAlexLPF on RX VFO change [@501e3f5]
+    if (m_model) {
+        auto subscribeToSlice = [this](SliceModel* slice) {
+            if (!slice) { return; }
+            m_currentFreqHz = slice->frequency();
+            connect(slice, &SliceModel::frequencyChanged,
+                    this, &AntennaAlexAlex1Tab::setCurrentFrequencyHz);
+        };
+        for (SliceModel* slice : m_model->slices()) {
+            subscribeToSlice(slice);
+        }
+        connect(m_model, &RadioModel::sliceAdded, this,
+                [this, subscribeToSlice](int index) {
+                    const auto slices = m_model->slices();
+                    if (index >= 0 && index < slices.size()) {
+                        subscribeToSlice(slices[index]);
+                    }
+                });
+    }
+
+    // Recompute when the master bypass or any per-row bypass toggles so
+    // edits update the LED without a frequency change.
+    connect(m_hpfBypass, &QCheckBox::toggled, this,
+            [this](bool) { updateActiveLeds(); });
+    for (HpfRowWidgets& row : m_hpfRows) {
+        if (row.bypass) {
+            connect(row.bypass, &QCheckBox::toggled, this,
+                    [this](bool) { updateActiveLeds(); });
+        }
+        if (row.start) {
+            connect(row.start,
+                    QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                    this, [this](double) { updateActiveLeds(); });
+        }
+        if (row.end) {
+            connect(row.end,
+                    QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                    this, [this](double) { updateActiveLeds(); });
+        }
+    }
+    for (LpfRowWidgets& row : m_lpfRows) {
+        if (row.start) {
+            connect(row.start,
+                    QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                    this, [this](double) { updateActiveLeds(); });
+        }
+        if (row.end) {
+            connect(row.end,
+                    QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                    this, [this](double) { updateActiveLeds(); });
+        }
+    }
+
+    // Belt-and-suspenders: poll slice 0 frequency every 250 ms and
+    // refresh the LED. Keeps the indicator alive even if the
+    // SliceModel::frequencyChanged subscription misses events (e.g.
+    // slice object swapped, or tuning via a code path that bypasses
+    // SliceModel::setFrequency's change-notification guard).
+    // Negligible cost — one double read + range comparison per tick.
+    auto* pollTimer = new QTimer(this);
+    pollTimer->setInterval(250);
+    connect(pollTimer, &QTimer::timeout, this, [this]() {
+        if (!m_model) { return; }
+        const auto slices = m_model->slices();
+        if (slices.isEmpty()) { return; }
+        const double hz = slices.first()->frequency();
+        if (!qFuzzyCompare(m_currentFreqHz, hz)) {
+            m_currentFreqHz = hz;
+            updateActiveLeds();
+        }
+    });
+    pollTimer->start();
+
+    // Initial paint.
+    updateActiveLeds();
+}
+
+// ── Live LED implementation ───────────────────────────────────────────────────
+
+void AntennaAlexAlex1Tab::setCurrentFrequencyHz(double freqHz)
+{
+    m_currentFreqHz = freqHz;
+    updateActiveLeds();
+}
+
+// Clear all LEDs then light the single HPF + single LPF row whose
+// [start, end] range contains the current frequency. HPF has two
+// fallbacks: master-bypass engaged → light the 6m-bypass row (last);
+// per-row bypass engaged on the matching row → also promote to the 6m-
+// bypass LED. Mirrors Thetis console.cs:setAlexHPF / setAlexLPF [@501e3f5].
+void AntennaAlexAlex1Tab::updateActiveLeds()
+{
+    if (m_hpfLeds.empty() || m_lpfLeds.empty()) { return; }
+
+    for (QFrame* led : m_hpfLeds) { setLedLit(led, false); }
+    for (QFrame* led : m_lpfLeds) { setLedLit(led, false); }
+
+    const double freqMhz = m_currentFreqHz / 1.0e6;
+    const int bypassRow = static_cast<int>(m_hpfLeds.size()) - 1;
+
+    // HPF selection
+    int hpfIdx = -1;
+    const bool masterBypass = (m_hpfBypass && m_hpfBypass->isChecked());
+    if (masterBypass) {
+        hpfIdx = bypassRow;
+    } else {
+        for (std::size_t i = 0; i < m_hpfRows.size(); ++i) {
+            const double startMhz =
+                m_hpfRows[i].start ? m_hpfRows[i].start->value() : 0.0;
+            const double endMhz =
+                m_hpfRows[i].end   ? m_hpfRows[i].end->value()   : 0.0;
+            if (freqMhz >= startMhz && freqMhz <= endMhz) {
+                if (m_hpfRows[i].bypass && m_hpfRows[i].bypass->isChecked()) {
+                    hpfIdx = bypassRow;
+                } else {
+                    hpfIdx = static_cast<int>(i);
+                }
+                break;
+            }
+        }
+        if (hpfIdx == -1) {
+            hpfIdx = bypassRow;
+        }
+    }
+
+    // LPF selection (no master bypass / per-row bypass for LPF)
+    int lpfIdx = -1;
+    for (std::size_t i = 0; i < m_lpfRows.size(); ++i) {
+        const double startMhz =
+            m_lpfRows[i].start ? m_lpfRows[i].start->value() : 0.0;
+        const double endMhz =
+            m_lpfRows[i].end   ? m_lpfRows[i].end->value()   : 0.0;
+        if (freqMhz >= startMhz && freqMhz <= endMhz) {
+            lpfIdx = static_cast<int>(i);
+            break;
+        }
+    }
+
+    if (hpfIdx >= 0 && static_cast<std::size_t>(hpfIdx) < m_hpfLeds.size()) {
+        setLedLit(m_hpfLeds[hpfIdx], true);
+    }
+    if (lpfIdx >= 0 && static_cast<std::size_t>(lpfIdx) < m_lpfLeds.size()) {
+        setLedLit(m_lpfLeds[lpfIdx], true);
+    }
+
+    m_activeHpfIndex = hpfIdx;
+    m_activeLpfIndex = lpfIdx;
+}
+
+// Simple LED repaint. Lit = green dot, unlit = dark grey. Mirrors
+// AntennaAlexAlex2Tab::setLedLit — no frame-shape or border so the
+// stylesheet background applies cleanly across platforms.
+void AntennaAlexAlex1Tab::setLedLit(QFrame* led, bool lit)
+{
+    if (!led) { return; }
+    if (lit) {
+        led->setStyleSheet(
+            QStringLiteral("QFrame { background: #00cc44; border-radius: 5px; }"));
+    } else {
+        led->setStyleSheet(
+            QStringLiteral("QFrame { background: #444444; border-radius: 5px; }"));
+    }
 }
 
 // ── updateBoardCapabilities ───────────────────────────────────────────────────

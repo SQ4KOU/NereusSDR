@@ -283,6 +283,8 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     //   DDCEnable = DDC2 (bit 2), Rate[2] = rx1_rate
     // This means DDC2 is the primary receiver, not DDC0!
     // From Thetis console.cs:8234-8241
+    // Upstream inline attribution preserved verbatim (console.cs:8238):
+    //   if (p1) Rate[0] = rx1_rate; // [2.10.3.13]MW0LGE p1 !
     m_rx[2].enable = 1;
     m_rx[2].frequency = 3865000;   // 80m LSB — overridden by setReceiverFrequency
     // DDC2 samplingRate is set by setSampleRate() which RadioModel queues
@@ -1144,6 +1146,54 @@ void P2RadioConnection::processHighPriorityStatus(const QByteArray& data)
         if (adcOverloadBits & (1 << i)) {
             emit adcOverflow(i);
         }
+    }
+
+    // Phase 3P-H Task 4: PA telemetry — extract raw 16-bit ADC counts from
+    // the High-Priority status packet body.  Per-board scaling lives in
+    // RadioModel (console.cs computeAlexFwdPower / computeRefPower /
+    // convertToVolts / convertToAmps), since bridge_volt / refvoltage /
+    // adc_cal_offset depend on HardwareSpecific.Model.
+    //
+    // The 4-byte sequence number sits at raw[0..3]; the status payload
+    // (matching Thetis's prn->ReadBufp[0..]) starts at raw[4].  Indices below
+    // are relative to the Thetis ReadBufp pointer; we add 3 to land in raw[].
+    //
+    // From Thetis network.c:711-748 [@501e3f5]:
+    // Upstream inline attribution preserved verbatim (network.c:708):
+    //   prn->adc[i].adc_overload = prn->adc[i].adc_overload || (((prn->ReadBufp[1] >> i) & 0x1) != 0); // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+    //   //Bytes 2,3      Exciter Power [15:0]     * 12 bits sign extended to 16
+    //   //Bytes 10,11    FWD Power [15:0]           ditto
+    //   //Bytes 18,19    REV Power [15:0]           ditto
+    //   prn->tx[0].exciter_power = prn->ReadBufp[2]  << 8 | prn->ReadBufp[3];
+    //   prn->tx[0].fwd_power     = prn->ReadBufp[10] << 8 | prn->ReadBufp[11];
+    //   prn->tx[0].rev_power     = prn->ReadBufp[18] << 8 | prn->ReadBufp[19];
+    //   //Bytes 45,46  Supply Volts [15:0]
+    //   prn->supply_volts        = prn->ReadBufp[45] << 8 | prn->ReadBufp[46];
+    //   //Bytes 51,52  User ADC1 [15:0]
+    //   //Bytes 53,54  User ADC0 [15:0]
+    //   prn->user_adc1           = prn->ReadBufp[51] << 8 | prn->ReadBufp[52];  // AIN4
+    //   prn->user_adc0           = prn->ReadBufp[53] << 8 | prn->ReadBufp[54];  // AIN3
+    //
+    // The High-Priority status packet body must be at least 55 bytes for the
+    // user_adc0 read (offset 53-54 from the ReadBufp base = data.size() ≥ 4 + 55).
+    // Defensive: skip telemetry emit on truncated packets.
+    if (data.size() >= 4 + 55) {
+        // ReadBufp[N] → raw[N + 4] (account for 4-byte sequence prefix).
+        // From Thetis network.c:714 [@501e3f5] — exciter AIN5
+        const quint16 exciterRaw  = static_cast<quint16>((raw[ 4 +  2] << 8) | raw[ 4 +  3]);
+        // From Thetis network.c:715 [@501e3f5] — fwd AIN1
+        const quint16 fwdRaw      = static_cast<quint16>((raw[ 4 + 10] << 8) | raw[ 4 + 11]);
+        // From Thetis network.c:716 [@501e3f5] — rev AIN2
+        const quint16 revRaw      = static_cast<quint16>((raw[ 4 + 18] << 8) | raw[ 4 + 19]);
+        // From Thetis network.c:738 [@501e3f5] — supply_volts
+        const quint16 supplyRaw   = static_cast<quint16>((raw[ 4 + 45] << 8) | raw[ 4 + 46]);
+        // From Thetis network.c:746 [@501e3f5] — user_adc1 AIN4 PA Amps
+        const quint16 userAdc1Raw = static_cast<quint16>((raw[ 4 + 51] << 8) | raw[ 4 + 52]);
+        // From Thetis network.c:747 [@501e3f5] — user_adc0 AIN3 PA Volts
+        const quint16 userAdc0Raw = static_cast<quint16>((raw[ 4 + 53] << 8) | raw[ 4 + 54]);
+
+        emit paTelemetryUpdated(fwdRaw, revRaw, exciterRaw,
+                                userAdc0Raw, userAdc1Raw, supplyRaw);
     }
 
     emit meterDataReceived(0.0f, 0.0f, 0.0f, 0.0f);

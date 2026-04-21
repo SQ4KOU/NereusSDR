@@ -264,6 +264,9 @@ struct BoardCapabilities {
     // Phase 3P-F Task 2: accessory board enable rules.
     // Source: setup.cs:19834-20310 RadioModelChanged() per-model if-ladder [@501e3f5]
     //         setup.cs:6338 AddHPSDRPages() for tpPennyCtrl / tpAlexControl visibility.
+    // Upstream inline attribution preserved verbatim:
+    //   setup.cs:20202  case HPSDRModel.ANAN_G2:                 // added G8NJJ
+    //   setup.cs:20253  case HPSDRModel.ANAN_G2_1K:              // added G8NJJ
     //
     // hasApollo:    chkApolloPresent.Enabled = true only for HPSDRModel.HERMES (bare HPSDR kit).
     //               All ANAN family boards set chkApolloPresent.Enabled=false + Checked=false.
@@ -321,6 +324,8 @@ namespace BoardCapsTable {
 
     // Returns the RX2 preamp combo items for a given board.
     // From Thetis console.cs:40815 comboRX2Preamp population.
+    // Upstream inline attribution preserved verbatim (console.cs:40813):
+    //   ... HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
     std::span<const PreampItem> rx2PreampItemsForBoard(HPSDRHW hw) noexcept;
 
     // Returns the step attenuator maximum dB for a given board + ALEX presence.

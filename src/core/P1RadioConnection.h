@@ -307,6 +307,22 @@ private:
     // Phase 3P-E Task 3.
     HermesLiteBandwidthMonitor* m_bwMonitor{nullptr};
 
+    // Phase 3P-H Task 4: PA telemetry latches.
+    // C0 cases 0x08/0x10/0x18 each carry only two of the six fields, so we
+    // hold the most recent value of each between subframes and emit one
+    // paTelemetryUpdated() per parsed frame.
+    // Source: networkproto1.c:332-356 [@501e3f5]
+    // C0 0x00/0x20 carry the ADC overflow flags — upstream cases at lines
+    // 335/353/354/355 each read:
+    //   adc[n].adc_overload = adc[n].adc_overload || (...);
+    //   // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+    quint16 m_paFwdRaw{0};
+    quint16 m_paRevRaw{0};
+    quint16 m_paExciterRaw{0};
+    quint16 m_paUserAdc0Raw{0};   // AIN3 — MKII PA Volts
+    quint16 m_paUserAdc1Raw{0};   // AIN4 — MKII PA Amps
+    quint16 m_paSupplyRaw{0};     // AIN6 — Hermes supply Volts
+
     // --- HL2 bandwidth monitor legacy state (replaced by HermesLiteBandwidthMonitor) ---
     // Retained so hl2IsThrottled() still compiles and existing callers are unbroken
     // until they migrate to m_bwMonitor->isThrottled().  Phase 3P-E Task 3.
@@ -340,6 +356,10 @@ public:
     void parseI2cResponseForTest(quint8 c0, quint8 c1, quint8 c2, quint8 c3, quint8 c4) {
         parseI2cResponse(c0, c1, c2, c3, c4);
     }
+    // Expose the instance parseEp6Frame so PA-telemetry tests can feed a
+    // hand-crafted 1032-byte ep6 datagram and assert paTelemetryUpdated()
+    // emits the expected raw values.  Phase 3P-H Task 4.
+    void parseEp6FrameForTest(const QByteArray& pkt) { parseEp6Frame(pkt); }
 #endif
 };
 

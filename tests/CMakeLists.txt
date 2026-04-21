@@ -399,6 +399,28 @@ nereus_add_test(tst_apollo_controller)
 # Ports HPSDR/Penny.cs (full) + console.cs:14899 + setup.cs:12679 [@501e3f5].
 nereus_add_test(tst_penny_lane_controller)
 
+# ── Phase 3P-H Task 1: RadioStatus + SettingsHygiene + PttSource models ──────
+nereus_add_test(tst_ptt_source)
+nereus_add_test(tst_radio_status)
+nereus_add_test(tst_settings_hygiene)
+
+# ── Phase 3P-H Task 4: status-packet parsing + RadioModel ownership ──────────
+# tst_p1_status_telemetry: feeds a hand-crafted 1032-byte ep6 datagram
+#   into P1RadioConnection::parseEp6FrameForTest and asserts the new
+#   paTelemetryUpdated() signal carries the C0=0x08/0x10/0x18 raw values
+#   per Thetis networkproto1.c:332-356 [@501e3f5].
+# tst_p2_status_telemetry: same for P2's 60-byte High-Priority status
+#   packet at byte offsets 2-3, 10-11, 18-19, 45-46, 51-52, 53-54
+#   per Thetis network.c:711-748 [@501e3f5].
+# tst_radio_model_status_wiring: verifies RadioModel owns RadioStatus +
+#   SettingsHygiene as single instances, that the public radioStatus()
+#   accessor surfaces signals to the embedded sub-model, and that
+#   settingsHygiene().validate() (called from onConnectionStateChanged
+#   on Connected) populates issues for an out-of-range persisted S-ATT.
+nereus_add_test(tst_p1_status_telemetry)
+nereus_add_test(tst_p2_status_telemetry)
+nereus_add_test(tst_radio_model_status_wiring)
+
 # ── Phase 3P-G commit 1: CalibrationController model ─────────────────────────
 # Verifies defaults (freqFactor=1.0, all offsets=0), setter signal emission
 # (idempotent no-fire), effectiveFreqCorrectionFactor() toggle between normal
@@ -413,5 +435,41 @@ nereus_add_test(tst_calibration_controller)
 # PA Current), controller->UI sync, and UI->controller write-back.
 nereus_add_test(tst_calibration_tab)
 target_compile_definitions(tst_calibration_tab PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-H Task 5a: Alex-2 Filters live LED selection ────────────────────
+# Verifies AntennaAlexAlex2Tab::updateActiveLeds() follows Thetis
+# console.cs:setAlex2HPF / setAlex2LPF (7060-7299) first-match range logic
+# [@501e3f5], tracks PanadapterModel::centerFrequencyChanged, and
+# surfaces the BP bypass fallback on no-row-match + master toggle.
+nereus_add_test(tst_alex2_live_leds)
+target_compile_definitions(tst_alex2_live_leds PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Alex-1 Filters live LED (UX parity follow-up, 2026-04-21) ─────────────────
+# Mirrors tst_alex2_live_leds for the Alex-1 Filters sub-sub-tab. Verifies
+# AntennaAlexAlex1Tab::updateActiveLeds() lights the correct HPF/LPF row
+# for the current SliceModel frequency per Thetis console.cs:setAlexHPF /
+# setAlexLPF [@501e3f5]. Does not cover the Saturn BPF1 column — that is a
+# separate panel with its own edge table and needs its own LED work if
+# Saturn-mode BPF1 is enabled.
+nereus_add_test(tst_alex1_live_leds)
+target_compile_definitions(tst_alex1_live_leds PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-H Task 5b: OC Outputs live pin-state LED row ─────────────────────
+# Verifies OcOutputsHfTab::onLiveStateChanged() computes the displayed OC
+# byte = OcMatrix::maskFor(currentBand, isTx) via RadioModel's first
+# panadapter + TransmitModel MOX state. Covers empty matrix, RX pin set
+# for 20m, band-change recompute, MOX-driven RX↔TX matrix flip, and
+# direct setCurrentOcByte path.
+nereus_add_test(tst_oc_outputs_live_pins)
+target_compile_definitions(tst_oc_outputs_live_pins PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-H Task 5c: HL2 I/O live register polling + bandwidth meter ───────
+# Verifies Hl2IoBoardTab spins a 40 ms register-table QTimer (matching
+# the group-box title "Register state  (polled @ 40 ms)") that refreshes
+# each cell from IoBoardHl2::registerValue, plus the 250 ms bandwidth
+# QTimer (Task E3) driving ep6/ep2 Mbps labels + throttle status from
+# HermesLiteBandwidthMonitor.
+nereus_add_test(tst_hl2_live_polling)
+target_compile_definitions(tst_hl2_live_polling PRIVATE NEREUS_BUILD_TESTS)
 
 

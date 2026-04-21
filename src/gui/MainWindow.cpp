@@ -1799,50 +1799,101 @@ void MainWindow::buildStatusBar()
     stationHbox->addWidget(m_callsignLabel);
 
     // ── ADC Overload indicator ─────────────────────────────────────────────
-    // From Thetis console.cs ucInfoBar Warning() + pbAutoAttWarningRX1.
+    // Status-bar warning label positioned immediately left of the STATION
+    // block. Mirrors Thetis's ucInfoBar Warning() — yellow while any ADC's
+    // hysteresis level > 0, red when any level > 3, hidden after 2 s of
+    // no new overload events (independent auto-hide timer).
+    //
+    // Source-first port of Thetis pollOverloadSyncSeqErr + ucInfoBar.Warning:
+    //   console.cs:21323        adc_names[] = { "ADC0", "ADC1", "ADC2" }
+    //   console.cs:21359-21389  per-ADC level counter + sWarning build
+    //                            (level>0 → append "{adc_names[i]} Overload   ";
+    //                             any level>3 → red_warning)
+    //   ucInfoBar.cs:911-933    Warning(msg, red_warning, show_duration):
+    //                            ForeColor = red ? Red : Yellow;
+    //                            Visible=true; _warningTimer.Start()
+    // [@501e3f5]
     m_adcOvlLabel = new QLabel(barWidget);
     m_adcOvlLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: #FFD700; font-size: 12px; font-weight: bold;"
         " border: none; background: transparent; padding: 0 4px; }"));
-    m_adcOvlLabel->hide();
+    // Reserve fixed width so the label appearing/disappearing does NOT
+    // shove STATION left/right when an overload fires. Width fits the
+    // common "ADCx Overload" case; multi-ADC strings elide with "…".
+    m_adcOvlLabel->setFixedWidth(180);
+    m_adcOvlLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_adcOvlLabel->setText(QString());  // empty when idle; no hide/show churn
+    // Explicit gap between the overload label and the STATION block so
+    // flashing text never visually touches the STATION border.
     hbox->addWidget(m_adcOvlLabel);
+    hbox->addSpacing(12);
+
+    // Auto-hide timer mirrors Thetis ucInfoBar._warningTimer — single-shot
+    // 2000 ms, restarts on each overload event so a single hit keeps the
+    // label visible for the full 2 s even after the per-ADC level decays.
+    // Source: ucInfoBar.cs:927-932 + console.cs:21388 show_duration=2000
+    // [@501e3f5]
+    m_adcOvlHideTimer = new QTimer(this);
+    m_adcOvlHideTimer->setSingleShot(true);
+    m_adcOvlHideTimer->setInterval(2000);
+    connect(m_adcOvlHideTimer, &QTimer::timeout, this, [this]() {
+        // Clear text only — label widget stays in the layout at its
+        // reserved width so STATION doesn't re-flow. Matches Thetis's
+        // ucInfoBar pattern where the lbl control keeps its position.
+        if (m_adcOvlLabel) { m_adcOvlLabel->setText(QString()); }
+    });
 
     connect(m_stepAttController, &StepAttenuatorController::overloadStatusChanged,
             this, [this](int /*adc*/, OverloadLevel /*level*/) {
-        // Build text from all ADCs
+        // Thetis adc_names table — console.cs:21323 [@501e3f5]
+        static const char* const kAdcNames[3] = { "ADC0", "ADC1", "ADC2" };
+
+        // Build warning text per Thetis console.cs:21359-21389 [@501e3f5]:
+        //   for each ADC: if level > 0, append "{adc_names[i]} Overload   "
+        //   red_warning = any level > 3
         QString text;
         bool anyRed = false;
         for (int i = 0; i < 3; ++i) {
             const OverloadLevel lvl = m_stepAttController->overloadLevel(i);
             if (lvl != OverloadLevel::None) {
-                if (!text.isEmpty()) { text += QStringLiteral(" "); }
-                text += QStringLiteral("ADC%1 OVL").arg(i);
+                text += QStringLiteral("%1 Overload   ").arg(
+                    QString::fromLatin1(kAdcNames[i]));
+                // console.cs:21369 [@501e3f5] — "turn red after 3 cycles of
+                // overload". Our levelToSeverity() maps level > 3 → Red.
                 if (lvl == OverloadLevel::Red) {
                     anyRed = true;
                 }
             }
         }
+        text = text.trimmed();  // Thetis: sWarning = sWarning.Trim()
 
         if (text.isEmpty()) {
-            m_adcOvlLabel->hide();
-        } else {
-            const QString color = anyRed ? QStringLiteral("#FF3333")
-                                         : QStringLiteral("#FFD700");
-            m_adcOvlLabel->setStyleSheet(
-                QStringLiteral("QLabel { color: %1; font-size: 12px; font-weight: bold;"
-                               " border: none; background: transparent;"
-                               " padding: 0 4px; }").arg(color));
-            m_adcOvlLabel->setText(text);
-            m_adcOvlLabel->show();
+            // No ADC currently above level 0. Don't clear the text yet —
+            // let the 2 s auto-hide timer expire so a just-cleared
+            // overload stays visible for the remainder of its 2 s window.
+            return;
         }
 
-        // Tooltip: per-ADC detail
-        // From Thetis console.cs: pbAutoAttWarningRX1 tooltip
+        // ucInfoBar.cs:928 [@501e3f5] — red_warning ? Red : Yellow
+        const QString color = anyRed ? QStringLiteral("#FF3333")
+                                     : QStringLiteral("#FFD700");
+        m_adcOvlLabel->setStyleSheet(
+            QStringLiteral("QLabel { color: %1; font-size: 12px; font-weight: bold;"
+                           " border: none; background: transparent;"
+                           " padding: 0 4px; }").arg(color));
+        m_adcOvlLabel->setText(text);
+
+        // Restart auto-hide — matches Thetis: _warningTimer.Stop(); .Start();
+        // (ucInfoBar.cs:927+932 [@501e3f5]).
+        m_adcOvlHideTimer->start();
+
+        // Tooltip: per-ADC detail.
         QString tip;
         for (int i = 0; i < 3; ++i) {
             if (m_stepAttController->overloadLevel(i) != OverloadLevel::None) {
                 if (!tip.isEmpty()) { tip += QStringLiteral("\n"); }
-                tip += QStringLiteral("ADC%1: overload").arg(i);
+                tip += QStringLiteral("%1: overload").arg(
+                    QString::fromLatin1(kAdcNames[i]));
             }
         }
         m_adcOvlLabel->setToolTip(tip);

@@ -88,6 +88,8 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/gui/setup/hardware/AntennaAlexAntennaControlTab.h | Project Files/Source/Console/setup.designer.cs | 5981-7000 | port | thetis-samphire | header mirrors .cpp |
 | src/core/StepAttenuatorController.cpp | Project Files/Source/Console/console.cs | 21290-21763 | port | thetis-samphire | handleOverload, pollOverloadSyncSeqErr, RX1AttenuatorData, comboPreamp_SelectedIndexChanged |
 | src/core/StepAttenuatorController.h | Project Files/Source/Console/console.cs | 21290-21763 | port | thetis-samphire | PreampMode enum (21574-21586), overload level fields (21212-21224) |
+| src/core/RadioStatus.cpp | Project Files/Source/Console/console.cs; Project Files/Source/Console/HPSDR/NetworkIOImports.cs | 6642-6659; 261-267 | port | multi-source | SWR formula (console.cs:6642 SWR(adc_fwd,adc_rev) [@501e3f5]); PA forward/reflected/exciter power getter DllImport declarations (NetworkIOImports.cs:261-267 [@501e3f5]); aggregates PA temp/current/SWR/PTT-source; PA voltage dropped (not exposed as separate status field in Thetis) |
+| src/core/RadioStatus.h | Project Files/Source/Console/console.cs; Project Files/Source/Console/HPSDR/NetworkIOImports.cs | 6642-6659; 261-267 | port | multi-source | header mirrors RadioStatus.cpp |
 | src/core/CalibrationController.cpp | Project Files/Source/Console/setup.cs; Project Files/Source/Console/console.cs | 5137-5144; 14036-14050; 22690-22706; 14325-14333; 17243-17248; 18315-18317; 9766-9844; 21022-21086 | port | thetis-samphire | frequency correction factor (normal + 10 MHz ext ref toggle), level offset, Rx1/Rx2 6m LNA offsets, TX display cal offset, PA current sensitivity/offset; per-MAC persistence under hardware/<mac>/cal/; effectiveFreqCorrectionFactor() picks based on using10MHzRef toggle (Phase 3P-G) |
 | src/core/CalibrationController.h | Project Files/Source/Console/setup.cs; Project Files/Source/Console/console.cs | 5137-5144; 14036-14050; 22690-22706; 14325-14333; 17243-17248; 18315-18317; 9766-9844; 21022-21086 | port | thetis-samphire | header mirrors CalibrationController.cpp |
 | src/core/wdsp_api.h | Project Files/Source/Console/dsp.cs; Project Files/Source/Console/radio.cs; Project Files/Source/Console/HPSDR/specHPSDR.cs | full | port | multi-source | verbatim C API declarations |
@@ -264,6 +266,7 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | tests/tst_slice_snb.cpp | Project Files/Source/Console/console.cs; Project Files/Source/Console/dsp.cs | 36347; 692-693 | port | multi-source | |
 | tests/tst_slice_squelch.cpp | Project Files/Source/Console/radio.cs | 1185-1329; 1164-1178; 1274-1291; 1293-1329 | port | thetis-samphire | |
 | tests/tst_step_attenuator_controller.cpp | Project Files/Source/Console/console.cs | 21359-21382; 21366; 21369; 21373-21375; 21378; 21548-21567 | port | thetis-samphire | |
+| tests/tst_radio_status.cpp | Project Files/Source/Console/console.cs; Project Files/Source/Console/HPSDR/NetworkIOImports.cs | 6642-6659; 261-267 | port | multi-source | SWR test vectors from console.cs:6642 SWR(adc_fwd,adc_rev) [@501e3f5]; getFwdPower/getRevPower DllImport declarations from NetworkIOImports.cs:264-267 [@501e3f5] |
 
 ## Files derived from mi0bot/Thetis-HL2
 
@@ -305,3 +308,10 @@ column 2 (not column 1) so the header-verifier script does not scan them.
 | Notes Thetis connection-refused behavior in a single comment | tests/tst_p1_loopback_connection.cpp | Loopback tests against P1FakeRadio; Thetis mention explains why a test was removed |
 | Factory that picks P1 vs P2 based on ProtocolVersion | src/core/RadioConnection.cpp | Thin factory — no Thetis logic; not on candidate list; checked as sanity probe |
 | Verifies AboutDialog contains ramdor/Thetis and mi0bot/OpenHPSDR-Thetis strings | tests/tst_about_dialog.cpp | Test of attribution rendering, not of Thetis-derived code |
+| PTT-source enum + label helper — concept is NereusSDR-internal routing | src/core/PttSource.h | No Thetis equivalent; enum identifies which trigger asserted MOX (UI/VOX/CAT/Mic/CW/Tune/2-Tone) so the Radio Status dashboard can highlight it |
+| Per-MAC AppSettings validation against BoardCapabilities | src/core/SettingsHygiene.cpp | NereusSDR-native concept; Thetis does not scope settings per-MAC or validate against board caps. Ports the `BoardCapabilities` read API already present in NereusSDR; no Thetis source consulted |
+| Same as .cpp | src/core/SettingsHygiene.h | NereusSDR-native header for the validator; see .cpp |
+| Consolidated Diagnostics → Radio Status dashboard | src/gui/diagnostics/RadioStatusPage.cpp | Thetis surfaces PA temp / current / SWR / PTT source piecemeal across Front Console, PA Settings, and the main meter; NereusSDR consolidates into a single dashboard. Data shapes ported in `src/core/RadioStatus` (listed above); this file is pure Qt widget construction backed by those aggregators |
+| Same as .cpp | src/gui/diagnostics/RadioStatusPage.h | NereusSDR-native dashboard header; see .cpp |
+| Four sibling Diagnostics sub-tabs (Connection Quality / Settings Validation / Export-Import / Logs) | src/gui/diagnostics/DiagnosticsPhaseHPages.cpp | NereusSDR-native consolidation; Thetis does not have a consolidated Diagnostics tab. Backed by models already listed in PROVENANCE (HermesLiteBandwidthMonitor, SettingsHygiene, AppSettings) |
+| Same as .cpp | src/gui/diagnostics/DiagnosticsPhaseHPages.h | NereusSDR-native sibling-tab header; see .cpp |

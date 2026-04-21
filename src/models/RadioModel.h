@@ -75,6 +75,8 @@
 #include "core/OcMatrix.h"
 #include "core/IoBoardHl2.h"
 #include "core/HermesLiteBandwidthMonitor.h"
+#include "core/RadioStatus.h"
+#include "core/SettingsHygiene.h"
 #include "core/accessories/AlexController.h"
 #include "core/accessories/ApolloController.h"
 #include "core/accessories/PennyLaneController.h"
@@ -145,6 +147,19 @@ public:
     // Phase 3P-E Task 3.
     const HermesLiteBandwidthMonitor& bwMonitor()        const { return m_bwMonitor; }
     HermesLiteBandwidthMonitor&       bwMonitorMutable()       { return m_bwMonitor; }
+
+    // Live PA telemetry and PTT state — single instance owned here.
+    // Setters called by connection layer on each status packet.
+    // Backed by Phase 3P-H Task 1 RadioStatus model.
+    // Phase 3P-H Task 2.
+    const RadioStatus& radioStatus()        const { return m_radioStatus; }
+    RadioStatus&       radioStatus()              { return m_radioStatus; }
+
+    // Settings hygiene validation — single instance owned here.
+    // Call validate() after each successful connect.
+    // Phase 3P-H Task 2.
+    const SettingsHygiene& settingsHygiene()        const { return m_settingsHygiene; }
+    SettingsHygiene&       settingsHygiene()              { return m_settingsHygiene; }
 
     // Alex antenna controller — per-band TX/RX/RX-only antenna assignment.
     // Loaded per-MAC at connect time. Backs Antenna Control sub-sub-tab UI
@@ -307,6 +322,14 @@ private:
     // Pushed into P1RadioConnection::setBandwidthMonitor() at connect time.
     // Phase 3P-E Task 3.
     HermesLiteBandwidthMonitor m_bwMonitor;
+
+    // Live PA telemetry + PTT state from status packets.
+    // Phase 3P-H Task 2.
+    RadioStatus m_radioStatus;
+
+    // Settings hygiene — validated against caps at connect time.
+    // Phase 3P-H Task 2.
+    SettingsHygiene m_settingsHygiene;
 
     // Alex antenna controller — per-band TX/RX/RX-only port assignment.
     // MAC and load() are called on connect, matching OcMatrix ownership pattern.

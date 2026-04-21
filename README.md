@@ -77,7 +77,7 @@ sha256sum -c SHA256SUMS.txt
 
 - **TX pipeline** (Phase 3M-1 through 3M-4) — TxChannel, mic input, MOX state machine, 18-stage TXA chain, PureSignal feedback DDC.
 - **Multi-panadapter** (Phase 3F) — DDC assignment, FFTRouter, PanadapterStack, RX2 enable.
-- **HL2 `IoBoardHl2`** (Phase 3L) — I2C-over-ep2 wire encoding lives in the closed `ChannelMaster.dll`; bandwidth-monitor full port also gated on this phase.
+- ~~**HL2 `IoBoardHl2`** (Phase 3L)~~ — completed via Phase 3P-E: I2C TLV queue + 12-step state machine + bandwidth-monitor two-pointer byte-rate compute + NereusSDR throttle-detection layer; `P1CodecHl2` now intercepts C&C frames to inject I2C TLV payloads.
 - **Skin system** (Phase 3H), **TCI + Spots** (Phase 3J), **CAT/rigctld** (Phase 3K), **WAV/IQ recording** (Phase 3M).
 
 ---
@@ -118,7 +118,7 @@ sha256sum -c SHA256SUMS.txt
 - **Phase 3H Skin System** — Thetis-inspired skin format with 4-pan support and legacy-skin import
 - **Phase 3J TCI + Spots** — TCI v2.0 WebSocket server, DX Cluster / RBN clients, spot overlay
 - **Phase 3K CAT / rigctld** — 4-channel rigctld, TCP CAT server
-- **Phase 3L HL2 `IoBoardHl2`** — I2C-over-ep2 wire encoding (extraction from closed `ChannelMaster.dll`); full bandwidth-monitor port
+- ~~**Phase 3L HL2 `IoBoardHl2`**~~ — **delivered via Phase 3P-E**: I2C-over-ep2 TLV queue + 12-step UpdateIOBoard state machine + full bandwidth-monitor port with throttle detection.
 - **Phase 3M Recording** — WAV record/playback, I/Q record, scheduled
 
 ---
@@ -169,6 +169,7 @@ sha256sum -c SHA256SUMS.txt
 | **3G-13: Step Attenuator & ADC Overload** | `StepAttenuatorController` (Classic + Adaptive), P1/P2 `adcOverflow` emission, OVL status badge, Setup→General→Options page, RxApplet ATT/S-ATT row, per-model preamp items | **Complete** |
 | **3G-14: About + AI Issue Reporter** | Help → About dialog, 💡 menu-bar issue reporter with structured prompts submitting to `bug_report.yml` / `feature_request.yml` | **Complete** |
 | **3N: Packaging** | Consolidated `release.yml`, `/release` skill, GPG-signed alpha builds: Linux AppImage ×2 archs, macOS Apple Silicon DMG, Windows portable ZIP + NSIS installer | **Complete** |
+| **3P: All-Board Radio-Control Parity** | 8 stacked sub-phases (A-H) delivering: HL2 BPF + S-ATT bug fixes, per-board P1/P2 codec subclasses, Alex-1/2 Filters live-LED sub-sub-tabs, OC Outputs matrix page, Calibration page (incl. freq-correction factor), Antenna Control per-band grid, HL2 I/O (closes Phase 3L), Accessories (Alex/Apollo/Penny), Diagnostics → Radio Status dashboard + 4 sibling sub-tabs, attribution enforcement pipeline. After merge: **NereusSDR userland-complete vs Thetis**. | **Complete (H in flight)** |
 | 3M-1: Basic SSB TX | TxChannel, mic input, MOX state machine, I/Q output | **Next** |
 | 3M-2: CW TX | Sidetone, firmware keyer, QSK/break-in | Planned |
 | 3M-3: TX Processing | 18-stage TXA chain + TX-side RX DSP additions | Planned |
@@ -177,7 +178,7 @@ sha256sum -c SHA256SUMS.txt
 | 3H: Skin System | Thetis-inspired skins with 4-pan support + legacy import | Planned |
 | 3J: TCI + Spots | TCI v2.0 WebSocket, DX Cluster/RBN clients, spot overlay | Planned |
 | 3K: CAT/rigctld | 4-channel rigctld, TCP CAT server | Planned |
-| 3L: HL2 ChannelMaster.dll port | HL2 `IoBoardHl2` I2C-over-ep2 wire encoding, full bandwidth-monitor port | Planned |
+| ~~3L: HL2 ChannelMaster.dll port~~ | **Delivered via Phase 3P-E** | ~~Planned~~ **Complete** |
 | 3M: Recording | WAV record/playback, I/Q record, scheduled | Planned |
 
 See [docs/MASTER-PLAN.md](docs/MASTER-PLAN.md) for the full implementation plan.
