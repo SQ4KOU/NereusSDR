@@ -407,6 +407,12 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     if (!info.macAddress.isEmpty()) {
         m_ocMatrix.setMacAddress(info.macAddress);
         m_ocMatrix.load();
+
+        // Load per-MAC Alex antenna controller state so Antenna Control UI
+        // and future protocol codecs read the correct per-band antenna assignments.
+        // Phase 3P-F Task 3. Pattern mirrors OcMatrix above.
+        m_alexController.setMacAddress(info.macAddress);
+        m_alexController.load();
     }
 
     m_name = info.displayName();

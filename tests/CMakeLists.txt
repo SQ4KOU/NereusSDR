@@ -373,3 +373,8 @@ target_compile_definitions(tst_hl2_io_board_tab PRIVATE NEREUS_BUILD_TESTS)
 # antennaChanged signal emission, and per-MAC AppSettings persistence round-trip.
 # Ports HPSDR/Alex.cs:30-106 [@501e3f5].
 nereus_add_test(tst_alex_controller)
+
+# Smoke test for Antenna Control sub-sub-tab UI (Phase 3P-F Task 3):
+# Widget construction + AlexController wiring + Block-TX safety rejection.
+nereus_add_test(tst_antenna_control_tab)
+target_compile_definitions(tst_antenna_control_tab PRIVATE NEREUS_BUILD_TESTS)

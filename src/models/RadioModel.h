@@ -75,6 +75,7 @@
 #include "core/OcMatrix.h"
 #include "core/IoBoardHl2.h"
 #include "core/HermesLiteBandwidthMonitor.h"
+#include "core/accessories/AlexController.h"
 #include "core/RadioDiscovery.h"
 #include "core/RadioConnection.h"
 #include "core/HardwareProfile.h"
@@ -141,6 +142,12 @@ public:
     // Phase 3P-E Task 3.
     const HermesLiteBandwidthMonitor& bwMonitor()        const { return m_bwMonitor; }
     HermesLiteBandwidthMonitor&       bwMonitorMutable()       { return m_bwMonitor; }
+
+    // Alex antenna controller — per-band TX/RX/RX-only antenna assignment.
+    // Loaded per-MAC at connect time. Backs Antenna Control sub-sub-tab UI
+    // (AntennaAlexAntennaControlTab — Phase 3P-F Task 3).
+    const AlexController& alexController()        const { return m_alexController; }
+    AlexController&       alexControllerMutable()       { return m_alexController; }
 
     // Sub-models
     MeterModel&       meterModel()       { return m_meterModel; }
@@ -280,6 +287,11 @@ private:
     // Pushed into P1RadioConnection::setBandwidthMonitor() at connect time.
     // Phase 3P-E Task 3.
     HermesLiteBandwidthMonitor m_bwMonitor;
+
+    // Alex antenna controller — per-band TX/RX/RX-only port assignment.
+    // MAC and load() are called on connect, matching OcMatrix ownership pattern.
+    // Phase 3P-F Task 3.
+    AlexController m_alexController;
 
     // Slices and panadapters (client-managed)
     QList<SliceModel*> m_slices;

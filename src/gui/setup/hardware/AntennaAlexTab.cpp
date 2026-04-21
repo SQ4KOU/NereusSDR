@@ -63,39 +63,18 @@
 //============================================================================================//
 
 #include "AntennaAlexTab.h"
+#include "AntennaAlexAntennaControlTab.h"
 #include "AntennaAlexAlex1Tab.h"
 #include "AntennaAlexAlex2Tab.h"
 
-#include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
-#include "core/RadioDiscovery.h"
-#include "models/Band.h"
 #include "models/RadioModel.h"
 
-#include <QCheckBox>
-#include <QGroupBox>
-#include <QHBoxLayout>
-#include <QHeaderView>
-#include <QLabel>
-#include <QScrollArea>
 #include <QTabWidget>
-#include <QTableWidget>
-#include <QTableWidgetItem>
 #include <QVBoxLayout>
 
 namespace NereusSDR {
-
-// ── Band row labels (14-band) ─────────────────────────────────────────────────
-static QStringList bandRowLabels()
-{
-    QStringList labels;
-    labels.reserve(static_cast<int>(Band::Count));
-    for (int i = 0; i < static_cast<int>(Band::Count); ++i) {
-        labels << bandLabel(static_cast<Band>(i));
-    }
-    return labels;
-}
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
@@ -113,86 +92,9 @@ AntennaAlexTab::AntennaAlexTab(RadioModel* model, QWidget* parent)
     outerLayout->addWidget(m_subTabs);
 
     // ── Tab 0: Antenna Control ────────────────────────────────────────────────
-    // Source: Thetis tpAlexAntCtrl. Hosts RX/TX antenna tables + relay options.
-    // Phase F will replace the placeholder with full routing controls.
-    m_antennaControlTab = new QWidget(m_subTabs);
-    auto* antCtrlLayout = new QVBoxLayout(m_antennaControlTab);
-    antCtrlLayout->setContentsMargins(8, 8, 8, 8);
-    antCtrlLayout->setSpacing(6);
-
-    // ── RX Antenna per-band grid ──────────────────────────────────────────────
-    // Source: Thetis Setup.cs:13412-13423 — _AlexRxAntButtons[band][ant]
-    // ANT1 / ANT2 / ANT3 per band. Exclusive selection per row.
-    auto* rxGroup = new QGroupBox(tr("RX Antenna per Band"), m_antennaControlTab);
-    auto* rxVBox  = new QVBoxLayout(rxGroup);
-
-    m_rxAntTable = new QTableWidget(static_cast<int>(Band::Count), 3, rxGroup);
-    m_rxAntTable->setHorizontalHeaderLabels({tr("ANT1"), tr("ANT2"), tr("ANT3")});
-    m_rxAntTable->setVerticalHeaderLabels(bandRowLabels());
-    m_rxAntTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    m_rxAntTable->verticalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
-    m_rxAntTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_rxAntTable->setSelectionMode(QAbstractItemView::NoSelection);
-
-    for (int row = 0; row < static_cast<int>(Band::Count); ++row) {
-        for (int col = 0; col < 3; ++col) {
-            auto* item = new QTableWidgetItem();
-            // First column (ANT1) checked by default — mirrors Thetis default
-            item->setCheckState(col == 0 ? Qt::Checked : Qt::Unchecked);
-            item->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled);
-            m_rxAntTable->setItem(row, col, item);
-        }
-    }
-    rxVBox->addWidget(m_rxAntTable);
-    antCtrlLayout->addWidget(rxGroup);
-
-    // ── TX Antenna per-band grid ──────────────────────────────────────────────
-    // Source: Thetis Setup.cs:13425-13436 — _AlexTxAntButtons[band][ant]
-    auto* txGroup = new QGroupBox(tr("TX Antenna per Band"), m_antennaControlTab);
-    auto* txVBox  = new QVBoxLayout(txGroup);
-
-    m_txAntTable = new QTableWidget(static_cast<int>(Band::Count), 3, txGroup);
-    m_txAntTable->setHorizontalHeaderLabels({tr("ANT1"), tr("ANT2"), tr("ANT3")});
-    m_txAntTable->setVerticalHeaderLabels(bandRowLabels());
-    m_txAntTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    m_txAntTable->verticalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
-    m_txAntTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_txAntTable->setSelectionMode(QAbstractItemView::NoSelection);
-
-    for (int row = 0; row < static_cast<int>(Band::Count); ++row) {
-        for (int col = 0; col < 3; ++col) {
-            auto* item = new QTableWidgetItem();
-            item->setCheckState(col == 0 ? Qt::Checked : Qt::Unchecked);
-            item->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled);
-            m_txAntTable->setItem(row, col, item);
-        }
-    }
-    txVBox->addWidget(m_txAntTable);
-    antCtrlLayout->addWidget(txGroup);
-
-    // ── ALEX bypass / relay options ───────────────────────────────────────────
-    // Source: Thetis Setup.cs:2892-2898 — chkRxOutOnTx, chkEXT1OutOnTx,
-    //   chkEXT2OutOnTx, chkHFTRRelay, chkBPF2Gnd, chkEnableXVTRHF
-    auto* optGroup = new QGroupBox(tr("ALEX Relay Options"), m_antennaControlTab);
-    auto* optLayout = new QVBoxLayout(optGroup);
-
-    m_rxOutOnTx   = new QCheckBox(tr("RX Out active during TX"), optGroup);
-    m_ext1OutOnTx = new QCheckBox(tr("EXT1 Out active during TX"), optGroup);
-    m_ext2OutOnTx = new QCheckBox(tr("EXT2 Out active during TX"), optGroup);
-    m_hfTrRelay   = new QCheckBox(tr("HF T/R relay present"), optGroup);
-    m_bpf2Gnd     = new QCheckBox(tr("BPF2 ground on TX"), optGroup);
-    m_enableXvtrHf = new QCheckBox(tr("Enable XVTR HF path"), optGroup);
-    m_enableXvtrHf->setToolTip(
-        tr("Routes the XVTR signal through the HF path. "
-           "Source: Thetis chkEnableXVTRHF (Setup.cs:18639)."));
-
-    for (QCheckBox* chk : {m_rxOutOnTx, m_ext1OutOnTx, m_ext2OutOnTx,
-                           m_hfTrRelay, m_bpf2Gnd, m_enableXvtrHf}) {
-        optLayout->addWidget(chk);
-    }
-    antCtrlLayout->addWidget(optGroup);
-    antCtrlLayout->addStretch();
-
+    // Source: Thetis tpAlexAntCtrl (setup.designer.cs:5981-7000) [@501e3f5]
+    // Phase 3P-F Task 3: replaced placeholder with real AntennaAlexAntennaControlTab.
+    m_antennaControlTab = new AntennaAlexAntennaControlTab(model, m_subTabs);
     m_subTabs->addTab(m_antennaControlTab, tr("Antenna Control"));
 
     // ── Tab 1: Alex-1 Filters ─────────────────────────────────────────────────
@@ -219,23 +121,9 @@ AntennaAlexTab::AntennaAlexTab(RadioModel* model, QWidget* parent)
                 emit settingChanged(QStringLiteral("alex2/") + key, value);
             });
 
-    // ── Wire Antenna Control signals ──────────────────────────────────────────
-    connect(m_rxAntTable, &QTableWidget::itemChanged,
-            this, &AntennaAlexTab::onRxAntTableChanged);
-    connect(m_txAntTable, &QTableWidget::itemChanged,
-            this, &AntennaAlexTab::onTxAntTableChanged);
-
-    auto wireCheckBox = [this](QCheckBox* chk, const QString& key) {
-        connect(chk, &QCheckBox::toggled, this, [this, key](bool checked) {
-            emit settingChanged(key, checked);
-        });
-    };
-    wireCheckBox(m_rxOutOnTx,    QStringLiteral("antennaAlex/rxOutOnTx"));
-    wireCheckBox(m_ext1OutOnTx,  QStringLiteral("antennaAlex/ext1OutOnTx"));
-    wireCheckBox(m_ext2OutOnTx,  QStringLiteral("antennaAlex/ext2OutOnTx"));
-    wireCheckBox(m_hfTrRelay,    QStringLiteral("antennaAlex/hfTrRelay"));
-    wireCheckBox(m_bpf2Gnd,      QStringLiteral("antennaAlex/bpf2Gnd"));
-    wireCheckBox(m_enableXvtrHf, QStringLiteral("antennaAlex/enableXvtrHf"));
+    // Antenna Control signals are now handled internally by AntennaAlexAntennaControlTab
+    // via AlexController bindings. No parent-level wiring needed for Tab 0.
+    // Phase 3P-F Task 3: placeholder connections removed.
 }
 
 // ── populate ──────────────────────────────────────────────────────────────────
@@ -243,33 +131,9 @@ AntennaAlexTab::AntennaAlexTab(RadioModel* model, QWidget* parent)
 void AntennaAlexTab::populate(const RadioInfo& info, const BoardCapabilities& caps)
 {
     // If the board has no ALEX, HardwarePage hides this whole tab.
-    // Defensive: if antennaInputCount < 3, disable extra antenna columns.
-    // Source: Thetis Setup.cs:6185-6246 — radAlexR/T column enable per caps.
-    for (int col = 0; col < 3; ++col) {
-        bool colEnabled = (col < caps.antennaInputCount);
-        for (int row = 0; row < static_cast<int>(Band::Count); ++row) {
-            if (auto* item = m_rxAntTable->item(row, col)) {
-                Qt::ItemFlags flags = Qt::ItemIsEnabled;
-                if (colEnabled) {
-                    flags |= Qt::ItemIsUserCheckable;
-                } else {
-                    item->setCheckState(Qt::Unchecked);
-                }
-                item->setFlags(flags);
-            }
-            if (auto* item = m_txAntTable->item(row, col)) {
-                Qt::ItemFlags flags = Qt::ItemIsEnabled;
-                if (colEnabled) {
-                    flags |= Qt::ItemIsUserCheckable;
-                } else {
-                    item->setCheckState(Qt::Unchecked);
-                }
-                item->setFlags(flags);
-            }
-        }
-    }
-    // XVTR path only relevant when board has an XVTR jack
-    m_enableXvtrHf->setEnabled(caps.xvtrJackCount > 0);
+    // Antenna port capability gating (antennaInputCount) is now handled
+    // internally by AntennaAlexAntennaControlTab via AlexController.
+    // Phase 3P-F Task 3: removed old placeholder table gating code.
 
     // Gate Saturn BPF1 column on board type.
     // Saturn = ANAN-G2 / G2-1K (G8NJJ). SaturnMKII = MkII board revision.
@@ -292,108 +156,17 @@ void AntennaAlexTab::populate(const RadioInfo& info, const BoardCapabilities& ca
     m_alex2FiltersTab->restoreSettings(info.macAddress);
 }
 
-// ── private slots ─────────────────────────────────────────────────────────────
-
-// Enforce exclusive selection per row (radio-button semantics).
-// Source: Thetis _AlexRxAntButtons are RadioButtonTS — mutually exclusive per band.
-void AntennaAlexTab::onRxAntTableChanged(QTableWidgetItem* changed)
-{
-    if (m_updating) { return; }
-    if (!changed || changed->checkState() != Qt::Checked) { return; }
-
-    int row = changed->row();
-    int col = changed->column();
-
-    m_updating = true;
-    for (int c = 0; c < m_rxAntTable->columnCount(); ++c) {
-        if (c == col) { continue; }
-        if (auto* item = m_rxAntTable->item(row, c)) {
-            item->setCheckState(Qt::Unchecked);
-        }
-    }
-    m_updating = false;
-
-    Band band = static_cast<Band>(row);
-    emit settingChanged(
-        QStringLiteral("antennaAlex/rxAnt[%1]").arg(bandKeyName(band)),
-        col + 1 /* 1-based ANT number */);
-}
-
-void AntennaAlexTab::onTxAntTableChanged(QTableWidgetItem* changed)
-{
-    if (m_updating) { return; }
-    if (!changed || changed->checkState() != Qt::Checked) { return; }
-
-    int row = changed->row();
-    int col = changed->column();
-
-    m_updating = true;
-    for (int c = 0; c < m_txAntTable->columnCount(); ++c) {
-        if (c == col) { continue; }
-        if (auto* item = m_txAntTable->item(row, c)) {
-            item->setCheckState(Qt::Unchecked);
-        }
-    }
-    m_updating = false;
-
-    Band band = static_cast<Band>(row);
-    emit settingChanged(
-        QStringLiteral("antennaAlex/txAnt[%1]").arg(bandKeyName(band)),
-        col + 1 /* 1-based ANT number */);
-}
-
 // ── restoreSettings ───────────────────────────────────────────────────────────
 
-void AntennaAlexTab::restoreSettings(const QMap<QString, QVariant>& settings)
+void AntennaAlexTab::restoreSettings(const QMap<QString, QVariant>& /*settings*/)
 {
-    // Restore simple boolean checkboxes. Block signals to avoid re-emitting
-    // settingChanged during restore.
-    struct CheckEntry { const char* key; QCheckBox* widget; };
-    const CheckEntry entries[] = {
-        { "rxOutOnTx",    m_rxOutOnTx    },
-        { "ext1OutOnTx",  m_ext1OutOnTx  },
-        { "ext2OutOnTx",  m_ext2OutOnTx  },
-        { "hfTrRelay",    m_hfTrRelay    },
-        { "bpf2Gnd",      m_bpf2Gnd      },
-        { "enableXvtrHf", m_enableXvtrHf },
-    };
-    for (const auto& e : entries) {
-        auto it = settings.constFind(QString::fromLatin1(e.key));
-        if (it != settings.constEnd()) {
-            QSignalBlocker blocker(e.widget);
-            e.widget->setChecked(it.value().toBool());
-        }
-    }
-
-    // Restore per-band RX antenna selections
-    {
-        QSignalBlocker blocker(m_rxAntTable);
-        for (auto it = settings.constBegin(); it != settings.constEnd(); ++it) {
-            if (!it.key().startsWith(QStringLiteral("rxAnt["))) { continue; }
-            // key format: "rxAnt[<bandKeyName>]"  value = 1-based ANT number
-            const QString inner = it.key().mid(6, it.key().size() - 7); // strip "rxAnt[" and "]"
-            for (int row = 0; row < m_rxAntTable->rowCount(); ++row) {
-                Band band = static_cast<Band>(row);
-                if (bandKeyName(band) != inner) { continue; }
-                const int antNum = it.value().toInt(); // 1-based
-                m_updating = true;
-                for (int col = 0; col < m_rxAntTable->columnCount(); ++col) {
-                    if (auto* item = m_rxAntTable->item(row, col)) {
-                        item->setCheckState((col + 1 == antNum) ? Qt::Checked : Qt::Unchecked);
-                    }
-                }
-                m_updating = false;
-                break;
-            }
-        }
-    }
-
+    // Antenna Control per-band state is now owned by AlexController (Phase 3P-F Task 1)
+    // and restored at connect time via RadioModel::connectToRadio() → m_alexController.load().
+    // The old placeholder checkbox restore (rxOutOnTx / hfTrRelay / etc.) and the
+    // old per-band RX table restore are no longer needed here.
+    //
     // Alex-1 Filters tab uses per-MAC AppSettings directly (different key namespace).
-    // The MAC is pulled from the settings map using the "mac" key if present, or
-    // queried from the model. Delegate to the tab which owns its own restore path.
-    // (m_alex1Tab->restoreSettings() is called separately from HardwarePage via
-    // populate() → updateBoardCapabilities(), then the MAC is passed via the
-    // antennaAlex/alex1 namespace when HardwarePage calls onCurrentRadioChanged.)
+    // Restore path: HardwarePage → populate() → m_alex1Tab->restoreSettings(mac).
     // No additional action needed here for the filtered map variant.
 }
 
