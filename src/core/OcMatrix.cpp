@@ -46,6 +46,10 @@
 // =================================================================
 
 #include "OcMatrix.h"
+
+#include <QReadLocker>
+#include <QWriteLocker>
+
 #include "AppSettings.h"
 
 namespace NereusSDR {
@@ -62,6 +66,7 @@ bool OcMatrix::pinEnabled(Band band, int pin, bool tx) const
 {
     const int b = int(band);
     if (b < 0 || b >= kBandCount || pin < 0 || pin >= kPinCount) { return false; }
+    QReadLocker locker(&m_lock);
     return m_pins[b][pin][tx ? 1 : 0];
 }
 
@@ -70,9 +75,12 @@ void OcMatrix::setPin(Band band, int pin, bool tx, bool enabled)
 {
     const int b = int(band);
     if (b < 0 || b >= kBandCount || pin < 0 || pin >= kPinCount) { return; }
-    auto& slot = m_pins[b][pin][tx ? 1 : 0];
-    if (slot == enabled) { return; }
-    slot = enabled;
+    {
+        QWriteLocker locker(&m_lock);
+        auto& slot = m_pins[b][pin][tx ? 1 : 0];
+        if (slot == enabled) { return; }
+        slot = enabled;
+    }
     emit changed();
 }
 
@@ -82,6 +90,7 @@ quint8 OcMatrix::maskFor(Band band, bool tx) const
 {
     const int b = int(band);
     if (b < 0 || b >= kBandCount) { return 0; }
+    QReadLocker locker(&m_lock);
     quint8 mask = 0;
     for (int pin = 0; pin < kPinCount; ++pin) {
         if (m_pins[b][pin][tx ? 1 : 0]) { mask |= quint8(1 << pin); }
@@ -94,6 +103,7 @@ quint8 OcMatrix::maskFor(Band band, bool tx) const
 OcMatrix::TXPinAction OcMatrix::pinAction(int pin) const
 {
     if (pin < 0 || pin >= kPinCount) { return TXPinAction::MoxTuneTwoTone; }
+    QReadLocker locker(&m_lock);
     return m_pinActions[pin];
 }
 
@@ -101,8 +111,11 @@ OcMatrix::TXPinAction OcMatrix::pinAction(int pin) const
 void OcMatrix::setPinAction(int pin, TXPinAction action)
 {
     if (pin < 0 || pin >= kPinCount) { return; }
-    if (m_pinActions[pin] == action) { return; }
-    m_pinActions[pin] = action;
+    {
+        QWriteLocker locker(&m_lock);
+        if (m_pinActions[pin] == action) { return; }
+        m_pinActions[pin] = action;
+    }
     emit changed();
 }
 
@@ -150,26 +163,30 @@ void OcMatrix::load()
     auto& s = AppSettings::instance();
     const QString base = persistenceKey();
 
-    // Hydrate per-band per-pin bits (RX and TX)
-    // Key scheme: hardware/<mac>/oc/rx/<bandKey>/pin<n>  (n = 1..7)
-    //             hardware/<mac>/oc/tx/<bandKey>/pin<n>
-    for (int b = 0; b < kBandCount; ++b) {
-        const QString bandSlug = bandKeyName(Band(b));
-        for (int pin = 0; pin < kPinCount; ++pin) {
-            const QString rxKey = QStringLiteral("%1/rx/%2/pin%3").arg(base, bandSlug).arg(pin + 1);
-            const QString txKey = QStringLiteral("%1/tx/%2/pin%3").arg(base, bandSlug).arg(pin + 1);
-            m_pins[b][pin][0] = s.value(rxKey, QStringLiteral("False")).toString() == QStringLiteral("True");
-            m_pins[b][pin][1] = s.value(txKey, QStringLiteral("False")).toString() == QStringLiteral("True");
-        }
-    }
+    {
+        QWriteLocker locker(&m_lock);
 
-    // Hydrate per-pin TX actions
-    // Key scheme: hardware/<mac>/oc/actions/pin<n>/action
-    for (int pin = 0; pin < kPinCount; ++pin) {
-        const QString k = QStringLiteral("%1/actions/pin%2/action").arg(base).arg(pin + 1);
-        const QString defaultSlug = actionSlug(TXPinAction::MoxTuneTwoTone);
-        const QString slug = s.value(k, defaultSlug).toString();
-        m_pinActions[pin] = actionFromSlug(slug);
+        // Hydrate per-band per-pin bits (RX and TX)
+        // Key scheme: hardware/<mac>/oc/rx/<bandKey>/pin<n>  (n = 1..7)
+        //             hardware/<mac>/oc/tx/<bandKey>/pin<n>
+        for (int b = 0; b < kBandCount; ++b) {
+            const QString bandSlug = bandKeyName(Band(b));
+            for (int pin = 0; pin < kPinCount; ++pin) {
+                const QString rxKey = QStringLiteral("%1/rx/%2/pin%3").arg(base, bandSlug).arg(pin + 1);
+                const QString txKey = QStringLiteral("%1/tx/%2/pin%3").arg(base, bandSlug).arg(pin + 1);
+                m_pins[b][pin][0] = s.value(rxKey, QStringLiteral("False")).toString() == QStringLiteral("True");
+                m_pins[b][pin][1] = s.value(txKey, QStringLiteral("False")).toString() == QStringLiteral("True");
+            }
+        }
+
+        // Hydrate per-pin TX actions
+        // Key scheme: hardware/<mac>/oc/actions/pin<n>/action
+        for (int pin = 0; pin < kPinCount; ++pin) {
+            const QString k = QStringLiteral("%1/actions/pin%2/action").arg(base).arg(pin + 1);
+            const QString defaultSlug = actionSlug(TXPinAction::MoxTuneTwoTone);
+            const QString slug = s.value(k, defaultSlug).toString();
+            m_pinActions[pin] = actionFromSlug(slug);
+        }
     }
 
     emit changed();
@@ -180,6 +197,8 @@ void OcMatrix::save()
     if (m_mac.isEmpty()) { return; }
     auto& s = AppSettings::instance();
     const QString base = persistenceKey();
+
+    QReadLocker locker(&m_lock);
 
     for (int b = 0; b < kBandCount; ++b) {
         const QString bandSlug = bandKeyName(Band(b));
@@ -201,12 +220,15 @@ void OcMatrix::save()
 // From Thetis HPSDR/Penny.cs:55-65 [@501e3f5]
 void OcMatrix::resetDefaults()
 {
-    for (auto& band : m_pins) {
-        for (auto& pin : band) {
-            for (auto& slot : pin) { slot = false; }
+    {
+        QWriteLocker locker(&m_lock);
+        for (auto& band : m_pins) {
+            for (auto& pin : band) {
+                for (auto& slot : pin) { slot = false; }
+            }
         }
+        m_pinActions.fill(TXPinAction::MoxTuneTwoTone);
     }
-    m_pinActions.fill(TXPinAction::MoxTuneTwoTone);
     emit changed();
 }
 
