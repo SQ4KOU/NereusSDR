@@ -2088,6 +2088,14 @@ void MainWindow::wireSliceToSpectrum()
     vfo->setTxAntenna(slice->txAntenna());
     vfo->setStepHz(slice->stepHz());
 
+    // Phase 3P-I-a T15 — push board caps into VFO Flag so ANT buttons
+    // hide on HL2/Atlas.
+    vfo->setBoardCapabilities(m_radioModel->boardCapabilities());
+    connect(m_radioModel, &RadioModel::currentRadioChanged, vfo,
+            [this, vfo]() {
+        vfo->setBoardCapabilities(m_radioModel->boardCapabilities());
+    });
+
     // --- Slice → spectrum display ---
 
     // VFO frequency change → move VFO marker
