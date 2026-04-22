@@ -201,10 +201,22 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 #include "HpsdrModel.h"
 #include "RadioDiscovery.h"  // for ProtocolVersion
+#include <QList>
 #include <array>
 #include <span>
 
 namespace NereusSDR {
+
+// Saturn BPF1 band edges — per-band start/end frequency in MHz.
+// When populated by user via Phase B Task 8 Alex-1 Filters page, the
+// per-MAC AppSettings copy is the source of truth; BoardCapsTable::forBoard
+// returns an empty list as the default. P2RadioConnection populates
+// CodecContext.p2SaturnBpfHpfBits from this list when computing freq→bits
+// for ANAN-G2 / G2-1K boards.
+struct SaturnBpf1Edge {
+    double startMhz{0.0};
+    double endMhz{0.0};
+};
 
 struct BoardCapabilities {
     HPSDRHW         board;
@@ -249,8 +261,46 @@ struct BoardCapabilities {
     bool hasIoBoardHl2;
     bool hasSidetoneGenerator;
 
+    // Phase 3P-F Task 2: accessory board enable rules.
+    // Source: setup.cs:19834-20310 RadioModelChanged() per-model if-ladder [@501e3f5]
+    //         setup.cs:6338 AddHPSDRPages() for tpPennyCtrl / tpAlexControl visibility.
+    // Upstream inline attribution preserved verbatim:
+    //   setup.cs:19855  if (initializing) return; // forceallevents will call this  // [2.10.1.0] MW0LGE renabled
+    //   setup.cs:19904  case HPSDRModel.ANAN_G1: //N1GP G1 added
+    //   setup.cs:20202  case HPSDRModel.ANAN_G2:                 // added G8NJJ
+    //   setup.cs:20253  case HPSDRModel.ANAN_G2_1K:              // added G8NJJ
+    //
+    // hasApollo:    chkApolloPresent.Enabled = true only for HPSDRModel.HERMES (bare HPSDR kit).
+    //               All ANAN family boards set chkApolloPresent.Enabled=false + Checked=false.
+    // hasAlex:      chkAlexPresent shown for all HPSDR family; absent on HermesLite (no Alex port).
+    // hasPennyLane: tpPennyCtrl inserted by AddHPSDRPages() for all HPSDR boards; absent on HL2
+    //               (ocOutputCount=0, no Penny/OC ext-ctrl). For HERMES, tab is labeled "Hermes Ctrl";
+    //               for all other boards it is labeled "OC Control".
+    bool hasApollo{false};
+    bool hasAlex{false};
+    bool hasPennyLane{false};
+
     int  minFirmwareVersion;
     int  knownGoodFirmware;
+
+    // Phase 3P-B Task 6: P2-specific capability fields.
+    // Source: spec §7 / plan Task 6.
+    //
+    // p2SaturnBpf1Edges: empty → use Alex HPF/LPF defaults.  User populates
+    // via Phase B Task 8's Alex-1 Filters page; persisted per-MAC in AppSettings
+    // under hardware/<mac>/alex/bpf1/<band>/{start,end}.
+    // Non-constexpr field — see BoardCapabilities.cpp for initialisation note.
+    QList<SaturnBpf1Edge> p2SaturnBpf1Edges;
+
+    // p2PreampPerAdc: true for boards with independent per-ADC preamp control
+    // (OrionMKII family: ANAN-7000DLE / 8000DLE / AnvelinaPro3).
+    // Saturn is single-ADC at the wire layer; set false.
+    bool p2PreampPerAdc{false};
+
+    // ditherByDefault / randomByDefault: ADC dither and randomiser enable
+    // per ADC index (0..2).  All boards default true (Thetis protocol2.cs).
+    bool ditherByDefault[3]{true, true, true};
+    bool randomByDefault[3]{true, true, true};
 
     const char* displayName;
     const char* sourceCitation;
@@ -276,6 +326,8 @@ namespace BoardCapsTable {
 
     // Returns the RX2 preamp combo items for a given board.
     // From Thetis console.cs:40815 comboRX2Preamp population.
+    // Upstream inline attribution preserved verbatim (console.cs:40813):
+    //   ... HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
     std::span<const PreampItem> rx2PreampItemsForBoard(HPSDRHW hw) noexcept;
 
     // Returns the step attenuator maximum dB for a given board + ALEX presence.

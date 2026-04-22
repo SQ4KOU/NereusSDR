@@ -9,6 +9,10 @@
 //
 // NereusSDR-original. No Thetis port; no PROVENANCE row.
 // Independently implemented from Protocol 1 interface design.
+//
+// no-port-check: NereusSDR-original aggregator. Field-level comments may
+//   cite Thetis for default-value origins (e.g. create_rnet defaults from
+//   netInterface.c:1416) without making the file a port.
 // =================================================================
 
 #pragma once
@@ -37,10 +41,101 @@ struct CodecContext {
     bool    dither[3]{true, true, true};
     bool    random[3]{true, true, true};
 
+    // ── P2-specific fields ──────────────────────────────────────────────
+    //
+    // Saturn BPF1 band-edge override bits — populated by
+    // P2RadioConnection::setReceiverFrequency when the connected board
+    // is ANAN-G2 / G2-1K AND user has configured Saturn BPF1 edges
+    // distinct from Alex defaults (see Phase 3P-B spec §7.1, Phase F
+    // mockup page-alex1-filters.html). When 0, P2CodecSaturn falls back
+    // to Alex bits computed by AlexFilterMap.
+    quint8  p2SaturnBpfHpfBits{0};
+    quint8  p2SaturnBpfLpfBits{0};
+
+    // Per-receiver antenna routing (RX1/RX2/RX3). Phase F antenna
+    // assignment populates these from the per-band Alex matrix; Phase B
+    // codecs read them but the Antenna Control sub-sub-tab UI lands in
+    // Phase F.
+    int     p2RxAnt[3]{0, 0, 0};
+
+    // Per-ADC RX1 preamp toggle (OrionMKII-family + Saturn-family
+    // dual-ADC boards). Phase B Task 10 wires the RxApplet UI for this;
+    // P2CodecOrionMkII reads it for byte 1403 bit 1 in CmdHighPriority.
+    bool    p2Rx1Preamp{false};
+
     // Alex HPF / LPF bits — recomputed by P1RadioConnection on freq change
     // via AlexFilterMap. Codec only emits them.
     quint8  alexHpfBits{0};
     quint8  alexLpfBits{0};
+
+    // P2 run state — prn->run. Set by P2RadioConnection on start/stop.
+    bool    p2Running{false};
+
+    // P2 PTT out + CW keying bits — prn->tx[0].ptt_out / cwx / dot / dash.
+    // Mapped to CmdHighPriority byte 4 (PTT/run) and byte 5 (CW bits).
+    int     p2PttOut{0};
+    int     p2Cwx{0};
+    int     p2Dot{0};
+    int     p2Dash{0};
+
+    // P2 TX drive level — prn->tx[0].drive_level. Byte 345 of CmdHighPriority.
+    int     p2DriveLevel{0};
+
+    // P2 TX PA enable — prn->tx[0].pa. Byte 58 of CmdGeneral (inverted).
+    // Default 1 = PA enabled → byte 58 = 0 ((!pa) & 0x01).
+    int     p2TxPa{1};
+
+    // P2 TX phase shift — prn->tx[0].phase_shift. Bytes 26-27 of CmdTx.
+    int     p2TxPhaseShift{0};
+
+    // P2 TX sampling rate — prn->tx[0].sampling_rate (kHz). Bytes 14-15 CmdTx.
+    // Default 192 per Thetis create_rnet (netInterface.c:1513).
+    int     p2TxSamplingRate{192};
+
+    // P2 number of ADCs / DACs — prn->num_adc / num_dac. Byte 4 of CmdRx/CmdTx.
+    int     p2NumAdc{1};
+    int     p2NumDac{1};
+
+    // P2 RX per-DDC state (up to 7 DDCs). Mapped from m_rx[] in composeCmdRx.
+    // p2RxEnable: enable bit per DDC.  p2RxAdc: ADC assignment.
+    // p2RxSamplingRate: rate in kHz. p2RxBitDepth: bit depth (24 default).
+    int     p2RxEnable[7]{0, 0, 0, 0, 0, 0, 0};
+    int     p2RxAdcAssign[7]{0, 0, 0, 0, 0, 0, 0};
+    int     p2RxSamplingRate[7]{48, 48, 48, 48, 48, 48, 48};
+    int     p2RxBitDepth[7]{24, 24, 24, 24, 24, 24, 24};
+    int     p2RxSync{0};  // prn->rx[0].sync — byte 1363 of CmdRx
+
+    // P2 custom port base — prn->p2_custom_port_base. Default 1025.
+    int     p2CustomPortBase{1025};
+
+    // P2 wideband settings — prn->wb_samples_per_packet / wb_sample_size /
+    // wb_update_rate / wb_packets_per_frame. From Thetis create_rnet defaults.
+    int     p2WbSamplesPerPacket{512};
+    int     p2WbSampleSize{16};
+    int     p2WbUpdateRate{70};
+    int     p2WbPacketsPerFrame{32};
+
+    // P2 watchdog timer — prn->wdt. 0 = disabled. Byte 38 of CmdGeneral.
+    int     p2Wdt{0};
+
+    // P2 CW state — prn->cw.*. Used in CmdTx bytes 5-13, 17.
+    unsigned char p2CwModeControl{0};
+    int     p2CwSidetoneLevel{0};
+    int     p2CwSidetoneFreq{0};
+    int     p2CwKeyerSpeed{0};
+    int     p2CwKeyerWeight{0};
+    int     p2CwHangDelay{0};
+    int     p2CwRfDelay{0};
+    int     p2CwEdgeLength{7};  // From Thetis create_rnet:1454
+
+    // P2 Mic state — prn->mic.*. Used in CmdTx bytes 50-51.
+    unsigned char p2MicControl{0};
+    int     p2MicLineInGain{0};
+
+    // P2 Alex antenna selection — rxAnt/txAnt for Alex0/Alex1 register.
+    // 1=ANT1, 2=ANT2, 3=ANT3. Default 1.
+    int     p2AlexRxAnt{1};
+    int     p2AlexTxAnt{1};
 
     // TX drive level (0-255).
     int     txDrive{0};
@@ -51,6 +146,14 @@ struct CodecContext {
     // RX VFO frequency words (Hz, raw, no phase-word conversion on P1).
     quint64 rxFreqHz[7]{};
     quint64 txFreqHz{0};
+
+    // P2 NCO phase-word frequency-correction factor.
+    // Source: setup.cs:14036-14050 udHPSDRFreqCorrectFactor_ValueChanged →
+    //   NetworkIO.FreqCorrectionFactor (0.999... / 1.000... trims ppm error).
+    //   P2RadioConnection populates this from CalibrationController::
+    //   effectiveFreqCorrectionFactor(); codecs fold it into hzToPhaseWord().
+    //   Default 1.0 → byte-identical to pre-calibration output. [@501e3f5]
+    double  freqCorrectionFactor{1.0};
 
     // Sample rate code (0=48k, 1=96k, 2=192k, 3=384k).
     int     sampleRateCode{0};

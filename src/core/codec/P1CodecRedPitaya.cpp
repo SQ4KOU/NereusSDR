@@ -46,6 +46,8 @@ namespace NereusSDR {
 //
 // "unsure why this was forced, but left as-is for all radios other than
 //  Red Pitaya" [original inline comment from networkproto1.c:607-608]
+// Upstream inline attribution (networkproto1.c:612, preserved verbatim):
+//   if (HPSDRModel == HPSDRModel_REDPITAYA) //[2.10.3.9]DH1KLM  //model needed as board type (prn->discovery.BoardType) is an OrionII
 void P1CodecRedPitaya::bank12(const CodecContext& ctx, quint8 out[5]) const
 {
     out[0] = (ctx.mox ? 0x01 : 0x00) | 0x16;

@@ -72,6 +72,8 @@ class TestAlexFilterMap : public QObject {
     Q_OBJECT
 private slots:
     // From Thetis console.cs:6830-6942 [@501e3f5]
+    // Upstream inline attribution preserved verbatim:
+    //   :6830  || (HardwareSpecific.Hardware == HPSDRHW.HermesIII)) //DK1HLM
     void hpfBypass_under_1_5MHz()       { QCOMPARE(computeHpf(1.0),  quint8(0x20)); }
     void hpf_1_5_to_6_5_MHz()           { QCOMPARE(computeHpf(3.5),  quint8(0x10)); }
     void hpf_6_5_to_9_5_MHz()           { QCOMPARE(computeHpf(7.0),  quint8(0x08)); }

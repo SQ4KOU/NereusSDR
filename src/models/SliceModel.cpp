@@ -619,6 +619,8 @@ std::pair<int, int> SliceModel::defaultFilterForMode(DSPMode mode)
     // From Thetis console.cs:14636
     static constexpr int kDiguOffset = 1500;
     // From Thetis console.cs:14671
+    // Upstream inline attribution preserved verbatim:
+    //   :14669  //reset preset filter's center frequency - W4TME
     static constexpr int kDiglOffset = 2210;
 
     switch (mode) {
@@ -641,6 +643,8 @@ std::pair<int, int> SliceModel::defaultFilterForMode(DSPMode mode)
         // FM filters are dynamic in Thetis (from deviation + high cut).
         // Default deviation=5000, so use ±8000 as reasonable default.
         // From Thetis console.cs:7559-7565
+        // Upstream inline attribution preserved verbatim (console.cs:7560):
+        //   int halfBw = (int)(radio.GetDSPRX(0, 0).RXFMDeviation + radio.GetDSPRX(0, 0).RXFMHighCut);  //[2.10.3.4]MW0LGE
         return {-8000, 8000};
     case DSPMode::AM:
         // From Thetis console.cs:5459 — F5: -5000 to 5000

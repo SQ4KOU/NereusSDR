@@ -238,11 +238,15 @@ mw0lge@grange-lane.co.uk
 
 #include "P1RadioConnection.h"
 #include "LogCategories.h"
+#include "OcMatrix.h"
+#include "IoBoardHl2.h"
+#include "HermesLiteBandwidthMonitor.h"
 #include "codec/P1CodecStandard.h"
 #include "codec/P1CodecAnvelinaPro3.h"
 #include "codec/P1CodecRedPitaya.h"
 #include "codec/P1CodecHl2.h"
 #include "codec/AlexFilterMap.h"
+#include "models/Band.h"
 
 #include <cstdlib>
 #include <cstring>    // memset
@@ -343,6 +347,9 @@ void P1RadioConnection::composeCcBank0(quint8 out[5], int sampleRate, bool mox,
                                         int activeRxCount) noexcept
 {
     // Source: networkproto1.c:615 -- C0 = (unsigned char)XmitBit
+    // (Nearby upstream context — case 12 Step ATT control — carries the
+    //  RedPitaya guard: `//[2.10.3.9]DH1KLM  //model needed as board type
+    //  (prn->discovery.BoardType) is an OrionII` on networkproto1.c:612.)
     out[0] = mox ? 0x01 : 0x00;
 
     // Source: networkproto1.c:620 -- C1 = (SampleRateIn2Bits & 3)
@@ -759,6 +766,8 @@ void P1RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
     m_rxFreqHz[receiverIndex] = frequencyHz;
     // RX0 drives the Alex HPF bank — recompute on every change.
     // Source: console.cs:6830-6942 [@501e3f5]
+    // Upstream inline attribution preserved verbatim:
+    //   :6830  || (HardwareSpecific.Hardware == HPSDRHW.HermesIII)) //DK1HLM
     if (receiverIndex == 0 && m_caps && m_caps->hasAlexFilters) {
         m_alexHpfBits = codec::alex::computeHpf(double(frequencyHz) / 1e6);
     }
@@ -857,6 +866,80 @@ void P1RadioConnection::selectCodec()
 }
 
 // ---------------------------------------------------------------------------
+// setOcMatrix — Phase 3P-D Task 3
+//
+// Wires the RadioModel's OcMatrix to this connection so buildCodecContext()
+// can source ctx.ocByte from maskFor(currentBand, mox) at C&C compose time.
+// Called by RadioModel::connectToRadio() on the main thread before the
+// connection thread is started, so no synchronisation is needed.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setOcMatrix(const OcMatrix* matrix)
+{
+    m_ocMatrix = matrix;
+}
+
+// ---------------------------------------------------------------------------
+// setIoBoard — Phase 3P-E Task 2
+//
+// Wires the RadioModel's IoBoardHl2 to this connection for I2C intercept
+// (outbound) and ep6 response parsing (inbound).  On HL2 boards, pushes
+// the pointer into P1CodecHl2 so tryComposeI2cFrame() can dequeue txns.
+// On non-HL2 boards, m_codec is not a P1CodecHl2, so the dynamic_cast
+// returns null and the codec push is a noop — only m_ioBoard is stored
+// (which is itself only used if the codec pushes a frame).
+// Called by RadioModel::connectToRadio() after selectCodec() returns.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setIoBoard(IoBoardHl2* io)
+{
+    m_ioBoard = io;
+    if (auto* hl2Codec = dynamic_cast<P1CodecHl2*>(m_codec.get())) {
+        hl2Codec->setIoBoard(io);
+    }
+    // Non-HL2 boards: codec cast returns null — noop (no I2C support).
+}
+
+// ---------------------------------------------------------------------------
+// setBandwidthMonitor — Phase 3P-E Task 3
+//
+// Wires the RadioModel-owned HermesLiteBandwidthMonitor into the connection.
+// Called by RadioModel::connectToRadio() when m_caps->hasBandwidthMonitor.
+// The pointer is non-owning — lifetime is managed by RadioModel.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setBandwidthMonitor(HermesLiteBandwidthMonitor* monitor)
+{
+    m_bwMonitor = monitor;
+}
+
+// ---------------------------------------------------------------------------
+// parseI2cResponse — Phase 3P-E Task 2
+//
+// Called from the instance parseEp6Frame() when incoming C&C status byte C0
+// has bit 7 set, indicating an I2C read response frame (not normal status).
+// Routes C1-C4 read data back into the IoBoardHl2 register mirror.
+//
+// Source: mi0bot networkproto1.c:478-493 [@c26a8a4]
+// ---------------------------------------------------------------------------
+void P1RadioConnection::parseI2cResponse(quint8 c0, quint8 c1, quint8 c2,
+                                          quint8 c3, quint8 c4)
+{
+    if (!m_ioBoard) { return; }  // no IoBoard wired (non-HL2 board)
+
+    // Persist all 4 response bytes plus the 7-bit returned address into the
+    // IoBoardHl2 model. Upstream stores these in prn->i2c.read_data[0..3]
+    // and sets ctrl_read_available = 1; we mirror both via
+    // IoBoardHl2::applyI2cReadResponse(), which also emits a signal so the
+    // HL2 I/O diagnostics page can reflect live hardware state instead of
+    // defaults.
+    //
+    // Full returnedAddress → Register slot dispatch (so reads auto-populate
+    // m_registers[]) is Phase 3P-E Task 3 state-machine work; for now
+    // downstream consumers read the response via IoBoardHl2::lastI2cRead().
+    //
+    // Source: mi0bot networkproto1.c:478-493 [@c26a8a4]
+    m_ioBoard->applyI2cReadResponse(c0, c1, c2, c3, c4);
+}
+
+// ---------------------------------------------------------------------------
 // buildCodecContext
 //
 // Snapshot all live state into a CodecContext for the codec call.
@@ -875,7 +958,19 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.duplex         = m_duplex;
     ctx.diversity      = m_diversity;
     ctx.antennaIdx     = m_antennaIdx;
-    ctx.ocByte         = m_ocOutput;
+
+    // Source OC byte from OcMatrix per current band + MOX state.  Falls
+    // through to legacy m_ocOutput when matrix is unset (e.g. tests that
+    // construct P1RadioConnection without a RadioModel).  Default state is
+    // byte-identical: empty matrix → maskFor()==0 == m_ocOutput==0.
+    // Phase 3P-D Task 3 — From Thetis HPSDR/Penny.cs:117-132 [@501e3f5]
+    // setBandABitMask — OC mask derived per-band at transmit time.
+    if (m_ocMatrix) {
+        const Band currentBand = bandFromFrequency(static_cast<double>(m_rxFreqHz[0]));
+        ctx.ocByte = m_ocMatrix->maskFor(currentBand, m_mox);
+    } else {
+        ctx.ocByte = m_ocOutput;
+    }
     ctx.adcCtrl        = m_adcCtrl;
     ctx.alexHpfBits    = m_alexHpfBits;
     ctx.alexLpfBits    = m_alexLpfBits;
@@ -899,6 +994,13 @@ CodecContext P1RadioConnection::buildCodecContext() const
 // Drains incoming datagrams. For each 1032-byte ep6 frame, calls the static
 // parseEp6Frame helper and emits iqDataReceived for each receiver.
 // Source: networkproto1.c:319-415 MetisReadThreadMainLoop
+//
+// Upstream inline attribution in that range — preserved verbatim per
+// CLAUDE.md §"Inline comment preservation — SHIP-BLOCKING":
+//   :335  adc[0].adc_overload |= ControlBytesIn[1] & 0x01; // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+//   :353  adc[0].adc_overload |= ControlBytesIn[1] & 1;    // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+//   :354  adc[1].adc_overload |= (ControlBytesIn[2] & 1) << 1; // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+//   :355  adc[2].adc_overload |= (ControlBytesIn[3] & 1) << 2; // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
 //
 // Handles both Connected and Connecting states so that reconnect attempts
 // (which send metis-start from Connecting) can transition to Connected on
@@ -953,6 +1055,10 @@ void P1RadioConnection::onReadyRead()
                     m_reconnectedLogged = true;
                 }
             }
+
+            // Phase 3P-E Task 3: record ep6 ingress bytes for bandwidth monitor.
+            // Source: mi0bot bandwidth_monitor.c:74-78 bandwidth_monitor_in() [@c26a8a4]
+            if (m_bwMonitor) { m_bwMonitor->recordEp6Bytes(data.size()); }
 
             parseEp6Frame(data);
         }
@@ -1173,7 +1279,14 @@ void P1RadioConnection::sendCommandFrame()
 {
     if (!m_socket) { return; }
 
-    const int maxBank = (m_hardwareProfile.model == HPSDRModel::ANVELINAPRO3) ? 17 : 16;
+    // Phase 3P-D follow-up: drive the bank ceiling from the active codec's
+    // maxBank() so HL2 (18) and AnvelinaPro3 (17) both emit their full bank
+    // range. Standard = 16. The legacy compose path (m_codec == nullptr under
+    // NEREUS_USE_LEGACY_P1_CODEC=1) retains the pre-refactor model-keyed
+    // constant to preserve the regression-freeze byte-identical guarantee.
+    const int maxBank = m_codec
+        ? m_codec->maxBank()
+        : ((m_hardwareProfile.model == HPSDRModel::ANVELINAPRO3) ? 17 : 16);
 
     quint8 frame[1032];
     memset(frame, 0, sizeof(frame));
@@ -1208,6 +1321,10 @@ void P1RadioConnection::sendCommandFrame()
 
     QByteArray pkt(reinterpret_cast<const char*>(frame), 1032);
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_radioInfo.port);
+
+    // Phase 3P-E Task 3: record ep2 egress bytes for bandwidth monitor.
+    // Source: mi0bot bandwidth_monitor.c:80-84 bandwidth_monitor_out() [@c26a8a4]
+    if (m_bwMonitor) { m_bwMonitor->recordEp2Bytes(pkt.size()); }
 }
 
 // ---------------------------------------------------------------------------
@@ -1243,6 +1360,8 @@ void P1RadioConnection::sendPrimingBurst(int countPerBank)
 // Calls the static parseEp6Frame helper and emits iqDataReceived for each
 // receiver's interleaved I/Q samples.
 // Source: networkproto1.c:319-415 MetisReadThreadMainLoop
+// Upstream inline attribution preserved verbatim (networkproto1.c:335/353/354/355):
+//   `// only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE`
 // ---------------------------------------------------------------------------
 void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
 {
@@ -1269,10 +1388,112 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
     //[2.10.3.13]MW0LGE adc_overload accumulated (or'd) across EP6 frames, cleared only by reader [Thetis networkproto1.c:335]
     // From Thetis networkproto1.c — ADC overflow in C&C status bytes.
     // C0[0] bit 0 = LT2208 overflow (ADC0).
+    // Phase 3P-E Task 2: C0 bit 7 = I2C response frame (HL2 only).
+    // Source: mi0bot networkproto1.c:478-493 [@c26a8a4]
     const quint8 c0_sub0 = frame[11];
     const quint8 c0_sub1 = frame[523];
+
+    // Check each subframe's C0 for I2C response marker (bit 7).
+    // Source: mi0bot networkproto1.c:478-480 [@c26a8a4]
+    for (int sub = 0; sub < 2; ++sub) {
+        const int base = 8 + sub * 512;  // sync bytes at base+0..2, C&C at base+3..7
+        const quint8 c0 = frame[base + 3];
+        if (c0 & 0x80) {
+            // I2C response frame: C1-C4 = read_data[0-3]
+            // Source: mi0bot networkproto1.c:480-492 [@c26a8a4]
+            parseI2cResponse(c0, frame[base + 4], frame[base + 5],
+                             frame[base + 6], frame[base + 7]);
+        }
+    }
+
     if ((c0_sub0 & 0x01) || (c0_sub1 & 0x01)) {
         emit adcOverflow(0);
+    }
+
+    // Phase 3P-H Task 4: PA telemetry — extract raw 16-bit ADC counts from
+    // each subframe's C&C status bytes.  Per-board scaling lives in RadioModel
+    // (console.cs computeAlexFwdPower / computeRefPower / convertToVolts /
+    // convertToAmps), because bridge_volt / refvoltage / adc_cal_offset
+    // depend on HardwareSpecific.Model.
+    //
+    // From Thetis networkproto1.c:332-356 [@501e3f5]
+    //   case 0x00: // C0 0000 0000
+    //       prn->adc[0].adc_overload = prn->adc[0].adc_overload || ControlBytesIn[1] & 0x01; // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+    //   case 0x08: // C0 0000 1xxx
+    //       prn->tx[0].exciter_power = ((C1 << 8) & 0xff00) | (C2 & 0xff);  // (AIN5) drive power
+    //       prn->tx[0].fwd_power     = ((C3 << 8) & 0xff00) | (C4 & 0xff);  // (AIN1) PA coupler
+    //   case 0x10: // C0 0001 0xxx
+    //       prn->tx[0].rev_power     = ((C1 << 8) & 0xff00) | (C2 & 0xff);  // (AIN2) PA reverse power
+    //       prn->user_adc0           = ((C3 << 8) & 0xff00) | (C4 & 0xff);  // AIN3 MKII PA Volts
+    //   case 0x18: // C0 0001 1xxx
+    //       prn->user_adc1           = ((C1 << 8) & 0xff00) | (C2 & 0xff);  // AIN4 MKII PA Amps
+    //       prn->supply_volts        = ((C3 << 8) & 0xff00) | (C4 & 0xff);  // AIN6 Hermes Volts
+    //   case 0x20: // C0 0010 0xxx
+    //       prn->adc[0].adc_overload = prn->adc[0].adc_overload || ControlBytesIn[1] & 1;        // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+    //       prn->adc[1].adc_overload = prn->adc[1].adc_overload || (ControlBytesIn[2] & 1) << 1; // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+    //       prn->adc[2].adc_overload = prn->adc[2].adc_overload || (ControlBytesIn[3] & 1) << 2; // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+    //
+    // We accumulate the latest value of each field across this frame's two
+    // subframes and emit one paTelemetryUpdated() with the latched values.
+    // Last-writer-wins matches Thetis (which mutates prn->* in place each subframe).
+    bool telemetryDirty = false;
+    for (int sub = 0; sub < 2; ++sub) {
+        const int base   = 8 + sub * 512;
+        const quint8 c0  = frame[base + 3];
+        const quint8 c1  = frame[base + 4];
+        const quint8 c2  = frame[base + 5];
+        const quint8 c3  = frame[base + 6];
+        const quint8 c4  = frame[base + 7];
+        if (c0 & 0x80) {
+            // I2C response — already handled above; not a telemetry frame.
+            continue;
+        }
+        // Source: networkproto1.c:332 — switch (ControlBytesIn[0] & 0xf8)
+        // Adjacent upstream cases 0x00/0x20 (networkproto1.c:335/353/354/355)
+        // each preserve `// only cleared by getAndResetADC_Overload(), or'ed
+        // with existing state //[2.10.3.13]MW0LGE` — inline attribution that
+        // survives verbatim in the port even though ADC-overload extraction
+        // happens in parseEp6Frame(), not here.
+        switch (c0 & 0xF8) {
+        case 0x08: {
+            // From Thetis networkproto1.c:339 [@501e3f5] — exciter_power AIN5
+            const quint16 exciter = static_cast<quint16>((c1 << 8) | c2);
+            // From Thetis networkproto1.c:340 [@501e3f5] — fwd_power AIN1
+            const quint16 fwd     = static_cast<quint16>((c3 << 8) | c4);
+            m_paExciterRaw = exciter;
+            m_paFwdRaw     = fwd;
+            telemetryDirty = true;
+            break;
+        }
+        case 0x10: {
+            // From Thetis networkproto1.c:344 [@501e3f5] — rev_power AIN2
+            const quint16 rev      = static_cast<quint16>((c1 << 8) | c2);
+            // From Thetis networkproto1.c:346 [@501e3f5] — user_adc0 AIN3 MKII PA Volts
+            const quint16 userAdc0 = static_cast<quint16>((c3 << 8) | c4);
+            m_paRevRaw      = rev;
+            m_paUserAdc0Raw = userAdc0;
+            telemetryDirty  = true;
+            break;
+        }
+        case 0x18: {
+            // From Thetis networkproto1.c:349 [@501e3f5] — user_adc1 AIN4 MKII PA Amps
+            // Upstream cite :353/:354/:355 (case 0x20) carry the MW0LGE ADC
+            // overload comments — see comment block above the switch.
+            const quint16 userAdc1 = static_cast<quint16>((c1 << 8) | c2);
+            // From Thetis networkproto1.c:350 [@501e3f5] — supply_volts AIN6 Hermes Volts //[2.10.3.13]MW0LGE (nearby upstream cases)
+            const quint16 supply   = static_cast<quint16>((c3 << 8) | c4);
+            m_paUserAdc1Raw = userAdc1;
+            m_paSupplyRaw   = supply;
+            telemetryDirty  = true;
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    if (telemetryDirty) {
+        emit paTelemetryUpdated(m_paFwdRaw, m_paRevRaw, m_paExciterRaw,
+                                m_paUserAdc0Raw, m_paUserAdc1Raw, m_paSupplyRaw);
     }
 
     // Emit iqDataReceived for each receiver
@@ -1425,6 +1646,23 @@ void P1RadioConnection::composeCcForBank(int bankIdx, quint8 out[5]) const
         composeCcForBankLegacy(bankIdx, out);
         return;
     }
+
+    // Phase 3P-E Task 2: HL2 I2C intercept — when IoBoardHl2 has pending
+    // I2C transactions, the next C&C frame carries I2C TLV bytes instead of
+    // the normal bank payload.
+    // Source: mi0bot networkproto1.c:898-943 [@c26a8a4]
+    if (m_codec->usesI2cIntercept()) {
+        // const_cast: tryComposeI2cFrame mutates the queue (dequeues txn),
+        // but composeCcForBank is const because the rest of compose is pure.
+        // Documented exception: only the I2C queue pointer is mutated, not
+        // the codec or connection state itself.
+        auto* hl2Codec = const_cast<P1CodecHl2*>(
+            dynamic_cast<const P1CodecHl2*>(m_codec.get()));
+        if (hl2Codec && hl2Codec->tryComposeI2cFrame(out, m_mox)) {
+            return;  // I2C frame written; skip normal bank compose
+        }
+    }
+
     const CodecContext ctx = buildCodecContext();
     m_codec->composeCcForBank(bankIdx, ctx, out);
 }
@@ -1539,17 +1777,39 @@ void P1RadioConnection::hl2CheckBandwidthMonitor()
 {
     if (!m_caps || !m_caps->hasBandwidthMonitor) { return; }
 
-    // Source: bandwidth_monitor.c:86-113 — compute_bps() measures the delta
-    //   in total bytes between two ticks divided by elapsed ms.  We use
-    //   sequence number stall as a simpler proxy: if m_epRecvSeqExpected
-    //   is the same as last tick AND we have previously received at least
-    //   one frame, count a potential throttle event.
-    //
-    // Throttle: 3 consecutive stall ticks (3 × 500 ms = 1.5 s) → flag.
-    // Clear:    any single advancing tick resets the counter.
+    // Phase 3P-E Task 3: delegate to HermesLiteBandwidthMonitor when wired.
+    // The monitor records ep6/ep2 bytes via recordEp6Bytes()/recordEp2Bytes()
+    // in onReadyRead()/sendCommandFrame() respectively, then tick() here runs
+    // the upstream compute_bps() algorithm (mi0bot bandwidth_monitor.c:86-113
+    // [@c26a8a4]) and the NereusSDR throttle-detection layer.
+    if (m_bwMonitor) {
+        m_bwMonitor->tick();
+        // Mirror throttle state into the legacy m_hl2Throttled flag so that
+        // hl2IsThrottled() and the test seam hl2ThrottledForTest() remain valid.
+        const bool nowThrottled = m_bwMonitor->isThrottled();
+        if (nowThrottled && !m_hl2Throttled) {
+            m_hl2Throttled = true;
+            m_hl2LastThrottleTick = QDateTime::currentDateTimeUtc();
+            qCWarning(lcConnection) << "HL2: LAN PHY throttle detected via byte-rate monitor —"
+                                    << "ep6 ingress silent for"
+                                    << HermesLiteBandwidthMonitor::kThrottleTickThreshold
+                                    << "watchdog ticks;"
+                                    << "throttle events:" << m_bwMonitor->throttleEventCount();
+            emit errorOccurred(RadioConnectionError::None,
+                               QStringLiteral("HL2 LAN throttled — pausing ep2"));
+        } else if (!nowThrottled && m_hl2Throttled) {
+            m_hl2Throttled = false;
+            qCInfo(lcConnection) << "HL2: LAN throttle cleared — ep6 stream resumed";
+        }
+        return;
+    }
 
-    static constexpr int kBwThrottleGapCount = 3;  // NereusSDR heuristic; TODO(3I-T12) calibrate
-
+    // Fallback: legacy sequence-gap heuristic used when m_bwMonitor is not wired
+    // (non-HL2 board or test seam without RadioModel).
+    // Source: NereusSDR design — sequence-gap proxy for byte-rate throttle detect.
+    // The upstream bandwidth_monitor.{c,h} (MW0LGE [@c26a8a4]) is a byte-rate
+    // telemetry helper; throttle detection is a NereusSDR addition.
+    static constexpr int kBwThrottleGapCount = 3;  // NereusSDR heuristic
     static quint32 s_lastSeq = 0;
 
     if (!m_lastEp6At.isValid()) {
@@ -1564,7 +1824,7 @@ void P1RadioConnection::hl2CheckBandwidthMonitor()
         if (!m_hl2Throttled && m_hl2ThrottleCount >= kBwThrottleGapCount) {
             m_hl2Throttled = true;
             m_hl2LastThrottleTick = QDateTime::currentDateTimeUtc();
-            qCWarning(lcConnection) << "HL2: LAN PHY throttle detected —"
+            qCWarning(lcConnection) << "HL2: LAN PHY throttle detected (seq-gap fallback) —"
                                     << "ep6 sequence stalled for"
                                     << m_hl2ThrottleCount << "watchdog ticks;"
                                     << "pausing ep2 command frames";
@@ -1574,7 +1834,7 @@ void P1RadioConnection::hl2CheckBandwidthMonitor()
     } else {
         // Sequence advanced — clear throttle.
         if (m_hl2Throttled) {
-            qCInfo(lcConnection) << "HL2: LAN throttle cleared — ep6 stream resumed";
+            qCInfo(lcConnection) << "HL2: LAN throttle cleared (seq-gap fallback) — ep6 stream resumed";
             m_hl2Throttled = false;
         }
         m_hl2ThrottleCount = 0;
@@ -1609,7 +1869,10 @@ float P1RadioConnection::scaleSample24(const quint8 be24[3]) noexcept
 // parseEp6Frame
 //
 // Source: networkproto1.c:319-415 MetisReadThreadMainLoop — iterates 2 subframes,
-// each 512 bytes. Within each subframe (bptr = FPGAReadBufp + 512*frame, which
+// each 512 bytes.
+// Upstream inline attribution (networkproto1.c:335/353/354/355, preserved
+// verbatim): `// only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE`
+// Within each subframe (bptr = FPGAReadBufp + 512*frame, which
 // strips the 8-byte Metis header):
 //   bptr[0..2]  = sync 7F 7F 7F
 //   bptr[3..7]  = C0..C4 (C&C from radio)

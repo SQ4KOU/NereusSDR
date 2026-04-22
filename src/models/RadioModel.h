@@ -72,6 +72,15 @@
 #include "PanadapterModel.h"
 #include "MeterModel.h"
 #include "TransmitModel.h"
+#include "core/OcMatrix.h"
+#include "core/IoBoardHl2.h"
+#include "core/HermesLiteBandwidthMonitor.h"
+#include "core/RadioStatus.h"
+#include "core/SettingsHygiene.h"
+#include "core/accessories/AlexController.h"
+#include "core/accessories/ApolloController.h"
+#include "core/accessories/PennyLaneController.h"
+#include "core/CalibrationController.h"
 #include "core/RadioDiscovery.h"
 #include "core/RadioConnection.h"
 #include "core/HardwareProfile.h"
@@ -120,6 +129,60 @@ public:
     ReceiverManager*  receiverManager()  { return m_receiverManager; }
     AudioEngine*      audioEngine()      { return m_audioEngine; }
     WdspEngine*       wdspEngine()       { return m_wdspEngine; }
+
+    // OC matrix — single instance shared between the OC Outputs UI and the
+    // codec layer (P1/P2 buildCodecContext). Loaded per-MAC at connect time.
+    // Phase 3P-D Task 3.
+    const OcMatrix& ocMatrix()        const { return m_ocMatrix; }
+    OcMatrix&       ocMatrixMutable()       { return m_ocMatrix; }
+
+    // HL2 I/O board model — single instance; non-null on any HL2 connection.
+    // Pushed into P1RadioConnection::setIoBoard() at connect time so the
+    // codec layer can dequeue I2C transactions.  Phase 3P-E Task 2.
+    const IoBoardHl2& ioBoard()        const { return m_ioBoard; }
+    IoBoardHl2&       ioBoardMutable()       { return m_ioBoard; }
+
+    // HL2 bandwidth monitor — single instance; pushed into P1RadioConnection
+    // via setBandwidthMonitor() at connect time when hasBandwidthMonitor.
+    // Phase 3P-E Task 3.
+    const HermesLiteBandwidthMonitor& bwMonitor()        const { return m_bwMonitor; }
+    HermesLiteBandwidthMonitor&       bwMonitorMutable()       { return m_bwMonitor; }
+
+    // Live PA telemetry and PTT state — single instance owned here.
+    // Setters called by connection layer on each status packet.
+    // Backed by Phase 3P-H Task 1 RadioStatus model.
+    // Phase 3P-H Task 2.
+    const RadioStatus& radioStatus()        const { return m_radioStatus; }
+    RadioStatus&       radioStatus()              { return m_radioStatus; }
+
+    // Settings hygiene validation — single instance owned here.
+    // Call validate() after each successful connect.
+    // Phase 3P-H Task 2.
+    const SettingsHygiene& settingsHygiene()        const { return m_settingsHygiene; }
+    SettingsHygiene&       settingsHygiene()              { return m_settingsHygiene; }
+
+    // Alex antenna controller — per-band TX/RX/RX-only antenna assignment.
+    // Loaded per-MAC at connect time. Backs Antenna Control sub-sub-tab UI
+    // (AntennaAlexAntennaControlTab — Phase 3P-F Task 3).
+    const AlexController& alexController()        const { return m_alexController; }
+    AlexController&       alexControllerMutable()       { return m_alexController; }
+
+    // Apollo PA + ATU + LPF accessory controller — present/filter/tuner enable flags.
+    // Loaded per-MAC at connect time. Setup UI deferred (Phase 3P-F Task 5a).
+    const ApolloController& apolloController()        const { return m_apolloController; }
+    ApolloController&       apolloControllerMutable()       { return m_apolloController; }
+
+    // PennyLane / Penelope external-control master toggle.
+    // Loaded per-MAC at connect time. OC bitmask logic lives in OcMatrix (Phase 3P-D).
+    // Setup UI deferred (Phase 3P-F Task 5b).
+    const PennyLaneController& pennyLaneController()        const { return m_pennyLaneController; }
+    PennyLaneController&       pennyLaneControllerMutable()       { return m_pennyLaneController; }
+
+    // Calibration controller — HPSDR NCO correction factor, level offsets, LNA
+    // offsets, TX display cal, PA current sens/offset. Loaded per-MAC at connect.
+    // Backs CalibrationTab UI and P2RadioConnection::hzToPhaseWord(). Phase 3P-G.
+    const CalibrationController& calibrationController()        const { return m_calController; }
+    CalibrationController&       calibrationControllerMutable()       { return m_calController; }
 
     // Sub-models
     MeterModel&       meterModel()       { return m_meterModel; }
@@ -243,6 +306,48 @@ private:
     // Sub-models
     MeterModel    m_meterModel;
     TransmitModel m_transmitModel;
+
+    // OC matrix — per-band × per-pin × {RX,TX} bit assignments.
+    // Owned here so both OcOutputsTab UI and P1/P2 codec layer read
+    // the same instance. MAC and load() are called on connect.
+    // Phase 3P-D Task 3.
+    OcMatrix      m_ocMatrix;
+
+    // HL2 I/O board model — owns I2C queue and register mirror.
+    // Shared with P1RadioConnection::setIoBoard() at connect time.
+    // Phase 3P-E Task 2.
+    IoBoardHl2    m_ioBoard;
+
+    // HL2 LAN PHY bandwidth monitor — owns byte-rate + throttle state.
+    // Pushed into P1RadioConnection::setBandwidthMonitor() at connect time.
+    // Phase 3P-E Task 3.
+    HermesLiteBandwidthMonitor m_bwMonitor;
+
+    // Live PA telemetry + PTT state from status packets.
+    // Phase 3P-H Task 2.
+    RadioStatus m_radioStatus;
+
+    // Settings hygiene — validated against caps at connect time.
+    // Phase 3P-H Task 2.
+    SettingsHygiene m_settingsHygiene;
+
+    // Alex antenna controller — per-band TX/RX/RX-only port assignment.
+    // MAC and load() are called on connect, matching OcMatrix ownership pattern.
+    // Phase 3P-F Task 3.
+    AlexController m_alexController;
+
+    // Apollo PA + ATU + LPF accessory state (present/filter/tuner enable bools).
+    // MAC and load() are called on connect. Phase 3P-F Task 5a.
+    ApolloController m_apolloController;
+
+    // PennyLane external-control master toggle. Composes with OcMatrix (Phase 3P-D).
+    // MAC and load() are called on connect. Phase 3P-F Task 5b.
+    PennyLaneController m_pennyLaneController;
+
+    // Calibration controller — HPSDR NCO correction factor, level offsets, PA current.
+    // MAC and load() are called on connect. Backs CalibrationTab UI and
+    // P2RadioConnection::hzToPhaseWord(). Phase 3P-G.
+    CalibrationController m_calController;
 
     // Slices and panadapters (client-managed)
     QList<SliceModel*> m_slices;

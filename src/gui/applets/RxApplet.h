@@ -122,11 +122,13 @@
 
 #include "AppletWidget.h"
 #include "gui/widgets/TriBtn.h"
+#include "models/Band.h"
 
 #include <QPushButton>
 #include <QStringList>
 #include <QVector>
 
+class QCheckBox;
 class QComboBox;
 class QPaintEvent;
 class QGridLayout;
@@ -139,6 +141,7 @@ class QStackedWidget;
 namespace NereusSDR {
 
 class FilterPassbandWidget;
+class PanadapterModel;
 class SliceModel;
 
 // RxApplet — per-slice RX controls applet.
@@ -188,6 +191,19 @@ public:
     // Test-only: returns current step-att spinbox maximum (for range assertions).
     // Phase 3P-A Task 15.
     int stepAttMaxForTest() const;
+
+    // Test-only: returns the number of visible ADC OVL badges.
+    // Phase 3P-B Task 10: 1 for single-ADC boards, 2 for dual-ADC boards.
+    int visibleOvlBadgeCountForTest() const;
+
+    // Test-only: returns the item count in the preamp combo at construction.
+    // Phase 3P-C Step 3: verifies per-board populate from BoardCapabilities.
+    int preampComboItemCountForTest() const;
+
+    // Test-only: returns antenna number (1/2/3) shown by each button.
+    // Phase 3P-F Task 4: verifies per-band wiring to AlexController.
+    int activeRxAntennaForTest() const;
+    int activeTxAntennaForTest() const;
 private:
 #endif
 
@@ -204,11 +220,16 @@ private:
     void updateFilterButtons();
     void applyFilterPreset(int widthHz);
 
+    // Phase 3P-F Task 4: read AlexController per-band assignments and push
+    // them into SliceModel so the antenna buttons reflect the active band.
+    void populateAntennaButtons(NereusSDR::Band band);
+
     static QString formatFilterWidth(int low, int high);
 
     // ── Model ──────────────────────────────────────────────────────────────
-    SliceModel* m_slice = nullptr;
-    QStringList m_antList{QStringLiteral("ANT1"), QStringLiteral("ANT2")};
+    SliceModel*      m_slice = nullptr;
+    PanadapterModel* m_pan   = nullptr;  // observed for bandChanged (Phase 3P-F Task 4)
+    QStringList m_antList{QStringLiteral("ANT1"), QStringLiteral("ANT2"), QStringLiteral("ANT3")};
 
     // Filter preset widths by mode (USB default)
     QVector<int> m_filterWidths{1800, 2100, 2400, 2700, 2900, 3300,
@@ -280,6 +301,18 @@ private:
     QPushButton* m_xitZero     = nullptr;
     TriBtn*      m_xitMinus    = nullptr;
     TriBtn*      m_xitPlus     = nullptr;
+
+    // Phase 3P-B Task 10: per-ADC ADC OVL badges.
+    // Index 0 = ADC0 ("OVL" on single-ADC boards, "OVL₀" on dual-ADC).
+    // Index 1 = ADC1 ("OVL₁" on dual-ADC boards only; nullptr on single-ADC).
+    // Gate: BoardCapabilities::p2PreampPerAdc — true for OrionMKII family.
+    // (p2PreampPerAdc is the proxy for "dual-ADC board" added in Task 6.)
+    QLabel*      m_ovlBadges[3]{nullptr, nullptr, nullptr};
+    QHBoxLayout* m_ovlRow{nullptr};
+
+    // Phase 3P-B Task 10: RX1 preamp toggle for dual-ADC boards only.
+    // Visible only when BoardCapabilities::p2PreampPerAdc=true.
+    QCheckBox*   m_rx1PreampToggle{nullptr};
 };
 
 } // namespace NereusSDR

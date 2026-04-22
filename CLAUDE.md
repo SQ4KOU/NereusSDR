@@ -70,15 +70,27 @@ interchangeable.
 - Include the Thetis version (`v2.10.3.13`) and commit (`501e3f5`) in the
   "Ported from" line.
 
-### Inline comment preservation
+### Inline comment preservation — SHIP-BLOCKING
+
+**This is a GPL attribution rule, not a style preference. Dropping a
+developer-attribution tag during porting is a compliance bug that
+blocks release.** A real incident (2026-04-21) shipped with a
+`//DH1KLM` tag silently dropped during a `computeAlexFwdPower` port
+— caught only because someone eyeballed the PR. The fix is
+mechanical:
 
 All inline comments from Thetis source code within ported logic **must be
 preserved verbatim** in the C++ translation. This includes:
 
-- `// MW0LGE` tags and explanatory notes
-- `// TODO` and `// FIXME` annotations
-- Developer attribution comments (e.g. `// -W2PA`)
-- Behavioral notes (e.g. `// MW0LGE_21k5 change to rx2`)
+- **Developer attribution tags** — `//DH1KLM`, `//MW0LGE`, `//W2PA`,
+  `//G8NJJ`, `//MI0BOT`, etc. Canonical list of recognized authors
+  lives in `docs/attribution/thetis-author-tags.json`, built
+  mechanically by `scripts/discover-thetis-author-tags.py`.
+- **Dash-prefix attribution** — `//-W2PA`, `// -W2PA`
+- **Version-tagged attribution** — `//[2.10.3.13]MW0LGE`, `//MW0LGE [2.9.0.7]`
+- **Underscored variants** — `//MW0LGE_21k5 change to rx2`
+- **Behavioral notes** — `// only cleared by getAndResetADC_Overload()`
+- **TODO / FIXME / XXX / HACK** annotations
 - Any `//` comment on or above a ported line of logic
 
 When the C++ translation restructures the code so that the comment no longer
@@ -86,6 +98,23 @@ sits on the same line, place it on the nearest equivalent line with a note:
 ```cpp
 // MW0LGE_21k5 change to rx2  [original inline comment from display.cs:10079]
 ```
+
+**Mechanical enforcement:** `scripts/verify-inline-tag-preservation.py`
+runs in the pre-commit hook chain and in CI. For every
+`// From Thetis X:N [@sha]` cite in the diff, it opens `../Thetis/X`
+(or `../mi0bot-Thetis/X`) at line N, extracts any author tag within
+±5 source lines, and fails the commit if a corresponding tag is not
+present within ±10 port lines. No way to land a port with a dropped
+tag. If the check fires, re-insert the verbatim tag exactly as it
+appears upstream.
+
+**Corpus drift:** when you re-sync Thetis (`git -C ../Thetis pull`),
+also run:
+```
+python3 scripts/discover-thetis-author-tags.py
+```
+to refresh the corpus. CI's `--drift` check fails the PR if new
+upstream contributors aren't in the committed corpus.
 
 ### Pre-port checklist (Ring 1 — authoring-time)
 

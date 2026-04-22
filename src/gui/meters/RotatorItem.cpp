@@ -343,6 +343,8 @@ void RotatorItem::paintHeading(QPainter& p, const QRect& compassRect)
 
     // ---- AZ heading (Primary face) ----
     // From Thetis MeterManager.cs:35191-35382
+    // Upstream inline attribution preserved verbatim:
+    //   :35220  //[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289
     if (m_mode != RotatorMode::Ele) {
         // From Thetis MeterManager.cs:35187 — xShift for BOTH mode
         const float xShift = (m_mode == RotatorMode::Both) ? 2.0f * (w * 0.0125f) : 0.0f;

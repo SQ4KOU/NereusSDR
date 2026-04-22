@@ -218,6 +218,12 @@ constexpr auto kCheckBoxStyle =
     " border: 1px solid #304050; border-radius: 2px; }"
     "QCheckBox::indicator:checked { background: #00b4d8; border-color: #00b4d8; }";
 
+constexpr auto kRadioButtonStyle =
+    "QRadioButton { color: #c8d8e8; font-size: 12px; }"
+    "QRadioButton::indicator { width: 14px; height: 14px; background: #1a2a3a;"
+    " border: 1px solid #304050; border-radius: 7px; }"
+    "QRadioButton::indicator:checked { background: #00b4d8; border-color: #00b4d8; }";
+
 constexpr auto kLineEditStyle =
     "QLineEdit { background: #1a2a3a; border: 1px solid #304050;"
     " border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }";
