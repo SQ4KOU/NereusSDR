@@ -740,11 +740,11 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 rxCh->setAgcHangThreshold(m_activeSlice->agcHangThreshold());
                 rxCh->setAgcFixedGain(m_activeSlice->agcFixedGain());
                 rxCh->setAgcMaxGain(m_activeSlice->agcMaxGain());
-                // NB/NB2 tuning defaults — From Thetis cmaster.c:43-68 (create_anbEXT / create_nobEXT)
-                // NbFamily constructor applies cmaster.c defaults at create time;
-                // setNbTuning() here is a no-op with default-constructed NbTuning but
-                // documents that Task 7 will replace this with m_activeSlice->nbTuning().
-                rxCh->setNbTuning(NereusSDR::NbTuning{});
+                // From phase3g-rx-epic-b-nb-plan.md Task 7 — push full NB family
+                // config from the active SliceModel. Thetis defaults pinned in
+                // NbTuning struct (NbFamily.h) mirror cmaster.c:43-68 [v2.10.3.13].
+                rxCh->setNbTuning(m_activeSlice->nbTuning());
+                rxCh->setNbMode(m_activeSlice->nbMode());
                 // EMNR sub-parameter defaults — From Thetis radio.cs:2062,2081,2101,2235
                 // These are set-and-forget on channel creation; run flag follows slice.
                 rxCh->setEmnrGainMethod(2);   // radio.cs:2062 rx_nr2_gain_method = 2
@@ -1295,6 +1295,28 @@ void RadioModel::wireSliceSignals()
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setSnbEnabled(on);
+        }
+        scheduleSettingsSave();
+    });
+
+    // NB mode (NB1 / NB2 / Off) → WDSP
+    // From Thetis Project Files/Source/Console/console.cs — chkDSPNB1/chkDSPNB2 Checked
+    // WDSP: third_party/wdsp/src/anb.c (SetRXAANBRun) + third_party/wdsp/src/nob.c (SetRXANOBRun)
+    connect(slice, &SliceModel::nbModeChanged, this, [this](NereusSDR::NbMode m) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setNbMode(m);
+        }
+        scheduleSettingsSave();
+    });
+
+    // NB tuning (threshold / slack / tau) → WDSP
+    // From Thetis cmaster.c:43-68 [v2.10.3.13] — create_anbEXT / create_nobEXT parameter layout
+    // WDSP: third_party/wdsp/src/anb.c (SetRXAANBParameters) + third_party/wdsp/src/nob.c (SetRXANOBParameters)
+    connect(slice, &SliceModel::nbTuningChanged, this, [this](const NereusSDR::NbTuning& t) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setNbTuning(t);
         }
         scheduleSettingsSave();
     });
