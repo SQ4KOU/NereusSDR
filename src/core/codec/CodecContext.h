@@ -9,6 +9,10 @@
 //
 // NereusSDR-original. No Thetis port; no PROVENANCE row.
 // Independently implemented from Protocol 1 interface design.
+//
+// no-port-check: NereusSDR-original aggregator. Field-level comments may
+//   cite Thetis for default-value origins (e.g. create_rnet defaults from
+//   netInterface.c:1416) without making the file a port.
 // =================================================================
 
 #pragma once

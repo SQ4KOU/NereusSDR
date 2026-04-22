@@ -25,6 +25,13 @@ HEADER_WINDOW = 120
 # These mark actual Thetis ports that require PROVENANCE entries
 DERIVATION_MARKERS = ["Ported from Thetis", "From Thetis"]
 
+# Per-file escape hatch — mirrors scripts/check-new-ports.py. Files that
+# genuinely cite Thetis without being ports (e.g. test fixtures asserting
+# parity with a Thetis value, NereusSDR-original POD aggregators with a
+# single default-value reference) can declare themselves exempt with
+# `// no-port-check: <reason>` in the first 120 lines.
+NO_PORT_CHECK_MARKER = "no-port-check:"
+
 
 def find_ported_files():
     """Scan src/ and tests/ for files with derivation markers.
@@ -50,6 +57,11 @@ def find_ported_files():
                     filepath.read_text(errors="replace").splitlines()[:HEADER_WINDOW]
                 )
             except Exception:
+                continue
+
+            # Honor the no-port-check: escape hatch for genuine
+            # false-positives (mirrors check-new-ports.py behavior).
+            if NO_PORT_CHECK_MARKER in head:
                 continue
 
             # Check for derivation marker
