@@ -11,7 +11,7 @@
 **What this build is NOT:**
 - Ready for transmit. **Do not key up.** The TX pipeline (Phase 3M) is intentionally cold — commands go on the wire but there is no SSB modulator yet.
 - Feature-complete. Some controls you see in the UI are placeholder — more on that below in "What is NOT wired up".
-- Signed on macOS or Windows. First launch on macOS needs right-click → Open. First launch on Windows triggers a SmartScreen warning you'll need to click through.
+- Signed with Apple Developer ID credentials. The v0.2.x alpha does not yet have paid Apple Developer credentials — the macOS app is **ad-hoc codesigned** (not Developer ID signed, not notarized), so first launch needs **right-click → Open → Open** to satisfy Gatekeeper. The Windows installer is **unsigned**, so first launch triggers a SmartScreen "Windows protected your PC" warning — click **More info → Run anyway**. See "macOS notes" below for the VAX HAL plugin situation on macOS (it's not shipped in the DMG; self-sign instructions are in that section).
 
 ---
 
@@ -244,6 +244,62 @@ Launch:
 - **macOS:** `open build-clean/NereusSDR.app`
 - **Linux:** `./build-clean/NereusSDR`
 - **Windows:** `build-clean/NereusSDR.exe`
+
+### macOS notes — code signing and the VAX HAL plugin
+
+The v0.2.x alpha line does not yet ship with paid Apple Developer ID credentials. That has two practical consequences on macOS:
+
+**1. Gatekeeper first-launch warning (main app).** The `.app` inside the DMG is **ad-hoc codesigned** — it has a signature, but not one tied to an Apple-issued Developer ID and not notarized. On first launch you'll see:
+
+> "NereusSDR" cannot be opened because the developer cannot be verified.
+
+Dismiss it, then:
+
+```text
+Right-click NereusSDR.app → Open → Open (in the second dialog)
+```
+
+macOS remembers that choice; subsequent launches open normally. If that flow still fails (happens on some macOS 14.x configurations), clear the quarantine attribute manually:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/NereusSDR.app
+```
+
+**2. VAX HAL plugin is not in the DMG.** NereusSDR's **VAX audio routing** on macOS is delivered as a CoreAudio **HAL plugin** (`NereusSDRVAX.driver`) that installs into `/Library/Audio/Plug-Ins/HAL/`. The macOS CoreAudio daemon (`coreaudiod`) is hardened and will not load a HAL plugin unless the system trusts its signature. Without Developer ID credentials the release pipeline can't produce a redistributable installer that `coreaudiod` will load on someone else's Mac, so **v0.2.2 does not attach the HAL plugin `.pkg` to the GitHub Release**. You can still:
+
+- **Use the app without VAX** — the main-output speaker path works fine over any normal CoreAudio device. You lose the per-slice VAX channel routing and the MasterOutputWidget's VAX destinations, but RX, spectrum, audio, CAT (once wired), and everything else continues to work.
+- **Self-sign and install the HAL plugin locally** if you want VAX routing today. An ad-hoc signature made on your own machine is trusted by `coreaudiod` on *that* machine.
+
+**Self-sign the HAL plugin (macOS, 5 minutes):**
+
+```bash
+# From the NereusSDR repo root, after a source build:
+cmake -B build-hal -S hal-plugin -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build-hal -j
+
+# Ad-hoc sign the driver bundle so coreaudiod will load it locally:
+codesign --force --deep --sign - build-hal/NereusSDRVAX.driver
+codesign --verify --verbose=2 build-hal/NereusSDRVAX.driver
+
+# Install it (HAL plugins live in /Library/Audio/Plug-Ins/HAL):
+sudo cp -R build-hal/NereusSDRVAX.driver /Library/Audio/Plug-Ins/HAL/
+
+# Restart coreaudiod so it picks up the new plugin:
+sudo killall coreaudiod
+```
+
+Launch NereusSDR and open **Setup → Audio → Devices**. You should now see four `NereusSDR VAX` output devices and one `NereusSDR VAX TX` input device in the device list. The first-run VAX dialog will offer to bind them to channels automatically.
+
+**To uninstall:**
+
+```bash
+sudo rm -rf /Library/Audio/Plug-Ins/HAL/NereusSDRVAX.driver
+sudo killall coreaudiod
+```
+
+> Why ad-hoc works locally but not for distribution: `codesign --sign -` writes a self-contained signature that includes the plugin's designated requirement but has no external certificate chain. `coreaudiod` on the machine that signed it accepts that signature; `coreaudiod` on any other Mac rejects it because nothing vouches for the identity. A future alpha, once Apple Developer credentials are in place, will ship a `.pkg` installer with a Developer-ID-signed + notarized driver that any Mac accepts.
+
+If you hit issues self-signing — the driver is new (Phase 3O Sub-Phase 5) and the alpha test is the first external trial of it — please file a bug via the 💡 menu with your macOS version, the output of `codesign --verify --verbose=2 build-hal/NereusSDRVAX.driver`, and the `log show --predicate 'process == "coreaudiod"' --last 5m` tail.
 
 ---
 
