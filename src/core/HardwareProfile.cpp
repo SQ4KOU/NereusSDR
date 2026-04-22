@@ -71,6 +71,11 @@ mw0lge@grange-lane.co.uk
 namespace NereusSDR {
 
 // From Thetis clsHardwareSpecific.cs:85-184
+// Upstream inline attribution preserved verbatim:
+//   :129  case HPSDRModel.ANAN_G1: //N1GP G1 added
+//   :164  case HPSDRModel.ANAN_G2_1K:             // G8NJJ: likely to need further changes for PA
+//   :178  case HPSDRModel.REDPITAYA: //DH1KLM
+//   :180      NetworkIO.SetMKIIBPF(0); // DH1KLM: changed for compatibility reasons for OpenHPSDR compat. DIY PA/Filter boards
 HardwareProfile profileForModel(HPSDRModel model)
 {
     HardwareProfile p;
@@ -219,6 +224,8 @@ HPSDRModel defaultModelForBoard(HPSDRHW board)
 }
 
 // From Thetis NetworkIO.cs:164-171
+// Upstream inline attribution preserved verbatim (NetworkIO.cs:160):
+//   //[2.10.3.9]MW0LGE added board check, issue icon shown in setup
 QList<HPSDRModel> compatibleModels(HPSDRHW board)
 {
     QList<HPSDRModel> result;
@@ -235,6 +242,8 @@ QList<HPSDRModel> compatibleModels(HPSDRHW board)
 
         // Special cross-board compatibility cases.
         // From Thetis NetworkIO.cs:164-171
+// Upstream inline attribution preserved verbatim (NetworkIO.cs:160):
+//   //[2.10.3.9]MW0LGE added board check, issue icon shown in setup
         switch (m) {
             case HPSDRModel::REDPITAYA:
                 // RedPitaya is compatible with Hermes (0x01) or OrionMKII (0x05)

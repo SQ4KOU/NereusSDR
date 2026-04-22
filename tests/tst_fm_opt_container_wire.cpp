@@ -165,6 +165,9 @@ private slots:
     // ── Simplex button — Thetis-faithful behavior ─────────────────────────────
     //
     // From Thetis console.cs:40412 chkFMTXSimplex_CheckedChanged:
+    // Upstream inline attribution preserved verbatim:
+    //   :40410  int halfBw = (int)(radio.GetDSPRX(0, 0).RXFMDeviation + radio.GetDSPRX(0, 0).RXFMHighCut); //[2.10.3.4]MW0LGE
+    //   :40415  int halfBw = (int)(radio.GetDSPRX(1, 0).RXFMDeviation + radio.GetDSPRX(1, 0).RXFMHighCut); //[2.10.3.4]MW0LGE
     // Simplex only sets the TX mode enum; it does NOT zero udFMOffset.
     // The repeater offset spinbox retains its value — TX effects are Phase 3M-1.
 

@@ -324,6 +324,8 @@ set(CORE_SOURCES
     src/core/codec/P1CodecAnvelinaPro3.cpp
     src/core/codec/P1CodecRedPitaya.cpp
     src/core/codec/P1CodecHl2.cpp
+    src/core/codec/P2CodecOrionMkII.cpp
+    src/core/codec/P2CodecSaturn.cpp
     src/core/P1RadioConnection.cpp
     src/core/P2RadioConnection.cpp
     src/core/ReceiverManager.cpp
@@ -335,6 +337,15 @@ set(CORE_SOURCES
     src/core/NoiseFloorTracker.cpp
     src/core/ClarityController.cpp
     src/core/StepAttenuatorController.cpp
+    src/core/CalibrationController.cpp
+    src/core/OcMatrix.cpp
+    src/core/RadioStatus.cpp
+    src/core/SettingsHygiene.cpp
+    src/core/IoBoardHl2.cpp
+    src/core/HermesLiteBandwidthMonitor.cpp
+    src/core/accessories/AlexController.cpp
+    src/core/accessories/ApolloController.cpp
+    src/core/accessories/PennyLaneController.cpp
     src/core/audio/MasterMixer.cpp
     src/core/audio/PortAudioBus.cpp
     src/core/audio/VirtualCableDetector.cpp
@@ -479,11 +490,15 @@ set(GUI_SOURCES
     src/gui/setup/HardwarePage.cpp
     src/gui/setup/hardware/RadioInfoTab.cpp
     src/gui/setup/hardware/AntennaAlexTab.cpp
+    src/gui/setup/hardware/AntennaAlexAntennaControlTab.cpp
+    src/gui/setup/hardware/AntennaAlexAlex1Tab.cpp
+    src/gui/setup/hardware/AntennaAlexAlex2Tab.cpp
     src/gui/setup/hardware/OcOutputsTab.cpp
+    src/gui/setup/hardware/OcOutputsHfTab.cpp
     src/gui/setup/hardware/XvtrTab.cpp
     src/gui/setup/hardware/PureSignalTab.cpp
     src/gui/setup/hardware/DiversityTab.cpp
-    src/gui/setup/hardware/PaCalibrationTab.cpp
+    src/gui/setup/hardware/CalibrationTab.cpp
     src/gui/setup/hardware/Hl2IoBoardTab.cpp
     src/gui/setup/hardware/BandwidthMonitorTab.cpp
     src/gui/setup/AudioAdvancedPage.cpp
@@ -499,6 +514,8 @@ set(GUI_SOURCES
     src/gui/setup/CatNetworkSetupPages.cpp
     src/gui/setup/KeyboardSetupPages.cpp
     src/gui/setup/DiagnosticsSetupPages.cpp
+    src/gui/diagnostics/RadioStatusPage.cpp
+    src/gui/diagnostics/DiagnosticsPhaseHPages.cpp
     src/gui/applets/AppletWidget.cpp
     src/gui/applets/NyiOverlay.cpp
     src/gui/applets/AppletPanelWidget.cpp

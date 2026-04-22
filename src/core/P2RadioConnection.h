@@ -139,6 +139,13 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <QVector>
 
 #include <array>
+#include <memory>
+
+#include "codec/IP2Codec.h"
+#include "codec/CodecContext.h"
+
+namespace NereusSDR { class OcMatrix; }              // forward decl — full header in .cpp
+namespace NereusSDR { class CalibrationController; } // forward decl — Phase 3P-G
 
 namespace NereusSDR {
 
@@ -171,13 +178,50 @@ public slots:
     void setMox(bool enabled) override;
     void setAntenna(int antennaIndex) override;
 
+    // Phase 3P-B Task 10: per-ADC RX1 preamp control for OrionMKII family.
+    // Routes to m_rx[1].preamp → CodecContext.p2Rx1Preamp →
+    // P2CodecOrionMkII::composeCmdHighPriority byte 1403 bit 1.
+    // ADC0 preamp uses the existing setPreamp(bool) (byte 1403 bit 0).
+    void setRx1Preamp(bool enabled);
+
+    // Wire RadioModel's OcMatrix so buildCodecContext() can set ctx.ocByte
+    // from maskFor(currentBand, mox).  No P2 codec reads ocByte yet — this
+    // is a symmetric companion to P1 so the field is ready when P2 OC
+    // support lands.  Phase 3P-D Task 3.
+    void setOcMatrix(const OcMatrix* matrix);
+
+    // Wire CalibrationController so hzToPhaseWord() can multiply by
+    // effectiveFreqCorrectionFactor(). When null (default 1.0 behaviour),
+    // the phase word is byte-identical to pre-calibration output.
+    // Phase 3P-G.
+    void setCalibrationController(const CalibrationController* cal);
+
 private slots:
     void onReadyRead();
     void onKeepAliveTick();
     void onReconnectTimeout();
 
 private:
-    // --- Command senders (ported from Thetis network.c) ---
+    // --- Phase 3P-B: per-board codec chosen at connectToRadio() time ---
+    std::unique_ptr<IP2Codec> m_codec;
+    bool m_useLegacyP2Codec{false};
+
+    void selectCodec();
+    CodecContext buildCodecContext() const;
+
+    // Legacy compose paths — preserved for the NEREUS_USE_LEGACY_P2_CODEC rollback flag.
+    void composeCmdGeneralLegacy     (char buf[60])   const;
+    void composeCmdHighPriorityLegacy(char buf[1444]) const;
+    void composeCmdRxLegacy          (char buf[1444]) const;
+    void composeCmdTxLegacy          (char buf[60])   const;
+
+    // --- Command composers (extract buffer-fill logic; sendCmd* calls these then UDP-sends) ---
+    void composeCmdGeneral(char buf[60]) const;               // network.c:821
+    void composeCmdHighPriority(char buf[1444]) const;        // network.c:913  (1444 == kBufLen)
+    void composeCmdRx(char buf[1444]) const;                  // network.c:1066 (1444 == kBufLen)
+    void composeCmdTx(char buf[60]) const;                    // network.c:1181
+
+    // --- Command senders (compose + UDP dispatch) ---
     void sendCmdGeneral();       // network.c:821 → port 1024
     void sendCmdHighPriority();  // network.c:913 → port 1027
     void sendCmdRx();            // network.c:1066 → port 1025
@@ -190,7 +234,7 @@ private:
 
     // From pcap analysis: phase_word = freq_hz * 2^32 / 122880000
     // General cmd byte 37 bit 3 = 1 means radio expects phase words, not Hz.
-    static quint32 hzToPhaseWord(quint64 freqHz);
+    quint32 hzToPhaseWord(quint64 freqHz) const;  // non-static: reads m_calController
 
     // --- Constants from Thetis network.h ---
     static constexpr int kMaxRxStreams = 12;  // network.h:34 MAX_RX_STREAMS
@@ -202,6 +246,20 @@ private:
 
     // --- Board capabilities (set in connectToRadio, used for clamp/dispatch) ---
     const BoardCapabilities* m_caps{nullptr};
+
+    // Non-owning pointer to RadioModel's OcMatrix.  When non-null,
+    // buildCodecContext() fills ctx.ocByte via
+    // m_ocMatrix->maskFor(bandFromFrequency(rx0Hz), m_mox).
+    // No P2 codec reads ocByte yet; the field is populated for symmetry
+    // with P1 so Phase F P2 OC wiring can read it without further changes.
+    // Phase 3P-D Task 3.
+    const OcMatrix* m_ocMatrix{nullptr};
+
+    // Non-owning pointer to RadioModel's CalibrationController.
+    // When non-null, hzToPhaseWord() multiplies by effectiveFreqCorrectionFactor().
+    // Default null → factor 1.0 → byte-identical to pre-cal output.
+    // Phase 3P-G.
+    const CalibrationController* m_calController{nullptr};
 
     // --- Single socket (Thetis listenSock, network.c:67) ---
     QUdpSocket* m_socket{nullptr};
@@ -329,6 +387,53 @@ private:
     // --- I/Q buffers and packet counters ---
     std::array<QVector<float>, kMaxDdc> m_iqBuffers;
     int m_totalIqPackets{0};
+
+#ifdef NEREUS_BUILD_TESTS
+public:
+    // Test-only helpers — allow unit tests to inject board state without a live radio.
+    void setBoardForTest(HPSDRHW board) {
+        m_caps = &BoardCapsTable::forBoard(board);
+        switch (board) {
+            case HPSDRHW::OrionMKII:  m_hardwareProfile.model = HPSDRModel::ORIONMKII; break;
+            case HPSDRHW::Saturn:     m_hardwareProfile.model = HPSDRModel::ANAN_G2;   break;
+            case HPSDRHW::SaturnMKII: m_hardwareProfile.model = HPSDRModel::ANAN_G2;   break;
+            default:                  m_hardwareProfile.model = HPSDRModel::ORIONMKII; break;
+        }
+        m_hardwareProfile.effectiveBoard = board;
+        selectCodec();
+    }
+    // Expose compose methods for regression-freeze capture (Task 1) and gate test (Task 7).
+    void composeCmdGeneralForTest(quint8 buf[60]) const {
+        char tmp[60];
+        memset(tmp, 0, sizeof(tmp));
+        composeCmdGeneral(tmp);
+        memcpy(buf, tmp, 60);
+    }
+    void composeCmdHighPriorityForTest(quint8 buf[kBufLen]) const {
+        char tmp[kBufLen];
+        memset(tmp, 0, sizeof(tmp));
+        composeCmdHighPriority(tmp);
+        memcpy(buf, tmp, kBufLen);
+    }
+    void composeCmdRxForTest(quint8 buf[kBufLen]) const {
+        char tmp[kBufLen];
+        memset(tmp, 0, sizeof(tmp));
+        composeCmdRx(tmp);
+        memcpy(buf, tmp, kBufLen);
+    }
+    void composeCmdTxForTest(quint8 buf[60]) const {
+        char tmp[60];
+        memset(tmp, 0, sizeof(tmp));
+        composeCmdTx(tmp);
+        memcpy(buf, tmp, 60);
+    }
+    // Expose the High-Priority status packet parser so PA-telemetry tests can
+    // feed a hand-crafted 60-byte packet and assert paTelemetryUpdated() emits
+    // the expected raw values.  Phase 3P-H Task 4.
+    void processHighPriorityStatusForTest(const QByteArray& data) {
+        processHighPriorityStatus(data);
+    }
+#endif
 };
 
 } // namespace NereusSDR

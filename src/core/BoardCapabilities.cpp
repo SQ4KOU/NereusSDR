@@ -280,7 +280,18 @@ namespace {
 //   the same way). Atlas max receivers = 7 (P1 hardware limit), though
 //   typically 3 in practice. maxSampleRate = 192k for P1 standard.
 // Firmware floor: none. Thetis NetworkIO.cs has no Atlas firmware check.
-constexpr BoardCapabilities kAtlas = {
+// NOTE: Changed from constexpr to const in Phase 3P-B Task 6 because
+// BoardCapabilities now contains QList<SaturnBpf1Edge> (p2SaturnBpf1Edges),
+// which is not constexpr-compatible.  All board entries follow suit.
+//
+// Phase 3P-F Task 2 (accessories):
+//   hasApollo=false — bare Atlas/Metis kit; HPSDRModel.HPSDR is not in the
+//     RadioModelChanged() switch at setup.cs:19834-20310 [@501e3f5], so no
+//     per-model case fires; chkApolloPresent defaults to disabled.
+//   hasAlex=false — Atlas is the bare board; no Alex physical slot.
+//   hasPennyLane=true — Penny board is Atlas's OC-output companion;
+//     AddHPSDRPages() adds tpPennyCtrl for all HPSDR models (setup.cs:6364).
+const BoardCapabilities kAtlas = {
     .board            = HPSDRHW::Atlas,
     .protocol         = ProtocolVersion::Protocol1,
     .adcCount         = 1,
@@ -301,6 +312,9 @@ constexpr BoardCapabilities kAtlas = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
+    .hasApollo        = false,  // Atlas bare board — no Apollo port
+    .hasAlex          = false,  // Atlas bare board — Alex is external
+    .hasPennyLane     = true,   // Penny is the Atlas OC companion; tpPennyCtrl added for all HPSDR models
     .minFirmwareVersion = 0,
     .knownGoodFirmware  = 0,
     .displayName      = "Atlas / HPSDR kit",
@@ -319,7 +333,14 @@ constexpr BoardCapabilities kAtlas = {
 //   Thetis is HermesII-only (DeviceType == HPSDRHW.HermesII && CodeVersion < 103).
 //   Plain Hermes has no equivalent guard. v15 ("FW v1.5") is a normal
 //   legitimate Hermes firmware that Thetis accepts without complaint.
-constexpr BoardCapabilities kHermes = {
+//
+// Phase 3P-F Task 2 (accessories):
+//   hasApollo=true — HPSDRModel.HERMES is the only case where
+//     chkApolloPresent.Enabled=true (setup.cs:19834 [@501e3f5]).
+//   hasAlex=true — chkAlexPresent.Enabled=true for HERMES (setup.cs:19835).
+//   hasPennyLane=true — tpPennyCtrl added for all HPSDR models; labeled "Hermes Ctrl"
+//     when Model==HERMES (setup.cs:6327-6328 [@501e3f5]).
+const BoardCapabilities kHermes = {
     .board            = HPSDRHW::Hermes,
     .protocol         = ProtocolVersion::Protocol1,
     .adcCount         = 1,
@@ -340,6 +361,9 @@ constexpr BoardCapabilities kHermes = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
+    .hasApollo        = true,   // only board with chkApolloPresent.Enabled=true (setup.cs:19834)
+    .hasAlex          = true,   // chkAlexPresent.Enabled=true (setup.cs:19835)
+    .hasPennyLane     = true,   // tpPennyCtrl always added; labeled "Hermes Ctrl" for this board
     .minFirmwareVersion = 0,   // No Thetis-attested floor for plain Hermes
     .knownGoodFirmware  = 0,   // No Thetis-attested "known good" reference
     .displayName      = "Hermes (ANAN-10/100)",
@@ -355,7 +379,12 @@ constexpr BoardCapabilities kHermes = {
 // Note: Setup.cs:16088-16099 — HermesII is explicitly excluded from the
 //   "Maximum=61" branch; uses standard 0..31 range.
 // TODO(3I-T2): verify maxReceivers=4 vs 7 for HermesII
-constexpr BoardCapabilities kHermesII = {
+//
+// Phase 3P-F Task 2 (accessories):
+//   hasApollo=false — setup.cs:19899 chkApolloPresent.Enabled=false for ANAN10E/100B.
+//   hasAlex=true — chkAlexPresent.Checked=true for ANAN10E/100B (setup.cs:19896-19897).
+//   hasPennyLane=true — tpPennyCtrl added for all HPSDR models (setup.cs:6364).
+const BoardCapabilities kHermesII = {
     .board            = HPSDRHW::HermesII,
     .protocol         = ProtocolVersion::Protocol1,
     .adcCount         = 1,
@@ -376,6 +405,9 @@ constexpr BoardCapabilities kHermesII = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
+    .hasApollo        = false,  // chkApolloPresent.Enabled=false for ANAN10E/100B (setup.cs:19899)
+    .hasAlex          = true,   // chkAlexPresent.Checked=true (setup.cs:19896)
+    .hasPennyLane     = true,   // tpPennyCtrl added for all HPSDR models (setup.cs:6364)
     .minFirmwareVersion = 0,   // floor check removed; see file header
     .knownGoodFirmware  = 0,   // Thetis NetworkIO.cs:138 still rejects <103
                                // for HermesII, but enforcement moved upstream
@@ -391,7 +423,12 @@ constexpr BoardCapabilities kHermesII = {
 // Diversity + PureSignal: yes (2 ADCs, console.cs GetDDC P1 Angelia branch:8680)
 // maxReceivers: 7 (P1 dual-ADC limit, console.cs GetDDC Angelia branch)
 // TODO(3I-T2): verify firmware versions
-constexpr BoardCapabilities kAngelia = {
+//
+// Phase 3P-F Task 2 (accessories):
+//   hasApollo=false — setup.cs:20009-20010 chkApolloPresent.Enabled=false for ANAN100D.
+//   hasAlex=true — chkAlexPresent.Checked=true, Enabled=true (setup.cs:20007-20008).
+//   hasPennyLane=true — tpPennyCtrl added for all HPSDR models (setup.cs:6364).
+const BoardCapabilities kAngelia = {
     .board            = HPSDRHW::Angelia,
     .protocol         = ProtocolVersion::Protocol1,
     .adcCount         = 2,
@@ -412,6 +449,9 @@ constexpr BoardCapabilities kAngelia = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
+    .hasApollo        = false,  // chkApolloPresent.Enabled=false for ANAN100D (setup.cs:20009)
+    .hasAlex          = true,   // chkAlexPresent.Checked=true, Enabled=true (setup.cs:20007)
+    .hasPennyLane     = true,   // tpPennyCtrl added for all HPSDR models (setup.cs:6364)
     .minFirmwareVersion = 0,   // floor check removed; see file header
     .knownGoodFirmware  = 0,
     .displayName      = "ANAN-100D (Angelia)",
@@ -425,7 +465,12 @@ constexpr BoardCapabilities kAngelia = {
 // Preamp: hasBypassAndPreamp=true (50V supply vs 33V for Hermes/Angelia,
 //   clsHardwareSpecific.cs:139 SetADCSupply(0,50))
 // TODO(3I-T2): verify firmware versions
-constexpr BoardCapabilities kOrion = {
+//
+// Phase 3P-F Task 2 (accessories):
+//   hasApollo=false — setup.cs:20059-20060 chkApolloPresent.Enabled=false for ANAN200D.
+//   hasAlex=true — chkAlexPresent.Checked=true, Enabled=true (setup.cs:20057-20058).
+//   hasPennyLane=true — tpPennyCtrl added for all HPSDR models (setup.cs:6364).
+const BoardCapabilities kOrion = {
     .board            = HPSDRHW::Orion,
     .protocol         = ProtocolVersion::Protocol1,
     .adcCount         = 2,
@@ -446,6 +491,9 @@ constexpr BoardCapabilities kOrion = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
+    .hasApollo        = false,  // chkApolloPresent.Enabled=false for ANAN200D (setup.cs:20059)
+    .hasAlex          = true,   // chkAlexPresent.Checked=true, Enabled=true (setup.cs:20057)
+    .hasPennyLane     = true,   // tpPennyCtrl added for all HPSDR models (setup.cs:6364)
     .minFirmwareVersion = 0,   // floor check removed; see file header
     .knownGoodFirmware  = 0,
     .displayName      = "ANAN-200D (Orion)",
@@ -459,7 +507,13 @@ constexpr BoardCapabilities kOrion = {
 // P2 sample rates: 48k/96k/192k/384k/768k/1536k all six (Setup.cs:854).
 // Correction vs plan baseline: maxSampleRate updated to 1536000 (P2 boards)
 // TODO(3I-T2): verify firmware versions for OrionMKII
-constexpr BoardCapabilities kOrionMKII = {
+//
+// Phase 3P-F Task 2 (accessories):
+//   hasApollo=false — setup.cs:20100-20101 chkApolloPresent.Enabled=false for ANAN7000D;
+//     same for ANAN8000D (setup.cs:20151-20152) and ANVELINAPRO3 (setup.cs:20205-20206).
+//   hasAlex=true — chkAlexPresent.Checked=true, Enabled=true (setup.cs:20098-20099 etc).
+//   hasPennyLane=true — tpPennyCtrl added for all HPSDR models (setup.cs:6364).
+const BoardCapabilities kOrionMKII = {
     .board            = HPSDRHW::OrionMKII,
     .protocol         = ProtocolVersion::Protocol2,
     .adcCount         = 2,
@@ -480,8 +534,15 @@ constexpr BoardCapabilities kOrionMKII = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
+    .hasApollo        = false,  // chkApolloPresent.Enabled=false for ANAN7000D/8000D/AnvelinaPro3 (setup.cs:20100)
+    .hasAlex          = true,   // chkAlexPresent.Checked=true, Enabled=true (setup.cs:20098)
+    .hasPennyLane     = true,   // tpPennyCtrl added for all HPSDR models (setup.cs:6364)
     .minFirmwareVersion = 0,   // floor check removed; see file header
     .knownGoodFirmware  = 0,
+    // Phase 3P-B Task 6: OrionMKII family has independent per-ADC preamp control
+    // (ANAN-7000DLE / 8000DLE / AnvelinaPro3). p2SaturnBpf1Edges stays empty
+    // (OrionMKII uses standard Alex HPF/LPF; Saturn BPF1 override is G2/G2-1K only).
+    .p2PreampPerAdc   = true,
     .displayName      = "ANAN-7000DLE/8000DLE (OrionMkII)",
     .sourceCitation   = "network.h:453, enums.cs:395, clsHardwareSpecific.cs:143-190",
 };
@@ -502,7 +563,15 @@ constexpr BoardCapabilities kOrionMKII = {
 //   (IoBoardHl2.cs references sidetone register)
 // maxReceivers: 4 for HL2 (console.cs GetDDC HermesLite branch:8734, same as Hermes)
 // Firmware: HL2 v72+ recommended (mi0bot Thetis-HL2 release notes)
-constexpr BoardCapabilities kHermesLite = {
+//
+// Phase 3P-F Task 2 (accessories):
+//   hasApollo=false — HL2 is not in the RadioModelChanged() switch; no Apollo
+//     port exists on HL2 hardware.
+//   hasAlex=false — HL2 has no Alex board slot; ocOutputCount=0; hasAlexFilters=false.
+//   hasPennyLane=false — HL2 has no OC ext-ctrl outputs (ocOutputCount=0);
+//     AddHPSDRPages() is called for HL2 but the tpPennyCtrl tab is meaningless
+//     without OC pins. HL2 uses IoBoardHl2 for I2C accessory control instead.
+const BoardCapabilities kHermesLite = {
     .board            = HPSDRHW::HermesLite,
     .protocol         = ProtocolVersion::Protocol1,
     .adcCount         = 1,
@@ -525,6 +594,9 @@ constexpr BoardCapabilities kHermesLite = {
     .hasBandwidthMonitor = true,
     .hasIoBoardHl2    = true,
     .hasSidetoneGenerator = true,
+    .hasApollo        = false,  // HL2 has no Apollo port; not in RadioModelChanged() switch
+    .hasAlex          = false,  // HL2 has no Alex board slot (ocOutputCount=0, hasAlexFilters=false)
+    .hasPennyLane     = false,  // HL2 has no OC ext-ctrl; uses IoBoardHl2 for I2C accessories
     .minFirmwareVersion = 0,   // floor check removed; see file header
     .knownGoodFirmware  = 0,
     .displayName      = "Hermes Lite 2",
@@ -540,7 +612,13 @@ constexpr BoardCapabilities kHermesLite = {
 // PSDefaultPeak = 0.6121 for Saturn (clsHardwareSpecific.cs:323-324 P2 switch)
 // Correction vs plan baseline: maxSampleRate updated to 1536000 (P2 board)
 // TODO(3I-T2): verify firmware versions for Saturn/ANAN-G2
-constexpr BoardCapabilities kSaturn = {
+//
+// Phase 3P-F Task 2 (accessories):
+//   hasApollo=false — setup.cs:20203-20206 chkApolloPresent.Enabled=false for ANAN_G2.
+//   hasAlex=true — chkAlexPresent.Checked=true, Enabled=true (setup.cs:20201-20202).
+//   hasPennyLane=true — tpPennyCtrl added for all HPSDR models including G2 (setup.cs:6364).
+//     Tab labeled "OC Control" for non-HERMES boards (setup.cs:6328).
+const BoardCapabilities kSaturn = {
     .board            = HPSDRHW::Saturn,
     .protocol         = ProtocolVersion::Protocol2,
     .adcCount         = 2,
@@ -561,6 +639,9 @@ constexpr BoardCapabilities kSaturn = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
+    .hasApollo        = false,  // chkApolloPresent.Enabled=false for ANAN_G2 (setup.cs:20203)
+    .hasAlex          = true,   // chkAlexPresent.Checked=true, Enabled=true (setup.cs:20201)
+    .hasPennyLane     = true,   // tpPennyCtrl added for all HPSDR models (setup.cs:6364); "OC Control"
     .minFirmwareVersion = 0,   // floor check removed; see file header
     .knownGoodFirmware  = 0,
     .displayName      = "ANAN-G2 (Saturn)",
@@ -573,7 +654,11 @@ constexpr BoardCapabilities kSaturn = {
 // Capabilities identical to Saturn; protocol P2 by derivation from Saturn base.
 // Correction vs plan baseline: maxSampleRate updated to 1536000 (P2 board)
 // TODO(3I-T2): verify SaturnMKII vs Saturn capability differences when hardware ships
-constexpr BoardCapabilities kSaturnMKII = {
+//
+// Phase 3P-F Task 2 (accessories):
+//   Matches ANAN_G2_1K case in Thetis (setup.cs:20254-20257): hasApollo=false,
+//   hasAlex=true, hasPennyLane=true (same as Saturn, derived from ANAN_G2_1K case).
+const BoardCapabilities kSaturnMKII = {
     .board            = HPSDRHW::SaturnMKII,
     .protocol         = ProtocolVersion::Protocol2,
     .adcCount         = 2,
@@ -594,6 +679,9 @@ constexpr BoardCapabilities kSaturnMKII = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
+    .hasApollo        = false,  // chkApolloPresent.Enabled=false for ANAN_G2_1K (setup.cs:20256)
+    .hasAlex          = true,   // chkAlexPresent.Checked=true, Enabled=true (setup.cs:20254)
+    .hasPennyLane     = true,   // tpPennyCtrl added for all HPSDR models (setup.cs:6364); "OC Control"
     .minFirmwareVersion = 0,   // floor check removed; see file header
     .knownGoodFirmware  = 0,
     .displayName      = "ANAN-G2 MkII (SaturnMKII)",
@@ -602,7 +690,7 @@ constexpr BoardCapabilities kSaturnMKII = {
 
 // ─── Unknown (fallback) ─────────────────────────────────────────────────────
 // Safe defaults for unrecognised boards. Used as forBoard() fallback.
-constexpr BoardCapabilities kUnknown = {
+const BoardCapabilities kUnknown = {
     .board            = HPSDRHW::Unknown,
     .protocol         = ProtocolVersion::Protocol1,
     .adcCount         = 1,
@@ -623,13 +711,18 @@ constexpr BoardCapabilities kUnknown = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
+    .hasApollo        = false,  // unknown board — all accessories disabled
+    .hasAlex          = false,
+    .hasPennyLane     = false,
     .minFirmwareVersion = 0,
     .knownGoodFirmware  = 0,
     .displayName      = "Unknown board",
     .sourceCitation   = "fallback — no Thetis source for HPSDRHW::Unknown",
 };
 
-constexpr std::array kTable = {
+// const (not constexpr) because BoardCapabilities contains QList<SaturnBpf1Edge>
+// which is not constexpr-compatible.  Introduced in Phase 3P-B Task 6.
+const std::array<BoardCapabilities, 10> kTable = {
     kAtlas, kHermes, kHermesII, kAngelia, kOrion,
     kOrionMKII, kHermesLite, kSaturn, kSaturnMKII, kUnknown
 };
@@ -657,6 +750,10 @@ std::span<const BoardCapabilities> all() noexcept {
 // From Thetis console.cs:40755-40825 SetComboPreampForHPSDR().
 // PreampMode mapping: 0=Off(-20dB HPSDR), 1=On(0dB), 2=Minus10, 3=Minus20,
 //                     4=Minus30, 5=Minus40, 6=Minus50.
+// Upstream inline attribution preserved verbatim:
+//   :40790  case HPSDRModel.REDPITAYA: // DH1KLM: changed to enable on_off_preamp_settings for OpenHPSDR compat. DIY PA/Filter boards
+//   :40805  // case HPSDRModel.REDPITAYA: // DH1KLM: removed for compatibility reasons
+//   :40813  ... HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
 
 // on_off_preamp_settings = { "0dB", "-20dB" }
 static constexpr PreampItem kOnOff[] = {
@@ -686,10 +783,11 @@ static constexpr PreampItem kOnOffPlusAlex[] = {
     {"-50db", 6},  // PreampMode::Minus50 (ALEX)
 };
 
-// Hermes Lite 2: preamp on only, no bypass/attenuation options.
-static constexpr PreampItem kHl2[] = {
-    {"0dB", 1},  // PreampMode::On
-};
+// Hermes Lite 2: uses anan100d 4-step set (Off / -10 / -20 / -30 dB).
+// HL2 is not in Thetis SetComboPreampForHPSDR (it postdates that switch),
+// but its LNA supports the same 4-level control as the anan100d set.
+// Per spec §8 and mi0bot HL2 LNA design [@c26a8a4].
+// Phase 3P-C Step 2 correction: was 1-item "On only" — updated to anan100d.
 
 // Helper to produce dynamic-extent spans from static arrays.
 template<std::size_t N>
@@ -735,8 +833,10 @@ std::span<const PreampItem> preampItemsForBoard(HPSDRHW hw, bool alexPresent) no
         return items(kAnan100d);
 
     case HPSDRHW::HermesLite:
-        // HL2: preamp on only, no variable attenuation.
-        return items(kHl2);
+        // HL2: anan100d 4-step set (Off / -10 / -20 / -30 dB). Not in Thetis
+        // SetComboPreampForHPSDR switch (HL2 postdates it); uses anan100d set
+        // per spec §8 and mi0bot HL2 LNA design [@c26a8a4]. Phase 3P-C Step 2.
+        return items(kAnan100d);
 
     default:
         return items(kAnan100d);
@@ -746,6 +846,8 @@ std::span<const PreampItem> preampItemsForBoard(HPSDRHW hw, bool alexPresent) no
 std::span<const PreampItem> rx2PreampItemsForBoard(HPSDRHW hw) noexcept
 {
     // From Thetis console.cs:40815 — RX2 always uses either on_off or anan100d.
+    // Upstream inline attribution preserved verbatim (console.cs:40813):
+    //   ... HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
     switch (hw) {
     case HPSDRHW::Angelia:
     case HPSDRHW::Orion:

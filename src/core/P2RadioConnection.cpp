@@ -131,7 +131,12 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 #include "P2RadioConnection.h"
 #include "LogCategories.h"
+#include "OcMatrix.h"
+#include "CalibrationController.h"
 #include "codec/AlexFilterMap.h"
+#include "codec/P2CodecOrionMkII.h"
+#include "codec/P2CodecSaturn.h"
+#include "models/Band.h"
 
 #include <QNetworkDatagram>
 #include <QVariant>
@@ -255,6 +260,9 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
              ? m_hardwareProfile.caps
              : &BoardCapsTable::forBoard(info.boardType);
 
+    // Phase 3P-B Task 7: select per-board codec now that m_caps is available.
+    selectCodec();
+
     // Reset sequence counters
     m_seqGeneral = 0;
     m_seqRx = 0;
@@ -275,6 +283,8 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     //   DDCEnable = DDC2 (bit 2), Rate[2] = rx1_rate
     // This means DDC2 is the primary receiver, not DDC0!
     // From Thetis console.cs:8234-8241
+    // Upstream inline attribution preserved verbatim (console.cs:8238):
+    //   if (p1) Rate[0] = rx1_rate; // [2.10.3.13]MW0LGE p1 !
     m_rx[2].enable = 1;
     m_rx[2].frequency = 3865000;   // 80m LSB — overridden by setReceiverFrequency
     // DDC2 samplingRate is set by setSampleRate() which RadioModel queues
@@ -360,6 +370,8 @@ void P2RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
 
     // Update Alex HPF/LPF based on new frequency
     // From Thetis console.cs:6830-7234 [@501e3f5] — auto-select band filters
+    // Upstream inline attribution preserved verbatim:
+    //   :6830  || (HardwareSpecific.Hardware == HPSDRHW.HermesIII)) //DK1HLM
     double freqMhz = frequencyHz / 1e6;
     m_alex.hpfBits = NereusSDR::codec::alex::computeHpf(freqMhz);
     m_alex.lpfBits = NereusSDR::codec::alex::computeLpf(freqMhz);
@@ -423,6 +435,19 @@ void P2RadioConnection::setPreamp(bool enabled)
 {
     // From Thetis: prn->rx[0].preamp
     m_rx[0].preamp = enabled ? 1 : 0;
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+void P2RadioConnection::setRx1Preamp(bool enabled)
+{
+    // Phase 3P-B Task 10: per-ADC RX1 preamp for OrionMKII family.
+    // Routes to byte 1403 bit 1 in CmdHighPriority via buildCodecContext():
+    //   ctx.p2Rx1Preamp = (m_rx[1].preamp != 0)
+    // P2CodecOrionMkII::composeCmdHighPriority:
+    //   buf[1403] = p2Rx1Preamp << 1 | rxPreamp[0]
+    m_rx[1].preamp = enabled ? 1 : 0;
     if (m_running) {
         sendCmdHighPriority();
     }
@@ -559,15 +584,256 @@ void P2RadioConnection::onReconnectTimeout()
     }
 }
 
-// --- Command Senders ---
-// Each ported byte-for-byte from Thetis CmdGeneral/CmdRx/CmdTx/CmdHighPriority
+// --- Command Composers ---
+// Each fills the packet buffer from current state. sendCmd* calls compose + UDP dispatch.
+// Extracting compose from send allows test seams (composeCmdGeneralForTest etc.) to
+// capture the exact bytes that would be sent, without requiring a live UDP socket.
+
+// ---------------------------------------------------------------------------
+// selectCodec — Phase 3P-B Task 7
+//
+// Builds m_codec from the physical board type. Called from connectToRadio()
+// after m_caps is set, and from setBoardForTest() in unit tests.
+//
+// For P2, codec dispatch is on the physical board (HPSDRHW), not the logical
+// model, because the wire dialect differences (Saturn BPF1 override) are
+// physical-board-specific, unlike P1 where codec dispatch is on HPSDRModel.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::selectCodec()
+{
+    m_codec.reset();
+    m_useLegacyP2Codec = (qEnvironmentVariableIntValue("NEREUS_USE_LEGACY_P2_CODEC") == 1);
+    if (m_useLegacyP2Codec) {
+        qCInfo(lcConnection) << "P2: NEREUS_USE_LEGACY_P2_CODEC=1 — using pre-refactor compose path";
+        return;
+    }
+    if (!m_caps) {
+        qCWarning(lcConnection) << "P2: no caps; codec selection deferred";
+        return;
+    }
+    using HW = HPSDRHW;
+    switch (m_hardwareProfile.effectiveBoard) {
+        case HW::Saturn:
+        case HW::SaturnMKII:
+            m_codec = std::make_unique<P2CodecSaturn>();
+            break;
+        default:
+            m_codec = std::make_unique<P2CodecOrionMkII>();
+            break;
+    }
+    qCInfo(lcConnection) << "P2: selected codec for board"
+                         << int(m_hardwareProfile.effectiveBoard);
+}
+
+// ---------------------------------------------------------------------------
+// setOcMatrix — Phase 3P-D Task 3
+//
+// Symmetric companion to P1RadioConnection::setOcMatrix.  Wires the
+// RadioModel's OcMatrix so buildCodecContext() fills ctx.ocByte from
+// maskFor(currentBand, mox).  No P2 codec reads ocByte yet; the field is
+// populated here so Phase F P2 OC wiring can consume it without further
+// changes to this class.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setOcMatrix(const OcMatrix* matrix)
+{
+    m_ocMatrix = matrix;
+}
+
+// ---------------------------------------------------------------------------
+// setCalibrationController — Phase 3P-G
+//
+// Wires RadioModel's CalibrationController so hzToPhaseWord() multiplies
+// by effectiveFreqCorrectionFactor(). When null, factor defaults to 1.0
+// and output is byte-identical to pre-calibration.
+//
+// Source: HPSDR/NetworkIO.cs:227-249 FreqCorrectionFactor property,
+//   Freq2PhaseWord(): long pw = (long)Math.Pow(2, 32) * freq / 122880000
+//   (correction factor applied before Freq2PhaseWord in Thetis via the
+//   VFOfreq → SetVFOfreq → Freq2PhaseWord chain) [@501e3f5]
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setCalibrationController(const CalibrationController* cal)
+{
+    m_calController = cal;
+}
+
+// ---------------------------------------------------------------------------
+// buildCodecContext — Phase 3P-B Task 7
+//
+// Snapshots all live P2RadioConnection state into a CodecContext so the
+// codec compose methods are pure functions of (ctx × packet-type).
+// ---------------------------------------------------------------------------
+CodecContext P2RadioConnection::buildCodecContext() const
+{
+    CodecContext ctx;
+
+    // Run/PTT state
+    ctx.p2Running  = m_running;
+    ctx.p2PttOut   = m_tx[0].pttOut;
+    ctx.p2Cwx      = m_tx[0].cwx;
+    ctx.p2Dot      = m_tx[0].dot;
+    ctx.p2Dash     = m_tx[0].dash;
+
+    // ADC / DAC counts
+    ctx.p2NumAdc   = m_numAdc;
+    ctx.p2NumDac   = m_numDac;
+
+    // Per-ADC dither + random
+    for (int i = 0; i < 3; ++i) {
+        ctx.dither[i] = (m_adc[i].dither != 0);
+        ctx.random[i] = (m_adc[i].random != 0);
+    }
+
+    // Per-ADC step attenuators
+    for (int i = 0; i < 3; ++i) {
+        ctx.rxStepAttn[i] = m_adc[i].rxStepAttn;
+        ctx.txStepAttn[i] = m_adc[i].txStepAttn;
+    }
+
+    // Per-RX preamp (index 0 = RX1 preamp at byte 1403 bit 0,
+    // m_rx[1].preamp = RX2 preamp at byte 1403 bit 1)
+    ctx.rxPreamp[0]  = (m_rx[0].preamp != 0);
+    ctx.p2Rx1Preamp  = (m_rx[1].preamp != 0);  // "Mercury Attenuator" byte bit 1
+
+    // RX per-DDC state (up to 7 DDCs)
+    for (int i = 0; i < 7; ++i) {
+        ctx.p2RxEnable[i]      = m_rx[i].enable;
+        ctx.p2RxAdcAssign[i]   = m_rx[i].rxAdc;
+        ctx.p2RxSamplingRate[i]= m_rx[i].samplingRate;
+        ctx.p2RxBitDepth[i]    = m_rx[i].bitDepth;
+        ctx.rxFreqHz[i]        = static_cast<quint64>(m_rx[i].frequency);
+    }
+    ctx.p2RxSync = m_rx[0].sync;
+
+    // TX frequency + drive + PA + sampling rate + phase shift
+    ctx.txFreqHz         = static_cast<quint64>(m_tx[0].frequency);
+    ctx.p2DriveLevel     = m_tx[0].driveLevel;
+    ctx.p2TxPa           = m_tx[0].pa;
+    ctx.p2TxSamplingRate = m_tx[0].samplingRate;
+    ctx.p2TxPhaseShift   = m_tx[0].phaseShift;
+
+    // CW state
+    ctx.p2CwModeControl   = m_cw.modeControl;
+    ctx.p2CwSidetoneLevel = m_cw.sidetoneLevel;
+    ctx.p2CwSidetoneFreq  = m_cw.sidetoneFreq;
+    ctx.p2CwKeyerSpeed    = m_cw.keyerSpeed;
+    ctx.p2CwKeyerWeight   = m_cw.keyerWeight;
+    ctx.p2CwHangDelay     = m_cw.hangDelay;
+    ctx.p2CwRfDelay       = m_cw.rfDelay;
+    ctx.p2CwEdgeLength    = m_cw.edgeLength;
+
+    // Mic state
+    ctx.p2MicControl    = m_mic.micControl;
+    ctx.p2MicLineInGain = m_mic.lineInGain;
+
+    // Alex antenna selection (1-based)
+    ctx.p2AlexRxAnt = m_alex.rxAnt;
+    ctx.p2AlexTxAnt = m_alex.txAnt;
+
+    // Alex HPF / LPF bits (recomputed by setReceiverFrequency on freq change)
+    ctx.alexHpfBits = static_cast<quint8>(m_alex.hpfBits);
+    ctx.alexLpfBits = static_cast<quint8>(m_alex.lpfBits);
+
+    // Port / wideband config
+    ctx.p2CustomPortBase     = m_p2CustomPortBase;
+    ctx.p2WbSamplesPerPacket = m_wbSamplesPerPacket;
+    ctx.p2WbSampleSize       = m_wbSampleSize;
+    ctx.p2WbUpdateRate       = m_wbUpdateRate;
+    ctx.p2WbPacketsPerFrame  = m_wbPacketsPerFrame;
+
+    // Watchdog timer
+    ctx.p2Wdt = m_wdt;
+
+    // Frequency-correction factor — Phase 3P-G. Source: setup.cs:14036-14050.
+    // Codec uses this in hzToPhaseWord() so calibration UI changes propagate
+    // through the codec cutover path; default 1.0 when no controller wired.
+    ctx.freqCorrectionFactor = m_calController
+                               ? m_calController->effectiveFreqCorrectionFactor()
+                               : 1.0;
+
+    // Saturn BPF1 override bits — left at default 0 until Phase F
+    // configures them via user-entered band-edge table.
+    ctx.p2SaturnBpfHpfBits = 0;
+    ctx.p2SaturnBpfLpfBits = 0;
+
+    // OC output byte — sourced from OcMatrix when wired; legacy 0 otherwise.
+    // No P2 codec reads ctx.ocByte yet; populated here symmetrically with P1
+    // so Phase F P2 OC wiring can consume it without further changes.
+    // Phase 3P-D Task 3 — From Thetis HPSDR/Penny.cs:117-132 [@501e3f5]
+    if (m_ocMatrix) {
+        const quint64 rx0Hz = static_cast<quint64>(m_rx[0].frequency);
+        const Band currentBand = bandFromFrequency(static_cast<double>(rx0Hz));
+        ctx.ocByte = m_ocMatrix->maskFor(currentBand, m_tx[0].pttOut != 0);
+    } else {
+        ctx.ocByte = 0;
+    }
+
+    return ctx;
+}
+
+// ---------------------------------------------------------------------------
+// composeCmd* wrappers — Phase 3P-B Task 7
+//
+// Each wrapper delegates to the per-board codec (m_codec) unless the
+// NEREUS_USE_LEGACY_P2_CODEC=1 env-var is set (rollback hatch).
+// Legacy compose bodies are preserved as composeCmd*Legacy for one release.
+// ---------------------------------------------------------------------------
+
+void P2RadioConnection::composeCmdGeneral(char buf[60]) const
+{
+    if (m_useLegacyP2Codec || !m_codec) {
+        composeCmdGeneralLegacy(buf);
+        return;
+    }
+    const CodecContext ctx = buildCodecContext();
+    quint8 tmp[60] = {};
+    m_codec->composeCmdGeneral(ctx, tmp);
+    memcpy(buf, tmp, 60);
+}
+
+void P2RadioConnection::composeCmdHighPriority(char buf[kBufLen]) const
+{
+    if (m_useLegacyP2Codec || !m_codec) {
+        composeCmdHighPriorityLegacy(buf);
+        return;
+    }
+    const CodecContext ctx = buildCodecContext();
+    quint8 tmp[kBufLen] = {};
+    m_codec->composeCmdHighPriority(ctx, tmp);
+    memcpy(buf, tmp, kBufLen);
+}
+
+void P2RadioConnection::composeCmdRx(char buf[kBufLen]) const
+{
+    if (m_useLegacyP2Codec || !m_codec) {
+        composeCmdRxLegacy(buf);
+        return;
+    }
+    const CodecContext ctx = buildCodecContext();
+    quint8 tmp[kBufLen] = {};
+    m_codec->composeCmdRx(ctx, tmp);
+    memcpy(buf, tmp, kBufLen);
+}
+
+void P2RadioConnection::composeCmdTx(char buf[60]) const
+{
+    if (m_useLegacyP2Codec || !m_codec) {
+        composeCmdTxLegacy(buf);
+        return;
+    }
+    const CodecContext ctx = buildCodecContext();
+    quint8 tmp[60] = {};
+    m_codec->composeCmdTx(ctx, tmp);
+    memcpy(buf, tmp, 60);
+}
+
+// ---------------------------------------------------------------------------
+// Legacy compose implementations — preserved for NEREUS_USE_LEGACY_P2_CODEC
+// rollback hatch. These are byte-for-byte the pre-Task-7 bodies.
+// ---------------------------------------------------------------------------
 
 // Porting from Thetis CmdGeneral() network.c:821-911
-void P2RadioConnection::sendCmdGeneral()
+void P2RadioConnection::composeCmdGeneralLegacy(char buf[60]) const
 {
-    char buf[60];
-    memset(buf, 0, sizeof(buf));
-
     // From Thetis network.c:826
     buf[4] = 0x00;  // Command
 
@@ -621,25 +887,14 @@ void P2RadioConnection::sendCmdGeneral()
     // prbpfilter->enable | prbpfilter2->enable
     buf[59] = 0x03;  // Enable both Alex0 and Alex1
 
-    // Sequence number (bytes 0-3 big-endian)
-    // From Thetis sendPacket — seq is in the packet buffer
-    writeBE32(buf, 0, m_seqGeneral++);
-
-    // From Thetis network.c:910
-    // sendPacket(listenSock, packetbuf, sizeof(packetbuf), prn->base_outbound_port);
-    QByteArray pkt(buf, sizeof(buf));
-    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort);
+    // Note: sequence number NOT written here — sendCmdGeneral() stamps it just
+    // before transmission so composeCmdGeneralForTest() captures a deterministic
+    // zero-sequence snapshot for regression baseline purposes.
 }
 
 // Porting from Thetis CmdHighPriority() network.c:913-1063
-void P2RadioConnection::sendCmdHighPriority()
+void P2RadioConnection::composeCmdHighPriorityLegacy(char buf[kBufLen]) const
 {
-    char buf[kBufLen];
-    memset(buf, 0, sizeof(buf));
-
-    // Sequence number
-    writeBE32(buf, 0, m_seqHighPri++);
-
     // From Thetis network.c:924-925
     // packetbuf[4] = (prn->tx[0].ptt_out << 1 | prn->run) & 0xff;
     buf[4] = (m_tx[0].pttOut << 1 | (m_running ? 1 : 0)) & 0xff;
@@ -679,21 +934,11 @@ void P2RadioConnection::sendCmdHighPriority()
     // Alex1 (bytes 1428-1431): TX antenna + HPF + LPF
     writeBE32(buf, 1432, buildAlex0());
     writeBE32(buf, 1428, buildAlex1());
-
-    // From Thetis network.c:1062
-    // sendPacket(listenSock, packetbuf, BUFLEN, prn->base_outbound_port + 3);
-    QByteArray pkt(buf, sizeof(buf));
-    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 3);
 }
 
 // Porting from Thetis CmdRx() network.c:1066-1179
-void P2RadioConnection::sendCmdRx()
+void P2RadioConnection::composeCmdRxLegacy(char buf[kBufLen]) const
 {
-    char buf[kBufLen];
-    memset(buf, 0, sizeof(buf));
-
-    writeBE32(buf, 0, m_seqRx++);
-
     // From Thetis network.c:1074
     buf[4] = m_numAdc;
 
@@ -722,20 +967,11 @@ void P2RadioConnection::sendCmdRx()
 
     // From Thetis network.c:1172
     buf[1363] = m_rx[0].sync;
-
-    // From Thetis network.c:1178
-    QByteArray pkt(buf, sizeof(buf));
-    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 1);
 }
 
 // Porting from Thetis CmdTx() network.c:1181-1248
-void P2RadioConnection::sendCmdTx()
+void P2RadioConnection::composeCmdTxLegacy(char buf[60]) const
 {
-    char buf[60];
-    memset(buf, 0, sizeof(buf));
-
-    writeBE32(buf, 0, m_seqTx++);
-
     // From Thetis network.c:1188
     buf[4] = m_numDac;
 
@@ -773,7 +1009,52 @@ void P2RadioConnection::sendCmdTx()
     buf[57] = m_adc[2].txStepAttn;
     buf[58] = m_adc[1].txStepAttn;
     buf[59] = m_adc[0].txStepAttn;
+}
 
+// --- Command Senders (compose + UDP dispatch) ---
+
+void P2RadioConnection::sendCmdGeneral()
+{
+    char buf[60];
+    memset(buf, 0, sizeof(buf));
+    // Stamp sequence number before compose so wire bytes include it.
+    writeBE32(buf, 0, m_seqGeneral++);
+    composeCmdGeneral(buf);
+    // From Thetis network.c:910
+    // sendPacket(listenSock, packetbuf, sizeof(packetbuf), prn->base_outbound_port);
+    QByteArray pkt(buf, sizeof(buf));
+    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort);
+}
+
+void P2RadioConnection::sendCmdHighPriority()
+{
+    char buf[kBufLen];
+    memset(buf, 0, sizeof(buf));
+    writeBE32(buf, 0, m_seqHighPri++);
+    composeCmdHighPriority(buf);
+    // From Thetis network.c:1062
+    // sendPacket(listenSock, packetbuf, BUFLEN, prn->base_outbound_port + 3);
+    QByteArray pkt(buf, sizeof(buf));
+    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 3);
+}
+
+void P2RadioConnection::sendCmdRx()
+{
+    char buf[kBufLen];
+    memset(buf, 0, sizeof(buf));
+    writeBE32(buf, 0, m_seqRx++);
+    composeCmdRx(buf);
+    // From Thetis network.c:1178
+    QByteArray pkt(buf, sizeof(buf));
+    m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 1);
+}
+
+void P2RadioConnection::sendCmdTx()
+{
+    char buf[60];
+    memset(buf, 0, sizeof(buf));
+    writeBE32(buf, 0, m_seqTx++);
+    composeCmdTx(buf);
     // From Thetis network.c:1247
     QByteArray pkt(buf, sizeof(buf));
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 2);
@@ -876,6 +1157,54 @@ void P2RadioConnection::processHighPriorityStatus(const QByteArray& data)
         }
     }
 
+    // Phase 3P-H Task 4: PA telemetry — extract raw 16-bit ADC counts from
+    // the High-Priority status packet body.  Per-board scaling lives in
+    // RadioModel (console.cs computeAlexFwdPower / computeRefPower /
+    // convertToVolts / convertToAmps), since bridge_volt / refvoltage /
+    // adc_cal_offset depend on HardwareSpecific.Model.
+    //
+    // The 4-byte sequence number sits at raw[0..3]; the status payload
+    // (matching Thetis's prn->ReadBufp[0..]) starts at raw[4].  Indices below
+    // are relative to the Thetis ReadBufp pointer; we add 3 to land in raw[].
+    //
+    // From Thetis network.c:711-748 [@501e3f5]:
+    // Upstream inline attribution preserved verbatim (network.c:708):
+    //   prn->adc[i].adc_overload = prn->adc[i].adc_overload || (((prn->ReadBufp[1] >> i) & 0x1) != 0); // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+    //   //Bytes 2,3      Exciter Power [15:0]     * 12 bits sign extended to 16
+    //   //Bytes 10,11    FWD Power [15:0]           ditto
+    //   //Bytes 18,19    REV Power [15:0]           ditto
+    //   prn->tx[0].exciter_power = prn->ReadBufp[2]  << 8 | prn->ReadBufp[3];
+    //   prn->tx[0].fwd_power     = prn->ReadBufp[10] << 8 | prn->ReadBufp[11];
+    //   prn->tx[0].rev_power     = prn->ReadBufp[18] << 8 | prn->ReadBufp[19];
+    //   //Bytes 45,46  Supply Volts [15:0]
+    //   prn->supply_volts        = prn->ReadBufp[45] << 8 | prn->ReadBufp[46];
+    //   //Bytes 51,52  User ADC1 [15:0]
+    //   //Bytes 53,54  User ADC0 [15:0]
+    //   prn->user_adc1           = prn->ReadBufp[51] << 8 | prn->ReadBufp[52];  // AIN4
+    //   prn->user_adc0           = prn->ReadBufp[53] << 8 | prn->ReadBufp[54];  // AIN3
+    //
+    // The High-Priority status packet body must be at least 55 bytes for the
+    // user_adc0 read (offset 53-54 from the ReadBufp base = data.size() ≥ 4 + 55).
+    // Defensive: skip telemetry emit on truncated packets.
+    if (data.size() >= 4 + 55) {
+        // ReadBufp[N] → raw[N + 4] (account for 4-byte sequence prefix).
+        // From Thetis network.c:714 [@501e3f5] — exciter AIN5
+        const quint16 exciterRaw  = static_cast<quint16>((raw[ 4 +  2] << 8) | raw[ 4 +  3]);
+        // From Thetis network.c:715 [@501e3f5] — fwd AIN1
+        const quint16 fwdRaw      = static_cast<quint16>((raw[ 4 + 10] << 8) | raw[ 4 + 11]);
+        // From Thetis network.c:716 [@501e3f5] — rev AIN2
+        const quint16 revRaw      = static_cast<quint16>((raw[ 4 + 18] << 8) | raw[ 4 + 19]);
+        // From Thetis network.c:738 [@501e3f5] — supply_volts
+        const quint16 supplyRaw   = static_cast<quint16>((raw[ 4 + 45] << 8) | raw[ 4 + 46]);
+        // From Thetis network.c:746 [@501e3f5] — user_adc1 AIN4 PA Amps
+        const quint16 userAdc1Raw = static_cast<quint16>((raw[ 4 + 51] << 8) | raw[ 4 + 52]);
+        // From Thetis network.c:747 [@501e3f5] — user_adc0 AIN3 PA Volts
+        const quint16 userAdc0Raw = static_cast<quint16>((raw[ 4 + 53] << 8) | raw[ 4 + 54]);
+
+        emit paTelemetryUpdated(fwdRaw, revRaw, exciterRaw,
+                                userAdc0Raw, userAdc1Raw, supplyRaw);
+    }
+
     emit meterDataReceived(0.0f, 0.0f, 0.0f, 0.0f);
 }
 
@@ -901,10 +1230,30 @@ void P2RadioConnection::writeBE32(char* buf, int offset, quint32 value)
 // From pcap analysis: phase_word = freq_hz * 2^32 / 122880000
 // The ANAN-G2 clock is 122.88 MHz. Phase word mode (General byte 37 bit 3)
 // tells the radio to interpret frequency fields as NCO phase increments.
-quint32 P2RadioConnection::hzToPhaseWord(quint64 freqHz)
+//
+// Phase 3P-G: multiplied by CalibrationController::effectiveFreqCorrectionFactor()
+// when a controller is wired.  Default factor 1.0 → byte-identical to pre-cal.
+//
+// Source: HPSDR/NetworkIO.cs:251-254 Freq2PhaseWord():
+//   long pw = (long)Math.Pow(2, 32) * freq / 122880000;
+//   (Thetis applies FreqCorrectionFactor to the freq argument via VFOfreq()
+//   before calling Freq2PhaseWord — we fold the factor into this helper.)
+//   [@501e3f5]
+quint32 P2RadioConnection::hzToPhaseWord(quint64 freqHz) const
 {
+    // Apply frequency correction factor if a CalibrationController is wired.
+    // Source: setup.cs:14036-14050 udHPSDRFreqCorrectFactor_ValueChanged:
+    //   NetworkIO.FreqCorrectionFactor = (double)udHPSDRFreqCorrectFactor.Value;
+    //   (factor sent from setup to NetworkIO; NereusSDR folds it here instead)
+    //   [@501e3f5]
+    const double factor = m_calController
+                          ? m_calController->effectiveFreqCorrectionFactor()
+                          : 1.0;
+    // Use floating-point for the correction, then convert to quint32.
+    // When factor == 1.0, the result is byte-identical to the pre-cal formula.
     // Use 64-bit math to avoid overflow: freq * 2^32 / 122880000
-    return static_cast<quint32>((freqHz * 4294967296ULL) / 122880000ULL);
+    const double correctedHz = static_cast<double>(freqHz) * factor;
+    return static_cast<quint32>((correctedHz * 4294967296.0) / 122880000.0);
 }
 
 // Build Alex0 32-bit register (bytes 1432-1435 in CmdHighPriority).

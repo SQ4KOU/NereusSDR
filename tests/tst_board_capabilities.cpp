@@ -1,3 +1,4 @@
+// no-port-check: test fixture asserting BoardCapabilities per-board fields against Thetis source rules
 #include <QtTest/QtTest>
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
@@ -131,6 +132,70 @@ private slots:
         QVERIFY(caps.hasDiversityReceiver);
         QVERIFY(caps.hasPureSignal);
         QCOMPARE(caps.adcCount, 2);
+    }
+
+    // Phase 3P-B Task 6: P2-specific capability fields
+    void saturn_has_p2_fields_default() {
+        const auto& caps = BoardCapsTable::forBoard(HPSDRHW::Saturn);
+        QVERIFY(!caps.p2PreampPerAdc);  // Saturn is single-ADC at the wire layer
+        QVERIFY(caps.p2SaturnBpf1Edges.isEmpty());  // user populates via Setup
+    }
+
+    void orionmkii_has_p2_per_adc_preamp() {
+        const auto& caps = BoardCapsTable::forBoard(HPSDRHW::OrionMKII);
+        QVERIFY(caps.p2PreampPerAdc);  // OrionMKII family supports per-ADC preamp
+    }
+
+    void hl2_no_p2_fields() {
+        // HL2 is P1-only — p2PreampPerAdc default false, no Saturn BPF1
+        const auto& caps = BoardCapsTable::forBoard(HPSDRHW::HermesLite);
+        QVERIFY(!caps.p2PreampPerAdc);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3P-F Task 2: accessory board capability gating
+    // Source: setup.cs:19834-20310 RadioModelChanged() per-model if-ladder [@501e3f5]
+    //         setup.cs:6338 AddHPSDRPages() for tpPennyCtrl / tpAlexControl visibility
+    // Upstream inline attribution preserved verbatim:
+    //   setup.cs:19855  if (initializing) return; // forceallevents will call this  // [2.10.1.0] MW0LGE renabled
+    //   setup.cs:19904  case HPSDRModel.ANAN_G1: //N1GP G1 added
+    //   setup.cs:20202  case HPSDRModel.ANAN_G2:                 // added G8NJJ
+    //   setup.cs:20253  case HPSDRModel.ANAN_G2_1K:              // added G8NJJ
+    // -----------------------------------------------------------------------
+
+    // Only HPSDRModel.HERMES enables chkApolloPresent; all ANAN family boards
+    // set chkApolloPresent.Enabled=false + Checked=false.
+    void hermes_has_apollo() {
+        const auto& caps = BoardCapsTable::forBoard(HPSDRHW::Hermes);
+        QVERIFY(caps.hasApollo);
+        QVERIFY(caps.hasAlex);
+        QVERIFY(caps.hasPennyLane);
+    }
+
+    // HL2 has no Alex slot, no Penny/OC ext-ctrl, no Apollo port.
+    void hl2_no_apollo_no_alex_no_penny() {
+        const auto& caps = BoardCapsTable::forBoard(HPSDRHW::HermesLite);
+        QVERIFY(!caps.hasApollo);
+        QVERIFY(!caps.hasAlex);
+        QVERIFY(!caps.hasPennyLane);
+    }
+
+    // ANAN-100D (Angelia): Apollo disabled (setup.cs:20009), Alex enabled (setup.cs:20007),
+    // PennyLane/OC Control tab present (setup.cs:6364).
+    void angelia_no_apollo_has_alex_has_penny() {
+        const auto& caps = BoardCapsTable::forBoard(HPSDRHW::Angelia);
+        QVERIFY(!caps.hasApollo);
+        QVERIFY(caps.hasAlex);
+        QVERIFY(caps.hasPennyLane);
+    }
+
+    // ANAN-G2 (Saturn): Apollo disabled (setup.cs:20203), Alex enabled (setup.cs:20201),
+    // PennyLane/OC Control tab present for all HPSDR boards (setup.cs:6364).
+    void saturn_no_apollo_has_alex_has_penny() {
+        const auto& caps = BoardCapsTable::forBoard(HPSDRHW::Saturn);
+        QVERIFY(!caps.hasApollo);
+        QVERIFY(caps.hasAlex);
+        QVERIFY(caps.hasPennyLane);
     }
 };
 

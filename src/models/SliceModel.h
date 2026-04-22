@@ -564,6 +564,8 @@ private:
     int      m_fmOffsetHz{0};           // Neutral default — zero offset
     FmTxMode m_fmTxMode{FmTxMode::Simplex};  // From Thetis console.cs:20873 — current_fm_tx_mode = FMTXMode.Simplex
     bool     m_fmReverse{false};        // Neutral default — normal direction
+    // Upstream inline attribution preserved verbatim:
+    //   console.cs:14669  //reset preset filter's center frequency - W4TME
     int      m_diglOffsetHz{0};         // From Thetis console.cs:14672 — DIGLClickTuneOffset default 0 Hz
     int      m_diguOffsetHz{0};         // From Thetis console.cs:14637 — DIGUClickTuneOffset default 0 Hz
     int    m_rttyMarkHz{2295};        // From Thetis setup.designer.cs:40635 — tooltip "RTTY MARK frequency" on udDSPRX1DollyF1; value 2295 (line 40637). F0=2125 is SPACE (line 40665).
