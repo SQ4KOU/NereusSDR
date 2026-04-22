@@ -433,6 +433,13 @@ signals:
     void centerChanged(double centerHz);
     // Emitted when user scrolls to change bandwidth
     void bandwidthChangeRequested(double newBandwidthHz);
+
+    // Emitted when user-visible dBm range changes via the scale strip
+    // (arrow click, drag-pan on strip body, wheel zoom). Args are the
+    // new floor (min) and ceiling (max) in dBm.
+    // From AetherSDR SpectrumWidget.cpp:1734 [@0cd4559]
+    void dbmRangeChangeRequested(float minDbm, float maxDbm);
+
     // Emitted when CTUN mode changes
     void ctunEnabledChanged(bool enabled);
 

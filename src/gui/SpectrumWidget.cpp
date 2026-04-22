@@ -1975,13 +1975,35 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
         return;
     }
 
-    // 1. dBm scale strip — drag to adjust ref level.
-    // Strip lives on the right edge per AetherSDR convention.
-    // From AetherSDR SpectrumWidget.cpp:1712-1745 [@0cd4559]
+    // 1. dBm scale strip — right edge. Arrow row adjusts ref level,
+    // body is drag-pan. From AetherSDR SpectrumWidget.cpp:1712-1745 [@0cd4559]
     const int stripX = width() - kDbmStripW;
     if (mx >= stripX && my < specH) {
-        // Arrow-click and wheel interactions land in Task 4 / Task 6.
-        // For now, below the arrow row becomes a drag-pan as before.
+        const QRect specRect_(0, 0, width() - kDbmStripW, specH);
+        const QRect strip    = NereusSDR::DbmStrip::stripRect(specRect_, kDbmStripW);
+        const QRect arrowRow = NereusSDR::DbmStrip::arrowRowRect(strip, kDbmArrowH);
+
+        if (arrowRow.contains(mx, my)) {
+            const int hit = NereusSDR::DbmStrip::arrowHit(mx, arrowRow);
+            const float bottom = m_refLevel - m_dynamicRange;
+            if (hit == 0) {
+                // Up arrow: raise ref level by 10 dB, keep bottom fixed
+                m_refLevel += 10.0f;
+            } else if (hit == 1) {
+                // Down arrow: lower ref level by 10 dB, keep bottom fixed
+                m_refLevel -= 10.0f;
+            }
+            m_dynamicRange = m_refLevel - bottom;
+            if (m_dynamicRange < 10.0f) {
+                m_dynamicRange = 10.0f;
+                m_refLevel = bottom + m_dynamicRange;
+            }
+            emit dbmRangeChangeRequested(m_refLevel - m_dynamicRange, m_refLevel);
+            update();
+            return;
+        }
+
+        // Below arrows: start drag-pan (existing behavior)
         m_draggingDbm = true;
         m_dragStartY = my;
         m_dragStartRef = m_refLevel;
@@ -2216,7 +2238,12 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* event)
             }
         }
 
-        // Persist display settings after drag adjustments
+        // Persist display settings after drag adjustments.
+        // Also emit range-change for observers (MainWindow, tests).
+        // From AetherSDR SpectrumWidget.cpp:2115 [@0cd4559]
+        if (m_draggingDbm) {
+            emit dbmRangeChangeRequested(m_refLevel - m_dynamicRange, m_refLevel);
+        }
         if (m_draggingDbm || m_draggingDivider) {
             scheduleSettingsSave();
         }
