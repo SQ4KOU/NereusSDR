@@ -536,4 +536,13 @@ target_compile_definitions(tst_oc_outputs_live_pins PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_hl2_live_polling)
 target_compile_definitions(tst_hl2_live_polling PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3P-I-a T21: widget-level capability gating ──────────────────────────
+# Verifies that setBoardCapabilities() on VfoWidget and RxApplet actually
+# hides / shows the m_rxAntBtn / m_txAntBtn children based on
+# caps.hasAlex + antennaInputCount. Coupled to the setObjectName calls in
+# those widgets — the test relies on findChild<QPushButton*>(name) and
+# will FAIL LOUDLY if the objectName strings drift.
+nereus_add_test(tst_ui_capability_gating)
+target_compile_definitions(tst_ui_capability_gating PRIVATE NEREUS_BUILD_TESTS)
+
 

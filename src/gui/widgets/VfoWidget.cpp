@@ -410,6 +410,7 @@ void VfoWidget::buildHeaderRow()
 
     // RX antenna button (blue)
     m_rxAntBtn = new QPushButton(QStringLiteral("ANT1"), this);
+    m_rxAntBtn->setObjectName(QStringLiteral("m_rxAntBtn"));
     m_rxAntBtn->setStyleSheet(QString(kFlatBtn) +
         QStringLiteral("QPushButton { color: #4488ff; }"));
     m_rxAntBtn->setFixedHeight(18);
@@ -434,6 +435,7 @@ void VfoWidget::buildHeaderRow()
 
     // TX antenna button (red)
     m_txAntBtn = new QPushButton(QStringLiteral("ANT1"), this);
+    m_txAntBtn->setObjectName(QStringLiteral("m_txAntBtn"));
     m_txAntBtn->setStyleSheet(QString(kFlatBtn) +
         QStringLiteral("QPushButton { color: #ff4444; }"));
     m_txAntBtn->setFixedHeight(18);
