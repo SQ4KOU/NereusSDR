@@ -55,6 +55,31 @@
   no `currentTextChanged` handler — zombie controls. Wired through
   slice 0 via the same pattern as the VAX Ch combo with
   `m_updatingFromModel` echo guard. (Phase 3P-I-a)
+- **Initial `CmdHighPriority` packet on P2 connect sent a DDC frequency
+  that didn't match the HPF/LPF bits.** `P2RadioConnection::connectToRadio`
+  unconditionally reset `m_rx[2].frequency` to 3865000 (80m LSB) after
+  `RadioModel` had queued `setReceiverFrequency` with the persisted
+  VFO. Worker-thread FIFO order made the hardcoded seed overwrite
+  the real value, so the first packet told the radio to tune DDC2 to
+  80m while enabling 13 MHz HPF. Audio stayed silent until the user
+  moved the panadapter (which fired a fresh `setReceiverFrequency`
+  with `running=true`). Fixed by only seeding the default when
+  `m_rx[2].frequency == 0`. Caught on ANAN-G2 (Saturn) bench testing
+  by KG4VCF. (Phase 3P-I-a follow-up)
+- **Band-crossing reapplied the wire antenna but kept the old UI label.**
+  T10's `SliceModel::frequencyChanged` → `applyAlexAntennaForBand`
+  path was missing the `refreshAntennasFromAlex` call that T9 had —
+  so the relay switched but the VFO Flag / RxApplet buttons showed
+  the previous band's antenna. Fixed + regression test
+  `band_crossing_refreshes_slice_labels`. (Phase 3P-I-a follow-up)
+- **`AlexController` per-band antenna selection didn't persist across
+  app restart.** `AlexController::save()` had zero production call
+  sites — only tests invoked it. User would pick ANT2 on 20m, quit,
+  relaunch, and see ANT1 again. Hooked `antennaChanged` +
+  `blockTxChanged` into the existing `scheduleSettingsSave()`
+  coalescer via an `m_alexControllerDirty` flag so the 14-per-band
+  emit burst during `load()` collapses to a single write. Also
+  flushes on `teardownConnection()`. (Phase 3P-I-a follow-up)
 
 ### Changed
 - VFO Flag, RxApplet, and SpectrumOverlayPanel antenna UI hidden on
