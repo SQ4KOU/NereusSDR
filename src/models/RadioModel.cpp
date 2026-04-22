@@ -273,8 +273,9 @@ namespace {
 //   if (volts < 0) volts = 0;
 //   float watts = Math.Pow(volts, 2) / bridge_volt;
 //
-// Upstream inline attribution preserved verbatim (console.cs:25038):
-//   case HPSDRModel.REDPITAYA: //DH1KLM
+// Upstream inline attribution preserved verbatim:
+//   :25007  case HPSDRModel.ANAN_G1: //N1GP G1 added
+//   :25038  case HPSDRModel.REDPITAYA: //DH1KLM
 //
 // Bridge constants per HPSDRModel:
 //   ANAN100/100B/100D : bridge=0.095  refV=3.3  cal=6

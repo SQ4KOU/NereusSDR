@@ -265,6 +265,8 @@ struct BoardCapabilities {
     // Source: setup.cs:19834-20310 RadioModelChanged() per-model if-ladder [@501e3f5]
     //         setup.cs:6338 AddHPSDRPages() for tpPennyCtrl / tpAlexControl visibility.
     // Upstream inline attribution preserved verbatim:
+    //   setup.cs:19855  if (initializing) return; // forceallevents will call this  // [2.10.1.0] MW0LGE renabled
+    //   setup.cs:19904  case HPSDRModel.ANAN_G1: //N1GP G1 added
     //   setup.cs:20202  case HPSDRModel.ANAN_G2:                 // added G8NJJ
     //   setup.cs:20253  case HPSDRModel.ANAN_G2_1K:              // added G8NJJ
     //

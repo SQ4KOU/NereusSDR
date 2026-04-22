@@ -74,6 +74,8 @@
 namespace NereusSDR {
 
 // Source: setup.cs:15566-15590 + console.cs:19068-19105 [@501e3f5]
+// Upstream inline attribution preserved verbatim:
+//   setup.cs:15586  case HPSDRModel.REDPITAYA: //DH1KLM
 // Defaults match Thetis private fields:
 //   private bool apollopresent = false;        [console.cs:19068]
 //   (no explicit filter default — effectively false until chkApolloFilter toggled)
@@ -100,6 +102,8 @@ void ApolloController::setPresent(bool on)
 }
 
 // Source: setup.cs:15582 chkApolloFilter_CheckedChanged [@501e3f5]
+// Upstream inline attribution preserved verbatim:
+//   setup.cs:15586  case HPSDRModel.REDPITAYA: //DH1KLM
 // "if (chkApolloFilter.Checked) NetworkIO.EnableApolloFilter(1); else NetworkIO.EnableApolloFilter(0);"
 // NereusSDR: protocol wire-up (NetworkIO equivalent) deferred to codec layer.
 bool ApolloController::filterEnabled() const { return m_filterEnabled; }
@@ -112,6 +116,8 @@ void ApolloController::setFilterEnabled(bool on)
 }
 
 // Source: setup.cs:15587 chkApolloTuner_CheckedChanged + console.cs:19097 ApolloTunerEnabled [@501e3f5]
+// Upstream inline attribution preserved verbatim:
+//   setup.cs:15586  case HPSDRModel.REDPITAYA: //DH1KLM
 // "console.ApolloTunerEnabled = chkApolloTuner.Checked;"
 // "apollo_tuner_enabled = value; if (apollo_tuner_enabled) NetworkIO.EnableApolloTuner(1);
 //  else NetworkIO.EnableApolloTuner(0);"

@@ -82,6 +82,7 @@ struct HardwareProfile {
 // Compute a HardwareProfile for the given model.
 // From Thetis clsHardwareSpecific.cs:85-184
 // Upstream inline attribution preserved verbatim:
+//   :129  case HPSDRModel.ANAN_G1: //N1GP G1 added
 //   :164  case HPSDRModel.ANAN_G2_1K:             // G8NJJ: likely to need further changes for PA
 //   :178  case HPSDRModel.REDPITAYA: //DH1KLM
 //   :180      NetworkIO.SetMKIIBPF(0); // DH1KLM: changed for compatibility reasons for OpenHPSDR compat. DIY PA/Filter boards

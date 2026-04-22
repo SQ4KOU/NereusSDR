@@ -78,6 +78,8 @@ namespace NereusSDR {
 // Apollo PA + ATU + LPF accessory board state model.
 //
 // Source: setup.cs:15566-15590 + console.cs:19060-19105 [@501e3f5]
+// Upstream inline attribution preserved verbatim:
+//   setup.cs:15586  case HPSDRModel.REDPITAYA: //DH1KLM
 //
 // Thetis stores these as three check-boxes in the Setup dialog:
 //   chkApolloPresent  → ApolloPresent property on console
@@ -102,6 +104,8 @@ public:
 
     // ── Apollo filter enable ─────────────────────────────────────────────────
     // Source: setup.cs:15582 chkApolloFilter_CheckedChanged [@501e3f5]
+    // Upstream inline attribution preserved verbatim:
+    //   setup.cs:15586  case HPSDRModel.REDPITAYA: //DH1KLM
     // "if (chkApolloFilter.Checked) NetworkIO.EnableApolloFilter(1); else NetworkIO.EnableApolloFilter(0);"
     bool filterEnabled() const;
     void setFilterEnabled(bool on);
@@ -109,6 +113,8 @@ public:
     // ── Apollo tuner enable ──────────────────────────────────────────────────
     // Source: setup.cs:15587 chkApolloTuner_CheckedChanged [@501e3f5]
     //         console.cs:19097 ApolloTunerEnabled property [@501e3f5]
+    // Upstream inline attribution preserved verbatim:
+    //   setup.cs:15586  case HPSDRModel.REDPITAYA: //DH1KLM
     // "apollo_tuner_enabled = value; if (apollo_tuner_enabled) NetworkIO.EnableApolloTuner(1);
     //  else NetworkIO.EnableApolloTuner(0);"
     // Note: Thetis has only a bool enable; no tuner-state enum was found in upstream source.

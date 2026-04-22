@@ -240,6 +240,10 @@ public:
     // returnedAddress lands in Task 3 with the 12-step state machine.
     // Source: mi0bot network.h:112-148 prn->i2c.read_data / ctrl_read_available
     //   [@c26a8a4]
+    // Upstream inline attribution preserved verbatim:
+    //   network.h:109  int reset_on_disconnect;       // MI0BOT: Reset on software disconnect
+    //   network.h:110  int swap_audio_channels;       // MI0BOT: Control to swap the left and right audio channels send over P1
+    //   network.h:113  struct _i2c    // MI0BOT: I2C data structure for HL2
     I2cReadResponse lastI2cRead() const;
     void applyI2cReadResponse(quint8 c0, quint8 c1, quint8 c2, quint8 c3, quint8 c4);
     void clearI2cReadAvailable();

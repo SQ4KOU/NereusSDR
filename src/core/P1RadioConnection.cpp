@@ -766,6 +766,8 @@ void P1RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
     m_rxFreqHz[receiverIndex] = frequencyHz;
     // RX0 drives the Alex HPF bank — recompute on every change.
     // Source: console.cs:6830-6942 [@501e3f5]
+    // Upstream inline attribution preserved verbatim:
+    //   :6830  || (HardwareSpecific.Hardware == HPSDRHW.HermesIII)) //DK1HLM
     if (receiverIndex == 0 && m_caps && m_caps->hasAlexFilters) {
         m_alexHpfBits = codec::alex::computeHpf(double(frequencyHz) / 1e6);
     }

@@ -370,6 +370,8 @@ void P2RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
 
     // Update Alex HPF/LPF based on new frequency
     // From Thetis console.cs:6830-7234 [@501e3f5] — auto-select band filters
+    // Upstream inline attribution preserved verbatim:
+    //   :6830  || (HardwareSpecific.Hardware == HPSDRHW.HermesIII)) //DK1HLM
     double freqMhz = frequencyHz / 1e6;
     m_alex.hpfBits = NereusSDR::codec::alex::computeHpf(freqMhz);
     m_alex.lpfBits = NereusSDR::codec::alex::computeLpf(freqMhz);

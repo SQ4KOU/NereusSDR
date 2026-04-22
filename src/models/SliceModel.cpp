@@ -619,6 +619,8 @@ std::pair<int, int> SliceModel::defaultFilterForMode(DSPMode mode)
     // From Thetis console.cs:14636
     static constexpr int kDiguOffset = 1500;
     // From Thetis console.cs:14671
+    // Upstream inline attribution preserved verbatim:
+    //   :14669  //reset preset filter's center frequency - W4TME
     static constexpr int kDiglOffset = 2210;
 
     switch (mode) {

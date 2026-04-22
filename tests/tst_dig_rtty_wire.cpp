@@ -197,6 +197,8 @@ private slots:
 
     void diglOffsetDefaultIsZero() {
         // From Thetis console.cs:14672 — DIGLClickTuneOffset default 0 Hz
+        // Upstream inline attribution preserved verbatim:
+        //   :14669  //reset preset filter's center frequency - W4TME
         // (NereusSDR defaults diglOffsetHz to 0 per SliceModel; Thetis's
         // digl_click_tune_offset default is 2210 but that governs filter
         // preset centering, not the demodulation shift we model here.)

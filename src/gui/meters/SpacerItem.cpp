@@ -71,6 +71,8 @@ SpacerItem::SpacerItem(QObject* parent)
 // ---------------------------------------------------------------------------
 // paint()
 // From Thetis MeterManager.cs:35010 — renderSpacer()
+// Upstream inline attribution preserved verbatim:
+//   :35007  //[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289
 // Thetis renders colour1 (RX) or colour2 (TX) depending on MOX state,
 // with a half-second cross-fade when MOX toggles.
 // NereusSDR simplifies: if colours differ, show vertical linear gradient

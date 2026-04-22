@@ -46,6 +46,8 @@ void TstCalibrationController::defaults_allCorrect()
     QCOMPARE(ctrl.using10MHzRef(), false);
     QCOMPARE(ctrl.effectiveFreqCorrectionFactor(), 1.0);
     // Source: console.cs:21074 _rx1_display_cal_offset default 0 [@501e3f5]
+    // Upstream inline attribution preserved verbatim:
+    //   :21075  HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
     QCOMPARE(ctrl.levelOffsetDb(), 0.0);
     // Source: setup.cs:3866 ud6mLNAGainOffset default 0 [@501e3f5]
     QCOMPARE(ctrl.rx1_6mLnaOffset(), 0.0);

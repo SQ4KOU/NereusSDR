@@ -176,6 +176,9 @@ public:
     // ── Level calibration offset ──────────────────────────────────────────────
     // Source: console.cs:21074-21086 _rx1_display_cal_offset / _rx2_display_cal_offset
     //   RXCalibrationOffset(int rx) [@501e3f5]
+    // Upstream inline attribution preserved verbatim:
+    //   :21075  HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
+    //   :21090  // Added 6/11/05 BT to support CAT //[2.10.3.11]MW0LGE included setter
     double levelOffsetDb() const;
     void   setLevelOffsetDb(double db);
 
@@ -221,10 +224,14 @@ private:
     // Source: setup.cs:22690 chkUsing10MHzRef default unchecked [@501e3f5]
     bool   m_using10MHzRef{false};
     // Source: console.cs:21074 _rx1_display_cal_offset default 0 [@501e3f5]
+    // Upstream inline attribution preserved verbatim:
+    //   console.cs:21075  HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
     double m_levelOffsetDb{0.0};
     // Source: setup.cs:3866 ud6mLNAGainOffset default 0 [@501e3f5]
     double m_rx1_6mLnaOffset{0.0};
     // Source: setup.cs:6262 ud6mRx2LNAGainOffset default 0 [@501e3f5]
+    // Upstream inline attribution preserved verbatim:
+    //   setup.cs:6261  HardwareSpecific.Model == HPSDRModel.REDPITAYA))//DH1KLM
     double m_rx2_6mLnaOffset{0.0};
     // Source: setup.cs:14325 udTXDisplayCalOffset default 0 [@501e3f5]
     double m_txDisplayOffsetDb{0.0};
