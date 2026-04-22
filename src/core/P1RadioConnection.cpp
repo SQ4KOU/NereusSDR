@@ -920,33 +920,21 @@ void P1RadioConnection::setBandwidthMonitor(HermesLiteBandwidthMonitor* monitor)
 void P1RadioConnection::parseI2cResponse(quint8 c0, quint8 c1, quint8 c2,
                                           quint8 c3, quint8 c4)
 {
-    Q_UNUSED(c2)
-    Q_UNUSED(c3)
-    Q_UNUSED(c4)
-
     if (!m_ioBoard) { return; }  // no IoBoard wired (non-HL2 board)
 
-    // Upstream stores the 4-byte read result in prn->i2c.read_data[0..3]
-    // and sets ctrl_read_available = 1.  NereusSDR instead routes the
-    // result directly to the register mirror via the returned_address
-    // field (not yet tracked here — future enhancement).  For now we
-    // store C1 into whatever register the IoBoardHl2 is waiting on.
-    // This matches the upstream store into prn->i2c.read_data[0].
+    // Persist all 4 response bytes plus the 7-bit returned address into the
+    // IoBoardHl2 model. Upstream stores these in prn->i2c.read_data[0..3]
+    // and sets ctrl_read_available = 1; we mirror both via
+    // IoBoardHl2::applyI2cReadResponse(), which also emits a signal so the
+    // HL2 I/O diagnostics page can reflect live hardware state instead of
+    // defaults.
     //
-    // TODO(3P-E-T3): track returned_address (low 7 bits of C0) and map
-    // to the correct Register enum slot; for now the caller is responsible
-    // for interpreting read_data — see Phase 3P-E Task 3 (state machine).
+    // Full returnedAddress → Register slot dispatch (so reads auto-populate
+    // m_registers[]) is Phase 3P-E Task 3 state-machine work; for now
+    // downstream consumers read the response via IoBoardHl2::lastI2cRead().
     //
     // Source: mi0bot networkproto1.c:478-493 [@c26a8a4]
-    const quint8 readByte = c1;  // C1 = read_data[0] (first byte of I2C read result)
-    (void)readByte;              // stored for future register dispatch
-
-    // Signal that data is available (mirrors ctrl_read_available = 1).
-    // The IoBoardHl2 model's 12-step state machine (Phase 3P-E Task 3)
-    // will pick this up and advance the cycle on the next tick.
-    // For now, the data is available to callers via IoBoardHl2 signals.
-    const quint8 responseC0 = c0;  // retained for debugging
-    (void)responseC0;
+    m_ioBoard->applyI2cReadResponse(c0, c1, c2, c3, c4);
 }
 
 // ---------------------------------------------------------------------------

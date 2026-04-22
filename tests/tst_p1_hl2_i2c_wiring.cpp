@@ -182,6 +182,40 @@ private slots:
         QVERIFY(true);  // no crash = pass
     }
 
+    // ep6 I2C response bytes persist into IoBoardHl2::lastI2cRead() so
+    // downstream diagnostics can reflect live hardware state instead of
+    // seeing the response silently dropped.
+    // Source: mi0bot networkproto1.c:478-493 + network.h:112-148 [@c26a8a4]
+    void ep6_i2c_response_persists_into_ioboard() {
+        P1RadioConnection conn(nullptr);
+        conn.setBoardForTest(HPSDRHW::HermesLite);
+        IoBoardHl2 io;
+        conn.setIoBoard(&io);
+        QVERIFY(!io.lastI2cRead().available);
+
+        QSignalSpy spy(&io, &IoBoardHl2::i2cReadResponseReceived);
+        // C0 bit 7 = response marker; low 7 bits = returned address 0x12
+        conn.parseI2cResponseForTest(quint8(0x80 | 0x12), 0xAA, 0xBB, 0xCC, 0xDD);
+
+        const auto resp = io.lastI2cRead();
+        QVERIFY(resp.available);
+        QCOMPARE(int(resp.returnedAddress), 0x12);
+        QCOMPARE(int(resp.data[0]), 0xAA);
+        QCOMPARE(int(resp.data[1]), 0xBB);
+        QCOMPARE(int(resp.data[2]), 0xCC);
+        QCOMPARE(int(resp.data[3]), 0xDD);
+        QCOMPARE(spy.count(), 1);
+    }
+
+    // Response with no IoBoard wired must not crash and has nowhere to land.
+    void ep6_i2c_response_no_ioboard_is_safe() {
+        P1RadioConnection conn(nullptr);
+        conn.setBoardForTest(HPSDRHW::HermesLite);
+        // intentionally no setIoBoard()
+        conn.parseI2cResponseForTest(quint8(0x80), 0x01, 0x02, 0x03, 0x04);
+        QVERIFY(true);
+    }
+
     // After dequeue, second compose falls through to normal bank output.
     void after_dequeue_falls_through_to_normal() {
         P1RadioConnection conn(nullptr);

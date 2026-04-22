@@ -226,6 +226,28 @@ void IoBoardHl2::setRegisterValue(Register reg, quint8 value)
     emit registerChanged(reg, value);
 }
 
+IoBoardHl2::I2cReadResponse IoBoardHl2::lastI2cRead() const
+{
+    return m_lastI2cRead;
+}
+
+void IoBoardHl2::applyI2cReadResponse(quint8 c0, quint8 c1, quint8 c2,
+                                      quint8 c3, quint8 c4)
+{
+    // Low 7 bits of C0 carry the firmware's "returned address" — identifies
+    // which outstanding read this payload belongs to. Bit 7 is the response
+    // marker and has already been checked by the caller.
+    m_lastI2cRead.returnedAddress = static_cast<quint8>(c0 & 0x7F);
+    m_lastI2cRead.data = {c1, c2, c3, c4};
+    m_lastI2cRead.available = true;
+    emit i2cReadResponseReceived(m_lastI2cRead.returnedAddress, c1, c2, c3, c4);
+}
+
+void IoBoardHl2::clearI2cReadAvailable()
+{
+    m_lastI2cRead.available = false;
+}
+
 quint8 IoBoardHl2::hardwareVersion() const { return m_hardwareVersion; }
 
 void IoBoardHl2::setHardwareVersion(quint8 v)

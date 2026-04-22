@@ -188,6 +188,18 @@ public:
         std::array<quint8, 4> readData{};
     };
 
+    // Last I2C read response from EP6 — mirrors the upstream fields
+    //   prn->i2c.read_data[0..3] + prn->i2c.ctrl_read_available
+    //   per mi0bot network.h:112-148 [@c26a8a4].
+    // `returnedAddress` is the low 7 bits of the response C0 byte, which
+    // identifies which outstanding read the payload belongs to (set by
+    // upstream firmware before framing the response).
+    struct I2cReadResponse {
+        quint8 returnedAddress{0};
+        std::array<quint8, 4> data{};  // [0]=C1, [1]=C2, [2]=C3, [3]=C4
+        bool   available{false};       // mirrors ctrl_read_available
+    };
+
     // MAX_I2C_QUEUE = 32 per mi0bot network.h:41 [@c26a8a4]
     static constexpr int kMaxI2cQueue = 32;
 
@@ -222,6 +234,16 @@ public:
     quint8 registerValue(Register reg) const;
     void   setRegisterValue(Register reg, quint8 value);
 
+    // ── I2C read-response mirror ──
+    // Stores the most recent EP6 I2C read response. Phase 3P-E Task 2:
+    // byte persistence + consumer signal; full register-slot dispatch from
+    // returnedAddress lands in Task 3 with the 12-step state machine.
+    // Source: mi0bot network.h:112-148 prn->i2c.read_data / ctrl_read_available
+    //   [@c26a8a4]
+    I2cReadResponse lastI2cRead() const;
+    void applyI2cReadResponse(quint8 c0, quint8 c1, quint8 c2, quint8 c3, quint8 c4);
+    void clearI2cReadAvailable();
+
     // Convenience accessor for the hardware version byte.
     quint8 hardwareVersion() const;
     void   setHardwareVersion(quint8 v);
@@ -236,6 +258,10 @@ signals:
     void registerChanged(NereusSDR::IoBoardHl2::Register reg, quint8 value);
     void hardwareVersionChanged(quint8 version);
     void detectedChanged(bool detected);
+    // Emitted when applyI2cReadResponse() stores a new EP6 response.
+    // Consumers: Phase 3P-E Task 3 state machine, HL2 I/O diagnostics page.
+    void i2cReadResponseReceived(quint8 returnedAddress,
+                                 quint8 b0, quint8 b1, quint8 b2, quint8 b3);
 
 private:
     // Circular FIFO for I2C queue (oldest entry at head, newest at tail-1).
@@ -256,6 +282,9 @@ private:
     quint8 m_hardwareVersion{0};
 
     bool m_detected{false};
+
+    // Last EP6 I2C read response — mirrors prn->i2c.read_data[] + flag.
+    I2cReadResponse m_lastI2cRead{};
 };
 
 } // namespace NereusSDR
