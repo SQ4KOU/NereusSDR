@@ -64,9 +64,10 @@ protected:
     // Write a 32-bit value big-endian at offset into buf.
     static void writeBE32(quint8* buf, int offset, quint32 value);
 
-    // Convert frequency in Hz to NCO phase word (2^32 / 122880000 * freqHz).
-    // Source: network.c:936-1005 [@501e3f5]
-    static quint32 hzToPhaseWord(quint64 freqHz);
+    // Convert frequency in Hz to NCO phase word (2^32 / 122880000 * freqHz),
+    // scaled by `factor` (Thetis FreqCorrectionFactor; 1.0 = no correction).
+    // Source: network.c:936-1005; setup.cs:14036-14050 [@501e3f5]
+    static quint32 hzToPhaseWord(quint64 freqHz, double factor);
 
     static constexpr int kMaxDdc = 7;
     static constexpr int kBufLen = 1444;

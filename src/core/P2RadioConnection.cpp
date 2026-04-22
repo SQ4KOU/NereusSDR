@@ -741,6 +741,13 @@ CodecContext P2RadioConnection::buildCodecContext() const
     // Watchdog timer
     ctx.p2Wdt = m_wdt;
 
+    // Frequency-correction factor — Phase 3P-G. Source: setup.cs:14036-14050.
+    // Codec uses this in hzToPhaseWord() so calibration UI changes propagate
+    // through the codec cutover path; default 1.0 when no controller wired.
+    ctx.freqCorrectionFactor = m_calController
+                               ? m_calController->effectiveFreqCorrectionFactor()
+                               : 1.0;
+
     // Saturn BPF1 override bits — left at default 0 until Phase F
     // configures them via user-entered band-edge table.
     ctx.p2SaturnBpfHpfBits = 0;

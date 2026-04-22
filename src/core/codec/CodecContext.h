@@ -143,6 +143,14 @@ struct CodecContext {
     quint64 rxFreqHz[7]{};
     quint64 txFreqHz{0};
 
+    // P2 NCO phase-word frequency-correction factor.
+    // Source: setup.cs:14036-14050 udHPSDRFreqCorrectFactor_ValueChanged →
+    //   NetworkIO.FreqCorrectionFactor (0.999... / 1.000... trims ppm error).
+    //   P2RadioConnection populates this from CalibrationController::
+    //   effectiveFreqCorrectionFactor(); codecs fold it into hzToPhaseWord().
+    //   Default 1.0 → byte-identical to pre-calibration output. [@501e3f5]
+    double  freqCorrectionFactor{1.0};
+
     // Sample rate code (0=48k, 1=96k, 2=192k, 3=384k).
     int     sampleRateCode{0};
 

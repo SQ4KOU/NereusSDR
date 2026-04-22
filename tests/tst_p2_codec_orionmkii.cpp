@@ -179,6 +179,63 @@ private slots:
         QCOMPARE(int(buf[7]), 0x01);
     }
 
+    // CmdHighPriority RX0 phase word — unity correction factor matches
+    // raw Thetis formula (freq_hz * 2^32 / 122880000).
+    // Source: network.c:936-1005 [@501e3f5]
+    void cmdHighPriority_rx0_phaseWord_unity_factor() {
+        P2CodecOrionMkII codec;
+        CodecContext ctx;
+        ctx.rxFreqHz[0] = 14'200'000ULL;  // 20m
+        ctx.freqCorrectionFactor = 1.0;
+        quint8 buf[1444] = {};
+        codec.composeCmdHighPriority(ctx, buf);
+        const quint32 expected =
+            static_cast<quint32>((14'200'000.0 * 4294967296.0) / 122880000.0);
+        const quint32 got =
+            (quint32(buf[9]) << 24) | (quint32(buf[10]) << 16) |
+            (quint32(buf[11]) << 8) |  quint32(buf[12]);
+        QCOMPARE(got, expected);
+    }
+
+    // CmdHighPriority RX0 phase word — non-unity correction factor changes
+    // the emitted phase word. Phase 3P-G: codec cutover path must apply
+    // CalibrationController::effectiveFreqCorrectionFactor() via ctx.
+    // Source: setup.cs:14036-14050 udHPSDRFreqCorrectFactor_ValueChanged
+    // → NetworkIO.FreqCorrectionFactor [@501e3f5]
+    void cmdHighPriority_phaseWord_applies_correction_factor() {
+        P2CodecOrionMkII codec;
+        CodecContext ctxA;
+        CodecContext ctxB;
+        ctxA.rxFreqHz[0] = 14'200'000ULL;
+        ctxA.txFreqHz    = 14'200'000ULL;
+        ctxA.freqCorrectionFactor = 1.0;
+        ctxB.rxFreqHz[0] = 14'200'000ULL;
+        ctxB.txFreqHz    = 14'200'000ULL;
+        ctxB.freqCorrectionFactor = 0.9999995;  // ~0.5 ppm trim
+        quint8 bufA[1444] = {};
+        quint8 bufB[1444] = {};
+        codec.composeCmdHighPriority(ctxA, bufA);
+        codec.composeCmdHighPriority(ctxB, bufB);
+
+        // RX0 phase word (bytes 9-12) must differ between unity and trimmed factor.
+        const quint32 rxA = (quint32(bufA[9]) << 24) | (quint32(bufA[10]) << 16) |
+                            (quint32(bufA[11]) << 8) |  quint32(bufA[12]);
+        const quint32 rxB = (quint32(bufB[9]) << 24) | (quint32(bufB[10]) << 16) |
+                            (quint32(bufB[11]) << 8) |  quint32(bufB[12]);
+        QVERIFY(rxA != rxB);
+
+        // TX phase word (bytes 329-332) must likewise differ.
+        const quint32 txA = (quint32(bufA[329]) << 24) | (quint32(bufA[330]) << 16) |
+                            (quint32(bufA[331]) << 8) |  quint32(bufA[332]);
+        const quint32 txB = (quint32(bufB[329]) << 24) | (quint32(bufB[330]) << 16) |
+                            (quint32(bufB[331]) << 8) |  quint32(bufB[332]);
+        QVERIFY(txA != txB);
+
+        // ctxB factor is below 1.0 → phase word should be strictly smaller.
+        QVERIFY(rxB < rxA);
+        QVERIFY(txB < txA);
+    }
+
     // CmdHighPriority — sequence bytes 0-3 NOT stamped by codec
     // Source: caller responsibility note [@501e3f5]
     void cmdHighPriority_seqno_zero() {

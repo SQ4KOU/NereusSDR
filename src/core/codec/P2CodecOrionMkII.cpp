@@ -53,10 +53,16 @@ void P2CodecOrionMkII::writeBE32(quint8* buf, int offset, quint32 value)
 
 // From network.c:936-1005 [@501e3f5] — NCO phase word calculation.
 // freq_hz * 2^32 / 122880000 (ANAN-G2 / OrionMKII clock rate).
-quint32 P2CodecOrionMkII::hzToPhaseWord(quint64 freqHz)
+//
+// Phase 3P-G: `factor` is Thetis' FreqCorrectionFactor (setup.cs:14036-14050).
+// Thetis folds the factor into the frequency argument before calling
+// Freq2PhaseWord (HPSDR/NetworkIO.cs:251-254); we fold it in here so every
+// compose path — direct or via CodecContext — picks up live calibration.
+// factor == 1.0 is byte-identical to the pre-calibration formula.
+quint32 P2CodecOrionMkII::hzToPhaseWord(quint64 freqHz, double factor)
 {
-    // Use 64-bit math to avoid overflow: freq * 2^32 / 122880000
-    return static_cast<quint32>((freqHz * 4294967296ULL) / 122880000ULL);
+    const double correctedHz = static_cast<double>(freqHz) * factor;
+    return static_cast<quint32>((correctedHz * 4294967296.0) / 122880000.0);
 }
 
 // --- CmdGeneral (60 bytes) ---
@@ -142,13 +148,13 @@ void P2CodecOrionMkII::composeCmdHighPriority(const CodecContext& ctx, quint8 bu
     for (int i = 0; i < kMaxDdc; ++i) {
         int offset = 9 + (i * 4);
         if (offset + 3 < kBufLen) {
-            quint32 phaseWord = hzToPhaseWord(ctx.rxFreqHz[i]);
+            quint32 phaseWord = hzToPhaseWord(ctx.rxFreqHz[i], ctx.freqCorrectionFactor);
             writeBE32(buf, offset, phaseWord);
         }
     }
 
     // From Thetis network.c:1008-1011 [@501e3f5] — TX0 frequency (also phase word)
-    writeBE32(buf, 329, hzToPhaseWord(ctx.txFreqHz));
+    writeBE32(buf, 329, hzToPhaseWord(ctx.txFreqHz, ctx.freqCorrectionFactor));
 
     // From Thetis network.c:1014 [@501e3f5]
     buf[345] = static_cast<quint8>(ctx.p2DriveLevel);
