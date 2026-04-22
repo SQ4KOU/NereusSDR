@@ -461,6 +461,18 @@ RadioModel::RadioModel(QObject* parent)
     // standalone).
     m_audioEngine->setRadioModel(this);
 
+    // Phase 3P-I-a T9 — AlexController → connection pump.
+    // Any per-band edit (from Setup grid, RxApplet, or VFO Flag via T12)
+    // reapplies to the wire when the changed band matches the current
+    // VFO band. Connect once here because m_alexController outlives each
+    // connection; the helper no-ops when m_connection is null. Closes
+    // issue #98's protocol-layer gap.
+    connect(&m_alexController, &AlexController::antennaChanged, this,
+            [this](Band b) {
+        if (b != m_lastBand) { return; }
+        applyAlexAntennaForBand(b);
+    });
+
     // Connection starts null — created by connectToRadio() via factory.
     //
     // Phase 3G-9b: the smooth-defaults profile is reachable only via the
@@ -1037,6 +1049,10 @@ void RadioModel::wireSliceSignals()
         Band newBand = bandFromFrequency(freq);
         if (newBand != m_lastBand) {
             m_lastBand = newBand;
+            // Phase 3P-I-a T10 — reapply per-band antenna on boundary
+            // crossing. Thetis UpdateAlexAntSelection equivalent
+            // (HPSDR/Alex.cs:310 [v2.10.3.13 @501e3f5]).
+            applyAlexAntennaForBand(newBand);
         }
         scheduleSettingsSave();
     });
@@ -1694,6 +1710,10 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
         // the connected radio's fields (Radio Info labels, sample rate,
         // capability-gated tab visibility, per-MAC settings restore).
         emit currentRadioChanged(m_lastRadioInfo);
+        // Phase 3P-I-a T11 — apply persisted per-band Alex antenna to the
+        // fresh connection. Matches Thetis's initial UpdateAlexAntSelection
+        // call path on radio startup (HPSDR/Alex.cs:310 [v2.10.3.13 @501e3f5]).
+        applyAlexAntennaForBand(m_lastBand);
         break;
     case ConnectionState::Disconnected:
         qCDebug(lcConnection) << "Disconnected from" << m_name;
