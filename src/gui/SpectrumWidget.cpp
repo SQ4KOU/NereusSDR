@@ -1451,31 +1451,67 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
 }
 
 // ---- dBm scale strip ----
+// From AetherSDR SpectrumWidget.cpp:4856-4925 [@0cd4559]
 void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
 {
-    // Strip occupies the rightmost kDbmStripW pixels of specRect.
-    // From AetherSDR SpectrumWidget.cpp:4858 [@0cd4559]
     const QRect strip = NereusSDR::DbmStrip::stripRect(specRect, kDbmStripW);
 
-    p.fillRect(strip, QColor(0x10, 0x15, 0x20));
+    // Semi-opaque background
+    p.fillRect(strip, QColor(0x0a, 0x0a, 0x18, 220));
 
-    QFont font = p.font();
-    font.setPixelSize(9);
-    p.setFont(font);
-    // Phase 3G-8 commit 5: configurable text colour (was hardcoded yellow).
-    p.setPen(m_gridTextColor);
+    // Left border line
+    p.setPen(QColor(0x30, 0x40, 0x50));
+    p.drawLine(strip.left(), specRect.top(), strip.left(), specRect.bottom());
 
-    float bottom = m_refLevel - m_dynamicRange;
-    float step = 10.0f;
-    if (m_dynamicRange <= 50.0f) {
-        step = 5.0f;
-    }
+    // ── Up/Down arrows side by side at top ─────────────────────────────
+    const int halfW    = kDbmStripW / 2;
+    const int upCx     = strip.left() + halfW / 2;          // left half center
+    const int dnCx     = strip.left() + halfW + halfW / 2;  // right half center
+    const int arrowTop = specRect.top() + 2;
+    const int arrowBot = specRect.top() + kDbmArrowH - 2;
 
-    for (float dbm = bottom; dbm <= m_refLevel; dbm += step) {
-        int y = dbmToY(dbm, specRect);
-        QString label = QString::number(static_cast<int>(dbm));
-        QRect textRect(strip.left() + 2, y - 6, strip.width() - 4, 12);
-        p.drawText(textRect, Qt::AlignRight | Qt::AlignVCenter, label);
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(0x60, 0x80, 0xa0));
+
+    // Up arrow (▲) — left side
+    QPolygon upTri;
+    upTri << QPoint(upCx - 5, arrowBot)
+          << QPoint(upCx + 5, arrowBot)
+          << QPoint(upCx,     arrowTop);
+    p.drawPolygon(upTri);
+
+    // Down arrow (▼) — right side
+    QPolygon dnTri;
+    dnTri << QPoint(dnCx - 5, arrowTop)
+          << QPoint(dnCx + 5, arrowTop)
+          << QPoint(dnCx,     arrowBot);
+    p.drawPolygon(dnTri);
+
+    // ── dBm labels ───────────────────────────────────────────────────────
+    QFont f = p.font();
+    f.setPointSize(7);
+    p.setFont(f);
+    const QFontMetrics fm(f);
+
+    const int labelTop = specRect.top() + kDbmArrowH + 4;
+    const float stepDb = NereusSDR::DbmStrip::adaptiveStepDb(m_dynamicRange);
+
+    const float bottomDbm  = m_refLevel - m_dynamicRange;
+    const float firstLabel = std::ceil(bottomDbm / stepDb) * stepDb;
+
+    for (float dbm = firstLabel; dbm <= m_refLevel; dbm += stepDb) {
+        const float frac = (m_refLevel - dbm) / m_dynamicRange;
+        const int y = specRect.top() + static_cast<int>(frac * specRect.height());
+        if (y < labelTop || y > specRect.bottom() - 5) continue;
+
+        // Tick mark
+        p.setPen(QColor(0x50, 0x70, 0x80));
+        p.drawLine(strip.left(), y, strip.left() + 4, y);
+
+        // Label
+        const QString label = QString::number(static_cast<int>(dbm));
+        p.setPen(QColor(0x80, 0xa0, 0xb0));
+        p.drawText(strip.left() + 6, y + fm.ascent() / 2, label);
     }
 }
 

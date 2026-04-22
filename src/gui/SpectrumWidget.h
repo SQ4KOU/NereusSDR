@@ -519,6 +519,9 @@ private:
     static constexpr int kFreqScaleH = 28;  // Taller for easier grab target
     static constexpr int kDividerH = 4;
     static constexpr int kDbmStripW = 36;
+    // Height of each arrow button at the top of the dBm strip.
+    // From AetherSDR SpectrumWidget.h:539 [@0cd4559]
+    static constexpr int kDbmArrowH = 14;
 
     // ---- Spectrum fill ----
     // From AetherSDR defaults
