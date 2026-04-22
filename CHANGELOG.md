@@ -3,13 +3,74 @@
 ## [Unreleased]
 
 ### Added
-- (none)
+- `BoardCapabilities` gains `hasAlex2`, `hasRxBypassRelay`,
+  `rxOnlyAntennaCount` fields (needed for 3P-I-a antenna routing +
+  future 3P-I-b RX-only work). Source cites to Thetis `setup.cs:6228`
+  and `HPSDR/Alex.cs:377` with `//DH1KLM` / `//G8NJJ` tags preserved
+  verbatim. (Phase 3P-I-a)
+- New `AntennaLabels` helper (`src/core/AntennaLabels.{h,cpp}`) —
+  single source for the ANT1/ANT2/ANT3 label list, returns empty on
+  boards without Alex so UI call sites can `setVisible(!empty)`.
+  Replaces ~10 hardcoded `QStringList{"ANT1","ANT2","ANT3"}` sites.
+  (Phase 3P-I-a)
+- New `PopupMenuStyle.h` defines the universal `kPopupMenu`
+  dark-palette `QMenu` stylesheet. Every antenna popup (VFO Flag +
+  RxApplet) now applies it, fixing Ubuntu 25.10 GNOME dark-on-dark
+  menu rendering (issue #98). (Phase 3P-I-a)
+- New `RadioConnection::setAntennaRouting(AntennaRouting)` pure-virtual
+  replaces the deprecated `setAntenna(int)`. `AntennaRouting` carries
+  RX/TX antenna numbers + `caps.hasAlex` so the protocol layer can
+  zero the antenna bits on HL2/Atlas. Both P1 and P2 implementations
+  updated with byte-for-byte wire-lock tests (`tst_p1_codec_standard`
+  bank 0 C4 antennaIdx; `tst_p2_codec_orionmkii` Alex0/Alex1
+  independent RX/TX bits). (Phase 3P-I-a)
+- Tests: `tst_antenna_routing_model` (4 — full pump through a mock
+  RadioConnection), `tst_alex_controller` (+4 cases — signal /
+  idempotency / rejection / setAntennasTo1 14-band),
+  `tst_ui_capability_gating` (5 — widget-level hide/show on VfoWidget
+  + RxApplet), `tst_popup_style_coverage` (1 — build-time kPopupMenu
+  invariant). (Phase 3P-I-a)
+- New manual verification matrix at
+  [`docs/architecture/antenna-routing-verification.md`](docs/architecture/antenna-routing-verification.md)
+  — per-SKU checklist covering VFO Flag / RxApplet / Setup grid /
+  spectrum overlay / AntennaButtonItem / band-change reapply / pcap
+  verification, with explicit out-of-scope enumeration so reviewers
+  don't file FAIL reports on deferred 3P-I-b/3M-1 scope.
+  (Phase 3P-I-a)
 
 ### Fixed
-- (none)
+- **Closes [#98](https://github.com/boydsoftprez/NereusSDR/issues/98)
+  — antenna routing wired end-to-end.** `AlexController`'s per-band
+  antenna state now reaches the radio via
+  `RadioConnection::setAntennaRouting`. Three triggers fire the pump:
+  `AlexController::antennaChanged`, `PanadapterModel::bandChanged`,
+  and `onConnectionStateChanged(Connected)`. All 5 writeable antenna
+  surfaces (VFO Flag, RxApplet, Setup-grid, SpectrumOverlayPanel
+  combos, AntennaButtonItem) funnel through `AlexController` as the
+  single source of truth; `SliceModel` caches from the controller via
+  `refreshAntennasFromAlex` so VFO/applet labels stay coherent on
+  band changes. (Phase 3P-I-a)
+- SpectrumOverlayPanel RX Ant / TX Ant combos in the ANT flyout now
+  actually change the antenna. Previously the combos rendered but had
+  no `currentTextChanged` handler — zombie controls. Wired through
+  slice 0 via the same pattern as the VAX Ch combo with
+  `m_updatingFromModel` echo guard. (Phase 3P-I-a)
 
 ### Changed
-- (none)
+- VFO Flag, RxApplet, and SpectrumOverlayPanel antenna UI hidden on
+  HL2 / Atlas (`!caps.hasAlex || antennaInputCount < 3`). Previously
+  these SKUs saw zombie ANT2/ANT3 buttons that wrote nothing. Matches
+  Thetis's behavior of hiding antenna controls for boards with no
+  Alex relay. (Phase 3P-I-a)
+- `AntennaButtonItem` (meter) click is a silent no-op on
+  `!caps.hasAlex`. Visual state (dimmed render) deferred to a future
+  phase; the signal no-op is sufficient to stop the zombie path at
+  the protocol layer. (Phase 3P-I-a)
+
+### Deprecated
+- `RadioConnection::setAntenna(int)` — use
+  `setAntennaRouting(AntennaRouting)`. Kept as a thin wrapper for one
+  release cycle; scheduled for removal in 0.3.x. (Phase 3P-I-a)
 
 ## [0.2.2] - 2026-04-22
 
