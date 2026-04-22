@@ -509,12 +509,17 @@ void SliceModel::setXitHz(int hz)
     }
 }
 
-void SliceModel::setNb2Enabled(bool v)
+void SliceModel::setNbMode(NereusSDR::NbMode v)
 {
-    if (m_nb2Enabled != v) {
-        m_nb2Enabled = v;
-        emit nb2EnabledChanged(v);
-    }
+    if (v == m_nbMode) { return; }
+    m_nbMode = v;
+    emit nbModeChanged(v);
+}
+
+void SliceModel::setNbTuning(const NereusSDR::NbTuning& v)
+{
+    m_nbTuning = v;
+    emit nbTuningChanged(v);
 }
 
 void SliceModel::setEmnrEnabled(bool v)
@@ -793,7 +798,16 @@ void SliceModel::saveToSettings(Band band)
     s.setValue(bp + QStringLiteral("AgcMode"),      static_cast<int>(m_agcMode));
     s.setValue(bp + QStringLiteral("StepHz"),       m_stepHz);
 
+    // Noise blanker (per-band).
+    // NB/NB2 tuning defaults trace to Thetis cmaster.c:43-68 [v2.10.3.13].
+    s.setValue(bp + QStringLiteral("NbMode"),       static_cast<int>(m_nbMode));
+    s.setValue(bp + QStringLiteral("NbThreshold"),  m_nbTuning.nbThreshold);
+    s.setValue(bp + QStringLiteral("NbTauMs"),      m_nbTuning.nbTauMs);
+    s.setValue(bp + QStringLiteral("NbLeadMs"),     m_nbTuning.nbAdvMs);
+    s.setValue(bp + QStringLiteral("NbLagMs"),      m_nbTuning.nbHangMs);
+
     // ── Session state (band-agnostic) ─────────────────────────────────────────
+    s.setValue(sp + QStringLiteral("SnbEnabled"), boolStr(m_snbEnabled));
     s.setValue(sp + QStringLiteral("Locked"),     boolStr(m_locked));
     s.setValue(sp + QStringLiteral("Muted"),      boolStr(m_muted));
     s.setValue(sp + QStringLiteral("RitEnabled"), boolStr(m_ritEnabled));
@@ -874,8 +888,29 @@ void SliceModel::restoreFromSettings(Band band)
         setStepHz(s.value(bp + QStringLiteral("StepHz")).toInt());
     }
 
+    // Noise blanker (per-band).
+    if (s.contains(bp + QStringLiteral("NbMode"))) {
+        setNbMode(static_cast<NereusSDR::NbMode>(
+            s.value(bp + QStringLiteral("NbMode")).toInt()));
+    }
+    if (s.contains(bp + QStringLiteral("NbThreshold")) ||
+        s.contains(bp + QStringLiteral("NbTauMs"))     ||
+        s.contains(bp + QStringLiteral("NbLeadMs"))    ||
+        s.contains(bp + QStringLiteral("NbLagMs")))
+    {
+        NereusSDR::NbTuning t = m_nbTuning;
+        if (s.contains(bp + QStringLiteral("NbThreshold"))) { t.nbThreshold = s.value(bp + QStringLiteral("NbThreshold")).toDouble(); }
+        if (s.contains(bp + QStringLiteral("NbTauMs")))     { t.nbTauMs     = s.value(bp + QStringLiteral("NbTauMs")).toDouble(); }
+        if (s.contains(bp + QStringLiteral("NbLeadMs")))    { t.nbAdvMs     = s.value(bp + QStringLiteral("NbLeadMs")).toDouble(); }
+        if (s.contains(bp + QStringLiteral("NbLagMs")))     { t.nbHangMs    = s.value(bp + QStringLiteral("NbLagMs")).toDouble(); }
+        setNbTuning(t);
+    }
+
     // ── Session state (band-agnostic) ─────────────────────────────────────────
 
+    if (s.contains(sp + QStringLiteral("SnbEnabled"))) {
+        setSnbEnabled(s.value(sp + QStringLiteral("SnbEnabled")).toString() == QLatin1String("True"));
+    }
     if (s.contains(sp + QStringLiteral("Locked"))) {
         setLocked(s.value(sp + QStringLiteral("Locked")).toString() == QLatin1String("True"));
     }

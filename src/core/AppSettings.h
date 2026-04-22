@@ -236,6 +236,14 @@ public:
     //   Slice<N>/Band<key>/DspMode        — int (DSPMode enum)
     //   Slice<N>/Band<key>/AgcMode        — int (AGCMode enum)
     //   Slice<N>/Band<key>/StepHz         — int Hz
+    //   Slice<N>/Band<key>/NbMode         — int  (0=Off, 1=NB, 2=NB2)  — default 0
+    //   Slice<N>/Band<key>/NbThreshold    — double                       — default 30.0
+    //   Slice<N>/Band<key>/NbTauMs        — double                       — default 0.1 ms
+    //   Slice<N>/Band<key>/NbLeadMs       — double                       — default 0.1 ms
+    //   Slice<N>/Band<key>/NbLagMs        — double                       — default 0.1 ms
+    //
+    // NB/NB2 tuning defaults trace to Thetis ChannelMaster/cmaster.c:43-68 [v2.10.3.13]
+    // (0.0001s=0.1ms for tau/hang/adv; 30.0 threshold; 0.05 backtau fixed, not per-slice).
     //
     // Session state (band-agnostic — restored on startup, not on band change):
     //   Slice<N>/Locked     — "True"/"False"
@@ -248,6 +256,7 @@ public:
     //   Slice<N>/RfGain     — int 0-100
     //   Slice<N>/RxAntenna  — string (e.g. "ANT1")
     //   Slice<N>/TxAntenna  — string (e.g. "ANT1")
+    //   Slice<N>/SnbEnabled — "True"/"False"           — default "False" (session-level)
     //
     // <N> = slice index (0-based). <key> = bandKeyName(band) from Band.h
     // (e.g. "20m", "40m", "GEN"). Written by SliceModel::saveToSettings();

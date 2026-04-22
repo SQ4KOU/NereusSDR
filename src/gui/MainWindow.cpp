@@ -2261,8 +2261,11 @@ void MainWindow::wireSliceToSpectrum()
     });
 
     // --- SliceModel → VfoWidget: DSP tab inbound (S1.8b stubs) ---
-    connect(slice, &SliceModel::nb2EnabledChanged, this, [vfo](bool v) {
-        vfo->setNb2Enabled(v);
+    // nb2EnabledChanged replaced by nbModeChanged in Task 6. VfoWidget's
+    // setNb2Enabled(bool) shim retained as-is until Task 8 rewrites the
+    // NB button wholesale with tri-state cycling.
+    connect(slice, &SliceModel::nbModeChanged, this, [vfo](NereusSDR::NbMode m) {
+        vfo->setNb2Enabled(m == NereusSDR::NbMode::NB2);
     });
 
     connect(slice, &SliceModel::emnrEnabledChanged, this, [vfo](bool v) {
@@ -2330,8 +2333,10 @@ void MainWindow::wireSliceToSpectrum()
     });
 
     // --- VfoWidget → SliceModel: DSP tab outbound (S1.8b stubs) ---
+    // nb2Changed is a bool toggle from VfoWidget; map to NbMode::NB2 or Off.
+    // Task 8 will replace this with a full tri-state nb2Changed → nbMode cycle.
     connect(vfo, &VfoWidget::nb2Changed, this, [slice](bool on) {
-        slice->setNb2Enabled(on);
+        slice->setNbMode(on ? NereusSDR::NbMode::NB2 : NereusSDR::NbMode::Off);
     });
     connect(vfo, &VfoWidget::nr2Changed, this, [slice](bool on) {
         // NR2 = EMNR in Thetis naming

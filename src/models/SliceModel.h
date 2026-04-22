@@ -117,6 +117,7 @@
 // project-level Thetis LICENSE applies.
 
 #include "Band.h"
+#include "core/NbFamily.h"
 #include "core/WdspTypes.h"
 
 #include <QObject>
@@ -188,7 +189,8 @@ class SliceModel : public QObject {
     Q_PROPERTY(int    ritHz           READ ritHz           WRITE setRitHz           NOTIFY ritHzChanged)
     Q_PROPERTY(bool   xitEnabled      READ xitEnabled      WRITE setXitEnabled      NOTIFY xitEnabledChanged)
     Q_PROPERTY(int    xitHz           READ xitHz           WRITE setXitHz           NOTIFY xitHzChanged)
-    Q_PROPERTY(bool   nb2Enabled      READ nb2Enabled      WRITE setNb2Enabled      NOTIFY nb2EnabledChanged)
+    // From phase3g-rx-experience-epic-design.md §sub-epic B — tri-state cycle.
+    Q_PROPERTY(NereusSDR::NbMode nbMode READ nbMode WRITE setNbMode NOTIFY nbModeChanged)
     Q_PROPERTY(bool   emnrEnabled     READ emnrEnabled     WRITE setEmnrEnabled     NOTIFY emnrEnabledChanged)
     Q_PROPERTY(bool   snbEnabled      READ snbEnabled      WRITE setSnbEnabled      NOTIFY snbEnabledChanged)
     Q_PROPERTY(bool   apfEnabled      READ apfEnabled      WRITE setApfEnabled      NOTIFY apfEnabledChanged)
@@ -360,8 +362,11 @@ public:
     int    xitHz()           const { return m_xitHz; }
     void   setXitHz(int hz);
 
-    bool   nb2Enabled()      const { return m_nb2Enabled; }
-    void   setNb2Enabled(bool v);
+    NereusSDR::NbMode nbMode() const { return m_nbMode; }
+    void   setNbMode(NereusSDR::NbMode v);
+
+    const NereusSDR::NbTuning& nbTuning() const { return m_nbTuning; }
+    void   setNbTuning(const NereusSDR::NbTuning& v);
 
     bool   emnrEnabled()     const { return m_emnrEnabled; }
     void   setEmnrEnabled(bool v);
@@ -507,7 +512,8 @@ signals:
     void ritHzChanged(int hz);
     void xitEnabledChanged(bool v);
     void xitHzChanged(int hz);
-    void nb2EnabledChanged(bool v);
+    void nbModeChanged(NereusSDR::NbMode v);
+    void nbTuningChanged(const NereusSDR::NbTuning& v);
     void emnrEnabledChanged(bool v);
     void snbEnabledChanged(bool v);
     void apfEnabledChanged(bool v);
@@ -568,7 +574,8 @@ private:
     int    m_ritHz{0};                // Neutral default — zero offset
     bool   m_xitEnabled{false};       // Neutral default — no Thetis citation needed
     int    m_xitHz{0};                // Neutral default — zero offset
-    bool   m_nb2Enabled{false};       // Neutral default — feature off at start (S1.6 gap-fill)
+    NereusSDR::NbMode   m_nbMode{NereusSDR::NbMode::Off};  // Tri-state: Off/NB/NB2
+    NereusSDR::NbTuning m_nbTuning{};  // per-band NB tuning knobs
     bool   m_emnrEnabled{false};      // Neutral default — feature off at start
     bool   m_snbEnabled{false};       // Neutral default — feature off at start
     bool   m_apfEnabled{false};       // Neutral default — feature off at start
