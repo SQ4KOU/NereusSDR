@@ -37,7 +37,8 @@ namespace {
 //      there is no ALSA default, PortAudio typically still enumerates
 //      "hw:0,0" etc., which at least lets audio reach the user.
 PaDeviceIndex resolveDevice(const PortAudioConfig& cfg,
-                            bool wantOutput)
+                            bool wantOutput,
+                            int requestedChannels)
 {
     const int deviceCount = Pa_GetDeviceCount();
     if (deviceCount <= 0) {
@@ -48,6 +49,18 @@ PaDeviceIndex resolveDevice(const PortAudioConfig& cfg,
         if (!di) { return false; }
         return wantOutput ? di->maxOutputChannels > 0
                           : di->maxInputChannels  > 0;
+    };
+
+    // Step 4 capacity check: prefer devices that actually support the
+    // requested channel count. Without this, the first enumerated output
+    // on a mono-first system (e.g. a USB webcam enumerated ahead of the
+    // onboard stereo card) causes Pa_OpenStream to fail with
+    // paInvalidChannelCount even though a later device would succeed.
+    auto capacityOk = [wantOutput, requestedChannels](const PaDeviceInfo* di) {
+        if (!di) { return false; }
+        const int avail = wantOutput ? di->maxOutputChannels
+                                     : di->maxInputChannels;
+        return avail >= requestedChannels;
     };
 
     // 1. Named-device match.
@@ -106,13 +119,19 @@ PaDeviceIndex resolveDevice(const PortAudioConfig& cfg,
         return def;
     }
 
-    // 4. First enumerated device with matching direction.
+    // 4. First enumerated device with matching direction — prefer one
+    //    that satisfies the requested channel count, fall back to any
+    //    direction-valid device if none does (Pa_OpenStream will then
+    //    surface a clear paInvalidChannelCount error, better than
+    //    silently picking step 3's default which may not even exist).
+    PaDeviceIndex anyDirection = paNoDevice;
     for (int i = 0; i < deviceCount; ++i) {
         const PaDeviceInfo* di = Pa_GetDeviceInfo(i);
-        if (directionOk(di)) { return i; }
+        if (!directionOk(di)) { continue; }
+        if (capacityOk(di))   { return i; }
+        if (anyDirection == paNoDevice) { anyDirection = i; }
     }
-
-    return paNoDevice;
+    return anyDirection;
 }
 
 } // namespace
@@ -144,7 +163,7 @@ bool PortAudioBus::open(const AudioFormat& format) {
     PaError err = paNoError;
     const PaDeviceInfo* di = nullptr;
 
-    params.device = resolveDevice(m_cfg, wantOutput);
+    params.device = resolveDevice(m_cfg, wantOutput, format.channels);
     if (params.device == paNoDevice) {
         m_err = wantOutput
             ? QStringLiteral("No output device found")
