@@ -2188,7 +2188,13 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
 
     int freqBarY = specH + kDividerH;
     if (mx >= w - kDbmStripW && my < specH) {
-        setCursor(Qt::SizeVerCursor);
+        // Hover over dBm strip → change cursor.
+        // From AetherSDR SpectrumWidget.cpp:2241-2248 [@0cd4559]
+        if (my < kDbmArrowH) {
+            setCursor(Qt::PointingHandCursor);
+        } else {
+            setCursor(Qt::SizeVerCursor);
+        }
     } else if (my >= specH - 6 && my < specH + kDividerH + 6) {
         setCursor(Qt::SplitVCursor);
     } else if (my >= freqBarY && my < freqBarY + kFreqScaleH) {
