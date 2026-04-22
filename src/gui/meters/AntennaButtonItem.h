@@ -69,6 +69,14 @@ public:
     void setActiveRxAntenna(int index);
     void setActiveTxAntenna(int index);
 
+    // Phase 3P-I-a T17 — suppress click handling when the connected
+    // board has no Alex. Rendered label still shows antennas but
+    // antennaSelected() will not fire. Paired with hasAlex plumbing
+    // in ContainerWidget so all AntennaButtonItems on a container
+    // flip together when the current radio changes.
+    void setHasAlex(bool hasAlex);
+    bool hasAlex() const { return m_hasAlex; }
+
     Layer renderLayer() const override { return Layer::OverlayDynamic; }
     QString serialize() const override;
     bool deserialize(const QString& data) override;
@@ -80,6 +88,7 @@ private:
     void onButtonClicked(int index, Qt::MouseButton button);
     int m_activeRxAnt{0};
     int m_activeTxAnt{0};
+    bool m_hasAlex{true};
     static constexpr int kAntennaCount = 10;
 };
 

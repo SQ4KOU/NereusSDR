@@ -556,6 +556,27 @@ void MainWindow::buildUI()
     // --- Container Infrastructure (Phase 3G-1) ---
     m_containerManager = new ContainerManager(spectrumPane, m_mainSplitter, this);
 
+    // Phase 3P-I-a T17 — push board caps into every container so
+    // AntennaButtonItems gate their click handler on hasAlex. Re-runs
+    // when the active radio changes (currentRadioChanged) and also fires
+    // when a new container is added (containerAdded). Without this,
+    // freshly-created or restored containers keep the default
+    // m_hasAlex=true and would allow clicks on HL2/Atlas.
+    auto pushCapsToAllContainers = [this]() {
+        const auto caps = m_radioModel->boardCapabilities();
+        for (ContainerWidget* c : m_containerManager->allContainers()) {
+            c->setBoardCapabilities(caps);
+        }
+    };
+    connect(m_radioModel, &RadioModel::currentRadioChanged, this,
+            pushCapsToAllContainers);
+    connect(m_containerManager, &ContainerManager::containerAdded, this,
+            [this](const QString& id) {
+        if (auto* c = m_containerManager->container(id)) {
+            c->setBoardCapabilities(m_radioModel->boardCapabilities());
+        }
+    });
+
     // Create the MeterPoller BEFORE restoreState / populateDefaultMeter
     // so the meterReadyForPolling signal fires into a live poller as
     // each container's MeterWidget is materialized. Previously the
@@ -590,6 +611,13 @@ void MainWindow::buildUI()
     // the applet panel is always populated regardless of restore path.
     populateDefaultMeter();
     m_containerManager->restoreSplitterState();
+
+    // Phase 3P-I-a T17 — initial push. `containerAdded` fires during
+    // restoreState() but the content (and any AntennaButtonItems) are
+    // installed after the signal by populateDefaultMeter() or the saved
+    // content factory. Do a one-shot sweep here so the final items
+    // pick up the startup board capabilities.
+    pushCapsToAllContainers();
 
     // Default splitter sizes on first run: ~80% spectrum, ~20% panel
     if (!AppSettings::instance().contains(QStringLiteral("MainSplitterSizes"))) {

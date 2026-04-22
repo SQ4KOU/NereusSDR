@@ -105,7 +105,21 @@ void AntennaButtonItem::setActiveTxAntenna(int index)
 
 void AntennaButtonItem::onButtonClicked(int index, Qt::MouseButton btn)
 {
+    // Phase 3P-I-a T17 — read-only when the board has no Alex front-end.
+    // HL2/Atlas have no antenna relay, so a click would be a no-op at the
+    // protocol layer; short-circuit here to stop zombie signal paths
+    // (and to avoid visually flipping the button `on` state).
+    if (!m_hasAlex) { return; }
     if (btn == Qt::LeftButton) { emit antennaSelected(index); }
+}
+
+void AntennaButtonItem::setHasAlex(bool hasAlex)
+{
+    if (m_hasAlex == hasAlex) { return; }
+    m_hasAlex = hasAlex;
+    // No explicit repaint hook on MeterItem; the container repaints on
+    // its own tick so the state change will become visible on the next
+    // frame. If we later add a disabled-render mode, emit a redraw here.
 }
 
 QString AntennaButtonItem::serialize() const
