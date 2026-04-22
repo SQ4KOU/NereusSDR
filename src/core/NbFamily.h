@@ -46,6 +46,26 @@ warren@wpratt.com
 
 */
 
+// --- From Project Files/Source/Console/HPSDR/specHPSDR.cs ---
+/*
+*
+* Copyright (C) 2010-2018  Doug Wigley
+*
+* This program is free software; you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation; either version 2 of the License, or
+* (at your option) any later version.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program; if not, write to the Free Software
+* Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+*/
+
 // --- From nob.h ---
 /*  nob.h
 
@@ -213,7 +233,9 @@ private:
     NbTuning            m_tuning{};
 
     // Pushes all tuning fields through WDSP post-create setters for both
-    // NB1 and NB2. Called from ctor (after create_*EXT) and from setTuning.
+    // NB1 and NB2. Called only from setTuning() — the ctor passes initial
+    // values directly to create_anbEXT / create_nobEXT, so a post-create
+    // push during construction would be redundant.
     void pushAllTuning();
 };
 

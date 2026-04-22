@@ -4,7 +4,7 @@
 //
 // Ported from Thetis sources:
 //   Project Files/Source/ChannelMaster/cmaster.c, original licence from Thetis source is included below
-//   Project Files/Source/Console/HPSDR/specHPSDR.cs (upstream has no top-of-file header — project-level LICENSE applies)
+//   Project Files/Source/Console/HPSDR/specHPSDR.cs (Copyright (C) 2010-2018 Doug Wigley, GPLv2+)
 //   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
 //   Project Files/Source/Console/setup.cs, original licence from Thetis source is included below
 //
@@ -44,6 +44,26 @@ The author can be reached by email at
 
 warren@wpratt.com
 
+*/
+
+// --- From Project Files/Source/Console/HPSDR/specHPSDR.cs ---
+/*
+*
+* Copyright (C) 2010-2018  Doug Wigley
+*
+* This program is free software; you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation; either version 2 of the License, or
+* (at your option) any later version.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program; if not, write to the Free Software
+* Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
 
 //=================================================================
@@ -188,11 +208,12 @@ NbFamily::NbFamily(int channelId, int sampleRate, int bufferSize)
 
     // From Thetis specHPSDR.cs:896-907 [v2.10.3.13] — NB2 P/Invoke 10-arg form:
     //   (id, run, mode, buffsize, samplerate, tau, hangtime, advtime, backtau, threshold)
-    // This is a reduction of the nobII.c 13-arg C signature — advslewtime,
-    // hangslewtime, and max_imp_seq_time are NOT post-create settable via the
-    // EXT interface; they come from nobII.c internal defaults. `nb2SlewMs`
-    // and `nb2MaxImpMs` fields in NbTuning are reserved for a future direct
-    // C-API wrapper and are unused in this path.
+    // This is a reduction of the nobII.c 13-arg C signature. advslewtime and
+    // hangslewtime collapse into a single `tau` arg (SetEXTNOBTau at
+    // nobII.c:686 pushes both simultaneously — see pushAllTuning below).
+    // max_imp_seq_time has no post-create EXT setter and is fixed at create
+    // time per nobII.c defaults. `nb2MaxImpMs` in NbTuning is reserved for a
+    // future direct C-API wrapper and is unused in this path.
     create_nobEXT(
         m_channelId,
         /*run=*/0,
