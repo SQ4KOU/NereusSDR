@@ -121,9 +121,16 @@ def scan_header_block(text: list[str], header_end: int):
 
 
 def scan_inline_tags(text: list[str], header_end: int,
-                     corpus_callsigns: set[str]):
+                     corpus_callsigns: list[str]):
     """Return dict callsign -> list of (line_num, raw_comment_snippet)
-    for every inline hit of a corpus callsign below the header block."""
+    for every inline hit of a corpus callsign below the header block.
+
+    `corpus_callsigns` MUST be an ordered sequence (not a set) — the
+    inner loop breaks after the first match, so iteration order
+    determines which callsign claims a multi-tag line. A set's
+    iteration order is hash-randomized between Python invocations,
+    which would make the generator's output non-deterministic and
+    cause the --check drift gate to flake."""
     hits = defaultdict(list)
     for idx in range(header_end - 1, len(text)):
         line = text[idx]
@@ -260,7 +267,10 @@ def render_inline_mods_index(corpus, per_file_data) -> str:
 
 
 def build_per_file_data(corpus):
-    callsigns = set(corpus["callsign_tags"].keys())
+    # Sorted list (NOT set) so scan_inline_tags' first-match-wins loop
+    # is deterministic across Python invocations — set iteration order
+    # is hash-randomized, which silently produced spurious drift in CI.
+    callsigns = sorted(corpus["callsign_tags"].keys())
     data = {}
     for base, tag in ((THETIS_DIR, "thetis"), (MI0BOT_DIR, "mi0bot")):
         if not base.is_dir():
