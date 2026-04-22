@@ -2,11 +2,12 @@
 
 **A cross-platform SDR console for OpenHPSDR radios**
 
-> ℹ **v0.1.x alpha builds are superseded**
+> 📖 **Alpha testers — start here:** [docs/debugging/alpha-tester-hl2-smoke-test.md](docs/debugging/alpha-tester-hl2-smoke-test.md)
 >
-> The v0.1.x alpha binaries are no longer the current line. **If you
-> installed a v0.1.x build, please uninstall it and upgrade to v0.2.x.**
-> v0.2.x is the supported alpha line going forward.
+> Full walkthrough of what to try, what "success" looks like on your
+> OpenHPSDR radio, and — just as important — which UI controls are
+> intentionally stubbed so you don't file bugs against them. Updated for
+> v0.2.2.
 >
 > — J.J. Boyd ~ KG4VCF
 
@@ -57,7 +58,7 @@ sha256sum -c SHA256SUMS.txt
 
 ## Current Status
 
-**Current release: v0.2.1** (2026-04-19). RX pipeline is feature-complete across the full OpenHPSDR P1 and P2 radio families; next implementation phase is **3M-1: Basic SSB TX**.
+**Current release: v0.2.2** (2026-04-22). RX pipeline is feature-complete across the full OpenHPSDR P1 and P2 radio families; v0.2.2 folds in the **Phase 3O VAX audio routing** (multi-platform virtual-cable stack with macOS CoreAudio HAL plugin, `LinuxPipeBus`, `PortAudioBus`, first-run VAX dialog, MasterOutputWidget in the TitleBar, per-slice VAX channel routing, 4 Setup → Audio sub-tabs) alongside the **Phase 3P-A…H** radio-control parity work (HL2 BPF + S-ATT fixes, per-board P1/P2 codecs, Alex-1/2 Filters live-LED, OC Outputs, Calibration with live freq-correction, Antenna Control, HL2 I/O, Accessories, Diagnostics → Radio Status) plus the post-v0.2.1 maintenance fixes (VFO parser #73, STEP arrows #69, receiver-leak #75, HL2 Winsock shutdown #83, HL2 I2C persistence, P2 `FreqCorrectionFactor` reaching the phase word, OcMatrix cross-thread lock, RX1-preamp queue, P1 bank-ceiling from codec). Next implementation phase is **3M-1: Basic SSB TX**.
 
 ### What's working end-to-end today
 
@@ -169,7 +170,7 @@ sha256sum -c SHA256SUMS.txt
 | **3G-13: Step Attenuator & ADC Overload** | `StepAttenuatorController` (Classic + Adaptive), P1/P2 `adcOverflow` emission, OVL status badge, Setup→General→Options page, RxApplet ATT/S-ATT row, per-model preamp items | **Complete** |
 | **3G-14: About + AI Issue Reporter** | Help → About dialog, 💡 menu-bar issue reporter with structured prompts submitting to `bug_report.yml` / `feature_request.yml` | **Complete** |
 | **3N: Packaging** | Consolidated `release.yml`, `/release` skill, GPG-signed alpha builds: Linux AppImage ×2 archs, macOS Apple Silicon DMG, Windows portable ZIP + NSIS installer | **Complete** |
-| **3P: All-Board Radio-Control Parity** | 8 stacked sub-phases (A-H) delivering: HL2 BPF + S-ATT bug fixes, per-board P1/P2 codec subclasses, Alex-1/2 Filters live-LED sub-sub-tabs, OC Outputs matrix page, Calibration page (incl. freq-correction factor), Antenna Control per-band grid, HL2 I/O (closes Phase 3L), Accessories (Alex/Apollo/Penny), Diagnostics → Radio Status dashboard + 4 sibling sub-tabs, attribution enforcement pipeline. After merge: **NereusSDR userland-complete vs Thetis**. | **Complete (H in flight)** |
+| **3P: All-Board Radio-Control Parity** | 8 stacked sub-phases (A-H) delivering: HL2 BPF + S-ATT bug fixes, per-board P1/P2 codec subclasses, Alex-1/2 Filters live-LED sub-sub-tabs, OC Outputs matrix page, Calibration page (incl. freq-correction factor), Antenna Control per-band grid, HL2 I/O (closes Phase 3L), Accessories (Alex/Apollo/Penny), Diagnostics → Radio Status dashboard + 4 sibling sub-tabs, attribution enforcement pipeline. After merge: NereusSDR's **hardware / radio-plumbing / status-readout surfaces are userland-complete vs Thetis** — DSP-parameter / Transmit / CAT / Appearance / Keyboard Setup pages are still page shells with disabled controls pending later phases (see the [alpha-tester guide](docs/debugging/alpha-tester-hl2-smoke-test.md) for the honest wired-vs-stub breakdown). | **Complete** |
 | 3M-1: Basic SSB TX | TxChannel, mic input, MOX state machine, I/Q output | **Next** |
 | 3M-2: CW TX | Sidetone, firmware keyer, QSK/break-in | Planned |
 | 3M-3: TX Processing | 18-stage TXA chain + TX-side RX DSP additions | Planned |
