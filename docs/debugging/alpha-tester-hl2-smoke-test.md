@@ -5,7 +5,7 @@
 **What this build is:**
 - A ground-up C++/Qt6 port of [Thetis](https://github.com/ramdor/Thetis) (the Apache Labs / OpenHPSDR console), architecturally modelled on [AetherSDR](https://github.com/ten9876/AetherSDR).
 - Supports the **full OpenHPSDR family** over **both Protocol 1 (P1)** and **Protocol 2 (P2)**. That includes the Apache Labs ANAN line (100/100B/100D/10/10E/200D/7000/8000/G2-Saturn), Hermes / Hermes Lite 2, Metis, Angelia, Orion, Orion MkII, and any other board that speaks the OpenHPSDR discovery + frame protocols.
-- As of **Phase 3P (Apr 2026), the radio-control surface is userland-complete vs Thetis** — every Setup page a Thetis user reaches for has a NereusSDR equivalent, every status readout a Thetis user expects is exposed.
+- As of **Phase 3P (Apr 2026), the hardware / radio-plumbing / status-readout surfaces are userland-complete vs Thetis** — every Hardware Config page (Antenna-ALEX, OC Outputs, Calibration, HL2 I/O) and every Diagnostics dashboard a Thetis user reaches for has a NereusSDR equivalent, and PA / connection-quality / settings-validation readouts a Thetis user expects are exposed. **The DSP-parameter, Transmit, PA Settings, CAT/Network, Appearance, and Keyboard Setup pages are NOT there yet** — the page tree is built out, but most controls inside those pages are disabled placeholders pending later phases (3M TX, 3J TCI, 3K CAT, 3H skins, etc.). See "Setup pages that look built but are still shell" below for specifics. A previous revision of this doc overstated that as "every Setup page is wired"; that was wrong and this revision corrects it.
 - The **goal of your test** is: confirm discovery → connect → listen to a live SSB QSO on your board, plus exercise the Phase 3P additions (Calibration, OC Outputs, Antenna Control, Alex filter live-LED, Radio Status dashboard, ADC Overload status-bar indicator).
 
 **What this build is NOT:**
@@ -66,8 +66,9 @@ Before you dive in, here's the honest state of the overall application so you ha
 | **3P-G** | **Hardware → Calibration** page (renamed from PA Calibration). 5 Thetis-1:1 group boxes: Freq Cal, Level Cal (with Rx1/Rx2 6m LNA offsets), HPSDR Freq Cal Diagnostic (9-decimal correction factor + 10 MHz external-ref toggle), TX Display Cal, existing PA Current (A) group. Freq correction factor wires into P2 phase-word so per-radio reference-oscillator drift is compensable. | Working |
 | **3P-H** | New **Diagnostics → Radio Status dashboard** (5 cards: PA Status, Forward/Reflected/SWR, PTT Source, Connection Quality, Settings Hygiene) + 4 sibling sub-tabs (Connection Quality / Settings Validation / Export-Import Config / Logs). **PA telemetry parsed from both P1 and P2** status packets with Thetis per-board scaling formulas. **ADC Overload status-bar label** left of STATION (yellow/red per hysteresis level, 2 s auto-hide, Thetis `ucInfoBar` parity). **Live LED wire-up** across Alex-1/2 Filters, OC Outputs pin-state, HL2 I/O register table. **Settings Hygiene** validates per-MAC AppSettings against BoardCapabilities on connect. Dark-theme checkbox + radio-button fix. Plus a discovery-driven **attribution enforcement pipeline** (corpus + preservation check + drift gate) that closed 74 historical dropped contributor tags. | Working |
 | **CLI: `--profile <name>`** | Run multiple concurrent NereusSDR instances with separate AppSettings / audio / container state. Each instance has its own profile-scoped config. | Working |
+| **Post-v0.2.1 maintenance (Apr 16–21)** | `fix(vfo)` full frequency-entry parser rewrite (closes [#73](https://github.com/boydsoftprez/NereusSDR/issues/73)). `fix(rx-applet)` STEP ↑/↓ arrows now step the tuning ladder (closes [#69](https://github.com/boydsoftprez/NereusSDR/issues/69)) and 500 Hz was added between 100 Hz and 1 kHz. `fix(receiver-manager)` ReceiverManager reset on disconnect so reconnecting the same rig doesn't leak receivers (closes [#75](https://github.com/boydsoftprez/NereusSDR/issues/75)). `fix(shutdown)` HL2 disconnect runs synchronously on the connection worker with a QSemaphore-bounded dispatch — fixes Winsock corruption on Windows HL2 shutdown (closes [#83](https://github.com/boydsoftprez/NereusSDR/issues/83)). `fix(p1)` HL2 I2C read responses now persist into the `IoBoardHl2` model so the HL2 I/O page stays in sync. `fix(codec)` `FreqCorrectionFactor` is now applied inside `P2CodecOrionMkII::hzToPhaseWord` — the Calibration page dial actually shifts the radio now (previously the UI changed but the phase word didn't). `fix(oc-matrix)` OcMatrix state guarded with QReadWriteLock for cross-thread safety. `fix(rx-applet)` RX1 preamp toggle queued onto the connection thread so the combo can't race the codec. `fix(p1)` bank scheduler ceiling now reads `codec->maxBank()` so HL2 and Anvelina Pro 3 stop clipping at bank 10. | Working |
 
-**The short version:** after Phase 3P, **NereusSDR's hardware and radio-control surface is userland-complete vs Thetis.** Every Setup page a Thetis user reaches for has a NereusSDR equivalent; every status readout a Thetis user expects is exposed. Single-receiver RX works end-to-end; all Setup / status surfaces are live. **TX pipeline (Phase 3M) is still cold**; multi-panadapter (3F), TCI (3J), CAT (3K), skins (3H), recording (3M) remain not-started.
+**The short version:** after Phase 3P, **NereusSDR's hardware / radio-plumbing / status-readout surface is userland-complete vs Thetis.** Every Hardware Config + Diagnostics page a Thetis user reaches for has a NereusSDR equivalent; every PA / connection / settings-validation readout a Thetis user expects is exposed. **Much of the rest of the Setup tree is NOT there yet.** The DSP-parameter pages (beyond RX AGC), the Transmit section, PA Settings, CAT/Network, Appearance, Keyboard, and parts of Diagnostics and Display are built-out page shells with **disabled placeholder controls** — they're the scaffolding for later phases (3M, 3J, 3K, 3H). Single-receiver RX works end-to-end. **TX pipeline (Phase 3M) is still cold**; multi-panadapter (3F), TCI (3J), CAT (3K), skins (3H), recording (3M) remain not-started.
 
 ### Touring the app
 
@@ -454,6 +455,29 @@ This is the list of things you will see in the UI that look like they should wor
 - **No PureSignal linearization.** Scaffold only; no DSP behind the switch.
 - **No external PTT input routing** — the ANAN OC Outputs tab has combos for PTT pin, CW key pin, and aux outputs; they persist the mapping but don't drive real GPIO until the TX pipeline lands (Phase 3M).
 
+### Setup pages that look built but are still shell
+
+A previous revision of this doc claimed "every Setup page a Thetis user reaches for has a NereusSDR equivalent." That was an overstatement. The page tree is built out, but **many pages have their controls disabled pending later phases**. Here's what's actually stub in the Setup dialog today, so you don't file bugs for disabled controls:
+
+- **Setup → DSP** — the only live controls in the whole DSP section are the **AGC** controls on the AGC/ALC page (Mode / Attack / Decay / Hang / Slope / Max Gain / Fixed Gain / Hang Threshold). **Everything else on the DSP section is a disabled placeholder:** ALC (in-band / out-of-band / max gain), Leveler, NR1 (Taps/Delay/Gain/Leak), ANF, NR2 / EMNR (gain/NPE/position/trained/artifact), NB1, NB2, SNB, CW Keyer, CW Timing, APF, AM, SAM, FM squelch / RX / TX sub-groups, VOX / DEXP, CFC, TX Profiles, MNF. **Note:** the ON/OFF *toggles* for most of these features are live on the VfoWidget DSP tab and the RX applet — it's only the tunable-parameter Setup UI that's still cold.
+- **Setup → Transmit** (all 4 pages: Power & PA, TX Profiles, Speech Processor, PureSignal) — essentially entirely stubbed pending Phase 3M. Max-power slider, SWR protection, compressor, CESSB, per-band gain, profile list / create / delete / copy — all disabled.
+- **Setup → CAT & Network** (Serial Ports, TCI Server, TCP/IP CAT, MIDI Control) — all 4 pages are stubbed pending Phases 3J (TCI) and 3K (CAT / rigctld). You can navigate into them, nothing drives anything.
+- **Setup → Keyboard → Shortcuts** — partial page; the keyboard-shortcut binder is not live yet.
+- **Setup → Appearance** (Colors & Theme, Meter Styles, Gradients, Skins, Collapsible Display) — all 5 pages are stubbed pending Phase 3H (skin system).
+- **Setup → Diagnostics → Signal Generator / Hardware Tests / Logging** — stubs alongside the four live Diagnostics sub-tabs (Radio Status / Connection Quality / Settings Validation / Export-Import). **Logs** sub-tab is a placeholder pending qCWarning capture wire-up.
+- **Setup → Display → RX2 Display / TX Display** — stubs pending Phase 3F (multi-panadapter) / 3M (TX pipeline). The three live Display pages are Spectrum Defaults / Waterfall Defaults / Grid & Scales.
+- **Setup → Hardware → PureSignal / Diversity** sub-tabs — scaffold only; state persists but no DSP or RX-fusion runs behind them.
+
+**What you CAN rely on in the Setup dialog right now:**
+- General → Startup & Preferences / UI Scale & Theme / Navigation / Options
+- Hardware Config → Radio Info / Antenna-ALEX (Antenna Control + Alex-1 Filters + Alex-2 Filters) / OC Outputs / Calibration / HL2 I/O
+- Audio → Devices / VAX / TCI (placeholder label) / Advanced
+- DSP → AGC controls on the AGC/ALC page (the *only* live DSP Setup controls)
+- Display → Spectrum Defaults / Waterfall Defaults / Grid & Scales
+- Diagnostics → Radio Status / Connection Quality / Settings Validation / Export-Import
+
+Everything outside that list in the Setup dialog is a disabled placeholder. Please don't file a "control X doesn't do anything" bug against those pages — we know.
+
 ### Controls that look live but are cold
 
 - **PureSignal enable** (visible on 2-ADC boards) — state persists, no DSP runs.
@@ -585,7 +609,7 @@ If at the end of this test you:
 10. Opened the new Phase 3P-H Diagnostics tabs (Radio Status / Connection Quality / Settings Validation)
 11. Quit cleanly
 
-…then we've hit the **alpha-test success criterion for NereusSDR's userland-complete milestone.** Everything beyond that is a bonus — and we especially want to hear about:
+…then we've hit the **alpha-test success criterion for NereusSDR's Phase-3P hardware-and-status milestone.** (Not "userland-complete" — the DSP / Transmit / CAT / Appearance / Keyboard Setup pages are still shells. "Hardware surface + status readouts" is the honest scope of this test.) Everything beyond that is a bonus — and we especially want to hear about:
 
 - Capability-gating misses (tabs that shouldn't be there on your board; tabs that should be there but are hidden)
 - Settings that don't persist across a `Quit → Relaunch → Connect` cycle
