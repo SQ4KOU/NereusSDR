@@ -116,6 +116,7 @@
 #include "SpectrumOverlayMenu.h"
 #include "widgets/VfoWidget.h"
 #include "core/AppSettings.h"
+#include "dbm_strip_math.h"
 
 #include <QHoverEvent>
 
@@ -1038,8 +1039,8 @@ void SpectrumWidget::resizeEvent(QResizeEvent* event)
     int w = width();
     int h = height();
 #ifdef NEREUS_GPU_SPECTRUM
-    // GPU mode: waterfall is full width (dBm strip is in overlay)
-    int wfW = w;
+    // GPU mode: waterfall clips at strip border (strip is in overlay on right edge)
+    int wfW = w - kDbmStripW;
 #else
     int wfW = w - kDbmStripW;
 #endif
@@ -1077,12 +1078,13 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
     int wfTop = specH + kDividerH;
     int wfH = h - wfTop - kFreqScaleH;
 
-    // Spectrum area (right of dBm strip)
-    QRect specRect(kDbmStripW, 0, w - kDbmStripW, specH);
+    // Spectrum area (left of dBm strip — strip lives on the right edge per
+    // AetherSDR convention). From AetherSDR SpectrumWidget.cpp:4858 [@0cd4559]
+    QRect specRect(0, 0, w - kDbmStripW, specH);
     // Waterfall area
-    QRect wfRect(kDbmStripW, wfTop, w - kDbmStripW, wfH);
+    QRect wfRect(0, wfTop, w - kDbmStripW, wfH);
     // Frequency scale bar
-    QRect freqRect(kDbmStripW, h - kFreqScaleH, w - kDbmStripW, kFreqScaleH);
+    QRect freqRect(0, h - kFreqScaleH, w - kDbmStripW, kFreqScaleH);
 
     // Draw divider bar between spectrum and waterfall
     p.fillRect(0, specH, w, kDividerH, QColor(0x30, 0x40, 0x50));
@@ -1094,7 +1096,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
     drawVfoMarker(p, specRect, wfRect);
     drawOffScreenIndicator(p, specRect, wfRect);
     drawFreqScale(p, freqRect);
-    drawDbmScale(p, QRect(0, 0, kDbmStripW, specH));
+    drawDbmScale(p, specRect);  // strip rect derived from specRect.right() inside drawDbmScale
     drawCursorInfo(p, specRect);
 
     // FPS overlay (Phase 3G-8 commit 5 / G8 ShowFPS). Cheap rolling counter
@@ -1451,8 +1453,11 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
 // ---- dBm scale strip ----
 void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
 {
-    p.fillRect(QRect(0, specRect.top(), kDbmStripW, specRect.height()),
-               QColor(0x10, 0x15, 0x20));
+    // Strip occupies the rightmost kDbmStripW pixels of specRect.
+    // From AetherSDR SpectrumWidget.cpp:4858 [@0cd4559]
+    const QRect strip = NereusSDR::DbmStrip::stripRect(specRect, kDbmStripW);
+
+    p.fillRect(strip, QColor(0x10, 0x15, 0x20));
 
     QFont font = p.font();
     font.setPixelSize(9);
@@ -1469,7 +1474,7 @@ void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
     for (float dbm = bottom; dbm <= m_refLevel; dbm += step) {
         int y = dbmToY(dbm, specRect);
         QString label = QString::number(static_cast<int>(dbm));
-        QRect textRect(2, y - 6, kDbmStripW - 4, 12);
+        QRect textRect(strip.left() + 2, y - 6, strip.width() - 4, 12);
         p.drawText(textRect, Qt::AlignRight | Qt::AlignVCenter, label);
     }
 }
@@ -1884,7 +1889,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
     int h = height();
     int specH = static_cast<int>(h * m_spectrumFrac);
     int dividerY = specH;
-    QRect specRect(kDbmStripW, 0, w - kDbmStripW, specH);
+    QRect specRect(0, 0, w - kDbmStripW, specH);
     int mx = static_cast<int>(event->position().x());
     int my = static_cast<int>(event->position().y());
 
@@ -1934,8 +1939,13 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
         return;
     }
 
-    // 1. dBm scale strip — drag to adjust ref level
-    if (mx < kDbmStripW) {
+    // 1. dBm scale strip — drag to adjust ref level.
+    // Strip lives on the right edge per AetherSDR convention.
+    // From AetherSDR SpectrumWidget.cpp:1712-1745 [@0cd4559]
+    const int stripX = width() - kDbmStripW;
+    if (mx >= stripX && my < specH) {
+        // Arrow-click and wheel interactions land in Task 4 / Task 6.
+        // For now, below the arrow row becomes a drag-pan as before.
         m_draggingDbm = true;
         m_dragStartY = my;
         m_dragStartRef = m_refLevel;
@@ -2018,7 +2028,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
     int w = width();
     int h = height();
     int specH = static_cast<int>(h * m_spectrumFrac);
-    QRect specRect(kDbmStripW, 0, w - kDbmStripW, specH);
+    QRect specRect(0, 0, w - kDbmStripW, specH);
 
     // --- Active drag modes ---
 
@@ -2119,7 +2129,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
     // From AetherSDR SpectrumWidget.cpp:1242-1344
 
     int freqBarY = specH + kDividerH;
-    if (mx < kDbmStripW) {
+    if (mx >= w - kDbmStripW && my < specH) {
         setCursor(Qt::SizeVerCursor);
     } else if (my >= specH - 6 && my < specH + kDividerH + 6) {
         setCursor(Qt::SplitVCursor);
@@ -2163,7 +2173,7 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* event)
             if (dx <= 4) {
                 int w = width();
                 int specH = static_cast<int>(height() * m_spectrumFrac);
-                QRect specRect(kDbmStripW, 0, w - kDbmStripW, specH);
+                QRect specRect(0, 0, w - kDbmStripW, specH);
                 double hz = xToHz(static_cast<int>(event->position().x()), specRect);
                 hz = std::round(hz / m_stepHz) * m_stepHz;
                 emit frequencyClicked(hz);
@@ -2481,8 +2491,11 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     const int specH = static_cast<int>(contentH * m_spectrumFrac);
     const int wfY = specH + kDividerH + kFreqScaleH;
     const int wfH = h - wfY;
-    const QRect specRect(0, 0, w, specH);
-    const QRect wfRect(0, wfY, w, wfH);
+    // Strip lives on the right edge (overlay texture paints it there).
+    // Clip GPU content to w - kDbmStripW so the trace stops at the
+    // strip's border instead of being drawn under it.
+    const QRect specRect(0, 0, w - kDbmStripW, specH);
+    const QRect wfRect(0, wfY, w - kDbmStripW, wfH);
 
     auto* batch = r->nextResourceUpdateBatch();
 
@@ -2561,9 +2574,9 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             p.setRenderHint(QPainter::Antialiasing, false);
 
             drawGrid(p, specRect);
-            drawDbmScale(p, QRect(0, 0, kDbmStripW, specH));
+            drawDbmScale(p, specRect);
             p.fillRect(0, specH, w, kDividerH, QColor(0x30, 0x40, 0x50));
-            drawFreqScale(p, QRect(0, specH + kDividerH, w, kFreqScaleH));
+            drawFreqScale(p, QRect(0, specH + kDividerH, w - kDbmStripW, kFreqScaleH));
             drawVfoMarker(p, specRect, wfRect);
             drawOffScreenIndicator(p, specRect, wfRect);
 
@@ -2961,7 +2974,7 @@ void SpectrumWidget::updateVfoPositions()
     }
 
     int specH = static_cast<int>(height() * m_spectrumFrac);
-    QRect specRect(kDbmStripW, 0, width() - kDbmStripW, specH);
+    QRect specRect(0, 0, width() - kDbmStripW, specH);
     int vfoX = hzToX(m_vfoHz, specRect);
 
     for (auto it = m_vfoWidgets.begin(); it != m_vfoWidgets.end(); ++it) {
