@@ -251,6 +251,25 @@ public:
         m_hardwareProfile = ::NereusSDR::profileForModel(
             defaultModelForBoard(board));
     }
+
+    // Phase 3P-I-a T14 — test-only hooks. Allow tests to inject a mock
+    // RadioConnection, simulate band crossings, trigger the Connected
+    // state handler, and override board capabilities. Production code
+    // must never use these.
+    void injectConnectionForTest(RadioConnection* conn) { m_connection = conn; }
+    void setLastBandForTest(NereusSDR::Band b) {
+        const bool cross = (b != m_lastBand);
+        m_lastBand = b;
+        if (cross) { applyAlexAntennaForBand(b); }
+    }
+    void onConnectedForTest() {
+        applyAlexAntennaForBand(m_lastBand);
+    }
+    void setCapsForTest(bool hasAlex) {
+        m_testCapsOverride = true;
+        m_testCapsHasAlex = hasAlex;
+    }
+    NereusSDR::Band lastBand() const { return m_lastBand; }
 #endif
 
     // Connection
@@ -395,6 +414,11 @@ private:
 
     // Settings save coalescing
     bool m_settingsSaveScheduled{false};
+
+#ifdef NEREUS_BUILD_TESTS
+    bool m_testCapsOverride{false};
+    bool m_testCapsHasAlex{false};
+#endif
 
     // AGC bidirectional sync guard — prevents infinite feedback loop between
     // agcThresholdChanged and rfGainChanged handlers.

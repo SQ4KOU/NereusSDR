@@ -501,6 +501,13 @@ bool RadioModel::isConnected() const
 
 const BoardCapabilities& RadioModel::boardCapabilities() const
 {
+#ifdef NEREUS_BUILD_TESTS
+    if (m_testCapsOverride) {
+        static BoardCapabilities overrideCaps{};
+        overrideCaps.hasAlex = m_testCapsHasAlex;
+        return overrideCaps;
+    }
+#endif
     if (m_hardwareProfile.caps) { return *m_hardwareProfile.caps; }
     return BoardCapsTable::forBoard(HPSDRHW::Unknown);
 }
