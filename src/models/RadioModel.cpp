@@ -1518,6 +1518,43 @@ void RadioModel::loadSliceState(SliceModel* slice)
                   << "AF:" << slice->afGain() << "RF:" << slice->rfGain();
 }
 
+// Phase 3P-I-a — see header for full context.
+// Composition scope is intentionally minimal in 3P-I-a: trxAnt = rxAnt(band),
+// txAnt = txAnt(band), all else zero. 3P-I-b adds SKU-aware Ext-on-TX and
+// RX-only composition; 3M-1 adds the MOX branch and Aries clamp.
+//
+// Source: Thetis HPSDR/Alex.cs:310-413 [v2.10.3.13 @501e3f5].
+void RadioModel::applyAlexAntennaForBand(Band band)
+{
+    if (!m_connection || !m_connection->isConnected()) {
+        return;
+    }
+
+    const BoardCapabilities& caps = boardCapabilities();
+
+    AntennaRouting r;
+    if (!caps.hasAlex) {
+        // HL2 / Atlas — matches Thetis Alex.cs:312-317 early return
+        // "SetAntBits(0, 0, 0, 0, false)". Leaves rxOnlyAnt=0,
+        // rxOut=false, tx=false from struct defaults; override
+        // trxAnt/txAnt to 0 so the clamp in
+        // P1/P2RadioConnection::setAntennaRouting maps them to
+        // "no antenna selection" (zero bits on the wire).
+        r.trxAnt = 0;
+        r.txAnt  = 0;
+    } else {
+        r.trxAnt = m_alexController.rxAnt(band);   // 1..3
+        r.txAnt  = m_alexController.txAnt(band);   // 1..3
+    }
+
+    // Marshal to connection worker thread — mirrors existing pattern
+    // used by e.g. setReceiverFrequency.
+    RadioConnection* conn = m_connection;
+    QMetaObject::invokeMethod(conn, [conn, r]() {
+        conn->setAntennaRouting(r);
+    });
+}
+
 // Coalesce settings saves to avoid writing on every scroll tick.
 void RadioModel::scheduleSettingsSave()
 {

@@ -281,6 +281,17 @@ private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
 
 private:
+    // Pushes AlexController's per-band antenna state to the connection.
+    // Mirrors Thetis HPSDR/Alex.cs:310-413 UpdateAlexAntSelection at
+    // 3P-I-a scope: reads rxAnt(band), composes an AntennaRouting with
+    // trxAnt = rxAnt (RX=TX unified in 3P-I-a), writes txAnt = txAnt(band)
+    // independently. No MOX-aware composition, no XVTR, no Aries — those
+    // land in 3P-I-b/3M-1.
+    //
+    // Source: docs/architecture/antenna-routing-design.md §5.3.
+    // Triggered from T9/T10/T11 wirings in follow-up tasks.
+    void applyAlexAntennaForBand(NereusSDR::Band band);
+
     void wireConnectionSignals(int wdspInSize);
     void wireSliceSignals();
     void teardownConnection();
