@@ -140,7 +140,7 @@ namespace NereusSDR {
 // so UI sliders round-trip without conversion; WDSP calls are converted
 // to seconds at the wdsp_api.h boundary.
 //
-// Defaults below are Thetis cmaster.c:43-68 [@501e3f5] byte-for-byte.
+// Defaults below are Thetis cmaster.c:43-68 [v2.10.3.13] byte-for-byte.
 struct NbTuning
 {
     // NB1 — applied via create_anbEXT + SetEXTANB* post-create setters.
@@ -156,7 +156,7 @@ struct NbTuning
     double nb2AdvMs      = 0.1;    // cmaster.c:63   advtime=0.0001 s
     double nb2HangMs     = 0.1;    // cmaster.c:65   hangtime=0.0001 s
     double nb2MaxImpMs   = 25.0;   // cmaster.c:66   max_imp_seq_time=0.025 s
-    double nb2Backtau    = 0.05;   // cmaster.c:67   backtau=0.05 s
+    double nb2Backtau    = 0.05;   // cmaster.c:67   backtau=0.05 s (stored in s, not ms)
     double nb2Threshold  = 30.0;   // cmaster.c:68   threshold=30.0
 };
 
