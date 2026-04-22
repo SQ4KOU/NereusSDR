@@ -140,6 +140,7 @@ class QStackedWidget;
 
 namespace NereusSDR {
 
+struct BoardCapabilities;
 class FilterPassbandWidget;
 class PanadapterModel;
 class SliceModel;
@@ -185,6 +186,11 @@ public:
 
     // Set the antenna list shown in the RX/TX antenna menus.
     void setAntennaList(const QStringList& ants);
+
+public slots:
+    // Phase 3P-I-a T16 — gate ANT buttons on caps.hasAlex + antenna count.
+    // Hidden on HL2/Atlas and any board without an Alex front-end.
+    void setBoardCapabilities(const NereusSDR::BoardCapabilities& caps);
 
 #ifdef NEREUS_BUILD_TESTS
 public:

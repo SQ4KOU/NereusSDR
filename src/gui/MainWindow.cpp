@@ -989,6 +989,14 @@ void MainWindow::populateDefaultMeter()
     m_rxApplet = new RxApplet(nullptr, m_radioModel, nullptr);
     panel->addApplet(m_rxApplet);
 
+    // Phase 3P-I-a T16 — push board caps into RxApplet so ANT buttons
+    // hide on HL2/Atlas. Matches the VFO Flag wiring below (T15).
+    m_rxApplet->setBoardCapabilities(m_radioModel->boardCapabilities());
+    connect(m_radioModel, &RadioModel::currentRadioChanged, m_rxApplet,
+            [this]() {
+        m_rxApplet->setBoardCapabilities(m_radioModel->boardCapabilities());
+    });
+
     // TxApplet — NYI shell (Phase 3I-1)
     auto* txApplet = new TxApplet(m_radioModel, nullptr);
     panel->addApplet(txApplet);

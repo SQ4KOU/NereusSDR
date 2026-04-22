@@ -125,6 +125,7 @@
 #include "core/accessories/AlexController.h"
 #include "gui/ComboStyle.h"
 #include "gui/StyleConstants.h"
+#include "gui/styles/PopupMenuStyle.h"
 #include "gui/widgets/FilterPassbandWidget.h"
 #include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
@@ -237,6 +238,7 @@ void RxApplet::buildUi()
         // Control 3: RX antenna button (flat, color #4488ff, transparent bg)
         // From AetherSDR RxApplet.cpp lines 270-289
         m_rxAntBtn = new QPushButton(QStringLiteral("ANT1"), this);
+        m_rxAntBtn->setObjectName(QStringLiteral("m_rxAntBtn"));
         m_rxAntBtn->setFlat(true);
         m_rxAntBtn->setStyleSheet(QStringLiteral(
             "QPushButton {"
@@ -247,6 +249,7 @@ void RxApplet::buildUi()
         ));
         connect(m_rxAntBtn, &QPushButton::clicked, this, [this] {
             QMenu menu(this);
+            menu.setStyleSheet(QString::fromLatin1(kPopupMenu));
             const QString cur = m_slice ? m_slice->rxAntenna() : QString{};
             for (const QString& ant : m_antList) {
                 QAction* act = menu.addAction(ant);
@@ -272,6 +275,7 @@ void RxApplet::buildUi()
         // Control 4: TX antenna button (flat, color #ff4444, transparent bg)
         // From AetherSDR RxApplet.cpp lines 292-311
         m_txAntBtn = new QPushButton(QStringLiteral("ANT1"), this);
+        m_txAntBtn->setObjectName(QStringLiteral("m_txAntBtn"));
         m_txAntBtn->setFlat(true);
         m_txAntBtn->setStyleSheet(QStringLiteral(
             "QPushButton {"
@@ -282,6 +286,7 @@ void RxApplet::buildUi()
         ));
         connect(m_txAntBtn, &QPushButton::clicked, this, [this] {
             QMenu menu(this);
+            menu.setStyleSheet(QString::fromLatin1(kPopupMenu));
             const QString cur = m_slice ? m_slice->txAntenna() : QString{};
             for (const QString& ant : m_antList) {
                 QAction* act = menu.addAction(ant);
@@ -1037,6 +1042,18 @@ void RxApplet::setAntennaList(const QStringList& ants)
         m_rxAntBtn->setText(m_slice->rxAntenna());
         m_txAntBtn->setText(m_slice->txAntenna());
     }
+}
+
+// Phase 3P-I-a T16 — hide antenna buttons on boards without Alex.
+// HL2 / Atlas / bare-ADC SKUs have no antenna relay; the buttons
+// would be zombie controls (visible but no-op) and would mislead users.
+// Matches VfoWidget::setBoardCapabilities (T15) one-for-one so the whole
+// header row stays in sync.
+void RxApplet::setBoardCapabilities(const BoardCapabilities& caps)
+{
+    const bool showAnt = caps.hasAlex && caps.antennaInputCount >= 3;
+    if (m_rxAntBtn) { m_rxAntBtn->setVisible(showAnt); }
+    if (m_txAntBtn) { m_txAntBtn->setVisible(showAnt); }
 }
 
 // ── Model → UI sync ───────────────────────────────────────────────────────────
