@@ -535,10 +535,10 @@ NereusSDR writes every log line to a file. Find it:
 - **Linux:** `~/.config/NereusSDR/nereussdr.log`
 - **Windows:** `%LOCALAPPDATA%\NereusSDR\nereussdr.log`
 
-If you launched with `--profile <name>` (Phase 3O multi-instance), the log lives under a profile-scoped path:
-- **macOS:** `~/Library/Application Support/NereusSDR/<name>/nereussdr.log`
-- **Linux:** `~/.config/NereusSDR/<name>/nereussdr.log`
-- **Windows:** `%LOCALAPPDATA%\NereusSDR\<name>\nereussdr.log`
+If you launched with `--profile <name>` (Phase 3O multi-instance), the log lives under a profile-scoped path (note the literal `profiles/` segment the runtime inserts via `AppSettings::resolveConfigDir()`):
+- **macOS:** `~/Library/Preferences/NereusSDR/profiles/<name>/nereussdr.log`
+- **Linux:** `~/.config/NereusSDR/profiles/<name>/nereussdr.log`
+- **Windows:** `%LOCALAPPDATA%\NereusSDR\profiles\<name>\nereussdr.log`
 
 The file is rewritten on each launch, so grab it *before* you relaunch the app after a crash.
 
