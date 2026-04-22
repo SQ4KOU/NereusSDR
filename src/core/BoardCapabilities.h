@@ -252,6 +252,20 @@ struct BoardCapabilities {
     int  xvtrJackCount;
     int  antennaInputCount;
 
+    // Antenna extensions (Phase 3P-I-a)
+    // hasAlex2:           P2 second BPF bank (OrionMKII + Saturn family).
+    //                     Gates Setup → Antenna → Alex-2 Filters sub-tab.
+    //                     Source: setup.cs:6230, tpAlex2FilterControl.Text = "BPF2" [v2.10.3.13 @501e3f5]
+    // hasRxBypassRelay:   Physical RxOut relay present on the Alex board.
+    //                     Source: HPSDR/Alex.cs:299-413 UpdateAlexAntSelection,
+    //                     "rx_out" param. False on HL2/Atlas (no Alex).
+    // rxOnlyAntennaCount: Number of RX-only inputs (RX1/RX2/XVTR). 0 on
+    //                     HL2/Atlas; 3 on Alex boards.
+    //                     Source: HPSDR/Alex.cs:59 RxOnlyAnt[12] enum (1=rx1,2=rx2,3=xv).
+    bool hasAlex2            {false};
+    bool hasRxBypassRelay    {false};
+    int  rxOnlyAntennaCount  {0};
+
     bool hasPureSignal;
     bool hasDiversityReceiver;
     bool hasStepAttenuatorCal;
