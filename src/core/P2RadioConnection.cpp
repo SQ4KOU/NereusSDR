@@ -286,7 +286,24 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // Upstream inline attribution preserved verbatim (console.cs:8238):
     //   if (p1) Rate[0] = rx1_rate; // [2.10.3.13]MW0LGE p1 !
     m_rx[2].enable = 1;
-    m_rx[2].frequency = 3865000;   // 80m LSB — overridden by setReceiverFrequency
+    // Phase 3P-I-a bench-bug fix (KG4VCF 2026-04-22):
+    // RadioModel::connectToRadio queues setReceiverFrequency BEFORE
+    // this method in the worker-thread FIFO — so by the time we run,
+    // m_rx[2].frequency already holds the persisted VFO (e.g. 14.3 MHz
+    // for 20m) and m_alex.hpfBits/lpfBits reflect the same. Only seed
+    // the 80m default when nothing has been stored yet (m_rx[2].frequency==0);
+    // the prior unconditional assign clobbered the real VFO, so the
+    // initial CmdHighPriority packet went out with DDC2 tuned to 80m
+    // but BPF bits for 20m — radio heard nothing until the next
+    // setReceiverFrequency fired from a user tune. The comment that used
+    // to read "overridden by setReceiverFrequency" had the FIFO order
+    // backwards.
+    if (m_rx[2].frequency == 0) {
+        m_rx[2].frequency = 3865000;   // 80m LSB — first-boot default only
+        double freqMhz = m_rx[2].frequency / 1.0e6;
+        m_alex.hpfBits = NereusSDR::codec::alex::computeHpf(freqMhz);
+        m_alex.lpfBits = NereusSDR::codec::alex::computeLpf(freqMhz);
+    }
     // DDC2 samplingRate is set by setSampleRate() which RadioModel queues
     // before connectToRadio in the FIFO (see RadioModel::connectToRadio).
     // Do NOT hardcode a rate here — it would stomp the user-selected value.
@@ -299,8 +316,13 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     m_adc[1].random = 1;
     m_adc[2].random = 1;
 
-    // TX frequency — overridden by SliceModel via setTxFrequency (simplex: TX=RX)
-    m_tx[0].frequency = 3865000;
+    // TX frequency — only seed default if nothing's been set (RadioModel
+    // doesn't queue an explicit setTxFrequency before connectToRadio today,
+    // but simplex TX will follow RX once TX phase lands. Same FIFO-order
+    // rationale as m_rx[2].frequency above.)
+    if (m_tx[0].frequency == 0) {
+        m_tx[0].frequency = 3865000;
+    }
 
     setState(ConnectionState::Connecting);
 
@@ -493,6 +515,9 @@ void P2RadioConnection::setAntennaRouting(AntennaRouting r)
     auto clamp = [](int v) { return (v < 1 || v > 3) ? 0 : v; };
     m_alex.rxAnt = clamp(r.trxAnt);
     m_alex.txAnt = clamp(r.txAnt);
+    qCDebug(lcConnection) << "P2::setAntennaRouting rxAnt=" << m_alex.rxAnt
+                          << "txAnt=" << m_alex.txAnt
+                          << "running=" << m_running;
     if (m_running) {
         sendCmdHighPriority();
     }

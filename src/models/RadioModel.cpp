@@ -469,6 +469,14 @@ RadioModel::RadioModel(QObject* parent)
     // issue #98's protocol-layer gap.
     connect(&m_alexController, &AlexController::antennaChanged, this,
             [this](Band b) {
+        // Persist on every controller mutation so the per-band
+        // selection survives app restart. Without this, AlexController
+        // state lived only in memory — caught during PR #N bench
+        // testing when ANT2 on 20m didn't restore across a relaunch
+        // (KG4VCF 2026-04-22). Coalesced via scheduleSettingsSave so
+        // load-time's 14-per-band emit burst collapses to one write.
+        m_alexControllerDirty = true;
+        scheduleSettingsSave();
         if (b != m_lastBand) { return; }
         applyAlexAntennaForBand(b);
         // T13 — keep the slice's cached ANT labels in sync so UI
@@ -476,6 +484,13 @@ RadioModel::RadioModel(QObject* parent)
         if (m_activeSlice) {
             m_activeSlice->refreshAntennasFromAlex(m_alexController, b);
         }
+    });
+    // Also persist the two blockTxAnt* safety toggles; they can change
+    // via the Antenna Control grid even when no band crossing occurs.
+    connect(&m_alexController, &AlexController::blockTxChanged, this,
+            [this]() {
+        m_alexControllerDirty = true;
+        scheduleSettingsSave();
     });
 
     // Connection starts null — created by connectToRadio() via factory.
@@ -1060,11 +1075,24 @@ void RadioModel::wireSliceSignals()
         // keeps the CURRENT band's slot up to date without either bug.
         Band newBand = bandFromFrequency(freq);
         if (newBand != m_lastBand) {
+            qCDebug(lcConnection) << "T10: band crossing" << bandLabel(m_lastBand)
+                                  << "→" << bandLabel(newBand)
+                                  << "(freq=" << freq << "Hz)";
             m_lastBand = newBand;
             // Phase 3P-I-a T10 — reapply per-band antenna on boundary
             // crossing. Thetis UpdateAlexAntSelection equivalent
             // (HPSDR/Alex.cs:310 [v2.10.3.13 @501e3f5]).
             applyAlexAntennaForBand(newBand);
+            // Phase 3P-I-a T10 follow-up — refresh the slice's cached
+            // rxAntenna/txAntenna labels from AlexController so the
+            // VFO Flag and RxApplet buttons show the new band's value.
+            // Without this call the wire switched but the UI stayed
+            // on the previous band's label (caught during PR #N
+            // bench testing — KG4VCF 2026-04-22). Mirrors the T9
+            // path at line 476-478.
+            if (m_activeSlice) {
+                m_activeSlice->refreshAntennasFromAlex(m_alexController, newBand);
+            }
         }
         scheduleSettingsSave();
     });
@@ -1558,6 +1586,8 @@ void RadioModel::loadSliceState(SliceModel* slice)
 void RadioModel::applyAlexAntennaForBand(Band band)
 {
     if (!m_connection || !m_connection->isConnected()) {
+        qCDebug(lcConnection) << "applyAlexAntennaForBand(" << bandLabel(band)
+                              << ") skipped — not connected";
         return;
     }
 
@@ -1577,6 +1607,10 @@ void RadioModel::applyAlexAntennaForBand(Band band)
         r.trxAnt = m_alexController.rxAnt(band);   // 1..3
         r.txAnt  = m_alexController.txAnt(band);   // 1..3
     }
+
+    qCDebug(lcConnection) << "applyAlexAntennaForBand(" << bandLabel(band)
+                          << ") → rxAnt=" << r.trxAnt << "txAnt=" << r.txAnt
+                          << "(hasAlex=" << caps.hasAlex << ")";
 
     // Marshal to connection worker thread — mirrors existing pattern
     // used by e.g. setReceiverFrequency.
@@ -1600,19 +1634,37 @@ void RadioModel::scheduleSettingsSave()
 }
 
 // Persist current slice state to AppSettings (per-band + session state).
+// Also flushes AlexController persistence if the dirty flag was set —
+// see the antennaChanged / blockTxChanged handlers in wireSliceSignals.
 void RadioModel::saveSliceState(SliceModel* slice)
 {
-    if (!slice) {
-        return;
+    if (slice) {
+        slice->saveToSettings(m_lastBand);
     }
 
-    slice->saveToSettings(m_lastBand);
+    // Flush AlexController if any per-band antenna or block-TX toggle
+    // changed since the last save. save() no-ops when MAC is empty,
+    // so pre-connect dirty flags are silently dropped — that's fine
+    // because load() hasn't run yet either.
+    if (m_alexControllerDirty) {
+        m_alexController.save();
+        m_alexControllerDirty = false;
+    }
 }
 
 void RadioModel::teardownConnection()
 {
     if (!m_connection) {
         return;
+    }
+
+    // Flush any pending AlexController writes before the MAC-scoped
+    // keys become unreachable (save() keys off m_mac, which stays set
+    // across disconnect, but a crash between disconnect and next save
+    // would lose the change). Cheap insurance.
+    if (m_alexControllerDirty) {
+        m_alexController.save();
+        m_alexControllerDirty = false;
     }
 
     // Disconnect signals into the DSP worker first so no new I/Q

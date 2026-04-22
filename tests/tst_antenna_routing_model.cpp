@@ -132,6 +132,42 @@ private slots:
         delete mock;
     }
 
+    // T10 follow-up: band crossing also refreshes the slice's cached
+    // rxAntenna/txAntenna labels so the VFO Flag / RxApplet buttons
+    // show the new band's value. Prior to the 2026-04-22 fix, T10
+    // only reapplied to the wire — slice labels stayed on the old
+    // band and the user reported "it did not switch automatically"
+    // (which was really "the UI label didn't update"). KG4VCF caught
+    // it on the bench against ANAN-G2.
+    void band_crossing_refreshes_slice_labels() {
+        RadioModel model;
+        model.setCapsForTest(/*hasAlex=*/true);
+        model.addSlice();
+        SliceModel* slice = model.sliceAt(0);
+        QVERIFY(slice);
+
+        // Store antenna 3 for 40m in the controller but NOT on the slice
+        // (the slice default is "ANT1"). Because m_lastBand starts at
+        // Band20m, the intermediate antennaChanged(Band40m) emission is
+        // filtered by T9's band-match check, so slice->rxAntenna stays
+        // at the default.
+        model.alexControllerMutable().setRxAnt(Band::Band40m, 3);
+        QCOMPARE(slice->rxAntenna(), QStringLiteral("ANT1"));
+
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+
+        // Simulate band crossing. setLastBandForTest fires both the
+        // wire reapply (applyAlexAntennaForBand) AND the slice label
+        // refresh (refreshAntennasFromAlex) — mirrors production T10.
+        model.setLastBandForTest(Band::Band40m);
+
+        QCOMPARE(slice->rxAntenna(), QStringLiteral("ANT3"));
+
+        model.injectConnectionForTest(nullptr);
+        delete mock;
+    }
+
     // !caps.hasAlex → zeros on the wire (Thetis Alex.cs:312-317 SetAntBits(0,0,0,0,false) parity).
     void hasAlex_false_writes_zero_routing() {
         RadioModel model;

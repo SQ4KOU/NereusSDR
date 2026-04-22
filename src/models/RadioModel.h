@@ -260,7 +260,15 @@ public:
     void setLastBandForTest(NereusSDR::Band b) {
         const bool cross = (b != m_lastBand);
         m_lastBand = b;
-        if (cross) { applyAlexAntennaForBand(b); }
+        if (cross) {
+            applyAlexAntennaForBand(b);
+            // Mirror the production T10 path so tests catch regressions
+            // in the slice-label refresh (see RadioModel.cpp frequencyChanged
+            // handler for the canonical version).
+            if (m_activeSlice) {
+                m_activeSlice->refreshAntennasFromAlex(m_alexController, b);
+            }
+        }
     }
     void onConnectedForTest() {
         applyAlexAntennaForBand(m_lastBand);
@@ -414,6 +422,12 @@ private:
 
     // Settings save coalescing
     bool m_settingsSaveScheduled{false};
+    // Phase 3P-I-a — dirty flag for AlexController persistence.
+    // AlexController::antennaChanged can fire 14× during load(); the
+    // flag + scheduleSettingsSave() timer coalesces them into a single
+    // write at flush time. Set from the antennaChanged/blockTxChanged
+    // handlers in wireSlice<Slot>, cleared by saveSliceState().
+    bool m_alexControllerDirty{false};
 
 #ifdef NEREUS_BUILD_TESTS
     bool m_testCapsOverride{false};
