@@ -246,6 +246,10 @@ void NbFamily::setMode(NbMode mode)
 
 void NbFamily::setSnbEnabled(bool enabled)
 {
+    // Short-circuit on unchanged state. Mirrors the guard in the old
+    // RxChannel::setSnbEnabled() body; avoids redundant SetRXASNBARun
+    // calls when upstream model signals re-fire on unchanged values.
+    if (m_snbEnabled.load(std::memory_order_acquire) == enabled) return;
     m_snbEnabled.store(enabled, std::memory_order_release);
 #ifdef HAVE_WDSP
     // From Thetis console.cs:36347 [v2.10.3.13]

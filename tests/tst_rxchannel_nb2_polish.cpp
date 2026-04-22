@@ -60,6 +60,8 @@ warren@wpratt.com
 
 #include <QtTest/QtTest>
 #include "core/RxChannel.h"
+#include "core/NbFamily.h"
+#include "core/WdspTypes.h"
 
 using namespace NereusSDR;
 
@@ -67,52 +69,94 @@ static constexpr int kTestChannel  = 99;  // Never opened via OpenChannel
 static constexpr int kTestBufSize  = 1024;
 static constexpr int kTestRate     = 48000;
 
+// Phase 3G sub-epic B rewrote RxChannel's NB surface around a single
+// NbFamily member exposing a tri-state NbMode + an NbTuning struct.
+// The old setNb2Enabled / setNb2Mode / setNb2Tau / setNb2LeadTime /
+// setNb2HangTime methods were removed. This test is the polish/refactor
+// test against the new API.
 class TestRxChannelNb2Polish : public QObject {
     Q_OBJECT
 
 private slots:
-    // ── nb2Enabled default ───────────────────────────────────────────────────
+    // ── nbMode default ───────────────────────────────────────────────────────
 
-    void nb2EnabledDefaultIsFalse() {
-        // NB2 is off by default; enabled flag stored atomically.
+    void nbModeDefaultIsOff() {
+        // NB starts Off; NbFamily::m_mode atomic default is NbMode::Off.
         RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
-        QCOMPARE(ch.nb2Enabled(), false);
+        QCOMPARE(ch.nbMode(), NbMode::Off);
     }
 
-    void setNb2EnabledEarlyReturnOnSameValue() {
-        // Same value as default → no change in the atomic, processIq gate unchanged.
+    // ── nbMode mutual exclusion ──────────────────────────────────────────────
+
+    void nbModeRotatesAcrossThreeStates() {
+        // Off → NB → NB2 → Off via cycleNbMode (design doc §sub-epic B,
+        // mirrors Thetis console.cs:43513 chkNB CheckState transition).
         RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
-        ch.setNb2Enabled(false);   // same as default
-        QCOMPARE(ch.nb2Enabled(), false);
+
+        ch.setNbMode(NbMode::NB);
+        QCOMPARE(ch.nbMode(), NbMode::NB);
+
+        // Switching to NB2 leaves ONLY NB2 active (mutual exclusion —
+        // the previous two-atomic design couldn't enforce this).
+        ch.setNbMode(NbMode::NB2);
+        QCOMPARE(ch.nbMode(), NbMode::NB2);
+
+        ch.setNbMode(NbMode::Off);
+        QCOMPARE(ch.nbMode(), NbMode::Off);
     }
 
-    // ── NB2 sub-parameter method existence ───────────────────────────────────
+    void cycleNbModeRotates() {
+        // Off → NB → NB2 → Off — matches space-bar and button-click behaviour.
+        QCOMPARE(cycleNbMode(NbMode::Off),  NbMode::NB);
+        QCOMPARE(cycleNbMode(NbMode::NB),   NbMode::NB2);
+        QCOMPARE(cycleNbMode(NbMode::NB2),  NbMode::Off);
+    }
+
+    // ── NbTuning defaults via RxChannel ──────────────────────────────────────
     //
-    // These tests confirm that setNb2Mode / setNb2Tau / setNb2LeadTime /
-    // setNb2HangTime compile and can be referenced. We do NOT call them
-    // because SetEXTNOB* functions operate on pnob[id] which is unallocated
-    // for channel 99. Calling them would segfault (same constraint as
+    // RxChannel::nbTuning() returns the NbFamily-owned tuning struct.
+    // With a default-constructed channel, the struct should hold the
+    // cmaster.c:43-68 [v2.10.3.13] byte-for-byte defaults.
+
+    void nbTuningDefaultsMatchThetisCmaster() {
+        RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
+        const NbTuning& t = ch.nbTuning();
+        QCOMPARE(t.nbTauMs,      0.1);
+        QCOMPARE(t.nbHangMs,     0.1);
+        QCOMPARE(t.nbAdvMs,      0.1);
+        QCOMPARE(t.nbBacktau,    0.05);
+        QCOMPARE(t.nbThreshold,  30.0);
+        QCOMPARE(t.nb2Mode,      0);
+        QCOMPARE(t.nb2Threshold, 30.0);
+    }
+
+    // ── NB setters compile ───────────────────────────────────────────────────
+    //
+    // These tests confirm that setNbMode / setNbTuning / setNbThreshold /
+    // setNbLagMs / setNbLeadMs / setNbTransitionMs exist as member
+    // functions. We take their addresses rather than calling them on live
+    // WDSP state — SetEXTANB* / SetEXTNOB* operate on panb[id] / pnob[id]
+    // which is unallocated for channel 99 (same constraint as
     // tst_rxchannel_audio_panel re: SetRXAPanelPan on channel 99).
-    //
-    // The RadioModel initial-push block (tested indirectly via build + run
-    // of the real app) calls these on a valid channel 0 after create_nobEXT.
 
-    void nb2SubParameterMethodsAreReachable() {
-        // Verify the methods can be called via a function-pointer — this
-        // confirms they exist and are not pure-virtual stubs. We use a
-        // lambda to take their address without calling them on a live channel.
-        using SetterFn = void (RxChannel::*)(int);
-        using DblFn    = void (RxChannel::*)(double);
+    void nbSubParameterMethodsAreReachable() {
+        using ModeFn    = void (RxChannel::*)(NbMode);
+        using TuningFn  = void (RxChannel::*)(const NbTuning&);
+        using DblFn     = void (RxChannel::*)(double);
 
-        SetterFn modePtr = &RxChannel::setNb2Mode;
-        DblFn    tauPtr  = &RxChannel::setNb2Tau;
-        DblFn    leadPtr = &RxChannel::setNb2LeadTime;
-        DblFn    hangPtr = &RxChannel::setNb2HangTime;
+        ModeFn   modePtr    = &RxChannel::setNbMode;
+        TuningFn tuningPtr  = &RxChannel::setNbTuning;
+        DblFn    threshPtr  = &RxChannel::setNbThreshold;
+        DblFn    lagPtr     = &RxChannel::setNbLagMs;
+        DblFn    leadPtr    = &RxChannel::setNbLeadMs;
+        DblFn    tauPtr     = &RxChannel::setNbTransitionMs;
 
-        QVERIFY(modePtr != nullptr);
-        QVERIFY(tauPtr  != nullptr);
-        QVERIFY(leadPtr != nullptr);
-        QVERIFY(hangPtr != nullptr);
+        QVERIFY(modePtr   != nullptr);
+        QVERIFY(tuningPtr != nullptr);
+        QVERIFY(threshPtr != nullptr);
+        QVERIFY(lagPtr    != nullptr);
+        QVERIFY(leadPtr   != nullptr);
+        QVERIFY(tauPtr    != nullptr);
     }
 };
 
