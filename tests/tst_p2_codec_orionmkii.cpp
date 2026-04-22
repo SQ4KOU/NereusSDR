@@ -248,6 +248,40 @@ private slots:
         QCOMPARE(int(buf[2]), 0);
         QCOMPARE(int(buf[3]), 0);
     }
+
+    // Thetis parity: Alex0/Alex1 antenna bits per netInterface.c:479-485
+    //   _ANT_1 → bit 24; _ANT_2 → bit 25; _ANT_3 → bit 26
+    // [v2.10.3.13 @501e3f5]
+    //
+    // Phase 3P-I-a T6: locks independent RX/TX antenna encoding so
+    // T7's setAntennaRouting split can't regress the wire bits.
+    void buildAlex_rxAnt_txAnt_independent_bits() {
+        P2CodecOrionMkII codec;
+        CodecContext ctx;
+
+        // RX=ANT2, TX=ANT3 — asymmetric to catch accidental coupling.
+        ctx.p2AlexRxAnt = 2;
+        ctx.p2AlexTxAnt = 3;
+
+        quint8 buf[1444] = {};
+        codec.composeCmdHighPriority(ctx, buf);
+
+        // Alex0 (bytes 1432-1435 big-endian) carries rxAnt in bits 24-26.
+        // Big-endian: bit 24 is the LSB of byte 1432; bit 25 is next; bit 26 next.
+        // After writeBE32: byte[1432] = (reg >> 24) & 0xff
+        //   → bit 24 of reg  = bit 0 of byte[1432]
+        //   → bit 25 of reg  = bit 1 of byte[1432]
+        //   → bit 26 of reg  = bit 2 of byte[1432]
+        QVERIFY(!(buf[1432] & 0x01));   // Alex0 bit 24 clear — not ANT1
+        QVERIFY( (buf[1432] & 0x02));   // Alex0 bit 25 set   —     ANT2
+        QVERIFY(!(buf[1432] & 0x04));   // Alex0 bit 26 clear — not ANT3
+
+        // Alex1 (bytes 1428-1431 big-endian) carries txAnt in bits 24-26.
+        // Same byte-mapping: bit N of reg → bit (N-24) of byte[1428].
+        QVERIFY(!(buf[1428] & 0x01));   // Alex1 bit 24 clear — not ANT1
+        QVERIFY(!(buf[1428] & 0x02));   // Alex1 bit 25 clear — not ANT2
+        QVERIFY( (buf[1428] & 0x04));   // Alex1 bit 26 set   —     ANT3
+    }
 };
 
 QTEST_APPLESS_MAIN(TestP2CodecOrionMkII)
