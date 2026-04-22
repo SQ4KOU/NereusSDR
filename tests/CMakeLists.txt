@@ -545,4 +545,14 @@ target_compile_definitions(tst_hl2_live_polling PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_ui_capability_gating)
 target_compile_definitions(tst_ui_capability_gating PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3P-I-a T22: kPopupMenu stylesheet invariant ────────────────────────
+# Grep-scans the known antenna QMenu call sites and fails if any
+# `menu.exec(...)` is not preceded by a `setStyleSheet` using kPopupMenu.
+# Gates issue #98 regression (dark-on-dark popup menus on Ubuntu 25.10
+# GNOME). NEREUS_SOURCE_ROOT lets the test resolve paths relative to
+# the source tree regardless of build directory.
+nereus_add_test(tst_popup_style_coverage)
+target_compile_definitions(tst_popup_style_coverage PRIVATE
+    NEREUS_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+
 
