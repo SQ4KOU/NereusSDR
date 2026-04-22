@@ -161,8 +161,8 @@ struct NbTuning
 };
 
 // Cycles the NbMode on user toggle: Off → NB → NB2 → Off.
-// From Thetis console.cs:42476-42482 [@501e3f5] — space-bar increment
-// and console.cs:43513-43560 [@501e3f5] — chkNB CheckState transition.
+// From Thetis console.cs:42476-42482 [v2.10.3.13] — space-bar increment
+// and console.cs:43513-43560 [v2.10.3.13] — chkNB CheckState transition.
 NbMode cycleNbMode(NbMode current);
 
 // Wrapper facade. One instance per RxChannel. Holds no WDSP-side ownership —
