@@ -1114,7 +1114,10 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
     drawOffScreenIndicator(p, specRect, wfRect);
     drawFreqScale(p, freqRect);
     if (m_dbmScaleVisible) {
-        drawDbmScale(p, specRect);  // strip rect derived from specRect.right() inside drawDbmScale
+        // drawDbmScale needs the FULL-WIDTH spectrum-vertical rect so the strip
+        // lands in the reserved right-edge zone at x=[w-kDbmStripW..w-1].
+        // Passing the clipped specRect would put the strip INSIDE the spectrum.
+        drawDbmScale(p, QRect(0, 0, w, specH));
     }
     drawCursorInfo(p, specRect);
 
@@ -1998,8 +2001,10 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
     // body is drag-pan. From AetherSDR SpectrumWidget.cpp:1712-1745 [@0cd4559]
     const int stripX = width() - effectiveStripW();
     if (mx >= stripX && effectiveStripW() > 0 && my < specH) {
-        const QRect specRect_(0, 0, width() - effectiveStripW(), specH);
-        const QRect strip    = NereusSDR::DbmStrip::stripRect(specRect_, kDbmStripW);
+        // Use FULL-WIDTH rect so stripRect() lands in the reserved zone.
+        // Matches the rect passed to drawDbmScale in paintEvent.
+        const QRect fullSpecRect(0, 0, width(), specH);
+        const QRect strip    = NereusSDR::DbmStrip::stripRect(fullSpecRect, kDbmStripW);
         const QRect arrowRow = NereusSDR::DbmStrip::arrowRowRect(strip, kDbmArrowH);
 
         if (arrowRow.contains(mx, my)) {
@@ -2209,6 +2214,8 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
     if (mx >= w - effectiveStripW() && effectiveStripW() > 0 && my < specH) {
         // Hover over dBm strip → change cursor.
         // From AetherSDR SpectrumWidget.cpp:2241-2248 [@0cd4559]
+        // Strip's arrow row is the top kDbmArrowH pixels of the strip.
+        // The strip's top aligns with the widget's top (y=0 in SpectrumWidget).
         if (my < kDbmArrowH) {
             setCursor(Qt::PointingHandCursor);
         } else {
@@ -2684,7 +2691,10 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 
             drawGrid(p, specRect);
             if (m_dbmScaleVisible) {
-                drawDbmScale(p, specRect);
+                // drawDbmScale needs the FULL-WIDTH rect so the strip
+                // lands in the reserved right-edge zone at x=[w-kDbmStripW..w-1].
+                // Passing the clipped specRect would put the strip INSIDE the spectrum.
+                drawDbmScale(p, QRect(0, 0, w, specH));
             }
             p.fillRect(0, specH, w, kDividerH, QColor(0x30, 0x40, 0x50));
             drawFreqScale(p, QRect(0, specH + kDividerH, w - effectiveStripW(), kFreqScaleH));

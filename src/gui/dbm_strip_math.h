@@ -5,8 +5,13 @@
 
 namespace NereusSDR::DbmStrip {
 
-// Strip occupies the rightmost kDbmStripW pixels of the spectrum area.
-// Returns the strip rect given the full spectrum area rect and strip width.
+// Strip occupies the rightmost `stripW` pixels of the given rect.
+//
+// IMPORTANT: pass the FULL-WIDTH widget rect (width == widget.width()),
+// NOT a rect that has been clipped to leave room for the strip. The strip
+// is DERIVED from the full rect — it doesn't sit BESIDE a clipped rect.
+// Passing a `w - stripW`-wide rect would put the strip inside the spectrum
+// area instead of the reserved right-edge zone.
 QRect stripRect(const QRect& specRect, int stripW);
 
 // Arrow row (up/down triangles side-by-side) sits at the top of the strip.
