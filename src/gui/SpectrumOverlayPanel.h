@@ -51,6 +51,7 @@ class QMouseEvent;
 
 namespace NereusSDR {
 
+struct BoardCapabilities;
 class RadioModel;
 
 class SpectrumOverlayPanel : public QWidget {
@@ -68,6 +69,13 @@ public:
 
     // Raise panel and all flyouts above siblings.
     void raiseAll();
+
+public slots:
+    // Phase 3P-I-a T18 — repopulate antenna combos from caps and hide
+    // both RX/TX rows on boards without Alex (HL2/Atlas). Also reseeds
+    // the combo's current value from slice 0 so the label matches the
+    // new port list (e.g. a persisted ANT3 preserves after reconnect).
+    void setBoardCapabilities(const NereusSDR::BoardCapabilities& caps);
 
 signals:
     // Band flyout
@@ -152,8 +160,16 @@ private:
 
     // ── ANT flyout ───────────────────────────────────────────────────────
     QWidget*     m_antFlyout{nullptr};
+    // Phase 3P-I-a T18 — row wrappers so setBoardCapabilities can
+    // setVisible(false) on both the label and the combo together.
+    QWidget*     m_rxAntRow{nullptr};
+    QWidget*     m_txAntRow{nullptr};
     QComboBox*   m_rxAntCmb{nullptr};
     QComboBox*   m_txAntCmb{nullptr};
+    // Stored so the widget→model connection ordering inside setRadioModel
+    // can replicate the bindToSliceZero pattern used for VAX.
+    QMetaObject::Connection m_rxAntConn;
+    QMetaObject::Connection m_txAntConn;
     QSlider*     m_rfGainSlider{nullptr};
     QLabel*      m_rfGainLabel{nullptr};
     QPushButton* m_wnbBtn{nullptr};

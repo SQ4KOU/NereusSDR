@@ -531,6 +531,16 @@ void MainWindow::buildUI()
     // (setRadioModel listens to sliceAdded), then flips live.
     m_overlayPanel->setRadioModel(m_radioModel);
 
+    // Phase 3P-I-a T18 — push board caps into the overlay's antenna
+    // combos on connect and on every radio swap. Hides both RX/TX
+    // rows on HL2/Atlas and reseeds from slice 0's rxAntenna/txAntenna
+    // so persisted per-band state is visible in the combo label.
+    m_overlayPanel->setBoardCapabilities(m_radioModel->boardCapabilities());
+    connect(m_radioModel, &RadioModel::currentRadioChanged, m_overlayPanel,
+            [this]() {
+        m_overlayPanel->setBoardCapabilities(m_radioModel->boardCapabilities());
+    });
+
     // Zoom slider bar below spectrum
     auto* zoomBar = new QSlider(Qt::Horizontal, spectrumPane);
     zoomBar->setRange(1, 768);

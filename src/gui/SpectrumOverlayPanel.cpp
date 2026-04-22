@@ -38,6 +38,8 @@
 
 #include "SpectrumOverlayPanel.h"
 
+#include "core/AntennaLabels.h"
+#include "core/BoardCapabilities.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -431,34 +433,71 @@ void SpectrumOverlayPanel::buildAntFlyout()
 
     constexpr int kLabelW = 52;
 
-    // RX Antenna
+    // Phase 3P-I-a T18 — RX/TX antenna rows. Prior to this phase the
+    // combos existed but had no currentTextChanged connect — they were
+    // zombie controls. Now wired through slice 0 (matches VAX pattern),
+    // and both rows are wrapped in a QWidget so setBoardCapabilities
+    // can hide them as a unit on HL2/Atlas.
     {
-        auto* row = new QHBoxLayout;
+        m_rxAntRow = new QWidget;
+        auto* row = new QHBoxLayout(m_rxAntRow);
+        row->setContentsMargins(0, 0, 0, 0);
         row->setSpacing(4);
         auto* lbl = new QLabel("RX Ant:");
         lbl->setStyleSheet(kLabelStyle);
         lbl->setFixedWidth(kLabelW);
         row->addWidget(lbl);
         m_rxAntCmb = new QComboBox;
-        m_rxAntCmb->addItems({"ANT1", "ANT2", "ANT3"});
+        m_rxAntCmb->setObjectName(QStringLiteral("m_rxAntCmb"));
+        // Seed with default labels; setBoardCapabilities replaces once
+        // a radio is connected.
+        m_rxAntCmb->addItems(QStringList{"ANT1", "ANT2", "ANT3"});
         m_rxAntCmb->setFixedHeight(kBtnH);
         row->addWidget(m_rxAntCmb, 1);
-        vbox->addLayout(row);
+        vbox->addWidget(m_rxAntRow);
+
+        // Widget → Model: user picks an antenna → slice 0 setRxAntenna.
+        // T12's RadioModel connect then routes to AlexController and
+        // T9's applyAlexAntennaForBand reaches the wire. Echo from the
+        // model side is guarded by m_updatingFromModel (shared with VAX
+        // — same flag, different combo, doesn't matter because the
+        // echoes arrive serially on the GUI thread).
+        connect(m_rxAntCmb, &QComboBox::currentTextChanged, this,
+                [this](const QString& ant) {
+            if (m_updatingFromModel || !m_radioModel || ant.isEmpty()) {
+                return;
+            }
+            if (SliceModel* s = m_radioModel->sliceAt(0)) {
+                s->setRxAntenna(ant);
+            }
+        });
     }
 
-    // TX Antenna
     {
-        auto* row = new QHBoxLayout;
+        m_txAntRow = new QWidget;
+        auto* row = new QHBoxLayout(m_txAntRow);
+        row->setContentsMargins(0, 0, 0, 0);
         row->setSpacing(4);
         auto* lbl = new QLabel("TX Ant:");
         lbl->setStyleSheet(kLabelStyle);
         lbl->setFixedWidth(kLabelW);
         row->addWidget(lbl);
         m_txAntCmb = new QComboBox;
-        m_txAntCmb->addItems({"ANT1", "ANT2", "ANT3"});
+        m_txAntCmb->setObjectName(QStringLiteral("m_txAntCmb"));
+        m_txAntCmb->addItems(QStringList{"ANT1", "ANT2", "ANT3"});
         m_txAntCmb->setFixedHeight(kBtnH);
         row->addWidget(m_txAntCmb, 1);
-        vbox->addLayout(row);
+        vbox->addWidget(m_txAntRow);
+
+        connect(m_txAntCmb, &QComboBox::currentTextChanged, this,
+                [this](const QString& ant) {
+            if (m_updatingFromModel || !m_radioModel || ant.isEmpty()) {
+                return;
+            }
+            if (SliceModel* s = m_radioModel->sliceAt(0)) {
+                s->setTxAntenna(ant);
+            }
+        });
     }
 
     // RF Gain slider (-8 to +32 dB) — from AetherSDR buildAntPanel
@@ -1137,6 +1176,10 @@ void SpectrumOverlayPanel::bindToSliceZero()
         QObject::disconnect(m_vaxChannelConn);
         m_vaxChannelConn = {};
     }
+    // Phase 3P-I-a T18 — antenna Model→Widget subscriptions. Same
+    // rebind-on-shuffle pattern as VAX above.
+    if (m_rxAntConn) { QObject::disconnect(m_rxAntConn); m_rxAntConn = {}; }
+    if (m_txAntConn) { QObject::disconnect(m_txAntConn); m_txAntConn = {}; }
 
     SliceModel* s = m_radioModel->sliceAt(0);
     if (s) {
@@ -1159,6 +1202,41 @@ void SpectrumOverlayPanel::bindToSliceZero()
 
         m_vaxCmb->setEnabled(true);
         m_vaxCmb->setToolTip("Route this slice's RX audio to a VAX channel");
+
+        // Phase 3P-I-a T18 — seed + subscribe antenna combos.
+        // SliceModel::rxAntennaChanged also fires from T13's reverse
+        // sync (AlexController → slice), so the combo label stays
+        // coherent with the per-band state after a band change.
+        if (m_rxAntCmb) {
+            m_updatingFromModel = true;
+            const int idx = m_rxAntCmb->findText(s->rxAntenna());
+            if (idx >= 0) { m_rxAntCmb->setCurrentIndex(idx); }
+            m_updatingFromModel = false;
+
+            m_rxAntConn = connect(s, &SliceModel::rxAntennaChanged,
+                                  this, [this](const QString& ant) {
+                if (!m_rxAntCmb) { return; }
+                m_updatingFromModel = true;
+                const int i = m_rxAntCmb->findText(ant);
+                if (i >= 0) { m_rxAntCmb->setCurrentIndex(i); }
+                m_updatingFromModel = false;
+            });
+        }
+        if (m_txAntCmb) {
+            m_updatingFromModel = true;
+            const int idx = m_txAntCmb->findText(s->txAntenna());
+            if (idx >= 0) { m_txAntCmb->setCurrentIndex(idx); }
+            m_updatingFromModel = false;
+
+            m_txAntConn = connect(s, &SliceModel::txAntennaChanged,
+                                  this, [this](const QString& ant) {
+                if (!m_txAntCmb) { return; }
+                m_updatingFromModel = true;
+                const int i = m_txAntCmb->findText(ant);
+                if (i >= 0) { m_txAntCmb->setCurrentIndex(i); }
+                m_updatingFromModel = false;
+            });
+        }
     } else {
         // No slice 0 — typically the pre-connectToRadio() state, or a
         // transient window during slice teardown. The sliceAdded listener
@@ -1169,6 +1247,45 @@ void SpectrumOverlayPanel::bindToSliceZero()
         m_updatingFromModel = false;
         m_vaxCmb->setEnabled(false);
         m_vaxCmb->setToolTip("VAX channel (waiting for slice 0)");
+    }
+}
+
+// Phase 3P-I-a T18 — repopulate RX/TX antenna combos from BoardCapabilities.
+// Called by MainWindow on connect and on currentRadioChanged. Empty port
+// list (HL2/Atlas) hides both rows entirely. After repopulating we reseed
+// the current value from slice 0 so persisted per-band selections survive
+// a reconnect.
+void SpectrumOverlayPanel::setBoardCapabilities(const BoardCapabilities& caps)
+{
+    if (!m_rxAntCmb || !m_txAntCmb) { return; }
+
+    const QStringList labels = antennaLabels(caps);
+    const bool show = !labels.isEmpty();
+
+    // Suppress widget→model echo while we clear + refill the combos.
+    // Clearing a combo emits currentTextChanged("") and addItems()
+    // emits again; without the guard each setVisible-false path would
+    // stomp slice 0's antenna setting to empty.
+    m_updatingFromModel = true;
+    m_rxAntCmb->clear();
+    m_txAntCmb->clear();
+    m_rxAntCmb->addItems(labels);
+    m_txAntCmb->addItems(labels);
+    m_updatingFromModel = false;
+
+    if (m_rxAntRow) { m_rxAntRow->setVisible(show); }
+    if (m_txAntRow) { m_txAntRow->setVisible(show); }
+
+    // Reseed from slice 0 so the combo label matches the persisted state.
+    if (show && m_radioModel) {
+        if (SliceModel* s = m_radioModel->sliceAt(0)) {
+            m_updatingFromModel = true;
+            const int rxIdx = m_rxAntCmb->findText(s->rxAntenna());
+            if (rxIdx >= 0) { m_rxAntCmb->setCurrentIndex(rxIdx); }
+            const int txIdx = m_txAntCmb->findText(s->txAntenna());
+            if (txIdx >= 0) { m_txAntCmb->setCurrentIndex(txIdx); }
+            m_updatingFromModel = false;
+        }
     }
 }
 
