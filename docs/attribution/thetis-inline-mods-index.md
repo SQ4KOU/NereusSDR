@@ -1,6 +1,6 @@
 # Thetis Inline Mod Index
 
-**Generated mechanically** by `scripts/generate-contributor-indexes.py` on `2026-04-22T00:57:00+00:00`
+**Generated mechanically** by `scripts/generate-contributor-indexes.py` on `2026-04-22T01:00:53+00:00`
 from corpus `docs/attribution/thetis-author-tags.json` (thetis@`93d50464`, mi0bot@`2829f76`).
 
 **Do NOT hand-edit this file.** To add or correct a contributor, edit `docs/attribution/thetis-author-tags.json` and re-run the generator.
@@ -15,69 +15,6 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 - Distinct callsigns inline: 18
 
 ## Per-file markers
-
-### `thetis/Project Files/lib/portaudio-19.7.0/include/portaudio.h`
-
-- **`MW0LGE`** (Richard Samphire): 1 marker
-  - L491: `//[2.10.3.11]MW0LGE portaudio note, new vals given to these, see commented code below`
-
-### `thetis/Project Files/lib/portaudio-19.7.0/src/common/pa_converters.c`
-
-- **`MW0LGE`** (Richard Samphire): 44 markers
-  - L120: `//[2.10.3.11]MW0LGE portaudio`
-  - L182: `//[2.10.3.11]MW0LGE portaudio`
-  - L194: `//[2.10.3.11]MW0LGE portaudio`
-  - L204: `//[2.10.3.11]MW0LGE portaudio`
-  - L214: `//[2.10.3.11]MW0LGE portaudio`
-  - L224: `//[2.10.3.11]MW0LGE portaudio`
-  - L234: `//[2.10.3.11]MW0LGE portaudio`
-  - L244: `//[2.10.3.11]MW0LGE portaudio`
-  - L262: `//[2.10.3.11]MW0LGE portaudio start`
-  - L272: `//[2.10.3.11]MW0LGE portaudio end`
-  - L298: `//[2.10.3.11]MW0LGE portaudio`
-  - L309: `//[2.10.3.11]MW0LGE portaudio`
-  - L319: `//[2.10.3.11]MW0LGE portaudio`
-  - L328: `//[2.10.3.11]MW0LGE portaudio`
-  - L335: `//[2.10.3.11]MW0LGE portaudio`
-  - L346: `//[2.10.3.11]MW0LGE portaudio`
-  - L366: `//[2.10.3.11]MW0LGE portaudio`
-  - L387: `//[2.10.3.11]MW0LGE portaudio`
-  - L414: `//[2.10.3.11]MW0LGE portaudio`
-  - L448: `//[2.10.3.11]MW0LGE portaudio`
-  - *(+24 more)*
-
-### `thetis/Project Files/lib/portaudio-19.7.0/src/common/pa_converters.h`
-
-- **`MW0LGE`** (Richard Samphire): 9 markers
-  - L139: `//[2.10.3]MW0LGE start`
-  - L150: `//[2.10.3]MW0LGE end`
-  - L176: `//[2.10.3]MW0LGE`
-  - L187: `//[2.10.3]MW0LGE`
-  - L197: `//[2.10.3]MW0LGE`
-  - L206: `//[2.10.3]MW0LGE`
-  - L213: `//[2.10.3]MW0LGE`
-  - L224: `//[2.10.3]MW0LGE`
-  - L257: `//[2.10.3]MW0LGE`
-
-### `thetis/Project Files/lib/portaudio-19.7.0/src/common/pa_front.c`
-
-- **`MW0LGE`** (Richard Samphire): 2 markers
-  - L810: `//[2.10.3.11]MW0LGE portaudio`
-  - L1817: `//[2.10.3.11]MW0LGE portaudio`
-
-### `thetis/Project Files/lib/portaudio-19.7.0/src/hostapi/asio/pa_asio.cpp`
-
-- **`MW0LGE`** (Richard Samphire): 3 markers
-  - L1274: `//[2.10.3.11]MW0LGE portaudio W4WMT`
-  - L1305: `//driver that cmASIO is using, if there is one //[2.10.3.11]MW0LGE portaudio W4WMT`
-  - L1306: `//black list the Avid Pro Tools at it was causing issues (https://discord.com/channels/1271453528656969789/1491198252593315940) //[2.10.3...`
-
-### `thetis/Project Files/lib/portaudio-19.7.0/src/hostapi/wasapi/pa_win_wasapi.c`
-
-- **`MW0LGE`** (Richard Samphire): 3 markers
-  - L993: `//[2.10.3.11]MW0LGE portaudio`
-  - L2757: `//[2.10.3.11]MW0LGE portaudio`
-  - L2784: `//[2.10.3.11]MW0LGE portaudio`
 
 ### `thetis/Project Files/Source/ChannelMaster/cmasio.c`
 
@@ -157,20 +94,6 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 - **`MW0LGE`** (Richard Samphire): 1 marker
   - L13: `// MW0LGE version number now stored in Thetis->Versions.cs file, to keep shared`
 
-### `thetis/Project Files/Source/cmASIO/hostsample.cpp`
-
-- **`MW0LGE`** (Richard Samphire): 3 markers
-  - L327: `//[2.10.3.13]MW0LGE added explicit channel indices for input/output (0-based)`
-  - L532: `//[2.10.3.13]MW0LGE pass explicit channel indices for input/output (0-based)`
-  - L690: `//[2.10.3.13]MW0LGE get base channel numbers for input and output, and input mode`
-- **`W4WMT`** (Bryan Rambo): 1 marker
-  - L506: `//W4WMT`
-
-### `thetis/Project Files/Source/cmASIO/version.cpp`
-
-- **`MW0LGE`** (Richard Samphire): 1 marker
-  - L13: `// MW0LGE version number now stored in Thetis->Versions.cs file, to keep shared`
-
 ### `thetis/Project Files/Source/Console/AmpView.cs`
 
 - **`MW0LGE`** (Richard Samphire): 4 markers
@@ -193,6 +116,11 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L4154: `// MW0LGE [2.10.1.0] andromeda mode dependant form fixes`
   - L4172: `//[2.10.3.5]MW0LGE we are expanded, so ok to move them always`
 
+### `thetis/Project Files/Source/Console/Andromeda/SliderSettingsForm.cs`
+
+- **`MW0LGE`** (Richard Samphire): 1 marker
+  - L1276: `//[2.10.3.5]MW0LGE`
+
 ### `thetis/Project Files/Source/Console/Andromeda/displaysettingsform.cs`
 
 - **`G8NJJ`** (Laurence Barker): 5 markers
@@ -201,26 +129,6 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L334: `// G8NJJ: clear old list before re-adding!`
   - L338: `// G8NJJ: clear old list before re-adding!`
   - L342: `// G8NJJ: clear old list before re-adding!`
-
-### `thetis/Project Files/Source/Console/Andromeda/SliderSettingsForm.cs`
-
-- **`MW0LGE`** (Richard Samphire): 1 marker
-  - L1276: `//[2.10.3.5]MW0LGE`
-
-### `thetis/Project Files/Source/Console/audio.cs`
-
-- **`MW0LGE`** (Richard Samphire): 11 markers
-  - L359: `//[2.10.0.4]MW0LGE fix issue with no RX2 audio when tx'ing on rx1`
-  - L718: `//[2.10.3.4]MW0LGE added`
-  - L1370: `//[2.10.3.4]MW0LGE changed to use tx block size`
-  - L1484: `//a.Add("HPSDR (USB/UDP)"); //[2.10.3.4]MW0LGE removed`
-  - L1494: `//a.Add(new PADeviceInfo("HPSDR (PCM A/D)", 0)); //[2.10.3.4]MW0LGE removed`
-  - L1543: `//a.Add(new PADeviceInfo("HPSDR (PWM D/A)", 0)); //[2.10.3.4]MW0LGE removed`
-  - L1812: `////MW0LGE [2.9.0.8] fix if protocol is changed at some point`
-  - L1907: `//[2.10.3.5]MW0LGE resolves #338`
-  - L1997: `//[2.10.3.5]MW0LGE added`
-  - L2001: `//MW0LGE added all other scope modes`
-  - L2083: `//[2.10.3.5]MW0LGE added`
 
 ### `thetis/Project Files/Source/Console/CAT/CATCommands.cs`
 
@@ -290,6 +198,206 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 - **`MW0LGE`** (Richard Samphire): 1 marker
   - L277: `//[2.10.3.9]MW0LGE fixed to handle multiple messages ending in ;`
 
+### `thetis/Project Files/Source/Console/ColorButton.cs`
+
+- **`MW0LGE`** (Richard Samphire): 1 marker
+  - L162: `//[2.10.3.7]MW0LGE fixed, as it is not a good idea to use the clip rect to position the triangle`
+
+### `thetis/Project Files/Source/Console/DiversityForm.cs`
+
+- **`G8NJJ`** (Laurence Barker): 6 markers
+  - L2219: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
+  - L2230: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
+  - L2253: `// added 6/8/2019 G8NJJ to allow access by Andromeda. Sets the appropriate gain.`
+  - L2292: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
+  - L2311: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
+  - L2326: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
+- **`MW0LGE`** (Richard Samphire): 9 markers
+  - L170: `//[2.10.3.6]MW0LGE these need to be high so that restore form can recover values`
+  - L188: `//[2.10.3.6]MW0LGE implement memories. A bit of a hack to store all this in a text box, but it is easy with the saveform/restoreform`
+  - L2280: `//[2.10.3.5]MW0LGE fixes #324`
+  - L2299: `//[2.10.3.5]MW0LGE fixes #324`
+  - L2318: `//[2.10.3.5]MW0LGE fixes #324`
+  - L2544: `//[2.10.3.0]MW0LGE`
+  - L2558: `//[2.10.3.0]MW0LGE`
+  - L2572: `//[2.10.3.0]MW0LGE`
+  - L2818: `//[2.10.3.5]MW0LGE old code, kept for reference`
+
+### `thetis/Project Files/Source/Console/FilterForm.cs`
+
+- **`MW0LGE`** (Richard Samphire): 5 markers
+  - L677: `//[2.10.3.9]MW0LGE prevent update if already happening`
+  - L696: `//[2.10.3.12]MW0LGE only call if changed, as the events will call us back, and we would get a stack overflow`
+  - L786: `//[2.10.3.12]MW0LGE prevent update if changes happening from UpdateFilter. UpdateFilter will call this directly`
+  - L808: `//[2.10.3.12]MW0LGE prevent update if changes happening from UpdateFilter. UpdateFilter will call this directly`
+  - L920: `//[2.10.3.12]MW0LGE prevent update if changes happening from UpdateFilter. UpdateFilter will call this directly`
+- **`W4TME`** (Ke Chen): 4 markers
+  - L936: `//W4TME`
+  - L937: `//W4TME`
+  - L940: `//W4TME`
+  - L941: `//W4TME`
+
+### `thetis/Project Files/Source/Console/HPSDR/Alex.cs`
+
+- **`G8NJJ`** (Laurence Barker): 1 marker
+  - L377: `// G8NJJ support for external Aries ATU on antenna port 1`
+- **`MW0LGE`** (Richard Samphire): 2 markers
+  - L167: `//[2.10.3.6]MW0LGE`
+  - L181: `//[2.10.3.6]MW0LGE else freq = Console.getConsole().VFOAFreq;`
+
+### `thetis/Project Files/Source/Console/HPSDR/NetworkIO.cs`
+
+- **`MW0LGE`** (Richard Samphire): 5 markers
+  - L160: `//[2.10.3.9]MW0LGE added board check, issue icon shown in setup`
+  - L432: `//                if (localEndPoint != null) //[2.10.3.7]MW0LGE null check added, and changed to tryparse`
+  - L562: `//            //[2.10.3.9]MW0LGE added board check, issue icon shown in setup`
+  - L901: `//                        //[2.10.3.5]MW0LGE sigh, MAC address in P1 is NOT at data[5], but at data[3]`
+  - L1120: `//                return null;  //[2.10.3.7]MW0LGE added try catch`
+
+### `thetis/Project Files/Source/Console/Memory/MemoryForm.cs`
+
+- **`KE9NS`** (Darrin): 1 marker
+  - L662: `//KE9NS ADD below is used to determine the URL from a drag and drop onto the memory form`
+- **`MW0LGE`** (Richard Samphire): 3 markers
+  - L935: `//[2.10.3.9]MW0LGE`
+  - L1389: `//[2.10.3.6]MW0LGE uncommented so that the recording folder is shown. Fixes #457`
+  - L1448: `//[2.10.3.5]MW0LGE it looks like MP3 support has been removed and commented out, above, about 5 years ago.`
+- **`W4TME`** (Ke Chen): 2 markers
+  - L470: `//W4TME`
+  - L504: `//W4TME`
+
+### `thetis/Project Files/Source/Console/MeterManager.cs`
+
+- **`MW0LGE`** (Richard Samphire): 18 markers
+  - L1801: `//[2.10.3.6]MW0LGE added for dev_6`
+  - L4224: `//[2.10.1.0] MW0LGE needed because at init rx2 might not be enabled, and the init function will have been given -999.999 from console.vfo...`
+  - L5720: `//[2.10.3.6]MW0LGE get all console info here, as everything will be at the correct state`
+  - L6458: `//a.Add("meterIGSettings_" + ig.Value.ID, igs.ToString()); //[2.10.3.6]MW0LGE not used`
+  - L6588: `//[2.10.3.7]MW0LGE // we have to dispose it because close() prevent this being freed up`
+  - L6817: `//[2.10.3.9]MW0LGE order these once, pointless doing it every time we get a percentage !`
+  - L6872: `//[2.10.1.0] MW0LGE used for on rx/tx fading`
+  - L6877: `//[2.10.1.0] MW0LGE used when certain features turned off such as eq,leveler,cfc`
+  - L6882: `//[2.10.30.9]MW0LGE this perc cache code totally refactored, and only caches to 2 decimal precision for the dB value, and is keyed on the...`
+  - L9981: `//[2.10.3.9]MW0LGE fix, was using _rx1_band`
+  - L19366: `//[2.10.3.9]MW0LGE update the data, prevents loads of updates`
+  - L30910: `//[2.10.3.6]MW0LGE added m.vfosub >= 0`
+  - L33152: `// [2.10.1.0] MW0LGE`
+  - L34798: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
+  - L35007: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
+  - L35220: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
+  - L41064: `//[2.10.3.9]MW0LGE refactor for speed`
+  - L41251: `//[2.10.3.6]MW0LGE refactored to use Windows Imaging Component (WIC)`
+
+### `thetis/Project Files/Source/Console/Midi2CatCommands.cs`
+
+- **`DH1KLM`** (Sigi): 32 markers
+  - L5524: `// DH1KLM`
+  - L5536: `// DH1KLM`
+  - L5548: `// DH1KLM`
+  - L5560: `// DH1KLM`
+  - L5572: `// DH1KLM`
+  - L5595: `// DH1KLM`
+  - L5618: `// DH1KLM`
+  - L5635: `// DH1KLM`
+  - L5675: `// DH1KLM`
+  - L5700: `// DH1KLM`
+  - L5725: `// DH1KLM`
+  - L5748: `// DH1KLM`
+  - L5807: `// DH1KLM`
+  - L5825: `// DH1KLM`
+  - L5844: `// DH1KLM`
+  - L5863: `// DH1KLM`
+  - L5882: `// DH1KLM`
+  - L5901: `// DH1KLM`
+  - L5920: `// DH1KLM`
+  - L5939: `// DH1KLM`
+  - *(+12 more)*
+- **`MW0GE`** (Richard Samphire): 1 marker
+  - L264: `//[2.10.3.6]MW0GE reimplemented`
+- **`MW0LGE`** (Richard Samphire): 6 markers
+  - L1166: `//[2.10.3.9]MW0LGE refactor for speed, as other implemation was just a complete mess`
+  - L1718: `//[2.10.3.9]MW0LGE refactor for speed`
+  - L1933: `//[2.10.3.9]MW0LGE refactor for speed`
+  - L3119: `//[2.10.3.6]MW0LGE changed`
+  - L3163: `//[2.10.3.6]MW0LGE seriously 0.078?????? crazy`
+  - L6465: `// MW0LGE [2.9.0.7]`
+- **`W2PA`** (Chris Codella): 90 markers
+  - L45: `//-W2PA Necessary for changes to support Behringer PL-1 (and others)`
+  - L93: `//-W2PA* Use the MidiMessageManager to send an update to the proper device/control LEDs`
+  - L103: `//-W2PA Added device parameter to all commands to support return messages to devices with LEDs such as the Behringers`
+  - L191: `//-W2PA This makes the function match its equivalent console function (e.g. mode gets copied)`
+  - L207: `//-W2PA This makes the function match its equivalent console function (e.g. mode gets copied)`
+  - L224: `//-W2PA This makes the function match its equivalent console function (e.g. mode gets copied)`
+  - L288: `//-W2PA special handling for Behringer wheel style knobs`
+  - L290: `//-W2PA for Behringer PL-1 type knob/wheel push button, to zero the setting`
+  - L294: `//-W2PA for Behringer PL-1 knob/wheel`
+  - L298: `//-W2PA for Behringer PL-1 knob/wheel`
+  - L303: `//-W2PA Original code in Midi2Cat`
+  - L318: `//-W2PA Rewritten to use a mini-wheel like the ones on the Behringer PL-1`
+  - L319: `//-W2PA XIT_inc is different from RIT_inc because the CAT commands are different in CATCommands.cs`
+  - L328: `//-W2PA special handling for Behringer wheel style knobs`
+  - L330: `//-W2PA for Behringer PL-1 type knob/wheel push button, to zero the setting`
+  - L338: `//-W2PA Changed to operate in all modes.`
+  - L345: `//-W2PA Changed to operate in all modes.`
+  - L350: `//-W2PA Original code in Midi2Cat`
+  - L436: `//-W2PA Incremental volume control for Behringer PL-1 or similar knobs as wheels. Also added an item for Wheel in CatCmdDb.cs`
+  - L446: `//-W2PA Ignore knob click presses`
+  - *(+70 more)*
+
+### `thetis/Project Files/Source/Console/N1MM.cs`
+
+- **`MW0LGE`** (Richard Samphire): 1 marker
+  - L188: `// MW0LGE [2.9.0.7] fix issue where spectrum is offset by cwpitch`
+
+### `thetis/Project Files/Source/Console/PSForm.cs`
+
+- **`MW0LGE`** (Richard Samphire): 9 markers
+  - L72: `// MW0LGE moved above restore, so that we actaully have console when control events fire because of restore form`
+  - L157: `//[2.10.3.9]MW0LGE used by finder`
+  - L409: `//[2.10.3.4]]MW0LGE leave it there until thetis closes`
+  - L738: `//MW0LGE`
+  - L754: `//[2.10.3.12]MW0LGE use rounding, to fix Banker's rounding issue`
+  - L802: `//[2.10.3.7]MW0LGE show a warning if the setpk is different to what we expect for this hardware`
+  - L815: `//MW0LGE use property`
+  - L907: `//MW0LGE`
+  - L1078: `//make copy of old, used in HasInfoChanged & CalibrationAttemptsChanged MW0LGE`
+- **`W2PA`** (Chris Codella): 1 marker
+  - L480: `//-W2PA Adds capability for CAT control via console`
+
+### `thetis/Project Files/Source/Console/Skin.cs`
+
+- **`MW0LGE`** (Richard Samphire): 4 markers
+  - L1897: `// [2.10.3.9]MW0LGE`
+  - L1917: `//[2.10.3.6]MW0LGE cache based on hash of image`
+  - L1923: `//[2.10.2.2] MW0LGE`
+  - L1973: `//[2.10.3.9]MW0LGE change to md5`
+
+### `thetis/Project Files/Source/Console/TCIServer.cs`
+
+- **`MW0LGE`** (Richard Samphire): 7 markers
+  - L2154: `//MW0LGE [2.9.0.7] note we invert with -`
+  - L2412: `//MW0LGE [2.9.0.7]`
+  - L4004: `//change if needed [2.10.3.6]MW0LGE fixes #365`
+  - L4482: `//[2.10.3.6]MW0LGE rumlog fills arg5 with Nil - spotted buy GW3JVB`
+  - L6679: `//[2.10.3.9]MW0LGE fixes issue #559`
+  - L7520: `// also send legacy command (EESDR3 does this)	MW0LGE [2.9.0.8]`
+  - L7999: `//[2.10.3.9]MW0LGE also send out RX_CLICKED_ON_SPOT defaults to rx1 and vfoA`
+
+### `thetis/Project Files/Source/Console/audio.cs`
+
+- **`MW0LGE`** (Richard Samphire): 11 markers
+  - L359: `//[2.10.0.4]MW0LGE fix issue with no RX2 audio when tx'ing on rx1`
+  - L718: `//[2.10.3.4]MW0LGE added`
+  - L1370: `//[2.10.3.4]MW0LGE changed to use tx block size`
+  - L1484: `//a.Add("HPSDR (USB/UDP)"); //[2.10.3.4]MW0LGE removed`
+  - L1494: `//a.Add(new PADeviceInfo("HPSDR (PCM A/D)", 0)); //[2.10.3.4]MW0LGE removed`
+  - L1543: `//a.Add(new PADeviceInfo("HPSDR (PWM D/A)", 0)); //[2.10.3.4]MW0LGE removed`
+  - L1812: `////MW0LGE [2.9.0.8] fix if protocol is changed at some point`
+  - L1907: `//[2.10.3.5]MW0LGE resolves #338`
+  - L1997: `//[2.10.3.5]MW0LGE added`
+  - L2001: `//MW0LGE added all other scope modes`
+  - L2083: `//[2.10.3.5]MW0LGE added`
+
 ### `thetis/Project Files/Source/Console/clsDBMan.cs`
 
 - **`MW0LGE`** (Richard Samphire): 1 marker
@@ -333,11 +441,6 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L807: `//N1GP G1 added`
   - L885: `//N1GP G1 added`
 
-### `thetis/Project Files/Source/Console/ColorButton.cs`
-
-- **`MW0LGE`** (Richard Samphire): 1 marker
-  - L162: `//[2.10.3.7]MW0LGE fixed, as it is not a good idea to use the clip rect to position the triangle`
-
 ### `thetis/Project Files/Source/Console/common.cs`
 
 - **`MW0LGE`** (Richard Samphire): 11 markers
@@ -352,6 +455,11 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L1478: `//[2.10.3.9]MW0LGE form scaling`
   - L1533: `//[2.10.3.9]MW0LGE cpu usage for this process`
   - L1561: `//[2.10.3.9]MW0LGE screensave/powersave prevention`
+
+### `thetis/Project Files/Source/Console/console.Designer.cs`
+
+- **`G8NJJ`** (Laurence Barker): 1 marker
+  - L474: `// G8NJJ`
 
 ### `thetis/Project Files/Source/Console/console.cs`
 
@@ -485,11 +593,6 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L14704: `//reset preset filter's center frequency - W4TME`
   - L15747: `// W4TME`
 
-### `thetis/Project Files/Source/Console/console.Designer.cs`
-
-- **`G8NJJ`** (Laurence Barker): 1 marker
-  - L474: `// G8NJJ`
-
 ### `thetis/Project Files/Source/Console/cwx.cs`
 
 - **`MW0LGE`** (Richard Samphire): 10 markers
@@ -565,26 +668,6 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L6609: `//[2.10.3.9]MW0LGE changed from max`
   - *(+36 more)*
 
-### `thetis/Project Files/Source/Console/DiversityForm.cs`
-
-- **`G8NJJ`** (Laurence Barker): 6 markers
-  - L2219: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
-  - L2230: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
-  - L2253: `// added 6/8/2019 G8NJJ to allow access by Andromeda. Sets the appropriate gain.`
-  - L2292: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
-  - L2311: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
-  - L2326: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
-- **`MW0LGE`** (Richard Samphire): 9 markers
-  - L170: `//[2.10.3.6]MW0LGE these need to be high so that restore form can recover values`
-  - L188: `//[2.10.3.6]MW0LGE implement memories. A bit of a hack to store all this in a text box, but it is easy with the saveform/restoreform`
-  - L2280: `//[2.10.3.5]MW0LGE fixes #324`
-  - L2299: `//[2.10.3.5]MW0LGE fixes #324`
-  - L2318: `//[2.10.3.5]MW0LGE fixes #324`
-  - L2544: `//[2.10.3.0]MW0LGE`
-  - L2558: `//[2.10.3.0]MW0LGE`
-  - L2572: `//[2.10.3.0]MW0LGE`
-  - L2818: `//[2.10.3.5]MW0LGE old code, kept for reference`
-
 ### `thetis/Project Files/Source/Console/dsp.cs`
 
 - **`MW0LGE`** (Richard Samphire): 6 markers
@@ -616,151 +699,10 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 - **`MW0LGE`** (Richard Samphire): 1 marker
   - L203: `//MW0LGE [2.9.0.7]`
 
-### `thetis/Project Files/Source/Console/FilterForm.cs`
-
-- **`MW0LGE`** (Richard Samphire): 5 markers
-  - L677: `//[2.10.3.9]MW0LGE prevent update if already happening`
-  - L696: `//[2.10.3.12]MW0LGE only call if changed, as the events will call us back, and we would get a stack overflow`
-  - L786: `//[2.10.3.12]MW0LGE prevent update if changes happening from UpdateFilter. UpdateFilter will call this directly`
-  - L808: `//[2.10.3.12]MW0LGE prevent update if changes happening from UpdateFilter. UpdateFilter will call this directly`
-  - L920: `//[2.10.3.12]MW0LGE prevent update if changes happening from UpdateFilter. UpdateFilter will call this directly`
-- **`W4TME`** (Ke Chen): 4 markers
-  - L936: `//W4TME`
-  - L937: `//W4TME`
-  - L940: `//W4TME`
-  - L941: `//W4TME`
-
 ### `thetis/Project Files/Source/Console/frmMeterDisplay.cs`
 
 - **`MW0LGE`** (Richard Samphire): 1 marker
   - L188: `//IMPORTANT NOTE *****   //[2.10.3.7]MW0LGE`
-
-### `thetis/Project Files/Source/Console/HPSDR/Alex.cs`
-
-- **`G8NJJ`** (Laurence Barker): 1 marker
-  - L377: `// G8NJJ support for external Aries ATU on antenna port 1`
-- **`MW0LGE`** (Richard Samphire): 2 markers
-  - L167: `//[2.10.3.6]MW0LGE`
-  - L181: `//[2.10.3.6]MW0LGE else freq = Console.getConsole().VFOAFreq;`
-
-### `thetis/Project Files/Source/Console/HPSDR/NetworkIO.cs`
-
-- **`MW0LGE`** (Richard Samphire): 5 markers
-  - L160: `//[2.10.3.9]MW0LGE added board check, issue icon shown in setup`
-  - L432: `//                if (localEndPoint != null) //[2.10.3.7]MW0LGE null check added, and changed to tryparse`
-  - L562: `//            //[2.10.3.9]MW0LGE added board check, issue icon shown in setup`
-  - L901: `//                        //[2.10.3.5]MW0LGE sigh, MAC address in P1 is NOT at data[5], but at data[3]`
-  - L1120: `//                return null;  //[2.10.3.7]MW0LGE added try catch`
-
-### `thetis/Project Files/Source/Console/Memory/MemoryForm.cs`
-
-- **`KE9NS`** (Darrin): 1 marker
-  - L662: `//KE9NS ADD below is used to determine the URL from a drag and drop onto the memory form`
-- **`MW0LGE`** (Richard Samphire): 3 markers
-  - L935: `//[2.10.3.9]MW0LGE`
-  - L1389: `//[2.10.3.6]MW0LGE uncommented so that the recording folder is shown. Fixes #457`
-  - L1448: `//[2.10.3.5]MW0LGE it looks like MP3 support has been removed and commented out, above, about 5 years ago.`
-- **`W4TME`** (Ke Chen): 2 markers
-  - L470: `//W4TME`
-  - L504: `//W4TME`
-
-### `thetis/Project Files/Source/Console/MeterManager.cs`
-
-- **`MW0LGE`** (Richard Samphire): 18 markers
-  - L1801: `//[2.10.3.6]MW0LGE added for dev_6`
-  - L4224: `//[2.10.1.0] MW0LGE needed because at init rx2 might not be enabled, and the init function will have been given -999.999 from console.vfo...`
-  - L5720: `//[2.10.3.6]MW0LGE get all console info here, as everything will be at the correct state`
-  - L6458: `//a.Add("meterIGSettings_" + ig.Value.ID, igs.ToString()); //[2.10.3.6]MW0LGE not used`
-  - L6588: `//[2.10.3.7]MW0LGE // we have to dispose it because close() prevent this being freed up`
-  - L6817: `//[2.10.3.9]MW0LGE order these once, pointless doing it every time we get a percentage !`
-  - L6872: `//[2.10.1.0] MW0LGE used for on rx/tx fading`
-  - L6877: `//[2.10.1.0] MW0LGE used when certain features turned off such as eq,leveler,cfc`
-  - L6882: `//[2.10.30.9]MW0LGE this perc cache code totally refactored, and only caches to 2 decimal precision for the dB value, and is keyed on the...`
-  - L9981: `//[2.10.3.9]MW0LGE fix, was using _rx1_band`
-  - L19366: `//[2.10.3.9]MW0LGE update the data, prevents loads of updates`
-  - L30910: `//[2.10.3.6]MW0LGE added m.vfosub >= 0`
-  - L33152: `// [2.10.1.0] MW0LGE`
-  - L34798: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
-  - L35007: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
-  - L35220: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
-  - L41064: `//[2.10.3.9]MW0LGE refactor for speed`
-  - L41251: `//[2.10.3.6]MW0LGE refactored to use Windows Imaging Component (WIC)`
-
-### `thetis/Project Files/Source/Console/Midi2CatCommands.cs`
-
-- **`DH1KLM`** (Sigi): 32 markers
-  - L5524: `// DH1KLM`
-  - L5536: `// DH1KLM`
-  - L5548: `// DH1KLM`
-  - L5560: `// DH1KLM`
-  - L5572: `// DH1KLM`
-  - L5595: `// DH1KLM`
-  - L5618: `// DH1KLM`
-  - L5635: `// DH1KLM`
-  - L5675: `// DH1KLM`
-  - L5700: `// DH1KLM`
-  - L5725: `// DH1KLM`
-  - L5748: `// DH1KLM`
-  - L5807: `// DH1KLM`
-  - L5825: `// DH1KLM`
-  - L5844: `// DH1KLM`
-  - L5863: `// DH1KLM`
-  - L5882: `// DH1KLM`
-  - L5901: `// DH1KLM`
-  - L5920: `// DH1KLM`
-  - L5939: `// DH1KLM`
-  - *(+12 more)*
-- **`MW0GE`** (Richard Samphire): 1 marker
-  - L264: `//[2.10.3.6]MW0GE reimplemented`
-- **`MW0LGE`** (Richard Samphire): 6 markers
-  - L1166: `//[2.10.3.9]MW0LGE refactor for speed, as other implemation was just a complete mess`
-  - L1718: `//[2.10.3.9]MW0LGE refactor for speed`
-  - L1933: `//[2.10.3.9]MW0LGE refactor for speed`
-  - L3119: `//[2.10.3.6]MW0LGE changed`
-  - L3163: `//[2.10.3.6]MW0LGE seriously 0.078?????? crazy`
-  - L6465: `// MW0LGE [2.9.0.7]`
-- **`W2PA`** (Chris Codella): 90 markers
-  - L45: `//-W2PA Necessary for changes to support Behringer PL-1 (and others)`
-  - L93: `//-W2PA* Use the MidiMessageManager to send an update to the proper device/control LEDs`
-  - L103: `//-W2PA Added device parameter to all commands to support return messages to devices with LEDs such as the Behringers`
-  - L191: `//-W2PA This makes the function match its equivalent console function (e.g. mode gets copied)`
-  - L207: `//-W2PA This makes the function match its equivalent console function (e.g. mode gets copied)`
-  - L224: `//-W2PA This makes the function match its equivalent console function (e.g. mode gets copied)`
-  - L288: `//-W2PA special handling for Behringer wheel style knobs`
-  - L290: `//-W2PA for Behringer PL-1 type knob/wheel push button, to zero the setting`
-  - L294: `//-W2PA for Behringer PL-1 knob/wheel`
-  - L298: `//-W2PA for Behringer PL-1 knob/wheel`
-  - L303: `//-W2PA Original code in Midi2Cat`
-  - L318: `//-W2PA Rewritten to use a mini-wheel like the ones on the Behringer PL-1`
-  - L319: `//-W2PA XIT_inc is different from RIT_inc because the CAT commands are different in CATCommands.cs`
-  - L328: `//-W2PA special handling for Behringer wheel style knobs`
-  - L330: `//-W2PA for Behringer PL-1 type knob/wheel push button, to zero the setting`
-  - L338: `//-W2PA Changed to operate in all modes.`
-  - L345: `//-W2PA Changed to operate in all modes.`
-  - L350: `//-W2PA Original code in Midi2Cat`
-  - L436: `//-W2PA Incremental volume control for Behringer PL-1 or similar knobs as wheels. Also added an item for Wheel in CatCmdDb.cs`
-  - L446: `//-W2PA Ignore knob click presses`
-  - *(+70 more)*
-
-### `thetis/Project Files/Source/Console/N1MM.cs`
-
-- **`MW0LGE`** (Richard Samphire): 1 marker
-  - L188: `// MW0LGE [2.9.0.7] fix issue where spectrum is offset by cwpitch`
-
-### `thetis/Project Files/Source/Console/PSForm.cs`
-
-- **`MW0LGE`** (Richard Samphire): 9 markers
-  - L72: `// MW0LGE moved above restore, so that we actaully have console when control events fire because of restore form`
-  - L157: `//[2.10.3.9]MW0LGE used by finder`
-  - L409: `//[2.10.3.4]]MW0LGE leave it there until thetis closes`
-  - L738: `//MW0LGE`
-  - L754: `//[2.10.3.12]MW0LGE use rounding, to fix Banker's rounding issue`
-  - L802: `//[2.10.3.7]MW0LGE show a warning if the setpk is different to what we expect for this hardware`
-  - L815: `//MW0LGE use property`
-  - L907: `//MW0LGE`
-  - L1078: `//make copy of old, used in HasInfoChanged & CalibrationAttemptsChanged MW0LGE`
-- **`W2PA`** (Chris Codella): 1 marker
-  - L480: `//-W2PA Adds capability for CAT control via console`
 
 ### `thetis/Project Files/Source/Console/radio.cs`
 
@@ -854,31 +796,12 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 - **`W4WMT`** (Bryan Rambo): 1 marker
   - L28620: `//[2.10.3.5]W4WMT implements #87`
 
-### `thetis/Project Files/Source/Console/Skin.cs`
-
-- **`MW0LGE`** (Richard Samphire): 4 markers
-  - L1897: `// [2.10.3.9]MW0LGE`
-  - L1917: `//[2.10.3.6]MW0LGE cache based on hash of image`
-  - L1923: `//[2.10.2.2] MW0LGE`
-  - L1973: `//[2.10.3.9]MW0LGE change to md5`
-
 ### `thetis/Project Files/Source/Console/splash.cs`
 
 - **`MW0LGE`** (Richard Samphire): 3 markers
   - L60: `//MW0LGE`
   - L493: `//MW0LGE interesting, but removed`
   - L523: `//MW0LGE pnlStatus.Invalidate(m_rProgress);`
-
-### `thetis/Project Files/Source/Console/TCIServer.cs`
-
-- **`MW0LGE`** (Richard Samphire): 7 markers
-  - L2154: `//MW0LGE [2.9.0.7] note we invert with -`
-  - L2412: `//MW0LGE [2.9.0.7]`
-  - L4004: `//change if needed [2.10.3.6]MW0LGE fixes #365`
-  - L4482: `//[2.10.3.6]MW0LGE rumlog fills arg5 with Nil - spotted buy GW3JVB`
-  - L6679: `//[2.10.3.9]MW0LGE fixes issue #559`
-  - L7520: `// also send legacy command (EESDR3 does this)	MW0LGE [2.9.0.8]`
-  - L7999: `//[2.10.3.9]MW0LGE also send out RX_CLICKED_ON_SPOT defaults to rx1 and vfoA`
 
 ### `thetis/Project Files/Source/Console/titlebar.cs`
 
@@ -1001,6 +924,25 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L159: `//-W2PA 8 button`
   - *(+12 more)*
 
+### `thetis/Project Files/Source/cmASIO/hostsample.cpp`
+
+- **`MW0LGE`** (Richard Samphire): 3 markers
+  - L327: `//[2.10.3.13]MW0LGE added explicit channel indices for input/output (0-based)`
+  - L532: `//[2.10.3.13]MW0LGE pass explicit channel indices for input/output (0-based)`
+  - L690: `//[2.10.3.13]MW0LGE get base channel numbers for input and output, and input mode`
+- **`W4WMT`** (Bryan Rambo): 1 marker
+  - L506: `//W4WMT`
+
+### `thetis/Project Files/Source/cmASIO/version.cpp`
+
+- **`MW0LGE`** (Richard Samphire): 1 marker
+  - L13: `// MW0LGE version number now stored in Thetis->Versions.cs file, to keep shared`
+
+### `thetis/Project Files/Source/wdsp/RXA.c`
+
+- **`MW0LGE`** (Richard Samphire): 1 marker
+  - L663: `// [2.10.3.13]MW0LGE carrier removal before AGC`
+
 ### `thetis/Project Files/Source/wdsp/analyzer.c`
 
 - **`MW0LGE`** (Richard Samphire): 2 markers
@@ -1028,11 +970,6 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L734: `// proportional feedback gain  ***W4WMT - reduce loop gain a bit for PowerSDR to help Primary buffers > 512`
   - L735: `// linearly interpolate cvar by sample  ***W4WMT - set varmode = 0 for PowerSDR (doesn't work otherwise!?!)`
 
-### `thetis/Project Files/Source/wdsp/RXA.c`
-
-- **`MW0LGE`** (Richard Samphire): 1 marker
-  - L663: `// [2.10.3.13]MW0LGE carrier removal before AGC`
-
 ### `thetis/Project Files/Source/wdsp/ssql.c`
 
 - **`WU2O`** (Scott): 3 markers
@@ -1040,12 +977,12 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L352: `// WU2O testing:  0.1 is good default value`
   - L364: `// WU2O testing:  0.1 is good default value`
 
-### `mi0bot/Project Files/lib/portaudio-19.7.0/include/portaudio.h`
+### `thetis/Project Files/lib/portaudio-19.7.0/include/portaudio.h`
 
 - **`MW0LGE`** (Richard Samphire): 1 marker
   - L491: `//[2.10.3.11]MW0LGE portaudio note, new vals given to these, see commented code below`
 
-### `mi0bot/Project Files/lib/portaudio-19.7.0/src/common/pa_converters.c`
+### `thetis/Project Files/lib/portaudio-19.7.0/src/common/pa_converters.c`
 
 - **`MW0LGE`** (Richard Samphire): 44 markers
   - L120: `//[2.10.3.11]MW0LGE portaudio`
@@ -1070,7 +1007,7 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L448: `//[2.10.3.11]MW0LGE portaudio`
   - *(+24 more)*
 
-### `mi0bot/Project Files/lib/portaudio-19.7.0/src/common/pa_converters.h`
+### `thetis/Project Files/lib/portaudio-19.7.0/src/common/pa_converters.h`
 
 - **`MW0LGE`** (Richard Samphire): 9 markers
   - L139: `//[2.10.3]MW0LGE start`
@@ -1083,19 +1020,20 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L224: `//[2.10.3]MW0LGE`
   - L257: `//[2.10.3]MW0LGE`
 
-### `mi0bot/Project Files/lib/portaudio-19.7.0/src/common/pa_front.c`
+### `thetis/Project Files/lib/portaudio-19.7.0/src/common/pa_front.c`
 
 - **`MW0LGE`** (Richard Samphire): 2 markers
   - L810: `//[2.10.3.11]MW0LGE portaudio`
   - L1817: `//[2.10.3.11]MW0LGE portaudio`
 
-### `mi0bot/Project Files/lib/portaudio-19.7.0/src/hostapi/asio/pa_asio.cpp`
+### `thetis/Project Files/lib/portaudio-19.7.0/src/hostapi/asio/pa_asio.cpp`
 
-- **`MW0LGE`** (Richard Samphire): 2 markers
+- **`MW0LGE`** (Richard Samphire): 3 markers
   - L1274: `//[2.10.3.11]MW0LGE portaudio W4WMT`
-  - L1304: `//driver that cmASIO is using, if there is one //[2.10.3.11]MW0LGE portaudio W4WMT`
+  - L1305: `//driver that cmASIO is using, if there is one //[2.10.3.11]MW0LGE portaudio W4WMT`
+  - L1306: `//black list the Avid Pro Tools at it was causing issues (https://discord.com/channels/1271453528656969789/1491198252593315940) //[2.10.3...`
 
-### `mi0bot/Project Files/lib/portaudio-19.7.0/src/hostapi/wasapi/pa_win_wasapi.c`
+### `thetis/Project Files/lib/portaudio-19.7.0/src/hostapi/wasapi/pa_win_wasapi.c`
 
 - **`MW0LGE`** (Richard Samphire): 3 markers
   - L993: `//[2.10.3.11]MW0LGE portaudio`
@@ -1215,20 +1153,6 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 - **`MW0LGE`** (Richard Samphire): 1 marker
   - L13: `// MW0LGE version number now stored in Thetis->Versions.cs file, to keep shared`
 
-### `mi0bot/Project Files/Source/cmASIO/hostsample.cpp`
-
-- **`MW0LGE`** (Richard Samphire): 3 markers
-  - L327: `//[2.10.3.13]MW0LGE added explicit channel indices for input/output (0-based)`
-  - L532: `//[2.10.3.13]MW0LGE pass explicit channel indices for input/output (0-based)`
-  - L690: `//[2.10.3.13]MW0LGE get base channel numbers for input and output, and input mode`
-- **`W4WMT`** (Bryan Rambo): 1 marker
-  - L506: `//W4WMT`
-
-### `mi0bot/Project Files/Source/cmASIO/version.cpp`
-
-- **`MW0LGE`** (Richard Samphire): 1 marker
-  - L13: `// MW0LGE version number now stored in Thetis->Versions.cs file, to keep shared`
-
 ### `mi0bot/Project Files/Source/Console/AmpView.cs`
 
 - **`MW0LGE`** (Richard Samphire): 4 markers
@@ -1253,6 +1177,11 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L4129: `// MW0LGE [2.10.1.0] andromeda mode dependant form fixes`
   - L4147: `//[2.10.3.5]MW0LGE we are expanded, so ok to move them always`
 
+### `mi0bot/Project Files/Source/Console/Andromeda/SliderSettingsForm.cs`
+
+- **`MW0LGE`** (Richard Samphire): 1 marker
+  - L1276: `//[2.10.3.5]MW0LGE`
+
 ### `mi0bot/Project Files/Source/Console/Andromeda/displaysettingsform.cs`
 
 - **`G8NJJ`** (Laurence Barker): 5 markers
@@ -1261,26 +1190,6 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L334: `// G8NJJ: clear old list before re-adding!`
   - L338: `// G8NJJ: clear old list before re-adding!`
   - L342: `// G8NJJ: clear old list before re-adding!`
-
-### `mi0bot/Project Files/Source/Console/Andromeda/SliderSettingsForm.cs`
-
-- **`MW0LGE`** (Richard Samphire): 1 marker
-  - L1276: `//[2.10.3.5]MW0LGE`
-
-### `mi0bot/Project Files/Source/Console/audio.cs`
-
-- **`MW0LGE`** (Richard Samphire): 11 markers
-  - L359: `//[2.10.0.4]MW0LGE fix issue with no RX2 audio when tx'ing on rx1`
-  - L717: `//[2.10.3.4]MW0LGE added`
-  - L1369: `//[2.10.3.4]MW0LGE changed to use tx block size`
-  - L1483: `//a.Add("HPSDR (USB/UDP)"); //[2.10.3.4]MW0LGE removed`
-  - L1493: `//a.Add(new PADeviceInfo("HPSDR (PCM A/D)", 0)); //[2.10.3.4]MW0LGE removed`
-  - L1542: `//a.Add(new PADeviceInfo("HPSDR (PWM D/A)", 0)); //[2.10.3.4]MW0LGE removed`
-  - L1811: `////MW0LGE [2.9.0.8] fix if protocol is changed at some point`
-  - L1906: `//[2.10.3.5]MW0LGE resolves #338`
-  - L1996: `//[2.10.3.5]MW0LGE added`
-  - L2000: `//MW0LGE added all other scope modes`
-  - L2082: `//[2.10.3.5]MW0LGE added`
 
 ### `mi0bot/Project Files/Source/Console/CAT/CATCommands.cs`
 
@@ -1366,6 +1275,253 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 - **`MW0LGE`** (Richard Samphire): 1 marker
   - L277: `//[2.10.3.9]MW0LGE fixed to handle multiple messages ending in ;`
 
+### `mi0bot/Project Files/Source/Console/ColorButton.cs`
+
+- **`MW0LGE`** (Richard Samphire): 1 marker
+  - L162: `//[2.10.3.7]MW0LGE fixed, as it is not a good idea to use the clip rect to position the triangle`
+
+### `mi0bot/Project Files/Source/Console/DiversityForm.cs`
+
+- **`G8NJJ`** (Laurence Barker): 6 markers
+  - L2219: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
+  - L2230: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
+  - L2253: `// added 6/8/2019 G8NJJ to allow access by Andromeda. Sets the appropriate gain.`
+  - L2292: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
+  - L2311: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
+  - L2326: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
+- **`MW0LGE`** (Richard Samphire): 9 markers
+  - L170: `//[2.10.3.6]MW0LGE these need to be high so that restore form can recover values`
+  - L188: `//[2.10.3.6]MW0LGE implement memories. A bit of a hack to store all this in a text box, but it is easy with the saveform/restoreform`
+  - L2280: `//[2.10.3.5]MW0LGE fixes #324`
+  - L2299: `//[2.10.3.5]MW0LGE fixes #324`
+  - L2318: `//[2.10.3.5]MW0LGE fixes #324`
+  - L2544: `//[2.10.3.0]MW0LGE`
+  - L2558: `//[2.10.3.0]MW0LGE`
+  - L2572: `//[2.10.3.0]MW0LGE`
+  - L2818: `//[2.10.3.5]MW0LGE old code, kept for reference`
+
+### `mi0bot/Project Files/Source/Console/FilterForm.cs`
+
+- **`MW0LGE`** (Richard Samphire): 5 markers
+  - L677: `//[2.10.3.9]MW0LGE prevent update if already happening`
+  - L696: `//[2.10.3.12]MW0LGE only call if changed, as the events will call us back, and we would get a stack overflow`
+  - L786: `//[2.10.3.12]MW0LGE prevent update if changes happening from UpdateFilter. UpdateFilter will call this directly`
+  - L808: `//[2.10.3.12]MW0LGE prevent update if changes happening from UpdateFilter. UpdateFilter will call this directly`
+  - L920: `//[2.10.3.12]MW0LGE prevent update if changes happening from UpdateFilter. UpdateFilter will call this directly`
+- **`W4TME`** (Ke Chen): 4 markers
+  - L936: `//W4TME`
+  - L937: `//W4TME`
+  - L940: `//W4TME`
+  - L941: `//W4TME`
+
+### `mi0bot/Project Files/Source/Console/HPSDR/Alex.cs`
+
+- **`G8NJJ`** (Laurence Barker): 1 marker
+  - L408: `// G8NJJ support for external Aries ATU on antenna port 1`
+- **`MI0BOT`** (Reid Campbell): 4 markers
+  - L366: `// MI0BOT: Alt RX has been requested or TX and Rx are not the same`
+  - L389: `// MI0BOT: Antenna not the same is valid`
+  - L426: `// MI0BOT: Transmit antenna is being used for reception in split aerial operation`
+  - L446: `// MI0BOT: Sets the aerial controls on the I/O board`
+- **`MW0LGE`** (Richard Samphire): 2 markers
+  - L167: `//[2.10.3.6]MW0LGE`
+  - L181: `//[2.10.3.6]MW0LGE else freq = Console.getConsole().VFOAFreq;`
+
+### `mi0bot/Project Files/Source/Console/HPSDR/NetworkIO.cs`
+
+- **`MW0LGE`** (Richard Samphire): 5 markers
+  - L160: `//[2.10.3.9]MW0LGE added board check, issue icon shown in setup`
+  - L432: `//                if (localEndPoint != null) //[2.10.3.7]MW0LGE null check added, and changed to tryparse`
+  - L562: `//            //[2.10.3.9]MW0LGE added board check, issue icon shown in setup`
+  - L901: `//                        //[2.10.3.5]MW0LGE sigh, MAC address in P1 is NOT at data[5], but at data[3]`
+  - L1120: `//                return null;  //[2.10.3.7]MW0LGE added try catch`
+
+### `mi0bot/Project Files/Source/Console/HPSDR/NetworkIOImports.cs`
+
+- **`MI0BIT`** (Unknown): 8 markers
+  - L384: `// MI0BIT: Pass hardware TX latency to HL2`
+  - L387: `// MI0BIT: Pass hardware PTT hang to HL2`
+  - L390: `// MI0BIT: Control reset on network disconnect`
+  - L393: `// MI0BIT: Control to swap the left and right audio channels send over P1`
+  - L396: `// MI0BIT: I2C read start for HL2`
+  - L399: `// MI0BIT: I2C write start for HL2`
+  - L402: `// MI0BIT: I2C write for HL2`
+  - L405: `// MI0BIT: I2C read response for HL2`
+- **`MI0BOT`** (Reid Campbell): 1 marker
+  - L321: `// MI0BOT: Pass PTT for CWX`
+
+### `mi0bot/Project Files/Source/Console/HPSDR/Penny.cs`
+
+- **`MI0BOT`** (Reid Campbell): 2 markers
+  - L174: `// MI0BOT: Select correct LPF for 2 receivers`
+  - L185: `// MI0BOT: Select the filter for the high band`
+
+### `mi0bot/Project Files/Source/Console/HPSDR/clsRadioDiscovery.cs`
+
+- **`MI0BOT`** (Reid Campbell): 9 markers
+  - L514: `// MI0BOT: Extra info from discovery for HL2`
+  - L518: `// MI0BOT: Extra info from discovery for HL2`
+  - L519: `// MI0BOT: Extra info from discovery for HL2`
+  - L1065: `// MI0BOT: Extra info from discovery for HL2`
+  - L1117: `// MI0BOT: Extra info from discovery for HL2`
+  - L1118: `// MI0BOT: Extra info from discovery for HL2`
+  - L1119: `// MI0BOT: Extra info from discovery for HL2`
+  - L1169: `// MI0BOT: Extra info from discovery for HL2`
+  - L1239: `// MI0BOT: HL2 added`
+
+### `mi0bot/Project Files/Source/Console/Memory/MemoryForm.cs`
+
+- **`KE9NS`** (Darrin): 1 marker
+  - L662: `//KE9NS ADD below is used to determine the URL from a drag and drop onto the memory form`
+- **`MW0LGE`** (Richard Samphire): 3 markers
+  - L935: `//[2.10.3.9]MW0LGE`
+  - L1389: `//[2.10.3.6]MW0LGE uncommented so that the recording folder is shown. Fixes #457`
+  - L1448: `//[2.10.3.5]MW0LGE it looks like MP3 support has been removed and commented out, above, about 5 years ago.`
+- **`W4TME`** (Ke Chen): 2 markers
+  - L470: `//W4TME`
+  - L504: `//W4TME`
+
+### `mi0bot/Project Files/Source/Console/MeterManager.cs`
+
+- **`MW0LGE`** (Richard Samphire): 18 markers
+  - L1800: `//[2.10.3.6]MW0LGE added for dev_6`
+  - L4200: `//[2.10.1.0] MW0LGE needed because at init rx2 might not be enabled, and the init function will have been given -999.999 from console.vfo...`
+  - L5695: `//[2.10.3.6]MW0LGE get all console info here, as everything will be at the correct state`
+  - L6433: `//a.Add("meterIGSettings_" + ig.Value.ID, igs.ToString()); //[2.10.3.6]MW0LGE not used`
+  - L6563: `//[2.10.3.7]MW0LGE // we have to dispose it because close() prevent this being freed up`
+  - L6791: `//[2.10.3.9]MW0LGE order these once, pointless doing it every time we get a percentage !`
+  - L6846: `//[2.10.1.0] MW0LGE used for on rx/tx fading`
+  - L6851: `//[2.10.1.0] MW0LGE used when certain features turned off such as eq,leveler,cfc`
+  - L6856: `//[2.10.30.9]MW0LGE this perc cache code totally refactored, and only caches to 2 decimal precision for the dB value, and is keyed on the...`
+  - L9861: `//[2.10.3.9]MW0LGE fix, was using _rx1_band`
+  - L18046: `//[2.10.3.9]MW0LGE update the data, prevents loads of updates`
+  - L29467: `//[2.10.3.6]MW0LGE added m.vfosub >= 0`
+  - L31618: `// [2.10.1.0] MW0LGE`
+  - L33264: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
+  - L33473: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
+  - L33686: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
+  - L39132: `//[2.10.3.9]MW0LGE refactor for speed`
+  - L39319: `//[2.10.3.6]MW0LGE refactored to use Windows Imaging Component (WIC)`
+
+### `mi0bot/Project Files/Source/Console/Midi2CatCommands.cs`
+
+- **`DH1KLM`** (Sigi): 32 markers
+  - L5524: `// DH1KLM`
+  - L5536: `// DH1KLM`
+  - L5548: `// DH1KLM`
+  - L5560: `// DH1KLM`
+  - L5572: `// DH1KLM`
+  - L5595: `// DH1KLM`
+  - L5618: `// DH1KLM`
+  - L5635: `// DH1KLM`
+  - L5675: `// DH1KLM`
+  - L5700: `// DH1KLM`
+  - L5725: `// DH1KLM`
+  - L5748: `// DH1KLM`
+  - L5807: `// DH1KLM`
+  - L5825: `// DH1KLM`
+  - L5844: `// DH1KLM`
+  - L5863: `// DH1KLM`
+  - L5882: `// DH1KLM`
+  - L5901: `// DH1KLM`
+  - L5920: `// DH1KLM`
+  - L5939: `// DH1KLM`
+  - *(+12 more)*
+- **`MI0BOT`** (Reid Campbell): 2 markers
+  - L6381: `//MI0BOT: CW keying via MIDI`
+  - L6395: `//MI0BOT: CW PTT via MIDI`
+- **`MW0GE`** (Richard Samphire): 1 marker
+  - L264: `//[2.10.3.6]MW0GE reimplemented`
+- **`MW0LGE`** (Richard Samphire): 6 markers
+  - L1166: `//[2.10.3.9]MW0LGE refactor for speed, as other implemation was just a complete mess`
+  - L1718: `//[2.10.3.9]MW0LGE refactor for speed`
+  - L1933: `//[2.10.3.9]MW0LGE refactor for speed`
+  - L3119: `//[2.10.3.6]MW0LGE changed`
+  - L3163: `//[2.10.3.6]MW0LGE seriously 0.078?????? crazy`
+  - L6493: `// MW0LGE [2.9.0.7]`
+- **`W2PA`** (Chris Codella): 90 markers
+  - L45: `//-W2PA Necessary for changes to support Behringer PL-1 (and others)`
+  - L93: `//-W2PA* Use the MidiMessageManager to send an update to the proper device/control LEDs`
+  - L103: `//-W2PA Added device parameter to all commands to support return messages to devices with LEDs such as the Behringers`
+  - L191: `//-W2PA This makes the function match its equivalent console function (e.g. mode gets copied)`
+  - L207: `//-W2PA This makes the function match its equivalent console function (e.g. mode gets copied)`
+  - L224: `//-W2PA This makes the function match its equivalent console function (e.g. mode gets copied)`
+  - L288: `//-W2PA special handling for Behringer wheel style knobs`
+  - L290: `//-W2PA for Behringer PL-1 type knob/wheel push button, to zero the setting`
+  - L294: `//-W2PA for Behringer PL-1 knob/wheel`
+  - L298: `//-W2PA for Behringer PL-1 knob/wheel`
+  - L303: `//-W2PA Original code in Midi2Cat`
+  - L318: `//-W2PA Rewritten to use a mini-wheel like the ones on the Behringer PL-1`
+  - L319: `//-W2PA XIT_inc is different from RIT_inc because the CAT commands are different in CATCommands.cs`
+  - L328: `//-W2PA special handling for Behringer wheel style knobs`
+  - L330: `//-W2PA for Behringer PL-1 type knob/wheel push button, to zero the setting`
+  - L338: `//-W2PA Changed to operate in all modes.`
+  - L345: `//-W2PA Changed to operate in all modes.`
+  - L350: `//-W2PA Original code in Midi2Cat`
+  - L436: `//-W2PA Incremental volume control for Behringer PL-1 or similar knobs as wheels. Also added an item for Wheel in CatCmdDb.cs`
+  - L446: `//-W2PA Ignore knob click presses`
+  - *(+70 more)*
+
+### `mi0bot/Project Files/Source/Console/N1MM.cs`
+
+- **`MW0LGE`** (Richard Samphire): 1 marker
+  - L188: `// MW0LGE [2.9.0.7] fix issue where spectrum is offset by cwpitch`
+
+### `mi0bot/Project Files/Source/Console/PSForm.cs`
+
+- **`MI0BOT`** (Reid Campbell): 5 markers
+  - L758: `// MI0BOT: Handle the Not A Number situation`
+  - L759: `// MI0BOT: Handle - infinity`
+  - L760: `// MI0BOT: Handle + infinity`
+  - L788: `//MI0BOT: HL2 can handle negative up to -28, just let it be handled in ATTOnTx section`
+  - L1144: `// MI0BOT: Needed seperate function for HL2 as`
+- **`MW0LGE`** (Richard Samphire): 9 markers
+  - L72: `// MW0LGE moved above restore, so that we actaully have console when control events fire because of restore form`
+  - L157: `//[2.10.3.9]MW0LGE used by finder`
+  - L409: `//[2.10.3.4]]MW0LGE leave it there until thetis closes`
+  - L740: `//MW0LGE`
+  - L772: `//[2.10.3.12]MW0LGE use rounding, to fix Banker's rounding issue`
+  - L830: `//[2.10.3.7]MW0LGE show a warning if the setpk is different to what we expect for this hardware`
+  - L843: `//MW0LGE use property`
+  - L935: `//MW0LGE`
+  - L1106: `//make copy of old, used in HasInfoChanged & CalibrationAttemptsChanged MW0LGE`
+- **`W2PA`** (Chris Codella): 1 marker
+  - L480: `//-W2PA Adds capability for CAT control via console`
+
+### `mi0bot/Project Files/Source/Console/Skin.cs`
+
+- **`MW0LGE`** (Richard Samphire): 4 markers
+  - L1897: `// [2.10.3.9]MW0LGE`
+  - L1917: `//[2.10.3.6]MW0LGE cache based on hash of image`
+  - L1923: `//[2.10.2.2] MW0LGE`
+  - L1973: `//[2.10.3.9]MW0LGE change to md5`
+
+### `mi0bot/Project Files/Source/Console/TCIServer.cs`
+
+- **`MW0LGE`** (Richard Samphire): 7 markers
+  - L2116: `//MW0LGE [2.9.0.7] note we invert with -`
+  - L2344: `//MW0LGE [2.9.0.7]`
+  - L3869: `//change if needed [2.10.3.6]MW0LGE fixes #365`
+  - L4319: `//[2.10.3.6]MW0LGE rumlog fills arg5 with Nil - spotted buy GW3JVB`
+  - L6270: `//[2.10.3.9]MW0LGE fixes issue #559`
+  - L7073: `// also send legacy command (EESDR3 does this)	MW0LGE [2.9.0.8]`
+  - L7478: `//[2.10.3.9]MW0LGE also send out RX_CLICKED_ON_SPOT defaults to rx1 and vfoA`
+
+### `mi0bot/Project Files/Source/Console/audio.cs`
+
+- **`MW0LGE`** (Richard Samphire): 11 markers
+  - L359: `//[2.10.0.4]MW0LGE fix issue with no RX2 audio when tx'ing on rx1`
+  - L717: `//[2.10.3.4]MW0LGE added`
+  - L1369: `//[2.10.3.4]MW0LGE changed to use tx block size`
+  - L1483: `//a.Add("HPSDR (USB/UDP)"); //[2.10.3.4]MW0LGE removed`
+  - L1493: `//a.Add(new PADeviceInfo("HPSDR (PCM A/D)", 0)); //[2.10.3.4]MW0LGE removed`
+  - L1542: `//a.Add(new PADeviceInfo("HPSDR (PWM D/A)", 0)); //[2.10.3.4]MW0LGE removed`
+  - L1811: `////MW0LGE [2.9.0.8] fix if protocol is changed at some point`
+  - L1906: `//[2.10.3.5]MW0LGE resolves #338`
+  - L1996: `//[2.10.3.5]MW0LGE added`
+  - L2000: `//MW0LGE added all other scope modes`
+  - L2082: `//[2.10.3.5]MW0LGE added`
+
 ### `mi0bot/Project Files/Source/Console/clsDBMan.cs`
 
 - **`MW0LGE`** (Richard Samphire): 1 marker
@@ -1405,11 +1561,6 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L1881: `//MW0LGE`
   - L2302: `//[2.10.3.4]MW0LGE use OutCountTX if moxing`
 
-### `mi0bot/Project Files/Source/Console/ColorButton.cs`
-
-- **`MW0LGE`** (Richard Samphire): 1 marker
-  - L162: `//[2.10.3.7]MW0LGE fixed, as it is not a good idea to use the clip rect to position the triangle`
-
 ### `mi0bot/Project Files/Source/Console/common.cs`
 
 - **`MW0LGE`** (Richard Samphire): 11 markers
@@ -1424,6 +1575,11 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L1478: `//[2.10.3.9]MW0LGE form scaling`
   - L1533: `//[2.10.3.9]MW0LGE cpu usage for this process`
   - L1561: `//[2.10.3.9]MW0LGE screensave/powersave prevention`
+
+### `mi0bot/Project Files/Source/Console/console.Designer.cs`
+
+- **`G8NJJ`** (Laurence Barker): 1 marker
+  - L474: `// G8NJJ`
 
 ### `mi0bot/Project Files/Source/Console/console.cs`
 
@@ -1557,11 +1713,6 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L14755: `//reset preset filter's center frequency - W4TME`
   - L15811: `// W4TME`
 
-### `mi0bot/Project Files/Source/Console/console.Designer.cs`
-
-- **`G8NJJ`** (Laurence Barker): 1 marker
-  - L474: `// G8NJJ`
-
 ### `mi0bot/Project Files/Source/Console/cwx.cs`
 
 - **`MW0LGE`** (Richard Samphire): 10 markers
@@ -1637,26 +1788,6 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L6727: `//[2.10.3.9]MW0LGE changed from max`
   - *(+36 more)*
 
-### `mi0bot/Project Files/Source/Console/DiversityForm.cs`
-
-- **`G8NJJ`** (Laurence Barker): 6 markers
-  - L2219: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
-  - L2230: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
-  - L2253: `// added 6/8/2019 G8NJJ to allow access by Andromeda. Sets the appropriate gain.`
-  - L2292: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
-  - L2311: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
-  - L2326: `// added 31/3/2018 G8NJJ to allow access by CAT commands`
-- **`MW0LGE`** (Richard Samphire): 9 markers
-  - L170: `//[2.10.3.6]MW0LGE these need to be high so that restore form can recover values`
-  - L188: `//[2.10.3.6]MW0LGE implement memories. A bit of a hack to store all this in a text box, but it is easy with the saveform/restoreform`
-  - L2280: `//[2.10.3.5]MW0LGE fixes #324`
-  - L2299: `//[2.10.3.5]MW0LGE fixes #324`
-  - L2318: `//[2.10.3.5]MW0LGE fixes #324`
-  - L2544: `//[2.10.3.0]MW0LGE`
-  - L2558: `//[2.10.3.0]MW0LGE`
-  - L2572: `//[2.10.3.0]MW0LGE`
-  - L2818: `//[2.10.3.5]MW0LGE old code, kept for reference`
-
 ### `mi0bot/Project Files/Source/Console/dsp.cs`
 
 - **`MW0LGE`** (Richard Samphire): 6 markers
@@ -1686,198 +1817,10 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 - **`MW0LGE`** (Richard Samphire): 1 marker
   - L203: `//MW0LGE [2.9.0.7]`
 
-### `mi0bot/Project Files/Source/Console/FilterForm.cs`
-
-- **`MW0LGE`** (Richard Samphire): 5 markers
-  - L677: `//[2.10.3.9]MW0LGE prevent update if already happening`
-  - L696: `//[2.10.3.12]MW0LGE only call if changed, as the events will call us back, and we would get a stack overflow`
-  - L786: `//[2.10.3.12]MW0LGE prevent update if changes happening from UpdateFilter. UpdateFilter will call this directly`
-  - L808: `//[2.10.3.12]MW0LGE prevent update if changes happening from UpdateFilter. UpdateFilter will call this directly`
-  - L920: `//[2.10.3.12]MW0LGE prevent update if changes happening from UpdateFilter. UpdateFilter will call this directly`
-- **`W4TME`** (Ke Chen): 4 markers
-  - L936: `//W4TME`
-  - L937: `//W4TME`
-  - L940: `//W4TME`
-  - L941: `//W4TME`
-
 ### `mi0bot/Project Files/Source/Console/frmMeterDisplay.cs`
 
 - **`MW0LGE`** (Richard Samphire): 1 marker
   - L188: `//IMPORTANT NOTE *****   //[2.10.3.7]MW0LGE`
-
-### `mi0bot/Project Files/Source/Console/HPSDR/Alex.cs`
-
-- **`G8NJJ`** (Laurence Barker): 1 marker
-  - L408: `// G8NJJ support for external Aries ATU on antenna port 1`
-- **`MI0BOT`** (Reid Campbell): 4 markers
-  - L366: `// MI0BOT: Alt RX has been requested or TX and Rx are not the same`
-  - L389: `// MI0BOT: Antenna not the same is valid`
-  - L426: `// MI0BOT: Transmit antenna is being used for reception in split aerial operation`
-  - L446: `// MI0BOT: Sets the aerial controls on the I/O board`
-- **`MW0LGE`** (Richard Samphire): 2 markers
-  - L167: `//[2.10.3.6]MW0LGE`
-  - L181: `//[2.10.3.6]MW0LGE else freq = Console.getConsole().VFOAFreq;`
-
-### `mi0bot/Project Files/Source/Console/HPSDR/clsRadioDiscovery.cs`
-
-- **`MI0BOT`** (Reid Campbell): 9 markers
-  - L514: `// MI0BOT: Extra info from discovery for HL2`
-  - L518: `// MI0BOT: Extra info from discovery for HL2`
-  - L519: `// MI0BOT: Extra info from discovery for HL2`
-  - L1065: `// MI0BOT: Extra info from discovery for HL2`
-  - L1117: `// MI0BOT: Extra info from discovery for HL2`
-  - L1118: `// MI0BOT: Extra info from discovery for HL2`
-  - L1119: `// MI0BOT: Extra info from discovery for HL2`
-  - L1169: `// MI0BOT: Extra info from discovery for HL2`
-  - L1239: `// MI0BOT: HL2 added`
-
-### `mi0bot/Project Files/Source/Console/HPSDR/NetworkIO.cs`
-
-- **`MW0LGE`** (Richard Samphire): 5 markers
-  - L160: `//[2.10.3.9]MW0LGE added board check, issue icon shown in setup`
-  - L432: `//                if (localEndPoint != null) //[2.10.3.7]MW0LGE null check added, and changed to tryparse`
-  - L562: `//            //[2.10.3.9]MW0LGE added board check, issue icon shown in setup`
-  - L901: `//                        //[2.10.3.5]MW0LGE sigh, MAC address in P1 is NOT at data[5], but at data[3]`
-  - L1120: `//                return null;  //[2.10.3.7]MW0LGE added try catch`
-
-### `mi0bot/Project Files/Source/Console/HPSDR/NetworkIOImports.cs`
-
-- **`MI0BIT`** (Unknown): 8 markers
-  - L384: `// MI0BIT: Pass hardware TX latency to HL2`
-  - L387: `// MI0BIT: Pass hardware PTT hang to HL2`
-  - L390: `// MI0BIT: Control reset on network disconnect`
-  - L393: `// MI0BIT: Control to swap the left and right audio channels send over P1`
-  - L396: `// MI0BIT: I2C read start for HL2`
-  - L399: `// MI0BIT: I2C write start for HL2`
-  - L402: `// MI0BIT: I2C write for HL2`
-  - L405: `// MI0BIT: I2C read response for HL2`
-- **`MI0BOT`** (Reid Campbell): 1 marker
-  - L321: `// MI0BOT: Pass PTT for CWX`
-
-### `mi0bot/Project Files/Source/Console/HPSDR/Penny.cs`
-
-- **`MI0BOT`** (Reid Campbell): 2 markers
-  - L174: `// MI0BOT: Select correct LPF for 2 receivers`
-  - L185: `// MI0BOT: Select the filter for the high band`
-
-### `mi0bot/Project Files/Source/Console/Memory/MemoryForm.cs`
-
-- **`KE9NS`** (Darrin): 1 marker
-  - L662: `//KE9NS ADD below is used to determine the URL from a drag and drop onto the memory form`
-- **`MW0LGE`** (Richard Samphire): 3 markers
-  - L935: `//[2.10.3.9]MW0LGE`
-  - L1389: `//[2.10.3.6]MW0LGE uncommented so that the recording folder is shown. Fixes #457`
-  - L1448: `//[2.10.3.5]MW0LGE it looks like MP3 support has been removed and commented out, above, about 5 years ago.`
-- **`W4TME`** (Ke Chen): 2 markers
-  - L470: `//W4TME`
-  - L504: `//W4TME`
-
-### `mi0bot/Project Files/Source/Console/MeterManager.cs`
-
-- **`MW0LGE`** (Richard Samphire): 18 markers
-  - L1800: `//[2.10.3.6]MW0LGE added for dev_6`
-  - L4200: `//[2.10.1.0] MW0LGE needed because at init rx2 might not be enabled, and the init function will have been given -999.999 from console.vfo...`
-  - L5695: `//[2.10.3.6]MW0LGE get all console info here, as everything will be at the correct state`
-  - L6433: `//a.Add("meterIGSettings_" + ig.Value.ID, igs.ToString()); //[2.10.3.6]MW0LGE not used`
-  - L6563: `//[2.10.3.7]MW0LGE // we have to dispose it because close() prevent this being freed up`
-  - L6791: `//[2.10.3.9]MW0LGE order these once, pointless doing it every time we get a percentage !`
-  - L6846: `//[2.10.1.0] MW0LGE used for on rx/tx fading`
-  - L6851: `//[2.10.1.0] MW0LGE used when certain features turned off such as eq,leveler,cfc`
-  - L6856: `//[2.10.30.9]MW0LGE this perc cache code totally refactored, and only caches to 2 decimal precision for the dB value, and is keyed on the...`
-  - L9861: `//[2.10.3.9]MW0LGE fix, was using _rx1_band`
-  - L18046: `//[2.10.3.9]MW0LGE update the data, prevents loads of updates`
-  - L29467: `//[2.10.3.6]MW0LGE added m.vfosub >= 0`
-  - L31618: `// [2.10.1.0] MW0LGE`
-  - L33264: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
-  - L33473: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
-  - L33686: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
-  - L39132: `//[2.10.3.9]MW0LGE refactor for speed`
-  - L39319: `//[2.10.3.6]MW0LGE refactored to use Windows Imaging Component (WIC)`
-
-### `mi0bot/Project Files/Source/Console/Midi2CatCommands.cs`
-
-- **`DH1KLM`** (Sigi): 32 markers
-  - L5524: `// DH1KLM`
-  - L5536: `// DH1KLM`
-  - L5548: `// DH1KLM`
-  - L5560: `// DH1KLM`
-  - L5572: `// DH1KLM`
-  - L5595: `// DH1KLM`
-  - L5618: `// DH1KLM`
-  - L5635: `// DH1KLM`
-  - L5675: `// DH1KLM`
-  - L5700: `// DH1KLM`
-  - L5725: `// DH1KLM`
-  - L5748: `// DH1KLM`
-  - L5807: `// DH1KLM`
-  - L5825: `// DH1KLM`
-  - L5844: `// DH1KLM`
-  - L5863: `// DH1KLM`
-  - L5882: `// DH1KLM`
-  - L5901: `// DH1KLM`
-  - L5920: `// DH1KLM`
-  - L5939: `// DH1KLM`
-  - *(+12 more)*
-- **`MI0BOT`** (Reid Campbell): 2 markers
-  - L6381: `//MI0BOT: CW keying via MIDI`
-  - L6395: `//MI0BOT: CW PTT via MIDI`
-- **`MW0GE`** (Richard Samphire): 1 marker
-  - L264: `//[2.10.3.6]MW0GE reimplemented`
-- **`MW0LGE`** (Richard Samphire): 6 markers
-  - L1166: `//[2.10.3.9]MW0LGE refactor for speed, as other implemation was just a complete mess`
-  - L1718: `//[2.10.3.9]MW0LGE refactor for speed`
-  - L1933: `//[2.10.3.9]MW0LGE refactor for speed`
-  - L3119: `//[2.10.3.6]MW0LGE changed`
-  - L3163: `//[2.10.3.6]MW0LGE seriously 0.078?????? crazy`
-  - L6493: `// MW0LGE [2.9.0.7]`
-- **`W2PA`** (Chris Codella): 90 markers
-  - L45: `//-W2PA Necessary for changes to support Behringer PL-1 (and others)`
-  - L93: `//-W2PA* Use the MidiMessageManager to send an update to the proper device/control LEDs`
-  - L103: `//-W2PA Added device parameter to all commands to support return messages to devices with LEDs such as the Behringers`
-  - L191: `//-W2PA This makes the function match its equivalent console function (e.g. mode gets copied)`
-  - L207: `//-W2PA This makes the function match its equivalent console function (e.g. mode gets copied)`
-  - L224: `//-W2PA This makes the function match its equivalent console function (e.g. mode gets copied)`
-  - L288: `//-W2PA special handling for Behringer wheel style knobs`
-  - L290: `//-W2PA for Behringer PL-1 type knob/wheel push button, to zero the setting`
-  - L294: `//-W2PA for Behringer PL-1 knob/wheel`
-  - L298: `//-W2PA for Behringer PL-1 knob/wheel`
-  - L303: `//-W2PA Original code in Midi2Cat`
-  - L318: `//-W2PA Rewritten to use a mini-wheel like the ones on the Behringer PL-1`
-  - L319: `//-W2PA XIT_inc is different from RIT_inc because the CAT commands are different in CATCommands.cs`
-  - L328: `//-W2PA special handling for Behringer wheel style knobs`
-  - L330: `//-W2PA for Behringer PL-1 type knob/wheel push button, to zero the setting`
-  - L338: `//-W2PA Changed to operate in all modes.`
-  - L345: `//-W2PA Changed to operate in all modes.`
-  - L350: `//-W2PA Original code in Midi2Cat`
-  - L436: `//-W2PA Incremental volume control for Behringer PL-1 or similar knobs as wheels. Also added an item for Wheel in CatCmdDb.cs`
-  - L446: `//-W2PA Ignore knob click presses`
-  - *(+70 more)*
-
-### `mi0bot/Project Files/Source/Console/N1MM.cs`
-
-- **`MW0LGE`** (Richard Samphire): 1 marker
-  - L188: `// MW0LGE [2.9.0.7] fix issue where spectrum is offset by cwpitch`
-
-### `mi0bot/Project Files/Source/Console/PSForm.cs`
-
-- **`MI0BOT`** (Reid Campbell): 5 markers
-  - L758: `// MI0BOT: Handle the Not A Number situation`
-  - L759: `// MI0BOT: Handle - infinity`
-  - L760: `// MI0BOT: Handle + infinity`
-  - L788: `//MI0BOT: HL2 can handle negative up to -28, just let it be handled in ATTOnTx section`
-  - L1144: `// MI0BOT: Needed seperate function for HL2 as`
-- **`MW0LGE`** (Richard Samphire): 9 markers
-  - L72: `// MW0LGE moved above restore, so that we actaully have console when control events fire because of restore form`
-  - L157: `//[2.10.3.9]MW0LGE used by finder`
-  - L409: `//[2.10.3.4]]MW0LGE leave it there until thetis closes`
-  - L740: `//MW0LGE`
-  - L772: `//[2.10.3.12]MW0LGE use rounding, to fix Banker's rounding issue`
-  - L830: `//[2.10.3.7]MW0LGE show a warning if the setpk is different to what we expect for this hardware`
-  - L843: `//MW0LGE use property`
-  - L935: `//MW0LGE`
-  - L1106: `//make copy of old, used in HasInfoChanged & CalibrationAttemptsChanged MW0LGE`
-- **`W2PA`** (Chris Codella): 1 marker
-  - L480: `//-W2PA Adds capability for CAT control via console`
 
 ### `mi0bot/Project Files/Source/Console/radio.cs`
 
@@ -1984,31 +1927,12 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 - **`W4WMT`** (Bryan Rambo): 1 marker
   - L29395: `//[2.10.3.5]W4WMT implements #87`
 
-### `mi0bot/Project Files/Source/Console/Skin.cs`
-
-- **`MW0LGE`** (Richard Samphire): 4 markers
-  - L1897: `// [2.10.3.9]MW0LGE`
-  - L1917: `//[2.10.3.6]MW0LGE cache based on hash of image`
-  - L1923: `//[2.10.2.2] MW0LGE`
-  - L1973: `//[2.10.3.9]MW0LGE change to md5`
-
 ### `mi0bot/Project Files/Source/Console/splash.cs`
 
 - **`MW0LGE`** (Richard Samphire): 3 markers
   - L60: `//MW0LGE`
   - L493: `//MW0LGE interesting, but removed`
   - L523: `//MW0LGE pnlStatus.Invalidate(m_rProgress);`
-
-### `mi0bot/Project Files/Source/Console/TCIServer.cs`
-
-- **`MW0LGE`** (Richard Samphire): 7 markers
-  - L2116: `//MW0LGE [2.9.0.7] note we invert with -`
-  - L2344: `//MW0LGE [2.9.0.7]`
-  - L3869: `//change if needed [2.10.3.6]MW0LGE fixes #365`
-  - L4319: `//[2.10.3.6]MW0LGE rumlog fills arg5 with Nil - spotted buy GW3JVB`
-  - L6270: `//[2.10.3.9]MW0LGE fixes issue #559`
-  - L7073: `// also send legacy command (EESDR3 does this)	MW0LGE [2.9.0.8]`
-  - L7478: `//[2.10.3.9]MW0LGE also send out RX_CLICKED_ON_SPOT defaults to rx1 and vfoA`
 
 ### `mi0bot/Project Files/Source/Console/titlebar.cs`
 
@@ -2139,6 +2063,25 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L159: `//-W2PA 8 button`
   - *(+12 more)*
 
+### `mi0bot/Project Files/Source/cmASIO/hostsample.cpp`
+
+- **`MW0LGE`** (Richard Samphire): 3 markers
+  - L327: `//[2.10.3.13]MW0LGE added explicit channel indices for input/output (0-based)`
+  - L532: `//[2.10.3.13]MW0LGE pass explicit channel indices for input/output (0-based)`
+  - L690: `//[2.10.3.13]MW0LGE get base channel numbers for input and output, and input mode`
+- **`W4WMT`** (Bryan Rambo): 1 marker
+  - L506: `//W4WMT`
+
+### `mi0bot/Project Files/Source/cmASIO/version.cpp`
+
+- **`MW0LGE`** (Richard Samphire): 1 marker
+  - L13: `// MW0LGE version number now stored in Thetis->Versions.cs file, to keep shared`
+
+### `mi0bot/Project Files/Source/wdsp/RXA.c`
+
+- **`MW0LGE`** (Richard Samphire): 1 marker
+  - L663: `// [2.10.3.13]MW0LGE carrier removal before AGC`
+
 ### `mi0bot/Project Files/Source/wdsp/analyzer.c`
 
 - **`MW0LGE`** (Richard Samphire): 2 markers
@@ -2161,15 +2104,72 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L734: `// proportional feedback gain  ***W4WMT - reduce loop gain a bit for PowerSDR to help Primary buffers > 512`
   - L735: `// linearly interpolate cvar by sample  ***W4WMT - set varmode = 0 for PowerSDR (doesn't work otherwise!?!)`
 
-### `mi0bot/Project Files/Source/wdsp/RXA.c`
-
-- **`MW0LGE`** (Richard Samphire): 1 marker
-  - L663: `// [2.10.3.13]MW0LGE carrier removal before AGC`
-
 ### `mi0bot/Project Files/Source/wdsp/ssql.c`
 
 - **`WU2O`** (Scott): 3 markers
   - L342: `// WU2O testing:  0.16 is a good default for 'threshold'; => 0.08 for 'wthresh'`
   - L352: `// WU2O testing:  0.1 is good default value`
   - L364: `// WU2O testing:  0.1 is good default value`
+
+### `mi0bot/Project Files/lib/portaudio-19.7.0/include/portaudio.h`
+
+- **`MW0LGE`** (Richard Samphire): 1 marker
+  - L491: `//[2.10.3.11]MW0LGE portaudio note, new vals given to these, see commented code below`
+
+### `mi0bot/Project Files/lib/portaudio-19.7.0/src/common/pa_converters.c`
+
+- **`MW0LGE`** (Richard Samphire): 44 markers
+  - L120: `//[2.10.3.11]MW0LGE portaudio`
+  - L182: `//[2.10.3.11]MW0LGE portaudio`
+  - L194: `//[2.10.3.11]MW0LGE portaudio`
+  - L204: `//[2.10.3.11]MW0LGE portaudio`
+  - L214: `//[2.10.3.11]MW0LGE portaudio`
+  - L224: `//[2.10.3.11]MW0LGE portaudio`
+  - L234: `//[2.10.3.11]MW0LGE portaudio`
+  - L244: `//[2.10.3.11]MW0LGE portaudio`
+  - L262: `//[2.10.3.11]MW0LGE portaudio start`
+  - L272: `//[2.10.3.11]MW0LGE portaudio end`
+  - L298: `//[2.10.3.11]MW0LGE portaudio`
+  - L309: `//[2.10.3.11]MW0LGE portaudio`
+  - L319: `//[2.10.3.11]MW0LGE portaudio`
+  - L328: `//[2.10.3.11]MW0LGE portaudio`
+  - L335: `//[2.10.3.11]MW0LGE portaudio`
+  - L346: `//[2.10.3.11]MW0LGE portaudio`
+  - L366: `//[2.10.3.11]MW0LGE portaudio`
+  - L387: `//[2.10.3.11]MW0LGE portaudio`
+  - L414: `//[2.10.3.11]MW0LGE portaudio`
+  - L448: `//[2.10.3.11]MW0LGE portaudio`
+  - *(+24 more)*
+
+### `mi0bot/Project Files/lib/portaudio-19.7.0/src/common/pa_converters.h`
+
+- **`MW0LGE`** (Richard Samphire): 9 markers
+  - L139: `//[2.10.3]MW0LGE start`
+  - L150: `//[2.10.3]MW0LGE end`
+  - L176: `//[2.10.3]MW0LGE`
+  - L187: `//[2.10.3]MW0LGE`
+  - L197: `//[2.10.3]MW0LGE`
+  - L206: `//[2.10.3]MW0LGE`
+  - L213: `//[2.10.3]MW0LGE`
+  - L224: `//[2.10.3]MW0LGE`
+  - L257: `//[2.10.3]MW0LGE`
+
+### `mi0bot/Project Files/lib/portaudio-19.7.0/src/common/pa_front.c`
+
+- **`MW0LGE`** (Richard Samphire): 2 markers
+  - L810: `//[2.10.3.11]MW0LGE portaudio`
+  - L1817: `//[2.10.3.11]MW0LGE portaudio`
+
+### `mi0bot/Project Files/lib/portaudio-19.7.0/src/hostapi/asio/pa_asio.cpp`
+
+- **`MW0LGE`** (Richard Samphire): 2 markers
+  - L1274: `//[2.10.3.11]MW0LGE portaudio W4WMT`
+  - L1304: `//driver that cmASIO is using, if there is one //[2.10.3.11]MW0LGE portaudio W4WMT`
+
+### `mi0bot/Project Files/lib/portaudio-19.7.0/src/hostapi/wasapi/pa_win_wasapi.c`
+
+- **`MW0LGE`** (Richard Samphire): 3 markers
+  - L993: `//[2.10.3.11]MW0LGE portaudio`
+  - L2757: `//[2.10.3.11]MW0LGE portaudio`
+  - L2784: `//[2.10.3.11]MW0LGE portaudio`
 

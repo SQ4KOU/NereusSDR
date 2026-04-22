@@ -90,9 +90,15 @@ def find_header_end(text: list[str]) -> int:
 def iter_upstream_files(base: Path):
     if not base.is_dir():
         return
-    for p in sorted(base.rglob("*")):
-        if p.is_file() and p.suffix in SCAN_SUFFIXES:
-            yield p
+    # Sort by POSIX-style relative path string so traversal order is
+    # identical across OSes. Comparing `Path` objects directly is
+    # case-insensitive on Windows and case-sensitive on Linux/macOS,
+    # which silently changes the per-file iteration order — and
+    # therefore the dict insertion order that drives index output.
+    candidates = [p for p in base.rglob("*")
+                  if p.is_file() and p.suffix in SCAN_SUFFIXES]
+    candidates.sort(key=lambda p: p.relative_to(base).as_posix())
+    yield from candidates
 
 
 def scan_header_block(text: list[str], header_end: int):
