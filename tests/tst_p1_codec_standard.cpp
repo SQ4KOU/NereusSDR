@@ -114,6 +114,35 @@ private slots:
         QCOMPARE(int(out[4]), c4_expected);
     }
 
+    // Thetis parity: bank 0 C4 antenna bits per networkproto1.c:463-468
+    //   if (prbpfilter->_ANT_3 == 1)       C4 = 0b10;
+    //   else if (prbpfilter->_ANT_2 == 1)  C4 = 0b01;
+    //   else                                C4 = 0b0;
+    // [v2.10.3.13 @501e3f5]
+    //
+    // Phase 3P-I-a T5: locks the current byte-for-byte encoding before
+    // the setAntennaRouting refactor lands in T7.
+    void bank0_c4_antennaIdx_matches_thetis() {
+        CodecContext ctx;
+        ctx.activeRxCount = 1;
+        ctx.duplex = true;
+
+        quint8 out[5]{};
+        P1CodecStandard codec;
+
+        ctx.antennaIdx = 0;  // ANT1
+        codec.composeCcForBank(0, ctx, out);
+        QCOMPARE(int(out[4] & 0x03), 0b00);
+
+        ctx.antennaIdx = 1;  // ANT2
+        codec.composeCcForBank(0, ctx, out);
+        QCOMPARE(int(out[4] & 0x03), 0b01);
+
+        ctx.antennaIdx = 2;  // ANT3
+        codec.composeCcForBank(0, ctx, out);
+        QCOMPARE(int(out[4] & 0x03), 0b10);
+    }
+
 private:
     // Tiny JSON helper — keeps the data table compact. Only handles the
     // fields used by the tests above; expand as new rows are added.
