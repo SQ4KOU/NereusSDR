@@ -63,6 +63,7 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/core/mmio/TcpListenerEndpointWorker.h | Project Files/Source/Console/MeterManager.cs | 39899-40160 | port | thetis-samphire | |
 | src/core/mmio/UdpEndpointWorker.cpp | Project Files/Source/Console/MeterManager.cs | 40419 | port | thetis-samphire | UdpListener bind pattern |
 | src/core/mmio/UdpEndpointWorker.h | Project Files/Source/Console/MeterManager.cs | 40403-40588 | port | thetis-samphire | UdpListener |
+| src/core/NbFamily.h | Project Files/Source/ChannelMaster/cmaster.c; Project Files/Source/wdsp/nob.h; Project Files/Source/wdsp/nobII.h; Project Files/Source/wdsp/snb.h; Project Files/Source/Console/HPSDR/specHPSDR.cs | 43-68; 1-25; 1-25; 1-25; full | port | thetis-no-samphire | NB/NB2/SNB facade header; NbTuning defaults pin cmaster.c:43-68 [@501e3f5] byte-for-byte; cycleNbMode declaration references console.cs:43513-43560 (implementation ships in NbFamily.cpp) |
 | src/core/NoiseFloorEstimator.h | Project Files/Source/Console/display.cs | 5866 | port | thetis-samphire | inspired-by; replaces algorithm; cites Thetis for contrast |
 | src/core/NoiseFloorTracker.cpp | Project Files/Source/Console/display.cs | 5866-5961 | port | thetis-samphire | lerp-based noise floor tracker; reimplements processNoiseFloor lerp approach |
 | src/core/NoiseFloorTracker.h | Project Files/Source/Console/display.cs | 5866-5961 | port | thetis-samphire | header for NoiseFloorTracker |
