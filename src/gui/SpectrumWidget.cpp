@@ -1522,8 +1522,10 @@ void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
     const float firstLabel = std::ceil(bottomDbm / stepDb) * stepDb;
 
     for (float dbm = firstLabel; dbm <= m_refLevel; dbm += stepDb) {
-        const float frac = (m_refLevel - dbm) / m_dynamicRange;
-        const int y = specRect.top() + static_cast<int>(frac * specRect.height());
+        // Route through dbmToY() so m_dbmCalOffset is applied consistently with
+        // the grid/trace/peak-hold paths — otherwise a non-zero cal offset would
+        // drift strip ticks off the actual grid lines.
+        const int y = dbmToY(dbm, specRect);
         if (y < labelTop || y > specRect.bottom() - 5) continue;
 
         // Tick mark
@@ -2023,6 +2025,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
                 m_refLevel = bottom + m_dynamicRange;
             }
             emit dbmRangeChangeRequested(m_refLevel - m_dynamicRange, m_refLevel);
+            scheduleSettingsSave();
             update();
             return;
         }
