@@ -823,8 +823,9 @@ void P1RadioConnection::setMox(bool enabled)                 { m_mox = enabled; 
 //   else if (prbpfilter->_ANT_2 == 1)  C4 = 0b01;
 //   else                                C4 = 0b0;
 //
-// 3P-I-a scope: rxOnlyAnt / rxOut are ignored. Bank 0 C3 keeps the
-// hardcoded 0x20 (RX_1_In) until 3P-I-b wires RX-only routing.
+// 3P-I-b (T4): rxOnlyAnt (C3 bits 5-6) and rxOut (C3 bit 7) are live —
+// forwarded through buildCodecContext() into P1Codec::bank0 per Thetis
+// networkproto1.c:455-461 [v2.10.3.13 @501e3f5].
 // ---------------------------------------------------------------------------
 void P1RadioConnection::setAntennaRouting(AntennaRouting r)
 {
