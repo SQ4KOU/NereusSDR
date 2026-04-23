@@ -226,6 +226,7 @@ warren@wpratt.com
 */
 
 #include "RadioModel.h"
+#include "BandDefaults.h"
 #include "RxDspWorker.h"
 #include "core/RadioConnection.h"
 #include "core/RadioConnectionTeardown.h"
@@ -597,6 +598,48 @@ void RadioModel::setActiveSlice(int index)
         m_activeSlice = m_slices.at(index);
         emit activeSliceChanged(index);
     }
+}
+
+void RadioModel::onBandButtonClicked(Band band)
+{
+    SliceModel* slice = activeSlice();
+    if (!slice) {
+        // No active slice (pre-connection, between-slice teardown, etc.).
+        // Silent — avoids log spam from UI events firing during startup.
+        return;
+    }
+
+    const Band current = bandFromFrequency(slice->frequency());
+    if (band == current) {
+        // Same-band click — design decision Q1(a). Keeps UX predictable;
+        // avoids yanking the VFO when the user is already in the band.
+        return;
+    }
+
+    // Snapshot outgoing band before we touch freq/mode.
+    slice->saveToSettings(current);
+
+    if (slice->hasSettingsFor(band)) {
+        // Second+ visit: restore last-used state for the clicked band.
+        slice->restoreFromSettings(band);
+        return;
+    }
+
+    // First visit: apply the seed if one exists, otherwise no-op.
+    BandSeed seed = BandDefaults::seedFor(band);
+    if (!seed.valid) {
+        // XVTR today. Becomes meaningful once the XVTR epic ships.
+        qCInfo(lcConnection) << "onBandButtonClicked: band" << bandLabel(band)
+                             << "has no seed and no persisted state — no-op";
+        return;
+    }
+
+    // Order: freq before mode. Matches Thetis SetBand
+    // (console.cs:5867-5886 [v2.10.3.13]). Alex band-dependent filters
+    // track the freq change before mode-dependent bandwidth is applied.
+    slice->setFrequency(seed.frequencyHz);
+    slice->setDspMode(seed.mode);
+    slice->saveToSettings(band);   // Bake seed for next visit.
 }
 
 // --- Panadapter Management ---

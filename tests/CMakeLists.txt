@@ -203,6 +203,7 @@ nereus_add_test(tst_step_attenuator_controller)
 nereus_add_test(tst_band_from_name)
 nereus_add_test(tst_slice_has_settings_for)
 nereus_add_test(tst_band_defaults)
+nereus_add_test(tst_radio_model_band_click)
 
 # ── About dialog ─────────────────────────────────────────────────────────
 nereus_add_test(tst_about_dialog)
