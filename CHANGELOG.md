@@ -2,7 +2,82 @@
 
 ## [Unreleased]
 
-### Added
+### Added (Phase 3P-I-b — PR #117)
+- New `SkuUiProfile` (`src/core/SkuUiProfile.{h,cpp}`) — per-`HPSDRModel`
+  UI overlay describing RX-only labels + checkbox visibility. 14-case
+  switch ports Thetis `setup.cs:19832-20375` exactly: Hermes/ANAN10 →
+  "RX1/RX2/XVTR", ANAN100-class → "EXT2/EXT1/XVTR", 7000D/G2/etc. →
+  "BYPS/EXT1/XVTR". Pure UI overlay; doesn't touch the wire.
+- New `rxOnlyLabels(SkuUiProfile&)` helper on `AntennaLabels` — named
+  delegator so callers don't reach into the struct directly.
+- `AlexController` gains 6 flags (`rxOutOnTx` / `ext1OutOnTx` /
+  `ext2OutOnTx` mutual-exclusion trio + `rxOutOverride` +
+  `useTxAntForRx` + `xvtrActive`), ported from Thetis `Alex.cs:61-66`
+  static fields. 5 persisted per-MAC; `xvtrActive` session-scoped.
+  Mutual-exclusion matches Thetis `setup.cs:15420-16505` handlers.
+- New fine-grained `rxOnlyAntChanged(Band)` signal on `AlexController`
+  so RX-only UI rows can refresh without the full TX grid redraw.
+- P1 bank0 C3 bits 5-7 now encode `AntennaRouting.rxOnlyAnt` +
+  `rxOut`, byte-locked against Thetis `networkproto1.c:453-468` +
+  `netInterface.c:479-481`. Both `P1CodecStandard` and `P1CodecHl2`
+  (which has its own bank0, not inherited) updated.
+- P2 Alex0 bits **8-11** (not 27-30 as the plan + design doc said —
+  bit 27 is `_TR_Relay`; corrected during T5 against authoritative
+  Thetis `network.h:263-307`) encode rxOnlyAnt (bits 8/9/10 for
+  XVTR_Rx_In / Rx_2_In / Rx_1_In) and rxOut (bit 11 = K36 RL17
+  RX-Bypass-Out relay).
+- `RadioModel::applyAlexAntennaForBand(Band, bool isTx=false)` now
+  ports the full Thetis `Alex.cs:310-413 UpdateAlexAntSelection`
+  composition (minus MOX coupling + Aries clamp, both deferred to
+  Phase 3M-1): isTx branch with Ext1/Ext2OnTx mapping, xvtrActive
+  gating (derived from `band == Band::XVTR` — matches Thetis
+  `console.vfoa_band == Band.XVTR`), rx_out_override clamp.
+  6 new signal triggers wire flag changes to reapply composition.
+- Setup → Antenna Control tab gains 5 new TX-bypass checkboxes (RX
+  Bypass on TX, Ext 1 on TX, Ext 2 on TX, Disable RX Bypass relay,
+  Use TX antenna for RX). SKU-driven visibility + per-SKU Ext2-on-TX
+  tooltip variants. RX-only column sub-headers retargeted per SKU.
+- Setup → Antenna → Alex-2 Filters sub-tab now gates on
+  `caps.hasAlex2` (replaces 3P-F hardcoded board check + hides the
+  tab outright on non-BPF2 boards instead of leaving it gray).
+- VFO Flag gains optional grey **BYPS** 3rd button between blue RX
+  and red TX antenna buttons, double-gated on
+  `caps.hasRxBypassRelay && SkuUiProfile.hasRxOutOnTx`. Toggles
+  `AlexController::rxOutOnTx` with bidirectional sync to the Setup
+  checkbox.
+- `AntennaButtonItem` meter gains `setHpsdrSku(HPSDRModel)` — button
+  indices 3-5 (Thetis "Aux1/Aux2/XVTR" slots) now show SKU-specific
+  labels from `SkuUiProfile.rxOnlyLabels`.
+- Tests: `tst_sku_ui_profile` (11 — 14-SKU overlay + 3 NereusSDR-native
+  fallback cases), `tst_antenna_labels` (5 — facade + rxOnlyLabels),
+  `tst_alex_controller` (+7 — flag mutual-exclusion / persistence /
+  rxOnlyAntChanged signal / rxOnlyAnt 0-range), `tst_p1_codec_standard`
+  (+8 byte-lock cases), `tst_p1_codec_hl2` (+8 byte-lock cases),
+  `tst_p2_codec_orionmkii` (+8 byte-lock cases on bits 8-11),
+  `tst_antenna_routing_model` (+7 integration cases: RX-only /
+  Ext1/Ext2 on TX / XVTR on/off / rxOutOverride / HL2 all-zero).
+- Verification doc: appended §7 per-SKU matrix (RX-only / XVTR /
+  Ext-on-TX) + §8 authoritative P1 bank0 C3 and P2 Alex0 bit-layout
+  reference.
+
+### Fixed (Phase 3P-I-b — PR #117)
+- **Latent 3P-I-a bug: `AlexController::setRxOnlyAnt(band, 0)` was
+  clamped to 1** by the shared `clampAnt(v)` helper, but Thetis
+  `Alex.cs:58` uses 0 as "none selected" (required by the RX
+  composition logic). New `clampRxOnlyAnt(0..3)` helper allows the 0
+  state; constructor default changed from 1 to 0; `load()` defaults
+  + clamp updated. 3P-I-b's full composition now works as Thetis
+  intended.
+- **Latent 3P-F bug: `setAntennasTo1` no longer touches rxOnlyAnt**
+  (Thetis `Alex.cs:72-77` is explicit: "the various RX bypass
+  unaffected"). 3P-F wrote all 3 arrays to 1; combined with 3P-I-b's
+  new 0 semantic this would have silently activated the RX-bypass
+  relay in external-ATU compat mode.
+- `AlexController::rxOnlyAnt(band)` out-of-bounds fallback returns 0
+  (was 1) to match the in-range default — consistent "none selected"
+  regardless of caller correctness.
+
+### Added (Phase 3P-I-a — PR #116)
 - `BoardCapabilities` gains `hasAlex2`, `hasRxBypassRelay`,
   `rxOnlyAntennaCount` fields (needed for 3P-I-a antenna routing +
   future 3P-I-b RX-only work). Source cites to Thetis `setup.cs:6228`
