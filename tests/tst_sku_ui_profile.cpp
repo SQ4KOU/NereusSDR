@@ -134,6 +134,7 @@ private slots:
         QVERIFY(p.hasExt1OutOnTx);
         QVERIFY(p.hasExt2OutOnTx);
         QVERIFY(!p.hasRxOutOnTx);
+        QVERIFY(!p.hasRxBypassUi);  // setup.cs:6174 — chkDisableRXOut hidden on G2
     }
 
     void anan_g2_1k_all_hidden() {

@@ -72,7 +72,12 @@ SkuUiProfile skuUiProfileFor(HPSDRModel sku)
 
     switch (sku) {
     case HPSDRModel::HPSDR:
-        // Treat as HERMES defaults (pre-ANAN classic Alex). Conservative.
+        // HPSDR (pre-ANAN Atlas/Penelope) has no explicit case in the Thetis
+        // setup.cs:19832-20405 antenna-overlay switch — it falls through and
+        // the panel renders with default-initialized fields. NereusSDR-native
+        // fallback: treat as classic Alex with all TX-bypass options visible,
+        // matching HERMES (setup.cs:19832-19861) except hasRxBypassUi=true
+        // (hypothetical hardware — user can disable in UI if not present).
         p.hasExt1OutOnTx = true;
         p.hasExt2OutOnTx = true;
         p.hasRxOutOnTx   = true;
@@ -103,9 +108,25 @@ SkuUiProfile skuUiProfileFor(HPSDRModel sku)
     case HPSDRModel::ANAN100B:
     case HPSDRModel::ANAN100D:
     case HPSDRModel::ANAN200D:
-    case HPSDRModel::ORIONMKII:
         // Thetis setup.cs:19933-20095 — classic Alex with all options visible
+        // (ORIONMKII shares this branch by analogy below.)
         p.hasExt1OutOnTx = true;   // setup.cs:6270-6271
+        p.hasExt2OutOnTx = true;   // setup.cs:6272-6273
+        p.hasRxOutOnTx   = true;   // setup.cs:6268-6269
+        p.hasRxBypassUi  = true;   // setup.cs:6195
+        p.rxOnlyLabels   = {QStringLiteral("EXT2"),
+                            QStringLiteral("EXT1"),
+                            QStringLiteral("XVTR")};
+        p.antennaTabLabel = QStringLiteral("Ant/Filters");
+        break;
+
+    case HPSDRModel::ORIONMKII:
+        // ORIONMKII has no explicit case in the Thetis setup.cs:19832-20405
+        // antenna-overlay switch — it falls through with panel defaults.
+        // NereusSDR-native grouping: mirrors the ANAN100-family EXT2/EXT1/XVTR
+        // labels and classic-Alex checkbox set because ORIONMKII predates the
+        // BPS-port generation (7000D+) and shares the EXT-prefixed wiring.
+        p.hasExt1OutOnTx = true;   // setup.cs:6270-6271 (default else branch)
         p.hasExt2OutOnTx = true;   // setup.cs:6272-6273
         p.hasRxOutOnTx   = true;   // setup.cs:6268-6269
         p.hasRxBypassUi  = true;   // setup.cs:6195
@@ -166,7 +187,10 @@ SkuUiProfile skuUiProfileFor(HPSDRModel sku)
         break;
 
     case HPSDRModel::HERMESLITE:
-        // Bare HL2 has no Alex board — tab hidden outright.
+        // HERMESLITE does not appear in Thetis setup.cs:19832-20405 (HL2
+        // support lives in the mi0bot fork, not upstream Thetis). Bare HL2
+        // has no Alex board — tab is hidden outright so the per-band grid
+        // never renders.
         p.hasExt1OutOnTx = false;
         p.hasExt2OutOnTx = false;
         p.hasRxOutOnTx   = false;
