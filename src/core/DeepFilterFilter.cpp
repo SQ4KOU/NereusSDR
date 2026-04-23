@@ -72,7 +72,9 @@ void DeepFilterFilter::reset()
         m_state = nullptr;
     }
     QByteArray modelPath = NereusSDR::ModelPaths::dfnrModelTarball().toUtf8();
-    if (!modelPath.isEmpty()) {
+    if (modelPath.isEmpty()) {
+        qCWarning(lcDsp) << "DeepFilterFilter::reset(): model not found — DFNR stays disabled";
+    } else {
         m_state = df_create(modelPath.constData(), m_attenLimit.load(), nullptr);
         if (m_state) {
             m_frameSize = static_cast<int>(df_get_frame_length(m_state));
