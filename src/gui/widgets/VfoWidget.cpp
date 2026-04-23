@@ -940,12 +940,11 @@ void VfoWidget::buildAudioTab()
 void VfoWidget::buildDspTab()
 {
     auto* dspWidget = new QWidget;
-    // Fixed size policy — prevents m_tabStack from stretching the DSP tab to
-    // match wider tabs (USB / X-RIT / VAX). The tab bar stays at kWidgetW;
-    // only the content panel shrinks to hug its 4×52px grid.
-    dspWidget->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    // Matches AetherSDR VfoWidget.cpp:933 DSP tab pattern — default sizing,
+    // grid's Expanding buttons fill the flag width.
+    dspWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     auto* dspLayout = new QVBoxLayout(dspWidget);
-    dspLayout->setContentsMargins(2, 2, 2, 2);
+    dspLayout->setContentsMargins(0, 0, 0, 0);
     dspLayout->setSpacing(2);
     dspLayout->setSizeConstraint(QLayout::SetFixedSize);
 
@@ -968,15 +967,13 @@ void VfoWidget::buildDspTab()
     };
 
     // Sub-grid widget that holds the entire 3×4 button matrix.
-    // No column stretching — each cell is exactly button-width so buttons
-    // sit flush with no inside-cell padding gaps.
+    // Cells stretch equally so buttons span the full flag width — removes
+    // awkward empty space right of the last column.
     auto* dspSubgrid = new QWidget(dspWidget);
-    dspSubgrid->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    dspSubgrid->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     auto* dspGrid = new QGridLayout(dspSubgrid);
     dspGrid->setContentsMargins(0, 0, 0, 0);
-    dspGrid->setHorizontalSpacing(0);
-    dspGrid->setVerticalSpacing(0);
-    // No setColumnStretch — cells shrink-wrap to button fixed width.
+    dspGrid->setSpacing(3);  // matches AetherSDR VfoWidget.cpp:939
 
     // NB cycling button (row 0, col 0) — tri-state Off → NB → NB2 → Off.
     // Mirrors Thetis chkNB — label switches "NB"/"NB2"; checked = active.
@@ -1073,8 +1070,8 @@ void VfoWidget::buildDspTab()
                       m_nr4Btn, m_dfnrBtn, m_mnrBtn,
                       m_anfToggle, m_snbToggle}) {
         if (btn) {
-            btn->setFixedSize(63, 26);
-            btn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            btn->setFixedHeight(26);
+            btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         }
     }
 
