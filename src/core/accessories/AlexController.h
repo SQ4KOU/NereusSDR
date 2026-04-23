@@ -92,6 +92,39 @@ public:
     // "SetAntennasTo1 causes RX, TX antennas to be set to 1 — the various RX bypass unaffected"
     void setAntennasTo1(bool force);
 
+    // ── TX-bypass routing flags ──────────────────────────────────────────────
+    // Ported from Thetis HPSDR/Alex.cs:61-66 [v2.10.3.13 @501e3f5].
+    // Thetis declares these as `public static bool` on the Alex class; NereusSDR
+    // scopes them per-instance so per-radio state is preserved.
+    //
+    // Mutual-exclusion trio (rxOutOnTx / ext1OutOnTx / ext2OutOnTx): setting any
+    // one true clears the other two. Matches Thetis setup.cs:15423-15427
+    // handlers (chkRxOutOnTx_CheckedChanged / chkEXT1OutOnTx_CheckedChanged /
+    // chkEXT2OutOnTx_CheckedChanged).
+    //
+    // rxOutOverride (Thetis: rx_out_override) — chkDisableRXOut.Checked.
+    //   Source: setup.cs:17568-17570 chkDisableRXOut_CheckedChanged.
+    // useTxAntForRx (Thetis: TRxAnt) — when true, RX path uses TxAnt[band]
+    //   instead of RxAnt[band]. Source: Alex.cs:363-364.
+    // xvtrActive — NereusSDR-native session flag. Not in Thetis (Thetis
+    //   passes `xvtr` as a method parameter; NereusSDR stores it as state
+    //   for signal-driven reapply). Not persisted.
+    bool rxOutOnTx() const;
+    bool ext1OutOnTx() const;
+    bool ext2OutOnTx() const;
+    bool rxOutOverride() const;
+    bool useTxAntForRx() const;
+    bool xvtrActive() const;
+
+public slots:
+    void setRxOutOnTx(bool on);
+    void setExt1OutOnTx(bool on);
+    void setExt2OutOnTx(bool on);
+    void setRxOutOverride(bool on);
+    void setUseTxAntForRx(bool on);
+    void setXvtrActive(bool on);
+
+public:
     // ── Persistence ──────────────────────────────────────────────────────────
     void setMacAddress(const QString& mac);
     void load();   // hydrate from AppSettings under hardware/<mac>/alex/antenna/...
@@ -100,6 +133,13 @@ public:
 signals:
     void antennaChanged(Band band);  // fires on any per-band assignment mutation
     void blockTxChanged();           // fires when blockTxAnt2 or blockTxAnt3 changes
+    void rxOutOnTxChanged(bool on);
+    void ext1OutOnTxChanged(bool on);
+    void ext2OutOnTxChanged(bool on);
+    void rxOutOverrideChanged(bool on);
+    void useTxAntForRxChanged(bool on);
+    void xvtrActiveChanged(bool on);
+    void rxOnlyAntChanged(Band band);  // fires independently of antennaChanged() for finer RX-only UI refresh
 
 private:
     // From Thetis HPSDR/Alex.cs:56-58 [@501e3f5] — Thetis uses 12 bands
@@ -111,11 +151,18 @@ private:
     std::array<int, kBandCount> m_rxOnlyAnt{};  // RxOnlyAnt[12] in Thetis
     bool m_blockTxAnt2{false};
     bool m_blockTxAnt3{false};
+    bool m_rxOutOnTx     {false};
+    bool m_ext1OutOnTx   {false};
+    bool m_ext2OutOnTx   {false};
+    bool m_rxOutOverride {false};
+    bool m_useTxAntForRx {false};
+    bool m_xvtrActive    {false};
 
     QString m_mac;
 
     QString persistenceKey() const;  // "hardware/<mac>/alex/antenna"
     static int clampAnt(int v) { return v < 1 ? 1 : (v > 3 ? 3 : v); }
+    static int clampRxOnlyAnt(int v) { return v < 0 ? 0 : (v > 3 ? 3 : v); }  // allows 0 = none
 };
 
 } // namespace NereusSDR

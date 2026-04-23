@@ -273,6 +273,10 @@ public:
     void onConnectedForTest() {
         applyAlexAntennaForBand(m_lastBand);
     }
+    // Phase 3P-I-b (T6): expose with isTx parameter for composition tests.
+    void applyAlexAntennaForBandForTest(NereusSDR::Band band, bool isTx) {
+        applyAlexAntennaForBand(band, isTx);
+    }
     void setCapsForTest(bool hasAlex) {
         m_testCapsOverride = true;
         m_testCapsHasAlex = hasAlex;
@@ -309,15 +313,14 @@ private slots:
 
 private:
     // Pushes AlexController's per-band antenna state to the connection.
-    // Mirrors Thetis HPSDR/Alex.cs:310-413 UpdateAlexAntSelection at
-    // 3P-I-a scope: reads rxAnt(band), composes an AntennaRouting with
-    // trxAnt = rxAnt (RX=TX unified in 3P-I-a), writes txAnt = txAnt(band)
-    // independently. No MOX-aware composition, no XVTR, no Aries — those
-    // land in 3P-I-b/3M-1.
+    // Full port of Thetis HPSDR/Alex.cs:310-413 UpdateAlexAntSelection.
+    // Phase 3P-I-b (T6): adds isTx branch, Ext1/Ext2OnTx mapping, xvtrActive
+    // gating, and rxOutOverride clamp. MOX coupling and Aries clamp deferred
+    // to Phase 3M-1 (TX bring-up). isTx defaults to false so existing callers
+    // are unaffected.
     //
-    // Source: docs/architecture/antenna-routing-design.md §5.3.
-    // Triggered from T9/T10/T11 wirings in follow-up tasks.
-    void applyAlexAntennaForBand(NereusSDR::Band band);
+    // Source: Thetis HPSDR/Alex.cs:310-413 [@501e3f5].
+    void applyAlexAntennaForBand(NereusSDR::Band band, bool isTx = false);
 
     void wireConnectionSignals(int wdspInSize);
     void wireSliceSignals();
@@ -415,7 +418,7 @@ private:
     // Per-slice-per-band persistence: tracks which band the VFO is currently
     // on so the coalesced scheduleSettingsSave() timer writes to the right
     // per-band slot. From Thetis console.cs:45312 handleBSFChange
-    // [v2.10.3.13 @501e3f5] — bandstack state is recalled via band-button
+    // [@501e3f5] — bandstack state is recalled via band-button
     // press, not via VFO tune, so this lambda only tracks; it does NOT
     // save or restore at the boundary.
     Band m_lastBand{Band::Band20m};

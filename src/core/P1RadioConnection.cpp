@@ -823,15 +823,19 @@ void P1RadioConnection::setMox(bool enabled)                 { m_mox = enabled; 
 //   else if (prbpfilter->_ANT_2 == 1)  C4 = 0b01;
 //   else                                C4 = 0b0;
 //
-// 3P-I-a scope: rxOnlyAnt / rxOut are ignored. Bank 0 C3 keeps the
-// hardcoded 0x20 (RX_1_In) until 3P-I-b wires RX-only routing.
+// 3P-I-b (T4): rxOnlyAnt (C3 bits 5-6) and rxOut (C3 bit 7) are live —
+// forwarded through buildCodecContext() into P1Codec::bank0 per Thetis
+// networkproto1.c:455-461 [v2.10.3.13 @501e3f5].
 // ---------------------------------------------------------------------------
 void P1RadioConnection::setAntennaRouting(AntennaRouting r)
 {
     const int clamped = (r.trxAnt < 1 || r.trxAnt > 3) ? 0 : (r.trxAnt - 1);
     m_antennaIdx = clamped;  // 0..2 (or 0 for "no selection")
-    // P1 has no high-priority packet; the next EP2 frame picks up the
-    // new antennaIdx via buildCodecContext() → P1Codec::bank0.
+    // RX-only input mux: clamp to 0..3 per netInterface.c:479-481 [v2.10.3.13 @501e3f5]
+    m_rxOnlyAnt = (r.rxOnlyAnt < 0) ? 0 : (r.rxOnlyAnt > 3 ? 3 : r.rxOnlyAnt);
+    m_rxOut     = r.rxOut;
+    // P1 has no high-priority packet; the next EP2 frame picks up all
+    // antenna fields via buildCodecContext() → P1Codec::bank0.
 }
 
 // ---------------------------------------------------------------------------
@@ -991,6 +995,8 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.duplex         = m_duplex;
     ctx.diversity      = m_diversity;
     ctx.antennaIdx     = m_antennaIdx;
+    ctx.rxOnlyAnt      = m_rxOnlyAnt;
+    ctx.rxOut          = m_rxOut;
 
     // Source OC byte from OcMatrix per current band + MOX state.  Falls
     // through to legacy m_ocOutput when matrix is unset (e.g. tests that

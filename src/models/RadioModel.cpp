@@ -493,6 +493,28 @@ RadioModel::RadioModel(QObject* parent)
         scheduleSettingsSave();
     });
 
+    // Phase 3P-I-b (T6): flag changes must re-fire composition for current band.
+    // The isTx arg stays false in 3P-I-b — MOX trigger wiring lands in 3M-1.
+    // Uses a local lambda so all six connects share one band-lookup path.
+    auto reapply = [this]() {
+        Band b = m_activeSlice
+                   ? bandFromFrequency(m_activeSlice->frequency())
+                   : m_lastBand;
+        applyAlexAntennaForBand(b);
+    };
+    connect(&m_alexController, &AlexController::ext1OutOnTxChanged,
+            this, [reapply](bool) { reapply(); });
+    connect(&m_alexController, &AlexController::ext2OutOnTxChanged,
+            this, [reapply](bool) { reapply(); });
+    connect(&m_alexController, &AlexController::rxOutOnTxChanged,
+            this, [reapply](bool) { reapply(); });
+    connect(&m_alexController, &AlexController::rxOutOverrideChanged,
+            this, [reapply](bool) { reapply(); });
+    connect(&m_alexController, &AlexController::useTxAntForRxChanged,
+            this, [reapply](bool) { reapply(); });
+    connect(&m_alexController, &AlexController::xvtrActiveChanged,
+            this, [reapply](bool) { reapply(); });
+
     // Connection starts null — created by connectToRadio() via factory.
     //
     // Phase 3G-9b: the smooth-defaults profile is reachable only via the
@@ -967,7 +989,7 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
 
     // Meter data → MeterModel
     connect(m_connection, &RadioConnection::meterDataReceived,
-            this, [this](float fwd, float rev, float voltage, float current) {
+            this, [](float fwd, float rev, float voltage, float current) {
         Q_UNUSED(voltage);
         Q_UNUSED(current);
         Q_UNUSED(fwd);
@@ -1007,7 +1029,7 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
 
     // Error handling
     connect(m_connection, &RadioConnection::errorOccurred,
-            this, [this](NereusSDR::RadioConnectionError code, const QString& msg) {
+            this, [](NereusSDR::RadioConnectionError code, const QString& msg) {
         Q_UNUSED(code);
         qCWarning(lcConnection) << "Connection error:" << msg;
     });
@@ -1060,7 +1082,7 @@ void RadioModel::wireSliceSignals()
         // band even when the panadapter center hasn't crossed the boundary.
         //
         // Do NOT recall bandstack state on a VFO-driven band crossing. From
-        // Thetis console.cs:45312 handleBSFChange [v2.10.3.13 @501e3f5]:
+        // Thetis console.cs:45312 handleBSFChange [@501e3f5]:
         // on an oldBand != newBand transition, Thetis only updates the old
         // and new band's LastVisited records — it does not restore saved
         // DSP state. Bandstack recall is reserved for the explicit
@@ -1079,7 +1101,7 @@ void RadioModel::wireSliceSignals()
             m_lastBand = newBand;
             // Phase 3P-I-a T10 — reapply per-band antenna on boundary
             // crossing. Thetis UpdateAlexAntSelection equivalent
-            // (HPSDR/Alex.cs:310 [v2.10.3.13 @501e3f5]).
+            // (HPSDR/Alex.cs:310 [@501e3f5]).
             applyAlexAntennaForBand(newBand);
             // Phase 3P-I-a T10 follow-up — refresh the slice's cached
             // rxAntenna/txAntenna labels from AlexController so the
@@ -1480,7 +1502,7 @@ void RadioModel::wireSliceSignals()
     //
     // Full dolly-filter support (SetRXAmpeakFilFreq wiring) is deferred to a later
     // phase when the ampeak API is added to RxChannel.
-    auto updateRttyFilter = [this, slice]() {
+    auto updateRttyFilter = [slice]() {
         const int mark  = slice->rttyMarkHz();
         const int shift = slice->rttyShiftHz();
         const int low   = mark - shift / 2 - 100;
@@ -1590,40 +1612,119 @@ void RadioModel::loadSliceState(SliceModel* slice)
                   << "AF:" << slice->afGain() << "RF:" << slice->rfGain();
 }
 
-// Phase 3P-I-a — see header for full context.
-// Composition scope is intentionally minimal in 3P-I-a: trxAnt = rxAnt(band),
-// txAnt = txAnt(band), all else zero. 3P-I-b adds SKU-aware Ext-on-TX and
-// RX-only composition; 3M-1 adds the MOX branch and Aries clamp.
+// Apply AlexController state to the wire. Called from three triggers:
+//   T9  — AlexController::antennaChanged(band) / <flag>Changed
+//   T10 — SliceModel band-crossing on current slice
+//   T11 — Connection state → Connected
 //
-// Source: Thetis HPSDR/Alex.cs:310-413 [v2.10.3.13 @501e3f5].
-void RadioModel::applyAlexAntennaForBand(Band band)
+// Phase 3P-I-b (T6): full port of Thetis HPSDR/Alex.cs:310-413
+// UpdateAlexAntSelection, minus MOX coupling and Aries clamp (both
+// deferred to Phase 3M-1 — TX bring-up). Composition mirrors Thetis
+// line-by-line with isTx branch, Ext1/Ext2OnTx mapping, xvtrActive
+// gating, and rx_out_override clamp.
+//
+// Source: Thetis HPSDR/Alex.cs:310-413 [@501e3f5].
+void RadioModel::applyAlexAntennaForBand(Band band, bool isTx)
 {
     if (!m_connection || !m_connection->isConnected()) {
         qCDebug(lcConnection) << "applyAlexAntennaForBand(" << bandLabel(band)
-                              << ") skipped — not connected";
+                              << "isTx=" << isTx << ") skipped — not connected";
         return;
     }
 
     const BoardCapabilities& caps = boardCapabilities();
 
     AntennaRouting r;
+    r.tx = isTx;  // Carried through for P2 MOX-aware wire reapply (3M-1 will consult).
+
+    // From Thetis Alex.cs:312-317 [@501e3f5].
+    // "if (!alex_enabled) { NetworkIO.SetAntBits(0, 0, 0, 0, false); return; }"
     if (!caps.hasAlex) {
-        // HL2 / Atlas — matches Thetis Alex.cs:312-317 early return
-        // "SetAntBits(0, 0, 0, 0, false)". Leaves rxOnlyAnt=0,
-        // rxOut=false, tx=false from struct defaults; override
-        // trxAnt/txAnt to 0 so the clamp in
-        // P1/P2RadioConnection::setAntennaRouting maps them to
-        // "no antenna selection" (zero bits on the wire).
-        r.trxAnt = 0;
-        r.txAnt  = 0;
-    } else {
-        r.trxAnt = m_alexController.rxAnt(band);   // 1..3
-        r.txAnt  = m_alexController.txAnt(band);   // 1..3
+        r.rxOnlyAnt = 0;
+        r.trxAnt    = 0;
+        r.txAnt     = 0;
+        r.rxOut     = false;
+        r.tx        = false;
+        RadioConnection* conn = m_connection;
+        QMetaObject::invokeMethod(conn, [conn, r]() { conn->setAntennaRouting(r); });
+        return;
     }
 
+    const int txAnt = m_alexController.txAnt(band);  // 1..3
+
+    int  rxOnlyAnt;
+    int  trxAnt;
+    bool rxOut;
+
+    if (isTx) {
+        // From Thetis Alex.cs:339-347 [@501e3f5].
+        if (m_alexController.ext2OutOnTx())      { rxOnlyAnt = 1; }
+        else if (m_alexController.ext1OutOnTx()) { rxOnlyAnt = 2; }
+        else                                      { rxOnlyAnt = 0; }
+
+        rxOut = m_alexController.rxOutOnTx()
+             || m_alexController.ext1OutOnTx()
+             || m_alexController.ext2OutOnTx();
+
+        trxAnt = txAnt;
+    } else {
+        // From Thetis Alex.cs:349-366 [@501e3f5].
+        rxOnlyAnt = m_alexController.rxOnlyAnt(band);
+
+        // Thetis derives `xvtr` from the current console band
+        // (console.vfoa_band == Band.XVTR). Mirror that: the user is in
+        // XVTR mode when the active band slot is Band::XVTR. The session
+        // flag m_xvtrActive acts as a secondary override for future
+        // scenarios where XVTR state isn't tied to the band enum.
+        const bool xvtr = (band == Band::XVTR) || m_alexController.xvtrActive();
+        if (xvtr) {
+            rxOnlyAnt = (rxOnlyAnt >= 3) ? 3 : 0;
+        } else if (rxOnlyAnt >= 3) {
+            // "do not use XVTR ant port if not using transverter" — Alex.cs:358
+            rxOnlyAnt -= 3;
+        }
+
+        rxOut = (rxOnlyAnt != 0);
+
+        trxAnt = m_alexController.useTxAntForRx()
+                   ? txAnt
+                   : m_alexController.rxAnt(band);
+    }
+
+    // From Thetis Alex.cs:368-375 rx_out_override [@501e3f5].
+    //G8NJJ  [Aries block adjacency — Thetis Alex.cs:376 "G8NJJ support for external Aries ATU"]
+    if (m_alexController.rxOutOverride() && rxOut) {
+        if (!isTx) {
+            trxAnt = 4;  // Special RX-override — trx_ant=4 signals the wire layer to bypass.
+        }
+        if (isTx) {
+            rxOut = m_alexController.rxOutOnTx()
+                 || m_alexController.ext1OutOnTx()
+                 || m_alexController.ext2OutOnTx();
+        } else {
+            rxOut = false;  // "disable Rx_Bypass_Out relay" — Alex.cs:374
+        }
+    }
+
+    // MOX-coupled reapply + Aries clamp — deferred to Phase 3M-1.
+    // From Thetis Alex.cs:381-382 [@501e3f5] (reference):
+    //   if ((trx_ant != 4) && (LimitTXRXAntenna == true)) trx_ant = 1;
+    //G8NJJ
+    //
+    // MW0LGE_21k9d only set bits if different — Alex.cs:394-413
+    // (deduplication guard) also deferred: NereusSDR connection layer
+    // can suppress redundant wire writes if needed, but we always compose
+    // here for correctness.
+
+    r.rxOnlyAnt = rxOnlyAnt;
+    r.trxAnt    = trxAnt;
+    r.txAnt     = txAnt;
+    r.rxOut     = rxOut;
+
     qCDebug(lcConnection) << "applyAlexAntennaForBand(" << bandLabel(band)
-                          << ") → rxAnt=" << r.trxAnt << "txAnt=" << r.txAnt
-                          << "(hasAlex=" << caps.hasAlex << ")";
+                          << "isTx=" << isTx << ") → rxOnly=" << r.rxOnlyAnt
+                          << "trxAnt=" << r.trxAnt << "txAnt=" << r.txAnt
+                          << "rxOut=" << r.rxOut;
 
     // Marshal to connection worker thread — mirrors existing pattern
     // used by e.g. setReceiverFrequency.
@@ -1792,7 +1893,7 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
         emit currentRadioChanged(m_lastRadioInfo);
         // Phase 3P-I-a T11 — apply persisted per-band Alex antenna to the
         // fresh connection. Matches Thetis's initial UpdateAlexAntSelection
-        // call path on radio startup (HPSDR/Alex.cs:310 [v2.10.3.13 @501e3f5]).
+        // call path on radio startup (HPSDR/Alex.cs:310 [@501e3f5]).
         applyAlexAntennaForBand(m_lastBand);
         break;
     case ConnectionState::Disconnected:

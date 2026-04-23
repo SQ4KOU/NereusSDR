@@ -2137,11 +2137,22 @@ void MainWindow::wireSliceToSpectrum()
 
     // Phase 3P-I-a T15 — push board caps into VFO Flag so ANT buttons
     // hide on HL2/Atlas.
+    // Phase 3P-I-b T9 — also push HPSDRModel so the BYPS button gates
+    // correctly (ANAN10/ANAN8000D/G2/G2_1K suppress it despite hasRxBypassRelay).
     vfo->setBoardCapabilities(m_radioModel->boardCapabilities());
+    vfo->setHpsdrSku(m_radioModel->hardwareProfile().model);
+    vfo->setRxBypassActive(m_radioModel->alexController().rxOutOnTx());
     connect(m_radioModel, &RadioModel::currentRadioChanged, vfo,
             [this, vfo]() {
         vfo->setBoardCapabilities(m_radioModel->boardCapabilities());
+        vfo->setHpsdrSku(m_radioModel->hardwareProfile().model);
     });
+
+    // Phase 3P-I-b T9 — VFO BYPS button ↔ AlexController::rxOutOnTx
+    connect(vfo, &VfoWidget::rxBypassToggled,
+            &m_radioModel->alexControllerMutable(), &AlexController::setRxOutOnTx);
+    connect(&m_radioModel->alexController(), &AlexController::rxOutOnTxChanged,
+            vfo, &VfoWidget::setRxBypassActive);
 
     // --- Slice → spectrum display ---
 

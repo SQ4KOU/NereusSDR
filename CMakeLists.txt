@@ -315,6 +315,7 @@ set(CORE_SOURCES
     src/core/BoardCapabilities.cpp
     src/core/AudioDeviceConfig.cpp
     src/core/SampleRateCatalog.cpp
+    src/core/SkuUiProfile.cpp
     src/core/HardwareProfile.cpp
     src/core/LogCategories.cpp
     src/core/SupportBundle.cpp

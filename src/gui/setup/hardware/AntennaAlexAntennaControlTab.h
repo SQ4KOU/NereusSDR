@@ -99,6 +99,7 @@ namespace NereusSDR {
 
 class RadioModel;
 class AlexController;
+struct RadioInfo;
 
 // AntennaAlexAntennaControlTab — "Antenna Control" sub-sub-tab under Hardware → Antenna/ALEX.
 //
@@ -109,6 +110,7 @@ class AlexController;
 //   1. Block-TX safety strip — two checkboxes + italic warning label
 //   2. TX Antenna per band   — 14 rows × 3 radio buttons (Ant 1/2/3)
 //   3. RX1 / RX2 per band    — 14 rows × 6 radio buttons (RX1: 1/2/3 + RX-only: 1/2/3)
+//   4. TX-bypass strip       — 5 checkboxes, SKU-gated visibility (Phase 3P-I-b T7)
 //
 // UI bindings are backed by AlexController (Phase 3P-F Task 1). Changes call
 // AlexController setters directly; antennaChanged/blockTxChanged signals
@@ -132,6 +134,8 @@ private:
     void buildBlockTxStrip(QVBoxLayout* outerLayout);
     void buildTxGrid(QBoxLayout* outerLayout);
     void buildRxGrid(QBoxLayout* outerLayout);
+    void buildTxBypassStrip(QVBoxLayout* outerLayout);
+    void applySkuProfile();  // reads current HPSDRModel + refreshes labels/visibility
 
     // Sync a single row's TX radio buttons from the model (no signal side-effects).
     void syncTxRow(int row);
@@ -162,6 +166,20 @@ private:
     // Per-band RX-only antenna: button group per row
     std::array<QButtonGroup*, kBandCount> m_rxOnlyGroups{};
     std::array<std::array<QRadioButton*, 3>, kBandCount> m_rxOnlyButtons{};
+
+    // Column sub-headers for RX-only grid — retargeted per SKU.
+    // See SkuUiProfile::rxOnlyLabels.
+    std::array<QLabel*, 3> m_rxOnlyColumnLabels{};
+
+    // TX-bypass flag checkboxes (Phase 3P-I-b T7).
+    // Source: Thetis setup.cs:6268-6273 (default Alex) / 6201-6250 (SKU overrides)
+    // [v2.10.3.13 @501e3f5]. Visibility driven by SkuUiProfile; state bound to
+    // AlexController.
+    QCheckBox* m_chkRxOutOnTx     {nullptr};  // "RX Bypass on TX"
+    QCheckBox* m_chkExt1OutOnTx   {nullptr};  // "Ext 1 on TX"
+    QCheckBox* m_chkExt2OutOnTx   {nullptr};  // "Ext 2 on TX"
+    QCheckBox* m_chkRxOutOverride {nullptr};  // "Disable RX Bypass relay"
+    QCheckBox* m_chkUseTxAntForRx {nullptr};  // "Use TX antenna for RX"
 };
 
 } // namespace NereusSDR

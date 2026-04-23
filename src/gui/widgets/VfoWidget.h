@@ -311,6 +311,7 @@ namespace NereusSDR {
 
 class VaxChannelSelector;  // forward declaration — full include in VfoWidget.cpp
 struct BoardCapabilities;  // forward declaration — Phase 3P-I-a T15
+enum class HPSDRModel : int;  // forward declaration — Phase 3P-I-b T9
 
 // Floating VFO flag widget — AetherSDR pattern.
 // Each slice gets one VfoWidget, parented to SpectrumWidget.
@@ -408,6 +409,13 @@ public slots:
     // RadioModel::currentRadioChanged.
     void setBoardCapabilities(const NereusSDR::BoardCapabilities& caps);
 
+    // Phase 3P-I-b T9 — BYPS button visibility gates on both caps.hasRxBypassRelay
+    // AND SkuUiProfile.hasRxBypassUi (ANAN10/ANAN8000D/G2/G2_1K etc. suppress).
+    void setHpsdrSku(NereusSDR::HPSDRModel sku);
+
+    // Phase 3P-I-b T9 — reflect AlexController::rxOutOnTx state into the BYPS button.
+    void setRxBypassActive(bool on);
+
 signals:
     void frequencyChanged(double hz);
     void modeChanged(NereusSDR::DSPMode mode);
@@ -417,6 +425,7 @@ signals:
     void rfGainChanged(int gain);
     void rxAntennaChanged(const QString& ant);
     void txAntennaChanged(const QString& ant);
+    void rxBypassToggled(bool on);     // Phase 3P-I-b T9 — BYPS button click
     // Emitted when the user clicks the NB button. MainWindow cycles the
     // slice's NbMode in response.
     void nbModeCycled();
@@ -502,9 +511,12 @@ private:
 
     bool m_hasAlex{true};   // default true until caps land; preserves
                             // existing behavior during discovery.
+    bool m_hasRxBypassRelay{false};    // Phase 3P-I-b T9 — BYPS button gate (caps)
+    bool m_hasRxOutOnTxUi{false};      // Phase 3P-I-b T9 — BYPS button gate (SKU)
 
     // --- Header row ---
     QPushButton* m_rxAntBtn{nullptr};
+    QPushButton* m_rxBypassBtn{nullptr};  // Phase 3P-I-b T9 — grey BYPS toggle
     QPushButton* m_txAntBtn{nullptr};
     QLabel*      m_filterWidthLbl{nullptr};
     QPushButton* m_txBadge{nullptr};

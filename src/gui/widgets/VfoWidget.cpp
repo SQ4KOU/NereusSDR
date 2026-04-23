@@ -267,6 +267,8 @@ warren@wpratt.com
 #include "VaxChannelSelector.h"
 #include "gui/applets/NyiOverlay.h"
 #include "core/BoardCapabilities.h"
+#include "core/SkuUiProfile.h"
+#include "core/HpsdrModel.h"
 #include "gui/styles/PopupMenuStyle.h"
 
 #include <QPainter>
@@ -429,6 +431,27 @@ void VfoWidget::buildHeaderRow()
         }
     });
     hdr->addWidget(m_rxAntBtn);
+
+    // RX Bypass button (grey, BYPS) — Phase 3P-I-b T9.
+    // Gated on caps.hasRxBypassRelay && SkuUiProfile.hasRxBypassUi.
+    // Toggles AlexController::rxOutOnTx. From Thetis HPSDR/Alex.cs:61
+    // "public static bool RxOutOnTx = false;" [v2.10.3.13 @501e3f5].
+    m_rxBypassBtn = new QPushButton(QStringLiteral("BYPS"), this);
+    m_rxBypassBtn->setObjectName(QStringLiteral("m_rxBypassBtn"));
+    m_rxBypassBtn->setCheckable(true);
+    m_rxBypassBtn->setStyleSheet(QString(kFlatBtn) +
+        QStringLiteral("QPushButton { color: #888888; }"
+                       "QPushButton:checked { color: #ffcc44; background: #2a2a1a; }"));
+    m_rxBypassBtn->setFixedHeight(18);
+    m_rxBypassBtn->setToolTip(QStringLiteral(
+        "RX Bypass on TX — routes RX path through bypass relay during transmit. "
+        "Maps to Thetis chkRxOutOnTx (Alex.cs:61)."));
+    m_rxBypassBtn->setVisible(false);  // hidden until setBoardCapabilities + setHpsdrSku confirm gates
+    connect(m_rxBypassBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (m_updatingFromModel) { return; }
+        emit rxBypassToggled(on);
+    });
+    hdr->addWidget(m_rxBypassBtn);
 
     // TX antenna button (red)
     m_txAntBtn = new QPushButton(QStringLiteral("ANT1"), this);
@@ -2246,9 +2269,39 @@ QColor VfoWidget::sliceColor(int index)
 void VfoWidget::setBoardCapabilities(const BoardCapabilities& caps)
 {
     m_hasAlex = caps.hasAlex;
+    m_hasRxBypassRelay = caps.hasRxBypassRelay;
     const bool showAnt = caps.hasAlex && caps.antennaInputCount >= 3;
     if (m_rxAntBtn) { m_rxAntBtn->setVisible(showAnt); }
     if (m_txAntBtn) { m_txAntBtn->setVisible(showAnt); }
+    if (m_rxBypassBtn) { m_rxBypassBtn->setVisible(m_hasRxBypassRelay && m_hasRxOutOnTxUi); }
+}
+
+// Phase 3P-I-b T9 — per-SKU BYPS button gate. Called by MainWindow on
+// RadioModel::currentRadioChanged alongside setBoardCapabilities.
+//
+// The button toggles AlexController::rxOutOnTx (Thetis Alex.cs:61
+// chkRxOutOnTx), so gate on profile.hasRxOutOnTx — not hasRxBypassUi,
+// which is the separate chkDisableRXOut (Alex.cs:65 rx_out_override)
+// "Disable RX Bypass relay" override.
+// From Thetis setup.cs:6268-6273 [v2.10.3.13] — chkRxOutOnTx visibility per HPSDRModel.
+// G8NJJ. will need more work ofr high power PA  [original inline comment from setup.cs:6277, ANAN_G2_1K branch of the same per-SKU switch]
+void VfoWidget::setHpsdrSku(HPSDRModel sku)
+{
+    const SkuUiProfile profile = skuUiProfileFor(sku);
+    m_hasRxOutOnTxUi = profile.hasRxOutOnTx;
+    if (m_rxBypassBtn) { m_rxBypassBtn->setVisible(m_hasRxBypassRelay && m_hasRxOutOnTxUi); }
+}
+
+// Phase 3P-I-b T9 — reflect AlexController::rxOutOnTx into the BYPS button.
+// Guard against signal re-emission so model → UI sync doesn't loop back.
+void VfoWidget::setRxBypassActive(bool on)
+{
+    if (!m_rxBypassBtn) { return; }
+    if (m_rxBypassBtn->isChecked() == on) { return; }
+    const bool prev = m_updatingFromModel;
+    m_updatingFromModel = true;
+    m_rxBypassBtn->setChecked(on);
+    m_updatingFromModel = prev;
 }
 
 } // namespace NereusSDR

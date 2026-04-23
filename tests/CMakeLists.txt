@@ -564,4 +564,17 @@ nereus_add_test(tst_popup_style_coverage)
 target_compile_definitions(tst_popup_style_coverage PRIVATE
     NEREUS_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 
+# ── Phase 3P-I-b T1: SkuUiProfile per-HPSDRModel UI overlay ──────────────────
+# Verifies every HPSDRModel maps to the label + flag set from Thetis
+# setup.cs:19832-20375. 8 cases: hermes, anan10, anan100, anan7000d,
+# anan8000d, anan_g2, anan_g2_1k, hermeslite.
+nereus_add_test(tst_sku_ui_profile)
+
+# ── Phase 3P-I-b T2: AntennaLabels facade — antennaLabels() + rxOnlyLabels() ─
+# Exercises the delegator surface: antennaLabels(caps) empty-on-no-alex,
+# three-port ANT1/2/3 list, and rxOnlyLabels(sku) for hermes / anan_g2 /
+# anan100 families. 5 cases. Values come indirectly from SkuUiProfile which
+# cites Thetis setup.cs:19846-20375 [v2.10.3.13 @501e3f5].
+nereus_add_test(tst_antenna_labels)
+
 
