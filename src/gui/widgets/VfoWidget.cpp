@@ -969,31 +969,15 @@ void VfoWidget::buildDspTab()
             this, [this](const QPoint&) { emit openNbSetupRequested(); });
     dspGrid->addWidget(m_nbButton, 0, 0);
 
-    // NR mutex group buttons — uniform style with slightly smaller font so
-    // 4-char labels ("NR1"/"DFN"/"MNR") fit within the equal-stretch columns.
-    static const QString kNrBtnStyle = QStringLiteral(
-        "QPushButton {"
-        "  background: #1a2230; color: #8899aa; border: 1px solid #2a3a4a;"
-        "  border-radius: 3px; font-size: 9px; padding: 1px 0px;"
-        "}"
-        "QPushButton:checked {"
-        "  background: rgba(0,160,220,180); color: #e8f8ff;"
-        "  border: 1px solid #00b4d8;"
-        "}"
-        "QPushButton:hover { border: 1px solid #4488aa; }");
-
-    auto makeNrBtn = [&](const QString& label) -> QPushButton* {
-        auto* b = new QPushButton(label, dspWidget);
-        b->setCheckable(true);
-        b->setStyleSheet(kNrBtnStyle);
-        b->setContextMenuPolicy(Qt::CustomContextMenu);
-        return b;
-    };
-
     // Row 0: NB (col 0) | NR1 | NR2 | NR3
-    m_nr1Btn = makeNrBtn(QStringLiteral("NR1"));
-    m_nr2Btn = makeNrBtn(QStringLiteral("NR2"));
-    m_nr3Btn = makeNrBtn(QStringLiteral("NR3"));
+    // All NR mutex group buttons share the same kDspToggle style as NB/ANF/SNB
+    // so the entire 3×4 grid is visually uniform (Option A, user feedback 2026-04-23).
+    m_nr1Btn = makeToggle(QStringLiteral("NR1"));
+    m_nr2Btn = makeToggle(QStringLiteral("NR2"));
+    m_nr3Btn = makeToggle(QStringLiteral("NR3"));
+    m_nr1Btn->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_nr2Btn->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_nr3Btn->setContextMenuPolicy(Qt::CustomContextMenu);
     // Tooltips — Sub-epic C-1.
     // From Thetis console.resx:3879 — chkNR.ToolTip (closest analogue for NR1)
     m_nr1Btn->setToolTip(QStringLiteral("NR1: Adaptive LMS noise reduction — left-click activates, right-click adjusts knobs"));
@@ -1004,10 +988,14 @@ void VfoWidget::buildDspTab()
     dspGrid->addWidget(m_nr3Btn, 0, 3);
 
     // Row 1: NR4 | DFNR | MNR | (col 3 empty)
-    m_nr4Btn  = makeNrBtn(QStringLiteral("NR4"));
-    m_dfnrBtn = makeNrBtn(QStringLiteral("DFN"));
-    m_bnrBtn  = makeNrBtn(QStringLiteral("BNR"));   // Hidden permanently (NVIDIA deferred)
-    m_mnrBtn  = makeNrBtn(QStringLiteral("MNR"));
+    m_nr4Btn  = makeToggle(QStringLiteral("NR4"));
+    m_dfnrBtn = makeToggle(QStringLiteral("DFNR"));  // Full label — was "DFN" (truncated at 28px); now fits at uniform width
+    m_bnrBtn  = makeToggle(QStringLiteral("BNR"));   // Hidden permanently (NVIDIA deferred)
+    m_mnrBtn  = makeToggle(QStringLiteral("MNR"));
+    m_nr4Btn->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_dfnrBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_bnrBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_mnrBtn->setContextMenuPolicy(Qt::CustomContextMenu);
     m_nr4Btn->setToolTip(QStringLiteral("NR4: SBNR (Spectral Baseline NR) — left-click activates, right-click adjusts knobs"));
     m_dfnrBtn->setToolTip(QStringLiteral("DFNR: DeepFilter noise reduction — left-click activates, right-click adjusts knobs"));
     m_bnrBtn->setToolTip(QStringLiteral("BNR: NVIDIA noise reduction — left-click activates, right-click adjusts knobs"));
@@ -1043,6 +1031,15 @@ void VfoWidget::buildDspTab()
             this, [this](const QPoint&) { emit openNbSetupRequested(); });
     dspGrid->addWidget(m_anfToggle, 2, 0);
     dspGrid->addWidget(m_snbToggle, 2, 1);
+
+    // Uniform Expanding policy so all buttons fill their grid cell width equally.
+    for (auto* btn : {m_nbButton, m_nr1Btn, m_nr2Btn, m_nr3Btn,
+                      m_nr4Btn, m_dfnrBtn, m_mnrBtn,
+                      m_anfToggle, m_snbToggle}) {
+        if (btn) {
+            btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        }
+    }
 
     dspLayout->addWidget(dspSubgrid);
 
