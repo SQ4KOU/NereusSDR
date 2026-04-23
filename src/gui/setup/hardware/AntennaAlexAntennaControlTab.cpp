@@ -83,6 +83,9 @@
 #include "AntennaAlexAntennaControlTab.h"
 
 #include "core/accessories/AlexController.h"
+#include "core/SkuUiProfile.h"
+#include "core/HardwareProfile.h"
+#include "core/RadioDiscovery.h"
 #include "models/RadioModel.h"
 #include "models/Band.h"
 
@@ -130,11 +133,22 @@ AntennaAlexAntennaControlTab::AntennaAlexAntennaControlTab(RadioModel* model, QW
     scrollArea->setWidget(scrollContents);
     outerLayout->addWidget(scrollArea, 1);
 
+    // Row 3: TX-bypass checkboxes (Phase 3P-I-b T7).
+    // Source: Thetis setup.cs:6174-6300 [v2.10.3.13 @501e3f5].
+    buildTxBypassStrip(outerLayout);
+
+    // Initial SKU sync — applies to current model state.
+    applySkuProfile();
+
     // ── Connect model → UI ────────────────────────────────────────────────────
     connect(m_alex, &AlexController::antennaChanged,
             this, &AntennaAlexAntennaControlTab::onAntennaChanged);
     connect(m_alex, &AlexController::blockTxChanged,
             this, &AntennaAlexAntennaControlTab::onBlockTxChanged);
+
+    // Re-sync when the connected radio changes (may switch HPSDRModel).
+    connect(m_model, &RadioModel::currentRadioChanged,
+            this, [this](const NereusSDR::RadioInfo&) { applySkuProfile(); });
 }
 
 // ── buildBlockTxStrip ─────────────────────────────────────────────────────────
@@ -282,22 +296,27 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
     hdrRow->addWidget(rxOnlyHdr, 3);
     layout->addLayout(hdrRow);
 
-    // Second header row with individual ant labels
+    // Second header row with individual ant labels. Store RX-only column
+    // labels so they can be retargeted per SKU (SkuUiProfile.rxOnlyLabels).
     auto* hdrRow2 = new QHBoxLayout();
     hdrRow2->setContentsMargins(0, 0, 0, 0);
     hdrRow2->addSpacing(48);  // band label space
-    for (int i = 0; i < 2; ++i) {
-        for (const char* lbl : {"1", "2", "3"}) {
-            auto* h = new QLabel(tr(lbl), grp);
-            h->setAlignment(Qt::AlignCenter);
-            hdrRow2->addWidget(h, 1);
-        }
-        if (i == 0) {
-            auto* sep2 = new QFrame(grp);
-            sep2->setFrameShape(QFrame::VLine);
-            sep2->setFrameShadow(QFrame::Sunken);
-            hdrRow2->addWidget(sep2);
-        }
+    // RX1 column: always "1" / "2" / "3" — these stay generic.
+    for (const char* lbl : {"1", "2", "3"}) {
+        auto* h = new QLabel(tr(lbl), grp);
+        h->setAlignment(Qt::AlignCenter);
+        hdrRow2->addWidget(h, 1);
+    }
+    auto* sep2 = new QFrame(grp);
+    sep2->setFrameShape(QFrame::VLine);
+    sep2->setFrameShadow(QFrame::Sunken);
+    hdrRow2->addWidget(sep2);
+    // RX-only column: SKU-specific. applySkuProfile() fills these.
+    for (int i = 0; i < 3; ++i) {
+        auto* h = new QLabel(grp);           // text set later by applySkuProfile()
+        h->setAlignment(Qt::AlignCenter);
+        hdrRow2->addWidget(h, 1);
+        m_rxOnlyColumnLabels[i] = h;
     }
     layout->addLayout(hdrRow2);
 
@@ -343,7 +362,7 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
         for (int a = 0; a < 3; ++a) {
             auto* rb = new QRadioButton(grp);
             rb->setChecked((a + 1) == currentRxOnly);
-            rb->setToolTip(tr("RX-only Ant %1 for %2").arg(a + 1).arg(bandLabel(band)));
+            // Tooltip will be set by applySkuProfile() with SKU-specific label.
             rxOnlyGrp->addButton(rb, a + 1);
             m_rxOnlyButtons[b][a] = rb;
             rowLayout->addWidget(rb, 1, Qt::AlignCenter);
@@ -434,6 +453,132 @@ void AntennaAlexAntennaControlTab::updateTxBlockedStates()
     for (int b = 0; b < kBandCount; ++b) {
         if (auto* rb = m_txButtons[b][1]) { rb->setEnabled(!blk2); }  // Ant 2
         if (auto* rb = m_txButtons[b][2]) { rb->setEnabled(!blk3); }  // Ant 3
+    }
+}
+
+// ── buildTxBypassStrip ───────────────────────────────────────────────────────
+//
+// Source: Thetis setup.cs:6174-6300 per-SKU visibility, setup.cs:19832-20405
+// per-SKU label strings, setup.cs:15420-16505 handlers [v2.10.3.13 @501e3f5].
+//
+// Renders 5 checkboxes below the per-band grid. Individual visibility is
+// driven by SkuUiProfile (set via applySkuProfile on model-change). The
+// mutual-exclusion trio (RxOutOnTx / Ext1OutOnTx / Ext2OutOnTx) is handled
+// model-side — AlexController clears the other two when any is set.
+
+void AntennaAlexAntennaControlTab::buildTxBypassStrip(QVBoxLayout* outerLayout)
+{
+    auto* frame = new QFrame(this);
+    frame->setFrameShape(QFrame::StyledPanel);
+    auto* row = new QHBoxLayout(frame);
+    row->setContentsMargins(8, 4, 8, 4);
+    row->setSpacing(12);
+
+    m_chkRxOutOnTx     = new QCheckBox(tr("RX Bypass on TX"), frame);
+    m_chkExt1OutOnTx   = new QCheckBox(tr("Ext 1 on TX"), frame);
+    m_chkExt2OutOnTx   = new QCheckBox(tr("Ext 2 on TX"), frame);
+    m_chkRxOutOverride = new QCheckBox(tr("Disable RX Bypass relay"), frame);
+    m_chkUseTxAntForRx = new QCheckBox(tr("Use TX antenna for RX"), frame);
+
+    // Tooltips — From Thetis setup.cs:6178/6198 [v2.10.3.13 @501e3f5].
+    // SKU-specific tooltip for chkEXT2OutOnTx is picked in applySkuProfile().
+    m_chkRxOutOnTx->setToolTip(tr("Enable RX Bypass Out relay on transmit."));
+    m_chkExt1OutOnTx->setToolTip(tr("Route Ext 1 to receive path during transmit."));
+    m_chkRxOutOverride->setToolTip(tr("Disable the RX Bypass Out relay (chkDisableRXOut in Thetis)."));
+    m_chkUseTxAntForRx->setToolTip(tr("Use the TX antenna for RX instead of the RX antenna."));
+
+    // Initialize state from controller.
+    m_chkRxOutOnTx->setChecked(m_alex->rxOutOnTx());
+    m_chkExt1OutOnTx->setChecked(m_alex->ext1OutOnTx());
+    m_chkExt2OutOnTx->setChecked(m_alex->ext2OutOnTx());
+    m_chkRxOutOverride->setChecked(m_alex->rxOutOverride());
+    m_chkUseTxAntForRx->setChecked(m_alex->useTxAntForRx());
+
+    row->addWidget(m_chkRxOutOnTx);
+    row->addWidget(m_chkExt1OutOnTx);
+    row->addWidget(m_chkExt2OutOnTx);
+    row->addWidget(m_chkRxOutOverride);
+    row->addWidget(m_chkUseTxAntForRx);
+    row->addStretch();
+
+    outerLayout->addWidget(frame);
+
+    // UI → model
+    connect(m_chkRxOutOnTx,     &QCheckBox::toggled, m_alex, &AlexController::setRxOutOnTx);
+    connect(m_chkExt1OutOnTx,   &QCheckBox::toggled, m_alex, &AlexController::setExt1OutOnTx);
+    connect(m_chkExt2OutOnTx,   &QCheckBox::toggled, m_alex, &AlexController::setExt2OutOnTx);
+    connect(m_chkRxOutOverride, &QCheckBox::toggled, m_alex, &AlexController::setRxOutOverride);
+    connect(m_chkUseTxAntForRx, &QCheckBox::toggled, m_alex, &AlexController::setUseTxAntForRx);
+
+    // Model → UI (so mutual-exclusion clears reflect back into UI)
+    connect(m_alex, &AlexController::rxOutOnTxChanged, this, [this](bool on) {
+        QSignalBlocker b(m_chkRxOutOnTx); m_chkRxOutOnTx->setChecked(on);
+    });
+    connect(m_alex, &AlexController::ext1OutOnTxChanged, this, [this](bool on) {
+        QSignalBlocker b(m_chkExt1OutOnTx); m_chkExt1OutOnTx->setChecked(on);
+    });
+    connect(m_alex, &AlexController::ext2OutOnTxChanged, this, [this](bool on) {
+        QSignalBlocker b(m_chkExt2OutOnTx); m_chkExt2OutOnTx->setChecked(on);
+    });
+    connect(m_alex, &AlexController::rxOutOverrideChanged, this, [this](bool on) {
+        QSignalBlocker b(m_chkRxOutOverride); m_chkRxOutOverride->setChecked(on);
+    });
+    connect(m_alex, &AlexController::useTxAntForRxChanged, this, [this](bool on) {
+        QSignalBlocker b(m_chkUseTxAntForRx); m_chkUseTxAntForRx->setChecked(on);
+    });
+}
+
+// ── applySkuProfile ──────────────────────────────────────────────────────────
+//
+// Source: Thetis setup.cs:6174-6300 + 19832-20405 [v2.10.3.13 @501e3f5].
+// Called on construction and whenever RadioModel::currentRadioChanged fires.
+
+void AntennaAlexAntennaControlTab::applySkuProfile()
+{
+    const HPSDRModel sku = m_model->hardwareProfile().model;
+    const SkuUiProfile profile = skuUiProfileFor(sku);
+
+    // RX-only column headers (the three "1/2/3" sub-labels become RX1/RX2/XVTR
+    // or EXT2/EXT1/XVTR or BYPS/EXT1/XVTR per SKU).
+    for (int i = 0; i < 3; ++i) {
+        if (m_rxOnlyColumnLabels[i]) {
+            m_rxOnlyColumnLabels[i]->setText(profile.rxOnlyLabels[i]);
+        }
+    }
+
+    // RX-only radio-button tooltips — re-bind to SKU label.
+    for (int b = 0; b < kBandCount; ++b) {
+        const auto band = static_cast<Band>(b);
+        for (int a = 0; a < 3; ++a) {
+            if (auto* rb = m_rxOnlyButtons[b][a]) {
+                rb->setToolTip(tr("RX-only %1 for %2")
+                                   .arg(profile.rxOnlyLabels[a])
+                                   .arg(bandLabel(band)));
+            }
+        }
+    }
+
+    // Checkbox visibility (gate on SkuUiProfile).
+    if (m_chkRxOutOnTx)     { m_chkRxOutOnTx->setVisible(profile.hasRxOutOnTx); }
+    if (m_chkExt1OutOnTx)   { m_chkExt1OutOnTx->setVisible(profile.hasExt1OutOnTx); }
+    if (m_chkExt2OutOnTx)   { m_chkExt2OutOnTx->setVisible(profile.hasExt2OutOnTx); }
+    if (m_chkRxOutOverride) { m_chkRxOutOverride->setVisible(profile.hasRxBypassUi); }
+    // useTxAntForRx is always visible — it's a NereusSDR-native control that
+    // maps to Thetis Alex.cs:66 TRxAnt (no per-SKU visibility override in Thetis).
+
+    // SKU-specific tooltip for Ext2OutOnTx — From Thetis setup.cs:6178/6198
+    // [v2.10.3.13 @501e3f5].
+    if (m_chkExt2OutOnTx) {
+        const bool isAnan7000Family =
+            (sku == HPSDRModel::ANAN7000D)      ||
+            (sku == HPSDRModel::ANAN8000D)      ||
+            (sku == HPSDRModel::ANAN_G2)        ||
+            (sku == HPSDRModel::ANAN_G2_1K)     ||
+            (sku == HPSDRModel::ANVELINAPRO3)   ||
+            (sku == HPSDRModel::REDPITAYA);
+        m_chkExt2OutOnTx->setToolTip(isAnan7000Family
+            ? tr("Enable RX Bypass during transmit.")
+            : tr("Enable RX 1 IN on Alex or Ext 2 on ANAN during transmit."));
     }
 }
 
