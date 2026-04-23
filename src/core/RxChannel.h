@@ -199,6 +199,10 @@ warren@wpratt.com
 #include "NbFamily.h"
 #include "WdspTypes.h"
 
+#ifdef HAVE_DFNR
+#include "DeepFilterFilter.h"
+#endif
+
 #include <QObject>
 
 #include <atomic>
@@ -436,6 +440,14 @@ public:
     bool bnrActive () const { return m_bnrActive .load(std::memory_order_acquire); }
     bool mnrActive () const { return m_mnrActive .load(std::memory_order_acquire); }
 
+    // DFNR — DeepFilterNet3 neural noise reduction (Sub-epic C-1, Task 9)
+    // Tuning setters forward to the DeepFilterFilter instance if present.
+    // Safe to call unconditionally — no-ops when HAVE_DFNR is not defined.
+#ifdef HAVE_DFNR
+    void setDfnrAttenLimit(float dB);
+    void setDfnrPostFilterBeta(float beta);
+#endif
+
     // SNB — Spectral Noise Blanker
     // From Thetis Project Files/Source/Console/radio.cs (SetRXASNBARun call site)
     bool snbEnabled() const { return m_nb ? m_nb->snbEnabled() : false; }
@@ -609,6 +621,14 @@ private:
     std::atomic<bool> m_dfnrActive{false};
     std::atomic<bool> m_bnrActive{false};
     std::atomic<bool> m_mnrActive{false};
+
+#ifdef HAVE_DFNR
+    // DeepFilterNet3 filter instance (Sub-epic C-1, Task 9).
+    // Created in constructor; null if model not found or df_create failed.
+    // Accessed only from the audio thread during processIq(); main thread
+    // writes tuning parameters via atomic setters in DeepFilterFilter.
+    std::unique_ptr<NereusSDR::DeepFilterFilter> m_dfnr;
+#endif
 
     // Cached filter state
     double m_filterLow{150.0};

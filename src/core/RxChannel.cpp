@@ -250,6 +250,10 @@ warren@wpratt.com
 #include "NbFamily.h"
 #include "wdsp_api.h"
 
+#ifdef HAVE_DFNR
+#include "DeepFilterFilter.h"
+#endif
+
 #include <cmath>
 
 namespace NereusSDR {
@@ -267,6 +271,18 @@ RxChannel::RxChannel(int channelId, int bufferSize, int sampleRate,
         m_channelId,
         /*sampleRate=*/ m_sampleRate,
         /*bufferSize=*/ m_bufferSize);
+#endif
+
+#ifdef HAVE_DFNR
+    // Sub-epic C-1 Task 9 — DeepFilterNet3 post-WDSP noise reduction.
+    // Instantiate unconditionally; the filter self-disables if the model
+    // tarball is not found (isValid() returns false).
+    m_dfnr = std::make_unique<NereusSDR::DeepFilterFilter>();
+    if (!m_dfnr->isValid()) {
+        qCWarning(lcDsp) << "DFNR not available on channel" << m_channelId
+                         << "(model not found or df_create failed)";
+        m_dfnr.reset();
+    }
 #endif
 }
 
@@ -1312,6 +1328,16 @@ void RxChannel::processIq(float* inI, float* inQ,
         qCWarning(lcDsp) << "fexchange2 error on channel"
                          << m_channelId << ":" << error;
     }
+
+#ifdef HAVE_DFNR
+    // Sub-epic C-1 Task 9 — post-fexchange2 DeepFilterNet3 noise reduction.
+    // Runs only when m_dfnrActive is set via setActiveNr(NrSlot::DFNR).
+    // outI/outQ are 48 kHz stereo float at this point — DFNR's native rate.
+    if (m_dfnr && m_dfnrActive.load(std::memory_order_acquire)) {
+        m_dfnr->process(outI, outQ, sampleCount);
+    }
+#endif
+
 #else
     // WDSP not available — output silence
     std::memset(outI, 0, sampleCount * sizeof(float));
@@ -1341,5 +1367,25 @@ double RxChannel::getMeter(RxMeterType type) const
     return -140.0;
 #endif
 }
+
+// ---------------------------------------------------------------------------
+// DFNR tuning setters (Sub-epic C-1, Task 9)
+// ---------------------------------------------------------------------------
+
+#ifdef HAVE_DFNR
+void RxChannel::setDfnrAttenLimit(float dB)
+{
+    if (m_dfnr) {
+        m_dfnr->setAttenLimit(dB);
+    }
+}
+
+void RxChannel::setDfnrPostFilterBeta(float beta)
+{
+    if (m_dfnr) {
+        m_dfnr->setPostFilterBeta(beta);
+    }
+}
+#endif
 
 } // namespace NereusSDR

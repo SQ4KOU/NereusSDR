@@ -638,6 +638,102 @@ if(WDSP_FOUND)
     target_compile_definitions(NereusSDRObjs PUBLIC HAVE_WDSP)
 endif()
 
+# --------------------------------------------------------------------------
+# DeepFilterNet3 DFNR — pre-built neural noise reduction library (MIT/Apache-2.0)
+# Sub-epic C-1. Library is built by ./setup-deepfilter.sh (external to CMake
+# because the Rust build is slow + needs rustc). If the lib is absent at
+# configure time, ENABLE_DFNR falls back to OFF.
+# Ported from AetherSDR CMakeLists.txt:323-363 [@0cd4559].
+# --------------------------------------------------------------------------
+option(ENABLE_DFNR "Enable DFNR DeepFilterNet3 noise reduction" ON)
+if(ENABLE_DFNR)
+    set(DEEPFILTER_DIR ${CMAKE_SOURCE_DIR}/third_party/deepfilter)
+    if(WIN32)
+        set(DFNR_LIB_DIR "${DEEPFILTER_DIR}/lib/windows-x86_64")
+        if(MINGW)
+            set(DFNR_LIB "${DFNR_LIB_DIR}/libdeepfilter.dll.a")
+            set(DFNR_DLL "${DFNR_LIB_DIR}/deepfilter.dll")
+        else()
+            # MSVC: prefer .dll.lib import library, fall back to .lib
+            if(EXISTS "${DFNR_LIB_DIR}/deepfilter.dll.lib")
+                set(DFNR_LIB "${DFNR_LIB_DIR}/deepfilter.dll.lib")
+            else()
+                set(DFNR_LIB "${DFNR_LIB_DIR}/deepfilter.lib")
+            endif()
+            set(DFNR_DLL "${DFNR_LIB_DIR}/deepfilter.dll")
+        endif()
+    elseif(APPLE)
+        if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+            set(DFNR_LIB_DIR "${DEEPFILTER_DIR}/lib/darwin-arm64")
+        else()
+            set(DFNR_LIB_DIR "${DEEPFILTER_DIR}/lib/darwin-x86_64")
+        endif()
+        set(DFNR_LIB "${DFNR_LIB_DIR}/libdeepfilter.a")
+    else()
+        if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+            set(DFNR_LIB_DIR "${DEEPFILTER_DIR}/lib/linux-aarch64")
+        else()
+            set(DFNR_LIB_DIR "${DEEPFILTER_DIR}/lib/linux-x86_64")
+        endif()
+        set(DFNR_LIB "${DFNR_LIB_DIR}/libdeepfilter.a")
+    endif()
+    if(EXISTS ${DFNR_LIB})
+        message(STATUS "DFNR (DeepFilterNet3) enabled — ${DFNR_LIB}")
+    else()
+        set(ENABLE_DFNR OFF)
+        message(STATUS "DFNR (DeepFilterNet3) disabled — library not found at ${DFNR_LIB} "
+                       "(run ./setup-deepfilter.sh before cmake to enable)")
+    endif()
+endif()
+
+if(ENABLE_DFNR)
+    target_sources(NereusSDRObjs PRIVATE src/core/DeepFilterFilter.cpp)
+    target_include_directories(NereusSDRObjs PRIVATE ${DEEPFILTER_DIR}/include)
+    target_link_libraries(NereusSDRObjs PRIVATE ${DFNR_LIB})
+    target_compile_definitions(NereusSDRObjs PRIVATE HAVE_DFNR)
+    if(WIN32)
+        target_link_libraries(NereusSDR PRIVATE ws2_32 bcrypt userenv ntdll)
+        if(DFNR_DLL AND EXISTS ${DFNR_DLL})
+            add_custom_command(TARGET NereusSDR POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${DFNR_DLL}" "$<TARGET_FILE_DIR:NereusSDR>"
+                COMMENT "Copying deepfilter.dll to build directory")
+        endif()
+    elseif(APPLE)
+        # Rust runtime deps on macOS
+        target_link_libraries(NereusSDR PRIVATE "-framework Security" "-framework CoreFoundation")
+    else()
+        # Rust runtime deps on Linux
+        target_link_libraries(NereusSDR PRIVATE pthread dl m)
+    endif()
+    # Copy the model tarball to build dir + app bundle Resources so
+    # findModelPath() in DeepFilterFilter.cpp can locate it at runtime.
+    set(DFNR_MODEL "${DEEPFILTER_DIR}/models/DeepFilterNet3_onnx.tar.gz")
+    if(EXISTS ${DFNR_MODEL})
+        if(APPLE)
+            # macOS: place in Resources/ so notarization doesn't reject a
+            # non-Mach-O file inside Contents/MacOS/
+            add_custom_command(TARGET NereusSDR POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "$<TARGET_BUNDLE_DIR:NereusSDR>/Contents/Resources"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${DFNR_MODEL}" "$<TARGET_BUNDLE_DIR:NereusSDR>/Contents/Resources/"
+                COMMENT "Copying DeepFilterNet3 model to app bundle Resources")
+        else()
+            add_custom_command(TARGET NereusSDR POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${DFNR_MODEL}" "$<TARGET_FILE_DIR:NereusSDR>"
+                COMMENT "Copying DeepFilterNet3 model to build directory")
+        endif()
+        # Install the model alongside the binary for cmake --install
+        if(NOT APPLE)
+            install(FILES "${DFNR_MODEL}"
+                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/NereusSDR"
+                OPTIONAL)
+        endif()
+    endif()
+endif()
+
 # PortAudio (Phase 3O VAX) — always linked; PortAudioBus is the cross-platform
 # IAudioBus fallback when no native low-latency backend is available.
 target_link_libraries(NereusSDRObjs PRIVATE portaudio_static)
