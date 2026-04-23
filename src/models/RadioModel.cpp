@@ -1658,7 +1658,12 @@ void RadioModel::applyAlexAntennaForBand(Band band, bool isTx)
         // From Thetis Alex.cs:349-366 [@501e3f5].
         rxOnlyAnt = m_alexController.rxOnlyAnt(band);
 
-        const bool xvtr = m_alexController.xvtrActive();
+        // Thetis derives `xvtr` from the current console band
+        // (console.vfoa_band == Band.XVTR). Mirror that: the user is in
+        // XVTR mode when the active band slot is Band::XVTR. The session
+        // flag m_xvtrActive acts as a secondary override for future
+        // scenarios where XVTR state isn't tied to the band enum.
+        const bool xvtr = (band == Band::XVTR) || m_alexController.xvtrActive();
         if (xvtr) {
             rxOnlyAnt = (rxOnlyAnt >= 3) ? 3 : 0;
         } else if (rxOnlyAnt >= 3) {

@@ -2238,17 +2238,22 @@ void VfoWidget::setBoardCapabilities(const BoardCapabilities& caps)
     const bool showAnt = caps.hasAlex && caps.antennaInputCount >= 3;
     if (m_rxAntBtn) { m_rxAntBtn->setVisible(showAnt); }
     if (m_txAntBtn) { m_txAntBtn->setVisible(showAnt); }
-    if (m_rxBypassBtn) { m_rxBypassBtn->setVisible(m_hasRxBypassRelay && m_hasRxBypassUi); }
+    if (m_rxBypassBtn) { m_rxBypassBtn->setVisible(m_hasRxBypassRelay && m_hasRxOutOnTxUi); }
 }
 
 // Phase 3P-I-b T9 — per-SKU BYPS button gate. Called by MainWindow on
 // RadioModel::currentRadioChanged alongside setBoardCapabilities.
-// From Thetis setup.cs:6174 [v2.10.3.13] — chkDisableRXOut visibility per HPSDRModel.
+//
+// The button toggles AlexController::rxOutOnTx (Thetis Alex.cs:61
+// chkRxOutOnTx), so gate on profile.hasRxOutOnTx — not hasRxBypassUi,
+// which is the separate chkDisableRXOut (Alex.cs:65 rx_out_override)
+// "Disable RX Bypass relay" override.
+// From Thetis setup.cs:6268-6273 [v2.10.3.13] — chkRxOutOnTx visibility per HPSDRModel.
 void VfoWidget::setHpsdrSku(HPSDRModel sku)
 {
     const SkuUiProfile profile = skuUiProfileFor(sku);
-    m_hasRxBypassUi = profile.hasRxBypassUi;
-    if (m_rxBypassBtn) { m_rxBypassBtn->setVisible(m_hasRxBypassRelay && m_hasRxBypassUi); }
+    m_hasRxOutOnTxUi = profile.hasRxOutOnTx;
+    if (m_rxBypassBtn) { m_rxBypassBtn->setVisible(m_hasRxBypassRelay && m_hasRxOutOnTxUi); }
 }
 
 // Phase 3P-I-b T9 — reflect AlexController::rxOutOnTx into the BYPS button.

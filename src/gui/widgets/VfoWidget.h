@@ -505,7 +505,7 @@ private:
     bool m_hasAlex{true};   // default true until caps land; preserves
                             // existing behavior during discovery.
     bool m_hasRxBypassRelay{false};    // Phase 3P-I-b T9 — BYPS button gate (caps)
-    bool m_hasRxBypassUi{false};       // Phase 3P-I-b T9 — BYPS button gate (SKU)
+    bool m_hasRxOutOnTxUi{false};      // Phase 3P-I-b T9 — BYPS button gate (SKU)
 
     // --- Header row ---
     QPushButton* m_rxAntBtn{nullptr};
