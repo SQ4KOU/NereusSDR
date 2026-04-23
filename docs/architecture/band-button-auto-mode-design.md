@@ -9,7 +9,12 @@
 
 ## Problem
 
-Clicking a band button in NereusSDR currently does nothing. `BandButtonItem` emits `bandClicked(int)` through `ContainerWidget`, but the signal has no downstream handler — it's orphaned in `MainWindow`. Frequency and mode stay put. The user reporting #118 expected the behavior every ham console has had for thirty years: click `20m` → VFO jumps into 20m, mode switches to USB; click `40m` → jumps into 40m, mode switches to LSB.
+Clicking a band button in NereusSDR leaves the DSP mode wrong. There are two band-button entry points today, and neither sets mode:
+
+1. **Spectrum overlay flyout** — the `BAND` button on `SpectrumOverlayPanel`. Emits `bandSelected(name, freqHz, mode)`. The connection in `MainWindow::wireSlice` calls `slice->setFrequency(freqHz)` but **explicitly discards the mode parameter** (see [MainWindow.cpp:2612-2615](../../src/gui/MainWindow.cpp:2612)). Clicking 80m tunes to 3.75 MHz but the mode stays wherever it was — USB → tuned into LSB territory, still decoding as USB.
+2. **Container `BandButtonItem`** — the band button inside a meter container. Emits `bandClicked(int)` through `ContainerWidget::bandClicked(int)`, which has **no downstream handler**. Click is silently dropped.
+
+The user reporting #118 expected the behavior every ham console has had for thirty years: click `20m` → VFO jumps into 20m, mode switches to USB; click `40m` → jumps into 40m, mode switches to LSB. Today both paths leave mode stale.
 
 ## Goal
 
@@ -44,7 +49,8 @@ One new utility + wiring in two existing classes. No new threads, no cross-threa
 | `src/models/SliceModel.cpp` | Implement `hasSettingsFor` | Probes `slices/<idx>/bands/<key>/DspMode`. |
 | `src/models/RadioModel.h` | Add `void onBandButtonClicked(Band);` public slot | Central handler. |
 | `src/models/RadioModel.cpp` | Implement `onBandButtonClicked` | Uses `activeSlice()`; calls existing `saveToSettings`/`restoreFromSettings` from Phase 3G-10 Stage 2. |
-| `src/gui/MainWindow.cpp` | Connect `ContainerWidget::bandClicked(int)` → lambda calling `RadioModel::onBandButtonClicked(Band::bandFromUiIndex(idx))` | Closes the orphaned signal. |
+| `src/gui/MainWindow.cpp` | (a) Replace the existing `SpectrumOverlayPanel::bandSelected` lambda so it routes through `RadioModel::onBandButtonClicked(Band)` instead of calling `slice->setFrequency` and dropping mode. (b) Add new connection `ContainerWidget::bandClicked(int)` → `RadioModel::onBandButtonClicked(Band::bandFromUiIndex(idx))` to close the orphaned signal. | Converges both band-button entry points on one handler. |
+| *(no change)* `src/gui/SpectrumOverlayPanel.cpp` | `kBands` table's inline `freqHz`/`mode` fields become unused (handler now drives seeds/restore). Left in place to avoid churn; can be pruned to name-only later. | Avoids signature change on `bandSelected(QString, double, QString)`. |
 
 The click handler lives on `RadioModel` because that class already owns `activeSlice()` and serves as the signal-routing hub (per `CLAUDE.md`). `BandDefaults` is a pure-data module so unit tests can hit it directly without constructing a radio.
 
@@ -77,26 +83,42 @@ Note: Thetis uses **SAM** (synchronous AM) for WWV and broadcast GEN, not plain 
 
 ### 3. Wiring & data flow
 
+Both band-button entry points converge on `RadioModel::onBandButtonClicked(Band)`:
+
 ```
-User clicks band button in MeterWidget
- └─ BandButtonItem::onButtonClicked(int, Qt::LeftButton)                    [unchanged]
-     └─ emits bandClicked(int)
-         └─ ContainerWidget::bandClicked(int)                                [unchanged — already forwards]
-             └─ MainWindow lambda                                            [NEW connection]
-                 └─ RadioModel::onBandButtonClicked(Band::bandFromUiIndex(idx))
-                     ├─ activeSlice() guard
-                     ├─ Band current = Band::bandFromFrequency(slice->frequency())
-                     ├─ if (clicked == current) return                       [Q1(a) no-op]
-                     ├─ slice->saveToSettings(current)                        [snapshot outgoing]
-                     └─ if (slice->hasSettingsFor(clicked))
-                        ├─ slice->restoreFromSettings(clicked)                [last-used wins]
-                        else
-                        ├─ BandSeed seed = BandDefaults::seedFor(clicked)
-                        ├─ if (!seed.valid) return                            [XVTR path]
-                        ├─ slice->setFrequency(seed.frequencyHz)
-                        ├─ slice->setDspMode(seed.mode)
-                        └─ slice->saveToSettings(clicked)                     [first-visit bakes seed]
+Path A — Spectrum overlay flyout
+  User clicks BAND button on SpectrumOverlayPanel
+   └─ SpectrumOverlayPanel::bandSelected(name, freqHz, mode)                 [unchanged signal]
+       └─ MainWindow lambda                                                  [REPLACED body]
+           └─ Band b = bandFromName(name);                                   [small helper: "80m" → Band::Band80m]
+              RadioModel::onBandButtonClicked(b);
+              // freqHz / mode args from the signal are ignored — seed/restore owns policy
+
+Path B — Container BandButtonItem
+  User clicks band button in MeterWidget
+   └─ BandButtonItem::onButtonClicked(int, Qt::LeftButton)                   [unchanged]
+       └─ emits bandClicked(int)
+           └─ ContainerWidget::bandClicked(int)                               [unchanged — already forwards]
+               └─ MainWindow lambda                                           [NEW connection]
+                   └─ RadioModel::onBandButtonClicked(Band::bandFromUiIndex(idx))
+
+Shared handler
+  RadioModel::onBandButtonClicked(Band clicked)
+   ├─ activeSlice() guard
+   ├─ Band current = Band::bandFromFrequency(slice->frequency())
+   ├─ if (clicked == current) return                                          [Q1(a) no-op]
+   ├─ slice->saveToSettings(current)                                          [snapshot outgoing]
+   └─ if (slice->hasSettingsFor(clicked))
+      ├─ slice->restoreFromSettings(clicked)                                  [last-used wins]
+      else
+      ├─ BandSeed seed = BandDefaults::seedFor(clicked)
+      ├─ if (!seed.valid) return                                              [XVTR path]
+      ├─ slice->setFrequency(seed.frequencyHz)
+      ├─ slice->setDspMode(seed.mode)
+      └─ slice->saveToSettings(clicked)                                       [first-visit bakes seed]
 ```
+
+**Name → Band helper** (new, trivial): `Band bandFromName(const QString& name)` — maps the string labels used by `SpectrumOverlayPanel::kBands` (`"160m"`, `"80m"`, …, `"WWV"`, `"GEN"`) back to the `Band` enum. Lives in `src/models/Band.{h,cpp}` next to `bandLabel()` and `bandFromUiIndex()`.
 
 **Downstream effects (already wired, just noting):**
 - `setFrequency` → `frequencyChanged` → `ReceiverManager` → `RadioConnection` (P1/P2 wire retune) + `AlexController` HPF/LPF switch + `PanadapterModel::setCenterFrequency` (fires `bandChanged`, grid reposition).
@@ -160,7 +182,9 @@ No exceptions thrown. All paths log-and-return using `qCWarning`/`qCInfo` with t
    - **Locked slice** — `slice->setLocked(true)`, click different band → freq unchanged, mode changed.
 
 **Manual verification** — one-row addendum to the 3G-8 verification matrix:
-- Connect to radio; click each band button 160m → 6m; confirm freq/mode match the seed table. Tune each band to a different freq, switch bands, return; confirm last-used state restores.
+- **Path A (overlay flyout):** Connect to radio; open the spectrum `BAND` flyout; click each band 160m → 6m; confirm freq **and mode** both update (the 80m case is the reproducer for #118 — must land on 3.650 MHz LSB, not "freq-only while mode stays USB").
+- **Path B (container band buttons):** Same sequence from the `BandButtonItem` grid in a meter container; confirm identical behavior (shared handler).
+- **Restore path:** Tune each band to a different freq, switch bands, return; confirm last-used state restores instead of re-seeding.
 
 No integration tests on the radio wire — the handler only drives existing setters whose wire paths are already covered by P1/P2 parity tests.
 
