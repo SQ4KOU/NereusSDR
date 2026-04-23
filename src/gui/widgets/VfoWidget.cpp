@@ -993,6 +993,10 @@ void VfoWidget::buildDspTab()
     m_nr1Btn->setToolTip(QStringLiteral("NR1: Adaptive LMS noise reduction — left-click activates, right-click adjusts knobs"));
     m_nr2Btn->setToolTip(QStringLiteral("NR2: EMNR (Enhanced Multiband Noise Reduction) — left-click activates, right-click adjusts knobs"));
     m_nr3Btn->setToolTip(QStringLiteral("NR3: RNNR (Recurrent Neural Net noise reduction) — left-click activates, right-click adjusts knobs"));
+    // 4×2 layout (option B) — four cols consistently filled.
+    //   Row 0: NB  | NR1  | NR2 | NR3
+    //   Row 1: NR4 | DFNR | MNR | ANF
+    //   Row 2: SNB (alone)
     dspGrid->addWidget(m_nr1Btn, 0, 1);
     dspGrid->addWidget(m_nr2Btn, 0, 2);
     dspGrid->addWidget(m_nr3Btn, 0, 3);
@@ -1039,8 +1043,8 @@ void VfoWidget::buildDspTab()
     m_snbToggle->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_snbToggle, &QWidget::customContextMenuRequested,
             this, [this](const QPoint&) { emit openNbSetupRequested(); });
-    dspGrid->addWidget(m_anfToggle, 2, 0);
-    dspGrid->addWidget(m_snbToggle, 2, 1);
+    dspGrid->addWidget(m_anfToggle, 1, 3);  // fills row 1 col 4
+    dspGrid->addWidget(m_snbToggle, 2, 0);  // alone on row 2
 
     // Uniform size for all 9 grid buttons: 64×26 px.
     // User directive: natural button size (not cramped), zero gaps between
