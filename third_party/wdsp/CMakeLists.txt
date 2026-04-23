@@ -62,6 +62,9 @@ typedef SpectralBleachAdaptiveParameters SpectralBleachParameters;
     if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU|AppleClang")
         target_compile_options(wdsp_static PRIVATE
             "-include${CMAKE_CURRENT_BINARY_DIR}/specbleach_compat/specbleach_compat.h")
+    elseif(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
+        target_compile_options(wdsp_static PRIVATE
+            "/FI${CMAKE_CURRENT_BINARY_DIR}/specbleach_compat/specbleach_compat.h")
     endif()
 endif()
 

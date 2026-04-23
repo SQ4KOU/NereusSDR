@@ -1323,7 +1323,7 @@ void RxChannel::processIq(float* inI, float* inQ,
     // rate) which may be smaller than sampleCount (input rate). Post-WDSP
     // processors must use the SMALLER count or they'll process zero-padded
     // tails and produce garbage. Default -1 preserves old contract.
-    const int postCount = (outSampleCount > 0) ? outSampleCount : sampleCount;
+    [[maybe_unused]] const int postCount = (outSampleCount > 0) ? outSampleCount : sampleCount;
 
     if (!m_active.load()) {
         // Channel inactive — output silence

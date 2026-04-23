@@ -714,24 +714,32 @@ if(ENABLE_DFNR)
     set(DFNR_MODEL "${DEEPFILTER_DIR}/models/DeepFilterNet3_onnx.tar.gz")
     if(EXISTS ${DFNR_MODEL})
         if(APPLE)
-            # macOS: place in Resources/ so notarization doesn't reject a
-            # non-Mach-O file inside Contents/MacOS/
+            # macOS: place in Resources/models/dfnet3/ so notarization doesn't
+            # reject a non-Mach-O file inside Contents/MacOS/, and so
+            # ModelPaths::probeModel() probe #2 finds it at
+            # <exeDir>/../Resources/models/dfnet3/<file>.
             add_custom_command(TARGET NereusSDR POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E make_directory
-                    "$<TARGET_BUNDLE_DIR:NereusSDR>/Contents/Resources"
+                    "$<TARGET_BUNDLE_DIR:NereusSDR>/Contents/Resources/models/dfnet3"
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${DFNR_MODEL}" "$<TARGET_BUNDLE_DIR:NereusSDR>/Contents/Resources/"
-                COMMENT "Copying DeepFilterNet3 model to app bundle Resources")
+                    "${DFNR_MODEL}" "$<TARGET_BUNDLE_DIR:NereusSDR>/Contents/Resources/models/dfnet3/"
+                COMMENT "Copying DeepFilterNet3 model to app bundle Resources/models/dfnet3")
         else()
+            # Non-macOS: place adjacent to exe in models/dfnet3/ subfolder so
+            # ModelPaths::probeModel() probe #1 finds it at
+            # <exeDir>/models/dfnet3/<file>.
             add_custom_command(TARGET NereusSDR POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "$<TARGET_FILE_DIR:NereusSDR>/models/dfnet3"
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${DFNR_MODEL}" "$<TARGET_FILE_DIR:NereusSDR>"
-                COMMENT "Copying DeepFilterNet3 model to build directory")
+                    "${DFNR_MODEL}" "$<TARGET_FILE_DIR:NereusSDR>/models/dfnet3/"
+                COMMENT "Copying DeepFilterNet3 model to build directory models/dfnet3")
         endif()
-        # Install the model alongside the binary for cmake --install
+        # Install the model alongside the binary for cmake --install.
+        # ModelPaths probe #3 expects <exeDir>/../share/NereusSDR/models/dfnet3/<file>.
         if(NOT APPLE)
             install(FILES "${DFNR_MODEL}"
-                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/NereusSDR"
+                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/NereusSDR/models/dfnet3"
                 OPTIONAL)
         endif()
     endif()
