@@ -68,7 +68,59 @@ static const char* kAutoDetectStyle =
     "}"
     "QPushButton:hover { background: #1d3045; }";
 
+// Binding-status banner — persistent one-line indicator at the top of each
+// VaxChannelCard. Colour encodes state: green = native HAL active, blue =
+// BYO cable bound, amber = nothing bound (Windows case).
+[[maybe_unused]] static const char* kStatusNativeStyle =
+    "QLabel {"
+    "  background: #0f2a1a;"
+    "  border: 1px solid #2a6a3a;"
+    "  border-radius: 3px;"
+    "  color: #00ff88;"
+    "  font-size: 11px;"
+    "  font-weight: bold;"
+    "  padding: 3px 8px;"
+    "}";
+
+static const char* kStatusBYOStyle =
+    "QLabel {"
+    "  background: #0f2030;"
+    "  border: 1px solid #2a5a8a;"
+    "  border-radius: 3px;"
+    "  color: #00b4d8;"
+    "  font-size: 11px;"
+    "  font-weight: bold;"
+    "  padding: 3px 8px;"
+    "}";
+
+[[maybe_unused]] static const char* kStatusUnboundStyle =
+    "QLabel {"
+    "  background: #2a1a00;"
+    "  border: 1px solid #b87300;"
+    "  border-radius: 3px;"
+    "  color: #e8a030;"
+    "  font-size: 11px;"
+    "  font-weight: bold;"
+    "  padding: 3px 8px;"
+    "}";
+
+// Label builder for the disabled "native (bound automatically)" info
+// row shown at the top of the Auto-detect menu on Mac/Linux when the
+// platform-native HAL/pipe bridge is live. Exposed via a static
+// VaxChannelCard::nativeHalLabelForCableForTest seam for unit coverage.
+QString nativeHalLabelForCableImpl(const DetectedCable& cable)
+{
+    return QStringLiteral(
+               "\u25ba  %1 \u00b7 NereusSDR \u00b7 native (bound automatically)")
+        .arg(cable.deviceName);
+}
+
 } // namespace
+
+QString VaxChannelCard::nativeHalLabelForCable(const DetectedCable& cable)
+{
+    return nativeHalLabelForCableImpl(cable);
+}
 
 // ---------------------------------------------------------------------------
 // VaxChannelCard
@@ -83,6 +135,14 @@ VaxChannelCard::VaxChannelCard(int channel, QWidget* parent)
     auto* outerLayout = new QVBoxLayout(this);
     outerLayout->setContentsMargins(8, 16, 8, 8);
     outerLayout->setSpacing(6);
+
+    // Persistent binding-status banner — always-visible one-liner telling
+    // the user what this channel is currently routed through. Populated
+    // in updateBindingStatus(), which is driven off currentDeviceName().
+    m_statusLabel = new QLabel(this);
+    m_statusLabel->setWordWrap(false);
+    m_statusLabel->setTextFormat(Qt::PlainText);
+    outerLayout->addWidget(m_statusLabel);
 
     // Inner DeviceCard (7-row form + enable checkbox in title).
     m_deviceCard = new DeviceCard(m_prefix, DeviceCard::Role::Output,
@@ -115,6 +175,10 @@ VaxChannelCard::VaxChannelCard(int channel, QWidget* parent)
             this, &VaxChannelCard::onInnerEnabledChanged);
     connect(m_autoDetectBtn, &QPushButton::clicked,
             this, &VaxChannelCard::onAutoDetectClicked);
+
+    // Populate the status banner with the card's initial state so it reads
+    // correctly even if loadFromSettings() isn't invoked (tests, previews).
+    updateBadge();
 }
 
 void VaxChannelCard::loadFromSettings()
@@ -215,8 +279,67 @@ void VaxChannelCard::onInnerEnabledChanged(bool on)
 void VaxChannelCard::updateBadge()
 {
     // Auto-detect button: show when no device is bound (name empty).
-    const bool hasDevice = !currentDeviceName().isEmpty();
+    const QString deviceName = currentDeviceName();
+    const bool hasDevice = !deviceName.isEmpty();
     m_autoDetectBtn->setVisible(!hasDevice);
+
+    // Persistent binding-status banner — answers "what is this channel
+    // routed through?" at a glance. Three states: native HAL (green),
+    // BYO cable (blue), unbound (amber, Windows-only case).
+    if (m_statusLabel) {
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
+        if (hasDevice) {
+            m_statusLabel->setStyleSheet(QLatin1String(kStatusBYOStyle));
+            m_statusLabel->setText(
+                QStringLiteral("\u2713  Bound: %1").arg(deviceName));
+            m_statusLabel->setToolTip(QStringLiteral(
+                "VAX channel is routed through the selected 3rd-party "
+                "virtual cable (BYO override). Clear the Device picker "
+                "to fall back to the native HAL/pipe bridge."));
+        } else {
+#  if defined(Q_OS_MAC)
+            const QString nativeName =
+                QStringLiteral("NereusSDR VAX %1").arg(m_channel);
+            m_statusLabel->setText(
+                QStringLiteral("\u2713  Bound: Native HAL \u00b7 %1")
+                    .arg(nativeName));
+            m_statusLabel->setToolTip(QStringLiteral(
+                "VAX channel is routed through the bundled CoreAudio "
+                "HAL plugin. Consumer apps (WSJT-X, FLDIGI, etc.) can "
+                "select \"%1\" as their audio input device.")
+                .arg(nativeName));
+#  else
+            const QString nativeName =
+                QStringLiteral("NereusSDR VAX %1").arg(m_channel);
+            m_statusLabel->setText(
+                QStringLiteral("\u2713  Bound: Native (PipeWire) \u00b7 %1")
+                    .arg(nativeName));
+            m_statusLabel->setToolTip(QStringLiteral(
+                "VAX channel is routed through a native PipeWire pipe "
+                "source. Consumer apps can select \"%1\" as their audio "
+                "input device.")
+                .arg(nativeName));
+#  endif
+            m_statusLabel->setStyleSheet(QLatin1String(kStatusNativeStyle));
+        }
+#else  // Q_OS_WIN
+        if (hasDevice) {
+            m_statusLabel->setStyleSheet(QLatin1String(kStatusBYOStyle));
+            m_statusLabel->setText(
+                QStringLiteral("\u2713  Bound: %1").arg(deviceName));
+            m_statusLabel->setToolTip(QStringLiteral(
+                "VAX channel is routed through the selected virtual cable."));
+        } else {
+            m_statusLabel->setStyleSheet(QLatin1String(kStatusUnboundStyle));
+            m_statusLabel->setText(QStringLiteral(
+                "\u26a0  Not bound \u2014 pick a virtual cable"));
+            m_statusLabel->setToolTip(QStringLiteral(
+                "Windows has no built-in virtual audio cable. Install "
+                "VB-CABLE, Voicemeeter, or VAC and pick it in the Device "
+                "dropdown to enable this VAX channel."));
+        }
+#endif
+    }
 
 #if defined(Q_OS_WIN)
     // Windows has no native HAL fallback — empty deviceName on setVaxConfig
@@ -233,11 +356,10 @@ void VaxChannelCard::updateBadge()
     // The native device name contains "NereusSDR" (reserved for the NereusSDR
     // HAL plugin). If the device is native, badge is always suppressed.
     if (hasDevice) {
-        const QString devName = currentDeviceName();
-        const bool isNative = devName.contains(QStringLiteral("NereusSDR"),
-                                                Qt::CaseInsensitive);
+        const bool isNative = deviceName.contains(QStringLiteral("NereusSDR"),
+                                                   Qt::CaseInsensitive);
         const bool badgeOn = !isNative
-            && (VirtualCableDetector::consumerCount(devName) == 0);
+            && (VirtualCableDetector::consumerCount(deviceName) == 0);
         m_badgeLabel->setVisible(badgeOn);
     } else {
         m_badgeLabel->setVisible(false);
@@ -275,6 +397,29 @@ void VaxChannelCard::onAutoDetectClicked()
         "QMenu::item:selected { background: #203040; }"
         "QMenu::item:disabled { color: #506070; }");
 
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
+    // Surface the platform-native HAL/pipe VAX devices as disabled info
+    // rows. Binding is automatic (AudioEngine::makeVaxBus sets up the shm
+    // bridge at start()) so these rows are not selectable — they exist so
+    // users can confirm the native plugin is alive. Absent when the plugin
+    // is not installed; the honest empty menu that follows is informative.
+    int nativeHalCount = 0;
+    for (const DetectedCable& cable : cables) {
+        if (cable.product != VirtualCableProduct::NereusSdrVax) {
+            continue;
+        }
+        // HAL plugin publishes VAX N as input-only on macOS; Linux pipe
+        // module analog is also input-only. Accept either side to future-
+        // proof against a dual-sided native bridge.
+        QAction* act = menu.addAction(nativeHalLabelForCable(cable));
+        act->setEnabled(false);
+        ++nativeHalCount;
+    }
+    if (nativeHalCount > 0) {
+        menu.addSeparator();
+    }
+#endif
+
     if (cables.isEmpty()) {
         // No cables case.
         QAction* noCablesAct = menu.addAction(
@@ -296,6 +441,15 @@ void VaxChannelCard::onAutoDetectClicked()
         // those are the cables that a consumer app reads from).
         bool hasAny = false;
         for (const DetectedCable& cable : cables) {
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
+            // Native HAL/pipe entries were already surfaced above as info
+            // rows. Don't re-offer them as BYO targets: the HAL plugin
+            // publishes input-only devices on Mac, so setVaxConfig →
+            // makeBus(capture=false) can't open them via PortAudio.
+            if (cable.product == VirtualCableProduct::NereusSdrVax) {
+                continue;
+            }
+#endif
             if (cable.isInput) {
                 continue; // skip capture side
             }
@@ -377,10 +531,25 @@ void VaxChannelCard::onAutoDetectClicked()
         }
 
         if (!hasAny) {
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
+            if (nativeHalCount > 0) {
+                // Native HAL/pipe is already surfaced above. No 3rd-party
+                // BYO cables are installed — hint that this is optional.
+                QAction* hintAct = menu.addAction(
+                    QStringLiteral(
+                        "No 3rd-party cables available (BYO override optional)"));
+                hintAct->setEnabled(false);
+            } else {
+                QAction* noCablesAct = menu.addAction(
+                    QStringLiteral("No output-side virtual cables detected"));
+                noCablesAct->setEnabled(false);
+            }
+#else
             // Only input-side cables found; surface a message.
             QAction* noCablesAct = menu.addAction(
                 QStringLiteral("No output-side virtual cables detected"));
             noCablesAct->setEnabled(false);
+#endif
         }
     }
 

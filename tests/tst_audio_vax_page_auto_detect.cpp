@@ -363,6 +363,88 @@ private slots:
         QCOMPARE(s.value(base + QStringLiteral("ManualLatencyMs"), QString()).toString().toInt(), 0);
     }
 
+    // ── 12c. nativeHalLabelForCable (option-2 Mac/Linux info row) ───────────
+    // Pure label builder used by onAutoDetectClicked() on Mac/Linux to
+    // render the disabled "native (bound automatically)" row for each
+    // detected NereusSdrVax device. Assertions keep the label contract
+    // stable so the UI doesn't silently regress when the string changes.
+    void nativeHalLabel_containsDeviceNameAndVendor()
+    {
+        const DetectedCable cable{
+            VirtualCableProduct::NereusSdrVax,
+            QStringLiteral("NereusSDR VAX 1"),
+            /*isInput=*/true, 0};
+
+        const QString label = VaxChannelCard::nativeHalLabelForCable(cable);
+
+        QVERIFY2(label.contains(QStringLiteral("NereusSDR VAX 1")),
+                 qPrintable(QStringLiteral(
+                     "Expected label to contain the device name; got: %1")
+                     .arg(label)));
+        QVERIFY2(label.contains(QStringLiteral("NereusSDR")),
+                 "Expected vendor name in native HAL label");
+        QVERIFY2(label.contains(QStringLiteral("bound automatically"),
+                                Qt::CaseInsensitive),
+                 "Expected native rows to declare they are bound automatically");
+    }
+
+    // ── 12d. Binding-status banner reflects current state ──────────────────
+    // The persistent status banner must always answer "what is this channel
+    // bound to?" without requiring the user to open any menu. Cases:
+    //   - empty deviceName on Mac/Linux → "Bound: Native HAL · NereusSDR VAX N"
+    //   - non-empty deviceName → "Bound: <name>"
+    void statusLabel_reflectsNativeHalWhenUnbound()
+    {
+        clearAudioKeys();
+
+        VaxChannelCard card(2, nullptr);
+        // Status banner is populated from updateBadge() which is invoked at
+        // the end of the ctor. On macOS/Linux an empty deviceName means the
+        // channel is bound to the native HAL/pipe bridge.
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
+        QLabel* statusLabel = nullptr;
+        for (QLabel* l : card.findChildren<QLabel*>()) {
+            const QString t = l->text();
+            if (t.contains(QStringLiteral("Bound:"), Qt::CaseInsensitive)) {
+                statusLabel = l;
+                break;
+            }
+        }
+        QVERIFY2(statusLabel, "Expected a binding-status label on VaxChannelCard");
+        QVERIFY2(statusLabel->text().contains(
+                     QStringLiteral("NereusSDR VAX 2")),
+                 qPrintable(QStringLiteral(
+                     "Expected status to name the channel's native HAL device;"
+                     " got: %1").arg(statusLabel->text())));
+#else
+        QSKIP("Native-HAL status only applies on macOS/Linux.");
+#endif
+    }
+
+    void statusLabel_reflectsByoBinding()
+    {
+        clearAudioKeys();
+
+        VaxChannelCard card(3, nullptr);
+        const QString cableName =
+            QStringLiteral("CABLE-A Output (VB-Audio Virtual Cable)");
+        card.bindDeviceNameForTest(cableName);
+
+        QLabel* statusLabel = nullptr;
+        for (QLabel* l : card.findChildren<QLabel*>()) {
+            if (l->text().contains(QStringLiteral("Bound:"),
+                                   Qt::CaseInsensitive)) {
+                statusLabel = l;
+                break;
+            }
+        }
+        QVERIFY2(statusLabel, "Expected a binding-status label on VaxChannelCard");
+        QVERIFY2(statusLabel->text().contains(cableName),
+                 qPrintable(QStringLiteral(
+                     "Expected status to name the BYO cable; got: %1")
+                     .arg(statusLabel->text())));
+    }
+
     // ── 13. autoDetectFreeCable_refreshesDeviceCardUI (C2) ───────────────────
     // After binding via the test seam, currentDeviceName() on the live card
     // must reflect the new binding (not the stale empty value).

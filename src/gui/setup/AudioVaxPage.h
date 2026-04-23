@@ -72,6 +72,12 @@ public:
     // to close the engine bus, and updates badge visibility.
     void clearBinding();
 
+    // Pure label builder for the disabled "native (bound automatically)"
+    // info row shown at the top of the Auto-detect menu on Mac/Linux when
+    // a platform-native HAL/pipe VAX bridge is live. Public so unit tests
+    // can assert the label format without opening a modal QMenu.
+    static QString nativeHalLabelForCable(const DetectedCable& cable);
+
 #ifdef NEREUS_BUILD_TESTS
     // Test seam — override the cable vector used by onAutoDetectClicked()
     // so unit tests can exercise menu population without PortAudio.
@@ -125,6 +131,7 @@ private:
     DeviceCard*  m_deviceCard{nullptr};
     QPushButton* m_autoDetectBtn{nullptr};
     QLabel*      m_badgeLabel{nullptr};
+    QLabel*      m_statusLabel{nullptr};
 
 #ifdef NEREUS_BUILD_TESTS
     bool                    m_useTestCables{false};
