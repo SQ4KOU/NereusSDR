@@ -494,17 +494,24 @@ void P2RadioConnection::setMox(bool enabled)
 }
 
 // ---------------------------------------------------------------------------
-// setAntennaRouting — Phase 3P-I-a
+// setAntennaRouting — Phase 3P-I-a + 3P-I-b (T5)
 //
-// Ports Thetis ChannelMaster/netInterface.c:479-485 — Alex0 (RX) and
-// Alex1 (TX) register encoding. Bits 24/25/26 are ANT1/ANT2/ANT3.
+// Ports Thetis ChannelMaster/netInterface.c:459-485 SetAntBits. Alex0
+// (RX) and Alex1 (TX) register encoding per network.h:263-358:
+//   Alex0 bits 24-26: _ANT_1/_ANT_2/_ANT_3 (from trxAnt)
+//   Alex0 bits  8-11: _XVTR_Rx_In / _Rx_2_In / _Rx_1_In / _Rx_1_Out
+//                     (from rxOnlyAnt 3/2/1 + rxOut)
+//   Alex1 bits 24-26: _TXANT_1/_TXANT_2/_TXANT_3 (from txAnt)
 //
-// 3P-I-a scope: only trxAnt / txAnt are honored. rxOnlyAnt / rxOut / tx
-// are accepted in the struct but ignored here until 3P-I-b wires Alex0
-// bits 27-30 (RX-only routing) and 3M-1 wires the MOX branch.
+// Encoding of rxOnlyAnt (bit-pair per netInterface.c:479-481 [@501e3f5]):
+//   rxOnlyAnt & 0x03 == 0x01 → _Rx_1_In (bit 10, EXT2)
+//   rxOnlyAnt & 0x03 == 0x02 → _Rx_2_In (bit 9, EXT1)
+//   rxOnlyAnt & 0x03 == 0x03 → _XVTR_Rx_In (bit 8)
+//   rxOut → _Rx_1_Out (bit 11, K36 RL17 bypass relay)
 //
 // From Thetis HPSDR/Alex.cs:401 [v2.10.3.13 @501e3f5] —
 //   NetworkIO.SetAntBits(rx_only_ant, trx_ant, tx_ant, rx_out, tx);
+// MOX coupling (the `tx` arg) deferred to Phase 3M-1.
 // ---------------------------------------------------------------------------
 void P2RadioConnection::setAntennaRouting(AntennaRouting r)
 {
@@ -515,8 +522,17 @@ void P2RadioConnection::setAntennaRouting(AntennaRouting r)
     auto clamp = [](int v) { return (v < 1 || v > 3) ? 0 : v; };
     m_alex.rxAnt = clamp(r.trxAnt);
     m_alex.txAnt = clamp(r.txAnt);
+
+    // RX-only antenna mux + RX-Bypass-Out relay — Phase 3P-I-b T5.
+    // From Thetis ChannelMaster/netInterface.c:479-481 + network.h:279-282
+    // [v2.10.3.13 @501e3f5]. rxOnlyAnt 0=none, 1=Rx1In, 2=Rx2In, 3=XVTRRxIn.
+    m_alex.rxOnlyAnt = (r.rxOnlyAnt < 0 || r.rxOnlyAnt > 3) ? 0 : r.rxOnlyAnt;
+    m_alex.rxOut     = r.rxOut;
+
     qCDebug(lcConnection) << "P2::setAntennaRouting rxAnt=" << m_alex.rxAnt
                           << "txAnt=" << m_alex.txAnt
+                          << "rxOnlyAnt=" << m_alex.rxOnlyAnt
+                          << "rxOut=" << m_alex.rxOut
                           << "running=" << m_running;
     if (m_running) {
         sendCmdHighPriority();
@@ -770,6 +786,12 @@ CodecContext P2RadioConnection::buildCodecContext() const
     // Alex antenna selection (1-based)
     ctx.p2AlexRxAnt = m_alex.rxAnt;
     ctx.p2AlexTxAnt = m_alex.txAnt;
+
+    // RX-only antenna mux + RX-Bypass-Out relay — Phase 3P-I-b T5.
+    // From Thetis ChannelMaster/network.h:279-282 + netInterface.c:479-481
+    // [v2.10.3.13 @501e3f5]. Consumed by P2CodecOrionMkII::buildAlex0().
+    ctx.rxOnlyAnt = m_alex.rxOnlyAnt;
+    ctx.rxOut     = m_alex.rxOut;
 
     // Alex HPF / LPF bits (recomputed by setReceiverFrequency on freq change)
     ctx.alexHpfBits = static_cast<quint8>(m_alex.hpfBits);

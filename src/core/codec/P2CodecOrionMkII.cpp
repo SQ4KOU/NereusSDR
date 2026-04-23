@@ -257,7 +257,8 @@ void P2CodecOrionMkII::composeCmdTx(const CodecContext& ctx, quint8 buf[60]) con
 // --- Alex register builders ---
 
 // Build Alex0 32-bit register (bytes 1432-1435 in CmdHighPriority).
-// Contains: RX antenna (bits 24-26), LPF (bits 20-31), HPF (bits 0-6).
+// Contains: RX antenna (bits 24-26), RX-only mux (bits 8-11),
+//           LPF (bits 20-31), HPF (bits 0-6).
 // From Thetis ChannelMaster/network.h:263-358 bpfilter struct [@501e3f5]
 quint32 P2CodecOrionMkII::buildAlex0(const CodecContext& ctx) const
 {
@@ -272,6 +273,28 @@ quint32 P2CodecOrionMkII::buildAlex0(const CodecContext& ctx) const
         reg |= (1u << 25);  // _ANT_2
     } else if (antBits == 0x03) {
         reg |= (1u << 26);  // _ANT_3
+    }
+
+    // RX-only antenna mux — Phase 3P-I-b T5. From Thetis
+    // ChannelMaster/netInterface.c:479-481 + network.h:279-282
+    // [v2.10.3.13 @501e3f5]. Bit-pair encoding matches SetAntBits():
+    //   (rxOnlyAnt & 0x03) == 0x01 → _Rx_1_In  (bit 10, EXT2)
+    //   (rxOnlyAnt & 0x03) == 0x02 → _Rx_2_In  (bit 9,  EXT1)
+    //   (rxOnlyAnt & 0x03) == 0x03 → _XVTR_Rx_In (bit 8)
+    //   rxOut → _Rx_1_Out (bit 11, K36 RL17 RX-Bypass-Out relay)
+    // NOTE: bit 27 is _TR_Relay — NOT an RX-only bit; not touched here.
+    {
+        const int rxOnlyBits = ctx.rxOnlyAnt & 0x03;
+        if (rxOnlyBits == 0x01) {
+            reg |= (1u << 10);  // _Rx_1_In  [network.h:281 @501e3f5]
+        } else if (rxOnlyBits == 0x02) {
+            reg |= (1u <<  9);  // _Rx_2_In  [network.h:280 @501e3f5]
+        } else if (rxOnlyBits == 0x03) {
+            reg |= (1u <<  8);  // _XVTR_Rx_In [network.h:279 @501e3f5]
+        }
+        if (ctx.rxOut) {
+            reg |= (1u << 11);  // _Rx_1_Out [network.h:282 @501e3f5]
+        }
     }
 
     // LPF bits — from Thetis netInterface.c:682-726 [@501e3f5]

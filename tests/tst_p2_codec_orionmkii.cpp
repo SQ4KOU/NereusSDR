@@ -3,6 +3,8 @@
 #include "core/codec/P2CodecOrionMkII.h"
 #include "core/codec/CodecContext.h"
 
+#include <array>
+
 using namespace NereusSDR;
 
 class TestP2CodecOrionMkII : public QObject {
@@ -247,6 +249,55 @@ private slots:
         QCOMPARE(int(buf[1]), 0);
         QCOMPARE(int(buf[2]), 0);
         QCOMPARE(int(buf[3]), 0);
+    }
+
+    // Byte-locked against Thetis network.h:279-282 + netInterface.c:479-481
+    // [v2.10.3.13 @501e3f5]. Alex0 bits 8-11 encoding:
+    //   bit  8: _XVTR_Rx_In (rxOnlyAnt & 0x03 == 0x03)
+    //   bit  9: _Rx_2_In    (rxOnlyAnt & 0x03 == 0x02, EXT1)
+    //   bit 10: _Rx_1_In    (rxOnlyAnt & 0x03 == 0x01, EXT2)
+    //   bit 11: _Rx_1_Out   (rxOut == true, K36 RL17 bypass relay)
+    // NOTE: bit 27 is _TR_Relay — NOT an RX-only bit; not set here.
+    //
+    // Phase 3P-I-b T5: 8-case lock (4 rxOnlyAnt values × 2 rxOut values).
+    // Mask isolates bits 8-11 to avoid contamination from ANT (24-26),
+    // LPF (20-23, 29-31), and HPF (1-6, 12) bits.
+    void alex0_rxOnly_and_rxOut_byteLock() {
+        struct Case { int rxOnly; bool rxOut; quint32 expectedBits8_11; };
+        const std::array<Case, 8> cases = {{
+            {0, false, 0x00000000u},
+            {1, false, (1u << 10)},                   // _Rx_1_In  (EXT2)
+            {2, false, (1u <<  9)},                   // _Rx_2_In  (EXT1)
+            {3, false, (1u <<  8)},                   // _XVTR_Rx_In
+            {0, true,  (1u << 11)},                   // _Rx_1_Out only
+            {1, true,  (1u << 10) | (1u << 11)},     // _Rx_1_In + _Rx_1_Out
+            {2, true,  (1u <<  9) | (1u << 11)},     // _Rx_2_In + _Rx_1_Out
+            {3, true,  (1u <<  8) | (1u << 11)},     // _XVTR_Rx_In + _Rx_1_Out
+        }};
+
+        constexpr quint32 kMask8_11 = 0b1111u << 8;  // isolate bits 8-11
+
+        for (const auto& tc : cases) {
+            P2CodecOrionMkII codec;
+            CodecContext ctx;
+            ctx.p2AlexRxAnt = 1;    // ANT1 — valid but shouldn't appear in bits 8-11
+            ctx.p2AlexTxAnt = 1;
+            ctx.rxOnlyAnt   = tc.rxOnly;
+            ctx.rxOut       = tc.rxOut;
+
+            quint8 buf[1444] = {};
+            codec.composeCmdHighPriority(ctx, buf);
+
+            // Alex0 bytes 1432-1435 big-endian: bit N of reg is in byte[1432 + (31-N)/8].
+            // Bits 8-11 map to byte 1434 (bits 8-11 = byte[1434] bits 0-3 in BE).
+            // Re-assemble Alex0 word for clean bit-level comparison.
+            const quint32 alex0 =
+                (quint32(buf[1432]) << 24) | (quint32(buf[1433]) << 16) |
+                (quint32(buf[1434]) <<  8) |  quint32(buf[1435]);
+
+            const quint32 masked = alex0 & kMask8_11;
+            QCOMPARE(masked, tc.expectedBits8_11);
+        }
     }
 
     // Thetis parity: Alex0/Alex1 antenna bits per netInterface.c:479-485

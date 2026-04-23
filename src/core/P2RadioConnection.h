@@ -374,6 +374,17 @@ private:
         int txAnt{1};       // 1=ANT1, 2=ANT2, 3=ANT3
         int hpfBits{0x20};  // HPF filter bits (default: bypass = 0x20)
         int lpfBits{0x10};  // LPF filter bits (default: 6m LPF = 0x10)
+
+        // RX-only antenna mux — from Thetis ChannelMaster/network.h:279-281
+        // [v2.10.3.13 @501e3f5]. Alex0 bits 8-10:
+        //   0 = no RX-only path, 1 = _Rx_1_In (bit 10), 2 = _Rx_2_In (bit 9),
+        //   3 = _XVTR_Rx_In (bit 8).
+        // Encoding per netInterface.c:479-481 SetAntBits().
+        int  rxOnlyAnt{0};
+
+        // _Rx_1_Out relay (K36 RL17 RX-Bypass-Out) — from Thetis
+        // ChannelMaster/network.h:282 [v2.10.3.13 @501e3f5]. Alex0 bit 11.
+        bool rxOut{false};
     };
     AlexState m_alex;
 
