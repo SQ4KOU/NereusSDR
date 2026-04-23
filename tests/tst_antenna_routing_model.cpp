@@ -188,6 +188,157 @@ private slots:
         model.injectConnectionForTest(nullptr);
         delete mock;
     }
+
+    // ── Phase 3P-I-b (T6) full composition ─────────────────────────────────────
+
+    // RX-only ant propagates on RX band: rxOnlyAnt=2 → routing.rxOnlyAnt=2,
+    // rxOut=true. From Thetis Alex.cs:350-361 [@501e3f5].
+    void rxOnly_propagates_on_rx_band() {
+        RadioModel model;
+        model.setCapsForTest(/*hasAlex=*/true);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+
+        model.alexControllerMutable().setRxOnlyAnt(Band::Band20m, 2);
+        mock->calls.clear();
+        model.applyAlexAntennaForBandForTest(Band::Band20m, /*isTx=*/false);
+
+        QVERIFY(mock->calls.size() >= 1);
+        QCOMPARE(mock->calls.last().rxOnlyAnt, 2);
+        QCOMPARE(mock->calls.last().rxOut, true);
+
+        model.injectConnectionForTest(nullptr);
+        delete mock;
+    }
+
+    // isTx=true + Ext1OutOnTx=true → rxOnlyAnt=2 (Ext1 mapped), rxOut=true.
+    // From Thetis Alex.cs:341-345 [@501e3f5].
+    void ext1_on_tx_maps_rxOnly_2() {
+        RadioModel model;
+        model.setCapsForTest(/*hasAlex=*/true);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+
+        model.alexControllerMutable().setExt1OutOnTx(true);
+        mock->calls.clear();
+        model.applyAlexAntennaForBandForTest(Band::Band20m, /*isTx=*/true);
+
+        QVERIFY(mock->calls.size() >= 1);
+        QCOMPARE(mock->calls.last().rxOnlyAnt, 2);
+        QCOMPARE(mock->calls.last().rxOut, true);
+        QCOMPARE(mock->calls.last().tx, true);
+
+        model.injectConnectionForTest(nullptr);
+        delete mock;
+    }
+
+    // isTx=true + Ext2OutOnTx=true → rxOnlyAnt=1 (Ext2 mapped), rxOut=true.
+    // From Thetis Alex.cs:341 [@501e3f5].
+    void ext2_on_tx_maps_rxOnly_1() {
+        RadioModel model;
+        model.setCapsForTest(/*hasAlex=*/true);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+
+        model.alexControllerMutable().setExt2OutOnTx(true);
+        mock->calls.clear();
+        model.applyAlexAntennaForBandForTest(Band::Band20m, /*isTx=*/true);
+
+        QVERIFY(mock->calls.size() >= 1);
+        QCOMPARE(mock->calls.last().rxOnlyAnt, 1);
+        QCOMPARE(mock->calls.last().rxOut, true);
+
+        model.injectConnectionForTest(nullptr);
+        delete mock;
+    }
+
+    // xvtrActive=true + rxOnlyAnt=3 → routing.rxOnlyAnt=3 preserved (XVTR port kept).
+    // From Thetis Alex.cs:352-354 [@501e3f5].
+    void xvtr_active_preserves_rxOnly_3() {
+        RadioModel model;
+        model.setCapsForTest(/*hasAlex=*/true);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+
+        model.alexControllerMutable().setRxOnlyAnt(Band::Band20m, 3);
+        model.alexControllerMutable().setXvtrActive(true);
+        mock->calls.clear();
+        model.applyAlexAntennaForBandForTest(Band::Band20m, /*isTx=*/false);
+
+        QVERIFY(mock->calls.size() >= 1);
+        QCOMPARE(mock->calls.last().rxOnlyAnt, 3);
+        QCOMPARE(mock->calls.last().rxOut, true);
+
+        model.injectConnectionForTest(nullptr);
+        delete mock;
+    }
+
+    // xvtrActive=false + rxOnlyAnt=3 → clamped to 0 (3-3=0, XVTR port suppressed).
+    // From Thetis Alex.cs:357-358 [@501e3f5]:
+    //   "if (rx_only_ant >= 3) rx_only_ant -= 3; // do not use XVTR ant port..."
+    void xvtr_inactive_clamps_rxOnly_3_to_0() {
+        RadioModel model;
+        model.setCapsForTest(/*hasAlex=*/true);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+
+        model.alexControllerMutable().setRxOnlyAnt(Band::Band20m, 3);
+        model.alexControllerMutable().setXvtrActive(false);
+        mock->calls.clear();
+        model.applyAlexAntennaForBandForTest(Band::Band20m, /*isTx=*/false);
+
+        QVERIFY(mock->calls.size() >= 1);
+        QCOMPARE(mock->calls.last().rxOnlyAnt, 0);  // 3 - 3 = 0
+        QCOMPARE(mock->calls.last().rxOut, false);
+
+        model.injectConnectionForTest(nullptr);
+        delete mock;
+    }
+
+    // rxOutOverride=true + rxOnlyAnt=1 (rxOut=true) → trxAnt forced to 4, rxOut=false.
+    // From Thetis Alex.cs:368-374 [@501e3f5].
+    void rxOutOverride_forces_trxAnt_4_on_rx() {
+        RadioModel model;
+        model.setCapsForTest(/*hasAlex=*/true);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+
+        model.alexControllerMutable().setRxOnlyAnt(Band::Band20m, 1);
+        model.alexControllerMutable().setRxOutOverride(true);
+        mock->calls.clear();
+        model.applyAlexAntennaForBandForTest(Band::Band20m, /*isTx=*/false);
+
+        QVERIFY(mock->calls.size() >= 1);
+        QCOMPARE(mock->calls.last().trxAnt, 4);
+        QCOMPARE(mock->calls.last().rxOut, false);
+
+        model.injectConnectionForTest(nullptr);
+        delete mock;
+    }
+
+    // !caps.hasAlex → all fields zeroed + tx=false (full zero-out check).
+    // Complements hasAlex_false_writes_zero_routing with rxOnlyAnt/rxOut fields.
+    // From Thetis Alex.cs:312-316 [@501e3f5].
+    void hasAlex_false_emits_all_zero() {
+        RadioModel model;
+        model.setCapsForTest(/*hasAlex=*/false);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        mock->calls.clear();
+
+        model.applyAlexAntennaForBandForTest(Band::Band20m, /*isTx=*/false);
+
+        QVERIFY(mock->calls.size() >= 1);
+        const AntennaRouting& r = mock->calls.last();
+        QCOMPARE(r.rxOnlyAnt, 0);
+        QCOMPARE(r.trxAnt,    0);
+        QCOMPARE(r.txAnt,     0);
+        QCOMPARE(r.rxOut,     false);
+        QCOMPARE(r.tx,        false);
+
+        model.injectConnectionForTest(nullptr);
+        delete mock;
+    }
 };
 
 QTEST_MAIN(TestAntennaRoutingModel)
