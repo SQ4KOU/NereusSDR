@@ -768,6 +768,15 @@ float AudioEngine::vaxRxLevel(int channel) const
     return bus->rxLevel();
 }
 
+bool AudioEngine::isVaxBusOpen(int channel) const
+{
+    if (channel < 1 || channel > 4) {
+        return false;
+    }
+    const IAudioBus* bus = m_vaxBus[channel - 1].get();
+    return bus != nullptr && bus->isOpen();
+}
+
 float AudioEngine::vaxTxLevel() const
 {
     const IAudioBus* bus = m_vaxTxBus.get();

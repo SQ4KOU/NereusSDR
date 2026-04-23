@@ -324,6 +324,60 @@ private slots:
                  "Device name with HTML special chars was not escaped"
                  " before rich-text injection");
     }
+
+    // ── 10. MacNative body reflects m_detected (regression for "always
+    //       Ready" bug).  When the HAL plugin is NOT detected the dialog
+    //       must say so instead of claiming all 4 channels are ready.
+    void macNativeBody_showsNotDetectedWhenHalMissing()
+    {
+        VaxFirstRunDialog dlg(FirstRunScenario::MacNative, {});
+
+        bool sawWarning = false;
+        bool sawAllReadyLie = false;
+        for (const auto* label : dlg.findChildren<QLabel*>()) {
+            const QString t = label->text();
+            if (t.contains(QStringLiteral("not detected"),
+                           Qt::CaseInsensitive)) {
+                sawWarning = true;
+            }
+            if (t.contains(QStringLiteral("All 4 VAX channels are ready"),
+                           Qt::CaseInsensitive)) {
+                sawAllReadyLie = true;
+            }
+        }
+        QVERIFY2(sawWarning,
+                 "Expected MacNative body to surface a 'not detected' warning"
+                 " when m_detected is empty");
+        QVERIFY2(!sawAllReadyLie,
+                 "MacNative body must not claim all 4 channels are ready"
+                 " when the HAL plugin was not detected");
+    }
+
+    // ── 11. MacNative body claims "ready" only when HAL is live ────────
+    void macNativeBody_showsAllReadyWhenHalFullyDetected()
+    {
+        QVector<DetectedCable> payload;
+        for (int slot = 1; slot <= 4; ++slot) {
+            payload.push_back({VirtualCableProduct::NereusSdrVax,
+                               QStringLiteral("NereusSDR VAX %1").arg(slot),
+                               /*isInput=*/true, 0});
+        }
+
+        VaxFirstRunDialog dlg(FirstRunScenario::MacNative, payload);
+
+        bool sawAllReady = false;
+        for (const auto* label : dlg.findChildren<QLabel*>()) {
+            if (label->text().contains(
+                    QStringLiteral("All 4 VAX channels are ready"),
+                    Qt::CaseInsensitive)) {
+                sawAllReady = true;
+                break;
+            }
+        }
+        QVERIFY2(sawAllReady,
+                 "Expected MacNative body to claim 'All 4 VAX channels are"
+                 " ready to use' when all 4 HAL devices were detected");
+    }
 };
 
 // The applySuggested signal carries QVector<QPair<int, QString>>; the
