@@ -403,6 +403,16 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_radioModel, &RadioModel::connectionStateChanged,
             this, &MainWindow::onConnectionStateChanged);
 
+    // Issue #118 — show a transient status-bar message when a band-button
+    // click short-circuits (locked slice, XVTR without transverter config).
+    // Prevents silent failure — the user sees why nothing happened.
+    connect(m_radioModel, &RadioModel::bandClickIgnored,
+            this, [this](Band /*band*/, const QString& reason) {
+        if (QStatusBar* sb = statusBar()) {
+            sb->showMessage(reason, 3000);
+        }
+    });
+
     // WDSP wisdom progress dialog — shown as a modal window during first-run
     // wisdom generation. Pattern from AetherSDR MainWindow::enableNr2WithWisdom().
     connect(m_radioModel->wdspEngine(), &WdspEngine::wisdomProgress,

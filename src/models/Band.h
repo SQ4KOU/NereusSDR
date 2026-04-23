@@ -65,6 +65,7 @@
 
 #pragma once
 
+#include <QMetaType>
 #include <QString>
 
 namespace NereusSDR {
@@ -137,3 +138,5 @@ int uiIndexFromBand(Band b);
 Band bandFromName(const QString& name);
 
 } // namespace NereusSDR
+
+Q_DECLARE_METATYPE(NereusSDR::Band)

@@ -323,6 +323,13 @@ signals:
     // Raw interleaved I/Q for spectrum display (tapped before WDSP processing)
     void rawIqData(const QVector<float>& interleavedIQ);
 
+    // Emitted when onBandButtonClicked short-circuits in a user-visible way
+    // (locked slice, XVTR no-seed). MainWindow connects this to the status
+    // bar so the user learns why their band click did nothing — prevents
+    // silent failure. `reason` is a one-line human-readable message.
+    // Issue #118.
+    void bandClickIgnored(NereusSDR::Band band, QString reason);
+
 private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
 

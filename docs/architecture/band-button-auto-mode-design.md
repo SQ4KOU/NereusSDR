@@ -156,8 +156,8 @@ Probes `DspMode` specifically because it is the field most directly coupled to t
 | Scenario | Behavior |
 | --- | --- |
 | `activeSlice() == nullptr` (no connection, or between-slice state) | Early return, silent. |
-| Slice is frequency-locked (3G-10 S2.9) | `setFrequency` is a no-op; mode still changes. Matches Thetis (lock is a VFO-only concept). Info log emitted once. |
-| Clicked band has no seed (XVTR) **and** no persisted state | No freq/mode change. `qCInfo(lcRadio) << "Band XVTR: no seed, no persisted state"`. |
+| Slice is frequency-locked (3G-10 S2.9) | Handler short-circuits entirely — freq AND mode frozen, no state written. Emits `bandClickIgnored(band, reason)` so MainWindow can show the user a status-bar message ("Band 20m ignored: slice is locked — unlock to change bands"). Earlier design let mode change (Thetis "lock is VFO-only"), but that corrupted the new band's persistence slot via a stale-freq write. 2026-04-23 review fix. |
+| Clicked band has no seed (XVTR) **and** no persisted state | No freq/mode change. Emits `bandClickIgnored(band, "Band XVTR ignored: transverter config not yet supported")` for status-bar feedback. Also traced at `qCDebug(lcConnection)` level. |
 | Disconnected radio | Handler still runs; local SliceModel updates. Connect path flushes to radio on next connect. |
 | Seed lands outside its own band (paranoia — bands are disjoint) | `qCWarning` and skip. Only triggers if the seed table is corrupted. |
 

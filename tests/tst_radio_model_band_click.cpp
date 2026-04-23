@@ -11,6 +11,7 @@
 // The tests drive RadioModel directly (no live radio, no WDSP) and
 // observe SliceModel state and AppSettings writes.
 
+#include <QSignalSpy>
 #include <QtTest/QtTest>
 
 #include "core/AppSettings.h"
@@ -117,7 +118,7 @@ private slots:
         QCOMPARE(slice->dspMode(),   modeBefore);
     }
 
-    void xvtr_no_seed_no_persisted_is_no_op() {
+    void xvtr_emits_ignored_and_no_change() {
         RadioModel radio;
         radio.addSlice();
         radio.setActiveSlice(0);
@@ -125,11 +126,49 @@ private slots:
         slice->setFrequency(14100000.0);   // on 20m
         slice->setDspMode(DSPMode::USB);
 
+        QSignalSpy spy(&radio, &RadioModel::bandClickIgnored);
         radio.onBandButtonClicked(Band::XVTR);
 
         // Neither freq nor mode should change.
         QCOMPARE(slice->frequency(), 14100000.0);
         QCOMPARE(slice->dspMode(),   DSPMode::USB);
+
+        // Signal fired so the user sees the transverter-config message.
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).value<Band>(), Band::XVTR);
+        const QString reason = spy.first().at(1).toString();
+        QVERIFY2(reason.contains(QStringLiteral("transverter"), Qt::CaseInsensitive),
+                 qPrintable(QStringLiteral("reason should mention transverter; got: %1").arg(reason)));
+    }
+
+    void successful_seed_does_not_emit_ignored() {
+        RadioModel radio;
+        radio.addSlice();
+        radio.setActiveSlice(0);
+        SliceModel* slice = radio.sliceAt(0);
+        slice->setFrequency(7100000.0);
+        slice->setDspMode(DSPMode::LSB);
+
+        QSignalSpy spy(&radio, &RadioModel::bandClickIgnored);
+        radio.onBandButtonClicked(Band::Band20m);
+
+        // Normal first-visit seed path — no ignored signal.
+        QCOMPARE(spy.count(), 0);
+    }
+
+    void same_band_click_does_not_emit_ignored() {
+        RadioModel radio;
+        radio.addSlice();
+        radio.setActiveSlice(0);
+        SliceModel* slice = radio.sliceAt(0);
+        slice->setFrequency(14100000.0);   // on 20m
+        slice->setDspMode(DSPMode::USB);
+
+        QSignalSpy spy(&radio, &RadioModel::bandClickIgnored);
+        radio.onBandButtonClicked(Band::Band20m);
+
+        // Same-band is silent-expected, not ignored-unexpected.
+        QCOMPARE(spy.count(), 0);
     }
 
     void null_active_slice_is_safe() {
@@ -140,7 +179,12 @@ private slots:
         QVERIFY(radio.activeSlice() == nullptr);
     }
 
-    void locked_slice_freezes_freq_but_mode_still_changes() {
+    void locked_slice_emits_ignored_and_leaves_state_intact() {
+        // Updated for #118 review: earlier design let mode change on a
+        // locked click but that corrupted the new band's persistence slot
+        // (blocked setFrequency left stale freq in memory, tail save then
+        // baked it in). Now lock short-circuits the handler entirely and
+        // emits bandClickIgnored for user-visible feedback.
         RadioModel radio;
         radio.addSlice();
         radio.setActiveSlice(0);
@@ -149,12 +193,19 @@ private slots:
         slice->setDspMode(DSPMode::LSB);
         slice->setLocked(true);
 
+        QSignalSpy spy(&radio, &RadioModel::bandClickIgnored);
         radio.onBandButtonClicked(Band::Band20m);
 
-        // Lock blocks setFrequency, so freq stays at 7.1 MHz.
-        // Mode is not locked and does move to the 20m seed (USB).
+        // Nothing moved — freq AND mode both frozen.
         QCOMPARE(slice->frequency(), 7100000.0);
-        QCOMPARE(slice->dspMode(),   DSPMode::USB);
+        QCOMPARE(slice->dspMode(),   DSPMode::LSB);
+
+        // Signal fired so UI can surface the reason.
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).value<Band>(), Band::Band20m);
+        const QString reason = spy.first().at(1).toString();
+        QVERIFY2(reason.contains(QStringLiteral("locked"), Qt::CaseInsensitive),
+                 qPrintable(QStringLiteral("reason should mention lock; got: %1").arg(reason)));
     }
 
     void save_on_exit_persists_current_band_state() {
