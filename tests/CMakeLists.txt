@@ -555,4 +555,10 @@ nereus_add_test(tst_popup_style_coverage)
 target_compile_definitions(tst_popup_style_coverage PRIVATE
     NEREUS_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 
+# ── Phase 3P-I-b T1: SkuUiProfile per-HPSDRModel UI overlay ──────────────────
+# Verifies every HPSDRModel maps to the label + flag set from Thetis
+# setup.cs:19832-20375. 8 cases: hermes, anan10, anan100, anan7000d,
+# anan8000d, anan_g2, anan_g2_1k, hermeslite.
+nereus_add_test(tst_sku_ui_profile)
+
 
