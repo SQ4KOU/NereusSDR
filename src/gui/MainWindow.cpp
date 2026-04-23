@@ -2617,11 +2617,17 @@ void MainWindow::wireSliceToSpectrum()
         // VfoWidget::openNbSetupRequested above handles the NB→Setup hop.
     }
 
-    // --- Wire overlay Band flyout to slice ---
+    // --- Wire overlay Band flyout to RadioModel band-click handler (#118) ---
+    // The signal still carries legacy (name, freqHz, mode) args for
+    // backwards-compat with SpectrumOverlayPanel's kBands table, but the
+    // handler now owns seed/restore policy — only the name is consulted.
+    // Previously this lambda called setFrequency and silently discarded
+    // the mode arg, which was the #118 reproducer (80m click moved VFO
+    // but left mode stale).
     if (m_overlayPanel) {
         connect(m_overlayPanel, &SpectrumOverlayPanel::bandSelected,
-                this, [slice](const QString& /*name*/, double freqHz, const QString& /*mode*/) {
-            slice->setFrequency(freqHz);
+                this, [this](const QString& name, double /*freqHz*/, const QString& /*mode*/) {
+            m_radioModel->onBandButtonClicked(bandFromName(name));
         });
     }
 }
