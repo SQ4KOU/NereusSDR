@@ -786,7 +786,8 @@ private:
     double m_nr4PostThresh = -10.0;    // setup.cs default
     NereusSDR::SbnrAlgo m_nr4Algo = NereusSDR::SbnrAlgo::Algo2;  // setup.cs:34511-34527
 
-    // DFNR — AetherSDR DeepFilterFilter defaults (post-WDSP, not in Thetis).
+    // DFNR — AetherSDR DeepFilterFilter defaults [@0cd4559] (post-WDSP, not
+    // in Thetis). m_attenLimit{100.0f}, m_postFilterBeta{0.0f} verbatim.
     double m_dfnrAttenLimit     = 100.0;
     double m_dfnrPostFilterBeta = 0.0;
 

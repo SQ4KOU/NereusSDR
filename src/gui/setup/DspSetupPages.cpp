@@ -318,6 +318,7 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
     // Embed QTabWidget directly in the inherited contentLayout().
     // This is identical to HardwarePage's pattern (HardwarePage.cpp:90-95).
     auto* tabs = new QTabWidget(this);
+    m_tabs = tabs;  // remember for selectSubtab()
     tabs->setTabPosition(QTabWidget::North);
     tabs->setStyleSheet(
         "QTabWidget::pane { border: 1px solid #304050; background: #0f0f1a; }"
@@ -1788,6 +1789,37 @@ MnfSetupPage::MnfSetupPage(RadioModel* model, QWidget* parent)
     addLabeledLabel(mnfLay, "Notch List", notchList);
 
     disableGroup(mnfGrp);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// NrAnfSetupPage::selectSubtab
+// ══════════════════════════════════════════════════════════════════════════════
+// Used by MainWindow's openNrSetupRequested handler to deep-link the "More
+// Settings…" popup button into the correct sub-tab. Tab order mirrors the
+// constructor's addTab calls.
+//
+void NrAnfSetupPage::selectSubtab(NrSlot slot)
+{
+    if (!m_tabs) { return; }
+    // Map NrSlot → QTabWidget tab label. Must match the labels passed to
+    // makeTab(tabs, <name>) in the ctor.
+    QString target;
+    switch (slot) {
+        case NrSlot::NR1:  target = QStringLiteral("NR1");  break;
+        case NrSlot::NR2:  target = QStringLiteral("NR2");  break;
+        case NrSlot::NR3:  target = QStringLiteral("NR3");  break;
+        case NrSlot::NR4:  target = QStringLiteral("NR4");  break;
+        case NrSlot::DFNR: target = QStringLiteral("DFNR"); break;
+        case NrSlot::MNR:  target = QStringLiteral("MNR");  break;
+        case NrSlot::BNR:
+        case NrSlot::Off:  return;  // no dedicated sub-tab
+    }
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        if (m_tabs->tabText(i) == target) {
+            m_tabs->setCurrentIndex(i);
+            return;
+        }
+    }
 }
 
 } // namespace NereusSDR

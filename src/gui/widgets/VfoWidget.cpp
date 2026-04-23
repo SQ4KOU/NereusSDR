@@ -2585,19 +2585,29 @@ void VfoWidget::showDfnrPopup(const QPoint& globalPos)
     if (!m_slice) { return; }
     auto* p = new DspParamPopup(this);
 
-    // DFNR (DeepFilter NR) — AetherSDR post-WDSP filter, not in Thetis.
-    // Ranges from AetherSDR MainWindow.cpp:7980-8080 [@0cd4559].
-    // Labels are NereusSDR-native (no Thetis equivalent).
+    // DFNR (DeepFilterNet3) — AetherSDR post-WDSP filter, not in Thetis.
+    // Factory defaults per user directive 2026-04-23: AttenLimit 100 dB,
+    // Post-Filter Beta 0.05 (UI 5).
     const int attenLimit = static_cast<int>(m_slice->dfnrAttenLimit());
     p->addSlider(QStringLiteral("Attenuation Limit"), 0, 100, attenLimit,
                  [](int v) { return QString::number(v) + QStringLiteral(" dB"); },
-                 [this](int v) { if (m_slice) m_slice->setDfnrAttenLimit(static_cast<double>(v)); });
-    // PostFilterBeta range 0-100 slider displayed as /100 → 0.00-1.00.
+                 [this](int v) { if (m_slice) m_slice->setDfnrAttenLimit(static_cast<double>(v)); },
+                 tr("Maximum noise attenuation in dB (0 = bypass, 100 = maximum). "
+                    "Default 100. Higher values suppress more noise but may clip speech peaks."),
+                 /*factory=*/100);
+
     const int beta = static_cast<int>(m_slice->dfnrPostFilterBeta() * 100.0);
     p->addSlider(QStringLiteral("Post-Filter Beta"), 0, 100, beta,
                  [](int v) { return QString::number(v / 100.0, 'f', 2); },
-                 [this](int v) { if (m_slice) m_slice->setDfnrPostFilterBeta(v / 100.0); });
-    p->finalize([this]() { emit openNrSetupRequested(NereusSDR::NrSlot::DFNR); }, nullptr);
+                 [this](int v) { if (m_slice) m_slice->setDfnrPostFilterBeta(v / 100.0); },
+                 tr("Post-filter aggressiveness (0 = disabled, 0.30+ = aggressive). "
+                    "Default 0 (off) — matches AetherSDR. Higher values reduce "
+                    "residual musical-noise artifacts but may over-attenuate "
+                    "consonants. Typical tuning: start at 0.05-0.10 and nudge up."),
+                 /*factory=*/0);
+
+    p->finalize([this]() { emit openNrSetupRequested(NereusSDR::NrSlot::DFNR); },
+                /*onReset=*/[]() { /* per-slider resetters push via valueChanged */ });
     p->showAt(globalPos);
 }
 

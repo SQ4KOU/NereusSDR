@@ -285,6 +285,7 @@ warren@wpratt.com
 #include "applets/TunerApplet.h"
 #include "SpectrumOverlayPanel.h"
 #include "SetupDialog.h"
+#include "setup/DspSetupPages.h"   // NrAnfSetupPage::selectSubtab
 #include "TitleBar.h"
 #include "VaxFirstRunDialog.h"
 #include "widgets/MasterOutputWidget.h"
@@ -2432,10 +2433,15 @@ void MainWindow::wireSliceToSpectrum()
     // Mirrors Thetis chkNR_MouseDown (console.cs [v2.10.3.13]) which calls
     // ShowSetupTab(NR_Tab). Sub-tab selection per NrSlot is deferred to Task 17.
     connect(vfo, &VfoWidget::openNrSetupRequested, this,
-            [this](NereusSDR::NrSlot /*slot*/) {
+            [this](NereusSDR::NrSlot slot) {
         auto* dialog = new SetupDialog(m_radioModel, this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
         dialog->selectPage(QStringLiteral("NR/ANF"));
+        // Deep-link to the sub-tab matching the NR slot the user clicked
+        // (Task 18 polish 2026-04-23 — previously always opened NR1).
+        if (auto* nrPage = dialog->findChild<NrAnfSetupPage*>()) {
+            nrPage->selectSubtab(slot);
+        }
         dialog->show();
     });
 
