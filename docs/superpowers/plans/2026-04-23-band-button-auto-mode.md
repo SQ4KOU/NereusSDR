@@ -203,8 +203,6 @@ SpectrumOverlayPanel::bandSelected and label form ("160m", "80m")
 matching bandKeyName() output. Falls back to Band::GEN for unknowns.
 Prereq for routing both band-button entry points through a single
 RadioModel handler.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -350,8 +348,6 @@ Returns true iff Slice<N>/Band<key>/DspMode is present in AppSettings.
 Used by the upcoming RadioModel::onBandButtonClicked handler to decide
 between seeding and restoring on a band click. Probe is per-slice so a
 band visited on slice 0 does not mask first-visit seeding on slice 1.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -675,8 +671,6 @@ feat(models): add BandDefaults seed table (#118)
 30m=CWU (voice prohibited), 60m=USB (channelized), all other ham bands
 LSB below 10 MHz / USB above. WWV + GEN use SAM per Thetis. XVTR marked
 invalid; handler will no-op until transverter config ships.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -1009,8 +1003,6 @@ change before mode-dependent bandwidth is applied.
 Does not interact with the v0.2.0 band-crossing recursion guard —
 restore is reserved for the explicit band-button press path per
 RadioModel.cpp:1084-1095 commentary, which is exactly this path.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -1112,8 +1104,6 @@ owns seed/restore policy and always sets mode alongside frequency.
 Signal signature stays the same; the legacy freqHz/mode args are
 ignored (handler derives the correct values from BandDefaults or
 per-band persistence).
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -1226,8 +1216,6 @@ Both the containerAdded signal (runtime adds) and a post-restoreState
 sweep (default + persisted containers) now connect each container's
 bandClicked to RadioModel::onBandButtonClicked via bandFromUiIndex.
 Shares one helper lambda so there's no drift between the two code paths.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -1309,12 +1297,14 @@ If any of the above fails, STOP and diagnose before claiming the task complete.
 
 Assuming the branch was opened for this work, push and open a PR referencing #118. Example:
 
-```bash
-git push -u origin claude/suspicious-davinci-a2609e
-gh pr create --title "fix: band button auto-mode (#118)" --body "$(cat <<'EOF'
+**Draft the PR body in chat first** and wait for explicit "post it" before running `gh pr create` (user standing rule `feedback_no_public_posts_without_review`). When posting, use the signature below — no Claude line, no "73 de" preamble (user standing rule `feedback_public_post_signature`).
+
+Suggested body:
+
+```
 ## Summary
 - Wires the two band-button entry points (`SpectrumOverlayPanel::bandSelected` and `ContainerWidget::bandClicked`) through one handler, `RadioModel::onBandButtonClicked(Band)`.
-- First click on a band applies a Thetis Region 2 seed (LSB/USB/CWU/SAM per [BandDefaults.cpp](../blob/HEAD/src/models/BandDefaults.cpp) with inline `clsBandStackManager.cs:2099-2176 [v2.10.3.13]` cites).
+- First click on a band applies a Thetis Region 2 seed (LSB/USB/CWU/SAM per `src/models/BandDefaults.cpp` with inline `clsBandStackManager.cs:2099-2176 [v2.10.3.13]` cites).
 - Subsequent clicks restore last-used state via the existing Phase 3G-10 Stage 2 per-band persistence.
 - Same-band click is a no-op; XVTR with no seed + no persisted state is a logged no-op; locked slices freeze freq but still change mode.
 
@@ -1330,12 +1320,15 @@ Closes #118.
 - [ ] Tune 20m to 14.074 DIGU; switch bands; return to 20m → restores 14.074 DIGU (not the seed)
 - [ ] Click 20m while already on 20m → no-op
 
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-EOF
-)"
+J.J. Boyd ~ KG4VCF
 ```
 
-> Per user standing rule `feedback_no_public_posts_without_review`: draft the PR body in chat first, wait for explicit "post it" before running `gh pr create`. The block above is the draft — do NOT execute until the user approves.
+Push + create command shell after approval:
+
+```bash
+git push -u origin claude/suspicious-davinci-a2609e
+# Then gh pr create with the approved body via HEREDOC.
+```
 
 ---
 
