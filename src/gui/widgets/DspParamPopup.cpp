@@ -143,7 +143,7 @@ void DspParamPopup::finalize(std::function<void()> onMore, std::function<void()>
 
     auto* btnRow = new QHBoxLayout;
 
-    auto* moreBtn = new QPushButton("AetherDSP Settings...");
+    auto* moreBtn = new QPushButton("More Settings...");
     connect(moreBtn, &QPushButton::clicked, this, [this, onMore]() {
         if (onMore) onMore();
         close();

@@ -31,7 +31,7 @@ class QCheckBox;
 namespace NereusSDR {
 
 // DspParamPopup — floating right-click popup for quick NR parameter access.
-// Shows essential controls with an "AetherDSP Settings..." link to the full dialog.
+// Shows essential controls with a "More Settings..." link to the full dialog.
 // Auto-dismisses on click outside (like the band/ant/dsp sub-panels).
 class DspParamPopup : public QWidget {
     Q_OBJECT
@@ -47,7 +47,7 @@ public:
     void addCheckbox(const QString& label, bool defaultVal,
                      std::function<void(bool)> onChange);
 
-    // Finalize layout (adds AetherDSP Settings + Reset buttons)
+    // Finalize layout (adds More Settings + Reset buttons)
     void finalize(std::function<void()> onMore, std::function<void()> onReset);
 
     // Show anchored to a button position

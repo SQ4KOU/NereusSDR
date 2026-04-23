@@ -2452,8 +2452,8 @@ void VfoWidget::showNr2Popup(const QPoint& globalPos)
     auto* p = new DspParamPopup(this);
 
     // NR2 (EMNR — Enhanced Multiband Noise Reduction).
-    // From Thetis setup.cs udEMNRGainMethod/NpeMethod radio groups [v2.10.3.13]
-    // and AetherSDR MainWindow.cpp:8100-8200 [@0cd4559].
+    // From Thetis setup.designer.cs grpDSPGainMethod / grpDSPNR2NPEMethod /
+    // chkDSPNR2AE / chkNR2PostProc_enable_rx1 labels [v2.10.3.13].
     p->addRadioGroup(QStringLiteral("Gain Method"),
                      {QStringLiteral("Linear"), QStringLiteral("Log"),
                       QStringLiteral("Gamma"), QStringLiteral("Trained")},
@@ -2461,17 +2461,26 @@ void VfoWidget::showNr2Popup(const QPoint& globalPos)
                      [this](int v) {
                          if (m_slice) m_slice->setNr2GainMethod(static_cast<NereusSDR::EmnrGainMethod>(v));
                      });
+    // From Thetis setup.designer.cs grpDSPNR2NPEMethod / radDSPNR2OSMS/MMSE/NSTAT [v2.10.3.13].
+    p->addRadioGroup(QStringLiteral("NPE Method"),
+                     {QStringLiteral("OSMS"), QStringLiteral("MMSE"), QStringLiteral("NSTAT")},
+                     static_cast<int>(m_slice->nr2NpeMethod()),
+                     [this](int v) {
+                         if (m_slice) m_slice->setNr2NpeMethod(static_cast<NereusSDR::EmnrNpeMethod>(v));
+                     });
+    // From Thetis setup.designer.cs chkDSPNR2AE.Text = "AE Filter" [v2.10.3.13].
     p->addCheckbox(QStringLiteral("AE Filter"), m_slice->nr2AeFilter(),
                    [this](bool v) { if (m_slice) m_slice->setNr2AeFilter(v); });
-    p->addCheckbox(QStringLiteral("Post2 Run"), m_slice->nr2Post2Run(),
+    // From Thetis setup.designer.cs chkNR2PostProc_enable_rx1.Text = "Noise post proc" [v2.10.3.13].
+    p->addCheckbox(QStringLiteral("Noise post proc"), m_slice->nr2Post2Run(),
                    [this](bool v) { if (m_slice) m_slice->setNr2Post2Run(v); });
-    // Post2 Factor/Rate — only meaningful when Post2 Run is on.
+    // From Thetis setup.designer.cs labelTS476.Text = "Factor:" / labelTS475.Text = "Rate:" [v2.10.3.13].
     const int post2Factor = static_cast<int>(m_slice->nr2Post2Factor());
-    p->addSlider(QStringLiteral("Post2 Factor"), 0, 30, post2Factor,
+    p->addSlider(QStringLiteral("Factor"), 0, 30, post2Factor,
                  [](int v) { return QString::number(v); },
                  [this](int v) { if (m_slice) m_slice->setNr2Post2Factor(static_cast<double>(v)); });
     const int post2Rate = static_cast<int>(m_slice->nr2Post2Rate());
-    p->addSlider(QStringLiteral("Post2 Rate"), 0, 30, post2Rate,
+    p->addSlider(QStringLiteral("Rate"), 0, 30, post2Rate,
                  [](int v) { return QString::number(v); },
                  [this](int v) { if (m_slice) m_slice->setNr2Post2Rate(static_cast<double>(v)); });
     p->finalize([this]() { emit openNrSetupRequested(NereusSDR::NrSlot::NR2); }, nullptr);
@@ -2492,7 +2501,9 @@ void VfoWidget::showNr3Popup(const QPoint& globalPos)
                      [this](int v) {
                          if (m_slice) m_slice->setNr3Position(static_cast<NereusSDR::NrPosition>(v));
                      });
-    p->addCheckbox(QStringLiteral("Use Default Gain"), m_slice->nr3UseDefaultGain(),
+    // From Thetis setup.designer.cs chkNR3_RNNoiseFixedGain.Text =
+    // "Use fixed gain for input samples" [v2.10.3.13].
+    p->addCheckbox(QStringLiteral("Use fixed gain for input samples"), m_slice->nr3UseDefaultGain(),
                    [this](bool v) { if (m_slice) m_slice->setNr3UseDefaultGain(v); });
     // "Load Model…" opens Setup NR3 page where file dialog lives (Task 17).
     p->finalize([this]() { emit openNrSetupRequested(NereusSDR::NrSlot::NR3); }, nullptr);
@@ -2505,18 +2516,31 @@ void VfoWidget::showNr4Popup(const QPoint& globalPos)
     auto* p = new DspParamPopup(this);
 
     // NR4 (SBNR — Spectral Baseline NR).
-    // From Thetis setup.cs udSBNRReduction/Smoothing ranges [v2.10.3.13]
-    // and AetherSDR MainWindow.cpp:8260-8324 [@0cd4559].
+    // From Thetis setup.designer.cs labelTS446/473 "Reduction", labelTS449/471 "Smoothing",
+    // labelTS451/468 "Whitening", labelTS453/466 "Rescale", labelTS455/459 "SNRthresh",
+    // radNR4_algo1/2/3 "Algo 1/2/3" [v2.10.3.13].
     const int reduction = static_cast<int>(m_slice->nr4Reduction());
     p->addSlider(QStringLiteral("Reduction"), 0, 20, reduction,
                  [](int v) { return QString::number(v) + QStringLiteral(" dB"); },
                  [this](int v) { if (m_slice) m_slice->setNr4Reduction(static_cast<double>(v)); });
     const int smoothing = static_cast<int>(m_slice->nr4Smoothing());
     p->addSlider(QStringLiteral("Smoothing"), 0, 100, smoothing,
-                 [](int v) { return QString::number(v); },
+                 [](int v) { return QString::number(v) + QStringLiteral("%"); },
                  [this](int v) { if (m_slice) m_slice->setNr4Smoothing(static_cast<double>(v)); });
-    p->addRadioGroup(QStringLiteral("Algorithm"),
-                     {QStringLiteral("Algo1"), QStringLiteral("Algo2"), QStringLiteral("Algo3")},
+    const int whitening = static_cast<int>(m_slice->nr4Whitening());
+    p->addSlider(QStringLiteral("Whitening"), 0, 100, whitening,
+                 [](int v) { return QString::number(v) + QStringLiteral("%"); },
+                 [this](int v) { if (m_slice) m_slice->setNr4Whitening(static_cast<double>(v)); });
+    const int rescale = static_cast<int>(m_slice->nr4Rescale());
+    p->addSlider(QStringLiteral("Rescale"), 0, 20, rescale,
+                 [](int v) { return QString::number(v) + QStringLiteral(" dB"); },
+                 [this](int v) { if (m_slice) m_slice->setNr4Rescale(static_cast<double>(v)); });
+    const int snrThresh = static_cast<int>(m_slice->nr4PostThresh());
+    p->addSlider(QStringLiteral("SNRthresh"), -30, 0, snrThresh,
+                 [](int v) { return QString::number(v) + QStringLiteral(" dB"); },
+                 [this](int v) { if (m_slice) m_slice->setNr4PostThresh(static_cast<double>(v)); });
+    p->addRadioGroup(QStringLiteral("Algo"),
+                     {QStringLiteral("Algo 1"), QStringLiteral("Algo 2"), QStringLiteral("Algo 3")},
                      static_cast<int>(m_slice->nr4Algo()),
                      [this](int v) {
                          if (m_slice) m_slice->setNr4Algo(static_cast<NereusSDR::SbnrAlgo>(v));
@@ -2532,13 +2556,14 @@ void VfoWidget::showDfnrPopup(const QPoint& globalPos)
 
     // DFNR (DeepFilter NR) — AetherSDR post-WDSP filter, not in Thetis.
     // Ranges from AetherSDR MainWindow.cpp:7980-8080 [@0cd4559].
+    // Labels are NereusSDR-native (no Thetis equivalent).
     const int attenLimit = static_cast<int>(m_slice->dfnrAttenLimit());
-    p->addSlider(QStringLiteral("Atten Limit"), 0, 100, attenLimit,
+    p->addSlider(QStringLiteral("Attenuation Limit"), 0, 100, attenLimit,
                  [](int v) { return QString::number(v) + QStringLiteral(" dB"); },
                  [this](int v) { if (m_slice) m_slice->setDfnrAttenLimit(static_cast<double>(v)); });
     // PostFilterBeta range 0-100 slider displayed as /100 → 0.00-1.00.
     const int beta = static_cast<int>(m_slice->dfnrPostFilterBeta() * 100.0);
-    p->addSlider(QStringLiteral("Post Beta"), 0, 100, beta,
+    p->addSlider(QStringLiteral("Post-Filter Beta"), 0, 100, beta,
                  [](int v) { return QString::number(v / 100.0, 'f', 2); },
                  [this](int v) { if (m_slice) m_slice->setDfnrPostFilterBeta(v / 100.0); });
     p->finalize([this]() { emit openNrSetupRequested(NereusSDR::NrSlot::DFNR); }, nullptr);
