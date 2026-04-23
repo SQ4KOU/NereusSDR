@@ -381,6 +381,7 @@ set(MODEL_SOURCES
     src/models/RadioModel.cpp
     src/models/RxDspWorker.cpp
     src/models/Band.cpp
+    src/models/BandDefaults.cpp
     src/models/SliceModel.cpp
     src/models/PanadapterModel.cpp
     src/models/MeterModel.cpp

@@ -164,4 +164,40 @@ int uiIndexFromBand(Band b)
     return static_cast<int>(b);
 }
 
+Band bandFromName(const QString& name)
+{
+    // Short-name form (as emitted by SpectrumOverlayPanel::kBands).
+    if (name == QLatin1String("160")) { return Band::Band160m; }
+    if (name == QLatin1String("80"))  { return Band::Band80m; }
+    if (name == QLatin1String("60"))  { return Band::Band60m; }
+    if (name == QLatin1String("40"))  { return Band::Band40m; }
+    if (name == QLatin1String("30"))  { return Band::Band30m; }
+    if (name == QLatin1String("20"))  { return Band::Band20m; }
+    if (name == QLatin1String("17"))  { return Band::Band17m; }
+    if (name == QLatin1String("15"))  { return Band::Band15m; }
+    if (name == QLatin1String("12"))  { return Band::Band12m; }
+    if (name == QLatin1String("10"))  { return Band::Band10m; }
+    if (name == QLatin1String("6"))   { return Band::Band6m; }
+
+    // Label form (matches bandKeyName() output).
+    if (name == QLatin1String("160m")) { return Band::Band160m; }
+    if (name == QLatin1String("80m"))  { return Band::Band80m; }
+    if (name == QLatin1String("60m"))  { return Band::Band60m; }
+    if (name == QLatin1String("40m"))  { return Band::Band40m; }
+    if (name == QLatin1String("30m"))  { return Band::Band30m; }
+    if (name == QLatin1String("20m"))  { return Band::Band20m; }
+    if (name == QLatin1String("17m"))  { return Band::Band17m; }
+    if (name == QLatin1String("15m"))  { return Band::Band15m; }
+    if (name == QLatin1String("12m"))  { return Band::Band12m; }
+    if (name == QLatin1String("10m"))  { return Band::Band10m; }
+    if (name == QLatin1String("6m"))   { return Band::Band6m; }
+
+    // Special bands.
+    if (name == QLatin1String("GEN"))  { return Band::GEN; }
+    if (name == QLatin1String("WWV"))  { return Band::WWV; }
+    if (name == QLatin1String("XVTR")) { return Band::XVTR; }
+
+    return Band::GEN;
+}
+
 } // namespace NereusSDR

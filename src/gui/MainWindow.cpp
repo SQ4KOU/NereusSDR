@@ -404,6 +404,16 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_radioModel, &RadioModel::connectionStateChanged,
             this, &MainWindow::onConnectionStateChanged);
 
+    // Issue #118 — show a transient status-bar message when a band-button
+    // click short-circuits (locked slice, XVTR without transverter config).
+    // Prevents silent failure — the user sees why nothing happened.
+    connect(m_radioModel, &RadioModel::bandClickIgnored,
+            this, [this](Band /*band*/, const QString& reason) {
+        if (QStatusBar* sb = statusBar()) {
+            sb->showMessage(reason, 3000);
+        }
+    });
+
     // WDSP wisdom progress dialog — shown as a modal window during first-run
     // wisdom generation. Pattern from AetherSDR MainWindow::enableNr2WithWisdom().
     connect(m_radioModel->wdspEngine(), &WdspEngine::wisdomProgress,
@@ -582,10 +592,23 @@ void MainWindow::buildUI()
     };
     connect(m_radioModel, &RadioModel::currentRadioChanged, this,
             pushCapsToAllContainers);
+
+    // Issue #118 — helper: wire a container's bandClicked signal through
+    // the RadioModel handler. Invoked from the containerAdded callback,
+    // which fires for every container materialized by ContainerManager
+    // (runtime-added, restoreState(), and createDefaultContainers()).
+    auto wireContainerBandClick = [this](ContainerWidget* c) {
+        if (!c) { return; }
+        connect(c, &ContainerWidget::bandClicked, this, [this](int idx) {
+            m_radioModel->onBandButtonClicked(bandFromUiIndex(idx));
+        });
+    };
+
     connect(m_containerManager, &ContainerManager::containerAdded, this,
-            [this](const QString& id) {
+            [this, wireContainerBandClick](const QString& id) {
         if (auto* c = m_containerManager->container(id)) {
             c->setBoardCapabilities(m_radioModel->boardCapabilities());
+            wireContainerBandClick(c);
         }
     });
 
@@ -2628,11 +2651,17 @@ void MainWindow::wireSliceToSpectrum()
         // VfoWidget::openNbSetupRequested above handles the NB→Setup hop.
     }
 
-    // --- Wire overlay Band flyout to slice ---
+    // --- Wire overlay Band flyout to RadioModel band-click handler (#118) ---
+    // The signal still carries legacy (name, freqHz, mode) args for
+    // backwards-compat with SpectrumOverlayPanel's kBands table, but the
+    // handler now owns seed/restore policy — only the name is consulted.
+    // Previously this lambda called setFrequency and silently discarded
+    // the mode arg, which was the #118 reproducer (80m click moved VFO
+    // but left mode stale).
     if (m_overlayPanel) {
         connect(m_overlayPanel, &SpectrumOverlayPanel::bandSelected,
-                this, [slice](const QString& /*name*/, double freqHz, const QString& /*mode*/) {
-            slice->setFrequency(freqHz);
+                this, [this](const QString& name, double /*freqHz*/, const QString& /*mode*/) {
+            m_radioModel->onBandButtonClicked(bandFromName(name));
         });
     }
 }

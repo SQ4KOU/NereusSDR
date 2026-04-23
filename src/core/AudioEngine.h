@@ -219,6 +219,15 @@ public:
     float vaxRxLevel(int channel) const;
     float vaxTxLevel() const;
 
+    // True when the VAX slot's IAudioBus has been minted AND its open() call
+    // succeeded. False when the slot is empty (pre-start, user-disabled via
+    // setVaxEnabled(false)) OR when makeVaxBus() / makeBus() failed to open
+    // the underlying device (CoreAudio HAL not loaded, shm mmap failed,
+    // PortAudio cable unplugged mid-session, etc.).  Drives the Setup →
+    // Audio → VAX card banner so users see an amber "unavailable" state
+    // rather than a false-positive green "bound" when the route is broken.
+    bool isVaxBusOpen(int channel) const;
+
 signals:
     void volumeChanged(float volume);
     void masterMutedChanged(bool muted);

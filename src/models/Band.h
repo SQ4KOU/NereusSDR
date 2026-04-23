@@ -65,6 +65,7 @@
 
 #pragma once
 
+#include <QMetaType>
 #include <QString>
 
 namespace NereusSDR {
@@ -126,4 +127,16 @@ Band bandFromUiIndex(int idx);
 /// Inverse of bandFromUiIndex.
 int uiIndexFromBand(Band b);
 
+/// Maps a string band name to the corresponding Band enum. Accepts both
+/// short-name form ("160", "80", "WWV") used by SpectrumOverlayPanel and
+/// label form ("160m", "80m") used by bandKeyName(). Returns Band::GEN
+/// for unknown strings. Case-sensitive for special names ("GEN", "WWV",
+/// "XVTR" — uppercase).
+///
+/// Added for issue #118 to route SpectrumOverlayPanel::bandSelected and
+/// ContainerWidget::bandClicked through a single RadioModel handler.
+Band bandFromName(const QString& name);
+
 } // namespace NereusSDR
+
+Q_DECLARE_METATYPE(NereusSDR::Band)
