@@ -14,13 +14,14 @@ private slots:
         AppSettings::instance().clear();
     }
 
-    // Default: every band's TX/RX antenna defaults to port 1
+    // Default: every band's TX/RX antenna defaults to port 1;
+    // rxOnlyAnt defaults to 0 ("none selected") per Thetis Alex.cs:52 [v2.10.3.13 @501e3f5]
     void default_all_antennas_port1() {
         AlexController a;
         for (int b = int(Band::Band160m); b <= int(Band::XVTR); ++b) {
             QCOMPARE(a.txAnt(Band(b)),     1);
             QCOMPARE(a.rxAnt(Band(b)),     1);
-            QCOMPARE(a.rxOnlyAnt(Band(b)), 1);
+            QCOMPARE(a.rxOnlyAnt(Band(b)), 0);
         }
     }
 
@@ -176,6 +177,96 @@ private slots:
         QCOMPARE(spy.count(), 0);              // no antennaChanged on disable
         a.setTxAnt(Band::Band20m, 2);         // now succeeds
         QCOMPARE(a.txAnt(Band::Band20m), 2);
+    }
+
+    // ── Phase 3P-I-b flag extension ──────────────────────────────────────────
+
+    void rxOutOnTx_mutualExclusion() {
+        AlexController a;
+        a.setExt1OutOnTx(true);
+        QVERIFY(a.ext1OutOnTx());
+        QVERIFY(!a.rxOutOnTx());
+
+        QSignalSpy rxSpy(&a, &AlexController::rxOutOnTxChanged);
+        QSignalSpy ext1Spy(&a, &AlexController::ext1OutOnTxChanged);
+        a.setRxOutOnTx(true);
+        QVERIFY(a.rxOutOnTx());
+        QVERIFY(!a.ext1OutOnTx());  // mutual-clear
+        QCOMPARE(rxSpy.count(), 1);
+        QCOMPARE(ext1Spy.count(), 1);  // fired false when cleared
+    }
+
+    void ext1_mutualExclusion_clears_ext2() {
+        AlexController a;
+        a.setExt2OutOnTx(true);
+        QVERIFY(a.ext2OutOnTx());
+        QSignalSpy ext2Spy(&a, &AlexController::ext2OutOnTxChanged);
+        a.setExt1OutOnTx(true);
+        QVERIFY(a.ext1OutOnTx());
+        QVERIFY(!a.ext2OutOnTx());
+        QCOMPARE(ext2Spy.count(), 1);
+    }
+
+    void flags_persist_across_reload() {
+        const QString mac = QStringLiteral("aabbccddeeff");
+        {
+            AlexController a;
+            a.setMacAddress(mac);
+            a.setExt1OutOnTx(true);
+            a.setRxOutOverride(true);
+            a.setUseTxAntForRx(true);
+            a.save();
+        }
+        AlexController b;
+        b.setMacAddress(mac);
+        b.load();
+        QVERIFY(b.ext1OutOnTx());
+        QVERIFY(b.rxOutOverride());
+        QVERIFY(b.useTxAntForRx());
+        QVERIFY(!b.rxOutOnTx());
+    }
+
+    void xvtrActive_session_scoped_no_persist() {
+        const QString mac = QStringLiteral("ddeeff001122");
+        {
+            AlexController a;
+            a.setMacAddress(mac);
+            QSignalSpy spy(&a, &AlexController::xvtrActiveChanged);
+            a.setXvtrActive(true);
+            QCOMPARE(spy.count(), 1);
+            a.save();
+        }
+        AlexController b;
+        b.setMacAddress(mac);
+        b.load();
+        QVERIFY(!b.xvtrActive());  // session-scoped; not persisted
+    }
+
+    void rxOnlyAntChanged_fine_signal() {
+        AlexController a;
+        QSignalSpy fineSpy(&a, &AlexController::rxOnlyAntChanged);
+        QSignalSpy coarseSpy(&a, &AlexController::antennaChanged);
+        a.setRxOnlyAnt(Band::Band20m, 2);
+        QCOMPARE(fineSpy.count(), 1);
+        QCOMPARE(coarseSpy.count(), 1);
+        QCOMPARE(fineSpy.at(0).at(0).value<Band>(), Band::Band20m);
+    }
+
+    void rxOnlyAnt_allows_zero() {
+        // Phase 3P-I-b fix: Thetis Alex.cs:58 uses 0 for "none selected".
+        // Prior 3P-I-a implementation clamped 0 → 1, breaking composition.
+        AlexController a;
+        QCOMPARE(a.rxOnlyAnt(Band::Band20m), 0);  // default now 0
+        a.setRxOnlyAnt(Band::Band20m, 2);
+        QCOMPARE(a.rxOnlyAnt(Band::Band20m), 2);
+        a.setRxOnlyAnt(Band::Band20m, 0);
+        QCOMPARE(a.rxOnlyAnt(Band::Band20m), 0);  // round-trip through 0
+    }
+
+    void rxOnlyAnt_clamps_high() {
+        AlexController a;
+        a.setRxOnlyAnt(Band::Band20m, 5);
+        QCOMPARE(a.rxOnlyAnt(Band::Band20m), 3);  // high clamp unchanged
     }
 
     // Per-MAC persistence round-trip

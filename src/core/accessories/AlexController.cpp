@@ -50,14 +50,15 @@
 
 namespace NereusSDR {
 
-// Source: HPSDR/Alex.cs:Alex() ctor — "for(int i=0;i<12;i++) { TxAnt[i]=1; RxAnt[i]=1; RxOnlyAnt[i]=0; }" [@501e3f5]
-// NereusSDR: default RxOnlyAnt to 1 (not 0) so every slot has a valid ant; "none selected" (0)
-// is Thetis's initial value but the UI presents 1-3. Bands GEN/WWV/XVTR add 2 extra slots.
+// Source: HPSDR/Alex.cs:Alex() ctor — "for(int i=0;i<12;i++) { TxAnt[i]=1; RxAnt[i]=1; RxOnlyAnt[i]=0; }" [v2.10.3.13 @501e3f5]
+// NereusSDR: Tx/RxAnt default to 1 (the standard ant port); RxOnlyAnt defaults
+// to 0 per Thetis ("none selected") so the RX-only bypass relay stays off
+// until the user picks a port. Bands GEN/WWV/XVTR add 2 extra slots.
 AlexController::AlexController(QObject* parent) : QObject(parent)
 {
     m_txAnt.fill(1);
     m_rxAnt.fill(1);
-    m_rxOnlyAnt.fill(1);  // 1 = rx1, 2 = rx2, 3 = xv, 0 = none selected [Alex.cs:58]
+    m_rxOnlyAnt.fill(0);  // 0 = none selected — matches Thetis Alex.cs:59 [v2.10.3.13 @501e3f5]
 }
 
 // Source: HPSDR/Alex.cs:setTxAnt / TxAnt[] accessor [@501e3f5]
@@ -112,14 +113,16 @@ void AlexController::setRxAnt(Band band, int ant)
 // Source: HPSDR/Alex.cs:setRxOnlyAnt(Band band, byte ant) [@501e3f5]
 // Original: "if(ant>3){//ant=0;} idx=(int)band-(int)Band.B160M; RxOnlyAnt[idx]=ant;"
 // 1 = rx1, 2 = rx2, 3 = xv, 0 = none selected  [Alex.cs:58]
+// Uses clampRxOnlyAnt (allows 0) instead of clampAnt — fix for 3P-I-b T3.3.
 void AlexController::setRxOnlyAnt(Band band, int ant)
 {
     const int b = int(band);
     if (b < 0 || b >= kBandCount) { return; }
-    const int newAnt = clampAnt(ant);
+    const int newAnt = clampRxOnlyAnt(ant);
     if (m_rxOnlyAnt[b] == newAnt) { return; }
     m_rxOnlyAnt[b] = newAnt;
     emit antennaChanged(band);
+    emit rxOnlyAntChanged(band);
 }
 
 bool AlexController::blockTxAnt2() const { return m_blockTxAnt2; }
@@ -180,6 +183,76 @@ void AlexController::setAntennasTo1(bool force)
     }
 }
 
+// ── TX-bypass routing flags ─────────────────────────────────────────────────
+// Source: Thetis HPSDR/Alex.cs:61-66 + setup.cs:15420-16505 [v2.10.3.13 @501e3f5]
+
+bool AlexController::rxOutOnTx() const       { return m_rxOutOnTx; }
+bool AlexController::ext1OutOnTx() const     { return m_ext1OutOnTx; }
+bool AlexController::ext2OutOnTx() const     { return m_ext2OutOnTx; }
+bool AlexController::rxOutOverride() const   { return m_rxOutOverride; }
+bool AlexController::useTxAntForRx() const   { return m_useTxAntForRx; }
+bool AlexController::xvtrActive() const      { return m_xvtrActive; }
+
+void AlexController::setRxOutOnTx(bool on)
+{
+    if (m_rxOutOnTx == on) { return; }
+    m_rxOutOnTx = on;
+    if (on) {
+        // Mutual exclusion — From Thetis setup.cs:15425-15426 [v2.10.3.13 @501e3f5]
+        if (m_ext1OutOnTx) { m_ext1OutOnTx = false; emit ext1OutOnTxChanged(false); }
+        if (m_ext2OutOnTx) { m_ext2OutOnTx = false; emit ext2OutOnTxChanged(false); }
+    }
+    emit rxOutOnTxChanged(on);
+}
+
+void AlexController::setExt1OutOnTx(bool on)
+{
+    if (m_ext1OutOnTx == on) { return; }
+    m_ext1OutOnTx = on;
+    if (on) {
+        // From Thetis setup.cs:16484-16485 [v2.10.3.13 @501e3f5]
+        if (m_rxOutOnTx)   { m_rxOutOnTx   = false; emit rxOutOnTxChanged(false); }
+        if (m_ext2OutOnTx) { m_ext2OutOnTx = false; emit ext2OutOnTxChanged(false); }
+    }
+    emit ext1OutOnTxChanged(on);
+}
+
+void AlexController::setExt2OutOnTx(bool on)
+{
+    if (m_ext2OutOnTx == on) { return; }
+    m_ext2OutOnTx = on;
+    if (on) {
+        // From Thetis setup.cs:16497-16498 [v2.10.3.13 @501e3f5]
+        if (m_rxOutOnTx)   { m_rxOutOnTx   = false; emit rxOutOnTxChanged(false); }
+        if (m_ext1OutOnTx) { m_ext1OutOnTx = false; emit ext1OutOnTxChanged(false); }
+    }
+    emit ext2OutOnTxChanged(on);
+}
+
+void AlexController::setRxOutOverride(bool on)
+{
+    if (m_rxOutOverride == on) { return; }
+    m_rxOutOverride = on;
+    emit rxOutOverrideChanged(on);
+}
+
+void AlexController::setUseTxAntForRx(bool on)
+{
+    if (m_useTxAntForRx == on) { return; }
+    m_useTxAntForRx = on;
+    emit useTxAntForRxChanged(on);
+}
+
+// NereusSDR-native — not a Thetis port. Thetis passes xvtr as a method
+// parameter to UpdateAlexAntSelection; NereusSDR stores it as session
+// state so signal-driven composition can re-fire on toggle. Not persisted.
+void AlexController::setXvtrActive(bool on)
+{
+    if (m_xvtrActive == on) { return; }
+    m_xvtrActive = on;
+    emit xvtrActiveChanged(on);
+}
+
 void AlexController::setMacAddress(const QString& mac) { m_mac = mac; }
 
 QString AlexController::persistenceKey() const
@@ -196,14 +269,24 @@ void AlexController::load()
         const QString slug = bandKeyName(Band(b));
         m_txAnt[b]     = s.value(QStringLiteral("%1/%2/tx").arg(base, slug),     QStringLiteral("1")).toInt();
         m_rxAnt[b]     = s.value(QStringLiteral("%1/%2/rx").arg(base, slug),     QStringLiteral("1")).toInt();
-        m_rxOnlyAnt[b] = s.value(QStringLiteral("%1/%2/rxonly").arg(base, slug), QStringLiteral("1")).toInt();
+        m_rxOnlyAnt[b] = s.value(QStringLiteral("%1/%2/rxonly").arg(base, slug), QStringLiteral("0")).toInt();
         m_txAnt[b]     = clampAnt(m_txAnt[b]);
         m_rxAnt[b]     = clampAnt(m_rxAnt[b]);
-        m_rxOnlyAnt[b] = clampAnt(m_rxOnlyAnt[b]);
+        m_rxOnlyAnt[b] = clampRxOnlyAnt(m_rxOnlyAnt[b]);
     }
     m_blockTxAnt2 = (s.value(QStringLiteral("%1/blockTxAnt2").arg(base), QStringLiteral("False")).toString() == QStringLiteral("True"));
     m_blockTxAnt3 = (s.value(QStringLiteral("%1/blockTxAnt3").arg(base), QStringLiteral("False")).toString() == QStringLiteral("True"));
+    m_rxOutOnTx     = (s.value(QStringLiteral("%1/rxOutOnTx").arg(base),     QStringLiteral("False")).toString() == QStringLiteral("True"));
+    m_ext1OutOnTx   = (s.value(QStringLiteral("%1/ext1OutOnTx").arg(base),   QStringLiteral("False")).toString() == QStringLiteral("True"));
+    m_ext2OutOnTx   = (s.value(QStringLiteral("%1/ext2OutOnTx").arg(base),   QStringLiteral("False")).toString() == QStringLiteral("True"));
+    m_rxOutOverride = (s.value(QStringLiteral("%1/rxOutOverride").arg(base), QStringLiteral("False")).toString() == QStringLiteral("True"));
+    m_useTxAntForRx = (s.value(QStringLiteral("%1/useTxAntForRx").arg(base), QStringLiteral("False")).toString() == QStringLiteral("True"));
     emit blockTxChanged();
+    emit rxOutOnTxChanged(m_rxOutOnTx);
+    emit ext1OutOnTxChanged(m_ext1OutOnTx);
+    emit ext2OutOnTxChanged(m_ext2OutOnTx);
+    emit rxOutOverrideChanged(m_rxOutOverride);
+    emit useTxAntForRxChanged(m_useTxAntForRx);
     for (int b = 0; b < kBandCount; ++b) { emit antennaChanged(Band(b)); }
 }
 
@@ -220,6 +303,11 @@ void AlexController::save()
     }
     s.setValue(QStringLiteral("%1/blockTxAnt2").arg(base), m_blockTxAnt2 ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(QStringLiteral("%1/blockTxAnt3").arg(base), m_blockTxAnt3 ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(QStringLiteral("%1/rxOutOnTx").arg(base),     m_rxOutOnTx     ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(QStringLiteral("%1/ext1OutOnTx").arg(base),   m_ext1OutOnTx   ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(QStringLiteral("%1/ext2OutOnTx").arg(base),   m_ext2OutOnTx   ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(QStringLiteral("%1/rxOutOverride").arg(base), m_rxOutOverride ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(QStringLiteral("%1/useTxAntForRx").arg(base), m_useTxAntForRx ? QStringLiteral("True") : QStringLiteral("False"));
 }
 
 } // namespace NereusSDR
