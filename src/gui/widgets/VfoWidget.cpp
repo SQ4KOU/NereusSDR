@@ -1073,7 +1073,7 @@ void VfoWidget::buildDspTab()
                       m_nr4Btn, m_dfnrBtn, m_mnrBtn,
                       m_anfToggle, m_snbToggle}) {
         if (btn) {
-            btn->setFixedSize(60, 24);
+            btn->setFixedSize(63, 26);
             btn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         }
     }
@@ -1084,7 +1084,7 @@ void VfoWidget::buildDspTab()
     // The toggle acts as the enable button; slider + Hz label are only visible
     // when APF is enabled AND mode is CW (gated by applyModeVisibility).
     m_apfToggle = makeToggle(QStringLiteral("APF"));
-    m_apfToggle->setFixedSize(60, 24);
+    m_apfToggle->setFixedSize(63, 26);
     m_apfToggle->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     // From Thetis console.resx:348 — chkCWAPFEnabled.ToolTip
     m_apfToggle->setToolTip(QStringLiteral("Enables APF"));
