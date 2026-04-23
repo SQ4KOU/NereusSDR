@@ -509,13 +509,16 @@ void SliceModel::setXitHz(int hz)
     }
 }
 
-void SliceModel::setNb2Enabled(bool v)
+void SliceModel::setNbMode(NereusSDR::NbMode v)
 {
-    if (m_nb2Enabled != v) {
-        m_nb2Enabled = v;
-        emit nb2EnabledChanged(v);
-    }
+    if (v == m_nbMode) { return; }
+    m_nbMode = v;
+    emit nbModeChanged(v);
 }
+
+// setNbTuning / nbTuningChanged removed 2026-04-22 — per-slice NB tuning is
+// not a Thetis concept. All NB tuning is global per DSPRX and lives inside
+// NbFamily, seeded from Setup → DSP → NB/SNB. See SliceModel.h.
 
 void SliceModel::setEmnrEnabled(bool v)
 {
@@ -793,7 +796,14 @@ void SliceModel::saveToSettings(Band band)
     s.setValue(bp + QStringLiteral("AgcMode"),      static_cast<int>(m_agcMode));
     s.setValue(bp + QStringLiteral("StepHz"),       m_stepHz);
 
+    // Noise-blanker mode (per-band). Tri-state Off/NB/NB2 mirrors Thetis
+    // chkNB state per-receiver. NB TUNING (threshold / tau / lag / lead) is
+    // NOT per-band in Thetis and lives globally inside NbFamily — see
+    // SliceModel.h for the 2026-04-22 removal note.
+    s.setValue(bp + QStringLiteral("NbMode"), static_cast<int>(m_nbMode));
+
     // ── Session state (band-agnostic) ─────────────────────────────────────────
+    s.setValue(sp + QStringLiteral("SnbEnabled"), boolStr(m_snbEnabled));
     s.setValue(sp + QStringLiteral("Locked"),     boolStr(m_locked));
     s.setValue(sp + QStringLiteral("Muted"),      boolStr(m_muted));
     s.setValue(sp + QStringLiteral("RitEnabled"), boolStr(m_ritEnabled));
@@ -874,8 +884,20 @@ void SliceModel::restoreFromSettings(Band band)
         setStepHz(s.value(bp + QStringLiteral("StepHz")).toInt());
     }
 
+    // Noise blanker mode (per-band). Tuning keys (NbThreshold/NbTauMs/
+    // NbLeadMs/NbLagMs) from an earlier pre-2026-04-22 schema are ignored
+    // if present — they'll be overwritten on next save. Per-band NB tuning
+    // is not a Thetis concept.
+    if (s.contains(bp + QStringLiteral("NbMode"))) {
+        setNbMode(static_cast<NereusSDR::NbMode>(
+            s.value(bp + QStringLiteral("NbMode")).toInt()));
+    }
+
     // ── Session state (band-agnostic) ─────────────────────────────────────────
 
+    if (s.contains(sp + QStringLiteral("SnbEnabled"))) {
+        setSnbEnabled(s.value(sp + QStringLiteral("SnbEnabled")).toString() == QLatin1String("True"));
+    }
     if (s.contains(sp + QStringLiteral("Locked"))) {
         setLocked(s.value(sp + QStringLiteral("Locked")).toString() == QLatin1String("True"));
     }

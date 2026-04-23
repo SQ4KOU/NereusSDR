@@ -369,7 +369,8 @@ public:
     void setLocked(bool v);
 
     // --- DSP tab state setters (S1.8b — guarded against re-emit) ---
-    void setNb2Enabled(bool v);
+    // Thetis chkNB CheckState mirror — see console.cs:43513-43560 [v2.10.3.13].
+    void setNbMode(NereusSDR::NbMode m);
     void setNr2Enabled(bool v);
     void setSnbEnabled(bool v);
     void setApfEnabled(bool v);
@@ -425,7 +426,14 @@ signals:
     void rxAntennaChanged(const QString& ant);
     void txAntennaChanged(const QString& ant);
     void rxBypassToggled(bool on);     // Phase 3P-I-b T9 — BYPS button click
-    void nb1Changed(bool enabled);
+    // Emitted when the user clicks the NB button. MainWindow cycles the
+    // slice's NbMode in response.
+    void nbModeCycled();
+    // Emitted when the user right-clicks the NB or SNB button. MainWindow
+    // opens the Setup dialog to the "NB/SNB" page. Mirrors Thetis
+    // chkNB_MouseDown (console.cs:44447 [v2.10.3.13]) which calls
+    // SetupForm.ShowSetupTab(SetupTab.NB_Tab).
+    void openNbSetupRequested();
     void nrChanged(bool enabled);
     void anfChanged(bool enabled);
     void sliceActivationRequested(int sliceIndex);
@@ -440,7 +448,6 @@ signals:
     void stepCycleRequested();
 
     // --- DSP tab signals (S1.8b) ---
-    void nb2Changed(bool enabled);
     void nr2Changed(bool enabled);    // maps to emnrEnabled in SliceModel
     void snbChanged(bool enabled);
     void apfChanged(bool enabled);
@@ -554,8 +561,7 @@ private:
     float               m_noiseFloorDbm{-200.0f};
 
     // --- DSP tab ---
-    QPushButton*        m_nb1Toggle{nullptr};
-    QPushButton*        m_nb2Toggle{nullptr};
+    QPushButton*        m_nbButton{nullptr};   // tri-state NB/NB2/Off cycling button
     QPushButton*        m_nrToggle{nullptr};
     QPushButton*        m_nr2Toggle{nullptr};
     QPushButton*        m_anfToggle{nullptr};

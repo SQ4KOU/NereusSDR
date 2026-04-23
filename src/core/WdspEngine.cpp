@@ -268,30 +268,9 @@ RxChannel* WdspEngine::createRxChannel(int channelId,
         0.010,                  // tslewdown — from Thetis cmaster.c:85
         1);                     // bfo: block until output available
 
-    // Create NB1 (Analog Noise Blanker) — from Thetis cmaster.c:43-53
-    create_anbEXT(
-        channelId,
-        0,                      // run: off initially
-        inputBufferSize,        // buffsize
-        static_cast<double>(inputSampleRate),  // samplerate
-        0.0001,                 // tau        — from Thetis cmaster.c:49
-        0.0001,                 // hangtime   — from Thetis cmaster.c:50
-        0.0001,                 // advtime    — from Thetis cmaster.c:51
-        0.05,                   // backtau    — from Thetis cmaster.c:52
-        30.0);                  // threshold  — from Thetis cmaster.c:53
-
-    // Create NB2 (Impulse Noise Blanker) — from Thetis cmaster.c:55-68
-    create_nobEXT(
-        channelId,
-        0,                      // run: off initially
-        0,                      // mode       — from Thetis cmaster.c:61
-        inputBufferSize,        // buffsize
-        static_cast<double>(inputSampleRate),  // samplerate
-        0.0001,                 // slewtime   — from Thetis cmaster.c:62
-        0.0001,                 // hangtime   — from Thetis cmaster.c:65
-        0.0001,                 // advtime    — from Thetis cmaster.c:63
-        0.05,                   // backtau    — from Thetis cmaster.c:67
-        30.0);                  // threshold  — from Thetis cmaster.c:68
+    // NB / NB2 lifecycle is owned by RxChannel::m_nb (NbFamily) — see
+    // src/core/NbFamily.h. Do NOT re-add create/destroy_anbEXT/nobEXT
+    // here; doing so double-constructs the WDSP anb/nob objects.
 
     // Initialize WDSP to match RxChannel's cached defaults so that
     // subsequent setMode/setFilterFreqs calls from RadioModel work correctly.
@@ -321,6 +300,18 @@ RxChannel* WdspEngine::createRxChannel(int channelId,
     auto channel = std::make_unique<RxChannel>(channelId, inputBufferSize,
                                                inputSampleRate, this);
     RxChannel* ptr = channel.get();
+
+#ifdef HAVE_WDSP
+    // Push persisted SNB Setup defaults to the RXA channel now that both
+    // OpenChannel (above) and RxChannel ctor (just above — which created
+    // NbFamily + ran create_anbEXT/create_nobEXT) have run. SNB lives
+    // inside rxa[channelId].snba and requires OpenChannel first; we gate
+    // the seed here rather than inside NbFamily so unit tests that use
+    // fabricated channel ids (never Opened) don't null-deref SetRXASNBA*.
+    // (Codex review PR #120, P2 — 2026-04-23.)
+    if (auto* nb = ptr->nb()) { nb->seedSnbFromSettings(); }
+#endif
+
     m_rxChannels.emplace(channelId, std::move(channel));
     return ptr;
 }
@@ -336,9 +327,8 @@ void WdspEngine::destroyRxChannel(int channelId)
     // Deactivate with drain
     SetChannelState(channelId, 0, 1);
 
-    // Destroy NB1 and NB2
-    destroy_anbEXT(channelId);
-    destroy_nobEXT(channelId);
+    // NB / NB2 destroy is owned by ~NbFamily inside ~RxChannel — see
+    // src/core/NbFamily.h. Do NOT re-add destroy_anbEXT/nobEXT here.
 
     // Close the WDSP channel
     CloseChannel(channelId);

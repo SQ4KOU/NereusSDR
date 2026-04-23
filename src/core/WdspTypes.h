@@ -226,8 +226,11 @@ enum class ChannelType : int {
 enum class NrMode      : int { Off = 0, ANR = 1, EMNR = 2 };
 
 // Noise-blanker mode.
-// Off = disabled, NB1 = classic blanker, NB2 = adaptive blanker.
-enum class NbMode      : int { Off = 0, NB1 = 1, NB2 = 2 };
+// From Thetis console.cs:43513-43560 [v2.10.3.13] — chkNB tri-state mapping:
+//   CheckState.Unchecked    → Off (0)
+//   CheckState.Checked      → NB  (1)  ≡ nob.c (Whitney blanker)
+//   CheckState.Indeterminate→ NB2 (2)  ≡ nobII.c (second-gen blanker)
+enum class NbMode : int { Off = 0, NB = 1, NB2 = 2 };
 
 // Squelch type active on a slice.
 enum class SquelchMode : int { Off, Voice, AM, FM };

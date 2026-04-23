@@ -537,7 +537,15 @@ void RxApplet::buildUi()
         NyiOverlay::markNyi(m_sqlSlider, QStringLiteral("Phase 3I"));
     }
 
-    // ATT/S-ATT row — between Squelch and AGC
+    // NB controls intentionally absent from RxApplet per strict Thetis parity:
+    // Thetis never puts NB controls on a per-slice applet. The valid Thetis
+    // surfaces are (1) chkNB tri-state on the VFO flag, (2) Setup → DSP →
+    // NB/SNB for tuning, (3) the DSP menu bar. An earlier draft shipped an
+    // NB cycling button + Thr + Lag sliders here; removed 2026-04-22 to
+    // match Thetis. Per-band NB MODE persistence still lives on SliceModel
+    // (not tuning) so different bands can have different NB/NB2/Off states.
+
+    // ATT/S-ATT row — between NB and AGC
     // From Thetis console.cs: comboPreamp / udRX1StepAttData (stacked)
     {
         auto* row = new QHBoxLayout;
@@ -1113,6 +1121,9 @@ void RxApplet::syncFromModel()
     // Step size label (Issue #69)
     m_stepLabel->setText(QStringLiteral("%1 Hz").arg(m_slice->stepHz()));
 
+    // NB button + NB1 tuning sliders removed from RxApplet per strict Thetis
+    // parity. NB state lives on VFO flag, Setup → DSP → NB/SNB, and menu bar.
+
     m_updatingFromModel = false;
 }
 
@@ -1193,6 +1204,10 @@ void RxApplet::connectSlice(SliceModel* s)
     connect(s, &SliceModel::stepHzChanged, this, [this](int hz) {
         m_stepLabel->setText(QStringLiteral("%1 Hz").arg(hz));
     });
+
+    // NB controls (button + tuning sliders) removed from RxApplet per strict
+    // Thetis parity (2026-04-22). NB state is managed via VFO flag chkNB,
+    // Setup → DSP → NB/SNB, and the DSP menu bar — not here.
 
     // ATT/S-ATT — wire to StepAttenuatorController if available
     auto* attCtrl = m_model ? m_model->stepAttController() : nullptr;

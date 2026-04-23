@@ -169,6 +169,15 @@ nereus_add_test(tst_slice_audio_panel)
 # ── Phase 3G-10 Stage 2: WDSP wiring — NB2 polish (S2.7) ───────────────────
 nereus_add_test(tst_rxchannel_nb2_polish)
 
+# ── Phase 3G RX Epic Sub-epic B Task 11: NbFamily cycling + per-band NB persistence ──
+# tst_nb_family: pure C++ — cycleNbMode rotation (Off→NB→NB2→Off) and
+#   NbTuning defaults pinned to Thetis cmaster.c:43-68 [v2.10.3.13].
+#   WDSP-free: NbFamily is never instantiated (no WDSP channel required).
+# tst_slice_nb_persistence: SliceModel NbMode + NbTuning round-trip through
+#   per-band AppSettings keys (Band40m/Band20m isolation, cross-band case).
+nereus_add_test(tst_nb_family)
+nereus_add_test(tst_slice_nb_persistence)
+
 # ── Phase 3G-10 Stage 2: RIT/XIT client offset (S2.8) ───────────────────────
 nereus_add_test(tst_slice_rit_xit)
 
