@@ -734,6 +734,21 @@ if(ENABLE_DFNR)
     endif()
 endif()
 
+# --------------------------------------------------------------------------
+# MNR — macOS Accelerate (vDSP) spectral noise reduction (Sub-epic C-1, Task 11).
+# Native Apple framework — no external build script or dependencies.
+# --------------------------------------------------------------------------
+option(ENABLE_MNR "Enable MNR Apple Accelerate noise reduction (macOS only)" ON)
+if(ENABLE_MNR AND APPLE)
+    target_sources(NereusSDRObjs PRIVATE src/core/MacNRFilter.cpp)
+    target_link_libraries(NereusSDRObjs PUBLIC "-framework Accelerate")
+    target_compile_definitions(NereusSDRObjs PUBLIC HAVE_MNR)
+    message(STATUS "MNR (Apple Accelerate) enabled")
+elseif(ENABLE_MNR)
+    set(ENABLE_MNR OFF)
+    message(STATUS "MNR (Apple Accelerate) disabled — macOS only")
+endif()
+
 # PortAudio (Phase 3O VAX) — always linked; PortAudioBus is the cross-platform
 # IAudioBus fallback when no native low-latency backend is available.
 target_link_libraries(NereusSDRObjs PRIVATE portaudio_static)

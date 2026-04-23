@@ -203,6 +203,10 @@ warren@wpratt.com
 #include "DeepFilterFilter.h"
 #endif
 
+#ifdef HAVE_MNR
+#include "MacNRFilter.h"
+#endif
+
 #include <QObject>
 
 #include <atomic>
@@ -448,6 +452,13 @@ public:
     void setDfnrPostFilterBeta(float beta);
 #endif
 
+    // MNR — Apple Accelerate MMSE-Wiener spectral NR (Sub-epic C-1, Task 11)
+    // macOS only (HAVE_MNR is defined only on Apple platforms).
+    // Strength: 0 = bypass, 1 = full NR.
+#ifdef HAVE_MNR
+    void setMnrStrength(float strength);
+#endif
+
     // SNB — Spectral Noise Blanker
     // From Thetis Project Files/Source/Console/radio.cs (SetRXASNBARun call site)
     bool snbEnabled() const { return m_nb ? m_nb->snbEnabled() : false; }
@@ -628,6 +639,15 @@ private:
     // Accessed only from the audio thread during processIq(); main thread
     // writes tuning parameters via atomic setters in DeepFilterFilter.
     std::unique_ptr<NereusSDR::DeepFilterFilter> m_dfnr;
+#endif
+
+#ifdef HAVE_MNR
+    // Apple Accelerate MMSE-Wiener NR instance (Sub-epic C-1, Task 11).
+    // Created in constructor; isValid() always true on macOS (Accelerate is
+    // a system framework — no external model or library dependency).
+    // Accessed only from the audio thread during processIq(); main thread
+    // writes strength via setMnrStrength() which calls the atomic setter.
+    std::unique_ptr<NereusSDR::MacNRFilter> m_mnr;
 #endif
 
     // Cached filter state

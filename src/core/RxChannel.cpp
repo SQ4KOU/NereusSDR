@@ -254,6 +254,10 @@ warren@wpratt.com
 #include "DeepFilterFilter.h"
 #endif
 
+#ifdef HAVE_MNR
+#include "MacNRFilter.h"
+#endif
+
 #include <cmath>
 
 namespace NereusSDR {
@@ -282,6 +286,19 @@ RxChannel::RxChannel(int channelId, int bufferSize, int sampleRate,
         qCWarning(lcDsp) << "DFNR not available on channel" << m_channelId
                          << "(model not found or df_create failed)";
         m_dfnr.reset();
+    }
+#endif
+
+#ifdef HAVE_MNR
+    // Sub-epic C-1 Task 11 — Apple Accelerate MMSE-Wiener post-WDSP NR.
+    // Accelerate is a system framework — always available on macOS.
+    // isValid() returns false only if vDSP_create_fftsetup failed (never
+    // in practice), so no warning-and-reset needed; log if it ever fires.
+    m_mnr = std::make_unique<NereusSDR::MacNRFilter>();
+    if (!m_mnr->isValid()) {
+        qCWarning(lcDsp) << "MNR (Apple Accelerate) FFT setup failed on channel"
+                         << m_channelId;
+        m_mnr.reset();
     }
 #endif
 }
@@ -1338,6 +1355,17 @@ void RxChannel::processIq(float* inI, float* inQ,
     }
 #endif
 
+#ifdef HAVE_MNR
+    // Sub-epic C-1 Task 11 — post-fexchange2 Apple Accelerate MMSE-Wiener NR.
+    // Runs only when m_mnrActive is set via setActiveNr(NrSlot::MNR).
+    // outI/outQ are 48 kHz stereo float at this point.
+    // Ported from AetherSDR src/core/MacNRFilter.{h,cpp} [@0cd4559]; retuned
+    // for 48 kHz (LOG2N 9→10, FFT 512→1024, hop 256→512).
+    if (m_mnr && m_mnrActive.load(std::memory_order_acquire)) {
+        m_mnr->process(outI, outQ, sampleCount);
+    }
+#endif
+
 #else
     // WDSP not available — output silence
     std::memset(outI, 0, sampleCount * sizeof(float));
@@ -1384,6 +1412,19 @@ void RxChannel::setDfnrPostFilterBeta(float beta)
 {
     if (m_dfnr) {
         m_dfnr->setPostFilterBeta(beta);
+    }
+}
+#endif
+
+// ---------------------------------------------------------------------------
+// MNR tuning setter (Sub-epic C-1, Task 11)
+// ---------------------------------------------------------------------------
+
+#ifdef HAVE_MNR
+void RxChannel::setMnrStrength(float strength)
+{
+    if (m_mnr) {
+        m_mnr->setStrength(strength);
     }
 }
 #endif
