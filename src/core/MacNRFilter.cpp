@@ -158,7 +158,7 @@ void MacNRFilter::processFrame(const float* inBuf, float* outBuf)
         float minPow = m_powerHistory[0][k];
         for (int h = 1; h < HIST; ++h)
             minPow = std::min(minPow, m_powerHistory[h][k]);
-        m_noiseEst[k] = BIAS * minPow;
+        m_noiseEst[k] = m_bias.load(std::memory_order_relaxed) * minPow;
     }
 
     // ── 4. Decision-directed MMSE-Wiener gain ────────────────────────────────
@@ -177,8 +177,9 @@ void MacNRFilter::processFrame(const float* inBuf, float* outBuf)
         const float prevCleanPow  = m_prevGain[k] * m_prevGain[k] * m_prevPow[k];
         const float prevSnrFromDD = prevCleanPow
                                   / std::max(m_noiseEst[k], 1e-10f);
-        const float priorSnr = ALPHA * prevSnrFromDD
-                             + (1.0f - ALPHA) * std::max(postSnr - 1.0f, 0.0f);
+        const float alpha_v  = m_alpha.load(std::memory_order_relaxed);
+        const float priorSnr = alpha_v * prevSnrFromDD
+                             + (1.0f - alpha_v) * std::max(postSnr - 1.0f, 0.0f);
 
         // Raw Wiener gain, clamped to [floor, 1]. OVER and FLOOR are now
         // runtime-tunable atomics (set via setOversub / setFloor).
@@ -189,7 +190,8 @@ void MacNRFilter::processFrame(const float* inBuf, float* outBuf)
 
         // ── Temporal gain smoothing ──────────────────────────────────────
         // Suppresses "musical noise" (rapid frame-to-frame gain swings)
-        m_smoothGain[k] = GSMOOTH * m_smoothGain[k] + (1.0f - GSMOOTH) * m_gainBuf[k];
+        const float gsmooth_v = m_gsmooth.load(std::memory_order_relaxed);
+        m_smoothGain[k] = gsmooth_v * m_smoothGain[k] + (1.0f - gsmooth_v) * m_gainBuf[k];
 
         // Effective gain: strength=0 → bypass (1.0), strength=1 → full NR
         const float appliedGain = 1.0f - m_strength.load() * (1.0f - m_smoothGain[k]);

@@ -2624,24 +2624,50 @@ void VfoWidget::showMnrPopup(const QPoint& globalPos)
 
     // MNR (macOS CoreML noise reduction) — button hidden off-macOS unless HAVE_MNR.
     // AetherSDR MainWindow.cpp:8100 [@0cd4559].
+    // Strength: UI 0-200 maps to MacNRFilter strength 0.0-2.0 (×0.01).
+    // 0-100 = normal bypass-to-full range; 101-200 = over-drive into phase-flip.
     const int strength = static_cast<int>(m_slice->mnrStrength() * 100.0);
-    p->addSlider(QStringLiteral("Strength"), 0, 100, strength,
+    p->addSlider(QStringLiteral("Strength"), 0, 200, strength,
                  [](int v) { return QString::number(v) + QStringLiteral("%"); },
                  [this](int v) { if (m_slice) { m_slice->setMnrStrength(v / 100.0); } });
 
-    // Aggressiveness: UI 1-20 maps directly to MacNRFilter oversub 1.0-20.0.
-    // Default 4 = DEF_OVER (gentle-but-effective starting point).
+    // Aggressiveness: UI 1-1000 maps directly to MacNRFilter oversub 1.0-1000.0.
+    // Default 4 = DEF_OVER. No upper clamp per user directive.
     const int oversubUi = static_cast<int>(m_slice->mnrOversub());
-    p->addSlider(QStringLiteral("Aggressiveness"), 1, 20, oversubUi,
+    p->addSlider(QStringLiteral("Aggressiveness"), 1, 1000, oversubUi,
                  [](int v) { return QString::number(v); },
                  [this](int v) { if (m_slice) { m_slice->setMnrOversub(static_cast<double>(v)); } });
 
-    // Floor: UI 1-500 maps to Wiener gain floor 0.001-0.500 (×0.001).
+    // Floor: UI 0-2000 maps to Wiener gain floor 0.0-2.0 (×0.001).
     // Default 50 = 0.05 = −26 dB minimum gain.
+    // 0 = silence, 1000 = no attenuation (0 dB), 2000 = amplify.
     const int floorUi = static_cast<int>(m_slice->mnrFloor() * 1000.0);
-    p->addSlider(QStringLiteral("Floor"), 1, 500, floorUi,
+    p->addSlider(QStringLiteral("Floor"), 0, 2000, floorUi,
                  [](int v) { return QString::number(v) + QStringLiteral("m"); },
                  [this](int v) { if (m_slice) { m_slice->setMnrFloor(v * 0.001); } });
+
+    // Alpha: decision-directed smoothing 0.0-1.0 (UI 0-100, ×0.01).
+    // Default 92 = 0.92. Lower = faster tracking, higher = smoother gain.
+    const int alphaUi = static_cast<int>(m_slice->mnrAlpha() * 100.0);
+    p->addSlider(QStringLiteral("Alpha"), 0, 100, alphaUi,
+                 [](int v) { return QString::number(v / 100.0, 'f', 2); },
+                 [this](int v) { if (m_slice) { m_slice->setMnrAlpha(v * 0.01); } });
+
+    // Bias: min-stats noise-floor bias 0.0-10.0 (UI 0-100, ×0.1).
+    // Default 12 = 1.2. Lower = noise-floor underestimate (less NR),
+    // higher = overestimate (more NR).
+    const int biasUi = static_cast<int>(m_slice->mnrBias() * 10.0);
+    p->addSlider(QStringLiteral("Bias"), 0, 100, biasUi,
+                 [](int v) { return QString::number(v / 10.0, 'f', 1); },
+                 [this](int v) { if (m_slice) { m_slice->setMnrBias(v * 0.1); } });
+
+    // Gsmooth: temporal gain smoothing 0.0-1.0 (UI 0-100, ×0.01).
+    // Default 70 = 0.70. Lower = fast response / more musical noise,
+    // higher = smoother / slower.
+    const int gsmoothUi = static_cast<int>(m_slice->mnrGsmooth() * 100.0);
+    p->addSlider(QStringLiteral("Gsmooth"), 0, 100, gsmoothUi,
+                 [](int v) { return QString::number(v / 100.0, 'f', 2); },
+                 [this](int v) { if (m_slice) { m_slice->setMnrGsmooth(v * 0.01); } });
 
     p->finalize([this]() { emit openNrSetupRequested(NereusSDR::NrSlot::MNR); }, nullptr);
     p->showAt(globalPos);

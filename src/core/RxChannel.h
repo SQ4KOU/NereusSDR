@@ -457,8 +457,11 @@ public:
     // Strength: 0 = bypass, 1 = full NR.
 #ifdef HAVE_MNR
     void setMnrStrength(float strength);
-    void setMnrOversub(float oversub);  // MMSE-Wiener oversubtraction 0.5-40
-    void setMnrFloor(float floor);      // min Wiener gain 0.001-1.0 (-60..0 dB)
+    void setMnrOversub(float oversub);   // MMSE-Wiener oversubtraction 0.01-1000
+    void setMnrFloor(float floor);       // min Wiener gain 0.0-2.0
+    void setMnrAlpha(float alpha);       // decision-directed smoothing 0.0-1.0
+    void setMnrBias(float bias);         // noise-floor bias correction 0.0-10.0
+    void setMnrGsmooth(float gsmooth);   // temporal gain smoothing 0.0-1.0
 #endif
 
     // SNB — Spectral Noise Blanker

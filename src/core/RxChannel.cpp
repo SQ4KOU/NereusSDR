@@ -1439,10 +1439,25 @@ void RxChannel::setMnrFloor(float floor)
 {
     if (m_mnr) { m_mnr->setFloor(floor); }
 }
+void RxChannel::setMnrAlpha(float alpha)
+{
+    if (m_mnr) { m_mnr->setAlpha(alpha); }
+}
+void RxChannel::setMnrBias(float bias)
+{
+    if (m_mnr) { m_mnr->setBias(bias); }
+}
+void RxChannel::setMnrGsmooth(float gsmooth)
+{
+    if (m_mnr) { m_mnr->setGsmooth(gsmooth); }
+}
 #else
 void RxChannel::setMnrStrength(float) {}
 void RxChannel::setMnrOversub(float) {}
 void RxChannel::setMnrFloor(float) {}
+void RxChannel::setMnrAlpha(float) {}
+void RxChannel::setMnrBias(float) {}
+void RxChannel::setMnrGsmooth(float) {}
 #endif
 
 } // namespace NereusSDR

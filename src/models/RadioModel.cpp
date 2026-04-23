@@ -828,6 +828,9 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                     rxCh->setMnrStrength(static_cast<float>(m_activeSlice->mnrStrength()));
                     rxCh->setMnrOversub(static_cast<float>(m_activeSlice->mnrOversub()));
                     rxCh->setMnrFloor(static_cast<float>(m_activeSlice->mnrFloor()));
+                    rxCh->setMnrAlpha(static_cast<float>(m_activeSlice->mnrAlpha()));
+                    rxCh->setMnrBias(static_cast<float>(m_activeSlice->mnrBias()));
+                    rxCh->setMnrGsmooth(static_cast<float>(m_activeSlice->mnrGsmooth()));
 #endif
 
                     // NR3 model — global (RNNRloadModel), not per-channel.
@@ -1550,6 +1553,21 @@ void RadioModel::wireSliceSignals()
     connect(slice, &SliceModel::mnrFloorChanged, this, [this](double v) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) { rxCh->setMnrFloor(static_cast<float>(v)); }
+        scheduleSettingsSave();
+    });
+    connect(slice, &SliceModel::mnrAlphaChanged, this, [this](double v) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) { rxCh->setMnrAlpha(static_cast<float>(v)); }
+        scheduleSettingsSave();
+    });
+    connect(slice, &SliceModel::mnrBiasChanged, this, [this](double v) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) { rxCh->setMnrBias(static_cast<float>(v)); }
+        scheduleSettingsSave();
+    });
+    connect(slice, &SliceModel::mnrGsmoothChanged, this, [this](double v) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) { rxCh->setMnrGsmooth(static_cast<float>(v)); }
         scheduleSettingsSave();
     });
 #endif

@@ -721,6 +721,24 @@ void SliceModel::setMnrFloor(double v)
     m_mnrFloor = v;
     emit mnrFloorChanged(v);
 }
+void SliceModel::setMnrAlpha(double v)
+{
+    if (qFuzzyCompare(m_mnrAlpha, v)) { return; }
+    m_mnrAlpha = v;
+    emit mnrAlphaChanged(v);
+}
+void SliceModel::setMnrBias(double v)
+{
+    if (qFuzzyCompare(m_mnrBias, v)) { return; }
+    m_mnrBias = v;
+    emit mnrBiasChanged(v);
+}
+void SliceModel::setMnrGsmooth(double v)
+{
+    if (qFuzzyCompare(m_mnrGsmooth, v)) { return; }
+    m_mnrGsmooth = v;
+    emit mnrGsmoothChanged(v);
+}
 
 void SliceModel::setSnbEnabled(bool v)
 {
@@ -1036,6 +1054,9 @@ void SliceModel::saveToSettings(Band band)
     s.setValue(sp + QStringLiteral("MnrStrength"),     m_mnrStrength);
     s.setValue(sp + QStringLiteral("MnrOversub"),      m_mnrOversub);
     s.setValue(sp + QStringLiteral("MnrFloor"),        m_mnrFloor);
+    s.setValue(sp + QStringLiteral("MnrAlpha"),        m_mnrAlpha);
+    s.setValue(sp + QStringLiteral("MnrBias"),         m_mnrBias);
+    s.setValue(sp + QStringLiteral("MnrGsmooth"),      m_mnrGsmooth);
 
     s.setValue(sp + QStringLiteral("SnbEnabled"), boolStr(m_snbEnabled));
     s.setValue(sp + QStringLiteral("Locked"),     boolStr(m_locked));
@@ -1227,6 +1248,15 @@ void SliceModel::restoreFromSettings(Band band)
     }
     if (s.contains(sp + QStringLiteral("MnrFloor"))) {
         setMnrFloor(s.value(sp + QStringLiteral("MnrFloor")).toDouble());
+    }
+    if (s.contains(sp + QStringLiteral("MnrAlpha"))) {
+        setMnrAlpha(s.value(sp + QStringLiteral("MnrAlpha")).toDouble());
+    }
+    if (s.contains(sp + QStringLiteral("MnrBias"))) {
+        setMnrBias(s.value(sp + QStringLiteral("MnrBias")).toDouble());
+    }
+    if (s.contains(sp + QStringLiteral("MnrGsmooth"))) {
+        setMnrGsmooth(s.value(sp + QStringLiteral("MnrGsmooth")).toDouble());
     }
 
     if (s.contains(sp + QStringLiteral("SnbEnabled"))) {

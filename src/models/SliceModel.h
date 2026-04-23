@@ -238,10 +238,15 @@ class SliceModel : public QObject {
     // BNR — Strength (single knob; filter class deferred to follow-up PR).
     Q_PROPERTY(double bnrStrength READ bnrStrength WRITE setBnrStrength NOTIFY bnrStrengthChanged)
 
-    // MNR — Strength, Oversub (aggressiveness), and Floor (min Wiener gain).
+    // MNR — Strength, Oversub (aggressiveness), Floor (min Wiener gain),
+    //        Alpha (decision-directed smoothing), Bias (noise-floor bias),
+    //        Gsmooth (temporal gain smoothing).
     Q_PROPERTY(double mnrStrength  READ mnrStrength  WRITE setMnrStrength  NOTIFY mnrStrengthChanged)
     Q_PROPERTY(double mnrOversub   READ mnrOversub   WRITE setMnrOversub   NOTIFY mnrOversubChanged)
     Q_PROPERTY(double mnrFloor     READ mnrFloor     WRITE setMnrFloor     NOTIFY mnrFloorChanged)
+    Q_PROPERTY(double mnrAlpha     READ mnrAlpha     WRITE setMnrAlpha     NOTIFY mnrAlphaChanged)
+    Q_PROPERTY(double mnrBias      READ mnrBias      WRITE setMnrBias      NOTIFY mnrBiasChanged)
+    Q_PROPERTY(double mnrGsmooth   READ mnrGsmooth   WRITE setMnrGsmooth   NOTIFY mnrGsmoothChanged)
     Q_PROPERTY(bool   snbEnabled      READ snbEnabled      WRITE setSnbEnabled      NOTIFY snbEnabledChanged)
     Q_PROPERTY(bool   apfEnabled      READ apfEnabled      WRITE setApfEnabled      NOTIFY apfEnabledChanged)
     Q_PROPERTY(int    apfTuneHz       READ apfTuneHz       WRITE setApfTuneHz       NOTIFY apfTuneHzChanged)
@@ -496,6 +501,12 @@ public:
     void   setMnrOversub(double v);
     double mnrFloor()    const { return m_mnrFloor; }
     void   setMnrFloor(double v);
+    double mnrAlpha()    const { return m_mnrAlpha; }
+    void   setMnrAlpha(double v);
+    double mnrBias()     const { return m_mnrBias; }
+    void   setMnrBias(double v);
+    double mnrGsmooth()  const { return m_mnrGsmooth; }
+    void   setMnrGsmooth(double v);
 
     bool   snbEnabled()      const { return m_snbEnabled; }
     void   setSnbEnabled(bool v);
@@ -671,6 +682,9 @@ signals:
     void mnrStrengthChanged(double v);
     void mnrOversubChanged(double v);
     void mnrFloorChanged(double v);
+    void mnrAlphaChanged(double v);
+    void mnrBiasChanged(double v);
+    void mnrGsmoothChanged(double v);
     void snbEnabledChanged(bool v);
     void apfEnabledChanged(bool v);
     void apfTuneHzChanged(int hz);
@@ -779,8 +793,11 @@ private:
     // BNR + MNR — AetherSDR filter defaults (post-WDSP, not in Thetis).
     double m_bnrStrength = 1.0;
     double m_mnrStrength = 1.0;
-    double m_mnrOversub  = 4.0;   // MacNRFilter::DEF_OVER; range 0.5-40 at filter
-    double m_mnrFloor    = 0.05;  // MacNRFilter::DEF_FLOOR; range 0.001-1.0 at filter
+    double m_mnrOversub  = 4.0;    // MacNRFilter::DEF_OVER;   range 0.01-1000 at filter
+    double m_mnrFloor    = 0.05;   // MacNRFilter::DEF_FLOOR;  range 0.0-2.0 at filter
+    double m_mnrAlpha    = 0.92;   // MacNRFilter::DEF_ALPHA;  range 0.0-1.0
+    double m_mnrBias     = 1.2;    // MacNRFilter::DEF_BIAS;   range 0.0-10.0
+    double m_mnrGsmooth  = 0.70;   // MacNRFilter::DEF_GSMOOTH; range 0.0-1.0
 
     bool   m_snbEnabled{false};       // Neutral default — feature off at start
     bool   m_apfEnabled{false};       // Neutral default — feature off at start

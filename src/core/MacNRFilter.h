@@ -73,22 +73,33 @@ public:
     // Reset internal state (e.g. on band change or stream restart).
     void reset();
 
-    // Noise-reduction strength: 0.0 = bypass, 1.0 = full suppression.
-    // The underlying algorithm always runs at full strength; only the
-    // blending into the output signal is scaled.
+    // Noise-reduction strength: 0.0 = bypass, 2.0 = over-drive (phase flip).
+    // Full range per user directive — no conservative clamp.
     // Thread-safe: audio thread and UI thread may access concurrently.
-    void  setStrength(float s) { m_strength.store(std::clamp(s, 0.0f, 1.0f)); }
+    void  setStrength(float s) { m_strength.store(std::clamp(s, 0.0f, 2.0f)); }
     float strength()     const { return m_strength.load(); }
 
     // Oversubtraction factor — higher = more aggressive attenuation on low-SNR
-    // bins. Typical range 1.0 (gentle) ... 20.0 (underwater). Default 4.
-    void  setOversub(float o) { m_oversub.store(std::clamp(o, 0.5f, 40.0f)); }
+    // bins. Uncapped (0.01–1000) per user directive. Default 4.
+    void  setOversub(float o) { m_oversub.store(std::clamp(o, 0.01f, 1000.0f)); }
     float oversub()     const { return m_oversub.load(); }
 
-    // Noise-floor clamp — minimum Wiener gain per bin. 0.001 = -60 dB max
-    // attenuation, 0.3 = -10 dB max. Default 0.05 (-26 dB).
-    void  setFloor(float f) { m_floor.store(std::clamp(f, 0.001f, 1.0f)); }
+    // Noise-floor clamp — minimum Wiener gain per bin. Full range 0–2.
+    // 0 = silence, 1 = no attenuation, 2 = amplify. Default 0.05 (-26 dB).
+    void  setFloor(float f) { m_floor.store(std::clamp(f, 0.0f, 2.0f)); }
     float floor()     const { return m_floor.load(); }
+
+    // Decision-directed smoothing coefficient (alpha). 0=no smoothing, 1=frozen.
+    void  setAlpha(float a) { m_alpha.store(std::clamp(a, 0.0f, 1.0f)); }
+    float alpha()     const { return m_alpha.load(); }
+
+    // Min-stats noise-floor bias correction. 0=none, 10=max. Default 1.2.
+    void  setBias(float b) { m_bias.store(std::clamp(b, 0.0f, 10.0f)); }
+    float bias()      const { return m_bias.load(); }
+
+    // Temporal gain smoothing coefficient. 0=off, 1=frozen. Default 0.70.
+    void  setGsmooth(float g) { m_gsmooth.store(std::clamp(g, 0.0f, 1.0f)); }
+    float gsmooth()   const { return m_gsmooth.load(); }
 
 private:
     // Process one N-sample analysis frame; writes N output samples to outBuf.
@@ -113,13 +124,14 @@ private:
     // gave ~-6 dB uniform attenuation that wasn't perceived as selective
     // NR. OVER=4 tilts the Wiener curve toward stronger attenuation on
     // low-SNR bins while leaving high-SNR (voice) bins mostly untouched.
-    static constexpr int   HIST     = 25;
-    static constexpr float ALPHA    = 0.92f;
-    static constexpr float BIAS     = 1.2f;
-    static constexpr float GSMOOTH  = 0.70f;
-    // Default values for runtime-tunable knobs (see setOversub / setFloor).
-    static constexpr float DEF_OVER  = 4.0f;
-    static constexpr float DEF_FLOOR = 0.05f;
+    static constexpr int   HIST       = 25;
+    // Compile-time defaults kept as DEF_* so init list can reference them.
+    static constexpr float DEF_ALPHA  = 0.92f;
+    static constexpr float DEF_BIAS   = 1.2f;
+    static constexpr float DEF_GSMOOTH = 0.70f;
+    // Default values for runtime-tunable knobs.
+    static constexpr float DEF_OVER   = 4.0f;
+    static constexpr float DEF_FLOOR  = 0.05f;
 
     // ── vDSP state ─────────────────────────────────────────────────────
     FFTSetup           m_fftSetup{nullptr};
@@ -148,6 +160,9 @@ private:
     std::atomic<float> m_strength{1.0f};
     std::atomic<float> m_oversub{DEF_OVER};
     std::atomic<float> m_floor{DEF_FLOOR};
+    std::atomic<float> m_alpha{DEF_ALPHA};
+    std::atomic<float> m_bias{DEF_BIAS};
+    std::atomic<float> m_gsmooth{DEF_GSMOOTH};
 };
 
 } // namespace NereusSDR
