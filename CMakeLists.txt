@@ -398,6 +398,7 @@ set(GUI_SOURCES
     src/gui/dbm_strip_math.cpp
     src/gui/SpectrumOverlayMenu.cpp
     src/gui/widgets/CenterMarkSlider.h
+    src/gui/widgets/DspParamPopup.cpp
     src/gui/widgets/FilterPassbandWidget.cpp
     src/gui/widgets/GuardedComboBox.h
     src/gui/widgets/GuardedSlider.h
