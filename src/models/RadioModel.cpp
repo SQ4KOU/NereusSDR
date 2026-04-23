@@ -821,9 +821,11 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                     rxCh->setDfnrPostFilterBeta(static_cast<float>(m_activeSlice->dfnrPostFilterBeta()));
 #endif
 #ifdef HAVE_MNR
-                    // SliceModel stores mnrStrength in 0–100 UI units;
-                    // MacNRFilter::setStrength expects 0.0–1.0.
-                    rxCh->setMnrStrength(static_cast<float>(m_activeSlice->mnrStrength()) / 100.0f);
+                    // SliceModel already stores mnrStrength as 0.0–1.0
+                    // (matches MacNRFilter::setStrength expected range).
+                    // The Setup/popup slider does the ×100 / ÷100 UI↔model
+                    // conversion; the model→filter path is 1:1.
+                    rxCh->setMnrStrength(static_cast<float>(m_activeSlice->mnrStrength()));
 #endif
 
                     // NR3 model — global (RNNRloadModel), not per-channel.
@@ -1531,10 +1533,11 @@ void RadioModel::wireSliceSignals()
 #endif
 
 #ifdef HAVE_MNR
-    // MNR — Strength 0-100 UI units → 0.0-1.0 for MacNRFilter::setStrength
+    // MNR — SliceModel mnrStrength already in 0.0–1.0 (the Setup/popup
+    // slider applies the ×100 / ÷100 UI↔model conversion on both sides).
     connect(slice, &SliceModel::mnrStrengthChanged, this, [this](double v) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
-        if (rxCh) { rxCh->setMnrStrength(static_cast<float>(v) / 100.0f); }
+        if (rxCh) { rxCh->setMnrStrength(static_cast<float>(v)); }
         scheduleSettingsSave();
     });
 #endif

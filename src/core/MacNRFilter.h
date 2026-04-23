@@ -94,13 +94,21 @@ private:
     static constexpr int NBINS = N / 2 + 1;   // 513 unique spectral bins
 
     // ── Algorithm tuning ───────────────────────────────────────────────
-    // All constants preserved verbatim from AetherSDR [@0cd4559].
-    static constexpr int   HIST    = 25;    // noise history frames (~267 ms at 48 kHz)
-    static constexpr float ALPHA   = 0.92f; // decision-directed smoothing
-    static constexpr float OVER    = 2.0f;  // oversubtraction — punches harder at noise bins
-    static constexpr float FLOOR   = 0.05f; // minimum Wiener gain (~26 dB max suppression)
-    static constexpr float BIAS    = 1.2f;  // min-stats bias correction
-    static constexpr float GSMOOTH = 0.70f; // temporal gain smoothing (faster response)
+    // Baseline from AetherSDR [@0cd4559]; retuned 2026-04-23 for audible
+    // NR depth after RMS-diagnostic run showed AetherSDR defaults gave
+    // only -2 to -3 dB attenuation on voice+noise (imperceptible as NR).
+    // Baseline from AetherSDR [@0cd4559]; after fixing the dimensional
+    // bug in the decision-directed prior-SNR formula (MacNRFilter.cpp, the
+    // /noise_est division that AetherSDR was missing), AetherSDR's OVER=2
+    // gave ~-6 dB uniform attenuation that wasn't perceived as selective
+    // NR. OVER=4 tilts the Wiener curve toward stronger attenuation on
+    // low-SNR bins while leaving high-SNR (voice) bins mostly untouched.
+    static constexpr int   HIST    = 25;
+    static constexpr float ALPHA   = 0.92f;
+    static constexpr float OVER    = 4.0f;  // was 2.0 in AetherSDR
+    static constexpr float FLOOR   = 0.05f;
+    static constexpr float BIAS    = 1.2f;
+    static constexpr float GSMOOTH = 0.70f;
 
     // ── vDSP state ─────────────────────────────────────────────────────
     FFTSetup           m_fftSetup{nullptr};

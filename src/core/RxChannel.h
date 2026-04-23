@@ -545,9 +545,16 @@ public:
     //   fexchange2(channel, Iin, Qin, Iout, Qout, &error)
     //
     // From Thetis wdsp-integration.md section 4.3
+    // sampleCount: number of INPUT samples in inI/inQ (drives fexchange2 input)
+    // outSampleCount: number of OUTPUT samples fexchange2 writes to outI/outQ
+    //                (post-decimation; defaults to sampleCount for back-compat
+    //                 but WDSP output is typically smaller, e.g. 64 at 48 kHz).
+    //                Post-WDSP filters (DFNR, MNR) operate only on
+    //                outI/outQ[0..outSampleCount-1] so they don't process the
+    //                zero-padded tail.
     void processIq(float* inI, float* inQ,
                    float* outI, float* outQ,
-                   int sampleCount);
+                   int sampleCount, int outSampleCount = -1);
 
     // --- Metering ---
 

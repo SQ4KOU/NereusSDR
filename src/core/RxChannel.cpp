@@ -1317,8 +1317,14 @@ void RxChannel::setActive(bool active)
 
 void RxChannel::processIq(float* inI, float* inQ,
                           float* outI, float* outQ,
-                          int sampleCount)
+                          int sampleCount, int outSampleCount)
 {
+    // fexchange2 writes outSampleCount samples (WDSP's decimated output
+    // rate) which may be smaller than sampleCount (input rate). Post-WDSP
+    // processors must use the SMALLER count or they'll process zero-padded
+    // tails and produce garbage. Default -1 preserves old contract.
+    const int postCount = (outSampleCount > 0) ? outSampleCount : sampleCount;
+
     if (!m_active.load()) {
         // Channel inactive — output silence
         std::memset(outI, 0, sampleCount * sizeof(float));
@@ -1351,7 +1357,7 @@ void RxChannel::processIq(float* inI, float* inQ,
     // Runs only when m_dfnrActive is set via setActiveNr(NrSlot::DFNR).
     // outI/outQ are 48 kHz stereo float at this point — DFNR's native rate.
     if (m_dfnr && m_dfnrActive.load(std::memory_order_acquire)) {
-        m_dfnr->process(outI, outQ, sampleCount);
+        m_dfnr->process(outI, outQ, postCount);
     }
 #endif
 
@@ -1362,7 +1368,7 @@ void RxChannel::processIq(float* inI, float* inQ,
     // Ported from AetherSDR src/core/MacNRFilter.{h,cpp} [@0cd4559]; retuned
     // for 48 kHz (LOG2N 9→10, FFT 512→1024, hop 256→512).
     if (m_mnr && m_mnrActive.load(std::memory_order_acquire)) {
-        m_mnr->process(outI, outQ, sampleCount);
+        m_mnr->process(outI, outQ, postCount);
     }
 #endif
 

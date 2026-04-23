@@ -32,6 +32,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstring>
+#include <QLoggingCategory>
 
 namespace NereusSDR {
 
@@ -165,9 +166,18 @@ void MacNRFilter::processFrame(const float* inBuf, float* outBuf)
         // A-posteriori SNR
         const float postSnr = m_powerBuf[k] / std::max(m_noiseEst[k], 1e-10f);
 
-        // A-priori SNR (decision-directed: blend previous clean estimate
-        // with new a-posteriori observation)
-        const float priorSnr = ALPHA * (m_prevGain[k] * m_prevGain[k]) * m_prevPow[k]
+        // A-priori SNR (decision-directed Ephraim-Malah: blend previous
+        // clean-power estimate / noise with new a-posteriori observation).
+        //
+        // Bug fix 2026-04-23 vs AetherSDR [@0cd4559]: original formula
+        // missed the /m_noiseEst on the prev-gain term, so it blended raw
+        // power with SNR — result was priorSnr ≈ prev power (huge) and
+        // Wiener gain = priorSnr / (priorSnr + OVER) ≈ 1.0 (inaudible NR).
+        // Adding the noise-divide gives a proper dimensionless prior-SNR.
+        const float prevCleanPow  = m_prevGain[k] * m_prevGain[k] * m_prevPow[k];
+        const float prevSnrFromDD = prevCleanPow
+                                  / std::max(m_noiseEst[k], 1e-10f);
+        const float priorSnr = ALPHA * prevSnrFromDD
                              + (1.0f - ALPHA) * std::max(postSnr - 1.0f, 0.0f);
 
         // Raw Wiener gain, clamped to [FLOOR, 1]
