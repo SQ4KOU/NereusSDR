@@ -919,9 +919,14 @@ void VfoWidget::buildAudioTab()
 void VfoWidget::buildDspTab()
 {
     auto* dspWidget = new QWidget;
+    // Fixed size policy — prevents m_tabStack from stretching the DSP tab to
+    // match wider tabs (USB / X-RIT / VAX). The tab bar stays at kWidgetW;
+    // only the content panel shrinks to hug its 4×52px grid.
+    dspWidget->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     auto* dspLayout = new QVBoxLayout(dspWidget);
     dspLayout->setContentsMargins(2, 2, 2, 2);
     dspLayout->setSpacing(2);
+    dspLayout->setSizeConstraint(QLayout::SetFixedSize);
 
     // Sub-epic C-1 USER-APPROVED layout: 3×4 DSP button grid.
     // NB first (preserves cycling), then NR mutual-exclusion group (NR1-4/DFNR/MNR),
@@ -942,14 +947,15 @@ void VfoWidget::buildDspTab()
     };
 
     // Sub-grid widget that holds the entire 3×4 button matrix.
+    // No column stretching — each cell is exactly button-width so buttons
+    // sit flush with no inside-cell padding gaps.
     auto* dspSubgrid = new QWidget(dspWidget);
+    dspSubgrid->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     auto* dspGrid = new QGridLayout(dspSubgrid);
     dspGrid->setContentsMargins(0, 0, 0, 0);
     dspGrid->setHorizontalSpacing(0);
     dspGrid->setVerticalSpacing(0);
-    for (int col = 0; col < 4; ++col) {
-        dspGrid->setColumnStretch(col, 1);
-    }
+    // No setColumnStretch — cells shrink-wrap to button fixed width.
 
     // NB cycling button (row 0, col 0) — tri-state Off → NB → NB2 → Off.
     // Mirrors Thetis chkNB — label switches "NB"/"NB2"; checked = active.
@@ -1032,15 +1038,18 @@ void VfoWidget::buildDspTab()
     dspGrid->addWidget(m_anfToggle, 2, 0);
     dspGrid->addWidget(m_snbToggle, 2, 1);
 
-    // Uniform Expanding policy so all buttons fill their grid cell width equally.
+    // Fixed size for all 9 grid buttons: 52×22 px.
+    // 52px accommodates "DFNR" (4 chars, bold 13px + 8px padding + 2px border).
+    // SizePolicy::Fixed prevents any cell from widening beyond button size,
+    // so the sub-grid hugs its content instead of stretching to the flag width.
     // Fixed height of 22px keeps the grid compact (conserves vertical space on
     // lower resolutions). Borders abut cleanly with 0-spacing.
     for (auto* btn : {m_nbButton, m_nr1Btn, m_nr2Btn, m_nr3Btn,
                       m_nr4Btn, m_dfnrBtn, m_mnrBtn,
                       m_anfToggle, m_snbToggle}) {
         if (btn) {
-            btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-            btn->setFixedHeight(22);
+            btn->setFixedSize(52, 22);
+            btn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         }
     }
 
@@ -1050,6 +1059,8 @@ void VfoWidget::buildDspTab()
     // The toggle acts as the enable button; slider + Hz label are only visible
     // when APF is enabled AND mode is CW (gated by applyModeVisibility).
     m_apfToggle = makeToggle(QStringLiteral("APF"));
+    m_apfToggle->setFixedSize(52, 22);
+    m_apfToggle->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     // From Thetis console.resx:348 — chkCWAPFEnabled.ToolTip
     m_apfToggle->setToolTip(QStringLiteral("Enables APF"));
 
