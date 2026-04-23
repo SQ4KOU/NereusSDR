@@ -2699,11 +2699,12 @@ void VfoWidget::showMnrPopup(const QPoint& globalPos)
     // factory defaults on every slider. DspParamPopup::finalize runs the
     // per-slider resetters registered by addSlider's /*factory=*/ arg.
     p->finalize([this]() { emit openNrSetupRequested(NereusSDR::NrSlot::MNR); },
-                /*onReset=*/[this]() {
-                    // The m_resetters chain pushes slider→UI→SliceModel
-                    // automatically via the valueChanged signal wiring.
-                    // Nothing to do here — provided so the Reset button
-                    // shows up in the popup footer.
+                /*onReset=*/[]() {
+                    // Per-slider resetters registered via addSlider's
+                    // factoryDefault arg already push slider → onChange →
+                    // SliceModel. This empty callback exists only so the
+                    // Reset button renders in the popup footer (finalize
+                    // hides it when onReset is null).
                 });
     p->showAt(globalPos);
 }
