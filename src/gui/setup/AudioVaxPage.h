@@ -72,6 +72,12 @@ public:
     // to close the engine bus, and updates badge visibility.
     void clearBinding();
 
+    // Pure label builder for the disabled "native (bound automatically)"
+    // info row shown at the top of the Auto-detect menu on Mac/Linux when
+    // a platform-native HAL/pipe VAX bridge is live. Public so unit tests
+    // can assert the label format without opening a modal QMenu.
+    static QString nativeHalLabelForCable(const DetectedCable& cable);
+
 #ifdef NEREUS_BUILD_TESTS
     // Test seam — override the cable vector used by onAutoDetectClicked()
     // so unit tests can exercise menu population without PortAudio.
@@ -109,6 +115,14 @@ public:
 
     int channelIndex() const { return m_channel; }
 
+    // Reflect the actual AudioEngine bus-open state into the card banner.
+    // AudioVaxPage calls this once per card after buildPage() and again on
+    // every AudioEngine::vaxConfigChanged / enabledChanged round-trip so
+    // the banner doesn't lie when makeVaxBus() fails (HAL plugin missing)
+    // or the user toggles the channel off (setVaxEnabled(false) closes
+    // the bus).
+    void setBusOpen(bool open);
+
 signals:
     void configChanged(int channel, NereusSDR::AudioDeviceConfig cfg);
     void enabledChanged(int channel, bool on);
@@ -125,6 +139,14 @@ private:
     DeviceCard*  m_deviceCard{nullptr};
     QPushButton* m_autoDetectBtn{nullptr};
     QLabel*      m_badgeLabel{nullptr};
+    QLabel*      m_statusLabel{nullptr};
+
+    // Mirror of AudioEngine::isVaxBusOpen(m_channel). Defaults to true so
+    // standalone card instances (tests, previews without a RadioModel)
+    // render the "bound" happy path rather than a misleading amber
+    // "unavailable" banner. AudioVaxPage overrides via setBusOpen() once
+    // the engine pointer is in hand.
+    bool         m_busOpen{true};
 
 #ifdef NEREUS_BUILD_TESTS
     bool                    m_useTestCables{false};

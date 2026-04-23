@@ -80,6 +80,30 @@ private:
         return {VirtualCableProduct::VbCableA, name, true, 0};
     }
 
+    // Pull the banner QLabel out of a VaxChannelCard. The banner is
+    // the QLabel whose current text matches any of the state-machine
+    // outcomes from updateBadge(). Returns nullptr if none match so
+    // the caller can fail fast.
+    static QLabel* findStatusBanner(VaxChannelCard& card)
+    {
+        for (QLabel* l : card.findChildren<QLabel*>()) {
+            const QString t = l->text();
+            if (t.contains(QStringLiteral("Bound:"),
+                           Qt::CaseInsensitive)
+                || t.contains(QStringLiteral("Disabled"),
+                              Qt::CaseInsensitive)
+                || t.contains(QStringLiteral("Not bound"),
+                              Qt::CaseInsensitive)
+                || t.contains(QStringLiteral("failed to open"),
+                              Qt::CaseInsensitive)
+                || t.contains(QStringLiteral("unavailable"),
+                              Qt::CaseInsensitive)) {
+                return l;
+            }
+        }
+        return nullptr;
+    }
+
 private slots:
 
     void init()    { clearAudioKeys(); }
@@ -361,6 +385,191 @@ private slots:
         QCOMPARE(s.value(base + QStringLiteral("BypassMixer"),  QString()).toString(),
                  QStringLiteral("False"));
         QCOMPARE(s.value(base + QStringLiteral("ManualLatencyMs"), QString()).toString().toInt(), 0);
+    }
+
+    // ── 12c. nativeHalLabelForCable (option-2 Mac/Linux info row) ───────────
+    // Pure label builder used by onAutoDetectClicked() on Mac/Linux to
+    // render the disabled "native (bound automatically)" row for each
+    // detected NereusSdrVax device. Assertions keep the label contract
+    // stable so the UI doesn't silently regress when the string changes.
+    void nativeHalLabel_containsDeviceNameAndVendor()
+    {
+        const DetectedCable cable{
+            VirtualCableProduct::NereusSdrVax,
+            QStringLiteral("NereusSDR VAX 1"),
+            /*isInput=*/true, 0};
+
+        const QString label = VaxChannelCard::nativeHalLabelForCable(cable);
+
+        QVERIFY2(label.contains(QStringLiteral("NereusSDR VAX 1")),
+                 qPrintable(QStringLiteral(
+                     "Expected label to contain the device name; got: %1")
+                     .arg(label)));
+        QVERIFY2(label.contains(QStringLiteral("NereusSDR")),
+                 "Expected vendor name in native HAL label");
+        QVERIFY2(label.contains(QStringLiteral("bound automatically"),
+                                Qt::CaseInsensitive),
+                 "Expected native rows to declare they are bound automatically");
+    }
+
+    // ── 12d. Binding-status banner reflects current state ──────────────────
+    // The persistent status banner must always answer "what is this channel
+    // bound to?" without requiring the user to open any menu. Cases:
+    //   - empty deviceName on Mac/Linux → "Bound: Native HAL · NereusSDR VAX N"
+    //   - non-empty deviceName → "Bound: <name>"
+    void statusLabel_reflectsNativeHalWhenUnbound()
+    {
+        clearAudioKeys();
+        // VAX card defaults to Enabled=True via test seam so the banner
+        // doesn't short-circuit to the "Disabled" state. `m_busOpen`
+        // defaults to true (assumed healthy when no engine is wired).
+        AppSettings::instance().setValue(
+            QStringLiteral("audio/Vax2/Enabled"), QStringLiteral("True"));
+
+        VaxChannelCard card(2, nullptr);
+        card.loadFromSettings();
+
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
+        QLabel* statusLabel = findStatusBanner(card);
+        QVERIFY2(statusLabel, "Expected a binding-status label on VaxChannelCard");
+        QVERIFY2(statusLabel->text().contains(
+                     QStringLiteral("NereusSDR VAX 2")),
+                 qPrintable(QStringLiteral(
+                     "Expected status to name the channel's native HAL device;"
+                     " got: %1").arg(statusLabel->text())));
+#else
+        QSKIP("Native-HAL status only applies on macOS/Linux.");
+#endif
+    }
+
+    void statusLabel_reflectsByoBinding()
+    {
+        clearAudioKeys();
+        AppSettings::instance().setValue(
+            QStringLiteral("audio/Vax3/Enabled"), QStringLiteral("True"));
+
+        VaxChannelCard card(3, nullptr);
+        card.loadFromSettings();
+        const QString cableName =
+            QStringLiteral("CABLE-A Output (VB-Audio Virtual Cable)");
+        card.bindDeviceNameForTest(cableName);
+
+        QLabel* statusLabel = findStatusBanner(card);
+        QVERIFY2(statusLabel, "Expected a binding-status label on VaxChannelCard");
+        QVERIFY2(statusLabel->text().contains(cableName),
+                 qPrintable(QStringLiteral(
+                     "Expected status to name the BYO cable; got: %1")
+                     .arg(statusLabel->text())));
+    }
+
+    // ── Banner flips to amber "Disabled" when the Enabled checkbox is off.
+    // Regression gate for Codex P2: "Show unbound state before claiming
+    // native HAL is bound" — users can uncheck the card's Enabled box
+    // (which closes the bus via AudioEngine::setVaxEnabled(false)) and
+    // previously still saw the green "Bound: Native HAL …" banner.
+    void statusLabel_flipsToDisabledWhenChannelOff()
+    {
+        clearAudioKeys();
+        AppSettings::instance().setValue(
+            QStringLiteral("audio/Vax1/Enabled"), QStringLiteral("False"));
+
+        VaxChannelCard card(1, nullptr);
+        card.loadFromSettings();
+
+        QLabel* statusLabel = findStatusBanner(card);
+        QVERIFY2(statusLabel, "Expected a banner label");
+        const QString txt = statusLabel->text();
+        QVERIFY2(txt.contains(QStringLiteral("Disabled"), Qt::CaseInsensitive),
+                 qPrintable(QStringLiteral(
+                     "Expected banner to read 'Disabled' when Enabled=False;"
+                     " got: %1").arg(txt)));
+        // Must NOT claim any binding while the checkbox is off.
+        QVERIFY2(!txt.contains(QStringLiteral("Bound:"), Qt::CaseInsensitive),
+                 "Disabled banner must not also claim 'Bound:'");
+    }
+
+    // ── Banner flips to amber "unavailable" / "failed to open" when the
+    // engine reports the VAX bus is NOT open, regardless of whether the
+    // card thinks it has a binding. Second half of the Codex P2 gate.
+    void statusLabel_flipsToUnavailableWhenBusNotOpen()
+    {
+        clearAudioKeys();
+        AppSettings::instance().setValue(
+            QStringLiteral("audio/Vax4/Enabled"), QStringLiteral("True"));
+
+        VaxChannelCard card(4, nullptr);
+        card.loadFromSettings();
+        card.setBusOpen(false);
+
+        QLabel* statusLabel = findStatusBanner(card);
+        QVERIFY2(statusLabel, "Expected a banner label");
+        const QString txt = statusLabel->text();
+#if defined(Q_OS_MAC)
+        QVERIFY2(txt.contains(QStringLiteral("unavailable"), Qt::CaseInsensitive)
+                     || txt.contains(QStringLiteral("failed to open"),
+                                     Qt::CaseInsensitive),
+                 qPrintable(QStringLiteral(
+                     "Expected banner to warn when bus is not open;"
+                     " got: %1").arg(txt)));
+#elif defined(Q_OS_LINUX)
+        QVERIFY2(txt.contains(QStringLiteral("unavailable"), Qt::CaseInsensitive)
+                     || txt.contains(QStringLiteral("failed to open"),
+                                     Qt::CaseInsensitive),
+                 qPrintable(QStringLiteral(
+                     "Expected banner to warn when bus is not open;"
+                     " got: %1").arg(txt)));
+#else
+        // Windows with no device name and busOpen=false: the existing
+        // "Not bound — pick a virtual cable" copy covers this since
+        // Windows has no native-HAL fallback.
+        QVERIFY2(txt.contains(QStringLiteral("Not bound"), Qt::CaseInsensitive)
+                     || txt.contains(QStringLiteral("failed to open"),
+                                     Qt::CaseInsensitive),
+                 qPrintable(QStringLiteral(
+                     "Expected Windows banner to warn when no cable picked;"
+                     " got: %1").arg(txt)));
+#endif
+        QVERIFY2(!txt.contains(QStringLiteral("\u2713  Bound:"),
+                               Qt::CaseInsensitive),
+                 "Unavailable banner must not also claim a successful bind");
+    }
+
+    // ── setBusOpen toggles the banner between green/amber without
+    // requiring a full re-load cycle.
+    void statusLabel_tracksBusOpenTransitions()
+    {
+        clearAudioKeys();
+        AppSettings::instance().setValue(
+            QStringLiteral("audio/Vax2/Enabled"), QStringLiteral("True"));
+
+        VaxChannelCard card(2, nullptr);
+        card.loadFromSettings();
+
+        // Start healthy (default m_busOpen=true).
+        QLabel* banner = findStatusBanner(card);
+        QVERIFY(banner);
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
+        QVERIFY(banner->text().contains(QStringLiteral("\u2713  Bound:"),
+                                        Qt::CaseInsensitive));
+
+        // Flip to unhealthy.
+        card.setBusOpen(false);
+        banner = findStatusBanner(card);
+        QVERIFY(banner);
+        QVERIFY(banner->text().contains(QStringLiteral("unavailable"),
+                                        Qt::CaseInsensitive)
+                || banner->text().contains(QStringLiteral("failed to open"),
+                                           Qt::CaseInsensitive));
+
+        // Flip back to healthy.
+        card.setBusOpen(true);
+        banner = findStatusBanner(card);
+        QVERIFY(banner);
+        QVERIFY(banner->text().contains(QStringLiteral("\u2713  Bound:"),
+                                        Qt::CaseInsensitive));
+#else
+        QSKIP("Native-HAL transitions only apply on macOS/Linux.");
+#endif
     }
 
     // ── 13. autoDetectFreeCable_refreshesDeviceCardUI (C2) ───────────────────

@@ -682,16 +682,64 @@ void VaxFirstRunDialog::buildBodyWindowsNoCables(QVBoxLayout* bodyLayout)
 
 void VaxFirstRunDialog::buildBodyMacNative(QVBoxLayout* bodyLayout)
 {
-    // Intro — byte-verbatim from mockup.
+    // Per-slot HAL-detection map. Earlier revisions hardcoded "Ready" for
+    // all 4 rows regardless of m_detected, so the dialog happily claimed
+    // the plugin was live even on installs where it had been removed or
+    // blocked (e.g. System Settings → Privacy had coreaudiod quarantined
+    // after a bad install). Drive slot status from m_detected so the UX
+    // doesn't lie on broken installs.
+    std::array<bool, 4> slotDetected{false, false, false, false};
+    for (const auto& cable : m_detected) {
+        if (cable.product != VirtualCableProduct::NereusSdrVax) {
+            continue;
+        }
+        // Device name matches "NereusSDR VAX <digit>" (enforced by the
+        // VirtualCableDetector::matchProduct regex). Pull the digit off
+        // the tail to place the row in the right slot; anything that
+        // doesn't trail with 1-4 gets ignored here.
+        const QChar c = cable.deviceName.isEmpty()
+                             ? QChar(0)
+                             : cable.deviceName.back();
+        const int slot = c.isDigit() ? (c.digitValue()) : 0;
+        if (slot >= 1 && slot <= 4) {
+            slotDetected[slot - 1] = true;
+        }
+    }
+
+    int detectedCount = 0;
+    for (bool on : slotDetected) {
+        if (on) { ++detectedCount; }
+    }
+
+    // Intro — adapts to actual detection count. "All 4 ready" when the
+    // plugin is fully live; "<N> of 4 ready" when partial; a clear
+    // "not detected" warning when coreaudiod hasn't loaded the driver.
     auto* intro = new QLabel(this);
     intro->setTextFormat(Qt::RichText);
     intro->setWordWrap(true);
     intro->setStyleSheet(introLabelStyle());
-    intro->setText(QStringLiteral(
-        "NereusSDR ships native VAX audio devices on macOS."
-        " <b style='color:%1'>All 4 VAX channels are ready to use</b>"
-        " &mdash; no extra installation needed.")
-        .arg(Style::kAccent));
+    if (detectedCount == 4) {
+        intro->setText(QStringLiteral(
+            "NereusSDR ships native VAX audio devices on macOS."
+            " <b style='color:%1'>All 4 VAX channels are ready to use</b>"
+            " &mdash; no extra installation needed.")
+            .arg(Style::kAccent));
+    } else if (detectedCount > 0) {
+        intro->setText(QStringLiteral(
+            "NereusSDR ships native VAX audio devices on macOS."
+            " <b style='color:%1'>%2 of 4 VAX channels detected.</b>"
+            " Reinstall NereusSDR if this persists.")
+            .arg(Style::kAmberText)
+            .arg(detectedCount));
+    } else {
+        intro->setText(QStringLiteral(
+            "NereusSDR ships a native CoreAudio HAL plugin for VAX."
+            " <b style='color:%1'>The HAL plugin was not detected.</b>"
+            " Reinstall NereusSDR or unblock"
+            " <code>NereusSDRVAX.driver</code> in System Settings"
+            " &rarr; Privacy &amp; Security to enable native VAX.")
+            .arg(Style::kAmberText));
+    }
     bodyLayout->addWidget(intro);
 
     auto* listFrame = new QFrame(this);
@@ -703,6 +751,8 @@ void VaxFirstRunDialog::buildBodyMacNative(QVBoxLayout* bodyLayout)
 
     // Row 1 has the "NereusSDR TX" tail per mockup; rows 2-4 are the
     // plain "NereusSDR VAX N" line. Device-name copy byte-verbatim.
+    // Each row's status pill flips between "Ready" (detected) and
+    // "— not detected —" (absent from m_detected).
     for (int slot = 1; slot <= 4; ++slot) {
         QString deviceLine;
         if (slot == 1) {
@@ -711,11 +761,20 @@ void VaxFirstRunDialog::buildBodyMacNative(QVBoxLayout* bodyLayout)
         } else {
             deviceLine = QStringLiteral("NereusSDR VAX %1").arg(slot);
         }
-        listLayout->addWidget(makeDetRow(
-            slot, deviceLine,
-            QStringLiteral("CoreAudio HAL \u2022 native"),
-            QStringLiteral("Ready"), pillNewStyle(),
-            QString(), listFrame));
+        if (slotDetected[slot - 1]) {
+            listLayout->addWidget(makeDetRow(
+                slot, deviceLine,
+                QStringLiteral("CoreAudio HAL \u2022 native"),
+                QStringLiteral("Ready"), pillNewStyle(),
+                QString(), listFrame));
+        } else {
+            listLayout->addWidget(makeDetRow(
+                slot, deviceLine,
+                QStringLiteral("CoreAudio HAL \u2022 not loaded"),
+                QString(), QString(),
+                QStringLiteral("not detected"),
+                listFrame));
+        }
     }
     bodyLayout->addWidget(listFrame);
 
