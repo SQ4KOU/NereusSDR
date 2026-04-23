@@ -660,9 +660,12 @@ void RadioModel::onBandButtonClicked(Band band)
         return;
     }
 
-    // Order: freq before mode. Matches Thetis SetBand
-    // (console.cs:5867-5886 [v2.10.3.13]). Alex band-dependent filters
-    // track the freq change before mode-dependent bandwidth is applied.
+    // Order: freq before mode. NereusSDR-specific — frequencyChanged
+    // triggers the per-band Alex/antenna update before mode-dependent
+    // filter bandwidth applies. Note Thetis SetBand applies mode first
+    // then freq (console.cs:5886/5911 [v2.10.3.13]); both orderings
+    // produce the same end state, but the freq-first order exposes the
+    // Alex switch earlier in the signal chain.
     slice->setFrequency(seed.frequencyHz);
     slice->setDspMode(seed.mode);
     slice->saveToSettings(band);   // Bake seed for next visit.
