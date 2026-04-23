@@ -37,6 +37,22 @@
   verification, with explicit out-of-scope enumeration so reviewers
   don't file FAIL reports on deferred 3P-I-b/3M-1 scope.
   (Phase 3P-I-a)
+- **Phase 3G RX Epic Sub-epic B — Noise Blanker family.** Port of Thetis's
+  three-filter NB stack: **NB** (`nob.c`, Whitney), **NB2** (`nobII.c`,
+  second-gen), and **SNB** (`snb.c`, spectral). New `NbFamily` wrapper on
+  `RxChannel` owns the WDSP create/destroy lifecycle and tuning. VFO gets a
+  cycling NB button (`Off → NB → NB2 → Off`) mirroring Thetis `chkNB`
+  tri-state (`console.cs:43513-43560 [v2.10.3.13]`). RxApplet gains
+  Threshold (0-100) + Lag (0-20 ms) sliders, scaled to match
+  `setup.cs:8572, 16236 [v2.10.3.13]`. Setup → DSP → NB/SNB page is now
+  interactive (previously greyed) and wires global defaults via AppSettings.
+  `NbMode` + full `NbTuning` struct persist per-slice-per-band under
+  `Slice<N>/Band<key>/Nb{Mode,Threshold,TauMs,LeadMs,LagMs}`; `SnbEnabled`
+  session-level. Defaults pinned to Thetis `cmaster.c:43-68 [v2.10.3.13]`
+  byte-for-byte (`nbThreshold=30.0`, times=0.1 ms, `backtau=0.05 s`,
+  `nb2MaxImpMs=25.0`). Three new unit tests (`tst_nb_family`,
+  `tst_slice_nb_persistence`) plus rewritten `tst_rxchannel_nb2_polish`
+  verify mode cycling, default parity, and per-band round-trip.
 
 ### Fixed
 - **Closes [#98](https://github.com/boydsoftprez/NereusSDR/issues/98)
