@@ -93,7 +93,7 @@ static const char* kStatusBYOStyle =
     "  padding: 3px 8px;"
     "}";
 
-[[maybe_unused]] static const char* kStatusUnboundStyle =
+static const char* kStatusUnboundStyle =
     "QLabel {"
     "  background: #2a1a00;"
     "  border: 1px solid #b87300;"
@@ -273,7 +273,21 @@ void VaxChannelCard::onInnerConfigChanged(AudioDeviceConfig cfg)
 
 void VaxChannelCard::onInnerEnabledChanged(bool on)
 {
+    // Refresh the banner so the amber "Disabled" / green "Bound" read
+    // flips in lockstep with the checkbox. Without this the user could
+    // uncheck Enabled and still see a stale green "Bound: Native HAL"
+    // even though AudioEngine::setVaxEnabled(false) has closed the bus.
+    updateBadge();
     emit enabledChanged(m_channel, on);
+}
+
+void VaxChannelCard::setBusOpen(bool open)
+{
+    if (m_busOpen == open) {
+        return;
+    }
+    m_busOpen = open;
+    updateBadge();
 }
 
 void VaxChannelCard::updateBadge()
@@ -284,61 +298,141 @@ void VaxChannelCard::updateBadge()
     m_autoDetectBtn->setVisible(!hasDevice);
 
     // Persistent binding-status banner — answers "what is this channel
-    // routed through?" at a glance. Three states: native HAL (green),
-    // BYO cable (blue), unbound (amber, Windows-only case).
+    // routed through?" at a glance. State machine:
+    //   - enabled=false                  → amber "Disabled"
+    //   - busOpen=false + empty (Mac/Lx) → amber "Native HAL unavailable"
+    //   - busOpen=false + BYO            → amber "Bus failed to open"
+    //   - busOpen=true  + empty (Mac/Lx) → green "Bound: Native HAL · …"
+    //   - busOpen=true  + BYO            → blue  "Bound: <name>"
+    //   - Windows empty                  → amber "Not bound — pick a cable"
+    // enabled+busOpen are tracked separately because setVaxEnabled(false)
+    // closes the bus (busOpen=false) but leaves m_engine's accounting
+    // intact, while a makeVaxBus() failure leaves the slot null without
+    // the user ever unchecking anything.
     if (m_statusLabel) {
-#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
-        if (hasDevice) {
-            m_statusLabel->setStyleSheet(QLatin1String(kStatusBYOStyle));
-            m_statusLabel->setText(
-                QStringLiteral("\u2713  Bound: %1").arg(deviceName));
-            m_statusLabel->setToolTip(QStringLiteral(
-                "VAX channel is routed through the selected 3rd-party "
-                "virtual cable (BYO override). Clear the Device picker "
-                "to fall back to the native HAL/pipe bridge."));
-        } else {
-#  if defined(Q_OS_MAC)
-            const QString nativeName =
-                QStringLiteral("NereusSDR VAX %1").arg(m_channel);
-            m_statusLabel->setText(
-                QStringLiteral("\u2713  Bound: Native HAL \u00b7 %1")
-                    .arg(nativeName));
-            m_statusLabel->setToolTip(QStringLiteral(
-                "VAX channel is routed through the bundled CoreAudio "
-                "HAL plugin. Consumer apps (WSJT-X, FLDIGI, etc.) can "
-                "select \"%1\" as their audio input device.")
-                .arg(nativeName));
-#  else
-            const QString nativeName =
-                QStringLiteral("NereusSDR VAX %1").arg(m_channel);
-            m_statusLabel->setText(
-                QStringLiteral("\u2713  Bound: Native (PipeWire) \u00b7 %1")
-                    .arg(nativeName));
-            m_statusLabel->setToolTip(QStringLiteral(
-                "VAX channel is routed through a native PipeWire pipe "
-                "source. Consumer apps can select \"%1\" as their audio "
-                "input device.")
-                .arg(nativeName));
-#  endif
-            m_statusLabel->setStyleSheet(QLatin1String(kStatusNativeStyle));
-        }
-#else  // Q_OS_WIN
-        if (hasDevice) {
-            m_statusLabel->setStyleSheet(QLatin1String(kStatusBYOStyle));
-            m_statusLabel->setText(
-                QStringLiteral("\u2713  Bound: %1").arg(deviceName));
-            m_statusLabel->setToolTip(QStringLiteral(
-                "VAX channel is routed through the selected virtual cable."));
-        } else {
+        const bool enabled = isChannelEnabled();
+        if (!enabled) {
             m_statusLabel->setStyleSheet(QLatin1String(kStatusUnboundStyle));
             m_statusLabel->setText(QStringLiteral(
-                "\u26a0  Not bound \u2014 pick a virtual cable"));
+                "\u26a0  Disabled \u2014 enable to route audio"));
             m_statusLabel->setToolTip(QStringLiteral(
-                "Windows has no built-in virtual audio cable. Install "
-                "VB-CABLE, Voicemeeter, or VAC and pick it in the Device "
-                "dropdown to enable this VAX channel."));
-        }
+                "The VAX channel's Enabled checkbox is off. Check it to "
+                "open the audio bus and route receiver audio through this "
+                "slot."));
+        } else {
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
+            const QString nativeName =
+                QStringLiteral("NereusSDR VAX %1").arg(m_channel);
+            if (hasDevice) {
+                // BYO override path.
+                if (!m_busOpen) {
+                    m_statusLabel->setStyleSheet(
+                        QLatin1String(kStatusUnboundStyle));
+                    m_statusLabel->setText(
+                        QStringLiteral("\u26a0  Bus failed to open: %1")
+                            .arg(deviceName));
+                    m_statusLabel->setToolTip(QStringLiteral(
+                        "NereusSDR tried to open the selected 3rd-party "
+                        "virtual cable but the PortAudio stream failed. "
+                        "The device may be busy, unplugged, or the "
+                        "Driver API / sample-rate combo may be "
+                        "unsupported. Clear the Device picker to fall "
+                        "back to the native HAL/pipe bridge."));
+                } else {
+                    m_statusLabel->setStyleSheet(
+                        QLatin1String(kStatusBYOStyle));
+                    m_statusLabel->setText(
+                        QStringLiteral("\u2713  Bound: %1").arg(deviceName));
+                    m_statusLabel->setToolTip(QStringLiteral(
+                        "VAX channel is routed through the selected "
+                        "3rd-party virtual cable (BYO override). Clear "
+                        "the Device picker to fall back to the native "
+                        "HAL/pipe bridge."));
+                }
+            } else {
+                // Native HAL / pipe bridge path.
+                if (!m_busOpen) {
+                    m_statusLabel->setStyleSheet(
+                        QLatin1String(kStatusUnboundStyle));
+#  if defined(Q_OS_MAC)
+                    m_statusLabel->setText(QStringLiteral(
+                        "\u26a0  Native HAL unavailable \u2014 reinstall "
+                        "NereusSDR"));
+                    m_statusLabel->setToolTip(QStringLiteral(
+                        "NereusSDR could not open the bundled CoreAudio "
+                        "HAL plugin's shared-memory bridge. Reinstall "
+                        "NereusSDR, or unblock NereusSDRVAX.driver in "
+                        "System Settings \u2192 Privacy & Security."));
+#  else
+                    m_statusLabel->setText(QStringLiteral(
+                        "\u26a0  Native PipeWire bridge unavailable"));
+                    m_statusLabel->setToolTip(QStringLiteral(
+                        "NereusSDR could not create a PipeWire "
+                        "pipe-source for this VAX slot. Check that "
+                        "PipeWire is running and that pactl is "
+                        "available on PATH."));
+#  endif
+                } else {
+                    m_statusLabel->setStyleSheet(
+                        QLatin1String(kStatusNativeStyle));
+#  if defined(Q_OS_MAC)
+                    m_statusLabel->setText(
+                        QStringLiteral(
+                            "\u2713  Bound: Native HAL \u00b7 %1")
+                            .arg(nativeName));
+                    m_statusLabel->setToolTip(QStringLiteral(
+                        "VAX channel is routed through the bundled "
+                        "CoreAudio HAL plugin. Consumer apps (WSJT-X, "
+                        "FLDIGI, etc.) can select \"%1\" as their "
+                        "audio input device.")
+                            .arg(nativeName));
+#  else
+                    m_statusLabel->setText(
+                        QStringLiteral(
+                            "\u2713  Bound: Native (PipeWire) \u00b7 %1")
+                            .arg(nativeName));
+                    m_statusLabel->setToolTip(QStringLiteral(
+                        "VAX channel is routed through a native "
+                        "PipeWire pipe source. Consumer apps can select "
+                        "\"%1\" as their audio input device.")
+                            .arg(nativeName));
+#  endif
+                }
+            }
+#else  // Q_OS_WIN
+            if (hasDevice) {
+                if (!m_busOpen) {
+                    m_statusLabel->setStyleSheet(
+                        QLatin1String(kStatusUnboundStyle));
+                    m_statusLabel->setText(
+                        QStringLiteral("\u26a0  Bus failed to open: %1")
+                            .arg(deviceName));
+                    m_statusLabel->setToolTip(QStringLiteral(
+                        "NereusSDR tried to open the selected virtual "
+                        "cable but the PortAudio stream failed. The "
+                        "device may be busy, unplugged, or the Driver "
+                        "API / sample-rate combo may be unsupported."));
+                } else {
+                    m_statusLabel->setStyleSheet(
+                        QLatin1String(kStatusBYOStyle));
+                    m_statusLabel->setText(
+                        QStringLiteral("\u2713  Bound: %1").arg(deviceName));
+                    m_statusLabel->setToolTip(QStringLiteral(
+                        "VAX channel is routed through the selected "
+                        "virtual cable."));
+                }
+            } else {
+                m_statusLabel->setStyleSheet(
+                    QLatin1String(kStatusUnboundStyle));
+                m_statusLabel->setText(QStringLiteral(
+                    "\u26a0  Not bound \u2014 pick a virtual cable"));
+                m_statusLabel->setToolTip(QStringLiteral(
+                    "Windows has no built-in virtual audio cable. "
+                    "Install VB-CABLE, Voicemeeter, or VAC and pick it "
+                    "in the Device dropdown to enable this VAX channel."));
+            }
 #endif
+        }
     }
 
 #if defined(Q_OS_WIN)
@@ -608,13 +702,31 @@ void AudioVaxPage::buildPage()
 
         // Wire configChanged to AudioEngine.
         if (m_engine) {
+            // Seed the card with the engine's current bus-open state so the
+            // banner reflects reality from the first paint (green bound /
+            // amber "Native HAL unavailable" / amber "Bus failed to open").
+            card->setBusOpen(m_engine->isVaxBusOpen(ch));
+
             connect(card, &VaxChannelCard::configChanged, this,
                     [this](int channel, AudioDeviceConfig cfg) {
                 m_engine->setVaxConfig(channel, cfg);
+                // setVaxConfig may have torn down + rebuilt the slot's bus
+                // (BYO path) or fallen back to the native bridge (empty
+                // deviceName). Reflect the post-op open state immediately
+                // so the banner doesn't lag.
+                if (auto* c = channelCard(channel)) {
+                    c->setBusOpen(m_engine->isVaxBusOpen(channel));
+                }
             });
             connect(card, &VaxChannelCard::enabledChanged, this,
                     [this](int channel, bool on) {
                 m_engine->setVaxEnabled(channel, on);
+                // setVaxEnabled(false) closes the bus; setVaxEnabled(true)
+                // re-mints the native or BYO bus. Push the resulting state
+                // back onto the card so the green/amber banner matches.
+                if (auto* c = channelCard(channel)) {
+                    c->setBusOpen(m_engine->isVaxBusOpen(channel));
+                }
             });
         }
     }
@@ -640,12 +752,17 @@ void AudioVaxPage::wirePillFeedback()
         return;
     }
 
-    // Connect AudioEngine::vaxConfigChanged back to each card's pill.
+    // Connect AudioEngine::vaxConfigChanged back to each card's pill and
+    // banner. vaxConfigChanged is also emitted on the resetAudioSettings
+    // path (factory-reset wipe + native-bus re-mint), so the banner has
+    // to re-read isVaxBusOpen here too.
     connect(m_engine, &AudioEngine::vaxConfigChanged, this,
             [this](int channel, AudioDeviceConfig cfg) {
         const int idx = channel - 1;
         if (idx >= 0 && idx < m_channelCards.size()) {
             m_channelCards[idx]->updateNegotiatedPill(cfg);
+            m_channelCards[idx]->setBusOpen(
+                m_engine->isVaxBusOpen(channel));
         }
     });
 }

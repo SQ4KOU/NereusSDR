@@ -115,6 +115,14 @@ public:
 
     int channelIndex() const { return m_channel; }
 
+    // Reflect the actual AudioEngine bus-open state into the card banner.
+    // AudioVaxPage calls this once per card after buildPage() and again on
+    // every AudioEngine::vaxConfigChanged / enabledChanged round-trip so
+    // the banner doesn't lie when makeVaxBus() fails (HAL plugin missing)
+    // or the user toggles the channel off (setVaxEnabled(false) closes
+    // the bus).
+    void setBusOpen(bool open);
+
 signals:
     void configChanged(int channel, NereusSDR::AudioDeviceConfig cfg);
     void enabledChanged(int channel, bool on);
@@ -132,6 +140,13 @@ private:
     QPushButton* m_autoDetectBtn{nullptr};
     QLabel*      m_badgeLabel{nullptr};
     QLabel*      m_statusLabel{nullptr};
+
+    // Mirror of AudioEngine::isVaxBusOpen(m_channel). Defaults to true so
+    // standalone card instances (tests, previews without a RadioModel)
+    // render the "bound" happy path rather than a misleading amber
+    // "unavailable" banner. AudioVaxPage overrides via setBusOpen() once
+    // the engine pointer is in hand.
+    bool         m_busOpen{true};
 
 #ifdef NEREUS_BUILD_TESTS
     bool                    m_useTestCables{false};
