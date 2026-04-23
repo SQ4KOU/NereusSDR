@@ -2278,9 +2278,10 @@ void MainWindow::wireSliceToSpectrum()
     connect(slice, &SliceModel::nbModeChanged, vfo, &VfoWidget::setNbMode);
     vfo->setNbMode(slice->nbMode());   // initial sync
 
-    connect(slice, &SliceModel::activeNrChanged, this, [vfo](NereusSDR::NrSlot slot) {
-        vfo->setNr2Enabled(slot == NereusSDR::NrSlot::NR2);
-    });
+    // Sub-epic C-1: NR bank sync — VfoWidget::setSlice also connects activeNrChanged
+    // via onActiveNrChanged for the full 7-button bank; this redundant connection is
+    // removed to avoid double-firing. setSlice handles both initial sync and updates.
+    // (Legacy setNr2Enabled call removed here — onActiveNrChanged covers NR2.)
 
     connect(slice, &SliceModel::snbEnabledChanged, this, [vfo](bool v) {
         vfo->setSnbEnabled(v);
