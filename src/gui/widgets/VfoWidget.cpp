@@ -337,11 +337,10 @@ static const char* kModeBtn =
 VfoWidget::VfoWidget(QWidget* parent)
     : QWidget(parent)
 {
-    // Flag grows to fit the active tab's natural width (minimum kWidgetW).
-    // DSP tab with 4-column NR grid needs 260 px → flag expands. Audio/X-RIT
-    // tabs use kWidgetW. Per user directive 2026-04-23: flag should only
-    // consume the space necessary to fit the active tab's buttons.
-    setMinimumWidth(kWidgetW);
+    // Width fixed at kWidgetW per original AetherSDR pattern. Height grows
+    // to fit content (no fixed height). DSP tab's 4-col grid uses ~60 px
+    // buttons so 4×60=240 + margins fit within the 252 px flag width.
+    setFixedWidth(kWidgetW);
     setAttribute(Qt::WA_TranslucentBackground);
     setAutoFillBackground(false);
     setMouseTracking(true);
@@ -397,6 +396,16 @@ void VfoWidget::buildUI()
     mainLayout->addWidget(m_tabStack);
     m_tabStack->hide();  // Hidden by default — click tab to expand
     m_activeTab = -1;    // No tab active initially
+
+    // Per user directive 2026-04-23: flag height should shrink to fit the
+    // ACTIVE tab only (not the tallest tab). QStackedWidget defaults to
+    // sizing by the tallest child; we override by marking hidden pages as
+    // QSizePolicy::Ignored so the stack reports the size of the active page.
+    // The tab-switcher in buildTabBar calls adjustStackSize() to re-apply.
+    for (int i = 0; i < m_tabStack->count(); ++i) {
+        m_tabStack->widget(i)->setSizePolicy(
+            QSizePolicy::Ignored, QSizePolicy::Ignored);
+    }
 
     setLayout(mainLayout);
     adjustSize();
@@ -631,6 +640,14 @@ void VfoWidget::buildTabBar()
                 for (auto* b : m_tabButtons) { b->setChecked(false); }
             } else {
                 m_activeTab = i;
+                // Mark all pages Ignored except the active one, so the
+                // QStackedWidget sizes to the ACTIVE page only (not to
+                // the tallest page). Per user directive 2026-04-23.
+                for (int j = 0; j < m_tabStack->count(); ++j) {
+                    m_tabStack->widget(j)->setSizePolicy(
+                        j == i ? QSizePolicy::Preferred : QSizePolicy::Ignored,
+                        j == i ? QSizePolicy::Preferred : QSizePolicy::Ignored);
+                }
                 m_tabStack->setCurrentIndex(i);
                 m_tabStack->show();
                 for (int j = 0; j < m_tabButtons.size(); ++j) {
@@ -1056,7 +1073,7 @@ void VfoWidget::buildDspTab()
                       m_nr4Btn, m_dfnrBtn, m_mnrBtn,
                       m_anfToggle, m_snbToggle}) {
         if (btn) {
-            btn->setFixedSize(64, 26);
+            btn->setFixedSize(60, 24);
             btn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         }
     }
@@ -1067,7 +1084,7 @@ void VfoWidget::buildDspTab()
     // The toggle acts as the enable button; slider + Hz label are only visible
     // when APF is enabled AND mode is CW (gated by applyModeVisibility).
     m_apfToggle = makeToggle(QStringLiteral("APF"));
-    m_apfToggle->setFixedSize(64, 26);
+    m_apfToggle->setFixedSize(60, 24);
     m_apfToggle->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     // From Thetis console.resx:348 — chkCWAPFEnabled.ToolTip
     m_apfToggle->setToolTip(QStringLiteral("Enables APF"));
