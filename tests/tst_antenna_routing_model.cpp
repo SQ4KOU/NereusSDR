@@ -6,7 +6,6 @@
 #include "models/Band.h"
 #include "core/RadioConnection.h"
 #include "core/accessories/AlexController.h"
-#include "core/BoardCapabilities.h"
 #include "core/AppSettings.h"
 
 using namespace NereusSDR;

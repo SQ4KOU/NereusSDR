@@ -991,7 +991,7 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
 
     // Meter data → MeterModel
     connect(m_connection, &RadioConnection::meterDataReceived,
-            this, [this](float fwd, float rev, float voltage, float current) {
+            this, [](float fwd, float rev, float voltage, float current) {
         Q_UNUSED(voltage);
         Q_UNUSED(current);
         Q_UNUSED(fwd);
@@ -1031,7 +1031,7 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
 
     // Error handling
     connect(m_connection, &RadioConnection::errorOccurred,
-            this, [this](NereusSDR::RadioConnectionError code, const QString& msg) {
+            this, [](NereusSDR::RadioConnectionError code, const QString& msg) {
         Q_UNUSED(code);
         qCWarning(lcConnection) << "Connection error:" << msg;
     });
@@ -1489,7 +1489,7 @@ void RadioModel::wireSliceSignals()
     //
     // Full dolly-filter support (SetRXAmpeakFilFreq wiring) is deferred to a later
     // phase when the ampeak API is added to RxChannel.
-    auto updateRttyFilter = [this, slice]() {
+    auto updateRttyFilter = [slice]() {
         const int mark  = slice->rttyMarkHz();
         const int shift = slice->rttyShiftHz();
         const int low   = mark - shift / 2 - 100;
