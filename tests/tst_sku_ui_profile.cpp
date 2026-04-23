@@ -152,6 +152,49 @@ private slots:
         QVERIFY(!p.hasRxOutOnTx);
         QVERIFY(!p.hasRxBypassUi);
     }
+
+    // Three independently-coded NereusSDR-native cases (no Thetis switch
+    // entry in the 19832-20405 block). Each deserves its own regression
+    // pin — they're the cases most likely to drift if someone edits the
+    // fallback policy.
+
+    void hpsdr_native_fallback() {
+        // HPSDR (pre-ANAN Atlas) has no Thetis antenna-overlay case;
+        // NereusSDR-native default per SkuUiProfile.cpp:74-83.
+        const auto p = skuUiProfileFor(HPSDRModel::HPSDR);
+        QCOMPARE(p.rxOnlyLabels[0], QStringLiteral("RX1"));  // struct default
+        QVERIFY(p.hasExt1OutOnTx);
+        QVERIFY(p.hasExt2OutOnTx);
+        QVERIFY(p.hasRxOutOnTx);
+        QVERIFY(p.hasRxBypassUi);  // differs from HERMES (true vs false)
+        QCOMPARE(p.antennaTabLabel, QStringLiteral("Alex"));
+    }
+
+    void orionmkii_native_grouping() {
+        // ORIONMKII has no explicit Thetis case; NereusSDR groups with
+        // ANAN100 family per SkuUiProfile.cpp:117-131.
+        const auto p = skuUiProfileFor(HPSDRModel::ORIONMKII);
+        QCOMPARE(p.rxOnlyLabels[0], QStringLiteral("EXT2"));
+        QCOMPARE(p.rxOnlyLabels[1], QStringLiteral("EXT1"));
+        QCOMPARE(p.rxOnlyLabels[2], QStringLiteral("XVTR"));
+        QVERIFY(p.hasExt1OutOnTx);
+        QVERIFY(p.hasExt2OutOnTx);
+        QVERIFY(p.hasRxOutOnTx);
+        QVERIFY(p.hasRxBypassUi);
+        QCOMPARE(p.antennaTabLabel, QStringLiteral("Ant/Filters"));
+    }
+
+    void redpitaya_BYPS_EXT1_XVTR() {
+        // Thetis setup.cs:20355-20405 [v2.10.3.13 @501e3f5] //DH1KLM
+        const auto p = skuUiProfileFor(HPSDRModel::REDPITAYA);
+        QCOMPARE(p.rxOnlyLabels[0], QStringLiteral("BYPS"));
+        QCOMPARE(p.rxOnlyLabels[1], QStringLiteral("EXT1"));
+        QCOMPARE(p.rxOnlyLabels[2], QStringLiteral("XVTR"));
+        QVERIFY(p.hasExt1OutOnTx);
+        QVERIFY(p.hasExt2OutOnTx);
+        QVERIFY(!p.hasRxOutOnTx);
+        QVERIFY(!p.hasRxBypassUi);
+    }
 };
 
 QTEST_APPLESS_MAIN(TestSkuUiProfile)

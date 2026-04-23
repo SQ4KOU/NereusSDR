@@ -175,7 +175,8 @@ SkuUiProfile skuUiProfileFor(HPSDRModel sku)
         break;
 
     case HPSDRModel::REDPITAYA:
-        // Thetis setup.cs:20355-20405 //DH1KLM
+        // Thetis setup.cs:20355-20405 [v2.10.3.13 @501e3f5]
+        //DH1KLM
         p.hasExt1OutOnTx = true;
         p.hasExt2OutOnTx = true;
         p.hasRxOutOnTx   = false;
