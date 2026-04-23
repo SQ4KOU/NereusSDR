@@ -266,6 +266,8 @@ warren@wpratt.com
 #include "VfoWidget.h"
 #include "VaxChannelSelector.h"
 #include "gui/applets/NyiOverlay.h"
+#include "core/BoardCapabilities.h"
+#include "gui/styles/PopupMenuStyle.h"
 
 #include <QPainter>
 #include <QMouseEvent>
@@ -405,6 +407,7 @@ void VfoWidget::buildHeaderRow()
 
     // RX antenna button (blue)
     m_rxAntBtn = new QPushButton(QStringLiteral("ANT1"), this);
+    m_rxAntBtn->setObjectName(QStringLiteral("m_rxAntBtn"));
     m_rxAntBtn->setStyleSheet(QString(kFlatBtn) +
         QStringLiteral("QPushButton { color: #4488ff; }"));
     m_rxAntBtn->setFixedHeight(18);
@@ -412,6 +415,7 @@ void VfoWidget::buildHeaderRow()
     m_rxAntBtn->setToolTip(QStringLiteral("Toggles receive antenna between RX and TX antennas for RX1"));
     connect(m_rxAntBtn, &QPushButton::clicked, this, [this]() {
         QMenu menu(this);
+        menu.setStyleSheet(QString::fromLatin1(kPopupMenu));   // Phase 3P-I-a T15 — issue #98
         for (const QString& ant : m_antennaList) {
             QAction* act = menu.addAction(ant);
             act->setCheckable(true);
@@ -428,6 +432,7 @@ void VfoWidget::buildHeaderRow()
 
     // TX antenna button (red)
     m_txAntBtn = new QPushButton(QStringLiteral("ANT1"), this);
+    m_txAntBtn->setObjectName(QStringLiteral("m_txAntBtn"));
     m_txAntBtn->setStyleSheet(QString(kFlatBtn) +
         QStringLiteral("QPushButton { color: #ff4444; }"));
     m_txAntBtn->setFixedHeight(18);
@@ -436,6 +441,7 @@ void VfoWidget::buildHeaderRow()
     m_txAntBtn->setToolTip(QStringLiteral("Select TX antenna"));
     connect(m_txAntBtn, &QPushButton::clicked, this, [this]() {
         QMenu menu(this);
+        menu.setStyleSheet(QString::fromLatin1(kPopupMenu));   // Phase 3P-I-a T15 — issue #98
         for (const QString& ant : m_antennaList) {
             QAction* act = menu.addAction(ant);
             act->setCheckable(true);
@@ -2198,6 +2204,16 @@ QColor VfoWidget::sliceColor(int index)
     case 3: return QColor(0xff, 0xff, 0x00);  // yellow
     default: return QColor(0x00, 0xd4, 0xff);
     }
+}
+
+// Phase 3P-I-a T15 — gate RX/TX ANT buttons on Alex presence and antenna count.
+// Spec: docs/architecture/antenna-routing-design.md §6.1 Rule 2 + Rule 4.
+void VfoWidget::setBoardCapabilities(const BoardCapabilities& caps)
+{
+    m_hasAlex = caps.hasAlex;
+    const bool showAnt = caps.hasAlex && caps.antennaInputCount >= 3;
+    if (m_rxAntBtn) { m_rxAntBtn->setVisible(showAnt); }
+    if (m_txAntBtn) { m_txAntBtn->setVisible(showAnt); }
 }
 
 } // namespace NereusSDR

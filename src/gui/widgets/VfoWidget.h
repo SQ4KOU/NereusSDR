@@ -310,6 +310,7 @@ warren@wpratt.com
 namespace NereusSDR {
 
 class VaxChannelSelector;  // forward declaration — full include in VfoWidget.cpp
+struct BoardCapabilities;  // forward declaration — Phase 3P-I-a T15
 
 // Floating VFO flag widget — AetherSDR pattern.
 // Each slice gets one VfoWidget, parented to SpectrumWidget.
@@ -400,6 +401,12 @@ public:
 
     int sliceIndex() const { return m_sliceIndex; }
 
+public slots:
+    // Phase 3P-I-a T15 — hide Blue/Red ANT buttons when the connected
+    // board has no Alex filter (HL2 / Atlas). Called by MainWindow on
+    // RadioModel::currentRadioChanged.
+    void setBoardCapabilities(const NereusSDR::BoardCapabilities& caps);
+
 signals:
     void frequencyChanged(double hz);
     void modeChanged(NereusSDR::DSPMode mode);
@@ -485,6 +492,9 @@ private:
 
     // Fixed width from AetherSDR VfoWidget
     static constexpr int kWidgetW = 252;
+
+    bool m_hasAlex{true};   // default true until caps land; preserves
+                            // existing behavior during discovery.
 
     // --- Header row ---
     QPushButton* m_rxAntBtn{nullptr};

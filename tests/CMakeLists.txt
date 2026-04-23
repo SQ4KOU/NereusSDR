@@ -429,6 +429,15 @@ target_compile_definitions(tst_hl2_io_board_tab PRIVATE NEREUS_BUILD_TESTS)
 # Ports HPSDR/Alex.cs:30-106 [@501e3f5].
 nereus_add_test(tst_alex_controller)
 
+# ── Phase 3P-I-a T14: RadioModel antenna pump integration test ────────────────
+# Exercises the full T9/T10/T11 signal path through a mock RadioConnection that
+# captures every setAntennaRouting call. Covers: rxAnt change for current band
+# reaches wire, band-crossing reapplies new band's antenna, connect applies
+# persisted antenna, and !caps.hasAlex writes zero routing (Thetis SetAntBits
+# parity). Uses NEREUS_BUILD_TESTS hooks on RadioModel for injection/simulation.
+nereus_add_test(tst_antenna_routing_model)
+target_compile_definitions(tst_antenna_routing_model PRIVATE NEREUS_BUILD_TESTS)
+
 # Smoke test for Antenna Control sub-sub-tab UI (Phase 3P-F Task 3):
 # Widget construction + AlexController wiring + Block-TX safety rejection.
 nereus_add_test(tst_antenna_control_tab)
@@ -526,5 +535,24 @@ target_compile_definitions(tst_oc_outputs_live_pins PRIVATE NEREUS_BUILD_TESTS)
 # HermesLiteBandwidthMonitor.
 nereus_add_test(tst_hl2_live_polling)
 target_compile_definitions(tst_hl2_live_polling PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-I-a T21: widget-level capability gating ──────────────────────────
+# Verifies that setBoardCapabilities() on VfoWidget and RxApplet actually
+# hides / shows the m_rxAntBtn / m_txAntBtn children based on
+# caps.hasAlex + antennaInputCount. Coupled to the setObjectName calls in
+# those widgets — the test relies on findChild<QPushButton*>(name) and
+# will FAIL LOUDLY if the objectName strings drift.
+nereus_add_test(tst_ui_capability_gating)
+target_compile_definitions(tst_ui_capability_gating PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3P-I-a T22: kPopupMenu stylesheet invariant ────────────────────────
+# Grep-scans the known antenna QMenu call sites and fails if any
+# `menu.exec(...)` is not preceded by a `setStyleSheet` using kPopupMenu.
+# Gates issue #98 regression (dark-on-dark popup menus on Ubuntu 25.10
+# GNOME). NEREUS_SOURCE_ROOT lets the test resolve paths relative to
+# the source tree regardless of build directory.
+nereus_add_test(tst_popup_style_coverage)
+target_compile_definitions(tst_popup_style_coverage PRIVATE
+    NEREUS_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 
 

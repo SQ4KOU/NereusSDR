@@ -153,6 +153,7 @@ class QPushButton;
 
 namespace NereusSDR {
 
+struct BoardCapabilities;
 class MeterItem;
 
 // From Thetis ucMeter.cs:49-59 — axis lock positions for docked containers.
@@ -273,6 +274,13 @@ public:
     // Call after installing items into the container's MeterWidget.
     void wireInteractiveItem(MeterItem* item);
 
+public slots:
+    // Phase 3P-I-a T17 — push current board caps into every
+    // AntennaButtonItem hosted inside this container. Called by
+    // MainWindow on connect / currentRadioChanged. Stored locally so
+    // items added later (via wireInteractiveItem) inherit the flag.
+    void setBoardCapabilities(const NereusSDR::BoardCapabilities& caps);
+
 signals:
     void floatRequested();
     void dockRequested();
@@ -380,6 +388,11 @@ private:
     QPushButton* m_btnAxis{nullptr};
     QPushButton* m_btnPin{nullptr};
     QPushButton* m_btnSettings{nullptr};
+
+    // Phase 3P-I-a T17 — cached hasAlex flag so items added via
+    // wireInteractiveItem() after setBoardCapabilities() still inherit
+    // the current gating. Defaults to true (no gating) until set.
+    bool m_hasAlex{true};
 };
 
 } // namespace NereusSDR

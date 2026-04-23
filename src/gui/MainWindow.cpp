@@ -531,6 +531,16 @@ void MainWindow::buildUI()
     // (setRadioModel listens to sliceAdded), then flips live.
     m_overlayPanel->setRadioModel(m_radioModel);
 
+    // Phase 3P-I-a T18 — push board caps into the overlay's antenna
+    // combos on connect and on every radio swap. Hides both RX/TX
+    // rows on HL2/Atlas and reseeds from slice 0's rxAntenna/txAntenna
+    // so persisted per-band state is visible in the combo label.
+    m_overlayPanel->setBoardCapabilities(m_radioModel->boardCapabilities());
+    connect(m_radioModel, &RadioModel::currentRadioChanged, m_overlayPanel,
+            [this]() {
+        m_overlayPanel->setBoardCapabilities(m_radioModel->boardCapabilities());
+    });
+
     // Zoom slider bar below spectrum
     auto* zoomBar = new QSlider(Qt::Horizontal, spectrumPane);
     zoomBar->setRange(1, 768);
@@ -555,6 +565,27 @@ void MainWindow::buildUI()
 
     // --- Container Infrastructure (Phase 3G-1) ---
     m_containerManager = new ContainerManager(spectrumPane, m_mainSplitter, this);
+
+    // Phase 3P-I-a T17 — push board caps into every container so
+    // AntennaButtonItems gate their click handler on hasAlex. Re-runs
+    // when the active radio changes (currentRadioChanged) and also fires
+    // when a new container is added (containerAdded). Without this,
+    // freshly-created or restored containers keep the default
+    // m_hasAlex=true and would allow clicks on HL2/Atlas.
+    auto pushCapsToAllContainers = [this]() {
+        const auto caps = m_radioModel->boardCapabilities();
+        for (ContainerWidget* c : m_containerManager->allContainers()) {
+            c->setBoardCapabilities(caps);
+        }
+    };
+    connect(m_radioModel, &RadioModel::currentRadioChanged, this,
+            pushCapsToAllContainers);
+    connect(m_containerManager, &ContainerManager::containerAdded, this,
+            [this](const QString& id) {
+        if (auto* c = m_containerManager->container(id)) {
+            c->setBoardCapabilities(m_radioModel->boardCapabilities());
+        }
+    });
 
     // Create the MeterPoller BEFORE restoreState / populateDefaultMeter
     // so the meterReadyForPolling signal fires into a live poller as
@@ -590,6 +621,13 @@ void MainWindow::buildUI()
     // the applet panel is always populated regardless of restore path.
     populateDefaultMeter();
     m_containerManager->restoreSplitterState();
+
+    // Phase 3P-I-a T17 — initial push. `containerAdded` fires during
+    // restoreState() but the content (and any AntennaButtonItems) are
+    // installed after the signal by populateDefaultMeter() or the saved
+    // content factory. Do a one-shot sweep here so the final items
+    // pick up the startup board capabilities.
+    pushCapsToAllContainers();
 
     // Default splitter sizes on first run: ~80% spectrum, ~20% panel
     if (!AppSettings::instance().contains(QStringLiteral("MainSplitterSizes"))) {
@@ -988,6 +1026,14 @@ void MainWindow::populateDefaultMeter()
     // RxApplet — Tier 1 wired to SliceModel (slice attached in wireSliceToSpectrum)
     m_rxApplet = new RxApplet(nullptr, m_radioModel, nullptr);
     panel->addApplet(m_rxApplet);
+
+    // Phase 3P-I-a T16 — push board caps into RxApplet so ANT buttons
+    // hide on HL2/Atlas. Matches the VFO Flag wiring below (T15).
+    m_rxApplet->setBoardCapabilities(m_radioModel->boardCapabilities());
+    connect(m_radioModel, &RadioModel::currentRadioChanged, m_rxApplet,
+            [this]() {
+        m_rxApplet->setBoardCapabilities(m_radioModel->boardCapabilities());
+    });
 
     // TxApplet — NYI shell (Phase 3I-1)
     auto* txApplet = new TxApplet(m_radioModel, nullptr);
@@ -2087,6 +2133,14 @@ void MainWindow::wireSliceToSpectrum()
     vfo->setRxAntenna(slice->rxAntenna());
     vfo->setTxAntenna(slice->txAntenna());
     vfo->setStepHz(slice->stepHz());
+
+    // Phase 3P-I-a T15 — push board caps into VFO Flag so ANT buttons
+    // hide on HL2/Atlas.
+    vfo->setBoardCapabilities(m_radioModel->boardCapabilities());
+    connect(m_radioModel, &RadioModel::currentRadioChanged, vfo,
+            [this, vfo]() {
+        vfo->setBoardCapabilities(m_radioModel->boardCapabilities());
+    });
 
     // --- Slice → spectrum display ---
 

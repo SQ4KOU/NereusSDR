@@ -54,7 +54,9 @@ mw0lge@grange-lane.co.uk
 
 #include "ContainerWidget.h"
 #include "FloatingContainer.h"
+#include "core/BoardCapabilities.h"
 #include "core/LogCategories.h"
+#include "gui/meters/MeterWidget.h"
 #include "gui/meters/BandButtonItem.h"
 #include "gui/meters/ModeButtonItem.h"
 #include "gui/meters/FilterButtonItem.h"
@@ -733,6 +735,10 @@ void ContainerWidget::wireInteractiveItem(MeterItem* item)
     } else if (auto* ant = qobject_cast<AntennaButtonItem*>(item)) {
         connect(ant, &AntennaButtonItem::antennaSelected,
                 this, &ContainerWidget::antennaSelected);
+        // Phase 3P-I-a T17 — late-added antenna items inherit the
+        // container's current hasAlex state (set by MainWindow on
+        // connect / currentRadioChanged via setBoardCapabilities).
+        ant->setHasAlex(m_hasAlex);
     } else if (auto* step = qobject_cast<TuneStepButtonItem*>(item)) {
         connect(step, &TuneStepButtonItem::tuneStepSelected,
                 this, &ContainerWidget::tuneStepSelected);
@@ -914,6 +920,32 @@ bool ContainerWidget::deserialize(const QString& data)
                           << "mode:" << dockModeToString(m_dockMode)
                           << "pos:" << m_dockedLocation << "size:" << m_dockedSize;
     return true;
+}
+
+// Phase 3P-I-a T17 — propagate hasAlex to every AntennaButtonItem
+// nested inside this container's content tree. Walks all MeterWidgets
+// reachable from m_content via findChildren (handles nested applet
+// panels that host a header MeterWidget as well as flat content).
+void ContainerWidget::setBoardCapabilities(const BoardCapabilities& caps)
+{
+    m_hasAlex = caps.hasAlex;
+    if (!m_content) { return; }
+
+    // The content may be the MeterWidget directly, or an applet panel
+    // hosting one as its header. findChildren catches both.
+    const QList<MeterWidget*> meters =
+        m_content->findChildren<MeterWidget*>();
+    QList<MeterWidget*> scan = meters;
+    if (auto* asMeter = qobject_cast<MeterWidget*>(m_content)) {
+        scan.prepend(asMeter);
+    }
+    for (MeterWidget* mw : scan) {
+        for (MeterItem* item : mw->items()) {
+            if (auto* ant = qobject_cast<AntennaButtonItem*>(item)) {
+                ant->setHasAlex(m_hasAlex);
+            }
+        }
+    }
 }
 
 } // namespace NereusSDR

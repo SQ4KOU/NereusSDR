@@ -251,6 +251,33 @@ public:
         m_hardwareProfile = ::NereusSDR::profileForModel(
             defaultModelForBoard(board));
     }
+
+    // Phase 3P-I-a T14 — test-only hooks. Allow tests to inject a mock
+    // RadioConnection, simulate band crossings, trigger the Connected
+    // state handler, and override board capabilities. Production code
+    // must never use these.
+    void injectConnectionForTest(RadioConnection* conn) { m_connection = conn; }
+    void setLastBandForTest(NereusSDR::Band b) {
+        const bool cross = (b != m_lastBand);
+        m_lastBand = b;
+        if (cross) {
+            applyAlexAntennaForBand(b);
+            // Mirror the production T10 path so tests catch regressions
+            // in the slice-label refresh (see RadioModel.cpp frequencyChanged
+            // handler for the canonical version).
+            if (m_activeSlice) {
+                m_activeSlice->refreshAntennasFromAlex(m_alexController, b);
+            }
+        }
+    }
+    void onConnectedForTest() {
+        applyAlexAntennaForBand(m_lastBand);
+    }
+    void setCapsForTest(bool hasAlex) {
+        m_testCapsOverride = true;
+        m_testCapsHasAlex = hasAlex;
+    }
+    NereusSDR::Band lastBand() const { return m_lastBand; }
 #endif
 
     // Connection
@@ -281,6 +308,17 @@ private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
 
 private:
+    // Pushes AlexController's per-band antenna state to the connection.
+    // Mirrors Thetis HPSDR/Alex.cs:310-413 UpdateAlexAntSelection at
+    // 3P-I-a scope: reads rxAnt(band), composes an AntennaRouting with
+    // trxAnt = rxAnt (RX=TX unified in 3P-I-a), writes txAnt = txAnt(band)
+    // independently. No MOX-aware composition, no XVTR, no Aries — those
+    // land in 3P-I-b/3M-1.
+    //
+    // Source: docs/architecture/antenna-routing-design.md §5.3.
+    // Triggered from T9/T10/T11 wirings in follow-up tasks.
+    void applyAlexAntennaForBand(NereusSDR::Band band);
+
     void wireConnectionSignals(int wdspInSize);
     void wireSliceSignals();
     void teardownConnection();
@@ -384,6 +422,17 @@ private:
 
     // Settings save coalescing
     bool m_settingsSaveScheduled{false};
+    // Phase 3P-I-a — dirty flag for AlexController persistence.
+    // AlexController::antennaChanged can fire 14× during load(); the
+    // flag + scheduleSettingsSave() timer coalesces them into a single
+    // write at flush time. Set from the antennaChanged/blockTxChanged
+    // handlers in wireSlice<Slot>, cleared by saveSliceState().
+    bool m_alexControllerDirty{false};
+
+#ifdef NEREUS_BUILD_TESTS
+    bool m_testCapsOverride{false};
+    bool m_testCapsHasAlex{false};
+#endif
 
     // AGC bidirectional sync guard — prevents infinite feedback loop between
     // agcThresholdChanged and rfGainChanged handlers.

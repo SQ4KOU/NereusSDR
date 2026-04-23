@@ -286,7 +286,24 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // Upstream inline attribution preserved verbatim (console.cs:8238):
     //   if (p1) Rate[0] = rx1_rate; // [2.10.3.13]MW0LGE p1 !
     m_rx[2].enable = 1;
-    m_rx[2].frequency = 3865000;   // 80m LSB — overridden by setReceiverFrequency
+    // Phase 3P-I-a bench-bug fix (KG4VCF 2026-04-22):
+    // RadioModel::connectToRadio queues setReceiverFrequency BEFORE
+    // this method in the worker-thread FIFO — so by the time we run,
+    // m_rx[2].frequency already holds the persisted VFO (e.g. 14.3 MHz
+    // for 20m) and m_alex.hpfBits/lpfBits reflect the same. Only seed
+    // the 80m default when nothing has been stored yet (m_rx[2].frequency==0);
+    // the prior unconditional assign clobbered the real VFO, so the
+    // initial CmdHighPriority packet went out with DDC2 tuned to 80m
+    // but BPF bits for 20m — radio heard nothing until the next
+    // setReceiverFrequency fired from a user tune. The comment that used
+    // to read "overridden by setReceiverFrequency" had the FIFO order
+    // backwards.
+    if (m_rx[2].frequency == 0) {
+        m_rx[2].frequency = 3865000;   // 80m LSB — first-boot default only
+        double freqMhz = m_rx[2].frequency / 1.0e6;
+        m_alex.hpfBits = NereusSDR::codec::alex::computeHpf(freqMhz);
+        m_alex.lpfBits = NereusSDR::codec::alex::computeLpf(freqMhz);
+    }
     // DDC2 samplingRate is set by setSampleRate() which RadioModel queues
     // before connectToRadio in the FIFO (see RadioModel::connectToRadio).
     // Do NOT hardcode a rate here — it would stomp the user-selected value.
@@ -299,8 +316,13 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     m_adc[1].random = 1;
     m_adc[2].random = 1;
 
-    // TX frequency — overridden by SliceModel via setTxFrequency (simplex: TX=RX)
-    m_tx[0].frequency = 3865000;
+    // TX frequency — only seed default if nothing's been set (RadioModel
+    // doesn't queue an explicit setTxFrequency before connectToRadio today,
+    // but simplex TX will follow RX once TX phase lands. Same FIFO-order
+    // rationale as m_rx[2].frequency above.)
+    if (m_tx[0].frequency == 0) {
+        m_tx[0].frequency = 3865000;
+    }
 
     setState(ConnectionState::Connecting);
 
@@ -471,11 +493,31 @@ void P2RadioConnection::setMox(bool enabled)
     }
 }
 
-void P2RadioConnection::setAntenna(int antennaIndex)
+// ---------------------------------------------------------------------------
+// setAntennaRouting — Phase 3P-I-a
+//
+// Ports Thetis ChannelMaster/netInterface.c:479-485 — Alex0 (RX) and
+// Alex1 (TX) register encoding. Bits 24/25/26 are ANT1/ANT2/ANT3.
+//
+// 3P-I-a scope: only trxAnt / txAnt are honored. rxOnlyAnt / rxOut / tx
+// are accepted in the struct but ignored here until 3P-I-b wires Alex0
+// bits 27-30 (RX-only routing) and 3M-1 wires the MOX branch.
+//
+// From Thetis HPSDR/Alex.cs:401 [v2.10.3.13 @501e3f5] —
+//   NetworkIO.SetAntBits(rx_only_ant, trx_ant, tx_ant, rx_out, tx);
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setAntennaRouting(AntennaRouting r)
 {
-    // antennaIndex: 0=ANT1, 1=ANT2, 2=ANT3
-    m_alex.rxAnt = antennaIndex + 1;  // 1-based for Alex register encoding
-    m_alex.txAnt = antennaIndex + 1;
+    // trxAnt drives the Alex0 RX antenna; txAnt drives the Alex1 TX.
+    // Clamp to 1..3 (AntennaRouting defaults to 1; 0 means "no-op write"
+    // used by RadioModel when caps.hasAlex is false — we still want the
+    // Alex register at zero on the wire in that case).
+    auto clamp = [](int v) { return (v < 1 || v > 3) ? 0 : v; };
+    m_alex.rxAnt = clamp(r.trxAnt);
+    m_alex.txAnt = clamp(r.txAnt);
+    qCDebug(lcConnection) << "P2::setAntennaRouting rxAnt=" << m_alex.rxAnt
+                          << "txAnt=" << m_alex.txAnt
+                          << "running=" << m_running;
     if (m_running) {
         sendCmdHighPriority();
     }

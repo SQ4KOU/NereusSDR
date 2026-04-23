@@ -461,6 +461,38 @@ RadioModel::RadioModel(QObject* parent)
     // standalone).
     m_audioEngine->setRadioModel(this);
 
+    // Phase 3P-I-a T9 — AlexController → connection pump.
+    // Any per-band edit (from Setup grid, RxApplet, or VFO Flag via T12)
+    // reapplies to the wire when the changed band matches the current
+    // VFO band. Connect once here because m_alexController outlives each
+    // connection; the helper no-ops when m_connection is null. Closes
+    // issue #98's protocol-layer gap.
+    connect(&m_alexController, &AlexController::antennaChanged, this,
+            [this](Band b) {
+        // Persist on every controller mutation so the per-band
+        // selection survives app restart. Without this, AlexController
+        // state lived only in memory — caught during PR #N bench
+        // testing when ANT2 on 20m didn't restore across a relaunch
+        // (KG4VCF 2026-04-22). Coalesced via scheduleSettingsSave so
+        // load-time's 14-per-band emit burst collapses to one write.
+        m_alexControllerDirty = true;
+        scheduleSettingsSave();
+        if (b != m_lastBand) { return; }
+        applyAlexAntennaForBand(b);
+        // T13 — keep the slice's cached ANT labels in sync so UI
+        // surfaces reading slice->rxAntenna() see the current-band value.
+        if (m_activeSlice) {
+            m_activeSlice->refreshAntennasFromAlex(m_alexController, b);
+        }
+    });
+    // Also persist the two blockTxAnt* safety toggles; they can change
+    // via the Antenna Control grid even when no band crossing occurs.
+    connect(&m_alexController, &AlexController::blockTxChanged, this,
+            [this]() {
+        m_alexControllerDirty = true;
+        scheduleSettingsSave();
+    });
+
     // Connection starts null — created by connectToRadio() via factory.
     //
     // Phase 3G-9b: the smooth-defaults profile is reachable only via the
@@ -484,6 +516,13 @@ bool RadioModel::isConnected() const
 
 const BoardCapabilities& RadioModel::boardCapabilities() const
 {
+#ifdef NEREUS_BUILD_TESTS
+    if (m_testCapsOverride) {
+        static BoardCapabilities overrideCaps{};
+        overrideCaps.hasAlex = m_testCapsHasAlex;
+        return overrideCaps;
+    }
+#endif
     if (m_hardwareProfile.caps) { return *m_hardwareProfile.caps; }
     return BoardCapsTable::forBoard(HPSDRHW::Unknown);
 }
@@ -1036,7 +1075,24 @@ void RadioModel::wireSliceSignals()
         // keeps the CURRENT band's slot up to date without either bug.
         Band newBand = bandFromFrequency(freq);
         if (newBand != m_lastBand) {
+            qCDebug(lcConnection) << "T10: band crossing" << bandLabel(m_lastBand)
+                                  << "→" << bandLabel(newBand)
+                                  << "(freq=" << freq << "Hz)";
             m_lastBand = newBand;
+            // Phase 3P-I-a T10 — reapply per-band antenna on boundary
+            // crossing. Thetis UpdateAlexAntSelection equivalent
+            // (HPSDR/Alex.cs:310 [v2.10.3.13 @501e3f5]).
+            applyAlexAntennaForBand(newBand);
+            // Phase 3P-I-a T10 follow-up — refresh the slice's cached
+            // rxAntenna/txAntenna labels from AlexController so the
+            // VFO Flag and RxApplet buttons show the new band's value.
+            // Without this call the wire switched but the UI stayed
+            // on the previous band's label (caught during PR #N
+            // bench testing — KG4VCF 2026-04-22). Mirrors the T9
+            // path at line 476-478.
+            if (m_activeSlice) {
+                m_activeSlice->refreshAntennasFromAlex(m_alexController, newBand);
+            }
         }
         scheduleSettingsSave();
     });
@@ -1451,22 +1507,25 @@ void RadioModel::wireSliceSignals()
         scheduleSettingsSave();
     });
 
-    // Antenna changes → Alex register via RadioConnection
+    // Phase 3P-I-a T12 — route slice antenna writes through AlexController.
+    // VFO Flag clicks land here; AlexController::setRxAnt/setTxAnt emit
+    // antennaChanged(band), and T9's constructor-level connection reapplies
+    // to the wire via applyAlexAntennaForBand. This makes per-band
+    // persistence uniform across all UI surfaces
+    // (see docs/architecture/antenna-routing-design.md §5.1).
     connect(slice, &SliceModel::rxAntennaChanged, this, [this](const QString& ant) {
-        if (m_connection) {
-            // Map antenna name to index: ANT1=0, ANT2=1, ANT3=2
-            int idx = 0;
-            if (ant == QLatin1String("ANT2")) { idx = 1; }
-            else if (ant == QLatin1String("ANT3")) { idx = 2; }
-            QMetaObject::invokeMethod(m_connection, [conn = m_connection, idx]() {
-                conn->setAntenna(idx);
-            });
-        }
+        int antNum = 1;
+        if (ant == QLatin1String("ANT2")) { antNum = 2; }
+        else if (ant == QLatin1String("ANT3")) { antNum = 3; }
+        m_alexController.setRxAnt(m_lastBand, antNum);
         scheduleSettingsSave();
     });
-    connect(slice, &SliceModel::txAntennaChanged, this, [this](const QString&) {
-        // TX antenna is set in the same setAntenna call for now
-        // Full TX-specific antenna routing deferred to TX implementation
+    connect(slice, &SliceModel::txAntennaChanged, this, [this](const QString& ant) {
+        int antNum = 1;
+        if (ant == QLatin1String("ANT2")) { antNum = 2; }
+        else if (ant == QLatin1String("ANT3")) { antNum = 3; }
+        // Note: setTxAnt respects blockTxAnt2/3 safety guards; reject is silent.
+        m_alexController.setTxAnt(m_lastBand, antNum);
         scheduleSettingsSave();
     });
 
@@ -1518,6 +1577,49 @@ void RadioModel::loadSliceState(SliceModel* slice)
                   << "AF:" << slice->afGain() << "RF:" << slice->rfGain();
 }
 
+// Phase 3P-I-a — see header for full context.
+// Composition scope is intentionally minimal in 3P-I-a: trxAnt = rxAnt(band),
+// txAnt = txAnt(band), all else zero. 3P-I-b adds SKU-aware Ext-on-TX and
+// RX-only composition; 3M-1 adds the MOX branch and Aries clamp.
+//
+// Source: Thetis HPSDR/Alex.cs:310-413 [v2.10.3.13 @501e3f5].
+void RadioModel::applyAlexAntennaForBand(Band band)
+{
+    if (!m_connection || !m_connection->isConnected()) {
+        qCDebug(lcConnection) << "applyAlexAntennaForBand(" << bandLabel(band)
+                              << ") skipped — not connected";
+        return;
+    }
+
+    const BoardCapabilities& caps = boardCapabilities();
+
+    AntennaRouting r;
+    if (!caps.hasAlex) {
+        // HL2 / Atlas — matches Thetis Alex.cs:312-317 early return
+        // "SetAntBits(0, 0, 0, 0, false)". Leaves rxOnlyAnt=0,
+        // rxOut=false, tx=false from struct defaults; override
+        // trxAnt/txAnt to 0 so the clamp in
+        // P1/P2RadioConnection::setAntennaRouting maps them to
+        // "no antenna selection" (zero bits on the wire).
+        r.trxAnt = 0;
+        r.txAnt  = 0;
+    } else {
+        r.trxAnt = m_alexController.rxAnt(band);   // 1..3
+        r.txAnt  = m_alexController.txAnt(band);   // 1..3
+    }
+
+    qCDebug(lcConnection) << "applyAlexAntennaForBand(" << bandLabel(band)
+                          << ") → rxAnt=" << r.trxAnt << "txAnt=" << r.txAnt
+                          << "(hasAlex=" << caps.hasAlex << ")";
+
+    // Marshal to connection worker thread — mirrors existing pattern
+    // used by e.g. setReceiverFrequency.
+    RadioConnection* conn = m_connection;
+    QMetaObject::invokeMethod(conn, [conn, r]() {
+        conn->setAntennaRouting(r);
+    });
+}
+
 // Coalesce settings saves to avoid writing on every scroll tick.
 void RadioModel::scheduleSettingsSave()
 {
@@ -1532,19 +1634,37 @@ void RadioModel::scheduleSettingsSave()
 }
 
 // Persist current slice state to AppSettings (per-band + session state).
+// Also flushes AlexController persistence if the dirty flag was set —
+// see the antennaChanged / blockTxChanged handlers in wireSliceSignals.
 void RadioModel::saveSliceState(SliceModel* slice)
 {
-    if (!slice) {
-        return;
+    if (slice) {
+        slice->saveToSettings(m_lastBand);
     }
 
-    slice->saveToSettings(m_lastBand);
+    // Flush AlexController if any per-band antenna or block-TX toggle
+    // changed since the last save. save() no-ops when MAC is empty,
+    // so pre-connect dirty flags are silently dropped — that's fine
+    // because load() hasn't run yet either.
+    if (m_alexControllerDirty) {
+        m_alexController.save();
+        m_alexControllerDirty = false;
+    }
 }
 
 void RadioModel::teardownConnection()
 {
     if (!m_connection) {
         return;
+    }
+
+    // Flush any pending AlexController writes before the MAC-scoped
+    // keys become unreachable (save() keys off m_mac, which stays set
+    // across disconnect, but a crash between disconnect and next save
+    // would lose the change). Cheap insurance.
+    if (m_alexControllerDirty) {
+        m_alexController.save();
+        m_alexControllerDirty = false;
     }
 
     // Disconnect signals into the DSP worker first so no new I/Q
@@ -1657,6 +1777,10 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
         // the connected radio's fields (Radio Info labels, sample rate,
         // capability-gated tab visibility, per-MAC settings restore).
         emit currentRadioChanged(m_lastRadioInfo);
+        // Phase 3P-I-a T11 — apply persisted per-band Alex antenna to the
+        // fresh connection. Matches Thetis's initial UpdateAlexAntSelection
+        // call path on radio startup (HPSDR/Alex.cs:310 [v2.10.3.13 @501e3f5]).
+        applyAlexAntennaForBand(m_lastBand);
         break;
     case ConnectionState::Disconnected:
         qCDebug(lcConnection) << "Disconnected from" << m_name;
