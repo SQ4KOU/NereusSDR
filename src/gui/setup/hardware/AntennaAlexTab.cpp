@@ -141,14 +141,15 @@ void AntennaAlexTab::populate(const RadioInfo& info, const BoardCapabilities& ca
     const bool isSaturn = (caps.board == HPSDRHW::Saturn || caps.board == HPSDRHW::SaturnMKII);
     m_alex1Tab->updateBoardCapabilities(isSaturn);
 
-    // Gate Alex-2 board status on board model.
-    // OrionMKII / Saturn / SaturnMKII boards have Alex-2 RX2 board capability.
-    // TODO: add hasAlex2 field to BoardCapabilities; gate on that field then.
-    // From Thetis: lblAlex2Active visible only for boards supporting Alex-2.
-    const bool hasAlex2 = (caps.board == HPSDRHW::OrionMKII
-                           || caps.board == HPSDRHW::Saturn
-                           || caps.board == HPSDRHW::SaturnMKII);
-    m_alex2FiltersTab->updateBoardCapabilities(hasAlex2);
+    // Gate Alex-2 board status on caps.hasAlex2 (Phase 3P-I-b T8).
+    // From Thetis setup.cs:6228-6264: tpAlex2FilterControl is visible only
+    // for BPF2-capable boards (ANAN7000D family + OrionMKII + Saturn).
+    // [v2.10.3.13 @501e3f5]
+    m_alex2FiltersTab->updateBoardCapabilities(caps.hasAlex2);
+    const int alex2Idx = m_subTabs->indexOf(m_alex2FiltersTab);
+    if (alex2Idx >= 0) {
+        m_subTabs->setTabVisible(alex2Idx, caps.hasAlex2);
+    }
 
     // Restore Alex-1 and Alex-2 filter settings from per-MAC AppSettings.
     m_lastMac = info.macAddress;
