@@ -337,7 +337,11 @@ static const char* kModeBtn =
 VfoWidget::VfoWidget(QWidget* parent)
     : QWidget(parent)
 {
-    setFixedWidth(kWidgetW);
+    // Flag grows to fit the active tab's natural width (minimum kWidgetW).
+    // DSP tab with 4-column NR grid needs 260 px → flag expands. Audio/X-RIT
+    // tabs use kWidgetW. Per user directive 2026-04-23: flag should only
+    // consume the space necessary to fit the active tab's buttons.
+    setMinimumWidth(kWidgetW);
     setAttribute(Qt::WA_TranslucentBackground);
     setAutoFillBackground(false);
     setMouseTracking(true);
@@ -1038,17 +1042,17 @@ void VfoWidget::buildDspTab()
     dspGrid->addWidget(m_anfToggle, 2, 0);
     dspGrid->addWidget(m_snbToggle, 2, 1);
 
-    // Fixed size for all 9 grid buttons: 52×22 px.
-    // 52px accommodates "DFNR" (4 chars, bold 13px + 8px padding + 2px border).
-    // SizePolicy::Fixed prevents any cell from widening beyond button size,
-    // so the sub-grid hugs its content instead of stretching to the flag width.
-    // Fixed height of 22px keeps the grid compact (conserves vertical space on
-    // lower resolutions). Borders abut cleanly with 0-spacing.
+    // Uniform size for all 9 grid buttons: 64×26 px.
+    // User directive: natural button size (not cramped), zero gaps between
+    // buttons so their 1px borders abut forming a continuous "board" around
+    // the grid. SizePolicy::Fixed prevents cells from widening beyond button
+    // size so the sub-grid hugs its content instead of stretching to the
+    // flag width.
     for (auto* btn : {m_nbButton, m_nr1Btn, m_nr2Btn, m_nr3Btn,
                       m_nr4Btn, m_dfnrBtn, m_mnrBtn,
                       m_anfToggle, m_snbToggle}) {
         if (btn) {
-            btn->setFixedSize(52, 22);
+            btn->setFixedSize(64, 26);
             btn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         }
     }
@@ -1059,7 +1063,7 @@ void VfoWidget::buildDspTab()
     // The toggle acts as the enable button; slider + Hz label are only visible
     // when APF is enabled AND mode is CW (gated by applyModeVisibility).
     m_apfToggle = makeToggle(QStringLiteral("APF"));
-    m_apfToggle->setFixedSize(52, 22);
+    m_apfToggle->setFixedSize(64, 26);
     m_apfToggle->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     // From Thetis console.resx:348 — chkCWAPFEnabled.ToolTip
     m_apfToggle->setToolTip(QStringLiteral("Enables APF"));
