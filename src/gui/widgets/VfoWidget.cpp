@@ -2249,6 +2249,7 @@ void VfoWidget::setBoardCapabilities(const BoardCapabilities& caps)
 // which is the separate chkDisableRXOut (Alex.cs:65 rx_out_override)
 // "Disable RX Bypass relay" override.
 // From Thetis setup.cs:6268-6273 [v2.10.3.13] — chkRxOutOnTx visibility per HPSDRModel.
+// G8NJJ. will need more work ofr high power PA  [original inline comment from setup.cs:6277, ANAN_G2_1K branch of the same per-SKU switch]
 void VfoWidget::setHpsdrSku(HPSDRModel sku)
 {
     const SkuUiProfile profile = skuUiProfileFor(sku);
