@@ -249,6 +249,7 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | tests/tst_fm_opt_container_wire.cpp | Project Files/Source/Console/console.cs | 40412 | port | thetis-samphire | chkFMTXSimplex_CheckedChanged |
 | tests/tst_hpsdr_enums.cpp | Project Files/Source/Console/enums.cs; Project Files/Source/ChannelMaster/network.h | 109; 446 | port | multi-source | verbatim integer value parity; mi0bot/Thetis@Hermes-Lite prefix is author viewpoint |
 | tests/tst_noise_floor_tracker.cpp | Project Files/Source/Console/display.cs | 5866-5961 | port | thetis-samphire | tests for NoiseFloorTracker lerp logic |
+| tests/tst_sku_ui_profile.cpp | Project Files/Source/Console/setup.cs | 19832-20375 | port | thetis-samphire | per-SKU label + flag fixture for SkuUiProfile (Phase 3P-I-b) |
 | tests/tst_meter_item_bar.cpp | Project Files/Source/Console/MeterManager.cs | 19917-20278; 35950-36140; 21499-21616 | port | thetis-samphire | clsBarItem, renderHBar, addSMeterBar parity |
 | tests/tst_meter_item_scale.cpp | Project Files/Source/Console/MeterManager.cs | 14785-15853; 31879-31886; 32338+ | port | thetis-samphire | clsScaleItem, ShowType, generalScale |
 | tests/tst_meter_presets.cpp | Project Files/Source/Console/MeterManager.cs | 21499-21616; 31911-31916 | port | thetis-samphire | addSMeterBar, renderScale dispatch |

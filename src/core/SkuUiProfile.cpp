@@ -173,6 +173,11 @@ SkuUiProfile skuUiProfileFor(HPSDRModel sku)
         p.hasRxBypassUi  = false;
         p.hasAntennaTab  = false;
         break;
+
+    case HPSDRModel::FIRST:
+    case HPSDRModel::LAST:
+        // Sentinel values — same pattern as HardwareProfile.cpp:197-199.
+        break;
     }
 
     return p;
