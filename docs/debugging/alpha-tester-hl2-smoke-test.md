@@ -238,7 +238,7 @@ cmake -S . -B build-clean -G Ninja
 cmake --build build-clean -j
 ```
 
-You need Qt6 (Core, Widgets, Network, Multimedia, Test), CMake 3.20+, and FFTW3. On macOS: `brew install qt@6 cmake ninja fftw`. On Ubuntu: `apt install qt6-base-dev qt6-multimedia-dev libfftw3-dev cmake ninja-build`. On Windows see `docs/build/windows.md` if it exists, otherwise the Qt online installer + MinGW/MSVC both work.
+You need Qt6 (Core, Widgets, Network, Multimedia, Test), CMake 3.20+, and FFTW3. On macOS: `brew install qt@6 cmake ninja fftw`. On Ubuntu: `apt install qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-shadertools-dev libfftw3-dev cmake ninja-build`. On Windows see `docs/build/windows.md` if it exists, otherwise the Qt online installer + MinGW/MSVC both work.
 
 Launch:
 - **macOS:** `open build-clean/NereusSDR.app`

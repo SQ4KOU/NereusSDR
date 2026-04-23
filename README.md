@@ -192,7 +192,8 @@ See [docs/MASTER-PLAN.md](docs/MASTER-PLAN.md) for the full implementation plan.
 
 ```bash
 # Ubuntu 24.04+ / Debian
-sudo apt install qt6-base-dev qt6-multimedia-dev \
+sudo apt install qt6-base-dev qt6-base-private-dev \
+  qt6-multimedia-dev qt6-shadertools-dev \
   cmake ninja-build pkg-config \
   libfftw3-dev libgl1-mesa-dev
 
