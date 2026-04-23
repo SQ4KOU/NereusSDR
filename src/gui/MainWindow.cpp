@@ -1310,7 +1310,9 @@ void MainWindow::buildMenuBar()
     nr2Action->setToolTip(QStringLiteral("Toggle enhanced multiband noise reduction (NR2/EMNR)"));
     connect(nr2Action, &QAction::toggled, this, [this](bool on) {
         SliceModel* slice = m_radioModel->activeSlice();
-        if (slice) { slice->setEmnrEnabled(on); }
+        if (slice) {
+            slice->setActiveNr(on ? NereusSDR::NrSlot::NR2 : NereusSDR::NrSlot::Off);
+        }
     });
 
     m_nbAction = dspMenu->addAction(QStringLiteral("N&B"));
@@ -2276,8 +2278,8 @@ void MainWindow::wireSliceToSpectrum()
     connect(slice, &SliceModel::nbModeChanged, vfo, &VfoWidget::setNbMode);
     vfo->setNbMode(slice->nbMode());   // initial sync
 
-    connect(slice, &SliceModel::emnrEnabledChanged, this, [vfo](bool v) {
-        vfo->setNr2Enabled(v);
+    connect(slice, &SliceModel::activeNrChanged, this, [vfo](NereusSDR::NrSlot slot) {
+        vfo->setNr2Enabled(slot == NereusSDR::NrSlot::NR2);
     });
 
     connect(slice, &SliceModel::snbEnabledChanged, this, [vfo](bool v) {
@@ -2346,8 +2348,8 @@ void MainWindow::wireSliceToSpectrum()
 
     // --- VfoWidget → SliceModel: DSP tab outbound (S1.8b) ---
     connect(vfo, &VfoWidget::nr2Changed, this, [slice](bool on) {
-        // NR2 = EMNR in Thetis naming
-        slice->setEmnrEnabled(on);
+        // NR2 = EMNR in Thetis naming. Toggle: NR2→active clears any other slot.
+        slice->setActiveNr(on ? NereusSDR::NrSlot::NR2 : NereusSDR::NrSlot::Off);
     });
     connect(vfo, &VfoWidget::snbChanged, this, [slice](bool on) {
         slice->setSnbEnabled(on);

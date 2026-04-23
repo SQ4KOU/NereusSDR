@@ -767,13 +767,10 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 // live-pushed from Setup → DSP → NB/SNB). Per-slice NB
                 // tuning pass-through removed 2026-04-22.
                 rxCh->setNbMode(m_activeSlice->nbMode());
-                // EMNR sub-parameter defaults — From Thetis radio.cs:2062,2081,2101,2235
-                // These are set-and-forget on channel creation; run flag follows slice.
-                rxCh->setEmnrGainMethod(2);   // radio.cs:2062 rx_nr2_gain_method = 2
-                rxCh->setEmnrNpeMethod(0);    // radio.cs:2081 rx_nr2_npe_method = 0
-                rxCh->setEmnrAeRun(true);     // radio.cs:2101 rx_nr2_ae_run = 1
-                rxCh->setEmnrPosition(1);     // radio.cs:2235 rx_nr2_position = 1 (post-AGC)
-                rxCh->setEmnrEnabled(m_activeSlice->emnrEnabled());
+                // NR defaults removed here — Task 19 adds the full NR-state-on-slice-
+                // activate push via SliceModel::activeNrChanged + tuning struct setters.
+                // setEmnrGainMethod/setEmnrNpeMethod/setEmnrAeRun/setEmnrPosition and
+                // the old setEmnrEnabled call are all superseded by Task 19 wiring.
                 rxCh->setSnbEnabled(m_activeSlice->snbEnabled());
                 // APF sub-parameter defaults — From Thetis radio.cs:1986,1948,1967,1929
                 // These are set-and-forget on channel creation; run flag follows slice.
@@ -1298,13 +1295,15 @@ void RadioModel::wireSliceSignals()
     });
     m_autoAgcTimer->start();
 
-    // EMNR (NR2) → WDSP
-    // From Thetis Project Files/Source/Console/radio.cs:2216-2232
-    // WDSP: third_party/wdsp/src/emnr.c:1283
-    connect(slice, &SliceModel::emnrEnabledChanged, this, [this](bool on) {
+    // NR slot → WDSP (minimal stub — full push added in Task 19)
+    // Task 12 replaces emnrEnabledChanged with activeNrChanged; Task 19 adds
+    // the full tuning-struct push and handles all 7 NR slots properly.
+    // For now: route activeNrChanged to RxChannel::setActiveNr (the mutex
+    // dispatch) so the on/off toggle reaches WDSP even before Task 19.
+    connect(slice, &SliceModel::activeNrChanged, this, [this](NereusSDR::NrSlot slot) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
-            rxCh->setEmnrEnabled(on);
+            rxCh->setActiveNr(slot);
         }
         scheduleSettingsSave();
     });
