@@ -2403,6 +2403,16 @@ void MainWindow::wireSliceToSpectrum()
         dialog->show();
     });
 
+    // --- VfoWidget → Setup → DSP → NB/SNB page (right-click on NB or SNB).
+    // Mirrors Thetis chkNB_MouseDown / chkDSPNB2_MouseDown (console.cs:44447
+    // [v2.10.3.13]) which call ShowSetupTab(NB_Tab).
+    connect(vfo, &VfoWidget::openNbSetupRequested, this, [this]() {
+        auto* dialog = new SetupDialog(m_radioModel, this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->selectPage(QStringLiteral("NB/SNB"));
+        dialog->show();
+    });
+
     // --- VfoWidget AUTO button → SliceModel auto-AGC toggle ---
     connect(vfo, &VfoWidget::autoAgcToggled,
             slice, &SliceModel::setAutoAgcEnabled);
@@ -2580,6 +2590,10 @@ void MainWindow::wireSliceToSpectrum()
             dialog->selectPage(QStringLiteral("AGC/ALC"));
             dialog->show();
         });
+
+        // RxApplet openNbSetupRequested wiring removed 2026-04-22 —
+        // RxApplet no longer hosts any NB controls (strict Thetis parity).
+        // VfoWidget::openNbSetupRequested above handles the NB→Setup hop.
     }
 
     // --- Wire overlay Band flyout to slice ---

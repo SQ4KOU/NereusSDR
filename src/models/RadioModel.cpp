@@ -740,10 +740,10 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 rxCh->setAgcHangThreshold(m_activeSlice->agcHangThreshold());
                 rxCh->setAgcFixedGain(m_activeSlice->agcFixedGain());
                 rxCh->setAgcMaxGain(m_activeSlice->agcMaxGain());
-                // From phase3g-rx-epic-b-nb-plan.md Task 7 — push full NB family
-                // config from the active SliceModel. Thetis defaults pinned in
-                // NbTuning struct (NbFamily.h) mirror cmaster.c:43-68 [v2.10.3.13].
-                rxCh->setNbTuning(m_activeSlice->nbTuning());
+                // NB mode is per-band; tuning is global per-channel and
+                // lives inside NbFamily (seeded from AppSettings at ctor,
+                // live-pushed from Setup → DSP → NB/SNB). Per-slice NB
+                // tuning pass-through removed 2026-04-22.
                 rxCh->setNbMode(m_activeSlice->nbMode());
                 // EMNR sub-parameter defaults — From Thetis radio.cs:2062,2081,2101,2235
                 // These are set-and-forget on channel creation; run flag follows slice.
@@ -1310,16 +1310,9 @@ void RadioModel::wireSliceSignals()
         scheduleSettingsSave();
     });
 
-    // NB tuning (threshold / slack / tau) → WDSP
-    // From Thetis cmaster.c:43-68 [v2.10.3.13] — create_anbEXT / create_nobEXT parameter layout
-    // WDSP: third_party/wdsp/src/anb.c (SetRXAANBParameters) + third_party/wdsp/src/nob.c (SetRXANOBParameters)
-    connect(slice, &SliceModel::nbTuningChanged, this, [this](const NereusSDR::NbTuning& t) {
-        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
-        if (rxCh) {
-            rxCh->setNbTuning(t);
-        }
-        scheduleSettingsSave();
-    });
+    // NB tuning wiring removed 2026-04-22 — no longer per-slice. All NB
+    // tuning lives inside NbFamily, seeded from AppSettings at ctor and
+    // live-pushed from Setup → DSP → NB/SNB handlers in DspSetupPages.cpp.
 
     // APF → WDSP
     // From Thetis Project Files/Source/Console/radio.cs:1910-1927

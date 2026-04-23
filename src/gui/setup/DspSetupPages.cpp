@@ -60,6 +60,7 @@
 #include "DspSetupPages.h"
 
 #include "core/AppSettings.h"
+#include "core/wdsp_api.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -370,82 +371,195 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
 NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
     : SetupPage("NB/SNB", model, parent)
 {
+    // Sliders with inline live-value labels. Tooltips use Thetis's own user-
+    // facing text (from setup.designer.cs ToolTip attributes [v2.10.3.13]).
+    // Ranges / defaults mirror Thetis NumericUpDown widgets byte-for-byte.
     auto& s = AppSettings::instance();
 
+    // Helper: integer slider, live value label showing "value / max" with unit.
+    // Returns the slider so caller can wire valueChanged.
+    auto addIntSlider = [this](QVBoxLayout* parent, const QString& label,
+                               int minVal, int maxVal, int value,
+                               const QString& unitSuffix,
+                               const QString& tooltip) -> QSlider*
+    {
+        auto* sl = new QSlider(Qt::Horizontal);
+        sl->setRange(minVal, maxVal);
+        sl->setValue(value);
+        sl->setToolTip(tooltip);
+        auto* valLbl = new QLabel;
+        valLbl->setMinimumWidth(80);
+        valLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        auto renderInt = [valLbl, maxVal, unitSuffix](int v) {
+            valLbl->setText(QStringLiteral("%1 / %2%3")
+                .arg(v).arg(maxVal).arg(unitSuffix));
+        };
+        renderInt(value);
+        QObject::connect(sl, &QSlider::valueChanged, valLbl, renderInt);
+        this->addLabeledSlider(parent, label, sl, valLbl);
+        return sl;
+    };
+
+    // Helper: "decimal" slider. Slider uses integer internally at the chosen
+    // scale (e.g. ×100 for 0.01 step); value label renders at the real scale
+    // with the given unit. Returns {slider, scaleDivisor}.
+    auto addScaledSlider = [this](QVBoxLayout* parent, const QString& label,
+                                  int sliderMin, int sliderMax, int sliderValue,
+                                  double divisor, int decimals,
+                                  const QString& unitSuffix,
+                                  const QString& tooltip) -> QSlider*
+    {
+        auto* sl = new QSlider(Qt::Horizontal);
+        sl->setRange(sliderMin, sliderMax);
+        sl->setValue(sliderValue);
+        sl->setToolTip(tooltip);
+        auto* valLbl = new QLabel;
+        valLbl->setMinimumWidth(110);
+        valLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        const double maxReal = sliderMax / divisor;
+        auto render = [valLbl, decimals, divisor, maxReal, unitSuffix](int v) {
+            valLbl->setText(QStringLiteral("%1 / %2%3")
+                .arg(v / divisor, 0, 'f', decimals)
+                .arg(maxReal, 0, 'f', decimals)
+                .arg(unitSuffix));
+        };
+        render(sliderValue);
+        QObject::connect(sl, &QSlider::valueChanged, valLbl, render);
+        this->addLabeledSlider(parent, label, sl, valLbl);
+        return sl;
+    };
+
     // ── NB1 ───────────────────────────────────────────────────────────────────
-    // From Thetis setup.cs — tbNB1Threshold [v2.10.3.13]
-    // Default 30 maps to 0.165 * 30 = 4.95 (NbFamily scales slider→WDSP units).
+    // Thetis grpDSPNB (setup.designer.cs:44399-44604 [v2.10.3.13]).
     QGroupBox* nb1Grp = addSection("NB1");
     QVBoxLayout* nb1Lay = qobject_cast<QVBoxLayout*>(nb1Grp->layout());
 
-    auto* nb1Thresh = new QSlider(Qt::Horizontal);
-    nb1Thresh->setRange(0, 100);
-    nb1Thresh->setValue(s.value(QStringLiteral("NbDefaultThresholdSlider"), 30).toInt());
-    addLabeledSlider(nb1Lay, "Threshold", nb1Thresh);
+    // Threshold — udDSPNB: 1-1000, default 30. WDSP threshold = 0.165 × value.
+    QSlider* nb1Thresh = addIntSlider(nb1Lay, tr("Threshold"),
+        1, 1000,
+        s.value(QStringLiteral("NbDefaultThresholdSlider"), 30).toInt(),
+        QString{},
+        tr("Controls the detection threshold for impulse noise.\n"
+           "Lower = more aggressive (blanks weaker impulses too).\n"
+           "Higher = more conservative (only strong clicks get blanked)."));
     connect(nb1Thresh, &QSlider::valueChanged, [](int v) {
         AppSettings::instance().setValue(QStringLiteral("NbDefaultThresholdSlider"), v);
+        SetEXTANBThreshold(0, 0.165 * static_cast<double>(v));
     });
 
-    // From Thetis cmaster.c:61 [v2.10.3.13] — NB2 mode (not NB1).
-    // The groupbox below is labelled "NB2" to match the actual WDSP object this
-    // combo controls (create_nobEXT mode arg). Thetis comboNB1Mode maps to
-    // NB2 internally; we preserve that naming here for Thetis parity.
+    // Transition — udDSPNBTransition: 0.01-2.00 ms, step 0.01, default 0.01.
+    // Slider internal: 1-200 (×100 scale). Label shows "X.XX / 2.00 ms".
+    QSlider* nb1Trans = addScaledSlider(nb1Lay, tr("Transition"),
+        1, 200,
+        s.value(QStringLiteral("NbDefaultTransition"), 1).toInt(),
+        100.0, 2, tr(" ms"),
+        tr("Time to decrease/increase to/from zero amplitude around an\n"
+           "impulse. Controls how gradually the blanker fades in and out\n"
+           "— very short = crisp click; longer = gentler but audible."));
+    connect(nb1Trans, &QSlider::valueChanged, [](int v) {
+        AppSettings::instance().setValue(QStringLiteral("NbDefaultTransition"), v);
+        // v/100 ms → × 0.001 s = v * 1e-5 s.
+        SetEXTANBTau(0, static_cast<double>(v) * 1e-5);
+    });
+
+    // Lead — udDSPNBLead: 0.01-2.00 ms, default 0.01.
+    QSlider* nb1Lead = addScaledSlider(nb1Lay, tr("Lead"),
+        1, 200,
+        s.value(QStringLiteral("NbDefaultLead"), 1).toInt(),
+        100.0, 2, tr(" ms"),
+        tr("Time at zero amplitude BEFORE the detected impulse. Blanks\n"
+           "the leading edge of the click that the detector would\n"
+           "otherwise miss. Raise slightly if clicks still get through."));
+    connect(nb1Lead, &QSlider::valueChanged, [](int v) {
+        AppSettings::instance().setValue(QStringLiteral("NbDefaultLead"), v);
+        SetEXTANBAdvtime(0, static_cast<double>(v) * 1e-5);
+    });
+
+    // Lag — udDSPNBLag: 0.01-2.00 ms, default 0.01.
+    QSlider* nb1Lag = addScaledSlider(nb1Lay, tr("Lag"),
+        1, 200,
+        s.value(QStringLiteral("NbDefaultLag"), 1).toInt(),
+        100.0, 2, tr(" ms"),
+        tr("Time to remain at zero amplitude AFTER the impulse. Blanks\n"
+           "the decay tail of the click. Raise this if pops still have\n"
+           "an audible ringing after the initial transient."));
+    connect(nb1Lag, &QSlider::valueChanged, [](int v) {
+        AppSettings::instance().setValue(QStringLiteral("NbDefaultLag"), v);
+        SetEXTANBHangtime(0, static_cast<double>(v) * 1e-5);
+    });
+
+    // NB2 Mode — Thetis comboDSPNOBmode.
     auto* nb1Mode = new QComboBox;
-    nb1Mode->addItems({"Zero", "Gate", "Interpolate"});
+    // Item text matches Thetis comboDSPNOBmode verbatim (setup.designer.cs:44434 [v2.10.3.13]).
+    nb1Mode->addItems({tr("Zero"), tr("Sample && Hold"), tr("Mean-Hold"),
+                       tr("Hold && Sample"), tr("Linear Interpolate")});
     nb1Mode->setCurrentIndex(s.value(QStringLiteral("Nb2DefaultMode"), 0).toInt());
+    nb1Mode->setToolTip(tr(
+        "Method used to fill in the blanked samples when NB2 triggers.\n"
+        "Zero silences the impulse entirely; the other modes synthesise\n"
+        "a replacement waveform from surrounding samples to reduce\n"
+        "audible artifacts on voice peaks."));
     addLabeledCombo(nb1Lay, "NB2 Mode", nb1Mode);
     connect(nb1Mode, QOverload<int>::of(&QComboBox::currentIndexChanged), [](int v) {
         AppSettings::instance().setValue(QStringLiteral("Nb2DefaultMode"), v);
+        SetEXTNOBMode(0, v);
     });
 
-    // ── NB2 ───────────────────────────────────────────────────────────────────
-    // From Thetis setup.cs — tbNB2Threshold [v2.10.3.13]
-    // NOTE: Thetis CATNB2Threshold is a TODO stub in setup.cs; NB2 threshold
-    // tuning is not user-configurable at the Setup level in Thetis. The slider
-    // here persists the value but it is currently ignored by NbFamily until a
-    // follow-up task wires Nb2DefaultThresholdSlider → nb2Threshold in setTuning().
-    QGroupBox* nb2Grp = addSection("NB2");
-    QVBoxLayout* nb2Lay = qobject_cast<QVBoxLayout*>(nb2Grp->layout());
-
-    auto* nb2Thresh = new QSlider(Qt::Horizontal);
-    nb2Thresh->setRange(0, 100);
-    nb2Thresh->setValue(s.value(QStringLiteral("Nb2DefaultThresholdSlider"), 30).toInt());
-    addLabeledSlider(nb2Lay, "Threshold", nb2Thresh);
-    connect(nb2Thresh, &QSlider::valueChanged, [](int v) {
-        AppSettings::instance().setValue(QStringLiteral("Nb2DefaultThresholdSlider"), v);
-    });
+    // ── NB2 Threshold — intentionally absent (Thetis parity) ─────────────────
+    // Thetis has no NB2 threshold UI. NB2 runs at cmaster.c:68 [v2.10.3.13]
+    // hardcoded default of 30.0.
 
     // ── SNB ───────────────────────────────────────────────────────────────────
-    // From Thetis setup.cs — tbSNBK1, tbSNBK2, udSNBOutputBW [v2.10.3.13]
-    // SNB K1/K2/OutputBW are applied at WDSP snb.c create time; these keys are
-    // read by NbFamily when create_snba is wired (deferred). Values persisted now
-    // for future use.
+    // Thetis grpDSPSNB (setup.designer.cs:44280-44398 [v2.10.3.13]).
     QGroupBox* snbGrp = addSection("SNB");
     QVBoxLayout* snbLay = qobject_cast<QVBoxLayout*>(snbGrp->layout());
 
-    auto* snbK1 = new QSlider(Qt::Horizontal);
-    snbK1->setRange(0, 100);
-    snbK1->setValue(s.value(QStringLiteral("SnbDefaultK1"), 30).toInt());
-    addLabeledSlider(snbLay, "K1", snbK1);
+    // Threshold 1 — udDSPSNBThresh1: 2.0-20.0, step 0.1, default 8.0.
+    // Slider internal: 20-200 (×10 scale).
+    QSlider* snbK1 = addScaledSlider(snbLay, tr("Threshold 1"),
+        20, 200,
+        qRound(s.value(QStringLiteral("SnbDefaultK1"), 8.0).toDouble() * 10.0),
+        10.0, 1, QString{},
+        tr("Multiple of the running noise power at which a sample is\n"
+           "flagged as a candidate outlier. Lower = more aggressive\n"
+           "first-pass detection; higher = miss weaker noise."));
     connect(snbK1, &QSlider::valueChanged, [](int v) {
-        AppSettings::instance().setValue(QStringLiteral("SnbDefaultK1"), v);
+        const double real = static_cast<double>(v) / 10.0;
+        AppSettings::instance().setValue(QStringLiteral("SnbDefaultK1"), real);
+        SetRXASNBAk1(0, real);
     });
 
-    auto* snbK2 = new QSlider(Qt::Horizontal);
-    snbK2->setRange(0, 100);
-    snbK2->setValue(s.value(QStringLiteral("SnbDefaultK2"), 30).toInt());
-    addLabeledSlider(snbLay, "K2", snbK2);
+    // Threshold 2 — udDSPSNBThresh2: 4.0-60.0, step 0.1, default 20.0.
+    // Slider internal: 40-600 (×10 scale).
+    QSlider* snbK2 = addScaledSlider(snbLay, tr("Threshold 2"),
+        40, 600,
+        qRound(s.value(QStringLiteral("SnbDefaultK2"), 20.0).toDouble() * 10.0),
+        10.0, 1, QString{},
+        tr("Multiplier applied to the final detection threshold — confirms\n"
+           "candidates from Threshold 1 as real noise outliers. Lower =\n"
+           "more aggressive overall blanking; higher = fewer false triggers\n"
+           "on genuine voice peaks."));
     connect(snbK2, &QSlider::valueChanged, [](int v) {
-        AppSettings::instance().setValue(QStringLiteral("SnbDefaultK2"), v);
+        const double real = static_cast<double>(v) / 10.0;
+        AppSettings::instance().setValue(QStringLiteral("SnbDefaultK2"), real);
+        SetRXASNBAk2(0, real);
     });
 
-    auto* snbOutBw = new QSpinBox;
-    snbOutBw->setRange(100, 96000);
-    snbOutBw->setSuffix(" Hz");
-    snbOutBw->setValue(s.value(QStringLiteral("SnbDefaultOutputBW"), 6000).toInt());
-    addLabeledSpinner(snbLay, "Output Bandwidth", snbOutBw);
-    connect(snbOutBw, QOverload<int>::of(&QSpinBox::valueChanged), [](int v) {
+    // SNB Output Bandwidth — NOT in Thetis Setup page. Thetis sets it
+    // automatically per mode in rxa.cs:112-124. Kept as a NereusSDR-native
+    // global override.
+    QSlider* snbOutBw = addIntSlider(snbLay, tr("Output Bandwidth"),
+        100, 96000,
+        s.value(QStringLiteral("SnbDefaultOutputBW"), 6000).toInt(),
+        tr(" Hz"),
+        tr("Width of the audio band SNB operates on, centred on zero.\n"
+           "Smaller = focuses the blanker on the active passband;\n"
+           "larger = covers wider modes (FM, DRM). Default 6000 Hz\n"
+           "covers SSB + AM comfortably."));
+    connect(snbOutBw, &QSlider::valueChanged, [](int v) {
         AppSettings::instance().setValue(QStringLiteral("SnbDefaultOutputBW"), v);
+        const double half = static_cast<double>(v) / 2.0;
+        SetRXASNBAOutputBandwidth(0, -half, half);
     });
 }
 

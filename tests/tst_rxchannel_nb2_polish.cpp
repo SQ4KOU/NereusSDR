@@ -112,51 +112,23 @@ private slots:
         QCOMPARE(cycleNbMode(NbMode::NB2),  NbMode::Off);
     }
 
-    // ── NbTuning defaults via RxChannel ──────────────────────────────────────
-    //
-    // RxChannel::nbTuning() returns the NbFamily-owned tuning struct.
-    // With a default-constructed channel, the struct should hold the
-    // cmaster.c:43-68 [v2.10.3.13] byte-for-byte defaults.
-
-    void nbTuningDefaultsMatchThetisCmaster() {
-        RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
-        const NbTuning& t = ch.nbTuning();
-        QCOMPARE(t.nbTauMs,      0.1);
-        QCOMPARE(t.nbHangMs,     0.1);
-        QCOMPARE(t.nbAdvMs,      0.1);
-        QCOMPARE(t.nbBacktau,    0.05);
-        QCOMPARE(t.nbThreshold,  30.0);
-        QCOMPARE(t.nb2Mode,      0);
-        QCOMPARE(t.nb2Threshold, 30.0);
-    }
+    // RxChannel-level NbTuning getter (nbTuning()) removed 2026-04-22 for
+    // strict Thetis parity. NbTuning default-value parity is now covered
+    // exclusively by tst_nb_family::tuning_nb1_defaults_match_thetis_runtime.
 
     // ── NB setters compile ───────────────────────────────────────────────────
     //
-    // These tests confirm that setNbMode / setNbTuning / setNbThreshold /
-    // setNbLagMs / setNbLeadMs / setNbTransitionMs exist as member
-    // functions. We take their addresses rather than calling them on live
-    // WDSP state — SetEXTANB* / SetEXTNOB* operate on panb[id] / pnob[id]
-    // which is unallocated for channel 99 (same constraint as
-    // tst_rxchannel_audio_panel re: SetRXAPanelPan on channel 99).
+    // setNbMode is the only per-slice NB entry point RxChannel exposes
+    // after the 2026-04-22 strict-Thetis-parity refactor. Tuning setters
+    // (setNbTuning / setNbThreshold / setNbLagMs / setNbLeadMs /
+    // setNbTransitionMs) were removed from RxChannel — NB tuning is now
+    // global per-channel and lives inside NbFamily, live-pushed from
+    // DspSetupPages via SetEXTANB* directly on channel 0.
 
-    void nbSubParameterMethodsAreReachable() {
-        using ModeFn    = void (RxChannel::*)(NbMode);
-        using TuningFn  = void (RxChannel::*)(const NbTuning&);
-        using DblFn     = void (RxChannel::*)(double);
-
-        ModeFn   modePtr    = &RxChannel::setNbMode;
-        TuningFn tuningPtr  = &RxChannel::setNbTuning;
-        DblFn    threshPtr  = &RxChannel::setNbThreshold;
-        DblFn    lagPtr     = &RxChannel::setNbLagMs;
-        DblFn    leadPtr    = &RxChannel::setNbLeadMs;
-        DblFn    tauPtr     = &RxChannel::setNbTransitionMs;
-
-        QVERIFY(modePtr   != nullptr);
-        QVERIFY(tuningPtr != nullptr);
-        QVERIFY(threshPtr != nullptr);
-        QVERIFY(lagPtr    != nullptr);
-        QVERIFY(leadPtr   != nullptr);
-        QVERIFY(tauPtr    != nullptr);
+    void setNbModeIsReachable() {
+        using ModeFn = void (RxChannel::*)(NbMode);
+        ModeFn modePtr = &RxChannel::setNbMode;
+        QVERIFY(modePtr != nullptr);
     }
 };
 

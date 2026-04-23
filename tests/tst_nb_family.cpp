@@ -38,14 +38,17 @@ private slots:
 
     // ── NbTuning defaults — Thetis cmaster.c:43-68 [v2.10.3.13] ──────────────
 
-    void tuning_nb1_defaults_match_thetis_cmaster_c() {
-        // NB1 defaults — from Thetis ChannelMaster/cmaster.c:49-53 [v2.10.3.13]
+    void tuning_nb1_defaults_match_thetis_runtime() {
+        // NB1 defaults match Thetis's EFFECTIVE runtime values after
+        // the Setup page's udDSPNB* ValueChanged handlers fire, per
+        // setup.designer.cs:44459-44604 + setup.cs:8572,16222-16236
+        // [v2.10.3.13]. See NbFamily.h for the derivation.
         NbTuning t;
-        QCOMPARE(t.nbTauMs,      0.1);    // cmaster.c:49 tau=0.0001 s
-        QCOMPARE(t.nbHangMs,     0.1);    // cmaster.c:50 hangtime=0.0001 s
-        QCOMPARE(t.nbAdvMs,      0.1);    // cmaster.c:51 advtime=0.0001 s
-        QCOMPARE(t.nbBacktau,    0.05);   // cmaster.c:52 backtau=0.05 s
-        QCOMPARE(t.nbThreshold,  30.0);   // cmaster.c:53 threshold=30.0
+        QCOMPARE(t.nbTauMs,      0.01);   // udDSPNBTransition default 0.01 ms
+        QCOMPARE(t.nbHangMs,     0.01);   // udDSPNBLag default 0.01 ms
+        QCOMPARE(t.nbAdvMs,      0.01);   // udDSPNBLead default 0.01 ms
+        QCOMPARE(t.nbBacktau,    0.05);   // cmaster.c:52 backtau=0.05 s (no Thetis UI override)
+        QCOMPARE(t.nbThreshold,  4.95);   // udDSPNB=30 × 0.165 = 4.95
     }
 
     void tuning_nb2_defaults_match_thetis_cmaster_c() {

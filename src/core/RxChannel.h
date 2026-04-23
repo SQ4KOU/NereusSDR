@@ -299,14 +299,9 @@ public:
     void setNbMode(NereusSDR::NbMode mode);
     NereusSDR::NbMode nbMode() const;
 
-    void setNbTuning(const NereusSDR::NbTuning& tuning);
-    const NereusSDR::NbTuning& nbTuning() const;
-
-    // Per-knob convenience setters for RxApplet sliders.
-    void setNbThreshold(double threshold);
-    void setNbLagMs(double hangMs);
-    void setNbLeadMs(double advMs);
-    void setNbTransitionMs(double tauMs);
+    // Per-slice NB tuning (setNbTuning, setNbThreshold, etc.) removed
+    // 2026-04-22 for strict Thetis parity. NB tuning is global per-channel
+    // now; Setup → DSP → NB/SNB calls SetEXTANB* directly on channel 0.
 
     // --- Noise reduction ---
 

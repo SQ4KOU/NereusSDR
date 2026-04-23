@@ -194,26 +194,42 @@ NbFamily::NbFamily(int channelId, int sampleRate, int bufferSize)
     , m_bufferSize(bufferSize)
 {
 #ifdef HAVE_WDSP
-    // Global defaults from Setup → DSP → NB/SNB (persisted via NbSnbSetupPage).
-    // Per-slice-per-band values override these via SliceModel::nbTuning(),
-    // pushed through setTuning() once SliceModel calls setNbTuning().
-    // Scaling: slider 0-100 → WDSP units via 0.165× factor
-    //   (cmaster.c:43-53 [v2.10.3.13] default nbThreshold=0.165*30=4.95).
+    // Global defaults from Setup → DSP → NB/SNB. NB tuning is global per
+    // channel (not per-band) per strict Thetis parity; see NbFamily.h for
+    // the derivation of the scaling factors.
+    //
+    // Scaling:
+    //   udDSPNB (1-1000, default 30)           × 0.165       → threshold
+    //   udDSPNBTransition/Lead/Lag (1-200)     × 0.01 ms     → m_tuning *Ms
+    //     (WDSP seconds = slider × 0.01 × 0.001 = slider × 1e-5)
+    //   Nb2DefaultMode (0-2)                   raw           → nb2Mode
     {
         auto& s = AppSettings::instance();
-        m_tuning.nbThreshold  = 0.165 * s.value(QStringLiteral("NbDefaultThresholdSlider"), 30).toDouble();
-        m_tuning.nb2Mode      = s.value(QStringLiteral("Nb2DefaultMode"), 0).toInt();
-        m_tuning.nb2Threshold = 0.165 * s.value(QStringLiteral("Nb2DefaultThresholdSlider"), 30).toDouble();
-        // SNB K1/K2/OutputBW are applied at WDSP snb.c create time; read when
-        // create_snba is wired (deferred). Stored in AppSettings now via the
-        // NbSnbSetupPage but not yet consumed here.
+        m_tuning.nbThreshold = 0.165 * s.value(QStringLiteral("NbDefaultThresholdSlider"), 30).toDouble();
+        m_tuning.nbTauMs     = 0.01  * s.value(QStringLiteral("NbDefaultTransition"), 1).toDouble();
+        m_tuning.nbAdvMs     = 0.01  * s.value(QStringLiteral("NbDefaultLead"),       1).toDouble();
+        m_tuning.nbHangMs    = 0.01  * s.value(QStringLiteral("NbDefaultLag"),        1).toDouble();
+        m_tuning.nb2Mode     =         s.value(QStringLiteral("Nb2DefaultMode"),      0).toInt();
+        // nb2Threshold / nb2*Ms stay at NbTuning's struct defaults — Thetis
+        // has no NB2 tuning UI, so there's no upstream override to apply.
+        // SNB K1/K2/OutputBW are pushed live by DspSetupPages handlers via
+        // SetRXASNBAk1/k2/OutputBandwidth after channel create.
     }
 
     // From Thetis cmaster.c:43-53 [v2.10.3.13] — NB (anb) create call.
-    // Run flag starts at 0; processIq() gates xanbEXTF on m_mode separately.
+    //
+    // CRITICAL — pass run=1, not 0:
+    //   xanb() at nob.c:113 gates the ENTIRE blanker body behind
+    //   `if (a->run)`. The mutual-exclusion dispatch lives in
+    //   RxChannel::processIq (switch on m_mode), which only calls
+    //   xanbEXTF when mode==NB; so a->run can safely stay at 1 for the
+    //   whole channel lifetime and the Qt-side mode atomic is what
+    //   actually enables/disables blanking. Shipping with run=0 here
+    //   made the blanker a no-op in the original sub-epic B PR (user
+    //   reported: electric-fence pops weren't blanked even with NB lit).
     create_anbEXT(
         m_channelId,
-        /*run=*/0,
+        /*run=*/1,
         m_bufferSize,
         static_cast<double>(m_sampleRate),
         m_tuning.nbTauMs    * kMsToSec,
@@ -230,9 +246,12 @@ NbFamily::NbFamily(int channelId, int sampleRate, int bufferSize)
     // max_imp_seq_time has no post-create EXT setter and is fixed at create
     // time per nobII.c defaults. `nb2MaxImpMs` in NbTuning is reserved for a
     // future direct C-API wrapper and is unused in this path.
+    // Same run=1 rule as create_anbEXT above — xnob() at nobII.c:161
+    // gates on a->run, processIq gates on m_mode. See the note on the
+    // NB (anb) create call for the full rationale.
     create_nobEXT(
         m_channelId,
-        /*run=*/0,
+        /*run=*/1,
         m_tuning.nb2Mode,
         m_bufferSize,
         static_cast<double>(m_sampleRate),
@@ -255,9 +274,23 @@ NbFamily::~NbFamily()
 
 void NbFamily::setMode(NbMode mode)
 {
-    m_mode.store(mode, std::memory_order_release);
+    const NbMode prev = m_mode.exchange(mode, std::memory_order_acq_rel);
+    if (prev == mode) return;
+
+#ifdef HAVE_WDSP
+    // Flush whichever blanker we just left so its state-machine
+    // (avg, count, ring indices) doesn't carry stale state into the
+    // next time the user returns to that mode. WDSP flush_* functions
+    // reset the anb/nob struct to just-created state without touching
+    // the run flag.
+    //
+    // WDSP: third_party/wdsp/src/nob.c:225  (flush_anb / flush_anbEXT)
+    //       third_party/wdsp/src/nobII.c    (flush_nob / flush_nobEXT)
+    if (prev == NbMode::NB  && mode != NbMode::NB)  flush_anbEXT(m_channelId);
+    if (prev == NbMode::NB2 && mode != NbMode::NB2) flush_nobEXT(m_channelId);
+#endif
     // The per-buffer xanbEXTF / xnobEXTF dispatch in RxChannel::processIq()
-    // reads this atomic; no WDSP "run" toggle needed.
+    // reads m_mode and picks the right path; no WDSP run-flag toggle needed.
 }
 
 void NbFamily::setSnbEnabled(bool enabled)

@@ -269,6 +269,21 @@ void SetRXAEMNRPosition(int channel, int position);
 // WDSP: third_party/wdsp/src/snb.c:579
 void SetRXASNBARun(int channel, int run);
 
+// SNB tuning — channel-id based setters callable post-create.
+// All declared in WDSP third_party/wdsp/src/snb.c:595-663 [v2.10.3.13].
+// Thetis wires these from setup.cs SNB controls (udSNBK1/K2/OutputBW);
+// NereusSDR wires them from Setup → DSP → NB/SNB → SNB group.
+void SetRXASNBAovrlp           (int channel, int ovrlp);
+void SetRXASNBAasize           (int channel, int size);
+void SetRXASNBAnpasses         (int channel, int npasses);
+void SetRXASNBAk1              (int channel, double k1);
+void SetRXASNBAk2              (int channel, double k2);
+void SetRXASNBAbridge          (int channel, int bridge);
+void SetRXASNBApresamps        (int channel, int presamps);
+void SetRXASNBApostsamps       (int channel, int postsamps);
+void SetRXASNBApmultmin        (int channel, double pmultmin);
+void SetRXASNBAOutputBandwidth (int channel, double flow, double fhigh);
+
 // ---------------------------------------------------------------------------
 // Noise blanker — external (nob.h, nob.c)
 // ---------------------------------------------------------------------------

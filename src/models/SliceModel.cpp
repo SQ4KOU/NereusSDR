@@ -516,11 +516,9 @@ void SliceModel::setNbMode(NereusSDR::NbMode v)
     emit nbModeChanged(v);
 }
 
-void SliceModel::setNbTuning(const NereusSDR::NbTuning& v)
-{
-    m_nbTuning = v;
-    emit nbTuningChanged(v);
-}
+// setNbTuning / nbTuningChanged removed 2026-04-22 — per-slice NB tuning is
+// not a Thetis concept. All NB tuning is global per DSPRX and lives inside
+// NbFamily, seeded from Setup → DSP → NB/SNB. See SliceModel.h.
 
 void SliceModel::setEmnrEnabled(bool v)
 {
@@ -798,13 +796,11 @@ void SliceModel::saveToSettings(Band band)
     s.setValue(bp + QStringLiteral("AgcMode"),      static_cast<int>(m_agcMode));
     s.setValue(bp + QStringLiteral("StepHz"),       m_stepHz);
 
-    // Noise blanker (per-band).
-    // NB/NB2 tuning defaults trace to Thetis cmaster.c:43-68 [v2.10.3.13].
-    s.setValue(bp + QStringLiteral("NbMode"),       static_cast<int>(m_nbMode));
-    s.setValue(bp + QStringLiteral("NbThreshold"),  m_nbTuning.nbThreshold);
-    s.setValue(bp + QStringLiteral("NbTauMs"),      m_nbTuning.nbTauMs);
-    s.setValue(bp + QStringLiteral("NbLeadMs"),     m_nbTuning.nbAdvMs);
-    s.setValue(bp + QStringLiteral("NbLagMs"),      m_nbTuning.nbHangMs);
+    // Noise-blanker mode (per-band). Tri-state Off/NB/NB2 mirrors Thetis
+    // chkNB state per-receiver. NB TUNING (threshold / tau / lag / lead) is
+    // NOT per-band in Thetis and lives globally inside NbFamily — see
+    // SliceModel.h for the 2026-04-22 removal note.
+    s.setValue(bp + QStringLiteral("NbMode"), static_cast<int>(m_nbMode));
 
     // ── Session state (band-agnostic) ─────────────────────────────────────────
     s.setValue(sp + QStringLiteral("SnbEnabled"), boolStr(m_snbEnabled));
@@ -888,22 +884,13 @@ void SliceModel::restoreFromSettings(Band band)
         setStepHz(s.value(bp + QStringLiteral("StepHz")).toInt());
     }
 
-    // Noise blanker (per-band).
+    // Noise blanker mode (per-band). Tuning keys (NbThreshold/NbTauMs/
+    // NbLeadMs/NbLagMs) from an earlier pre-2026-04-22 schema are ignored
+    // if present — they'll be overwritten on next save. Per-band NB tuning
+    // is not a Thetis concept.
     if (s.contains(bp + QStringLiteral("NbMode"))) {
         setNbMode(static_cast<NereusSDR::NbMode>(
             s.value(bp + QStringLiteral("NbMode")).toInt()));
-    }
-    if (s.contains(bp + QStringLiteral("NbThreshold")) ||
-        s.contains(bp + QStringLiteral("NbTauMs"))     ||
-        s.contains(bp + QStringLiteral("NbLeadMs"))    ||
-        s.contains(bp + QStringLiteral("NbLagMs")))
-    {
-        NereusSDR::NbTuning t = m_nbTuning;
-        if (s.contains(bp + QStringLiteral("NbThreshold"))) { t.nbThreshold = s.value(bp + QStringLiteral("NbThreshold")).toDouble(); }
-        if (s.contains(bp + QStringLiteral("NbTauMs")))     { t.nbTauMs     = s.value(bp + QStringLiteral("NbTauMs")).toDouble(); }
-        if (s.contains(bp + QStringLiteral("NbLeadMs")))    { t.nbAdvMs     = s.value(bp + QStringLiteral("NbLeadMs")).toDouble(); }
-        if (s.contains(bp + QStringLiteral("NbLagMs")))     { t.nbHangMs    = s.value(bp + QStringLiteral("NbLagMs")).toDouble(); }
-        setNbTuning(t);
     }
 
     // ── Session state (band-agnostic) ─────────────────────────────────────────

@@ -160,15 +160,26 @@ namespace NereusSDR {
 // so UI sliders round-trip without conversion; WDSP calls are converted
 // to seconds at the wdsp_api.h boundary.
 //
-// Defaults below are Thetis cmaster.c:43-68 [v2.10.3.13] byte-for-byte.
+// NB1 defaults below are Thetis's EFFECTIVE runtime values, not cmaster.c's
+// create-time seeds. cmaster.c:49-53 initializes WDSP with tau=0.0001s,
+// hangtime=0.0001s, advtime=0.0001s, threshold=30.0, but Thetis's Setup
+// page loads its designer-default slider positions on startup — per
+// setup.designer.cs:44459-44604 [v2.10.3.13] udDSPNBTransition.Value=0.01,
+// udDSPNBLead=0.01, udDSPNBLag=0.01 (ms), udDSPNB.Value=30 — and
+// ValueChanged handlers at setup.cs:8572,16222,16229,16236 [v2.10.3.13]
+// immediately push the scaled values (×0.165 for threshold, ×0.001 for
+// times) to WDSP. Net effect: every Thetis user's WDSP sees 4.95 / 10 µs
+// once the Setup page is ever touched. Matching that here avoids the
+// 6-10× "why isn't NB doing anything" disparity a cmaster.c-literal
+// default would ship with.
 struct NbTuning
 {
     // NB1 — applied via create_anbEXT + SetEXTANB* post-create setters.
-    double nbTauMs       = 0.1;    // cmaster.c:49   tau=0.0001 s
-    double nbHangMs      = 0.1;    // cmaster.c:50   hangtime=0.0001 s
-    double nbAdvMs       = 0.1;    // cmaster.c:51   advtime=0.0001 s
-    double nbBacktau     = 0.05;   // cmaster.c:52   backtau=0.05 s (stored in s, not ms)
-    double nbThreshold   = 30.0;   // cmaster.c:53   threshold=30.0
+    double nbTauMs       = 0.01;   // Thetis effective: udDSPNBTransition=0.01 ms × 0.001 = 10 µs
+    double nbHangMs      = 0.01;   // Thetis effective: udDSPNBLag       =0.01 ms × 0.001 = 10 µs
+    double nbAdvMs       = 0.01;   // Thetis effective: udDSPNBLead      =0.01 ms × 0.001 = 10 µs
+    double nbBacktau     = 0.05;   // cmaster.c:52 backtau=0.05 s (stored in s; no Thetis UI to override)
+    double nbThreshold   = 4.95;   // Thetis effective: udDSPNB=30 × 0.165 = 4.95 (cmaster.c:53 seed=30.0 is immediately overridden)
 
     // NB2 — applied via create_nobEXT + SetEXTNOB* post-create setters.
     int    nb2Mode       = 0;      // cmaster.c:61   mode=0 (zero-fill)

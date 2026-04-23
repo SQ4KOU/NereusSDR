@@ -920,12 +920,17 @@ void VfoWidget::buildDspTab()
     // From Thetis console.cs:43513-43560 [v2.10.3.13].
     m_nbButton = makeToggle(QStringLiteral("NB"));
     m_nbButton->setToolTip(tr(
-        "Noise blanker — click to cycle Off \u2192 NB \u2192 NB2 \u2192 Off.\n"
+        "Noise blanker — left-click cycles Off \u2192 NB \u2192 NB2 \u2192 Off,\n"
+        "right-click opens Setup \u2192 DSP \u2192 NB/SNB.\n"
         "NB  (nob.c, Whitney): time-domain impulse blanker, suited to\n"
         "      sporadic crashes (powerline / ignition).\n"
         "NB2 (nobII.c): second-generation with hold/interpolate modes,\n"
-        "      suited to denser impulse noise.\n"
-        "Tuning: Setup \u2192 DSP \u2192 NB/SNB."));
+        "      suited to denser impulse noise."));
+    // Right-click → Setup page. Mirrors Thetis chkNB_MouseDown
+    // (console.cs:44447 [v2.10.3.13]) which calls ShowSetupTab(NB_Tab).
+    m_nbButton->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_nbButton, &QWidget::customContextMenuRequested,
+            this, [this](const QPoint&) { emit openNbSetupRequested(); });
     m_nrToggle  = makeToggle(QStringLiteral("NR"));
     // From Thetis console.resx:3879 — chkNR.ToolTip
     m_nrToggle->setToolTip(QStringLiteral("Noise Reduction"));
@@ -944,7 +949,16 @@ void VfoWidget::buildDspTab()
     m_anfToggle->setToolTip(QStringLiteral("Automatic Notch Filter"));
     m_snbToggle = makeToggle(QStringLiteral("SNB"));
     // From Thetis console.resx:3927 — chkDSPNB2.ToolTip (labeled "SNB" in Thetis UI)
-    m_snbToggle->setToolTip(QStringLiteral("Spectral Noise Blanker"));
+    m_snbToggle->setToolTip(tr(
+        "Spectral Noise Blanker — left-click toggles, right-click opens\n"
+        "Setup \u2192 DSP \u2192 NB/SNB. Runs independently of NB/NB2 and\n"
+        "targets tonal/wideband statics that time-domain blankers can't\n"
+        "see."));
+    // Right-click → Setup page. Mirrors Thetis chkDSPNB2_MouseDown
+    // (console.cs:44451 [v2.10.3.13]) which calls ShowSetupTab(NB_Tab).
+    m_snbToggle->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_snbToggle, &QWidget::customContextMenuRequested,
+            this, [this](const QPoint&) { emit openNbSetupRequested(); });
     m_apfToggle = makeToggle(QStringLiteral("APF"));
     // From Thetis console.resx:348 — chkCWAPFEnabled.ToolTip
     m_apfToggle->setToolTip(QStringLiteral("Enables APF"));

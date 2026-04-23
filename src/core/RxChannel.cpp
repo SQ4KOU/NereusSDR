@@ -545,21 +545,10 @@ NereusSDR::NbMode RxChannel::nbMode() const
     return m_nb ? m_nb->mode() : NereusSDR::NbMode::Off;
 }
 
-void RxChannel::setNbTuning(const NereusSDR::NbTuning& tuning)
-{
-    if (m_nb) m_nb->setTuning(tuning);
-}
-
-const NereusSDR::NbTuning& RxChannel::nbTuning() const
-{
-    static const NereusSDR::NbTuning kEmpty{};
-    return m_nb ? m_nb->tuning() : kEmpty;
-}
-
-void RxChannel::setNbThreshold(double threshold)    { if (m_nb) m_nb->setNbThreshold(threshold); }
-void RxChannel::setNbLagMs(double hangMs)           { if (m_nb) m_nb->setNbLagMs(hangMs); }
-void RxChannel::setNbLeadMs(double advMs)           { if (m_nb) m_nb->setNbLeadMs(advMs); }
-void RxChannel::setNbTransitionMs(double tauMs)     { if (m_nb) m_nb->setNbTauMs(tauMs); }
+// Per-slice NB tuning pass-through (setNbTuning / nbTuning / setNbThreshold
+// / setNbLagMs / setNbLeadMs / setNbTransitionMs) removed 2026-04-22. NB
+// tuning is global per-channel now; Setup → DSP → NB/SNB calls WDSP
+// SetEXTANB* directly on channel 0. See DspSetupPages.cpp.
 
 // ---------------------------------------------------------------------------
 // Noise reduction

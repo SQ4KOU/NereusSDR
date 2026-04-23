@@ -1,18 +1,20 @@
 // tests/tst_slice_nb_persistence.cpp — Phase 3G RX Epic Sub-epic B
 //
-// Tests that SliceModel's NbMode + NbTuning round-trip through the
-// per-slice-per-band AppSettings namespace established in Phase 3G-10 Stage 2.
+// Tests that SliceModel's NbMode round-trips through the per-slice-per-band
+// AppSettings namespace established in Phase 3G-10 Stage 2.
+//
+// NOTE: Per-slice NB TUNING tests removed 2026-04-22 for strict Thetis
+// parity — NB tuning is global per DSPRX in Thetis, not per-band. Tuning
+// now lives inside NbFamily; only the Off/NB/NB2 mode is per-band.
 //
 // Isolation: TestSandboxInit.cpp (auto-linked by nereus_add_test) calls
 // QStandardPaths::setTestModeEnabled(true) before main(), redirecting
 // AppSettings to the Qt test sandbox rather than the real user config file.
-// Keys written during tests are cleaned up in cleanup() to prevent cross-test
-// pollution within the shared sandbox.
 
 #include <QtTest/QtTest>
 
 #include "core/AppSettings.h"
-#include "core/NbFamily.h"
+#include "core/WdspTypes.h"
 #include "models/Band.h"
 #include "models/SliceModel.h"
 
@@ -60,30 +62,12 @@ private slots:
         }
     }
 
-    // ── NbTuning round-trip on 20m ────────────────────────────────────────────
-
-    void nb_tuning_round_trips_per_band() {
-        NbTuning t;
-        t.nbThreshold = 42.5;
-        t.nbHangMs    = 17.0;
-        t.nbAdvMs     = 13.0;
-        t.nbTauMs     = 0.7;
-
-        {
-            SliceModel a(0);
-            a.setNbTuning(t);
-            a.saveToSettings(Band::Band20m);
-        }
-        {
-            SliceModel b(0);
-            b.restoreFromSettings(Band::Band20m);
-            const NbTuning got = b.nbTuning();
-            QCOMPARE(got.nbThreshold, 42.5);
-            QCOMPARE(got.nbHangMs,    17.0);
-            QCOMPARE(got.nbAdvMs,     13.0);
-            QCOMPARE(got.nbTauMs,     0.7);
-        }
-    }
+    // Per-slice NB TUNING persistence (previously `nb_tuning_round_trips_per_band`)
+    // removed 2026-04-22 for strict Thetis parity. Thetis has no per-band NB
+    // tuning — it's a single global set per DSPRX via Setup → DSP → NB.
+    // NbTuning now lives inside NbFamily, seeded from AppSettings global
+    // keys (NbDefaultThresholdSlider, Nb2DefaultMode, etc.) at channel
+    // create and live-pushed from DspSetupPages handlers.
 
     // ── NbMode is band-separate: 40m=NB, 20m=NB2 ─────────────────────────────
 

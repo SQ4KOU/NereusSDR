@@ -365,8 +365,11 @@ public:
     NereusSDR::NbMode nbMode() const { return m_nbMode; }
     void   setNbMode(NereusSDR::NbMode v);
 
-    const NereusSDR::NbTuning& nbTuning() const { return m_nbTuning; }
-    void   setNbTuning(const NereusSDR::NbTuning& v);
+    // Per-slice NB TUNING (threshold / tau / lag / lead) removed 2026-04-22
+    // for strict Thetis parity. Thetis has a single global NB tuning set
+    // per DSPRX via Setup → DSP → NB; no per-band overrides. All NB tuning
+    // now lives globally inside NbFamily (seeded from AppSettings at
+    // channel create + live-pushed from the Setup page).
 
     bool   emnrEnabled()     const { return m_emnrEnabled; }
     void   setEmnrEnabled(bool v);
@@ -513,7 +516,6 @@ signals:
     void xitEnabledChanged(bool v);
     void xitHzChanged(int hz);
     void nbModeChanged(NereusSDR::NbMode v);
-    void nbTuningChanged(const NereusSDR::NbTuning& v);
     void emnrEnabledChanged(bool v);
     void snbEnabledChanged(bool v);
     void apfEnabledChanged(bool v);
@@ -575,7 +577,6 @@ private:
     bool   m_xitEnabled{false};       // Neutral default — no Thetis citation needed
     int    m_xitHz{0};                // Neutral default — zero offset
     NereusSDR::NbMode   m_nbMode{NereusSDR::NbMode::Off};  // Tri-state: Off/NB/NB2
-    NereusSDR::NbTuning m_nbTuning{};  // per-band NB tuning knobs
     bool   m_emnrEnabled{false};      // Neutral default — feature off at start
     bool   m_snbEnabled{false};       // Neutral default — feature off at start
     bool   m_apfEnabled{false};       // Neutral default — feature off at start

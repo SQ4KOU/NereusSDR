@@ -121,7 +121,6 @@
 #pragma once
 
 #include "AppletWidget.h"
-#include "core/NbFamily.h"
 #include "gui/widgets/TriBtn.h"
 #include "models/Band.h"
 
@@ -218,11 +217,6 @@ signals:
     void autoAgcToggled(bool on);
     void openSetupRequested();
 
-private slots:
-    void onNbThresholdChanged(int sliderVal);
-    void onNbLagChanged(int ms);
-    void onSliceNbTuningChanged(const NereusSDR::NbTuning& t);
-
 private:
     void buildUi();
     void connectSlice(SliceModel* s);
@@ -282,13 +276,6 @@ private:
     // Control 14: Squelch
     QPushButton* m_sqlBtn      = nullptr;
     QSlider*     m_sqlSlider   = nullptr;
-
-    // NB button + NB1 tuning row (Task 9 — binds to slice nbTuning struct)
-    QPushButton* m_nbBtn{nullptr};
-    QSlider*     m_nbThreshold{nullptr};
-    QSlider*     m_nbLag{nullptr};
-    QLabel*      m_nbThresholdLabel{nullptr};
-    QLabel*      m_nbLagLabel{nullptr};
 
     // ATT/S-ATT row (between Squelch and AGC)
     QLabel*         m_attLabel{nullptr};

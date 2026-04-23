@@ -537,79 +537,13 @@ void RxApplet::buildUi()
         NyiOverlay::markNyi(m_sqlSlider, QStringLiteral("Phase 3I"));
     }
 
-    // NB button row — cycles Off → NB → NB2 → Off on each click.
-    // From Thetis console.cs:42476-42482 [v2.10.3.13] — chkNB CheckState cycle.
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
-
-        // NB button: cycles Off/NB/NB2 tri-state on click.
-        m_nbBtn = new QPushButton(QStringLiteral("NB"), this);
-        m_nbBtn->setCheckable(true);
-        m_nbBtn->setFixedWidth(52);
-        m_nbBtn->setFixedHeight(20);
-        m_nbBtn->setStyleSheet(QStringLiteral(
-            "QPushButton { background: %1; color: %2;"
-            " border: 1px solid %3; border-radius: 3px; font-size: 11px; font-weight: bold; }"
-            "QPushButton:checked { background: #1a5c20; color: #55ff66;"
-            " border-color: #44cc55; }"
-        ).arg(Style::kButtonBg, Style::kTextSecondary, Style::kBorder));
-        connect(m_nbBtn, &QPushButton::clicked, this, [this] {
-            if (!m_updatingFromModel && m_slice) {
-                const NereusSDR::NbMode next = NereusSDR::cycleNbMode(m_slice->nbMode());
-                m_slice->setNbMode(next);
-            }
-        });
-        row->addWidget(m_nbBtn);
-
-        row->addStretch(1);
-
-        rightCol->addLayout(row);
-    }
-
-    // NB1 tuning row — Threshold + Lag sliders below the NB button.
-    // From Thetis setup.cs:8572 [v2.10.3.13] — udDSPNB (0.165×) and
-    // Thetis setup.cs:16236 [v2.10.3.13] — udDSPNBLag (ms, 0–500).
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
-
-        m_nbThresholdLabel = new QLabel(QStringLiteral("Thr"), this);
-        m_nbThresholdLabel->setStyleSheet(QStringLiteral(
-            "QLabel { color: %1; font-size: 11px; }"
-        ).arg(Style::kTextSecondary));
-        row->addWidget(m_nbThresholdLabel);
-
-        m_nbThreshold = new QSlider(Qt::Horizontal, this);
-        m_nbThreshold->setRange(0, 100);
-        m_nbThreshold->setFixedHeight(18);
-        m_nbThreshold->setStyleSheet(Style::sliderHStyle());
-        // From Thetis setup.designer.cs udDSPNB.ToolTip [v2.10.3.13]
-        m_nbThreshold->setToolTip(tr("NB threshold — higher = blanks fewer, weaker impulses (Thetis udDSPNB)"));
-        connect(m_nbThreshold, &QSlider::valueChanged, this, &RxApplet::onNbThresholdChanged);
-        row->addWidget(m_nbThreshold, 1);
-
-        m_nbLagLabel = new QLabel(QStringLiteral("Lag"), this);
-        m_nbLagLabel->setStyleSheet(QStringLiteral(
-            "QLabel { color: %1; font-size: 11px; }"
-        ).arg(Style::kTextSecondary));
-        row->addWidget(m_nbLagLabel);
-
-        m_nbLag = new QSlider(Qt::Horizontal, this);
-        // From Thetis setup.designer.cs udDSPNBLag.Maximum [v2.10.3.13]:
-        //   Maximum = {20, 0, 0, 65536}  →  0.20 s = 20 ms
-        // Plan Task 9 initially specified 0-500 ms; tightened post-review
-        // for Thetis parity.
-        m_nbLag->setRange(0, 20);
-        m_nbLag->setFixedHeight(18);
-        m_nbLag->setStyleSheet(Style::sliderHStyle());
-        // From Thetis setup.designer.cs udDSPNBLag.ToolTip [v2.10.3.13]
-        m_nbLag->setToolTip(tr("NB lag — hold-off time after a blanked impulse, ms (Thetis udDSPNBLag)"));
-        connect(m_nbLag, &QSlider::valueChanged, this, &RxApplet::onNbLagChanged);
-        row->addWidget(m_nbLag, 1);
-
-        rightCol->addLayout(row);
-    }
+    // NB controls intentionally absent from RxApplet per strict Thetis parity:
+    // Thetis never puts NB controls on a per-slice applet. The valid Thetis
+    // surfaces are (1) chkNB tri-state on the VFO flag, (2) Setup → DSP →
+    // NB/SNB for tuning, (3) the DSP menu bar. An earlier draft shipped an
+    // NB cycling button + Thr + Lag sliders here; removed 2026-04-22 to
+    // match Thetis. Per-band NB MODE persistence still lives on SliceModel
+    // (not tuning) so different bands can have different NB/NB2/Off states.
 
     // ATT/S-ATT row — between NB and AGC
     // From Thetis console.cs: comboPreamp / udRX1StepAttData (stacked)
@@ -959,8 +893,6 @@ void RxApplet::buildUi()
     m_muteBtn->setToolTip(QStringLiteral("Mute - Mutes the output to the speaker."));
     // From Thetis console.resx:8433 — ptbAF.ToolTip
     m_afSlider->setToolTip(QStringLiteral("AF Gain - Monitor Volume for RX/TX"));
-    // From Thetis console.resx chkNB.ToolTip [v2.10.3.13] — cycles Off/NB/NB2
-    m_nbBtn->setToolTip(QStringLiteral("Noise Blanker - cycles Off / NB (ANB) / NB2 (NOB)"));
     // From Thetis console.resx:4554 — comboAGC.ToolTip
     m_agcCombo->setToolTip(QStringLiteral("Automatic Gain Control Mode Setting"));
     // From Thetis console.resx:8397 — ptbRF.ToolTip (ptbRF is the AGC-T slider)
@@ -1189,14 +1121,8 @@ void RxApplet::syncFromModel()
     // Step size label (Issue #69)
     m_stepLabel->setText(QStringLiteral("%1 Hz").arg(m_slice->stepHz()));
 
-    // NB button + NB1 tuning sliders (Task 9)
-    onSliceNbTuningChanged(m_slice->nbTuning());
-    {
-        const NereusSDR::NbMode nbm = m_slice->nbMode();
-        m_nbBtn->setText(nbm == NereusSDR::NbMode::NB2
-            ? QStringLiteral("NB2") : QStringLiteral("NB"));
-        m_nbBtn->setChecked(nbm != NereusSDR::NbMode::Off);
-    }
+    // NB button + NB1 tuning sliders removed from RxApplet per strict Thetis
+    // parity. NB state lives on VFO flag, Setup → DSP → NB/SNB, and menu bar.
 
     m_updatingFromModel = false;
 }
@@ -1279,18 +1205,9 @@ void RxApplet::connectSlice(SliceModel* s)
         m_stepLabel->setText(QStringLiteral("%1 Hz").arg(hz));
     });
 
-    // NB mode → button visual sync (Task 9)
-    connect(s, &SliceModel::nbModeChanged, this, [this](NereusSDR::NbMode m) {
-        m_updatingFromModel = true;
-        m_nbBtn->setText(m == NereusSDR::NbMode::NB2
-            ? QStringLiteral("NB2") : QStringLiteral("NB"));
-        m_nbBtn->setChecked(m != NereusSDR::NbMode::Off);
-        m_updatingFromModel = false;
-    });
-
-    // NB tuning → sliders sync (Task 9)
-    connect(s, &SliceModel::nbTuningChanged, this, &RxApplet::onSliceNbTuningChanged);
-    onSliceNbTuningChanged(s->nbTuning());  // initial paint
+    // NB controls (button + tuning sliders) removed from RxApplet per strict
+    // Thetis parity (2026-04-22). NB state is managed via VFO flag chkNB,
+    // Setup → DSP → NB/SNB, and the DSP menu bar — not here.
 
     // ATT/S-ATT — wire to StepAttenuatorController if available
     auto* attCtrl = m_model ? m_model->stepAttController() : nullptr;
@@ -1406,36 +1323,6 @@ void RxApplet::connectSlice(SliceModel* s)
             }
         });
     }
-}
-
-// ── NB1 tuning slot implementations (Task 9) ─────────────────────────────────
-
-void RxApplet::onNbThresholdChanged(int sliderVal)
-{
-    if (!m_slice) { return; }
-    NereusSDR::NbTuning t = m_slice->nbTuning();
-    // From Thetis setup.cs:8572 [v2.10.3.13] — 0.165 × udDSPNB.Value
-    t.nbThreshold = 0.165 * static_cast<double>(sliderVal);
-    m_slice->setNbTuning(t);
-}
-
-void RxApplet::onNbLagChanged(int ms)
-{
-    if (!m_slice) { return; }
-    NereusSDR::NbTuning t = m_slice->nbTuning();
-    // From Thetis setup.cs:16236 [v2.10.3.13] — udDSPNBLag.Value (ms)
-    t.nbHangMs = static_cast<double>(ms);
-    m_slice->setNbTuning(t);
-}
-
-void RxApplet::onSliceNbTuningChanged(const NereusSDR::NbTuning& t)
-{
-    const QSignalBlocker bt(m_nbThreshold);
-    const QSignalBlocker bl(m_nbLag);
-    // From Thetis setup.cs:8572 [v2.10.3.13] — inverse of 0.165× factor
-    m_nbThreshold->setValue(static_cast<int>(qRound(t.nbThreshold / 0.165)));
-    // From Thetis setup.cs:16236 [v2.10.3.13] — nbHangMs stored in ms
-    m_nbLag->setValue(static_cast<int>(qRound(t.nbHangMs)));
 }
 
 void RxApplet::disconnectSlice(SliceModel* s)

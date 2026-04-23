@@ -420,6 +420,11 @@ signals:
     // Emitted when the user clicks the NB button. MainWindow cycles the
     // slice's NbMode in response.
     void nbModeCycled();
+    // Emitted when the user right-clicks the NB or SNB button. MainWindow
+    // opens the Setup dialog to the "NB/SNB" page. Mirrors Thetis
+    // chkNB_MouseDown (console.cs:44447 [v2.10.3.13]) which calls
+    // SetupForm.ShowSetupTab(SetupTab.NB_Tab).
+    void openNbSetupRequested();
     void nrChanged(bool enabled);
     void anfChanged(bool enabled);
     void sliceActivationRequested(int sliceIndex);
