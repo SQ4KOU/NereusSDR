@@ -196,6 +196,21 @@ public:
     void removeSlice(int index);
     void setActiveSlice(int index);
 
+    // Band-button click handler. Routes both SpectrumOverlayPanel::bandSelected
+    // and ContainerWidget::bandClicked through one code path. On first
+    // visit to `band`, applies BandDefaults::seedFor(band) and persists;
+    // on subsequent visits, restores last-used per-band state via the
+    // 3G-10 Stage 2 persistence already on SliceModel.
+    //
+    // Same-band click is a no-op. XVTR with no seed and no persisted
+    // state is a logged no-op. Locked slices freeze frequency (mode still
+    // changes, matching Thetis lock semantics).
+    //
+    // Acts on activeSlice(). No-op if active slice is null.
+    //
+    // Issue #118.
+    void onBandButtonClicked(NereusSDR::Band band);
+
     // Panadapter management (client-side)
     QList<PanadapterModel*> panadapters() const { return m_panadapters; }
     int addPanadapter();
@@ -307,6 +322,13 @@ signals:
 
     // Raw interleaved I/Q for spectrum display (tapped before WDSP processing)
     void rawIqData(const QVector<float>& interleavedIQ);
+
+    // Emitted when onBandButtonClicked short-circuits in a user-visible way
+    // (locked slice, XVTR no-seed). MainWindow connects this to the status
+    // bar so the user learns why their band click did nothing — prevents
+    // silent failure. `reason` is a one-line human-readable message.
+    // Issue #118.
+    void bandClickIgnored(NereusSDR::Band band, QString reason);
 
 private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);

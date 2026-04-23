@@ -772,6 +772,19 @@ QString boolStr(bool v) { return v ? QStringLiteral("True") : QStringLiteral("Fa
 
 } // namespace
 
+// DspMode is the sentinel: if present under the per-band namespace,
+// the band is treated as visited. Alternatives (Frequency, FilterLow)
+// are written by migrateLegacyKeys() even when the upstream VfoDspMode
+// key was absent, so they'd report "visited" for a band the user has
+// never intentionally configured on the mode side. Using DspMode matches
+// the semantic we want for the #118 band-click handler: "has this band
+// been configured, not just visited."
+bool SliceModel::hasSettingsFor(Band band) const
+{
+    auto& s = AppSettings::instance();
+    return s.contains(bandPrefix(m_sliceIndex, band) + QStringLiteral("DspMode"));
+}
+
 void SliceModel::saveToSettings(Band band)
 {
     auto& s = AppSettings::instance();

@@ -226,6 +226,7 @@ warren@wpratt.com
 */
 
 #include "RadioModel.h"
+#include "BandDefaults.h"
 #include "RxDspWorker.h"
 #include "core/RadioConnection.h"
 #include "core/RadioConnectionTeardown.h"
@@ -597,6 +598,77 @@ void RadioModel::setActiveSlice(int index)
         m_activeSlice = m_slices.at(index);
         emit activeSliceChanged(index);
     }
+}
+
+void RadioModel::onBandButtonClicked(Band band)
+{
+    SliceModel* slice = activeSlice();
+    if (!slice) {
+        // No active slice (pre-connection, between-slice teardown, etc.).
+        // Silent — avoids log spam from UI events firing during startup.
+        return;
+    }
+
+    // Use slice frequency (not PanadapterModel::band()) so that in CTUN
+    // mode with an off-center panadapter, the "current band" follows the
+    // VFO's actual band, not the DDC tuner's.
+    const Band current = bandFromFrequency(slice->frequency());
+    if (band == current) {
+        // Same-band click — design decision Q1(a). Keeps UX predictable;
+        // avoids yanking the VFO when the user is already in the band.
+        // Silent (not emitted as "ignored") because this is expected
+        // behavior, not a failed command.
+        return;
+    }
+
+    if (slice->locked()) {
+        // Lock → full short-circuit. Earlier design had mode still changing
+        // (Thetis "lock is VFO-only" semantic), but our per-band persistence
+        // model corrupted the new band's slot on a locked click: the
+        // blocked setFrequency left stale freq in memory, then the tail
+        // saveToSettings(newBand) baked that stale freq into the new
+        // band's slot. Full short-circuit is simpler and matches the
+        // common user mental model of "lock = slice is inert".
+        const QString reason = QStringLiteral("Band %1 ignored: slice is locked — unlock to change bands")
+                                   .arg(bandLabel(band));
+        qCDebug(lcConnection) << reason;
+        emit bandClickIgnored(band, reason);
+        return;
+    }
+
+    // Snapshot outgoing band's full per-band DSP + session state (freq,
+    // mode, filter, AGC tuple, NB, step, antennas, etc.) before we
+    // overwrite the slice. See SliceModel::saveToSettings for the exact
+    // key set persisted.
+    slice->saveToSettings(current);
+
+    if (slice->hasSettingsFor(band)) {
+        // Second+ visit: restore last-used state for the clicked band.
+        slice->restoreFromSettings(band);
+        return;
+    }
+
+    // First visit: apply the seed if one exists, otherwise no-op with
+    // user-visible feedback.
+    BandSeed seed = BandDefaults::seedFor(band);
+    if (!seed.valid) {
+        // XVTR today. Becomes meaningful once the XVTR epic ships.
+        const QString reason = QStringLiteral("Band %1 ignored: transverter config not yet supported")
+                                   .arg(bandLabel(band));
+        qCDebug(lcConnection) << reason;
+        emit bandClickIgnored(band, reason);
+        return;
+    }
+
+    // Order: freq before mode. NereusSDR-specific — frequencyChanged
+    // triggers the per-band Alex/antenna update before mode-dependent
+    // filter bandwidth applies. Note Thetis SetBand applies mode first
+    // then freq (console.cs:5886/5911 [v2.10.3.13]); both orderings
+    // produce the same end state, but the freq-first order exposes the
+    // Alex switch earlier in the signal chain.
+    slice->setFrequency(seed.frequencyHz);
+    slice->setDspMode(seed.mode);
+    slice->saveToSettings(band);   // Bake seed for next visit.
 }
 
 // --- Panadapter Management ---
