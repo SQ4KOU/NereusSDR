@@ -25,8 +25,13 @@ private:
         for (const QString& band : {
                 QStringLiteral("20m"), QStringLiteral("40m"),
                 QStringLiteral("60m"), QStringLiteral("XVTR") }) {
-            s.remove(QStringLiteral("Slice0/Band") + band + QStringLiteral("/DspMode"));
-            s.remove(QStringLiteral("Slice1/Band") + band + QStringLiteral("/DspMode"));
+            for (const QString& field : {
+                    QStringLiteral("DspMode"),
+                    QStringLiteral("Frequency"),
+                    QStringLiteral("FilterLow") }) {
+                s.remove(QStringLiteral("Slice0/Band") + band + QStringLiteral("/") + field);
+                s.remove(QStringLiteral("Slice1/Band") + band + QStringLiteral("/") + field);
+            }
         }
     }
 
@@ -58,6 +63,19 @@ private slots:
                    static_cast<int>(DSPMode::USB));
         QVERIFY(slice0.hasSettingsFor(Band::Band20m));
         QVERIFY(!slice1.hasSettingsFor(Band::Band20m));
+    }
+
+    void other_keys_present_without_dspmode_returns_false() {
+        // Pins the sentinel contract: hasSettingsFor probes DspMode
+        // specifically. A partial write that sets Frequency or FilterLow
+        // but never stored DspMode (possible via migrateLegacyKeys when
+        // VfoDspMode was absent upstream) is treated as "not visited"
+        // and the handler will apply the seed.
+        SliceModel slice(0);
+        auto& s = AppSettings::instance();
+        s.setValue(QStringLiteral("Slice0/Band20m/Frequency"), 14155000.0);
+        s.setValue(QStringLiteral("Slice0/Band20m/FilterLow"), -2800);
+        QVERIFY(!slice.hasSettingsFor(Band::Band20m));
     }
 };
 

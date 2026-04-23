@@ -453,6 +453,7 @@ public:
     //   If found, migrates to Slice0/Band<current>/... using the persisted
     //   frequency to derive the band. Then removes all legacy Vfo* keys.
     //   Call once on startup, before restoreFromSettings().
+    //
     // Returns true iff the per-band AppSettings namespace for this slice
     // has any persisted state for `band` (probes the DspMode key).
     // Used by RadioModel::onBandButtonClicked (#118) to decide whether a
