@@ -15,12 +15,18 @@ cmake_minimum_required(VERSION 3.20)
 
 include(FetchContent)
 
-# Pinned to match Thetis v2.10.3.13 @ 501e3f51 libspecbleach bundle.
-# Verified 2026-04-23 against https://github.com/lucianodato/libspecbleach HEAD.
+# Pinned to match the API used by Thetis v2.10.3.13 @ 501e3f51 libspecbleach bundle.
+# Verified 2026-04-23: sbnr.c uses specbleach_adenoiser.h (adaptive denoiser API —
+# specbleach_adaptive_initialize / specbleach_adaptive_process). That header was
+# present from commit 41d3f58 (2026-01-05) up to commit 622626c where it was merged
+# into specbleach_denoiser.h. We pin to 41d3f58 (the refactor that first introduced
+# the dedicated adenoiser header) so both specbleach_adenoiser.h and the matching
+# adaptive C implementation are present.
+# Note: the earlier GIT_TAG (d4cb7af) was post-merger and lacked the adenoiser header.
 FetchContent_Declare(
     libspecbleach_upstream
     GIT_REPOSITORY https://github.com/lucianodato/libspecbleach.git
-    GIT_TAG        d4cb7afff2c954b7938bd1e9bc77d81e788d08f0
+    GIT_TAG        41d3f58310391e05ecfb8b7c9efb62ea2ba8ef05
     GIT_SHALLOW    FALSE   # full clone required for specific SHA pin
 )
 

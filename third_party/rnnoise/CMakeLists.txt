@@ -48,7 +48,14 @@ if(NOT RNNOISE_SOURCES)
         "rnnoise_upstream_SOURCE_DIR (${rnnoise_upstream_SOURCE_DIR})?")
 endif()
 
-add_library(rnnoise_static STATIC ${RNNOISE_SOURCES})
+# rnnoise_model_init.c provides init_rnnoise(), which is normally bundled
+# inside rnnoise_data_little.c / rnnoise_data.c. Those files are excluded
+# because they contain 274 000+ lines of baked model weights. We supply
+# a thin shim that contains only the function body (no weight data).
+# Ported from Thetis rnnoise_data_little.c:274936-274952 [v2.10.3.13 @501e3f51].
+set(RNNOISE_MODEL_INIT_SRC "${CMAKE_CURRENT_SOURCE_DIR}/rnnoise_model_init.c")
+
+add_library(rnnoise_static STATIC ${RNNOISE_SOURCES} ${RNNOISE_MODEL_INIT_SRC})
 
 target_include_directories(rnnoise_static PUBLIC
     "${rnnoise_upstream_SOURCE_DIR}/include"
@@ -64,10 +71,25 @@ target_compile_definitions(rnnoise_static PRIVATE
     COMPILE_OPUS
 )
 
-# rnnoise's autotools build generates a config.h that declares
-# PACKAGE_VERSION and enables/disables optional features. Provide a minimal
-# shim so #ifdef HAVE_CONFIG_H / #include "config.h" blocks compile cleanly.
+# rnnoise's autotools build generates two headers that rnn.h / rnn.c include
+# unconditionally:
+#
+#   config.h      — autoconf feature-detection macros
+#   rnnoise_data.h — model architecture constants (CONV1_STATE_SIZE, GRU*_STATE_SIZE,
+#                    the RNNoise typedef, and init_rnnoise() declaration)
+#
+# Neither is shipped in the git tree; both are produced by the autotools /
+# Python model-dump pipeline. We provide hand-written shims that match the
+# constants from the Thetis-bundled copy at:
+#   ../Thetis/Project Files/lib/NR_Algorithms_x64/src/rnnoise/src/rnnoise_data.h
+# (Thetis v2.10.3.13 @ 501e3f51 — verified 2026-04-23).
+#
+# The rnnoise_data.h constants match the Default_large.bin model that
+# NereusSDR loads at runtime via RNNRloadModel(). They must stay in sync if
+# the model is ever upgraded.
+
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rnnoise_config")
+
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/rnnoise_config/config.h"
 "/* NereusSDR-generated config.h shim for rnnoise FetchContent build.
  * Minimal: only the macros rnnoise needs to compile without autotools.
@@ -81,6 +103,67 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/rnnoise_config/config.h"
  * repeating here keeps the config.h self-consistent for any translation
  * unit that includes it before seeing the command-line -D flag. */
 #define USE_WEIGHTS_FILE 1
+")
+
+# rnnoise_data.h — model architecture constants.
+# Source: Thetis/Project Files/lib/NR_Algorithms_x64/src/rnnoise/src/rnnoise_data.h
+# From Thetis rnnoise/src/rnnoise_data.h [v2.10.3.13 @501e3f51]
+# Must be in the same directory as config.h so the PRIVATE include below
+# reaches both files. rnn.h includes it with "rnnoise_data.h" (not a path
+# prefix), so the rnnoise_config dir must appear before src/ in the search
+# path — the target_include_directories(PRIVATE rnnoise_config) below
+# guarantees that ordering.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/rnnoise_config/rnnoise_data.h"
+"/* NereusSDR-generated rnnoise_data.h shim for rnnoise FetchContent build.
+ * Constants ported from:
+ *   Thetis/Project Files/lib/NR_Algorithms_x64/src/rnnoise/src/rnnoise_data.h
+ *   Thetis v2.10.3.13 @ 501e3f51 — verified 2026-04-23.
+ * Generated at configure time — do not edit by hand.
+ * If the Default_large.bin model is upgraded, update these constants to match.
+ */
+#ifndef RNNOISE_DATA_H
+#define RNNOISE_DATA_H
+
+#include \"nnet.h\"
+
+#define CONV1_OUT_SIZE 128
+#define CONV1_IN_SIZE 65
+#define CONV1_STATE_SIZE (65 * (2))
+#define CONV1_DELAY 1
+
+#define CONV2_OUT_SIZE 384
+#define CONV2_IN_SIZE 128
+#define CONV2_STATE_SIZE (128 * (2))
+#define CONV2_DELAY 1
+
+#define GRU1_OUT_SIZE 384
+#define GRU1_STATE_SIZE 384
+
+#define GRU2_OUT_SIZE 384
+#define GRU2_STATE_SIZE 384
+
+#define GRU3_OUT_SIZE 384
+#define GRU3_STATE_SIZE 384
+
+#define DENSE_OUT_OUT_SIZE 32
+#define VAD_DENSE_OUT_SIZE 1
+
+typedef struct {
+    LinearLayer conv1;
+    LinearLayer conv2;
+    LinearLayer gru1_input;
+    LinearLayer gru1_recurrent;
+    LinearLayer gru2_input;
+    LinearLayer gru2_recurrent;
+    LinearLayer gru3_input;
+    LinearLayer gru3_recurrent;
+    LinearLayer dense_out;
+    LinearLayer vad_dense;
+} RNNoise;
+
+int init_rnnoise(RNNoise *model, const WeightArray *arrays);
+
+#endif /* RNNOISE_DATA_H */
 ")
 
 target_include_directories(rnnoise_static PRIVATE

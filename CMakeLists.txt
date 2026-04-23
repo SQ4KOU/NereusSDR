@@ -628,6 +628,11 @@ if(FFTW3_FOUND)
 endif()
 
 if(WDSP_FOUND)
+    # Sub-epic C-1 NR backends: rnnoise (NR3/rnnr.c) and libspecbleach (NR4/sbnr.c).
+    # Must be add_subdirectory'd before wdsp so the targets exist when
+    # third_party/wdsp/CMakeLists.txt pulls them in as PUBLIC link deps.
+    add_subdirectory(third_party/rnnoise)
+    add_subdirectory(third_party/libspecbleach)
     add_subdirectory(third_party/wdsp)
     target_link_libraries(NereusSDRObjs PUBLIC wdsp_static)
     target_compile_definitions(NereusSDRObjs PUBLIC HAVE_WDSP)
