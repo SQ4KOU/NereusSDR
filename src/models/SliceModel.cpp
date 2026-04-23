@@ -709,6 +709,18 @@ void SliceModel::setMnrStrength(double v)
     m_mnrStrength = v;
     emit mnrStrengthChanged(v);
 }
+void SliceModel::setMnrOversub(double v)
+{
+    if (qFuzzyCompare(m_mnrOversub, v)) { return; }
+    m_mnrOversub = v;
+    emit mnrOversubChanged(v);
+}
+void SliceModel::setMnrFloor(double v)
+{
+    if (qFuzzyCompare(m_mnrFloor, v)) { return; }
+    m_mnrFloor = v;
+    emit mnrFloorChanged(v);
+}
 
 void SliceModel::setSnbEnabled(bool v)
 {
@@ -1022,6 +1034,8 @@ void SliceModel::saveToSettings(Band band)
     // BNR + MNR
     s.setValue(sp + QStringLiteral("BnrStrength"),     m_bnrStrength);
     s.setValue(sp + QStringLiteral("MnrStrength"),     m_mnrStrength);
+    s.setValue(sp + QStringLiteral("MnrOversub"),      m_mnrOversub);
+    s.setValue(sp + QStringLiteral("MnrFloor"),        m_mnrFloor);
 
     s.setValue(sp + QStringLiteral("SnbEnabled"), boolStr(m_snbEnabled));
     s.setValue(sp + QStringLiteral("Locked"),     boolStr(m_locked));
@@ -1207,6 +1221,12 @@ void SliceModel::restoreFromSettings(Band band)
     }
     if (s.contains(sp + QStringLiteral("MnrStrength"))) {
         setMnrStrength(s.value(sp + QStringLiteral("MnrStrength")).toDouble());
+    }
+    if (s.contains(sp + QStringLiteral("MnrOversub"))) {
+        setMnrOversub(s.value(sp + QStringLiteral("MnrOversub")).toDouble());
+    }
+    if (s.contains(sp + QStringLiteral("MnrFloor"))) {
+        setMnrFloor(s.value(sp + QStringLiteral("MnrFloor")).toDouble());
     }
 
     if (s.contains(sp + QStringLiteral("SnbEnabled"))) {

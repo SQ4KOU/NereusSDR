@@ -238,8 +238,10 @@ class SliceModel : public QObject {
     // BNR — Strength (single knob; filter class deferred to follow-up PR).
     Q_PROPERTY(double bnrStrength READ bnrStrength WRITE setBnrStrength NOTIFY bnrStrengthChanged)
 
-    // MNR — Strength (single knob; AetherSDR MacNRFilter has setStrength).
-    Q_PROPERTY(double mnrStrength READ mnrStrength WRITE setMnrStrength NOTIFY mnrStrengthChanged)
+    // MNR — Strength, Oversub (aggressiveness), and Floor (min Wiener gain).
+    Q_PROPERTY(double mnrStrength  READ mnrStrength  WRITE setMnrStrength  NOTIFY mnrStrengthChanged)
+    Q_PROPERTY(double mnrOversub   READ mnrOversub   WRITE setMnrOversub   NOTIFY mnrOversubChanged)
+    Q_PROPERTY(double mnrFloor     READ mnrFloor     WRITE setMnrFloor     NOTIFY mnrFloorChanged)
     Q_PROPERTY(bool   snbEnabled      READ snbEnabled      WRITE setSnbEnabled      NOTIFY snbEnabledChanged)
     Q_PROPERTY(bool   apfEnabled      READ apfEnabled      WRITE setApfEnabled      NOTIFY apfEnabledChanged)
     Q_PROPERTY(int    apfTuneHz       READ apfTuneHz       WRITE setApfTuneHz       NOTIFY apfTuneHzChanged)
@@ -490,6 +492,10 @@ public:
     void   setBnrStrength(double v);
     double mnrStrength() const { return m_mnrStrength; }
     void   setMnrStrength(double v);
+    double mnrOversub()  const { return m_mnrOversub; }
+    void   setMnrOversub(double v);
+    double mnrFloor()    const { return m_mnrFloor; }
+    void   setMnrFloor(double v);
 
     bool   snbEnabled()      const { return m_snbEnabled; }
     void   setSnbEnabled(bool v);
@@ -663,6 +669,8 @@ signals:
     void dfnrPostFilterBetaChanged(double v);
     void bnrStrengthChanged(double v);
     void mnrStrengthChanged(double v);
+    void mnrOversubChanged(double v);
+    void mnrFloorChanged(double v);
     void snbEnabledChanged(bool v);
     void apfEnabledChanged(bool v);
     void apfTuneHzChanged(int hz);
@@ -771,6 +779,8 @@ private:
     // BNR + MNR — AetherSDR filter defaults (post-WDSP, not in Thetis).
     double m_bnrStrength = 1.0;
     double m_mnrStrength = 1.0;
+    double m_mnrOversub  = 4.0;   // MacNRFilter::DEF_OVER; range 0.5-40 at filter
+    double m_mnrFloor    = 0.05;  // MacNRFilter::DEF_FLOOR; range 0.001-1.0 at filter
 
     bool   m_snbEnabled{false};       // Neutral default — feature off at start
     bool   m_apfEnabled{false};       // Neutral default — feature off at start

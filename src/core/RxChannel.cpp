@@ -1429,10 +1429,20 @@ void RxChannel::setDfnrPostFilterBeta(float beta)
 #ifdef HAVE_MNR
 void RxChannel::setMnrStrength(float strength)
 {
-    if (m_mnr) {
-        m_mnr->setStrength(strength);
-    }
+    if (m_mnr) { m_mnr->setStrength(strength); }
 }
+void RxChannel::setMnrOversub(float oversub)
+{
+    if (m_mnr) { m_mnr->setOversub(oversub); }
+}
+void RxChannel::setMnrFloor(float floor)
+{
+    if (m_mnr) { m_mnr->setFloor(floor); }
+}
+#else
+void RxChannel::setMnrStrength(float) {}
+void RxChannel::setMnrOversub(float) {}
+void RxChannel::setMnrFloor(float) {}
 #endif
 
 } // namespace NereusSDR

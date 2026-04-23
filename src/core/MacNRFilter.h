@@ -80,6 +80,16 @@ public:
     void  setStrength(float s) { m_strength.store(std::clamp(s, 0.0f, 1.0f)); }
     float strength()     const { return m_strength.load(); }
 
+    // Oversubtraction factor — higher = more aggressive attenuation on low-SNR
+    // bins. Typical range 1.0 (gentle) ... 20.0 (underwater). Default 4.
+    void  setOversub(float o) { m_oversub.store(std::clamp(o, 0.5f, 40.0f)); }
+    float oversub()     const { return m_oversub.load(); }
+
+    // Noise-floor clamp — minimum Wiener gain per bin. 0.001 = -60 dB max
+    // attenuation, 0.3 = -10 dB max. Default 0.05 (-26 dB).
+    void  setFloor(float f) { m_floor.store(std::clamp(f, 0.001f, 1.0f)); }
+    float floor()     const { return m_floor.load(); }
+
 private:
     // Process one N-sample analysis frame; writes N output samples to outBuf.
     void processFrame(const float* inBuf, float* outBuf);
@@ -103,12 +113,13 @@ private:
     // gave ~-6 dB uniform attenuation that wasn't perceived as selective
     // NR. OVER=4 tilts the Wiener curve toward stronger attenuation on
     // low-SNR bins while leaving high-SNR (voice) bins mostly untouched.
-    static constexpr int   HIST    = 25;
-    static constexpr float ALPHA   = 0.92f;
-    static constexpr float OVER    = 4.0f;  // was 2.0 in AetherSDR
-    static constexpr float FLOOR   = 0.05f;
-    static constexpr float BIAS    = 1.2f;
-    static constexpr float GSMOOTH = 0.70f;
+    static constexpr int   HIST     = 25;
+    static constexpr float ALPHA    = 0.92f;
+    static constexpr float BIAS     = 1.2f;
+    static constexpr float GSMOOTH  = 0.70f;
+    // Default values for runtime-tunable knobs (see setOversub / setFloor).
+    static constexpr float DEF_OVER  = 4.0f;
+    static constexpr float DEF_FLOOR = 0.05f;
 
     // ── vDSP state ─────────────────────────────────────────────────────
     FFTSetup           m_fftSetup{nullptr};
@@ -135,6 +146,8 @@ private:
     int                m_frameCount{0};
 
     std::atomic<float> m_strength{1.0f};
+    std::atomic<float> m_oversub{DEF_OVER};
+    std::atomic<float> m_floor{DEF_FLOOR};
 };
 
 } // namespace NereusSDR

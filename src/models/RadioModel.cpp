@@ -826,6 +826,8 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                     // The Setup/popup slider does the ×100 / ÷100 UI↔model
                     // conversion; the model→filter path is 1:1.
                     rxCh->setMnrStrength(static_cast<float>(m_activeSlice->mnrStrength()));
+                    rxCh->setMnrOversub(static_cast<float>(m_activeSlice->mnrOversub()));
+                    rxCh->setMnrFloor(static_cast<float>(m_activeSlice->mnrFloor()));
 #endif
 
                     // NR3 model — global (RNNRloadModel), not per-channel.
@@ -1538,6 +1540,16 @@ void RadioModel::wireSliceSignals()
     connect(slice, &SliceModel::mnrStrengthChanged, this, [this](double v) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) { rxCh->setMnrStrength(static_cast<float>(v)); }
+        scheduleSettingsSave();
+    });
+    connect(slice, &SliceModel::mnrOversubChanged, this, [this](double v) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) { rxCh->setMnrOversub(static_cast<float>(v)); }
+        scheduleSettingsSave();
+    });
+    connect(slice, &SliceModel::mnrFloorChanged, this, [this](double v) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) { rxCh->setMnrFloor(static_cast<float>(v)); }
         scheduleSettingsSave();
     });
 #endif

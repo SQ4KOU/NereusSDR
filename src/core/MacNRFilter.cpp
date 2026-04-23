@@ -180,9 +180,12 @@ void MacNRFilter::processFrame(const float* inBuf, float* outBuf)
         const float priorSnr = ALPHA * prevSnrFromDD
                              + (1.0f - ALPHA) * std::max(postSnr - 1.0f, 0.0f);
 
-        // Raw Wiener gain, clamped to [FLOOR, 1]
-        const float g = priorSnr / (priorSnr + OVER);
-        m_gainBuf[k] = std::clamp(g, FLOOR, 1.0f);
+        // Raw Wiener gain, clamped to [floor, 1]. OVER and FLOOR are now
+        // runtime-tunable atomics (set via setOversub / setFloor).
+        const float over  = m_oversub.load(std::memory_order_relaxed);
+        const float floor = m_floor.load(std::memory_order_relaxed);
+        const float g = priorSnr / (priorSnr + over);
+        m_gainBuf[k] = std::clamp(g, floor, 1.0f);
 
         // ── Temporal gain smoothing ──────────────────────────────────────
         // Suppresses "musical noise" (rapid frame-to-frame gain swings)

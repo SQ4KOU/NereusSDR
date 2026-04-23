@@ -2627,7 +2627,22 @@ void VfoWidget::showMnrPopup(const QPoint& globalPos)
     const int strength = static_cast<int>(m_slice->mnrStrength() * 100.0);
     p->addSlider(QStringLiteral("Strength"), 0, 100, strength,
                  [](int v) { return QString::number(v) + QStringLiteral("%"); },
-                 [this](int v) { if (m_slice) m_slice->setMnrStrength(v / 100.0); });
+                 [this](int v) { if (m_slice) { m_slice->setMnrStrength(v / 100.0); } });
+
+    // Aggressiveness: UI 1-20 maps directly to MacNRFilter oversub 1.0-20.0.
+    // Default 4 = DEF_OVER (gentle-but-effective starting point).
+    const int oversubUi = static_cast<int>(m_slice->mnrOversub());
+    p->addSlider(QStringLiteral("Aggressiveness"), 1, 20, oversubUi,
+                 [](int v) { return QString::number(v); },
+                 [this](int v) { if (m_slice) { m_slice->setMnrOversub(static_cast<double>(v)); } });
+
+    // Floor: UI 1-500 maps to Wiener gain floor 0.001-0.500 (×0.001).
+    // Default 50 = 0.05 = −26 dB minimum gain.
+    const int floorUi = static_cast<int>(m_slice->mnrFloor() * 1000.0);
+    p->addSlider(QStringLiteral("Floor"), 1, 500, floorUi,
+                 [](int v) { return QString::number(v) + QStringLiteral("m"); },
+                 [this](int v) { if (m_slice) { m_slice->setMnrFloor(v * 0.001); } });
+
     p->finalize([this]() { emit openNrSetupRequested(NereusSDR::NrSlot::MNR); }, nullptr);
     p->showAt(globalPos);
 }
