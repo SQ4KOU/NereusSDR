@@ -54,6 +54,9 @@ mw0lge@grange-lane.co.uk
 
 #include "AntennaButtonItem.h"
 
+#include "core/SkuUiProfile.h"
+#include "core/HpsdrModel.h"
+
 namespace NereusSDR {
 
 // From Thetis clsAntennaButtonBox (MeterManager.cs:9502+)
@@ -111,6 +114,23 @@ void AntennaButtonItem::onButtonClicked(int index, Qt::MouseButton btn)
     // (and to avoid visually flipping the button `on` state).
     if (!m_hasAlex) { return; }
     if (btn == Qt::LeftButton) { emit antennaSelected(index); }
+}
+
+// Phase 3P-I-b T10 — retarget RX-only button labels (slots 3/4/5) per SKU.
+// Indices 3-5 are the RX-only inputs (Thetis "Aux1/Aux2/XVTR"); their labels
+// map to SkuUiProfile.rxOnlyLabels per Thetis setup.cs:19846-20375.
+// TX (6-8) + TRX (0-2) + Rx/Tx toggle (9) labels stay generic.
+void AntennaButtonItem::setHpsdrSku(HPSDRModel sku)
+{
+    const SkuUiProfile profile = skuUiProfileFor(sku);
+    // rxOnlyLabels[0] = wire value 1, maps to button index 3 (Aux1 slot).
+    // rxOnlyLabels[1] = wire value 2, maps to button index 4 (Aux2 slot).
+    // rxOnlyLabels[2] = wire value 3, maps to button index 5 (XVTR slot).
+    for (int i = 0; i < 3; ++i) {
+        if (button(3 + i).text != profile.rxOnlyLabels[i]) {
+            button(3 + i).text = profile.rxOnlyLabels[i];
+        }
+    }
 }
 
 void AntennaButtonItem::setHasAlex(bool hasAlex)

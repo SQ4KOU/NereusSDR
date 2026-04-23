@@ -58,6 +58,8 @@ mw0lge@grange-lane.co.uk
 
 namespace NereusSDR {
 
+enum class HPSDRModel : int;  // forward declaration — Phase 3P-I-b T10
+
 // Antenna selection: Rx Ant 1-3, Rx Aux 1-2, Tx Ant 1-3, Rx/Tx toggle.
 // Ported from Thetis clsAntennaButtonBox (MeterManager.cs:9502+).
 class AntennaButtonItem : public ButtonBoxItem {
@@ -76,6 +78,11 @@ public:
     // flip together when the current radio changes.
     void setHasAlex(bool hasAlex);
     bool hasAlex() const { return m_hasAlex; }
+
+    // Phase 3P-I-b T10 — retarget RX-only button labels (indices 3/4/5) per
+    // SKU. Hermes: RX1/RX2/XVTR; ANAN100: EXT2/EXT1/XVTR; G2: BYPS/EXT1/XVTR.
+    // From Thetis setup.cs:19846-20375 [v2.10.3.13].
+    void setHpsdrSku(HPSDRModel sku);
 
     Layer renderLayer() const override { return Layer::OverlayDynamic; }
     QString serialize() const override;
