@@ -411,6 +411,92 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         vl->addLayout(row);
     };
 
+    // addSliderRow — horizontal QSlider + live value readout label on the right.
+    // For integer-valued controls.
+    // Returns {slider, valueLabel}.
+    auto addSliderRow = [this](QVBoxLayout* parent, const QString& labelText,
+                               int minimum, int maximum, int defaultValue,
+                               const QString& tooltip = QString(),
+                               const QString& suffix = QString())
+        -> std::pair<QSlider*, QLabel*>
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(8);
+
+        auto* label = new QLabel(labelText);
+        label->setStyleSheet("QLabel { color: #8aa8c0; font-size: 12px; }");
+        label->setFixedWidth(80);
+        row->addWidget(label);
+
+        auto* slider = new QSlider(Qt::Horizontal);
+        slider->setRange(minimum, maximum);
+        slider->setValue(defaultValue);
+        slider->setStyleSheet(
+            "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
+            "QSlider::handle:horizontal { background: #00b4d8; width: 12px; height: 12px; "
+            "border-radius: 6px; margin: -4px 0; }");
+        if (!tooltip.isEmpty()) { slider->setToolTip(tooltip); }
+        row->addWidget(slider, /*stretch=*/1);
+
+        auto* value = new QLabel(QString::number(defaultValue) + suffix);
+        value->setStyleSheet("QLabel { color: #c8d8e8; font-size: 12px; font-weight: bold; }");
+        value->setFixedWidth(48);
+        value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        row->addWidget(value);
+
+        QObject::connect(slider, &QSlider::valueChanged, value,
+            [value, suffix](int v) { value->setText(QString::number(v) + suffix); });
+
+        parent->addLayout(row);
+        return {slider, value};
+    };
+
+    // addDoubleSliderRow — QSlider + label for double-valued controls.
+    // Uses an integer-backed QSlider with a scale factor (1/step) to represent
+    // fractional values. Returns {slider, valueLabel, scale}.
+    auto addDoubleSliderRow = [this](QVBoxLayout* parent, const QString& labelText,
+                                     double minimum, double maximum, double defaultValue,
+                                     double step, int decimals,
+                                     const QString& tooltip = QString(),
+                                     const QString& suffix = QString())
+        -> std::tuple<QSlider*, QLabel*, double>
+    {
+        const double scale = 1.0 / step;   // e.g. step=0.1 → scale=10
+        auto* row = new QHBoxLayout;
+        row->setSpacing(8);
+
+        auto* label = new QLabel(labelText);
+        label->setStyleSheet("QLabel { color: #8aa8c0; font-size: 12px; }");
+        label->setFixedWidth(80);
+        row->addWidget(label);
+
+        auto* slider = new QSlider(Qt::Horizontal);
+        slider->setRange(static_cast<int>(minimum * scale),
+                         static_cast<int>(maximum * scale));
+        slider->setValue(static_cast<int>(defaultValue * scale));
+        slider->setStyleSheet(
+            "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
+            "QSlider::handle:horizontal { background: #00b4d8; width: 12px; height: 12px; "
+            "border-radius: 6px; margin: -4px 0; }");
+        if (!tooltip.isEmpty()) { slider->setToolTip(tooltip); }
+        row->addWidget(slider, 1);
+
+        auto* value = new QLabel;
+        value->setStyleSheet("QLabel { color: #c8d8e8; font-size: 12px; font-weight: bold; }");
+        value->setFixedWidth(56);
+        value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        value->setText(QString::number(defaultValue, 'f', decimals) + suffix);
+        row->addWidget(value);
+
+        QObject::connect(slider, &QSlider::valueChanged, value,
+            [value, scale, decimals, suffix](int v) {
+                value->setText(QString::number(v / scale, 'f', decimals) + suffix);
+            });
+
+        parent->addLayout(row);
+        return {slider, value, scale};
+    };
+
     // Helper: add a pair of radio buttons as a Position row.
     // Returns {preRadio, postRadio}.
     auto addPositionRow = [lblStyle](QVBoxLayout* vl) -> std::pair<QRadioButton*, QRadioButton*>
@@ -446,46 +532,38 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         QVBoxLayout* grpLay = makeGroup(tabLay, "NR1 (LMS)");
 
         // Taps — udDSPNRTaps: 16-1024, default 64
-        auto* taps = new QSpinBox;
-    
-        taps->setRange(16, 1024);
-        taps->setValue(slice ? slice->nr1Taps() : 64);
         // From Thetis setup.designer.cs — udDSPNRTaps.ToolTip [v2.10.3.13]
-        taps->setToolTip(tr("LMS filter length (number of taps). Longer = more suppression, "
-                            "more latency. Range 16-1024."));
-        addRow(grpLay, "Taps", taps);
+        auto [taps, tapsVal] = addSliderRow(grpLay, "Taps", 16, 1024,
+            slice ? slice->nr1Taps() : 64,
+            tr("LMS filter length (number of taps). Longer = more suppression, "
+               "more latency. Range 16-1024."));
 
         // Delay — udDSPNRDelay: 1-256, default 16
-        auto* delay = new QSpinBox;
-    
-        delay->setRange(1, 256);
-        delay->setValue(slice ? slice->nr1Delay() : 16);
-        delay->setToolTip(tr("LMS adaptive delay in samples. Separates desired signal "
-                             "from correlated noise."));
-        addRow(grpLay, "Delay", delay);
+        auto [delay, delayVal] = addSliderRow(grpLay, "Delay", 1, 256,
+            slice ? slice->nr1Delay() : 16,
+            tr("LMS adaptive delay in samples. Separates desired signal "
+               "from correlated noise."));
 
         // Gain — tbDSPNRGain: UI range 0-999 → WDSP domain = UI × 1e-6
         // From Thetis setup.cs NR1 gain rescaling [v2.10.3.13].
-        auto* gain = new QSpinBox;
-    
-        gain->setRange(0, 999);
         // Reverse-scale from WDSP domain: WDSP_val = UI / 1e6 → UI = WDSP_val × 1e6
-        gain->setValue(slice ? static_cast<int>(slice->nr1Gain() * 1e6) : 1600);
-        gain->setToolTip(tr("LMS adaptation rate (gain). UI units × 1e-6 = WDSP domain value. "
-                            "Default 1600 (= 16e-4 WDSP)."));
-        addRow(grpLay, "Gain", gain);
+        // Clamped to 999 (slider max) — WDSP default 16e-4 = 1600 overflows range.
+        const int gainDefault = slice
+            ? std::min(999, static_cast<int>(slice->nr1Gain() * 1e6))
+            : 999;
+        auto [gain, gainVal] = addSliderRow(grpLay, "Gain", 0, 999,
+            gainDefault,
+            tr("LMS adaptation rate (gain). UI units × 1e-6 = WDSP domain value. "
+               "Default 999 (clamped from 16e-4 WDSP)."));
 
         // Leakage — tbDSPNRLeak: UI range 0-999 → WDSP domain = UI × 1e-3
         // From Thetis setup.cs NR1 leakage rescaling [v2.10.3.13].
-        auto* leak = new QSpinBox;
-    
-        leak->setRange(0, 999);
         // Reverse-scale: WDSP_val = UI / 1e3 → UI = WDSP_val × 1e3
         // Default slice value is 10e-7; scaled UI = 10e-7 × 1e3 ≈ 0
-        leak->setValue(slice ? static_cast<int>(slice->nr1Leakage() * 1e3) : 0);
-        leak->setToolTip(tr("LMS leakage factor. UI units × 1e-3 = WDSP domain value. "
-                            "Default 0 (= 10e-7 WDSP)."));
-        addRow(grpLay, "Leak", leak);
+        auto [leak, leakVal] = addSliderRow(grpLay, "Leak", 0, 999,
+            slice ? static_cast<int>(slice->nr1Leakage() * 1e3) : 0,
+            tr("LMS leakage factor. UI units × 1e-3 = WDSP domain value. "
+               "Default 0 (= 10e-7 WDSP)."));
 
         // Position radio
         auto [preRdo, postRdo] = addPositionRow(grpLay);
@@ -497,19 +575,19 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
 
         // ── Wire NR1 controls → SliceModel ──────────────────────────────────
         if (slice) {
-            connect(taps, QOverload<int>::of(&QSpinBox::valueChanged),
+            connect(taps, &QSlider::valueChanged,
                     slice, &SliceModel::setNr1Taps);
 
-            connect(delay, QOverload<int>::of(&QSpinBox::valueChanged),
+            connect(delay, &QSlider::valueChanged,
                     slice, &SliceModel::setNr1Delay);
 
-            connect(gain, QOverload<int>::of(&QSpinBox::valueChanged),
+            connect(gain, &QSlider::valueChanged,
                     slice, [slice](int v) {
                 // UI × 1e-6 → WDSP domain (matching VfoWidget Task 8 scaling).
                 slice->setNr1Gain(static_cast<double>(v) * 1e-6);
             });
 
-            connect(leak, QOverload<int>::of(&QSpinBox::valueChanged),
+            connect(leak, &QSlider::valueChanged,
                     slice, [slice](int v) {
                 // UI × 1e-3 → WDSP domain (matching VfoWidget Task 8 scaling).
                 slice->setNr1Leakage(static_cast<double>(v) * 1e-3);
@@ -530,7 +608,8 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
                 QSignalBlocker b(delay); delay->setValue(v);
             });
             connect(slice, &SliceModel::nr1GainChanged, gain, [gain](double v) {
-                QSignalBlocker b(gain); gain->setValue(static_cast<int>(v * 1e6));
+                QSignalBlocker b(gain);
+                gain->setValue(std::min(999, static_cast<int>(v * 1e6)));
             });
             connect(slice, &SliceModel::nr1LeakageChanged, leak, [leak](double v) {
                 QSignalBlocker b(leak); leak->setValue(static_cast<int>(v * 1e3));
@@ -590,23 +669,17 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         QVBoxLayout* tfGrp = makeGroup(tabLay, "Training / Filter");
 
         // T1 — udDSPEMNRTrainT1: −5.0 .. 5.0 step 0.1, default −0.5
-        auto* t1 = new QDoubleSpinBox;
-        t1->setRange(-5.0, 5.0);
-        t1->setSingleStep(0.1);
-        t1->setDecimals(1);
-        t1->setValue(slice ? slice->nr2TrainT1() : -0.5);
-        t1->setToolTip(tr("EMNR Zeta threshold (T1). Controls the asymmetry of the "
-                          "noise estimator. Range -5.0 to +5.0."));
-        addRow(tfGrp, "T1", t1);
+        auto [t1, t1Val, t1Scale] = addDoubleSliderRow(tfGrp, "T1",
+            -5.0, 5.0, slice ? slice->nr2TrainT1() : -0.5,
+            0.1, 1,
+            tr("EMNR Zeta threshold (T1). Controls the asymmetry of the "
+               "noise estimator. Range -5.0 to +5.0."));
 
         // T2 — udDSPEMNRTrainT2: 0.0 .. 2.0 step 0.05, default 0.20
-        auto* t2 = new QDoubleSpinBox;
-        t2->setRange(0.0, 2.0);
-        t2->setSingleStep(0.05);
-        t2->setDecimals(2);
-        t2->setValue(slice ? slice->nr2TrainT2() : 0.20);
-        t2->setToolTip(tr("EMNR T2 training parameter. Range 0.0 to 2.0."));
-        addRow(tfGrp, "T2", t2);
+        auto [t2, t2Val, t2Scale] = addDoubleSliderRow(tfGrp, "T2",
+            0.0, 2.0, slice ? slice->nr2TrainT2() : 0.20,
+            0.05, 2,
+            tr("EMNR T2 training parameter. Range 0.0 to 2.0."));
 
         // AE Filter checkbox
         auto* aeChk = new QCheckBox("AE Filter");
@@ -630,39 +703,24 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         ppRun->setToolTip(tr("Enable EMNR Noise Post-Processing cascade."));
         ppGrp->addWidget(ppRun);
 
-        // Level — udDSPEMNRPost2Level
-        auto* ppLevel = new QDoubleSpinBox;
-    
-        ppLevel->setRange(0.0, 100.0);
-        ppLevel->setSingleStep(0.1);
-        ppLevel->setDecimals(1);
-        ppLevel->setValue(slice ? slice->nr2Post2Level() : 15.0);
-        addRow(ppGrp, "Level", ppLevel);
+        // Level — udDSPEMNRPost2Level: 0-100 step 1, default 15.0
+        auto [ppLevel, ppLevelVal, ppLevelScale] = addDoubleSliderRow(ppGrp, "Level",
+            0.0, 100.0, slice ? slice->nr2Post2Level() : 15.0,
+            1.0, 0);
 
-        // Factor — udDSPEMNRPost2Factor
-        auto* ppFactor = new QDoubleSpinBox;
-    
-        ppFactor->setRange(0.0, 100.0);
-        ppFactor->setSingleStep(0.1);
-        ppFactor->setDecimals(1);
-        ppFactor->setValue(slice ? slice->nr2Post2Factor() : 15.0);
-        addRow(ppGrp, "Factor", ppFactor);
+        // Factor — udDSPEMNRPost2Factor: 0-100 step 1, default 15.0
+        auto [ppFactor, ppFactorVal, ppFactorScale] = addDoubleSliderRow(ppGrp, "Factor",
+            0.0, 100.0, slice ? slice->nr2Post2Factor() : 15.0,
+            1.0, 0);
 
-        // Rate — udDSPEMNRPost2Rate
-        auto* ppRate = new QDoubleSpinBox;
-    
-        ppRate->setRange(0.0, 100.0);
-        ppRate->setSingleStep(0.1);
-        ppRate->setDecimals(1);
-        ppRate->setValue(slice ? slice->nr2Post2Rate() : 5.0);
-        addRow(ppGrp, "Rate", ppRate);
+        // Rate — udDSPEMNRPost2Rate: 0-100 step 0.1, default 5.0
+        auto [ppRate, ppRateVal, ppRateScale] = addDoubleSliderRow(ppGrp, "Rate",
+            0.0, 100.0, slice ? slice->nr2Post2Rate() : 5.0,
+            0.1, 1);
 
-        // Taper — udDSPEMNRPost2Taper (integer)
-        auto* ppTaper = new QSpinBox;
-    
-        ppTaper->setRange(0, 100);
-        ppTaper->setValue(slice ? slice->nr2Post2Taper() : 12);
-        addRow(ppGrp, "Taper", ppTaper);
+        // Taper — udDSPEMNRPost2Taper (integer): 0-100, default 12
+        auto [ppTaper, ppTaperVal] = addSliderRow(ppGrp, "Taper", 0, 100,
+            slice ? slice->nr2Post2Taper() : 12);
 
         tabLay->addStretch(1);
 
@@ -687,10 +745,12 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
                 });
             }
 
-            connect(t1, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                    slice, &SliceModel::setNr2TrainT1);
-            connect(t2, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                    slice, &SliceModel::setNr2TrainT2);
+            connect(t1, &QSlider::valueChanged, slice, [slice, t1Scale](int v) {
+                slice->setNr2TrainT1(v / t1Scale);
+            });
+            connect(t2, &QSlider::valueChanged, slice, [slice, t2Scale](int v) {
+                slice->setNr2TrainT2(v / t2Scale);
+            });
             connect(aeChk, &QCheckBox::toggled, slice, &SliceModel::setNr2AeFilter);
 
             connect(preRdo, &QRadioButton::toggled, slice, [slice](bool checked) {
@@ -701,13 +761,16 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
             });
 
             connect(ppRun, &QCheckBox::toggled, slice, &SliceModel::setNr2Post2Run);
-            connect(ppLevel, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                    slice, &SliceModel::setNr2Post2Level);
-            connect(ppFactor, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                    slice, &SliceModel::setNr2Post2Factor);
-            connect(ppRate, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                    slice, &SliceModel::setNr2Post2Rate);
-            connect(ppTaper, QOverload<int>::of(&QSpinBox::valueChanged),
+            connect(ppLevel, &QSlider::valueChanged, slice, [slice, ppLevelScale](int v) {
+                slice->setNr2Post2Level(v / ppLevelScale);
+            });
+            connect(ppFactor, &QSlider::valueChanged, slice, [slice, ppFactorScale](int v) {
+                slice->setNr2Post2Factor(v / ppFactorScale);
+            });
+            connect(ppRate, &QSlider::valueChanged, slice, [slice, ppRateScale](int v) {
+                slice->setNr2Post2Rate(v / ppRateScale);
+            });
+            connect(ppTaper, &QSlider::valueChanged,
                     slice, &SliceModel::setNr2Post2Taper);
 
             // ── Model → UI (bi-directional sync) ────────────────────────────
@@ -727,11 +790,11 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
                     npeRdos[idx]->setChecked(true);
                 }
             });
-            connect(slice, &SliceModel::nr2TrainT1Changed, t1, [t1](double v) {
-                QSignalBlocker b(t1); t1->setValue(v);
+            connect(slice, &SliceModel::nr2TrainT1Changed, t1, [t1, t1Scale](double v) {
+                QSignalBlocker b(t1); t1->setValue(static_cast<int>(v * t1Scale));
             });
-            connect(slice, &SliceModel::nr2TrainT2Changed, t2, [t2](double v) {
-                QSignalBlocker b(t2); t2->setValue(v);
+            connect(slice, &SliceModel::nr2TrainT2Changed, t2, [t2, t2Scale](double v) {
+                QSignalBlocker b(t2); t2->setValue(static_cast<int>(v * t2Scale));
             });
             connect(slice, &SliceModel::nr2AeFilterChanged, aeChk, [aeChk](bool v) {
                 QSignalBlocker b(aeChk); aeChk->setChecked(v);
@@ -745,14 +808,17 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
             connect(slice, &SliceModel::nr2Post2RunChanged, ppRun, [ppRun](bool v) {
                 QSignalBlocker b(ppRun); ppRun->setChecked(v);
             });
-            connect(slice, &SliceModel::nr2Post2LevelChanged, ppLevel, [ppLevel](double v) {
-                QSignalBlocker b(ppLevel); ppLevel->setValue(v);
+            connect(slice, &SliceModel::nr2Post2LevelChanged, ppLevel,
+                    [ppLevel, ppLevelScale](double v) {
+                QSignalBlocker b(ppLevel); ppLevel->setValue(static_cast<int>(v * ppLevelScale));
             });
-            connect(slice, &SliceModel::nr2Post2FactorChanged, ppFactor, [ppFactor](double v) {
-                QSignalBlocker b(ppFactor); ppFactor->setValue(v);
+            connect(slice, &SliceModel::nr2Post2FactorChanged, ppFactor,
+                    [ppFactor, ppFactorScale](double v) {
+                QSignalBlocker b(ppFactor); ppFactor->setValue(static_cast<int>(v * ppFactorScale));
             });
-            connect(slice, &SliceModel::nr2Post2RateChanged, ppRate, [ppRate](double v) {
-                QSignalBlocker b(ppRate); ppRate->setValue(v);
+            connect(slice, &SliceModel::nr2Post2RateChanged, ppRate,
+                    [ppRate, ppRateScale](double v) {
+                QSignalBlocker b(ppRate); ppRate->setValue(static_cast<int>(v * ppRateScale));
             });
             connect(slice, &SliceModel::nr2Post2TaperChanged, ppTaper, [ppTaper](int v) {
                 QSignalBlocker b(ppTaper); ppTaper->setValue(v);
@@ -858,59 +924,44 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         QVBoxLayout* grpLay = makeGroup(tabLay, "NR4 (SpecBleach)");
 
         // Reduction — udDSPSBNRreduction: 0-20 step 0.1, default 10.0
-        auto* reduction = new QDoubleSpinBox;
-    
-        reduction->setRange(0.0, 20.0);
-        reduction->setSingleStep(0.1);
-        reduction->setDecimals(1);
-        reduction->setValue(slice ? slice->nr4Reduction() : 10.0);
         // Tooltip source: Thetis setup.cs udDSPSBNRreduction [v2.10.3.13]
-        reduction->setToolTip(tr("Spectral reduction amount in dB. Range 0-20, step 0.1."));
-        addRow(grpLay, "Reduction", reduction);
+        auto [reduction, reductionVal, reductionScale] = addDoubleSliderRow(grpLay, "Reduction",
+            0.0, 20.0, slice ? slice->nr4Reduction() : 10.0,
+            0.1, 1,
+            tr("Spectral reduction amount in dB. Range 0-20, step 0.1."),
+            " dB");
 
         // Smoothing — udDSPSBNRsmooth: 0-100 step 1, default 65.0
-        auto* smoothing = new QDoubleSpinBox;
-    
-        smoothing->setRange(0.0, 100.0);
-        smoothing->setSingleStep(1.0);
-        smoothing->setDecimals(1);
-        smoothing->setValue(slice ? slice->nr4Smoothing() : 65.0);
         // Tooltip source: Thetis setup.cs udDSPSBNRsmooth [v2.10.3.13]
-        smoothing->setToolTip(tr("Spectral smoothing factor. Range 0-100."));
-        addRow(grpLay, "Smoothing", smoothing);
+        auto [smoothing, smoothingVal, smoothingScale] = addDoubleSliderRow(grpLay, "Smoothing",
+            0.0, 100.0, slice ? slice->nr4Smoothing() : 65.0,
+            1.0, 0,
+            tr("Spectral smoothing factor. Range 0-100."),
+            " %");
 
         // Whitening — udDSPSBNRwhiten: 0-100 step 1, default 2.0
-        auto* whitening = new QDoubleSpinBox;
-    
-        whitening->setRange(0.0, 100.0);
-        whitening->setSingleStep(1.0);
-        whitening->setDecimals(1);
-        whitening->setValue(slice ? slice->nr4Whitening() : 2.0);
         // Tooltip source: Thetis setup.cs udDSPSBNRwhiten [v2.10.3.13]
-        whitening->setToolTip(tr("Spectral whitening factor. Range 0-100."));
-        addRow(grpLay, "Whitening", whitening);
+        auto [whitening, whiteningVal, whiteningScale] = addDoubleSliderRow(grpLay, "Whitening",
+            0.0, 100.0, slice ? slice->nr4Whitening() : 2.0,
+            1.0, 0,
+            tr("Spectral whitening factor. Range 0-100."),
+            " %");
 
         // Rescale — udDSPSBNRrescale: 0-12 step 0.1, default 2.0
-        auto* rescale = new QDoubleSpinBox;
-    
-        rescale->setRange(0.0, 12.0);
-        rescale->setSingleStep(0.1);
-        rescale->setDecimals(1);
-        rescale->setValue(slice ? slice->nr4Rescale() : 2.0);
         // Tooltip source: Thetis setup.cs udDSPSBNRrescale [v2.10.3.13]
-        rescale->setToolTip(tr("Output rescale factor. Range 0-12, step 0.1."));
-        addRow(grpLay, "Rescale", rescale);
+        auto [rescale, rescaleVal, rescaleScale] = addDoubleSliderRow(grpLay, "Rescale",
+            0.0, 12.0, slice ? slice->nr4Rescale() : 2.0,
+            0.1, 1,
+            tr("Output rescale factor. Range 0-12, step 0.1."),
+            " dB");
 
         // SNR Threshold — udDSPSBNRsnrthresh: -10..10 step 0.5, default -10.0
-        auto* snrThresh = new QDoubleSpinBox;
-    
-        snrThresh->setRange(-10.0, 10.0);
-        snrThresh->setSingleStep(0.5);
-        snrThresh->setDecimals(1);
-        snrThresh->setValue(slice ? slice->nr4PostThresh() : -10.0);
         // Tooltip source: Thetis setup.cs udDSPSBNRsnrthresh [v2.10.3.13]
-        snrThresh->setToolTip(tr("Post-processing SNR threshold. Range -10 to +10 dB, step 0.5."));
-        addRow(grpLay, "SNR Thresh", snrThresh);
+        auto [snrThresh, snrThreshVal, snrThreshScale] = addDoubleSliderRow(grpLay, "SNR Thresh",
+            -10.0, 10.0, slice ? slice->nr4PostThresh() : -10.0,
+            0.5, 1,
+            tr("Post-processing SNR threshold. Range -10 to +10 dB, step 0.5."),
+            " dB");
 
         // Algorithm radio — rdoSBNR1/2/3 [v2.10.3.13]
         const QString rdoStyle =
@@ -950,16 +1001,21 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
 
         // ── Wire NR4 controls → SliceModel ──────────────────────────────────
         if (slice) {
-            connect(reduction, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                    slice, &SliceModel::setNr4Reduction);
-            connect(smoothing, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                    slice, &SliceModel::setNr4Smoothing);
-            connect(whitening, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                    slice, &SliceModel::setNr4Whitening);
-            connect(rescale, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                    slice, &SliceModel::setNr4Rescale);
-            connect(snrThresh, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                    slice, &SliceModel::setNr4PostThresh);
+            connect(reduction, &QSlider::valueChanged, slice, [slice, reductionScale](int v) {
+                slice->setNr4Reduction(v / reductionScale);
+            });
+            connect(smoothing, &QSlider::valueChanged, slice, [slice, smoothingScale](int v) {
+                slice->setNr4Smoothing(v / smoothingScale);
+            });
+            connect(whitening, &QSlider::valueChanged, slice, [slice, whiteningScale](int v) {
+                slice->setNr4Whitening(v / whiteningScale);
+            });
+            connect(rescale, &QSlider::valueChanged, slice, [slice, rescaleScale](int v) {
+                slice->setNr4Rescale(v / rescaleScale);
+            });
+            connect(snrThresh, &QSlider::valueChanged, slice, [slice, snrThreshScale](int v) {
+                slice->setNr4PostThresh(v / snrThreshScale);
+            });
 
             connect(algo1, &QRadioButton::toggled, slice, [slice](bool checked) {
                 if (checked) { slice->setNr4Algo(SbnrAlgo::Algo1); }
@@ -972,20 +1028,25 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
             });
 
             // ── Model → UI ────────────────────────────────────────────────
-            connect(slice, &SliceModel::nr4ReductionChanged, reduction, [reduction](double v) {
-                QSignalBlocker b(reduction); reduction->setValue(v);
+            connect(slice, &SliceModel::nr4ReductionChanged, reduction,
+                    [reduction, reductionScale](double v) {
+                QSignalBlocker b(reduction); reduction->setValue(static_cast<int>(v * reductionScale));
             });
-            connect(slice, &SliceModel::nr4SmoothingChanged, smoothing, [smoothing](double v) {
-                QSignalBlocker b(smoothing); smoothing->setValue(v);
+            connect(slice, &SliceModel::nr4SmoothingChanged, smoothing,
+                    [smoothing, smoothingScale](double v) {
+                QSignalBlocker b(smoothing); smoothing->setValue(static_cast<int>(v * smoothingScale));
             });
-            connect(slice, &SliceModel::nr4WhiteningChanged, whitening, [whitening](double v) {
-                QSignalBlocker b(whitening); whitening->setValue(v);
+            connect(slice, &SliceModel::nr4WhiteningChanged, whitening,
+                    [whitening, whiteningScale](double v) {
+                QSignalBlocker b(whitening); whitening->setValue(static_cast<int>(v * whiteningScale));
             });
-            connect(slice, &SliceModel::nr4RescaleChanged, rescale, [rescale](double v) {
-                QSignalBlocker b(rescale); rescale->setValue(v);
+            connect(slice, &SliceModel::nr4RescaleChanged, rescale,
+                    [rescale, rescaleScale](double v) {
+                QSignalBlocker b(rescale); rescale->setValue(static_cast<int>(v * rescaleScale));
             });
-            connect(slice, &SliceModel::nr4PostThreshChanged, snrThresh, [snrThresh](double v) {
-                QSignalBlocker b(snrThresh); snrThresh->setValue(v);
+            connect(slice, &SliceModel::nr4PostThreshChanged, snrThresh,
+                    [snrThresh, snrThreshScale](double v) {
+                QSignalBlocker b(snrThresh); snrThresh->setValue(static_cast<int>(v * snrThreshScale));
             });
             connect(slice, &SliceModel::nr4AlgoChanged, algo1,
                     [algo1, algo2, algo3](SbnrAlgo v) {
@@ -1032,6 +1093,7 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         attenRow->addWidget(attenSl, 1);
         auto* attenVal = new QLabel(QString::number(attenSl->value()));
         attenVal->setStyleSheet("QLabel { color: #00c8ff; font-size: 12px; min-width: 28px; }");
+        attenVal->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         attenRow->addWidget(attenVal);
         grpLay->addLayout(attenRow);
         connect(attenSl, &QSlider::valueChanged, attenVal, [attenVal](int v) {
@@ -1054,6 +1116,7 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         betaRow->addWidget(betaSl, 1);
         auto* betaVal = new QLabel(QStringLiteral("0.%1").arg(betaSl->value(), 2, 10, QChar('0')));
         betaVal->setStyleSheet("QLabel { color: #00c8ff; font-size: 12px; min-width: 40px; }");
+        betaVal->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         betaRow->addWidget(betaVal);
         grpLay->addLayout(betaRow);
         connect(betaSl, &QSlider::valueChanged, betaVal, [betaVal](int v) {
@@ -1117,6 +1180,7 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         strRow->addWidget(strSl, 1);
         auto* strVal = new QLabel(QString::number(strSl->value()));
         strVal->setStyleSheet("QLabel { color: #00c8ff; font-size: 12px; min-width: 28px; }");
+        strVal->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         strRow->addWidget(strVal);
         grpLay->addLayout(strRow);
         connect(strSl, &QSlider::valueChanged, strVal, [strVal](int v) {
