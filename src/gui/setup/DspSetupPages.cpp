@@ -1137,19 +1137,67 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         grpLay->addWidget(note);
 #endif
 
-        // Strength (0-100 — SliceModel stores 0.0-1.0, scale at setter boundary).
-        // Uses the shared addSliderRow helper for style consistency.
+        // Full 6-knob tuning surface matching the VFO right-click MNR popup
+        // (see VfoWidget::showMnrPopup). Ranges + factory defaults identical.
+
         auto [strSl, strVal] = addSliderRow(
-            grpLay, "Strength", 0, 100,
+            grpLay, "Strength", 0, 200,
             slice ? static_cast<int>(slice->mnrStrength() * 100.0) : 100,
-            tr("Noise reduction strength 0-100. Default 100 = full NR; lower values "
-               "blend the processed and clean signal. "
-               "MMSE-Wiener spectral filter using Apple Accelerate vDSP."),
-            QString());
+            tr("Dry/wet blend. 0%% = bypass (filter runs but output = input), "
+               "100%% = full NR, 200%% = over-drive (phase-flip, destructive). "
+               "Default 100%%."),
+            QStringLiteral("%"));
         Q_UNUSED(strVal);
+
+        auto [oversubSl, oversubVal] = addSliderRow(
+            grpLay, "Aggressiveness", 1, 1000,
+            slice ? static_cast<int>(slice->mnrOversub()) : 6,
+            tr("MMSE-Wiener oversubtraction factor. Higher = more attenuation "
+               "on low-SNR bins; 1 = gentle, 6 = default, 20+ = underwater."),
+            QString());
+        Q_UNUSED(oversubVal);
+
+        auto [floorSl, floorVal] = addSliderRow(
+            grpLay, "Floor", 0, 2000,
+            slice ? static_cast<int>(slice->mnrFloor() * 1000.0) : 50,
+            tr("Minimum Wiener gain per bin (x0.001). 0 = silence, "
+               "50 = -26 dB (default), 1000 = 0 dB, 2000 = amplify."),
+            QStringLiteral("m"));
+        Q_UNUSED(floorVal);
+
+        auto [alphaSl, alphaVal] = addSliderRow(
+            grpLay, "Alpha", 0, 100,
+            slice ? static_cast<int>(slice->mnrAlpha() * 100.0) : 92,
+            tr("Decision-directed smoothing (x0.01). 0 = no smoothing "
+               "(chattery), 92 = Ephraim-Malah classic (default), "
+               "100 = frozen prior SNR."),
+            QString());
+        Q_UNUSED(alphaVal);
+
+        auto [biasSl, biasVal] = addSliderRow(
+            grpLay, "Bias", 0, 100,
+            slice ? static_cast<int>(slice->mnrBias() * 10.0) : 15,
+            tr("Min-statistics noise-floor bias (x0.1). <10 = underestimate "
+               "noise (less NR), 15 = default, >30 = overestimate (erodes signal). "
+               "Nudge up if NR is weak, down if it eats speech."),
+            QString());
+        Q_UNUSED(biasVal);
+
+        auto [gsmoothSl, gsmoothVal] = addSliderRow(
+            grpLay, "Gsmooth", 0, 100,
+            slice ? static_cast<int>(slice->mnrGsmooth() * 100.0) : 70,
+            tr("Temporal gain smoothing (x0.01). 0 = instant (musical noise), "
+               "70 = balanced (default), 100 = frozen gain."),
+            QString());
+        Q_UNUSED(gsmoothVal);
 
 #ifndef Q_OS_APPLE
         strSl->setEnabled(false);
+        oversubSl->setEnabled(false);
+        floorSl->setEnabled(false);
+        alphaSl->setEnabled(false);
+        biasSl->setEnabled(false);
+        gsmoothSl->setEnabled(false);
 #endif
 
         tabLay->addStretch(1);
@@ -1162,6 +1210,41 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
             });
             connect(slice, &SliceModel::mnrStrengthChanged, strSl, [strSl](double v) {
                 QSignalBlocker b(strSl); strSl->setValue(static_cast<int>(v * 100.0));
+            });
+
+            connect(oversubSl, &QSlider::valueChanged, slice, [slice](int v) {
+                slice->setMnrOversub(static_cast<double>(v));
+            });
+            connect(slice, &SliceModel::mnrOversubChanged, oversubSl, [oversubSl](double v) {
+                QSignalBlocker b(oversubSl); oversubSl->setValue(static_cast<int>(v));
+            });
+
+            connect(floorSl, &QSlider::valueChanged, slice, [slice](int v) {
+                slice->setMnrFloor(static_cast<double>(v) * 0.001);
+            });
+            connect(slice, &SliceModel::mnrFloorChanged, floorSl, [floorSl](double v) {
+                QSignalBlocker b(floorSl); floorSl->setValue(static_cast<int>(v * 1000.0));
+            });
+
+            connect(alphaSl, &QSlider::valueChanged, slice, [slice](int v) {
+                slice->setMnrAlpha(static_cast<double>(v) * 0.01);
+            });
+            connect(slice, &SliceModel::mnrAlphaChanged, alphaSl, [alphaSl](double v) {
+                QSignalBlocker b(alphaSl); alphaSl->setValue(static_cast<int>(v * 100.0));
+            });
+
+            connect(biasSl, &QSlider::valueChanged, slice, [slice](int v) {
+                slice->setMnrBias(static_cast<double>(v) * 0.1);
+            });
+            connect(slice, &SliceModel::mnrBiasChanged, biasSl, [biasSl](double v) {
+                QSignalBlocker b(biasSl); biasSl->setValue(static_cast<int>(v * 10.0));
+            });
+
+            connect(gsmoothSl, &QSlider::valueChanged, slice, [slice](int v) {
+                slice->setMnrGsmooth(static_cast<double>(v) * 0.01);
+            });
+            connect(slice, &SliceModel::mnrGsmoothChanged, gsmoothSl, [gsmoothSl](double v) {
+                QSignalBlocker b(gsmoothSl); gsmoothSl->setValue(static_cast<int>(v * 100.0));
             });
         }
 #endif
