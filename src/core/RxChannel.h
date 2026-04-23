@@ -323,6 +323,119 @@ public:
     void setEmnrAeRun(bool run);
     void setEmnrPosition(int position);
 
+    // ----- NR tuning structs (Sub-epic C-1) -----
+    // From Thetis Setup → DSP → NR/ANF tab [v2.10.3.13] — one struct per
+    // WDSP NR stage.  Defaults match Thetis radio.cs / RXA.c byte-for-byte.
+
+    // NR1 — LMS Adaptive Noise Reduction (Thetis: WDSP anr.c, Warren Pratt NR0V)
+    // Gain/leakage stored in UI units; NereusSDR setters apply the same
+    // scaling Thetis setup.cs:8545-8550 applies before the WDSP call:
+    //   WDSP gain    = 1e-6 * gainUiValue   (Thetis udLMSNRgain  → SetRXAANRVals)
+    //   WDSP leakage = 1e-3 * leakUiValue   (Thetis udLMSNRLeak  → SetRXAANRVals)
+    // Defaults match the radio.cs private field initialisers:
+    //   nr_gain  = 16e-4  →  gainUiValue = 1600.0  (nr_gain / 1e-6)   — unused, see below
+    // *** The struct stores raw WDSP-domain values, NOT UI units, so
+    //     the setAnrGain / setAnrLeakage setters accept raw values and pass
+    //     them straight to WDSP.  The UI layer is responsible for the /1e6
+    //     and /1e3 conversions before calling these setters. ***
+    // From Thetis radio.cs:673-699 [v2.10.3.13]
+    struct Nr1Tuning {
+        int        taps     = 64;       // radio.cs:674   nr_taps = 64
+        int        delay    = 16;       // radio.cs:675   nr_delay = 16
+        double     gain     = 16e-4;    // radio.cs:677   nr_gain = 16e-4
+        double     leakage  = 10e-7;    // radio.cs:679   nr_leak = 10e-7
+        NrPosition position = NrPosition::PostAgc;  // setup.cs:8723
+    };
+
+    // NR2 — EMNR (Enhanced Multiband NR, Warren Pratt NR0V)
+    // All post2 values are raw passthrough to WDSP (no scaling at setter boundary).
+    // From Thetis radio.cs:2062-2213, setup.cs:34711-34748 [v2.10.3.13]
+    struct Nr2Tuning {
+        EmnrGainMethod gainMethod = EmnrGainMethod::Gamma;  // setup.cs:17359-17468
+        EmnrNpeMethod  npeMethod  = EmnrNpeMethod::Osms;    // setup.cs:17374-17404
+        bool           aeFilter   = true;    // radio.cs:2103  rx_nr2_ae_run=1
+        NrPosition     position   = NrPosition::PostAgc;    // radio.cs:2237
+        // Post-processing cascade (Thetis "Noise post proc" group, dsp.cs:295-312)
+        bool   post2Run    = false;    // radio.cs:2122  rx_nr2_ae_post2_run default
+        double post2Level  = 15.0;    // radio.cs:2139  rx_nr2_ae_post2_nlevel = 15.0
+        double post2Factor = 15.0;    // radio.cs:2158  rx_nr2_ae_post2_factor = 15.0
+        double post2Rate   = 5.0;     // radio.cs:2177  rx_nr2_ae_post2_rate = 5.0
+        int    post2Taper  = 12;      // radio.cs:2196  rx_nr2_ae_post2_taper = 12
+    };
+
+    // NR3 — RNNR (Recurrent Neural Network NR, MW0LGE / Samphire)
+    // From Thetis radio.cs:2257-2311, setup.cs:35460-35462 [v2.10.3.13]
+    struct Nr3Tuning {
+        NrPosition position       = NrPosition::PostAgc;  // radio.cs:2275
+        bool       useDefaultGain = true;   // setup.cs:35460  RXANR3FixedGain  default
+        // Note: RNNR model path is global (RNNRloadModel), not per-channel.
+    };
+
+    // NR4 — SBNR (Spectral Bleach NR, MW0LGE / Samphire)
+    // All values are raw passthrough to WDSP (float casts happen at setter boundary).
+    // From Thetis radio.cs:2312-2355, setup.cs:34511-34527 [v2.10.3.13]
+    struct Nr4Tuning {
+        double   reductionAmount     = 10.0;   // setup.cs default
+        double   smoothingFactor     = 65.0;   // setup.cs default
+        double   whiteningFactor     = 2.0;    // setup.cs default
+        double   noiseRescale        = 2.0;    // setup.cs default
+        double   postFilterThreshold = -10.0;  // setup.cs default
+        SbnrAlgo algo                = SbnrAlgo::Algo2;  // setup.cs:34511-34527
+    };
+
+    // ----- NR API (Sub-epic C-1) -----
+    // New unified NR surface.  Coexists with legacy setEmnrEnabled /
+    // setNrEnabled stubs until Task 12 finishes the SliceModel cutover.
+
+    // Struct-level setters — push full tuning state through multiple WDSP calls.
+    void setAnrTuning  (const Nr1Tuning& t);
+    void setEmnrTuning (const Nr2Tuning& t);
+    void setRnnrTuning (const Nr3Tuning& t);
+    void setSbnrTuning (const Nr4Tuning& t);
+
+    // Per-knob convenience setters (single WDSP call each).
+    // Gain/leakage are in raw WDSP domain (caller is responsible for 1e-6/1e-3 scaling).
+    // From Thetis setup.cs:8539-8566 [v2.10.3.13]
+    void setAnrTaps    (int taps);
+    void setAnrDelay   (int delay);
+    void setAnrGain    (double gain);        // raw WDSP domain; SetRXAANRGain
+    void setAnrLeakage (double leakage);     // raw WDSP domain; SetRXAANRLeakage
+    void setAnrPosition(NrPosition p);
+
+    // EMNR per-knob setters not in the legacy API.
+    // From Thetis setup.cs NR2 group [v2.10.3.13]
+    void setEmnrTrainT1        (double t1);     // SetRXAEMNRtrainZetaThresh
+    void setEmnrTrainT2        (double t2);     // SetRXAEMNRtrainT2
+    void setEmnrAeZetaThresh   (double v);      // SetRXAEMNRaeZetaThresh
+    void setEmnrAePsi          (double v);      // SetRXAEMNRaePsi
+    void setEmnrPost2Run       (bool on);
+    void setEmnrPost2Level     (double level);  // raw passthrough; SetRXAEMNRpost2Nlevel
+    void setEmnrPost2Factor    (double factor); // raw passthrough; SetRXAEMNRpost2Factor
+    void setEmnrPost2Rate      (double rate);   // raw passthrough; SetRXAEMNRpost2Rate
+    void setEmnrPost2Taper     (int taper);     // raw passthrough; SetRXAEMNRpost2Taper
+
+    // RNNR per-knob setters.
+    void setRnnrPosition       (NrPosition p);
+    void setRnnrUseDefaultGain (bool on);
+
+    // SBNR per-knob setters.
+    void setSbnrReductionAmount     (double dB);
+    void setSbnrSmoothingFactor     (double pct);
+    void setSbnrWhiteningFactor     (double pct);
+    void setSbnrNoiseRescale        (double dB);
+    void setSbnrPostFilterThreshold (double dB);
+    void setSbnrAlgo                (SbnrAlgo a);
+
+    // Central mode dispatch — flip SetRXA*Run flags so exactly 0 or 1 is on.
+    // Byte-for-byte from Thetis console.cs:43297-43450 SelectNR() [v2.10.3.13].
+    void   setActiveNr(NrSlot slot);
+    NrSlot activeNr() const { return m_activeNr.load(std::memory_order_acquire); }
+
+    // Accessors for post-WDSP filter atomics (filter classes land in Tasks 9-11).
+    bool dfnrActive() const { return m_dfnrActive.load(std::memory_order_acquire); }
+    bool bnrActive () const { return m_bnrActive .load(std::memory_order_acquire); }
+    bool mnrActive () const { return m_mnrActive .load(std::memory_order_acquire); }
+
     // SNB — Spectral Noise Blanker
     // From Thetis Project Files/Source/Console/radio.cs (SetRXASNBARun call site)
     bool snbEnabled() const { return m_nb ? m_nb->snbEnabled() : false; }
@@ -477,6 +590,25 @@ private:
     std::atomic<int> m_agcFixedGain{20};
     // maxGain: From Thetis v2.10.3.13 setup.designer.cs:39245
     std::atomic<int> m_agcMaxGain{90};
+
+    // ----- NR state (Sub-epic C-1) -----
+    // From Thetis console.cs:43297-43450 SelectNR() [v2.10.3.13]
+    std::atomic<NrSlot> m_activeNr{NrSlot::Off};
+
+    // Full tuning state per stage.  Written by the main thread under no lock
+    // (struct setters copy by value; WDSP setters are the authoritative state
+    // for the audio thread).
+    Nr1Tuning m_nr1Tuning;
+    Nr2Tuning m_nr2Tuning;
+    Nr3Tuning m_nr3Tuning;
+    Nr4Tuning m_nr4Tuning;
+
+    // Post-WDSP filter "on" flags.  Filter instances (DeepFilterFilter,
+    // NvidiaBnrFilter, MacNRFilter) land in Tasks 9-11; these atomics exist now
+    // so setActiveNr() can flip them and callers can read them.
+    std::atomic<bool> m_dfnrActive{false};
+    std::atomic<bool> m_bnrActive{false};
+    std::atomic<bool> m_mnrActive{false};
 
     // Cached filter state
     double m_filterLow{150.0};

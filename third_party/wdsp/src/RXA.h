@@ -1,3 +1,4 @@
+// no-port-check: vendored upstream TAPR WDSP v1.29 — not a NereusSDR port of Thetis
 /*  RXA.h
 
 This file is part of a program that implements a Software-Defined Radio.
