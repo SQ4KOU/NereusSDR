@@ -269,6 +269,21 @@ void SetRXAEMNRPosition(int channel, int position);
 // WDSP: third_party/wdsp/src/snb.c:579
 void SetRXASNBARun(int channel, int run);
 
+// SNB tuning — channel-id based setters callable post-create.
+// All declared in WDSP third_party/wdsp/src/snb.c:595-663 [v2.10.3.13].
+// Thetis wires these from setup.cs SNB controls (udSNBK1/K2/OutputBW);
+// NereusSDR wires them from Setup → DSP → NB/SNB → SNB group.
+void SetRXASNBAovrlp           (int channel, int ovrlp);
+void SetRXASNBAasize           (int channel, int size);
+void SetRXASNBAnpasses         (int channel, int npasses);
+void SetRXASNBAk1              (int channel, double k1);
+void SetRXASNBAk2              (int channel, double k2);
+void SetRXASNBAbridge          (int channel, int bridge);
+void SetRXASNBApresamps        (int channel, int presamps);
+void SetRXASNBApostsamps       (int channel, int postsamps);
+void SetRXASNBApmultmin        (int channel, double pmultmin);
+void SetRXASNBAOutputBandwidth (int channel, double flow, double fhigh);
+
 // ---------------------------------------------------------------------------
 // Noise blanker — external (nob.h, nob.c)
 // ---------------------------------------------------------------------------
@@ -285,6 +300,18 @@ void xanbEXT(int id, double* in, double* out);
 
 // Float version (nob.c — not in header, but exported)
 void xanbEXTF(int id, float* I, float* Q);
+
+// NB1 post-create setters — called after create_anbEXT to override defaults.
+// Declared in Thetis Project Files/Source/Console/HPSDR/specHPSDR.cs:965-977
+// WDSP: third_party/wdsp/src/nob.c
+// Thetis cmaster.c:43-53 [v2.10.3.13] create-time defaults:
+//   tau=0.0001, hangtime=0.0001, advtime=0.0001, backtau=0.05, threshold=30.0
+
+void SetEXTANBTau(int id, double tau);
+void SetEXTANBHangtime(int id, double time);
+void SetEXTANBAdvtime(int id, double time);
+void SetEXTANBBacktau(int id, double tau);
+void SetEXTANBThreshold(int id, double thresh);
 
 // ---------------------------------------------------------------------------
 // Noise blanker II — external (nobII.h, nobII.c)
@@ -331,6 +358,11 @@ void SetEXTNOBAdvtime(int id, double time);
 // From Thetis specHPSDR.cs:934 — SetEXTNOBThreshold(int id, double thresh)
 // WDSP: third_party/wdsp/src/nobII.c:727
 void SetEXTNOBThreshold(int id, double thresh);
+
+// backtau: averaging time constant for signal magnitude (seconds)
+// From Thetis specHPSDR.cs:931 — SetEXTNOBBacktau(int id, double tau)
+// WDSP: third_party/wdsp/src/nobII.c
+void SetEXTNOBBacktau(int id, double tau);
 
 // ---------------------------------------------------------------------------
 // APF — Audio Peak Filter (apfshadow.c / apfshadow.h)

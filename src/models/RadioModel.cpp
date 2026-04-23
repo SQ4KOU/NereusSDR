@@ -740,13 +740,11 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 rxCh->setAgcHangThreshold(m_activeSlice->agcHangThreshold());
                 rxCh->setAgcFixedGain(m_activeSlice->agcFixedGain());
                 rxCh->setAgcMaxGain(m_activeSlice->agcMaxGain());
-                // NB2 sub-parameter defaults — From Thetis cmaster.c:55-68 (create_nobEXT)
-                // These are set-and-forget; the run flag is gated by processIq() atomics.
-                // Declared in specHPSDR.cs:922-937; WDSP nobII.c:658,686,697,707
-                rxCh->setNb2Mode(0);         // cmaster.c:61  mode=0 (zero)
-                rxCh->setNb2Tau(0.0001);     // cmaster.c:62  slewtime=0.0001 s
-                rxCh->setNb2LeadTime(0.0001);// cmaster.c:63  advtime=0.0001 s
-                rxCh->setNb2HangTime(0.0001);// cmaster.c:65  hangtime=0.0001 s
+                // NB mode is per-band; tuning is global per-channel and
+                // lives inside NbFamily (seeded from AppSettings at ctor,
+                // live-pushed from Setup → DSP → NB/SNB). Per-slice NB
+                // tuning pass-through removed 2026-04-22.
+                rxCh->setNbMode(m_activeSlice->nbMode());
                 // EMNR sub-parameter defaults — From Thetis radio.cs:2062,2081,2101,2235
                 // These are set-and-forget on channel creation; run flag follows slice.
                 rxCh->setEmnrGainMethod(2);   // radio.cs:2062 rx_nr2_gain_method = 2
@@ -1300,6 +1298,21 @@ void RadioModel::wireSliceSignals()
         }
         scheduleSettingsSave();
     });
+
+    // NB mode (NB1 / NB2 / Off) → WDSP
+    // From Thetis Project Files/Source/Console/console.cs — chkDSPNB1/chkDSPNB2 Checked
+    // WDSP: third_party/wdsp/src/anb.c (SetRXAANBRun) + third_party/wdsp/src/nob.c (SetRXANOBRun)
+    connect(slice, &SliceModel::nbModeChanged, this, [this](NereusSDR::NbMode m) {
+        RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+        if (rxCh) {
+            rxCh->setNbMode(m);
+        }
+        scheduleSettingsSave();
+    });
+
+    // NB tuning wiring removed 2026-04-22 — no longer per-slice. All NB
+    // tuning lives inside NbFamily, seeded from AppSettings at ctor and
+    // live-pushed from Setup → DSP → NB/SNB handlers in DspSetupPages.cpp.
 
     // APF → WDSP
     // From Thetis Project Files/Source/Console/radio.cs:1910-1927

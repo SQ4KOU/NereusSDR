@@ -254,6 +254,7 @@ warren@wpratt.com
 #include "core/RadioDiscovery.h"
 #include "core/WdspEngine.h"
 #include "core/FFTEngine.h"
+#include "core/NbFamily.h"
 #include "core/ClarityController.h"
 #include "core/StepAttenuatorController.h"
 #include "core/NoiseFloorTracker.h"
@@ -1316,7 +1317,7 @@ void MainWindow::buildMenuBar()
     m_nbAction->setCheckable(true);
     connect(m_nbAction, &QAction::toggled, this, [this](bool on) {
         RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
-        if (rxCh) { rxCh->setNb1Enabled(on); }
+        if (rxCh) { rxCh->setNbMode(on ? NereusSDR::NbMode::NB : NereusSDR::NbMode::Off); }
     });
 
     QAction* nb2Action = dspMenu->addAction(QStringLiteral("NB&2"));
@@ -2260,10 +2261,9 @@ void MainWindow::wireSliceToSpectrum()
         vfo->setXitHz(hz);
     });
 
-    // --- SliceModel → VfoWidget: DSP tab inbound (S1.8b stubs) ---
-    connect(slice, &SliceModel::nb2EnabledChanged, this, [vfo](bool v) {
-        vfo->setNb2Enabled(v);
-    });
+    // --- SliceModel → VfoWidget: DSP tab inbound (S1.8b) ---
+    connect(slice, &SliceModel::nbModeChanged, vfo, &VfoWidget::setNbMode);
+    vfo->setNbMode(slice->nbMode());   // initial sync
 
     connect(slice, &SliceModel::emnrEnabledChanged, this, [vfo](bool v) {
         vfo->setNr2Enabled(v);
@@ -2315,11 +2315,15 @@ void MainWindow::wireSliceToSpectrum()
         slice->setTxAntenna(ant);
     });
 
-    // NB/NR/ANF → RxChannel directly (not SliceModel properties)
-    connect(vfo, &VfoWidget::nb1Changed, this, [this](bool on) {
-        RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
-        if (rxCh) { rxCh->setNb1Enabled(on); }
+    // NB cycling — nbModeCycled fires on user click; cycle the mode through
+    // Off → NB → NB2 → Off via SliceModel. SliceModel's nbModeChanged feeds
+    // back to setNbMode() (wired in the inbound block above).
+    // From Thetis console.cs:43513 [v2.10.3.13].
+    connect(vfo, &VfoWidget::nbModeCycled, this, [slice] {
+        slice->setNbMode(NereusSDR::cycleNbMode(slice->nbMode()));
     });
+
+    // NR/ANF → RxChannel directly (not SliceModel properties)
     connect(vfo, &VfoWidget::nrChanged, this, [this](bool on) {
         RxChannel* rxCh = m_radioModel->wdspEngine()->rxChannel(0);
         if (rxCh) { rxCh->setNrEnabled(on); }
@@ -2329,10 +2333,7 @@ void MainWindow::wireSliceToSpectrum()
         if (rxCh) { rxCh->setAnfEnabled(on); }
     });
 
-    // --- VfoWidget → SliceModel: DSP tab outbound (S1.8b stubs) ---
-    connect(vfo, &VfoWidget::nb2Changed, this, [slice](bool on) {
-        slice->setNb2Enabled(on);
-    });
+    // --- VfoWidget → SliceModel: DSP tab outbound (S1.8b) ---
     connect(vfo, &VfoWidget::nr2Changed, this, [slice](bool on) {
         // NR2 = EMNR in Thetis naming
         slice->setEmnrEnabled(on);
@@ -2399,6 +2400,16 @@ void MainWindow::wireSliceToSpectrum()
         auto* dialog = new SetupDialog(m_radioModel, this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
         dialog->selectPage(QStringLiteral("AGC/ALC"));
+        dialog->show();
+    });
+
+    // --- VfoWidget → Setup → DSP → NB/SNB page (right-click on NB or SNB).
+    // Mirrors Thetis chkNB_MouseDown / chkDSPNB2_MouseDown (console.cs:44447
+    // [v2.10.3.13]) which call ShowSetupTab(NB_Tab).
+    connect(vfo, &VfoWidget::openNbSetupRequested, this, [this]() {
+        auto* dialog = new SetupDialog(m_radioModel, this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->selectPage(QStringLiteral("NB/SNB"));
         dialog->show();
     });
 
@@ -2579,6 +2590,10 @@ void MainWindow::wireSliceToSpectrum()
             dialog->selectPage(QStringLiteral("AGC/ALC"));
             dialog->show();
         });
+
+        // RxApplet openNbSetupRequested wiring removed 2026-04-22 —
+        // RxApplet no longer hosts any NB controls (strict Thetis parity).
+        // VfoWidget::openNbSetupRequested above handles the NB→Setup hop.
     }
 
     // --- Wire overlay Band flyout to slice ---
