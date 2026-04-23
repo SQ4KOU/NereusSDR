@@ -199,6 +199,9 @@ nereus_add_test(tst_band_change_recursion_guard)
 # ── Step attenuator / ADC overload detection ─────────────────────────────
 nereus_add_test(tst_step_attenuator_controller)
 
+# ── Issue #118: band-button auto-mode ────────────────────────────────────
+nereus_add_test(tst_band_from_name)
+
 # ── About dialog ─────────────────────────────────────────────────────────
 nereus_add_test(tst_about_dialog)
 
