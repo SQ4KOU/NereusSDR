@@ -1,6 +1,6 @@
 # Thetis Inline Mod Index
 
-**Generated mechanically** by `scripts/generate-contributor-indexes.py` on `2026-04-22T01:00:53+00:00`
+**Generated mechanically** by `scripts/generate-contributor-indexes.py` on `2026-04-23T12:10:53+00:00`
 from corpus `docs/attribution/thetis-author-tags.json` (thetis@`93d50464`, mi0bot@`2829f76`).
 
 **Do NOT hand-edit this file.** To add or correct a contributor, edit `docs/attribution/thetis-author-tags.json` and re-run the generator.
@@ -9,10 +9,10 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 
 ## Summary
 
-- Upstream sources scanned: 152
-- Files with ≥1 inline marker: 152
-- Total inline markers: 2990
-- Distinct callsigns inline: 18
+- Upstream sources scanned: 151
+- Files with ≥1 inline marker: 151
+- Total inline markers: 2947
+- Distinct callsigns inline: 17
 
 ## Per-file markers
 
@@ -105,16 +105,16 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 ### `thetis/Project Files/Source/Console/Andromeda/Andromeda.cs`
 
 - **`G8NJJ`** (Laurence Barker): 4 markers
-  - L41: `// G8NJJ: handlers for ARIES ATU`
-  - L875: `// G8NJJ: handlers for Ganymeda 500W PA protection`
-  - L1052: `// G8NJJ: define the Andromeda button bar menu`
-  - L1172: `// G8NJJ: define the actons an Andromeda encoder can have`
+  - L16: `// G8NJJ: handlers for ARIES ATU`
+  - L850: `// G8NJJ: handlers for Ganymeda 500W PA protection`
+  - L1027: `// G8NJJ: define the Andromeda button bar menu`
+  - L1147: `// G8NJJ: define the actons an Andromeda encoder can have`
 - **`MW0LGE`** (Richard Samphire): 5 markers
-  - L2166: `// MW0LGE`
-  - L4146: `// MW0LGE [2.10.1.0]`
-  - L4151: `// MW0LGE [2.9.0.7] in collapsed view, hide them all`
-  - L4154: `// MW0LGE [2.10.1.0] andromeda mode dependant form fixes`
-  - L4172: `//[2.10.3.5]MW0LGE we are expanded, so ok to move them always`
+  - L2141: `// MW0LGE`
+  - L4121: `// MW0LGE [2.10.1.0]`
+  - L4126: `// MW0LGE [2.9.0.7] in collapsed view, hide them all`
+  - L4129: `// MW0LGE [2.10.1.0] andromeda mode dependant form fixes`
+  - L4147: `//[2.10.3.5]MW0LGE we are expanded, so ok to move them always`
 
 ### `thetis/Project Files/Source/Console/Andromeda/SliderSettingsForm.cs`
 
@@ -269,24 +269,24 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 ### `thetis/Project Files/Source/Console/MeterManager.cs`
 
 - **`MW0LGE`** (Richard Samphire): 18 markers
-  - L1801: `//[2.10.3.6]MW0LGE added for dev_6`
-  - L4224: `//[2.10.1.0] MW0LGE needed because at init rx2 might not be enabled, and the init function will have been given -999.999 from console.vfo...`
-  - L5720: `//[2.10.3.6]MW0LGE get all console info here, as everything will be at the correct state`
-  - L6458: `//a.Add("meterIGSettings_" + ig.Value.ID, igs.ToString()); //[2.10.3.6]MW0LGE not used`
-  - L6588: `//[2.10.3.7]MW0LGE // we have to dispose it because close() prevent this being freed up`
-  - L6817: `//[2.10.3.9]MW0LGE order these once, pointless doing it every time we get a percentage !`
-  - L6872: `//[2.10.1.0] MW0LGE used for on rx/tx fading`
-  - L6877: `//[2.10.1.0] MW0LGE used when certain features turned off such as eq,leveler,cfc`
-  - L6882: `//[2.10.30.9]MW0LGE this perc cache code totally refactored, and only caches to 2 decimal precision for the dB value, and is keyed on the...`
-  - L9981: `//[2.10.3.9]MW0LGE fix, was using _rx1_band`
-  - L19366: `//[2.10.3.9]MW0LGE update the data, prevents loads of updates`
-  - L30910: `//[2.10.3.6]MW0LGE added m.vfosub >= 0`
-  - L33152: `// [2.10.1.0] MW0LGE`
-  - L34798: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
-  - L35007: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
-  - L35220: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
-  - L41064: `//[2.10.3.9]MW0LGE refactor for speed`
-  - L41251: `//[2.10.3.6]MW0LGE refactored to use Windows Imaging Component (WIC)`
+  - L1800: `//[2.10.3.6]MW0LGE added for dev_6`
+  - L4200: `//[2.10.1.0] MW0LGE needed because at init rx2 might not be enabled, and the init function will have been given -999.999 from console.vfo...`
+  - L5695: `//[2.10.3.6]MW0LGE get all console info here, as everything will be at the correct state`
+  - L6433: `//a.Add("meterIGSettings_" + ig.Value.ID, igs.ToString()); //[2.10.3.6]MW0LGE not used`
+  - L6563: `//[2.10.3.7]MW0LGE // we have to dispose it because close() prevent this being freed up`
+  - L6791: `//[2.10.3.9]MW0LGE order these once, pointless doing it every time we get a percentage !`
+  - L6846: `//[2.10.1.0] MW0LGE used for on rx/tx fading`
+  - L6851: `//[2.10.1.0] MW0LGE used when certain features turned off such as eq,leveler,cfc`
+  - L6856: `//[2.10.30.9]MW0LGE this perc cache code totally refactored, and only caches to 2 decimal precision for the dB value, and is keyed on the...`
+  - L9861: `//[2.10.3.9]MW0LGE fix, was using _rx1_band`
+  - L18046: `//[2.10.3.9]MW0LGE update the data, prevents loads of updates`
+  - L29467: `//[2.10.3.6]MW0LGE added m.vfosub >= 0`
+  - L31618: `// [2.10.1.0] MW0LGE`
+  - L33264: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
+  - L33473: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
+  - L33686: `//[2.10.3.5]MW0LGE note these are reverse RGB, we normally expect BGRA #289`
+  - L39132: `//[2.10.3.9]MW0LGE refactor for speed`
+  - L39319: `//[2.10.3.6]MW0LGE refactored to use Windows Imaging Component (WIC)`
 
 ### `thetis/Project Files/Source/Console/Midi2CatCommands.cs`
 
@@ -375,13 +375,13 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 ### `thetis/Project Files/Source/Console/TCIServer.cs`
 
 - **`MW0LGE`** (Richard Samphire): 7 markers
-  - L2154: `//MW0LGE [2.9.0.7] note we invert with -`
-  - L2412: `//MW0LGE [2.9.0.7]`
-  - L4004: `//change if needed [2.10.3.6]MW0LGE fixes #365`
-  - L4482: `//[2.10.3.6]MW0LGE rumlog fills arg5 with Nil - spotted buy GW3JVB`
-  - L6679: `//[2.10.3.9]MW0LGE fixes issue #559`
-  - L7520: `// also send legacy command (EESDR3 does this)	MW0LGE [2.9.0.8]`
-  - L7999: `//[2.10.3.9]MW0LGE also send out RX_CLICKED_ON_SPOT defaults to rx1 and vfoA`
+  - L2116: `//MW0LGE [2.9.0.7] note we invert with -`
+  - L2344: `//MW0LGE [2.9.0.7]`
+  - L3869: `//change if needed [2.10.3.6]MW0LGE fixes #365`
+  - L4319: `//[2.10.3.6]MW0LGE rumlog fills arg5 with Nil - spotted buy GW3JVB`
+  - L6270: `//[2.10.3.9]MW0LGE fixes issue #559`
+  - L7073: `// also send legacy command (EESDR3 does this)	MW0LGE [2.9.0.8]`
+  - L7478: `//[2.10.3.9]MW0LGE also send out RX_CLICKED_ON_SPOT defaults to rx1 and vfoA`
 
 ### `thetis/Project Files/Source/Console/audio.cs`
 
@@ -406,40 +406,29 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 ### `thetis/Project Files/Source/Console/clsHardwareSpecific.cs`
 
 - **`DH1KLM`** (Sigi): 4 markers
-  - L185: `//DH1KLM`
-  - L187: `// DH1KLM: changed for compatibility reasons for OpenHPSDR compat. DIY PA/Filter boards`
-  - L414: `//DH1KLM`
-  - L431: `//DH1KLM`
+  - L178: `//DH1KLM`
+  - L180: `// DH1KLM: changed for compatibility reasons for OpenHPSDR compat. DIY PA/Filter boards`
+  - L403: `//DH1KLM`
+  - L420: `//DH1KLM`
 - **`G8NJJ`** (Laurence Barker): 1 marker
-  - L171: `// G8NJJ: likely to need further changes for PA`
-- **`N1GP`** (Rick N1GP): 5 markers
-  - L129: `//N1GP G1 added`
-  - L356: `//N1GP G1 added`
-  - L383: `//N1GP G1 added`
-  - L697: `//N1GP G1 added`
-  - L792: `//N1GP G1 added`
+  - L164: `// G8NJJ: likely to need further changes for PA`
 
 ### `thetis/Project Files/Source/Console/cmaster.cs`
 
 - **`DH1KLM`** (Sigi): 4 markers
-  - L631: `//DH1KLM`
-  - L715: `//DH1KLM`
-  - L751: `//DH1KLM`
-  - L846: `//DH1KLM`
+  - L625: `//DH1KLM`
+  - L708: `//DH1KLM`
+  - L744: `//DH1KLM`
+  - L838: `//DH1KLM`
 - **`MW0LGE`** (Richard Samphire): 8 markers
-  - L675: `// DDC0+DDC1, port 1035, Call 1 Sends TX_freq data to both RX //MW0LGE_21d DUP on top panadaptor (Warren provided info), // MW0LGE [2.9.0...`
-  - L1008: `//[2.10.3.4]MW0LGE`
-  - L1020: `//[2.10.3.5]MW0LGE`
-  - L1026: `//[2.10.3.5]MW0LGE`
-  - L1029: `//[2.10.3.4]MW0LGE`
-  - L1114: `//[2.10.3.4]MW0LGE run on/off`
-  - L1912: `//MW0LGE`
-  - L2333: `//[2.10.3.4]MW0LGE use OutCountTX if moxing`
-- **`N1GP`** (Rick N1GP): 4 markers
-  - L595: `//N1GP G1 added`
-  - L685: `//N1GP G1 added`
-  - L807: `//N1GP G1 added`
-  - L885: `//N1GP G1 added`
+  - L669: `// DDC0+DDC1, port 1035, Call 1 Sends TX_freq data to both RX //MW0LGE_21d DUP on top panadaptor (Warren provided info), // MW0LGE [2.9.0...`
+  - L999: `//[2.10.3.4]MW0LGE`
+  - L1011: `//[2.10.3.5]MW0LGE`
+  - L1017: `//[2.10.3.5]MW0LGE`
+  - L1020: `//[2.10.3.4]MW0LGE`
+  - L1105: `//[2.10.3.4]MW0LGE run on/off`
+  - L1872: `//MW0LGE`
+  - L2293: `//[2.10.3.4]MW0LGE use OutCountTX if moxing`
 
 ### `thetis/Project Files/Source/Console/common.cs`
 
@@ -464,134 +453,112 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 ### `thetis/Project Files/Source/Console/console.cs`
 
 - **`DH1KLM`** (Sigi): 31 markers
-  - L6747: `//DH1KLM`
-  - L8305: `//DH1KLM`
-  - L10041: `//DH1KLM`
-  - L11016: `//DH1KLM`
-  - L11042: `//DH1KLM`
-  - L11186: `//DH1KLM`
-  - L11211: `//DH1KLM`
-  - L11689: `//        HardwareSpecific.Model != HPSDRModel.REDPITAYA) return; //DH1KLM`
-  - L11919: `// DH1KLM`
-  - L14851: `//DH1KLM`
-  - L14877: `//DH1KLM`
-  - L15441: `//DH1KLM`
-  - L18731: `//DH1KLM`
-  - L19319: `//DH1KLM`
-  - L19495: `//DH1KLM`
-  - L21049: `//DH1KLM`
-  - L21075: `//DH1KLM`
-  - L22548: `//DH1KLM`
-  - L25010: `//DH1KLM`
-  - L25084: `//DH1KLM`
+  - L6739: `//DH1KLM`
+  - L8296: `//DH1KLM`
+  - L10028: `//DH1KLM`
+  - L10999: `//DH1KLM`
+  - L11024: `//DH1KLM`
+  - L11164: `//DH1KLM`
+  - L11189: `//DH1KLM`
+  - L11667: `//        HardwareSpecific.Model != HPSDRModel.REDPITAYA) return; //DH1KLM`
+  - L11897: `// DH1KLM`
+  - L14825: `//DH1KLM`
+  - L14850: `//DH1KLM`
+  - L15413: `//DH1KLM`
+  - L18702: `//DH1KLM`
+  - L19289: `//DH1KLM`
+  - L19464: `//DH1KLM`
+  - L21009: `//DH1KLM`
+  - L21035: `//DH1KLM`
+  - L22506: `//DH1KLM`
+  - L24965: `//DH1KLM`
+  - L25038: `//DH1KLM`
   - *(+11 more)*
 - **`DK1HLM`** (Unknown): 1 marker
-  - L6830: `//DK1HLM`
+  - L6821: `//DK1HLM`
 - **`G7KLJ`** (Unknown): 3 markers
-  - L731: `// PA init thread - from G7KLJ changes - done as early as possible`
-  - L1228: `// this should not happen, ever !  // G7KLJ's idea/implementation`
-  - L1232: `// G7KLJ's idea/implementation`
+  - L725: `// PA init thread - from G7KLJ changes - done as early as possible`
+  - L1221: `// this should not happen, ever !  // G7KLJ's idea/implementation`
+  - L1225: `// G7KLJ's idea/implementation`
 - **`G8NJJ`** (Laurence Barker): 52 markers
-  - L147: `// G8NJJ`
-  - L498: `// G8NJJ`
-  - L499: `//G8NJJ added`
-  - L500: `//G8NJJ added`
-  - L501: `//G8NJJ added`
-  - L502: `//G8NJJ added`
-  - L503: `//G8NJJ added`
-  - L504: `//G8NJJ added`
-  - L510: `// G8NJJ: Titlebar strings and button/encoder/menu definitions for Andromeda`
-  - L6745: `// G8NJJ`
-  - L6746: `// G8NJJ`
-  - L7370: `// G8NJJ like CATBandGroup but covering SWL too`
-  - L7506: `// G8NJJ added to allow labelling of buttons in popup form`
-  - L8569: `// ANAN-G2, G21K    (G8NJJ)`
-  - L11633: `// added G8NJJ`
-  - L11652: `// added G8NJJ`
-  - L12884: `// added G8NJJ to allow scaling of VOX gain CAT command to Thetis range which is typ -80 to 0, not 0 to 1000`
-  - L13362: `// G8NJJ: return the set of strings in the combo box`
-  - L13381: `// G8NJJ: return the set of strings in the combo box`
-  - L13387: `// added G8NJJ`
+  - L141: `// G8NJJ`
+  - L492: `// G8NJJ`
+  - L493: `//G8NJJ added`
+  - L494: `//G8NJJ added`
+  - L495: `//G8NJJ added`
+  - L496: `//G8NJJ added`
+  - L497: `//G8NJJ added`
+  - L498: `//G8NJJ added`
+  - L504: `// G8NJJ: Titlebar strings and button/encoder/menu definitions for Andromeda`
+  - L6737: `// G8NJJ`
+  - L6738: `// G8NJJ`
+  - L7361: `// G8NJJ like CATBandGroup but covering SWL too`
+  - L7497: `// G8NJJ added to allow labelling of buttons in popup form`
+  - L8559: `// ANAN-G2, G21K    (G8NJJ)`
+  - L11611: `// added G8NJJ`
+  - L11630: `// added G8NJJ`
+  - L12862: `// added G8NJJ to allow scaling of VOX gain CAT command to Thetis range which is typ -80 to 0, not 0 to 1000`
+  - L13340: `// G8NJJ: return the set of strings in the combo box`
+  - L13359: `// G8NJJ: return the set of strings in the combo box`
+  - L13365: `// added G8NJJ`
   - *(+32 more)*
 - **`IK4JPN`** (Unknown): 2 markers
-  - L26394: `// IK4JPN+ 9/11/2014`
-  - L26421: `// IK4JPN-`
+  - L26345: `// IK4JPN+ 9/11/2014`
+  - L26372: `// IK4JPN-`
 - **`K2UE`** (George Donadio): 2 markers
-  - L26034: `// in following 'if', K2UE recommends not checking open antenna for the 8000 model`
-  - L26113: `// K2UE idea:  try to determine if Hi-Z or Lo-Z load`
+  - L25985: `// in following 'if', K2UE recommends not checking open antenna for the 8000 model`
+  - L26064: `// K2UE idea:  try to determine if Hi-Z or Lo-Z load`
 - **`MW0LGE`** (Richard Samphire): 422 markers
-  - L565: `//[2.10.3]MW0LGE`
-  - L620: `//MW0LGE`
-  - L872: `// initialise expandedSize so that we have something as a minimum to come back to from collapsed state //MW0LGE`
-  - L909: `//[2.10.3.4]MW0LGE shutdown log remove`
-  - L921: `//MW0LGE [2.9.0.8]`
-  - L957: `//[2.10.1.0] MW0LGE initial call to setup check marks in status bar as a minimum`
-  - L970: `//_frmFinder.WriteXmlFinderFile(AppDataPath); // note: this will only happen if not already there //[2.10.3.12]MW0LGE moved to shutdown`
-  - L1051: `//[2.10.3.5]MW0LGE setup all status icon items`
-  - L1074: `//MW0LGE now defaulted with m_tpDisplayThreadPriority, and updated by setupform`
-  - L1216: `// MW0LGE used because some aspects of thetis test for null.`
-  - L1222: `// MW0LGE implement SetupForm as singleton, with some level of thread safety (which is probably not needed)`
-  - L1272: `//MW0LGE`
-  - L1486: `//[2.10.3.12]MW0LGE command line adaptor select`
-  - L1575: `// init the logger MW0LGE`
-  - L1685: `//[2.10.3.6]MW0LGE changed to use invoke if needed as CATTCPIPserver uses this from another thread`
-  - L2042: `//[2.10.3.1]MW0LGE make sure it is created on this thread, as the following serial`
-  - L2124: `// MW0LGE certain things in setup need objects created in this instance, so we will`
-  - L2141: `//[2.10.3.7]MW0LGE FM tx filter select, this was not being done at startup`
-  - L2232: `//MW0LGE duped from above Display.Target = pnlDisplay;`
-  - L2235: `//[2.10.3.13]MW0LGE moved to after the console window is showing`
+  - L559: `//[2.10.3]MW0LGE`
+  - L614: `//MW0LGE`
+  - L866: `// initialise expandedSize so that we have something as a minimum to come back to from collapsed state //MW0LGE`
+  - L902: `//[2.10.3.4]MW0LGE shutdown log remove`
+  - L914: `//MW0LGE [2.9.0.8]`
+  - L950: `//[2.10.1.0] MW0LGE initial call to setup check marks in status bar as a minimum`
+  - L963: `//_frmFinder.WriteXmlFinderFile(AppDataPath); // note: this will only happen if not already there //[2.10.3.12]MW0LGE moved to shutdown`
+  - L1044: `//[2.10.3.5]MW0LGE setup all status icon items`
+  - L1067: `//MW0LGE now defaulted with m_tpDisplayThreadPriority, and updated by setupform`
+  - L1209: `// MW0LGE used because some aspects of thetis test for null.`
+  - L1215: `// MW0LGE implement SetupForm as singleton, with some level of thread safety (which is probably not needed)`
+  - L1265: `//MW0LGE`
+  - L1479: `//[2.10.3.12]MW0LGE command line adaptor select`
+  - L1568: `// init the logger MW0LGE`
+  - L1677: `//[2.10.3.6]MW0LGE changed to use invoke if needed as CATTCPIPserver uses this from another thread`
+  - L2034: `//[2.10.3.1]MW0LGE make sure it is created on this thread, as the following serial`
+  - L2116: `// MW0LGE certain things in setup need objects created in this instance, so we will`
+  - L2133: `//[2.10.3.7]MW0LGE FM tx filter select, this was not being done at startup`
+  - L2224: `//MW0LGE duped from above Display.Target = pnlDisplay;`
+  - L2227: `//[2.10.3.13]MW0LGE moved to after the console window is showing`
   - *(+402 more)*
-- **`N1GP`** (Rick N1GP): 23 markers
-  - L8388: `//N1GP G1 added`
-  - L10037: `//N1GP G1 added`
-  - L11012: `//N1GP G1 added`
-  - L11038: `//N1GP G1 added`
-  - L11182: `//N1GP G1 added`
-  - L14835: `//N1GP G1 added`
-  - L14873: `//N1GP G1 added`
-  - L15414: `//N1GP G1 added`
-  - L15449: `//N1GP G1 added`
-  - L19315: `//N1GP G1 added`
-  - L19491: `//N1GP G1 added`
-  - L22547: `//N1GP G1 added`
-  - L25007: `//N1GP G1 added`
-  - L25081: `//N1GP G1 added`
-  - L25807: `//N1GP G1 added`
-  - L25833: `//N1GP G1 added`
-  - L26006: `//N1GP G1 added`
-  - L27674: `//N1GP G1 added`
-  - L31357: `//N1GP G1 added`
-  - L40874: `//N1GP G1 added`
-  - *(+3 more)*
 - **`W1CEG`** (Unknown): 2 markers
-  - L37138: `// :W1CEG:`
-  - L42437: `// W1CEG:  End`
+  - L37084: `// :W1CEG:`
+  - L42364: `// W1CEG:  End`
 - **`W2PA`** (Chris Codella): 45 markers
-  - L58: `//-W2PA Necessary for Behringer MIDI changes`
-  - L4979: `//-W2PA  The number of rig types in the imported DB matches the number in this version`
-  - L4985: `//-W2PA  else the number has changed so don't import, leave the defaults alone`
-  - L4993: `//-W2PA  The number of rig types in the imported DB matches the number in this version`
-  - L4999: `//-W2PA  else the number has changed so don't import, leave the defaults alone`
-  - L13000: `// QSK - a.k.a. full-break-in - Possible with Protocol-2 v1.7 or later  -W2PA`
-  - L15781: `//-W2PA Added three new functions to make CAT functions match behavior of equivalent console functions.`
-  - L16036: `//-W2PA This specifies the number of MIDI messages that cause a single tune step increment`
-  - L18220: `//-W2PA`
-  - L18225: `//-W2PA June 2017`
-  - L26036: `//-W2PA Changed to allow 35w - some amplifier tuners need about 30w to reliably start working`
-  - L28702: `//-W2PA Send LED update back to Behringer`
-  - L28704: `//-W2PA Don't let the last LED go out until zero`
-  - L28707: `//-W2PA Update LEDs on Behringer MIDI controller mini wheel`
-  - L28790: `//-W2PA Update LEDs on Behringer MIDI controller`
-  - L28878: `//-W2PA Update LEDs on Behringer MIDI controller`
-  - L28880: `//-W2PA Don't let the last LED go out`
-  - L30852: `//-W2PA Added to enable extended CAT control`
-  - L31400: `// Lock the display //-W2PA Don't freeze display if we are zoomed in too far to fit the passband`
-  - L31433: `//-W2PA If we tune beyond the display limits, re-center or scroll display, and keep going.  Original code above just stops tuning at edges.`
+  - L52: `//-W2PA Necessary for Behringer MIDI changes`
+  - L4971: `//-W2PA  The number of rig types in the imported DB matches the number in this version`
+  - L4977: `//-W2PA  else the number has changed so don't import, leave the defaults alone`
+  - L4985: `//-W2PA  The number of rig types in the imported DB matches the number in this version`
+  - L4991: `//-W2PA  else the number has changed so don't import, leave the defaults alone`
+  - L12978: `// QSK - a.k.a. full-break-in - Possible with Protocol-2 v1.7 or later  -W2PA`
+  - L15752: `//-W2PA Added three new functions to make CAT functions match behavior of equivalent console functions.`
+  - L16007: `//-W2PA This specifies the number of MIDI messages that cause a single tune step increment`
+  - L18191: `//-W2PA`
+  - L18196: `//-W2PA June 2017`
+  - L25987: `//-W2PA Changed to allow 35w - some amplifier tuners need about 30w to reliably start working`
+  - L28651: `//-W2PA Send LED update back to Behringer`
+  - L28653: `//-W2PA Don't let the last LED go out until zero`
+  - L28656: `//-W2PA Update LEDs on Behringer MIDI controller mini wheel`
+  - L28739: `//-W2PA Update LEDs on Behringer MIDI controller`
+  - L28827: `//-W2PA Update LEDs on Behringer MIDI controller`
+  - L28829: `//-W2PA Don't let the last LED go out`
+  - L30801: `//-W2PA Added to enable extended CAT control`
+  - L31348: `// Lock the display //-W2PA Don't freeze display if we are zoomed in too far to fit the passband`
+  - L31381: `//-W2PA If we tune beyond the display limits, re-center or scroll display, and keep going.  Original code above just stops tuning at edges.`
   - *(+25 more)*
 - **`W4TME`** (Ke Chen): 3 markers
-  - L14669: `//reset preset filter's center frequency - W4TME`
-  - L14704: `//reset preset filter's center frequency - W4TME`
-  - L15747: `// W4TME`
+  - L14647: `//reset preset filter's center frequency - W4TME`
+  - L14682: `//reset preset filter's center frequency - W4TME`
+  - L15718: `// W4TME`
 
 ### `thetis/Project Files/Source/Console/cwx.cs`
 
@@ -614,34 +581,34 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 - **`MW0LGE`** (Richard Samphire): 19 markers
   - L744: `//MW0LGE`
   - L3425: `//         // MW0LGE`
-  - L9910: `//[2.10.1.0] MW0LGE added bSaveEmptyValues. All entries need to be in the database even if empty, because`
-  - L9926: `//MW0LGE converted to Rows.Find because it is insanely faster, needs a primary key though`
-  - L9952: `//[2.10.1.0] MW0LGE added bSaveEmptyValues. All entries need to be in the database even if empty, because`
-  - L9976: `//MW0LGE converted to Rows.Find because it is insanely faster, needs a primary key though`
-  - L10104: `//    // MW0LGE [2.9.0.8]`
-  - L10402: `//                        //MW0LGE this db contains comboRadioModel, we need to pull over old radio selection from radio button implement...`
-  - L10426: `//                    else if (thisKey.Contains("mnotchdb")) //[2.10.3]MW0LGE let defaul else import any`
-  - L10509: `//                //[2.10.3]MW0LGE merge from old, any notches, fixes #236`
-  - L10605: `//    _importedDS = manualImport;  // Prevents overwriting the new database file on next exit // [2.10.1.0] MW0LGE added flag manualImpor...`
-  - L10621: `//[2.10.3.6]MW0LGE modified for new DB manager system`
-  - L10660: `// MW0LGE [2.9.0.8]`
-  - L10962: `//MW0LGE this db contains comboRadioModel, we need to pull over old radio selection from radio button implementation`
-  - L10986: `//[2.10.3]MW0LGE let defaul else import any`
-  - L11018: `// [2.10.3.6]MW0LGE changed, previously it would drop all meters from existing setup, and import`
-  - L11089: `//[2.10.3]MW0LGE merge from old, any notches, fixes #236`
-  - L11213: `//--MW0LGE`
-  - L11648: `// MW0LGE added region1,2,3`
+  - L9844: `//[2.10.1.0] MW0LGE added bSaveEmptyValues. All entries need to be in the database even if empty, because`
+  - L9860: `//MW0LGE converted to Rows.Find because it is insanely faster, needs a primary key though`
+  - L9886: `//[2.10.1.0] MW0LGE added bSaveEmptyValues. All entries need to be in the database even if empty, because`
+  - L9910: `//MW0LGE converted to Rows.Find because it is insanely faster, needs a primary key though`
+  - L10038: `//    // MW0LGE [2.9.0.8]`
+  - L10336: `//                        //MW0LGE this db contains comboRadioModel, we need to pull over old radio selection from radio button implement...`
+  - L10360: `//                    else if (thisKey.Contains("mnotchdb")) //[2.10.3]MW0LGE let defaul else import any`
+  - L10443: `//                //[2.10.3]MW0LGE merge from old, any notches, fixes #236`
+  - L10539: `//    _importedDS = manualImport;  // Prevents overwriting the new database file on next exit // [2.10.1.0] MW0LGE added flag manualImpor...`
+  - L10555: `//[2.10.3.6]MW0LGE modified for new DB manager system`
+  - L10594: `// MW0LGE [2.9.0.8]`
+  - L10896: `//MW0LGE this db contains comboRadioModel, we need to pull over old radio selection from radio button implementation`
+  - L10920: `//[2.10.3]MW0LGE let defaul else import any`
+  - L10952: `// [2.10.3.6]MW0LGE changed, previously it would drop all meters from existing setup, and import`
+  - L11023: `//[2.10.3]MW0LGE merge from old, any notches, fixes #236`
+  - L11147: `//--MW0LGE`
+  - L11582: `// MW0LGE added region1,2,3`
 - **`W2PA`** (Chris Codella): 7 markers
-  - L9535: `//-W2PA Write the database to a specific file`
-  - L9541: `//-W2PA Write specific dataset to a file`
-  - L10053: `////-W2PA New version of ImportDatabase to merge an old database or partly corruped one with a new default one`
-  - L11230: `//-W2PA Basic validity checks of imported DataSet xml file`
-  - L11263: `//-W2PA Expand an old TxProfile table into a newer one with more colunms. Fill in missing ones with default values.`
-  - L11294: `//-W2PA Write a message to the ImportLog file during the import process`
-  - L11301: `//-W2PA Original version of ImportDatabase`
+  - L9469: `//-W2PA Write the database to a specific file`
+  - L9475: `//-W2PA Write specific dataset to a file`
+  - L9987: `////-W2PA New version of ImportDatabase to merge an old database or partly corruped one with a new default one`
+  - L11164: `//-W2PA Basic validity checks of imported DataSet xml file`
+  - L11197: `//-W2PA Expand an old TxProfile table into a newer one with more colunms. Fill in missing ones with default values.`
+  - L11228: `//-W2PA Write a message to the ImportLog file during the import process`
+  - L11235: `//-W2PA Original version of ImportDatabase`
 - **`W4TME`** (Ke Chen): 2 markers
-  - L5014: `// W4TME`
-  - L5247: `// W4TME`
+  - L5005: `// W4TME`
+  - L5235: `// W4TME`
 
 ### `thetis/Project Files/Source/Console/display.cs`
 
@@ -664,8 +631,8 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L5824: `//            bool bElapsed = (_high_perf_timer.ElapsedMsec - _fLastFastAttackEnabledTimeRX1) > tmpDelay; //[2.10.1.0] MW0LGE change to t...`
   - L5859: `//            bool bElapsed = (_high_perf_timer.ElapsedMsec - _fLastFastAttackEnabledTimeRX2) > tmpDelay; //[2.10.1.0] MW0LGE change to t...`
   - L5868: `//[2.10.3.9]MW0LGE refactor to use refs, simplifies the code, removes unnecessary branching, general speed improvements`
-  - L6582: `//MW0LGE [2.9.0.7]`
-  - L6609: `//[2.10.3.9]MW0LGE changed from max`
+  - L6700: `//MW0LGE [2.9.0.7]`
+  - L6727: `//[2.10.3.9]MW0LGE changed from max`
   - *(+36 more)*
 
 ### `thetis/Project Files/Source/Console/dsp.cs`
@@ -685,14 +652,12 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 - **`G8NJJ`** (Laurence Barker): 3 markers
   - L125: `//G8NJJ`
   - L126: `//G8NJJ`
-  - L398: `// ANAN-G2: added G8NJJ`
+  - L397: `// ANAN-G2: added G8NJJ`
 - **`MI0BOT`** (Reid Campbell): 2 markers
   - L128: `//MI0BOT`
-  - L397: `// MI0BOT`
+  - L396: `// MI0BOT`
 - **`MW0LGE`** (Richard Samphire): 1 marker
-  - L401: `// MW0LGE`
-- **`N1GP`** (Rick N1GP): 1 marker
-  - L130: `//N1GP G1 added`
+  - L399: `// MW0LGE`
 
 ### `thetis/Project Files/Source/Console/eqform.cs`
 
@@ -709,56 +674,56 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 - **`MW0LGE`** (Richard Samphire): 8 markers
   - L82: `//[2.10.3] MW0LGE`
   - L105: `//check for old wdspWisdom00 file - [2.10.3.9]MW0LGE`
-  - L1092: `//[2.10.3.5]MW0LGE wave recorder volume normalise`
-  - L1185: `// MW0LGE [2.9.0.8]`
-  - L4245: `//MW0LGE return a notch that matches`
-  - L4260: `//MW0LGE check if notch close by`
-  - L4274: `//MW0LGE return list of notches in given bandwidth`
-  - L4296: `//MW0LGE return first notch found that surrounds a given frequency in the given bandwidth`
+  - L1090: `//[2.10.3.5]MW0LGE wave recorder volume normalise`
+  - L1183: `// MW0LGE [2.9.0.8]`
+  - L4243: `//MW0LGE return a notch that matches`
+  - L4258: `//MW0LGE check if notch close by`
+  - L4272: `//MW0LGE return list of notches in given bandwidth`
+  - L4294: `//MW0LGE return first notch found that surrounds a given frequency in the given bandwidth`
 
 ### `thetis/Project Files/Source/Console/setup.cs`
 
 - **`DH1KLM`** (Sigi): 18 markers
   - L847: `//DH1KLM`
-  - L6195: `//DH1KLM`
-  - L6197: `//DH1KLM`
-  - L6256: `//DH1KLM`
-  - L6261: `//DH1KLM`
-  - L6343: `//DH1KLM`
-  - L6390: `//DH1KLM`
-  - L6428: `//DH1KLM  //N1GP G1 added`
-  - L6460: `//DH1KLM`
-  - L7136: `//DH1KLM`
-  - L7226: `// MW0LGE [2.9.07] always initialise rx2 even if P1. Thanks to Reid (Gi8TME/Mi0BOT) and DH1KLM`
-  - L15586: `//DH1KLM`
-  - L15823: `//DH1KLM`
-  - L15882: `//DH1KLM`
-  - L20440: `//DH1KLM`
-  - L20485: `//DH1KLM, not possible for Red Pitaya since ADC overflow pin not implement in Hard and Firmware`
-  - L20486: `//DH1KLM, not possible for Red Pitaya since ADC overflow pin not implement in Hard and Firmware`
-  - L23804: `//DH1KLM`
+  - L6162: `//DH1KLM`
+  - L6164: `//DH1KLM`
+  - L6223: `//DH1KLM`
+  - L6228: `//DH1KLM`
+  - L6309: `//DH1KLM`
+  - L6356: `//DH1KLM`
+  - L6394: `//DH1KLM`
+  - L6426: `//DH1KLM`
+  - L7102: `//DH1KLM`
+  - L7192: `// MW0LGE [2.9.07] always initialise rx2 even if P1. Thanks to Reid (Gi8TME/Mi0BOT) and DH1KLM`
+  - L15547: `//DH1KLM`
+  - L15783: `//DH1KLM`
+  - L15841: `//DH1KLM`
+  - L20355: `//DH1KLM`
+  - L20400: `//DH1KLM, not possible for Red Pitaya since ADC overflow pin not implement in Hard and Firmware`
+  - L20401: `//DH1KLM, not possible for Red Pitaya since ADC overflow pin not implement in Hard and Firmware`
+  - L23698: `//DH1KLM`
 - **`G7KLJ`** (Unknown): 1 marker
   - L127: `//everything here moved to AfterConstructor, which is called during singleton instance // G7KLJ's idea/implementation`
 - **`G8NJJ`** (Laurence Barker): 17 markers
-  - L6062: `// added G8NJJ for Andromeda`
-  - L6069: `// added G8NJJ for Aries`
-  - L6076: `// added G8NJJ for Aries`
-  - L6083: `// added G8NJJ for Ganymede`
-  - L6090: `// added G8NJJ for Ganymede`
-  - L6277: `// G8NJJ. will need more work ofr high power PA`
-  - L8836: `// G8NJJ Saturn has QSK capability in any version.`
-  - L9740: `// G8NJJ: all logic moved to the console properties code`
-  - L9747: `// G8NJJ: all logic moved to the console properties code`
-  - L9754: `// G8NJJ: all logic moved to the console properties code`
-  - L9758: `// G8NJJ: setup control to select an Andromeda top bar when display is collapsed`
-  - L9764: `// G8NJJ: all logic moved to the console properties code`
-  - L9768: `// G8NJJ: setup control to select an Andromeda top bar when display is collapsed`
-  - L9774: `// G8NJJ: all logic moved to the console properties code`
-  - L16402: `// G8NJJ will need more work for ANAN_G2_1K (1KW PA)`
-  - L20287: `// added G8NJJ`
-  - L20338: `// added G8NJJ`
+  - L6029: `// added G8NJJ for Andromeda`
+  - L6036: `// added G8NJJ for Aries`
+  - L6043: `// added G8NJJ for Aries`
+  - L6050: `// added G8NJJ for Ganymede`
+  - L6057: `// added G8NJJ for Ganymede`
+  - L6244: `// G8NJJ. will need more work ofr high power PA`
+  - L8802: `// G8NJJ Saturn has QSK capability in any version.`
+  - L9701: `// G8NJJ: all logic moved to the console properties code`
+  - L9708: `// G8NJJ: all logic moved to the console properties code`
+  - L9715: `// G8NJJ: all logic moved to the console properties code`
+  - L9719: `// G8NJJ: setup control to select an Andromeda top bar when display is collapsed`
+  - L9725: `// G8NJJ: all logic moved to the console properties code`
+  - L9729: `// G8NJJ: setup control to select an Andromeda top bar when display is collapsed`
+  - L9735: `// G8NJJ: all logic moved to the console properties code`
+  - L16361: `// G8NJJ will need more work for ANAN_G2_1K (1KW PA)`
+  - L20202: `// added G8NJJ`
+  - L20253: `// added G8NJJ`
 - **`MW0GLE`** (Richard Samphire): 1 marker
-  - L2741: `//MW0GLE [2.10.3.6_dev4]`
+  - L2740: `//MW0GLE [2.10.3.6_dev4]`
 - **`MW0LGE`** (Richard Samphire): 129 markers
   - L134: `//[2.10.3.9]MW0LGE atempt to get the model as soon as possile, before the getoptions, so that everything that relies on it at least has a...`
   - L170: `// MW0LGE note: this will allways cause the change event to fire, as the combobox does not contain any default value`
@@ -781,20 +746,11 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
   - L1439: `//[2.6.10.3]MW0LGE this had been removed, and was spotted after I diffed older version. I put it here to keep a record`
   - L1584: `//a.Add("chkRadioProtocolSelect_checkstate", chkRadioProtocolSelect.CheckState.ToString()); //[2.10.3.5]MW0LGE not used anymore`
   - *(+109 more)*
-- **`N1GP`** (Rick N1GP): 8 markers
-  - L6340: `//N1GP G1 added`
-  - L15815: `//N1GP G1 added`
-  - L15874: `//N1GP G1 added`
-  - L19904: `//N1GP G1 added`
-  - L20537: `//N1GP G1 added`
-  - L20715: `//N1GP G1 added`
-  - L20745: `//N1GP G1 added`
-  - L23746: `//N1GP G1 added`
 - **`W2PA`** (Chris Codella): 2 markers
-  - L10211: `//-W2PA MIDI wheel as VFO sensitivity adjustments`
-  - L12448: `//-W2PA Export a single TX Profile to send to someone else for importing.`
+  - L10172: `//-W2PA MIDI wheel as VFO sensitivity adjustments`
+  - L12409: `//-W2PA Export a single TX Profile to send to someone else for importing.`
 - **`W4WMT`** (Bryan Rambo): 1 marker
-  - L28620: `//[2.10.3.5]W4WMT implements #87`
+  - L28453: `//[2.10.3.5]W4WMT implements #87`
 
 ### `thetis/Project Files/Source/Console/splash.cs`
 
@@ -954,11 +910,6 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 - **`MW0LGE`** (Richard Samphire): 1 marker
   - L74: `// [2.10.3.13]MW0LGE`
 
-### `thetis/Project Files/Source/wdsp/cfcomp.c`
-
-- **`MW0LGE`** (Richard Samphire): 1 marker
-  - L110: `// modified for use with Q factor - Richard Samphire (c) 2026 - MW0LGE`
-
 ### `thetis/Project Files/Source/wdsp/eq.c`
 
 - **`MW0LGE`** (Richard Samphire): 1 marker
@@ -1028,10 +979,9 @@ Historical Pass 6a snapshot preserved at `thetis-inline-mods-index-v020-snapshot
 
 ### `thetis/Project Files/lib/portaudio-19.7.0/src/hostapi/asio/pa_asio.cpp`
 
-- **`MW0LGE`** (Richard Samphire): 3 markers
+- **`MW0LGE`** (Richard Samphire): 2 markers
   - L1274: `//[2.10.3.11]MW0LGE portaudio W4WMT`
-  - L1305: `//driver that cmASIO is using, if there is one //[2.10.3.11]MW0LGE portaudio W4WMT`
-  - L1306: `//black list the Avid Pro Tools at it was causing issues (https://discord.com/channels/1271453528656969789/1491198252593315940) //[2.10.3...`
+  - L1304: `//driver that cmASIO is using, if there is one //[2.10.3.11]MW0LGE portaudio W4WMT`
 
 ### `thetis/Project Files/lib/portaudio-19.7.0/src/hostapi/wasapi/pa_win_wasapi.c`
 
