@@ -12,6 +12,8 @@
 // Modification history (NereusSDR):
 //   2026-04-23 — Written for NereusSDR by J.J. Boyd (KG4VCF),
 //                 with AI-assisted development via Anthropic Claude Code.
+//   2026-04-23 — Added rnnoiseDefaultSmallBin() and dfnrModelTarball()
+//                 helpers for Sub-epic C-1 packaging.
 // =================================================================
 
 #include <QString>
@@ -31,5 +33,22 @@ namespace NereusSDR::ModelPaths {
 // See docs/architecture/phase3g-rx-epic-c1-nr-xplat-plan.md Task 22
 // for packaging details.
 QString rnnoiseDefaultLargeBin();
+
+// Path to the bundled rnnoise "Default (small)" model. Same probe
+// sequence as rnnoiseDefaultLargeBin() but for Default_small.bin.
+// Returns empty QString if not found.
+QString rnnoiseDefaultSmallBin();
+
+// Path to the bundled DeepFilterNet3 ONNX model tarball. Resolves to:
+//   macOS:   .app/Contents/Resources/models/dfnet3/DeepFilterNet3_onnx.tar.gz
+//   Linux:   <exe-dir>/../share/NereusSDR/models/dfnet3/DeepFilterNet3_onnx.tar.gz
+//            OR <XDG_DATA>/NereusSDR/models/dfnet3/DeepFilterNet3_onnx.tar.gz
+//   Windows: <exe-dir>/models/dfnet3/DeepFilterNet3_onnx.tar.gz
+//   Dev:     <source>/third_party/deepfilter/models/DeepFilterNet3_onnx.tar.gz
+//            (located via relative path from the build-dir binary)
+//
+// Returns empty QString if not found. The caller should warn and
+// disable DFNR in that case.
+QString dfnrModelTarball();
 
 } // namespace NereusSDR::ModelPaths

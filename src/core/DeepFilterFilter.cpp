@@ -18,7 +18,8 @@
 //                native rate — saves 2 resample passes per block.
 //                New process(outL, outR, sampleCount) signature
 //                operates in-place on separated channel arrays.
-//                findModelPath() updated to search NereusSDR paths.
+//                findModelPath() removed — now resolves via
+//                ModelPaths::dfnrModelTarball().
 //                df_create / df_process_frame / df_set_* calls
 //                and tuning surface (attenLimit, postFilterBeta)
 //                unchanged from AetherSDR original.
@@ -31,69 +32,20 @@
 #include "DeepFilterFilter.h"
 #include "deep_filter.h"
 #include "LogCategories.h"
+#include "ModelPaths.h"
 
 #include <algorithm>
 #include <cstring>
 #include <vector>
-#include <QCoreApplication>
-#include <QDir>
-#include <QFile>
 #include <QDebug>
-#include <QStandardPaths>
 
 namespace NereusSDR {
 
-static constexpr const char* kModelFileName = "DeepFilterNet3_onnx.tar.gz";
-
-static QByteArray findModelPath()
-{
-    QString exeDir = QCoreApplication::applicationDirPath();
-    QStringList searched;
-
-    // 1. Adjacent to the executable (Linux/Windows build dir, or installed)
-    QString path = exeDir + "/" + kModelFileName;
-    searched << path;
-    if (QFile::exists(path)) {
-        return path.toUtf8();
-    }
-    // 2. macOS app bundle: Contents/Resources/
-    path = exeDir + "/../Resources/" + kModelFileName;
-    searched << path;
-    if (QFile::exists(path)) {
-        return QDir(path).canonicalPath().toUtf8();
-    }
-    // 3. Dev builds: third_party dir relative to exe
-    path = exeDir + "/../third_party/deepfilter/models/" + kModelFileName;
-    searched << path;
-    if (QFile::exists(path)) {
-        return QDir(path).canonicalPath().toUtf8();
-    }
-    // 4. XDG data directory (Linux installed via package or cmake --install)
-    QString dataDir = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
-    if (!dataDir.isEmpty()) {
-        path = dataDir + "/NereusSDR/" + kModelFileName;
-        searched << path;
-        if (QFile::exists(path)) {
-            return path.toUtf8();
-        }
-    }
-    // 5. System-wide install paths (Linux)
-    for (const QString& prefix : {QStringLiteral("/usr/share"), QStringLiteral("/usr/local/share")}) {
-        path = prefix + "/NereusSDR/" + kModelFileName;
-        searched << path;
-        if (QFile::exists(path)) {
-            return path.toUtf8();
-        }
-    }
-
-    qCWarning(lcDsp) << "DeepFilterFilter: model not found. Searched:" << searched;
-    return {};
-}
-
 DeepFilterFilter::DeepFilterFilter()
 {
-    QByteArray modelPath = findModelPath();
+    QByteArray modelPath = NereusSDR::ModelPaths::dfnrModelTarball().toUtf8();
     if (modelPath.isEmpty()) {
+        qCWarning(lcDsp) << "DeepFilterFilter: model not found via ModelPaths::dfnrModelTarball() — DFNR disabled";
         return;
     }
     qCDebug(lcDsp) << "DeepFilterFilter: loading model from" << modelPath;
@@ -119,7 +71,7 @@ void DeepFilterFilter::reset()
         df_free(m_state);
         m_state = nullptr;
     }
-    QByteArray modelPath = findModelPath();
+    QByteArray modelPath = NereusSDR::ModelPaths::dfnrModelTarball().toUtf8();
     if (!modelPath.isEmpty()) {
         m_state = df_create(modelPath.constData(), m_attenLimit.load(), nullptr);
         if (m_state) {
