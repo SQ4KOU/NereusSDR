@@ -76,10 +76,12 @@ int AlexController::rxAnt(Band band) const
 }
 
 // Source: HPSDR/Alex.cs:setRxOnlyAnt / RxOnlyAnt[] accessor [@501e3f5]
+// Out-of-bounds sentinel returns 0 ("none selected") to match the in-range
+// default; returning 1 would silently activate the RX-bypass relay.
 int AlexController::rxOnlyAnt(Band band) const
 {
     const int b = int(band);
-    return (b >= 0 && b < kBandCount) ? m_rxOnlyAnt[b] : 1;
+    return (b >= 0 && b < kBandCount) ? m_rxOnlyAnt[b] : 0;
 }
 
 // Source: HPSDR/Alex.cs:setTxAnt(Band band, byte ant) [@501e3f5]
@@ -168,17 +170,24 @@ void AlexController::setBlockTxAnt3(bool on)
     emit blockTxChanged();
 }
 
-// Source: HPSDR/Alex.cs:SetAntennasTo1(bool IsSetTo1) [@501e3f5]
-// "SetAntennasTo1 causes RX, TX antennas to be set to 1 — the various RX bypass unaffected"
-// Original: "LimitTXRXAntenna = IsSetTo1;" (applies on next output frame via callers).
-// NereusSDR: applies immediately to all in-memory values and emits signals for each band.
+// Source: HPSDR/Alex.cs:SetAntennasTo1(bool IsSetTo1) [v2.10.3.13 @501e3f5]
+// Thetis original: "LimitTXRXAntenna = IsSetTo1;" — a flag consulted by
+// UpdateAlexAntSelection (Alex.cs:381-382) that clamps trx_ant to 1 at
+// composition time. The method comment is explicit: "SetAntennasTo1 causes
+// RX, TX antennas to be set to 1 — the various RX 'bypass' unaffected."
+//
+// NereusSDR: applies the TX/RX-antenna clamp immediately to in-memory
+// storage and emits per-band signals. The RX-only array is intentionally
+// left untouched to preserve Thetis semantics (the RX-bypass / XVTR port
+// selection is independent of external-ATU compat mode). Phase 3M-1 will
+// add the proper Aries/LimitTXRXAntenna flag-and-compose path; this
+// immediate-set form is a 3P-F carry-over kept here for UI wiring.
 void AlexController::setAntennasTo1(bool force)
 {
     if (!force) { return; }
     for (int b = 0; b < kBandCount; ++b) {
         m_txAnt[b] = 1;
         m_rxAnt[b] = 1;
-        m_rxOnlyAnt[b] = 1;
         emit antennaChanged(Band(b));
     }
 }

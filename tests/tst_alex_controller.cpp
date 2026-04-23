@@ -65,16 +65,19 @@ private slots:
         QCOMPARE(a.txAnt(Band::Band20m), 1);  // clamped low
     }
 
-    // setAntennasTo1 forces all bands to port 1
+    // setAntennasTo1 forces TX/RX antennas to port 1; RX-only untouched
+    // (Thetis Alex.cs:72-77 — "the various RX 'bypass' unaffected").
     void setAntennasTo1_forces_all_to_port1() {
         AlexController a;
         a.setTxAnt(Band::Band20m, 2);
         a.setRxAnt(Band::Band40m, 3);
+        a.setRxOnlyAnt(Band::Band30m, 2);  // RX-only pre-set — must survive
         a.setAntennasTo1(true);
         for (int b = int(Band::Band160m); b <= int(Band::XVTR); ++b) {
             QCOMPARE(a.txAnt(Band(b)), 1);
             QCOMPARE(a.rxAnt(Band(b)), 1);
         }
+        QCOMPARE(a.rxOnlyAnt(Band::Band30m), 2);  // RX-only intentionally preserved
     }
 
     // antennaChanged signal fires on per-band update
