@@ -34,7 +34,15 @@ private slots:
 
     void label_form_also_maps() {
         QCOMPARE(bandFromName(QStringLiteral("160m")), Band::Band160m);
+        QCOMPARE(bandFromName(QStringLiteral("80m")),  Band::Band80m);
+        QCOMPARE(bandFromName(QStringLiteral("60m")),  Band::Band60m);
+        QCOMPARE(bandFromName(QStringLiteral("40m")),  Band::Band40m);
+        QCOMPARE(bandFromName(QStringLiteral("30m")),  Band::Band30m);
         QCOMPARE(bandFromName(QStringLiteral("20m")),  Band::Band20m);
+        QCOMPARE(bandFromName(QStringLiteral("17m")),  Band::Band17m);
+        QCOMPARE(bandFromName(QStringLiteral("15m")),  Band::Band15m);
+        QCOMPARE(bandFromName(QStringLiteral("12m")),  Band::Band12m);
+        QCOMPARE(bandFromName(QStringLiteral("10m")),  Band::Band10m);
         QCOMPARE(bandFromName(QStringLiteral("6m")),   Band::Band6m);
     }
 
@@ -55,6 +63,25 @@ private slots:
         // NOT the canonical key and should fall back to GEN.
         QCOMPARE(bandFromName(QStringLiteral("gen")),  Band::GEN);
         QCOMPARE(bandFromName(QStringLiteral("wwv")),  Band::GEN);
+        // HF label form is case-sensitive too — "20M" uppercase does
+        // NOT match the canonical "20m" and must fall back.
+        QCOMPARE(bandFromName(QStringLiteral("20M")),  Band::GEN);
+        QCOMPARE(bandFromName(QStringLiteral("160M")), Band::GEN);
+        // Mixed-case special names must NOT match.
+        QCOMPARE(bandFromName(QStringLiteral("Xvtr")), Band::GEN);
+        QCOMPARE(bandFromName(QStringLiteral("Wwv")),  Band::GEN);
+    }
+
+    void edge_cases_fall_back_to_gen() {
+        // Whitespace-padded input is not trimmed — callers must pass
+        // clean strings. Pinning current behavior so a future "helpful"
+        // .trimmed() call doesn't silently change semantics.
+        QCOMPARE(bandFromName(QStringLiteral(" 20m")),    Band::GEN);
+        QCOMPARE(bandFromName(QStringLiteral("20m ")),    Band::GEN);
+        // Frequency-looking strings are not bands.
+        QCOMPARE(bandFromName(QStringLiteral("14155000")), Band::GEN);
+        // Null / default-constructed QString.
+        QCOMPARE(bandFromName(QString()),                  Band::GEN);
     }
 };
 
