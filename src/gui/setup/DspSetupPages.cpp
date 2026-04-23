@@ -59,6 +59,7 @@
 
 #include "DspSetupPages.h"
 
+#include "core/AppSettings.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -369,48 +370,83 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
 NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
     : SetupPage("NB/SNB", model, parent)
 {
+    auto& s = AppSettings::instance();
+
     // ── NB1 ───────────────────────────────────────────────────────────────────
+    // From Thetis setup.cs — tbNB1Threshold [v2.10.3.13]
+    // Default 30 maps to 0.165 * 30 = 4.95 (NbFamily scales slider→WDSP units).
     QGroupBox* nb1Grp = addSection("NB1");
     QVBoxLayout* nb1Lay = qobject_cast<QVBoxLayout*>(nb1Grp->layout());
 
     auto* nb1Thresh = new QSlider(Qt::Horizontal);
     nb1Thresh->setRange(0, 100);
+    nb1Thresh->setValue(s.value(QStringLiteral("NbDefaultThresholdSlider"), 30).toInt());
     addLabeledSlider(nb1Lay, "Threshold", nb1Thresh);
+    connect(nb1Thresh, &QSlider::valueChanged, [](int v) {
+        AppSettings::instance().setValue(QStringLiteral("NbDefaultThresholdSlider"), v);
+    });
 
+    // From Thetis cmaster.c:61 [v2.10.3.13] — NB2 mode (not NB1).
+    // The groupbox below is labelled "NB2" to match the actual WDSP object this
+    // combo controls (create_nobEXT mode arg). Thetis comboNB1Mode maps to
+    // NB2 internally; we preserve that naming here for Thetis parity.
     auto* nb1Mode = new QComboBox;
     nb1Mode->addItems({"Zero", "Gate", "Interpolate"});
-    addLabeledCombo(nb1Lay, "Mode", nb1Mode);
-
-    disableGroup(nb1Grp);
+    nb1Mode->setCurrentIndex(s.value(QStringLiteral("Nb2DefaultMode"), 0).toInt());
+    addLabeledCombo(nb1Lay, "NB2 Mode", nb1Mode);
+    connect(nb1Mode, QOverload<int>::of(&QComboBox::currentIndexChanged), [](int v) {
+        AppSettings::instance().setValue(QStringLiteral("Nb2DefaultMode"), v);
+    });
 
     // ── NB2 ───────────────────────────────────────────────────────────────────
+    // From Thetis setup.cs — tbNB2Threshold [v2.10.3.13]
+    // NOTE: Thetis CATNB2Threshold is a TODO stub in setup.cs; NB2 threshold
+    // tuning is not user-configurable at the Setup level in Thetis. The slider
+    // here persists the value but it is currently ignored by NbFamily until a
+    // follow-up task wires Nb2DefaultThresholdSlider → nb2Threshold in setTuning().
     QGroupBox* nb2Grp = addSection("NB2");
     QVBoxLayout* nb2Lay = qobject_cast<QVBoxLayout*>(nb2Grp->layout());
 
     auto* nb2Thresh = new QSlider(Qt::Horizontal);
     nb2Thresh->setRange(0, 100);
+    nb2Thresh->setValue(s.value(QStringLiteral("Nb2DefaultThresholdSlider"), 30).toInt());
     addLabeledSlider(nb2Lay, "Threshold", nb2Thresh);
-
-    disableGroup(nb2Grp);
+    connect(nb2Thresh, &QSlider::valueChanged, [](int v) {
+        AppSettings::instance().setValue(QStringLiteral("Nb2DefaultThresholdSlider"), v);
+    });
 
     // ── SNB ───────────────────────────────────────────────────────────────────
+    // From Thetis setup.cs — tbSNBK1, tbSNBK2, udSNBOutputBW [v2.10.3.13]
+    // SNB K1/K2/OutputBW are applied at WDSP snb.c create time; these keys are
+    // read by NbFamily when create_snba is wired (deferred). Values persisted now
+    // for future use.
     QGroupBox* snbGrp = addSection("SNB");
     QVBoxLayout* snbLay = qobject_cast<QVBoxLayout*>(snbGrp->layout());
 
     auto* snbK1 = new QSlider(Qt::Horizontal);
     snbK1->setRange(0, 100);
+    snbK1->setValue(s.value(QStringLiteral("SnbDefaultK1"), 30).toInt());
     addLabeledSlider(snbLay, "K1", snbK1);
+    connect(snbK1, &QSlider::valueChanged, [](int v) {
+        AppSettings::instance().setValue(QStringLiteral("SnbDefaultK1"), v);
+    });
 
     auto* snbK2 = new QSlider(Qt::Horizontal);
     snbK2->setRange(0, 100);
+    snbK2->setValue(s.value(QStringLiteral("SnbDefaultK2"), 30).toInt());
     addLabeledSlider(snbLay, "K2", snbK2);
+    connect(snbK2, &QSlider::valueChanged, [](int v) {
+        AppSettings::instance().setValue(QStringLiteral("SnbDefaultK2"), v);
+    });
 
     auto* snbOutBw = new QSpinBox;
     snbOutBw->setRange(100, 96000);
     snbOutBw->setSuffix(" Hz");
+    snbOutBw->setValue(s.value(QStringLiteral("SnbDefaultOutputBW"), 6000).toInt());
     addLabeledSpinner(snbLay, "Output Bandwidth", snbOutBw);
-
-    disableGroup(snbGrp);
+    connect(snbOutBw, QOverload<int>::of(&QSpinBox::valueChanged), [](int v) {
+        AppSettings::instance().setValue(QStringLiteral("SnbDefaultOutputBW"), v);
+    });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

@@ -162,6 +162,7 @@ warren@wpratt.com
 
 #include "NbFamily.h"
 
+#include "AppSettings.h"
 #include "wdsp_api.h"
 
 namespace NereusSDR {
@@ -193,6 +194,21 @@ NbFamily::NbFamily(int channelId, int sampleRate, int bufferSize)
     , m_bufferSize(bufferSize)
 {
 #ifdef HAVE_WDSP
+    // Global defaults from Setup → DSP → NB/SNB (persisted via NbSnbSetupPage).
+    // Per-slice-per-band values override these via SliceModel::nbTuning(),
+    // pushed through setTuning() once SliceModel calls setNbTuning().
+    // Scaling: slider 0-100 → WDSP units via 0.165× factor
+    //   (cmaster.c:43-53 [v2.10.3.13] default nbThreshold=0.165*30=4.95).
+    {
+        auto& s = AppSettings::instance();
+        m_tuning.nbThreshold  = 0.165 * s.value(QStringLiteral("NbDefaultThresholdSlider"), 30).toDouble();
+        m_tuning.nb2Mode      = s.value(QStringLiteral("Nb2DefaultMode"), 0).toInt();
+        m_tuning.nb2Threshold = 0.165 * s.value(QStringLiteral("Nb2DefaultThresholdSlider"), 30).toDouble();
+        // SNB K1/K2/OutputBW are applied at WDSP snb.c create time; read when
+        // create_snba is wired (deferred). Stored in AppSettings now via the
+        // NbSnbSetupPage but not yet consumed here.
+    }
+
     // From Thetis cmaster.c:43-53 [v2.10.3.13] — NB (anb) create call.
     // Run flag starts at 0; processIq() gates xanbEXTF on m_mode separately.
     create_anbEXT(
