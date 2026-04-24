@@ -178,6 +178,21 @@ else()
 endif()
 
 # --------------------------------------------------------------------------
+# libpipewire-0.3 — optional native Linux audio bridge (Phase 3O PipeWire).
+# Detection-only here; actual PipeWire sources land behind NEREUS_HAVE_PIPEWIRE
+# in follow-up tasks. If the dev package is absent the Linux audio path stays
+# on the existing pactl / LinuxPipeBus FIFO route.
+# --------------------------------------------------------------------------
+if(UNIX AND NOT APPLE)
+    pkg_check_modules(PIPEWIRE libpipewire-0.3>=0.3.50)
+    if(PIPEWIRE_FOUND)
+        message(STATUS "PipeWire ${PIPEWIRE_VERSION} — native Linux audio bridge enabled")
+    else()
+        message(STATUS "libpipewire-0.3 >= 0.3.50 not found — Linux audio limited to pactl path")
+    endif()
+endif()
+
+# --------------------------------------------------------------------------
 # WDSP DSP library (required for signal processing)
 # --------------------------------------------------------------------------
 option(ENABLE_WDSP "Build with WDSP DSP engine" ON)
@@ -628,6 +643,16 @@ if(FFTW3_FOUND)
     target_include_directories(NereusSDRObjs PUBLIC ${FFTW3_INCLUDE_DIRS})
     target_link_libraries(NereusSDRObjs PUBLIC ${FFTW3_LIBRARIES})
     target_compile_definitions(NereusSDRObjs PUBLIC HAVE_FFTW3)
+endif()
+
+# libpipewire-0.3 — gated by the pkg_check_modules block above. Only links on
+# Linux when the dev package is present; NEREUS_HAVE_PIPEWIRE lets follow-up
+# PipeWire sources compile conditionally.
+if(PIPEWIRE_FOUND)
+    target_link_libraries(NereusSDRObjs PRIVATE ${PIPEWIRE_LIBRARIES})
+    target_include_directories(NereusSDRObjs PRIVATE ${PIPEWIRE_INCLUDE_DIRS})
+    target_compile_options(NereusSDRObjs PRIVATE ${PIPEWIRE_CFLAGS_OTHER})
+    target_compile_definitions(NereusSDRObjs PRIVATE NEREUS_HAVE_PIPEWIRE)
 endif()
 
 if(WDSP_FOUND)
