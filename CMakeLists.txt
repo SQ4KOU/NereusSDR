@@ -659,6 +659,9 @@ if(PIPEWIRE_FOUND)
     target_include_directories(NereusSDRObjs PRIVATE ${PIPEWIRE_INCLUDE_DIRS})
     target_compile_options(NereusSDRObjs PRIVATE ${PIPEWIRE_CFLAGS_OTHER})
     target_compile_definitions(NereusSDRObjs PRIVATE NEREUS_HAVE_PIPEWIRE)
+    target_sources(NereusSDRObjs PRIVATE
+        src/core/audio/PipeWireThreadLoop.cpp
+    )
 endif()
 
 if(WDSP_FOUND)
