@@ -274,8 +274,21 @@ void PipeWireStream::onProcessOutput()
     if (!b) { m_xruns.fetch_add(1, std::memory_order_relaxed); return; }
 
     spa_buffer* sb = b->buffer;
+    if (!sb || !sb->datas[0].data || !sb->datas[0].chunk) {
+        // PipeWire fires on_process during PAUSED state to drive graph
+        // negotiation. The first such callback can deliver a buffer that is
+        // allocated but not yet wired (chunk or data pointer is null).
+        // Requeue and return cleanly — no data to consume, no crash.
+        pw_stream_queue_buffer(m_stream, b);
+        return;
+    }
+
     auto* dst = static_cast<uint8_t*>(sb->datas[0].data);
     const uint32_t dstCapacity = sb->datas[0].maxsize;
+    if (dstCapacity == 0) {
+        pw_stream_queue_buffer(m_stream, b);
+        return;
+    }
 
     const qint64 popped = m_ring.popInto(dst, qint64(dstCapacity));
     if (popped < qint64(dstCapacity)) {
@@ -308,8 +321,21 @@ void PipeWireStream::onProcessInput()
     if (!b) { m_xruns.fetch_add(1, std::memory_order_relaxed); return; }
 
     const spa_buffer* sb = b->buffer;
+    if (!sb || !sb->datas[0].data || !sb->datas[0].chunk) {
+        // Same negotiation-phase guard as onProcessOutput: PAUSED-state
+        // callbacks can deliver a buffer with null data/chunk pointers.
+        // Requeue and return cleanly.
+        pw_stream_queue_buffer(m_stream, b);
+        return;
+    }
+
     const auto* src = static_cast<const uint8_t*>(sb->datas[0].data);
     const uint32_t size = sb->datas[0].chunk->size;
+    if (size == 0) {
+        pw_stream_queue_buffer(m_stream, b);
+        return;
+    }
+
     m_ring.pushCopy(src, qint64(size));
 
     pw_stream_queue_buffer(m_stream, b);
