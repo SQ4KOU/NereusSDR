@@ -1082,6 +1082,9 @@ void SliceModel::saveToSettings(Band band)
     s.setValue(sp + QStringLiteral("RfGain"),     m_rfGain);
     s.setValue(sp + QStringLiteral("RxAntenna"),  m_rxAntenna);
     s.setValue(sp + QStringLiteral("TxAntenna"),  m_txAntenna);
+
+    // Phase 3O Task 15 — per-slice PipeWire sink routing.
+    s.setValue(sp + QStringLiteral("SinkNodeName"), m_sinkNodeName);
 }
 
 void SliceModel::restoreFromSettings(Band band)
@@ -1400,6 +1403,14 @@ void SliceModel::setVaxChannel(int ch)
     emit vaxChannelChanged(ch);
 }
 
+// ── Phase 3O Task 15: per-slice PipeWire sink routing ─────────────────────
+void SliceModel::setSinkNodeName(const QString& v)
+{
+    if (m_sinkNodeName == v) { return; }
+    m_sinkNodeName = v;
+    emit sinkNodeNameChanged(v);
+}
+
 void SliceModel::loadFromSettings()
 {
     auto& s = AppSettings::instance();
@@ -1413,6 +1424,11 @@ void SliceModel::loadFromSettings()
         m_vaxChannel.store(vaxCh, std::memory_order_release);
         emit vaxChannelChanged(vaxCh);
     }
+
+    // Phase 3O Task 15 — per-slice PipeWire sink routing.
+    // Use the setter (not direct assignment) so sinkNodeNameChanged fires on restore.
+    setSinkNodeName(s.value(slicePrefix(m_sliceIndex) + QStringLiteral("SinkNodeName"),
+                            QStringLiteral("")).toString());
 }
 
 } // namespace NereusSDR

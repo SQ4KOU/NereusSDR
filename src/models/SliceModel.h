@@ -261,6 +261,10 @@ class SliceModel : public QObject {
     Q_PROPERTY(int    rttyMarkHz      READ rttyMarkHz      WRITE setRttyMarkHz      NOTIFY rttyMarkHzChanged)
     Q_PROPERTY(int    rttyShiftHz     READ rttyShiftHz     WRITE setRttyShiftHz     NOTIFY rttyShiftHzChanged)
 
+    // ── Phase 3O Task 15: per-slice PipeWire sink routing ─────────────────────
+    Q_PROPERTY(QString sinkNodeName READ sinkNodeName WRITE setSinkNodeName
+               NOTIFY sinkNodeNameChanged)
+
 public:
     explicit SliceModel(QObject* parent = nullptr);
     // Convenience constructor that initialises m_sliceIndex directly.
@@ -608,6 +612,13 @@ public:
     int vaxChannel() const { return m_vaxChannel.load(std::memory_order_acquire); }
     void setVaxChannel(int ch);
 
+    // ── Phase 3O Task 15: per-slice PipeWire sink routing ─────────────────────
+    // Empty string = route to Primary output (default).
+    // Non-empty = PipeWire node.name to target.
+    // Task 16 reads this in AudioEngine::rxBlockReady to dispatch per-target buses.
+    QString sinkNodeName() const { return m_sinkNodeName; }
+    void setSinkNodeName(const QString& v);
+
 public slots:
     // Phase 3P-I-a T13 — refresh cached antenna values from AlexController
     // for the given band. Called by RadioModel on
@@ -708,6 +719,9 @@ signals:
 
     // ── Phase 3O VAX routing ──────────────────────────────────────────────────
     void vaxChannelChanged(int ch);
+
+    // ── Phase 3O Task 15: per-slice PipeWire sink routing ─────────────────────
+    void sinkNodeNameChanged(const QString& value);
 
 private:
     double  m_frequency{14225000.0};     // Default: 14.225 MHz (20m USB)
@@ -825,6 +839,11 @@ private:
 
     // ── Phase 3O VAX routing ──────────────────────────────────────────────────
     std::atomic<int> m_vaxChannel{0};  // 0=Off, 1..4=VAX N. Atomic for audio-thread-safe reads.
+
+    // ── Phase 3O Task 15: per-slice PipeWire sink routing ─────────────────────
+    // Empty = route to Primary output. Non-empty = PipeWire node.name to target.
+    // QString default-initializes to empty string — no explicit init needed.
+    QString m_sinkNodeName;
 };
 
 } // namespace NereusSDR

@@ -213,6 +213,9 @@ nereus_add_test(tst_vax_first_run_dialog)
 
 # ── Phase 3O VAX routing ──────────────────────────────────────────────────
 nereus_add_test(tst_slice_model_vax)
+
+# ── Phase 3O Task 15: SliceModel::sinkNodeName per-slice audio routing ───────
+nereus_add_test(tst_slice_sink_routing)
 nereus_add_test(tst_transmit_model_tx_owner)
 
 # ── Phase 3O VAX schema migration ─────────────────────────────────────────
