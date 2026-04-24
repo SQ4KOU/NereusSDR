@@ -481,6 +481,20 @@ MainWindow::MainWindow(QWidget* parent)
     // Deferred via singleShot(0, ...) so the UI is fully built first.
     QTimer::singleShot(0, this, &MainWindow::checkVaxFirstRun);
 
+    // Task 23 — auto-open the Linux audio first-run dialog when no backend
+    // is detected on this host. The check is deferred via singleShot(0, ...)
+    // so the event loop is spinning before the modal dialog is posted.
+    // The dialog's Dismiss button (Task 18) sets Audio/LinuxFirstRunSeen=True,
+    // so this trigger fires at most once per user installation.
+#if defined(Q_OS_LINUX)
+    if (m_radioModel->audioEngine()->linuxBackend() == LinuxAudioBackend::None
+        && AppSettings::instance().value(QStringLiteral("Audio/LinuxFirstRunSeen"),
+                                          QStringLiteral("False")).toString()
+               != QStringLiteral("True")) {
+        QTimer::singleShot(0, this, &MainWindow::showAudioDiagnoseDialog);
+    }
+#endif
+
     // Defensive save on aboutToQuit. closeEvent is fine for ⌘Q but
     // does NOT run when the process is signaled (SIGTERM from pkill,
     // Activity Monitor force-quit, debugger detach). Without this
