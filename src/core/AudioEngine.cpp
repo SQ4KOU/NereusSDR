@@ -757,11 +757,6 @@ void AudioEngine::setHeadphonesBusForTest(std::unique_ptr<IAudioBus> bus)
     m_headphonesBus = std::move(bus);
 }
 
-void AudioEngine::installFakeBusForTest(const QString& key,
-                                        std::unique_ptr<IAudioBus> bus)
-{
-    m_routedBuses[key] = std::move(bus);
-}
 #endif
 
 void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
@@ -833,29 +828,6 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
                         payloadBytes);
                 }
             }
-        }
-    }
-
-    // Per-slice sinkNodeName routing (Phase 3O Task 16). Additive tap
-    // parallel to the VAX tap above. Only fires for non-empty sinkNodeName
-    // — empty key falls through to the master-mix-to-speakers default.
-    const QString sinkKey = slice->sinkNodeName();
-    if (!sinkKey.isEmpty()) {
-        auto it = m_routedBuses.find(sinkKey);
-        if (it == m_routedBuses.end()) {
-            auto bus = makePrimaryOut(sinkKey);
-            if (bus) {
-                auto [inserted, ok] =
-                    m_routedBuses.emplace(sinkKey, std::move(bus));
-                it = inserted;
-                Q_UNUSED(ok);
-            }
-        }
-        if (it != m_routedBuses.end() && it->second && it->second->isOpen()) {
-            const qint64 payloadBytes =
-                static_cast<qint64>(frames) * 2 * sizeof(float);
-            it->second->push(reinterpret_cast<const char*>(samples),
-                             payloadBytes);
         }
     }
 

@@ -10,7 +10,6 @@
 // Audio
 #include "setup/AudioBackendStrip.h"
 #include "setup/AudioDevicesPage.h"
-#include "setup/AudioOutputPage.h"
 #include "setup/AudioVaxPage.h"
 #include "setup/AudioTciPage.h"
 #include "setup/AudioAdvancedPage.h"
@@ -188,7 +187,6 @@ void SetupDialog::buildTree()
     // ── Audio ─────────────────────────────────────────────────────────────────
     QTreeWidgetItem* audio = addCategory("Audio");
     addWrapped(audio, "Devices",  wrapWithAudioBackendStrip(new AudioDevicesPage(m_model)));
-    addWrapped(audio, "Output",   wrapWithAudioBackendStrip(new AudioOutputPage(m_model->audioEngine(), m_model)));
     addWrapped(audio, "VAX",      wrapWithAudioBackendStrip(new AudioVaxPage(m_model)));
     addWrapped(audio, "TCI",      wrapWithAudioBackendStrip(new AudioTciPage(m_model)));
     addWrapped(audio, "Advanced", wrapWithAudioBackendStrip(new AudioAdvancedPage(m_model)));

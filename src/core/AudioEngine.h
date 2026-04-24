@@ -77,7 +77,6 @@ namespace NereusSDR { class PipeWireThreadLoop; }
 
 #include <array>
 #include <atomic>
-#include <map>
 #include <memory>
 #include <mutex>
 
@@ -163,12 +162,6 @@ public:
     // Test seam — inject a fake IAudioBus into the headphones slot.
     void setHeadphonesBusForTest(std::unique_ptr<IAudioBus> bus);
 
-    // Phase 3O Task 16: lets tests pre-install a stub bus into
-    // m_routedBuses without having a real PipeWire daemon. Key matches
-    // SliceModel::sinkNodeName() — empty string never reaches the
-    // cache lookup (see rxBlockReady's empty-key fast path).
-    void installFakeBusForTest(const QString& key,
-                               std::unique_ptr<IAudioBus> bus);
 #endif
 
     // Called by RxDspWorker when a slice produces an RX audio block.
@@ -337,15 +330,6 @@ private:
     // Opened in start(), reset in stop(); consumption is a Phase 3M concern.
     std::unique_ptr<IAudioBus> m_vaxTxBus;
     std::array<std::unique_ptr<IAudioBus>, 4> m_vaxBus;
-    // Phase 3O Task 16: per-target output bus cache, keyed by
-    // SliceModel::sinkNodeName(). Lazily populated by rxBlockReady on
-    // first push for each unique key. Forward Contract #1: must be
-    // destroyed BEFORE m_pwLoop (declared LAST in this class) so each
-    // PipeWireBus dtor can take m_loop->lock() during teardown.
-    // std::map chosen over QHash: QHash requires copyable value types
-    // (its node pool copies on rehash), while unique_ptr is move-only.
-    // std::map<QString,...> uses Qt's operator< and compiles cleanly.
-    std::map<QString, std::unique_ptr<IAudioBus>> m_routedBuses;
     MasterMixer m_masterMix;
 
     // Speakers format last negotiated. frames passed to rxBlockReady may

@@ -214,17 +214,7 @@ nereus_add_test(tst_vax_first_run_dialog)
 # ── Phase 3O VAX routing ──────────────────────────────────────────────────
 nereus_add_test(tst_slice_model_vax)
 
-# ── Phase 3O Task 15: SliceModel::sinkNodeName per-slice audio routing ───────
-nereus_add_test(tst_slice_sink_routing)
 nereus_add_test(tst_transmit_model_tx_owner)
-
-# ── Phase 3O Task 16: AudioEngine per-slice sinkNodeName route dispatch ───────
-# Exercises the rxBlockReady → m_routedBuses[] dispatch using FakeAudioBus
-# injected via the NEREUS_BUILD_TESTS-only installFakeBusForTest seam.
-# Three cases: empty-key fast path skips push, named-key hits cached bus,
-# changed key reroutes to new bus. No real PipeWire daemon required.
-nereus_add_test(tst_audio_engine_route_dispatch)
-target_compile_definitions(tst_audio_engine_route_dispatch PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3O VAX schema migration ─────────────────────────────────────────
 nereus_add_test(tst_app_settings_vax_migration)

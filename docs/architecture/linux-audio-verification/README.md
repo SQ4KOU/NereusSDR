@@ -40,7 +40,7 @@
 
 | # | Distro | PipeWire | pactl | Expected detection | Scenarios |
 |---|--------|----------|-------|--------------------|-----------|
-| A | Ubuntu 25.10 (bare metal) | ✓ 1.4.7 | ✗ | PipeWire | VAX → WSJT-X, sidetone on USB headphones, per-slice routing, reconnect on device replug |
+| A | Ubuntu 25.10 (bare metal) | ✓ 1.4.7 | ✗ | PipeWire | VAX → WSJT-X, sidetone on USB headphones, reconnect on device replug |
 | B | Ubuntu 22.04 LTS | 0.3.48 (under 0.3.50 floor) | ✓ | Pactl | VAX → WSJT-X, single speakers sink |
 | C | Ubuntu 20.04 LTS (VM) | ✗ | ✓ | Pactl | VAX → WSJT-X, single speakers sink |
 | D | Fedora 41 | ✓ | maybe ✓ | PipeWire | Full scenarios (A's set) |
@@ -67,7 +67,6 @@ container (G) must be filled before merging `ubuntu-dev` to `main`.
 | Primary sink default routing | Speakers + master mix audible | _user-pending_ | Requires GUI session — not testable in headless ssh. |
 | CW sidetone on USB headphones | Separate stream visible in `pw-cli`, audible in headphones only | _user-pending_ | |
 | TX MON on third sink | Separate stream, audible | _user-pending_ | |
-| Per-slice sinkNodeName routing | Slice 2 routed to alt sink, audio audibly splits | _user-pending_ | |
 | Device replug recovery | Unplug + replug headphones; sidetone reroutes | _user-pending_ | |
 | 10-min soak — latency | Measured (target ≤ 15 ms total RX → speakers) | _user-pending_ | |
 | 10-min soak — xrun count | Target 0; record actual | _user-pending_ | |
