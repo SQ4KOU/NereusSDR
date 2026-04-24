@@ -662,6 +662,7 @@ if(PIPEWIRE_FOUND)
     target_sources(NereusSDRObjs PRIVATE
         src/core/audio/PipeWireThreadLoop.cpp
         src/core/audio/PipeWireStream.cpp
+        src/core/audio/PipeWireBus.cpp
     )
 endif()
 
