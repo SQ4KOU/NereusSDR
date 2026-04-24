@@ -388,8 +388,14 @@ endif()
 # module-pipe-sink. The header compiles on all platforms (falls through to
 # error stubs off Linux) but the .cpp uses mkfifo / QProcess(pactl), so only
 # compile it on Linux targets. Phase 3O Sub-Phase 6 Task 6.1.
+#
+# LinuxAudioBackend — pure detection logic for the PipeWire-native bridge.
+# Uses only Qt + std (no PipeWire symbols) so it is NOT gated on
+# PIPEWIRE_FOUND. Linux-only because the whole decision tree is dead code
+# on macOS / Windows (which have their own IAudioBus impls).
 if(UNIX AND NOT APPLE)
     list(APPEND CORE_SOURCES src/core/audio/LinuxPipeBus.cpp)
+    list(APPEND CORE_SOURCES src/core/audio/LinuxAudioBackend.cpp)
 endif()
 
 set(MODEL_SOURCES

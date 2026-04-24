@@ -250,6 +250,16 @@ if(UNIX AND NOT APPLE)
     nereus_add_test(tst_linux_pipe_bus)
 endif()
 
+# ── Linux audio backend detection (PipeWire-native bridge, Task 3) ───────────
+# Pure unit test: injects stub probe callbacks into detectLinuxBackend() to
+# cover all 8 (pipewire × pactl × forced-override) combinations plus the
+# forced-unknown fall-through and toString mapping. No real daemon required.
+# The .cpp providing detectLinuxBackend/toString/defaultProbes is in the
+# Linux-only CORE_SOURCES branch, so the test binary is Linux-only to match.
+if(UNIX AND NOT APPLE)
+    nereus_add_test(tst_linux_backend_detection)
+endif()
+
 # ── Phase 3O Sub-Phase 7 Task 7.1: VirtualCableDetector ──────────────────────
 nereus_add_test(tst_virtual_cable_detector)
 
