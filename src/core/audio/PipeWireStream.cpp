@@ -342,7 +342,17 @@ void PipeWireStream::onProcessInput()
         return;
     }
 
-    m_ring.pushCopy(src, qint64(size));
+    // Non-blocking write: this runs on PipeWire's data thread, which
+    // the daemon SIGKILLs if it doesn't return within the per-quantum
+    // budget. Yielding (the original pushCopy contract) is fatal here.
+    // tryPushCopy returns whatever fits in the current free space; any
+    // shortfall is counted as an xrun (data dropped because the
+    // consumer — the TX DSP, Phase 3M — isn't keeping up or doesn't
+    // exist yet).
+    const qint64 written = m_ring.tryPushCopy(src, qint64(size));
+    if (written < qint64(size)) {
+        m_xruns.fetch_add(1, std::memory_order_relaxed);
+    }
 
     pw_stream_queue_buffer(m_stream, b);
 

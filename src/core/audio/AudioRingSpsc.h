@@ -57,6 +57,39 @@ public:
     //       space. This is still lock-free under the SPSC definition —
     //       we never take a mutex — and it preserves the invariant
     //       that a successfully-accepted byte is delivered in order.
+    // Non-blocking variant for RT producers that MUST NOT yield.
+    // Writes whatever fits in the current free space; returns the byte
+    // count actually written (0 if the ring was full). Caller is
+    // responsible for tracking the dropped portion (overflow counter).
+    //
+    // Required for PipeWire data-thread producers (onProcessInput): the
+    // PipeWire daemon SIGKILLs clients whose data thread blocks beyond
+    // the per-quantum budget, so the regular pushCopy yield-loop is
+    // fatal there. Use this for any producer running on a thread that
+    // a real-time daemon polices.
+    qint64 tryPushCopy(const uint8_t* src, qint64 bytes) {
+        if (bytes <= 0) { return 0; }
+        size_t want = size_t(bytes);
+        if (want > kCapacity - 1) {
+            src  += (want - (kCapacity - 1));
+            want  = kCapacity - 1;
+        }
+        const size_t wr = m_wr.load(std::memory_order_relaxed);
+        const size_t rd = m_rd.load(std::memory_order_acquire);
+        const size_t free = (kCapacity - 1) - (wr - rd);
+        if (free == 0) { return 0; }
+        if (want > free) { want = free; }   // partial write
+        const size_t writeIdx = wr & kMask;
+        const size_t firstChunk =
+            (kCapacity - writeIdx < want) ? kCapacity - writeIdx : want;
+        std::memcpy(&m_buf[writeIdx], src, firstChunk);
+        if (firstChunk < want) {
+            std::memcpy(&m_buf[0], src + firstChunk, want - firstChunk);
+        }
+        m_wr.store(wr + want, std::memory_order_release);
+        return qint64(want);
+    }
+
     qint64 pushCopy(const uint8_t* src, qint64 bytes) {
         if (bytes <= 0) { return 0; }
         size_t want = size_t(bytes);
