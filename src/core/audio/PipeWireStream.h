@@ -103,6 +103,7 @@ private:
     std::atomic<int>      m_schedPriority{0};
     std::atomic<bool>     m_schedProbed{false};
 
+    // FIXME(task-9-followup): QString assignment from pw event thread races with telemetry() read from GUI thread; promote to std::atomic<int> + switch.
     QString m_stateName = QStringLiteral("closed");
 };
 

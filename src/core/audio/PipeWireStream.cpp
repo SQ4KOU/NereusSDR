@@ -139,6 +139,9 @@ bool PipeWireStream::open()
 // ---------------------------------------------------------------------------
 void PipeWireStream::close()
 {
+    // loop.lock() blocks until any in-flight onProcessCb() (and the
+    // maybeEmitTelemetry call inside it) completes — so m_stream is
+    // safe to destroy without racing the pw data thread.
     if (!m_stream) { return; }
     m_loop->lock();
     pw_stream_disconnect(m_stream);
@@ -172,9 +175,10 @@ PipeWireStream::Telemetry PipeWireStream::telemetry() const {
     t.processCbCpuPct   = m_cpuPct.load();
     t.measuredLatencyMs = m_latencyMs.load();
     t.deviceLatencyMs   = m_deviceLatencyMs.load();
-    t.ringDepthMs       = double(m_ring.usedBytes())
-                        / (m_cfg.rate * m_cfg.channels * sizeof(float)) * 1000.0;
-    t.pwQuantumMs       = double(m_cfg.quantum) / m_cfg.rate * 1000.0;
+    t.ringDepthMs       = m_cfg.rate
+        ? double(m_ring.usedBytes()) / (m_cfg.rate * m_cfg.channels * sizeof(float)) * 1000.0
+        : 0.0;
+    t.pwQuantumMs       = m_cfg.rate ? double(m_cfg.quantum) / m_cfg.rate * 1000.0 : 0.0;
     t.schedPolicy       = m_schedPolicy.load(std::memory_order_relaxed);
     t.schedPriority     = m_schedPriority.load(std::memory_order_relaxed);
     return t;
@@ -287,9 +291,12 @@ void PipeWireStream::onProcessInput()
 }
 
 // ---------------------------------------------------------------------------
-// maybeEmitTelemetry() — coalesced 1 Hz telemetry update from pw data thread.
-// pw_stream_get_time_n() is RT-safe. QMetaObject::invokeMethod with
-// QueuedConnection crosses to the GUI thread without touching the loop lock.
+// 1 Hz coalesced telemetry update from the pw data thread.
+// pw_stream_get_time_n() is RT-safe (per pipewire/stream.h:591). The
+// QueuedConnection emit is NOT strictly RT-safe — it allocates a
+// QMetaCallEvent and briefly locks the receiver's event-queue mutex —
+// but the 1 Hz gate makes the cost ~1×/sec, far below the per-quantum
+// budget. Re-evaluate if you ever drop the 1 Hz coalesce.
 // ---------------------------------------------------------------------------
 void PipeWireStream::maybeEmitTelemetry()
 {
