@@ -130,6 +130,9 @@ AudioEngine::AudioEngine(QObject* parent)
             qCWarning(lcAudio) << "PipeWire connect failed — falling back to Pactl detection";
             m_pwLoop.reset();
             m_linuxBackend = LinuxAudioBackend::Pactl;
+            // No linuxBackendChanged emit here — ctor runs before any subscriber
+            // (UI / SetupDialog) has been wired. rescanLinuxBackend() emits on
+            // the same condition because by then subscribers exist.
         }
     }
 #  endif
@@ -154,6 +157,10 @@ AudioEngine::AudioEngine(QObject* parent)
 
 AudioEngine::~AudioEngine()
 {
+    // FORWARD CONTRACT #1: stop() drops every IAudioBus member explicitly
+    // here, while m_pwLoop is still alive. Implicit member-teardown order
+    // (m_pwLoop declared LAST → destroyed LAST) is the second line of defense.
+    // See AudioEngine.h §"FORWARD CONTRACT #1 — DECLARED LAST".
     stop();
     if (m_paInitialized) {
         Pa_Terminate();
@@ -228,6 +235,9 @@ void AudioEngine::start()
         if (m_vaxTxBus) {
             qCInfo(lcAudio) << "VAX TX bus opened (eager)"
                             << "[" << m_vaxTxBus->backendName() << "]";
+        } else {
+            qCWarning(lcAudio) << "VAX TX bus open failed — TX disabled "
+                                  "(see preceding LinuxPipeBus / PipeWireBus log)";
         }
         // TODO(phase3M): pull TX audio from m_vaxTxBus when
         // TransmitModel::txOwnerSlot() != MicDirect. The bus is opened
@@ -403,6 +413,19 @@ std::unique_ptr<IAudioBus> AudioEngine::makeVaxTxBus()
     }
     return bus;
 #elif defined(Q_OS_LINUX)
+#  ifdef NEREUS_HAVE_PIPEWIRE
+    if (m_linuxBackend == LinuxAudioBackend::PipeWire && m_pwLoop) {
+        auto bus = std::make_unique<PipeWireBus>(
+            PipeWireBus::Role::TxInput, m_pwLoop.get());
+        if (!bus->open(fmt)) {
+            qCWarning(lcAudio) << "PipeWireBus open failed for VAX TX:"
+                               << bus->errorString();
+            return nullptr;
+        }
+        return bus;
+    }
+#  endif
+    // Pactl fallback: existing LinuxPipeBus path — unchanged.
     auto bus = std::make_unique<LinuxPipeBus>(LinuxPipeBus::Role::TxInput);
     if (!bus->open(fmt)) {
         qCWarning(lcAudio) << "LinuxPipeBus open failed for VAX TX:"

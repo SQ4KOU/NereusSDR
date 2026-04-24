@@ -384,13 +384,13 @@ private:
     //
     // C++ destroys class members in REVERSE declaration order. m_pwLoop is
     // declared after all bus members (m_vaxBus, m_speakersBus, m_headphonesBus,
-    // m_txInputBus, m_vaxTxBus, m_masterMix, m_linuxBackend) so that on
-    // destruction the buses are torn down BEFORE the loop. Each ~PipeWireBus()
-    // calls close() → PipeWireStream::close() which takes m_loop->lock(); the
-    // loop must still be alive at that point. If m_pwLoop were declared earlier
-    // (higher up in the class), its destructor would run first — the loop
-    // thread would stop, and then the bus dtors would attempt to take a lock
-    // on a destroyed loop, deadlocking or crashing the audio thread.
+    // m_txInputBus, m_vaxTxBus, m_masterMix) so that on destruction the buses
+    // are torn down BEFORE the loop. Each ~PipeWireBus() calls close() →
+    // PipeWireStream::close() which takes m_loop->lock(); the loop must still
+    // be alive at that point. If m_pwLoop were declared earlier (higher up in
+    // the class), its destructor would run first — the loop thread would stop,
+    // and then the bus dtors would attempt to take a lock on a destroyed loop,
+    // deadlocking or crashing the audio thread.
     //
     // The DSP producer (rxBlockReady) must also have stopped feeding push()
     // before destruction. AudioEngine::stop() handles this; the caller
