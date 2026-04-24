@@ -655,10 +655,10 @@ endif()
 # Linux when the dev package is present; NEREUS_HAVE_PIPEWIRE lets follow-up
 # PipeWire sources compile conditionally.
 if(PIPEWIRE_FOUND)
-    target_link_libraries(NereusSDRObjs PRIVATE ${PIPEWIRE_LIBRARIES})
-    target_include_directories(NereusSDRObjs PRIVATE ${PIPEWIRE_INCLUDE_DIRS})
-    target_compile_options(NereusSDRObjs PRIVATE ${PIPEWIRE_CFLAGS_OTHER})
-    target_compile_definitions(NereusSDRObjs PRIVATE NEREUS_HAVE_PIPEWIRE)
+    target_link_libraries(NereusSDRObjs PUBLIC ${PIPEWIRE_LIBRARIES})
+    target_include_directories(NereusSDRObjs PUBLIC ${PIPEWIRE_INCLUDE_DIRS})
+    target_compile_options(NereusSDRObjs PUBLIC ${PIPEWIRE_CFLAGS_OTHER})
+    target_compile_definitions(NereusSDRObjs PUBLIC NEREUS_HAVE_PIPEWIRE)
     target_sources(NereusSDRObjs PRIVATE
         src/core/audio/PipeWireThreadLoop.cpp
         src/core/audio/PipeWireStream.cpp
