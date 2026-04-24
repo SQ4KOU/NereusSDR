@@ -28,7 +28,6 @@ public:
     pw_core*        core() const { return m_core; }
 
     QString serverVersion() const { return m_serverVersion; }
-    bool    rtGranted()     const { return m_rtGranted; }
 
     void lock()   { if (m_loop) { pw_thread_loop_lock(m_loop); } }
     void unlock() { if (m_loop) { pw_thread_loop_unlock(m_loop); } }
@@ -39,7 +38,6 @@ private:
     pw_core*        m_core    = nullptr;
 
     QString m_serverVersion;
-    bool    m_rtGranted = false;
 };
 
 }  // namespace NereusSDR

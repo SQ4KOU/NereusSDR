@@ -8,8 +8,6 @@
 
 #include <QLoggingCategory>
 #include <pipewire/pipewire.h>
-#include <pthread.h>
-#include <sched.h>
 
 Q_LOGGING_CATEGORY(lcPw, "nereussdr.pipewire")
 
@@ -30,6 +28,10 @@ PipeWireThreadLoop::~PipeWireThreadLoop()
     // mid-push, the producer spins forever. AudioEngine's dtor therefore
     // tears down DSP-facing state (stops feeding rxBlockReady) BEFORE
     // destroying the PipeWireThreadLoop. Do not reorder.
+    // Stop the loop thread BEFORE disconnect/destroy so no pw callback
+    // races with teardown. pw_thread_loop_destroy() also stops internally,
+    // but that runs AFTER we've disconnected core/destroyed context — too
+    // late. The duplicate-stop is intentional, not accidental.
     if (m_loop) {
         pw_thread_loop_stop(m_loop);
     }
@@ -69,19 +71,9 @@ bool PipeWireThreadLoop::connect()
     // Record server version for the Setup backend strip.
     m_serverVersion = QString::fromUtf8(pw_get_library_version());
 
-    // RT scheduling probe — check whether the CURRENT thread runs with
-    // a realtime policy. This is a proxy for "can our pw_thread_loop
-    // get RT?" — pipewire inherits policy from the creating thread via
-    // rtkit. If it was refused here, it'll be refused on the pw thread.
-    int policy = SCHED_OTHER;
-    sched_param param{};
-    if (pthread_getschedparam(pthread_self(), &policy, &param) == 0) {
-        m_rtGranted = (policy == SCHED_FIFO || policy == SCHED_RR);
-    }
-
     unlock();
     qCInfo(lcPw) << "PipeWire thread loop connected — server version"
-                 << m_serverVersion << "RT granted:" << m_rtGranted;
+                 << m_serverVersion;
     return true;
 }
 
