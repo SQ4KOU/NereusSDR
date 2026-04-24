@@ -62,6 +62,8 @@ public:
         double   processCbCpuPct      = 0.0;
         QString  streamStateName      = QStringLiteral("closed");
         int      consumerCount        = 0;
+        int      schedPolicy          = -1;   // SCHED_OTHER / SCHED_FIFO / SCHED_RR / -1=unprobed
+        int      schedPriority        = 0;
     };
     Telemetry telemetry() const;
 
@@ -82,6 +84,7 @@ private:
 
     void onProcessOutput();
     void onProcessInput();
+    void maybeEmitTelemetry();
 
     PipeWireThreadLoop* m_loop;
     StreamConfig        m_cfg;
@@ -95,6 +98,10 @@ private:
     std::atomic<double>   m_cpuPct{0.0};
     std::atomic<double>   m_latencyMs{0.0};
     std::atomic<double>   m_deviceLatencyMs{0.0};
+    std::atomic<qint64>   m_lastTelemetryNs{0};
+    std::atomic<int>      m_schedPolicy{-1};
+    std::atomic<int>      m_schedPriority{0};
+    std::atomic<bool>     m_schedProbed{false};
 
     QString m_stateName = QStringLiteral("closed");
 };

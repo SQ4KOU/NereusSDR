@@ -9,7 +9,11 @@
 #include <QLoggingCategory>
 #include <pipewire/keys.h>
 
+#include <chrono>
 #include <cstring>
+#include <pthread.h>
+#include <sched.h>
+#include <time.h>
 
 #include "core/audio/PipeWireThreadLoop.h"
 
@@ -163,11 +167,16 @@ qint64 PipeWireStream::pull(char*, qint64)       { return 0; }    // Task 11
 // ---------------------------------------------------------------------------
 PipeWireStream::Telemetry PipeWireStream::telemetry() const {
     Telemetry t;
-    t.streamStateName = m_stateName;
-    t.xrunCount = m_xruns.load();
-    t.processCbCpuPct = m_cpuPct.load();
+    t.streamStateName   = m_stateName;
+    t.xrunCount         = m_xruns.load();
+    t.processCbCpuPct   = m_cpuPct.load();
     t.measuredLatencyMs = m_latencyMs.load();
-    t.deviceLatencyMs = m_deviceLatencyMs.load();
+    t.deviceLatencyMs   = m_deviceLatencyMs.load();
+    t.ringDepthMs       = double(m_ring.usedBytes())
+                        / (m_cfg.rate * m_cfg.channels * sizeof(float)) * 1000.0;
+    t.pwQuantumMs       = double(m_cfg.quantum) / m_cfg.rate * 1000.0;
+    t.schedPolicy       = m_schedPolicy.load(std::memory_order_relaxed);
+    t.schedPriority     = m_schedPriority.load(std::memory_order_relaxed);
     return t;
 }
 
@@ -226,6 +235,25 @@ void PipeWireStream::onProcessCb(void* userData)
 // ---------------------------------------------------------------------------
 void PipeWireStream::onProcessOutput()
 {
+    timespec t0{}, t1{};
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t0);
+
+    // One-shot RT-scheduling probe on the pw data thread — this is the actual
+    // thread where rtkit's RT grant lands (not Qt main). See forward contract
+    // from f35cc7b which removed the probe from PipeWireThreadLoop::connect().
+    if (!m_schedProbed.load(std::memory_order_relaxed)) {
+        int policy = SCHED_OTHER;
+        sched_param param{};
+        if (pthread_getschedparam(pthread_self(), &policy, &param) == 0) {
+            m_schedPolicy.store(policy, std::memory_order_relaxed);
+            m_schedPriority.store(param.sched_priority, std::memory_order_relaxed);
+            qCInfo(lcPw) << "pw data thread sched policy:" << policy
+                         << "priority:" << param.sched_priority
+                         << "for stream:" << m_cfg.nodeName;
+        }
+        m_schedProbed.store(true, std::memory_order_relaxed);
+    }
+
     pw_buffer* b = pw_stream_dequeue_buffer(m_stream);
     if (!b) { m_xruns.fetch_add(1, std::memory_order_relaxed); return; }
 
@@ -242,11 +270,56 @@ void PipeWireStream::onProcessOutput()
     sb->datas[0].chunk->stride = sizeof(float) * m_cfg.channels;
     sb->datas[0].chunk->size   = dstCapacity;
     pw_stream_queue_buffer(m_stream, b);
+
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t1);
+    const double cbNs = double((t1.tv_sec - t0.tv_sec) * 1'000'000'000LL
+                               + (t1.tv_nsec - t0.tv_nsec));
+    const double quantumNs = double(m_cfg.quantum) / m_cfg.rate * 1e9;
+    m_cpuPct.store(quantumNs > 0.0 ? cbNs / quantumNs * 100.0 : 0.0,
+                   std::memory_order_relaxed);
+
+    maybeEmitTelemetry();
 }
 
 void PipeWireStream::onProcessInput()
 {
     // Task 11
+}
+
+// ---------------------------------------------------------------------------
+// maybeEmitTelemetry() — coalesced 1 Hz telemetry update from pw data thread.
+// pw_stream_get_time_n() is RT-safe. QMetaObject::invokeMethod with
+// QueuedConnection crosses to the GUI thread without touching the loop lock.
+// ---------------------------------------------------------------------------
+void PipeWireStream::maybeEmitTelemetry()
+{
+    const qint64 nowNs = qint64(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    const qint64 last = m_lastTelemetryNs.load(std::memory_order_relaxed);
+    if (nowNs - last < 1'000'000'000) { return; }
+    m_lastTelemetryNs.store(nowNs, std::memory_order_relaxed);
+
+    pw_time t{};
+    pw_stream_get_time_n(m_stream, &t, sizeof(t));
+
+    // pw_time::buffered is frames (per pipewire/stream.h:395), NOT nanoseconds.
+    // Plan had /1e6 which would under-report by ~21000× at 48 kHz. Corrected:
+    const double bufferedMs = m_cfg.rate
+        ? double(t.buffered) * 1000.0 / m_cfg.rate
+        : 0.0;
+    // pw_time::delay is in units of t.rate (samples × rate fraction → ms):
+    const double delayMs = (t.rate.denom > 0)
+        ? double(t.delay) * 1000.0 * t.rate.num / double(t.rate.denom)
+        : 0.0;
+    const double ringMs = double(m_ring.usedBytes())
+                        / (m_cfg.rate * m_cfg.channels * sizeof(float))
+                        * 1000.0;
+    m_latencyMs.store(bufferedMs + delayMs + ringMs, std::memory_order_relaxed);
+    m_deviceLatencyMs.store(delayMs, std::memory_order_relaxed);
+
+    QMetaObject::invokeMethod(this, &PipeWireStream::telemetryUpdated,
+                              Qt::QueuedConnection);
 }
 
 }  // namespace NereusSDR
