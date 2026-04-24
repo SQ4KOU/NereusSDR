@@ -288,6 +288,7 @@ warren@wpratt.com
 #include "setup/DspSetupPages.h"   // NrAnfSetupPage::selectSubtab
 #include "TitleBar.h"
 #include "VaxFirstRunDialog.h"
+#include "VaxLinuxFirstRunDialog.h"
 #include "widgets/MasterOutputWidget.h"
 #include "core/AudioDeviceConfig.h"
 #include "core/AudioEngine.h"
@@ -1718,6 +1719,11 @@ void MainWindow::buildMenuBar()
 
     helpMenu->addSeparator();
 
+    helpMenu->addAction(QStringLiteral("&Diagnose audio backend…"),
+                        this, &MainWindow::showAudioDiagnoseDialog);
+
+    helpMenu->addSeparator();
+
     helpMenu->addAction(QStringLiteral("&About NereusSDR"), this, [this]() {
         AboutDialog dlg(this);
         dlg.exec();
@@ -2767,6 +2773,17 @@ void MainWindow::showSupportDialog()
     m_supportDialog->show();
     m_supportDialog->raise();
     m_supportDialog->activateWindow();
+}
+
+void MainWindow::showAudioDiagnoseDialog()
+{
+    AudioEngine* eng = m_radioModel->audioEngine();
+    if (!eng) {
+        return;
+    }
+    auto* dlg = new VaxLinuxFirstRunDialog(eng, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->exec();
 }
 
 void MainWindow::onConnectionStateChanged()
