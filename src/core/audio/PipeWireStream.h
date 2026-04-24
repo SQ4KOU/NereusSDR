@@ -86,8 +86,9 @@ private:
     PipeWireThreadLoop* m_loop;
     StreamConfig        m_cfg;
     pw_stream*          m_stream = nullptr;
-    spa_hook            m_listener;
+    spa_hook            m_listener{};
 
+    // Sized for ~170 ms at 8 B/frame (F32 stereo); push must be sizeof(float)*channels-aligned.
     AudioRingSpsc<65536> m_ring;
 
     std::atomic<uint64_t> m_xruns{0};
