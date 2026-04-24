@@ -163,7 +163,10 @@ qint64 PipeWireStream::push(const char* data, qint64 bytes)
     return m_ring.pushCopy(reinterpret_cast<const uint8_t*>(data), bytes);
 }
 
-qint64 PipeWireStream::pull(char*, qint64)       { return 0; }    // Task 11
+qint64 PipeWireStream::pull(char* data, qint64 maxBytes)
+{
+    return m_ring.popInto(reinterpret_cast<uint8_t*>(data), maxBytes);
+}
 
 // ---------------------------------------------------------------------------
 // telemetry()
@@ -287,7 +290,40 @@ void PipeWireStream::onProcessOutput()
 
 void PipeWireStream::onProcessInput()
 {
-    // Task 11
+    timespec t0{}, t1{};
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t0);
+
+    if (!m_schedProbed.load(std::memory_order_relaxed)) {
+        int policy = SCHED_OTHER;
+        sched_param param{};
+        if (pthread_getschedparam(pthread_self(), &policy, &param) == 0) {
+            m_schedPolicy.store(policy, std::memory_order_relaxed);
+            m_schedPriority.store(param.sched_priority, std::memory_order_relaxed);
+            qCInfo(lcPw) << "pw data thread sched policy:" << policy
+                         << "priority:" << param.sched_priority
+                         << "for stream:" << m_cfg.nodeName;
+        }
+        m_schedProbed.store(true, std::memory_order_relaxed);
+    }
+
+    pw_buffer* b = pw_stream_dequeue_buffer(m_stream);
+    if (!b) { m_xruns.fetch_add(1, std::memory_order_relaxed); return; }
+
+    const spa_buffer* sb = b->buffer;
+    const auto* src = static_cast<const uint8_t*>(sb->datas[0].data);
+    const uint32_t size = sb->datas[0].chunk->size;
+    m_ring.pushCopy(src, qint64(size));
+
+    pw_stream_queue_buffer(m_stream, b);
+
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t1);
+    const double cbNs = double((t1.tv_sec - t0.tv_sec) * 1'000'000'000LL
+                               + (t1.tv_nsec - t0.tv_nsec));
+    const double quantumNs = double(m_cfg.quantum) / m_cfg.rate * 1e9;
+    m_cpuPct.store(quantumNs > 0.0 ? cbNs / quantumNs * 100.0 : 0.0,
+                   std::memory_order_relaxed);
+
+    maybeEmitTelemetry();
 }
 
 // ---------------------------------------------------------------------------
