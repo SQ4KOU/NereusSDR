@@ -270,6 +270,15 @@ endif()
 # 1 M-byte concurrent producer/consumer race for memory ordering.
 nereus_add_test(tst_audio_ring_spsc)
 
+# ── Phase 3O Sub-Phase 8 Task 8: PipeWireStream config-translation ───────────
+# Pure unit test: exercises configToProperties() for Output (virtual source),
+# Input (consumer), and targetNodeName routing. No running daemon required.
+# Gated by NEREUS_HAVE_PIPEWIRE — on hosts without libpipewire the test
+# main() returns 0 and ctest reports PASS.
+if(UNIX AND NOT APPLE)
+    nereus_add_test(tst_pipewire_stream_config)
+endif()
+
 # ── Phase 3O Sub-Phase 7 Task 7.1: VirtualCableDetector ──────────────────────
 nereus_add_test(tst_virtual_cable_detector)
 
