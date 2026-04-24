@@ -65,6 +65,13 @@
 #  include "core/audio/LinuxAudioBackend.h"
 #endif
 
+#if defined(Q_OS_LINUX) && defined(NEREUS_HAVE_PIPEWIRE)
+// Forward-declare only — AudioEngine.h must not drag in libpipewire types.
+// The full type is available in AudioEngine.cpp via
+// #include "core/audio/PipeWireThreadLoop.h".
+namespace NereusSDR { class PipeWireThreadLoop; }
+#endif
+
 #include <QObject>
 #include <QString>
 
@@ -281,7 +288,8 @@ private:
 
     // Sub-Phase 8.5: construct + open the platform-native VAX RX bus for
     // `channel` (1..4). macOS → CoreAudioHalBus(Role::VaxN). Linux →
-    // LinuxPipeBus(Role::VaxN). Windows → returns nullptr; Windows BYO
+    // PipeWireBus(Role::VaxN) when backend is PipeWire, LinuxPipeBus(Role::VaxN)
+    // for Pactl, nullptr for None. Windows → returns nullptr; Windows BYO
     // wiring lands in Sub-Phase 9 via setVaxConfig().
     std::unique_ptr<IAudioBus> makeVaxBus(int channel);
 
@@ -289,6 +297,15 @@ private:
     // bus. Opened so coreaudiod / pactl register the virtual TX device for
     // 3rd-party apps. Pulled from in Phase 3M when txOwnerSlot() != MicDirect.
     std::unique_ptr<IAudioBus> makeVaxTxBus();
+
+    // Task 14: split output stream factories (Linux PipeWire path; other
+    // platforms return nullptr pending later sub-phase wiring).
+    // sourceNode / targetNode — PipeWire node.name to bind to; empty = default
+    // routing decided by PipeWire policy.
+    std::unique_ptr<IAudioBus> makeTxInputBus(const QString& sourceNode = {});
+    std::unique_ptr<IAudioBus> makePrimaryOut(const QString& targetNode = {});
+    std::unique_ptr<IAudioBus> makeSidetoneOut(const QString& targetNode = {});
+    std::unique_ptr<IAudioBus> makeMonitorOut(const QString& targetNode = {});
 
     // Open m_speakersBus with a sensible platform default if nothing
     // has been wired by the time start() runs. Keeps the live RX path
@@ -360,6 +377,26 @@ private:
     // existing LinuxPipeBus (pactl) path. Re-runnable via
     // rescanLinuxBackend() (Setup → Audio Rescan).
     LinuxAudioBackend m_linuxBackend = LinuxAudioBackend::None;
+#endif
+
+#if defined(Q_OS_LINUX) && defined(NEREUS_HAVE_PIPEWIRE)
+    // FORWARD CONTRACT #1 — DECLARED LAST. DO NOT MOVE THIS MEMBER EARLIER.
+    //
+    // C++ destroys class members in REVERSE declaration order. m_pwLoop is
+    // declared after all bus members (m_vaxBus, m_speakersBus, m_headphonesBus,
+    // m_txInputBus, m_vaxTxBus, m_masterMix, m_linuxBackend) so that on
+    // destruction the buses are torn down BEFORE the loop. Each ~PipeWireBus()
+    // calls close() → PipeWireStream::close() which takes m_loop->lock(); the
+    // loop must still be alive at that point. If m_pwLoop were declared earlier
+    // (higher up in the class), its destructor would run first — the loop
+    // thread would stop, and then the bus dtors would attempt to take a lock
+    // on a destroyed loop, deadlocking or crashing the audio thread.
+    //
+    // The DSP producer (rxBlockReady) must also have stopped feeding push()
+    // before destruction. AudioEngine::stop() handles this; the caller
+    // (RadioModel teardown) stops the DSP worker thread before calling stop().
+    // See also: PipeWireThreadLoop.cpp:23-30.
+    std::unique_ptr<PipeWireThreadLoop> m_pwLoop;
 #endif
 };
 

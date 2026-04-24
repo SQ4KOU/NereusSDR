@@ -83,6 +83,10 @@
 #ifdef Q_OS_LINUX
 #include "audio/LinuxPipeBus.h"
 #endif
+#if defined(Q_OS_LINUX) && defined(NEREUS_HAVE_PIPEWIRE)
+#include "core/audio/PipeWireBus.h"
+#include "core/audio/PipeWireThreadLoop.h"
+#endif
 
 #include <portaudio.h>
 
@@ -119,6 +123,16 @@ AudioEngine::AudioEngine(QObject* parent)
     m_linuxBackend = detectLinuxBackend();
     qCInfo(lcAudio) << "Linux audio backend detected:"
                     << toString(m_linuxBackend);
+#  if defined(NEREUS_HAVE_PIPEWIRE)
+    if (m_linuxBackend == LinuxAudioBackend::PipeWire) {
+        m_pwLoop = std::make_unique<PipeWireThreadLoop>();
+        if (!m_pwLoop->connect()) {
+            qCWarning(lcAudio) << "PipeWire connect failed — falling back to Pactl detection";
+            m_pwLoop.reset();
+            m_linuxBackend = LinuxAudioBackend::Pactl;
+        }
+    }
+#  endif
 #endif
 
     // Own the Pa_Initialize/Pa_Terminate pair so the static PortAudioBus
@@ -322,20 +336,43 @@ std::unique_ptr<IAudioBus> AudioEngine::makeVaxBus(int channel)
     }
     return bus;
 #elif defined(Q_OS_LINUX)
-    LinuxPipeBus::Role role = LinuxPipeBus::Role::Vax1;
-    switch (channel) {
-        case 1: role = LinuxPipeBus::Role::Vax1; break;
-        case 2: role = LinuxPipeBus::Role::Vax2; break;
-        case 3: role = LinuxPipeBus::Role::Vax3; break;
-        case 4: role = LinuxPipeBus::Role::Vax4; break;
+#  ifdef NEREUS_HAVE_PIPEWIRE
+    if (m_linuxBackend == LinuxAudioBackend::PipeWire && m_pwLoop) {
+        PipeWireBus::Role role = PipeWireBus::Role::Vax1;
+        switch (channel) {
+            case 1: role = PipeWireBus::Role::Vax1; break;
+            case 2: role = PipeWireBus::Role::Vax2; break;
+            case 3: role = PipeWireBus::Role::Vax3; break;
+            case 4: role = PipeWireBus::Role::Vax4; break;
+        }
+        auto bus = std::make_unique<PipeWireBus>(role, m_pwLoop.get());
+        if (!bus->open(fmt)) {
+            qCWarning(lcAudio) << "PipeWireBus open failed for VAX"
+                               << channel << ":" << bus->errorString();
+            return nullptr;
+        }
+        return bus;
     }
-    auto bus = std::make_unique<LinuxPipeBus>(role);
-    if (!bus->open(fmt)) {
-        qCWarning(lcAudio) << "LinuxPipeBus open failed for VAX" << channel
-                           << ":" << bus->errorString();
-        return nullptr;
+#  endif
+    // Pactl fallback: existing LinuxPipeBus path — unchanged.
+    if (m_linuxBackend == LinuxAudioBackend::Pactl) {
+        LinuxPipeBus::Role role = LinuxPipeBus::Role::Vax1;
+        switch (channel) {
+            case 1: role = LinuxPipeBus::Role::Vax1; break;
+            case 2: role = LinuxPipeBus::Role::Vax2; break;
+            case 3: role = LinuxPipeBus::Role::Vax3; break;
+            case 4: role = LinuxPipeBus::Role::Vax4; break;
+        }
+        auto bus = std::make_unique<LinuxPipeBus>(role);
+        if (!bus->open(fmt)) {
+            qCWarning(lcAudio) << "LinuxPipeBus open failed for VAX" << channel
+                               << ":" << bus->errorString();
+            return nullptr;
+        }
+        return bus;
     }
-    return bus;
+    qCInfo(lcAudio) << "Linux VAX" << channel << "disabled — no audio backend";
+    return nullptr;
 #else
     // Windows: TODO(sub-phase-9-byo): wire user-picked virtual cables via
     // setVaxConfig(). Returning nullptr here leaves the slot empty so the
@@ -378,6 +415,124 @@ std::unique_ptr<IAudioBus> AudioEngine::makeVaxTxBus()
     // setVaxConfig() (a future TX-side equivalent setter).
     return nullptr;
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// Task 14: split output stream factories.
+// On PipeWire, each method opens a dedicated PipeWireBus with the appropriate
+// Role. The targetNode / sourceNode override is passed through to PipeWireBus
+// so callers (Tasks 15-16, per-slice routing) can bind to a specific node.
+// All other platforms (macOS, Windows) and the non-PipeWire Linux paths return
+// nullptr — later sub-phases (Task 17+) may wire QAudioSinkAdapter for Primary
+// on non-PipeWire Linux, but that is out of Task 14 scope.
+// ---------------------------------------------------------------------------
+
+std::unique_ptr<IAudioBus> AudioEngine::makeTxInputBus(const QString& sourceNode)
+{
+    // 48 kHz stereo Float32 — canonical DSP format.
+    AudioFormat fmt;
+    fmt.sampleRate = 48000;
+    fmt.channels   = 2;
+    fmt.sample     = AudioFormat::Sample::Float32;
+
+#if defined(Q_OS_LINUX) && defined(NEREUS_HAVE_PIPEWIRE)
+    if (m_linuxBackend == LinuxAudioBackend::PipeWire && m_pwLoop) {
+        // TxInput is a capture (INPUT direction) stream; sourceNode names the
+        // PipeWire source node to link from (e.g. the mic or a software
+        // source). Empty = PipeWire default routing.
+        auto bus = std::make_unique<PipeWireBus>(
+            PipeWireBus::Role::TxInput, m_pwLoop.get(), sourceNode);
+        if (!bus->open(fmt)) {
+            qCWarning(lcAudio) << "PipeWireBus open failed for TxInput:"
+                               << bus->errorString();
+            return nullptr;
+        }
+        return bus;
+    }
+    (void)sourceNode;  // PipeWire available but backend is Pactl/None
+#else
+    (void)sourceNode;  // Non-Linux or Linux without libpipewire-0.3
+#endif
+    qCInfo(lcAudio) << "makeTxInputBus: no PipeWire backend — returning nullptr";
+    return nullptr;
+}
+
+std::unique_ptr<IAudioBus> AudioEngine::makePrimaryOut(const QString& targetNode)
+{
+    AudioFormat fmt;
+    fmt.sampleRate = 48000;
+    fmt.channels   = 2;
+    fmt.sample     = AudioFormat::Sample::Float32;
+
+#if defined(Q_OS_LINUX) && defined(NEREUS_HAVE_PIPEWIRE)
+    if (m_linuxBackend == LinuxAudioBackend::PipeWire && m_pwLoop) {
+        auto bus = std::make_unique<PipeWireBus>(
+            PipeWireBus::Role::Primary, m_pwLoop.get(), targetNode);
+        if (!bus->open(fmt)) {
+            qCWarning(lcAudio) << "PipeWireBus open failed for Primary:"
+                               << bus->errorString();
+            return nullptr;
+        }
+        return bus;
+    }
+    (void)targetNode;
+#else
+    (void)targetNode;
+#endif
+    qCInfo(lcAudio) << "makePrimaryOut: no PipeWire backend — returning nullptr";
+    return nullptr;
+}
+
+std::unique_ptr<IAudioBus> AudioEngine::makeSidetoneOut(const QString& targetNode)
+{
+    AudioFormat fmt;
+    fmt.sampleRate = 48000;
+    fmt.channels   = 2;
+    fmt.sample     = AudioFormat::Sample::Float32;
+
+#if defined(Q_OS_LINUX) && defined(NEREUS_HAVE_PIPEWIRE)
+    if (m_linuxBackend == LinuxAudioBackend::PipeWire && m_pwLoop) {
+        auto bus = std::make_unique<PipeWireBus>(
+            PipeWireBus::Role::Sidetone, m_pwLoop.get(), targetNode);
+        if (!bus->open(fmt)) {
+            qCWarning(lcAudio) << "PipeWireBus open failed for Sidetone:"
+                               << bus->errorString();
+            return nullptr;
+        }
+        return bus;
+    }
+    (void)targetNode;
+#else
+    (void)targetNode;
+#endif
+    qCInfo(lcAudio) << "makeSidetoneOut: no PipeWire backend — returning nullptr";
+    return nullptr;
+}
+
+std::unique_ptr<IAudioBus> AudioEngine::makeMonitorOut(const QString& targetNode)
+{
+    AudioFormat fmt;
+    fmt.sampleRate = 48000;
+    fmt.channels   = 2;
+    fmt.sample     = AudioFormat::Sample::Float32;
+
+#if defined(Q_OS_LINUX) && defined(NEREUS_HAVE_PIPEWIRE)
+    if (m_linuxBackend == LinuxAudioBackend::PipeWire && m_pwLoop) {
+        auto bus = std::make_unique<PipeWireBus>(
+            PipeWireBus::Role::Monitor, m_pwLoop.get(), targetNode);
+        if (!bus->open(fmt)) {
+            qCWarning(lcAudio) << "PipeWireBus open failed for Monitor:"
+                               << bus->errorString();
+            return nullptr;
+        }
+        return bus;
+    }
+    (void)targetNode;
+#else
+    (void)targetNode;
+#endif
+    qCInfo(lcAudio) << "makeMonitorOut: no PipeWire backend — returning nullptr";
+    return nullptr;
 }
 
 void AudioEngine::ensureSpeakersOpen()
