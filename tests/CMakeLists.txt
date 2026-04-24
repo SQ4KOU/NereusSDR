@@ -290,6 +290,15 @@ if(UNIX AND NOT APPLE)
     nereus_add_test(tst_pipewire_stream_config)
 endif()
 
+# ── Phase 3O Task 24: env-gated PipeWire stream integration test ─────────────
+# Real round-trip: PipeWireThreadLoop.connect() → PipeWireStream(Audio/Source)
+# → open() → wait for "streaming" signal → push 500 ms silence → close().
+# QSKIPs when XDG_RUNTIME_DIR is unset (no PipeWire session on host).
+# Compiles to int main(){return 0;} on platforms without libpipewire (#else).
+if(UNIX AND NOT APPLE)
+    nereus_add_test(tst_pipewire_stream_integration)
+endif()
+
 # ── Phase 3O Sub-Phase 7 Task 7.1: VirtualCableDetector ──────────────────────
 nereus_add_test(tst_virtual_cable_detector)
 
