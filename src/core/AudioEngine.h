@@ -61,6 +61,10 @@
 #include "IAudioBus.h"
 #include "audio/MasterMixer.h"
 
+#if defined(Q_OS_LINUX)
+#  include "core/audio/LinuxAudioBackend.h"
+#endif
+
 #include <QObject>
 #include <QString>
 
@@ -228,6 +232,16 @@ public:
     // rather than a false-positive green "bound" when the route is broken.
     bool isVaxBusOpen(int channel) const;
 
+#if defined(Q_OS_LINUX)
+    LinuxAudioBackend linuxBackend() const { return m_linuxBackend; }
+
+    // Re-runs detection and re-emits linuxBackendChanged if the result
+    // differs from the cached value. Does not tear down existing audio
+    // buses — caller (MainWindow's Rescan button) is responsible for
+    // that if they want a live-switch.
+    void rescanLinuxBackend();
+#endif
+
 signals:
     void volumeChanged(float volume);
     void masterMutedChanged(bool muted);
@@ -248,6 +262,11 @@ signals:
     void headphonesConfigChanged(NereusSDR::AudioDeviceConfig cfg);
     void txInputConfigChanged(NereusSDR::AudioDeviceConfig cfg);
     void vaxConfigChanged(int channel, NereusSDR::AudioDeviceConfig cfg);
+
+#if defined(Q_OS_LINUX)
+    void linuxBackendChanged(LinuxAudioBackend oldBackend,
+                             LinuxAudioBackend newBackend);
+#endif
 
 private:
     // Sub-Phase 12: speakers-bus rebuild (called directly from setSpeakersConfig).
@@ -334,6 +353,14 @@ private:
     // per design-decision D6 (plan); prevents a main-thread insert/rehash
     // race against the audio thread's lock-free find().
     bool m_slicePreregistered{false};
+
+#if defined(Q_OS_LINUX)
+    // Cached Linux audio backend detected by detectLinuxBackend() in the
+    // ctor. Task 14 consults this to dispatch to PipeWireBus vs. the
+    // existing LinuxPipeBus (pactl) path. Re-runnable via
+    // rescanLinuxBackend() (Setup → Audio Rescan).
+    LinuxAudioBackend m_linuxBackend = LinuxAudioBackend::None;
+#endif
 };
 
 } // namespace NereusSDR

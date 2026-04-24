@@ -110,6 +110,17 @@ AudioFormat toAudioFormat(const AudioDeviceConfig& cfg)
 AudioEngine::AudioEngine(QObject* parent)
     : QObject(parent)
 {
+#if defined(Q_OS_LINUX)
+    // Cache the Linux audio backend detection result up front so Task 14's
+    // dispatch (PipeWireBus vs. LinuxPipeBus pactl path) has a stable
+    // answer by the time start() runs. Log only — no signal emission at
+    // ctor time (nothing is listening yet; rescanLinuxBackend() is the
+    // live-change path).
+    m_linuxBackend = detectLinuxBackend();
+    qCInfo(lcAudio) << "Linux audio backend detected:"
+                    << toString(m_linuxBackend);
+#endif
+
     // Own the Pa_Initialize/Pa_Terminate pair so the static PortAudioBus
     // enumeration helpers (hostApis / outputDevicesFor / inputDevicesFor)
     // can be called at any time from the application. Tests that run
@@ -140,6 +151,20 @@ void AudioEngine::setRadioModel(RadioModel* radio)
 {
     m_radio = radio;
 }
+
+#if defined(Q_OS_LINUX)
+void AudioEngine::rescanLinuxBackend()
+{
+    const auto previous = m_linuxBackend;
+    m_linuxBackend = detectLinuxBackend();
+    if (m_linuxBackend != previous) {
+        qCInfo(lcAudio) << "Linux audio backend changed:"
+                        << toString(previous) << "→"
+                        << toString(m_linuxBackend);
+        emit linuxBackendChanged(previous, m_linuxBackend);
+    }
+}
+#endif
 
 void AudioEngine::start()
 {
