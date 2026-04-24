@@ -156,11 +156,26 @@ void PipeWireStream::close()
 // push() — Step 5
 // Forward contract #2: writes must be sizeof(float)*channels-aligned.
 // Q_ASSERT fires in debug builds; compiles to no-op in release.
+//
+// Uses tryPushCopy (non-blocking, drop-on-full + xrun) instead of pushCopy
+// (yield-until-space). When a VAX OUTPUT stream is in PipeWire's PAUSED
+// state (no consumer connected — e.g. WSJT-X not running yet), the
+// consumer-side onProcessOutput callback never fires, so the ring never
+// drains. The original pushCopy yield-loop would block the DSP thread
+// indefinitely on the first VAX bus tap, cascading into "no audio out the
+// speakers" because rxBlockReady never reaches the speakers push at its
+// tail. Drop-on-full is the right semantic for real-time audio anyway —
+// stale samples are useless.
 // ---------------------------------------------------------------------------
 qint64 PipeWireStream::push(const char* data, qint64 bytes)
 {
     Q_ASSERT(bytes % (sizeof(float) * m_cfg.channels) == 0);
-    return m_ring.pushCopy(reinterpret_cast<const uint8_t*>(data), bytes);
+    const qint64 written = m_ring.tryPushCopy(
+        reinterpret_cast<const uint8_t*>(data), bytes);
+    if (written < bytes) {
+        m_xruns.fetch_add(1, std::memory_order_relaxed);
+    }
+    return written;
 }
 
 qint64 PipeWireStream::pull(char* data, qint64 maxBytes)
