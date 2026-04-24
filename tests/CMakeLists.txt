@@ -260,6 +260,16 @@ if(UNIX AND NOT APPLE)
     nereus_add_test(tst_linux_backend_detection)
 endif()
 
+# ── Linux audio infrastructure — AudioRingSpsc (Task 6) ──────────────────────
+# Lock-free single-producer single-consumer byte ring used by the PipeWire
+# bridge (Task 8+) to shuttle audio between the DSP thread and the
+# pw_thread_loop. Pure header-only template — compiles cleanly on every
+# platform, so no Linux-only gate. Covers: push/pop round-trip, empty-pop,
+# partial-pop honouring dst capacity, overflow-drops-oldest on a 70 kB write
+# into a 64 kiB ring, wrap-around across the buffer boundary, and a
+# 1 M-byte concurrent producer/consumer race for memory ordering.
+nereus_add_test(tst_audio_ring_spsc)
+
 # ── Phase 3O Sub-Phase 7 Task 7.1: VirtualCableDetector ──────────────────────
 nereus_add_test(tst_virtual_cable_detector)
 
