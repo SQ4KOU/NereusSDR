@@ -249,6 +249,13 @@ public:
 
     QSize sizeHint() const override { return {800, 400}; }
 
+    // Cap on waterfall scrollback history capacity, in rows. Bounds memory use.
+    // Public so unit tests (tst_waterfall_scrollback) can mirror the
+    // capacity-clamp formula in their parallel shim.
+    // From AetherSDR SpectrumWidget.h:482 [@2bb3b5c]
+    // (cap added by unmerged AetherSDR PR #1478 — see plan §authoring-time #2)
+    static constexpr int kMaxWaterfallHistoryRows = 4096;
+
     // ---- Frequency range ----
     void setFrequencyRange(double centerHz, double bandwidthHz);
     void setCenterFrequency(double centerHz);
@@ -563,10 +570,9 @@ private:
     // From AetherSDR SpectrumWidget.h:502 [@0cd4559]
     static constexpr qint64 kDefaultWaterfallHistoryMs = 20LL * 60LL * 1000LL;
 
-    // Cap on history capacity to bound memory.
-    // From AetherSDR SpectrumWidget.h:482 [@2bb3b5c]
-    // (cap added by unmerged AetherSDR PR #1478 — see plan §authoring-time #2)
-    static constexpr int    kMaxWaterfallHistoryRows  = 4096;
+    // (kMaxWaterfallHistoryRows declared at the top of the public block —
+    // moved there in sub-epic E task 2 so test-shims can mirror the
+    // capacity-clamp formula without befriending the class.)
 
     // Runtime-configurable depth; persisted as AppSettings("DisplayWaterfallHistoryMs").
     // NereusSDR-side enhancement — see plan §authoring-time #1.

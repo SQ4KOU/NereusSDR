@@ -633,4 +633,12 @@ nereus_add_test(tst_antenna_labels)
 #   - Default plan after loadPlans() is "ARRL (US)" (no AppSettings key)
 nereus_add_test(tst_bandplan_manager)
 
+# ── Phase 3G RX Epic sub-epic E: waterfall scrollback math helpers ──────────
+# Pure-arithmetic checks for the capacity-clamp + age→row formulas used by
+# SpectrumWidget's scrollback implementation. The test mirrors the formula in
+# a parallel shim so it can run without a QApplication or GPU widget; the
+# shim references SpectrumWidget::kMaxWaterfallHistoryRows directly so any
+# drift in the cap is caught by the build.
+nereus_add_test(tst_waterfall_scrollback)
+
 

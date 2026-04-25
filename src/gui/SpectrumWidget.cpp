@@ -122,6 +122,7 @@
 #include <QHoverEvent>
 
 #include <QDateTime>
+#include <QTimeZone>
 #include <QPainter>
 #include <QPainterPath>
 #include <QResizeEvent>
@@ -1713,6 +1714,47 @@ int SpectrumWidget::dbmToY(float dbm, const QRect& r) const
     float frac = (calibrated - bottom) / m_dynamicRange;
     frac = qBound(0.0f, frac, 1.0f);
     return r.bottom() - static_cast<int>(frac * r.height());
+}
+
+// ─── Waterfall scrollback math helpers (sub-epic E) ───────────────────
+// From AetherSDR SpectrumWidget.cpp:559-590 [@0cd4559]
+//   plus 4096-row cap from [@2bb3b5c] (unmerged AetherSDR PR #1478)
+
+int SpectrumWidget::waterfallHistoryCapacityRows() const
+{
+    const int msPerRow = std::max(1, m_wfUpdatePeriodMs);
+    const int rows = static_cast<int>(
+        (m_waterfallHistoryMs + msPerRow - 1) / msPerRow);
+    return std::min(rows, kMaxWaterfallHistoryRows);
+}
+
+int SpectrumWidget::maxWaterfallHistoryOffsetRows() const
+{
+    return std::max(0, m_wfHistoryRowCount - m_waterfall.height());
+}
+
+int SpectrumWidget::historyRowIndexForAge(int ageRows) const
+{
+    if (m_waterfallHistory.isNull() || ageRows < 0
+        || ageRows >= m_wfHistoryRowCount) {
+        return -1;
+    }
+    return (m_wfHistoryWriteRow + ageRows) % m_waterfallHistory.height();
+}
+
+QString SpectrumWidget::pausedTimeLabelForAge(int ageRows) const
+{
+    const int rowIndex = historyRowIndexForAge(ageRows);
+    if (rowIndex < 0 || rowIndex >= m_wfHistoryTimestamps.size()) {
+        return QString();
+    }
+    const qint64 timestampMs = m_wfHistoryTimestamps[rowIndex];
+    if (timestampMs <= 0) {
+        return QString();
+    }
+    const QDateTime utc = QDateTime::fromMSecsSinceEpoch(
+        timestampMs, QTimeZone::utc());
+    return QStringLiteral("-") + utc.toString(QStringLiteral("HH:mm:ssZ"));
 }
 
 // ---- Waterfall row push ----
