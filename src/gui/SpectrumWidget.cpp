@@ -554,7 +554,13 @@ void SpectrumWidget::setFrequencyRange(double centerHz, double bandwidthHz)
     m_centerHz = centerHz;
     m_bandwidthHz = bandwidthHz;
     updateVfoPositions();
+#ifdef NEREUS_GPU_SPECTRUM
+    // Band-plan strip depends on m_centerHz/m_bandwidthHz — invalidate the
+    // static overlay so the strip repositions correctly on freq/zoom changes.
+    markOverlayDirty();
+#else
     update();
+#endif
 
     // Phase 3G-12: persist zoom level on every bandwidth change so the
     // visible span survives app restarts. Center frequency is not saved
@@ -1152,6 +1158,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
         // Passing the clipped specRect would put the strip INSIDE the spectrum.
         drawDbmScale(p, QRect(0, 0, w, specH));
     }
+    drawBandPlan(p, specRect);
     drawCursorInfo(p, specRect);
 
     // FPS overlay (Phase 3G-8 commit 5 / G8 ShowFPS). Cheap rolling counter
@@ -1570,6 +1577,91 @@ void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
         p.setPen(QColor(0x80, 0xa0, 0xb0));
         p.drawText(strip.left() + 6, y + fm.ascent() / 2, label);
     }
+}
+
+// ---- Band-plan strip ----
+// From AetherSDR SpectrumWidget.cpp:4220-4293 [@0cd4559]
+void SpectrumWidget::drawBandPlan(QPainter& p, const QRect& specRect)
+{
+    if (!m_bandPlanMgr || m_bandPlanFontSize <= 0) {
+        return;
+    }
+
+    const double startMhz = m_centerHz / 1.0e6 - (m_bandwidthHz / 2.0) / 1.0e6;
+    const double endMhz   = m_centerHz / 1.0e6 + (m_bandwidthHz / 2.0) / 1.0e6;
+    const int    bandH    = m_bandPlanFontSize + 4;
+    const int    bandY    = specRect.bottom() - bandH + 1;
+
+    const auto& segments = m_bandPlanMgr->segments();
+    for (const auto& seg : segments) {
+        if (seg.highMhz <= startMhz || seg.lowMhz >= endMhz) {
+            continue;
+        }
+
+        const int x1 = hzToX(std::max(seg.lowMhz,  startMhz) * 1.0e6, specRect);
+        const int x2 = hzToX(std::min(seg.highMhz, endMhz)   * 1.0e6, specRect);
+        if (x2 <= x1) {
+            continue;
+        }
+
+        // License-class brightness blend: more-restrictive classes paint dimmer
+        // so the eye can scan to "where I'm allowed to operate" at a glance.
+        // From AetherSDR SpectrumWidget.cpp:4239-4244 [@0cd4559].
+        const QString& lic = seg.license;
+        float blend = 0.6f;
+        if      (lic == QLatin1String("E"))          { blend = 0.20f; }
+        else if (lic == QLatin1String("E,G"))         { blend = 0.40f; }
+        else if (lic.contains(QLatin1Char('T')))      { blend = 0.60f; }
+        else if (lic.isEmpty())                       { blend = 0.50f; }
+
+        const QColor bg(0x0a, 0x0a, 0x14);
+        const QColor fill(
+            static_cast<int>(seg.color.red()   * blend + bg.red()   * (1.0f - blend)),
+            static_cast<int>(seg.color.green() * blend + bg.green() * (1.0f - blend)),
+            static_cast<int>(seg.color.blue()  * blend + bg.blue()  * (1.0f - blend)),
+            255);
+        p.fillRect(x1, bandY, x2 - x1, bandH, fill);
+
+        // Separator line at left edge of each segment.
+        p.setPen(QColor(0x0f, 0x0f, 0x1a, 200));
+        p.drawLine(x1, bandY, x1, bandY + bandH);
+
+        // Label: mode + lowest license class allowed (only if there's room).
+        if (x2 - x1 > 20) {
+            QFont f = p.font();
+            f.setPointSize(m_bandPlanFontSize);
+            f.setBold(true);
+            p.setFont(f);
+
+            QString lowestClass;
+            if      (lic.contains(QLatin1Char('T'))) { lowestClass = QStringLiteral("Tech"); }
+            else if (lic.contains(QLatin1Char('G'))) { lowestClass = QStringLiteral("General"); }
+            else if (lic == QLatin1String("E"))      { lowestClass = QStringLiteral("Extra"); }
+
+            QString label = seg.label;
+            if (!lowestClass.isEmpty() && x2 - x1 > 60) {
+                label = QStringLiteral("%1 %2").arg(seg.label, lowestClass);
+            }
+
+            p.setPen(Qt::white);
+            p.drawText(QRect(x1, bandY, x2 - x1, bandH), Qt::AlignCenter, label);
+        }
+    }
+
+    // Spot markers (white dots for digital calling frequencies, etc.).
+    // From AetherSDR SpectrumWidget.cpp:4282-4292 [@0cd4559].
+    const auto& spots = m_bandPlanMgr->spots();
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(Qt::NoPen);
+    p.setBrush(Qt::white);
+    for (const auto& spot : spots) {
+        if (spot.freqMhz < startMhz || spot.freqMhz > endMhz) {
+            continue;
+        }
+        const int sx = hzToX(spot.freqMhz * 1.0e6, specRect);
+        p.drawEllipse(QPoint(sx, bandY + bandH / 2), 4, 4);
+    }
+    p.setRenderHint(QPainter::Antialiasing, false);
 }
 
 // ---- Coordinate helpers ----
@@ -2732,6 +2824,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 // Passing the clipped specRect would put the strip INSIDE the spectrum.
                 drawDbmScale(p, QRect(0, 0, w, specH));
             }
+            drawBandPlan(p, specRect);
             p.fillRect(0, specH, w, kDividerH, QColor(0x30, 0x40, 0x50));
             drawFreqScale(p, QRect(0, specH + kDividerH, w - effectiveStripW(), kFreqScaleH));
             drawVfoMarker(p, specRect, wfRect);
