@@ -2,12 +2,18 @@
 
 **A cross-platform SDR console for OpenHPSDR radios**
 
-> 📖 **Alpha testers — start here:** [docs/debugging/alpha-tester-hl2-smoke-test.md](docs/debugging/alpha-tester-hl2-smoke-test.md)
+> 📖 **Alpha testers — start here:** [docs/debugging/v0.2.3-alpha-tester-smoketest.md](docs/debugging/v0.2.3-alpha-tester-smoketest.md)
 >
-> Full walkthrough of what to try, what "success" looks like on your
-> OpenHPSDR radio, and — just as important — which UI controls are
-> intentionally stubbed so you don't file bugs against them. Updated for
-> v0.2.2.
+> Full v0.2.3 walkthrough of what to try, what "success" looks like on
+> your OpenHPSDR radio, and — just as important — which UI controls are
+> intentionally stubbed so you don't file bugs against them. Includes
+> 18 numbered steps from launch → live SSB QSO → quit, plus
+> v0.2.3-specific tests for the dBm scale strip (step 12), the DSP grid
+> + 7-filter NR family (step 13), Alex antenna routing per-band
+> (step 14), and the new Linux PipeWire audio bridge (step 15).
+> Earlier-release walkthroughs remain at
+> [docs/debugging/alpha-tester-hl2-smoke-test.md](docs/debugging/alpha-tester-hl2-smoke-test.md)
+> for historical reference.
 >
 > — J.J. Boyd ~ KG4VCF
 
@@ -58,7 +64,7 @@ sha256sum -c SHA256SUMS.txt
 
 ## Current Status
 
-**Current release: v0.2.2** (2026-04-22). RX pipeline is feature-complete across the full OpenHPSDR P1 and P2 radio families; v0.2.2 folds in the **Phase 3O VAX audio routing** (multi-platform virtual-cable stack with macOS CoreAudio HAL plugin, `LinuxPipeBus`, `PortAudioBus`, first-run VAX dialog, MasterOutputWidget in the TitleBar, per-slice VAX channel routing, 4 Setup → Audio sub-tabs) alongside the **Phase 3P-A…H** radio-control parity work (HL2 BPF + S-ATT fixes, per-board P1/P2 codecs, Alex-1/2 Filters live-LED, OC Outputs, Calibration with live freq-correction, Antenna Control, HL2 I/O, Accessories, Diagnostics → Radio Status) plus the post-v0.2.1 maintenance fixes (VFO parser #73, STEP arrows #69, receiver-leak #75, HL2 Winsock shutdown #83, HL2 I2C persistence, P2 `FreqCorrectionFactor` reaching the phase word, OcMatrix cross-thread lock, RX1-preamp queue, P1 bank-ceiling from codec). Next implementation phase is **3M-1: Basic SSB TX**.
+**Current release: v0.2.3** (2026-04-24). Builds on v0.2.2 with the **Phase 3G RX experience epic** (Sub-epic A — AetherSDR-style dBm strip with hover/wheel-zoom and arrow clicks; Sub-epic B — full Thetis NB family port with NbFamily wrapper, cycling NB button, per-slice-per-band persistence; Sub-epic C-1 — 7-filter NR stack: NR1/2/3/4 plus DFNR DeepFilterNet3 neural NR and macOS-native MNR Apple Accelerate MMSE-Wiener), the **Phase 3P-I-a/b Alex antenna integration** (`AlexController` pump driving full `Alex.cs:310-413` composition, RX-only antennas with SKU-driven labels, Alex-2 Filters sub-tab gating, RX-Bypass 3rd VFO flag button, P1 bank0 C3 bits 5-7 + P2 Alex0 bits 8-11 wire-locked), and a **Linux PipeWire-native audio bridge** (`PipeWireBus`, `PipeWireStream`, `PipeWireThreadLoop`, lock-free SPSC ring, full backend detection / auto-open dialog, AudioOutputPage with per-slice routing, Help → Diagnose audio backend). Earlier-shipped 3O VAX, 3P-A…H, and the v0.2.2 maintenance fixes still apply. Next implementation phase is **3M-1: Basic SSB TX**.
 
 ### What's working end-to-end today
 

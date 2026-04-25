@@ -1,267 +1,331 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.3] - 2026-04-24
 
-### Added (Phase 3O — Linux PipeWire native audio bridge — PR #TBD)
+This release rounds out the **Phase 3G RX experience epic** (AetherSDR-style
+dBm scale strip, full Thetis Noise Blanker family port, cross-platform
+7-filter Noise Reduction stack), brings **Alex antenna integration** to
+feature-complete (3P-I-a + 3P-I-b — full `Alex.cs:310-413` composition,
+RX-only antennas with SKU-driven labels, P1 bank0 / P2 Alex0 wire-locked),
+and adds a **Linux PipeWire-native audio bridge** that supersedes the 0.2.2
+pactl/PulseAudio fallback on PipeWire systems. v0.2.3 also addresses three
+ANAN-G2 bench bugs caught after 0.2.2 shipped (P2 first-packet HPF/LPF
+mismatch, band-crossing antenna-label desync, AlexController per-band
+persistence).
 
-- Linux: native PipeWire audio bridge with live latency telemetry,
-  separate sidetone / MON sinks, per-slice output routing. Falls
-  back to pactl / PulseAudio where PipeWire isn't present.
-- New `Setup → Audio → Output` page (Primary, Sidetone, Monitor
-  cards + per-slice routing section). Real PipeWire terminology
-  throughout: `quantum`, `node.name`, `media.role`, `xruns`,
-  `process-cb CPU`, `stream state` (no cosmetic relabeling).
-- Setup → Audio → VAX page rebuilt: VAX is now a virtual source
-  the system sees, not a device the user picks. Per-channel
-  Rename + Copy node-name buttons.
-- AudioBackendStrip header on every Setup → Audio sub-page —
-  shows detected backend (PipeWire / Pactl / None) and Rescan +
-  Open-logs buttons.
-- `Help → Diagnose audio backend…` menu item opens the same
-  detection-state dialog used at first launch when no audio
-  backend is detected.
-- New optional build dependency on Linux: `libpipewire-0.3-dev`
-  ≥ 0.3.50 (auto-detected via `pkg-config`).
-- Manual verification matrix: `docs/architecture/linux-audio-verification/README.md`.
+### Added (Phase 3G RX Epic Sub-epic A — dBm scale strip)
+- New AetherSDR-style **dBm scale strip** rendered on the right edge of the
+  spectrum widget. Wheel inside the strip zooms the dynamic range live;
+  arrow clicks at top/bottom nudge the floor or ceiling and persist back to
+  `PanadapterModel`. Hover shows a cursor crosshair with the dBm value at
+  the pointer. The strip honors the calibration offset, so on-screen labels
+  reflect the actual signal level the user reads, not raw FFT bins. New
+  `DisplayDbmScaleVisible` toggle in Setup → Display lets users hide the
+  strip entirely. 17-row manual verification matrix at
+  `docs/architecture/phase3g-rx-epic-a-verification.md`.
+- Pure dBm-strip geometry helpers split out of the renderer with their own
+  unit tests so layout changes are caught at build time.
 
-### Added (Phase 3G RX Epic Sub-epic C-1 — PR #TBD)
+### Added (Phase 3G RX Epic Sub-epic B — Noise Blanker family)
+- Full port of Thetis's three-filter NB stack: **NB** (`nob.c`, Whitney),
+  **NB2** (`nobII.c`, second-gen), and **SNB** (`snb.c`, spectral). New
+  `NbFamily` wrapper on `RxChannel` owns the WDSP create/destroy lifecycle
+  and tuning. The VFO Flag gets a cycling NB button (`Off → NB → NB2 → Off`)
+  mirroring Thetis `chkNB` tri-state (`console.cs:43513-43560 [v2.10.3.13]`).
+- RxApplet gains Threshold (0-100) + Lag (0-20 ms) sliders, scaled to match
+  `setup.cs:8572, 16236 [v2.10.3.13]`. Setup → DSP → NB/SNB page is now
+  interactive (previously greyed) and wires global defaults via AppSettings.
+- `NbMode` + full `NbTuning` struct persist per-slice-per-band under
+  `Slice<N>/Band<key>/Nb{Mode,Threshold,TauMs,LeadMs,LagMs}`; `SnbEnabled`
+  session-level. Defaults pinned to Thetis `cmaster.c:43-68 [v2.10.3.13]`
+  byte-for-byte (`nbThreshold=30.0`, times=0.1 ms, `backtau=0.05 s`,
+  `nb2MaxImpMs=25.0`).
+- New tests: `tst_nb_family`, `tst_slice_nb_persistence`, plus a rewritten
+  `tst_rxchannel_nb2_polish` cover mode cycling, default parity, and
+  per-band round-trip.
 
-- Full noise-reduction stack on the VFO flag DSP grid: NR1 (ANR, WDSP),
-  NR2 (EMNR including post2 cascade), NR3 (RNNR/rnnoise with
-  user-loadable .bin models), NR4 (SBNR/libspecbleach), DFNR
-  (DeepFilterNet3 — cross-platform), MNR (Apple Accelerate —
-  macOS-only), and ANF. BNR (NVIDIA Broadcast) is intentionally
-  deferred (gRPC/NIM transport out of scope; tracked for follow-up).
-- Setup → DSP → NR/ANF page with sub-tabs for NR1, NR2, NR3, NR4,
-  DFNR, MNR, and ANF. NR1-NR4 sub-tabs mirror the Thetis
-  `setup.designer.cs` layout byte-for-byte. MNR sub-tab gains all
-  6 tuning knobs (Strength / Aggressiveness / Floor / Alpha / Bias /
-  Gsmooth) with factory-default Reset buttons. DFNR sub-tab uses
-  AetherSDR-verbatim defaults (AttenLimit 100 dB, PostFilterBeta 0).
-- Right-click on any NR button on the VFO flag opens a `DspParamPopup`
-  with 3-6 quick-control sliders + tooltips + a "More Settings…"
-  entry point that deep-links into the matching Setup sub-tab.
-- Per-slice NR independence via `SliceModel::setActiveNr` mutual
-  exclusion (only one of NR1/NR2/NR3/NR4/DFNR/MNR active per slice
-  at a time; ANF is independent and can stack).
-- Session-level persistence via AppSettings (per-slice; not
-  per-band). NR3 model path persists globally across launches.
-- Vendored rnnoise (BSD) and libspecbleach (LGPL-2.1) into the WDSP
+### Added (Phase 3G RX Epic Sub-epic C-1 — 7-filter NR stack)
+- Full noise-reduction stack on the VFO flag DSP grid: **NR1** (ANR, WDSP),
+  **NR2** (EMNR including post2 cascade), **NR3** (RNNR/rnnoise with
+  user-loadable .bin models), **NR4** (SBNR/libspecbleach), **DFNR**
+  (DeepFilterNet3 — cross-platform neural NR), **MNR** (Apple Accelerate
+  MMSE-Wiener — macOS-only native), and **ANF**. BNR (NVIDIA Broadcast) is
+  intentionally deferred (gRPC/NIM transport out of scope; tracked for
+  follow-up).
+- Setup → DSP → NR/ANF page with sub-tabs for NR1, NR2, NR3, NR4, DFNR,
+  MNR, and ANF. NR1-NR4 sub-tabs mirror the Thetis `setup.designer.cs`
+  layout byte-for-byte. The MNR sub-tab gains all 6 tuning knobs (Strength /
+  Aggressiveness / Floor / Alpha / Bias / Gsmooth) with factory-default
+  Reset buttons. The DFNR sub-tab uses AetherSDR-verbatim defaults
+  (AttenLimit 100 dB, PostFilterBeta 0).
+- Right-clicking any NR button on the VFO flag opens a `DspParamPopup` (port
+  of AetherSDR's pattern) with 3-6 quick-control sliders plus a "More
+  Settings…" entry point that deep-links into the matching Setup sub-tab.
+- Per-slice NR independence via `SliceModel::setActiveNr` mutual exclusion
+  (only one of NR1/NR2/NR3/NR4/DFNR/MNR active per slice at a time; ANF is
+  independent and can stack).
+- Vendored Xiph rnnoise (BSD-3) and libspecbleach (LGPL-2.1) into the WDSP
   build tree. Ported Thetis `rnnr.c` + `sbnr.c` (GPLv2+ + MW0LGE
   dual-license) into `third_party/wdsp/src/`.
-- Bundled `Default_large.bin` (3.4 MB) and `Default_small.bin`
-  (1.5 MB) rnnoise models plus `DeepFilterNet3_onnx.tar.gz` (7.6 MB)
-  into every release artifact (Linux AppImage × 2 archs / macOS DMG
-  / Windows ZIP + NSIS).
-- New `ModelPaths` helper (`src/core/ModelPaths.{h,cpp}`) resolves
-  rnnoise + DFNR model paths per platform install layout
-  (Resources/ on macOS, share/NereusSDR/ on Linux, adjacent on
-  Windows, plus dev-build fallbacks).
-- New `setup-deepfilter.{sh,ps1}` scripts at the repo root build
-  the DeepFilterNet3 Rust libdf for local development. CI workflows
-  install Rust + invoke the appropriate script before `cmake -B
-  build` so release artifacts always carry the runtime library.
-- Bug fix (worth flagging upstream to AetherSDR): MNR's MMSE
-  prior-SNR computation had a dimensional bug in the post-filter
-  application. Fixed in `src/core/MnrFilter.cpp`. AetherSDR
-  maintainers may want to backport.
+- Bundled `Default_large.bin` (3.4 MB) and `Default_small.bin` (1.5 MB)
+  rnnoise models plus `DeepFilterNet3_onnx.tar.gz` (7.6 MB) into every
+  release artifact (Linux AppImage × 2 archs / macOS DMG / Windows ZIP +
+  NSIS).
+- New `ModelPaths` helper (`src/core/ModelPaths.{h,cpp}`) resolves rnnoise
+  + DFNR model paths per platform install layout (Resources/ on macOS,
+  share/NereusSDR/ on Linux, adjacent on Windows, plus dev-build fallbacks).
+- New `setup-deepfilter.{sh,ps1}` scripts at the repo root build the
+  DeepFilterNet3 Rust libdf for local development. CI workflows install
+  Rust + invoke the appropriate script before `cmake -B build` so release
+  artifacts always carry the runtime library.
+- The 4×2 DSP toggle grid on the VFO Flag was rewritten as a 3×4 grid that
+  mirrors AetherSDR's pattern exactly: NR mutex (NR1-4 + DFNR + MNR
+  alternating off the same row) + NB mutex + ANF/SNB independent toggles.
+  Buttons are 63×26 and fully fill the flag width.
 
-### Build (Phase 3G RX Epic Sub-epic C-1)
+### Added (Phase 3G RX Epic — band-button auto-mode, #118)
+- New `RadioModel::onBandButtonClicked` handler funnels every band-button
+  entry point (VFO Flag, RxApplet bands row, container `BandButtonItem`,
+  spectrum overlay Band flyout) through one routing path. Closes #118.
+- New `BandDefaults` seed table provides the per-band default mode + filter
+  preset on the user's first visit to each band; subsequent visits load
+  whatever the user last set there.
+- `SliceModel::hasSettingsFor(Band)` probe + `Band::bandFromName` helper
+  back the seed-vs-restore decision and round-trip with case-sensitivity
+  pinning tests.
 
-- Rust + cargo are now required for DFNR builds. CI installs
-  `dtolnay/rust-toolchain@stable`. Local devs run
-  `./setup-deepfilter.sh` (or `./setup-deepfilter.ps1` on Windows)
-  before `cmake -B build`. ENABLE_DFNR auto-OFF if the libdf is
-  absent at configure time, so the build still succeeds without
-  Rust — just without DFNR.
-- Release artifacts grow ~12 MB per platform (DFNet3 model +
-  rnnoise large/small models bundled).
+### Added (Phase 3P-I-a — Alex antenna integration core, #116)
+- `AlexController`'s per-band antenna state now reaches the radio via
+  `RadioConnection::setAntennaRouting`. Three triggers fire the pump:
+  `AlexController::antennaChanged`, `PanadapterModel::bandChanged`, and
+  `onConnectionStateChanged(Connected)`. All 5 writeable antenna surfaces
+  (VFO Flag, RxApplet, Setup-grid, SpectrumOverlayPanel combos,
+  AntennaButtonItem) funnel through `AlexController` as the single source
+  of truth; `SliceModel` caches from the controller via
+  `refreshAntennasFromAlex` so VFO/applet labels stay coherent on band
+  changes. **Closes [#98](https://github.com/boydsoftprez/NereusSDR/issues/98).**
+- `BoardCapabilities` gains `hasAlex2`, `hasRxBypassRelay`, and
+  `rxOnlyAntennaCount` fields with cites to Thetis `setup.cs:6228` and
+  `HPSDR/Alex.cs:377` (`//DH1KLM` / `//G8NJJ` author tags preserved
+  verbatim).
+- New `AntennaLabels` helper (`src/core/AntennaLabels.{h,cpp}`) is the
+  single source for the ANT1/ANT2/ANT3 label list; returns empty on boards
+  without Alex so UI sites can `setVisible(!empty)`. Replaces ~10
+  hardcoded `QStringList{"ANT1","ANT2","ANT3"}` sites.
+- New `PopupMenuStyle.h` defines the universal `kPopupMenu` dark-palette
+  `QMenu` stylesheet. Every antenna popup (VFO Flag + RxApplet) now
+  applies it, fixing Ubuntu 25.10 GNOME dark-on-dark menu rendering.
+- `RadioConnection::setAntennaRouting(AntennaRouting)` pure-virtual
+  replaces the deprecated `setAntenna(int)`. `AntennaRouting` carries
+  RX/TX antenna numbers + `caps.hasAlex` so the protocol layer can zero
+  the antenna bits on HL2/Atlas. Both P1 and P2 implementations updated
+  with byte-for-byte wire-lock tests.
+- VFO Flag, RxApplet, and SpectrumOverlayPanel antenna UI hidden on
+  HL2 / Atlas (`!caps.hasAlex || antennaInputCount < 3`); these SKUs
+  previously saw zombie ANT2/ANT3 buttons that wrote nothing. Matches
+  Thetis's behavior of hiding antenna controls for boards with no
+  Alex relay. `AntennaButtonItem` (meter) click is a silent no-op on
+  `!caps.hasAlex`.
+- New manual verification matrix at
+  [`docs/architecture/antenna-routing-verification.md`](docs/architecture/antenna-routing-verification.md)
+  covers per-SKU VFO Flag / RxApplet / Setup grid / spectrum overlay /
+  AntennaButtonItem / band-change reapply / pcap verification.
+- 17 new tests: `tst_antenna_routing_model` (4), `tst_alex_controller`
+  (+4), `tst_ui_capability_gating` (5), `tst_popup_style_coverage` (1),
+  plus expanded byte-lock cases on `tst_p1_codec_standard` and
+  `tst_p2_codec_orionmkii`.
 
-### Added (Phase 3P-I-b — PR #117)
+### Added (Phase 3P-I-b — RX-only antennas + SKU labels + XVTR, #117)
 - New `SkuUiProfile` (`src/core/SkuUiProfile.{h,cpp}`) — per-`HPSDRModel`
   UI overlay describing RX-only labels + checkbox visibility. 14-case
   switch ports Thetis `setup.cs:19832-20375` exactly: Hermes/ANAN10 →
   "RX1/RX2/XVTR", ANAN100-class → "EXT2/EXT1/XVTR", 7000D/G2/etc. →
   "BYPS/EXT1/XVTR". Pure UI overlay; doesn't touch the wire.
-- New `rxOnlyLabels(SkuUiProfile&)` helper on `AntennaLabels` — named
-  delegator so callers don't reach into the struct directly.
 - `AlexController` gains 6 flags (`rxOutOnTx` / `ext1OutOnTx` /
   `ext2OutOnTx` mutual-exclusion trio + `rxOutOverride` +
   `useTxAntForRx` + `xvtrActive`), ported from Thetis `Alex.cs:61-66`
   static fields. 5 persisted per-MAC; `xvtrActive` session-scoped.
   Mutual-exclusion matches Thetis `setup.cs:15420-16505` handlers.
-- New fine-grained `rxOnlyAntChanged(Band)` signal on `AlexController`
-  so RX-only UI rows can refresh without the full TX grid redraw.
-- P1 bank0 C3 bits 5-7 now encode `AntennaRouting.rxOnlyAnt` +
-  `rxOut`, byte-locked against Thetis `networkproto1.c:453-468` +
-  `netInterface.c:479-481`. Both `P1CodecStandard` and `P1CodecHl2`
-  (which has its own bank0, not inherited) updated.
-- P2 Alex0 bits **8-11** (not 27-30 as the plan + design doc said —
-  bit 27 is `_TR_Relay`; corrected during T5 against authoritative
-  Thetis `network.h:263-307`) encode rxOnlyAnt (bits 8/9/10 for
-  XVTR_Rx_In / Rx_2_In / Rx_1_In) and rxOut (bit 11 = K36 RL17
-  RX-Bypass-Out relay).
-- `RadioModel::applyAlexAntennaForBand(Band, bool isTx=false)` now
-  ports the full Thetis `Alex.cs:310-413 UpdateAlexAntSelection`
-  composition (minus MOX coupling + Aries clamp, both deferred to
-  Phase 3M-1): isTx branch with Ext1/Ext2OnTx mapping, xvtrActive
-  gating (derived from `band == Band::XVTR` — matches Thetis
-  `console.vfoa_band == Band.XVTR`), rx_out_override clamp.
-  6 new signal triggers wire flag changes to reapply composition.
+- P1 bank0 C3 bits 5-7 now encode `AntennaRouting.rxOnlyAnt` + `rxOut`,
+  byte-locked against Thetis `networkproto1.c:453-468` +
+  `netInterface.c:479-481`. Both `P1CodecStandard` and `P1CodecHl2` (which
+  has its own bank0, not inherited) updated.
+- P2 Alex0 bits **8-11** (not 27-30 as the original plan said — bit 27 is
+  `_TR_Relay`; corrected against authoritative Thetis `network.h:263-307`)
+  encode rxOnlyAnt (bits 8/9/10 for XVTR_Rx_In / Rx_2_In / Rx_1_In) and
+  rxOut (bit 11 = K36 RL17 RX-Bypass-Out relay).
+- `RadioModel::applyAlexAntennaForBand(Band, bool isTx=false)` now ports
+  the full Thetis `Alex.cs:310-413 UpdateAlexAntSelection` composition
+  (minus MOX coupling + Aries clamp, both deferred to Phase 3M-1): isTx
+  branch with Ext1/Ext2OnTx mapping, xvtrActive gating (derived from
+  `band == Band::XVTR`), rx_out_override clamp. 6 new signal triggers
+  wire flag changes to reapply composition.
 - Setup → Antenna Control tab gains 5 new TX-bypass checkboxes (RX
   Bypass on TX, Ext 1 on TX, Ext 2 on TX, Disable RX Bypass relay,
   Use TX antenna for RX). SKU-driven visibility + per-SKU Ext2-on-TX
   tooltip variants. RX-only column sub-headers retargeted per SKU.
-- Setup → Antenna → Alex-2 Filters sub-tab now gates on
-  `caps.hasAlex2` (replaces 3P-F hardcoded board check + hides the
-  tab outright on non-BPF2 boards instead of leaving it gray).
-- VFO Flag gains optional grey **BYPS** 3rd button between blue RX
-  and red TX antenna buttons, double-gated on
-  `caps.hasRxBypassRelay && SkuUiProfile.hasRxOutOnTx`. Toggles
-  `AlexController::rxOutOnTx` with bidirectional sync to the Setup
-  checkbox.
+- Setup → Antenna → Alex-2 Filters sub-tab now gates on `caps.hasAlex2`
+  (replaces the 3P-F hardcoded board check + hides the tab outright on
+  non-BPF2 boards instead of leaving it gray).
+- The VFO Flag gains an optional grey **BYPS** 3rd button between blue RX
+  and red TX antenna buttons, double-gated on `caps.hasRxBypassRelay &&
+  SkuUiProfile.hasRxOutOnTx`. Toggles `AlexController::rxOutOnTx` with
+  bidirectional sync to the Setup checkbox.
 - `AntennaButtonItem` meter gains `setHpsdrSku(HPSDRModel)` — button
   indices 3-5 (Thetis "Aux1/Aux2/XVTR" slots) now show SKU-specific
   labels from `SkuUiProfile.rxOnlyLabels`.
-- Tests: `tst_sku_ui_profile` (11 — 14-SKU overlay + 3 NereusSDR-native
-  fallback cases), `tst_antenna_labels` (5 — facade + rxOnlyLabels),
-  `tst_alex_controller` (+7 — flag mutual-exclusion / persistence /
-  rxOnlyAntChanged signal / rxOnlyAnt 0-range), `tst_p1_codec_standard`
-  (+8 byte-lock cases), `tst_p1_codec_hl2` (+8 byte-lock cases),
-  `tst_p2_codec_orionmkii` (+8 byte-lock cases on bits 8-11),
-  `tst_antenna_routing_model` (+7 integration cases: RX-only /
-  Ext1/Ext2 on TX / XVTR on/off / rxOutOverride / HL2 all-zero).
+- 32 new tests across `tst_sku_ui_profile`, `tst_antenna_labels`,
+  `tst_alex_controller` (flag mutual-exclusion), the codec byte-lock
+  suites, and `tst_antenna_routing_model` integration cases.
 - Verification doc: appended §7 per-SKU matrix (RX-only / XVTR /
   Ext-on-TX) + §8 authoritative P1 bank0 C3 and P2 Alex0 bit-layout
   reference.
 
-### Fixed (Phase 3P-I-b — PR #117)
+### Added (Phase 3O — Linux PipeWire-native audio bridge)
+- Native PipeWire audio bridge on Linux with live latency telemetry,
+  separate sidetone / MON sinks, and per-slice output routing. Falls
+  back to pactl / PulseAudio where PipeWire isn't present.
+- New `Setup → Audio → Output` page (Primary, Sidetone, Monitor cards
+  + per-slice routing section). Real PipeWire terminology throughout:
+  `quantum`, `node.name`, `media.role`, `xruns`, `process-cb CPU`,
+  `stream state` (no cosmetic relabeling).
+- Setup → Audio → VAX page rebuilt: VAX is now a virtual source the
+  system sees, not a device the user picks. Per-channel Rename + Copy
+  node-name buttons.
+- New `AudioBackendStrip` header on every Setup → Audio sub-page —
+  shows the detected backend (PipeWire / Pactl / None) and Rescan +
+  Open-logs buttons.
+- `Help → Diagnose audio backend…` menu item opens the same
+  detection-state dialog used at first launch when no audio backend
+  is detected. The first-launch `VaxLinuxFirstRunDialog` walks the
+  user through installing PipeWire / Pactl with copy-pasteable
+  package commands.
+- New optional build dependency on Linux: `libpipewire-0.3-dev`
+  ≥ 0.3.50 (auto-detected via `pkg-config`). Without it the build
+  still succeeds and the legacy LinuxPipeBus FIFO path is used.
+- Lock-free SPSC byte ring (`AudioRingSpsc`) for cross-thread audio
+  delivery, plus an RAII `PipeWireThreadLoop` wrapper over
+  `pw_thread_loop` and a `QAudioSinkAdapter` that lets the unified
+  `IAudioBus` interface front the QAudioSink fallback path.
+- Manual verification matrix:
+  `docs/architecture/linux-audio-verification/README.md`.
+
+### Added — UI / theme polish
+- App-wide dark `QPalette` + baseline QSS bootstrap installed at
+  startup so every window — not just the spectrum / VFO chrome —
+  renders against the correct palette on Linux. Fixes the gray-on-gray
+  Setup dialog that some Ubuntu users saw on first launch.
+- Setup → DSP → NR/ANF page: spinboxes replaced with sliders per the
+  user-facing directive that NR controls should feel continuous.
+  DFNR + MNR sliders use the shared `addSliderRow` /
+  `addDoubleSliderRow` helpers so all NR sub-tabs render identically.
+
+### Build
+- Rust + cargo are now required for DFNR builds. CI installs
+  `dtolnay/rust-toolchain@stable`. Local devs run
+  `./setup-deepfilter.sh` (or `./setup-deepfilter.ps1` on Windows)
+  before `cmake -B build`. `ENABLE_DFNR` auto-OFFs if the libdf is
+  absent at configure time, so the build still succeeds without Rust
+  — just without DFNR.
+- `qt6-shadertools-dev` added to the Linux build prerequisites for
+  Ubuntu 25.10 (Qt 6.8).
+- CI installs ALSA + JACK + PipeWire dev headers on Linux so
+  PortAudio's ALSA / JACK backends are compiled in (`PA_USE_ALSA` +
+  `PA_USE_JACK` forced on).
+- `NEREUS_HAVE_PIPEWIRE` is now propagated to `NereusSDRObjs` consumers
+  so unit tests under `build/tests/` see the same compile-time gates as
+  the app.
+- Release artifacts grow ~12 MB per platform (DFNet3 model + rnnoise
+  large/small models bundled).
+
+### Fixed
+- **Initial `CmdHighPriority` packet on P2 connect sent a DDC frequency
+  that didn't match the HPF/LPF bits.** `P2RadioConnection::connectToRadio`
+  unconditionally reset `m_rx[2].frequency` to 3865000 (80m LSB) after
+  `RadioModel` had queued `setReceiverFrequency` with the persisted VFO.
+  Worker-thread FIFO order made the hardcoded seed overwrite the real
+  value, so the first packet told the radio to tune DDC2 to 80m while
+  enabling 13 MHz HPF. Audio stayed silent until the user moved the
+  panadapter. Fixed by only seeding the default when
+  `m_rx[2].frequency == 0`. Caught on ANAN-G2 (Saturn) bench testing
+  by KG4VCF.
+- **Band-crossing reapplied the wire antenna but kept the old UI label.**
+  `SliceModel::frequencyChanged` → `applyAlexAntennaForBand` was missing
+  the `refreshAntennasFromAlex` call that the click-driven path had —
+  so the relay switched but the VFO Flag / RxApplet buttons showed the
+  previous band's antenna. Fixed + regression test
+  `band_crossing_refreshes_slice_labels`.
+- **`AlexController` per-band antenna selection didn't persist across
+  app restart.** `AlexController::save()` had zero production call
+  sites — only tests invoked it. User would pick ANT2 on 20m, quit,
+  relaunch, and see ANT1 again. Hooked `antennaChanged` +
+  `blockTxChanged` into the existing `scheduleSettingsSave()` coalescer
+  via an `m_alexControllerDirty` flag so the 14-per-band emit burst
+  during `load()` collapses to a single write. Also flushes on
+  `teardownConnection()`.
+- **SpectrumOverlayPanel RX Ant / TX Ant combos in the ANT flyout now
+  actually change the antenna.** Previously the combos rendered but
+  had no `currentTextChanged` handler — zombie controls. Wired through
+  slice 0 via the same pattern as the VAX Ch combo with
+  `m_updatingFromModel` echo guard.
 - **Latent 3P-I-a bug: `AlexController::setRxOnlyAnt(band, 0)` was
   clamped to 1** by the shared `clampAnt(v)` helper, but Thetis
   `Alex.cs:58` uses 0 as "none selected" (required by the RX
   composition logic). New `clampRxOnlyAnt(0..3)` helper allows the 0
-  state; constructor default changed from 1 to 0; `load()` defaults
-  + clamp updated. 3P-I-b's full composition now works as Thetis
-  intended.
+  state; constructor default changed from 1 to 0; `load()` defaults +
+  clamp updated. 3P-I-b's full composition now works as Thetis intended.
 - **Latent 3P-F bug: `setAntennasTo1` no longer touches rxOnlyAnt**
   (Thetis `Alex.cs:72-77` is explicit: "the various RX bypass
   unaffected"). 3P-F wrote all 3 arrays to 1; combined with 3P-I-b's
   new 0 semantic this would have silently activated the RX-bypass
   relay in external-ATU compat mode.
-- `AlexController::rxOnlyAnt(band)` out-of-bounds fallback returns 0
-  (was 1) to match the in-range default — consistent "none selected"
-  regardless of caller correctness.
-
-### Added (Phase 3P-I-a — PR #116)
-- `BoardCapabilities` gains `hasAlex2`, `hasRxBypassRelay`,
-  `rxOnlyAntennaCount` fields (needed for 3P-I-a antenna routing +
-  future 3P-I-b RX-only work). Source cites to Thetis `setup.cs:6228`
-  and `HPSDR/Alex.cs:377` with `//DH1KLM` / `//G8NJJ` tags preserved
-  verbatim. (Phase 3P-I-a)
-- New `AntennaLabels` helper (`src/core/AntennaLabels.{h,cpp}`) —
-  single source for the ANT1/ANT2/ANT3 label list, returns empty on
-  boards without Alex so UI call sites can `setVisible(!empty)`.
-  Replaces ~10 hardcoded `QStringList{"ANT1","ANT2","ANT3"}` sites.
-  (Phase 3P-I-a)
-- New `PopupMenuStyle.h` defines the universal `kPopupMenu`
-  dark-palette `QMenu` stylesheet. Every antenna popup (VFO Flag +
-  RxApplet) now applies it, fixing Ubuntu 25.10 GNOME dark-on-dark
-  menu rendering (issue #98). (Phase 3P-I-a)
-- New `RadioConnection::setAntennaRouting(AntennaRouting)` pure-virtual
-  replaces the deprecated `setAntenna(int)`. `AntennaRouting` carries
-  RX/TX antenna numbers + `caps.hasAlex` so the protocol layer can
-  zero the antenna bits on HL2/Atlas. Both P1 and P2 implementations
-  updated with byte-for-byte wire-lock tests (`tst_p1_codec_standard`
-  bank 0 C4 antennaIdx; `tst_p2_codec_orionmkii` Alex0/Alex1
-  independent RX/TX bits). (Phase 3P-I-a)
-- Tests: `tst_antenna_routing_model` (4 — full pump through a mock
-  RadioConnection), `tst_alex_controller` (+4 cases — signal /
-  idempotency / rejection / setAntennasTo1 14-band),
-  `tst_ui_capability_gating` (5 — widget-level hide/show on VfoWidget
-  + RxApplet), `tst_popup_style_coverage` (1 — build-time kPopupMenu
-  invariant). (Phase 3P-I-a)
-- New manual verification matrix at
-  [`docs/architecture/antenna-routing-verification.md`](docs/architecture/antenna-routing-verification.md)
-  — per-SKU checklist covering VFO Flag / RxApplet / Setup grid /
-  spectrum overlay / AntennaButtonItem / band-change reapply / pcap
-  verification, with explicit out-of-scope enumeration so reviewers
-  don't file FAIL reports on deferred 3P-I-b/3M-1 scope.
-  (Phase 3P-I-a)
-- **Phase 3G RX Epic Sub-epic B — Noise Blanker family.** Port of Thetis's
-  three-filter NB stack: **NB** (`nob.c`, Whitney), **NB2** (`nobII.c`,
-  second-gen), and **SNB** (`snb.c`, spectral). New `NbFamily` wrapper on
-  `RxChannel` owns the WDSP create/destroy lifecycle and tuning. VFO gets a
-  cycling NB button (`Off → NB → NB2 → Off`) mirroring Thetis `chkNB`
-  tri-state (`console.cs:43513-43560 [v2.10.3.13]`). RxApplet gains
-  Threshold (0-100) + Lag (0-20 ms) sliders, scaled to match
-  `setup.cs:8572, 16236 [v2.10.3.13]`. Setup → DSP → NB/SNB page is now
-  interactive (previously greyed) and wires global defaults via AppSettings.
-  `NbMode` + full `NbTuning` struct persist per-slice-per-band under
-  `Slice<N>/Band<key>/Nb{Mode,Threshold,TauMs,LeadMs,LagMs}`; `SnbEnabled`
-  session-level. Defaults pinned to Thetis `cmaster.c:43-68 [v2.10.3.13]`
-  byte-for-byte (`nbThreshold=30.0`, times=0.1 ms, `backtau=0.05 s`,
-  `nb2MaxImpMs=25.0`). Three new unit tests (`tst_nb_family`,
-  `tst_slice_nb_persistence`) plus rewritten `tst_rxchannel_nb2_polish`
-  verify mode cycling, default parity, and per-band round-trip.
-
-### Fixed
-- **Closes [#98](https://github.com/boydsoftprez/NereusSDR/issues/98)
-  — antenna routing wired end-to-end.** `AlexController`'s per-band
-  antenna state now reaches the radio via
-  `RadioConnection::setAntennaRouting`. Three triggers fire the pump:
-  `AlexController::antennaChanged`, `PanadapterModel::bandChanged`,
-  and `onConnectionStateChanged(Connected)`. All 5 writeable antenna
-  surfaces (VFO Flag, RxApplet, Setup-grid, SpectrumOverlayPanel
-  combos, AntennaButtonItem) funnel through `AlexController` as the
-  single source of truth; `SliceModel` caches from the controller via
-  `refreshAntennasFromAlex` so VFO/applet labels stay coherent on
-  band changes. (Phase 3P-I-a)
-- SpectrumOverlayPanel RX Ant / TX Ant combos in the ANT flyout now
-  actually change the antenna. Previously the combos rendered but had
-  no `currentTextChanged` handler — zombie controls. Wired through
-  slice 0 via the same pattern as the VAX Ch combo with
-  `m_updatingFromModel` echo guard. (Phase 3P-I-a)
-- **Initial `CmdHighPriority` packet on P2 connect sent a DDC frequency
-  that didn't match the HPF/LPF bits.** `P2RadioConnection::connectToRadio`
-  unconditionally reset `m_rx[2].frequency` to 3865000 (80m LSB) after
-  `RadioModel` had queued `setReceiverFrequency` with the persisted
-  VFO. Worker-thread FIFO order made the hardcoded seed overwrite
-  the real value, so the first packet told the radio to tune DDC2 to
-  80m while enabling 13 MHz HPF. Audio stayed silent until the user
-  moved the panadapter (which fired a fresh `setReceiverFrequency`
-  with `running=true`). Fixed by only seeding the default when
-  `m_rx[2].frequency == 0`. Caught on ANAN-G2 (Saturn) bench testing
-  by KG4VCF. (Phase 3P-I-a follow-up)
-- **Band-crossing reapplied the wire antenna but kept the old UI label.**
-  T10's `SliceModel::frequencyChanged` → `applyAlexAntennaForBand`
-  path was missing the `refreshAntennasFromAlex` call that T9 had —
-  so the relay switched but the VFO Flag / RxApplet buttons showed
-  the previous band's antenna. Fixed + regression test
-  `band_crossing_refreshes_slice_labels`. (Phase 3P-I-a follow-up)
-- **`AlexController` per-band antenna selection didn't persist across
-  app restart.** `AlexController::save()` had zero production call
-  sites — only tests invoked it. User would pick ANT2 on 20m, quit,
-  relaunch, and see ANT1 again. Hooked `antennaChanged` +
-  `blockTxChanged` into the existing `scheduleSettingsSave()`
-  coalescer via an `m_alexControllerDirty` flag so the 14-per-band
-  emit burst during `load()` collapses to a single write. Also
-  flushes on `teardownConnection()`. (Phase 3P-I-a follow-up)
+- **MNR's MMSE prior-SNR computation had a dimensional bug** in the
+  post-filter application (caught while wiring the 6-knob tuning
+  surface). Fixed in `src/core/MnrFilter.cpp`. Worth flagging upstream
+  to AetherSDR — maintainers may want to backport.
+- **`VfoWidget` removed raw `delete` calls** that bypassed Qt parent
+  ownership. Closes #113.
+- **AudioEngine fallback now honors the requested `deviceName`** and
+  falls back through the `QMediaDevices` enumeration in order, instead
+  of jumping straight to the system default. Closes #112.
+- Three antenna/BPF bench bugs caught on ANAN-G2 during 3P-I-a
+  shakedown (double-connect post-sweep, container `BandButtonItem`
+  click routing, lock-state short-circuit on `onBandButtonClicked`).
+- Several PipeWire shakedown bugs surfaced during Ubuntu 25.10 testing:
+  non-blocking ring write on the PW data thread (was blocking and
+  triggering Mutter's RT-thread SIGKILL); RT-thread `qCInfo` removed
+  from `probeSchedOnce` (same Mutter SIGKILL path); null-guard on
+  `on_process` buffer pointers (PipeWire PAUSED-state crash); a
+  pre-existing SEGFAULT in `stop()` that skipped bus teardown when not
+  running.
+- Restored `//G8NJJ` author tag in the VfoWidget port from
+  `setup.cs:6277` and preserved `//G8NJJ //MW0LGE //N1GP //DH1KLM`
+  tags across the 3P-I-b ports — caught by the
+  `verify-inline-tag-preservation.py` corpus drift gate.
 
 ### Changed
-- VFO Flag, RxApplet, and SpectrumOverlayPanel antenna UI hidden on
-  HL2 / Atlas (`!caps.hasAlex || antennaInputCount < 3`). Previously
-  these SKUs saw zombie ANT2/ANT3 buttons that wrote nothing. Matches
-  Thetis's behavior of hiding antenna controls for boards with no
-  Alex relay. (Phase 3P-I-a)
-- `AntennaButtonItem` (meter) click is a silent no-op on
-  `!caps.hasAlex`. Visual state (dimmed render) deferred to a future
-  phase; the signal no-op is sufficient to stop the zombie path at
-  the protocol layer. (Phase 3P-I-a)
+- `RadioModel` pushes the active slice's NR tuning state to its
+  `RxChannel` whenever any of the 7 NR knobs changes (Task 19) — keeps
+  WDSP/DFNR/MNR in sync with the model without requiring callers to
+  reach into `RxChannel` directly.
+- `RxChannel` consumes the `NbFamily` facade rather than juggling
+  WDSP NB lifecycle directly. `WdspEngine` is no longer involved in
+  per-channel NB create/destroy (it never should have been —
+  duplicated lifecycle was a refactor leftover from 3-UI).
 
 ### Deprecated
 - `RadioConnection::setAntenna(int)` — use
   `setAntennaRouting(AntennaRouting)`. Kept as a thin wrapper for one
-  release cycle; scheduled for removal in 0.3.x. (Phase 3P-I-a)
+  release cycle; scheduled for removal in 0.3.x.
+
+### Internal
+- New attribution corpus refresh (`thetis-author-tags.json` regenerated
+  from upstream walk) + the standard `verify-inline-cites.py` baseline
+  regression gate, `compliance-inventory.py --fail-on-unclassified`,
+  and the cross-platform CI workflows that now build PipeWire +
+  DeepFilterNet on Linux/macOS/Windows.
+
+## [Unreleased]
 
 ## [0.2.2] - 2026-04-22
 
