@@ -732,6 +732,9 @@ void MainWindow::buildUI()
     m_radioModel->setSpectrumWidget(m_spectrumWidget);
     m_radioModel->setFftEngine(m_fftEngine);
 
+    // Wire BandPlanManager → SpectrumWidget so the bandplan strip renders on launch.
+    m_spectrumWidget->setBandPlanManager(&m_radioModel->bandPlanManagerMutable());
+
     // Phase 3G-9b: no first-launch auto-apply of smooth defaults. Per
     // user decision 2026-04-15, the out-of-box waterfall stays on
     // WfColorScheme::Default; ClarityBlue is reachable only via the
@@ -1245,37 +1248,54 @@ void MainWindow::buildMenuBar()
 
     viewMenu->addSeparator();
 
+    // From AetherSDR MainWindow.cpp:4098-4130 [@0cd4559]
     {
         QMenu* bandPlanMenu = viewMenu->addMenu(QStringLiteral("&Band Plan"));
-        QActionGroup* bpGroup = new QActionGroup(this);
+
+        const int savedBpSize = AppSettings::instance()
+                                    .value(QStringLiteral("BandPlanFontSize"),
+                                           QStringLiteral("6"))
+                                    .toInt();
+
+        QActionGroup* bpGroup = new QActionGroup(bandPlanMenu);
         bpGroup->setExclusive(true);
-        const struct { const char* label; } bpModes[] = {
-            { "&Off" }, { "&Small" }, { "&Medium" }, { "&Large" }
+        struct BpOption { const char* label; int pt; };
+        const BpOption bpModes[] = {
+            { "&Off",    0  },
+            { "&Small",  6  },
+            { "&Medium", 10 },
+            { "&Large",  12 },
+            { "&Huge",   16 },
         };
-        bool first = true;
-        for (const auto& m : bpModes) {
-            QAction* a = bandPlanMenu->addAction(QString::fromUtf8(m.label));
+        for (const auto& opt : bpModes) {
+            QAction* a = bandPlanMenu->addAction(QString::fromUtf8(opt.label));
             a->setCheckable(true);
-            a->setEnabled(false);
-            a->setToolTip(QStringLiteral("NYI — Phase X"));
-            if (first) { a->setChecked(true); first = false; }
+            a->setChecked(opt.pt == savedBpSize);
             bpGroup->addAction(a);
+            const int pt = opt.pt;
+            connect(a, &QAction::triggered, this, [this, pt]() {
+                if (m_spectrumWidget) {
+                    m_spectrumWidget->setBandPlanFontSize(pt);
+                }
+                AppSettings::instance().setValue(QStringLiteral("BandPlanFontSize"),
+                                                 QString::number(pt));
+            });
         }
+
         bandPlanMenu->addSeparator();
-        QMenu* regionMenu = bandPlanMenu->addMenu(QStringLiteral("&Region"));
-        QActionGroup* regionGroup = new QActionGroup(this);
-        regionGroup->setExclusive(true);
-        const struct { const char* label; } regions[] = {
-            { "&US" }, { "&EU" }, { "&JA" }, { "&Other" }
-        };
-        bool firstRegion = true;
-        for (const auto& r : regions) {
-            QAction* a = regionMenu->addAction(QString::fromUtf8(r.label));
+
+        QActionGroup* planGroup = new QActionGroup(bandPlanMenu);
+        planGroup->setExclusive(true);
+        const auto& mgr = m_radioModel->bandPlanManager();
+        const QString activePlan = mgr.activePlanName();
+        for (const QString& name : mgr.availablePlans()) {
+            QAction* a = bandPlanMenu->addAction(name);
             a->setCheckable(true);
-            a->setEnabled(false);
-            a->setToolTip(QStringLiteral("NYI — Phase X"));
-            if (firstRegion) { a->setChecked(true); firstRegion = false; }
-            regionGroup->addAction(a);
+            a->setChecked(name == activePlan);
+            planGroup->addAction(a);
+            connect(a, &QAction::triggered, this, [this, name]() {
+                m_radioModel->bandPlanManagerMutable().setActivePlan(name);
+            });
         }
     }
 

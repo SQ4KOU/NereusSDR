@@ -68,6 +68,7 @@
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
 #include "Band.h"
+#include "BandPlanManager.h"
 #include "SliceModel.h"
 #include "PanadapterModel.h"
 #include "MeterModel.h"
@@ -166,6 +167,12 @@ public:
     // (AntennaAlexAntennaControlTab — Phase 3P-F Task 3).
     const AlexController& alexController()        const { return m_alexController; }
     AlexController&       alexControllerMutable()       { return m_alexController; }
+
+    // Band-plan overlay manager — loaded once on construction from bundled
+    // Qt resource JSON files. Active plan persists in AppSettings under
+    // "BandPlanName". Phase 3G RX Epic sub-epic D.
+    const BandPlanManager& bandPlanManager()        const { return m_bandPlanManager; }
+    BandPlanManager&       bandPlanManagerMutable()       { return m_bandPlanManager; }
 
     // Apollo PA + ATU + LPF accessory controller — present/filter/tuner enable flags.
     // Loaded per-MAC at connect time. Setup UI deferred (Phase 3P-F Task 5a).
@@ -398,6 +405,10 @@ private:
     // MAC and load() are called on connect, matching OcMatrix ownership pattern.
     // Phase 3P-F Task 3.
     AlexController m_alexController;
+
+    // Band-plan overlay manager — app-global, loaded once from Qt resources.
+    // Phase 3G RX Epic sub-epic D.
+    BandPlanManager m_bandPlanManager;
 
     // Apollo PA + ATU + LPF accessory state (present/filter/tuner enable bools).
     // MAC and load() are called on connect. Phase 3P-F Task 5a.
