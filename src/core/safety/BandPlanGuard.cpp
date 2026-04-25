@@ -2,12 +2,14 @@
 // src/core/safety/BandPlanGuard.cpp  (NereusSDR)
 // =================================================================
 //
-// Ported from Thetis sources:
+// Ported from Thetis [v2.10.3.13 @501e3f5]:
 //   Project Files/Source/Console/console.cs
 //   Project Files/Source/Console/clsBandStackManager.cs
 //   Project Files/Source/Console/setup.designer.cs
 //
-// Original licence from Thetis source is included below.
+// Original licences from each Thetis source file are included below,
+// verbatim, separated by // --- From [filename] --- markers per
+// CLAUDE.md "Byte-for-byte headers and multi-file attribution".
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -16,9 +18,7 @@
 //                Anthropic Claude Code.
 // =================================================================
 
-//=================================================================
-// console.cs
-//=================================================================
+// --- From console.cs ---
 // Thetis is a C# implementation of a Software Defined Radio.
 // Copyright (C) 2004-2009  FlexRadio Systems
 // Copyright (C) 2010-2020  Doug Wigley
@@ -45,7 +45,6 @@
 //    Austin, TX 78750
 //    USA
 //
-//=================================================================
 // Modifications to support the Behringer Midi controllers
 // by Chris Codella, W2PA, May 2017.  Indicated by //-W2PA comment lines.
 // Modifications for using the new database import function.  W2PA, 29 May 2017
@@ -64,8 +63,55 @@
 // its original terms and is not affected by this dual-licensing statement in any way.        //
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
-
+//
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
+
+// --- From clsBandStackManager.cs ---
+/*  clsBandStackManager.cs
+
+This file is part of a program that implements a Software-Defined Radio.
+
+This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+
+Copyright (C) 2020-2025 Richard Samphire MW0LGE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+mw0lge@grange-lane.co.uk
+*/
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+// --- From setup.designer.cs ---
+// (Auto-generated Visual Studio designer file; no upstream copyright header present.
+//  Cite stamp v2.10.3.13 @501e3f5 traces back to that designer file in the Thetis repo.
+//  The comboFRSRegion 24-region list is sourced from
+//  setup.designer.cs:8084-8108 [v2.10.3.13].)
 
 #include "core/safety/BandPlanGuard.h"
 #include <array>
