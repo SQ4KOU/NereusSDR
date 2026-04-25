@@ -647,4 +647,11 @@ nereus_add_test(tst_band_plan_guard)
 # console.cs:29191-29195 [v2.10.3.13] (UIMOXChangedFalse).
 nereus_add_test(tst_swr_protection_controller)
 
+# ── Phase 3M-0 Task 4: TxInhibitMonitor GPIO poll + 4-source aggregation ─────
+# 8 tests cover: startup no-inhibit, UserIo01 active-low, reverse-logic inversion,
+# immediate Rx2OnlyRadio / OutOfBand / BlockTxAntenna notification paths,
+# multi-source priority ordering + all-clear, and poll-cadence duplicate suppression.
+# Ports Thetis console.cs:25801-25839 [v2.10.3.13] (PollTXInhibit loop).
+nereus_add_test(tst_tx_inhibit_monitor)
+
 
