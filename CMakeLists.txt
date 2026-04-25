@@ -389,6 +389,7 @@ set(CORE_SOURCES
     src/core/safety/BandPlanGuard.cpp
     src/core/safety/SwrProtectionController.cpp
     src/core/safety/TxInhibitMonitor.cpp
+    src/core/safety/safety_constants.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the

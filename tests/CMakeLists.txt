@@ -669,4 +669,11 @@ nereus_add_test(tst_radio_connection_watchdog)
 # (CATHandleAmplifierTripMessage + GanymedeResetPressed).
 nereus_add_test(tst_radio_model_pa_tripped)
 
+# ── Phase 3M-0 Task 7A: per-board PA scaling table ────────────────────────────
+# 5 tests pin per-board forward-power watts for ANAN100, ANAN_G2, ORIONMKII,
+# REDPITAYA, and the default fallback (HERMES). Values computed from the ported
+# formula: volts=(adc-offset)/4095*refVoltage; watts=volts^2/bridgeVolt.
+# Ports Thetis console.cs:25008-25072 [v2.10.3.13] (computeAlexFwdPower).
+nereus_add_test(tst_pa_scaling)
+
 
