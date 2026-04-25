@@ -525,6 +525,11 @@ RadioModel::RadioModel(QObject* parent)
     // decision 2026-04-15 (Default should stay the out-of-box default).
     // No first-launch auto-apply here. The `DisplayProfileApplied`
     // AppSettings key is reserved for PR3 (Clarity) to repurpose.
+
+    // Load bundled band-plan overlays from Qt resources. AppSettings is a
+    // singleton available before RadioModel is constructed, so this is safe
+    // here. Phase 3G RX Epic sub-epic D.
+    m_bandPlanManager.loadPlans();
 }
 
 RadioModel::~RadioModel()
