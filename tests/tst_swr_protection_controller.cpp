@@ -95,6 +95,7 @@ void TestSwrProtectionController::recoveryWithoutMoxOff_doesNotClearLatch()
 
 // moxOff() clears all latches and resets factor to 1.0
 // From Thetis console.cs:29191-29195 [v2.10.3.13] (UIMOXChangedFalse)
+// Tag preserved: //[2.10.3.7]MW0LGE (console.cs:29190 — reset comment)
 void TestSwrProtectionController::moxOffClearsLatch()
 {
     for (int i = 0; i < 4; ++i) {
@@ -111,6 +112,8 @@ void TestSwrProtectionController::moxOffClearsLatch()
 
 // Open antenna: fwd > 10W and (fwd-rev) < 1W → swr=50, factor=0.01
 // From Thetis console.cs:25989-26009 [v2.10.3.6] //[2.10.3.6]MW0LGE (verbatim inline tag)
+// Tags preserved: //K2UE (console.cs:25985 — open-antenna check bypass for ANAN8000D)
+//                 //-W2PA (console.cs:25987 — changed fwd threshold to allow 35W for amp tuners)
 void TestSwrProtectionController::openAntennaDetected_swr50_factor0_01()
 {
     // fwd=15W, rev=14.5W → (fwd-rev)=0.5 < 1.0 and fwd > 10.0
@@ -123,6 +126,7 @@ void TestSwrProtectionController::openAntennaDetected_swr50_factor0_01()
 
 // Both fwd and rev ≤ 2W floor → SWR clamped to 1.0, no trip
 // From Thetis console.cs:25978 [v2.10.3.13]
+// Tag preserved: //[2.10.3.6]MW0LGE (console.cs:25980 — SWR/tune config modifications)
 void TestSwrProtectionController::lowPowerClampedToSwr1_0()
 {
     m_ctrl->ingest(1.0f, 1.0f, false);

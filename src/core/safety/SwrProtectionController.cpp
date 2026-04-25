@@ -112,6 +112,13 @@ void SwrProtectionController::setDisableOnTune(bool on) noexcept
 void SwrProtectionController::ingest(float fwdW, float revW, bool tuneActive) noexcept
 {
     // From Thetis console.cs:25933-26120 [v2.10.3.13] (PollPAPWR loop)
+    // Verbatim inline tags from the cited range preserved per CLAUDE.md:
+    //   console.cs:25961  case HPSDRModel.REDPITAYA: //DH1KLM
+    //   console.cs:25980  //[2.10.3.6]MW0LGE modifications to use setup config for swr
+    //   console.cs:25985  // in following 'if', K2UE recommends not checking open antenna
+    //   console.cs:25987  //-W2PA Changed to allow 35w - some amplifier tuners need about 30w
+    //   console.cs:25989  //[2.10.3.6]MW0LGE ignored if tuning, and returned the 10.0f
+    //   console.cs:26064  // K2UE idea:  try to determine if Hi-Z or Lo-Z load
 
     if (!m_enabled) {
         // When protection is disabled, always pass-through at full power
@@ -128,6 +135,7 @@ void SwrProtectionController::ingest(float fwdW, float revW, bool tuneActive) no
 
     // ── SWR computation ───────────────────────────────────────────────────
     // From Thetis console.cs:25972-25978 [v2.10.3.13]
+    // Tag preserved: //[2.10.3.6]MW0LGE (console.cs:25980 — SWR/tune config)
 
     float swr = 1.0f;
     float rho = std::sqrt(revW / fwdW);

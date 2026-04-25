@@ -76,6 +76,11 @@ TxInhibitMonitor::TxInhibitMonitor(QObject* parent)
 {
     m_pollTimer->setInterval(kPollIntervalMs);
     connect(m_pollTimer, &QTimer::timeout, this, &TxInhibitMonitor::recompute);
+    // The QTimer runs continuously regardless of enabled state, so m_userIoAsserted
+    // stays current even while the monitor is disabled. This avoids a stale-startup
+    // emission when re-enabled (the first poll after enable returns the live pin
+    // state, not a stale pre-construction value). Intentional improvement over
+    // Thetis PollTXInhibit which gates the entire body on _useTxInhibit.
     m_pollTimer->start();
 }
 
@@ -150,6 +155,7 @@ TxInhibitMonitor::Source TxInhibitMonitor::lastSource() const noexcept
 void TxInhibitMonitor::recompute()
 {
     // From Thetis console.cs:25801-25839 [v2.10.3.13] (PollTXInhibit loop)
+    // Tag preserved: //DH1KLM (console.cs:25814 — REDPITAYA/ANAN7000D/8000D use getUserI02 in P1)
 
     // Step 1 — read the UserIO pin if a reader is installed.
     // From Thetis console.cs:25814-25820 [v2.10.3.13]:

@@ -46,6 +46,7 @@ void TestTxInhibitMonitor::cleanup()
 // After startup with pin LOW (not asserted), no inhibit signal fires and
 // inhibited() returns false after the first poll tick at 100 ms.
 // From Thetis console.cs:25801-25839 [v2.10.3.13] (PollTXInhibit baseline state)
+// Tag preserved: //DH1KLM (console.cs:25814 — REDPITAYA/ANAN7000D/8000D use getUserI02 in P1)
 void TestTxInhibitMonitor::noInhibit_atStartup_signalsFalse()
 {
     QSignalSpy spy(m_mon, &TxInhibitMonitor::txInhibitedChanged);
@@ -58,6 +59,7 @@ void TestTxInhibitMonitor::noInhibit_atStartup_signalsFalse()
 // When the UserIO pin is asserted (active-low → logical true from reader),
 // the monitor emits txInhibitedChanged(true, UserIo01).
 // From Thetis console.cs:25814-25820 [v2.10.3.13] (inhibit_input = !getUserI01())
+// Tag preserved: //DH1KLM (console.cs:25814 — per-board model check)
 void TestTxInhibitMonitor::userIo01_assertedActiveLow_emitsWithSourceUserIo01()
 {
     QSignalSpy spy(m_mon, &TxInhibitMonitor::txInhibitedChanged);
@@ -123,6 +125,7 @@ void TestTxInhibitMonitor::blockTxAntenna_assertedTrue_emitsWithSourceBlockTxAnt
 // (highest-priority source takes over). Only when all sources are cleared does
 // inhibited() return false.
 // From Thetis console.cs:25801-25839 [v2.10.3.13] — priority ordering.
+// Tag preserved: //DH1KLM (console.cs:25814 — per-board model check for P1)
 void TestTxInhibitMonitor::multipleSourcesActive_inhibitedRemainsTrueUntilAllClear()
 {
     m_mon->notifyRxOnly(true);

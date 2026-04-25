@@ -105,6 +105,12 @@ namespace NereusSDR::safety {
 ///         Andromeda.cs:285-306 [v2.10.3.13] (AlexANT[2,3]RXOnly).
 ///
 /// The controller is inert (signals only, no radio I/O) until 3M-1a wires it.
+///
+/// Thread safety: all public methods (notify*(), setEnabled(), setReverseLogic(),
+/// setUserIoReader()) must be called on the same thread the object lives on.
+/// The QTimer fires on that same thread. Cross-thread callers in Task 17 must
+/// use QMetaObject::invokeMethod(monitor, [=]{ ... }, Qt::QueuedConnection)
+/// or queued signal-slot connections.
 class TxInhibitMonitor : public QObject
 {
     Q_OBJECT
