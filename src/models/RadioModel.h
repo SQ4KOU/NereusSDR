@@ -68,6 +68,7 @@
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
 #include "Band.h"
+#include "BandPlanManager.h"
 #include "SliceModel.h"
 #include "PanadapterModel.h"
 #include "MeterModel.h"
@@ -78,7 +79,6 @@
 #include "core/RadioStatus.h"
 #include "core/SettingsHygiene.h"
 #include "core/accessories/AlexController.h"
-#include "BandPlanManager.h"
 #include "core/accessories/ApolloController.h"
 #include "core/accessories/PennyLaneController.h"
 #include "core/CalibrationController.h"
