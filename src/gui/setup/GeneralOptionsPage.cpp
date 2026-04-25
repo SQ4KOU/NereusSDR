@@ -88,8 +88,9 @@ void applyDarkStyle(QWidget* w)
         "  selection-background-color: #00b4d8; }"
         "QSpinBox { background: #1a2a3a; color: #c8d8e8;"
         "  border: 1px solid #203040; border-radius: 3px; padding: 1px 4px; }"
-        "QSpinBox::up-button, QSpinBox::down-button"
-        "  { background: #203040; border: none; }"
+        // Up/down buttons: rely on Fusion + app-level dark palette
+        // (see main.cpp / AppTheme.h). Styling the subcontrols here
+        // would erase the native arrow images.
         "QCheckBox { color: #c8d8e8; }"
         "QCheckBox::indicator { width: 14px; height: 14px; background: #1a2a3a;"
         "  border: 1px solid #203040; border-radius: 2px; }"

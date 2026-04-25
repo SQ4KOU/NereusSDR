@@ -112,9 +112,12 @@ void applyDarkStyle(QWidget* w)
         "QSlider::sub-page:horizontal { background: #00b4d8; border-radius: 2px; }"
         "QSpinBox, QDoubleSpinBox { background: #1a2a3a; color: #c8d8e8;"
         "  border: 1px solid #203040; border-radius: 3px; padding: 1px 4px; }"
-        "QSpinBox::up-button, QSpinBox::down-button,"
-        "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button"
-        "  { background: #203040; border: none; }"
+        // Up/down buttons left to Fusion native rendering: the moment
+        // we style the subcontrol, Qt drops the native arrow image
+        // and we'd need to provide our own. With the app-level dark
+        // palette installed in main.cpp, Fusion paints the native
+        // arrows in the right color against the surrounding QSpinBox
+        // background.
         "QCheckBox { color: #c8d8e8; }"
         "QCheckBox::indicator { width: 14px; height: 14px; background: #1a2a3a;"
         "  border: 1px solid #203040; border-radius: 2px; }"
