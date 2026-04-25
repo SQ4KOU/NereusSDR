@@ -1,4 +1,5 @@
 #include "gui/MainWindow.h"
+#include "gui/styles/AppTheme.h"
 #include "core/AppSettings.h"
 #include "core/AudioDeviceConfig.h"
 #include "core/RadioConnection.h"
@@ -185,8 +186,15 @@ int main(int argc, char* argv[])
         s_logFile = nullptr;
     }
 
-    // Fusion style as a clean cross-platform base
+    // Fusion style as a clean cross-platform base, then layer the
+    // NereusSDR dark palette + minimal baseline QSS on top so every
+    // widget (including ones without their own stylesheet) renders
+    // with the dark theme. Without this, Linux/Ubuntu Yaru leaks
+    // light-grey backgrounds and orange Highlight through into popups,
+    // group-box titles, tooltips, and any unstyled control.
     app.setStyle(QStyleFactory::create("Fusion"));
+    NereusSDR::applyDarkPalette(app);
+    NereusSDR::applyAppBaselineQss(app);
 
     // Register custom metatypes for cross-thread signal/slot connections.
     qRegisterMetaType<NereusSDR::RadioConnectionError>();

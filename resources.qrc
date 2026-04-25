@@ -17,5 +17,7 @@
     </qresource>
     <qresource prefix="/icons">
         <file alias="NereusSDR.png">resources/icons/NereusSDR.png</file>
+        <file alias="spin-up.svg">resources/icons/spin-up.svg</file>
+        <file alias="spin-down.svg">resources/icons/spin-down.svg</file>
     </qresource>
 </RCC>
