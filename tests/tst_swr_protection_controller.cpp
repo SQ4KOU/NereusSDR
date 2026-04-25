@@ -15,8 +15,9 @@ private slots:
     void cleanup();
 
     void cleanMatch_factorIs1_highSwrFalse();
-    void swrAtLimit_foldbackEngages_factorComputed();
+    void swrAtLimit_fourTripsWithWindBack_latchEngages();
     void fourConsecutiveTrips_windbackLatches();
+    void perSampleFoldback_oneTrip_windBackDisabled_factorIs0_5();
     void recoveryWithoutMoxOff_doesNotClearLatch();
     void moxOffClearsLatch();
     void openAntennaDetected_swr50_factor0_01();
@@ -49,17 +50,18 @@ void TestSwrProtectionController::cleanMatch_factorIs1_highSwrFalse()
     QVERIFY(!m_ctrl->highSwr());
 }
 
-// SWR at limit → per-sample foldback factor = limit / (swr + 1)
-// From Thetis console.cs:26073-26075 [v2.10.3.13] — 4th trip triggers foldback
-void TestSwrProtectionController::swrAtLimit_foldbackEngages_factorComputed()
+// SWR at limit, windBackEnabled=true → 4 trips → windback latch engages at 0.01
+// From Thetis console.cs:26083-26090 [v2.10.3.13] — windback latch path
+void TestSwrProtectionController::swrAtLimit_fourTripsWithWindBack_latchEngages()
 {
     // fwd=10W, rev=5.56W → rho≈0.7454 → swr≈(1.745)/(0.2546)≈6.86 > limit(2.0)
-    // Trigger 4 consecutive trips to get foldback
+    // windBackEnabled=true (set in init()) — latch fires after 4 trips at 0.01
     for (int i = 0; i < 4; ++i) {
         m_ctrl->ingest(10.0f, 5.56f, false);
     }
     QVERIFY(m_ctrl->highSwr());
-    // After 4 trips, windback latches at 0.01
+    QVERIFY(m_ctrl->windBackLatched());
+    // After 4 trips with windback enabled, latch overrides per-sample factor to 0.01
     QCOMPARE(m_ctrl->protectFactor(), 0.01f);
 }
 
@@ -142,6 +144,33 @@ void TestSwrProtectionController::disableOnTune_bypassesProtection()
 
     QCOMPARE(m_ctrl->protectFactor(), 1.0f);
     QVERIFY(!m_ctrl->highSwr());
+}
+
+// Per-sample foldback formula in isolation (windBackEnabled=false isolates this path)
+// From Thetis console.cs:26071-26075 [v2.10.3.13]:
+//   factor = limit / (swr + 1)
+// With limit=2.0, fwd=100W, rev=25W → rho=sqrt(0.25)=0.5 → swr=3.0
+//   → factor = 2.0 / (3.0 + 1.0) = 0.5
+void TestSwrProtectionController::perSampleFoldback_oneTrip_windBackDisabled_factorIs0_5()
+{
+    // Disabling windback isolates the per-sample foldback path; without windback
+    // the controller computes factor = limit/(swr+1) each debounce cycle and
+    // never overrides it to kWindBackFactor (0.01).
+    m_ctrl->setWindBackEnabled(false);
+
+    // Per-sample foldback only engages once tripCount reaches the debounce
+    // threshold (kTripDebounceCount = 4). Feed four identical trips.
+    m_ctrl->ingest(/*fwdW=*/100.0f, /*revW=*/25.0f, /*tuneActive=*/false);
+    m_ctrl->ingest(100.0f, 25.0f, false);
+    m_ctrl->ingest(100.0f, 25.0f, false);
+    m_ctrl->ingest(100.0f, 25.0f, false);
+
+    QVERIFY(m_ctrl->highSwr());
+    QVERIFY(!m_ctrl->windBackLatched());
+
+    const float factor = m_ctrl->protectFactor();
+    QVERIFY2(factor >= 0.49f && factor <= 0.51f,
+             qPrintable(QString("expected ~0.5, got %1").arg(factor)));
 }
 
 QTEST_GUILESS_MAIN(TestSwrProtectionController)

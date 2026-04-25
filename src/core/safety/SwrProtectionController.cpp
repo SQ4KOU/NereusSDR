@@ -196,6 +196,15 @@ void SwrProtectionController::ingest(float fwdW, float revW, bool tuneActive) no
     // ── Trip detection + foldback / windback ──────────────────────────────
     // console.cs:26067-26091 [v2.10.3.13]
 
+    // TODO [3M-1a]: add `alex_fwd > alex_fwd_limit` floor (5W default,
+    //   2× power-slider for ANAN-8000D) to suppress false trips during TX
+    //   ramp-up. Mirrors console.cs:26067 [v2.10.3.13].
+    // TODO [3M-1a]: add the `tunePowerSliderValue <= 70` override to the
+    //   tune-bypass block when the power slider value is exposed by the
+    //   integration in Task 17. Mirrors console.cs:26020-26057 [v2.10.3.13].
+    //
+    // Both conditions are intentionally deferred — SwrProtectionController
+    // is inert until 3M-1a wires it into the MOX path.
     if (swr > m_limit && !swrPass) {
         m_tripCount++;
         if (m_tripCount >= kTripDebounceCount) {
