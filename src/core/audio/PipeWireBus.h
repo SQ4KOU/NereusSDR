@@ -88,9 +88,12 @@ public:
     qint64 push(const char* data, qint64 bytes) override;
     qint64 pull(char* data, qint64 maxBytes) override;
 
-    // Metering — both atomics initialised to 0.0f. Written by metering wiring
-    // in a later task; they exist here to satisfy the interface.
-    float rxLevel() const override { return m_rxLevel.load(); }
+    // Metering. rxLevel defers to PipeWireStream which computes RMS on
+    // every push() call. txLevel still returns the unwritten m_txLevel
+    // atomic (TX-side metering lands when Phase 3M wires the consumer).
+    float rxLevel() const override {
+        return m_stream ? m_stream->rxLevel() : 0.0f;
+    }
     float txLevel() const override { return m_txLevel.load(); }
 
     // Diagnostics.

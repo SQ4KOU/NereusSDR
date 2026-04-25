@@ -26,12 +26,26 @@ namespace NereusSDR {
 // ---------------------------------------------------------------------------
 pw_properties* configToProperties(const StreamConfig& cfg)
 {
+    // For OUTPUT-direction Audio/Source streams (our VAX virtual sources
+    // that consumer apps capture FROM), media.category must be "Capture"
+    // — the value is from the consumer's perspective, not ours. Setting
+    // "Playback" produces a contradictory node (Audio/Source class +
+    // Playback category) that the ALSA-compat bridge refuses to expose
+    // as an arecord-listable device, which is what Qt's audio backend
+    // (and therefore WSJT-X / fldigi / VARA) enumerates.
+    const bool isVirtualSource =
+        (cfg.direction == StreamConfig::Output) &&
+        (cfg.mediaClass == QStringLiteral("Audio/Source"));
+    const char* mediaCategory =
+        isVirtualSource                              ? "Capture" :
+        (cfg.direction == StreamConfig::Output)      ? "Playback" :
+                                                       "Capture";
+
     pw_properties* p = pw_properties_new(
         PW_KEY_NODE_NAME,        cfg.nodeName.toUtf8().constData(),
         PW_KEY_NODE_DESCRIPTION, cfg.nodeDescription.toUtf8().constData(),
         PW_KEY_MEDIA_TYPE,       "Audio",
-        PW_KEY_MEDIA_CATEGORY,
-            cfg.direction == StreamConfig::Output ? "Playback" : "Capture",
+        PW_KEY_MEDIA_CATEGORY,   mediaCategory,
         PW_KEY_MEDIA_ROLE,       cfg.mediaRole.toUtf8().constData(),
         PW_KEY_MEDIA_CLASS,      cfg.mediaClass.toUtf8().constData(),
         nullptr);
@@ -44,6 +58,25 @@ pw_properties* configToProperties(const StreamConfig& cfg)
     pw_properties_setf(p, PW_KEY_NODE_RATE, "1/%u", cfg.rate);
     pw_properties_setf(p, PW_KEY_NODE_LATENCY, "%u/%u",
                        cfg.quantum, cfg.rate);
+
+    // Audio format hints — the system mic exposes these (channels=2,
+    // position=FL,FR) and they're required for WirePlumber's ALSA-compat
+    // bridge to expose us as an arecord-listable capture device. Without
+    // them WSJT-X / fldigi can see us in `wpctl status` but we don't
+    // appear in their device dropdowns (which enumerate ALSA PCMs).
+    pw_properties_setf(p, PW_KEY_AUDIO_CHANNELS, "%u", cfg.channels);
+    if (cfg.channels == 2) {
+        pw_properties_set(p, "audio.position", "FL,FR");
+    } else if (cfg.channels == 1) {
+        pw_properties_set(p, "audio.position", "MONO");
+    }
+
+    // node.virtual = true is the canonical hint for "I am a virtual node,
+    // not backed by hardware — please expose me as a first-class source
+    // through the session manager / ALSA bridge."
+    if (isVirtualSource) {
+        pw_properties_set(p, "node.virtual", "true");
+    }
 
     return p;
 }
@@ -170,6 +203,24 @@ void PipeWireStream::close()
 qint64 PipeWireStream::push(const char* data, qint64 bytes)
 {
     Q_ASSERT(bytes % (sizeof(float) * m_cfg.channels) == 0);
+
+    // RMS of the block, for the meter UI. Computed on the producer
+    // thread (DSP thread for OUTPUT direction). Cheap — single pass,
+    // no allocations.
+    if (bytes > 0) {
+        const float* samples = reinterpret_cast<const float*>(data);
+        const qint64 floatCount = bytes / qint64(sizeof(float));
+        double sumSq = 0.0;
+        for (qint64 i = 0; i < floatCount; ++i) {
+            const float s = samples[i];
+            sumSq += double(s) * double(s);
+        }
+        const float rms = floatCount > 0
+            ? float(std::sqrt(sumSq / double(floatCount)))
+            : 0.0f;
+        m_rxLevel.store(rms, std::memory_order_relaxed);
+    }
+
     const qint64 written = m_ring.tryPushCopy(
         reinterpret_cast<const uint8_t*>(data), bytes);
     if (written < bytes) {

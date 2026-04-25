@@ -104,6 +104,14 @@ private:
     std::atomic<int>      m_schedPriority{0};
     std::atomic<bool>     m_schedProbed{false};
 
+    // RMS of last block pushed (0..1, F32 absolute) — read by the IAudioBus
+    // wrapper's rxLevel() for meter UI. Computed on the producer thread
+    // inside push() (DSP thread for OUTPUT direction streams).
+    std::atomic<float>    m_rxLevel{0.0f};
+public:
+    float rxLevel() const { return m_rxLevel.load(std::memory_order_relaxed); }
+private:
+
     // FIXME(task-9-followup): QString assignment from pw event thread races with telemetry() read from GUI thread; promote to std::atomic<int> + switch.
     QString m_stateName = QStringLiteral("closed");
 };
