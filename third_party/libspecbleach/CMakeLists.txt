@@ -66,6 +66,16 @@ set_target_properties(specbleach_static PROPERTIES
     C_STANDARD_REQUIRED ON
     C_EXTENSIONS OFF)
 
+# libspecbleach's general_utils.h decorates declarations with
+# __attribute__((warn_unused_result)), a GCC/Clang extension MSVC does
+# not parse. Force-include a tiny shim that #defines __attribute__(x)
+# to empty under _MSC_VER so the decoration evaporates on Windows
+# without touching the upstream tree.
+if(MSVC)
+    target_compile_options(specbleach_static PRIVATE
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/msvc_compat.h")
+endif()
+
 # FFTW3 linkage — mirror the convention used by third_party/wdsp/CMakeLists.txt.
 # NereusSDR's top-level CMake populates FFTW3_INCLUDE_DIRS + FFTW3_LIBRARIES
 # (which include both double and single-precision on Linux/macOS, or the
