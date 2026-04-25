@@ -179,6 +179,10 @@ private:
     std::function<bool()> m_userIoReader;
 
     QTimer* m_pollTimer = nullptr;
+
+    // Poll cadence — From Thetis console.cs:25838 [v2.10.3.13]:
+    //   await Task.Delay(100); // PollTXInhibit loop
+    static constexpr int kPollIntervalMs = 100;
 };
 
 } // namespace NereusSDR::safety

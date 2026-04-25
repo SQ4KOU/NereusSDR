@@ -74,9 +74,7 @@ TxInhibitMonitor::TxInhibitMonitor(QObject* parent)
     : QObject(parent)
     , m_pollTimer(new QTimer(this))
 {
-    // From Thetis console.cs:25838 [v2.10.3.13] — await Task.Delay(100)
-    // corresponds to our 100 ms QTimer interval.
-    m_pollTimer->setInterval(100);
+    m_pollTimer->setInterval(kPollIntervalMs);
     connect(m_pollTimer, &QTimer::timeout, this, &TxInhibitMonitor::recompute);
     m_pollTimer->start();
 }
