@@ -7,10 +7,11 @@
 > Full v0.2.3 walkthrough of what to try, what "success" looks like on
 > your OpenHPSDR radio, and — just as important — which UI controls are
 > intentionally stubbed so you don't file bugs against them. Includes
-> 18 numbered steps from launch → live SSB QSO → quit, plus
+> 19 numbered steps from launch → live SSB QSO → quit, plus
 > v0.2.3-specific tests for the dBm scale strip (step 12), the DSP grid
 > + 7-filter NR family (step 13), Alex antenna routing per-band
-> (step 14), and the new Linux PipeWire audio bridge (step 15).
+> (step 14), VAX audio routing (step 15), and the new Linux PipeWire
+> audio bridge (step 16).
 > Earlier-release walkthroughs remain at
 > [docs/debugging/alpha-tester-hl2-smoke-test.md](docs/debugging/alpha-tester-hl2-smoke-test.md)
 > for historical reference.
@@ -77,6 +78,7 @@ sha256sum -c SHA256SUMS.txt
 - **Auto AGC-T** — `NoiseFloorTracker` feeds the Auto-threshold timer with MOX guard and `agcCalOffset`; AUTO button toggles auto-mode; right-click the AGC-T slider opens Setup directly on the AGC/ALC page.
 - **Step attenuator + ADC overload** — `StepAttenuatorController` with Classic + Adaptive auto-attenuation modes, hysteresis, per-MAC persistence. P1/P2 `adcOverflow` signal from frame parsers, OVL status badge in RxApplet, per-model preamp items from Thetis `SetComboPreampForHPSDR`.
 - **Container / meter system** — GPU-rendered meter engine (QRhi 3-pipeline), 31 `MeterItem` types, 38+ ItemGroup presets (S-Meter, Power/SWR, ALC, ANANMM 7-needle, CrossNeedle, Magic Eye, History, SignalText, TX bar meters), full Thetis-parity Container Settings Dialog (3-column layout, per-item property editors), MMIO external-data subsystem (UDP / TCP-listen / TCP-client / Serial transports; JSON / XML / RAW formats).
+- **VAX audio routing** — NereusSDR-native multi-channel audio bus. `IAudioBus` abstraction with 5 platform backends (CoreAudio HAL plugin on macOS, PulseAudio pipes / pactl on Linux, PortAudio on Windows). First-run VAX dialog auto-detects Windows virtual-cable families (VB-Audio / VAC / Voicemeeter / Dante / FlexRadio DAX); `MasterOutputWidget` in the menu bar; Setup → Audio sub-tabs (Devices / VAX / TCI / Advanced); per-slice VAX channel assignment on the VFO Flag, persisted under `Slice<N>/`.
 - **App polish** — Help → About NereusSDR (version / Qt / WDSP / GPG fingerprint / heritage credits), 💡 AI-assisted issue reporter in the menu bar corner (structured prompts, submits to the `bug_report.yml` / `feature_request.yml` GitHub templates), radio-model override persistence, P1 full 17-bank C&C round-robin.
 - **Packaging** — `release.yml` prepare → build×3 → sign-and-publish pipeline. GPG-signed alpha artifacts: Linux AppImage (x86_64 + aarch64), macOS Apple Silicon DMG, Windows portable ZIP + NSIS installer.
 
@@ -111,6 +113,7 @@ sha256sum -c SHA256SUMS.txt
 - GPU-rendered meter engine (QRhi 3-pipeline), 31 `MeterItem` types, 38+ ItemGroup presets, ANANMM 7-needle with exact Thetis calibration, CrossNeedle dual fwd/rev, Magic Eye, History, Edge mode
 - Full Thetis-parity Container Settings Dialog — 3-column layout, per-item property editors (~155 fields), snapshot+revert, container-level Lock/Notes/Highlight/Minimises/Auto-height, Duplicate, Copy/Paste item settings
 - MMIO (Multi-Meter I/O) external-data subsystem — UDP / TCP-listen / TCP-client / Serial transports, JSON / XML / RAW formats, endpoint manager, variable picker, 10 fps polled bindings
+- VAX multi-channel audio bus — 5 platform backends, Windows virtual-cable auto-detect (VB-Audio / VAC / Voicemeeter / Dante / DAX), MasterOutputWidget, per-slice VAX channel routing
 - Interactive button grids — band (14), mode, filter, antenna, tuning step, macro — with hover/click feedback
 - Full UI skeleton — 12 applets, 9-menu bar, 47-page SetupDialog, SpectrumOverlayPanel with 5 flyout sub-panels, status bar
 - Help → About dialog + 💡 AI-assisted issue reporter wired to the GitHub issue tracker
@@ -176,6 +179,7 @@ sha256sum -c SHA256SUMS.txt
 | **3G-13: Step Attenuator & ADC Overload** | `StepAttenuatorController` (Classic + Adaptive), P1/P2 `adcOverflow` emission, OVL status badge, Setup→General→Options page, RxApplet ATT/S-ATT row, per-model preamp items | **Complete** |
 | **3G-14: About + AI Issue Reporter** | Help → About dialog, 💡 menu-bar issue reporter with structured prompts submitting to `bug_report.yml` / `feature_request.yml` | **Complete** |
 | **3N: Packaging** | Consolidated `release.yml`, `/release` skill, GPG-signed alpha builds: Linux AppImage ×2 archs, macOS Apple Silicon DMG, Windows portable ZIP + NSIS installer | **Complete** |
+| **3O: VAX Audio Routing** | NereusSDR-native multi-channel audio bus — 5 platform backends + first-run virtual-cable auto-detect (VB-Audio / VAC / Voicemeeter / Dante / DAX) + `MasterOutputWidget` + Setup → Audio sub-tabs + per-slice VAX channel persistence | **Complete** |
 | **3P: All-Board Radio-Control Parity** | 8 stacked sub-phases (A-H) delivering: HL2 BPF + S-ATT bug fixes, per-board P1/P2 codec subclasses, Alex-1/2 Filters live-LED sub-sub-tabs, OC Outputs matrix page, Calibration page (incl. freq-correction factor), Antenna Control per-band grid, HL2 I/O (closes Phase 3L), Accessories (Alex/Apollo/Penny), Diagnostics → Radio Status dashboard + 4 sibling sub-tabs, attribution enforcement pipeline. After merge: NereusSDR's **hardware / radio-plumbing / status-readout surfaces are userland-complete vs Thetis** — DSP-parameter / Transmit / CAT / Appearance / Keyboard Setup pages are still page shells with disabled controls pending later phases (see the [alpha-tester guide](docs/debugging/alpha-tester-hl2-smoke-test.md) for the honest wired-vs-stub breakdown). | **Complete** |
 | 3M-1: Basic SSB TX | TxChannel, mic input, MOX state machine, I/Q output | **Next** |
 | 3M-2: CW TX | Sidetone, firmware keyer, QSK/break-in | Planned |
