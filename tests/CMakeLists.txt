@@ -622,4 +622,15 @@ nereus_add_test(tst_sku_ui_profile)
 # cites Thetis setup.cs:19846-20375 [v2.10.3.13 @501e3f5].
 nereus_add_test(tst_antenna_labels)
 
+# ── Phase 3G RX Epic sub-epic D: BandPlanManager loader + active-plan API ───
+# TDD red bar: tests are registered here but BandPlanManager.h does not exist
+# yet. Build of this target will fail until Task 3 ports BandPlanManager from
+# AetherSDR [@0cd4559]. Tests cover:
+#   - BandSegment / BandSpot value-type defaults (Task 2 types from BandPlan.h)
+#   - loadPlans() discovers all 5 bundled JSON files (ARRL/IARU-R1/R2/R3/RAC)
+#   - setActivePlan() emits planChanged, ignores unknown names
+#   - segments() / spots() reflect the active plan
+#   - Default plan after loadPlans() is "ARRL (US)" (no AppSettings key)
+nereus_add_test(tst_bandplan_manager)
+
 

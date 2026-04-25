@@ -88,6 +88,7 @@ claim), or when 25a couldn't positively disprove the claim.
 |---|---|---|---|
 | `src/models/RadioModel.h` | `src/models/RadioModel.{h,cpp}` | 25a index §Per-file (RadioModel is the "Main structural template" for NereusSDR's hub pattern). | "Structural template (state-hub pattern, sub-model ownership, main-thread signal routing) ported from AetherSDR `src/models/RadioModel.{h,cpp}`." |
 | `src/models/SliceModel.h` | `src/models/SliceModel.{h,cpp}` | Inline comment line 84: "From AetherSDR SliceModel pattern: Q_PROPERTY + signals for each state." Line 184: rxAntenna/txAntenna pattern. 25a index §Per-file (slice-template match). | "Per-slice `Q_PROPERTY` + signal shape ported from AetherSDR `src/models/SliceModel.{h,cpp}` (NereusSDR swaps SmartSDR slice/pan fields for OpenHPSDR DDC/receiver fields; DSP behaviour is Thetis, see Copyright block)." |
+| `src/models/BandPlan.h` | `src/models/BandPlanManager.h` | File header line 5: "Ported from AetherSDR src/models/BandPlanManager.h [@0cd4559]." Phase 3G RX Epic sub-epic D Task 2. BandSegment/BandSpot value types extracted from AetherSDR BandPlanManager. | "BandSegment + BandSpot value types ported from AetherSDR `src/models/BandPlanManager.h` [@0cd4559]. Loader class BandPlanManager ported separately in Task 3." |
 
 ### VFO widget tree (AetherSDR floating-flag pattern)
 
