@@ -2264,4 +2264,70 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
     }
 }
 
+// ── Phase 3M-0 Task 6: Ganymede PA-trip live state ──────────────────────────
+// Porting from Thetis Andromeda/Andromeda.cs:914-948 [v2.10.3.13]
+// (CATHandleAmplifierTripMessage + GanymedeResetPressed).
+// G8NJJ: handlers for Ganymede 500W PA protection
+
+// From Thetis Andromeda/Andromeda.cs:915-920 [v2.10.3.13]:
+//   public void CATHandleAmplifierTripMessage(int TripState)
+//   {
+//       GanymedePresent = true;
+//       _ganymede_pa_issue = TripState != 0; // this will also prevent MOX being re-enabled
+//       if (_ganymede_pa_issue && MOX) MOX = false; //if there is a fault, undo mox if active
+//   ...
+// G8NJJ: handlers for Ganymede 500W PA protection
+void RadioModel::handleGanymedeTrip(int tripState)
+{
+    // From Thetis Andromeda/Andromeda.cs:917 [v2.10.3.13]: GanymedePresent = true;
+    m_ganymedePresent = true;
+
+    // From Thetis Andromeda/Andromeda.cs:919 [v2.10.3.13]:
+    //   _ganymede_pa_issue = TripState != 0; // this will also prevent MOX being re-enabled
+    const bool newTripped = (tripState != 0);
+    if (newTripped == m_paTripped) {
+        return; // idempotent — no state change, no signal
+    }
+
+    m_paTripped = newTripped;
+    emit paTrippedChanged(newTripped);
+
+    // From Thetis Andromeda/Andromeda.cs:920 [v2.10.3.13]:
+    //   if (_ganymede_pa_issue && MOX) MOX = false; //if there is a fault, undo mox if active
+    // G8NJJ: handlers for Ganymede 500W PA protection
+    if (m_paTripped && m_transmitModel.isMox()) {
+        m_transmitModel.setMox(false);
+    }
+}
+
+// From Thetis Andromeda/Andromeda.cs:950-968 [v2.10.3.13] (GanymedeResetPressed).
+// G8NJJ: handlers for Ganymede 500W PA protection
+void RadioModel::resetGanymedePa()
+{
+    if (!m_paTripped) {
+        return; // already clear — idempotent
+    }
+    m_paTripped = false;
+    emit paTrippedChanged(false);
+}
+
+// From Thetis Andromeda/Andromeda.cs:855-866 [v2.10.3.13] (GanymedePresent property setter):
+//   if (!_ganymedePresent)
+//   {
+//       _ganymede_pa_issue = false;
+//       PAStatusIndicator = PAstatusIndicatorState.NotUsed;
+//   }
+// G8NJJ: handlers for Ganymede 500W PA protection
+void RadioModel::setGanymedePresent(bool present)
+{
+    m_ganymedePresent = present;
+
+    // From Thetis Andromeda/Andromeda.cs:861-863 [v2.10.3.13]:
+    //   if (!_ganymedePresent) { _ganymede_pa_issue = false; ... }
+    if (!present && m_paTripped) {
+        m_paTripped = false;
+        emit paTrippedChanged(false);
+    }
+}
+
 } // namespace NereusSDR

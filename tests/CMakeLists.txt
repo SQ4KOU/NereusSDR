@@ -661,4 +661,12 @@ nereus_add_test(tst_tx_inhibit_monitor)
 # [v2.10.3.13] (DllImport SetWatchdogTimer entry point).
 nereus_add_test(tst_radio_connection_watchdog)
 
+# ── Phase 3M-0 Task 6: RadioModel::paTripped() live state + Ganymede handler ─
+# 5 tests cover initial state (clear), trip latch (non-zero tripState → true),
+# latch reset (resetGanymedePa()), absent-PA clear (setGanymedePresent(false)),
+# and the MOX-drop safety side effect on trip latch.
+# Ports Thetis Andromeda/Andromeda.cs:914-948 [v2.10.3.13]
+# (CATHandleAmplifierTripMessage + GanymedeResetPressed).
+nereus_add_test(tst_radio_model_pa_tripped)
+
 

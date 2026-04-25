@@ -310,6 +310,29 @@ public:
     void connectToRadio(const RadioInfo& info);
     void disconnectFromRadio();
 
+    // ── Phase 3M-0 Task 6: Ganymede PA-trip live state ───────────────────────
+    // G8NJJ: handlers for Ganymede 500W PA protection
+    // From Thetis Andromeda/Andromeda.cs:914-948 [v2.10.3.13]
+    // (CATHandleAmplifierTripMessage + GanymedeResetPressed).
+
+    /// True iff a Ganymede PA trip is currently latched.
+    /// From Thetis Andromeda/Andromeda.cs:914-920 [v2.10.3.13] (CATHandleAmplifierTripMessage).
+    bool paTripped() const noexcept { return m_paTripped; }
+
+    /// Apply a Ganymede CAT trip message. tripState != 0 latches the trip,
+    /// 0 clears. As a safety side-effect, latching also drops MOX
+    /// (Andromeda.cs:920 [v2.10.3.13]: `if (_ganymede_pa_issue && MOX) MOX = false`).
+    void handleGanymedeTrip(int tripState);
+
+    /// Clear the trip latch. Mirrors GanymedeResetPressed().
+    /// Cite: Andromeda/Andromeda.cs (GanymedeResetPressed function) [v2.10.3.13].
+    void resetGanymedePa();
+
+    /// Setter for GanymedePresent capability. When set to false while a
+    /// trip is latched, clears the trip (the radio no longer reports a PA).
+    /// From Thetis Andromeda/Andromeda.cs:855-866 [v2.10.3.13] (GanymedePresent setter). //G8NJJ
+    void setGanymedePresent(bool present);
+
 signals:
     void infoChanged();
     void connectionStateChanged();
@@ -336,6 +359,12 @@ signals:
     // silent failure. `reason` is a one-line human-readable message.
     // Issue #118.
     void bandClickIgnored(NereusSDR::Band band, QString reason);
+
+    // Phase 3M-0 Task 6: Ganymede PA-trip live state.
+    // Emitted whenever the trip latch changes (true = tripped, false = clear).
+    // From Thetis Andromeda/Andromeda.cs:914-920 [v2.10.3.13]
+    // (CATHandleAmplifierTripMessage). G8NJJ: handlers for Ganymede 500W PA protection.
+    void paTrippedChanged(bool tripped);
 
 private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
@@ -469,6 +498,13 @@ private:
     bool m_testCapsOverride{false};
     bool m_testCapsHasAlex{false};
 #endif
+
+    // Phase 3M-0 Task 6: Ganymede PA-trip live state.
+    // From Thetis Andromeda/Andromeda.cs:914 [v2.10.3.13] (_ganymede_pa_issue volatile bool).
+    // G8NJJ: handlers for Ganymede 500W PA protection
+    bool m_paTripped{false};
+    // From Thetis Andromeda/Andromeda.cs:854-866 [v2.10.3.13] (_ganymedePresent / GanymedePresent setter).
+    bool m_ganymedePresent{false};
 
     // AGC bidirectional sync guard — prevents infinite feedback loop between
     // agcThresholdChanged and rfGainChanged handlers.
