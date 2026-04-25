@@ -336,6 +336,10 @@ public:
     void setWfUpdatePeriodMs(int ms);
     int  wfUpdatePeriodMs() const { return m_wfUpdatePeriodMs; }
 
+    qint64 waterfallHistoryMs() const  { return m_waterfallHistoryMs; }
+    void   setWaterfallHistoryMs(qint64 ms);
+    bool   wfLive() const              { return m_wfLive; }
+
     // Ported from setup.cs:7801 Display.WaterfallUseRX1SpectrumMinMax.
     void setWfUseSpectrumMinMax(bool on);
     bool wfUseSpectrumMinMax() const { return m_wfUseSpectrumMinMax; }
@@ -483,6 +487,25 @@ private:
     void drawFreqScale(QPainter& p, const QRect& r);
     void drawDbmScale(QPainter& p, const QRect& specRect);
     void drawBandPlan(QPainter& p, const QRect& specRect);
+
+    // ── Waterfall scrollback (sub-epic E) ─────────────────────────────────
+    // From AetherSDR SpectrumWidget.h:402-413 [@0cd4559]
+    void drawTimeScale(QPainter& p, const QRect& wfRect);
+    QRect waterfallTimeScaleRect(const QRect& wfRect) const;
+    QRect waterfallLiveButtonRect(const QRect& wfRect) const;
+    int   waterfallStripWidth() const;
+    void  ensureWaterfallHistory();
+    void  rebuildWaterfallViewport();
+    void  setWaterfallLive(bool live);
+    void  appendHistoryRow(const QRgb* rowData, qint64 timestampMs);
+    int   waterfallHistoryCapacityRows() const;
+    int   maxWaterfallHistoryOffsetRows() const;
+    int   historyRowIndexForAge(int ageRows) const;
+    QString pausedTimeLabelForAge(int ageRows) const;
+    void  reprojectWaterfall(double oldCenterHz, double oldBandwidthHz,
+                             double newCenterHz, double newBandwidthHz);
+    void  clearWaterfallHistory();
+
     void drawVfoMarker(QPainter& p, const QRect& specRect, const QRect& wfRect);
     void drawCursorInfo(QPainter& p, const QRect& specRect);
 
@@ -523,6 +546,36 @@ private:
     // ---- Waterfall ----
     QImage m_waterfall;               // ring buffer (Format_RGB32)
     int    m_wfWriteRow{0};
+
+    // ── Waterfall scrollback (sub-epic E) ─────────────────────────────────
+    // From AetherSDR SpectrumWidget.h:493-502 [@0cd4559]
+    QImage          m_waterfallHistory;            // RGB32 ring buffer
+    QVector<qint64> m_wfHistoryTimestamps;         // parallel; per-row wall-clock ms
+    int             m_wfHistoryWriteRow{0};        // LIFO; index 0 = newest
+    int             m_wfHistoryRowCount{0};        // saturates at capacity
+    int             m_wfHistoryOffsetRows{0};      // 0 = newest visible at top
+    bool            m_wfLive{true};                // pause/live state
+    bool            m_draggingTimeScale{false};    // gesture flag
+    int             m_timeScaleDragStartY{0};      // anchor Y at mousedown
+    int             m_timeScaleDragStartOffsetRows{0};
+
+    // Default depth (overridden at runtime by m_waterfallHistoryMs from AppSettings).
+    // From AetherSDR SpectrumWidget.h:502 [@0cd4559]
+    static constexpr qint64 kDefaultWaterfallHistoryMs = 20LL * 60LL * 1000LL;
+
+    // Cap on history capacity to bound memory.
+    // From AetherSDR SpectrumWidget.h:482 [@2bb3b5c]
+    // (cap added by unmerged AetherSDR PR #1478 — see plan §authoring-time #2)
+    static constexpr int    kMaxWaterfallHistoryRows  = 4096;
+
+    // Runtime-configurable depth; persisted as AppSettings("DisplayWaterfallHistoryMs").
+    // NereusSDR-side enhancement — see plan §authoring-time #1.
+    qint64          m_waterfallHistoryMs{kDefaultWaterfallHistoryMs};
+
+    // Debounce timer for ensureWaterfallHistory() during rapid resize / slider drag.
+    // From AetherSDR SpectrumWidget.h:559 [@2bb3b5c]
+    // (debounce timer added by unmerged AetherSDR PR #1478 — see plan §authoring-time #2)
+    QTimer*         m_historyResizeTimer{nullptr};
 
     // ---- Waterfall display controls ----
     // From AetherSDR SpectrumWidget defaults + Thetis display.cs:2522-2536
