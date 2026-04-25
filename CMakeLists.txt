@@ -429,7 +429,6 @@ set(GUI_SOURCES
     src/gui/SupportDialog.cpp
     src/gui/AboutDialog.cpp
     src/gui/VaxFirstRunDialog.cpp
-    src/gui/VaxLinuxFirstRunDialog.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/dbm_strip_math.cpp
     src/gui/SpectrumOverlayMenu.cpp
@@ -615,6 +614,14 @@ add_library(NereusSDRObjs OBJECT
     ${RESOURCES}
     ${APP_ICON_SOURCES}
 )
+
+# Linux-only sources: the PipeWire/pactl first-run + diagnose dialog uses
+# POSIX <unistd.h> (getuid) and the LinuxAudioBackend probe. MainWindow.cpp
+# already gates the menu wiring on Q_OS_LINUX, so the .cpp shouldn't enter
+# the build on macOS or Windows.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(NereusSDRObjs PRIVATE src/gui/VaxLinuxFirstRunDialog.cpp)
+endif()
 
 add_executable(NereusSDR src/main.cpp)
 target_link_libraries(NereusSDR PRIVATE NereusSDRObjs)

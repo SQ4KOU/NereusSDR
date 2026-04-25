@@ -288,7 +288,9 @@ warren@wpratt.com
 #include "setup/DspSetupPages.h"   // NrAnfSetupPage::selectSubtab
 #include "TitleBar.h"
 #include "VaxFirstRunDialog.h"
-#include "VaxLinuxFirstRunDialog.h"
+#if defined(Q_OS_LINUX)
+#  include "VaxLinuxFirstRunDialog.h"
+#endif
 #include "widgets/MasterOutputWidget.h"
 #include "core/AudioDeviceConfig.h"
 #include "core/AudioEngine.h"
@@ -1733,10 +1735,13 @@ void MainWindow::buildMenuBar()
 
     helpMenu->addSeparator();
 
+#if defined(Q_OS_LINUX)
+    // PipeWire / pactl diagnostic dialog — Linux-only feature.
     helpMenu->addAction(QStringLiteral("&Diagnose audio backend…"),
                         this, &MainWindow::showAudioDiagnoseDialog);
 
     helpMenu->addSeparator();
+#endif
 
     helpMenu->addAction(QStringLiteral("&About NereusSDR"), this, [this]() {
         AboutDialog dlg(this);
@@ -2791,6 +2796,7 @@ void MainWindow::showSupportDialog()
 
 void MainWindow::showAudioDiagnoseDialog()
 {
+#if defined(Q_OS_LINUX)
     AudioEngine* eng = m_radioModel->audioEngine();
     if (!eng) {
         return;
@@ -2798,6 +2804,7 @@ void MainWindow::showAudioDiagnoseDialog()
     auto* dlg = new VaxLinuxFirstRunDialog(eng, this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->exec();
+#endif
 }
 
 void MainWindow::onConnectionStateChanged()
