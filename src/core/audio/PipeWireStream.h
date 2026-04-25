@@ -87,6 +87,10 @@ private:
     void probeSchedOnce();
     void maybeEmitTelemetry();
 
+    // Translates a pw_stream_state enum value to its display string.
+    // Safe to call from any thread; no shared state.
+    static QString streamStateName(int s);
+
     PipeWireThreadLoop* m_loop;
     StreamConfig        m_cfg;
     pw_stream*          m_stream = nullptr;
@@ -112,8 +116,11 @@ public:
     float rxLevel() const { return m_rxLevel.load(std::memory_order_relaxed); }
 private:
 
-    // FIXME(task-9-followup): QString assignment from pw event thread races with telemetry() read from GUI thread; promote to std::atomic<int> + switch.
-    QString m_stateName = QStringLiteral("closed");
+    // Stream state as an atomic int holding pw_stream_state enum values.
+    // Written by the PipeWire event thread (onStateChangedCb) and read by
+    // the GUI thread (telemetry()) — must be atomic to avoid UB on
+    // concurrent QString access (the original m_stateName was not safe).
+    std::atomic<int> m_streamState{int(PW_STREAM_STATE_UNCONNECTED)};
 };
 
 }  // namespace NereusSDR

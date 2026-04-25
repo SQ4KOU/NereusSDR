@@ -20,6 +20,7 @@
 
 #include "core/audio/PipeWireBus.h"
 #include "core/audio/PipeWireThreadLoop.h"
+#include "core/AppSettings.h"
 
 #include <QLoggingCategory>
 
@@ -50,37 +51,29 @@ StreamConfig PipeWireBus::configFor(Role role,
 
     switch (role) {
         case Role::Vax1:
-            cfg.nodeName        = nodeName.isEmpty() ? QStringLiteral("nereussdr.vax-1") : nodeName;
-            cfg.nodeDescription = QStringLiteral("NereusSDR VAX 1");
-            cfg.direction       = StreamConfig::Output;
-            cfg.mediaClass      = QStringLiteral("Audio/Source");
-            cfg.mediaRole       = QStringLiteral("Music");
-            cfg.quantum         = 512;
-            break;
         case Role::Vax2:
-            cfg.nodeName        = nodeName.isEmpty() ? QStringLiteral("nereussdr.vax-2") : nodeName;
-            cfg.nodeDescription = QStringLiteral("NereusSDR VAX 2");
-            cfg.direction       = StreamConfig::Output;
-            cfg.mediaClass      = QStringLiteral("Audio/Source");
-            cfg.mediaRole       = QStringLiteral("Music");
-            cfg.quantum         = 512;
-            break;
         case Role::Vax3:
-            cfg.nodeName        = nodeName.isEmpty() ? QStringLiteral("nereussdr.vax-3") : nodeName;
-            cfg.nodeDescription = QStringLiteral("NereusSDR VAX 3");
-            cfg.direction       = StreamConfig::Output;
-            cfg.mediaClass      = QStringLiteral("Audio/Source");
-            cfg.mediaRole       = QStringLiteral("Music");
-            cfg.quantum         = 512;
+        case Role::Vax4: {
+            const int n = int(role) - int(Role::Vax1) + 1;
+            cfg.nodeName = nodeName.isEmpty()
+                ? QStringLiteral("nereussdr.vax-%1").arg(n)
+                : nodeName;
+            // Read the persisted NodeDescription so that AudioVaxPage's Rename
+            // button takes effect on the actual PipeWire node metadata, not just
+            // the UI label. Falls back to the default "NereusSDR VAX N" when
+            // the key has not been set.
+            const QString defaultDesc =
+                QStringLiteral("NereusSDR VAX %1").arg(n);
+            cfg.nodeDescription = NereusSDR::AppSettings::instance()
+                .value(QStringLiteral("Audio/Vax%1/NodeDescription").arg(n),
+                       defaultDesc)
+                .toString();
+            cfg.direction  = StreamConfig::Output;
+            cfg.mediaClass = QStringLiteral("Audio/Source");
+            cfg.mediaRole  = QStringLiteral("Music");
+            cfg.quantum    = 512;
             break;
-        case Role::Vax4:
-            cfg.nodeName        = nodeName.isEmpty() ? QStringLiteral("nereussdr.vax-4") : nodeName;
-            cfg.nodeDescription = QStringLiteral("NereusSDR VAX 4");
-            cfg.direction       = StreamConfig::Output;
-            cfg.mediaClass      = QStringLiteral("Audio/Source");
-            cfg.mediaRole       = QStringLiteral("Music");
-            cfg.quantum         = 512;
-            break;
+        }
         case Role::TxInput:
             cfg.nodeName        = nodeName.isEmpty() ? QStringLiteral("nereussdr.tx-input") : nodeName;
             cfg.nodeDescription = QStringLiteral("NereusSDR TX input");

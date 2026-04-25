@@ -178,12 +178,36 @@ void AudioEngine::rescanLinuxBackend()
 {
     const auto previous = m_linuxBackend;
     m_linuxBackend = detectLinuxBackend();
-    if (m_linuxBackend != previous) {
-        qCInfo(lcAudio) << "Linux audio backend changed:"
-                        << toString(previous) << "→"
-                        << toString(m_linuxBackend);
-        emit linuxBackendChanged(previous, m_linuxBackend);
+    if (m_linuxBackend == previous) { return; }
+
+    qCInfo(lcAudio) << "Linux audio backend changed:"
+                    << toString(previous) << "→"
+                    << toString(m_linuxBackend);
+
+#  if defined(NEREUS_HAVE_PIPEWIRE)
+    // Transitioning TO PipeWire (None/Pactl → PipeWire): create m_pwLoop.
+    // On connect failure revert m_linuxBackend rather than emitting a
+    // phantom-PipeWire signal with no backing loop.
+    if (m_linuxBackend == LinuxAudioBackend::PipeWire && !m_pwLoop) {
+        m_pwLoop = std::make_unique<PipeWireThreadLoop>();
+        if (!m_pwLoop->connect()) {
+            qCWarning(lcAudio) << "PipeWire connect failed during rescan — reverting to"
+                               << toString(previous);
+            m_pwLoop.reset();
+            m_linuxBackend = previous;
+            return;  // skip the linuxBackendChanged emit
+        }
     }
+    // NOTE: transitioning AWAY from PipeWire (PipeWire → Pactl/None)
+    // requires bus teardown first per Forward Contract #1 (PipeWireThreadLoop.cpp
+    // §"FORWARD CONTRACT #1"). Buses in m_vaxBus[N] and m_vaxTxBus may be
+    // PipeWire-backed; destroying m_pwLoop while they're alive crashes on
+    // m_loop->lock(). For now, app restart is the supported recovery path
+    // for the PipeWire daemon dying mid-session. A future task will add
+    // graceful downgrade with proper bus teardown.
+#  endif
+
+    emit linuxBackendChanged(previous, m_linuxBackend);
 }
 #endif
 

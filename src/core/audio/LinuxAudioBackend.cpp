@@ -20,6 +20,7 @@
 #include <QStandardPaths>
 #include <QtCore/qglobal.h>
 #include "core/AppSettings.h"
+#include "core/LogCategories.h"
 
 namespace {
 
@@ -62,13 +63,25 @@ LinuxAudioBackend detectLinuxBackend(const LinuxAudioBackendProbes& probes)
     // Forced override (AppSettings debug key).
     const QString forced = probes.forcedBackendOverride
                              ? probes.forcedBackendOverride() : QString();
-    if (forced == QLatin1String("pipewire")) { return LinuxAudioBackend::PipeWire; }
+    if (forced == QLatin1String("pipewire")) {
+#ifdef NEREUS_HAVE_PIPEWIRE
+        return LinuxAudioBackend::PipeWire;
+#else
+        qCWarning(lcAudio) << "Audio/LinuxBackendPreferred=pipewire but build lacks"
+                              " libpipewire — falling through to Pactl probe";
+        // fall through
+#endif
+    }
     if (forced == QLatin1String("pactl"))    { return LinuxAudioBackend::Pactl; }
     if (forced == QLatin1String("none"))     { return LinuxAudioBackend::None; }
     // Any other value (empty or garbage) falls through to probes.
 
     if (probes.pipewireSocketReachable && probes.pipewireSocketReachable(500)) {
+#ifdef NEREUS_HAVE_PIPEWIRE
         return LinuxAudioBackend::PipeWire;
+#endif
+        // Build lacks PipeWire support — socket found but we can't use it.
+        // Fall through silently to the Pactl probe.
     }
     if (probes.pactlBinaryRunnable && probes.pactlBinaryRunnable(500)) {
         return LinuxAudioBackend::Pactl;

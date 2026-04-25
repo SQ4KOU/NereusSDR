@@ -32,8 +32,12 @@ private slots:
                  cfg.nodeName);
         QCOMPARE(QString::fromUtf8(pw_properties_get(p, PW_KEY_MEDIA_CLASS)),
                  cfg.mediaClass);
+        // Audio/Source + OUTPUT direction = virtual source node: media.category
+        // must be "Capture" (consumer's perspective, not ours). "Playback" is
+        // wrong for this class and breaks ALSA-compat bridge enumeration.
+        // Expectation updated to match the correct configToProperties() output.
         QCOMPARE(QString::fromUtf8(pw_properties_get(p, PW_KEY_MEDIA_CATEGORY)),
-                 QStringLiteral("Playback"));
+                 QStringLiteral("Capture"));
         QCOMPARE(QString::fromUtf8(pw_properties_get(p, PW_KEY_NODE_LATENCY)),
                  QStringLiteral("512/48000"));
         pw_properties_free(p);

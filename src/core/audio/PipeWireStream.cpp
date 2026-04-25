@@ -182,7 +182,7 @@ void PipeWireStream::close()
     m_stream = nullptr;
     spa_hook_remove(&m_listener);
     m_loop->unlock();
-    m_stateName = QStringLiteral("closed");
+    m_streamState.store(int(PW_STREAM_STATE_UNCONNECTED), std::memory_order_relaxed);
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +239,7 @@ qint64 PipeWireStream::pull(char* data, qint64 maxBytes)
 // ---------------------------------------------------------------------------
 PipeWireStream::Telemetry PipeWireStream::telemetry() const {
     Telemetry t;
-    t.streamStateName   = m_stateName;
+    t.streamStateName   = streamStateName(m_streamState.load(std::memory_order_relaxed));
     t.xrunCount         = m_xruns.load();
     t.processCbCpuPct   = m_cpuPct.load();
     t.measuredLatencyMs = m_latencyMs.load();
@@ -257,22 +257,33 @@ PipeWireStream::Telemetry PipeWireStream::telemetry() const {
 // Static callbacks — Steps 3 & 4
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// streamStateName() — static helper: pw_stream_state int → display string.
+// Safe to call from any thread; no shared state.
+// ---------------------------------------------------------------------------
+QString PipeWireStream::streamStateName(int s)
+{
+    switch (s) {
+        case int(PW_STREAM_STATE_ERROR):       return QStringLiteral("error");
+        case int(PW_STREAM_STATE_UNCONNECTED): return QStringLiteral("unconnected");
+        case int(PW_STREAM_STATE_CONNECTING):  return QStringLiteral("connecting");
+        case int(PW_STREAM_STATE_PAUSED):      return QStringLiteral("paused");
+        case int(PW_STREAM_STATE_STREAMING):   return QStringLiteral("streaming");
+        default:                               return QStringLiteral("unknown");
+    }
+}
+
 void PipeWireStream::onStateChangedCb(void* userData,
                                       pw_stream_state /*old_*/,
                                       pw_stream_state new_,
                                       const char* error)
 {
     auto* self = static_cast<PipeWireStream*>(userData);
-    QString name;
-    switch (new_) {
-        case PW_STREAM_STATE_ERROR:       name = QStringLiteral("error");       break;
-        case PW_STREAM_STATE_UNCONNECTED: name = QStringLiteral("unconnected"); break;
-        case PW_STREAM_STATE_CONNECTING:  name = QStringLiteral("connecting");  break;
-        case PW_STREAM_STATE_PAUSED:      name = QStringLiteral("paused");      break;
-        case PW_STREAM_STATE_STREAMING:   name = QStringLiteral("streaming");   break;
-        default:                          name = QStringLiteral("unknown");     break;
-    }
-    self->m_stateName = name;
+    self->m_streamState.store(int(new_), std::memory_order_relaxed);
+    // Compute the name once here; capture by value into the queued lambda so
+    // the GUI-thread signal carries the correct string without touching
+    // m_streamState again (avoids a second atomic load across the queue).
+    const QString name = streamStateName(int(new_));
     // FIXME(task 14): self may dangle if ~PipeWireStream runs before queued emit drains.
     QMetaObject::invokeMethod(self, [self, name]() {
         emit self->streamStateChanged(name);
