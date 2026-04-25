@@ -56,7 +56,15 @@ target_include_directories(specbleach_static PUBLIC
 target_include_directories(specbleach_static PRIVATE
     "${libspecbleach_upstream_SOURCE_DIR}/src")
 
-set_target_properties(specbleach_static PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# C_STANDARD 11 is required: libspecbleach uses _Static_assert
+# (configurations.h:35-46), which MSVC's default C dialect (C89/C90)
+# does not parse. GCC and Clang default to gnu11+ so Linux/macOS were
+# unaffected; the v0.2.3 release shakedown caught it on Windows.
+set_target_properties(specbleach_static PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
 
 # FFTW3 linkage — mirror the convention used by third_party/wdsp/CMakeLists.txt.
 # NereusSDR's top-level CMake populates FFTW3_INCLUDE_DIRS + FFTW3_LIBRARIES
