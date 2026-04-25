@@ -633,4 +633,10 @@ nereus_add_test(tst_antenna_labels)
 #   - Default plan after loadPlans() is "ARRL (US)" (no AppSettings key)
 nereus_add_test(tst_bandplan_manager)
 
+# ── Phase 3M-0 Task 2: BandPlanGuard region tables + 60m channels ─────────
+# Pure data + pure predicates; no Qt parent, no signals.
+# 12 table-driven tests cover US/UK/Japan 60m channelization, extended bypass,
+# different-band guard, and 20m in/out-of-band cases.
+nereus_add_test(tst_band_plan_guard)
+
 

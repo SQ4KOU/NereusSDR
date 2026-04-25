@@ -386,6 +386,7 @@ set(CORE_SOURCES
     src/core/audio/PortAudioBus.cpp
     src/core/audio/QAudioSinkAdapter.cpp
     src/core/audio/VirtualCableDetector.cpp
+    src/core/safety/BandPlanGuard.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the
