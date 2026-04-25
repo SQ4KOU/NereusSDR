@@ -178,8 +178,6 @@ void SpectrumDefaultsPage::loadFromRenderer()
     QSignalBlocker b11(m_peakHoldToggle);
     QSignalBlocker b12(m_peakHoldDelaySpin);
     QSignalBlocker b13(m_threadPriorityCombo);
-    QSignalBlocker b14(m_bandplanRegionCombo);
-    QSignalBlocker b15(m_bandplanFontSizeSpin);
 
     // FFT size — map actual FFT size to combo index.
     const int fs = fe->fftSize();
@@ -210,14 +208,6 @@ void SpectrumDefaultsPage::loadFromRenderer()
 
     if (m_dataLineColorBtn) { m_dataLineColorBtn->setColor(sw->fillColor()); }
     if (m_dataFillColorBtn) { m_dataFillColorBtn->setColor(sw->fillColor()); }
-
-    // Bandplan Overlay
-    if (m_bandplanRegionCombo) {
-        m_bandplanRegionCombo->setCurrentText(model()->bandPlanManager().activePlanName());
-    }
-    if (m_bandplanFontSizeSpin) {
-        m_bandplanFontSizeSpin->setValue(sw->bandPlanFontSize());
-    }
 }
 
 void SpectrumDefaultsPage::buildUI()
@@ -577,47 +567,6 @@ void SpectrumDefaultsPage::buildUI()
     threadForm->addRow(QStringLiteral("Display Thread Priority:"), m_threadPriorityCombo);
 
     contentLayout()->addWidget(threadGroup);
-
-    // --- Section: Bandplan Overlay (Phase 3G RX Epic sub-epic D) ---
-    auto* bandplanGroup = new QGroupBox(QStringLiteral("Bandplan Overlay"), this);
-    auto* bandplanForm  = new QFormLayout(bandplanGroup);
-    bandplanForm->setSpacing(6);
-
-    m_bandplanRegionCombo = new QComboBox(bandplanGroup);
-    if (model()) {
-        const auto& mgr = model()->bandPlanManager();
-        m_bandplanRegionCombo->addItems(mgr.availablePlans());
-        m_bandplanRegionCombo->setCurrentText(mgr.activePlanName());
-    }
-    m_bandplanRegionCombo->setToolTip(QStringLiteral(
-        "Select the band-plan region. The spectrum strip shows segment labels "
-        "and spot markers from the chosen plan."));
-    connect(m_bandplanRegionCombo, &QComboBox::currentTextChanged, this,
-            [this](const QString& name) {
-                if (model()) {
-                    model()->bandPlanManagerMutable().setActivePlan(name);
-                }
-            });
-    bandplanForm->addRow(QStringLiteral("Region:"), m_bandplanRegionCombo);
-
-    m_bandplanFontSizeSpin = new QSpinBox(bandplanGroup);
-    m_bandplanFontSizeSpin->setRange(0, 16);
-    m_bandplanFontSizeSpin->setSuffix(QStringLiteral(" pt"));
-    m_bandplanFontSizeSpin->setSpecialValueText(QStringLiteral("Off"));
-    m_bandplanFontSizeSpin->setToolTip(QStringLiteral(
-        "Label font size in points. 0 hides the bandplan strip entirely."));
-    if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
-        m_bandplanFontSizeSpin->setValue(w->bandPlanFontSize());
-    }
-    connect(m_bandplanFontSizeSpin, qOverload<int>(&QSpinBox::valueChanged), this,
-            [this](int pt) {
-                if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
-                    w->setBandPlanFontSize(pt);
-                }
-            });
-    bandplanForm->addRow(QStringLiteral("Label size:"), m_bandplanFontSizeSpin);
-
-    contentLayout()->addWidget(bandplanGroup);
     contentLayout()->addStretch();
 
     Q_UNUSED(sw);

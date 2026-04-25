@@ -114,10 +114,6 @@ private:
 
     // Section: Thread (S17)
     QComboBox*      m_threadPriorityCombo{nullptr};
-
-    // Section: Bandplan Overlay (Phase 3G RX Epic sub-epic D)
-    QComboBox* m_bandplanRegionCombo{nullptr};  // availablePlans() driven
-    QSpinBox*  m_bandplanFontSizeSpin{nullptr}; // 0 = off; 1..16 pt
 };
 
 // ---------------------------------------------------------------------------
