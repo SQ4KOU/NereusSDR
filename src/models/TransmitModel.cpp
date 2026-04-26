@@ -245,6 +245,13 @@ void TransmitModel::save()
     }
     // Cite: console.cs:3087-3091 [v2.10.3.13] — Thetis pipe-delimited save.
     // NereusSDR uses per-band scalar keys matching the AlexController pattern.
+    //
+    // Like AlexController::save(), this method only writes to the in-memory
+    // AppSettings map; it does NOT call AppSettings::save() (full XML flush).
+    // Callers schedule the disk flush at the appropriate time (teardown /
+    // app-exit / explicit user-save), not on every per-band setter.
+    // Calling s.save() here would trigger a full XML rewrite on every
+    // saveSliceState() call (debounced 500 ms during active TX/UI use).
     auto& s = AppSettings::instance();
     const QString prefix =
         QStringLiteral("hardware/%1/tunePowerByBand/").arg(m_mac);
@@ -252,7 +259,6 @@ void TransmitModel::save()
         s.setValue(prefix + QString::number(i),
                    QString::number(m_tunePowerByBand[static_cast<std::size_t>(i)]));
     }
-    s.save();
 }
 
 } // namespace NereusSDR
