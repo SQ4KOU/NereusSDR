@@ -7,7 +7,7 @@
 #include <QImage>
 #include <QVector>
 
-// We test the math helpers in isolation by re-implementing them as a friend
+// We test the math helpers in isolation by re-implementing them as a parallel
 // shim. This avoids needing a full QApplication + GPU widget for what are
 // pure-arithmetic checks. The production code lives in SpectrumWidget — when
 // modifying the formulas, update both copies (CI ensures parity via the
@@ -75,6 +75,30 @@ private slots:
     void rowIndexForAge_outOfBounds_returnsMinus1() {
         QCOMPARE(rowIndexForAge(0, 100, 4096, 100), -1);
         QCOMPARE(rowIndexForAge(0, 100, 4096, -1), -1);
+    }
+
+    void wrapAround_writePastCapacity_keepsCapRows() {
+        // Simulate appending 5000 rows into a 4096-row ring; verify
+        // m_wfHistoryRowCount saturates at 4096 and writeRow wraps.
+        // We instrument this via a minimal stand-in (not a real
+        // SpectrumWidget) because the production appendHistoryRow needs
+        // a live QImage and a parent QWidget. The contract is small
+        // enough to mirror in the test.
+        constexpr int kHeight = 4096;
+        int writeRow = 0;
+        int rowCount = 0;
+        for (int i = 0; i < 5000; ++i) {
+            writeRow = (writeRow - 1 + kHeight) % kHeight;
+            if (rowCount < kHeight) ++rowCount;
+        }
+        QCOMPARE(rowCount, 4096);
+        // After 5000 writes from initial writeRow=0, the new writeRow is
+        // (0 - 5000) % 4096 = -5000 % 4096 = -904 + 4096 = 3192 ... but
+        // because we apply (writeRow - 1 + h) % h each iteration, we
+        // wrap once per 4096 writes. After 5000 writes that's one full
+        // wrap (4096 writes) plus 904 more, landing at:
+        //     ((0 - 5000) % 4096 + 4096) % 4096 = (4096 - 904) = 3192
+        QCOMPARE(writeRow, 3192);
     }
 };
 

@@ -136,6 +136,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <utility>
 
 namespace NereusSDR {
@@ -1755,6 +1756,124 @@ QString SpectrumWidget::pausedTimeLabelForAge(int ageRows) const
     const QDateTime utc = QDateTime::fromMSecsSinceEpoch(
         timestampMs, QTimeZone::utc());
     return QStringLiteral("-") + utc.toString(QStringLiteral("HH:mm:ssZ"));
+}
+
+// From AetherSDR SpectrumWidget.cpp:594-630 [@0cd4559]
+void SpectrumWidget::ensureWaterfallHistory()
+{
+    if (m_waterfall.isNull()) {
+        return;
+    }
+
+    const QSize desiredSize(m_waterfall.width(), waterfallHistoryCapacityRows());
+    if (desiredSize.width() <= 0 || desiredSize.height() <= 0) {
+        return;
+    }
+
+    if (m_waterfallHistory.size() == desiredSize) {
+        return;
+    }
+
+    // Preserve rows across width changes (e.g. divider drag, manual window
+    // resize) by horizontally scaling the existing history image. Height
+    // capacity is fixed via waterfallHistoryCapacityRows() so row indices
+    // and timestamps remain valid.
+    QImage newHistory;
+    if (!m_waterfallHistory.isNull() && m_wfHistoryRowCount > 0
+        && m_waterfallHistory.height() == desiredSize.height()) {
+        newHistory = m_waterfallHistory.scaled(
+            desiredSize, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+    }
+    if (newHistory.isNull() || newHistory.size() != desiredSize) {
+        newHistory = QImage(desiredSize, QImage::Format_RGB32);
+        newHistory.fill(Qt::black);
+        m_wfHistoryTimestamps = QVector<qint64>(desiredSize.height(), 0);
+        m_wfHistoryWriteRow = 0;
+        m_wfHistoryRowCount = 0;
+        m_wfHistoryOffsetRows = 0;
+        m_wfLive = true;
+    }
+    m_waterfallHistory = newHistory;
+}
+
+// From AetherSDR SpectrumWidget.cpp:647-668 [@0cd4559]
+void SpectrumWidget::appendHistoryRow(const QRgb* rowData, qint64 timestampMs)
+{
+    ensureWaterfallHistory();
+    if (m_waterfallHistory.isNull() || rowData == nullptr) {
+        return;
+    }
+
+    const int h = m_waterfallHistory.height();
+    m_wfHistoryWriteRow = (m_wfHistoryWriteRow - 1 + h) % h;
+    auto* row = reinterpret_cast<QRgb*>(
+        m_waterfallHistory.bits()
+        + m_wfHistoryWriteRow * m_waterfallHistory.bytesPerLine());
+    std::memcpy(row, rowData, m_waterfallHistory.width() * sizeof(QRgb));
+    if (m_wfHistoryWriteRow >= 0
+        && m_wfHistoryWriteRow < m_wfHistoryTimestamps.size()) {
+        m_wfHistoryTimestamps[m_wfHistoryWriteRow] = timestampMs;
+    }
+    if (m_wfHistoryRowCount < h) {
+        ++m_wfHistoryRowCount;
+    }
+    if (!m_wfLive) {
+        // Auto-bump while paused so the displayed row stays visually fixed
+        // as new live rows arrive underneath.
+        m_wfHistoryOffsetRows = std::min(
+            m_wfHistoryOffsetRows + 1, maxWaterfallHistoryOffsetRows());
+    }
+}
+
+// From AetherSDR SpectrumWidget.cpp:670-704 [@0cd4559]
+void SpectrumWidget::rebuildWaterfallViewport()
+{
+    if (m_waterfall.isNull()) {
+        return;
+    }
+
+    m_wfHistoryOffsetRows = std::clamp(
+        m_wfHistoryOffsetRows, 0, maxWaterfallHistoryOffsetRows());
+    m_waterfall.fill(Qt::black);
+    m_wfWriteRow = 0;
+
+    if (m_waterfallHistory.isNull()) {
+        update();
+        return;
+    }
+
+    const int rowWidthBytes = m_waterfall.width() * static_cast<int>(sizeof(QRgb));
+    for (int y = 0; y < m_waterfall.height(); ++y) {
+        const int rowIndex = historyRowIndexForAge(m_wfHistoryOffsetRows + y);
+        if (rowIndex < 0) {
+            break;
+        }
+        const QRgb* src = reinterpret_cast<const QRgb*>(
+            m_waterfallHistory.constScanLine(rowIndex));
+        auto* dst = reinterpret_cast<QRgb*>(m_waterfall.scanLine(y));
+        std::memcpy(dst, src, rowWidthBytes);
+    }
+
+    // Force GPU full re-upload — the per-row delta path can't follow a
+    // viewport rebuild because m_wfWriteRow no longer indexes the most
+    // recent live row.
+    m_wfLastUploadedRow = -1;
+    update();
+}
+
+// Sub-epic E — flush ring buffer + force live. Called from clearDisplay()
+// and from setFrequencyRange's largeShift branch (NereusSDR divergence;
+// see plan §authoring-time #3).
+void SpectrumWidget::clearWaterfallHistory()
+{
+    if (!m_waterfallHistory.isNull()) {
+        m_waterfallHistory.fill(Qt::black);
+    }
+    std::fill(m_wfHistoryTimestamps.begin(), m_wfHistoryTimestamps.end(), 0);
+    m_wfHistoryWriteRow = 0;
+    m_wfHistoryRowCount = 0;
+    m_wfHistoryOffsetRows = 0;
+    m_wfLive = true;
 }
 
 // ---- Waterfall row push ----
