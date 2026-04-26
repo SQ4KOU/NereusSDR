@@ -78,11 +78,25 @@ public:
     void syncFromModel() override;
 
 private:
+    void buildHardwareConfigGroup();
+    void buildOptionsGroup();
     void buildStepAttGroup();
     void buildAutoAttGroup();
     void connectController();
 
     StepAttenuatorController* m_ctrl{nullptr};
+
+    // Hardware Configuration group
+    // From Thetis setup.designer.cs:8045-8396 [v2.10.3.13] (tpGeneralHardware)
+    QComboBox* m_comboFRSRegion{nullptr};
+    QCheckBox* m_chkExtended{nullptr};
+    QLabel*    m_lblWarningRegionExtended{nullptr};
+    QCheckBox* m_chkGeneralRXOnly{nullptr};
+    QCheckBox* m_chkNetworkWDT{nullptr};
+
+    // Options group
+    // From Thetis setup.designer.cs:9050-9059 [v2.10.3.13] (grpGeneralOptions)
+    QCheckBox* m_chkPreventTXonDifferentBandToRX{nullptr};
 
     // Step Attenuator group
     QCheckBox* m_chkRx1StepAttEnable{nullptr};

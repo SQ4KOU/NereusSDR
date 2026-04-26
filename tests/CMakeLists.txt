@@ -702,4 +702,11 @@ nereus_add_test(tst_transmit_setup_tx_inhibit)
 # "Disables HF PA." verbatim from setup.designer.cs:5786 [v2.10.3.13].
 nereus_add_test(tst_transmit_setup_block_tx)
 
+# ── Phase 3M-0 Task 12: Hardware Configuration group box on Setup → General ──
+# Verifies grpHardwareConfig has 4 controls + 1 warning label per
+# Thetis tpGeneralHardware (setup.designer.cs:8045-8396 [v2.10.3.13]):
+# 24-entry Region combo (default United States), Extended checkbox, red warning
+# label, chkGeneralRXOnly hidden by default, chkNetworkWDT default ON.
+nereus_add_test(tst_general_setup_hardware_config)
+
 
