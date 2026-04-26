@@ -384,7 +384,7 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
 
     if (m_txChannels.count(channelId)) {
         qCWarning(lcDsp) << "TX channel" << channelId << "already exists";
-        return m_txChannels.at(channelId).get();   // may be nullptr in C.1 (Approach A)
+        return m_txChannels.at(channelId).get();   // already exists — return existing wrapper
     }
 
 #ifdef HAVE_WDSP

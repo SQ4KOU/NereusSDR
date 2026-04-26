@@ -92,7 +92,7 @@ the shell before each commit.
 
 **Modified (~13):**
 - `src/core/WdspEngine.{h,cpp}` — `createTxChannel` / `destroyTxChannel` /
-  `setPureSignalSource` (PS API stub) + 25-stage TXA construction.
+  `setPureSignalSource` (PS API stub) + 31-stage TXA construction.
 - `src/core/RadioModel.{h,cpp}` — own `MoxController` + `TxChannel` +
   `TxMicRouter`; wire Receive Only visibility from `caps.isRxOnlySku`.
 - `src/models/TransmitModel.{h,cpp}` — MoxController integration,
@@ -157,13 +157,13 @@ unit-testable.
 
 ### Phase C — TxChannel + WDSP API (4 tasks)
 
-Builds the WDSP TX channel with the 25-stage pipeline and TUNE
+Builds the WDSP TX channel with the 31-stage pipeline and TUNE
 configuration.
 
 | # | Task | Tests | Cite |
 |---|---|---|---|
 | C.1 | `WdspEngine::createTxChannel()` / `destroyTxChannel()` API; channel ID = `WDSP.id(1, 0)`; channel parameters (96 kHz DSP rate, type 1 = TX, slewup/slewdown 10 ms, block-on-output) | `tst_wdsp_engine_tx_channel.cpp` (channel created with correct params; idempotent destroy) | Pre-code §8.4 |
-| C.2 | `TxChannel` skeleton: 25-stage TXA pipeline build via `create_txa()`; verify all 25 stages constructed; default Run states match Thetis (panel/micmeter/eqmeter/bp0/compmeter/alc/alcmeter/sip1/calcc/outmeter ON; rest OFF) | `tst_tx_channel_pipeline.cpp` (introspect each stage's `Run` attribute) | Pre-code §8.1 |
+| C.2 | `TxChannel` skeleton: 31-stage TXA pipeline build via `create_txa()`; verify all 31 stages constructed; default Run states match Thetis (panel/micmeter/eqmeter/lvlrmeter/cfcmeter/bp0/compmeter/alc/alcmeter/sip1/calcc/outmeter ON; rest OFF) — 12 ON / 19 OFF, total 31 stages per `wdsp/TXA.c:31-479 [v2.10.3.13]` | `tst_tx_channel_pipeline.cpp` (introspect each stage's `Run` attribute) | Pre-code §8.1 |
 | C.3 | `TxChannel::setTuneTone(bool on, double freqHz, double magnitude)` — writes to gen1 (PostGen) via `SetTXAPostGenMode/Mag/Freq/Run`; mode=0 sine, freq=±cw_pitch (sign per current DSP mode — caller passes signed freq), magnitude = `kMaxToneMag = 0.99999f` (Thetis `console.cs:29954 [v2.10.3.13]` — preserve inline `// why not 1?  clipping?` comment per GPL attribution rule) | `tst_tx_channel_tune_tone.cpp` (PostGen state after on/off; sign-handling via parametrized inputs) | Pre-code §3.5, §8.3 |
 | C.4 | `TxChannel::setRunning(bool)` — calls `WDSP.SetChannelState(WDSP.id(1, 0), running ? 1 : 0, running ? 0 : 1)`; activates the 10 active stages in 3M-1a (rsmpin / bp0 / alc / gen1 / uslew / cfir / rsmpout / sip1 / alcmeter / outmeter) | `tst_tx_channel_running.cpp` (channel state transition; idempotent) | Pre-code §8.1 (3M-1a active stages column) |
 

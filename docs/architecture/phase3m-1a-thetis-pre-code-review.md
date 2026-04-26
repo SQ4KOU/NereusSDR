@@ -1279,13 +1279,15 @@ just port the missing logic.
 
 ---
 
-## 8. WDSP TXA pipeline — 25 stages
+## 8. WDSP TXA pipeline — 31 stages
 
 **Cite:** `wdsp/TXA.c:31-479 [v2.10.3.13]`.
 
 Master design Section 5.1.1 said "22 stages". The actual count from
-`create_txa()` is **25 stages**. This is a master-design correction
-that propagates to Section 2 (architecture) of the 3M-1a design.
+`create_txa()` is **31 stages** (five speech-processing stages — PreEmph,
+Leveler, LvlrMeter, CfComp, CfcMeter — live between EqMeter and Bp0 and
+were missed in earlier counts). This is a master-design correction that
+propagates to Section 2 (architecture) of the 3M-1a design.
 
 ### 8.1 Stage list with default Run state
 
@@ -1320,7 +1322,7 @@ Order matches the WDSP signal-flow path from `create_txa()`:
 | 24 | `rsmpout` (output resampler) | OFF (turned on if needed) | YES | Resample to radio rate |
 | 25 | `outmeter` (TXA_OUT_PK/AV) | ON | YES | Output telemetry |
 
-**3M-1a active stages (10 of 25, not 9 as master design said):** rsmpin,
+**3M-1a active stages (10 of 31, not 9 as master design said):** rsmpin,
 bp0, alc, gen1, uslew, sip1, cfir, rsmpout, alcmeter, outmeter. Master
 design's "9 stages" missed alcmeter or sip1; the actual minimum for
 audible-clean TUNE + ALC + spectrum capture is the 10 above.
@@ -1489,7 +1491,7 @@ Section 5.1:
 
 | # | Master design said | Reality (Thetis source) | Fix in 3M-1a |
 |---|---|---|---|
-| 1 | TXA pipeline = 22 stages | 25 stages | Use 25-stage list (§8.1) |
+| 1 | TXA pipeline = 22 stages | 31 stages | Use 31-stage list (§8.1) |
 | 2 | TUNE switches mode to AM + carrier-only postgen | Stays in current mode (CW→LSB/USB only); gen1 emits tone at ±cw_pitch | TxChannel doesn't change DSP mode; gen1 frequency = ±cw_pitch (§3.5) |
 | 3 | "9 active stages" | 10 active stages (alcmeter + sip1 missed) | Activate 10 stages in 3M-1a (§8.1) |
 | 4 | `tune_power_by_band[14]` | Sized `(int)Band.LAST` in Thetis (~23); NereusSDR has 14 bands so array stays 14 | NereusSDR-native sizing (§4.2) |
@@ -1515,7 +1517,7 @@ relevant pre-code review section is the source-of-truth for behaviour:
 | MoxController state machine + 6 timer chains | §1, §1.3 (constants), §1.5 (side-effects) |
 | MoxController phase signals + idempotent-guard ordering | §1.4 (transition order — the "safety effect first, idempotent guard second" Codex P2 rule applies to step 12 of RX→TX where `HdwMOXChanged` runs before `_mox` is finalized) |
 | PttMode enum (9 values, Thetis-verbatim, separate from existing PttSource) | §1.5 |
-| TxChannel 25-stage pipeline + 10 active | §8 |
+| TxChannel 31-stage pipeline + 10 active | §8 |
 | TxChannel TUNE tone (gen1) + uslew | §3.5, §8.2-8.3 |
 | TxChannel uslew 5 ms ramp (no audible click) | §8.2 |
 | RadioConnection sendTxIq virtual base | §7.1, §7.6 |

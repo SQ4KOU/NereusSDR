@@ -176,11 +176,10 @@ public:
     // channel 1.  C# equivalent: `WDSP.id(1, 0)` — dsp.cs:926-944 [v2.10.3.13]
     // case 2 returns `CMsubrcvr * CMrcvr = 1 * 1 = 1`.
     //
-    // APPROACH A (3M-1a Task C.1): this method opens the WDSP-side channel
-    // Opens the WDSP TX channel (OpenChannel type=1) and constructs the C++
-    // TxChannel wrapper around the 31-stage TXA pipeline that WDSP built.
+    // Opens the WDSP TX channel (OpenChannel type=1) and constructs the
+    // TxChannel C++ wrapper around the 31-stage TXA pipeline that WDSP built.
     // Returns the TxChannel pointer on success, nullptr if WDSP is not
-    // initialized or the channel already exists.
+    // initialized.
     //
     // Default parameters match our P2 configuration:
     //   inputBufferSize=238 (one P2 packet), dspBufferSize=4096,
@@ -199,8 +198,8 @@ public:
     void destroyTxChannel(int channelId);
 
     // Look up an existing TX channel by WDSP channel ID.
-    // Returns nullptr if not found OR if C.2 wrapper construction has not
-    // yet run (Approach A: WDSP channel may be open while C++ wrapper is null).
+    // Returns nullptr if not found. If the channel exists, the pointer is
+    // always non-null (wrapper is always constructed alongside the WDSP channel).
     TxChannel* txChannel(int channelId) const;
 
 signals:
