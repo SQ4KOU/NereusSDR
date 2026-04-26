@@ -1369,9 +1369,14 @@ if (m_historyResizeTimer) {
 
 Note: NereusSDR's divider-drag block doesn't currently reallocate `m_waterfall` — that's a pre-existing divergence from upstream. The timer wiring there is deferred to a follow-up.
 
-- [ ] **Step 3: Replace direct call in divider-drag mouseMove**
+- [ ] **Step 3: Divider-drag mouseMove — DEFERRED**
 
-Same replacement in the `m_draggingDivider` branch of `mouseMoveEvent`.
+NereusSDR's divider-drag block doesn't currently reallocate `m_waterfall`
+(only `resizeEvent` does — pre-existing divergence from upstream where the
+divider drag inlines a `newWf = m_waterfall.scaled(...)` reallocation). The
+timer wiring at this site is deferred to a follow-up that ports the missing
+reallocation logic. See Step 2's deferral note above and the Task 10 review
+discussion for context.
 
 - [ ] **Step 4: Wire the debounce into `setWfUpdatePeriodMs`**
 
