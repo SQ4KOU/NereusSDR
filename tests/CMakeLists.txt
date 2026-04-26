@@ -747,3 +747,14 @@ nereus_add_test(tst_phase3m0_persistence_audit)
 # round-trips both Thetis-source names and user-visible labels case-insensitively.
 nereus_add_test(tst_ptt_mode)
 
+# ── Phase 3M-1a Task B.2: MoxController skeleton ──────────────────────────────
+# Verifies: default state (isMox=false, state=Rx, pttMode=None);
+# setMox(true) emits moxStateChanged(true) exactly once, state→Tx;
+# setMox(false) emits moxStateChanged(false) exactly once, state→Rx;
+# idempotent guard: repeated setMox(true) emits only on first call;
+# Codex P2 ordering lock: runMoxSafetyEffects fires on EVERY setMox call
+#   (including idempotent ones) and fires BEFORE m_mox is committed;
+# setPttMode idempotent guard + pttModeChanged signal;
+# all 7 MoxState enumerators exist and are distinct.
+nereus_add_test(tst_mox_controller_basic)
+
