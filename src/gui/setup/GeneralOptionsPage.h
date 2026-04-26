@@ -69,6 +69,7 @@ class QLabel;
 namespace NereusSDR {
 
 class StepAttenuatorController;
+struct RadioInfo;
 
 class GeneralOptionsPage : public SetupPage {
     Q_OBJECT
@@ -84,6 +85,12 @@ public:
     /// update visibility correctly.  BoardCapabilities::isRxOnlySku
     /// (NereusSDR-original) is the authoritative source.
     void setReceiveOnlyVisible(bool visible);
+
+private slots:
+    // 3M-1a G.2 fixup: named slot mirrors HardwarePage::onCurrentRadioChanged.
+    // Eliminates the capture-by-pointer shutdown race of the original lambda
+    // and brings the two setup pages into stylistic parity.
+    void onCurrentRadioChanged(const NereusSDR::RadioInfo& info);
 
 private:
     void buildHardwareConfigGroup();

@@ -108,6 +108,40 @@ private slots:
         page.setReceiveOnlyVisible(false);
         QVERIFY2(chk->isHidden(), "setReceiveOnlyVisible(false) must re-hide checkbox");
     }
+
+    // ── 5. reconnect simulation: currentRadioChanged drives visibility ────────
+    // Spec reviewer gap (G.2 fixup): the named-slot connection must propagate
+    // live cap changes — i.e. a reconnect to a different board type (e.g.
+    // standard board → RX-only board) updates the checkbox without reopening Setup.
+
+    void reconnectChange_rxOnlyCheckbox_visibilityUpdates()
+    {
+        // Start with a non-RX-only board: checkbox must be hidden on construction.
+        RadioModel model;
+        model.setCapsRxOnlyForTest(false);
+        GeneralOptionsPage page(&model);
+
+        auto* chk = page.findChild<QCheckBox*>(QStringLiteral("chkGeneralRXOnly"));
+        QVERIFY2(chk, "chkGeneralRXOnly not found");
+        QVERIFY2(chk->isHidden(),
+                 "checkbox must be hidden on construction when isRxOnlySku=false");
+
+        // Simulate reconnect to an RX-only board: update caps then emit the signal.
+        model.setCapsRxOnlyForTest(true);
+        model.emitCurrentRadioChangedForTest();
+        QApplication::processEvents();
+
+        QVERIFY2(!chk->isHidden(),
+                 "checkbox must be visible after currentRadioChanged fires with isRxOnlySku=true");
+
+        // Reverse: simulate reconnect back to a full-TX board.
+        model.setCapsRxOnlyForTest(false);
+        model.emitCurrentRadioChangedForTest();
+        QApplication::processEvents();
+
+        QVERIFY2(chk->isHidden(),
+                 "checkbox must be hidden after currentRadioChanged fires with isRxOnlySku=false");
+    }
 };
 
 QTEST_MAIN(TestGeneralOptionsPageRxOnly)

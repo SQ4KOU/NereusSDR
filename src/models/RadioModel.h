@@ -337,15 +337,24 @@ public:
         applyAlexAntennaForBand(band, isTx);
     }
     void setCapsForTest(bool hasAlex) {
-        m_testCapsOverride = true;
-        m_testCapsHasAlex = hasAlex;
+        m_testCapsOverride  = true;
+        m_testCapsHasAlex   = hasAlex;
+        m_testCapsIsRxOnly  = false;  // reset sibling so combined state is unambiguous
     }
     // 3M-1a G.2: inject isRxOnlySku without a live HermesLiteRxOnly board.
     // (HermesLiteRxOnly has no HPSDRModel entry so setBoardForTest cannot
     // reach its caps via the normal profileForModel path.)
+    // Resets m_testCapsHasAlex so chaining setCapsForTest + setCapsRxOnlyForTest
+    // in the same fixture does not silently combine both flags.
     void setCapsRxOnlyForTest(bool isRxOnly) {
-        m_testCapsOverride   = true;
-        m_testCapsIsRxOnly   = isRxOnly;
+        m_testCapsOverride  = true;
+        m_testCapsHasAlex   = false;  // reset sibling so combined state is unambiguous
+        m_testCapsIsRxOnly  = isRxOnly;
+    }
+    // Emit currentRadioChanged with a default-constructed RadioInfo for test use.
+    // Use this to simulate a reconnect when testing signal-driven visibility updates.
+    void emitCurrentRadioChangedForTest() {
+        emit currentRadioChanged(NereusSDR::RadioInfo{});
     }
     NereusSDR::Band lastBand() const { return m_lastBand; }
 #endif

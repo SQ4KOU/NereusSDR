@@ -156,7 +156,7 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
 
     // 3M-1a G.2: wire Receive Only checkbox visibility from caps.isRxOnlySku.
     // Hidden by default (see buildHardwareConfigGroup); shown only for RX-only
-    // SKUs (HL2-RX, etc.).  Pattern mirrors HardwarePage::onCurrentRadioChanged.
+    // SKUs (HL2-RX, etc.).  Named slot mirrors HardwarePage::onCurrentRadioChanged.
     // Cite: Thetis setup.designer.cs:8535-8544 [v2.10.3.13] (Visible=false default);
     //       BoardCapabilities::isRxOnlySku (NereusSDR-original).
     if (model) {
@@ -166,9 +166,7 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
         // Live updates: reconnects to a different radio (e.g. HL2-RX → ANAN-G2)
         // must flip visibility without reopening Setup.
         connect(model, &RadioModel::currentRadioChanged,
-                this, [this, model](const NereusSDR::RadioInfo&) {
-                    setReceiveOnlyVisible(model->boardCapabilities().isRxOnlySku);
-                });
+                this, &GeneralOptionsPage::onCurrentRadioChanged);
     }
 
     if (m_ctrl) {
@@ -193,6 +191,20 @@ void GeneralOptionsPage::setReceiveOnlyVisible(bool visible)
 {
     if (m_chkGeneralRXOnly) {
         m_chkGeneralRXOnly->setVisible(visible);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// onCurrentRadioChanged — named slot, mirrors HardwarePage::onCurrentRadioChanged
+// ---------------------------------------------------------------------------
+// 3M-1a G.2 fixup: replaces the lambda that captured 'model' by pointer.
+// The named slot form is auto-disconnected when 'this' dies (Qt::AutoConnection),
+// with no shutdown-race on pointer capture.  m_model is the SetupPage base member.
+
+void GeneralOptionsPage::onCurrentRadioChanged(const NereusSDR::RadioInfo& /*info*/)
+{
+    if (model()) {
+        setReceiveOnlyVisible(model()->boardCapabilities().isRxOnlySku);
     }
 }
 
