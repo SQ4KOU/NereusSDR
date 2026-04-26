@@ -409,18 +409,19 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
     qCInfo(lcDsp) << "Opened TX WDSP channel" << channelId
                   << "bufSize=" << inputBufferSize
                   << "inRate=" << inputSampleRate
-                  << "dspRate=" << dspSampleRate
-                  << "(C++ wrapper deferred to 3M-1a Task C.2)";
+                  << "dspRate=" << dspSampleRate;
 #endif
 
-    // TODO [3M-1a C.2]: construct the TxChannel C++ wrapper here (create_txa,
-    // walk 25-stage TXA pipeline). For now (Approach A) we record the open
-    // channel ID with a nullptr wrapper so destroyTxChannel can close it.
-    // C.2 will replace this line with:
-    //   m_txChannels[channelId] = std::make_unique<TxChannel>(...);
-    // unique_ptr destructor handles cleanup automatically on erase().
-    m_txChannels.emplace(channelId, nullptr);
-    return nullptr;
+    // C.2 [3M-1a]: Construct the TxChannel C++ wrapper around the WDSP TXA
+    // pipeline that OpenChannel(type=1) already built in WDSP-managed memory.
+    // The 31 TXA stages (create_txa()) are live; TxChannel provides the typed
+    // C++ facade.  unique_ptr destructor handles cleanup automatically on erase().
+    auto wrapper = std::make_unique<TxChannel>(channelId, this);
+    TxChannel* raw = wrapper.get();
+    m_txChannels.emplace(channelId, std::move(wrapper));
+
+    qCInfo(lcDsp) << "Created TX channel" << channelId;
+    return raw;
 }
 
 void WdspEngine::destroyTxChannel(int channelId)
@@ -447,7 +448,7 @@ TxChannel* WdspEngine::txChannel(int channelId) const
 {
     auto it = m_txChannels.find(channelId);
     if (it != m_txChannels.end()) {
-        return it->second.get();   // nullptr in C.1 (Approach A); real ptr after C.2
+        return it->second.get();
     }
     return nullptr;
 }

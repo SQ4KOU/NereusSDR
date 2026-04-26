@@ -814,3 +814,22 @@ nereus_add_test(tst_mox_controller_tune)
 #   Channel ID: WDSP.id(1, 0) = CMsubrcvr * CMrcvr = 1 with single-RX layout.
 nereus_add_test(tst_wdsp_engine_tx_channel)
 
+# ── Phase 3M-1a Task C.2: TxChannel 31-stage TXA pipeline skeleton ────────────
+# Verifies:
+#   Stage::kStageCount == 31 (authoritative from wdsp/TXA.c:31-479 [v2.10.3.13]);
+#   createTxChannel returns a non-null TxChannel* (C++ wrapper now constructed);
+#   txChannel(1)->channelId() == 1;
+#   Default Run states match create_txa() first-argument for each of 31 stages:
+#     ON : Panel, MicMeter, EqMeter, LvlrMeter, CfcMeter, Bp0, CompMeter, Alc,
+#          AlcMeter, Sip1, Calcc, OutMeter;
+#     OFF: RsmpIn, Gen0, PhRot, AmSq, Eqp, PreEmph, Leveler, CfComp, Compressor,
+#          Bp1, OsCtrl, Bp2, AmMod, FmMod, Gen1, UsLew (no run param), Iqc, Cfir,
+#          RsmpOut;
+#   destroyTxChannel → txChannel(1) returns nullptr;
+#   RX channel 0 + TX channel 1 co-exist without aliasing.
+#   Stage count correction: pre-code review §8.1 said 25; actual source has 31
+#   (PreEmph, Leveler, LvlrMeter, CfComp, CfcMeter between EqMeter and Bp0).
+#   Tests run against stub path (no HAVE_WDSP in unit-test builds); stub returns
+#   compile-time defaults matching create_txa() run arguments.
+nereus_add_test(tst_tx_channel_pipeline)
+

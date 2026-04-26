@@ -177,9 +177,10 @@ public:
     // case 2 returns `CMsubrcvr * CMrcvr = 1 * 1 = 1`.
     //
     // APPROACH A (3M-1a Task C.1): this method opens the WDSP-side channel
-    // (via OpenChannel with type=1/TX) but returns nullptr for the C++ wrapper.
-    // The TxChannel C++ wrapper class is constructed in Task C.2.
-    // Document this in callsites: the returned pointer is null until C.2.
+    // Opens the WDSP TX channel (OpenChannel type=1) and constructs the C++
+    // TxChannel wrapper around the 31-stage TXA pipeline that WDSP built.
+    // Returns the TxChannel pointer on success, nullptr if WDSP is not
+    // initialized or the channel already exists.
     //
     // Default parameters match our P2 configuration:
     //   inputBufferSize=238 (one P2 packet), dspBufferSize=4096,
@@ -218,11 +219,9 @@ private:
     std::map<int, std::unique_ptr<RxChannel>> m_rxChannels;
 
     // TX channels keyed by WDSP channel ID.
-    // NOTE (3M-1a Approach A): In Task C.1 the WDSP channel is opened but no
-    // C++ TxChannel wrapper is constructed. The set of open TX channel IDs is
-    // tracked here with nullptr values until Task C.2 fills the wrapper.
-    // C.2 populates entries via:  m_txChannels[id] = std::make_unique<TxChannel>(...);
-    // Ownership transfer is automatic; destroyTxChannel's erase() runs the destructor.
+    // Each entry holds a TxChannel C++ wrapper around the 31-stage TXA
+    // pipeline that WDSP constructs when OpenChannel(type=1) is called.
+    // destroyTxChannel's erase() runs the unique_ptr destructor automatically.
     std::map<int, std::unique_ptr<TxChannel>> m_txChannels;
 };
 

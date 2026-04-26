@@ -137,14 +137,15 @@ private slots:
         engine.destroyTxChannel(kTxChannelId);  // idempotent second call
     }
 
-    // ── Approach A: createTxChannel returns nullptr (C.2 fills wrapper) ──────
+    // ── createTxChannel returns nullptr when WDSP not initialized ───────────────
+    // (Task C.2 updated this from Approach-A stub to full TxChannel construction,
+    //  but without WDSP the not-initialized guard fires first — result still nullptr.)
 
-    void createTxChannelReturnsNullptrApproachA() {
-        // Approach A (Task C.1): WDSP-side channel is opened but the C++
-        // TxChannel wrapper is nullptr until Task C.2.
-        // Without WDSP at unit-test time, the function returns nullptr early
-        // (not-initialized guard). This test documents the expectation for
-        // both paths: the API returns nullptr, not a real TxChannel*, until C.2.
+    void createTxChannelReturnsNullptrWithoutWdsp() {
+        // Without WDSP at unit-test time, createTxChannel fails at the
+        // not-initialized guard and returns nullptr without constructing TxChannel.
+        // The real non-null return path is exercised in tst_tx_channel_pipeline
+        // via the stub path (no WDSP, but WdspEngine initialized with no-op).
         WdspEngine engine;
         TxChannel* result = engine.createTxChannel(kTxChannelId);
         QVERIFY(result == nullptr);
