@@ -1167,6 +1167,12 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
         drawDbmScale(p, QRect(0, 0, w, specH));
     }
     drawBandPlan(p, specRect);
+    // Sub-epic E: time-scale + LIVE button on the right edge of the
+    // waterfall area (always painted; widens automatically when paused).
+    // Use a full-width wfRect (not the clipped `wfRect` at line 1141) so the
+    // strip lands in the same right-edge column as the dBm scale strip.
+    const QRect wfRectFull(0, wfRect.top(), width(), wfRect.height());
+    drawTimeScale(p, wfRectFull);
     drawCursorInfo(p, specRect);
 
     // FPS overlay (Phase 3G-8 commit 5 / G8 ShowFPS). Cheap rolling counter
@@ -1670,6 +1676,83 @@ void SpectrumWidget::drawBandPlan(QPainter& p, const QRect& specRect)
         p.drawEllipse(QPoint(sx, bandY + bandH / 2), 4, 4);
     }
     p.setRenderHint(QPainter::Antialiasing, false);
+}
+
+// ─── Time scale + LIVE button (sub-epic E) ─────────────────────────────
+// From AetherSDR SpectrumWidget.cpp:4929-4994 [@0cd4559]
+//   adapter: NereusSDR computes msPerRow directly from m_wfUpdatePeriodMs
+//   instead of AetherSDR's calibrated m_wfMsPerRow (we have no radio
+//   tile clock to calibrate against).
+
+void SpectrumWidget::drawTimeScale(QPainter& p, const QRect& wfRect)
+{
+    const QRect strip = waterfallTimeScaleRect(wfRect);
+    const int stripX = strip.x();
+
+    // Semi-opaque background so spectrum content underneath dims.
+    p.fillRect(strip, QColor(0x0a, 0x0a, 0x18, 220));
+
+    // Left border line — separates the strip from waterfall content.
+    p.setPen(QColor(0x30, 0x40, 0x50));
+    p.drawLine(stripX, wfRect.top(), stripX, wfRect.bottom());
+
+    // LIVE button — grey when live, bright red when paused.
+    const QRect liveRect = waterfallLiveButtonRect(wfRect);
+    p.setPen(QColor(0x40, 0x50, 0x60));
+    p.setBrush(m_wfLive ? QColor(0x45, 0x45, 0x45)
+                        : QColor(0xc0, 0x20, 0x20));  // bright red when paused
+    p.drawRoundedRect(liveRect, 3, 3);
+
+    QFont liveFont = p.font();
+    liveFont.setPointSize(7);
+    liveFont.setBold(true);
+    p.setFont(liveFont);
+    p.setPen(m_wfLive ? QColor(0xb0, 0xb0, 0xb0) : Qt::white);
+    p.drawText(liveRect, Qt::AlignCenter, QStringLiteral("LIVE"));
+
+    // Tick labels along the strip.
+    const float msPerRow = std::max(1, m_wfUpdatePeriodMs);
+    const QRect labelRect = strip.adjusted(0, 4, 0, 0);
+    const float totalSec = labelRect.height() * msPerRow / 1000.0f;
+    if (totalSec <= 0) {
+        return;
+    }
+
+    QFont f = p.font();
+    f.setPointSize(7);
+    f.setBold(false);
+    p.setFont(f);
+    const QFontMetrics fm(f);
+
+    constexpr float kStepSec = 5.0f;
+    for (float sec = 0; sec <= totalSec; sec += kStepSec) {
+        const float frac = sec / totalSec;
+        const int yy = labelRect.top()
+                     + static_cast<int>(frac * labelRect.height());
+        if (yy > wfRect.bottom() - 5) {
+            continue;
+        }
+
+        // Tick mark
+        p.setPen(QColor(0x50, 0x70, 0x80));
+        p.drawLine(stripX, yy, stripX + 4, yy);
+
+        // Label: elapsed seconds when live, absolute UTC when paused.
+        const QString label = m_wfLive
+            ? QStringLiteral("%1s").arg(static_cast<int>(sec))
+            : pausedTimeLabelForAge(
+                m_wfHistoryOffsetRows
+                + static_cast<int>(std::round(sec * 1000.0f / msPerRow)));
+
+        p.setPen(QColor(0x80, 0xa0, 0xb0));
+        if (m_wfLive) {
+            p.drawText(stripX + 6, yy + fm.ascent() / 2, label);
+        } else {
+            const QRect textRect(stripX + 6, yy - fm.height() / 2,
+                                 strip.width() - 10, fm.height());
+            p.drawText(textRect, Qt::AlignRight | Qt::AlignVCenter, label);
+        }
+    }
 }
 
 // ---- Coordinate helpers ----
@@ -3162,6 +3245,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 drawDbmScale(p, QRect(0, 0, w, specH));
             }
             drawBandPlan(p, specRect);
+            // Sub-epic E: time-scale + LIVE button on the right edge of the
+            // waterfall area. Same FULL-WIDTH wfRect contract as the QPainter
+            // path — the clipped `wfRect` local at line 3079 cannot be reused
+            // because the time-scale helpers expect a wfRect spanning the full
+            // widget width (the strip lives in the dBm-strip column).
+            const QRect wfRectFull(0, wfRect.top(), w, wfRect.height());
+            drawTimeScale(p, wfRectFull);
             p.fillRect(0, specH, w, kDividerH, QColor(0x30, 0x40, 0x50));
             drawFreqScale(p, QRect(0, specH + kDividerH, w - effectiveStripW(), kFreqScaleH));
             drawVfoMarker(p, specRect, wfRect);
