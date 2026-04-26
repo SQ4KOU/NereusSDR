@@ -95,7 +95,7 @@ private slots:
         QVERIFY(ctrl.isManualMox());
     }
 
-    void setTuneTrue_pttModeBecomesMnaual()
+    void setTuneTrue_pttModeBecomesManual()
     {
         MoxController ctrl;
         ctrl.setTimerIntervals(0, 0, 0, 0, 0, 0);

@@ -144,7 +144,12 @@ public:
     // Mirrors Thetis _manual_mox (console.cs:240 [v2.10.3.13]):
     //   "True if the MOX button was clicked on (not PTT)"
     // In NereusSDR, TUN goes through setTune() which sets this flag.
-    // External code must not set this directly — call setTune() instead.
+    // setMox() does NOT touch this flag (Thetis sets it via chkMOX_
+    // CheckedChanged2 only; NereusSDR narrows that to the TUN path).
+    // F.1 subscribers wanting to distinguish a TUN-triggered MOX from a
+    // raw setMox(true) call should read this getter inside their
+    // hardwareFlipped(bool isTx) slot. External code must not set this
+    // directly — call setTune() instead.
     bool     isManualMox() const noexcept { return m_manualMox; }
 
     // ── Setter ───────────────────────────────────────────────────────────────
@@ -192,6 +197,13 @@ public slots:
     //   - RadioModel TUNE function port (Task G.4) for the rest
     // Those tasks call setTune() after doing their prep, or subscribe to
     // MoxController phase signals for ordered hardware-flip side-effects.
+    //
+    // F.1 contract: m_pttMode is intentionally NOT cleared on TUN-off.
+    // The F.1 RadioModel subscriber is responsible for resetting it via
+    // the hardwareFlipped(false) signal path (matches Thetis behaviour
+    // where chkMOX_CheckedChanged2 sets _current_ptt_mode = NONE in its
+    // TX→RX branch at console.cs:29539 [v2.10.3.13]). The full rationale
+    // is in MoxController.cpp in the setTune(false) body comment.
     void setTune(bool on);
 
     // setMox: Codex P2-ordered slot.
@@ -255,8 +267,13 @@ signals:
     void txaFlushed();              // TX→RX phase 3 of 4 — fires after keyUpDelay; in-flight samples cleared
     void rxReady();                 // TX→RX phase 4 of 4 — fires after pttOutDelay
 
-    // manualMoxChanged: emitted when m_manualMox transitions (diagnostic-level).
+    // ── TUN state signal (diagnostic) ────────────────────────────────────────
+    // manualMoxChanged is NOT a Codex P1 phase signal. F.1 subscribers should
+    // continue to wire to the 6 phase signals above; manualMoxChanged is a
+    // diagnostic-level emit for code that needs to react to TUN flag changes
+    // independently of the MOX state walk (e.g. UI button highlight).
     //
+    // Emitted when m_manualMox transitions (set/cleared only by setTune()).
     // Subscribers who need to distinguish a TUN-originated MOX from a
     // direct setMox() call can attach here. Phase-signal subscribers (F.1)
     // typically use hardwareFlipped(bool isTx) instead — its payload is
