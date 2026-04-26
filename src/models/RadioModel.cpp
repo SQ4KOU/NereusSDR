@@ -937,6 +937,12 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                          << "inSize=" << wdspInSize
                          << "activeRxCount=" << activeRxCount;
 
+    // 3M-1a G.1 fixup: explicit disconnect in teardownConnection() prevents
+    // accumulation across reconnect cycles.  Qt::UniqueConnection can't be
+    // used with lambdas, so we rely on the matching disconnect there.
+    // Without that disconnect, every connectToRadio() would add another copy
+    // of this lambda; on the second connect, both copies would call
+    // createRxChannel + createTxChannel(1) (idempotent today, but doubled work).
     connect(m_wdspEngine, &WdspEngine::initializedChanged, this,
             [this, wdspInputRate, wdspInSize](bool ok) {
         if (!ok) {
@@ -2270,6 +2276,16 @@ void RadioModel::teardownConnection()
 {
     if (!m_connection) {
         return;
+    }
+
+    // 3M-1a G.1 fixup: drop any prior WdspEngine::initializedChanged subscribers
+    // we registered in connectToRadio(). Without this, each reconnect cycle
+    // accumulates another copy of the WDSP-init lambda, causing duplicate
+    // createRxChannel + createTxChannel(1) calls on the next initializedChanged.
+    // Qt::UniqueConnection can't be used with lambdas, so we disconnect by hand
+    // here, on the matching teardown path.
+    if (m_wdspEngine != nullptr) {
+        disconnect(m_wdspEngine, &WdspEngine::initializedChanged, this, nullptr);
     }
 
     // Flush any pending AlexController writes before the MAC-scoped

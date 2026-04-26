@@ -271,6 +271,10 @@ public:
     // can call setTuneTone / setRunning without depending on WdspEngine.
     // Non-owning; WdspEngine owns the channel. Null until WDSP initializes.
     // Master design §5.1.1; pre-code review §2.5.
+    // TODO (3M-1a G.4): wire TxChannel → RadioConnection::sendTxIq SPSC ring here.
+    // The audio thread (TxChannel) pushes 24-bit BE I/Q frames into the ring
+    // established by E.2 (P1) / E.6 (P2). G.4 attaches setTuneTone() to MoxController
+    // ::txReady and the production loop to fexchange2 output.
     TxChannel* txChannel() const { return m_txChannel; }
 
     // Phase 3G-9b: one-shot profile that sets the 7 smooth-default recipe

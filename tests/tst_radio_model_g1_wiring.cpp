@@ -110,10 +110,12 @@ private slots:
     }
 
     // ── 5. hardwareFlipped → onMoxHardwareFlipped is connected ────────────────
-    // Verify the connect() in the constructor actually wired the slot by
-    // using QSignalSpy to count emissions and a mock connection to verify
-    // the three F.1 side-effects fire (setMox is indirectly called via
-    // QMetaObject::invokeMethod so we just count hardwareFlipped deliveries).
+    // Verify the connect() in the constructor wired the slot delivery: we
+    // use QSignalSpy to count signal emissions on hardwareFlipped, then
+    // confirm the slot body's side-effects (Alex/setMox/setTrxRelay) fire
+    // via the mock connection's call log.  Slot-body coverage (the actual
+    // fan-out logic) is in tst_radio_model_mox_hardware_flip — this test
+    // verifies WIRING (the connection exists), not slot semantics.
     //
     // We use setTimerIntervals(0,...) to make the MoxController walk
     // synchronous (no wall-clock wait) and processEvents() to drain the
