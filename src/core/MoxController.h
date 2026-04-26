@@ -138,3 +138,10 @@ private:
 };
 
 } // namespace NereusSDR
+
+// Qt metatype registration — required so MoxState can be carried by
+// QVariant / QSignalSpy::value<MoxState>() without silently returning
+// a zero-initialised value on Qt6 builds that haven't called
+// qRegisterMetaType<>().  Matches the pattern in WdspTypes.h:298-305.
+#include <QMetaType>
+Q_DECLARE_METATYPE(NereusSDR::MoxState)

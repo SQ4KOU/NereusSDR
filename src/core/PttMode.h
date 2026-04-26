@@ -112,3 +112,10 @@ inline PttMode pttModeFromString(const QString& s)
 }
 
 } // namespace NereusSDR
+
+// Qt metatype registration — required so PttMode can be carried by
+// QVariant / QSignalSpy::value<PttMode>() without silently returning
+// a zero-initialised value on Qt6 builds that haven't called
+// qRegisterMetaType<>().  Matches the pattern in WdspTypes.h:298-305.
+#include <QMetaType>
+Q_DECLARE_METATYPE(NereusSDR::PttMode)

@@ -367,7 +367,6 @@ set(CORE_SOURCES
     src/core/RxChannel.cpp
     src/core/NbFamily.cpp
     src/core/NbFamily.h
-    src/core/MoxController.h
     src/core/MoxController.cpp
     src/core/FFTEngine.cpp
     src/core/NoiseFloorEstimator.cpp
