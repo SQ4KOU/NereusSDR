@@ -1028,15 +1028,18 @@ void SpectrumWidget::setBandPlanFontSize(int pt)
     update();
 }
 
+// Width of the right-edge column reserved for the dBm scale strip in the
+// SPECTRUM row. The waterfall row's time-scale strip widens to 72px when
+// paused but does NOT narrow the spectrum — it overlays the right edge of
+// the waterfall image instead. Keeping the spectrum reservation at
+// kDbmStripW means the spectrum trace doesn't shift when the user pauses.
 int SpectrumWidget::effectiveStripW() const
 {
     // dBm strip + paused-mode timescale-strip extension.
     // The strip is always present in the *waterfall* row (where the
     // time scale is painted); the dBm strip is in the *spectrum* row.
     // They occupy the same right-edge column.
-    const int spectrumStripW = m_dbmScaleVisible ? kDbmStripW : 0;
-    const int waterfallStripW = waterfallStripWidth();
-    return std::max(spectrumStripW, waterfallStripW);
+    return m_dbmScaleVisible ? kDbmStripW : 0;
 }
 
 void SpectrumWidget::setFreqLabelAlign(FreqLabelAlign a)
@@ -2071,11 +2074,16 @@ QRect SpectrumWidget::waterfallTimeScaleRect(const QRect& wfRect) const
 QRect SpectrumWidget::waterfallLiveButtonRect(const QRect& wfRect) const
 {
     const QRect strip = waterfallTimeScaleRect(wfRect);
-    constexpr int kLiveButtonW = 32;
-    constexpr int kLiveButtonH = 16;
-    const int buttonX = strip.right() - kLiveButtonW - 2;
-    const int buttonY = wfRect.top() - kFreqScaleH + 2;  // sits in the freq-scale row
-    return QRect(buttonX, buttonY, kLiveButtonW, kLiveButtonH);
+    // Button width tracks the strip column so it fits without clipping:
+    // 32x16 in live mode (strip is 36 px wide, matches upstream), 40x20
+    // when paused (strip widens to 72 px and the user is actively trying
+    // to click it to resume — bigger target is friendlier).
+    const int buttonW = m_wfLive ? 32 : 40;
+    const int buttonH = m_wfLive ? 16 : 20;
+    const int padding = m_wfLive ? 2 : 4;
+    const int buttonX = strip.right() - buttonW - 2;
+    const int buttonY = wfRect.top() - kFreqScaleH + padding;
+    return QRect(buttonX, buttonY, buttonW, buttonH);
 }
 
 // Sub-epic E — flush ring buffer + force live. Called from clearDisplay()
@@ -2521,11 +2529,22 @@ bool SpectrumWidget::eventFilter(QObject* obj, QEvent* ev)
 // Hit-test priority from AetherSDR SpectrumWidget.cpp:824-1128
 // Filter edge drag, passband slide-to-tune, divider drag, dBm drag, click-to-tune
 
+// GPU renderer's specH formula. Mouse handlers must mirror it exactly so
+// the hover/click hit-tests align with where the GPU path actually paints
+// the spectrum/divider/freq-scale/waterfall rows. Old `h * m_spectrumFrac`
+// assumed the chrome (divider + freq-scale) lived elsewhere; the GPU path
+// reserves chromeH from contentH explicitly.
+static int specHFromHeight(int widgetH, float spectrumFrac, int chromeH)
+{
+    const int contentH = widgetH - chromeH;
+    return static_cast<int>(contentH * spectrumFrac);
+}
+
 void SpectrumWidget::mousePressEvent(QMouseEvent* event)
 {
     int w = width();
     int h = height();
-    int specH = static_cast<int>(h * m_spectrumFrac);
+    int specH = specHFromHeight(h, m_spectrumFrac, kFreqScaleH + kDividerH);
     int dividerY = specH;
     QRect specRect(0, 0, w - effectiveStripW(), specH);
     int mx = static_cast<int>(event->position().x());
@@ -2632,6 +2651,18 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
     // 3. Frequency scale bar (wider gray bar below divider) — zoom bandwidth left/right
     int freqBarY = dividerY + kDividerH;
     if (my >= freqBarY && my < freqBarY + kFreqScaleH) {
+        // Sub-epic E: the LIVE button sits in the freq-scale row, so its
+        // hit-test MUST run before the bandwidth-drag below grabs the click.
+        // From AetherSDR SpectrumWidget.cpp:1655-1660 [@0cd4559]
+        const int wfY = freqBarY + kFreqScaleH;
+        const QRect wfRect(0, wfY, w, h - wfY);
+        if (waterfallLiveButtonRect(wfRect).contains(event->position().toPoint())
+            && event->button() == Qt::LeftButton) {
+            setWaterfallLive(true);
+            event->accept();
+            return;
+        }
+
         m_draggingBandwidth = true;
         m_bwDragStartX = mx;
         m_bwDragStartBw = m_bandwidthHz;
@@ -2721,7 +2752,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
     int my = static_cast<int>(event->position().y());
     int w = width();
     int h = height();
-    int specH = static_cast<int>(h * m_spectrumFrac);
+    int specH = specHFromHeight(h, m_spectrumFrac, kFreqScaleH + kDividerH);
     QRect specRect(0, 0, w - effectiveStripW(), specH);
 
     // --- Active drag modes ---
@@ -3389,10 +3420,15 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             // path — the clipped `wfRect` local at line 3079 cannot be reused
             // because the time-scale helpers expect a wfRect spanning the full
             // widget width (the strip lives in the dBm-strip column).
+            //
+            // drawTimeScale must paint AFTER drawFreqScale so the LIVE
+            // button (in the freq-scale row) is on top of the freq labels —
+            // when paused the 40px button extends slightly past the
+            // dBm-strip column's left edge into freq-scale territory.
             const QRect wfRectFull(0, wfRect.top(), w, wfRect.height());
-            drawTimeScale(p, wfRectFull);
             p.fillRect(0, specH, w, kDividerH, QColor(0x30, 0x40, 0x50));
             drawFreqScale(p, QRect(0, specH + kDividerH, w - effectiveStripW(), kFreqScaleH));
+            drawTimeScale(p, wfRectFull);
             drawVfoMarker(p, specRect, wfRect);
             drawOffScreenIndicator(p, specRect, wfRect);
 
