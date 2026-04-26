@@ -51,7 +51,6 @@ namespace NereusSDR { class HermesLiteBandwidthMonitor; }// forward decl — ful
 
 #include <memory>
 #include <array>
-#include <cstdint>
 #include <QUdpSocket>
 #include <QTimer>
 #include <QElapsedTimer>
