@@ -646,7 +646,7 @@ void WaterfallDefaultsPage::updateEffectiveDepthLabel()
     if (!sw || !m_effectiveDepthLabel) { return; }
     const qint64 depthMs  = sw->waterfallHistoryMs();
     const int    periodMs = std::max(1, sw->wfUpdatePeriodMs());
-    const int    capRows  = 4096;
+    const int    capRows  = SpectrumWidget::kMaxWaterfallHistoryRows;
     const int    rows     = std::min(
         static_cast<int>((depthMs + periodMs - 1) / periodMs), capRows);
     const int    effectiveMs = rows * periodMs;
@@ -878,10 +878,11 @@ void WaterfallDefaultsPage::buildUI()
     m_historyDepthCombo->addItem(QStringLiteral("5 minutes"),  5LL * 60 * 1000);
     m_historyDepthCombo->addItem(QStringLiteral("15 minutes"), 15LL * 60 * 1000);
     m_historyDepthCombo->addItem(QStringLiteral("20 minutes"), 20LL * 60 * 1000);
-    m_historyDepthCombo->setToolTip(QStringLiteral(
-        "Maximum amount of waterfall history kept for rewind. "
-        "Effective rewind is capped at 4 096 rows — slow the "
-        "update period to extend depth at fast refresh rates."));
+    m_historyDepthCombo->setToolTip(
+        QStringLiteral("Maximum amount of waterfall history kept for rewind. "
+                       "Effective rewind is capped at %1 rows — slow the "
+                       "update period to extend depth at fast refresh rates.")
+            .arg(SpectrumWidget::kMaxWaterfallHistoryRows));
     histForm->addRow(QStringLiteral("Depth:"), m_historyDepthCombo);
 
     m_effectiveDepthLabel = new QLabel(histGroup);
