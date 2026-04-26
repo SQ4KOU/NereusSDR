@@ -645,13 +645,29 @@ void P2RadioConnection::setAntennaRouting(AntennaRouting r)
 // NOTE: P2RadioConnection already carries m_wdt (int, maps to prn->wdt) which
 // is set to 1 unconditionally in connectToRadio() because the radio requires
 // the watchdog for streaming. m_watchdogEnabled records the *user* toggle from
-// Setup → Network WDT checkbox; the relationship to m_wdt is deferred to E.8.
+// Setup → Network WDT checkbox; the relationship to m_wdt is unresolved.
 //
-// TODO [E.8]: reconcile m_watchdogEnabled with m_wdt / prn->wdt and emit
-// the wire bit update via sendCmdGeneral(). Bit position is currently unknown —
-// Thetis dispatches via ChannelMaster.dll (closed source). Identify via wire
-// capture; until then this stores state only (P1 wire bit resolved in E.5).
-// Cite: NetworkIOImports.cs:197-198 [v2.10.3.13] (DllImport entry).
+// 3M-1a Task E.8 — DEFERRED with documented blocker
+// (pre-code review §7.8, "P2 BPF2Gnd / Alex T/R / Network watchdog —
+//  DEFERRED to research"):
+//
+//   "deskhpsdr does not currently emit a P2 watchdog command.  Likely a
+//    Saturn-specific register; documented blocker."
+//   "P2 watchdog wire bit stays a state-tracking stub.  Update the TODO
+//    comment to reference this pre-code review §7.8 and file a tracking
+//    issue."
+//
+// State-only stub: setWatchdogEnabled stores the requested value in the
+// base-class m_watchdogEnabled field (default true, set by E.5).  No P2
+// wire emission.  P1 wire bit was resolved in E.5 (RUNSTOP pkt[3] bit 7).
+//
+// Tracking: see GitHub issue (filed post-merge — link to be added when
+// the issue number is known).  Re-port path: when Saturn register layout
+// is identified (likely via deskhpsdr saturndrivers.c / saturnregisters.c
+// once they document the watchdog control register), restore the wire-bit
+// emission via sendCmdGeneral() and remove the deferral note.
+// Cite: NetworkIOImports.cs:197-198 [v2.10.3.13] (DllImport entry that
+// indirects through ChannelMaster.dll's closed-source watchdog handler).
 // ---------------------------------------------------------------------------
 void P2RadioConnection::setWatchdogEnabled(bool enabled)
 {
