@@ -833,3 +833,21 @@ nereus_add_test(tst_wdsp_engine_tx_channel)
 #   compile-time defaults matching create_txa() run arguments.
 nereus_add_test(tst_tx_channel_pipeline)
 
+# ── Phase 3M-1a Task C.3: TxChannel::setTuneTone() PostGen (gen1) wiring ──────
+# Verifies:
+#   kMaxToneMag == 0.99999 (from Thetis console.cs:29954 [v2.10.3.13]:
+#     MAX_TONE_MAG = 0.99999f; // why not 1?  clipping? — comment preserved verbatim);
+#   kMaxToneMag < 1.0 (deliberate: avoids clipping);
+#   kMaxToneMag > 0.0 (positive magnitude);
+#   setTuneTone(true)  with default args doesn't crash (stub path, no WDSP);
+#   setTuneTone(false) with default args doesn't crash;
+#   setTuneTone(true, +600.0) — positive freq, USB/CWU/DIGU convention;
+#   setTuneTone(true, -600.0) — negative freq, LSB/CWL/DIGL convention;
+#   setTuneTone(true, +600.0, 0.5) — custom magnitude override;
+#   on→off and off→on toggle sequences don't crash;
+#   repeated calls (10 cycles) don't crash;
+#   zero freq is accepted;
+#   Sign contract: no abs() / clamp / negate inside setTuneTone (sign is caller-authoritative).
+#   Ports Thetis console.cs:29954, 30031-30040 [v2.10.3.13] and gen.c:783-813 [v2.10.3.13].
+nereus_add_test(tst_tx_channel_tune_tone)
+

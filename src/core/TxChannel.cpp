@@ -68,10 +68,17 @@ warren@wpratt.com
 //   2026-04-25 — TxChannel C++ wrapper implemented by J.J. Boyd (KG4VCF)
 //                 during 3M-1a Task C.2, with AI-assisted transformation
 //                 via Anthropic Claude Code.
+//   2026-04-25 — setTuneTone() PostGen wiring added by J.J. Boyd (KG4VCF)
+//                 during 3M-1a Task C.3, with AI-assisted transformation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"
 #include "LogCategories.h"
+
+// WDSP API declarations (SetTXAPostGen*, fexchange2, etc.) — guarded by
+// HAVE_WDSP internally.  Include unconditionally; the header guards itself.
+#include "wdsp_api.h"
 
 // Direct WDSP struct access for stage-Run introspection.
 // WDSP declares "extern struct _txa txa[];" in TXA.h; we access
@@ -270,6 +277,66 @@ bool TxChannel::stageRunning(Stage s) const
     }
 #else
     return stageRunningDefault(s);
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// setTuneTone()
+//
+// Enables or disables the TUNE sine-tone carrier via the WDSP gen1 PostGen.
+//
+// Porting from Thetis console.cs:30031-30040 [v2.10.3.13] — original C# logic
+// inside chkTUN_CheckedChanged (non-pulse branch):
+//
+//   // put tone in opposite sideband (LSB/CWL/DIGL → negative, else positive)
+//   switch (Audio.TXDSPMode) {
+//       case DSPMode.LSB:
+//       case DSPMode.CWL:
+//       case DSPMode.DIGL:
+//           radio.GetDSPTX(0).TXPostGenToneFreq = -cw_pitch;   // console.cs:30031
+//           break;
+//       default:
+//           radio.GetDSPTX(0).TXPostGenToneFreq = +cw_pitch;   // console.cs:30034
+//           break;
+//   }
+//   radio.GetDSPTX(0).TXPostGenMode   = 0;             // console.cs:30038
+//   radio.GetDSPTX(0).TXPostGenToneMag = MAX_TONE_MAG; // console.cs:30039
+//   radio.GetDSPTX(0).TXPostGenRun    = 1;             // console.cs:30040
+//
+// NereusSDR translation: the sign-flip is the caller's responsibility (G.4
+// TUNE function port computes ±cw_pitch and passes it as freqHz).  The call
+// order is preserved verbatim: freq → mode → mag → run.
+//
+// WDSP API:
+//   SetTXAPostGenToneFreq — gen.c:808-813 [v2.10.3.13]: txa[ch].gen1.p->tone.freq
+//                           + calls calc_tone() to recompute phase increment.
+//   SetTXAPostGenMode     — gen.c:792-797 [v2.10.3.13]: txa[ch].gen1.p->mode
+//   SetTXAPostGenToneMag  — gen.c:800-805 [v2.10.3.13]: txa[ch].gen1.p->tone.mag
+//   SetTXAPostGenRun      — gen.c:784-789 [v2.10.3.13]: txa[ch].gen1.p->run
+// ---------------------------------------------------------------------------
+void TxChannel::setTuneTone(bool on, double freqHz, double magnitude)
+{
+#ifdef HAVE_WDSP
+    // Null-guard: if the TXA channel was never opened (e.g. unit-test builds
+    // that link WDSP but don't call WdspEngine::initialize()), txa[ch].rsmpin.p
+    // is null.  The SetTXAPostGen* functions call EnterCriticalSection on
+    // ch[channel].csDSP, which would also be uninitialized and segfault.
+    // Match the same sentinel guard used in stageRunning().
+    if (txa[m_channelId].rsmpin.p == nullptr) {
+        return;
+    }
+
+    // From Thetis console.cs:30031-30040 [v2.10.3.13] — chkTUN_CheckedChanged.
+    // Caller passes signed freqHz (±cw_pitch); sign-flip per DSP mode is G.4's job.
+    // Call order matches Thetis: freq → mode → mag → run.
+    SetTXAPostGenToneFreq(m_channelId, freqHz);          // gen.c:808 [v2.10.3.13]
+    SetTXAPostGenMode(m_channelId, 0);                   // gen.c:792 [v2.10.3.13] — 0 = sine tone
+    SetTXAPostGenToneMag(m_channelId, magnitude);        // gen.c:800 [v2.10.3.13]
+    SetTXAPostGenRun(m_channelId, on ? 1 : 0);           // gen.c:784 [v2.10.3.13]
+#else
+    Q_UNUSED(on);
+    Q_UNUSED(freqHz);
+    Q_UNUSED(magnitude);
 #endif
 }
 

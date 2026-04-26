@@ -188,6 +188,17 @@ public:
         kStageCount = 31
     };
 
+    // ── TUNE-tone magnitude constant ─────────────────────────────────────────
+    //
+    // From Thetis console.cs:29954 [v2.10.3.13]:
+    //   private const double MAX_TONE_MAG = 0.99999f; // why not 1?  clipping?
+    //
+    // Used as the default magnitude for setTuneTone().  The original Thetis
+    // constant is `float` literal (0.99999f) stored in a `double` field; we
+    // preserve the value exactly and keep the inline developer comment verbatim
+    // per the GPL attribution rule (CLAUDE.md "Inline comment preservation").
+    static constexpr double kMaxToneMag = 0.99999;  // why not 1?  clipping?
+
     explicit TxChannel(int channelId, QObject* parent = nullptr);
     ~TxChannel() override;
 
@@ -213,7 +224,39 @@ public:
     // argument to each create_*() call in create_txa().
     bool stageRunning(Stage s) const;
 
-    // (C.3 adds setTuneTone; C.4 adds setRunning — do not add here.)
+    // ── TUNE-tone PostGen (3M-1a C.3) ───────────────────────────────────────
+    //
+    // Enable / disable the TUNE-tone PostGen (gen1) on this TX channel.
+    //
+    // Wires WDSP's `SetTXAPostGen*` API per the TUNE pattern from Thetis
+    // `chkTUN_CheckedChanged` (console.cs:30031-30040 [v2.10.3.13]).
+    //
+    // Call order matches Thetis exactly (freq → mode → mag → run):
+    //   - Frequency = signed Hz; caller is responsible for sign-flipping per
+    //     the current DSP mode (LSB/CWL/DIGL → -cw_pitch; everything else
+    //     → +cw_pitch). See pre-code review §3.5. Default 0.0 (caller passes
+    //     signed cw_pitch; G.4 TUNE function port computes the sign).
+    //   - Mode = 0 (sine tone — per `wdsp/gen.c:144-193 [v2.10.3.13]`)
+    //   - Magnitude = kMaxToneMag (= 0.99999) by default; the `magnitude`
+    //     parameter exists so future callers (e.g., 2-TONE test in 3M-3a)
+    //     can override.
+    //   - Run = 1 (on) or 0 (off)
+    //
+    // 3M-1a callers (Task G.4 TUNE function port + TxApplet) drive this from
+    // `MoxController::txAboutToBegin` for TUN-on and `txAboutToEnd` for TUN-off.
+    //
+    // **Scope (3M-1a C.3):** this method only touches the gen1 PostGen API.
+    // It does NOT engage MOX (that is MoxController), does NOT configure the
+    // TXA channel's DSP mode (that is C.4 / G.4), and does NOT compute the
+    // cw_pitch sign (that is G.4's responsibility).
+    //
+    // From Thetis console.cs:30031-30040 [v2.10.3.13] — chkTUN_CheckedChanged.
+    // From Thetis wdsp/gen.c:783-813 [v2.10.3.13] — SetTXAPostGen* API.
+    void setTuneTone(bool on,
+                     double freqHz   = 0.0,
+                     double magnitude = kMaxToneMag);
+
+    // (C.4 adds setRunning — do not add here.)
 
 private:
     const int m_channelId;

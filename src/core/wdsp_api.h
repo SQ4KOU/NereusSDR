@@ -540,6 +540,32 @@ void use_impulse_cache(int use);
 
 int GetWDSPVersion(void);
 
+// ---------------------------------------------------------------------------
+// TX PostGen (gen1) — TUNE-tone carrier (gen.c)
+//
+// gen1 is the last DSP stage before up-slew ramp and output metering.
+// Mode 0 = sine tone (used for TUNE carrier).
+// Mode 1 = two-tone (used for 2-TONE IMD test — 3M-3a scope).
+//
+// From Thetis wdsp/gen.c:783-813 [v2.10.3.13].
+// Call-site: console.cs:30031-30040 [v2.10.3.13] — chkTUN_CheckedChanged.
+// Ported by NereusSDR Task C.3 (3M-1a).
+// ---------------------------------------------------------------------------
+
+// From Thetis wdsp/gen.c:784-789 [v2.10.3.13] — txa[ch].gen1.p->run
+void SetTXAPostGenRun(int channel, int run);
+
+// From Thetis wdsp/gen.c:792-797 [v2.10.3.13] — txa[ch].gen1.p->mode
+// mode: 0=sine tone, 1=two-tone, 2=noise, 3=sweep, 4=sawtooth, 5=triangle, 6=pulse
+void SetTXAPostGenMode(int channel, int mode);
+
+// From Thetis wdsp/gen.c:800-805 [v2.10.3.13] — txa[ch].gen1.p->tone.mag
+void SetTXAPostGenToneMag(int channel, double mag);
+
+// From Thetis wdsp/gen.c:808-813 [v2.10.3.13] — txa[ch].gen1.p->tone.freq + calc_tone()
+// Signed Hz; caller provides sign per DSP mode (LSB/CWL/DIGL → negative).
+void SetTXAPostGenToneFreq(int channel, double freq);
+
 } // extern "C"
 
 #endif // HAVE_WDSP
