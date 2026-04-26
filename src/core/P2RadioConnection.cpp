@@ -560,10 +560,24 @@ void P2RadioConnection::setTxDrive(int level)
 
 void P2RadioConnection::setMox(bool enabled)
 {
-    // From Thetis: prn->tx[0].ptt_out
-    m_tx[0].pttOut = enabled ? 1 : 0;
+    // Codex P2: safety effect (wire byte update) fires unconditionally so
+    // repeated calls with the same value still re-emit the high-priority packet.
+    // This matches deskhpsdr behaviour where new_protocol_high_priority() is
+    // triggered on every MOX state change event regardless of prior value.
+    //
+    // From deskhpsdr/src/new_protocol.c:739-762 [@120188f]:
+    //   high_priority_buffer_to_radio[4] = P2running;   // bit 0 = run
+    //   if (xmit) { high_priority_buffer_to_radio[4] |= 0x02; }  // bit 1 = MOX
+    //
+    // m_mox drives bit 1 (0x02) of byte 4 in composeCmdHighPriority.
+    // m_tx[0].pttOut remains for the rear-panel PTT-out relay (TX-confirmation
+    // output, deferred to 3M-3 per the plan); it is NOT the MOX source here.
     if (m_running) {
-        sendCmdHighPriority();
+        sendCmdHighPriority();  // safety effect: re-emit before state update
+    }
+    m_mox = enabled;
+    if (m_running) {
+        sendCmdHighPriority();  // emit with new MOX state
     }
 }
 
@@ -914,8 +928,14 @@ CodecContext P2RadioConnection::buildCodecContext() const
     CodecContext ctx;
 
     // Run/PTT state
+    // ctx.p2PttOut drives byte 4 bit 1 (0x02) of CmdHighPriority = MOX.
+    // Source: deskhpsdr/src/new_protocol.c:739-762 [@120188f]:
+    //   high_priority_buffer_to_radio[4] = P2running;    // bit 0 = run
+    //   if (xmit) { high_priority_buffer_to_radio[4] |= 0x02; }  // bit 1 = MOX
+    // m_tx[0].pttOut is the rear-panel PTT-out relay (deferred to 3M-3) — NOT
+    // the MOX source.  m_mox (3M-1a E.7) is the correct source for byte 4 bit 1.
     ctx.p2Running  = m_running;
-    ctx.p2PttOut   = m_tx[0].pttOut;
+    ctx.p2PttOut   = m_mox ? 1 : 0;    // 3M-1a E.7: was m_tx[0].pttOut (latent bug)
     ctx.p2Cwx      = m_tx[0].cwx;
     ctx.p2Dot      = m_tx[0].dot;
     ctx.p2Dash     = m_tx[0].dash;
@@ -953,7 +973,27 @@ CodecContext P2RadioConnection::buildCodecContext() const
 
     // TX frequency + drive + PA + sampling rate + phase shift
     ctx.txFreqHz         = static_cast<quint64>(m_tx[0].frequency);
-    ctx.p2DriveLevel     = m_tx[0].driveLevel;
+
+    // Out-of-band TX drive level gate.
+    // From deskhpsdr/src/new_protocol.c:864-876 [@120188f]:
+    //   int power = 0;
+    //   if ((txfreq >= txband->frequencyMin && txfreq <= txband->frequencyMax)
+    //       || tx_out_of_band_allowed) {
+    //     power = transmitter->drive_level;
+    //   }
+    //   high_priority_buffer_to_radio[345] = power & 0xFF;
+    //
+    // NereusSDR uses bandFromFrequency() as a fast band-range check.
+    // GEN and WWV map to out-of-ham-band TX frequencies.  BandPlanGuard is
+    // a predicate — it does not zero driveLevel upstream — so the gate is
+    // applied here at compose time, matching deskhpsdr behaviour.
+    // tx_out_of_band_allowed is not yet wired in NereusSDR; when it is,
+    // this gate should pass through driveLevel unconditionally.
+    {
+        const Band txBand = bandFromFrequency(static_cast<double>(m_tx[0].frequency));
+        const bool txInBand = (txBand != Band::GEN && txBand != Band::WWV);
+        ctx.p2DriveLevel = txInBand ? m_tx[0].driveLevel : 0;
+    }
     ctx.p2TxPa           = m_tx[0].pa;
     ctx.p2TxSamplingRate = m_tx[0].samplingRate;
     ctx.p2TxPhaseShift   = m_tx[0].phaseShift;
@@ -1015,7 +1055,7 @@ CodecContext P2RadioConnection::buildCodecContext() const
     if (m_ocMatrix) {
         const quint64 rx0Hz = static_cast<quint64>(m_rx[0].frequency);
         const Band currentBand = bandFromFrequency(static_cast<double>(rx0Hz));
-        ctx.ocByte = m_ocMatrix->maskFor(currentBand, m_tx[0].pttOut != 0);
+        ctx.ocByte = m_ocMatrix->maskFor(currentBand, m_mox);  // 3M-1a E.7: was m_tx[0].pttOut != 0
     } else {
         ctx.ocByte = 0;
     }
@@ -1148,9 +1188,15 @@ void P2RadioConnection::composeCmdGeneralLegacy(char buf[60]) const
 // Porting from Thetis CmdHighPriority() network.c:913-1063
 void P2RadioConnection::composeCmdHighPriorityLegacy(char buf[kBufLen]) const
 {
-    // From Thetis network.c:924-925
-    // packetbuf[4] = (prn->tx[0].ptt_out << 1 | prn->run) & 0xff;
-    buf[4] = (m_tx[0].pttOut << 1 | (m_running ? 1 : 0)) & 0xff;
+    // From deskhpsdr/src/new_protocol.c:739-762 [@120188f]:
+    //   high_priority_buffer_to_radio[4] = P2running;   // bit 0 = run
+    //   if (xmit) { high_priority_buffer_to_radio[4] |= 0x02; }  // bit 1 = MOX
+    //
+    // 3M-1a E.7: prior code used m_tx[0].pttOut (rear-panel PTT-out relay) for
+    // bit 1, which is wrong — pttOut is a TX-confirmation output, not the MOX
+    // initiator.  m_mox is the correct source.  m_tx[0].pttOut is retained for
+    // future 3M-3 rear-panel-PTT-out wiring but must NOT drive the MOX wire bit.
+    buf[4] = static_cast<char>((m_mox ? 0x02 : 0x00) | (m_running ? 0x01 : 0x00));
 
     // From Thetis network.c:931-933
     buf[5] = (m_tx[0].dash << 2 | m_tx[0].dot << 1 | m_tx[0].cwx) & 0x7;
@@ -1171,8 +1217,21 @@ void P2RadioConnection::composeCmdHighPriorityLegacy(char buf[kBufLen]) const
     // From Thetis network.c:1008-1011 — TX0 frequency (also phase word)
     writeBE32(buf, 329, hzToPhaseWord(m_tx[0].frequency));
 
-    // From Thetis network.c:1014
-    buf[345] = m_tx[0].driveLevel;
+    // From deskhpsdr/src/new_protocol.c:864-876 [@120188f]:
+    //   int power = 0;
+    //   if ((txfreq >= txband->frequencyMin && txfreq <= txband->frequencyMax)
+    //       || tx_out_of_band_allowed) { power = transmitter->drive_level; }
+    //   high_priority_buffer_to_radio[345] = power & 0xFF;
+    //
+    // Out-of-band TX drive level gate: zero byte 345 when TX frequency is
+    // outside a recognised ham band.  BandPlanGuard does not zero driveLevel
+    // upstream; gate applied at compose time.  tx_out_of_band_allowed not yet
+    // wired in NereusSDR.
+    {
+        const Band txBand = bandFromFrequency(static_cast<double>(m_tx[0].frequency));
+        const bool txInBand = (txBand != Band::GEN && txBand != Band::WWV);
+        buf[345] = static_cast<char>(txInBand ? m_tx[0].driveLevel : 0);
+    }
 
     // From Thetis network.c:1037-1038 — Mercury Attenuator
     buf[1403] = m_rx[1].preamp << 1 | m_rx[0].preamp;

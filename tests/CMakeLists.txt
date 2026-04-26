@@ -762,6 +762,31 @@ target_compile_definitions(tst_p1_watchdog_wire PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_p2_tx_iq_wire)
 target_compile_definitions(tst_p2_tx_iq_wire PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1a Task E.7: P2 MOX wire byte (byte 4 bit 1 = 0x02) ─────────────
+# 10 tests verify:
+#   1-5. Legacy path (no codec): default=0, setMox(true)→1, setMox(false)→0,
+#        round-trip, run-bit unaffected, bits-2-7 zero.
+#   6-8. Codec path (setBoardForTest): OrionMKII + Saturn both land MOX at bit 1.
+#   9.   Idempotency.
+#  10.   CW byte (byte 5) unaffected.
+# Fixes latent bug: prior code wrote m_tx[0].pttOut to byte 4 bit 1;
+# setMox() now writes m_mox (the correct source).
+# Source: deskhpsdr/src/new_protocol.c:739-762 [@120188f].
+nereus_add_test(tst_p2_mox_wire)
+target_compile_definitions(tst_p2_mox_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1a Task E.7: P2 TX drive level wire (byte 345) ──────────────────
+# 10 tests verify:
+#   1.   Default state: byte 345 = 0.
+#   2-5. setTxDrive(50/255/300/-10): value/clamp-high/clamp-low.
+#   6-7. Codec path (OrionMKII + Saturn): matches legacy.
+#   8-9. Out-of-band gate: in-band → drive passes; GEN-band → byte 345 = 0.
+#  10.   Round-trip: two successive setTxDrive calls.
+# Out-of-band gate ported from deskhpsdr/src/new_protocol.c:864-876 [@120188f].
+# BandPlanGuard does not zero driveLevel upstream; gate is at compose time.
+nereus_add_test(tst_p2_drive_level_wire)
+target_compile_definitions(tst_p2_drive_level_wire PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-0 Task 6: RadioModel::paTripped() live state + Ganymede handler ─
 # 5 tests cover initial state (clear), trip latch (non-zero tripState → true),
 # latch reset (resetGanymedePa()), absent-PA clear (setGanymedePresent(false)),

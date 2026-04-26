@@ -279,6 +279,17 @@ private:
     int m_wdt{0};                    // prn->wdt (watchdog timer, 0=disabled)
     bool m_intentionalDisconnect{false};
 
+    // --- MOX (transmit) state (3M-1a E.7) ---
+    // Separate from m_tx[0].pttOut.  pttOut is the rear-panel PTT-out relay
+    // (a TX-confirmation output, not the MOX initiator).  m_mox is the
+    // software-asserted transmit state that maps to byte 4 bit 1 (0x02) of
+    // CmdHighPriority.
+    //
+    // From deskhpsdr/src/new_protocol.c:739-762 [@120188f]:
+    //   high_priority_buffer_to_radio[4] = P2running;   // bit 0 = run
+    //   if (xmit) { high_priority_buffer_to_radio[4] |= 0x02; }  // bit 1 = MOX
+    bool m_mox{false};
+
     // --- Hardware config (from Thetis _radionet) ---
     int m_numAdc{1};                 // prn->num_adc
     int m_numDac{1};                 // prn->num_dac
