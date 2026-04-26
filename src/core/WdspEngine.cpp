@@ -40,6 +40,7 @@ warren@wpratt.com
 
 #include "WdspEngine.h"
 #include "RxChannel.h"
+#include "TxChannel.h"
 #include "LogCategories.h"
 #include "wdsp_api.h"
 
@@ -210,6 +211,11 @@ void WdspEngine::shutdown()
 
     qCInfo(lcDsp) << "Shutting down WDSP...";
 
+    // TX channels destroyed BEFORE RX: the TXA pipeline (post-uslew →
+    // rsmpout → outmeter) feeds samples into shared output buffers; tearing
+    // RX down first can leave the TXA chain reading freed channel state
+    // during teardown. WDSP teardown ordering: TX → RX always.
+    //
     // Destroy all TX channels (collect IDs first to avoid iterator invalidation)
     {
         std::vector<int> txIds;
@@ -222,12 +228,14 @@ void WdspEngine::shutdown()
     }
 
     // Destroy all RX channels (collect IDs first to avoid iterator invalidation)
-    std::vector<int> channelIds;
-    for (const auto& [id, ch] : m_rxChannels) {
-        channelIds.push_back(id);
-    }
-    for (int id : channelIds) {
-        destroyRxChannel(id);
+    {
+        std::vector<int> channelIds;
+        for (const auto& [id, ch] : m_rxChannels) {
+            channelIds.push_back(id);
+        }
+        for (int id : channelIds) {
+            destroyRxChannel(id);
+        }
     }
 
 #ifdef HAVE_WDSP
@@ -376,7 +384,7 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
 
     if (m_txChannels.count(channelId)) {
         qCWarning(lcDsp) << "TX channel" << channelId << "already exists";
-        return m_txChannels.at(channelId);   // may be nullptr in C.1 (Approach A)
+        return m_txChannels.at(channelId).get();   // may be nullptr in C.1 (Approach A)
     }
 
 #ifdef HAVE_WDSP
@@ -401,12 +409,16 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
     qCInfo(lcDsp) << "Opened TX WDSP channel" << channelId
                   << "bufSize=" << inputBufferSize
                   << "inRate=" << inputSampleRate
-                  << "dspRate=" << dspSampleRate;
+                  << "dspRate=" << dspSampleRate
+                  << "(C++ wrapper deferred to 3M-1a Task C.2)";
 #endif
 
     // TODO [3M-1a C.2]: construct the TxChannel C++ wrapper here (create_txa,
     // walk 25-stage TXA pipeline). For now (Approach A) we record the open
     // channel ID with a nullptr wrapper so destroyTxChannel can close it.
+    // C.2 will replace this line with:
+    //   m_txChannels[channelId] = std::make_unique<TxChannel>(...);
+    // unique_ptr destructor handles cleanup automatically on erase().
     m_txChannels.emplace(channelId, nullptr);
     return nullptr;
 }
@@ -435,7 +447,7 @@ TxChannel* WdspEngine::txChannel(int channelId) const
 {
     auto it = m_txChannels.find(channelId);
     if (it != m_txChannels.end()) {
-        return it->second;   // nullptr in C.1 (Approach A); real ptr after C.2
+        return it->second.get();   // nullptr in C.1 (Approach A); real ptr after C.2
     }
     return nullptr;
 }

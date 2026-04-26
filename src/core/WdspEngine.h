@@ -221,7 +221,9 @@ private:
     // NOTE (3M-1a Approach A): In Task C.1 the WDSP channel is opened but no
     // C++ TxChannel wrapper is constructed. The set of open TX channel IDs is
     // tracked here with nullptr values until Task C.2 fills the wrapper.
-    std::map<int, TxChannel*> m_txChannels;
+    // C.2 populates entries via:  m_txChannels[id] = std::make_unique<TxChannel>(...);
+    // Ownership transfer is automatic; destroyTxChannel's erase() runs the destructor.
+    std::map<int, std::unique_ptr<TxChannel>> m_txChannels;
 };
 
 } // namespace NereusSDR
