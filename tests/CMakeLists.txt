@@ -1056,3 +1056,24 @@ target_compile_definitions(tst_radio_model_mox_hardware_flip PRIVATE NEREUS_BUIL
 nereus_add_test(tst_step_att_tx_path)
 target_compile_definitions(tst_step_att_tx_path PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1a Task G.4: RadioModel::setTune orchestrator ───────────────────
+# Verifies all TUNE side-effects outside MoxController:
+#   1. tuneRefused emitted when not connected
+#   2. USB mode: no DSP swap, no mode-change signal
+#   3. LSB mode: no DSP swap
+#   4. CWL → swap to LSB on TUN-on
+#   5. CWU → swap to USB on TUN-on
+#   6. CWL TUN-on → TUN-off restores CWL
+#   7. CWU TUN-on → TUN-off restores CWU
+#   8. USB mode unchanged after TUN-on/off cycle
+#   9. TUN-on pushes tunePowerForBand to connection (txDriveLog)
+#  10. TUN-off restores saved power (txDriveLog.last())
+#  11. MoxController::manualMoxChanged(true) fires on TUN-on
+#  12. MoxController::manualMoxChanged(false) fires on TUN-off
+#  13. Null m_txChannel on TUN-on: no crash (null guard)
+#  14. Null m_txChannel on TUN-off: no crash (null guard)
+#  15. setTune(false) without prior TUN-on: no crash, manualMoxChanged silent
+# Cite: Thetis console.cs:29978-30157 [v2.10.3.13] — chkTUN_CheckedChanged.
+nereus_add_test(tst_radio_model_set_tune)
+target_compile_definitions(tst_radio_model_set_tune PRIVATE NEREUS_BUILD_TESTS)
+

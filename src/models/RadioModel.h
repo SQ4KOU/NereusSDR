@@ -402,6 +402,44 @@ public slots:
     // QMetaObject::invokeMethod (see implementation).
     void onMoxHardwareFlipped(bool isTx);
 
+    // ── Phase 3M-1a Task G.4: TUN function orchestrator ─────────────────────
+    // Activate / release the TUNE function.
+    //
+    // Orchestrates all TUN side-effects across the model:
+    //   TUN-on:  save DSP mode + power; swap CW→LSB/USB if needed;
+    //            set tune tone; push tune power; drive MoxController.
+    //   TUN-off: drive MoxController; release tone; restore DSP mode,
+    //            power, and meter mode.
+    //
+    // Coordinates with:
+    //   - MoxController::setTune(bool) for MOX state machine + flags.
+    //   - TxChannel::setTuneTone(bool, freqHz, mag) for WDSP gen1 PostGen.
+    //   - SliceModel::setDspMode() for CW→LSB/USB swap and restore.
+    //   - TransmitModel::tunePowerForBand() + m_connection->setTxDrive()
+    //     for per-band tune power push and restore.
+    //
+    // Power-on guard: emits tuneRefused(reason) and returns without any
+    // state change if the radio is not connected (matching Thetis
+    // console.cs:29983-29991 [v2.10.3.13] MessageBox "Power must be on").
+    //
+    // Meter mode save/restore: Thetis saves current_meter_tx_mode and
+    // restores it on TUN-off (console.cs:30011-30015 [v2.10.3.13]).
+    // NereusSDR's MeterModel does not yet expose a TX-mode selector (that
+    // is H.3 territory); this method saves and restores m_transmitModel.power()
+    // as the "slider power" position instead.  The full meter-mode lock
+    // (switch to FORWARD_POWER display) is deferred to H.3 or 3M-1b when
+    // MeterModel gains a setTxDisplayMode() setter.
+    //
+    // Inline attribution preserved from Thetis:
+    //   //MW0LGE_21k9d  [original inline comment from console.cs:29979]
+    //   //MW0LGE_21a    [original inline comment from console.cs:29997]
+    //   //MW0LGE_22b    [original inline comment from console.cs:30033]
+    //   //MW0LGE_21k8   [original inline comment from console.cs:30086]
+    //   //MW0LGE_21j    [original inline comment from console.cs:30136]
+    //
+    // Cite: Thetis console.cs:29978-30157 [v2.10.3.13] — chkTUN_CheckedChanged.
+    void setTune(bool on);
+
 signals:
     void infoChanged();
     void connectionStateChanged();
@@ -434,6 +472,14 @@ signals:
     // From Thetis Andromeda/Andromeda.cs:914-920 [v2.10.3.13]
     // (CATHandleAmplifierTripMessage). G8NJJ: handlers for Ganymede 500W PA protection.
     void paTrippedChanged(bool tripped);
+
+    // ── Phase 3M-1a Task G.4: TUNE refused ──────────────────────────────────
+    // Emitted when setTune(true) is called but the power-on guard fires
+    // (radio not connected / audio engine not active).
+    // Cite: Thetis console.cs:29983-29991 [v2.10.3.13] — MessageBox "Power must be on".
+    // NereusSDR equivalent: emit signal; UI reacts with a toast or status bar message.
+    // Subscribers should uncheck the TUN button and display `reason` to the user.
+    void tuneRefused(const QString& reason);
 
 private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
@@ -593,6 +639,27 @@ private:
     // From Thetis v2.10.3.13 console.cs:46057 — tmrAutoAGC (500ms interval)
     QTimer* m_autoAgcTimer{nullptr};
     NoiseFloorTracker* m_noiseFloorTracker{nullptr};
+
+    // ── 3M-1a G.4: TUN state save/restore ───────────────────────────────────
+    // Fields that preserve pre-TUN state across the setTune(true)/setTune(false)
+    // pair so TUN-off can restore exactly what TUN-on changed.
+    //
+    // m_savedTxDspMode: DSP mode before the CW→LSB/USB swap.
+    //   Cite: Thetis console.cs:30042 [v2.10.3.13] — old_dsp_mode = ...CurrentDSPMode.
+    //   Default USB (matches SliceModel default). Used only when old_dsp_mode
+    //   was CWL or CWU; restored unconditionally on TUN-off.
+    DSPMode m_savedTxDspMode{DSPMode::USB};
+    //
+    // m_savedPowerPct: power slider value (0-100) before the tune-power push.
+    //   Cite: Thetis console.cs:30033 [v2.10.3.13] — PreviousPWR = ptbPWR.Value.
+    //   //MW0LGE_22b  [original inline comment from console.cs:30033]
+    //   Restored to the connection on TUN-off so the slider snaps back.
+    int m_savedPowerPct{50};
+    //
+    // m_isTuning: mirror of MoxController::_tuning to guard against double-off.
+    //   Cite: Thetis console.cs:30010 [v2.10.3.13] — _tuning = true.
+    //   Set true by setTune(true), cleared by setTune(false).
+    bool m_isTuning{false};
 
     // ── 3M-1a G.1: TX-side integration ──────────────────────────────────────
     // Master design §5.1.1; pre-code review §1.6 + §2.5.

@@ -2530,6 +2530,210 @@ void RadioModel::setGanymedePresent(bool present)
 // Note: pre-code review §2.5 maps HdwMOXChanged body to this slot.
 // The connect() of MoxController::hardwareFlipped → this slot is G.1's job.
 // G.1 MUST use Qt::QueuedConnection — see declaration in RadioModel.h.
+// ── 3M-1a G.4: RadioModel::setTune ─────────────────────────────────────────
+//
+// Orchestrator for the TUNE function side-effects.
+//
+// Porting from Thetis console.cs:29978-30157 [v2.10.3.13] — chkTUN_CheckedChanged.
+// This method ports the non-MoxController side-effects (see MoxController::setTune
+// for the flag-management and MOX-state-machine portion, B.5).
+//
+// Inline attribution from Thetis:
+//   //MW0LGE_21k9d  [original inline comment from console.cs:29979]
+//   //MW0LGE_21a    [original inline comment from console.cs:29997]
+//   //MW0LGE_22b    [original inline comment from console.cs:30033]
+//   //MW0LGE_21k8   [original inline comment from console.cs:30086]
+//   //MW0LGE_21j    [original inline comment from console.cs:30136]
+//
+// LSB-family helper: used for sign-selecting the tune-tone frequency.
+// Cite: console.cs:30024-30037 [v2.10.3.13] — switch on Audio.TXDSPMode.
+//   LSB, CWL, DIGL → -cw_pitch (negative side of baseband).
+//   All others     → +cw_pitch (positive side of baseband).
+static bool isLsbFamily(DSPMode mode) noexcept
+{
+    // From Thetis console.cs:30024-30037 [v2.10.3.13]:
+    //   case DSPMode.LSB:
+    //   case DSPMode.CWL:
+    //   case DSPMode.DIGL:
+    //       radio.GetDSPTX(0).TXPostGenToneFreq = -cw_pitch;
+    return mode == DSPMode::LSB || mode == DSPMode::CWL || mode == DSPMode::DIGL;
+}
+
+void RadioModel::setTune(bool on)
+{
+    // Porting from Thetis console.cs:29978-30157 [v2.10.3.13] — chkTUN_CheckedChanged.
+    //
+    // 3M-1a scope: all side-effects listed in pre-code review §3.2/§3.3 except:
+    //   - 2-TONE pre-stop (3M-3a)
+    //   - _tune_pulse_enabled path (3M-3a)
+    //   - SetPowerUsingTargetDBM full dBm-target logic (3M-3a)
+    //   - ATU async tune, NetworkIO.SetUserOut*, Apollo auto-tune (deferred)
+    //   - UI BackColor changes (H.3 territory)
+    //   - Meter TX mode lock/restore: NereusSDR's MeterModel has no TX-mode
+    //     selector yet; this is deferred to H.3 / 3M-1b when MeterModel gains
+    //     a setTxDisplayMode() setter.  The save/restore slots remain below
+    //     as named comments so the H.3 author knows exactly where to plug in.
+
+    if (on) {
+        // ── Power-on guard ─────────────────────────────────────────────────────
+        // Cite: console.cs:29983-29991 [v2.10.3.13].
+        // Thetis: "if (!PowerOn) { MessageBox.Show(...); chkTUN.Checked = false; return; }"
+        // NereusSDR: PowerOn ≈ "radio connected and audio engine running".
+        // Guard: if not connected, emit tuneRefused and bail out.  m_audioEngine
+        // null-check mirrors Thetis's PowerOn check (power-on requires the audio
+        // engine to be live, which presupposes a live connection).
+        if (!isConnected() || !m_audioEngine) {
+            emit tuneRefused(QStringLiteral("Power must be on to enable Tune."));
+            return;
+        }
+
+        // ── SAVE meter mode ────────────────────────────────────────────────────
+        // Cite: console.cs:30011 [v2.10.3.13]:
+        //   old_meter_tx_mode_before_tune = current_meter_tx_mode;
+        // NereusSDR: MeterModel does not expose a TX display-mode enum yet
+        // (deferred to H.3).  No-op placeholder; the variable is declared as a
+        // comment token so H.3 can fill in the real API when it exists.
+        // [H.3 hook: save meterModel().txDisplayMode() here]
+
+        // ── SWITCH to POWER meter mode ─────────────────────────────────────────
+        // Cite: console.cs:30012-30015 [v2.10.3.13]:
+        //   if (current_meter_tx_mode != tune_meter_tx_mode) CurrentMeterTXMode = tune_meter_tx_mode;
+        //   tune_meter_tx_mode = MeterTXMode.FORWARD_POWER (console.cs:11861).
+        // NereusSDR: deferred to H.3 (no MeterModel setTxDisplayMode() yet).
+        // [H.3 hook: meterModel().setTxDisplayMode(MeterTxMode::ForwardPower) here]
+
+        // ── SAVE current DSP mode ──────────────────────────────────────────────
+        // Cite: console.cs:30042 [v2.10.3.13]:
+        //   old_dsp_mode = radio.GetDSPTX(0).CurrentDSPMode;
+        m_savedTxDspMode = m_activeSlice ? m_activeSlice->dspMode() : DSPMode::USB;
+
+        // ── SAVE power slider value ────────────────────────────────────────────
+        // Cite: console.cs:30033 [v2.10.3.13]: PreviousPWR = ptbPWR.Value;
+        //   //MW0LGE_22b  [original inline comment from console.cs:30033]
+        m_savedPowerPct = m_transmitModel.power();
+
+        // ── COMPUTE tune-tone frequency (sign-selected by current DSP mode) ────
+        // Cite: console.cs:30024-30037 [v2.10.3.13] — switch on Audio.TXDSPMode.
+        //   NB: in Thetis the tone-freq switch runs BEFORE the CW→LSB/USB swap,
+        //   so the sign is based on the ORIGINAL mode (CWL → negative, CWU → positive).
+        //   Because CWL is LSB-family and CWU is not, the pre-swap mode determines
+        //   the correct sideband. This ordering is preserved here.
+        //
+        // cw_pitch: from Thetis console.cs:18182 [v2.10.3.13] — private int cw_pitch = 600;
+        static constexpr double kCwPitch = 600.0;
+        const DSPMode modeBeforeSwap = m_savedTxDspMode;
+        const double signedFreq = isLsbFamily(modeBeforeSwap) ? -kCwPitch : +kCwPitch;
+
+        // ── SET TUNE TONE ──────────────────────────────────────────────────────
+        // Cite: console.cs:30038-30040 [v2.10.3.13]:
+        //   radio.GetDSPTX(0).TXPostGenMode = 0;
+        //   radio.GetDSPTX(0).TXPostGenToneMag = MAX_TONE_MAG;
+        //   radio.GetDSPTX(0).TXPostGenRun = 1;
+        if (m_txChannel) {
+            m_txChannel->setTuneTone(true, signedFreq, TxChannel::kMaxToneMag);
+        }
+
+        // ── CW→LSB/USB DSP MODE SWAP ───────────────────────────────────────────
+        // Cite: console.cs:30043-30070 [v2.10.3.13]:
+        //   switch (old_dsp_mode) { case CWL: ... TXDSPMode = LSB; break;
+        //                            case CWU: ... TXDSPMode = USB; break; }
+        if (m_activeSlice) {
+            DSPMode swappedMode = m_savedTxDspMode;
+            switch (m_savedTxDspMode) {
+                case DSPMode::CWL:
+                    swappedMode = DSPMode::LSB;
+                    break;
+                case DSPMode::CWU:
+                    swappedMode = DSPMode::USB;
+                    break;
+                default:
+                    break;  // no swap for SSB/AM/FM/DIGU/DIGL/etc.
+            }
+            if (swappedMode != m_savedTxDspMode) {
+                m_activeSlice->setDspMode(swappedMode);
+            }
+        }
+
+        // ── PUSH TUNE POWER ────────────────────────────────────────────────────
+        // Cite: console.cs:30033-30037 [v2.10.3.13]:
+        //   PreviousPWR = ptbPWR.Value;  //MW0LGE_22b
+        //   int new_pwr = SetPowerUsingTargetDBM(..., true, true, false);
+        //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED) PWR = new_pwr;
+        //
+        // 3M-1a: uses TransmitModel::tunePowerForBand() directly.
+        // Full SetPowerUsingTargetDBM dBm-target logic deferred to 3M-3a.
+        const Band currentBand = m_activeSlice
+                                    ? bandFromFrequency(m_activeSlice->frequency())
+                                    : m_lastBand;
+        const int tunePower = m_transmitModel.tunePowerForBand(currentBand);
+        if (m_connection) {
+            auto* conn = m_connection;
+            QMetaObject::invokeMethod(conn, [conn, tunePower]() {
+                conn->setTxDrive(tunePower);
+            });
+        }
+
+        // ── ENGAGE MOX via MoxController ─────────────────────────────────────
+        // Cite: console.cs:30081 [v2.10.3.13]: chkMOX.Checked = true;
+        //   //MW0LGE_21k8  [original inline comment from console.cs:30086]
+        // MoxController::setTune(true) drives the full state machine and sets
+        // _manual_mox + _current_ptt_mode = PTTMode.MANUAL (B.5).
+        m_isTuning = true;
+        if (m_moxController) {
+            m_moxController->setTune(true);
+        }
+
+    } else {
+        // ── TUN OFF path ───────────────────────────────────────────────────────
+
+        // ── RELEASE MOX via MoxController ────────────────────────────────────
+        // Cite: console.cs:30105 [v2.10.3.13]: chkMOX.Checked = false;
+        // MoxController::setTune(false) drives the full TX→RX walk (B.5).
+        if (m_moxController) {
+            m_moxController->setTune(false);
+        }
+
+        // ── RELEASE TUNE TONE ──────────────────────────────────────────────────
+        // Cite: console.cs:30109 [v2.10.3.13]: radio.GetDSPTX(0).TXPostGenRun = 0;
+        if (m_txChannel) {
+            m_txChannel->setTuneTone(false, 0.0, 0.0);
+        }
+
+        // ── RESTORE DSP MODE if swapped ────────────────────────────────────────
+        // Cite: console.cs:30112-30122 [v2.10.3.13]:
+        //   switch (old_dsp_mode) { case CWL: case CWU:
+        //       radio.GetDSPTX(0).CurrentDSPMode = old_dsp_mode; ... }
+        if (m_activeSlice) {
+            const bool wasSwapped = (m_savedTxDspMode == DSPMode::CWL ||
+                                     m_savedTxDspMode == DSPMode::CWU);
+            if (wasSwapped) {
+                m_activeSlice->setDspMode(m_savedTxDspMode);
+            }
+        }
+
+        // ── RESTORE POWER ──────────────────────────────────────────────────────
+        // Cite: console.cs:30129-30132 [v2.10.3.13]:
+        //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED) PWR = PreviousPWR;
+        //   //MW0LGE_22b  [original inline comment from console.cs:30033]
+        if (m_connection) {
+            auto* conn = m_connection;
+            const int savedPwr = m_savedPowerPct;
+            QMetaObject::invokeMethod(conn, [conn, savedPwr]() {
+                conn->setTxDrive(savedPwr);
+            });
+        }
+
+        // ── RESTORE METER MODE ─────────────────────────────────────────────────
+        // Cite: console.cs:30136-30137 [v2.10.3.13]:
+        //   if (current_meter_tx_mode != old_meter_tx_mode_before_tune) //MW0LGE_21j
+        //       CurrentMeterTXMode = old_meter_tx_mode_before_tune;
+        // NereusSDR: deferred to H.3 (no MeterModel setTxDisplayMode() yet).
+        // [H.3 hook: restore meterModel().setTxDisplayMode(savedMode) here]
+
+        m_isTuning = false;
+    }
+}
+
 void RadioModel::onMoxHardwareFlipped(bool isTx)
 {
     // Step 1 — Alex antenna routing.  Resolves which TX/RX antenna ports
