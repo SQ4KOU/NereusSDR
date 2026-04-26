@@ -1758,7 +1758,7 @@ QString SpectrumWidget::pausedTimeLabelForAge(int ageRows) const
     return QStringLiteral("-") + utc.toString(QStringLiteral("HH:mm:ssZ"));
 }
 
-// From AetherSDR SpectrumWidget.cpp:594-630 [@0cd4559]
+// From AetherSDR SpectrumWidget.cpp:594-632 [@0cd4559]
 void SpectrumWidget::ensureWaterfallHistory()
 {
     if (m_waterfall.isNull()) {
@@ -1825,7 +1825,7 @@ void SpectrumWidget::appendHistoryRow(const QRgb* rowData, qint64 timestampMs)
     }
 }
 
-// From AetherSDR SpectrumWidget.cpp:670-704 [@0cd4559]
+// From AetherSDR SpectrumWidget.cpp:670-705 [@0cd4559]
 void SpectrumWidget::rebuildWaterfallViewport()
 {
     if (m_waterfall.isNull()) {
@@ -1856,7 +1856,13 @@ void SpectrumWidget::rebuildWaterfallViewport()
 
     // Force GPU full re-upload — the per-row delta path can't follow a
     // viewport rebuild because m_wfWriteRow no longer indexes the most
-    // recent live row.
+    // recent live row. Two sentinels needed: m_wfTexFullUpload routes
+    // the next frame through the full-upload branch (matching upstream
+    // AetherSDR's `#ifdef AETHER_GPU_SPECTRUM` path which sets
+    // `m_wfTexFullUpload = true`); m_wfLastUploadedRow alone leaves the
+    // bottom scanline stale because the incremental loop exits before
+    // uploading row texH-1.
+    m_wfTexFullUpload = true;
     m_wfLastUploadedRow = -1;
     update();
 }
