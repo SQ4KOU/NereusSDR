@@ -126,6 +126,8 @@ public slots:
     void setMox(bool enabled) override;
     void setAntennaRouting(AntennaRouting routing) override;
     void setWatchdogEnabled(bool enabled) override;
+    void sendTxIq(const float* iq, int n) override;
+    void setTrxRelay(bool enabled) override;
 
 private slots:
     void onReadyRead();

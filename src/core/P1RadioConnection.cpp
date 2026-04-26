@@ -866,6 +866,43 @@ void P1RadioConnection::setWatchdogEnabled(bool enabled)
 }
 
 // ---------------------------------------------------------------------------
+// sendTxIq — 3M-1a Task E.1 (stub; filled in by Task E.2)
+//
+// P1 wire format: TX I/Q samples are written into the two 504-byte
+// HPSDR sample zones within each 1032-byte EP2 frame, interleaved
+// with the 5-byte C&C subframe per the Metis spec.
+//
+// TODO [3M-1a E.2]: implement the EP2 TX I/Q write path.
+// Cite: pre-code review §7.1; deskhpsdr/src/old_protocol.c:2900-2950.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::sendTxIq(const float* /*iq*/, int /*n*/)
+{
+    // TODO [3M-1a E.2]: write TX I/Q samples into the EP2 frame zones.
+    qCWarning(lcConnection) << "P1: sendTxIq called before E.2 wired — samples dropped";
+}
+
+// ---------------------------------------------------------------------------
+// setTrxRelay — 3M-1a Task E.1 (stub; filled in by Task E.4)
+//
+// P1 wire bit: C3 byte 6 bit 7, INVERTED sense.
+//   enabled=true  → bit 7 = 0 (relay engaged, normal TX path)
+//   enabled=false → bit 7 = 1 (relay bypassed, PA protect)
+//
+// State is stored in base-class m_trxRelay so isTrxRelayEngaged()
+// is available before E.4 wires the actual bit.
+//
+// TODO [3M-1a E.4]: compose bit 7 of C&C bank 6 byte 3 from m_trxRelay.
+// Cite: pre-code review §7.2; deskhpsdr/src/old_protocol.c:2909-2910.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setTrxRelay(bool enabled)
+{
+    m_trxRelay = enabled;
+    // TODO [3M-1a E.4]: trigger the next outbound C&C frame so the
+    // relay bit update reaches the radio without waiting for the
+    // round-robin to cycle through bank 6.
+}
+
+// ---------------------------------------------------------------------------
 // applyBoardQuirks
 //
 // Reads BoardCapabilities (m_caps) and enforces runtime constraints.

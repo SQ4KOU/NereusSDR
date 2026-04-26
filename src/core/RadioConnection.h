@@ -102,6 +102,53 @@ public slots:
     virtual void setMox(bool enabled) = 0;
     virtual void setAntennaRouting(AntennaRouting routing) = 0;
 
+    // ── TX path (3M-1a) ────────────────────────────────────────────────
+
+    /// Push TX I/Q samples to the radio.
+    ///
+    /// `iq` points to interleaved I/Q float32 samples; `n` is the
+    /// number of complex samples (so the buffer has 2*n floats).
+    /// Implementations:
+    ///   - P1: write to EP2 zones in the 1032-byte Metis frame
+    ///     (interleaved with status bytes per the Metis spec).
+    ///   - P2: write to UDP port 1029 with the per-frame layout
+    ///     specified by OpenHPSDR Protocol 2.
+    ///
+    /// Audio-thread context: callers run this in the WDSP audio thread.
+    /// The implementation must not block; it queues to the connection
+    /// thread for actual UDP send.
+    ///
+    /// Cite: pre-code review §7.1 (P1 EP2 TX I/Q layout),
+    ///        §7.6 (P2 port 1029 TX I/Q layout).
+    virtual void sendTxIq(const float* iq, int n) = 0;
+
+    /// Set the Alex T/R relay wire bit.
+    ///
+    /// Distinct from `setMox(bool)`:
+    ///   - `setMox(true)` asserts the MOX bit on the next outbound
+    ///     frame (P1 byte 3 bit 0 / P2 high-pri byte 4 bit 1).
+    ///   - `setTrxRelay(true)` engages the Alex T/R relay path so
+    ///     the PA can drive the antenna. P1 wire bit is C3 byte 6
+    ///     bit 7 with INVERTED semantic — `1` = disabled (bypass),
+    ///     `0` = enabled (normal TX). When `enabled` is true the
+    ///     implementation writes `0` to bit 7 (engaged); when false
+    ///     (PA disabled), writes `1` (bypass).
+    ///   - P2: routed via Saturn register C0=0x24 indirect writes;
+    ///     stub for 3M-1a (deferred to 3M-3).
+    ///
+    /// `enabled` follows caller-friendly convention (true = TX path
+    /// engaged); the implementation handles the bit inversion on the
+    /// wire. State is stored in base-class `m_trxRelay`.
+    ///
+    /// 3M-1a wires this from `MoxController::hardwareFlipped` via
+    /// `RadioModel::onMoxHardwareFlipped` (Task F.1).
+    ///
+    /// Cite: pre-code review §7.2 + deskhpsdr/src/old_protocol.c:2909-2910
+    ///       (T/R relay bit C3[6] bit 7, inverted sense).
+    virtual void setTrxRelay(bool enabled) = 0;
+
+    bool isTrxRelayEngaged() const noexcept { return m_trxRelay; }
+
     // DEPRECATED — call setAntennaRouting directly. Kept for one release
     // cycle as a rollback hatch per docs/architecture/antenna-routing-design.md §7.7.
     // Removed in the release following 3P-I-b.
@@ -184,6 +231,11 @@ protected:
     // Both P1 and P2 overrides read/write this field.
     // 3M-0: state-tracking only; wire emit deferred to 3M-1a.
     bool m_watchdogEnabled{false};
+
+    // Shared state for setTrxRelay / isTrxRelayEngaged (3M-1a Task E.1).
+    // true = TX path engaged (bit 7 of P1 C3 bank 6 written as 0 — inverted
+    // sense). P2 stub; wire emit deferred to 3M-3.
+    bool m_trxRelay{false};
 };
 
 } // namespace NereusSDR

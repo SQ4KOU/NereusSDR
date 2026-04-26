@@ -571,6 +571,38 @@ void P2RadioConnection::setWatchdogEnabled(bool enabled)
     m_watchdogEnabled = enabled;
 }
 
+// ---------------------------------------------------------------------------
+// sendTxIq — 3M-1a Task E.1 (stub; filled in by Task E.6)
+//
+// P2 wire format: TX I/Q samples are sent as 1444-byte UDP datagrams
+// to port 1029, per the OpenHPSDR Protocol 2 TX I/Q packet layout.
+//
+// TODO [3M-1a E.6]: implement the P2 TX I/Q UDP send path.
+// Cite: pre-code review §7.6; Thetis ChannelMaster/network.c TX I/Q path.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::sendTxIq(const float* /*iq*/, int /*n*/)
+{
+    // TODO [3M-1a E.6]: write TX I/Q samples into a P2 TX I/Q UDP frame
+    // and dispatch to port 1029.
+    qCWarning(lcConnection) << "P2: sendTxIq called before E.6 wired — samples dropped";
+}
+
+// ---------------------------------------------------------------------------
+// setTrxRelay — 3M-1a Task E.1 (stub; deferred to 3M-3)
+//
+// P2 T/R relay is routed via Saturn register C0=0x24 indirect writes.
+// State is stored in base-class m_trxRelay so isTrxRelayEngaged() is
+// available before the full P2 relay control lands in 3M-3.
+//
+// TODO [3M-3]: implement P2 T/R relay via Saturn register writes.
+// Cite: pre-code review §7.2 (note: P2 path deferred to 3M-3).
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setTrxRelay(bool enabled)
+{
+    m_trxRelay = enabled;
+    // TODO [3M-3]: emit Saturn register write for T/R relay.
+}
+
 // --- UDP Reception ---
 // Porting from Thetis ReadUDPFrame() network.c:481
 // Single socket, dispatch by source port: inport = ntohs(fromaddr.sin_port)

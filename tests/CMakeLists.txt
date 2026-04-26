@@ -669,6 +669,16 @@ nereus_add_test(tst_tx_inhibit_monitor)
 # [v2.10.3.13] (DllImport SetWatchdogTimer entry point).
 nereus_add_test(tst_radio_connection_watchdog)
 
+# ── Phase 3M-1a Task E.1: TX virtual interface on RadioConnection ──────────
+# 16 tests assert:
+#   - sendTxIq() is callable on P1 + P2 without crash (stub bodies; wire
+#     format filled by Tasks E.2 / E.6 — no byte assertions here).
+#   - setTrxRelay() stores state in base-class m_trxRelay, readable via
+#     isTrxRelayEngaged(); round-trip and idempotency covered.
+#   - setMox / setWatchdogEnabled / setTxDrive unchanged (regression guards).
+# Cite: 3M-1a plan Task E.1; Master design §5.1.4.
+nereus_add_test(tst_radio_connection_tx_iface)
+
 # ── Phase 3M-0 Task 6: RadioModel::paTripped() live state + Ganymede handler ─
 # 5 tests cover initial state (clear), trip latch (non-zero tripState → true),
 # latch reset (resetGanymedePa()), absent-PA clear (setGanymedePresent(false)),
