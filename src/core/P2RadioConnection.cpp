@@ -254,6 +254,13 @@ void P2RadioConnection::init()
         //   TXIQRINGBUF[iptr++] = (isample >>  8) & 0xFF;
         //   TXIQRINGBUF[iptr++] = (isample      ) & 0xFF;
         //   TXIQRINGBUF[iptr++] = (qsample >> 16) & 0xFF; …
+        //
+        // IMPORTANT: keep this drain loop in sync with txIqFrameForTest() in
+        // P2RadioConnection.h.  The test seam mirrors this byte-packing path
+        // exactly so wire-byte snapshot tests stay authoritative.  If you
+        // change the encoding here (gain, clip bounds, byte order, layout),
+        // update the helper to match — there is no shared composer function
+        // (E.5 fixup convention).
         for (int s = 0; s < 240; ++s) {
             int i24 = 0;
             int q24 = 0;
