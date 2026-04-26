@@ -317,6 +317,19 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // overlays or mouse tracking without button press. Zoom control is handled via
     // the frequency scale bar inside the QRhiWidget's own mouse press/drag events
     // (which DO work when a button is pressed).
+
+    // Sub-epic E: debounce timer for waterfall history re-allocation
+    // From AetherSDR SpectrumWidget.cpp:158-168 [@2bb3b5c]
+    // (debounce timer added by unmerged AetherSDR PR #1478 — see plan §authoring-time #2)
+    m_historyResizeTimer = new QTimer(this);
+    m_historyResizeTimer->setSingleShot(true);
+    m_historyResizeTimer->setInterval(250);
+    connect(m_historyResizeTimer, &QTimer::timeout, this, [this]() {
+        ensureWaterfallHistory();
+        if (m_wfHistoryRowCount > 0) {
+            rebuildWaterfallViewport();
+        }
+    });
 }
 
 SpectrumWidget::~SpectrumWidget() = default;
@@ -402,6 +415,12 @@ void SpectrumWidget::loadSettings()
                                 QStringLiteral("False")).toString() == QStringLiteral("True");
     m_wfOpacity          = readInt(QStringLiteral("DisplayWfOpacity"), 100);
     m_wfUpdatePeriodMs   = readInt(QStringLiteral("DisplayWfUpdatePeriodMs"), 30);
+
+    // Sub-epic E: scrollback depth (default 20 min, range 60s..20min).
+    m_waterfallHistoryMs = s.value(
+        settingsKey(QStringLiteral("DisplayWaterfallHistoryMs"), m_panIndex),
+        QString::number(static_cast<qint64>(kDefaultWaterfallHistoryMs))
+    ).toLongLong();
     m_wfUseSpectrumMinMax = s.value(settingsKey(QStringLiteral("DisplayWfUseSpectrumMinMax"), m_panIndex),
                                     QStringLiteral("False")).toString() == QStringLiteral("True");
     const int wfAvgRaw = readInt(QStringLiteral("DisplayWfAverageMode"),
@@ -499,6 +518,8 @@ void SpectrumWidget::saveSettings()
               m_wfReverseScroll ? QStringLiteral("True") : QStringLiteral("False"));
     writeInt(QStringLiteral("DisplayWfOpacity"), m_wfOpacity);
     writeInt(QStringLiteral("DisplayWfUpdatePeriodMs"), m_wfUpdatePeriodMs);
+    s.setValue(settingsKey(QStringLiteral("DisplayWaterfallHistoryMs"), m_panIndex),
+               QString::number(m_waterfallHistoryMs));
     s.setValue(settingsKey(QStringLiteral("DisplayWfUseSpectrumMinMax"), m_panIndex),
               m_wfUseSpectrumMinMax ? QStringLiteral("True") : QStringLiteral("False"));
     writeInt(QStringLiteral("DisplayWfAverageMode"), static_cast<int>(m_wfAverageMode));
@@ -838,6 +859,31 @@ void SpectrumWidget::setWfUpdatePeriodMs(int ms)
     if (m_wfUpdatePeriodMs == ms) { return; }
     m_wfUpdatePeriodMs = ms;
     scheduleSettingsSave();
+
+    // Sub-epic E: capacity may have changed — debounce history rebuild
+    // so slider drag doesn't trash history mid-drag.
+    if (m_historyResizeTimer) {
+        m_historyResizeTimer->start();
+    }
+}
+
+// Sub-epic E: depth setter, called from Setup → Display dropdown.
+void SpectrumWidget::setWaterfallHistoryMs(qint64 ms)
+{
+    ms = qBound(static_cast<qint64>(60 * 1000),     // 60 s minimum
+                ms,
+                static_cast<qint64>(20 * 60 * 1000)); // 20 min maximum
+    if (m_waterfallHistoryMs == ms) { return; }
+    m_waterfallHistoryMs = ms;
+
+    auto& s = AppSettings::instance();
+    s.setValue(settingsKey(QStringLiteral("DisplayWaterfallHistoryMs"), m_panIndex),
+               QString::number(m_waterfallHistoryMs));
+    s.save();
+
+    if (m_historyResizeTimer) {
+        m_historyResizeTimer->start();
+    }
 }
 
 void SpectrumWidget::setWfUseSpectrumMinMax(bool on)
