@@ -228,6 +228,10 @@ warren@wpratt.com
 #include "RadioModel.h"
 #include "BandDefaults.h"
 #include "RxDspWorker.h"
+// 3M-1a G.1: TX-side integration — MoxController + TxChannel view.
+// TxMicRouter is already included via RadioModel.h (for std::unique_ptr destructor).
+#include "core/MoxController.h"
+#include "core/TxChannel.h"
 #include "core/RadioConnection.h"
 #include "core/RadioConnectionTeardown.h"
 #include "core/P1RadioConnection.h"
@@ -587,6 +591,69 @@ RadioModel::RadioModel(QObject* parent)
             m_spectrumWidget->setHighSwrOverlay(true, latched);
         }
     });
+
+    // ── 3M-1a G.1: TX-side integration ──────────────────────────────────────
+    // Master design §5.1.1; pre-code review §1.6 + §2.5.
+    //
+    // MoxController: main-thread owner (QTimers fire on the main event loop).
+    // Qt parent = this so RadioModel destructor cleans it up automatically.
+    // From Thetis console.cs:29311-29678 [v2.10.3.13] — chkMOX_CheckedChanged2.
+    //
+    // Inline attribution tags preserved verbatim from the cited range:
+    //[2.10.1.0]MW0LGE changed  [original inline comment from console.cs:29355]
+    //MW0LGE [2.9.0.7]  [original inline comment from console.cs:29400]
+    //MW0LGE [2.9.0.7] added option to always apply 31 att from setup form when not in ps  [console.cs:29561]
+    //[2.10.3.6]MW0LGE att_fixes  [original inline comment from console.cs:29567]
+    //[2.10.3.6]MW0LGE att_fixes NOTE: this will eventually call Display.TXAttenuatorOffset with the value  [console.cs:29568]
+    // Display.TXAttenuatorOffset = 0; //[2.10.3.6]MW0LGE att_fixes  [console.cs:29576]
+    // Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE  [console.cs:29603]
+    //comboRX2Preamp.Enabled = true; //[2.10.3.6]MW0LGE att_fixes  [console.cs:29647]
+    //udRX2StepAttData.Enabled = true; //[2.10.3.6]MW0LGE att_fixes  [console.cs:29648]
+    // Display.TXAttenuatorOffset = 0; //[2.10.3.6]MW0LGE att_fixes  [console.cs:29659]
+    m_moxController = new MoxController(this);
+
+    // MoxController::hardwareFlipped → RadioModel::onMoxHardwareFlipped (F.1).
+    // Qt::QueuedConnection: both live on the main thread, but QueuedConnection
+    // documents the cross-component intent and ensures the slot runs after the
+    // emitting call stack unwinds, matching the pre-code review §1.6 pattern.
+    // From Thetis console.cs:29567-29576 [v2.10.3.13] — HdwMOXChanged call.
+    //[2.10.3.6]MW0LGE att_fixes  [original inline comment from console.cs:29567-29576]
+    connect(m_moxController, &MoxController::hardwareFlipped,
+            this, &RadioModel::onMoxHardwareFlipped,
+            Qt::QueuedConnection);
+
+    // MoxController::txReady → TxChannel::setRunning(true).
+    // txReady fires after the 30 ms rfDelay (hardware settle) — this is the
+    // correct point to turn the WDSP TX channel on.
+    // From Thetis console.cs:29595 [v2.10.3.13] — TX-on callsite after
+    // Thread.Sleep(rf_delay) in chkMOX_CheckedChanged2.
+    // Guard: m_txChannel may be null if WDSP hasn't initialized yet (unlikely
+    // for a user-initiated TUNE but defensive). If null, the channel isn't open
+    // anyway so skipping is safe.
+    connect(m_moxController, &MoxController::txReady,
+            this, [this]() {
+        if (m_txChannel) {
+            m_txChannel->setRunning(true);
+        }
+    }, Qt::QueuedConnection);
+
+    // MoxController::txaFlushed → TxChannel::setRunning(false).
+    // txaFlushed fires after mox_delay / key_up_delay (in-flight samples
+    // cleared). Matching Thetis console.cs:29607 [v2.10.3.13] — TX-off callsite
+    // with dmode=1 (drain) in the TX→RX branch.
+    connect(m_moxController, &MoxController::txaFlushed,
+            this, [this]() {
+        if (m_txChannel) {
+            m_txChannel->setRunning(false);
+        }
+    }, Qt::QueuedConnection);
+
+    // TxMicRouter: NullMicSource for 3M-1a (zero-padded silence stream).
+    // The TUNE path (gen1 PostGen) overwrites the WDSP input buffer at TXA
+    // stage 22, so silence from NullMicSource is functionally inert during
+    // TUNE-only TX. Replaced with PcMicSource / RadioMicSource in 3M-1b.
+    // Master design §5.2 (3M-1a NullMicSource stub).
+    m_txMicRouter = std::make_unique<NullMicSource>();
 }
 
 RadioModel::~RadioModel()
@@ -881,6 +948,21 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // per fexchange2 call.
         RxChannel* rxCh = m_wdspEngine->createRxChannel(0, wdspInSize, 4096,
                                                          wdspInputRate, 48000, 48000);
+
+        // 3M-1a G.1: create the WDSP TX channel (channel ID = 1 = WDSP.id(1, 0)).
+        // Default parameters (238-sample input buffer, 4096 DSP buffer, 96 kHz DSP
+        // rate) match Thetis cmaster.c:177-190 [v2.10.3.13] — create_xmtr().
+        // WdspEngine owns the channel via m_txChannels; we take a non-owning view.
+        // The channel starts stopped (setRunning(false) is the default); txReady
+        // fires setRunning(true) after MOX engage + rfDelay.
+        // From Thetis dsp.cs:926-944 [v2.10.3.13] — WDSP.id(1, 0) = channel 1.
+        m_txChannel = m_wdspEngine->createTxChannel(/*channelId=*/1);
+        if (!m_txChannel) {
+            qCWarning(lcDsp) << "G.1: createTxChannel(1) returned nullptr — "
+                                "TUNE will be unavailable until WDSP re-initializes.";
+        } else {
+            qCInfo(lcDsp) << "G.1: TX channel 1 created — TUNE path ready.";
+        }
         if (rxCh) {
             // Apply slice state to WDSP channel (no longer hardcoded)
             if (m_activeSlice) {
@@ -2218,6 +2300,12 @@ void RadioModel::teardownConnection()
 
     // Stop audio output
     m_audioEngine->stop();
+
+    // 3M-1a G.1: clear non-owning TX channel view before WdspEngine::shutdown()
+    // destroys the underlying WDSP channel. Any in-flight txReady / txaFlushed
+    // slot calls are queued and will see m_txChannel == nullptr after this clear.
+    // WdspEngine::shutdown() → destroyTxChannel(1) handles the actual WDSP teardown.
+    m_txChannel = nullptr;
 
     // Shutdown WDSP (destroys all channels, saves cache)
     m_wdspEngine->shutdown();

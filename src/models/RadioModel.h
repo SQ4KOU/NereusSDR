@@ -94,6 +94,11 @@
 #include <QList>
 #include <QThread>
 
+// 3M-1a G.1: TxMicRouter is a plain (non-QObject) strategy interface.
+// Include required directly so unique_ptr destructor is available here.
+#include "core/TxMicRouter.h"
+#include <memory>  // std::unique_ptr
+
 namespace NereusSDR {
 
 class ReceiverManager;
@@ -101,6 +106,9 @@ class AudioEngine;
 class WdspEngine;
 class RxDspWorker;
 class NoiseFloorTracker;
+// 3M-1a G.1: forward declarations for TX-side components.
+class MoxController;
+class TxChannel;
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
@@ -252,6 +260,18 @@ public:
     NoiseFloorTracker* noiseFloorTracker() const { return m_noiseFloorTracker; }
     void setNoiseFloorTracker(NoiseFloorTracker* t) { m_noiseFloorTracker = t; }
     QTimer* autoAgcTimer() const { return m_autoAgcTimer; }
+
+    // 3M-1a G.1: expose MoxController so MainWindow can wire
+    // StepAttenuatorController::onMoxHardwareFlipped (F.2 connect) after
+    // both objects exist.  Non-owning; lifetime is RadioModel's lifetime.
+    // Master design §5.1.1; pre-code review §1.6.
+    MoxController* moxController() const { return m_moxController; }
+
+    // 3M-1a G.1: expose TxChannel view so TxApplet and G.4 TUNE function
+    // can call setTuneTone / setRunning without depending on WdspEngine.
+    // Non-owning; WdspEngine owns the channel. Null until WDSP initializes.
+    // Master design §5.1.1; pre-code review §2.5.
+    TxChannel* txChannel() const { return m_txChannel; }
 
     // Phase 3G-9b: one-shot profile that sets the 7 smooth-default recipe
     // values on SpectrumWidget. Called from the constructor exactly once
@@ -552,6 +572,47 @@ private:
     // From Thetis v2.10.3.13 console.cs:46057 — tmrAutoAGC (500ms interval)
     QTimer* m_autoAgcTimer{nullptr};
     NoiseFloorTracker* m_noiseFloorTracker{nullptr};
+
+    // ── 3M-1a G.1: TX-side integration ──────────────────────────────────────
+    // Master design §5.1.1; pre-code review §1.6 + §2.5.
+
+    // MOX state machine — lives on the main thread (QTimers must be on
+    // the event loop of the thread they fire on; RadioModel is main-thread).
+    // Owned by RadioModel (Qt parent = this, set in constructor).
+    // Wired: hardwareFlipped(bool) → onMoxHardwareFlipped(bool)
+    //                              → StepAttenuatorController::onMoxHardwareFlipped
+    //        txReady()             → m_txChannel->setRunning(true)
+    //        txaFlushed()          → m_txChannel->setRunning(false)
+    // From Thetis console.cs:29311-29678 [v2.10.3.13] — chkMOX_CheckedChanged2.
+    //
+    // Inline attribution tags preserved verbatim from the cited range:
+    //[2.10.1.0]MW0LGE changed  [original inline comment from console.cs:29355]
+    //MW0LGE [2.9.0.7]  [original inline comment from console.cs:29400]
+    //[2.10.3.6]MW0LGE att_fixes  [original inline comment from console.cs:29561-29576]
+    // Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE  [console.cs:29603]
+    //[2.10.3.6]MW0LGE att_fixes  [original inline comment from console.cs:29647-29659]
+    MoxController* m_moxController{nullptr};
+
+    // Non-owning view of the WDSP TX channel (channel ID = 1 = WDSP.id(1, 0)).
+    // WdspEngine owns the channel via m_txChannels. This pointer is valid only
+    // after m_wdspEngine->initializedChanged fires and createTxChannel(1) is
+    // called inside the initializedChanged lambda. null before that.
+    // Callers must guard: if (m_txChannel) { ... }.
+    // Thread safety: read only from the main thread. WDSP TX processing happens
+    // on the DSP thread (m_dspThread), but the run-flag mutations called here
+    // (setRunning / setTuneTone) are non-realtime control-path calls that are
+    // safe to call from the main thread per the WDSP API contract.
+    // From Thetis dsp.cs:926-944 [v2.10.3.13] — WDSP.id(1, 0) = channel 1.
+    TxChannel* m_txChannel{nullptr};
+
+    // TX mic source — strategy interface for silence (3M-1a) or real mic (3M-1b).
+    // Owned by RadioModel via unique_ptr. NullMicSource for 3M-1a; replaced with
+    // PcMicSource / RadioMicSource in 3M-1b per user preference and board caps.
+    // Not a QObject — no thread affinity. pullSamples() is called from whatever
+    // thread drives the TX I/Q production loop; for 3M-1a (TUNE carrier via WDSP
+    // gen1 PostGen) it is never actually invoked, since gen1 overwrites the input.
+    // Master design §5.2 (3M-1a NullMicSource; 3M-1b concrete sources).
+    std::unique_ptr<TxMicRouter> m_txMicRouter;
 };
 
 } // namespace NereusSDR

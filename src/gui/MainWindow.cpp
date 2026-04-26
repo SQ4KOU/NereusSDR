@@ -257,6 +257,7 @@ warren@wpratt.com
 #include "core/NbFamily.h"
 #include "core/ClarityController.h"
 #include "core/StepAttenuatorController.h"
+#include "core/MoxController.h"  // 3M-1a G.1: F.2 connect (hardwareFlipped → onMoxHardwareFlipped)
 #include "core/NoiseFloorTracker.h"
 #include "core/BoardCapabilities.h"
 #include "models/PanadapterModel.h"
@@ -757,6 +758,26 @@ void MainWindow::buildUI()
     // --- Phase 3G-13: Step attenuator + ADC overload ---
     m_stepAttController = new StepAttenuatorController(this);
     m_radioModel->setStepAttController(m_stepAttController);
+
+    // 3M-1a G.1 / F.2: MoxController::hardwareFlipped → StepAttenuatorController.
+    // Both objects are now live; RadioModel owns MoxController, MainWindow owns
+    // StepAttenuatorController. Wire here where both sides are accessible.
+    // Qt::QueuedConnection documents cross-component intent (both main-thread)
+    // and ensures the slot body runs after the emit call stack unwinds.
+    // F.2 connect note: this is the connect deferred from StepAttenuatorController.h
+    // line 257 ("The connect() call wiring this slot to MoxController::hardwareFlipped
+    // is deferred to Task G.1").
+    // From Thetis console.cs:29546-29576 [v2.10.3.13] — ATT-on-TX in HdwMOXChanged.
+    // Inline attribution tags preserved verbatim from the cited range:
+    //MW0LGE [2.9.0.7] added option to always apply 31 att from setup form when not in ps  [console.cs:29561]
+    //[2.10.3.6]MW0LGE att_fixes  [original inline comment from console.cs:29567]
+    //[2.10.3.6]MW0LGE att_fixes NOTE: this will eventually call Display.TXAttenuatorOffset with the value  [console.cs:29568]
+    // Display.TXAttenuatorOffset = 0; //[2.10.3.6]MW0LGE att_fixes  [console.cs:29576]
+    if (MoxController* mox = m_radioModel->moxController()) {
+        connect(mox, &MoxController::hardwareFlipped,
+                m_stepAttController, &StepAttenuatorController::onMoxHardwareFlipped,
+                Qt::QueuedConnection);
+    }
 
     // --- Phase 3G-9c: Clarity adaptive display tuning ---
     m_clarityController = new ClarityController(this);

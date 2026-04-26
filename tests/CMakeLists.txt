@@ -998,6 +998,20 @@ nereus_add_test(tst_tx_channel_running)
 # via TxMicRouter base pointer.
 nereus_add_test(tst_tx_mic_router)
 
+# ── Phase 3M-1a Task G.1: RadioModel ownership + wiring integration ──────────
+# Verifies:
+#   - moxController() is non-null after construction (owns MoxController on main thread)
+#   - moxController() parent is RadioModel (Qt parent → auto-cleanup)
+#   - txChannel() is null before WDSP initializes (non-owning view guarded)
+#   - hardwareFlipped → onMoxHardwareFlipped is connected (F.1 wiring confirmed)
+#   - txReady and txaFlushed lambdas guard null m_txChannel (no crash)
+#   - moxController() pointer is stable across repeated calls
+#   - RadioModel destruction with MoxController in-flight does not crash
+#   - F.2 connect signal/slot shape is valid (QSignalSpy confirm)
+# Master design §5.1.1; pre-code review §1.6 + §2.5.
+nereus_add_test(tst_radio_model_g1_wiring)
+target_compile_definitions(tst_radio_model_g1_wiring PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1a Task F.1: RadioModel::onMoxHardwareFlipped slot ──────────────
 # Verifies the three-step fan-out in Thetis HdwMOXChanged order (§2.3):
 #   1. Alex antenna routing (applyAlexAntennaForBand → setAntennaRouting)
