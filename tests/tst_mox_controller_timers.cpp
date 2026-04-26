@@ -435,6 +435,8 @@ private slots:
         MoxController ctrl;
         ctrl.setTimerIntervals(0, 0, 0, 0, 0, 0);
 
+        QSignalSpy spy(&ctrl, &MoxController::moxStateChanged);
+
         ctrl.setMox(true);
         // Immediately call setMox(false) before processEvents drives rfDelay.
         ctrl.setMox(false);
@@ -448,6 +450,12 @@ private slots:
         QCOMPARE(ctrl.state(), MoxState::Rx);
         // m_mox must be false.
         QVERIFY(!ctrl.isMox());
+
+        // Invariant: stopAllTimers cancelled the rfDelay timer before
+        // onRfDelayElapsed could fire, so moxStateChanged(true) was never
+        // emitted — only the final TX→RX moxStateChanged(false).
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.at(0).at(0).toBool(), false);
     }
 };
 
