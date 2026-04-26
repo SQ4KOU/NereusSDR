@@ -1277,6 +1277,37 @@ just port the missing logic.
 | BPF2Gnd / T/R | P2 | (Saturn reg) | — | — | **DEFERRED** to 3M-3 (Saturn registers) |
 | Network watchdog | P2 | — | — | — | **DEFERRED** with documented blocker (resolves TODO via stub-update path) |
 
+### 7.11 TX I/Q sample format — P1 (16-bit) vs P2 (24-bit)
+
+§7.10 covers the C&C wire bits. The TX I/Q **sample stream** has its own
+wire format, which differs between protocols. This section records the
+finding (caught during E.2 implementation) so future ports / reviewers
+don't repeat the mistake of assuming a uniform sample width.
+
+| Property | Protocol 1 | Protocol 2 |
+|---|---|---|
+| Bit width | **16-bit signed PCM** | **24-bit signed PCM** |
+| Bytes per complex sample | 8 (`mic_L 2B + mic_R 2B + I 2B + Q 2B`) | 6 (`I 3B + Q 3B`; mic on a separate stream) |
+| Endianness | Big-endian | Big-endian |
+| Float→int gain | `32767.0` (`0x7FFF`) | `8388607.0` (`0x7FFFFF`) |
+| UDP port | **1024** (Metis frame, EP2 zones) | **1029** (`TX_IQ_FROM_HOST_PORT`) |
+| Frame size | 1032 bytes (Metis) | 1444 bytes (4-byte sequence + 1440-byte payload) |
+| Samples per frame | 126 (2 × 63 in EP2 sub-zones) | 240 (1440 ÷ 6) |
+| Source cite | `deskhpsdr/src/transmitter.c:1541` (`gain = 32767.0; // 16 bit`) + `deskhpsdr/src/old_protocol.c:2429-2458` (per-sample layout) [@HEAD-2026-04-25] | `deskhpsdr/src/new_protocol.c:1476` (`// should be 24: TX IQ sample width 24 bits`), `:1596` (`// there are 24 bits per sample`), `:2811-2816` (3-byte big-endian I + 3-byte big-endian Q packing), `new_protocol.h:37` (`#define TX_IQ_FROM_HOST_PORT 1029`) [@HEAD-2026-04-25] |
+
+**Cross-confirmation (HL2 firmware):** the receiving end's FPGA decode
+path is wired for 16-bit P1; no client (Thetis included) can deviate
+without the radio rejecting the frames. Thetis's actual byte composition
+lives in `ChannelMaster.dll` (closed source) but must produce the same
+16-bit P1 / 24-bit P2 wire bytes per the OpenHPSDR Protocol 1 + 2 specs.
+
+**Why this section exists:** the original dispatch prompt for E.2 told
+the implementer "24-bit P1" — wrong, conflated with the older P1 spec
+draft that had a 24-bit MIC variant which was never shipped on
+HL2/ANAN-class hardware. The implementer caught it via source-first
+reading of `deskhpsdr/src/transmitter.c` and pushed back. This is the
+kind of correction the source-first protocol exists to surface.
+
 ---
 
 ## 8. WDSP TXA pipeline — 31 stages
