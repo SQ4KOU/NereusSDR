@@ -2357,7 +2357,11 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
 
     // 1. dBm scale strip — right edge. Arrow row adjusts ref level,
     // body is drag-pan. From AetherSDR SpectrumWidget.cpp:1712-1745 [@0cd4559]
-    const int stripX = width() - effectiveStripW();
+    // Sub-epic E: hit-test against the actual dBm-strip width, not the
+    // effectiveStripW() layout reservation (which widens to 72px when paused
+    // to make room for the time-scale strip's UTC labels — but the dBm strip
+    // itself stays at kDbmStripW = 36px wide).
+    const int stripX = width() - kDbmStripW;
     if (mx >= stripX && effectiveStripW() > 0 && my < specH) {
         // Use FULL-WIDTH rect so stripRect() lands in the reserved zone.
         // Matches the rect passed to drawDbmScale in paintEvent.
@@ -2449,6 +2453,33 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
         return;
     }
 
+    // Sub-epic E: time-scale strip + LIVE button
+    // From AetherSDR SpectrumWidget.cpp:1655-1693 [@0cd4559]
+    const int wfY = freqBarY + kFreqScaleH;
+    const QRect wfRect(0, wfY, w, h - wfY);
+
+    // LIVE button click (sits in the freq-scale row above the waterfall)
+    if (waterfallLiveButtonRect(wfRect).contains(event->position().toPoint())
+        && event->button() == Qt::LeftButton) {
+        setWaterfallLive(true);
+        event->accept();
+        return;
+    }
+
+    // Time-scale strip drag start (right edge of waterfall)
+    if (my >= wfY && event->button() == Qt::LeftButton) {
+        const QRect timeScaleRect = waterfallTimeScaleRect(wfRect);
+        const QPoint pos = event->position().toPoint();
+        if (timeScaleRect.contains(pos)) {
+            m_draggingTimeScale = true;
+            m_timeScaleDragStartY = my;
+            m_timeScaleDragStartOffsetRows = m_wfHistoryOffsetRows;
+            setCursor(Qt::SizeVerCursor);
+            event->accept();
+            return;
+        }
+    }
+
     // 5. Pan drag — click in spectrum/waterfall area and drag to pan the view
     // From AetherSDR SpectrumWidget.cpp:879-887
     m_draggingPan = true;
@@ -2472,6 +2503,36 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
     QRect specRect(0, 0, w - effectiveStripW(), specH);
 
     // --- Active drag modes ---
+
+    // Sub-epic E: time-scale drag = scrub through history
+    // From AetherSDR SpectrumWidget.cpp:2122-2145 [@0cd4559]
+    if (m_draggingTimeScale) {
+        const int wfY = specH + kDividerH + kFreqScaleH;
+        const QRect wfRect(0, wfY, w, h - wfY);
+        const QRect timeScaleRect = waterfallTimeScaleRect(wfRect);
+        const int dragHeight = std::max(1, timeScaleRect.height());
+        const int maxOffset = maxWaterfallHistoryOffsetRows();
+        const int dy = m_timeScaleDragStartY - my;  // pull up = scroll back
+        const int deltaRows = (maxOffset > 0)
+            ? static_cast<int>(std::round(
+                (static_cast<double>(dy) / dragHeight) * maxOffset))
+            : 0;
+        const int newOffset = std::clamp(
+            m_timeScaleDragStartOffsetRows + deltaRows, 0, maxOffset);
+
+        if (newOffset != m_wfHistoryOffsetRows) {
+            m_wfHistoryOffsetRows = newOffset;
+            if (newOffset > 0) {
+                m_wfLive = false;  // entering paused state
+            }
+            rebuildWaterfallViewport();
+            update();
+        }
+
+        setCursor(Qt::SizeVerCursor);
+        event->accept();
+        return;
+    }
 
     if (m_draggingDbm) {
         int dy = my - m_dragStartY;
@@ -2570,7 +2631,35 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
     // From AetherSDR SpectrumWidget.cpp:1242-1344
 
     int freqBarY = specH + kDividerH;
-    if (mx >= w - effectiveStripW() && effectiveStripW() > 0 && my < specH) {
+
+    // Sub-epic E: hover cursors for LIVE button + time scale
+    // From AetherSDR SpectrumWidget.cpp:2200-2225 [@0cd4559]
+    {
+        const int wfY = specH + kDividerH + kFreqScaleH;
+        if (my >= specH + kDividerH && my < wfY) {
+            // In the freq-scale row — LIVE button overlaps here.
+            const QRect wfRect(0, wfY, w, h - wfY);
+            if (waterfallLiveButtonRect(wfRect).contains(event->position().toPoint())) {
+                setCursor(Qt::PointingHandCursor);
+                return;
+            }
+        }
+        if (my >= wfY) {
+            const QRect wfRect(0, wfY, w, h - wfY);
+            const QRect timeScaleRect = waterfallTimeScaleRect(wfRect);
+            if (timeScaleRect.contains(event->position().toPoint())) {
+                setCursor(Qt::SizeVerCursor);
+                return;
+            }
+            // fall through to existing crosshair assignment
+        }
+    }
+
+    // Sub-epic E: hit-test against the actual dBm-strip width, not the
+    // effectiveStripW() layout reservation (which widens to 72px when paused
+    // to make room for the time-scale strip's UTC labels — but the dBm strip
+    // itself stays at kDbmStripW = 36px wide).
+    if (mx >= w - kDbmStripW && effectiveStripW() > 0 && my < specH) {
         // Hover over dBm strip → change cursor.
         // From AetherSDR SpectrumWidget.cpp:2241-2248 [@0cd4559]
         // Strip's arrow row is the top kDbmArrowH pixels of the strip.
@@ -2614,6 +2703,19 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
 
 void SpectrumWidget::mouseReleaseEvent(QMouseEvent* event)
 {
+    // Sub-epic E: time-scale drag end
+    // From AetherSDR SpectrumWidget.cpp:2382-2387 [@0cd4559]
+    //   note: drag release does NOT auto-resume to live — m_wfLive is only
+    //   flipped true by the LIVE button. Drag-to-zero would auto-bump back
+    //   on the next row otherwise. This is deliberate; see plan
+    //   §authoring-time decisions discussion.
+    if (m_draggingTimeScale) {
+        m_draggingTimeScale = false;
+        setCursor(Qt::CrossCursor);
+        event->accept();
+        return;
+    }
+
     if (event->button() == Qt::LeftButton) {
         // If pan drag was short (click, not real drag), treat as click-to-tune
         // From AetherSDR SpectrumWidget.cpp:1427-1457 — 4px Manhattan threshold
@@ -2662,7 +2764,11 @@ void SpectrumWidget::wheelEvent(QWheelEvent* event)
     const int mx = static_cast<int>(event->position().x());
     const int my = static_cast<int>(event->position().y());
     const int specH = static_cast<int>(height() * m_spectrumFrac);
-    const int stripX = width() - effectiveStripW();
+    // Sub-epic E: hit-test against the actual dBm-strip width, not the
+    // effectiveStripW() layout reservation (which widens to 72px when paused
+    // to make room for the time-scale strip's UTC labels — but the dBm strip
+    // itself stays at kDbmStripW = 36px wide).
+    const int stripX = width() - kDbmStripW;
     if (mx >= stripX && effectiveStripW() > 0 && my < specH) {
         const int notches = event->angleDelta().y() / 120;
         if (notches != 0) {
