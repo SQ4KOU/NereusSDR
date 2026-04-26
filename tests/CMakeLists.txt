@@ -685,7 +685,7 @@ nereus_add_test(tst_radio_connection_tx_iface)
 #     multi-frame sequence increment, sign/clamp, over-range clamp,
 #     underrun silence, mic bytes zero (NullMicSource), zone-0 last sample.
 # Porting from deskhpsdr/src/old_protocol.c:2421-2458, transmitter.c:1541
-# [@HEAD-2026-04-25].
+# [@120188f].
 nereus_add_test(tst_p1_tx_iq_wire)
 target_compile_definitions(tst_p1_tx_iq_wire PRIVATE NEREUS_BUILD_TESTS)
 

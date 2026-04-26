@@ -10,8 +10,8 @@
 //   [4-5] I     int16 big-endian
 //   [6-7] Q     int16 big-endian
 //
-// Cite: deskhpsdr/src/old_protocol.c:2429-2458 [@HEAD-2026-04-25]
-//       deskhpsdr/src/transmitter.c:1541 [@HEAD-2026-04-25] (gain = 32767.0)
+// Cite: deskhpsdr/src/old_protocol.c:2429-2458 [@120188f]
+//       deskhpsdr/src/transmitter.c:1541 [@120188f] (gain = 32767.0)
 #include <QtTest/QtTest>
 #include "core/P1RadioConnection.h"
 
@@ -30,7 +30,7 @@ private slots:
     //   frame[22..23] = 0x00 0x00  (Q = 0)
     //
     // float→int16: gain=32767.0, v=1.0 → (long)(1.0*32767+0.5)=32767=0x7FFF
-    // Cite: deskhpsdr/src/transmitter.c:1541 [@HEAD-2026-04-25]
+    // Cite: deskhpsdr/src/transmitter.c:1541 [@120188f]
     void unitPulse_firstSampleIsMaxI() {
         P1RadioConnection conn;
 
@@ -62,7 +62,7 @@ private slots:
         QCOMPARE(quint8(frame[19]), quint8(0x00));  // mic_R lo
 
         // Sample 0, bytes 4-5: I = 0x7FFF (32767).
-        // Cite: deskhpsdr/src/transmitter.c:1541,1787 [@HEAD-2026-04-25]
+        // Cite: deskhpsdr/src/transmitter.c:1541,1787 [@120188f]
         //   gain=32767.0; isample=(long)(1.0*32767.0+0.5)=32767=0x7FFF
         QCOMPARE(quint8(frame[20]), quint8(0x7F));  // I hi
         QCOMPARE(quint8(frame[21]), quint8(0xFF));  // I lo
@@ -160,7 +160,7 @@ private slots:
 
     // ── 5. Sign + clamp test ───────────────────────────────────────────────
     // Feed v = -1.0: expected int16 = -32767 = 0x8001.
-    // Cite: deskhpsdr/src/transmitter.c:1787-1788 [@HEAD-2026-04-25]
+    // Cite: deskhpsdr/src/transmitter.c:1787-1788 [@120188f]
     //   qsample = (long)(qs * gain + (qs >= 0.0 ? 0.5 : -0.5))
     //   qs=-1.0: (-1.0*32767.0 - 0.5) = -32767.5 → (long) = -32767 → 0x8001
     void negativeFullScale_encodedAsNegativeInt16() {
@@ -220,7 +220,7 @@ private slots:
 
     // ── 8. Mic bytes are zero (NullMicSource) ─────────────────────────────
     // Even when I/Q are non-zero, mic bytes [0..3] per sample must be zero.
-    // Cite: deskhpsdr/src/old_protocol.c:2429-2434 [@HEAD-2026-04-25]
+    // Cite: deskhpsdr/src/old_protocol.c:2429-2434 [@120188f]
     //   (HL2 path writes zeros; NereusSDR 3M-1a uses NullMicSource)
     void micBytesAreZeroForNullMicSource() {
         P1RadioConnection conn;
@@ -259,6 +259,61 @@ private slots:
         // Q = (long)(-0.5*32767 - 0.5) = (long)(-16383.5 - 0.5) = -16384 = 0xC000
         QCOMPARE(quint8(frame[base + 6]), quint8(0xC0));  // Q hi
         QCOMPARE(quint8(frame[base + 7]), quint8(0x00));  // Q lo
+    }
+
+    // ── 10. HL2 CWX LSB-clear workaround ─────────────────────────────────────
+    // When HPSDRModel == HERMESLITE, I-low and Q-low bytes must have LSB = 0
+    // (masked with 0xFE). Non-HL2 path must NOT mask.
+    // Cite: deskhpsdr/src/old_protocol.c:2441-2453 [@120188f]
+    //   TXRINGBUF[iptr++] = isample & 0xFE;  // I lo — LSB cleared on HL2
+    //   TXRINGBUF[iptr++] = qsample & 0xFE;  // Q lo — LSB cleared on HL2
+    void hl2_iLoAndQLoLsbAreCleared() {
+        P1RadioConnection conn;
+
+        // Set HPSDRModel to HERMESLITE so the workaround activates.
+        HardwareProfile hl2Profile;
+        hl2Profile.model = HPSDRModel::HERMESLITE;
+        conn.setHardwareProfile(hl2Profile);
+
+        // Use I = 0x7FFF (32767) and Q = 0x8001 (-32767).
+        // I lo without mask = 0xFF; with 0xFE mask → 0xFE.
+        // Q lo without mask = 0x01; with 0xFE mask → 0x00.
+        std::vector<float> iq(126 * 2, 0.0f);
+        iq[0] =  1.0f;   // I0 → 32767 = 0x7FFF; I lo = 0xFF → 0xFE after mask
+        iq[1] = -1.0f;   // Q0 → -32767 = 0x8001; Q lo = 0x01 → 0x00 after mask
+
+        QByteArray frame = conn.sendTxIqAndCapture(iq.data(), 126);
+        QCOMPARE(frame.size(), 1032);
+
+        // I hi unchanged: 0x7F
+        QCOMPARE(quint8(frame[20]), quint8(0x7F));
+        // I lo LSB cleared: 0xFF & 0xFE = 0xFE
+        QCOMPARE(quint8(frame[21]), quint8(0xFE));
+
+        // Q hi unchanged: 0x80
+        QCOMPARE(quint8(frame[22]), quint8(0x80));
+        // Q lo LSB cleared: 0x01 & 0xFE = 0x00
+        QCOMPARE(quint8(frame[23]), quint8(0x00));
+    }
+
+    // ── 11. Non-HL2 LSB is NOT masked ────────────────────────────────────────
+    // On a non-HL2 board the I lo and Q lo bytes must be unmodified.
+    void nonHl2_iLoAndQLoLsbPreserved() {
+        P1RadioConnection conn;
+        // Default model is HPSDRModel::HERMES — no mask applied.
+
+        // I = 0x7FFF, Q = 0x8001 same as above.
+        std::vector<float> iq(126 * 2, 0.0f);
+        iq[0] =  1.0f;   // I0 → 32767 = 0x7FFF; I lo = 0xFF (no mask)
+        iq[1] = -1.0f;   // Q0 → -32767 = 0x8001; Q lo = 0x01 (no mask)
+
+        QByteArray frame = conn.sendTxIqAndCapture(iq.data(), 126);
+        QCOMPARE(frame.size(), 1032);
+
+        // I lo must be 0xFF (unmasked)
+        QCOMPARE(quint8(frame[21]), quint8(0xFF));
+        // Q lo must be 0x01 (unmasked)
+        QCOMPARE(quint8(frame[23]), quint8(0x01));
     }
 };
 

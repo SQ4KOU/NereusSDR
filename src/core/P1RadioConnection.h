@@ -49,6 +49,7 @@ namespace NereusSDR { class OcMatrix; }                  // forward decl — ful
 namespace NereusSDR { class IoBoardHl2; }                // forward decl — full header in .cpp
 namespace NereusSDR { class HermesLiteBandwidthMonitor; }// forward decl — full header in .cpp
 
+#include <atomic>
 #include <memory>
 #include <array>
 #include <QUdpSocket>
@@ -284,21 +285,35 @@ private:
     //                 [I hi][I lo][Q hi][Q lo]  — big-endian int16.
     //
     // Layout ported from deskhpsdr/src/old_protocol.c:2421-2458
-    // [@HEAD-2026-04-25] (old_protocol_iq_samples / TXRING_AUDIO_SAMPLE_BYTES).
+    // [@120188f] (old_protocol_iq_samples / TXRING_AUDIO_SAMPLE_BYTES).
     //
     // One EP2 frame carries 2×63 = 126 samples.  kTxIqBufSamples is sized
     // to match deskhpsdr's TXRING_MAX_BLOCKS×126 (32 blocks) giving ~21 msec
     // of headroom at 48 kHz before the producer stalls.
-    // Source: deskhpsdr/src/old_protocol.c:460-461 [@HEAD-2026-04-25]
+    // Source: deskhpsdr/src/old_protocol.c:460-461 [@120188f]
     //   TXRING_AUDIO_FRAMES_PER_BLOCK 126
     //   TXRING_MAX_BLOCKS             32
+    //
+    // SPSC ring buffer — audio thread writes, connection thread reads.
+    // Memory ordering:
+    //   - m_txIqWritePos: single audio-thread writer; relaxed store /
+    //     acquire load from connection thread (mirrors classic Lamport SPSC).
+    //   - m_txIqReadPos: single connection-thread writer; relaxed store /
+    //     acquire load from audio thread.
+    //   - m_txIqCount: cross-thread fetch_add (audio) / fetch_sub (conn);
+    //     release on writes that publish new bytes, acquire on reads that
+    //     consume bytes. The release/acquire pair pins the byte-write
+    //     order before the count update.
+    //
+    // CLAUDE.md mandates atomics for cross-thread DSP; deskhpsdr's
+    // old_protocol.c:466-469 [@120188f] uses the same atomic_int pattern.
     static constexpr int kTxIqBufSamples = 126 * 32;  // 4032 samples, 32256 bytes
     static constexpr int kTxIqBytesPerSample = 8;
     // Pre-allocated — no heap in the hot path.
     std::array<quint8, kTxIqBufSamples * kTxIqBytesPerSample> m_txIqBuf{};
-    int m_txIqWritePos{0};  // next write offset in bytes (wraps at buf size)
-    int m_txIqReadPos{0};   // next read offset in bytes  (wraps at buf size)
-    int m_txIqCount{0};     // number of buffered samples (not bytes)
+    std::atomic<int> m_txIqWritePos{0};  // audio thread writes; relaxed store
+    std::atomic<int> m_txIqReadPos{0};   // connection thread writes; relaxed store
+    std::atomic<int> m_txIqCount{0};     // both threads: fetch_add (audio, release) / fetch_sub (conn)
 
     // Float→int16 + EP2 zone fill helper.
     // Returns true if 63 samples were available and written, false if underrun.
@@ -419,7 +434,7 @@ public:
     }
 
     // Access buffer count for buffer-state tests.
-    int txIqBufferedSamplesForTest() const { return m_txIqCount; }
+    int txIqBufferedSamplesForTest() const { return m_txIqCount.load(std::memory_order_acquire); }
 #endif
 };
 
