@@ -71,6 +71,9 @@ warren@wpratt.com
 //   2026-04-25 — setTuneTone() PostGen wiring added by J.J. Boyd (KG4VCF)
 //                 during 3M-1a Task C.3, with AI-assisted transformation
 //                 via Anthropic Claude Code.
+//   2026-04-26 — setRunning(bool) / isRunning() / setStageRunning(Stage, bool)
+//                 implemented by J.J. Boyd (KG4VCF) during 3M-1a Task C.4.
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"
@@ -338,6 +341,193 @@ void TxChannel::setTuneTone(bool on, double freqHz, double magnitude)
     Q_UNUSED(freqHz);
     Q_UNUSED(magnitude);
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// setRunning()
+//
+// Activate or deactivate the WDSP TXA channel.
+//
+// Porting from Thetis console.cs callsite pattern [v2.10.3.13]:
+//   WDSP.SetChannelState(WDSP.id(1, 0), 1, 0);   // console.cs:29595 — RX→TX
+//   WDSP.SetChannelState(WDSP.id(1, 0), 0, 1);   // console.cs:29607 — TX→RX (drain)
+//
+// cfir is additionally activated for Protocol 2 operation, matching Thetis
+// cmaster.cs:522-527 [v2.10.3.13]:
+//   WDSP.SetTXACFIRRun(txch, false);   // P1 (USB protocol)
+//   WDSP.SetTXACFIRRun(txch, true);    // P2
+// NereusSDR activates cfir unconditionally in 3M-1a; P1/P2 gating is deferred
+// to 3M-1b when the active protocol is exposed through TxChannel.
+//
+// Stages NOT activated here:
+//   rsmpin / rsmpout: no public Set*Run API — managed by WDSP's internal
+//     TXAResCheck() (wdsp/TXA.c:809-817 [v2.10.3.13]), which sets their run
+//     flag based on rate mismatch at create_txa() and rate-change calls.
+//   bp0 / alc / sip1 / alcmeter / outmeter: default ON in create_txa().
+//   gen1: activated by setTuneTone(true).
+//   uslew: always-on inside WDSP's xuslew state machine (no run flag).
+// ---------------------------------------------------------------------------
+void TxChannel::setRunning(bool on)
+{
+#ifdef HAVE_WDSP
+    // Null-guard: txa[] is a zero-initialized global array; if OpenChannel was
+    // never called for this channel ID (e.g. unit-test builds that link WDSP
+    // but don't call WdspEngine::initialize()), all pointer fields are null.
+    // Check the sentinel rsmpin.p — if null, the channel is uninitialized.
+    // Match the same guard used in stageRunning() and setTuneTone().
+    if (txa[m_channelId].rsmpin.p == nullptr) {
+        m_running = on;  // track state even without an open channel
+        return;
+    }
+
+    if (on) {
+        // Activate cfir: custom CIC FIR filter required for Protocol 2 output.
+        // From Thetis wdsp/cfir.c:233-238 [v2.10.3.13] — SetTXACFIRRun.
+        // From Thetis cmaster.cs:526-527 [v2.10.3.13]:
+        //   // setup CFIR to run; it will always be ON with new protocol firmware
+        //   WDSP.SetTXACFIRRun(txch, true);
+        SetTXACFIRRun(m_channelId, 1);   // cfir.c:233 [v2.10.3.13]
+
+        // Turn the TXA channel ON: state=1, dmode=0 (immediate start, no flush).
+        // From Thetis console.cs:29595 [v2.10.3.13] — RX→TX transition:
+        //   WDSP.SetChannelState(WDSP.id(1, 0), 1, 0);
+        SetChannelState(m_channelId, 1, 0);   // channel.c:259 [v2.10.3.13]
+    } else {
+        // Turn the TXA channel OFF: state=0, dmode=1 (drain in-flight samples).
+        // From Thetis console.cs:29607 [v2.10.3.13] — TX→RX transition:
+        //   WDSP.SetChannelState(WDSP.id(1, 0), 0, 1);   // turn off, drain
+        //   (preceded by: Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE [console.cs:29603])
+        SetChannelState(m_channelId, 0, 1);   // channel.c:259 [v2.10.3.13]
+
+        // Deactivate cfir after channel drain so no residual samples process.
+        // From Thetis wdsp/cfir.c:233-238 [v2.10.3.13] — SetTXACFIRRun.
+        SetTXACFIRRun(m_channelId, 0);   // cfir.c:233 [v2.10.3.13]
+    }
+#endif // HAVE_WDSP
+
+    m_running = on;
+    qCDebug(lcDsp) << "TxChannel" << m_channelId
+                   << (on ? "started (channel ON)" : "stopped (channel OFF, drain)");
+}
+
+// ---------------------------------------------------------------------------
+// setStageRunning()
+//
+// Enable or disable a single TXA pipeline stage by name.
+//
+// Each supported stage maps to the corresponding WDSP Set*Run function.
+// Unsupported stages (rsmpin/rsmpout — managed by TXAResCheck; uslew — no
+// run flag; meters/Iqc/Calcc/Alc/Bp*/AmMod/FmMod — added in later tasks)
+// log a warning and return without calling WDSP.
+//
+// From Thetis wdsp/ source files [v2.10.3.13] — individual Set*Run APIs.
+// ---------------------------------------------------------------------------
+void TxChannel::setStageRunning(Stage s, bool run)
+{
+    const int r = run ? 1 : 0;
+
+#ifdef HAVE_WDSP
+    // Null-guard: same sentinel as stageRunning() / setTuneTone() / setRunning().
+    if (txa[m_channelId].rsmpin.p == nullptr) {
+        qCWarning(lcDsp) << "TxChannel::setStageRunning: channel" << m_channelId
+                         << "not initialized (no OpenChannel call)";
+        return;
+    }
+#endif
+
+    switch (s) {
+    // gen0 (PreGen, stage 1): 2-TONE noise source.
+    // From Thetis wdsp/gen.c:636-641 [v2.10.3.13].
+    case Stage::Gen0:
+#ifdef HAVE_WDSP
+        SetTXAPreGenRun(m_channelId, r);   // gen.c:636 [v2.10.3.13]
+#endif
+        return;
+
+    // gen1 (PostGen, stage 22): TUNE tone / 2-TONE. Also driven by setTuneTone().
+    // From Thetis wdsp/gen.c:784-789 [v2.10.3.13].
+    case Stage::Gen1:
+#ifdef HAVE_WDSP
+        SetTXAPostGenRun(m_channelId, r);  // gen.c:784 [v2.10.3.13]
+#endif
+        return;
+
+    // panel (stage 2): audio panel / mic gain. Activated by 3M-1b.
+    // From Thetis wdsp/patchpanel.c:201-206 [v2.10.3.13] and patchpanel.h:74.
+    case Stage::Panel:
+#ifdef HAVE_WDSP
+        SetTXAPanelRun(m_channelId, r);    // patchpanel.c:201 [v2.10.3.13]
+#endif
+        return;
+
+    // phrot (stage 3): phase rotator for SSB carrier-phase correction.
+    // From Thetis wdsp/iir.c:665-670 [v2.10.3.13].
+    case Stage::PhRot:
+#ifdef HAVE_WDSP
+        SetTXAPHROTRun(m_channelId, r);    // iir.c:665 [v2.10.3.13]
+#endif
+        return;
+
+    // amsq (stage 5): TX AM squelch / downward expander.
+    // From Thetis wdsp/amsq.c:246-252 [v2.10.3.13] and amsq.h:83.
+    case Stage::AmSq:
+#ifdef HAVE_WDSP
+        SetTXAAMSQRun(m_channelId, r);     // amsq.c:246 [v2.10.3.13]
+#endif
+        return;
+
+    // eqp (stage 6): TX parametric EQ. Activated by 3M-3a.
+    // From Thetis wdsp/eq.c:742-747 [v2.10.3.13].
+    case Stage::Eqp:
+#ifdef HAVE_WDSP
+        SetTXAEQRun(m_channelId, r);       // eq.c:742 [v2.10.3.13]
+#endif
+        return;
+
+    // compressor (stage 14): TX speech compressor. Also adjusts bp1/bp2.
+    // From Thetis wdsp/compress.c:100-107 [v2.10.3.13] and compress.h:60.
+    case Stage::Compressor:
+#ifdef HAVE_WDSP
+        SetTXACompressorRun(m_channelId, r);  // compress.c:100 [v2.10.3.13]
+#endif
+        return;
+
+    // osctrl (stage 16): CESSB overshoot control. Activated by 3M-3a.
+    // From Thetis wdsp/osctrl.c:142-147 [v2.10.3.13].
+    case Stage::OsCtrl:
+#ifdef HAVE_WDSP
+        SetTXAosctrlRun(m_channelId, r);   // osctrl.c:142 [v2.10.3.13]
+#endif
+        return;
+
+    // cfir (stage 28): custom CIC FIR. Also driven by setRunning().
+    // From Thetis wdsp/cfir.c:233-238 [v2.10.3.13] and cfir.h:71.
+    case Stage::Cfir:
+#ifdef HAVE_WDSP
+        SetTXACFIRRun(m_channelId, r);     // cfir.c:233 [v2.10.3.13]
+#endif
+        return;
+
+    // cfcomp (stage 11): continuous frequency compander. Activated by 3M-3a.
+    // From Thetis wdsp/cfcomp.c:632-637 [v2.10.3.13].
+    case Stage::CfComp:
+#ifdef HAVE_WDSP
+        SetTXACFCOMPRun(m_channelId, r);   // cfcomp.c:632 [v2.10.3.13]
+#endif
+        return;
+
+    // Stages with no public WDSP Run setter or internally managed:
+    //   RsmpIn / RsmpOut: run managed by TXAResCheck() — wdsp/TXA.c:809-817 [v2.10.3.13]
+    //   UsLew: no run flag — channel-upslew driven (see stageRunning comment)
+    //   All meter stages, Alc, Bp0/Bp1/Bp2, AmMod, FmMod, Calcc, Iqc, Sip1:
+    //     dedicated Set*Run APIs exist but are added in 3M-1b/3M-3a/3M-4 scope.
+    default:
+        qCWarning(lcDsp) << "TxChannel::setStageRunning: stage"
+                         << static_cast<int>(s)
+                         << "has no public WDSP Run setter in 3M-1a scope "
+                            "(or is internally managed by WDSP). No-op.";
+        return;
+    }
 }
 
 } // namespace NereusSDR

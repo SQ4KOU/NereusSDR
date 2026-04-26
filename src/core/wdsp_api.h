@@ -18,6 +18,13 @@
 //                 Task C.3 — TxChannel::setTuneTone WDSP wiring. Signatures
 //                 match wdsp/gen.c:784-813 [v2.10.3.13]. AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-04-26 — SetTXACFIRRun + per-stage TXA Run setters (SetTXAPreGenRun,
+//                 SetTXAPanelRun, SetTXAPHROTRun, SetTXAAMSQRun, SetTXAEQRun,
+//                 SetTXACompressorRun, SetTXAosctrlRun, SetTXACFCOMPRun)
+//                 added by J.J. Boyd (KG4VCF) during 3M-1a Task C.4 —
+//                 TxChannel::setRunning / setStageRunning WDSP wiring.
+//                 Signatures match wdsp/ source files [v2.10.3.13].
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -571,6 +578,59 @@ void SetTXAPostGenToneMag(int channel, double mag);
 // From Thetis wdsp/gen.c:808-813 [v2.10.3.13] — txa[ch].gen1.p->tone.freq + calc_tone()
 // Signed Hz; caller provides sign per DSP mode (LSB/CWL/DIGL → negative).
 void SetTXAPostGenToneFreq(int channel, double freq);
+
+// ---------------------------------------------------------------------------
+// TX stage Run setters — TxChannel::setRunning() + setStageRunning()
+//
+// These are called from TxChannel::setRunning() (cfir only) and from
+// TxChannel::setStageRunning() to enable/disable individual TXA pipeline
+// stages.  Each corresponds to a PORT-exported WDSP function.
+//
+// NOTE: rsmpin and rsmpout have NO exported Set*Run API. Their run flags are
+// managed internally by WDSP's TXAResCheck() (wdsp/TXA.c:809-817
+// [v2.10.3.13]), which sets run=1 iff the relevant rates differ.  They are
+// therefore absent from this list.
+//
+// Ported by NereusSDR Task C.4 (3M-1a).
+// ---------------------------------------------------------------------------
+
+// cfir (stage 28): custom CIC FIR filter, used for Protocol 2 output path.
+// Thetis cmaster.cs:522-527 [v2.10.3.13]: false for P1 (USB), true for P2.
+// From Thetis wdsp/cfir.c:233-238 [v2.10.3.13] and wdsp/cfir.h:71.
+void SetTXACFIRRun(int channel, int run);
+
+// gen0 (stage 1): TX PreGen, mode=2 noise. Used for 2-TONE (3M-3a).
+// From Thetis wdsp/gen.c:636-641 [v2.10.3.13].
+void SetTXAPreGenRun(int channel, int run);
+
+// panel (stage 2): audio panel / mic gain.
+// From Thetis wdsp/patchpanel.c:201-206 [v2.10.3.13] and patchpanel.h:74.
+void SetTXAPanelRun(int channel, int run);
+
+// phrot (stage 3): phase rotator for SSB carrier-phase correction.
+// From Thetis wdsp/iir.c:665-670 [v2.10.3.13].
+void SetTXAPHROTRun(int channel, int run);
+
+// amsq (stage 5): TX AM squelch / downward expander.
+// From Thetis wdsp/amsq.c:246-252 [v2.10.3.13] and amsq.h:83.
+void SetTXAAMSQRun(int channel, int run);
+
+// eqp (stage 6): TX parametric EQ.
+// From Thetis wdsp/eq.c:742-747 [v2.10.3.13].
+void SetTXAEQRun(int channel, int run);
+
+// compressor (stage 14): TX speech compressor (COMP).
+// Also adjusts bp1/bp2 bandpass routing via TXASetupBPFilters().
+// From Thetis wdsp/compress.c:100-107 [v2.10.3.13] and compress.h:60.
+void SetTXACompressorRun(int channel, int run);
+
+// osctrl (stage 16): CESSB overshoot control.
+// From Thetis wdsp/osctrl.c:142-147 [v2.10.3.13].
+void SetTXAosctrlRun(int channel, int run);
+
+// cfcomp (stage 11): continuous frequency compander.
+// From Thetis wdsp/cfcomp.c:632-637 [v2.10.3.13].
+void SetTXACFCOMPRun(int channel, int run);
 
 } // extern "C"
 

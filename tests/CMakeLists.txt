@@ -851,3 +851,24 @@ nereus_add_test(tst_tx_channel_pipeline)
 #   Ports Thetis console.cs:29954, 30031-30040 [v2.10.3.13] and gen.c:783-813 [v2.10.3.13].
 nereus_add_test(tst_tx_channel_tune_tone)
 
+# ── Phase 3M-1a Task C.4: TxChannel::setRunning() + 3M-1a active stages ────
+# Verifies:
+#   isRunning() initial state is false (channel starts stopped);
+#   setRunning(true) doesn't crash (stub path, no WDSP);
+#   setRunning(false) doesn't crash;
+#   isRunning() returns true after setRunning(true);
+#   isRunning() returns false after setRunning(false);
+#   toggle sequences (on→off, off→on, on→off→on) don't crash;
+#   idempotent calls (setRunning(true) twice, setRunning(false) twice) are safe;
+#   isRunning() remains correct after idempotent calls;
+#   repeated toggle (10 cycles) doesn't crash;
+#   setStageRunning(Stage::Gen0/Gen1/Panel/PhRot/AmSq/Eqp/Compressor/OsCtrl/Cfir/CfComp, true/false)
+#     doesn't crash for all supported stages;
+#   setStageRunning(RsmpIn/RsmpOut/UsLew, true) is a warning + no-op (not crash);
+#   HAVE_WDSP-gated: setRunning(true) channel state ON, cfir ON;
+#   HAVE_WDSP-gated: setRunning(false) channel state OFF, cfir OFF.
+#   (HAVE_WDSP tests use QSKIP — integration harness pending; no segfault.)
+#   Ports Thetis console.cs:29595, 29607 and cmaster.cs:522-527 [v2.10.3.13].
+#   Ports Thetis wdsp/channel.c:259-294 and wdsp/cfir.c:233-238 [v2.10.3.13].
+nereus_add_test(tst_tx_channel_running)
+

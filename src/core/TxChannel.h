@@ -73,6 +73,10 @@ warren@wpratt.com
 //   2026-04-26 — kMaxToneMag constant + setTuneTone() declaration added
 //                 by J.J. Boyd (KG4VCF) during 3M-1a Task C.3.
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-26 — setRunning(bool) / isRunning() / setStageRunning(Stage, bool)
+//                 added by J.J. Boyd (KG4VCF) during 3M-1a Task C.4 (channel
+//                 state + 3M-1a active-stage activation). AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -265,10 +269,91 @@ public:
                      double freqHz   = 0.0,
                      double magnitude = kMaxToneMag);
 
-    // (C.4 adds setRunning — do not add here.)
+    // ── Channel state (3M-1a C.4) ────────────────────────────────────────────
+    //
+    // Activate or deactivate the WDSP TXA channel.
+    //
+    // Calls `SetChannelState(channelId, on ? 1 : 0, on ? 0 : 1)`. The dmode
+    // (drain) convention matches Thetis console.cs:29595/29607 [v2.10.3.13]:
+    //   - Turn ON  (RX→TX): state=1, dmode=0  — immediate start, no flush
+    //   - Turn OFF (TX→RX): state=0, dmode=1  — drain in-flight samples before stop
+    //
+    // On `true`, also activates the one stage that defaults OFF in create_txa()
+    // but is required for the 3M-1a TUNE-carrier flow under Protocol 2:
+    //   - cfir (stage 28, custom CIC FIR filter): SetTXACFIRRun(ch, 1)
+    //     * From Thetis cmaster.cs:522-527 [v2.10.3.13]: enabled for P2, disabled
+    //       for P1 (USB protocol). NereusSDR activates it unconditionally here;
+    //       3M-1b will gate it on the active protocol when P1/P2 divergence matters.
+    //
+    // Stages NOT needing explicit activation:
+    //   - rsmpin (stage 0): run flag managed internally by WDSP's TXAResCheck()
+    //     (wdsp/TXA.c:809-817 [v2.10.3.13]); set to 1 iff in_rate != dsp_rate.
+    //     No public SetTXA*Run API exists for rsmpin/rsmpout — WDSP controls them.
+    //   - rsmpout (stage 29): same — TXAResCheck() manages the run flag.
+    //   - bp0 / alc / sip1 / alcmeter / outmeter: all default ON (run=1) in create_txa().
+    //   - gen1: activated separately by setTuneTone(true).
+    //   - uslew: always-on inside the xuslew state machine (no run flag).
+    //
+    // On `false`, deactivates cfir so it does not process during RX.
+    //
+    // Scope (3M-1a C.4): this method manages the minimum 3M-1a signal path.
+    // 3M-1b will activate panel + micmeter for full SSB mic path; 3M-3a
+    // activates speech-processing chain; 3M-4 activates calcc/iqc for PureSignal.
+    //
+    // From Thetis console.cs:29595 [v2.10.3.13] — TX-on callsite.
+    // From Thetis console.cs:29607 [v2.10.3.13] — TX-off callsite.
+    //   space_mox_delay: default 0 // from PSDR MW0LGE  [console.cs:29603]
+    // From Thetis cmaster.cs:522-527 [v2.10.3.13] — cfir P2 activation.
+    // From Thetis wdsp/channel.c:259-294 [v2.10.3.13] — SetChannelState impl.
+    // From Thetis wdsp/cfir.c:233-238 [v2.10.3.13] — SetTXACFIRRun impl.
+    void setRunning(bool on);
+
+    /// Returns whether the WDSP TXA channel state is currently ON.
+    ///
+    /// Reflects the value set by the last call to setRunning(). Initialises
+    /// to false (channel created stopped).  Does NOT query WDSP directly —
+    /// it mirrors the local m_running flag, which is sufficient for 3M-1a
+    /// single-threaded use (main thread is the only writer in 3M-1a).
+    bool isRunning() const noexcept { return m_running; }
+
+    // ── Per-stage Run override (3M-1a C.4) ──────────────────────────────────
+    //
+    // Activate or deactivate a single TXA pipeline stage by name.
+    //
+    // Callers that need to enable or disable individual stages outside the
+    // 3M-1a minimum-path bulk-activate (handled by setRunning()) may use
+    // this method directly.  3M-1b will use it to activate Stage::Panel and
+    // Stage::MicMeter; 3M-3a will use it for Stage::Eqp, Stage::Leveler,
+    // Stage::Compressor, etc.
+    //
+    // Supported stages and their WDSP APIs (from wdsp/ sources [v2.10.3.13]):
+    //   Gen0        → SetTXAPreGenRun        (gen.c:636-641)
+    //   Gen1        → SetTXAPostGenRun       (gen.c:784-789)
+    //   Panel       → SetTXAPanelRun         (patchpanel.c:201-206)
+    //   PhRot       → SetTXAPHROTRun         (iir.c:665-670)
+    //   AmSq        → SetTXAAMSQRun          (amsq.c:246-252)
+    //   Eqp         → SetTXAEQRun            (eq.c:742-747)
+    //   Compressor  → SetTXACompressorRun    (compress.c:100-105)
+    //   OsCtrl      → SetTXAosctrlRun        (osctrl.c:142-147)
+    //   Cfir        → SetTXACFIRRun          (cfir.c:233-238)
+    //   CfComp      → SetTXACFCOMPRun        (cfcomp.c:632-637)
+    //
+    // Unsupported stages (no public WDSP Run API, or managed internally):
+    //   RsmpIn / RsmpOut: run managed by TXAResCheck() — not externally settable.
+    //   UsLew:            no run flag; channel-upslew driven.
+    //   MicMeter / EqMeter / LvlrMeter / CfcMeter / AlcMeter / CompMeter /
+    //   OutMeter / Sip1 / Calcc / Iqc / Alc / Bp0 / Bp1 / Bp2 / AmMod / FmMod:
+    //     use SetTXA*Run variants added in later tasks (3M-1b, 3M-3a, 3M-4)
+    //     or remain always-on for the lifetime of the 3M-1a session.
+    //
+    // For unsupported stages this method logs a warning and is a no-op.
+    //
+    // From Thetis wdsp/ source files [v2.10.3.13] — individual Set*Run APIs.
+    void setStageRunning(Stage s, bool run);
 
 private:
     const int m_channelId;
+    bool m_running{false};
 };
 
 } // namespace NereusSDR
