@@ -50,6 +50,8 @@ namespace NereusSDR { class IoBoardHl2; }                // forward decl — ful
 namespace NereusSDR { class HermesLiteBandwidthMonitor; }// forward decl — full header in .cpp
 
 #include <memory>
+#include <array>
+#include <cstdint>
 #include <QUdpSocket>
 #include <QTimer>
 #include <QElapsedTimer>
@@ -277,6 +279,32 @@ private:
     quint8  m_alexHpfBits{0};     // Bank 10 C3: HPF select bits
     quint8  m_alexLpfBits{0};     // Bank 10 C4: LPF select bits
 
+    // ── TX I/Q ring buffer (3M-1a E.2) ───────────────────────────────────────
+    // Pre-allocated to hold kTxIqBufSamples×8 bytes.  Each slot is one
+    // P1 wire sample: [mic_L hi][mic_L lo][mic_R hi][mic_R lo]
+    //                 [I hi][I lo][Q hi][Q lo]  — big-endian int16.
+    //
+    // Layout ported from deskhpsdr/src/old_protocol.c:2421-2458
+    // [@HEAD-2026-04-25] (old_protocol_iq_samples / TXRING_AUDIO_SAMPLE_BYTES).
+    //
+    // One EP2 frame carries 2×63 = 126 samples.  kTxIqBufSamples is sized
+    // to match deskhpsdr's TXRING_MAX_BLOCKS×126 (32 blocks) giving ~21 msec
+    // of headroom at 48 kHz before the producer stalls.
+    // Source: deskhpsdr/src/old_protocol.c:460-461 [@HEAD-2026-04-25]
+    //   TXRING_AUDIO_FRAMES_PER_BLOCK 126
+    //   TXRING_MAX_BLOCKS             32
+    static constexpr int kTxIqBufSamples = 126 * 32;  // 4032 samples, 32256 bytes
+    static constexpr int kTxIqBytesPerSample = 8;
+    // Pre-allocated — no heap in the hot path.
+    std::array<quint8, kTxIqBufSamples * kTxIqBytesPerSample> m_txIqBuf{};
+    int m_txIqWritePos{0};  // next write offset in bytes (wraps at buf size)
+    int m_txIqReadPos{0};   // next read offset in bytes  (wraps at buf size)
+    int m_txIqCount{0};     // number of buffered samples (not bytes)
+
+    // Float→int16 + EP2 zone fill helper.
+    // Returns true if 63 samples were available and written, false if underrun.
+    bool fillTxZone(quint8* zone63) noexcept;
+
     // Hardware config from profile
     int     m_txDrive{0};
     bool    m_paEnabled{false};
@@ -365,6 +393,34 @@ public:
     // hand-crafted 1032-byte ep6 datagram and assert paTelemetryUpdated()
     // emits the expected raw values.  Phase 3P-H Task 4.
     void parseEp6FrameForTest(const QByteArray& pkt) { parseEp6Frame(pkt); }
+
+    // ── 3M-1a E.2 TX I/Q test seams ─────────────────────────────────────────
+    // sendTxIqAndCapture — feeds n interleaved float I/Q samples through the
+    // ring buffer, drains one EP2 frame's worth (126 samples), and returns the
+    // 1032-byte Metis frame as a QByteArray for wire-byte assertions.
+    // The socket send is skipped (m_socket is null in tests), but frame
+    // composition still happens normally so byte layout can be asserted.
+    QByteArray sendTxIqAndCapture(const float* iq, int n) {
+        sendTxIq(iq, n);
+        // Build a full EP2 frame and fill both TX zones from the ring buffer.
+        quint8 frame[1032];
+        memset(frame, 0, sizeof(frame));
+        frame[0] = 0xEF; frame[1] = 0xFE; frame[2] = 0x01; frame[3] = 0x02;
+        const quint32 seq = m_epSendSeq++;
+        frame[4] = quint8((seq >> 24) & 0xFF);
+        frame[5] = quint8((seq >> 16) & 0xFF);
+        frame[6] = quint8((seq >>  8) & 0xFF);
+        frame[7] = quint8( seq        & 0xFF);
+        frame[8] = 0x7F; frame[9] = 0x7F; frame[10] = 0x7F;
+        // C&C bytes: zeros in test context (no codec wired)
+        fillTxZone(frame + 16);
+        frame[520] = 0x7F; frame[521] = 0x7F; frame[522] = 0x7F;
+        fillTxZone(frame + 528);
+        return QByteArray(reinterpret_cast<const char*>(frame), 1032);
+    }
+
+    // Access buffer count for buffer-state tests.
+    int txIqBufferedSamplesForTest() const { return m_txIqCount; }
 #endif
 };
 

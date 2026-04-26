@@ -679,6 +679,16 @@ nereus_add_test(tst_radio_connection_watchdog)
 # Cite: 3M-1a plan Task E.1; Master design §5.1.4.
 nereus_add_test(tst_radio_connection_tx_iface)
 
+# ── Phase 3M-1a Task E.2: P1 sendTxIq wire-byte snapshot ─────────────────
+# 9 tests verify the EP2 TX I/Q zone byte layout for P1RadioConnection:
+#   - Unit pulse (I=1.0 → 0x7FFF), subframe 1 zone offset, partial fill,
+#     multi-frame sequence increment, sign/clamp, over-range clamp,
+#     underrun silence, mic bytes zero (NullMicSource), zone-0 last sample.
+# Porting from deskhpsdr/src/old_protocol.c:2421-2458, transmitter.c:1541
+# [@HEAD-2026-04-25].
+nereus_add_test(tst_p1_tx_iq_wire)
+target_compile_definitions(tst_p1_tx_iq_wire PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-0 Task 6: RadioModel::paTripped() live state + Ganymede handler ─
 # 5 tests cover initial state (clear), trip latch (non-zero tripState → true),
 # latch reset (resetGanymedePa()), absent-PA clear (setGanymedePresent(false)),

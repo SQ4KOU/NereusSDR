@@ -866,22 +866,133 @@ void P1RadioConnection::setWatchdogEnabled(bool enabled)
 }
 
 // ---------------------------------------------------------------------------
-// sendTxIq — 3M-1a Task E.1 (stub; filled in by Task E.2)
+// sendTxIq — 3M-1a Task E.2
 //
-// P1 wire format: TX I/Q samples are written into the two 504-byte
-// HPSDR sample zones within each 1032-byte EP2 frame, interleaved
-// with the 5-byte C&C subframe per the Metis spec.
+// Porting from deskhpsdr/src/old_protocol.c:2373-2459 [@HEAD-2026-04-25]
+// (old_protocol_iq_samples) — original C logic:
 //
-// TODO [3M-1a E.2]: implement the EP2 TX I/Q write path.
-// Cite: pre-code review §7.1; deskhpsdr/src/old_protocol.c:2900-2950.
+//   Per sample (8 bytes each, TXRING_AUDIO_SAMPLE_BYTES = 8):
+//     TXRINGBUF[iptr++] = left_audio_sample >> 8;   // mic L hi
+//     TXRINGBUF[iptr++] = left_audio_sample;         // mic L lo
+//     TXRINGBUF[iptr++] = right_audio_sample >> 8;   // mic R hi
+//     TXRINGBUF[iptr++] = right_audio_sample;         // mic R lo
+//     TXRINGBUF[iptr++] = isample >> 8;               // I hi
+//     TXRINGBUF[iptr++] = isample;                    // I lo
+//     TXRINGBUF[iptr++] = qsample >> 8;               // Q hi
+//     TXRINGBUF[iptr++] = qsample;                    // Q lo
+//
+//   Float→int16 gain (old protocol = 16-bit, not 24-bit):
+//     gain = 32767.0  (deskhpsdr/src/transmitter.c:1541 [@HEAD-2026-04-25])
+//     isample = (long)(is * gain + (is >= 0.0 ? 0.5 : -0.5))
+//
+// Accepts n interleaved float32 I/Q pairs [I0,Q0, I1,Q1, ...] from the
+// WDSP TX channel output.  Converts each pair to 8 wire bytes and appends
+// them to the ring buffer m_txIqBuf.  If the buffer is full, excess samples
+// are dropped with a debug log (matches deskhpsdr overflow path).
+//
+// The EP2 pacer (onEp2PacerTick → sendCommandFrame) drains 63+63 = 126
+// samples per frame call via fillTxZone().
+//
+// Cite: deskhpsdr/src/old_protocol.c:458-463 [@HEAD-2026-04-25]
+//   TXRING_AUDIO_SAMPLE_BYTES   8
+//   TXRING_AUDIO_FRAMES_PER_BLOCK 126  — one SDR block (= two EP2 subframes)
 // ---------------------------------------------------------------------------
-void P1RadioConnection::sendTxIq(const float* /*iq*/, int /*n*/)
+void P1RadioConnection::sendTxIq(const float* iq, int n)
 {
-    // TODO [3M-1a E.2]: write TX I/Q samples into the EP2 frame zones.
-    //   Guard n <= 0 (and iq == nullptr) before dereferencing —
-    //   the zero-samples regression test in tst_radio_connection_tx_iface
-    //   relies on this safety.
-    qCDebug(lcConnection) << "P1: sendTxIq called before E.2 wired — samples dropped";
+    if (n <= 0 || iq == nullptr) { return; }
+
+    // From deskhpsdr/src/transmitter.c:1541 [@HEAD-2026-04-25]
+    //   gain = 32767.0;  // 16 bit (ORIGINAL_PROTOCOL)
+    static constexpr float kGain = 32767.0f;
+
+    static constexpr int kBufBytes = kTxIqBufSamples * kTxIqBytesPerSample;
+
+    for (int k = 0; k < n; ++k) {
+        // Ring-buffer full: drop sample, matching deskhpsdr overflow path.
+        if (m_txIqCount >= kTxIqBufSamples) {
+            qCDebug(lcConnection) << "P1 TX I/Q ring buffer overflow — dropping sample";
+            break;
+        }
+
+        const float fI = iq[k * 2];
+        const float fQ = iq[k * 2 + 1];
+
+        // Float → int16 conversion.
+        // From deskhpsdr/src/transmitter.c:1787-1788 [@HEAD-2026-04-25]
+        //   isample = (long)(is * gain + (is >= 0.0 ? 0.5 : -0.5));
+        //   qsample = (long)(qs * gain + (qs >= 0.0 ? 0.5 : -0.5));
+        auto toInt16 = [](float v) -> int16_t {
+            const float scaled = v * kGain + (v >= 0.0f ? 0.5f : -0.5f);
+            if (scaled >= 32767.0f)  { return  32767; }
+            if (scaled <= -32767.0f) { return -32767; }
+            return static_cast<int16_t>(scaled);
+        };
+        const int16_t iSample = toInt16(fI);
+        const int16_t qSample = toInt16(fQ);
+
+        // Write 8 bytes: [mic_L hi][mic_L lo][mic_R hi][mic_R lo][I hi][I lo][Q hi][Q lo]
+        // From deskhpsdr/src/old_protocol.c:2429-2458 [@HEAD-2026-04-25]
+        //   mic bytes zero — NullMicSource (3M-1b will fill them)
+        int wp = m_txIqWritePos;
+        m_txIqBuf[wp++] = 0;                                    // mic_L hi
+        m_txIqBuf[wp++] = 0;                                    // mic_L lo
+        m_txIqBuf[wp++] = 0;                                    // mic_R hi
+        m_txIqBuf[wp++] = 0;                                    // mic_R lo
+        m_txIqBuf[wp++] = static_cast<quint8>((iSample >> 8) & 0xFF);  // I hi
+        m_txIqBuf[wp++] = static_cast<quint8>( iSample       & 0xFF);  // I lo
+        m_txIqBuf[wp++] = static_cast<quint8>((qSample >> 8) & 0xFF);  // Q hi
+        m_txIqBuf[wp++] = static_cast<quint8>( qSample       & 0xFF);  // Q lo
+        if (wp >= kBufBytes) { wp = 0; }
+        m_txIqWritePos = wp;
+        ++m_txIqCount;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// fillTxZone
+//
+// Drains exactly 63 samples from the TX I/Q ring buffer into a 504-byte EP2
+// TX data zone (63 × 8 bytes = 504 bytes).  If fewer than 63 samples are
+// buffered, the zone is zero-filled (silence — matches deskhpsdr behaviour
+// when the ring buffer underruns).
+//
+// Called from sendCommandFrame() for each of the two 504-byte zones in the
+// 1032-byte Metis EP2 frame ([16..519] and [528..1031]).
+//
+// Cite: deskhpsdr/src/old_protocol.c:545-549 [@HEAD-2026-04-25]
+//   memcpy(output_buffer + 8, &TXRINGBUF[out], 504);
+//   ozy_send_buffer();
+//   memcpy(output_buffer + 8, &TXRINGBUF[out + 504], 504);
+//   ozy_send_buffer();
+//
+// Returns true when samples were available, false on underrun.
+// ---------------------------------------------------------------------------
+bool P1RadioConnection::fillTxZone(quint8* zone63) noexcept
+{
+    static constexpr int kSamplesPerZone = 63;
+    static constexpr int kBufBytes       = kTxIqBufSamples * kTxIqBytesPerSample;
+
+    if (m_txIqCount < kSamplesPerZone) {
+        // Underrun — zero-fill the zone (silence).  zone63 is already zeroed
+        // by sendCommandFrame()'s memset, so no explicit fill is needed.
+        return false;
+    }
+
+    for (int i = 0; i < kSamplesPerZone; ++i) {
+        int rp = m_txIqReadPos;
+        zone63[i * kTxIqBytesPerSample + 0] = m_txIqBuf[rp++]; // mic_L hi
+        zone63[i * kTxIqBytesPerSample + 1] = m_txIqBuf[rp++]; // mic_L lo
+        zone63[i * kTxIqBytesPerSample + 2] = m_txIqBuf[rp++]; // mic_R hi
+        zone63[i * kTxIqBytesPerSample + 3] = m_txIqBuf[rp++]; // mic_R lo
+        zone63[i * kTxIqBytesPerSample + 4] = m_txIqBuf[rp++]; // I hi
+        zone63[i * kTxIqBytesPerSample + 5] = m_txIqBuf[rp++]; // I lo
+        zone63[i * kTxIqBytesPerSample + 6] = m_txIqBuf[rp++]; // Q hi
+        zone63[i * kTxIqBytesPerSample + 7] = m_txIqBuf[rp++]; // Q lo
+        if (rp >= kBufBytes) { rp = 0; }
+        m_txIqReadPos = rp;
+    }
+    m_txIqCount -= kSamplesPerZone;
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1428,6 +1539,16 @@ void P1RadioConnection::sendCommandFrame()
 
     m_ccRoundRobinIdx++;
     if (m_ccRoundRobinIdx > maxBank) { m_ccRoundRobinIdx = 0; }
+
+    // 3M-1a E.2: fill the two 504-byte TX I/Q zones from the ring buffer.
+    // Each zone holds 63 samples × 8 bytes = 504 bytes.
+    // From deskhpsdr/src/old_protocol.c:545-549 [@HEAD-2026-04-25]:
+    //   memcpy(output_buffer + 8, &TXRINGBUF[out],       504); ozy_send_buffer();
+    //   memcpy(output_buffer + 8, &TXRINGBUF[out + 504], 504); ozy_send_buffer();
+    // frame[16..519]   = subframe 0 TX data zone (after 3-byte sync + 5-byte C&C)
+    // frame[528..1031] = subframe 1 TX data zone (after 3-byte sync + 5-byte C&C)
+    fillTxZone(frame + 16);
+    fillTxZone(frame + 528);
 
     QByteArray pkt(reinterpret_cast<const char*>(frame), 1032);
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_radioInfo.port);
