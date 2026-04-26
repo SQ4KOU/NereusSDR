@@ -1,3 +1,6 @@
+// no-port-check: NereusSDR-original unit-test file.  The "console.cs"
+// references below are cite comments documenting which Thetis lines each
+// assertion verifies; no Thetis logic is ported in this test file.
 // =================================================================
 // tests/tst_transmit_model_tune_power.cpp  (NereusSDR)
 // =================================================================
@@ -6,7 +9,7 @@
 //
 // Phase 3M-1a G.3.
 //
-// Source references:
+// Source references (cited for traceability; logic ported in TransmitModel.cpp):
 //   console.cs:12094 [v2.10.3.13]  — declaration of tunePower_by_band int[]
 //   console.cs:1819-1820 [v2.10.3.13] — initialisation to 50W per band
 //   console.cs:3087-3091 [v2.10.3.13] — save (pipe-delimited in Thetis;

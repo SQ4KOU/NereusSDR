@@ -217,6 +217,16 @@ void TransmitModel::load()
     }
     // Cite: console.cs:4904-4910 [v2.10.3.13] — Thetis pipe-delimited restore.
     // NereusSDR uses per-band scalar keys matching the AlexController pattern.
+    //
+    // Author-tag preservation (CLAUDE.md GPL rule): the upstream restore loop
+    // at console.cs:4906 [v2.10.3.13] carries
+    //   if (list.Length != (int)Band.LAST) continue; //[2.10.3.5]MW0LGE
+    // This is a length-mismatch guard against the pipe-delimited string format.
+    // The NereusSDR scalar-key path doesn't have a list-length to check (each
+    // band's value is read independently with its own default), so the guard
+    // has no direct equivalent.  The author tag is preserved here per the
+    // CLAUDE.md byte-for-byte rule:
+    //   //[2.10.3.5]MW0LGE  [original guard from console.cs:4906]
     auto& s = AppSettings::instance();
     const QString prefix =
         QStringLiteral("hardware/%1/tunePowerByBand/").arg(m_mac);
