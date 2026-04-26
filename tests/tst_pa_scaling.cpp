@@ -1,3 +1,7 @@
+// no-port-check: test file — verifies NereusSDR::safety::paScalingFor() +
+// computeAlexFwdPower() output values; the Thetis source reference is a
+// citation in the docstring, not a derivation claim. The ported functions
+// themselves are registered in THETIS-PROVENANCE.md.
 // =================================================================
 // tests/tst_pa_scaling.cpp  (NereusSDR)
 // =================================================================

@@ -676,4 +676,11 @@ nereus_add_test(tst_radio_model_pa_tripped)
 # Ports Thetis console.cs:25008-25072 [v2.10.3.13] (computeAlexFwdPower).
 nereus_add_test(tst_pa_scaling)
 
+# ── Phase 3M-0 Task 8: SpectrumWidget "HIGH SWR" overlay state ───────────────
+# Verifies setHighSwrOverlay(active, foldback) stores state, foldback flag
+# toggles independently, and repeated calls with same args are idempotent.
+# No pixel-diff — visual verification deferred to 3M-1a.
+# Mirrors Thetis display.cs:4183-4201 [v2.10.3.13].
+nereus_add_test(tst_spectrum_widget_highswr_overlay)
+
 
