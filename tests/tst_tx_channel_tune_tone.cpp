@@ -42,6 +42,11 @@ warren@wpratt.com
 //   2026-04-25 — New test for Phase 3M-1a Task C.3: TxChannel::setTuneTone()
 //                 PostGen (gen1) wiring. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-04-26 — C.3 fixup: updated maxToneMagConstantValue assertion to use
+//                 static_cast<double>(0.99999f) for byte-exact Thetis parity;
+//                 removed redundant defaultMagnitudeEqualsMaxToneMag test;
+//                 added QFAIL guards to HAVE_WDSP skeleton tests.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: Attribution for ported constants and logic lives in
@@ -70,13 +75,16 @@ private slots:
     // From Thetis console.cs:29954 [v2.10.3.13]:
     //   private const double MAX_TONE_MAG = 0.99999f; // why not 1?  clipping?
     //
-    // The value uses a float literal but is stored in a double field.
-    // NereusSDR preserves the value as 0.99999 (same precision as 0.99999f).
+    // kMaxToneMag mirrors Thetis MAX_TONE_MAG = 0.99999f widened to double,
+    // ~0.99998999641968.  The C# `f` suffix forces float precision first then
+    // widens to double on assignment; NereusSDR uses `0.99999f` to replicate
+    // the identical widening and keep the values byte-exact at runtime.
 
     void maxToneMagConstantValue() {
-        // kMaxToneMag must equal 0.99999 (from Thetis MAX_TONE_MAG = 0.99999f).
+        // kMaxToneMag mirrors Thetis MAX_TONE_MAG = 0.99999f widened to double,
+        // ~0.99998999641968.  Verify byte-exact match to the Thetis runtime value.
         // From Thetis console.cs:29954 [v2.10.3.13] — // why not 1?  clipping?
-        QVERIFY(std::abs(TxChannel::kMaxToneMag - 0.99999) < 1e-9);
+        QVERIFY(std::abs(TxChannel::kMaxToneMag - static_cast<double>(0.99999f)) < 1e-12);
     }
 
     void maxToneMagIsLessThanOne() {
@@ -88,15 +96,6 @@ private slots:
     void maxToneMagIsPositive() {
         // Sanity: magnitude must be positive.
         QVERIFY(TxChannel::kMaxToneMag > 0.0);
-    }
-
-    // ── Default-parameter contract ─────────────────────────────────────────
-
-    void defaultMagnitudeEqualsMaxToneMag() {
-        // setTuneTone has a default magnitude = kMaxToneMag.
-        // Verify the constant is usable as a default parameter value at compile time.
-        // (If kMaxToneMag is constexpr, this is guaranteed; the test documents it.)
-        QVERIFY(std::abs(TxChannel::kMaxToneMag - 0.99999) < 1e-9);
     }
 
     // ── Crash-safety (no HAVE_WDSP — stub path) ───────────────────────────
@@ -210,12 +209,14 @@ private slots:
         // WDSP struct: extern struct _txa txa[]; txa[ch].gen1.p->run
         // Note: if this test ever runs in an integration harness, add QSKIP
         // guard: if (txa[kTxChannelId].gen1.p == nullptr) QSKIP("channel not opened");
+        QFAIL("Integration harness not yet set up — implement assertions here before enabling HAVE_WDSP-gated tests.");
     }
 
     void wdsp_setTuneToneOff_clearsRunFlag() {
         // After setTuneTone(false), txa[ch].gen1.p->run must be 0.
         // From Thetis wdsp/gen.c:784-789 [v2.10.3.13] — SetTXAPostGenRun.
         // From Thetis console.cs:30040 [v2.10.3.13] — TXPostGenRun = 1/0.
+        QFAIL("Integration harness not yet set up — implement assertions here before enabling HAVE_WDSP-gated tests.");
     }
 #endif // HAVE_WDSP
 };

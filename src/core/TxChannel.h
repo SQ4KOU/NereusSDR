@@ -70,6 +70,9 @@ warren@wpratt.com
 //                 introspection) added by J.J. Boyd (KG4VCF) during 3M-1a
 //                 Task C.2, with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-04-26 — kMaxToneMag constant + setTuneTone() declaration added
+//                 by J.J. Boyd (KG4VCF) during 3M-1a Task C.3.
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -193,11 +196,17 @@ public:
     // From Thetis console.cs:29954 [v2.10.3.13]:
     //   private const double MAX_TONE_MAG = 0.99999f; // why not 1?  clipping?
     //
-    // Used as the default magnitude for setTuneTone().  The original Thetis
-    // constant is `float` literal (0.99999f) stored in a `double` field; we
-    // preserve the value exactly and keep the inline developer comment verbatim
-    // per the GPL attribution rule (CLAUDE.md "Inline comment preservation").
-    static constexpr double kMaxToneMag = 0.99999;  // why not 1?  clipping?
+    // NereusSDR mirrors the Thetis declaration byte-exactly: `0.99999f` widens
+    // to `double` on assignment, producing the same bit pattern Thetis stores
+    // at runtime (~0.99998999641968).  The C# `f` suffix forces float precision
+    // first then widens to double; using a bare double literal `0.99999` would
+    // store `0.99999000…`, differing from Thetis by ~1.4e-8.  Using `0.99999f`
+    // here reproduces the identical widening and keeps the values byte-exact.
+    //
+    // NOTE: If 3M-3a adds 2-TONE support and needs this value, move it to a
+    // shared WdspTuneConstants.h and include from both TxChannel.h and any
+    // new 2-TONE source. Today the constant has one owner; do not duplicate.
+    static constexpr double kMaxToneMag = 0.99999f;  // why not 1?  clipping?
 
     explicit TxChannel(int channelId, QObject* parent = nullptr);
     ~TxChannel() override;

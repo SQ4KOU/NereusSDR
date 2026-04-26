@@ -6,12 +6,18 @@
 //   Project Files/Source/Console/dsp.cs, original licence from Thetis source is included below
 //   Project Files/Source/Console/radio.cs, original licence from Thetis source is included below
 //   Project Files/Source/Console/HPSDR/specHPSDR.cs, original licence from Thetis source is included below
+//   Project Files/Source/wdsp/gen.c, original licence from Thetis source is included below
 //
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-04-26 — SetTXAPostGen* declarations (4 functions: Mode, ToneMag,
+//                 ToneFreq, Run) added by J.J. Boyd (KG4VCF) during 3M-1a
+//                 Task C.3 — TxChannel::setTuneTone WDSP wiring. Signatures
+//                 match wdsp/gen.c:784-813 [v2.10.3.13]. AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
