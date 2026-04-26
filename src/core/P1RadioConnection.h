@@ -485,6 +485,45 @@ public:
 
     // Access buffer count for buffer-state tests.
     int txIqBufferedSamplesForTest() const { return m_txIqCount.load(std::memory_order_acquire); }
+
+    // ── 3M-1a E.5 RUNSTOP watchdog wire test seams ───────────────────────────
+    // metisStartPacketForTest — compose the 64-byte RUNSTOP start packet that
+    // sendMetisStart() would send (without a live socket), so unit tests can
+    // assert the watchdog bit (pkt[3] bit 7) without needing a real UDP socket.
+    //
+    // Wire format: pkt[3] = run_bits | watchdog_disable_bit
+    //   run_bits:     0x01 (IQ only) or 0x02 (IQ + mic)
+    //   watchdog_bit: 0x00 if m_watchdogEnabled == true, 0x80 if false
+    //
+    // Source: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:200-203, 399-400
+    //   eth_data[0] = run; eth_data[7] = watchdog_disable (1=disabled, 0=enabled)
+    QByteArray metisStartPacketForTest(bool iqAndMic) const {
+        QByteArray pkt(64, '\0');
+        pkt[0] = static_cast<char>(0xEF);
+        pkt[1] = static_cast<char>(0xFE);
+        pkt[2] = static_cast<char>(0x04);
+        const quint8 runBits     = iqAndMic ? quint8(0x02) : quint8(0x01);
+        const quint8 watchdogBit = m_watchdogEnabled ? quint8(0x00) : quint8(0x80);
+        pkt[3] = static_cast<char>(runBits | watchdogBit);
+        return pkt;
+    }
+
+    // metisStopPacketForTest — compose the 64-byte RUNSTOP stop packet (run = 0).
+    //
+    // Wire format: pkt[3] = watchdog_disable_bit (run bits = 0)
+    //   0x00 if m_watchdogEnabled == true, 0x80 if false
+    //
+    // Source: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400
+    //   watchdog_disable <= eth_data[7]; // Bit 7 can be used to disable watchdog
+    QByteArray metisStopPacketForTest() const {
+        QByteArray pkt(64, '\0');
+        pkt[0] = static_cast<char>(0xEF);
+        pkt[1] = static_cast<char>(0xFE);
+        pkt[2] = static_cast<char>(0x04);
+        const quint8 watchdogBit = m_watchdogEnabled ? quint8(0x00) : quint8(0x80);
+        pkt[3] = static_cast<char>(watchdogBit);
+        return pkt;
+    }
 #endif
 };
 

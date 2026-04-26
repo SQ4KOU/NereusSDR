@@ -229,8 +229,18 @@ protected:
 
     // Shared boolean state for setWatchdogEnabled / isWatchdogEnabled.
     // Both P1 and P2 overrides read/write this field.
-    // 3M-0: state-tracking only; wire emit deferred to 3M-1a.
-    bool m_watchdogEnabled{false};
+    //
+    // Default TRUE: HL2 firmware (dsopenhpsdr1.v:399-400) interprets RUNSTOP
+    // byte bit 7 as watchdog_disable (1 = disabled, 0 = enabled). When this
+    // field is true, sendMetisStart/sendMetisStop write bit 7 = 0 (watchdog
+    // enabled), matching deskhpsdr's implicit behavior (buffer[3] = command
+    // with no bit-7 OR → bit 7 = 0 → watchdog active by default).
+    //
+    // 3M-0 used false here (bug): first sendMetisStart would have written
+    // bit 7 = 1 → watchdog disabled on connect. Fixed in 3M-1a Task E.5.
+    // From deskhpsdr/src/old_protocol.c:3811 [@120188f]:
+    //   buffer[3] = command;  // 0x01 start / 0x00 stop — bit 7 never set
+    bool m_watchdogEnabled{true};
 
     // Shared state for setTrxRelay / isTrxRelayEngaged (3M-1a Task E.1).
     // true = TX path engaged (bit 7 of P1 C3 bank 6 written as 0 — inverted

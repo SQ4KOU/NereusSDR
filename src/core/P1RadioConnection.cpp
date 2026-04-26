@@ -871,23 +871,30 @@ void P1RadioConnection::setAntennaRouting(AntennaRouting r)
 }
 
 // ---------------------------------------------------------------------------
-// setWatchdogEnabled — Phase 3M-0 Task 5
+// setWatchdogEnabled — 3M-1a Task E.5
 //
 // Records the requested watchdog enable state in the base-class
-// m_watchdogEnabled field (shared with P2).
+// m_watchdogEnabled field (shared with P2). The wire bit is emitted by
+// sendMetisStart() and sendMetisStop() on the next start/stop cycle — not
+// immediately — matching deskhpsdr behavior (no re-send on toggle).
 //
-// From Thetis NetworkIOImports.cs:197-198 [v2.10.3.13]:
-//   [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
+// Wire format (HL2 firmware primary cite):
+//   Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400
+//     watchdog_disable <= eth_data[7]; // Bit 7 can be used to disable watchdog
+//   Inverted semantic: bit 7 = 1 means disabled, bit 7 = 0 means enabled.
+//
+// Thetis call-site (setup.cs:17986 [v2.10.3.13]):
+//   NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
+//   chkNetworkWDT.Checked == true => value 1 => watchdog ENABLED => bit 7 = 0.
+//
+// Thetis DllImport (NetworkIOImports.cs:197-198 [v2.10.3.13]):
 //   public static extern void SetWatchdogTimer(int bits);
 //
-// The callsite (setup.cs:17986 [v2.10.3.13]):
-//   NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
-//
-// TODO [3M-1a]: emit the watchdog wire bit on the next outbound C&C
-// frame. Bit position is currently unknown — Thetis dispatches via
-// ChannelMaster.dll (closed source). Identify via wire capture or
-// HL2-firmware reading; until then this is a state-tracking stub.
-// Cite: NetworkIOImports.cs:197-198 [v2.10.3.13] (DllImport entry).
+// deskhpsdr reference (deskhpsdr/src/old_protocol.c:3811 [@120188f]):
+//   buffer[3] = command;  // no bit-7 OR -- watchdog always enabled (bit 7 = 0)
+//   deskhpsdr has no user-configurable watchdog disable; it never re-sends
+//   RUNSTOP on a watchdog toggle.  NereusSDR matches: state stored here,
+//   picked up on the next sendMetisStart() / sendMetisStop() call.
 // ---------------------------------------------------------------------------
 void P1RadioConnection::setWatchdogEnabled(bool enabled)
 {
@@ -895,6 +902,9 @@ void P1RadioConnection::setWatchdogEnabled(bool enabled)
         return;
     }
     m_watchdogEnabled = enabled;
+    // No immediate re-send: matches deskhpsdr pattern (no standalone RUNSTOP
+    // packet for watchdog toggle). The new state is included in the next
+    // sendMetisStart() or sendMetisStop() call.
 }
 
 // ---------------------------------------------------------------------------
@@ -1530,7 +1540,34 @@ void P1RadioConnection::sendMetisStart(bool iqAndMic)
     pkt[0] = static_cast<char>(0xEF);
     pkt[1] = static_cast<char>(0xFE);
     pkt[2] = static_cast<char>(0x04);
-    pkt[3] = iqAndMic ? static_cast<char>(0x02) : static_cast<char>(0x01);
+
+    // RUNSTOP byte (pkt[3]) encodes three independent fields from the same byte:
+    //   eth_data[0] = run         (1 = start IQ/mic stream)
+    //   eth_data[1] = wide_spectrum (iqAndMic path sets 0x02)
+    //   eth_data[7] = watchdog_disable (1 = disabled, 0 = enabled -- inverted)
+    //
+    // Source: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:200-203
+    //   RUNSTOP: begin
+    //     run_next = eth_data[0];
+    //     wide_spectrum_next = eth_data[1];
+    //     runstop_watchdog_valid = 1'b1;
+    //   end
+    //
+    // Source: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400
+    //   watchdog_disable <= eth_data[7]; // Bit 7 can be used to disable watchdog
+    //
+    // deskhpsdr reference (deskhpsdr/src/old_protocol.c:3811 [@120188f]):
+    //   buffer[3] = command;  // 0x01 start -- bit 7 = 0 implicitly (watchdog enabled)
+    //   deskhpsdr never sets bit 7; watchdog is always enabled there.
+    //
+    // Thetis (setup.cs:17986 [v2.10.3.13]):
+    //   NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
+    //   When checked (enabled): passes 1 -> bit 7 = 0 (not disabled).
+    const quint8 runBits     = iqAndMic ? quint8(0x02) : quint8(0x01);
+    // From Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400 [@hl2-gateware]:
+    //   watchdog_disable <= eth_data[7]; -- 1=disabled, 0=enabled (inverted)
+    const quint8 watchdogBit = m_watchdogEnabled ? quint8(0x00) : quint8(0x80);
+    pkt[3] = static_cast<char>(runBits | watchdogBit);
 
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_radioInfo.port);
 }
@@ -1552,7 +1589,21 @@ void P1RadioConnection::sendMetisStop()
     pkt[0] = static_cast<char>(0xEF);
     pkt[1] = static_cast<char>(0xFE);
     pkt[2] = static_cast<char>(0x04);
-    pkt[3] = static_cast<char>(0x00);
+
+    // Stop packet (run = 0).  Watchdog bit still emitted for consistency:
+    //   eth_data[0] = 0 (stop)
+    //   eth_data[7] = watchdog_disable (inverted -- see sendMetisStart for full cite)
+    //
+    // Source: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400
+    //   watchdog_disable <= eth_data[7]; // Bit 7 can be used to disable watchdog
+    //
+    // deskhpsdr reference (deskhpsdr/src/old_protocol.c:3811 [@120188f]):
+    //   buffer[3] = command;  // 0x00 stop -- bit 7 = 0 implicitly
+    //   deskhpsdr doesn't set bit 7 on stop either; NereusSDR emits it
+    //   explicitly so the watchdog state is preserved if the radio re-reads
+    //   the last RUNSTOP byte on reconnect.
+    const quint8 watchdogBit = m_watchdogEnabled ? quint8(0x00) : quint8(0x80);
+    pkt[3] = static_cast<char>(watchdogBit); // run = 0; watchdog bit set if disabled
 
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_radioInfo.port);
 }

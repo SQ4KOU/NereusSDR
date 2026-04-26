@@ -662,11 +662,12 @@ nereus_add_test(tst_swr_protection_controller)
 # Ports Thetis console.cs:25801-25839 [v2.10.3.13] (PollTXInhibit loop).
 nereus_add_test(tst_tx_inhibit_monitor)
 
-# ── Phase 3M-0 Task 5: setWatchdogEnabled(bool) stub on RadioConnection ──────
-# 8 tests assert boolean state-tracking only — NO wire-format assertions.
-# Bit position is unknown (inside Thetis closed-source ChannelMaster.dll);
-# wire emit deferred to 3M-1a. API mirrors NetworkIOImports.cs:197-198
-# [v2.10.3.13] (DllImport SetWatchdogTimer entry point).
+# ── Phase 3M-0 Task 5 (updated 3M-1a E.5): setWatchdogEnabled(bool) ──────────
+# 8 tests assert boolean state-tracking on RadioConnection (P1 + P2).
+# Default changed from false to true in 3M-1a E.5 (see RadioConnection.h).
+# Wire-format assertions (RUNSTOP pkt[3] bit 7) are in tst_p1_watchdog_wire.
+# API mirrors NetworkIOImports.cs:197-198 [v2.10.3.13] (DllImport SetWatchdogTimer).
+# HL2 cite: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400.
 nereus_add_test(tst_radio_connection_watchdog)
 
 # ── Phase 3M-1a Task E.1: TX virtual interface on RadioConnection ──────────
@@ -724,6 +725,22 @@ target_compile_definitions(tst_p1_mox_wire PRIVATE NEREUS_BUILD_TESTS)
 # Latent bug fixed: prior code wrote (m_paEnabled ? 0x80 : 0) — INVERTED.
 nereus_add_test(tst_p1_trx_relay_wire)
 target_compile_definitions(tst_p1_trx_relay_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1a Task E.5: P1 RUNSTOP watchdog wire-byte snapshot ─────────────
+# 12 tests assert that pkt[3] bit 7 of the RUNSTOP packet correctly encodes
+# m_watchdogEnabled (inverted: 0=enabled, 1=disabled) per HL2 firmware.
+#
+# Wire cite: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400
+#   watchdog_disable <= eth_data[7]; // Bit 7 can be used to disable watchdog
+#
+# deskhpsdr reference: deskhpsdr/src/old_protocol.c:3811 [@120188f]
+#   buffer[3] = command; // no bit-7 OR -- watchdog always enabled implicitly
+#
+# Default changed: m_watchdogEnabled{false} -> {true} in RadioConnection.h
+# so the first sendMetisStart() writes bit 7 = 0 (watchdog active), matching
+# deskhpsdr implicit behavior.
+nereus_add_test(tst_p1_watchdog_wire)
+target_compile_definitions(tst_p1_watchdog_wire PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3M-0 Task 6: RadioModel::paTripped() live state + Ganymede handler ─
 # 5 tests cover initial state (clear), trip latch (non-zero tripState → true),
