@@ -85,6 +85,9 @@
 #include "core/RadioDiscovery.h"
 #include "core/RadioConnection.h"
 #include "core/HardwareProfile.h"
+#include "core/safety/SwrProtectionController.h"
+#include "core/safety/TxInhibitMonitor.h"
+#include "core/safety/BandPlanGuard.h"
 
 #include <QObject>
 #include <QString>
@@ -190,6 +193,16 @@ public:
     // Backs CalibrationTab UI and P2RadioConnection::hzToPhaseWord(). Phase 3P-G.
     const CalibrationController& calibrationController()        const { return m_calController; }
     CalibrationController&       calibrationControllerMutable()       { return m_calController; }
+
+    // Phase 3M-0 Task 17: safety controller accessors.
+    // SwrProtectionController and TxInhibitMonitor are QObject-owned by RadioModel.
+    // BandPlanGuard is a plain value class (no Qt parent).
+    safety::SwrProtectionController& swrProt() noexcept { return m_swrProt; }
+    const safety::SwrProtectionController& swrProt() const noexcept { return m_swrProt; }
+    safety::TxInhibitMonitor& txInhibit() noexcept { return m_txInhibit; }
+    const safety::TxInhibitMonitor& txInhibit() const noexcept { return m_txInhibit; }
+    safety::BandPlanGuard& bandPlan() noexcept { return m_bandPlan; }
+    const safety::BandPlanGuard& bandPlan() const noexcept { return m_bandPlan; }
 
     // Sub-models
     MeterModel&       meterModel()       { return m_meterModel; }
@@ -405,6 +418,15 @@ private:
     // Sub-models
     MeterModel    m_meterModel;
     TransmitModel m_transmitModel;
+
+    // Phase 3M-0 Task 17: PA safety controllers.
+    // Declared AFTER m_transmitModel so the ingest lambda can read
+    // m_transmitModel.isTune() safely at any point post-construction.
+    // SwrProtectionController and TxInhibitMonitor are QObject children
+    // (parent=this); BandPlanGuard is a plain value class.
+    safety::SwrProtectionController m_swrProt{this};
+    safety::TxInhibitMonitor        m_txInhibit{this};
+    safety::BandPlanGuard           m_bandPlan;
 
     // OC matrix — per-band × per-pin × {RX,TX} bit assignments.
     // Owned here so both OcOutputsTab UI and P1/P2 codec layer read

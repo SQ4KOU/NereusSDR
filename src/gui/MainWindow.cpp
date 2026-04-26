@@ -891,6 +891,30 @@ void MainWindow::buildUI()
             }
         });
     });
+
+    // ── Phase 3M-0 Task 17: safety controller → status-bar wiring ────────────
+    //
+    // Wire PA Fwd/Rev/SWR telemetry into MeterPoller's cache so PA power
+    // meter items (MeterPoller::setRadioStatus) receive live data as
+    // RadioStatus::powerChanged fires. Called here (after poller creation)
+    // so the connection outlives the poller's lifetime.
+    m_meterPoller->setRadioStatus(&m_radioModel->radioStatus());
+
+    // Ganymede PA-trip badge: RadioModel::paTrippedChanged → setPaTripped.
+    // setPaTripped() was added in Task 14 and updates m_paStatusBadge text
+    // and colour atomically.
+    connect(m_radioModel, &RadioModel::paTrippedChanged,
+            this, &MainWindow::setPaTripped);
+
+    // TX Inhibit pill: TxInhibitMonitor::txInhibitedChanged → setTxInhibited.
+    // setTxInhibited() was added in Task 14 and toggles m_txInhibitLabel
+    // visibility. The Source parameter is ignored by the UI slot (the pill
+    // is binary: visible or hidden).
+    connect(&m_radioModel->txInhibit(),
+            &safety::TxInhibitMonitor::txInhibitedChanged,
+            this, [this](bool inhibited, safety::TxInhibitMonitor::Source /*source*/) {
+        setTxInhibited(inhibited);
+    });
 }
 
 void MainWindow::rebuildEditContainerSubmenu()

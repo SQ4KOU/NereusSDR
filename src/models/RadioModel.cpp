@@ -530,6 +530,64 @@ RadioModel::RadioModel(QObject* parent)
     // singleton available before RadioModel is constructed, so this is safe
     // here. Phase 3G RX Epic sub-epic D.
     m_bandPlanManager.loadPlans();
+
+    // ── Phase 3M-0 Task 17: safety controller wiring ─────────────────────────
+    //
+    // 1. Load persisted enable / limit states so user preferences from
+    //    Tasks 9-13's setup pages take effect on the first launch, not
+    //    only after re-toggling each control.
+    {
+        auto& s = AppSettings::instance();
+        m_swrProt.setEnabled(
+            s.value(QStringLiteral("SwrProtectionEnabled"), QStringLiteral("False"))
+             .toString() == QStringLiteral("True"));
+        m_swrProt.setLimit(
+            s.value(QStringLiteral("SwrProtectionLimit"), QStringLiteral("2.0"))
+             .toString().toFloat());
+        m_swrProt.setWindBackEnabled(
+            s.value(QStringLiteral("WindBackPowerSwr"), QStringLiteral("False"))
+             .toString() == QStringLiteral("True"));
+        m_swrProt.setDisableOnTune(
+            s.value(QStringLiteral("SwrTuneProtectionEnabled"), QStringLiteral("False"))
+             .toString() == QStringLiteral("True"));
+        m_swrProt.setTunePowerSwrIgnore(
+            s.value(QStringLiteral("TunePowerSwrIgnore"), QStringLiteral("35"))
+             .toString().toFloat());
+
+        m_txInhibit.setEnabled(
+            s.value(QStringLiteral("TxInhibitMonitorEnabled"), QStringLiteral("False"))
+             .toString() == QStringLiteral("True"));
+        m_txInhibit.setReverseLogic(
+            s.value(QStringLiteral("TxInhibitMonitorReversed"), QStringLiteral("False"))
+             .toString() == QStringLiteral("True"));
+    }
+
+    // 2. RadioStatus::powerChanged(fwd, rev, swr) → SwrProtectionController::ingest.
+    //    TransmitModel::isTune() provides the tuneActive flag.
+    //    Adaptation: plan mentioned separate paFwdChanged / paRevChanged signals
+    //    which don't exist; RadioStatus.h:165 has a single powerChanged(fwd,rev,swr).
+    connect(&m_radioStatus, &RadioStatus::powerChanged,
+            this, [this](double fwd, double rev, double /*swr*/) {
+        m_swrProt.ingest(static_cast<float>(fwd),
+                         static_cast<float>(rev),
+                         m_transmitModel.isTune());
+    });
+
+    // 3. SwrProtectionController::highSwrChanged → SpectrumWidget overlay.
+    //    m_spectrumWidget may be null at construction time (set later by
+    //    MainWindow::setSpectrumWidget). Guard every access.
+    connect(&m_swrProt, &safety::SwrProtectionController::highSwrChanged,
+            this, [this](bool isHigh) {
+        if (m_spectrumWidget) {
+            m_spectrumWidget->setHighSwrOverlay(isHigh, m_swrProt.windBackLatched());
+        }
+    });
+    connect(&m_swrProt, &safety::SwrProtectionController::windBackLatchedChanged,
+            this, [this](bool latched) {
+        if (m_spectrumWidget && m_swrProt.highSwr()) {
+            m_spectrumWidget->setHighSwrOverlay(true, latched);
+        }
+    });
 }
 
 RadioModel::~RadioModel()
