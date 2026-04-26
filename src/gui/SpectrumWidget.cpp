@@ -1896,6 +1896,27 @@ int SpectrumWidget::waterfallStripWidth() const
     return m_wfLive ? kDbmStripW : kPausedStripW;
 }
 
+// From AetherSDR SpectrumWidget.cpp:720-725 [@0cd4559]
+QRect SpectrumWidget::waterfallTimeScaleRect(const QRect& wfRect) const
+{
+    const int stripWidth = waterfallStripWidth();
+    const int stripX = wfRect.right() - stripWidth + 1;
+    return QRect(stripX, wfRect.top(), stripWidth, wfRect.height());
+}
+
+// From AetherSDR SpectrumWidget.cpp:728-735 [@0cd4559]
+//   adapter: NereusSDR uses kFreqScaleH = 28 (vs AetherSDR's 20),
+//   button Y inset adjusted accordingly.
+QRect SpectrumWidget::waterfallLiveButtonRect(const QRect& wfRect) const
+{
+    const QRect strip = waterfallTimeScaleRect(wfRect);
+    constexpr int kLiveButtonW = 32;
+    constexpr int kLiveButtonH = 16;
+    const int buttonX = strip.right() - kLiveButtonW - 2;
+    const int buttonY = wfRect.top() - kFreqScaleH + 2;  // sits in the freq-scale row
+    return QRect(buttonX, buttonY, kLiveButtonW, kLiveButtonH);
+}
+
 // Sub-epic E — flush ring buffer + force live. Called from clearDisplay()
 // and from setFrequencyRange's largeShift branch (NereusSDR divergence;
 // see plan §authoring-time #3).
