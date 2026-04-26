@@ -57,6 +57,9 @@ public:
     /// Pull `n` mono float samples into `dst`. Returns the number
     /// of samples actually written. For well-behaved sources this
     /// equals `n`; less is permissible only for transient underrun.
+    /// Returns 0 if `dst` is null or `n <= 0` (programming-error guard
+    /// only; callers providing valid args will never see this path at
+    /// runtime).
     ///
     /// Called from the WDSP audio thread — must not block or allocate.
     /// `dst` is guaranteed non-null and large enough to hold `n`
@@ -74,8 +77,16 @@ public:
 /// HL2 note: HL2 also uses this stub in 3M-1a; 3M-1b forces HL2 to
 /// PcMicSource (no radio-side mic jack).
 ///
-/// TODO [3M-1b]: replace with PcMicSource (PortAudioBus/PipeWireBus) or
-///   RadioMicSource (P2 port 1026 / P1 EP2 mic zone) per user preference.
+/// TODO [3M-1b]: replace NullMicSource with PcMicSource (PortAudioBus /
+///   PipeWireBus, reusing 3O VAX infrastructure) or RadioMicSource
+///   (P2 port 1026 / P1 EP2 mic byte zone) per user preference.
+///
+///   Audio-thread constraint: concrete implementations must be
+///   lock-free. RadioMicSource will use a ring buffer fed by the
+///   connection thread; PcMicSource taps PortAudioBus's existing
+///   ring buffer. NO allocations or blocking inside pullSamples().
+///
+///   HL2 boardcap forces PcMicSource (no radio-side mic jack).
 ///   See docs/architecture/phase3m-tx-epic-master-design.md §5.2.
 class NullMicSource : public TxMicRouter {
 public:
@@ -86,6 +97,8 @@ public:
         if (dst == nullptr || n <= 0) {
             return 0;
         }
+        // std::fill_n: type-safe alternative to memset for float buffers
+        // (equivalent on IEEE-754 where 0.0f is all-zero bits).
         std::fill_n(dst, n, 0.0f);
         return n;
     }

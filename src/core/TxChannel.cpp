@@ -381,6 +381,12 @@ void TxChannel::setRunning(bool on)
     }
 
     if (on) {
+        // TODO [3M-1a-G.1]: when RadioModel wires TxMicRouter into TxChannel,
+        //   call m_micRouter->pullSamples(rsmpinInputBuffer, kDspBufferSize) here
+        //   to feed the rsmpin (stage 0). For 3M-1a TUNE-only, the gen1 PostGen
+        //   at stage 22 overwrites the input buffer, so NullMicSource's zero-fill
+        //   is functionally inert.
+
         // Activate cfir: custom CIC FIR filter required for Protocol 2 output.
         // From Thetis wdsp/cfir.c:233-238 [v2.10.3.13] — SetTXACFIRRun.
         // From Thetis cmaster.cs:526-527 [v2.10.3.13]:
