@@ -171,16 +171,16 @@ void MoxController::setMox(bool on)
         // Note: console.cs:29603 (5 lines past cite end) carries
         //   Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE
         //
-        // Phase signal ordering (Codex P1 — pre-code review §1.4):
-        //   Step 3 — emit txAboutToBegin()
-        //   Step 5 — emit hardwareFlipped(true) BEFORE rf_delay starts
-        //             (matches HdwMOXChanged at console.cs:29569-29588
-        //              [v2.10.3.13] which fires before Thread.Sleep(rf_delay))
+        // Phase signal ordering (Codex P1):
+        //   Phase 1 of 3 — emit txAboutToBegin()
+        //   Phase 2 of 3 — emit hardwareFlipped(true) BEFORE rf_delay starts
+        //                  (matches HdwMOXChanged at console.cs:29569-29588
+        //                   [v2.10.3.13] which fires before Thread.Sleep(rf_delay))
         //   Walk: Rx → RxToTxRfDelay → (timer fires) → Tx
-        //   Step 9 — emit txReady() in onRfDelayElapsed()
-        //   Step 10 — emit moxStateChanged(true) after txReady()
-        emit txAboutToBegin();                          // step 3
-        emit hardwareFlipped(true);                     // step 5 — before rfDelay
+        //   Phase 3 of 3 — emit txReady() in onRfDelayElapsed()
+        //   moxStateChanged(true) emitted after txReady() (diagnostic signal)
+        emit txAboutToBegin();                          // RX→TX phase 1 of 3
+        emit hardwareFlipped(true);                     // RX→TX phase 2 of 3 — before rfDelay
         advanceState(MoxState::RxToTxRfDelay);
         m_rfDelayTimer.start();
     } else {
@@ -193,20 +193,20 @@ void MoxController::setMox(bool on)
         //   if (ptt_out_delay > 0) Thread.Sleep(ptt_out_delay);      // 20ms
         //   ... WDSP RX on ...
         //
-        // Phase signal ordering (Codex P1 — pre-code review §1.4):
-        //   Step 3 — emit txAboutToEnd()
-        //   Step 4 — emit hardwareFlipped(false) — symmetric with RX→TX:
-        //             routing clears before in-flight sample flush.
+        // Phase signal ordering (Codex P1):
+        //   Phase 1 of 4 — emit txAboutToEnd()
+        //   Phase 2 of 4 — emit hardwareFlipped(false) — symmetric with RX→TX:
+        //                  routing clears before in-flight sample flush.
         //   Walk: Tx → TxToRxInFlight (keyUpDelayTimer, 10ms) →
         //              TxToRxFlush   (pttOutDelayTimer, 20ms) → Rx
-        //   Step 7 — emit txaFlushed() in onKeyUpDelayElapsed()
-        //   Step 12 — emit rxReady() in onPttOutElapsed()
-        //   Step 13 — emit moxStateChanged(false) after rxReady()
+        //   Phase 3 of 4 — emit txaFlushed() in onKeyUpDelayElapsed()
+        //   Phase 4 of 4 — emit rxReady() in onPttOutElapsed()
+        //   moxStateChanged(false) emitted after rxReady() (diagnostic signal)
         //
         // spaceDelay is skipped when kSpaceDelayMs == 0 (matches the
         // Thetis `if (space_mox_delay > 0)` guard).
-        emit txAboutToEnd();                            // step 3
-        emit hardwareFlipped(false);                    // step 4 — before flush
+        emit txAboutToEnd();                            // TX→RX phase 1 of 4
+        emit hardwareFlipped(false);                    // TX→RX phase 2 of 4 — before flush
         advanceState(MoxState::TxToRxInFlight);
         m_keyUpDelayTimer.start();
     }
@@ -263,19 +263,23 @@ void MoxController::stopAllTimers()
 }
 
 // ---------------------------------------------------------------------------
-// runMoxSafetyEffects — placeholder for F.1 wiring.
+// runMoxSafetyEffects — Codex P2 hook; intentionally empty in 3M-1a.
 //
 // Called on EVERY setMox() invocation, including idempotent ones, so
 // that safety effects cannot be skipped by a repeated call.
 //
-// TODO [3M-1a F.1]: wire body with:
-//   - AlexController::applyAntennaForBand(currentBand(), isTx)
-//   - StepAttenuatorController TX-path activation / RX restore
-//   - RadioConnection::setMoxBit(isTx) + setTrxRelayBit(isTx)
+// 3M-1a: intentionally empty. The plan's F.1 task does not fill this
+// body — it wires Alex routing, ATT-on-TX, and MOX wire bits to the
+// hardwareFlipped(bool isTx) signal in RadioModel instead (subscriber
+// model, fires only on real transitions).
+//
+// This hook stays available for any future Codex-P2-required-on-every-
+// call effects (e.g., re-drop MOX on PA fault, per PR #139 pattern).
+// No 3M-1a effects need this; reassess in 3M-1b/3M-3.
 // ---------------------------------------------------------------------------
 void MoxController::runMoxSafetyEffects(bool /*newMox*/)
 {
-    // intentionally empty in B.2/B.3 — see TODO above
+    // intentionally empty in 3M-1a — see comment above
 }
 
 // ---------------------------------------------------------------------------
@@ -291,16 +295,16 @@ void MoxController::runMoxSafetyEffects(bool /*newMox*/)
 // Note: console.cs:29603 (5 lines past cite end) carries
 //   Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE
 //
-// Phase signals (Codex P1, pre-code review §1.4):
-//   Step 8  — advance to terminal Tx state
-//   Step 9  — emit txReady() — TX I/Q stream + audio MOX from this point
-//   Step 10 — emit moxStateChanged(true) (diagnostic / integration signal)
+// Phase signals (Codex P1):
+//   Advance to terminal Tx state
+//   RX→TX phase 3 of 3 — emit txReady() — TX I/Q stream + audio MOX from this point
+//   emit moxStateChanged(true) (diagnostic / integration signal)
 void MoxController::onRfDelayElapsed()
 {
     // TODO [3M-1a F.1]: AudioMOXChanged(true) + WDSP TX channel on here.
     advanceState(MoxState::Tx);
-    emit txReady();                                     // step 9
-    emit moxStateChanged(true);                         // step 10
+    emit txReady();                                     // RX→TX phase 3 of 3
+    emit moxStateChanged(true);                         // diagnostic signal
 }
 
 // onMoxDelayElapsed — fires when m_moxDelayTimer elapses.
@@ -332,15 +336,14 @@ void MoxController::onSpaceDelayElapsed()
 //
 // (3M-2 will also branch here for CW key_up_delay, also 10ms by default.)
 //
-// Phase signals (Codex P1, pre-code review §1.4):
-//   Step 7  — emit txaFlushed() — in-flight samples cleared; TX channel may stop
-//   Step 8  — advance to TxToRxFlush state
-//   Step 9  — start ptt_out_delay timer
+// Phase signals (Codex P1):
+//   TX→RX phase 3 of 4 — emit txaFlushed() — in-flight samples cleared; TX channel may stop
+//   Advance to TxToRxFlush state, then start ptt_out_delay timer
 void MoxController::onKeyUpDelayElapsed()
 {
     // TODO [3M-1a F.1]: UpdateDDCs + UpdateAAudioMixerStates + AudioMOXChanged(false)
     //                   + HdwMOXChanged(false) here.
-    emit txaFlushed();                                  // step 7
+    emit txaFlushed();                                  // TX→RX phase 3 of 4
     advanceState(MoxState::TxToRxFlush);
     m_pttOutDelayTimer.start();
 }
@@ -351,16 +354,16 @@ void MoxController::onKeyUpDelayElapsed()
 //   if (ptt_out_delay > 0)
 //       Thread.Sleep(ptt_out_delay);  //wcp:  added 2018-12-24, time for HW to switch
 //
-// Phase signals (Codex P1, pre-code review §1.4):
-//   Step 11 — advance to terminal Rx state
-//   Step 12 — emit rxReady() — RX channel active from this point
-//   Step 13 — emit moxStateChanged(false) (diagnostic / integration signal)
+// Phase signals (Codex P1):
+//   Advance to terminal Rx state
+//   TX→RX phase 4 of 4 — emit rxReady() — RX channel active from this point
+//   emit moxStateChanged(false) (diagnostic / integration signal)
 void MoxController::onPttOutElapsed()
 {
     // TODO [3M-1a F.1]: WDSP.SetChannelState(WDSP.id(0, 0), 1, 0) (RX1 on) here.
     advanceState(MoxState::Rx);
-    emit rxReady();                                     // step 12
-    emit moxStateChanged(false);                        // step 13
+    emit rxReady();                                     // TX→RX phase 4 of 4
+    emit moxStateChanged(false);                        // diagnostic signal
 }
 
 // onBreakInDelayElapsed — fires when m_breakInDelayTimer elapses.

@@ -153,9 +153,14 @@ public slots:
     //   4. start timer-driven walk      — transient states then terminal
     //   5. emit moxStateChanged(on)      — fires at END of walk (Codex P1)
     //
-    // Task F.1 fills runMoxSafetyEffects with Alex routing, ATT-on-TX,
-    // and the MOX wire bit. DO NOT insert an early-return guard above
-    // the runMoxSafetyEffects call — that would regress Codex P2.
+    // runMoxSafetyEffects is the Codex P2 hook — it fires on every
+    // setMox() call, including idempotent ones, BEFORE the m_mox==on guard.
+    // 3M-1a has no Codex-P2-required-on-every-call effects identified, so
+    // the body stays empty in this phase. F.1 wires Alex routing, ATT-on-TX,
+    // and MOX/T-R wire bits via hardwareFlipped(bool isTx) subscribers in
+    // RadioModel — NOT by filling runMoxSafetyEffects.
+    // DO NOT insert an early-return guard above the runMoxSafetyEffects
+    // call — that would regress Codex P2.
     void setMox(bool on);
 
 signals:
@@ -193,12 +198,12 @@ signals:
     //   false — TX→RX: release Alex routing, ATT-on-TX, clear MOX wire bit.
     //   One subscriber slot handles both directions via the bool payload.
 
-    void txAboutToBegin();          // RX→TX: step 3 — safety-relevant prep
-    void hardwareFlipped(bool isTx);// RX→TX step 5 / TX→RX step 4 — hardware routing committed or released
-    void txReady();                 // RX→TX: step 9 — TX channel runs from this point
-    void txAboutToEnd();            // TX→RX: step 3 — teardown begins
-    void txaFlushed();              // TX→RX: step 7 — in-flight samples cleared, TX channel may stop
-    void rxReady();                 // TX→RX: step 12 — RX channel runs from this point
+    void txAboutToBegin();          // RX→TX phase 1 of 3 — synchronous; safety-relevant prep
+    void hardwareFlipped(bool isTx);// Both directions; synchronous; subscribers wire Alex/ATT/MOX-bit
+    void txReady();                 // RX→TX phase 3 of 3 — fires after rfDelay timer
+    void txAboutToEnd();            // TX→RX phase 1 of 4 — synchronous; teardown entry
+    void txaFlushed();              // TX→RX phase 3 of 4 — fires after keyUpDelay; in-flight samples cleared
+    void rxReady();                 // TX→RX phase 4 of 4 — fires after pttOutDelay
 
     // ── Boundary signals (diagnostic / integration — keep these) ─────────────
     // moxStateChanged: emitted exactly once per real transition, at the END
@@ -217,10 +222,13 @@ protected:
     // override it to verify the Codex P2 ordering invariant without
     // needing a full RadioModel or RadioConnection.
     //
-    // F.1 wires: AlexController::applyAntennaForBand,
-    //            StepAttenuatorController TX-path, RadioConnection MOX bit.
+    // 3M-1a: intentionally empty. The plan's F.1 task does not fill this
+    // body — it wires Alex routing, ATT-on-TX, and MOX wire bits to the
+    // hardwareFlipped(bool isTx) signal in RadioModel instead.
     //
-    // TODO [3M-1a F.1]: fill this body with actual safety effects.
+    // This hook stays available for any future Codex-P2-required-on-every-
+    // call effects (e.g., re-drop MOX on PA fault, per PR #139 pattern).
+    // No 3M-1a effects need this; reassess in 3M-1b/3M-3.
     virtual void runMoxSafetyEffects(bool newMox);
 
 private slots:

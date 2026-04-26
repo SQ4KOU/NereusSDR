@@ -411,7 +411,7 @@ private slots:
     // true) and returns without emitting any phase signal.
     // ════════════════════════════════════════════════════════════════════════
 
-    void idempotent_setMoxTrue_noPhasSignalOnSecondCall()
+    void idempotent_setMoxTrue_noPhaseSignalOnSecondCall()
     {
         MoxController ctrl;
         ctrl.setTimerIntervals(0, 0, 0, 0, 0, 0);
@@ -437,7 +437,7 @@ private slots:
         QCOMPARE(txReadySpy.count(), 1);
     }
 
-    void idempotent_setMoxFalse_noPhasSignalOnSecondCall()
+    void idempotent_setMoxFalse_noPhaseSignalOnSecondCall()
     {
         MoxController ctrl;
         ctrl.setTimerIntervals(0, 0, 0, 0, 0, 0);
