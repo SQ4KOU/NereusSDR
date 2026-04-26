@@ -38,6 +38,7 @@
 //   latent from 3M-0 because no prior task exercised live TX I/Q on EP2.
 #include <QtTest/QtTest>
 #include "core/P1RadioConnection.h"
+#include "core/HpsdrModel.h"
 
 using namespace NereusSDR;
 
@@ -206,6 +207,61 @@ private slots:
         // change, but Codex P2 means the flush flag was set before the guard.
         conn.setTrxRelay(false);
         QCOMPARE(conn.forceBank10NextForTest(), true);
+    }
+
+    // ── 12. Codec path (Standard): setTrxRelay(true) → C3 bit 7 CLEARED ─────
+    // When m_codec is set (production path via applyBoardQuirks), composeCcForBank
+    // dispatches through P1CodecStandard::bank10, which must now read ctx.trxRelay
+    // (not ctx.paEnabled).  This test drives the codec path by calling
+    // setBoardForTest(HPSDRHW::HermesII) which sets m_codec = P1CodecStandard.
+    //
+    // E.4 bug: without this fix, the codec path wrote (ctx.paEnabled ? 0x80 : 0),
+    // ignoring ctx.trxRelay entirely.  Production connections (m_codec != null) would
+    // never clear C3 bit 7 on setTrxRelay(true), leaving the relay disengaged mid-TX.
+    //
+    // Source: deskhpsdr/src/old_protocol.c:2909-2910 [@120188f]
+    void setTrxRelayTrue_codecPath_c3Bit7Cleared() {
+        P1RadioConnection conn;
+        conn.setBoardForTest(HPSDRHW::HermesII);   // → P1CodecStandard; m_codec != null
+        conn.setTrxRelay(true);                     // engage relay → bit 7 must be 0
+
+        const QByteArray bank10 = conn.captureBank10ForTest();
+        QCOMPARE(bank10.size(), 5);
+        // C3 bit 7 (0x80) must be 0: relay engaged, normal TX path.
+        QCOMPARE(int(quint8(bank10[3]) & 0x80), 0);
+    }
+
+    // ── 13. Codec path (Standard): setTrxRelay(false) → C3 bit 7 SET ────────
+    // After disengaging the relay on the Standard codec path, C3 bit 7 must be 1.
+    // Source: deskhpsdr/src/old_protocol.c:2909-2910 [@120188f]
+    void setTrxRelayFalse_codecPath_c3Bit7Set() {
+        P1RadioConnection conn;
+        conn.setBoardForTest(HPSDRHW::HermesII);   // → P1CodecStandard; m_codec != null
+        conn.setTrxRelay(true);
+        conn.setTrxRelay(false);                    // disengage relay → bit 7 must be 1
+
+        const QByteArray bank10 = conn.captureBank10ForTest();
+        QCOMPARE(bank10.size(), 5);
+        // C3 bit 7 (0x80) must be 1: relay disabled / PA bypass.
+        QCOMPARE(int(quint8(bank10[3]) & 0x80), 0x80);
+    }
+
+    // ── 14. Codec path (HL2): setTrxRelay(true) → C3 bit 7 CLEARED ──────────
+    // HL2 firmware (control.v:211-214) does NOT decode C3 bit 7 — it uses C2
+    // bit 3 for PA enable instead (deskhpsdr old_protocol.c:2964-2966 [@120188f]).
+    // The P1CodecHl2::bank10 path still writes ctx.trxRelay into C3 bit 7 for
+    // correctness (the HL2 FW ignores it).  Verify the bit is correctly set/cleared
+    // so HL2 output matches the Standard codec contract on that byte.
+    // Source: deskhpsdr/src/old_protocol.c:2909-2910 [@120188f]
+    void setTrxRelayTrue_hl2CodecPath_c3Bit7Cleared() {
+        P1RadioConnection conn;
+        conn.setBoardForTest(HPSDRHW::HermesLite);  // → P1CodecHl2; m_codec != null
+        conn.setTrxRelay(true);                      // engage relay → bit 7 must be 0
+
+        const QByteArray bank10 = conn.captureBank10ForTest();
+        QCOMPARE(bank10.size(), 5);
+        // C3 bit 7 (0x80) must be 0 (relay engaged), even though HL2 FW ignores it.
+        QCOMPARE(int(quint8(bank10[3]) & 0x80), 0);
     }
 };
 

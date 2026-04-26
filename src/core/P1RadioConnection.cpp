@@ -1241,6 +1241,7 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.activeRxCount  = m_activeRxCount;
     ctx.txDrive        = m_txDrive;
     ctx.paEnabled      = m_paEnabled;
+    ctx.trxRelay       = m_trxRelay;
     ctx.duplex         = m_duplex;
     ctx.diversity      = m_diversity;
     ctx.antennaIdx     = m_antennaIdx;
@@ -1594,6 +1595,8 @@ void P1RadioConnection::sendCommandFrame()
     // 3M-1a E.4: if setTrxRelay() requested a bank-10 flush, jump to bank 10
     // so the T/R relay bit (C3 bit 7) lands within ≤1 frame of the call.
     // Bank-0 flush takes priority if both flags are set simultaneously (rare).
+    // If both flags are set simultaneously, bank 0 wins this frame;
+    // m_forceBank10Next is preserved (not cleared) and fires on the following frame.
     // Source: deskhpsdr/src/old_protocol.c:2909-2910 [@120188f].
     if (m_forceBank0Next) {
         m_ccRoundRobinIdx = 0;
