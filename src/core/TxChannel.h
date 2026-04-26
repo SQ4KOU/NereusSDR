@@ -333,7 +333,7 @@ public:
     //   PhRot       → SetTXAPHROTRun         (iir.c:665-670)
     //   AmSq        → SetTXAAMSQRun          (amsq.c:246-252)
     //   Eqp         → SetTXAEQRun            (eq.c:742-747)
-    //   Compressor  → SetTXACompressorRun    (compress.c:100-105)
+    //   Compressor  → SetTXACompressorRun    (compress.c:99-109)
     //   OsCtrl      → SetTXAosctrlRun        (osctrl.c:142-147)
     //   Cfir        → SetTXACFIRRun          (cfir.c:233-238)
     //   CfComp      → SetTXACFCOMPRun        (cfcomp.c:632-637)

@@ -621,7 +621,7 @@ void SetTXAEQRun(int channel, int run);
 
 // compressor (stage 14): TX speech compressor (COMP).
 // Also adjusts bp1/bp2 bandpass routing via TXASetupBPFilters().
-// From Thetis wdsp/compress.c:100-107 [v2.10.3.13] and compress.h:60.
+// From Thetis wdsp/compress.c:99-109 [v2.10.3.13] and compress.h:60.
 void SetTXACompressorRun(int channel, int run);
 
 // osctrl (stage 16): CESSB overshoot control.

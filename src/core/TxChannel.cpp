@@ -485,7 +485,7 @@ void TxChannel::setStageRunning(Stage s, bool run)
         return;
 
     // compressor (stage 14): TX speech compressor. Also adjusts bp1/bp2.
-    // From Thetis wdsp/compress.c:100-107 [v2.10.3.13] and compress.h:60.
+    // From Thetis wdsp/compress.c:99-109 [v2.10.3.13] and compress.h:60.
     case Stage::Compressor:
 #ifdef HAVE_WDSP
         SetTXACompressorRun(m_channelId, r);  // compress.c:100 [v2.10.3.13]
@@ -516,16 +516,45 @@ void TxChannel::setStageRunning(Stage s, bool run)
 #endif
         return;
 
-    // Stages with no public WDSP Run setter or internally managed:
-    //   RsmpIn / RsmpOut: run managed by TXAResCheck() — wdsp/TXA.c:809-817 [v2.10.3.13]
-    //   UsLew: no run flag — channel-upslew driven (see stageRunning comment)
-    //   All meter stages, Alc, Bp0/Bp1/Bp2, AmMod, FmMod, Calcc, Iqc, Sip1:
-    //     dedicated Set*Run APIs exist but are added in 3M-1b/3M-3a/3M-4 scope.
+    // Permanently uncontrollable stages — explicit case arms so the default:
+    // below only catches genuinely deferred stages.
+
+    case Stage::RsmpIn:
+    case Stage::RsmpOut:
+        // Permanently uncontrollable from C++. WDSP's TXAResCheck()
+        // (wdsp/TXA.c:809-817 [v2.10.3.13]) sets these run flags
+        // automatically based on input/output sample-rate mismatch at
+        // create_txa() time. No public PORT API exists.
+        qCDebug(lcDsp) << "TxChannel" << m_channelId
+                       << "setStageRunning(" << static_cast<int>(s) << ","
+                       << run << "): rsmpin/rsmpout managed by TXAResCheck — no-op";
+        return;
+
+    case Stage::UsLew:
+        // Permanently uncontrollable from a per-stage run flag. The uslew
+        // ramp uses a state machine (BEGIN/WAIT/UP/ON) gated by
+        // ch[].iob.ch_upslew, not a stage-level run bit.
+        // From wdsp/slew.c:62-75 [v2.10.3.13].
+        qCDebug(lcDsp) << "TxChannel" << m_channelId
+                       << "setStageRunning(UsLew," << run
+                       << "): uslew uses runmode state machine — no-op";
+        return;
+
+    case Stage::kStageCount:
+        // Sentinel — never a valid argument.
+        qCWarning(lcDsp) << "TxChannel" << m_channelId
+                         << "setStageRunning(kStageCount): sentinel value, ignoring";
+        return;
+
+    // Deferred stages — Set*Run API exists in WDSP but is not yet declared
+    // in wdsp_api.h. Each will get its own explicit case arm when wired in
+    // 3M-1b / 3M-3a / 3M-4.
     default:
-        qCWarning(lcDsp) << "TxChannel::setStageRunning: stage"
-                         << static_cast<int>(s)
-                         << "has no public WDSP Run setter in 3M-1a scope "
-                            "(or is internally managed by WDSP). No-op.";
+        qCWarning(lcDsp) << "TxChannel" << m_channelId
+                         << "setStageRunning(" << static_cast<int>(s) << ","
+                         << run << "): WDSP Set*Run API for this stage is "
+                         << "not yet declared in wdsp_api.h — deferred to "
+                         << "3M-1b/3M-3a. No-op in 3M-1a.";
         return;
     }
 }
