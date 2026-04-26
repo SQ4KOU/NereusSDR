@@ -1967,7 +1967,7 @@ void SpectrumWidget::setWaterfallLive(bool live)
     }
     m_wfLive = live;
     rebuildWaterfallViewport();
-    update();
+    markOverlayDirty();
 }
 
 int SpectrumWidget::waterfallStripWidth() const
@@ -2013,6 +2013,7 @@ void SpectrumWidget::clearWaterfallHistory()
     m_wfHistoryRowCount = 0;
     m_wfHistoryOffsetRows = 0;
     m_wfLive = true;
+    markOverlayDirty();
 }
 
 // ---- Waterfall row push ----
@@ -2123,6 +2124,7 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
             // Paused: don't show the new row — auto-bump in appendHistoryRow
             // already shifted offset, just rebuild the viewport.
             rebuildWaterfallViewport();
+            markOverlayDirty();
         }
     }
 }
@@ -2609,7 +2611,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
                 m_wfLive = false;  // entering paused state
             }
             rebuildWaterfallViewport();
-            update();
+            markOverlayDirty();
         }
 
         setCursor(Qt::SizeVerCursor);

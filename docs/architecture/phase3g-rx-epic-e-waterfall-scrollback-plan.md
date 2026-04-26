@@ -580,6 +580,7 @@ void SpectrumWidget::clearWaterfallHistory()
     m_wfHistoryRowCount = 0;
     m_wfHistoryOffsetRows = 0;
     m_wfLive = true;
+    markOverlayDirty();
 }
 ```
 
@@ -665,6 +666,7 @@ Find the line `QRgb* scanline = reinterpret_cast<QRgb*>(m_waterfall.scanLine(m_w
         // Paused: don't show the new row — auto-bump in appendHistoryRow
         // already shifted offset, just rebuild the viewport.
         rebuildWaterfallViewport();
+        markOverlayDirty();
     }
 }
 ```
@@ -749,7 +751,7 @@ void SpectrumWidget::setWaterfallLive(bool live)
     }
     m_wfLive = live;
     rebuildWaterfallViewport();
-    update();
+    markOverlayDirty();
 }
 
 int SpectrumWidget::waterfallStripWidth() const
@@ -949,7 +951,7 @@ if (m_draggingTimeScale) {
             m_wfLive = false;  // entering paused state
         }
         rebuildWaterfallViewport();
-        update();
+        markOverlayDirty();
     }
 
     setCursor(Qt::SizeVerCursor);
