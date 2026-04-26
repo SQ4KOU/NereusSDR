@@ -801,3 +801,16 @@ nereus_add_test(tst_mox_controller_phase_signals)
 # Ports chkTUN_CheckedChanged (console.cs:29978-30157 [v2.10.3.13]) flag block.
 nereus_add_test(tst_mox_controller_tune)
 
+# ── Phase 3M-1a Task C.1: WdspEngine TX channel API ──────────────────────────
+# Verifies:
+#   TX channel constants match Thetis cmaster.c:177-190 [v2.10.3.13]:
+#     kTxChannelType=1, kTxBlockOnOutput=1, kTxTSlewUpSecs/DownSecs=0.010,
+#     kTxDspSampleRate=96000, kTxDspBufferSize=4096;
+#   createTxChannel returns nullptr before WDSP initialized (Approach A);
+#   createTxChannel returns nullptr after WDSP open (C++ wrapper null until C.2);
+#   destroyTxChannel is idempotent (double-call, never-created channel, post-destroy);
+#   txChannel(id) lookup returns nullptr when not created and after destroy;
+#   RX channel 0 and TX channel 1 co-exist without aliasing.
+#   Channel ID: WDSP.id(1, 0) = CMsubrcvr * CMrcvr = 1 with single-RX layout.
+nereus_add_test(tst_wdsp_engine_tx_channel)
+

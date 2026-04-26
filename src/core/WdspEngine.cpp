@@ -210,6 +210,17 @@ void WdspEngine::shutdown()
 
     qCInfo(lcDsp) << "Shutting down WDSP...";
 
+    // Destroy all TX channels (collect IDs first to avoid iterator invalidation)
+    {
+        std::vector<int> txIds;
+        for (const auto& [id, ch] : m_txChannels) {
+            txIds.push_back(id);
+        }
+        for (int id : txIds) {
+            destroyTxChannel(id);
+        }
+    }
+
     // Destroy all RX channels (collect IDs first to avoid iterator invalidation)
     std::vector<int> channelIds;
     for (const auto& [id, ch] : m_rxChannels) {
@@ -343,6 +354,88 @@ RxChannel* WdspEngine::rxChannel(int channelId) const
     auto it = m_rxChannels.find(channelId);
     if (it != m_rxChannels.end()) {
         return it->second.get();
+    }
+    return nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// TX Channel management
+// ---------------------------------------------------------------------------
+
+TxChannel* WdspEngine::createTxChannel(int channelId,
+                                       int inputBufferSize,
+                                       int dspBufferSize,
+                                       int inputSampleRate,
+                                       int dspSampleRate,
+                                       int outputSampleRate)
+{
+    if (!m_initialized) {
+        qCWarning(lcDsp) << "Cannot create TX channel: WDSP not initialized";
+        return nullptr;
+    }
+
+    if (m_txChannels.count(channelId)) {
+        qCWarning(lcDsp) << "TX channel" << channelId << "already exists";
+        return m_txChannels.at(channelId);   // may be nullptr in C.1 (Approach A)
+    }
+
+#ifdef HAVE_WDSP
+    // From Thetis cmaster.c:177-190 (create_xmtr OpenChannel call) [v2.10.3.13]
+    // Differences vs. RX: type=1 (TX), bfo=1 (block-on-output), dsp_rate=96000,
+    // tdelayup=0, tslewup=0.010, tdelaydown=0, tslewdown=0.010.
+    OpenChannel(
+        channelId,
+        inputBufferSize,        // in_size — from cmaster.c:179 pcm->xcm_insize[in_id]
+        dspBufferSize,          // dsp_size — from cmaster.c:180 hardcoded 4096
+        inputSampleRate,        // input sample rate — from cmaster.c:181 pcm->xcm_inrate[in_id]
+        dspSampleRate,          // dsp sample rate — from cmaster.c:182 96000
+        outputSampleRate,       // output sample rate — from cmaster.c:183 pcm->xmtr[i].ch_outrate
+        kTxChannelType,         // type=1 (TX) — from cmaster.c:184 [v2.10.3.13]
+        0,                      // initial state: off — from cmaster.c:185
+        0.000,                  // tdelayup  — from cmaster.c:186
+        kTxTSlewUpSecs,         // tslewup 0.010 s — from cmaster.c:187 [v2.10.3.13]
+        0.000,                  // tdelaydown — from cmaster.c:188
+        kTxTSlewDownSecs,       // tslewdown 0.010 s — from cmaster.c:189 [v2.10.3.13]
+        kTxBlockOnOutput);      // bfo=1 (block on output) — from cmaster.c:190 [v2.10.3.13]
+
+    qCInfo(lcDsp) << "Opened TX WDSP channel" << channelId
+                  << "bufSize=" << inputBufferSize
+                  << "inRate=" << inputSampleRate
+                  << "dspRate=" << dspSampleRate;
+#endif
+
+    // TODO [3M-1a C.2]: construct the TxChannel C++ wrapper here (create_txa,
+    // walk 25-stage TXA pipeline). For now (Approach A) we record the open
+    // channel ID with a nullptr wrapper so destroyTxChannel can close it.
+    m_txChannels.emplace(channelId, nullptr);
+    return nullptr;
+}
+
+void WdspEngine::destroyTxChannel(int channelId)
+{
+    auto it = m_txChannels.find(channelId);
+    if (it == m_txChannels.end()) {
+        return;   // idempotent — not found, nothing to do
+    }
+
+#ifdef HAVE_WDSP
+    // Deactivate with drain before closing.
+    // dmode=1: drain-mode close (mirrors destroyRxChannel pattern).
+    SetChannelState(channelId, 0, 1);
+
+    // Close the WDSP TX channel.
+    CloseChannel(channelId);
+#endif
+
+    m_txChannels.erase(it);
+    qCInfo(lcDsp) << "Destroyed TX channel" << channelId;
+}
+
+TxChannel* WdspEngine::txChannel(int channelId) const
+{
+    auto it = m_txChannels.find(channelId);
+    if (it != m_txChannels.end()) {
+        return it->second;   // nullptr in C.1 (Approach A); real ptr after C.2
     }
     return nullptr;
 }

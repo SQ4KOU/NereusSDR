@@ -93,6 +93,7 @@ warren@wpratt.com
 namespace NereusSDR {
 
 class RxChannel;
+class TxChannel;
 
 // Central WDSP manager. Owns all RxChannel instances and manages
 // system-level initialization (FFTW wisdom, impulse cache).
@@ -152,6 +153,55 @@ public:
     // Look up an existing RX channel by WDSP channel ID.
     RxChannel* rxChannel(int channelId) const;
 
+    // --- TX Channel management ---
+
+    // TX channel constants derived from Thetis cmaster.c:177-190 [v2.10.3.13].
+    // From cmaster.c:184  — channel type 1 = TX (vs. RX = 0).
+    static constexpr int kTxChannelType    = 1;
+    // From cmaster.c:190  — block until output available (bfo = 1 for TX).
+    static constexpr int kTxBlockOnOutput  = 1;
+    // From cmaster.c:186  — tslewup  = 0.010 s (10 ms channel-level state envelope).
+    static constexpr double kTxTSlewUpSecs   = 0.010;
+    // From cmaster.c:188  — tslewdown = 0.010 s (10 ms channel-level state envelope).
+    static constexpr double kTxTSlewDownSecs = 0.010;
+    // From cmaster.c:182  — DSP sample rate for TX channel = 96000 Hz.
+    static constexpr int kTxDspSampleRate  = 96000;
+    // From cmaster.c:180  — DSP buffer size for TX channel = 4096 samples.
+    static constexpr int kTxDspBufferSize  = 4096;
+
+    // Create a TX channel with the given parameters.
+    //
+    // Channel ID convention: Thetis uses `chid(inid(1, 0), 0)`, which with
+    // NereusSDR's single-RX (CMsubrcvr=1, CMrcvr=1) layout resolves to
+    // channel 1.  C# equivalent: `WDSP.id(1, 0)` — dsp.cs:926-944 [v2.10.3.13]
+    // case 2 returns `CMsubrcvr * CMrcvr = 1 * 1 = 1`.
+    //
+    // APPROACH A (3M-1a Task C.1): this method opens the WDSP-side channel
+    // (via OpenChannel with type=1/TX) but returns nullptr for the C++ wrapper.
+    // The TxChannel C++ wrapper class is constructed in Task C.2.
+    // Document this in callsites: the returned pointer is null until C.2.
+    //
+    // Default parameters match our P2 configuration:
+    //   inputBufferSize=238 (one P2 packet), dspBufferSize=4096,
+    //   inputRate=48000, dspRate=96000, outputRate=48000
+    //
+    // From Thetis cmaster.c:177-190 (create_xmtr OpenChannel call) [v2.10.3.13]
+    TxChannel* createTxChannel(int channelId,
+                               int inputBufferSize = 238,
+                               int dspBufferSize = kTxDspBufferSize,
+                               int inputSampleRate = 48000,
+                               int dspSampleRate = kTxDspSampleRate,
+                               int outputSampleRate = 48000);
+
+    // Destroy a TX channel by ID. Idempotent — safe to call even if the
+    // channel was never created or was already destroyed.
+    void destroyTxChannel(int channelId);
+
+    // Look up an existing TX channel by WDSP channel ID.
+    // Returns nullptr if not found OR if C.2 wrapper construction has not
+    // yet run (Approach A: WDSP channel may be open while C++ wrapper is null).
+    TxChannel* txChannel(int channelId) const;
+
 signals:
     void initializedChanged(bool initialized);
     // Emitted during wisdom generation. percent=0-100, status=what's being planned.
@@ -166,6 +216,12 @@ private:
 
     // RX channels keyed by WDSP channel ID.
     std::map<int, std::unique_ptr<RxChannel>> m_rxChannels;
+
+    // TX channels keyed by WDSP channel ID.
+    // NOTE (3M-1a Approach A): In Task C.1 the WDSP channel is opened but no
+    // C++ TxChannel wrapper is constructed. The set of open TX channel IDs is
+    // tracked here with nullptr values until Task C.2 fills the wrapper.
+    std::map<int, TxChannel*> m_txChannels;
 };
 
 } // namespace NereusSDR
