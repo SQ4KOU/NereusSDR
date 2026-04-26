@@ -1127,19 +1127,24 @@ void SpectrumWidget::drawTimeScale(QPainter& p, const QRect& wfRect)
 
 - [ ] **Step 2: Wire `drawTimeScale` into the QPainter render path**
 
-`rg -n 'drawDbmScale\(p|drawBandPlan\(p' src/gui/SpectrumWidget.cpp`. Find where `drawDbmScale(p, ...)` and `drawBandPlan(p, specRect)` are called from the QPainter overlay block (around line 1155-1161). Add a call to `drawTimeScale` immediately after — but **only on the waterfall rect**, not the spectrum rect:
+`rg -n 'drawDbmScale\(p|drawBandPlan\(p' src/gui/SpectrumWidget.cpp`. Find where `drawDbmScale(p, ...)` and `drawBandPlan(p, specRect)` are called from the QPainter overlay block (around line 1155-1161). Add a call to `drawTimeScale` immediately after — but **only on the waterfall rect**, not the spectrum rect.
+
+**IMPORTANT — wfRect width contract:** NereusSDR's existing `wfRect` at line 1141 is clipped via `w - effectiveStripW()` to leave room for the dBm strip. AetherSDR's time-scale helpers (`waterfallTimeScaleRect` / `waterfallLiveButtonRect`) expect a wfRect that extends to the FULL widget width, because the time-scale strip lives in the same right-edge column as the dBm strip. Construct a **separate full-width wfRect** for the `drawTimeScale` call rather than reusing the clipped one:
 
 ```cpp
 // Sub-epic E: time-scale + LIVE button on the right edge of the
 // waterfall area (always painted; widens automatically when paused).
-drawTimeScale(p, wfRect);
+// Use a full-width wfRect (not the clipped `wfRect` at line 1141) so the
+// strip lands in the same right-edge column as the dBm scale strip.
+const QRect wfRectFull(0, wfRect.top(), width(), wfRect.height());
+drawTimeScale(p, wfRectFull);
 ```
-
-`wfRect` should be the waterfall rect already computed at line 1141. If the local variable name differs, use the existing local that was passed to `drawWaterfall`.
 
 - [ ] **Step 3: Wire `drawTimeScale` into the GPU overlay-static-texture path**
 
-`rg -n 'overlay.*static|m_overlayStatic|paintOverlayToImage|drawDbmScale\b' src/gui/SpectrumWidget.cpp` — find where the GPU path renders chrome to its overlay image. Sub-epic A's `drawDbmScale` is the model: same call pattern, into the same overlay-image painter. Add `drawTimeScale(overlayPainter, wfRectInOverlay)` immediately after the `drawDbmScale` and `drawBandPlan` calls in that path.
+`rg -n 'overlay.*static|m_overlayStatic|paintOverlayToImage|drawDbmScale\b' src/gui/SpectrumWidget.cpp` — find where the GPU path renders chrome to its overlay image. Sub-epic A's `drawDbmScale` is the model: same call pattern, into the same overlay-image painter. Add a `drawTimeScale(...)` call after the `drawDbmScale` and `drawBandPlan` calls.
+
+**SAME wfRect-width contract as Step 2:** the time-scale strip's geometry helpers expect a wfRect spanning the full widget width. If the GPU path's overlay-image-painter callsite has a `wfRect` local that's clipped, construct a separate full-width version (`QRect(0, existingWfRect.top(), width(), existingWfRect.height())`) for `drawTimeScale`.
 
 If the overlay-static-texture path is unclear, run:
 ```bash
