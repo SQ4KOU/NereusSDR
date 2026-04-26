@@ -1564,7 +1564,7 @@ void P1RadioConnection::sendMetisStart(bool iqAndMic)
     //   NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
     //   When checked (enabled): passes 1 -> bit 7 = 0 (not disabled).
     const quint8 runBits     = iqAndMic ? quint8(0x02) : quint8(0x01);
-    // From Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400 [@hl2-gateware]:
+    // From Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400 [@7472bd1]:
     //   watchdog_disable <= eth_data[7]; -- 1=disabled, 0=enabled (inverted)
     const quint8 watchdogBit = m_watchdogEnabled ? quint8(0x00) : quint8(0x80);
     pkt[3] = static_cast<char>(runBits | watchdogBit);

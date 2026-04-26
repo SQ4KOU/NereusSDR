@@ -167,9 +167,9 @@ public slots:
     // Mirrors SetWatchdogTimer(int bits) in NetworkIOImports.cs:197-198
     // [v2.10.3.13]. Boolean only — no host-side timeout parameter.
     //
-    // 3M-0 status: stub. Stores the boolean state; the actual wire
-    // bit emit is deferred to 3M-1a pending wire-format identification
-    // (the bit position lives inside Thetis's closed ChannelMaster.dll).
+    // Wire bit emission: P1 implemented in P1RadioConnection::sendMetisStart
+    // (RUNSTOP pkt[3] bit 7 per dsopenhpsdr1.v:399-400 [@7472bd1]).
+    // P2 wire bit deferred to E.8 — see tracking comment in P2RadioConnection.cpp.
     virtual void setWatchdogEnabled(bool enabled) = 0;
 
     bool isWatchdogEnabled() const noexcept { return m_watchdogEnabled; }

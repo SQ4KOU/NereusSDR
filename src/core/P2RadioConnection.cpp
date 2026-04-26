@@ -555,12 +555,12 @@ void P2RadioConnection::setAntennaRouting(AntennaRouting r)
 // NOTE: P2RadioConnection already carries m_wdt (int, maps to prn->wdt) which
 // is set to 1 unconditionally in connectToRadio() because the radio requires
 // the watchdog for streaming. m_watchdogEnabled records the *user* toggle from
-// Setup → Network WDT checkbox; the relationship to m_wdt is deferred to 3M-1a.
+// Setup → Network WDT checkbox; the relationship to m_wdt is deferred to E.8.
 //
-// TODO [3M-1a]: reconcile m_watchdogEnabled with m_wdt / prn->wdt and emit
+// TODO [E.8]: reconcile m_watchdogEnabled with m_wdt / prn->wdt and emit
 // the wire bit update via sendCmdGeneral(). Bit position is currently unknown —
 // Thetis dispatches via ChannelMaster.dll (closed source). Identify via wire
-// capture or HL2-firmware reading; until then this is a state-tracking stub.
+// capture; until then this stores state only (P1 wire bit resolved in E.5).
 // Cite: NetworkIOImports.cs:197-198 [v2.10.3.13] (DllImport entry).
 // ---------------------------------------------------------------------------
 void P2RadioConnection::setWatchdogEnabled(bool enabled)

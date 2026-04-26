@@ -491,6 +491,8 @@ public:
     // sendMetisStart() would send (without a live socket), so unit tests can
     // assert the watchdog bit (pkt[3] bit 7) without needing a real UDP socket.
     //
+    // IMPORTANT: keep in sync with sendMetisStart() / sendMetisStop() in P1RadioConnection.cpp.
+    //
     // Wire format: pkt[3] = run_bits | watchdog_disable_bit
     //   run_bits:     0x01 (IQ only) or 0x02 (IQ + mic)
     //   watchdog_bit: 0x00 if m_watchdogEnabled == true, 0x80 if false
@@ -509,6 +511,8 @@ public:
     }
 
     // metisStopPacketForTest — compose the 64-byte RUNSTOP stop packet (run = 0).
+    //
+    // IMPORTANT: keep in sync with sendMetisStart() / sendMetisStop() in P1RadioConnection.cpp.
     //
     // Wire format: pkt[3] = watchdog_disable_bit (run bits = 0)
     //   0x00 if m_watchdogEnabled == true, 0x80 if false
