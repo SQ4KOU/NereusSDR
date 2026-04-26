@@ -70,6 +70,7 @@
 #include "WdspTypes.h"
 
 #include <QDateTime>
+#include <QMetaObject>
 
 namespace NereusSDR {
 
@@ -325,8 +326,12 @@ void StepAttenuatorController::onMoxHardwareFlipped(bool isTx)
             // From Thetis console.cs:29575-29576 [v2.10.3.13]:
             //   NetworkIO.SetTxAttenData(0);
             //   Display.TXAttenuatorOffset = 0; //[2.10.3.6]MW0LGE att_fixes
+            // Marshalled to connection thread — m_connection is connection-thread owned.
             if (m_connection) {
-                m_connection->setTxStepAttenuation(0); //[2.10.3.6]MW0LGE att_fixes
+                RadioConnection* conn = m_connection.get();
+                QMetaObject::invokeMethod(conn, [conn]() {
+                    conn->setTxStepAttenuation(0); //[2.10.3.6]MW0LGE att_fixes
+                });
             }
 #ifdef NEREUS_BUILD_TESTS
             m_lastTxStepAttDb = 0;
@@ -357,8 +362,12 @@ void StepAttenuatorController::onMoxHardwareFlipped(bool isTx)
             if (shouldForce31Db(m_currentDspMode, psOff)) {
                 txAtt = 31; // reset when PS is OFF or in CW mode
             }
+            // Marshalled to connection thread — m_connection is connection-thread owned.
             if (m_connection) {
-                m_connection->setTxStepAttenuation(txAtt); //[2.10.3.6]MW0LGE att_fixes
+                RadioConnection* conn = m_connection.get();
+                QMetaObject::invokeMethod(conn, [conn, txAtt]() {
+                    conn->setTxStepAttenuation(txAtt); //[2.10.3.6]MW0LGE att_fixes
+                });
             }
 #ifdef NEREUS_BUILD_TESTS
             m_lastTxStepAttDb = txAtt;
@@ -374,11 +383,15 @@ void StepAttenuatorController::onMoxHardwareFlipped(bool isTx)
             // setBand() with the same band is a no-op (idempotent guard),
             // so we call a direct restore of m_bandState.
             // Clear TX ATT back to 0.
-            // From Thetis console.cs:29575 [v2.10.3.13]:
+            // From Thetis console.cs:29658 [v2.10.3.13]:
             //   NetworkIO.SetTxAttenData(0);
             //   Display.TXAttenuatorOffset = 0; //[2.10.3.6]MW0LGE att_fixes
+            // Marshalled to connection thread — m_connection is connection-thread owned.
             if (m_connection) {
-                m_connection->setTxStepAttenuation(0); //[2.10.3.6]MW0LGE att_fixes
+                RadioConnection* conn = m_connection.get();
+                QMetaObject::invokeMethod(conn, [conn]() {
+                    conn->setTxStepAttenuation(0); //[2.10.3.6]MW0LGE att_fixes
+                });
             }
 #ifdef NEREUS_BUILD_TESTS
             m_lastTxStepAttDb = 0;
@@ -744,12 +757,16 @@ void StepAttenuatorController::saveSettings(const QString& mac)
                        QString::number(m_adaptiveFloorDb));
 
     // --- TX-path settings (F.2) ---
+    // Keys "options/stepAtt/attOnTxEnabled" and "options/stepAtt/forceAttWhenPsOff"
+    // are first introduced in F.2 (no pre-existing 3G-13/3M-0 keys at these paths).
     s.setHardwareValue(mac, QStringLiteral("options/stepAtt/attOnTxEnabled"),
                        m_attOnTxEnabled ? QStringLiteral("True") : QStringLiteral("False"));
     s.setHardwareValue(mac, QStringLiteral("options/stepAtt/forceAttWhenPsOff"),
                        m_forceAttWhenPsOff ? QStringLiteral("True") : QStringLiteral("False"));
 
     // Per-band TX ATT values.
+    // Key casing ("txBand/") follows the existing RX convention used above
+    // ("rx1Band/") — camelCase sub-path is the established per-controller style.
     for (int b = 0; b < static_cast<int>(Band::Count); ++b) {
         Band band = static_cast<Band>(b);
         QString key = bandKeyName(band);

@@ -3065,6 +3065,11 @@ void MainWindow::onConnectionStateChanged()
         const auto& caps = BoardCapsTable::forBoard(
             m_radioModel->connection()->radioInfo().boardType);
         m_stepAttController->setMaxAttenuation(caps.attenuator.maxDb);
+        // Wire HPSDR-board flag — Atlas/Metis kit uses preamp save/restore on
+        // MOX rather than per-band TX ATT (Thetis console.cs:29548 [v2.10.3.13]:
+        //   if (HardwareSpecific.Model == HPSDRModel.HPSDR) { ... }).
+        m_stepAttController->setIsHpsdrBoard(
+            m_radioModel->connection()->radioInfo().boardType == HPSDRHW::Atlas);
         m_stepAttController->loadSettings(m_radioModel->connection()->radioInfo().macAddress);
     } else {
         m_radioModelLabel->setText(QStringLiteral("—"));
