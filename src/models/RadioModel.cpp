@@ -885,6 +885,11 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // Phase 3P-G. Pushed to P2RadioConnection via setCalibrationController() below.
         m_calController.setMacAddress(info.macAddress);
         m_calController.load();
+
+        // Load per-MAC per-band tune power (50W default per band on first init).
+        // Phase 3M-1a G.3. Source: Thetis console.cs:1819-1820 / :4904-4910 [v2.10.3.13].
+        m_transmitModel.setMacAddress(info.macAddress);
+        m_transmitModel.load();
     }
 
     m_name = info.displayName();
@@ -2271,6 +2276,12 @@ void RadioModel::saveSliceState(SliceModel* slice)
         m_alexController.save();
         m_alexControllerDirty = false;
     }
+
+    // Flush per-band tune power on every slice save (matches AlexController
+    // cadence; save() no-ops when MAC is empty, so pre-connect calls are
+    // harmless).
+    // Phase 3M-1a G.3. Source: Thetis console.cs:3087-3091 [v2.10.3.13].
+    m_transmitModel.save();
 }
 
 void RadioModel::teardownConnection()
@@ -2297,6 +2308,10 @@ void RadioModel::teardownConnection()
         m_alexController.save();
         m_alexControllerDirty = false;
     }
+
+    // Flush per-band tune power on disconnect.
+    // Phase 3M-1a G.3. Source: Thetis console.cs:3087-3091 [v2.10.3.13].
+    m_transmitModel.save();
 
     // Disconnect signals into the DSP worker first so no new I/Q
     // batches can be posted onto the worker thread, then quit and

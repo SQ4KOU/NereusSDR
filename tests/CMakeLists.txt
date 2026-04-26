@@ -216,6 +216,9 @@ nereus_add_test(tst_slice_model_vax)
 
 nereus_add_test(tst_transmit_model_tx_owner)
 
+# ── Phase 3M-1a G.3: TransmitModel tunePowerByBand[14] per-MAC persistence ──
+nereus_add_test(tst_transmit_model_tune_power)
+
 # ── Phase 3O VAX schema migration ─────────────────────────────────────────
 nereus_add_test(tst_app_settings_vax_migration)
 
