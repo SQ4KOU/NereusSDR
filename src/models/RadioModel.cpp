@@ -2539,7 +2539,7 @@ void RadioModel::setGanymedePresent(bool present)
 // for the flag-management and MOX-state-machine portion, B.5).
 //
 // Inline attribution from Thetis:
-//   //MW0LGE_21k9d  [original inline comment from console.cs:29979]
+//   //MW0LGE_21k9d  [original inline comment from console.cs:29980]
 //   //MW0LGE_21a    [original inline comment from console.cs:29997]
 //   //MW0LGE_22b    [original inline comment from console.cs:30033]
 //   //MW0LGE_21k8   [original inline comment from console.cs:30086]
@@ -2586,6 +2586,13 @@ void RadioModel::setTune(bool on)
             emit tuneRefused(QStringLiteral("Power must be on to enable Tune."));
             return;
         }
+
+        // 3M-1a G.4 fixup: set m_isTuning EARLY, matching Thetis console.cs:30010
+        // [v2.10.3.13] "_tuning = true;" which precedes the tone-freq switch
+        // (30022) and the PreviousPWR save (30043).  Functionally inconsequential
+        // in 3M-1a (no subscriber reads m_isTuning during TUN-on setup), but
+        // matches Thetis ordering for future maintainers reading side-by-side.
+        m_isTuning = true;
 
         // ── SAVE meter mode ────────────────────────────────────────────────────
         // Cite: console.cs:30011 [v2.10.3.13]:
@@ -2678,13 +2685,26 @@ void RadioModel::setTune(bool on)
         //   //MW0LGE_21k8  [original inline comment from console.cs:30086]
         // MoxController::setTune(true) drives the full state machine and sets
         // _manual_mox + _current_ptt_mode = PTTMode.MANUAL (B.5).
-        m_isTuning = true;
+        // Note: m_isTuning = true was moved earlier (after power-on guard) to
+        // match Thetis console.cs:30010 [v2.10.3.13] ordering (G.4 fixup).
         if (m_moxController) {
             m_moxController->setTune(true);
         }
 
     } else {
         // ── TUN OFF path ───────────────────────────────────────────────────────
+
+        // 3M-1a G.4 fixup: idempotent guard against double-off and cold-off.
+        // Without this guard, a setTune(false) called before any setTune(true)
+        // would restore m_savedPowerPct (default 100) over the user's actual
+        // power setting, stomping whatever real-time value the TransmitModel holds.
+        // Also matches Thetis behavior: chkTUN_CheckedChanged only runs the
+        // TUN-off branch when chkTUN was checked (i.e. _tuning was true).
+        // Cite: Thetis console.cs:29978 [v2.10.3.13] — if (e.NewValue == Enabled) { ... } else { ... }
+        //   //MW0LGE_21k9d  [original inline comment from console.cs:29980]
+        if (!m_isTuning) {
+            return;
+        }
 
         // ── RELEASE MOX via MoxController ────────────────────────────────────
         // Cite: console.cs:30105 [v2.10.3.13]: chkMOX.Checked = false;

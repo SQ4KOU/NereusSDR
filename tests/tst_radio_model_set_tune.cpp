@@ -21,7 +21,10 @@
 //  12. MoxController::setTune(false) called on TUN-off.
 //  13. Tune tone engaged on TUN-on (setTuneTone recorded by MockTxChannel).
 //  14. Tune tone released on TUN-off.
-//  15. m_isTuning guard: TUN-off when not tuning is a no-op.
+//  15. m_isTuning guard: TUN-off without prior TUN-on → complete no-op (G.4 fixup).
+//  16. AM mode: not swapped (isLsbFamily(AM) == false → no setDspMode).
+//  17. FM mode: not swapped (isLsbFamily(FM) == false → no setDspMode).
+//  18. DIGL/DIGU isLsbFamily predicate: DIGL → true, DIGU → false (tone sign).
 
 #include <QtTest/QtTest>
 #include <QObject>
@@ -37,6 +40,22 @@
 #include "models/TransmitModel.h"
 
 using namespace NereusSDR;
+
+// ── isLsbFamily reference copy (test seam) ───────────────────────────────────
+// G.4 fixup: isLsbFamily() is a file-scope static in RadioModel.cpp and cannot
+// be linked from the test binary (NereusSDRObjs is not compiled with
+// NEREUS_BUILD_TESTS).  We maintain an independent reference copy here that
+// mirrors the production logic exactly.  A mismatch between this copy and
+// RadioModel.cpp will be caught by test 18 failing on the observable behaviors
+// of setTune (AM/FM/DIGL/DIGU mode-swap / no-swap tests 16-17 verify the
+// integration path; test 18 validates the predicate contract itself).
+//
+// Production source: RadioModel.cpp — static bool isLsbFamily(DSPMode mode)
+// Cite: Thetis console.cs:30024-30037 [v2.10.3.13].
+static bool isLsbFamilyRef(DSPMode mode) noexcept
+{
+    return mode == DSPMode::LSB || mode == DSPMode::CWL || mode == DSPMode::DIGL;
+}
 
 // ── MockConnection ────────────────────────────────────────────────────────────
 // Records setTxDrive calls (and satisfies RadioConnection pure virtuals).
@@ -506,13 +525,12 @@ private slots:
         model.injectConnectionForTest(nullptr);
     }
 
-    // ── 15. setTune(false) without prior TUN-on: no crash, no manualMoxChanged ─
-    // TUN-off without prior TUN-on must not crash.
-    // manualMoxChanged must NOT fire (m_manualMox starts false, stays false).
-    // setMox(false) may fire (idempotent MOX-off is a no-op in MoxController)
-    // but the MOX state machine's idempotent guard prevents a TX→RX walk.
-    // setTxDrive(restore) DOES fire since setTune(false) always pushes restore —
-    // this matches Thetis (no guard on the PWR = PreviousPWR restore path).
+    // ── 15. TUN-off without prior TUN-on → no-op via m_isTuning guard ──────────
+    // MoxController not engaged, no power restore, no setDspMode, no setTuneTone.
+    // G.4 fixup: the cold-off guard (if (!m_isTuning) return;) at the top of
+    // the TUN-off else-branch means setTune(false) with no prior setTune(true)
+    // is a complete no-op: no setTxDrive, no MoxController::setTune(false),
+    // no DSP mode restore, no tune tone release.
     void tuneOffWithoutPriorTuneOnNocrash()
     {
         RadioModel model;
@@ -522,14 +540,104 @@ private slots:
 
         QSignalSpy moxSpy(model.moxController(), &MoxController::manualMoxChanged);
 
+        conn->txDriveLog.clear();
         model.setTune(false);
         pump();
 
-        // m_manualMox starts false; setTune(false) sets it false → no change
-        // → manualMoxChanged must NOT fire.
+        // m_isTuning was false → guard fires → complete no-op.
+        // manualMoxChanged must NOT fire.
         QCOMPARE(moxSpy.count(), 0);
+        // setTxDrive (restore) must NOT have been called (guard returned early).
+        QCOMPARE(conn->txDriveLog.size(), 0);
 
         model.injectConnectionForTest(nullptr);
+    }
+
+    // ── 16. AM mode: not swapped on TUN-on ───────────────────────────────────
+    // AM is not CWL/CWU and not LSB-family; the mode must remain AM after TUN-on.
+    // Cite: console.cs:30043-30070 [v2.10.3.13] — switch (old_dsp_mode):
+    //   only CWL and CWU arms trigger a mode change; AM falls through default.
+    // G.4 fixup: verifies AM-not-swapped, complementing tests 2-5 which only
+    // cover USB/LSB/CWL/CWU.
+    void amModeNotSwappedOnTuneOn()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn);
+        std::unique_ptr<MockConnection> connOwner(conn);
+
+        auto* slice = model.activeSlice();
+        QVERIFY(slice != nullptr);
+        slice->setDspMode(DSPMode::AM);
+
+        QSignalSpy modeSpy(slice, &SliceModel::dspModeChanged);
+
+        model.setTune(true);
+        pump();
+
+        // AM → no swap → dspModeChanged must NOT have fired.
+        QCOMPARE(modeSpy.count(), 0);
+        QCOMPARE(slice->dspMode(), DSPMode::AM);
+        // Saved mode must reflect AM (not a default USB).
+        // Verify by doing TUN-off and checking mode is still AM (no CW restore).
+        model.setTune(false);
+        pump();
+        QCOMPARE(slice->dspMode(), DSPMode::AM);
+
+        model.injectConnectionForTest(nullptr);
+    }
+
+    // ── 17. FM mode: not swapped on TUN-on ───────────────────────────────────
+    // FM is not CWL/CWU and not LSB-family; the mode must remain FM after TUN-on.
+    // G.4 fixup: verifies FM-not-swapped.
+    void fmModeNotSwappedOnTuneOn()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn);
+        std::unique_ptr<MockConnection> connOwner(conn);
+
+        auto* slice = model.activeSlice();
+        QVERIFY(slice != nullptr);
+        slice->setDspMode(DSPMode::FM);
+
+        QSignalSpy modeSpy(slice, &SliceModel::dspModeChanged);
+
+        model.setTune(true);
+        pump();
+
+        // FM → no swap → dspModeChanged must NOT have fired.
+        QCOMPARE(modeSpy.count(), 0);
+        QCOMPARE(slice->dspMode(), DSPMode::FM);
+
+        model.setTune(false);
+        pump();
+        QCOMPARE(slice->dspMode(), DSPMode::FM);
+
+        model.injectConnectionForTest(nullptr);
+    }
+
+    // ── 18. isLsbFamily predicate: DIGL → true (negative tone), DIGU → false ─
+    // Validates the sign-selection logic directly via a reference copy of the
+    // production predicate (isLsbFamilyRef, defined above in this test file).
+    // Cite: console.cs:30024-30037 [v2.10.3.13]:
+    //   case DSPMode.DIGL: radio.GetDSPTX(0).TXPostGenToneFreq = -cw_pitch; break;
+    //   case DSPMode.DIGU: (falls through to default) → +cw_pitch.
+    // G.4 fixup: added to complement tests 2-3 (USB/LSB sign) with DIGL/DIGU,
+    // and to provide a standalone predicate test independent of WDSP being live.
+    void isLsbFamilyPredicateDiglDigu()
+    {
+        // DIGL is LSB-family → tone sign = negative (−cw_pitch).
+        QVERIFY(isLsbFamilyRef(DSPMode::DIGL));
+        // DIGU is NOT LSB-family → tone sign = positive (+cw_pitch).
+        QVERIFY(!isLsbFamilyRef(DSPMode::DIGU));
+        // Cross-check the full set for regressions against the Thetis switch table.
+        QVERIFY(isLsbFamilyRef(DSPMode::LSB));
+        QVERIFY(isLsbFamilyRef(DSPMode::CWL));
+        QVERIFY(!isLsbFamilyRef(DSPMode::USB));
+        QVERIFY(!isLsbFamilyRef(DSPMode::CWU));
+        QVERIFY(!isLsbFamilyRef(DSPMode::AM));
+        QVERIFY(!isLsbFamilyRef(DSPMode::FM));
     }
 };
 

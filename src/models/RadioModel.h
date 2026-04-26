@@ -431,7 +431,7 @@ public slots:
     // MeterModel gains a setTxDisplayMode() setter.
     //
     // Inline attribution preserved from Thetis:
-    //   //MW0LGE_21k9d  [original inline comment from console.cs:29979]
+    //   //MW0LGE_21k9d  [original inline comment from console.cs:29980]
     //   //MW0LGE_21a    [original inline comment from console.cs:29997]
     //   //MW0LGE_22b    [original inline comment from console.cs:30033]
     //   //MW0LGE_21k8   [original inline comment from console.cs:30086]
@@ -654,11 +654,17 @@ private:
     //   Cite: Thetis console.cs:30033 [v2.10.3.13] — PreviousPWR = ptbPWR.Value.
     //   //MW0LGE_22b  [original inline comment from console.cs:30033]
     //   Restored to the connection on TUN-off so the slider snaps back.
-    int m_savedPowerPct{50};
+    // Default 100 matches TransmitModel::m_power default (TransmitModel.h).
+    // G.4 fixup: changed from 50 (initial value mismatch with TransmitModel);
+    // harmless after the cold-off guard in setTune(false) but kept for hygiene.
+    int m_savedPowerPct{100};
     //
-    // m_isTuning: mirror of MoxController::_tuning to guard against double-off.
+    // m_isTuning: True while TUN is engaged (between setTune(true) and
+    //   setTune(false)).  Used as the idempotent guard at the top of
+    //   setTune(false) — prevents a cold-off (no prior setTune(true)) from
+    //   restoring stale saved state over the user's actual settings.  Also
+    //   exported for H.3 UI polling.
     //   Cite: Thetis console.cs:30010 [v2.10.3.13] — _tuning = true.
-    //   Set true by setTune(true), cleared by setTune(false).
     bool m_isTuning{false};
 
     // ── 3M-1a G.1: TX-side integration ──────────────────────────────────────
