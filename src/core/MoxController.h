@@ -9,6 +9,10 @@
 //   console.cs:19659-19698 [v2.10.3.13] — mox_delay / space_mox_delay /
 //     key_up_delay / rf_delay / ptt_out_delay field declarations
 //   console.cs:18494-18502 [v2.10.3.13] — break_in_delay field declaration
+//   console.cs:29978-30157 [v2.10.3.13] — chkTUN_CheckedChanged (TUN
+//     slot; only the _manual_mox + _current_ptt_mode flag assignments
+//     at lines 30093-30094 and the _manual_mox clear at line 30142
+//     are ported here; the remainder is split across Tasks C.3 / G.3 / G.4)
 //
 // Upstream file has no per-member inline attribution tags in this
 // state-machine region except where noted with inline cites below.
@@ -39,6 +43,14 @@
 //                 hardwareFlipped(bool isTx) chosen (Option B) so a
 //                 single subscriber slot handles both RX→TX and TX→RX
 //                 hardware routing transitions.
+//   2026-04-25 — Phase 3M-1a Task B.5 — setTune(bool) slot added.
+//                 Drives MOX through the existing state machine and
+//                 manages the m_manualMox / m_pttMode = Manual flags.
+//                 Scope: MoxController-side TUN flag management only.
+//                 Fuller chkTUN_CheckedChanged behaviour (CW→LSB/USB swap,
+//                 meter-mode lock, tune-power lookup, gen1 tone, ATU async,
+//                 NetworkIO.SetUserOut, Apollo auto-tune, 2-TONE pre-stop)
+//                 is split across Tasks C.3 / G.3 / G.4.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -124,9 +136,16 @@ public:
     static constexpr int kBreakInDelayMs = 300;
 
     // ── Getters ──────────────────────────────────────────────────────────────
-    bool     isMox()    const noexcept { return m_mox; }
-    MoxState state()    const noexcept { return m_state; }
-    PttMode  pttMode()  const noexcept { return m_pttMode; }
+    bool     isMox()      const noexcept { return m_mox; }
+    MoxState state()      const noexcept { return m_state; }
+    PttMode  pttMode()    const noexcept { return m_pttMode; }
+    // isManualMox: true while MOX is engaged via the TUN button.
+    //
+    // Mirrors Thetis _manual_mox (console.cs:240 [v2.10.3.13]):
+    //   "True if the MOX button was clicked on (not PTT)"
+    // In NereusSDR, TUN goes through setTune() which sets this flag.
+    // External code must not set this directly — call setTune() instead.
+    bool     isManualMox() const noexcept { return m_manualMox; }
 
     // ── Setter ───────────────────────────────────────────────────────────────
     // setPttMode: idempotent; emits pttModeChanged on actual transition.
@@ -144,6 +163,37 @@ public:
                            int keyUpMs, int pttOutMs, int breakInMs);
 
 public slots:
+    // setTune: engage / release the TUN function.
+    //
+    // Drives MOX through the full state machine and manages the
+    // m_manualMox / m_pttMode = Manual flags per the Thetis TUN-on
+    // "go for it" block and TUN-off path in chkTUN_CheckedChanged
+    // (console.cs:29978-30157 [v2.10.3.13]).
+    //
+    // Specifically ports the flag assignments at:
+    //   console.cs:30093 — _current_ptt_mode = PTTMode.MANUAL  [v2.10.3.13]
+    //   console.cs:30094 — _manual_mox = true                  [v2.10.3.13]
+    //   console.cs:30142 — _manual_mox = false                 [v2.10.3.13]
+    //
+    // Note: Thetis sets flags AFTER chkMOX.Checked = true (line 30081)
+    // and AFTER await Task.Delay(100) (line 30083). NereusSDR sets them
+    // BEFORE setMox(true) so that phase-signal subscribers (F.1) see a
+    // consistent m_manualMox=true / m_pttMode=Manual snapshot when their
+    // slots fire. This ordering deviation is intentional and documented.
+    // See pre-code review §3.2 for the rationale.
+    //
+    // Scope (3M-1a B.5): this slot owns the MoxController-side flag
+    // management and MOX-state engagement only. The fuller Thetis
+    // chkTUN_CheckedChanged behaviour — CW→LSB/USB swap, meter-mode lock,
+    // tune-power lookup, gen1 tone setup, ATU async, NetworkIO.SetUserOut,
+    // Apollo auto-tune, 2-TONE pre-stop — is split across:
+    //   - TxChannel::setTuneTone (Task C.3) for gen1 tone
+    //   - TransmitModel per-band tune-power (Task G.3)
+    //   - RadioModel TUNE function port (Task G.4) for the rest
+    // Those tasks call setTune() after doing their prep, or subscribe to
+    // MoxController phase signals for ordered hardware-flip side-effects.
+    void setTune(bool on);
+
     // setMox: Codex P2-ordered slot.
     //
     // Order (must not be reordered):
@@ -205,6 +255,14 @@ signals:
     void txaFlushed();              // TX→RX phase 3 of 4 — fires after keyUpDelay; in-flight samples cleared
     void rxReady();                 // TX→RX phase 4 of 4 — fires after pttOutDelay
 
+    // manualMoxChanged: emitted when m_manualMox transitions (diagnostic-level).
+    //
+    // Subscribers who need to distinguish a TUN-originated MOX from a
+    // direct setMox() call can attach here. Phase-signal subscribers (F.1)
+    // typically use hardwareFlipped(bool isTx) instead — its payload is
+    // sufficient for routing decisions.
+    void manualMoxChanged(bool isManual);
+
     // ── Boundary signals (diagnostic / integration — keep these) ─────────────
     // moxStateChanged: emitted exactly once per real transition, at the END
     // of the timer walk (TX fully engaged or fully released).
@@ -253,6 +311,11 @@ private:
     bool     m_mox{false};               // single source of truth for MOX
     MoxState m_state{MoxState::Rx};      // current state-machine position
     PttMode  m_pttMode{PttMode::None};   // current PTT mode
+    // m_manualMox: true while MOX is engaged via the TUN button.
+    // From Thetis console.cs:240 [v2.10.3.13]:
+    //   "private bool _manual_mox; // True if the MOX button was clicked on (not PTT)"
+    // Set/cleared only by setTune() — never set by setMox() directly.
+    bool     m_manualMox{false};
 
     // ── QTimer chains (B.3) ──────────────────────────────────────────────────
     // All initialized single-shot in the constructor with kXxxMs intervals.

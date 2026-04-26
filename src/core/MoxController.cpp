@@ -9,6 +9,10 @@
 //   console.cs:19659-19698 [v2.10.3.13] — mox_delay / space_mox_delay /
 //     key_up_delay / rf_delay / ptt_out_delay field declarations
 //   console.cs:18494-18502 [v2.10.3.13] — break_in_delay field declaration
+//   console.cs:29978-30157 [v2.10.3.13] — chkTUN_CheckedChanged (TUN
+//     slot; only the _manual_mox + _current_ptt_mode flag assignments
+//     at lines 30093-30094 and the _manual_mox clear at line 30142
+//     are ported here; the remainder is split across Tasks C.3 / G.3 / G.4)
 //
 // Upstream file has no per-member inline attribution tags in this
 // state-machine region except where noted with inline cites below.
@@ -40,6 +44,14 @@
 //                 rxReady emitted in setMox(false), onKeyUpDelayElapsed,
 //                 and onPttOutElapsed.
 //                 Codex P1: subscribers attach to phase signals.
+//   2026-04-25 — Phase 3M-1a Task B.5 — setTune(bool) implemented.
+//                 Drives MOX through the existing state machine and
+//                 manages m_manualMox / m_pttMode = Manual flags.
+//                 Ports the flag-assignment block at
+//                 console.cs:30081-30094 and the clear at
+//                 console.cs:30142 [v2.10.3.13]. The fuller
+//                 chkTUN_CheckedChanged behaviour is split across
+//                 Tasks C.3 / G.3 / G.4.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -112,6 +124,91 @@ void MoxController::setTimerIntervals(int rfMs, int moxMs, int spaceMs,
     m_keyUpDelayTimer.setInterval(keyUpMs);
     m_pttOutDelayTimer.setInterval(pttOutMs);
     m_breakInDelayTimer.setInterval(breakInMs);
+}
+
+// ---------------------------------------------------------------------------
+// setTune — engage / release the TUN function.
+//
+// From Thetis chkTUN_CheckedChanged (console.cs:29978-30157 [v2.10.3.13]).
+//
+// This method ports ONLY the MoxController-side flag management and MOX
+// engagement from that handler. The broader TUN effects (CW→LSB/USB mode
+// swap, meter-mode lock, tune-power lookup, gen1 tone setup, ATU async,
+// NetworkIO.SetUserOut, Apollo auto-tune, 2-TONE pre-stop) live in other
+// tasks — see the full scope note in the header comment for setTune.
+//
+// Relevant Thetis lines (the "go for it" block):
+//   console.cs:30081 — chkMOX.Checked = true;              [v2.10.3.13]
+//   console.cs:30083 — await Task.Delay(100); // MW0LGE_21k8
+//   console.cs:30090 — // MW0LGE_21k8 moved below mox
+//   console.cs:30093 — _current_ptt_mode = PTTMode.MANUAL; [v2.10.3.13]
+//   console.cs:30094 — _manual_mox = true;                 [v2.10.3.13]
+// And the TUN-off path:
+//   console.cs:30106 — chkMOX.Checked = false;             [v2.10.3.13]
+//   console.cs:30142 — _manual_mox = false;                [v2.10.3.13]
+//
+// ORDERING NOTE vs Thetis:
+// In Thetis, the flags are set AFTER chkMOX.Checked = true (line 30081)
+// and AFTER an awaited 100 ms delay (line 30083). NereusSDR sets them
+// BEFORE setMox(true) so that phase-signal subscribers (F.1) see a
+// consistent m_manualMox=true / m_pttMode=Manual snapshot when their
+// slots fire on the synchronous txAboutToBegin / hardwareFlipped(true)
+// emissions inside setMox(). This ordering deviation is intentional.
+// See pre-code review §3.2 for the rationale; it is safe because
+// NereusSDR's setMox() is synchronous (no async/await equivalent),
+// and the 100 ms settle delay that Thetis uses to interleave the flag
+// set with the hardware switch does not apply here.
+//
+// For TUN-off: MOX is released BEFORE the flag is cleared, matching the
+// spirit of Thetis (line 30106 precedes 30142) and ensuring that any
+// phase-signal subscriber that fires during the TX→RX walk (e.g.
+// txAboutToEnd, hardwareFlipped(false)) still observes m_manualMox=true.
+// m_pttMode is NOT reset here: per Thetis, it clears indirectly via the
+// TX→RX path in chkMOX_CheckedChanged2 (console.cs:29496 [v2.10.3.13])
+// which sets _current_ptt_mode = PTTMode.NONE. In NereusSDR that reset
+// belongs to the F.1 hardwareFlipped(false) subscriber in RadioModel.
+// ---------------------------------------------------------------------------
+void MoxController::setTune(bool on)
+{
+    if (on) {
+        // ── TUN-on: set flags BEFORE engaging MOX ────────────────────────
+        // (Ordering deviation from Thetis documented above.)
+
+        // From Thetis console.cs:30093 [v2.10.3.13]:
+        //   _current_ptt_mode = PTTMode.MANUAL;
+        // MW0LGE_21k8 moved below mox  [original inline comment console.cs:30090]
+        setPttMode(PttMode::Manual);      // idempotent; emits pttModeChanged on transition
+
+        // From Thetis console.cs:30094 [v2.10.3.13]:
+        //   _manual_mox = true;
+        const bool wasManual = m_manualMox;
+        m_manualMox = true;
+        if (!wasManual) {
+            emit manualMoxChanged(true);
+        }
+
+        // Engage MOX. setMox runs Codex P2 (safety effect) → idempotent
+        // guard → state commit → emit txAboutToBegin → emit
+        // hardwareFlipped(true) → start rfDelay → ... → txReady.
+        // From Thetis console.cs:30081 [v2.10.3.13]: chkMOX.Checked = true;
+        setMox(true);
+
+    } else {
+        // ── TUN-off: release MOX BEFORE clearing the flag ─────────────────
+        // From Thetis console.cs:30106 [v2.10.3.13]: chkMOX.Checked = false;
+        setMox(false);
+
+        // From Thetis console.cs:30142 [v2.10.3.13]: _manual_mox = false;
+        const bool wasManual = m_manualMox;
+        m_manualMox = false;
+        if (wasManual) {
+            emit manualMoxChanged(false);
+        }
+        // NOTE: m_pttMode is intentionally NOT reset here.
+        // Thetis clears _current_ptt_mode indirectly via the TX→RX path
+        // in chkMOX_CheckedChanged2 (console.cs:29496 [v2.10.3.13]).
+        // In NereusSDR that belongs to F.1's hardwareFlipped(false) subscriber.
+    }
 }
 
 // ---------------------------------------------------------------------------

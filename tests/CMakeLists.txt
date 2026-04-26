@@ -786,3 +786,18 @@ nereus_add_test(tst_mox_controller_timers)
 # Phase signals derived from chkMOX_CheckedChanged2 (console.cs:29311-29678 [v2.10.3.13]).
 nereus_add_test(tst_mox_controller_phase_signals)
 
+# ── Phase 3M-1a Task B.5: MoxController setTune(bool) slot ───────────────────
+# Verifies: setTune(true) engages MOX, sets isManualMox=true, pttMode=Manual,
+#   emits manualMoxChanged(true) and pttModeChanged(Manual) each exactly once;
+# setTune(false) releases MOX, clears isManualMox (but NOT pttMode — F.1 resets it),
+#   emits manualMoxChanged(false) exactly once;
+# NereusSDR ordering: flags set BEFORE setMox(true) so phase-signal subscribers
+#   see m_manualMox=true at txAboutToBegin time; flag cleared AFTER setMox(false)
+#   so m_manualMox stays true during TX→RX phase signals (txAboutToEnd etc.);
+# Idempotent guard: setTune(true) twice → manualMoxChanged fires only once;
+# TUN→RAW-MOX combinations: direct setMox(true) then setTune(true) flips manualMox;
+#   setTune(true) + setMox(false) leaves manualMox true; setTune(false) then clears;
+# Codex P2 invariant: runMoxSafetyEffects fires on every setTune call (via setMox);
+# Ports chkTUN_CheckedChanged (console.cs:29978-30157 [v2.10.3.13]) flag block.
+nereus_add_test(tst_mox_controller_tune)
+
