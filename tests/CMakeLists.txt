@@ -835,6 +835,15 @@ nereus_add_test(tst_transmit_setup_block_tx)
 # label, chkGeneralRXOnly hidden by default, chkNetworkWDT default ON.
 nereus_add_test(tst_general_setup_hardware_config)
 
+# ── Phase 3M-1a G.2: Receive Only checkbox visibility wired from caps.isRxOnlySku ──
+# Verifies setReceiveOnlyVisible(bool) works correctly and that the constructor
+# reads initial caps (hidden for standard boards, visible for RX-only SKUs like
+# HermesLiteRxOnly).  Cite: Thetis setup.designer.cs:8535-8544 [v2.10.3.13]
+# (Visible=false default); BoardCapabilities::isRxOnlySku (NereusSDR-original).
+# NEREUS_BUILD_TESTS required for RadioModel::setBoardForTest.
+nereus_add_test(tst_general_options_page_rx_only)
+target_compile_definitions(tst_general_options_page_rx_only PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-0 Task 13: Options group box on Setup → General ─────────────────
 # Verifies grpGeneralOptions has chkPreventTXonDifferentBandToRX per
 # Thetis setup.designer.cs:9050-9059 [v2.10.3.13]. Tooltip NereusSDR-original

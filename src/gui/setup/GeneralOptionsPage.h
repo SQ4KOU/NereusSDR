@@ -77,6 +77,14 @@ public:
 
     void syncFromModel() override;
 
+    /// Show or hide the Receive Only checkbox.  Hidden by default per
+    /// Thetis setup.designer.cs:8535-8544 [v2.10.3.13] (Visible=false).
+    /// Called by the constructor on initial connect and by currentRadioChanged
+    /// so reconnects to a different radio (e.g. full-TX board after an HL2-RX)
+    /// update visibility correctly.  BoardCapabilities::isRxOnlySku
+    /// (NereusSDR-original) is the authoritative source.
+    void setReceiveOnlyVisible(bool visible);
+
 private:
     void buildHardwareConfigGroup();
     void buildOptionsGroup();

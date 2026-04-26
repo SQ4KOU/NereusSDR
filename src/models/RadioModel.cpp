@@ -673,7 +673,8 @@ const BoardCapabilities& RadioModel::boardCapabilities() const
 #ifdef NEREUS_BUILD_TESTS
     if (m_testCapsOverride) {
         static BoardCapabilities overrideCaps{};
-        overrideCaps.hasAlex = m_testCapsHasAlex;
+        overrideCaps.hasAlex     = m_testCapsHasAlex;
+        overrideCaps.isRxOnlySku = m_testCapsIsRxOnly;  // 3M-1a G.2
         return overrideCaps;
     }
 #endif

@@ -340,6 +340,13 @@ public:
         m_testCapsOverride = true;
         m_testCapsHasAlex = hasAlex;
     }
+    // 3M-1a G.2: inject isRxOnlySku without a live HermesLiteRxOnly board.
+    // (HermesLiteRxOnly has no HPSDRModel entry so setBoardForTest cannot
+    // reach its caps via the normal profileForModel path.)
+    void setCapsRxOnlyForTest(bool isRxOnly) {
+        m_testCapsOverride   = true;
+        m_testCapsIsRxOnly   = isRxOnly;
+    }
     NereusSDR::Band lastBand() const { return m_lastBand; }
 #endif
 
@@ -559,6 +566,7 @@ private:
 #ifdef NEREUS_BUILD_TESTS
     bool m_testCapsOverride{false};
     bool m_testCapsHasAlex{false};
+    bool m_testCapsIsRxOnly{false};  // 3M-1a G.2: injected via setCapsRxOnlyForTest
 #endif
 
     // Phase 3M-0 Task 6: Ganymede PA-trip live state.
