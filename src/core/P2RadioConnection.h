@@ -288,6 +288,12 @@ private:
     // From deskhpsdr/src/new_protocol.c:739-762 [@120188f]:
     //   high_priority_buffer_to_radio[4] = P2running;   // bit 0 = run
     //   if (xmit) { high_priority_buffer_to_radio[4] |= 0x02; }  // bit 1 = MOX
+    //
+    // THREAD SAFETY: m_mox must only be written from the connection thread.
+    // All compose functions read it on the connection thread.  Cross-thread
+    // callers (e.g., MoxController on main thread post-F.1) must dispatch via
+    // QMetaObject::invokeMethod with Qt::QueuedConnection, matching the
+    // existing pattern for setTxFrequency / setRxFrequency.
     bool m_mox{false};
 
     // --- Hardware config (from Thetis _radionet) ---

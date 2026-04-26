@@ -32,7 +32,7 @@
 //   6.  Codec path (OrionMKII): same value as legacy.
 //   7.  Codec path (Saturn): same value.
 //   8.  Out-of-band gate: TX freq in ham band → drive passes.
-//   9.  Out-of-band gate: TX freq in GEN band → byte 345 = 0.
+//   9.  Out-of-band gate: TX freq in Band::WWV → byte 345 = 0.
 //  10.  Byte 345 round-trip: set, read, update, read.
 #include <QtTest/QtTest>
 #include "core/P2RadioConnection.h"
@@ -147,17 +147,18 @@ private slots:
         QCOMPARE(int(buf[345]), 100);
     }
 
-    // ── 9. Out-of-band gate: TX freq in GEN band → byte 345 = 0 ─────────────
-    // A TX frequency outside all recognised ham bands maps to Band::GEN.
-    // The out-of-band gate must zero byte 345 regardless of driveLevel.
+    // ── 9. Out-of-band gate: TX freq in Band::WWV → byte 345 = 0 ────────────
+    // 10 MHz is one of the WWV discrete centers (bandFromFrequency returns
+    // Band::WWV, not Band::GEN).  WWV is not a ham band, so the gate zeros
+    // byte 345 regardless of driveLevel.
     // Source: deskhpsdr/src/new_protocol.c:864,876 [@120188f]
     //   int power = 0; ... high_priority_buffer_to_radio[345] = power & 0xFF;
-    // NereusSDR translation: txBand == GEN → power = 0.
+    // NereusSDR translation: txBand == WWV → power = 0.
     void outOfBandGate_genBandFreq_driveZeroed() {
         P2RadioConnection conn;
         conn.setBoardForTest(HPSDRHW::OrionMKII);
-        // 10 MHz is in the GEN band in bandFromFrequency (between ham bands).
-        conn.setTxFrequency(10000000ULL);  // ~10 MHz — GEN (outside ham bands)
+        // 10 MHz is a WWV discrete center (bandFromFrequency returns Band::WWV).
+        conn.setTxFrequency(10000000ULL);  // 10 MHz — Band::WWV (WWV-time-signal frequency, not a ham band; gate zeros it)
         conn.setTxDrive(100);
         quint8 buf[1444] = {};
         conn.composeCmdHighPriorityForTest(buf);

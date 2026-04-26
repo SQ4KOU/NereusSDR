@@ -560,10 +560,12 @@ void P2RadioConnection::setTxDrive(int level)
 
 void P2RadioConnection::setMox(bool enabled)
 {
-    // Codex P2: safety effect (wire byte update) fires unconditionally so
-    // repeated calls with the same value still re-emit the high-priority packet.
-    // This matches deskhpsdr behaviour where new_protocol_high_priority() is
-    // triggered on every MOX state change event regardless of prior value.
+    // Guard idempotent transitions: the 100 ms high-priority periodic cadence
+    // already re-emits the current m_mox state on every tick, so there is no
+    // need to force an extra packet when the value is unchanged.  This matches
+    // P1 setMox (which uses m_forceBank0Next for its safety effect and early-
+    // returns on idempotent) and deskhpsdr's model where new_protocol_high_
+    // priority() fires only when the transmit state actually transitions.
     //
     // From deskhpsdr/src/new_protocol.c:739-762 [@120188f]:
     //   high_priority_buffer_to_radio[4] = P2running;   // bit 0 = run
@@ -572,12 +574,12 @@ void P2RadioConnection::setMox(bool enabled)
     // m_mox drives bit 1 (0x02) of byte 4 in composeCmdHighPriority.
     // m_tx[0].pttOut remains for the rear-panel PTT-out relay (TX-confirmation
     // output, deferred to 3M-3 per the plan); it is NOT the MOX source here.
-    if (m_running) {
-        sendCmdHighPriority();  // safety effect: re-emit before state update
+    if (m_mox == enabled) {
+        return;  // idempotent — periodic cadence covers any state drift
     }
     m_mox = enabled;
     if (m_running) {
-        sendCmdHighPriority();  // emit with new MOX state
+        sendCmdHighPriority();  // immediate emit on state change for low latency
     }
 }
 
@@ -989,6 +991,12 @@ CodecContext P2RadioConnection::buildCodecContext() const
     // applied here at compose time, matching deskhpsdr behaviour.
     // tx_out_of_band_allowed is not yet wired in NereusSDR; when it is,
     // this gate should pass through driveLevel unconditionally.
+    //
+    // XVTR note: bandFromFrequency() never returns Band::XVTR — it falls
+    // through to Band::GEN for any unmapped frequency.  Transverter operation
+    // works because the IF frequency (radio-side) is in a ham band; the LO
+    // offset is applied by the transverter hardware.  If a future task
+    // explicitly handles XVTR with a known LO offset, revisit this gate.
     {
         const Band txBand = bandFromFrequency(static_cast<double>(m_tx[0].frequency));
         const bool txInBand = (txBand != Band::GEN && txBand != Band::WWV);
@@ -1227,6 +1235,12 @@ void P2RadioConnection::composeCmdHighPriorityLegacy(char buf[kBufLen]) const
     // outside a recognised ham band.  BandPlanGuard does not zero driveLevel
     // upstream; gate applied at compose time.  tx_out_of_band_allowed not yet
     // wired in NereusSDR.
+    //
+    // XVTR note: bandFromFrequency() never returns Band::XVTR — it falls
+    // through to Band::GEN for any unmapped frequency.  Transverter operation
+    // works because the IF frequency (radio-side) is in a ham band; the LO
+    // offset is applied by the transverter hardware.  If a future task
+    // explicitly handles XVTR with a known LO offset, revisit this gate.
     {
         const Band txBand = bandFromFrequency(static_cast<double>(m_tx[0].frequency));
         const bool txInBand = (txBand != Band::GEN && txBand != Band::WWV);
