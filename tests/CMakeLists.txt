@@ -740,3 +740,10 @@ nereus_add_test(tst_mainwindow_status_bar_safety)
 # PreventTxOnDifferentBandToRx (1). Uses QTemporaryDir for full isolation.
 nereus_add_test(tst_phase3m0_persistence_audit)
 
+# ── Phase 3M-1a Task B.1: PttMode enum (Thetis PTTMode port) ─────────────────
+# Verifies all 9 values (None/Manual/Mic/Cw/X2/Cat/Vox/Space/Tci) have
+# distinct non-empty labels, integer assignments match Thetis
+# enums.cs:346-359 [v2.10.3.13] (First=-1..Last=9), and pttModeFromString
+# round-trips both Thetis-source names and user-visible labels case-insensitively.
+nereus_add_test(tst_ptt_mode)
+
