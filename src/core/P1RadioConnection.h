@@ -259,6 +259,13 @@ private:
     // Cleared by sendCommandFrame() after it emits bank 0.
     bool    m_forceBank0Next{false};
 
+    // 3M-1a E.4: force the next sendCommandFrame() to jump to bank 10 so
+    // the T/R relay bit (C3 bit 7) lands on the wire within ≤1 frame of
+    // setTrxRelay().  Mirrored from E.3's forceBank0Next pattern.
+    // Set by setTrxRelay() on every call (Codex P2: safety effect before guard).
+    // Cleared by sendCommandFrame() after it emits bank 10.
+    bool    m_forceBank10Next{false};
+
     // Phase 3P-A: per-board codec chosen at applyBoardQuirks() time.
     // Null when m_caps is null (pre-connect) or env var
     // NEREUS_USE_LEGACY_P1_CODEC=1 forces legacy compose path.
@@ -432,6 +439,24 @@ public:
 
     // forceBank0NextForTest — returns m_forceBank0Next (the flush flag state).
     bool forceBank0NextForTest() const { return m_forceBank0Next; }
+
+    // ── 3M-1a E.4 TRX relay wire test seams ──────────────────────────────────
+    // captureBank10ForTest — compose 5 bank-10 C&C bytes from current state
+    // and return them.  Used by tst_p1_trx_relay_wire to verify the T/R relay
+    // bit (C3 bit 7, INVERTED: 0 = engaged, 1 = disabled) without needing a
+    // live socket.
+    // Source: deskhpsdr/src/old_protocol.c:2909-2910 [@120188f]
+    //   if (txband->disablePA || !pa_enabled)
+    //       output_buffer[C3] |= 0x80; // disable Alex T/R relay
+    QByteArray captureBank10ForTest() const {
+        quint8 out[5] = {};
+        composeCcForBankForTest(10, out);
+        return QByteArray(reinterpret_cast<const char*>(out), 5);
+    }
+
+    // forceBank10NextForTest — returns m_forceBank10Next (the bank-10 flush
+    // flag state).  Used by tst_p1_trx_relay_wire to verify Codex P2 pattern.
+    bool forceBank10NextForTest() const { return m_forceBank10Next; }
 
     // ── 3M-1a E.2 TX I/Q test seams ─────────────────────────────────────────
     // sendTxIqAndCapture — feeds n interleaved float I/Q samples through the

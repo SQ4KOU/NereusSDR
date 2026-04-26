@@ -1048,28 +1048,43 @@ bool P1RadioConnection::fillTxZone(quint8* zone63) noexcept
 }
 
 // ---------------------------------------------------------------------------
-// setTrxRelay — 3M-1a Task E.1 (stub; filled in by Task E.4)
+// setTrxRelay — 3M-1a Task E.4
 //
-// P1 wire bit: C3 byte 6 bit 7, INVERTED sense.
-//   enabled=true  → bit 7 = 0 (relay engaged, normal TX path)
-//   enabled=false → bit 7 = 1 (relay bypassed, PA protect)
+// Sets or clears the Alex T/R relay engage state.
+// Wire location: bank 10 (C0=0x12), C3 byte, bit 7 (0x80).
+// Semantic INVERTED vs MOX: 1 = relay disabled (PA bypass / RX-only protect),
+//                           0 = relay engaged (normal TX path).
 //
-// State is stored in base-class m_trxRelay so isTrxRelayEngaged()
-// is available before E.4 wires the actual bit.
+// enabled=true  → bit 7 = 0 (relay engaged, current flows through relay)
+// enabled=false → bit 7 = 1 (relay open / PA bypassed)
 //
-// TODO [3M-1a E.4]: compose bit 7 of C&C bank 6 byte 3 from m_trxRelay.
-// Cite: pre-code review §7.2; deskhpsdr/src/old_protocol.c:2909-2910.
+// Primary cite: deskhpsdr/src/old_protocol.c:2909-2910 [@120188f]
+//   if (txband->disablePA || !pa_enabled)
+//       output_buffer[C3] |= 0x80; // disable Alex T/R relay
+//
+// HL2 note: HL2 clears C2/C3/C4 entirely for its own PA-enable path
+// (old_protocol.c:2964-2966 [@120188f]), so this bit is irrelevant for
+// HL2 hardware.  The composeCcForBank case 10 emits it only for
+// Alex-equipped boards; the codec layer handles HL2-specific encoding.
+//
+// Codex P2 pattern (safety effect before idempotent guard):
+// Force bank 10 onto the wire within ≤1 frame of this call so the relay
+// state change is immediate, matching deskhpsdr's non-deferred behaviour.
 // ---------------------------------------------------------------------------
 void P1RadioConnection::setTrxRelay(bool enabled)
 {
+    // Codex P2: force bank 10 flush BEFORE the idempotent guard so the
+    // relay bit lands on the next outbound frame regardless of whether
+    // the state actually changed.
+    // Source: deskhpsdr/src/old_protocol.c:2909-2910 [@120188f] — the
+    // reference implementation writes the T/R relay bit every command
+    // frame; we flush immediately on state change to match timing.
+    m_forceBank10Next = true;
+
     if (m_trxRelay == enabled) {
-        return;
+        return;  // idempotent — flush flag already set above
     }
     m_trxRelay = enabled;
-    // TODO [3M-1a E.4]: emit Alex T/R relay wire bit (P1 C3 byte 6 bit 7,
-    //   inverted: 0 = engaged, 1 = bypass) on next outbound C&C frame
-    //   AND force a frame flush so the bit lands without waiting for the
-    //   next normal C&C cycle.
 }
 
 // ---------------------------------------------------------------------------
@@ -1576,9 +1591,16 @@ void P1RadioConnection::sendCommandFrame()
     // to 0 so this frame carries the MOX bit within ≤1 frame of the call.
     // Source: deskhpsdr/src/old_protocol.c:3595-3599 [@120188f] — the reference
     // implementation does not defer MOX; it sets the bit on the very next frame.
+    // 3M-1a E.4: if setTrxRelay() requested a bank-10 flush, jump to bank 10
+    // so the T/R relay bit (C3 bit 7) lands within ≤1 frame of the call.
+    // Bank-0 flush takes priority if both flags are set simultaneously (rare).
+    // Source: deskhpsdr/src/old_protocol.c:2909-2910 [@120188f].
     if (m_forceBank0Next) {
         m_ccRoundRobinIdx = 0;
         m_forceBank0Next  = false;
+    } else if (m_forceBank10Next) {
+        m_ccRoundRobinIdx = 10;
+        m_forceBank10Next = false;
     }
 
     // Subframe 0: current bank
@@ -1852,11 +1874,21 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
         return;
     }
 
-    case 10: // TX drive, mic, Alex HPF/LPF, PA (networkproto1.c:578-591)
+    case 10: // TX drive, mic, Alex HPF/LPF, T/R relay (networkproto1.c:578-591)
+        // C3 bit 7 (0x80) = Alex T/R relay DISABLED.  Inverted vs MOX.
+        // Write 0x80 only when relay should be disengaged (PA bypass / RX-only).
+        // m_trxRelay: true  = relay engaged (normal TX path) → bit 7 = 0;
+        //             false = relay disengaged (PA bypass)   → bit 7 = 1.
+        // From deskhpsdr/src/old_protocol.c:2909-2910 [@120188f]:
+        //   if (txband->disablePA || !pa_enabled)
+        //       output_buffer[C3] |= 0x80; // disable Alex T/R relay
+        // BUG FIX (3M-1a E.4): prior code wrote (m_paEnabled ? 0x80 : 0), which
+        // is INVERTED — it asserted "disable" when PA was enabled.  Latent from
+        // 3M-0; never surfaced because no TX I/Q was live on EP2 before E.4.
         out[0] = C0base | 0x12;
         out[1] = static_cast<quint8>(m_txDrive & 0xFF);
         out[2] = 0x40; // line_in=0, mic_boost=0 defaults
-        out[3] = m_alexHpfBits | (m_paEnabled ? 0x80 : 0);
+        out[3] = m_alexHpfBits | (m_trxRelay ? 0x00 : 0x80); // 3M-1a E.4
         out[4] = m_alexLpfBits;
         return;
 

@@ -707,6 +707,24 @@ target_compile_definitions(tst_p1_tx_iq_wire PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_p1_mox_wire)
 target_compile_definitions(tst_p1_mox_wire PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1a Task E.4: P1 T/R relay wire-byte snapshot ────────────────────
+# 11 tests pin the Alex T/R relay bit (C3 bit 7 of bank 10, C0=0x12):
+#   1. Default state: relay disengaged → bit 7 = 1.
+#   2. setTrxRelay(true) → bit 7 = 0 (relay engaged, normal TX).
+#   3. setTrxRelay(false) → bit 7 = 1 (relay disengaged, PA bypass).
+#   4. Bank 10 C0 address stays 0x12 regardless of relay state.
+#   5. setTrxRelay() sets m_forceBank10Next (Codex P2 flush pattern).
+#   6. Repeated same-value call still sets the flush flag.
+#   7. setTrxRelay(true) twice doesn't crash.
+#   8. Round-trip: true → false → true produces correct bit values.
+#   9. Alex HPF bits (C3 bits 6..0) are preserved across relay state changes.
+#  10. HL2 firmware cross-check: bank 10 C0 maps to cmd_addr 6'h09 (informational).
+#  11. Flush flag is set even when state doesn't change (false→false no-op).
+# Source: deskhpsdr/src/old_protocol.c:2909-2910 [@120188f].
+# Latent bug fixed: prior code wrote (m_paEnabled ? 0x80 : 0) — INVERTED.
+nereus_add_test(tst_p1_trx_relay_wire)
+target_compile_definitions(tst_p1_trx_relay_wire PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-0 Task 6: RadioModel::paTripped() live state + Ganymede handler ─
 # 5 tests cover initial state (clear), trip latch (non-zero tripState → true),
 # latch reset (resetGanymedePa()), absent-PA clear (setGanymedePresent(false)),
