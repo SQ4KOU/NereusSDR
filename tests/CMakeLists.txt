@@ -755,6 +755,22 @@ nereus_add_test(tst_ptt_mode)
 # Codex P2 ordering lock: runMoxSafetyEffects fires on EVERY setMox call
 #   (including idempotent ones) and fires BEFORE m_mox is committed;
 # setPttMode idempotent guard + pttModeChanged signal;
-# all 7 MoxState enumerators exist and are distinct.
+# all 7 MoxState enumerators exist and are distinct;
+# kXxxMs constants have correct Thetis-cited defaults.
+# Updated in B.3: setTimerIntervals(0,...) makes walk synchronous for
+# signal-cadence tests; Codex P2 tests unchanged.
 nereus_add_test(tst_mox_controller_basic)
+
+# ── Phase 3M-1a Task B.3: MoxController 6 QTimer chains ──────────────────────
+# Verifies: default kXxxMs constants match Thetis [v2.10.3.13];
+# RX→TX walk: Rx → RxToTxRfDelay (rfDelay) → Tx;
+# TX→RX walk: Tx → TxToRxInFlight (keyUpDelay) → TxToRxFlush (pttOutDelay) → Rx;
+# moxStateChanged(true) fires at end of RX→TX walk (not at setMox entry);
+# moxStateChanged(false) fires at end of TX→RX walk;
+# stateChanged signals fire in expected order;
+# 0ms timer intervals drive full walk via processEvents() alone;
+# breakInDelayTimer never started in 3M-1a;
+# spaceDelayTimer never started when kSpaceDelayMs == 0;
+# rapid toggle (setMox false during RX→TX walk) cancels in-flight timers.
+nereus_add_test(tst_mox_controller_timers)
 

@@ -6,6 +6,9 @@
 // states are designed for NereusSDR's Qt6 architecture; logic and
 // timer constants are derived from Thetis:
 //   console.cs:29311-29678 [v2.10.3.13] — chkMOX_CheckedChanged2
+//   console.cs:19659-19698 [v2.10.3.13] — mox_delay / space_mox_delay /
+//     key_up_delay / rf_delay / ptt_out_delay field declarations
+//   console.cs:18494-18502 [v2.10.3.13] — break_in_delay field declaration
 //
 // Upstream file has no per-member inline attribution tags in this
 // state-machine region except where noted with inline cites below.
@@ -25,6 +28,11 @@
 //                 (Codex P2 ordering). State-machine transitions
 //                 derived from chkMOX_CheckedChanged2
 //                 (console.cs:29311-29678 [v2.10.3.13]).
+//   2026-04-25 — Phase 3M-1a Task B.3 — 6 QTimer chains wired.
+//                 Timer constants derived from console.cs:19659-19698
+//                 and console.cs:18494-18502 [v2.10.3.13].
+//                 State-machine walk through transient states replaces
+//                 the B.2 direct-to-terminal jump in setMox().
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -33,6 +41,7 @@
 #pragma once
 
 #include <QObject>
+#include <QTimer>
 #include "core/PttMode.h"
 
 namespace NereusSDR {
@@ -43,19 +52,21 @@ namespace NereusSDR {
 // State machine derived from chkMOX_CheckedChanged2
 // (console.cs:29311-29678 [v2.10.3.13]).
 //
-// The 5 transient states (RxToTxRfDelay, RxToTxMoxDelay,
-// TxToRxKeyUpDelay, TxToRxBreakIn, TxToRxFlush) are visited only
-// during timer-driven transitions. B.2 (this skeleton) immediately
-// steps through them to the terminal state; B.3 wires the QTimer
-// chains to make them dwell for the correct interval.
+// Transient states are visited only during timer-driven transitions.
+// B.3 wires QTimer chains to make them dwell for the correct interval.
+//
+// Naming note: TxToRxInFlight is used for what Thetis calls mox_delay
+// (SSB/FM) or key_up_delay (CW) — both are 10 ms by default. The name
+// is intentionally neutral so that 3M-2 can branch on CW vs non-CW from
+// this state without changing the enum.
 // ---------------------------------------------------------------------------
 enum class MoxState {
     Rx,                // idle, receiver active
     RxToTxRfDelay,     // waiting for rf_delay (30 ms default) before TX channel on
-    RxToTxMoxDelay,    // waiting for mox_delay settle (non-CW RX→TX)
+    RxToTxMoxDelay,    // reserved: mox_delay settle (non-CW RX→TX); not used in 3M-1a
     Tx,                // transmitting
-    TxToRxKeyUpDelay,  // CW key-up delay (key_up_delay, 10 ms) before hardware flip
-    TxToRxBreakIn,     // break-in settle (space_mox_delay, 0 ms default)
+    TxToRxInFlight,    // mox_delay (SSB/FM 10ms) or key_up_delay (CW 10ms) in-flight clear
+    TxToRxBreakIn,     // reserved: break-in settle; not started in 3M-1a (3M-2 CW QSK)
     TxToRxFlush,       // waiting for ptt_out_delay (20 ms) before RX channels on
 };
 
@@ -66,8 +77,22 @@ enum class MoxState {
 //
 // Codex P2 (PR #139): safety effects in setMox() execute BEFORE the
 // idempotent guard so that a repeated setMox(true) call cannot skip
-// them. The body of runMoxSafetyEffects() is empty in B.2; Task F.1
+// them. The body of runMoxSafetyEffects() is empty in B.2/B.3; Task F.1
 // wires AlexController routing, ATT-on-TX, and the MOX wire bit.
+//
+// Timer behaviour:
+//   RX→TX path: Rx → RxToTxRfDelay (30ms) → Tx
+//   TX→RX path: Tx → TxToRxInFlight (10ms, mox_delay) → TxToRxFlush
+//               (20ms, ptt_out_delay) → Rx
+//   spaceDelay (0ms default): m_spaceDelayTimer declared but skipped
+//     when kSpaceDelayMs == 0, matching Thetis
+//     `if (space_mox_delay > 0) Thread.Sleep(...)` pattern.
+//   breakInDelay (300ms): declared for 3M-2 CW QSK; NOT started in
+//     any 3M-1a path.
+//
+// moxStateChanged fires at end of walk (TX fully engaged or fully
+// released), not at setMox() entry, so subscribers see a definitive
+// "MOX is on/off" rather than "MOX command initiated".
 // ---------------------------------------------------------------------------
 class MoxController : public QObject {
     Q_OBJECT
@@ -75,6 +100,22 @@ class MoxController : public QObject {
 public:
     explicit MoxController(QObject* parent = nullptr);
     ~MoxController() override;
+
+    // ── Timer constants (from Thetis console.cs:19659-19698 [v2.10.3.13]) ──
+    //
+    // From Thetis console.cs:19687 — private int rf_delay = 30 [v2.10.3.13]
+    static constexpr int kRfDelayMs      = 30;
+    // From Thetis console.cs:19659 — private int mox_delay = 10 [v2.10.3.13]
+    static constexpr int kMoxDelayMs     = 10;
+    // From Thetis console.cs:19669 — private int space_mox_delay = 0 [v2.10.3.13]
+    static constexpr int kSpaceDelayMs   = 0;
+    // From Thetis console.cs:19677 — private int key_up_delay = 10 [v2.10.3.13]
+    static constexpr int kKeyUpDelayMs   = 10;
+    // From Thetis console.cs:19694 — private int ptt_out_delay = 20 [v2.10.3.13]
+    static constexpr int kPttOutDelayMs  = 20;
+    // From Thetis console.cs:18494 — private double break_in_delay = 300 [v2.10.3.13]
+    // 3M-2 CW QSK; not used in any 3M-1a path.
+    static constexpr int kBreakInDelayMs = 300;
 
     // ── Getters ──────────────────────────────────────────────────────────────
     bool     isMox()    const noexcept { return m_mox; }
@@ -85,6 +126,17 @@ public:
     // setPttMode: idempotent; emits pttModeChanged on actual transition.
     void setPttMode(PttMode mode);
 
+    // ── Test seam ─────────────────────────────────────────────────────────────
+    // setTimerIntervals: override the default Thetis timer durations.
+    //
+    // FOR TESTING ONLY. Production code must use the kXxxMs defaults.
+    // Pass all-zeros for synchronous-equivalent behavior in unit tests:
+    //   ctrl.setTimerIntervals(0, 0, 0, 0, 0, 0);
+    // so QCoreApplication::processEvents() drives the entire walk
+    // without waiting for wall-clock time.
+    void setTimerIntervals(int rfMs, int moxMs, int spaceMs,
+                           int keyUpMs, int pttOutMs, int breakInMs);
+
 public slots:
     // setMox: Codex P2-ordered slot.
     //
@@ -92,8 +144,8 @@ public slots:
     //   1. runMoxSafetyEffects(on)       — safety effects fire FIRST
     //   2. idempotent guard              — skip state advance if no change
     //   3. m_mox = on                   — commit new state
-    //   4. advanceState(...)             — internal state machine step
-    //   5. emit moxStateChanged(on)      — single boundary signal (Codex P1)
+    //   4. start timer-driven walk      — transient states then terminal
+    //   5. emit moxStateChanged(on)      — fires at END of walk (Codex P1)
     //
     // Task F.1 fills runMoxSafetyEffects with Alex routing, ATT-on-TX,
     // and the MOX wire bit. DO NOT insert an early-return guard above
@@ -101,9 +153,9 @@ public slots:
     void setMox(bool on);
 
 signals:
-    // ── Boundary signals (B.2) ───────────────────────────────────────────────
-    // moxStateChanged: emitted exactly once per real transition.
-    // Subscribers attach here (Codex P1), not to individual setters.
+    // ── Boundary signals ─────────────────────────────────────────────────────
+    // moxStateChanged: emitted exactly once per real transition, at the END
+    // of the timer walk (TX fully engaged or fully released).
     void moxStateChanged(bool on);
 
     // pttModeChanged: emitted when m_pttMode transitions.
@@ -124,17 +176,42 @@ protected:
     // TODO [3M-1a F.1]: fill this body with actual safety effects.
     virtual void runMoxSafetyEffects(bool newMox);
 
+private slots:
+    // Timer slots — each fires when the corresponding QTimer elapses and
+    // drives the state machine to the next state.
+    void onRfDelayElapsed();
+    void onMoxDelayElapsed();
+    void onSpaceDelayElapsed();
+    void onKeyUpDelayElapsed();
+    void onPttOutElapsed();
+    void onBreakInDelayElapsed(); // declared for 3M-2 CW QSK; not started in 3M-1a
+
 private:
     // advanceState: sets m_state and emits stateChanged.
-    // Called from setMox to transition to the terminal state (Tx or Rx
-    // in B.2). B.3 replaces the direct call with timer-driven advances
-    // through the transient states.
     void advanceState(MoxState newState);
+
+    // stopAllTimers: cancel any in-flight timers (safety guard for
+    // rapid setMox(false)/setMox(true) toggles or test teardown).
+    void stopAllTimers();
 
     // ── Fields ───────────────────────────────────────────────────────────────
     bool     m_mox{false};               // single source of truth for MOX
     MoxState m_state{MoxState::Rx};      // current state-machine position
     PttMode  m_pttMode{PttMode::None};   // current PTT mode
+
+    // ── QTimer chains (B.3) ──────────────────────────────────────────────────
+    // All initialized single-shot in the constructor with kXxxMs intervals.
+    // setTimerIntervals() overrides intervals for test use.
+    //
+    // From Thetis console.cs:29592-29628 [v2.10.3.13] — Thread.Sleep() calls
+    // in chkMOX_CheckedChanged2 translated to Qt single-shot timers.
+    // console.cs:29603: Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE
+    QTimer m_rfDelayTimer;      // 30 ms — RX→TX: between hardware flip and TX-channel-on (non-CW)
+    QTimer m_moxDelayTimer;     // 10 ms — reserved for future RX→TX use; not started in 3M-1a
+    QTimer m_spaceDelayTimer;   // 0 ms  — TX→RX: initial wait before WDSP TX off; skipped when 0 // from PSDR MW0LGE
+    QTimer m_keyUpDelayTimer;   // 10 ms — TX→RX: mox_delay (SSB) or key_up_delay (CW); drives TxToRxInFlight
+    QTimer m_pttOutDelayTimer;  // 20 ms — TX→RX: HW settle before WDSP RX on; drives TxToRxFlush
+    QTimer m_breakInDelayTimer; // 300 ms — 3M-2 CW QSK; NOT started from any B.3 logic
 };
 
 } // namespace NereusSDR
