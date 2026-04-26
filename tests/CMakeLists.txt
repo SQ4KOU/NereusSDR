@@ -683,4 +683,10 @@ nereus_add_test(tst_pa_scaling)
 # Mirrors Thetis display.cs:4183-4201 [v2.10.3.13].
 nereus_add_test(tst_spectrum_widget_highswr_overlay)
 
+# ── Phase 3M-0 Task 9: SWR Protection group box on Setup → Transmit ──────────
+# Verifies grpSWRProtectionControl has 5 controls with correct objectNames,
+# defaults, and verbatim tooltip text per
+# Thetis setup.designer.cs:5793-5924 [v2.10.3.13].
+nereus_add_test(tst_transmit_setup_swr_protection)
+
 
