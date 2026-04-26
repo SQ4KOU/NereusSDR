@@ -444,12 +444,12 @@ PttOut on TX is always **1** for TUN.
 `HdwMOXChanged` becomes the body of `MoxController::hardwareFlipped`'s
 slot in `RadioModel`. The slot fans out to:
 
-- `RadioConnection::setMoxBit(true/false)` (P1 frame builder writes byte 3
+- `RadioConnection::setMox(true/false)` (P1 frame builder writes byte 3
   bit 0; P2 frame builder writes high-priority byte 4 bit 1 — see §7).
 - `RadioConnection::setBpf2GndBit(true/false)` — **deferred for HL2**
   (firmware doesn't have BPF2; ANAN-only feature, P1 byte/bit position
   not yet found in open-source — see §7.4).
-- `RadioConnection::setTrxRelayBit(true/false)` — P1 byte 6 bit 7
+- `RadioConnection::setTrxRelay(true/false)` — P1 byte 6 bit 7
   (semantic: 1=disable, so RX state writes `1`); P2 routed via Saturn
   register C0=0x24 (deferred).
 - `RadioConnection::setPttOutBit(true/false)` — **deferred** (rear-panel

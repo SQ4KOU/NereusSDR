@@ -9,8 +9,10 @@
 //     filled by Tasks E.2 and E.6).
 //   - setTrxRelay() stores state in the base-class m_trxRelay field,
 //     readable via isTrxRelayEngaged().
-//   - setMox / setWatchdogEnabled / setTxDrive remain UNTOUCHED
-//     (spot-checked to confirm E.1 did not regress them).
+//   - setMox / setWatchdogEnabled remain UNTOUCHED (regression guards
+//     confirm E.1 did not disturb prior API).
+//   - setTxDrive(N) is callable without crash (regression guard;
+//     p1_setTxDrive_callableNoCrash + p2_setTxDrive_callableNoCrash).
 //
 // Cite: Phase 3M-1a plan Task E.1, Master design §5.1.4.
 #include <QtTest/QtTest>
@@ -78,6 +80,13 @@ private slots:
 
     // P2: same.
     void p2_setWatchdogEnabled_unchanged();
+
+    // P1: setTxDrive(N) is callable without crash (regression guard —
+    // E.1 header comment claims this is covered; this is the actual test).
+    void p1_setTxDrive_callableNoCrash();
+
+    // P2: same.
+    void p2_setTxDrive_callableNoCrash();
 };
 
 // ── sendTxIq ──────────────────────────────────────────────────────────────────
@@ -207,6 +216,25 @@ void TestRadioConnectionTxIface::p2_setWatchdogEnabled_unchanged()
     P2RadioConnection conn;
     conn.setWatchdogEnabled(true);
     QVERIFY(conn.isWatchdogEnabled());
+}
+
+void TestRadioConnectionTxIface::p1_setTxDrive_callableNoCrash()
+{
+    P1RadioConnection conn;
+    // setTxDrive is a stub in 3M-1a; must not crash at any legal drive value.
+    conn.setTxDrive(0);
+    conn.setTxDrive(50);
+    conn.setTxDrive(100);
+    QVERIFY(true);  // reaching here means no crash
+}
+
+void TestRadioConnectionTxIface::p2_setTxDrive_callableNoCrash()
+{
+    P2RadioConnection conn;
+    conn.setTxDrive(0);
+    conn.setTxDrive(50);
+    conn.setTxDrive(100);
+    QVERIFY(true);
 }
 
 QTEST_APPLESS_MAIN(TestRadioConnectionTxIface)

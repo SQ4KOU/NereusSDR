@@ -98,8 +98,11 @@ the shell before each commit.
 - `src/models/TransmitModel.{h,cpp}` — MoxController integration,
   per-band `tunePower_by_band[14]`.
 - `src/core/RadioConnection.{h,cpp}` — `virtual void sendTxIq()`,
-  `virtual void setMoxBit(bool)`, `virtual void setTrxRelayBit(bool)`,
-  `virtual void setWatchdogBit(bool)`.
+  `virtual void setMox(bool)` (already declared), `virtual void setTrxRelay(bool)` (added
+  in E.1), `virtual void setWatchdogEnabled(bool)` (already declared).
+  (NereusSDR base class already declares `setMox`/`setWatchdogEnabled`; new method
+  `setTrxRelay` added in E.1; the `*Bit` shorthand in early plan drafts was renamed
+  for consistency.)
 - `src/core/P1RadioConnection.{h,cpp}` — TX I/Q in EP2 zones; MOX byte 3
   bit 0; T/R relay byte 6 bit 7; tune-power; watchdog RUNSTOP byte 1
   bit 7.
@@ -180,20 +183,20 @@ test that compares the outbound frame byte-by-byte to a golden vector.
 
 | # | Task | Tests | Cite |
 |---|---|---|---|
-| E.1 | `RadioConnection` (base): `virtual void sendTxIq(const float* iq, int n) = 0`; `virtual void setMoxBit(bool) = 0`; `virtual void setTrxRelayBit(bool) = 0`; `virtual void setWatchdogBit(bool) = 0` (already declared in 3M-0; this task wires the dispatch chain) | `tst_radio_connection_tx_iface.cpp` (base class compiles; subclasses must override; signal/slot wiring) | Master design 5.1.4 |
+| E.1 | `RadioConnection` (base): `virtual void sendTxIq(const float* iq, int n) = 0`; `virtual void setMox(bool)` (already declared, 3M-0); `virtual void setTrxRelay(bool)` (new, E.1); `virtual void setWatchdogEnabled(bool)` (already declared, 3M-0). Wires the dispatch chain. | `tst_radio_connection_tx_iface.cpp` (base class compiles; subclasses must override; signal/slot wiring) | Master design 5.1.4 |
 | E.2 | `P1RadioConnection::sendTxIq()` — write TX I/Q to EP2 frame zones in the 1032-byte Metis frame; integration with existing `sendCmdHighPriority` outbound cadence | `tst_p1_tx_iq_wire.cpp` (wire-byte snapshot with hand-fed I/Q vector) | Pre-code §7.10 (P1 row), Thetis EP2 layout in NetworkIO.cs |
-| E.3 | `P1RadioConnection::setMoxBit(bool)` — sets/clears C0 byte 3 bit 0 (`0x01`); idempotent at the field level; runs the safety-effect-first idempotent-guard pattern (write the bit, then guard the next call) | `tst_p1_mox_wire.cpp` (wire-byte snapshot: MOX=true → byte 3 has bit 0 set; MOX=false → bit 0 cleared) + cross-confirm against HL2 firmware decoding | Pre-code §7.1 |
-| E.4 | `P1RadioConnection::setTrxRelayBit(bool)` — sets/clears C3 byte 6 bit 7 (`0x80`); inverted semantic (`1=disabled`); only writes `1` when PA explicitly disabled; otherwise `0` (relay engaged) | `tst_p1_trx_relay_wire.cpp` (wire-byte snapshot for both PA-enabled and PA-disabled states) | Pre-code §7.2 |
-| E.5 | `P1RadioConnection::setWatchdogBit(bool)` — RUNSTOP packet byte 1 bit 7; inverted semantic (`1=disabled`, default-on writes `0`); resolves `// TODO [3M-1a]` at `P1RadioConnection.cpp:854` | `tst_p1_watchdog_wire.cpp` (wire-byte snapshot for enabled/disabled states; cite refresh in source comment to point at HL2 firmware finding) | Pre-code §7.5 |
+| E.3 | `P1RadioConnection::setMox(bool)` — sets/clears C0 byte 3 bit 0 (`0x01`); idempotent at the field level; runs the safety-effect-first idempotent-guard pattern (write the bit, then guard the next call) | `tst_p1_mox_wire.cpp` (wire-byte snapshot: MOX=true → byte 3 has bit 0 set; MOX=false → bit 0 cleared) + cross-confirm against HL2 firmware decoding | Pre-code §7.1 |
+| E.4 | `P1RadioConnection::setTrxRelay(bool)` — sets/clears C3 byte 6 bit 7 (`0x80`); inverted semantic (`1=disabled`); only writes `1` when PA explicitly disabled; otherwise `0` (relay engaged) | `tst_p1_trx_relay_wire.cpp` (wire-byte snapshot for both PA-enabled and PA-disabled states) | Pre-code §7.2 |
+| E.5 | `P1RadioConnection::setWatchdogEnabled(bool)` — RUNSTOP packet byte 1 bit 7; inverted semantic (`1=disabled`, default-on writes `0`); resolves `// TODO [3M-1a]` at `P1RadioConnection.cpp:854` | `tst_p1_watchdog_wire.cpp` (wire-byte snapshot for enabled/disabled states; cite refresh in source comment to point at HL2 firmware finding) | Pre-code §7.5 |
 | E.6 | `P2RadioConnection::sendTxIq()` — write TX I/Q to UDP port 1029 in 60-sample frames (288-byte payload per frame; existing P2 frame-builder pattern from 3A) | `tst_p2_tx_iq_wire.cpp` (wire-byte snapshot of frame layout + sequence numbering) | Pre-code §7.10 (P2 rows) |
-| E.7 | `P2RadioConnection::setMoxBit(bool)` + `composeCmdTx` mox flag — writes high-priority byte 4 bit 1 (`0x02`) for MOX; high-priority byte 345 (`drive_level & 0xFF`) for tune power; UDP port 1027 | `tst_p2_mox_wire.cpp` + `tst_p2_drive_level_wire.cpp` (wire-byte snapshots) | Pre-code §7.6, §7.7 |
-| E.8 | `P2RadioConnection::setWatchdogBit(bool)` — state-tracking stub; updates the existing `// TODO [3M-1a]` comment at `P2RadioConnection.cpp:560` to cite pre-code review §7.8 (P2 wire bit deferred); files a tracking issue (`gh issue create --title "P2 watchdog wire-bit research"`) and links from the comment | `tst_p2_watchdog_state_track.cpp` (state stored, no wire emission; idempotent) | Pre-code §7.8 |
+| E.7 | `P2RadioConnection::setMox(bool)` + `composeCmdTx` mox flag — writes high-priority byte 4 bit 1 (`0x02`) for MOX; high-priority byte 345 (`drive_level & 0xFF`) for tune power; UDP port 1027 | `tst_p2_mox_wire.cpp` + `tst_p2_drive_level_wire.cpp` (wire-byte snapshots) | Pre-code §7.6, §7.7 |
+| E.8 | `P2RadioConnection::setWatchdogEnabled(bool)` — state-tracking stub; updates the existing `// TODO [3M-1a]` comment at `P2RadioConnection.cpp:560` to cite pre-code review §7.8 (P2 wire bit deferred); files a tracking issue (`gh issue create --title "P2 watchdog wire-bit research"`) and links from the comment | `tst_p2_watchdog_state_track.cpp` (state stored, no wire emission; idempotent) | Pre-code §7.8 |
 
 ### Phase F — Hardware flip + safety (3 tasks)
 
 | # | Task | Tests | Cite |
 |---|---|---|---|
-| F.1 | `RadioModel::onMoxHardwareFlipped(bool isTx)` slot — connects `MoxController::hardwareFlipped` to `AlexController::applyAntennaForBand(currentBand(), isTx)` AND `RadioConnection::setMoxBit(isTx)` AND `RadioConnection::setTrxRelayBit(isTx)`. Order matters: Alex routing FIRST, then MOX wire bit, then T/R relay (matches Thetis HdwMOXChanged step order — see pre-code §2.3) | `tst_radio_model_mox_hardware_flip.cpp` (signal-spy verifies emit order: applyAntennaForBand → setMoxBit → setTrxRelayBit) | Pre-code §2.3, §2.5 |
+| F.1 | `RadioModel::onMoxHardwareFlipped(bool isTx)` slot — connects `MoxController::hardwareFlipped` to `AlexController::applyAntennaForBand(currentBand(), isTx)` AND `RadioConnection::setMox(isTx)` AND `RadioConnection::setTrxRelay(isTx)`. Order matters: Alex routing FIRST, then MOX wire bit, then T/R relay (matches Thetis HdwMOXChanged step order — see pre-code §2.3) | `tst_radio_model_mox_hardware_flip.cpp` (signal-spy verifies emit order: applyAntennaForBand → setMox → setTrxRelay) | Pre-code §2.3, §2.5 |
 | F.2 | `StepAttenuatorController` TX-path activation: subscribe to `MoxController::hardwareFlipped(isTx)`; on `isTx=true` call `applyTxAttenuationForBand(currentBand)` plus `shouldForce31Db()` predicate (PS-off OR CWL/CWU); on `isTx=false` restore RX-band ATT. HPSDR variant (Atlas/Hermes-original) uses `saveRxPreampMode` / `restoreRxPreampMode` helpers | `tst_step_att_tx_path.cpp` (force-31 trigger logic; HPSDR vs non-HPSDR branches) | Pre-code §6.2-§6.4 |
 | F.3 | `SwrProtectionController` 2 TODOs: (a) `alex_fwd > alex_fwd_limit` floor (5 W default; 2× power-slider for ANAN-8000D); (b) `tunePowerSliderValue ≤ 70` override on the tune-bypass block. Both pure source-first ports from Thetis cites already in TODO comments | `tst_swr_protection_tune_floors.cpp` (3 cases: alex_fwd < 5W bypass; tune-power ≤ 70 bypass; both pass-through to existing logic) | Pre-code §7.9, Thetis `console.cs:26020-26057` + `:26067` |
 

@@ -878,7 +878,10 @@ void P1RadioConnection::setWatchdogEnabled(bool enabled)
 void P1RadioConnection::sendTxIq(const float* /*iq*/, int /*n*/)
 {
     // TODO [3M-1a E.2]: write TX I/Q samples into the EP2 frame zones.
-    qCWarning(lcConnection) << "P1: sendTxIq called before E.2 wired — samples dropped";
+    //   Guard n <= 0 (and iq == nullptr) before dereferencing —
+    //   the zero-samples regression test in tst_radio_connection_tx_iface
+    //   relies on this safety.
+    qCDebug(lcConnection) << "P1: sendTxIq called before E.2 wired — samples dropped";
 }
 
 // ---------------------------------------------------------------------------
@@ -896,10 +899,14 @@ void P1RadioConnection::sendTxIq(const float* /*iq*/, int /*n*/)
 // ---------------------------------------------------------------------------
 void P1RadioConnection::setTrxRelay(bool enabled)
 {
+    if (m_trxRelay == enabled) {
+        return;
+    }
     m_trxRelay = enabled;
-    // TODO [3M-1a E.4]: trigger the next outbound C&C frame so the
-    // relay bit update reaches the radio without waiting for the
-    // round-robin to cycle through bank 6.
+    // TODO [3M-1a E.4]: emit Alex T/R relay wire bit (P1 C3 byte 6 bit 7,
+    //   inverted: 0 = engaged, 1 = bypass) on next outbound C&C frame
+    //   AND force a frame flush so the bit lands without waiting for the
+    //   next normal C&C cycle.
 }
 
 // ---------------------------------------------------------------------------

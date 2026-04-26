@@ -583,8 +583,10 @@ void P2RadioConnection::setWatchdogEnabled(bool enabled)
 void P2RadioConnection::sendTxIq(const float* /*iq*/, int /*n*/)
 {
     // TODO [3M-1a E.6]: write TX I/Q samples into a P2 TX I/Q UDP frame
-    // and dispatch to port 1029.
-    qCWarning(lcConnection) << "P2: sendTxIq called before E.6 wired — samples dropped";
+    //   and dispatch to port 1029. Guard n <= 0 (and iq == nullptr) before
+    //   dereferencing — the zero-samples regression test in
+    //   tst_radio_connection_tx_iface relies on this safety.
+    qCDebug(lcConnection) << "P2: sendTxIq called before E.6 wired — samples dropped";
 }
 
 // ---------------------------------------------------------------------------
@@ -599,6 +601,9 @@ void P2RadioConnection::sendTxIq(const float* /*iq*/, int /*n*/)
 // ---------------------------------------------------------------------------
 void P2RadioConnection::setTrxRelay(bool enabled)
 {
+    if (m_trxRelay == enabled) {
+        return;
+    }
     m_trxRelay = enabled;
     // TODO [3M-3]: emit Saturn register write for T/R relay.
 }
