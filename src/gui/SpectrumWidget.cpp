@@ -1107,6 +1107,9 @@ void SpectrumWidget::resizeEvent(QResizeEvent* event)
         m_waterfall.width() != wfW || m_waterfall.height() != wfH)) {
         m_waterfall = QImage(wfW, wfH, QImage::Format_RGB32);
         m_waterfall.fill(QColor(0x0f, 0x0f, 0x1a));
+        // Sub-epic E: also flush the rewind history on disconnect.
+        // From AetherSDR SpectrumWidget.cpp:740-756 [@0cd4559]
+        clearWaterfallHistory();
         m_wfWriteRow = 0;
 #ifdef NEREUS_GPU_SPECTRUM
         m_wfTexFullUpload = true;
@@ -1977,6 +1980,20 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
         int srcBin = firstBin + static_cast<int>(static_cast<float>(x) * binScale);
         srcBin = qBound(firstBin, srcBin, lastBin);
         scanline[x] = dbmToRgb((*src)[srcBin]);
+    }
+
+    // ── Sub-epic E: mirror the just-written row into the history ring ───
+    // From AetherSDR SpectrumWidget.cpp:2808-2812 [@0cd4559]
+    //   adapter: NereusSDR has a single FFT-derived path (no native tile
+    //   path), so we always use QDateTime::currentMSecsSinceEpoch().
+    {
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        appendHistoryRow(scanline, nowMs);
+        if (!m_wfLive) {
+            // Paused: don't show the new row — auto-bump in appendHistoryRow
+            // already shifted offset, just rebuild the viewport.
+            rebuildWaterfallViewport();
+        }
     }
 }
 
