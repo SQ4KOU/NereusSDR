@@ -70,6 +70,7 @@
 
 #include "core/safety/SwrProtectionController.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace NereusSDR::safety {
@@ -118,7 +119,9 @@ void SwrProtectionController::setAlexFwdLimit(float watts) noexcept
 void SwrProtectionController::setTunePowerSliderValue(int value) noexcept
 {
     // console.cs:26020-26057 [v2.10.3.13]: tunePowerSliderValue — bypass only fires when <= 70
-    m_tunePowerSliderValue = value;
+    // Clamp to [0, 100] to match Thetis ptbTune.Value / ptbPWR.Value range and
+    // prevent a stale -1 sentinel from any caller silently arming the tune-bypass.
+    m_tunePowerSliderValue = std::clamp(value, 0, 100);
 }
 
 void SwrProtectionController::ingest(float fwdW, float revW, bool tuneActive) noexcept

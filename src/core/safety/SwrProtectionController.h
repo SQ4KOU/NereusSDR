@@ -131,6 +131,8 @@ public:
     /// Minimum forward power (watts) that can trigger a trip.
     /// Suppresses false trips during TX ramp-up. Default 5.0W.
     /// For ANAN-8000D set to 2.0 × ptbPWR.Value before each ingest call.
+    /// The caller computes the watts value (ptbPWR.Value × 2.0); this setter
+    /// stores it directly — do NOT pass a raw slider int.
     /// Cite: console.cs:26067 [v2.10.3.13] (alex_fwd_limit).
     void setAlexFwdLimit(float watts) noexcept;
 
