@@ -562,16 +562,15 @@ RadioModel::RadioModel(QObject* parent)
              .toString() == QStringLiteral("True"));
     }
 
-    // 2. RadioStatus::powerChanged(fwd, rev, swr) → SwrProtectionController::ingest.
-    //    TransmitModel::isTune() provides the tuneActive flag.
-    //    Adaptation: plan mentioned separate paFwdChanged / paRevChanged signals
-    //    which don't exist; RadioStatus.h:165 has a single powerChanged(fwd,rev,swr).
-    connect(&m_radioStatus, &RadioStatus::powerChanged,
-            this, [this](double fwd, double rev, double /*swr*/) {
-        m_swrProt.ingest(static_cast<float>(fwd),
-                         static_cast<float>(rev),
-                         m_transmitModel.isTune());
-    });
+    // 2. PA telemetry → SwrProtectionController::ingest is wired from the
+    //    per-sample paTelemetryUpdated handler (search this file for
+    //    "paTelemetryUpdated"), NOT from RadioStatus::powerChanged.
+    //    RadioStatus emits powerChanged twice per hardware sample — once
+    //    after setForwardPower and once after setReflectedPower — which
+    //    would double-count trips and the first call would mix new fwd
+    //    with stale rev. (Codex P1 follow-up to PR #139.) Routing from
+    //    paTelemetryUpdated guarantees one ingest per sample with
+    //    consistent fwd/rev values.
 
     // 3. SwrProtectionController::highSwrChanged → SpectrumWidget overlay.
     //    m_spectrumWidget may be null at construction time (set later by
@@ -1243,6 +1242,13 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
         if (paTemp > 0.0) {
             m_radioStatus.setPaTemperature(paTemp);
         }
+
+        // Phase 3M-0 Task 17 + Codex P1 follow-up: feed SwrProtectionController
+        // here (one call per hardware sample with consistent fwd/rev), not
+        // from RadioStatus::powerChanged (which emits twice per sample).
+        m_swrProt.ingest(static_cast<float>(fwdW),
+                         static_cast<float>(revW),
+                         m_transmitModel.isTune());
     });
 
     // Error handling
@@ -2343,19 +2349,25 @@ void RadioModel::handleGanymedeTrip(int tripState)
     // From Thetis Andromeda/Andromeda.cs:919 [v2.10.3.13]:
     //   _ganymede_pa_issue = TripState != 0; // this will also prevent MOX being re-enabled
     const bool newTripped = (tripState != 0);
-    if (newTripped == m_paTripped) {
-        return; // idempotent — no state change, no signal
-    }
-
-    m_paTripped = newTripped;
-    emit paTrippedChanged(newTripped);
 
     // From Thetis Andromeda/Andromeda.cs:920 [v2.10.3.13]:
     //   if (_ganymede_pa_issue && MOX) MOX = false; //if there is a fault, undo mox if active
     // G8NJJ: handlers for Ganymede 500W PA protection
-    if (m_paTripped && m_transmitModel.isMox()) {
+    //
+    // Codex P2 follow-up to PR #139: drop MOX on every asserted trip, even
+    // when m_paTripped is already true. Otherwise a user manually re-keying
+    // mid-fault would stay on TX after the next CAT trip message, because
+    // the idempotent return below would skip the setMox(false) call.
+    if (newTripped && m_transmitModel.isMox()) {
         m_transmitModel.setMox(false);
     }
+
+    if (newTripped == m_paTripped) {
+        return; // already in this trip state — no transition signal
+    }
+
+    m_paTripped = newTripped;
+    emit paTrippedChanged(newTripped);
 }
 
 // From Thetis Andromeda/Andromeda.cs:950-968 [v2.10.3.13] (GanymedeResetPressed).

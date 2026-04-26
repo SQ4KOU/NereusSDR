@@ -122,6 +122,10 @@ void SwrProtectionController::ingest(float fwdW, float revW, bool tuneActive) no
 
     if (!m_enabled) {
         // When protection is disabled, always pass-through at full power
+        // and clear all latched/observable state so re-enable starts clean.
+        // (Codex P2 follow-up to PR #139: previously left m_windBackLatched,
+        //  m_openAntennaDetected, and m_tripCount stale; phantom fault
+        //  state would survive into the re-enabled path.)
         if (m_protectFactor != 1.0f) {
             m_protectFactor = 1.0f;
             emit protectFactorChanged(m_protectFactor);
@@ -130,6 +134,15 @@ void SwrProtectionController::ingest(float fwdW, float revW, bool tuneActive) no
             m_highSwr = false;
             emit highSwrChanged(m_highSwr);
         }
+        if (m_windBackLatched) {
+            m_windBackLatched = false;
+            emit windBackLatchedChanged(false);
+        }
+        if (m_openAntennaDetected) {
+            m_openAntennaDetected = false;
+            emit openAntennaDetectedChanged(false);
+        }
+        m_tripCount = 0;
         return;
     }
 

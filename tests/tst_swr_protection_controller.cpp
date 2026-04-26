@@ -23,6 +23,9 @@ private slots:
     void openAntennaDetected_swr50_factor0_01();
     void lowPowerClampedToSwr1_0();
     void disableOnTune_bypassesProtection();
+
+    // Codex P2 follow-up to PR #139:
+    void setEnabled_false_clearsLatchedState();
 };
 
 void TestSwrProtectionController::init()
@@ -175,6 +178,67 @@ void TestSwrProtectionController::perSampleFoldback_oneTrip_windBackDisabled_fac
     const float factor = m_ctrl->protectFactor();
     QVERIFY2(factor >= 0.49f && factor <= 0.51f,
              qPrintable(QString("expected ~0.5, got %1").arg(factor)));
+}
+
+// Codex P2 follow-up to PR #139: when protection is disabled mid-flight while
+// the windback latch / open-antenna flag / trip count are non-default, the
+// disabled-path early-return MUST clear all of them. Previously only
+// m_protectFactor and m_highSwr were reset; the latch and trip-count would
+// survive into the re-enabled path, immediately re-asserting phantom fault
+// state.
+void TestSwrProtectionController::setEnabled_false_clearsLatchedState()
+{
+    // Drive the controller into latched + open-antenna state.
+    // Two-step: 4 trips engage the windback latch (per console.cs:26069);
+    // a follow-up open-antenna sample (fwd=15, fwd-rev<1, console.cs:25989)
+    // sets m_openAntennaDetected on top.
+    m_ctrl->setWindBackEnabled(true);
+    for (int i = 0; i < 4; ++i) {
+        m_ctrl->ingest(100.0f, 25.0f, false); // SWR=3 > limit=2 → trip
+    }
+    QVERIFY(m_ctrl->windBackLatched());
+    QVERIFY(m_ctrl->highSwr());
+    QCOMPARE(m_ctrl->protectFactor(), 0.01f);
+
+    m_ctrl->ingest(15.0f, 14.5f, false); // open-antenna heuristic
+    QVERIFY(m_ctrl->openAntennaDetected());
+    QVERIFY(m_ctrl->windBackLatched());     // unchanged from earlier latch
+    QVERIFY(m_ctrl->highSwr());
+    QCOMPARE(m_ctrl->protectFactor(), 0.01f);
+
+    QSignalSpy windSpy(m_ctrl, &SwrProtectionController::windBackLatchedChanged);
+    QSignalSpy openSpy(m_ctrl, &SwrProtectionController::openAntennaDetectedChanged);
+    QSignalSpy highSpy(m_ctrl, &SwrProtectionController::highSwrChanged);
+    QSignalSpy factorSpy(m_ctrl, &SwrProtectionController::protectFactorChanged);
+
+    // Disable protection mid-flight, then ingest (which would normally
+    // re-trigger trip / open-antenna in enabled mode).
+    m_ctrl->setEnabled(false);
+    m_ctrl->ingest(100.0f, 25.0f, false);
+
+    // All four observable flags must be clear.
+    QVERIFY(!m_ctrl->openAntennaDetected());
+    QVERIFY(!m_ctrl->windBackLatched());
+    QVERIFY(!m_ctrl->highSwr());
+    QCOMPARE(m_ctrl->protectFactor(), 1.0f);
+
+    // Each transition emitted exactly once on disable.
+    QCOMPARE(windSpy.count(), 1);
+    QCOMPARE(windSpy.at(0).at(0).toBool(), false);
+    QCOMPARE(openSpy.count(), 1);
+    QCOMPARE(openSpy.at(0).at(0).toBool(), false);
+    QCOMPARE(highSpy.count(), 1);
+    QCOMPARE(highSpy.at(0).at(0).toBool(), false);
+    QCOMPARE(factorSpy.count(), 1);
+    QCOMPARE(factorSpy.at(0).at(0).toFloat(), 1.0f);
+
+    // Re-enable + ingest something safe → still clean (no phantom latch
+    // resurrects from stale state).
+    m_ctrl->setEnabled(true);
+    m_ctrl->ingest(100.0f, 0.0f, false);
+    QVERIFY(!m_ctrl->windBackLatched());
+    QVERIFY(!m_ctrl->openAntennaDetected());
+    QVERIFY(!m_ctrl->highSwr());
 }
 
 QTEST_GUILESS_MAIN(TestSwrProtectionController)
