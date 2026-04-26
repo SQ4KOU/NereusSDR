@@ -715,4 +715,13 @@ nereus_add_test(tst_general_setup_hardware_config)
 # (Thetis has no tooltip on this control). Default unchecked.
 nereus_add_test(tst_general_setup_options)
 
+# ── Phase 3M-0 Task 14: MainWindow status-bar TX Inhibit + PA Status badge ───
+# Tests the label-state logic for the two safety indicator widgets added to
+# the MainWindow status bar:
+#   m_txInhibitLabel — hidden by default, shown when inhibit asserts (Task 17)
+#   m_paStatusBadge  — "PA OK" (green) / "PA FAULT" (red) per paTripped()
+# MainWindow itself is too heavyweight to construct in a unit test (requires
+# full RadioModel + WDSP + audio stack). Tests exercise the helper logic via
+# standalone QLabel instances; Task 17 integration provides the live wiring.
+nereus_add_test(tst_mainwindow_status_bar_safety)
 
