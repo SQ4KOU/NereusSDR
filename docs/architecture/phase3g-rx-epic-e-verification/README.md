@@ -2,7 +2,7 @@
 
 **Build under test:** NereusSDR `claude/phase3g-rx-epic-e-waterfall-scrollback`
 
-**Setup:** Connect to a real OpenHPSDR radio (HL2 or ANAN). Defaults at first launch (no `~/.config/NereusSDR/NereusSDR.settings`): 30 ms update period, 20 min depth, cap-reached effective rewind ≈ 2 min.
+**Setup:** Connect to a real OpenHPSDR radio (HL2 or ANAN). Defaults at first launch (no `~/.config/NereusSDR/NereusSDR.settings`): 30 ms update period, 20 min depth, cap-reached effective rewind ≈ 8 min (post-merge cap raised from 4 096 to 16 384 rows — see plan §"Post-merge cap raise"). Cap break-even moves from 293 ms to 73 ms.
 
 | # | Action | Expected | Pass? |
 |---|--------|----------|-------|
@@ -23,8 +23,8 @@
 | **Narrow bandwidth (largeShift threshold note)** | | | |
 | 11a | At a 24 kHz CW panadapter (small bandwidth), pan freq by 5 kHz | History clears + LIVE forced grey — note that 25% of half-BW = 3 kHz at 24 kHz BW, so a 5 kHz pan exceeds the threshold. **This is expected behaviour, not a regression.** Document for QA so the test isn't read as a bug. (Source: Task 9 code review.) | |
 | **Period change** | | | |
-| 12 | Open Setup → Display → Waterfall. Drag update-period slider from 30 ms to 100 ms | Waterfall scrolls slower; rewind history is preserved (capacity stays at 4096 within the common range); effective-depth hint updates to `100 ms × 4096 rows = 6:49 (cap reached)` | |
-| 13 | Drag period slider to 500 ms | Waterfall scrolls much slower; rewind history is wiped (capacity drops to 2400, below the cap); LIVE button forced grey; hint reads `500 ms × 2400 rows = 20:00 (uncapped)` | |
+| 12 | Open Setup → Display → Waterfall. Drag update-period slider from 30 ms to 100 ms | Waterfall scrolls slower; capacity changes from cap-bound (16 384 rows = 8 min) to depth-bound (12 000 rows × 100 ms = 20 min). At the 73 ms break-even the height changes, so history may wipe at that point even within the depth dropdown. Effective-depth hint updates to `100 ms × 12000 rows = 20:00 (uncapped)` | |
+| 13 | Drag period slider to 500 ms | Waterfall scrolls much slower; capacity = 2 400 rows (depth-bound); LIVE button forced grey if a wipe occurred; hint reads `500 ms × 2400 rows = 20:00 (uncapped)` | |
 | 14 | Drag period slider mid-drag from 30 ms to 500 ms in one motion | No mid-drag flicker; only the final value triggers ensureWaterfallHistory after the 250 ms debounce | |
 | **Depth change** | | | |
 | 15 | At 500 ms period, change depth dropdown from 20 min to 5 min | Capacity drops to 600 rows; hint updates to `500 ms × 600 rows = 5:00 (uncapped)`; history wiped + forced live | |
@@ -40,7 +40,7 @@
 | **Multi-pan (Phase 3F is planned, not yet — sanity-check single-pan only)** | | | |
 | 22 | Confirm only one panadapter exists | Sub-epic E ring buffer is per-`SpectrumWidget`; multi-pan validation is deferred to Phase 3F | |
 | **Memory** | | | |
-| 23 | At default settings, run for 10 minutes; check Activity Monitor / `top` | RAM growth from sub-epic-D baseline ≈ 33 MB (= 2000 × 4 × 4096 bytes for the QImage history + ~32 KB for timestamps) | |
+| 23 | At default settings, run for 10 minutes; check Activity Monitor / `top` | RAM growth from sub-epic-D baseline ≈ 128 MB (= 2 000 × 4 × 16 384 bytes for the QImage history + ~128 KB for timestamps). Cap raised post-spec-merge from 4 096 to 16 384 rows for ~8 min effective rewind at default refresh — see plan §"Post-merge cap raise". | |
 | 24 | Slow update period to 1000 ms; check capacity | History capacity = 1200 rows ≈ 9.6 MB at 2000px width | |
 | **Visual states (screenshot for PR body)** | | | |
 | 25 | Live state, narrow strip, grey LIVE | Take screenshot | |

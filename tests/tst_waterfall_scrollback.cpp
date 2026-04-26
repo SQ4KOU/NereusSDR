@@ -12,17 +12,21 @@
 // pure-arithmetic checks. The production code lives in SpectrumWidget — when
 // modifying the formulas, update both copies (CI ensures parity via the
 // kMaxWaterfallHistoryRows constant pulled directly from the production
-// header).
+// header). All cap-dependent test values reference kMaxRows directly so a
+// future cap change requires zero test edits.
 
 #include "../src/gui/SpectrumWidget.h"
 
 namespace {
 
+constexpr int kMaxRows = NereusSDR::SpectrumWidget::kMaxWaterfallHistoryRows;
+constexpr qint64 k20MinMs = 20LL * 60 * 1000;
+
 // Mirrors SpectrumWidget::waterfallHistoryCapacityRows() — pure arithmetic.
 int capacityRows(qint64 depthMs, int periodMs) {
     const int p = std::max(1, periodMs);
     const int rows = static_cast<int>((depthMs + p - 1) / p);
-    return std::min(rows, NereusSDR::SpectrumWidget::kMaxWaterfallHistoryRows);
+    return std::min(rows, kMaxRows);
 }
 
 // Mirrors SpectrumWidget::historyRowIndexForAge() with explicit args.
@@ -37,68 +41,74 @@ class TstWaterfallScrollback : public QObject
 {
     Q_OBJECT
 private slots:
-    void capacityCappedAt4096_30ms_20min() {
-        QCOMPARE(capacityRows(20LL * 60 * 1000, 30), 4096);
+    // ── Capacity / cap arithmetic ──────────────────────────────────────────
+    //
+    // Cap break-even at 20 min depth = 1 200 000 / kMaxRows. With
+    // kMaxRows = 16 384, that's ~73 ms. Periods <= 73 ms are cap-bound;
+    // periods > 73 ms are depth-bound.
+
+    void capacityCappedAtMaxRows_30msPeriod_20minDepth() {
+        // 20 min × 60 000 / 30 = 40 000 → clamped to kMaxRows.
+        QCOMPARE(capacityRows(k20MinMs, 30), kMaxRows);
     }
-    void capacityCappedAt4096_100ms_20min() {
-        QCOMPARE(capacityRows(20LL * 60 * 1000, 100), 4096);
+    void capacityUncapped_100msPeriod_20minDepth() {
+        // 20 min × 60 000 / 100 = 12 000 → uncapped (under kMaxRows = 16 384).
+        QCOMPARE(capacityRows(k20MinMs, 100), 12000);
     }
-    void capacityCapBoundary_293ms_20min() {
-        // 20 min × 60 000 / 293 = 4 095.56 → ceil = 4 096 → capped at 4 096
-        QCOMPARE(capacityRows(20LL * 60 * 1000, 293), 4096);
+    void capacityUncapped_500msPeriod_20minDepth() {
+        // 20 min × 60 000 / 500 = 2 400 → uncapped.
+        QCOMPARE(capacityRows(k20MinMs, 500), 2400);
     }
-    void capacityUncapped_500ms_20min() {
-        // 20 min × 60 000 / 500 = 2 400 → uncapped
-        QCOMPARE(capacityRows(20LL * 60 * 1000, 500), 2400);
-    }
-    void capacityUncapped_1000ms_20min() {
-        QCOMPARE(capacityRows(20LL * 60 * 1000, 1000), 1200);
+    void capacityUncapped_1000msPeriod_20minDepth() {
+        QCOMPARE(capacityRows(k20MinMs, 1000), 1200);
     }
     void capacityRespects60sDepth() {
-        // Even at 30 ms period, a 60 s depth selector is honoured below the cap.
+        // 60 s depth at 30 ms = 2 000 rows — well under any reasonable cap.
         QCOMPARE(capacityRows(60 * 1000, 30), 2000);
     }
     void capacityZeroPeriodGuard() {
-        // 0 period clamped to 1 — must not divide by zero.
-        QCOMPARE(capacityRows(20LL * 60 * 1000, 0), 4096);
+        // 0 period clamped to 1 — must not divide by zero, then capped.
+        QCOMPARE(capacityRows(k20MinMs, 0), kMaxRows);
     }
 
+    // ── Row-index / age math ───────────────────────────────────────────────
+
     void rowIndexForAge_age0_isWriteRow() {
-        QCOMPARE(rowIndexForAge(/*writeRow=*/100, /*rowCount=*/4096,
-                                /*ringHeight=*/4096, /*ageRows=*/0),
+        QCOMPARE(rowIndexForAge(/*writeRow=*/100, /*rowCount=*/kMaxRows,
+                                /*ringHeight=*/kMaxRows, /*ageRows=*/0),
                  100);
     }
     void rowIndexForAge_wraps() {
-        // writeRow=4090, age=10 → 4100 % 4096 = 4
-        QCOMPARE(rowIndexForAge(4090, 4096, 4096, 10), 4);
+        // writeRow=kMaxRows-6, age=10 → (kMaxRows-6+10) % kMaxRows = 4
+        QCOMPARE(rowIndexForAge(kMaxRows - 6, kMaxRows, kMaxRows, 10), 4);
     }
     void rowIndexForAge_outOfBounds_returnsMinus1() {
-        QCOMPARE(rowIndexForAge(0, 100, 4096, 100), -1);
-        QCOMPARE(rowIndexForAge(0, 100, 4096, -1), -1);
+        QCOMPARE(rowIndexForAge(0, 100, kMaxRows, 100), -1);
+        QCOMPARE(rowIndexForAge(0, 100, kMaxRows, -1), -1);
     }
 
+    // ── Ring buffer wrap-around ────────────────────────────────────────────
+
     void wrapAround_writePastCapacity_keepsCapRows() {
-        // Simulate appending 5000 rows into a 4096-row ring; verify
-        // m_wfHistoryRowCount saturates at 4096 and writeRow wraps.
-        // We instrument this via a minimal stand-in (not a real
-        // SpectrumWidget) because the production appendHistoryRow needs
-        // a live QImage and a parent QWidget. The contract is small
-        // enough to mirror in the test.
-        constexpr int kHeight = 4096;
+        // Simulate kMaxRows + 616 writes into a kMaxRows-row ring; verify
+        // m_wfHistoryRowCount saturates at kMaxRows and writeRow wraps.
+        // We instrument via a minimal stand-in (not a real SpectrumWidget)
+        // because the production appendHistoryRow needs a live QImage and
+        // a parent QWidget. The contract is small enough to mirror.
+        constexpr int kHeight = kMaxRows;
+        constexpr int kIters = kMaxRows + 616;  // one full wrap + a known offset
         int writeRow = 0;
         int rowCount = 0;
-        for (int i = 0; i < 5000; ++i) {
+        for (int i = 0; i < kIters; ++i) {
             writeRow = (writeRow - 1 + kHeight) % kHeight;
-            if (rowCount < kHeight) ++rowCount;
+            if (rowCount < kHeight) { ++rowCount; }
         }
-        QCOMPARE(rowCount, 4096);
-        // After 5000 writes from initial writeRow=0, the new writeRow is
-        // (0 - 5000) % 4096 = -5000 % 4096 = -904 + 4096 = 3192 ... but
-        // because we apply (writeRow - 1 + h) % h each iteration, we
-        // wrap once per 4096 writes. After 5000 writes that's one full
-        // wrap (4096 writes) plus 904 more, landing at:
-        //     ((0 - 5000) % 4096 + 4096) % 4096 = (4096 - 904) = 3192
-        QCOMPARE(writeRow, 3192);
+        QCOMPARE(rowCount, kMaxRows);
+        // (kHeight - kIters) mod kHeight, kept positive:
+        //     ((kMaxRows - (kMaxRows + 616)) mod kMaxRows + kMaxRows) mod kMaxRows
+        //   = ((-616) mod kMaxRows + kMaxRows) mod kMaxRows
+        //   = kMaxRows - 616
+        QCOMPARE(writeRow, kMaxRows - 616);
     }
 };
 

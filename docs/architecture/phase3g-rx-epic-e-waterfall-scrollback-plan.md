@@ -16,6 +16,16 @@
 
 ---
 
+## Post-merge cap raise (4 096 → 16 384)
+
+After live testing on macOS / GPU path, the user found the 4 096-row cap delivered only ~2 minutes of effective rewind at NereusSDR's default 30 ms refresh rate — too short to be useful. The cap was raised to 16 384 rows post-spec-approval, increasing memory cost from ~32 MB to ~128 MB per panadapter at 2 000 px wide and effective rewind from ~2 min to ~8 min at default settings, or 20+ min at any refresh rate ≥ 73 ms.
+
+**Body of this plan is preserved as historical record at the as-designed cap of 4 096.** Concrete cap-dependent numbers below (in tests, the file structure description, and `kMaxWaterfallHistoryRows`'s declaration in `SpectrumWidget.h`) reference the *current* value via the constant. The break-even point between depth-bound and cap-bound capacity moves from 293 ms (at the 4 096-row cap) to ~73 ms (at 16 384).
+
+A disk-spool tier — to extend rewind beyond the in-memory cap at the fastest refresh rates, with a `QTemporaryFile`-backed lazy-load store purged on app close — is deferred to **Phase 3M (Recording)** per the epic design doc.
+
+---
+
 ## Authoring-time decisions (lock these before coding)
 
 Three points where the design doc paraphrase, the AetherSDR `main` upstream, and the unmerged PR diverge. **Each port follows the source named below**, and a reviewer reading the doc + the upstream code should see why each choice was made without needing to ask. Documented here so a reviewer doesn't read the doc, look at the code, and ask "wait, why does it look like that?".

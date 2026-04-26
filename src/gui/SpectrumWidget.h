@@ -252,9 +252,13 @@ public:
     // Cap on waterfall scrollback history capacity, in rows. Bounds memory use.
     // Public so unit tests (tst_waterfall_scrollback) can mirror the
     // capacity-clamp formula in their parallel shim.
-    // From AetherSDR SpectrumWidget.h:482 [@2bb3b5c]
-    // (cap added by unmerged AetherSDR PR #1478 — see plan §authoring-time #2)
-    static constexpr int kMaxWaterfallHistoryRows = 4096;
+    //
+    // Originally 4096 (~32 MB at 2000 px wide) — ported from unmerged
+    // AetherSDR PR #1478 [@2bb3b5c]. NereusSDR raised the cap to 16384
+    // (~128 MB at 2000 px wide) post-merge to give ~8 min effective rewind
+    // at the default 30 ms refresh and 20+ min at any period ≥ 73 ms.
+    // Disk-spool tier deferred to Phase 3M (Recording).
+    static constexpr int kMaxWaterfallHistoryRows = 16384;
 
     // ---- Frequency range ----
     void setFrequencyRange(double centerHz, double bandwidthHz);
