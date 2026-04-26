@@ -2036,8 +2036,10 @@ void SpectrumWidget::rebuildWaterfallViewport()
     // `m_wfTexFullUpload = true`); m_wfLastUploadedRow alone leaves the
     // bottom scanline stale because the incremental loop exits before
     // uploading row texH-1.
+#ifdef NEREUS_GPU_SPECTRUM
     m_wfTexFullUpload = true;
     m_wfLastUploadedRow = -1;
+#endif
     update();
 }
 
@@ -2172,8 +2174,10 @@ void SpectrumWidget::reprojectWaterfall(double oldCenterHz, double oldBandwidthH
     // review): m_wfTexFullUpload routes the GPU upload through the full
     // path, m_wfLastUploadedRow = -1 forces every scanline to be re-sent.
     // Skipping either leaves the bottom row stale on the next frame.
+#ifdef NEREUS_GPU_SPECTRUM
     m_wfLastUploadedRow = -1;
     m_wfTexFullUpload   = true;
+#endif
 }
 
 // ---- Waterfall row push ----
