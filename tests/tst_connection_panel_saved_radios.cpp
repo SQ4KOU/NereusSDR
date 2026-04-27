@@ -1,11 +1,13 @@
 // tests/tst_connection_panel_saved_radios.cpp
 //
-// Round-trip tests for AppSettings saved-radio persistence (Phase 3I Task 15).
+// Round-trip tests for AppSettings saved-radio persistence (Phase 3I Task 15)
+// + stale-sweep exemption for saved MACs (Phase 3Q Task 11).
 //
 // Uses AppSettings(filePath) direct constructor so each test gets an isolated
 // in-memory store — no pollution of the user's real settings file.
 
 #include <QtTest/QtTest>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 #include "core/AppSettings.h"
 #include "core/RadioDiscovery.h"
@@ -137,6 +139,55 @@ private slots:
         QCOMPARE(list.size(), 1);  // still one entry, not duplicated
         QCOMPARE(list.first().info.firmwareVersion, 73);
         QCOMPARE(list.first().autoConnect,          true);
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 3Q Task 11 — design §7.4
+    // Saved radios must survive the stale sweep even when their lastSeen
+    // timestamp is well past the discovered-only timeout (60 s).
+    // Discovered-only radios with the same expired timestamp MUST be removed.
+    // -------------------------------------------------------------------------
+    void savedRadioSurvivesStaleSweep() {
+        // Arrange: one saved MAC and one discovered-only MAC, both with a
+        // lastSeen timestamp 90 s in the past (past the 60 s timeout).
+        const QString savedMac     = QStringLiteral("aa:bb:cc:11:22:33");
+        const QString discoveredMac = QStringLiteral("dd:ee:ff:77:88:99");
+
+        RadioDiscovery disc;
+        disc.setSavedMacs(QStringList{savedMac});
+
+        const qint64 staleTs = QDateTime::currentMSecsSinceEpoch() - 90 * 1000;
+
+        RadioInfo savedInfo = makeHl2Info();
+        savedInfo.macAddress = savedMac;
+        disc.injectLastSeenForTest(savedMac, savedInfo, staleTs);
+
+        RadioInfo discoveredInfo;
+        discoveredInfo.name       = QStringLiteral("Ghost Radio");
+        discoveredInfo.macAddress = discoveredMac;
+        disc.injectLastSeenForTest(discoveredMac, discoveredInfo, staleTs);
+
+        // Monitor radioLost emissions
+        QSignalSpy lostSpy(&disc, &RadioDiscovery::radioLost);
+
+        // Act: run the stale sweep directly
+        disc.forceStaleCheckForTest();
+
+        // Assert: exactly one radioLost emitted — the discovered-only radio
+        QCOMPARE(lostSpy.count(), 1);
+        QCOMPARE(lostSpy.first().first().toString(), discoveredMac);
+
+        // Assert: savedMac is still accessible via discoveredRadios() (i.e. not removed)
+        const QList<RadioInfo> remaining = disc.discoveredRadios();
+        bool savedStillPresent = false;
+        for (const RadioInfo& ri : remaining) {
+            if (ri.macAddress == savedMac) {
+                savedStillPresent = true;
+                break;
+            }
+        }
+        QVERIFY2(savedStillPresent,
+                 "Saved radio must survive the stale sweep regardless of lastSeen age");
     }
 };
 

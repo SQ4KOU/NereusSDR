@@ -156,7 +156,9 @@ void RadioDiscovery::startDiscovery()
     emit discoveryStarted();
     scanAllNics();                              // one-shot NIC walk
     if (!m_staleTimer.isActive()) {
-        m_staleTimer.start(kStaleTimeoutMs);
+        // Sweep interval matches the discovered-only timeout so the first sweep
+        // fires no earlier than a radio can be considered stale (design §7.4).
+        m_staleTimer.start(kDiscoveredOnlyTimeoutMs);
     }
     emit discoveryFinished();
 }
@@ -490,9 +492,15 @@ void RadioDiscovery::onStaleCheck()
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     QStringList stale;
 
+    // Design §7.4: two permanent exemptions from stale removal —
+    //   1. Connected MAC (already connected, stops sending beacons; existing rule).
+    //   2. Saved MACs (AppSettings entries): rows stay in the panel forever;
+    //      the pill transitions Stale → Offline on age but the entry is never removed.
+    // Discovered-only radios (not in m_savedMacs) age out at kDiscoveredOnlyTimeoutMs.
     for (auto it = m_lastSeen.constBegin(); it != m_lastSeen.constEnd(); ++it) {
         if (it.key() == m_connectedMac) { continue; }
-        if (now - it.value() > kStaleTimeoutMs) {
+        if (m_savedMacs.contains(it.key())) { continue; }  // saved never age out
+        if (now - it.value() > kDiscoveredOnlyTimeoutMs) {
             stale.append(it.key());
         }
     }

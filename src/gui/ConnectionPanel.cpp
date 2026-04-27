@@ -215,6 +215,20 @@ ConnectionPanel::ConnectionPanel(RadioModel* model, QWidget* parent)
             this, &ConnectionPanel::refreshLastSeenColumn);
     m_lastSeenRefreshTimer.start(15000);
 
+    // Design §7.4: feed all currently-saved MACs to RadioDiscovery so it knows
+    // which entries to exempt from the stale-removal sweep.
+    {
+        const QList<SavedRadio> saved = AppSettings::instance().savedRadios();
+        QStringList savedMacs;
+        savedMacs.reserve(saved.size());
+        for (const SavedRadio& sr : saved) {
+            if (!sr.info.macAddress.isEmpty()) {
+                savedMacs.append(sr.info.macAddress);
+            }
+        }
+        disc->setSavedMacs(savedMacs);
+    }
+
     // Populate with any radios already discovered before the panel opened
     const QList<RadioInfo> existing = disc->discoveredRadios();
     for (const RadioInfo& info : existing) {
@@ -1049,6 +1063,12 @@ void ConnectionPanel::onAddManuallyClicked()
     AppSettings::instance().saveRadio(info, dlg.pinToMac(), dlg.autoConnect());
     AppSettings::instance().save();
 
+    // Design §7.4: tell RadioDiscovery this MAC is now saved so it is
+    // permanently exempt from the stale-removal sweep.
+    if (!info.macAddress.isEmpty()) {
+        m_radioModel->discovery()->addSavedMac(info.macAddress);
+    }
+
     // Add the row to the table immediately so the user sees their entry.
     // onRadioDiscovered handles de-duplication via rowForMac.
     upsertRowForInfo(info, /*online=*/false);
@@ -1075,6 +1095,10 @@ void ConnectionPanel::onForgetClicked()
 
     AppSettings::instance().forgetRadio(mac);
     AppSettings::instance().save();
+
+    // Design §7.4: the user has explicitly forgotten this radio, so remove
+    // the MAC from the saved-exempt set — it can now age out of discovery.
+    m_radioModel->discovery()->removeSavedMac(mac);
 
     m_discoveredRadios.remove(mac);
     m_lastSeenMs.remove(mac);
