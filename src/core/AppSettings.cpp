@@ -567,6 +567,37 @@ void AppSettings::setModelOverride(const QString& macKey, HPSDRModel model)
 }
 
 // ---------------------------------------------------------------------------
+// Radio-key migration (Phase 3Q Task 12)
+// ---------------------------------------------------------------------------
+
+void AppSettings::migrateRadioKey(const QString& oldKey, const QString& newKey)
+{
+    if (oldKey == newKey) {
+        return;
+    }
+
+    // Read all fields stored under the old key via the typed accessor.
+    // Returns std::nullopt when no entry exists — nothing to migrate.
+    std::optional<SavedRadio> saved = savedRadio(oldKey);
+    if (!saved.has_value()) {
+        return;
+    }
+
+    // Promote the MAC address field to the real MAC so saveRadio() derives
+    // the correct key (saveRadio uses info.macAddress when non-empty, else
+    // falls back to "manual-<ip>-<port>").
+    saved->info.macAddress = newKey;
+
+    // Remove the old synthetic entry before writing the new one so there is
+    // no window where both keys co-exist in the settings map.
+    forgetRadio(oldKey);
+
+    // Re-persist under the real-MAC key.  saveRadio() overwrites lastSeen with
+    // QDateTime::currentDateTimeUtc() — acceptable for a first-probe migration.
+    saveRadio(saved->info, saved->pinToMac, saved->autoConnect);
+}
+
+// ---------------------------------------------------------------------------
 // Phase 3O VAX schema migration
 // ---------------------------------------------------------------------------
 

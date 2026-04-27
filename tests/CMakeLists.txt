@@ -769,3 +769,10 @@ nereus_add_test(tst_add_custom_radio_dialog)
 # NereusSDR-original; no Thetis attribution needed.
 nereus_add_test(tst_connection_panel_state_pills)
 
+# ── Phase 3Q Task 12: AppSettings::migrateRadioKey — synthetic → real-MAC ────
+# 6 tests: core migration (name+autoConnect), pinToMac preserved, same-key no-op,
+# absent-key no-op, IP+port preserved, no orphan keys after migration.
+# Uses QTemporaryDir for full isolation; QTEST_APPLESS_MAIN (no QApplication).
+# NereusSDR-original; no Thetis attribution needed.
+nereus_add_test(tst_app_settings_migration)
+
