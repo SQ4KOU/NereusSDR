@@ -1,5 +1,5 @@
 {
-  "generated_utc": "2026-04-27T23:49:51+00:00",
+  "generated_utc": "2026-04-27T23:58:35+00:00",
   "deskhpsdr_sha": "120188f",
   "callsign_tags": {
     "G0ORX": {
@@ -159,7 +159,7 @@
       "role": "piHPSDR original author (2015)"
     },
     "DL1BZ": {
-      "count": 216,
+      "count": 217,
       "first_seen": "main.h:3",
       "files": [
         "MacOS.c",
@@ -370,7 +370,7 @@
       "role": "deskHPSDR maintainer (2024-2025)"
     },
     "DL1YCF": {
-      "count": 192,
+      "count": 200,
       "first_seen": "main.h:5",
       "files": [
         "MacOS.c",
@@ -724,6 +724,32 @@
       "name": "John Melton",
       "role": "piHPSDR original author (G0ORX/N6LYT \u2014 same person, dual callsign)"
     },
+    "N1GP": {
+      "count": 8,
+      "first_seen": "saturndrivers.c:28",
+      "files": [
+        "saturndrivers.c",
+        "saturndrivers.h",
+        "saturnmain.c",
+        "saturnmain.h",
+        "saturnregisters.c",
+        "saturnregisters.h",
+        "saturnserver.c",
+        "saturnserver.h"
+      ],
+      "name": "Rick Koch",
+      "role": "Saturn/PiHPSDR interfacing contributor; name from source (saturndrivers.c:28)"
+    },
+    "DH0DM": {
+      "count": 5,
+      "first_seen": "rigctl.c:488",
+      "files": [
+        "main.c",
+        "rigctl.c"
+      ],
+      "name": "Rainer Mattes",
+      "role": "Inline patch contributor (keyboard shortcuts, time-controlled adjustment); attribution preserved per GPLv3 §5"
+    },
     "KA6S": {
       "count": 4,
       "first_seen": "store.c:2",
@@ -735,15 +761,6 @@
       ],
       "name": "Steve Wilson",
       "role": "store.c / store_menu.c contributor (2016)"
-    },
-    "DH0DM": {
-      "count": 2,
-      "first_seen": "rigctl.c:488",
-      "files": [
-        "rigctl.c"
-      ],
-      "name": null,
-      "role": null
     }
   },
   "named_tags": {

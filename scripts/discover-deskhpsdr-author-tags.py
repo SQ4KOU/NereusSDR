@@ -15,15 +15,17 @@ observed in the source tree:
   - Inline attribution: `// Contribution of <phrase> from N1GP (Rick Koch)`
   - Inline notes: `// Contributed initially by Davide "ra1nb0w"`
   - Named + parenthesized callsign: `N1GP (Rick Koch)`
+  - Inline `// CALLSIGN:` patch tags in function bodies: deskhpsdr uses
+    inline `// CALLSIGN:` patches in some files (e.g., `main.c` for DH0DM
+    keyboard contributions); the regex set covers all the major patterns
+    observed in the corpus.
 
-Unlike Thetis, deskhpsdr does NOT use inline developer-tag comments in the
-`//DH1KLM` or `//MW0LGE` style within function bodies. Attribution is
-carried in file headers and occasional named contribution comments. The
-regex set is therefore tuned for C-project norms:
+The regex set is therefore tuned for C-project norms:
   - Callsign in parentheses: `(N1GP)`, `(G0ORX)`, `(DL1YCF)`, `(DL1BZ)`
   - Named credit lines: `Contribution of ... from NAME (CALLSIGN)`,
     `Contributed initially by NAME`
   - Copyright header callsigns: extracted from `YYYY - Name, CALLSIGN`
+  - Bare `// CALLSIGN:` inline tags: `// DH0DM: add keyboard shortcuts`
 
 Output JSON schema (mirrors thetis-author-tags.json):
     {
@@ -84,21 +86,27 @@ RE_PAREN_CALLSIGN = re.compile(r"\((" + RE_CALLSIGN_CORE + r")\)")
 # Slash-separated callsigns: G0ORX/N6LYT
 RE_SLASH_CALLSIGN = re.compile(
     r"\b(" + RE_CALLSIGN_CORE + r")/(" + RE_CALLSIGN_CORE + r")\b")
-# Bare callsign after comma in copyright lines:
-#   "2015 - John Melton, G0ORX/N6LYT"
-RE_COMMA_CALLSIGN = re.compile(r",\s*(" + RE_CALLSIGN_CORE + r")\b")
 # Bare callsign after dash in copyright lines:
 #   "2024,2025 - Heiko Amft, DL1BZ"
 RE_COPYRIGHT_CALLSIGN = re.compile(
     r"\d{4}(?:,\d{4})*\s*-\s*[A-Za-z\s]+,\s*(" + RE_CALLSIGN_CORE + r")\b")
 
-# Prose attribution "by CALLSIGN" in headers, inline comments, and strings:
+# Bare `// CALLSIGN:` inline tag in function bodies (byte-mirrored from
+# scripts/discover-thetis-author-tags.py):
+#   "// DH0DM: add additional keyboard shortcuts"
+#   "//DH0DM: changed the logic here"
+# Applied AFTER the more-specific patterns so it only fires when nothing
+# else matched.
+RE_BARE_CALLSIGN = re.compile(r"//\s*(" + RE_CALLSIGN_CORE + r")(?:_[\w]+)?\b")
+
+# Prose attribution "by/from CALLSIGN" in headers, inline comments, strings:
 #   "forked and was adapted from piHPSDR by DL1YCF to deskHPSDR"
 #   "// add by DL1BZ", "// patch by DH0DM"
+#   "// add an idea from DH0DM: press key [s]..."
 #   "Sep/Oct/Nov 2018, by DL1YCF Christoph van Wüllen"
 # Applied AFTER the more-specific copyright / paren / slash regexes so that
 # "Copyright (C) ... by NAME" is caught by RE_COPYRIGHT_CALLSIGN first.
-RE_BY_CALLSIGN = re.compile(r"\bby\s+(" + RE_CALLSIGN_CORE + r")\b")
+RE_BY_CALLSIGN = re.compile(r"\b(?:by|from)\s+(" + RE_CALLSIGN_CORE + r")\b")
 
 # Named credits in inline comments or attribution blocks:
 #   "Contribution of interfacing to PiHPSDR from N1GP (Rick Koch)"
@@ -207,7 +215,7 @@ def discover(base: Path):
         name = name.strip()
         # Strip trailing quote artifacts from "ra1nb0w"-style nicknames
         name = name.rstrip('"').strip()
-        if not name or len(name) < 4:
+        if not name or len(name) < 5:
             return
         # Skip all-uppercase (callsign, not name)
         if name == name.upper():
@@ -245,6 +253,13 @@ def discover(base: Path):
             # Applied after the copyright regex to avoid pre-empting it.
             for m in RE_BY_CALLSIGN.finditer(line):
                 record_callsign(m.group(1), src, ln_idx + 1)
+            # Bare `// CALLSIGN:` inline tag — applied last (least specific).
+            # Restrict to the comment tail to avoid firing on non-comment code.
+            #   "// DH0DM: add additional keyboard shortcuts"
+            if "//" in line:
+                commented = "//" + line.split("//", 1)[1]
+                for m in RE_BARE_CALLSIGN.finditer(commented):
+                    record_callsign(m.group(1), src, ln_idx + 1)
             # Copyright-line named author
             for m in RE_COPYRIGHT_NAME.finditer(line):
                 record_named(m.group(1), src, ln_idx + 1)
@@ -346,15 +361,11 @@ def main() -> int:
             print("Run scripts/discover-deskhpsdr-author-tags.py and commit "
                   "the refreshed corpus (populate name/role fields).")
             return 1
-        # Fail if any committed callsign with count > 2 still has name=null.
-        # Low-count (<=2) callsigns are minor patch contributors whose full
-        # names are not resolvable from the source tree alone; they are
-        # admitted to the corpus for completeness but exempt from the
-        # name-enforcement rule.
+        # Fail if any committed callsign still has name=null — same
+        # unconditional enforcement as scripts/discover-thetis-author-tags.py.
         unnamed = sorted(
             cs for cs, meta in committed["callsign_tags"].items()
             if meta.get("name") in (None, "")
-            and meta.get("count", 0) > 2
         )
         if unnamed:
             print(f"DRIFT: {len(unnamed)} callsign(s) in corpus have "
