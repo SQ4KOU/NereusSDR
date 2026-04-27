@@ -163,11 +163,17 @@ P2RadioConnection::P2RadioConnection(QObject* parent)
         m_rx[i].rxInSeqErr = 0;
     }
 
-    // From Thetis create_rnet() netInterface.c:1504-1514
+    // From Thetis create_rnet() netInterface.c:1504-1514 [v2.10.3.13]
     for (int i = 0; i < kMaxTxStreams; ++i) {
         m_tx[i].id = i;
         m_tx[i].frequency = 0;
-        m_tx[i].samplingRate = 48;
+        // 3M-1a bench fix: P2 TX is ALWAYS 192 kHz (Thetis netInterface.c:1513
+        // [v2.10.3.13]).  This was incorrectly initialised to 48 (a copy-paste
+        // from the RX block above where 48 kHz IS correct), causing
+        // txSampleRate() to return 48000 → createTxChannel opened the WDSP TX
+        // channel with outputSampleRate=48000 → WDSP rsmpout produced samples
+        // at the wrong rate → G2 saw silence/aliased noise instead of carrier.
+        m_tx[i].samplingRate = 192;
         m_tx[i].cwx = 0;
         m_tx[i].dash = 0;
         m_tx[i].dot = 0;
@@ -248,8 +254,25 @@ void P2RadioConnection::init()
     m_txIqTimer = new QTimer(this);
     m_txIqTimer->setInterval(kTxTimerIntervalMs);
     connect(m_txIqTimer, &QTimer::timeout, this, [this]() {
+        // BENCH-DIAG: log every 200th tick (200 × 5 ms = 1 s).  Tracks ring
+        // fill state + whether the consumer is actually emitting nonzero data.
+        static int s_diagTick = 0;
+        ++s_diagTick;
+        const bool diagThisTick = (s_diagTick % 200) == 1;
+
         if (!m_running || !m_socket) {
+            if (diagThisTick) {
+                qCInfo(lcConnection) << "BENCH-DIAG P2 TX-IQ tick #" << s_diagTick
+                                     << "early-return"
+                                     << "running=" << m_running
+                                     << "socket=" << (m_socket != nullptr);
+            }
             return;
+        }
+        if (diagThisTick) {
+            qCInfo(lcConnection) << "BENCH-DIAG P2 TX-IQ tick #" << s_diagTick
+                                 << "ring count=" << m_txIqRingCount.load(std::memory_order_acquire)
+                                 << "(0=empty/silence; nonzero=carrier samples queued)";
         }
 
         // Drain kTxFramesPerTick (4) frames per 5 ms tick at 192 kHz.
@@ -574,6 +597,10 @@ void P2RadioConnection::setTxDrive(int level)
 {
     // From Thetis: prn->tx[0].drive_level
     m_tx[0].driveLevel = qBound(0, level, 255);
+    qCInfo(lcConnection) << "BENCH-DIAG P2::setTxDrive level=" << level
+                         << "stored=" << m_tx[0].driveLevel
+                         << "m_running=" << m_running
+                         << "(byte 345 will be" << m_tx[0].driveLevel << "on next high-pri)";
     if (m_running) {
         sendCmdHighPriority();
     }

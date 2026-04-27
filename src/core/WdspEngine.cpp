@@ -410,6 +410,41 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
                   << "bufSize=" << inputBufferSize
                   << "inRate=" << inputSampleRate
                   << "dspRate=" << dspSampleRate;
+
+    // 3M-1a bench fix: TX channel default configuration.
+    // Without this block the WDSP TX channel is in an undefined-default state
+    // and ALC's gain integrator runs unbounded on silent input — output
+    // diverges to inf within ~1 second of TUN.
+    //
+    // This is the standard set of init calls deskhpsdr issues right after
+    // OpenChannel(type=1).  Cite: deskhpsdr/src/transmitter.c:1459-1473 [@120188f]:
+    //   SetTXABandpassWindow(tx->id, 1);   // 7-term Blackman-Harris
+    //   SetTXABandpassRun(tx->id, 1);
+    //   SetTXAAMSQRun(tx->id, 0);          // disable mic noise gate
+    //   SetTXAALCAttack(tx->id, 1);        // 1 ms attack
+    //   SetTXAALCDecay(tx->id, 10);        // 10 ms decay
+    //   SetTXAALCMaxGain(tx->id, 0);       // 0 dB max — KEY: caps ALC at 1.0×
+    //   SetTXAALCSt(tx->id, 1);            // ALC on (never switch it off!)
+    //   SetTXAPreGenMode/ToneMag/ToneFreq/Run — PreGen off (silence)
+    //   SetTXAPanelRun(tx->id, 1);         // activate patch panel
+    //   SetTXAPanelSelect(tx->id, 2);      // route Mic I sample
+    //   SetTXAPostGenRun(tx->id, 0);       // PostGen off until setTuneTone
+    SetTXABandpassWindow(channelId, 1);
+    SetTXABandpassRun(channelId, 1);
+    SetTXAAMSQRun(channelId, 0);
+    SetTXAALCAttack(channelId, 1);
+    SetTXAALCDecay(channelId, 10);
+    SetTXAALCMaxGain(channelId, 0.0);
+    SetTXAALCSt(channelId, 1);
+    SetTXAPreGenMode(channelId, 0);
+    SetTXAPreGenToneMag(channelId, 0.0);
+    SetTXAPreGenToneFreq(channelId, 0.0);
+    SetTXAPreGenRun(channelId, 0);
+    SetTXAPanelRun(channelId, 1);
+    SetTXAPanelSelect(channelId, 2);
+    SetTXAPostGenRun(channelId, 0);
+    qCInfo(lcDsp) << "TX channel" << channelId
+                  << "init: ALC max-gain capped at 0 dB (per deskhpsdr [@120188f])";
 #endif
 
     // C.2 [3M-1a]: Construct the TxChannel C++ wrapper around the WDSP TXA

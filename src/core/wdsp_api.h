@@ -632,6 +632,48 @@ void SetTXAosctrlRun(int channel, int run);
 // From Thetis wdsp/cfcomp.c:632-637 [v2.10.3.13].
 void SetTXACFCOMPRun(int channel, int run);
 
+// ── TX channel default config — from deskhpsdr/src/transmitter.c:1459-1473 [@120188f]
+// These calls are invoked AFTER OpenChannel(... type=1 ...) to put the WDSP TX
+// channel into a sane state.  Without them ALC's max gain integrator runs to
+// infinity on silent input (NullMicSource) and produces inf samples on output.
+//
+// alc (stage 14, wcpAGC): TX ALC.
+// From Thetis wdsp/wcpAGC.c:570-610 [v2.10.3.13].
+void SetTXAALCSt(int channel, int state);          // wcpAGC.c:570 — ALC on/off (1 = on)
+void SetTXAALCAttack(int channel, int attack);     // wcpAGC.c:578 — attack ms (1 = 1 ms)
+void SetTXAALCDecay(int channel, int decay);       // wcpAGC.c:586 — decay ms (10 = 10 ms)
+void SetTXAALCMaxGain(int channel, double maxgain); // wcpAGC.c:604 — max gain dB (0 = unity, no amplification)
+
+// bp0 (stage 8): mandatory TX bandpass filter.
+// From Thetis wdsp/bandpass.c — SetTXABandpass{Window,Run}.
+void SetTXABandpassWindow(int channel, int window); // 1 = 7-term Blackman-Harris
+void SetTXABandpassRun(int channel, int run);
+
+// SetTXAMode: configure TXA pipeline for an operating mode (LSB/USB/AM/FM/...).
+// Activates ammod/fmmod/preemph stages per mode and triggers TXASetupBPFilters.
+// Mode integer matches NereusSDR DSPMode enum (LSB=0, USB=1, ..., DRM=11).
+// From Thetis wdsp/TXA.c:753-789 [v2.10.3.13].
+void SetTXAMode(int channel, int mode);
+
+// SetTXABandpassFreqs: configure bp0 / bp1 / bp2 bandpass cutoffs in IQ space.
+// LSB: low=-high_audio, high=-low_audio (e.g. -2850, -150).
+// USB: low=+low_audio, high=+high_audio (e.g. +150, +2850).
+// AM/DSB/SAM: symmetric (-high, +high).
+// From Thetis wdsp/TXA.c:792-799 [v2.10.3.13].
+// Cite: deskhpsdr/src/transmitter.c:2091-2191 [@120188f] — tx_set_filter
+//   per-mode mapping from audio bandpass to IQ-space bandpass.
+void SetTXABandpassFreqs(int channel, double f_low, double f_high);
+
+// gen0 (stage 1): PreGen — pure tone generator (used for 2-TONE; off in 3M-1a).
+// From Thetis wdsp/gen.c.
+void SetTXAPreGenMode(int channel, int mode);       // 0 = sine
+void SetTXAPreGenToneMag(int channel, double mag);
+void SetTXAPreGenToneFreq(int channel, double freq);
+
+// panel (stage 2): audio patch panel — selects which input source feeds the chain.
+// From Thetis wdsp/patchpanel.c.
+void SetTXAPanelSelect(int channel, int select);    // 2 = use Mic I sample (mono mic)
+
 } // extern "C"
 
 #endif // HAVE_WDSP

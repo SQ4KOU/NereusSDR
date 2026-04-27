@@ -968,42 +968,17 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // fires setRunning(true) after MOX engage + rfDelay.
         // From Thetis dsp.cs:926-944 [v2.10.3.13] — WDSP.id(1, 0) = channel 1.
         //
-        // Bench fix round 3 (Issue B): pass the connection's negotiated TX output
-        // sample rate so WDSP's rsmpout stage delivers fexchange2 output at the
-        // correct rate.
-        //   P2 (Saturn/G2): 192000 Hz — m_connection->txSampleRate() = 192000.
-        //   P1 (HL2/Atlas): 48000 Hz  — m_connection->txSampleRate() = 48000.
-        // Without this, createTxChannel defaulted to 48000 Hz even on P2, so WDSP
-        // resampled to 48 kHz when the radio expected 192 kHz — no carrier on air.
+        // 3M-1a bench fix: the TX channel was previously created here, but
+        // this lambda fires synchronously inside m_wdspEngine->initialize()
+        // BEFORE m_connection = conn.release() runs lower down in
+        // connectToRadio().  That left m_txChannel with a null connection
+        // pointer AND a wrong outputSampleRate (m_connection->txSampleRate()
+        // returned the default 48 kHz instead of the radio's 192 kHz).
         //
-        // From Thetis wdsp/cmaster.c:183 [v2.10.3.13] — ch_outrate parameter.
-        // From Thetis netInterface.c:1513 [v2.10.3.13] — P2 TX always 192 kHz.
-        const int txOutRate = m_connection ? m_connection->txSampleRate() : 48000;
-        m_txChannel = m_wdspEngine->createTxChannel(/*channelId=*/1,
-                                                    /*inputBufferSize=*/238,
-                                                    /*dspBufferSize=*/WdspEngine::kTxDspBufferSize,
-                                                    /*inputSampleRate=*/48000,
-                                                    /*dspSampleRate=*/WdspEngine::kTxDspSampleRate,
-                                                    /*outputSampleRate=*/txOutRate);
-        if (!m_txChannel) {
-            qCWarning(lcDsp) << "G.1: createTxChannel(1) returned nullptr — "
-                                "TUNE will be unavailable until WDSP re-initializes.";
-        } else {
-            // 3M-1a G.1: wire the production loop — inject the connection
-            // and mic router so driveOneTxBlock() can push fexchange2 output
-            // to the SPSC ring on every 5 ms production-timer tick.
-            //
-            // setConnection(m_connection): non-owning; RadioModel owns the
-            //   connection.  Cleared in teardownConnection() before the
-            //   connection is destroyed.
-            // setMicRouter(m_txMicRouter.get()): NullMicSource for 3M-1a
-            //   (silence stream; gen1 PostGen overwrites with TUNE carrier).
-            //   Non-owning; RadioModel owns the unique_ptr.
-            m_txChannel->setConnection(m_connection);
-            m_txChannel->setMicRouter(m_txMicRouter.get());
-            qCInfo(lcDsp) << "G.1: TX channel 1 created — TUNE path ready "
-                             "(production loop wired: connection + NullMicSource).";
-        }
+        // Both prerequisites (WDSP initialised + m_connection live) are
+        // guaranteed AFTER conn.release() completes, so TX channel creation
+        // moved there.  See the "TX channel creation deferred" block right
+        // after m_connection = conn.release().
         if (rxCh) {
             // Apply slice state to WDSP channel (no longer hardcoded)
             if (m_activeSlice) {
@@ -1159,6 +1134,37 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     }
     m_connection = conn.release();
     m_connection->setHardwareProfile(m_hardwareProfile);
+
+    // 3M-1a bench fix: TX channel creation was previously inside the WDSP-
+    // init lambda, which fires synchronously inside m_wdspEngine->initialize()
+    // (above, line ~1152) — BEFORE m_connection was assigned.  Result: the
+    // channel was opened with the wrong outputSampleRate (default 48 kHz
+    // instead of radio's 192 kHz for P2/G2) AND TxChannel.m_connection was
+    // null.  Both prerequisites (WDSP init + live m_connection) are
+    // guaranteed at this point, so the TX channel is created here.
+    //
+    // From Thetis wdsp/cmaster.c:177-190 [v2.10.3.13] — create_xmtr() params.
+    // From Thetis dsp.cs:926-944 [v2.10.3.13] — WDSP.id(1, 0) = channel 1.
+    // From Thetis netInterface.c:1513 [v2.10.3.13] — P2 TX always 192 kHz.
+    if (m_wdspEngine && !m_txChannel) {
+        const int txOutRate = m_connection->txSampleRate();
+        m_txChannel = m_wdspEngine->createTxChannel(/*channelId=*/1,
+                                                    /*inputBufferSize=*/238,
+                                                    /*dspBufferSize=*/WdspEngine::kTxDspBufferSize,
+                                                    /*inputSampleRate=*/48000,
+                                                    /*dspSampleRate=*/WdspEngine::kTxDspSampleRate,
+                                                    /*outputSampleRate=*/txOutRate);
+        if (m_txChannel) {
+            m_txChannel->setConnection(m_connection);
+            m_txChannel->setMicRouter(m_txMicRouter.get());
+            qCInfo(lcDsp) << "G.1: TX channel 1 created (deferred until conn live)"
+                          << "outRate=" << txOutRate
+                          << "— TUNE path ready (production loop wired).";
+        } else {
+            qCWarning(lcDsp) << "G.1: deferred createTxChannel(1) returned nullptr —"
+                                " TUNE will be unavailable until next reconnect.";
+        }
+    }
 
     // Wire the OcMatrix so P1/P2 buildCodecContext() can source ctx.ocByte
     // from maskFor(currentBand, mox) at C&C compose time.  Must be called
@@ -2712,6 +2718,15 @@ void RadioModel::setTune(bool on)
                                     ? bandFromFrequency(m_activeSlice->frequency())
                                     : m_lastBand;
         const int tunePower = m_transmitModel.tunePowerForBand(currentBand);
+        // BENCH-DIAG: log the values we're about to push to the radio so we
+        // can see if drive level / channel state are right when TUN engages.
+        qCInfo(lcDsp) << "BENCH-DIAG RadioModel::setTune(true)"
+                      << "band=" << static_cast<int>(currentBand)
+                      << "tunePower=" << tunePower
+                      << "savedDspMode=" << static_cast<int>(m_savedTxDspMode)
+                      << "signedFreq=" << signedFreq
+                      << "txChannel=" << (m_txChannel != nullptr)
+                      << "connection=" << (m_connection != nullptr);
         if (m_connection) {
             auto* conn = m_connection;
             QMetaObject::invokeMethod(conn, [conn, tunePower]() {
