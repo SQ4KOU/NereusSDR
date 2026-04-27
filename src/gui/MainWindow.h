@@ -230,6 +230,13 @@ private:
     // Dark theme checkable action (Task 12)
     QAction* m_darkThemeAction = nullptr;
 
+    // Radio menu state-aware actions (3Q-9)
+    QAction* m_actConnect      = nullptr;
+    QAction* m_actDisconnect   = nullptr;
+    QAction* m_actDiscoverNow  = nullptr;
+    QAction* m_actManageRadios = nullptr;
+    QAction* m_actProtocolInfo = nullptr;
+
     // Status bar members (Task 13)
     QLabel*  m_cpuTopLabel{nullptr};   // "CPU: X.X%"
     QLabel*  m_cpuBotLabel{nullptr};   // "Mem: —"
