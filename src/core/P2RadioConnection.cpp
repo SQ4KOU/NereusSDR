@@ -355,7 +355,17 @@ void P2RadioConnection::init()
             }
 
             QByteArray pkt(buf, sizeof(buf));
-            m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 4);
+            // 3M-1a (2026-04-27): TX I/Q port is base + 5 (= 1029), NOT
+            // base + 4 (= 1028; that's the RX-audio port).  Verified by
+            // pcap: NereusSDR was sending all 240-sample TX I/Q packets
+            // to port 1028 the whole time, which the radio routes to its
+            // RX-audio sink and discards — exciter saw zero TX samples,
+            // PA stayed silent, no carrier on the SO-239.
+            // Source: Thetis network.c:1388 [v2.10.3.13]:
+            //   sendPacket(..., prn->base_outbound_port + 5);// 1029);
+            // Source: deskhpsdr/src/new_protocol.h:37 [@120188f]:
+            //   #define TX_IQ_FROM_HOST_PORT 1029
+            m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 5);
         }
     });
 
