@@ -870,6 +870,18 @@ int ConnectionPanel::rowForMac(const QString& mac) const
     return -1;
 }
 
+// Phase 3Q Task 10 — select the table row for `mac` so the user immediately
+// sees which radio failed to auto-connect. Defensive: if the row doesn't
+// exist yet (the auto-open panel hasn't been populated by discovery), do
+// nothing — the user can still see the status-bar message.
+void ConnectionPanel::highlightMac(const QString& mac)
+{
+    const int row = rowForMac(mac);
+    if (row >= 0) {
+        m_radioTable->selectRow(row);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Discovery slots
 // ---------------------------------------------------------------------------

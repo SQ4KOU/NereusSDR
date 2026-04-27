@@ -334,6 +334,22 @@ public:
     void connectToRadio(const RadioInfo& info);
     void disconnectFromRadio();
 
+    // Phase 3Q Task 10: arm / disarm the auto-connect-in-progress flag.
+    // Called by MainWindow::tryAutoReconnect() before and after the probe.
+    // When armed, RadioModel::wireConnectionSignals wires RadioConnection::connectFailed
+    // to emit autoConnectFailed(mac, reason) and then disarms automatically.
+    void setAutoConnectInProgress(bool inProgress, const QString& chosenMac = {}) {
+        m_autoConnectInProgress = inProgress;
+        m_autoConnectChosenMac  = inProgress ? chosenMac : QString{};
+    }
+
+    // Phase 3Q Task 10: called by MainWindow when multiple saved radios have
+    // autoConnect = true. Emits autoConnectAmbiguous so the MainWindow lambda
+    // can post the status-bar warning without the caller reaching into our signals.
+    void notifyAutoConnectAmbiguous(int count, const QString& chosenMac) {
+        emit autoConnectAmbiguous(count, chosenMac);
+    }
+
     // ── Phase 3M-0 Task 6: Ganymede PA-trip live state ───────────────────────
     // G8NJJ: handlers for Ganymede 500W PA protection
     // From Thetis Andromeda/Andromeda.cs:914-948 [v2.10.3.13]
@@ -399,6 +415,22 @@ signals:
     // From Thetis Andromeda/Andromeda.cs:914-920 [v2.10.3.13]
     // (CATHandleAmplifierTripMessage). G8NJJ: handlers for Ganymede 500W PA protection.
     void paTrippedChanged(bool tripped);
+
+    // Phase 3Q Task 10: auto-connect failure signals.
+    //
+    // autoConnectFailed — emitted when an auto-connect-on-launch attempt fails
+    // (RadioConnection::connectFailed fires while m_autoConnectInProgress is set).
+    // `mac`    — the saved-radio MAC key that was attempted.
+    // `reason` — typed failure code (Timeout is the most common: radio unreachable).
+    // MainWindow reacts by opening the ConnectionPanel and posting a status-bar message.
+    void autoConnectFailed(const QString& mac, NereusSDR::ConnectFailure reason);
+
+    // autoConnectAmbiguous — emitted when tryAutoReconnect finds more than one
+    // saved radio with autoConnect = true. The most-recently-connected MAC wins;
+    // MainWindow surfaces a one-time status-bar warning pointing to Manage Radios.
+    // `count`      — total number of autoConnect-flagged radios.
+    // `chosenMac`  — the MAC selected (most recently connected).
+    void autoConnectAmbiguous(int count, const QString& chosenMac);
 
 private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
@@ -556,6 +588,13 @@ private:
     bool m_paTripped{false};
     // From Thetis Andromeda/Andromeda.cs:854-866 [v2.10.3.13] (_ganymedePresent / GanymedePresent setter).
     bool m_ganymedePresent{false};
+
+    // Phase 3Q Task 10: auto-connect failure path.
+    // Set by MainWindow::tryAutoReconnect() before starting the probe;
+    // cleared (to false / empty) on success OR failure so that a subsequent
+    // user-initiated Connect does not trip the failure handler.
+    bool    m_autoConnectInProgress{false};
+    QString m_autoConnectChosenMac;
 
     // AGC bidirectional sync guard — prevents infinite feedback loop between
     // agcThresholdChanged and rfGainChanged handlers.

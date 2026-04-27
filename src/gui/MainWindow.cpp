@@ -442,6 +442,45 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
+    // Phase 3Q Task 10: auto-connect failure / ambiguity surface.
+    //
+    // autoConnectFailed — the probe timed out or the radio rejected the
+    // handshake. Open the ConnectionPanel, highlight the failed target,
+    // and post an 8-second status-bar explanation.
+    connect(m_radioModel, &RadioModel::autoConnectFailed,
+            this, [this](const QString& mac, NereusSDR::ConnectFailure reason) {
+        showConnectionPanel();
+        if (m_connectionPanel) {
+            m_connectionPanel->highlightMac(mac);
+        }
+        const auto saved = AppSettings::instance().savedRadio(mac);
+        const QString name = (saved.has_value() && !saved->info.name.isEmpty())
+            ? saved->info.name : mac;
+        const QString reasonText =
+            (reason == NereusSDR::ConnectFailure::Timeout)
+                ? QStringLiteral("isn't reachable from this network")
+                : QStringLiteral("returned an error");
+        statusBar()->showMessage(
+            QStringLiteral("Auto-connect target %1 %2. Pick a different radio or update the address.")
+                .arg(name, reasonText),
+            8000);
+    });
+
+    // autoConnectAmbiguous — multiple radios have AutoConnect = true.
+    // The most-recently-connected MAC was chosen; post a 6-second advisory
+    // pointing the user at Manage Radios for cleanup.
+    connect(m_radioModel, &RadioModel::autoConnectAmbiguous,
+            this, [this](int count, const QString& chosenMac) {
+        const auto saved = AppSettings::instance().savedRadio(chosenMac);
+        const QString name = (saved.has_value() && !saved->info.name.isEmpty())
+            ? saved->info.name : chosenMac;
+        statusBar()->showMessage(
+            QStringLiteral("%1 radios marked Auto-connect on launch. Using %2 (most recent). "
+                           "Adjust in Manage Radios.")
+                .arg(count).arg(name),
+            6000);
+    });
+
     // WDSP wisdom progress dialog — shown as a modal window during first-run
     // wisdom generation. Pattern from AetherSDR MainWindow::enableNr2WithWisdom().
     connect(m_radioModel->wdspEngine(), &WdspEngine::wisdomProgress,
@@ -3288,39 +3327,64 @@ void MainWindow::onConnectionStateChanged()
     }
 }
 
-// Phase 3I Task 17 — auto-reconnect on launch.
+// Phase 3I Task 17 / Phase 3Q Task 10 — auto-reconnect on launch.
 //
 // Logic:
-//   1. Read radios/lastConnected from AppSettings (set by ConnectionPanel
-//      whenever the user explicitly connects).
-//   2. Look up the SavedRadio entry; bail silently if missing or
-//      autoConnect == false.
-//   3a. pinToMac=true  → run a Fast-profile discovery, connect when the
-//      same MAC is seen.  A 3-second kill timer stops the attempt if no
-//      reply arrives — ConnectionPanel is unaffected.
-//   3b. pinToMac=false → direct connect using the saved IP (faster;
-//      if the IP drifted the user just opens ConnectionPanel and rescans).
+//   1. Collect ALL saved radios with autoConnect = true. If none, return
+//      (cold-launch — ConnectionPanel is not auto-opened here; Task 5 handles
+//      the auto-open on the Disconnected→Connected→Disconnected transition).
+//   2. Pick the target MAC:
+//      - Single autoConnect entry → use it directly.
+//      - Multiple entries → most-recently-connected MAC wins (radios/lastConnected);
+//        a one-time status-bar warning is posted via RadioModel::autoConnectAmbiguous.
+//   3a. pinToMac=true  → run a Fast-profile discovery, connect when the same MAC
+//      is seen. A 3-second kill timer fires if the MAC never appears; on timeout
+//      the ConnectionPanel opens with the target row highlighted and a status-bar
+//      message explains why.  RadioModel's m_autoConnectInProgress flag ensures
+//      the RadioConnection::connectFailed signal (if the radio replies but fails)
+//      also surfaces via RadioModel::autoConnectFailed → MainWindow lambdas.
+//   3b. pinToMac=false → direct connect to saved IP. Arm m_autoConnectInProgress
+//      so RadioConnection::connectFailed is forwarded as autoConnectFailed.
 //
-// The m_autoReconnectInProgress flag gates the 3-second cleanup so it
-// does not call stopDiscovery() if the user has already launched a manual
-// scan via ConnectionPanel::onStartDiscoveryClicked.
+// m_autoReconnectInProgress gates the disconnect auto-open in onConnectionStateChanged
+// so the background probe does not flash the ConnectionPanel while in flight.
 void MainWindow::tryAutoReconnect()
 {
     AppSettings& s = AppSettings::instance();
+
+    // --- Step 1: Collect all autoConnect-flagged saved radios ---
+    const QList<SavedRadio> allSaved = s.savedRadios();
+    QStringList autoMacs;
+    for (const SavedRadio& sr : allSaved) {
+        if (sr.autoConnect) {
+            autoMacs << sr.info.macAddress;
+        }
+    }
+    if (autoMacs.isEmpty()) {
+        return;  // Cold launch — no auto-connect target configured.
+    }
+
+    // --- Step 2: Pick the target MAC (most-recently-connected wins) ---
     const QString lastMac = s.lastConnected();
-    if (lastMac.isEmpty()) {
-        return;
+    QString chosenMac = autoMacs.first();
+    if (autoMacs.size() > 1) {
+        if (autoMacs.contains(lastMac)) {
+            chosenMac = lastMac;
+        }
+        // Warn once — notifyAutoConnectAmbiguous emits the signal; the
+        // MainWindow lambda wired in buildUI surfaces it as a status-bar message.
+        m_radioModel->notifyAutoConnectAmbiguous(autoMacs.size(), chosenMac);
+    } else if (chosenMac != lastMac && !lastMac.isEmpty()) {
+        // Single autoConnect entry but it's not the most recently connected.
+        // Still proceed — the user may have switched their autoConnect flag.
     }
 
-    const auto saved = s.savedRadio(lastMac);
+    const auto saved = s.savedRadio(chosenMac);
     if (!saved.has_value()) {
-        return;
-    }
-    if (!saved->autoConnect) {
-        return;
+        return;  // Shouldn't happen — entry disappeared between the two reads.
     }
 
-    qCInfo(lcConnection) << "Auto-reconnect: attempting" << lastMac
+    qCInfo(lcConnection) << "Auto-reconnect: attempting" << chosenMac
                          << "at" << saved->info.address.toString()
                          << "(pinToMac=" << saved->pinToMac << ")";
 
@@ -3331,11 +3395,17 @@ void MainWindow::tryAutoReconnect()
         disc->setProfile(DiscoveryProfile::Fast);
         m_autoReconnectInProgress = true;
 
-        // Listen for a radio that matches our saved MAC
+        // Arm the RadioModel flag so RadioConnection::connectFailed (which fires
+        // if the radio replies but fails the handshake) is forwarded as
+        // RadioModel::autoConnectFailed. This covers the pinToMac discovery-found
+        // but connect-failed path; the timeout path below handles unreachable.
+        m_radioModel->setAutoConnectInProgress(true, chosenMac);
+
+        // Listen for a radio that matches our chosen MAC
         QMetaObject::Connection* connPtr = new QMetaObject::Connection;
         *connPtr = connect(disc, &RadioDiscovery::radioDiscovered,
-            this, [this, lastMac, connPtr](const RadioInfo& found) {
-            if (found.macAddress != lastMac) {
+            this, [this, chosenMac, connPtr](const RadioInfo& found) {
+            if (found.macAddress != chosenMac) {
                 return;
             }
             if (m_radioModel->isConnected()) {
@@ -3347,7 +3417,11 @@ void MainWindow::tryAutoReconnect()
             QObject::disconnect(*connPtr);
             delete connPtr;
             m_autoReconnectInProgress = false;
-            // Load persisted model override for auto-reconnect (Phase 3I-RP)
+            // Note: do NOT disarm m_radioModel->setAutoConnectInProgress here —
+            // connectToRadio runs asynchronously and we want connectFailed to
+            // still be forwarded if the handshake itself fails. RadioModel's
+            // onConnectionStateChanged(Connected) disarms on success;
+            // wireConnectionSignals' connectFailed handler disarms on failure.
             RadioInfo ri = found;
             HPSDRModel mo = AppSettings::instance().modelOverride(ri.macAddress);
             if (mo != HPSDRModel::FIRST) {
@@ -3359,27 +3433,47 @@ void MainWindow::tryAutoReconnect()
         // Kick off the Fast-profile discovery
         disc->startDiscovery();
 
-        // 3-second hard timeout — give up silently if MAC never appears
-        QTimer::singleShot(3000, this, [this, connPtr]() {
+        // 3-second hard timeout — if the MAC never appears, the radio is
+        // unreachable on this network. Open the panel + post a status message.
+        QTimer::singleShot(3000, this, [this, chosenMac, connPtr]() {
             if (!m_autoReconnectInProgress) {
-                // Already connected (lambda cleaned up) — nothing to do
+                // Already connected (discovery lambda cleaned up) — nothing to do.
                 return;
             }
-            qCInfo(lcConnection) << "Auto-reconnect: 3-second timeout — giving up silently";
+            qCInfo(lcConnection) << "Auto-reconnect: 3-second timeout — radio not found";
             // Disconnect the listener so it doesn't fire on later scans
             QObject::disconnect(*connPtr);
             delete connPtr;
             m_autoReconnectInProgress = false;
+            // Disarm RadioModel flag — the Timeout path is surfaced here directly
+            // (not via connectFailed, which only fires after a reply is received).
+            m_radioModel->setAutoConnectInProgress(false);
             // Stop the discovery pass we started; restore SafeDefault profile
             // so the user's next manual scan uses the full timing.
             m_radioModel->discovery()->stopDiscovery();
             m_radioModel->discovery()->setProfile(DiscoveryProfile::SafeDefault);
+            // Phase 3Q Task 10: surface the failure — open panel + status bar.
+            const QString name = AppSettings::instance()
+                .savedRadio(chosenMac)
+                .value_or(SavedRadio{})
+                .info.name;
+            const QString displayName = name.isEmpty() ? chosenMac : name;
+            showConnectionPanel();
+            if (m_connectionPanel) {
+                m_connectionPanel->highlightMac(chosenMac);
+            }
+            statusBar()->showMessage(
+                QStringLiteral("Auto-connect target %1 isn't reachable from this network. "
+                               "Pick a different radio or update the address.")
+                    .arg(displayName),
+                8000);
         });
     } else {
         // No MAC pinning — direct connect to saved IP address.
-        // Silent failure: if the radio doesn't respond, RadioConnection's
-        // internal state machine eventually times out without any popup.
+        // Arm m_autoConnectInProgress so that RadioConnection::connectFailed
+        // is forwarded as RadioModel::autoConnectFailed → MainWindow lambdas.
         if (!m_radioModel->isConnected()) {
+            m_radioModel->setAutoConnectInProgress(true, chosenMac);
             // Load persisted model override for auto-reconnect (Phase 3I-RP)
             RadioInfo ri = saved->info;
             HPSDRModel mo = AppSettings::instance().modelOverride(ri.macAddress);

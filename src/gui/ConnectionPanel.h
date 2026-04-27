@@ -138,6 +138,12 @@ public slots:
     void onRadioLost(const QString& macAddress);
     void onConnectionStateChanged();
 
+    // Phase 3Q Task 10: select the table row whose MAC matches `mac`.
+    // No-op if the MAC is not currently in the table (defensive — the
+    // auto-connect failure path may call this before discovery populates
+    // the offline entry for the saved radio).
+    void highlightMac(const QString& mac);
+
 private slots:
     void onConnectClicked();
     void onDisconnectClicked();

@@ -1265,6 +1265,23 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
         qCWarning(lcConnection) << "Connection error:" << msg;
     });
 
+    // Phase 3Q Task 10: auto-connect failure path.
+    // When tryAutoReconnect() arms m_autoConnectInProgress, forward the
+    // first connectFailed() emission as autoConnectFailed() so MainWindow
+    // can open the ConnectionPanel and surface a status-bar message.
+    // The flag is cleared immediately so a later user-initiated Connect
+    // does not re-trigger this path.
+    connect(m_connection, &RadioConnection::connectFailed,
+            this, [this](NereusSDR::ConnectFailure reason, const QString& detail) {
+        Q_UNUSED(detail);
+        if (m_autoConnectInProgress) {
+            const QString mac = m_autoConnectChosenMac;
+            m_autoConnectInProgress = false;
+            m_autoConnectChosenMac.clear();
+            emit autoConnectFailed(mac, reason);
+        }
+    });
+
     // ReceiverManager → RadioConnection (hardware updates)
     connect(m_receiverManager, &ReceiverManager::hardwareReceiverCountChanged,
             this, [this](int count) {
@@ -2305,6 +2322,12 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
     switch (state) {
     case ConnectionState::Connected:
         qCDebug(lcConnection) << "Connected to" << m_name;
+        // Phase 3Q Task 10: auto-connect succeeded — disarm the in-progress
+        // flag so a later user-initiated Connect does not trip the failure path.
+        if (m_autoConnectInProgress) {
+            m_autoConnectInProgress = false;
+            m_autoConnectChosenMac.clear();
+        }
         // Phase 3I Task 17 — record the most recently used radio so
         // tryAutoReconnect() targets the right entry on next launch.
         if (!m_lastRadioInfo.macAddress.isEmpty()) {
