@@ -834,6 +834,14 @@ nereus_add_test(tst_meter_poller_tx_bindings)
 # Derives from Thetis console.cs:4822 + 12094 + 29978-30157 [v2.10.3.13].
 nereus_add_test(tst_tx_applet_tune_wiring)
 
+# ── Phase 3M-1a H.4: PowerPaPage wiring — Max Power, per-band Tune Power, ATT-on-TX ──
+# Verifies Max Power slider ↔ TransmitModel::power(), per-band tune-power spinboxes
+# ↔ TransmitModel::tunePowerForBand(), chkATTOnTX and chkForceATTwhenPSAoff widget
+# existence + null-controller guards.
+# Derives from Thetis console.cs:4822 + 12094 [v2.10.3.13] + setup.designer.cs:5926-5939
+# + setup.designer.cs:5660-5671 [v2.10.3.13].
+nereus_add_test(tst_transmit_setup_power_pa_page)
+
 # ── Phase 3M-0 Task 9: SWR Protection group box on Setup → Transmit ──────────
 # Verifies grpSWRProtectionControl has 5 controls with correct objectNames,
 # defaults, and verbatim tooltip text per

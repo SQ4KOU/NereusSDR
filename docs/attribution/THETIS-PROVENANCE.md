@@ -126,6 +126,8 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/gui/applets/PureSignalApplet.h | Project Files/Source/Console/PSForm.cs | full | port | thetis-samphire | applet declaration; pairs with PureSignalApplet.cpp |
 | src/gui/applets/RxApplet.cpp | Project Files/Source/Console/console.cs; Project Files/Source/Console/console.resx; Project Files/Source/Console/setup.cs | full | port | thetis-samphire | comboPreamp, AGC thresh, step attenuator, tooltips |
 | src/gui/applets/RxApplet.h | Project Files/Source/Console/console.cs; Project Files/Source/Console/console.resx; Project Files/Source/Console/setup.cs | full | port | multi-source | applet declaration; pairs with RxApplet.cpp |
+| src/gui/applets/TxApplet.cpp | Project Files/Source/Console/console.cs | 29311-29678; 29978-30157 [v2.10.3.13] | port | multi-source | layout from AetherSDR TxApplet.{h,cpp} (GPLv3); wiring from Thetis chkMOX_CheckedChanged2 + chkTUN_CheckedChanged — Phase 3M-1a H.3 deep-wires TUNE/MOX/Tune-Power/RF-Power |
+| src/gui/applets/TxApplet.h | Project Files/Source/Console/console.cs | 29311-29678; 29978-30157 [v2.10.3.13] | port | multi-source | applet declaration; pairs with TxApplet.cpp |
 | src/gui/ConnectionPanel.cpp | Project Files/Source/Console/ucRadioList.cs; Project Files/Source/Console/clsDiscoveredRadioPicker.cs | full | port | thetis-samphire | Thetis ucRadioList port — radio list UI; both sources are Samphire-maintained |
 | src/gui/ConnectionPanel.h | Project Files/Source/Console/ucRadioList.cs | full | port | thetis-samphire | |
 | src/gui/containers/ContainerManager.cpp | Project Files/Source/Console/MeterManager.cs | 5613-5673; 5812-5918; 6012-6105; 6391-6447; 6514-6579 | port | thetis-samphire | container lifecycle |
