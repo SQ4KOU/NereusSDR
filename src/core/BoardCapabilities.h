@@ -292,6 +292,25 @@ struct BoardCapabilities {
     bool hasIoBoardHl2;
     bool hasSidetoneGenerator;
 
+    // Radio-side microphone input present.
+    //
+    // True for Hermes / Atlas / Orion / ANAN family + Saturn G2.
+    // False for HermesLite 2 (no radio-side mic input).
+    //
+    // Source: NereusSDR-original; derived from Thetis Setup->Audio->Primary
+    // per-board panel visibility:
+    //   panelSaturnMicInput  (setup.designer.cs:8613 [v2.10.3.13])
+    //   panelOrionMic        (setup.designer.cs:8661 [v2.10.3.13])
+    //   panelOrionPTT        (setup.designer.cs:8709 [v2.10.3.13])
+    //   panelOrionBias       (setup.designer.cs:8755 [v2.10.3.13])
+    //   grpBoxMic            (setup.designer.cs:5154 [v2.10.3.13])
+    // All hidden when CurrentModel == HermesLite2 per setup.cs:19834-20310
+    // RadioModelChanged() per-model if-ladder [@501e3f5].
+    //
+    // Drives Setup -> Audio -> TX Input page Radio-Mic radio button visibility.
+    // 3M-1b.
+    bool hasMicJack {true};
+
     // Phase 3P-F Task 2: accessory board enable rules.
     // Source: setup.cs:19834-20310 RadioModelChanged() per-model if-ladder [@501e3f5]
     //         setup.cs:6338 AddHPSDRPages() for tpPennyCtrl / tpAlexControl visibility.

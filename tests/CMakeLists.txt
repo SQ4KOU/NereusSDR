@@ -45,6 +45,12 @@ nereus_add_test(tst_clarity_controller)
 nereus_add_test(tst_hpsdr_enums)
 nereus_add_test(tst_board_capabilities)
 
+# ── Phase 3M-1b Task B.1: BoardCapabilities::hasMicJack flag ─────────────────
+# Parametrized over all HPSDRHW enum values.
+# HL2 and HermesLiteRxOnly → false; all other boards → true.
+# Source: pre-code review §11.3 per-board table.
+nereus_add_test(tst_board_capabilities_mic_jack)
+
 nereus_add_test(tst_radio_discovery_parse)
 # TEST_DATA_DIR lets the fixture loader resolve paths relative to the tests/
 # source directory regardless of where the build tree lives.

@@ -615,6 +615,7 @@ const BoardCapabilities kHermesLite = {
     .hasBandwidthMonitor = true,
     .hasIoBoardHl2    = true,
     .hasSidetoneGenerator = true,
+    .hasMicJack       = false,  // HL2 has no radio-side mic input (3M-1b §11)
     .hasApollo        = false,  // HL2 has no Apollo port; not in RadioModelChanged() switch
     .hasAlex          = false,  // HL2 has no Alex board slot (ocOutputCount=0, hasAlexFilters=false)
     .hasPennyLane     = false,  // HL2 has no OC ext-ctrl; uses IoBoardHl2 for I2C accessories
@@ -658,6 +659,7 @@ const BoardCapabilities kHermesLiteRxOnly = {
     .hasBandwidthMonitor = true,
     .hasIoBoardHl2    = true,
     .hasSidetoneGenerator = true,
+    .hasMicJack       = false,  // HL2 RX-only has no radio-side mic input (3M-1b §11)
     .hasApollo        = false,
     .hasAlex          = false,
     .hasPennyLane     = false,
