@@ -416,7 +416,12 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // From Thetis StartAudioNative netInterface.c:83
     // prn->hKeepAliveThread = _beginthreadex(NULL, 0, KeepAliveMain, 0, 0, NULL);
     m_keepAliveTimer->start();
-    // m_txIqTimer->start();  // DISABLED: testing if TX silence stream causes weak signals
+    // 3M-1a bench fix: re-enabled — the producer side (TxChannel::driveOneTxBlock,
+    // commit e6e48bd) now feeds the SPSC ring with real TX I/Q during TUN.  Earlier
+    // "weak signals" concern was an artifact of the unwired producer (silence stream
+    // made the carrier appear low-energy on the radio).  Confirmed correct after
+    // E.6 + E.7 + e6e48bd landed.
+    m_txIqTimer->start();
 
     setState(ConnectionState::Connected);
 }

@@ -320,10 +320,22 @@ private:
     // Layout ported from deskhpsdr/src/new_protocol.c:2795-2837 [@120188f]
     // (new_protocol_iq_samples / TXIQRINGBUFLEN).
     //
-    // kTxIqRingCapacityFloats: sized for ≥4 frames of headroom at 192 kHz.
-    //   4 × 240 samples × 2 floats (I+Q) = 1920 floats.
-    //   Rounded up to the nearest power-of-two for simpler modular arithmetic: 2048.
-    //   Provides ~5 msec of audio-thread headroom before the ring fills.
+    // kTxIqRingCapacityFloats: sized to hold one full fexchange2 output block
+    // (kTxDspBufferSize = 4096 samples) plus headroom for the consumer drain.
+    //
+    // Background: TxChannel::driveOneTxBlock() calls fexchange2 with n =
+    // WdspEngine::kTxDspBufferSize (4096) samples and pushes 4096 complex pairs
+    // = 8192 floats per call via sendTxIq().  The previous ring size of 2048
+    // floats (= 1024 sample pairs) was 4× smaller than a single producer block,
+    // causing 75% sample loss every tick (3M-1a bench fix, 2026-04-26).
+    //
+    // New size: 16384 floats = 8192 complex samples.
+    //   - One fexchange2 block at 4096 samples = 8192 floats → ring must be ≥ 8192.
+    //   - Rounded up to the next power-of-two (16384) for simpler modular arithmetic.
+    //   - Consumer drains 240 samples (480 floats) per 5 ms tick → ring holds ~170 ticks
+    //     of headroom, which is more than enough to absorb the 42.67 ms block cadence.
+    //   - deskhpsdr reference: TXIQRINGBUFLEN 97920 (85 msec ring) — we remain leaner
+    //     than deskhpsdr while fixing the overflow.
     //   Source: deskhpsdr/src/new_protocol.c:186 [@120188f]
     //     TXIQRINGBUFLEN 97920  (85 msec; NereusSDR uses a leaner in-memory float ring)
     //
@@ -338,7 +350,7 @@ private:
     //     the memory ordering fence for the float data.
     //
     // CLAUDE.md mandates atomics for cross-thread DSP parameters.
-    static constexpr int kTxIqRingCapacityFloats = 2048;  // ≥4 frames; power-of-two
+    static constexpr int kTxIqRingCapacityFloats = 16384;  // ≥1 full DSP block; power-of-two
     std::array<float, kTxIqRingCapacityFloats> m_txIqRing{};
     std::atomic<int> m_txIqRingWrite{0};  // audio thread writes; relaxed store
     std::atomic<int> m_txIqRingRead{0};   // connection thread writes; relaxed store

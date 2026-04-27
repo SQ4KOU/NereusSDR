@@ -2828,6 +2828,49 @@ void RadioModel::onMoxHardwareFlipped(bool isTx)
         conn->setMox(isTx);      // Step 2 — P1 queues bank-0 flush; P2 sends immediate high-priority packet.
         conn->setTrxRelay(isTx); // Step 3 — P1 queues bank-10 flush; P2 not yet wired.
     });
+
+    // 3M-1a bench fix: RX channel shutdown on MOX engage / restore on release.
+    //
+    // Porting from Thetis console.cs:29527-29543 [v2.10.3.13] — RX→TX path:
+    //   if (!full_duplex)  {
+    //     bool RX1_shutdown = chkVFOATX.Checked || ...;
+    //     if (RX1_shutdown)
+    //       WDSP.SetChannelState(WDSP.id(0, 0), 0, 1);  // off + flush
+    //   }
+    //
+    // Porting from Thetis console.cs:29629 [v2.10.3.13] — TX→RX path:
+    //   WDSP.SetChannelState(WDSP.id(0, 0), 1, 0);  // on, no flush
+    //
+    // 3M-1a scope: no full-duplex, no PureSignal, no VFOBTX — all currently-
+    // active RX channels stop on MOX-on, restore on MOX-off.
+    //
+    // Ordering deviation from Thetis (acceptable for 3M-1a):
+    //   - RX stop fires here on hardwareFlipped(true), which is the same
+    //     moment as Alex routing / setMox wire bit — before the rfDelay.
+    //     Thetis stops RX at this same point (line 29527-29543 is before
+    //     HdwMOXChanged on line 29582 and the rf_delay on 29592).
+    //   - RX restore fires here on hardwareFlipped(false) rather than the
+    //     later rxReady phase signal.  Thetis restores at line 29629 which
+    //     is after HdwMOXChanged(false) and ptt_out_delay.  The early
+    //     restore is acceptable for TUN-only scope; if bench shows a click
+    //     on TX→RX, wire a separate rxReady slot in a follow-up.
+    if (m_wdspEngine) {
+        // Only RX channel 0 is active in 3M-1a (single-RX, no RX2).
+        // Thetis conditionally shuts down RX1 (id(0,0)) and sub-RX (id(0,1))
+        // based on chkVFOATX/chkVFOBTX/RX2Enabled/mute_* flags.
+        // For 3M-1a we unconditionally act on channel 0 (the only created channel).
+        if (auto* rxCh = m_wdspEngine->rxChannel(0)) {
+            if (isTx) {
+                // RX off + flush.  SetChannelState(id, 0, 1) — matches
+                // Thetis console.cs:29534 [v2.10.3.13].
+                rxCh->setActive(false);
+            } else {
+                // RX on, no flush.  SetChannelState(id, 1, 0) — matches
+                // Thetis console.cs:29629 [v2.10.3.13].
+                rxCh->setActive(true);
+            }
+        }
+    }
 }
 
 } // namespace NereusSDR

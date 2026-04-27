@@ -212,17 +212,21 @@ private slots:
     // ── 11. Ring saturation — excess samples beyond capacity are dropped ───────
     // Push kTxIqRingCapacityFloats floats + extra; ring should not overflow.
     // After saturation, buffered count must not exceed capacity.
+    //
+    // 3M-1a bench fix (2026-04-26): ring capacity increased from 2048 to 16384
+    // floats to accommodate one full fexchange2 block (kTxDspBufferSize = 4096
+    // samples = 8192 floats).  Test updated to match new capacity.
     void ringSaturation_excessSamplesDropped() {
         P2RadioConnection conn;
 
         // Slightly more than the ring capacity (in I/Q pairs).
-        // kTxIqRingCapacityFloats = 2048 floats = 1024 pairs.
-        const int overCount = 1024 + 64;  // 1088 pairs = 2176 floats
+        // kTxIqRingCapacityFloats = 16384 floats = 8192 pairs.
+        const int overCount = 8192 + 64;  // 8256 pairs = 16512 floats
         std::vector<float> iq(overCount * 2, 0.25f);
         conn.sendTxIq(iq.data(), overCount);
 
-        // Buffer must not exceed ring capacity (2048 floats).
-        QVERIFY(conn.txIqRingCountForTest() <= 2048);
+        // Buffer must not exceed ring capacity (16384 floats).
+        QVERIFY(conn.txIqRingCountForTest() <= 16384);
         QVERIFY(conn.txIqRingCountForTest() > 0);
     }
 

@@ -132,11 +132,18 @@ TxChannel::TxChannel(int channelId, QObject* parent)
     // Qt::PreciseTimer reduces OS scheduler jitter on the audio path.
     //
     // At 96 kHz DSP rate with 4096 samples/block → one block = 42.67 ms.
-    // The SPSC ring (kTxIqRingCapacityFloats = 2048 floats = 1024 samples)
-    // absorbs burst output from fexchange2 between 5 ms drain cycles.
-    // The connection thread's 1.25 ms nominal P2 UDP drain empties the ring
-    // faster than this timer fills it, so ring overflow is not a concern at
-    // the 5 ms tick rate.
+    // driveOneTxBlock() pushes 4096 samples (8192 floats) per fexchange2 call
+    // into the SPSC ring (kTxIqRingCapacityFloats = 16384 floats = 8192 samples).
+    // The ring is sized to hold exactly one full DSP block plus headroom so the
+    // connection-thread consumer (240 samples / 5 ms drain) can catch up between
+    // producer ticks.  The 5 ms producer timer fires ~8× before the DSP block
+    // is full, but only the first tick per 42.67 ms period actually calls fexchange2
+    // with fresh output; subsequent ticks push zeros (silence guard) until WDSP
+    // accumulates enough input to drive the pipeline again.
+    //
+    // 3M-1a bench fix (2026-04-26): ring capacity was 2048 floats (1024 samples),
+    // which was 4× smaller than one DSP block — causing 75% sample loss per tick.
+    // Increased to 16384 (next power-of-two above 8192) in P2RadioConnection.h.
     m_txProductionTimer = new QTimer(this);
     m_txProductionTimer->setTimerType(Qt::PreciseTimer);
     m_txProductionTimer->setInterval(5);  // 5 ms — matches E.6 consumer cadence
