@@ -237,6 +237,12 @@ void P2RadioConnection::init()
         m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 4);
     });
 
+    // Connect watchdog — single-shot; fires kConnectTimeoutMs after
+    // connectToRadio() if no first DDC I/Q frame arrives. Phase 3Q Task 3.
+    m_connectWatchdog = new QTimer(this);
+    m_connectWatchdog->setSingleShot(true);
+    connect(m_connectWatchdog, &QTimer::timeout, this, &P2RadioConnection::onConnectTimeout);
+
     qCDebug(lcConnection) << "P2: init() socket port:" << m_socket->localPort();
 }
 
@@ -345,6 +351,13 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // m_txIqTimer->start();  // DISABLED: testing if TX silence stream causes weak signals
 
     setState(ConnectionState::Connected);
+
+    // Arm the connect watchdog: if no first DDC I/Q frame arrives within
+    // kConnectTimeoutMs, emit connectFailed(Timeout, ...).
+    // processIqPacket() cancels this on the first valid frame. Phase 3Q Task 3.
+    if (m_connectWatchdog) {
+        m_connectWatchdog->start(kConnectTimeoutMs);
+    }
 }
 
 // Porting from Thetis SendStop() network.c:372
@@ -362,6 +375,11 @@ void P2RadioConnection::disconnect()
     }
     if (m_reconnectTimer) {
         m_reconnectTimer->stop();
+    }
+    // Cancel the connect watchdog so intentional disconnect() does not
+    // trigger connectFailed() after the user has already moved on.
+    if (m_connectWatchdog) {
+        m_connectWatchdog->stop();
     }
 
     if (m_running && m_socket && !m_radioInfo.address.isNull()) {
@@ -1216,11 +1234,45 @@ void P2RadioConnection::processIqPacket(const QByteArray& data, int ddcIndex)
     if (m_totalIqPackets == 1) {
         qCDebug(lcConnection) << "P2: First I/Q packet! DDC" << ddcIndex
                               << "seq:" << seq << "spp:" << spp;
+
+        // Cancel the connect watchdog — first valid DDC frame means we
+        // reached the radio successfully. Design §4.1.
+        if (m_connectWatchdog && m_connectWatchdog->isActive()) {
+            m_connectWatchdog->stop();
+        }
     } else if (m_totalIqPackets % 10000 == 0) {
         qCDebug(lcProtocol) << "P2: I/Q packets:" << m_totalIqPackets;
     }
 
+    // Per-frame activity signal for TitleBar LED (throttled to 10 Hz by
+    // the receiver). Design §4.1.
+    emit frameReceived();
+
     emit iqDataReceived(ddcIndex, buf);
+}
+
+// ---------------------------------------------------------------------------
+// onConnectTimeout — Phase 3Q Task 3
+//
+// Fires kConnectTimeoutMs after connectToRadio() if no first DDC I/Q frame
+// arrived. Emits connectFailed(Timeout, ...) so the UI can surface a typed
+// error instead of leaving the spinner running forever.
+// processIqPacket() cancels this timer on the first valid frame.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::onConnectTimeout()
+{
+    if (m_intentionalDisconnect) { return; }
+
+    // Guard: if we somehow received a first frame already, do nothing.
+    if (m_totalIqPackets > 0) { return; }
+
+    qCWarning(lcConnection) << "P2: Connect watchdog fired — no DDC I/Q frame within"
+                            << kConnectTimeoutMs << "ms; emitting connectFailed(Timeout)";
+
+    emit connectFailed(ConnectFailure::Timeout,
+                       QStringLiteral("No response from radio within %1 ms — "
+                                      "check IP address, radio power, and network")
+                           .arg(kConnectTimeoutMs));
 }
 
 // Porting from Thetis ReadUDPFrame:519-532 — High Priority C&C status

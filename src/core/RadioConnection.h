@@ -18,6 +18,17 @@
 
 namespace NereusSDR {
 
+// Structured failure taxonomy for the initial connect attempt — design §4.1.
+// Emitted by connectFailed() when connectToRadio() cannot reach Connected state.
+// The UI (TitleBar, ConnectionPanel) maps these to human-readable messages.
+enum class ConnectFailure : int {
+    Unreachable     = 0,  // OS reports "destination unreachable" (ICMP unreach)
+    Timeout         = 1,  // No reply / no first frame within the connect budget
+    MalformedReply  = 2,  // Response received but the frame parser rejected it
+    ProtocolMismatch = 3, // Reply valid but P1/P2 version mismatch
+    IncompatibleBoard = 4 // Reply valid but boardType is not supported
+};
+
 // Structured error taxonomy — design doc §6.1.
 enum class RadioConnectionError {
     None,
@@ -125,6 +136,19 @@ signals:
     void connectionStateChanged(NereusSDR::ConnectionState state);
     void errorOccurred(NereusSDR::RadioConnectionError code, const QString& message);
 
+    // Emitted once per valid ep6 (P1) or DDC I/Q (P2) frame arrival.
+    // The TitleBar activity LED throttles this to ≤10 Hz visible refresh —
+    // the emitter fires at the full frame rate; throttling is the receiver's job.
+    // Design doc §4.1.
+    void frameReceived();
+
+    // Emitted when connectToRadio() fails to reach the Connected state.
+    // reason carries a typed failure code; detail is a plain-English
+    // explanation suitable for display in the ConnectionPanel / TitleBar.
+    // Fully-qualified type names required for Qt MOC queued-connection support.
+    // Design doc §4.1.
+    void connectFailed(NereusSDR::ConnectFailure reason, QString detail);
+
     // --- Data ---
     // Emitted for each receiver's I/Q block.
     // hwReceiverIndex: 0-based hardware receiver number.
@@ -182,3 +206,4 @@ protected:
 } // namespace NereusSDR
 
 Q_DECLARE_METATYPE(NereusSDR::RadioConnectionError)
+Q_DECLARE_METATYPE(NereusSDR::ConnectFailure)

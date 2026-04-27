@@ -201,6 +201,9 @@ private slots:
     void onReadyRead();
     void onKeepAliveTick();
     void onReconnectTimeout();
+    // Fires kConnectTimeoutMs after connectToRadio() if no first DDC I/Q frame
+    // arrives. Emits connectFailed(Timeout, ...) — Phase 3Q Task 3.
+    void onConnectTimeout();
 
 private:
     // --- Phase 3P-B: per-board codec chosen at connectToRadio() time ---
@@ -267,6 +270,14 @@ private:
     QTimer* m_keepAliveTimer{nullptr};
     QTimer* m_reconnectTimer{nullptr};
     QTimer* m_txIqTimer{nullptr};
+    // Single-shot connect watchdog — fires kConnectTimeoutMs after
+    // connectToRadio() if no first DDC I/Q frame arrives. Emits
+    // connectFailed(Timeout, ...). Cancelled in processIqPacket() on first
+    // valid frame. Created in init(), Qt-parent-owned. Phase 3Q Task 3.
+    QTimer* m_connectWatchdog{nullptr};
+
+    // Connect watchdog budget — 2 s matches P1.
+    static constexpr int kConnectTimeoutMs = 2000;
 
     // --- Port configuration (from Thetis _radionet, network.h:55-56) ---
     int m_p2CustomPortBase{1025};    // prn->p2_custom_port_base

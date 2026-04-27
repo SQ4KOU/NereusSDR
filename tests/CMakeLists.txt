@@ -669,6 +669,13 @@ nereus_add_test(tst_tx_inhibit_monitor)
 # [v2.10.3.13] (DllImport SetWatchdogTimer entry point).
 nereus_add_test(tst_radio_connection_watchdog)
 
+# ── Phase 3Q Task 3: ConnectFailure enum + connectFailed() signal ─────────────
+# 2 tests: emitsTypedFailureOnUnreachable (RFC 5737 black-hole, 2s connect
+# watchdog must fire ConnectFailure::Timeout) and noFailureOnIntentionalDisconnect
+# (disconnect() before watchdog fires must not emit connectFailed).
+# NereusSDR-original infrastructure; no Thetis attribution needed.
+nereus_add_test(tst_radio_connection_failure)
+
 # ── Phase 3M-0 Task 6: RadioModel::paTripped() live state + Ganymede handler ─
 # 5 tests cover initial state (clear), trip latch (non-zero tripState → true),
 # latch reset (resetGanymedePa()), absent-PA clear (setGanymedePresent(false)),
