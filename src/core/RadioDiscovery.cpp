@@ -526,7 +526,8 @@ void RadioDiscovery::probeAddress(const QHostAddress& addr,
     };
 
     // Reply handler — try P1 first, then P2.
-    connect(sock, &QUdpSocket::readyRead, this, [this, sock, addr, port, cleanup]() {
+    // Reply path doesn't need addr/port; the parsers read them from the datagram.
+    connect(sock, &QUdpSocket::readyRead, this, [this, sock, cleanup]() {
         while (sock->hasPendingDatagrams()) {
             QByteArray buf;
             buf.resize(int(sock->pendingDatagramSize()));
