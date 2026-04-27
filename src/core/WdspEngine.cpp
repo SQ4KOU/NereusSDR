@@ -455,11 +455,11 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
     // Bench fix round 3 (Issue A): pass inputBufferSize and outputBufferSize so
     // TxChannel sizes its fexchange2 buffers correctly.
     //   outputBufferSize = inputBufferSize × outputSampleRate / inputSampleRate
-    // At 48 kHz in / 48 kHz out (P1/HL2): 238 × 1 = 238.
-    // At 48 kHz in / 192 kHz out (P2 Saturn): 238 × 4 = 952.
+    // At 48 kHz in / 48 kHz out (P1/HL2): 256 × 1 = 256.
+    // At 48 kHz in / 192 kHz out (P2 Saturn): 256 × 4 = 1024.
     //
-    // Integer multiply-then-divide is safe here: inputBufferSize (238) × outputSampleRate
-    // (192000 max) = 45,696,000 — well within int32 range.
+    // Integer multiply-then-divide is safe here: inputBufferSize (256) × outputSampleRate
+    // (192000 max) = 49,152,000 — well within int32 range.
     // From Thetis wdsp/cmaster.c:179-183 [v2.10.3.13] — in_size / ch_outrate.
     const int outputBufferSize = inputBufferSize * outputSampleRate / inputSampleRate;
     auto wrapper = std::make_unique<TxChannel>(channelId, inputBufferSize, outputBufferSize, this);

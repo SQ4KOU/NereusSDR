@@ -180,7 +180,15 @@ P2RadioConnection::P2RadioConnection(QObject* parent)
         m_tx[i].pttOut = 0;
         m_tx[i].driveLevel = 0;
         m_tx[i].phaseShift = 0;
-        m_tx[i].pa = 1;
+        // 3M-1a (2026-04-27): Thetis's `prn->tx[0].pa` is the *DisablePA* flag,
+        // not "PA enabled".  CmdGeneral byte 58 is written as `(!pa) & 0x01`
+        // (Thetis network.c:904 [v2.10.3.13]), so pa=0 ⇒ wire byte 58 = 1
+        // ⇒ radio enables its PA.  Previously initialised to 1 (DisablePA on),
+        // which silently kept the radio's PA off during MOX — exact symptom
+        // of "MOX engages, TX I/Q on the wire, no carrier on the SO-239".
+        // deskhpsdr's equivalent default is `pa_enabled = 1` (new_protocol.c
+        // [@120188f]) — same effective wire byte (1).
+        m_tx[i].pa = 0;   // PA enabled (NOT inverted: this is the DisablePA bit)
         m_tx[i].epwmMax = 0;
         m_tx[i].epwmMin = 0;
     }
@@ -272,6 +280,7 @@ void P2RadioConnection::init()
         if (diagThisTick) {
             qCInfo(lcConnection) << "BENCH-DIAG P2 TX-IQ tick #" << s_diagTick
                                  << "ring count=" << m_txIqRingCount.load(std::memory_order_acquire)
+                                 << "this=" << static_cast<const void*>(this)
                                  << "(0=empty/silence; nonzero=carrier samples queued)";
         }
 
@@ -350,6 +359,40 @@ void P2RadioConnection::init()
         }
     });
 
+    // 3M-1a (2026-04-27): periodic protocol heartbeat at 100 ms.  The radio
+    // expects high-priority packets at this cadence to keep TX state fresh
+    // (MOX, drive, freq, antenna) — without it the radio treats TX state as
+    // stale and never engages the PA, so even though our TX I/Q is on the
+    // wire there is no carrier coming out the SO-239.
+    //
+    // Cadence per deskhpsdr/src/new_protocol.c:2870-2898 [@120188f]:
+    //   every 100 ms       — high-pri
+    //   every 200 ms (alt) — RX-spec / TX-spec
+    //   every 800 ms       — General
+    //
+    // Dispatch table over an 8-cycle wheel (0..7) — matches deskhpsdr's
+    // `switch (cycling)` cases 1..8 (we're 0-indexed).
+    m_p2HeartbeatTimer = new QTimer(this);
+    m_p2HeartbeatTimer->setInterval(100);
+    m_p2HeartbeatTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_p2HeartbeatTimer, &QTimer::timeout, this, [this]() {
+        if (!m_running) { return; }
+        sendCmdHighPriority();                // every 100 ms (every cycle)
+        switch (m_p2HeartbeatCycle) {
+            case 0: case 2: case 4: case 6:   // odd-numbered cycles → TX-spec
+                sendCmdTx();                  // every 200 ms
+                break;
+            case 1: case 3: case 5:           // even-numbered cycles → RX-spec
+                sendCmdRx();                  // every 200 ms
+                break;
+            case 7:
+                sendCmdRx();                  // every 200 ms
+                sendCmdGeneral();             // every 800 ms (once per wheel)
+                break;
+        }
+        m_p2HeartbeatCycle = (m_p2HeartbeatCycle + 1) % 8;
+    });
+
     qCDebug(lcConnection) << "P2: init() socket port:" << m_socket->localPort();
 }
 
@@ -383,10 +426,12 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     m_seqHighPri = 0;
     m_ccSeqNo = 0;
 
-    // From Thetis create_rnet defaults + Thetis pcap analysis
-    // Use m_caps->adcCount instead of info.adcCount for capability-metadata consistency.
-    // Both carry the same value (info.adcCount is populated from adcCountForBoard() which
-    // reads the same BoardCapsTable). m_caps is authoritative.
+    // 3M-1a (2026-04-27 v4): num_adc = hardware ADC count.  Earlier guess
+    // (numAdc=1) was wrong — drove from a freeze-fixture test scenario, not
+    // runtime.  Authoritative reference: captures/thetis-3865-lsb-pcap-analysis.md
+    // line 34 — Thetis sends "Num ADC | 2 | ANAN-G2 has 2 ADCs" for the same
+    // ANAN-G2 in non-diversity RX-only mode.  The freeze fixture's byte 4 = 1
+    // captures a default-init state before SetADCCount(2) is applied.
     m_numAdc = m_hardwareProfile.caps ? m_hardwareProfile.adcCount : m_caps->adcCount;
     m_numDac = 1;
     m_wdt = 1;  // Watchdog timer MUST be enabled — radio requires it for streaming
@@ -461,6 +506,9 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // made the carrier appear low-energy on the radio).  Confirmed correct after
     // E.6 + E.7 + e6e48bd landed.
     m_txIqTimer->start();
+    // 3M-1a (2026-04-27): protocol heartbeat — high-pri every 100 ms, etc.
+    m_p2HeartbeatCycle = 0;
+    m_p2HeartbeatTimer->start();
 
     setState(ConnectionState::Connected);
 }
@@ -477,6 +525,9 @@ void P2RadioConnection::disconnect()
     }
     if (m_txIqTimer) {
         m_txIqTimer->stop();
+    }
+    if (m_p2HeartbeatTimer) {
+        m_p2HeartbeatTimer->stop();
     }
     if (m_reconnectTimer) {
         m_reconnectTimer->stop();
@@ -767,6 +818,22 @@ void P2RadioConnection::sendTxIq(const float* iq, int n)
 {
     if (n <= 0 || iq == nullptr) { return; }
 
+    // BENCH-DIAG (3M-1a): confirm producer is reaching this method and ring
+    // count actually advances after fetch_add.  Logs every 50th call (≈ 250 ms
+    // at the 5 ms audio production cadence).  Same `this` pointer in the log
+    // as the consumer's tick log lets us tell if producer and consumer share
+    // the same instance.
+    static int s_diagSendCount = 0;
+    ++s_diagSendCount;
+    const bool diagThisCall = (s_diagSendCount % 50) == 1;
+    if (diagThisCall) {
+        const int beforeCount = m_txIqRingCount.load(std::memory_order_acquire);
+        qCInfo(lcConnection) << "BENCH-DIAG sendTxIq #" << s_diagSendCount
+                             << "n=" << n
+                             << "ring_count_before_push=" << beforeCount
+                             << "this=" << static_cast<const void*>(this);
+    }
+
     for (int k = 0; k < n * 2; k += 2) {
         // acquire: see the latest fetch_sub from the connection thread so we
         // don't overfill after a drain.  Pair count: each sample = 2 floats.
@@ -805,7 +872,17 @@ void P2RadioConnection::setTrxRelay(bool enabled)
         return;
     }
     m_trxRelay = enabled;
-    // TODO [3M-3]: emit Saturn register write for T/R relay.
+    // 3M-1a (2026-04-27): m_trxRelay state is encoded into Alex0 bits 27/18
+    // (see buildAlex0) and goes to the radio in CmdHighPriority.  Push the
+    // state immediately so the antenna switches to the TX path before the
+    // first TX I/Q packet (rather than waiting up to 100 ms for the next
+    // heartbeat tick).  setMox() does the same thing on the MOX bit.
+    if (m_running && m_socket) {
+        sendCmdHighPriority();
+    }
+    // TODO [3M-3]: emit Saturn register write for T/R relay (in addition
+    // to the Alex0 bit, deskhpsdr does a Saturn register write for some
+    // hardware variants — defer until we hit a radio that requires it).
 }
 
 // ---------------------------------------------------------------------------
@@ -1022,6 +1099,16 @@ CodecContext P2RadioConnection::buildCodecContext() const
     ctx.p2Cwx      = m_tx[0].cwx;
     ctx.p2Dot      = m_tx[0].dot;
     ctx.p2Dash     = m_tx[0].dash;
+    // 3M-1a (2026-04-27): mox + trxRelay drive the Alex bits 27 (_TR_Relay)
+    // and 18 (_trx_status) in the codec's buildAlex0/buildAlex1.  Without
+    // these the radio's antenna stays connected to the RX path during MOX
+    // and no carrier reaches the SO-239.
+    // Source: Thetis network.h:290,300,339,349 [v2.10.3.13];
+    //         deskhpsdr/src/alex.h:91-96 + new_protocol.c:996-1004 [@120188f].
+    // Note: P1 already wires these (P1RadioConnection.cpp:1268-1275); P2
+    // had a gap that this commit closes.
+    ctx.mox        = m_mox;
+    ctx.trxRelay   = m_trxRelay;
 
     // ADC / DAC counts
     ctx.p2NumAdc   = m_numAdc;
@@ -1431,6 +1518,20 @@ void P2RadioConnection::sendCmdGeneral()
     // sendPacket(listenSock, packetbuf, sizeof(packetbuf), prn->base_outbound_port);
     QByteArray pkt(buf, sizeof(buf));
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort);
+
+    // BENCH-DIAG (3M-1a, 2026-04-27): confirm the PA-enable byte (58) and
+    // Alex-enable byte (59) are actually on the wire as we expect.  Logged
+    // every send while connected (the heartbeat fires sendCmdGeneral every
+    // 800 ms — ~4 logs across a 3 s TUN press).
+    const auto u8 = [&](int off) { return static_cast<unsigned>(static_cast<unsigned char>(buf[off])); };
+    qCInfo(lcConnection) << "BENCH-DIAG sendCmdGeneral seq=" << (m_seqGeneral - 1)
+                         << "byte58_pa_enable=" << u8(58)
+                         << "byte59_alex_enable=" << u8(59)
+                         << "byte4_cmd=" << u8(4)
+                         << "byte37_phase_word=" << u8(37)
+                         << "byte38_wdt=" << u8(38)
+                         << "m_tx[0].pa(=DisablePA)=" << m_tx[0].pa
+                         << "mox=" << m_mox;
 }
 
 void P2RadioConnection::sendCmdHighPriority()
@@ -1443,6 +1544,54 @@ void P2RadioConnection::sendCmdHighPriority()
     // sendPacket(listenSock, packetbuf, BUFLEN, prn->base_outbound_port + 3);
     QByteArray pkt(buf, sizeof(buf));
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 3);
+
+    // BENCH-DIAG (3M-1a, 2026-04-27): when MOX is engaged dump the bytes that
+    // tell the radio what to do with TX I/Q.  We're confirmed sending TX I/Q
+    // packets but the radio isn't keying carrier — these bytes are the most
+    // likely culprits.  Read each as unsigned to avoid signed-byte sign-extension
+    // confusing the hex dump.
+    if (m_mox) {
+        const auto u8  = [&](int off) { return static_cast<unsigned>(static_cast<unsigned char>(buf[off])); };
+        const auto u32 = [&](int off) {
+            return  (static_cast<quint32>(static_cast<unsigned char>(buf[off  ])) << 24)
+                  | (static_cast<quint32>(static_cast<unsigned char>(buf[off+1])) << 16)
+                  | (static_cast<quint32>(static_cast<unsigned char>(buf[off+2])) << 8)
+                  |  static_cast<quint32>(static_cast<unsigned char>(buf[off+3]));
+        };
+        // Phase word → Hz: hz = phase * 122880000 / 2^32  (inverse of hzToPhaseWord).
+        const quint32 txPhase  = u32(329);
+        const quint32 rx0Phase = u32(9);
+        const double  txHz   = static_cast<double>(txPhase)  * 122880000.0 / 4294967296.0;
+        const double  rx0Hz  = static_cast<double>(rx0Phase) * 122880000.0 / 4294967296.0;
+        // BENCH-DIAG (3M-1a, 2026-04-27 v3): full hex dump of every non-zero
+        // byte in the high-pri packet during MOX so any anomaly we missed
+        // shows up.  Logged once per TUN press (s_logged latches false → true
+        // on first MOX-on send and resets when MOX drops).
+        static bool s_loggedHipriDump = false;
+        if (!s_loggedHipriDump) {
+            QString hex;
+            for (int i = 0; i < kBufLen; ++i) {
+                if (buf[i] != 0) {
+                    hex += QString::asprintf("[%d]=%02x ", i,
+                                             static_cast<unsigned>(static_cast<unsigned char>(buf[i])));
+                }
+            }
+            qCInfo(lcConnection) << "BENCH-DIAG hipri ALL non-zero bytes:" << hex;
+            s_loggedHipriDump = true;
+        }
+
+        qCInfo(lcConnection)
+            << "BENCH-DIAG hipri MOX-on:"
+            << "byte4=" << QString::number(u8(4), 16)
+            << "(run=" << ((u8(4) & 0x01) != 0) << "mox=" << ((u8(4) & 0x02) != 0) << ")"
+            << "byte5=" << QString::number(u8(5), 16)
+            << "rx0_phase=" << QString::number(rx0Phase, 16) << "(" << rx0Hz << "Hz)"
+            << "tx_phase=" << QString::number(txPhase, 16) << "(" << txHz << "Hz)"
+            << "drive=" << u8(345)
+            << "alex0_rx=" << QString::number(u32(1432), 16)
+            << "alex1_tx=" << QString::number(u32(1428), 16)
+            << "att0=" << u8(1443) << "att1=" << u8(1442);
+    }
 }
 
 void P2RadioConnection::sendCmdRx()
@@ -1454,6 +1603,22 @@ void P2RadioConnection::sendCmdRx()
     // From Thetis network.c:1178
     QByteArray pkt(buf, sizeof(buf));
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 1);
+
+    // BENCH-DIAG (3M-1a, 2026-04-27 v3): one-shot dump of every non-zero byte
+    // in CmdRx so we can spot any byte we're sending wrong.  Latched once on
+    // first send post-MOX, reset elsewhere.
+    static bool s_loggedRxDump = false;
+    if (m_mox && !s_loggedRxDump) {
+        QString hex;
+        for (int i = 0; i < kBufLen; ++i) {
+            if (buf[i] != 0) {
+                hex += QString::asprintf("[%d]=%02x ", i,
+                                         static_cast<unsigned>(static_cast<unsigned char>(buf[i])));
+            }
+        }
+        qCInfo(lcConnection) << "BENCH-DIAG cmdRx ALL non-zero bytes:" << hex;
+        s_loggedRxDump = true;
+    }
 }
 
 void P2RadioConnection::sendCmdTx()
@@ -1465,6 +1630,21 @@ void P2RadioConnection::sendCmdTx()
     // From Thetis network.c:1247
     QByteArray pkt(buf, sizeof(buf));
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 2);
+
+    // BENCH-DIAG (3M-1a, 2026-04-27 v3): one-shot dump of every non-zero byte
+    // in CmdTx during MOX.
+    static bool s_loggedTxDump = false;
+    if (m_mox && !s_loggedTxDump) {
+        QString hex;
+        for (int i = 0; i < 60; ++i) {
+            if (buf[i] != 0) {
+                hex += QString::asprintf("[%d]=%02x ", i,
+                                         static_cast<unsigned>(static_cast<unsigned char>(buf[i])));
+            }
+        }
+        qCInfo(lcConnection) << "BENCH-DIAG cmdTx ALL non-zero bytes:" << hex;
+        s_loggedTxDump = true;
+    }
 }
 
 // --- Data Parsing ---
@@ -1610,6 +1790,35 @@ void P2RadioConnection::processHighPriorityStatus(const QByteArray& data)
 
         emit paTelemetryUpdated(fwdRaw, revRaw, exciterRaw,
                                 userAdc0Raw, userAdc1Raw, supplyRaw);
+
+        // BENCH-DIAG (3M-1a, 2026-04-27 v4): log radio-reported PA telemetry
+        // + status byte 0 (PTT in, key, PLL lock).  The previous run showed
+        // fwd/rev ≈ noise-floor during MOX even though the radio reached
+        // MOX state — exciter chain isn't producing.  PLL-not-locked or a
+        // status flag we don't read could explain it.
+        // Status byte 0 bits (Thetis network.c:689-693 [v2.10.3.13]):
+        //   bit 0 = ptt_in, bit 1 = dot_in, bit 2 = dash_in,
+        //   bit 4 = pll_locked, bit 7 = keySidetone
+        static bool s_loggedPaTelem = false;
+        if (m_mox && !s_loggedPaTelem) {
+            const quint8 byte0 = raw[4 + 0];
+            qCInfo(lcConnection) << "BENCH-DIAG PA telemetry first-MOX:"
+                                 << "byte0=" << QString::number(byte0, 16)
+                                 << "(ptt_in=" << ((byte0 & 0x01) != 0)
+                                 << "dot=" << ((byte0 & 0x02) != 0)
+                                 << "dash=" << ((byte0 & 0x04) != 0)
+                                 << "pll_locked=" << ((byte0 & 0x10) != 0)
+                                 << "keySidetone=" << ((byte0 & 0x80) != 0)
+                                 << ")"
+                                 << "fwd_raw=" << fwdRaw
+                                 << "rev_raw=" << revRaw
+                                 << "exciter_raw=" << exciterRaw
+                                 << "supply_raw=" << supplyRaw;
+            s_loggedPaTelem = true;
+        }
+        if (!m_mox) {
+            s_loggedPaTelem = false;   // re-arm for next MOX press
+        }
     }
 
     emit meterDataReceived(0.0f, 0.0f, 0.0f, 0.0f);

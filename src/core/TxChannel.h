@@ -223,22 +223,29 @@ public:
     // new 2-TONE source. Today the constant has one owner; do not duplicate.
     static constexpr double kMaxToneMag = 0.99999f;  // why not 1?  clipping?
 
-    // inputBufferSize:  fexchange2 input block == OpenChannel in_size (default 238).
+    // inputBufferSize:  fexchange2 input block == OpenChannel in_size (default 256).
     // outputBufferSize: fexchange2 output block == in_size × out_rate / in_rate.
-    //   At 48 kHz in / 48 kHz out (P1/HL2): 238 samples.
-    //   At 48 kHz in / 192 kHz out (P2 Saturn): 238 × 4 = 952 samples.
+    //   At 48 kHz in / 48 kHz out (P1/HL2): 256 samples.
+    //   At 48 kHz in / 192 kHz out (P2 Saturn): 256 × 4 = 1024 samples.
     //
     // Both sizes are passed from WdspEngine::createTxChannel() which holds the
     // authoritative rate values used in OpenChannel().
     //
-    // Defaults (238/238) are correct for P1 (48 kHz in/out) and unit tests
-    // that don't call WdspEngine::initialize().
+    // Defaults (256/256) are correct for P1 (48 kHz in/out, 1:1 ratio) and
+    // unit tests that don't call WdspEngine::initialize().  Real P2 callers
+    // (WdspEngine::createTxChannel) pass explicit values: in_size=256 and
+    // out_size=1024 (= 256 × 192 000 / 48 000).
+    //
+    // The 256 default (vs Thetis cmaster.c xcm_insize values that vary per
+    // hardware) is required because WDSP iobuffs.c:577 wraps r2_outidx with
+    // `==` rather than modulo, so out_size must divide r2_active_buffsize
+    // exactly.  See WdspEngine::kTxDspBufferSize for the full derivation.
     //
     // From Thetis wdsp/cmaster.c:177-190 [v2.10.3.13] — OpenChannel in_size /
     //   pcm->xmtr[i].ch_outrate.
     explicit TxChannel(int channelId,
-                       int inputBufferSize  = 238,
-                       int outputBufferSize = 238,
+                       int inputBufferSize  = 256,
+                       int outputBufferSize = 256,
                        QObject* parent = nullptr);
     ~TxChannel() override;
 
@@ -411,11 +418,12 @@ private:
     void driveOneTxBlock();
 
     // Production timer — fires at 5 ms intervals while TX is active.
-    // fexchange2 processes m_inputBufferSize (238) samples per call.
-    // At 48 kHz input: 238/48000 = ~5 ms per block → one fexchange2 call per tick.
-    // At 192 kHz output (P2 Saturn): m_outputBufferSize = 952 samples per call.
+    // fexchange2 processes m_inputBufferSize (256) samples per call.
+    // At 48 kHz input: 256/48000 = ~5.33 ms per block → one fexchange2 call per tick.
+    // At 192 kHz output (P2 Saturn): m_outputBufferSize = 1024 samples per call.
     // The P2 consumer (m_txIqTimer at 5 ms, 4 frames/tick) drains ~960 samples
-    // per tick — matching the producer rate.
+    // per tick — slightly under the producer rate, so the SPSC ring fills
+    // gradually until natural backpressure (audio underrun would block).
     //
     // Qt::PreciseTimer: reduces OS-scheduler jitter on the audio path.
     QTimer* m_txProductionTimer{nullptr};
@@ -437,8 +445,8 @@ private:
     //
     // From Thetis wdsp/iobuffs.c fexchange2 [v2.10.3.13].
     // From Thetis wdsp/cmaster.c:177-190 [v2.10.3.13] — in_size / ch_outrate.
-    int m_inputBufferSize{238};   // == OpenChannel in_size; fexchange2 Iin/Qin size
-    int m_outputBufferSize{238};  // == in_size × out_rate / in_rate; fexchange2 Iout/Qout size
+    int m_inputBufferSize{256};   // == OpenChannel in_size; fexchange2 Iin/Qin size
+    int m_outputBufferSize{256};  // == in_size × out_rate / in_rate; fexchange2 Iout/Qout size
     std::vector<float> m_inI;
     std::vector<float> m_inQ;
     std::vector<float> m_outI;

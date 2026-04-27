@@ -246,11 +246,12 @@ private slots:
         }
         // At least one sendTxIq call must have reached the mock.
         QVERIFY(conn.callCount >= 1);
-        // Each call must pass n = outputBufferSize = 238 at 48 kHz in/out.
-        // Bench fix round 3 (Issue A): previous test expected 4096 (the old
-        // broken kTxDspBufferSize value used before in/out sizes were separated).
-        // Correct value is 238 = in_size × (outRate / inRate) = 238 × (48000/48000).
-        QCOMPARE(conn.lastN, 238);
+        // Each call must pass n = outputBufferSize = 256 at 48 kHz in/out.
+        // 3M-1a r2-ring fix (2026-04-27): in_size raised 238 → 256 so it
+        // divides WDSP's ring sizes cleanly (iobuffs.c:577 == wrap requires
+        // exact divisibility).  Correct value is 256 = in_size × (outRate /
+        // inRate) = 256 × (48000/48000) for the P1 1:1 unit-test path.
+        QCOMPARE(conn.lastN, 256);
     }
 
     // ── sendTxIq count increases with timer ticks ─────────────────────────

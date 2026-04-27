@@ -280,6 +280,14 @@ private:
     QTimer* m_keepAliveTimer{nullptr};
     QTimer* m_reconnectTimer{nullptr};
     QTimer* m_txIqTimer{nullptr};
+    // Periodic protocol heartbeat: fires every 100 ms while connected and
+    // dispatches HighPri / RX-spec / TX-spec / General on the cycling cadence
+    // documented in deskhpsdr/src/new_protocol.c:2870-2898 [@120188f].
+    // The radio expects the high-priority packet at 100 ms intervals to keep
+    // TX state fresh — without it, MOX + drive bytes go stale and the PA
+    // never engages.  3M-1a, 2026-04-27.
+    QTimer* m_p2HeartbeatTimer{nullptr};
+    int     m_p2HeartbeatCycle{0};   // 0..7, drives RX/TX-spec + General cadence
 
     // --- Port configuration (from Thetis _radionet, network.h:55-56) ---
     int m_p2CustomPortBase{1025};    // prn->p2_custom_port_base
@@ -393,7 +401,7 @@ private:
         int pttOut{0};               // prn->tx[i].ptt_out
         int driveLevel{0};           // prn->tx[i].drive_level
         int phaseShift{0};           // prn->tx[i].phase_shift
-        int pa{1};                   // prn->tx[i].pa
+        int pa{0};                   // prn->tx[i].pa — DisablePA flag (1 = PA OFF)
         int epwmMax{0};
         int epwmMin{0};
     };

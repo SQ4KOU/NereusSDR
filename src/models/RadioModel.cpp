@@ -1149,7 +1149,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     if (m_wdspEngine && !m_txChannel) {
         const int txOutRate = m_connection->txSampleRate();
         m_txChannel = m_wdspEngine->createTxChannel(/*channelId=*/1,
-                                                    /*inputBufferSize=*/238,
+                                                    /*inputBufferSize=*/256,
                                                     /*dspBufferSize=*/WdspEngine::kTxDspBufferSize,
                                                     /*inputSampleRate=*/48000,
                                                     /*dspSampleRate=*/WdspEngine::kTxDspSampleRate,

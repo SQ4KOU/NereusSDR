@@ -101,6 +101,11 @@ warren@wpratt.com
 #ifdef HAVE_WDSP
 extern "C" {
 #include "../../third_party/wdsp/src/TXA.h"
+// BENCH-DIAG (3M-1a): need ch[] (channel.h) and IOB struct (iobuffs.h) so we
+// can peek midbuff / outbuff peaks + r2 ring state right before fexchange2.
+// To be reverted along with the rest of the bench-diag block before merge.
+#include "../../third_party/wdsp/src/channel.h"
+#include "../../third_party/wdsp/src/iobuffs.h"
 }
 #endif
 
@@ -113,13 +118,13 @@ namespace NereusSDR {
 // by OpenChannel(... type=1 ...) in WdspEngine::createTxChannel() before
 // this constructor runs.
 //
-// inputBufferSize:  fexchange2 Iin/Qin size == OpenChannel in_size (default 238).
+// inputBufferSize:  fexchange2 Iin/Qin size == OpenChannel in_size (default 256).
 // outputBufferSize: fexchange2 Iout/Qout size == in_size × out_rate / in_rate.
-//   At 48 kHz out: 238.  At 192 kHz out (P2 Saturn): 238 × 4 = 952.
+//   At 48 kHz out: 256.  At 192 kHz out (P2 Saturn): 256 × 4 = 1024.
 //
 // CRITICAL: fexchange2 requires Iin/Qin to be exactly in_size samples and
 // Iout/Qout to be exactly out_size samples.  Calling it with wrong-sized
-// buffers (e.g. kTxDspBufferSize = 4096) produces no output (silent error).
+// buffers (e.g. kTxDspBufferSize = 2048) produces no output (silent error).
 //
 // From Thetis wdsp/TXA.c:31-479 [v2.10.3.13] — create_txa() signal flow.
 // From Thetis wdsp/cmaster.c:177-190 [v2.10.3.13] — OpenChannel in_size / ch_outrate.
@@ -131,18 +136,18 @@ TxChannel::TxChannel(int channelId,
     : QObject(parent)
     // Init order must match declaration order (-Wreorder-ctor):
     // m_inputBufferSize, m_outputBufferSize, m_channelId.
-    , m_inputBufferSize(inputBufferSize > 0 ? inputBufferSize : 238)
-    , m_outputBufferSize(outputBufferSize > 0 ? outputBufferSize : 238)
+    , m_inputBufferSize(inputBufferSize > 0 ? inputBufferSize : 256)
+    , m_outputBufferSize(outputBufferSize > 0 ? outputBufferSize : 256)
     , m_channelId(channelId)
 {
     // Allocate fexchange2 I/O buffers at correct sizes.
     // Iin/Qin:   m_inputBufferSize samples  (== OpenChannel in_size)
     // Iout/Qout: m_outputBufferSize samples (== in_size × out_rate / in_rate)
     //
-    // Bench fix round 3 (Issue A): previous code used kTxDspBufferSize (4096)
-    // for all four buffers.  fexchange2 requires Iin/Qin of exactly in_size and
-    // Iout/Qout of exactly out_size; the 4096-sample call with in_size=238 produced
-    // no output (silent error).
+    // Bench fix round 3 (Issue A): previous code used kTxDspBufferSize for all
+    // four buffers.  fexchange2 requires Iin/Qin of exactly in_size and
+    // Iout/Qout of exactly out_size; the dsp-size-sized call with in_size=256
+    // would produce no output (silent error).
     //
     // From Thetis wdsp/iobuffs.c fexchange2 [v2.10.3.13].
     // From Thetis wdsp/cmaster.c:179-183 [v2.10.3.13] — in_size, ch_outrate.
@@ -153,10 +158,10 @@ TxChannel::TxChannel(int channelId,
     m_outInterleaved.assign(m_outputBufferSize * 2, 0.0f);
 
     // Production timer — drives driveOneTxBlock() while TX is active.
-    // Cadence: 5 ms.  At 48 kHz input / 238 samples: 238/48000 ≈ 4.96 ms → one
-    // fexchange2 call per tick.  At 192 kHz output (P2): out block = 952 samples.
+    // Cadence: 5 ms.  At 48 kHz input / 256 samples: 256/48000 ≈ 5.33 ms → one
+    // fexchange2 call per tick.  At 192 kHz output (P2): out block = 1024 samples.
     // The P2 consumer (m_txIqTimer at 5 ms, 4 frames/tick) drains ~960 samples
-    // per tick, matching the producer rate.
+    // per tick — slightly under producer; the SPSC ring absorbs the surplus.
     //
     // Qt::PreciseTimer reduces OS scheduler jitter on the audio path.
     m_txProductionTimer = new QTimer(this);
@@ -793,7 +798,13 @@ void TxChannel::driveOneTxBlock()
     // NereusSDR uses the float variant declared in wdsp_api.h (INREAL=float).
     // BENCH-DIAG: dump gen1 runtime state right before fexchange2 to verify
     // SetTXAPostGen* calls actually took effect.
-    if (diagThisCall) {
+    // Null-guard the entire BENCH-DIAG block for unit-test builds: txa[] /
+    // ch[] are zero-initialized at load time; gen1.p, midbuff, outbuff,
+    // and iob.pe are all null until WdspEngine::initialize() + OpenChannel()
+    // run.  Match the same sentinel pattern setRunning() uses (rsmpin.p).
+    // (fexchange2 itself is null-safe — it no-ops when ch[].exchange is 0.)
+    const bool wdspReady = (txa[m_channelId].gen1.p != nullptr);
+    if (diagThisCall && wdspReady) {
         const auto* g1 = txa[m_channelId].gen1.p;
         qCInfo(lcDsp) << "BENCH-DIAG gen1 state: run=" << g1->run
                       << "mode=" << g1->mode
@@ -802,6 +813,46 @@ void TxChannel::driveOneTxBlock()
                       << "tone.delta=" << g1->tone.delta
                       << "size=" << g1->size
                       << "rate=" << g1->rate;
+
+        // BENCH-DIAG (3M-1a, 2026-04-27): pinpoint where the tone is lost in
+        // the TXA pipeline. Three buffers are interesting:
+        //   midbuff  — gen1 writes the sine here (size 2*dsp_size complex
+        //              = 4*dsp_size doubles)
+        //   outbuff  — rsmpout writes resampled output here; dexchange copies
+        //              this into the r2 ring (size 1*dsp_outsize complex
+        //              = 2*dsp_outsize doubles)
+        //   r2 ring  — fexchange2 reads from here into Iout/Qout
+        // Plus the IOB state so we can see if exchange flag is actually 1
+        // and the ring is filling.
+        const double* mid  = txa[m_channelId].midbuff;
+        const double* outb = txa[m_channelId].outbuff;
+        double midPeak = 0.0;
+        double outPeak = 0.0;
+        if (mid != nullptr) {
+            const int midDoubles = 4 * g1->size;   // 2 * dsp_size complex
+            for (int i = 0; i < midDoubles; ++i) {
+                const double v = std::abs(mid[i]);
+                if (v > midPeak) midPeak = v;
+            }
+        }
+        if (outb != nullptr) {
+            const int outDoubles = 2 * outN;   // 1 * dsp_outsize complex (outN already in samples)
+            for (int i = 0; i < outDoubles; ++i) {
+                const double v = std::abs(outb[i]);
+                if (v > outPeak) outPeak = v;
+            }
+        }
+        const auto& chState = ch[m_channelId];
+        const auto* iobE = chState.iob.pe;
+        qCInfo(lcDsp) << "BENCH-DIAG buffers/iob:"
+                      << "midbuff_peak=" << midPeak
+                      << "outbuff_peak=" << outPeak
+                      << "exchange=" << (chState.exchange & 1)
+                      << "state=" << chState.state
+                      << "bfo=" << (iobE ? iobE->bfo : -1)
+                      << "r2_havesamps=" << (iobE ? iobE->r2_havesamps : -1)
+                      << "r2_outidx=" << (iobE ? iobE->r2_outidx : -1)
+                      << "out_size=" << (iobE ? iobE->out_size : -1);
     }
 
     int error = 0;

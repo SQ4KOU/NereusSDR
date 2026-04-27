@@ -166,8 +166,23 @@ public:
     static constexpr double kTxTSlewDownSecs = 0.010;
     // From cmaster.c:182  — DSP sample rate for TX channel = 96000 Hz.
     static constexpr int kTxDspSampleRate  = 96000;
-    // From cmaster.c:180  — DSP buffer size for TX channel = 4096 samples.
-    static constexpr int kTxDspBufferSize  = 4096;
+    // DSP buffer size for TX channel = 2048 samples.
+    //
+    // Deviation from Thetis: cmaster.c:180 [v2.10.3.13] hardcodes 4096.
+    // We adopt deskhpsdr's 2048 (transmitter.c:1072 [@120188f] —
+    // `tx->dsp_size = 2048`) for two reasons:
+    //   1. WDSP iobuffs.c:577 wraps r2_outidx with `==` rather than modulo:
+    //        `if ((a->r2_outidx += a->out_size) == a->r2_active_buffsize) ...`
+    //      With dsp_size=4096 + in_size=238 (P2 5 ms tick), out_size=952
+    //      and r2_active_buffsize=16384, which is not a multiple of 952 —
+    //      the wrap never triggers and fexchange2 reads past the end of
+    //      r2_baseptr into random heap (verified by bench, r2_outidx grew
+    //      unbounded to >900 000).  With dsp_size=2048 + in_size=256
+    //      (this header), out_size=1024 and r2_active_buffsize=8192,
+    //      which divides cleanly (8 wraps per ring cycle).
+    //   2. ~50 % lower TX pipeline latency: dsp_insize/in_rate +
+    //      dsp_outsize/out_rate drops from 85 ms to 42 ms.
+    static constexpr int kTxDspBufferSize  = 2048;
 
     // Create a TX channel with the given parameters.
     //
@@ -182,12 +197,17 @@ public:
     // initialized.
     //
     // Default parameters match our P2 configuration:
-    //   inputBufferSize=238 (one P2 packet), dspBufferSize=4096,
-    //   inputRate=48000, dspRate=96000, outputRate=48000
+    //   inputBufferSize=256 (5.33 ms at 48 kHz; satisfies WDSP r1 ring
+    //                       wrap math — must divide DSP_MULT × dsp_insize
+    //                       = 2 × 1024 = 2048; 2048/256 = 8 ✓),
+    //   dspBufferSize=kTxDspBufferSize (2048, deskhpsdr-derived; see
+    //                                  the `kTxDspBufferSize` definition
+    //                                  above for the full rationale),
+    //   inputRate=48000, dspRate=96000, outputRate=48000.
     //
     // From Thetis cmaster.c:177-190 (create_xmtr OpenChannel call) [v2.10.3.13]
     TxChannel* createTxChannel(int channelId,
-                               int inputBufferSize = 238,
+                               int inputBufferSize = 256,
                                int dspBufferSize = kTxDspBufferSize,
                                int inputSampleRate = 48000,
                                int dspSampleRate = kTxDspSampleRate,

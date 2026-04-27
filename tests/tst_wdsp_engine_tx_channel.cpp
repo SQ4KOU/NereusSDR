@@ -95,9 +95,17 @@ private slots:
         QCOMPARE(WdspEngine::kTxDspSampleRate, 96000);
     }
 
-    void txDspBufferSizeIs4096() {
-        // From cmaster.c:180  — dsp buffer size = 4096 samples
-        QCOMPARE(WdspEngine::kTxDspBufferSize, 4096);
+    void txDspBufferSizeIs2048() {
+        // 3M-1a r2-ring fix (2026-04-27): NereusSDR uses dsp_size=2048
+        // (deskhpsdr/src/transmitter.c:1072 [@120188f]) instead of Thetis's
+        // hardcoded 4096 (cmaster.c:180 [v2.10.3.13]).  Two reasons:
+        //   1. WDSP iobuffs.c:577 wraps r2_outidx with `==` not modulo —
+        //      with dsp_size=4096 + in_size=256, out_size=1024 doesn't
+        //      divide r2_active_buffsize=16384 cleanly.  With dsp_size=2048
+        //      + in_size=256, out_size=1024 divides r2_active_buffsize=8192
+        //      cleanly (8 wraps per cycle).
+        //   2. ~50 % lower TX pipeline latency (42 ms instead of 85 ms).
+        QCOMPARE(WdspEngine::kTxDspBufferSize, 2048);
     }
 
     // ── WdspEngine::txChannel lookup before any channel is created ───────────
