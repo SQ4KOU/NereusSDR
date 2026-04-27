@@ -2280,9 +2280,20 @@ void RadioModel::applyClaritySmoothDefaults()
         QStringLiteral("True"));
 }
 
+void RadioModel::setConnectionState(ConnectionState s)
+{
+    if (m_connectionState == s) {
+        return;
+    }
+    m_connectionState = s;
+    emit connectionStateChanged(s);
+}
+
 void RadioModel::onConnectionStateChanged(ConnectionState state)
 {
-    emit connectionStateChanged();
+    // Phase 3Q-1: route through setConnectionState() so m_connectionState
+    // stays in sync and the signal carries the new state value.
+    setConnectionState(state);
 
     switch (state) {
     case ConnectionState::Connected:
@@ -2321,8 +2332,11 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
     case ConnectionState::Connecting:
         qCDebug(lcConnection) << "Connecting to" << m_name << "...";
         break;
-    case ConnectionState::Error:
-        qCWarning(lcConnection) << "Connection error for" << m_name;
+    case ConnectionState::Probing:
+        qCDebug(lcConnection) << "Probing for" << m_name << "...";
+        break;
+    case ConnectionState::LinkLost:
+        qCWarning(lcConnection) << "Link lost to" << m_name;
         m_discovery->clearConnectedMac();
         break;
     }

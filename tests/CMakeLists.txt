@@ -740,3 +740,8 @@ nereus_add_test(tst_mainwindow_status_bar_safety)
 # PreventTxOnDifferentBandToRx (1). Uses QTemporaryDir for full isolation.
 nereus_add_test(tst_phase3m0_persistence_audit)
 
+# ── Phase 3Q Task 1: ConnectionState enum + RadioModel state exposure ─────────
+# 3 tests: initial state Disconnected, signal on transition, no signal for
+# redundant transition. NereusSDR-original (no upstream port).
+nereus_add_test(tst_connection_state)
+

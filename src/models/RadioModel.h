@@ -67,6 +67,7 @@
 
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
+#include "core/ConnectionState.h"
 #include "Band.h"
 #include "BandPlanManager.h"
 #include "SliceModel.h"
@@ -278,6 +279,16 @@ public:
 
     bool isConnected() const;
 
+    // Phase 3Q-1: single source of truth for the connection lifecycle state.
+    // UI components (TitleBar, ConnectionPanel, status bar, spectrum overlay)
+    // read this instead of deriving state from RadioConnection directly.
+    ConnectionState connectionState() const { return m_connectionState; }
+
+    // Test-only: allow tests to drive transitions without standing up
+    // a fake RadioConnection. Production transitions go through the
+    // private setConnectionState() called from connection signals.
+    void setConnectionStateForTest(ConnectionState s) { setConnectionState(s); }
+
 #ifdef NEREUS_BUILD_TESTS
 public:
     // Test-only: inject board caps without a live radio connection.
@@ -348,7 +359,11 @@ public:
 
 signals:
     void infoChanged();
-    void connectionStateChanged();
+    // Phase 3Q-1: parametrized — state passed so UI consumers can act without
+    // a secondary RadioModel::connectionState() read under race conditions.
+    // Existing no-arg slot connections (ConnectionPanel, MainWindow, SpectrumWidget)
+    // remain valid: Qt discards excess signal args when slot arity is lower.
+    void connectionStateChanged(NereusSDR::ConnectionState newState);
     // Emitted when the on-air sample rate for the current connection is
     // known. MainWindow reacts by updating FFTEngine + SpectrumWidget so
     // bin math matches the wire rate (P1=192k, P2=768k).
@@ -383,6 +398,10 @@ private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
 
 private:
+    // Phase 3Q-1: drives the RadioModel-level connection state machine.
+    // Guards against redundant transitions (no emit if state unchanged).
+    void setConnectionState(ConnectionState s);
+
     // Pushes AlexController's per-band antenna state to the connection.
     // Full port of Thetis HPSDR/Alex.cs:310-413 UpdateAlexAntSelection.
     // Phase 3P-I-b (T6): adds isTx branch, Ext1/Ext2OnTx mapping, xvtrActive
@@ -490,6 +509,10 @@ private:
     QString m_model;
     QString m_version;
     HardwareProfile m_hardwareProfile;
+
+    // Phase 3Q-1: RadioModel-level connection state machine.
+    // Drives UI (TitleBar, ConnectionPanel, status bar, spectrum overlay).
+    ConnectionState m_connectionState{ConnectionState::Disconnected};
 
     // Reconnect state
     RadioInfo m_lastRadioInfo;

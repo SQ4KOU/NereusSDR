@@ -124,7 +124,8 @@ static constexpr QColor kColorOnlineFree  { 20, 80, 30};    // dark green — on
 // From ucRadioList.cs:1117 — selectedFill = Color.FromArgb(225, 240, 255)
 static constexpr QColor kColorOnlineInUse { 80, 60, 10};    // dark amber — online + in-use
 static constexpr QColor kColorOffline     { 30, 30, 40};    // dark grey — offline
-static constexpr QColor kColorError       { 80, 20, 20};    // dark red — error
+// kColorError reserved for Phase 3Q-3 ConnectionPanel state pills (LinkLost).
+// static constexpr QColor kColorError    { 80, 20, 20};
 
 ConnectionPanel::ConnectionPanel(RadioModel* model, QWidget* parent)
     : QDialog(parent)

@@ -3,7 +3,11 @@
 // Phase 3I Task 10 — reconnection state machine test for P1RadioConnection.
 //
 // Tests the §3.6 state machine:
-//   Connected → (2s silence) → Error → (5s × up to 3 retries) → Connected or Error
+//   Connected → (2s silence) → LinkLost → (5s × up to 3 retries) → Connected or LinkLost
+//
+// Phase 3Q-1 note: ConnectionState::LinkLost was removed from the 5-value enum
+// (Disconnected/Probing/Connecting/Connected/LinkLost). A watchdog timeout is
+// semantically "link lost" (was connected; frames stopped), so Error → LinkLost.
 //
 // Uses P1FakeRadio auto-streaming (Task 10 addition: goSilent() stops ep6 output
 // and resume() re-enables it, simulating a transient vs permanent radio failure).
@@ -48,9 +52,9 @@ private slots:
         // Kick the fake into silence — it stops replying to ep2 and stops ep6.
         fake.goSilent();
 
-        // Watchdog should trip after 2s → Error.
+        // Watchdog should trip after 2s → LinkLost.
         QTRY_VERIFY_WITH_TIMEOUT(
-            conn.state() == ConnectionState::Error, 5000);
+            conn.state() == ConnectionState::LinkLost, 5000);
 
         // Resume the fake before the reconnect window closes.
         // The reconnect timer fires after 5s — resume immediately so the next
@@ -65,7 +69,7 @@ private slots:
         fake.stop();
     }
 
-    void boundedRetriesExhaustStayInError() {
+    void boundedRetriesExhaustStayInLinkLost() {
         P1FakeRadio fake;
         fake.start();
 
@@ -82,23 +86,23 @@ private slots:
         fake.stop();
 
         // Timeline (all times relative to fake.stop()):
-        //   ~2s:  watchdog trips → Error (attempt 0)
+        //   ~2s:  watchdog trips → LinkLost (attempt 0)
         //   ~7s:  reconnect timeout → attempt 1, Connecting
-        //   ~9s:  watchdog trips → Error
+        //   ~9s:  watchdog trips → LinkLost
         //   ~14s: reconnect timeout → attempt 2, Connecting
-        //   ~16s: watchdog trips → Error
+        //   ~16s: watchdog trips → LinkLost
         //   ~21s: reconnect timeout → attempt 3, Connecting
-        //   ~23s: watchdog trips → Error
-        //   ~28s: reconnect timeout → retries exhausted, stays in Error
+        //   ~23s: watchdog trips → LinkLost
+        //   ~28s: reconnect timeout → retries exhausted, stays in LinkLost
         //
-        // Wait 35s total — well past the 28s exhaust point — then verify Error.
+        // Wait 35s total — well past the 28s exhaust point — then verify LinkLost.
         QTest::qWait(35000);
-        QCOMPARE(conn.state(), ConnectionState::Error);
+        QCOMPARE(conn.state(), ConnectionState::LinkLost);
 
         // Wait another 7s to confirm no further state changes (reconnect timer
-        // would fire at 33s from exhaust point if unbounded — this rules it out).
+        // would fire at 33s from exhaust point if unbounded — rules it out).
         QTest::qWait(7000);
-        QCOMPARE(conn.state(), ConnectionState::Error);
+        QCOMPARE(conn.state(), ConnectionState::LinkLost);
 
         conn.disconnect();
     }

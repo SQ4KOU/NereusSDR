@@ -6,6 +6,7 @@
 // (P1RadioConnection.cpp, P2RadioConnection.cpp); no upstream code is
 // reproduced in this header.
 
+#include "ConnectionState.h"
 #include "RadioDiscovery.h"
 #include "HardwareProfile.h"
 
@@ -29,14 +30,6 @@ enum class RadioConnectionError {
     NoDataTimeout,
     UnknownBoardType,
     ProtocolMismatch
-};
-
-// Connection state for a radio.
-enum class ConnectionState {
-    Disconnected,
-    Connecting,
-    Connected,
-    Error
 };
 
 // Antenna routing parameters — Phase 3P-I-a.
@@ -188,5 +181,4 @@ protected:
 
 } // namespace NereusSDR
 
-Q_DECLARE_METATYPE(NereusSDR::ConnectionState)
 Q_DECLARE_METATYPE(NereusSDR::RadioConnectionError)

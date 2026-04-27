@@ -1139,7 +1139,7 @@ void P1RadioConnection::onReadyRead()
 // (onEp2PacerTick) to match Thetis' 381 pps audio-clock cadence.
 //
 // Detects ep6 silence: if no frame has arrived for kWatchdogSilenceMs,
-// transitions to Error and arms the reconnect timer.
+// transitions to LinkLost and arms the reconnect timer (Phase 3Q-1).
 // Applies to both Connected (initial silence detection) and Connecting
 // (reconnect attempt timed out — the retry got no response).
 // Source: NereusSDR design doc §3.6.
@@ -1171,13 +1171,15 @@ void P1RadioConnection::onWatchdogTick()
     if (silenceMs > kWatchdogSilenceMs) {
         qCWarning(lcConnection) << "P1: Watchdog — ep6 silent for" << silenceMs
                                 << "ms (state=" << static_cast<int>(cs)
-                                << "); transitioning to Error and scheduling reconnect";
+                                << "); transitioning to LinkLost and scheduling reconnect";
         m_watchdogTimer->stop();
         if (m_ep2PacerTimer) {
             m_ep2PacerTimer->stop();
         }
         m_reconnectedLogged = false;
-        setState(ConnectionState::Error);
+        // Phase 3Q-1: ConnectionState::Error removed from the 5-value enum.
+        // Watchdog timeout (was Connected, frames stopped) → LinkLost.
+        setState(ConnectionState::LinkLost);
         emit errorOccurred(RadioConnectionError::NoDataTimeout,
                            QStringLiteral("Radio stopped responding"));
 
@@ -1236,7 +1238,7 @@ void P1RadioConnection::onEp2PacerTick()
 // onReconnectTimeout
 //
 // Called when the single-shot reconnect timer fires.
-// Implements bounded retries: up to kMaxReconnectAttempts, then stays in Error.
+// Implements bounded retries: up to kMaxReconnectAttempts, then stays in LinkLost.
 // Source: NereusSDR design doc §3.6.
 // ---------------------------------------------------------------------------
 void P1RadioConnection::onReconnectTimeout()
@@ -1246,7 +1248,7 @@ void P1RadioConnection::onReconnectTimeout()
 
     if (m_reconnectAttempts >= kMaxReconnectAttempts) {
         qCWarning(lcConnection) << "P1: Reconnect — bounded retries exhausted after"
-                                << kMaxReconnectAttempts << "attempts; staying in Error";
+                                << kMaxReconnectAttempts << "attempts; staying in LinkLost";
         // Stay in Error — user must explicitly call connectToRadio() to reset.
         return;
     }
