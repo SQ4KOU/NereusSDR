@@ -1032,6 +1032,26 @@ nereus_add_test(tst_tx_channel_tune_tone)
 #   Ports Thetis wdsp/channel.c:259-294 and wdsp/cfir.c:233-238 [v2.10.3.13].
 nereus_add_test(tst_tx_channel_running)
 
+# ── Phase 3M-1a Task G.1 (production loop bench fix): TxChannel TX I/Q pump ──
+# Verifies the fexchange2 → sendTxIq production loop wired in 3M-1a Task G.1.
+# Test cases:
+#   - setConnection(nullptr) / setMicRouter(nullptr): null-safety (no crash)
+#   - setConnection(non-null) then null: detach — no crash
+#   - driveOneTxBlock with no connection: null-guard path — no crash
+#   - driveOneTxBlock with no mic router: silence-fill path — no crash
+#   - setRunning(true) + connection attached: no crash
+#   - Repeated toggle cycles (5×) with connection: no crash
+#   - Timer fires → sendTxIq reaches MockConnection (≥1 call in 30 ms)
+#   - lastN == kTxDspBufferSize (4096) — correct sample count per call
+#   - Multiple timer ticks → callCount ≥ 2
+#   - After setRunning(false) timer stops — no further calls (±1 tolerance)
+#   - Detach connection while running: null-guard in driveOneTxBlock — no crash
+#   - CountingMicSource::pullSamples() is called by driveOneTxBlock (≥1)
+#   - Null mic router still calls sendTxIq (silence path, not skipped)
+#   - setRunning(false) with no prior on: no crash
+#   - Teardown order (setConnection(nullptr) before connection destructs): safe
+nereus_add_test(tst_tx_channel_production_loop)
+
 # ── Phase 3M-1a Task D.1: TxMicRouter interface + NullMicSource stub ─────────
 # Pure unit test: header-only interface + NullMicSource concrete stub.
 # Covers typical buffer sizes (64/128/256/1024), defensive edge cases

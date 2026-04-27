@@ -74,10 +74,17 @@ warren@wpratt.com
 //   2026-04-26 — setRunning(bool) / isRunning() / setStageRunning(Stage, bool)
 //                 implemented by J.J. Boyd (KG4VCF) during 3M-1a Task C.4.
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-26 — setConnection() / setMicRouter() / driveOneTxBlock() /
+//                 m_txProductionTimer implemented by J.J. Boyd (KG4VCF) during
+//                 3M-1a Task G.1 (TX I/Q production loop). AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"
 #include "LogCategories.h"
+#include "RadioConnection.h"
+#include "TxMicRouter.h"
+#include "WdspEngine.h"    // kTxDspBufferSize constant
 
 // WDSP API declarations (SetTXAPostGen*, fexchange2, etc.) — guarded by
 // HAVE_WDSP internally.  Include unconditionally; the header guards itself.
@@ -110,6 +117,31 @@ TxChannel::TxChannel(int channelId, QObject* parent)
     : QObject(parent)
     , m_channelId(channelId)
 {
+    // Allocate fexchange2 I/O buffers at construction.
+    // Size matches kTxDspBufferSize (4096 samples) from cmaster.c:180 [v2.10.3.13].
+    // Buffers are reused across driveOneTxBlock() calls — no per-call allocation.
+    const int n = WdspEngine::kTxDspBufferSize;
+    m_inI.assign(n, 0.0f);
+    m_inQ.assign(n, 0.0f);
+    m_outI.assign(n, 0.0f);
+    m_outQ.assign(n, 0.0f);
+    m_outInterleaved.assign(n * 2, 0.0f);
+
+    // Production timer — drives driveOneTxBlock() while TX is active.
+    // Cadence: 5 ms, matching the P2 connection's m_txIqTimer consumer (E.6).
+    // Qt::PreciseTimer reduces OS scheduler jitter on the audio path.
+    //
+    // At 96 kHz DSP rate with 4096 samples/block → one block = 42.67 ms.
+    // The SPSC ring (kTxIqRingCapacityFloats = 2048 floats = 1024 samples)
+    // absorbs burst output from fexchange2 between 5 ms drain cycles.
+    // The connection thread's 1.25 ms nominal P2 UDP drain empties the ring
+    // faster than this timer fills it, so ring overflow is not a concern at
+    // the 5 ms tick rate.
+    m_txProductionTimer = new QTimer(this);
+    m_txProductionTimer->setTimerType(Qt::PreciseTimer);
+    m_txProductionTimer->setInterval(5);  // 5 ms — matches E.6 consumer cadence
+    connect(m_txProductionTimer, &QTimer::timeout, this, &TxChannel::driveOneTxBlock);
+
     qCInfo(lcDsp) << "TxChannel" << m_channelId
                   << "wrapper constructed; WDSP TXA pipeline (31 stages) "
                      "was built by OpenChannel(type=1) in WdspEngine";
@@ -369,6 +401,32 @@ void TxChannel::setTuneTone(bool on, double freqHz, double magnitude)
 // ---------------------------------------------------------------------------
 void TxChannel::setRunning(bool on)
 {
+    // Always update the run-state flag and start/stop the production timer,
+    // regardless of whether the WDSP channel is open.  This ensures the timer
+    // fires correctly in unit-test builds (HAVE_WDSP compiled in but no
+    // OpenChannel called — txa[].rsmpin.p is null) and in stub builds (!HAVE_WDSP).
+    //
+    // driveOneTxBlock() guards against null m_connection and the HAVE_WDSP
+    // null-channel path, so it is safe to let the timer fire in both cases.
+    m_running = on;
+
+    // Start / stop the TX I/Q production timer (3M-1a G.1).
+    // The timer drives driveOneTxBlock() which calls fexchange2 and pushes
+    // output to m_connection->sendTxIq() (the SPSC ring producer side).
+    if (on) {
+        if (m_txProductionTimer) {
+            m_txProductionTimer->start();
+        }
+    } else {
+        if (m_txProductionTimer) {
+            m_txProductionTimer->stop();
+        }
+    }
+
+    qCDebug(lcDsp) << "TxChannel" << m_channelId
+                   << (on ? "started (channel ON, production timer running)"
+                          : "stopped (channel OFF, drain, production timer stopped)");
+
 #ifdef HAVE_WDSP
     // Null-guard: txa[] is a zero-initialized global array; if OpenChannel was
     // never called for this channel ID (e.g. unit-test builds that link WDSP
@@ -376,17 +434,10 @@ void TxChannel::setRunning(bool on)
     // Check the sentinel rsmpin.p — if null, the channel is uninitialized.
     // Match the same guard used in stageRunning() and setTuneTone().
     if (txa[m_channelId].rsmpin.p == nullptr) {
-        m_running = on;  // track state even without an open channel
-        return;
+        return;   // m_running and timer already updated above
     }
 
     if (on) {
-        // TODO [3M-1a-G.1]: when RadioModel wires TxMicRouter into TxChannel,
-        //   call m_micRouter->pullSamples(rsmpinInputBuffer, kDspBufferSize) here
-        //   to feed the rsmpin (stage 0). For 3M-1a TUNE-only, the gen1 PostGen
-        //   at stage 22 overwrites the input buffer, so NullMicSource's zero-fill
-        //   is functionally inert.
-
         // Activate cfir: custom CIC FIR filter required for Protocol 2 output.
         // From Thetis wdsp/cfir.c:233-238 [v2.10.3.13] — SetTXACFIRRun.
         // From Thetis cmaster.cs:526-527 [v2.10.3.13]:
@@ -410,10 +461,6 @@ void TxChannel::setRunning(bool on)
         SetTXACFIRRun(m_channelId, 0);   // cfir.c:233 [v2.10.3.13]
     }
 #endif // HAVE_WDSP
-
-    m_running = on;
-    qCDebug(lcDsp) << "TxChannel" << m_channelId
-                   << (on ? "started (channel ON)" : "stopped (channel OFF, drain)");
 }
 
 // ---------------------------------------------------------------------------
@@ -563,6 +610,134 @@ void TxChannel::setStageRunning(Stage s, bool run)
                          << "3M-1b/3M-3a. No-op in 3M-1a.";
         return;
     }
+}
+
+// ---------------------------------------------------------------------------
+// setConnection()
+//
+// Attach or detach the RadioConnection that will receive TX I/Q output.
+// Non-owning: caller (RadioModel) owns the connection and TxChannel.
+// Pass nullptr to detach before connection teardown.
+//
+// Thread safety: call from the main thread only.  driveOneTxBlock() reads
+// m_connection under the timer (QTimer fires on the main thread event loop),
+// so no synchronization is needed as long as this setter and the timer
+// share the main thread.  If the timer is ever moved to a worker thread,
+// add an atomic or mutex here.
+// ---------------------------------------------------------------------------
+void TxChannel::setConnection(RadioConnection* conn)
+{
+    m_connection = conn;
+    qCDebug(lcDsp) << "TxChannel" << m_channelId
+                   << "connection" << (conn ? "attached" : "detached");
+}
+
+// ---------------------------------------------------------------------------
+// setMicRouter()
+//
+// Attach or detach the TxMicRouter used as fexchange2 input source.
+// Non-owning: caller (RadioModel) owns the unique_ptr.
+// In 3M-1a, NullMicSource provides zero-padded silence — functionally
+// inert because gen1 PostGen overwrites the rsmpin input at TXA stage 22.
+//
+// Thread safety: see setConnection() note above.
+// ---------------------------------------------------------------------------
+void TxChannel::setMicRouter(TxMicRouter* router)
+{
+    m_micRouter = router;
+    qCDebug(lcDsp) << "TxChannel" << m_channelId
+                   << "mic router" << (router ? "attached" : "detached");
+}
+
+// ---------------------------------------------------------------------------
+// driveOneTxBlock()
+//
+// Drive one fexchange2 call: pull m_inI.size() samples from the mic router,
+// call fexchange2(channelId, inI, inQ, outI, outQ, &error), interleave the
+// output, and push to m_connection->sendTxIq() (the SPSC ring producer side).
+//
+// Called by m_txProductionTimer on every 5 ms tick while m_running is true.
+//
+// In 3M-1a TUNE-only mode:
+//   - NullMicSource fills m_inI with zeros; m_inQ stays zero.
+//   - WDSP gen1 PostGen (TXA stage 22, set by setTuneTone()) overwrites the
+//     zero input with the TUNE sine carrier before bp0 processes it.
+//   - fexchange2 output is the modulated I/Q stream ready for the radio DUC.
+//
+// Guard conditions (all return early):
+//   - !m_running: timer should not fire, but guard in case of race at stop.
+//   - !m_connection: connection not yet injected or already detached.
+//   - m_inI.empty(): buffers not allocated (should never happen after ctor).
+//
+// WDSP guard: without HAVE_WDSP, fexchange2 is not available; the method
+// pushes zeros (silence) to m_connection->sendTxIq() via the pre-zeroed
+// m_outInterleaved buffer. This keeps the ring populated in stub builds
+// (unit tests, CI without WDSP) so connection-side drain path stays warm.
+// ---------------------------------------------------------------------------
+void TxChannel::driveOneTxBlock()
+{
+    if (!m_running || !m_connection) {
+        return;
+    }
+
+    const int n = static_cast<int>(m_inI.size());
+    if (n == 0) {
+        return;
+    }
+
+    // Pull mic samples from the router.
+    // In 3M-1a: NullMicSource writes n zeros to m_inI (functionally inert
+    // during TUNE because gen1 PostGen overwrites the rsmpin stage input).
+    // m_inQ stays zero throughout (real mono mic input; Q=0 for real signals).
+    if (m_micRouter) {
+        // pullSamples fills the I buffer with mono mic samples.
+        // Q channel for real mic input is zero (WDSP handles SSB modulation).
+        m_micRouter->pullSamples(m_inI.data(), n);
+        // m_inQ is already pre-zeroed and only zeroed again on first call;
+        // NullMicSource writes zeros, so both are equivalent in 3M-1a.
+        std::fill(m_inQ.begin(), m_inQ.end(), 0.0f);
+    } else {
+        // No mic router — send pure silence to WDSP input.
+        // gen1 PostGen will still inject the TUNE carrier downstream.
+        std::fill(m_inI.begin(), m_inI.end(), 0.0f);
+        std::fill(m_inQ.begin(), m_inQ.end(), 0.0f);
+    }
+
+#ifdef HAVE_WDSP
+    // fexchange2 — drives the WDSP TX channel.
+    //
+    // gen1 PostGen (set by setTuneTone()) injects the TUNE tone after bp0;
+    // output is the modulated I/Q stream ready for the radio's DUC.
+    //
+    // From Thetis wdsp/iobuffs.c [v2.10.3.13] — fexchange2 prototype:
+    //   void fexchange2(int id, double* Iin, double* Qin,
+    //                   double* Iout, double* Qout, int* error)
+    // NereusSDR uses the float variant declared in wdsp_api.h (INREAL=float).
+    int error = 0;
+    fexchange2(m_channelId,
+               m_inI.data(), m_inQ.data(),
+               m_outI.data(), m_outQ.data(),
+               &error);
+    if (error != 0) {
+        qCWarning(lcDsp) << "TxChannel" << m_channelId
+                         << "fexchange2 error" << error;
+        return;
+    }
+#endif // HAVE_WDSP
+
+    // Interleave I/Q into [I0,Q0,I1,Q1,...] for sendTxIq's layout.
+    // Without HAVE_WDSP, m_outI/m_outQ were never written so m_outInterleaved
+    // stays all-zeros (silence stream) — keeps the ring warm in stub builds.
+    for (int i = 0; i < n; ++i) {
+        m_outInterleaved[2 * i]     = m_outI[i];
+        m_outInterleaved[2 * i + 1] = m_outQ[i];
+    }
+
+    // Push to connection's SPSC ring (producer side).
+    // The connection thread's E.6 drain (P2 port 1029 / P1 EP2 zones)
+    // consumes the ring and emits to UDP.
+    // sendTxIq(iq, n): n = number of complex samples; buffer has 2*n floats.
+    m_connection->sendTxIq(m_outInterleaved.data(), n);
 }
 
 } // namespace NereusSDR

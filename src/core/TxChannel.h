@@ -77,13 +77,24 @@ warren@wpratt.com
 //                 added by J.J. Boyd (KG4VCF) during 3M-1a Task C.4 (channel
 //                 state + 3M-1a active-stage activation). AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-04-26 — setConnection() / setMicRouter() / driveOneTxBlock() /
+//                 m_txProductionTimer added by J.J. Boyd (KG4VCF) during
+//                 3M-1a Task G.1 (TX I/Q production loop — bench fix:
+//                 fexchange2 output now reaches RadioConnection::sendTxIq).
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
 
 #include <QObject>
+#include <QTimer>
+
+#include <vector>
 
 namespace NereusSDR {
+
+class RadioConnection;
+class TxMicRouter;
 
 // Per-transmitter WDSP channel wrapper.
 //
@@ -269,6 +280,26 @@ public:
                      double freqHz   = 0.0,
                      double magnitude = kMaxToneMag);
 
+    // ── TX I/Q production loop (3M-1a G.1) ──────────────────────────────────
+    //
+    // Attach or detach the RadioConnection that receives TX I/Q output from
+    // fexchange2.  Non-owning; the caller (RadioModel) owns the connection.
+    // Pass nullptr to detach (e.g. on disconnect).  Safe to call from the
+    // main thread at any time; driveOneTxBlock() guards against null.
+    //
+    // Must be called before setRunning(true) to get samples on the wire.
+    void setConnection(RadioConnection* conn);
+
+    // Attach or detach the mic router used as fexchange2 input source.
+    // Non-owning; the caller (RadioModel) owns the unique_ptr.
+    // In 3M-1a, NullMicSource provides zero-padded silence — functionally
+    // inert because gen1 PostGen overwrites the input during TUNE.
+    // Pass nullptr to detach.  Safe to call from the main thread.
+    //
+    // TODO [3M-1b]: Replace NullMicSource with PcMicSource / RadioMicSource
+    //   per user preference and BoardCapabilities. See TxMicRouter.h §TODO.
+    void setMicRouter(TxMicRouter* router);
+
     // ── Channel state (3M-1a C.4) ────────────────────────────────────────────
     //
     // Activate or deactivate the WDSP TXA channel.
@@ -352,6 +383,42 @@ public:
     void setStageRunning(Stage s, bool run);
 
 private:
+    // ── TX I/Q production loop internals (3M-1a G.1) ─────────────────────────
+
+    // Drive one fexchange2 call: pull m_inI.size() samples from the mic
+    // router (zeros in 3M-1a), call fexchange2(channelId, …), interleave
+    // the output, and push to m_connection->sendTxIq().
+    //
+    // Called by m_txProductionTimer on every tick while m_running is true.
+    // Must not block; guards against null m_connection and uninitialized
+    // WDSP channel.
+    void driveOneTxBlock();
+
+    // Production timer — fires at 5 ms intervals while TX is active.
+    // Cadence matches the P2 connection's m_txIqTimer consumer (E.6):
+    // both run at 5 ms = 200 drain cycles/sec.  fexchange2 processes
+    // kTxDspBufferSize (4096) samples at 96 kHz → one block ≈ 42.67 ms;
+    // the ring absorbs the burst and the consumer drains it at 240 spp
+    // per 1.25 ms ideal P2 cadence.
+    //
+    // Qt::PreciseTimer: reduces OS-scheduler jitter on the audio thread.
+    QTimer* m_txProductionTimer{nullptr};
+
+    // Non-owning pointers — injected by RadioModel, cleared on disconnect.
+    RadioConnection* m_connection{nullptr};  // sendTxIq recipient
+    TxMicRouter*     m_micRouter{nullptr};   // mic samples (NullMicSource for 3M-1a)
+
+    // fexchange2 I/O buffers — allocated once in constructor, reused each call.
+    // Size: kTxDspBufferSize (4096) samples; same value used by WdspEngine
+    // when calling OpenChannel for the TX channel (cmaster.c:180 [v2.10.3.13]).
+    std::vector<float> m_inI;
+    std::vector<float> m_inQ;
+    std::vector<float> m_outI;
+    std::vector<float> m_outQ;
+    // Interleaved [I0,Q0,I1,Q1,…] output for sendTxIq.
+    // Size: 2 × kTxDspBufferSize floats.
+    std::vector<float> m_outInterleaved;
+
     const int m_channelId;
     bool m_running{false};
 };

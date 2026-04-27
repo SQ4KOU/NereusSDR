@@ -973,7 +973,20 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             qCWarning(lcDsp) << "G.1: createTxChannel(1) returned nullptr — "
                                 "TUNE will be unavailable until WDSP re-initializes.";
         } else {
-            qCInfo(lcDsp) << "G.1: TX channel 1 created — TUNE path ready.";
+            // 3M-1a G.1: wire the production loop — inject the connection
+            // and mic router so driveOneTxBlock() can push fexchange2 output
+            // to the SPSC ring on every 5 ms production-timer tick.
+            //
+            // setConnection(m_connection): non-owning; RadioModel owns the
+            //   connection.  Cleared in teardownConnection() before the
+            //   connection is destroyed.
+            // setMicRouter(m_txMicRouter.get()): NullMicSource for 3M-1a
+            //   (silence stream; gen1 PostGen overwrites with TUNE carrier).
+            //   Non-owning; RadioModel owns the unique_ptr.
+            m_txChannel->setConnection(m_connection);
+            m_txChannel->setMicRouter(m_txMicRouter.get());
+            qCInfo(lcDsp) << "G.1: TX channel 1 created — TUNE path ready "
+                             "(production loop wired: connection + NullMicSource).";
         }
         if (rxCh) {
             // Apply slice state to WDSP channel (no longer hardcoded)
@@ -2333,7 +2346,17 @@ void RadioModel::teardownConnection()
     // Stop audio output
     m_audioEngine->stop();
 
-    // 3M-1a G.1: clear non-owning TX channel view before WdspEngine::shutdown()
+    // 3M-1a G.1: detach the production loop pointers before clearing m_txChannel.
+    // setConnection(nullptr) stops driveOneTxBlock() from calling sendTxIq on
+    // a destroyed connection; setMicRouter(nullptr) drops the TxMicRouter ref.
+    // The production timer is stopped by setRunning(false) (MoxController
+    // txaFlushed path), but guard here in case TX was still active at teardown.
+    if (m_txChannel) {
+        m_txChannel->setConnection(nullptr);
+        m_txChannel->setMicRouter(nullptr);
+    }
+
+    // Clear the non-owning TX channel view before WdspEngine::shutdown()
     // destroys the underlying WDSP channel. Any in-flight txReady / txaFlushed
     // slot calls are queued and will see m_txChannel == nullptr after this clear.
     // WdspEngine::shutdown() → destroyTxChannel(1) handles the actual WDSP teardown.
