@@ -157,8 +157,11 @@ mw0lge@grange-lane.co.uk
 #include <QPoint>
 #include <QMap>
 #include <QTimer>
+#include <QPropertyAnimation>
 
 #include <utility>
+
+#include "core/ConnectionState.h"
 
 // GPU spectrum: QRhiWidget base class for Metal/Vulkan/D3D12 rendering.
 // CPU fallback: QWidget with QPainter.
@@ -242,6 +245,10 @@ const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count);
 // From gpu-waterfall.md lines 274-289
 class SpectrumWidget : public SpectrumBaseClass {
     Q_OBJECT
+
+    // Phase 3Q-8: animated dim factor for the disconnect overlay.
+    // 1.0 = no dim (connected), 0.4 = 60% dim (disconnected, after 800 ms fade).
+    Q_PROPERTY(float disconnectFade READ disconnectFade WRITE setDisconnectFade)
 
 public:
     explicit SpectrumWidget(QWidget* parent = nullptr);
@@ -457,6 +464,9 @@ public:
     void updateVfoPositions();
 
 public slots:
+    // Phase 3Q-8: update connection state for the disconnect overlay.
+    void setConnectionState(NereusSDR::ConnectionState s);
+
     // Feed a new FFT frame. binsDbm are dBm values, one per frequency bin.
     // Called from the main thread after FFTEngine delivers the frame.
     void updateSpectrum(int receiverId, const QVector<float>& binsDbm);
@@ -471,6 +481,10 @@ public slots:
     void clearWaterfallHistory();
 
 signals:
+    // Phase 3Q-8: emitted on a left-click while not Connected.
+    // MainWindow wires this to showConnectionPanel().
+    void disconnectedClickRequest();
+
     // Emitted when user clicks on spectrum/waterfall to tune
     void frequencyClicked(double hz);
     // Emitted when user drags a filter edge
@@ -504,6 +518,18 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
 
 private:
+    // ---- Phase 3Q-8: disconnect overlay state ----
+    NereusSDR::ConnectionState m_connState{NereusSDR::ConnectionState::Disconnected};
+    float m_disconnectFade{1.0f};  // animated; 1.0 connected, 0.4 disconnected
+    QPropertyAnimation* m_fadeAnim{nullptr};
+
+    float disconnectFade() const { return m_disconnectFade; }
+    void  setDisconnectFade(float f) { m_disconnectFade = f; update(); }
+
+    // Renders the dim tint + DISCONNECTED label. Called from paintEvent
+    // tail when m_connState != Connected.
+    void paintDisconnectOverlay(QPainter& p);
+
     // ---- Drawing helpers ----
     void drawGrid(QPainter& p, const QRect& specRect);
     void drawSpectrum(QPainter& p, const QRect& specRect);

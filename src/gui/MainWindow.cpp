@@ -769,6 +769,10 @@ void MainWindow::buildUI()
         }
     });
 
+    // Phase 3Q-8: clicking the spectrum while disconnected opens ConnectionPanel.
+    connect(m_spectrumWidget, &SpectrumWidget::disconnectedClickRequest,
+            this, &MainWindow::showConnectionPanel);
+
     // Wire BandPlanManager → SpectrumWidget so the bandplan strip renders on launch.
     m_spectrumWidget->setBandPlanManager(&m_radioModel->bandPlanManagerMutable());
 
@@ -3098,6 +3102,11 @@ void MainWindow::showAudioDiagnoseDialog()
 
 void MainWindow::onConnectionStateChanged()
 {
+    // Phase 3Q-8: forward state to the spectrum widget for the disconnect overlay.
+    if (m_spectrumWidget) {
+        m_spectrumWidget->setConnectionState(m_radioModel->connectionState());
+    }
+
     if (m_radioModel->isConnected()) {
         m_radioModelLabel->setText(m_radioModel->name());
         m_radioModelLabel->setStyleSheet(QStringLiteral(

@@ -120,6 +120,7 @@
 #include "models/BandPlanManager.h"
 
 #include <QHoverEvent>
+#include <QPropertyAnimation>
 
 #include <QDateTime>
 #include <QTimeZone>
@@ -1283,6 +1284,12 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
     // HIGH SWR / PA safety overlay — painted last so it sits on top of all
     // other chrome. From Thetis display.cs:4183-4201 [v2.10.3.13].
     paintHighSwrOverlay(p);
+
+    // Phase 3Q-8: disconnect overlay (dim tint + DISCONNECTED label).
+    // Drawn after all spectrum chrome so it sits above everything.
+    if (m_connState != ConnectionState::Connected) {
+        paintDisconnectOverlay(p);
+    }
 
     // Reposition VFO flag widgets every frame — ensures flag tracks marker
     // exactly with no frame delay. From AetherSDR: updatePosition called
@@ -2632,6 +2639,14 @@ static int specHFromHeight(int widgetH, float spectrumFrac, int chromeH)
 
 void SpectrumWidget::mousePressEvent(QMouseEvent* event)
 {
+    // Phase 3Q-8: while disconnected, swallow all left-clicks and signal
+    // MainWindow to open the ConnectionPanel instead.
+    if (m_connState != ConnectionState::Connected
+        && event->button() == Qt::LeftButton) {
+        emit disconnectedClickRequest();
+        return;
+    }
+
     int w = width();
     int h = height();
     int specH = specHFromHeight(h, m_spectrumFrac, kFreqScaleH + kDividerH);
@@ -3939,6 +3954,56 @@ void SpectrumWidget::updateVfoPositions()
             vfo->raise();
         }
     }
+}
+
+// ---- Phase 3Q-8: disconnect overlay ----------------------------------------
+
+void SpectrumWidget::setConnectionState(ConnectionState s)
+{
+    if (m_connState == s) {
+        return;
+    }
+    const bool wasConnected = (m_connState == ConnectionState::Connected);
+    const bool isConnected = (s == ConnectionState::Connected);
+    m_connState = s;
+
+    if (wasConnected && !isConnected) {
+        // Connected → not-Connected: fade dim factor 1.0 → 0.4 over 800 ms.
+        if (!m_fadeAnim) {
+            m_fadeAnim = new QPropertyAnimation(this, "disconnectFade");
+            m_fadeAnim->setDuration(800);
+        }
+        m_fadeAnim->stop();
+        m_fadeAnim->setStartValue(1.0f);
+        m_fadeAnim->setEndValue(0.4f);
+        m_fadeAnim->start();
+    } else if (!wasConnected && isConnected) {
+        // not-Connected → Connected: snap back to full opacity.
+        if (m_fadeAnim) {
+            m_fadeAnim->stop();
+        }
+        m_disconnectFade = 1.0f;
+    }
+    update();
+}
+
+void SpectrumWidget::paintDisconnectOverlay(QPainter& p)
+{
+    // Dim tint over the whole widget — dim factor goes 0 (no tint) → 0.6 (60% dim)
+    // as m_disconnectFade animates from 1.0 → 0.4.
+    const float tint = std::clamp(1.0f - m_disconnectFade, 0.0f, 0.6f);
+    if (tint > 0.001f) {
+        p.fillRect(rect(), QColor(10, 12, 20, int(tint * 235)));
+    }
+
+    // Centred "DISCONNECTED" label.
+    QFont f = p.font();
+    f.setPointSize(22);
+    f.setBold(true);
+    f.setLetterSpacing(QFont::PercentageSpacing, 122);
+    p.setFont(f);
+    p.setPen(QColor("#c14848"));
+    p.drawText(rect(), Qt::AlignCenter, QStringLiteral("DISCONNECTED"));
 }
 
 } // namespace NereusSDR
