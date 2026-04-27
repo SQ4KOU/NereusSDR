@@ -3066,6 +3066,17 @@ void MainWindow::onConnectionStateChanged()
             m_radioModel->connection()->radioInfo().boardType);
         m_stepAttController->setMaxAttenuation(caps.attenuator.maxDb);
         m_stepAttController->loadSettings(m_radioModel->connection()->radioInfo().macAddress);
+
+        // Phase 3Q Task 5 — auto-close: 1 s after connect, accept() the panel if open.
+        // Fires on transitions TO Connected only (not on repeated Connected emits).
+        if (m_connectionPanel && m_connectionPanel->isVisible()) {
+            QTimer::singleShot(1000, this, [this]() {
+                if (m_connectionPanel && m_connectionPanel->isVisible()
+                    && m_radioModel->isConnected()) {
+                    m_connectionPanel->accept();
+                }
+            });
+        }
     } else {
         m_radioModelLabel->setText(QStringLiteral("—"));
         m_radioModelLabel->setStyleSheet(QStringLiteral(
@@ -3081,6 +3092,21 @@ void MainWindow::onConnectionStateChanged()
 
         // Disconnect step attenuator from radio
         m_stepAttController->setRadioConnection(nullptr);
+
+        // Phase 3Q Task 5 — auto-open: on disconnect (after having been connected),
+        // open the ConnectionPanel so the user can reconnect.
+        // Guard: m_autoReconnectInProgress suppresses the panel during background
+        // auto-reconnect (Task 17), and the very first state read at startup is
+        // Disconnected which should not open the panel.
+        // The panel itself is non-modal (show/raise), matching the current pattern.
+        if (!m_autoReconnectInProgress) {
+            // Only open if we were previously connected (transition from Connected,
+            // not the initial Disconnected state at startup). We detect this by
+            // checking if the model has ever reported a radio name — set on connect.
+            if (!m_radioModel->name().isEmpty()) {
+                showConnectionPanel();
+            }
+        }
     }
 }
 

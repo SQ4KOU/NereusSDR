@@ -1,6 +1,8 @@
 // =================================================================
 // tests/tst_add_custom_radio_dialog.cpp  (NereusSDR)
 // =================================================================
+// no-port-check: test file is NereusSDR-original; the frmAddCustomRadio.cs
+// reference above is a comment describing what is being tested, not a port.
 //
 // Phase 3Q Task 4 — widget-level coverage for the rebuilt Add Custom
 // Radio dialog. The dialog is a NereusSDR port of Thetis

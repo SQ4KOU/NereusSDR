@@ -763,3 +763,9 @@ target_link_libraries(tst_radio_discovery_probe PRIVATE Qt6::Network)
 # saveOfflineButton + probeButton objectNames accessible via findChild.
 nereus_add_test(tst_add_custom_radio_dialog)
 
+# ── Phase 3Q Task 5: ConnectionPanel state pills — threshold logic ─────────────
+# 4 tests: online < 60s, stale 60s-5min, offline > 5min, offline when never seen.
+# Exercises statePillForLastSeen() static method — pure function, no radio required.
+# NereusSDR-original; no Thetis attribution needed.
+nereus_add_test(tst_connection_panel_state_pills)
+
