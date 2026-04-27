@@ -758,3 +758,8 @@ nereus_add_test(tst_connection_state)
 nereus_add_test(tst_radio_discovery_probe)
 target_link_libraries(tst_radio_discovery_probe PRIVATE Qt6::Network)
 
+# ── Phase 3Q Task 4: AddCustomRadioDialog — SKU model picker + action buttons ──
+# 4 tests: Auto-detect at index 0, all 16 SKUs present in modelCombo,
+# saveOfflineButton + probeButton objectNames accessible via findChild.
+nereus_add_test(tst_add_custom_radio_dialog)
+
