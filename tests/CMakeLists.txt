@@ -819,6 +819,12 @@ nereus_add_test(tst_spectrum_widget_highswr_overlay)
 # Derives from Thetis display.cs:1569-1593 [v2.10.3.13] Display.MOX setter.
 nereus_add_test(tst_spectrum_widget_mox_overlay)
 
+# ── Phase 3M-1a H.2: MeterPoller TX bindings on MOX engage ───────────────────
+# Verifies setInTx(bool) switches poll set, idempotency, null guards in
+# pollTxMeters() and poll().  No live WDSP reads — headless state tests only.
+# Derives from Thetis dsp.cs:995-1050 [v2.10.3.13] CalculateTXMeter dispatch.
+nereus_add_test(tst_meter_poller_tx_bindings)
+
 # ── Phase 3M-0 Task 9: SWR Protection group box on Setup → Transmit ──────────
 # Verifies grpSWRProtectionControl has 5 controls with correct objectNames,
 # defaults, and verbatim tooltip text per

@@ -249,6 +249,7 @@ warren@wpratt.com
 #include "models/SliceModel.h"
 #include "widgets/VfoWidget.h"
 #include "core/RxChannel.h"
+#include "core/TxChannel.h"  // H.2: setTxChannel wiring
 #include "core/ReceiverManager.h"
 #include "core/AppSettings.h"
 #include "core/RadioDiscovery.h"
@@ -937,8 +938,28 @@ void MainWindow::buildUI()
             } else {
                 qCWarning(lcMeter) << "MeterPoller: RxChannel 0 still null after WDSP init";
             }
+
+            // H.2 (Phase 3M-1a): wire TxChannel to MeterPoller for TX meters.
+            // TxChannel is valid after WDSP initialization via createTxChannel().
+            // Guard: txChannel() is null before initialization; null guard in
+            // pollTxMeters() handles the case where it isn't set yet.
+            if (TxChannel* txCh = m_radioModel->txChannel()) {
+                m_meterPoller->setTxChannel(txCh);
+                qCDebug(lcMeter) << "MeterPoller: TxChannel wired for TX meters";
+            }
         });
     });
+
+    // H.2 (Phase 3M-1a): wire MoxController::moxStateChanged → MeterPoller::setInTx.
+    // Switches the poll set between RX meters (TX off) and TX meters (TX on).
+    // From Thetis dsp.cs:995-1050 [v2.10.3.13] CalculateTXMeter dispatch.
+    // Qt::QueuedConnection: ensures the flip happens at the start of the next
+    // event loop tick rather than mid-poll, matching Thetis's timer dispatch.
+    if (MoxController* mox = m_radioModel->moxController()) {
+        connect(mox, &MoxController::moxStateChanged,
+                m_meterPoller, &MeterPoller::setInTx,
+                Qt::QueuedConnection);
+    }
 
     // ── Phase 3M-0 Task 17: safety controller → status-bar wiring ────────────
     //
