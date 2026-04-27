@@ -1204,6 +1204,13 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
             Qt::QueuedConnection);
     m_dspThread->start();
 
+    // Phase 3Q-6: forward frame ticks to RadioModel::frameReceived() so
+    // TitleBar::ConnectionSegment can pulse its activity LED. Using a
+    // forwarding signal here means the segment never holds a raw
+    // RadioConnection* that could be recreated on reconnect.
+    connect(m_connection, &RadioConnection::frameReceived,
+            this, &RadioModel::frameReceived);
+
     // Meter data → MeterModel
     connect(m_connection, &RadioConnection::meterDataReceived,
             this, [](float fwd, float rev, float voltage, float current) {

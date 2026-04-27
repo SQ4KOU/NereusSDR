@@ -42,6 +42,10 @@
 //                 wires that to showFeatureRequestDialog. Matches
 //                 AetherSDR's pattern of the feature button being the
 //                 rightmost strip element.
+//   2026-04-27 — Phase 3Q-6: implemented ConnectionSegment — state dot,
+//                 radio name/IP text, ▲▼ Mbps readout, and 10 Hz
+//                 throttled activity LED. Inserted at position 1 in the
+//                 hbox (just after the menu bar). Design §4.1.
 // =================================================================
 
 #include "TitleBar.h"
@@ -52,6 +56,7 @@
 #include <QIcon>
 #include <QLabel>
 #include <QMenuBar>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
 #include <QPixmap>
@@ -59,6 +64,7 @@
 #include <QPushButton>
 #include <QSize>
 #include <QSizePolicy>
+#include <QTimer>
 
 namespace NereusSDR {
 
@@ -92,6 +98,138 @@ constexpr int kStripHeight = 32;
 
 } // namespace
 
+// =========================================================================
+// ConnectionSegment implementation
+// =========================================================================
+
+ConnectionSegment::ConnectionSegment(QWidget* parent)
+    : QWidget(parent)
+{
+    setFixedHeight(32);
+    setMinimumWidth(280);
+
+    // LED throttle: one-shot 100 ms timer that turns the LED off after a
+    // pulse. frameTick() drops calls that arrive while the timer is active,
+    // giving ≤10 Hz visible refresh on high-rate frame streams.
+    m_ledThrottle.setSingleShot(true);
+    m_ledThrottle.setInterval(100);  // 10 Hz max
+    connect(&m_ledThrottle, &QTimer::timeout, this, [this]() {
+        m_ledOn = false;
+        update();
+    });
+}
+
+void ConnectionSegment::setState(ConnectionState s)
+{
+    m_state = s;
+    update();
+}
+
+void ConnectionSegment::setRadio(const QString& name, const QHostAddress& ip)
+{
+    m_name = name;
+    m_ip   = ip;
+    update();
+}
+
+void ConnectionSegment::setRates(double rxMbps, double txMbps)
+{
+    m_rxMbps = rxMbps;
+    m_txMbps = txMbps;
+    update();
+}
+
+void ConnectionSegment::frameTick()
+{
+    if (!m_ledThrottle.isActive()) {
+        m_ledOn = true;
+        m_ledThrottle.start();
+        update();
+    }
+    // Otherwise drop — we already pulsed within the last 100 ms.
+}
+
+void ConnectionSegment::mousePressEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton) {
+        emit clicked();
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void ConnectionSegment::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    // ── State dot (left edge) ─────────────────────────────────────────────
+    const QRect dotRect(8, height() / 2 - 5, 9, 9);
+    QColor dotColor;
+    switch (m_state) {
+        case ConnectionState::Disconnected: dotColor = QColor("#445566"); break;
+        case ConnectionState::Probing:
+        case ConnectionState::Connecting:   dotColor = QColor("#d39c2a"); break;
+        case ConnectionState::Connected:    dotColor = QColor("#39c167"); break;
+        case ConnectionState::LinkLost:     dotColor = QColor("#c14848"); break;
+    }
+    p.setBrush(dotColor);
+    p.setPen(Qt::NoPen);
+    p.drawEllipse(dotRect);
+
+    // ── Text (depends on state) ───────────────────────────────────────────
+    int x = dotRect.right() + 8;
+    p.setPen(QColor("#a0b0c0"));
+
+    if (m_state == ConnectionState::Disconnected) {
+        p.drawText(QRect(x, 0, width() - x, height()),
+                   Qt::AlignVCenter | Qt::AlignLeft,
+                   QStringLiteral("Disconnected — click to connect"));
+        return;
+    }
+    if (m_state == ConnectionState::Probing || m_state == ConnectionState::Connecting) {
+        p.drawText(QRect(x, 0, width() - x, height()),
+                   Qt::AlignVCenter | Qt::AlignLeft,
+                   QStringLiteral("%1 %2…").arg(connectionStateName(m_state), m_name));
+        return;
+    }
+
+    // ── Connected: name (bold) · IP · ▲ rx ▼ tx · activity LED ──────────
+    QFont nameFont = p.font();
+    nameFont.setBold(true);
+    p.setFont(nameFont);
+    p.setPen(QColor("#e0eef8"));
+    p.drawText(QRect(x, 0, width() - x, height()),
+               Qt::AlignVCenter | Qt::AlignLeft, m_name);
+    QFontMetrics fm(nameFont);
+    x += fm.horizontalAdvance(m_name) + 10;
+
+    nameFont.setBold(false);
+    p.setFont(nameFont);
+    p.setPen(QColor("#7088a0"));
+    const QString ipStr = m_ip.toString();
+    p.drawText(QRect(x, 0, width() - x, height()),
+               Qt::AlignVCenter | Qt::AlignLeft, ipStr);
+    x += fm.horizontalAdvance(ipStr) + 12;
+
+    p.setPen(QColor("#90a0b0"));
+    const QString rates = QStringLiteral("▲ %1 Mb/s   ▼ %2 kb/s")
+        .arg(m_rxMbps, 0, 'f', 1).arg(int(m_txMbps * 1000));
+    p.drawText(QRect(x, 0, width() - x, height()),
+               Qt::AlignVCenter | Qt::AlignLeft, rates);
+    x += fm.horizontalAdvance(rates) + 8;
+
+    // ── Activity LED ──────────────────────────────────────────────────────
+    if (m_ledOn) {
+        p.setBrush(QColor("#5fff8a"));
+        p.setPen(Qt::NoPen);
+        p.drawEllipse(QRect(x, height() / 2 - 3, 6, 6));
+    }
+}
+
+// =========================================================================
+// TitleBar implementation
+// =========================================================================
+
 TitleBar::TitleBar(AudioEngine* audio, QWidget* parent)
     : QWidget(parent)
 {
@@ -103,7 +241,16 @@ TitleBar::TitleBar(AudioEngine* audio, QWidget* parent)
     m_hbox->setSpacing(kSpacing);
 
     // Position 0 is reserved for the menu bar (inserted via setMenuBar()).
-    // Until setMenuBar() runs, the layout is [stretch][app-name][stretch][master].
+    // The ConnectionSegment sits at position 1 (or 0 before the menu is
+    // inserted), between the menu bar and the centre label stretch.
+
+    // ── ConnectionSegment — Phase 3Q-6 ─────────────────────────────────
+    // Inserted as the first item. setMenuBar() will prepend the menu bar
+    // at index 0 pushing this to index 1. Until setMenuBar() runs the
+    // segment sits at index 0 — acceptable; it just moves right once the
+    // menu arrives.
+    m_connectionSegment = new ConnectionSegment(this);
+    m_hbox->addWidget(m_connectionSegment);
 
     // ── Left stretch ───────────────────────────────────────────────────────
     m_hbox->addStretch(1);

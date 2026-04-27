@@ -46,8 +46,16 @@
 //                 MainWindow wires that to its existing
 //                 showFeatureRequestDialog slot. Matches AetherSDR's
 //                 pattern of the feature button as the rightmost element.
+//   2026-04-27 — Phase 3Q-6: added ConnectionSegment — always-visible
+//                 connection state widget (dot + radio name/IP + Mbps +
+//                 activity LED). Inserted between menu bar and the
+//                 centre stretch. Design §4.1.
 // =================================================================
 
+#include "core/ConnectionState.h"
+
+#include <QHostAddress>
+#include <QTimer>
 #include <QWidget>
 
 class QHBoxLayout;
@@ -59,10 +67,59 @@ namespace NereusSDR {
 class AudioEngine;
 class MasterOutputWidget;
 
+// ConnectionSegment — always-visible connection-state indicator living
+// in the TitleBar, between the menu bar and the centre "NereusSDR" label.
+//
+// Visual layout (left → right within the segment):
+//   [9 px state dot]  [radio name (bold, white) · IP · ▲▼ Mbps · LED]
+//   — or when not connected:
+//   [9 px state dot]  ["Disconnected — click to connect"]
+//   — or when probing/connecting:
+//   [9 px state dot]  ["Probing 192.168.x.x…" / "Connecting to ANAN-G2…"]
+//
+// Click anywhere on the segment emits clicked() → MainWindow wires that
+// to showConnectionPanel().
+//
+// LED: pulses green on each frameReceived() tick, throttled to 10 Hz
+// max visible refresh so high-rate EP6/DDC streams pulse cleanly
+// instead of seizing.
+class ConnectionSegment : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit ConnectionSegment(QWidget* parent = nullptr);
+
+    void setState(ConnectionState s);
+    void setRadio(const QString& name, const QHostAddress& ip);
+    void setRates(double rxMbps, double txMbps);
+
+public slots:
+    // Pulse the activity LED. Throttled to 10 Hz — calls that arrive
+    // within the 100 ms window after a pulse are silently dropped.
+    void frameTick();
+
+signals:
+    void clicked();
+
+protected:
+    void mousePressEvent(QMouseEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
+
+private:
+    ConnectionState m_state{ConnectionState::Disconnected};
+    QString         m_name;
+    QHostAddress    m_ip;
+    double          m_rxMbps{0.0};
+    double          m_txMbps{0.0};
+    bool            m_ledOn{false};
+    QTimer          m_ledThrottle;
+};
+
 // TitleBar — thin 32 px host strip at the top of the main window.
 //
 // Layout (left → right):
 //   [menuBar, inserted at position 0 via setMenuBar()]
+//   [ConnectionSegment — state dot + radio info + activity LED]
 //   [stretch]
 //   [NereusSDR app-name label]
 //   [stretch]
@@ -92,6 +149,10 @@ public:
     // signal into AudioEngine::setSpeakersConfig.
     MasterOutputWidget* masterOutput() const { return m_master; }
 
+    // Non-owning accessor so MainWindow can wire connection-state signals
+    // and the activity LED. Phase 3Q-6.
+    ConnectionSegment* connectionSegment() const { return m_connectionSegment; }
+
 signals:
     // Emitted when the 💡 feature-request button is clicked. MainWindow
     // connects this to its showFeatureRequestDialog slot.
@@ -100,6 +161,7 @@ signals:
 private:
     QHBoxLayout*        m_hbox{nullptr};
     QMenuBar*           m_menuBar{nullptr};
+    ConnectionSegment*  m_connectionSegment{nullptr};
     MasterOutputWidget* m_master{nullptr};
     QPushButton*        m_featureBtn{nullptr};
 };

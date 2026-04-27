@@ -381,6 +381,12 @@ signals:
     // Raw interleaved I/Q for spectrum display (tapped before WDSP processing)
     void rawIqData(const QVector<float>& interleavedIQ);
 
+    // Phase 3Q-6: forwarded from the active RadioConnection::frameReceived()
+    // so TitleBar::ConnectionSegment can pulse its activity LED without
+    // holding a reference to a connection that may be recreated on reconnect.
+    // Re-emitted from wireConnectionSignals() for every new connection.
+    void frameReceived();
+
     // Emitted when onBandButtonClicked short-circuits in a user-visible way
     // (locked slice, XVTR no-seed). MainWindow connects this to the status
     // bar so the user learns why their band click did nothing — prevents

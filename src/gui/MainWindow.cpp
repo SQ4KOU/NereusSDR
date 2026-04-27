@@ -401,6 +401,30 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_titleBar, &TitleBar::featureRequestClicked,
             this, &MainWindow::showFeatureRequestDialog);
 
+    // ── Phase 3Q-6: ConnectionSegment wiring ────────────────────────────
+    {
+        auto* seg = m_titleBar->connectionSegment();
+
+        // State dot and text: driven by RadioModel's parametrized signal.
+        connect(m_radioModel, &RadioModel::connectionStateChanged,
+                seg, &ConnectionSegment::setState);
+
+        // Click → open the ConnectionPanel.
+        connect(seg, &ConnectionSegment::clicked,
+                this, &MainWindow::showConnectionPanel);
+
+        // Activity LED: forwarded frameReceived from RadioModel so we
+        // never need to re-wire when m_connection is recreated.
+        connect(m_radioModel, &RadioModel::frameReceived,
+                seg, &ConnectionSegment::frameTick);
+
+        // Seed the segment with the current state (Disconnected at launch)
+        // and the radio name/IP if a previous connection info is available.
+        seg->setState(m_radioModel->connectionState());
+        // Rates start at 0; they will be updated when a rate-calc path is
+        // added in a follow-up. The display formatting is in place.
+    }
+
     buildStatusBar();
     applyDarkTheme();
 
@@ -3057,6 +3081,14 @@ void MainWindow::onConnectionStateChanged()
         m_radioFwLabel->setText(QStringLiteral("FW %1").arg(m_radioModel->version()));
         m_radioFwLabel->setStyleSheet(QStringLiteral(
             "QLabel { color: #8aa8c0; font-size: 12px; }"));
+
+        // Phase 3Q-6: feed radio name + IP into the ConnectionSegment so the
+        // connected label shows the correct identity. Connection must be
+        // non-null here because isConnected() returned true.
+        if (auto* conn = m_radioModel->connection()) {
+            m_titleBar->connectionSegment()->setRadio(
+                m_radioModel->name(), conn->radioInfo().address);
+        }
 
         // Wire step attenuator controller to the live radio connection
         // and set max attenuation from board capabilities.
