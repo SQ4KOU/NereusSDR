@@ -2680,6 +2680,25 @@ void RadioModel::setTune(bool on)
             });
         }
 
+        // ── WIRE SWR PROTECTION TO LIVE TUNE POWER (F.3 final wiring) ──────────
+        // F.3 ported two SwrProtectionController setters; both must be called
+        // before MOX engages so the SWR controller's tune-bypass + alex_fwd
+        // floor use the correct values during the impending TX.
+        //
+        // Cite: console.cs:26020-26057 [v2.10.3.13] — tunePowerSliderValue
+        //   determines the tune-bypass condition (≤70 enables bypass).
+        // Cite: console.cs:26064-26067 [v2.10.3.13] — alex_fwd_limit defaults
+        //   to 5.0f, with ANAN-8000D scaling as 2.0 × ptbPWR.Value:
+        //     float alex_fwd_limit = 5.0f;
+        //     if (HardwareSpecific.Model == HPSDRModel.ANAN8000D)        // K2UE idea: try to determine if Hi-Z or Lo-Z load
+        //         alex_fwd_limit = 2.0f * (float)ptbPWR.Value;        //    by comparing alex_fwd with power setting
+        m_swrProt.setTunePowerSliderValue(tunePower);
+        const float alexFwdLimit =
+            (m_hardwareProfile.model == HPSDRModel::ANAN8000D)
+                ? 2.0f * static_cast<float>(tunePower)
+                : 5.0f;
+        m_swrProt.setAlexFwdLimit(alexFwdLimit);
+
         // ── ENGAGE MOX via MoxController ─────────────────────────────────────
         // Cite: console.cs:30081 [v2.10.3.13]: chkMOX.Checked = true;
         //   //MW0LGE_21k8  [original inline comment from console.cs:30086]
