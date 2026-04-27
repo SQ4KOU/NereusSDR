@@ -78,13 +78,17 @@ warren@wpratt.com
 //                 m_txProductionTimer implemented by J.J. Boyd (KG4VCF) during
 //                 3M-1a Task G.1 (TX I/Q production loop). AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-04-26 — Bench round 3 fix (Issues A+B+C): constructor now accepts
+//                 inputBufferSize + outputBufferSize and sizes m_inI/inQ/outI/
+//                 outQ accordingly.  Previous code used kTxDspBufferSize (4096)
+//                 for all four buffers, causing fexchange2 to produce no output.
+//                 By J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"
 #include "LogCategories.h"
 #include "RadioConnection.h"
 #include "TxMicRouter.h"
-#include "WdspEngine.h"    // kTxDspBufferSize constant
 
 // WDSP API declarations (SetTXAPostGen*, fexchange2, etc.) — guarded by
 // HAVE_WDSP internally.  Include unconditionally; the header guards itself.
@@ -107,51 +111,61 @@ namespace NereusSDR {
 //
 // The WDSP-side TXA channel (all 31 pipeline stages) was already constructed
 // by OpenChannel(... type=1 ...) in WdspEngine::createTxChannel() before
-// this constructor runs.  The constructor body is intentionally minimal:
-// it stores the channel ID and emits a diagnostic log only.
+// this constructor runs.
+//
+// inputBufferSize:  fexchange2 Iin/Qin size == OpenChannel in_size (default 238).
+// outputBufferSize: fexchange2 Iout/Qout size == in_size × out_rate / in_rate.
+//   At 48 kHz out: 238.  At 192 kHz out (P2 Saturn): 238 × 4 = 952.
+//
+// CRITICAL: fexchange2 requires Iin/Qin to be exactly in_size samples and
+// Iout/Qout to be exactly out_size samples.  Calling it with wrong-sized
+// buffers (e.g. kTxDspBufferSize = 4096) produces no output (silent error).
 //
 // From Thetis wdsp/TXA.c:31-479 [v2.10.3.13] — create_txa() signal flow.
-// From Thetis wdsp/cmaster.c:177-190 [v2.10.3.13] — OpenChannel type=1 invokes create_txa.
+// From Thetis wdsp/cmaster.c:177-190 [v2.10.3.13] — OpenChannel in_size / ch_outrate.
 // ---------------------------------------------------------------------------
-TxChannel::TxChannel(int channelId, QObject* parent)
+TxChannel::TxChannel(int channelId,
+                     int inputBufferSize,
+                     int outputBufferSize,
+                     QObject* parent)
     : QObject(parent)
     , m_channelId(channelId)
+    , m_inputBufferSize(inputBufferSize > 0 ? inputBufferSize : 238)
+    , m_outputBufferSize(outputBufferSize > 0 ? outputBufferSize : 238)
 {
-    // Allocate fexchange2 I/O buffers at construction.
-    // Size matches kTxDspBufferSize (4096 samples) from cmaster.c:180 [v2.10.3.13].
-    // Buffers are reused across driveOneTxBlock() calls — no per-call allocation.
-    const int n = WdspEngine::kTxDspBufferSize;
-    m_inI.assign(n, 0.0f);
-    m_inQ.assign(n, 0.0f);
-    m_outI.assign(n, 0.0f);
-    m_outQ.assign(n, 0.0f);
-    m_outInterleaved.assign(n * 2, 0.0f);
+    // Allocate fexchange2 I/O buffers at correct sizes.
+    // Iin/Qin:   m_inputBufferSize samples  (== OpenChannel in_size)
+    // Iout/Qout: m_outputBufferSize samples (== in_size × out_rate / in_rate)
+    //
+    // Bench fix round 3 (Issue A): previous code used kTxDspBufferSize (4096)
+    // for all four buffers.  fexchange2 requires Iin/Qin of exactly in_size and
+    // Iout/Qout of exactly out_size; the 4096-sample call with in_size=238 produced
+    // no output (silent error).
+    //
+    // From Thetis wdsp/iobuffs.c fexchange2 [v2.10.3.13].
+    // From Thetis wdsp/cmaster.c:179-183 [v2.10.3.13] — in_size, ch_outrate.
+    m_inI.assign(m_inputBufferSize, 0.0f);
+    m_inQ.assign(m_inputBufferSize, 0.0f);
+    m_outI.assign(m_outputBufferSize, 0.0f);
+    m_outQ.assign(m_outputBufferSize, 0.0f);
+    m_outInterleaved.assign(m_outputBufferSize * 2, 0.0f);
 
     // Production timer — drives driveOneTxBlock() while TX is active.
-    // Cadence: 5 ms, matching the P2 connection's m_txIqTimer consumer (E.6).
+    // Cadence: 5 ms.  At 48 kHz input / 238 samples: 238/48000 ≈ 4.96 ms → one
+    // fexchange2 call per tick.  At 192 kHz output (P2): out block = 952 samples.
+    // The P2 consumer (m_txIqTimer at 5 ms, 4 frames/tick) drains ~960 samples
+    // per tick, matching the producer rate.
+    //
     // Qt::PreciseTimer reduces OS scheduler jitter on the audio path.
-    //
-    // At 96 kHz DSP rate with 4096 samples/block → one block = 42.67 ms.
-    // driveOneTxBlock() pushes 4096 samples (8192 floats) per fexchange2 call
-    // into the SPSC ring (kTxIqRingCapacityFloats = 16384 floats = 8192 samples).
-    // The ring is sized to hold exactly one full DSP block plus headroom so the
-    // connection-thread consumer (240 samples / 5 ms drain) can catch up between
-    // producer ticks.  The 5 ms producer timer fires ~8× before the DSP block
-    // is full, but only the first tick per 42.67 ms period actually calls fexchange2
-    // with fresh output; subsequent ticks push zeros (silence guard) until WDSP
-    // accumulates enough input to drive the pipeline again.
-    //
-    // 3M-1a bench fix (2026-04-26): ring capacity was 2048 floats (1024 samples),
-    // which was 4× smaller than one DSP block — causing 75% sample loss per tick.
-    // Increased to 16384 (next power-of-two above 8192) in P2RadioConnection.h.
     m_txProductionTimer = new QTimer(this);
     m_txProductionTimer->setTimerType(Qt::PreciseTimer);
-    m_txProductionTimer->setInterval(5);  // 5 ms — matches E.6 consumer cadence
+    m_txProductionTimer->setInterval(5);  // 5 ms
     connect(m_txProductionTimer, &QTimer::timeout, this, &TxChannel::driveOneTxBlock);
 
     qCInfo(lcDsp) << "TxChannel" << m_channelId
-                  << "wrapper constructed; WDSP TXA pipeline (31 stages) "
-                     "was built by OpenChannel(type=1) in WdspEngine";
+                  << "wrapper constructed; WDSP TXA pipeline (31 stages)"
+                  << "inBuf=" << m_inputBufferSize
+                  << "outBuf=" << m_outputBufferSize;
 }
 
 TxChannel::~TxChannel() = default;
@@ -687,21 +701,20 @@ void TxChannel::driveOneTxBlock()
         return;
     }
 
-    const int n = static_cast<int>(m_inI.size());
-    if (n == 0) {
+    const int inN  = m_inputBufferSize;
+    const int outN = m_outputBufferSize;
+    if (inN == 0 || m_inI.empty()) {
         return;
     }
 
-    // Pull mic samples from the router.
-    // In 3M-1a: NullMicSource writes n zeros to m_inI (functionally inert
+    // Pull mic samples from the router into Iin (size == inN == in_size).
+    // In 3M-1a: NullMicSource writes inN zeros to m_inI (functionally inert
     // during TUNE because gen1 PostGen overwrites the rsmpin stage input).
     // m_inQ stays zero throughout (real mono mic input; Q=0 for real signals).
     if (m_micRouter) {
         // pullSamples fills the I buffer with mono mic samples.
         // Q channel for real mic input is zero (WDSP handles SSB modulation).
-        m_micRouter->pullSamples(m_inI.data(), n);
-        // m_inQ is already pre-zeroed and only zeroed again on first call;
-        // NullMicSource writes zeros, so both are equivalent in 3M-1a.
+        m_micRouter->pullSamples(m_inI.data(), inN);
         std::fill(m_inQ.begin(), m_inQ.end(), 0.0f);
     } else {
         // No mic router — send pure silence to WDSP input.
@@ -713,6 +726,11 @@ void TxChannel::driveOneTxBlock()
 #ifdef HAVE_WDSP
     // fexchange2 — drives the WDSP TX channel.
     //
+    // CRITICAL: Iin/Qin must be exactly in_size (== m_inputBufferSize) samples;
+    // Iout/Qout must be exactly out_size (== m_outputBufferSize) samples.
+    // fexchange2 silently produces no output if the sizes don't match the channel
+    // parameters set in OpenChannel().
+    //
     // gen1 PostGen (set by setTuneTone()) injects the TUNE tone after bp0;
     // output is the modulated I/Q stream ready for the radio's DUC.
     //
@@ -722,8 +740,8 @@ void TxChannel::driveOneTxBlock()
     // NereusSDR uses the float variant declared in wdsp_api.h (INREAL=float).
     int error = 0;
     fexchange2(m_channelId,
-               m_inI.data(), m_inQ.data(),
-               m_outI.data(), m_outQ.data(),
+               m_inI.data(), m_inQ.data(),   // inN samples each
+               m_outI.data(), m_outQ.data(),  // outN samples each
                &error);
     if (error != 0) {
         qCWarning(lcDsp) << "TxChannel" << m_channelId
@@ -732,10 +750,10 @@ void TxChannel::driveOneTxBlock()
     }
 #endif // HAVE_WDSP
 
-    // Interleave I/Q into [I0,Q0,I1,Q1,...] for sendTxIq's layout.
+    // Interleave outN I/Q pairs into [I0,Q0,I1,Q1,...] for sendTxIq's layout.
     // Without HAVE_WDSP, m_outI/m_outQ were never written so m_outInterleaved
     // stays all-zeros (silence stream) — keeps the ring warm in stub builds.
-    for (int i = 0; i < n; ++i) {
+    for (int i = 0; i < outN; ++i) {
         m_outInterleaved[2 * i]     = m_outI[i];
         m_outInterleaved[2 * i + 1] = m_outQ[i];
     }
@@ -744,7 +762,7 @@ void TxChannel::driveOneTxBlock()
     // The connection thread's E.6 drain (P2 port 1029 / P1 EP2 zones)
     // consumes the ring and emits to UDP.
     // sendTxIq(iq, n): n = number of complex samples; buffer has 2*n floats.
-    m_connection->sendTxIq(m_outInterleaved.data(), n);
+    m_connection->sendTxIq(m_outInterleaved.data(), outN);
 }
 
 } // namespace NereusSDR

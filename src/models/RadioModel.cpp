@@ -962,13 +962,29 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                                                          wdspInputRate, 48000, 48000);
 
         // 3M-1a G.1: create the WDSP TX channel (channel ID = 1 = WDSP.id(1, 0)).
-        // Default parameters (238-sample input buffer, 4096 DSP buffer, 96 kHz DSP
-        // rate) match Thetis cmaster.c:177-190 [v2.10.3.13] — create_xmtr().
+        // Parameters match Thetis cmaster.c:177-190 [v2.10.3.13] — create_xmtr().
         // WdspEngine owns the channel via m_txChannels; we take a non-owning view.
         // The channel starts stopped (setRunning(false) is the default); txReady
         // fires setRunning(true) after MOX engage + rfDelay.
         // From Thetis dsp.cs:926-944 [v2.10.3.13] — WDSP.id(1, 0) = channel 1.
-        m_txChannel = m_wdspEngine->createTxChannel(/*channelId=*/1);
+        //
+        // Bench fix round 3 (Issue B): pass the connection's negotiated TX output
+        // sample rate so WDSP's rsmpout stage delivers fexchange2 output at the
+        // correct rate.
+        //   P2 (Saturn/G2): 192000 Hz — m_connection->txSampleRate() = 192000.
+        //   P1 (HL2/Atlas): 48000 Hz  — m_connection->txSampleRate() = 48000.
+        // Without this, createTxChannel defaulted to 48000 Hz even on P2, so WDSP
+        // resampled to 48 kHz when the radio expected 192 kHz — no carrier on air.
+        //
+        // From Thetis wdsp/cmaster.c:183 [v2.10.3.13] — ch_outrate parameter.
+        // From Thetis netInterface.c:1513 [v2.10.3.13] — P2 TX always 192 kHz.
+        const int txOutRate = m_connection ? m_connection->txSampleRate() : 48000;
+        m_txChannel = m_wdspEngine->createTxChannel(/*channelId=*/1,
+                                                    /*inputBufferSize=*/238,
+                                                    /*dspBufferSize=*/WdspEngine::kTxDspBufferSize,
+                                                    /*inputSampleRate=*/48000,
+                                                    /*dspSampleRate=*/WdspEngine::kTxDspSampleRate,
+                                                    /*outputSampleRate=*/txOutRate);
         if (!m_txChannel) {
             qCWarning(lcDsp) << "G.1: createTxChannel(1) returned nullptr — "
                                 "TUNE will be unavailable until WDSP re-initializes.";

@@ -416,7 +416,18 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
     // pipeline that OpenChannel(type=1) already built in WDSP-managed memory.
     // The 31 TXA stages (create_txa()) are live; TxChannel provides the typed
     // C++ facade.  unique_ptr destructor handles cleanup automatically on erase().
-    auto wrapper = std::make_unique<TxChannel>(channelId, this);
+    //
+    // Bench fix round 3 (Issue A): pass inputBufferSize and outputBufferSize so
+    // TxChannel sizes its fexchange2 buffers correctly.
+    //   outputBufferSize = inputBufferSize × outputSampleRate / inputSampleRate
+    // At 48 kHz in / 48 kHz out (P1/HL2): 238 × 1 = 238.
+    // At 48 kHz in / 192 kHz out (P2 Saturn): 238 × 4 = 952.
+    //
+    // Integer multiply-then-divide is safe here: inputBufferSize (238) × outputSampleRate
+    // (192000 max) = 45,696,000 — well within int32 range.
+    // From Thetis wdsp/cmaster.c:179-183 [v2.10.3.13] — in_size / ch_outrate.
+    const int outputBufferSize = inputBufferSize * outputSampleRate / inputSampleRate;
+    auto wrapper = std::make_unique<TxChannel>(channelId, inputBufferSize, outputBufferSize, this);
     TxChannel* raw = wrapper.get();
     m_txChannels.emplace(channelId, std::move(wrapper));
 

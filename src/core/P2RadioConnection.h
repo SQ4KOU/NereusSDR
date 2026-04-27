@@ -182,6 +182,16 @@ public slots:
     void setTrxRelay(bool enabled) override;
     void setTxStepAttenuation(int dB) override;
 
+    // Bench fix round 3 (Issue B): P2 TX I/Q output is always at 192 kHz.
+    // This rate is used by WdspEngine::createTxChannel() to open the WDSP
+    // TX channel with the correct outputSampleRate so WDSP's rsmpout stage
+    // (TXA stage 29) delivers fexchange2 Iout/Qout at 192000 samples/sec.
+    //
+    // From Thetis netInterface.c:1513 [v2.10.3.13]:
+    //   prn->tx[i].sampling_rate = 192;  // P2 TX always 192 kHz
+    // Stored as m_tx[i].samplingRate (kHz); return value in Hz.
+    int txSampleRate() const override { return m_tx[0].samplingRate * 1000; }
+
     // Phase 3P-B Task 10: per-ADC RX1 preamp control for OrionMKII family.
     // Routes to m_rx[1].preamp → CodecContext.p2Rx1Preamp →
     // P2CodecOrionMkII::composeCmdHighPriority byte 1403 bit 1.

@@ -246,8 +246,11 @@ private slots:
         }
         // At least one sendTxIq call must have reached the mock.
         QVERIFY(conn.callCount >= 1);
-        // Each call must pass n = kTxDspBufferSize = 4096.
-        QCOMPARE(conn.lastN, 4096);
+        // Each call must pass n = outputBufferSize = 238 at 48 kHz in/out.
+        // Bench fix round 3 (Issue A): previous test expected 4096 (the old
+        // broken kTxDspBufferSize value used before in/out sizes were separated).
+        // Correct value is 238 = in_size × (outRate / inRate) = 238 × (48000/48000).
+        QCOMPARE(conn.lastN, 238);
     }
 
     // ── sendTxIq count increases with timer ticks ─────────────────────────

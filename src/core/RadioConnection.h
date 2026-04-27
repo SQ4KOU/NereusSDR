@@ -172,6 +172,28 @@ public slots:
     // --- ADC Mapping ---
     virtual int getAdcForDdc(int /*ddc*/) const { return 0; }
 
+    // --- TX output sample rate (bench fix round 3 — Issue B) ---
+    //
+    // Returns the radio's negotiated TX I/Q output sample rate in Hz.
+    // This is the rate passed to OpenChannel() as outputSampleRate, and
+    // therefore the rate at which WDSP's TXA rsmpout resampler delivers
+    // samples to fexchange2's Iout/Qout buffers.
+    //
+    // P1 (HL2/Atlas/Hermes/Angelia/Orion): TX I/Q flows into EP2 zones at
+    //   the radio's sample rate.  For single-RX operation this is always
+    //   48000 Hz (single-rate mode).  P1RadioConnection returns 48000.
+    //
+    // P2 (Saturn/ANAN-G2): TX I/Q flows to UDP port 1029 at 192000 Hz.
+    //   P2RadioConnection returns 192000 — derived from m_tx[0].samplingRate
+    //   (always 192 kHz per Thetis netInterface.c:1513 [v2.10.3.13]).
+    //
+    // Default implementation returns 48000 (correct for P1 and stubs).
+    // P2RadioConnection overrides to return 192000.
+    //
+    // From Thetis wdsp/cmaster.c:183 [v2.10.3.13] — ch_outrate parameter.
+    // From Thetis netInterface.c:1513 [v2.10.3.13] — P2 tx always 192 kHz.
+    virtual int txSampleRate() const { return 48000; }
+
     // --- Watchdog ---
     // Enable / disable the radio-side network watchdog. When enabled,
     // the radio firmware drops TX if it stops seeing C&C traffic.
