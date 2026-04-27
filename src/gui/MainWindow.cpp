@@ -1189,6 +1189,44 @@ void MainWindow::populateDefaultMeter()
         txApplet->setCurrentBand(pan0->band());
     }
 
+    // 3M-1a (2026-04-27): also track every SLICE'S frequency.  The
+    // panadapter band only changes when its center crosses a band
+    // boundary, but the user's slice can sit on a different band entirely
+    // (e.g. the slice loaded at 7.241 MHz while the panadapter center is
+    // still on 14 MHz from a prior session). Without this wire,
+    // TxApplet's m_currentBand lags the slice → the TUN-power slider
+    // writes to the wrong band's stored value (or no-ops on the
+    // m_currentBand-default band — bench-confirmed 2026-04-27 with the
+    // slider only working on 20m even after retuning to 40m).
+    //
+    // Pattern matches AntennaAlexAlex2Tab.cpp:408-425 — subscribe to
+    // every current slice AND every future-added slice (slices are
+    // created by addSlice() AFTER MainWindow construction, so a single-
+    // shot activeSlice() check at construction returns null and never
+    // wires up).
+    {
+        auto subscribeToSlice = [txApplet](SliceModel* slice) {
+            if (!slice) { return; }
+            connect(slice, &SliceModel::frequencyChanged,
+                    txApplet, [txApplet](double freq) {
+                        txApplet->setCurrentBand(bandFromFrequency(freq));
+                    });
+            // Push the slice's current band immediately — overrides the
+            // panadapter initial when the slice is on a different band.
+            txApplet->setCurrentBand(bandFromFrequency(slice->frequency()));
+        };
+        for (SliceModel* slice : m_radioModel->slices()) {
+            subscribeToSlice(slice);
+        }
+        connect(m_radioModel, &RadioModel::sliceAdded, txApplet,
+                [this, subscribeToSlice](int index) {
+                    const auto slices = m_radioModel->slices();
+                    if (index >= 0 && index < slices.size()) {
+                        subscribeToSlice(slices[index]);
+                    }
+                });
+    }
+
     // PhoneCwApplet — Phone + CW pages, NYI
     m_phoneCwApplet = new PhoneCwApplet(m_radioModel, nullptr);
     panel->addApplet(m_phoneCwApplet);

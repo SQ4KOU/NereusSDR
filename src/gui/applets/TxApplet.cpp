@@ -113,8 +113,8 @@
 #include "gui/ComboStyle.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
-#include "models/PanadapterModel.h"
 #include "core/MoxController.h"
+#include "core/RadioStatus.h"
 
 #include <QComboBox>
 #include <QHBoxLayout>
@@ -122,6 +122,7 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -161,7 +162,10 @@ void TxApplet::buildUI()
                               QStringLiteral("120")});
     fwdGauge->setAccessibleName(QStringLiteral("Forward power gauge"));
     m_fwdPowerGauge = fwdGauge;
-    NyiOverlay::markNyi(fwdGauge, QStringLiteral("Phase 3I-1"));
+    // 3M-1a (2026-04-27): wired to RadioStatus::powerChanged in
+    // wireControls() — the gauge displays radio-reported forward
+    // power in watts (scaleFwdPowerWatts'd at the model side).
+    // The legacy "Phase 3I-1" NYI marker has been dropped.
     vbox->addWidget(fwdGauge);
 
     // ── 2. SWR gauge ── 1.0–3.0, redStart 2.5 ───────────────────────────────
@@ -436,6 +440,36 @@ void TxApplet::wireControls()
 
     TransmitModel& tx = m_model->transmitModel();
     MoxController* mox = m_model->moxController();
+
+    // ── Forward-power gauge ← RadioStatus::powerChanged ─────────────────────
+    // 3M-1a (2026-04-27): wire the previously-NYI fwd-power gauge to the
+    // radio's reported forward power.  Pipeline:
+    //   P2RadioConnection → paTelemetryUpdated(fwdRaw,...)
+    //     → RadioModel handler scaleFwdPowerWatts() → m_radioStatus.setForwardPower(W)
+    //     → RadioStatus::powerChanged(fwd, rev, swr)  ← we listen here
+    //
+    // Two-stage de-jitter (Phase 3I-1 will replace with the proper Thetis
+    // peak-decay filter):
+    //   1.  alpha=0.10 EMA on every powerChanged emit — smooths the per-
+    //       sample noise without much lag (~10 sample time-constant).
+    //   2.  10 Hz QTimer reads the smoothed state into the gauge — keeps
+    //       the visible digits stable even when RadioStatus::powerChanged
+    //       fires twice per hardware sample (documented in
+    //       RadioModel.cpp:572).  Without this throttle the digit
+    //       characters update too fast to read.
+    connect(&m_model->radioStatus(), &RadioStatus::powerChanged,
+            this, [this](double fwdW, double /*revW*/, double /*swr*/) {
+        constexpr double kAlpha = 0.30;
+        m_fwdPowerSmoothedW = kAlpha * fwdW + (1.0 - kAlpha) * m_fwdPowerSmoothedW;
+    });
+    auto* fwdGaugeRefreshTimer = new QTimer(this);
+    fwdGaugeRefreshTimer->setInterval(50);   // 20 Hz UI refresh
+    connect(fwdGaugeRefreshTimer, &QTimer::timeout, this, [this]() {
+        if (m_fwdPowerGauge) {
+            m_fwdPowerGauge->setValue(m_fwdPowerSmoothedW);
+        }
+    });
+    fwdGaugeRefreshTimer->start();
 
     // ── RF Power slider → TransmitModel::setPower(int) ──────────────────────
     // From Thetis chkMOX_CheckedChanged2 power flow [v2.10.3.13]:

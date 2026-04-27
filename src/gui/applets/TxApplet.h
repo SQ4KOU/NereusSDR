@@ -98,6 +98,8 @@ class QLabel;
 
 namespace NereusSDR {
 
+class HGauge;
+
 // TxApplet — transmit controls panel.
 //
 // Layout (AetherSDR TxApplet.cpp pattern):
@@ -138,9 +140,14 @@ private:
     void wireControls();  // called after buildUI() — attaches signals/slots
 
     // 1. Forward Power gauge
-    QWidget* m_fwdPowerGauge  = nullptr;
+    HGauge*  m_fwdPowerGauge  = nullptr;
     // 2. SWR gauge
     QWidget* m_swrGauge       = nullptr;
+    // EMA smoothing state for fwd-power gauge (Thetis-style envelope detector
+    // not yet ported; this is a simple alpha=0.25 exponential-moving-average
+    // to keep the displayed value calm — RadioStatus::powerChanged fires
+    // ~twice per hardware sample, which makes raw values visibly jittery).
+    double   m_fwdPowerSmoothedW{0.0};
     // 3. RF Power
     QSlider* m_rfPowerSlider  = nullptr;
     QLabel*  m_rfPowerValue   = nullptr;
