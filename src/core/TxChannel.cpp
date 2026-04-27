@@ -129,9 +129,11 @@ TxChannel::TxChannel(int channelId,
                      int outputBufferSize,
                      QObject* parent)
     : QObject(parent)
-    , m_channelId(channelId)
+    // Init order must match declaration order (-Wreorder-ctor):
+    // m_inputBufferSize, m_outputBufferSize, m_channelId.
     , m_inputBufferSize(inputBufferSize > 0 ? inputBufferSize : 238)
     , m_outputBufferSize(outputBufferSize > 0 ? outputBufferSize : 238)
+    , m_channelId(channelId)
 {
     // Allocate fexchange2 I/O buffers at correct sizes.
     // Iin/Qin:   m_inputBufferSize samples  (== OpenChannel in_size)
