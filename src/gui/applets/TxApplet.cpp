@@ -1,24 +1,25 @@
 // src/gui/applets/TxApplet.cpp
 //
-// TxApplet — complete TX control panel with all 15 controls, all NYI.
-// Layout matches AetherSDR TxApplet.cpp. Wiring is deferred to Phase 3I-1.
+// TxApplet — TX control panel.
+// Phase 3M-1a H.3: TUNE/MOX/Tune-Power/RF-Power deep-wired.
+// Out-of-phase controls (2-Tone, PS-A) hidden.
 //
 // Control inventory:
 //  1.  Fwd Power gauge   — HGauge 0–120 W, redStart 100 W
 //  2.  SWR gauge         — HGauge 1.0–3.0, redStart 2.5
-//  3.  RF Power slider   + label + value
-//  4.  Tune Power slider + label + value
-//  5.  MOX button        — checkable, red:checked style
-//  6.  TUNE button       — checkable, red:checked + "TUNING..." text change
-//  7.  ATU button        — checkable
-//  8.  MEM button        — checkable
-//  9.  TX Profile combo  — "Default" item
-// 10.  Tune mode combo
-// 11.  2-Tone test       — checkable
-// 12.  PS-A toggle       — checkable, green:checked style
-// 13.  DUP               — checkable
-// 14.  xPA indicator     — checkable
-// 15.  SWR protection LED — QLabel indicator, inactive style
+//  3.  RF Power slider   + label + value  [WIRED — 3M-1a H.3]
+//  4.  Tune Power slider + label + value  [WIRED — 3M-1a H.3]
+//  5.  MOX button        — checkable, red:checked style  [WIRED — 3M-1a H.3]
+//  6.  TUNE button       — checkable, red:checked + "TUNING..." text  [WIRED — 3M-1a H.3]
+//  7.  ATU button        — checkable (NYI — 3M-2/3M-3)
+//  8.  MEM button        — checkable (NYI — 3M-2/3M-3)
+//  9.  TX Profile combo  — (NYI — 3M-3)
+// 10.  Tune mode combo   — (NYI — 3M-3)
+// 11.  2-Tone test       — HIDDEN until Phase 3M-3
+// 12.  PS-A toggle       — HIDDEN until Phase 3M-4
+// 13.  DUP               — checkable (NYI — 3M-3)
+// 14.  xPA indicator     — checkable (NYI — 3M-3)
+// 15.  SWR protection LED — QLabel indicator (NYI — 3M-3)
 
 // =================================================================
 // src/gui/applets/TxApplet.cpp  (NereusSDR)
@@ -41,6 +42,9 @@
 //                 via Anthropic Claude Code.
 //                 Layout pattern from AetherSDR `src/gui/TxApplet.{h,cpp}`.
 //                 Wiring deferred to Phase 3M.
+//   2026-04-26 — Phase 3M-1a H.3: deep-wired TUNE/MOX/Tune-Power/RF-Power.
+//                 Out-of-phase controls (2-Tone, PS-A) hidden.
+//                 syncFromModel() implemented. setCurrentBand(Band) added.
 // =================================================================
 
 #include "TxApplet.h"
@@ -48,11 +52,16 @@
 #include "gui/HGauge.h"
 #include "gui/StyleConstants.h"
 #include "gui/ComboStyle.h"
+#include "models/RadioModel.h"
+#include "models/TransmitModel.h"
+#include "models/PanadapterModel.h"
+#include "core/MoxController.h"
 
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSlider>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -63,6 +72,7 @@ TxApplet::TxApplet(RadioModel* model, QWidget* parent)
     : AppletWidget(model, parent)
 {
     buildUI();
+    wireControls();
 }
 
 void TxApplet::buildUI()
@@ -136,10 +146,11 @@ void TxApplet::buildUI()
         row->addWidget(lbl);
 
         rfSlider->setFixedHeight(18);
+        rfSlider->setEnabled(true);   // Phase 3M-1a H.3: wired
+        rfSlider->setToolTip(QStringLiteral("RF output power (0–100 W)"));
         row->addWidget(rfSlider, 1);
         row->addWidget(rfValue);
 
-        NyiOverlay::markNyi(rfSlider, QStringLiteral("Phase 3I-1"));
         vbox->addLayout(row);
     }
 
@@ -170,10 +181,11 @@ void TxApplet::buildUI()
         row->addWidget(lbl);
 
         tunSlider->setFixedHeight(18);
+        tunSlider->setEnabled(true);  // Phase 3M-1a H.3: wired
+        tunSlider->setToolTip(QStringLiteral("Tune carrier power for current band (0–100 W)"));
         row->addWidget(tunSlider, 1);
         row->addWidget(tunValue);
 
-        NyiOverlay::markNyi(tunSlider, QStringLiteral("Phase 3I-1"));
         vbox->addLayout(row);
     }
 
@@ -194,8 +206,9 @@ void TxApplet::buildUI()
         m_tuneBtn->setFixedHeight(22);
         m_tuneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_tuneBtn->setStyleSheet(btnStyle + redChecked);
+        m_tuneBtn->setEnabled(true);  // Phase 3M-1a H.3: wired
         m_tuneBtn->setAccessibleName(QStringLiteral("Tune carrier"));
-        NyiOverlay::markNyi(m_tuneBtn, QStringLiteral("Phase 3I-1"));
+        m_tuneBtn->setToolTip(QStringLiteral("Enable TUNE carrier (single-tone CW)"));
         row->addWidget(m_tuneBtn, 1);
 
         m_moxBtn = new QPushButton(QStringLiteral("MOX"), this);
@@ -203,8 +216,9 @@ void TxApplet::buildUI()
         m_moxBtn->setFixedHeight(22);
         m_moxBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_moxBtn->setStyleSheet(btnStyle + redChecked);
+        m_moxBtn->setEnabled(true);  // Phase 3M-1a H.3: wired
         m_moxBtn->setAccessibleName(QStringLiteral("MOX transmit"));
-        NyiOverlay::markNyi(m_moxBtn, QStringLiteral("Phase 3I-1"));
+        m_moxBtn->setToolTip(QStringLiteral("Manual transmit (MOX)"));
         row->addWidget(m_moxBtn, 1);
 
         m_atuBtn = new QPushButton(QStringLiteral("ATU"), this);
@@ -257,7 +271,9 @@ void TxApplet::buildUI()
     }
 
     // ── Button row 3: 2-Tone + PS-A + DUP ───────────────────────────────────
-    // PS-A: green active (#006030 bg) when checked
+    // Phase 3M-1a H.3: 2-Tone and PS-A are hidden until their owning phases land.
+    //   2-Tone: TODO [3M-3]: visible when 2-tone test feature lands.
+    //   PS-A:   TODO [3M-4]: visible when PureSignal lands.
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(2);
@@ -267,7 +283,9 @@ void TxApplet::buildUI()
         m_twoToneBtn->setFixedHeight(22);
         m_twoToneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_twoToneBtn->setAccessibleName(QStringLiteral("2-tone test"));
-        NyiOverlay::markNyi(m_twoToneBtn, QStringLiteral("Phase 3I-1"));
+        m_twoToneBtn->setToolTip(QStringLiteral("2-tone test — not yet implemented (Phase 3M-3)"));
+        m_twoToneBtn->setVisible(false);  // TODO [3M-3]: visible when feature lands
+        NyiOverlay::markNyi(m_twoToneBtn, QStringLiteral("Phase 3M-3"));
         row->addWidget(m_twoToneBtn, 1);
 
         // PS-A: green when checked — #006030 bg matches AetherSDR APD button
@@ -279,7 +297,9 @@ void TxApplet::buildUI()
             + QStringLiteral("QPushButton:checked {"
                              " background: #006030; border: 1px solid #008040; color: #fff; }"));
         m_psaBtn->setAccessibleName(QStringLiteral("PS-A PureSignal"));
-        NyiOverlay::markNyi(m_psaBtn, QStringLiteral("Phase 3I-1"));
+        m_psaBtn->setToolTip(QStringLiteral("PureSignal — not yet implemented (Phase 3M-4)"));
+        m_psaBtn->setVisible(false);  // TODO [3M-4]: visible when PureSignal lands
+        NyiOverlay::markNyi(m_psaBtn, QStringLiteral("Phase 3M-4"));
         row->addWidget(m_psaBtn, 1);
 
         m_dupBtn = new QPushButton(QStringLiteral("DUP"), this);
@@ -287,7 +307,7 @@ void TxApplet::buildUI()
         m_dupBtn->setFixedHeight(22);
         m_dupBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_dupBtn->setAccessibleName(QStringLiteral("Full duplex"));
-        NyiOverlay::markNyi(m_dupBtn, QStringLiteral("Phase 3I-1"));
+        NyiOverlay::markNyi(m_dupBtn, QStringLiteral("Phase 3M-3"));
         row->addWidget(m_dupBtn, 1);
 
         vbox->addLayout(row);
@@ -340,9 +360,183 @@ void TxApplet::buildUI()
     vbox->addStretch();
 }
 
+// ── Phase 3M-1a H.3 wiring ──────────────────────────────────────────────────
+//
+// wireControls: called once after buildUI(). Attaches signal/slot connections
+// between the four wired controls and the model layer.
+//
+// Pattern follows the NereusSDR "GUI↔Model sync, no feedback loops" rule:
+//   - Use QSignalBlocker (or m_updatingFromModel) to prevent echo loops.
+//   - Model setters emit signals → RadioConnection sends protocol commands.
+//   - UI state changes → model setters → emit back to update other UI.
+void TxApplet::wireControls()
+{
+    if (!m_model) {
+        return;
+    }
+
+    TransmitModel& tx = m_model->transmitModel();
+    MoxController* mox = m_model->moxController();
+
+    // ── RF Power slider → TransmitModel::setPower(int) ──────────────────────
+    // From Thetis chkMOX_CheckedChanged2 power flow [v2.10.3.13]:
+    //   the RF Power slider maps 0–100 to TX drive level.
+    connect(m_rfPowerSlider, &QSlider::valueChanged, this, [this, &tx](int val) {
+        if (m_updatingFromModel) { return; }
+        m_rfPowerValue->setText(QString::number(val));
+        tx.setPower(val);
+    });
+
+    // Reverse: TransmitModel::powerChanged → slider
+    connect(&tx, &TransmitModel::powerChanged, this, [this](int power) {
+        QSignalBlocker b(m_rfPowerSlider);
+        m_updatingFromModel = true;
+        m_rfPowerSlider->setValue(power);
+        m_rfPowerValue->setText(QString::number(power));
+        m_updatingFromModel = false;
+    });
+
+    // ── Tune Power slider → TransmitModel::setTunePowerForBand ──────────────
+    // Per-band tune power, ported from Thetis console.cs:12094 [v2.10.3.13]:
+    //   private int[] tunePower_by_band;
+    // The current band is tracked by m_currentBand (updated by setCurrentBand).
+    connect(m_tunePwrSlider, &QSlider::valueChanged, this, [this, &tx](int val) {
+        if (m_updatingFromModel) { return; }
+        m_tunePwrValue->setText(QString::number(val));
+        tx.setTunePowerForBand(m_currentBand, val);
+    });
+
+    // Reverse: TransmitModel::tunePowerByBandChanged → slider (only for current band)
+    connect(&tx, &TransmitModel::tunePowerByBandChanged,
+            this, [this](Band band, int watts) {
+        if (band != m_currentBand) { return; }
+        QSignalBlocker b(m_tunePwrSlider);
+        m_updatingFromModel = true;
+        m_tunePwrSlider->setValue(watts);
+        m_tunePwrValue->setText(QString::number(watts));
+        m_updatingFromModel = false;
+    });
+
+    // ── TUNE button → RadioModel::setTune(bool) ──────────────────────────────
+    // G.4 orchestrator: CW mode swap, tone setup, tune-power push.
+    // From Thetis console.cs:29978-30157 [v2.10.3.13] chkTUN_CheckedChanged.
+    // G8NJJ tell ARIES that tune is active  [original inline comment from console.cs:30153]
+    // MW0LGE_22b setupTuneDriveSlider  [original inline comment from console.cs:30155]
+    connect(m_tuneBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (m_updatingFromModel) { return; }
+        m_model->setTune(on);
+        if (on) {
+            m_tuneBtn->setText(QStringLiteral("TUNING..."));
+        } else {
+            m_tuneBtn->setText(QStringLiteral("TUNE"));
+        }
+    });
+
+    // Reverse: tuneRefused → uncheck TUN button + clear text.
+    // From Thetis console.cs:30076 [v2.10.3.13]: guard conditions before
+    // chkTUN.Checked = true (connection + power-on checks).
+    connect(m_model, &RadioModel::tuneRefused, this, [this](const QString& /*reason*/) {
+        QSignalBlocker b(m_tuneBtn);
+        m_updatingFromModel = true;
+        m_tuneBtn->setChecked(false);
+        m_tuneBtn->setText(QStringLiteral("TUNE"));
+        m_updatingFromModel = false;
+    });
+
+    // ── MOX button → MoxController::setMox(bool) ────────────────────────────
+    // B.5 setter: drives state machine through RX→TX or TX→RX transitions.
+    // From Thetis console.cs:29311-29678 [v2.10.3.13] chkMOX_CheckedChanged2.
+    // //[2.10.1.0]MW0LGE changed  [original inline comment from console.cs:29355]
+    // //MW0LGE [2.9.0.7]  [original inline comment from console.cs:29400, 29561]
+    // //[2.10.3.6]MW0LGE att_fixes  [original inline comment from console.cs:29567-29568, 29659]
+    if (mox) {
+        connect(m_moxBtn, &QPushButton::toggled, this, [this, mox](bool on) {
+            if (m_updatingFromModel) { return; }
+            mox->setMox(on);
+        });
+
+        // Reverse: MoxController::moxStateChanged → button checked state.
+        // moxStateChanged fires at end of the timer walk (TX fully engaged
+        // or fully released), not at setMox() entry — so the button reflects
+        // the confirmed state, not the in-progress request.
+        connect(mox, &MoxController::moxStateChanged,
+                this, [this](bool on) {
+            QSignalBlocker b(m_moxBtn);
+            m_updatingFromModel = true;
+            m_moxBtn->setChecked(on);
+            m_updatingFromModel = false;
+        });
+
+        // TUNE button checked state driven by manualMoxChanged.
+        // manualMoxChanged fires when setTune() sets/clears m_manualMox.
+        connect(mox, &MoxController::manualMoxChanged,
+                this, [this](bool isManual) {
+            QSignalBlocker b(m_tuneBtn);
+            m_updatingFromModel = true;
+            m_tuneBtn->setChecked(isManual);
+            m_tuneBtn->setText(isManual
+                ? QStringLiteral("TUNING...")
+                : QStringLiteral("TUNE"));
+            m_updatingFromModel = false;
+        });
+    }
+
+    // ── Initial sync from model ──────────────────────────────────────────────
+    syncFromModel();
+}
+
 void TxApplet::syncFromModel()
 {
-    // NYI — wired in Phase 3I-1 (Basic SSB TX)
+    if (!m_model) { return; }
+
+    TransmitModel& tx = m_model->transmitModel();
+    MoxController* mox = m_model->moxController();
+
+    m_updatingFromModel = true;
+
+    // RF Power
+    {
+        QSignalBlocker b(m_rfPowerSlider);
+        m_rfPowerSlider->setValue(tx.power());
+        m_rfPowerValue->setText(QString::number(tx.power()));
+    }
+
+    // Tune Power for current band
+    {
+        QSignalBlocker b(m_tunePwrSlider);
+        const int tunePwr = tx.tunePowerForBand(m_currentBand);
+        m_tunePwrSlider->setValue(tunePwr);
+        m_tunePwrValue->setText(QString::number(tunePwr));
+    }
+
+    // MOX / TUNE button state
+    if (mox) {
+        QSignalBlocker bm(m_moxBtn);
+        m_moxBtn->setChecked(mox->isMox());
+
+        QSignalBlocker bt(m_tuneBtn);
+        const bool isManual = mox->isManualMox();
+        m_tuneBtn->setChecked(isManual);
+        m_tuneBtn->setText(isManual ? QStringLiteral("TUNING...") : QStringLiteral("TUNE"));
+    }
+
+    m_updatingFromModel = false;
+}
+
+void TxApplet::setCurrentBand(Band band)
+{
+    if (m_currentBand == band) { return; }
+    m_currentBand = band;
+
+    if (!m_model) { return; }
+
+    // Update the Tune Power slider to reflect the stored value for the new band.
+    const int tunePwr = m_model->transmitModel().tunePowerForBand(band);
+    QSignalBlocker b(m_tunePwrSlider);
+    m_updatingFromModel = true;
+    m_tunePwrSlider->setValue(tunePwr);
+    m_tunePwrValue->setText(QString::number(tunePwr));
+    m_updatingFromModel = false;
 }
 
 } // namespace NereusSDR

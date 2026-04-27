@@ -825,6 +825,15 @@ nereus_add_test(tst_spectrum_widget_mox_overlay)
 # Derives from Thetis dsp.cs:995-1050 [v2.10.3.13] CalculateTXMeter dispatch.
 nereus_add_test(tst_meter_poller_tx_bindings)
 
+# ── Phase 3M-1a H.3: TxApplet wiring model-layer contracts ───────────────────
+# Verifies TransmitModel::setPower/tunePowerForBand round-trips, powerChanged
+# and tunePowerByBandChanged signals, MoxController default states,
+# moxStateChanged end-of-walk firing, manualMoxChanged on setTune().
+# Headless (QCoreApplication only) — TxApplet widget not constructed here
+# since QWidget requires a display server.
+# Derives from Thetis console.cs:4822 + 12094 + 29978-30157 [v2.10.3.13].
+nereus_add_test(tst_tx_applet_tune_wiring)
+
 # ── Phase 3M-0 Task 9: SWR Protection group box on Setup → Transmit ──────────
 # Verifies grpSWRProtectionControl has 5 controls with correct objectNames,
 # defaults, and verbatim tooltip text per
