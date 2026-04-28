@@ -1336,3 +1336,20 @@ target_compile_definitions(tst_audio_engine_pull_tx_mic PRIVATE NEREUS_BUILD_TES
 # Pre-code review §4.4.
 nereus_add_test(tst_audio_engine_tx_monitor_state)
 
+# Plan: 3M-1b E.3. Exercises AudioEngine::txMonitorBlockReady — the
+# audio-thread consumer of TxChannel::sip1OutputReady.
+# Cases:
+#   disabled_noOutput               — monitor off → mixInto returns silence
+#   enabled_hasOutput               — monitor on → mixInto returns audio
+#   volumeScalesOutput              — gain 1.0 vs 0.5 produces proportional output
+#   nullSamples_noOp                — null ptr guard → no crash, no output
+#   zeroFrames_noOp                 — frames=0 guard → no output
+#   volumeZero_thenNonZero_hasOutput — gain=0 produces silence; gain=1 produces audio
+#   monoExpandedToStereo_LequalsR   — mono sample → L=R in stereo mix
+#   disableAfterEnable_silencesNextBlock — re-disable silences subsequent blocks
+#
+# Uses masterMixForTest() NEREUS_BUILD_TESTS seam to observe MasterMixer output.
+# Pre-code review §4.3 + §4.4.
+nereus_add_test(tst_audio_engine_tx_monitor_block)
+target_compile_definitions(tst_audio_engine_tx_monitor_block PRIVATE NEREUS_BUILD_TESTS)
+

@@ -55,6 +55,15 @@
 //                 buffer when gain != 1.0f. TX gain is storage-only pending
 //                 Phase 3M TX pull wiring. Matches VaxApplet control-wiring
 //                 rows in docs/architecture/2026-04-19-vax-design.md §6.4.
+//   2026-04-27 — Phase 3M-1b E.3 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. Adds txMonitorBlockReady(samples,frames)
+//                 slot — the audio-thread consumer of TxChannel::sip1OutputReady.
+//                 When m_txMonitorEnabled, expands mono TXA samples to
+//                 interleaved stereo (L=R), applies m_txMonitorVolume via
+//                 MasterMixer::setSliceGain, and accumulates into m_masterMix
+//                 at kTxMonitorSlotId. kTxMonitorSlotId = -2 (negative; distinct
+//                 from all non-negative RX slice IDs). Slot is pre-registered
+//                 in the ctor. Plan: 3M-1b E.3. Pre-code review §4.3 + §4.4.
 // =================================================================
 
 #include "AudioDeviceConfig.h"
@@ -168,11 +177,34 @@ public:
     // Plan: 3M-1b E.1.
     void setTxInputBusForTest(std::unique_ptr<IAudioBus> bus);
 
+    // Test seam — expose m_masterMix so tests can call mixInto() to verify
+    // that txMonitorBlockReady accumulated audio into the correct slot.
+    // Plan: 3M-1b E.3.
+    MasterMixer& masterMixForTest() { return m_masterMix; }
+
 #endif
 
     // Called by RxDspWorker when a slice produces an RX audio block.
     // samples is interleaved stereo float32, length = frames * 2.
     void rxBlockReady(int sliceId, const float* samples, int frames);
+
+    /// TX-monitor block consumer. Called via Qt::DirectConnection from
+    /// TxChannel::sip1OutputReady on the audio thread. When monitor is
+    /// enabled, expands the mono TXA samples to interleaved stereo (L=R),
+    /// applies m_txMonitorVolume, and accumulates into MasterMixer at
+    /// kTxMonitorSlotId so the user hears themselves through speakers.
+    /// When disabled, no-op.
+    ///
+    /// **DirectConnection ONLY.** The samples pointer is valid only for
+    /// the duration of this synchronous call. Does not queue, store, or
+    /// allocate.
+    ///
+    /// Atomic contract: m_txMonitorEnabled and m_txMonitorVolume are both
+    /// loaded with std::memory_order_acquire (same acq/rel pairing as
+    /// rxBlockReady's master-volume and mute loads).
+    ///
+    /// Plan: 3M-1b E.3. Pre-code review §4.3 + §4.4.
+    void txMonitorBlockReady(const float* samples, int frames);
 
     // Pull TX-mic audio samples from the bound TX-input bus.
     //
@@ -334,6 +366,12 @@ signals:
 #endif
 
 private:
+    // Slot ID for the TX-monitor channel in MasterMixer. Negative so it
+    // cannot collide with any non-negative RX slice ID. -1 is avoided as
+    // a common "invalid" sentinel; -2 is used here.
+    // Plan: 3M-1b E.3. Pre-code review §4.3.
+    static constexpr int kTxMonitorSlotId = -2;
+
     // Sub-Phase 12: speakers-bus rebuild (called directly from setSpeakersConfig).
     void applySpeakersConfig(const AudioDeviceConfig& cfg);
 

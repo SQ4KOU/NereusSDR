@@ -67,6 +67,14 @@
 //                 Code-review follow-up: 200ms buffer-size debounce moved from
 //                 AudioEngine::setSpeakersConfig to DeviceCard (addendum §2.1);
 //                 setSpeakersConfig now applies synchronously.
+//   2026-04-27 — Phase 3M-1b E.3 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. Adds txMonitorBlockReady(samples,frames)
+//                 — the audio-thread consumer of TxChannel::sip1OutputReady.
+//                 Expands mono TXA block to interleaved stereo, accumulates
+//                 into m_masterMix at kTxMonitorSlotId (-2). Slot pre-registered
+//                 in ctor with initial gain = m_txMonitorVolume default (0.5f).
+//                 setTxMonitorVolume now pushes gain updates to MasterMixer
+//                 via setSliceGain. Plan: 3M-1b E.3. Pre-code review §4.3 §4.4.
 // =================================================================
 
 #include "AudioEngine.h"
@@ -153,6 +161,13 @@ AudioEngine::AudioEngine(QObject* parent)
         m_paInitialized = true;
         qCInfo(lcAudio) << "PortAudio initialized:" << Pa_GetVersionText();
     }
+
+    // Pre-register the TX-monitor mixer slot so txMonitorBlockReady's
+    // accumulate() call finds the entry without a main-thread insert/rehash
+    // race. Initial gain matches m_txMonitorVolume default (0.5f); updated
+    // atomically by setTxMonitorVolume via setSliceGain.
+    // Plan: 3M-1b E.3. Pre-code review §4.3.
+    m_masterMix.setSliceGain(kTxMonitorSlotId, m_txMonitorVolume.load(std::memory_order_relaxed), 0.0f);
 }
 
 AudioEngine::~AudioEngine()
@@ -1006,7 +1021,7 @@ void AudioEngine::setTxMonitorEnabled(bool enabled)
     emit txMonitorEnabledChanged(enabled);
 }
 
-// Plan: 3M-1b E.2. Pre-code review §4.4.
+// Plan: 3M-1b E.2 + E.3. Pre-code review §4.4.
 void AudioEngine::setTxMonitorVolume(float volume)
 {
     const float clamped = std::clamp(volume, 0.0f, 1.0f);
@@ -1015,7 +1030,61 @@ void AudioEngine::setTxMonitorVolume(float volume)
     if (prev == clamped) {
         return;  // idempotent (float == compared after clamp)
     }
+    // Push the new gain into MasterMixer so accumulate() picks it up on
+    // the next audio-thread call. setSliceGain acquires m_sliceMapMutex
+    // (main-thread only; not called from the audio callback).
+    m_masterMix.setSliceGain(kTxMonitorSlotId, clamped, 0.0f);
     emit txMonitorVolumeChanged(clamped);
+}
+
+// Plan: 3M-1b E.3. Pre-code review §4.3 + §4.4.
+//
+// Receives the TXA Sip1 siphon output from TxChannel::sip1OutputReady via
+// Qt::DirectConnection (audio thread, same callsite as rxBlockReady). When
+// TX monitor is enabled, expands the mono TXA block to interleaved stereo
+// (L = R = each sample) and accumulates into MasterMixer at kTxMonitorSlotId.
+// The per-slot gain is maintained by setTxMonitorVolume via
+// MasterMixer::setSliceGain; accumulate() reads it atomically, so no
+// per-sample multiply is needed here.
+//
+// MasterMixer::mixInto() is called as usual from rxBlockReady; the TX-monitor
+// contribution is included in the next RX flush (or as soon as mixInto() is
+// called by whichever RX block arrives first). At typical SSB block sizes the
+// two are synchronised; a small (~1 block) latency is acceptable and matches
+// Thetis's aaudio asynchronous mix path.
+//
+// RT-safety contract:
+//   - atomic acquire loads for m_txMonitorEnabled; no lock, no alloc.
+//   - thread_local scratch vector for the stereo expansion; zero-alloc after
+//     the first call from a given thread.
+//   - MasterMixer::accumulate() is lock-free on the audio thread (map is
+//     structurally stable after ctor pre-registration; gains are atomics).
+void AudioEngine::txMonitorBlockReady(const float* samples, int frames)
+{
+    if (!m_txMonitorEnabled.load(std::memory_order_acquire)) {
+        return;
+    }
+    if (samples == nullptr || frames <= 0) {
+        return;
+    }
+
+    // Expand mono TXA samples to interleaved stereo (L=R) so MasterMixer
+    // sees the same format as RX blocks. thread_local so no allocation after
+    // the first block per DSP thread.
+    static thread_local std::vector<float> stereoScratch;
+    const int stereoFloats = frames * 2;
+    if (static_cast<int>(stereoScratch.size()) < stereoFloats) {
+        stereoScratch.resize(static_cast<size_t>(stereoFloats));
+    }
+    for (int i = 0; i < frames; ++i) {
+        stereoScratch[i * 2 + 0] = samples[i];  // L
+        stereoScratch[i * 2 + 1] = samples[i];  // R
+    }
+
+    // Accumulate into MasterMixer. The slot's gain (= m_txMonitorVolume)
+    // was written by setTxMonitorVolume via setSliceGain and is read
+    // atomically inside accumulate(). No separate multiply needed here.
+    m_masterMix.accumulate(kTxMonitorSlotId, stereoScratch.data(), frames);
 }
 
 void AudioEngine::setVaxRxGain(int channel, float gain)
