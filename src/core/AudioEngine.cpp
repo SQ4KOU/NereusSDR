@@ -992,6 +992,32 @@ void AudioEngine::setMasterMuted(bool muted)
     }
 }
 
+// Plan: 3M-1b E.2. Pre-code review §4.4.
+void AudioEngine::setTxMonitorEnabled(bool enabled)
+{
+    // Same acq_rel / acquire pairing as setMasterMuted above — the
+    // audio-thread read in E.3's txMonitorBlockReady uses acquire; a
+    // plain release would not synchronize on weak memory models (ARM /
+    // Apple Silicon).
+    const bool prev = m_txMonitorEnabled.exchange(enabled, std::memory_order_acq_rel);
+    if (prev == enabled) {
+        return;  // idempotent
+    }
+    emit txMonitorEnabledChanged(enabled);
+}
+
+// Plan: 3M-1b E.2. Pre-code review §4.4.
+void AudioEngine::setTxMonitorVolume(float volume)
+{
+    const float clamped = std::clamp(volume, 0.0f, 1.0f);
+    // Same acq_rel / acquire pairing as setVolume above.
+    const float prev = m_txMonitorVolume.exchange(clamped, std::memory_order_acq_rel);
+    if (prev == clamped) {
+        return;  // idempotent (float == compared after clamp)
+    }
+    emit txMonitorVolumeChanged(clamped);
+}
+
 void AudioEngine::setVaxRxGain(int channel, float gain)
 {
     if (channel < 1 || channel > 4) {

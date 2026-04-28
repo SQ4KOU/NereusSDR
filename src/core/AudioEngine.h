@@ -214,6 +214,28 @@ public:
     void setMasterMuted(bool muted);
     bool masterMuted() const { return m_masterMuted.load(std::memory_order_acquire); }
 
+    /// TX monitor (MON) enable. When true, TXA siphon audio is mixed into
+    /// the master output during MOX (the user hears themselves).
+    ///
+    /// Atomic: written by main thread via this setter, read by audio thread
+    /// in E.3's txMonitorBlockReady slot. Idempotent: skips signal emit if
+    /// value unchanged.
+    ///
+    /// Default false (mon off at startup per plan §0 row 9).
+    ///
+    /// Plan: 3M-1b E.2. Pre-code review §4.4.
+    void setTxMonitorEnabled(bool enabled);
+    bool txMonitorEnabled() const { return m_txMonitorEnabled.load(std::memory_order_acquire); }
+
+    /// TX monitor volume (0.0..1.0). Atomic; clamped on set.
+    ///
+    /// Default 0.5f (matches Thetis fixed mix coefficient at audio.cs:417;
+    /// see pre-code review §12.5).
+    ///
+    /// Plan: 3M-1b E.2. Pre-code review §4.4.
+    void setTxMonitorVolume(float volume);
+    float txMonitorVolume() const { return m_txMonitorVolume.load(std::memory_order_acquire); }
+
     // Per-channel VAX controls (Sub-Phase 9 Task 9.2a). Main-thread writes,
     // audio-thread reads, via std::atomic — matches the setVolume /
     // m_masterVolume handshake. `channel` is 1..4; out-of-range calls are
@@ -285,6 +307,9 @@ public:
 signals:
     void volumeChanged(float volume);
     void masterMutedChanged(bool muted);
+    // Plan: 3M-1b E.2. Pre-code review §4.4.
+    void txMonitorEnabledChanged(bool enabled);
+    void txMonitorVolumeChanged(float volume);
     void vaxRxGainChanged(int channel, float gain);
     void vaxMutedChanged(int channel, bool muted);
     void vaxTxGainChanged(float gain);
@@ -378,6 +403,16 @@ private:
     // rxBlockReady() on the DSP thread. Same acq_rel / acquire pairing
     // as m_masterVolume above.
     std::atomic<bool> m_masterMuted{false};
+
+    // Plan: 3M-1b E.2. Pre-code review §4.4.
+    // Written by setTxMonitorEnabled() on the main thread, read by the
+    // audio thread in E.3's txMonitorBlockReady slot. Same acq_rel /
+    // acquire pairing as m_masterMuted above.
+    std::atomic<bool>  m_txMonitorEnabled{false};  // default off per plan §0 row 9
+    // Default 0.5f — mirrors the fixed coefficient used in Thetis audio.cs
+    // for the aaudio mix path; NereusSDR exposes this as user-adjustable
+    // volume (pre-code review §4.4). Not a port; AudioEngine is NereusSDR-native.
+    std::atomic<float> m_txMonitorVolume{0.5f};
 
     // Sub-Phase 9 Task 9.2a — per-channel VAX rx gain / mute and master
     // VAX tx gain. Main-thread writes via set*() setters, DSP-thread

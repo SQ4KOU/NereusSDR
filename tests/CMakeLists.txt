@@ -1331,3 +1331,8 @@ nereus_add_test(tst_tx_channel_meters)
 nereus_add_test(tst_audio_engine_pull_tx_mic)
 target_compile_definitions(tst_audio_engine_pull_tx_mic PRIVATE NEREUS_BUILD_TESTS)
 
+# Plan: 3M-1b E.2. Exercises AudioEngine TX monitor enable + volume state
+# (setTxMonitorEnabled / setTxMonitorVolume / signals / clamping / idempotency).
+# Pre-code review §4.4.
+nereus_add_test(tst_audio_engine_tx_monitor_state)
+
