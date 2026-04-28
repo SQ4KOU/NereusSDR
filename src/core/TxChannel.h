@@ -93,7 +93,6 @@ warren@wpratt.com
 #include <QObject>
 #include <QTimer>
 
-#include <stdexcept>
 #include <vector>
 
 #include "WdspTypes.h"

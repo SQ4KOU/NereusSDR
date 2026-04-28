@@ -94,6 +94,8 @@ warren@wpratt.com
 #include "RadioConnection.h"
 #include "TxMicRouter.h"
 
+#include <stdexcept>
+
 // WDSP API declarations (SetTXAPostGen*, fexchange2, etc.) — guarded by
 // HAVE_WDSP internally.  Include unconditionally; the header guards itself.
 #include "wdsp_api.h"
