@@ -650,6 +650,26 @@ set_target_properties(NereusSDR PROPERTIES
     MACOSX_BUNDLE_COPYRIGHT "© 2026 J.J. Boyd (KG4VCF); GPL port of Thetis (ramdor/Thetis) and mi0bot/OpenHPSDR-Thetis; descends from FlexRadio PowerSDR lineage. GPLv3."
 )
 
+# macOS strict mode requires NSMicrophoneUsageDescription in Info.plist
+# for any app that opens an audio capture stream — without it the stream
+# opens but macOS silently delivers zero-filled buffers (no permission
+# dialog, no error). CMake's MACOSX_BUNDLE template doesn't include the
+# key; inject it post-build via PlistBuddy + re-sign so TCC accepts the
+# updated bundle. Safe to run on every build (PlistBuddy "Set" is
+# idempotent — adds on first run, updates on subsequent runs).
+if(APPLE)
+    add_custom_command(TARGET NereusSDR POST_BUILD
+        COMMAND /usr/libexec/PlistBuddy
+            -c "Delete :NSMicrophoneUsageDescription" || true
+        COMMAND /usr/libexec/PlistBuddy
+            -c "Add :NSMicrophoneUsageDescription string 'NereusSDR uses the microphone for SSB voice transmission and live mic level monitoring.'"
+            "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist"
+        COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:NereusSDR>"
+        COMMENT "Inject NSMicrophoneUsageDescription + re-sign bundle (mic-permission gate)"
+        VERBATIM
+    )
+endif()
+
 target_include_directories(NereusSDRObjs PUBLIC
     ${CMAKE_SOURCE_DIR}/src
 )
