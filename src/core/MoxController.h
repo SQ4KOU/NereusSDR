@@ -80,7 +80,6 @@
 
 #include <QObject>
 #include <QTimer>
-#include <cmath>
 #include <limits>
 #include "core/PttMode.h"
 #include "core/WdspTypes.h"

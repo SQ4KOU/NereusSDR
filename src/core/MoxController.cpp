@@ -75,6 +75,8 @@
 
 #include "core/MoxController.h"
 
+#include <cmath>
+
 namespace NereusSDR {
 
 // ---------------------------------------------------------------------------

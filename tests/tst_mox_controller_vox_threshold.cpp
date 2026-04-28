@@ -33,7 +33,6 @@
 #include <QSignalSpy>
 
 #include <cmath>
-#include <limits>
 
 #include "core/MoxController.h"
 
