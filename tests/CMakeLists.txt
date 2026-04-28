@@ -1400,3 +1400,31 @@ target_compile_definitions(tst_pc_mic_source PRIVATE NEREUS_BUILD_TESTS)
 # Pre-code review §6.4.
 nereus_add_test(tst_radio_connection_mic_frame_signal)
 
+# ── Phase 3M-1b Task F.2: RadioMicSource ─────────────────────────────────────
+# Verifies RadioMicSource — the TxMicRouter implementation that drains a
+# lock-free SPSC float ring fed by RadioConnection::micFrameDecoded.
+# Uses TestRadioConnection (inline subclass) to drive micFrameDecoded
+# synchronously via DirectConnection. Test seam: NEREUS_BUILD_TESTS exposes
+# ringFillForTest() and ringDroppedForTest().
+# Cases (14):
+#   pullSamples_emptyRing_zeroFills         — empty ring → zero-fill + return n
+#   pullSamples_partialRing_returnsZeroFilledRest
+#                                           — 4 samples pushed, pull 8 → 4 data + 4 zero
+#   pullSamples_fullDrain_returnsAllSamples — push n, pull n → ring empty
+#   pullSamples_fifoOrder_preserved         — 16 values in order
+#   onMicFrame_pushesToRing                 — ringFill increases after emit
+#   onMicFrame_overflow_dropsExtra_recordsDropCount
+#                                           — full ring → 5 more dropped, counter=5
+#   onMicFrame_nullSamples_noOp             — nullptr samples → no crash, no state change
+#   onMicFrame_zeroFrames_noOp              — frames=0 → no crash, no state change
+#   roundTrip_pushAndPull                   — two batches pushed, read back in order
+#   multipleCycles_fifo_preserved           — 8×1024 cycles, crosses ring wraparound
+#   nullConnection_constructorOk            — nullptr conn → constructs ok, zero-fills
+#   pullSamples_returnAlwaysN               — underrun → returns n (not toRead)
+#   pullSamples_nullDst_returnsZero         — nullptr dst → 0, ring unchanged
+#   viaBasePointer_dispatchWorks            — virtual dispatch through TxMicRouter*
+#
+# Master design §5.2.1. Plan: 3M-1b F.2.
+nereus_add_test(tst_radio_mic_source)
+target_compile_definitions(tst_radio_mic_source PRIVATE NEREUS_BUILD_TESTS)
+
