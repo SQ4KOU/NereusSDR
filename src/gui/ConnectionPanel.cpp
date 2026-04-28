@@ -216,7 +216,12 @@ ConnectionPanel::ConnectionPanel(RadioModel* model, QWidget* parent)
     m_lastSeenRefreshTimer.start(15000);
 
     // Design §7.4: feed all currently-saved MACs to RadioDiscovery so it knows
-    // which entries to exempt from the stale-removal sweep.
+    // which entries to exempt from the stale-removal sweep, AND seed the
+    // table from disk so saved radios are visible on cold launch even if
+    // they aren't currently broadcasting (offline-save case from the Add
+    // Radio dialog, or any radio that's powered off / behind a VPN that's
+    // down right now). Broadcast discovery will upgrade the row to online
+    // when it sees them; otherwise they stay as a red Offline pill.
     {
         const QList<SavedRadio> saved = AppSettings::instance().savedRadios();
         QStringList savedMacs;
@@ -225,6 +230,7 @@ ConnectionPanel::ConnectionPanel(RadioModel* model, QWidget* parent)
             if (!sr.info.macAddress.isEmpty()) {
                 savedMacs.append(sr.info.macAddress);
             }
+            upsertRowForInfo(sr.info, /*online=*/false);
         }
         disc->setSavedMacs(savedMacs);
     }
@@ -1060,6 +1066,13 @@ void ConnectionPanel::onAddManuallyClicked()
         return;
     }
     const RadioInfo info = dlg.result();
+
+    if (info.macAddress.isEmpty() || !info.address.toString().size()) {
+        setStatusText(QStringLiteral("Save failed: missing MAC or IP"));
+        qCWarning(lcDiscovery) << "ConnectionPanel: refusing to save — empty MAC or IP";
+        return;
+    }
+
     AppSettings::instance().saveRadio(info, dlg.pinToMac(), dlg.autoConnect());
     AppSettings::instance().save();
 

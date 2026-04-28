@@ -523,6 +523,18 @@ void AddCustomRadioDialog::onProbeClicked()
                     }
                 }
 
+                // Default Name to "<board> @ .<last-octet>" if user left it blank
+                // (matches design §4.4 "Defaults to Model · IP suffix").
+                if (m_nameEdit->text().trimmed().isEmpty()) {
+                    const QString boardName = QString::fromUtf8(
+                        BoardCapsTable::forBoard(m_probedInfo.boardType).displayName);
+                    const QStringList octets = m_probedInfo.address.toString().split('.');
+                    const QString suffix = octets.size() == 4
+                        ? QStringLiteral(" @ .%1").arg(octets.last())
+                        : QString();
+                    m_nameEdit->setText(boardName + suffix);
+                }
+
                 disc->deleteLater();
                 hideProbingOverlay();
 
@@ -692,10 +704,16 @@ void AddCustomRadioDialog::hideProbingOverlay()
 
 RadioInfo AddCustomRadioDialog::result() const
 {
-    // If probe succeeded, return the probed info (already populated).
-    // If saved offline, synthesise from the form fields.
+    // If probe succeeded, return the probed info — but layer the user-entered
+    // Name on top so the row in the panel uses what the user typed (probe
+    // replies don't carry a name).
     if (!m_savedOffline && m_probedInfo.macAddress.length() > 0) {
-        return m_probedInfo;
+        RadioInfo verified = m_probedInfo;
+        const QString userName = m_nameEdit->text().trimmed();
+        if (!userName.isEmpty()) {
+            verified.name = userName;
+        }
+        return verified;
     }
 
     RadioInfo info;
