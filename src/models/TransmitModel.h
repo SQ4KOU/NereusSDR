@@ -22,6 +22,11 @@
 //   2026-04-28 — micSource (MicSource::Pc/Radio) property (I.1, Phase 3M-1b)
 //                 NereusSDR-native Setup UI property, J.J. Boyd (KG4VCF),
 //                 with AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-28 — AppSettings per-MAC persistence for 15 mic/VOX/MON properties
+//                 (L.2, Phase 3M-1b): loadFromSettings(mac) / persistToSettings(mac)
+//                 + auto-persist on each setter via persistOne().
+//                 NereusSDR-native persistence glue, J.J. Boyd (KG4VCF),
+//                 with AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -174,6 +179,36 @@ public:
     /// current MAC scope.  No-op when no MAC has been set.
     /// Cite: console.cs:3087-3091 [v2.10.3.13].
     void save();
+
+    // ── Per-MAC mic/VOX/MON persistence (3M-1b L.2) ──────────────────────
+    //
+    // NereusSDR-native persistence glue.  Persists 15 mic/VOX/MON properties
+    // under hardware/<mac>/tx/<key>.  Three properties are intentionally
+    // excluded (per plan §0 rows 8/9):
+    //   - voxEnabled  → always loads false (safety: VOX always starts OFF)
+    //   - monEnabled  → always loads false (safety: MON always starts OFF)
+    //   - micMute     → always loads true  (safety: mic in use on startup)
+    //
+    // The auto-persist pattern: once loadFromSettings(mac) is called, every
+    // property setter invokes persistOne(key, value) to write the new value
+    // immediately.  This means no explicit flush is needed on each change;
+    // persistToSettings(mac) is bulk-write used at disconnect as insurance.
+    //
+    // Key namespace: hardware/<mac>/tx/<propertyName>
+    // (consistent with hardware/<mac>/tunePowerByBand/ and cal/ namespaces).
+
+    /// Load 15 per-MAC mic/VOX/MON properties from AppSettings.
+    /// Sets m_persistMac so subsequent setters auto-persist changes.
+    /// voxEnabled, monEnabled, and micMute are NEVER loaded — they always
+    /// start at their safety defaults regardless of any stored value.
+    /// micGainDb defaults to -6 on first run (plan §0 row 11).
+    void loadFromSettings(const QString& mac);
+
+    /// Bulk-write all 15 persisted mic/VOX/MON properties to AppSettings.
+    /// (Excluding voxEnabled, monEnabled, micMute — never persisted.)
+    /// Used at disconnect as defense-in-depth; auto-persist should have
+    /// flushed each change already.
+    void persistToSettings(const QString& mac) const;
 
     // ── Mic gain (3M-1b C.1) ──────────────────────────────────────────────
     //
@@ -670,6 +705,15 @@ private:
 
     // Per-MAC AppSettings scope (mirrors AlexController pattern).
     QString m_mac;
+
+    // Per-MAC scope for mic/VOX/MON auto-persist (L.2).
+    // Empty until loadFromSettings(mac) is called; setters no-op their
+    // persistOne() call when this is empty.
+    QString m_persistMac;
+
+    /// Write a single key under hardware/<m_persistMac>/tx/<key> to AppSettings.
+    /// No-op when m_persistMac is empty (before loadFromSettings is called).
+    void persistOne(const QString& key, const QVariant& value) const;
 
     // ── Mic gain (3M-1b C.1) ──────────────────────────────────────────────
     // From Thetis console.cs:28805-28817 [v2.10.3.13] (setAudioMicGain).

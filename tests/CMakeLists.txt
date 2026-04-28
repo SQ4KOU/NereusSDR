@@ -271,6 +271,15 @@ nereus_add_test(tst_transmit_model_anti_vox)
 #         phase3m-1b-thetis-pre-code-review.md §4.2 + §12.5.
 nereus_add_test(tst_transmit_model_mon)
 
+# ── Phase 3M-1b L.2: TransmitModel per-MAC mic/VOX/MON persistence ───────────
+# Verifies loadFromSettings(mac) / persistToSettings(mac) + auto-persist on
+# each setter.  Covers: round-trip per persisted key (15 cases), exclusion of
+# non-persisted keys (voxEnabled/monEnabled/micMute — 3 cases), first-run
+# defaults (all 15 at C.1-C.5 defaults; micGainDb -6 per §0 row 11),
+# multi-MAC isolation, bulk persistToSettings round-trip, and auto-persist
+# no-op before loadFromSettings.
+nereus_add_test(tst_transmit_model_persistence)
+
 # ── Phase 3O VAX schema migration ─────────────────────────────────────────
 nereus_add_test(tst_app_settings_vax_migration)
 

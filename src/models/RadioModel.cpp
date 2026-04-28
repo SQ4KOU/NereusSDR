@@ -1068,6 +1068,11 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // Phase 3M-1a G.3. Source: Thetis console.cs:1819-1820 / :4904-4910 [v2.10.3.13].
         m_transmitModel.setMacAddress(info.macAddress);
         m_transmitModel.load();
+
+        // Load per-MAC mic/VOX/MON properties (15 properties, 3 excluded for safety).
+        // Phase 3M-1b L.2. After setMacAddress so auto-persist uses the correct MAC.
+        // voxEnabled, monEnabled, micMute are NOT loaded — always start at safe defaults.
+        m_transmitModel.loadFromSettings(info.macAddress);
     }
 
     m_name = info.displayName();
@@ -2656,6 +2661,13 @@ void RadioModel::teardownConnection()
     // Flush per-band tune power on disconnect.
     // Phase 3M-1a G.3. Source: Thetis console.cs:3087-3091 [v2.10.3.13].
     m_transmitModel.save();
+
+    // Flush mic/VOX/MON properties on disconnect (defense-in-depth;
+    // auto-persist should have flushed each change already).
+    // Phase 3M-1b L.2.
+    if (!m_lastRadioInfo.macAddress.isEmpty()) {
+        m_transmitModel.persistToSettings(m_lastRadioInfo.macAddress);
+    }
 
     // Disconnect signals into the DSP worker first so no new I/Q
     // batches can be posted onto the worker thread, then quit and
