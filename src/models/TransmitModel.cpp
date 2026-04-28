@@ -10,6 +10,9 @@
 //   2026-04-26 — tunePowerByBand[14] + per-MAC persistence (G.3, Phase 3M-1a)
 //                 ported by J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                 via Anthropic Claude Code.
+//   2026-04-27 — micGainDb (int) + derived micPreampLinear (double) (C.1, Phase 3M-1b)
+//                 ported by J.J. Boyd (KG4VCF), with AI-assisted transformation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -67,6 +70,7 @@
 #include "core/AppSettings.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -176,6 +180,25 @@ void TransmitModel::loadFromSettings()
         m_txOwnerSlot.store(s, std::memory_order_release);
         emit txOwnerSlotChanged(s);
     }
+}
+
+// ── Mic gain (3M-1b C.1) ──────────────────────────────────────────────────
+
+void TransmitModel::setMicGainDb(int dB)
+{
+    // Clamp to range per Thetis console.cs:19151-19171 [v2.10.3.13].
+    // Thetis runtime defaults: mic_gain_min = -40, mic_gain_max = 10.
+    // NereusSDR model range [-50, 70] per plan §C.1.
+    const int clamped = std::clamp(dB, kMicGainDbMin, kMicGainDbMax);
+    if (clamped == m_micGainDb) { return; }  // idempotent guard
+
+    m_micGainDb = clamped;
+    // Porting from Thetis console.cs:28805-28817 [v2.10.3.13]:
+    //   Audio.MicPreamp = Math.Pow(10.0, gain_db / 20.0); // convert to scalar
+    m_micPreampLinear = std::pow(10.0, clamped / 20.0);
+
+    emit micGainDbChanged(m_micGainDb);
+    emit micPreampChanged(m_micPreampLinear);
 }
 
 // ── Per-band tune power (G.3) ─────────────────────────────────────────────

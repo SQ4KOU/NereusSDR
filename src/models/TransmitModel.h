@@ -10,6 +10,9 @@
 //   2026-04-26 — tunePowerByBand[14] + per-MAC persistence (G.3, Phase 3M-1a)
 //                 ported by J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                 via Anthropic Claude Code.
+//   2026-04-27 — micGainDb (int) + derived micPreampLinear (double) (C.1, Phase 3M-1b)
+//                 ported by J.J. Boyd (KG4VCF), with AI-assisted transformation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -71,6 +74,7 @@
 #include <QString>
 #include <array>
 #include <atomic>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -161,6 +165,62 @@ public:
     /// Cite: console.cs:3087-3091 [v2.10.3.13].
     void save();
 
+    // ── Mic gain (3M-1b C.1) ──────────────────────────────────────────────
+    //
+    // Porting from Thetis console.cs:28805-28817 [v2.10.3.13]:
+    //   private void setAudioMicGain(double gain_db)
+    //   {
+    //       if (chkMicMute.Checked) // although it is called chkMicMute, checked = mic in use
+    //       {
+    //           Audio.MicPreamp = Math.Pow(10.0, gain_db / 20.0); // convert to scalar
+    //           _mic_muted = false;
+    //       }
+    //       else
+    //       {
+    //           Audio.MicPreamp = 0.0;
+    //           _mic_muted = true;
+    //       }
+    //   }
+    //
+    // C.1 implements the unconditional dB→linear path only.  The
+    // chkMicMute-gated zero-fill is C.2's responsibility (micMute property
+    // and mute-zeroing logic arrive in C.2).
+    //
+    // Default -6 dB is a NereusSDR-original safety addition (not from
+    // Thetis — Thetis defaults vary by board).  Conservative starting
+    // point against ALC overdrive at 100 W PA per plan §0 row 11.
+    //
+    // micPreampLinear is a derived read-only computed property; it
+    // recomputes on every setMicGainDb() call and emits its own signal
+    // for downstream subscribers (TxChannel::recomputeTxAPanelGain1
+    // arrives in D.6).
+    //
+    // Range clamped to kMicGainDbMin / kMicGainDbMax.
+    // Thetis console.cs:19151-19171 [v2.10.3.13] shows mic_gain_min = -40
+    // and mic_gain_max = 10 as runtime defaults, but setup.designer.cs shows
+    // the spinboxes allow Minimum = -96, Maximum = 70.  The NereusSDR model
+    // uses [-50, 70] as a conservative fixed range per plan §C.1.
+    //
+    // TODO [3M-1b L.x]: read range from BoardCapabilities once per-board
+    // mic-gain fields land (HL2 range differs from ANAN range).
+    //
+    // Persistence per-MAC arrives in L.2.
+
+    /// Return the user-facing mic gain in dB.
+    int    micGainDb()       const noexcept { return m_micGainDb; }
+    /// Return the derived linear scalar: pow(10, micGainDb / 20).
+    double micPreampLinear() const noexcept { return m_micPreampLinear; }
+
+    // Hardcoded range per plan §C.1.
+    // Thetis console.cs:19151-19171 [v2.10.3.13]: mic_gain_min = -40 /
+    // mic_gain_max = 10 are runtime defaults; setup.designer.cs shows the
+    // spinboxes allow down to -96 and up to 70.  NereusSDR uses [-50, 70].
+    static constexpr int kMicGainDbMin = -50;
+    static constexpr int kMicGainDbMax =  70;
+
+public slots:
+    void setMicGainDb(int dB);
+
 signals:
     void moxChanged(bool mox);
     void tuneChanged(bool tune);
@@ -171,6 +231,12 @@ signals:
 
     /// Emitted when a per-band tune-power value changes.
     void tunePowerByBandChanged(Band band, int watts);
+
+    // ── Mic gain signals (3M-1b C.1) ──────────────────────────────────────
+    /// Emitted when micGainDb changes (carries the clamped dB value).
+    void micGainDbChanged(int dB);
+    /// Emitted when micPreampLinear changes (carries the new linear scalar).
+    void micPreampChanged(double linear);
 
 private:
     bool m_mox{false};
@@ -188,6 +254,14 @@ private:
 
     // Per-MAC AppSettings scope (mirrors AlexController pattern).
     QString m_mac;
+
+    // ── Mic gain (3M-1b C.1) ──────────────────────────────────────────────
+    // From Thetis console.cs:28805-28817 [v2.10.3.13] (setAudioMicGain).
+    // Default -6 dB per plan §0 row 11 (NereusSDR safety addition).
+    // m_micPreampLinear is derived: pow(10, m_micGainDb / 20.0).
+    int    m_micGainDb       = -6;
+    // pow(10, -6/20) ≈ 0.501187233627272
+    double m_micPreampLinear = std::pow(10.0, -6.0 / 20.0);
 };
 
 } // namespace NereusSDR

@@ -225,6 +225,13 @@ nereus_add_test(tst_transmit_model_tx_owner)
 # ── Phase 3M-1a G.3: TransmitModel tunePowerByBand[14] per-MAC persistence ──
 nereus_add_test(tst_transmit_model_tune_power)
 
+# ── Phase 3M-1b C.1: TransmitModel::micGainDb + derived micPreampLinear ─────
+# Verifies default (-6 dB), dB→linear round-trip via pow(10, dB/20),
+# both micGainDbChanged + micPreampChanged signals emitted together,
+# idempotent guard on same-value set, range clamping to kMicGainDbMin/Max.
+# Source: console.cs:28805-28817 [v2.10.3.13] (setAudioMicGain dB→scalar).
+nereus_add_test(tst_transmit_model_mic_gain)
+
 # ── Phase 3O VAX schema migration ─────────────────────────────────────────
 nereus_add_test(tst_app_settings_vax_migration)
 
