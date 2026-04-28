@@ -13,6 +13,9 @@
 //   2026-04-27 — micGainDb (int) + derived micPreampLinear (double) (C.1, Phase 3M-1b)
 //                 ported by J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                 via Anthropic Claude Code.
+//   2026-04-27 — VOX properties: voxEnabled / voxThresholdDb / voxGainScalar /
+//                 voxHangTimeMs (C.3, Phase 3M-1b) ported by J.J. Boyd (KG4VCF),
+//                 with AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -298,6 +301,93 @@ public:
     static constexpr double kLineInBoostMin = -34.5;
     static constexpr double kLineInBoostMax =  12.0;
 
+    // ── VOX properties (3M-1b C.3) ────────────────────────────────────────
+    //
+    // Porting from Thetis audio.cs:167-202 [v2.10.3.13]:
+    //   private static bool vox_enabled = false;
+    //   public static bool VOXEnabled { get { return vox_enabled; } set { vox_enabled = value; ... } }
+    //   private static float vox_gain = 1.0f;
+    //   public static float VOXGain { get { return vox_gain; } set { vox_gain = value; } }
+    //
+    // Porting from Thetis console.cs:14707-14716 [v2.10.3.13]:
+    //   public double VOXHangTime { get { return vox_hang_time; }
+    //                               set { vox_hang_time = value;
+    //                                     if (!IsSetupFormNull) SetupForm.VOXHangTime = (int)value; } }
+    // Mapped to setup.cs:4865-4876 / setup.designer.cs:45005-45024 [v2.10.3.13]:
+    //   udDEXPHold.Minimum=1, udDEXPHold.Maximum=2000, udDEXPHold.Value=500 ms.
+    //
+    // voxThresholdDb range from console.Designer.cs:6018-6019 [v2.10.3.13]:
+    //   ptbVOX.Maximum=0, ptbVOX.Minimum=-80  (display unit is dB).
+    //
+    // WDSP wiring (SetDEXPRunVox, SetDEXPAttackThreshold, SetDEXPHoldTime)
+    // arrives in Phase D and Phase H.
+    // AppSettings persistence arrives in Phase L.2; voxEnabled does NOT persist
+    // (safety: VOX always loads OFF — plan §0 row 8).
+    //
+    // voxGainScalar: Thetis has no explicit clamp on VOXGain; NereusSDR adds a
+    // sane guard [0.0f, 100.0f].  A scalar of 0.0 disables the mic-boost
+    // scaling effect; 100.0 is an extreme upper bound that avoids silent
+    // overflow.  Callers should use values in [0.0f, 10.0f] for normal use.
+
+    /// VOX enable toggle.  Default FALSE — safety rule: VOX always starts OFF
+    /// (plan §0 row 8; prevents unintended TX on startup).
+    ///
+    /// Mode-gating (VOX fires only in voice modes) is wired in Phase H Task H.1
+    /// via CMSetTXAVoxRun mode-gate logic.
+    ///
+    /// From Thetis audio.cs:167 [v2.10.3.13]:
+    ///   private static bool vox_enabled = false;
+    bool voxEnabled() const noexcept { return m_voxEnabled; }
+
+    /// VOX detection threshold in dB.  Clamped to [kVoxThresholdDbMin, kVoxThresholdDbMax].
+    /// Default −40 dB (NereusSDR-original conservative starting point; Thetis
+    /// ptbVOX.Value defaults to −20 per console.Designer.cs:6024 [v2.10.3.13]).
+    ///
+    /// Range from console.Designer.cs:6018-6019 [v2.10.3.13]:
+    ///   ptbVOX.Maximum = 0, ptbVOX.Minimum = -80
+    int voxThresholdDb() const noexcept { return m_voxThresholdDb; }
+
+    /// Mic-boost-aware VOX threshold scaler.  Applied in CMSetTXAVoxThresh when
+    /// MicBoost is on: threshold *= voxGainScalar.  Clamped to
+    /// [kVoxGainScalarMin, kVoxGainScalarMax].
+    ///
+    /// Full mic-boost-aware scaling is wired in Phase H Task H.2.
+    ///
+    /// From Thetis audio.cs:194 [v2.10.3.13]:
+    ///   private static float vox_gain = 1.0f;
+    ///
+    /// Thetis has no explicit clamp on VOXGain.  NereusSDR adds a sane upper
+    /// guard of 100.0f to prevent silent float overflow.
+    float voxGainScalar() const noexcept { return m_voxGainScalar; }
+
+    /// VOX hang time in milliseconds: delay from signal-drop to gain recovery.
+    /// Clamped to [kVoxHangTimeMsMin, kVoxHangTimeMsMax].
+    /// Default 500 ms (NereusSDR-original; matches Thetis udDEXPHold.Value=500
+    /// per setup.designer.cs:45020-45024 [v2.10.3.13]).
+    ///
+    /// Full DEXP knob set (attack, release, hysteresis, expansion ratio) lives
+    /// in the Setup DEXP page and is deferred to Phase 3M-3a-iii.
+    ///
+    /// From Thetis console.cs:14707 [v2.10.3.13] / setup.cs:4865 [v2.10.3.13].
+    int voxHangTimeMs() const noexcept { return m_voxHangTimeMs; }
+
+    // VOX threshold range constants.
+    // From Thetis console.Designer.cs:6018-6019 [v2.10.3.13]:
+    //   ptbVOX.Maximum = 0, ptbVOX.Minimum = -80
+    static constexpr int kVoxThresholdDbMin = -80;
+    static constexpr int kVoxThresholdDbMax =   0;
+
+    // VOX gain scalar range constants.
+    // NereusSDR sane guard; Thetis Audio.VOXGain has no explicit clamp.
+    static constexpr float kVoxGainScalarMin =   0.0f;
+    static constexpr float kVoxGainScalarMax = 100.0f;
+
+    // VOX hang time range constants.
+    // From Thetis setup.designer.cs:45005-45013 [v2.10.3.13]:
+    //   udDEXPHold.Maximum = 2000, udDEXPHold.Minimum = 1  (units: ms)
+    static constexpr int kVoxHangTimeMsMin =    1;
+    static constexpr int kVoxHangTimeMsMax = 2000;
+
 public slots:
     void setMicGainDb(int dB);
 
@@ -310,6 +400,12 @@ public slots:
     void setMicTipRing(bool tipIsMic);
     void setMicBias(bool on);
     void setMicPttDisabled(bool disabled);
+
+    // ── VOX setters (3M-1b C.3) ────────────────────────────────────────────
+    void setVoxEnabled(bool on);
+    void setVoxThresholdDb(int dB);
+    void setVoxGainScalar(float scalar);
+    void setVoxHangTimeMs(int ms);
 
 signals:
     void moxChanged(bool mox);
@@ -337,6 +433,12 @@ signals:
     void micTipRingChanged(bool tipIsMic);
     void micBiasChanged(bool on);
     void micPttDisabledChanged(bool disabled);
+
+    // ── VOX signals (3M-1b C.3) ────────────────────────────────────────────
+    void voxEnabledChanged(bool on);
+    void voxThresholdDbChanged(int dB);
+    void voxGainScalarChanged(float scalar);
+    void voxHangTimeMsChanged(int ms);
 
 private:
     bool m_mox{false};
@@ -375,6 +477,14 @@ private:
     bool   m_micTipRing     = true;   // setup.designer.cs:8683: radOrionMicTip.Checked=true
     bool   m_micBias        = false;  // setup.designer.cs:8779: radOrionBiasOff.Checked=true
     bool   m_micPttDisabled = false;  // console.cs:19757: mic_ptt_disabled = false
+
+    // ── VOX properties (3M-1b C.3) ──────────────────────────────────────
+    // From Thetis audio.cs:167-202 [v2.10.3.13].
+    // m_voxEnabled intentionally NOT persisted — safety: VOX loads OFF always.
+    bool  m_voxEnabled     = false;  // audio.cs:167: vox_enabled = false
+    int   m_voxThresholdDb = -40;    // NereusSDR-original default; ptbVOX range [-80,0]
+    float m_voxGainScalar  = 1.0f;   // audio.cs:194: vox_gain = 1.0f
+    int   m_voxHangTimeMs  = 500;    // udDEXPHold.Value=500 (setup.designer.cs:45020-45024)
 };
 
 } // namespace NereusSDR

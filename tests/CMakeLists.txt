@@ -242,6 +242,16 @@ nereus_add_test(tst_transmit_model_mic_gain)
 # (udLineInBoost range -34.5..12.0).
 nereus_add_test(tst_transmit_model_mic_jack_flags)
 
+# ── Phase 3M-1b C.3: TransmitModel VOX properties (4x) ───────────────────────
+# Verifies defaults (voxEnabled=false / voxThresholdDb=-40 / voxGainScalar=1.0f /
+# voxHangTimeMs=500), round-trip setters, signal emission, idempotent guard,
+# and range clamping for voxThresholdDb [−80,0], voxGainScalar [0.0f,100.0f],
+# and voxHangTimeMs [1,2000].
+# Source: audio.cs:167-202 [v2.10.3.13] (VOXEnabled/VOXGain defaults);
+#         console.Designer.cs:6018-6019 [v2.10.3.13] (ptbVOX range −80..0);
+#         setup.designer.cs:45005-45024 [v2.10.3.13] (udDEXPHold range 1..2000).
+nereus_add_test(tst_transmit_model_vox_properties)
+
 # ── Phase 3O VAX schema migration ─────────────────────────────────────────
 nereus_add_test(tst_app_settings_vax_migration)
 

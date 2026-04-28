@@ -17,6 +17,9 @@
 //                 lineIn / lineInBoost / micTipRing / micBias / micPttDisabled
 //                 (C.2, Phase 3M-1b) ported by J.J. Boyd (KG4VCF), with
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-27 — VOX properties: voxEnabled / voxThresholdDb / voxGainScalar /
+//                 voxHangTimeMs (C.3, Phase 3M-1b) ported by J.J. Boyd (KG4VCF),
+//                 with AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -382,6 +385,75 @@ void TransmitModel::save()
         s.setValue(prefix + QString::number(i),
                    QString::number(m_tunePowerByBand[static_cast<std::size_t>(i)]));
     }
+}
+
+// ── VOX properties (3M-1b C.3) ───────────────────────────────────────────────
+//
+// Porting from Thetis audio.cs:167-192 [v2.10.3.13] (VOXEnabled setter):
+//   private static bool vox_enabled = false;
+//   public static bool VOXEnabled { get { return vox_enabled; } set { vox_enabled = value; ... } }
+// Porting from Thetis audio.cs:194-202 [v2.10.3.13] (VOXGain):
+//   private static float vox_gain = 1.0f;
+//   public static float VOXGain { get { return vox_gain; } set { vox_gain = value; } }
+// VOXHangTime from Thetis console.cs:14707-14716 [v2.10.3.13] /
+//   setup.cs:4865-4876 [v2.10.3.13] (maps to udDEXPHold).
+// voxThresholdDb range from console.Designer.cs:6018-6019 [v2.10.3.13]:
+//   ptbVOX.Maximum=0, ptbVOX.Minimum=-80.
+// udDEXPHold range from setup.designer.cs:45005-45013 [v2.10.3.13]:
+//   Maximum=2000, Minimum=1 (ms).
+//
+// WDSP wiring (SetDEXPRunVox, SetDEXPAttackThreshold, SetDEXPHoldTime) deferred
+// to Phase D and Phase H.  AppSettings persistence deferred to Phase L.2.
+// voxEnabled intentionally NOT persisted — safety: VOX always loads OFF.
+
+void TransmitModel::setVoxEnabled(bool on)
+{
+    if (on == m_voxEnabled) { return; }  // idempotent guard
+    // Porting from Thetis audio.cs:167-192 [v2.10.3.13]:
+    //   vox_enabled = value; cmaster.CMSetTXAVoxRun(0); ...
+    // Phase H Task H.1 wires the mode-gate; model just stores + signals.
+    m_voxEnabled = on;
+    emit voxEnabledChanged(on);
+}
+
+void TransmitModel::setVoxThresholdDb(int dB)
+{
+    // Clamp to Thetis ptbVOX range per console.Designer.cs:6018-6019 [v2.10.3.13]:
+    //   ptbVOX.Maximum = 0, ptbVOX.Minimum = -80
+    const int clamped = std::clamp(dB, kVoxThresholdDbMin, kVoxThresholdDbMax);
+    if (clamped == m_voxThresholdDb) { return; }  // idempotent guard
+    // Porting from Thetis console.cs:12850-12858 [v2.10.3.13] (ptbVOX.Value setter).
+    // WDSP threshold application (CMSetTXAVoxThresh mic-boost-aware scaling)
+    // deferred to Phase H Task H.2.
+    m_voxThresholdDb = clamped;
+    emit voxThresholdDbChanged(clamped);
+}
+
+void TransmitModel::setVoxGainScalar(float scalar)
+{
+    // NereusSDR sane guard [0.0f, 100.0f]; Thetis Audio.VOXGain has no explicit
+    // clamp (audio.cs:194-202 [v2.10.3.13]).  0.0f disables mic-boost scaling;
+    // 100.0f is an extreme upper bound that avoids silent float overflow.
+    const float clamped = std::clamp(scalar, kVoxGainScalarMin, kVoxGainScalarMax);
+    if (qFuzzyCompare(clamped, m_voxGainScalar)) { return; }  // idempotent guard
+    // Porting from Thetis audio.cs:194-202 [v2.10.3.13]:
+    //   vox_gain = value;
+    // Mic-boost-aware threshold scaling wired in Phase H Task H.2.
+    m_voxGainScalar = clamped;
+    emit voxGainScalarChanged(clamped);
+}
+
+void TransmitModel::setVoxHangTimeMs(int ms)
+{
+    // Clamp to Thetis udDEXPHold range per setup.designer.cs:45005-45013 [v2.10.3.13]:
+    //   udDEXPHold.Maximum = 2000, udDEXPHold.Minimum = 1  (units: ms)
+    const int clamped = std::clamp(ms, kVoxHangTimeMsMin, kVoxHangTimeMsMax);
+    if (clamped == m_voxHangTimeMs) { return; }  // idempotent guard
+    // Porting from Thetis console.cs:14707-14716 [v2.10.3.13]:
+    //   vox_hang_time = value; if (!IsSetupFormNull) SetupForm.VOXHangTime = (int)value;
+    // WDSP SetDEXPHoldTime call deferred to Phase D / Phase H.
+    m_voxHangTimeMs = clamped;
+    emit voxHangTimeMsChanged(clamped);
 }
 
 } // namespace NereusSDR
