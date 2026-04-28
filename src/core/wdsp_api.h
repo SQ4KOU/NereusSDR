@@ -659,6 +659,15 @@ void SetTXAALCAttack(int channel, int attack);     // wcpAGC.c:578 — attack ms
 void SetTXAALCDecay(int channel, int decay);       // wcpAGC.c:586 — decay ms (10 = 10 ms)
 void SetTXAALCMaxGain(int channel, double maxgain); // wcpAGC.c:604 — max gain dB (0 = unity, no amplification)
 
+// leveler (stage 13, wcpAGC): slow speech-leveling AGC. Sits between
+// the mic preamp / bandpass and the ALC. Provides intelligibility
+// compression so ALC only handles fast clip protection.
+// From Thetis wdsp/wcpAGC.c:613-650 [v2.10.3.13].
+void SetTXALevelerSt(int channel, int state);          // wcpAGC.c:613 — leveler on/off
+void SetTXALevelerAttack(int channel, int attack);     // wcpAGC.c:621 — attack ms
+void SetTXALevelerDecay(int channel, int decay);       // wcpAGC.c:630 — decay ms
+void SetTXALevelerTop(int channel, double maxgain);    // wcpAGC.c:648 — max gain dB (Top)
+
 // bp0 (stage 8): mandatory TX bandpass filter.
 // From Thetis wdsp/bandpass.c — SetTXABandpass{Window,Run}.
 void SetTXABandpassWindow(int channel, int window); // 1 = 7-term Blackman-Harris
