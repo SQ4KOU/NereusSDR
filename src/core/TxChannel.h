@@ -82,6 +82,40 @@ warren@wpratt.com
 //                 3M-1a Task G.1 (TX I/Q production loop — bench fix:
 //                 fexchange2 output now reaches RadioConnection::sendTxIq).
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-27 — setTxMode(DSPMode) / setTxBandpass(int, int) /
+//                 setSubAmMode(int) added by J.J. Boyd (KG4VCF) during
+//                 3M-1b Task D.2 (per-mode TXA config setters). AI-assisted
+//                 transformation via Anthropic Claude Code.
+//   2026-04-27 — setStageRunning() expanded with explicit cases for
+//                 MicMeter, AlcMeter, AmMod, FmMod (+ Panel verified) by
+//                 J.J. Boyd (KG4VCF) during 3M-1b Task D.4. All 4 new
+//                 stages are documented no-ops: MicMeter/AlcMeter have no
+//                 public WDSP Run setter (meter.c:36-57 [v2.10.3.13]);
+//                 AmMod/FmMod run-controlled only via SetTXAMode()
+//                 (TXA.c:753-789 [v2.10.3.13]). AI-assisted transformation
+//                 via Anthropic Claude Code.
+//   2026-04-27 — sip1OutputReady(const float*, int) signal added by
+//                 J.J. Boyd (KG4VCF) during 3M-1b Task D.5. Emitted inside
+//                 driveOneTxBlock() after fexchange2 + sendTxIq; carries
+//                 m_outI.data() + m_outputBufferSize for the MON siphon
+//                 path (AudioEngine::txMonitorBlockReady in Phase L).
+//                 DirectConnection-only contract documented in signal
+//                 doc-comment. AI-assisted transformation via Anthropic
+//                 Claude Code.
+//   2026-04-27 — setMicPreamp(double) / recomputeTxAPanelGain1() added by
+//                 J.J. Boyd (KG4VCF) during 3M-1b Task D.6 (mic-mute path).
+//                 NaN-aware idempotent guard. When TransmitModel::micPreampChanged
+//                 fires 0.0 (MicMute toggled off / Thetis mute=true path),
+//                 SetTXAPanelGain1 is called with 0, silencing the mic in WDSP.
+//                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-27 — getTxMicMeter() / getAlcMeter() (2 wired) + getEqMeter() /
+//                 getLvlrMeter() / getCfcMeter() / getCompMeter() (4 deferred)
+//                 + kMeterUninitialisedSentinel constant added by J.J. Boyd
+//                 (KG4VCF) during 3M-1b Task D.7 (TX meter readouts).
+//                 Active meters read GetTXAMeter(TXA_MIC_PK / TXA_ALC_PK) from
+//                 Thetis wdsp/TXA.h:51-64 [v2.10.3.13]; deferred meters return
+//                 0.0f unconditionally per master design §5.2.1 (3M-3a scope).
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -89,7 +123,10 @@ warren@wpratt.com
 #include <QObject>
 #include <QTimer>
 
+#include <limits>   // std::numeric_limits — quiet_NaN() initialiser (D.3)
 #include <vector>
+
+#include "WdspTypes.h"
 
 namespace NereusSDR {
 
@@ -370,6 +407,203 @@ public:
     /// single-threaded use (main thread is the only writer in 3M-1a).
     bool isRunning() const noexcept { return m_running; }
 
+    // ── Per-mode TXA configuration (3M-1b D.2) ──────────────────────────────
+
+    /// Set the TXA channel's DSP mode (LSB / USB / DIGL / DIGU / etc.).
+    ///
+    /// Thin wrapper over WDSP SetTXAMode(channelId, mode).  Mode-gating
+    /// (rejecting AM / SAM / FM / DSB in 3M-1b) is BandPlanGuard's
+    /// responsibility at the MOX-engage layer; setTxMode itself is mode-agnostic.
+    ///
+    /// For AM/SAM modes the caller must also invoke setSubAmMode() (deferred to
+    /// 3M-3b) to select the sideband dispatch.  setTxMode alone will call
+    /// SetTXAMode with the raw AM/SAM integer value, which is correct WDSP
+    /// usage; the sub-mode dispatch is additive.
+    ///
+    /// 3M-1b SSB scope: callers should pass LSB / USB / DIGL / DIGU only.
+    ///
+    /// From Thetis radio.cs:2670-2696 [v2.10.3.13] — CurrentDSPMode setter
+    /// (else-branch: WDSP.SetTXAMode(WDSP.id(thread, 0), value) for non-AM/SAM).
+    void setTxMode(DSPMode mode);
+
+    /// Set the TXA channel's bandpass filter cutoff frequencies.
+    ///
+    /// Thin wrapper over WDSP SetTXABandpassFreqs(channelId, lowHz, highHz).
+    /// No pre-validation is applied — Thetis SetTXFilter passes the values
+    /// through to WDSP without range-checking (radio.cs:2730-2780 [v2.10.3.13]).
+    ///
+    /// IQ-space conventions (USB/LSB/AM/FM vary):
+    ///   USB / DIGU: low=+low_audio,  high=+high_audio  (e.g. +150, +2850)
+    ///   LSB / DIGL: low=-high_audio, high=-low_audio   (e.g. -2850, -150)
+    ///   AM / DSB:   low=-high_audio, high=+high_audio  (e.g. -2850, +2850)
+    ///
+    /// From Thetis radio.cs:2730-2780 [v2.10.3.13] — SetTXFilter /
+    /// TXFilterLow / TXFilterHigh setters.
+    void setTxBandpass(int lowHz, int highHz);
+
+    /// Set the AM/SAM sub-mode dispatch (0=DSB, 1=AM_LSB, 2=AM_USB).
+    ///
+    /// **Deferred to 3M-3b.** Throws std::logic_error if called in 3M-1b
+    /// because AM/SAM TX is not enabled in this phase.  The method exists so
+    /// the API is stable for 3M-3b; 3M-1b development that accidentally
+    /// reaches this code path surfaces immediately as a test failure.
+    ///
+    /// From Thetis radio.cs:2699-2728 [v2.10.3.13] — SubAMMode setter
+    /// (sub_am_mode 0=double-sided AM, 1=AM_LSB, 2=AM_USB).
+    [[noreturn]] void setSubAmMode(int sub);
+
+    // ── VOX / anti-VOX WDSP wrappers (3M-1b D.3) ────────────────────────────
+
+    /// VOX run gate — wires WDSP SetDEXPRunVox.
+    ///
+    /// VOX is mode-gated at the MoxController layer (Phase H.1) — this is
+    /// just the WDSP-side wrapper.  Idempotent: skips the WDSP call if the
+    /// value is unchanged from the last call.
+    ///
+    /// From Thetis cmaster.cs:199-200 [v2.10.3.13] — SetDEXPRunVox DLL import.
+    void setVoxRun(bool run);
+
+    /// VOX attack threshold — wires WDSP SetDEXPAttackThreshold.
+    ///
+    /// Mic-boost-aware scaling (CMSetTXAVoxThresh in Thetis cmaster.cs:1057)
+    /// is applied at the MoxController layer (Phase H.2); this method is a
+    /// thin wrapper.  Idempotent: skips WDSP if value unchanged.
+    ///
+    /// From Thetis cmaster.cs:187-188 [v2.10.3.13] — SetDEXPAttackThreshold.
+    void setVoxAttackThreshold(double thresh);
+
+    /// VOX hang time in seconds — wires WDSP SetDEXPHoldTime.
+    ///
+    /// WDSP names this parameter "HoldTime" (wdsp/dexp.c:SetDEXPHoldTime);
+    /// Thetis exposes it as VOXHangTime (console.cs:14706).  There is no
+    /// SetDEXPHangTime in the WDSP source.  The mapping is:
+    ///   NereusSDR setVoxHangTime(seconds) → WDSP SetDEXPHoldTime(id, seconds)
+    /// Thetis passes milliseconds/1000.0 (setup.cs:18899):
+    ///   cmaster.SetDEXPHoldTime(0, (double)udDEXPHold.Value / 1000.0)
+    /// Callers are responsible for the ms→s conversion.
+    ///
+    /// Idempotent: skips WDSP if value unchanged.
+    ///
+    /// From Thetis cmaster.cs:178-179 [v2.10.3.13] — SetDEXPHoldTime DLL import.
+    void setVoxHangTime(double seconds);
+
+    /// Anti-VOX run gate — wires WDSP SetAntiVOXRun.
+    ///
+    /// Idempotent: skips WDSP if value unchanged.
+    ///
+    /// From Thetis cmaster.cs:208-209 [v2.10.3.13] — SetAntiVOXRun DLL import.
+    void setAntiVoxRun(bool run);
+
+    /// Anti-VOX gain — wires WDSP SetAntiVOXGain.
+    ///
+    /// Idempotent: skips WDSP if value unchanged.
+    ///
+    /// From Thetis cmaster.cs:211-212 [v2.10.3.13] — SetAntiVOXGain DLL import.
+    void setAntiVoxGain(double gain);
+
+    // ── Mic preamp / mic-mute path (3M-1b D.6) ──────────────────────────────
+
+    /// Set the mic preamp linear scalar pushed to WDSP via SetTXAPanelGain1.
+    ///
+    /// Called by TransmitModel::micPreampChanged subscriber (wired in
+    /// Phase L). When MicMute toggles off (chkMicMute.Checked == false in
+    /// Thetis terms — note counter-intuitive naming: Checked == mic in use),
+    /// TransmitModel sets micPreamp to 0.0, which lands here and silences
+    /// the mic via SetTXAPanelGain1(channelId, 0).
+    ///
+    /// Idempotent: skips WDSP call if value unchanged. Uses NaN-aware
+    /// guard matching D.3's pattern: m_micPreampLast initialises to
+    /// quiet_NaN so the first call (any value) always passes.
+    ///
+    /// From Thetis console.cs:28805-28817 [v2.10.3.13] — setAudioMicGain():
+    ///   Audio.MicPreamp = Math.Pow(10.0, gain_db / 20.0);  // mute=false (mic active)
+    ///   Audio.MicPreamp = 0.0;                              // mute=true  (mic silent)
+    /// Audio.MicPreamp setter calls CMSetTXAPanelGain1 → SetTXAPanelGain1.
+    void setMicPreamp(double linearGain);
+
+    /// Re-push the current m_micPreampLast value to WDSP.
+    ///
+    /// Called internally by setMicPreamp. Also exposed publicly for callers
+    /// that need to force a refresh after channel state changes (e.g., after
+    /// setRunning(true) re-initialises the channel).
+    ///
+    /// Idempotent only at the WDSP level — re-pushing the same value
+    /// triggers a redundant WDSP call. Callers that care about idempotency
+    /// should track state externally; this method always issues the WDSP
+    /// call when invoked (subject to HAVE_WDSP + null-guard).
+    void recomputeTxAPanelGain1();
+
+    // ── TX meter readouts (3M-1b D.7) ───────────────────────────────────────
+
+    /// Sentinel value returned by active meters when the WDSP channel is not
+    /// initialised (txa[channelId].rsmpin.p == nullptr, or HAVE_WDSP not defined).
+    ///
+    /// UI code should treat this value as "channel not running" — distinct from
+    /// "no signal" (which is typically -120 dB or -inf, not exactly -999).
+    ///
+    /// Deferred meters (getEqMeter / getLvlrMeter / getCfcMeter / getCompMeter)
+    /// return 0.0f unconditionally; callers should treat 0.0f as "meter not yet
+    /// active" rather than the -999 "channel not initialised" sentinel.
+    static constexpr float kMeterUninitialisedSentinel = -999.0f;
+
+    /// TX mic input peak meter — reads WDSP TXA_MIC_PK channel state.
+    ///
+    /// Returns the peak mic-input level in dB (typical range -100..0).
+    /// Returns kMeterUninitialisedSentinel (-999.0f) if the WDSP channel is
+    /// not initialised or HAVE_WDSP is not defined.
+    ///
+    /// Active during MOX in 3M-1b. Phase J.1 binds this to the TxApplet
+    /// mic-meter widget.
+    ///
+    /// Porting from Thetis dsp.cs:390-391 [v2.10.3.13] — GetTXAMeter DLL import:
+    ///   public static extern double GetTXAMeter(int channel, txaMeterType meter);
+    /// Porting from Thetis wdsp/TXA.h:51 [v2.10.3.13]:
+    ///   TXA_MIC_PK  = 0  (first value in txaMeterType enum)
+    /// Porting from Thetis wdsp/meter.c:151-159 [v2.10.3.13] — GetTXAMeter impl.
+    float getTxMicMeter() const;
+
+    /// TX ALC peak meter — reads WDSP TXA_ALC_PK channel state.
+    ///
+    /// Returns the peak ALC level in dB (typical range -30..+10).
+    /// Returns kMeterUninitialisedSentinel (-999.0f) if the WDSP channel is
+    /// not initialised or HAVE_WDSP is not defined.
+    ///
+    /// Active during MOX in 3M-1b.
+    ///
+    /// Porting from Thetis dsp.cs:390-391 [v2.10.3.13] — GetTXAMeter DLL import.
+    /// Porting from Thetis wdsp/TXA.h:63 [v2.10.3.13]:
+    ///   TXA_ALC_PK  = 12  (12th value in txaMeterType enum, 0-indexed)
+    /// Porting from Thetis wdsp/meter.c:151-159 [v2.10.3.13] — GetTXAMeter impl.
+    float getAlcMeter() const;
+
+    /// TX EQ meter — DEFERRED to 3M-3a. Returns 0.0f unconditionally in 3M-1b.
+    ///
+    /// Callers should treat 0.0f as "meter not yet active" (distinct from the
+    /// active meters' kMeterUninitialisedSentinel = -999.0f "channel not running").
+    ///
+    /// Reads TXA_EQ_PK (= 2) when wired. From Thetis wdsp/TXA.h:53 [v2.10.3.13].
+    /// Full wiring in 3M-3a per master design §5.2.1.
+    float getEqMeter() const;
+
+    /// TX Leveler meter — DEFERRED to 3M-3a. Returns 0.0f unconditionally.
+    ///
+    /// Reads TXA_LVLR_PK (= 4) when wired. From Thetis wdsp/TXA.h:55 [v2.10.3.13].
+    /// Full wiring in 3M-3a per master design §5.2.1.
+    float getLvlrMeter() const;
+
+    /// TX CFC (continuous frequency compander) meter — DEFERRED to 3M-3a.
+    /// Returns 0.0f unconditionally.
+    ///
+    /// Reads TXA_CFC_PK (= 7) when wired. From Thetis wdsp/TXA.h:58 [v2.10.3.13].
+    /// Full wiring in 3M-3a per master design §5.2.1.
+    float getCfcMeter() const;
+
+    /// TX Compressor meter — DEFERRED to 3M-3a. Returns 0.0f unconditionally.
+    ///
+    /// Reads TXA_COMP_PK (= 10) when wired. From Thetis wdsp/TXA.h:61 [v2.10.3.13].
+    /// Full wiring in 3M-3a per master design §5.2.1.
+    float getCompMeter() const;
+
     // ── Per-stage Run override (3M-1a C.4) ──────────────────────────────────
     //
     // Activate or deactivate a single TXA pipeline stage by name.
@@ -395,15 +629,88 @@ public:
     // Unsupported stages (no public WDSP Run API, or managed internally):
     //   RsmpIn / RsmpOut: run managed by TXAResCheck() — not externally settable.
     //   UsLew:            no run flag; channel-upslew driven.
-    //   MicMeter / EqMeter / LvlrMeter / CfcMeter / AlcMeter / CompMeter /
-    //   OutMeter / Sip1 / Calcc / Iqc / Alc / Bp0 / Bp1 / Bp2 / AmMod / FmMod:
-    //     use SetTXA*Run variants added in later tasks (3M-1b, 3M-3a, 3M-4)
-    //     or remain always-on for the lifetime of the 3M-1a session.
+    //   MicMeter / AlcMeter: always-on (run=1); no public Run setter in WDSP
+    //     meter.c:36-57 [v2.10.3.13]. Documented no-op + qCDebug log (D.4).
+    //   AmMod / FmMod:   run controlled exclusively by SetTXAMode() (TXA.c:753-789
+    //     [v2.10.3.13]). No standalone Set*Run API. Documented no-op + qCWarning
+    //     log (D.4). Use setTxMode() to activate these stages.
+    //   EqMeter / LvlrMeter / CfcMeter / CompMeter /
+    //   OutMeter / Sip1 / Calcc / Iqc / Alc / Bp0 / Bp1 / Bp2:
+    //     use SetTXA*Run variants added in later tasks (3M-3a, 3M-4)
+    //     or remain always-on for the lifetime of the 3M-1a/1b session.
     //
     // For unsupported stages this method logs a warning and is a no-op.
     //
     // From Thetis wdsp/ source files [v2.10.3.13] — individual Set*Run APIs.
     void setStageRunning(Stage s, bool run);
+
+#ifdef NEREUS_BUILD_TESTS
+    // ── Test seam (Phase 3M-1b D.1) ─────────────────────────────────────────
+    //
+    // Synchronously drive one fexchange2 cycle. Bypasses the 5 ms QTimer so
+    // tests can deterministically inspect input buffers after pullSamples has
+    // run without waiting for timer ticks.
+    //
+    // Only available when NEREUS_BUILD_TESTS is defined.  Production builds do
+    // not include this method; the timer-based path is the only entry point.
+    void tickForTest() { driveOneTxBlock(); }
+
+    // Read-only access to fexchange2 input buffers after a tickForTest() cycle.
+    // Used by D.1 tests to verify: (a) m_inI matches the injected mic source's
+    // output, and (b) m_inQ is zero-filled (real mic input has no Q component).
+    const std::vector<float>& inIForTest() const { return m_inI; }
+    const std::vector<float>& inQForTest() const { return m_inQ; }
+
+    // ── Test seams (Phase 3M-1b D.3) — VOX / anti-VOX last-value read-back ──
+    //
+    // Allow tests to verify:
+    //   (a) The first call propagates (NaN sentinel fires → value stored).
+    //   (b) Round-trip updates (set A → set B → last returns B).
+    //   (c) Idempotent guard fires on duplicate calls (value unchanged).
+    bool   lastVoxRunForTest()                const noexcept { return m_voxRunLast; }
+    double lastVoxAttackThresholdForTest()    const noexcept { return m_voxAttackThresholdLast; }
+    double lastVoxHangTimeForTest()           const noexcept { return m_voxHangTimeLast; }
+    bool   lastAntiVoxRunForTest()            const noexcept { return m_antiVoxRunLast; }
+    double lastAntiVoxGainForTest()           const noexcept { return m_antiVoxGainLast; }
+
+    // ── Test seam (Phase 3M-1b D.6) — mic preamp last-value read-back ────────
+    //
+    // Allow tests to verify:
+    //   (a) First call with any value passes the NaN guard and stores the value.
+    //   (b) Zero-value (mute case) stores 0.0 correctly.
+    //   (c) Idempotent guard fires on duplicate calls (value unchanged).
+    double lastMicPreampForTest()             const noexcept { return m_micPreampLast; }
+#endif // NEREUS_BUILD_TESTS
+
+signals:
+    // ── MON siphon signal (3M-1b D.5) ────────────────────────────────────────
+    //
+    /// Emitted on the audio thread inside driveOneTxBlock() after every
+    /// fexchange2 cycle (and after sendTxIq delivers the block to the radio).
+    /// Carries the post-SSB-modulator I-channel audio (m_outI) as a raw
+    /// pointer plus the frame count.
+    ///
+    /// **DirectConnection ONLY.** The pointer is only valid during the
+    /// synchronous slot dispatch. Subscribers MUST connect with
+    /// Qt::DirectConnection. QueuedConnection is unsafe: the buffer will
+    /// be reused on the next driveOneTxBlock() cycle before the queued
+    /// slot runs, leading to silent data corruption.
+    ///
+    /// Design note (3M-1b): the signal carries m_outI.data() directly —
+    /// the interleaved-I output of fexchange2, which IS the post-SSB-
+    /// modulator I-channel. This is the simplest correct tap for MON
+    /// playback. A dedicated Sip1-stage tap (wdsp/sip.c, TXA stage 25)
+    /// can be wired in 3M-3 if a different processing point is needed for
+    /// acoustic monitoring; for 3M-1b the m_outI path is sufficient.
+    ///
+    /// Sample rate: matches TXA dsp-rate —
+    ///   96 kHz on P2 (Saturn / Orion-II with 192 kHz ADC output rate);
+    ///   48 kHz on P1 (Hermes / HL2 / Angelia).
+    /// Subscribers (AudioEngine::txMonitorBlockReady in Phase L) are
+    /// responsible for downmix / resample to speaker output rate.
+    ///
+    /// Plan: 3M-1b D.5 (this commit). Pre-code review §4.3.
+    void sip1OutputReady(const float* samples, int frames);
 
 private:
     // ── TX I/Q production loop internals (3M-1a G.1) ─────────────────────────
@@ -457,6 +764,38 @@ private:
 
     const int m_channelId;
     bool m_running{false};
+
+    // ── VOX / anti-VOX last-set values (D.3) ─────────────────────────────────
+    //
+    // Each setter stores the last value dispatched to WDSP and skips the WDSP
+    // call if the incoming value matches (idempotent guard).
+    //
+    // Bool setters initialise to false (matches WDSP DEXP/AntiVOX defaults).
+    // First call with false is therefore a no-op — intentional: the MoxController
+    // (Phase H.1) calls these at TX-on/TX-off; initialising to false avoids a
+    // redundant WDSP call on the first TX-off cycle.
+    //
+    // Double setters initialise to quiet_NaN so the first call (whatever value)
+    // always passes the guard.  NaN != NaN is guaranteed by IEEE 754, so the
+    // plain `thresh == m_voxAttackThresholdLast` expression fires when NaN is
+    // the stored value; the `std::isnan` pre-check is added for clarity.
+    bool   m_voxRunLast             = false;
+    double m_voxAttackThresholdLast = std::numeric_limits<double>::quiet_NaN();
+    double m_voxHangTimeLast        = std::numeric_limits<double>::quiet_NaN();
+    bool   m_antiVoxRunLast         = false;
+    double m_antiVoxGainLast        = std::numeric_limits<double>::quiet_NaN();
+
+    // ── Mic preamp last-set value (D.6) ──────────────────────────────────────
+    //
+    // Initialised to quiet_NaN so the first setMicPreamp() call (any value,
+    // including 0.0) always passes the idempotent guard.  NaN != NaN is
+    // guaranteed by IEEE 754; the `std::isnan` pre-check in setMicPreamp()
+    // makes this explicit.
+    //
+    // From Thetis console.cs:28805-28817 [v2.10.3.13] — setAudioMicGain:
+    //   Audio.MicPreamp = 0.0  (mute=true)
+    //   Audio.MicPreamp = Math.Pow(10.0, gain_db / 20.0)  (mute=false)
+    double m_micPreampLast = std::numeric_limits<double>::quiet_NaN();
 };
 
 } // namespace NereusSDR

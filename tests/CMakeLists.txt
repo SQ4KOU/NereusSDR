@@ -45,6 +45,12 @@ nereus_add_test(tst_clarity_controller)
 nereus_add_test(tst_hpsdr_enums)
 nereus_add_test(tst_board_capabilities)
 
+# ── Phase 3M-1b Task B.1: BoardCapabilities::hasMicJack flag ─────────────────
+# Parametrized over all HPSDRHW enum values.
+# HL2 and HermesLiteRxOnly → false; all other boards → true.
+# Source: pre-code review §11.3 per-board table.
+nereus_add_test(tst_board_capabilities_mic_jack)
+
 nereus_add_test(tst_radio_discovery_parse)
 # TEST_DATA_DIR lets the fixture loader resolve paths relative to the tests/
 # source directory regardless of where the build tree lives.
@@ -218,6 +224,61 @@ nereus_add_test(tst_transmit_model_tx_owner)
 
 # ── Phase 3M-1a G.3: TransmitModel tunePowerByBand[14] per-MAC persistence ──
 nereus_add_test(tst_transmit_model_tune_power)
+
+# ── Phase 3M-1b C.1: TransmitModel::micGainDb + derived micPreampLinear ─────
+# Verifies default (-6 dB), dB→linear round-trip via pow(10, dB/20),
+# both micGainDbChanged + micPreampChanged signals emitted together,
+# idempotent guard on same-value set, range clamping to kMicGainDbMin/Max.
+# Source: console.cs:28805-28817 [v2.10.3.13] (setAudioMicGain dB→scalar).
+nereus_add_test(tst_transmit_model_mic_gain)
+
+# ── Phase 3M-1b C.2: TransmitModel mic-jack flag properties (8x) ─────────────
+# Verifies defaults, round-trip setters, signal emission, idempotent guard,
+# and lineInBoost range clamping for: micMute / micBoost / micXlr / lineIn /
+# lineInBoost / micTipRing / micBias / micPttDisabled.
+# Source: console.cs:13213-13260 [v2.10.3.13]; console.cs:28752 [v2.10.3.13]
+# (MicMute counter-intuitive naming); console.cs:19757-19766 [v2.10.3.13]
+# (MicPTTDisabled); setup.designer.cs:46898-46907 [v2.10.3.13]
+# (udLineInBoost range -34.5..12.0).
+nereus_add_test(tst_transmit_model_mic_jack_flags)
+
+# ── Phase 3M-1b C.3: TransmitModel VOX properties (4x) ───────────────────────
+# Verifies defaults (voxEnabled=false / voxThresholdDb=-40 / voxGainScalar=1.0f /
+# voxHangTimeMs=500), round-trip setters, signal emission, idempotent guard,
+# and range clamping for voxThresholdDb [−80,0], voxGainScalar [0.0f,100.0f],
+# and voxHangTimeMs [1,2000].
+# Source: audio.cs:167-202 [v2.10.3.13] (VOXEnabled/VOXGain defaults);
+#         console.Designer.cs:6018-6019 [v2.10.3.13] (ptbVOX range −80..0);
+#         setup.designer.cs:45005-45024 [v2.10.3.13] (udDEXPHold range 1..2000).
+nereus_add_test(tst_transmit_model_vox_properties)
+
+# ── Phase 3M-1b C.4: TransmitModel anti-VOX properties (2x) ─────────────────
+# Verifies defaults (antiVoxGainDb=0 NereusSDR-original / antiVoxSourceVax=false
+# matches Thetis audio.cs:446 [v2.10.3.13]), round-trip setters, signal emission,
+# idempotent guard, and range clamping for antiVoxGainDb [−60,60].
+# Source: setup.designer.cs:44699-44728 [v2.10.3.13] (udAntiVoxGain -60..60);
+#         audio.cs:446-454 [v2.10.3.13] (antivox_source_VAC = false);
+#         setup.cs:18986-18989 [v2.10.3.13] (SetAntiVOXGain dB→linear formula).
+nereus_add_test(tst_transmit_model_anti_vox)
+
+# ── Phase 3M-1b C.5: TransmitModel MON properties (2x) ──────────────────────
+# Verifies defaults (monEnabled=false matches Thetis audio.cs:406 [v2.10.3.13] /
+# monitorVolume=0.5f matches Thetis audio.cs:417 [v2.10.3.13] literal mix
+# coefficient), round-trip setters, signal emission, idempotent guard (incl.
+# min-boundary zero-case per C.3 fix-up), and range clamping [0.0f, 1.0f].
+# Source: audio.cs:406 [v2.10.3.13] (mon default off);
+#         audio.cs:417 [v2.10.3.13] (SetAAudioMixVol 0.5 literal);
+#         phase3m-1b-thetis-pre-code-review.md §4.2 + §12.5.
+nereus_add_test(tst_transmit_model_mon)
+
+# ── Phase 3M-1b L.2: TransmitModel per-MAC mic/VOX/MON persistence ───────────
+# Verifies loadFromSettings(mac) / persistToSettings(mac) + auto-persist on
+# each setter.  Covers: round-trip per persisted key (15 cases), exclusion of
+# non-persisted keys (voxEnabled/monEnabled/micMute — 3 cases), first-run
+# defaults (all 15 at C.1-C.5 defaults; micGainDb -6 per §0 row 11),
+# multi-MAC isolation, bulk persistToSettings round-trip, and auto-persist
+# no-op before loadFromSettings.
+nereus_add_test(tst_transmit_model_persistence)
 
 # ── Phase 3O VAX schema migration ─────────────────────────────────────────
 nereus_add_test(tst_app_settings_vax_migration)
@@ -650,6 +711,38 @@ nereus_add_test(tst_waterfall_scrollback)
 # different-band guard, and 20m in/out-of-band cases.
 nereus_add_test(tst_band_plan_guard)
 
+# ── Phase 3M-1b Task K.1: BandPlanGuard SSB-mode allow-list for TX ─────────
+# isModeAllowedForTx: 4 allowed (LSB/USB/DIGL/DIGU) + 8 rejected
+# (CWL/CWU/AM/SAM/DSB/FM/DRM/SPEC). checkMoxAllowed: reason strings for each
+# rejection class + ok path (LSB/USB on valid freq) + freq/band reject on
+# an otherwise-allowed mode. ~20 test cases.
+nereus_add_test(tst_band_plan_guard_mode_allow_list)
+
+# ── Phase 3M-1b Task K.2: MoxController rejection signal + tooltip override ──
+# Tests the full K.2 plumbing:
+#   MoxController::setMoxCheck(fn) + moxRejected(QString) signal.
+#
+# MoxController cases (8):
+#   1. CWL → moxRejected("CW TX coming in Phase 3M-2"); state stays Rx.
+#   2. CWU → moxRejected with CW reason.
+#   3. AM  → moxRejected("AM/FM TX coming in Phase 3M-3 (audio modes)"); state stays Rx.
+#   4. FM  → moxRejected with audio-modes reason.
+#   5. LSB (allowed) → MOX engages; moxRejected NOT emitted.
+#   6. USB (allowed) → same.
+#   7. No MoxCheckFn installed → setMox(true) succeeds (backwards-compat).
+#   8. setMox(false) never rejected (release path bypasses BandPlanGuard).
+#   Extra: SPEC → "Mode not supported for TX"; rejection is repeatable;
+#          txAboutToBegin NOT emitted on rejection.
+#
+# TxApplet::tooltipForMode static helper (12):
+#   USB/LSB/DIGL/DIGU → normal "Manual transmit (MOX)" tooltip.
+#   CWL/CWU → "CW TX coming in Phase 3M-2".
+#   AM/FM/SAM/DSB/DRM → "AM/FM TX coming in Phase 3M-3 (audio modes)".
+#   SPEC → "Mode not supported for TX".
+#
+# Total: ~20 test cases. Uses QTEST_GUILESS_MAIN; no RadioModel required.
+nereus_add_test(tst_band_plan_guard_mox_rejection)
+
 # ── Phase 3M-0 Task 3: SwrProtectionController PollPAPWR state machine ─────
 # 8 tests cover the two-stage foldback (per-sample + 4-trip windback latch),
 # open-antenna heuristic (swr=50 / factor=0.01), low-power floor clamp,
@@ -834,6 +927,50 @@ nereus_add_test(tst_meter_poller_tx_bindings)
 # Derives from Thetis console.cs:4822 + 12094 + 29978-30157 [v2.10.3.13].
 nereus_add_test(tst_tx_applet_tune_wiring)
 
+# ── Phase 3M-1b (relocated): PhoneCwApplet Mic Gain slider ──────────────────
+# Verifies the model-layer contracts that PhoneCwApplet's Mic Gain slider depends on
+# (relocated from TxApplet J.1 per JJ feedback 2026-04-28):
+#   default value (-6 dB), per-board range (BoardCapabilities::micGainMinDb/Max),
+#   bidirectional sync (setMicGainDb / micGainDbChanged), mic-mute state
+#   (micMuteChanged fires; default micMute==true), idempotency / no-feedback-loop,
+#   and clamping to kMicGainDbMin/Max.
+# NereusSDR-native UI (no Thetis cite stamps required for the applet layer).
+nereus_add_test(tst_phone_applet_mic_gain)
+
+# ── Phase 3M-1b (new): PhoneCwApplet Mic Level Gauge dB conversion ───────────
+# Exercises the linear→dBFS conversion + clamping logic used by the 50 ms
+# AudioEngine::pcMicInputLevel() polling timer that drives m_levelGauge.
+# Tests: silence/sub-floor/exact-threshold → -40 dB floor; 0.1f → -20 dB;
+# 0.5f → -6 dB; 1.0f → 0 dB; NaN/Inf → floor; above FS → +10 ceiling.
+# NereusSDR-native UI (no Thetis cite stamps required for the applet layer).
+nereus_add_test(tst_phone_applet_mic_level_gauge)
+
+# ── Phase 3M-1b J.2: TxApplet VOX toggle button + VoxSettingsPopup ───────────
+# Verifies the model-layer contracts + VoxSettingsPopup that the VOX button
+# depends on:
+#   default voxEnabled=false (plan §0 row 8 safety — VOX always loads OFF),
+#   UI→Model toggle ON/OFF (setVoxEnabled / voxEnabled getter),
+#   Model→UI: voxEnabledChanged fires with correct bool,
+#   visual state on toggle (signal fires on change),
+#   no feedback loop / idempotency (same-value set → no extra emit),
+#   VoxSettingsPopup constructed with exactly 3 sliders,
+#   popup slider round-trip: thresholdDbChanged → model update.
+# NereusSDR-native UI (no Thetis cite stamps required for the applet layer).
+nereus_add_test(tst_tx_applet_vox_toggle)
+
+# ── Phase 3M-1b J.3: TxApplet MON toggle + monitor volume slider + mic-source badge ──
+# Verifies the model-layer contracts that TxApplet's MON button, monitor volume
+# slider, and mic-source badge depend on:
+#   monEnabled default false (plan §0 row 9 safety — MON always loads OFF),
+#   setMonEnabled / monEnabledChanged bidirectional round-trip,
+#   monitorVolume default 0.5f (Thetis audio.cs:417), float↔int mapping
+#   (float = int / 100.0f; int = qRound(float * 100.0f)), boundary 0.0/1.0,
+#   micSource default Pc, micSourceChanged fires with Radio/Pc values (badge
+#   text contracts "PC mic"/"Radio mic"), idempotency guards.
+# Closes Phase J (all 3 J tasks landed).
+# NereusSDR-native UI (no Thetis cite stamps required for the applet layer).
+nereus_add_test(tst_tx_applet_mon)
+
 # ── Phase 3M-1a H.4: PowerPaPage wiring — Max Power, per-band Tune Power, ATT-on-TX ──
 # Verifies Max Power slider ↔ TransmitModel::power(), per-band tune-power spinboxes
 # ↔ TransmitModel::tunePowerForBand(), chkATTOnTX and chkForceATTwhenPSAoff widget
@@ -960,6 +1097,100 @@ nereus_add_test(tst_mox_controller_phase_signals)
 # Codex P2 invariant: runMoxSafetyEffects fires on every setTune call (via setMox);
 # Ports chkTUN_CheckedChanged (console.cs:29978-30157 [v2.10.3.13]) flag block.
 nereus_add_test(tst_mox_controller_tune)
+
+# ── Phase 3M-1b Task H.1: MoxController::setVoxEnabled voice-family mode-gate ─
+# Verifies: setVoxEnabled(bool) + onModeChanged(DSPMode) + voxRunRequested(bool);
+# Default state: no spurious emit at startup (m_voxEnabled=false, gated=false);
+# LSB + VOX on → voxRunRequested(true) fires once;
+# LSB + VOX off (after on) → voxRunRequested(false) fires once;
+# CW mode + VOX on → voxRunRequested(true) does NOT fire (gate=false);
+# LSB + VOX on, then mode change to CWL → voxRunRequested(false) fires once;
+# CWL + VOX on (no emit), then mode change to LSB → voxRunRequested(true) fires once;
+# Within-voice mode change (LSB→USB) while VOX on → no double emit;
+# Repeat setVoxEnabled(true) in voice mode → no double emit (idempotent);
+# All 8 voice-family modes (parametrized): + voxEnabled(true) → emits true;
+# All 4 excluded modes (CWL/CWU/SPEC/DRM) + voxEnabled(true) → no true emit.
+# Source: Thetis cmaster.cs:1039-1052 [v2.10.3.13] — CMSetTXAVoxRun.
+nereus_add_test(tst_mox_controller_vox_enabled)
+
+# ── Phase 3M-1b Task H.2: MoxController::setVoxThreshold mic-boost-aware scaling ─
+# Verifies: setVoxThreshold(int dB) + onMicBoostChanged(bool) + setVoxGainScalar(float)
+#           + voxThresholdRequested(double);
+# NAN sentinel: first call always emits (primes WDSP regardless of default value);
+# Boost OFF: threshold = pow(10, dB/20) only (no gain scaling);
+# Boost ON, scalar 1.0: same result as boost-off (identity multiplication);
+# Boost ON, scalar 0.5: threshold halved vs. boost-off;
+# Gain scalar change (0.5→1.0) re-emits with new computed value;
+# Mic-boost toggle (on→off→on) re-emits on each transition;
+# Idempotent on emitted double: repeat setVoxThreshold(-40) → no second emit;
+# Thetis cross-check Combo A: dB=-60, boost=off → 0.001 (exact);
+# Thetis cross-check Combo B: dB=-20, boost=on, gain=0.5 → 0.05 (exact);
+# Thetis cross-check Combo C: dB=0,   boost=on, gain=2.0 → 2.0 (exact);
+# Boundary -80 dB: result > 0, not NaN/Inf, ≈ 1e-4;
+# Boundary 0 dB: result ≈ 1.0, not NaN/Inf;
+# Boost round-trip: off→on re-emits with the original scaled value.
+# Source: Thetis cmaster.cs:1054-1059 + setup.cs:18908-18912 [v2.10.3.13].
+nereus_add_test(tst_mox_controller_vox_threshold)
+
+# ── Phase 3M-1b Task H.3: MoxController VOX hang-time + anti-VOX gain/source ──
+# Verifies:
+#   setVoxHangTime: NaN sentinel first-call emit; ms→seconds conversion (/ 1000.0);
+#     idempotent on emitted double; boundary 1 ms → 0.001 s, 10000 ms → 10.0 s.
+#   setAntiVoxGain: NaN sentinel; dB→linear /20.0 voltage scaling (0 dB → 1.0,
+#     -20 dB → 0.1, -60 dB → 0.001); idempotent on emitted double; boundary check.
+#   setAntiVoxSourceVax: useVax=false emits antiVoxSourceWhatRequested(false);
+#     useVax=true is rejected (no signal, no state update, qCWarning only);
+#     toggle false→true→false: second false idempotent after rejected true;
+#     first-call-always-emits via m_antiVoxSourceVaxInitialized flag.
+# Source: Thetis setup.cs:18896-18900 + 18986-18990 [v2.10.3.13] +
+#   cmaster.cs:912-943 [v2.10.3.13]. Plan §3 H.3 + pre-code §3.4.
+nereus_add_test(tst_mox_controller_anti_vox)
+
+# ── Phase 3M-1b Task H.4: MoxController PTT-source dispatch ──────────────────
+# Verifies:
+#   Accepted slots (5): onMicPttFromRadio, onCatPtt, onVoxActive, onSpacePtt,
+#     onX2Ptt — each press emits pttModeChanged(Xxx) then moxStateChanged(true);
+#     each release emits moxStateChanged(false); PttMode NOT cleared on release
+#     (F.1 contract: hardwareFlipped(false) subscriber in RadioModel clears it).
+#   Rejected slots (2): onCwPtt (deferred to 3M-2), onTciPtt (deferred to 3J) —
+#     both press and release emit no signals and leave m_pttMode unchanged.
+#   Cross-source switching (§G): last-setter-wins semantic.
+#   Idempotency (§H): repeated press does not double-emit.
+#   PttMode integer values (§I): spot-check vs enums.cs:346-359 [v2.10.3.13].
+# Source: Thetis console.cs:25463-25507 [v2.10.3.13] (PollPTT dispatch);
+#   console.cs:26680 [v2.10.3.13] (SPACE); enums.cs:346-359 [v2.10.3.13].
+#   Pre-code review §0.3 + master design §5.2.1.
+nereus_add_test(tst_mox_controller_ptt_source_dispatch)
+
+# ── Phase 3M-1b Task H.5: mic_ptt extraction from P1/P2 status frames ─────────
+# Verifies end-to-end mic_ptt extraction and dispatch through MoxController.
+#
+# Prong A — RadioConnection-level extraction:
+#   §A.1  P1: C0 bit 0 set in sub-frame 0 → micPttFromRadio(true)
+#   §A.2  P1: C0 bit 0 set in sub-frame 1 only → micPttFromRadio(true) (OR logic)
+#   §A.3  P1: C0 bit 0 clear in both sub-frames → micPttFromRadio(false)
+#   §A.4  P1: ADC overload in C1 does NOT set micPtt (PTT is in C0, not C1)
+#   §B.1  P2: raw[4] bit 0 set → micPttFromRadio(true)
+#   §B.2  P2: raw[4] bit 0 clear → micPttFromRadio(false)
+#   §B.3  P2: dot/dash bits (bits 1/2) only → micPttFromRadio(false)
+#   §B.4  P2: ADC overload at raw[5] does NOT set micPtt (separate byte)
+#
+# Prong B — End-to-end (status frame → MoxController):
+#   §C.1  P1 press → MoxController engaged, PttMode::Mic
+#   §C.2  P1 release → MoxController released, PttMode retained
+#   §C.3  P1 repeated press → idempotent (no double-emit)
+#   §D.1  P2 press → MoxController engaged, PttMode::Mic
+#   §D.2  P2 release → MoxController released, PttMode retained
+#   §D.3  P2 repeated press → idempotent (no double-emit)
+#   §E.1  P1: consecutive false frames both emit (unconditional emission)
+#   §E.2  P2: consecutive false packets both emit (unconditional emission)
+#
+# Source: Thetis console.cs:25426 [v2.10.3.13] (PollPTT mic_ptt bit);
+#   networkproto1.c:329 [v2.10.3.13] (P1 ptt_in bit);
+#   network.c:686-689 [v2.10.3.13] (P2 ptt_in byte/bit);
+#   deskhpsdr/src/new_protocol.c:2525 [@120188f] (P2 cross-ref).
+nereus_add_test(tst_mox_controller_mic_ptt_extraction)
+target_compile_definitions(tst_mox_controller_mic_ptt_extraction PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3M-1a Task C.1: WdspEngine TX channel API ──────────────────────────
 # Verifies:
@@ -1126,4 +1357,658 @@ target_compile_definitions(tst_step_att_tx_path PRIVATE NEREUS_BUILD_TESTS)
 # Cite: Thetis console.cs:29978-30157 [v2.10.3.13] — chkTUN_CheckedChanged.
 nereus_add_test(tst_radio_model_set_tune)
 target_compile_definitions(tst_radio_model_set_tune PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task D.1: TxChannel real mic-router drives fexchange2 with Q=0
+# Verifies two invariants when a real (non-null) TxMicRouter is attached:
+#   1. CALL CHAIN: pullSamples() is called by driveOneTxBlock() via tickForTest()
+#      seam; m_inI holds exactly the values the mock emitted (ramp 1, 2, …, n).
+#   2. Q=0 INVARIANT: m_inQ is all-zero after every driveOneTxBlock() cycle.
+#      Real mic input is mono (real-valued); driveOneTxBlock() zero-fills m_inQ
+#      via std::fill before fexchange2 so no stale data contaminates the Q input.
+# Test cases (9):
+#   - pullSamples is called after one tick (callCount > 0)
+#   - inI spot-check: [0]=1.0, [1]=2.0, [mid]=mid+1, [n-1]=n
+#   - inI exhaustive ramp check (all 256 elements)
+#   - inQ all-zero after one tick
+#   - inQ stays zero across 5 consecutive ticks (stale-data regression check)
+#   - inI still matches ramp on each of 3 consecutive ticks
+#   - inI size == kBufSize (256)
+#   - inQ size == kBufSize (256)
+#   - !m_running path: pullSamples not called, no crash
+# Pre-code review: §0.3 (PcMicSource arch). Test seam added to TxChannel.h
+# under NEREUS_BUILD_TESTS guard.
+nereus_add_test(tst_tx_channel_real_mic_router)
+target_compile_definitions(tst_tx_channel_real_mic_router PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task D.2: TxChannel per-mode TXA config setters ──────────────
+# Tests setTxMode(DSPMode), setTxBandpass(int, int), and setSubAmMode(int).
+#
+# setTxMode wraps WDSP SetTXAMode(channelId, mode).
+# setTxBandpass wraps WDSP SetTXABandpassFreqs(channelId, f_low, f_high).
+# setSubAmMode is deferred to 3M-3b — throws std::logic_error if called.
+#
+# Porting cites (in TxChannel.h / TxChannel.cpp):
+#   setTxMode:      radio.cs:2670-2696 [v2.10.3.13]
+#   setTxBandpass:  radio.cs:2730-2780 [v2.10.3.13]
+#   setSubAmMode:   radio.cs:2699-2728 [v2.10.3.13] (DEFERRED)
+#
+# Test cases (13):
+#   - setTxMode does not throw for: LSB, USB, DIGL, DIGU, AM, CWL, CWU
+#   - setTxBandpass does not throw for: typical SSB, wide SSB, negative-low
+#     (LSB IQ-space), zero-bandwidth, symmetric AM
+#   - setSubAmMode throws std::logic_error for: 0, 1, 2, -1 (out-of-range),
+#     3 (out-of-range)
+#   - setSubAmMode throw carries non-empty error message
+# Pre-code review: §7 (per-mode TXA config trace).
+nereus_add_test(tst_tx_channel_per_mode_config)
+
+# D.3 Phase 3M-1b — VOX/anti-VOX WDSP wrappers
+#
+# Exercises (NEREUS_BUILD_TESTS required for test-seam accessors):
+#   setVoxRun(bool)              → SetDEXPRunVox    [cmaster.cs:199-200 v2.10.3.13]
+#   setVoxAttackThreshold(double)→ SetDEXPAttackThreshold [cmaster.cs:187-188]
+#   setVoxHangTime(double)       → SetDEXPHoldTime  [cmaster.cs:178-179]
+#                                  (WDSP uses HoldTime for VOX hang; no SetDEXPHangTime)
+#   setAntiVoxRun(bool)          → SetAntiVOXRun    [cmaster.cs:208-209]
+#   setAntiVoxGain(double)       → SetAntiVOXGain   [cmaster.cs:211-212]
+#
+# Test cases (17):
+#   setVoxRun:             first-call-true, first-call-false, round-trip, idempotent
+#   setVoxAttackThreshold: first-call, round-trip, idempotent, zero-value
+#   setVoxHangTime:        first-call, round-trip, idempotent, zero-value
+#   setAntiVoxRun:         first-call-true, round-trip, idempotent
+#   setAntiVoxGain:        first-call, round-trip, idempotent
+# Pre-code review: §3.5 (VOX/anti-VOX WDSP DLL imports).
+nereus_add_test(tst_tx_channel_vox_anti_vox)
+target_compile_definitions(tst_tx_channel_vox_anti_vox PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task D.4: TxChannel::setStageRunning expansion ───────────────
+# Verifies Panel (existing), MicMeter, AlcMeter, AmMod, FmMod dispatch.
+# MicMeter/AlcMeter: always-on meter stages — no public WDSP Run setter (meter.c);
+#   documented no-op with qCDebug log (wdsp/TXA.c:80-93, 379-392 [v2.10.3.13]).
+# AmMod/FmMod: run controlled only via SetTXAMode() — no standalone Run setter
+#   (wdsp/ammod.c, fmmod.c, TXA.c:753-789 [v2.10.3.13]);
+#   documented no-op with qCWarning log.
+# Panel: verified as already dispatched (SetTXAPanelRun, patchpanel.c:201-206).
+nereus_add_test(tst_tx_channel_stage_running_expansion)
+
+# ── Phase 3M-1b Task D.5: TxChannel::sip1OutputReady signal ──────────────────
+# Verifies the MON-path siphon signal emitted after each fexchange2 cycle.
+#
+# Signal contract (Plan §4.3, pre-code review §4.3):
+#   void sip1OutputReady(const float* samples, int frames)
+#   - Emitted AFTER fexchange2 + sendTxIq in driveOneTxBlock().
+#   - DirectConnection-only: pointer valid only during synchronous dispatch.
+#   - samples: m_outI.data() — post-SSB-modulator I-channel output.
+#   - frames:  m_outputBufferSize (256 for P1/HL2; 1024 for P2 Saturn).
+#
+# Test cases (6):
+#   - sip1OutputReady fires exactly once per tickForTest() call.
+#   - frames argument matches m_outputBufferSize (kBufSize = 256).
+#   - signal fires on every tick across 5 cycles (count == tick).
+#   - signal does NOT fire when m_running is false (early-exit guard).
+#   - signal does NOT fire when m_connection is null (early-exit guard).
+#   - frames matches non-default outputBufferSize (1024 = P2 Saturn).
+nereus_add_test(tst_tx_channel_sip1_signal)
+target_compile_definitions(tst_tx_channel_sip1_signal PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task D.6: TxChannel::setMicPreamp + recomputeTxAPanelGain1 ───
+#
+# Exercises (NEREUS_BUILD_TESTS required for lastMicPreampForTest accessor):
+#   setMicPreamp(double)          → SetTXAPanelGain1 [dsp.cs:411-412 v2.10.3.13]
+#   recomputeTxAPanelGain1()      → SetTXAPanelGain1 force-refresh
+#
+# Mic-mute semantic (Thetis console.cs:28805-28817 [v2.10.3.13]):
+#   chkMicMute.Checked == true  → mic active → MicPreamp = pow(10, gain_db/20)
+#   chkMicMute.Checked == false → mic MUTED  → MicPreamp = 0.0
+#   setMicPreamp(0.0) maps to the mute=true (Checked==false) path.
+#
+# Test cases (8):
+#   setMicPreamp: initial-NaN, non-zero-value, zero-value (mute case),
+#                 round-trip-mute, round-trip-unmute, idempotent
+#   recomputeTxAPanelGain1: does-not-crash, after-setMicPreamp-pushes-latest
+# Pre-code review: §2.1 (MicMute counter-intuitive naming).
+nereus_add_test(tst_tx_channel_mic_mute)
+target_compile_definitions(tst_tx_channel_mic_mute PRIVATE NEREUS_BUILD_TESTS)
+
+# Phase 3M-1b D.7 — TxChannel TX meter readouts
+#
+# Tests:
+#   getTxMicMeter()  — wired: reads GetTXAMeter(ch, TXA_MIC_PK=0); returns
+#                      kMeterUninitialisedSentinel (-999.0f) when channel not open
+#   getAlcMeter()    — wired: reads GetTXAMeter(ch, TXA_ALC_PK=12); same sentinel
+#   getEqMeter()     — deferred 3M-3a: returns 0.0f unconditionally
+#   getLvlrMeter()   — deferred 3M-3a: returns 0.0f unconditionally
+#   getCfcMeter()    — deferred 3M-3a: returns 0.0f unconditionally
+#   getCompMeter()   — deferred 3M-3a: returns 0.0f unconditionally
+#   kMeterUninitialisedSentinel == -999.0f
+#
+# Enum value provenance: Thetis wdsp/TXA.h:49-69 [v2.10.3.13] txaMeterType.
+# Pre-code review: §1.4 (TX meters live row) + master design §5.2.1.
+#
+# Test cases (11):
+#   sentinel: value-is-minus-999
+#   active: getTxMicMeter uninitialised×2, getAlcMeter uninitialised×2
+#   deferred: getEqMeter, getLvlrMeter, getCfcMeter, getCompMeter (all zero)
+#   distinctness: deferred-not-sentinel, sentinel-not-zero
+nereus_add_test(tst_tx_channel_meters)
+
+# ── Phase 3M-1b Task E.1: AudioEngine::pullTxMic ─────────────────────────────
+# Verifies the TX-mic pull accessor that PcMicSource (Phase F.1) will tap:
+#   nullBus_returnsZero       — no bus configured → 0
+#   zeroN_returnsZero         — n <= 0 guard → 0
+#   nullDst_returnsZero       — null dst guard → 0
+#   emptyBus_returnsZero      — bus open but no data → 0
+#   int16Stereo_returnsSampleCount        — 2 stereo frames → 2
+#   int16StereoToFloat32Mono_correctConversion — left/32768, right discarded
+#   float32StereoToMono_correctPassthrough     — left taken, right discarded
+#   float32Mono_fullTransfer  — mono bus, all 3 samples pass through
+#   partialBus_returnsActualCount — 1 frame available, asked for 4 → 1
+#
+# Uses FakeAudioBus injected via NEREUS_BUILD_TESTS seam setTxInputBusForTest.
+# Pre-code review: §0.3 (PcMicSource arch).
+nereus_add_test(tst_audio_engine_pull_tx_mic)
+target_compile_definitions(tst_audio_engine_pull_tx_mic PRIVATE NEREUS_BUILD_TESTS)
+
+# Plan: 3M-1b E.2. Exercises AudioEngine TX monitor enable + volume state
+# (setTxMonitorEnabled / setTxMonitorVolume / signals / clamping / idempotency).
+# Pre-code review §4.4.
+nereus_add_test(tst_audio_engine_tx_monitor_state)
+
+# Plan: 3M-1b E.3. Exercises AudioEngine::txMonitorBlockReady — the
+# audio-thread consumer of TxChannel::sip1OutputReady.
+# Cases:
+#   disabled_noOutput               — monitor off → mixInto returns silence
+#   enabled_hasOutput               — monitor on → mixInto returns audio
+#   volumeScalesOutput              — gain 1.0 vs 0.5 produces proportional output
+#   nullSamples_noOp                — null ptr guard → no crash, no output
+#   zeroFrames_noOp                 — frames=0 guard → no output
+#   volumeZero_thenNonZero_hasOutput — gain=0 produces silence; gain=1 produces audio
+#   monoExpandedToStereo_LequalsR   — mono sample → L=R in stereo mix
+#   disableAfterEnable_silencesNextBlock — re-disable silences subsequent blocks
+#
+# Uses masterMixForTest() NEREUS_BUILD_TESTS seam to observe MasterMixer output.
+# Pre-code review §4.3 + §4.4.
+nereus_add_test(tst_audio_engine_tx_monitor_block)
+target_compile_definitions(tst_audio_engine_tx_monitor_block PRIVATE NEREUS_BUILD_TESTS)
+
+# Plan: 3M-1b E.4. Exercises AudioEngine::rxBlockReady MOX gate —
+# the RX-leak-during-MOX fold that fixes the PR #144 cosmetic regression.
+# Cases:
+#   moxState_default_isFalse             — m_moxActive defaults false
+#   setMoxState_atomic_round_trip        — store/load round-trip
+#   rxBlockReady_moxOff_blockFlows       — MOX off → block reaches mixer
+#   rxBlockReady_moxOn_activeSlice_blockDropped
+#                                        — MOX on + active slice → dropped
+#   rxBlockReady_moxOn_nonActiveSlice_blockFlows
+#                                        — MOX on + non-active slice → flows
+#   rxBlockReady_moxOnToOff_blockResumes — MOX off again → block resumes
+#
+# Uses setMoxStateForTest() NEREUS_BUILD_TESTS seam and masterMixForTest()
+# to observe MasterMixer output.
+# Pre-code review §10.3 + §10.4.
+nereus_add_test(tst_audio_engine_rx_leak_during_mox)
+target_compile_definitions(tst_audio_engine_rx_leak_during_mox PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task F.1: PcMicSource ────────────────────────────────────────
+# Verifies that PcMicSource::pullSamples correctly dispatches to
+# AudioEngine::pullTxMic via the NEREUS_BUILD_TESTS seam:
+#   nullEngine_returnsZero        — null engine → 0, buffer untouched
+#   validEngine_noBusData_returnsZero — engine ok, bus empty → 0
+#   validEngine_withBusData_returnsSampleCount — 3 frames → 3
+#   validEngine_correctSamplesForwarded — dispatch is transparent (no scaling)
+#   zeroN_returnsZero             — n=0 propagated from AudioEngine guard
+#   nullDst_returnsZero           — nullptr dst propagated from AudioEngine guard
+#   viaBasePointer_dispatchWorks  — virtual dispatch through TxMicRouter*
+#
+# Uses FakeAudioBus injected via setTxInputBusForTest (NEREUS_BUILD_TESTS seam).
+# Pre-code review: §0.3 + §12.7 (PcMicSource arch lock).
+nereus_add_test(tst_pc_mic_source)
+target_compile_definitions(tst_pc_mic_source PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task F.4: RadioConnection::micFrameDecoded signal ─────────────
+# Verifies the micFrameDecoded Qt signal added to the RadioConnection base class.
+# Uses TestRadioConnection minimal concrete subclass (stubs all pure-virtuals).
+# Cases (4):
+#   micFrameDecoded_signalExists        — QSignalSpy attaches successfully
+#   micFrameDecoded_emit_capturedBySpy  — emitMicFrame → spy.count() == 1
+#   micFrameDecoded_signalCarriesFrameCount — args.at(1) int frames matches n
+#   micFrameDecoded_multipleEmissions   — spy accumulates across 3 emits
+#
+# DirectConnection-only contract documented in RadioConnection.h.
+# Pre-code review §6.4.
+nereus_add_test(tst_radio_connection_mic_frame_signal)
+
+# ── Phase 3M-1b Task F.2: RadioMicSource ─────────────────────────────────────
+# Verifies RadioMicSource — the TxMicRouter implementation that drains a
+# lock-free SPSC float ring fed by RadioConnection::micFrameDecoded.
+# Uses TestRadioConnection (inline subclass) to drive micFrameDecoded
+# synchronously via DirectConnection. Test seam: NEREUS_BUILD_TESTS exposes
+# ringFillForTest() and ringDroppedForTest().
+# Cases (14):
+#   pullSamples_emptyRing_zeroFills         — empty ring → zero-fill + return n
+#   pullSamples_partialRing_returnsZeroFilledRest
+#                                           — 4 samples pushed, pull 8 → 4 data + 4 zero
+#   pullSamples_fullDrain_returnsAllSamples — push n, pull n → ring empty
+#   pullSamples_fifoOrder_preserved         — 16 values in order
+#   onMicFrame_pushesToRing                 — ringFill increases after emit
+#   onMicFrame_overflow_dropsExtra_recordsDropCount
+#                                           — full ring → 5 more dropped, counter=5
+#   onMicFrame_nullSamples_noOp             — nullptr samples → no crash, no state change
+#   onMicFrame_zeroFrames_noOp              — frames=0 → no crash, no state change
+#   roundTrip_pushAndPull                   — two batches pushed, read back in order
+#   multipleCycles_fifo_preserved           — 8×1024 cycles, crosses ring wraparound
+#   nullConnection_constructorOk            — nullptr conn → constructs ok, zero-fills
+#   pullSamples_returnAlwaysN               — underrun → returns n (not toRead)
+#   pullSamples_nullDst_returnsZero         — nullptr dst → 0, ring unchanged
+#   viaBasePointer_dispatchWorks            — virtual dispatch through TxMicRouter*
+#
+# Master design §5.2.1. Plan: 3M-1b F.2.
+nereus_add_test(tst_radio_mic_source)
+target_compile_definitions(tst_radio_mic_source PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task F.3: CompositeTxMicRouter ───────────────────────────────
+# Verifies CompositeTxMicRouter — the strategy-pattern selector that holds
+# PcMicSource + RadioMicSource and dispatches pullSamples based on MicSource
+# selection, with HL2 force-PC and MOX-locked switching.
+# Uses real PcMicSource (FakeAudioBus-backed AudioEngine) and real
+# RadioMicSource (TestRadioConnection). Test seam: NEREUS_BUILD_TESTS exposes
+# hasPendingSwitchForTest().
+# Cases (14):
+#   defaultSource_isPc                           — construction defaults to Pc
+#   setActiveSource_Pc_dispatchesToPc            — Pc selected → PC data flows
+#   setActiveSource_Radio_dispatchesToRadio      — Radio selected → radio data
+#   setActiveSource_Radio_HL2force_dispatchesToPc — hasMicJack=false → forced Pc
+#   setActiveSource_Radio_nullRadioSource_dispatchesToPc — null radio → forced Pc
+#   setActiveSource_Pc_duringMox_appliesImmediately — Pc during MOX → deferred
+#   setActiveSource_Radio_duringMox_isPending_appliedOnMoxOff
+#                                                — Radio during MOX → pending → applied on MOX-off
+#   setActiveSource_Radio_duringMox_HL2force_isIgnored — double-gate: HL2+MOX → ignored
+#   setMoxActive_offToOn_noEffectOnSource        — MOX-on alone doesn't change source
+#   setMoxActive_onToOff_appliesPending          — MOX-off applies pending switch
+#   setMoxActive_onToOff_noPending_noEffect      — MOX-off with no pending → no change
+#   pullSamples_nullDst_returnsZero              — null dst → 0
+#   pullSamples_zeroN_returnsZero                — n=0 → 0
+#   pullSamples_noSources_zeroFills              — both sources null → zero-fill
+#
+# Pre-code review §0.3 + master design §5.2.1. Plan: 3M-1b F.3.
+nereus_add_test(tst_tx_mic_router_selector)
+target_compile_definitions(tst_tx_mic_router_selector PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.1: P1 mic_boost wire-byte snapshot ────────────────────
+# 14 tests pin the mic_boost bit (C2 bit 0 = 0x01) of bank 10 (C0=0x12) in
+# P1RadioConnection::setMicBoost():
+#   1.  Default state: C2 bit 0 = 0.
+#   2.  setMicBoost(true)  → C2 bit 0 = 1.
+#   3.  setMicBoost(false) → C2 bit 0 = 0.
+#   4.  Bit 6 (0x40) always set regardless of mic_boost.
+#   5.  No spillover into C2 bits 7, 5..2, 1.
+#   6.  Bank 10 C0 address stays 0x12.
+#   7.  setMicBoost sets m_forceBank10Next (Codex P2 flush pattern).
+#   8.  Repeated same-value call still sets the flush flag.
+#   9.  Idempotency: setMicBoost(true) twice doesn't crash.
+#  10.  Round-trip: true → false produces correct bit values.
+#  11.  Codec path (Standard): C2 bit 0 set/cleared correctly.
+#  12.  Codec path (Standard): C2 bit 0 clear after false.
+#  13.  Codec path (HL2): C2 bit 0 set (FW ignores, but bit is correct).
+#  14.  T/R relay byte (C3) unaffected by mic_boost changes.
+# Source: Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13].
+nereus_add_test(tst_p1_mic_boost_wire)
+target_compile_definitions(tst_p1_mic_boost_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.1: P2 mic_boost wire-byte snapshot ────────────────────
+# 10 tests pin the mic_boost bit (CmdTx byte 50 bit 1 = 0x02) in
+# P2RadioConnection::setMicBoost():
+#   1.  Default state: byte 50 bit 1 = 0.
+#   2.  setMicBoost(true)  → byte 50 bit 1 = 1.
+#   3.  setMicBoost(false) → byte 50 bit 1 = 0.
+#   4.  Round-trip true → false → true.
+#   5.  Bit 0 (line_in) unaffected by mic_boost.
+#   6.  Bits 2-7 of byte 50 unaffected.
+#   7.  Idempotency: setMicBoost(true) twice → bit remains 1.
+#   8.  Codec path (OrionMKII): mic_boost at byte 50 bit 1.
+#   9.  Codec path (Saturn/ANAN-G2): same behaviour.
+#  10.  Byte 51 (line_in gain) unaffected by setMicBoost.
+# Source: deskhpsdr/src/new_protocol.c:1484-1486 [@120188f].
+# First deskhpsdr port in NereusSDR — DESKHPSDR-PROVENANCE.md updated.
+nereus_add_test(tst_p2_mic_boost_wire)
+target_compile_definitions(tst_p2_mic_boost_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.2: P1 line_in wire-byte snapshot ──────────────────────
+# 14 tests pin the line_in bit (C2 bit 1 = 0x02) of bank 10 (C0=0x12) in
+# P1RadioConnection::setLineIn():
+#   1.  Default state: C2 bit 1 = 0.
+#   2.  setLineIn(true)  → C2 bit 1 = 1.
+#   3.  setLineIn(false) → C2 bit 1 = 0.
+#   4.  Bit 6 (0x40) always set regardless of line_in.
+#   5.  No spillover into C2 bits 7, 5..2, 0.
+#   6.  Bank 10 C0 address stays 0x12.
+#   7.  setLineIn sets m_forceBank10Next (Codex P2 flush pattern).
+#   8.  Repeated same-value call still sets the flush flag.
+#   9.  Idempotency: setLineIn(true) twice doesn't crash.
+#  10.  Round-trip: true → false produces correct bit values.
+#  11.  Codec path (Standard): C2 bit 1 set/cleared correctly.
+#  12.  Codec path (Standard): C2 bit 1 clear after false.
+#  13.  Codec path (HL2): C2 bit 1 set (FW ignores, but bit is correct).
+#  14.  setLineIn(true) does NOT touch C2 bit 0 (mic_boost) — cross-bit guard.
+# Source: Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13].
+nereus_add_test(tst_p1_line_in_wire)
+target_compile_definitions(tst_p1_line_in_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.2: P2 line_in wire-byte snapshot ──────────────────────
+# 10 tests pin the line_in bit (CmdTx byte 50 bit 0 = 0x01) in
+# P2RadioConnection::setLineIn():
+#   1.  Default state: byte 50 bit 0 = 0.
+#   2.  setLineIn(true)  → byte 50 bit 0 = 1.
+#   3.  setLineIn(false) → byte 50 bit 0 = 0.
+#   4.  Round-trip true → false → true.
+#   5.  Bit 1 (mic_boost) unaffected by line_in — cross-bit guard.
+#   6.  Bits 2-7 of byte 50 unaffected.
+#   7.  Idempotency: setLineIn(true) twice → bit remains 1.
+#   8.  Codec path (OrionMKII): line_in at byte 50 bit 0.
+#   9.  Codec path (Saturn/ANAN-G2): same behaviour.
+#  10.  Byte 51 (line_in gain) unaffected by setLineIn.
+# Source: deskhpsdr/src/new_protocol.c:1480-1482 [@120188f].
+nereus_add_test(tst_p2_line_in_wire)
+target_compile_definitions(tst_p2_line_in_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.3: P1 mic_trs wire-byte snapshot ──────────────────────
+# 14 tests pin the mic_trs bit (C1 bit 4 = 0x10, INVERTED) of bank 11 (C0=0x14)
+# in P1RadioConnection::setMicTipRing().
+# POLARITY INVERSION: tipHot=true (Tip-is-mic) → wire bit 0;
+#                     tipHot=false (Tip-is-BIAS) → wire bit 1.
+#   1.  Default state: C1 bit 4 = 0 (default tipHot=true).
+#   2.  setMicTipRing(true)  → C1 bit 4 = 0 (tip-is-mic, wire inverted).
+#   3.  setMicTipRing(false) → C1 bit 4 = 1 (tip-is-BIAS, wire inverted).
+#   4.  Round-trip: false → true → bit clears.
+#   5.  Bank 11 C0 address stays 0x14.
+#   6.  setMicTipRing(false) does NOT clobber C1 bits 0-3 (preamp).
+#   7.  setMicTipRing(true) leaves C1 all-zero in default state.
+#   8.  setMicTipRing sets m_forceBank11Next (Codex P2 flush pattern).
+#   9.  Repeated same-value call still sets the flush flag.
+#  10.  Idempotency: setMicTipRing(false) twice → bit stays 1.
+#  11.  Codec path (Standard): setMicTipRing(false) → C1 bit 4 set.
+#  12.  Codec path (Standard): setMicTipRing(true) → C1 bit 4 clear.
+#  13.  Codec path (HL2): setMicTipRing(false) → C1 bit 4 set (FW ignores).
+#  14.  setMicTipRing(false) does NOT touch C1 bits 0-3 — cross-bit guard.
+# Source: Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13].
+nereus_add_test(tst_p1_mic_tip_ring_wire)
+target_compile_definitions(tst_p1_mic_tip_ring_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.3: P2 mic_tip_ring wire-byte snapshot ─────────────────
+# 10 tests pin the mic_ptt_tip_bias_ring bit (CmdTx byte 50 bit 3 = 0x08,
+# INVERTED) in P2RadioConnection::setMicTipRing().
+# POLARITY INVERSION: tipHot=true → byte-50 bit 3 = 0; tipHot=false → 1.
+#   1.  Default state: byte 50 bit 3 = 0 (default tipHot=true).
+#   2.  setMicTipRing(false) → byte 50 bit 3 = 1 (tip-is-BIAS, inverted).
+#   3.  setMicTipRing(true)  → byte 50 bit 3 = 0 (tip-is-mic, inverted).
+#   4.  Round-trip false → true → false.
+#   5.  Bits 0 (line_in) and 1 (mic_boost) unaffected — cross-bit guard.
+#   6.  Bits 4-7 of byte 50 unaffected.
+#   7.  Idempotency: setMicTipRing(false) twice → bit remains 1.
+#   8.  Codec path (OrionMKII): mic_trs at byte 50 bit 3 (inverted).
+#   9.  Codec path (Saturn/ANAN-G2): same inverted behaviour.
+#  10.  Byte 51 (line_in gain) unaffected by setMicTipRing.
+# Source: deskhpsdr/src/new_protocol.c:1492-1494 [@120188f].
+nereus_add_test(tst_p2_mic_tip_ring_wire)
+target_compile_definitions(tst_p2_mic_tip_ring_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.4: P1 mic_bias wire-byte snapshot ──────────────────────
+# 14 tests pin the mic_bias bit (C1 bit 5 = 0x20) of bank 11 (C0=0x14)
+# in P1RadioConnection::setMicBias().
+# Polarity: on=true (bias on) → wire bit 1; on=false (bias off) → wire bit 0.
+# Reuses m_forceBank11Next + captureBank11ForTest infrastructure from G.3.
+#   1.  Default state: C1 bit 5 = 0 (default m_micBias=false).
+#   2.  setMicBias(true)  → C1 bit 5 = 1 (bias on → wire bit set).
+#   3.  setMicBias(false) → C1 bit 5 = 0 (bias off → wire bit clear).
+#   4.  Round-trip: true → false → bit clears after set.
+#   5.  Bank 11 C0 address stays 0x14.
+#   6.  setMicBias(true) does NOT clobber C1 bits 0-3 (preamp).
+#   7.  setMicBias(true) does NOT touch C1 bit 4 (G.3 mic_trs, cross-bit guard).
+#   8.  setMicBias(true) produces C1 = 0x20 in default state (only bit 5).
+#   9.  setMicBias sets m_forceBank11Next (Codex P2 flush pattern).
+#  10.  Repeated same-value call still sets the flush flag (Codex P2).
+#  11.  Idempotency: setMicBias(true) twice → bit stays 1.
+#  12.  Codec path (Standard): setMicBias(true) → C1 bit 5 set.
+#  13.  Codec path (Standard): setMicBias(false) → C1 bit 5 clear.
+#  14.  Codec path (HL2): setMicBias(true) → C1 bit 5 set (FW ignores).
+# Source: Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13].
+nereus_add_test(tst_p1_mic_bias_wire)
+target_compile_definitions(tst_p1_mic_bias_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.4: P2 mic_bias wire-byte snapshot ─────────────────────
+# 10 tests pin the mic_bias_enabled bit (CmdTx byte 50 bit 4 = 0x10)
+# in P2RadioConnection::setMicBias().
+# Polarity: on=true → byte-50 bit 4 = 1 (no inversion).
+#   1.  Default state: byte 50 bit 4 = 0 (default m_micBias=false).
+#   2.  setMicBias(true)  → byte 50 bit 4 = 1 (bias on → wire bit set).
+#   3.  setMicBias(false) → byte 50 bit 4 = 0 (bias off → wire bit clear).
+#   4.  Round-trip true → false → true.
+#   5.  Bits 0 (line_in), 1 (mic_boost), 3 (mic_trs) unaffected — cross-bit guard.
+#   6.  Bits 5-7 of byte 50 unaffected.
+#   7.  Idempotency: setMicBias(true) twice → bit remains 1.
+#   8.  Codec path (OrionMKII): mic_bias at byte 50 bit 4.
+#   9.  Codec path (Saturn/ANAN-G2): same behaviour.
+#  10.  Byte 51 (line_in gain) unaffected by setMicBias.
+# Source: deskhpsdr/src/new_protocol.c:1496-1498 [@120188f].
+nereus_add_test(tst_p2_mic_bias_wire)
+target_compile_definitions(tst_p2_mic_bias_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.5: P1 mic_ptt wire-byte snapshot ─────────────────────
+# 16 tests pin the mic_ptt bit (C1 bit 6 = 0x40, INVERTED) of bank 11 (C0=0x14)
+# in P1RadioConnection::setMicPTT().
+# POLARITY INVERSION: enabled=true → wire bit CLEAR; enabled=false → wire bit SET.
+# Reuses m_forceBank11Next + captureBank11ForTest infrastructure from G.3.
+#   1.  Default state: C1 bit 6 = 1 (PTT disabled by default — m_micPTT=false → !false=1).
+#   2.  setMicPTT(true)  → C1 bit 6 = 0 (PTT enabled → disable-flag cleared).
+#   3.  setMicPTT(false) → C1 bit 6 = 1 (PTT disabled → disable-flag set).
+#   4.  Round-trip true → false.
+#   5.  Bank 11 C0 address must be 0x14.
+#   6.  setMicPTT(true) does NOT clobber C1 bits 0-3 (preamp).
+#   7.  setMicPTT(true) does NOT touch C1 bits 4 or 5 (G.3/G.4 bits).
+#   8.  setMicPTT sets m_forceBank11Next (Codex P2 flush pattern).
+#   9.  Flush flag set even when value doesn't change (Codex P2).
+#  10.  Idempotency: setMicPTT(true) twice → bit stays 0.
+#  11.  Codec path (Standard): setMicPTT(true) → C1 bit 6 clear.
+#  12.  Codec path (Standard): setMicPTT(false) → C1 bit 6 set.
+#  13.  Codec path (HL2): setMicPTT(true) → C1 bit 6 clear (FW ignores).
+#  14.  setMicPTT(true) does NOT touch C1 bits 0-3 — cross-bit guard.
+#  15.  G.3+G.4+G.5 composition: mic_trs(inverted)+mic_bias+mic_ptt(inverted) → C1 & 0x70 == 0x70.
+#  16.  G.3+G.4 composition sub-case: mic_trs+mic_bias → C1 & 0x30 == 0x30.
+# Source: Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13].
+nereus_add_test(tst_p1_mic_ptt_wire)
+target_compile_definitions(tst_p1_mic_ptt_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.5: P2 mic_ptt wire-byte snapshot ─────────────────────
+# 10 tests pin the mic_ptt bit (CmdTx byte 50 bit 2 = 0x04, INVERTED)
+# in P2RadioConnection::setMicPTT().
+# POLARITY INVERSION: enabled=true → byte-50 bit 2 = 0; enabled=false → = 1.
+#   1.  Default state: byte 50 bit 2 = 1 (PTT disabled by default).
+#   2.  setMicPTT(true)  → byte 50 bit 2 = 0 (PTT enabled → disable-flag cleared).
+#   3.  setMicPTT(false) → byte 50 bit 2 = 1 (PTT disabled → disable-flag set).
+#   4.  Round-trip true → false → true.
+#   5.  Bits 0 (line_in), 1 (mic_boost) unaffected — cross-bit guard.
+#   6.  setMicPTT(true) does NOT touch byte-50 bit 3 (G.3 mic_trs).
+#   7.  Idempotency: setMicPTT(true) twice → bit stays 0.
+#   8.  Codec path (OrionMKII): mic_ptt at byte 50 bit 2.
+#   9.  Codec path (Saturn/ANAN-G2): same behaviour.
+#  10.  Byte 51 (line_in gain) unaffected by setMicPTT.
+# Source: deskhpsdr/src/new_protocol.c:1488-1490 [@120188f].
+nereus_add_test(tst_p2_mic_ptt_wire)
+target_compile_definitions(tst_p2_mic_ptt_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.6: P1 mic_xlr storage-only ──────────────────────────
+# 8 tests verify that P1RadioConnection::setMicXlr() is STORAGE-ONLY.
+# Saturn G2 P2-only feature — P1 hardware has no XLR jack. No wire emission.
+# P1 case-10 and case-11 C&C bytes must be UNCHANGED regardless of m_micXlr value.
+#   1.  Default state (true): setMicXlr(true) → bank10 unchanged.
+#   2.  Default state: setMicXlr(true) → bank11 unchanged.
+#   3.  setMicXlr(false) → bank10 all 5 bytes unchanged (critical assertion).
+#   4.  setMicXlr(false) → bank11 all 5 bytes unchanged (critical assertion).
+#   5.  Round-trip false→true: bank10 unchanged after both calls.
+#   6.  Round-trip false→true: bank11 unchanged after both calls.
+#   7.  Idempotency: setMicXlr(false) twice → bank11 stable.
+#   8.  Codec path (Standard/HermesII): bank11 still unchanged by setMicXlr.
+# Source: deskhpsdr/src/new_protocol.c:1500-1502 [@120188f] (P2 wire — P1 storage-only).
+nereus_add_test(tst_p1_mic_xlr_storage)
+target_compile_definitions(tst_p1_mic_xlr_storage PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.6: P2 mic_xlr wire-byte snapshot ────────────────────
+# 10 tests pin the mic_xlr bit (CmdTx byte 50 bit 5 = 0x20, no inversion)
+# in P2RadioConnection::setMicXlr().
+# POLARITY: xlrJack=true → byte-50 bit 5 = 1; xlrJack=false → = 0. No inversion.
+# Default true — Saturn G2 ships with XLR-enabled config.
+# MicState::micControl default updated from 0x04 to 0x24 (bit 2 + bit 5 set).
+#   1.  Default state: byte 50 bit 5 = 1 (XLR selected by default).
+#   2.  setMicXlr(true)  → byte 50 bit 5 = 1 (XLR selected).
+#   3.  setMicXlr(false) → byte 50 bit 5 = 0 (XLR deselected).
+#   4.  Round-trip false → true.
+#   5.  setMicXlr(true) does NOT touch bits 0-4 (G.1-G.5) — cross-bit guard.
+#   6.  setMicXlr(false) does NOT touch bits 0-4 — cross-bit guard.
+#   7.  Idempotency: setMicXlr(true) twice → bit stays 1.
+#   8.  Codec path (OrionMKII): mic_xlr at byte 50 bit 5.
+#   9.  Codec path (Saturn/ANAN-G2): same behaviour.
+#  10.  Byte 51 (line_in gain) unaffected by setMicXlr.
+# Source: deskhpsdr/src/new_protocol.c:1500-1502 [@120188f].
+nereus_add_test(tst_p2_mic_xlr_wire)
+target_compile_definitions(tst_p2_mic_xlr_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task I.1: AudioTxInputPage skeleton + TransmitModel::micSource ─
+# 12 tests covering:
+#   1-2.  HL2 (hasMicJack=false): PC Mic enabled, Radio Mic disabled.
+#   2.    HL2: disabled-tooltip exact text "Radio mic jack not present on Hermes Lite 2".
+#   3-4.  G2 (hasMicJack=true): both PC Mic and Radio Mic enabled, no tooltip.
+#   5.    Default state: PC Mic checked, Radio Mic unchecked.
+#   6-7.  UI → Model round-trip: button click drives TransmitModel::micSource.
+#   8-9.  Model → UI round-trip: setMicSource() drives radio-button check state.
+#  10.    HL2 forced state: Radio Mic button disabled even when model holds Radio.
+#  11.    TransmitModel signal emission: setMicSource emits micSourceChanged.
+#  12.    TransmitModel idempotency: same-value call emits no signal.
+# NEREUS_BUILD_TESTS required for RadioModel::setCapsHasMicJackForTest.
+nereus_add_test(tst_audio_tx_input_page_skeleton)
+target_compile_definitions(tst_audio_tx_input_page_skeleton PRIVATE NEREUS_BUILD_TESTS)
+
+# =============================================================================
+# Phase 3M-1b Task I.2 — PC Mic settings group on AudioTxInputPage
+# =============================================================================
+# Covers:
+#   1-3.  Backend combo UI↔model round-trips; device list repopulation.
+#   4-6.  Buffer slider: label update, UI↔model round-trips.
+#   7-8.  Mic Gain slider UI↔model round-trips.
+#   9.    No-feedback-loop: model→UI→model emission count.
+#  10.    Test Mic button state machine (checked + timer running / stopped).
+#  11-13. TransmitModel idempotency for 3 new PC Mic properties.
+#  14-15. PC Mic group box visibility gated by mic-source selection.
+# NEREUS_BUILD_TESTS required for RadioModel::setCapsHasMicJackForTest.
+nereus_add_test(tst_audio_tx_input_pc_mic_group)
+target_compile_definitions(tst_audio_tx_input_pc_mic_group PRIVATE NEREUS_BUILD_TESTS)
+
+# =============================================================================
+# Phase 3M-1b Task I.3 — Radio Mic settings group with per-family layout
+# =============================================================================
+# Covers:
+#   1.    HL2 (hasMicJack=false): all 3 Radio Mic groups hidden.
+#   2-4.  Saturn / OrionMKII / HermesII + Radio Mic: correct group visible.
+#   5-6.  PC→Radio Mic and Radio→PC Mic toggle visibility on Saturn.
+#   7-8.  Hermes: Line In radio UI↔Model round-trip.
+#   9-10. Hermes: +20 dB Mic Boost checkbox UI↔Model round-trip.
+#  11-12. Hermes: Line In Gain slider UI↔Model round-trip.
+#  13.    Orion: Mic Tip-Ring checkbox UI→Model round-trip.
+#  14.    Orion: micPttDisabled model→UI round-trip.
+#  15-16. Saturn: 3.5mm/XLR radio UI↔Model round-trip.
+#  17.    Saturn: Mic Bias UI→Model round-trip.
+#  18.    No feedback loop: micBoostChanged emission count.
+# NEREUS_BUILD_TESTS required for RadioModel::setCapsHasMicJackForTest +
+#   setCapsHwForTest.
+nereus_add_test(tst_audio_tx_input_radio_mic_group)
+target_compile_definitions(tst_audio_tx_input_radio_mic_group PRIVATE NEREUS_BUILD_TESTS)
+
+# =============================================================================
+# Phase 3M-1b Task I.4 — Per-board mic gain slider range on AudioTxInputPage
+# =============================================================================
+# Covers:
+#   1.    Unknown board: slider range = -50/+70 (TransmitModel fallback).
+#   2.    Hermes board: slider range = -40/+10 (Thetis runtime defaults).
+#   3.    Saturn board: slider range = -40/+10 (Thetis runtime defaults).
+#   4.    HermesLite board: slider range = -40/+10 (no mic jack, but caps OK).
+#   5.    Slider clamps low: model -50 dB on Hermes → slider at -40.
+#   6.    Slider clamps high: model +70 dB on Hermes → slider at +10.
+#   7.    UI → model: slider setValue(5) → micGainDb = 5.
+#   8.    Model → UI: setMicGainDb(-20) → slider value = -20.
+#   9.    TransmitModel clamps above global kMicGainDbMax.
+#  10.    No feedback loop: model → UI → no re-emission.
+# NEREUS_BUILD_TESTS required for RadioModel::setCapsHwForTest +
+#   setCapsHasMicJackForTest.
+nereus_add_test(tst_audio_tx_input_mic_gain_mirror)
+target_compile_definitions(tst_audio_tx_input_mic_gain_mirror PRIVATE NEREUS_BUILD_TESTS)
+
+# =============================================================================
+# Phase 3M-1b Task I.5 — Integration: chk20dbMicBoost → VOX threshold scaling
+# =============================================================================
+# Verifies the full chain:
+#   AudioTxInputPage checkbox toggle
+#     → TransmitModel::setMicBoost
+#     → TransmitModel::micBoostChanged
+#     → MoxController::onMicBoostChanged  [H.2 wiring in RadioModel]
+#     → MoxController::recomputeVoxThreshold
+#     → MoxController::voxThresholdRequested(double)
+#
+# Test matrix (~7 cases):
+#   1.  Default state: NAN sentinel → at least one initial emit.
+#   2.  Hermes checkbox ON: voxThresholdRequested fires with scaled value.
+#   3.  Hermes checkbox OFF: voxThresholdRequested fires with unscaled value.
+#   4.  Model setMicBoost(true) → Hermes UI checkbox reflects change.
+#   5.  Idempotency: toggle ON twice → only one additional emit.
+#   6.  Orion cross-family: Orion checkbox triggers same recompute chain.
+#   7.  Saturn cross-family: Saturn checkbox triggers same recompute chain.
+#
+# NEREUS_BUILD_TESTS required for RadioModel::setCapsHwForTest +
+#   setCapsHasMicJackForTest + moxController() accessor.
+nereus_add_test(tst_audio_tx_input_mic_boost_vox_thresh)
+target_compile_definitions(tst_audio_tx_input_mic_boost_vox_thresh PRIVATE NEREUS_BUILD_TESTS)
+
+# =============================================================================
+# Phase 3M-1b Task L.1 — RadioModel owns Pc/Radio mic sources + composite router
+# =============================================================================
+# Covers:
+#   1-3.  Test seams: pcMicSource/radioMicSource/compositeMicRouter null before connect.
+#   4.    RadioMicSource (QObject) lives on the main thread after construction.
+#   5.    RadioMicSource null-connection: construction + pullSamples = zero-fill.
+#   6.    RadioMicSource ring starts empty (ringFillForTest == 0).
+#   7.    CompositeTxMicRouter zero-fills when both sources null (edge-case guard).
+#   8.    TransmitModel::micPreampChanged signal carries a double linear gain.
+#   9.    monEnabledChanged → AudioEngine::setTxMonitorEnabled state round-trip.
+#  10.    monitorVolumeChanged → AudioEngine::setTxMonitorVolume state round-trip.
+#  11.    MoxCheck lifecycle: install, invoke, clear.
+#  12.    MoxCheck rejection: moxRejected emitted + MOX does not advance.
+#  13.    MoxCheck approved: no moxRejected, MOX advances.
+#  14.    RadioModel lifecycle (no connect): construct + destroy cleanly.
+#  15.    RadioModel double lifecycle: two consecutive instances, no leak/crash.
+#
+# NEREUS_BUILD_TESTS required for RadioModel::pcMicSourceForTest etc. +
+#   RadioMicSource::ringFillForTest.
+nereus_add_test(tst_radio_model_3m1b_ownership)
+target_compile_definitions(tst_radio_model_3m1b_ownership PRIVATE NEREUS_BUILD_TESTS)
+
+# =============================================================================
+# Phase 3M-1b Task L.3 — HL2 force-Pc on connect (closes Phase L)
+# =============================================================================
+# Covers:
+#   1.  HL2 fresh connect: micSource == Pc.
+#   2a. HL2 fresh connect: lock engaged (isMicSourceLocked true).
+#   2b. HL2 connect with stored Radio: forced to Pc.
+#   2c. HL2 connect with stored Radio: lock engaged.
+#   3a. Non-HL2 fresh connect: default Pc.
+#   3b. Non-HL2 fresh connect: not locked.
+#   4.  Non-HL2 with stored Radio: loads Radio (no override).
+#   5.  Lock prevents setMicSource(Radio) on HL2 → stays Pc.
+#   6.  Lock released on non-HL2 → setMicSource(Radio) succeeds.
+#   7.  isMicSourceLocked() reflects hasMicJack for both boards.
+#   8.  Reconnect HL2 → non-HL2: lock released, Radio allowed.
+#
+# NEREUS_BUILD_TESTS required for RadioModel test seams:
+#   setCapsHasMicJackForTest, simulateConnectLoadForTest,
+#   simulateDisconnectForTest.
+nereus_add_test(tst_radio_model_mic_source_hl2_force)
+target_compile_definitions(tst_radio_model_mic_source_hl2_force PRIVATE NEREUS_BUILD_TESTS)
 

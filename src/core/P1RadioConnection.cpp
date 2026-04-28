@@ -1119,6 +1119,191 @@ void P1RadioConnection::setTrxRelay(bool enabled)
 }
 
 // ---------------------------------------------------------------------------
+// setMicBoost (3M-1b G.1)
+//
+// Sets the hardware mic-jack 20 dB boost preamp bit.
+// Wire bit: bank 10 (C0=0x12) C2 byte bit 0 (mask 0x01).
+// Polarity: 1 = boost on (no inversion).
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+//   C2 = ((prn->mic.mic_boost & 1) | ((prn->mic.line_in & 1) << 1) | ...)
+//   mic_boost occupies the lowest bit of C2.
+//
+// Flush pattern mirrors setTrxRelay (Codex P2): m_forceBank10Next is set
+// before the idempotent guard so the bit lands on the wire within ≤1 frame.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setMicBoost(bool on)
+{
+    // Codex P2: set flush flag BEFORE idempotent guard.
+    m_forceBank10Next = true;
+
+    if (m_micBoost == on) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_micBoost = on;
+}
+
+// ---------------------------------------------------------------------------
+// setLineIn (3M-1b G.2)
+//
+// Sets the hardware mic-jack line-in path bit.
+// Wire bit: bank 10 (C0=0x12) C2 byte bit 1 (mask 0x02).
+// Polarity: 1 = line in active (no inversion).
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+//   C2 = ((prn->mic.mic_boost & 1) | ((prn->mic.line_in & 1) << 1) | ...)
+//   line_in occupies bit 1 of C2 (mic_boost is bit 0).
+//
+// Flush pattern mirrors setMicBoost (Codex P2): m_forceBank10Next is set
+// before the idempotent guard so the bit lands on the wire within ≤1 frame.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setLineIn(bool on)
+{
+    // Codex P2: set flush flag BEFORE idempotent guard.
+    m_forceBank10Next = true;
+
+    if (m_lineIn == on) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_lineIn = on;
+}
+
+// ---------------------------------------------------------------------------
+// setMicTipRing (3M-1b G.3)
+//
+// Selects mic-jack Tip/Ring polarity.
+// NereusSDR parameter convention: tipHot = true → Tip carries the mic signal.
+//
+// POLARITY INVERSION AT THE WIRE LAYER:
+// Thetis field mic_trs and deskhpsdr field mic_ptt_tip_bias_ring both mean
+// "1 = Tip is BIAS/PTT" (i.e. NOT the mic).  So:
+//   tipHot = true  → Tip is mic    → wire bit CLEAR (0)
+//   tipHot = false → Tip is BIAS   → wire bit SET   (1)
+// The implementation writes (!m_micTipRing) to bit 4 of bank-11 C1.
+//
+// Wire bit: bank 11 (C0=0x14) C1 byte bit 4 (mask 0x10), INVERTED.
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13]
+//   C1 = ... | ((prn->mic.mic_trs & 1) << 4) | ...
+//   mic_trs: 1 = tip is BIAS/PTT (ring is mic), 0 = tip is mic (normal).
+//
+// First touch of case 11 / bank 11: adds m_forceBank11Next flush flag +
+// round-robin chooser extension + captureBank11ForTest/forceBank11NextForTest
+// test seams.  Bits 0-3 of C1 carry per-ADC preamp flags (Thetis quirk:
+// bit 3 = rx0 again) and are untouched by this setter (OR into C1, never AND).
+//
+// Flush pattern mirrors setLineIn (Codex P2): m_forceBank11Next is set
+// before the idempotent guard so the bit lands on the wire within ≤1 frame.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setMicTipRing(bool tipHot)
+{
+    // Codex P2: set flush flag BEFORE idempotent guard.
+    m_forceBank11Next = true;
+
+    if (m_micTipRing == tipHot) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_micTipRing = tipHot;
+}
+
+// ---------------------------------------------------------------------------
+// setMicBias (3M-1b G.4)
+//
+// Enables or disables hardware mic-jack phantom power (bias voltage).
+// Polarity: on=true → bias enabled → wire bit SET (no inversion).
+//
+// Wire bit: bank 11 (C0=0x14) C1 byte bit 5 (mask 0x20).
+// This is the SAME C1 byte as G.3 (mic_trs bit 4) — both are OR'd in.
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13]
+//   C1 = ... | ((prn->mic.mic_bias & 1) << 5) | ...
+//   mic_bias: 1 = bias on, 0 = bias off (no polarity inversion).
+//
+// Flush pattern mirrors setMicTipRing (Codex P2): m_forceBank11Next is set
+// before the idempotent guard so the bit lands on the wire within ≤1 frame.
+// Reuses m_forceBank11Next + captureBank11ForTest infrastructure added in G.3.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setMicBias(bool on)
+{
+    // Codex P2: set flush flag BEFORE idempotent guard.
+    m_forceBank11Next = true;
+
+    if (m_micBias == on) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_micBias = on;
+}
+
+// ---------------------------------------------------------------------------
+// setMicPTT (3M-1b G.5)
+//
+// Enables or disables the hardware mic-jack PTT line (Orion/ANAN front-panel).
+// NereusSDR parameter convention: enabled=true → PTT enabled (intuitive).
+//
+// POLARITY INVERSION AT THE WIRE LAYER:
+// Both Thetis and deskhpsdr carry the *disable* flag on the wire:
+//   Thetis field name: mic_ptt  (1 = PTT DISABLED)
+//   deskhpsdr: mic_ptt_enabled == 0 → set bit (bit set = PTT disabled)
+//   Thetis console.cs:19758 [v2.10.3.13]: MicPTTDisabled property name
+//     confirms the storage convention (disable flag, not enable flag).
+// Therefore the implementation writes (!enabled) to the wire bit:
+//   enabled=true  → PTT enabled  → wire bit 6 CLEAR (0)
+//   enabled=false → PTT disabled → wire bit 6 SET   (1)
+//
+// Wire bit: bank 11 (C0=0x14) C1 byte bit 6 (mask 0x40), INVERTED.
+// This is the SAME C1 byte as G.3 (bit 4) + G.4 (bit 5) — all OR'd in.
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13]:
+//   C1 = ... | ((prn->mic.mic_ptt & 1) << 6);
+//   mic_ptt: 1 = PTT disabled on wire (polarity inversion at API layer).
+//
+// Cross-reference:
+//   deskhpsdr/src/old_protocol.c:3000-3002 [@120188f]:
+//     if (mic_ptt_enabled == 0) { output_buffer[C1] |= 0x40; }  // same inversion
+//   deskhpsdr/src/new_protocol.c:1488-1490 [@120188f] — P2 byte 50 bit 2.
+//   Thetis console.cs:19764 [v2.10.3.13] — MicPTTDisabled calls SetMicPTT(value).
+//
+// Flush pattern mirrors setMicBias (Codex P2): m_forceBank11Next is set
+// BEFORE the idempotent guard so the bit lands on the wire within ≤1 frame.
+// Reuses m_forceBank11Next + captureBank11ForTest infrastructure from G.3.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setMicPTT(bool enabled)
+{
+    // Codex P2: set flush flag BEFORE idempotent guard.
+    m_forceBank11Next = true;
+
+    if (m_micPTT == enabled) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_micPTT = enabled;
+}
+
+// ---------------------------------------------------------------------------
+// setMicXlr (3M-1b G.6)
+//
+// Saturn G2 P2-only feature; P1 hardware has no XLR jack.
+// Setter stores the flag for cross-board API consistency but does NOT
+// emit any wire bytes. P1 case-10 and case-11 C&C bytes are UNCHANGED
+// regardless of m_micXlr value.
+//
+// P2 source: deskhpsdr/src/new_protocol.c:1500-1502 [@120188f]:
+//   if (mic_input_xlr) { transmit_specific_buffer[50] |= 0x20; }
+//   (byte 50 bit 5 = 0x20, polarity 1=XLR jack — no inversion)
+//   P2 implementation in P2RadioConnection::setMicXlr().
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setMicXlr(bool xlrJack)
+{
+    // Saturn G2 P2-only feature; P1 hardware has no XLR jack.
+    // Setter stores the flag for cross-board consistency but does NOT
+    // emit any wire bytes. P1 case-10 and case-11 C&C bytes are
+    // unchanged regardless of m_micXlr value.
+    if (m_micXlr == xlrJack) {
+        return;
+    }
+    m_micXlr = xlrJack;
+}
+
+// ---------------------------------------------------------------------------
 // applyBoardQuirks
 //
 // Reads BoardCapabilities (m_caps) and enforces runtime constraints.
@@ -1273,6 +1458,11 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.txDrive        = m_txDrive;
     ctx.paEnabled      = m_paEnabled;
     ctx.trxRelay       = m_trxRelay;
+    ctx.p1MicBoost     = m_micBoost;
+    ctx.p1LineIn       = m_lineIn;
+    ctx.p1MicTipRing   = m_micTipRing;
+    ctx.p1MicBias      = m_micBias;     // 3M-1b G.4
+    ctx.p1MicPTT       = m_micPTT;      // 3M-1b G.5
     ctx.duplex         = m_duplex;
     ctx.diversity      = m_diversity;
     ctx.antennaIdx     = m_antennaIdx;
@@ -1666,16 +1856,21 @@ void P1RadioConnection::sendCommandFrame()
     // implementation does not defer MOX; it sets the bit on the very next frame.
     // 3M-1a E.4: if setTrxRelay() requested a bank-10 flush, jump to bank 10
     // so the T/R relay bit (C3 bit 7) lands within ≤1 frame of the call.
-    // Bank-0 flush takes priority if both flags are set simultaneously (rare).
-    // If both flags are set simultaneously, bank 0 wins this frame;
-    // m_forceBank10Next is preserved (not cleared) and fires on the following frame.
+    // 3M-1b G.3: if setMicTipRing() requested a bank-11 flush, jump to bank 11
+    // so the mic_trs bit (C1 bit 4) lands within ≤1 frame of the call.
+    // Priority: bank 0 > bank 10 > bank 11.  Losing flags are preserved and
+    // fire on the following frame (same pattern as bank 0 vs bank 10).
     // Source: deskhpsdr/src/old_protocol.c:2909-2910 [@120188f].
+    // Source: Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13].
     if (m_forceBank0Next) {
         m_ccRoundRobinIdx = 0;
         m_forceBank0Next  = false;
     } else if (m_forceBank10Next) {
         m_ccRoundRobinIdx = 10;
         m_forceBank10Next = false;
+    } else if (m_forceBank11Next) {
+        m_ccRoundRobinIdx = 11;
+        m_forceBank11Next = false;
     }
 
     // Subframe 0: current bank
@@ -1798,6 +1993,22 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
     if ((c0_sub0 & 0x01) || (c0_sub1 & 0x01)) {
         emit adcOverflow(0);
     }
+
+    // H.5: mic_ptt extraction — P1 status frame C0 bit 0 (PTT from radio).
+    // From Thetis networkproto1.c:329 [v2.10.3.13]:
+    //   prn->ptt_in = ControlBytesIn[0] & 0x1;
+    // + console.cs:25426 [v2.10.3.13]:
+    //   bool mic_ptt = (dotdashptt & 0x01) != 0; // PTT from radio
+    //
+    // C0 is ControlBytesIn[0]; bit 0 is ptt_in.  Both sub-frames carry the
+    // same instantaneous PTT state; OR them to produce the frame-level value
+    // (matches Thetis nativeGetDotDashPTT() which reads a single prn->ptt_in
+    // accumulated across all sub-frame writes).
+    //
+    // Emitted unconditionally each frame: MoxController::onMicPttFromRadio
+    // is idempotent, so repeated false→false calls are harmless.
+    const bool micPtt = ((c0_sub0 & 0x01) != 0) || ((c0_sub1 & 0x01) != 0);
+    emit micPttFromRadio(micPtt);
 
     // Phase 3P-H Task 4: PA telemetry — extract raw 16-bit ADC counts from
     // each subframe's C&C status bytes.  Per-board scaling lives in RadioModel
@@ -1962,18 +2173,32 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
         // 3M-0; never surfaced because no TX I/Q was live on EP2 before E.4.
         out[0] = C0base | 0x12;
         out[1] = static_cast<quint8>(m_txDrive & 0xFF);
-        out[2] = 0x40; // line_in=0, mic_boost=0 defaults
+        // C2: mic_boost → bit 0 (0x01); line_in → bit 1 (0x02); bit 6 always set per upstream default.
+        // From Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+        //   C2 = ((prn->mic.mic_boost & 1) | ((prn->mic.line_in & 1) << 1) | ... | 0b01000000) & 0x7f;
+        out[2] = static_cast<quint8>((m_micBoost ? 0x01 : 0x00) | (m_lineIn ? 0x02 : 0x00) | 0x40); // 3M-1b G.1+G.2
         out[3] = m_alexHpfBits | (m_trxRelay ? 0x00 : 0x80); // 3M-1a E.4
         out[4] = m_alexLpfBits;
         return;
 
     case 11: // Preamp control (networkproto1.c:593-601)
         out[0] = C0base | 0x14;
+        // C1: preamp bits 0-3 (bit 3 = rx0 again, Thetis quirk) + mic_trs bit 4
+        //     + mic_bias bit 5 + mic_ptt bit 6 (INVERTED).
+        // mic_trs polarity inversion: 1 = tip is BIAS/PTT → write !m_micTipRing.
+        // mic_bias polarity: 1 = bias on (no inversion) → write m_micBias.
+        // mic_ptt polarity inversion: 1 = PTT DISABLED on wire → write !m_micPTT.
+        // From Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13]
+        //   C1 = ... | ((prn->mic.mic_trs & 1) << 4) | ((prn->mic.mic_bias & 1) << 5)
+        //           | ((prn->mic.mic_ptt & 1) << 6);
         out[1] = static_cast<quint8>(
                    (m_rxPreamp[0] ? 0x01 : 0)
                  | (m_rxPreamp[1] ? 0x02 : 0)
                  | (m_rxPreamp[2] ? 0x04 : 0)
-                 | (m_rxPreamp[0] ? 0x08 : 0)); // bit3 = rx0 again (Thetis quirk)
+                 | (m_rxPreamp[0] ? 0x08 : 0)        // bit3 = rx0 again (Thetis quirk)
+                 | (!m_micTipRing ? 0x10 : 0x00)      // 3M-1b G.3 — mic_trs (inverted)
+                 | (m_micBias    ? 0x20 : 0x00)       // 3M-1b G.4 — mic_bias (no inversion)
+                 | (!m_micPTT    ? 0x40 : 0x00));     // 3M-1b G.5 — mic_ptt (INVERTED)
         out[2] = 0; // line_in_gain + puresignal
         out[3] = 0; // user digital outputs
         out[4] = static_cast<quint8>((m_stepAttn[0] & 0x1F) | 0x20); // ADC0 step ATT + enable

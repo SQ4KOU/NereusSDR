@@ -115,7 +115,10 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
         case 10:
             out[0] = C0base | 0x12;
             out[1] = quint8(ctx.txDrive & 0xFF);
-            out[2] = 0x40;
+            // C2: mic_boost → bit 0 (0x01); line_in → bit 1 (0x02); bit 6 always set per upstream default.
+            // From Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+            //   C2 = ((prn->mic.mic_boost & 1) | ((prn->mic.line_in & 1) << 1) | ... | 0b01000000) & 0x7f;
+            out[2] = quint8((ctx.p1MicBoost ? 0x01 : 0x00) | (ctx.p1LineIn ? 0x02 : 0x00) | 0x40);
             out[3] = quint8(ctx.alexHpfBits | (ctx.trxRelay ? 0x00 : 0x80));  // T/R relay engaged (INVERTED: 1 = disabled)
             out[4] = quint8(ctx.alexLpfBits);
             return;
@@ -127,10 +130,23 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
         // Source: mi0bot networkproto1.c:1091-1104 [@c26a8a4]
         case 11: {
             out[0] = C0base | 0x14;
+            // C1: preamp bits 0-3 (bit 3 = rx0 again, Thetis quirk) + mic_trs bit 4
+            //     + mic_bias bit 5 + mic_ptt bit 6 (INVERTED).
+            // HL2 has no mic jack but the bits are written for correctness (FW ignores).
+            // mic_trs polarity inversion: wire bit set when tip is BIAS/PTT (!tipHot).
+            // mic_bias polarity: 1 = bias on (no inversion).
+            // mic_ptt polarity inversion: wire bit set when PTT is DISABLED (!enabled).
+            // From Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13]
+            //   C1 = ... | ((prn->mic.mic_trs & 1) << 4) | ((prn->mic.mic_bias & 1) << 5)
+            //           | ((prn->mic.mic_ptt & 1) << 6);
+            //   3M-1b G.3 (mic_trs) + G.4 (mic_bias) + G.5 (mic_ptt)
             out[1] = quint8((ctx.rxPreamp[0] ? 0x01 : 0)
                           | (ctx.rxPreamp[1] ? 0x02 : 0)
                           | (ctx.rxPreamp[2] ? 0x04 : 0)
-                          | (ctx.rxPreamp[0] ? 0x08 : 0));
+                          | (ctx.rxPreamp[0] ? 0x08 : 0)         // bit3 = rx0 again (Thetis quirk)
+                          | (!ctx.p1MicTipRing ? 0x10 : 0x00)    // mic_trs (inverted) — 3M-1b G.3
+                          | (ctx.p1MicBias    ? 0x20 : 0x00)     // mic_bias (no inversion) — 3M-1b G.4
+                          | (!ctx.p1MicPTT    ? 0x40 : 0x00));   // mic_ptt (INVERTED) — 3M-1b G.5
             out[2] = 0;
             out[3] = 0;
             // MI0BOT: Different read loop for HL2 — Larger range for the HL2 attenuator

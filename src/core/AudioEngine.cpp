@@ -67,6 +67,14 @@
 //                 Code-review follow-up: 200ms buffer-size debounce moved from
 //                 AudioEngine::setSpeakersConfig to DeviceCard (addendum §2.1);
 //                 setSpeakersConfig now applies synchronously.
+//   2026-04-27 — Phase 3M-1b E.3 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. Adds txMonitorBlockReady(samples,frames)
+//                 — the audio-thread consumer of TxChannel::sip1OutputReady.
+//                 Expands mono TXA block to interleaved stereo, accumulates
+//                 into m_masterMix at kTxMonitorSlotId (-2). Slot pre-registered
+//                 in ctor with initial gain = m_txMonitorVolume default (0.5f).
+//                 setTxMonitorVolume now pushes gain updates to MasterMixer
+//                 via setSliceGain. Plan: 3M-1b E.3. Pre-code review §4.3 §4.4.
 // =================================================================
 
 #include "AudioEngine.h"
@@ -153,6 +161,13 @@ AudioEngine::AudioEngine(QObject* parent)
         m_paInitialized = true;
         qCInfo(lcAudio) << "PortAudio initialized:" << Pa_GetVersionText();
     }
+
+    // Pre-register the TX-monitor mixer slot so txMonitorBlockReady's
+    // accumulate() call finds the entry without a main-thread insert/rehash
+    // race. Initial gain matches m_txMonitorVolume default (0.5f); updated
+    // atomically by setTxMonitorVolume via setSliceGain.
+    // Plan: 3M-1b E.3. Pre-code review §4.3.
+    m_masterMix.setSliceGain(kTxMonitorSlotId, m_txMonitorVolume.load(std::memory_order_relaxed), 0.0f);
 }
 
 AudioEngine::~AudioEngine()
@@ -228,6 +243,7 @@ void AudioEngine::start()
     }
 
     ensureSpeakersOpen();
+    ensureTxInputOpen();
 
     // Sub-Phase 8.5: eagerly construct platform-native VAX RX buses + the
     // VAX TX virtual bus on macOS / Linux so coreaudiod / pactl publish the
@@ -609,6 +625,36 @@ void AudioEngine::ensureSpeakersOpen()
     }
 }
 
+void AudioEngine::ensureTxInputOpen()
+{
+    if (m_txInputBus && m_txInputBus->isOpen()) {
+        return;
+    }
+    if (!m_paInitialized) {
+        return;
+    }
+
+    // Phase 3M-1b: open the platform-default mic on start() so the
+    // PhoneCwApplet mic-level meter (and PcMicSource on TX) has signal
+    // without requiring the user to visit Setup → Audio → Devices.
+    // Persisted choice (audio/TxInput keys) takes priority on subsequent
+    // launches; first run with no keys returns a default-constructed
+    // AudioDeviceConfig (empty deviceName → platform-default mic).
+    const AudioDeviceConfig cfg =
+        AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/TxInput"));
+
+    m_txInputBus = makeBus(cfg, /*capture=*/true);
+    if (m_txInputBus) {
+        qCInfo(lcAudio) << "TX input bus opened (eager) @"
+                        << m_txInputBus->negotiatedFormat().sampleRate << "Hz /"
+                        << m_txInputBus->negotiatedFormat().channels << "ch"
+                        << "[" << m_txInputBus->backendName() << "]";
+        emit txInputConfigChanged(cfg);
+    } else {
+        qCWarning(lcAudio) << "TX input bus open failed — mic level meter inert";
+    }
+}
+
 void AudioEngine::setSpeakersConfig(const AudioDeviceConfig& cfg)
 {
     // Sub-Phase 12 Task 12.2: applies synchronously.  The 200 ms intra-control
@@ -781,6 +827,11 @@ void AudioEngine::setHeadphonesBusForTest(std::unique_ptr<IAudioBus> bus)
     m_headphonesBus = std::move(bus);
 }
 
+void AudioEngine::setTxInputBusForTest(std::unique_ptr<IAudioBus> bus)
+{
+    m_txInputBus = std::move(bus);
+}
+
 #endif
 
 void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
@@ -797,6 +848,18 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     SliceModel* slice = m_radio->sliceAt(sliceId);
     if (slice == nullptr) {
         return;
+    }
+
+    // 3M-1b E.4 fold: silence the active TX slice's RX audio during MOX.
+    // Non-active slices (e.g. RX2 when TX is on VFO-A, or a second slice in
+    // a future multi-RX configuration) keep playing — matching Thetis IVAC
+    // mox state-machine in audio.cs:349-384 [v2.10.3.13].
+    //
+    // m_moxActive acquire load provides the ordering barrier before the
+    // non-atomic isActiveSlice() read on slice. A stale read of isActiveSlice
+    // is harmless: worst case one ~10 ms block leaks before the next barrier.
+    if (m_moxActive.load(std::memory_order_acquire) && slice->isActiveSlice()) {
+        return;  // silenced — active TX slice's RX audio gated during MOX
     }
 
     if (!slice->muted()) {
@@ -905,6 +968,64 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     }
 }
 
+int AudioEngine::pullTxMic(float* dst, int n)
+{
+    // Plan: 3M-1b E.1. Pre-code review §0.3 (PcMicSource arch).
+    if (m_txInputBus == nullptr || dst == nullptr || n <= 0) {
+        return 0;
+    }
+
+    const AudioFormat fmt = m_txInputBus->negotiatedFormat();
+    const int channels = (fmt.channels > 0) ? fmt.channels : 1;
+
+    int bytesPerSample = 0;
+    if (fmt.sample == AudioFormat::Sample::Int16) {
+        bytesPerSample = 2;
+    } else if (fmt.sample == AudioFormat::Sample::Float32) {
+        bytesPerSample = 4;
+    } else {
+        // Int24 and Int32 are not supported on the TX-mic path.
+        qCWarning(lcAudio) << "pullTxMic: unsupported sample format"
+                           << static_cast<int>(fmt.sample);
+        return 0;
+    }
+
+    // To produce n mono output samples we need n * channels source samples.
+    const int needSrcSamples = n * channels;
+    const qint64 needBytes = static_cast<qint64>(needSrcSamples) * bytesPerSample;
+
+    // thread_local scratch avoids heap allocation on every audio-thread call.
+    // Grows once per thread; zero-alloc thereafter.
+    static thread_local std::vector<char> scratch;
+    if (static_cast<qint64>(scratch.size()) < needBytes) {
+        scratch.resize(static_cast<size_t>(needBytes));
+    }
+
+    const qint64 gotBytes = m_txInputBus->pull(scratch.data(), needBytes);
+    if (gotBytes <= 0) {
+        return 0;
+    }
+
+    const int gotSrcSamples = static_cast<int>(gotBytes / bytesPerSample);
+    const int gotMonoSamples = gotSrcSamples / channels;
+
+    if (fmt.sample == AudioFormat::Sample::Int16) {
+        const int16_t* src = reinterpret_cast<const int16_t*>(scratch.data());
+        for (int i = 0; i < gotMonoSamples; ++i) {
+            // Take left channel (index 0 in each interleaved frame).
+            dst[i] = static_cast<float>(src[i * channels]) / 32768.0f;
+        }
+    } else {
+        // Float32
+        const float* src = reinterpret_cast<const float*>(scratch.data());
+        for (int i = 0; i < gotMonoSamples; ++i) {
+            dst[i] = src[i * channels];
+        }
+    }
+
+    return gotMonoSamples;
+}
+
 void AudioEngine::setVolume(float volume)
 {
     volume = std::clamp(volume, 0.0f, 1.0f);
@@ -927,6 +1048,100 @@ void AudioEngine::setMasterMuted(bool muted)
     if (prev != muted) {
         emit masterMutedChanged(muted);
     }
+}
+
+// Plan: 3M-1b E.4. Pre-code review §10.3 + §10.4.
+void AudioEngine::setMoxState(bool active)
+{
+    // Same acq_rel / acquire pairing as setMasterMuted above — the
+    // DSP-thread read in rxBlockReady uses acquire; a plain release
+    // would not synchronize the read-side observation order on weak
+    // memory models (ARM / Apple Silicon).
+    //
+    // Wired by RadioModel (Phase L) to MoxController::moxChanged.
+    // No change-signal emitted — MOX state is authoritative in MoxController;
+    // this is a cross-thread mirror only.
+    m_moxActive.store(active, std::memory_order_release);
+}
+
+// Plan: 3M-1b E.2. Pre-code review §4.4.
+void AudioEngine::setTxMonitorEnabled(bool enabled)
+{
+    // Same acq_rel / acquire pairing as setMasterMuted above — the
+    // audio-thread read in E.3's txMonitorBlockReady uses acquire; a
+    // plain release would not synchronize on weak memory models (ARM /
+    // Apple Silicon).
+    const bool prev = m_txMonitorEnabled.exchange(enabled, std::memory_order_acq_rel);
+    if (prev == enabled) {
+        return;  // idempotent
+    }
+    emit txMonitorEnabledChanged(enabled);
+}
+
+// Plan: 3M-1b E.2 + E.3. Pre-code review §4.4.
+void AudioEngine::setTxMonitorVolume(float volume)
+{
+    const float clamped = std::clamp(volume, 0.0f, 1.0f);
+    // Same acq_rel / acquire pairing as setVolume above.
+    const float prev = m_txMonitorVolume.exchange(clamped, std::memory_order_acq_rel);
+    if (prev == clamped) {
+        return;  // idempotent (float == compared after clamp)
+    }
+    // Push the new gain into MasterMixer so accumulate() picks it up on
+    // the next audio-thread call. setSliceGain acquires m_sliceMapMutex
+    // (main-thread only; not called from the audio callback).
+    m_masterMix.setSliceGain(kTxMonitorSlotId, clamped, 0.0f);
+    emit txMonitorVolumeChanged(clamped);
+}
+
+// Plan: 3M-1b E.3. Pre-code review §4.3 + §4.4.
+//
+// Receives the TXA Sip1 siphon output from TxChannel::sip1OutputReady via
+// Qt::DirectConnection (audio thread, same callsite as rxBlockReady). When
+// TX monitor is enabled, expands the mono TXA block to interleaved stereo
+// (L = R = each sample) and accumulates into MasterMixer at kTxMonitorSlotId.
+// The per-slot gain is maintained by setTxMonitorVolume via
+// MasterMixer::setSliceGain; accumulate() reads it atomically, so no
+// per-sample multiply is needed here.
+//
+// MasterMixer::mixInto() is called as usual from rxBlockReady; the TX-monitor
+// contribution is included in the next RX flush (or as soon as mixInto() is
+// called by whichever RX block arrives first). At typical SSB block sizes the
+// two are synchronised; a small (~1 block) latency is acceptable and matches
+// Thetis's aaudio asynchronous mix path.
+//
+// RT-safety contract:
+//   - atomic acquire loads for m_txMonitorEnabled; no lock, no alloc.
+//   - thread_local scratch vector for the stereo expansion; zero-alloc after
+//     the first call from a given thread.
+//   - MasterMixer::accumulate() is lock-free on the audio thread (map is
+//     structurally stable after ctor pre-registration; gains are atomics).
+void AudioEngine::txMonitorBlockReady(const float* samples, int frames)
+{
+    if (!m_txMonitorEnabled.load(std::memory_order_acquire)) {
+        return;
+    }
+    if (samples == nullptr || frames <= 0) {
+        return;
+    }
+
+    // Expand mono TXA samples to interleaved stereo (L=R) so MasterMixer
+    // sees the same format as RX blocks. thread_local so no allocation after
+    // the first block per DSP thread.
+    static thread_local std::vector<float> stereoScratch;
+    const int stereoFloats = frames * 2;
+    if (static_cast<int>(stereoScratch.size()) < stereoFloats) {
+        stereoScratch.resize(static_cast<size_t>(stereoFloats));
+    }
+    for (int i = 0; i < frames; ++i) {
+        stereoScratch[i * 2 + 0] = samples[i];  // L
+        stereoScratch[i * 2 + 1] = samples[i];  // R
+    }
+
+    // Accumulate into MasterMixer. The slot's gain (= m_txMonitorVolume)
+    // was written by setTxMonitorVolume via setSliceGain and is read
+    // atomically inside accumulate(). No separate multiply needed here.
+    m_masterMix.accumulate(kTxMonitorSlotId, stereoScratch.data(), frames);
 }
 
 void AudioEngine::setVaxRxGain(int channel, float gain)
@@ -1007,6 +1222,28 @@ bool AudioEngine::isVaxBusOpen(int channel) const
 float AudioEngine::vaxTxLevel() const
 {
     const IAudioBus* bus = m_vaxTxBus.get();
+    if (bus == nullptr || !bus->isOpen()) {
+        return 0.0f;
+    }
+    return bus->txLevel();
+}
+
+// ── PC Mic input level (3M-1b I.2) ───────────────────────────────────────────
+//
+// Provides a peak-amplitude readout from the TX-input bus (the PC's capture
+// device, owned by m_txInputBus).  The PortAudioBus audio callback updates
+// m_txLevel (std::atomic<float>) each callback cycle; this accessor reads
+// it lock-free from the main thread.
+//
+// Returns 0.0f when m_txInputBus is null (mic not configured) or the bus is
+// not open (stream not started yet, or startup failed).
+//
+// Used by AudioTxInputPage's Test Mic VU bar (I.2) to show live mic level
+// without opening a separate capture stream.
+
+float AudioEngine::pcMicInputLevel() const
+{
+    const IAudioBus* bus = m_txInputBus.get();
     if (bus == nullptr || !bus->isOpen()) {
         return 0.0f;
     }

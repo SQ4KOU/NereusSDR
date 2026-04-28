@@ -232,6 +232,10 @@ warren@wpratt.com
 // TxMicRouter is already included via RadioModel.h (for std::unique_ptr destructor).
 #include "core/MoxController.h"
 #include "core/TxChannel.h"
+// 3M-1b L.1: concrete mic-source strategy objects.
+#include "core/audio/PcMicSource.h"
+#include "core/audio/RadioMicSource.h"
+#include "core/audio/CompositeTxMicRouter.h"
 #include "core/RadioConnection.h"
 #include "core/RadioConnectionTeardown.h"
 #include "core/P1RadioConnection.h"
@@ -648,6 +652,143 @@ RadioModel::RadioModel(QObject* parent)
         }
     }, Qt::QueuedConnection);
 
+    // ── H.1: VOX run gated by voice-family mode ───────────────────────────────
+    // Ports CMSetTXAVoxRun logic (cmaster.cs:1039-1052 [v2.10.3.13]):
+    //   bool run = Audio.VOXEnabled && (mode in voice family)
+    //   cmaster.SetDEXPRunVox(id, run);
+    //
+    // Signal chain:
+    //   TransmitModel::voxEnabledChanged → MoxController::setVoxEnabled
+    //   SliceModel::dspModeChanged       → MoxController::onModeChanged
+    //   MoxController::voxRunRequested   → TxChannel::setVoxRun
+    //
+    // MoxController acts as the gating layer; TxChannel::setVoxRun is a
+    // thin WDSP wrapper (D.3). The MoxController has already been seeded
+    // with m_currentMode=DSPMode::USB (matching SliceModel default) and
+    // m_voxEnabled=false so no spurious emit occurs at startup.
+    //
+    // Note: SliceModel wiring uses m_activeSlice (the single TX slice in
+    // 3M-1b). If m_activeSlice is null at construction time the connection
+    // is deferred; 3M-1b always has exactly one slice added during
+    // onConnected() before any user interaction can enable VOX.
+    connect(&m_transmitModel, &TransmitModel::voxEnabledChanged,
+            m_moxController,  &MoxController::setVoxEnabled);
+
+    // Active-slice mode gate: wire slice(0) dspModeChanged → MoxController.
+    // The actual `connect` happens in addSlice() (when the slice exists);
+    // wiring it here at construction time silently no-ops because m_slices
+    // is empty at this point — the first slice gets added later via
+    // addSlice() in connectToRadio(). Codex caught this on PR #149.
+    // In 3M-1b there is exactly one slice; wiring via slice(0) is correct.
+    // 3F multi-pan will need to re-evaluate when the active TX slice can change.
+    // TODO [3F]: rewire to activeSlice() when multi-panadapter TX switching lands.
+
+    connect(m_moxController, &MoxController::voxRunRequested,
+            this, [this](bool run) {
+        if (m_txChannel) {
+            m_txChannel->setVoxRun(run);
+        }
+    }, Qt::QueuedConnection);
+
+    // ── H.2: VOX threshold with mic-boost-aware scaling ───────────────────────
+    // Ports CMSetTXAVoxThresh (cmaster.cs:1054-1059 [v2.10.3.13]):
+    //   if (Audio.console.MicBoost) thresh *= (double)Audio.VOXGain;
+    //   cmaster.SetDEXPAttackThreshold(id, thresh);
+    // and the dB→linear conversion from setup.cs:18911 [v2.10.3.13]:
+    //   Math.Pow(10.0, (double)udDEXPThreshold.Value / 20.0)
+    //
+    // Signal chain:
+    //   TransmitModel::voxThresholdDbChanged → MoxController::setVoxThreshold
+    //   TransmitModel::micBoostChanged       → MoxController::onMicBoostChanged
+    //   TransmitModel::voxGainScalarChanged  → MoxController::setVoxGainScalar
+    //   MoxController::voxThresholdRequested → TxChannel::setVoxAttackThreshold
+    //
+    // MoxController applies both the dB→linear conversion and the mic-boost
+    // scaling in computeScaledThreshold(); TxChannel::setVoxAttackThreshold
+    // is a thin WDSP wrapper (D.3, TxChannel.h:473).
+    connect(&m_transmitModel, &TransmitModel::voxThresholdDbChanged,
+            m_moxController,  &MoxController::setVoxThreshold);
+    connect(&m_transmitModel, &TransmitModel::micBoostChanged,
+            m_moxController,  &MoxController::onMicBoostChanged);
+    connect(&m_transmitModel, &TransmitModel::voxGainScalarChanged,
+            m_moxController,  &MoxController::setVoxGainScalar);
+
+    connect(m_moxController, &MoxController::voxThresholdRequested,
+            this, [this](double thresh) {
+        if (m_txChannel) {
+            m_txChannel->setVoxAttackThreshold(thresh);
+        }
+    }, Qt::QueuedConnection);
+
+    // ── H.3: VOX hang-time + anti-VOX gain + anti-VOX source path ────────────
+    // Ports:
+    //   ms→seconds for SetDEXPHoldTime (setup.cs:18899 [v2.10.3.13]):
+    //     cmaster.SetDEXPHoldTime(0, Value / 1000.0)
+    //   dB→linear for SetAntiVOXGain (setup.cs:18989 [v2.10.3.13]):
+    //     cmaster.SetAntiVOXGain(0, Math.Pow(10.0, dB / 20.0))
+    //   CMSetAntiVoxSourceWhat useVAC=false (cmaster.cs:937-942 [v2.10.3.13]):
+    //     all RX slots (RX1, RX1S, RX2) get source=1.
+    //
+    // Signal chain:
+    //   TransmitModel::voxHangTimeMsChanged    → MoxController::setVoxHangTime
+    //   TransmitModel::antiVoxGainDbChanged    → MoxController::setAntiVoxGain
+    //   TransmitModel::antiVoxSourceVaxChanged → MoxController::setAntiVoxSourceVax
+    //   MoxController::voxHangTimeRequested    → TxChannel::setVoxHangTime
+    //   MoxController::antiVoxGainRequested    → TxChannel::setAntiVoxGain
+    //   MoxController::antiVoxSourceWhatRequested → TxChannel::setAntiVoxRun
+    //
+    // MoxController handles ms→seconds and dB→linear conversions; TxChannel
+    // wrappers (D.3) are thin WDSP delegates.
+    connect(&m_transmitModel, &TransmitModel::voxHangTimeMsChanged,
+            m_moxController,  &MoxController::setVoxHangTime);
+    connect(&m_transmitModel, &TransmitModel::antiVoxGainDbChanged,
+            m_moxController,  &MoxController::setAntiVoxGain);
+    connect(&m_transmitModel, &TransmitModel::antiVoxSourceVaxChanged,
+            m_moxController,  &MoxController::setAntiVoxSourceVax);
+
+    connect(m_moxController, &MoxController::voxHangTimeRequested,
+            this, [this](double seconds) {
+        if (m_txChannel) {
+            m_txChannel->setVoxHangTime(seconds);
+        }
+    }, Qt::QueuedConnection);
+
+    connect(m_moxController, &MoxController::antiVoxGainRequested,
+            this, [this](double gain) {
+        if (m_txChannel) {
+            m_txChannel->setAntiVoxGain(gain);
+        }
+    }, Qt::QueuedConnection);
+
+    connect(m_moxController, &MoxController::antiVoxSourceWhatRequested,
+            this, [this](bool useVax) {
+        if (!m_txChannel) {
+            return;
+        }
+        // useVax==false: per cmaster.cs:937-942 [v2.10.3.13], all RX slots
+        // (RX1, RX1S, RX2) get source=1 (local-RX audio for antivox reference).
+        // 3M-1b has one TxChannel paired with the active slice; the three-slot
+        // iteration collapses to setAntiVoxRun(!useVax) for the single-TX layout.
+        // Full per-WDSP-channel SetAntiVOXSourceWhat iteration is a 3F
+        // multi-pan concern (when multiple DDC RX channels are active).
+        m_txChannel->setAntiVoxRun(!useVax);
+    }, Qt::QueuedConnection);
+
+    // ── H.5: P1/P2 status-frame mic_ptt → MoxController PTT-source dispatch ──
+    //
+    // RadioConnection::micPttFromRadio(bool) is emitted unconditionally on every
+    // status frame (P1 EP6, P2 High-Priority) with the instantaneous PTT state.
+    // MoxController::onMicPttFromRadio is idempotent on repeated same-state calls.
+    //
+    // The actual connect() is deferred to wireConnectionSignals() where
+    // m_connection is live.  This block documents the wiring intent so
+    // the phase-H comment block is self-contained.
+    //
+    //   onCatPtt: 3K — full CAT integration (rigctld / serial / network)
+    //   onVoxActive: 3M-3a or via TxChannel TX-meter polling (WDSP DEXP output)
+    //   onSpacePtt: 3M-3a — UI keyboard handler (MainWindow keyPressEvent)
+    //   onX2Ptt: 3M-3a or later — X2 status-frame parsing in RadioConnection
+
     // TxMicRouter: NullMicSource for 3M-1a (zero-padded silence stream).
     // The TUNE path (gen1 PostGen) overwrites the WDSP input buffer at TXA
     // stage 22, so silence from NullMicSource is functionally inert during
@@ -701,6 +842,14 @@ const BoardCapabilities& RadioModel::boardCapabilities() const
         static BoardCapabilities overrideCaps{};
         overrideCaps.hasAlex     = m_testCapsHasAlex;
         overrideCaps.isRxOnlySku = m_testCapsIsRxOnly;  // 3M-1a G.2
+        overrideCaps.hasMicJack  = m_testCapsHasMicJack; // 3M-1b I.1
+        overrideCaps.board       = m_testCapsHw;          // 3M-1b I.3
+        // 3M-1b I.4: propagate per-board mic gain range from the canonical
+        // caps table for the injected board type.  This lets mic-gain range
+        // tests observe the correct per-family values without a live radio.
+        const BoardCapabilities& canonical = BoardCapsTable::forBoard(m_testCapsHw);
+        overrideCaps.micGainMinDb = canonical.micGainMinDb;
+        overrideCaps.micGainMaxDb = canonical.micGainMaxDb;
         return overrideCaps;
     }
 #endif
@@ -725,8 +874,21 @@ int RadioModel::addSlice()
     slice->setSliceIndex(index);
     m_slices.append(slice);
 
+    // 3M-1b H.1: wire VOX mode-gate from THIS slice's dspModeChanged →
+    // MoxController. The construction-time wire-up at line ~677 silently
+    // no-ops because m_slices is empty at that point; the first slice is
+    // added here. Codex P1 fix on PR #149.
+    if (m_moxController) {
+        connect(slice, &SliceModel::dspModeChanged,
+                m_moxController, &MoxController::onModeChanged);
+    }
+
     if (!m_activeSlice) {
         m_activeSlice = slice;
+        // Mark the first slice as active so isActiveSlice() returns true for it.
+        // AudioEngine::rxBlockReady (3M-1b E.4) reads this flag to gate the
+        // per-slice RX-audio push during MOX.
+        slice->setActive(true);
         emit activeSliceChanged(0);
     }
 
@@ -742,7 +904,13 @@ void RadioModel::removeSlice(int index)
 
     SliceModel* slice = m_slices.takeAt(index);
     if (m_activeSlice == slice) {
+        // Clear the active flag before reassigning. The deleted slice's flag
+        // is moot, but the new active slice needs to be marked.
+        slice->setActive(false);
         m_activeSlice = m_slices.isEmpty() ? nullptr : m_slices.first();
+        if (m_activeSlice) {
+            m_activeSlice->setActive(true);
+        }
         emit activeSliceChanged(m_activeSlice ? 0 : -1);
     }
 
@@ -753,7 +921,18 @@ void RadioModel::removeSlice(int index)
 void RadioModel::setActiveSlice(int index)
 {
     if (index >= 0 && index < m_slices.size()) {
-        m_activeSlice = m_slices.at(index);
+        SliceModel* newActive = m_slices.at(index);
+        if (m_activeSlice == newActive) {
+            return;  // no change
+        }
+        // Clear the previous active slice flag so isActiveSlice() reflects
+        // the correct single active slice. AudioEngine::rxBlockReady (3M-1b
+        // E.4) reads this flag to gate the RX-audio push during MOX.
+        if (m_activeSlice) {
+            m_activeSlice->setActive(false);
+        }
+        m_activeSlice = newActive;
+        m_activeSlice->setActive(true);
         emit activeSliceChanged(index);
     }
 }
@@ -916,6 +1095,21 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // Phase 3M-1a G.3. Source: Thetis console.cs:1819-1820 / :4904-4910 [v2.10.3.13].
         m_transmitModel.setMacAddress(info.macAddress);
         m_transmitModel.load();
+
+        // Load per-MAC mic/VOX/MON properties (15 properties, 3 excluded for safety).
+        // Phase 3M-1b L.2. After setMacAddress so auto-persist uses the correct MAC.
+        // voxEnabled, monEnabled, micMute are NOT loaded — always start at safe defaults.
+        m_transmitModel.loadFromSettings(info.macAddress);
+
+        // L.3: HL2 force-Pc on connect.
+        // HL2 has no radio-side mic jack (BoardCapabilities::hasMicJack == false).
+        // Even if AppSettings persisted MicSource::Radio from a different radio
+        // connected under the same MAC (extremely unlikely but possible),
+        // override to Pc to keep mic-source state aligned with hardware reality.
+        // The UI side (AudioTxInputPage) already disables the Radio Mic radio
+        // button when !hasMicJack; this completes the model-side lock.
+        // setMicSourceLocked also coerces any existing Radio state to Pc immediately.
+        m_transmitModel.setMicSourceLocked(!boardCapabilities().hasMicJack);
     }
 
     m_name = info.displayName();
@@ -1182,10 +1376,135 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                                                     /*outputSampleRate=*/txOutRate);
         if (m_txChannel) {
             m_txChannel->setConnection(m_connection);
-            m_txChannel->setMicRouter(m_txMicRouter.get());
+
+            // ── L.1: construct Pc + Radio mic sources + composite router ──────────
+            // Construct after m_connection is live so RadioMicSource has a valid
+            // connection pointer and caps are known for the hasMicJack gate.
+            //
+            // Ownership: RadioModel holds all three via unique_ptr (declared in
+            // RadioModel.h §3M-1b L.1). CompositeTxMicRouter holds non-owning
+            // raw pointers to the pc + radio sources — it must be reset FIRST
+            // during teardown (see teardownConnection).
+            //
+            // hasMicJack gates RadioMicSource dispatch inside CompositeTxMicRouter.
+            // On HL2 (hasMicJack=false) setActiveSource(Radio) is silently ignored
+            // and Pc is always used.
+            //
+            // PcMicSource: non-QObject — no Qt parent needed.
+            // RadioMicSource: QObject — parent=nullptr because unique_ptr owns
+            //   the lifetime (Qt parent would cause double-free).
+            //
+            // Plan: 3M-1b Task L.1. Pre-code review §0.3 + master design §5.2.4.
+            m_pcMicSource = std::make_unique<PcMicSource>(m_audioEngine);
+            m_radioMicSource = std::make_unique<RadioMicSource>(m_connection, nullptr);
+            const bool hasMicJack = m_hardwareProfile.caps
+                                        ? m_hardwareProfile.caps->hasMicJack
+                                        : true;  // safe default: assume mic jack present
+            m_compositeMicRouter = std::make_unique<CompositeTxMicRouter>(
+                m_pcMicSource.get(), m_radioMicSource.get(), hasMicJack);
+
+            // Replace the 3M-1a NullMicSource stub with the composite router.
+            m_txChannel->setMicRouter(m_compositeMicRouter.get());
+
+            // L.1 connection 1: TxChannel siphon → AudioEngine TX monitor mix-in.
+            // DirectConnection: both objects are used from the audio/DSP thread;
+            // the sip1 callback must feed the monitor in-band (zero latency).
+            // From pre-code review §0.3: sip1OutputReady carries post-stage-16
+            // samples to the monitor bus without extra buffering.
+            connect(m_txChannel, &TxChannel::sip1OutputReady,
+                    m_audioEngine, &AudioEngine::txMonitorBlockReady,
+                    Qt::DirectConnection);
+
+            // L.1 connection 2 — REMOVED (Codex review on PR #149).
+            // RadioMicSource::RadioMicSource subscribes to micFrameDecoded
+            // itself with Qt::DirectConnection in its constructor; adding a
+            // second QueuedConnection from RadioModel caused onMicFrame to
+            // fire TWICE per frame from two producer threads (connection
+            // thread + main thread), violating the SPSC ring's
+            // single-producer assumption (m_writeIdx uses relaxed atomics).
+            // The duplicated push corrupted the ring under load and was a
+            // likely contributor to the audible noise floor JJ saw on the
+            // bench. RadioMicSource owns the subscription; do not add a
+            // second one here.
+
+            // L.1 connection 3: TransmitModel mic preamp → TxChannel.
+            // Auto (main thread → main thread); TxChannel::setMicPreamp is
+            // thread-safe (atomic write per TxChannel.h E.2 notes).
+            connect(&m_transmitModel, &TransmitModel::micPreampChanged,
+                    m_txChannel, &TxChannel::setMicPreamp);
+            // Initial-state sync: signal connections don't fire for the
+            // current value. Without this push, TxChannel::m_micPreampLast
+            // stays at its quiet_NaN sentinel and SetTXAPanelGain1(NaN)
+            // produces silent SSB on the air. TUN uses gen-tone (different
+            // gain stage) so it works without this. The mic-driven
+            // fexchange2 path needs the initial preamp value to land.
+            m_txChannel->setMicPreamp(m_transmitModel.micPreampLinear());
+
+            // L.1 connection 4: TX monitor enable from TransmitModel.
+            // setTxMonitorEnabled is atomic (E.3 design); auto connection.
+            connect(&m_transmitModel, &TransmitModel::monEnabledChanged,
+                    m_audioEngine, &AudioEngine::setTxMonitorEnabled);
+
+            // L.1 connection 5: TX monitor volume from TransmitModel.
+            // setTxMonitorVolume is atomic (E.3 design); auto connection.
+            connect(&m_transmitModel, &TransmitModel::monitorVolumeChanged,
+                    m_audioEngine, &AudioEngine::setTxMonitorVolume);
+
+            // ── L.1 (K.2 carry-forward): install MoxController BandPlanGuard check ──
+            // Installs the moxCheck callback so setMox(true) consults BandPlanGuard
+            // before any safety effects fire (see MoxController.cpp K.2 block).
+            //
+            // Closure captures: m_bandPlan, m_slices, m_hardwareProfile.
+            //
+            // The closure derives region from AppSettings (key "BandPlanRegion"
+            // with Region2/UnitedStates as safe default matching Thetis).
+            // preventDifferentBand and extended are not yet plumbed into RadioModel
+            // (deferred to 3M-2+ as per the plan §L.1 TODO annotation).
+            //
+            // Cite: pre-code review §0.3 + MoxController.h K.2 API contract.
+            if (m_moxController) {
+                m_moxController->setMoxCheck([this]() -> safety::BandPlanGuard::MoxCheckResult {
+                    // Derive region from AppSettings (same key used by SetupDialog).
+                    // Default to Region2 (United States), matching Thetis behaviour
+                    // when no region has been configured.
+                    const int regionInt = AppSettings::instance()
+                        .value(QStringLiteral("BandPlanRegion"),
+                               QString::number(static_cast<int>(safety::Region::UnitedStates)))
+                        .toInt();
+                    const auto region = static_cast<safety::Region>(regionInt);
+
+                    const SliceModel* slice = !m_slices.isEmpty() ? m_slices.first() : nullptr;
+                    if (!slice) {
+                        return {true, QString()};  // no slice → allow (no band context)
+                    }
+
+                    const auto freqHz = static_cast<std::int64_t>(slice->frequency());
+                    const DSPMode mode = slice->dspMode();
+                    // Band derived from m_lastBand (RadioModel's VFO band tracker).
+                    // SliceModel has no band() accessor; m_lastBand is updated on
+                    // every frequency change and reflects the current VFO band.
+                    const Band rxBand  = m_lastBand;
+                    // TX band: follow RX band (simplex). 3M-2/3F will separate TX band
+                    // when split-VFO and cross-band TX are supported.
+                    const Band txBand  = rxBand;
+
+                    // preventDifferentBand and extended: deferred to 3M-2 / Setup TX page.
+                    // TODO [3M-2]: wire to AppSettings keys "PreventDifferentBandTx" + "ExtendedTx".
+                    const bool preventDifferentBand = false;
+                    const bool extended = false;
+
+                    return m_bandPlan.checkMoxAllowed(region, freqHz, mode,
+                                                      rxBand, txBand,
+                                                      preventDifferentBand, extended);
+                });
+            }
+
+            qCInfo(lcDsp) << "L.1: mic sources constructed (hasMicJack=" << hasMicJack
+                          << "); composite router wired to TxChannel;"
+                          << " 5 signal connections + K.2 moxCheck installed.";
             qCInfo(lcDsp) << "G.1: TX channel 1 created (deferred until conn live)"
                           << "outRate=" << txOutRate
-                          << "— TUNE path ready (production loop wired).";
+                          << "— SSB voice path ready (L.1 composite router wired).";
         } else {
             qCWarning(lcDsp) << "G.1: deferred createTxChannel(1) returned nullptr —"
                                 " TUNE will be unavailable until next reconnect.";
@@ -1431,6 +1750,22 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
             });
         }
     });
+
+    // H.5: P1/P2 status-frame mic_ptt → MoxController PTT-source dispatch.
+    // Source: Thetis console.cs:25426 [v2.10.3.13] PollPTT:
+    //   bool mic_ptt = (dotdashptt & 0x01) != 0; // PTT from radio
+    // P1 bit-source: networkproto1.c:329 [v2.10.3.13] ControlBytesIn[0] & 0x1
+    // P2 bit-source: network.c:689 [v2.10.3.13] ReadBufp[0] & 0x1
+    //
+    // m_connection lives on the connection thread; m_moxController lives on the
+    // main thread.  Qt::AutoConnection would queue across threads automatically,
+    // but explicit QueuedConnection documents the intent and is always correct
+    // for cross-thread slot dispatch.
+    if (m_moxController) {
+        connect(m_connection, &RadioConnection::micPttFromRadio,
+                m_moxController, &MoxController::onMicPttFromRadio,
+                Qt::QueuedConnection);
+    }
 }
 
 // Wire active slice signals to WDSP channel and radio hardware.
@@ -2374,6 +2709,20 @@ void RadioModel::teardownConnection()
     // Phase 3M-1a G.3. Source: Thetis console.cs:3087-3091 [v2.10.3.13].
     m_transmitModel.save();
 
+    // Flush mic/VOX/MON properties on disconnect (defense-in-depth;
+    // auto-persist should have flushed each change already).
+    // Phase 3M-1b L.2.
+    if (!m_lastRadioInfo.macAddress.isEmpty()) {
+        m_transmitModel.persistToSettings(m_lastRadioInfo.macAddress);
+    }
+
+    // L.3: Release the HL2 mic-source lock on disconnect.
+    // A subsequent connectToRadio() to a non-HL2 radio must be free to use
+    // MicSource::Radio if the user selects it.  The lock is re-engaged
+    // (or not) by the next connectToRadio() call based on the new radio's
+    // BoardCapabilities::hasMicJack.
+    m_transmitModel.setMicSourceLocked(false);
+
     // Disconnect signals into the DSP worker first so no new I/Q
     // batches can be posted onto the worker thread, then quit and
     // join that thread before touching WDSP. The worker is queued
@@ -2403,6 +2752,22 @@ void RadioModel::teardownConnection()
         m_txChannel->setConnection(nullptr);
         m_txChannel->setMicRouter(nullptr);
     }
+
+    // 3M-1b L.1: K.2 carry-forward — uninstall the MoxCheck callback before
+    // the closure's captured state (m_slices, m_bandPlan) is potentially invalid.
+    // Passing an empty std::function clears the stored callback in MoxController.
+    if (m_moxController) {
+        m_moxController->setMoxCheck({});
+    }
+
+    // 3M-1b L.1: destroy mic-source strategy objects in reverse-construction order
+    // so CompositeTxMicRouter (which holds raw pointers to pc + radio sources)
+    // is released BEFORE the sources it points into.
+    // After reset(), pullSamples() on the composite is unreachable (TxChannel
+    // already has setMicRouter(nullptr) above).
+    m_compositeMicRouter.reset();
+    m_radioMicSource.reset();
+    m_pcMicSource.reset();
 
     // Clear the non-owning TX channel view before WdspEngine::shutdown()
     // destroys the underlying WDSP channel. Any in-flight txReady / txaFlushed

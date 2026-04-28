@@ -436,6 +436,26 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
     SetTXAALCDecay(channelId, 10);
     SetTXAALCMaxGain(channelId, 0.0);
     SetTXAALCSt(channelId, 1);
+
+    // Leveler — slow speech-leveling AGC stage that sits between mic
+    // preamp/bandpass and the ALC. Without this enabled, the ALC alone
+    // has to handle both intelligibility compression AND fast clip
+    // protection, and (with ALCMaxGain=0 dB) it amplifies weak inputs
+    // back to unity output, making the slider feel ineffective. Pulled
+    // forward from 3M-3a per JJ's bench feedback (2026-04-28) — the
+    // plan's "Leveler off in 3M-1b" left SSB sounding too hot.
+    //
+    // Defaults sourced from upstream:
+    //   Thetis radio.cs:2979 [v2.10.3.13]: tx_leveler_max_gain = 15.0 dB
+    //   Thetis radio.cs:2999 [v2.10.3.13]: tx_leveler_decay    = 100 ms
+    //   Thetis radio.cs:3019 [v2.10.3.13]: tx_leveler_on       = true
+    //   deskhpsdr/src/transmitter.c:1273 [@120188f]: lev_attack = 1 ms
+    //     (Thetis doesn't expose attack as a setter; deskhpsdr's 1ms is
+    //      the standard SSB attack value)
+    SetTXALevelerAttack(channelId, 1);
+    SetTXALevelerDecay(channelId, 100);
+    SetTXALevelerTop(channelId, 15.0);
+    SetTXALevelerSt(channelId, 1);
     SetTXAPreGenMode(channelId, 0);
     SetTXAPreGenToneMag(channelId, 0.0);
     SetTXAPreGenToneFreq(channelId, 0.0);

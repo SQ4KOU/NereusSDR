@@ -10,11 +10,50 @@
 //   Project Files/Source/ChannelMaster/netInterface.c, original licence from Thetis source is included below
 //   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
 //
+// --- From deskhpsdr/src/new_protocol.c (3M-1b G.1–G.6) ---
+// Byte 50 mic control bits: G.1 mic_boost (0x02), G.2 line_in (0x01),
+// G.3 mic_tip_ring (0x08, INVERTED), G.4 mic_bias (0x10), G.5 mic_ptt (0x04, INVERTED),
+// G.6 mic_xlr (0x20, P2-only). Lines 1480-1502 [@120188f].
+// See modification history and DESKHPSDR-PROVENANCE.md.
+//
+/* Copyright (C)
+* 2015 - John Melton, G0ORX/N6LYT
+* 2024,2025 - Heiko Amft, DL1BZ (Project deskHPSDR)
+*
+*   This source code has been forked and was adapted from piHPSDR by DL1YCF to deskHPSDR in October 2024
+*
+*   This program is free software: you can redistribute it and/or modify
+*   it under the terms of the GNU General Public License as published by
+*   the Free Software Foundation, either version 3 of the License, or
+*   (at your option) any later version.
+*
+*   This program is distributed in the hope that it will be useful,
+*   but WITHOUT ANY WARRANTY; without even the implied warranty of
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+*   GNU General Public License for more details.
+*
+*   You should have received a copy of the GNU General Public License
+*   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*
+*/
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-04-27 — setMicBoost: first deskhpsdr port. Byte 50 bit 1 (0x02)
+//                 from deskhpsdr new_protocol.c:1484-1486 [@120188f].
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-28 — setLineIn: 2nd deskhpsdr port. Byte 50 bit 0 (0x01) from
+//                 deskhpsdr new_protocol.c:1480-1482 [@120188f].
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-28 — setMicTipRing: 3rd deskhpsdr port. Byte 50 bit 3 (0x08, INVERTED)
+//                 from deskhpsdr new_protocol.c:1492-1494 [@120188f].
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-28 — setMicBias (G.4): byte 50 bit 4 (0x10), polarity 1=on. deskhpsdr new_protocol.c:1496-1498 [@120188f]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-28 — setMicPTT (G.5): byte 50 bit 2 (0x04, INVERTED). deskhpsdr new_protocol.c:1488-1490 [@120188f]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-28 — setMicXlr (G.6): byte 50 bit 5 (0x20), P2-only, polarity 1=XLR. deskhpsdr new_protocol.c:1500-1502 [@120188f]. MicState::micControl default updated 0x04 -> 0x24. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -181,6 +220,12 @@ public slots:
     void sendTxIq(const float* iq, int n) override;
     void setTrxRelay(bool enabled) override;
     void setTxStepAttenuation(int dB) override;
+    void setMicBoost(bool on) override;
+    void setLineIn(bool on) override;
+    void setMicTipRing(bool tipHot) override;
+    void setMicBias(bool on) override;
+    void setMicPTT(bool enabled) override;
+    void setMicXlr(bool xlrJack) override;
 
     // Bench fix round 3 (Issue B): P2 TX I/Q output is always at 192 kHz.
     // This rate is used by WdspEngine::createTxChannel() to open the WDSP
@@ -433,12 +478,22 @@ private:
     // mic_control bit-field (from Thetis network.c:1227-1233):
     //   Bit 0: Line In (0=off, 1=on)
     //   Bit 1: Mic Boost (0=off, 1=on)
-    //   Bit 2: Orion Mic PTT (0=enabled, 1=disabled)
-    //   Bit 3: Tip/Ring (0=ptt-ring/mic-tip, 1=ptt-tip/mic-ring)
+    //   Bit 2: Orion Mic PTT (0=enabled, 1=disabled) — INVERTED POLARITY
+    //   Bit 3: Tip/Ring (0=ptt-ring/mic-tip, 1=ptt-tip/mic-ring) — INVERTED POLARITY
     //   Bit 4: Mic Bias (0=disabled, 1=enabled)
     //   Bit 5: Balanced Input (0=disabled, 1=enabled, Saturn only)
+    //
+    // Initial value 0x24: reflects two default-set bits:
+    //   bit 2 (0x04) SET = PTT disabled by default (matches m_micPTT=false
+    //     default in RadioConnection.h — polarity inversion: !false = 1 on wire).
+    //     deskhpsdr src/new_protocol.c:1488-1490 [@120188f]: mic_ptt_enabled==0 → set bit.
+    //   bit 5 (0x20) SET = XLR jack selected by default (matches m_micXlr=true
+    //     default in RadioConnection.h — no inversion: true = 1 on wire).
+    //     deskhpsdr src/new_protocol.c:1500-1502 [@120188f]: mic_input_xlr → set bit.
+    //     Saturn G2 ships with XLR-enabled config; default true per pre-code review §2.7.
+    // Bit 3 CLEAR = Tip-is-mic (matches m_micTipRing=true default — !true = 0 on wire).
     struct MicState {
-        unsigned char micControl{0};
+        unsigned char micControl{0x24};  // PTT disabled (bit 2) + XLR selected (bit 5) — 3M-1b G.5+G.6 defaults
         int lineInGain{0};
     };
     MicState m_mic;

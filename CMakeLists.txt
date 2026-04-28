@@ -385,6 +385,9 @@ set(CORE_SOURCES
     src/core/accessories/ApolloController.cpp
     src/core/accessories/PennyLaneController.cpp
     src/core/audio/MasterMixer.cpp
+    src/core/audio/PcMicSource.cpp
+    src/core/audio/RadioMicSource.cpp
+    src/core/audio/CompositeTxMicRouter.cpp
     src/core/audio/PortAudioBus.cpp
     src/core/audio/QAudioSinkAdapter.cpp
     src/core/audio/VirtualCableDetector.cpp
@@ -442,6 +445,7 @@ set(GUI_SOURCES
     src/gui/SpectrumOverlayMenu.cpp
     src/gui/widgets/CenterMarkSlider.h
     src/gui/widgets/DspParamPopup.cpp
+    src/gui/widgets/VoxSettingsPopup.cpp
     src/gui/widgets/FilterPassbandWidget.cpp
     src/gui/widgets/GuardedComboBox.h
     src/gui/widgets/GuardedSlider.h
@@ -557,6 +561,7 @@ set(GUI_SOURCES
     src/gui/setup/AudioAdvancedPage.cpp
     src/gui/setup/AudioBackendStrip.cpp
     src/gui/setup/AudioDevicesPage.cpp
+    src/gui/setup/AudioTxInputPage.cpp
     src/gui/setup/AudioTciPage.cpp
     src/gui/setup/AudioVaxPage.cpp
     src/gui/setup/DeviceCard.cpp
@@ -644,6 +649,25 @@ set_target_properties(NereusSDR PROPERTIES
     MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
     MACOSX_BUNDLE_COPYRIGHT "© 2026 J.J. Boyd (KG4VCF); GPL port of Thetis (ramdor/Thetis) and mi0bot/OpenHPSDR-Thetis; descends from FlexRadio PowerSDR lineage. GPLv3."
 )
+
+# macOS strict mode requires NSMicrophoneUsageDescription in Info.plist
+# for any app that opens an audio capture stream — without it the stream
+# opens but macOS silently delivers zero-filled buffers (no permission
+# dialog, no error). CMake's MACOSX_BUNDLE template doesn't include the
+# key; inject it post-build + re-sign so TCC accepts the updated bundle.
+#
+# Uses Set-then-Add pattern via /bin/sh so the operation is idempotent:
+# Set succeeds when the key already exists from a prior build; falls
+# through to Add on the first build (when the key is absent).
+if(APPLE)
+    set(_nereus_mic_desc "NereusSDR uses the microphone for SSB voice transmission and live mic level monitoring.")
+    add_custom_command(TARGET NereusSDR POST_BUILD
+        COMMAND /bin/sh -c "/usr/libexec/PlistBuddy -c \"Set :NSMicrophoneUsageDescription '${_nereus_mic_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\" 2>/dev/null || /usr/libexec/PlistBuddy -c \"Add :NSMicrophoneUsageDescription string '${_nereus_mic_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\""
+        COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:NereusSDR>"
+        COMMENT "Inject NSMicrophoneUsageDescription + re-sign bundle (mic-permission gate)"
+        VERBATIM
+    )
+endif()
 
 target_include_directories(NereusSDRObjs PUBLIC
     ${CMAKE_SOURCE_DIR}/src

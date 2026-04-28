@@ -100,6 +100,12 @@ public:
         lastSetTrxRelayArg = enabled;
         callLog.append(QStringLiteral("setTrxRelay:") + (enabled ? QStringLiteral("1") : QStringLiteral("0")));
     }
+    void setMicBoost(bool) override {}
+    void setLineIn(bool) override {}
+    void setMicTipRing(bool) override {}
+    void setMicBias(bool) override {}
+    void setMicPTT(bool) override {}
+    void setMicXlr(bool) override {}
 };
 
 // ── Test class ───────────────────────────────────────────────────────────────

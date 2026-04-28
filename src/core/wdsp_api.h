@@ -25,6 +25,21 @@
 //                 TxChannel::setRunning / setStageRunning WDSP wiring.
 //                 Signatures match wdsp/ source files [v2.10.3.13].
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-27 — SetDEXPRunVox, SetDEXPAttackThreshold, SetDEXPHoldTime,
+//                 SetAntiVOXRun, SetAntiVOXGain added by J.J. Boyd (KG4VCF)
+//                 during 3M-1b Task D.3 — TxChannel VOX/anti-VOX WDSP wrappers.
+//                 Signatures match wdsp/dexp.c [v2.10.3.13]. AI-assisted
+//                 transformation via Anthropic Claude Code.
+//   2026-04-27 — SetTXAPanelGain1 added by J.J. Boyd (KG4VCF) during 3M-1b
+//                 Task D.6 — TxChannel mic-mute path via setMicPreamp.
+//                 Signature matches wdsp/patchpanel.c:209 [v2.10.3.13].
+//                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-27 — TXA meter type integer constants (TXA_MIC_PK, TXA_ALC_PK, and
+//                 the deferred TXA_EQ_PK / TXA_LVLR_PK / TXA_CFC_PK / TXA_COMP_PK)
+//                 added by J.J. Boyd (KG4VCF) during 3M-1b Task D.7 — TX meter
+//                 readouts. Values sourced from Thetis wdsp/TXA.h:49-69
+//                 [v2.10.3.13] txaMeterType enum. AI-assisted transformation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -644,6 +659,15 @@ void SetTXAALCAttack(int channel, int attack);     // wcpAGC.c:578 — attack ms
 void SetTXAALCDecay(int channel, int decay);       // wcpAGC.c:586 — decay ms (10 = 10 ms)
 void SetTXAALCMaxGain(int channel, double maxgain); // wcpAGC.c:604 — max gain dB (0 = unity, no amplification)
 
+// leveler (stage 13, wcpAGC): slow speech-leveling AGC. Sits between
+// the mic preamp / bandpass and the ALC. Provides intelligibility
+// compression so ALC only handles fast clip protection.
+// From Thetis wdsp/wcpAGC.c:613-650 [v2.10.3.13].
+void SetTXALevelerSt(int channel, int state);          // wcpAGC.c:613 — leveler on/off
+void SetTXALevelerAttack(int channel, int attack);     // wcpAGC.c:621 — attack ms
+void SetTXALevelerDecay(int channel, int decay);       // wcpAGC.c:630 — decay ms
+void SetTXALevelerTop(int channel, double maxgain);    // wcpAGC.c:648 — max gain dB (Top)
+
 // bp0 (stage 8): mandatory TX bandpass filter.
 // From Thetis wdsp/bandpass.c — SetTXABandpass{Window,Run}.
 void SetTXABandpassWindow(int channel, int window); // 1 = 7-term Blackman-Harris
@@ -674,6 +698,109 @@ void SetTXAPreGenToneFreq(int channel, double freq);
 // From Thetis wdsp/patchpanel.c.
 void SetTXAPanelSelect(int channel, int select);    // 2 = use Mic I sample (mono mic)
 
+// panel (stage 2): mic gain scalar (linear, not dB).
+//
+// Sets txa[channel].panel.p->gain1 directly (patchpanel.c:209-216 [v2.10.3.13]).
+// This is the WDSP-side knob for Audio.MicPreamp in Thetis.
+//
+// Called with 0.0 to silence the mic (mute=true path in setAudioMicGain).
+// Called with Math.Pow(10.0, gain_db / 20.0) to restore gain (mute=false).
+//
+// From Thetis dsp.cs:411-412 [v2.10.3.13] — DLL import:
+//   [DllImport("wdsp.dll", EntryPoint = "SetTXAPanelGain1", ...)]
+//   public static extern void SetTXAPanelGain1(int channel, double gain);
+// From Thetis wdsp/patchpanel.c:209-216 [v2.10.3.13] — implementation:
+//   void SetTXAPanelGain1(int channel, double gain) { txa[ch].panel.p->gain1 = gain; }
+void SetTXAPanelGain1(int channel, double gain);
+
+// DEXP (downward expander / VOX) — wires SetDEXPRunVox, SetDEXPAttackThreshold,
+// SetDEXPHoldTime (= VOX hang/hold time).
+// WDSP takes int for bool parameters (0=false, 1=true).
+// From Thetis wdsp/dexp.c [v2.10.3.13]:
+//   SetDEXPRunVox:          dexp.c:616  — enable/disable VOX gating inside DEXP
+//   SetDEXPAttackThreshold: dexp.c:544  — VOX trigger threshold (linear amplitude)
+//   SetDEXPHoldTime:        dexp.c:505  — hold/hang time after audio drops (seconds)
+// Cited from Thetis cmaster.cs [v2.10.3.13]:
+//   SetDEXPRunVox:          cmaster.cs:199-200
+//   SetDEXPAttackThreshold: cmaster.cs:187-188
+//   SetDEXPHoldTime:        cmaster.cs:178-179
+void SetDEXPRunVox(int id, int run);
+void SetDEXPAttackThreshold(int id, double thresh);
+void SetDEXPHoldTime(int id, double time);
+
+// Anti-VOX — wires SetAntiVOXRun and SetAntiVOXGain.
+// WDSP takes int for bool parameters (0=false, 1=true).
+// From Thetis wdsp/dexp.c [v2.10.3.13]:
+//   SetAntiVOXRun:  dexp.c:657  — enable/disable anti-VOX side-chain cancellation
+//   SetAntiVOXGain: dexp.c:688  — anti-VOX side-chain coupling gain
+// Cited from Thetis cmaster.cs [v2.10.3.13]:
+//   SetAntiVOXRun:  cmaster.cs:208-209
+//   SetAntiVOXGain: cmaster.cs:211-212
+void SetAntiVOXRun(int id, int run);
+void SetAntiVOXGain(int id, double gain);
+
 } // extern "C"
 
 #endif // HAVE_WDSP
+
+// ---------------------------------------------------------------------------
+// TXA meter type integer constants
+//
+// These mirror the txaMeterType enum from Thetis wdsp/TXA.h:49-69 [v2.10.3.13].
+// Only defined when HAVE_WDSP is NOT set (i.e. in stub/test builds that do not
+// include the full WDSP headers). When HAVE_WDSP is defined, TxChannel.cpp
+// includes third_party/wdsp/src/TXA.h directly, which provides the real
+// txaMeterType C enum — these constexpr ints would conflict with those names.
+//
+// Sourced from Thetis wdsp/TXA.h:49-69 [v2.10.3.13] — txaMeterType enum:
+//   TXA_MIC_PK  = 0,  TXA_MIC_AV  = 1,  TXA_EQ_PK   = 2,  TXA_EQ_AV   = 3,
+//   TXA_LVLR_PK = 4,  TXA_LVLR_AV = 5,  TXA_LVLR_GAIN = 6,
+//   TXA_CFC_PK  = 7,  TXA_CFC_AV  = 8,  TXA_CFC_GAIN = 9,
+//   TXA_COMP_PK = 10, TXA_COMP_AV = 11,
+//   TXA_ALC_PK  = 12, TXA_ALC_AV  = 13, TXA_ALC_GAIN = 14,
+//   TXA_OUT_PK  = 15, TXA_OUT_AV  = 16, TXA_METERTYPE_LAST = 17
+//
+// Active in 3M-1b (getTxMicMeter / getAlcMeter in TxChannel.cpp):
+//   TXA_MIC_PK, TXA_ALC_PK
+// Deferred to 3M-3a (stub getters returning 0.0f):
+//   TXA_EQ_PK, TXA_LVLR_PK, TXA_CFC_PK, TXA_COMP_PK
+// ---------------------------------------------------------------------------
+
+#ifndef HAVE_WDSP
+
+// From Thetis wdsp/TXA.h:51 [v2.10.3.13] — txaMeterType::TXA_MIC_PK
+static constexpr int TXA_MIC_PK   =  0;
+// From Thetis wdsp/TXA.h:52 [v2.10.3.13] — txaMeterType::TXA_MIC_AV
+static constexpr int TXA_MIC_AV   =  1;
+// From Thetis wdsp/TXA.h:53 [v2.10.3.13] — txaMeterType::TXA_EQ_PK  (deferred 3M-3a)
+static constexpr int TXA_EQ_PK    =  2;
+// From Thetis wdsp/TXA.h:54 [v2.10.3.13] — txaMeterType::TXA_EQ_AV
+static constexpr int TXA_EQ_AV    =  3;
+// From Thetis wdsp/TXA.h:55 [v2.10.3.13] — txaMeterType::TXA_LVLR_PK  (deferred 3M-3a)
+static constexpr int TXA_LVLR_PK  =  4;
+// From Thetis wdsp/TXA.h:56 [v2.10.3.13] — txaMeterType::TXA_LVLR_AV
+static constexpr int TXA_LVLR_AV  =  5;
+// From Thetis wdsp/TXA.h:57 [v2.10.3.13] — txaMeterType::TXA_LVLR_GAIN
+static constexpr int TXA_LVLR_GAIN =  6;
+// From Thetis wdsp/TXA.h:58 [v2.10.3.13] — txaMeterType::TXA_CFC_PK  (deferred 3M-3a)
+static constexpr int TXA_CFC_PK   =  7;
+// From Thetis wdsp/TXA.h:59 [v2.10.3.13] — txaMeterType::TXA_CFC_AV
+static constexpr int TXA_CFC_AV   =  8;
+// From Thetis wdsp/TXA.h:60 [v2.10.3.13] — txaMeterType::TXA_CFC_GAIN
+static constexpr int TXA_CFC_GAIN  =  9;
+// From Thetis wdsp/TXA.h:61 [v2.10.3.13] — txaMeterType::TXA_COMP_PK  (deferred 3M-3a)
+static constexpr int TXA_COMP_PK  = 10;
+// From Thetis wdsp/TXA.h:62 [v2.10.3.13] — txaMeterType::TXA_COMP_AV
+static constexpr int TXA_COMP_AV  = 11;
+// From Thetis wdsp/TXA.h:63 [v2.10.3.13] — txaMeterType::TXA_ALC_PK
+static constexpr int TXA_ALC_PK   = 12;
+// From Thetis wdsp/TXA.h:64 [v2.10.3.13] — txaMeterType::TXA_ALC_AV
+static constexpr int TXA_ALC_AV   = 13;
+// From Thetis wdsp/TXA.h:65 [v2.10.3.13] — txaMeterType::TXA_ALC_GAIN
+static constexpr int TXA_ALC_GAIN  = 14;
+// From Thetis wdsp/TXA.h:66 [v2.10.3.13] — txaMeterType::TXA_OUT_PK
+static constexpr int TXA_OUT_PK   = 15;
+// From Thetis wdsp/TXA.h:67 [v2.10.3.13] — txaMeterType::TXA_OUT_AV
+static constexpr int TXA_OUT_AV   = 16;
+
+#endif // !HAVE_WDSP

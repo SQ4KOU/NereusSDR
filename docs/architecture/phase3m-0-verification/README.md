@@ -152,3 +152,68 @@ preceded the resume from `5c7015a`):
 | I.1 | (full ctest sweep) | 168/168 tests green |
 | I.4 | (this matrix update) | Verification matrix extension |
 | I.5 | (TBD) | Post-code Thetis review §2 |
+
+---
+
+# Phase 3M-1b Mic + SSB Voice — Verification Matrix Extension
+
+Added 2026-04-28 as part of M.6. Manual rows tagged `[3M-1b-bench-*]` need
+hardware (HL2 + ANAN-G2 dummy load + wireshark) and are deferred to JJ.
+Unit-test rows are auto-checked by ctest and pass on commit `26eca01`
+(221/221).
+
+## New rows
+
+| # | Test | Hardware | Procedure | Expected | Result |
+|---|---|---|---|---|---|
+| 14 | BandPlanGuard SSB-mode allow-list | none | `ctest -R '^tst_band_plan_guard_mode_allow_list$' -V` | All 20 slots pass: LSB/USB/DIGL/DIGU allowed; AM/SAM/DSB/FM/DRM rejected with "AM/FM TX coming in Phase 3M-3 (audio modes)"; CWL/CWU rejected with "CW TX coming in Phase 3M-2"; SPEC rejected. | ✅ |
+| 15 | BandPlanGuard MOX rejection toast `[3M-1b-bench]` | any radio | Tune to LSB → MOX → "MOX engaged" (success). Switch to AM → click MOX → expect rejected; status-bar toast shows "AM/FM TX coming in Phase 3M-3 (audio modes)" for ~3s; TxApplet MOX button tooltip overrides to the same string. | Toast appears, tooltip overrides; m_mox stays false. | |
+| 16 | VOX with mic-boost-aware threshold scaling | none | `ctest -R '^tst_mox_controller_vox_threshold$' -V` | All 14 slots pass: scaled formula `pow(10, dB/20.0) * voxGainScalar` when micBoost==true; passthrough when false. NaN sentinel forces first-call emit. | ✅ |
+| 17 | VOX voice-family mode-gate | none | `ctest -R '^tst_mox_controller_vox_enabled$' -V` | All 22 assertions pass: LSB/USB/DSB/AM/SAM/FM/DIGL/DIGU enabled VOX → setVoxRun(true) emit; CWL/CWU/SPEC/DRM enabled VOX → no emit. | ✅ |
+| 18 | Anti-VOX path-agnostic | none | `ctest -R '^tst_mox_controller_anti_vox$' -V` | All 18 cases pass: useVax=false → antiVoxSourceWhatRequested(false) emit; useVax=true → qCWarning + state unchanged + no emit. | ✅ |
+| 19 | PTT-source dispatch (MIC/CAT/VOX/SPACE/X2) | none | `ctest -R '^tst_mox_controller_ptt_source_dispatch$' -V` | All 19 cases pass: 5 accepted sources × press/release transition with PttMode set; 2 rejected sources (CW/TCI) → qCWarning + no state change. | ✅ |
+| 20 | mic_ptt extraction P1 + P2 | none | `ctest -R '^tst_mox_controller_mic_ptt_extraction$' -V` | All 18 cases pass: P1 OR-across-sub-frames bit 0 of C0; P2 raw[4] bit 0; ADC overload byte (raw[5]) does NOT cross-trigger PTT; end-to-end status frame → MoxController dispatch. | ✅ |
+| 21 | TransmitModel per-MAC persistence | none | `ctest -R '^tst_transmit_model_persistence$' -V` | All 42 cases pass: 15 persisted keys round-trip; voxEnabled/monEnabled/micMute NOT persisted (safety: load to safe defaults); micGainDb defaults -6 first run; multi-MAC isolated. | ✅ |
+| 22 | RadioModel HL2 force-Pc on connect | none | `ctest -R '^tst_radio_model_mic_source_hl2_force$' -V` | All 8 cases pass: HL2 caps force micSource=Pc + lock; non-HL2 unlocked; locked setter coerces Radio→Pc. | ✅ |
+| 23 | RadioModel 3M-1b ownership wiring | none | `ctest -R '^tst_radio_model_3m1b_ownership$' -V` | All 15 cases pass: PcMicSource + RadioMicSource + CompositeTxMicRouter constructed on connect; 5 signal connections wired; MoxCheck callback installed. | ✅ |
+| 24 | PC mic SSB out `[3M-1b-bench-HL2]` | HL2 + dummy load + USB headset/mic + test receiver | Setup → Audio → TX Input. Confirm Radio Mic radio button hidden + tooltip "Radio mic jack not present on Hermes Lite 2". Confirm PC Mic selected by default. Tune to 7.241 MHz LSB. Configure PC mic device. Run Test Mic → see VU bar move. Set Mic Gain to -6 dB. PTT via TxApplet MOX button → speak → observe SSB carrier on test receiver. Verify TxApplet TxMic + ALC meters paint live values. Confirm clean release on MOX off. | Voice on the air via test receiver; meters live; clean MOX↔Rx transitions. | |
+| 25 | PC + Radio mic switching `[3M-1b-bench-G2]` | ANAN-G2 + dummy load + USB headset + radio mic | Tune to 7.241 MHz LSB. Configure PC mic (default), confirm SSB out. Switch to Radio Mic, configure 3.5mm jack default, plug radio mic, speak, confirm SSB out. | Both mic paths produce clean SSB; switching is < 1s; no MOX-locked-during-switch deadlock. | |
+| 26 | Mic-jack bits wireshark cross-check `[3M-1b-bench-G2]` | ANAN-G2 + wireshark on RX/TX UDP traffic | Toggle each mic-jack control in turn (MicBoost / LineIn / MicTipRing / MicBias / MicPTT). For each, capture the next outbound P2 transmit-specific packet (port 1029) AND the next outbound P1 bank-10/bank-11 C&C frame (port 1024). | Bit positions match the deskhpsdr `new_protocol.c:1480-1502` polarity table verbatim. P1 bank-10 C2 bit 0 = mic_boost; bank-10 C2 bit 1 = line_in; bank-11 C1 bit 4 = mic_trs (inverted); bank-11 C1 bit 5 = mic_bias; bank-11 C1 bit 6 = mic_ptt (inverted). | |
+| 27 | MicXlr P2 byte-50 bit 5 `[3M-1b-bench-G2]` | ANAN-G2 + XLR mic + wireshark | Switch Saturn G2 family between 3.5mm and XLR via Setup → Audio → TX Input → Radio Mic group. Capture P2 transmit-specific packet for each. | byte-50 bit 5 (0x20): set when XLR selected, clear when 3.5mm. Default-true means a fresh connection sees bit 5 set. | |
+| 28 | MON enable + monitor volume `[3M-1b-bench]` | any radio + headphones | With headphones connected, enable MON via TxApplet. Set volume to 50. PTT and speak. Confirm self-audio in headphones. Move RX volume to 0 → MON audio still flows during MOX. | Self-audio audible during MOX, level scales with volume slider, independent of RX volume. Default volume on first run = 50. | |
+| 29 | RX-leak fix during MOX `[3M-1b-bench]` | any radio + dummy load | With MON disabled, tune RX1 to 7.250 MHz LSB; RX2 (if available) to 14.200 MHz. Engage MOX (PTT + speak). | Active slice (RX1) RX audio silenced during MOX. Non-active slice (RX2) audio unaffected. (Was cosmetic bug in 3M-1a per row 30 carry-forward.) | |
+| 30 | PTT-source dispatch bench `[3M-1b-bench]` | any radio | For each of MIC PTT (radio mic), CAT PTT (rigctl/hamlib send T command), VOX (auto-engaged on speech threshold), SPACE (UI keyboard), X2 (external TX trigger): exercise each source and confirm MoxController.pttMode reflects the right enum value, MOX engages, and TX I/Q starts flowing. | Each source independently engages + releases MOX with correct pttMode set. | |
+
+## Carry-forward flips from 3M-1a
+
+| Row | Change |
+|---|---|
+| 3M-1a "RX still plays during MOX (cosmetic)" | Flips from "deferred" → "fixed in 3M-1b". E.4 + RadioModel activeSlice gate fold-in resolves the cosmetic leak. Verified by row 29 above. |
+| 3M-1a "PA telemetry meters during TUN" | Flips to "PA telemetry meters during MOX-voice TX". Same meters now exercised under voice TX (rows 24-25), not just TUN. |
+
+## Result tracking
+
+Rows 14, 16-23 (unit tests, 9 rows): ✅ all green on commit `26eca01` (221/221).
+Rows 15, 24-30 (bench tests, 8 rows): pending JJ + hardware.
+
+When bench rows complete, edit the Result column to `✅` with the commit SHA where the row was confirmed.
+
+## Phase 3M-1b commit summary (added 2026-04-28 by M.6)
+
+| Phase | Commits | Summary |
+|---|---|---|
+| Plan + pre-code review | `2a7a3b1` + `be2c52d` | Pre-code Thetis review + implementation plan |
+| B.1-B.2 | `01fb507` + `4828d6d` | BoardCapabilities::hasMicJack + deskhpsdr provenance |
+| C.1-C.5 | `c9700a7` + `9c6b4f1` + `5c29049` + `d6258b9` + `9e6fec8` + 2 fixups | TransmitModel mic gain + 8 mic-jack flags + 4 VOX + 2 anti-VOX + 2 MON props |
+| D.1-D.7 | `db1fbd9` + `c900b88` + `372489c` + `33fe64b` + `940c7e7` + `24a9f2e` + `b4ad655` + 3 fixups | TxChannel mic-router + per-mode TXA + VOX/anti-VOX wrappers + stage Run + Sip1 signal + mic-mute + meters |
+| E.1-E.4 | `0765bb0` + `27408aa` + `9ec4a9a` + `7ed6710` | AudioEngine pullTxMic + monitor enable/volume + slot + RX-leak gate |
+| F.1-F.4 | `d39135b` + `f64a2d3` + `83f8625` + `ef588ec` + 1 fixup | PcMicSource + RadioMicSource (SPSC ring) + CompositeTxMicRouter + RadioConnection::micFrameDecoded |
+| G.1-G.6 | `46d93f6` + `b3e63fb` + `4cc76a4` + `ce160da` + `c6b0712` + `dfd5393` | 6 mic-jack wire-bit setters byte-exact ported from Thetis P1 + deskhpsdr P2 |
+| H.1-H.5 | `2b36db8` + `bd038ef` + `5d40a3d` + `81c6002` + `6829f5a` + `efd7ebc` | MoxController VOX + anti-VOX + PTT-source dispatch + mic_ptt extraction |
+| I.1-I.5 | `7966a8d` + `647bae8` + `7816eed` + `c28adbb` + `910334e` + `2fe2c39` + `c787936` | AudioTxInputPage + per-family Radio Mic + mic gain per-board range + VOX integration |
+| J.1-J.3 | `0ae8a9b` + `817b68b` + `c961690` + `318d422` + `047c762` | TxApplet Mic Gain + VOX toggle/popup + MON + mic-source badge |
+| K.1-K.2 | `3c9c707` + `80359bb` | BandPlanGuard SSB-mode allow-list + MOX rejection toast/tooltip |
+| L.1-L.3 | `64bb8fa` + `e3cedf8` + `0da0f2e` + `26eca01` | RadioModel ownership + per-MAC persistence + HL2 force-Pc lock |
+| M.1 | (full ctest sweep) | 221/221 tests green on `26eca01` |
+| M.6 | (this matrix update) | Verification matrix extended with 17 rows (3M-1b) |
+| M.7 | (TBD) | Post-code Thetis review (`phase3m-1b-post-code-review.md`) |

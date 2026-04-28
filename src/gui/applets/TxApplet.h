@@ -23,6 +23,24 @@
 //                 Out-of-phase controls hidden with TODO comments.
 //                 syncFromModel() activates. setCurrentBand(Band) added for
 //                 tune-power slider sync on band change.
+//   2026-04-28 — Phase 3M-1b J.2: VOX toggle button added below Tune Power.
+//                 Checkable, green border when active. Bidirectional with
+//                 TransmitModel::voxEnabled (default false; does NOT persist).
+//                 Right-click opens VoxSettingsPopup with 3 sliders for
+//                 threshold/gain/hang-time.
+//   2026-04-28 — Phase 3M-1b J.3: MON toggle button + monitor volume slider
+//                 added below VOX. Bidirectional with TransmitModel::monEnabled
+//                 and TransmitModel::monitorVolume (default 0.5f). Mic-source
+//                 badge added above the gauges (read-only, "PC mic"/"Radio mic").
+//   2026-04-28 — Phase 3M-1b K.2: MOX button tooltip override on DSP mode change.
+//                 tooltipForMode(DSPMode) returns a static tooltip string that
+//                 reflects the deferred-phase reason for CW and AM/FM/SAM/DSB/DRM,
+//                 or the normal "Manual transmit (MOX)" for allowed modes.
+//                 onMoxModeChanged(DSPMode) slot wired to SliceModel::dspModeChanged
+//                 via RadioModel in wireControls(). Closes Phase K.
+//   2026-04-28 — Phase 3M-1b (relocation): Mic Gain slider row (J.1) removed.
+//                 Relocated to PhoneCwApplet (#5 slot) per JJ feedback.
+//                 PhoneCwApplet now owns micGainDb wiring and mic level gauge.
 // =================================================================
 
 //=================================================================
@@ -90,6 +108,7 @@
 
 #include "AppletWidget.h"
 #include "models/Band.h"
+#include "core/WdspTypes.h"
 
 class QPushButton;
 class QSlider;
@@ -103,10 +122,17 @@ class HGauge;
 // TxApplet — transmit controls panel.
 //
 // Layout (AetherSDR TxApplet.cpp pattern):
+//  0.  Mic-source badge     — read-only label "PC mic"/"Radio mic" [J.3 Phase 3M-1b]
 //  1.  Forward Power gauge  — HGauge 0–120 W, red > 100 W
 //  2.  SWR gauge            — HGauge 1.0–3.0, red > 2.5
 //  3.  RF Power slider row  — label(62) + slider + value(22)
 //  4.  Tune Power slider row
+//  4b. VOX toggle button    — checkable, green border on active [J.2 Phase 3M-1b]
+//      Right-click: VoxSettingsPopup with threshold/gain/hang-time sliders.
+//  4c. MON toggle button    — checkable, blue border on active [J.3 Phase 3M-1b]
+//      Bidirectional with TransmitModel::monEnabled (default false).
+//  4d. Monitor volume slider — 0..100 → monitorVolume 0.0..1.0 [J.3 Phase 3M-1b]
+//      Default 50 (matches model default 0.5f from Thetis audio.cs:417).
 //  5.  MOX button           — checkable, red when active
 //  6.  TUNE button          — checkable, red + "TUNING..." when active
 //  7.  ATU button           — checkable
@@ -119,7 +145,12 @@ class HGauge;
 // 14.  xPA indicator button — checkable
 // 15.  SWR protection LED   — QLabel indicator
 //
+// NOTE: Mic Gain slider was here (Row 3b, J.1) but was relocated to
+//       PhoneCwApplet (#5 slot) per JJ feedback (2026-04-28 relocation).
+//
 // Phase 3M-1a H.3: TUNE/MOX/Tune-Power/RF-Power are deep-wired.
+// Phase 3M-1b J.2: VOX toggle + VoxSettingsPopup wired.
+// Phase 3M-1b J.3: MON toggle + volume slider + mic-source badge wired.
 // Out-of-phase controls (2-Tone, PS-A) are hidden.
 class TxApplet : public AppletWidget {
     Q_OBJECT
@@ -135,10 +166,23 @@ public:
     // Phase 3M-1a H.3.
     void setCurrentBand(Band band);
 
+    // K.2: MOX button tooltip override based on current DSP mode.
+    // Public static so tests can call it directly without constructing a full
+    // TxApplet instance. Returns the rejection reason for deferred modes
+    // (CW → 3M-2, AM/FM/SAM/DSB/DRM → 3M-3) or the normal tooltip otherwise.
+    static QString tooltipForMode(DSPMode mode);
+
 private:
     void buildUI();
     void wireControls();  // called after buildUI() — attaches signals/slots
+    // J.2: VOX settings right-click popup.
+    void showVoxSettingsPopup(const QPoint& pos);
+    // K.2: slot called when SliceModel::dspModeChanged fires (via RadioModel).
+    // Updates m_moxBtn->setToolTip(tooltipForMode(mode)).
+    void onMoxModeChanged(DSPMode mode);
 
+    // 0. Mic-source badge (J.3 Phase 3M-1b) — read-only label above the gauges.
+    QLabel*  m_micSourceBadge = nullptr;
     // 1. Forward Power gauge
     HGauge*  m_fwdPowerGauge  = nullptr;
     // 2. SWR gauge
@@ -154,6 +198,14 @@ private:
     // 4. Tune Power
     QSlider* m_tunePwrSlider  = nullptr;
     QLabel*  m_tunePwrValue   = nullptr;
+    // 4b. VOX toggle (J.2 Phase 3M-1b)
+    QPushButton* m_voxBtn     = nullptr;
+    // 4c. MON toggle (J.3 Phase 3M-1b) — bidirectional with TransmitModel::monEnabled
+    QPushButton* m_monBtn     = nullptr;
+    // 4d. Monitor volume slider (J.3 Phase 3M-1b) — 0..100 → monitorVolume 0.0..1.0
+    //     Default 50 (matches model default 0.5f from Thetis audio.cs:417).
+    QSlider*     m_monitorVolumeSlider = nullptr;
+    QLabel*      m_monitorVolumeValue  = nullptr;
     // 5. MOX
     QPushButton* m_moxBtn     = nullptr;
     // 6. TUNE

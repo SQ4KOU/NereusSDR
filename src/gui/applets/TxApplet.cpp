@@ -20,6 +20,21 @@
 //   2026-04-26 — Phase 3M-1a H.3: deep-wired TUNE/MOX/Tune-Power/RF-Power.
 //                 Out-of-phase controls (2-Tone, PS-A) hidden.
 //                 syncFromModel() implemented. setCurrentBand(Band) added.
+//   2026-04-28 — Phase 3M-1b J.2: VOX toggle button added below Tune Power.
+//                 Checkable, green border when active. Bidirectional with
+//                 TransmitModel::voxEnabled. Right-click opens VoxSettingsPopup.
+//   2026-04-28 — Phase 3M-1b J.3: MON toggle button + monitor volume slider
+//                 added below VOX. Bidirectional with TransmitModel::monEnabled
+//                 and monitorVolume (default 0.5f, Thetis audio.cs:417). Mic-source
+//                 badge added above the gauges ("PC mic"/"Radio mic"), driven by
+//                 TransmitModel::micSourceChanged. Phase J complete.
+//   2026-04-28 — Phase 3M-1b (relocation): Mic Gain slider row (J.1) removed from
+//                 TxApplet. Relocated to PhoneCwApplet (#5 slot) per JJ feedback.
+//   2026-04-28 — Phase 3M-1b K.2: tooltipForMode(DSPMode) helper + onMoxModeChanged
+//                 slot implemented. Wired to SliceModel::dspModeChanged via
+//                 RadioModel active-slice accessor so the MOX button tooltip
+//                 reflects the rejection reason for CW/AM/FM/etc. modes.
+//                 Closes Phase K.
 // =================================================================
 
 //=================================================================
@@ -87,13 +102,23 @@
 
 // TxApplet — TX control panel.
 // Phase 3M-1a H.3: TUNE/MOX/Tune-Power/RF-Power deep-wired.
+// Phase 3M-1b J.2: VOX toggle + VoxSettingsPopup wired.
+// Phase 3M-1b J.3: MON toggle + monitor volume slider + mic-source badge wired.
 // Out-of-phase controls (2-Tone, PS-A) hidden.
 //
 // Control inventory:
+//  0.  Mic-source badge  — read-only "PC mic"/"Radio mic"  [WIRED — 3M-1b J.3]
 //  1.  Fwd Power gauge   — HGauge 0–120 W, redStart 100 W
 //  2.  SWR gauge         — HGauge 1.0–3.0, redStart 2.5
 //  3.  RF Power slider   + label + value  [WIRED — 3M-1a H.3]
 //  4.  Tune Power slider + label + value  [WIRED — 3M-1a H.3]
+//      (Mic Gain slider relocated to PhoneCwApplet — 2026-04-28 relocation)
+//  4b. VOX toggle button — checkable, green:checked style  [WIRED — 3M-1b J.2]
+//      Right-click opens VoxSettingsPopup (threshold/gain/hang-time).
+//  4c. MON toggle button — checkable, blue:checked style  [WIRED — 3M-1b J.3]
+//      Bidirectional with TransmitModel::monEnabled (default false).
+//  4d. Monitor volume slider — 0..100 → monitorVolume 0.0..1.0  [WIRED — 3M-1b J.3]
+//      Default 50 (model default 0.5f, Thetis audio.cs:417).
 //  5.  MOX button        — checkable, red:checked style  [WIRED — 3M-1a H.3]
 //  6.  TUNE button       — checkable, red:checked + "TUNING..." text  [WIRED — 3M-1a H.3]
 //  7.  ATU button        — checkable (NYI — 3M-2/3M-3)
@@ -111,7 +136,10 @@
 #include "gui/HGauge.h"
 #include "gui/StyleConstants.h"
 #include "gui/ComboStyle.h"
+#include "gui/widgets/VoxSettingsPopup.h"
+#include "core/audio/CompositeTxMicRouter.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "core/MoxController.h"
 #include "core/RadioStatus.h"
@@ -149,6 +177,31 @@ void TxApplet::buildUI()
     vbox->setContentsMargins(4, 2, 4, 2);
     vbox->setSpacing(2);
     outer->addWidget(body);
+
+    // ── 0. Mic-source badge ── read-only label above the gauges ─────────────
+    // Phase 3M-1b J.3: shows "PC mic" or "Radio mic" reflecting
+    // TransmitModel::micSource (default MicSource::Pc). Read-only; no interaction.
+    // Updates on micSourceChanged signal (wired in wireControls()).
+    {
+        m_micSourceBadge = new QLabel(QStringLiteral("PC mic"), this);
+        m_micSourceBadge->setAlignment(Qt::AlignCenter);
+        m_micSourceBadge->setFixedHeight(16);
+        m_micSourceBadge->setStyleSheet(QStringLiteral(
+            "QLabel {"
+            " color: %1;"
+            " font-size: 9px;"
+            " border: 1px solid %2;"
+            " border-radius: 2px;"
+            " padding: 0px 4px;"
+            " background: %3;"
+            "}"
+        ).arg(Style::kTitleText, Style::kInsetBorder, Style::kInsetBg));
+        m_micSourceBadge->setAccessibleName(QStringLiteral("Mic source indicator"));
+        m_micSourceBadge->setToolTip(QStringLiteral(
+            "Active microphone source: PC mic or Radio mic.\n"
+            "Change via Setup → Transmit → Mic Source."));
+        vbox->addWidget(m_micSourceBadge);
+    }
 
     // ── 1. Forward Power gauge ── 0–120 W, redStart 100 W ───────────────────
     // Ticks: 0 / 40 / 80 / 100 / 120  (AetherSDR TxApplet.cpp:71)
@@ -250,6 +303,102 @@ void TxApplet::buildUI()
         row->addWidget(tunValue);
 
         vbox->addLayout(row);
+    }
+
+    // ── 4b. VOX toggle button ─────────────────────────────────────────────────
+    // Phase 3M-1b J.2: below Tune Power slider.
+    // Checkable: green border when active (greenCheckedStyle()).
+    // voxEnabled does NOT persist — safety: VOX always loads OFF (plan §0 row 8).
+    // Right-click → showVoxSettingsPopup(pos) for threshold/gain/hang-time.
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        m_voxBtn = new QPushButton(QStringLiteral("VOX"), this);
+        m_voxBtn->setCheckable(true);
+        m_voxBtn->setChecked(false);  // default: OFF — plan §0 row 8 safety rule
+        m_voxBtn->setFixedHeight(22);
+        m_voxBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_voxBtn->setStyleSheet(Style::buttonBaseStyle() + Style::greenCheckedStyle());
+        m_voxBtn->setAccessibleName(QStringLiteral("VOX enable"));
+        m_voxBtn->setToolTip(QStringLiteral(
+            "Voice-operated TX (VOX). Left-click to toggle.\n"
+            "Right-click for threshold/gain/hang-time settings.\n"
+            "Does NOT persist across restarts (safety)."));
+        // Custom context menu policy so right-click emits customContextMenuRequested.
+        m_voxBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+        row->addWidget(m_voxBtn, 1);
+
+        // Right-hand spacer so the button occupies ≈half the applet width
+        // (matching Thetis UI density where VOX is a single small button, not
+        // the full row). A stretch absorbs the remaining space.
+        row->addStretch();
+
+        vbox->addLayout(row);
+    }
+
+    // ── 4c. MON toggle button + 4d. Monitor volume slider ─────────────────────
+    // Phase 3M-1b J.3: below VOX toggle.
+    // MON: checkable, blue border when active (indicates monitor on).
+    //   monEnabled does NOT persist — plan §0 row 9 safety: loads OFF always.
+    //   Default volume 50 (matches model default 0.5f from Thetis audio.cs:417).
+    //
+    // Volume slider: 0..100 integer → monitorVolume float 0.0..1.0 (value/100.0f).
+    //   Inverse: monitorVolumeChanged(float) → slider position = qRound(v * 100.0f).
+    {
+        // MON button row
+        auto* monRow = new QHBoxLayout;
+        monRow->setSpacing(4);
+
+        m_monBtn = new QPushButton(QStringLiteral("MON"), this);
+        m_monBtn->setCheckable(true);
+        m_monBtn->setChecked(false);  // default: OFF — plan §0 row 9 safety rule
+        m_monBtn->setFixedHeight(22);
+        m_monBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        // Blue checked style: blue border + slightly tinted bg when active.
+        m_monBtn->setStyleSheet(Style::buttonBaseStyle()
+            + QStringLiteral("QPushButton:checked {"
+                             " background: #001a33;"
+                             " border: 1px solid #3399ff;"
+                             " color: #ffffff;"
+                             "}"));
+        m_monBtn->setAccessibleName(QStringLiteral("Monitor enable"));
+        m_monBtn->setToolTip(QStringLiteral(
+            "Monitor: mix received audio into headphones during TX.\n"
+            "Does NOT persist across restarts (safety)."));
+        monRow->addWidget(m_monBtn, 1);
+        monRow->addStretch();
+
+        vbox->addLayout(monRow);
+
+        // Monitor volume slider row
+        auto* volRow = new QHBoxLayout;
+        volRow->setSpacing(4);
+
+        auto* volLbl = new QLabel(QStringLiteral("Mon Vol:"), this);
+        volLbl->setFixedWidth(62);
+        volLbl->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTitleText));
+        volRow->addWidget(volLbl);
+
+        // Range 0..100 integer; default 50 (model default 0.5f).
+        m_monitorVolumeSlider = new QSlider(Qt::Horizontal, this);
+        m_monitorVolumeSlider->setRange(0, 100);
+        m_monitorVolumeSlider->setValue(50);
+        m_monitorVolumeSlider->setFixedHeight(18);
+        m_monitorVolumeSlider->setAccessibleName(QStringLiteral("Monitor volume"));
+        m_monitorVolumeSlider->setToolTip(QStringLiteral(
+            "Monitor receive audio volume during TX (0–100 %)"));
+        volRow->addWidget(m_monitorVolumeSlider, 1);
+
+        m_monitorVolumeValue = new QLabel(QStringLiteral("50"), this);
+        m_monitorVolumeValue->setFixedWidth(26);
+        m_monitorVolumeValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        m_monitorVolumeValue->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTextPrimary));
+        volRow->addWidget(m_monitorVolumeValue);
+
+        vbox->addLayout(volRow);
     }
 
     // ── Button row: TUNE + MOX + ATU + MEM (25% each) ─────────────────────
@@ -575,6 +724,92 @@ void TxApplet::wireControls()
         });
     }
 
+    // ── K.2: MOX button tooltip override ← SliceModel::dspModeChanged ─────────
+    // Phase 3M-1b K.2: update MOX button tooltip when DSP mode changes.
+    // For modes that are deferred to a later phase (CW → 3M-2, AM/FM → 3M-3)
+    // the tooltip explains why MOX won't engage, matching the moxRejected reason.
+    // Wired here (wireControls) rather than syncFromModel because the active
+    // slice can change after construction.
+    if (m_model) {
+        if (SliceModel* slice = m_model->activeSlice()) {
+            // Wire the active slice's dspModeChanged to onMoxModeChanged.
+            connect(slice, &SliceModel::dspModeChanged,
+                    this, &TxApplet::onMoxModeChanged);
+            // Set initial tooltip from current mode.
+            onMoxModeChanged(slice->dspMode());
+        }
+    }
+
+    // ── VOX toggle button ↔ TransmitModel::voxEnabled ────────────────────────
+    // Phase 3M-1b J.2.
+    // UI → Model: toggled → setVoxEnabled (with m_updatingFromModel guard).
+    // Model → UI: voxEnabledChanged → update checked state with QSignalBlocker.
+    // Right-click → showVoxSettingsPopup.
+    connect(m_voxBtn, &QPushButton::toggled, this, [this, &tx](bool on) {
+        if (m_updatingFromModel) { return; }
+        tx.setVoxEnabled(on);
+    });
+
+    connect(&tx, &TransmitModel::voxEnabledChanged, this, [this](bool on) {
+        QSignalBlocker b(m_voxBtn);
+        m_updatingFromModel = true;
+        m_voxBtn->setChecked(on);
+        m_updatingFromModel = false;
+    });
+
+    connect(m_voxBtn, &QPushButton::customContextMenuRequested,
+            this, [this](const QPoint& pos) {
+        showVoxSettingsPopup(pos);
+    });
+
+    // ── MON toggle button ↔ TransmitModel::monEnabled ────────────────────────
+    // Phase 3M-1b J.3.
+    // UI → Model: toggled → setMonEnabled (with m_updatingFromModel guard).
+    // Model → UI: monEnabledChanged → update checked state with QSignalBlocker.
+    connect(m_monBtn, &QPushButton::toggled, this, [this, &tx](bool on) {
+        if (m_updatingFromModel) { return; }
+        tx.setMonEnabled(on);
+    });
+
+    connect(&tx, &TransmitModel::monEnabledChanged, this, [this](bool on) {
+        QSignalBlocker b(m_monBtn);
+        m_updatingFromModel = true;
+        m_monBtn->setChecked(on);
+        m_updatingFromModel = false;
+    });
+
+    // ── Monitor volume slider ↔ TransmitModel::monitorVolume ─────────────────
+    // Phase 3M-1b J.3.
+    // UI → Model: slider valueChanged(int) → setMonitorVolume(value / 100.0f).
+    // Model → UI: monitorVolumeChanged(float) → slider = qRound(v * 100.0f).
+    connect(m_monitorVolumeSlider, &QSlider::valueChanged,
+            this, [this, &tx](int val) {
+        if (m_updatingFromModel) { return; }
+        m_monitorVolumeValue->setText(QString::number(val));
+        tx.setMonitorVolume(static_cast<float>(val) / 100.0f);
+    });
+
+    connect(&tx, &TransmitModel::monitorVolumeChanged,
+            this, [this](float volume) {
+        QSignalBlocker b(m_monitorVolumeSlider);
+        m_updatingFromModel = true;
+        const int uiVal = qRound(volume * 100.0f);
+        m_monitorVolumeSlider->setValue(uiVal);
+        m_monitorVolumeValue->setText(QString::number(uiVal));
+        m_updatingFromModel = false;
+    });
+
+    // ── Mic-source badge ← TransmitModel::micSourceChanged ───────────────────
+    // Phase 3M-1b J.3. Read-only: updates badge text on signal, no user interaction.
+    // "PC mic" for MicSource::Pc, "Radio mic" for MicSource::Radio.
+    connect(&tx, &TransmitModel::micSourceChanged,
+            this, [this](MicSource source) {
+        m_micSourceBadge->setText(
+            source == MicSource::Radio
+                ? QStringLiteral("Radio mic")
+                : QStringLiteral("PC mic"));
+    });
+
     // ── Initial sync from model ──────────────────────────────────────────────
     syncFromModel();
 }
@@ -603,6 +838,39 @@ void TxApplet::syncFromModel()
         m_tunePwrValue->setText(QString::number(tunePwr));
     }
 
+    // VOX button state (J.2 Phase 3M-1b)
+    // voxEnabled intentionally loads as OFF — plan §0 row 8 safety rule.
+    // We still read the model so that if setVoxEnabled was called programmatically
+    // before the applet was shown, the UI reflects the actual model state.
+    if (m_voxBtn) {
+        QSignalBlocker bv(m_voxBtn);
+        m_voxBtn->setChecked(tx.voxEnabled());
+    }
+
+    // MON button state (J.3 Phase 3M-1b)
+    // monEnabled intentionally loads as OFF — plan §0 row 9 safety rule.
+    if (m_monBtn) {
+        QSignalBlocker bm(m_monBtn);
+        m_monBtn->setChecked(tx.monEnabled());
+    }
+
+    // Monitor volume slider (J.3 Phase 3M-1b)
+    // Sync slider position from model; default 0.5f → slider 50.
+    if (m_monitorVolumeSlider) {
+        QSignalBlocker bvol(m_monitorVolumeSlider);
+        const int uiVal = qRound(tx.monitorVolume() * 100.0f);
+        m_monitorVolumeSlider->setValue(uiVal);
+        m_monitorVolumeValue->setText(QString::number(uiVal));
+    }
+
+    // Mic-source badge (J.3 Phase 3M-1b)
+    if (m_micSourceBadge) {
+        m_micSourceBadge->setText(
+            tx.micSource() == MicSource::Radio
+                ? QStringLiteral("Radio mic")
+                : QStringLiteral("PC mic"));
+    }
+
     // MOX / TUNE button state
     if (mox) {
         QSignalBlocker bm(m_moxBtn);
@@ -615,6 +883,40 @@ void TxApplet::syncFromModel()
     }
 
     m_updatingFromModel = false;
+}
+
+// ── Phase 3M-1b J.2: showVoxSettingsPopup ────────────────────────────────────
+//
+// Opens a VoxSettingsPopup anchored near the VOX button. The popup is
+// auto-delete (Qt::Popup + WA_DeleteOnClose) so no ownership management is
+// needed here. Each slider in the popup drives the corresponding TransmitModel
+// setter via a direct signal connection.
+void TxApplet::showVoxSettingsPopup(const QPoint& pos)
+{
+    if (!m_model) { return; }
+
+    TransmitModel& tx = m_model->transmitModel();
+
+    // Construct the popup with the current model values so sliders start in sync.
+    auto* popup = new VoxSettingsPopup(
+        tx.voxThresholdDb(),
+        tx.voxGainScalar(),
+        tx.voxHangTimeMs(),
+        nullptr);  // Qt::Popup window manages its own lifetime
+
+    // Wire popup signals → model setters.
+    connect(popup, &VoxSettingsPopup::thresholdDbChanged,
+            &tx,   &TransmitModel::setVoxThresholdDb);
+    connect(popup, &VoxSettingsPopup::gainScalarChanged,
+            &tx,   &TransmitModel::setVoxGainScalar);
+    connect(popup, &VoxSettingsPopup::hangTimeMsChanged,
+            &tx,   &TransmitModel::setVoxHangTimeMs);
+
+    // Map the button-local position to global so showAt() can position correctly.
+    const QPoint globalPos = m_voxBtn
+        ? m_voxBtn->mapToGlobal(pos)
+        : mapToGlobal(pos);
+    popup->showAt(globalPos);
 }
 
 void TxApplet::setCurrentBand(Band band)
@@ -631,6 +933,64 @@ void TxApplet::setCurrentBand(Band band)
     m_tunePwrSlider->setValue(tunePwr);
     m_tunePwrValue->setText(QString::number(tunePwr));
     m_updatingFromModel = false;
+}
+
+// ── Phase 3M-1b K.2: tooltipForMode ──────────────────────────────────────────
+//
+// Returns a MOX button tooltip string matching the active DSP mode.
+// For modes deferred to a later phase, the tooltip explains why MOX won't
+// engage, matching the reason string emitted by moxRejected (K.2) and the
+// rejection reason from BandPlanGuard::checkMoxAllowed (K.1).
+//
+// Mode categories:
+//   Allowed (LSB/USB/DIGL/DIGU): normal "Manual transmit (MOX)" tooltip.
+//   CW (CWL/CWU):                CW TX deferred to Phase 3M-2.
+//   Audio (AM/SAM/DSB/FM/DRM):   AM/FM TX deferred to Phase 3M-3 (audio modes).
+//   SPEC:                        Never a TX mode.
+//
+// This helper is static so TxApplet tests can call it directly without
+// constructing a full TxApplet instance.
+// ---------------------------------------------------------------------------
+// static
+QString TxApplet::tooltipForMode(DSPMode mode)
+{
+    switch (mode) {
+    case DSPMode::LSB:
+    case DSPMode::USB:
+    case DSPMode::DIGL:
+    case DSPMode::DIGU:
+        return QStringLiteral("Manual transmit (MOX)");
+
+    case DSPMode::CWL:
+    case DSPMode::CWU:
+        return QStringLiteral("CW TX coming in Phase 3M-2");
+
+    case DSPMode::AM:
+    case DSPMode::SAM:
+    case DSPMode::DSB:
+    case DSPMode::FM:
+    case DSPMode::DRM:
+        return QStringLiteral("AM/FM TX coming in Phase 3M-3 (audio modes)");
+
+    case DSPMode::SPEC:
+    default:
+        return QStringLiteral("Mode not supported for TX");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// onMoxModeChanged — update MOX button tooltip when DSP mode changes.
+//
+// Wired to SliceModel::dspModeChanged (via RadioModel active-slice accessor)
+// in wireControls(). Calls tooltipForMode(mode) to get the appropriate
+// tooltip text and installs it on m_moxBtn. If the mode is an allowed SSB
+// mode the tooltip reverts to the normal "Manual transmit (MOX)".
+// ---------------------------------------------------------------------------
+void TxApplet::onMoxModeChanged(DSPMode mode)
+{
+    if (m_moxBtn) {
+        m_moxBtn->setToolTip(tooltipForMode(mode));
+    }
 }
 
 } // namespace NereusSDR

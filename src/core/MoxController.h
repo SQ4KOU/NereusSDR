@@ -13,6 +13,19 @@
 //     slot; only the _manual_mox + _current_ptt_mode flag assignments
 //     at lines 30093-30094 and the _manual_mox clear at line 30142
 //     are ported here; the remainder is split across Tasks C.3 / G.3 / G.4)
+//   cmaster.cs:1054-1059 [v2.10.3.13] — CMSetTXAVoxThresh: mic-boost-aware
+//     scaling applied to VOX attack threshold before SetDEXPAttackThreshold.
+//   setup.cs:18908-18912 [v2.10.3.13] — udDEXPThreshold_ValueChanged:
+//     dB-to-linear conversion (Math.Pow(10.0, dB / 20.0)) before calling
+//     CMSetTXAVoxThresh; confirms thresh parameter is linear amplitude.
+//   setup.cs:18896-18900 [v2.10.3.13] — udDEXPHold_ValueChanged:
+//     ms→seconds conversion (Value / 1000.0) before SetDEXPHoldTime.
+//   setup.cs:18986-18990 [v2.10.3.13] — udAntiVoxGain_ValueChanged:
+//     dB-to-linear conversion (Math.Pow(10.0, dB / 20.0)) before calling
+//     SetAntiVOXGain; confirms voltage-amplitude scaling (/20.0).
+//   cmaster.cs:912-943 [v2.10.3.13] — CMSetAntiVoxSourceWhat:
+//     when useVAC==false (lines 937-942), all RX slots (RX1, RX1S, RX2)
+//     get source=1 (local-RX audio for antivox reference).
 //
 // Upstream file has no per-member inline attribution tags in this
 // state-machine region except where noted with inline cites below.
@@ -51,6 +64,54 @@
 //                 meter-mode lock, tune-power lookup, gen1 tone, ATU async,
 //                 NetworkIO.SetUserOut, Apollo auto-tune, 2-TONE pre-stop)
 //                 is split across Tasks C.3 / G.3 / G.4.
+//   2026-04-28 — Phase 3M-1b Task H.1 — setVoxEnabled(bool) and
+//                 onModeChanged(DSPMode) slots added with voice-family
+//                 mode-gate. voxRunRequested(bool) phase signal added.
+//                 Internal recomputeVoxRun() emits idempotently on the
+//                 gated value (voxEnabled && isVoiceMode(currentMode)).
+//                 Ports CMSetTXAVoxRun logic from
+//                 cmaster.cs:1039-1052 [v2.10.3.13].
+//   2026-04-28 — Phase 3M-1b Task H.2 — setVoxThreshold(int dB),
+//                 onMicBoostChanged(bool), setVoxGainScalar(float) slots
+//                 added. voxThresholdRequested(double) phase signal added.
+//                 Internal computeScaledThreshold() / recomputeVoxThreshold()
+//                 helpers port the Thetis mic-boost-aware scaling from
+//                 CMSetTXAVoxThresh (cmaster.cs:1054-1059 [v2.10.3.13])
+//                 with the dB→linear conversion from
+//                 udDEXPThreshold_ValueChanged (setup.cs:18911 [v2.10.3.13]).
+//   2026-04-28 — Phase 3M-1b Task H.3 — setVoxHangTime(int ms),
+//                 setAntiVoxGain(int dB), setAntiVoxSourceVax(bool useVax)
+//                 slots added. voxHangTimeRequested(double seconds),
+//                 antiVoxGainRequested(double gain),
+//                 antiVoxSourceWhatRequested(bool useVax) signals added.
+//                 Ports ms→seconds conversion for SetDEXPHoldTime
+//                 (setup.cs:18899 [v2.10.3.13]), dB→linear gain conversion
+//                 for SetAntiVOXGain (setup.cs:18989 [v2.10.3.13], /20.0
+//                 voltage scaling), and CMSetAntiVoxSourceWhat useVAC=false
+//                 path (cmaster.cs:937-942 [v2.10.3.13]). The useVax=true
+//                 path is rejected (deferred to 3M-3a) per plan §3 H.3.
+//   2026-04-28 — Phase 3M-1b Task K.2 — moxRejected(QString) signal added.
+//                 setMoxCheck(MoxCheckFn) installs a std::function<> callback
+//                 that setMox(true) consults before the existing Codex P2
+//                 safety effects. On rejection, emits moxRejected(reason)
+//                 and returns without state advance (early-out BEFORE Codex P2
+//                 so safety effects only fire on accepted requests).
+//   2026-04-28 — Phase 3M-1b Task H.4 — 7 PTT-source dispatch slots added:
+//                 Accepted (5): onMicPttFromRadio, onCatPtt, onVoxActive,
+//                   onSpacePtt, onX2Ptt.  Each sets the corresponding
+//                   PttMode (Mic/Cat/Vox/Space/X2) before driving
+//                   setMox(pressed).  PttMode is NOT cleared on
+//                   setMox(false) — cleared by F.1 hardwareFlipped(false)
+//                   subscribers per the F.1 contract (symmetric with
+//                   setTune(false) behaviour). Ordering follows the
+//                   PollPTT dispatch in console.cs:25463-25507 [v2.10.3.13].
+//                 Rejected (2): onCwPtt, onTciPtt.  Log qCWarning to
+//                   lcDsp and return without state mutation.  CW deferred
+//                   to 3M-2; TCI deferred to 3J.  Rejection follows the
+//                   setAntiVoxSourceVax(true) pattern from H.3.
+//                 RadioModel: H.4 adds the MoxController API only;
+//                   upstream signal sources land in later phases (H.5
+//                   mic_ptt extraction, 3K CAT, 3M-3a SPACE/VOX/X2).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -60,7 +121,11 @@
 
 #include <QObject>
 #include <QTimer>
+#include <functional>
+#include <limits>
 #include "core/PttMode.h"
+#include "core/WdspTypes.h"
+#include "core/safety/BandPlanGuard.h"
 
 namespace NereusSDR {
 
@@ -152,6 +217,32 @@ public:
     // directly — call setTune() instead.
     bool     isManualMox() const noexcept { return m_manualMox; }
 
+    // ── K.2: MOX pre-check callback ──────────────────────────────────────────
+    //
+    // setMoxCheck: install a BandPlanGuard check callback for setMox(true).
+    //
+    // When set, setMox(true) calls m_moxCheck() BEFORE the Codex P2 safety
+    // effects. If the result.ok == false, emits moxRejected(result.reason)
+    // and returns immediately without running safety effects or advancing state.
+    // setMox(false) NEVER consults the callback — the release path is always
+    // unconditional.
+    //
+    // The callback is a std::function<> that closes over RadioModel state
+    // (current region, freq, mode, bands, flags). RadioModel installs it once
+    // at construction via the lambda pattern:
+    //   m_moxController->setMoxCheck([this]() -> safety::BandPlanGuard::MoxCheckResult {
+    //       return m_bandPlan.checkMoxAllowed(...);
+    //   });
+    //
+    // If no callback is installed (nullptr), setMox(true) proceeds as before
+    // (backwards-compatible default — no rejection possible).
+    //
+    // Thread safety: setMoxCheck must be called from the main thread before
+    // any setMox() call, consistent with MoxController's main-thread-only
+    // contract.
+    using MoxCheckFn = std::function<safety::BandPlanGuard::MoxCheckResult()>;
+    void setMoxCheck(MoxCheckFn check);
+
     // ── Setter ───────────────────────────────────────────────────────────────
     // setPttMode: idempotent; emits pttModeChanged on actual transition.
     void setPttMode(PttMode mode);
@@ -206,6 +297,284 @@ public slots:
     // is in MoxController.cpp in the setTune(false) body comment.
     void setTune(bool on);
 
+    // setVoxEnabled: engage/disengage VOX with voice-family mode-gate.
+    //
+    // From Thetis CMSetTXAVoxRun (cmaster.cs:1039-1052 [v2.10.3.13]):
+    //   VOX fires only when the TX DSP mode is in the voice family:
+    //   LSB, USB, DSB, AM, SAM, FM, DIGL, DIGU.  In CW (CWL, CWU),
+    //   SPEC, or DRM the gated result is always false regardless of the
+    //   voxEnabled flag value.
+    //
+    // Idempotent on the GATED value: if the gate result does not change
+    // (e.g. VOX toggled while in CW mode), no signal is emitted and no
+    // WDSP call is made.  This prevents spurious SetDEXPRunVox(false)
+    // calls when the user operates the VOX button in a non-voice mode.
+    //
+    // Wired by RadioModel H.1:
+    //   TransmitModel::voxEnabledChanged → MoxController::setVoxEnabled
+    //
+    // From Thetis cmaster.cs:1039-1052 [v2.10.3.13]:
+    //   bool run = Audio.VOXEnabled && (mode == DSPMode.LSB || ...)
+    //   cmaster.SetDEXPRunVox(id, run);
+    void setVoxEnabled(bool on);
+
+    // onModeChanged: re-evaluate the voice-family gate when the TX DSP
+    // mode changes.
+    //
+    // Called whenever SliceModel::dspModeChanged fires on the active
+    // slice.  Updates m_currentMode and calls recomputeVoxRun().
+    //
+    // From Thetis CMSetTXAVoxRun (cmaster.cs:1039-1052 [v2.10.3.13]):
+    //   DSPMode mode = Audio.TXDSPMode;  // re-read at every call site
+    //
+    // Wired by RadioModel H.1:
+    //   SliceModel::dspModeChanged → MoxController::onModeChanged
+    void onModeChanged(DSPMode mode);
+
+    // ── H.2: VOX threshold with mic-boost-aware scaling ──────────────────────
+
+    // setVoxThreshold: set the VOX attack threshold in dB and recompute.
+    //
+    // Ports Thetis CMSetTXAVoxThresh (cmaster.cs:1054-1059 [v2.10.3.13]):
+    //   if (Audio.console.MicBoost) thresh *= (double)Audio.VOXGain;
+    //   cmaster.SetDEXPAttackThreshold(id, thresh);
+    //
+    // The caller (setup.cs:18911 [v2.10.3.13]) converts dB to linear
+    // amplitude first:
+    //   Math.Pow(10.0, (double)udDEXPThreshold.Value / 20.0)
+    // then passes to CMSetTXAVoxThresh.  This slot performs both the
+    // dB→linear conversion AND the mic-boost scaling so the RadioModel
+    // wiring is a single direct connection.
+    //
+    // Wired by RadioModel H.2:
+    //   TransmitModel::voxThresholdDbChanged → MoxController::setVoxThreshold
+    void setVoxThreshold(int dB);
+
+    // onMicBoostChanged: re-evaluate the scaled threshold when the
+    // mic-boost flag changes.
+    //
+    // From Thetis CMSetTXAVoxThresh (cmaster.cs:1057 [v2.10.3.13]):
+    //   if (Audio.console.MicBoost) thresh *= (double)Audio.VOXGain;
+    //
+    // When MicBoost toggles, the effective threshold changes even if the
+    // raw dB value has not.  This slot updates m_micBoost and calls
+    // recomputeVoxThreshold().
+    //
+    // Re-evaluation trigger is also noted in setup.cs:7684-7687 [v2.10.3.13]:
+    //   chk20dbMicBoost_CheckedChanged re-runs udVOXGain_ValueChanged
+    //   (which calls CMSetTXAVoxThresh) whenever mic-boost changes.
+    //
+    // Wired by RadioModel H.2:
+    //   TransmitModel::micBoostChanged → MoxController::onMicBoostChanged
+    void onMicBoostChanged(bool boost);
+
+    // setVoxGainScalar: update the mic-boost gain scalar and recompute.
+    //
+    // From Thetis audio.cs:194-202 [v2.10.3.13]:
+    //   private static float vox_gain = 1.0f;  // default 1.0
+    //   // Used in CMSetTXAVoxThresh when MicBoost is on
+    //
+    // NereusSDR exposes this as TransmitModel::voxGainScalar.  Changing
+    // it re-evaluates the scaled threshold even if dB and micBoost are
+    // unchanged.
+    //
+    // Wired by RadioModel H.2:
+    //   TransmitModel::voxGainScalarChanged → MoxController::setVoxGainScalar
+    void setVoxGainScalar(float scalar);
+
+    // ── H.3: VOX hang-time + anti-VOX gain + anti-VOX source path ────────────
+
+    // setVoxHangTime: set the DEXP (downward expander / VOX) hold time in ms.
+    //
+    // Converts ms → seconds before emitting voxHangTimeRequested(double).
+    // TxChannel::setVoxHangTime (D.3) wraps WDSP SetDEXPHoldTime which takes
+    // seconds.
+    //
+    // From Thetis Project Files/Source/Console/setup.cs:18896-18900 [v2.10.3.13]:
+    //   private void udDEXPHold_ValueChanged(object sender, EventArgs e)
+    //   {
+    //       if (initializing) return;
+    //       cmaster.SetDEXPHoldTime(0, (double)udDEXPHold.Value / 1000.0);
+    //   }
+    //
+    // Wired by RadioModel H.3:
+    //   TransmitModel::voxHangTimeMsChanged → MoxController::setVoxHangTime
+    void setVoxHangTime(int ms);
+
+    // setAntiVoxGain: set the anti-VOX gain in dB.
+    //
+    // Converts dB → linear amplitude (voltage scaling: /20.0) before emitting
+    // antiVoxGainRequested(double). TxChannel::setAntiVoxGain (D.3) wraps WDSP
+    // SetAntiVOXGain which takes a linear double.
+    //
+    // From Thetis Project Files/Source/Console/setup.cs:18986-18990 [v2.10.3.13]:
+    //   private void udAntiVoxGain_ValueChanged(object sender, EventArgs e)
+    //   {
+    //       if (initializing) return;
+    //       cmaster.SetAntiVOXGain(0, Math.Pow(10.0, (double)udAntiVoxGain.Value / 20.0));
+    //   }
+    //
+    // NaN sentinel m_lastAntiVoxGainEmitted forces first-call emit so WDSP is
+    // primed at startup regardless of the default value.
+    //
+    // Wired by RadioModel H.3:
+    //   TransmitModel::antiVoxGainDbChanged → MoxController::setAntiVoxGain
+    void setAntiVoxGain(int dB);
+
+    // setAntiVoxSourceVax: choose the anti-VOX reference audio source.
+    //
+    // Ports the path-agnostic logic from Thetis CMSetAntiVoxSourceWhat
+    // (cmaster.cs:912-943 [v2.10.3.13]).  In Thetis that function reads
+    // Audio.AntiVOXSourceVAC and routes per-channel WDSP anti-VOX source.
+    //
+    // When useVax == false (default, per audio.cs:447 [v2.10.3.13]
+    //   antivox_source_VAC property default = false):
+    //   From Thetis cmaster.cs:937-942 [v2.10.3.13] — else branch
+    //   (use audio going to hardware minus MON):
+    //     cmaster.SetAntiVOXSourceWhat(0, RX1,  1);
+    //     cmaster.SetAntiVOXSourceWhat(0, RX1S, 1);
+    //     cmaster.SetAntiVOXSourceWhat(0, RX2,  1);
+    //   Emits antiVoxSourceWhatRequested(false).  RadioModel lambda collapses
+    //   to TxChannel::setAntiVoxRun(true) for the single-TX 3M-1b layout;
+    //   the full per-WDSP-channel iteration is a 3F multi-pan TODO.
+    //
+    // When useVax == true (VAC/VAX audio path, deferred):
+    //   NereusSDR style guide (CLAUDE.md) prohibits C++ exceptions.
+    //   Logs qCWarning(lcDsp) and returns WITHOUT updating m_antiVoxSourceVax
+    //   or emitting the signal.  Deferred to 3M-3a per plan §3 H.3.
+    //
+    // Wired by RadioModel H.3:
+    //   TransmitModel::antiVoxSourceVaxChanged → MoxController::setAntiVoxSourceVax
+    void setAntiVoxSourceVax(bool useVax);
+
+    // ── H.4: PTT-source dispatch slots ───────────────────────────────────────
+    //
+    // Each slot routes an external PTT event through the MoxController state
+    // machine by setting the corresponding PttMode BEFORE driving setMox().
+    //
+    // Dispatch pattern (all 5 accepted slots):
+    //   if (pressed) { setPttMode(PttMode::Xxx); }   ← PttMode set FIRST
+    //   setMox(pressed);
+    //
+    // ORDERING NOTE: PttMode is set before setMox(true) so that phase-signal
+    // subscribers (F.1 hardwareFlipped, txAboutToBegin) see a consistent
+    // m_pttMode == Xxx snapshot when their slots fire.  This mirrors the
+    // setTune() ordering precedent and matches the Thetis PollPTT dispatch
+    // in console.cs:25463-25507 [v2.10.3.13] where _current_ptt_mode is
+    // assigned immediately before chkMOX.Checked = true.
+    //
+    // F.1 CONTRACT: setMox(false) does NOT clear m_pttMode.  That is the
+    // responsibility of the RadioModel hardwareFlipped(false) subscriber per
+    // the F.1 contract (same as setTune(false) at MoxController.cpp:329).
+    // The 5 dispatch slots are fully symmetric with setTune() in this respect.
+    //
+    // CROSS-SOURCE SWITCHING: the dispatch slots do not refcount or arbitrate.
+    // The semantic is "last setter wins" — if onCatPtt(true) fires while Mic
+    // is active, PttMode transitions to Cat.  The upstream PollPTT handles
+    // arbitration before calling into these slots.
+    //
+    // Rejected slots (CW, TCI): log qCWarning(lcDsp) and return WITHOUT
+    // calling setMox() or updating m_pttMode.  Matches the setAntiVoxSourceVax
+    // (true) rejection pattern from H.3.
+
+    // onMicPttFromRadio: MIC PTT button on the radio hardware.
+    //
+    // Triggered when the radio's physical PTT switch / mic button is pressed
+    // or released. In Thetis this maps to:
+    //   PollPTT: bool mic_ptt = (dotdashptt & 0x01) != 0; // PTT from radio
+    //   _current_ptt_mode = PTTMode.MIC;                   [v2.10.3.13]
+    //   From Thetis console.cs:25492 [v2.10.3.13]
+    //
+    // In NereusSDR, H.5 will extract mic_ptt from the P1/P2 status frame and
+    // call this slot.  Wiring deferred to H.5; this slot establishes the API.
+    //
+    // Note: the slot name is "FromRadio" to distinguish hardware PTT from a
+    // future software-only "mic mute" control.
+    void onMicPttFromRadio(bool pressed);
+
+    // onCatPtt: CAT (computer-aided transceiver) PTT command.
+    //
+    // Triggered when a CAT command (serial or network) asserts or de-asserts
+    // PTT.  In Thetis this maps to:
+    //   PollPTT: bool cat_ptt = (_ptt_bit_bang_enabled && ...) | _cat_ptt;
+    //   _current_ptt_mode = PTTMode.CAT;                    [v2.10.3.13]
+    //   From Thetis console.cs:25469 [v2.10.3.13]
+    //
+    // Full CAT integration is Phase 3K.  Wiring deferred to 3K; this slot
+    // establishes the API.
+    void onCatPtt(bool pressed);
+
+    // onVoxActive: WDSP VOX activity crossing the DEXP gate.
+    //
+    // Triggered when WDSP's downward expander (DEXP/VOX) determines that the
+    // microphone signal has exceeded the VOX threshold.  In Thetis this maps to:
+    //   PollPTT: bool vox_ptt = vox_ok && Audio.VOXActive;
+    //   _current_ptt_mode = PTTMode.VOX;                    [v2.10.3.13]
+    //   From Thetis console.cs:25507 [v2.10.3.13]
+    //
+    // In NereusSDR, the VOX active event will be driven by WDSP DEXP detection
+    // polling (TxChannel TX-meter readback, related to D.7).  Wiring deferred
+    // to 3M-3a or via TxChannel TX-meter polling.
+    void onVoxActive(bool active);
+
+    // onSpacePtt: spacebar PTT from the keyboard handler.
+    //
+    // Triggered when the user presses / releases the space bar with
+    // spacebar_ptt enabled in console settings.  In Thetis this maps to:
+    //   Console_KeyDown case Keys.Space:
+    //   _current_ptt_mode = PTTMode.SPACE;                  [v2.10.3.13]
+    //   chkMOX.Checked = !chkMOX.Checked;
+    //   From Thetis console.cs:26680 [v2.10.3.13]
+    //
+    // Wired in 3M-3a or later (UI keyboard handler).  This slot establishes
+    // the API.
+    void onSpacePtt(bool pressed);
+
+    // onX2Ptt: X2 jack external PTT trigger.
+    //
+    // Triggered when the radio's X2 input jack asserts or de-asserts.
+    // PTTMode::X2 is defined in Thetis enums.cs:353 [v2.10.3.13] but the
+    // X2 PTT dispatch path in Thetis is not currently extracted to PollPTT.
+    // NereusSDR pre-wires the slot here for parity completeness; wiring
+    // deferred to 3M-3a or later when X2 status-frame parsing lands.
+    void onX2Ptt(bool pressed);
+
+    // ── H.4: Rejected PTT-source dispatch slots (CW, TCI) ────────────────────
+    //
+    // These slots EXIST but REJECT all calls with qCWarning(lcDsp) + return.
+    // CW is deferred to 3M-2; TCI is deferred to 3J.
+    //
+    // The slots are declared (rather than omitted) so that:
+    //   (a) tests can verify rejection behaviour via QSignalSpy;
+    //   (b) future callers can wire to a stable name without waiting for the
+    //       deferred implementation;
+    //   (c) the rejection point is explicit in the public API.
+    //
+    // Rejection pattern matches setAntiVoxSourceVax(true) from H.3:
+    //   qCWarning(lcDsp) << "... rejected — deferred to 3M-2/3J";
+    //   return;   // no setMox(), no setPttMode() update
+
+    // onCwPtt: CW keyer PTT — REJECTED (deferred to 3M-2).
+    //
+    // In Thetis this maps to:
+    //   PollPTT: bool cw_ptt = CWInput.KeyerPTT && ...;
+    //   _current_ptt_mode = PTTMode.CW;                     [v2.10.3.13]
+    //   From Thetis console.cs:25475 [v2.10.3.13]
+    //
+    // 3M-2 will implement the CW keyer, sidetone, and QSK/break-in state
+    // machine.  This slot logs and returns without driving MOX.
+    void onCwPtt(bool pressed);
+
+    // onTciPtt: TCI (transceiver control interface) PTT — REJECTED (deferred to 3J).
+    //
+    // In Thetis this maps to:
+    //   PollPTT: if (_tci_ptt) _current_ptt_mode = PTTMode.TCI;
+    //   From Thetis console.cs:25463 [v2.10.3.13]
+    //
+    // 3J will implement the TCI server.  This slot logs and returns without
+    // driving MOX.
+    void onTciPtt(bool pressed);
+
     // setMox: Codex P2-ordered slot.
     //
     // Order (must not be reordered):
@@ -226,6 +595,22 @@ public slots:
     void setMox(bool on);
 
 signals:
+    // ── K.2: rejection signal ────────────────────────────────────────────────
+    //
+    // moxRejected: emitted when setMox(true) is called but the MoxCheckFn
+    // callback rejects the request (ok == false).
+    //
+    // Carries the human-readable reason string from BandPlanGuard::MoxCheckResult
+    // suitable for display in a status-bar toast or tooltip override.
+    //
+    // Subscribers:
+    //   - MainWindow: statusBar()->showMessage(reason, 3000)   [K.2]
+    //   - TxApplet: tooltip override on m_moxBtn               [K.2]
+    //
+    // NOT emitted when no MoxCheckFn is installed (bypass — backwards-compat).
+    // NOT emitted for setMox(false) — release is never rejected.
+    void moxRejected(QString reason);
+
     // ── Phase signals (Codex P1) ──────────────────────────────────────────────
     //
     // Subscribers attach HERE, not to individual low-level setters.
@@ -266,6 +651,74 @@ signals:
     void txAboutToEnd();            // TX→RX phase 1 of 4 — synchronous; teardown entry
     void txaFlushed();              // TX→RX phase 3 of 4 — fires after keyUpDelay; in-flight samples cleared
     void rxReady();                 // TX→RX phase 4 of 4 — fires after pttOutDelay
+
+    // voxRunRequested: emitted when the gated VOX-run state changes.
+    //
+    // Carries (voxEnabled && isVoiceMode(currentMode)).  Emitted at most
+    // once per gated-value transition (idempotent on the EMITTED state,
+    // not on the raw input).
+    //
+    // Subscribers: RadioModel H.1 connects this to TxChannel::setVoxRun.
+    //
+    // From Thetis CMSetTXAVoxRun (cmaster.cs:1039-1052 [v2.10.3.13]):
+    //   cmaster.SetDEXPRunVox(id, run);  // 'run' is the gated bool
+    void voxRunRequested(bool run);
+
+    // voxThresholdRequested: emitted when the computed WDSP attack threshold
+    // changes.
+    //
+    // Carries the mic-boost-aware linear amplitude ready for
+    // TxChannel::setVoxAttackThreshold(double).  Emitted at most once per
+    // computed-value transition (idempotent on the EMITTED double).  The NAN
+    // sentinel in m_lastVoxThresholdEmitted guarantees one emit on the first
+    // call so WDSP is always primed at startup.
+    //
+    // Subscribers: RadioModel H.2 connects this (via lambda) to
+    //   TxChannel::setVoxAttackThreshold(double).
+    //
+    // From Thetis CMSetTXAVoxThresh (cmaster.cs:1054-1059 [v2.10.3.13]):
+    //   cmaster.SetDEXPAttackThreshold(id, thresh);
+    //   // thresh is linear amplitude (dB→linear done by setup.cs:18911)
+    void voxThresholdRequested(double thresh);
+
+    // ── H.3 phase signals ────────────────────────────────────────────────────
+
+    // voxHangTimeRequested: emitted when the DEXP hold time changes.
+    //
+    // Carries the converted value in seconds.  Idempotent on the EMITTED
+    // double (NAN sentinel forces first-call emit to prime WDSP).
+    //
+    // Subscribers: RadioModel H.3 connects this (via lambda) to
+    //   TxChannel::setVoxHangTime(double seconds).
+    //
+    // From Thetis setup.cs:18899 [v2.10.3.13]:
+    //   cmaster.SetDEXPHoldTime(0, (double)udDEXPHold.Value / 1000.0);
+    void voxHangTimeRequested(double seconds);
+
+    // antiVoxGainRequested: emitted when the anti-VOX gain changes.
+    //
+    // Carries the linear amplitude value (dB→linear via /20.0, voltage
+    // scaling).  Idempotent on the EMITTED double (NAN sentinel).
+    //
+    // Subscribers: RadioModel H.3 connects this (via lambda) to
+    //   TxChannel::setAntiVoxGain(double gain).
+    //
+    // From Thetis setup.cs:18989 [v2.10.3.13]:
+    //   cmaster.SetAntiVOXGain(0, Math.Pow(10.0, (double)udAntiVoxGain.Value / 20.0));
+    void antiVoxGainRequested(double gain);
+
+    // antiVoxSourceWhatRequested: emitted when the anti-VOX source path is
+    // accepted and applied.
+    //
+    // Carries the new useVax value.  Only emitted with false in 3M-1b
+    // (true is rejected with qCWarning; deferred to 3M-3a).
+    //
+    // Subscribers: RadioModel H.3 lambda collapses the Thetis
+    //   CMSetAntiVoxSourceWhat RX-slot iteration
+    //   (cmaster.cs:937-942 [v2.10.3.13]) to TxChannel::setAntiVoxRun(true)
+    //   for the single-TX 3M-1b layout.  Full per-WDSP-channel iteration
+    //   is a 3F multi-pan concern.
+    void antiVoxSourceWhatRequested(bool useVax);
 
     // ── TUN state signal (diagnostic) ────────────────────────────────────────
     // manualMoxChanged is NOT a Codex P1 phase signal. F.1 subscribers should
@@ -317,6 +770,60 @@ private slots:
     void onBreakInDelayElapsed(); // declared for 3M-2 CW QSK; not started in 3M-1a
 
 private:
+    // isVoiceMode: true for the 8 voice-family DSP modes.
+    //
+    // Voice family (per Thetis CMSetTXAVoxRun, cmaster.cs:1043-1050
+    // [v2.10.3.13]):
+    //   LSB, USB, DSB, AM, SAM, FM, DIGL, DIGU — 8 modes.
+    // Excluded (VOX gate → false):
+    //   CWL, CWU — CW modes (no mic audio).
+    //   SPEC, DRM — special / DRM modes.
+    bool isVoiceMode(DSPMode mode) const noexcept;
+
+    // recomputeVoxRun: recalculate the gated VOX state and emit
+    // voxRunRequested(bool) if the result has changed since the last emit.
+    //
+    // Called by setVoxEnabled() and onModeChanged() after updating their
+    // respective member variables.  Idempotent on the EMITTED value so
+    // that repeated inputs (e.g. VOX toggled in CW mode stays gated-false)
+    // do not trigger spurious WDSP calls.
+    void recomputeVoxRun();
+
+    // computeScaledThreshold: compute the WDSP-side linear amplitude
+    // from m_voxThresholdDb and the mic-boost gain.
+    //
+    // Ports the two-step Thetis formula verbatim:
+    //   Step 1 (setup.cs:18911 [v2.10.3.13]):
+    //     thresh = Math.Pow(10.0, (double)udDEXPThreshold.Value / 20.0)
+    //   Step 2 (cmaster.cs:1057 [v2.10.3.13]):
+    //     if (Audio.console.MicBoost) thresh *= (double)Audio.VOXGain;
+    //
+    // No additional clamping — Thetis applies none.
+    double computeScaledThreshold() const noexcept;
+
+    // recomputeVoxThreshold: emit voxThresholdRequested(double) if the
+    // computed value differs from the last emitted value.
+    //
+    // Idempotent on the EMITTED double (not on any individual input).
+    // Uses std::isnan(m_lastVoxThresholdEmitted) as a first-call sentinel
+    // so the initial call always primes WDSP regardless of the default value.
+    // Subsequent calls compare with qFuzzyCompare to suppress spurious emits
+    // from floating-point noise.
+    void recomputeVoxThreshold();
+
+    // recomputeVoxHangTime: emit voxHangTimeRequested(double) if the converted
+    // hang time (in seconds) differs from the last emitted value.
+    //
+    // NAN sentinel forces first-call emit.  Subsequent calls use qFuzzyCompare.
+    void recomputeVoxHangTime();
+
+    // recomputeAntiVoxGain: emit antiVoxGainRequested(double) if the dB→linear
+    // converted gain differs from the last emitted value.
+    //
+    // From Thetis setup.cs:18989 [v2.10.3.13]: Math.Pow(10.0, dB / 20.0).
+    // NAN sentinel forces first-call emit.
+    void recomputeAntiVoxGain();
+
     // advanceState: sets m_state and emits stateChanged.
     void advanceState(MoxState newState);
 
@@ -324,7 +831,74 @@ private:
     // rapid setMox(false)/setMox(true) toggles or test teardown).
     void stopAllTimers();
 
+    // ── K.2: MOX pre-check callback ──────────────────────────────────────────
+    // Installed by RadioModel after construction. Empty (nullptr) by default.
+    // setMox(true) consults this BEFORE Codex P2 safety effects. If the check
+    // returns !ok, moxRejected is emitted and setMox returns early.
+    MoxCheckFn m_moxCheck;
+
     // ── Fields ───────────────────────────────────────────────────────────────
+
+    // ── VOX gate state (H.1) ─────────────────────────────────────────────────
+    // From Thetis CMSetTXAVoxRun (cmaster.cs:1039-1052 [v2.10.3.13]):
+    //   Audio.VOXEnabled checked against voice-family mode enum.
+    bool     m_voxEnabled{false};          // last value from TransmitModel::voxEnabled()
+    // Default USB matches SliceModel m_dspMode{DSPMode::USB} default.
+    DSPMode  m_currentMode{DSPMode::USB};  // last value from SliceModel::dspMode()
+    // Tracks the last emitted gated value for idempotency.
+    // Initial false matches (m_voxEnabled=false && ...) so no spurious emit at startup.
+    bool     m_lastVoxRunGated{false};
+
+    // ── VOX threshold state (H.2) ─────────────────────────────────────────────
+    // From Thetis cmaster.cs:1054-1059 [v2.10.3.13] — CMSetTXAVoxThresh.
+    // From Thetis setup.cs:18911 [v2.10.3.13] — dB→linear conversion.
+    //
+    // m_voxThresholdDb: raw dB from the TransmitModel slider.
+    //   Default -40 matches TransmitModel::m_voxThresholdDb = -40.
+    int      m_voxThresholdDb{-40};
+    //
+    // m_micBoost: mirrors TransmitModel::micBoost().
+    //   Default true matches console.cs:13237 [v2.10.3.13]: mic_boost = true.
+    bool     m_micBoost{true};
+    //
+    // m_voxGainScalar: mirrors TransmitModel::voxGainScalar().
+    //   Default 1.0 matches audio.cs:194 [v2.10.3.13]: vox_gain = 1.0f.
+    float    m_voxGainScalar{1.0f};
+    //
+    // m_lastVoxThresholdEmitted: NAN sentinel forces first-call emit so
+    // WDSP is always primed with the correct threshold at startup.
+    double   m_lastVoxThresholdEmitted{std::numeric_limits<double>::quiet_NaN()};
+
+    // ── VOX hang-time + anti-VOX state (H.3) ─────────────────────────────────
+    // From Thetis setup.cs:18896-18900 [v2.10.3.13] — SetDEXPHoldTime.
+    // From Thetis setup.cs:18986-18990 [v2.10.3.13] — SetAntiVOXGain.
+    // From Thetis cmaster.cs:912-943 [v2.10.3.13] — CMSetAntiVoxSourceWhat.
+    //
+    // m_voxHangTimeMs: raw ms from TransmitModel::voxHangTimeMs().
+    //   Default 500 matches TransmitModel default (udDEXPHold designer default).
+    int      m_voxHangTimeMs{500};
+    //
+    // m_lastVoxHangTimeEmitted: NAN sentinel forces first-call emit to prime WDSP.
+    double   m_lastVoxHangTimeEmitted{std::numeric_limits<double>::quiet_NaN()};
+    //
+    // m_antiVoxGainDb: raw dB from TransmitModel::antiVoxGainDb().
+    //   Default 0 matches TransmitModel default.
+    int      m_antiVoxGainDb{0};
+    //
+    // m_lastAntiVoxGainEmitted: NAN sentinel forces first-call emit.
+    double   m_lastAntiVoxGainEmitted{std::numeric_limits<double>::quiet_NaN()};
+    //
+    // m_antiVoxSourceVax: mirrors TransmitModel::antiVoxSourceVax().
+    //   Default false matches audio.cs:447 [v2.10.3.13]:
+    //     antivox_source_VAC property — default behavior returns false.
+    bool     m_antiVoxSourceVax{false};
+    //
+    // m_antiVoxSourceVaxInitialized: false until the first accepted call to
+    // setAntiVoxSourceVax().  Forces first-call emit even when useVax==false
+    // matches the default m_antiVoxSourceVax value, so WDSP is primed.
+    bool     m_antiVoxSourceVaxInitialized{false};
+
+    // ── MOX core state ────────────────────────────────────────────────────────
     bool     m_mox{false};               // single source of truth for MOX
     MoxState m_state{MoxState::Rx};      // current state-machine position
     PttMode  m_pttMode{PttMode::None};   // current PTT mode

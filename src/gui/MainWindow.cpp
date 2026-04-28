@@ -959,6 +959,20 @@ void MainWindow::buildUI()
         connect(mox, &MoxController::moxStateChanged,
                 m_meterPoller, &MeterPoller::setInTx,
                 Qt::QueuedConnection);
+
+        // ── Phase 3M-1b K.2: MOX rejection → status-bar toast ───────────────
+        // moxRejected fires when BandPlanGuard::checkMoxAllowed() rejects a
+        // setMox(true) request (wrong mode, out-of-band freq, cross-band TX).
+        // showMessage(reason, 3000) presents the rejection reason for 3 seconds
+        // in the Qt status bar, matching the bandClickIgnored toast pattern
+        // wired at MainWindow.cpp:418.  The toast is transient — it clears
+        // automatically and does not affect status-bar layout or persistence.
+        connect(mox, &MoxController::moxRejected,
+                this, [this](const QString& reason) {
+            if (QStatusBar* sb = statusBar()) {
+                sb->showMessage(reason, 3000);
+            }
+        });
     }
 
     // ── Phase 3M-0 Task 17: safety controller → status-bar wiring ────────────

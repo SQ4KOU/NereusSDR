@@ -87,6 +87,12 @@ public:
     void setAntennaRouting(AntennaRouting) override {}
     void setMox(bool) override {}
     void setTrxRelay(bool) override {}
+    void setMicBoost(bool) override {}
+    void setLineIn(bool) override {}
+    void setMicTipRing(bool) override {}
+    void setMicBias(bool) override {}
+    void setMicPTT(bool) override {}
+    void setMicXlr(bool) override {}
 };
 
 // ── MockTxChannel ─────────────────────────────────────────────────────────────

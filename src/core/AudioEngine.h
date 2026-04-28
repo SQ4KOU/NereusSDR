@@ -55,6 +55,26 @@
 //                 buffer when gain != 1.0f. TX gain is storage-only pending
 //                 Phase 3M TX pull wiring. Matches VaxApplet control-wiring
 //                 rows in docs/architecture/2026-04-19-vax-design.md §6.4.
+//   2026-04-27 — Phase 3M-1b E.3 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. Adds txMonitorBlockReady(samples,frames)
+//                 slot — the audio-thread consumer of TxChannel::sip1OutputReady.
+//                 When m_txMonitorEnabled, expands mono TXA samples to
+//                 interleaved stereo (L=R), applies m_txMonitorVolume via
+//                 MasterMixer::setSliceGain, and accumulates into m_masterMix
+//                 at kTxMonitorSlotId. kTxMonitorSlotId = -2 (negative; distinct
+//                 from all non-negative RX slice IDs). Slot is pre-registered
+//                 in the ctor. Plan: 3M-1b E.3. Pre-code review §4.3 + §4.4.
+//   2026-04-27 — Phase 3M-1b E.4 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. Adds std::atomic<bool> m_moxActive
+//                 cross-thread MOX-state mirror + setMoxState() setter.
+//                 rxBlockReady gates the per-slice speakers push when
+//                 m_moxActive && slice->isActiveSlice() — fixes the PR #144
+//                 cosmetic regression where RX audio leaked during TUN/MOX.
+//                 Non-active slices (e.g. RX2) keep playing. Matches Thetis
+//                 IVAC mox state-machine in audio.cs:349-384 [v2.10.3.13].
+//                 Phase L (RadioModel integration) wires MoxController::moxChanged
+//                 → setMoxState via signal/slot. Plan: 3M-1b E.4.
+//                 Pre-code review §10.3 + §10.4.
 // =================================================================
 
 #include "AudioDeviceConfig.h"
@@ -162,11 +182,72 @@ public:
     // Test seam — inject a fake IAudioBus into the headphones slot.
     void setHeadphonesBusForTest(std::unique_ptr<IAudioBus> bus);
 
+    // Test seam — inject a fake IAudioBus into the TX-input slot so unit
+    // tests can exercise pullTxMic without standing up a real PortAudio
+    // capture device. Takes ownership of `bus`.
+    // Plan: 3M-1b E.1.
+    void setTxInputBusForTest(std::unique_ptr<IAudioBus> bus);
+
+    // Test seam — expose m_masterMix so tests can call mixInto() to verify
+    // that txMonitorBlockReady accumulated audio into the correct slot.
+    // Plan: 3M-1b E.3.
+    MasterMixer& masterMixForTest() { return m_masterMix; }
+
+    /// Test seam — directly set MOX state without going through MoxController.
+    /// Bypasses the signal/slot connection that RadioModel wires in Phase L so
+    /// unit tests can drive the gate logic without a full radio fixture.
+    /// Plan: 3M-1b E.4.
+    void setMoxStateForTest(bool active) { setMoxState(active); }
+
 #endif
 
     // Called by RxDspWorker when a slice produces an RX audio block.
     // samples is interleaved stereo float32, length = frames * 2.
     void rxBlockReady(int sliceId, const float* samples, int frames);
+
+    /// TX-monitor block consumer. Called via Qt::DirectConnection from
+    /// TxChannel::sip1OutputReady on the audio thread. When monitor is
+    /// enabled, expands the mono TXA samples to interleaved stereo (L=R),
+    /// applies m_txMonitorVolume, and accumulates into MasterMixer at
+    /// kTxMonitorSlotId so the user hears themselves through speakers.
+    /// When disabled, no-op.
+    ///
+    /// **DirectConnection ONLY.** The samples pointer is valid only for
+    /// the duration of this synchronous call. Does not queue, store, or
+    /// allocate.
+    ///
+    /// Atomic contract: m_txMonitorEnabled and m_txMonitorVolume are both
+    /// loaded with std::memory_order_acquire (same acq/rel pairing as
+    /// rxBlockReady's master-volume and mute loads).
+    ///
+    /// Plan: 3M-1b E.3. Pre-code review §4.3 + §4.4.
+    void txMonitorBlockReady(const float* samples, int frames);
+
+    // Pull TX-mic audio samples from the bound TX-input bus.
+    //
+    // Drains m_txInputBus->pull(...), converts the raw byte buffer to
+    // float32 mono samples, and writes up to `n` samples to `dst`.
+    // Returns the number of samples actually written; returns 0 if
+    // m_txInputBus is null (mic not configured), dst is null, n <= 0,
+    // or if the bus has no data ready.
+    //
+    // Audio-thread safe: m_txInputBus uses a lock-free SPSC ring; this
+    // method does not block.
+    //
+    // Format conversion contract:
+    //   - If the bus negotiated format is Int16 (typical mic device),
+    //     each Int16 sample is normalised to float32 by dividing by
+    //     32768.0f. Only the left channel (channel 0) is used; the
+    //     right channel (if stereo) is discarded, producing mono output.
+    //   - If the bus negotiated format is Float32, the left channel is
+    //     taken directly. Multichannel buses discard all but channel 0.
+    //   - Other sample formats (Int24, Int32) are unsupported; returns 0.
+    //
+    // Caller (PcMicSource in Phase F.1) is responsible for resampling if
+    // the bus rate doesn't match the TXA DSP rate.
+    //
+    // Plan: 3M-1b E.1. Pre-code review §0.3 (PcMicSource arch).
+    int pullTxMic(float* dst, int n);
 
     // Master volume (0.0–1.0). Read on the DSP thread, written on the
     // main thread. Preserves the existing AF-gain wiring in
@@ -181,6 +262,43 @@ public:
     // MasterOutputWidget wiring land in Task 10b.
     void setMasterMuted(bool muted);
     bool masterMuted() const { return m_masterMuted.load(std::memory_order_acquire); }
+
+    /// Update the cross-thread MOX-state mirror used by rxBlockReady.
+    /// Wired by RadioModel (Phase L) to MoxController::moxChanged via
+    /// signal/slot (Qt::DirectConnection, audio thread).
+    ///
+    /// Audio-thread reads via std::atomic<bool> with acquire ordering;
+    /// main-thread writes via this setter with release ordering.
+    ///
+    /// Matches Thetis IVAC mox state-machine in audio.cs:349-384
+    /// [v2.10.3.13]: when MOX is on, the active TX slice's RX audio is
+    /// silenced; non-active slices keep playing.
+    ///
+    /// Plan: 3M-1b E.4. Pre-code review §10.3 + §10.4.
+    void setMoxState(bool active);
+    bool moxState() const { return m_moxActive.load(std::memory_order_acquire); }
+
+    /// TX monitor (MON) enable. When true, TXA siphon audio is mixed into
+    /// the master output during MOX (the user hears themselves).
+    ///
+    /// Atomic: written by main thread via this setter, read by audio thread
+    /// in E.3's txMonitorBlockReady slot. Idempotent: skips signal emit if
+    /// value unchanged.
+    ///
+    /// Default false (mon off at startup per plan §0 row 9).
+    ///
+    /// Plan: 3M-1b E.2. Pre-code review §4.4.
+    void setTxMonitorEnabled(bool enabled);
+    bool txMonitorEnabled() const { return m_txMonitorEnabled.load(std::memory_order_acquire); }
+
+    /// TX monitor volume (0.0..1.0). Atomic; clamped on set.
+    ///
+    /// Default 0.5f (matches Thetis fixed mix coefficient at audio.cs:417;
+    /// see pre-code review §12.5).
+    ///
+    /// Plan: 3M-1b E.2. Pre-code review §4.4.
+    void setTxMonitorVolume(float volume);
+    float txMonitorVolume() const { return m_txMonitorVolume.load(std::memory_order_acquire); }
 
     // Per-channel VAX controls (Sub-Phase 9 Task 9.2a). Main-thread writes,
     // audio-thread reads, via std::atomic — matches the setVolume /
@@ -231,6 +349,12 @@ public:
     float vaxRxLevel(int channel) const;
     float vaxTxLevel() const;
 
+    // Peak input level (0.0–1.0 normalized) from the PC Mic capture bus
+    // (m_txInputBus). Used by AudioTxInputPage's Test Mic VU bar (I.2).
+    // Returns 0.0f when m_txInputBus is null or not open. Safe to call
+    // from the main thread — reads std::atomic<float> in IAudioBus.
+    float pcMicInputLevel() const;
+
     // True when the VAX slot's IAudioBus has been minted AND its open() call
     // succeeded. False when the slot is empty (pre-start, user-disabled via
     // setVaxEnabled(false)) OR when makeVaxBus() / makeBus() failed to open
@@ -253,6 +377,9 @@ public:
 signals:
     void volumeChanged(float volume);
     void masterMutedChanged(bool muted);
+    // Plan: 3M-1b E.2. Pre-code review §4.4.
+    void txMonitorEnabledChanged(bool enabled);
+    void txMonitorVolumeChanged(float volume);
     void vaxRxGainChanged(int channel, float gain);
     void vaxMutedChanged(int channel, bool muted);
     void vaxTxGainChanged(float gain);
@@ -277,6 +404,12 @@ signals:
 #endif
 
 private:
+    // Slot ID for the TX-monitor channel in MasterMixer. Negative so it
+    // cannot collide with any non-negative RX slice ID. -1 is avoided as
+    // a common "invalid" sentinel; -2 is used here.
+    // Plan: 3M-1b E.3. Pre-code review §4.3.
+    static constexpr int kTxMonitorSlotId = -2;
+
     // Sub-Phase 12: speakers-bus rebuild (called directly from setSpeakersConfig).
     void applySpeakersConfig(const AudioDeviceConfig& cfg);
 
@@ -313,6 +446,15 @@ private:
     // audible without a Setup→Audio→Devices UI in Sub-Phase 4.
     void ensureSpeakersOpen();
 
+    // Open m_txInputBus with the persisted device or platform-default mic
+    // capture so PhoneCwApplet's mic-level meter has signal without
+    // requiring Setup configuration. Users can override later via
+    // Setup → Audio → Devices (or → TX Input). Loaded from
+    // audio/TxInput AppSettings keys (loadFromSettings returns a
+    // default-constructed config on first run → empty deviceName →
+    // platform default mic).
+    void ensureTxInputOpen();
+
     RadioModel* m_radio{nullptr};
 
     // Sub-Phase 12 Task 12.2 — live-reconfig safety mutex for the speakers
@@ -346,6 +488,28 @@ private:
     // rxBlockReady() on the DSP thread. Same acq_rel / acquire pairing
     // as m_masterVolume above.
     std::atomic<bool> m_masterMuted{false};
+
+    // Plan: 3M-1b E.4. Pre-code review §10.3 + §10.4.
+    // Cross-thread MOX-state mirror. Written by main-thread setMoxState()
+    // (wired by RadioModel in Phase L from MoxController::moxChanged).
+    // Read by audio-thread rxBlockReady via acquire load; written via
+    // release store (same acq/rel pairing as m_masterMuted above).
+    // Defaults false (MOX off at startup).
+    //
+    // Matches Thetis IVAC mox state-machine in audio.cs:349-384 [v2.10.3.13]:
+    // when MOX is on, active TX slice's RX audio is silenced; non-active
+    // slices keep playing.
+    std::atomic<bool> m_moxActive{false};
+
+    // Plan: 3M-1b E.2. Pre-code review §4.4.
+    // Written by setTxMonitorEnabled() on the main thread, read by the
+    // audio thread in E.3's txMonitorBlockReady slot. Same acq_rel /
+    // acquire pairing as m_masterMuted above.
+    std::atomic<bool>  m_txMonitorEnabled{false};  // default off per plan §0 row 9
+    // Default 0.5f — mirrors the fixed coefficient used in Thetis audio.cs
+    // for the aaudio mix path; NereusSDR exposes this as user-adjustable
+    // volume (pre-code review §4.4). Not a port; AudioEngine is NereusSDR-native.
+    std::atomic<float> m_txMonitorVolume{0.5f};
 
     // Sub-Phase 9 Task 9.2a — per-channel VAX rx gain / mute and master
     // VAX tx gain. Main-thread writes via set*() setters, DSP-thread

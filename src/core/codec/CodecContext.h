@@ -155,6 +155,52 @@ struct CodecContext {
     // Populated by buildCodecContext() from P1RadioConnection::m_trxRelay.
     bool    trxRelay{false};
 
+    // P1 mic-jack boost bit — bank 10 (C0=0x12) C2 bit 0 (0x01).
+    // Polarity: 1 = boost on (no inversion).
+    // Source: Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+    //   C2 = ((prn->mic.mic_boost & 1) | ...)
+    // Populated by buildCodecContext() from RadioConnection::m_micBoost.
+    bool    p1MicBoost{false};
+
+    // P1 mic-jack line-in bit — bank 10 (C0=0x12) C2 bit 1 (0x02).
+    // Polarity: 1 = line in active (no inversion).
+    // Source: Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+    //   C2 = ((prn->mic.mic_boost & 1) | ((prn->mic.line_in & 1) << 1) | ...)
+    // Populated by buildCodecContext() from RadioConnection::m_lineIn.
+    bool    p1LineIn{false};
+
+    // P1 mic-jack Tip/Ring polarity — bank 11 (C0=0x14) C1 bit 4 (0x10), INVERTED.
+    // NereusSDR convention: true = Tip is mic (intuitive).
+    // POLARITY INVERSION: wire bit is written as !p1MicTipRing.
+    //   p1MicTipRing = true  → Tip is mic  → wire bit 4 = 0
+    //   p1MicTipRing = false → Tip is BIAS → wire bit 4 = 1
+    // Source: Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13]
+    //   C1 = ... | ((prn->mic.mic_trs & 1) << 4) | ...
+    //   mic_trs: 1 = Tip is BIAS/PTT (ring is mic), 0 = Tip is mic (normal).
+    // Populated by buildCodecContext() from RadioConnection::m_micTipRing.
+    bool    p1MicTipRing{true};
+
+    // P1 mic-jack phantom power (bias) — bank 11 (C0=0x14) C1 bit 5 (0x20).
+    // Polarity: 1 = bias on (no inversion).
+    // Source: Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13]
+    //   C1 = ... | ((prn->mic.mic_bias & 1) << 5) | ...
+    // Populated by buildCodecContext() from RadioConnection::m_micBias.
+    bool    p1MicBias{false};
+
+    // P1 mic-jack PTT enable — bank 11 (C0=0x14) C1 bit 6 (0x40), POLARITY INVERTED.
+    // NereusSDR convention: true = PTT enabled (intuitive).
+    // POLARITY INVERSION: wire bit is written as !p1MicPTT.
+    //   p1MicPTT = true  → PTT enabled  → wire bit 6 = 0 (PTT-disabled-flag clear)
+    //   p1MicPTT = false → PTT disabled → wire bit 6 = 1 (PTT-disabled-flag set)
+    // Default false → wire bit 6 = 1 (PTT disabled by default, matching
+    //   TransmitModel::micPttDisabled default from pre-code review §2.3 / §2.7).
+    // Source: Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13]
+    //   C1 = ... | ((prn->mic.mic_ptt & 1) << 6);
+    //   mic_ptt: 1 = PTT DISABLED (confirmed by Thetis console.cs:19758:
+    //   MicPTTDisabled property; deskhpsdr old_protocol.c:3000: mic_ptt_enabled==0).
+    // Populated by buildCodecContext() from RadioConnection::m_micPTT.
+    bool    p1MicPTT{false};
+
     // RX VFO frequency words (Hz, raw, no phase-word conversion on P1).
     quint64 rxFreqHz[7]{};
     quint64 txFreqHz{0};
