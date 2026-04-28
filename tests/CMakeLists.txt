@@ -1456,3 +1456,42 @@ target_compile_definitions(tst_radio_mic_source PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_tx_mic_router_selector)
 target_compile_definitions(tst_tx_mic_router_selector PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1b Task G.1: P1 mic_boost wire-byte snapshot ────────────────────
+# 14 tests pin the mic_boost bit (C2 bit 0 = 0x01) of bank 10 (C0=0x12) in
+# P1RadioConnection::setMicBoost():
+#   1.  Default state: C2 bit 0 = 0.
+#   2.  setMicBoost(true)  → C2 bit 0 = 1.
+#   3.  setMicBoost(false) → C2 bit 0 = 0.
+#   4.  Bit 6 (0x40) always set regardless of mic_boost.
+#   5.  No spillover into C2 bits 7, 5..2, 1.
+#   6.  Bank 10 C0 address stays 0x12.
+#   7.  setMicBoost sets m_forceBank10Next (Codex P2 flush pattern).
+#   8.  Repeated same-value call still sets the flush flag.
+#   9.  Idempotency: setMicBoost(true) twice doesn't crash.
+#  10.  Round-trip: true → false produces correct bit values.
+#  11.  Codec path (Standard): C2 bit 0 set/cleared correctly.
+#  12.  Codec path (Standard): C2 bit 0 clear after false.
+#  13.  Codec path (HL2): C2 bit 0 set (FW ignores, but bit is correct).
+#  14.  T/R relay byte (C3) unaffected by mic_boost changes.
+# Source: Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13].
+nereus_add_test(tst_p1_mic_boost_wire)
+target_compile_definitions(tst_p1_mic_boost_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.1: P2 mic_boost wire-byte snapshot ────────────────────
+# 10 tests pin the mic_boost bit (CmdTx byte 50 bit 1 = 0x02) in
+# P2RadioConnection::setMicBoost():
+#   1.  Default state: byte 50 bit 1 = 0.
+#   2.  setMicBoost(true)  → byte 50 bit 1 = 1.
+#   3.  setMicBoost(false) → byte 50 bit 1 = 0.
+#   4.  Round-trip true → false → true.
+#   5.  Bit 0 (line_in) unaffected by mic_boost.
+#   6.  Bits 2-7 of byte 50 unaffected.
+#   7.  Idempotency: setMicBoost(true) twice → bit remains 1.
+#   8.  Codec path (OrionMKII): mic_boost at byte 50 bit 1.
+#   9.  Codec path (Saturn/ANAN-G2): same behaviour.
+#  10.  Byte 51 (line_in gain) unaffected by setMicBoost.
+# Source: deskhpsdr/src/new_protocol.c:1484-1486 [@120188f].
+# First deskhpsdr port in NereusSDR — DESKHPSDR-PROVENANCE.md updated.
+nereus_add_test(tst_p2_mic_boost_wire)
+target_compile_definitions(tst_p2_mic_boost_wire PRIVATE NEREUS_BUILD_TESTS)
+

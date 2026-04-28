@@ -160,6 +160,23 @@ public slots:
 
     bool isTrxRelayEngaged() const noexcept { return m_trxRelay; }
 
+    // ── Mic-jack hardware bits (3M-1b Phase G) ────────────────────────────
+
+    /// Hardware mic-jack 20 dB boost preamp.
+    ///
+    /// P1 source: Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+    ///   case 10 (C0=0x12) C2 byte: (prn->mic.mic_boost & 1) → bit 0 (0x01)
+    ///
+    /// P2 source: deskhpsdr src/new_protocol.c:1484-1486 [@120188f]
+    ///   if (mic_boost) { transmit_specific_buffer[50] |= 0x02; }
+    ///   (bit 1, mask 0x02 — different bit from P1)
+    ///
+    /// Polarity: 1 = boost on (no inversion).
+    ///
+    /// HL2 has no mic jack; the P1 implementation still writes the bit
+    /// (firmware ignores it).
+    virtual void setMicBoost(bool on) = 0;
+
     // DEPRECATED — call setAntennaRouting directly. Kept for one release
     // cycle as a rollback hatch per docs/architecture/antenna-routing-design.md §7.7.
     // Removed in the release following 3P-I-b.
@@ -301,6 +318,12 @@ protected:
     // true = TX path engaged (bit 7 of P1 C3 bank 6 written as 0 — inverted
     // sense). P2 stub; wire emit deferred to 3M-3.
     bool m_trxRelay{false};
+
+    // Shared state for setMicBoost (3M-1b G.1).
+    // P1: emitted to case 10 (C0=0x12) C2 bit 0 (0x01).
+    // P2: emitted to transmit_specific_buffer[50] bit 1 (0x02).
+    // From Thetis networkproto1.c:581 [v2.10.3.13]; deskhpsdr new_protocol.c:1484-1486 [@120188f].
+    bool m_micBoost{false};
 };
 
 } // namespace NereusSDR

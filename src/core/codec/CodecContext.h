@@ -155,6 +155,13 @@ struct CodecContext {
     // Populated by buildCodecContext() from P1RadioConnection::m_trxRelay.
     bool    trxRelay{false};
 
+    // P1 mic-jack boost bit — bank 10 (C0=0x12) C2 bit 0 (0x01).
+    // Polarity: 1 = boost on (no inversion).
+    // Source: Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+    //   C2 = ((prn->mic.mic_boost & 1) | ...)
+    // Populated by buildCodecContext() from RadioConnection::m_micBoost.
+    bool    p1MicBoost{false};
+
     // RX VFO frequency words (Hz, raw, no phase-word conversion on P1).
     quint64 rxFreqHz[7]{};
     quint64 txFreqHz{0};

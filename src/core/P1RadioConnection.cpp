@@ -1119,6 +1119,31 @@ void P1RadioConnection::setTrxRelay(bool enabled)
 }
 
 // ---------------------------------------------------------------------------
+// setMicBoost (3M-1b G.1)
+//
+// Sets the hardware mic-jack 20 dB boost preamp bit.
+// Wire bit: bank 10 (C0=0x12) C2 byte bit 0 (mask 0x01).
+// Polarity: 1 = boost on (no inversion).
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+//   C2 = ((prn->mic.mic_boost & 1) | ((prn->mic.line_in & 1) << 1) | ...)
+//   mic_boost occupies the lowest bit of C2.
+//
+// Flush pattern mirrors setTrxRelay (Codex P2): m_forceBank10Next is set
+// before the idempotent guard so the bit lands on the wire within ≤1 frame.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setMicBoost(bool on)
+{
+    // Codex P2: set flush flag BEFORE idempotent guard.
+    m_forceBank10Next = true;
+
+    if (m_micBoost == on) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_micBoost = on;
+}
+
+// ---------------------------------------------------------------------------
 // applyBoardQuirks
 //
 // Reads BoardCapabilities (m_caps) and enforces runtime constraints.
@@ -1273,6 +1298,7 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.txDrive        = m_txDrive;
     ctx.paEnabled      = m_paEnabled;
     ctx.trxRelay       = m_trxRelay;
+    ctx.p1MicBoost     = m_micBoost;
     ctx.duplex         = m_duplex;
     ctx.diversity      = m_diversity;
     ctx.antennaIdx     = m_antennaIdx;
@@ -1962,7 +1988,10 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
         // 3M-0; never surfaced because no TX I/Q was live on EP2 before E.4.
         out[0] = C0base | 0x12;
         out[1] = static_cast<quint8>(m_txDrive & 0xFF);
-        out[2] = 0x40; // line_in=0, mic_boost=0 defaults
+        // C2: mic_boost → bit 0 (0x01); bit 6 always set per upstream default.
+        // From Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+        //   C2 = ((prn->mic.mic_boost & 1) | ... | 0b01000000) & 0x7f;
+        out[2] = static_cast<quint8>((m_micBoost ? 0x01 : 0x00) | 0x40); // 3M-1b G.1
         out[3] = m_alexHpfBits | (m_trxRelay ? 0x00 : 0x80); // 3M-1a E.4
         out[4] = m_alexLpfBits;
         return;

@@ -131,6 +131,7 @@ public slots:
     void sendTxIq(const float* iq, int n) override;
     void setTrxRelay(bool enabled) override;
     void setTxStepAttenuation(int dB) override;
+    void setMicBoost(bool on) override;
 
 private slots:
     void onReadyRead();

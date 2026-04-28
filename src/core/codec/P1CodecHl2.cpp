@@ -115,7 +115,10 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
         case 10:
             out[0] = C0base | 0x12;
             out[1] = quint8(ctx.txDrive & 0xFF);
-            out[2] = 0x40;
+            // C2: mic_boost → bit 0 (0x01); bit 6 always set per upstream default.
+            // From Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+            //   C2 = ((prn->mic.mic_boost & 1) | ... | 0b01000000) & 0x7f;
+            out[2] = quint8((ctx.p1MicBoost ? 0x01 : 0x00) | 0x40);
             out[3] = quint8(ctx.alexHpfBits | (ctx.trxRelay ? 0x00 : 0x80));  // T/R relay engaged (INVERTED: 1 = disabled)
             out[4] = quint8(ctx.alexLpfBits);
             return;

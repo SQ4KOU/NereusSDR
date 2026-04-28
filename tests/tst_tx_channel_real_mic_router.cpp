@@ -123,6 +123,7 @@ public:
     void setAntennaRouting(AntennaRouting) override {}
     void setMox(bool) override {}
     void setTrxRelay(bool) override {}
+    void setMicBoost(bool) override {}
     void sendTxIq(const float*, int) override {}  // consume silently
 };
 
