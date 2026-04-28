@@ -260,6 +260,36 @@ private slots:
         QCOMPARE(spy.count(), 0);
     }
 
+    void idempotent_micXlr_default_noSignal() {
+        // setMicXlr(true) on fresh model (default = true) must NOT emit.
+        // Guards that a future refactor cannot silently drop the == check in
+        // TransmitModel::setMicXlr without a CI failure.
+        TransmitModel t;
+        QSignalSpy spy(&t, &TransmitModel::micXlrChanged);
+        t.setMicXlr(true);   // default is true
+        QCOMPARE(spy.count(), 0);
+    }
+
+    void idempotent_micTipRing_default_noSignal() {
+        // setMicTipRing(true) on fresh model (default = true) must NOT emit.
+        // Guards that a future refactor cannot silently drop the == check in
+        // TransmitModel::setMicTipRing without a CI failure.
+        TransmitModel t;
+        QSignalSpy spy(&t, &TransmitModel::micTipRingChanged);
+        t.setMicTipRing(true);   // default is true
+        QCOMPARE(spy.count(), 0);
+    }
+
+    void idempotent_micBias_default_noSignal() {
+        // setMicBias(false) on fresh model (default = false) must NOT emit.
+        // Guards that a future refactor cannot silently drop the == check in
+        // TransmitModel::setMicBias without a CI failure.
+        TransmitModel t;
+        QSignalSpy spy(&t, &TransmitModel::micBiasChanged);
+        t.setMicBias(false);   // default is false
+        QCOMPARE(spy.count(), 0);
+    }
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // LINEINBOOST RANGE CLAMPING
     // (From Thetis setup.designer.cs:46898-46907 [v2.10.3.13]:
