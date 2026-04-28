@@ -38,6 +38,11 @@
 //                 + auto-persist on each setter via persistOne().
 //                 NereusSDR-native persistence glue, J.J. Boyd (KG4VCF),
 //                 with AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-28 — setMicSourceLocked(bool) lock guard (L.3, Phase 3M-1b): HL2
+//                 force-Pc-on-connect model-side lock. When locked,
+//                 setMicSource(MicSource::Radio) silently coerces to Pc.
+//                 NereusSDR-native, J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -722,11 +727,45 @@ void TransmitModel::setVoxHangTimeMs(int ms)
 
 void TransmitModel::setMicSource(MicSource source)
 {
+    // L.3: HL2 force-Pc lock guard.
+    // When m_micSourceLocked is true (hasMicJack == false), MicSource::Radio
+    // is silently coerced to MicSource::Pc.  HL2 has no radio-side mic jack;
+    // the UI side (AudioTxInputPage) already disables the Radio Mic radio button
+    // when !hasMicJack.  This ensures the model state is consistent even if
+    // any code path calls setMicSource(Radio) while the lock is active.
+    if (source == MicSource::Radio && m_micSourceLocked) {
+        source = MicSource::Pc;
+    }
+
     if (source == m_micSource) { return; }  // idempotent guard
     m_micSource = source;
     persistOne(QStringLiteral("micSource"),
                source == MicSource::Radio ? QStringLiteral("Radio") : QStringLiteral("Pc"));  // L.2 auto-persist
     emit micSourceChanged(source);
+}
+
+// ── Mic source lock guard (3M-1b L.3) ────────────────────────────────────────
+//
+// NereusSDR-native.  RadioModel::connectToRadio() calls
+//   setMicSourceLocked(!boardCapabilities().hasMicJack)
+// after loadFromSettings() so the lock is active for the lifetime of the HL2
+// connection.  teardownConnection() calls setMicSourceLocked(false) to release
+// the lock before a potential reconnect to a different (non-HL2) radio.
+//
+// The lock itself is NOT persisted — it is a runtime capability constraint
+// derived from hardware, not a user preference.
+
+void TransmitModel::setMicSourceLocked(bool lock)
+{
+    m_micSourceLocked = lock;
+
+    // If we are engaging the lock while micSource is Radio, coerce to Pc now.
+    // This handles the case where loadFromSettings already ran and set Radio
+    // (from a previous non-HL2 connection's stored value), and the lock is
+    // being engaged afterwards by RadioModel.
+    if (lock && m_micSource == MicSource::Radio) {
+        setMicSource(MicSource::Pc);  // will clamp through the lock guard above
+    }
 }
 
 // ── PC Mic session state (3M-1b I.2) ─────────────────────────────────────────

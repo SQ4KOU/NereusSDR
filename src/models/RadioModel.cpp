@@ -1073,6 +1073,16 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // Phase 3M-1b L.2. After setMacAddress so auto-persist uses the correct MAC.
         // voxEnabled, monEnabled, micMute are NOT loaded — always start at safe defaults.
         m_transmitModel.loadFromSettings(info.macAddress);
+
+        // L.3: HL2 force-Pc on connect.
+        // HL2 has no radio-side mic jack (BoardCapabilities::hasMicJack == false).
+        // Even if AppSettings persisted MicSource::Radio from a different radio
+        // connected under the same MAC (extremely unlikely but possible),
+        // override to Pc to keep mic-source state aligned with hardware reality.
+        // The UI side (AudioTxInputPage) already disables the Radio Mic radio
+        // button when !hasMicJack; this completes the model-side lock.
+        // setMicSourceLocked also coerces any existing Radio state to Pc immediately.
+        m_transmitModel.setMicSourceLocked(!boardCapabilities().hasMicJack);
     }
 
     m_name = info.displayName();
@@ -2668,6 +2678,13 @@ void RadioModel::teardownConnection()
     if (!m_lastRadioInfo.macAddress.isEmpty()) {
         m_transmitModel.persistToSettings(m_lastRadioInfo.macAddress);
     }
+
+    // L.3: Release the HL2 mic-source lock on disconnect.
+    // A subsequent connectToRadio() to a non-HL2 radio must be free to use
+    // MicSource::Radio if the user selects it.  The lock is re-engaged
+    // (or not) by the next connectToRadio() call based on the new radio's
+    // BoardCapabilities::hasMicJack.
+    m_transmitModel.setMicSourceLocked(false);
 
     // Disconnect signals into the DSP worker first so no new I/Q
     // batches can be posted onto the worker thread, then quit and

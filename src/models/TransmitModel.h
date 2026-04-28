@@ -27,6 +27,11 @@
 //                 + auto-persist on each setter via persistOne().
 //                 NereusSDR-native persistence glue, J.J. Boyd (KG4VCF),
 //                 with AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-28 — setMicSourceLocked(bool) lock guard (L.3, Phase 3M-1b): HL2
+//                 force-Pc-on-connect model-side lock. When locked,
+//                 setMicSource(MicSource::Radio) silently coerces to Pc.
+//                 NereusSDR-native, J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -593,8 +598,38 @@ public slots:
 
     // ── Mic source setter (3M-1b I.1) ─────────────────────────────────────────
     /// Select the active mic source (Pc or Radio).  Idempotent: no signal
-    /// when the value is unchanged.  AppSettings persistence deferred to L.2.
+    /// when the value is unchanged.
+    ///
+    /// When locked via setMicSourceLocked(true), calling setMicSource(Radio)
+    /// silently coerces the value to Pc.  This is the HL2 force-Pc-on-connect
+    /// model-side lock (L.3): HL2 has no radio-side mic jack so MicSource::Radio
+    /// must never be active on that board.
     void setMicSource(MicSource source);
+
+    // ── Mic source lock guard (3M-1b L.3) ────────────────────────────────────
+    //
+    // NereusSDR-native. When lock is true, setMicSource(MicSource::Radio)
+    // silently coerces to MicSource::Pc.  This is the model-side complement
+    // of the UI-side lock (AudioTxInputPage disables the Radio Mic radio button
+    // when BoardCapabilities::hasMicJack == false).
+    //
+    // RadioModel::connectToRadio() calls setMicSourceLocked(!caps.hasMicJack)
+    // after loadFromSettings() so the lock is active for the lifetime of the
+    // connection.  On disconnect, RadioModel calls setMicSourceLocked(false)
+    // (teardownConnection) so a subsequent reconnect to a different radio with
+    // hasMicJack=true can use Radio again.
+    //
+    // The lock is NOT persisted — it is a runtime capability constraint, not
+    // a user preference.  It is never stored in AppSettings.
+
+    /// Install or release the HL2 mic-source lock.
+    /// When lock is true, setMicSource(MicSource::Radio) is silently coerced
+    /// to MicSource::Pc.  Call with false to release the lock (e.g. after
+    /// teardown, before a non-HL2 reconnect).
+    void setMicSourceLocked(bool lock);
+
+    /// Return true when the mic-source lock is active (hasMicJack == false).
+    bool isMicSourceLocked() const noexcept { return m_micSourceLocked; }
 
     // ── PC Mic session-state setters (3M-1b I.2) ─────────────────────────────
     /// Set the PortAudio host API index for PC Mic capture.  Idempotent.
@@ -758,10 +793,12 @@ private:
     float m_voxGainScalar  = 1.0f;   // audio.cs:194: vox_gain = 1.0f
     int   m_voxHangTimeMs  = 500;    // udDEXPHold.Value=500 (setup.designer.cs:45020-45024)
 
-    // ── Mic source (3M-1b I.1) ──────────────────────────────────────────
+    // ── Mic source (3M-1b I.1 + L.3) ───────────────────────────────────
     // NereusSDR-native. Default Pc (always available; Radio is opt-in).
-    // AppSettings persistence deferred to Phase L.2.
+    // m_micSourceLocked: L.3 HL2 force. When true, setMicSource(Radio)
+    // silently coerces to Pc.  Runtime capability constraint; not persisted.
     MicSource m_micSource{MicSource::Pc};
+    bool      m_micSourceLocked{false};  // L.3: set by RadioModel per hasMicJack
 
     // ── PC Mic session state (3M-1b I.2) ─────────────────────────────────
     // NereusSDR-native transient session state. AppSettings persistence

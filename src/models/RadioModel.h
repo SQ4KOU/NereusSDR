@@ -385,6 +385,24 @@ public:
     const PcMicSource*           pcMicSourceForTest()          const { return m_pcMicSource.get(); }
     const RadioMicSource*        radioMicSourceForTest()        const { return m_radioMicSource.get(); }
     const CompositeTxMicRouter*  compositeMicRouterForTest()   const { return m_compositeMicRouter.get(); }
+
+    // 3M-1b L.3 test seam: simulate connectToRadio()'s loadFromSettings +
+    // HL2 force-Pc sequence without a live radio connection.
+    // Call setCapsHasMicJackForTest(bool) first to inject the board caps,
+    // then call this to run the exact same two-step sequence as
+    // connectToRadio(): loadFromSettings(mac) → setMicSourceLocked(!hasMicJack).
+    // After this call, transmitModel().micSource() and isMicSourceLocked()
+    // reflect the HL2 (or non-HL2) post-connect state.
+    void simulateConnectLoadForTest(const QString& mac) {
+        m_transmitModel.loadFromSettings(mac);
+        m_transmitModel.setMicSourceLocked(!boardCapabilities().hasMicJack);
+    }
+
+    // Release the lock, mirroring teardownConnection()'s setMicSourceLocked(false).
+    // Use between simulated reconnects in the same test.
+    void simulateDisconnectForTest() {
+        m_transmitModel.setMicSourceLocked(false);
+    }
 #endif
 
     // Connection

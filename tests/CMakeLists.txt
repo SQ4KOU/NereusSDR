@@ -1981,3 +1981,25 @@ target_compile_definitions(tst_audio_tx_input_mic_boost_vox_thresh PRIVATE NEREU
 nereus_add_test(tst_radio_model_3m1b_ownership)
 target_compile_definitions(tst_radio_model_3m1b_ownership PRIVATE NEREUS_BUILD_TESTS)
 
+# =============================================================================
+# Phase 3M-1b Task L.3 — HL2 force-Pc on connect (closes Phase L)
+# =============================================================================
+# Covers:
+#   1.  HL2 fresh connect: micSource == Pc.
+#   2a. HL2 fresh connect: lock engaged (isMicSourceLocked true).
+#   2b. HL2 connect with stored Radio: forced to Pc.
+#   2c. HL2 connect with stored Radio: lock engaged.
+#   3a. Non-HL2 fresh connect: default Pc.
+#   3b. Non-HL2 fresh connect: not locked.
+#   4.  Non-HL2 with stored Radio: loads Radio (no override).
+#   5.  Lock prevents setMicSource(Radio) on HL2 → stays Pc.
+#   6.  Lock released on non-HL2 → setMicSource(Radio) succeeds.
+#   7.  isMicSourceLocked() reflects hasMicJack for both boards.
+#   8.  Reconnect HL2 → non-HL2: lock released, Radio allowed.
+#
+# NEREUS_BUILD_TESTS required for RadioModel test seams:
+#   setCapsHasMicJackForTest, simulateConnectLoadForTest,
+#   simulateDisconnectForTest.
+nereus_add_test(tst_radio_model_mic_source_hl2_force)
+target_compile_definitions(tst_radio_model_mic_source_hl2_force PRIVATE NEREUS_BUILD_TESTS)
+
