@@ -1292,3 +1292,25 @@ target_compile_definitions(tst_tx_channel_sip1_signal PRIVATE NEREUS_BUILD_TESTS
 nereus_add_test(tst_tx_channel_mic_mute)
 target_compile_definitions(tst_tx_channel_mic_mute PRIVATE NEREUS_BUILD_TESTS)
 
+# Phase 3M-1b D.7 — TxChannel TX meter readouts
+#
+# Tests:
+#   getTxMicMeter()  — wired: reads GetTXAMeter(ch, TXA_MIC_PK=0); returns
+#                      kMeterUninitialisedSentinel (-999.0f) when channel not open
+#   getAlcMeter()    — wired: reads GetTXAMeter(ch, TXA_ALC_PK=12); same sentinel
+#   getEqMeter()     — deferred 3M-3a: returns 0.0f unconditionally
+#   getLvlrMeter()   — deferred 3M-3a: returns 0.0f unconditionally
+#   getCfcMeter()    — deferred 3M-3a: returns 0.0f unconditionally
+#   getCompMeter()   — deferred 3M-3a: returns 0.0f unconditionally
+#   kMeterUninitialisedSentinel == -999.0f
+#
+# Enum value provenance: Thetis wdsp/TXA.h:49-69 [v2.10.3.13] txaMeterType.
+# Pre-code review: §1.4 (TX meters live row) + master design §5.2.1.
+#
+# Test cases (11):
+#   sentinel: value-is-minus-999
+#   active: getTxMicMeter uninitialised×2, getAlcMeter uninitialised×2
+#   deferred: getEqMeter, getLvlrMeter, getCfcMeter, getCompMeter (all zero)
+#   distinctness: deferred-not-sentinel, sentinel-not-zero
+nereus_add_test(tst_tx_channel_meters)
+

@@ -34,6 +34,12 @@
 //                 Task D.6 — TxChannel mic-mute path via setMicPreamp.
 //                 Signature matches wdsp/patchpanel.c:209 [v2.10.3.13].
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-27 — TXA meter type integer constants (TXA_MIC_PK, TXA_ALC_PK, and
+//                 the deferred TXA_EQ_PK / TXA_LVLR_PK / TXA_CFC_PK / TXA_COMP_PK)
+//                 added by J.J. Boyd (KG4VCF) during 3M-1b Task D.7 — TX meter
+//                 readouts. Values sourced from Thetis wdsp/TXA.h:49-69
+//                 [v2.10.3.13] txaMeterType enum. AI-assisted transformation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -727,3 +733,65 @@ void SetAntiVOXGain(int id, double gain);
 } // extern "C"
 
 #endif // HAVE_WDSP
+
+// ---------------------------------------------------------------------------
+// TXA meter type integer constants
+//
+// These mirror the txaMeterType enum from Thetis wdsp/TXA.h:49-69 [v2.10.3.13].
+// Only defined when HAVE_WDSP is NOT set (i.e. in stub/test builds that do not
+// include the full WDSP headers). When HAVE_WDSP is defined, TxChannel.cpp
+// includes third_party/wdsp/src/TXA.h directly, which provides the real
+// txaMeterType C enum — these constexpr ints would conflict with those names.
+//
+// Sourced from Thetis wdsp/TXA.h:49-69 [v2.10.3.13] — txaMeterType enum:
+//   TXA_MIC_PK  = 0,  TXA_MIC_AV  = 1,  TXA_EQ_PK   = 2,  TXA_EQ_AV   = 3,
+//   TXA_LVLR_PK = 4,  TXA_LVLR_AV = 5,  TXA_LVLR_GAIN = 6,
+//   TXA_CFC_PK  = 7,  TXA_CFC_AV  = 8,  TXA_CFC_GAIN = 9,
+//   TXA_COMP_PK = 10, TXA_COMP_AV = 11,
+//   TXA_ALC_PK  = 12, TXA_ALC_AV  = 13, TXA_ALC_GAIN = 14,
+//   TXA_OUT_PK  = 15, TXA_OUT_AV  = 16, TXA_METERTYPE_LAST = 17
+//
+// Active in 3M-1b (getTxMicMeter / getAlcMeter in TxChannel.cpp):
+//   TXA_MIC_PK, TXA_ALC_PK
+// Deferred to 3M-3a (stub getters returning 0.0f):
+//   TXA_EQ_PK, TXA_LVLR_PK, TXA_CFC_PK, TXA_COMP_PK
+// ---------------------------------------------------------------------------
+
+#ifndef HAVE_WDSP
+
+// From Thetis wdsp/TXA.h:51 [v2.10.3.13] — txaMeterType::TXA_MIC_PK
+static constexpr int TXA_MIC_PK   =  0;
+// From Thetis wdsp/TXA.h:52 [v2.10.3.13] — txaMeterType::TXA_MIC_AV
+static constexpr int TXA_MIC_AV   =  1;
+// From Thetis wdsp/TXA.h:53 [v2.10.3.13] — txaMeterType::TXA_EQ_PK  (deferred 3M-3a)
+static constexpr int TXA_EQ_PK    =  2;
+// From Thetis wdsp/TXA.h:54 [v2.10.3.13] — txaMeterType::TXA_EQ_AV
+static constexpr int TXA_EQ_AV    =  3;
+// From Thetis wdsp/TXA.h:55 [v2.10.3.13] — txaMeterType::TXA_LVLR_PK  (deferred 3M-3a)
+static constexpr int TXA_LVLR_PK  =  4;
+// From Thetis wdsp/TXA.h:56 [v2.10.3.13] — txaMeterType::TXA_LVLR_AV
+static constexpr int TXA_LVLR_AV  =  5;
+// From Thetis wdsp/TXA.h:57 [v2.10.3.13] — txaMeterType::TXA_LVLR_GAIN
+static constexpr int TXA_LVLR_GAIN =  6;
+// From Thetis wdsp/TXA.h:58 [v2.10.3.13] — txaMeterType::TXA_CFC_PK  (deferred 3M-3a)
+static constexpr int TXA_CFC_PK   =  7;
+// From Thetis wdsp/TXA.h:59 [v2.10.3.13] — txaMeterType::TXA_CFC_AV
+static constexpr int TXA_CFC_AV   =  8;
+// From Thetis wdsp/TXA.h:60 [v2.10.3.13] — txaMeterType::TXA_CFC_GAIN
+static constexpr int TXA_CFC_GAIN  =  9;
+// From Thetis wdsp/TXA.h:61 [v2.10.3.13] — txaMeterType::TXA_COMP_PK  (deferred 3M-3a)
+static constexpr int TXA_COMP_PK  = 10;
+// From Thetis wdsp/TXA.h:62 [v2.10.3.13] — txaMeterType::TXA_COMP_AV
+static constexpr int TXA_COMP_AV  = 11;
+// From Thetis wdsp/TXA.h:63 [v2.10.3.13] — txaMeterType::TXA_ALC_PK
+static constexpr int TXA_ALC_PK   = 12;
+// From Thetis wdsp/TXA.h:64 [v2.10.3.13] — txaMeterType::TXA_ALC_AV
+static constexpr int TXA_ALC_AV   = 13;
+// From Thetis wdsp/TXA.h:65 [v2.10.3.13] — txaMeterType::TXA_ALC_GAIN
+static constexpr int TXA_ALC_GAIN  = 14;
+// From Thetis wdsp/TXA.h:66 [v2.10.3.13] — txaMeterType::TXA_OUT_PK
+static constexpr int TXA_OUT_PK   = 15;
+// From Thetis wdsp/TXA.h:67 [v2.10.3.13] — txaMeterType::TXA_OUT_AV
+static constexpr int TXA_OUT_AV   = 16;
+
+#endif // !HAVE_WDSP

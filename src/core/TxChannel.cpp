@@ -109,6 +109,12 @@ warren@wpratt.com
 //                 NaN-aware idempotent guard; HAVE_WDSP + null-guard consistent
 //                 with D.3. SetTXAPanelGain1 called with 0.0 when mute=true.
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-27 — getTxMicMeter() / getAlcMeter() (2 wired: GetTXAMeter with
+//                 TXA_MIC_PK=0 / TXA_ALC_PK=12) + 4 deferred stubs returning
+//                 0.0f (getEqMeter / getLvlrMeter / getCfcMeter / getCompMeter)
+//                 implemented by J.J. Boyd (KG4VCF) during 3M-1b Task D.7.
+//                 Constants sourced from Thetis wdsp/TXA.h:49-69 [v2.10.3.13].
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
@@ -1262,5 +1268,82 @@ void TxChannel::recomputeTxAPanelGain1()
     SetTXAPanelGain1(m_channelId, m_micPreampLast);
 #endif
 }
+
+// ---------------------------------------------------------------------------
+// getTxMicMeter()
+//
+// TX mic input peak meter — reads WDSP TXA_MIC_PK (= 0) via GetTXAMeter.
+//
+// Porting from Thetis dsp.cs:390-391 [v2.10.3.13] — GetTXAMeter DLL import:
+//   [DllImport("wdsp.dll", EntryPoint = "GetTXAMeter", ...)]
+//   public static extern double GetTXAMeter(int channel, txaMeterType meter);
+// Porting from Thetis dsp.cs:1025-1026 [v2.10.3.13] — callsite:
+//   case txaMeterType.TXA_MIC_PK:
+//       val = GetTXAMeter(channel, txaMeterType.TXA_MIC_PK);
+// Porting from Thetis wdsp/TXA.h:51 [v2.10.3.13]:
+//   TXA_MIC_PK  = 0  (first value in txaMeterType enum)
+// Porting from Thetis wdsp/meter.c:151-159 [v2.10.3.13] — GetTXAMeter:
+//   double GetTXAMeter(int channel, int mt)
+//   { ... val = txa[channel].meter[mt]; ... return val; }
+// ---------------------------------------------------------------------------
+float TxChannel::getTxMicMeter() const
+{
+#ifdef HAVE_WDSP
+    // From Thetis wdsp/meter.c:153-157 [v2.10.3.13] — GetTXAMeter accesses
+    // txa[channel].pmtupdate[mt] (CRITICAL_SECTION*). Guard against uninitialised
+    // channel using the same rsmpin.p sentinel used throughout this class.
+    if (txa[m_channelId].rsmpin.p == nullptr) return kMeterUninitialisedSentinel;
+    return static_cast<float>(GetTXAMeter(m_channelId, TXA_MIC_PK));  // TXA_MIC_PK = 0 [TXA.h:51]
+#else
+    return kMeterUninitialisedSentinel;
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// getAlcMeter()
+//
+// TX ALC peak meter — reads WDSP TXA_ALC_PK (= 12) via GetTXAMeter.
+//
+// Porting from Thetis dsp.cs:390-391 [v2.10.3.13] — GetTXAMeter DLL import.
+// Porting from Thetis dsp.cs:1028-1029 [v2.10.3.13] — callsite:
+//   case txaMeterType.TXA_ALC_PK:
+//       val = GetTXAMeter(channel, txaMeterType.TXA_ALC_PK);
+// Porting from Thetis wdsp/TXA.h:63 [v2.10.3.13]:
+//   TXA_ALC_PK  = 12  (12th value in txaMeterType enum, 0-indexed)
+// Porting from Thetis wdsp/meter.c:151-159 [v2.10.3.13] — GetTXAMeter impl.
+// ---------------------------------------------------------------------------
+float TxChannel::getAlcMeter() const
+{
+#ifdef HAVE_WDSP
+    // Same rsmpin.p null-guard as getTxMicMeter().
+    if (txa[m_channelId].rsmpin.p == nullptr) return kMeterUninitialisedSentinel;
+    return static_cast<float>(GetTXAMeter(m_channelId, TXA_ALC_PK));  // TXA_ALC_PK = 12 [TXA.h:63]
+#else
+    return kMeterUninitialisedSentinel;
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Deferred TX meter stubs — return 0.0f unconditionally (3M-3a scope)
+//
+// Per master design §5.2.1: EQ / Leveler / CFC / Compressor meters are
+// deferred to Phase 3M-3a when the full speech-processing chain is wired.
+// These stubs return 0.0f so callers can safely poll them during 3M-1b
+// without crashing; UI code treats 0.0f as "meter not yet active".
+//
+// The active meters (getTxMicMeter / getAlcMeter) return
+// kMeterUninitialisedSentinel (-999.0f) when the channel is uninitialised —
+// a different sentinel to keep the two "inactive" states distinguishable.
+//
+// Future wiring in 3M-3a:
+//   getEqMeter()   → GetTXAMeter(ch, TXA_EQ_PK)    TXA.h:53 [v2.10.3.13]
+//   getLvlrMeter() → GetTXAMeter(ch, TXA_LVLR_PK)  TXA.h:55 [v2.10.3.13]
+//   getCfcMeter()  → GetTXAMeter(ch, TXA_CFC_PK)   TXA.h:58 [v2.10.3.13]
+//   getCompMeter() → GetTXAMeter(ch, TXA_COMP_PK)  TXA.h:61 [v2.10.3.13]
+// ---------------------------------------------------------------------------
+float TxChannel::getEqMeter()   const { return 0.0f; }  // deferred 3M-3a
+float TxChannel::getLvlrMeter() const { return 0.0f; }  // deferred 3M-3a
+float TxChannel::getCfcMeter()  const { return 0.0f; }  // deferred 3M-3a
+float TxChannel::getCompMeter() const { return 0.0f; }  // deferred 3M-3a
 
 } // namespace NereusSDR

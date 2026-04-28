@@ -108,6 +108,14 @@ warren@wpratt.com
 //                 fires 0.0 (MicMute toggled off / Thetis mute=true path),
 //                 SetTXAPanelGain1 is called with 0, silencing the mic in WDSP.
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-27 — getTxMicMeter() / getAlcMeter() (2 wired) + getEqMeter() /
+//                 getLvlrMeter() / getCfcMeter() / getCompMeter() (4 deferred)
+//                 + kMeterUninitialisedSentinel constant added by J.J. Boyd
+//                 (KG4VCF) during 3M-1b Task D.7 (TX meter readouts).
+//                 Active meters read GetTXAMeter(TXA_MIC_PK / TXA_ALC_PK) from
+//                 Thetis wdsp/TXA.h:51-64 [v2.10.3.13]; deferred meters return
+//                 0.0f unconditionally per master design §5.2.1 (3M-3a scope).
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -524,6 +532,77 @@ public:
     /// should track state externally; this method always issues the WDSP
     /// call when invoked (subject to HAVE_WDSP + null-guard).
     void recomputeTxAPanelGain1();
+
+    // ── TX meter readouts (3M-1b D.7) ───────────────────────────────────────
+
+    /// Sentinel value returned by active meters when the WDSP channel is not
+    /// initialised (txa[channelId].rsmpin.p == nullptr, or HAVE_WDSP not defined).
+    ///
+    /// UI code should treat this value as "channel not running" — distinct from
+    /// "no signal" (which is typically -120 dB or -inf, not exactly -999).
+    ///
+    /// Deferred meters (getEqMeter / getLvlrMeter / getCfcMeter / getCompMeter)
+    /// return 0.0f unconditionally; callers should treat 0.0f as "meter not yet
+    /// active" rather than the -999 "channel not initialised" sentinel.
+    static constexpr float kMeterUninitialisedSentinel = -999.0f;
+
+    /// TX mic input peak meter — reads WDSP TXA_MIC_PK channel state.
+    ///
+    /// Returns the peak mic-input level in dB (typical range -100..0).
+    /// Returns kMeterUninitialisedSentinel (-999.0f) if the WDSP channel is
+    /// not initialised or HAVE_WDSP is not defined.
+    ///
+    /// Active during MOX in 3M-1b. Phase J.1 binds this to the TxApplet
+    /// mic-meter widget.
+    ///
+    /// Porting from Thetis dsp.cs:390-391 [v2.10.3.13] — GetTXAMeter DLL import:
+    ///   public static extern double GetTXAMeter(int channel, txaMeterType meter);
+    /// Porting from Thetis wdsp/TXA.h:51 [v2.10.3.13]:
+    ///   TXA_MIC_PK  = 0  (first value in txaMeterType enum)
+    /// Porting from Thetis wdsp/meter.c:151-159 [v2.10.3.13] — GetTXAMeter impl.
+    float getTxMicMeter() const;
+
+    /// TX ALC peak meter — reads WDSP TXA_ALC_PK channel state.
+    ///
+    /// Returns the peak ALC level in dB (typical range -30..+10).
+    /// Returns kMeterUninitialisedSentinel (-999.0f) if the WDSP channel is
+    /// not initialised or HAVE_WDSP is not defined.
+    ///
+    /// Active during MOX in 3M-1b.
+    ///
+    /// Porting from Thetis dsp.cs:390-391 [v2.10.3.13] — GetTXAMeter DLL import.
+    /// Porting from Thetis wdsp/TXA.h:63 [v2.10.3.13]:
+    ///   TXA_ALC_PK  = 12  (12th value in txaMeterType enum, 0-indexed)
+    /// Porting from Thetis wdsp/meter.c:151-159 [v2.10.3.13] — GetTXAMeter impl.
+    float getAlcMeter() const;
+
+    /// TX EQ meter — DEFERRED to 3M-3a. Returns 0.0f unconditionally in 3M-1b.
+    ///
+    /// Callers should treat 0.0f as "meter not yet active" (distinct from the
+    /// active meters' kMeterUninitialisedSentinel = -999.0f "channel not running").
+    ///
+    /// Reads TXA_EQ_PK (= 2) when wired. From Thetis wdsp/TXA.h:53 [v2.10.3.13].
+    /// Full wiring in 3M-3a per master design §5.2.1.
+    float getEqMeter() const;
+
+    /// TX Leveler meter — DEFERRED to 3M-3a. Returns 0.0f unconditionally.
+    ///
+    /// Reads TXA_LVLR_PK (= 4) when wired. From Thetis wdsp/TXA.h:55 [v2.10.3.13].
+    /// Full wiring in 3M-3a per master design §5.2.1.
+    float getLvlrMeter() const;
+
+    /// TX CFC (continuous frequency compander) meter — DEFERRED to 3M-3a.
+    /// Returns 0.0f unconditionally.
+    ///
+    /// Reads TXA_CFC_PK (= 7) when wired. From Thetis wdsp/TXA.h:58 [v2.10.3.13].
+    /// Full wiring in 3M-3a per master design §5.2.1.
+    float getCfcMeter() const;
+
+    /// TX Compressor meter — DEFERRED to 3M-3a. Returns 0.0f unconditionally.
+    ///
+    /// Reads TXA_COMP_PK (= 10) when wired. From Thetis wdsp/TXA.h:61 [v2.10.3.13].
+    /// Full wiring in 3M-3a per master design §5.2.1.
+    float getCompMeter() const;
 
     // ── Per-stage Run override (3M-1a C.4) ──────────────────────────────────
     //
