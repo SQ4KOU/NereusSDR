@@ -32,6 +32,10 @@
 //                 TransmitModel::voxEnabled (default false; does NOT persist).
 //                 Right-click opens VoxSettingsPopup with 3 sliders for
 //                 threshold/gain/hang-time.
+//   2026-04-28 — Phase 3M-1b J.3: MON toggle button + monitor volume slider
+//                 added below VOX. Bidirectional with TransmitModel::monEnabled
+//                 and TransmitModel::monitorVolume (default 0.5f). Mic-source
+//                 badge added above the gauges (read-only, "PC mic"/"Radio mic").
 // =================================================================
 
 //=================================================================
@@ -112,6 +116,7 @@ class HGauge;
 // TxApplet — transmit controls panel.
 //
 // Layout (AetherSDR TxApplet.cpp pattern):
+//  0.  Mic-source badge     — read-only label "PC mic"/"Radio mic" [J.3 Phase 3M-1b]
 //  1.  Forward Power gauge  — HGauge 0–120 W, red > 100 W
 //  2.  SWR gauge            — HGauge 1.0–3.0, red > 2.5
 //  3.  RF Power slider row  — label(62) + slider + value(22)
@@ -120,6 +125,10 @@ class HGauge;
 //  4.  Tune Power slider row
 //  4b. VOX toggle button    — checkable, green border on active [J.2 Phase 3M-1b]
 //      Right-click: VoxSettingsPopup with threshold/gain/hang-time sliders.
+//  4c. MON toggle button    — checkable, blue border on active [J.3 Phase 3M-1b]
+//      Bidirectional with TransmitModel::monEnabled (default false).
+//  4d. Monitor volume slider — 0..100 → monitorVolume 0.0..1.0 [J.3 Phase 3M-1b]
+//      Default 50 (matches model default 0.5f from Thetis audio.cs:417).
 //  5.  MOX button           — checkable, red when active
 //  6.  TUNE button          — checkable, red + "TUNING..." when active
 //  7.  ATU button           — checkable
@@ -134,6 +143,7 @@ class HGauge;
 //
 // Phase 3M-1a H.3: TUNE/MOX/Tune-Power/RF-Power are deep-wired.
 // Phase 3M-1b J.2: VOX toggle + VoxSettingsPopup wired.
+// Phase 3M-1b J.3: MON toggle + volume slider + mic-source badge wired.
 // Out-of-phase controls (2-Tone, PS-A) are hidden.
 class TxApplet : public AppletWidget {
     Q_OBJECT
@@ -155,6 +165,8 @@ private:
     // J.2: VOX settings right-click popup.
     void showVoxSettingsPopup(const QPoint& pos);
 
+    // 0. Mic-source badge (J.3 Phase 3M-1b) — read-only label above the gauges.
+    QLabel*  m_micSourceBadge = nullptr;
     // 1. Forward Power gauge
     HGauge*  m_fwdPowerGauge  = nullptr;
     // 2. SWR gauge
@@ -175,6 +187,12 @@ private:
     QLabel*  m_tunePwrValue   = nullptr;
     // 4b. VOX toggle (J.2 Phase 3M-1b)
     QPushButton* m_voxBtn     = nullptr;
+    // 4c. MON toggle (J.3 Phase 3M-1b) — bidirectional with TransmitModel::monEnabled
+    QPushButton* m_monBtn     = nullptr;
+    // 4d. Monitor volume slider (J.3 Phase 3M-1b) — 0..100 → monitorVolume 0.0..1.0
+    //     Default 50 (matches model default 0.5f from Thetis audio.cs:417).
+    QSlider*     m_monitorVolumeSlider = nullptr;
+    QLabel*      m_monitorVolumeValue  = nullptr;
     // 5. MOX
     QPushButton* m_moxBtn     = nullptr;
     // 6. TUNE

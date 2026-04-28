@@ -27,6 +27,11 @@
 //   2026-04-28 — Phase 3M-1b J.2: VOX toggle button added below Tune Power.
 //                 Checkable, green border when active. Bidirectional with
 //                 TransmitModel::voxEnabled. Right-click opens VoxSettingsPopup.
+//   2026-04-28 — Phase 3M-1b J.3: MON toggle button + monitor volume slider
+//                 added below VOX. Bidirectional with TransmitModel::monEnabled
+//                 and monitorVolume (default 0.5f, Thetis audio.cs:417). Mic-source
+//                 badge added above the gauges ("PC mic"/"Radio mic"), driven by
+//                 TransmitModel::micSourceChanged. Phase J complete.
 // =================================================================
 
 //=================================================================
@@ -95,9 +100,11 @@
 // TxApplet — TX control panel.
 // Phase 3M-1a H.3: TUNE/MOX/Tune-Power/RF-Power deep-wired.
 // Phase 3M-1b J.2: VOX toggle + VoxSettingsPopup wired.
+// Phase 3M-1b J.3: MON toggle + monitor volume slider + mic-source badge wired.
 // Out-of-phase controls (2-Tone, PS-A) hidden.
 //
 // Control inventory:
+//  0.  Mic-source badge  — read-only "PC mic"/"Radio mic"  [WIRED — 3M-1b J.3]
 //  1.  Fwd Power gauge   — HGauge 0–120 W, redStart 100 W
 //  2.  SWR gauge         — HGauge 1.0–3.0, redStart 2.5
 //  3.  RF Power slider   + label + value  [WIRED — 3M-1a H.3]
@@ -106,6 +113,10 @@
 //  4.  Tune Power slider + label + value  [WIRED — 3M-1a H.3]
 //  4b. VOX toggle button — checkable, green:checked style  [WIRED — 3M-1b J.2]
 //      Right-click opens VoxSettingsPopup (threshold/gain/hang-time).
+//  4c. MON toggle button — checkable, blue:checked style  [WIRED — 3M-1b J.3]
+//      Bidirectional with TransmitModel::monEnabled (default false).
+//  4d. Monitor volume slider — 0..100 → monitorVolume 0.0..1.0  [WIRED — 3M-1b J.3]
+//      Default 50 (model default 0.5f, Thetis audio.cs:417).
 //  5.  MOX button        — checkable, red:checked style  [WIRED — 3M-1a H.3]
 //  6.  TUNE button       — checkable, red:checked + "TUNING..." text  [WIRED — 3M-1a H.3]
 //  7.  ATU button        — checkable (NYI — 3M-2/3M-3)
@@ -125,6 +136,7 @@
 #include "gui/ComboStyle.h"
 #include "gui/widgets/VoxSettingsPopup.h"
 #include "core/BoardCapabilities.h"
+#include "core/audio/CompositeTxMicRouter.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 #include "core/MoxController.h"
@@ -163,6 +175,31 @@ void TxApplet::buildUI()
     vbox->setContentsMargins(4, 2, 4, 2);
     vbox->setSpacing(2);
     outer->addWidget(body);
+
+    // ── 0. Mic-source badge ── read-only label above the gauges ─────────────
+    // Phase 3M-1b J.3: shows "PC mic" or "Radio mic" reflecting
+    // TransmitModel::micSource (default MicSource::Pc). Read-only; no interaction.
+    // Updates on micSourceChanged signal (wired in wireControls()).
+    {
+        m_micSourceBadge = new QLabel(QStringLiteral("PC mic"), this);
+        m_micSourceBadge->setAlignment(Qt::AlignCenter);
+        m_micSourceBadge->setFixedHeight(16);
+        m_micSourceBadge->setStyleSheet(QStringLiteral(
+            "QLabel {"
+            " color: %1;"
+            " font-size: 9px;"
+            " border: 1px solid %2;"
+            " border-radius: 2px;"
+            " padding: 0px 4px;"
+            " background: %3;"
+            "}"
+        ).arg(Style::kTitleText, Style::kInsetBorder, Style::kInsetBg));
+        m_micSourceBadge->setAccessibleName(QStringLiteral("Mic source indicator"));
+        m_micSourceBadge->setToolTip(QStringLiteral(
+            "Active microphone source: PC mic or Radio mic.\n"
+            "Change via Setup → Transmit → Mic Source."));
+        vbox->addWidget(m_micSourceBadge);
+    }
 
     // ── 1. Forward Power gauge ── 0–120 W, redStart 100 W ───────────────────
     // Ticks: 0 / 40 / 80 / 100 / 120  (AetherSDR TxApplet.cpp:71)
@@ -343,6 +380,70 @@ void TxApplet::buildUI()
         row->addStretch();
 
         vbox->addLayout(row);
+    }
+
+    // ── 4c. MON toggle button + 4d. Monitor volume slider ─────────────────────
+    // Phase 3M-1b J.3: below VOX toggle.
+    // MON: checkable, blue border when active (indicates monitor on).
+    //   monEnabled does NOT persist — plan §0 row 9 safety: loads OFF always.
+    //   Default volume 50 (matches model default 0.5f from Thetis audio.cs:417).
+    //
+    // Volume slider: 0..100 integer → monitorVolume float 0.0..1.0 (value/100.0f).
+    //   Inverse: monitorVolumeChanged(float) → slider position = qRound(v * 100.0f).
+    {
+        // MON button row
+        auto* monRow = new QHBoxLayout;
+        monRow->setSpacing(4);
+
+        m_monBtn = new QPushButton(QStringLiteral("MON"), this);
+        m_monBtn->setCheckable(true);
+        m_monBtn->setChecked(false);  // default: OFF — plan §0 row 9 safety rule
+        m_monBtn->setFixedHeight(22);
+        m_monBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        // Blue checked style: blue border + slightly tinted bg when active.
+        m_monBtn->setStyleSheet(Style::buttonBaseStyle()
+            + QStringLiteral("QPushButton:checked {"
+                             " background: #001a33;"
+                             " border: 1px solid #3399ff;"
+                             " color: #ffffff;"
+                             "}"));
+        m_monBtn->setAccessibleName(QStringLiteral("Monitor enable"));
+        m_monBtn->setToolTip(QStringLiteral(
+            "Monitor: mix received audio into headphones during TX.\n"
+            "Does NOT persist across restarts (safety)."));
+        monRow->addWidget(m_monBtn, 1);
+        monRow->addStretch();
+
+        vbox->addLayout(monRow);
+
+        // Monitor volume slider row
+        auto* volRow = new QHBoxLayout;
+        volRow->setSpacing(4);
+
+        auto* volLbl = new QLabel(QStringLiteral("Mon Vol:"), this);
+        volLbl->setFixedWidth(62);
+        volLbl->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTitleText));
+        volRow->addWidget(volLbl);
+
+        // Range 0..100 integer; default 50 (model default 0.5f).
+        m_monitorVolumeSlider = new QSlider(Qt::Horizontal, this);
+        m_monitorVolumeSlider->setRange(0, 100);
+        m_monitorVolumeSlider->setValue(50);
+        m_monitorVolumeSlider->setFixedHeight(18);
+        m_monitorVolumeSlider->setAccessibleName(QStringLiteral("Monitor volume"));
+        m_monitorVolumeSlider->setToolTip(QStringLiteral(
+            "Monitor receive audio volume during TX (0–100 %)"));
+        volRow->addWidget(m_monitorVolumeSlider, 1);
+
+        m_monitorVolumeValue = new QLabel(QStringLiteral("50"), this);
+        m_monitorVolumeValue->setFixedWidth(26);
+        m_monitorVolumeValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        m_monitorVolumeValue->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTextPrimary));
+        volRow->addWidget(m_monitorVolumeValue);
+
+        vbox->addLayout(volRow);
     }
 
     // ── Button row: TUNE + MOX + ATU + MEM (25% each) ─────────────────────
@@ -722,6 +823,54 @@ void TxApplet::wireControls()
         showVoxSettingsPopup(pos);
     });
 
+    // ── MON toggle button ↔ TransmitModel::monEnabled ────────────────────────
+    // Phase 3M-1b J.3.
+    // UI → Model: toggled → setMonEnabled (with m_updatingFromModel guard).
+    // Model → UI: monEnabledChanged → update checked state with QSignalBlocker.
+    connect(m_monBtn, &QPushButton::toggled, this, [this, &tx](bool on) {
+        if (m_updatingFromModel) { return; }
+        tx.setMonEnabled(on);
+    });
+
+    connect(&tx, &TransmitModel::monEnabledChanged, this, [this](bool on) {
+        QSignalBlocker b(m_monBtn);
+        m_updatingFromModel = true;
+        m_monBtn->setChecked(on);
+        m_updatingFromModel = false;
+    });
+
+    // ── Monitor volume slider ↔ TransmitModel::monitorVolume ─────────────────
+    // Phase 3M-1b J.3.
+    // UI → Model: slider valueChanged(int) → setMonitorVolume(value / 100.0f).
+    // Model → UI: monitorVolumeChanged(float) → slider = qRound(v * 100.0f).
+    connect(m_monitorVolumeSlider, &QSlider::valueChanged,
+            this, [this, &tx](int val) {
+        if (m_updatingFromModel) { return; }
+        m_monitorVolumeValue->setText(QString::number(val));
+        tx.setMonitorVolume(static_cast<float>(val) / 100.0f);
+    });
+
+    connect(&tx, &TransmitModel::monitorVolumeChanged,
+            this, [this](float volume) {
+        QSignalBlocker b(m_monitorVolumeSlider);
+        m_updatingFromModel = true;
+        const int uiVal = qRound(volume * 100.0f);
+        m_monitorVolumeSlider->setValue(uiVal);
+        m_monitorVolumeValue->setText(QString::number(uiVal));
+        m_updatingFromModel = false;
+    });
+
+    // ── Mic-source badge ← TransmitModel::micSourceChanged ───────────────────
+    // Phase 3M-1b J.3. Read-only: updates badge text on signal, no user interaction.
+    // "PC mic" for MicSource::Pc, "Radio mic" for MicSource::Radio.
+    connect(&tx, &TransmitModel::micSourceChanged,
+            this, [this](MicSource source) {
+        m_micSourceBadge->setText(
+            source == MicSource::Radio
+                ? QStringLiteral("Radio mic")
+                : QStringLiteral("PC mic"));
+    });
+
     // ── Initial sync from model ──────────────────────────────────────────────
     syncFromModel();
 }
@@ -769,6 +918,30 @@ void TxApplet::syncFromModel()
     if (m_voxBtn) {
         QSignalBlocker bv(m_voxBtn);
         m_voxBtn->setChecked(tx.voxEnabled());
+    }
+
+    // MON button state (J.3 Phase 3M-1b)
+    // monEnabled intentionally loads as OFF — plan §0 row 9 safety rule.
+    if (m_monBtn) {
+        QSignalBlocker bm(m_monBtn);
+        m_monBtn->setChecked(tx.monEnabled());
+    }
+
+    // Monitor volume slider (J.3 Phase 3M-1b)
+    // Sync slider position from model; default 0.5f → slider 50.
+    if (m_monitorVolumeSlider) {
+        QSignalBlocker bvol(m_monitorVolumeSlider);
+        const int uiVal = qRound(tx.monitorVolume() * 100.0f);
+        m_monitorVolumeSlider->setValue(uiVal);
+        m_monitorVolumeValue->setText(QString::number(uiVal));
+    }
+
+    // Mic-source badge (J.3 Phase 3M-1b)
+    if (m_micSourceBadge) {
+        m_micSourceBadge->setText(
+            tx.micSource() == MicSource::Radio
+                ? QStringLiteral("Radio mic")
+                : QStringLiteral("PC mic"));
     }
 
     // MOX / TUNE button state

@@ -908,6 +908,19 @@ nereus_add_test(tst_tx_applet_mic_gain)
 # NereusSDR-native UI (no Thetis cite stamps required for the applet layer).
 nereus_add_test(tst_tx_applet_vox_toggle)
 
+# ── Phase 3M-1b J.3: TxApplet MON toggle + monitor volume slider + mic-source badge ──
+# Verifies the model-layer contracts that TxApplet's MON button, monitor volume
+# slider, and mic-source badge depend on:
+#   monEnabled default false (plan §0 row 9 safety — MON always loads OFF),
+#   setMonEnabled / monEnabledChanged bidirectional round-trip,
+#   monitorVolume default 0.5f (Thetis audio.cs:417), float↔int mapping
+#   (float = int / 100.0f; int = qRound(float * 100.0f)), boundary 0.0/1.0,
+#   micSource default Pc, micSourceChanged fires with Radio/Pc values (badge
+#   text contracts "PC mic"/"Radio mic"), idempotency guards.
+# Closes Phase J (all 3 J tasks landed).
+# NereusSDR-native UI (no Thetis cite stamps required for the applet layer).
+nereus_add_test(tst_tx_applet_mon)
+
 # ── Phase 3M-1a H.4: PowerPaPage wiring — Max Power, per-band Tune Power, ATT-on-TX ──
 # Verifies Max Power slider ↔ TransmitModel::power(), per-band tune-power spinboxes
 # ↔ TransmitModel::tunePowerForBand(), chkATTOnTX and chkForceATTwhenPSAoff widget
