@@ -1387,3 +1387,16 @@ target_compile_definitions(tst_audio_engine_rx_leak_during_mox PRIVATE NEREUS_BU
 nereus_add_test(tst_pc_mic_source)
 target_compile_definitions(tst_pc_mic_source PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1b Task F.4: RadioConnection::micFrameDecoded signal ─────────────
+# Verifies the micFrameDecoded Qt signal added to the RadioConnection base class.
+# Uses TestRadioConnection minimal concrete subclass (stubs all pure-virtuals).
+# Cases (4):
+#   micFrameDecoded_signalExists        — QSignalSpy attaches successfully
+#   micFrameDecoded_emit_capturedBySpy  — emitMicFrame → spy.count() == 1
+#   micFrameDecoded_signalCarriesFrameCount — args.at(1) int frames matches n
+#   micFrameDecoded_multipleEmissions   — spy accumulates across 3 emits
+#
+# DirectConnection-only contract documented in RadioConnection.h.
+# Pre-code review §6.4.
+nereus_add_test(tst_radio_connection_mic_frame_signal)
+
