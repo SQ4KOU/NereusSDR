@@ -254,19 +254,26 @@ void AddCustomRadioDialog::buildUi()
     outerLayout->addWidget(m_feedbackFrame);
 
     // --- Action button row ---
-    // Phase 3Q Task 4: "Probe and connect now" (primary, default) +
-    // "Save offline" (secondary) + "Cancel" (secondary, right-aligned).
-    // Design §4.4: probe button is the dialog's default action.
-    m_probeButton = new QPushButton(QStringLiteral("Probe and save"), this);
+    // Two-step flow per user feedback: Probe verifies (stays open), Save commits.
+    // Probe is optional — user can Save without probing if they accept Protocol
+    // explicitly. Save uses probed RadioInfo when available, else synthesises
+    // from the form fields.
+    m_probeButton = new QPushButton(QStringLiteral("Probe"), this);
     m_probeButton->setObjectName(QStringLiteral("probeButton"));
-    m_probeButton->setStyleSheet(kPrimaryButtonStyle);
-    m_probeButton->setDefault(true);
+    m_probeButton->setStyleSheet(kSecondaryButtonStyle);
+    m_probeButton->setToolTip(QStringLiteral(
+        "Verify the radio responds at the given IP. Optional — leaves the "
+        "dialog open so you can review and edit before saving."));
     connect(m_probeButton, &QPushButton::clicked,
             this, &AddCustomRadioDialog::onProbeClicked);
 
-    m_saveOfflineButton = new QPushButton(QStringLiteral("Save offline"), this);
+    m_saveOfflineButton = new QPushButton(QStringLiteral("Save"), this);
     m_saveOfflineButton->setObjectName(QStringLiteral("saveOfflineButton"));
-    m_saveOfflineButton->setStyleSheet(kSecondaryButtonStyle);
+    m_saveOfflineButton->setStyleSheet(kPrimaryButtonStyle);
+    m_saveOfflineButton->setDefault(true);
+    m_saveOfflineButton->setToolTip(QStringLiteral(
+        "Save this radio to the saved-radio list. Uses verified data if a "
+        "probe succeeded, else uses the form fields."));
     connect(m_saveOfflineButton, &QPushButton::clicked,
             this, &AddCustomRadioDialog::onSaveOfflineClicked);
 
@@ -470,18 +477,12 @@ void AddCustomRadioDialog::onProbeClicked()
 
     showProbingOverlay();  // disables buttons, shows "Probing…" text
 
-    // Track probe start so we can enforce a minimum visible time below — fast
-    // LAN probes can return in <100 ms which makes the dialog appear to vanish
-    // without any feedback. We hold the success state for at least kMinFlashMs
-    // total so the user sees "Probing…" → "Verified ✓ Saving…" as a clear beat.
-    const qint64 probeStartedMs = QDateTime::currentMSecsSinceEpoch();
-
     // Heap-allocate with 'this' parent so it is auto-destroyed if the dialog
     // closes mid-probe (e.g. Cancel or window close).
     auto* disc = new RadioDiscovery(this);
 
     connect(disc, &RadioDiscovery::radioDiscovered, this,
-            [this, disc, probeStartedMs](const RadioInfo& info) {
+            [this, disc](const RadioInfo& info) {
                 m_probedInfo = info;
 
                 // User-picked model overrides the probe-detected silicon family default.
@@ -492,25 +493,51 @@ void AddCustomRadioDialog::onProbeClicked()
                     m_probedInfo.modelOverride = userModel;
                 }
 
-                disc->deleteLater();
+                // Reflect probe-discovered fields back into the form so the
+                // user can review them before saving. Don't overwrite
+                // user-edited Name / Port; do fill MAC and select the silicon
+                // family default if the user left Auto-detect.
+                if (m_macEdit->text().trimmed().isEmpty()) {
+                    m_macEdit->setText(m_probedInfo.macAddress);
+                }
+                if (userModel == HPSDRModel::FIRST
+                    && m_probedInfo.boardType != HPSDRHW::Unknown) {
+                    // Pick the SKU that matches the probe-reported boardType.
+                    // Falls back gracefully if no exact match is in the combo.
+                    for (int i = 0; i < m_modelCombo->count(); ++i) {
+                        const HPSDRModel m = static_cast<HPSDRModel>(
+                            m_modelCombo->itemData(i).toInt());
+                        if (m == HPSDRModel::FIRST) continue;
+                        if (boardForModel(m) == m_probedInfo.boardType) {
+                            m_modelCombo->setCurrentIndex(i);
+                            break;
+                        }
+                    }
+                }
+                // Reflect detected protocol on the combo so Save uses it.
+                for (int i = 0; i < m_protocolCombo->count(); ++i) {
+                    const int v = m_protocolCombo->itemData(i).toInt();
+                    if (v == static_cast<int>(m_probedInfo.protocol)) {
+                        m_protocolCombo->setCurrentIndex(i);
+                        break;
+                    }
+                }
 
-                // Probe verified the radio responds — save the entry to the
-                // saved-radio list. The user then connects via the panel's
-                // existing Connect button on the row (mirrors the standard
-                // saved-radio flow exactly). No auto-connect from this path.
+                disc->deleteLater();
+                hideProbingOverlay();
+
+                // Stay open; user reviews and clicks Save when ready.
                 const QString name = m_probedInfo.name.isEmpty()
                     ? m_probedInfo.address.toString()
                     : m_probedInfo.name;
-                showInlineInfo(QStringLiteral("Verified %1 — saving…").arg(name));
-
-                constexpr qint64 kMinFlashMs = 700;
-                const qint64 elapsedMs = QDateTime::currentMSecsSinceEpoch() - probeStartedMs;
-                const int remainingMs = static_cast<int>(std::max<qint64>(
-                    0, kMinFlashMs - elapsedMs));
-                QTimer::singleShot(remainingMs, this, [this]() {
-                    hideProbingOverlay();
-                    QDialog::accept();  // caller saves + adds row; user clicks Connect on row
-                });
+                showInlineInfo(QStringLiteral(
+                    "✓ Verified %1 (board %2, fw %3, MAC %4) — click Save to add it.")
+                    .arg(name)
+                    .arg(QString::fromUtf8(BoardCapsTable::forBoard(
+                        m_probedInfo.boardType).displayName))
+                    .arg(m_probedInfo.firmwareVersion)
+                    .arg(m_probedInfo.macAddress));
+                m_probeButton->setText(QStringLiteral("Probe again"));
             });
 
     connect(disc, &RadioDiscovery::probeFailed, this,
@@ -532,17 +559,28 @@ void AddCustomRadioDialog::onProbeClicked()
 
 void AddCustomRadioDialog::onSaveOfflineClicked()
 {
-    // Design §6.4: protocol must be set explicitly when there's no probe to
-    // learn from. If the user left it on "Auto-detect" (-1), inform them.
-    const int protoIdx = m_protocolCombo->currentIndex();
-    if (m_protocolCombo->itemData(protoIdx).toInt() < 0) {
-        showInlineInfo(
-            QStringLiteral(
-                "Saving without probing — please set Protocol explicitly.\n"
-                "Pick Protocol 1 (HL2 / classic ANAN) or Protocol 2 (Saturn / ANAN-G2)."));
-        m_protocolCombo->setStyleSheet(
-            kFieldStyle + QStringLiteral("QComboBox { border: 1px solid #5985b8; }"));
-        return;
+    // The button is now the unified "Save". Two paths feed it:
+    //
+    //   1. Probe-then-save: m_probedInfo is populated (probe succeeded).
+    //      Use it directly — protocol, board, MAC, firmware all from probe.
+    //
+    //   2. Save without probe: synthesise from form fields. Protocol must
+    //      be set explicitly (Auto-detect won't fly without a network
+    //      verification to learn it from).
+    const bool wasProbed = !m_probedInfo.macAddress.isEmpty();
+
+    if (!wasProbed) {
+        const int protoIdx = m_protocolCombo->currentIndex();
+        if (m_protocolCombo->itemData(protoIdx).toInt() < 0) {
+            showInlineInfo(
+                QStringLiteral(
+                    "Pick Protocol (P1 / P2) before saving — without a probe "
+                    "we have no way to learn it.\n"
+                    "Protocol 1 = HL2 / classic ANAN. Protocol 2 = Saturn / ANAN-G2."));
+            m_protocolCombo->setStyleSheet(
+                kFieldStyle + QStringLiteral("QComboBox { border: 1px solid #5985b8; }"));
+            return;
+        }
     }
 
     // Validate required fields before accepting
@@ -554,7 +592,7 @@ void AddCustomRadioDialog::onSaveOfflineClicked()
         return;
     }
 
-    m_savedOffline = true;
+    m_savedOffline = !wasProbed;
     QDialog::accept();
 }
 
