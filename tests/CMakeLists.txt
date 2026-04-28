@@ -1371,3 +1371,19 @@ target_compile_definitions(tst_audio_engine_tx_monitor_block PRIVATE NEREUS_BUIL
 nereus_add_test(tst_audio_engine_rx_leak_during_mox)
 target_compile_definitions(tst_audio_engine_rx_leak_during_mox PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1b Task F.1: PcMicSource ────────────────────────────────────────
+# Verifies that PcMicSource::pullSamples correctly dispatches to
+# AudioEngine::pullTxMic via the NEREUS_BUILD_TESTS seam:
+#   nullEngine_returnsZero        — null engine → 0, buffer untouched
+#   validEngine_noBusData_returnsZero — engine ok, bus empty → 0
+#   validEngine_withBusData_returnsSampleCount — 3 frames → 3
+#   validEngine_correctSamplesForwarded — dispatch is transparent (no scaling)
+#   zeroN_returnsZero             — n=0 propagated from AudioEngine guard
+#   nullDst_returnsZero           — nullptr dst propagated from AudioEngine guard
+#   viaBasePointer_dispatchWorks  — virtual dispatch through TxMicRouter*
+#
+# Uses FakeAudioBus injected via setTxInputBusForTest (NEREUS_BUILD_TESTS seam).
+# Pre-code review: §0.3 + §12.7 (PcMicSource arch lock).
+nereus_add_test(tst_pc_mic_source)
+target_compile_definitions(tst_pc_mic_source PRIVATE NEREUS_BUILD_TESTS)
+

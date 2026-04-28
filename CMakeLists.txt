@@ -385,6 +385,7 @@ set(CORE_SOURCES
     src/core/accessories/ApolloController.cpp
     src/core/accessories/PennyLaneController.cpp
     src/core/audio/MasterMixer.cpp
+    src/core/audio/PcMicSource.cpp
     src/core/audio/PortAudioBus.cpp
     src/core/audio/QAudioSinkAdapter.cpp
     src/core/audio/VirtualCableDetector.cpp
