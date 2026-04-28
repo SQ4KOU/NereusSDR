@@ -93,7 +93,6 @@ warren@wpratt.com
 #include <QObject>
 #include <QTimer>
 
-#include <cmath>    // std::isnan — NaN sentinel for double idempotent guards (D.3)
 #include <limits>   // std::numeric_limits — quiet_NaN() initialiser (D.3)
 #include <vector>
 

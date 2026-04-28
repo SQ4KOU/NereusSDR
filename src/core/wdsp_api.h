@@ -25,6 +25,11 @@
 //                 TxChannel::setRunning / setStageRunning WDSP wiring.
 //                 Signatures match wdsp/ source files [v2.10.3.13].
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-27 — SetDEXPRunVox, SetDEXPAttackThreshold, SetDEXPHoldTime,
+//                 SetAntiVOXRun, SetAntiVOXGain added by J.J. Boyd (KG4VCF)
+//                 during 3M-1b Task D.3 — TxChannel VOX/anti-VOX WDSP wrappers.
+//                 Signatures match wdsp/dexp.c [v2.10.3.13]. AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs

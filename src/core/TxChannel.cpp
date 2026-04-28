@@ -99,6 +99,7 @@ warren@wpratt.com
 #include "RadioConnection.h"
 #include "TxMicRouter.h"
 
+#include <cmath>        // std::isnan — NaN sentinel for double idempotent guards (D.3)
 #include <stdexcept>
 
 // WDSP API declarations (SetTXAPostGen*, fexchange2, etc.) — guarded by
