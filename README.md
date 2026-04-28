@@ -212,7 +212,7 @@ sudo apt install qt6-base-dev qt6-base-private-dev \
 # Arch / CachyOS / Manjaro
 sudo pacman -S qt6-base qt6-multimedia qt6-svg \
   cmake ninja pkgconf fftw \
-  alsa-lib jack2 libpipewire
+  alsa-lib jack2 pipewire
 
 # macOS (Homebrew)
 brew install qt@6 ninja cmake pkgconf fftw
