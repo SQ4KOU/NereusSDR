@@ -395,6 +395,29 @@ signals:
     // ADC overflow detected.
     void adcOverflow(int adc);
 
+    // Mic-jack PTT input from the radio hardware, decoded from the status
+    // frame on every frame receipt.  Emitted unconditionally each frame;
+    // MoxController::onMicPttFromRadio() is idempotent on repeated same-state
+    // calls (setPttMode(Mic) is a no-op when mode unchanged; setMox(x) only
+    // advances the state machine when x differs from m_mox).
+    //
+    // Subscriber: RadioModel wires this to MoxController::onMicPttFromRadio
+    // in setupMoxController() (H.5).  The MoxController drives MOX state when
+    // mic-jack PTT changes state.
+    //
+    // P1 source: C0 byte (ControlBytesIn[0]) bit 0 of each EP6 sub-frame.
+    //   Cite: Thetis networkproto1.c:329 [v2.10.3.13]:
+    //     prn->ptt_in = ControlBytesIn[0] & 0x1;
+    //   + console.cs:25426 [v2.10.3.13]:
+    //     bool mic_ptt = (dotdashptt & 0x01) != 0; // PTT from radio
+    //
+    // P2 source: High-Priority status packet byte 4 (ReadBufp[0]) bit 0.
+    //   Cite: Thetis network.c:686-689 [v2.10.3.13]:
+    //     //Byte 0 - Bit [0] - PTT  1 = active, 0 = inactive
+    //     prn->ptt_in = prn->ReadBufp[0] & 0x1;
+    //   (ReadBufp points to raw[4] in NereusSDR — after 4-byte seq prefix.)
+    void micPttFromRadio(bool pressed);
+
     // Radio firmware info received during handshake.
     void firmwareInfoReceived(int version, const QString& details);
 

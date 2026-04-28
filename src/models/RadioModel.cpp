@@ -778,20 +778,20 @@ RadioModel::RadioModel(QObject* parent)
         m_txChannel->setAntiVoxRun(!useVax);
     }, Qt::QueuedConnection);
 
-    // ── H.4: PTT-source dispatch slots (present on MoxController; upstream wiring deferred)
+    // ── H.5: P1/P2 status-frame mic_ptt → MoxController PTT-source dispatch ──
     //
-    // MoxController now exposes 7 PTT-source dispatch slots:
-    //   Accepted: onMicPttFromRadio, onCatPtt, onVoxActive, onSpacePtt, onX2Ptt
-    //   Rejected: onCwPtt (3M-2), onTciPtt (3J)
+    // RadioConnection::micPttFromRadio(bool) is emitted unconditionally on every
+    // status frame (P1 EP6, P2 High-Priority) with the instantaneous PTT state.
+    // MoxController::onMicPttFromRadio is idempotent on repeated same-state calls.
     //
-    // The upstream signal sources land in later phases; no connect() calls here.
-    //   onMicPttFromRadio: H.5 — P1/P2 status-frame mic_ptt bit extraction
-    //     (dotdashptt & 0x01 per console.cs:25421 [v2.10.3.13])
+    // The actual connect() is deferred to wireConnectionSignals() where
+    // m_connection is live.  This block documents the wiring intent so
+    // the phase-H comment block is self-contained.
+    //
     //   onCatPtt: 3K — full CAT integration (rigctld / serial / network)
     //   onVoxActive: 3M-3a or via TxChannel TX-meter polling (WDSP DEXP output)
     //   onSpacePtt: 3M-3a — UI keyboard handler (MainWindow keyPressEvent)
     //   onX2Ptt: 3M-3a or later — X2 status-frame parsing in RadioConnection
-    // H.4 adds the MoxController API only; downstream wiring follows per phase.
 
     // TxMicRouter: NullMicSource for 3M-1a (zero-padded silence stream).
     // The TUNE path (gen1 PostGen) overwrites the WDSP input buffer at TXA
@@ -1571,6 +1571,22 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
             });
         }
     });
+
+    // H.5: P1/P2 status-frame mic_ptt → MoxController PTT-source dispatch.
+    // Source: Thetis console.cs:25426 [v2.10.3.13] PollPTT:
+    //   bool mic_ptt = (dotdashptt & 0x01) != 0; // PTT from radio
+    // P1 bit-source: networkproto1.c:329 [v2.10.3.13] ControlBytesIn[0] & 0x1
+    // P2 bit-source: network.c:689 [v2.10.3.13] ReadBufp[0] & 0x1
+    //
+    // m_connection lives on the connection thread; m_moxController lives on the
+    // main thread.  Qt::AutoConnection would queue across threads automatically,
+    // but explicit QueuedConnection documents the intent and is always correct
+    // for cross-thread slot dispatch.
+    if (m_moxController) {
+        connect(m_connection, &RadioConnection::micPttFromRadio,
+                m_moxController, &MoxController::onMicPttFromRadio,
+                Qt::QueuedConnection);
+    }
 }
 
 // Wire active slice signals to WDSP channel and radio hardware.

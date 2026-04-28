@@ -1994,6 +1994,22 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
         emit adcOverflow(0);
     }
 
+    // H.5: mic_ptt extraction — P1 status frame C0 bit 0 (PTT from radio).
+    // From Thetis networkproto1.c:329 [v2.10.3.13]:
+    //   prn->ptt_in = ControlBytesIn[0] & 0x1;
+    // + console.cs:25426 [v2.10.3.13]:
+    //   bool mic_ptt = (dotdashptt & 0x01) != 0; // PTT from radio
+    //
+    // C0 is ControlBytesIn[0]; bit 0 is ptt_in.  Both sub-frames carry the
+    // same instantaneous PTT state; OR them to produce the frame-level value
+    // (matches Thetis nativeGetDotDashPTT() which reads a single prn->ptt_in
+    // accumulated across all sub-frame writes).
+    //
+    // Emitted unconditionally each frame: MoxController::onMicPttFromRadio
+    // is idempotent, so repeated false→false calls are harmless.
+    const bool micPtt = ((c0_sub0 & 0x01) != 0) || ((c0_sub1 & 0x01) != 0);
+    emit micPttFromRadio(micPtt);
+
     // Phase 3P-H Task 4: PA telemetry — extract raw 16-bit ADC counts from
     // each subframe's C&C status bytes.  Per-board scaling lives in RadioModel
     // (console.cs computeAlexFwdPower / computeRefPower / convertToVolts /

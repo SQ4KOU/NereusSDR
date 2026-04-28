@@ -1900,10 +1900,35 @@ void P2RadioConnection::processHighPriorityStatus(const QByteArray& data)
     // Extract key fields for meter data
     // These offsets are from the Thetis high-priority status parsing
     // (varies by firmware; basic fields for now)
+    //
+    // Byte layout (relative to raw[], which includes the 4-byte seq prefix):
+    //   raw[0..3] = sequence number
+    //   raw[4]    = ReadBufp[0] = PTT/dot/dash byte
+    //               Bit [0] = PTT,  Bit [1] = Dot,  Bit [2] = Dash
+    //   raw[5]    = ReadBufp[1] = ADC overload bitmap
+    //               Bit [0] = ADC0, Bit [1] = ADC1, Bit [2] = ADC2
+    // Source: Thetis network.c:686-708 [v2.10.3.13] (ReadUDPFrame strips seq,
+    //   memcpy(bufp, readbuf+4, 56) — so ReadBufp[N] = raw[N+4]).
+
+    // H.5: mic_ptt extraction — P2 High-Priority status ReadBufp[0] bit 0.
+    // From Thetis network.c:686-689 [v2.10.3.13]:
+    //   //Byte 0 - Bit [0] - PTT  1 = active, 0 = inactive
+    //   prn->ptt_in = prn->ReadBufp[0] & 0x1;
+    // + console.cs:25426 [v2.10.3.13]:
+    //   bool mic_ptt = (dotdashptt & 0x01) != 0; // PTT from radio
+    // + deskhpsdr new_protocol.c:2525 [@120188f]:
+    //   radio_ptt = (buffer[4]) & 0x01;
+    //
+    // Emitted unconditionally each frame: MoxController::onMicPttFromRadio
+    // is idempotent on repeated same-state calls.
+    const bool micPtt = (raw[4] & 0x01) != 0;
+    emit micPttFromRadio(micPtt);
 
     //[2.10.3.13]MW0LGE adc_overload bits accumulated across status frames; reset-on-read pattern preserved [Thetis network.c:708]
-    // From Thetis network.c:getAndResetADC_Overload — bit 0=ADC0, bit 1=ADC1, bit 2=ADC2.
-    const quint8 adcOverloadBits = raw[4];
+    // From Thetis network.c:695-708 [v2.10.3.13]: ReadBufp[1] is the ADC overload
+    // bitmap.  In NereusSDR raw[], ReadBufp[1] = raw[5] (after 4-byte seq prefix).
+    // Bit 0=ADC0, Bit 1=ADC1, Bit 2=ADC2 (Thetis network.c:708).
+    const quint8 adcOverloadBits = raw[5];
     for (int i = 0; i < 3; ++i) {
         if (adcOverloadBits & (1 << i)) {
             emit adcOverflow(i);

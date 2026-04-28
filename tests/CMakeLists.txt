@@ -1077,6 +1077,36 @@ nereus_add_test(tst_mox_controller_anti_vox)
 #   Pre-code review §0.3 + master design §5.2.1.
 nereus_add_test(tst_mox_controller_ptt_source_dispatch)
 
+# ── Phase 3M-1b Task H.5: mic_ptt extraction from P1/P2 status frames ─────────
+# Verifies end-to-end mic_ptt extraction and dispatch through MoxController.
+#
+# Prong A — RadioConnection-level extraction:
+#   §A.1  P1: C0 bit 0 set in sub-frame 0 → micPttFromRadio(true)
+#   §A.2  P1: C0 bit 0 set in sub-frame 1 only → micPttFromRadio(true) (OR logic)
+#   §A.3  P1: C0 bit 0 clear in both sub-frames → micPttFromRadio(false)
+#   §A.4  P1: ADC overload in C1 does NOT set micPtt (PTT is in C0, not C1)
+#   §B.1  P2: raw[4] bit 0 set → micPttFromRadio(true)
+#   §B.2  P2: raw[4] bit 0 clear → micPttFromRadio(false)
+#   §B.3  P2: dot/dash bits (bits 1/2) only → micPttFromRadio(false)
+#   §B.4  P2: ADC overload at raw[5] does NOT set micPtt (separate byte)
+#
+# Prong B — End-to-end (status frame → MoxController):
+#   §C.1  P1 press → MoxController engaged, PttMode::Mic
+#   §C.2  P1 release → MoxController released, PttMode retained
+#   §C.3  P1 repeated press → idempotent (no double-emit)
+#   §D.1  P2 press → MoxController engaged, PttMode::Mic
+#   §D.2  P2 release → MoxController released, PttMode retained
+#   §D.3  P2 repeated press → idempotent (no double-emit)
+#   §E.1  P1: consecutive false frames both emit (unconditional emission)
+#   §E.2  P2: consecutive false packets both emit (unconditional emission)
+#
+# Source: Thetis console.cs:25426 [v2.10.3.13] (PollPTT mic_ptt bit);
+#   networkproto1.c:329 [v2.10.3.13] (P1 ptt_in bit);
+#   network.c:686-689 [v2.10.3.13] (P2 ptt_in byte/bit);
+#   deskhpsdr/src/new_protocol.c:2525 [@120188f] (P2 cross-ref).
+nereus_add_test(tst_mox_controller_mic_ptt_extraction)
+target_compile_definitions(tst_mox_controller_mic_ptt_extraction PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1a Task C.1: WdspEngine TX channel API ──────────────────────────
 # Verifies:
 #   TX channel constants match Thetis cmaster.c:177-190 [v2.10.3.13]:
