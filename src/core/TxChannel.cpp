@@ -99,6 +99,11 @@ warren@wpratt.com
 //                 (meter.c:36-57 [v2.10.3.13]); AmMod/FmMod run controlled
 //                 only by SetTXAMode() (TXA.c:753-789 [v2.10.3.13]).
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-27 — emit sip1OutputReady(m_outI.data(), m_outputBufferSize)
+//                 added inside driveOneTxBlock() after sendTxIq() by
+//                 J.J. Boyd (KG4VCF) during 3M-1b Task D.5. DirectConnection-
+//                 only contract; full Sip1-stage tap deferred to 3M-3.
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
@@ -1167,6 +1172,18 @@ void TxChannel::driveOneTxBlock()
     // consumes the ring and emits to UDP.
     // sendTxIq(iq, n): n = number of complex samples; buffer has 2*n floats.
     m_connection->sendTxIq(m_outInterleaved.data(), outN);
+
+    // Siphon signal — MON path (3M-1b D.5).
+    //
+    // Emit post-SSB-modulator I-channel audio to any subscribed MON consumer
+    // (AudioEngine::txMonitorBlockReady wired in Phase L).
+    //
+    // CRITICAL: DirectConnection ONLY. m_outI.data() is valid only during
+    // this synchronous slot dispatch. QueuedConnection subscribers will
+    // see stale or reused buffer data on the next driveOneTxBlock() call.
+    //
+    // Plan: 3M-1b D.5. Pre-code review §4.3.
+    emit sip1OutputReady(m_outI.data(), m_outputBufferSize);
 }
 
 } // namespace NereusSDR

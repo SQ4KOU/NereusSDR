@@ -94,6 +94,14 @@ warren@wpratt.com
 //                 AmMod/FmMod run-controlled only via SetTXAMode()
 //                 (TXA.c:753-789 [v2.10.3.13]). AI-assisted transformation
 //                 via Anthropic Claude Code.
+//   2026-04-27 — sip1OutputReady(const float*, int) signal added by
+//                 J.J. Boyd (KG4VCF) during 3M-1b Task D.5. Emitted inside
+//                 driveOneTxBlock() after fexchange2 + sendTxIq; carries
+//                 m_outI.data() + m_outputBufferSize for the MON siphon
+//                 path (AudioEngine::txMonitorBlockReady in Phase L).
+//                 DirectConnection-only contract documented in signal
+//                 doc-comment. AI-assisted transformation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #pragma once
@@ -548,6 +556,36 @@ public:
     bool   lastAntiVoxRunForTest()            const noexcept { return m_antiVoxRunLast; }
     double lastAntiVoxGainForTest()           const noexcept { return m_antiVoxGainLast; }
 #endif // NEREUS_BUILD_TESTS
+
+signals:
+    // ── MON siphon signal (3M-1b D.5) ────────────────────────────────────────
+    //
+    /// Emitted on the audio thread inside driveOneTxBlock() after every
+    /// fexchange2 cycle (and after sendTxIq delivers the block to the radio).
+    /// Carries the post-SSB-modulator I-channel audio (m_outI) as a raw
+    /// pointer plus the frame count.
+    ///
+    /// **DirectConnection ONLY.** The pointer is only valid during the
+    /// synchronous slot dispatch. Subscribers MUST connect with
+    /// Qt::DirectConnection. QueuedConnection is unsafe: the buffer will
+    /// be reused on the next driveOneTxBlock() cycle before the queued
+    /// slot runs, leading to silent data corruption.
+    ///
+    /// Design note (3M-1b): the signal carries m_outI.data() directly —
+    /// the interleaved-I output of fexchange2, which IS the post-SSB-
+    /// modulator I-channel. This is the simplest correct tap for MON
+    /// playback. A dedicated Sip1-stage tap (wdsp/sip.c, TXA stage 25)
+    /// can be wired in 3M-3 if a different processing point is needed for
+    /// acoustic monitoring; for 3M-1b the m_outI path is sufficient.
+    ///
+    /// Sample rate: matches TXA dsp-rate —
+    ///   96 kHz on P2 (Saturn / Orion-II with 192 kHz ADC output rate);
+    ///   48 kHz on P1 (Hermes / HL2 / Angelia).
+    /// Subscribers (AudioEngine::txMonitorBlockReady in Phase L) are
+    /// responsible for downmix / resample to speaker output rate.
+    ///
+    /// Plan: 3M-1b D.5 (this commit). Pre-code review §4.3.
+    void sip1OutputReady(const float* samples, int frames);
 
 private:
     // ── TX I/Q production loop internals (3M-1a G.1) ─────────────────────────

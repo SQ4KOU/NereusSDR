@@ -1253,3 +1253,23 @@ target_compile_definitions(tst_tx_channel_vox_anti_vox PRIVATE NEREUS_BUILD_TEST
 # Panel: verified as already dispatched (SetTXAPanelRun, patchpanel.c:201-206).
 nereus_add_test(tst_tx_channel_stage_running_expansion)
 
+# ── Phase 3M-1b Task D.5: TxChannel::sip1OutputReady signal ──────────────────
+# Verifies the MON-path siphon signal emitted after each fexchange2 cycle.
+#
+# Signal contract (Plan §4.3, pre-code review §4.3):
+#   void sip1OutputReady(const float* samples, int frames)
+#   - Emitted AFTER fexchange2 + sendTxIq in driveOneTxBlock().
+#   - DirectConnection-only: pointer valid only during synchronous dispatch.
+#   - samples: m_outI.data() — post-SSB-modulator I-channel output.
+#   - frames:  m_outputBufferSize (256 for P1/HL2; 1024 for P2 Saturn).
+#
+# Test cases (6):
+#   - sip1OutputReady fires exactly once per tickForTest() call.
+#   - frames argument matches m_outputBufferSize (kBufSize = 256).
+#   - signal fires on every tick across 5 cycles (count == tick).
+#   - signal does NOT fire when m_running is false (early-exit guard).
+#   - signal does NOT fire when m_connection is null (early-exit guard).
+#   - frames matches non-default outputBufferSize (1024 = P2 Saturn).
+nereus_add_test(tst_tx_channel_sip1_signal)
+target_compile_definitions(tst_tx_channel_sip1_signal PRIVATE NEREUS_BUILD_TESTS)
+
