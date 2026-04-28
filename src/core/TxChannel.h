@@ -405,6 +405,25 @@ public:
     // From Thetis wdsp/ source files [v2.10.3.13] — individual Set*Run APIs.
     void setStageRunning(Stage s, bool run);
 
+#ifdef NEREUS_BUILD_TESTS
+public:
+    // ── Test seam (Phase 3M-1b D.1) ─────────────────────────────────────────
+    //
+    // Synchronously drive one fexchange2 cycle. Bypasses the 5 ms QTimer so
+    // tests can deterministically inspect input buffers after pullSamples has
+    // run without waiting for timer ticks.
+    //
+    // Only available when NEREUS_BUILD_TESTS is defined.  Production builds do
+    // not include this method; the timer-based path is the only entry point.
+    void tickForTest() { driveOneTxBlock(); }
+
+    // Read-only access to fexchange2 input buffers after a tickForTest() cycle.
+    // Used by D.1 tests to verify: (a) m_inI matches the injected mic source's
+    // output, and (b) m_inQ is zero-filled (real mic input has no Q component).
+    const std::vector<float>& inIForTest() const { return m_inI; }
+    const std::vector<float>& inQForTest() const { return m_inQ; }
+#endif // NEREUS_BUILD_TESTS
+
 private:
     // ── TX I/Q production loop internals (3M-1a G.1) ─────────────────────────
 

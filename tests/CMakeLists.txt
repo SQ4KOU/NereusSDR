@@ -1179,3 +1179,25 @@ target_compile_definitions(tst_step_att_tx_path PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_radio_model_set_tune)
 target_compile_definitions(tst_radio_model_set_tune PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1b Task D.1: TxChannel real mic-router drives fexchange2 with Q=0
+# Verifies two invariants when a real (non-null) TxMicRouter is attached:
+#   1. CALL CHAIN: pullSamples() is called by driveOneTxBlock() via tickForTest()
+#      seam; m_inI holds exactly the values the mock emitted (ramp 1, 2, …, n).
+#   2. Q=0 INVARIANT: m_inQ is all-zero after every driveOneTxBlock() cycle.
+#      Real mic input is mono (real-valued); driveOneTxBlock() zero-fills m_inQ
+#      via std::fill before fexchange2 so no stale data contaminates the Q input.
+# Test cases (9):
+#   - pullSamples is called after one tick (callCount > 0)
+#   - inI spot-check: [0]=1.0, [1]=2.0, [mid]=mid+1, [n-1]=n
+#   - inI exhaustive ramp check (all 256 elements)
+#   - inQ all-zero after one tick
+#   - inQ stays zero across 5 consecutive ticks (stale-data regression check)
+#   - inI still matches ramp on each of 3 consecutive ticks
+#   - inI size == kBufSize (256)
+#   - inQ size == kBufSize (256)
+#   - !m_running path: pullSamples not called, no crash
+# Pre-code review: §0.3 (PcMicSource arch). Test seam added to TxChannel.h
+# under NEREUS_BUILD_TESTS guard.
+nereus_add_test(tst_tx_channel_real_mic_router)
+target_compile_definitions(tst_tx_channel_real_mic_router PRIVATE NEREUS_BUILD_TESTS)
+
