@@ -1145,16 +1145,15 @@ void TxChannel::driveOneTxBlock()
     bool haveSamples = false;
     if (m_micRouter) {
         const int got = m_micRouter->pullSamples(m_inI.data(), inN);
-        if (got > 0 && got < inN) {
-            // Partial read — zero-fill the gap so we don't reprocess stale
-            // samples on the right edge.
+        // Zero-fill the unfilled tail (covers got==0 → full silence + the
+        // partial-read case → just the right edge). This replaces the
+        // previous early-return on got==0, which Codex flagged on PR #149:
+        // returning suppressed fexchange2 entirely, killing TXA gen1
+        // PostGen output (TUNE tone) during any mic underrun. Driving
+        // fexchange2 with silence still lets gen1 PostGen and other
+        // downstream-generated TX audio reach the radio.
+        if (got < inN) {
             std::fill(m_inI.begin() + got, m_inI.end(), 0.0f);
-        }
-        if (got == 0) {
-            // No new samples this tick — nothing changed since last fexchange2.
-            // Skip the modulator call to avoid double-processing m_inI's
-            // existing contents.
-            return;
         }
         std::fill(m_inQ.begin(), m_inQ.end(), 0.0f);
         haveSamples = true;

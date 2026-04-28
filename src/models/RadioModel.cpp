@@ -675,21 +675,13 @@ RadioModel::RadioModel(QObject* parent)
             m_moxController,  &MoxController::setVoxEnabled);
 
     // Active-slice mode gate: wire slice(0) dspModeChanged → MoxController.
+    // The actual `connect` happens in addSlice() (when the slice exists);
+    // wiring it here at construction time silently no-ops because m_slices
+    // is empty at this point — the first slice gets added later via
+    // addSlice() in connectToRadio(). Codex caught this on PR #149.
     // In 3M-1b there is exactly one slice; wiring via slice(0) is correct.
     // 3F multi-pan will need to re-evaluate when the active TX slice can change.
     // TODO [3F]: rewire to activeSlice() when multi-panadapter TX switching lands.
-    if (!m_slices.isEmpty()) {
-        connect(m_slices.first(), &SliceModel::dspModeChanged,
-                m_moxController,  &MoxController::onModeChanged);
-    } else {
-        // H.1/H.2 carry-forward nit: if no slice exists at construction the
-        // VOX mode-gate (H.1) and threshold-recompute (H.2) remain unwired.
-        // In 3M-1b this branch is unreachable; flagged here so that a future
-        // 3F multi-pan slice-creation-order change doesn't silently break VOX.
-        qCWarning(lcDsp) << "H.1/H.2: no slice available at construction; "
-                            "VOX mode-gate + threshold-recompute are unwired. "
-                            "Revisit in 3F multi-pan reset.";
-    }
 
     connect(m_moxController, &MoxController::voxRunRequested,
             this, [this](bool run) {
@@ -881,6 +873,15 @@ int RadioModel::addSlice()
     int index = m_slices.size();
     slice->setSliceIndex(index);
     m_slices.append(slice);
+
+    // 3M-1b H.1: wire VOX mode-gate from THIS slice's dspModeChanged →
+    // MoxController. The construction-time wire-up at line ~677 silently
+    // no-ops because m_slices is empty at that point; the first slice is
+    // added here. Codex P1 fix on PR #149.
+    if (m_moxController) {
+        connect(slice, &SliceModel::dspModeChanged,
+                m_moxController, &MoxController::onModeChanged);
+    }
 
     if (!m_activeSlice) {
         m_activeSlice = slice;
@@ -1414,14 +1415,17 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                     m_audioEngine, &AudioEngine::txMonitorBlockReady,
                     Qt::DirectConnection);
 
-            // L.1 connection 2: RadioConnection mic frame → RadioMicSource ring.
-            // QueuedConnection: micFrameDecoded fires on the connection thread;
-            // RadioMicSource::onMicFrame (promoted to public slots in L.1) is
-            // the lock-free ring push. Queued dispatch documents the cross-thread
-            // boundary: connection thread → RadioMicSource's thread (main thread).
-            connect(m_connection, &RadioConnection::micFrameDecoded,
-                    m_radioMicSource.get(), &RadioMicSource::onMicFrame,
-                    Qt::QueuedConnection);
+            // L.1 connection 2 — REMOVED (Codex review on PR #149).
+            // RadioMicSource::RadioMicSource subscribes to micFrameDecoded
+            // itself with Qt::DirectConnection in its constructor; adding a
+            // second QueuedConnection from RadioModel caused onMicFrame to
+            // fire TWICE per frame from two producer threads (connection
+            // thread + main thread), violating the SPSC ring's
+            // single-producer assumption (m_writeIdx uses relaxed atomics).
+            // The duplicated push corrupted the ring under load and was a
+            // likely contributor to the audible noise floor JJ saw on the
+            // bench. RadioMicSource owns the subscription; do not add a
+            // second one here.
 
             // L.1 connection 3: TransmitModel mic preamp → TxChannel.
             // Auto (main thread → main thread); TxChannel::setMicPreamp is
