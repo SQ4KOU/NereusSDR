@@ -27,6 +27,11 @@
 //                 and Tune Power. Bidirectional with TransmitModel::micGainDb.
 //                 Range from BoardCapabilities::micGainMinDb/Max.
 //                 Slider greyed when TransmitModel::micMute == false.
+//   2026-04-28 — Phase 3M-1b J.2: VOX toggle button added below Tune Power.
+//                 Checkable, green border when active. Bidirectional with
+//                 TransmitModel::voxEnabled (default false; does NOT persist).
+//                 Right-click opens VoxSettingsPopup with 3 sliders for
+//                 threshold/gain/hang-time.
 // =================================================================
 
 //=================================================================
@@ -113,6 +118,8 @@ class HGauge;
 //  3b. Mic Gain slider row  — label(62) + slider + value(35) [J.1 Phase 3M-1b]
 //      Range from BoardCapabilities::micGainMinDb/Max; greyed when micMute==false.
 //  4.  Tune Power slider row
+//  4b. VOX toggle button    — checkable, green border on active [J.2 Phase 3M-1b]
+//      Right-click: VoxSettingsPopup with threshold/gain/hang-time sliders.
 //  5.  MOX button           — checkable, red when active
 //  6.  TUNE button          — checkable, red + "TUNING..." when active
 //  7.  ATU button           — checkable
@@ -126,6 +133,7 @@ class HGauge;
 // 15.  SWR protection LED   — QLabel indicator
 //
 // Phase 3M-1a H.3: TUNE/MOX/Tune-Power/RF-Power are deep-wired.
+// Phase 3M-1b J.2: VOX toggle + VoxSettingsPopup wired.
 // Out-of-phase controls (2-Tone, PS-A) are hidden.
 class TxApplet : public AppletWidget {
     Q_OBJECT
@@ -144,6 +152,8 @@ public:
 private:
     void buildUI();
     void wireControls();  // called after buildUI() — attaches signals/slots
+    // J.2: VOX settings right-click popup.
+    void showVoxSettingsPopup(const QPoint& pos);
 
     // 1. Forward Power gauge
     HGauge*  m_fwdPowerGauge  = nullptr;
@@ -163,6 +173,8 @@ private:
     // 4. Tune Power
     QSlider* m_tunePwrSlider  = nullptr;
     QLabel*  m_tunePwrValue   = nullptr;
+    // 4b. VOX toggle (J.2 Phase 3M-1b)
+    QPushButton* m_voxBtn     = nullptr;
     // 5. MOX
     QPushButton* m_moxBtn     = nullptr;
     // 6. TUNE

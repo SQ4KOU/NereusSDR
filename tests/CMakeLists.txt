@@ -895,6 +895,19 @@ nereus_add_test(tst_tx_applet_tune_wiring)
 # NereusSDR-native UI (no Thetis cite stamps required for the applet layer).
 nereus_add_test(tst_tx_applet_mic_gain)
 
+# ── Phase 3M-1b J.2: TxApplet VOX toggle button + VoxSettingsPopup ───────────
+# Verifies the model-layer contracts + VoxSettingsPopup that the VOX button
+# depends on:
+#   default voxEnabled=false (plan §0 row 8 safety — VOX always loads OFF),
+#   UI→Model toggle ON/OFF (setVoxEnabled / voxEnabled getter),
+#   Model→UI: voxEnabledChanged fires with correct bool,
+#   visual state on toggle (signal fires on change),
+#   no feedback loop / idempotency (same-value set → no extra emit),
+#   VoxSettingsPopup constructed with exactly 3 sliders,
+#   popup slider round-trip: thresholdDbChanged → model update.
+# NereusSDR-native UI (no Thetis cite stamps required for the applet layer).
+nereus_add_test(tst_tx_applet_vox_toggle)
+
 # ── Phase 3M-1a H.4: PowerPaPage wiring — Max Power, per-band Tune Power, ATT-on-TX ──
 # Verifies Max Power slider ↔ TransmitModel::power(), per-band tune-power spinboxes
 # ↔ TransmitModel::tunePowerForBand(), chkATTOnTX and chkForceATTwhenPSAoff widget

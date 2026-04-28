@@ -24,6 +24,9 @@
 //                 and Tune Power. Range from BoardCapabilities::micGainMinDb/Max.
 //                 Bidirectional with TransmitModel::micGainDb. Slider greyed
 //                 when TransmitModel::micMute == false (mic muted).
+//   2026-04-28 — Phase 3M-1b J.2: VOX toggle button added below Tune Power.
+//                 Checkable, green border when active. Bidirectional with
+//                 TransmitModel::voxEnabled. Right-click opens VoxSettingsPopup.
 // =================================================================
 
 //=================================================================
@@ -91,6 +94,7 @@
 
 // TxApplet — TX control panel.
 // Phase 3M-1a H.3: TUNE/MOX/Tune-Power/RF-Power deep-wired.
+// Phase 3M-1b J.2: VOX toggle + VoxSettingsPopup wired.
 // Out-of-phase controls (2-Tone, PS-A) hidden.
 //
 // Control inventory:
@@ -100,6 +104,8 @@
 //  3b. Mic Gain slider   + label + value  [WIRED — 3M-1b J.1]
 //      Range from BoardCapabilities::micGainMinDb/Max; greyed when micMute==false.
 //  4.  Tune Power slider + label + value  [WIRED — 3M-1a H.3]
+//  4b. VOX toggle button — checkable, green:checked style  [WIRED — 3M-1b J.2]
+//      Right-click opens VoxSettingsPopup (threshold/gain/hang-time).
 //  5.  MOX button        — checkable, red:checked style  [WIRED — 3M-1a H.3]
 //  6.  TUNE button       — checkable, red:checked + "TUNING..." text  [WIRED — 3M-1a H.3]
 //  7.  ATU button        — checkable (NYI — 3M-2/3M-3)
@@ -117,6 +123,7 @@
 #include "gui/HGauge.h"
 #include "gui/StyleConstants.h"
 #include "gui/ComboStyle.h"
+#include "gui/widgets/VoxSettingsPopup.h"
 #include "core/BoardCapabilities.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -302,6 +309,38 @@ void TxApplet::buildUI()
         tunSlider->setToolTip(QStringLiteral("Tune carrier power for current band (0–100 W)"));
         row->addWidget(tunSlider, 1);
         row->addWidget(tunValue);
+
+        vbox->addLayout(row);
+    }
+
+    // ── 4b. VOX toggle button ─────────────────────────────────────────────────
+    // Phase 3M-1b J.2: below Tune Power slider.
+    // Checkable: green border when active (greenCheckedStyle()).
+    // voxEnabled does NOT persist — safety: VOX always loads OFF (plan §0 row 8).
+    // Right-click → showVoxSettingsPopup(pos) for threshold/gain/hang-time.
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        m_voxBtn = new QPushButton(QStringLiteral("VOX"), this);
+        m_voxBtn->setCheckable(true);
+        m_voxBtn->setChecked(false);  // default: OFF — plan §0 row 8 safety rule
+        m_voxBtn->setFixedHeight(22);
+        m_voxBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_voxBtn->setStyleSheet(Style::buttonBaseStyle() + Style::greenCheckedStyle());
+        m_voxBtn->setAccessibleName(QStringLiteral("VOX enable"));
+        m_voxBtn->setToolTip(QStringLiteral(
+            "Voice-operated TX (VOX). Left-click to toggle.\n"
+            "Right-click for threshold/gain/hang-time settings.\n"
+            "Does NOT persist across restarts (safety)."));
+        // Custom context menu policy so right-click emits customContextMenuRequested.
+        m_voxBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+        row->addWidget(m_voxBtn, 1);
+
+        // Right-hand spacer so the button occupies ≈half the applet width
+        // (matching Thetis UI density where VOX is a single small button, not
+        // the full row). A stretch absorbs the remaining space.
+        row->addStretch();
 
         vbox->addLayout(row);
     }
@@ -661,6 +700,28 @@ void TxApplet::wireControls()
         });
     }
 
+    // ── VOX toggle button ↔ TransmitModel::voxEnabled ────────────────────────
+    // Phase 3M-1b J.2.
+    // UI → Model: toggled → setVoxEnabled (with m_updatingFromModel guard).
+    // Model → UI: voxEnabledChanged → update checked state with QSignalBlocker.
+    // Right-click → showVoxSettingsPopup.
+    connect(m_voxBtn, &QPushButton::toggled, this, [this, &tx](bool on) {
+        if (m_updatingFromModel) { return; }
+        tx.setVoxEnabled(on);
+    });
+
+    connect(&tx, &TransmitModel::voxEnabledChanged, this, [this](bool on) {
+        QSignalBlocker b(m_voxBtn);
+        m_updatingFromModel = true;
+        m_voxBtn->setChecked(on);
+        m_updatingFromModel = false;
+    });
+
+    connect(m_voxBtn, &QPushButton::customContextMenuRequested,
+            this, [this](const QPoint& pos) {
+        showVoxSettingsPopup(pos);
+    });
+
     // ── Initial sync from model ──────────────────────────────────────────────
     syncFromModel();
 }
@@ -701,6 +762,15 @@ void TxApplet::syncFromModel()
         m_tunePwrValue->setText(QString::number(tunePwr));
     }
 
+    // VOX button state (J.2 Phase 3M-1b)
+    // voxEnabled intentionally loads as OFF — plan §0 row 8 safety rule.
+    // We still read the model so that if setVoxEnabled was called programmatically
+    // before the applet was shown, the UI reflects the actual model state.
+    if (m_voxBtn) {
+        QSignalBlocker bv(m_voxBtn);
+        m_voxBtn->setChecked(tx.voxEnabled());
+    }
+
     // MOX / TUNE button state
     if (mox) {
         QSignalBlocker bm(m_moxBtn);
@@ -713,6 +783,40 @@ void TxApplet::syncFromModel()
     }
 
     m_updatingFromModel = false;
+}
+
+// ── Phase 3M-1b J.2: showVoxSettingsPopup ────────────────────────────────────
+//
+// Opens a VoxSettingsPopup anchored near the VOX button. The popup is
+// auto-delete (Qt::Popup + WA_DeleteOnClose) so no ownership management is
+// needed here. Each slider in the popup drives the corresponding TransmitModel
+// setter via a direct signal connection.
+void TxApplet::showVoxSettingsPopup(const QPoint& pos)
+{
+    if (!m_model) { return; }
+
+    TransmitModel& tx = m_model->transmitModel();
+
+    // Construct the popup with the current model values so sliders start in sync.
+    auto* popup = new VoxSettingsPopup(
+        tx.voxThresholdDb(),
+        tx.voxGainScalar(),
+        tx.voxHangTimeMs(),
+        nullptr);  // Qt::Popup window manages its own lifetime
+
+    // Wire popup signals → model setters.
+    connect(popup, &VoxSettingsPopup::thresholdDbChanged,
+            &tx,   &TransmitModel::setVoxThresholdDb);
+    connect(popup, &VoxSettingsPopup::gainScalarChanged,
+            &tx,   &TransmitModel::setVoxGainScalar);
+    connect(popup, &VoxSettingsPopup::hangTimeMsChanged,
+            &tx,   &TransmitModel::setVoxHangTimeMs);
+
+    // Map the button-local position to global so showAt() can position correctly.
+    const QPoint globalPos = m_voxBtn
+        ? m_voxBtn->mapToGlobal(pos)
+        : mapToGlobal(pos);
+    popup->showAt(globalPos);
 }
 
 void TxApplet::setCurrentBand(Band band)
