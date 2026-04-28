@@ -709,6 +709,31 @@ nereus_add_test(tst_band_plan_guard)
 # an otherwise-allowed mode. ~20 test cases.
 nereus_add_test(tst_band_plan_guard_mode_allow_list)
 
+# ── Phase 3M-1b Task K.2: MoxController rejection signal + tooltip override ──
+# Tests the full K.2 plumbing:
+#   MoxController::setMoxCheck(fn) + moxRejected(QString) signal.
+#
+# MoxController cases (8):
+#   1. CWL → moxRejected("CW TX coming in Phase 3M-2"); state stays Rx.
+#   2. CWU → moxRejected with CW reason.
+#   3. AM  → moxRejected("AM/FM TX coming in Phase 3M-3 (audio modes)"); state stays Rx.
+#   4. FM  → moxRejected with audio-modes reason.
+#   5. LSB (allowed) → MOX engages; moxRejected NOT emitted.
+#   6. USB (allowed) → same.
+#   7. No MoxCheckFn installed → setMox(true) succeeds (backwards-compat).
+#   8. setMox(false) never rejected (release path bypasses BandPlanGuard).
+#   Extra: SPEC → "Mode not supported for TX"; rejection is repeatable;
+#          txAboutToBegin NOT emitted on rejection.
+#
+# TxApplet::tooltipForMode static helper (12):
+#   USB/LSB/DIGL/DIGU → normal "Manual transmit (MOX)" tooltip.
+#   CWL/CWU → "CW TX coming in Phase 3M-2".
+#   AM/FM/SAM/DSB/DRM → "AM/FM TX coming in Phase 3M-3 (audio modes)".
+#   SPEC → "Mode not supported for TX".
+#
+# Total: ~20 test cases. Uses QTEST_GUILESS_MAIN; no RadioModel required.
+nereus_add_test(tst_band_plan_guard_mox_rejection)
+
 # ── Phase 3M-0 Task 3: SwrProtectionController PollPAPWR state machine ─────
 # 8 tests cover the two-stage foldback (per-sample + 4-trip windback latch),
 # open-antenna heuristic (swr=50 / factor=0.01), low-power floor clamp,

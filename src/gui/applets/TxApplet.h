@@ -36,6 +36,12 @@
 //                 added below VOX. Bidirectional with TransmitModel::monEnabled
 //                 and TransmitModel::monitorVolume (default 0.5f). Mic-source
 //                 badge added above the gauges (read-only, "PC mic"/"Radio mic").
+//   2026-04-28 — Phase 3M-1b K.2: MOX button tooltip override on DSP mode change.
+//                 tooltipForMode(DSPMode) returns a static tooltip string that
+//                 reflects the deferred-phase reason for CW and AM/FM/SAM/DSB/DRM,
+//                 or the normal "Manual transmit (MOX)" for allowed modes.
+//                 onMoxModeChanged(DSPMode) slot wired to SliceModel::dspModeChanged
+//                 via RadioModel in wireControls(). Closes Phase K.
 // =================================================================
 
 //=================================================================
@@ -103,6 +109,7 @@
 
 #include "AppletWidget.h"
 #include "models/Band.h"
+#include "core/WdspTypes.h"
 
 class QPushButton;
 class QSlider;
@@ -159,11 +166,20 @@ public:
     // Phase 3M-1a H.3.
     void setCurrentBand(Band band);
 
+    // K.2: MOX button tooltip override based on current DSP mode.
+    // Public static so tests can call it directly without constructing a full
+    // TxApplet instance. Returns the rejection reason for deferred modes
+    // (CW → 3M-2, AM/FM/SAM/DSB/DRM → 3M-3) or the normal tooltip otherwise.
+    static QString tooltipForMode(DSPMode mode);
+
 private:
     void buildUI();
     void wireControls();  // called after buildUI() — attaches signals/slots
     // J.2: VOX settings right-click popup.
     void showVoxSettingsPopup(const QPoint& pos);
+    // K.2: slot called when SliceModel::dspModeChanged fires (via RadioModel).
+    // Updates m_moxBtn->setToolTip(tooltipForMode(mode)).
+    void onMoxModeChanged(DSPMode mode);
 
     // 0. Mic-source badge (J.3 Phase 3M-1b) — read-only label above the gauges.
     QLabel*  m_micSourceBadge = nullptr;

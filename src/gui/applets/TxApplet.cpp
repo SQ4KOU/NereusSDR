@@ -32,6 +32,11 @@
 //                 and monitorVolume (default 0.5f, Thetis audio.cs:417). Mic-source
 //                 badge added above the gauges ("PC mic"/"Radio mic"), driven by
 //                 TransmitModel::micSourceChanged. Phase J complete.
+//   2026-04-28 — Phase 3M-1b K.2: tooltipForMode(DSPMode) helper + onMoxModeChanged
+//                 slot implemented. Wired to SliceModel::dspModeChanged via
+//                 RadioModel active-slice accessor so the MOX button tooltip
+//                 reflects the rejection reason for CW/AM/FM/etc. modes.
+//                 Closes Phase K.
 // =================================================================
 
 //=================================================================
@@ -138,6 +143,7 @@
 #include "core/BoardCapabilities.h"
 #include "core/audio/CompositeTxMicRouter.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "core/MoxController.h"
 #include "core/RadioStatus.h"
@@ -801,6 +807,22 @@ void TxApplet::wireControls()
         });
     }
 
+    // ── K.2: MOX button tooltip override ← SliceModel::dspModeChanged ─────────
+    // Phase 3M-1b K.2: update MOX button tooltip when DSP mode changes.
+    // For modes that are deferred to a later phase (CW → 3M-2, AM/FM → 3M-3)
+    // the tooltip explains why MOX won't engage, matching the moxRejected reason.
+    // Wired here (wireControls) rather than syncFromModel because the active
+    // slice can change after construction.
+    if (m_model) {
+        if (SliceModel* slice = m_model->activeSlice()) {
+            // Wire the active slice's dspModeChanged to onMoxModeChanged.
+            connect(slice, &SliceModel::dspModeChanged,
+                    this, &TxApplet::onMoxModeChanged);
+            // Set initial tooltip from current mode.
+            onMoxModeChanged(slice->dspMode());
+        }
+    }
+
     // ── VOX toggle button ↔ TransmitModel::voxEnabled ────────────────────────
     // Phase 3M-1b J.2.
     // UI → Model: toggled → setVoxEnabled (with m_updatingFromModel guard).
@@ -1006,6 +1028,64 @@ void TxApplet::setCurrentBand(Band band)
     m_tunePwrSlider->setValue(tunePwr);
     m_tunePwrValue->setText(QString::number(tunePwr));
     m_updatingFromModel = false;
+}
+
+// ── Phase 3M-1b K.2: tooltipForMode ──────────────────────────────────────────
+//
+// Returns a MOX button tooltip string matching the active DSP mode.
+// For modes deferred to a later phase, the tooltip explains why MOX won't
+// engage, matching the reason string emitted by moxRejected (K.2) and the
+// rejection reason from BandPlanGuard::checkMoxAllowed (K.1).
+//
+// Mode categories:
+//   Allowed (LSB/USB/DIGL/DIGU): normal "Manual transmit (MOX)" tooltip.
+//   CW (CWL/CWU):                CW TX deferred to Phase 3M-2.
+//   Audio (AM/SAM/DSB/FM/DRM):   AM/FM TX deferred to Phase 3M-3 (audio modes).
+//   SPEC:                        Never a TX mode.
+//
+// This helper is static so TxApplet tests can call it directly without
+// constructing a full TxApplet instance.
+// ---------------------------------------------------------------------------
+// static
+QString TxApplet::tooltipForMode(DSPMode mode)
+{
+    switch (mode) {
+    case DSPMode::LSB:
+    case DSPMode::USB:
+    case DSPMode::DIGL:
+    case DSPMode::DIGU:
+        return QStringLiteral("Manual transmit (MOX)");
+
+    case DSPMode::CWL:
+    case DSPMode::CWU:
+        return QStringLiteral("CW TX coming in Phase 3M-2");
+
+    case DSPMode::AM:
+    case DSPMode::SAM:
+    case DSPMode::DSB:
+    case DSPMode::FM:
+    case DSPMode::DRM:
+        return QStringLiteral("AM/FM TX coming in Phase 3M-3 (audio modes)");
+
+    case DSPMode::SPEC:
+    default:
+        return QStringLiteral("Mode not supported for TX");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// onMoxModeChanged — update MOX button tooltip when DSP mode changes.
+//
+// Wired to SliceModel::dspModeChanged (via RadioModel active-slice accessor)
+// in wireControls(). Calls tooltipForMode(mode) to get the appropriate
+// tooltip text and installs it on m_moxBtn. If the mode is an allowed SSB
+// mode the tooltip reverts to the normal "Manual transmit (MOX)".
+// ---------------------------------------------------------------------------
+void TxApplet::onMoxModeChanged(DSPMode mode)
+{
+    if (m_moxBtn) {
+        m_moxBtn->setToolTip(tooltipForMode(mode));
+    }
 }
 
 } // namespace NereusSDR

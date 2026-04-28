@@ -90,6 +90,12 @@
 //                 voltage scaling), and CMSetAntiVoxSourceWhat useVAC=false
 //                 path (cmaster.cs:937-942 [v2.10.3.13]). The useVax=true
 //                 path is rejected (deferred to 3M-3a) per plan §3 H.3.
+//   2026-04-28 — Phase 3M-1b Task K.2 — moxRejected(QString) signal added.
+//                 setMoxCheck(MoxCheckFn) installs a std::function<> callback
+//                 that setMox(true) consults before the existing Codex P2
+//                 safety effects. On rejection, emits moxRejected(reason)
+//                 and returns without state advance (early-out BEFORE Codex P2
+//                 so safety effects only fire on accepted requests).
 //   2026-04-28 — Phase 3M-1b Task H.4 — 7 PTT-source dispatch slots added:
 //                 Accepted (5): onMicPttFromRadio, onCatPtt, onVoxActive,
 //                   onSpacePtt, onX2Ptt.  Each sets the corresponding
@@ -115,9 +121,11 @@
 
 #include <QObject>
 #include <QTimer>
+#include <functional>
 #include <limits>
 #include "core/PttMode.h"
 #include "core/WdspTypes.h"
+#include "core/safety/BandPlanGuard.h"
 
 namespace NereusSDR {
 
@@ -208,6 +216,32 @@ public:
     // hardwareFlipped(bool isTx) slot. External code must not set this
     // directly — call setTune() instead.
     bool     isManualMox() const noexcept { return m_manualMox; }
+
+    // ── K.2: MOX pre-check callback ──────────────────────────────────────────
+    //
+    // setMoxCheck: install a BandPlanGuard check callback for setMox(true).
+    //
+    // When set, setMox(true) calls m_moxCheck() BEFORE the Codex P2 safety
+    // effects. If the result.ok == false, emits moxRejected(result.reason)
+    // and returns immediately without running safety effects or advancing state.
+    // setMox(false) NEVER consults the callback — the release path is always
+    // unconditional.
+    //
+    // The callback is a std::function<> that closes over RadioModel state
+    // (current region, freq, mode, bands, flags). RadioModel installs it once
+    // at construction via the lambda pattern:
+    //   m_moxController->setMoxCheck([this]() -> safety::BandPlanGuard::MoxCheckResult {
+    //       return m_bandPlan.checkMoxAllowed(...);
+    //   });
+    //
+    // If no callback is installed (nullptr), setMox(true) proceeds as before
+    // (backwards-compatible default — no rejection possible).
+    //
+    // Thread safety: setMoxCheck must be called from the main thread before
+    // any setMox() call, consistent with MoxController's main-thread-only
+    // contract.
+    using MoxCheckFn = std::function<safety::BandPlanGuard::MoxCheckResult()>;
+    void setMoxCheck(MoxCheckFn check);
 
     // ── Setter ───────────────────────────────────────────────────────────────
     // setPttMode: idempotent; emits pttModeChanged on actual transition.
@@ -561,6 +595,22 @@ public slots:
     void setMox(bool on);
 
 signals:
+    // ── K.2: rejection signal ────────────────────────────────────────────────
+    //
+    // moxRejected: emitted when setMox(true) is called but the MoxCheckFn
+    // callback rejects the request (ok == false).
+    //
+    // Carries the human-readable reason string from BandPlanGuard::MoxCheckResult
+    // suitable for display in a status-bar toast or tooltip override.
+    //
+    // Subscribers:
+    //   - MainWindow: statusBar()->showMessage(reason, 3000)   [K.2]
+    //   - TxApplet: tooltip override on m_moxBtn               [K.2]
+    //
+    // NOT emitted when no MoxCheckFn is installed (bypass — backwards-compat).
+    // NOT emitted for setMox(false) — release is never rejected.
+    void moxRejected(QString reason);
+
     // ── Phase signals (Codex P1) ──────────────────────────────────────────────
     //
     // Subscribers attach HERE, not to individual low-level setters.
@@ -780,6 +830,12 @@ private:
     // stopAllTimers: cancel any in-flight timers (safety guard for
     // rapid setMox(false)/setMox(true) toggles or test teardown).
     void stopAllTimers();
+
+    // ── K.2: MOX pre-check callback ──────────────────────────────────────────
+    // Installed by RadioModel after construction. Empty (nullptr) by default.
+    // setMox(true) consults this BEFORE Codex P2 safety effects. If the check
+    // returns !ok, moxRejected is emitted and setMox returns early.
+    MoxCheckFn m_moxCheck;
 
     // ── Fields ───────────────────────────────────────────────────────────────
 

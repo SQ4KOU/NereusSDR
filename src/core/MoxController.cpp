@@ -68,6 +68,9 @@
 //                        if (MicBoost) thresh *= VOXGain
 //                 recomputeVoxThreshold() emits voxThresholdRequested
 //                 idempotently (NAN sentinel primes WDSP on first call).
+//   2026-04-28 — Phase 3M-1b Task K.2 — setMoxCheck(MoxCheckFn) implemented.
+//                 setMox(true) now checks m_moxCheck() BEFORE Codex P2 safety
+//                 effects; on rejection emits moxRejected(reason) and returns.
 //   2026-04-28 — Phase 3M-1b Task H.3 — recomputeVoxHangTime(),
 //                 recomputeAntiVoxGain(), setVoxHangTime(int ms),
 //                 setAntiVoxGain(int dB), setAntiVoxSourceVax(bool) implemented.
@@ -155,6 +158,22 @@ void MoxController::setTimerIntervals(int rfMs, int moxMs, int spaceMs,
     m_keyUpDelayTimer.setInterval(keyUpMs);
     m_pttOutDelayTimer.setInterval(pttOutMs);
     m_breakInDelayTimer.setInterval(breakInMs);
+}
+
+// ---------------------------------------------------------------------------
+// setMoxCheck — install (or remove) the BandPlanGuard pre-check callback.
+//
+// The callback is stored and called from setMox(true) BEFORE the Codex P2
+// safety effects hook. If the callback returns ok==false, moxRejected(reason)
+// is emitted and setMox returns immediately without advancing state.
+//
+// Passing nullptr clears the check (backwards-compatible bypass, no rejection).
+// Must be called from the main thread before the first setMox() call, matching
+// MoxController's main-thread-only contract.
+// ---------------------------------------------------------------------------
+void MoxController::setMoxCheck(MoxCheckFn check)
+{
+    m_moxCheck = std::move(check);
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +381,28 @@ void MoxController::setTune(bool on)
 // ---------------------------------------------------------------------------
 void MoxController::setMox(bool on)
 {
+    // ── K.2: BandPlanGuard pre-check (BEFORE Codex P2 safety effects) ────────
+    //
+    // When a MoxCheckFn is installed and the caller is requesting TX-on,
+    // consult the callback before doing ANYTHING else. If rejected, emit
+    // moxRejected(reason) and return immediately — no safety effects, no
+    // state advance, no idempotent guard consumption.
+    //
+    // Rationale: safety effects (runMoxSafetyEffects) are designed to fire on
+    // every setMox() including idempotent repeats (Codex P2). Emitting a
+    // rejection is not a "safety effect" — it is a guard that aborts the
+    // entire call. Placing the guard here (before Step 1) means:
+    //   - Safety effects ONLY fire when MOX is actually going to proceed.
+    //   - Rejected calls are cheap (no routing changes, no state mutation).
+    //   - The Codex P2 invariant is preserved for accepted calls.
+    if (on && m_moxCheck) {
+        const auto result = m_moxCheck();
+        if (!result.ok) {
+            emit moxRejected(result.reason);
+            return;
+        }
+    }
+
     // ── Step 1: Safety effects (BEFORE idempotent guard — Codex P2) ─────────
     // F.1 wires: AlexController::applyAntennaForBand(currentBand, isTx)
     //            StepAttenuatorController TX-path activation / RX restore
