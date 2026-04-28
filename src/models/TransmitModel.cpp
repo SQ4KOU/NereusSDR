@@ -23,6 +23,9 @@
 //   2026-04-27 — Anti-VOX properties: antiVoxGainDb / antiVoxSourceVax
 //                 (C.4, Phase 3M-1b) ported by J.J. Boyd (KG4VCF), with
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-27 — MON properties: monEnabled / monitorVolume
+//                 (C.5, Phase 3M-1b) ported by J.J. Boyd (KG4VCF), with
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -430,6 +433,45 @@ void TransmitModel::setAntiVoxSourceVax(bool useVax)
     // CMSetAntiVoxSourceWhat port (path-agnostic version) deferred to Phase H.3.
     m_antiVoxSourceVax = useVax;
     emit antiVoxSourceVaxChanged(useVax);
+}
+
+// ── MON properties (3M-1b C.5) ───────────────────────────────────────────────
+//
+// Porting from Thetis audio.cs:406 [v2.10.3.13]:
+//   private bool mon = false;
+// Porting from Thetis audio.cs:417 [v2.10.3.13]:
+//   cmaster.SetAAudioMixVol((void*)0, 0, WDSP.id(1, 0), 0.5);
+//   The 0.5 literal is a fixed mix coefficient that NereusSDR repurposes as
+//   the user-volume default for monitorVolume.
+//
+// AudioEngine integration (setTxMonitorEnabled / setTxMonitorVolume) deferred
+// to Phase E.2-E.3.  AppSettings persistence for monitorVolume deferred to
+// Phase L.2.  monEnabled intentionally NOT persisted — safety (plan §0 row 9).
+
+void TransmitModel::setMonEnabled(bool on)
+{
+    if (on == m_monEnabled) { return; }  // idempotent guard
+    // Porting from Thetis audio.cs:406 [v2.10.3.13]:
+    //   private bool mon = false;  (default off)
+    // AudioEngine integration arrives in Phase E.2.
+    m_monEnabled = on;
+    emit monEnabledChanged(on);
+}
+
+void TransmitModel::setMonitorVolume(float volume)
+{
+    // Clamp to normalized scalar range [0.0f, 1.0f].
+    const float clamped = std::clamp(volume, kMonitorVolumeMin, kMonitorVolumeMax);
+    // Use qFuzzyIsNull(diff) for the zero-boundary-safe idempotent guard.
+    // qFuzzyCompare(0.0f, x) is unreliable when one operand is exactly zero
+    // (Qt docs: both values must be non-zero).  Using diff + qFuzzyIsNull
+    // avoids that pitfall (C.3 fix-up pattern).
+    if (qFuzzyIsNull(clamped - m_monitorVolume)) { return; }
+    // Porting from Thetis audio.cs:417 [v2.10.3.13]:
+    //   cmaster.SetAAudioMixVol((void*)0, 0, WDSP.id(1, 0), 0.5);
+    // SetAAudioMixVol WDSP call deferred to Phase E.3.
+    m_monitorVolume = clamped;
+    emit monitorVolumeChanged(clamped);
 }
 
 // ── VOX properties (3M-1b C.3) ───────────────────────────────────────────────

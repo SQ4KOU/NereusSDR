@@ -261,6 +261,16 @@ nereus_add_test(tst_transmit_model_vox_properties)
 #         setup.cs:18986-18989 [v2.10.3.13] (SetAntiVOXGain dB→linear formula).
 nereus_add_test(tst_transmit_model_anti_vox)
 
+# ── Phase 3M-1b C.5: TransmitModel MON properties (2x) ──────────────────────
+# Verifies defaults (monEnabled=false matches Thetis audio.cs:406 [v2.10.3.13] /
+# monitorVolume=0.5f matches Thetis audio.cs:417 [v2.10.3.13] literal mix
+# coefficient), round-trip setters, signal emission, idempotent guard (incl.
+# min-boundary zero-case per C.3 fix-up), and range clamping [0.0f, 1.0f].
+# Source: audio.cs:406 [v2.10.3.13] (mon default off);
+#         audio.cs:417 [v2.10.3.13] (SetAAudioMixVol 0.5 literal);
+#         phase3m-1b-thetis-pre-code-review.md §4.2 + §12.5.
+nereus_add_test(tst_transmit_model_mon)
+
 # ── Phase 3O VAX schema migration ─────────────────────────────────────────
 nereus_add_test(tst_app_settings_vax_migration)
 

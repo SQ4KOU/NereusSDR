@@ -16,6 +16,9 @@
 //   2026-04-27 — VOX properties: voxEnabled / voxThresholdDb / voxGainScalar /
 //                 voxHangTimeMs (C.3, Phase 3M-1b) ported by J.J. Boyd (KG4VCF),
 //                 with AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-27 — MON properties: monEnabled / monitorVolume (C.5, Phase 3M-1b)
+//                 ported by J.J. Boyd (KG4VCF), with AI-assisted transformation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -358,6 +361,53 @@ public:
     static constexpr int kAntiVoxGainDbMin = -60;
     static constexpr int kAntiVoxGainDbMax =  60;
 
+    // ── MON properties (3M-1b C.5) ────────────────────────────────────────
+    //
+    // Porting from Thetis audio.cs:406 [v2.10.3.13]:
+    //   private bool mon = false;
+    //
+    // Porting from Thetis audio.cs:417 [v2.10.3.13]:
+    //   cmaster.SetAAudioMixVol((void*)0, 0, WDSP.id(1, 0), 0.5);
+    //   The 0.5 literal is a fixed mix coefficient in Thetis; NereusSDR
+    //   repurposes it as the user-volume default for the monitorVolume property.
+    //
+    // monEnabled does NOT persist — plan §0 row 9: safety, loads OFF at
+    // startup to prevent unexpected headphone audio.
+    // monitorVolume DOES persist — AppSettings persistence arrives in Phase L.2.
+    // AudioEngine integration (setTxMonitorEnabled / setTxMonitorVolume)
+    // arrives in Phase E.2-E.3.  MOX-fold (RX-leak gate) in Phase E.4.
+    //
+    // monitorVolume range [kMonitorVolumeMin, kMonitorVolumeMax] = [0.0f, 1.0f]
+    // (normalized volume scalar; no Thetis spinbox needed — master design and
+    //  pre-code review §4.2 + §12.5 consistently use 0..1 normalized).
+
+    /// MON (TX monitor) enable.  When true, TXA siphon (Stage::Sip1) audio
+    /// is mixed into MasterMixer at monitorVolume during MOX so the user
+    /// hears themselves.
+    ///
+    /// Default false.  Per plan §0 row 9, does NOT persist — loads OFF at
+    /// startup (safety: prevents unexpected headphone audio).
+    ///
+    /// AudioEngine integration arrives in Phase E.2-E.3.
+    /// MOX-fold (RX-leak gate) integrates with this in Phase E.4.
+    ///
+    /// Source: Thetis audio.cs:406 [v2.10.3.13] (mon default off).
+    bool monEnabled() const noexcept { return m_monEnabled; }
+
+    /// MON volume scalar (0.0..1.0).  Default 0.5f matches Thetis literal
+    /// mix coefficient at audio.cs:417 [v2.10.3.13]:
+    ///   cmaster.SetAAudioMixVol((void*)0, 0, WDSP.id(1, 0), 0.5);
+    ///
+    /// AppSettings persistence arrives in Phase L.2 (this property persists,
+    /// unlike monEnabled).
+    float monitorVolume() const noexcept { return m_monitorVolume; }
+
+    // MON volume range constants.
+    // Normalized volume scalar [0.0f, 1.0f].
+    // 0.5f default matches Thetis audio.cs:417 [v2.10.3.13] literal coefficient.
+    static constexpr float kMonitorVolumeMin = 0.0f;
+    static constexpr float kMonitorVolumeMax = 1.0f;
+
     // ── VOX properties (3M-1b C.3) ────────────────────────────────────────
     //
     // Porting from Thetis audio.cs:167-202 [v2.10.3.13]:
@@ -462,6 +512,10 @@ public slots:
     void setAntiVoxGainDb(int dB);
     void setAntiVoxSourceVax(bool useVax);
 
+    // ── MON setters (3M-1b C.5) ──────────────────────────────────────────────
+    void setMonEnabled(bool on);
+    void setMonitorVolume(float volume);
+
     // ── VOX setters (3M-1b C.3) ────────────────────────────────────────────
     void setVoxEnabled(bool on);
     void setVoxThresholdDb(int dB);
@@ -498,6 +552,10 @@ signals:
     // ── Anti-VOX signals (3M-1b C.4) ─────────────────────────────────────────
     void antiVoxGainDbChanged(int dB);
     void antiVoxSourceVaxChanged(bool useVax);
+
+    // ── MON signals (3M-1b C.5) ──────────────────────────────────────────────
+    void monEnabledChanged(bool on);
+    void monitorVolumeChanged(float volume);
 
     // ── VOX signals (3M-1b C.3) ────────────────────────────────────────────
     void voxEnabledChanged(bool on);
@@ -548,6 +606,14 @@ private:
     // setup.designer.cs:44699-44728 [v2.10.3.13] (udAntiVoxGain range -60..60).
     int  m_antiVoxGainDb    = 0;      // NereusSDR-original default; range [-60,60]
     bool m_antiVoxSourceVax = false;  // audio.cs:446: antivox_source_VAC = false
+
+    // ── MON properties (3M-1b C.5) ────────────────────────────────────────
+    // From Thetis audio.cs:406 [v2.10.3.13]: private bool mon = false;
+    // From Thetis audio.cs:417 [v2.10.3.13]: SetAAudioMixVol(0.5) literal.
+    // m_monEnabled intentionally NOT persisted — safety: MON loads OFF always
+    // (plan §0 row 9).  m_monitorVolume persists (Phase L.2).
+    bool  m_monEnabled     = false;  // audio.cs:406: mon = false
+    float m_monitorVolume  = 0.5f;   // matches Thetis audio.cs:417 literal coefficient
 
     // ── VOX properties (3M-1b C.3) ──────────────────────────────────────
     // From Thetis audio.cs:167-202 [v2.10.3.13].
