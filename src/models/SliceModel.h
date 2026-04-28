@@ -324,6 +324,25 @@ public:
     bool isActive() const { return m_active; }
     void setActive(bool active);
 
+    /// True when this slice is the currently-active (foreground) receiver.
+    ///
+    /// Used by AudioEngine::rxBlockReady (E.4) to gate the per-slice RX-audio
+    /// push during MOX: the active TX slice is silenced; non-active slices
+    /// keep playing — matching Thetis IVAC mox state-machine in
+    /// audio.cs:349-384 [v2.10.3.13].
+    ///
+    /// This is a thin alias for isActive() to make the audio-gate callsite
+    /// self-documenting. The underlying flag is m_active, written by
+    /// RadioModel::setActiveSlice() on the main thread and read by the audio
+    /// thread in AudioEngine::rxBlockReady. The read is not atomic; the
+    /// gate is protected by the cross-thread m_moxActive atomic in AudioEngine
+    /// (acquire load) which acts as a barrier before the isActiveSlice() read.
+    /// A stale read here is harmless: worst case the active-slice RX leaks for
+    /// one block (~10 ms) before the next atomic-acquire sync catches up.
+    ///
+    /// Plan: 3M-1b E.4.
+    bool isActiveSlice() const { return m_active; }
+
     bool isTxSlice() const { return m_txSlice; }
     void setTxSlice(bool tx);
 

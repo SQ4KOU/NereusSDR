@@ -64,6 +64,17 @@
 //                 at kTxMonitorSlotId. kTxMonitorSlotId = -2 (negative; distinct
 //                 from all non-negative RX slice IDs). Slot is pre-registered
 //                 in the ctor. Plan: 3M-1b E.3. Pre-code review §4.3 + §4.4.
+//   2026-04-27 — Phase 3M-1b E.4 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. Adds std::atomic<bool> m_moxActive
+//                 cross-thread MOX-state mirror + setMoxState() setter.
+//                 rxBlockReady gates the per-slice speakers push when
+//                 m_moxActive && slice->isActiveSlice() — fixes the PR #144
+//                 cosmetic regression where RX audio leaked during TUN/MOX.
+//                 Non-active slices (e.g. RX2) keep playing. Matches Thetis
+//                 IVAC mox state-machine in audio.cs:349-384 [v2.10.3.13].
+//                 Phase L (RadioModel integration) wires MoxController::moxChanged
+//                 → setMoxState via signal/slot. Plan: 3M-1b E.4.
+//                 Pre-code review §10.3 + §10.4.
 // =================================================================
 
 #include "AudioDeviceConfig.h"
@@ -182,6 +193,12 @@ public:
     // Plan: 3M-1b E.3.
     MasterMixer& masterMixForTest() { return m_masterMix; }
 
+    /// Test seam — directly set MOX state without going through MoxController.
+    /// Bypasses the signal/slot connection that RadioModel wires in Phase L so
+    /// unit tests can drive the gate logic without a full radio fixture.
+    /// Plan: 3M-1b E.4.
+    void setMoxStateForTest(bool active) { setMoxState(active); }
+
 #endif
 
     // Called by RxDspWorker when a slice produces an RX audio block.
@@ -245,6 +262,21 @@ public:
     // MasterOutputWidget wiring land in Task 10b.
     void setMasterMuted(bool muted);
     bool masterMuted() const { return m_masterMuted.load(std::memory_order_acquire); }
+
+    /// Update the cross-thread MOX-state mirror used by rxBlockReady.
+    /// Wired by RadioModel (Phase L) to MoxController::moxChanged via
+    /// signal/slot (Qt::DirectConnection, audio thread).
+    ///
+    /// Audio-thread reads via std::atomic<bool> with acquire ordering;
+    /// main-thread writes via this setter with release ordering.
+    ///
+    /// Matches Thetis IVAC mox state-machine in audio.cs:349-384
+    /// [v2.10.3.13]: when MOX is on, the active TX slice's RX audio is
+    /// silenced; non-active slices keep playing.
+    ///
+    /// Plan: 3M-1b E.4. Pre-code review §10.3 + §10.4.
+    void setMoxState(bool active);
+    bool moxState() const { return m_moxActive.load(std::memory_order_acquire); }
 
     /// TX monitor (MON) enable. When true, TXA siphon audio is mixed into
     /// the master output during MOX (the user hears themselves).
@@ -441,6 +473,18 @@ private:
     // rxBlockReady() on the DSP thread. Same acq_rel / acquire pairing
     // as m_masterVolume above.
     std::atomic<bool> m_masterMuted{false};
+
+    // Plan: 3M-1b E.4. Pre-code review §10.3 + §10.4.
+    // Cross-thread MOX-state mirror. Written by main-thread setMoxState()
+    // (wired by RadioModel in Phase L from MoxController::moxChanged).
+    // Read by audio-thread rxBlockReady via acquire load; written via
+    // release store (same acq/rel pairing as m_masterMuted above).
+    // Defaults false (MOX off at startup).
+    //
+    // Matches Thetis IVAC mox state-machine in audio.cs:349-384 [v2.10.3.13]:
+    // when MOX is on, active TX slice's RX audio is silenced; non-active
+    // slices keep playing.
+    std::atomic<bool> m_moxActive{false};
 
     // Plan: 3M-1b E.2. Pre-code review §4.4.
     // Written by setTxMonitorEnabled() on the main thread, read by the

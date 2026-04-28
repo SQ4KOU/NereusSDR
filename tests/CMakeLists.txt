@@ -1353,3 +1353,21 @@ nereus_add_test(tst_audio_engine_tx_monitor_state)
 nereus_add_test(tst_audio_engine_tx_monitor_block)
 target_compile_definitions(tst_audio_engine_tx_monitor_block PRIVATE NEREUS_BUILD_TESTS)
 
+# Plan: 3M-1b E.4. Exercises AudioEngine::rxBlockReady MOX gate —
+# the RX-leak-during-MOX fold that fixes the PR #144 cosmetic regression.
+# Cases:
+#   moxState_default_isFalse             — m_moxActive defaults false
+#   setMoxState_atomic_round_trip        — store/load round-trip
+#   rxBlockReady_moxOff_blockFlows       — MOX off → block reaches mixer
+#   rxBlockReady_moxOn_activeSlice_blockDropped
+#                                        — MOX on + active slice → dropped
+#   rxBlockReady_moxOn_nonActiveSlice_blockFlows
+#                                        — MOX on + non-active slice → flows
+#   rxBlockReady_moxOnToOff_blockResumes — MOX off again → block resumes
+#
+# Uses setMoxStateForTest() NEREUS_BUILD_TESTS seam and masterMixForTest()
+# to observe MasterMixer output.
+# Pre-code review §10.3 + §10.4.
+nereus_add_test(tst_audio_engine_rx_leak_during_mox)
+target_compile_definitions(tst_audio_engine_rx_leak_during_mox PRIVATE NEREUS_BUILD_TESTS)
+

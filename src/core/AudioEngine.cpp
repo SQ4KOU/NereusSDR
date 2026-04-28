@@ -819,6 +819,18 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         return;
     }
 
+    // 3M-1b E.4 fold: silence the active TX slice's RX audio during MOX.
+    // Non-active slices (e.g. RX2 when TX is on VFO-A, or a second slice in
+    // a future multi-RX configuration) keep playing — matching Thetis IVAC
+    // mox state-machine in audio.cs:349-384 [v2.10.3.13].
+    //
+    // m_moxActive acquire load provides the ordering barrier before the
+    // non-atomic isActiveSlice() read on slice. A stale read of isActiveSlice
+    // is harmless: worst case one ~10 ms block leaks before the next barrier.
+    if (m_moxActive.load(std::memory_order_acquire) && slice->isActiveSlice()) {
+        return;  // silenced — active TX slice's RX audio gated during MOX
+    }
+
     if (!slice->muted()) {
         m_masterMix.accumulate(sliceId, samples, frames);
     }
@@ -1005,6 +1017,20 @@ void AudioEngine::setMasterMuted(bool muted)
     if (prev != muted) {
         emit masterMutedChanged(muted);
     }
+}
+
+// Plan: 3M-1b E.4. Pre-code review §10.3 + §10.4.
+void AudioEngine::setMoxState(bool active)
+{
+    // Same acq_rel / acquire pairing as setMasterMuted above — the
+    // DSP-thread read in rxBlockReady uses acquire; a plain release
+    // would not synchronize the read-side observation order on weak
+    // memory models (ARM / Apple Silicon).
+    //
+    // Wired by RadioModel (Phase L) to MoxController::moxChanged.
+    // No change-signal emitted — MOX state is authoritative in MoxController;
+    // this is a cross-thread mirror only.
+    m_moxActive.store(active, std::memory_order_release);
 }
 
 // Plan: 3M-1b E.2. Pre-code review §4.4.

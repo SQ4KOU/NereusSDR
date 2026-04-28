@@ -701,6 +701,10 @@ int RadioModel::addSlice()
 
     if (!m_activeSlice) {
         m_activeSlice = slice;
+        // Mark the first slice as active so isActiveSlice() returns true for it.
+        // AudioEngine::rxBlockReady (3M-1b E.4) reads this flag to gate the
+        // per-slice RX-audio push during MOX.
+        slice->setActive(true);
         emit activeSliceChanged(0);
     }
 
@@ -716,7 +720,13 @@ void RadioModel::removeSlice(int index)
 
     SliceModel* slice = m_slices.takeAt(index);
     if (m_activeSlice == slice) {
+        // Clear the active flag before reassigning. The deleted slice's flag
+        // is moot, but the new active slice needs to be marked.
+        slice->setActive(false);
         m_activeSlice = m_slices.isEmpty() ? nullptr : m_slices.first();
+        if (m_activeSlice) {
+            m_activeSlice->setActive(true);
+        }
         emit activeSliceChanged(m_activeSlice ? 0 : -1);
     }
 
@@ -727,7 +737,18 @@ void RadioModel::removeSlice(int index)
 void RadioModel::setActiveSlice(int index)
 {
     if (index >= 0 && index < m_slices.size()) {
-        m_activeSlice = m_slices.at(index);
+        SliceModel* newActive = m_slices.at(index);
+        if (m_activeSlice == newActive) {
+            return;  // no change
+        }
+        // Clear the previous active slice flag so isActiveSlice() reflects
+        // the correct single active slice. AudioEngine::rxBlockReady (3M-1b
+        // E.4) reads this flag to gate the RX-audio push during MOX.
+        if (m_activeSlice) {
+            m_activeSlice->setActive(false);
+        }
+        m_activeSlice = newActive;
+        m_activeSlice->setActive(true);
         emit activeSliceChanged(index);
     }
 }
