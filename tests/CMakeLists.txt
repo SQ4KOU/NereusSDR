@@ -886,6 +886,15 @@ nereus_add_test(tst_meter_poller_tx_bindings)
 # Derives from Thetis console.cs:4822 + 12094 + 29978-30157 [v2.10.3.13].
 nereus_add_test(tst_tx_applet_tune_wiring)
 
+# ── Phase 3M-1b J.1: TxApplet Mic Gain slider ────────────────────────────────
+# Verifies the model-layer contracts that TxApplet's Mic Gain slider depends on:
+#   default value (-6 dB), per-board range (BoardCapabilities::micGainMinDb/Max),
+#   bidirectional sync (setMicGainDb / micGainDbChanged), mic-mute state
+#   (micMuteChanged fires; default micMute==true), idempotency / no-feedback-loop,
+#   and clamping to kMicGainDbMin/Max.
+# NereusSDR-native UI (no Thetis cite stamps required for the applet layer).
+nereus_add_test(tst_tx_applet_mic_gain)
+
 # ── Phase 3M-1a H.4: PowerPaPage wiring — Max Power, per-band Tune Power, ATT-on-TX ──
 # Verifies Max Power slider ↔ TransmitModel::power(), per-band tune-power spinboxes
 # ↔ TransmitModel::tunePowerForBand(), chkATTOnTX and chkForceATTwhenPSAoff widget

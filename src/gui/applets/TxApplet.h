@@ -23,6 +23,10 @@
 //                 Out-of-phase controls hidden with TODO comments.
 //                 syncFromModel() activates. setCurrentBand(Band) added for
 //                 tune-power slider sync on band change.
+//   2026-04-28 — Phase 3M-1b J.1: Mic Gain slider row added between RF Power
+//                 and Tune Power. Bidirectional with TransmitModel::micGainDb.
+//                 Range from BoardCapabilities::micGainMinDb/Max.
+//                 Slider greyed when TransmitModel::micMute == false.
 // =================================================================
 
 //=================================================================
@@ -106,6 +110,8 @@ class HGauge;
 //  1.  Forward Power gauge  — HGauge 0–120 W, red > 100 W
 //  2.  SWR gauge            — HGauge 1.0–3.0, red > 2.5
 //  3.  RF Power slider row  — label(62) + slider + value(22)
+//  3b. Mic Gain slider row  — label(62) + slider + value(35) [J.1 Phase 3M-1b]
+//      Range from BoardCapabilities::micGainMinDb/Max; greyed when micMute==false.
 //  4.  Tune Power slider row
 //  5.  MOX button           — checkable, red when active
 //  6.  TUNE button          — checkable, red + "TUNING..." when active
@@ -151,6 +157,9 @@ private:
     // 3. RF Power
     QSlider* m_rfPowerSlider  = nullptr;
     QLabel*  m_rfPowerValue   = nullptr;
+    // 3b. Mic Gain (J.1 Phase 3M-1b)
+    QSlider* m_micGainSlider  = nullptr;
+    QLabel*  m_micGainValue   = nullptr;
     // 4. Tune Power
     QSlider* m_tunePwrSlider  = nullptr;
     QLabel*  m_tunePwrValue   = nullptr;
