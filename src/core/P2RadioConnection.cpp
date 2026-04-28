@@ -8,10 +8,12 @@
 //   Project Files/Source/ChannelMaster/netInterface.c, original licence from Thetis source is included below
 //   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
 //
-// --- From deskhpsdr/src/new_protocol.c (first deskhpsdr port, 3M-1b G.1) ---
+// --- From deskhpsdr/src/new_protocol.c (first deskhpsdr port, 3M-1b G.1; G.2) ---
 //
 // setMicBoost P2 wire-byte (transmit_specific_buffer[50] bit 1, 0x02) ported
 // from deskhpsdr/src/new_protocol.c:1484-1486 [@120188f].
+// setLineIn P2 wire-byte (transmit_specific_buffer[50] bit 0, 0x01) ported
+// from deskhpsdr/src/new_protocol.c:1480-1482 [@120188f].
 //
 /* Copyright (C)
 * 2015 - John Melton, G0ORX/N6LYT
@@ -41,6 +43,9 @@
 //                 Claude Code.
 //   2026-04-27 — setMicBoost: first deskhpsdr port. Byte 50 bit 1 (0x02)
 //                 from deskhpsdr new_protocol.c:1484-1486 [@120188f].
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-28 — setLineIn: 2nd deskhpsdr port. Byte 50 bit 0 (0x01) from
+//                 deskhpsdr new_protocol.c:1480-1482 [@120188f].
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -915,6 +920,41 @@ void P2RadioConnection::setMicBoost(bool on)
         m_mic.micControl |= 0x02;
     } else {
         m_mic.micControl &= ~quint8(0x02);
+    }
+    if (m_running && m_socket) {
+        sendCmdTx();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setLineIn (3M-1b G.2)
+//
+// Sets the hardware mic-jack line-in path bit.
+// Wire byte: transmit_specific_buffer[50] bit 0 (mask 0x01).
+// Polarity: 1 = line in active (no inversion).
+//
+// Porting from deskhpsdr/src/new_protocol.c:1480-1482 [@120188f]:
+//   if (mic_linein) {
+//     transmit_specific_buffer[50] |= 0x01;
+//   }
+//
+// Note: P2 bit position (bit 0 = 0x01) differs from P1 bit position
+// (bit 1 = 0x02 in C2 of bank 10). Both mean "line in active = 1".
+// The bit field is written via m_mic.micControl which is used in
+// composeCmdTxLegacy() at buf[50] and in P2CodecOrionMkII at byte 50.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setLineIn(bool on)
+{
+    if (m_lineIn == on) {
+        return;  // idempotent — 100 ms heartbeat covers any state drift
+    }
+    m_lineIn = on;
+    // From deskhpsdr/src/new_protocol.c:1480-1482 [@120188f]:
+    //   if (mic_linein) { transmit_specific_buffer[50] |= 0x01; }
+    if (on) {
+        m_mic.micControl |= 0x01;
+    } else {
+        m_mic.micControl &= ~quint8(0x01);
     }
     if (m_running && m_socket) {
         sendCmdTx();

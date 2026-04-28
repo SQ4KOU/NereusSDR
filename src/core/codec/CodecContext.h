@@ -162,6 +162,13 @@ struct CodecContext {
     // Populated by buildCodecContext() from RadioConnection::m_micBoost.
     bool    p1MicBoost{false};
 
+    // P1 mic-jack line-in bit — bank 10 (C0=0x12) C2 bit 1 (0x02).
+    // Polarity: 1 = line in active (no inversion).
+    // Source: Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+    //   C2 = ((prn->mic.mic_boost & 1) | ((prn->mic.line_in & 1) << 1) | ...)
+    // Populated by buildCodecContext() from RadioConnection::m_lineIn.
+    bool    p1LineIn{false};
+
     // RX VFO frequency words (Hz, raw, no phase-word conversion on P1).
     quint64 rxFreqHz[7]{};
     quint64 txFreqHz{0};

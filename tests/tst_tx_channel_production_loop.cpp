@@ -83,6 +83,7 @@ public:
     void setMox(bool) override {}
     void setTrxRelay(bool) override {}
     void setMicBoost(bool) override {}
+    void setLineIn(bool) override {}
 
     // Record every sendTxIq() call for assertion.
     void sendTxIq(const float* iq, int n) override

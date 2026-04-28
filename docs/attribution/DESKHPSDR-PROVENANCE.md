@@ -66,3 +66,4 @@ Derivation type:
 | NereusSDR file | deskhpsdr source | Line ranges | Type | Notes |
 | --- | --- | --- | --- | --- |
 | `src/core/P2RadioConnection.h` + `P2RadioConnection.cpp` | `src/new_protocol.c:1484-1486` | P2 CmdTx byte 50 mic_boost bit (0x02): `if (mic_boost) { transmit_specific_buffer[50] \|= 0x02; }` | `port` | First deskhpsdr port. 3M-1b G.1. Date: 2026-04-27. |
+| `src/core/P2RadioConnection.h` + `P2RadioConnection.cpp` | `src/new_protocol.c:1480-1482` | P2 CmdTx byte 50 line_in bit (0x01): `if (mic_linein) { transmit_specific_buffer[50] \|= 0x01; }` | `port` | 3M-1b G.2. Date: 2026-04-28. |

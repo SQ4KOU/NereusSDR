@@ -66,6 +66,7 @@ public:
     void setMox(bool) override {}
     void setTrxRelay(bool) override {}
     void setMicBoost(bool) override {}
+    void setLineIn(bool) override {}
     void sendTxIq(const float*, int) override {}
 
     // Test helper: fires micFrameDecoded synchronously (DirectConnection).

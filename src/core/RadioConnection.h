@@ -177,6 +177,21 @@ public slots:
     /// (firmware ignores it).
     virtual void setMicBoost(bool on) = 0;
 
+    /// Hardware mic-jack line-in path (replaces front-panel mic with line input).
+    ///
+    /// P1 source: Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+    ///   case 10 (C0=0x12) C2 byte: ((prn->mic.line_in & 1) << 1) → bit 1 (0x02)
+    ///
+    /// P2 source: deskhpsdr src/new_protocol.c:1480-1482 [@120188f]
+    ///   if (mic_linein) { transmit_specific_buffer[50] |= 0x01; }
+    ///   (bit 0, mask 0x01 — different bit position from P1)
+    ///
+    /// Polarity: 1 = line in active (no inversion).
+    ///
+    /// HL2 has no mic jack; the P1 implementation still writes the bit
+    /// (firmware ignores it).
+    virtual void setLineIn(bool on) = 0;
+
     // DEPRECATED — call setAntennaRouting directly. Kept for one release
     // cycle as a rollback hatch per docs/architecture/antenna-routing-design.md §7.7.
     // Removed in the release following 3P-I-b.
@@ -324,6 +339,12 @@ protected:
     // P2: emitted to transmit_specific_buffer[50] bit 1 (0x02).
     // From Thetis networkproto1.c:581 [v2.10.3.13]; deskhpsdr new_protocol.c:1484-1486 [@120188f].
     bool m_micBoost{false};
+
+    // Shared state for setLineIn (3M-1b G.2).
+    // P1: emitted to case 10 (C0=0x12) C2 bit 1 (0x02).
+    // P2: emitted to transmit_specific_buffer[50] bit 0 (0x01).
+    // From Thetis networkproto1.c:581 [v2.10.3.13]; deskhpsdr new_protocol.c:1480-1482 [@120188f].
+    bool m_lineIn{false};
 };
 
 } // namespace NereusSDR

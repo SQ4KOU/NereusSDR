@@ -118,6 +118,7 @@ public:
     void sendTxIq(const float*, int) override {}
     void setTrxRelay(bool) override {}
     void setMicBoost(bool) override {}
+    void setLineIn(bool) override {}
 
     void setTxStepAttenuation(int dB) override {
         lastTxStepAtt = dB;

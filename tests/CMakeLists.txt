@@ -1495,3 +1495,41 @@ target_compile_definitions(tst_p1_mic_boost_wire PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_p2_mic_boost_wire)
 target_compile_definitions(tst_p2_mic_boost_wire PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1b Task G.2: P1 line_in wire-byte snapshot ──────────────────────
+# 14 tests pin the line_in bit (C2 bit 1 = 0x02) of bank 10 (C0=0x12) in
+# P1RadioConnection::setLineIn():
+#   1.  Default state: C2 bit 1 = 0.
+#   2.  setLineIn(true)  → C2 bit 1 = 1.
+#   3.  setLineIn(false) → C2 bit 1 = 0.
+#   4.  Bit 6 (0x40) always set regardless of line_in.
+#   5.  No spillover into C2 bits 7, 5..2, 0.
+#   6.  Bank 10 C0 address stays 0x12.
+#   7.  setLineIn sets m_forceBank10Next (Codex P2 flush pattern).
+#   8.  Repeated same-value call still sets the flush flag.
+#   9.  Idempotency: setLineIn(true) twice doesn't crash.
+#  10.  Round-trip: true → false produces correct bit values.
+#  11.  Codec path (Standard): C2 bit 1 set/cleared correctly.
+#  12.  Codec path (Standard): C2 bit 1 clear after false.
+#  13.  Codec path (HL2): C2 bit 1 set (FW ignores, but bit is correct).
+#  14.  setLineIn(true) does NOT touch C2 bit 0 (mic_boost) — cross-bit guard.
+# Source: Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13].
+nereus_add_test(tst_p1_line_in_wire)
+target_compile_definitions(tst_p1_line_in_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.2: P2 line_in wire-byte snapshot ──────────────────────
+# 10 tests pin the line_in bit (CmdTx byte 50 bit 0 = 0x01) in
+# P2RadioConnection::setLineIn():
+#   1.  Default state: byte 50 bit 0 = 0.
+#   2.  setLineIn(true)  → byte 50 bit 0 = 1.
+#   3.  setLineIn(false) → byte 50 bit 0 = 0.
+#   4.  Round-trip true → false → true.
+#   5.  Bit 1 (mic_boost) unaffected by line_in — cross-bit guard.
+#   6.  Bits 2-7 of byte 50 unaffected.
+#   7.  Idempotency: setLineIn(true) twice → bit remains 1.
+#   8.  Codec path (OrionMKII): line_in at byte 50 bit 0.
+#   9.  Codec path (Saturn/ANAN-G2): same behaviour.
+#  10.  Byte 51 (line_in gain) unaffected by setLineIn.
+# Source: deskhpsdr/src/new_protocol.c:1480-1482 [@120188f].
+nereus_add_test(tst_p2_line_in_wire)
+target_compile_definitions(tst_p2_line_in_wire PRIVATE NEREUS_BUILD_TESTS)
+

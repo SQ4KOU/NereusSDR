@@ -132,6 +132,7 @@ public slots:
     void setTrxRelay(bool enabled) override;
     void setTxStepAttenuation(int dB) override;
     void setMicBoost(bool on) override;
+    void setLineIn(bool on) override;
 
 private slots:
     void onReadyRead();
