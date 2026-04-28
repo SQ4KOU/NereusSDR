@@ -1235,6 +1235,50 @@ void P1RadioConnection::setMicBias(bool on)
 }
 
 // ---------------------------------------------------------------------------
+// setMicPTT (3M-1b G.5)
+//
+// Enables or disables the hardware mic-jack PTT line (Orion/ANAN front-panel).
+// NereusSDR parameter convention: enabled=true → PTT enabled (intuitive).
+//
+// POLARITY INVERSION AT THE WIRE LAYER:
+// Both Thetis and deskhpsdr carry the *disable* flag on the wire:
+//   Thetis field name: mic_ptt  (1 = PTT DISABLED)
+//   deskhpsdr: mic_ptt_enabled == 0 → set bit (bit set = PTT disabled)
+//   Thetis console.cs:19758 [v2.10.3.13]: MicPTTDisabled property name
+//     confirms the storage convention (disable flag, not enable flag).
+// Therefore the implementation writes (!enabled) to the wire bit:
+//   enabled=true  → PTT enabled  → wire bit 6 CLEAR (0)
+//   enabled=false → PTT disabled → wire bit 6 SET   (1)
+//
+// Wire bit: bank 11 (C0=0x14) C1 byte bit 6 (mask 0x40), INVERTED.
+// This is the SAME C1 byte as G.3 (bit 4) + G.4 (bit 5) — all OR'd in.
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13]:
+//   C1 = ... | ((prn->mic.mic_ptt & 1) << 6);
+//   mic_ptt: 1 = PTT disabled on wire (polarity inversion at API layer).
+//
+// Cross-reference:
+//   deskhpsdr/src/old_protocol.c:3000-3002 [@120188f]:
+//     if (mic_ptt_enabled == 0) { output_buffer[C1] |= 0x40; }  // same inversion
+//   deskhpsdr/src/new_protocol.c:1488-1490 [@120188f] — P2 byte 50 bit 2.
+//   Thetis console.cs:19764 [v2.10.3.13] — MicPTTDisabled calls SetMicPTT(value).
+//
+// Flush pattern mirrors setMicBias (Codex P2): m_forceBank11Next is set
+// BEFORE the idempotent guard so the bit lands on the wire within ≤1 frame.
+// Reuses m_forceBank11Next + captureBank11ForTest infrastructure from G.3.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setMicPTT(bool enabled)
+{
+    // Codex P2: set flush flag BEFORE idempotent guard.
+    m_forceBank11Next = true;
+
+    if (m_micPTT == enabled) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_micPTT = enabled;
+}
+
+// ---------------------------------------------------------------------------
 // applyBoardQuirks
 //
 // Reads BoardCapabilities (m_caps) and enforces runtime constraints.
@@ -1393,6 +1437,7 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.p1LineIn       = m_lineIn;
     ctx.p1MicTipRing   = m_micTipRing;
     ctx.p1MicBias      = m_micBias;     // 3M-1b G.4
+    ctx.p1MicPTT       = m_micPTT;      // 3M-1b G.5
     ctx.duplex         = m_duplex;
     ctx.diversity      = m_diversity;
     ctx.antennaIdx     = m_antennaIdx;
@@ -2098,18 +2143,21 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
     case 11: // Preamp control (networkproto1.c:593-601)
         out[0] = C0base | 0x14;
         // C1: preamp bits 0-3 (bit 3 = rx0 again, Thetis quirk) + mic_trs bit 4
-        //     + mic_bias bit 5.
+        //     + mic_bias bit 5 + mic_ptt bit 6 (INVERTED).
         // mic_trs polarity inversion: 1 = tip is BIAS/PTT → write !m_micTipRing.
         // mic_bias polarity: 1 = bias on (no inversion) → write m_micBias.
-        // From Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13]
-        //   C1 = ... | ((prn->mic.mic_trs & 1) << 4) | ((prn->mic.mic_bias & 1) << 5) | ...
+        // mic_ptt polarity inversion: 1 = PTT DISABLED on wire → write !m_micPTT.
+        // From Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13]
+        //   C1 = ... | ((prn->mic.mic_trs & 1) << 4) | ((prn->mic.mic_bias & 1) << 5)
+        //           | ((prn->mic.mic_ptt & 1) << 6);
         out[1] = static_cast<quint8>(
                    (m_rxPreamp[0] ? 0x01 : 0)
                  | (m_rxPreamp[1] ? 0x02 : 0)
                  | (m_rxPreamp[2] ? 0x04 : 0)
                  | (m_rxPreamp[0] ? 0x08 : 0)        // bit3 = rx0 again (Thetis quirk)
                  | (!m_micTipRing ? 0x10 : 0x00)      // 3M-1b G.3 — mic_trs (inverted)
-                 | (m_micBias    ? 0x20 : 0x00));     // 3M-1b G.4 — mic_bias (no inversion)
+                 | (m_micBias    ? 0x20 : 0x00)       // 3M-1b G.4 — mic_bias (no inversion)
+                 | (!m_micPTT    ? 0x40 : 0x00));     // 3M-1b G.5 — mic_ptt (INVERTED)
         out[2] = 0; // line_in_gain + puresignal
         out[3] = 0; // user digital outputs
         out[4] = static_cast<quint8>((m_stepAttn[0] & 0x1F) | 0x20); // ADC0 step ATT + enable

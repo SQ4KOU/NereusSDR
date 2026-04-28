@@ -8,17 +8,10 @@
 //   Project Files/Source/ChannelMaster/netInterface.c, original licence from Thetis source is included below
 //   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
 //
-// --- From deskhpsdr/src/new_protocol.c (first deskhpsdr port, 3M-1b G.1; G.2; G.3; G.4) ---
-//
-// setMicBoost P2 wire-byte (transmit_specific_buffer[50] bit 1, 0x02) ported
-// from deskhpsdr/src/new_protocol.c:1484-1486 [@120188f].
-// setLineIn P2 wire-byte (transmit_specific_buffer[50] bit 0, 0x01) ported
-// from deskhpsdr/src/new_protocol.c:1480-1482 [@120188f].
-// setMicTipRing P2 wire-byte (transmit_specific_buffer[50] bit 3, 0x08, INVERTED) ported
-// from deskhpsdr/src/new_protocol.c:1492-1494 [@120188f].
-// NOTE: polarity inversion at NereusSDR API layer — setMicTipRing(tipHot) writes
-// !tipHot to the wire bit (upstream field = "1 = Tip is BIAS/PTT", not mic).
-// setMicBias (G.4): byte 50 bit 4 (0x10), polarity 1=on, deskhpsdr src/new_protocol.c:1496-1498 [@120188f].
+// --- From deskhpsdr/src/new_protocol.c (3M-1b G.1–G.5) ---
+// Byte 50 mic control bits: G.1 mic_boost (0x02), G.2 line_in (0x01),
+// G.3 mic_tip_ring (0x08, INVERTED), G.4 mic_bias (0x10), G.5 mic_ptt (0x04, INVERTED).
+// Lines 1480-1498 [@120188f]. See modification history and DESKHPSDR-PROVENANCE.md.
 //
 /* Copyright (C)
 * 2015 - John Melton, G0ORX/N6LYT
@@ -55,7 +48,8 @@
 //   2026-04-28 — setMicTipRing: 3rd deskhpsdr port. Byte 50 bit 3 (0x08, INVERTED)
 //                 from deskhpsdr new_protocol.c:1492-1494 [@120188f].
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
-//   2026-04-28 — setMicBias (G.4): byte 50 bit 4 (0x10), polarity 1=on. deskhpsdr new_protocol.c:1496-1498 [@120188f]. J.J. Boyd (KG4VCF).
+//   2026-04-28 — setMicBias (G.4): byte 50 bit 4 (0x10), polarity 1=on. deskhpsdr new_protocol.c:1496-1498 [@120188f]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-28 — setMicPTT (G.5): byte 50 bit 2 (0x04, INVERTED). deskhpsdr new_protocol.c:1488-1490 [@120188f]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -1046,6 +1040,57 @@ void P2RadioConnection::setMicBias(bool on)
         m_mic.micControl |= 0x10;
     } else {
         m_mic.micControl &= ~quint8(0x10);
+    }
+    if (m_running && m_socket) {
+        sendCmdTx();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setMicPTT (3M-1b G.5)
+//
+// Enables or disables the hardware mic-jack PTT line (Orion/ANAN front-panel).
+// NereusSDR parameter convention: enabled=true → PTT enabled (intuitive).
+//
+// POLARITY INVERSION AT THE WIRE LAYER:
+// deskhpsdr carries the *disable* flag at byte 50 bit 2 (mask 0x04):
+//   mic_ptt_enabled == 0 → set the bit (bit set means PTT is DISABLED)
+// Thetis console.cs:19758 MicPTTDisabled property confirms the disable-flag
+//   convention — MicPTTDisabled=true (PTT off) maps to the wire bit = 1.
+// Thetis networkproto1.c case 11 C1 bit 6 (0x40) also carries the disable flag.
+// Therefore this implementation writes (!enabled) to the wire bit:
+//   enabled=true  → PTT enabled  → bit 2 CLEAR (0)
+//   enabled=false → PTT disabled → bit 2 SET   (1)
+//
+// Wire byte: transmit_specific_buffer[50] bit 2 (mask 0x04), INVERTED.
+//
+// Porting from deskhpsdr/src/new_protocol.c:1488-1490 [@120188f]:
+//   if (mic_ptt_enabled == 0) { // set if disabled
+//     transmit_specific_buffer[50] |= 0x04;
+//   }
+//
+// Cross-reference:
+//   deskhpsdr/src/old_protocol.c:3000-3002 [@120188f] — P1 same inversion at C1 bit 6.
+//   Thetis console.cs:19764 [v2.10.3.13] — MicPTTDisabled calls SetMicPTT(value).
+//
+// Note: P2 bit position (bit 2 = 0x04) differs from P1 bit position
+// (bit 6 = 0x40 in C1 of bank 11). Both carry the same inverted semantics.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setMicPTT(bool enabled)
+{
+    if (m_micPTT == enabled) {
+        return;  // idempotent — 100 ms heartbeat covers any state drift
+    }
+    m_micPTT = enabled;
+    // POLARITY INVERSION: mic_ptt_enabled == 0 → bit 2 SET (PTT disabled on wire).
+    // setMicPTT(true)  = PTT enabled  → wire bit 2 CLEAR.
+    // setMicPTT(false) = PTT disabled → wire bit 2 SET.
+    // From deskhpsdr/src/new_protocol.c:1488-1490 [@120188f]:
+    //   if (mic_ptt_enabled == 0) { transmit_specific_buffer[50] |= 0x04; }
+    if (!enabled) {
+        m_mic.micControl |= 0x04;
+    } else {
+        m_mic.micControl &= ~quint8(0x04);
     }
     if (m_running && m_socket) {
         sendCmdTx();

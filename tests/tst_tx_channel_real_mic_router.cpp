@@ -127,6 +127,7 @@ public:
     void setLineIn(bool) override {}
     void setMicTipRing(bool) override {}
     void setMicBias(bool) override {}
+    void setMicPTT(bool) override {}
     void sendTxIq(const float*, int) override {}  // consume silently
 };
 

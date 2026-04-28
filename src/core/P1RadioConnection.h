@@ -135,6 +135,7 @@ public slots:
     void setLineIn(bool on) override;
     void setMicTipRing(bool tipHot) override;
     void setMicBias(bool on) override;
+    void setMicPTT(bool enabled) override;
 
 private slots:
     void onReadyRead();
@@ -470,13 +471,15 @@ public:
     // flag state).  Used by tst_p1_trx_relay_wire to verify Codex P2 pattern.
     bool forceBank10NextForTest() const { return m_forceBank10Next; }
 
-    // ── 3M-1b G.3 mic_trs wire test seams ───────────────────────────────────
+    // ── 3M-1b G.3 / G.4 / G.5 bank-11 wire test seams ──────────────────────
     // captureBank11ForTest — compose 5 bank-11 C&C bytes from current state
-    // and return them.  Used by tst_p1_mic_tip_ring_wire to verify the mic_trs
-    // bit (C1 bit 4 = 0x10, INVERTED: 0 = Tip-is-mic, 1 = Tip-is-BIAS/PTT)
-    // without needing a live socket.
+    // and return them.  Used by tst_p1_mic_tip_ring_wire (G.3), tst_p1_mic_bias_wire
+    // (G.4), and tst_p1_mic_ptt_wire (G.5) to verify C1 bits 4/5/6 without
+    // needing a live socket.
     // Source: Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13]
-    //   ((prn->mic.mic_trs & 1) << 4) — mic_trs 1 = tip is BIAS/PTT
+    //   C1 = ... | ((prn->mic.mic_trs & 1) << 4)   — bit 4, INVERTED
+    //           | ((prn->mic.mic_bias & 1) << 5)    — bit 5
+    //           | ((prn->mic.mic_ptt  & 1) << 6);   — bit 6, INVERTED
     QByteArray captureBank11ForTest() const {
         quint8 out[5] = {};
         composeCcForBankForTest(11, out);

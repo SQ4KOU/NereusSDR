@@ -1615,3 +1615,46 @@ target_compile_definitions(tst_p1_mic_bias_wire PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_p2_mic_bias_wire)
 target_compile_definitions(tst_p2_mic_bias_wire PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1b Task G.5: P1 mic_ptt wire-byte snapshot ─────────────────────
+# 16 tests pin the mic_ptt bit (C1 bit 6 = 0x40, INVERTED) of bank 11 (C0=0x14)
+# in P1RadioConnection::setMicPTT().
+# POLARITY INVERSION: enabled=true → wire bit CLEAR; enabled=false → wire bit SET.
+# Reuses m_forceBank11Next + captureBank11ForTest infrastructure from G.3.
+#   1.  Default state: C1 bit 6 = 1 (PTT disabled by default — m_micPTT=false → !false=1).
+#   2.  setMicPTT(true)  → C1 bit 6 = 0 (PTT enabled → disable-flag cleared).
+#   3.  setMicPTT(false) → C1 bit 6 = 1 (PTT disabled → disable-flag set).
+#   4.  Round-trip true → false.
+#   5.  Bank 11 C0 address must be 0x14.
+#   6.  setMicPTT(true) does NOT clobber C1 bits 0-3 (preamp).
+#   7.  setMicPTT(true) does NOT touch C1 bits 4 or 5 (G.3/G.4 bits).
+#   8.  setMicPTT sets m_forceBank11Next (Codex P2 flush pattern).
+#   9.  Flush flag set even when value doesn't change (Codex P2).
+#  10.  Idempotency: setMicPTT(true) twice → bit stays 0.
+#  11.  Codec path (Standard): setMicPTT(true) → C1 bit 6 clear.
+#  12.  Codec path (Standard): setMicPTT(false) → C1 bit 6 set.
+#  13.  Codec path (HL2): setMicPTT(true) → C1 bit 6 clear (FW ignores).
+#  14.  setMicPTT(true) does NOT touch C1 bits 0-3 — cross-bit guard.
+#  15.  G.3+G.4+G.5 composition: mic_trs(inverted)+mic_bias+mic_ptt(inverted) → C1 & 0x70 == 0x70.
+#  16.  G.3+G.4 composition sub-case: mic_trs+mic_bias → C1 & 0x30 == 0x30.
+# Source: Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13].
+nereus_add_test(tst_p1_mic_ptt_wire)
+target_compile_definitions(tst_p1_mic_ptt_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.5: P2 mic_ptt wire-byte snapshot ─────────────────────
+# 10 tests pin the mic_ptt bit (CmdTx byte 50 bit 2 = 0x04, INVERTED)
+# in P2RadioConnection::setMicPTT().
+# POLARITY INVERSION: enabled=true → byte-50 bit 2 = 0; enabled=false → = 1.
+#   1.  Default state: byte 50 bit 2 = 1 (PTT disabled by default).
+#   2.  setMicPTT(true)  → byte 50 bit 2 = 0 (PTT enabled → disable-flag cleared).
+#   3.  setMicPTT(false) → byte 50 bit 2 = 1 (PTT disabled → disable-flag set).
+#   4.  Round-trip true → false → true.
+#   5.  Bits 0 (line_in), 1 (mic_boost) unaffected — cross-bit guard.
+#   6.  setMicPTT(true) does NOT touch byte-50 bit 3 (G.3 mic_trs).
+#   7.  Idempotency: setMicPTT(true) twice → bit stays 0.
+#   8.  Codec path (OrionMKII): mic_ptt at byte 50 bit 2.
+#   9.  Codec path (Saturn/ANAN-G2): same behaviour.
+#  10.  Byte 51 (line_in gain) unaffected by setMicPTT.
+# Source: deskhpsdr/src/new_protocol.c:1488-1490 [@120188f].
+nereus_add_test(tst_p2_mic_ptt_wire)
+target_compile_definitions(tst_p2_mic_ptt_wire PRIVATE NEREUS_BUILD_TESTS)
+

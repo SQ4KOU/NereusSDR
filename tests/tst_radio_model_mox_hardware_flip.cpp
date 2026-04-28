@@ -104,6 +104,7 @@ public:
     void setLineIn(bool) override {}
     void setMicTipRing(bool) override {}
     void setMicBias(bool) override {}
+    void setMicPTT(bool) override {}
 };
 
 // ── Test class ───────────────────────────────────────────────────────────────

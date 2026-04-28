@@ -109,16 +109,20 @@ private slots:
     }
 
     // ── 6. Bits 2-7 of byte 50 unaffected by setLineIn ───────────────────
-    // Only bit 0 (line_in) and bit 1 (mic_boost) are defined here.
-    // Bits 2-7 should remain 0 in the default state.
-    // Source: deskhpsdr/src/new_protocol.c:1480-1502 [@120188f]
+    // After G.5 is wired, bit 2 (0x04) is SET by default because m_micPTT defaults
+    // false → !false = 1 on wire (PTT disabled). setLineIn must not change bit 2
+    // or bits 3-7. Only bit 0 (line_in) changes; other bits stay at their defaults.
+    // Source: deskhpsdr/src/new_protocol.c:1480-1482 [@120188f]
     void byte50UpperBits_unaffectedByLineIn() {
         P2RadioConnection conn;
         conn.setLineIn(true);
         quint8 buf[60] = {};
         conn.composeCmdTxForTest(buf);
-        // Bits 2-7 must be 0 (only bit 0 set).
-        QCOMPARE(int(buf[50] & 0xFC), 0);
+        // After G.5: bit 2 (0x04) is on by default (PTT disabled default).
+        // Bits 3-7 (0xF8) must be 0. Bit 2 must be 1.
+        QCOMPARE(int(buf[50] & 0xF8), 0);
+        // Bit 2 (mic_ptt disabled by default) must be set.
+        QCOMPARE(int(buf[50] & 0x04), 0x04);
     }
 
     // ── 7. Idempotent: setLineIn(true) twice → bit remains 1 ─────────────

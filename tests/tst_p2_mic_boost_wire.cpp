@@ -109,17 +109,23 @@ private slots:
         QCOMPARE(int(buf[50] & 0x02), 0x02);
     }
 
-    // ── 6. Bits 2-7 of byte 50 unaffected by setMicBoost ─────────────────
-    // Only bit 0 (line_in) and bit 1 (mic_boost) are defined here.
-    // Bits 2-7 should remain 0 in the default state.
-    // Source: deskhpsdr/src/new_protocol.c:1480-1502 [@120188f]
+    // ── 6. Bit 2 (G.5 mic_ptt default) is set; bits 3-7 unaffected by setMicBoost ──
+    // After G.5 is wired, bit 2 (0x04) is SET in the default state because
+    // m_micPTT defaults false → !false = 1 on wire (PTT disabled = mic_ptt=1).
+    // setMicBoost must not change bit 2 (or bits 3-7).
+    // Bits 3-7 must remain as-is; only bit 1 (mic_boost) changes.
+    // Source: deskhpsdr/src/new_protocol.c:1484-1486 [@120188f]
     void byte50UpperBits_unaffectedByMicBoost() {
         P2RadioConnection conn;
         conn.setMicBoost(true);
         quint8 buf[60] = {};
         conn.composeCmdTxForTest(buf);
-        // Bits 2-7 must be 0 (only bit 1 set).
-        QCOMPARE(int(buf[50] & 0xFC), 0);
+        // After G.5: bit 2 (0x04) is on by default (PTT disabled default).
+        // Bits 3-7 (0xF8) must be 0 — not set by setMicBoost or G.5 defaults.
+        // 0xFC = bits 2-7; after G.5, bit 2 should be 1, so (buf[50] & 0xFC) = 0x04.
+        QCOMPARE(int(buf[50] & 0xF8), 0);
+        // Bit 2 (mic_ptt disabled by default) must be set.
+        QCOMPARE(int(buf[50] & 0x04), 0x04);
     }
 
     // ── 7. Idempotent: setMicBoost(true) twice → bit remains 1 ───────────

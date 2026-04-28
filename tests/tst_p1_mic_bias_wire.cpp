@@ -123,14 +123,18 @@ private slots:
         QCOMPARE(int(quint8(bank11[1]) & 0x10), 0);
     }
 
-    // ── 8. setMicBias(true) produces C1 = 0x20 in default state ─────────────
-    // With no preamp set, no mic_trs override: only bit 5 is set.
-    void setMicBiasTrue_c1IsExactly0x20InDefaultState() {
+    // ── 8. setMicBias(true) produces C1 = 0x60 in default state (after G.5) ───
+    // With no preamp set, no mic_trs override: bit 5 (mic_bias) is set.
+    // After G.5 is wired, bit 6 (0x40) is ALSO set by default because
+    // m_micPTT defaults false → !false = 1 on wire (PTT disabled = mic_ptt=1).
+    // Source: Thetis networkproto1.c:597-598 [v2.10.3.13]
+    void setMicBiasTrue_c1IsExactly0x60InDefaultState() {
         P1RadioConnection conn;
         conn.setMicBias(true);
 
         const QByteArray bank11 = conn.captureBank11ForTest();
-        QCOMPARE(int(quint8(bank11[1])), 0x20);
+        // 0x20 (mic_bias bit 5) | 0x40 (mic_ptt default inverted bit 6) = 0x60.
+        QCOMPARE(int(quint8(bank11[1])), 0x60);
     }
 
     // ── 9. Flush flag: setMicBias sets m_forceBank11Next (Codex P2) ──────────
