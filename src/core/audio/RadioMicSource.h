@@ -104,9 +104,18 @@ public:
     int ringDroppedForTest() const;
 #endif
 
-private slots:
-    /// Called with DirectConnection from RadioConnection::micFrameDecoded.
+public slots:
+    /// Receive a decoded mic frame from RadioConnection::micFrameDecoded.
     /// Copies up to `frames` samples into the ring; drops excess on overflow.
+    ///
+    /// Wired by RadioModel (L.1) with QueuedConnection so this slot runs on
+    /// RadioMicSource's thread affinity (main thread) regardless of which
+    /// thread emits micFrameDecoded (connection thread). Lock-free ring push
+    /// — safe to call from any thread, but queued dispatch documents intent.
+    ///
+    /// Previously declared private slots (F.2 design expected self-wiring in
+    /// the constructor, but L.1 moves wiring to RadioModel so the slot must
+    /// be accessible from outside the class).
     void onMicFrame(const float* samples, int frames);
 
 private:

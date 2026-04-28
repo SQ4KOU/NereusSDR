@@ -1949,3 +1949,26 @@ target_compile_definitions(tst_audio_tx_input_mic_gain_mirror PRIVATE NEREUS_BUI
 nereus_add_test(tst_audio_tx_input_mic_boost_vox_thresh)
 target_compile_definitions(tst_audio_tx_input_mic_boost_vox_thresh PRIVATE NEREUS_BUILD_TESTS)
 
+# =============================================================================
+# Phase 3M-1b Task L.1 — RadioModel owns Pc/Radio mic sources + composite router
+# =============================================================================
+# Covers:
+#   1-3.  Test seams: pcMicSource/radioMicSource/compositeMicRouter null before connect.
+#   4.    RadioMicSource (QObject) lives on the main thread after construction.
+#   5.    RadioMicSource null-connection: construction + pullSamples = zero-fill.
+#   6.    RadioMicSource ring starts empty (ringFillForTest == 0).
+#   7.    CompositeTxMicRouter zero-fills when both sources null (edge-case guard).
+#   8.    TransmitModel::micPreampChanged signal carries a double linear gain.
+#   9.    monEnabledChanged → AudioEngine::setTxMonitorEnabled state round-trip.
+#  10.    monitorVolumeChanged → AudioEngine::setTxMonitorVolume state round-trip.
+#  11.    MoxCheck lifecycle: install, invoke, clear.
+#  12.    MoxCheck rejection: moxRejected emitted + MOX does not advance.
+#  13.    MoxCheck approved: no moxRejected, MOX advances.
+#  14.    RadioModel lifecycle (no connect): construct + destroy cleanly.
+#  15.    RadioModel double lifecycle: two consecutive instances, no leak/crash.
+#
+# NEREUS_BUILD_TESTS required for RadioModel::pcMicSourceForTest etc. +
+#   RadioMicSource::ringFillForTest.
+nereus_add_test(tst_radio_model_3m1b_ownership)
+target_compile_definitions(tst_radio_model_3m1b_ownership PRIVATE NEREUS_BUILD_TESTS)
+

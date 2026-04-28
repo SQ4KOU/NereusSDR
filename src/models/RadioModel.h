@@ -109,6 +109,10 @@ class NoiseFloorTracker;
 // 3M-1a G.1: forward declarations for TX-side components.
 class MoxController;
 class TxChannel;
+// 3M-1b L.1: forward declarations for mic-source strategy objects.
+class PcMicSource;
+class RadioMicSource;
+class CompositeTxMicRouter;
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
@@ -372,6 +376,15 @@ public:
         emit currentRadioChanged(NereusSDR::RadioInfo{});
     }
     NereusSDR::Band lastBand() const { return m_lastBand; }
+
+    // 3M-1b L.1 test seams: expose raw pointers into the mic-source strategy
+    // objects so ownership, threading, and lifecycle tests can inspect state
+    // without coupling to production API surfaces.
+    // All three return nullptr before the first connectToRadio() / after
+    // teardownConnection() — exactly the lifecycle the tests verify.
+    const PcMicSource*           pcMicSourceForTest()          const { return m_pcMicSource.get(); }
+    const RadioMicSource*        radioMicSourceForTest()        const { return m_radioMicSource.get(); }
+    const CompositeTxMicRouter*  compositeMicRouterForTest()   const { return m_compositeMicRouter.get(); }
 #endif
 
     // Connection
@@ -724,6 +737,30 @@ private:
     // gen1 PostGen) it is never actually invoked, since gen1 overwrites the input.
     // Master design §5.2 (3M-1a NullMicSource; 3M-1b concrete sources).
     std::unique_ptr<TxMicRouter> m_txMicRouter;
+
+    // 3M-1b L.1: concrete mic-source objects owned by RadioModel.
+    // Constructed in connectToRadio() after m_connection is live (so
+    // PcMicSource has AudioEngine and RadioMicSource has a valid connection
+    // pointer). Destroyed in teardownConnection() in reverse-construction order
+    // (composite first, then radio, then pc) to avoid dangling raw pointers
+    // inside CompositeTxMicRouter.
+    //
+    // When null (before first connect or after disconnect):
+    //   m_txChannel->setMicRouter() is called with nullptr via teardownConnection,
+    //   matching the G.1 convention for nulling injection pointers on teardown.
+    //
+    // PcMicSource does NOT inherit QObject — no Qt parent. AudioEngine lifetime
+    // is RadioModel's lifetime, so the non-owning AudioEngine* is always valid
+    // while m_pcMicSource is alive.
+    //
+    // RadioMicSource IS a QObject but its parent is set to nullptr here because
+    // RadioModel manages its lifetime via unique_ptr. This matches the convention
+    // used by TxChannel (non-owning view, managed externally).
+    //
+    // Plan: 3M-1b Task L.1. Pre-code review §0.3 + master design §5.2.4.
+    std::unique_ptr<PcMicSource>           m_pcMicSource;
+    std::unique_ptr<RadioMicSource>        m_radioMicSource;
+    std::unique_ptr<CompositeTxMicRouter>  m_compositeMicRouter;
 };
 
 } // namespace NereusSDR
