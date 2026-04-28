@@ -1207,6 +1207,34 @@ void P1RadioConnection::setMicTipRing(bool tipHot)
 }
 
 // ---------------------------------------------------------------------------
+// setMicBias (3M-1b G.4)
+//
+// Enables or disables hardware mic-jack phantom power (bias voltage).
+// Polarity: on=true → bias enabled → wire bit SET (no inversion).
+//
+// Wire bit: bank 11 (C0=0x14) C1 byte bit 5 (mask 0x20).
+// This is the SAME C1 byte as G.3 (mic_trs bit 4) — both are OR'd in.
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13]
+//   C1 = ... | ((prn->mic.mic_bias & 1) << 5) | ...
+//   mic_bias: 1 = bias on, 0 = bias off (no polarity inversion).
+//
+// Flush pattern mirrors setMicTipRing (Codex P2): m_forceBank11Next is set
+// before the idempotent guard so the bit lands on the wire within ≤1 frame.
+// Reuses m_forceBank11Next + captureBank11ForTest infrastructure added in G.3.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setMicBias(bool on)
+{
+    // Codex P2: set flush flag BEFORE idempotent guard.
+    m_forceBank11Next = true;
+
+    if (m_micBias == on) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_micBias = on;
+}
+
+// ---------------------------------------------------------------------------
 // applyBoardQuirks
 //
 // Reads BoardCapabilities (m_caps) and enforces runtime constraints.
@@ -1364,6 +1392,7 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.p1MicBoost     = m_micBoost;
     ctx.p1LineIn       = m_lineIn;
     ctx.p1MicTipRing   = m_micTipRing;
+    ctx.p1MicBias      = m_micBias;     // 3M-1b G.4
     ctx.duplex         = m_duplex;
     ctx.diversity      = m_diversity;
     ctx.antennaIdx     = m_antennaIdx;
@@ -2068,16 +2097,19 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
 
     case 11: // Preamp control (networkproto1.c:593-601)
         out[0] = C0base | 0x14;
-        // C1: preamp bits 0-3 (bit 3 = rx0 again, Thetis quirk) + mic_trs bit 4.
+        // C1: preamp bits 0-3 (bit 3 = rx0 again, Thetis quirk) + mic_trs bit 4
+        //     + mic_bias bit 5.
         // mic_trs polarity inversion: 1 = tip is BIAS/PTT → write !m_micTipRing.
+        // mic_bias polarity: 1 = bias on (no inversion) → write m_micBias.
         // From Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13]
-        //   C1 = ... | ((prn->mic.mic_trs & 1) << 4) | ...
+        //   C1 = ... | ((prn->mic.mic_trs & 1) << 4) | ((prn->mic.mic_bias & 1) << 5) | ...
         out[1] = static_cast<quint8>(
                    (m_rxPreamp[0] ? 0x01 : 0)
                  | (m_rxPreamp[1] ? 0x02 : 0)
                  | (m_rxPreamp[2] ? 0x04 : 0)
-                 | (m_rxPreamp[0] ? 0x08 : 0)  // bit3 = rx0 again (Thetis quirk)
-                 | (!m_micTipRing ? 0x10 : 0x00)); // 3M-1b G.3 — mic_trs (inverted)
+                 | (m_rxPreamp[0] ? 0x08 : 0)        // bit3 = rx0 again (Thetis quirk)
+                 | (!m_micTipRing ? 0x10 : 0x00)      // 3M-1b G.3 — mic_trs (inverted)
+                 | (m_micBias    ? 0x20 : 0x00));     // 3M-1b G.4 — mic_bias (no inversion)
         out[2] = 0; // line_in_gain + puresignal
         out[3] = 0; // user digital outputs
         out[4] = static_cast<quint8>((m_stepAttn[0] & 0x1F) | 0x20); // ADC0 step ATT + enable

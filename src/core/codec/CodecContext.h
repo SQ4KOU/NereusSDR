@@ -180,6 +180,13 @@ struct CodecContext {
     // Populated by buildCodecContext() from RadioConnection::m_micTipRing.
     bool    p1MicTipRing{true};
 
+    // P1 mic-jack phantom power (bias) — bank 11 (C0=0x14) C1 bit 5 (0x20).
+    // Polarity: 1 = bias on (no inversion).
+    // Source: Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13]
+    //   C1 = ... | ((prn->mic.mic_bias & 1) << 5) | ...
+    // Populated by buildCodecContext() from RadioConnection::m_micBias.
+    bool    p1MicBias{false};
+
     // RX VFO frequency words (Hz, raw, no phase-word conversion on P1).
     quint64 rxFreqHz[7]{};
     quint64 txFreqHz{0};

@@ -60,6 +60,7 @@ public:
     void setMicBoost(bool) override {}
     void setLineIn(bool) override {}
     void setMicTipRing(bool) override {}
+    void setMicBias(bool) override {}
 };
 
 // ── Test class ─────────────────────────────────────────────────────────────────

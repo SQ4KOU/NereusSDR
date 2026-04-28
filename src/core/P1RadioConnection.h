@@ -134,6 +134,7 @@ public slots:
     void setMicBoost(bool on) override;
     void setLineIn(bool on) override;
     void setMicTipRing(bool tipHot) override;
+    void setMicBias(bool on) override;
 
 private slots:
     void onReadyRead();

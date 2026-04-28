@@ -1574,3 +1574,44 @@ target_compile_definitions(tst_p1_mic_tip_ring_wire PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_p2_mic_tip_ring_wire)
 target_compile_definitions(tst_p2_mic_tip_ring_wire PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1b Task G.4: P1 mic_bias wire-byte snapshot ──────────────────────
+# 14 tests pin the mic_bias bit (C1 bit 5 = 0x20) of bank 11 (C0=0x14)
+# in P1RadioConnection::setMicBias().
+# Polarity: on=true (bias on) → wire bit 1; on=false (bias off) → wire bit 0.
+# Reuses m_forceBank11Next + captureBank11ForTest infrastructure from G.3.
+#   1.  Default state: C1 bit 5 = 0 (default m_micBias=false).
+#   2.  setMicBias(true)  → C1 bit 5 = 1 (bias on → wire bit set).
+#   3.  setMicBias(false) → C1 bit 5 = 0 (bias off → wire bit clear).
+#   4.  Round-trip: true → false → bit clears after set.
+#   5.  Bank 11 C0 address stays 0x14.
+#   6.  setMicBias(true) does NOT clobber C1 bits 0-3 (preamp).
+#   7.  setMicBias(true) does NOT touch C1 bit 4 (G.3 mic_trs, cross-bit guard).
+#   8.  setMicBias(true) produces C1 = 0x20 in default state (only bit 5).
+#   9.  setMicBias sets m_forceBank11Next (Codex P2 flush pattern).
+#  10.  Repeated same-value call still sets the flush flag (Codex P2).
+#  11.  Idempotency: setMicBias(true) twice → bit stays 1.
+#  12.  Codec path (Standard): setMicBias(true) → C1 bit 5 set.
+#  13.  Codec path (Standard): setMicBias(false) → C1 bit 5 clear.
+#  14.  Codec path (HL2): setMicBias(true) → C1 bit 5 set (FW ignores).
+# Source: Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13].
+nereus_add_test(tst_p1_mic_bias_wire)
+target_compile_definitions(tst_p1_mic_bias_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.4: P2 mic_bias wire-byte snapshot ─────────────────────
+# 10 tests pin the mic_bias_enabled bit (CmdTx byte 50 bit 4 = 0x10)
+# in P2RadioConnection::setMicBias().
+# Polarity: on=true → byte-50 bit 4 = 1 (no inversion).
+#   1.  Default state: byte 50 bit 4 = 0 (default m_micBias=false).
+#   2.  setMicBias(true)  → byte 50 bit 4 = 1 (bias on → wire bit set).
+#   3.  setMicBias(false) → byte 50 bit 4 = 0 (bias off → wire bit clear).
+#   4.  Round-trip true → false → true.
+#   5.  Bits 0 (line_in), 1 (mic_boost), 3 (mic_trs) unaffected — cross-bit guard.
+#   6.  Bits 5-7 of byte 50 unaffected.
+#   7.  Idempotency: setMicBias(true) twice → bit remains 1.
+#   8.  Codec path (OrionMKII): mic_bias at byte 50 bit 4.
+#   9.  Codec path (Saturn/ANAN-G2): same behaviour.
+#  10.  Byte 51 (line_in gain) unaffected by setMicBias.
+# Source: deskhpsdr/src/new_protocol.c:1496-1498 [@120188f].
+nereus_add_test(tst_p2_mic_bias_wire)
+target_compile_definitions(tst_p2_mic_bias_wire PRIVATE NEREUS_BUILD_TESTS)
+

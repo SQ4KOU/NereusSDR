@@ -215,6 +215,22 @@ public slots:
     /// (firmware ignores it).
     virtual void setMicTipRing(bool tipHot) = 0;
 
+    /// Hardware mic-jack phantom power (bias) enable.
+    ///
+    /// Polarity: 1 = bias on (no inversion — parameter maps directly to wire bit).
+    ///
+    /// P1 source: Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13]
+    ///   case 11 (C0=0x14) C1 byte: ((prn->mic.mic_bias & 1) << 5) → bit 5 (0x20)
+    ///   (same bank 11 / case 11 as G.3 mic_trs — both OR into C1)
+    ///
+    /// P2 source: deskhpsdr src/new_protocol.c:1496-1498 [@120188f]
+    ///   if (mic_bias_enabled) { transmit_specific_buffer[50] |= 0x10; }
+    ///   (bit 4, mask 0x10 in byte 50 — different bit position from P1)
+    ///
+    /// HL2 has no mic jack; the P1 implementation still writes the bit
+    /// (firmware ignores it).
+    virtual void setMicBias(bool on) = 0;
+
     // DEPRECATED — call setAntennaRouting directly. Kept for one release
     // cycle as a rollback hatch per docs/architecture/antenna-routing-design.md §7.7.
     // Removed in the release following 3P-I-b.
@@ -376,6 +392,15 @@ protected:
     // P2: emitted to transmit_specific_buffer[50] bit 3 (0x08) inverted.
     // From Thetis networkproto1.c:597 [v2.10.3.13]; deskhpsdr new_protocol.c:1492-1494 [@120188f].
     bool m_micTipRing{true};
+
+    // Shared state for setMicBias (3M-1b G.4).
+    // Polarity: 1 = bias on (no inversion — parameter maps directly to wire bit).
+    // Default false — bias off (per pre-code review §2.3 / §2.7 and
+    //   TransmitModel::micBias default in C.2).
+    // P1: emitted to case 11 (C0=0x14) C1 bit 5 (0x20).
+    // P2: emitted to transmit_specific_buffer[50] bit 4 (0x10).
+    // From Thetis networkproto1.c:597 [v2.10.3.13]; deskhpsdr new_protocol.c:1496-1498 [@120188f].
+    bool m_micBias{false};
 };
 
 } // namespace NereusSDR

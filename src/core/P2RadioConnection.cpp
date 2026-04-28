@@ -8,7 +8,7 @@
 //   Project Files/Source/ChannelMaster/netInterface.c, original licence from Thetis source is included below
 //   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
 //
-// --- From deskhpsdr/src/new_protocol.c (first deskhpsdr port, 3M-1b G.1; G.2) ---
+// --- From deskhpsdr/src/new_protocol.c (first deskhpsdr port, 3M-1b G.1; G.2; G.3; G.4) ---
 //
 // setMicBoost P2 wire-byte (transmit_specific_buffer[50] bit 1, 0x02) ported
 // from deskhpsdr/src/new_protocol.c:1484-1486 [@120188f].
@@ -18,6 +18,7 @@
 // from deskhpsdr/src/new_protocol.c:1492-1494 [@120188f].
 // NOTE: polarity inversion at NereusSDR API layer — setMicTipRing(tipHot) writes
 // !tipHot to the wire bit (upstream field = "1 = Tip is BIAS/PTT", not mic).
+// setMicBias (G.4): byte 50 bit 4 (0x10), polarity 1=on, deskhpsdr src/new_protocol.c:1496-1498 [@120188f].
 //
 /* Copyright (C)
 * 2015 - John Melton, G0ORX/N6LYT
@@ -54,6 +55,7 @@
 //   2026-04-28 — setMicTipRing: 3rd deskhpsdr port. Byte 50 bit 3 (0x08, INVERTED)
 //                 from deskhpsdr new_protocol.c:1492-1494 [@120188f].
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-28 — setMicBias (G.4): byte 50 bit 4 (0x10), polarity 1=on. deskhpsdr new_protocol.c:1496-1498 [@120188f]. J.J. Boyd (KG4VCF).
 // =================================================================
 
 /*
@@ -1007,6 +1009,43 @@ void P2RadioConnection::setMicTipRing(bool tipHot)
         m_mic.micControl |= 0x08;
     } else {
         m_mic.micControl &= ~quint8(0x08);
+    }
+    if (m_running && m_socket) {
+        sendCmdTx();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setMicBias (3M-1b G.4)
+//
+// Enables or disables hardware mic-jack phantom power (bias voltage).
+// Polarity: on=true → bias enabled → wire bit SET (no inversion).
+//
+// Wire byte: transmit_specific_buffer[50] bit 4 (mask 0x10).
+//
+// Porting from deskhpsdr/src/new_protocol.c:1496-1498 [@120188f]:
+//   if (mic_bias_enabled) {
+//     transmit_specific_buffer[50] |= 0x10;
+//   }
+//
+// Note: P2 bit position (bit 4 = 0x10) differs from P1 bit position
+// (bit 5 = 0x20 in C1 of bank 11). Both carry the same polarity (1=on).
+// The bit field is written via m_mic.micControl which is used in
+// composeCmdTxLegacy() at buf[50] and in P2CodecOrionMkII at byte 50.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setMicBias(bool on)
+{
+    if (m_micBias == on) {
+        return;  // idempotent — 100 ms heartbeat covers any state drift
+    }
+    m_micBias = on;
+    // No polarity inversion: mic_bias_enabled = 1 means bias on.
+    // From deskhpsdr/src/new_protocol.c:1496-1498 [@120188f]:
+    //   if (mic_bias_enabled) { transmit_specific_buffer[50] |= 0x10; }
+    if (on) {
+        m_mic.micControl |= 0x10;
+    } else {
+        m_mic.micControl &= ~quint8(0x10);
     }
     if (m_running && m_socket) {
         sendCmdTx();
