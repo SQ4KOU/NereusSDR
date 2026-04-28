@@ -83,9 +83,13 @@ warren@wpratt.com
 //                 outQ accordingly.  Previous code used kTxDspBufferSize (4096)
 //                 for all four buffers, causing fexchange2 to produce no output.
 //                 By J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-27 — setTxMode(DSPMode) / setTxBandpass(int, int) /
+//                 setSubAmMode(int) implemented by J.J. Boyd (KG4VCF) during
+//                 3M-1b Task D.2 (per-mode TXA config setters). AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
-#include "TxChannel.h"
+#include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
 #include "LogCategories.h"
 #include "RadioConnection.h"
 #include "TxMicRouter.h"
@@ -666,6 +670,121 @@ void TxChannel::setStageRunning(Stage s, bool run)
                          << "3M-1b/3M-3a. No-op in 3M-1a.";
         return;
     }
+}
+
+// ---------------------------------------------------------------------------
+// setTxMode()
+//
+// Set the TXA channel's DSP mode.
+//
+// Porting from Thetis radio.cs:2670-2696 [v2.10.3.13] — CurrentDSPMode setter,
+// original C# logic (else-branch, all modes that are not AM/SAM):
+//
+//   else
+//       WDSP.SetTXAMode(WDSP.id(thread, 0), value);
+//
+// For AM/SAM the Thetis setter dispatches through sub_am_mode first; that
+// dispatch is setSubAmMode()'s job (deferred to 3M-3b).  setTxMode() calls
+// SetTXAMode with the raw mode integer — correct for all non-AM/SAM modes,
+// and correct as a base call even for AM/SAM (SetTXAMode wires the WDSP
+// pipeline; the sub-mode refines the sideband selection afterwards).
+//
+// WDSP SetTXAMode wires:
+//   - Activates ammod (stage 20) for AM/DSB modes.
+//   - Activates fmmod (stage 21) for FM modes.
+//   - Activates preemph (stage 8) for FM.
+//   - Calls TXASetupBPFilters() to reconfigure bp0/bp1/bp2 to match mode.
+// From Thetis wdsp/TXA.c:753-789 [v2.10.3.13].
+//
+// In unit-test builds that link WDSP but haven't called OpenChannel, the
+// txa[].rsmpin.p null-guard fires and the call is a no-op — same pattern as
+// setTuneTone() and setRunning().
+// ---------------------------------------------------------------------------
+void TxChannel::setTxMode(DSPMode mode)
+{
+#ifdef HAVE_WDSP
+    // From Thetis radio.cs:2670-2696 [v2.10.3.13]
+    if (txa[m_channelId].rsmpin.p == nullptr) {
+        return;  // channel not yet opened (unit-test path)
+    }
+    SetTXAMode(m_channelId, static_cast<int>(mode));
+#else
+    Q_UNUSED(mode);
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// setTxBandpass()
+//
+// Set the TXA channel's bandpass filter cutoff frequencies.
+//
+// Porting from Thetis radio.cs:2730-2780 [v2.10.3.13] — SetTXFilter /
+// TXFilterLow / TXFilterHigh setters, original C# logic:
+//
+//   public void SetTXFilter(int low, int high)
+//   {
+//       ...
+//       WDSP.SetTXABandpassFreqs(WDSP.id(thread, 0), low, high);
+//       ...
+//   }
+//
+// NereusSDR translation: no change-detection guard (Thetis checks low != dsp
+// or high != dsp; NereusSDR's callers are responsible for avoiding unnecessary
+// calls, so we call WDSP unconditionally — simpler and correct for 3M-1b
+// where the same filter values may be set at channel-start to ensure the
+// bandpass is correct regardless of prior state).
+//
+// IQ-space conventions documented in TxChannel.h; WDSP maps the pair to
+// bp0/bp1/bp2 cutoffs internally.
+//
+// From Thetis wdsp/TXA.c:792-799 [v2.10.3.13] — SetTXABandpassFreqs.
+// ---------------------------------------------------------------------------
+void TxChannel::setTxBandpass(int lowHz, int highHz)
+{
+#ifdef HAVE_WDSP
+    // From Thetis radio.cs:2730-2780 [v2.10.3.13]
+    if (txa[m_channelId].rsmpin.p == nullptr) {
+        return;  // channel not yet opened (unit-test path)
+    }
+    SetTXABandpassFreqs(m_channelId,
+                        static_cast<double>(lowHz),
+                        static_cast<double>(highHz));
+#else
+    Q_UNUSED(lowHz);
+    Q_UNUSED(highHz);
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// setSubAmMode()
+//
+// DEFERRED TO 3M-3b.  Throws std::logic_error unconditionally.
+//
+// The full dispatch logic (porting from Thetis radio.cs:2699-2728
+// [v2.10.3.13] — SubAMMode setter) is:
+//
+//   switch (sub_am_mode)
+//   {
+//       case 0: WDSP.SetTXAMode(..., DSPMode.AM);     break;  // double-sided
+//       case 1: WDSP.SetTXAMode(..., DSPMode.AM_LSB); break;
+//       case 2: WDSP.SetTXAMode(..., DSPMode.AM_USB); break;
+//   }
+//
+// In 3M-1b: AM/SAM TX is gated off by BandPlanGuard. This stub exists so
+// the API surface is stable for 3M-3b, and so any accidental 3M-1b caller
+// surfaces immediately as a crash rather than silent misbehaviour.
+//
+// From Thetis radio.cs:2699-2728 [v2.10.3.13] — SubAMMode setter.
+// ---------------------------------------------------------------------------
+[[noreturn]] void TxChannel::setSubAmMode(int /*sub*/)
+{
+    // Defer per Plan §3 Phase D.2 — 3M-3b will activate AM/SAM/DSB TX.
+    // Throws so accidental 3M-1b callers surface immediately.
+    throw std::logic_error(
+        "TxChannel::setSubAmMode deferred to 3M-3b — "
+        "AM/SAM TX is not enabled in 3M-1b. "
+        "Full SubAMMode dispatch (radio.cs:2699-2728 [v2.10.3.13]) "
+        "will be ported in Phase 3M-3b.");
 }
 
 // ---------------------------------------------------------------------------

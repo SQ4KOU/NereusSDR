@@ -1201,3 +1201,25 @@ target_compile_definitions(tst_radio_model_set_tune PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_tx_channel_real_mic_router)
 target_compile_definitions(tst_tx_channel_real_mic_router PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1b Task D.2: TxChannel per-mode TXA config setters ──────────────
+# Tests setTxMode(DSPMode), setTxBandpass(int, int), and setSubAmMode(int).
+#
+# setTxMode wraps WDSP SetTXAMode(channelId, mode).
+# setTxBandpass wraps WDSP SetTXABandpassFreqs(channelId, f_low, f_high).
+# setSubAmMode is deferred to 3M-3b — throws std::logic_error if called.
+#
+# Porting cites (in TxChannel.h / TxChannel.cpp):
+#   setTxMode:      radio.cs:2670-2696 [v2.10.3.13]
+#   setTxBandpass:  radio.cs:2730-2780 [v2.10.3.13]
+#   setSubAmMode:   radio.cs:2699-2728 [v2.10.3.13] (DEFERRED)
+#
+# Test cases (13):
+#   - setTxMode does not throw for: LSB, USB, DIGL, DIGU, AM, CWL, CWU
+#   - setTxBandpass does not throw for: typical SSB, wide SSB, negative-low
+#     (LSB IQ-space), zero-bandwidth, symmetric AM
+#   - setSubAmMode throws std::logic_error for: 0, 1, 2, -1 (out-of-range),
+#     3 (out-of-range)
+#   - setSubAmMode throw carries non-empty error message
+# Pre-code review: §7 (per-mode TXA config trace).
+nereus_add_test(tst_tx_channel_per_mode_config)
+
