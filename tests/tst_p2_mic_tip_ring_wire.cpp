@@ -107,16 +107,21 @@ private slots:
         QCOMPARE(int(buf[50] & 0x02), 0);
     }
 
-    // ── 6. Bits 4-7 of byte 50 unaffected by setMicTipRing ───────────────────
-    // Only bit 3 (mic_trs) changes; bits 4-7 must remain 0 in default state.
+    // ── 6. Bits 4,6-7 of byte 50 unaffected by setMicTipRing; bit 5 is G.6 default ─
+    // After G.6: bit 5 (0x20) SET by default (m_micXlr=true → XLR selected on wire).
+    // setMicTipRing must not change bit 5 (G.6 XLR), bit 4 (G.4 mic_bias), or bits 6-7.
+    // Only bit 3 (mic_trs) changes; bits 4,6,7 (0xD0) must remain 0.
     // Source: deskhpsdr/src/new_protocol.c:1492-1502 [@120188f]
     void byte50UpperBits_unaffectedByMicTipRing() {
         P2RadioConnection conn;
         conn.setMicTipRing(false);
         quint8 buf[60] = {};
         conn.composeCmdTxForTest(buf);
-        // Bits 4-7 must be 0 (only bit 3 set).
-        QCOMPARE(int(buf[50] & 0xF0), 0);
+        // After G.6: bit 5 (0x20) is on by default (XLR selected default).
+        // Bits 4,6,7 (0xD0) must be 0 — not set by setMicTipRing or G.6 defaults.
+        QCOMPARE(int(buf[50] & 0xD0), 0);
+        // Bit 5 (mic_xlr, XLR selected by default) must be set.
+        QCOMPARE(int(buf[50] & 0x20), 0x20);
     }
 
     // ── 7. Idempotent: setMicTipRing(false) twice → bit remains 1 ────────────

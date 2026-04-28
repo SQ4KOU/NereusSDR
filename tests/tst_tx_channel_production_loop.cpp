@@ -87,6 +87,7 @@ public:
     void setMicTipRing(bool) override {}
     void setMicBias(bool) override {}
     void setMicPTT(bool) override {}
+    void setMicXlr(bool) override {}
 
     // Record every sendTxIq() call for assertion.
     void sendTxIq(const float* iq, int n) override

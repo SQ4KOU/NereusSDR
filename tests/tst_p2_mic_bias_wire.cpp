@@ -108,16 +108,21 @@ private slots:
         QCOMPARE(int(buf[50] & 0x08), 0);
     }
 
-    // ── 6. Bits 5-7 of byte 50 unaffected by setMicBias ─────────────────────
-    // Only bit 4 changes; bits 5-7 must remain 0 in default state.
-    // Source: deskhpsdr/src/new_protocol.c:1496-1506 [@120188f]
+    // ── 6. Bits 6-7 of byte 50 unaffected by setMicBias; bit 5 is XLR default ─
+    // After G.6: bit 5 (0x20) is SET by default (m_micXlr=true, XLR selected).
+    // setMicBias must not change bit 5 (G.6 XLR) or bits 6-7.
+    // Only bit 4 (mic_bias) changes; bits 6-7 (0xC0) must remain 0.
+    // Source: deskhpsdr/src/new_protocol.c:1496-1502 [@120188f]
     void byte50UpperBits_unaffectedByMicBias() {
         P2RadioConnection conn;
         conn.setMicBias(true);
         quint8 buf[60] = {};
         conn.composeCmdTxForTest(buf);
-        // Bits 5-7 must be 0 (only bit 4 set).
-        QCOMPARE(int(buf[50] & 0xE0), 0);
+        // After G.6: bit 5 (0x20) is on by default (XLR selected default).
+        // Bits 6-7 (0xC0) must be 0 — not set by setMicBias or G.6 defaults.
+        QCOMPARE(int(buf[50] & 0xC0), 0);
+        // Bit 5 (mic_xlr, default true) must be set.
+        QCOMPARE(int(buf[50] & 0x20), 0x20);
     }
 
     // ── 7. Idempotent: setMicBias(true) twice → bit remains 1 ────────────────

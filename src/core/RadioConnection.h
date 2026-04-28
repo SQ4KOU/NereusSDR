@@ -264,6 +264,25 @@ public slots:
     /// bit (firmware ignores it).
     virtual void setMicPTT(bool enabled) = 0;
 
+    /// Hardware mic-jack XLR input select (Saturn G2 / ANAN-G2 only).
+    ///
+    /// P2-ONLY FEATURE. Saturn G2 hardware ships with an XLR balanced mic
+    /// input; this bit selects between XLR (balanced) and TRS (unbalanced).
+    ///
+    /// P2 source: deskhpsdr src/new_protocol.c:1500-1502 [@120188f]
+    ///   if (mic_input_xlr) { transmit_specific_buffer[50] |= 0x20; }
+    ///   Bit 5 (mask 0x20) of byte 50. Polarity: 1 = XLR jack selected.
+    ///   No inversion — parameter maps directly to wire bit.
+    ///
+    /// P1 implementation is STORAGE-ONLY.
+    ///   P1 hardware has no XLR jack. The setter stores m_micXlr for
+    ///   cross-board API consistency but does NOT emit any wire bytes.
+    ///   P1 case-10 and case-11 C&C bytes are unchanged regardless of value.
+    ///   Comment: "Saturn G2 P2-only feature; P1 hardware has no XLR jack."
+    ///
+    /// Default true — Saturn G2 ships with XLR-enabled configuration.
+    virtual void setMicXlr(bool xlrJack) = 0;
+
     // DEPRECATED — call setAntennaRouting directly. Kept for one release
     // cycle as a rollback hatch per docs/architecture/antenna-routing-design.md §7.7.
     // Removed in the release following 3P-I-b.
@@ -449,6 +468,20 @@ protected:
     // Thetis console.cs:19764 [v2.10.3.13] confirms MicPTTDisabled is the
     //   UI property (storage name = disable flag) — NereusSDR flips to enabled.
     bool m_micPTT{false};
+
+    // Shared state for setMicXlr (3M-1b G.6).
+    // P2-only wire emission. P1 stores the flag for cross-board API consistency
+    //   but does NOT emit any wire bytes. "Saturn G2 P2-only feature; P1 hardware
+    //   has no XLR jack." P1 case-10 and case-11 C&C bytes are UNCHANGED
+    //   regardless of m_micXlr value.
+    // Polarity: 1 = XLR selected (no inversion — parameter maps directly to wire bit).
+    // Default true — Saturn G2 ships with XLR-enabled configuration.
+    //   This matches pre-code review §2.7 and TransmitModel::micXlr default in C.2.
+    // P1: STORAGE-ONLY (no wire emission).
+    // P2: emitted to transmit_specific_buffer[50] bit 5 (0x20).
+    // From deskhpsdr new_protocol.c:1500-1502 [@120188f]:
+    //   if (mic_input_xlr) { transmit_specific_buffer[50] |= 0x20; }
+    bool m_micXlr{true};
 };
 
 } // namespace NereusSDR

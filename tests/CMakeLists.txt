@@ -1658,3 +1658,39 @@ target_compile_definitions(tst_p1_mic_ptt_wire PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_p2_mic_ptt_wire)
 target_compile_definitions(tst_p2_mic_ptt_wire PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1b Task G.6: P1 mic_xlr storage-only ──────────────────────────
+# 8 tests verify that P1RadioConnection::setMicXlr() is STORAGE-ONLY.
+# Saturn G2 P2-only feature — P1 hardware has no XLR jack. No wire emission.
+# P1 case-10 and case-11 C&C bytes must be UNCHANGED regardless of m_micXlr value.
+#   1.  Default state (true): setMicXlr(true) → bank10 unchanged.
+#   2.  Default state: setMicXlr(true) → bank11 unchanged.
+#   3.  setMicXlr(false) → bank10 all 5 bytes unchanged (critical assertion).
+#   4.  setMicXlr(false) → bank11 all 5 bytes unchanged (critical assertion).
+#   5.  Round-trip false→true: bank10 unchanged after both calls.
+#   6.  Round-trip false→true: bank11 unchanged after both calls.
+#   7.  Idempotency: setMicXlr(false) twice → bank11 stable.
+#   8.  Codec path (Standard/HermesII): bank11 still unchanged by setMicXlr.
+# Source: deskhpsdr/src/new_protocol.c:1500-1502 [@120188f] (P2 wire — P1 storage-only).
+nereus_add_test(tst_p1_mic_xlr_storage)
+target_compile_definitions(tst_p1_mic_xlr_storage PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1b Task G.6: P2 mic_xlr wire-byte snapshot ────────────────────
+# 10 tests pin the mic_xlr bit (CmdTx byte 50 bit 5 = 0x20, no inversion)
+# in P2RadioConnection::setMicXlr().
+# POLARITY: xlrJack=true → byte-50 bit 5 = 1; xlrJack=false → = 0. No inversion.
+# Default true — Saturn G2 ships with XLR-enabled config.
+# MicState::micControl default updated from 0x04 to 0x24 (bit 2 + bit 5 set).
+#   1.  Default state: byte 50 bit 5 = 1 (XLR selected by default).
+#   2.  setMicXlr(true)  → byte 50 bit 5 = 1 (XLR selected).
+#   3.  setMicXlr(false) → byte 50 bit 5 = 0 (XLR deselected).
+#   4.  Round-trip false → true.
+#   5.  setMicXlr(true) does NOT touch bits 0-4 (G.1-G.5) — cross-bit guard.
+#   6.  setMicXlr(false) does NOT touch bits 0-4 — cross-bit guard.
+#   7.  Idempotency: setMicXlr(true) twice → bit stays 1.
+#   8.  Codec path (OrionMKII): mic_xlr at byte 50 bit 5.
+#   9.  Codec path (Saturn/ANAN-G2): same behaviour.
+#  10.  Byte 51 (line_in gain) unaffected by setMicXlr.
+# Source: deskhpsdr/src/new_protocol.c:1500-1502 [@120188f].
+nereus_add_test(tst_p2_mic_xlr_wire)
+target_compile_definitions(tst_p2_mic_xlr_wire PRIVATE NEREUS_BUILD_TESTS)
+

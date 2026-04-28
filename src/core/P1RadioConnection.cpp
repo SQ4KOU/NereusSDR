@@ -1279,6 +1279,31 @@ void P1RadioConnection::setMicPTT(bool enabled)
 }
 
 // ---------------------------------------------------------------------------
+// setMicXlr (3M-1b G.6)
+//
+// Saturn G2 P2-only feature; P1 hardware has no XLR jack.
+// Setter stores the flag for cross-board API consistency but does NOT
+// emit any wire bytes. P1 case-10 and case-11 C&C bytes are UNCHANGED
+// regardless of m_micXlr value.
+//
+// P2 source: deskhpsdr/src/new_protocol.c:1500-1502 [@120188f]:
+//   if (mic_input_xlr) { transmit_specific_buffer[50] |= 0x20; }
+//   (byte 50 bit 5 = 0x20, polarity 1=XLR jack — no inversion)
+//   P2 implementation in P2RadioConnection::setMicXlr().
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setMicXlr(bool xlrJack)
+{
+    // Saturn G2 P2-only feature; P1 hardware has no XLR jack.
+    // Setter stores the flag for cross-board consistency but does NOT
+    // emit any wire bytes. P1 case-10 and case-11 C&C bytes are
+    // unchanged regardless of m_micXlr value.
+    if (m_micXlr == xlrJack) {
+        return;
+    }
+    m_micXlr = xlrJack;
+}
+
+// ---------------------------------------------------------------------------
 // applyBoardQuirks
 //
 // Reads BoardCapabilities (m_caps) and enforces runtime constraints.

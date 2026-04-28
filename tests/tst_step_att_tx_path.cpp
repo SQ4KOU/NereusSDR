@@ -122,6 +122,7 @@ public:
     void setMicTipRing(bool) override {}
     void setMicBias(bool) override {}
     void setMicPTT(bool) override {}
+    void setMicXlr(bool) override {}
 
     void setTxStepAttenuation(int dB) override {
         lastTxStepAtt = dB;

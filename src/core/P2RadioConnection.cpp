@@ -8,10 +8,11 @@
 //   Project Files/Source/ChannelMaster/netInterface.c, original licence from Thetis source is included below
 //   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
 //
-// --- From deskhpsdr/src/new_protocol.c (3M-1b G.1–G.5) ---
+// --- From deskhpsdr/src/new_protocol.c (3M-1b G.1–G.6) ---
 // Byte 50 mic control bits: G.1 mic_boost (0x02), G.2 line_in (0x01),
-// G.3 mic_tip_ring (0x08, INVERTED), G.4 mic_bias (0x10), G.5 mic_ptt (0x04, INVERTED).
-// Lines 1480-1498 [@120188f]. See modification history and DESKHPSDR-PROVENANCE.md.
+// G.3 mic_tip_ring (0x08, INVERTED), G.4 mic_bias (0x10), G.5 mic_ptt (0x04, INVERTED),
+// G.6 mic_xlr (0x20, P2-only). Lines 1480-1502 [@120188f].
+// See modification history and DESKHPSDR-PROVENANCE.md.
 //
 /* Copyright (C)
 * 2015 - John Melton, G0ORX/N6LYT
@@ -50,6 +51,7 @@
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-04-28 — setMicBias (G.4): byte 50 bit 4 (0x10), polarity 1=on. deskhpsdr new_protocol.c:1496-1498 [@120188f]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-04-28 — setMicPTT (G.5): byte 50 bit 2 (0x04, INVERTED). deskhpsdr new_protocol.c:1488-1490 [@120188f]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-28 — setMicXlr (G.6): byte 50 bit 5 (0x20), P2-only, polarity 1=XLR. deskhpsdr new_protocol.c:1500-1502 [@120188f]. MicState::micControl default updated 0x04 -> 0x24. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -1091,6 +1093,51 @@ void P2RadioConnection::setMicPTT(bool enabled)
         m_mic.micControl |= 0x04;
     } else {
         m_mic.micControl &= ~quint8(0x04);
+    }
+    if (m_running && m_socket) {
+        sendCmdTx();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setMicXlr (3M-1b G.6)
+//
+// Selects between XLR balanced input (xlrJack=true) and TRS unbalanced
+// input (xlrJack=false) on Saturn G2 / ANAN-G2 hardware.
+// P2-only feature — P1 hardware has no XLR jack.
+// P1 implementation is storage-only (no wire emission).
+//
+// Polarity: 1 = XLR jack selected (no inversion — parameter maps directly
+//   to wire bit). Default true (Saturn G2 ships with XLR-enabled config).
+//
+// Wire byte: transmit_specific_buffer[50] bit 5 (mask 0x20).
+//
+// Porting from deskhpsdr/src/new_protocol.c:1500-1502 [@120188f]:
+//   if (mic_input_xlr) {
+//     transmit_specific_buffer[50] |= 0x20;
+//   }
+//   // Saturn G2 only
+//
+// Cross-reference:
+//   Thetis console.cs [v2.10.3.13] — MicXLR property (Saturn-gated in setup UI).
+//
+// Note: This is the 6th and final byte-50 mic-control bit (G.1–G.6 complete).
+//   MicState::micControl default was updated from 0x04 to 0x24 to reflect
+//   m_micXlr=true default at construction (bit 5 pre-set at init).
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setMicXlr(bool xlrJack)
+{
+    if (m_micXlr == xlrJack) {
+        return;  // idempotent — 100 ms heartbeat covers any state drift
+    }
+    m_micXlr = xlrJack;
+    // Polarity 1=XLR (no inversion). No inversion needed.
+    // From deskhpsdr/src/new_protocol.c:1500-1502 [@120188f]:
+    //   if (mic_input_xlr) { transmit_specific_buffer[50] |= 0x20; }
+    if (xlrJack) {
+        m_mic.micControl |= 0x20;
+    } else {
+        m_mic.micControl &= ~quint8(0x20);
     }
     if (m_running && m_socket) {
         sendCmdTx();
