@@ -1428,3 +1428,31 @@ nereus_add_test(tst_radio_connection_mic_frame_signal)
 nereus_add_test(tst_radio_mic_source)
 target_compile_definitions(tst_radio_mic_source PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1b Task F.3: CompositeTxMicRouter ───────────────────────────────
+# Verifies CompositeTxMicRouter — the strategy-pattern selector that holds
+# PcMicSource + RadioMicSource and dispatches pullSamples based on MicSource
+# selection, with HL2 force-PC and MOX-locked switching.
+# Uses real PcMicSource (FakeAudioBus-backed AudioEngine) and real
+# RadioMicSource (TestRadioConnection). Test seam: NEREUS_BUILD_TESTS exposes
+# hasPendingSwitchForTest().
+# Cases (14):
+#   defaultSource_isPc                           — construction defaults to Pc
+#   setActiveSource_Pc_dispatchesToPc            — Pc selected → PC data flows
+#   setActiveSource_Radio_dispatchesToRadio      — Radio selected → radio data
+#   setActiveSource_Radio_HL2force_dispatchesToPc — hasMicJack=false → forced Pc
+#   setActiveSource_Radio_nullRadioSource_dispatchesToPc — null radio → forced Pc
+#   setActiveSource_Pc_duringMox_appliesImmediately — Pc during MOX → deferred
+#   setActiveSource_Radio_duringMox_isPending_appliedOnMoxOff
+#                                                — Radio during MOX → pending → applied on MOX-off
+#   setActiveSource_Radio_duringMox_HL2force_isIgnored — double-gate: HL2+MOX → ignored
+#   setMoxActive_offToOn_noEffectOnSource        — MOX-on alone doesn't change source
+#   setMoxActive_onToOff_appliesPending          — MOX-off applies pending switch
+#   setMoxActive_onToOff_noPending_noEffect      — MOX-off with no pending → no change
+#   pullSamples_nullDst_returnsZero              — null dst → 0
+#   pullSamples_zeroN_returnsZero                — n=0 → 0
+#   pullSamples_noSources_zeroFills              — both sources null → zero-fill
+#
+# Pre-code review §0.3 + master design §5.2.1. Plan: 3M-1b F.3.
+nereus_add_test(tst_tx_mic_router_selector)
+target_compile_definitions(tst_tx_mic_router_selector PRIVATE NEREUS_BUILD_TESTS)
+
