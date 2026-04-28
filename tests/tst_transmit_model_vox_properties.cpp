@@ -43,7 +43,7 @@ private slots:
         QCOMPARE(t.voxEnabled(), false);
     }
 
-    void default_voxThresholdDb_isMinusFourty() {
+    void default_voxThresholdDb_isMinusForty() {
         // NereusSDR-original default -40 dB (plan §8.5).
         // Thetis ptbVOX default is -20 (console.Designer.cs:6024 [v2.10.3.13]:
         //   ptbVOX.Value = -20), but NereusSDR uses -40 as a more conservative
@@ -168,6 +168,17 @@ private slots:
         QCOMPARE(spy.count(), 0);
     }
 
+    void idempotent_voxGainScalar_atMin_noSignal() {
+        // qFuzzyCompare(0.0f, 0.0f) zero-boundary: evaluates 0 <= 0 = true,
+        // so the guard correctly suppresses emission at kVoxGainScalarMin.
+        // Locks in the zero-boundary behavior explicitly.
+        TransmitModel t;
+        t.setVoxGainScalar(TransmitModel::kVoxGainScalarMin);  // 0.0f
+        QSignalSpy spy(&t, &TransmitModel::voxGainScalarChanged);
+        t.setVoxGainScalar(TransmitModel::kVoxGainScalarMin);  // 0.0f again
+        QCOMPARE(spy.count(), 0);
+    }
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // RANGE CLAMPING
     // (ptbVOX: Minimum=-80, Maximum=0 per console.Designer.cs:6018-6019 [v2.10.3.13])
@@ -208,6 +219,26 @@ private slots:
         t.setVoxThresholdDb(-999);
         QCOMPARE(spy.count(), 1);
         QCOMPARE(spy.first().at(0).toInt(), TransmitModel::kVoxThresholdDbMin);
+    }
+
+    void voxGainScalar_clampSignalCarriesClampedValue() {
+        // Signal must carry clamped value (kVoxGainScalarMax = 100.0f), not raw input.
+        TransmitModel t;
+        QSignalSpy spy(&t, &TransmitModel::voxGainScalarChanged);
+        t.setVoxGainScalar(200.0f);  // exceeds kVoxGainScalarMax = 100.0f
+        QCOMPARE(spy.count(), 1);
+        const QList<QVariant> args = spy.takeFirst();
+        QVERIFY(qFuzzyCompare(args.at(0).value<float>(), TransmitModel::kVoxGainScalarMax));
+    }
+
+    void voxHangTimeMs_clampSignalCarriesClampedValue() {
+        // Signal must carry clamped value (kVoxHangTimeMsMax = 2000), not raw input.
+        TransmitModel t;
+        QSignalSpy spy(&t, &TransmitModel::voxHangTimeMsChanged);
+        t.setVoxHangTimeMs(5000);  // exceeds kVoxHangTimeMsMax = 2000
+        QCOMPARE(spy.count(), 1);
+        const QList<QVariant> args = spy.takeFirst();
+        QCOMPARE(args.at(0).value<int>(), TransmitModel::kVoxHangTimeMsMax);
     }
 
     void voxGainScalar_clampBelowMin() {
