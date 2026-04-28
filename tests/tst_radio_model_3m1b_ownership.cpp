@@ -39,7 +39,6 @@
 #include <QObject>
 #include <QSignalSpy>
 #include <QCoreApplication>
-#include <memory>
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
