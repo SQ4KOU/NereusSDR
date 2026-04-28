@@ -19,7 +19,6 @@
 #pragma once
 
 #include <QWidget>
-#include <functional>
 
 class QVBoxLayout;
 class QSlider;
