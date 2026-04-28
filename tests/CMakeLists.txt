@@ -1314,3 +1314,20 @@ target_compile_definitions(tst_tx_channel_mic_mute PRIVATE NEREUS_BUILD_TESTS)
 #   distinctness: deferred-not-sentinel, sentinel-not-zero
 nereus_add_test(tst_tx_channel_meters)
 
+# ── Phase 3M-1b Task E.1: AudioEngine::pullTxMic ─────────────────────────────
+# Verifies the TX-mic pull accessor that PcMicSource (Phase F.1) will tap:
+#   nullBus_returnsZero       — no bus configured → 0
+#   zeroN_returnsZero         — n <= 0 guard → 0
+#   nullDst_returnsZero       — null dst guard → 0
+#   emptyBus_returnsZero      — bus open but no data → 0
+#   int16Stereo_returnsSampleCount        — 2 stereo frames → 2
+#   int16StereoToFloat32Mono_correctConversion — left/32768, right discarded
+#   float32StereoToMono_correctPassthrough     — left taken, right discarded
+#   float32Mono_fullTransfer  — mono bus, all 3 samples pass through
+#   partialBus_returnsActualCount — 1 frame available, asked for 4 → 1
+#
+# Uses FakeAudioBus injected via NEREUS_BUILD_TESTS seam setTxInputBusForTest.
+# Pre-code review: §0.3 (PcMicSource arch).
+nereus_add_test(tst_audio_engine_pull_tx_mic)
+target_compile_definitions(tst_audio_engine_pull_tx_mic PRIVATE NEREUS_BUILD_TESTS)
+

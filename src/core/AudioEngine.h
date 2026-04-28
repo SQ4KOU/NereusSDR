@@ -162,11 +162,43 @@ public:
     // Test seam — inject a fake IAudioBus into the headphones slot.
     void setHeadphonesBusForTest(std::unique_ptr<IAudioBus> bus);
 
+    // Test seam — inject a fake IAudioBus into the TX-input slot so unit
+    // tests can exercise pullTxMic without standing up a real PortAudio
+    // capture device. Takes ownership of `bus`.
+    // Plan: 3M-1b E.1.
+    void setTxInputBusForTest(std::unique_ptr<IAudioBus> bus);
+
 #endif
 
     // Called by RxDspWorker when a slice produces an RX audio block.
     // samples is interleaved stereo float32, length = frames * 2.
     void rxBlockReady(int sliceId, const float* samples, int frames);
+
+    // Pull TX-mic audio samples from the bound TX-input bus.
+    //
+    // Drains m_txInputBus->pull(...), converts the raw byte buffer to
+    // float32 mono samples, and writes up to `n` samples to `dst`.
+    // Returns the number of samples actually written; returns 0 if
+    // m_txInputBus is null (mic not configured), dst is null, n <= 0,
+    // or if the bus has no data ready.
+    //
+    // Audio-thread safe: m_txInputBus uses a lock-free SPSC ring; this
+    // method does not block.
+    //
+    // Format conversion contract:
+    //   - If the bus negotiated format is Int16 (typical mic device),
+    //     each Int16 sample is normalised to float32 by dividing by
+    //     32768.0f. Only the left channel (channel 0) is used; the
+    //     right channel (if stereo) is discarded, producing mono output.
+    //   - If the bus negotiated format is Float32, the left channel is
+    //     taken directly. Multichannel buses discard all but channel 0.
+    //   - Other sample formats (Int24, Int32) are unsupported; returns 0.
+    //
+    // Caller (PcMicSource in Phase F.1) is responsible for resampling if
+    // the bus rate doesn't match the TXA DSP rate.
+    //
+    // Plan: 3M-1b E.1. Pre-code review §0.3 (PcMicSource arch).
+    int pullTxMic(float* dst, int n);
 
     // Master volume (0.0–1.0). Read on the DSP thread, written on the
     // main thread. Preserves the existing AF-gain wiring in

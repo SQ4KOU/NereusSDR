@@ -781,6 +781,11 @@ void AudioEngine::setHeadphonesBusForTest(std::unique_ptr<IAudioBus> bus)
     m_headphonesBus = std::move(bus);
 }
 
+void AudioEngine::setTxInputBusForTest(std::unique_ptr<IAudioBus> bus)
+{
+    m_txInputBus = std::move(bus);
+}
+
 #endif
 
 void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
@@ -903,6 +908,64 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
             }
         }
     }
+}
+
+int AudioEngine::pullTxMic(float* dst, int n)
+{
+    // Plan: 3M-1b E.1. Pre-code review §0.3 (PcMicSource arch).
+    if (m_txInputBus == nullptr || dst == nullptr || n <= 0) {
+        return 0;
+    }
+
+    const AudioFormat fmt = m_txInputBus->negotiatedFormat();
+    const int channels = (fmt.channels > 0) ? fmt.channels : 1;
+
+    int bytesPerSample = 0;
+    if (fmt.sample == AudioFormat::Sample::Int16) {
+        bytesPerSample = 2;
+    } else if (fmt.sample == AudioFormat::Sample::Float32) {
+        bytesPerSample = 4;
+    } else {
+        // Int24 and Int32 are not supported on the TX-mic path.
+        qCWarning(lcAudio) << "pullTxMic: unsupported sample format"
+                           << static_cast<int>(fmt.sample);
+        return 0;
+    }
+
+    // To produce n mono output samples we need n * channels source samples.
+    const int needSrcSamples = n * channels;
+    const qint64 needBytes = static_cast<qint64>(needSrcSamples) * bytesPerSample;
+
+    // thread_local scratch avoids heap allocation on every audio-thread call.
+    // Grows once per thread; zero-alloc thereafter.
+    static thread_local std::vector<char> scratch;
+    if (static_cast<qint64>(scratch.size()) < needBytes) {
+        scratch.resize(static_cast<size_t>(needBytes));
+    }
+
+    const qint64 gotBytes = m_txInputBus->pull(scratch.data(), needBytes);
+    if (gotBytes <= 0) {
+        return 0;
+    }
+
+    const int gotSrcSamples = static_cast<int>(gotBytes / bytesPerSample);
+    const int gotMonoSamples = gotSrcSamples / channels;
+
+    if (fmt.sample == AudioFormat::Sample::Int16) {
+        const int16_t* src = reinterpret_cast<const int16_t*>(scratch.data());
+        for (int i = 0; i < gotMonoSamples; ++i) {
+            // Take left channel (index 0 in each interleaved frame).
+            dst[i] = static_cast<float>(src[i * channels]) / 32768.0f;
+        }
+    } else {
+        // Float32
+        const float* src = reinterpret_cast<const float*>(scratch.data());
+        for (int i = 0; i < gotMonoSamples; ++i) {
+            dst[i] = src[i * channels];
+        }
+    }
+
+    return gotMonoSamples;
 }
 
 void AudioEngine::setVolume(float volume)
