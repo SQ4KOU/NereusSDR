@@ -311,6 +311,31 @@ struct BoardCapabilities {
     // 3M-1b.
     bool hasMicJack {true};
 
+    // Per-board mic gain slider range (Phase 3M-1b Task I.4).
+    //
+    // Porting from Thetis console.cs:19151-19171 [v2.10.3.13]:
+    //   private int mic_gain_min = -40;
+    //   private int mic_gain_max = 10;
+    //
+    // These are the runtime defaults for all known boards.  In Thetis they
+    // are user-adjustable at runtime via udMicGainMin / udMicGainMax spinboxes
+    // in the grpBoxMic settings group (setup.designer.cs:46808-46866
+    // [v2.10.3.13]; spinbox widget range: Min -96..0, Max 1..70).
+    //
+    // NereusSDR uses the Thetis runtime defaults (-40/+10) for all known
+    // boards, and the TransmitModel fallback (-50/+70) for Unknown.
+    // The slider default is coded in TransmitModel::kMicGainDbMin/Max.
+    //
+    // Unknown board (kUnknown) defaults to -50/+70 (matches the global
+    // TransmitModel::kMicGainDbMin/Max fallback).
+    // All known boards default to -40/+10 per Thetis runtime defaults.
+    //
+    // TODO [3M-1b L.x]: persist user-overridden mic gain range per-MAC
+    // in AppSettings (mirrors Thetis udMicGainMin/Max persistence in
+    // setup.cs DB.SaveVarsDictionary).
+    int micGainMinDb {-40};
+    int micGainMaxDb {+10};
+
     // Phase 3P-F Task 2: accessory board enable rules.
     // Source: setup.cs:19834-20310 RadioModelChanged() per-model if-ladder [@501e3f5]
     //         setup.cs:6338 AddHPSDRPages() for tpPennyCtrl / tpAlexControl visibility.

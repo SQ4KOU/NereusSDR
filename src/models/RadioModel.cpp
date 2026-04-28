@@ -822,6 +822,12 @@ const BoardCapabilities& RadioModel::boardCapabilities() const
         overrideCaps.isRxOnlySku = m_testCapsIsRxOnly;  // 3M-1a G.2
         overrideCaps.hasMicJack  = m_testCapsHasMicJack; // 3M-1b I.1
         overrideCaps.board       = m_testCapsHw;          // 3M-1b I.3
+        // 3M-1b I.4: propagate per-board mic gain range from the canonical
+        // caps table for the injected board type.  This lets mic-gain range
+        // tests observe the correct per-family values without a live radio.
+        const BoardCapabilities& canonical = BoardCapsTable::forBoard(m_testCapsHw);
+        overrideCaps.micGainMinDb = canonical.micGainMinDb;
+        overrideCaps.micGainMaxDb = canonical.micGainMaxDb;
         return overrideCaps;
     }
 #endif

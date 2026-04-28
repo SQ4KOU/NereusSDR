@@ -41,8 +41,15 @@
 // HL2 hides all three groups (hasMicJack=false). HW-family discriminated
 // via BoardCapabilities::board (HPSDRHW enum).
 //
+// Phase 3M-1b Task I.4 (2026-04-28): Mic Gain slider reads per-board
+//   range from BoardCapabilities::micGainMinDb / micGainMaxDb.
+//   All known boards: -40/+10 (Thetis console.cs:19151-19171 [v2.10.3.13]
+//   runtime defaults). Unknown board: -50/+70 (TransmitModel fallback).
+//   Initial value clamped to range at construction.
+//   Cite: Pre-code review §5.4.
+//
 // Design spec: docs/architecture/phase3m-1b-mic-ssb-voice-plan.md
-// §3 Phase I (I.1–I.3) + pre-code review §5.1 + §5.4.
+// §3 Phase I (I.1–I.4) + pre-code review §5.1 + §5.4.
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-04-28 — I.1 written by J.J. Boyd (KG4VCF), with AI-assisted
@@ -52,6 +59,8 @@
 //   2026-04-28 — I.3 Radio Mic per-family group boxes written by
 //                J.J. Boyd (KG4VCF), with AI-assisted implementation
 //                via Anthropic Claude Code.
+//   2026-04-28 — I.4 Per-board mic gain range written by J.J. Boyd (KG4VCF),
+//                with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; no Thetis logic ported here.

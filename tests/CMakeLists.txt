@@ -1838,3 +1838,22 @@ target_compile_definitions(tst_audio_tx_input_pc_mic_group PRIVATE NEREUS_BUILD_
 nereus_add_test(tst_audio_tx_input_radio_mic_group)
 target_compile_definitions(tst_audio_tx_input_radio_mic_group PRIVATE NEREUS_BUILD_TESTS)
 
+# =============================================================================
+# Phase 3M-1b Task I.4 — Per-board mic gain slider range on AudioTxInputPage
+# =============================================================================
+# Covers:
+#   1.    Unknown board: slider range = -50/+70 (TransmitModel fallback).
+#   2.    Hermes board: slider range = -40/+10 (Thetis runtime defaults).
+#   3.    Saturn board: slider range = -40/+10 (Thetis runtime defaults).
+#   4.    HermesLite board: slider range = -40/+10 (no mic jack, but caps OK).
+#   5.    Slider clamps low: model -50 dB on Hermes → slider at -40.
+#   6.    Slider clamps high: model +70 dB on Hermes → slider at +10.
+#   7.    UI → model: slider setValue(5) → micGainDb = 5.
+#   8.    Model → UI: setMicGainDb(-20) → slider value = -20.
+#   9.    TransmitModel clamps above global kMicGainDbMax.
+#  10.    No feedback loop: model → UI → no re-emission.
+# NEREUS_BUILD_TESTS required for RadioModel::setCapsHwForTest +
+#   setCapsHasMicJackForTest.
+nereus_add_test(tst_audio_tx_input_mic_gain_mirror)
+target_compile_definitions(tst_audio_tx_input_mic_gain_mirror PRIVATE NEREUS_BUILD_TESTS)
+

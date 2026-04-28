@@ -170,13 +170,19 @@ AudioTxInputPage::AudioTxInputPage(RadioModel* model, QWidget* parent)
             updateBufferLabel(storedBuf);
         }
 
-        // Seed mic gain slider.
+        // Seed mic gain slider — clamp stored model value to the per-board
+        // slider range so a value persisted for a different board doesn't
+        // land outside the slider bounds.
         if (m_micGainSlider) {
             QSignalBlocker blk(m_micGainSlider);
-            m_micGainSlider->setValue(tx->micGainDb());
+            const int clampedGain = qBound(
+                m_micGainSlider->minimum(),
+                tx->micGainDb(),
+                m_micGainSlider->maximum());
+            m_micGainSlider->setValue(clampedGain);
             if (m_micGainLabel) {
                 m_micGainLabel->setText(
-                    QStringLiteral("%1 dB").arg(tx->micGainDb()));
+                    QStringLiteral("%1 dB").arg(clampedGain));
             }
         }
 
@@ -417,11 +423,34 @@ void AudioTxInputPage::buildPcMicGroup(QVBoxLayout* parentLayout)
             this, &AudioTxInputPage::onTestMicToggled);
 
     // ── Row 5: Mic Gain ───────────────────────────────────────────────────────
+    // Range is read from BoardCapabilities::micGainMinDb / micGainMaxDb.
+    //
+    // From Thetis console.cs:19151-19171 [v2.10.3.13]:
+    //   private int mic_gain_min = -40;  // runtime default for all known boards
+    //   private int mic_gain_max = 10;   // runtime default for all known boards
+    //
+    // Unknown board fallback uses TransmitModel::kMicGainDbMin/Max (-50/+70).
+    // The initial slider value clamps to the per-board range so an initial
+    // value of -6 dB is always valid within [-40, +10] (known boards) or
+    // [-50, +70] (Unknown).
+    //
+    // Board capabilities are static at construction time for 3M-1b.
+    // TODO [3M-1b I.x]: refresh slider range on currentRadioChanged when
+    // RadioModel emits a capability-change signal (dynamic re-eval).
+    const int micGainMin = model()
+        ? model()->boardCapabilities().micGainMinDb
+        : TransmitModel::kMicGainDbMin;
+    const int micGainMax = model()
+        ? model()->boardCapabilities().micGainMaxDb
+        : TransmitModel::kMicGainDbMax;
+
     m_micGainSlider = new QSlider(Qt::Horizontal, this);
-    m_micGainSlider->setMinimum(TransmitModel::kMicGainDbMin);
-    m_micGainSlider->setMaximum(TransmitModel::kMicGainDbMax);
+    m_micGainSlider->setMinimum(micGainMin);
+    m_micGainSlider->setMaximum(micGainMax);
     m_micGainSlider->setSingleStep(1);
-    m_micGainSlider->setValue(-6);  // TransmitModel default
+    // Default -6 dB — clamp to range in case the initial model value falls
+    // outside (e.g. a loaded -50 dB value on a board with max = +10).
+    m_micGainSlider->setValue(qBound(micGainMin, -6, micGainMax));
 
     m_micGainLabel = new QLabel(QStringLiteral("-6 dB"), this);
     m_micGainLabel->setMinimumWidth(60);
@@ -776,7 +805,9 @@ void AudioTxInputPage::buildHermesRadioMicGroup(QVBoxLayout* parentLayout)
             this, &AudioTxInputPage::onHermesMicBoostToggled);
 
     // ── Row 3: Line In Gain slider ───────────────────────────────────────────
-    // Range: kLineInBoostMin (-34) to kLineInBoostMax (12), 1 dB steps.
+    // Range: kLineInBoostMin (-34.5 → int: -34) to kLineInBoostMax (12), 1 dB steps.
+    // kLineInBoostMin is a double (-34.5) cast to int at slider construction
+    // time via static_cast<int>; the slider integer minimum is therefore -34.
     m_hermesLineInGainSlider = new QSlider(Qt::Horizontal, m_hermesGroup);
     m_hermesLineInGainSlider->setMinimum(static_cast<int>(TransmitModel::kLineInBoostMin));
     m_hermesLineInGainSlider->setMaximum(static_cast<int>(TransmitModel::kLineInBoostMax));

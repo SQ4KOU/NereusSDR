@@ -29,7 +29,6 @@
 #include <QtTest/QtTest>
 #include <QApplication>
 #include <QAbstractButton>
-#include <QButtonGroup>
 #include <QCheckBox>
 #include <QGroupBox>
 #include <QRadioButton>
