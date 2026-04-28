@@ -1857,3 +1857,28 @@ target_compile_definitions(tst_audio_tx_input_radio_mic_group PRIVATE NEREUS_BUI
 nereus_add_test(tst_audio_tx_input_mic_gain_mirror)
 target_compile_definitions(tst_audio_tx_input_mic_gain_mirror PRIVATE NEREUS_BUILD_TESTS)
 
+# =============================================================================
+# Phase 3M-1b Task I.5 — Integration: chk20dbMicBoost → VOX threshold scaling
+# =============================================================================
+# Verifies the full chain:
+#   AudioTxInputPage checkbox toggle
+#     → TransmitModel::setMicBoost
+#     → TransmitModel::micBoostChanged
+#     → MoxController::onMicBoostChanged  [H.2 wiring in RadioModel]
+#     → MoxController::recomputeVoxThreshold
+#     → MoxController::voxThresholdRequested(double)
+#
+# Test matrix (~7 cases):
+#   1.  Default state: NAN sentinel → at least one initial emit.
+#   2.  Hermes checkbox ON: voxThresholdRequested fires with scaled value.
+#   3.  Hermes checkbox OFF: voxThresholdRequested fires with unscaled value.
+#   4.  Model setMicBoost(true) → Hermes UI checkbox reflects change.
+#   5.  Idempotency: toggle ON twice → only one additional emit.
+#   6.  Orion cross-family: Orion checkbox triggers same recompute chain.
+#   7.  Saturn cross-family: Saturn checkbox triggers same recompute chain.
+#
+# NEREUS_BUILD_TESTS required for RadioModel::setCapsHwForTest +
+#   setCapsHasMicJackForTest + moxController() accessor.
+nereus_add_test(tst_audio_tx_input_mic_boost_vox_thresh)
+target_compile_definitions(tst_audio_tx_input_mic_boost_vox_thresh PRIVATE NEREUS_BUILD_TESTS)
+
