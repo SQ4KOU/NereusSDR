@@ -51,6 +51,13 @@
 //                 meter-mode lock, tune-power lookup, gen1 tone, ATU async,
 //                 NetworkIO.SetUserOut, Apollo auto-tune, 2-TONE pre-stop)
 //                 is split across Tasks C.3 / G.3 / G.4.
+//   2026-04-28 — Phase 3M-1b Task H.1 — setVoxEnabled(bool) and
+//                 onModeChanged(DSPMode) slots added with voice-family
+//                 mode-gate. voxRunRequested(bool) phase signal added.
+//                 Internal recomputeVoxRun() emits idempotently on the
+//                 gated value (voxEnabled && isVoiceMode(currentMode)).
+//                 Ports CMSetTXAVoxRun logic from
+//                 cmaster.cs:1039-1052 [v2.10.3.13].
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -61,6 +68,7 @@
 #include <QObject>
 #include <QTimer>
 #include "core/PttMode.h"
+#include "core/WdspTypes.h"
 
 namespace NereusSDR {
 
@@ -206,6 +214,40 @@ public slots:
     // is in MoxController.cpp in the setTune(false) body comment.
     void setTune(bool on);
 
+    // setVoxEnabled: engage/disengage VOX with voice-family mode-gate.
+    //
+    // From Thetis CMSetTXAVoxRun (cmaster.cs:1039-1052 [v2.10.3.13]):
+    //   VOX fires only when the TX DSP mode is in the voice family:
+    //   LSB, USB, DSB, AM, SAM, FM, DIGL, DIGU.  In CW (CWL, CWU),
+    //   SPEC, or DRM the gated result is always false regardless of the
+    //   voxEnabled flag value.
+    //
+    // Idempotent on the GATED value: if the gate result does not change
+    // (e.g. VOX toggled while in CW mode), no signal is emitted and no
+    // WDSP call is made.  This prevents spurious SetDEXPRunVox(false)
+    // calls when the user operates the VOX button in a non-voice mode.
+    //
+    // Wired by RadioModel H.1:
+    //   TransmitModel::voxEnabledChanged → MoxController::setVoxEnabled
+    //
+    // From Thetis cmaster.cs:1039-1052 [v2.10.3.13]:
+    //   bool run = Audio.VOXEnabled && (mode == DSPMode.LSB || ...)
+    //   cmaster.SetDEXPRunVox(id, run);
+    void setVoxEnabled(bool on);
+
+    // onModeChanged: re-evaluate the voice-family gate when the TX DSP
+    // mode changes.
+    //
+    // Called whenever SliceModel::dspModeChanged fires on the active
+    // slice.  Updates m_currentMode and calls recomputeVoxRun().
+    //
+    // From Thetis CMSetTXAVoxRun (cmaster.cs:1039-1052 [v2.10.3.13]):
+    //   DSPMode mode = Audio.TXDSPMode;  // re-read at every call site
+    //
+    // Wired by RadioModel H.1:
+    //   SliceModel::dspModeChanged → MoxController::onModeChanged
+    void onModeChanged(DSPMode mode);
+
     // setMox: Codex P2-ordered slot.
     //
     // Order (must not be reordered):
@@ -267,6 +309,18 @@ signals:
     void txaFlushed();              // TX→RX phase 3 of 4 — fires after keyUpDelay; in-flight samples cleared
     void rxReady();                 // TX→RX phase 4 of 4 — fires after pttOutDelay
 
+    // voxRunRequested: emitted when the gated VOX-run state changes.
+    //
+    // Carries (voxEnabled && isVoiceMode(currentMode)).  Emitted at most
+    // once per gated-value transition (idempotent on the EMITTED state,
+    // not on the raw input).
+    //
+    // Subscribers: RadioModel H.1 connects this to TxChannel::setVoxRun.
+    //
+    // From Thetis CMSetTXAVoxRun (cmaster.cs:1039-1052 [v2.10.3.13]):
+    //   cmaster.SetDEXPRunVox(id, run);  // 'run' is the gated bool
+    void voxRunRequested(bool run);
+
     // ── TUN state signal (diagnostic) ────────────────────────────────────────
     // manualMoxChanged is NOT a Codex P1 phase signal. F.1 subscribers should
     // continue to wire to the 6 phase signals above; manualMoxChanged is a
@@ -317,6 +371,25 @@ private slots:
     void onBreakInDelayElapsed(); // declared for 3M-2 CW QSK; not started in 3M-1a
 
 private:
+    // isVoiceMode: true for the 8 voice-family DSP modes.
+    //
+    // Voice family (per Thetis CMSetTXAVoxRun, cmaster.cs:1043-1050
+    // [v2.10.3.13]):
+    //   LSB, USB, DSB, AM, SAM, FM, DIGL, DIGU — 8 modes.
+    // Excluded (VOX gate → false):
+    //   CWL, CWU — CW modes (no mic audio).
+    //   SPEC, DRM — special / DRM modes.
+    bool isVoiceMode(DSPMode mode) const noexcept;
+
+    // recomputeVoxRun: recalculate the gated VOX state and emit
+    // voxRunRequested(bool) if the result has changed since the last emit.
+    //
+    // Called by setVoxEnabled() and onModeChanged() after updating their
+    // respective member variables.  Idempotent on the EMITTED value so
+    // that repeated inputs (e.g. VOX toggled in CW mode stays gated-false)
+    // do not trigger spurious WDSP calls.
+    void recomputeVoxRun();
+
     // advanceState: sets m_state and emits stateChanged.
     void advanceState(MoxState newState);
 
@@ -325,6 +398,18 @@ private:
     void stopAllTimers();
 
     // ── Fields ───────────────────────────────────────────────────────────────
+
+    // ── VOX gate state (H.1) ─────────────────────────────────────────────────
+    // From Thetis CMSetTXAVoxRun (cmaster.cs:1039-1052 [v2.10.3.13]):
+    //   Audio.VOXEnabled checked against voice-family mode enum.
+    bool     m_voxEnabled{false};          // last value from TransmitModel::voxEnabled()
+    // Default USB matches SliceModel m_dspMode{DSPMode::USB} default.
+    DSPMode  m_currentMode{DSPMode::USB};  // last value from SliceModel::dspMode()
+    // Tracks the last emitted gated value for idempotency.
+    // Initial false matches (m_voxEnabled=false && ...) so no spurious emit at startup.
+    bool     m_lastVoxRunGated{false};
+
+    // ── MOX core state ────────────────────────────────────────────────────────
     bool     m_mox{false};               // single source of truth for MOX
     MoxState m_state{MoxState::Rx};      // current state-machine position
     PttMode  m_pttMode{PttMode::None};   // current PTT mode

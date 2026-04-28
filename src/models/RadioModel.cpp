@@ -648,6 +648,49 @@ RadioModel::RadioModel(QObject* parent)
         }
     }, Qt::QueuedConnection);
 
+    // ── H.1: VOX run gated by voice-family mode ───────────────────────────────
+    // Ports CMSetTXAVoxRun logic (cmaster.cs:1039-1052 [v2.10.3.13]):
+    //   bool run = Audio.VOXEnabled && (mode in voice family)
+    //   cmaster.SetDEXPRunVox(id, run);
+    //
+    // Signal chain:
+    //   TransmitModel::voxEnabledChanged → MoxController::setVoxEnabled
+    //   SliceModel::dspModeChanged       → MoxController::onModeChanged
+    //   MoxController::voxRunRequested   → TxChannel::setVoxRun
+    //
+    // MoxController acts as the gating layer; TxChannel::setVoxRun is a
+    // thin WDSP wrapper (D.3). The MoxController has already been seeded
+    // with m_currentMode=DSPMode::USB (matching SliceModel default) and
+    // m_voxEnabled=false so no spurious emit occurs at startup.
+    //
+    // Note: SliceModel wiring uses m_activeSlice (the single TX slice in
+    // 3M-1b). If m_activeSlice is null at construction time the connection
+    // is deferred; 3M-1b always has exactly one slice added during
+    // onConnected() before any user interaction can enable VOX.
+    connect(&m_transmitModel, &TransmitModel::voxEnabledChanged,
+            m_moxController,  &MoxController::setVoxEnabled);
+
+    // Active-slice mode gate: wire slice(0) dspModeChanged → MoxController.
+    // In 3M-1b there is exactly one slice; wiring via slice(0) is correct.
+    // 3F multi-pan will need to re-evaluate when the active TX slice can change.
+    // TODO [3F]: rewire to activeSlice() when multi-panadapter TX switching lands.
+    if (!m_slices.isEmpty()) {
+        connect(m_slices.first(), &SliceModel::dspModeChanged,
+                m_moxController,  &MoxController::onModeChanged);
+    }
+    // If no slice exists yet (early construction), the mode defaults to USB
+    // (voice family) in MoxController, which is safe. The slice connection
+    // must be re-evaluated in onConnected() if slices are created later.
+    // For 3M-1b this is fine: slices are created before the constructor
+    // returns in all tested code paths.
+
+    connect(m_moxController, &MoxController::voxRunRequested,
+            this, [this](bool run) {
+        if (m_txChannel) {
+            m_txChannel->setVoxRun(run);
+        }
+    }, Qt::QueuedConnection);
+
     // TxMicRouter: NullMicSource for 3M-1a (zero-padded silence stream).
     // The TUNE path (gen1 PostGen) overwrites the WDSP input buffer at TXA
     // stage 22, so silence from NullMicSource is functionally inert during

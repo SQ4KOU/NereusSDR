@@ -52,6 +52,12 @@
 //                 console.cs:30142 [v2.10.3.13]. The fuller
 //                 chkTUN_CheckedChanged behaviour is split across
 //                 Tasks C.3 / G.3 / G.4.
+//   2026-04-28 — Phase 3M-1b Task H.1 — isVoiceMode(), recomputeVoxRun(),
+//                 setVoxEnabled(bool), onModeChanged(DSPMode) implemented.
+//                 Voice-family gate: LSB/USB/DSB/AM/SAM/FM/DIGL/DIGU.
+//                 recomputeVoxRun() emits voxRunRequested idempotently on
+//                 the gated value (not the raw inputs).
+//                 Ports CMSetTXAVoxRun (cmaster.cs:1039-1052 [v2.10.3.13]).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -124,6 +130,96 @@ void MoxController::setTimerIntervals(int rfMs, int moxMs, int spaceMs,
     m_keyUpDelayTimer.setInterval(keyUpMs);
     m_pttOutDelayTimer.setInterval(pttOutMs);
     m_breakInDelayTimer.setInterval(breakInMs);
+}
+
+// ---------------------------------------------------------------------------
+// isVoiceMode — returns true for the 8 voice-family DSP modes.
+//
+// Porting from cmaster.cs:CMSetTXAVoxRun:1043-1050 — original C# logic:
+//   bool run = Audio.VOXEnabled &&
+//       (mode == DSPMode.LSB  ||
+//        mode == DSPMode.USB  ||
+//        mode == DSPMode.DSB  ||
+//        mode == DSPMode.AM   ||
+//        mode == DSPMode.SAM  ||
+//        mode == DSPMode.FM   ||
+//        mode == DSPMode.DIGL ||
+//        mode == DSPMode.DIGU);
+//
+// From Thetis Project Files/Source/Console/cmaster.cs:1039-1052 [v2.10.3.13]
+// ---------------------------------------------------------------------------
+bool MoxController::isVoiceMode(DSPMode mode) const noexcept
+{
+    return mode == DSPMode::LSB
+        || mode == DSPMode::USB
+        || mode == DSPMode::DSB
+        || mode == DSPMode::AM
+        || mode == DSPMode::SAM
+        || mode == DSPMode::FM
+        || mode == DSPMode::DIGL
+        || mode == DSPMode::DIGU;
+}
+
+// ---------------------------------------------------------------------------
+// recomputeVoxRun — recalculate gated VOX state and emit if changed.
+//
+// Idempotent on the EMITTED (gated) value, not the raw inputs.
+// This prevents spurious voxRunRequested(false) calls when the user
+// toggles VOX while already in CW mode (gated stays false both times).
+//
+// From Thetis Project Files/Source/Console/cmaster.cs:1039-1052 [v2.10.3.13]
+//   cmaster.SetDEXPRunVox(id, run);  ← 'run' is the gated value
+// ---------------------------------------------------------------------------
+void MoxController::recomputeVoxRun()
+{
+    const bool gated = m_voxEnabled && isVoiceMode(m_currentMode);
+    if (gated == m_lastVoxRunGated) {
+        return;  // idempotent on emitted state; no spurious emit
+    }
+    m_lastVoxRunGated = gated;
+    emit voxRunRequested(gated);
+}
+
+// ---------------------------------------------------------------------------
+// setVoxEnabled — engage/disengage VOX with voice-family mode-gate.
+//
+// Updates m_voxEnabled and calls recomputeVoxRun(). If the mode is not
+// in the voice family (e.g. CWL), the gated result stays false and no
+// signal is emitted.
+//
+// Wired by RadioModel H.1:
+//   TransmitModel::voxEnabledChanged → MoxController::setVoxEnabled
+//
+// From Thetis Project Files/Source/Console/cmaster.cs:1039-1052 [v2.10.3.13]:
+//   bool run = Audio.VOXEnabled && (mode == DSPMode.LSB || ...)
+//   cmaster.SetDEXPRunVox(id, run);
+// ---------------------------------------------------------------------------
+void MoxController::setVoxEnabled(bool on)
+{
+    m_voxEnabled = on;
+    recomputeVoxRun();
+}
+
+// ---------------------------------------------------------------------------
+// onModeChanged — re-evaluate voice-family gate on TX DSP mode change.
+//
+// Updates m_currentMode and calls recomputeVoxRun().  If VOX is not
+// enabled, the gated result stays false regardless of mode and no signal
+// is emitted.  If VOX is enabled, a mode change from LSB (voice) to CWL
+// (non-voice) emits voxRunRequested(false); reverse emits true.
+//
+// Wired by RadioModel H.1:
+//   SliceModel::dspModeChanged → MoxController::onModeChanged
+//
+// From Thetis Project Files/Source/Console/cmaster.cs:1039-1052 [v2.10.3.13]:
+//   DSPMode mode = Audio.TXDSPMode;   // re-read on each invocation
+//   bool run = Audio.VOXEnabled && (mode == DSPMode.LSB || ...)
+//   cmaster.SetDEXPRunVox(id, run);
+// ---------------------------------------------------------------------------
+void MoxController::onModeChanged(DSPMode mode)
+{
+    m_currentMode = mode;
+    recomputeVoxRun();
 }
 
 // ---------------------------------------------------------------------------

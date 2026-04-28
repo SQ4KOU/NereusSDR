@@ -1013,6 +1013,21 @@ nereus_add_test(tst_mox_controller_phase_signals)
 # Ports chkTUN_CheckedChanged (console.cs:29978-30157 [v2.10.3.13]) flag block.
 nereus_add_test(tst_mox_controller_tune)
 
+# ── Phase 3M-1b Task H.1: MoxController::setVoxEnabled voice-family mode-gate ─
+# Verifies: setVoxEnabled(bool) + onModeChanged(DSPMode) + voxRunRequested(bool);
+# Default state: no spurious emit at startup (m_voxEnabled=false, gated=false);
+# LSB + VOX on → voxRunRequested(true) fires once;
+# LSB + VOX off (after on) → voxRunRequested(false) fires once;
+# CW mode + VOX on → voxRunRequested(true) does NOT fire (gate=false);
+# LSB + VOX on, then mode change to CWL → voxRunRequested(false) fires once;
+# CWL + VOX on (no emit), then mode change to LSB → voxRunRequested(true) fires once;
+# Within-voice mode change (LSB→USB) while VOX on → no double emit;
+# Repeat setVoxEnabled(true) in voice mode → no double emit (idempotent);
+# All 8 voice-family modes (parametrized): + voxEnabled(true) → emits true;
+# All 4 excluded modes (CWL/CWU/SPEC/DRM) + voxEnabled(true) → no true emit.
+# Source: Thetis cmaster.cs:1039-1052 [v2.10.3.13] — CMSetTXAVoxRun.
+nereus_add_test(tst_mox_controller_vox_enabled)
+
 # ── Phase 3M-1a Task C.1: WdspEngine TX channel API ──────────────────────────
 # Verifies:
 #   TX channel constants match Thetis cmaster.c:177-190 [v2.10.3.13]:
