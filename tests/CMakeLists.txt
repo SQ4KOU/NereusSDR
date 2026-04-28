@@ -927,14 +927,23 @@ nereus_add_test(tst_meter_poller_tx_bindings)
 # Derives from Thetis console.cs:4822 + 12094 + 29978-30157 [v2.10.3.13].
 nereus_add_test(tst_tx_applet_tune_wiring)
 
-# ── Phase 3M-1b J.1: TxApplet Mic Gain slider ────────────────────────────────
-# Verifies the model-layer contracts that TxApplet's Mic Gain slider depends on:
+# ── Phase 3M-1b (relocated): PhoneCwApplet Mic Gain slider ──────────────────
+# Verifies the model-layer contracts that PhoneCwApplet's Mic Gain slider depends on
+# (relocated from TxApplet J.1 per JJ feedback 2026-04-28):
 #   default value (-6 dB), per-board range (BoardCapabilities::micGainMinDb/Max),
 #   bidirectional sync (setMicGainDb / micGainDbChanged), mic-mute state
 #   (micMuteChanged fires; default micMute==true), idempotency / no-feedback-loop,
 #   and clamping to kMicGainDbMin/Max.
 # NereusSDR-native UI (no Thetis cite stamps required for the applet layer).
-nereus_add_test(tst_tx_applet_mic_gain)
+nereus_add_test(tst_phone_applet_mic_gain)
+
+# ── Phase 3M-1b (new): PhoneCwApplet Mic Level Gauge dB conversion ───────────
+# Exercises the linear→dBFS conversion + clamping logic used by the 50 ms
+# AudioEngine::pcMicInputLevel() polling timer that drives m_levelGauge.
+# Tests: silence/sub-floor/exact-threshold → -40 dB floor; 0.1f → -20 dB;
+# 0.5f → -6 dB; 1.0f → 0 dB; NaN/Inf → floor; above FS → +10 ceiling.
+# NereusSDR-native UI (no Thetis cite stamps required for the applet layer).
+nereus_add_test(tst_phone_applet_mic_level_gauge)
 
 # ── Phase 3M-1b J.2: TxApplet VOX toggle button + VoxSettingsPopup ───────────
 # Verifies the model-layer contracts + VoxSettingsPopup that the VOX button

@@ -12,6 +12,13 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-04-28 — Phase 3M-1b: Mic Gain slider (#5) wired bidirectionally to
+//                 TransmitModel::micGainDb (relocated from TxApplet J.1).
+//                 Range from BoardCapabilities::micGainMinDb/Max; label shows
+//                 dB value; slider greyed when micMute == false.
+//                 Mic level gauge (#1) wired to AudioEngine::pcMicInputLevel()
+//                 via 50 ms QTimer; linear→dBFS (20*log10); clamped to
+//                 gauge range [-40, +10]. Silent at floor when mic not active.
 // =================================================================
 
 //=================================================================
@@ -65,6 +72,10 @@
 #include "gui/StyleConstants.h"
 #include "gui/widgets/TriBtn.h"
 #include "NyiOverlay.h"
+#include "core/BoardCapabilities.h"
+#include "core/AudioEngine.h"
+#include "models/RadioModel.h"
+#include "models/TransmitModel.h"
 
 #include <QButtonGroup>
 #include <QComboBox>
@@ -72,9 +83,12 @@
 #include <QLabel>
 #include <QPainter>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSlider>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QVBoxLayout>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -150,6 +164,14 @@ PhoneCwApplet::PhoneCwApplet(RadioModel* model, QWidget* parent)
 {
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     buildUI();
+    wireControls();
+}
+
+PhoneCwApplet::~PhoneCwApplet()
+{
+    if (m_micLevelTimer) {
+        m_micLevelTimer->stop();
+    }
 }
 
 void PhoneCwApplet::buildUI()
@@ -281,18 +303,23 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
         applyComboStyle(m_micSourceCombo);
         row->addWidget(m_micSourceCombo);
 
-        // Control 5a: Mic level slider
+        // Control 5a: Mic gain slider
+        // Range and initial value set in wireControls() once RadioModel is ready.
+        // Placeholder range (0,100) is overwritten before the widget is visible.
+        // Phase 3M-1b: bidirectional with TransmitModel::micGainDb.
         m_micLevelSlider = new QSlider(Qt::Horizontal, page);
         m_micLevelSlider->setRange(0, 100);
         m_micLevelSlider->setValue(50);
         m_micLevelSlider->setStyleSheet(kSliderStyle);
-        m_micLevelSlider->setAccessibleName(QStringLiteral("Microphone level"));
+        m_micLevelSlider->setToolTip(QStringLiteral("Microphone input gain (dB)"));
+        m_micLevelSlider->setAccessibleName(QStringLiteral("Microphone gain"));
         row->addWidget(m_micLevelSlider, 1);
 
-        // Control 5b: Value label (fixedWidth 22)
-        m_micLevelLabel = new QLabel(QStringLiteral("50"), page);
+        // Control 5b: Value label — widened to 35px for "-40 dB" / "+10 dB" strings.
+        // Phase 3M-1b: shows dB value e.g. "-6 dB".
+        m_micLevelLabel = new QLabel(QStringLiteral("-6 dB"), page);
         m_micLevelLabel->setStyleSheet(kLabelStyle);
-        m_micLevelLabel->setFixedWidth(22);
+        m_micLevelLabel->setFixedWidth(35);
         m_micLevelLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         row->addWidget(m_micLevelLabel);
 
@@ -544,12 +571,12 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
         vbox->addLayout(row);
     }
 
-    // ── Mark all Phone controls NYI ───────────────────────────────────────────
-    NyiOverlay::markNyi(m_levelGauge,       kNyiPhone);   // #1
+    // ── Mark Phone controls NYI (wired controls NOT marked) ──────────────────
+    // #1 m_levelGauge  — wired (Phase 3M-1b mic level gauge)
+    // #5 m_micLevelSlider — wired (Phase 3M-1b mic gain)
     NyiOverlay::markNyi(m_compGauge,        kNyiProc);    // #2 — Phase 3I-3
     NyiOverlay::markNyi(m_micProfileCombo,  kNyiPhone);   // #3
     NyiOverlay::markNyi(m_micSourceCombo,   kNyiPhone);   // #4
-    NyiOverlay::markNyi(m_micLevelSlider,   kNyiPhone);   // #5
     NyiOverlay::markNyi(m_accBtn,           kNyiPhone);   // #6
     NyiOverlay::markNyi(m_procBtn,          kNyiProc);    // #7 — Phase 3I-3
     NyiOverlay::markNyi(m_procSlider,       kNyiProc);    // #7 slider
@@ -1027,11 +1054,117 @@ void PhoneCwApplet::buildFmPage(QWidget* page)
     NyiOverlay::markNyi(m_fmMemNext,       kNyiFm);
 }
 
-// ── syncFromModel — NYI ───────────────────────────────────────────────────────
+// ── wireControls — Phase 3M-1b mic gain slider + mic level gauge ─────────────
+//
+// Wires the two now-active Phone page controls:
+//
+//  #5 Mic gain slider (m_micLevelSlider):
+//    - Range reset from BoardCapabilities::micGainMinDb/Max (per-board).
+//    - Initial value from TransmitModel::micGainDb() (default -6 dB).
+//    - UI → Model: slider valueChanged → tx.setMicGainDb(val).
+//    - Model → UI: micGainDbChanged → update slider + label (QSignalBlocker).
+//    - Mic mute: micMuteChanged(false) → slider disabled (greyed).
+//
+//  #1 Mic level gauge (m_levelGauge):
+//    - 50 ms QTimer (20 fps) polls AudioEngine::pcMicInputLevel().
+//    - linear 0..1 → dBFS (20*log10); floor at -60 dBFS → clamped to gauge
+//      min (-40 dB). Reads 0.0f (floor) when TX input bus is not open.
+//    - Guard: NaN/Inf input clamps to -40 dB (gauge floor).
+//
+// m_updatingFromModel inherited from AppletWidget prevents feedback loops.
+void PhoneCwApplet::wireControls()
+{
+    if (!m_model) {
+        return;
+    }
+
+    TransmitModel& tx = m_model->transmitModel();
+
+    // ── #5 Mic gain slider ────────────────────────────────────────────────────
+    // Reset range from per-board capabilities (overrides placeholder 0..100).
+    // From Thetis console.cs:19151-19171 [v2.10.3.13]:
+    //   private int mic_gain_min = -40;   private int mic_gain_max = 10;
+    {
+        const BoardCapabilities& caps = m_model->boardCapabilities();
+        QSignalBlocker b(m_micLevelSlider);
+        m_micLevelSlider->setRange(caps.micGainMinDb, caps.micGainMaxDb);
+        m_micLevelSlider->setValue(tx.micGainDb());
+        m_micLevelLabel->setText(QStringLiteral("%1 dB").arg(tx.micGainDb()));
+        // micMute == true → mic in use → slider enabled.
+        // (Thetis counter-intuitive naming: console.cs:28752 [v2.10.3.13])
+        m_micLevelSlider->setEnabled(tx.micMute());
+    }
+
+    // UI → Model
+    connect(m_micLevelSlider, &QSlider::valueChanged, this, [this, &tx](int val) {
+        if (m_updatingFromModel) { return; }
+        m_micLevelLabel->setText(QStringLiteral("%1 dB").arg(val));
+        tx.setMicGainDb(val);
+    });
+
+    // Model → UI (micGainDbChanged)
+    connect(&tx, &TransmitModel::micGainDbChanged, this, [this](int dB) {
+        m_updatingFromModel = true;
+        {
+            QSignalBlocker b(m_micLevelSlider);
+            m_micLevelSlider->setValue(dB);
+        }
+        m_micLevelLabel->setText(QStringLiteral("%1 dB").arg(dB));
+        m_updatingFromModel = false;
+    });
+
+    // Mic mute state → slider enabled / greyed.
+    // NOTE: micMute == true means mic IS in use; false means muted/disabled.
+    connect(&tx, &TransmitModel::micMuteChanged, this, [this](bool micInUse) {
+        m_micLevelSlider->setEnabled(micInUse);
+    });
+
+    // ── #1 Mic level gauge ────────────────────────────────────────────────────
+    // 50 ms timer (20 fps) — same polling cadence as VAX/HGauge meter precedent.
+    // Reads AudioEngine::pcMicInputLevel() (linear 0..1, thread-safe atomic).
+    // Returns 0.0f when m_txInputBus is null (mic not configured / RX mode).
+    m_micLevelTimer = new QTimer(this);
+    m_micLevelTimer->setInterval(50);
+    connect(m_micLevelTimer, &QTimer::timeout, this, [this]() {
+        if (!m_model || !m_levelGauge) { return; }
+
+        AudioEngine* ae = m_model->audioEngine();
+        if (!ae) { return; }
+
+        const float linear = ae->pcMicInputLevel();
+
+        // Guard: NaN/Inf and very small values (≤1e-6) → floor at -60 dBFS.
+        double dB = -60.0;
+        if (std::isfinite(linear) && linear > 1e-6f) {
+            dB = 20.0 * std::log10(static_cast<double>(linear));
+        }
+
+        // Clamp to gauge range [-40, +10].
+        m_levelGauge->setValue(qBound(-40.0, dB, 10.0));
+    });
+    m_micLevelTimer->start();
+}
+
+// ── syncFromModel ─────────────────────────────────────────────────────────────
 
 void PhoneCwApplet::syncFromModel()
 {
-    // NYI — wired in Phase 3I-1 (Phone/FM) / Phase 3I-2 (CW)
+    if (!m_model) { return; }
+
+    // Mic gain slider + label (Phase 3M-1b)
+    if (m_micLevelSlider) {
+        TransmitModel& tx = m_model->transmitModel();
+        const BoardCapabilities& caps = m_model->boardCapabilities();
+
+        m_updatingFromModel = true;
+        QSignalBlocker b(m_micLevelSlider);
+        m_micLevelSlider->setRange(caps.micGainMinDb, caps.micGainMaxDb);
+        m_micLevelSlider->setValue(tx.micGainDb());
+        m_micLevelLabel->setText(QStringLiteral("%1 dB").arg(tx.micGainDb()));
+        m_micLevelSlider->setEnabled(tx.micMute());
+        m_updatingFromModel = false;
+    }
+    // Other controls wired in Phase 3I-1 (Phone/FM) / Phase 3I-2 (CW)
 }
 
 // ── showPage — switch stacked widget to the given page index ─────────────────

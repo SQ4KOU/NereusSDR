@@ -23,10 +23,6 @@
 //                 Out-of-phase controls hidden with TODO comments.
 //                 syncFromModel() activates. setCurrentBand(Band) added for
 //                 tune-power slider sync on band change.
-//   2026-04-28 — Phase 3M-1b J.1: Mic Gain slider row added between RF Power
-//                 and Tune Power. Bidirectional with TransmitModel::micGainDb.
-//                 Range from BoardCapabilities::micGainMinDb/Max.
-//                 Slider greyed when TransmitModel::micMute == false.
 //   2026-04-28 — Phase 3M-1b J.2: VOX toggle button added below Tune Power.
 //                 Checkable, green border when active. Bidirectional with
 //                 TransmitModel::voxEnabled (default false; does NOT persist).
@@ -42,6 +38,9 @@
 //                 or the normal "Manual transmit (MOX)" for allowed modes.
 //                 onMoxModeChanged(DSPMode) slot wired to SliceModel::dspModeChanged
 //                 via RadioModel in wireControls(). Closes Phase K.
+//   2026-04-28 — Phase 3M-1b (relocation): Mic Gain slider row (J.1) removed.
+//                 Relocated to PhoneCwApplet (#5 slot) per JJ feedback.
+//                 PhoneCwApplet now owns micGainDb wiring and mic level gauge.
 // =================================================================
 
 //=================================================================
@@ -127,8 +126,6 @@ class HGauge;
 //  1.  Forward Power gauge  — HGauge 0–120 W, red > 100 W
 //  2.  SWR gauge            — HGauge 1.0–3.0, red > 2.5
 //  3.  RF Power slider row  — label(62) + slider + value(22)
-//  3b. Mic Gain slider row  — label(62) + slider + value(35) [J.1 Phase 3M-1b]
-//      Range from BoardCapabilities::micGainMinDb/Max; greyed when micMute==false.
 //  4.  Tune Power slider row
 //  4b. VOX toggle button    — checkable, green border on active [J.2 Phase 3M-1b]
 //      Right-click: VoxSettingsPopup with threshold/gain/hang-time sliders.
@@ -147,6 +144,9 @@ class HGauge;
 // 13.  DUP (full duplex)    — checkable
 // 14.  xPA indicator button — checkable
 // 15.  SWR protection LED   — QLabel indicator
+//
+// NOTE: Mic Gain slider was here (Row 3b, J.1) but was relocated to
+//       PhoneCwApplet (#5 slot) per JJ feedback (2026-04-28 relocation).
 //
 // Phase 3M-1a H.3: TUNE/MOX/Tune-Power/RF-Power are deep-wired.
 // Phase 3M-1b J.2: VOX toggle + VoxSettingsPopup wired.
@@ -195,9 +195,6 @@ private:
     // 3. RF Power
     QSlider* m_rfPowerSlider  = nullptr;
     QLabel*  m_rfPowerValue   = nullptr;
-    // 3b. Mic Gain (J.1 Phase 3M-1b)
-    QSlider* m_micGainSlider  = nullptr;
-    QLabel*  m_micGainValue   = nullptr;
     // 4. Tune Power
     QSlider* m_tunePwrSlider  = nullptr;
     QLabel*  m_tunePwrValue   = nullptr;

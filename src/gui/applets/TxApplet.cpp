@@ -20,10 +20,6 @@
 //   2026-04-26 — Phase 3M-1a H.3: deep-wired TUNE/MOX/Tune-Power/RF-Power.
 //                 Out-of-phase controls (2-Tone, PS-A) hidden.
 //                 syncFromModel() implemented. setCurrentBand(Band) added.
-//   2026-04-28 — Phase 3M-1b J.1: Mic Gain slider row added between RF Power
-//                 and Tune Power. Range from BoardCapabilities::micGainMinDb/Max.
-//                 Bidirectional with TransmitModel::micGainDb. Slider greyed
-//                 when TransmitModel::micMute == false (mic muted).
 //   2026-04-28 — Phase 3M-1b J.2: VOX toggle button added below Tune Power.
 //                 Checkable, green border when active. Bidirectional with
 //                 TransmitModel::voxEnabled. Right-click opens VoxSettingsPopup.
@@ -32,6 +28,8 @@
 //                 and monitorVolume (default 0.5f, Thetis audio.cs:417). Mic-source
 //                 badge added above the gauges ("PC mic"/"Radio mic"), driven by
 //                 TransmitModel::micSourceChanged. Phase J complete.
+//   2026-04-28 — Phase 3M-1b (relocation): Mic Gain slider row (J.1) removed from
+//                 TxApplet. Relocated to PhoneCwApplet (#5 slot) per JJ feedback.
 //   2026-04-28 — Phase 3M-1b K.2: tooltipForMode(DSPMode) helper + onMoxModeChanged
 //                 slot implemented. Wired to SliceModel::dspModeChanged via
 //                 RadioModel active-slice accessor so the MOX button tooltip
@@ -113,9 +111,8 @@
 //  1.  Fwd Power gauge   — HGauge 0–120 W, redStart 100 W
 //  2.  SWR gauge         — HGauge 1.0–3.0, redStart 2.5
 //  3.  RF Power slider   + label + value  [WIRED — 3M-1a H.3]
-//  3b. Mic Gain slider   + label + value  [WIRED — 3M-1b J.1]
-//      Range from BoardCapabilities::micGainMinDb/Max; greyed when micMute==false.
 //  4.  Tune Power slider + label + value  [WIRED — 3M-1a H.3]
+//      (Mic Gain slider relocated to PhoneCwApplet — 2026-04-28 relocation)
 //  4b. VOX toggle button — checkable, green:checked style  [WIRED — 3M-1b J.2]
 //      Right-click opens VoxSettingsPopup (threshold/gain/hang-time).
 //  4c. MON toggle button — checkable, blue:checked style  [WIRED — 3M-1b J.3]
@@ -140,7 +137,6 @@
 #include "gui/StyleConstants.h"
 #include "gui/ComboStyle.h"
 #include "gui/widgets/VoxSettingsPopup.h"
-#include "core/BoardCapabilities.h"
 #include "core/audio/CompositeTxMicRouter.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -270,53 +266,6 @@ void TxApplet::buildUI()
         rfSlider->setToolTip(QStringLiteral("RF output power (0–100 W)"));
         row->addWidget(rfSlider, 1);
         row->addWidget(rfValue);
-
-        vbox->addLayout(row);
-    }
-
-    // ── 3b. Mic Gain slider row ──────────────────────────────────────────────
-    // Phase 3M-1b J.1. Placed between RF Power (Row 3) and Tune Power (Row 4).
-    // Range from BoardCapabilities::micGainMinDb/Max (per-board; Thetis
-    //   console.cs:19151-19171 [v2.10.3.13]: mic_gain_min=-40, mic_gain_max=10).
-    // Bidirectional with TransmitModel::micGainDb (default -6 dB per plan §0 row 11).
-    // Value label is 35px wide to accommodate e.g. "-50 dB".
-    // Slider greyed (setEnabled(false)) when micMute == false (mic muted).
-    {
-        const BoardCapabilities& caps = m_model->boardCapabilities();
-        const int micMin = caps.micGainMinDb;
-        const int micMax = caps.micGainMaxDb;
-        const int micDefault = m_model->transmitModel().micGainDb();
-
-        auto* micSlider = new QSlider(Qt::Horizontal, this);
-        micSlider->setRange(micMin, micMax);
-        micSlider->setValue(micDefault);
-        micSlider->setAccessibleName(QStringLiteral("Mic gain"));
-        micSlider->setToolTip(QStringLiteral("Microphone input gain (%1 to +%2 dB)")
-                                  .arg(micMin).arg(micMax));
-
-        const QString micValText = QStringLiteral("%1 dB").arg(micDefault);
-        auto* micValue = new QLabel(micValText, this);
-        micValue->setFixedWidth(35);
-        micValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        micValue->setStyleSheet(QStringLiteral(
-            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTextPrimary));
-
-        m_micGainSlider = micSlider;
-        m_micGainValue  = micValue;
-
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
-
-        auto* lbl = new QLabel(QStringLiteral("Mic Gain:"), this);
-        lbl->setFixedWidth(62);
-        lbl->setStyleSheet(QStringLiteral(
-            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTitleText));
-        row->addWidget(lbl);
-
-        micSlider->setFixedHeight(18);
-        // Enabled state set by syncFromModel() / onModelMicMuteChanged after wiring.
-        row->addWidget(micSlider, 1);
-        row->addWidget(micValue);
 
         vbox->addLayout(row);
     }
@@ -689,38 +638,6 @@ void TxApplet::wireControls()
         m_updatingFromModel = false;
     });
 
-    // ── Mic Gain slider → TransmitModel::setMicGainDb(int) ─────────────────
-    // Phase 3M-1b J.1: bidirectional wiring.
-    // UI → Model: slider valueChanged → setMicGainDb(value).
-    // Model → UI: micGainDbChanged → update slider position + label.
-    // Mic mute: micMuteChanged → enable/disable slider (muted = false means
-    //   mic is off; slider greyed to signal that gain has no effect).
-    connect(m_micGainSlider, &QSlider::valueChanged, this, [this, &tx](int val) {
-        if (m_updatingFromModel) { return; }
-        m_micGainValue->setText(QStringLiteral("%1 dB").arg(val));
-        tx.setMicGainDb(val);
-    });
-
-    // Reverse: TransmitModel::micGainDbChanged → slider + label.
-    connect(&tx, &TransmitModel::micGainDbChanged, this, [this](int dB) {
-        m_updatingFromModel = true;
-        {
-            QSignalBlocker b(m_micGainSlider);
-            m_micGainSlider->setValue(dB);
-        }
-        m_micGainValue->setText(QStringLiteral("%1 dB").arg(dB));
-        m_updatingFromModel = false;
-    });
-
-    // Mic mute state → slider enabled.
-    // NOTE: micMute == true means the mic IS in use (Thetis counter-intuitive
-    // naming, console.cs:28752 [v2.10.3.13]: "although called MicMute, true = mic in use").
-    // Slider is enabled when mic is in use (micMute == true).
-    // Slider is greyed (disabled) when mic is muted (micMute == false).
-    connect(&tx, &TransmitModel::micMuteChanged, this, [this](bool micInUse) {
-        m_micGainSlider->setEnabled(micInUse);
-    });
-
     // ── Tune Power slider → TransmitModel::setTunePowerForBand ──────────────
     // Per-band tune power, ported from Thetis console.cs:12094 [v2.10.3.13]:
     //   private int[] tunePower_by_band;
@@ -911,18 +828,6 @@ void TxApplet::syncFromModel()
         QSignalBlocker b(m_rfPowerSlider);
         m_rfPowerSlider->setValue(tx.power());
         m_rfPowerValue->setText(QString::number(tx.power()));
-    }
-
-    // Mic Gain (J.1 Phase 3M-1b)
-    // Sync slider range from current board capabilities, then value and mute state.
-    if (m_micGainSlider) {
-        const BoardCapabilities& caps = m_model->boardCapabilities();
-        QSignalBlocker b(m_micGainSlider);
-        m_micGainSlider->setRange(caps.micGainMinDb, caps.micGainMaxDb);
-        m_micGainSlider->setValue(tx.micGainDb());
-        m_micGainValue->setText(QStringLiteral("%1 dB").arg(tx.micGainDb()));
-        // micMute == true → mic in use → slider enabled.
-        m_micGainSlider->setEnabled(tx.micMute());
     }
 
     // Tune Power for current band
