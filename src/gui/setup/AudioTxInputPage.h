@@ -26,22 +26,42 @@
 // TransmitModel session state: pcMicHostApiIndex, pcMicDeviceName,
 // pcMicBufferSamples (transient; AppSettings persistence deferred L.2).
 //
+// Phase 3M-1b Task I.3 (2026-04-28): Radio Mic settings group with
+// per-family layout, capability-gated. Visible only when
+// MicSource::Radio AND caps.hasMicJack == true. Three sub-layouts:
+//   Hermes/Atlas/HermesII/Angelia family — QGroupBox "Radio Mic — Hermes / Atlas":
+//     Row 1: Mic In / Line In radio buttons (TransmitModel::lineIn)
+//     Row 2: +20 dB Mic Boost checkbox (TransmitModel::micBoost)
+//     Row 3: Line In Gain slider -34..+12 dB (TransmitModel::lineInBoost)
+//   Orion-MkII family (Orion/OrionMKII) — QGroupBox "Radio Mic — Orion-MkII":
+//     4 checkboxes: Mic Tip-Ring, Mic Bias, Mic PTT Disabled, +20 dB Mic Boost
+//   Saturn G2 — QGroupBox "Radio Mic — Saturn G2":
+//     Row 1: 3.5 mm / XLR radio buttons (TransmitModel::micXlr)
+//     Rows 2-4: Mic PTT Disabled, Mic Bias, +20 dB Mic Boost checkboxes
+// HL2 hides all three groups (hasMicJack=false). HW-family discriminated
+// via BoardCapabilities::board (HPSDRHW enum).
+//
 // Design spec: docs/architecture/phase3m-1b-mic-ssb-voice-plan.md
-// §3 Phase I (I.1–I.2) + pre-code review §5.4 + master design §5.2.2.
+// §3 Phase I (I.1–I.3) + pre-code review §5.1 + §5.4.
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-04-28 — I.1 written by J.J. Boyd (KG4VCF), with AI-assisted
 //                implementation via Anthropic Claude Code.
 //   2026-04-28 — I.2 PC Mic group box written by J.J. Boyd (KG4VCF),
 //                with AI-assisted implementation via Anthropic Claude Code.
+//   2026-04-28 — I.3 Radio Mic per-family group boxes written by
+//                J.J. Boyd (KG4VCF), with AI-assisted implementation
+//                via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; no Thetis logic ported here.
 
 #include "gui/SetupPage.h"
 #include "core/audio/CompositeTxMicRouter.h"
+#include "core/HpsdrModel.h"
 
 #include <QButtonGroup>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QGroupBox>
 #include <QLabel>
@@ -107,6 +127,11 @@ public:
     HGauge*      vuBar()           const { return m_vuBar; }
     QSlider*     micGainSlider()   const { return m_micGainSlider; }
 
+    // Expose Radio Mic per-family group boxes for test introspection (I.3).
+    QGroupBox* hermesRadioMicGroup() const { return m_hermesGroup; }
+    QGroupBox* orionRadioMicGroup()  const { return m_orionGroup; }
+    QGroupBox* saturnRadioMicGroup() const { return m_saturnGroup; }
+
 private slots:
     void onMicSourceButtonToggled(int id, bool checked);
     void onModelMicSourceChanged(MicSource source);
@@ -120,14 +145,46 @@ private slots:
     void onMicGainSliderChanged(int value);
     void onModelMicGainDbChanged(int dB);
 
+    // ── Radio Mic per-family slots (I.3) ──────────────────────────────────────
+    // Hermes/Atlas family
+    void onHermesMicInputToggled(int id, bool checked);
+    void onHermesMicBoostToggled(bool on);
+    void onHermesLineInGainChanged(int sliderValue);
+
+    // Orion-MkII family
+    void onOrionMicTipRingToggled(bool on);
+    void onOrionMicBiasToggled(bool on);
+    void onOrionMicPttDisabledToggled(bool on);
+    void onOrionMicBoostToggled(bool on);
+
+    // Saturn G2 family
+    void onSaturnMicInputToggled(int id, bool checked);
+    void onSaturnMicPttDisabledToggled(bool on);
+    void onSaturnMicBiasToggled(bool on);
+    void onSaturnMicBoostToggled(bool on);
+
+    // Model → UI: radio mic flag changes (all families, I.3)
+    void onModelLineInChanged(bool on);
+    void onModelMicBoostChanged(bool on);
+    void onModelLineInBoostChanged(double dB);
+    void onModelMicTipRingChanged(bool on);
+    void onModelMicBiasChanged(bool on);
+    void onModelMicPttDisabledChanged(bool on);
+    void onModelMicXlrChanged(bool on);
+
 private:
-    void buildPage(bool hasMicJack);
+    void buildPage(bool hasMicJack, HPSDRHW hw);
     void buildPcMicGroup(QVBoxLayout* parentLayout);
+    void buildHermesRadioMicGroup(QVBoxLayout* parentLayout);
+    void buildOrionRadioMicGroup(QVBoxLayout* parentLayout);
+    void buildSaturnRadioMicGroup(QVBoxLayout* parentLayout);
     void syncButtonsFromModel(MicSource source);
     void populateBackendCombo();
     void populateDeviceCombo(int hostApiIndex);
     void updateBufferLabel(int samples);
     void updatePcMicGroupVisibility(MicSource source);
+    void updateRadioMicGroupVisibility(MicSource source, HPSDRHW hw);
+    static QString lineInBoostLabel(int sliderValue);
 
     // Returns the latency string for `samples` samples at 48 kHz reference.
     static QString latencyString(int samples);
@@ -162,8 +219,34 @@ private:
     QSlider*     m_micGainSlider{nullptr};
     QLabel*      m_micGainLabel{nullptr};
 
-    // Guard flag for both source-selector and mic-gain two-way sync.
+    // Guard flag for both source-selector, mic-gain and radio-mic two-way sync.
     bool m_updatingFromModel{false};
+
+    // HW family, captured at construction time for visibility logic (I.3).
+    HPSDRHW m_hw{HPSDRHW::Unknown};
+
+    // ── Radio Mic per-family group boxes (I.3) ────────────────────────────────
+    QGroupBox* m_hermesGroup{nullptr};
+    QGroupBox* m_orionGroup{nullptr};
+    QGroupBox* m_saturnGroup{nullptr};
+
+    // Hermes/Atlas family widgets
+    QButtonGroup* m_hermesMicInputGroup{nullptr};  // Mic In / Line In
+    QCheckBox*    m_hermesMicBoostChk{nullptr};
+    QSlider*      m_hermesLineInGainSlider{nullptr};
+    QLabel*       m_hermesLineInGainLabel{nullptr};
+
+    // Orion-MkII family widgets
+    QCheckBox* m_orionMicTipRingChk{nullptr};
+    QCheckBox* m_orionMicBiasChk{nullptr};
+    QCheckBox* m_orionMicPttDisabledChk{nullptr};
+    QCheckBox* m_orionMicBoostChk{nullptr};
+
+    // Saturn G2 family widgets
+    QButtonGroup* m_saturnMicInputGroup{nullptr};   // 3.5 mm / XLR
+    QCheckBox*    m_saturnMicPttDisabledChk{nullptr};
+    QCheckBox*    m_saturnMicBiasChk{nullptr};
+    QCheckBox*    m_saturnMicBoostChk{nullptr};
 
 public:
     // Discrete buffer sizes exposed by the slider (power-of-2 steps).

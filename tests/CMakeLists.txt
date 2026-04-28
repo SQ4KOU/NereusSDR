@@ -1818,3 +1818,23 @@ target_compile_definitions(tst_audio_tx_input_page_skeleton PRIVATE NEREUS_BUILD
 nereus_add_test(tst_audio_tx_input_pc_mic_group)
 target_compile_definitions(tst_audio_tx_input_pc_mic_group PRIVATE NEREUS_BUILD_TESTS)
 
+# =============================================================================
+# Phase 3M-1b Task I.3 — Radio Mic settings group with per-family layout
+# =============================================================================
+# Covers:
+#   1.    HL2 (hasMicJack=false): all 3 Radio Mic groups hidden.
+#   2-4.  Saturn / OrionMKII / HermesII + Radio Mic: correct group visible.
+#   5-6.  PC→Radio Mic and Radio→PC Mic toggle visibility on Saturn.
+#   7-8.  Hermes: Line In radio UI↔Model round-trip.
+#   9-10. Hermes: +20 dB Mic Boost checkbox UI↔Model round-trip.
+#  11-12. Hermes: Line In Gain slider UI↔Model round-trip.
+#  13.    Orion: Mic Tip-Ring checkbox UI→Model round-trip.
+#  14.    Orion: micPttDisabled model→UI round-trip.
+#  15-16. Saturn: 3.5mm/XLR radio UI↔Model round-trip.
+#  17.    Saturn: Mic Bias UI→Model round-trip.
+#  18.    No feedback loop: micBoostChanged emission count.
+# NEREUS_BUILD_TESTS required for RadioModel::setCapsHasMicJackForTest +
+#   setCapsHwForTest.
+nereus_add_test(tst_audio_tx_input_radio_mic_group)
+target_compile_definitions(tst_audio_tx_input_radio_mic_group PRIVATE NEREUS_BUILD_TESTS)
+

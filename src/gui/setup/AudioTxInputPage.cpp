@@ -22,7 +22,9 @@
 #include "core/AudioEngine.h"
 #include "gui/HGauge.h"
 
+#include <QAbstractButton>
 #include <QButtonGroup>
+#include <QCheckBox>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -109,8 +111,11 @@ AudioTxInputPage::AudioTxInputPage(RadioModel* model, QWidget* parent)
     const bool hasMicJack = model
         ? model->boardCapabilities().hasMicJack
         : true;  // safe default: don't disable Radio Mic for null model
+    m_hw = model
+        ? model->boardCapabilities().board
+        : HPSDRHW::Unknown;
 
-    buildPage(hasMicJack);
+    buildPage(hasMicJack, m_hw);
 
     // Wire two-way sync with TransmitModel.
     if (model) {
@@ -175,6 +180,83 @@ AudioTxInputPage::AudioTxInputPage(RadioModel* model, QWidget* parent)
             }
         }
 
+        // ── Model → UI wiring for Radio Mic flags (I.3) ─────────────────────────
+        connect(tx, &TransmitModel::lineInChanged,
+                this, &AudioTxInputPage::onModelLineInChanged);
+        connect(tx, &TransmitModel::micBoostChanged,
+                this, &AudioTxInputPage::onModelMicBoostChanged);
+        connect(tx, &TransmitModel::lineInBoostChanged,
+                this, &AudioTxInputPage::onModelLineInBoostChanged);
+        connect(tx, &TransmitModel::micTipRingChanged,
+                this, &AudioTxInputPage::onModelMicTipRingChanged);
+        connect(tx, &TransmitModel::micBiasChanged,
+                this, &AudioTxInputPage::onModelMicBiasChanged);
+        connect(tx, &TransmitModel::micPttDisabledChanged,
+                this, &AudioTxInputPage::onModelMicPttDisabledChanged);
+        connect(tx, &TransmitModel::micXlrChanged,
+                this, &AudioTxInputPage::onModelMicXlrChanged);
+
+        // Seed Radio Mic group widgets from current model state.
+        // Hermes family: lineIn + micBoost + lineInBoost
+        if (m_hermesMicInputGroup) {
+            m_updatingFromModel = true;
+            QAbstractButton* lineInBtn = m_hermesMicInputGroup->button(1);  // id=1 = Line In
+            QAbstractButton* micInBtn  = m_hermesMicInputGroup->button(0);  // id=0 = Mic In
+            if (tx->lineIn()) { if (lineInBtn) lineInBtn->setChecked(true); }
+            else              { if (micInBtn)  micInBtn->setChecked(true); }
+            m_updatingFromModel = false;
+        }
+        if (m_hermesMicBoostChk) {
+            QSignalBlocker blk(m_hermesMicBoostChk);
+            m_hermesMicBoostChk->setChecked(tx->micBoost());
+        }
+        if (m_hermesLineInGainSlider) {
+            QSignalBlocker blk(m_hermesLineInGainSlider);
+            const int sliderVal = static_cast<int>(tx->lineInBoost());
+            m_hermesLineInGainSlider->setValue(sliderVal);
+            if (m_hermesLineInGainLabel) {
+                m_hermesLineInGainLabel->setText(lineInBoostLabel(sliderVal));
+            }
+        }
+        // Orion family: micTipRing + micBias + micPttDisabled + micBoost
+        if (m_orionMicTipRingChk) {
+            QSignalBlocker blk(m_orionMicTipRingChk);
+            m_orionMicTipRingChk->setChecked(tx->micTipRing());
+        }
+        if (m_orionMicBiasChk) {
+            QSignalBlocker blk(m_orionMicBiasChk);
+            m_orionMicBiasChk->setChecked(tx->micBias());
+        }
+        if (m_orionMicPttDisabledChk) {
+            QSignalBlocker blk(m_orionMicPttDisabledChk);
+            m_orionMicPttDisabledChk->setChecked(tx->micPttDisabled());
+        }
+        if (m_orionMicBoostChk) {
+            QSignalBlocker blk(m_orionMicBoostChk);
+            m_orionMicBoostChk->setChecked(tx->micBoost());
+        }
+        // Saturn family: micXlr + micPttDisabled + micBias + micBoost
+        if (m_saturnMicInputGroup) {
+            m_updatingFromModel = true;
+            QAbstractButton* xlrBtn   = m_saturnMicInputGroup->button(1);  // id=1 = XLR
+            QAbstractButton* jackBtn  = m_saturnMicInputGroup->button(0);  // id=0 = 3.5mm
+            if (tx->micXlr()) { if (xlrBtn)  xlrBtn->setChecked(true); }
+            else              { if (jackBtn) jackBtn->setChecked(true); }
+            m_updatingFromModel = false;
+        }
+        if (m_saturnMicPttDisabledChk) {
+            QSignalBlocker blk(m_saturnMicPttDisabledChk);
+            m_saturnMicPttDisabledChk->setChecked(tx->micPttDisabled());
+        }
+        if (m_saturnMicBiasChk) {
+            QSignalBlocker blk(m_saturnMicBiasChk);
+            m_saturnMicBiasChk->setChecked(tx->micBias());
+        }
+        if (m_saturnMicBoostChk) {
+            QSignalBlocker blk(m_saturnMicBoostChk);
+            m_saturnMicBoostChk->setChecked(tx->micBoost());
+        }
+
         // Live model → UI connections for PC Mic session state.
         // Buffer samples: model change → slider position.
         connect(tx, &TransmitModel::pcMicBufferSamplesChanged,
@@ -220,7 +302,7 @@ AudioTxInputPage::~AudioTxInputPage()
 // Build helpers
 // ---------------------------------------------------------------------------
 
-void AudioTxInputPage::buildPage(bool hasMicJack)
+void AudioTxInputPage::buildPage(bool hasMicJack, HPSDRHW hw)
 {
     // ── Mic Source group box (I.1) ────────────────────────────────────────────
     auto* srcGrp = new QGroupBox(QStringLiteral("Mic Source"), this);
@@ -257,8 +339,17 @@ void AudioTxInputPage::buildPage(bool hasMicJack)
     buildPcMicGroup(pcMicGroupContainer);
     contentLayout()->addLayout(pcMicGroupContainer);
 
+    // ── Radio Mic per-family group boxes (I.3) ────────────────────────────────
+    auto* radioMicContainer = new QVBoxLayout();
+    buildHermesRadioMicGroup(radioMicContainer);
+    buildOrionRadioMicGroup(radioMicContainer);
+    buildSaturnRadioMicGroup(radioMicContainer);
+    contentLayout()->addLayout(radioMicContainer);
+
     // Show PC Mic group only when PC Mic is selected.
     updatePcMicGroupVisibility(MicSource::Pc);
+    // All Radio Mic groups hidden initially (PC Mic is selected by default).
+    updateRadioMicGroupVisibility(MicSource::Pc, hw);
 }
 
 void AudioTxInputPage::buildPcMicGroup(QVBoxLayout* parentLayout)
@@ -433,6 +524,42 @@ void AudioTxInputPage::updatePcMicGroupVisibility(MicSource source)
 }
 
 // ---------------------------------------------------------------------------
+// Radio Mic per-family group visibility (I.3)
+// Shows the appropriate family group when Radio Mic is selected AND
+// caps.hasMicJack == true. The hasMicJack gate is implicit: if hasMicJack
+// is false the Radio Mic button is disabled so source can never be Radio in
+// normal use; these groups are also explicitly hidden in that case.
+// ---------------------------------------------------------------------------
+
+void AudioTxInputPage::updateRadioMicGroupVisibility(MicSource source, HPSDRHW hw)
+{
+    // Only show a Radio Mic group when Radio Mic is actually selected.
+    const bool radioMicActive = (source == MicSource::Radio);
+
+    const bool isHermes = (hw == HPSDRHW::Hermes
+                        || hw == HPSDRHW::HermesII
+                        || hw == HPSDRHW::Angelia
+                        || hw == HPSDRHW::Atlas);
+    const bool isOrion  = (hw == HPSDRHW::Orion
+                        || hw == HPSDRHW::OrionMKII);
+    const bool isSaturn = (hw == HPSDRHW::Saturn
+                        || hw == HPSDRHW::SaturnMKII);
+
+    if (m_hermesGroup) { m_hermesGroup->setVisible(radioMicActive && isHermes); }
+    if (m_orionGroup)  { m_orionGroup->setVisible(radioMicActive && isOrion);  }
+    if (m_saturnGroup) { m_saturnGroup->setVisible(radioMicActive && isSaturn); }
+}
+
+// ---------------------------------------------------------------------------
+// lineInBoostLabel: format dB label for the Line In Gain slider (I.3)
+// ---------------------------------------------------------------------------
+
+/*static*/ QString AudioTxInputPage::lineInBoostLabel(int sliderValue)
+{
+    return QStringLiteral("%1 dB").arg(sliderValue);
+}
+
+// ---------------------------------------------------------------------------
 // Slot: Mic Source radio button toggled (UI → Model, I.1)
 // ---------------------------------------------------------------------------
 
@@ -446,6 +573,7 @@ void AudioTxInputPage::onMicSourceButtonToggled(int id, bool checked)
     const MicSource source = static_cast<MicSource>(id);
     model()->transmitModel().setMicSource(source);
     updatePcMicGroupVisibility(source);
+    updateRadioMicGroupVisibility(source, m_hw);
 }
 
 // ---------------------------------------------------------------------------
@@ -456,6 +584,7 @@ void AudioTxInputPage::onModelMicSourceChanged(MicSource source)
 {
     syncButtonsFromModel(source);
     updatePcMicGroupVisibility(source);
+    updateRadioMicGroupVisibility(source, m_hw);
 }
 
 void AudioTxInputPage::syncButtonsFromModel(MicSource source)
@@ -604,6 +733,350 @@ void AudioTxInputPage::onModelMicGainDbChanged(int dB)
     if (m_micGainLabel) {
         m_micGainLabel->setText(QStringLiteral("%1 dB").arg(dB));
     }
+    m_updatingFromModel = false;
+}
+
+// ===========================================================================
+// ── Radio Mic per-family group build helpers (I.3) ──────────────────────────
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// buildHermesRadioMicGroup — Hermes / Atlas / HermesII / Angelia family
+// ---------------------------------------------------------------------------
+
+void AudioTxInputPage::buildHermesRadioMicGroup(QVBoxLayout* parentLayout)
+{
+    m_hermesGroup = new QGroupBox(QStringLiteral("Radio Mic — Hermes / Atlas"), this);
+    auto* grpLayout = new QVBoxLayout(m_hermesGroup);
+
+    // ── Row 1: Mic In / Line In radio buttons ─────────────────────────────────
+    auto* micInBtn  = new QRadioButton(QStringLiteral("Mic In"),  m_hermesGroup);
+    auto* lineInBtn = new QRadioButton(QStringLiteral("Line In"), m_hermesGroup);
+    micInBtn->setChecked(true);  // Hermes default: mic input active
+
+    m_hermesMicInputGroup = new QButtonGroup(this);
+    m_hermesMicInputGroup->addButton(micInBtn,  0);  // id=0 → lineIn=false
+    m_hermesMicInputGroup->addButton(lineInBtn, 1);  // id=1 → lineIn=true
+
+    auto* inputRow = new QHBoxLayout();
+    inputRow->addWidget(micInBtn);
+    inputRow->addWidget(lineInBtn);
+    inputRow->addStretch();
+    grpLayout->addLayout(inputRow);
+
+    connect(m_hermesMicInputGroup, &QButtonGroup::idToggled,
+            this, &AudioTxInputPage::onHermesMicInputToggled);
+
+    // ── Row 2: +20 dB Mic Boost checkbox ────────────────────────────────────
+    m_hermesMicBoostChk = new QCheckBox(QStringLiteral("+20 dB Mic Boost"), m_hermesGroup);
+    m_hermesMicBoostChk->setChecked(true);  // TransmitModel default: true
+    grpLayout->addWidget(m_hermesMicBoostChk);
+
+    connect(m_hermesMicBoostChk, &QCheckBox::toggled,
+            this, &AudioTxInputPage::onHermesMicBoostToggled);
+
+    // ── Row 3: Line In Gain slider ───────────────────────────────────────────
+    // Range: kLineInBoostMin (-34) to kLineInBoostMax (12), 1 dB steps.
+    m_hermesLineInGainSlider = new QSlider(Qt::Horizontal, m_hermesGroup);
+    m_hermesLineInGainSlider->setMinimum(static_cast<int>(TransmitModel::kLineInBoostMin));
+    m_hermesLineInGainSlider->setMaximum(static_cast<int>(TransmitModel::kLineInBoostMax));
+    m_hermesLineInGainSlider->setSingleStep(1);
+    m_hermesLineInGainSlider->setValue(0);  // TransmitModel default: 0.0 dB
+
+    m_hermesLineInGainLabel = new QLabel(lineInBoostLabel(0), m_hermesGroup);
+    m_hermesLineInGainLabel->setMinimumWidth(60);
+
+    auto* gainRow = new QHBoxLayout();
+    gainRow->addWidget(new QLabel(QStringLiteral("Line In Gain:"), m_hermesGroup));
+    gainRow->addWidget(m_hermesLineInGainSlider, 1);
+    gainRow->addWidget(m_hermesLineInGainLabel);
+    grpLayout->addLayout(gainRow);
+
+    connect(m_hermesLineInGainSlider, &QSlider::valueChanged,
+            this, &AudioTxInputPage::onHermesLineInGainChanged);
+
+    parentLayout->addWidget(m_hermesGroup);
+}
+
+// ---------------------------------------------------------------------------
+// buildOrionRadioMicGroup — Orion / OrionMKII family
+// ---------------------------------------------------------------------------
+
+void AudioTxInputPage::buildOrionRadioMicGroup(QVBoxLayout* parentLayout)
+{
+    m_orionGroup = new QGroupBox(QStringLiteral("Radio Mic — Orion-MkII"), this);
+    auto* grpLayout = new QVBoxLayout(m_orionGroup);
+
+    m_orionMicTipRingChk = new QCheckBox(
+        QStringLiteral("Mic Tip-Ring (Tip is Mic)"), m_orionGroup);
+    m_orionMicTipRingChk->setChecked(true);  // TransmitModel default: true
+    grpLayout->addWidget(m_orionMicTipRingChk);
+
+    m_orionMicBiasChk = new QCheckBox(QStringLiteral("Mic Bias"), m_orionGroup);
+    m_orionMicBiasChk->setChecked(false);  // TransmitModel default: false
+    grpLayout->addWidget(m_orionMicBiasChk);
+
+    m_orionMicPttDisabledChk = new QCheckBox(
+        QStringLiteral("Mic PTT Disabled"), m_orionGroup);
+    m_orionMicPttDisabledChk->setChecked(false);  // TransmitModel default: false
+    grpLayout->addWidget(m_orionMicPttDisabledChk);
+
+    m_orionMicBoostChk = new QCheckBox(
+        QStringLiteral("+20 dB Mic Boost"), m_orionGroup);
+    m_orionMicBoostChk->setChecked(true);  // TransmitModel default: true
+    grpLayout->addWidget(m_orionMicBoostChk);
+
+    connect(m_orionMicTipRingChk,    &QCheckBox::toggled,
+            this, &AudioTxInputPage::onOrionMicTipRingToggled);
+    connect(m_orionMicBiasChk,       &QCheckBox::toggled,
+            this, &AudioTxInputPage::onOrionMicBiasToggled);
+    connect(m_orionMicPttDisabledChk, &QCheckBox::toggled,
+            this, &AudioTxInputPage::onOrionMicPttDisabledToggled);
+    connect(m_orionMicBoostChk,      &QCheckBox::toggled,
+            this, &AudioTxInputPage::onOrionMicBoostToggled);
+
+    parentLayout->addWidget(m_orionGroup);
+}
+
+// ---------------------------------------------------------------------------
+// buildSaturnRadioMicGroup — Saturn G2 family
+// ---------------------------------------------------------------------------
+
+void AudioTxInputPage::buildSaturnRadioMicGroup(QVBoxLayout* parentLayout)
+{
+    m_saturnGroup = new QGroupBox(QStringLiteral("Radio Mic — Saturn G2"), this);
+    auto* grpLayout = new QVBoxLayout(m_saturnGroup);
+
+    // ── Row 1: 3.5 mm Jack / XLR radio buttons ───────────────────────────────
+    auto* jackBtn = new QRadioButton(QStringLiteral("3.5 mm Jack"), m_saturnGroup);
+    auto* xlrBtn  = new QRadioButton(QStringLiteral("XLR"),         m_saturnGroup);
+    // TransmitModel default: micXlr=true → XLR selected by default.
+    xlrBtn->setChecked(true);
+
+    m_saturnMicInputGroup = new QButtonGroup(this);
+    m_saturnMicInputGroup->addButton(jackBtn, 0);  // id=0 → micXlr=false (3.5mm)
+    m_saturnMicInputGroup->addButton(xlrBtn,  1);  // id=1 → micXlr=true  (XLR)
+
+    auto* inputRow = new QHBoxLayout();
+    inputRow->addWidget(jackBtn);
+    inputRow->addWidget(xlrBtn);
+    inputRow->addStretch();
+    grpLayout->addLayout(inputRow);
+
+    connect(m_saturnMicInputGroup, &QButtonGroup::idToggled,
+            this, &AudioTxInputPage::onSaturnMicInputToggled);
+
+    // ── Rows 2-4: three checkboxes ───────────────────────────────────────────
+    m_saturnMicPttDisabledChk = new QCheckBox(
+        QStringLiteral("Mic PTT Disabled"), m_saturnGroup);
+    m_saturnMicPttDisabledChk->setChecked(false);  // TransmitModel default
+    grpLayout->addWidget(m_saturnMicPttDisabledChk);
+
+    m_saturnMicBiasChk = new QCheckBox(QStringLiteral("Mic Bias"), m_saturnGroup);
+    m_saturnMicBiasChk->setChecked(false);  // TransmitModel default
+    grpLayout->addWidget(m_saturnMicBiasChk);
+
+    m_saturnMicBoostChk = new QCheckBox(
+        QStringLiteral("+20 dB Mic Boost"), m_saturnGroup);
+    m_saturnMicBoostChk->setChecked(true);  // TransmitModel default: true
+    grpLayout->addWidget(m_saturnMicBoostChk);
+
+    connect(m_saturnMicPttDisabledChk, &QCheckBox::toggled,
+            this, &AudioTxInputPage::onSaturnMicPttDisabledToggled);
+    connect(m_saturnMicBiasChk,        &QCheckBox::toggled,
+            this, &AudioTxInputPage::onSaturnMicBiasToggled);
+    connect(m_saturnMicBoostChk,       &QCheckBox::toggled,
+            this, &AudioTxInputPage::onSaturnMicBoostToggled);
+
+    parentLayout->addWidget(m_saturnGroup);
+}
+
+// ===========================================================================
+// ── Radio Mic UI→Model slots — Hermes family (I.3) ──────────────────────────
+// ===========================================================================
+
+void AudioTxInputPage::onHermesMicInputToggled(int id, bool checked)
+{
+    if (m_updatingFromModel) { return; }
+    if (!checked) { return; }
+    if (!model()) { return; }
+    // id=0 → Mic In (lineIn=false), id=1 → Line In (lineIn=true)
+    model()->transmitModel().setLineIn(id == 1);
+}
+
+void AudioTxInputPage::onHermesMicBoostToggled(bool on)
+{
+    if (m_updatingFromModel) { return; }
+    if (!model()) { return; }
+    model()->transmitModel().setMicBoost(on);
+}
+
+void AudioTxInputPage::onHermesLineInGainChanged(int sliderValue)
+{
+    if (m_updatingFromModel) { return; }
+    if (m_hermesLineInGainLabel) {
+        m_hermesLineInGainLabel->setText(lineInBoostLabel(sliderValue));
+    }
+    if (!model()) { return; }
+    model()->transmitModel().setLineInBoost(static_cast<double>(sliderValue));
+}
+
+// ===========================================================================
+// ── Radio Mic UI→Model slots — Orion-MkII family (I.3) ─────────────────────
+// ===========================================================================
+
+void AudioTxInputPage::onOrionMicTipRingToggled(bool on)
+{
+    if (m_updatingFromModel) { return; }
+    if (!model()) { return; }
+    model()->transmitModel().setMicTipRing(on);
+}
+
+void AudioTxInputPage::onOrionMicBiasToggled(bool on)
+{
+    if (m_updatingFromModel) { return; }
+    if (!model()) { return; }
+    model()->transmitModel().setMicBias(on);
+}
+
+void AudioTxInputPage::onOrionMicPttDisabledToggled(bool on)
+{
+    if (m_updatingFromModel) { return; }
+    if (!model()) { return; }
+    model()->transmitModel().setMicPttDisabled(on);
+}
+
+void AudioTxInputPage::onOrionMicBoostToggled(bool on)
+{
+    if (m_updatingFromModel) { return; }
+    if (!model()) { return; }
+    model()->transmitModel().setMicBoost(on);
+}
+
+// ===========================================================================
+// ── Radio Mic UI→Model slots — Saturn G2 family (I.3) ──────────────────────
+// ===========================================================================
+
+void AudioTxInputPage::onSaturnMicInputToggled(int id, bool checked)
+{
+    if (m_updatingFromModel) { return; }
+    if (!checked) { return; }
+    if (!model()) { return; }
+    // id=0 → 3.5mm (micXlr=false), id=1 → XLR (micXlr=true)
+    model()->transmitModel().setMicXlr(id == 1);
+}
+
+void AudioTxInputPage::onSaturnMicPttDisabledToggled(bool on)
+{
+    if (m_updatingFromModel) { return; }
+    if (!model()) { return; }
+    model()->transmitModel().setMicPttDisabled(on);
+}
+
+void AudioTxInputPage::onSaturnMicBiasToggled(bool on)
+{
+    if (m_updatingFromModel) { return; }
+    if (!model()) { return; }
+    model()->transmitModel().setMicBias(on);
+}
+
+void AudioTxInputPage::onSaturnMicBoostToggled(bool on)
+{
+    if (m_updatingFromModel) { return; }
+    if (!model()) { return; }
+    model()->transmitModel().setMicBoost(on);
+}
+
+// ===========================================================================
+// ── Radio Mic Model→UI slots — all families (I.3) ───────────────────────────
+// ===========================================================================
+
+void AudioTxInputPage::onModelLineInChanged(bool on)
+{
+    if (!m_hermesMicInputGroup) { return; }
+    m_updatingFromModel = true;
+    QAbstractButton* btn = m_hermesMicInputGroup->button(on ? 1 : 0);
+    if (btn) { btn->setChecked(true); }
+    m_updatingFromModel = false;
+}
+
+void AudioTxInputPage::onModelMicBoostChanged(bool on)
+{
+    m_updatingFromModel = true;
+    if (m_hermesMicBoostChk) {
+        QSignalBlocker blk(m_hermesMicBoostChk);
+        m_hermesMicBoostChk->setChecked(on);
+    }
+    if (m_orionMicBoostChk) {
+        QSignalBlocker blk(m_orionMicBoostChk);
+        m_orionMicBoostChk->setChecked(on);
+    }
+    if (m_saturnMicBoostChk) {
+        QSignalBlocker blk(m_saturnMicBoostChk);
+        m_saturnMicBoostChk->setChecked(on);
+    }
+    m_updatingFromModel = false;
+}
+
+void AudioTxInputPage::onModelLineInBoostChanged(double dB)
+{
+    if (!m_hermesLineInGainSlider) { return; }
+    m_updatingFromModel = true;
+    {
+        QSignalBlocker blk(m_hermesLineInGainSlider);
+        m_hermesLineInGainSlider->setValue(static_cast<int>(dB));
+    }
+    if (m_hermesLineInGainLabel) {
+        m_hermesLineInGainLabel->setText(lineInBoostLabel(static_cast<int>(dB)));
+    }
+    m_updatingFromModel = false;
+}
+
+void AudioTxInputPage::onModelMicTipRingChanged(bool on)
+{
+    if (!m_orionMicTipRingChk) { return; }
+    m_updatingFromModel = true;
+    {
+        QSignalBlocker blk(m_orionMicTipRingChk);
+        m_orionMicTipRingChk->setChecked(on);
+    }
+    m_updatingFromModel = false;
+}
+
+void AudioTxInputPage::onModelMicBiasChanged(bool on)
+{
+    m_updatingFromModel = true;
+    if (m_orionMicBiasChk) {
+        QSignalBlocker blk(m_orionMicBiasChk);
+        m_orionMicBiasChk->setChecked(on);
+    }
+    if (m_saturnMicBiasChk) {
+        QSignalBlocker blk(m_saturnMicBiasChk);
+        m_saturnMicBiasChk->setChecked(on);
+    }
+    m_updatingFromModel = false;
+}
+
+void AudioTxInputPage::onModelMicPttDisabledChanged(bool on)
+{
+    m_updatingFromModel = true;
+    if (m_orionMicPttDisabledChk) {
+        QSignalBlocker blk(m_orionMicPttDisabledChk);
+        m_orionMicPttDisabledChk->setChecked(on);
+    }
+    if (m_saturnMicPttDisabledChk) {
+        QSignalBlocker blk(m_saturnMicPttDisabledChk);
+        m_saturnMicPttDisabledChk->setChecked(on);
+    }
+    m_updatingFromModel = false;
+}
+
+void AudioTxInputPage::onModelMicXlrChanged(bool on)
+{
+    if (!m_saturnMicInputGroup) { return; }
+    m_updatingFromModel = true;
+    QAbstractButton* btn = m_saturnMicInputGroup->button(on ? 1 : 0);
+    if (btn) { btn->setChecked(true); }
     m_updatingFromModel = false;
 }
 

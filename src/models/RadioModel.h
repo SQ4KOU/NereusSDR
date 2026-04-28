@@ -359,6 +359,13 @@ public:
         m_testCapsOverride     = true;
         m_testCapsHasMicJack   = hasMicJack;
     }
+    // 3M-1b I.3: inject HPSDRHW board type to select the per-family Radio Mic
+    // group box in AudioTxInputPage without a live radio connection.
+    // Does not reset other test-cap flags — independent of hasMicJack.
+    void setCapsHwForTest(HPSDRHW hw) {
+        m_testCapsOverride = true;
+        m_testCapsHw       = hw;
+    }
     // Emit currentRadioChanged with a default-constructed RadioInfo for test use.
     // Use this to simulate a reconnect when testing signal-driven visibility updates.
     void emitCurrentRadioChangedForTest() {
@@ -627,10 +634,11 @@ private:
     bool m_alexControllerDirty{false};
 
 #ifdef NEREUS_BUILD_TESTS
-    bool m_testCapsOverride{false};
-    bool m_testCapsHasAlex{false};
-    bool m_testCapsIsRxOnly{false};   // 3M-1a G.2: injected via setCapsRxOnlyForTest
-    bool m_testCapsHasMicJack{true};  // 3M-1b I.1: injected via setCapsHasMicJackForTest
+    bool     m_testCapsOverride{false};
+    bool     m_testCapsHasAlex{false};
+    bool     m_testCapsIsRxOnly{false};              // 3M-1a G.2: injected via setCapsRxOnlyForTest
+    bool     m_testCapsHasMicJack{true};             // 3M-1b I.1: injected via setCapsHasMicJackForTest
+    HPSDRHW  m_testCapsHw{HPSDRHW::Unknown};        // 3M-1b I.3: injected via setCapsHwForTest
 #endif
 
     // Phase 3M-0 Task 6: Ganymede PA-trip live state.
