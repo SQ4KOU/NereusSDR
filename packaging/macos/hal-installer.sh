@@ -137,11 +137,22 @@ cat > "${PKG_DIR}/resources/welcome.html" << 'WELCOME'
 WELCOME
 
 # 7. Build product archive
-productbuild \
-    --distribution "${PKG_DIR}/Distribution.xml" \
-    --resources "${PKG_DIR}/resources" \
-    --package-path "${PKG_DIR}" \
-    "${BUILD_DIR}/NereusSDR-${VERSION}-macOS.pkg"
+#    If APPLE_INSTALLER_ID env var is set (CI with Developer ID Installer
+#    cert imported into the keychain), sign the .pkg. Otherwise produce
+#    an unsigned .pkg suitable for local smoke-testing.
+PRODUCTBUILD_ARGS=(
+    --distribution "${PKG_DIR}/Distribution.xml"
+    --resources "${PKG_DIR}/resources"
+    --package-path "${PKG_DIR}"
+)
+if [ -n "${APPLE_INSTALLER_ID:-}" ]; then
+    echo "--- Signing .pkg with: ${APPLE_INSTALLER_ID} ---"
+    PRODUCTBUILD_ARGS+=(--sign "${APPLE_INSTALLER_ID}")
+else
+    echo "--- APPLE_INSTALLER_ID not set; producing unsigned .pkg ---"
+fi
+PRODUCTBUILD_ARGS+=("${BUILD_DIR}/NereusSDR-${VERSION}-macOS.pkg")
+productbuild "${PRODUCTBUILD_ARGS[@]}"
 
 echo ""
 echo "=== Installer created: ${BUILD_DIR}/NereusSDR-${VERSION}-macOS.pkg ==="
