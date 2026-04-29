@@ -407,6 +407,16 @@ public:
     const RadioMicSource*        radioMicSourceForTest()        const { return m_radioMicSource.get(); }
     const CompositeTxMicRouter*  compositeMicRouterForTest()   const { return m_compositeMicRouter.get(); }
 
+    // 3M-1c TX pump architecture redesign test seam: returns the unique_ptr's
+    // raw pointer to the TxWorkerThread.  Returns nullptr before the first
+    // connectToRadio() (m_txWorker is constructed inside the WDSP-init lambda
+    // once m_audioEngine and m_txChannel are both live) and after
+    // teardownConnection() resets it.  Used by tst_radio_model_3m1b_ownership
+    // to verify worker construction/destruction follows the documented
+    // lifecycle.
+    // Test-only accessor — do not use in production code.
+    const TxWorkerThread* txWorkerForTest() const { return m_txWorker.get(); }
+
     // 3M-1b L.3 test seam: simulate connectToRadio()'s loadFromSettings +
     // HL2 force-Pc sequence without a live radio connection.
     // Call setCapsHasMicJackForTest(bool) first to inject the board caps,
