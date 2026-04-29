@@ -47,11 +47,12 @@ next.
 These are **questions the implementation plan should call out** but do
 not block plan-writing.
 
-1. **Chunk 1 — VFO TX badge palette.** Thetis has **no per-mode TX
-   colour palette** (Area A research). Decision: NereusSDR ships **a
-   single TX colour swap** (red on band/split label + reuse of existing
-   `vfo_text_light_color`), not per-mode. Cite the absence; do not
-   invent per-mode colours.
+1. **Chunk 1 — VFO Flag TX badge attribution.** The VFO Flag widget is
+   an **AetherSDR pattern**; the `setTransmitting(bool)` MOX-state
+   colour-swap behaviour is **NereusSDR-native** (already implemented in
+   3G-8). Per memory `feedback_source_first_ui_vs_dsp`, source-first
+   governs DSP/radio only — Qt widgets are NereusSDR-native. Chunk 1 is
+   pure UI wire-up; no Thetis cite required.
 2. **Chunk 4 — Rename button.** Thetis has **no explicit Rename button**
    (Area B research). Decision: NereusSDR matches Thetis — Save (with
    new name) + Delete (old) covers the rename use case. The plan should
@@ -78,96 +79,72 @@ not block plan-writing.
 
 ### 1.1 Goal
 
-Wire `VfoDisplayItem::setTransmitting(bool)` (already stubbed in 3G-8) to
-`MoxController` MOX state changes. Provide visual feedback during TX.
+Wire `VfoDisplayItem::setTransmitting(bool)` (already implemented in 3G-8)
+to `MoxController` MOX state changes. Provide visual feedback during TX.
 
-### 1.2 Thetis source — what MOX recolour exists
+### 1.2 Source attribution — AetherSDR pattern + NereusSDR-native widget
 
-Thetis has **a single TX visual feedback model** with **no per-mode
-colours**. The MOX recolour is on `chkPower` (button background) and on
-the band readout under split TX, not on the chkMOX button itself.
+**Per memory `feedback_source_first_ui_vs_dsp`:** source-first governs
+DSP/radio only; Qt widgets are NereusSDR-native. Chunk 1 is therefore a
+**NereusSDR UI wire-up** with an **AetherSDR pattern reference**, not a
+Thetis port. No Thetis cite is required for chunk 1 because Thetis's
+non-Qt UI implementation (button background colours, label foregrounds)
+doesn't translate to the AetherSDR-style floating VFO Flag widget that
+NereusSDR uses.
 
-**`console.cs:20207-20247` [v2.10.3.13]** — VFO colour properties:
+**AetherSDR pattern reference** — `AetherSDR/src/gui/VfoWidget.{h,cpp}`:
+floating flag widget anchored to the VFO marker, flips right when
+clipped (`VfoWidget.h:30-32`). AetherSDR exposes a `TX` push-button
+badge (`m_txBadge` at `VfoWidget.cpp:359-366`) that toggles which slice
+is the TX target via `m_slice->setTxSlice(!m_slice->isTxSlice())` —
+this is **slice assignment**, not MOX-state visualisation.
 
-```csharp
-private Color vfo_text_light_color = Color.Yellow;
-public Color VFOTextLightColor { ... }
-private Color vfo_text_dark_color = Color.Olive;
-public Color VFOTextDarkColor { ... }
-```
+**NereusSDR `VfoDisplayItem`** (already implemented in 3G-8) has both:
+- The AetherSDR-style flag widget for slice assignment
+- A NereusSDR-native MOX-state colour swap via:
+  - `setTransmitting(bool tx)` setter (`VfoDisplayItem.h:83`)
+  - `m_transmitting` member (`VfoDisplayItem.h:122`)
+  - `m_txColour{0xff, 0x00, 0x00}` red default (`VfoDisplayItem.h:131`)
+  - `setTxColour(const QColor& c)` for theme override (`VfoDisplayItem.h:96`)
+  - Render-time swap: `const QColor stateColour = m_transmitting ?
+    m_txColour : m_rxColour` (`VfoDisplayItem.cpp:96`)
 
-The same two colours are used regardless of DSP mode.
-
-**`console.cs:29147` [v2.10.3.13]** — `UIMOXChangedTrue` paints chkPower
-red:
-
-```csharp
-chkPower.BackColor = Color.Red;
-```
-
-**`console.cs:29207` [v2.10.3.13]** — `chkMOX_CheckedChanged` resets
-chkMOX background to system control after MOX transition:
-
-```csharp
-chkMOX.BackColor = SystemColors.Control;
-```
-
-This is the **only** chkMOX background write in console.cs (verified via
-single-hit grep). The button's checked-state visual comes from the
-`ButtonTS` selectable rendering, not a recolour.
-
-**`console.cs:35585-35713` [v2.10.3.13]** — VFO-B band readout turns red
-when split TX is active (closest equivalent to a per-VFO TX badge):
-
-```csharp
-if (chkPower.Checked) txtVFOABand.ForeColor = Color.Red;
-else txtVFOABand.ForeColor = Color.DarkRed;
-...
-if (chkPower.Checked) {
-    txtVFOBFreq.ForeColor = Color.Red;
-    ...
-    txtVFOBBand.ForeColor = band_text_light_color;
-}
-```
-
-**`console.cs:29131-29133` [v2.10.3.13]** — `UIMOXChangedTrue` swaps
-the meter combo: RX combo greys, TX combo whitens:
-
-```csharp
-comboMeterRXMode.ForeColor = Color.Gray;
-comboMeterTXMode.ForeColor = Color.White;
-comboMeterTXMode_SelectedIndexChanged(this, EventArgs.Empty);
-```
+The `setTransmitting()` API is NereusSDR-native — AetherSDR's `m_txBadge`
+is for slice assignment only; AetherSDR has no comparable
+"currently keying" indicator on the VFO flag itself. NereusSDR added the
+MOX-state colour-swap behaviour during 3G-8 as a UX enhancement.
 
 ### 1.3 Locked decisions
 
-1. **Single TX colour swap.** No per-mode palette. Apply red to the
-   active VFO's band label during TX. Reuse `vfo_text_light_color` for
-   the digits (no change there from current 3G-8 stub).
-2. **Active VFO determined by `int rx` argument** of MoxChanged signal
-   (chunk 6). When `rx == 2` (RX2 enabled AND VFOBTX), badge appears on
-   VFO-B's flag. When `rx == 1` (default), badge appears on VFO-A's
-   flag. This is the same semantic Thetis uses — but Thetis paints VFO-B
-   red specifically when `chkVFOSplit && chkPower.Checked`, NereusSDR's
-   logic generalises to any TX-on-B configuration.
-3. **No status-bar TX label.** Thetis has none; NereusSDR doesn't add
-   one in 3M-1c (could be a future polish item). The MOX state already
-   has visibility through the TxApplet MOX button's button-state visual
-   plus the per-flag badge.
+1. **Reuse existing 3G-8 widget machinery.** `m_transmitting` flag,
+   `m_txColour` (red default), `setTransmitting(bool)` API — all
+   already implemented. Chunk 1 just wires the slot.
+2. **Active VFO determined by `int rx` argument** of MoxController's
+   3-arg `moxChanged(int rx, bool oldMox, bool newMox)` signal
+   (chunk 6). When `rx == 1` (default), badge applies to VFO-A's flag.
+   When `rx == 2` (RX2 enabled AND VFOBTX), badge applies to VFO-B's
+   flag.
+3. **No status-bar TX label.** AetherSDR doesn't have one; NereusSDR
+   doesn't add one in 3M-1c. The MOX state already has visibility via
+   (a) the TxApplet MOX button visual, (b) the per-flag colour swap
+   from 3G-8, (c) future spectrum overlay tinting (already in 3M-1a).
+4. **No per-mode TX palette.** AetherSDR ships a single TX colour;
+   NereusSDR matches. Per-mode palette could be a future polish item
+   but isn't part of 3M-1c scope.
 
 ### 1.4 Test surface
 
 | Test | Scope |
 |---|---|
-| `tst_vfo_display_item_tx_badge.cpp` | `setTransmitting(true)` → badge shows; `setTransmitting(false)` → badge hides |
-| `tst_vfo_display_item_active_vfo_routing.cpp` | When `MoxController` emits `moxStateChanged(true)` with `rx=1`, only VFO-A flag badges; with `rx=2`, only VFO-B flag badges |
+| `tst_vfo_display_item_tx_badge.cpp` | `setTransmitting(true)` → render uses `m_txColour`; `setTransmitting(false)` → render uses `m_rxColour` |
+| `tst_vfo_display_item_active_vfo_routing.cpp` | When `MoxController` emits `moxChanged(int=1, ...)`, only VFO-A's `VfoDisplayItem` receives `setTransmitting(true)`; `int=2` routes to VFO-B |
 
 ### 1.5 Risk
 
-**Low.** UI wire-up only. The badge widget already exists from 3G-8;
-this chunk just connects its slot to MoxController's signal. No source-
-first translation risk because Thetis's behaviour is minimal (single
-red colour swap).
+**Low.** UI wire-up only — no DSP, no protocol, no Thetis behaviour
+translation. The widget machinery already exists from 3G-8; this chunk
+just connects its slot to MoxController's signal with the `int rx`
+routing logic.
 
 ---
 
@@ -1129,7 +1106,7 @@ Plus manual bench rows (added to verification matrix):
 
 ### Key Thetis source files for 3M-1c
 
-- `Project Files/Source/Console/console.cs` — `chk2TONE_CheckedChanged` (44728-44760), VFO colour properties (20207-20247), MOX state machine (29017-29677), `MoxChangeHandlers` (44851/45012), `BuildTXProfileCombos` (8125-8183), `comboTXProfile_MouseDown` (44519-44522)
+- `Project Files/Source/Console/console.cs` — `chk2TONE_CheckedChanged` (44728-44760), MOX state machine (29017-29677), `MoxChangeHandlers` (44851/45012), `BuildTXProfileCombos` (8125-8183), `comboTXProfile_MouseDown` (44519-44522)
 - `Project Files/Source/Console/setup.cs` — `chkTestIMD_CheckedChanged` (11019-11200ish), `btnTXProfileSave_Click` (9545-9612), `btnTXProfileDelete_Click` (9615-9656), `comboTXProfileName_SelectedIndexChanged` (9505-9543), `loadTXProfile` (9252-9292), `highlightTXProfileSaveItems` (3399-3550)
 - `Project Files/Source/Console/database.cs` — `AddTXProfileTable` (4299-4540) — column-name reference
 - `Project Files/Source/Console/cmaster.cs` — `cmInboundSize` (493-497), mic input rate (514-518), `SendCallbacks` (1123-1136)
@@ -1138,6 +1115,10 @@ Plus manual bench rows (added to verification matrix):
 ### Key mi0bot-Thetis source files for 3M-1c cross-checks
 
 - `Project Files/Source/Console/cmaster.cs:495` — identical 720-sample mic block size (no HL2 override)
+
+### AetherSDR pattern references (chunk 1)
+
+- `AetherSDR/src/gui/VfoWidget.{h,cpp}` — floating VFO Flag widget pattern; `m_txBadge` (slice assignment, not MOX state)
 
 ---
 

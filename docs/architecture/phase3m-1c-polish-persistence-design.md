@@ -65,7 +65,7 @@ without re-deriving the scope.
 | # | Chunk | Source-first cite | Risk |
 |---|---|---|---|
 | 0 | **HL2 TX path desk-review vs mi0bot-Thetis** (precursor) | mi0bot-Thetis `[v2.10.3.13-beta2]` / `[@c26a8a4]` primary for this chunk; cross-check against Thetis upstream | Low (analysis only; output is a doc) |
-| 1 | VFO Flag TX badge wire-up | `VfoDisplayItem::setTransmitting(bool)` already stubbed in 3G-8; Thetis MOX visual feedback as colour-palette ref | Low |
+| 1 | VFO Flag TX badge wire-up | AetherSDR `VfoWidget.{h,cpp}` floating-flag pattern + NereusSDR-native `VfoDisplayItem::setTransmitting(bool)` already implemented in 3G-8 | Low |
 | 2 | Two-tone test full port (continuous + pulsed) | `console.cs:44728-44760` + `setup.cs:11019-11200ish` `[v2.10.3.13]` | Medium |
 | 3 | Mic profile schema (live fields, Thetis names, SSB-only pointer) | `database.cs:AddTXProfileTable` `[v2.10.3.13]` (~20-column subset of Thetis's 206) | Medium |
 | 4 | TxApplet completes (profile combo + save/load/delete/rename + 2-TONE button) | various Thetis `[v2.10.3.13]` | Low |
