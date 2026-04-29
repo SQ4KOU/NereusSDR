@@ -30,6 +30,8 @@
 #include "setup/DiagnosticsSetupPages.h"
 #include "diagnostics/RadioStatusPage.h"
 #include "diagnostics/DiagnosticsPhaseHPages.h"
+// Test (Phase 3M-1c H.1: Two-Tone IMD page)
+#include "setup/TestTwoTonePage.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -238,6 +240,11 @@ void SetupDialog::buildTree()
     // ── Keyboard ──────────────────────────────────────────────────────────────
     QTreeWidgetItem* keyboard = addCategory("Keyboard");
     add(keyboard, "Shortcuts", new KeyboardShortcutsPage);
+
+    // ── Test ──────────────────────────────────────────────────────────────────
+    // Phase 3M-1c H.1: top-level Test category for the Two-Tone IMD page.
+    QTreeWidgetItem* test = addCategory("Test");
+    add(test, "Two-Tone IMD", new TestTwoTonePage(m_model));
 
     // ── Diagnostics ───────────────────────────────────────────────────────────
     QTreeWidgetItem* diagnostics = addCategory("Diagnostics");

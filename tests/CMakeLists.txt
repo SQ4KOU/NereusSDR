@@ -2151,3 +2151,22 @@ target_compile_definitions(tst_radio_model_3m1b_ownership PRIVATE NEREUS_BUILD_T
 nereus_add_test(tst_radio_model_mic_source_hl2_force)
 target_compile_definitions(tst_radio_model_mic_source_hl2_force PRIVATE NEREUS_BUILD_TESTS)
 
+# =============================================================================
+# Phase 3M-1c Task H — Setup → Test → Two-Tone IMD page (TestTwoTonePage)
+# =============================================================================
+# Covers:
+#   1.    Constructor doesn't crash with default RadioModel.
+#   2.    Initial widget values match TransmitModel two-tone defaults
+#         (8 properties: 5 numeric + 2 booleans + DrivePowerSource enum).
+#   3-3f. UI → Model round trips (7 numeric / boolean controls).
+#   4-4b. Model → UI round trips (QSignalBlocker prevents feedback loops).
+#   5.    Defaults preset button → Freq1=700 / Freq2=1900 only (Level/Power
+#         unchanged, matching Thetis btnTwoToneF_defaults_Click semantics).
+#   6.    Stealth preset button → Freq1=70 / Freq2=190.
+#   7.    Invert checkbox initial state checked (twoToneInvert default true).
+#   8.    Pulsed checkbox initial state unchecked (twoTonePulsed default false).
+#   9.    DrivePowerSource radio button two-way sync
+#         (model→UI: Fixed enum selects Fixed radio; UI→model: TuneSlider
+#         click sets enum; UI→model: Fixed click sets enum).
+nereus_add_test(tst_test_two_tone_page)
+
