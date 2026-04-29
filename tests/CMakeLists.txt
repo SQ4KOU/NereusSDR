@@ -33,6 +33,16 @@ nereus_add_test(tst_reading_name)
 nereus_add_test(tst_meter_item_scale)
 nereus_add_test(tst_meter_presets)
 
+# ── Phase 3M-1c G.1 / G.2: VfoDisplayItem TX-state badge + Phase L routing ──
+# Verifies the existing 3G-8 widget machinery (setTransmitting / isTransmitting
+# round-trip + paint() colour-swap rendered to QImage) AND demonstrates the
+# Phase L wiring lambda that will dispatch MoxController::moxChanged(int rx,
+# bool, bool) to per-VFO setTransmitting based on the rx index semantic from
+# pre-code review §6.5 ((rx2_enabled && vfobTx) ? 2 : 1).  Routing tests connect
+# directly to MoxController and drive setMox to exercise the Pre/Post emit
+# walk completion.
+nereus_add_test(tst_vfo_display_item_tx_badge)
+
 # ── Phase 3G-9b clarity defaults invariants ───────────────────────────────
 nereus_add_test(tst_clarity_defaults)
 
