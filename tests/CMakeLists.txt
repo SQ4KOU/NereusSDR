@@ -1182,6 +1182,31 @@ nereus_add_test(tst_mox_controller_anti_vox)
 #   Pre-code review §0.3 + master design §5.2.1.
 nereus_add_test(tst_mox_controller_ptt_source_dispatch)
 
+# ── Phase 3M-1c Tasks C.2 / C.3 / C.4: MoxController multicast Pre/Post signals ─
+# Verifies the new 3-arg Pre/Post MOX state-change signals that future
+# observers (PS form, TCI server, MeterPoller, audio recorder, etc.) plug into:
+#   moxChanging(int rx, bool oldMox, bool newMox) — Pre, before m_mox commit;
+#     subscribers can defensively freeze readings.
+#   moxChanged (int rx, bool oldMox, bool newMox) — Post, after the timer
+#     walk completes (parallels the existing 1-arg moxStateChanged boundary).
+#
+# Coverage:
+#   §1.1  Pre fires before m_mox commit (isMox() inside slot returns OLD value);
+#   §1.2  Post fires after timer walk with correct oldMox/newMox payload;
+#   §1.3  Pre→Post ordering across a full RX→TX cycle;
+#   §2.1  rx == 1 when rx2_enabled=false, vfobTx=false (default);
+#   §2.2  rx == 1 when rx2_enabled=true,  vfobTx=false (RX2 alone is not a TX route);
+#   §2.3  rx == 1 when rx2_enabled=false, vfobTx=true;
+#   §2.4  rx == 2 when rx2_enabled=true,  vfobTx=true (TX off VFO-B via RX2);
+#   §3.1  Idempotent setMox(false) on fresh controller emits neither Pre nor Post;
+#   §4.1  TX→RX direction Post carries oldMox=true, newMox=false.
+#
+# The existing 1-arg moxStateChanged(bool) signal is unchanged — the 3-arg
+# moxChanged is an additive overload (Pre/Post overlay), not a rename.
+# Source: Thetis console.cs:29324 [v2.10.3.13] (MoxPreChangeHandlers, // MW0LGE_21k8);
+#   console.cs:29677 [v2.10.3.13] (MoxChangeHandlers, // MW0LGE_21a).
+nereus_add_test(tst_mox_controller_multicast_signals)
+
 # ── Phase 3M-1b Task H.5: mic_ptt extraction from P1/P2 status frames ─────────
 # Verifies end-to-end mic_ptt extraction and dispatch through MoxController.
 #

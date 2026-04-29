@@ -83,6 +83,22 @@
 //                   (cmaster.cs:937-942 [v2.10.3.13]):
 //                     all RX slots (RX1, RX1S, RX2) get source=1.
 //                 useVax=true rejected with qCWarning (deferred to 3M-3a).
+//   2026-04-28 — Phase 3M-1c Tasks C.2 / C.3 / C.4 — multicast Pre/Post MOX
+//                 state-change signals wired:
+//                   moxChanging(rx, oldMox, newMox) Pre — emitted in setMox
+//                     after the idempotent guard but BEFORE m_mox commit, so
+//                     subscribers see the OLD value via isMox().
+//                     Ports console.cs:29324 [v2.10.3.13]
+//                     (MoxPreChangeHandlers, // MW0LGE_21k8).
+//                   moxChanged(rx, oldMox, newMox) Post — emitted after the
+//                     timer walk completes (onRfDelayElapsed / onPttOutElapsed)
+//                     parallel to the existing moxStateChanged(bool) emit.
+//                     Ports console.cs:29677 [v2.10.3.13]
+//                     (MoxChangeHandlers, // MW0LGE_21a).
+//                   setRx2Enabled(bool) / setVfobTx(bool) idempotent setters
+//                     added so RadioModel can keep activeRxForTx() current.
+//                   activeRxForTx() = (m_rx2Enabled && m_vfobTx) ? 2 : 1
+//                     matches the Thetis dispatch expression verbatim.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -174,6 +190,38 @@ void MoxController::setTimerIntervals(int rfMs, int moxMs, int spaceMs,
 void MoxController::setMoxCheck(MoxCheckFn check)
 {
     m_moxCheck = std::move(check);
+}
+
+// ---------------------------------------------------------------------------
+// C.4 — setRx2Enabled / setVfobTx
+//
+// Idempotent setters that update the internal flags consumed by
+// activeRxForTx(), the helper that produces the rx argument carried by the
+// moxChanging / moxChanged multicast signals (Pre/Post).
+//
+// No signal is emitted — these slots only mirror upstream RadioModel state.
+// Both flags default to false; the emitted rx argument is therefore always 1
+// until RadioModel calls these setters (NereusSDR has no RX2 wired yet —
+// scheduled for Phase 3F).
+//
+// From Thetis console.cs:29324 [v2.10.3.13] (MoxPreChangeHandlers) and
+//                console.cs:29677 [v2.10.3.13] (MoxChangeHandlers):
+//   rx2_enabled && VFOBTX ? 2 : 1
+// ---------------------------------------------------------------------------
+void MoxController::setRx2Enabled(bool enabled)
+{
+    if (m_rx2Enabled == enabled) {
+        return;  // idempotent — no internal state churn
+    }
+    m_rx2Enabled = enabled;
+}
+
+void MoxController::setVfobTx(bool enabled)
+{
+    if (m_vfobTx == enabled) {
+        return;  // idempotent — no internal state churn
+    }
+    m_vfobTx = enabled;
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +462,22 @@ void MoxController::setMox(bool on)
         return;  // no real transition — no state advance, no timer chain
     }
 
+    // ── C.2: Pre signal (multicast, before m_mox commit) ─────────────────────
+    // From Thetis console.cs:29322-29324 [v2.10.3.13]:
+    //   bool bOldMox = _mox; //MW0LGE_21b used for state change delgates at end of fn
+    //   MoxPreChangeHandlers?.Invoke(rx2_enabled && VFOBTX ? 2 : 1, _mox, chkMOX.Checked); // MW0LGE_21k8
+    //
+    // Emit BEFORE m_mox commit so subscribers' isMox() snapshot still reflects
+    // the OLD value. Subscribers (PS form, MeterPoller, recorder…) can
+    // defensively freeze readings between Pre and Post.
+    //
+    // Note: Thetis' Pre fires before the rx_only short-circuit and the VAC
+    // bypass logic; in NereusSDR we have no rx_only equivalent at this layer
+    // (RadioModel-level RX-only enforcement lives elsewhere) so the placement
+    // BETWEEN the idempotent guard and the m_mox commit is the most faithful
+    // translation. By construction, m_mox != on here (idempotent guard passed).
+    emit moxChanging(activeRxForTx(), m_mox, on);  // MW0LGE_21k8 — Pre
+
     // ── Step 3: Commit new MOX state ─────────────────────────────────────────
     m_mox = on;
 
@@ -564,6 +628,12 @@ void MoxController::onRfDelayElapsed()
     advanceState(MoxState::Tx);
     emit txReady();                                     // RX→TX phase 3 of 3
     emit moxStateChanged(true);                         // diagnostic signal
+    // ── C.3: Post signal (multicast, after timer walk completes) ─────────
+    // From Thetis console.cs:29677 [v2.10.3.13]:
+    //   if (bOldMox != tx) MoxChangeHandlers?.Invoke(rx2_enabled && VFOBTX ? 2 : 1, bOldMox, tx); // MW0LGE_21a
+    // RX→TX direction: by construction we got here because setMox(true)
+    // entered the walk past its idempotent guard, so bOldMox=false, tx=true.
+    emit moxChanged(activeRxForTx(), false, true);      // MW0LGE_21a — Post
 }
 
 // onMoxDelayElapsed — fires when m_moxDelayTimer elapses.
@@ -623,6 +693,12 @@ void MoxController::onPttOutElapsed()
     advanceState(MoxState::Rx);
     emit rxReady();                                     // TX→RX phase 4 of 4
     emit moxStateChanged(false);                        // diagnostic signal
+    // ── C.3: Post signal (multicast, after timer walk completes) ─────────
+    // From Thetis console.cs:29677 [v2.10.3.13]:
+    //   if (bOldMox != tx) MoxChangeHandlers?.Invoke(rx2_enabled && VFOBTX ? 2 : 1, bOldMox, tx); // MW0LGE_21a
+    // TX→RX direction: by construction we got here via setMox(false) past
+    // the idempotent guard, so bOldMox=true, tx=false.
+    emit moxChanged(activeRxForTx(), true, false);      // MW0LGE_21a — Post
 }
 
 // onBreakInDelayElapsed — fires when m_breakInDelayTimer elapses.
