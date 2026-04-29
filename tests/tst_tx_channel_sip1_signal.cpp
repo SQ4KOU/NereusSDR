@@ -30,7 +30,8 @@ warren@wpratt.com
 //
 // No Thetis code is ported in this test file. The test exercises:
 //   - TxChannel::sip1OutputReady signal (Phase 3M-1b D.5).
-//   - driveOneTxBlock() via the NEREUS_BUILD_TESTS tickForTest() seam.
+//   - driveOneTxBlock() via the NEREUS_BUILD_TESTS tickForTest seam,
+//     updated to (samples, frames) for the Phase 3M-1c E.1 push model.
 //
 // This test verifies the invariants of the D.5 sip1OutputReady signal:
 //
@@ -73,6 +74,9 @@ warren@wpratt.com
 //                 signal fires after each driveOneTxBlock() cycle with the
 //                 correct frame count. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-04-28 — Phase 3M-1c E.1: tickForTest now takes (samples, frames).
+//                 TxMicRouter is no longer the PC-mic source; tests push
+//                 samples directly.  J.J. Boyd (KG4VCF), AI-assisted.
 // =================================================================
 
 // no-port-check: NereusSDR-original test file. All Thetis source cites are
@@ -80,29 +84,12 @@ warren@wpratt.com
 
 #include <QtTest/QtTest>
 
+#include <vector>
+
 #include "core/TxChannel.h"
-#include "core/TxMicRouter.h"
 #include "core/RadioConnection.h"
 
 using namespace NereusSDR;
-
-// ── TestRampMicRouter ───────────────────────────────────────────────────────
-//
-// Emits a deterministic ramp: dst[i] = float(i + 1).
-// Non-zero values so any silent-failure in the mic path is visible.
-class TestRampMicRouter : public TxMicRouter {
-public:
-    int pullSamples(float* dst, int n) override
-    {
-        if (dst == nullptr || n <= 0) {
-            return 0;
-        }
-        for (int i = 0; i < n; ++i) {
-            dst[i] = static_cast<float>(i + 1);
-        }
-        return n;
-    }
-};
 
 // ── MockConnection ──────────────────────────────────────────────────────────
 // Minimal mock so TxChannel's null-connection guard does not short-circuit
@@ -146,11 +133,19 @@ class TstTxChannelSip1Signal : public QObject {
     static constexpr int kChannelId = 1;   // WDSP.id(1, 0) — TX channel
     static constexpr int kBufSize   = 256; // default inputBufferSize / outputBufferSize
 
+    // Build a deterministic ramp matching the configured input buffer size.
+    static std::vector<float> ramp(int n)
+    {
+        std::vector<float> v(static_cast<size_t>(n));
+        for (int i = 0; i < n; ++i) {
+            v[static_cast<size_t>(i)] = static_cast<float>(i + 1);
+        }
+        return v;
+    }
+
 private slots:
 
     // ── Signal fires exactly once per tick ───────────────────────────────────
-    //
-    // After one tickForTest(), QSignalSpy must record exactly 1 emission.
 
     void sip1OutputReady_emitsOnTick()
     {
@@ -159,44 +154,31 @@ private slots:
         qRegisterMetaType<const float*>("const float*");
 
         TxChannel ch(kChannelId, kBufSize, kBufSize);
-        TestRampMicRouter mock;
         MockConnection conn;
-        ch.setMicRouter(&mock);
         ch.setConnection(&conn);
         ch.setRunning(true);
 
         QSignalSpy spy(&ch, &TxChannel::sip1OutputReady);
-        ch.tickForTest();
+        const auto buf = ramp(kBufSize);
+        ch.tickForTest(buf.data(), kBufSize);
 
         QCOMPARE(spy.count(), 1);
     }
 
     // ── Second signal argument (frames) matches kBufSize ─────────────────────
-    //
-    // The signal carries (const float* samples, int frames). The `frames`
-    // argument must equal m_outputBufferSize which equals the kBufSize
-    // constructor argument. This is the load-bearing invariant: AudioEngine
-    // (Phase L) relies on knowing the exact frame count to size its buffer.
-    //
-    // QSignalSpy argument capture:
-    //   args.at(0) — const float* pointer (may be an invalid QVariant if
-    //                the metatype registration above was not enough; we skip
-    //                its value assertion and only verify the frame count).
-    //   args.at(1) — int frames (standard Qt metatype, always captured).
 
     void sip1OutputReady_frameCountMatchesOutputBufferSize()
     {
         qRegisterMetaType<const float*>("const float*");
 
         TxChannel ch(kChannelId, kBufSize, kBufSize);
-        TestRampMicRouter mock;
         MockConnection conn;
-        ch.setMicRouter(&mock);
         ch.setConnection(&conn);
         ch.setRunning(true);
 
         QSignalSpy spy(&ch, &TxChannel::sip1OutputReady);
-        ch.tickForTest();
+        const auto buf = ramp(kBufSize);
+        ch.tickForTest(buf.data(), kBufSize);
 
         QCOMPARE(spy.count(), 1);
         const QList<QVariant> args = spy.takeFirst();
@@ -205,80 +187,61 @@ private slots:
     }
 
     // ── Signal fires on every tick across multiple cycles ────────────────────
-    //
-    // The signal must be emitted once per driveOneTxBlock() call, not
-    // only on the first call. After N ticks, spy.count() must equal N.
 
     void sip1OutputReady_multipleCycles()
     {
         qRegisterMetaType<const float*>("const float*");
 
         TxChannel ch(kChannelId, kBufSize, kBufSize);
-        TestRampMicRouter mock;
         MockConnection conn;
-        ch.setMicRouter(&mock);
         ch.setConnection(&conn);
         ch.setRunning(true);
 
         QSignalSpy spy(&ch, &TxChannel::sip1OutputReady);
+        const auto buf = ramp(kBufSize);
 
         for (int tick = 1; tick <= 5; ++tick) {
-            ch.tickForTest();
+            ch.tickForTest(buf.data(), kBufSize);
             QCOMPARE(spy.count(), tick);
         }
     }
 
     // ── Signal does NOT fire when m_running is false ──────────────────────────
-    //
-    // driveOneTxBlock() early-exits when !m_running; sip1OutputReady must
-    // therefore never be emitted in that case.
 
     void sip1OutputReady_notRunning_doesNotEmit()
     {
         qRegisterMetaType<const float*>("const float*");
 
         TxChannel ch(kChannelId, kBufSize, kBufSize);
-        TestRampMicRouter mock;
         MockConnection conn;
-        ch.setMicRouter(&mock);
         ch.setConnection(&conn);
         // Deliberately do NOT call setRunning(true).
 
         QSignalSpy spy(&ch, &TxChannel::sip1OutputReady);
-        ch.tickForTest();
+        const auto buf = ramp(kBufSize);
+        ch.tickForTest(buf.data(), kBufSize);
 
         QCOMPARE(spy.count(), 0);
     }
 
     // ── Signal does NOT fire when m_connection is null ────────────────────────
-    //
-    // driveOneTxBlock() early-exits when !m_connection; sip1OutputReady is
-    // emitted AFTER the connection guard, so it must not fire here.
-    //
-    // Design note: the emit is placed after sendTxIq(), which requires
-    // m_connection to be non-null. If m_connection is null, the whole
-    // driveOneTxBlock() returns before reaching the emit.
 
     void sip1OutputReady_noConnection_doesNotEmit()
     {
         qRegisterMetaType<const float*>("const float*");
 
         TxChannel ch(kChannelId, kBufSize, kBufSize);
-        TestRampMicRouter mock;
-        ch.setMicRouter(&mock);
         // Deliberately do NOT call setConnection() — m_connection stays null.
         ch.setRunning(true);
 
         QSignalSpy spy(&ch, &TxChannel::sip1OutputReady);
-        ch.tickForTest();
+        const auto buf = ramp(kBufSize);
+        ch.tickForTest(buf.data(), kBufSize);
 
         QCOMPARE(spy.count(), 0);
     }
 
     // ── Frame count is correct for non-default outputBufferSize ──────────────
-    //
-    // Verify that the frames argument tracks m_outputBufferSize, not a
-    // hardcoded constant. Use a P2-Saturn-style 1024-sample output buffer.
 
     void sip1OutputReady_frameCountMatchesNonDefaultOutputBufferSize()
     {
@@ -286,14 +249,13 @@ private slots:
 
         constexpr int kP2OutSize = 1024;  // P2 Saturn: 256 × 192 000 / 48 000
         TxChannel ch(kChannelId, 256 /*in*/, kP2OutSize /*out*/);
-        TestRampMicRouter mock;
         MockConnection conn;
-        ch.setMicRouter(&mock);
         ch.setConnection(&conn);
         ch.setRunning(true);
 
         QSignalSpy spy(&ch, &TxChannel::sip1OutputReady);
-        ch.tickForTest();
+        const auto buf = ramp(256);
+        ch.tickForTest(buf.data(), 256);
 
         QCOMPARE(spy.count(), 1);
         const QList<QVariant> args = spy.takeFirst();

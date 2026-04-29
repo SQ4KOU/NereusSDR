@@ -115,6 +115,16 @@ warren@wpratt.com
 //                 implemented by J.J. Boyd (KG4VCF) during 3M-1b Task D.7.
 //                 Constants sourced from Thetis wdsp/TXA.h:49-69 [v2.10.3.13].
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-28 — Phase 3M-1c E.1 — push-driven TX pump.  driveOneTxBlock()
+//                 now accepts (const float* samples, int frames) and is wired
+//                 by RadioModel (Phase L) to AudioEngine::micBlockReady via
+//                 Qt::DirectConnection.  Removed m_txProductionTimer + 5 ms
+//                 QTimer pull-model + the 1b353f4 partial-read zero-fill
+//                 workaround (the push model has no underrun pathology by
+//                 construction).  m_micRouter retained for future Radio-mic
+//                 source path (the PC-mic path no longer pulls from it).
+//                 J.J. Boyd (KG4VCF), AI-assisted transformation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
@@ -187,17 +197,10 @@ TxChannel::TxChannel(int channelId,
     m_outQ.assign(m_outputBufferSize, 0.0f);
     m_outInterleaved.assign(m_outputBufferSize * 2, 0.0f);
 
-    // Production timer — drives driveOneTxBlock() while TX is active.
-    // Cadence: 5 ms.  At 48 kHz input / 256 samples: 256/48000 ≈ 5.33 ms → one
-    // fexchange2 call per tick.  At 192 kHz output (P2): out block = 1024 samples.
-    // The P2 consumer (m_txIqTimer at 5 ms, 4 frames/tick) drains ~960 samples
-    // per tick — slightly under producer; the SPSC ring absorbs the surplus.
-    //
-    // Qt::PreciseTimer reduces OS scheduler jitter on the audio path.
-    m_txProductionTimer = new QTimer(this);
-    m_txProductionTimer->setTimerType(Qt::PreciseTimer);
-    m_txProductionTimer->setInterval(5);  // 5 ms
-    connect(m_txProductionTimer, &QTimer::timeout, this, &TxChannel::driveOneTxBlock);
+    // Phase 3M-1c E.1: no QTimer — driveOneTxBlock(samples, frames) is a slot
+    // wired by RadioModel (Phase L) to AudioEngine::micBlockReady via
+    // Qt::DirectConnection.  Each mic block emits triggers exactly one
+    // fexchange2 cycle synchronously on the audio thread.
 
     qCInfo(lcDsp) << "TxChannel" << m_channelId
                   << "wrapper constructed; WDSP TXA pipeline (31 stages)"
@@ -490,31 +493,16 @@ void TxChannel::setTuneTone(bool on, double freqHz, double magnitude)
 // ---------------------------------------------------------------------------
 void TxChannel::setRunning(bool on)
 {
-    // Always update the run-state flag and start/stop the production timer,
-    // regardless of whether the WDSP channel is open.  This ensures the timer
-    // fires correctly in unit-test builds (HAVE_WDSP compiled in but no
-    // OpenChannel called — txa[].rsmpin.p is null) and in stub builds (!HAVE_WDSP).
-    //
-    // driveOneTxBlock() guards against null m_connection and the HAVE_WDSP
-    // null-channel path, so it is safe to let the timer fire in both cases.
+    // Update the run-state flag.  Phase 3M-1c E.1 removed the 5 ms
+    // QTimer; production samples now arrive via the
+    // AudioEngine::micBlockReady → driveOneTxBlock(samples, frames) slot
+    // wired in Phase L.  The slot itself early-exits when m_running is
+    // false, so toggling this flag is sufficient to gate fexchange2.
     m_running = on;
 
-    // Start / stop the TX I/Q production timer (3M-1a G.1).
-    // The timer drives driveOneTxBlock() which calls fexchange2 and pushes
-    // output to m_connection->sendTxIq() (the SPSC ring producer side).
-    if (on) {
-        if (m_txProductionTimer) {
-            m_txProductionTimer->start();
-        }
-    } else {
-        if (m_txProductionTimer) {
-            m_txProductionTimer->stop();
-        }
-    }
-
     qCDebug(lcDsp) << "TxChannel" << m_channelId
-                   << (on ? "started (channel ON, production timer running)"
-                          : "stopped (channel OFF, drain, production timer stopped)");
+                   << (on ? "started (channel ON, push-driven slot armed)"
+                          : "stopped (channel OFF, drain, push-driven slot disarmed)");
 
 #ifdef HAVE_WDSP
     // Null-guard: txa[] is a zero-initialized global array; if OpenChannel was
@@ -1061,10 +1049,13 @@ void TxChannel::setAntiVoxGain(double gain)
 // Pass nullptr to detach before connection teardown.
 //
 // Thread safety: call from the main thread only.  driveOneTxBlock() reads
-// m_connection under the timer (QTimer fires on the main thread event loop),
-// so no synchronization is needed as long as this setter and the timer
-// share the main thread.  If the timer is ever moved to a worker thread,
-// add an atomic or mutex here.
+// m_connection on the audio thread (the slot is wired to AudioEngine::
+// micBlockReady via Qt::DirectConnection per Phase 3M-1c E.1), so the
+// raw pointer must be set before setRunning(true) and not torn down while
+// the channel is active.  RadioModel orchestrates this ordering: it sets
+// the connection first, sets running, and detaches only after stopping.
+// If a future task makes the slot connection runtime-mutable while
+// running, add an atomic or mutex here.
 // ---------------------------------------------------------------------------
 void TxChannel::setConnection(RadioConnection* conn)
 {
@@ -1091,32 +1082,58 @@ void TxChannel::setMicRouter(TxMicRouter* router)
 }
 
 // ---------------------------------------------------------------------------
-// driveOneTxBlock()
+// driveOneTxBlock(const float* samples, int frames)  [3M-1c E.1]
 //
-// Drive one fexchange2 call: pull m_inI.size() samples from the mic router,
-// call fexchange2(channelId, inI, inQ, outI, outQ, &error), interleave the
-// output, and push to m_connection->sendTxIq() (the SPSC ring producer side).
+// Push-driven TX pump slot.  Wired by RadioModel (Phase L) to
+// AudioEngine::micBlockReady via Qt::DirectConnection — runs synchronously
+// on the audio thread.
 //
-// Called by m_txProductionTimer on every 5 ms tick while m_running is true.
+// Behavior:
+//   - samples != nullptr, frames == m_inputBufferSize:  copy into m_inI,
+//     zero-fill m_inQ, dispatch fexchange2.
+//   - samples == nullptr, frames == 0:                  silence path —
+//     zero-fill m_inI/m_inQ and dispatch fexchange2 (TUNE-tone PostGen
+//     output still reaches sendTxIq).
+//   - samples != nullptr, frames != m_inputBufferSize:  contract
+//     violation — log a qCWarning and return without dispatching.  The
+//     wire-up site is responsible for delivering exactly
+//     m_inputBufferSize samples per push.
 //
-// In 3M-1a TUNE-only mode:
-//   - NullMicSource fills m_inI with zeros; m_inQ stays zero.
-//   - WDSP gen1 PostGen (TXA stage 22, set by setTuneTone()) overwrites the
-//     zero input with the TUNE sine carrier before bp0 processes it.
-//   - fexchange2 output is the modulated I/Q stream ready for the radio DUC.
-//
-// Guard conditions (all return early):
-//   - !m_running: timer should not fire, but guard in case of race at stop.
-//   - !m_connection: connection not yet injected or already detached.
-//   - m_inI.empty(): buffers not allocated (should never happen after ctor).
+// Guards:
+//   - !m_running       — channel not active; return.
+//   - !m_connection    — no recipient for sendTxIq; return.
+//   - m_inI.empty()    — buffers not allocated (should never happen after ctor).
 //
 // WDSP guard: without HAVE_WDSP, fexchange2 is not available; the method
 // pushes zeros (silence) to m_connection->sendTxIq() via the pre-zeroed
-// m_outInterleaved buffer. This keeps the ring populated in stub builds
+// m_outInterleaved buffer.  This keeps the ring populated in stub builds
 // (unit tests, CI without WDSP) so connection-side drain path stays warm.
+//
+// History note: Phase 3M-1a G.1 introduced an m_txProductionTimer firing
+// every 5 ms; PR #149 added a partial-read zero-fill workaround (commit
+// 1b353f4) for the timer-vs-sample-rate race.  Phase 3M-1c E.1 deleted
+// both: the push model has no underrun pathology by construction
+// (AudioEngine::micBlockReady emits exactly kMicBlockFrames per signal).
 // ---------------------------------------------------------------------------
-void TxChannel::driveOneTxBlock()
+void TxChannel::driveOneTxBlock(const float* samples, int frames)
 {
+    // ── 3M-1c E.1 push-driven slot ──────────────────────────────────────────
+    //
+    // Wired by RadioModel (Phase L) to AudioEngine::micBlockReady via
+    // Qt::DirectConnection.  Runs synchronously on the audio thread.
+    //
+    // Three call shapes:
+    //   1. (samples != null, frames == m_inputBufferSize) — mic-block path:
+    //      copy samples into m_inI, zero-fill m_inQ, dispatch fexchange2.
+    //   2. (samples == null, frames == 0)                 — silence path:
+    //      zero-fill m_inI/m_inQ, dispatch fexchange2 (TUNE-tone PostGen
+    //      output still reaches sendTxIq).
+    //   3. (samples != null, frames != m_inputBufferSize) — contract
+    //      violation: log a warning and return.  The Phase L wire-up site
+    //      is responsible for delivering exactly m_inputBufferSize samples
+    //      per push (re-blocking AudioEngine's 720-sample emits if needed).
+    //
+    // !m_running and !m_connection short-circuit the slot to a no-op.
     if (!m_running || !m_connection) {
         return;
     }
@@ -1127,45 +1144,26 @@ void TxChannel::driveOneTxBlock()
         return;
     }
 
-    // Pull mic samples from the router into Iin (size == inN == in_size).
-    // In 3M-1a: NullMicSource writes inN zeros to m_inI (functionally inert
-    // during TUNE because gen1 PostGen overwrites the rsmpin stage input).
-    // m_inQ stays zero throughout (real mono mic input; Q=0 for real signals).
-    //
-    // Producer/consumer rate mismatch: this timer fires every 5 ms but
-    // 256 samples at 48 kHz needs 5.333 ms. The consumer outruns the
-    // producer by ~6%, which means pullSamples will frequently return
-    // fewer than inN samples. Without explicit handling, the partial
-    // fill leaves stale data from the previous tick in m_inI[got..inN),
-    // which fexchange2 re-processes — audible as "overdriven + jittery"
-    // because the same speech segment gets folded back into the modulator
-    // every tick that underruns. Zero-fill the gap and skip the fexchange2
-    // call entirely on a complete underrun (no point modulating silence
-    // when the radio is already in TX mode and nothing changes).
-    bool haveSamples = false;
-    if (m_micRouter) {
-        const int got = m_micRouter->pullSamples(m_inI.data(), inN);
-        // Zero-fill the unfilled tail (covers got==0 → full silence + the
-        // partial-read case → just the right edge). This replaces the
-        // previous early-return on got==0, which Codex flagged on PR #149:
-        // returning suppressed fexchange2 entirely, killing TXA gen1
-        // PostGen output (TUNE tone) during any mic underrun. Driving
-        // fexchange2 with silence still lets gen1 PostGen and other
-        // downstream-generated TX audio reach the radio.
-        if (got < inN) {
-            std::fill(m_inI.begin() + got, m_inI.end(), 0.0f);
-        }
-        std::fill(m_inQ.begin(), m_inQ.end(), 0.0f);
-        haveSamples = true;
-    } else {
-        // No mic router — send pure silence to WDSP input.
-        // gen1 PostGen will still inject the TUNE carrier downstream so
-        // we still need to call fexchange2 for the carrier path.
-        std::fill(m_inI.begin(), m_inI.end(), 0.0f);
-        std::fill(m_inQ.begin(), m_inQ.end(), 0.0f);
-        haveSamples = true;  // PostGen / TUNE path needs fexchange2 to fire
+    // Contract: caller pushes exactly m_inputBufferSize samples (or the
+    // explicit nullptr/0 silence path).  Anything else is a bug at the
+    // wire-up layer — log and skip.  Never silently truncate or pad.
+    if (samples != nullptr && frames != inN) {
+        qCWarning(lcDsp) << "TxChannel" << m_channelId
+                         << "driveOneTxBlock: frames=" << frames
+                         << "does not match m_inputBufferSize=" << inN
+                         << "; skipping fexchange2 (caller must re-block "
+                            "samples to inputBufferSize before pushing).";
+        return;
     }
-    (void)haveSamples;
+
+    // Populate m_inI from the pushed block (or zero-fill for the silence path).
+    // m_inQ is always zero — real mic input is mono, no Q component.
+    if (samples != nullptr) {
+        std::copy_n(samples, inN, m_inI.begin());
+    } else {
+        std::fill(m_inI.begin(), m_inI.end(), 0.0f);
+    }
+    std::fill(m_inQ.begin(), m_inQ.end(), 0.0f);
 
 #ifdef HAVE_WDSP
     // fexchange2 — drives the WDSP TX channel.

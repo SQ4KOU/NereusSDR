@@ -1564,6 +1564,31 @@ target_compile_definitions(tst_audio_engine_pull_tx_mic PRIVATE NEREUS_BUILD_TES
 nereus_add_test(tst_audio_engine_mic_block_ready)
 target_compile_definitions(tst_audio_engine_mic_block_ready PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1c E.1: TxChannel push-driven refactor ─────────────────────
+# Verifies the QTimer-driven pull model is gone and the (samples, frames)
+# push slot is the single fexchange2 entry point.  Test cases (7):
+#   - pushFullBlock_drivesOneSendTxIq            — full block → 1 fexchange2
+#   - pushNullSamples_stillDrivesSendTxIq        — TUNE silence path
+#   - pushMismatchedFrameCount_skipsFexchange2   — contract violation: warn + skip
+#   - tickForTest_isSynchronousPushEntryPoint    — 2 ticks → 2 sendTxIq
+#   - noTimer_doesNotFireWithoutPush             — no QTimer dispatches
+#   - pushWhileNotRunning_isNoOp                 — !running guard
+#   - pushWithNullConnection_isNoOp              — null-connection guard
+# Pre-code review: Phase 3M-1c E.1.
+nereus_add_test(tst_tx_channel_push_driven)
+target_compile_definitions(tst_tx_channel_push_driven PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1c E.1: TxChannel zero-fill workaround removal ─────────────
+# Verifies the 1b353f4 partial-read zero-fill workaround is gone in the
+# push-driven model.  Test cases (4):
+#   - thirtyPushCycles_yieldThirtySendTxIqCalls   — no missed cycles
+#   - inIBufferMatchesPushedSamplesExactly        — no zero-fill contamination
+#   - inQBufferStaysZeroAcrossCycles              — Q=0 over 5 cycles
+#   - nullPush_zeroFillsInputBuffers              — silence path correctness
+# Pre-code review: Phase 3M-1c E.1.
+nereus_add_test(tst_tx_channel_no_zero_fill)
+target_compile_definitions(tst_tx_channel_no_zero_fill PRIVATE NEREUS_BUILD_TESTS)
+
 # Plan: 3M-1b E.2. Exercises AudioEngine TX monitor enable + volume state
 # (setTxMonitorEnabled / setTxMonitorVolume / signals / clamping / idempotency).
 # Pre-code review §4.4.

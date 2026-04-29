@@ -116,12 +116,21 @@ warren@wpratt.com
 //                 Thetis wdsp/TXA.h:51-64 [v2.10.3.13]; deferred meters return
 //                 0.0f unconditionally per master design §5.2.1 (3M-3a scope).
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-28 — Phase 3M-1c E.1 — push-driven TX pump.  driveOneTxBlock()
+//                 converted from QTimer-driven pull to a slot accepting
+//                 (const float* samples, int frames).  The QTimer (and the
+//                 1b353f4 partial-read zero-fill workaround) were dropped:
+//                 AudioEngine::micBlockReady (Phase D.1) now drives fexchange2
+//                 directly via Qt::DirectConnection.  TxMicRouter retained
+//                 for the future Radio-mic source path; the PC-mic path no
+//                 longer pulls from it.  tickForTest seam updated to
+//                 (samples, frames).  J.J. Boyd (KG4VCF), AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
 
 #include <QObject>
-#include <QTimer>
 
 #include <limits>   // std::numeric_limits — quiet_NaN() initialiser (D.3)
 #include <vector>
@@ -645,19 +654,27 @@ public:
     void setStageRunning(Stage s, bool run);
 
 #ifdef NEREUS_BUILD_TESTS
-    // ── Test seam (Phase 3M-1b D.1) ─────────────────────────────────────────
+    // ── Test seam (Phase 3M-1b D.1, updated for 3M-1c E.1 push model) ─────
     //
-    // Synchronously drive one fexchange2 cycle. Bypasses the 5 ms QTimer so
-    // tests can deterministically inspect input buffers after pullSamples has
-    // run without waiting for timer ticks.
+    // Synchronously drive one fexchange2 cycle by pushing the given mic
+    // block through the production slot.  Mirrors what AudioEngine's
+    // micBlockReady signal does at runtime (Qt::DirectConnection, Phase L
+    // wire-up).
     //
-    // Only available when NEREUS_BUILD_TESTS is defined.  Production builds do
-    // not include this method; the timer-based path is the only entry point.
-    void tickForTest() { driveOneTxBlock(); }
+    // Pass `samples == nullptr` and `frames == 0` to drive the silence
+    // path (TUNE-tone PostGen output still reaches sendTxIq).  Pass any
+    // mismatched frame count to exercise the contract-violation guard.
+    //
+    // Only available when NEREUS_BUILD_TESTS is defined.  Production
+    // builds rely on the slot connection wired by RadioModel (Phase L).
+    void tickForTest(const float* samples, int frames)
+    {
+        driveOneTxBlock(samples, frames);
+    }
 
     // Read-only access to fexchange2 input buffers after a tickForTest() cycle.
-    // Used by D.1 tests to verify: (a) m_inI matches the injected mic source's
-    // output, and (b) m_inQ is zero-filled (real mic input has no Q component).
+    // Used by D.1 tests to verify: (a) m_inI matches the pushed samples, and
+    // (b) m_inQ is zero-filled (real mic input has no Q component).
     const std::vector<float>& inIForTest() const { return m_inI; }
     const std::vector<float>& inQForTest() const { return m_inQ; }
 
@@ -681,6 +698,35 @@ public:
     //   (c) Idempotent guard fires on duplicate calls (value unchanged).
     double lastMicPreampForTest()             const noexcept { return m_micPreampLast; }
 #endif // NEREUS_BUILD_TESTS
+
+public slots:
+    // ── Push-driven TX pump slot (3M-1c E.1) ─────────────────────────────────
+    //
+    /// Drive one fexchange2 cycle from a pushed mic block.  Wired by
+    /// RadioModel (Phase L) to AudioEngine::micBlockReady via
+    /// Qt::DirectConnection — the audio thread synchronously dispatches
+    /// each 720-sample mic block into TxChannel.
+    ///
+    /// Contract:
+    ///   - `samples == nullptr && frames == 0`  →  silence path: zero-fill
+    ///     m_inI/m_inQ and dispatch fexchange2 (TUNE-tone PostGen output
+    ///     still reaches sendTxIq).
+    ///   - `samples != nullptr && frames == m_inputBufferSize`  →  copy
+    ///     samples into m_inI, zero-fill m_inQ, dispatch fexchange2.
+    ///   - `samples != nullptr && frames != m_inputBufferSize`  →  contract
+    ///     violation: log a qCWarning and return without dispatching.
+    ///     Caller is responsible for delivering exactly m_inputBufferSize
+    ///     samples per push (an adapter step at the Phase L wire-up site
+    ///     is responsible for re-blocking AudioEngine's 720-sample emits
+    ///     into m_inputBufferSize chunks if the two sizes differ).
+    ///
+    /// **DirectConnection ONLY.** The slot must run synchronously on the
+    /// audio thread.  Qt::QueuedConnection is unsafe: AudioEngine reuses
+    /// its mic-block buffer on the next emit, so a queued slot would see
+    /// stale or corrupted data.  See AudioEngine::micBlockReady doc-comment.
+    ///
+    /// !m_running and !m_connection short-circuit the slot to a no-op.
+    void driveOneTxBlock(const float* samples, int frames);
 
 signals:
     // ── MON siphon signal (3M-1b D.5) ────────────────────────────────────────
@@ -713,31 +759,21 @@ signals:
     void sip1OutputReady(const float* samples, int frames);
 
 private:
-    // ── TX I/Q production loop internals (3M-1a G.1) ─────────────────────────
+    // ── TX I/Q production loop internals (3M-1c E.1 — push-driven) ──────────
 
-    // Drive one fexchange2 call: pull m_inI.size() samples from the mic
-    // router (zeros in 3M-1a), call fexchange2(channelId, …), interleave
-    // the output, and push to m_connection->sendTxIq().
-    //
-    // Called by m_txProductionTimer on every tick while m_running is true.
-    // Must not block; guards against null m_connection and uninitialized
-    // WDSP channel.
-    void driveOneTxBlock();
-
-    // Production timer — fires at 5 ms intervals while TX is active.
-    // fexchange2 processes m_inputBufferSize (256) samples per call.
-    // At 48 kHz input: 256/48000 = ~5.33 ms per block → one fexchange2 call per tick.
-    // At 192 kHz output (P2 Saturn): m_outputBufferSize = 1024 samples per call.
-    // The P2 consumer (m_txIqTimer at 5 ms, 4 frames/tick) drains ~960 samples
-    // per tick — slightly under the producer rate, so the SPSC ring fills
-    // gradually until natural backpressure (audio underrun would block).
-    //
-    // Qt::PreciseTimer: reduces OS-scheduler jitter on the audio path.
-    QTimer* m_txProductionTimer{nullptr};
+    // (No QTimer in the push-driven model.  Phase 3M-1a G.1 introduced an
+    //  m_txProductionTimer firing every 5 ms; Phase 3M-1c E.1 removed it
+    //  in favour of the AudioEngine::micBlockReady → driveOneTxBlock slot
+    //  wired via Qt::DirectConnection.  See driveOneTxBlock() doc-comment.)
 
     // Non-owning pointers — injected by RadioModel, cleared on disconnect.
     RadioConnection* m_connection{nullptr};  // sendTxIq recipient
-    TxMicRouter*     m_micRouter{nullptr};   // mic samples (NullMicSource for 3M-1a)
+    // Retained for the future Radio-mic source path (mic source piped through
+    // the radio's discovery socket).  In 3M-1c E.1 the PC-mic path is push-
+    // driven and no longer pulls from m_micRouter; this field is reserved
+    // so a future task can wire the Radio-mic source through the same slot
+    // without touching TxChannel's public surface again.
+    TxMicRouter*     m_micRouter{nullptr};
 
     // fexchange2 I/O buffers — allocated at construction from m_inputBufferSize /
     // m_outputBufferSize, reused each driveOneTxBlock() call.
