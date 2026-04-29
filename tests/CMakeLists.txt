@@ -872,6 +872,20 @@ target_compile_definitions(tst_p1_mox_wire PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_p1_trx_relay_wire)
 target_compile_definitions(tst_p1_trx_relay_wire PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1c HL2 bench triage (2026-04-29): P1 setTxDrive wire-byte ───────
+# 12 tests assert that bank 10 C1 carries the drive level set via setTxDrive().
+#
+# Bug fix: setTxDrive(int) was a no-op stub from 3M-1a; m_txDrive stayed at 0
+# forever, so HL2 (and every P1 family member) silently shipped with zero TX
+# drive and produced no RF on TUN or SSB.  PR #149 SSB voice bench tests ran
+# only on ANAN-G2 (P2), masking the latent P1 stub.
+#
+# Standard and HL2 codec paths share the bank-10 C1 encoding per
+# Thetis networkproto1.c:579 [v2.10.3.13] (= mi0bot @c26a8a4 line 1061);
+# both codec paths exercised below.
+nereus_add_test(tst_p1_drive_level_wire)
+target_compile_definitions(tst_p1_drive_level_wire PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1a Task E.5: P1 RUNSTOP watchdog wire-byte snapshot ─────────────
 # 12 tests assert that pkt[3] bit 7 of the RUNSTOP packet correctly encodes
 # m_watchdogEnabled (inverted: 0=enabled, 1=disabled) per HL2 firmware.

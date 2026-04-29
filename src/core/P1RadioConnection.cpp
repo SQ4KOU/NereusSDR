@@ -811,7 +811,38 @@ void P1RadioConnection::setAttenuator(int dB)
     m_stepAttn[0] = dB;
 }
 void P1RadioConnection::setPreamp(bool enabled)              { m_rxPreamp[0] = enabled; }
-void P1RadioConnection::setTxDrive(int /*level*/)            { /* stub — Task 7 */ }
+// ---------------------------------------------------------------------------
+// setTxDrive — 3M-1c follow-up (HL2 bench triage 2026-04-29)
+//
+// Stores the TX drive level (0-255) and forces bank 10 onto the wire on the
+// next sendCommandFrame() so the new drive level reaches the radio within
+// ≤1 EP2 frame (~2.6 ms at 380.95 pps).
+//
+// Bank 10 C1 byte carries the drive level; the codec reads ctx.txDrive which
+// is sourced from m_txDrive in buildCodecContext.  Without this setter, the
+// drive level was silently fixed at zero and HL2 / Atlas / Hermes / Angelia /
+// Orion never produced RF on TUN or SSB.  The bug was latent because the
+// 3M-1b SSB voice bench tests ran on ANAN-G2 (P2), which has its own
+// setTxDrive on P2RadioConnection that always worked.
+//
+// From Thetis ChannelMaster/networkproto1.c:579 [v2.10.3.13]:
+//   C1 = prn->tx[0].drive_level & 0xFF;
+// From mi0bot networkproto1.c:1061 [@c26a8a4]: identical encoding.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setTxDrive(int level)
+{
+    const int clamped = qBound(0, level, 255);
+    if (m_txDrive == clamped) {
+        return;  // idempotent — wire emit already in flight via round-robin
+    }
+    m_txDrive = clamped;
+    // Codex P2 safety-effect pattern: force bank 10 on the next frame so
+    // the new drive level reaches the wire within ≤1 EP2 frame.  Without
+    // this, the round-robin schedule would defer bank 10 by up to 17
+    // frames (~45 ms), which is plenty long for a TUN tap to land mid-
+    // round-robin and never see a non-zero drive.
+    m_forceBank10Next = true;
+}
 
 // ---------------------------------------------------------------------------
 // setTxStepAttenuation — 3M-1a Task F.2
