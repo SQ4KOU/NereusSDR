@@ -231,11 +231,17 @@ warren@wpratt.com
 // 3M-1a G.1: TX-side integration — MoxController + TxChannel view.
 // TxMicRouter is already included via RadioModel.h (for std::unique_ptr destructor).
 #include "core/MoxController.h"
+#include "core/MicProfileManager.h"
+#include "core/TwoToneController.h"
 #include "core/TxChannel.h"
+// 3M-1c TX pump architecture redesign — dedicated worker thread for
+// TX DSP pump (replaces D.1/E.1/L.4 chain).
+#include "core/TxWorkerThread.h"
 // 3M-1b L.1: concrete mic-source strategy objects.
 #include "core/audio/PcMicSource.h"
 #include "core/audio/RadioMicSource.h"
 #include "core/audio/CompositeTxMicRouter.h"
+#include "core/audio/TxMicSource.h"
 #include "core/RadioConnection.h"
 #include "core/RadioConnectionTeardown.h"
 #include "core/P1RadioConnection.h"
@@ -626,31 +632,14 @@ RadioModel::RadioModel(QObject* parent)
             this, &RadioModel::onMoxHardwareFlipped,
             Qt::QueuedConnection);
 
-    // MoxController::txReady → TxChannel::setRunning(true).
-    // txReady fires after the 30 ms rfDelay (hardware settle) — this is the
-    // correct point to turn the WDSP TX channel on.
-    // From Thetis console.cs:29595 [v2.10.3.13] — TX-on callsite after
-    // Thread.Sleep(rf_delay) in chkMOX_CheckedChanged2.
-    // Guard: m_txChannel may be null if WDSP hasn't initialized yet (unlikely
-    // for a user-initiated TUNE but defensive). If null, the channel isn't open
-    // anyway so skipping is safe.
-    connect(m_moxController, &MoxController::txReady,
-            this, [this]() {
-        if (m_txChannel) {
-            m_txChannel->setRunning(true);
-        }
-    }, Qt::QueuedConnection);
-
-    // MoxController::txaFlushed → TxChannel::setRunning(false).
-    // txaFlushed fires after mox_delay / key_up_delay (in-flight samples
-    // cleared). Matching Thetis console.cs:29607 [v2.10.3.13] — TX-off callsite
-    // with dmode=1 (drain) in the TX→RX branch.
-    connect(m_moxController, &MoxController::txaFlushed,
-            this, [this]() {
-        if (m_txChannel) {
-            m_txChannel->setRunning(false);
-        }
-    }, Qt::QueuedConnection);
+    // MoxController::txReady → TxChannel::setRunning(true) and
+    // MoxController::txaFlushed → TxChannel::setRunning(false) are wired in
+    // connectToRadio() once m_txChannel is live (see the "MoxController →
+    // TxChannel queued connects" block inside the WDSP-init lambda).  We
+    // cannot wire them here at construction time because m_txChannel is
+    // nullptr until createTxChannel(1) runs inside that lambda — Qt's
+    // AutoConnection thread-routing depends on the receiver having a valid
+    // thread affinity (TxWorkerThread after moveToThread).
 
     // ── H.1: VOX run gated by voice-family mode ───────────────────────────────
     // Ports CMSetTXAVoxRun logic (cmaster.cs:1039-1052 [v2.10.3.13]):
@@ -683,12 +672,11 @@ RadioModel::RadioModel(QObject* parent)
     // 3F multi-pan will need to re-evaluate when the active TX slice can change.
     // TODO [3F]: rewire to activeSlice() when multi-panadapter TX switching lands.
 
-    connect(m_moxController, &MoxController::voxRunRequested,
-            this, [this](bool run) {
-        if (m_txChannel) {
-            m_txChannel->setVoxRun(run);
-        }
-    }, Qt::QueuedConnection);
+    // MoxController::voxRunRequested → TxChannel::setVoxRun is wired in
+    // connectToRadio() once m_txChannel is live — same reason as txReady /
+    // txaFlushed above.  Receiver=m_txChannel + AutoConnection auto-routes
+    // to QueuedConnection when m_txChannel lives on TxWorkerThread, so the
+    // lambda body runs on the worker thread (same-thread WDSP setter call).
 
     // ── H.2: VOX threshold with mic-boost-aware scaling ───────────────────────
     // Ports CMSetTXAVoxThresh (cmaster.cs:1054-1059 [v2.10.3.13]):
@@ -713,12 +701,9 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_transmitModel, &TransmitModel::voxGainScalarChanged,
             m_moxController,  &MoxController::setVoxGainScalar);
 
-    connect(m_moxController, &MoxController::voxThresholdRequested,
-            this, [this](double thresh) {
-        if (m_txChannel) {
-            m_txChannel->setVoxAttackThreshold(thresh);
-        }
-    }, Qt::QueuedConnection);
+    // MoxController::voxThresholdRequested → TxChannel::setVoxAttackThreshold
+    // is wired in connectToRadio() once m_txChannel is live — same reason as
+    // txReady / txaFlushed above.
 
     // ── H.3: VOX hang-time + anti-VOX gain + anti-VOX source path ────────────
     // Ports:
@@ -746,33 +731,10 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_transmitModel, &TransmitModel::antiVoxSourceVaxChanged,
             m_moxController,  &MoxController::setAntiVoxSourceVax);
 
-    connect(m_moxController, &MoxController::voxHangTimeRequested,
-            this, [this](double seconds) {
-        if (m_txChannel) {
-            m_txChannel->setVoxHangTime(seconds);
-        }
-    }, Qt::QueuedConnection);
-
-    connect(m_moxController, &MoxController::antiVoxGainRequested,
-            this, [this](double gain) {
-        if (m_txChannel) {
-            m_txChannel->setAntiVoxGain(gain);
-        }
-    }, Qt::QueuedConnection);
-
-    connect(m_moxController, &MoxController::antiVoxSourceWhatRequested,
-            this, [this](bool useVax) {
-        if (!m_txChannel) {
-            return;
-        }
-        // useVax==false: per cmaster.cs:937-942 [v2.10.3.13], all RX slots
-        // (RX1, RX1S, RX2) get source=1 (local-RX audio for antivox reference).
-        // 3M-1b has one TxChannel paired with the active slice; the three-slot
-        // iteration collapses to setAntiVoxRun(!useVax) for the single-TX layout.
-        // Full per-WDSP-channel SetAntiVOXSourceWhat iteration is a 3F
-        // multi-pan concern (when multiple DDC RX channels are active).
-        m_txChannel->setAntiVoxRun(!useVax);
-    }, Qt::QueuedConnection);
+    // MoxController::voxHangTimeRequested / antiVoxGainRequested /
+    // antiVoxSourceWhatRequested → TxChannel setters are wired in
+    // connectToRadio() once m_txChannel is live — same reason as txReady /
+    // txaFlushed above.
 
     // ── H.5: P1/P2 status-frame mic_ptt → MoxController PTT-source dispatch ──
     //
@@ -795,6 +757,48 @@ RadioModel::RadioModel(QObject* parent)
     // TUNE-only TX. Replaced with PcMicSource / RadioMicSource in 3M-1b.
     // Master design §5.2 (3M-1a NullMicSource stub).
     m_txMicRouter = std::make_unique<NullMicSource>();
+
+    // ── 3M-1c Phase L.1: MicProfileManager ────────────────────────────────────
+    //
+    // Per-MAC bank holding the 23 mic / VOX / MON / two-tone live keys
+    // (chunk F).  Constructed once at RadioModel-ctor time; setMacAddress +
+    // load() are called per-connect inside connectToRadio().  Empty MAC is
+    // a silent-no-op contract per MicProfileManager.h §"All ops require a
+    // per-MAC scope".  Qt parent=this so the dtor frees it.
+    //
+    // The user-driven setActiveProfile path is in TxApplet (J.1) and
+    // TxProfileSetupPage (J.3): both call `manager->setActiveProfile(name,
+    // &m_transmitModel)` directly.  No additional connect is needed at this
+    // layer — MicProfileManager mutates TransmitModel via the public setter
+    // API, and TransmitModel's auto-persist already routes those changes to
+    // AppSettings.  The activeProfileChanged signal is consumed by the UI
+    // (TxApplet J.1 + TxProfileSetupPage J.3) for combo-selection mirror.
+    m_micProfileMgr = new MicProfileManager(this);
+
+    // ── 3M-1c Phase L.2: TwoToneController ────────────────────────────────────
+    //
+    // Activation orchestrator for the two-tone IMD test (chunk I).  Holds
+    // non-owning pointers to TransmitModel, TxChannel, MoxController, and
+    // SliceModel.  The construction-time deps that DON'T require a live
+    // connection (TransmitModel, MoxController) are wired here; setTxChannel
+    // is called inside the WDSP-init lambda once m_txChannel is live;
+    // setSliceModel is called when the active slice exists.
+    //
+    // Direct WDSP TXPostGen setter wiring for the 5 live-tunable two-tone
+    // properties (Freq1, Freq2, Level, Power, Freq2Delay) is deferred:
+    // L.2 caveat §"Recommend: keep L.2 simple — connect the signals to
+    // direct WDSP setters as shown above. Live-update during active test is
+    // a Phase 3M-3+ polish concern. Document the deferral."  At test-start
+    // time TwoToneController reads the latest TransmitModel values directly,
+    // so the user's edits ARE picked up — they just don't fire mid-test.
+    //
+    // The 3 control-only properties (TwoToneInvert / TwoTonePulsed /
+    // TwoToneDrivePowerOrigin) are read by the controller during setActive(true)
+    // and don't have WDSP-setter equivalents — they branch the activation
+    // flow itself.  No connects needed for those.
+    m_twoToneController = new TwoToneController(this);
+    m_twoToneController->setTransmitModel(&m_transmitModel);
+    m_twoToneController->setMoxController(m_moxController);
 
     // 3M-1a (Codex review on PR #144): wire RF-Power-slider movements to
     // the radio's drive byte.  Without this, the slider updates UI/model
@@ -1101,6 +1105,17 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // voxEnabled, monEnabled, micMute are NOT loaded — always start at safe defaults.
         m_transmitModel.loadFromSettings(info.macAddress);
 
+        // ── 3M-1c L.1: per-MAC MicProfileManager scope ────────────────────────
+        //
+        // Set the MAC scope first, then load() seeds the "Default" profile on
+        // first launch (per F.5).  Idempotent on subsequent loads under the
+        // same MAC.  Constructed once at RadioModel ctor time (above);
+        // setMacAddress("")  is called in teardownConnection.
+        if (m_micProfileMgr) {
+            m_micProfileMgr->setMacAddress(info.macAddress);
+            m_micProfileMgr->load();
+        }
+
         // L.3: HL2 force-Pc on connect.
         // HL2 has no radio-side mic jack (BoardCapabilities::hasMicJack == false).
         // Even if AppSettings persisted MicSource::Radio from a different radio
@@ -1140,6 +1155,17 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     setActiveSlice(0);
     m_activeSlice->setReceiverIndex(rxIdx);
     loadSliceState(m_activeSlice);
+
+    // ── 3M-1c L.2: TwoToneController active-slice mode source ────────────────
+    //
+    // The controller reads SliceModel::dspMode() during setActive(true) for
+    // the LSB-family invert-tones branch (TwoToneController.cpp step 4 /
+    // setup.cs:11058-11062 [v2.10.3.13]).  Wire it to the freshly-added
+    // active slice; if active slice changes later (3F multi-pan), the
+    // setActiveSlice path will need to refresh this pointer too.
+    if (m_twoToneController) {
+        m_twoToneController->setSliceModel(m_activeSlice);
+    }
 
     // Activate receiver (this sends hardwareReceiverCountChanged to RadioConnection)
     m_receiverManager->activateReceiver(rxIdx);
@@ -1368,8 +1394,12 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // From Thetis netInterface.c:1513 [v2.10.3.13] — P2 TX always 192 kHz.
     if (m_wdspEngine && !m_txChannel) {
         const int txOutRate = m_connection->txSampleRate();
+        // Phase 3M-1c TX pump v3: inputBufferSize == 64 mirrors Thetis
+        // getbuffsize(48000) at cmsetup.c:106-110 [v2.10.3.13] exactly.
+        // Output buffer = 64 * txOutRate / 48000 — at 48 kHz out: 64; at
+        // 192 kHz out (P2 G2): 256.
         m_txChannel = m_wdspEngine->createTxChannel(/*channelId=*/1,
-                                                    /*inputBufferSize=*/256,
+                                                    /*inputBufferSize=*/64,
                                                     /*dspBufferSize=*/WdspEngine::kTxDspBufferSize,
                                                     /*inputSampleRate=*/48000,
                                                     /*dspSampleRate=*/WdspEngine::kTxDspSampleRate,
@@ -1444,11 +1474,26 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             // setTxMonitorEnabled is atomic (E.3 design); auto connection.
             connect(&m_transmitModel, &TransmitModel::monEnabledChanged,
                     m_audioEngine, &AudioEngine::setTxMonitorEnabled);
+            // 3M-1c K.1 — initial-state sync (mirrors the L.1 micPreamp push):
+            // signal connects don't fire for the current value, so without
+            // this push, AudioEngine::m_txMonitorEnabled stays at its
+            // default-constructed false even if the user persisted a true
+            // before disconnect. monEnabled doesn't actually persist (always
+            // loads false per safety), so this push is functionally harmless
+            // — but it closes the audit gap and stays robust if the
+            // safety-default policy ever changes.
+            m_audioEngine->setTxMonitorEnabled(m_transmitModel.monEnabled());
 
             // L.1 connection 5: TX monitor volume from TransmitModel.
             // setTxMonitorVolume is atomic (E.3 design); auto connection.
             connect(&m_transmitModel, &TransmitModel::monitorVolumeChanged,
                     m_audioEngine, &AudioEngine::setTxMonitorVolume);
+            // 3M-1c K.2 — initial-state sync.  monitorVolume DOES persist
+            // (audio.cs:417 [v2.10.3.13] literal default 0.5; user-tunable
+            // and stored under hardware/<mac>/tx/MonitorVolume).  Without
+            // this push, AudioEngine starts at its default 0.5 even if the
+            // user saved e.g. 0.75 — first MOX cycle would be wrong volume.
+            m_audioEngine->setTxMonitorVolume(m_transmitModel.monitorVolume());
 
             // ── L.1 (K.2 carry-forward): install MoxController BandPlanGuard check ──
             // Installs the moxCheck callback so setMox(true) consults BandPlanGuard
@@ -1497,6 +1542,268 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                                                       rxBand, txBand,
                                                       preventDifferentBand, extended);
                 });
+            }
+
+            // ── 3M-1c L.2: TwoToneController TxChannel injection ───────────────
+            //
+            // The controller's setTxChannel() must be called once m_txChannel is
+            // live (and BEFORE any user can press the 2-TONE button — UI surfaces
+            // are wired post-construction by MainWindow).  Cleared on teardown.
+            // The other two deps (TransmitModel + MoxController) are wired in the
+            // RadioModel ctor since they don't depend on a live connection.
+            // SliceModel is wired earlier in connectToRadio() right after addSlice().
+            if (m_twoToneController) {
+                m_twoToneController->setTxChannel(m_txChannel);
+            }
+
+            // ── 3M-1c L.2 fixup: 5 TransmitModel two-tone signal connects + ──
+            //                   initial-state pushes to TxChannel TXPostGen
+            //                   wrappers (Phase L spec gap closure).
+            //
+            // Per pre-code review §2 + plan §L.2, the user-tunable two-tone
+            // numerics (Freq1/Freq2/Level/Power/Freq2Delay) flow from the
+            // model to TxChannel's TXPostGen wrapper setters in BOTH
+            // continuous (TXPostGenMode=1) and pulsed (TXPostGenMode=7)
+            // modes — Phase I's TwoToneController reads the values at
+            // setActive(true) time, but the WDSP r2 stage still needs the
+            // initial values pushed here so a fresh fexchange2 call after
+            // connect doesn't see uninitialised TT params.  Mid-test
+            // live-update of running TXPostGen state is deferred to 3M-3a
+            // per plan caveat — these connects only push to the wrappers,
+            // which are no-ops outside an active test cycle.
+            //
+            // Magnitude scaling (the 0.49999 * pow(10, dB/20) formula at
+            // setup.cs:11056 [v2.10.3.13]) is applied INSIDE TwoToneController
+            // before its WDSP setter calls; raw twoToneLevel is the dB
+            // value the user set in Setup → Test → Two-Tone, NOT the linear
+            // magnitude.  These L.2 connects therefore push the level as
+            // a literal dB value to a separate TXPostGen path that
+            // doesn't gate on the active-test flag — bench-verify in M.
+            connect(&m_transmitModel, &TransmitModel::twoToneFreq1Changed,
+                    m_txChannel, [this](int hz) {
+                if (!m_txChannel) { return; }
+                m_txChannel->setTxPostGenTTFreq1(static_cast<double>(hz));
+                m_txChannel->setTxPostGenTTPulseToneFreq1(static_cast<double>(hz));
+            });
+            connect(&m_transmitModel, &TransmitModel::twoToneFreq2Changed,
+                    m_txChannel, [this](int hz) {
+                if (!m_txChannel) { return; }
+                m_txChannel->setTxPostGenTTFreq2(static_cast<double>(hz));
+                m_txChannel->setTxPostGenTTPulseToneFreq2(static_cast<double>(hz));
+            });
+            connect(&m_transmitModel, &TransmitModel::twoToneLevelChanged,
+                    m_txChannel, [this](double db) {
+                if (!m_txChannel) { return; }
+                // Level is the dB amplitude (UI value, e.g. -6 dB).  The
+                // WDSP TXPostGen mag fields expect a LINEAR magnitude in
+                // [0, 0.49999] (`ttmag1` / `ttmag2` in gen.c).  Apply
+                // the same conversion TwoToneController uses at activation
+                // time so user-driven mid-test level changes don't push
+                // an out-of-range raw dB into WDSP — that produced
+                // muted / wrong-magnitude two-tone output (Codex P2 review
+                // on PR #152).
+                //
+                // From Thetis setup.cs:11056 [v2.10.3.13]:
+                //   ttmag1 = ttmag2 = 0.49999 * Math.Pow(10.0, ttmag / 20.0);
+                // The literal 0.49999 MUST be preserved verbatim
+                // (CLAUDE.md "Constants and Magic Numbers").
+                const double mag = 0.49999 * std::pow(10.0, db / 20.0);
+                m_txChannel->setTxPostGenTTMag1(mag);
+                m_txChannel->setTxPostGenTTMag2(mag);
+                m_txChannel->setTxPostGenTTPulseMag1(mag);
+                m_txChannel->setTxPostGenTTPulseMag2(mag);
+            });
+            connect(&m_transmitModel, &TransmitModel::twoTonePowerChanged,
+                    m_txChannel, [](int /*pct*/) {
+                // TwoTonePower is consumed by TwoToneController at
+                // setActive(true) when DrivePowerSource::Fixed is
+                // selected — no TXPostGen analog.  Connect kept for
+                // symmetry / future polish.
+            });
+            connect(&m_transmitModel, &TransmitModel::twoToneFreq2DelayChanged,
+                    m_txChannel, [](int /*ms*/) {
+                // TwoToneFreq2Delay is consumed by TwoToneController at
+                // setActive(true) — no TXPostGen analog (the delay is
+                // implemented as a controller-side QTimer::singleShot,
+                // not a WDSP setter).  Connect kept for symmetry.
+            });
+            // Initial-state pushes (mirrors the L.1 micPreamp + K.1/K.2
+            // pattern): signal connects don't fire for the current
+            // value, so without these pushes a fresh TxChannel sees
+            // uninitialised TT params.
+            m_txChannel->setTxPostGenTTFreq1(static_cast<double>(m_transmitModel.twoToneFreq1()));
+            m_txChannel->setTxPostGenTTFreq2(static_cast<double>(m_transmitModel.twoToneFreq2()));
+            m_txChannel->setTxPostGenTTPulseToneFreq1(static_cast<double>(m_transmitModel.twoToneFreq1()));
+            m_txChannel->setTxPostGenTTPulseToneFreq2(static_cast<double>(m_transmitModel.twoToneFreq2()));
+            // Mirror the dB→linear conversion applied in the
+            // twoToneLevelChanged lambda above — initial-state pushes
+            // must use the same formula or the first activation runs
+            // with raw-dB magnitudes (Codex P2 review on PR #152).
+            // Source: Thetis setup.cs:11056 [v2.10.3.13].
+            {
+                const double initialLevelDb = m_transmitModel.twoToneLevel();
+                const double initialMag = 0.49999 * std::pow(10.0, initialLevelDb / 20.0);
+                m_txChannel->setTxPostGenTTMag1(initialMag);
+                m_txChannel->setTxPostGenTTMag2(initialMag);
+                m_txChannel->setTxPostGenTTPulseMag1(initialMag);
+                m_txChannel->setTxPostGenTTPulseMag2(initialMag);
+            }
+
+            // ── 3M-1c TX pump architecture redesign: MoxController → TxChannel ──
+            //                       queued connects (Phase 3M-1c spec §5.2)
+            //
+            // These 7 connects route MoxController emissions to TxChannel
+            // setters with receiver=m_txChannel so Qt's AutoConnection
+            // auto-resolves to QueuedConnection once m_txChannel is moved to
+            // TxWorkerThread (a few lines below).  The lambda body then runs
+            // on the worker thread, where m_txChannel->setX() is a same-
+            // thread direct call — no cross-thread setter race.
+            //
+            // Why these are wired here (not in the RadioModel ctor):
+            //   m_txChannel doesn't exist at construction time (createTxChannel
+            //   runs inside this WDSP-init lambda).  Receiver thread affinity
+            //   is what AutoConnection consults at signal-emission time, but
+            //   the connection itself needs a non-null receiver to bind to —
+            //   establishing it after m_txChannel is alive is the cleanest
+            //   pattern.  Mirrors the L.2 fixup connects above.
+            //
+            // Why no in-lambda null guard:
+            //   receiver=m_txChannel guarantees Qt auto-disconnects when
+            //   m_txChannel is destroyed.  The lambda body cannot fire while
+            //   m_txChannel is null.
+            //
+            // Source-of-truth: docs/architecture/phase3m-1c-tx-pump-architecture-plan.md
+            // §5.2 last bullet (TxChannel cross-thread setter audit).
+
+            // F.1 — txReady → setRunning(true).
+            // From Thetis console.cs:29595 [v2.10.3.13] — TX-on callsite after
+            // Thread.Sleep(rf_delay) in chkMOX_CheckedChanged2.
+            connect(m_moxController, &MoxController::txReady,
+                    m_txChannel, [this]() {
+                m_txChannel->setRunning(true);
+            });
+
+            // F.1 — txaFlushed → setRunning(false).
+            // From Thetis console.cs:29607 [v2.10.3.13] — TX-off callsite with
+            // dmode=1 (drain) in the TX→RX branch.
+            // Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE  [console.cs:29603]
+            connect(m_moxController, &MoxController::txaFlushed,
+                    m_txChannel, [this]() {
+                m_txChannel->setRunning(false);
+            });
+
+            // H.1 — voxRunRequested → setVoxRun.
+            // From Thetis cmaster.cs:1039-1052 [v2.10.3.13] — CMSetTXAVoxRun.
+            connect(m_moxController, &MoxController::voxRunRequested,
+                    m_txChannel, [this](bool run) {
+                m_txChannel->setVoxRun(run);
+            });
+
+            // H.2 — voxThresholdRequested → setVoxAttackThreshold.
+            // From Thetis cmaster.cs:1054-1059 [v2.10.3.13] — CMSetTXAVoxThresh.
+            connect(m_moxController, &MoxController::voxThresholdRequested,
+                    m_txChannel, [this](double thresh) {
+                m_txChannel->setVoxAttackThreshold(thresh);
+            });
+
+            // H.3 — voxHangTimeRequested → setVoxHangTime.
+            // From Thetis setup.cs:18899 [v2.10.3.13] — SetDEXPHoldTime
+            //   (ms→seconds applied in MoxController).
+            connect(m_moxController, &MoxController::voxHangTimeRequested,
+                    m_txChannel, [this](double seconds) {
+                m_txChannel->setVoxHangTime(seconds);
+            });
+
+            // H.3 — antiVoxGainRequested → setAntiVoxGain.
+            // From Thetis setup.cs:18989 [v2.10.3.13] — SetAntiVOXGain
+            //   (dB→linear applied in MoxController).
+            connect(m_moxController, &MoxController::antiVoxGainRequested,
+                    m_txChannel, [this](double gain) {
+                m_txChannel->setAntiVoxGain(gain);
+            });
+
+            // H.3 — antiVoxSourceWhatRequested → setAntiVoxRun.
+            // useVax==false: per cmaster.cs:937-942 [v2.10.3.13], all RX slots
+            // (RX1, RX1S, RX2) get source=1 (local-RX audio for antivox
+            // reference).  3M-1b has one TxChannel paired with the active
+            // slice; the three-slot iteration collapses to setAntiVoxRun(!useVax)
+            // for the single-TX layout.  Full per-WDSP-channel
+            // SetAntiVOXSourceWhat iteration is a 3F multi-pan concern.
+            connect(m_moxController, &MoxController::antiVoxSourceWhatRequested,
+                    m_txChannel, [this](bool useVax) {
+                m_txChannel->setAntiVoxRun(!useVax);
+            });
+
+            // ── 3M-1c TX pump architecture redesign: TxWorkerThread setup ──────
+            //
+            // Replaces the deleted L.4 MicReBlocker + D.1 AudioEngine
+            // accumulator + bench-fix-A pumpMic timer + bench-fix-B
+            // TxChannel silence-drive timer chain.  Mirrors Thetis's
+            // `cm_main` worker-thread pattern (cmbuffs.c:151-168
+            // [v2.10.3.13]) with NereusSDR's WDSP-r2-ring-divisibility
+            // 256-sample block size end-to-end.
+            //
+            // Lifecycle (this block):
+            //   1. Construct TxWorkerThread (RadioModel-owned via
+            //      unique_ptr, parent=this for Qt cleanup safety).
+            //   2. Wire deps: setTxChannel + setAudioEngine.
+            //   3. Move TxChannel to the worker thread.  All connect()
+            //      lambdas above already use AutoConnection, which
+            //      auto-resolves to QueuedConnection now that the
+            //      receiver lives on the worker thread.  The initial
+            //      direct setter pushes already executed above on the
+            //      main thread BEFORE this move — so the WDSP state is
+            //      pre-loaded before the pump starts.
+            //   4. startPump() — launches QThread, sets up the QTimer
+            //      on the worker thread, enters the event loop.
+            //
+            // Teardown is in teardownConnection() further down.
+            //
+            // See plan §5.2 + §4.4 (cross-thread setter audit) and
+            // src/core/TxWorkerThread.h for the full design rationale.
+            if (m_audioEngine && m_txChannel) {
+                // Phase 3M-1c TX pump v3: construct TxMicSource ALONGSIDE
+                // TxWorkerThread.  Order matters:
+                //   1. Construct TxMicSource and start() it (opens the
+                //      inbound gate so the connection's parser can push
+                //      mic samples even before the worker is ready).
+                //   2. Hand the source to the connection so EP6/port-1026
+                //      parsers route mic frames into the ring.
+                //   3. Wire AudioEngine's PC mic override gate to
+                //      TransmitModel::micSourceChanged.  Sync the initial
+                //      value via a direct slot call (signal connections
+                //      don't fire for the current value).
+                //   4. Construct TxWorkerThread, attach the source as its
+                //      cadence input, moveToThread + startPump.
+                m_txMicSource = std::make_unique<TxMicSource>(this);
+                m_txMicSource->start();
+
+                if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+                    p1->setTxMicSource(m_txMicSource.get());
+                } else if (auto* p2 = qobject_cast<P2RadioConnection*>(m_connection)) {
+                    p2->setTxMicSource(m_txMicSource.get());
+                }
+
+                // PC mic override gate (Thetis cmaster.c:379 [v2.10.3.13]).
+                // micSourceChanged emits MicSource enum; the slot needs a
+                // bool ("is PC"), so funnel through a lambda.
+                connect(&m_transmitModel, &TransmitModel::micSourceChanged,
+                        m_audioEngine, [this](MicSource src) {
+                            m_audioEngine->onMicSourceChanged(src == MicSource::Pc);
+                        });
+                m_audioEngine->onMicSourceChanged(
+                    m_transmitModel.micSource() == MicSource::Pc);
+
+                m_txWorker = std::make_unique<TxWorkerThread>(this);
+                m_txWorker->setTxChannel(m_txChannel);
+                m_txWorker->setAudioEngine(m_audioEngine);
+                m_txWorker->setMicSource(m_txMicSource.get());
+                m_txChannel->moveToThread(m_txWorker.get());
+                m_txWorker->startPump();
+
+                qCInfo(lcDsp) << "TX pump: TxWorkerThread started"
+                              << "blockFrames=" << TxWorkerThread::kBlockFrames
+                              << "(semaphore-wake, mic-frame-driven — 3M-1c v3)";
             }
 
             qCInfo(lcDsp) << "L.1: mic sources constructed (hasMicJack=" << hasMicJack
@@ -2743,6 +3050,93 @@ void RadioModel::teardownConnection()
     // Stop audio output
     m_audioEngine->stop();
 
+    // 3M-1c TX pump architecture redesign — TxWorkerThread teardown.
+    //
+    // ORDER MATTERS:
+    //   1. stopPump() — quits the worker's event loop and waits for
+    //      its QTimer/onPumpTick to finish.  Any in-flight tick
+    //      completes before exit.
+    //   2. Move TxChannel back to RadioModel's thread (main).  Required
+    //      so TxChannel's destruction (via WdspEngine::shutdown →
+    //      destroyTxChannel(1)) runs on the right thread; Qt asserts
+    //      otherwise.
+    //   3. unique_ptr.reset() — destroys the TxWorkerThread itself.
+    //
+    // Replaces the deleted L.4 MicReBlocker teardown.  See plan §5.2.
+    if (m_txWorker) {
+        // stopPump() internally calls m_txMicSource->stop() (the poison
+        // semaphore release that breaks the worker out of waitForBlock).
+        m_txWorker->stopPump();
+        if (m_txChannel) {
+            m_txChannel->moveToThread(this->thread());
+        }
+        m_txWorker.reset();
+    }
+    // Phase 3M-1c TX pump v3: drop the connection's view of the mic
+    // source BEFORE destroying it.  Otherwise the next inbound mic
+    // frame would dereference a freed TxMicSource.
+    //
+    // Codex P1 fix (PR #152): `setTxMicSource` is a connection-thread
+    // operation (per the I3 caller-contract comment in P1/P2
+    // RadioConnection::setTxMicSource — race-free with the connection-
+    // thread reads in onReadyRead / onWatchdogTick / decodeMicFrame132
+    // ONLY when invoked on the connection's affinity thread).  At
+    // teardown, the connection has long since been moveToThread'd to
+    // m_connThread (RadioModel.cpp:1842), so we must marshal the call
+    // there.  BlockingQueuedConnection ensures the detach completes
+    // before we proceed to `m_txMicSource->stop() + reset()` below —
+    // without blocking, a queued lambda would still hold a TxMicSource*
+    // when we destroy the source object.
+    if (m_connection != nullptr) {
+        auto* const conn = m_connection;
+        auto detachMicSource = [conn]() {
+            if (auto* p1 = qobject_cast<P1RadioConnection*>(conn)) {
+                p1->setTxMicSource(nullptr);
+            } else if (auto* p2 = qobject_cast<P2RadioConnection*>(conn)) {
+                p2->setTxMicSource(nullptr);
+            }
+        };
+        if (conn->thread() == QThread::currentThread()) {
+            // Same-thread fast path — direct call.  This branch fires
+            // when teardownConnection is itself running on the connection
+            // thread (no production callsite today, but the guard is
+            // cheap and keeps the contract explicit).
+            detachMicSource();
+        } else {
+            // Cross-thread — block until the lambda runs on the connection
+            // thread, then return.  Qt requires sender ≠ receiver thread
+            // for BlockingQueuedConnection (asserts otherwise); the
+            // currentThread check above guarantees this precondition.
+            QMetaObject::invokeMethod(conn, detachMicSource,
+                                      Qt::BlockingQueuedConnection);
+        }
+    }
+    if (m_txMicSource) {
+        m_txMicSource->stop();
+        m_txMicSource.reset();
+    }
+
+    // 3M-1c L.2: drop the TwoToneController's view of the TX channel.  If a
+    // user-driven setActive(true) call were to fire during teardown (mid-test
+    // reconnect), the controller's null-check in setActive() short-circuits
+    // safely.  Same pattern as TxChannel::setConnection(nullptr) below.
+    if (m_twoToneController) {
+        m_twoToneController->setTxChannel(nullptr);
+        m_twoToneController->setSliceModel(nullptr);
+        m_twoToneController->setPowerOn(false);
+        // If a two-tone test is currently running, force it off so the
+        // restored MOX-release doesn't hold over the disconnect.
+        if (m_twoToneController->isActive()) {
+            m_twoToneController->setActive(false);
+        }
+    }
+
+    // 3M-1c L.1: drop the per-MAC scope on the profile manager so subsequent
+    // mutators silently no-op until the next connectToRadio() sets a new MAC.
+    if (m_micProfileMgr) {
+        m_micProfileMgr->setMacAddress(QString());
+    }
+
     // 3M-1a G.1: detach the production loop pointers before clearing m_txChannel.
     // setConnection(nullptr) stops driveOneTxBlock() from calling sendTxIq on
     // a destroyed connection; setMicRouter(nullptr) drops the TxMicRouter ref.
@@ -2843,6 +3237,13 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
     switch (state) {
     case ConnectionState::Connected:
         qCDebug(lcConnection) << "Connected to" << m_name;
+        // ── 3M-1c Phase L.2: TwoToneController power-on gate ─────────────────
+        // The controller's setActive(true) refuses to engage unless powerOn
+        // is true (mirrors !console.PowerOn at setup.cs:11063 [v2.10.3.13]).
+        // Set on Connected, cleared on Disconnected / Error below.
+        if (m_twoToneController) {
+            m_twoToneController->setPowerOn(true);
+        }
         // Phase 3I Task 17 — record the most recently used radio so
         // tryAutoReconnect() targets the right entry on next launch.
         if (!m_lastRadioInfo.macAddress.isEmpty()) {
@@ -2873,6 +3274,12 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
     case ConnectionState::Disconnected:
         qCDebug(lcConnection) << "Disconnected from" << m_name;
         m_discovery->clearConnectedMac();
+        // 3M-1c L.2: drop the TwoToneController power-on gate so any
+        // subsequent setActive(true) is refused with a qCWarning until
+        // the next Connected transition.
+        if (m_twoToneController) {
+            m_twoToneController->setPowerOn(false);
+        }
         break;
     case ConnectionState::Connecting:
         qCDebug(lcConnection) << "Connecting to" << m_name << "...";
@@ -2880,6 +3287,10 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
     case ConnectionState::Error:
         qCWarning(lcConnection) << "Connection error for" << m_name;
         m_discovery->clearConnectedMac();
+        // 3M-1c L.2: same as Disconnected — drop the power-on gate.
+        if (m_twoToneController) {
+            m_twoToneController->setPowerOn(false);
+        }
         break;
     }
 }

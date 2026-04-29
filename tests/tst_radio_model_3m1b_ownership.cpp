@@ -2,9 +2,10 @@
 //
 // no-port-check: Test file exercises NereusSDR API; no C# is translated here.
 // NereusSDR-original integration glue (Phase 3M-1b Task L.1) — strategy-pattern
-// mic sources and composite router owned by RadioModel.
+// mic sources and composite router owned by RadioModel.  Phase 3M-1c TX pump
+// architecture redesign extends this with TxWorkerThread ownership cases.
 //
-// Unit tests for Phase 3M-1b Task L.1:
+// Unit tests for Phase 3M-1b Task L.1 + 3M-1c TX pump architecture redesign:
 //   1.  mic source test seams return nullptr before connectToRadio().
 //   2.  RadioMicSource (QObject) lives on the main thread.
 //   3.  RadioMicSource construction (standalone) doesn't crash with null connection.
@@ -23,14 +24,40 @@
 //  13   Mic source objects null before connect: compositeMicRouterForTest.
 //  14.  Construct + destroy RadioModel without crash (lifecycle).
 //  15.  RadioMicSource ring starts empty (zero fill level).
+//  16.  TxWorkerThread test seam returns nullptr before connectToRadio()
+//       (Phase 3M-1c TX pump architecture redesign).
+//  17.  Construct + destroy RadioModel — TxWorkerThread null throughout
+//       no-connect lifecycle.
+//  18.  Double-construct lifecycle — TxWorkerThread stays null across two
+//       consecutive RadioModel instances.
 //
-// L.1 signal connections that require a live radio connection cannot be tested
-// here without significant harness infrastructure (WDSP + full RadioConnection
-// lifecycle). Those connections are covered by the integration layer:
-//   tst_tx_channel_real_mic_router, tst_radio_mic_source,
-//   tst_tx_mic_router_selector.
+// L.1 signal connections AND the TxWorkerThread post-connect construction
+// require a live radio connection (m_audioEngine running + m_txChannel via
+// WdspEngine::createTxChannel(1)) and cannot be tested here without
+// significant harness infrastructure (WDSP + full RadioConnection lifecycle).
+// Those paths are covered by:
+//   - L.1 signal wiring: tst_tx_channel_real_mic_router, tst_radio_mic_source,
+//     tst_tx_mic_router_selector.
+//   - TxWorkerThread pump cadence + driveOneTxBlock dispatch:
+//     tst_tx_worker_thread (constructs + ticks the worker directly).
 //
-// Plan: 3M-1b Task L.1. Pre-code review §0.3 + master design §5.2.4.
+// What this file CAN verify (covered by tests 16-18 below) and what it
+// CANNOT (deferred to integration layer):
+//   CAN: m_txWorker is a unique_ptr<TxWorkerThread> in the class layout
+//        (verified by the txWorkerForTest accessor's existence + null
+//         pre-connect return — if the field were absent or wrong type
+//         the build would fail).
+//   CAN: m_txWorker holds nullptr from construction through destruction
+//        for any RadioModel that never reaches connectToRadio()'s
+//        WDSP-init lambda.
+//   CANNOT: post-connect "is the worker actually running" — that
+//           requires WdspEngine::initialize() success + AudioEngine
+//           running + WDSP TX channel creation.  Covered by manual bench
+//           verification matrix [3M-1c-bench] rows.
+//
+// Plan: 3M-1b Task L.1 (mic source ownership) + 3M-1c TX pump architecture
+// redesign §5.5 (TxWorkerThread construct/destroy on connect/teardown).
+// Pre-code review §0.3 + master design §5.2.4.
 
 // NEREUS_BUILD_TESTS is defined in CMakeLists.txt for this target, which
 // unlocks the test seams used below (pcMicSourceForTest, etc.).
@@ -44,6 +71,7 @@
 #include "core/AudioEngine.h"
 #include "core/MoxController.h"
 #include "core/RadioConnection.h"
+#include "core/TxWorkerThread.h"
 #include "core/audio/CompositeTxMicRouter.h"
 #include "core/audio/PcMicSource.h"
 #include "core/audio/RadioMicSource.h"
@@ -374,6 +402,65 @@ private slots:
             QVERIFY(model.compositeMicRouterForTest() == nullptr);
         }
         QVERIFY(true);
+    }
+
+    // ── 16. txWorkerForTest() returns nullptr before connectToRadio() ──────────
+    // Phase 3M-1c TX pump architecture redesign (§5.5): the TxWorkerThread is
+    // constructed inside connectToRadio()'s WDSP-init lambda once m_audioEngine
+    // and m_txChannel are both live.  Before connect, m_txWorker holds nullptr
+    // (default-constructed unique_ptr).  Mirrors the mic-source pre-connect
+    // pattern (tests 1-3 / 11-13).
+    //
+    // This test verifies the class-layout invariant — that m_txWorker is a
+    // unique_ptr<TxWorkerThread> field on RadioModel — without requiring the
+    // heavy WDSP + live-connection machinery the post-connect path needs.
+    // If the field were absent, removed, or renamed, this test would fail to
+    // compile (or fail at runtime if the accessor stub were broken).
+    void txWorkerNullBeforeConnect()
+    {
+        RadioModel model;
+        QVERIFY(model.txWorkerForTest() == nullptr);
+    }
+
+    // ── 17. RadioModel lifecycle — TxWorker null throughout no-connect path ────
+    // Phase 3M-1c TX pump architecture redesign: mirrors test 14 with the
+    // additional TxWorkerThread null check.  No connect() = no worker.
+    // Destructor must not crash even though m_txWorker is null (the
+    // teardownConnection() path's `if (m_txWorker)` guard handles the case).
+    void txWorkerLifecycleNoConnect()
+    {
+        {
+            RadioModel model;
+            QVERIFY(model.txWorkerForTest() == nullptr);
+        }
+        // Destructor ran — no crash.
+        QVERIFY(true);
+    }
+
+    // ── 18. Double-construct lifecycle — TxWorker null across consecutive ──────
+    // RadioModel instances.  Phase 3M-1c TX pump architecture redesign: mirrors
+    // test 15 with the additional TxWorkerThread null check.  The unique_ptr
+    // reset/reconstruct pattern must survive two consecutive RadioModel
+    // instances cleanly.
+    void txWorkerDoubleLifecycleNoConnect()
+    {
+        for (int i = 0; i < 2; ++i) {
+            RadioModel model;
+            QVERIFY(model.txWorkerForTest() == nullptr);
+        }
+        QVERIFY(true);
+    }
+
+    // ── 19. txMicSourceForTest() returns nullptr before connectToRadio() ──────
+    // Phase 3M-1c TX pump architecture redesign v3 (§5.6): the TxMicSource
+    // (Thetis Inbound/cm_main port) is constructed alongside TxWorkerThread
+    // inside the WDSP-init lambda once a connection + TxChannel are both
+    // live.  Before connect, m_txMicSource holds nullptr.  Mirrors the
+    // m_txWorker pre-connect pattern (tests 16-18).
+    void txMicSourceNullBeforeConnect()
+    {
+        RadioModel model;
+        QVERIFY(model.txMicSourceForTest() == nullptr);
     }
 };
 

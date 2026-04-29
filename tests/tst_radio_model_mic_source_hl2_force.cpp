@@ -49,7 +49,7 @@ static const QString kMacHermes = QStringLiteral("aa:bb:cc:dd:ee:ff");
 // Convenience: pre-seed AppSettings with a persisted micSource value.
 static void seedMicSource(const QString& mac, MicSource source)
 {
-    const QString key = QStringLiteral("hardware/%1/tx/micSource").arg(mac);
+    const QString key = QStringLiteral("hardware/%1/tx/Mic_Source").arg(mac);
     AppSettings::instance().setValue(
         key,
         source == MicSource::Radio ? QStringLiteral("Radio") : QStringLiteral("Pc"));

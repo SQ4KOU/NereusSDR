@@ -1,5 +1,10 @@
 #pragma once
 
+// no-port-check: AetherSDR-derived NereusSDR file; Thetis cmaster.cs /
+// audio.cs references in inline cites are behavioral source-first cites
+// for sample sizes / timing / mix coefficient parity only, not Thetis
+// logic ports.
+
 // =================================================================
 // src/core/AudioEngine.h  (NereusSDR)
 // =================================================================
@@ -72,9 +77,33 @@
 //                 cosmetic regression where RX audio leaked during TUN/MOX.
 //                 Non-active slices (e.g. RX2) keep playing. Matches Thetis
 //                 IVAC mox state-machine in audio.cs:349-384 [v2.10.3.13].
-//                 Phase L (RadioModel integration) wires MoxController::moxChanged
+//                 Phase L (RadioModel integration) wires MoxController::moxStateChanged
 //                 → setMoxState via signal/slot. Plan: 3M-1b E.4.
 //                 Pre-code review §10.3 + §10.4.
+//   2026-04-28 — Phase 3M-1c D.1 / D.2 by J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code. Adds 720-sample mic-block
+//                 accumulator (m_micBlockBuffer / m_micBlockFill / kMicBlockFrames)
+//                 + micBlockReady(const float*, int) Qt signal + clearMicBuffer()
+//                 method. pullTxMic feeds the accumulator and emits on every
+//                 720-sample full block. Phase E will connect TxChannel as
+//                 a Qt::DirectConnection slot. Source: Thetis cmaster.cs:493-518
+//                 [v2.10.3.13] (mic stream index 5 = 720 samples @ 48 kHz).
+//   2026-04-29 — Phase 3M-1c TX pump architecture redesign by J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code. REMOVED 720-sample mic-block accumulator
+//                 (kMicBlockFrames / m_micBlockBuffer / m_micBlockFill /
+//                 micBlockReady signal / clearMicBuffer slot) and the
+//                 bench-fix-A pumpMic timer (m_micPumpTimer /
+//                 kMicPumpIntervalMs / pumpMic method).  Architectural
+//                 review traced both back to a misread of
+//                 cmInboundSize[5]=720 (network arrival block size, not
+//                 DSP block size — Thetis's actual DSP block is 64
+//                 per cmaster.c:460-487 [v2.10.3.13]).  TX pump now lives
+//                 in src/core/TxWorkerThread.{h,cpp} and pulls 256 mono
+//                 samples per ~5 ms tick directly via pullTxMic.  pullTxMic
+//                 returns to its pre-D.1 form: drain m_txInputBus and
+//                 convert to float32 mono, no accumulator side effects.
+//                 Plan: docs/architecture/phase3m-1c-tx-pump-architecture-plan.md
 // =================================================================
 
 #include "AudioDeviceConfig.h"
@@ -231,8 +260,16 @@ public:
     // m_txInputBus is null (mic not configured), dst is null, n <= 0,
     // or if the bus has no data ready.
     //
-    // Audio-thread safe: m_txInputBus uses a lock-free SPSC ring; this
-    // method does not block.
+    // Threading (Phase 3M-1c TX pump architecture redesign):
+    //   Called from TxWorkerThread::onPumpTick at ~5 ms cadence.  The
+    //   underlying m_txInputBus uses a lock-free SPSC ring, so this
+    //   method does not block; the bus's audio-callback producer thread
+    //   (e.g., PortAudio's HAL callback) and the TxWorkerThread consumer
+    //   are the SPSC pair.
+    //
+    //   The legacy D.1 720-sample accumulator + micBlockReady signal +
+    //   clearMicBuffer were removed in the TX pump architecture redesign;
+    //   pullTxMic is now a pure drain with no accumulator side effects.
     //
     // Format conversion contract:
     //   - If the bus negotiated format is Int16 (typical mic device),
@@ -243,11 +280,26 @@ public:
     //     taken directly. Multichannel buses discard all but channel 0.
     //   - Other sample formats (Int24, Int32) are unsupported; returns 0.
     //
-    // Caller (PcMicSource in Phase F.1) is responsible for resampling if
-    // the bus rate doesn't match the TXA DSP rate.
+    // Caller (TxWorkerThread::onPumpTick) is responsible for resampling
+    // if the bus rate doesn't match the TXA DSP rate.  In 3M-1c, both
+    // are 48 kHz so no resample needed.
     //
-    // Plan: 3M-1b E.1. Pre-code review §0.3 (PcMicSource arch).
+    // Plan: 3M-1b E.1 (initial introduction); 3M-1c TX pump architecture
+    // redesign (removal of accumulator side effects).
     int pullTxMic(float* dst, int n);
+
+    /// Phase 3M-1c TX pump v3 — PC mic override gate.
+    ///
+    /// Returns true when the worker should overlay PC mic samples on
+    /// top of the radio mic samples in m_in.  Gated by:
+    ///   1. m_micSourceWantsPc (true iff TransmitModel::micSource ==
+    ///      MicSource::Pc; updated by onMicSourceChanged()).
+    ///   2. m_txInputBus exists and is open.
+    ///
+    /// Both conditions are read atomically; both must be true.  Mirrors
+    /// the conditional invocation of `asioIN(pcm->in[stream])` at
+    /// Thetis cmaster.c:379 [v2.10.3.13].
+    bool isPcMicOverrideActive() const noexcept;
 
     // Master volume (0.0–1.0). Read on the DSP thread, written on the
     // main thread. Preserves the existing AF-gain wiring in
@@ -264,7 +316,7 @@ public:
     bool masterMuted() const { return m_masterMuted.load(std::memory_order_acquire); }
 
     /// Update the cross-thread MOX-state mirror used by rxBlockReady.
-    /// Wired by RadioModel (Phase L) to MoxController::moxChanged via
+    /// Wired by RadioModel (Phase L) to MoxController::moxStateChanged via
     /// signal/slot (Qt::DirectConnection, audio thread).
     ///
     /// Audio-thread reads via std::atomic<bool> with acquire ordering;
@@ -374,6 +426,12 @@ public:
     void rescanLinuxBackend();
 #endif
 
+public slots:
+    /// Phase 3M-1c TX pump v3 — slot wired by RadioModel to
+    /// TransmitModel::micSourceChanged.  Updates m_micSourceWantsPc.
+    /// `selectedSourceIsPc == true` means the user picked PC mic.
+    void onMicSourceChanged(bool selectedSourceIsPc);
+
 signals:
     void volumeChanged(float volume);
     void masterMutedChanged(bool muted);
@@ -383,6 +441,13 @@ signals:
     void vaxRxGainChanged(int channel, float gain);
     void vaxMutedChanged(int channel, bool muted);
     void vaxTxGainChanged(float gain);
+
+    // (Phase 3M-1c D.1 added a micBlockReady(const float*, int) signal
+    //  that fired on every kMicBlockFrames=720-sample accumulator block.
+    //  The TX pump architecture redesign (2026-04-29) removed the signal
+    //  and the accumulator entirely.  TX pump moved to TxWorkerThread,
+    //  which calls pullTxMic directly without an intermediate signal.
+    //  See plan §5.2 for the rationale.)
 
     // Sub-Phase 12 Task 12.4 — DSP parameter and audio-reset signals.
     void dspSampleRateChanged(int rate);
@@ -467,6 +532,13 @@ private:
     std::unique_ptr<IAudioBus> m_speakersBus;
     std::unique_ptr<IAudioBus> m_headphonesBus;
     std::unique_ptr<IAudioBus> m_txInputBus;
+
+    // (Phase 3M-1c D.1 added a kMicBlockFrames=720-sample mic-block
+    //  accumulator + clearMicBuffer + bench-fix-A pumpMic timer.  The
+    //  TX pump architecture redesign (2026-04-29) removed all of them.
+    //  Pump now lives in src/core/TxWorkerThread.{h,cpp}, which calls
+    //  pullTxMic directly at ~5 ms cadence.  See plan §5.2.)
+
     // Sub-Phase 8.5: platform-native VAX TX virtual bus. Distinct from
     // m_txInputBus, which is the OS mic-capture device owned by MicDirect.
     // Opened in start(), reset in stop(); consumption is a Phase 3M concern.
@@ -491,7 +563,7 @@ private:
 
     // Plan: 3M-1b E.4. Pre-code review §10.3 + §10.4.
     // Cross-thread MOX-state mirror. Written by main-thread setMoxState()
-    // (wired by RadioModel in Phase L from MoxController::moxChanged).
+    // (wired by RadioModel in Phase L from MoxController::moxStateChanged).
     // Read by audio-thread rxBlockReady via acquire load; written via
     // release store (same acq/rel pairing as m_masterMuted above).
     // Defaults false (MOX off at startup).
@@ -500,6 +572,16 @@ private:
     // when MOX is on, active TX slice's RX audio is silenced; non-active
     // slices keep playing.
     std::atomic<bool> m_moxActive{false};
+
+    // Phase 3M-1c TX pump v3 — PC mic override gate.
+    // Written by onMicSourceChanged() on the main thread (slot wired
+    // by RadioModel to TransmitModel::micSourceChanged).  Read by the
+    // worker thread via isPcMicOverrideActive().  Default false matches
+    // a fresh radio session before TransmitModel::micSourceChanged
+    // fires.  When the radio is HL2 (no mic jack), RadioModel forces
+    // micSource=PC via setMicSourceLocked, and the resulting
+    // micSourceChanged emit lands here as true.
+    std::atomic<bool> m_micSourceWantsPc{false};
 
     // Plan: 3M-1b E.2. Pre-code review §4.4.
     // Written by setTxMonitorEnabled() on the main thread, read by the

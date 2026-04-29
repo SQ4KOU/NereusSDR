@@ -112,6 +112,24 @@
 //                 RadioModel: H.4 adds the MoxController API only;
 //                   upstream signal sources land in later phases (H.5
 //                   mic_ptt extraction, 3K CAT, 3M-3a SPACE/VOX/X2).
+//   2026-04-28 — Phase 3M-1c Tasks C.2 / C.3 / C.4 — multicast Pre/Post
+//                 MOX state-change signals added:
+//                   moxChanging(int rx, bool oldMox, bool newMox) — Pre
+//                     (Thetis MoxPreChangeHandlers, console.cs:29324
+//                     [v2.10.3.13], // MW0LGE_21k8). Subscribers can
+//                     defensively freeze readings before the transition.
+//                   moxChanged(int rx, bool oldMox, bool newMox) — Post
+//                     (Thetis MoxChangeHandlers, console.cs:29677
+//                     [v2.10.3.13], // MW0LGE_21a). Parallels existing
+//                     1-arg moxStateChanged(bool) — additive overload,
+//                     not a replacement.
+//                 The rx argument is the RECEIVER INDEX THAT OWNS THE TX
+//                   PATH: (m_rx2Enabled && m_vfobTx) ? 2 : 1. RX2 alone
+//                   without VFOBTX still yields rx==1 because TX comes
+//                   off VFO-A. setRx2Enabled / setVfobTx public slots
+//                   are added (idempotent, no-emit) for future RadioModel
+//                   wiring; both default to false (NereusSDR has no RX2
+//                   wired yet).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -575,6 +593,22 @@ public slots:
     // driving MOX.
     void onTciPtt(bool pressed);
 
+    // ── C.4: rx2_enabled / vfobTx state for multicast Pre/Post rx argument ───
+    //
+    // Idempotent setters that update the internal state used by activeRxForTx()
+    // (the rx argument carried by moxChanging / moxChanged). No signal is
+    // emitted from these slots — they only mirror upstream RadioModel state so
+    // that the rx argument carried by Pre/Post signals stays correct.
+    //
+    // Default for both: false. NereusSDR does not have RX2 wired yet, so the
+    // emitted rx argument is always 1 until RadioModel calls these setters.
+    //
+    // From Thetis console.cs:29324 [v2.10.3.13] — MoxPreChangeHandlers and
+    //                console.cs:29677 [v2.10.3.13] — MoxChangeHandlers:
+    //   rx2_enabled && VFOBTX ? 2 : 1
+    void setRx2Enabled(bool enabled);
+    void setVfobTx(bool enabled);
+
     // setMox: Codex P2-ordered slot.
     //
     // Order (must not be reordered):
@@ -732,6 +766,37 @@ signals:
     // typically use hardwareFlipped(bool isTx) instead — its payload is
     // sufficient for routing decisions.
     void manualMoxChanged(bool isManual);
+
+    // ── C.2 / C.3: multicast Pre/Post MOX state-change signals ──────────────
+    //
+    // Future Pre/Post observers (PS form, TCI server, MeterPoller, audio
+    // recorder) plug into these signals.  They are an additive overlay over
+    // the existing 1-arg moxStateChanged(bool) — moxStateChanged is NOT
+    // renamed or removed.
+    //
+    // moxChanging (Pre): emitted BEFORE the state-machine transition begins.
+    //   At emit time, isMox() still reflects the OLD value.  Subscribers
+    //   may defensively freeze readings (e.g. MeterPoller pauses).
+    //
+    // moxChanged (Post): emitted AFTER the timer walk completes (parallel to
+    //   the existing moxStateChanged boundary signal — fires from the same
+    //   onRfDelayElapsed / onPttOutElapsed slots).  Carries the actual
+    //   bOldMox stack capture from setMox so the payload is direction-correct
+    //   even if upstream state was racing.
+    //
+    // rx argument (C.4):
+    //   The receiver index that OWNS THE TX PATH:
+    //     (m_rx2Enabled && m_vfobTx) ? 2 : 1
+    //   RX2 alone without VFOBTX still yields rx==1 — TX comes off VFO-A.
+    //
+    // From Thetis console.cs:29324 [v2.10.3.13] — Pre emit point:
+    //   MoxPreChangeHandlers?.Invoke(rx2_enabled && VFOBTX ? 2 : 1, _mox,
+    //                                chkMOX.Checked); // MW0LGE_21k8
+    // From Thetis console.cs:29677 [v2.10.3.13] — Post emit point:
+    //   if (bOldMox != tx) MoxChangeHandlers?.Invoke(rx2_enabled && VFOBTX
+    //                                ? 2 : 1, bOldMox, tx); // MW0LGE_21a
+    void moxChanging(int rx, bool oldMox, bool newMox);
+    void moxChanged(int rx, bool oldMox, bool newMox);
 
     // ── Boundary signals (diagnostic / integration — keep these) ─────────────
     // moxStateChanged: emitted exactly once per real transition, at the END
@@ -907,6 +972,21 @@ private:
     //   "private bool _manual_mox; // True if the MOX button was clicked on (not PTT)"
     // Set/cleared only by setTune() — never set by setMox() directly.
     bool     m_manualMox{false};
+
+    // ── C.4: multicast Pre/Post rx-argument state ────────────────────────────
+    // m_rx2Enabled mirrors RadioModel "RX2 enabled" flag.
+    // m_vfobTx mirrors RadioModel "VFO-B is the TX VFO" flag.
+    // Both default false — NereusSDR has no RX2 wired yet (3F territory).
+    // activeRxForTx() returns 2 iff (m_rx2Enabled && m_vfobTx), else 1.
+    //
+    // From Thetis console.cs:29324 [v2.10.3.13] — MoxPreChangeHandlers and
+    //                console.cs:29677 [v2.10.3.13] — MoxChangeHandlers:
+    //   rx2_enabled && VFOBTX ? 2 : 1
+    bool     m_rx2Enabled{false};
+    bool     m_vfobTx{false};
+    int activeRxForTx() const noexcept {
+        return (m_rx2Enabled && m_vfobTx) ? 2 : 1;
+    }
 
     // ── QTimer chains (B.3) ──────────────────────────────────────────────────
     // All initialized single-shot in the constructor with kXxxMs intervals.

@@ -43,6 +43,14 @@
 //                 setMicSource(MicSource::Radio) silently coerces to Pc.
 //                 NereusSDR-native, J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-04-28 — Two-tone test properties (B.2, Phase 3M-1c): 7 setter
+//                 implementations + per-MAC AppSettings load/persist for
+//                 TwoToneFreq1/Freq2/Level/Power/Freq2Delay/Invert/Pulsed.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-28 — DrivePowerSource string conversions + setter +
+//                 TwoToneDrivePowerOrigin AppSettings load/persist
+//                 (B.3, Phase 3M-1c).  J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -133,6 +141,26 @@ VaxSlot vaxSlotFromString(const QString& s)
     if (s == QLatin1String("Vax4"))      { return VaxSlot::Vax4; }
     if (s == QLatin1String("MicDirect")) { return VaxSlot::MicDirect; }
     return VaxSlot::MicDirect;  // unknown-string fallback
+}
+
+// Drive-power source helpers (3M-1c B.3) — used by AppSettings persistence.
+// Matches Thetis enums.cs:456-461 [v2.10.3.13] enum value identity.
+QString drivePowerSourceToString(DrivePowerSource s)
+{
+    switch (s) {
+        case DrivePowerSource::DriveSlider: return QStringLiteral("DriveSlider");
+        case DrivePowerSource::TuneSlider:  return QStringLiteral("TuneSlider");
+        case DrivePowerSource::Fixed:       return QStringLiteral("Fixed");
+    }
+    return QStringLiteral("DriveSlider");  // unreachable; default fallback
+}
+
+DrivePowerSource drivePowerSourceFromString(const QString& s)
+{
+    if (s == QLatin1String("DriveSlider")) { return DrivePowerSource::DriveSlider; }
+    if (s == QLatin1String("TuneSlider"))  { return DrivePowerSource::TuneSlider; }
+    if (s == QLatin1String("Fixed"))       { return DrivePowerSource::Fixed; }
+    return DrivePowerSource::DriveSlider;  // unknown-string fallback
 }
 
 TransmitModel::TransmitModel(QObject* parent)
@@ -227,7 +255,7 @@ void TransmitModel::setMicGainDb(int dB)
     //   Audio.MicPreamp = Math.Pow(10.0, gain_db / 20.0); // convert to scalar
     m_micPreampLinear = std::pow(10.0, clamped / 20.0);
 
-    persistOne(QStringLiteral("micGainDb"), QString::number(m_micGainDb));  // L.2 auto-persist
+    persistOne(QStringLiteral("MicGain"), QString::number(m_micGainDb));  // L.2 auto-persist
 
     emit micGainDbChanged(m_micGainDb);
     emit micPreampChanged(m_micPreampLinear);
@@ -261,7 +289,7 @@ void TransmitModel::setMicBoost(bool on)
     //   mic_boost = value; ptbMic_Scroll(); SetMicGain();
     // Phase D wires the WDSP side; model just stores + signals.
     m_micBoost = on;
-    persistOne(QStringLiteral("micBoost"), on ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
+    persistOne(QStringLiteral("Mic_Input_Boost"), on ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
     emit micBoostChanged(on);
 }
 
@@ -272,7 +300,7 @@ void TransmitModel::setMicXlr(bool on)
     //   mic_xlr = value; ptbMic_Scroll(); SetMicXlr();
     // Phase G wires the SetMicXlr() bit; model just stores + signals.
     m_micXlr = on;
-    persistOne(QStringLiteral("micXlr"), on ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
+    persistOne(QStringLiteral("Mic_XLR"), on ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
     emit micXlrChanged(on);
 }
 
@@ -282,7 +310,7 @@ void TransmitModel::setLineIn(bool on)
     // Porting from Thetis console.cs:13213-13222 [v2.10.3.13]:
     //   line_in = value; ptbMic_Scroll(); SetMicGain();
     m_lineIn = on;
-    persistOne(QStringLiteral("lineIn"), on ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
+    persistOne(QStringLiteral("Line_Input_On"), on ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
     emit lineInChanged(on);
 }
 
@@ -295,7 +323,7 @@ void TransmitModel::setLineInBoost(double dB)
     // Porting from Thetis console.cs:13225-13234 [v2.10.3.13]:
     //   line_in_boost = value; ptbMic_Scroll(); SetMicGain();
     m_lineInBoost = clamped;
-    persistOne(QStringLiteral("lineInBoost"), QString::number(m_lineInBoost));  // L.2 auto-persist
+    persistOne(QStringLiteral("Line_Input_Level"), QString::number(m_lineInBoost));  // L.2 auto-persist
     emit lineInBoostChanged(clamped);
 }
 
@@ -308,7 +336,7 @@ void TransmitModel::setMicTipRing(bool tipIsMic)
     //   if (radOrionMicTip.Checked) NetworkIO.SetMicTipRing(0);
     //   else NetworkIO.SetMicTipRing(1);
     m_micTipRing = tipIsMic;
-    persistOne(QStringLiteral("micTipRing"), tipIsMic ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
+    persistOne(QStringLiteral("Mic_TipRing"), tipIsMic ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
     emit micTipRingChanged(tipIsMic);
 }
 
@@ -320,7 +348,7 @@ void TransmitModel::setMicBias(bool on)
     //   else NetworkIO.SetMicBias(0);
     // Phase G wires the SetMicBias() bit; model just stores + signals.
     m_micBias = on;
-    persistOne(QStringLiteral("micBias"), on ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
+    persistOne(QStringLiteral("Mic_Bias"), on ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
     emit micBiasChanged(on);
 }
 
@@ -332,7 +360,7 @@ void TransmitModel::setMicPttDisabled(bool disabled)
     //   NetworkIO.SetMicPTT(Convert.ToInt32(value));
     // Phase G wires the NetworkIO.SetMicPTT() call; model just stores + signals.
     m_micPttDisabled = disabled;
-    persistOne(QStringLiteral("micPttDisabled"), disabled ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
+    persistOne(QStringLiteral("Mic_PTT_Disabled"), disabled ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
     emit micPttDisabledChanged(disabled);
 }
 
@@ -454,76 +482,111 @@ void TransmitModel::loadFromSettings(const QString& mac)
     const QString pfx = QStringLiteral("hardware/%1/tx/").arg(mac);
 
     // ── micGainDb (default -6 per plan §0 row 11) ────────────────────────
-    const int micGainDb = s.value(pfx + QLatin1String("micGainDb"),
+    const int micGainDb = s.value(pfx + QLatin1String("MicGain"),
                                    QStringLiteral("-6")).toInt();
     setMicGainDb(micGainDb);
 
     // ── Mic-jack flag properties ──────────────────────────────────────────
     // micMute: NEVER loaded (safety default true = mic in use).
     // micBoost: default true (console.cs:13237 [v2.10.3.13])
-    const bool micBoost = s.value(pfx + QLatin1String("micBoost"),
+    const bool micBoost = s.value(pfx + QLatin1String("Mic_Input_Boost"),
                                    QStringLiteral("True")).toString() == QLatin1String("True");
     setMicBoost(micBoost);
     // micXlr: default true (console.cs:13249 [v2.10.3.13])
-    const bool micXlr = s.value(pfx + QLatin1String("micXlr"),
+    const bool micXlr = s.value(pfx + QLatin1String("Mic_XLR"),
                                   QStringLiteral("True")).toString() == QLatin1String("True");
     setMicXlr(micXlr);
     // lineIn: default false (console.cs:13213 [v2.10.3.13])
-    const bool lineIn = s.value(pfx + QLatin1String("lineIn"),
+    const bool lineIn = s.value(pfx + QLatin1String("Line_Input_On"),
                                   QStringLiteral("False")).toString() == QLatin1String("True");
     setLineIn(lineIn);
     // lineInBoost: default 0.0 (console.cs:13225 [v2.10.3.13])
-    const double lineInBoost = s.value(pfx + QLatin1String("lineInBoost"),
+    const double lineInBoost = s.value(pfx + QLatin1String("Line_Input_Level"),
                                         QStringLiteral("0")).toDouble();
     setLineInBoost(lineInBoost);
     // micTipRing: default true (setup.designer.cs:8683 [v2.10.3.13])
-    const bool micTipRing = s.value(pfx + QLatin1String("micTipRing"),
+    const bool micTipRing = s.value(pfx + QLatin1String("Mic_TipRing"),
                                      QStringLiteral("True")).toString() == QLatin1String("True");
     setMicTipRing(micTipRing);
     // micBias: default false (setup.designer.cs:8779 [v2.10.3.13])
-    const bool micBias = s.value(pfx + QLatin1String("micBias"),
+    const bool micBias = s.value(pfx + QLatin1String("Mic_Bias"),
                                    QStringLiteral("False")).toString() == QLatin1String("True");
     setMicBias(micBias);
     // micPttDisabled: default false (console.cs:19757 [v2.10.3.13])
-    const bool micPttDisabled = s.value(pfx + QLatin1String("micPttDisabled"),
+    const bool micPttDisabled = s.value(pfx + QLatin1String("Mic_PTT_Disabled"),
                                          QStringLiteral("False")).toString() == QLatin1String("True");
     setMicPttDisabled(micPttDisabled);
 
     // ── VOX properties (voxEnabled NOT loaded — safety: always false) ─────
-    const int voxThresholdDb = s.value(pfx + QLatin1String("voxThresholdDb"),
+    const int voxThresholdDb = s.value(pfx + QLatin1String("Dexp_Threshold"),
                                         QStringLiteral("-40")).toInt();
     setVoxThresholdDb(voxThresholdDb);
-    const float voxGainScalar = s.value(pfx + QLatin1String("voxGainScalar"),
+    const float voxGainScalar = s.value(pfx + QLatin1String("VOX_GainScalar"),
                                          QStringLiteral("1")).toFloat();
     setVoxGainScalar(voxGainScalar);
-    const int voxHangTimeMs = s.value(pfx + QLatin1String("voxHangTimeMs"),
+    const int voxHangTimeMs = s.value(pfx + QLatin1String("VOX_HangTime"),
                                        QStringLiteral("500")).toInt();
     setVoxHangTimeMs(voxHangTimeMs);
 
     // ── Anti-VOX properties ───────────────────────────────────────────────
     // antiVoxGainDb: default 0 (NereusSDR-original safe starting point)
-    const int antiVoxGainDb = s.value(pfx + QLatin1String("antiVoxGainDb"),
+    const int antiVoxGainDb = s.value(pfx + QLatin1String("AntiVox_Gain"),
                                        QStringLiteral("0")).toInt();
     setAntiVoxGainDb(antiVoxGainDb);
     // antiVoxSourceVax: default false (audio.cs:446 [v2.10.3.13])
-    const bool antiVoxSourceVax = s.value(pfx + QLatin1String("antiVoxSourceVax"),
+    const bool antiVoxSourceVax = s.value(pfx + QLatin1String("AntiVox_Source_VAX"),
                                            QStringLiteral("False")).toString() == QLatin1String("True");
     setAntiVoxSourceVax(antiVoxSourceVax);
 
     // ── MON properties (monEnabled NOT loaded — safety: always false) ─────
     // monitorVolume: default 0.5f (audio.cs:417 [v2.10.3.13] literal)
-    const float monitorVolume = s.value(pfx + QLatin1String("monitorVolume"),
+    const float monitorVolume = s.value(pfx + QLatin1String("MonitorVolume"),
                                          QStringLiteral("0.5")).toFloat();
     setMonitorVolume(monitorVolume);
 
     // ── Mic source ────────────────────────────────────────────────────────
     // micSource: default Pc (NereusSDR-native; always safe and available)
-    const QString micSourceStr = s.value(pfx + QLatin1String("micSource"),
+    const QString micSourceStr = s.value(pfx + QLatin1String("Mic_Source"),
                                           QStringLiteral("Pc")).toString();
     const MicSource micSource = (micSourceStr == QLatin1String("Radio"))
                                     ? MicSource::Radio
                                     : MicSource::Pc;
     setMicSource(micSource);
+
+    // ── Two-tone test properties (3M-1c B.2) ──────────────────────────────
+    // Defaults per design spec §4.4 (option C):
+    //   Freq1=700, Freq2=1900 — match Thetis Designer + btnTwoToneF_defaults.
+    //   Level=-6, Power=50    — NereusSDR-original safer (Designer 0/10).
+    //   Freq2Delay=0          — match Thetis Designer.
+    //   Invert=true           — Designer chkInvertTones.Checked = true.
+    //   Pulsed=false          — Designer (no Checked= line).
+    const int twoToneFreq1 = s.value(pfx + QLatin1String("TwoToneFreq1"),
+                                       QStringLiteral("700")).toInt();
+    setTwoToneFreq1(twoToneFreq1);
+    const int twoToneFreq2 = s.value(pfx + QLatin1String("TwoToneFreq2"),
+                                       QStringLiteral("1900")).toInt();
+    setTwoToneFreq2(twoToneFreq2);
+    const double twoToneLevel = s.value(pfx + QLatin1String("TwoToneLevel"),
+                                         QStringLiteral("-6")).toDouble();
+    setTwoToneLevel(twoToneLevel);
+    const int twoTonePower = s.value(pfx + QLatin1String("TwoTonePower"),
+                                      QStringLiteral("50")).toInt();
+    setTwoTonePower(twoTonePower);
+    const int twoToneFreq2Delay = s.value(pfx + QLatin1String("TwoToneFreq2Delay"),
+                                           QStringLiteral("0")).toInt();
+    setTwoToneFreq2Delay(twoToneFreq2Delay);
+    const bool twoToneInvert = s.value(pfx + QLatin1String("TwoToneInvert"),
+                                        QStringLiteral("True")).toString() == QLatin1String("True");
+    setTwoToneInvert(twoToneInvert);
+    const bool twoTonePulsed = s.value(pfx + QLatin1String("TwoTonePulsed"),
+                                        QStringLiteral("False")).toString() == QLatin1String("True");
+    setTwoTonePulsed(twoTonePulsed);
+
+    // ── Two-tone drive-power source (3M-1c B.3) ──────────────────────────
+    // Default DriveSlider per Thetis console.cs:46553 [v2.10.3.13].
+    const QString drivePowerSourceStr = s.value(pfx + QLatin1String("TwoToneDrivePowerOrigin"),
+                                                 QStringLiteral("DriveSlider")).toString();
+    setTwoToneDrivePowerSource(drivePowerSourceFromString(drivePowerSourceStr));
 }
 
 void TransmitModel::persistToSettings(const QString& mac) const
@@ -532,32 +595,45 @@ void TransmitModel::persistToSettings(const QString& mac) const
     const QString pfx = QStringLiteral("hardware/%1/tx/").arg(mac);
 
     // ── micGainDb ─────────────────────────────────────────────────────────
-    s.setValue(pfx + QLatin1String("micGainDb"),        QString::number(m_micGainDb));
+    s.setValue(pfx + QLatin1String("MicGain"),        QString::number(m_micGainDb));
 
     // ── Mic-jack flag properties (micMute excluded — safety) ─────────────
-    s.setValue(pfx + QLatin1String("micBoost"),         m_micBoost        ? QStringLiteral("True") : QStringLiteral("False"));
-    s.setValue(pfx + QLatin1String("micXlr"),           m_micXlr          ? QStringLiteral("True") : QStringLiteral("False"));
-    s.setValue(pfx + QLatin1String("lineIn"),           m_lineIn          ? QStringLiteral("True") : QStringLiteral("False"));
-    s.setValue(pfx + QLatin1String("lineInBoost"),      QString::number(m_lineInBoost));
-    s.setValue(pfx + QLatin1String("micTipRing"),       m_micTipRing      ? QStringLiteral("True") : QStringLiteral("False"));
-    s.setValue(pfx + QLatin1String("micBias"),          m_micBias         ? QStringLiteral("True") : QStringLiteral("False"));
-    s.setValue(pfx + QLatin1String("micPttDisabled"),   m_micPttDisabled  ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("Mic_Input_Boost"),         m_micBoost        ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("Mic_XLR"),           m_micXlr          ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("Line_Input_On"),           m_lineIn          ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("Line_Input_Level"),      QString::number(m_lineInBoost));
+    s.setValue(pfx + QLatin1String("Mic_TipRing"),       m_micTipRing      ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("Mic_Bias"),          m_micBias         ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("Mic_PTT_Disabled"),   m_micPttDisabled  ? QStringLiteral("True") : QStringLiteral("False"));
 
     // ── VOX properties (voxEnabled excluded — safety) ────────────────────
-    s.setValue(pfx + QLatin1String("voxThresholdDb"),   QString::number(m_voxThresholdDb));
-    s.setValue(pfx + QLatin1String("voxGainScalar"),    QString::number(static_cast<double>(m_voxGainScalar)));
-    s.setValue(pfx + QLatin1String("voxHangTimeMs"),    QString::number(m_voxHangTimeMs));
+    s.setValue(pfx + QLatin1String("Dexp_Threshold"),   QString::number(m_voxThresholdDb));
+    s.setValue(pfx + QLatin1String("VOX_GainScalar"),    QString::number(static_cast<double>(m_voxGainScalar)));
+    s.setValue(pfx + QLatin1String("VOX_HangTime"),    QString::number(m_voxHangTimeMs));
 
     // ── Anti-VOX properties ───────────────────────────────────────────────
-    s.setValue(pfx + QLatin1String("antiVoxGainDb"),    QString::number(m_antiVoxGainDb));
-    s.setValue(pfx + QLatin1String("antiVoxSourceVax"), m_antiVoxSourceVax ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("AntiVox_Gain"),    QString::number(m_antiVoxGainDb));
+    s.setValue(pfx + QLatin1String("AntiVox_Source_VAX"), m_antiVoxSourceVax ? QStringLiteral("True") : QStringLiteral("False"));
 
     // ── MON properties (monEnabled excluded — safety) ─────────────────────
-    s.setValue(pfx + QLatin1String("monitorVolume"),    QString::number(static_cast<double>(m_monitorVolume)));
+    s.setValue(pfx + QLatin1String("MonitorVolume"),    QString::number(static_cast<double>(m_monitorVolume)));
 
     // ── Mic source ────────────────────────────────────────────────────────
-    s.setValue(pfx + QLatin1String("micSource"),
+    s.setValue(pfx + QLatin1String("Mic_Source"),
                m_micSource == MicSource::Radio ? QStringLiteral("Radio") : QStringLiteral("Pc"));
+
+    // ── Two-tone test properties (3M-1c B.2) ──────────────────────────────
+    s.setValue(pfx + QLatin1String("TwoToneFreq1"),       QString::number(m_twoToneFreq1));
+    s.setValue(pfx + QLatin1String("TwoToneFreq2"),       QString::number(m_twoToneFreq2));
+    s.setValue(pfx + QLatin1String("TwoToneLevel"),       QString::number(m_twoToneLevel));
+    s.setValue(pfx + QLatin1String("TwoTonePower"),       QString::number(m_twoTonePower));
+    s.setValue(pfx + QLatin1String("TwoToneFreq2Delay"),  QString::number(m_twoToneFreq2Delay));
+    s.setValue(pfx + QLatin1String("TwoToneInvert"),      m_twoToneInvert ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("TwoTonePulsed"),      m_twoTonePulsed ? QStringLiteral("True") : QStringLiteral("False"));
+
+    // ── Two-tone drive-power source (3M-1c B.3) ─────────────────────────
+    s.setValue(pfx + QLatin1String("TwoToneDrivePowerOrigin"),
+               drivePowerSourceToString(m_twoToneDrivePowerSource));
 }
 
 // ── Anti-VOX properties (3M-1b C.4) ─────────────────────────────────────────
@@ -588,7 +664,7 @@ void TransmitModel::setAntiVoxGainDb(int dB)
     //   cmaster.SetAntiVOXGain(0, Math.Pow(10.0, (double)udAntiVoxGain.Value / 20.0));
     // WDSP SetAntiVOXGain call deferred to Phase H.3.
     m_antiVoxGainDb = clamped;
-    persistOne(QStringLiteral("antiVoxGainDb"), QString::number(m_antiVoxGainDb));  // L.2 auto-persist
+    persistOne(QStringLiteral("AntiVox_Gain"), QString::number(m_antiVoxGainDb));  // L.2 auto-persist
     emit antiVoxGainDbChanged(clamped);
 }
 
@@ -600,7 +676,7 @@ void TransmitModel::setAntiVoxSourceVax(bool useVax)
     // VAC->VAX rename: same conceptual role, NereusSDR-native design.
     // CMSetAntiVoxSourceWhat port (path-agnostic version) deferred to Phase H.3.
     m_antiVoxSourceVax = useVax;
-    persistOne(QStringLiteral("antiVoxSourceVax"), useVax ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
+    persistOne(QStringLiteral("AntiVox_Source_VAX"), useVax ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
     emit antiVoxSourceVaxChanged(useVax);
 }
 
@@ -640,7 +716,7 @@ void TransmitModel::setMonitorVolume(float volume)
     //   cmaster.SetAAudioMixVol((void*)0, 0, WDSP.id(1, 0), 0.5);
     // SetAAudioMixVol WDSP call deferred to Phase E.3.
     m_monitorVolume = clamped;
-    persistOne(QStringLiteral("monitorVolume"), QString::number(static_cast<double>(m_monitorVolume)));  // L.2 auto-persist
+    persistOne(QStringLiteral("MonitorVolume"), QString::number(static_cast<double>(m_monitorVolume)));  // L.2 auto-persist
     emit monitorVolumeChanged(clamped);
 }
 
@@ -683,7 +759,7 @@ void TransmitModel::setVoxThresholdDb(int dB)
     // WDSP threshold application (CMSetTXAVoxThresh mic-boost-aware scaling)
     // deferred to Phase H Task H.2.
     m_voxThresholdDb = clamped;
-    persistOne(QStringLiteral("voxThresholdDb"), QString::number(m_voxThresholdDb));  // L.2 auto-persist
+    persistOne(QStringLiteral("Dexp_Threshold"), QString::number(m_voxThresholdDb));  // L.2 auto-persist
     emit voxThresholdDbChanged(clamped);
 }
 
@@ -698,7 +774,7 @@ void TransmitModel::setVoxGainScalar(float scalar)
     //   vox_gain = value;
     // Mic-boost-aware threshold scaling wired in Phase H Task H.2.
     m_voxGainScalar = clamped;
-    persistOne(QStringLiteral("voxGainScalar"), QString::number(static_cast<double>(m_voxGainScalar)));  // L.2 auto-persist
+    persistOne(QStringLiteral("VOX_GainScalar"), QString::number(static_cast<double>(m_voxGainScalar)));  // L.2 auto-persist
     emit voxGainScalarChanged(clamped);
 }
 
@@ -712,8 +788,99 @@ void TransmitModel::setVoxHangTimeMs(int ms)
     //   vox_hang_time = value; if (!IsSetupFormNull) SetupForm.VOXHangTime = (int)value;
     // WDSP SetDEXPHoldTime call deferred to Phase D / Phase H.
     m_voxHangTimeMs = clamped;
-    persistOne(QStringLiteral("voxHangTimeMs"), QString::number(m_voxHangTimeMs));  // L.2 auto-persist
+    persistOne(QStringLiteral("VOX_HangTime"), QString::number(m_voxHangTimeMs));  // L.2 auto-persist
     emit voxHangTimeMsChanged(clamped);
+}
+
+// ── Two-tone test properties (3M-1c B.2) ────────────────────────────────────
+//
+// Per-MAC AppSettings persistence with Thetis column names per design spec
+// §4.4.  WDSP setters (TXPostGenMode / TXPostGenTTFreq1/2 / TXPostGenTTMag1/2
+// + pulse-profile setters) arrive in Phase E.  The two-tone activation
+// handler (mode-aware invert, power-source enum, MOX engage) arrives in
+// Phase I.  Setters here just store + signal + auto-persist.
+
+void TransmitModel::setTwoToneFreq1(int hz)
+{
+    // Clamp to Thetis Designer range per setup.Designer.cs:62117-62126 [v2.10.3.13].
+    const int clamped = std::clamp(hz, kTwoToneFreq1HzMin, kTwoToneFreq1HzMax);
+    if (clamped == m_twoToneFreq1) { return; }
+    m_twoToneFreq1 = clamped;
+    persistOne(QStringLiteral("TwoToneFreq1"), QString::number(m_twoToneFreq1));
+    emit twoToneFreq1Changed(clamped);
+}
+
+void TransmitModel::setTwoToneFreq2(int hz)
+{
+    // Clamp to Thetis Designer range per setup.Designer.cs:62035-62044 [v2.10.3.13].
+    const int clamped = std::clamp(hz, kTwoToneFreq2HzMin, kTwoToneFreq2HzMax);
+    if (clamped == m_twoToneFreq2) { return; }
+    m_twoToneFreq2 = clamped;
+    persistOne(QStringLiteral("TwoToneFreq2"), QString::number(m_twoToneFreq2));
+    emit twoToneFreq2Changed(clamped);
+}
+
+void TransmitModel::setTwoToneLevel(double db)
+{
+    // Clamp to Thetis Designer range per setup.Designer.cs:61994-62003 [v2.10.3.13].
+    const double clamped = std::clamp(db, kTwoToneLevelDbMin, kTwoToneLevelDbMax);
+    // qFuzzyIsNull(diff) zero-boundary-safe idempotent guard (matches MON pattern).
+    if (qFuzzyIsNull(clamped - m_twoToneLevel)) { return; }
+    m_twoToneLevel = clamped;
+    persistOne(QStringLiteral("TwoToneLevel"), QString::number(m_twoToneLevel));
+    emit twoToneLevelChanged(clamped);
+}
+
+void TransmitModel::setTwoTonePower(int pct)
+{
+    // Clamp to Thetis Designer range per setup.Designer.cs:62064-62073 [v2.10.3.13].
+    const int clamped = std::clamp(pct, kTwoTonePowerMin, kTwoTonePowerMax);
+    if (clamped == m_twoTonePower) { return; }
+    m_twoTonePower = clamped;
+    persistOne(QStringLiteral("TwoTonePower"), QString::number(m_twoTonePower));
+    emit twoTonePowerChanged(clamped);
+}
+
+void TransmitModel::setTwoToneFreq2Delay(int ms)
+{
+    // Clamp to Thetis Designer range per setup.Designer.cs:61928-61937 [v2.10.3.13].
+    const int clamped = std::clamp(ms, kTwoToneFreq2DelayMsMin, kTwoToneFreq2DelayMsMax);
+    if (clamped == m_twoToneFreq2Delay) { return; }
+    m_twoToneFreq2Delay = clamped;
+    persistOne(QStringLiteral("TwoToneFreq2Delay"), QString::number(m_twoToneFreq2Delay));
+    emit twoToneFreq2DelayChanged(clamped);
+}
+
+void TransmitModel::setTwoToneInvert(bool on)
+{
+    if (on == m_twoToneInvert) { return; }
+    m_twoToneInvert = on;
+    persistOne(QStringLiteral("TwoToneInvert"), on ? QStringLiteral("True") : QStringLiteral("False"));
+    emit twoToneInvertChanged(on);
+}
+
+void TransmitModel::setTwoTonePulsed(bool on)
+{
+    if (on == m_twoTonePulsed) { return; }
+    m_twoTonePulsed = on;
+    persistOne(QStringLiteral("TwoTonePulsed"), on ? QStringLiteral("True") : QStringLiteral("False"));
+    emit twoTonePulsedChanged(on);
+}
+
+// ── Two-tone drive-power source (3M-1c B.3) ────────────────────────────────
+//
+// Porting from Thetis console.cs:46576-46597 [v2.10.3.13] (TwoToneDrivePowerOrigin
+// property — Thetis console-side; NereusSDR puts it on TransmitModel).  Phase I
+// (two-tone activation handler) consumes this to decide power-source behaviour
+// per setup.cs:11111-11119.  AppSettings key: "TwoToneDrivePowerOrigin".
+
+void TransmitModel::setTwoToneDrivePowerSource(DrivePowerSource source)
+{
+    if (source == m_twoToneDrivePowerSource) { return; }
+    m_twoToneDrivePowerSource = source;
+    persistOne(QStringLiteral("TwoToneDrivePowerOrigin"),
+               drivePowerSourceToString(source));
+    emit twoToneDrivePowerSourceChanged(source);
 }
 
 // ── Mic source (3M-1b I.1) ────────────────────────────────────────────────────
@@ -739,7 +906,7 @@ void TransmitModel::setMicSource(MicSource source)
 
     if (source == m_micSource) { return; }  // idempotent guard
     m_micSource = source;
-    persistOne(QStringLiteral("micSource"),
+    persistOne(QStringLiteral("Mic_Source"),
                source == MicSource::Radio ? QStringLiteral("Radio") : QStringLiteral("Pc"));  // L.2 auto-persist
     emit micSourceChanged(source);
 }
