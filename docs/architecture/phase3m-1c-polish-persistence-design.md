@@ -5,7 +5,7 @@
 **Branch:** `feature/phase3m-1c-polish-persistence`.
 **Base:** `origin/main` @ `bfce1cf` (post-3M-1b merge).
 **Master design:** [`phase3m-tx-epic-master-design.md`](phase3m-tx-epic-master-design.md) §5.3.
-**Risk:** Low–Medium (3 Low chunks + 3 Low chunks + 3 Medium chunks).
+**Risk:** Low–Medium (1 desk-review chunk + 3 Low chunks + 3 Low chunks + 3 Medium chunks = 10 chunks total).
 
 > **For agentic workers:** REQUIRED SUB-SKILL — use
 > `superpowers:subagent-driven-development` (recommended) or
@@ -16,19 +16,23 @@
 
 ## 1. Goal
 
-Wrap Phase 3M-1 with the polish layer: VFO Flag TX badge wiring, full-Thetis
-two-tone test port (continuous + pulsed), mic profile schema using Thetis
-column names (live fields only), TxApplet profile-combo polish, persistence
-audit with hard-cutover key rename, generalised `MoxChangeHandlers` /
-`MoxPreChangeHandlers` Qt signals matching Thetis multicast delegate
-semantics, plus three carry-forward fixups from 3M-1b. TX recording
-**deferred** to 3M-6 where it lives natively alongside its three siblings
-(I/Q recording, scheduled recording, DVK record-backend).
+Wrap Phase 3M-1 with the polish layer: HL2 TX path desk-review vs
+mi0bot-Thetis (precursor — the bench rows M.2/M.3/M.4 are
+HL2-hardware-gated; desk-review against the authoritative HL2 reference
+catches divergence before hardware does), VFO Flag TX badge wiring, full-
+Thetis two-tone test port (continuous + pulsed), mic profile schema using
+Thetis column names (live fields only), TxApplet profile-combo polish,
+persistence audit with hard-cutover key rename, generalised
+`MoxChangeHandlers` / `MoxPreChangeHandlers` Qt signals matching Thetis
+multicast delegate semantics, plus three carry-forward fixups from 3M-1b.
+TX recording **deferred** to 3M-6 where it lives natively alongside its
+three siblings (I/Q recording, scheduled recording, DVK record-backend).
 
 Phase 3M-1c **completes 3M-1**. After it ships, the radio TX path is
-production-quality for SSB voice (LSB / USB / DIGL / DIGU). 3M-2 (CW TX)
-and 3M-3 (TXA speech-processing depth) come next per master-design plan
-order.
+production-quality for SSB voice (LSB / USB / DIGL / DIGU) on Saturn G2 /
+Anan-G2 boards and the HL2 TX path is documented + cross-checked against
+mi0bot-Thetis. 3M-2 (CW TX) and 3M-3 (TXA speech-processing depth) come
+next per master-design plan order.
 
 ---
 
@@ -39,11 +43,12 @@ without re-deriving the scope.
 
 | # | Decision | Choice |
 |---|---|---|
-| Q1 | 3M-1c scope | **9 chunks** (master-design §5.3 minus TX recording, plus 3 carry-forwards from 3M-1b) |
+| Q1 | 3M-1c scope | **10 chunks** (master-design §5.3 minus TX recording, plus 3 carry-forwards from 3M-1b, plus chunk 0 HL2 TX path desk-review) |
 | Q2 | Mic profile schema scope | **Live-fields-only with Thetis column names** (~20 columns named per `database.cs:AddTXProfileTable`); 1 default factory profile; SSB-only mode-family pointer for 3M-1c (Digital/FM/AM pointers land in 3M-3b) |
 | Q3 | AppSettings rename strategy | **Hard cutover** — no migration code. 3M-1b 16-key naming hasn't shipped to a tagged release; users have no settings files with the old keys yet |
 | Q4 | Two-tone test scope | **Full Thetis port** — continuous + pulsed modes, all 6 user-tunable params, Setup → Test → Two-Tone page with defaults/stealth preset buttons, mode-aware tone inversion, Freq2 delay, power-source enum, TUN auto-stop, TxApplet 2-TONE button |
 | Q5 | TX recording scope | **Defer to 3M-6** (already lists WAV record/playback as a known phase with three siblings). DVK applet stays UI-only stub (no regression — current state since Phase 3-UI) |
+| Q6 | HL2 TX path desk-review | **Chunk 0 (precursor)** — runs before chunks 1-9 so findings inform implementation. Output: `docs/architecture/phase3m-1c-hl2-tx-path-review.md`. mi0bot-Thetis is **promoted to primary** for chunk 0 (it's the HL2 reference); Thetis remains primary for chunks 1-9 |
 
 **Folded carry-forwards from 3M-1b post-code review §14:**
 
@@ -55,10 +60,11 @@ without re-deriving the scope.
 
 ---
 
-## 3. Scope (9 chunks)
+## 3. Scope (10 chunks)
 
 | # | Chunk | Source-first cite | Risk |
 |---|---|---|---|
+| 0 | **HL2 TX path desk-review vs mi0bot-Thetis** (precursor) | mi0bot-Thetis `[v2.10.3.13-beta2]` / `[@c26a8a4]` primary for this chunk; cross-check against Thetis upstream | Low (analysis only; output is a doc) |
 | 1 | VFO Flag TX badge wire-up | `VfoDisplayItem::setTransmitting(bool)` already stubbed in 3G-8; Thetis MOX visual feedback as colour-palette ref | Low |
 | 2 | Two-tone test full port (continuous + pulsed) | `console.cs:44728-44760` + `setup.cs:11019-11200ish` `[v2.10.3.13]` | Medium |
 | 3 | Mic profile schema (live fields, Thetis names, SSB-only pointer) | `database.cs:AddTXProfileTable` `[v2.10.3.13]` (~20-column subset of Thetis's 206) | Medium |
@@ -77,6 +83,7 @@ without re-deriving the scope.
 
 | File | Purpose |
 |---|---|
+| `docs/architecture/phase3m-1c-hl2-tx-path-review.md` | **Chunk 0 deliverable.** HL2 TX path desk-review vs mi0bot-Thetis. Findings list with file paths, line refs, descriptions, fix proposals or follow-up-issue suggestions. Each delta categorised as either (a) absorb into a 3M-1c chunk inline, (b) file as separate follow-up issue, or (c) document as known-divergence with rationale. |
 | `src/core/MicProfileManager.{h,cpp}` | Profile bank: load / save / delete / rename / set-active. Holds `QVector<MicProfile>`, fires `profileListChanged` / `activeProfileChanged` signals. Persists to AppSettings under `hardware/<mac>/tx/profile/<name>/...` and `hardware/<mac>/tx/profile/active`. |
 | `src/gui/setup/TestTwoTonePage.{h,cpp}` | 6-param Setup page: Freq1, Freq2, Level, Power, Freq2 delay, Invert tones, Pulsed mode toggle, defaults / stealth preset buttons |
 | `src/gui/setup/SetupCategoryTest.{h,cpp}` | New top-level Setup → Test category parent (first test page; future siblings: PA scaling, IMD analyzer, calibration probes) |
@@ -138,6 +145,68 @@ When user saves a new profile (e.g. "Heil PR40"), all currently-wired
 control values are written under `hardware/<mac>/tx/profile/Heil PR40/...`.
 3M-3a sub-PRs add new column names as their backends ship — no migration
 needed because AppSettings is schema-less.
+
+---
+
+## 4bis. Chunk 0 — HL2 TX path desk-review scope
+
+mi0bot-Thetis is the authoritative HL2 reference. The 3M-1a / 3M-1b TX
+work shipped without HL2 hardware in hand; bench rows M.2 / M.3 / M.4 are
+still open. Chunk 0 closes the desk-review gap so we don't carry HL2
+divergence into 3M-1c implementation.
+
+**Areas to compare** (mi0bot-Thetis vs NereusSDR + upstream Thetis):
+
+1. **HL2 P1 EP2 zone TX timing** — sample rate / buffer alignment / SPSC ring
+   sizing. Compare mi0bot's HL2 path with our `P1RadioConnection::sendTxIq`
+   from 3M-1a (commit `0b557e9`).
+2. **HL2 mic-jack handling** — 3M-1b set `hasMicJack=false` for HL2.
+   mi0bot's HL2 UI: do they show mic-jack controls at all? Are the
+   `Mic_Input_Boost` / `Line_Input_*` columns honoured on HL2?
+3. **HL2 watchdog (RUNSTOP `pkt[3]` bit 7)** — already wired in 3M-1a E.5
+   per HL2 firmware `dsopenhpsdr1.v:399-400 [@7472bd1]`. Cross-check
+   mi0bot's setting at MOX boundaries.
+4. **HL2 step attenuator on TX** — 3G-13 wired `shouldForce31Db` (PS-off OR
+   CWL/CWU). Verify mi0bot's HL2 force-31dB logic matches.
+5. **HL2 codec path vs Saturn G2 path** — TXA channel ID, sample rate,
+   buffer size differences. NereusSDR uses `WdspEngine::createTxChannel(WDSP.id(1,0))`
+   with channel ID 1 (3M-1a §5.1.1). mi0bot's HL2 channel setup?
+6. **HL2 firmware quirks** — CWX LSB-clear workaround (already noted in
+   3M-1a `tst_p1_tx_iq_wire`). Other HL2-only quirks mi0bot patches?
+7. **HL2 power scaling** — `safety_constants.cpp` HL2 scaling values
+   (3M-0). Verify mi0bot's HL2 PA scaling reference values match.
+8. **HL2 PTT path** — `mic_ptt` extraction (3M-1b H.5). Does HL2 have any
+   different PTT semantics in mi0bot's fork?
+9. **HL2-specific patches not upstream** — anything mi0bot has that
+   upstream Thetis doesn't, that affects TX. List with rationale.
+
+**Output document structure:**
+
+- §1 Scope and method (which mi0bot files inspected, mi0bot version stamp)
+- §2 Findings (one section per area 1-9 above; each with delta + proposed action)
+- §3 Categorised action plan:
+  - (a) Absorb into 3M-1c chunk N inline — with target chunk
+  - (b) File as separate follow-up issue (post-3M-1c)
+  - (c) Document as known-divergence with rationale
+- §4 Open questions (anything mi0bot does that we don't understand)
+
+**Non-goals for chunk 0:** no code changes; no unit tests; no protocol
+captures; no hardware testing. Pure desk-review producing one Markdown
+document. If a finding requires immediate fix and would otherwise
+ship-block 3M-1c, it gets added to a target chunk's task list and is
+implemented there.
+
+**Estimated effort:** 1-2 days of session work. ~5-10 mi0bot files to
+read (Console/console.cs, Console/setup.cs, Console/cmaster.cs,
+Console/NetworkIO.cs, Console/HPSDRHardware/HermesLite2*.cs if present,
+Console/audio.cs).
+
+**Source-first stamp:** chunk 0 cites use mi0bot-Thetis primary stamps
+(`[v2.10.3.13-beta2]` for tag-aligned values; `[@c26a8a4]` for post-tag).
+If chunk 0 ports anything (unlikely for a desk-review), the one-time
+setup of `MI0BOT-THETIS-PROVENANCE.md` + `mi0bot-thetis-author-tags.json`
++ `discover-mi0bot-thetis-author-tags.py` happens as part of the chunk 0
+commit.
 
 ---
 
@@ -212,12 +281,14 @@ OK but bench-verify across mic types is needed before changing the default.
    `networkproto1.c` covered some bits, deskhpsdr `new_protocol.c:1480-1502`
    covered the full table). 3M-1c lookup most likely on chunk 2 (two-tone
    pulsed mode parameters) and chunk 7 (push-driven TX timer architecture).
-3. **mi0bot-Thetis tertiary** — `v2.10.3.13-beta2` / `[@c26a8a4]` for
-   **HL2-functional verification and HL2-specific patches**. Precedent:
-   Phase 3I RadioDiscovery port. HL2 is mi0bot's primary focus, so HL2
-   paths get cross-checked here. 3M-1c lookup most likely on chunks 1
-   (VFO TX badge HL2 visual), 2 (HL2 two-tone support), 3 (HL2 profile
-   schema cross-check), 7 (HL2 timing tweaks), 8/9 (HL2 smoke).
+3. **mi0bot-Thetis** — `v2.10.3.13-beta2` / `[@c26a8a4]`.
+   - **Primary for chunk 0** (HL2 TX path desk-review — see §4bis).
+   - **Tertiary for chunks 1-9** for HL2-functional verification and
+     HL2-specific patches. Precedent: Phase 3I RadioDiscovery port. HL2
+     is mi0bot's primary focus, so HL2 paths get cross-checked here.
+     Lookup most likely on chunks 1 (VFO TX badge HL2 visual), 2 (HL2
+     two-tone support), 3 (HL2 profile schema cross-check), 7 (HL2
+     timing tweaks), 8/9 (HL2 smoke).
 
 **Multi-source cite format examples:**
 
@@ -245,15 +316,19 @@ required for this phase.
   (created from `origin/main` `bfce1cf`).
 - **Single PR.**
 - **Document sequence:**
-  1. This design spec → committed first.
-  2. `phase3m-1c-thetis-pre-code-review.md` → Thetis source quotes,
-     behaviour analysis, deferral table, risk surface.
-  3. `phase3m-1c-polish-persistence-plan.md` → TDD task list with cite
+  1. This design spec → committed first (already at `81ff57e`).
+  2. **Chunk 0 deliverable** — `phase3m-1c-hl2-tx-path-review.md` (HL2
+     desk-review vs mi0bot-Thetis). Lands as its own commit before
+     pre-code review. Findings inform pre-code review and chunks 1-9.
+  3. `phase3m-1c-thetis-pre-code-review.md` → Thetis source quotes,
+     behaviour analysis, deferral table, risk surface (incorporates
+     chunk 0 findings where they affect chunks 1-9).
+  4. `phase3m-1c-polish-persistence-plan.md` → TDD task list with cite
      stamps and per-task tests.
-  4. TDD execution per task with `superpowers:subagent-driven-development`
+  5. TDD execution per task with `superpowers:subagent-driven-development`
      two-stage review (spec compliance + code quality).
-  5. Verification matrix update (`docs/architecture/phase3m-0-verification/`).
-  6. `phase3m-1c-post-code-review.md` → for each pre-code §, did the
+  6. Verification matrix update (`docs/architecture/phase3m-0-verification/`).
+  7. `phase3m-1c-post-code-review.md` → for each pre-code §, did the
      implementation match the analysis? Note deltas; surface follow-ups.
 - **TDD:** test-driven per task. Failing test or failing source-cited
   assertion first; implement to green; commit.
@@ -274,7 +349,9 @@ required for this phase.
 
 ### 8.1 Unit tests (~30 new)
 
-Per chunk, parametrised where applicable. New test files (illustrative):
+Chunk 0 contributes no unit tests (it's an analysis deliverable). The
+~30 figure covers chunks 1-9. Per chunk, parametrised where applicable.
+New test files (illustrative):
 
 - `tst_mic_profile_manager.cpp` — load / save / delete / rename / set-active round-trip
 - `tst_transmit_model_thetis_key_rename.cpp` — all 16 keys persist under Thetis names; old NereusSDR-original names absent (hard cutover)
@@ -314,18 +391,20 @@ blocking 3M-1c work.
 
 ## 9. Estimated work + Risk
 
-**Estimated session work:** ~2–3 weeks. About half of 3M-1b's 51-task
+**Estimated session work:** ~2.5–3 weeks. About half of 3M-1b's 51-task
 scope. Most chunks are well-bounded; the largest single chunk is the
 two-tone full port (chunk 2, ~250-300 lines + Setup page + ~10 tests).
+Chunk 0 (HL2 desk-review) adds 1-2 days at the front of the phase.
 
 **Risk profile:** Low–Medium overall.
 
 | Risk | Source | Mitigation |
 |---|---|---|
+| HL2 path divergence undiscovered until bench | mi0bot may have HL2-specific tweaks not in upstream | **Chunk 0 desk-review** vs mi0bot-Thetis (precursor); HL2 bench rows confirm |
+| Chunk 0 surfaces a substantive delta requiring its own PR | unknown until the desk-review runs | If 2+ substantive HL2 deltas: split chunk 0 off as its own pre-3M-1c branch and merge first; chunks 1-9 rebase on the merged HL2 fixes |
 | Two-tone pulsed-mode parameter range mistakes | `setupTwoTonePulse()` not fully self-documenting | Cross-check deskhpsdr secondary; bench-verify with spectrum analyser |
-| Push-driven TX timer regression | B.2 architecture change | TDD harness simulates underrun / overrun; bench-verify with 30-min SSB transmission |
+| Push-driven TX timer regression | B.2 architecture change | TDD harness simulates underrun / overrun; bench-verify with 30-min SSB transmission; chunk 0 may surface HL2-specific timing constraints |
 | Hard-cutover key rename leaves orphans | 16 keys × per-MAC scope | Persistence audit test asserts old key names absent after first 3M-1c launch |
-| HL2 path divergence | mi0bot may have HL2-specific tweaks not in upstream | Cross-check mi0bot-Thetis tertiary; HL2 bench rows |
 | MoxController call-site migration breaks observers | ~30 call-sites for the rename | Compile-time enforced (signature change); test sweep catches behavioural regressions |
 
 ---
