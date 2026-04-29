@@ -16,7 +16,8 @@
 //      (silence-falls-out-for-free behaviour).
 //   5. Cross-thread setter race — main thread setMicPreamp while
 //      worker is pumping does not crash and the value eventually
-//      lands.
+//      lands.  Companion test covers setVoxRun (MoxController-routed
+//      lambda-connect form) for the same property.
 //   6. stopPump while a tick is in flight completes the current
 //      tick before exiting.
 //
@@ -362,6 +363,54 @@ private slots:
 
         // Final value should be 0.99 (99 * 0.01) after the loop above.
         QCOMPARE(ch.lastMicPreampForTest(), 0.99);
+    }
+
+    // ── 9. Cross-thread setter race — setVoxRun from main while pumping ────
+    //
+    // Companion test to (8) covering the MoxController-routed setter shape.
+    // The 7 MoxController → TxChannel connects added in commit a5b4585 use
+    // `receiver=m_txChannel` with lambdas wrapping the setter call (rather
+    // than the direct TransmitModel::micPreampChanged → setMicPreamp connect
+    // exercised by (8)).  Qt's AutoConnection picks QueuedConnection at
+    // emission time based on receiver thread affinity, so the lambda body
+    // runs on the worker thread.  This test confirms the lambda-connect
+    // pattern doesn't introduce a new race surface beyond the direct
+    // setter form already covered by (8).
+    //
+    // setVoxRun was picked because it's the simplest of the 7 (no scaling /
+    // unit conversion) — but the race surface is the same across
+    // setVoxAttackThreshold / setVoxHangTime / setAntiVoxGain / setAntiVoxRun
+    // / setRunning, all of which write a single Last-mirror field guarded
+    // only by WDSP's csDSP from the fexchange2 side.
+    void crossThreadSetter_voxRun_noCrash_finalValueLands()
+    {
+        AudioEngine engine;
+        TxChannel ch(kChannelId, kBufSize, kBufSize);
+        MockConnection conn;
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+
+        TxWorkerThread w;
+        w.setTxChannel(&ch);
+        w.setAudioEngine(&engine);
+
+        w.startPump();
+
+        // Hammer setVoxRun from main thread while worker is pumping.
+        // Toggle 100 times so the final value is deterministic.
+        constexpr int kIterations = 100;
+        for (int i = 0; i < kIterations; ++i) {
+            ch.setVoxRun((i % 2) == 0);
+        }
+
+        // Allow a few pump ticks to run.
+        QTest::qWait(20);
+
+        w.stopPump();
+        ch.moveToThread(this->thread());
+
+        // Final value: i==99 is odd → setVoxRun(false) was the last call.
+        QCOMPARE(ch.lastVoxRunForTest(), false);
     }
 };
 
