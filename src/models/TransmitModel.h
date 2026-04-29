@@ -32,6 +32,17 @@
 //                 setMicSource(MicSource::Radio) silently coerces to Pc.
 //                 NereusSDR-native, J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-04-28 — Two-tone test properties (B.2, Phase 3M-1c): TwoToneFreq1 /
+//                 TwoToneFreq2 / TwoToneLevel / TwoTonePower /
+//                 TwoToneFreq2Delay / TwoToneInvert / TwoTonePulsed (7x).
+//                 Defaults follow option C — Thetis Designer for Freq1/Freq2/
+//                 Invert and ranges, NereusSDR-original safer for Level/Power.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-28 — DrivePowerSource enum + TwoToneDrivePowerSource property
+//                 (B.3, Phase 3M-1c): full 3-value enum (DriveSlider /
+//                 TuneSlider / Fixed) ported from Thetis enums.cs:456-461;
+//                 default DriveSlider per console.cs:46553 [v2.10.3.13].
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -111,6 +122,31 @@ enum class VaxSlot {
 
 QString vaxSlotToString(VaxSlot s);
 VaxSlot vaxSlotFromString(const QString& s);
+
+// Drive-power source for the two-tone IMD test (and TUN button).
+//
+// From Thetis enums.cs:456-461 [v2.10.3.13]:
+//   public enum DrivePowerSource { DRIVE_SLIDER = 0, TUNE_SLIDER = 1, FIXED = 2 }
+//
+// Selects which power slider drives the radio during a two-tone test:
+//   DriveSlider — the regular drive-power slider (PWR).
+//   TuneSlider  — the dedicated tune-power slider (matches TUN behaviour).
+//   Fixed       — Setup-page-fixed power; saves PWR pre-MOX, applies the
+//                 fixed value during the test, restores PWR on stop.
+//
+// Default is DriveSlider per Thetis console.cs:46553 [v2.10.3.13]:
+//   private DrivePowerSource _2ToneDrivePowerSource = DRIVE_SLIDER;
+//
+// Phase 3M-1c B.3 ports the enum + a TransmitModel property; the actual
+// power-source-driven MOX behaviour wires up in Phase I (two-tone handler).
+enum class DrivePowerSource : int {
+    DriveSlider = 0,  ///< Drive (PWR) slider
+    TuneSlider  = 1,  ///< Tune slider
+    Fixed       = 2,  ///< Setup-page-fixed power; saves+restores PWR
+};
+
+QString drivePowerSourceToString(DrivePowerSource s);
+DrivePowerSource drivePowerSourceFromString(const QString& s);
 
 // Transmit state management.
 // Includes MOX, tune, TX frequency, power, mic gain, and PureSignal state.
@@ -593,6 +629,85 @@ public:
     /// Session-transient; AppSettings persistence deferred to Phase L.2.
     int pcMicBufferSamples() const noexcept { return m_pcMicBufferSamples; }
 
+    // ── Two-tone test properties (3M-1c B.2) ─────────────────────────────────
+    //
+    // Per-MAC AppSettings persistence with Thetis column names per design
+    // spec §4.4 / pre-code review §2.3.  Drives Setup → Test → Two-Tone page
+    // (chunk 2 part — Phase H) and the TxApplet 2-TONE button (Phase J).
+    //
+    // Default values follow option C (JJ 2026-04-28):
+    //   - Freq1 (700 Hz) / Freq2 (1900 Hz) — match Thetis Designer
+    //     + btnTwoToneF_defaults preset (setup.cs:34226-34227 [v2.10.3.13]).
+    //   - Level (-6 dB) / Power (50 %) — NereusSDR-original safer defaults
+    //     (Thetis Designer ships 0 dB / 10 %).
+    //   - Freq2Delay (0 ms) — matches Thetis Designer
+    //     (setup.Designer.cs:61943-61947 [v2.10.3.13]).
+    //   - Invert (true) — matches Thetis Designer chkInvertTones.Checked = true
+    //     (setup.Designer.cs:61963 [v2.10.3.13]); functionally correct on
+    //     LSB/CWL/DIGL per setup.cs:11058 [v2.10.3.13] conditional sign-flip.
+    //   - Pulsed (false) — matches Thetis Designer (no Checked= line at
+    //     setup.Designer.cs:61643-61653 [v2.10.3.13]).
+    //
+    // All ranges match Thetis Designer.  WDSP setters
+    // (TXPostGenMode / TXPostGenTTFreq1/2 / TXPostGenTTMag1/2 + pulse-profile)
+    // arrive in Phase E.  The two-tone activation handler (mode-aware invert,
+    // power-source enum, MOX engage) arrives in Phase I.
+
+    /// First test tone frequency (Hz).  Negative values valid; range matches
+    /// Thetis udTestIMDFreq1.Min/Max.
+    int twoToneFreq1() const noexcept { return m_twoToneFreq1; }
+
+    /// Second test tone frequency (Hz).
+    int twoToneFreq2() const noexcept { return m_twoToneFreq2; }
+
+    /// Two-tone test magnitude (dB).  Used in setup.cs:11056 [v2.10.3.13]:
+    ///   ttmag1 = ttmag2 = 0.49999 * pow(10, level / 20)
+    /// NereusSDR default -6 dB (Thetis Designer udTwoToneLevel.Value = 0 dB).
+    double twoToneLevel() const noexcept { return m_twoToneLevel; }
+
+    /// TX power (%) used during the two-tone test when
+    /// DrivePowerSource::Fixed (Phase B.3 enum) is active.
+    /// NereusSDR default 50 % (Thetis Designer udTestIMDPower.Value = 10 %).
+    int twoTonePower() const noexcept { return m_twoTonePower; }
+
+    /// Delay (ms) before Freq2 magnitude is applied during a two-tone run.
+    /// Defeats amplifier frequency-counters that latch on the first tone.
+    /// 0 = both tones applied simultaneously.
+    int twoToneFreq2Delay() const noexcept { return m_twoToneFreq2Delay; }
+
+    /// Whether to negate Freq1/Freq2 in LS modes (LSB/CWL/DIGL).  When true,
+    /// tones land at +Freq1/+Freq2 in the audio band on LSB; when false,
+    /// they appear mirrored at -Freq1/-Freq2.  Default true per
+    /// setup.Designer.cs:61963 [v2.10.3.13].
+    bool twoToneInvert() const noexcept { return m_twoToneInvert; }
+
+    /// Pulsed two-tone mode toggle.  When true, Phase I selects
+    /// TXPostGenMode=7 (pulsed) + setupTwoTonePulse() profile setters;
+    /// when false, TXPostGenMode=1 (continuous).
+    bool twoTonePulsed() const noexcept { return m_twoTonePulsed; }
+
+    /// Power-source selection for the two-tone test (Phase 3M-1c B.3).
+    /// Default DriveSlider matches Thetis console.cs:46553 [v2.10.3.13]:
+    ///   private DrivePowerSource _2ToneDrivePowerSource = DRIVE_SLIDER;
+    /// Phase I (two-tone activation handler) consumes this to decide
+    /// whether to save+override PWR (Fixed) or honor the user slider
+    /// (DriveSlider / TuneSlider) per setup.cs:11111-11119 [v2.10.3.13].
+    DrivePowerSource twoToneDrivePowerSource() const noexcept {
+        return m_twoToneDrivePowerSource;
+    }
+
+    // Two-tone range constants — all match Thetis Designer.
+    static constexpr int    kTwoToneFreq1HzMin      = -20000;  // setup.Designer.cs:62122-62126
+    static constexpr int    kTwoToneFreq1HzMax      =  20000;  // setup.Designer.cs:62117-62121
+    static constexpr int    kTwoToneFreq2HzMin      = -20000;  // setup.Designer.cs:62040-62044
+    static constexpr int    kTwoToneFreq2HzMax      =  20000;  // setup.Designer.cs:62035-62039
+    static constexpr double kTwoToneLevelDbMin      =  -96.0;  // setup.Designer.cs:61999-62003
+    static constexpr double kTwoToneLevelDbMax      =    0.0;  // setup.Designer.cs:61994-61998
+    static constexpr int    kTwoTonePowerMin        =      0;  // setup.Designer.cs:62069-62073
+    static constexpr int    kTwoTonePowerMax        =    100;  // setup.Designer.cs:62064-62068
+    static constexpr int    kTwoToneFreq2DelayMsMin =      0;  // setup.Designer.cs:61933-61937
+    static constexpr int    kTwoToneFreq2DelayMsMax =   1000;  // setup.Designer.cs:61928-61932
+
 public slots:
     void setMicGainDb(int dB);
 
@@ -671,6 +786,18 @@ public slots:
     void setVoxGainScalar(float scalar);
     void setVoxHangTimeMs(int ms);
 
+    // ── Two-tone setters (3M-1c B.2) ───────────────────────────────────────
+    void setTwoToneFreq1(int hz);
+    void setTwoToneFreq2(int hz);
+    void setTwoToneLevel(double db);
+    void setTwoTonePower(int pct);
+    void setTwoToneFreq2Delay(int ms);
+    void setTwoToneInvert(bool on);
+    void setTwoTonePulsed(bool on);
+
+    // ── Two-tone drive-power source (3M-1c B.3) ───────────────────────────
+    void setTwoToneDrivePowerSource(DrivePowerSource source);
+
 signals:
     void moxChanged(bool mox);
     void tuneChanged(bool tune);
@@ -723,6 +850,18 @@ signals:
     void pcMicDeviceNameChanged(const QString& name);
     /// Emitted when pcMicBufferSamples changes. Not emitted on idempotent calls.
     void pcMicBufferSamplesChanged(int samples);
+
+    // ── Two-tone signals (3M-1c B.2) ───────────────────────────────────────
+    void twoToneFreq1Changed(int hz);
+    void twoToneFreq2Changed(int hz);
+    void twoToneLevelChanged(double db);
+    void twoTonePowerChanged(int pct);
+    void twoToneFreq2DelayChanged(int ms);
+    void twoToneInvertChanged(bool on);
+    void twoTonePulsedChanged(bool on);
+
+    // ── Two-tone drive-power source signal (3M-1c B.3) ─────────────────────
+    void twoToneDrivePowerSourceChanged(DrivePowerSource source);
 
 private:
     bool m_mox{false};
@@ -806,6 +945,21 @@ private:
     int     m_pcMicHostApiIndex  = -1;      // -1 = OS default (PA resolves)
     QString m_pcMicDeviceName;              // empty = default device for host API
     int     m_pcMicBufferSamples = 512;     // ~10.7 ms @ 48 kHz reference rate
+
+    // ── Two-tone test properties (3M-1c B.2) ─────────────────────────────
+    // Defaults per design spec §4.4 / pre-code review §2.3 (option C).
+    int    m_twoToneFreq1      =   700;   // Designer + Defaults preset
+    int    m_twoToneFreq2      =  1900;   // Designer + Defaults preset
+    double m_twoToneLevel      =  -6.0;   // NereusSDR-original; Designer = 0 dB
+    int    m_twoTonePower      =    50;   // NereusSDR-original; Designer = 10 %
+    int    m_twoToneFreq2Delay =     0;   // matches Thetis Designer
+    bool   m_twoToneInvert     =  true;   // setup.Designer.cs:61963 [v2.10.3.13]
+    bool   m_twoTonePulsed     = false;   // setup.Designer.cs:61643-61653 (default)
+
+    // ── Two-tone drive-power source (3M-1c B.3) ──────────────────────────
+    // Default DriveSlider per Thetis console.cs:46553 [v2.10.3.13]:
+    //   private DrivePowerSource _2ToneDrivePowerSource = DRIVE_SLIDER;
+    DrivePowerSource m_twoToneDrivePowerSource{DrivePowerSource::DriveSlider};
 };
 
 } // namespace NereusSDR

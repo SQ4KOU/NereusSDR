@@ -1,3 +1,8 @@
+// no-port-check: AetherSDR-derived NereusSDR file; Thetis cmaster.cs /
+// audio.cs references in inline cites are behavioral source-first cites
+// for sample sizes / timing / mix coefficient parity only, not Thetis
+// logic ports.
+
 // =================================================================
 // src/core/AudioEngine.cpp  (NereusSDR)
 // =================================================================
@@ -75,6 +80,18 @@
 //                 in ctor with initial gain = m_txMonitorVolume default (0.5f).
 //                 setTxMonitorVolume now pushes gain updates to MasterMixer
 //                 via setSliceGain. Plan: 3M-1b E.3. Pre-code review §4.3 §4.4.
+//   2026-04-28 — Phase 3M-1c D.1 / D.2 by J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code. pullTxMic feeds a 720-sample
+//                 accumulator and emits micBlockReady on every full block.
+//                 clearMicBuffer() resets the accumulator (called on MOX-off
+//                 in Phase E). Source: Thetis cmaster.cs:493-518 [v2.10.3.13].
+//   2026-04-29 — Phase 3M-1c TX pump architecture redesign by J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.  Reverted the D.1 accumulator + D.2
+//                 clearMicBuffer + bench-fix-A pumpMic timer; pullTxMic
+//                 returns to a pure drain (no accumulator side effects).
+//                 TX pump now lives in src/core/TxWorkerThread.{h,cpp}.
+//                 Plan: docs/architecture/phase3m-1c-tx-pump-architecture-plan.md
 // =================================================================
 
 #include "AudioEngine.h"
@@ -168,6 +185,13 @@ AudioEngine::AudioEngine(QObject* parent)
     // atomically by setTxMonitorVolume via setSliceGain.
     // Plan: 3M-1b E.3. Pre-code review §4.3.
     m_masterMix.setSliceGain(kTxMonitorSlotId, m_txMonitorVolume.load(std::memory_order_relaxed), 0.0f);
+
+    // (Phase 3M-1c bench-fix-A added an m_micPumpTimer here that drove
+    //  pullTxMic at 5 ms cadence to keep the D.1 720-sample accumulator
+    //  ticking after the E.1 push-slot refactor dropped TxChannel's
+    //  QTimer.  The TX pump architecture redesign (2026-04-29) deleted
+    //  both the timer and the accumulator.  TX pump now lives in
+    //  src/core/TxWorkerThread.{h,cpp}, which calls pullTxMic directly.)
 }
 
 AudioEngine::~AudioEngine()
@@ -968,6 +992,23 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     }
 }
 
+bool AudioEngine::isPcMicOverrideActive() const noexcept
+{
+    // Phase 3M-1c TX pump v3 — both conditions must hold for the worker
+    // to overlay PC mic samples on radio mic samples:
+    //   - the user explicitly selected MicSource::Pc (m_micSourceWantsPc)
+    //   - we have an open TX-input bus to pull from
+    if (!m_micSourceWantsPc.load(std::memory_order_acquire)) {
+        return false;
+    }
+    return (m_txInputBus != nullptr) && m_txInputBus->isOpen();
+}
+
+void AudioEngine::onMicSourceChanged(bool selectedSourceIsPc)
+{
+    m_micSourceWantsPc.store(selectedSourceIsPc, std::memory_order_release);
+}
+
 int AudioEngine::pullTxMic(float* dst, int n)
 {
     // Plan: 3M-1b E.1. Pre-code review §0.3 (PcMicSource arch).
@@ -1023,6 +1064,10 @@ int AudioEngine::pullTxMic(float* dst, int n)
         }
     }
 
+    // Phase 3M-1c TX pump architecture redesign (2026-04-29): no
+    // accumulator side effects.  TxWorkerThread::onPumpTick is the
+    // sole caller and uses the returned sample count directly.
+
     return gotMonoSamples;
 }
 
@@ -1058,7 +1103,7 @@ void AudioEngine::setMoxState(bool active)
     // would not synchronize the read-side observation order on weak
     // memory models (ARM / Apple Silicon).
     //
-    // Wired by RadioModel (Phase L) to MoxController::moxChanged.
+    // Wired by RadioModel (Phase L) to MoxController::moxStateChanged.
     // No change-signal emitted — MOX state is authoritative in MoxController;
     // this is a cross-thread mirror only.
     m_moxActive.store(active, std::memory_order_release);

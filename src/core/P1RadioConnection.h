@@ -48,6 +48,7 @@
 namespace NereusSDR { class OcMatrix; }                  // forward decl — full header in .cpp
 namespace NereusSDR { class IoBoardHl2; }                // forward decl — full header in .cpp
 namespace NereusSDR { class HermesLiteBandwidthMonitor; }// forward decl — full header in .cpp
+namespace NereusSDR { class TxMicSource; }               // forward decl — full header in audio/TxMicSource.h
 
 #include <atomic>
 #include <memory>
@@ -95,6 +96,19 @@ public:
                               int numRx,
                               std::vector<std::vector<float>>& perRx) noexcept;
 
+    // Phase 3M-1c TX pump v3 overload — also extracts mic16 byte zone
+    // samples per Thetis networkproto1.c:393-411 [v2.10.3.13].  micOut
+    // receives the float-scaled mono mic samples for both subframes (in
+    // network order — subframe 0 first, then subframe 1).  Sample count
+    // == 2 * samplesPerSubframe at the operating sample rate.
+    //
+    // Backed by the same parser body as the 3-arg overload; the mic
+    // extraction is gated on a non-null micOut.
+    static bool parseEp6Frame(const quint8 frame[1032],
+                              int numRx,
+                              std::vector<std::vector<float>>& perRx,
+                              std::vector<float>* micOut) noexcept;
+
     // Wire RadioModel's OcMatrix so buildCodecContext() can source the OC
     // byte from maskFor(currentBand, mox) at C&C compose time.
     // Phase 3P-D Task 3 — called by RadioModel::connectToRadio().
@@ -112,6 +126,19 @@ public:
     // pointer and records ep6/ep2 bytes + calls tick() from the watchdog.
     // Null-safe — all call sites guard with if (m_bwMonitor).
     void setBandwidthMonitor(HermesLiteBandwidthMonitor* monitor);
+
+    // Phase 3M-1c TX pump v3: wire the radio-mic cadence source.
+    // The mic16 byte zone in EP6 frames (Thetis networkproto1.c:393-411
+    // [v2.10.3.13]) is decoded and pushed into TxMicSource::inbound() on
+    // every parsed EP6 frame.  Owned by RadioModel; this class keeps a
+    // non-owning pointer.  Null-safe.
+    //
+    // HL2 quirk: the HL2 has no mic jack, so the mic16 byte zone is all
+    // zeros — but the byte zone IS still present in EP6 frames at the
+    // documented offsets, so cadence still flows.  RadioModel forces the
+    // PC mic override on HL2 via setMicSourceLocked(true) so the mic16
+    // zeros never reach fexchange0.
+    void setTxMicSource(TxMicSource* src);
 
 public slots:
     void init() override;
@@ -234,6 +261,11 @@ private:
     // 25 ms watchdog tick for silence detection only. EP2 pacing has moved
     // to m_ep2PacerTimer (kEp2PacerIntervalMs) — see onEp2PacerTick.
     static constexpr int kWatchdogTickMs       = 25;            // watchdog silence-detection cadence
+    // Mic-frame LOS timeout — after this long without a successful mic16
+    // dispatch, inject a zero block into TxMicSource so the worker keeps
+    // ticking through silence.  Matches Thetis network.c:656 [v2.10.3.13]:
+    //   prn->wdt ? 3000 : WSA_INFINITE
+    static constexpr int kMicLosTimeoutMs      = 3000;
     // EP2 send cadence — target 381 pps (48 kHz audio / 126 samples per
     // EP2 frame) to match Thetis' sendProtocol1Samples semaphore-driven
     // audio clock. 2 ms PreciseTimer yields ~350-500 pps on Windows under
@@ -380,6 +412,18 @@ private:
     //   - onWatchdogTick(): tick() once per watchdog fire (via hl2CheckBandwidthMonitor)
     // Phase 3P-E Task 3.
     HermesLiteBandwidthMonitor* m_bwMonitor{nullptr};
+
+    // Non-owning pointer to RadioModel's TxMicSource.  Set via
+    // setTxMicSource() at connect time.  parseEp6Frame extracts mic16 bytes
+    // and pushes them via inbound(); onWatchdogTick injects a zero block
+    // after kMicLosTimeoutMs (3000 ms — Thetis network.c:656 [v2.10.3.13]).
+    // Phase 3M-1c TX pump v3.
+    TxMicSource* m_txMicSource{nullptr};
+
+    // Wall-clock timestamp of the last successful mic16 dispatch.  Drives
+    // LOS-zero injection at kMicLosTimeoutMs.  Reset on every successful
+    // parseEp6Frame mic dispatch.  Phase 3M-1c TX pump v3.
+    QDateTime m_lastMicAt;
 
     // Phase 3P-H Task 4: PA telemetry latches.
     // C0 cases 0x08/0x10/0x18 each carry only two of the six fields, so we

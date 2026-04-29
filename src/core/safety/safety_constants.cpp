@@ -95,6 +95,13 @@ PaScalingTriplet paScalingFor(HPSDRModel model) noexcept
     case HPSDRModel::ORIONMKII:
     case HPSDRModel::ANAN8000D:
         return { 0.08f, 5.0f, 18 };
+    // From mi0bot-Thetis console.cs:25269-25273 [@c26a8a4]
+    // MI0BOT: HL2 — HermesLite 2 PA scaling (NOT in upstream Thetis;
+    // upstream falls to default {0.09, 3.3, 6} causing ~16.7x fwd-power
+    // over-reading on HL2, which would trigger spurious SwrProtectionController
+    // TX-inhibits.  Discovered during 3M-1c chunk 0 desk-review against mi0bot.
+    case HPSDRModel::HERMESLITE:
+        return { 1.5f, 3.3f, 6 };
     // From Thetis console.cs:25049-25053 [v2.10.3.13]
     default:
         return { 0.09f, 3.3f, 6 };

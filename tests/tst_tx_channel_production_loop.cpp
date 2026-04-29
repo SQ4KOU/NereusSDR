@@ -28,10 +28,9 @@ warren@wpratt.com
 // tests/tst_tx_channel_production_loop.cpp  (NereusSDR)
 // =================================================================
 //
-// No Thetis code is ported in this test file. The production loop
-// logic (driveOneTxBlock) exercises:
+// No Thetis code is ported in this test file. The production loop logic
+// (driveOneTxBlock) exercises:
 //   - WDSP fexchange2 (wdsp/iobuffs.c [v2.10.3.13])
-//   - TxMicRouter::pullSamples (NereusSDR-original, TxMicRouter.h)
 //   - RadioConnection::sendTxIq (RadioConnection.h — abstract virtual)
 // Attribution for ported constants lives in TxChannel.h/cpp.
 //
@@ -40,6 +39,12 @@ warren@wpratt.com
 //   2026-04-26 — New test for Phase 3M-1a Task G.1 (TX I/Q production
 //                 loop bench fix). J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-04-28 — Phase 3M-1c E.1 — converted timer-driven tests to
+//                 synchronous tickForTest(samples, frames) push calls.
+//                 The QTimer was removed in E.1; tests that used to spin
+//                 QTest::qWait() to let timer ticks fire now drive the
+//                 push slot directly.  J.J. Boyd (KG4VCF), AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original test file. Exercises the production
@@ -49,6 +54,8 @@ warren@wpratt.com
 #include <QCoreApplication>
 #include <QObject>
 #include <QVector>
+
+#include <vector>
 
 #include "core/TxChannel.h"
 #include "core/TxMicRouter.h"
@@ -102,30 +109,23 @@ public:
     int lastN{0};
 };
 
-// ── CountingMicSource ───────────────────────────────────────────────────────
-// TxMicRouter that counts pullSamples() calls and writes a known pattern.
-class CountingMicSource : public TxMicRouter {
-public:
-    int pullSamples(float* dst, int n) override
-    {
-        ++callCount;
-        if (dst && n > 0) {
-            // Write a distinctive non-zero pattern so we can verify it was called.
-            for (int i = 0; i < n; ++i) {
-                dst[i] = 0.5f;
-            }
-            return n;
-        }
-        return 0;
-    }
-
-    int callCount{0};
-};
-
 // ── Test fixture ─────────────────────────────────────────────────────────────
 
 class TestTxChannelProductionLoop : public QObject {
     Q_OBJECT
+
+    static constexpr int kBufSize = 256;  // default inputBufferSize / outputBufferSize
+
+    // Build a non-zero block of size n — pushed via tickForTest to exercise
+    // the production slot synchronously.
+    static std::vector<float> ramp(int n)
+    {
+        std::vector<float> v(static_cast<size_t>(n));
+        for (int i = 0; i < n; ++i) {
+            v[static_cast<size_t>(i)] = static_cast<float>(i + 1);
+        }
+        return v;
+    }
 
 private slots:
 
@@ -147,7 +147,9 @@ private slots:
         ch.setConnection(nullptr);  // detach — no crash
     }
 
-    // Setting a null mic router must not crash.
+    // Setting a null mic router must not crash.  TxMicRouter is retained
+    // in 3M-1c E.1 for the future Radio-mic source path; the PC-mic path
+    // no longer pulls from it.
     void setMicRouter_null_doesNotCrash()
     {
         TxChannel ch(1);
@@ -165,212 +167,148 @@ private slots:
 
     // ── driveOneTxBlock — guard conditions ────────────────────────────────
 
-    // driveOneTxBlock() with no connection attached must not crash.
-    // (m_connection == nullptr guard path)
-    void driveOneTxBlock_noConnection_doesNotCrash()
+    // setRunning(true) without a connection must not crash.
+    void setRunning_noConnection_doesNotCrash()
     {
         TxChannel ch(1);
-        // Do not call setRunning(true) — driveOneTxBlock guards on m_running.
-        // We test the guard indirectly: set running but no connection so the
-        // null-connection guard fires before fexchange2.
-        // (Can't call driveOneTxBlock directly — it's private; use the timer
-        // by process-events after setRunning.)
         ch.setRunning(true);
-        // Immediately stop — no connection, so driveOneTxBlock returns early.
         ch.setRunning(false);
-        // No crash verifies the guard is intact.
     }
 
-    // driveOneTxBlock() with connection but no mic router must not crash.
-    // (m_micRouter == nullptr path — fills silence internally)
-    void driveOneTxBlock_noMicRouter_doesNotCrash()
+    // setRunning(true) with a connection but no router must not crash.
+    void setRunning_noMicRouter_doesNotCrash()
     {
         TxChannel ch(1);
         MockConnection conn;
         ch.setConnection(&conn);
-        // No mic router attached — driveOneTxBlock should silence-fill.
         ch.setRunning(true);
         ch.setRunning(false);
-        // No crash.
     }
 
-    // ── setRunning / timer start-stop ─────────────────────────────────────
+    // ── setRunning toggle cycles ───────────────────────────────────────────
 
-    // setRunning(true) starts the timer; setRunning(false) stops it.
-    // Indirect test: if the timer fires we'd see sendTxIq calls on the
-    // next event-loop spin.  We just verify no crash here.
     void setRunning_on_doesNotCrash_withConnection()
     {
         TxChannel ch(1);
         MockConnection conn;
-        NullMicSource src;
         ch.setConnection(&conn);
-        ch.setMicRouter(&src);
         ch.setRunning(true);
         ch.setRunning(false);
     }
 
-    // Repeated setRunning(true) / setRunning(false) cycles must not crash.
     void setRunning_toggleCycles_doesNotCrash()
     {
         TxChannel ch(1);
         MockConnection conn;
-        NullMicSource src;
         ch.setConnection(&conn);
-        ch.setMicRouter(&src);
         for (int i = 0; i < 5; ++i) {
             ch.setRunning(true);
             ch.setRunning(false);
         }
     }
 
-    // ── sendTxIq call reaches MockConnection ─────────────────────────────
-
-    // When running and a connection is attached, at least one timer tick
-    // should call sendTxIq on the mock.  We spin the event loop long enough
-    // for the 5 ms timer to fire at least once.
+    // ── Push slot drives sendTxIq ─────────────────────────────────────────
     //
-    // This test exercises the timer→driveOneTxBlock→sendTxIq chain in the
-    // unit-test build (no HAVE_WDSP → m_outInterleaved stays zero-filled,
-    // but sendTxIq is still called with n = kTxDspBufferSize).
-    void timerFires_sendsTxIq_toConnection()
+    // 3M-1c E.1: the QTimer is gone; tests now push samples via the
+    // tickForTest(samples, frames) seam.  One push -> one sendTxIq call.
+
+    void pushFullBlock_sendsTxIq_toConnection()
     {
         MockConnection conn;
-        NullMicSource src;
-        // Use a QCoreApplication-enabled test so the Qt event loop processes
-        // the QTimer::timeout signal.  QTest provides this via QTEST_MAIN.
-        {
-            TxChannel ch(1);
-            ch.setConnection(&conn);
-            ch.setMicRouter(&src);
-            ch.setRunning(true);
-
-            // Spin event loop for 30 ms — enough for ≥5 timer ticks at 5 ms.
-            QTest::qWait(30);
-
-            ch.setRunning(false);
-        }
-        // At least one sendTxIq call must have reached the mock.
-        QVERIFY(conn.callCount >= 1);
-        // Each call must pass n = outputBufferSize = 256 at 48 kHz in/out.
-        // 3M-1a r2-ring fix (2026-04-27): in_size raised 238 → 256 so it
-        // divides WDSP's ring sizes cleanly (iobuffs.c:577 == wrap requires
-        // exact divisibility).  Correct value is 256 = in_size × (outRate /
-        // inRate) = 256 × (48000/48000) for the P1 1:1 unit-test path.
-        QCOMPARE(conn.lastN, 256);
-    }
-
-    // ── sendTxIq count increases with timer ticks ─────────────────────────
-
-    // Multiple timer ticks → multiple sendTxIq calls.
-    void timerFires_multipleTimes()
-    {
-        MockConnection conn;
-        NullMicSource src;
-        {
-            TxChannel ch(1);
-            ch.setConnection(&conn);
-            ch.setMicRouter(&src);
-            ch.setRunning(true);
-            QTest::qWait(60);  // ≥12 ticks at 5 ms
-            ch.setRunning(false);
-        }
-        QVERIFY(conn.callCount >= 2);
-    }
-
-    // ── Stopping the timer halts sendTxIq ────────────────────────────────
-
-    // After setRunning(false), no further sendTxIq calls should occur.
-    void timerStopped_noMoreSendTxIq()
-    {
-        MockConnection conn;
-        NullMicSource src;
-        {
-            TxChannel ch(1);
-            ch.setConnection(&conn);
-            ch.setMicRouter(&src);
-            ch.setRunning(true);
-            QTest::qWait(30);
-            ch.setRunning(false);
-
-            const int countAfterStop = conn.callCount;
-            QTest::qWait(20);   // extra time — timer should be stopped
-            // No new calls after stop (allowing +1 in-flight tolerance).
-            QVERIFY(conn.callCount <= countAfterStop + 1);
-        }
-    }
-
-    // ── Null connection mid-flight: detach while running ──────────────────
-
-    // Detaching the connection while the timer is running must not crash.
-    // driveOneTxBlock() guards m_connection == nullptr before sendTxIq.
-    void detachConnection_whileRunning_doesNotCrash()
-    {
-        MockConnection conn;
-        NullMicSource src;
         TxChannel ch(1);
         ch.setConnection(&conn);
-        ch.setMicRouter(&src);
         ch.setRunning(true);
-        QTest::qWait(15);         // let a few ticks fire
-        ch.setConnection(nullptr); // detach mid-flight
-        QTest::qWait(15);         // additional ticks with null connection
+
+        const auto buf = ramp(kBufSize);
+        ch.tickForTest(buf.data(), kBufSize);
+
+        QCOMPARE(conn.callCount, 1);
+        // n = outputBufferSize = 256 at 48 kHz in/out.
+        QCOMPARE(conn.lastN, kBufSize);
+    }
+
+    // Multiple synchronous pushes → multiple sendTxIq calls.
+    void pushMultipleBlocks_yieldsMultipleSendTxIq()
+    {
+        MockConnection conn;
+        TxChannel ch(1);
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+
+        const auto buf = ramp(kBufSize);
+        for (int i = 0; i < 5; ++i) {
+            ch.tickForTest(buf.data(), kBufSize);
+        }
+
+        QCOMPARE(conn.callCount, 5);
+    }
+
+    // ── Stopping disarms the slot ─────────────────────────────────────────
+
+    // After setRunning(false), pushed samples are ignored (slot guard).
+    void slotIgnoresPushAfterStop()
+    {
+        MockConnection conn;
+        TxChannel ch(1);
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+
+        const auto buf = ramp(kBufSize);
+        ch.tickForTest(buf.data(), kBufSize);
         ch.setRunning(false);
-        // No crash verifies the null-guard in driveOneTxBlock.
+        ch.tickForTest(buf.data(), kBufSize);  // ignored — slot disarmed
+
+        QCOMPARE(conn.callCount, 1);
     }
 
-    // ── CountingMicSource is called by driveOneTxBlock ───────────────────
+    // ── Null connection mid-flight: detach and continue pushing ────────────
 
-    // When a CountingMicSource is attached, pullSamples() must be called
-    // at least once per timer tick.
-    void micRouter_pullSamples_isCalled()
+    void detachConnection_pushIsSilent()
     {
         MockConnection conn;
-        CountingMicSource src;
-        {
-            TxChannel ch(1);
-            ch.setConnection(&conn);
-            ch.setMicRouter(&src);
-            ch.setRunning(true);
-            QTest::qWait(30);   // ≥5 ticks
-            ch.setRunning(false);
-        }
-        QVERIFY(src.callCount >= 1);
+        TxChannel ch(1);
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+
+        const auto buf = ramp(kBufSize);
+        ch.tickForTest(buf.data(), kBufSize);
+        QCOMPARE(conn.callCount, 1);
+
+        ch.setConnection(nullptr);  // detach — slot now no-ops on push
+        ch.tickForTest(buf.data(), kBufSize);
+        QCOMPARE(conn.callCount, 1);
+
+        ch.setRunning(false);
     }
 
-    // ── Null mic router: driveOneTxBlock still sends zeros ───────────────
+    // ── Null mic router: silence push still drives sendTxIq ────────────────
+    //
+    // The TxMicRouter is no longer pulled from; the silence path is the
+    // explicit (nullptr, 0) push case for TUNE-tone PostGen output.
 
-    // With no mic router, driveOneTxBlock must still call sendTxIq
-    // (silence path — m_inI/inQ filled with zeros internally).
-    void nullMicRouter_stillSendsTxIq()
+    void nullSamples_stillSendsTxIq()
     {
         MockConnection conn;
-        {
-            TxChannel ch(1);
-            ch.setConnection(&conn);
-            // Deliberately no setMicRouter — null router path.
-            ch.setRunning(true);
-            QTest::qWait(30);
-            ch.setRunning(false);
-        }
-        QVERIFY(conn.callCount >= 1);
+        TxChannel ch(1);
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+
+        ch.tickForTest(nullptr, 0);
+
+        QCOMPARE(conn.callCount, 1);
     }
 
-    // ── setRunning(false) with null m_txProductionTimer: safety ──────────
+    // ── setRunning(false) before any setRunning(true): safety ──────────────
 
-    // This verifies setRunning(false) is safe even if called before timer
-    // is started (isRunning() stays false; no crash).
     void setRunningOff_noPriorOn_doesNotCrash()
     {
         TxChannel ch(1);
-        ch.setRunning(false);   // timer never started — no crash
+        ch.setRunning(false);
         QVERIFY(!ch.isRunning());
     }
 
     // ── Destroyed connection before TxChannel: graceful ───────────────────
 
-    // Simulate teardownConnection order: setConnection(nullptr) first, then
-    // destroy the connection.  No dangling-pointer access.
     void teardownOrder_connectionNullFirst_doesNotCrash()
     {
         TxChannel ch(1);
@@ -380,11 +318,14 @@ private slots:
             ch.setConnection(&conn);
             ch.setMicRouter(&src);
             ch.setRunning(true);
-            QTest::qWait(15);
-            ch.setConnection(nullptr);  // detach before connection leaves scope
+
+            const auto buf = ramp(kBufSize);
+            ch.tickForTest(buf.data(), kBufSize);
+
+            ch.setConnection(nullptr);
             ch.setMicRouter(nullptr);
             ch.setRunning(false);
-        } // conn destroyed here — ch.m_connection already null
+        }
         // No crash verifies safe teardown order.
     }
 };

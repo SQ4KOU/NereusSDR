@@ -241,6 +241,7 @@ mw0lge@grange-lane.co.uk
 #include "OcMatrix.h"
 #include "IoBoardHl2.h"
 #include "HermesLiteBandwidthMonitor.h"
+#include "audio/TxMicSource.h"
 #include "codec/P1CodecStandard.h"
 #include "codec/P1CodecAnvelinaPro3.h"
 #include "codec/P1CodecRedPitaya.h"
@@ -248,6 +249,7 @@ mw0lge@grange-lane.co.uk
 #include "codec/AlexFilterMap.h"
 #include "models/Band.h"
 
+#include <array>
 #include <cstdlib>
 #include <cstring>    // memset
 #include <vector>
@@ -809,7 +811,38 @@ void P1RadioConnection::setAttenuator(int dB)
     m_stepAttn[0] = dB;
 }
 void P1RadioConnection::setPreamp(bool enabled)              { m_rxPreamp[0] = enabled; }
-void P1RadioConnection::setTxDrive(int /*level*/)            { /* stub — Task 7 */ }
+// ---------------------------------------------------------------------------
+// setTxDrive — 3M-1c follow-up (HL2 bench triage 2026-04-29)
+//
+// Stores the TX drive level (0-255) and forces bank 10 onto the wire on the
+// next sendCommandFrame() so the new drive level reaches the radio within
+// ≤1 EP2 frame (~2.6 ms at 380.95 pps).
+//
+// Bank 10 C1 byte carries the drive level; the codec reads ctx.txDrive which
+// is sourced from m_txDrive in buildCodecContext.  Without this setter, the
+// drive level was silently fixed at zero and HL2 / Atlas / Hermes / Angelia /
+// Orion never produced RF on TUN or SSB.  The bug was latent because the
+// 3M-1b SSB voice bench tests ran on ANAN-G2 (P2), which has its own
+// setTxDrive on P2RadioConnection that always worked.
+//
+// From Thetis ChannelMaster/networkproto1.c:579 [v2.10.3.13]:
+//   C1 = prn->tx[0].drive_level & 0xFF;
+// From mi0bot networkproto1.c:1061 [@c26a8a4]: identical encoding.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setTxDrive(int level)
+{
+    const int clamped = qBound(0, level, 255);
+    if (m_txDrive == clamped) {
+        return;  // idempotent — wire emit already in flight via round-robin
+    }
+    m_txDrive = clamped;
+    // Codex P2 safety-effect pattern: force bank 10 on the next frame so
+    // the new drive level reaches the wire within ≤1 EP2 frame.  Without
+    // this, the round-robin schedule would defer bank 10 by up to 17
+    // frames (~45 ms), which is plenty long for a TUN tap to land mid-
+    // round-robin and never see a non-zero drive.
+    m_forceBank10Next = true;
+}
 
 // ---------------------------------------------------------------------------
 // setTxStepAttenuation — 3M-1a Task F.2
@@ -1413,6 +1446,42 @@ void P1RadioConnection::setBandwidthMonitor(HermesLiteBandwidthMonitor* monitor)
 }
 
 // ---------------------------------------------------------------------------
+// setTxMicSource — Phase 3M-1c TX pump v3
+//
+// Wires the RadioModel-owned TxMicSource into the connection.  Called by
+// RadioModel::connectToRadio() unconditionally (the source itself handles
+// HL2 mic16-zero quirks via the existing PC mic-source-locked mechanism).
+// The pointer is non-owning — lifetime is managed by RadioModel.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setTxMicSource(TxMicSource* src)
+{
+    // Caller contract: invoked on this connection's affinity thread.
+    // Today that is the main thread, because RadioModel::connectToRadio
+    // calls setTxMicSource at line 1764-1767 BEFORE the connection is
+    // moved to its worker thread at line 1842.  The assignment + the
+    // m_lastMicAt arming below therefore race-free with the connection-
+    // thread reads in onWatchdogTick / parseEp6Frame mic16 extraction.
+    // If a future refactor reorders these RadioModel calls, this
+    // function will need atomic / mutex protection.
+    m_txMicSource = src;
+
+    // Stage-2 review fix I3: arm the LOS timer at attach time so the
+    // 3 s zero-block injection (onWatchdogTick) fires even if the
+    // radio never delivers a mic frame.  Without this, m_lastMicAt
+    // stays default-constructed (invalid) and the mic-LOS guard at
+    // P1RadioConnection.cpp:1628 short-circuits forever — the worker
+    // would block on waitForBlock(INFINITE) with no recovery.
+    //
+    // Mirrors Thetis network.c:655-666 [v2.10.3.13] — WSA_WAIT_TIMEOUT
+    // injects zero buffer via Inbound regardless of whether real
+    // samples have been observed.  Setting m_lastMicAt = now here is
+    // equivalent to Thetis's implicit "the timer started counting the
+    // moment we attached", because the watchdog tick does
+    // sinceMicMs = now - m_lastMicAt > kMicLosTimeoutMs.
+    m_lastMicAt = QDateTime::currentDateTimeUtc();
+}
+
+// ---------------------------------------------------------------------------
 // parseI2cResponse — Phase 3P-E Task 2
 //
 // Called from the instance parseEp6Frame() when incoming C&C status byte C0
@@ -1602,6 +1671,23 @@ void P1RadioConnection::onWatchdogTick()
     // Source: mi0bot bandwidth_monitor.{c,h} — NereusSDR sequence-gap adaptation.
     if (m_caps && m_caps->hasBandwidthMonitor) {
         hl2CheckBandwidthMonitor();
+    }
+
+    // Phase 3M-1c TX pump v3: mic-frame LOS injection.
+    // Mirrors Thetis network.c:655-666 [v2.10.3.13] — when no UDP frame
+    // has arrived for 3000 ms, push a zero block into the TX inbound ring
+    // so the worker keeps ticking through silence (otherwise the worker
+    // would block forever on waitForBlock(INFINITE)).  We use mono-sample
+    // count == kBlockFrames so exactly one ring block is released.
+    if (m_txMicSource != nullptr && m_lastMicAt.isValid()) {
+        const qint64 sinceMicMs = m_lastMicAt.msecsTo(QDateTime::currentDateTimeUtc());
+        if (sinceMicMs > kMicLosTimeoutMs) {
+            std::array<float, TxMicSource::kBlockFrames> zeros{};
+            m_txMicSource->inbound(zeros.data(), TxMicSource::kBlockFrames);
+            // Reset the LOS timer so we inject one block per kMicLosTimeoutMs
+            // window (not one block per watchdog tick).
+            m_lastMicAt = QDateTime::currentDateTimeUtc();
+        }
     }
 
     // Silence detection applies to both Connected and Connecting states.
@@ -1952,9 +2038,15 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
     if (pkt.size() != 1032) { return; }
 
     std::vector<std::vector<float>> perRx;
+    std::vector<float> micSamples;
     const auto* frame = reinterpret_cast<const quint8*>(pkt.constData());
 
-    if (!P1RadioConnection::parseEp6Frame(frame, m_activeRxCount, perRx)) {
+    // Phase 3M-1c TX pump v3: extract mic16 byte zone alongside RX I/Q so
+    // the network thread is the cadence source for TX (matches Thetis
+    // network.c:655-666 [v2.10.3.13] which calls Inbound() for both rx and
+    // mic in lockstep with EP6 frame arrival).
+    std::vector<float>* micOut = (m_txMicSource != nullptr) ? &micSamples : nullptr;
+    if (!P1RadioConnection::parseEp6Frame(frame, m_activeRxCount, perRx, micOut)) {
         if (!m_parseFailLogged) {
             m_parseFailLogged = true;
             qCWarning(lcConnection) << "P1: parseEp6Frame rejected frame;"
@@ -2110,6 +2202,15 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
             }
             emit iqDataReceived(r, samples);
         }
+    }
+
+    // Phase 3M-1c TX pump v3: dispatch the extracted mic16 samples to
+    // TxMicSource as the cadence source for TxWorkerThread.  Mirrors
+    // Thetis networkproto1.c:410 [v2.10.3.13]:
+    //   Inbound(inid(1, 0), mic_sample_count, prn->TxReadBufp);
+    if (m_txMicSource != nullptr && !micSamples.empty()) {
+        m_txMicSource->inbound(micSamples.data(), static_cast<int>(micSamples.size()));
+        m_lastMicAt = QDateTime::currentDateTimeUtc();
     }
 }
 
@@ -2513,6 +2614,16 @@ bool P1RadioConnection::parseEp6Frame(const quint8 frame[1032],
                                        int numRx,
                                        std::vector<std::vector<float>>& perRx) noexcept
 {
+    // Delegate to the mic-aware overload with a null mic output (back-compat
+    // for callers / tests that don't care about the mic16 byte zone).
+    return parseEp6Frame(frame, numRx, perRx, /*micOut=*/nullptr);
+}
+
+bool P1RadioConnection::parseEp6Frame(const quint8 frame[1032],
+                                       int numRx,
+                                       std::vector<std::vector<float>>& perRx,
+                                       std::vector<float>* micOut) noexcept
+{
     // Validate numRx range (1..7 — Thetis supports up to 7 DDCs)
     if (numRx < 1 || numRx > 7) { return false; }
 
@@ -2538,6 +2649,11 @@ bool P1RadioConnection::parseEp6Frame(const quint8 frame[1032],
         v.reserve(static_cast<size_t>(samplesPerSubframe * 2 * 2));  // 2 subframes × 2 floats/sample
     }
 
+    if (micOut != nullptr) {
+        micOut->clear();
+        micOut->reserve(static_cast<size_t>(samplesPerSubframe * 2));
+    }
+
     // Parse one 512-byte subframe; sampleStart is the offset of the first sample
     // slot within the full 1032-byte datagram.
     // Source: networkproto1.c:366 — k = 8 + isample*(6*nddc+2) + iddc*6
@@ -2553,7 +2669,26 @@ bool P1RadioConnection::parseEp6Frame(const quint8 frame[1032],
                 perRx[static_cast<size_t>(r)].push_back(i);
                 perRx[static_cast<size_t>(r)].push_back(q);
             }
-            // Mic16 bytes at offset sampleStart + s*slotBytes + numRx*6 are skipped
+            // Mic16 bytes at offset sampleStart + s*slotBytes + numRx*6.
+            // From Thetis networkproto1.c:401-404 [v2.10.3.13] — extracts a
+            // 16-bit big-endian mic sample from the slot's last two bytes
+            // (Thetis decimates by mic_decimation_factor; at 48 ksps that's
+            // factor=1 and every sample is kept).  We always run at 48 ksps
+            // mic feed, so no decimation here.
+            //   prn->TxReadBufp[2 * mic_sample_count + 0] = const_1_div_2147483648_ *
+            //       (double)(bptr[k + 0] << 24 |
+            //                bptr[k + 1] << 16);
+            //   prn->TxReadBufp[2 * mic_sample_count + 1] = 0.0;
+            // Equivalent to: (int16)(bptr[k]<<8 | bptr[k+1]) / 32768.0  — both
+            // give the same float in [-1, +1].  We use the int16/32768 form
+            // because the bytes are signed 16-bit big-endian.
+            if (micOut != nullptr) {
+                const int micOff = sampleStart + s * slotBytes + numRx * 6;
+                const int16_t mic16 = static_cast<int16_t>(
+                    (static_cast<uint16_t>(frame[micOff]) << 8) |
+                    static_cast<uint16_t>(frame[micOff + 1]));
+                micOut->push_back(static_cast<float>(mic16) / 32768.0f);
+            }
         }
     };
 

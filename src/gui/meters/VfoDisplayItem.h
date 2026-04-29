@@ -81,6 +81,7 @@ public:
     void setFilterLabel(const QString& label) { m_filterLabel = label; }
     void setBandLabel(const QString& label) { m_bandLabel = label; }
     void setTransmitting(bool tx) { m_transmitting = tx; }
+    bool isTransmitting() const noexcept { return m_transmitting; }
     void setSplit(bool split) { m_split = split; }
 
     void setFrequencyColour(const QColor& c) { m_freqColour = c; }

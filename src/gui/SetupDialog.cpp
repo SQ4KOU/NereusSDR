@@ -30,6 +30,10 @@
 #include "setup/DiagnosticsSetupPages.h"
 #include "diagnostics/RadioStatusPage.h"
 #include "diagnostics/DiagnosticsPhaseHPages.h"
+// Test (Phase 3M-1c H.1: Two-Tone IMD page)
+#include "setup/TestTwoTonePage.h"
+// TX Profile editor (Phase 3M-1c J.3 — under Audio)
+#include "setup/TxProfileSetupPage.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -192,6 +196,20 @@ void SetupDialog::buildTree()
     addWrapped(audio, "VAX",      wrapWithAudioBackendStrip(new AudioVaxPage(m_model)));
     addWrapped(audio, "TCI",      wrapWithAudioBackendStrip(new AudioTciPage(m_model)));
     addWrapped(audio, "Advanced", wrapWithAudioBackendStrip(new AudioAdvancedPage(m_model)));
+    // Phase 3M-1c J.3: TX Profile editor.
+    //
+    // 3M-1c L.1 update: RadioModel now constructs MicProfileManager in its
+    // ctor (per RadioModel::m_micProfileMgr in RadioModel.cpp), so this page
+    // gets the live manager pointer at SetupDialog construction time.  The
+    // manager itself is per-MAC scoped — setMacAddress + load() run inside
+    // RadioModel::connectToRadio().  Before any radio has connected the
+    // manager is unscoped and every mutator silently no-ops; the page still
+    // renders correctly (combo is empty) and Setup → TX Profile is harmless.
+    add(audio, "TX Profile",
+        new TxProfileSetupPage(
+            m_model,
+            m_model ? m_model->micProfileManager() : nullptr,
+            m_model ? &m_model->transmitModel() : nullptr));
 
     // ── DSP ───────────────────────────────────────────────────────────────────
     QTreeWidgetItem* dsp = addCategory("DSP");
@@ -238,6 +256,11 @@ void SetupDialog::buildTree()
     // ── Keyboard ──────────────────────────────────────────────────────────────
     QTreeWidgetItem* keyboard = addCategory("Keyboard");
     add(keyboard, "Shortcuts", new KeyboardShortcutsPage);
+
+    // ── Test ──────────────────────────────────────────────────────────────────
+    // Phase 3M-1c H.1: top-level Test category for the Two-Tone IMD page.
+    QTreeWidgetItem* test = addCategory("Test");
+    add(test, "Two-Tone IMD", new TestTwoTonePage(m_model));
 
     // ── Diagnostics ───────────────────────────────────────────────────────────
     QTreeWidgetItem* diagnostics = addCategory("Diagnostics");

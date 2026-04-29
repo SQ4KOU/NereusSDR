@@ -366,9 +366,12 @@ set(CORE_SOURCES
     src/core/WdspEngine.cpp
     src/core/RxChannel.cpp
     src/core/TxChannel.cpp
+    src/core/TxWorkerThread.cpp
     src/core/NbFamily.cpp
     src/core/NbFamily.h
     src/core/MoxController.cpp
+    src/core/MicProfileManager.cpp
+    src/core/TwoToneController.cpp
     src/core/FFTEngine.cpp
     src/core/NoiseFloorEstimator.cpp
     src/core/NoiseFloorTracker.cpp
@@ -390,6 +393,7 @@ set(CORE_SOURCES
     src/core/audio/CompositeTxMicRouter.cpp
     src/core/audio/PortAudioBus.cpp
     src/core/audio/QAudioSinkAdapter.cpp
+    src/core/audio/TxMicSource.cpp
     src/core/audio/VirtualCableDetector.cpp
     src/core/safety/BandPlanGuard.cpp
     src/core/safety/SwrProtectionController.cpp
@@ -562,6 +566,8 @@ set(GUI_SOURCES
     src/gui/setup/AudioBackendStrip.cpp
     src/gui/setup/AudioDevicesPage.cpp
     src/gui/setup/AudioTxInputPage.cpp
+    src/gui/setup/TestTwoTonePage.cpp
+    src/gui/setup/TxProfileSetupPage.cpp
     src/gui/setup/AudioTciPage.cpp
     src/gui/setup/AudioVaxPage.cpp
     src/gui/setup/DeviceCard.cpp

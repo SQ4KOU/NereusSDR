@@ -33,6 +33,16 @@ nereus_add_test(tst_reading_name)
 nereus_add_test(tst_meter_item_scale)
 nereus_add_test(tst_meter_presets)
 
+# ── Phase 3M-1c G.1 / G.2: VfoDisplayItem TX-state badge + Phase L routing ──
+# Verifies the existing 3G-8 widget machinery (setTransmitting / isTransmitting
+# round-trip + paint() colour-swap rendered to QImage) AND demonstrates the
+# Phase L wiring lambda that will dispatch MoxController::moxChanged(int rx,
+# bool, bool) to per-VFO setTransmitting based on the rx index semantic from
+# pre-code review §6.5 ((rx2_enabled && vfobTx) ? 2 : 1).  Routing tests connect
+# directly to MoxController and drive setMox to exercise the Pre/Post emit
+# walk completion.
+nereus_add_test(tst_vfo_display_item_tx_badge)
+
 # ── Phase 3G-9b clarity defaults invariants ───────────────────────────────
 nereus_add_test(tst_clarity_defaults)
 
@@ -279,6 +289,46 @@ nereus_add_test(tst_transmit_model_mon)
 # multi-MAC isolation, bulk persistToSettings round-trip, and auto-persist
 # no-op before loadFromSettings.
 nereus_add_test(tst_transmit_model_persistence)
+
+# ── Phase 3M-1c B.2: TransmitModel two-tone test properties (7x) ────────────
+# Verifies defaults, round-trip setters + signals, idempotent guards, and
+# range clamping for: TwoToneFreq1 / TwoToneFreq2 / TwoToneLevel /
+# TwoTonePower / TwoToneFreq2Delay / TwoToneInvert / TwoTonePulsed.
+# Defaults follow option C: NereusSDR-original safer numerics for Level/Power
+# (-6 dB / 50%); Thetis-Designer-aligned for Invert (true) and ranges.
+# Source: setup.Designer.cs:61920-62136 [v2.10.3.13] (Designer init values
+# for the 7 controls); setup.cs:11019-11200 (handler context).
+nereus_add_test(tst_transmit_model_two_tone_properties)
+
+# ── Phase 3M-1c B.3: TransmitModel TwoToneDrivePowerSource enum property ─────
+# Verifies default (DriveSlider) + 3-value enum coverage (DriveSlider /
+# TuneSlider / Fixed) + signal emission + idempotent guard +
+# string-conversion helpers (drivePowerSourceToString / fromString).
+# Source: enums.cs:456-461 [v2.10.3.13] (enum definition; 3 values, not 2 —
+# pre-code review §2.3 abbreviated as "Fixed / Slider" but Thetis has 3);
+# console.cs:46553 [v2.10.3.13] (default DRIVE_SLIDER);
+# setup.cs:11111-11119 [v2.10.3.13] (Fixed-mode behaviour reference).
+nereus_add_test(tst_transmit_model_two_tone_drive_origin)
+
+# ── Phase 3M-1c F: MicProfileManager (load/save/delete/setActive) ────────────
+# Verifies the per-MAC mic-profile-bank API: F.1 class skeleton + load/save,
+# F.2 save with overwrite + comma-strip, F.3 delete with last-profile guard
+# (verbatim Thetis warning string preserved), F.4 setActiveProfile applies
+# values back to TransmitModel + persists active key, F.5 first-launch
+# "Default" profile seed (23 documented defaults), F.6 per-MAC isolation
+# (two MACs maintain independent profile lists).
+# Source: setup.cs:9505-9656 [v2.10.3.13] (Thetis comboTXProfileName /
+# btnTXProfileSave_Click / btnTXProfileDelete_Click handlers).
+nereus_add_test(tst_mic_profile_manager)
+
+# ── Phase 3M-1c chunk I (I.1-I.5): TwoToneController activation handler ────
+# Verifies the chkTestIMD_CheckedChanged port (setup.cs:11040-11191
+# [v2.10.3.13]): power-on precondition, MOX cycle-off-then-on flow,
+# TXPostGen setter ordering, continuous vs pulsed branch, 0.49999 magnitude
+# scaling, mode-aware invert, Freq2Delay deferred Mag2, DrivePowerSource::Fixed
+# snapshot/restore of PWR, and BandPlanGuard rejection cleanup (via
+# the existing 3M-1b K.1 SSB-mode allow-list rule).
+nereus_add_test(tst_two_tone_controller)
 
 # ── Phase 3O VAX schema migration ─────────────────────────────────────────
 nereus_add_test(tst_app_settings_vax_migration)
@@ -822,6 +872,20 @@ target_compile_definitions(tst_p1_mox_wire PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_p1_trx_relay_wire)
 target_compile_definitions(tst_p1_trx_relay_wire PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1c HL2 bench triage (2026-04-29): P1 setTxDrive wire-byte ───────
+# 12 tests assert that bank 10 C1 carries the drive level set via setTxDrive().
+#
+# Bug fix: setTxDrive(int) was a no-op stub from 3M-1a; m_txDrive stayed at 0
+# forever, so HL2 (and every P1 family member) silently shipped with zero TX
+# drive and produced no RF on TUN or SSB.  PR #149 SSB voice bench tests ran
+# only on ANAN-G2 (P2), masking the latent P1 stub.
+#
+# Standard and HL2 codec paths share the bank-10 C1 encoding per
+# Thetis networkproto1.c:579 [v2.10.3.13] (= mi0bot @c26a8a4 line 1061);
+# both codec paths exercised below.
+nereus_add_test(tst_p1_drive_level_wire)
+target_compile_definitions(tst_p1_drive_level_wire PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1a Task E.5: P1 RUNSTOP watchdog wire-byte snapshot ─────────────
 # 12 tests assert that pkt[3] bit 7 of the RUNSTOP packet correctly encodes
 # m_watchdogEnabled (inverted: 0=enabled, 1=disabled) per HL2 firmware.
@@ -1161,6 +1225,31 @@ nereus_add_test(tst_mox_controller_anti_vox)
 #   console.cs:26680 [v2.10.3.13] (SPACE); enums.cs:346-359 [v2.10.3.13].
 #   Pre-code review §0.3 + master design §5.2.1.
 nereus_add_test(tst_mox_controller_ptt_source_dispatch)
+
+# ── Phase 3M-1c Tasks C.2 / C.3 / C.4: MoxController multicast Pre/Post signals ─
+# Verifies the new 3-arg Pre/Post MOX state-change signals that future
+# observers (PS form, TCI server, MeterPoller, audio recorder, etc.) plug into:
+#   moxChanging(int rx, bool oldMox, bool newMox) — Pre, before m_mox commit;
+#     subscribers can defensively freeze readings.
+#   moxChanged (int rx, bool oldMox, bool newMox) — Post, after the timer
+#     walk completes (parallels the existing 1-arg moxStateChanged boundary).
+#
+# Coverage:
+#   §1.1  Pre fires before m_mox commit (isMox() inside slot returns OLD value);
+#   §1.2  Post fires after timer walk with correct oldMox/newMox payload;
+#   §1.3  Pre→Post ordering across a full RX→TX cycle;
+#   §2.1  rx == 1 when rx2_enabled=false, vfobTx=false (default);
+#   §2.2  rx == 1 when rx2_enabled=true,  vfobTx=false (RX2 alone is not a TX route);
+#   §2.3  rx == 1 when rx2_enabled=false, vfobTx=true;
+#   §2.4  rx == 2 when rx2_enabled=true,  vfobTx=true (TX off VFO-B via RX2);
+#   §3.1  Idempotent setMox(false) on fresh controller emits neither Pre nor Post;
+#   §4.1  TX→RX direction Post carries oldMox=true, newMox=false.
+#
+# The existing 1-arg moxStateChanged(bool) signal is unchanged — the 3-arg
+# moxChanged is an additive overload (Pre/Post overlay), not a rename.
+# Source: Thetis console.cs:29324 [v2.10.3.13] (MoxPreChangeHandlers, // MW0LGE_21k8);
+#   console.cs:29677 [v2.10.3.13] (MoxChangeHandlers, // MW0LGE_21a).
+nereus_add_test(tst_mox_controller_multicast_signals)
 
 # ── Phase 3M-1b Task H.5: mic_ptt extraction from P1/P2 status frames ─────────
 # Verifies end-to-end mic_ptt extraction and dispatch through MoxController.
@@ -1509,6 +1598,120 @@ nereus_add_test(tst_tx_channel_meters)
 # Pre-code review: §0.3 (PcMicSource arch).
 nereus_add_test(tst_audio_engine_pull_tx_mic)
 target_compile_definitions(tst_audio_engine_pull_tx_mic PRIVATE NEREUS_BUILD_TESTS)
+
+# (Phase 3M-1c D.1/D.2 + L.4 — tst_audio_engine_mic_block_ready and
+#  tst_mic_re_blocker — were dropped by the TX pump architecture
+#  redesign on 2026-04-29.  The 720-sample mic accumulator and
+#  720→256 re-blocker they tested were deleted along with their
+#  underlying classes.  See plan §5.3.)
+
+# ── Phase 3M-1c TX pump architecture redesign: TxWorkerThread ────────────
+# Verifies the new worker-thread pump that replaces D.1/E.1/L.4 + bench
+# fixes.  Test cases (8):
+#   - constructDestruct_clean
+#   - startPump_withoutDeps_warns_andStaysStopped
+#   - startStop_lifecycle_isRunningTracksThread
+#   - tickForTest_drivesOneSendTxIq_whenBusHasFullBlock
+#   - tickForTest_drivesFexchange2_onEmptyBus_zeroFilled
+#   - tickForTest_zeroFillsGap_whenBusPartial
+#   - realWorker_pumpCadence_approx5ms
+#   - crossThreadSetter_noCrash_finalValueLands
+# Plan: docs/architecture/phase3m-1c-tx-pump-architecture-plan.md §5.4.
+nereus_add_test(tst_tx_worker_thread)
+target_compile_definitions(tst_tx_worker_thread PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1c TX pump v3 — TxMicSource (Thetis Inbound/cm_main port) ──
+# Verifies the ring + semaphore primitives that source the worker's
+# cadence from radio mic frames.  Test cases (8):
+#   - constructStartStop_clean
+#   - waitForBlock_returnsFalse_beforeAnyInbound
+#   - inbound_oneBlock_releasesOneSemaphore_drainYieldsSamples
+#   - inbound_threeBlocks_releasesThreeSemaphores
+#   - inbound_wrapAware_preservesSampleOrder
+#   - inbound_partialBlock_doesNotReleaseUntilComplete
+#   - stop_unblocksConsumer_inWaitForBlockInfinite
+#   - concurrent_producerConsumer_noDataCorruption
+nereus_add_test(tst_tx_mic_source)
+target_compile_definitions(tst_tx_mic_source PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1c TX pump v3 — P1 EP6 mic16 extraction ────────────────────
+# Verifies the static parseEp6Frame mic-aware overload extracts the
+# mic16 byte zone correctly from synthetic EP6 frames; covers the
+# normal mic16 path, the HL2 mic16-zeros quirk, and backward-compat
+# with the existing 3-arg overload.
+nereus_add_test(tst_p1_mic_extraction)
+target_compile_definitions(tst_p1_mic_extraction PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1c TX pump v3 — P2 port-1026 mic frame decoder ─────────────
+# Verifies the static decodeMicFrame132 helper used by the port-1026
+# dispatch path.  Hand-crafted 132-byte frames; covers the normal data
+# path, zero data, and wrong-size rejection.
+nereus_add_test(tst_p2_mic_frame)
+target_compile_definitions(tst_p2_mic_frame PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1c E.1: TxChannel push-driven refactor ─────────────────────
+# Verifies the QTimer-driven pull model is gone and the (samples, frames)
+# push slot is the single fexchange2 entry point.  Test cases (7):
+#   - pushFullBlock_drivesOneSendTxIq            — full block → 1 fexchange2
+#   - pushNullSamples_stillDrivesSendTxIq        — TUNE silence path
+#   - pushMismatchedFrameCount_skipsFexchange2   — contract violation: warn + skip
+#   - tickForTest_isSynchronousPushEntryPoint    — 2 ticks → 2 sendTxIq
+#   - noTimer_doesNotFireWithoutPush             — no QTimer dispatches
+#   - pushWhileNotRunning_isNoOp                 — !running guard
+#   - pushWithNullConnection_isNoOp              — null-connection guard
+# Pre-code review: Phase 3M-1c E.1.
+nereus_add_test(tst_tx_channel_push_driven)
+target_compile_definitions(tst_tx_channel_push_driven PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1c E.1: TxChannel zero-fill workaround removal ─────────────
+# Verifies the 1b353f4 partial-read zero-fill workaround is gone in the
+# push-driven model.  Test cases (4):
+#   - thirtyPushCycles_yieldThirtySendTxIqCalls   — no missed cycles
+#   - inIBufferMatchesPushedSamplesExactly        — no zero-fill contamination
+#   - inQBufferStaysZeroAcrossCycles              — Q=0 over 5 cycles
+#   - nullPush_zeroFillsInputBuffers              — silence path correctness
+# Pre-code review: Phase 3M-1c E.1.
+nereus_add_test(tst_tx_channel_no_zero_fill)
+target_compile_definitions(tst_tx_channel_no_zero_fill PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-1c E.2-E.6: TXA PostGen wrapper setters ────────────────────
+#
+# Twelve thin C++ wrappers over the WDSP `SetTXAPostGen*` family that drive
+# the gen1 (TXA stage 22) two-tone IMD test source.
+#
+# Setters under test:
+#   E.2: setTxPostGenMode(int)                      → SetTXAPostGenMode
+#                                                     [setup.cs:11084/11096 v2.10.3.13]
+#   E.3: setTxPostGenTTFreq1(double)                → SetTXAPostGenTTFreq
+#        setTxPostGenTTFreq2(double)                  [setup.cs:11099-11100 v2.10.3.13]
+#        setTxPostGenTTMag1(double)                 → SetTXAPostGenTTMag
+#        setTxPostGenTTMag2(double)                   [setup.cs:11102-11103 v2.10.3.13]
+#   E.4: setTxPostGenTTPulseToneFreq1(double)       → SetTXAPostGenTTPulseToneFreq
+#        setTxPostGenTTPulseToneFreq2(double)         [setup.cs:11087-11088 v2.10.3.13]
+#        setTxPostGenTTPulseMag1(double)            → SetTXAPostGenTTPulseMag
+#        setTxPostGenTTPulseMag2(double)              [setup.cs:11090-11091 v2.10.3.13]
+#   E.5: setTxPostGenTTPulseFreq(int)               → SetTXAPostGenTTPulseFreq
+#        setTxPostGenTTPulseDutyCycle(double)       → SetTXAPostGenTTPulseDutyCycle
+#        setTxPostGenTTPulseTransition(double)      → SetTXAPostGenTTPulseTransition
+#                                                     [setup.cs:34415-34417 v2.10.3.13]
+#   E.6: setTxPostGenRun(bool)                      → SetTXAPostGenRun
+#                                                     [setup.cs:11107/11166 v2.10.3.13]
+#
+# Test strategy: pure smoke / does-not-crash, matching the convention
+# established by tst_tx_channel_tune_tone.cpp.  The Freq1/Freq2 / Mag1/Mag2
+# split-property cache is exercised via the mixedCallSequence regression
+# tests (continuous + pulsed) plus a zero-values stress test.
+#
+# Test cases (15):
+#   E.2 mode: off, continuous (mode=1), pulsed (mode=7) — 3 cases
+#   E.3 continuous TT: setTxPostGenTTFreq1/Freq2/Mag1/Mag2 typical — 4 cases
+#   E.4 pulsed TT:     setTxPostGenTTPulseToneFreq1/Freq2/Mag1/Mag2 — 4 cases
+#   E.5 pulse profile: setTxPostGenTTPulseFreq/DutyCycle/Transition — 3 cases
+#   E.6 run:          setTxPostGenRun on/off — 2 cases
+#   Cache integrity: continuousTT_mixedCallSequence + pulsedTT_mixedCallSequence
+#   Edge: setters_zeroValues_doNotCrash
+# (15 individual private-slot test methods total.)
+nereus_add_test(tst_tx_channel_tx_post_gen_setters)
 
 # Plan: 3M-1b E.2. Exercises AudioEngine TX monitor enable + volume state
 # (setTxMonitorEnabled / setTxMonitorVolume / signals / clamping / idempotency).
@@ -2011,4 +2214,62 @@ target_compile_definitions(tst_radio_model_3m1b_ownership PRIVATE NEREUS_BUILD_T
 #   simulateDisconnectForTest.
 nereus_add_test(tst_radio_model_mic_source_hl2_force)
 target_compile_definitions(tst_radio_model_mic_source_hl2_force PRIVATE NEREUS_BUILD_TESTS)
+
+# =============================================================================
+# Phase 3M-1c Task H — Setup → Test → Two-Tone IMD page (TestTwoTonePage)
+# =============================================================================
+# Covers:
+#   1.    Constructor doesn't crash with default RadioModel.
+#   2.    Initial widget values match TransmitModel two-tone defaults
+#         (8 properties: 5 numeric + 2 booleans + DrivePowerSource enum).
+#   3-3f. UI → Model round trips (7 numeric / boolean controls).
+#   4-4b. Model → UI round trips (QSignalBlocker prevents feedback loops).
+#   5.    Defaults preset button → Freq1=700 / Freq2=1900 only (Level/Power
+#         unchanged, matching Thetis btnTwoToneF_defaults_Click semantics).
+#   6.    Stealth preset button → Freq1=70 / Freq2=190.
+#   7.    Invert checkbox initial state checked (twoToneInvert default true).
+#   8.    Pulsed checkbox initial state unchecked (twoTonePulsed default false).
+#   9.    DrivePowerSource radio button two-way sync
+#         (model→UI: Fixed enum selects Fixed radio; UI→model: TuneSlider
+#         click sets enum; UI→model: Fixed click sets enum).
+nereus_add_test(tst_test_two_tone_page)
+
+# =============================================================================
+# Phase 3M-1c Task J — TxApplet TX-Profile combo + 2-TONE button (J.1+J.2)
+# =============================================================================
+# Covers (TxApplet wiring tests):
+#   - Combo accessor present after construction.
+#   - Combo populated from MicProfileManager on injection.
+#   - User-driven combo change calls setActiveProfile.
+#   - profileListChanged refreshes combo entries.
+#   - activeProfileChanged updates combo selection programmatically without
+#     echo back into setActiveProfile.
+#   - Right-click on combo emits TxApplet::txProfileMenuRequested signal
+#     (mirrors Thetis comboTXProfile_MouseDown — console.cs:44519-44522
+#     [v2.10.3.13]).
+#   - 2-TONE button accessor present, checkable, visible.
+#   - 2-TONE button tooltip mentions "two-tone" + "Setup".
+#   - Click dispatches TwoToneController::setActive(true/false).
+#   - twoToneActiveChanged signal mirrors back into the button checked state.
+#   - setTwoToneController(nullptr) doesn't crash on click.
+nereus_add_test(tst_tx_applet_profile_combo)
+
+# =============================================================================
+# Phase 3M-1c Task J — Setup → Audio → TX Profile editor (J.3+J.4)
+# =============================================================================
+# Covers (TxProfileSetupPage):
+#   - Constructor doesn't crash with default RadioModel + injected pointers.
+#   - Combo populated from MicProfileManager.
+#   - Save button: new name calls saveProfile.
+#   - Save button: empty / whitespace name is no-op.
+#   - Save button: existing name + overwrite=Yes overwrites.
+#   - Save button: existing name + overwrite=No is a no-op.
+#   - Delete button: calls deleteProfile and combo shrinks.
+#   - Delete button: last-remaining shows verbatim Thetis string and refuses.
+#   - J.4: programmatic combo change does NOT trigger unsaved-prompt.
+#   - J.4: simulated user combo change DOES trigger prompt when dirty.
+#   - J.4: prompt Yes saves before switching.
+#   - J.4: prompt No discards before switching.
+#   - J.4: prompt Cancel reverts the combo to the original selection.
+nereus_add_test(tst_tx_profile_setup_page)
 
