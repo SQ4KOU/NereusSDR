@@ -43,6 +43,10 @@
 //                 setMicSource(MicSource::Radio) silently coerces to Pc.
 //                 NereusSDR-native, J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-04-28 — Two-tone test properties (B.2, Phase 3M-1c): 7 setter
+//                 implementations + per-MAC AppSettings load/persist for
+//                 TwoToneFreq1/Freq2/Level/Power/Freq2Delay/Invert/Pulsed.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -524,6 +528,35 @@ void TransmitModel::loadFromSettings(const QString& mac)
                                     ? MicSource::Radio
                                     : MicSource::Pc;
     setMicSource(micSource);
+
+    // ── Two-tone test properties (3M-1c B.2) ──────────────────────────────
+    // Defaults per design spec §4.4 (option C):
+    //   Freq1=700, Freq2=1900 — match Thetis Designer + btnTwoToneF_defaults.
+    //   Level=-6, Power=50    — NereusSDR-original safer (Designer 0/10).
+    //   Freq2Delay=0          — match Thetis Designer.
+    //   Invert=true           — Designer chkInvertTones.Checked = true.
+    //   Pulsed=false          — Designer (no Checked= line).
+    const int twoToneFreq1 = s.value(pfx + QLatin1String("TwoToneFreq1"),
+                                       QStringLiteral("700")).toInt();
+    setTwoToneFreq1(twoToneFreq1);
+    const int twoToneFreq2 = s.value(pfx + QLatin1String("TwoToneFreq2"),
+                                       QStringLiteral("1900")).toInt();
+    setTwoToneFreq2(twoToneFreq2);
+    const double twoToneLevel = s.value(pfx + QLatin1String("TwoToneLevel"),
+                                         QStringLiteral("-6")).toDouble();
+    setTwoToneLevel(twoToneLevel);
+    const int twoTonePower = s.value(pfx + QLatin1String("TwoTonePower"),
+                                      QStringLiteral("50")).toInt();
+    setTwoTonePower(twoTonePower);
+    const int twoToneFreq2Delay = s.value(pfx + QLatin1String("TwoToneFreq2Delay"),
+                                           QStringLiteral("0")).toInt();
+    setTwoToneFreq2Delay(twoToneFreq2Delay);
+    const bool twoToneInvert = s.value(pfx + QLatin1String("TwoToneInvert"),
+                                        QStringLiteral("True")).toString() == QLatin1String("True");
+    setTwoToneInvert(twoToneInvert);
+    const bool twoTonePulsed = s.value(pfx + QLatin1String("TwoTonePulsed"),
+                                        QStringLiteral("False")).toString() == QLatin1String("True");
+    setTwoTonePulsed(twoTonePulsed);
 }
 
 void TransmitModel::persistToSettings(const QString& mac) const
@@ -558,6 +591,15 @@ void TransmitModel::persistToSettings(const QString& mac) const
     // ── Mic source ────────────────────────────────────────────────────────
     s.setValue(pfx + QLatin1String("Mic_Source"),
                m_micSource == MicSource::Radio ? QStringLiteral("Radio") : QStringLiteral("Pc"));
+
+    // ── Two-tone test properties (3M-1c B.2) ──────────────────────────────
+    s.setValue(pfx + QLatin1String("TwoToneFreq1"),       QString::number(m_twoToneFreq1));
+    s.setValue(pfx + QLatin1String("TwoToneFreq2"),       QString::number(m_twoToneFreq2));
+    s.setValue(pfx + QLatin1String("TwoToneLevel"),       QString::number(m_twoToneLevel));
+    s.setValue(pfx + QLatin1String("TwoTonePower"),       QString::number(m_twoTonePower));
+    s.setValue(pfx + QLatin1String("TwoToneFreq2Delay"),  QString::number(m_twoToneFreq2Delay));
+    s.setValue(pfx + QLatin1String("TwoToneInvert"),      m_twoToneInvert ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("TwoTonePulsed"),      m_twoTonePulsed ? QStringLiteral("True") : QStringLiteral("False"));
 }
 
 // ── Anti-VOX properties (3M-1b C.4) ─────────────────────────────────────────
@@ -714,6 +756,81 @@ void TransmitModel::setVoxHangTimeMs(int ms)
     m_voxHangTimeMs = clamped;
     persistOne(QStringLiteral("VOX_HangTime"), QString::number(m_voxHangTimeMs));  // L.2 auto-persist
     emit voxHangTimeMsChanged(clamped);
+}
+
+// ── Two-tone test properties (3M-1c B.2) ────────────────────────────────────
+//
+// Per-MAC AppSettings persistence with Thetis column names per design spec
+// §4.4.  WDSP setters (TXPostGenMode / TXPostGenTTFreq1/2 / TXPostGenTTMag1/2
+// + pulse-profile setters) arrive in Phase E.  The two-tone activation
+// handler (mode-aware invert, power-source enum, MOX engage) arrives in
+// Phase I.  Setters here just store + signal + auto-persist.
+
+void TransmitModel::setTwoToneFreq1(int hz)
+{
+    // Clamp to Thetis Designer range per setup.Designer.cs:62117-62126 [v2.10.3.13].
+    const int clamped = std::clamp(hz, kTwoToneFreq1HzMin, kTwoToneFreq1HzMax);
+    if (clamped == m_twoToneFreq1) { return; }
+    m_twoToneFreq1 = clamped;
+    persistOne(QStringLiteral("TwoToneFreq1"), QString::number(m_twoToneFreq1));
+    emit twoToneFreq1Changed(clamped);
+}
+
+void TransmitModel::setTwoToneFreq2(int hz)
+{
+    // Clamp to Thetis Designer range per setup.Designer.cs:62035-62044 [v2.10.3.13].
+    const int clamped = std::clamp(hz, kTwoToneFreq2HzMin, kTwoToneFreq2HzMax);
+    if (clamped == m_twoToneFreq2) { return; }
+    m_twoToneFreq2 = clamped;
+    persistOne(QStringLiteral("TwoToneFreq2"), QString::number(m_twoToneFreq2));
+    emit twoToneFreq2Changed(clamped);
+}
+
+void TransmitModel::setTwoToneLevel(double db)
+{
+    // Clamp to Thetis Designer range per setup.Designer.cs:61994-62003 [v2.10.3.13].
+    const double clamped = std::clamp(db, kTwoToneLevelDbMin, kTwoToneLevelDbMax);
+    // qFuzzyIsNull(diff) zero-boundary-safe idempotent guard (matches MON pattern).
+    if (qFuzzyIsNull(clamped - m_twoToneLevel)) { return; }
+    m_twoToneLevel = clamped;
+    persistOne(QStringLiteral("TwoToneLevel"), QString::number(m_twoToneLevel));
+    emit twoToneLevelChanged(clamped);
+}
+
+void TransmitModel::setTwoTonePower(int pct)
+{
+    // Clamp to Thetis Designer range per setup.Designer.cs:62064-62073 [v2.10.3.13].
+    const int clamped = std::clamp(pct, kTwoTonePowerMin, kTwoTonePowerMax);
+    if (clamped == m_twoTonePower) { return; }
+    m_twoTonePower = clamped;
+    persistOne(QStringLiteral("TwoTonePower"), QString::number(m_twoTonePower));
+    emit twoTonePowerChanged(clamped);
+}
+
+void TransmitModel::setTwoToneFreq2Delay(int ms)
+{
+    // Clamp to Thetis Designer range per setup.Designer.cs:61928-61937 [v2.10.3.13].
+    const int clamped = std::clamp(ms, kTwoToneFreq2DelayMsMin, kTwoToneFreq2DelayMsMax);
+    if (clamped == m_twoToneFreq2Delay) { return; }
+    m_twoToneFreq2Delay = clamped;
+    persistOne(QStringLiteral("TwoToneFreq2Delay"), QString::number(m_twoToneFreq2Delay));
+    emit twoToneFreq2DelayChanged(clamped);
+}
+
+void TransmitModel::setTwoToneInvert(bool on)
+{
+    if (on == m_twoToneInvert) { return; }
+    m_twoToneInvert = on;
+    persistOne(QStringLiteral("TwoToneInvert"), on ? QStringLiteral("True") : QStringLiteral("False"));
+    emit twoToneInvertChanged(on);
+}
+
+void TransmitModel::setTwoTonePulsed(bool on)
+{
+    if (on == m_twoTonePulsed) { return; }
+    m_twoTonePulsed = on;
+    persistOne(QStringLiteral("TwoTonePulsed"), on ? QStringLiteral("True") : QStringLiteral("False"));
+    emit twoTonePulsedChanged(on);
 }
 
 // ── Mic source (3M-1b I.1) ────────────────────────────────────────────────────

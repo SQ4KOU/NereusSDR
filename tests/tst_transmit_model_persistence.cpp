@@ -165,6 +165,60 @@ private slots:
         QCOMPARE(t.micSource(), MicSource::Pc);
     }
 
+    // ── Two-tone test properties (3M-1c B.2) — first-run defaults ────────────
+
+    void firstRunDefaults_twoToneFreq1_700()
+    {
+        TransmitModel t;
+        t.loadFromSettings(kMacA);
+        QCOMPARE(t.twoToneFreq1(), 700);
+    }
+
+    void firstRunDefaults_twoToneFreq2_1900()
+    {
+        TransmitModel t;
+        t.loadFromSettings(kMacA);
+        QCOMPARE(t.twoToneFreq2(), 1900);
+    }
+
+    void firstRunDefaults_twoToneLevel_minus6()
+    {
+        TransmitModel t;
+        t.loadFromSettings(kMacA);
+        // NereusSDR-original safer default (Thetis Designer = 0 dB).
+        QCOMPARE(t.twoToneLevel(), -6.0);
+    }
+
+    void firstRunDefaults_twoTonePower_50()
+    {
+        TransmitModel t;
+        t.loadFromSettings(kMacA);
+        // NereusSDR-original (Thetis Designer = 10 %).
+        QCOMPARE(t.twoTonePower(), 50);
+    }
+
+    void firstRunDefaults_twoToneFreq2Delay_0()
+    {
+        TransmitModel t;
+        t.loadFromSettings(kMacA);
+        QCOMPARE(t.twoToneFreq2Delay(), 0);
+    }
+
+    void firstRunDefaults_twoToneInvert_true()
+    {
+        TransmitModel t;
+        t.loadFromSettings(kMacA);
+        // setup.Designer.cs:61963 [v2.10.3.13]: Checked = true.
+        QVERIFY(t.twoToneInvert());
+    }
+
+    void firstRunDefaults_twoTonePulsed_false()
+    {
+        TransmitModel t;
+        t.loadFromSettings(kMacA);
+        QVERIFY(!t.twoTonePulsed());
+    }
+
     // =========================================================================
     // §2  Round-trip per persisted key (15 cases)
     //     Set a non-default value, verify AppSettings has the key, then
@@ -353,6 +407,94 @@ private slots:
         TransmitModel t2;
         t2.loadFromSettings(kMacA);
         QCOMPARE(t2.micSource(), MicSource::Radio);
+    }
+
+    // ── Two-tone test properties (3M-1c B.2) — round-trip ────────────────────
+
+    void roundTrip_twoToneFreq1()
+    {
+        {
+            TransmitModel t;
+            t.loadFromSettings(kMacA);
+            t.setTwoToneFreq1(800);  // flip from default 700
+        }
+        const QString key = QStringLiteral("hardware/%1/tx/TwoToneFreq1").arg(kMacA);
+        QCOMPARE(AppSettings::instance().value(key).toString(), QStringLiteral("800"));
+        TransmitModel t2;
+        t2.loadFromSettings(kMacA);
+        QCOMPARE(t2.twoToneFreq1(), 800);
+    }
+
+    void roundTrip_twoToneFreq2()
+    {
+        {
+            TransmitModel t;
+            t.loadFromSettings(kMacA);
+            t.setTwoToneFreq2(2100);  // flip from default 1900
+        }
+        TransmitModel t2;
+        t2.loadFromSettings(kMacA);
+        QCOMPARE(t2.twoToneFreq2(), 2100);
+    }
+
+    void roundTrip_twoToneLevel()
+    {
+        {
+            TransmitModel t;
+            t.loadFromSettings(kMacA);
+            t.setTwoToneLevel(-12.5);  // flip from default -6
+        }
+        TransmitModel t2;
+        t2.loadFromSettings(kMacA);
+        QCOMPARE(t2.twoToneLevel(), -12.5);
+    }
+
+    void roundTrip_twoTonePower()
+    {
+        {
+            TransmitModel t;
+            t.loadFromSettings(kMacA);
+            t.setTwoTonePower(75);  // flip from default 50
+        }
+        TransmitModel t2;
+        t2.loadFromSettings(kMacA);
+        QCOMPARE(t2.twoTonePower(), 75);
+    }
+
+    void roundTrip_twoToneFreq2Delay()
+    {
+        {
+            TransmitModel t;
+            t.loadFromSettings(kMacA);
+            t.setTwoToneFreq2Delay(250);  // flip from default 0
+        }
+        TransmitModel t2;
+        t2.loadFromSettings(kMacA);
+        QCOMPARE(t2.twoToneFreq2Delay(), 250);
+    }
+
+    void roundTrip_twoToneInvert()
+    {
+        {
+            TransmitModel t;
+            t.loadFromSettings(kMacA);
+            t.setTwoToneInvert(false);  // flip from default true
+        }
+        TransmitModel t2;
+        t2.loadFromSettings(kMacA);
+        QVERIFY(!t2.twoToneInvert());
+    }
+
+    void roundTrip_twoTonePulsed()
+    {
+        {
+            TransmitModel t;
+            t.loadFromSettings(kMacA);
+            t.setTwoTonePulsed(true);  // flip from default false
+        }
+        TransmitModel t2;
+        t2.loadFromSettings(kMacA);
+        QVERIFY(t2.twoTonePulsed());
     }
 
     // =========================================================================

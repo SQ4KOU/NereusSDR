@@ -280,6 +280,16 @@ nereus_add_test(tst_transmit_model_mon)
 # no-op before loadFromSettings.
 nereus_add_test(tst_transmit_model_persistence)
 
+# ── Phase 3M-1c B.2: TransmitModel two-tone test properties (7x) ────────────
+# Verifies defaults, round-trip setters + signals, idempotent guards, and
+# range clamping for: TwoToneFreq1 / TwoToneFreq2 / TwoToneLevel /
+# TwoTonePower / TwoToneFreq2Delay / TwoToneInvert / TwoTonePulsed.
+# Defaults follow option C: NereusSDR-original safer numerics for Level/Power
+# (-6 dB / 50%); Thetis-Designer-aligned for Invert (true) and ranges.
+# Source: setup.Designer.cs:61920-62136 [v2.10.3.13] (Designer init values
+# for the 7 controls); setup.cs:11019-11200 (handler context).
+nereus_add_test(tst_transmit_model_two_tone_properties)
+
 # ── Phase 3O VAX schema migration ─────────────────────────────────────────
 nereus_add_test(tst_app_settings_vax_migration)
 
