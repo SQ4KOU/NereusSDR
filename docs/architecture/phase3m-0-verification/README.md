@@ -217,3 +217,79 @@ When bench rows complete, edit the Result column to `✅` with the commit SHA wh
 | M.1 | (full ctest sweep) | 221/221 tests green on `26eca01` |
 | M.6 | (this matrix update) | Verification matrix extended with 17 rows (3M-1b) |
 | M.7 | (TBD) | Post-code Thetis review (`phase3m-1b-post-code-review.md`) |
+
+---
+
+# Phase 3M-1c Polish & Persistence — Verification Matrix Extension
+
+Added 2026-04-29 as part of M.6.  Manual rows tagged `[3M-1c-bench-*]` need
+hardware (HL2 + ANAN-G2 dummy load + USB headset/mic) and are deferred to
+JJ.  Unit-test rows are auto-checked by ctest and pass on commit `c26358e`
+(236/236).
+
+## New rows
+
+| # | Test | Hardware | Procedure | Expected | Result |
+|---|---|---|---|---|---|
+| 31 | TransmitModel two-tone properties (B.2) | none | `ctest -R '^tst_transmit_model_two_tone_properties$' -V` | All 36 cases pass: 7 default values (Freq1=700, Freq2=1900, Level=-6 dB, Power=50%, Freq2Delay=0, Invert=true, Pulsed=false) match Thetis Designer + option C decisions; round-trip + idempotent + range clamping for all 5 numeric properties; constants match Thetis-Designer-derived ranges. | ✅ |
+| 32 | TransmitModel two-tone drive-power-source enum (B.3) | none | `ctest -R '^tst_transmit_model_two_tone_drive_origin$' -V` | All 16 cases pass: 3-value enum (DriveSlider=0, TuneSlider=1, Fixed=2) ports verbatim from Thetis enums.cs:456-461 [v2.10.3.13]; default DriveSlider matches console.cs:46553; toString/fromString helpers cover all values + unknown-string fallback. | ✅ |
+| 33 | TransmitModel persistence covers two-tone keys (B.2 + B.3) | none | `ctest -R '^tst_transmit_model_persistence$' -V` | All 60+ cases pass: 15 mic/VOX/MON keys (Thetis column names) + 7 two-tone keys + 1 drive-power enum key all round-trip per-MAC. First-launch defaults match the F.5 default-profile table. | ✅ |
+| 34 | MoxController multicast Pre/Post signals (C.2-C.4) | none | `ctest -R '^tst_mox_controller_multicast_signals$' -V` | All 9 cases pass: moxChanging fires before m_mox state change; moxChanged 3-arg fires after timer-walk completion alongside the existing moxStateChanged(bool); int rx semantic = (rx2_enabled && vfobTx) ? 2 : 1 (4 truth-table cells covered); idempotent guard suppresses both Pre and Post on same-value setMox; verbatim MW0LGE_21k8 + MW0LGE_21a author tags preserved per CLAUDE.md inline-tag rule. | ✅ |
+| 35 | AudioEngine 720-sample mic block accumulator (D.1/D.2) | none | `ctest -R '^tst_audio_engine_mic_block_ready$' -V` | All 8 cases pass: kMicBlockFrames=720 matches Thetis cmaster.cs:495 [v2.10.3.13]; emit fires on every full 720-sample accumulation (not on partials); 1440 input → 2 emits; clearMicBuffer drops partial fill so post-clear 360-sample push restarts accumulator from 0; samples received in order. | ✅ |
+| 36 | TxChannel push-driven refactor (E.1) | none | `ctest -R '^tst_tx_channel_push_driven$\|^tst_tx_channel_no_zero_fill$' -V` | All 11 cases pass: driveOneTxBlock(samples, frames) slot signature; nullptr-samples silence path drives fexchange2 anyway (TUNE-tone PostGen); mismatched-frame-count push (e.g., 720 vs m_inputBufferSize=256) rejected with qCWarning; QTimer dropped (compile-time enforced via field absence); zero-fill workaround removed; no silent frames in 30 cycles of valid input. | ✅ |
+| 37 | TxChannel TXA PostGen wrapper setters (E.2-E.6) | none | `ctest -R '^tst_tx_channel_tx_post_gen_setters$' -V` | All 19 cases pass: 12 wrappers (setTxPostGenMode, setTxPostGenTTFreq1/2, setTxPostGenTTMag1/2, setTxPostGenTTPulseToneFreq1/2, setTxPostGenTTPulseMag1/2, setTxPostGenTTPulseFreq, setTxPostGenTTPulseDutyCycle, setTxPostGenTTPulseTransition, setTxPostGenRun) all callable on a default-constructed TxChannel without crash; cache-and-recall pattern preserves Thetis radio.cs:3697-3771 [v2.10.3.13] partner-value semantics for the 4 paired Freq1/Freq2 + Mag1/Mag2 setters. | ✅ |
+| 38 | MicProfileManager (F.1-F.6) | none | `ctest -R '^tst_mic_profile_manager$' -V` | All 18 cases pass: load/save/delete/setActive round-trip; comma-strip TCI safety on save name; verbatim Thetis "It is not possible to delete the last remaining TX profile" warning preserved; per-MAC isolation; first-launch "Default" seed with all 23 documented values; 19 deferred factory profiles correctly NOT created. | ✅ |
+| 39 | VFO Flag TX badge + Phase L routing pattern (G.1/G.2) | none | `ctest -R '^tst_vfo_display_item_tx_badge$' -V` | All 9 cases pass: setTransmitting/isTransmitting round-trip; render-time pixel sample at the badge stripe matches m_rxColour (LimeGreen) when off and m_txColour (Red) when on; custom txColour honoured; routing lambda dispatches based on rx index from MoxController moxChanged 3-arg signal (rx=1→VFO-A, rx=2→VFO-B per Thetis console.cs:29677 [v2.10.3.13] semantic). | ✅ |
+| 40 | Setup → Test → Two-Tone page (H.1-H.3) | none | `ctest -R '^tst_test_two_tone_page$' -V` | All 16 cases pass: page constructs without crash; 8 controls bind bidirectionally to the 8 TransmitModel two-tone properties (5 spinboxes + 2 checkboxes + 3-button radio group); QSignalBlocker prevents Model→UI feedback loops; Defaults preset sets only Freq1=700/Freq2=1900 (other 6 properties unchanged); Stealth preset sets Freq1=70/Freq2=190; verbatim Thetis tooltips preserved on chkInvertTones + udFreq2Delay; DrivePowerSource radio group round-trips all 3 enum values. | ✅ |
+| 41 | TwoToneController activation handler (I.1-I.5) | none | `ctest -R '^tst_two_tone_controller$' -V` | All 14 cases pass: power-on gate; MOX cycle-off with 200ms settle non-blocking via QTimer::singleShot (verbatim MW0LGE_21a author tag preserved); 0.49999 magnitude scaling literal preserved at TwoToneController.cpp:241; LSB/CWL/DIGL invert sign-flip; pulsed (mode=7) vs continuous (mode=1) branch with full TXPostGen setter sequences + TXPostGenTTPulseIQOut=true for pulsed; setTxPostGenRun fires last in activation, first in deactivation (after 200ms settle); BandPlanGuard rejection cleans up m_active=false via moxRejected slot; verbatim MW0LGE_22b author tag preserved on power-source switching. | ✅ |
+| 42 | TxApplet profile combo + 2-TONE button (J.1/J.2) | none | `ctest -R '^tst_tx_applet_profile_combo$' -V` | All 15 cases pass: combo populated from MicProfileManager::profileNames(); selection triggers setActiveProfile via setMicProfileManager() pointer plumbing; refresh on profileListChanged + activeProfileChanged with QSignalBlocker; right-click emits txProfileMenuRequested signal; 2-TONE button toggle calls TwoToneController::setActive; controller's twoToneActiveChanged signal mirrors back to button visual (e.g., BandPlanGuard rejection un-checks the button). | ✅ |
+| 43 | Setup → TX Profile editor page (J.3/J.4) | none | `ctest -R '^tst_tx_profile_setup_page$' -V` | All 16 cases pass: combo populated from MicProfileManager; Save flow with InputDialog mock + non-empty validation + overwrite confirmation; Delete flow with verbatim Thetis last-profile-guard message; focus-gated unsaved-changes Yes/No/Cancel prompt (programmatic combo changes don't trigger; user-driven dirty changes do); 23-signal dirty-flag subscription cleared on save/load. | ✅ |
+| 44 | Initial-state-sync audit (K.1/K.2) | none | (no dedicated test target; covered by integration via tst_audio_engine_tx_monitor_block + tst_radio_model_3m1b_ownership) | The 2 missing pushes for AudioEngine::setTxMonitorEnabled and setTxMonitorVolume after their connect() calls in connectToRadio (mirrors the L.1 micPreamp push at 1841462) close the audit gap that was carried forward from 3M-1b. Push for monEnabled is functionally a no-op (always loads false per safety policy); push for monitorVolume is load-bearing (DOES persist; default 0.5 from audio.cs:417 [v2.10.3.13]). | ✅ |
+| 45 | MicReBlocker 720→256 (L.4) | none | `ctest -R '^tst_mic_re_blocker$' -V` | All 8 cases pass: re-blocker accumulates AudioEngine::micBlockReady (720 frames per emit) into 256-sample slices and re-emits to TxChannel::driveOneTxBlock; samples preserved in order across slice boundaries; reset() drops partial accumulation; cross-thread safety via Qt::DirectConnection. | ✅ |
+| 46 | Two-tone test continuous mode `[3M-1c-bench-G2]` | ANAN-G2 + dummy load + spectrum analyser | Tune to 14.200 MHz LSB. Setup → Test → Two-Tone: confirm Freq1=700, Freq2=1900, Level=-6 dB, Power=50%, Pulsed=unchecked, Invert=checked. TxApplet 2-TONE button → engages MOX. Read spectrum analyser. | Two clean tones at +700 / +1900 Hz audio offset; no spurious products in the SSB pass-band; PA forward power ~50% of dummy-load rating; 3rd-order intermod products visible at expected −10·log10(2) below carrier. Click 2-TONE off → MOX cleanly releases. | |
+| 47 | Two-tone test pulsed mode `[3M-1c-bench-G2]` | ANAN-G2 + dummy load + spectrum analyser | Same as row 46 but check Pulsed=true. Engage 2-TONE. | Pulsed envelope visible on spectrum analyser at the configured pulse rate; carrier still on Freq1+Freq2 audio tones; pulse cadence audible. | |
+| 48 | Two-tone test on LSB-family invert `[3M-1c-bench-G2]` | ANAN-G2 + spectrum analyser | Tune to LSB → engage 2-TONE → check Invert=true → tones land at +Freq1/+Freq2 (audio band positive). Toggle Invert=false → tones flip to −Freq1/−Freq2 (mirrored). | Invert toggle flips spectral position of the two tones in LSB mode only. USB mode shows no change on invert toggle. | |
+| 49 | Two-tone test BandPlanGuard rejection `[3M-1c-bench]` | any radio + dummy load | Tune to CW (CWL or CWU). Click 2-TONE button. | BandPlanGuard rejects the activation (toast message: "CW TX coming in Phase 3M-2"); 2-TONE button visually un-checks (controller emitted twoToneActiveChanged(false) on the moxRejected slot). | |
+| 50 | Profile save/load/restart-app round-trip `[3M-1c-bench-G2]` | ANAN-G2 | Setup → TX Profile → save profile "BenchA" with non-default mic gain + VOX threshold + monitor volume. Quit app. Relaunch. Setup → TX Profile → switch to "BenchA". Verify all 23 keys restored. | All values from BenchA propagate to TransmitModel; meters reflect the loaded state; subsequent SSB transmission uses the loaded mic gain. | |
+| 51 | Mic-jack flag persistence in profile `[3M-1c-bench-G2]` | ANAN-G2 | Save profile "MicJackTest" with non-default Mic_Input_Boost + Mic_XLR + Line_Input_On + Mic_Bias + Mic_TipRing. Switch to Default. Switch back to MicJackTest. Wireshark cross-check the radio-side P2 byte-50 + P1 bank-10/11 frames before and after. | Mic-jack bit positions in the wire frames change only when the profile-load completes, NOT mid-load (atomic). After load, the saved bits are visible on the wire. | |
+| 52 | VFO Flag TX badge live `[3M-1c-bench]` | any radio + dummy load | Engage MOX (PTT or 2-TONE). Watch the VFO Flag widget on the panadapter. | Left-edge badge stripe colour changes from m_rxColour (LimeGreen) to m_txColour (Red) at the moment moxChanged fires (after the timer-walk completes), and back to LimeGreen at MOX off. | |
+
+## Carry-forward flips from 3M-1b
+
+| Row | Change |
+|---|---|
+| 3M-1b row 17 (VOX voice-family mode-gate) | Stays ✅; 3M-1c didn't touch the VOX mode-gate. |
+| 3M-1b row 18 (anti-VOX path-agnostic) | Stays ✅; 3M-1c didn't touch the anti-VOX path. |
+| 3M-1b row 21 (TransmitModel persistence) | Expanded — 3M-1c B.1 renamed 15 keys to Thetis column names; B.2/B.3 added 8 more persisted keys. tst_transmit_model_persistence now covers 23 keys total. |
+| 3M-1b row 24 (PC mic SSB out) | Carries forward — 3M-1c E.1 push-driven refactor changes the TX pump from QTimer to AudioEngine::micBlockReady → MicReBlocker → TxChannel slot. Bench-verify TX path still produces clean SSB. |
+
+## Result tracking
+
+Rows 31-45 (unit tests, 15 rows): ✅ all green on commit `c26358e` (236/236).
+Rows 46-52 (bench tests, 7 rows): pending JJ + hardware.
+
+When bench rows complete, edit the Result column to `✅` with the commit SHA where the row was confirmed.
+
+## Phase 3M-1c commit summary (added 2026-04-29 by M.6)
+
+| Phase | Commits | Summary |
+|---|---|---|
+| Pre-code (A) | `81ff57e` + `a8fb2d3` + `a79a158` + `cf93ab6` + `69c4054` + `45ae619` + `4a17b05` + `81ccb7e` | Design spec + chunk 0 HL2 desk-review + 2 absorbed safety fixes + pre-code Thetis review + plan |
+| B.1 | `bd9af67` | TransmitModel rename of 15 NereusSDR-original keys → Thetis column names |
+| B.2 | `10098ed` | 7 TransmitModel two-tone properties (Freq1/Freq2/Level/Power/Freq2Delay/Invert/Pulsed) |
+| B.3 | `ecc456b` | DrivePowerSource 3-value enum + TwoToneDrivePowerSource property |
+| C.1 | `48a8234` | C.1 finalize — update 4 stale MoxController::moxChanged refs (rename was done earlier) |
+| C.2-C.4 | `516682f` | MoxController multicast Pre/Post signals (moxChanging + moxChanged 3-arg) + int rx semantic |
+| D.1/D.2 | `12130cf` | AudioEngine micBlockReady signal + clearMicBuffer slot + 720-sample accumulator |
+| E.1 | `63d54a5` | TxChannel push-driven refactor (slot signature + drop QTimer + drop zero-fill workaround) |
+| E.2-E.6 | `4be9e63` | 12 TXA PostGen wrapper setters with cache-and-recall partner-value pattern |
+| F | `016c2ea` | MicProfileManager class (load/save/delete/setActive + Default seed + per-MAC isolation) |
+| G | `bb51486` | VFO Flag TX badge wire-up (isTransmitting getter + render-path test + Phase L routing demo) |
+| H | `1b6e1ad` | Setup → Test → Two-Tone page (8 properties × bidirectional sync + Defaults/Stealth presets) |
+| I | `687e63d` | TwoToneController activation handler (I.1-I.5: full chkTestIMD_CheckedChanged port) |
+| J | `d1df70d` | TxApplet 2-TONE button + profile combo + Setup TX Profile editor page |
+| K | `5c4ab13` | Initial-state-sync audit (TX monitor enable + volume push gaps closed) |
+| L | `6aefc6f` + `c26358e` | RadioModel cross-cutting wiring + 720→256 mic re-blocker (L.4) + L.2 fixup |
+| M.1 | (full ctest sweep) | 236/236 tests green on `c26358e` |
+| M.6 | (this matrix update) | Verification matrix extended with 22 rows (3M-1c) |
+| M.7 | (TBD) | Post-code Thetis review (`phase3m-1c-post-code-review.md`) |
