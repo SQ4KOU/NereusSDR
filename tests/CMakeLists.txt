@@ -1620,6 +1620,14 @@ target_compile_definitions(tst_tx_worker_thread PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_tx_mic_source)
 target_compile_definitions(tst_tx_mic_source PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1c TX pump v3 — P1 EP6 mic16 extraction ────────────────────
+# Verifies the static parseEp6Frame mic-aware overload extracts the
+# mic16 byte zone correctly from synthetic EP6 frames; covers the
+# normal mic16 path, the HL2 mic16-zeros quirk, and backward-compat
+# with the existing 3-arg overload.
+nereus_add_test(tst_p1_mic_extraction)
+target_compile_definitions(tst_p1_mic_extraction PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1c E.1: TxChannel push-driven refactor ─────────────────────
 # Verifies the QTimer-driven pull model is gone and the (samples, frames)
 # push slot is the single fexchange2 entry point.  Test cases (7):
