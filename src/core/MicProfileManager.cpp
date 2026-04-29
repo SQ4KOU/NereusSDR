@@ -34,8 +34,6 @@ namespace NereusSDR {
 
 namespace {
 
-constexpr const char* kProfileSubpath = "/tx/profile/";
-
 QString profilePathPrefix(const QString& mac)
 {
     return QStringLiteral("hardware/%1/tx/profile/").arg(mac);
