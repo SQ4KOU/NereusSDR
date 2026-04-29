@@ -1424,6 +1424,14 @@ void P1RadioConnection::setBandwidthMonitor(HermesLiteBandwidthMonitor* monitor)
 // ---------------------------------------------------------------------------
 void P1RadioConnection::setTxMicSource(TxMicSource* src)
 {
+    // Caller contract: invoked on this connection's affinity thread.
+    // Today that is the main thread, because RadioModel::connectToRadio
+    // calls setTxMicSource at line 1764-1767 BEFORE the connection is
+    // moved to its worker thread at line 1842.  The assignment + the
+    // m_lastMicAt arming below therefore race-free with the connection-
+    // thread reads in onWatchdogTick / parseEp6Frame mic16 extraction.
+    // If a future refactor reorders these RadioModel calls, this
+    // function will need atomic / mutex protection.
     m_txMicSource = src;
 
     // Stage-2 review fix I3: arm the LOS timer at attach time so the

@@ -24,12 +24,15 @@
 //      while worker is pumping does not crash and the value lands.
 //   9. Cross-thread setter race — setVoxRun from main thread (the
 //      MoxController-routed lambda-connect form).
-//  10. Cross-thread Auto→Queued connection delivery — TxChannel
-//      moved to worker thread, signal emitted from main thread,
-//      verifies the queued slot actually fires (regression trap for
-//      Stage-2 review C1: without QCoreApplication::processEvents in
-//      run() this test fails because the QMetaCallEvent never
-//      delivers).
+//  10. Cross-thread Auto→Queued connection delivery (micPreamp) —
+//      TxChannel moved to worker thread, signal emitted from main
+//      thread, verifies the queued slot actually fires (regression
+//      trap for Stage-2 review C1: without sendPostedEvents in run()
+//      this test fails because the QMetaCallEvent never delivers).
+//  10b. Cross-thread Auto→Queued connection delivery (voxRun via
+//       lambda-connect, the MoxController routing form) — same
+//       regression trap as case 10, exercises the lambda receiver
+//       form rather than direct member-pointer.
 //
 // =================================================================
 //
@@ -444,7 +447,7 @@ private slots:
     //
     // Pre-C1-fix: m_micPreampLast stays at the original push value
     // (0.5) — the queued event sits in the worker's event queue forever.
-    // Post-C1-fix: m_micPreampLast == 0.85 — processEvents() drained the
+    // Post-C1-fix: m_micPreampLast == 0.85 — sendPostedEvents() drained the
     // queue and ran the slot.
     void crossThreadQueuedDelivery_micPreampSlotFires()
     {
@@ -482,7 +485,7 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(w.isRunning(), true, 500);
 
         // Feed the worker mic blocks so it actually wakes from
-        // waitForBlock and gets a chance to call processEvents.
+        // waitForBlock and gets a chance to call sendPostedEvents.
         // Without inbound traffic the worker would block forever and the
         // queued event would never deliver even after C1 is fixed.
         std::vector<float> samples(kBufSize, 0.0f);
@@ -491,11 +494,11 @@ private slots:
         }
 
         // Wait until the worker has processed at least one block (proves
-        // the loop is alive and processEvents has run at least once).
+        // the loop is alive and sendPostedEvents has run at least once).
         QTRY_COMPARE_WITH_TIMEOUT(conn.callCount.load() >= 1, true, 1000);
 
         // NOW emit the cross-thread signal.  Push more mic blocks so the
-        // worker keeps waking and processEvents keeps draining the queue.
+        // worker keeps waking and sendPostedEvents keeps draining the queue.
         emit emitter.emitMicPreamp(0.85);
         for (int blk = 0; blk < 5; ++blk) {
             src.inbound(samples.data(), kBufSize);
@@ -503,7 +506,7 @@ private slots:
 
         // Pre-C1-fix this assertion fails: m_micPreampLast stays at 0.5
         // because the QMetaCallEvent is stuck in the worker's queue.
-        // Post-C1-fix the queued event drains via processEvents inside
+        // Post-C1-fix the queued event drains via sendPostedEvents inside
         // run() and m_micPreampLast == 0.85 within the timeout.
         QTRY_COMPARE_WITH_TIMEOUT(ch.lastMicPreampForTest(), 0.85, 1000);
 

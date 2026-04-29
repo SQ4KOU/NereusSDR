@@ -15,11 +15,14 @@
 //                 (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
 //   2026-04-29 — Stage-2 review fix C1 — added
-//                 QCoreApplication::processEvents inside run() so
-//                 cross-thread queued slot calls (TransmitModel /
-//                 MoxController → TxChannel setters) actually
-//                 deliver after m_txChannel->moveToThread(this).  Same
-//                 author / same AI tooling.
+//                 QCoreApplication::sendPostedEvents(m_txChannel, 0)
+//                 inside run() so cross-thread queued slot calls
+//                 (TransmitModel / MoxController → TxChannel setters)
+//                 actually deliver after m_txChannel->moveToThread(this).
+//                 (Initially shipped as processEvents(AllEvents); refined
+//                 to sendPostedEvents on Stage-2 follow-up review for a
+//                 surgical TxChannel-targeted drain.)  Same author /
+//                 same AI tooling.
 //   2026-04-29 — Stage-2 review fix I2 — zero-fill the unfilled slots
 //                 in m_in when AudioEngine::pullTxMic returns
 //                 got < kBlockFrames.  Prevents radio mic data from
@@ -39,7 +42,6 @@
 #include "audio/TxMicSource.h"
 
 #include <QCoreApplication>
-#include <QEventLoop>
 #include <QLoggingCategory>
 
 #include <algorithm>
@@ -170,11 +172,10 @@ void TxWorkerThread::run()
     // apply to the upcoming block.
     //
     // Thetis itself doesn't need this — its cm_main is a native pthread
-    // (cmbuffs.c:151-168 [v2.10.3.13], no Qt event loop), and its
-    // setters drop straight into WDSP via P/Invoke regardless of which
-    // managed thread is calling.  NereusSDR's setters are Qt slots
-    // dispatched via signals, so we have to give the worker an event
-    // pump.
+    // (no Qt event loop), and its setters drop straight into WDSP via
+    // P/Invoke regardless of which managed thread is calling.
+    // NereusSDR's setters are Qt slots dispatched via signals, so we
+    // have to give the worker an event pump.
     while (m_micSource && m_micSource->isRunning()) {
         // INFINITE wait — mirrors `WaitForSingleObject(..., INFINITE)`.
         // Returns false when stop() releases the poison semaphore AND
@@ -196,9 +197,19 @@ void TxWorkerThread::run()
         // BEFORE dispatching the DSP cycle so the updated WDSP state
         // applies to the upcoming block.  This is the Qt-Posted-Event
         // analogue of the implicit event-pump that Thetis's Win32
-        // cm_main loop never needed (cmbuffs.c:151-168 [v2.10.3.13] —
+        // cm_main loop never needed (cmbuffs.c [v2.10.3.13] —
         // pthread/native, no Qt event loop in the picture).
-        QCoreApplication::processEvents(QEventLoop::AllEvents);
+        //
+        // We call sendPostedEvents targeted at m_txChannel (rather than
+        // QCoreApplication::processEvents) so the dispatch is surgical:
+        // only QMetaCallEvents posted to the TxChannel are delivered.
+        // No SocketNotifier, DeferredDeletion, timer, or paint events for
+        // any other QObject that might one day be affined to this worker
+        // get pulled in.  Faster (no event-filter walk), narrower
+        // surface, and locks in the invariant "only TxChannel is
+        // addressable on this thread" against future refactors that
+        // might affine additional QObjects to the worker.
+        QCoreApplication::sendPostedEvents(m_txChannel, 0);
 
         dispatchOneBlock();
     }
