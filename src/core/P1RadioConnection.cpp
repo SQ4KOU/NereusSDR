@@ -1425,6 +1425,21 @@ void P1RadioConnection::setBandwidthMonitor(HermesLiteBandwidthMonitor* monitor)
 void P1RadioConnection::setTxMicSource(TxMicSource* src)
 {
     m_txMicSource = src;
+
+    // Stage-2 review fix I3: arm the LOS timer at attach time so the
+    // 3 s zero-block injection (onWatchdogTick) fires even if the
+    // radio never delivers a mic frame.  Without this, m_lastMicAt
+    // stays default-constructed (invalid) and the mic-LOS guard at
+    // P1RadioConnection.cpp:1628 short-circuits forever — the worker
+    // would block on waitForBlock(INFINITE) with no recovery.
+    //
+    // Mirrors Thetis network.c:655-666 [v2.10.3.13] — WSA_WAIT_TIMEOUT
+    // injects zero buffer via Inbound regardless of whether real
+    // samples have been observed.  Setting m_lastMicAt = now here is
+    // equivalent to Thetis's implicit "the timer started counting the
+    // moment we attached", because the watchdog tick does
+    // sinceMicMs = now - m_lastMicAt > kMicLosTimeoutMs.
+    m_lastMicAt = QDateTime::currentDateTimeUtc();
 }
 
 // ---------------------------------------------------------------------------

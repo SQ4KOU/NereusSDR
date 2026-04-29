@@ -1410,6 +1410,18 @@ bool P2RadioConnection::decodeMicFrame132(const QByteArray& data,
 void P2RadioConnection::setTxMicSource(TxMicSource* src)
 {
     m_txMicSource = src;
+
+    // Stage-2 review fix I3: arm the LOS timer at attach time so the
+    // mic-LOS zero-block injection (onKeepAliveTick) fires even if the
+    // radio never delivers a mic frame.  Without this, m_lastMicAt
+    // stays default-constructed (invalid) and the guard at
+    // P2RadioConnection.cpp:1285 short-circuits forever — the worker
+    // would block on waitForBlock(INFINITE) with no recovery.
+    //
+    // Mirrors Thetis network.c:655-666 [v2.10.3.13] — WSA_WAIT_TIMEOUT
+    // injects zero buffer via Inbound regardless of whether real
+    // samples have been observed.
+    m_lastMicAt = QDateTime::currentDateTimeUtc();
 }
 
 void P2RadioConnection::setCalibrationController(const CalibrationController* cal)
