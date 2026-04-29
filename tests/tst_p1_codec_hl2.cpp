@@ -32,7 +32,8 @@ private slots:
     }
 
     // Bank 11 C4 — TX path: uses txStepAttn[0] not rxStepAttn[0]
-    // Source: mi0bot networkproto1.c:1099-1100 [@c26a8a4]
+    // HL2 TX wire byte is INVERTED: wire = (31 - userDb).
+    // Source: mi0bot networkproto1.c:1099-1100 + console.cs:10657-10658 [@c26a8a4]
     void bank11_tx_att_uses_tx_value() {
         P1CodecHl2 codec;
         CodecContext ctx;
@@ -42,7 +43,49 @@ private slots:
         quint8 out[5] = {};
         codec.composeCcForBank(11, ctx, out);
         QCOMPARE(int(out[0]), 0x15);  // C0=0x14 | mox
-        QCOMPARE(int(out[4]), (20 & 0x3F) | 0x40);  // 0x54 from TX side
+        // userDb=20 → wire = (31-20) | 0x40 = 11 | 0x40 = 0x4B
+        QCOMPARE(int(out[4]), ((31 - 20) & 0x3F) | 0x40);
+    }
+
+    // Bank 11 C4 — TX path: HL2 firmware treats higher value as MORE
+    // attenuation, so user-facing dB is inverted to (31 - dB) on wire.
+    // Critical for force-31-dB safety pathway:
+    //   userDb = 31 (max protection) → wire = 0 (HL2 max attenuation = -31 dB)
+    //   userDb = 0  (no protection)  → wire = 31 (HL2 zero attenuation)
+    // Without this inversion, force-31-dB would send wire=31 to HL2 firmware,
+    // which interprets that as ZERO attenuation → full PA drive at the moment
+    // we are trying to PROTECT the PA.
+    // Discovered during 3M-1c chunk 0 desk-review against mi0bot-Thetis.
+    // From mi0bot-Thetis console.cs:10657-10658, 19164-19165, 27814-27815 [@c26a8a4]
+    // MI0BOT: Greater range for HL2
+    void bank11_tx_att_31_minus_n_inversion_for_hl2() {
+        P1CodecHl2 codec;
+        CodecContext ctx;
+        ctx.mox = true;
+
+        // Force-31-dB safety: userDb=31 → wire byte = 0x40 (= 0 | 0x40)
+        ctx.txStepAttn[0] = 31;
+        quint8 out_max[5] = {};
+        codec.composeCcForBank(11, ctx, out_max);
+        QCOMPARE(int(out_max[4]), 0x40);
+
+        // Zero protection: userDb=0 → wire byte = 0x5F (= 31 | 0x40)
+        ctx.txStepAttn[0] = 0;
+        quint8 out_zero[5] = {};
+        codec.composeCcForBank(11, ctx, out_zero);
+        QCOMPARE(int(out_zero[4]), 0x5F);
+
+        // Mid-range: userDb=15 → wire byte = 0x50 (= 16 | 0x40)
+        ctx.txStepAttn[0] = 15;
+        quint8 out_mid[5] = {};
+        codec.composeCcForBank(11, ctx, out_mid);
+        QCOMPARE(int(out_mid[4]), 0x50);
+
+        // Out-of-range input is clamped: userDb=63 → clamped to 31 → wire 0x40
+        ctx.txStepAttn[0] = 63;
+        quint8 out_clamp[5] = {};
+        codec.composeCcForBank(11, ctx, out_clamp);
+        QCOMPARE(int(out_clamp[4]), 0x40);
     }
 
     // Bank 11 C4 — full 6-bit range (HL2 supports 0-63)

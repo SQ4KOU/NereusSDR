@@ -152,7 +152,19 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
             // MI0BOT: Different read loop for HL2 — Larger range for the HL2 attenuator
             // [original inline comment from networkproto1.c:1100,1102]
             if (ctx.mox) {
-                out[4] = quint8((ctx.txStepAttn[0] & 0b00111111) | 0b01000000);  // Larger range for the HL2 attenuator
+                // HL2 TX path: wire byte is (31 - userDb) — HL2 firmware
+                // treats higher values as MORE attenuation, opposite of the
+                // user-facing dB.  Critical for force-31-dB safety pathway:
+                //   userDb=31 → wire=0  → HL2 max attenuation (-31 dB)
+                //   userDb=0  → wire=31 → HL2 zero attenuation
+                // Without this inversion, force-31 sends wire=31 to HL2,
+                // which is interpreted as ZERO attenuation = full PA drive
+                // at the moment we are trying to PROTECT the PA.
+                // Discovered during 3M-1c chunk 0 desk-review against mi0bot.
+                // From mi0bot-Thetis console.cs:10657-10658, 19164-19165, 27814-27815 [@c26a8a4]
+                // MI0BOT: Greater range for HL2
+                const int userDb = qBound(0, static_cast<int>(ctx.txStepAttn[0]), 31);
+                out[4] = quint8(((31 - userDb) & 0b00111111) | 0b01000000);
             } else {
                 out[4] = quint8((ctx.rxStepAttn[0] & 0b00111111) | 0b01000000);  // Larger range for the HL2 attenuator
             }
