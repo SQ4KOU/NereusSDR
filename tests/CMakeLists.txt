@@ -300,6 +300,17 @@ nereus_add_test(tst_transmit_model_two_tone_properties)
 # setup.cs:11111-11119 [v2.10.3.13] (Fixed-mode behaviour reference).
 nereus_add_test(tst_transmit_model_two_tone_drive_origin)
 
+# ── Phase 3M-1c F: MicProfileManager (load/save/delete/setActive) ────────────
+# Verifies the per-MAC mic-profile-bank API: F.1 class skeleton + load/save,
+# F.2 save with overwrite + comma-strip, F.3 delete with last-profile guard
+# (verbatim Thetis warning string preserved), F.4 setActiveProfile applies
+# values back to TransmitModel + persists active key, F.5 first-launch
+# "Default" profile seed (23 documented defaults), F.6 per-MAC isolation
+# (two MACs maintain independent profile lists).
+# Source: setup.cs:9505-9656 [v2.10.3.13] (Thetis comboTXProfileName /
+# btnTXProfileSave_Click / btnTXProfileDelete_Click handlers).
+nereus_add_test(tst_mic_profile_manager)
+
 # ── Phase 3O VAX schema migration ─────────────────────────────────────────
 nereus_add_test(tst_app_settings_vax_migration)
 
