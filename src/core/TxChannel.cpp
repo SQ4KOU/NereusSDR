@@ -1616,6 +1616,26 @@ void TxChannel::setTxPostGenTTPulseTransition(double sec)
 #endif
 }
 
+// ── I.1: setTxPostGenTTPulseIQOut ────────────────────────────────────────────
+//
+// From Thetis setup.cs:34414 [v2.10.3.13] — setupTwoTonePulse:
+//   console.radio.GetDSPTX(0).TXPostGenTTPulseIQOut = true;
+// From Thetis radio.cs:4090-4105 [v2.10.3.13] — TXPostGenTTPulseIQOut setter.
+// From Thetis wdsp/gen.c:963-969 [v2.10.3.13] — SetTXAPostGenTTPulseIQout impl.
+//
+// Added in 3M-1c chunk I (rather than chunk E.5) because the TwoToneController
+// activation flow is the only call site, and adding the wrapper here keeps the
+// activation handler's setupTwoTonePulse() port complete in a single phase.
+void TxChannel::setTxPostGenTTPulseIQOut(bool on)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    SetTXAPostGenTTPulseIQout(m_channelId, on ? 1 : 0); // gen.c:963-969 [v2.10.3.13]
+#else
+    Q_UNUSED(on);
+#endif
+}
+
 // ── E.6: setTxPostGenRun ─────────────────────────────────────────────────────
 //
 // From Thetis setup.cs:11107 [v2.10.3.13]:

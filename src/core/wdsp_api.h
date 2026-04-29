@@ -646,6 +646,12 @@ void SetTXAPostGenTTPulseToneFreq(int channel, double freq1, double freq2);
 // From Thetis wdsp/gen.c:955-962 [v2.10.3.13] — txa[ch].gen1.p->ttpulse.transtime
 void SetTXAPostGenTTPulseTransition(int channel, double transtime);
 
+// Pulsed-mode I/Q-out enable flag (0 = real out only, 1 = I and Q both).
+// Required by setupTwoTonePulse() at setup.cs:34414 [v2.10.3.13]:
+//   console.radio.GetDSPTX(0).TXPostGenTTPulseIQOut = true;
+// From Thetis wdsp/gen.c:963-969 [v2.10.3.13] — txa[ch].gen1.p->ttpulse.IQout
+void SetTXAPostGenTTPulseIQout(int channel, int IQout);
+
 // ---------------------------------------------------------------------------
 // TX stage Run setters — TxChannel::setRunning() + setStageRunning()
 //

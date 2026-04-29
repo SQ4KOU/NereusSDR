@@ -370,6 +370,7 @@ set(CORE_SOURCES
     src/core/NbFamily.h
     src/core/MoxController.cpp
     src/core/MicProfileManager.cpp
+    src/core/TwoToneController.cpp
     src/core/FFTEngine.cpp
     src/core/NoiseFloorEstimator.cpp
     src/core/NoiseFloorTracker.cpp

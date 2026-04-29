@@ -663,7 +663,12 @@ public:
     ///   console.radio.GetDSPTX(0).TXPostGenMode = 7;  // pulsed
     ///   console.radio.GetDSPTX(0).TXPostGenMode = 1;  // continuous
     /// From Thetis wdsp/gen.c:792-797 [v2.10.3.13] — SetTXAPostGenMode impl.
-    void setTxPostGenMode(int mode);
+    ///
+    /// 'virtual' for the I.1 TwoToneController test seam — TestableTxChannel
+    /// in tests/tst_two_tone_controller.cpp overrides to record the call
+    /// sequence without needing a real WDSP context.  Production callers do
+    /// not subclass.
+    virtual void setTxPostGenMode(int mode);
 
     /// Continuous-mode two-tone freq 1 (Hz, lower tone).
     ///
@@ -675,7 +680,8 @@ public:
     /// From Thetis setup.cs:11099 [v2.10.3.13]:
     ///   console.radio.GetDSPTX(0).TXPostGenTTFreq1 = ttfreq1;
     /// From Thetis wdsp/gen.c:826-833 [v2.10.3.13] — SetTXAPostGenTTFreq impl.
-    void setTxPostGenTTFreq1(double hz);
+    /// 'virtual' for the I.1 TwoToneController test seam (see setTxPostGenMode).
+    virtual void setTxPostGenTTFreq1(double hz);
 
     /// Continuous-mode two-tone freq 2 (Hz, upper tone).
     ///
@@ -684,7 +690,8 @@ public:
     ///
     /// From Thetis setup.cs:11100 [v2.10.3.13]:
     ///   console.radio.GetDSPTX(0).TXPostGenTTFreq2 = ttfreq2;
-    void setTxPostGenTTFreq2(double hz);
+    /// 'virtual' for the I.1 TwoToneController test seam.
+    virtual void setTxPostGenTTFreq2(double hz);
 
     /// Continuous-mode two-tone mag 1 (linear amplitude, tone 1).
     ///
@@ -694,7 +701,8 @@ public:
     /// From Thetis setup.cs:11102 [v2.10.3.13]:
     ///   console.radio.GetDSPTX(0).TXPostGenTTMag1 = ttmag1;
     /// From Thetis wdsp/gen.c:817-823 [v2.10.3.13] — SetTXAPostGenTTMag impl.
-    void setTxPostGenTTMag1(double linear);
+    /// 'virtual' for the I.1 TwoToneController test seam.
+    virtual void setTxPostGenTTMag1(double linear);
 
     /// Continuous-mode two-tone mag 2 (linear amplitude, tone 2).
     ///
@@ -703,7 +711,8 @@ public:
     ///
     /// From Thetis setup.cs:11103 [v2.10.3.13]:
     ///   console.radio.GetDSPTX(0).TXPostGenTTMag2 = ttmag2;
-    void setTxPostGenTTMag2(double linear);
+    /// 'virtual' for the I.1 TwoToneController test seam.
+    virtual void setTxPostGenTTMag2(double linear);
 
     /// Pulsed-mode two-tone freq 1 (Hz, lower tone in pulsed window).
     ///
@@ -713,7 +722,8 @@ public:
     /// From Thetis setup.cs:11087 [v2.10.3.13]:
     ///   console.radio.GetDSPTX(0).TXPostGenTTPulseToneFreq1 = ttfreq1;
     /// From Thetis wdsp/gen.c:944-952 [v2.10.3.13] — SetTXAPostGenTTPulseToneFreq.
-    void setTxPostGenTTPulseToneFreq1(double hz);
+    /// 'virtual' for the I.1 TwoToneController test seam.
+    virtual void setTxPostGenTTPulseToneFreq1(double hz);
 
     /// Pulsed-mode two-tone freq 2 (Hz, upper tone in pulsed window).
     ///
@@ -722,7 +732,8 @@ public:
     ///
     /// From Thetis setup.cs:11088 [v2.10.3.13]:
     ///   console.radio.GetDSPTX(0).TXPostGenTTPulseToneFreq2 = ttfreq2;
-    void setTxPostGenTTPulseToneFreq2(double hz);
+    /// 'virtual' for the I.1 TwoToneController test seam.
+    virtual void setTxPostGenTTPulseToneFreq2(double hz);
 
     /// Pulsed-mode two-tone mag 1 (linear amplitude, tone 1).
     ///
@@ -732,7 +743,8 @@ public:
     /// From Thetis setup.cs:11090 [v2.10.3.13]:
     ///   console.radio.GetDSPTX(0).TXPostGenTTPulseMag1 = ttmag1;
     /// From Thetis wdsp/gen.c:915-923 [v2.10.3.13] — SetTXAPostGenTTPulseMag.
-    void setTxPostGenTTPulseMag1(double linear);
+    /// 'virtual' for the I.1 TwoToneController test seam.
+    virtual void setTxPostGenTTPulseMag1(double linear);
 
     /// Pulsed-mode two-tone mag 2 (linear amplitude, tone 2).
     ///
@@ -741,7 +753,8 @@ public:
     ///
     /// From Thetis setup.cs:11091 [v2.10.3.13]:
     ///   console.radio.GetDSPTX(0).TXPostGenTTPulseMag2 = ttmag2;
-    void setTxPostGenTTPulseMag2(double linear);
+    /// 'virtual' for the I.1 TwoToneController test seam.
+    virtual void setTxPostGenTTPulseMag2(double linear);
 
     /// Pulsed-mode window pulse rate (Hz).
     ///
@@ -751,7 +764,8 @@ public:
     /// From Thetis setup.cs:34415 [v2.10.3.13] — setupTwoTonePulse:
     ///   console.radio.GetDSPTX(0).TXPostGenTTPulseFreq = (int)nudPulsed_TwoTone_window.Value;
     /// From Thetis wdsp/gen.c:926-933 [v2.10.3.13] — SetTXAPostGenTTPulseFreq.
-    void setTxPostGenTTPulseFreq(int hz);
+    /// 'virtual' for the I.1 TwoToneController test seam.
+    virtual void setTxPostGenTTPulseFreq(int hz);
 
     /// Pulsed-mode duty cycle (fraction 0..1; e.g. 0.10 = 10%).
     ///
@@ -761,7 +775,8 @@ public:
     ///   console.radio.GetDSPTX(0).TXPostGenTTPulseDutyCycle =
     ///       (float)(nudPulsed_TwoTone_percent.Value) / 100f;
     /// From Thetis wdsp/gen.c:935-942 [v2.10.3.13] — SetTXAPostGenTTPulseDutyCycle.
-    void setTxPostGenTTPulseDutyCycle(double pct);
+    /// 'virtual' for the I.1 TwoToneController test seam.
+    virtual void setTxPostGenTTPulseDutyCycle(double pct);
 
     /// Pulsed-mode ramp transition time (seconds; e.g. 0.005 = 5 ms).
     ///
@@ -771,7 +786,20 @@ public:
     ///   console.radio.GetDSPTX(0).TXPostGenTTPulseTransition =
     ///       (float)(nudPulsed_TwoTone_ramp.Value) / 1000f;
     /// From Thetis wdsp/gen.c:955-962 [v2.10.3.13] — SetTXAPostGenTTPulseTransition.
-    void setTxPostGenTTPulseTransition(double sec);
+    /// 'virtual' for the I.1 TwoToneController test seam.
+    virtual void setTxPostGenTTPulseTransition(double sec);
+
+    /// Pulsed-mode I/Q-out enable flag (true = I and Q both, false = real-out
+    /// only).  Required for the pulsed two-tone path to actually emit on the
+    /// I/Q axes.
+    ///
+    /// Wraps SetTXAPostGenTTPulseIQout(channel, on ? 1 : 0).
+    ///
+    /// From Thetis setup.cs:34414 [v2.10.3.13] — setupTwoTonePulse:
+    ///   console.radio.GetDSPTX(0).TXPostGenTTPulseIQOut = true;
+    /// From Thetis wdsp/gen.c:963-969 [v2.10.3.13] — SetTXAPostGenTTPulseIQout.
+    /// 'virtual' for the I.1 TwoToneController test seam.
+    virtual void setTxPostGenTTPulseIQOut(bool on);
 
     /// TXA PostGen run gate (engages / disengages the gen1 stage).
     ///
@@ -781,7 +809,8 @@ public:
     ///   console.radio.GetDSPTX(0).TXPostGenRun = 1;  // on  (line 11107)
     ///   console.radio.GetDSPTX(0).TXPostGenRun = 0;  // off (line 11166)
     /// From Thetis wdsp/gen.c:784-789 [v2.10.3.13] — SetTXAPostGenRun impl.
-    void setTxPostGenRun(bool on);
+    /// 'virtual' for the I.1 TwoToneController test seam.
+    virtual void setTxPostGenRun(bool on);
 
     // ── Per-stage Run override (3M-1a C.4) ──────────────────────────────────
     //

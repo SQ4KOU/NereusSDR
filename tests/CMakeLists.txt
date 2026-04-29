@@ -321,6 +321,15 @@ nereus_add_test(tst_transmit_model_two_tone_drive_origin)
 # btnTXProfileSave_Click / btnTXProfileDelete_Click handlers).
 nereus_add_test(tst_mic_profile_manager)
 
+# ── Phase 3M-1c chunk I (I.1-I.5): TwoToneController activation handler ────
+# Verifies the chkTestIMD_CheckedChanged port (setup.cs:11040-11191
+# [v2.10.3.13]): power-on precondition, MOX cycle-off-then-on flow,
+# TXPostGen setter ordering, continuous vs pulsed branch, 0.49999 magnitude
+# scaling, mode-aware invert, Freq2Delay deferred Mag2, DrivePowerSource::Fixed
+# snapshot/restore of PWR, and BandPlanGuard rejection cleanup (via
+# the existing 3M-1b K.1 SSB-mode allow-list rule).
+nereus_add_test(tst_two_tone_controller)
+
 # ── Phase 3O VAX schema migration ─────────────────────────────────────────
 nereus_add_test(tst_app_settings_vax_migration)
 
