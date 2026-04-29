@@ -841,4 +841,171 @@ major epic.
 
 ---
 
+## 12. Phase 3M-1c bench regression + architectural pivot (2026-04-29 amendment)
+
+**Status:** PR draft paused; redesign plan landed; execution deferred
+to a fresh session per the discipline of catching cross-thread Qt
+subtleties without compounding-error fatigue.
+
+### 12.1 What happened
+
+Within an hour of the M.7 commit (`8b6a4fb`), JJ took the build to the
+bench (Saturn G2, dummy load) and reported: **"1 tone tune stopped
+working"**.
+
+The investigation surfaced a regression-cascade that turned out to be
+architectural, not a tuning issue:
+
+1. **Initial diagnosis (correct):** E.1 (commit `63d54a5`) had
+   dropped `TxChannel`'s 5 ms `QTimer` that was the production-side
+   pump for `m_micRouter->pullSamples` → `PcMicSource::pullSamples` →
+   `AudioEngine::pullTxMic`. After E.1, **nothing called `pullTxMic`
+   in production**; the 720-sample accumulator (D.1) never filled,
+   `micBlockReady` never fired, the L.4 `MicReBlocker` never delivered,
+   and `TxChannel::driveOneTxBlock` never ran. Both TUN and SSB voice
+   TX were silent. The 236/236 ctest suite passed because tests
+   exercised `driveOneTxBlock` directly with synthetic samples,
+   never the production pump.
+
+2. **Bench-fix attempt A** (commit `418e155`, JJ option B from a
+   bench-pause): added a 5 ms `QTimer` in AudioEngine that calls
+   `pullTxMic`. Restores TUN. Also added a 5 ms silence-drive timer
+   in TxChannel for the no-mic case (`pullTxMic` returns 0 when
+   `m_txInputBus` is null).
+
+3. **Bench regression #2:** JJ at the bench (post-`418e155`) reports
+   TUN works, but **"ssb audio with the mic all the way down sounds
+   distorted and gravelly"**.
+
+4. **Diagnosis #2:** the silence-drive timer (8 ms stale threshold)
+   fires *during the natural mic-driven burst gap*. AudioEngine emits
+   `micBlockReady` every ~15 ms (when accumulator fills); MicReBlocker
+   re-chunks 720 → 256 and fires `driveOneTxBlock` 2-3 times in <1 ms;
+   then 14 ms idle until next emit. The silence timer's 8 ms threshold
+   triggers during that 14 ms gap, adding an extra `fexchange2` call
+   per 15 ms cycle (~4 calls vs ~2.81 expected). Output rate runs
+   ~42 % over the radio's 192 kHz expectation → SPSC ring overflows
+   and silence frames interleave with mic audio → audible "gravelly"
+   distortion.
+
+5. **Bench-fix attempt C** (commit `03ec584`): bumped silence-drive
+   threshold from 8 ms to 20 ms. Stops mid-burst-gap firing but does
+   NOT address the root architectural mismatch.
+
+6. **Architectural review** (this section + sibling plan doc):
+   re-read Thetis `cmaster.c` / `cmbuffs.c` and deskhpsdr's
+   `transmitter.c`. Found that **the entire pump model adopted in
+   D.1 / E.1 / L.4 is built on a misread of Thetis's
+   `cmInboundSize[5]=720`**.
+
+### 12.2 The misread
+
+Pre-code review §0.5 locked: *"Thetis uses 720 samples @ 48 kHz =
+15 ms (cmaster.cs:495). NereusSDR's TxChannel accumulator can match
+Thetis exactly (720). Locking 720 samples for source-first parity."*
+
+This was wrong. `cmInboundSize[5]=720` is the **inbound network block
+size from the radio** for stream 5 (mic input) — what arrives in a
+P1 EP6 mic byte zone or P2 mic packet. It is not the DSP block size.
+
+Thetis's actual DSP block size is `xcm_insize = getbuffsize(rate) = 64`
+samples at 48 kHz (per `cmsetup.c:106-110 [v2.10.3.13]`). `cmaster`
+**re-chunks 720 → 64 internally on the network side** before
+fexchange0; the DSP side runs at the much smaller 64-sample cadence
+(every 1.33 ms).
+
+The proper Thetis invariant is:
+```
+r1_outsize == xcm_insize == WDSP in_size
+   (all = getbuffsize(rate); 64 at 48 kHz)
+```
+
+NereusSDR's attempt to mirror "720" as the DSP block size required a
+re-blocker (L.4) to bridge to the actual WDSP block size (256 in
+NereusSDR, dictated by the WDSP r2-ring's 2048-divisor constraint).
+That re-blocker creates a burst pattern (2-3 fexchange calls every
+~15 ms) that fights the radio's expected steady output cadence.
+
+### 12.3 The corrected design
+
+Single uniform block size end-to-end (matching Thetis's
+`r1_outsize == xcm_insize == in_size` invariant). For NereusSDR:
+**256 samples** (not 720, not 64) — the value already used by
+TxChannel's `m_inputBufferSize`, dictated by WDSP r2-ring divisibility.
+
+Pump driver: dedicated `TxWorkerThread` (QThread). Mirrors Thetis's
+`cm_main` worker-thread pattern at `cmbuffs.c:151-168 [v2.10.3.13]`,
+adapted to Qt's event-loop conventions. Worker thread runs a 5 ms
+QTimer; each tick:
+
+```cpp
+void onPumpTick() {
+    static thread_local std::array<float, 256> buf;
+    const int got = audioEngine->pullTxMic(buf.data(), 256);
+    if (got < 256) {
+        // Partial / null bus — zero-fill the gap.
+        // Silence path falls out for free; no separate timer.
+        std::fill(buf.begin() + got, buf.end(), 0.0f);
+    }
+    txChannel->driveOneTxBlock(buf.data(), 256);
+}
+```
+
+`fexchange2` runs on TxWorkerThread (off main, off audio callback).
+Steady cadence (one fexchange per 5 ms tick = ~192 kHz output rate).
+**No re-blocker. No silence-drive timer. No 720-sample accumulator.**
+
+### 12.4 What gets undone in the redesign
+
+D.1 (`micBlockReady` signal + 720-sample accumulator), D.2
+(`clearMicBuffer`), L.4 (`MicReBlocker` class entirely), bench-fix-A
+(`AudioEngine::pumpMic` timer, commit `418e155`), bench-fix-B
+(TxChannel silence-drive timer, refined in `03ec584`).
+
+D.1 / E.1 / L.4 leave behind a small refactor footprint
+(slot-signature on `driveOneTxBlock(samples, frames)` is kept — it's
+how the worker now invokes the channel) but the surrounding
+infrastructure is deleted.
+
+### 12.5 What the redesign preserves
+
+- Phase B (TransmitModel rename + 7 two-tone properties + DrivePowerSource enum) — unaffected.
+- Phase C (MoxController multicast Pre/Post signals) — unaffected.
+- Phase E.2-E.6 (12 TXA PostGen wrappers, cache-and-recall pattern) — unaffected.
+- Phase F (MicProfileManager) — unaffected.
+- Phase G (VFO Flag TX badge wire-up) — unaffected.
+- Phase H (Setup → Test → Two-Tone page) — unaffected.
+- Phase I (TwoToneController activation handler) — its connections
+  to TxChannel slots may become Queued (since TxChannel moves to
+  TxWorkerThread); the class itself doesn't change.
+- Phase J (TxApplet 2-TONE button + profile combo + Setup TX Profile
+  page) — unaffected.
+- Phase K (initial-state-sync audit) — unaffected.
+- Phase L.1, L.2, L.3 — unaffected. Only L.4 (MicReBlocker) goes away.
+
+### 12.6 Why a fresh session
+
+Cross-thread Qt is subtle. `moveToThread`, `Qt::QueuedConnection`,
+parameter-mutation safety, lifecycle on disconnect — these are
+exactly the issues that ship as race conditions if rushed in a tired
+session. The redesign is well-scoped (~300 lines new, ~200 deleted)
+but needs proper TDD + two-stage review + bench-verify discipline.
+
+The current branch is `28 commits ahead of origin/main` after this
+amendment + plan doc commit. The git log shows the journey clearly:
+build the wrong thing → bench regression → diagnose → architectural
+review → plan doc → fresh-session execution → ship clean. Future
+maintainers reading the history get the architectural lesson for
+free, which is more valuable than a clean log that hides the
+back-and-forth.
+
+### 12.7 Plan handoff
+
+Complete implementation spec: `phase3m-1c-tx-pump-architecture-plan.md`.
+Includes Thetis cite line numbers, deskhpsdr comparison, full file
+list (add/modify/delete), test plan, subagent dispatch prompt,
+bench-row acceptance criteria.
+
+---
+
 End of post-code review.
