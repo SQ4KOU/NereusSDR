@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Qt loads platform plugins, image format plugins, and Rust/DSP
+         dylibs (DeepFilterNet, rnnoise) that are re-signed with our
+         Developer ID during macdeployqt + codesign. Library validation
+         normally requires same-TeamID OR Apple signature for every loaded
+         binary; we disable it because re-signing every nested framework
+         in lock-step is brittle for Qt apps. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
