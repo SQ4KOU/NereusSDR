@@ -1008,4 +1008,58 @@ bench-row acceptance criteria.
 
 ---
 
+## 13. 2026-04-29 redesign execution status
+
+The plan from §12 was executed in a focused subagent session on
+2026-04-29.  Outcome:
+
+**Files added:** `src/core/TxWorkerThread.{h,cpp}`,
+`tests/tst_tx_worker_thread.cpp` (8 cases — lifecycle, cadence,
+zero-fill gap, cross-thread setter race).
+
+**Files modified:**
+- `src/core/TxChannel.{h,cpp}` — silence-drive timer +
+  `m_lastDriveTimer` + `onSilenceTimer()` deleted; `m_running`
+  becomes `std::atomic<bool>`.
+- `src/core/AudioEngine.{h,cpp}` — `kMicBlockFrames` accumulator +
+  `clearMicBuffer` + `micBlockReady` signal + `m_micPumpTimer` +
+  `pumpMic()` deleted; `pullTxMic` returns to a pure drain.
+- `src/models/RadioModel.{h,cpp}` — `MicReBlocker` construction +
+  `AudioEngine::micBlockReady` connection deleted; replaced with
+  `std::unique_ptr<TxWorkerThread> m_txWorker` lifecycle managed in
+  `connectToRadio` / `teardownConnection`.
+- `tests/tst_tx_channel_push_driven.cpp` — silence-timer assertion
+  dropped (timer no longer exists).
+
+**Files deleted:**
+- `src/core/audio/MicReBlocker.{h,cpp}` — class no longer needed.
+- `tests/tst_audio_engine_mic_block_ready.cpp` — obsolete.
+- `tests/tst_mic_re_blocker.cpp` — obsolete.
+
+**Test result:** 235/235 passing (236 baseline minus 2 dropped plus
+1 added).  Stable under `-j8` parallel runs (verified across two
+full-suite executions back-to-back).
+
+**Bench verification:** deferred to next user session.  Acceptance
+rows from `phase3m-0-verification/README.md`:
+- TUN clean carrier on dummy load
+- SSB voice TX low mic gain — clean (was gravelly)
+- SSB voice TX normal mic gain — clean speech reproduction
+- Mic-mute / no-mic / TUN-without-mic — TUN clean carrier
+- 30-min SSB transmission — no zero-filled frames / glitches /
+  SPSC overflows
+
+**Source-first audit confirmed:**
+- `xcm_insize == r1_outsize == in_size` invariant from Thetis
+  `cmaster.c:460-487 [v2.10.3.13]` reflected in NereusSDR's
+  `kBlockFrames = 256 == TxChannel::m_inputBufferSize ==
+  fexchange2 in_size` end-to-end.
+- `cm_main` worker-thread pattern from `cmbuffs.c:151-168
+  [v2.10.3.13]` reflected in `TxWorkerThread::run` + QTimer-driven
+  `onPumpTick`.
+- `cmInboundSize[5]=720` correction documented in this file (§12)
+  and in `phase3m-1c-thetis-pre-code-review.md` §0.5 lock #4.
+
+---
+
 End of post-code review.

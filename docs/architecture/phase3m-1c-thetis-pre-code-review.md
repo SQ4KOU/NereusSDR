@@ -67,6 +67,27 @@ not block plan-writing.
    matches PC mic block delivery). **Locking 720 samples** for source-
    first parity; plan should verify this doesn't introduce excess TX
    latency on PC mic (5.3 → 15 ms).
+
+   **CORRECTION (2026-04-29 amendment).** This decision was based on a
+   misread of `cmInboundSize[5]=720`.  The 720-sample value is the
+   **network arrival block size** for stream 5 (mic input from the
+   radio's ADC, multiplexed onto the Ethernet stream from Thetis's
+   perspective — NereusSDR doesn't actually use this stream because
+   our TX mic is local).  The DSP block size in Thetis is
+   `xcm_insize == r1_outsize == in_size == getbuffsize(48000) == 64`
+   per `cmaster.c:460-487` and `cmsetup.c:106-110` [v2.10.3.13] —
+   uniform end-to-end with no re-blocking.  The cmaster ring absorbs
+   720-sample network deliveries into 64-sample DSP slices via
+   `cm_main`'s semaphore-driven worker loop (cmbuffs.c:151-168).
+
+   The 720-sample lock here cascaded into the D.1 + E.1 + L.4 +
+   bench-fix-A + bench-fix-B chain that produced the gravelly SSB
+   voice TX bench regression on 2026-04-29.  Architectural review
+   replaced the chain with a Thetis-style worker-thread + matching
+   block size (NereusSDR uses 256 due to WDSP r2-ring divisibility,
+   which is Thetis-equivalent up to the constant).  See
+   `docs/architecture/phase3m-1c-tx-pump-architecture-plan.md` for
+   the full redesign rationale.
 5. **Chunk 6 — observer count.** 12 distinct Thetis subscribers
    identified (Area C research). NereusSDR will likely have fewer in
    3M-1c (no PS form yet, no TCI server yet, no MeterManager Pre/Post
