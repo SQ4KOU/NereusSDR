@@ -24,6 +24,12 @@
 //      while worker is pumping does not crash and the value lands.
 //   9. Cross-thread setter race — setVoxRun from main thread (the
 //      MoxController-routed lambda-connect form).
+//  10. Cross-thread Auto→Queued connection delivery — TxChannel
+//      moved to worker thread, signal emitted from main thread,
+//      verifies the queued slot actually fires (regression trap for
+//      Stage-2 review C1: without QCoreApplication::processEvents in
+//      run() this test fails because the QMetaCallEvent never
+//      delivers).
 //
 // =================================================================
 //
@@ -102,6 +108,22 @@ public:
     std::atomic<int> callCount{0};
     std::atomic<int> lastN{0};
     std::atomic<int32_t> firstISampleBits{0};
+};
+
+// ── MainThreadEmitter — issues signals from the main thread for the C1 ──────
+//
+// regression-trap test (case 10).  An on-purpose bare-bones QObject living on
+// the test (main) thread, used to emit signals connected to TxChannel slots
+// AFTER TxChannel has been moveToThread()'d onto the worker.  This forces Qt
+// to auto-resolve the connection to QueuedConnection — the same dispatch
+// path used by RadioModel's TransmitModel/MoxController → TxChannel wiring.
+class MainThreadEmitter : public QObject {
+    Q_OBJECT
+public:
+    using QObject::QObject;
+signals:
+    void emitMicPreamp(double linearGain);
+    void emitVoxRun(bool run);
 };
 
 // ── Fixture ─────────────────────────────────────────────────────────────────
@@ -392,6 +414,166 @@ private slots:
 
         // Final value: i==99 is odd → setVoxRun(false) was the last call.
         QCOMPARE(ch.lastVoxRunForTest(), false);
+    }
+
+    // ── 10. Stage-2 review C1 regression trap ───────────────────────────────
+    //
+    // The earlier setMicPreamp / setVoxRun race tests (cases 8 & 9) call
+    // ch.setMicPreamp(...) / ch.setVoxRun(...) directly on the test thread.
+    // Direct method calls bypass Qt's connection machinery entirely, so
+    // those tests pass regardless of whether TxWorkerThread::run pumps the
+    // worker's event queue.
+    //
+    // The PRODUCTION wiring at RadioModel.cpp:1463-1718 is different:
+    //   - TransmitModel::micPreampChanged → TxChannel::setMicPreamp
+    //   - MoxController::voxRunRequested  → lambda → TxChannel::setVoxRun
+    // ...and these emissions happen FROM THE MAIN THREAD while TxChannel
+    // lives on TxWorkerThread.  Qt's AutoConnection auto-resolves to
+    // QueuedConnection — the slot call is posted into the worker's event
+    // queue.  Without an event pump in run() (Stage-2 review C1), the
+    // QMetaCallEvent NEVER delivers and the setter never runs.
+    //
+    // This test stands up exactly that production scenario:
+    //   1. Construct TxChannel on the main thread.
+    //   2. Wire MainThreadEmitter::emitMicPreamp → TxChannel::setMicPreamp
+    //      (AutoConnection — same-thread at connect time).
+    //   3. moveToThread(worker) so the connection now spans threads.
+    //   4. Start the worker, feed it mic blocks so the loop is awake.
+    //   5. Emit the signal from the main thread.
+    //   6. Wait for the new value to land via the test seam.
+    //
+    // Pre-C1-fix: m_micPreampLast stays at the original push value
+    // (0.5) — the queued event sits in the worker's event queue forever.
+    // Post-C1-fix: m_micPreampLast == 0.85 — processEvents() drained the
+    // queue and ran the slot.
+    void crossThreadQueuedDelivery_micPreampSlotFires()
+    {
+        AudioEngine engine;
+        TxChannel ch(kChannelId, kBufSize, kBufSize);
+        MockConnection conn;
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+
+        // Initial value to distinguish from the queued-delivery target.
+        ch.setMicPreamp(0.5);
+        QCOMPARE(ch.lastMicPreampForTest(), 0.5);
+
+        TxMicSource src;
+        src.start();
+
+        TxWorkerThread w;
+        w.setTxChannel(&ch);
+        w.setAudioEngine(&engine);
+        w.setMicSource(&src);
+
+        // Wire a main-thread emitter to TxChannel BEFORE moveToThread so
+        // the connection survives the affinity change cleanly (Qt
+        // re-evaluates connection type at emission time, not at connect
+        // time).  AutoConnection here will resolve to QueuedConnection
+        // because the receiver lives on the worker thread once moved.
+        MainThreadEmitter emitter;
+        QObject::connect(&emitter, &MainThreadEmitter::emitMicPreamp,
+                         &ch, &TxChannel::setMicPreamp);
+
+        // Move TxChannel onto the worker BEFORE startPump — this is the
+        // production order in RadioModel.cpp:1784.
+        ch.moveToThread(&w);
+        w.startPump();
+        QTRY_COMPARE_WITH_TIMEOUT(w.isRunning(), true, 500);
+
+        // Feed the worker mic blocks so it actually wakes from
+        // waitForBlock and gets a chance to call processEvents.
+        // Without inbound traffic the worker would block forever and the
+        // queued event would never deliver even after C1 is fixed.
+        std::vector<float> samples(kBufSize, 0.0f);
+        for (int blk = 0; blk < 5; ++blk) {
+            src.inbound(samples.data(), kBufSize);
+        }
+
+        // Wait until the worker has processed at least one block (proves
+        // the loop is alive and processEvents has run at least once).
+        QTRY_COMPARE_WITH_TIMEOUT(conn.callCount.load() >= 1, true, 1000);
+
+        // NOW emit the cross-thread signal.  Push more mic blocks so the
+        // worker keeps waking and processEvents keeps draining the queue.
+        emit emitter.emitMicPreamp(0.85);
+        for (int blk = 0; blk < 5; ++blk) {
+            src.inbound(samples.data(), kBufSize);
+        }
+
+        // Pre-C1-fix this assertion fails: m_micPreampLast stays at 0.5
+        // because the QMetaCallEvent is stuck in the worker's queue.
+        // Post-C1-fix the queued event drains via processEvents inside
+        // run() and m_micPreampLast == 0.85 within the timeout.
+        QTRY_COMPARE_WITH_TIMEOUT(ch.lastMicPreampForTest(), 0.85, 1000);
+
+        // Cleanup.  Stop the worker before attempting to move ch back to
+        // the main thread.  Once stopPump returns, the worker thread is
+        // dead and ch's affinity is "the dead worker QThread" — Qt
+        // tolerates the dangling affinity for the rest of the test (the
+        // QObject destructor handles cleanup regardless of affinity-
+        // thread liveness).  We don't bother moving ch back because it
+        // would emit a benign warning ("Current thread is not the
+        // object's thread") that's purely cosmetic.
+        w.stopPump();
+        src.stop();
+    }
+
+    // ── 10b. Same trap but for the lambda-routed setVoxRun connect form ─────
+    //
+    // RadioModel.cpp:1680-1683 wires:
+    //   connect(m_moxController, &MoxController::voxRunRequested,
+    //           m_txChannel, [this](bool run) {
+    //               m_txChannel->setVoxRun(run);
+    //           });
+    // The lambda body executes on the receiver's (TxChannel's) thread once
+    // moved.  Same C1 regression trap — different connect shape.
+    void crossThreadQueuedDelivery_voxRunLambdaFires()
+    {
+        AudioEngine engine;
+        TxChannel ch(kChannelId, kBufSize, kBufSize);
+        MockConnection conn;
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+
+        // Initial value.
+        ch.setVoxRun(false);
+        QCOMPARE(ch.lastVoxRunForTest(), false);
+
+        TxMicSource src;
+        src.start();
+
+        TxWorkerThread w;
+        w.setTxChannel(&ch);
+        w.setAudioEngine(&engine);
+        w.setMicSource(&src);
+
+        MainThreadEmitter emitter;
+        QObject::connect(&emitter, &MainThreadEmitter::emitVoxRun,
+                         &ch, [&ch](bool run) {
+                             ch.setVoxRun(run);
+                         });
+
+        ch.moveToThread(&w);
+        w.startPump();
+        QTRY_COMPARE_WITH_TIMEOUT(w.isRunning(), true, 500);
+
+        std::vector<float> samples(kBufSize, 0.0f);
+        for (int blk = 0; blk < 5; ++blk) {
+            src.inbound(samples.data(), kBufSize);
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(conn.callCount.load() >= 1, true, 1000);
+
+        emit emitter.emitVoxRun(true);
+        for (int blk = 0; blk < 5; ++blk) {
+            src.inbound(samples.data(), kBufSize);
+        }
+
+        QTRY_COMPARE_WITH_TIMEOUT(ch.lastVoxRunForTest(), true, 1000);
+
+        // Cleanup (see case 10 for rationale).
+        w.stopPump();
+        src.stop();
     }
 };
 
