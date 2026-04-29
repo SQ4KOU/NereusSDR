@@ -1606,6 +1606,20 @@ target_compile_definitions(tst_audio_engine_pull_tx_mic PRIVATE NEREUS_BUILD_TES
 nereus_add_test(tst_tx_worker_thread)
 target_compile_definitions(tst_tx_worker_thread PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1c TX pump v3 — TxMicSource (Thetis Inbound/cm_main port) ──
+# Verifies the ring + semaphore primitives that source the worker's
+# cadence from radio mic frames.  Test cases (8):
+#   - constructStartStop_clean
+#   - waitForBlock_returnsFalse_beforeAnyInbound
+#   - inbound_oneBlock_releasesOneSemaphore_drainYieldsSamples
+#   - inbound_threeBlocks_releasesThreeSemaphores
+#   - inbound_wrapAware_preservesSampleOrder
+#   - inbound_partialBlock_doesNotReleaseUntilComplete
+#   - stop_unblocksConsumer_inWaitForBlockInfinite
+#   - concurrent_producerConsumer_noDataCorruption
+nereus_add_test(tst_tx_mic_source)
+target_compile_definitions(tst_tx_mic_source PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1c E.1: TxChannel push-driven refactor ─────────────────────
 # Verifies the QTimer-driven pull model is gone and the (samples, frames)
 # push slot is the single fexchange2 entry point.  Test cases (7):
