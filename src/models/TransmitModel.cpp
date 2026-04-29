@@ -47,6 +47,10 @@
 //                 implementations + per-MAC AppSettings load/persist for
 //                 TwoToneFreq1/Freq2/Level/Power/Freq2Delay/Invert/Pulsed.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-28 — DrivePowerSource string conversions + setter +
+//                 TwoToneDrivePowerOrigin AppSettings load/persist
+//                 (B.3, Phase 3M-1c).  J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -137,6 +141,26 @@ VaxSlot vaxSlotFromString(const QString& s)
     if (s == QLatin1String("Vax4"))      { return VaxSlot::Vax4; }
     if (s == QLatin1String("MicDirect")) { return VaxSlot::MicDirect; }
     return VaxSlot::MicDirect;  // unknown-string fallback
+}
+
+// Drive-power source helpers (3M-1c B.3) — used by AppSettings persistence.
+// Matches Thetis enums.cs:456-461 [v2.10.3.13] enum value identity.
+QString drivePowerSourceToString(DrivePowerSource s)
+{
+    switch (s) {
+        case DrivePowerSource::DriveSlider: return QStringLiteral("DriveSlider");
+        case DrivePowerSource::TuneSlider:  return QStringLiteral("TuneSlider");
+        case DrivePowerSource::Fixed:       return QStringLiteral("Fixed");
+    }
+    return QStringLiteral("DriveSlider");  // unreachable; default fallback
+}
+
+DrivePowerSource drivePowerSourceFromString(const QString& s)
+{
+    if (s == QLatin1String("DriveSlider")) { return DrivePowerSource::DriveSlider; }
+    if (s == QLatin1String("TuneSlider"))  { return DrivePowerSource::TuneSlider; }
+    if (s == QLatin1String("Fixed"))       { return DrivePowerSource::Fixed; }
+    return DrivePowerSource::DriveSlider;  // unknown-string fallback
 }
 
 TransmitModel::TransmitModel(QObject* parent)
@@ -557,6 +581,12 @@ void TransmitModel::loadFromSettings(const QString& mac)
     const bool twoTonePulsed = s.value(pfx + QLatin1String("TwoTonePulsed"),
                                         QStringLiteral("False")).toString() == QLatin1String("True");
     setTwoTonePulsed(twoTonePulsed);
+
+    // ── Two-tone drive-power source (3M-1c B.3) ──────────────────────────
+    // Default DriveSlider per Thetis console.cs:46553 [v2.10.3.13].
+    const QString drivePowerSourceStr = s.value(pfx + QLatin1String("TwoToneDrivePowerOrigin"),
+                                                 QStringLiteral("DriveSlider")).toString();
+    setTwoToneDrivePowerSource(drivePowerSourceFromString(drivePowerSourceStr));
 }
 
 void TransmitModel::persistToSettings(const QString& mac) const
@@ -600,6 +630,10 @@ void TransmitModel::persistToSettings(const QString& mac) const
     s.setValue(pfx + QLatin1String("TwoToneFreq2Delay"),  QString::number(m_twoToneFreq2Delay));
     s.setValue(pfx + QLatin1String("TwoToneInvert"),      m_twoToneInvert ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(pfx + QLatin1String("TwoTonePulsed"),      m_twoTonePulsed ? QStringLiteral("True") : QStringLiteral("False"));
+
+    // ── Two-tone drive-power source (3M-1c B.3) ─────────────────────────
+    s.setValue(pfx + QLatin1String("TwoToneDrivePowerOrigin"),
+               drivePowerSourceToString(m_twoToneDrivePowerSource));
 }
 
 // ── Anti-VOX properties (3M-1b C.4) ─────────────────────────────────────────
@@ -831,6 +865,22 @@ void TransmitModel::setTwoTonePulsed(bool on)
     m_twoTonePulsed = on;
     persistOne(QStringLiteral("TwoTonePulsed"), on ? QStringLiteral("True") : QStringLiteral("False"));
     emit twoTonePulsedChanged(on);
+}
+
+// ── Two-tone drive-power source (3M-1c B.3) ────────────────────────────────
+//
+// Porting from Thetis console.cs:46576-46597 [v2.10.3.13] (TwoToneDrivePowerOrigin
+// property — Thetis console-side; NereusSDR puts it on TransmitModel).  Phase I
+// (two-tone activation handler) consumes this to decide power-source behaviour
+// per setup.cs:11111-11119.  AppSettings key: "TwoToneDrivePowerOrigin".
+
+void TransmitModel::setTwoToneDrivePowerSource(DrivePowerSource source)
+{
+    if (source == m_twoToneDrivePowerSource) { return; }
+    m_twoToneDrivePowerSource = source;
+    persistOne(QStringLiteral("TwoToneDrivePowerOrigin"),
+               drivePowerSourceToString(source));
+    emit twoToneDrivePowerSourceChanged(source);
 }
 
 // ── Mic source (3M-1b I.1) ────────────────────────────────────────────────────

@@ -38,6 +38,11 @@
 //                 Defaults follow option C — Thetis Designer for Freq1/Freq2/
 //                 Invert and ranges, NereusSDR-original safer for Level/Power.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-28 — DrivePowerSource enum + TwoToneDrivePowerSource property
+//                 (B.3, Phase 3M-1c): full 3-value enum (DriveSlider /
+//                 TuneSlider / Fixed) ported from Thetis enums.cs:456-461;
+//                 default DriveSlider per console.cs:46553 [v2.10.3.13].
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -117,6 +122,31 @@ enum class VaxSlot {
 
 QString vaxSlotToString(VaxSlot s);
 VaxSlot vaxSlotFromString(const QString& s);
+
+// Drive-power source for the two-tone IMD test (and TUN button).
+//
+// From Thetis enums.cs:456-461 [v2.10.3.13]:
+//   public enum DrivePowerSource { DRIVE_SLIDER = 0, TUNE_SLIDER = 1, FIXED = 2 }
+//
+// Selects which power slider drives the radio during a two-tone test:
+//   DriveSlider — the regular drive-power slider (PWR).
+//   TuneSlider  — the dedicated tune-power slider (matches TUN behaviour).
+//   Fixed       — Setup-page-fixed power; saves PWR pre-MOX, applies the
+//                 fixed value during the test, restores PWR on stop.
+//
+// Default is DriveSlider per Thetis console.cs:46553 [v2.10.3.13]:
+//   private DrivePowerSource _2ToneDrivePowerSource = DRIVE_SLIDER;
+//
+// Phase 3M-1c B.3 ports the enum + a TransmitModel property; the actual
+// power-source-driven MOX behaviour wires up in Phase I (two-tone handler).
+enum class DrivePowerSource : int {
+    DriveSlider = 0,  ///< Drive (PWR) slider
+    TuneSlider  = 1,  ///< Tune slider
+    Fixed       = 2,  ///< Setup-page-fixed power; saves+restores PWR
+};
+
+QString drivePowerSourceToString(DrivePowerSource s);
+DrivePowerSource drivePowerSourceFromString(const QString& s);
 
 // Transmit state management.
 // Includes MOX, tune, TX frequency, power, mic gain, and PureSignal state.
@@ -656,6 +686,16 @@ public:
     /// when false, TXPostGenMode=1 (continuous).
     bool twoTonePulsed() const noexcept { return m_twoTonePulsed; }
 
+    /// Power-source selection for the two-tone test (Phase 3M-1c B.3).
+    /// Default DriveSlider matches Thetis console.cs:46553 [v2.10.3.13]:
+    ///   private DrivePowerSource _2ToneDrivePowerSource = DRIVE_SLIDER;
+    /// Phase I (two-tone activation handler) consumes this to decide
+    /// whether to save+override PWR (Fixed) or honor the user slider
+    /// (DriveSlider / TuneSlider) per setup.cs:11111-11119 [v2.10.3.13].
+    DrivePowerSource twoToneDrivePowerSource() const noexcept {
+        return m_twoToneDrivePowerSource;
+    }
+
     // Two-tone range constants — all match Thetis Designer.
     static constexpr int    kTwoToneFreq1HzMin      = -20000;  // setup.Designer.cs:62122-62126
     static constexpr int    kTwoToneFreq1HzMax      =  20000;  // setup.Designer.cs:62117-62121
@@ -755,6 +795,9 @@ public slots:
     void setTwoToneInvert(bool on);
     void setTwoTonePulsed(bool on);
 
+    // ── Two-tone drive-power source (3M-1c B.3) ───────────────────────────
+    void setTwoToneDrivePowerSource(DrivePowerSource source);
+
 signals:
     void moxChanged(bool mox);
     void tuneChanged(bool tune);
@@ -816,6 +859,9 @@ signals:
     void twoToneFreq2DelayChanged(int ms);
     void twoToneInvertChanged(bool on);
     void twoTonePulsedChanged(bool on);
+
+    // ── Two-tone drive-power source signal (3M-1c B.3) ─────────────────────
+    void twoToneDrivePowerSourceChanged(DrivePowerSource source);
 
 private:
     bool m_mox{false};
@@ -909,6 +955,11 @@ private:
     int    m_twoToneFreq2Delay =     0;   // matches Thetis Designer
     bool   m_twoToneInvert     =  true;   // setup.Designer.cs:61963 [v2.10.3.13]
     bool   m_twoTonePulsed     = false;   // setup.Designer.cs:61643-61653 (default)
+
+    // ── Two-tone drive-power source (3M-1c B.3) ──────────────────────────
+    // Default DriveSlider per Thetis console.cs:46553 [v2.10.3.13]:
+    //   private DrivePowerSource _2ToneDrivePowerSource = DRIVE_SLIDER;
+    DrivePowerSource m_twoToneDrivePowerSource{DrivePowerSource::DriveSlider};
 };
 
 } // namespace NereusSDR

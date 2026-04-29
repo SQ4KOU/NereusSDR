@@ -290,6 +290,16 @@ nereus_add_test(tst_transmit_model_persistence)
 # for the 7 controls); setup.cs:11019-11200 (handler context).
 nereus_add_test(tst_transmit_model_two_tone_properties)
 
+# ── Phase 3M-1c B.3: TransmitModel TwoToneDrivePowerSource enum property ─────
+# Verifies default (DriveSlider) + 3-value enum coverage (DriveSlider /
+# TuneSlider / Fixed) + signal emission + idempotent guard +
+# string-conversion helpers (drivePowerSourceToString / fromString).
+# Source: enums.cs:456-461 [v2.10.3.13] (enum definition; 3 values, not 2 —
+# pre-code review §2.3 abbreviated as "Fixed / Slider" but Thetis has 3);
+# console.cs:46553 [v2.10.3.13] (default DRIVE_SLIDER);
+# setup.cs:11111-11119 [v2.10.3.13] (Fixed-mode behaviour reference).
+nereus_add_test(tst_transmit_model_two_tone_drive_origin)
+
 # ── Phase 3O VAX schema migration ─────────────────────────────────────────
 nereus_add_test(tst_app_settings_vax_migration)
 

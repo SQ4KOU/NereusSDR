@@ -219,6 +219,15 @@ private slots:
         QVERIFY(!t.twoTonePulsed());
     }
 
+    void firstRunDefaults_twoToneDrivePowerSource_DriveSlider()
+    {
+        // Matches Thetis console.cs:46553 [v2.10.3.13]:
+        //   private DrivePowerSource _2ToneDrivePowerSource = DRIVE_SLIDER;
+        TransmitModel t;
+        t.loadFromSettings(kMacA);
+        QCOMPARE(t.twoToneDrivePowerSource(), DrivePowerSource::DriveSlider);
+    }
+
     // =========================================================================
     // §2  Round-trip per persisted key (15 cases)
     //     Set a non-default value, verify AppSettings has the key, then
@@ -495,6 +504,32 @@ private slots:
         TransmitModel t2;
         t2.loadFromSettings(kMacA);
         QVERIFY(t2.twoTonePulsed());
+    }
+
+    void roundTrip_twoToneDrivePowerSource_Fixed()
+    {
+        {
+            TransmitModel t;
+            t.loadFromSettings(kMacA);
+            t.setTwoToneDrivePowerSource(DrivePowerSource::Fixed);
+        }
+        const QString key = QStringLiteral("hardware/%1/tx/TwoToneDrivePowerOrigin").arg(kMacA);
+        QCOMPARE(AppSettings::instance().value(key).toString(), QStringLiteral("Fixed"));
+        TransmitModel t2;
+        t2.loadFromSettings(kMacA);
+        QCOMPARE(t2.twoToneDrivePowerSource(), DrivePowerSource::Fixed);
+    }
+
+    void roundTrip_twoToneDrivePowerSource_TuneSlider()
+    {
+        {
+            TransmitModel t;
+            t.loadFromSettings(kMacA);
+            t.setTwoToneDrivePowerSource(DrivePowerSource::TuneSlider);
+        }
+        TransmitModel t2;
+        t2.loadFromSettings(kMacA);
+        QCOMPARE(t2.twoToneDrivePowerSource(), DrivePowerSource::TuneSlider);
     }
 
     // =========================================================================
