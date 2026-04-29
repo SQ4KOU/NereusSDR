@@ -416,6 +416,9 @@ public:
     // lifecycle.
     // Test-only accessor — do not use in production code.
     const TxWorkerThread* txWorkerForTest() const { return m_txWorker.get(); }
+    // Phase 3M-1c TX pump v3 — TxMicSource is constructed alongside
+    // TxWorkerThread; allow tests to verify the pre/post-connect ownership.
+    const class TxMicSource* txMicSourceForTest() const { return m_txMicSource.get(); }
 
     // 3M-1b L.3 test seam: simulate connectToRadio()'s loadFromSettings +
     // HL2 force-Pc sequence without a live radio connection.
@@ -842,6 +845,14 @@ private:
     // startPump().  Teardown: stopPump() → quit() + wait() → move
     // TxChannel back to main thread → reset.  See plan §5.2.
     std::unique_ptr<TxWorkerThread> m_txWorker;
+
+    // Phase 3M-1c TX pump v3 — TxMicSource (Thetis Inbound/cm_main port).
+    // Constructed inside the WDSP-init lambda alongside TxWorkerThread,
+    // wired into both the worker (consumer) and the connection (producer).
+    // Teardown order: stopPump (worker exits) → micSource->stop (already
+    // happens inside stopPump, but reset only after the worker is torn
+    // down so the consumer side is fully disconnected).
+    std::unique_ptr<class TxMicSource> m_txMicSource;
 };
 
 } // namespace NereusSDR

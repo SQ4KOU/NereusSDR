@@ -241,6 +241,7 @@ warren@wpratt.com
 #include "core/audio/PcMicSource.h"
 #include "core/audio/RadioMicSource.h"
 #include "core/audio/CompositeTxMicRouter.h"
+#include "core/audio/TxMicSource.h"
 #include "core/RadioConnection.h"
 #include "core/RadioConnectionTeardown.h"
 #include "core/P1RadioConnection.h"
@@ -1744,15 +1745,48 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             // See plan §5.2 + §4.4 (cross-thread setter audit) and
             // src/core/TxWorkerThread.h for the full design rationale.
             if (m_audioEngine && m_txChannel) {
+                // Phase 3M-1c TX pump v3: construct TxMicSource ALONGSIDE
+                // TxWorkerThread.  Order matters:
+                //   1. Construct TxMicSource and start() it (opens the
+                //      inbound gate so the connection's parser can push
+                //      mic samples even before the worker is ready).
+                //   2. Hand the source to the connection so EP6/port-1026
+                //      parsers route mic frames into the ring.
+                //   3. Wire AudioEngine's PC mic override gate to
+                //      TransmitModel::micSourceChanged.  Sync the initial
+                //      value via a direct slot call (signal connections
+                //      don't fire for the current value).
+                //   4. Construct TxWorkerThread, attach the source as its
+                //      cadence input, moveToThread + startPump.
+                m_txMicSource = std::make_unique<TxMicSource>(this);
+                m_txMicSource->start();
+
+                if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+                    p1->setTxMicSource(m_txMicSource.get());
+                } else if (auto* p2 = qobject_cast<P2RadioConnection*>(m_connection)) {
+                    p2->setTxMicSource(m_txMicSource.get());
+                }
+
+                // PC mic override gate (Thetis cmaster.c:379 [v2.10.3.13]).
+                // micSourceChanged emits MicSource enum; the slot needs a
+                // bool ("is PC"), so funnel through a lambda.
+                connect(&m_transmitModel, &TransmitModel::micSourceChanged,
+                        m_audioEngine, [this](MicSource src) {
+                            m_audioEngine->onMicSourceChanged(src == MicSource::Pc);
+                        });
+                m_audioEngine->onMicSourceChanged(
+                    m_transmitModel.micSource() == MicSource::Pc);
+
                 m_txWorker = std::make_unique<TxWorkerThread>(this);
                 m_txWorker->setTxChannel(m_txChannel);
                 m_txWorker->setAudioEngine(m_audioEngine);
+                m_txWorker->setMicSource(m_txMicSource.get());
                 m_txChannel->moveToThread(m_txWorker.get());
                 m_txWorker->startPump();
 
                 qCInfo(lcDsp) << "TX pump: TxWorkerThread started"
                               << "blockFrames=" << TxWorkerThread::kBlockFrames
-                              << "(semaphore-wake — Phase 3M-1c v3)";
+                              << "(semaphore-wake, mic-frame-driven — 3M-1c v3)";
             }
 
             qCInfo(lcDsp) << "L.1: mic sources constructed (hasMicJack=" << hasMicJack
@@ -3013,11 +3047,27 @@ void RadioModel::teardownConnection()
     //
     // Replaces the deleted L.4 MicReBlocker teardown.  See plan §5.2.
     if (m_txWorker) {
+        // stopPump() internally calls m_txMicSource->stop() (the poison
+        // semaphore release that breaks the worker out of waitForBlock).
         m_txWorker->stopPump();
         if (m_txChannel) {
             m_txChannel->moveToThread(this->thread());
         }
         m_txWorker.reset();
+    }
+    // Phase 3M-1c TX pump v3: drop the connection's view of the mic
+    // source BEFORE destroying it.  Otherwise the next inbound mic
+    // frame would dereference a freed TxMicSource.
+    if (m_connection != nullptr) {
+        if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+            p1->setTxMicSource(nullptr);
+        } else if (auto* p2 = qobject_cast<P2RadioConnection*>(m_connection)) {
+            p2->setTxMicSource(nullptr);
+        }
+    }
+    if (m_txMicSource) {
+        m_txMicSource->stop();
+        m_txMicSource.reset();
     }
 
     // 3M-1c L.2: drop the TwoToneController's view of the TX channel.  If a

@@ -450,6 +450,18 @@ private slots:
         }
         QVERIFY(true);
     }
+
+    // ── 19. txMicSourceForTest() returns nullptr before connectToRadio() ──────
+    // Phase 3M-1c TX pump architecture redesign v3 (§5.6): the TxMicSource
+    // (Thetis Inbound/cm_main port) is constructed alongside TxWorkerThread
+    // inside the WDSP-init lambda once a connection + TxChannel are both
+    // live.  Before connect, m_txMicSource holds nullptr.  Mirrors the
+    // m_txWorker pre-connect pattern (tests 16-18).
+    void txMicSourceNullBeforeConnect()
+    {
+        RadioModel model;
+        QVERIFY(model.txMicSourceForTest() == nullptr);
+    }
 };
 
 QTEST_MAIN(TestRadioModel3m1bOwnership)
