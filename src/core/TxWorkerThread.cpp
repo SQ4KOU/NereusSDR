@@ -20,6 +20,11 @@
 //                 MoxController → TxChannel setters) actually
 //                 deliver after m_txChannel->moveToThread(this).  Same
 //                 author / same AI tooling.
+//   2026-04-29 — Stage-2 review fix I2 — zero-fill the unfilled slots
+//                 in m_in when AudioEngine::pullTxMic returns
+//                 got < kBlockFrames.  Prevents radio mic data from
+//                 leaking into a PC-mic-selected TX block.  Same
+//                 author / same AI tooling.
 // =================================================================
 
 // no-port-check: NereusSDR-original file.  The Thetis cmbuffs.c /
@@ -215,15 +220,28 @@ void TxWorkerThread::dispatchOneBlock()
     // returns true and we splice PC mic samples into m_in's I channel,
     // overwriting whatever the radio sent.
     //
-    // Partial pulls (got < kBlockFrames) leave the remaining slots
-    // populated with radio mic data — a "smooth degradation" rather
-    // than a hard zero-fill.  Q channel always stays zero.
+    // Partial-pull policy: PC mic is the user's chosen TX input; partial
+    // pulls (got < kBlockFrames) are zero-filled across the remaining
+    // slots — the radio mic must NOT leak into a PC-selected TX block.
+    // Silence is the correct degradation under PC-mic short-pull (the
+    // user expects "the PC mic" — if the bus stalls, what they hear on
+    // the air is silence, not their radio's hand mic on top of dead
+    // audio).  Q channel always stays zero (real-only TX input).
     if (m_audioEngine != nullptr && m_audioEngine->isPcMicOverrideActive()) {
         const int got = m_audioEngine->pullTxMic(m_pcMicBuf.data(), kBlockFrames);
         const int n   = std::clamp(got, 0, kBlockFrames);
         for (int i = 0; i < n; ++i) {
             m_in[static_cast<size_t>(2 * i + 0)] =
                 static_cast<double>(m_pcMicBuf[static_cast<size_t>(i)]);
+            m_in[static_cast<size_t>(2 * i + 1)] = 0.0;
+        }
+        // Stage-2 review fix I2: zero-fill the unfilled slots so a short
+        // PortAudio pull does not leak the radio mic block through.  The
+        // worker just drained kBlockFrames of radio mic into m_in above;
+        // that data must be overwritten when PC mic is the selected
+        // source.  Silent degradation is the user-correct behaviour.
+        for (int i = n; i < kBlockFrames; ++i) {
+            m_in[static_cast<size_t>(2 * i + 0)] = 0.0;
             m_in[static_cast<size_t>(2 * i + 1)] = 0.0;
         }
     }
