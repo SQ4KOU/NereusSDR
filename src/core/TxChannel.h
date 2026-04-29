@@ -927,11 +927,29 @@ public:
         driveOneTxBlock(samples, frames);
     }
 
-    // Read-only access to fexchange2 input buffers after a tickForTest() cycle.
-    // Used by D.1 tests to verify: (a) m_inI matches the pushed samples, and
-    // (b) m_inQ is zero-filled (real mic input has no Q component).
-    const std::vector<float>& inIForTest() const { return m_inI; }
-    const std::vector<float>& inQForTest() const { return m_inQ; }
+    // Read-only access to fexchange0 input I-channel after a tickForTest()
+    // cycle.  Phase 3M-1c TX pump v3: internal storage migrated from
+    // separate float Iin/Qin buffers (fexchange2) to a single interleaved
+    // double m_in (fexchange0), so these accessors deinterleave + downcast
+    // on demand to keep existing test API stable.  cached_inI / cached_inQ
+    // are mutable so the const accessors can refresh them.
+    const std::vector<float>& inIForTest() const {
+        m_cachedInI.resize(static_cast<size_t>(m_inputBufferSize));
+        for (int i = 0; i < m_inputBufferSize; ++i) {
+            m_cachedInI[static_cast<size_t>(i)] = static_cast<float>(m_in[2 * i + 0]);
+        }
+        return m_cachedInI;
+    }
+    const std::vector<float>& inQForTest() const {
+        m_cachedInQ.resize(static_cast<size_t>(m_inputBufferSize));
+        for (int i = 0; i < m_inputBufferSize; ++i) {
+            m_cachedInQ[static_cast<size_t>(i)] = static_cast<float>(m_in[2 * i + 1]);
+        }
+        return m_cachedInQ;
+    }
+    // Direct double interleaved view for tests that want to read m_in
+    // without the float deinterleave step.
+    const std::vector<double>& inForTest() const { return m_in; }
 
     // ── Test seams (Phase 3M-1b D.3) — VOX / anti-VOX last-value read-back ──
     //
@@ -980,6 +998,16 @@ public slots:
     /// Qt connection involved), so the call is synchronous on the worker.
     /// !m_running and !m_connection short-circuit the slot to a no-op.
     void driveOneTxBlock(const float* samples, int frames);
+
+    /// Drive one fexchange0 cycle from a pre-populated interleaved I/Q
+    /// double buffer.  Phase 3M-1c TX pump v3 callsite: TxWorkerThread
+    /// hands this method the buffer it just drained from TxMicSource.
+    ///
+    /// `interleavedIn` MUST point to 2 * m_inputBufferSize doubles
+    /// (interleaved I0,Q0,I1,Q1,…) — passing a smaller buffer is UB.
+    /// nullptr is treated as the silence path: m_in is zero-filled and
+    /// fexchange0 is dispatched (TUN PostGen still produces clean carrier).
+    void driveOneTxBlockFromInterleaved(const double* interleavedIn);
 
 signals:
     // ── MON siphon signal (3M-1b D.5) ────────────────────────────────────────
@@ -1039,28 +1067,49 @@ private:
     // without touching TxChannel's public surface again.
     TxMicRouter*     m_micRouter{nullptr};
 
-    // fexchange2 I/O buffers — allocated at construction from m_inputBufferSize /
-    // m_outputBufferSize, reused each driveOneTxBlock() call.
+    // fexchange0 I/O buffers — allocated at construction from
+    // m_inputBufferSize / m_outputBufferSize, reused each driveOneTxBlock()
+    // call.  Phase 3M-1c TX pump v3 switched from fexchange2 (separate
+    // float I/Q) to fexchange0 (interleaved double I/Q) to match Thetis's
+    // cmaster.c:389 [v2.10.3.13] callsite exactly.
     //
-    // fexchange2 requires:
-    //   Iin/Qin:   exactly in_size == m_inputBufferSize samples
-    //   Iout/Qout: exactly out_size == m_outputBufferSize samples
+    // fexchange0 requires:
+    //   in:  exactly in_size  complex (== m_inputBufferSize  pairs == 2*N doubles)
+    //   out: exactly out_size complex (== m_outputBufferSize pairs == 2*N doubles)
     //
-    // Calling fexchange2 with wrong-sized buffers produces no output (silent error).
-    // Previous code used kTxDspBufferSize (4096) for all four buffers — this was
-    // the root cause of the bench-round-3 silent failure.
-    //
-    // From Thetis wdsp/iobuffs.c fexchange2 [v2.10.3.13].
+    // From Thetis wdsp/iobuffs.c:464-516 [v2.10.3.13] — fexchange0 prototype.
     // From Thetis wdsp/cmaster.c:177-190 [v2.10.3.13] — in_size / ch_outrate.
-    int m_inputBufferSize{256};   // == OpenChannel in_size; fexchange2 Iin/Qin size
-    int m_outputBufferSize{256};  // == in_size × out_rate / in_rate; fexchange2 Iout/Qout size
-    std::vector<float> m_inI;
-    std::vector<float> m_inQ;
-    std::vector<float> m_outI;
-    std::vector<float> m_outQ;
-    // Interleaved [I0,Q0,I1,Q1,…] output for sendTxIq.
-    // Size: 2 × m_outputBufferSize floats.
-    std::vector<float> m_outInterleaved;
+    // Default 64 matches Thetis getbuffsize(48000) (cmsetup.c:106-110
+    // [v2.10.3.13]); WdspEngine::createTxChannel passes the actual sizes
+    // computed from the TX out-rate (e.g., 256 out at 192 kHz for P2 G2).
+    int m_inputBufferSize{64};   // == OpenChannel in_size
+    int m_outputBufferSize{64};  // == in_size × out_rate / in_rate
+
+    // Interleaved I/Q double buffers — fexchange0 layout.
+    // m_in.size()  == 2 * m_inputBufferSize  (one I + one Q per frame)
+    // m_out.size() == 2 * m_outputBufferSize (likewise)
+    std::vector<double> m_in;
+    std::vector<double> m_out;
+
+    // Float scratch for sendTxIq — sendTxIq's signature still takes float*
+    // (it pushes into the connection's SPSC ring which holds floats).
+    // Convert from m_out (double) → m_outInterleavedFloat (float) before
+    // calling sendTxIq.  Size: 2 * m_outputBufferSize floats.
+    std::vector<float> m_outInterleavedFloat;
+
+    // Float scratch for the post-fexchange0 MON siphon emit — the
+    // sip1OutputReady signal carries `const float*`, but m_out is double,
+    // so cache a downcast I-only view here.  Size: m_outputBufferSize floats.
+    std::vector<float> m_outIFloatScratch;
+
+#ifdef NEREUS_BUILD_TESTS
+    // Mutable test caches — populated lazily by inIForTest/inQForTest so
+    // those accessors stay drop-in compatible with pre-3M-1c-v3 tests
+    // that consumed `vector<float>` views of the (now defunct) Iin/Qin
+    // buffers.  Marked mutable so the accessors can stay const.
+    mutable std::vector<float> m_cachedInI;
+    mutable std::vector<float> m_cachedInQ;
+#endif
 
     const int m_channelId;
     // m_running is std::atomic so isRunning() can be safely read from

@@ -1393,8 +1393,12 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // From Thetis netInterface.c:1513 [v2.10.3.13] — P2 TX always 192 kHz.
     if (m_wdspEngine && !m_txChannel) {
         const int txOutRate = m_connection->txSampleRate();
+        // Phase 3M-1c TX pump v3: inputBufferSize == 64 mirrors Thetis
+        // getbuffsize(48000) at cmsetup.c:106-110 [v2.10.3.13] exactly.
+        // Output buffer = 64 * txOutRate / 48000 — at 48 kHz out: 64; at
+        // 192 kHz out (P2 G2): 256.
         m_txChannel = m_wdspEngine->createTxChannel(/*channelId=*/1,
-                                                    /*inputBufferSize=*/256,
+                                                    /*inputBufferSize=*/64,
                                                     /*dspBufferSize=*/WdspEngine::kTxDspBufferSize,
                                                     /*inputSampleRate=*/48000,
                                                     /*dspSampleRate=*/WdspEngine::kTxDspSampleRate,

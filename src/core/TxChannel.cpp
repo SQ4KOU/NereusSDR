@@ -151,7 +151,9 @@ warren@wpratt.com
 #include "RadioConnection.h"
 #include "TxMicRouter.h"
 
+#include <algorithm>
 #include <cmath>        // std::isnan — NaN sentinel for double idempotent guards (D.3)
+#include <cstring>
 #include <stdexcept>
 
 // WDSP API declarations (SetTXAPostGen*, fexchange2, etc.) — guarded by
@@ -195,26 +197,24 @@ TxChannel::TxChannel(int channelId,
     : QObject(parent)
     // Init order must match declaration order (-Wreorder-ctor):
     // m_inputBufferSize, m_outputBufferSize, m_channelId.
-    , m_inputBufferSize(inputBufferSize > 0 ? inputBufferSize : 256)
-    , m_outputBufferSize(outputBufferSize > 0 ? outputBufferSize : 256)
+    , m_inputBufferSize(inputBufferSize > 0 ? inputBufferSize : 64)
+    , m_outputBufferSize(outputBufferSize > 0 ? outputBufferSize : 64)
     , m_channelId(channelId)
 {
-    // Allocate fexchange2 I/O buffers at correct sizes.
-    // Iin/Qin:   m_inputBufferSize samples  (== OpenChannel in_size)
-    // Iout/Qout: m_outputBufferSize samples (== in_size × out_rate / in_rate)
+    // Allocate fexchange0 I/O buffers at correct sizes.
     //
-    // Bench fix round 3 (Issue A): previous code used kTxDspBufferSize for all
-    // four buffers.  fexchange2 requires Iin/Qin of exactly in_size and
-    // Iout/Qout of exactly out_size; the dsp-size-sized call with in_size=256
-    // would produce no output (silent error).
+    // Phase 3M-1c TX pump v3: switched from fexchange2 (separate float
+    // I/Q buffers) to fexchange0 (interleaved double I/Q buffers) to
+    // match Thetis cmaster.c:389 [v2.10.3.13] callsite exactly.  The
+    // ratio is the same — m_inputBufferSize and m_outputBufferSize are
+    // pair counts; the underlying storage is 2× that in doubles.
     //
-    // From Thetis wdsp/iobuffs.c fexchange2 [v2.10.3.13].
+    // From Thetis wdsp/iobuffs.c:464-516 [v2.10.3.13] — fexchange0 prototype.
     // From Thetis wdsp/cmaster.c:179-183 [v2.10.3.13] — in_size, ch_outrate.
-    m_inI.assign(m_inputBufferSize, 0.0f);
-    m_inQ.assign(m_inputBufferSize, 0.0f);
-    m_outI.assign(m_outputBufferSize, 0.0f);
-    m_outQ.assign(m_outputBufferSize, 0.0f);
-    m_outInterleaved.assign(m_outputBufferSize * 2, 0.0f);
+    m_in.assign(static_cast<size_t>(m_inputBufferSize) * 2, 0.0);
+    m_out.assign(static_cast<size_t>(m_outputBufferSize) * 2, 0.0);
+    m_outInterleavedFloat.assign(static_cast<size_t>(m_outputBufferSize) * 2, 0.0f);
+    m_outIFloatScratch.assign(static_cast<size_t>(m_outputBufferSize), 0.0f);
 
     // Phase 3M-1c TX pump architecture redesign (2026-04-29): no QTimer.
     // TxWorkerThread::onPumpTick calls driveOneTxBlock at ~5 ms cadence
@@ -1151,105 +1151,121 @@ void TxChannel::setMicRouter(TxMicRouter* router)
 // ---------------------------------------------------------------------------
 void TxChannel::driveOneTxBlock(const float* samples, int frames)
 {
-    // ── TxWorkerThread pump entry point (3M-1c TX pump redesign) ────────────
+    // ── float-buffer entry point (back-compat) ──────────────────────────────
     //
-    // Called by TxWorkerThread::onPumpTick.  Runs synchronously on the
-    // worker thread.  Three call shapes:
-    //   1. (samples != null, frames == m_inputBufferSize) — mic-block path:
-    //      copy samples into m_inI, zero-fill m_inQ, dispatch fexchange2.
-    //   2. (samples == null, frames == 0)                 — silence path:
-    //      zero-fill m_inI/m_inQ, dispatch fexchange2 (TUNE-tone PostGen
-    //      output still reaches sendTxIq).
-    //   3. (samples != null, frames != m_inputBufferSize) — contract
-    //      violation: log a warning and return.  TxWorkerThread always
-    //      delivers exactly kBlockFrames=256 samples per pump tick.
+    // Phase 3M-1c TX pump v3: convert the float buffer into the interleaved
+    // double layout that fexchange0 wants, then delegate to the canonical
+    // driveOneTxBlockFromInterleaved entry point.  Q is always zero (real
+    // mic input is mono).
     //
-    // !m_running and !m_connection short-circuit the slot to a no-op.
-    // m_running is std::atomic; load with acquire pairing setRunning's
-    // release store.
+    // Three call shapes:
+    //   1. (samples != null, frames == m_inputBufferSize) — mic-block path
+    //   2. (samples == null, frames == 0)                 — silence path
+    //   3. (samples != null, frames != m_inputBufferSize) — contract violation
+    if (!m_running.load(std::memory_order_acquire) || !m_connection) {
+        return;
+    }
+    const int inN = m_inputBufferSize;
+    if (inN == 0 || m_in.empty()) {
+        return;
+    }
+    if (samples != nullptr && frames != inN) {
+        qCWarning(lcDsp) << "TxChannel" << m_channelId
+                         << "driveOneTxBlock: frames=" << frames
+                         << "does not match m_inputBufferSize=" << inN
+                         << "; skipping fexchange0 (caller must re-block "
+                            "samples to inputBufferSize before pushing).";
+        return;
+    }
+
+    if (samples != nullptr) {
+        for (int i = 0; i < inN; ++i) {
+            m_in[static_cast<size_t>(2 * i + 0)] = static_cast<double>(samples[i]);
+            m_in[static_cast<size_t>(2 * i + 1)] = 0.0;
+        }
+        // Note: pass nullptr to driveOneTxBlockFromInterleaved so it
+        // treats m_in as already populated and skips the redundant copy.
+        driveOneTxBlockFromInterleaved(m_in.data());
+    } else {
+        // Silence path — fill m_in with zeros, then dispatch.
+        std::fill(m_in.begin(), m_in.end(), 0.0);
+        driveOneTxBlockFromInterleaved(m_in.data());
+    }
+}
+
+void TxChannel::driveOneTxBlockFromInterleaved(const double* interleavedIn)
+{
+    // ── TxWorkerThread canonical pump entry (3M-1c TX pump v3) ──────────────
+    //
+    // Mirrors Thetis cmaster.c:389 [v2.10.3.13] callsite of fexchange0:
+    //   fexchange0 (chid (stream, 0), pcm->in[stream],
+    //               pcm->xmtr[tx].out[0], &error);
+    //
+    // Block-size invariant matches Thetis cmaster.c:460-487 [v2.10.3.13]:
+    //   r1_outsize == xcm_insize == in_size (= getbuffsize(48000) = 64).
     if (!m_running.load(std::memory_order_acquire) || !m_connection) {
         return;
     }
 
     const int inN  = m_inputBufferSize;
     const int outN = m_outputBufferSize;
-    if (inN == 0 || m_inI.empty()) {
+    if (inN == 0 || m_in.empty()) {
         return;
     }
 
-    // Contract: caller pushes exactly m_inputBufferSize samples (or the
-    // explicit nullptr/0 silence path).  Anything else is a bug at the
-    // wire-up layer — log and skip.  Never silently truncate or pad.
-    if (samples != nullptr && frames != inN) {
-        qCWarning(lcDsp) << "TxChannel" << m_channelId
-                         << "driveOneTxBlock: frames=" << frames
-                         << "does not match m_inputBufferSize=" << inN
-                         << "; skipping fexchange2 (caller must re-block "
-                            "samples to inputBufferSize before pushing).";
-        return;
+    // If the caller handed us an external buffer (not m_in.data()), copy
+    // into m_in.  Identity comparison: TxWorkerThread will hand us its own
+    // scratch buffer; the float-overload above hands us m_in.data() back
+    // (no-op copy avoided).
+    if (interleavedIn != nullptr && interleavedIn != m_in.data()) {
+        std::memcpy(m_in.data(), interleavedIn, sizeof(double) * 2 * inN);
+    } else if (interleavedIn == nullptr) {
+        std::fill(m_in.begin(), m_in.end(), 0.0);
     }
-
-    // Populate m_inI from the pushed block (or zero-fill for the silence path).
-    // m_inQ is always zero — real mic input is mono, no Q component.
-    if (samples != nullptr) {
-        std::copy_n(samples, inN, m_inI.begin());
-    } else {
-        std::fill(m_inI.begin(), m_inI.end(), 0.0f);
-    }
-    std::fill(m_inQ.begin(), m_inQ.end(), 0.0f);
 
 #ifdef HAVE_WDSP
-    // fexchange2 — drives the WDSP TX channel.
+    // fexchange0 — drives the WDSP TX channel with interleaved double I/Q.
     //
-    // CRITICAL: Iin/Qin must be exactly in_size (== m_inputBufferSize) samples;
-    // Iout/Qout must be exactly out_size (== m_outputBufferSize) samples.
-    // fexchange2 silently produces no output if the sizes don't match the channel
-    // parameters set in OpenChannel().
-    //
-    // gen1 PostGen (set by setTuneTone()) injects the TUNE tone after bp0;
-    // output is the modulated I/Q stream ready for the radio's DUC.
-    //
-    // From Thetis wdsp/iobuffs.c [v2.10.3.13] — fexchange2 prototype:
-    //   void fexchange2(int id, double* Iin, double* Qin,
-    //                   double* Iout, double* Qout, int* error)
-    // NereusSDR uses the float variant declared in wdsp_api.h (INREAL=float).
+    // CRITICAL: in/out must be exactly 2*in_size / 2*out_size doubles.
+    // From Thetis wdsp/iobuffs.c:464-516 [v2.10.3.13] — fexchange0 prototype:
+    //   void fexchange0 (int channel, double* in, double* out, int* error)
     int error = 0;
-    fexchange2(m_channelId,
-               m_inI.data(), m_inQ.data(),   // inN samples each
-               m_outI.data(), m_outQ.data(),  // outN samples each
-               &error);
+    fexchange0(m_channelId, m_in.data(), m_out.data(), &error);
     if (error != 0) {
         qCWarning(lcDsp) << "TxChannel" << m_channelId
-                         << "fexchange2 error" << error;
+                         << "fexchange0 error" << error;
         return;
     }
 #endif // HAVE_WDSP
 
-    // Interleave outN I/Q pairs into [I0,Q0,I1,Q1,...] for sendTxIq's layout.
-    // Without HAVE_WDSP, m_outI/m_outQ were never written so m_outInterleaved
-    // stays all-zeros (silence stream) — keeps the ring warm in stub builds.
+    // Convert m_out (interleaved double) → m_outInterleavedFloat for
+    // sendTxIq, which still uses the float* SPSC ring layout.
+    // Without HAVE_WDSP, m_out stays all-zeros (silence stream) — keeps
+    // the ring warm in stub builds.
     for (int i = 0; i < outN; ++i) {
-        m_outInterleaved[2 * i]     = m_outI[i];
-        m_outInterleaved[2 * i + 1] = m_outQ[i];
+        m_outInterleavedFloat[static_cast<size_t>(2 * i + 0)] =
+            static_cast<float>(m_out[static_cast<size_t>(2 * i + 0)]);
+        m_outInterleavedFloat[static_cast<size_t>(2 * i + 1)] =
+            static_cast<float>(m_out[static_cast<size_t>(2 * i + 1)]);
     }
 
     // Push to connection's SPSC ring (producer side).
-    // The connection thread's E.6 drain (P2 port 1029 / P1 EP2 zones)
-    // consumes the ring and emits to UDP.
     // sendTxIq(iq, n): n = number of complex samples; buffer has 2*n floats.
-    m_connection->sendTxIq(m_outInterleaved.data(), outN);
+    m_connection->sendTxIq(m_outInterleavedFloat.data(), outN);
 
     // Siphon signal — MON path (3M-1b D.5).
     //
     // Emit post-SSB-modulator I-channel audio to any subscribed MON consumer
-    // (AudioEngine::txMonitorBlockReady wired in Phase L).
+    // (AudioEngine::txMonitorBlockReady wired in Phase L).  Cache an I-only
+    // float view in m_outIFloatScratch for the legacy float* signal API.
     //
-    // CRITICAL: DirectConnection ONLY. m_outI.data() is valid only during
-    // this synchronous slot dispatch. QueuedConnection subscribers will
-    // see stale or reused buffer data on the next driveOneTxBlock() call.
-    //
-    // Plan: 3M-1b D.5. Pre-code review §4.3.
-    emit sip1OutputReady(m_outI.data(), m_outputBufferSize);
+    // CRITICAL: DirectConnection ONLY. The pointer is valid only during
+    // this synchronous slot dispatch.  See sip1OutputReady doc-comment.
+    for (int i = 0; i < outN; ++i) {
+        m_outIFloatScratch[static_cast<size_t>(i)] =
+            static_cast<float>(m_out[static_cast<size_t>(2 * i + 0)]);
+    }
+    emit sip1OutputReady(m_outIFloatScratch.data(), m_outputBufferSize);
 }
 
 // ---------------------------------------------------------------------------

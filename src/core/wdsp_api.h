@@ -191,6 +191,15 @@ void SetOutputSamplerate(int channel, int samplerate);
 void fexchange2(int channel, float* Iin, float* Qin,
                 float* Iout, float* Qout, int* error);
 
+// Phase 3M-1c TX pump v3 — fexchange0 (interleaved double I/Q).
+// Used by TxChannel since v3 to mirror Thetis cmaster.c:389 [v2.10.3.13]
+// callsite exactly.  The `in` buffer is 2 * in_size doubles (I0,Q0,I1,…),
+// and `out` is 2 * out_size doubles in the same layout.
+//
+// From Thetis wdsp/iobuffs.c:465 [v2.10.3.13] — declaration also in
+// third_party/wdsp/src/iobuffs.h:90.
+void fexchange0(int channel, double* in, double* out, int* error);
+
 // ---------------------------------------------------------------------------
 // RX mode (RXA.h)
 // ---------------------------------------------------------------------------
