@@ -1594,16 +1594,24 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             connect(&m_transmitModel, &TransmitModel::twoToneLevelChanged,
                     m_txChannel, [this](double db) {
                 if (!m_txChannel) { return; }
-                // Level is the dB amplitude; TwoToneController converts
-                // to the linear ttmag1/ttmag2 magnitudes via the
-                // 0.49999 * pow(10, db/20) formula at setActive(true).
-                // For the always-pushed Mag setters we just preserve
-                // the dB value — TXPostGen treats it as the next
-                // start-of-test magnitude.
-                m_txChannel->setTxPostGenTTMag1(db);
-                m_txChannel->setTxPostGenTTMag2(db);
-                m_txChannel->setTxPostGenTTPulseMag1(db);
-                m_txChannel->setTxPostGenTTPulseMag2(db);
+                // Level is the dB amplitude (UI value, e.g. -6 dB).  The
+                // WDSP TXPostGen mag fields expect a LINEAR magnitude in
+                // [0, 0.49999] (`ttmag1` / `ttmag2` in gen.c).  Apply
+                // the same conversion TwoToneController uses at activation
+                // time so user-driven mid-test level changes don't push
+                // an out-of-range raw dB into WDSP — that produced
+                // muted / wrong-magnitude two-tone output (Codex P2 review
+                // on PR #152).
+                //
+                // From Thetis setup.cs:11056 [v2.10.3.13]:
+                //   ttmag1 = ttmag2 = 0.49999 * Math.Pow(10.0, ttmag / 20.0);
+                // The literal 0.49999 MUST be preserved verbatim
+                // (CLAUDE.md "Constants and Magic Numbers").
+                const double mag = 0.49999 * std::pow(10.0, db / 20.0);
+                m_txChannel->setTxPostGenTTMag1(mag);
+                m_txChannel->setTxPostGenTTMag2(mag);
+                m_txChannel->setTxPostGenTTPulseMag1(mag);
+                m_txChannel->setTxPostGenTTPulseMag2(mag);
             });
             connect(&m_transmitModel, &TransmitModel::twoTonePowerChanged,
                     m_txChannel, [](int /*pct*/) {
@@ -1627,10 +1635,19 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             m_txChannel->setTxPostGenTTFreq2(static_cast<double>(m_transmitModel.twoToneFreq2()));
             m_txChannel->setTxPostGenTTPulseToneFreq1(static_cast<double>(m_transmitModel.twoToneFreq1()));
             m_txChannel->setTxPostGenTTPulseToneFreq2(static_cast<double>(m_transmitModel.twoToneFreq2()));
-            m_txChannel->setTxPostGenTTMag1(m_transmitModel.twoToneLevel());
-            m_txChannel->setTxPostGenTTMag2(m_transmitModel.twoToneLevel());
-            m_txChannel->setTxPostGenTTPulseMag1(m_transmitModel.twoToneLevel());
-            m_txChannel->setTxPostGenTTPulseMag2(m_transmitModel.twoToneLevel());
+            // Mirror the dB→linear conversion applied in the
+            // twoToneLevelChanged lambda above — initial-state pushes
+            // must use the same formula or the first activation runs
+            // with raw-dB magnitudes (Codex P2 review on PR #152).
+            // Source: Thetis setup.cs:11056 [v2.10.3.13].
+            {
+                const double initialLevelDb = m_transmitModel.twoToneLevel();
+                const double initialMag = 0.49999 * std::pow(10.0, initialLevelDb / 20.0);
+                m_txChannel->setTxPostGenTTMag1(initialMag);
+                m_txChannel->setTxPostGenTTMag2(initialMag);
+                m_txChannel->setTxPostGenTTPulseMag1(initialMag);
+                m_txChannel->setTxPostGenTTPulseMag2(initialMag);
+            }
 
             // ── 3M-1c TX pump architecture redesign: MoxController → TxChannel ──
             //                       queued connects (Phase 3M-1c spec §5.2)
