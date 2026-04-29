@@ -1444,11 +1444,26 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             // setTxMonitorEnabled is atomic (E.3 design); auto connection.
             connect(&m_transmitModel, &TransmitModel::monEnabledChanged,
                     m_audioEngine, &AudioEngine::setTxMonitorEnabled);
+            // 3M-1c K.1 — initial-state sync (mirrors the L.1 micPreamp push):
+            // signal connects don't fire for the current value, so without
+            // this push, AudioEngine::m_txMonitorEnabled stays at its
+            // default-constructed false even if the user persisted a true
+            // before disconnect. monEnabled doesn't actually persist (always
+            // loads false per safety), so this push is functionally harmless
+            // — but it closes the audit gap and stays robust if the
+            // safety-default policy ever changes.
+            m_audioEngine->setTxMonitorEnabled(m_transmitModel.monEnabled());
 
             // L.1 connection 5: TX monitor volume from TransmitModel.
             // setTxMonitorVolume is atomic (E.3 design); auto connection.
             connect(&m_transmitModel, &TransmitModel::monitorVolumeChanged,
                     m_audioEngine, &AudioEngine::setTxMonitorVolume);
+            // 3M-1c K.2 — initial-state sync.  monitorVolume DOES persist
+            // (audio.cs:417 [v2.10.3.13] literal default 0.5; user-tunable
+            // and stored under hardware/<mac>/tx/MonitorVolume).  Without
+            // this push, AudioEngine starts at its default 0.5 even if the
+            // user saved e.g. 0.75 — first MOX cycle would be wrong volume.
+            m_audioEngine->setTxMonitorVolume(m_transmitModel.monitorVolume());
 
             // ── L.1 (K.2 carry-forward): install MoxController BandPlanGuard check ──
             // Installs the moxCheck callback so setMox(true) consults BandPlanGuard
