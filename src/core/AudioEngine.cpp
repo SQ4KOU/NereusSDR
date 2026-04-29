@@ -1,3 +1,8 @@
+// no-port-check: AetherSDR-derived NereusSDR file; Thetis cmaster.cs /
+// audio.cs references in inline cites are behavioral source-first cites
+// for sample sizes / timing / mix coefficient parity only, not Thetis
+// logic ports.
+
 // =================================================================
 // src/core/AudioEngine.cpp  (NereusSDR)
 // =================================================================
@@ -75,6 +80,11 @@
 //                 in ctor with initial gain = m_txMonitorVolume default (0.5f).
 //                 setTxMonitorVolume now pushes gain updates to MasterMixer
 //                 via setSliceGain. Plan: 3M-1b E.3. Pre-code review §4.3 §4.4.
+//   2026-04-28 — Phase 3M-1c D.1 / D.2 by J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code. pullTxMic feeds a 720-sample
+//                 accumulator and emits micBlockReady on every full block.
+//                 clearMicBuffer() resets the accumulator (called on MOX-off
+//                 in Phase E). Source: Thetis cmaster.cs:493-518 [v2.10.3.13].
 // =================================================================
 
 #include "AudioEngine.h"
@@ -1023,7 +1033,28 @@ int AudioEngine::pullTxMic(float* dst, int n)
         }
     }
 
+    // ── 3M-1c D.1: feed the 720-sample accumulator + emit micBlockReady ──
+    // Matches Thetis cmaster.cs:493-497 [v2.10.3.13] — mic stream block
+    // size (index 5) = 720 samples.  Phase E will connect TxChannel as a
+    // slot consumer via Qt::DirectConnection so fexchange2 fires on the
+    // audio thread without a separate timer.
+    for (int i = 0; i < gotMonoSamples; ++i) {
+        m_micBlockBuffer[m_micBlockFill++] = dst[i];
+        if (m_micBlockFill >= kMicBlockFrames) {
+            emit micBlockReady(m_micBlockBuffer.data(), kMicBlockFrames);
+            m_micBlockFill = 0;
+        }
+    }
+
     return gotMonoSamples;
+}
+
+void AudioEngine::clearMicBuffer()
+{
+    // 3M-1c D.2 — drop any partial fill; called on MOX-off so a fresh TX
+    // cycle begins with an empty accumulator.  Single-threaded by contract
+    // (audio-thread only); no atomic needed.
+    m_micBlockFill = 0;
 }
 
 void AudioEngine::setVolume(float volume)

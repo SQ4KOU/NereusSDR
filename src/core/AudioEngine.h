@@ -1,5 +1,10 @@
 #pragma once
 
+// no-port-check: AetherSDR-derived NereusSDR file; Thetis cmaster.cs /
+// audio.cs references in inline cites are behavioral source-first cites
+// for sample sizes / timing / mix coefficient parity only, not Thetis
+// logic ports.
+
 // =================================================================
 // src/core/AudioEngine.h  (NereusSDR)
 // =================================================================
@@ -75,6 +80,14 @@
 //                 Phase L (RadioModel integration) wires MoxController::moxStateChanged
 //                 → setMoxState via signal/slot. Plan: 3M-1b E.4.
 //                 Pre-code review §10.3 + §10.4.
+//   2026-04-28 — Phase 3M-1c D.1 / D.2 by J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code. Adds 720-sample mic-block
+//                 accumulator (m_micBlockBuffer / m_micBlockFill / kMicBlockFrames)
+//                 + micBlockReady(const float*, int) Qt signal + clearMicBuffer()
+//                 method. pullTxMic feeds the accumulator and emits on every
+//                 720-sample full block. Phase E will connect TxChannel as
+//                 a Qt::DirectConnection slot. Source: Thetis cmaster.cs:493-518
+//                 [v2.10.3.13] (mic stream index 5 = 720 samples @ 48 kHz).
 // =================================================================
 
 #include "AudioDeviceConfig.h"
@@ -249,6 +262,21 @@ public:
     // Plan: 3M-1b E.1. Pre-code review §0.3 (PcMicSource arch).
     int pullTxMic(float* dst, int n);
 
+    // ── Mic block accumulator (3M-1c D.1 / D.2) ──────────────────────────
+    //
+    // Number of mono samples per micBlockReady emit.  Matches Thetis
+    // cmaster.cs:495 [v2.10.3.13]:
+    //   int[] cmInboundSize = new int[8] { 240, 240, 240, 240, 240, 720, ... };
+    // Index 5 (mic stream) = 720 samples → 15 ms @ 48 kHz.  Pre-code
+    // review §0.5 locks NereusSDR to the exact Thetis size.
+    static constexpr int kMicBlockFrames = 720;
+
+    /// Reset the 720-sample mic accumulator.  Called on MOX-off (Phase E)
+    /// to drop any partial pre-MOX samples and start the next TX cycle
+    /// with a clean buffer.  Idempotent — safe to call when the accumulator
+    /// is already empty.
+    void clearMicBuffer();
+
     // Master volume (0.0–1.0). Read on the DSP thread, written on the
     // main thread. Preserves the existing AF-gain wiring in
     // RadioModel::wireSliceSignals.
@@ -384,6 +412,19 @@ signals:
     void vaxMutedChanged(int channel, bool muted);
     void vaxTxGainChanged(float gain);
 
+    // ── Mic block accumulator (3M-1c D.1) ─────────────────────────────────
+    //
+    // Emitted each time the TX mic input bus has accumulated kMicBlockFrames
+    // (720) samples of mono float audio.  Subscribers (Phase E TxChannel)
+    // connect via Qt::DirectConnection to drive `fexchange2` on the audio
+    // thread, matching Thetis's native-callback-driven TX timing in
+    // cmaster.cs:493-518 [v2.10.3.13].
+    //
+    // Buffer lifetime: `samples` points to an internal accumulator that is
+    // overwritten on the next emit.  Slots must consume synchronously
+    // (DirectConnection) and not hold the pointer past the call.
+    void micBlockReady(const float* samples, int frames);
+
     // Sub-Phase 12 Task 12.4 — DSP parameter and audio-reset signals.
     void dspSampleRateChanged(int rate);
     void dspBlockSizeChanged(int blockSize);
@@ -467,6 +508,14 @@ private:
     std::unique_ptr<IAudioBus> m_speakersBus;
     std::unique_ptr<IAudioBus> m_headphonesBus;
     std::unique_ptr<IAudioBus> m_txInputBus;
+
+    // ── Mic block accumulator (3M-1c D.1 / D.2) ──────────────────────────
+    // Fixed-size 720-sample accumulator filled by pullTxMic().  When the
+    // fill counter reaches kMicBlockFrames, micBlockReady is emitted with
+    // a pointer to m_micBlockBuffer.data() and the fill counter resets to 0.
+    // Single-threaded (audio-thread only) so no atomics needed.
+    std::array<float, kMicBlockFrames> m_micBlockBuffer{};
+    int m_micBlockFill = 0;
     // Sub-Phase 8.5: platform-native VAX TX virtual bus. Distinct from
     // m_txInputBus, which is the OS mic-capture device owned by MicDirect.
     // Opened in start(), reset in stop(); consumption is a Phase 3M concern.

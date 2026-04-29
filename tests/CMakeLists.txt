@@ -1555,6 +1555,15 @@ nereus_add_test(tst_tx_channel_meters)
 nereus_add_test(tst_audio_engine_pull_tx_mic)
 target_compile_definitions(tst_audio_engine_pull_tx_mic PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1c D.1 / D.2: AudioEngine 720-sample mic block accumulator ──
+# Verifies the micBlockReady signal fires on every kMicBlockFrames=720
+# accumulated mono samples + clearMicBuffer drops partial fill.  Uses the
+# same FakeAudioBus injection pattern as tst_audio_engine_pull_tx_mic via
+# the NEREUS_BUILD_TESTS-only setTxInputBusForTest seam.
+# Source: cmaster.cs:493-518 [v2.10.3.13] (mic stream block size = 720).
+nereus_add_test(tst_audio_engine_mic_block_ready)
+target_compile_definitions(tst_audio_engine_mic_block_ready PRIVATE NEREUS_BUILD_TESTS)
+
 # Plan: 3M-1b E.2. Exercises AudioEngine TX monitor enable + volume state
 # (setTxMonitorEnabled / setTxMonitorVolume / signals / clamping / idempotency).
 # Pre-code review §4.4.
