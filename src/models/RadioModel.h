@@ -97,9 +97,10 @@
 // 3M-1a G.1: TxMicRouter is a plain (non-QObject) strategy interface.
 // Include required directly so unique_ptr destructor is available here.
 #include "core/TxMicRouter.h"
-// 3M-1c L.4: MicReBlocker is a plain (non-QObject) class.  Include required
-// so unique_ptr destructor is available here.
-#include "core/audio/MicReBlocker.h"
+// (Phase 3M-1c L.4 added a `core/audio/MicReBlocker.h` include for the
+//  unique_ptr<MicReBlocker> destructor.  The TX pump architecture
+//  redesign (2026-04-29) deleted MicReBlocker; replaced with
+//  TxWorkerThread which drives TxChannel directly.)
 #include <memory>  // std::unique_ptr
 
 namespace NereusSDR {
@@ -120,6 +121,8 @@ class CompositeTxMicRouter;
 // (chunk F) + the TwoToneController activation orchestrator (chunk I).
 class MicProfileManager;
 class TwoToneController;
+// 3M-1c TX pump architecture redesign — TxWorkerThread.
+class TxWorkerThread;
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
@@ -814,16 +817,21 @@ private:
     // m_txChannel is live.  setTxChannel(nullptr) is called in teardown.
     TwoToneController* m_twoToneController{nullptr};
     //
-    // L.4 — 720→256 mic re-blocker.  Bridges
-    // AudioEngine::micBlockReady (720 mono frames per emit, matches Thetis
-    // cmaster.cs:495 [v2.10.3.13] mic stream block size) to
-    // TxChannel::driveOneTxBlock (m_inputBufferSize=256, dictated by the
-    // WDSP r2-ring constraint that 256 divides 2048 cleanly; see TxChannel.cpp
-    // E.1 contract notes).  Plain (non-QObject) class; lifetime managed via
-    // unique_ptr.  Constructed inside the WDSP-init lambda once m_txChannel
-    // is live (so the sink callback can capture m_txChannel safely); reset
-    // and destroyed in teardownConnection().
-    std::unique_ptr<MicReBlocker> m_micReBlocker;
+    // (Phase 3M-1c L.4 introduced a `std::unique_ptr<MicReBlocker>` here
+    //  to bridge AudioEngine 720-sample emits to TxChannel 256-sample
+    //  pushes.  The TX pump architecture redesign (2026-04-29) deleted
+    //  MicReBlocker entirely; replaced with TxWorkerThread below.)
+    //
+    // 3M-1c TX pump architecture redesign — dedicated QThread that
+    // drives the TX DSP pump off the main thread.  Mirrors Thetis's
+    // `cm_main` worker-thread pattern (cmbuffs.c:151-168 [v2.10.3.13]):
+    // QTimer-driven 5 ms tick, pulls 256-sample mic blocks via
+    // AudioEngine::pullTxMic, calls TxChannel::driveOneTxBlock(samples,
+    // 256).  Constructed inside the WDSP-init lambda once m_txChannel
+    // is live; TxChannel is moveToThread'd to the worker before
+    // startPump().  Teardown: stopPump() → quit() + wait() → move
+    // TxChannel back to main thread → reset.  See plan §5.2.
+    std::unique_ptr<TxWorkerThread> m_txWorker;
 };
 
 } // namespace NereusSDR

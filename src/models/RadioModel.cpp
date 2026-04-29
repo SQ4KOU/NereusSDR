@@ -234,6 +234,9 @@ warren@wpratt.com
 #include "core/MicProfileManager.h"
 #include "core/TwoToneController.h"
 #include "core/TxChannel.h"
+// 3M-1c TX pump architecture redesign — dedicated worker thread for
+// TX DSP pump (replaces D.1/E.1/L.4 chain).
+#include "core/TxWorkerThread.h"
 // 3M-1b L.1: concrete mic-source strategy objects.
 #include "core/audio/PcMicSource.h"
 #include "core/audio/RadioMicSource.h"
@@ -1668,71 +1671,44 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             m_txChannel->setTxPostGenTTPulseMag1(m_transmitModel.twoToneLevel());
             m_txChannel->setTxPostGenTTPulseMag2(m_transmitModel.twoToneLevel());
 
-            // ── 3M-1c L.4: 720→256 mic re-blocker ──────────────────────────────
+            // ── 3M-1c TX pump architecture redesign: TxWorkerThread setup ──────
             //
-            // Bridges AudioEngine::micBlockReady (720 mono frames per emit, per
-            // Thetis cmaster.cs:495 [v2.10.3.13]) to TxChannel::driveOneTxBlock
-            // (m_inputBufferSize=256, dictated by the WDSP r2-ring requirement
-            // that 256 divides 2048 cleanly — TxChannel.cpp E.1 contract).
+            // Replaces the deleted L.4 MicReBlocker + D.1 AudioEngine
+            // accumulator + bench-fix-A pumpMic timer + bench-fix-B
+            // TxChannel silence-drive timer chain.  Mirrors Thetis's
+            // `cm_main` worker-thread pattern (cmbuffs.c:151-168
+            // [v2.10.3.13]) with NereusSDR's WDSP-r2-ring-divisibility
+            // 256-sample block size end-to-end.
             //
-            // Construction is deferred to here (not the ctor) so the sink lambda
-            // can capture m_txChannel safely.  A captured-by-value pointer is
-            // refreshed at every connectToRadio call: when teardown nulls
-            // m_txChannel, m_micReBlocker is reset() to drop the partial fill
-            // and the sink callback is cleared (the next connect rebuilds the
-            // pair from scratch).
+            // Lifecycle (this block):
+            //   1. Construct TxWorkerThread (RadioModel-owned via
+            //      unique_ptr, parent=this for Qt cleanup safety).
+            //   2. Wire deps: setTxChannel + setAudioEngine.
+            //   3. Move TxChannel to the worker thread.  All connect()
+            //      lambdas above already use AutoConnection, which
+            //      auto-resolves to QueuedConnection now that the
+            //      receiver lives on the worker thread.  The initial
+            //      direct setter pushes already executed above on the
+            //      main thread BEFORE this move — so the WDSP state is
+            //      pre-loaded before the pump starts.
+            //   4. startPump() — launches QThread, sets up the QTimer
+            //      on the worker thread, enters the event loop.
             //
-            // Ownership: RadioModel via unique_ptr.  Plain (non-QObject) class.
-            // Threading: lambda runs synchronously on the audio thread (because
-            // AudioEngine::micBlockReady is documented as DirectConnection-only
-            // and we honour that here).
+            // Teardown is in teardownConnection() further down.
             //
-            // No re-blocker construction in the ctor: m_txChannel is null until
-            // WDSP init completes, and PcMicSource isn't wired yet either.
-            // Lazy construction on each connect keeps the ownership story
-            // simple — one MicReBlocker per connection cycle.
+            // See plan §5.2 + §4.4 (cross-thread setter audit) and
+            // src/core/TxWorkerThread.h for the full design rationale.
             if (m_audioEngine && m_txChannel) {
-                m_micReBlocker = std::make_unique<MicReBlocker>(
-                    /*outputBlockSize=*/256);
-                // Capture the TxChannel pointer by value.  m_txChannel is
-                // nulled in teardown ABOVE the m_micReBlocker.reset() call,
-                // so the captured pointer can race-with-teardown only on a
-                // hard crash, which we accept.
-                TxChannel* txChannel = m_txChannel;
-                m_micReBlocker->setSinkCallback(
-                    [txChannel](const float* samples, int frames) {
-                        // driveOneTxBlock is the canonical TX entry point;
-                        // it short-circuits when !m_running and !m_connection,
-                        // so passing 256-sample blocks while the radio is
-                        // sitting in RX is harmless.
-                        txChannel->driveOneTxBlock(samples, frames);
-                    });
+                m_txWorker = std::make_unique<TxWorkerThread>(this);
+                m_txWorker->setTxChannel(m_txChannel);
+                m_txWorker->setAudioEngine(m_audioEngine);
+                m_txChannel->moveToThread(m_txWorker.get());
+                m_txWorker->startPump();
 
-                // Connect AudioEngine::micBlockReady to the re-blocker via
-                // Qt::DirectConnection.  AudioEngine is owned by RadioModel
-                // (main thread); the signal is emitted from whatever thread
-                // is currently driving the mic accumulator (the audio bus
-                // thread).  DirectConnection here matches the documented
-                // contract on AudioEngine::micBlockReady ("Subscribers (Phase E
-                // TxChannel) connect via Qt::DirectConnection").
-                //
-                // The callback captures `this` so it can route to the
-                // re-blocker's onMicBlock.  We capture by `this` rather than
-                // the unique_ptr's raw pointer so the lambda implicitly
-                // observes the post-teardown null when the unique_ptr is
-                // reset() — a defensive null check covers the gap between
-                // teardownConnection's reset() and the AudioEngine signal's
-                // last queued emit.
-                connect(m_audioEngine, &AudioEngine::micBlockReady, this,
-                        [this](const float* samples, int frames) {
-                            if (!m_micReBlocker) { return; }
-                            m_micReBlocker->onMicBlock(samples, frames);
-                        },
-                        Qt::DirectConnection);
-
-                qCInfo(lcDsp) << "L.4: mic re-blocker installed —"
-                                 " AudioEngine::micBlockReady (720) →"
-                                 " TxChannel::driveOneTxBlock (256).";
+                qCInfo(lcDsp) << "TX pump: TxWorkerThread started"
+                              << "blockFrames=" << TxWorkerThread::kBlockFrames
+                              << "intervalMs=" << TxWorkerThread::kPumpIntervalMs
+                              << "(replaces D.1+E.1+L.4 + bench-fix-A/B)";
             }
 
             qCInfo(lcDsp) << "L.1: mic sources constructed (hasMicJack=" << hasMicJack
@@ -2979,18 +2955,26 @@ void RadioModel::teardownConnection()
     // Stop audio output
     m_audioEngine->stop();
 
-    // 3M-1c L.4: drop the AudioEngine::micBlockReady → re-blocker connection
-    // BEFORE m_txChannel is nulled.  Without this disconnect, every reconnect
-    // accumulates another copy of the lambda; the queued emits would also
-    // race with m_txChannel = nullptr below.  Disconnect-by-receiver matches
-    // the WDSP-init lambda teardown idiom higher up in this method.
-    if (m_audioEngine != nullptr) {
-        disconnect(m_audioEngine, &AudioEngine::micBlockReady, this, nullptr);
+    // 3M-1c TX pump architecture redesign — TxWorkerThread teardown.
+    //
+    // ORDER MATTERS:
+    //   1. stopPump() — quits the worker's event loop and waits for
+    //      its QTimer/onPumpTick to finish.  Any in-flight tick
+    //      completes before exit.
+    //   2. Move TxChannel back to RadioModel's thread (main).  Required
+    //      so TxChannel's destruction (via WdspEngine::shutdown →
+    //      destroyTxChannel(1)) runs on the right thread; Qt asserts
+    //      otherwise.
+    //   3. unique_ptr.reset() — destroys the TxWorkerThread itself.
+    //
+    // Replaces the deleted L.4 MicReBlocker teardown.  See plan §5.2.
+    if (m_txWorker) {
+        m_txWorker->stopPump();
+        if (m_txChannel) {
+            m_txChannel->moveToThread(this->thread());
+        }
+        m_txWorker.reset();
     }
-    // Reset the re-blocker (drops partial fill, clears sink callback).
-    // Done BEFORE clearing m_txChannel because the sink lambda captures the
-    // TxChannel pointer; clearing the sink first removes that reference.
-    m_micReBlocker.reset();
 
     // 3M-1c L.2: drop the TwoToneController's view of the TX channel.  If a
     // user-driven setActive(true) call were to fire during teardown (mid-test

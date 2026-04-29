@@ -1585,20 +1585,26 @@ nereus_add_test(tst_tx_channel_meters)
 nereus_add_test(tst_audio_engine_pull_tx_mic)
 target_compile_definitions(tst_audio_engine_pull_tx_mic PRIVATE NEREUS_BUILD_TESTS)
 
-# ── Phase 3M-1c D.1 / D.2: AudioEngine 720-sample mic block accumulator ──
-# Verifies the micBlockReady signal fires on every kMicBlockFrames=720
-# accumulated mono samples + clearMicBuffer drops partial fill.  Uses the
-# same FakeAudioBus injection pattern as tst_audio_engine_pull_tx_mic via
-# the NEREUS_BUILD_TESTS-only setTxInputBusForTest seam.
-# Source: cmaster.cs:493-518 [v2.10.3.13] (mic stream block size = 720).
-nereus_add_test(tst_audio_engine_mic_block_ready)
-target_compile_definitions(tst_audio_engine_mic_block_ready PRIVATE NEREUS_BUILD_TESTS)
+# (Phase 3M-1c D.1/D.2 + L.4 — tst_audio_engine_mic_block_ready and
+#  tst_mic_re_blocker — were dropped by the TX pump architecture
+#  redesign on 2026-04-29.  The 720-sample mic accumulator and
+#  720→256 re-blocker they tested were deleted along with their
+#  underlying classes.  See plan §5.3.)
 
-# ── Phase 3M-1c L.4: 720→256 mic re-blocker ──────────────────────────────
-# Verifies the AudioEngine micBlockReady (720 mono frames) → TxChannel
-# driveOneTxBlock (m_inputBufferSize=256) re-blocking adapter.  No Thetis
-# port — bridge is dictated by the in-tree contract sizes.
-nereus_add_test(tst_mic_re_blocker)
+# ── Phase 3M-1c TX pump architecture redesign: TxWorkerThread ────────────
+# Verifies the new worker-thread pump that replaces D.1/E.1/L.4 + bench
+# fixes.  Test cases (8):
+#   - constructDestruct_clean
+#   - startPump_withoutDeps_warns_andStaysStopped
+#   - startStop_lifecycle_isRunningTracksThread
+#   - tickForTest_drivesOneSendTxIq_whenBusHasFullBlock
+#   - tickForTest_drivesFexchange2_onEmptyBus_zeroFilled
+#   - tickForTest_zeroFillsGap_whenBusPartial
+#   - realWorker_pumpCadence_approx5ms
+#   - crossThreadSetter_noCrash_finalValueLands
+# Plan: docs/architecture/phase3m-1c-tx-pump-architecture-plan.md §5.4.
+nereus_add_test(tst_tx_worker_thread)
+target_compile_definitions(tst_tx_worker_thread PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3M-1c E.1: TxChannel push-driven refactor ─────────────────────
 # Verifies the QTimer-driven pull model is gone and the (samples, frames)

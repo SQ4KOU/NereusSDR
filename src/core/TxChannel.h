@@ -126,6 +126,26 @@ warren@wpratt.com
 //                 longer pulls from it.  tickForTest seam updated to
 //                 (samples, frames).  J.J. Boyd (KG4VCF), AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-04-29 — Phase 3M-1c TX pump architecture redesign by J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.  Dropped the bench-fix-B silence-drive timer
+//                 (m_silenceTimer / m_lastDriveTimer / kSilenceTimerIntervalMs
+//                 / kSilenceStaleThresholdMs / onSilenceTimer slot) — the new
+//                 TxWorkerThread pump pulls every 5 ms unconditionally and
+//                 zero-fills the gap when AudioEngine::pullTxMic returns
+//                 partial / no data, so the silence path "falls out for free"
+//                 (PostGen TUNE-tone still produces output; SSB with no mic
+//                 produces silent — both correct).
+//                 All public state-mutation setters became `public slots:`
+//                 so cross-thread invocation from the main thread auto-
+//                 resolves to Qt::QueuedConnection when TxChannel lives on
+//                 TxWorkerThread.  Lifecycle setters (setConnection /
+//                 setMicRouter / setRunning) are also slots; RadioModel
+//                 invokes them with the worker stopped or via queued
+//                 connect()s.  driveOneTxBlock keeps its public-slot
+//                 status — the worker thread calls it directly (same-thread
+//                 dispatch).
+//                 Plan: docs/architecture/phase3m-1c-tx-pump-architecture-plan.md
 //   2026-04-28 — Phase 3M-1c E.2-E.6 — TXA PostGen wrapper setters (12 methods)
 //                 added by J.J. Boyd (KG4VCF):
 //                   E.2: setTxPostGenMode(int)
@@ -148,10 +168,9 @@ warren@wpratt.com
 
 #pragma once
 
-#include <QElapsedTimer>
 #include <QObject>
-#include <QTimer>
 
+#include <atomic>   // std::atomic<bool> — m_running cross-thread mirror (3M-1c TxWorkerThread)
 #include <limits>   // std::numeric_limits — quiet_NaN() initialiser (D.3)
 #include <vector>
 
@@ -169,9 +188,34 @@ class TxMicRouter;
 // The 31 pipeline stages are already in WDSP-managed memory when this
 // constructor runs; this class provides a typed C++ facade over them.
 //
-// Thread safety:
-//   - Main thread: create/destroy, all stage-run-state queries (stageRunning)
-//   - Audio thread (future, C.4+): setRunning / processTx
+// Thread safety (Phase 3M-1c TX pump architecture redesign):
+//   The TxChannel object is moved to TxWorkerThread by RadioModel after
+//   construction + initial wiring.  The worker thread's pump
+//   (TxWorkerThread::onPumpTick) calls driveOneTxBlock() at ~5 ms cadence,
+//   which runs fexchange2 + sendTxIq.
+//
+//   - Construct + destroy: main thread.  Destruction MUST happen on the
+//     thread the TxChannel currently lives on; RadioModel teardown moves
+//     it back to the main thread before destroying.
+//   - Public state-mutation setters (setMicPreamp, setVoxRun, setTuneTone,
+//     setTxPostGen*, setMicMute, setTxMode, setTxBandpass, etc.):
+//     called from the main thread.  WDSP's per-channel csDSP critical
+//     section serializes setter↔fexchange2 access; the C++ idempotent-guard
+//     fields (m_micPreampLast, m_voxRunLast, etc.) are accessed only from
+//     within their own setters, which are all main-thread-only.  No
+//     concurrent setter calls in the codebase today.  See plan §4.4 for
+//     the full audit.
+//   - Lifecycle setters (setConnection, setMicRouter, setRunning):
+//     setConnection / setMicRouter are called from the main thread BEFORE
+//     moveToThread (initial wiring) and AFTER the worker has been stopped
+//     (teardown).  setRunning is called via MoxController connect()
+//     lambdas with receiver=this, so the lambda runs on this object's
+//     thread (worker).  m_running is std::atomic so getters from any
+//     thread are safe.
+//   - driveOneTxBlock: called from TxWorkerThread (the worker).  Runs
+//     fexchange2 → sendTxIq synchronously on that thread.
+//   - stageRunning / isRunning / get*Meter: read-only introspection,
+//     safe from any thread (atomics + WDSP-internal locking).
 //
 // Ported from Thetis wdsp/TXA.c:31-479 [v2.10.3.13] — create_txa() signal
 // flow order determines the Stage enum ordinal values.
@@ -432,9 +476,10 @@ public:
     ///
     /// Reflects the value set by the last call to setRunning(). Initialises
     /// to false (channel created stopped).  Does NOT query WDSP directly —
-    /// it mirrors the local m_running flag, which is sufficient for 3M-1a
-    /// single-threaded use (main thread is the only writer in 3M-1a).
-    bool isRunning() const noexcept { return m_running; }
+    /// it mirrors the local m_running atomic, which is updated by setRunning
+    /// on the worker thread (after Phase 3M-1c TxWorkerThread move) and read
+    /// from any thread.
+    bool isRunning() const noexcept { return m_running.load(std::memory_order_acquire); }
 
     // ── Per-mode TXA configuration (3M-1b D.2) ──────────────────────────────
 
@@ -901,31 +946,29 @@ public:
 #endif // NEREUS_BUILD_TESTS
 
 public slots:
-    // ── Push-driven TX pump slot (3M-1c E.1) ─────────────────────────────────
+    // ── TX pump slot (Phase 3M-1c TX pump architecture redesign) ─────────────
     //
-    /// Drive one fexchange2 cycle from a pushed mic block.  Wired by
-    /// RadioModel (Phase L) to AudioEngine::micBlockReady via
-    /// Qt::DirectConnection — the audio thread synchronously dispatches
-    /// each 720-sample mic block into TxChannel.
+    /// Drive one fexchange2 cycle from a TX-mic block.  Called by
+    /// TxWorkerThread::onPumpTick at ~5 ms cadence with frames ==
+    /// kBlockFrames (256).  Runs synchronously on the worker thread.
     ///
     /// Contract:
     ///   - `samples == nullptr && frames == 0`  →  silence path: zero-fill
     ///     m_inI/m_inQ and dispatch fexchange2 (TUNE-tone PostGen output
-    ///     still reaches sendTxIq).
+    ///     still reaches sendTxIq).  Used only by tests today; production
+    ///     callers always pass a kBlockFrames-sized buffer (zero-filled
+    ///     by TxWorkerThread when the bus has no data).
     ///   - `samples != nullptr && frames == m_inputBufferSize`  →  copy
     ///     samples into m_inI, zero-fill m_inQ, dispatch fexchange2.
     ///   - `samples != nullptr && frames != m_inputBufferSize`  →  contract
     ///     violation: log a qCWarning and return without dispatching.
-    ///     Caller is responsible for delivering exactly m_inputBufferSize
-    ///     samples per push (an adapter step at the Phase L wire-up site
-    ///     is responsible for re-blocking AudioEngine's 720-sample emits
-    ///     into m_inputBufferSize chunks if the two sizes differ).
+    ///     The block-size invariant matches Thetis cmaster.c:460-487
+    ///     [v2.10.3.13] — `r1_outsize == xcm_insize == in_size` end-to-end
+    ///     (NereusSDR uses 256, dictated by WDSP r2-ring divisibility).
     ///
-    /// **DirectConnection ONLY.** The slot must run synchronously on the
-    /// audio thread.  Qt::QueuedConnection is unsafe: AudioEngine reuses
-    /// its mic-block buffer on the next emit, so a queued slot would see
-    /// stale or corrupted data.  See AudioEngine::micBlockReady doc-comment.
-    ///
+    /// **Thread affinity:** runs on the TxChannel's current thread.
+    /// TxWorkerThread invokes this directly (same-thread dispatch — no
+    /// Qt connection involved), so the call is synchronous on the worker.
     /// !m_running and !m_connection short-circuit the slot to a no-op.
     void driveOneTxBlock(const float* samples, int frames);
 
@@ -959,39 +1002,24 @@ signals:
     /// Plan: 3M-1b D.5 (this commit). Pre-code review §4.3.
     void sip1OutputReady(const float* samples, int frames);
 
-private slots:
-    // 3M-1c E.1 bench-fix — silence-drive fallback when no mic is flowing.
-    void onSilenceTimer();
-
 private:
-    // ── TX I/Q production loop internals (3M-1c E.1 — push-driven) ──────────
-
-    // (Phase 3M-1a G.1 introduced an m_txProductionTimer firing every 5 ms;
-    //  Phase 3M-1c E.1 removed it in favour of the AudioEngine::micBlockReady
-    //  → driveOneTxBlock slot wired via Qt::DirectConnection.
-    //  Phase 3M-1c E.1 bench-fix added m_silenceTimer below as a fallback
-    //  for the no-mic case.  See driveOneTxBlock() / onSilenceTimer() doc.)
-
-    // Silence-drive fallback timer — fires driveOneTxBlock(nullptr, 0)
-    // at 5 ms cadence when no mic-driven driveOneTxBlock has fired in
-    // the last kSilenceStaleThresholdMs (8 ms).  Active only when
-    // m_running is true.  See setRunning() + onSilenceTimer().
-    QTimer*       m_silenceTimer{nullptr};
-    QElapsedTimer m_lastDriveTimer;
-    static constexpr int kSilenceTimerIntervalMs   = 5;   // ms between ticks
-    // Threshold must be > the mic-driven burst gap.  AudioEngine emits
-    // micBlockReady every ~15 ms (= kMicBlockFrames / 48 kHz); the L.4
-    // MicReBlocker re-chunks 720 → 256, firing driveOneTxBlock 2-3 times
-    // in immediate succession per emit.  Between bursts, m_lastDriveTimer
-    // can age up to ~14 ms before the next mic burst lands.  Setting
-    // threshold = 20 ms guarantees the silence-drive timer NEVER fires
-    // mid-mic-session (which would add extra fexchange2 calls and push
-    // the SPSC ring over 192 kHz, producing audible "gravelly" distortion
-    // bench-caught by JJ post-3M-1c).  In the no-mic case the silence
-    // timer fires every 20 ms — slower than ideal for TUN's PostGen path
-    // but the radio's TX ring tolerates rate variation enough for the
-    // tone to land.
-    static constexpr int kSilenceStaleThresholdMs  = 20;  // > mic burst gap
+    // ── TX I/Q production loop internals ────────────────────────────────────
+    //
+    // History (deleted machinery):
+    //   - Phase 3M-1a G.1 introduced an m_txProductionTimer firing every 5 ms.
+    //   - Phase 3M-1c E.1 dropped that timer in favour of an
+    //     AudioEngine::micBlockReady → driveOneTxBlock slot wired via
+    //     Qt::DirectConnection.
+    //   - Phase 3M-1c E.1 bench-fix added an m_silenceTimer fallback for the
+    //     no-mic case (gravelly SSB voice TX bench regression).
+    //   - Phase 3M-1c TX pump architecture redesign (2026-04-29) deleted both
+    //     timers entirely.  TxWorkerThread now drives driveOneTxBlock at
+    //     ~5 ms cadence; when AudioEngine::pullTxMic returns < kBlockFrames,
+    //     TxWorkerThread zero-fills the gap and silence falls out for free
+    //     (PostGen TUNE-tone still produces output; mic-driven SSB still
+    //     works at the natural 256/48 kHz cadence).  See
+    //     docs/architecture/phase3m-1c-tx-pump-architecture-plan.md for
+    //     the architectural rationale.
 
     // Non-owning pointers — injected by RadioModel, cleared on disconnect.
     RadioConnection* m_connection{nullptr};  // sendTxIq recipient
@@ -1026,7 +1054,12 @@ private:
     std::vector<float> m_outInterleaved;
 
     const int m_channelId;
-    bool m_running{false};
+    // m_running is std::atomic so isRunning() can be safely read from
+    // threads other than the TxChannel's own thread (e.g., main-thread UI
+    // queries while the channel lives on TxWorkerThread).  setRunning runs
+    // on the channel's thread (worker after moveToThread); driveOneTxBlock
+    // reads it on the same thread.
+    std::atomic<bool> m_running{false};
 
     // ── VOX / anti-VOX last-set values (D.3) ─────────────────────────────────
     //
