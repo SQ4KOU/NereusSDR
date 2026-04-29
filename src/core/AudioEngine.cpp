@@ -992,6 +992,23 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     }
 }
 
+bool AudioEngine::isPcMicOverrideActive() const noexcept
+{
+    // Phase 3M-1c TX pump v3 — both conditions must hold for the worker
+    // to overlay PC mic samples on radio mic samples:
+    //   - the user explicitly selected MicSource::Pc (m_micSourceWantsPc)
+    //   - we have an open TX-input bus to pull from
+    if (!m_micSourceWantsPc.load(std::memory_order_acquire)) {
+        return false;
+    }
+    return (m_txInputBus != nullptr) && m_txInputBus->isOpen();
+}
+
+void AudioEngine::onMicSourceChanged(bool selectedSourceIsPc)
+{
+    m_micSourceWantsPc.store(selectedSourceIsPc, std::memory_order_release);
+}
+
 int AudioEngine::pullTxMic(float* dst, int n)
 {
     // Plan: 3M-1b E.1. Pre-code review §0.3 (PcMicSource arch).

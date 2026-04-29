@@ -1752,8 +1752,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
 
                 qCInfo(lcDsp) << "TX pump: TxWorkerThread started"
                               << "blockFrames=" << TxWorkerThread::kBlockFrames
-                              << "intervalMs=" << TxWorkerThread::kPumpIntervalMs
-                              << "(replaces D.1+E.1+L.4 + bench-fix-A/B)";
+                              << "(semaphore-wake — Phase 3M-1c v3)";
             }
 
             qCInfo(lcDsp) << "L.1: mic sources constructed (hasMicJack=" << hasMicJack

@@ -288,6 +288,27 @@ public:
     // redesign (removal of accumulator side effects).
     int pullTxMic(float* dst, int n);
 
+    /// Phase 3M-1c TX pump v3 — PC mic override gate.
+    ///
+    /// Returns true when the worker should overlay PC mic samples on
+    /// top of the radio mic samples in m_in.  Gated by:
+    ///   1. m_micSourceWantsPc (true iff TransmitModel::micSource ==
+    ///      MicSource::Pc; updated by onMicSourceChanged()).
+    ///   2. m_txInputBus exists and is open.
+    ///
+    /// Both conditions are read atomically; both must be true.  Mirrors
+    /// the conditional invocation of `asioIN(pcm->in[stream])` at
+    /// Thetis cmaster.c:379 [v2.10.3.13].
+    bool isPcMicOverrideActive() const noexcept;
+
+public slots:
+    /// Phase 3M-1c TX pump v3 — slot wired by RadioModel to
+    /// TransmitModel::micSourceChanged.  Updates m_micSourceWantsPc.
+    /// `selectedSourceIsPc == true` means the user picked PC mic.
+    void onMicSourceChanged(bool selectedSourceIsPc);
+
+public:
+
     // Master volume (0.0–1.0). Read on the DSP thread, written on the
     // main thread. Preserves the existing AF-gain wiring in
     // RadioModel::wireSliceSignals.
@@ -553,6 +574,16 @@ private:
     // when MOX is on, active TX slice's RX audio is silenced; non-active
     // slices keep playing.
     std::atomic<bool> m_moxActive{false};
+
+    // Phase 3M-1c TX pump v3 — PC mic override gate.
+    // Written by onMicSourceChanged() on the main thread (slot wired
+    // by RadioModel to TransmitModel::micSourceChanged).  Read by the
+    // worker thread via isPcMicOverrideActive().  Default false matches
+    // a fresh radio session before TransmitModel::micSourceChanged
+    // fires.  When the radio is HL2 (no mic jack), RadioModel forces
+    // micSource=PC via setMicSourceLocked, and the resulting
+    // micSourceChanged emit lands here as true.
+    std::atomic<bool> m_micSourceWantsPc{false};
 
     // Plan: 3M-1b E.2. Pre-code review §4.4.
     // Written by setTxMonitorEnabled() on the main thread, read by the

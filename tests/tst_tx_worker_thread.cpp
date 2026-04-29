@@ -3,28 +3,33 @@
 // =================================================================
 //
 // Unit tests for TxWorkerThread (Phase 3M-1c TX pump architecture
-// redesign).  See src/core/TxWorkerThread.{h,cpp} for the class and
+// redesign v3 — semaphore-driven, sourced from TxMicSource).  See
+// src/core/TxWorkerThread.{h,cpp} for the class and
 // docs/architecture/phase3m-1c-tx-pump-architecture-plan.md for the
 // architectural rationale.
 //
 // Test surface:
 //   1. Construct/destruct cleanly without start.
-//   2. startPump fires onPumpTick at ~5 ms cadence (cadence test).
-//   3. onPumpTick pulls from AudioEngine and pushes to TxChannel
-//      with the correct block size.
-//   4. Bus returning < kBlockFrames → zero-fill in driveOneTxBlock
-//      (silence-falls-out-for-free behaviour).
-//   5. Cross-thread setter race — main thread setMicPreamp while
-//      worker is pumping does not crash and the value eventually
-//      lands.  Companion test covers setVoxRun (MoxController-routed
-//      lambda-connect form) for the same property.
-//   6. stopPump while a tick is in flight completes the current
-//      tick before exiting.
+//   2. startPump without dependencies — warning + stays stopped.
+//   3. startPump + stopPump lifecycle — isRunning tracks thread.
+//   4. tickForTest with one block in the mic source — exactly one
+//      sendTxIq fires.
+//   5. tickForTest with no inbound() — no sendTxIq fires (test seam
+//      timeout returns false).
+//   6. PC mic override path — when isPcMicOverrideActive() is true,
+//      the I-channel data passed to fexchange0 comes from PC mic, not
+//      radio mic.
+//   7. Real worker thread fires fexchange0 in response to inbound().
+//   8. Cross-thread setter race — setMicPreamp from main thread
+//      while worker is pumping does not crash and the value lands.
+//   9. Cross-thread setter race — setVoxRun from main thread (the
+//      MoxController-routed lambda-connect form).
 //
 // =================================================================
 //
 // Modification history (NereusSDR):
 //   2026-04-29 — New test for Phase 3M-1c TX pump architecture redesign.
+//                 Rewritten same day for v3 semaphore-driven design.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation
 //                 via Anthropic Claude Code.
 // =================================================================
@@ -35,15 +40,16 @@
 #include <QtTest/QtTest>
 #include <QObject>
 #include <QSignalSpy>
-#include <QElapsedTimer>
 
 #include <atomic>
+#include <cstring>
 #include <vector>
 
 #include "core/AudioEngine.h"
 #include "core/TxChannel.h"
 #include "core/TxWorkerThread.h"
 #include "core/RadioConnection.h"
+#include "core/audio/TxMicSource.h"
 
 #include "fakes/FakeAudioBus.h"
 
@@ -79,16 +85,23 @@ public:
     void setMicPTT(bool) override {}
     void setMicXlr(bool) override {}
 
-    void sendTxIq(const float*, int n) override
+    void sendTxIq(const float* iq, int n) override
     {
-        // sendTxIq runs on the worker thread (TxWorkerThread).
-        // Use atomics so the main-thread test code can read counters.
         callCount.fetch_add(1, std::memory_order_relaxed);
         lastN.store(n, std::memory_order_relaxed);
+        // Stash first I sample for override-path verification (atomic
+        // double via reinterpret).  Use float, exact-bit-compare via
+        // std::atomic<int32_t>.
+        if (iq != nullptr && n > 0) {
+            int32_t bits = 0;
+            std::memcpy(&bits, &iq[0], sizeof(int32_t));
+            firstISampleBits.store(bits, std::memory_order_relaxed);
+        }
     }
 
     std::atomic<int> callCount{0};
     std::atomic<int> lastN{0};
+    std::atomic<int32_t> firstISampleBits{0};
 };
 
 // ── Fixture ─────────────────────────────────────────────────────────────────
@@ -96,36 +109,16 @@ class TestTxWorkerThread : public QObject {
     Q_OBJECT
 
     static constexpr int kChannelId = 1;
-    static constexpr int kBufSize   = 256;  // == TxWorkerThread::kBlockFrames
-
-    // Float32 stereo bus payload helper.  Mirrors the helper in
-    // tst_audio_engine_pull_tx_mic.cpp — produces `frames` interleaved
-    // L/R samples where L == R == startValue + i*step.
-    static QByteArray makeFloat32StereoBytes(int frames, float startValue = 0.0f,
-                                             float step = 0.0f)
-    {
-        QByteArray out;
-        out.resize(frames * 2 * 4);  // 2 channels × 4 bytes
-        float* p = reinterpret_cast<float*>(out.data());
-        float v = startValue;
-        for (int i = 0; i < frames; ++i) {
-            p[i * 2 + 0] = v;  // left
-            p[i * 2 + 1] = v;  // right
-            v += step;
-        }
-        return out;
-    }
+    // Use the Thetis-faithful 64-block size end-to-end.
+    static constexpr int kBufSize   = TxWorkerThread::kBlockFrames;
 
 private slots:
 
     // ── 1. Construct + destruct without start ───────────────────────────────
-    //
-    // The dtor should not block waiting for a thread that was never started.
     void constructDestruct_clean()
     {
         TxWorkerThread w;
         QCOMPARE(w.isRunning(), false);
-        // Falling out of scope destroys w; should not hang or crash.
     }
 
     // ── 2. startPump without dependencies is a warning + no-op ──────────────
@@ -139,8 +132,6 @@ private slots:
     }
 
     // ── 3. startPump + stopPump lifecycle ───────────────────────────────────
-    //
-    // With deps wired, startPump → isRunning() == true; stopPump → false.
     void startStop_lifecycle_isRunningTracksThread()
     {
         AudioEngine engine;
@@ -148,26 +139,86 @@ private slots:
         MockConnection conn;
         ch.setConnection(&conn);
 
+        TxMicSource src;
+        src.start();
+
         TxWorkerThread w;
         w.setTxChannel(&ch);
         w.setAudioEngine(&engine);
+        w.setMicSource(&src);
 
         QCOMPARE(w.isRunning(), false);
         w.startPump();
-        // QThread::start() returns before the new thread has actually
-        // started running; isRunning() may briefly be false on some
-        // platforms.  Wait briefly for the transition.
         QTRY_COMPARE_WITH_TIMEOUT(w.isRunning(), true, 500);
 
         w.stopPump();
         QCOMPARE(w.isRunning(), false);
     }
 
-    // ── 4. onPumpTick pulls and drives a 256-sample block ───────────────────
+    // ── 4. One inbound block → tickForTest fires exactly one fexchange0 ─────
+    void tickForTest_drivesOneSendTxIq_whenBlockAvailable()
+    {
+        AudioEngine engine;
+        TxChannel ch(kChannelId, kBufSize, kBufSize);
+        MockConnection conn;
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+
+        TxMicSource src;
+        src.start();
+
+        TxWorkerThread w;
+        w.setTxChannel(&ch);
+        w.setAudioEngine(&engine);
+        w.setMicSource(&src);
+
+        // Push exactly one block of mic samples.
+        std::vector<float> samples(kBufSize, 0.5f);
+        src.inbound(samples.data(), kBufSize);
+
+        // Drive one synchronous tick (waitForBlock + drain + dispatch).
+        w.tickForTest();
+
+        QCOMPARE(conn.callCount.load(), 1);
+        QCOMPARE(conn.lastN.load(), kBufSize);
+
+        src.stop();
+    }
+
+    // ── 5. No inbound → tickForTest is a no-op (semaphore times out) ────────
+    void tickForTest_noBlock_doesNotDispatch()
+    {
+        AudioEngine engine;
+        TxChannel ch(kChannelId, kBufSize, kBufSize);
+        MockConnection conn;
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+
+        TxMicSource src;
+        src.start();
+
+        TxWorkerThread w;
+        w.setTxChannel(&ch);
+        w.setAudioEngine(&engine);
+        w.setMicSource(&src);
+
+        // No inbound() → tickForTest's waitForBlock(100) times out.
+        w.tickForTest();
+
+        QCOMPARE(conn.callCount.load(), 0);
+        src.stop();
+    }
+
+    // ── 6. PC mic override — PC samples replace radio samples in m_in ──────
     //
-    // Synchronous test using tickForTest seam: bus has 256 frames available;
-    // tickForTest pulls them and pushes through TxChannel → MockConnection.
-    void tickForTest_drivesOneSendTxIq_whenBusHasFullBlock()
+    // Push radio mic samples = 0.3.  PC mic bus has 0.7.  After tickForTest,
+    // the I channel of m_in (and therefore the I sample of m_outInterleavedFloat
+    // sent via sendTxIq) reflects the PC mic value, not 0.3.
+    //
+    // We can't easily inspect m_outInterleavedFloat, so we verify via
+    // TxChannel::inForTest() that m_in's I channel was overwritten with PC
+    // samples before fexchange0 ran.
+    void pcMicOverride_overwritesRadioSamplesInIChannel()
     {
         AudioEngine engine;
         AudioFormat fmt{};
@@ -179,119 +230,57 @@ private slots:
         FakeAudioBus* bus = fakeBus.get();
         engine.setTxInputBusForTest(std::move(fakeBus));
 
+        // Tell engine the user picked PC mic.
+        engine.onMicSourceChanged(/*selectedSourceIsPc=*/true);
+        QVERIFY(engine.isPcMicOverrideActive());
+
         TxChannel ch(kChannelId, kBufSize, kBufSize);
         MockConnection conn;
         ch.setConnection(&conn);
         ch.setRunning(true);
 
-        TxWorkerThread w;
-        w.setTxChannel(&ch);
-        w.setAudioEngine(&engine);
-
-        // Bus has exactly kBufSize frames available.
-        bus->setPullData(makeFloat32StereoBytes(kBufSize, 0.5f, 0.0f));
-
-        // Drive one synchronous tick.
-        w.tickForTest();
-
-        QCOMPARE(conn.callCount.load(), 1);
-        QCOMPARE(conn.lastN.load(), kBufSize);
-    }
-
-    // ── 5. Empty bus → tickForTest still drives fexchange2 (silence path) ──
-    //
-    // When AudioEngine::pullTxMic returns 0 (bus empty / null), the worker
-    // zero-fills the buffer and dispatches anyway.  TUNE-tone PostGen +
-    // fexchange2 idle output still produce sendTxIq.  This is the
-    // "silence-falls-out-for-free" property documented in plan §4.3.
-    void tickForTest_drivesFexchange2_onEmptyBus_zeroFilled()
-    {
-        AudioEngine engine;  // no bus configured → pullTxMic returns 0
-        TxChannel ch(kChannelId, kBufSize, kBufSize);
-        MockConnection conn;
-        ch.setConnection(&conn);
-        ch.setRunning(true);
+        TxMicSource src;
+        src.start();
 
         TxWorkerThread w;
         w.setTxChannel(&ch);
         w.setAudioEngine(&engine);
+        w.setMicSource(&src);
 
-        // No bus configured at all — pullTxMic returns 0.
-        w.tickForTest();
+        // Radio mic = 0.3.  PC mic bus = 0.7 (interleaved L/R floats).
+        std::vector<float> radio(kBufSize, 0.3f);
+        src.inbound(radio.data(), kBufSize);
 
-        // sendTxIq should still fire (silence path).
-        QCOMPARE(conn.callCount.load(), 1);
-        QCOMPARE(conn.lastN.load(), kBufSize);
-
-        // Verify the m_inI buffer is all zeros (zero-fill happened).
-        const auto& inI = ch.inIForTest();
-        QCOMPARE(static_cast<int>(inI.size()), kBufSize);
+        QByteArray pcm;
+        pcm.resize(kBufSize * 2 * 4);
+        float* p = reinterpret_cast<float*>(pcm.data());
         for (int i = 0; i < kBufSize; ++i) {
-            QCOMPARE(inI[i], 0.0f);
+            p[i * 2 + 0] = 0.7f;  // left
+            p[i * 2 + 1] = 0.7f;  // right (ignored)
         }
-    }
-
-    // ── 6. Partial bus → tickForTest zero-fills the gap ─────────────────────
-    //
-    // Bus has only 100 frames available.  TxWorkerThread pulls those 100
-    // and zero-fills the remaining 156, pushing exactly kBufSize=256 to
-    // driveOneTxBlock.  This exercises the "got < kBlockFrames" branch.
-    void tickForTest_zeroFillsGap_whenBusPartial()
-    {
-        AudioEngine engine;
-        AudioFormat fmt{};
-        fmt.sample = AudioFormat::Sample::Float32;
-        fmt.channels = 2;
-        fmt.sampleRate = 48000;
-        auto fakeBus = std::make_unique<FakeAudioBus>(QStringLiteral("FakeMic"));
-        fakeBus->open(fmt);
-        FakeAudioBus* bus = fakeBus.get();
-        engine.setTxInputBusForTest(std::move(fakeBus));
-
-        TxChannel ch(kChannelId, kBufSize, kBufSize);
-        MockConnection conn;
-        ch.setConnection(&conn);
-        ch.setRunning(true);
-
-        TxWorkerThread w;
-        w.setTxChannel(&ch);
-        w.setAudioEngine(&engine);
-
-        // Bus has 100 frames; TxWorkerThread should zero-fill bytes 100-255.
-        // Use a constant 0.7f payload so we can distinguish the 100 pulled
-        // samples from the zero-filled tail.
-        bus->setPullData(makeFloat32StereoBytes(100, 0.7f, 0.0f));
+        bus->setPullData(pcm);
 
         w.tickForTest();
-
-        // Exactly one sendTxIq call (one block dispatched).
         QCOMPARE(conn.callCount.load(), 1);
-        QCOMPARE(conn.lastN.load(), kBufSize);
 
-        // Verify zero-fill: inI[0..99] = 0.7, inI[100..255] = 0.0.
-        const auto& inI = ch.inIForTest();
-        QCOMPARE(static_cast<int>(inI.size()), kBufSize);
-        // The first 100 mono samples should be 0.7 (left channel of the
-        // float32 stereo payload).
-        for (int i = 0; i < 100; ++i) {
-            QCOMPARE(inI[i], 0.7f);
+        // After dispatch, m_in's I channel should be 0.7 (PC mic), not 0.3.
+        const auto& in = ch.inForTest();
+        QCOMPARE(static_cast<int>(in.size()), 2 * kBufSize);
+        for (int i = 0; i < kBufSize; ++i) {
+            // Float→double promotion: compare against the same promotion.
+            QCOMPARE(in[2 * i + 0], static_cast<double>(0.7f));
+            QCOMPARE(in[2 * i + 1], 0.0);  // Q always zero
         }
-        // The remaining samples (100..255) should be zero-filled.
-        for (int i = 100; i < kBufSize; ++i) {
-            QCOMPARE(inI[i], 0.0f);
-        }
+
+        src.stop();
     }
 
-    // ── 7. Real worker thread — pump cadence ───────────────────────────────
+    // ── 7. Real worker thread fires fexchange0 in response to inbound() ────
     //
-    // Start the worker, let it run for ~100 ms, verify sendTxIq fires
-    // multiple times.  Wide tolerance (≥ 2 ticks in 100 ms) absorbs
-    // QTimer scheduling jitter on busy CI without leaving the test
-    // useless — under -j8 load the worker sometimes only manages 3-4
-    // ticks per 100 ms instead of the ideal ~20.  Asserting ≥ 2 still
-    // catches the regression "no ticks at all" (the actual bench
-    // failure mode pre-redesign).
-    void realWorker_pumpCadence_atLeastTwoTicksIn100ms()
+    // Start the worker as a real QThread.  Push a few blocks via inbound().
+    // The worker should wake on each semaphore release and produce one
+    // sendTxIq call per block.
+    void realWorker_inboundDrivesFexchange0()
     {
         AudioEngine engine;
         TxChannel ch(kChannelId, kBufSize, kBufSize);
@@ -299,43 +288,37 @@ private slots:
         ch.setConnection(&conn);
         ch.setRunning(true);
 
+        TxMicSource src;
+        src.start();
+
         TxWorkerThread w;
         w.setTxChannel(&ch);
         w.setAudioEngine(&engine);
+        w.setMicSource(&src);
 
-        QElapsedTimer elapsed;
-        elapsed.start();
         w.startPump();
-        QTest::qWait(100);  // 100 ms — wider window to absorb CI jitter
-        const qint64 elapsedMs = elapsed.elapsed();
-        const int callsObserved = conn.callCount.load();
+        QTRY_COMPARE_WITH_TIMEOUT(w.isRunning(), true, 500);
+
+        // Push 5 blocks.
+        const int kBlocks = 5;
+        for (int blk = 0; blk < kBlocks; ++blk) {
+            std::vector<float> samples(kBufSize, 0.1f);
+            src.inbound(samples.data(), kBufSize);
+        }
+
+        // Wait for the worker to drain all 5 blocks.
+        QTRY_COMPARE_WITH_TIMEOUT(conn.callCount.load(), kBlocks, 1000);
+
         w.stopPump();
-
-        // Move TxChannel back so destructor runs cleanly on this thread.
         ch.moveToThread(this->thread());
-
-        // Expected ideal: ~20 ticks (100 / 5).  Lower bound 2 catches
-        // "no ticks at all" while tolerating heavy CI load.
-        QVERIFY2(callsObserved >= 2,
-                 qPrintable(QStringLiteral("pump did not tick — got %1 calls in %2 ms")
-                                .arg(callsObserved)
-                                .arg(elapsedMs)));
     }
 
     // ── 8. Cross-thread setter race — setMicPreamp from main while pumping ─
     //
-    // While the worker pump is running on the worker thread, repeatedly
-    // call setMicPreamp from the main thread.  Verify:
-    //   (a) No crash.
-    //   (b) The final value lands (visible via lastMicPreampForTest()).
-    //
-    // setMicPreamp's m_micPreampLast field is plain double, but per the
-    // setter audit (TxChannel.h §"Thread safety") only the setter itself
-    // touches it, and the setter is called from a single thread (here
-    // the test main thread).  WDSP's csDSP critical section serializes
-    // setter↔fexchange2.  This test verifies the practical absence of
-    // observable corruption under contention.
-    void crossThreadSetter_noCrash_finalValueLands()
+    // While the worker is pumping, hammer setMicPreamp from main.  Verify
+    // (a) no crash and (b) the final value lands.  Identical to the v2
+    // race test but using the new mic-source-driven cadence.
+    void crossThreadSetter_micPreamp_noCrash_finalValueLands()
     {
         AudioEngine engine;
         TxChannel ch(kChannelId, kBufSize, kBufSize);
@@ -343,45 +326,37 @@ private slots:
         ch.setConnection(&conn);
         ch.setRunning(true);
 
+        TxMicSource src;
+        src.start();
+
         TxWorkerThread w;
         w.setTxChannel(&ch);
         w.setAudioEngine(&engine);
+        w.setMicSource(&src);
 
         w.startPump();
+        QTRY_COMPARE_WITH_TIMEOUT(w.isRunning(), true, 500);
 
         // Hammer setMicPreamp from main thread while worker is pumping.
+        // Push some inbound blocks too so the worker actually runs.
         constexpr int kIterations = 100;
         for (int i = 0; i < kIterations; ++i) {
             ch.setMicPreamp(static_cast<double>(i) * 0.01);
+            if ((i % 10) == 0) {
+                std::vector<float> samples(kBufSize, 0.0f);
+                src.inbound(samples.data(), kBufSize);
+            }
         }
 
-        // Allow a few pump ticks to run.
         QTest::qWait(20);
 
         w.stopPump();
         ch.moveToThread(this->thread());
 
-        // Final value should be 0.99 (99 * 0.01) after the loop above.
         QCOMPARE(ch.lastMicPreampForTest(), 0.99);
     }
 
-    // ── 9. Cross-thread setter race — setVoxRun from main while pumping ────
-    //
-    // Companion test to (8) covering the MoxController-routed setter shape.
-    // The 7 MoxController → TxChannel connects added in commit a5b4585 use
-    // `receiver=m_txChannel` with lambdas wrapping the setter call (rather
-    // than the direct TransmitModel::micPreampChanged → setMicPreamp connect
-    // exercised by (8)).  Qt's AutoConnection picks QueuedConnection at
-    // emission time based on receiver thread affinity, so the lambda body
-    // runs on the worker thread.  This test confirms the lambda-connect
-    // pattern doesn't introduce a new race surface beyond the direct
-    // setter form already covered by (8).
-    //
-    // setVoxRun was picked because it's the simplest of the 7 (no scaling /
-    // unit conversion) — but the race surface is the same across
-    // setVoxAttackThreshold / setVoxHangTime / setAntiVoxGain / setAntiVoxRun
-    // / setRunning, all of which write a single Last-mirror field guarded
-    // only by WDSP's csDSP from the fexchange2 side.
+    // ── 9. Cross-thread setter race — setVoxRun (MoxController lambda form) ─
     void crossThreadSetter_voxRun_noCrash_finalValueLands()
     {
         AudioEngine engine;
@@ -390,20 +365,26 @@ private slots:
         ch.setConnection(&conn);
         ch.setRunning(true);
 
+        TxMicSource src;
+        src.start();
+
         TxWorkerThread w;
         w.setTxChannel(&ch);
         w.setAudioEngine(&engine);
+        w.setMicSource(&src);
 
         w.startPump();
+        QTRY_COMPARE_WITH_TIMEOUT(w.isRunning(), true, 500);
 
-        // Hammer setVoxRun from main thread while worker is pumping.
-        // Toggle 100 times so the final value is deterministic.
         constexpr int kIterations = 100;
         for (int i = 0; i < kIterations; ++i) {
             ch.setVoxRun((i % 2) == 0);
+            if ((i % 10) == 0) {
+                std::vector<float> samples(kBufSize, 0.0f);
+                src.inbound(samples.data(), kBufSize);
+            }
         }
 
-        // Allow a few pump ticks to run.
         QTest::qWait(20);
 
         w.stopPump();
