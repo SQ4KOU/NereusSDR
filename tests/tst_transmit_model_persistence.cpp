@@ -179,7 +179,7 @@ private slots:
             t.setMicGainDb(10);
         }
         // Verify key was written
-        const QString key = QStringLiteral("hardware/%1/tx/micGainDb").arg(kMacA);
+        const QString key = QStringLiteral("hardware/%1/tx/MicGain").arg(kMacA);
         QCOMPARE(AppSettings::instance().value(key).toString(), QStringLiteral("10"));
         // Fresh load
         TransmitModel t2;
@@ -523,8 +523,8 @@ private slots:
         t.setMicGainDb(15);
         t.setVoxThresholdDb(-5);
 
-        const QString keyGain = QStringLiteral("hardware/%1/tx/micGainDb").arg(kMacA);
-        const QString keyVox  = QStringLiteral("hardware/%1/tx/voxThresholdDb").arg(kMacA);
+        const QString keyGain = QStringLiteral("hardware/%1/tx/MicGain").arg(kMacA);
+        const QString keyVox  = QStringLiteral("hardware/%1/tx/Dexp_Threshold").arg(kMacA);
         QVERIFY(!AppSettings::instance().value(keyGain).isValid());
         QVERIFY(!AppSettings::instance().value(keyVox).isValid());
     }
