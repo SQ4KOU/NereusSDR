@@ -198,23 +198,36 @@ private slots:
         QCOMPARE(conn.callCount, 2);
     }
 
-    // ── No async dispatches occur after setRunning(true) ────────────────────
+    // ── Silence-drive fallback fires when no mic-driven push arrives ─────────
     //
-    // Proves the QTimer is gone: after starting the channel and waiting for
-    // 30 ms (more than enough for the old 5 ms timer to fire 6× times), no
-    // sendTxIq calls should have occurred without an explicit tickForTest.
+    // Phase 3M-1c E.1 bench-fix: TxChannel has a 5 ms silence-drive timer
+    // that fires driveOneTxBlock(nullptr, 0) when no mic-driven push has
+    // happened in the last kSilenceStaleThresholdMs (8 ms).  This drives
+    // PostGen TUNE-tone output even when no PC mic is configured / open.
+    //
+    // The original E.1 commit removed all timer-driven dispatch and asserted
+    // "no sendTxIq calls without explicit push" — that proved silent on the
+    // bench (TUN broken).  This corrected test asserts the post-bench-fix
+    // behavior: after starting the channel and waiting > 30 ms (well past
+    // both the 5 ms tick interval and the 8 ms stale threshold), the
+    // silence-drive timer should have fired sendTxIq at least once.
 
-    void noTimer_doesNotFireWithoutPush()
+    void silenceTimer_drivesFexchange2_whenNoPushArrives()
     {
         TxChannel ch(kChannelId, kBufSize, kBufSize);
         MockConnection conn;
         ch.setConnection(&conn);
         ch.setRunning(true);
 
-        // Spin event loop — old timer would have fired ~6× by now.
+        // Spin event loop — silence timer fires every 5 ms; stale threshold
+        // is 8 ms; so within 30 ms we expect ~3-5 silence-drive calls.
         QTest::qWait(30);
 
-        QCOMPARE(conn.callCount, 0);
+        // At least one silence-drive call should have fired sendTxIq via
+        // the driveOneTxBlock(nullptr, 0) silence path.
+        QVERIFY2(conn.callCount > 0,
+                 "Silence-drive timer did not fire — TUN/PostGen path "
+                 "would be silent without a mic push");
 
         ch.setRunning(false);
     }

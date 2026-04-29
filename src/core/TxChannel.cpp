@@ -221,6 +221,17 @@ TxChannel::TxChannel(int channelId,
     // Qt::DirectConnection.  Each mic block emits triggers exactly one
     // fexchange2 cycle synchronously on the audio thread.
 
+    // Phase 3M-1c E.1 bench-fix: silence-drive fallback timer.  Started/
+    // stopped from setRunning(); fires onSilenceTimer() at 5 ms cadence
+    // and drives driveOneTxBlock(nullptr, 0) when the mic-driven path
+    // has been quiet for more than kSilenceStaleThresholdMs.  Covers
+    // the no-mic case (TUN with PC mic missing / open failed).
+    m_silenceTimer = new QTimer(this);
+    m_silenceTimer->setInterval(kSilenceTimerIntervalMs);
+    m_silenceTimer->setTimerType(Qt::PreciseTimer);
+    QObject::connect(m_silenceTimer, &QTimer::timeout,
+                     this, &TxChannel::onSilenceTimer);
+
     qCInfo(lcDsp) << "TxChannel" << m_channelId
                   << "wrapper constructed; WDSP TXA pipeline (31 stages)"
                   << "inBuf=" << m_inputBufferSize
@@ -518,6 +529,26 @@ void TxChannel::setRunning(bool on)
     // wired in Phase L.  The slot itself early-exits when m_running is
     // false, so toggling this flag is sufficient to gate fexchange2.
     m_running = on;
+
+    // ── 3M-1c E.1 bench-regression fix: silence-drive fallback timer ─────
+    //
+    // Companion to the AudioEngine pump (which drives mic-driven
+    // fexchange2 when PC mic is configured + bus is open).  This timer
+    // covers the no-mic case: when m_txInputBus is null (mic missing /
+    // open failed) the AudioEngine pump no-ops and PostGen TUNE-tone
+    // output never reaches the radio.  This silence-drive timer fires
+    // driveOneTxBlock(nullptr, 0) at 5 ms cadence, but only when no
+    // mic-driven driveOneTxBlock has fired in the last
+    // kSilenceStaleThresholdMs (8 ms) — preventing double-fexchange2
+    // when mic is flowing normally (mic-driven path ticks every ~5-7 ms).
+    if (m_silenceTimer != nullptr) {
+        if (on) {
+            m_lastDriveTimer.restart();   // freshen so first tick waits
+            m_silenceTimer->start();
+        } else {
+            m_silenceTimer->stop();
+        }
+    }
 
     qCDebug(lcDsp) << "TxChannel" << m_channelId
                    << (on ? "started (channel ON, push-driven slot armed)"
@@ -1236,6 +1267,32 @@ void TxChannel::driveOneTxBlock(const float* samples, int frames)
     //
     // Plan: 3M-1b D.5. Pre-code review §4.3.
     emit sip1OutputReady(m_outI.data(), m_outputBufferSize);
+
+    // 3M-1c E.1 bench-fix: refresh the last-drive timestamp so the
+    // silence-drive fallback timer (TxChannel m_silenceTimer) skips its
+    // next tick.  When mic is flowing the mic-driven path ticks every
+    // ~5-7 ms, well within the 8 ms stale threshold; the silence
+    // fallback only fires when no mic data has reached fexchange2 in
+    // the last 8 ms (mic missing, mic-mute, etc.).
+    m_lastDriveTimer.restart();
+}
+
+void TxChannel::onSilenceTimer()
+{
+    // 3M-1c E.1 bench-fix — silence-drive fallback for the TUN PostGen
+    // path when no mic data is flowing.  Cadence: kSilenceTimerIntervalMs
+    // (5 ms).  Skips when a mic-driven driveOneTxBlock has fired in
+    // the last kSilenceStaleThresholdMs (8 ms) — preventing double
+    // fexchange2 when mic is flowing normally.
+    if (!m_running) {
+        return;
+    }
+    if (m_lastDriveTimer.isValid() &&
+        m_lastDriveTimer.elapsed() < kSilenceStaleThresholdMs) {
+        return;   // mic-driven path is fresh enough; skip.
+    }
+    // Silence path — drives PostGen TUNE-tone output even without mic.
+    driveOneTxBlock(nullptr, 0);
 }
 
 // ---------------------------------------------------------------------------

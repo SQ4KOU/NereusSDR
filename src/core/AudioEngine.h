@@ -108,6 +108,8 @@ namespace NereusSDR { class PipeWireThreadLoop; }
 #include <QObject>
 #include <QString>
 
+class QTimer;
+
 #include <array>
 #include <atomic>
 #include <memory>
@@ -516,6 +518,25 @@ private:
     // Single-threaded (audio-thread only) so no atomics needed.
     std::array<float, kMicBlockFrames> m_micBlockBuffer{};
     int m_micBlockFill = 0;
+
+    // ── Mic pump timer (3M-1c E.1 bench-regression fix) ──────────────────
+    //
+    // Phase 3M-1c E.1 dropped TxChannel's 5 ms QTimer that drove the
+    // pullTxMic chain (TxMicRouter → PcMicSource → AudioEngine::pullTxMic),
+    // breaking both TUN (PostGen TUNE-tone path) and SSB voice TX
+    // (mic→fexchange2 path).  This timer pumps pullTxMic on the same
+    // 5 ms cadence so the existing accumulator-and-emit flow keeps
+    // ticking.  Always-running (not gated on MOX) — pullTxMic is cheap
+    // when m_txInputBus is null and TxChannel has its own !m_running
+    // guard for the slot.
+    //
+    // Runs on the main thread (Qt event loop).  Future polish: move to
+    // a dedicated audio thread to keep fexchange2 off the main thread.
+    QTimer* m_micPumpTimer{nullptr};
+    static constexpr int kMicPumpIntervalMs = 5;
+
+    // 3M-1c E.1 bench-regression fix — periodic mic pump.
+    void pumpMic();
     // Sub-Phase 8.5: platform-native VAX TX virtual bus. Distinct from
     // m_txInputBus, which is the OS mic-capture device owned by MicDirect.
     // Opened in start(), reset in stop(); consumption is a Phase 3M concern.

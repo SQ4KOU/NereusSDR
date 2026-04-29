@@ -108,6 +108,8 @@
 
 #include <portaudio.h>
 
+#include <QTimer>
+
 #include <algorithm>
 #include <vector>
 
@@ -178,6 +180,26 @@ AudioEngine::AudioEngine(QObject* parent)
     // atomically by setTxMonitorVolume via setSliceGain.
     // Plan: 3M-1b E.3. Pre-code review §4.3.
     m_masterMix.setSliceGain(kTxMonitorSlotId, m_txMonitorVolume.load(std::memory_order_relaxed), 0.0f);
+
+    // ── 3M-1c E.1 bench-regression fix: mic pump timer ────────────────────
+    //
+    // E.1 dropped TxChannel's 5 ms QTimer that drove the pullTxMic chain
+    // (TxMicRouter → PcMicSource → AudioEngine::pullTxMic).  Without that
+    // pump, the 720-sample accumulator (D.1) never filled, micBlockReady
+    // never fired, and the push-driven TX path (E.1 + L.4 MicReBlocker →
+    // TxChannel::driveOneTxBlock) never ran — breaking both TUN
+    // (PostGen TUNE-tone path) and SSB voice TX (mic→fexchange2 path).
+    //
+    // The pump runs unconditionally at 5 ms cadence (matches pre-E.1
+    // TxChannel timer period).  pumpMic() no-ops if m_txInputBus is
+    // null; pullTxMic's existing accumulator emits micBlockReady when
+    // 720 samples accumulate (~15 ms at 48 kHz).
+    m_micPumpTimer = new QTimer(this);
+    m_micPumpTimer->setInterval(kMicPumpIntervalMs);
+    m_micPumpTimer->setTimerType(Qt::PreciseTimer);
+    QObject::connect(m_micPumpTimer, &QTimer::timeout,
+                     this, &AudioEngine::pumpMic);
+    m_micPumpTimer->start();
 }
 
 AudioEngine::~AudioEngine()
@@ -1055,6 +1077,37 @@ void AudioEngine::clearMicBuffer()
     // cycle begins with an empty accumulator.  Single-threaded by contract
     // (audio-thread only); no atomic needed.
     m_micBlockFill = 0;
+}
+
+void AudioEngine::pumpMic()
+{
+    // 3M-1c E.1 bench-regression fix.
+    //
+    // Periodic pump that drives the pullTxMic chain.  E.1 dropped
+    // TxChannel's 5 ms QTimer that did this; without a replacement
+    // pump, micBlockReady never fired and both TUN + SSB voice TX
+    // were silent (regression caught at the bench by JJ post-3M-1c).
+    //
+    // pullTxMic is a no-op when m_txInputBus is null; otherwise it
+    // pulls up to 256 mono samples from the bus, accumulates into
+    // m_micBlockBuffer, and emits micBlockReady when the accumulator
+    // hits kMicBlockFrames (720).  The Phase L MicReBlocker re-chunks
+    // 720 → 256 and pushes to TxChannel::driveOneTxBlock(samples, 256)
+    // via Qt::DirectConnection.
+    //
+    // Caveat: when m_txInputBus is null (no PC mic configured / open
+    // failed), this pump does nothing and TUN's PostGen TUNE-tone path
+    // is still silent.  TxChannel adds its own silence-drive fallback
+    // timer for that scenario (E.1 bench-fix part B).
+    if (m_txInputBus == nullptr) {
+        return;
+    }
+    // Discard the dst output — the goal is the side-effect of
+    // pullTxMic's accumulator filling and emitting micBlockReady.
+    // 256 mono samples per tick (~5.33 ms at 48 kHz) is the smallest
+    // chunk that matches the original TxChannel timer's pull size.
+    static thread_local std::array<float, 256> scratch;
+    pullTxMic(scratch.data(), static_cast<int>(scratch.size()));
 }
 
 void AudioEngine::setVolume(float volume)

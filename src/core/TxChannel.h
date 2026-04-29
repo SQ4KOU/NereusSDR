@@ -148,7 +148,9 @@ warren@wpratt.com
 
 #pragma once
 
+#include <QElapsedTimer>
 #include <QObject>
+#include <QTimer>
 
 #include <limits>   // std::numeric_limits — quiet_NaN() initialiser (D.3)
 #include <vector>
@@ -957,13 +959,29 @@ signals:
     /// Plan: 3M-1b D.5 (this commit). Pre-code review §4.3.
     void sip1OutputReady(const float* samples, int frames);
 
+private slots:
+    // 3M-1c E.1 bench-fix — silence-drive fallback when no mic is flowing.
+    void onSilenceTimer();
+
 private:
     // ── TX I/Q production loop internals (3M-1c E.1 — push-driven) ──────────
 
-    // (No QTimer in the push-driven model.  Phase 3M-1a G.1 introduced an
-    //  m_txProductionTimer firing every 5 ms; Phase 3M-1c E.1 removed it
-    //  in favour of the AudioEngine::micBlockReady → driveOneTxBlock slot
-    //  wired via Qt::DirectConnection.  See driveOneTxBlock() doc-comment.)
+    // (Phase 3M-1a G.1 introduced an m_txProductionTimer firing every 5 ms;
+    //  Phase 3M-1c E.1 removed it in favour of the AudioEngine::micBlockReady
+    //  → driveOneTxBlock slot wired via Qt::DirectConnection.
+    //  Phase 3M-1c E.1 bench-fix added m_silenceTimer below as a fallback
+    //  for the no-mic case.  See driveOneTxBlock() / onSilenceTimer() doc.)
+
+    // Silence-drive fallback timer — fires driveOneTxBlock(nullptr, 0)
+    // at 5 ms cadence when no mic-driven driveOneTxBlock has fired in
+    // the last kSilenceStaleThresholdMs (8 ms).  Active only when
+    // m_running is true.  See setRunning() + onSilenceTimer().
+    QTimer*       m_silenceTimer{nullptr};
+    QElapsedTimer m_lastDriveTimer;
+    static constexpr int kSilenceTimerIntervalMs   = 5;   // ms between ticks
+    static constexpr int kSilenceStaleThresholdMs  = 8;   // skip if mic-driven
+                                                          // path fired more
+                                                          // recently than this
 
     // Non-owning pointers — injected by RadioModel, cleared on disconnect.
     RadioConnection* m_connection{nullptr};  // sendTxIq recipient
