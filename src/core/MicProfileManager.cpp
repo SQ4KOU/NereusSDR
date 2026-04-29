@@ -57,8 +57,9 @@ QString activeKey(const QString& mac)
 }
 
 // ---------------------------------------------------------------------------
-// 23 live-field keys captured per profile.  Order matches the table in the
-// chunk-F task spec (tools/script-friendly: stays sorted by group).
+// 50 live-field keys captured per profile.  Order matches the table in the
+// chunk-F + 3M-3a-i G task specs (tools/script-friendly: sorted by group).
+// 23 mic/VOX/MON/two-tone (3M-1c F) + 27 EQ/Lev/ALC (3M-3a-i G).
 // ---------------------------------------------------------------------------
 const QStringList& liveKeyList()
 {
@@ -91,6 +92,41 @@ const QStringList& liveKeyList()
         QStringLiteral("TwoToneInvert"),
         QStringLiteral("TwoTonePulsed"),
         QStringLiteral("TwoToneDrivePowerOrigin"),
+        // ── 3M-3a-i G — TX EQ + Leveler + ALC (27 keys) ───────────────────
+        // EQ enable + preamp + 10 band gains + 10 band frequencies (22 keys).
+        // Defaults from Thetis database.cs:4552-4594 [v2.10.3.13] (TXProfile
+        // schema) + WDSP TXA.c:111-128 (create_eqp G[]/F[] vectors).
+        // EQ globals (eq/nc, eq/mp, eq/ctfmode, eq/wintype) are intentionally
+        // NOT bundled — they are radio-wide DSP settings, not per-profile.
+        QStringLiteral("TXEQEnabled"),
+        QStringLiteral("TXEQPreamp"),
+        QStringLiteral("TXEQ1"),
+        QStringLiteral("TXEQ2"),
+        QStringLiteral("TXEQ3"),
+        QStringLiteral("TXEQ4"),
+        QStringLiteral("TXEQ5"),
+        QStringLiteral("TXEQ6"),
+        QStringLiteral("TXEQ7"),
+        QStringLiteral("TXEQ8"),
+        QStringLiteral("TXEQ9"),
+        QStringLiteral("TXEQ10"),
+        QStringLiteral("TxEqFreq1"),
+        QStringLiteral("TxEqFreq2"),
+        QStringLiteral("TxEqFreq3"),
+        QStringLiteral("TxEqFreq4"),
+        QStringLiteral("TxEqFreq5"),
+        QStringLiteral("TxEqFreq6"),
+        QStringLiteral("TxEqFreq7"),
+        QStringLiteral("TxEqFreq8"),
+        QStringLiteral("TxEqFreq9"),
+        QStringLiteral("TxEqFreq10"),
+        // Leveler (3 keys) — database.cs:4584-4588 [v2.10.3.13].
+        QStringLiteral("Lev_On"),
+        QStringLiteral("Lev_MaxGain"),
+        QStringLiteral("Lev_Decay"),
+        // ALC (2 keys) — database.cs:4592-4594 [v2.10.3.13].
+        QStringLiteral("ALC_MaximumGain"),
+        QStringLiteral("ALC_Decay"),
     };
     return kKeys;
 }
@@ -350,6 +386,40 @@ QHash<QString, QVariant> MicProfileManager::defaultProfileValues()
     out.insert(QStringLiteral("TwoTonePulsed"),        QStringLiteral("False"));         // setup.Designer.cs:61643-61653 [v2.10.3.13]
     out.insert(QStringLiteral("TwoToneDrivePowerOrigin"),
                QStringLiteral("DriveSlider"));                                            // console.cs:46553 [v2.10.3.13]
+
+    // ── 3M-3a-i G — TX EQ + Leveler + ALC defaults (27 keys) ─────────────
+    // From Thetis database.cs:4552-4594 [v2.10.3.13] (TXProfile schema).
+    // EQ band/freq defaults from WDSP TXA.c:112-113 [v2.10.3.13]:
+    //   default_F[1..10] = {32, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000};
+    //   default_G[1..10] = {-12, -12, -12, -1, +1, +4, +9, +12, -10, -10};
+    //   //double default_G[11] =   {0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,    0.0,    0.0,    0.0,     0.0};
+    out.insert(QStringLiteral("TXEQEnabled"),    QStringLiteral("False"));   // database.cs:4553
+    out.insert(QStringLiteral("TXEQPreamp"),     QStringLiteral("0"));       // database.cs:4554
+    out.insert(QStringLiteral("TXEQ1"),          QStringLiteral("-12"));     // WDSP TXA.c:113 default_G[1]
+    out.insert(QStringLiteral("TXEQ2"),          QStringLiteral("-12"));     // WDSP TXA.c:113 default_G[2]
+    out.insert(QStringLiteral("TXEQ3"),          QStringLiteral("-12"));     // WDSP TXA.c:113 default_G[3]
+    out.insert(QStringLiteral("TXEQ4"),          QStringLiteral("-1"));      // WDSP TXA.c:113 default_G[4]
+    out.insert(QStringLiteral("TXEQ5"),          QStringLiteral("1"));       // WDSP TXA.c:113 default_G[5]
+    out.insert(QStringLiteral("TXEQ6"),          QStringLiteral("4"));       // WDSP TXA.c:113 default_G[6]
+    out.insert(QStringLiteral("TXEQ7"),          QStringLiteral("9"));       // WDSP TXA.c:113 default_G[7]
+    out.insert(QStringLiteral("TXEQ8"),          QStringLiteral("12"));      // WDSP TXA.c:113 default_G[8]
+    out.insert(QStringLiteral("TXEQ9"),          QStringLiteral("-10"));     // WDSP TXA.c:113 default_G[9]
+    out.insert(QStringLiteral("TXEQ10"),         QStringLiteral("-10"));     // WDSP TXA.c:113 default_G[10]
+    out.insert(QStringLiteral("TxEqFreq1"),      QStringLiteral("32"));      // WDSP TXA.c:112 default_F[1]
+    out.insert(QStringLiteral("TxEqFreq2"),      QStringLiteral("63"));      // WDSP TXA.c:112 default_F[2]
+    out.insert(QStringLiteral("TxEqFreq3"),      QStringLiteral("125"));     // WDSP TXA.c:112 default_F[3]
+    out.insert(QStringLiteral("TxEqFreq4"),      QStringLiteral("250"));     // WDSP TXA.c:112 default_F[4]
+    out.insert(QStringLiteral("TxEqFreq5"),      QStringLiteral("500"));     // WDSP TXA.c:112 default_F[5]
+    out.insert(QStringLiteral("TxEqFreq6"),      QStringLiteral("1000"));    // WDSP TXA.c:112 default_F[6]
+    out.insert(QStringLiteral("TxEqFreq7"),      QStringLiteral("2000"));    // WDSP TXA.c:112 default_F[7]
+    out.insert(QStringLiteral("TxEqFreq8"),      QStringLiteral("4000"));    // WDSP TXA.c:112 default_F[8]
+    out.insert(QStringLiteral("TxEqFreq9"),      QStringLiteral("8000"));    // WDSP TXA.c:112 default_F[9]
+    out.insert(QStringLiteral("TxEqFreq10"),     QStringLiteral("16000"));   // WDSP TXA.c:112 default_F[10]
+    out.insert(QStringLiteral("Lev_On"),         QStringLiteral("True"));    // database.cs:4584
+    out.insert(QStringLiteral("Lev_MaxGain"),    QStringLiteral("15"));      // database.cs:4586
+    out.insert(QStringLiteral("Lev_Decay"),      QStringLiteral("100"));     // database.cs:4588
+    out.insert(QStringLiteral("ALC_MaximumGain"), QStringLiteral("3"));      // database.cs:4592
+    out.insert(QStringLiteral("ALC_Decay"),      QStringLiteral("10"));      // database.cs:4594
     return out;
 }
 
@@ -388,6 +458,23 @@ QHash<QString, QVariant> MicProfileManager::captureLiveValues(const TransmitMode
     out.insert(QStringLiteral("TwoTonePulsed"),        tx->twoTonePulsed() ? QStringLiteral("True") : QStringLiteral("False"));
     out.insert(QStringLiteral("TwoToneDrivePowerOrigin"),
                drivePowerSourceToString(tx->twoToneDrivePowerSource()));
+
+    // ── 3M-3a-i G — TX EQ + Leveler + ALC live capture (27 keys) ─────────
+    out.insert(QStringLiteral("TXEQEnabled"),
+               tx->txEqEnabled() ? QStringLiteral("True") : QStringLiteral("False"));
+    out.insert(QStringLiteral("TXEQPreamp"), QString::number(tx->txEqPreamp()));
+    for (int i = 0; i < 10; ++i) {
+        out.insert(QStringLiteral("TXEQ%1").arg(i + 1),
+                   QString::number(tx->txEqBand(i)));
+        out.insert(QStringLiteral("TxEqFreq%1").arg(i + 1),
+                   QString::number(tx->txEqFreq(i)));
+    }
+    out.insert(QStringLiteral("Lev_On"),
+               tx->txLevelerOn() ? QStringLiteral("True") : QStringLiteral("False"));
+    out.insert(QStringLiteral("Lev_MaxGain"), QString::number(tx->txLevelerMaxGain()));
+    out.insert(QStringLiteral("Lev_Decay"),   QString::number(tx->txLevelerDecay()));
+    out.insert(QStringLiteral("ALC_MaximumGain"), QString::number(tx->txAlcMaxGain()));
+    out.insert(QStringLiteral("ALC_Decay"),       QString::number(tx->txAlcDecay()));
     return out;
 }
 
@@ -435,6 +522,26 @@ void MicProfileManager::applyValuesToModel(const QHash<QString, QVariant>& value
     tx->setTwoTonePulsed(take(QStringLiteral("TwoTonePulsed"), QStringLiteral("False")) == QLatin1String("True"));
     tx->setTwoToneDrivePowerSource(drivePowerSourceFromString(
         take(QStringLiteral("TwoToneDrivePowerOrigin"), QStringLiteral("DriveSlider"))));
+
+    // ── 3M-3a-i G — TX EQ + Leveler + ALC apply-to-model (27 keys) ───────
+    // Defaults match the EQ/Lev/ALC defaults in defaultProfileValues() above.
+    tx->setTxEqEnabled(take(QStringLiteral("TXEQEnabled"), QStringLiteral("False"))
+                            == QLatin1String("True"));
+    tx->setTxEqPreamp(take(QStringLiteral("TXEQPreamp"), QStringLiteral("0")).toInt());
+    static constexpr int kDefaultG[10] = {-12, -12, -12, -1, 1, 4, 9, 12, -10, -10};
+    static constexpr int kDefaultF[10] = {32, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000};
+    for (int i = 0; i < 10; ++i) {
+        tx->setTxEqBand(i, take(QStringLiteral("TXEQ%1").arg(i + 1),
+                                 QString::number(kDefaultG[i])).toInt());
+        tx->setTxEqFreq(i, take(QStringLiteral("TxEqFreq%1").arg(i + 1),
+                                 QString::number(kDefaultF[i])).toInt());
+    }
+    tx->setTxLevelerOn(take(QStringLiteral("Lev_On"), QStringLiteral("True"))
+                            == QLatin1String("True"));
+    tx->setTxLevelerMaxGain(take(QStringLiteral("Lev_MaxGain"), QStringLiteral("15")).toInt());
+    tx->setTxLevelerDecay(take(QStringLiteral("Lev_Decay"), QStringLiteral("100")).toInt());
+    tx->setTxAlcMaxGain(take(QStringLiteral("ALC_MaximumGain"), QStringLiteral("3")).toInt());
+    tx->setTxAlcDecay(take(QStringLiteral("ALC_Decay"), QStringLiteral("10")).toInt());
 }
 
 } // namespace NereusSDR

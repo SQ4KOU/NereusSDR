@@ -172,8 +172,169 @@ private slots:
         QCOMPARE(defs.value("TwoToneFreq1").toString(), QStringLiteral("700"));
         QCOMPARE(defs.value("TwoToneDrivePowerOrigin").toString(),
                  QStringLiteral("DriveSlider"));
-        // 23 keys total per the documented table.
-        QCOMPARE(defs.size(), 23);
+        // 50 keys total: 23 mic/VOX/MON/two-tone (3M-1c) + 27 EQ/Lev/ALC (3M-3a-i G).
+        QCOMPARE(defs.size(), 50);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // §G  3M-3a-i — TX EQ + Leveler + ALC keys (27 new keys bundled)
+    // ─────────────────────────────────────────────────────────────────────
+
+    void firstLaunch_seedsEqLevAlcDefaults()
+    {
+        MicProfileManager mgr;
+        mgr.setMacAddress(kMacA);
+        mgr.load();
+
+        // Spot-check the new EQ/Lev/ALC defaults sourced from
+        // Thetis database.cs:4552-4594 [v2.10.3.13] + WDSP TXA.c:111-128.
+        auto& s = AppSettings::instance();
+        QCOMPARE(s.value(profileKey(kMacA, "Default", "TXEQEnabled")).toString(),
+                 QStringLiteral("False"));
+        QCOMPARE(s.value(profileKey(kMacA, "Default", "TXEQPreamp")).toString(),
+                 QStringLiteral("0"));
+        // WDSP TXA.c:113 default_G[1..10] = {-12, -12, -12, -1, +1, +4, +9, +12, -10, -10}
+        QCOMPARE(s.value(profileKey(kMacA, "Default", "TXEQ1")).toString(),
+                 QStringLiteral("-12"));
+        QCOMPARE(s.value(profileKey(kMacA, "Default", "TXEQ4")).toString(),
+                 QStringLiteral("-1"));
+        QCOMPARE(s.value(profileKey(kMacA, "Default", "TXEQ8")).toString(),
+                 QStringLiteral("12"));
+        QCOMPARE(s.value(profileKey(kMacA, "Default", "TXEQ10")).toString(),
+                 QStringLiteral("-10"));
+        // WDSP TXA.c:112 default_F[1..10] = {32, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000}
+        QCOMPARE(s.value(profileKey(kMacA, "Default", "TxEqFreq1")).toString(),
+                 QStringLiteral("32"));
+        QCOMPARE(s.value(profileKey(kMacA, "Default", "TxEqFreq6")).toString(),
+                 QStringLiteral("1000"));
+        QCOMPARE(s.value(profileKey(kMacA, "Default", "TxEqFreq10")).toString(),
+                 QStringLiteral("16000"));
+        // Leveler — database.cs:4584-4588 [v2.10.3.13]
+        QCOMPARE(s.value(profileKey(kMacA, "Default", "Lev_On")).toString(),
+                 QStringLiteral("True"));
+        QCOMPARE(s.value(profileKey(kMacA, "Default", "Lev_MaxGain")).toString(),
+                 QStringLiteral("15"));
+        QCOMPARE(s.value(profileKey(kMacA, "Default", "Lev_Decay")).toString(),
+                 QStringLiteral("100"));
+        // ALC — database.cs:4592-4594 [v2.10.3.13]
+        QCOMPARE(s.value(profileKey(kMacA, "Default", "ALC_MaximumGain")).toString(),
+                 QStringLiteral("3"));
+        QCOMPARE(s.value(profileKey(kMacA, "Default", "ALC_Decay")).toString(),
+                 QStringLiteral("10"));
+    }
+
+    void saveProfile_capturesEqLevAlcLiveKeys()
+    {
+        TransmitModel tx;
+        tx.loadFromSettings(kMacA);
+        // Mutate EQ/Lev/ALC properties.
+        tx.setTxEqEnabled(true);
+        tx.setTxEqPreamp(5);
+        tx.setTxEqBand(0, -8);
+        tx.setTxEqBand(9, 7);
+        tx.setTxEqFreq(0, 50);
+        tx.setTxEqFreq(9, 14000);
+        tx.setTxLevelerOn(false);
+        tx.setTxLevelerMaxGain(8);
+        tx.setTxLevelerDecay(250);
+        tx.setTxAlcMaxGain(20);
+        tx.setTxAlcDecay(25);
+
+        MicProfileManager mgr;
+        mgr.setMacAddress(kMacA);
+        mgr.load();
+        mgr.saveProfile("EqProfile", &tx);
+
+        auto& s = AppSettings::instance();
+        QCOMPARE(s.value(profileKey(kMacA, "EqProfile", "TXEQEnabled")).toString(),
+                 QStringLiteral("True"));
+        QCOMPARE(s.value(profileKey(kMacA, "EqProfile", "TXEQPreamp")).toString(),
+                 QStringLiteral("5"));
+        QCOMPARE(s.value(profileKey(kMacA, "EqProfile", "TXEQ1")).toString(),
+                 QStringLiteral("-8"));
+        QCOMPARE(s.value(profileKey(kMacA, "EqProfile", "TXEQ10")).toString(),
+                 QStringLiteral("7"));
+        QCOMPARE(s.value(profileKey(kMacA, "EqProfile", "TxEqFreq1")).toString(),
+                 QStringLiteral("50"));
+        QCOMPARE(s.value(profileKey(kMacA, "EqProfile", "TxEqFreq10")).toString(),
+                 QStringLiteral("14000"));
+        QCOMPARE(s.value(profileKey(kMacA, "EqProfile", "Lev_On")).toString(),
+                 QStringLiteral("False"));
+        QCOMPARE(s.value(profileKey(kMacA, "EqProfile", "Lev_MaxGain")).toString(),
+                 QStringLiteral("8"));
+        QCOMPARE(s.value(profileKey(kMacA, "EqProfile", "Lev_Decay")).toString(),
+                 QStringLiteral("250"));
+        QCOMPARE(s.value(profileKey(kMacA, "EqProfile", "ALC_MaximumGain")).toString(),
+                 QStringLiteral("20"));
+        QCOMPARE(s.value(profileKey(kMacA, "EqProfile", "ALC_Decay")).toString(),
+                 QStringLiteral("25"));
+    }
+
+    void setActiveProfile_appliesEqLevAlcValuesToTransmitModel()
+    {
+        TransmitModel tx;
+        tx.loadFromSettings(kMacA);
+        tx.setTxEqEnabled(true);
+        tx.setTxEqPreamp(8);
+        tx.setTxEqBand(2, -3);
+        tx.setTxEqFreq(2, 200);
+        tx.setTxLevelerOn(false);
+        tx.setTxLevelerMaxGain(10);
+        tx.setTxLevelerDecay(300);
+        tx.setTxAlcMaxGain(12);
+        tx.setTxAlcDecay(20);
+
+        MicProfileManager mgr;
+        mgr.setMacAddress(kMacA);
+        mgr.load();
+        mgr.saveProfile("MyEq", &tx);
+
+        // Mutate to other values.
+        tx.setTxEqEnabled(false);
+        tx.setTxEqPreamp(0);
+        tx.setTxEqBand(2, 5);
+        tx.setTxEqFreq(2, 100);
+        tx.setTxLevelerOn(true);
+        tx.setTxLevelerMaxGain(15);
+        tx.setTxLevelerDecay(100);
+        tx.setTxAlcMaxGain(3);
+        tx.setTxAlcDecay(10);
+
+        QVERIFY(mgr.setActiveProfile("MyEq", &tx));
+        QCOMPARE(tx.txEqEnabled(), true);
+        QCOMPARE(tx.txEqPreamp(), 8);
+        QCOMPARE(tx.txEqBand(2), -3);
+        QCOMPARE(tx.txEqFreq(2), 200);
+        QCOMPARE(tx.txLevelerOn(), false);
+        QCOMPARE(tx.txLevelerMaxGain(), 10);
+        QCOMPARE(tx.txLevelerDecay(), 300);
+        QCOMPARE(tx.txAlcMaxGain(), 12);
+        QCOMPARE(tx.txAlcDecay(), 20);
+    }
+
+    void deleteProfile_removesEqLevAlcKeys()
+    {
+        TransmitModel tx;
+        MicProfileManager mgr;
+        mgr.setMacAddress(kMacA);
+        mgr.load();
+        mgr.saveProfile("ToDelete", &tx);
+
+        // Spot-check a couple of EQ keys are present.
+        QVERIFY(AppSettings::instance().contains(profileKey(kMacA, "ToDelete", "TXEQEnabled")));
+        QVERIFY(AppSettings::instance().contains(profileKey(kMacA, "ToDelete", "Lev_MaxGain")));
+
+        QVERIFY(mgr.deleteProfile("ToDelete"));
+
+        // All EQ/Lev/ALC keys for the deleted profile must be removed.
+        QVERIFY(!AppSettings::instance().contains(profileKey(kMacA, "ToDelete", "TXEQEnabled")));
+        QVERIFY(!AppSettings::instance().contains(profileKey(kMacA, "ToDelete", "TXEQ1")));
+        QVERIFY(!AppSettings::instance().contains(profileKey(kMacA, "ToDelete", "TxEqFreq1")));
+        QVERIFY(!AppSettings::instance().contains(profileKey(kMacA, "ToDelete", "Lev_On")));
+        QVERIFY(!AppSettings::instance().contains(profileKey(kMacA, "ToDelete", "Lev_MaxGain")));
+        QVERIFY(!AppSettings::instance().contains(profileKey(kMacA, "ToDelete", "Lev_Decay")));
+        QVERIFY(!AppSettings::instance().contains(profileKey(kMacA, "ToDelete", "ALC_MaximumGain")));
+        QVERIFY(!AppSettings::instance().contains(profileKey(kMacA, "ToDelete", "ALC_Decay")));
     }
 
     // =========================================================================
