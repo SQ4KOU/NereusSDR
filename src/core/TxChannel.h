@@ -136,15 +136,16 @@ warren@wpratt.com
 //                 partial / no data, so the silence path "falls out for free"
 //                 (PostGen TUNE-tone still produces output; SSB with no mic
 //                 produces silent — both correct).
-//                 All public state-mutation setters became `public slots:`
-//                 so cross-thread invocation from the main thread auto-
-//                 resolves to Qt::QueuedConnection when TxChannel lives on
-//                 TxWorkerThread.  Lifecycle setters (setConnection /
-//                 setMicRouter / setRunning) are also slots; RadioModel
-//                 invokes them with the worker stopped or via queued
-//                 connect()s.  driveOneTxBlock keeps its public-slot
-//                 status — the worker thread calls it directly (same-thread
-//                 dispatch).
+//                 Public state-mutation setters remain in `public:`. The L.2
+//                 fixup connects + 3M-1c spec-compliance MoxController→TxChannel
+//                 connects use Qt5 functor syntax (`connect(emit, sig,
+//                 m_txChannel, lambda_or_methodptr)`) which dispatches via
+//                 AutoConnection — auto-routes to QueuedConnection when the
+//                 receiver lives on a different thread, no slot annotation
+//                 required.  Only `driveOneTxBlock` is in `public slots:`
+//                 because TxWorkerThread invokes it directly via member-pointer
+//                 call (same-thread dispatch on the worker, not via Qt's
+//                 connect machinery).
 //                 Plan: docs/architecture/phase3m-1c-tx-pump-architecture-plan.md
 //   2026-04-28 — Phase 3M-1c E.2-E.6 — TXA PostGen wrapper setters (12 methods)
 //                 added by J.J. Boyd (KG4VCF):
@@ -198,20 +199,28 @@ class TxMicRouter;
 //     thread the TxChannel currently lives on; RadioModel teardown moves
 //     it back to the main thread before destroying.
 //   - Public state-mutation setters (setMicPreamp, setVoxRun, setTuneTone,
-//     setTxPostGen*, setMicMute, setTxMode, setTxBandpass, etc.):
+//     setTxPostGen*, setTxMode, setTxBandpass, etc.):
 //     called from the main thread.  WDSP's per-channel csDSP critical
-//     section serializes setter↔fexchange2 access; the C++ idempotent-guard
-//     fields (m_micPreampLast, m_voxRunLast, etc.) are accessed only from
-//     within their own setters, which are all main-thread-only.  No
-//     concurrent setter calls in the codebase today.  See plan §4.4 for
-//     the full audit.
+//     section serializes setter↔setter access (multiple writers are
+//     mutually-excluded inside WDSP).  Setter↔DSP-read is unprotected —
+//     Thetis itself relies on x86-style atomic-double semantics here
+//     (e.g., `xgen` in wdsp/gen.c:215 [v2.10.3.13] reads `tt.f1`/`tt.f2`/
+//     `tt.mag` without taking csDSP).  NereusSDR inherits the same race
+//     surface and acceptance criterion.  The C++ idempotent-guard fields
+//     (m_micPreampLast, m_voxRunLast, etc.) are accessed only from within
+//     their own setters, which are all main-thread-only.  No concurrent
+//     setter calls in the codebase today.  See plan §4.4 for the full
+//     audit.
 //   - Lifecycle setters (setConnection, setMicRouter, setRunning):
 //     setConnection / setMicRouter are called from the main thread BEFORE
 //     moveToThread (initial wiring) and AFTER the worker has been stopped
-//     (teardown).  setRunning is called via MoxController connect()
-//     lambdas with receiver=this, so the lambda runs on this object's
-//     thread (worker).  m_running is std::atomic so getters from any
-//     thread are safe.
+//     (teardown).  setRunning is invoked via MoxController connect()
+//     lambdas with receiver=m_txChannel — AutoConnection routes the
+//     lambda body to the worker thread, where the m_txChannel->setRunning()
+//     call becomes same-thread.  m_running is std::atomic for safe
+//     isRunning() reads from any thread (e.g., main-thread UI queries
+//     while the channel lives on TxWorkerThread, test code, future
+//     cross-thread instrumentation).
 //   - driveOneTxBlock: called from TxWorkerThread (the worker).  Runs
 //     fexchange2 → sendTxIq synchronously on that thread.
 //   - stageRunning / isRunning / get*Meter: read-only introspection,
