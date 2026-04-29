@@ -631,31 +631,14 @@ RadioModel::RadioModel(QObject* parent)
             this, &RadioModel::onMoxHardwareFlipped,
             Qt::QueuedConnection);
 
-    // MoxController::txReady → TxChannel::setRunning(true).
-    // txReady fires after the 30 ms rfDelay (hardware settle) — this is the
-    // correct point to turn the WDSP TX channel on.
-    // From Thetis console.cs:29595 [v2.10.3.13] — TX-on callsite after
-    // Thread.Sleep(rf_delay) in chkMOX_CheckedChanged2.
-    // Guard: m_txChannel may be null if WDSP hasn't initialized yet (unlikely
-    // for a user-initiated TUNE but defensive). If null, the channel isn't open
-    // anyway so skipping is safe.
-    connect(m_moxController, &MoxController::txReady,
-            this, [this]() {
-        if (m_txChannel) {
-            m_txChannel->setRunning(true);
-        }
-    }, Qt::QueuedConnection);
-
-    // MoxController::txaFlushed → TxChannel::setRunning(false).
-    // txaFlushed fires after mox_delay / key_up_delay (in-flight samples
-    // cleared). Matching Thetis console.cs:29607 [v2.10.3.13] — TX-off callsite
-    // with dmode=1 (drain) in the TX→RX branch.
-    connect(m_moxController, &MoxController::txaFlushed,
-            this, [this]() {
-        if (m_txChannel) {
-            m_txChannel->setRunning(false);
-        }
-    }, Qt::QueuedConnection);
+    // MoxController::txReady → TxChannel::setRunning(true) and
+    // MoxController::txaFlushed → TxChannel::setRunning(false) are wired in
+    // connectToRadio() once m_txChannel is live (see the "MoxController →
+    // TxChannel queued connects" block inside the WDSP-init lambda).  We
+    // cannot wire them here at construction time because m_txChannel is
+    // nullptr until createTxChannel(1) runs inside that lambda — Qt's
+    // AutoConnection thread-routing depends on the receiver having a valid
+    // thread affinity (TxWorkerThread after moveToThread).
 
     // ── H.1: VOX run gated by voice-family mode ───────────────────────────────
     // Ports CMSetTXAVoxRun logic (cmaster.cs:1039-1052 [v2.10.3.13]):
@@ -688,12 +671,11 @@ RadioModel::RadioModel(QObject* parent)
     // 3F multi-pan will need to re-evaluate when the active TX slice can change.
     // TODO [3F]: rewire to activeSlice() when multi-panadapter TX switching lands.
 
-    connect(m_moxController, &MoxController::voxRunRequested,
-            this, [this](bool run) {
-        if (m_txChannel) {
-            m_txChannel->setVoxRun(run);
-        }
-    }, Qt::QueuedConnection);
+    // MoxController::voxRunRequested → TxChannel::setVoxRun is wired in
+    // connectToRadio() once m_txChannel is live — same reason as txReady /
+    // txaFlushed above.  Receiver=m_txChannel + AutoConnection auto-routes
+    // to QueuedConnection when m_txChannel lives on TxWorkerThread, so the
+    // lambda body runs on the worker thread (same-thread WDSP setter call).
 
     // ── H.2: VOX threshold with mic-boost-aware scaling ───────────────────────
     // Ports CMSetTXAVoxThresh (cmaster.cs:1054-1059 [v2.10.3.13]):
@@ -718,12 +700,9 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_transmitModel, &TransmitModel::voxGainScalarChanged,
             m_moxController,  &MoxController::setVoxGainScalar);
 
-    connect(m_moxController, &MoxController::voxThresholdRequested,
-            this, [this](double thresh) {
-        if (m_txChannel) {
-            m_txChannel->setVoxAttackThreshold(thresh);
-        }
-    }, Qt::QueuedConnection);
+    // MoxController::voxThresholdRequested → TxChannel::setVoxAttackThreshold
+    // is wired in connectToRadio() once m_txChannel is live — same reason as
+    // txReady / txaFlushed above.
 
     // ── H.3: VOX hang-time + anti-VOX gain + anti-VOX source path ────────────
     // Ports:
@@ -751,33 +730,10 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_transmitModel, &TransmitModel::antiVoxSourceVaxChanged,
             m_moxController,  &MoxController::setAntiVoxSourceVax);
 
-    connect(m_moxController, &MoxController::voxHangTimeRequested,
-            this, [this](double seconds) {
-        if (m_txChannel) {
-            m_txChannel->setVoxHangTime(seconds);
-        }
-    }, Qt::QueuedConnection);
-
-    connect(m_moxController, &MoxController::antiVoxGainRequested,
-            this, [this](double gain) {
-        if (m_txChannel) {
-            m_txChannel->setAntiVoxGain(gain);
-        }
-    }, Qt::QueuedConnection);
-
-    connect(m_moxController, &MoxController::antiVoxSourceWhatRequested,
-            this, [this](bool useVax) {
-        if (!m_txChannel) {
-            return;
-        }
-        // useVax==false: per cmaster.cs:937-942 [v2.10.3.13], all RX slots
-        // (RX1, RX1S, RX2) get source=1 (local-RX audio for antivox reference).
-        // 3M-1b has one TxChannel paired with the active slice; the three-slot
-        // iteration collapses to setAntiVoxRun(!useVax) for the single-TX layout.
-        // Full per-WDSP-channel SetAntiVOXSourceWhat iteration is a 3F
-        // multi-pan concern (when multiple DDC RX channels are active).
-        m_txChannel->setAntiVoxRun(!useVax);
-    }, Qt::QueuedConnection);
+    // MoxController::voxHangTimeRequested / antiVoxGainRequested /
+    // antiVoxSourceWhatRequested → TxChannel setters are wired in
+    // connectToRadio() once m_txChannel is live — same reason as txReady /
+    // txaFlushed above.
 
     // ── H.5: P1/P2 status-frame mic_ptt → MoxController PTT-source dispatch ──
     //
@@ -1670,6 +1626,91 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             m_txChannel->setTxPostGenTTMag2(m_transmitModel.twoToneLevel());
             m_txChannel->setTxPostGenTTPulseMag1(m_transmitModel.twoToneLevel());
             m_txChannel->setTxPostGenTTPulseMag2(m_transmitModel.twoToneLevel());
+
+            // ── 3M-1c TX pump architecture redesign: MoxController → TxChannel ──
+            //                       queued connects (Phase 3M-1c spec §5.2)
+            //
+            // These 7 connects route MoxController emissions to TxChannel
+            // setters with receiver=m_txChannel so Qt's AutoConnection
+            // auto-resolves to QueuedConnection once m_txChannel is moved to
+            // TxWorkerThread (a few lines below).  The lambda body then runs
+            // on the worker thread, where m_txChannel->setX() is a same-
+            // thread direct call — no cross-thread setter race.
+            //
+            // Why these are wired here (not in the RadioModel ctor):
+            //   m_txChannel doesn't exist at construction time (createTxChannel
+            //   runs inside this WDSP-init lambda).  Receiver thread affinity
+            //   is what AutoConnection consults at signal-emission time, but
+            //   the connection itself needs a non-null receiver to bind to —
+            //   establishing it after m_txChannel is alive is the cleanest
+            //   pattern.  Mirrors the L.2 fixup connects above.
+            //
+            // Why no in-lambda null guard:
+            //   receiver=m_txChannel guarantees Qt auto-disconnects when
+            //   m_txChannel is destroyed.  The lambda body cannot fire while
+            //   m_txChannel is null.
+            //
+            // Source-of-truth: docs/architecture/phase3m-1c-tx-pump-architecture-plan.md
+            // §5.2 last bullet (TxChannel cross-thread setter audit).
+
+            // F.1 — txReady → setRunning(true).
+            // From Thetis console.cs:29595 [v2.10.3.13] — TX-on callsite after
+            // Thread.Sleep(rf_delay) in chkMOX_CheckedChanged2.
+            connect(m_moxController, &MoxController::txReady,
+                    m_txChannel, [this]() {
+                m_txChannel->setRunning(true);
+            });
+
+            // F.1 — txaFlushed → setRunning(false).
+            // From Thetis console.cs:29607 [v2.10.3.13] — TX-off callsite with
+            // dmode=1 (drain) in the TX→RX branch.
+            // Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE  [console.cs:29603]
+            connect(m_moxController, &MoxController::txaFlushed,
+                    m_txChannel, [this]() {
+                m_txChannel->setRunning(false);
+            });
+
+            // H.1 — voxRunRequested → setVoxRun.
+            // From Thetis cmaster.cs:1039-1052 [v2.10.3.13] — CMSetTXAVoxRun.
+            connect(m_moxController, &MoxController::voxRunRequested,
+                    m_txChannel, [this](bool run) {
+                m_txChannel->setVoxRun(run);
+            });
+
+            // H.2 — voxThresholdRequested → setVoxAttackThreshold.
+            // From Thetis cmaster.cs:1054-1059 [v2.10.3.13] — CMSetTXAVoxThresh.
+            connect(m_moxController, &MoxController::voxThresholdRequested,
+                    m_txChannel, [this](double thresh) {
+                m_txChannel->setVoxAttackThreshold(thresh);
+            });
+
+            // H.3 — voxHangTimeRequested → setVoxHangTime.
+            // From Thetis setup.cs:18899 [v2.10.3.13] — SetDEXPHoldTime
+            //   (ms→seconds applied in MoxController).
+            connect(m_moxController, &MoxController::voxHangTimeRequested,
+                    m_txChannel, [this](double seconds) {
+                m_txChannel->setVoxHangTime(seconds);
+            });
+
+            // H.3 — antiVoxGainRequested → setAntiVoxGain.
+            // From Thetis setup.cs:18989 [v2.10.3.13] — SetAntiVOXGain
+            //   (dB→linear applied in MoxController).
+            connect(m_moxController, &MoxController::antiVoxGainRequested,
+                    m_txChannel, [this](double gain) {
+                m_txChannel->setAntiVoxGain(gain);
+            });
+
+            // H.3 — antiVoxSourceWhatRequested → setAntiVoxRun.
+            // useVax==false: per cmaster.cs:937-942 [v2.10.3.13], all RX slots
+            // (RX1, RX1S, RX2) get source=1 (local-RX audio for antivox
+            // reference).  3M-1b has one TxChannel paired with the active
+            // slice; the three-slot iteration collapses to setAntiVoxRun(!useVax)
+            // for the single-TX layout.  Full per-WDSP-channel
+            // SetAntiVOXSourceWhat iteration is a 3F multi-pan concern.
+            connect(m_moxController, &MoxController::antiVoxSourceWhatRequested,
+                    m_txChannel, [this](bool useVax) {
+                m_txChannel->setAntiVoxRun(!useVax);
+            });
 
             // ── 3M-1c TX pump architecture redesign: TxWorkerThread setup ──────
             //
