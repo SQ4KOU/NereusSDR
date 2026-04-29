@@ -387,6 +387,7 @@ set(CORE_SOURCES
     src/core/accessories/ApolloController.cpp
     src/core/accessories/PennyLaneController.cpp
     src/core/audio/MasterMixer.cpp
+    src/core/audio/MicReBlocker.cpp
     src/core/audio/PcMicSource.cpp
     src/core/audio/RadioMicSource.cpp
     src/core/audio/CompositeTxMicRouter.cpp

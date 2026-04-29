@@ -272,6 +272,7 @@ warren@wpratt.com
 #include "meters/MeterItem.h"
 #include "meters/ItemGroup.h"
 #include "meters/MeterPoller.h"
+#include "meters/VfoDisplayItem.h"  // 3M-1c L.3 — TX badge routing
 #include "applets/AppletPanelWidget.h"
 #include "applets/RxApplet.h"
 #include "applets/TxApplet.h"
@@ -793,6 +794,44 @@ void MainWindow::buildUI()
                     m_spectrumWidget, &SpectrumWidget::setMoxOverlay,
                     Qt::QueuedConnection);
         }
+
+        // ── 3M-1c Phase L.3: VFO TX badge routing ─────────────────────────────
+        //
+        // MoxController::moxChanged(rx, oldMox, newMox) → VfoDisplayItem
+        // setTransmitting on every VfoDisplayItem hosted by the app.  The rx
+        // semantic (Thetis console.cs:29677 [v2.10.3.13]) is:
+        //   rx==1  → VFO-A (TX comes off VFO-A in 3M-1; default in NereusSDR)
+        //   rx==2  → VFO-B (only when RX2 enabled AND VFOBTX — neither
+        //                    plumbed in NereusSDR today)
+        //
+        // Lookup strategy: walk every container's MeterWidget and update
+        // every VfoDisplayItem found.  This is coarse but correct for 3M-1
+        // (one VFO instance) — when RX2 lands (3F multi-pan), upgrade to
+        // per-VfoDisplayItem item-name routing so VFO-B gets rx==2 only.
+        //
+        // The G.2 routing test (tst_vfo_display_item_tx_badge.cpp) demonstrates
+        // the canonical lambda shape that this code mirrors at production scale.
+        // TODO [3F]: split routing per-item so RX2's VFO-B instance only
+        // updates on rx==2.
+        connect(mox, &MoxController::moxChanged, this,
+                [this](int rx, bool /*oldMox*/, bool newMox) {
+            if (!m_containerManager) { return; }
+            // 3M-1: only rx==1 is ever emitted (default RX2/VFOBTX both
+            // false in MoxController), so the broadcast fires the same set
+            // of items.  Filter on rx==1 to leave the door open for the
+            // 3F upgrade without changing the connect site.
+            if (rx != 1) { return; }
+            for (ContainerWidget* c : m_containerManager->allContainers()) {
+                if (!c) { continue; }
+                auto* mw = qobject_cast<MeterWidget*>(c->content());
+                if (!mw) { continue; }
+                for (MeterItem* item : mw->items()) {
+                    if (auto* vfo = qobject_cast<VfoDisplayItem*>(item)) {
+                        vfo->setTransmitting(newMox);
+                    }
+                }
+            }
+        }, Qt::QueuedConnection);
     }
 
     // --- Phase 3G-9c: Clarity adaptive display tuning ---
@@ -1191,6 +1230,35 @@ void MainWindow::populateDefaultMeter()
     // TxApplet — NYI shell (Phase 3I-1)
     auto* txApplet = new TxApplet(m_radioModel, nullptr);
     panel->addApplet(txApplet);
+
+    // ── 3M-1c Phase L: hand TxApplet the controllers it needs ──────────────
+    //
+    // L.1 — MicProfileManager (J.1 setter): drives the TX Profile combo
+    // population + active-profile mirror + "Default" seed surfacing.  The
+    // pointer is obtained from RadioModel (constructed in the ctor; per-MAC
+    // scope is set inside connectToRadio).  Pre-connect, the manager is
+    // unscoped and the combo simply stays at the placeholder "Default" item
+    // (rebuildProfileCombo() no-ops when no manager is set).
+    //
+    // L.2 — TwoToneController (J.2 setter): drives the 2-TONE button toggle
+    // round-trip.  The controller's setActive(true) refuses with a
+    // qCWarning when m_powerOn is false, so pre-connect button presses are
+    // safely rejected.
+    //
+    // L (J.4) — txProfileMenuRequested signal: a right-click on the profile
+    // combo opens SetupDialog at "TX Profile".  Lambda-construct a fresh
+    // SetupDialog each time (matches the 7 other "open setup" sites in
+    // MainWindow.cpp at lines 1283 / 2824 / 2834 / 2846 / 3029 / 3428).
+    if (m_radioModel) {
+        txApplet->setMicProfileManager(m_radioModel->micProfileManager());
+        txApplet->setTwoToneController(m_radioModel->twoToneController());
+    }
+    connect(txApplet, &TxApplet::txProfileMenuRequested, this, [this]() {
+        auto* dialog = new SetupDialog(m_radioModel, this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->selectPage(QStringLiteral("TX Profile"));
+        dialog->show();
+    });
 
     // 3M-1a H.1-H.4 fixup: wire panadapter band changes to TxApplet so
     // the per-band Tune Power slider tracks the active band.

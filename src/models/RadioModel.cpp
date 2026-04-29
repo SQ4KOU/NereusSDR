@@ -231,6 +231,8 @@ warren@wpratt.com
 // 3M-1a G.1: TX-side integration — MoxController + TxChannel view.
 // TxMicRouter is already included via RadioModel.h (for std::unique_ptr destructor).
 #include "core/MoxController.h"
+#include "core/MicProfileManager.h"
+#include "core/TwoToneController.h"
 #include "core/TxChannel.h"
 // 3M-1b L.1: concrete mic-source strategy objects.
 #include "core/audio/PcMicSource.h"
@@ -796,6 +798,48 @@ RadioModel::RadioModel(QObject* parent)
     // Master design §5.2 (3M-1a NullMicSource stub).
     m_txMicRouter = std::make_unique<NullMicSource>();
 
+    // ── 3M-1c Phase L.1: MicProfileManager ────────────────────────────────────
+    //
+    // Per-MAC bank holding the 23 mic / VOX / MON / two-tone live keys
+    // (chunk F).  Constructed once at RadioModel-ctor time; setMacAddress +
+    // load() are called per-connect inside connectToRadio().  Empty MAC is
+    // a silent-no-op contract per MicProfileManager.h §"All ops require a
+    // per-MAC scope".  Qt parent=this so the dtor frees it.
+    //
+    // The user-driven setActiveProfile path is in TxApplet (J.1) and
+    // TxProfileSetupPage (J.3): both call `manager->setActiveProfile(name,
+    // &m_transmitModel)` directly.  No additional connect is needed at this
+    // layer — MicProfileManager mutates TransmitModel via the public setter
+    // API, and TransmitModel's auto-persist already routes those changes to
+    // AppSettings.  The activeProfileChanged signal is consumed by the UI
+    // (TxApplet J.1 + TxProfileSetupPage J.3) for combo-selection mirror.
+    m_micProfileMgr = new MicProfileManager(this);
+
+    // ── 3M-1c Phase L.2: TwoToneController ────────────────────────────────────
+    //
+    // Activation orchestrator for the two-tone IMD test (chunk I).  Holds
+    // non-owning pointers to TransmitModel, TxChannel, MoxController, and
+    // SliceModel.  The construction-time deps that DON'T require a live
+    // connection (TransmitModel, MoxController) are wired here; setTxChannel
+    // is called inside the WDSP-init lambda once m_txChannel is live;
+    // setSliceModel is called when the active slice exists.
+    //
+    // Direct WDSP TXPostGen setter wiring for the 5 live-tunable two-tone
+    // properties (Freq1, Freq2, Level, Power, Freq2Delay) is deferred:
+    // L.2 caveat §"Recommend: keep L.2 simple — connect the signals to
+    // direct WDSP setters as shown above. Live-update during active test is
+    // a Phase 3M-3+ polish concern. Document the deferral."  At test-start
+    // time TwoToneController reads the latest TransmitModel values directly,
+    // so the user's edits ARE picked up — they just don't fire mid-test.
+    //
+    // The 3 control-only properties (TwoToneInvert / TwoTonePulsed /
+    // TwoToneDrivePowerOrigin) are read by the controller during setActive(true)
+    // and don't have WDSP-setter equivalents — they branch the activation
+    // flow itself.  No connects needed for those.
+    m_twoToneController = new TwoToneController(this);
+    m_twoToneController->setTransmitModel(&m_transmitModel);
+    m_twoToneController->setMoxController(m_moxController);
+
     // 3M-1a (Codex review on PR #144): wire RF-Power-slider movements to
     // the radio's drive byte.  Without this, the slider updates UI/model
     // state but `CmdHighPriority` byte 345 stays stale — users move the
@@ -1101,6 +1145,17 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // voxEnabled, monEnabled, micMute are NOT loaded — always start at safe defaults.
         m_transmitModel.loadFromSettings(info.macAddress);
 
+        // ── 3M-1c L.1: per-MAC MicProfileManager scope ────────────────────────
+        //
+        // Set the MAC scope first, then load() seeds the "Default" profile on
+        // first launch (per F.5).  Idempotent on subsequent loads under the
+        // same MAC.  Constructed once at RadioModel ctor time (above);
+        // setMacAddress("")  is called in teardownConnection.
+        if (m_micProfileMgr) {
+            m_micProfileMgr->setMacAddress(info.macAddress);
+            m_micProfileMgr->load();
+        }
+
         // L.3: HL2 force-Pc on connect.
         // HL2 has no radio-side mic jack (BoardCapabilities::hasMicJack == false).
         // Even if AppSettings persisted MicSource::Radio from a different radio
@@ -1140,6 +1195,17 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     setActiveSlice(0);
     m_activeSlice->setReceiverIndex(rxIdx);
     loadSliceState(m_activeSlice);
+
+    // ── 3M-1c L.2: TwoToneController active-slice mode source ────────────────
+    //
+    // The controller reads SliceModel::dspMode() during setActive(true) for
+    // the LSB-family invert-tones branch (TwoToneController.cpp step 4 /
+    // setup.cs:11058-11062 [v2.10.3.13]).  Wire it to the freshly-added
+    // active slice; if active slice changes later (3F multi-pan), the
+    // setActiveSlice path will need to refresh this pointer too.
+    if (m_twoToneController) {
+        m_twoToneController->setSliceModel(m_activeSlice);
+    }
 
     // Activate receiver (this sends hardwareReceiverCountChanged to RadioConnection)
     m_receiverManager->activateReceiver(rxIdx);
@@ -1512,6 +1578,85 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                                                       rxBand, txBand,
                                                       preventDifferentBand, extended);
                 });
+            }
+
+            // ── 3M-1c L.2: TwoToneController TxChannel injection ───────────────
+            //
+            // The controller's setTxChannel() must be called once m_txChannel is
+            // live (and BEFORE any user can press the 2-TONE button — UI surfaces
+            // are wired post-construction by MainWindow).  Cleared on teardown.
+            // The other two deps (TransmitModel + MoxController) are wired in the
+            // RadioModel ctor since they don't depend on a live connection.
+            // SliceModel is wired earlier in connectToRadio() right after addSlice().
+            if (m_twoToneController) {
+                m_twoToneController->setTxChannel(m_txChannel);
+            }
+
+            // ── 3M-1c L.4: 720→256 mic re-blocker ──────────────────────────────
+            //
+            // Bridges AudioEngine::micBlockReady (720 mono frames per emit, per
+            // Thetis cmaster.cs:495 [v2.10.3.13]) to TxChannel::driveOneTxBlock
+            // (m_inputBufferSize=256, dictated by the WDSP r2-ring requirement
+            // that 256 divides 2048 cleanly — TxChannel.cpp E.1 contract).
+            //
+            // Construction is deferred to here (not the ctor) so the sink lambda
+            // can capture m_txChannel safely.  A captured-by-value pointer is
+            // refreshed at every connectToRadio call: when teardown nulls
+            // m_txChannel, m_micReBlocker is reset() to drop the partial fill
+            // and the sink callback is cleared (the next connect rebuilds the
+            // pair from scratch).
+            //
+            // Ownership: RadioModel via unique_ptr.  Plain (non-QObject) class.
+            // Threading: lambda runs synchronously on the audio thread (because
+            // AudioEngine::micBlockReady is documented as DirectConnection-only
+            // and we honour that here).
+            //
+            // No re-blocker construction in the ctor: m_txChannel is null until
+            // WDSP init completes, and PcMicSource isn't wired yet either.
+            // Lazy construction on each connect keeps the ownership story
+            // simple — one MicReBlocker per connection cycle.
+            if (m_audioEngine && m_txChannel) {
+                m_micReBlocker = std::make_unique<MicReBlocker>(
+                    /*outputBlockSize=*/256);
+                // Capture the TxChannel pointer by value.  m_txChannel is
+                // nulled in teardown ABOVE the m_micReBlocker.reset() call,
+                // so the captured pointer can race-with-teardown only on a
+                // hard crash, which we accept.
+                TxChannel* txChannel = m_txChannel;
+                m_micReBlocker->setSinkCallback(
+                    [txChannel](const float* samples, int frames) {
+                        // driveOneTxBlock is the canonical TX entry point;
+                        // it short-circuits when !m_running and !m_connection,
+                        // so passing 256-sample blocks while the radio is
+                        // sitting in RX is harmless.
+                        txChannel->driveOneTxBlock(samples, frames);
+                    });
+
+                // Connect AudioEngine::micBlockReady to the re-blocker via
+                // Qt::DirectConnection.  AudioEngine is owned by RadioModel
+                // (main thread); the signal is emitted from whatever thread
+                // is currently driving the mic accumulator (the audio bus
+                // thread).  DirectConnection here matches the documented
+                // contract on AudioEngine::micBlockReady ("Subscribers (Phase E
+                // TxChannel) connect via Qt::DirectConnection").
+                //
+                // The callback captures `this` so it can route to the
+                // re-blocker's onMicBlock.  We capture by `this` rather than
+                // the unique_ptr's raw pointer so the lambda implicitly
+                // observes the post-teardown null when the unique_ptr is
+                // reset() — a defensive null check covers the gap between
+                // teardownConnection's reset() and the AudioEngine signal's
+                // last queued emit.
+                connect(m_audioEngine, &AudioEngine::micBlockReady, this,
+                        [this](const float* samples, int frames) {
+                            if (!m_micReBlocker) { return; }
+                            m_micReBlocker->onMicBlock(samples, frames);
+                        },
+                        Qt::DirectConnection);
+
+                qCInfo(lcDsp) << "L.4: mic re-blocker installed —"
+                                 " AudioEngine::micBlockReady (720) →"
+                                 " TxChannel::driveOneTxBlock (256).";
             }
 
             qCInfo(lcDsp) << "L.1: mic sources constructed (hasMicJack=" << hasMicJack
@@ -2758,6 +2903,40 @@ void RadioModel::teardownConnection()
     // Stop audio output
     m_audioEngine->stop();
 
+    // 3M-1c L.4: drop the AudioEngine::micBlockReady → re-blocker connection
+    // BEFORE m_txChannel is nulled.  Without this disconnect, every reconnect
+    // accumulates another copy of the lambda; the queued emits would also
+    // race with m_txChannel = nullptr below.  Disconnect-by-receiver matches
+    // the WDSP-init lambda teardown idiom higher up in this method.
+    if (m_audioEngine != nullptr) {
+        disconnect(m_audioEngine, &AudioEngine::micBlockReady, this, nullptr);
+    }
+    // Reset the re-blocker (drops partial fill, clears sink callback).
+    // Done BEFORE clearing m_txChannel because the sink lambda captures the
+    // TxChannel pointer; clearing the sink first removes that reference.
+    m_micReBlocker.reset();
+
+    // 3M-1c L.2: drop the TwoToneController's view of the TX channel.  If a
+    // user-driven setActive(true) call were to fire during teardown (mid-test
+    // reconnect), the controller's null-check in setActive() short-circuits
+    // safely.  Same pattern as TxChannel::setConnection(nullptr) below.
+    if (m_twoToneController) {
+        m_twoToneController->setTxChannel(nullptr);
+        m_twoToneController->setSliceModel(nullptr);
+        m_twoToneController->setPowerOn(false);
+        // If a two-tone test is currently running, force it off so the
+        // restored MOX-release doesn't hold over the disconnect.
+        if (m_twoToneController->isActive()) {
+            m_twoToneController->setActive(false);
+        }
+    }
+
+    // 3M-1c L.1: drop the per-MAC scope on the profile manager so subsequent
+    // mutators silently no-op until the next connectToRadio() sets a new MAC.
+    if (m_micProfileMgr) {
+        m_micProfileMgr->setMacAddress(QString());
+    }
+
     // 3M-1a G.1: detach the production loop pointers before clearing m_txChannel.
     // setConnection(nullptr) stops driveOneTxBlock() from calling sendTxIq on
     // a destroyed connection; setMicRouter(nullptr) drops the TxMicRouter ref.
@@ -2858,6 +3037,13 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
     switch (state) {
     case ConnectionState::Connected:
         qCDebug(lcConnection) << "Connected to" << m_name;
+        // ── 3M-1c Phase L.2: TwoToneController power-on gate ─────────────────
+        // The controller's setActive(true) refuses to engage unless powerOn
+        // is true (mirrors !console.PowerOn at setup.cs:11063 [v2.10.3.13]).
+        // Set on Connected, cleared on Disconnected / Error below.
+        if (m_twoToneController) {
+            m_twoToneController->setPowerOn(true);
+        }
         // Phase 3I Task 17 — record the most recently used radio so
         // tryAutoReconnect() targets the right entry on next launch.
         if (!m_lastRadioInfo.macAddress.isEmpty()) {
@@ -2888,6 +3074,12 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
     case ConnectionState::Disconnected:
         qCDebug(lcConnection) << "Disconnected from" << m_name;
         m_discovery->clearConnectedMac();
+        // 3M-1c L.2: drop the TwoToneController power-on gate so any
+        // subsequent setActive(true) is refused with a qCWarning until
+        // the next Connected transition.
+        if (m_twoToneController) {
+            m_twoToneController->setPowerOn(false);
+        }
         break;
     case ConnectionState::Connecting:
         qCDebug(lcConnection) << "Connecting to" << m_name << "...";
@@ -2895,6 +3087,10 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
     case ConnectionState::Error:
         qCWarning(lcConnection) << "Connection error for" << m_name;
         m_discovery->clearConnectedMac();
+        // 3M-1c L.2: same as Disconnected — drop the power-on gate.
+        if (m_twoToneController) {
+            m_twoToneController->setPowerOn(false);
+        }
         break;
     }
 }

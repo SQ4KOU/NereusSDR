@@ -97,6 +97,9 @@
 // 3M-1a G.1: TxMicRouter is a plain (non-QObject) strategy interface.
 // Include required directly so unique_ptr destructor is available here.
 #include "core/TxMicRouter.h"
+// 3M-1c L.4: MicReBlocker is a plain (non-QObject) class.  Include required
+// so unique_ptr destructor is available here.
+#include "core/audio/MicReBlocker.h"
 #include <memory>  // std::unique_ptr
 
 namespace NereusSDR {
@@ -113,6 +116,10 @@ class TxChannel;
 class PcMicSource;
 class RadioMicSource;
 class CompositeTxMicRouter;
+// 3M-1c L.1 / L.2: forward declarations for the MicProfileManager bank
+// (chunk F) + the TwoToneController activation orchestrator (chunk I).
+class MicProfileManager;
+class TwoToneController;
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
@@ -270,6 +277,17 @@ public:
     // both objects exist.  Non-owning; lifetime is RadioModel's lifetime.
     // Master design §5.1.1; pre-code review §1.6.
     MoxController* moxController() const { return m_moxController; }
+
+    // 3M-1c Phase L.1: expose MicProfileManager so MainWindow / SetupDialog
+    // can hand the per-MAC profile bank to TxApplet (J.1 setter) and
+    // TxProfileSetupPage (J.3 ctor).  Non-owning; lifetime is RadioModel's
+    // lifetime.  See header §3M-1c L.1 for the construction + connect flow.
+    MicProfileManager* micProfileManager() const { return m_micProfileMgr; }
+
+    // 3M-1c Phase L.2: expose TwoToneController so MainWindow can hand it to
+    // TxApplet (J.2 setter) for the 2-TONE button + status mirror.
+    // Non-owning; lifetime is RadioModel's lifetime.
+    TwoToneController* twoToneController() const { return m_twoToneController; }
 
     // 3M-1a G.1: expose TxChannel view so TxApplet and G.4 TUNE function
     // can call setTuneTone / setRunning without depending on WdspEngine.
@@ -779,6 +797,33 @@ private:
     std::unique_ptr<PcMicSource>           m_pcMicSource;
     std::unique_ptr<RadioMicSource>        m_radioMicSource;
     std::unique_ptr<CompositeTxMicRouter>  m_compositeMicRouter;
+
+    // ── 3M-1c Phase L: cross-cutting ownership ──────────────────────────────
+    //
+    // L.1 — MicProfileManager (chunk F).  QObject child of RadioModel so the
+    // dtor cleans it up automatically.  Constructed once in the RadioModel
+    // ctor; setMacAddress + load() are called per-connect inside
+    // connectToRadio(); setMacAddress("") is called in teardownConnection so
+    // mutators silently no-op while no radio is selected.
+    MicProfileManager* m_micProfileMgr{nullptr};
+    //
+    // L.2 — TwoToneController (chunk I).  QObject child of RadioModel.
+    // Construction-time deps that DON'T require a live connection
+    // (TransmitModel, MoxController, SliceModel) are wired in the RadioModel
+    // ctor; setTxChannel(...) is called inside the WDSP-init lambda once
+    // m_txChannel is live.  setTxChannel(nullptr) is called in teardown.
+    TwoToneController* m_twoToneController{nullptr};
+    //
+    // L.4 — 720→256 mic re-blocker.  Bridges
+    // AudioEngine::micBlockReady (720 mono frames per emit, matches Thetis
+    // cmaster.cs:495 [v2.10.3.13] mic stream block size) to
+    // TxChannel::driveOneTxBlock (m_inputBufferSize=256, dictated by the
+    // WDSP r2-ring constraint that 256 divides 2048 cleanly; see TxChannel.cpp
+    // E.1 contract notes).  Plain (non-QObject) class; lifetime managed via
+    // unique_ptr.  Constructed inside the WDSP-init lambda once m_txChannel
+    // is live (so the sink callback can capture m_txChannel safely); reset
+    // and destroyed in teardownConnection().
+    std::unique_ptr<MicReBlocker> m_micReBlocker;
 };
 
 } // namespace NereusSDR

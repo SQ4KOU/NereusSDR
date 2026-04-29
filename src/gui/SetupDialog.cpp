@@ -196,13 +196,19 @@ void SetupDialog::buildTree()
     addWrapped(audio, "VAX",      wrapWithAudioBackendStrip(new AudioVaxPage(m_model)));
     addWrapped(audio, "TCI",      wrapWithAudioBackendStrip(new AudioTciPage(m_model)));
     addWrapped(audio, "Advanced", wrapWithAudioBackendStrip(new AudioAdvancedPage(m_model)));
-    // Phase 3M-1c J.3: TX Profile editor.  Phase L will inject the per-MAC
-    // MicProfileManager + TransmitModel via RadioModel hookups; until then
-    // the page renders with null pointers (every action is a no-op).
+    // Phase 3M-1c J.3: TX Profile editor.
+    //
+    // 3M-1c L.1 update: RadioModel now constructs MicProfileManager in its
+    // ctor (per RadioModel::m_micProfileMgr in RadioModel.cpp), so this page
+    // gets the live manager pointer at SetupDialog construction time.  The
+    // manager itself is per-MAC scoped — setMacAddress + load() run inside
+    // RadioModel::connectToRadio().  Before any radio has connected the
+    // manager is unscoped and every mutator silently no-ops; the page still
+    // renders correctly (combo is empty) and Setup → TX Profile is harmless.
     add(audio, "TX Profile",
         new TxProfileSetupPage(
             m_model,
-            /*profileMgr=*/nullptr,   // Phase L wires MicProfileManager
+            m_model ? m_model->micProfileManager() : nullptr,
             m_model ? &m_model->transmitModel() : nullptr));
 
     // ── DSP ───────────────────────────────────────────────────────────────────

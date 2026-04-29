@@ -1594,6 +1594,12 @@ target_compile_definitions(tst_audio_engine_pull_tx_mic PRIVATE NEREUS_BUILD_TES
 nereus_add_test(tst_audio_engine_mic_block_ready)
 target_compile_definitions(tst_audio_engine_mic_block_ready PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-1c L.4: 720→256 mic re-blocker ──────────────────────────────
+# Verifies the AudioEngine micBlockReady (720 mono frames) → TxChannel
+# driveOneTxBlock (m_inputBufferSize=256) re-blocking adapter.  No Thetis
+# port — bridge is dictated by the in-tree contract sizes.
+nereus_add_test(tst_mic_re_blocker)
+
 # ── Phase 3M-1c E.1: TxChannel push-driven refactor ─────────────────────
 # Verifies the QTimer-driven pull model is gone and the (samples, frames)
 # push slot is the single fexchange2 entry point.  Test cases (7):
