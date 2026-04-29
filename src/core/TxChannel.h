@@ -979,9 +979,19 @@ private:
     QTimer*       m_silenceTimer{nullptr};
     QElapsedTimer m_lastDriveTimer;
     static constexpr int kSilenceTimerIntervalMs   = 5;   // ms between ticks
-    static constexpr int kSilenceStaleThresholdMs  = 8;   // skip if mic-driven
-                                                          // path fired more
-                                                          // recently than this
+    // Threshold must be > the mic-driven burst gap.  AudioEngine emits
+    // micBlockReady every ~15 ms (= kMicBlockFrames / 48 kHz); the L.4
+    // MicReBlocker re-chunks 720 → 256, firing driveOneTxBlock 2-3 times
+    // in immediate succession per emit.  Between bursts, m_lastDriveTimer
+    // can age up to ~14 ms before the next mic burst lands.  Setting
+    // threshold = 20 ms guarantees the silence-drive timer NEVER fires
+    // mid-mic-session (which would add extra fexchange2 calls and push
+    // the SPSC ring over 192 kHz, producing audible "gravelly" distortion
+    // bench-caught by JJ post-3M-1c).  In the no-mic case the silence
+    // timer fires every 20 ms — slower than ideal for TUN's PostGen path
+    // but the radio's TX ring tolerates rate variation enough for the
+    // tone to land.
+    static constexpr int kSilenceStaleThresholdMs  = 20;  // > mic burst gap
 
     // Non-owning pointers — injected by RadioModel, cleared on disconnect.
     RadioConnection* m_connection{nullptr};  // sendTxIq recipient
