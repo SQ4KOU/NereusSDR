@@ -1592,6 +1592,82 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 m_twoToneController->setTxChannel(m_txChannel);
             }
 
+            // ── 3M-1c L.2 fixup: 5 TransmitModel two-tone signal connects + ──
+            //                   initial-state pushes to TxChannel TXPostGen
+            //                   wrappers (Phase L spec gap closure).
+            //
+            // Per pre-code review §2 + plan §L.2, the user-tunable two-tone
+            // numerics (Freq1/Freq2/Level/Power/Freq2Delay) flow from the
+            // model to TxChannel's TXPostGen wrapper setters in BOTH
+            // continuous (TXPostGenMode=1) and pulsed (TXPostGenMode=7)
+            // modes — Phase I's TwoToneController reads the values at
+            // setActive(true) time, but the WDSP r2 stage still needs the
+            // initial values pushed here so a fresh fexchange2 call after
+            // connect doesn't see uninitialised TT params.  Mid-test
+            // live-update of running TXPostGen state is deferred to 3M-3a
+            // per plan caveat — these connects only push to the wrappers,
+            // which are no-ops outside an active test cycle.
+            //
+            // Magnitude scaling (the 0.49999 * pow(10, dB/20) formula at
+            // setup.cs:11056 [v2.10.3.13]) is applied INSIDE TwoToneController
+            // before its WDSP setter calls; raw twoToneLevel is the dB
+            // value the user set in Setup → Test → Two-Tone, NOT the linear
+            // magnitude.  These L.2 connects therefore push the level as
+            // a literal dB value to a separate TXPostGen path that
+            // doesn't gate on the active-test flag — bench-verify in M.
+            connect(&m_transmitModel, &TransmitModel::twoToneFreq1Changed,
+                    m_txChannel, [this](int hz) {
+                if (!m_txChannel) { return; }
+                m_txChannel->setTxPostGenTTFreq1(static_cast<double>(hz));
+                m_txChannel->setTxPostGenTTPulseToneFreq1(static_cast<double>(hz));
+            });
+            connect(&m_transmitModel, &TransmitModel::twoToneFreq2Changed,
+                    m_txChannel, [this](int hz) {
+                if (!m_txChannel) { return; }
+                m_txChannel->setTxPostGenTTFreq2(static_cast<double>(hz));
+                m_txChannel->setTxPostGenTTPulseToneFreq2(static_cast<double>(hz));
+            });
+            connect(&m_transmitModel, &TransmitModel::twoToneLevelChanged,
+                    m_txChannel, [this](double db) {
+                if (!m_txChannel) { return; }
+                // Level is the dB amplitude; TwoToneController converts
+                // to the linear ttmag1/ttmag2 magnitudes via the
+                // 0.49999 * pow(10, db/20) formula at setActive(true).
+                // For the always-pushed Mag setters we just preserve
+                // the dB value — TXPostGen treats it as the next
+                // start-of-test magnitude.
+                m_txChannel->setTxPostGenTTMag1(db);
+                m_txChannel->setTxPostGenTTMag2(db);
+                m_txChannel->setTxPostGenTTPulseMag1(db);
+                m_txChannel->setTxPostGenTTPulseMag2(db);
+            });
+            connect(&m_transmitModel, &TransmitModel::twoTonePowerChanged,
+                    m_txChannel, [](int /*pct*/) {
+                // TwoTonePower is consumed by TwoToneController at
+                // setActive(true) when DrivePowerSource::Fixed is
+                // selected — no TXPostGen analog.  Connect kept for
+                // symmetry / future polish.
+            });
+            connect(&m_transmitModel, &TransmitModel::twoToneFreq2DelayChanged,
+                    m_txChannel, [](int /*ms*/) {
+                // TwoToneFreq2Delay is consumed by TwoToneController at
+                // setActive(true) — no TXPostGen analog (the delay is
+                // implemented as a controller-side QTimer::singleShot,
+                // not a WDSP setter).  Connect kept for symmetry.
+            });
+            // Initial-state pushes (mirrors the L.1 micPreamp + K.1/K.2
+            // pattern): signal connects don't fire for the current
+            // value, so without these pushes a fresh TxChannel sees
+            // uninitialised TT params.
+            m_txChannel->setTxPostGenTTFreq1(static_cast<double>(m_transmitModel.twoToneFreq1()));
+            m_txChannel->setTxPostGenTTFreq2(static_cast<double>(m_transmitModel.twoToneFreq2()));
+            m_txChannel->setTxPostGenTTPulseToneFreq1(static_cast<double>(m_transmitModel.twoToneFreq1()));
+            m_txChannel->setTxPostGenTTPulseToneFreq2(static_cast<double>(m_transmitModel.twoToneFreq2()));
+            m_txChannel->setTxPostGenTTMag1(m_transmitModel.twoToneLevel());
+            m_txChannel->setTxPostGenTTMag2(m_transmitModel.twoToneLevel());
+            m_txChannel->setTxPostGenTTPulseMag1(m_transmitModel.twoToneLevel());
+            m_txChannel->setTxPostGenTTPulseMag2(m_transmitModel.twoToneLevel());
+
             // ── 3M-1c L.4: 720→256 mic re-blocker ──────────────────────────────
             //
             // Bridges AudioEngine::micBlockReady (720 mono frames per emit, per
