@@ -30,6 +30,7 @@ private slots:
     void ananG2_known_adc_returns_known_watts();
     void orionMkII_known_adc_returns_known_watts();
     void redPitaya_known_adc_returns_known_watts();
+    void hermesLite_known_adc_returns_known_watts();
     void default_unknown_board_uses_default_triplet();
 };
 
@@ -70,6 +71,25 @@ void TestPaScaling::redPitaya_known_adc_returns_known_watts()
     const float watts = computeAlexFwdPower(HPSDRModel::REDPITAYA, 4095);
     QVERIFY2(watts >= 204.0f && watts <= 206.0f,
              qPrintable(QString("REDPITAYA watts=%1, expected ~205.1 W").arg(static_cast<double>(watts))));
+}
+
+// HERMESLITE (HL2): bridge_volt=1.5, refvoltage=3.3, offset=6
+// (mi0bot HL2-specific case — NOT in upstream Thetis, where HL2 falls to
+// default and reads ~16x too high.)
+// From mi0bot-Thetis console.cs:25269-25273 [@c26a8a4]
+//   case HPSDRModel.HERMESLITE:     // MI0BOT: HL2
+//       bridge_volt = 1.5f; refvoltage = 3.3f; adc_cal_offset = 6;
+// ADC=4095 → volts = (4095-6)/4095*3.3 = 3.2952 V
+//            watts = 3.2952^2 / 1.5 ≈ 7.24 W
+// At a real HL2 5W output, ADC ≈ 3405 → volts ≈ 2.74 → watts ≈ 5.0.
+// Without this case, default {0.09, 3.3, 6} would compute ~120.6 W for
+// the same ADC=4095 — ~16.7x over-reading would trigger spurious
+// SwrProtectionController TX-inhibits.
+void TestPaScaling::hermesLite_known_adc_returns_known_watts()
+{
+    const float watts = computeAlexFwdPower(HPSDRModel::HERMESLITE, 4095);
+    QVERIFY2(watts >= 7.0f && watts <= 7.5f,
+             qPrintable(QString("HERMESLITE watts=%1, expected ~7.24 W").arg(static_cast<double>(watts))));
 }
 
 // HERMES (no on-board PA): hits the default branch
