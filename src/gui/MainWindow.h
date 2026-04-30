@@ -95,6 +95,7 @@ class MeterPoller;
 class TitleBar;
 class VaxFirstRunDialog;
 class RxDashboard;
+class StationBlock;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -140,6 +141,9 @@ private slots:
     // ConnectionSegment. Items: Disconnect / Connect-to-other / Diagnostics /
     // Copy IP / Copy MAC. "Reconnect" omitted — no RadioModel::reconnect() API.
     void showSegmentContextMenu(const QPoint& globalPos);
+    // Phase 3Q Sub-PR-7 G.1: right-click context menu on the StationBlock.
+    // Items: Disconnect / Edit radio… / Forget radio.
+    void showStationContextMenu(const QPoint& globalPos);
 
 private:
     void buildUI();
@@ -165,7 +169,7 @@ private:
     QLabel* m_connStatusLabel{nullptr};
     QLabel* m_radioModelLabel{nullptr};
     QLabel* m_radioFwLabel{nullptr};
-    QLabel* m_callsignLabel{nullptr};
+    StationBlock* m_stationBlock{nullptr};    // Sub-PR-7 G.1: radio-name anchor
     QLabel* m_utcTimeLabel{nullptr};
     QTimer* m_clockTimer{nullptr};
     QLabel* m_tnfLabel{nullptr};

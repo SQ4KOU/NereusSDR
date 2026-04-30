@@ -298,6 +298,7 @@ warren@wpratt.com
 #  include "VaxLinuxFirstRunDialog.h"
 #endif
 #include "widgets/MasterOutputWidget.h"
+#include "widgets/StationBlock.h"
 #include "core/AudioDeviceConfig.h"
 #include "core/AudioEngine.h"
 #include "core/audio/VirtualCableDetector.h"
@@ -2490,29 +2491,31 @@ void MainWindow::buildStatusBar()
     // ── Stretch ───────────────────────────────────────────────────────────────
     hbox->addStretch(1);
 
-    // ── Center section: STATION callsign ─────────────────────────────────────
-    auto* stationContainer = new QWidget(barWidget);
-    stationContainer->setStyleSheet(QStringLiteral(
-        "QWidget { border: 1px solid rgba(0,180,216,80); background: #0a0a14;"
-        " padding: 1px 10px; border-radius: 3px; }"));
-    QHBoxLayout* stationHbox = new QHBoxLayout(stationContainer);
-    stationHbox->setContentsMargins(0, 0, 0, 0);
-    stationHbox->setSpacing(6);
-
-    auto* stationLabel = new QLabel(QStringLiteral("STATION:"), stationContainer);
-    stationLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: #00b4d8; font-size: 13px; border: none;"
-        " background: transparent; padding: 0; }"));
-    stationHbox->addWidget(stationLabel);
-
-    m_callsignLabel = new QLabel(stationContainer);
-    QString callsign = AppSettings::instance().value(
-        QStringLiteral("StationCallsign"), QStringLiteral("NereusSDR")).toString();
-    m_callsignLabel->setText(callsign);
-    m_callsignLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: #c8d8e8; font-size: 13px; font-weight: bold;"
-        " border: none; background: transparent; padding: 0; }"));
-    stationHbox->addWidget(m_callsignLabel);
+    // ── Center section: STATION — radio-name anchor (Sub-PR-7 G.1) ───────────
+    // The old cyan "STATION: NereusSDR" box is replaced by a StationBlock that
+    // shows the connected radio's name. Click → opens ConnectionPanel. Right-
+    // click → Disconnect / Edit radio… / Forget radio. Disconnected appearance:
+    // dashed-red border + italic "Click to connect" placeholder.
+    // The StationCallsign AppSettings key is preserved on disk for a potential
+    // future operator-callsign surface; it is no longer shown in status chrome.
+    m_stationBlock = new StationBlock(barWidget);
+    connect(m_stationBlock, &StationBlock::clicked,
+            this, &MainWindow::showConnectionPanel);
+    connect(m_stationBlock, &StationBlock::contextMenuRequested,
+            this, &MainWindow::showStationContextMenu);
+    // Update the block's name on connection state changes.
+    connect(m_radioModel, &RadioModel::currentRadioChanged, this,
+            [this](const NereusSDR::RadioInfo& info) {
+        const bool connected =
+            (m_radioModel->connectionState() == ConnectionState::Connected);
+        m_stationBlock->setRadioName(connected ? info.name : QString());
+    });
+    connect(m_radioModel, &RadioModel::connectionStateChanged, this,
+            [this](ConnectionState s) {
+        if (s != ConnectionState::Connected) {
+            m_stationBlock->setRadioName(QString());
+        }
+    });
 
     // ── ADC Overload indicator ─────────────────────────────────────────────
     // Status-bar warning label positioned immediately left of the STATION
@@ -2615,7 +2618,7 @@ void MainWindow::buildStatusBar()
         m_adcOvlLabel->setToolTip(tip);
     });
 
-    hbox->addWidget(stationContainer);
+    hbox->addWidget(m_stationBlock);
 
     // ── Stretch ───────────────────────────────────────────────────────────────
     hbox->addStretch(1);
@@ -3487,6 +3490,50 @@ void MainWindow::showSegmentContextMenu(const QPoint& globalPos)
     });
     menu.addAction(tr("Copy MAC address"), this, [this]() {
         QGuiApplication::clipboard()->setText(m_radioModel->connectionMacText());
+    });
+
+    menu.exec(globalPos);
+}
+
+void MainWindow::showStationContextMenu(const QPoint& globalPos)
+{
+    // Only show when connected — StationBlock only emits contextMenuRequested
+    // in connected appearance, but guard here defensively.
+    if (m_radioModel->connectionState() != ConnectionState::Connected) {
+        return;
+    }
+
+    QMenu menu(this);
+
+    menu.addAction(tr("Disconnect"), this, [this]() {
+        m_radioModel->disconnectFromRadio();
+    });
+
+    // "Edit radio…" — open ConnectionPanel so the user can edit the currently
+    // connected radio's settings (model override, etc.). The panel pre-selects
+    // by highlighted MAC when available; if not connected, user clicks the row.
+    menu.addAction(tr("Edit radio…"), this, [this]() {
+        showConnectionPanel();
+        if (m_connectionPanel) {
+            const QString mac =
+                m_radioModel->connection()
+                    ? m_radioModel->connection()->radioInfo().macAddress
+                    : QString();
+            if (!mac.isEmpty()) {
+                m_connectionPanel->highlightMac(mac);
+            }
+        }
+    });
+
+    menu.addAction(tr("Forget radio"), this, [this]() {
+        const QString mac =
+            m_radioModel->connection()
+                ? m_radioModel->connection()->radioInfo().macAddress
+                : QString();
+        m_radioModel->disconnectFromRadio();
+        if (!mac.isEmpty()) {
+            AppSettings::instance().forgetRadio(mac);
+        }
     });
 
     menu.exec(globalPos);
