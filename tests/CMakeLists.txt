@@ -1077,6 +1077,14 @@ nereus_add_test(tst_transmit_setup_tx_inhibit)
 # "Disables HF PA." verbatim from setup.designer.cs:5786 [v2.10.3.13].
 nereus_add_test(tst_transmit_setup_block_tx)
 
+# ── Phase 3M-3a-i Batch 5 Task E: SpeechProcessorPage TX dashboard ───────────
+# Verifies the NereusSDR-spin Speech Processor page builds without crashing,
+# the TX EQ + Leveler status labels read from + react to TransmitModel signals,
+# the active-profile label tracks MicProfileManager::activeProfileChanged, the
+# ALC row is statically labelled "always-on", and the cross-link buttons emit
+# openSetupRequested(category, page) with the correct setup-page leaf labels.
+nereus_add_test(tst_speech_processor_page)
+
 # ── Phase 3M-0 Task 12: Hardware Configuration group box on Setup → General ──
 # Verifies grpHardwareConfig has 4 controls + 1 warning label per
 # Thetis tpGeneralHardware (setup.designer.cs:8045-8396 [v2.10.3.13]):
