@@ -1734,14 +1734,23 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 m_txChannel->setAntiVoxRun(!useVax);
             });
 
-            // ── 3M-3a-i Batch 2 — TransmitModel → TxChannel TX EQ + Leveler + ALC ──
+            // ── 3M-3 — TransmitModel → TxChannel TX processing chain wiring ─────
             //
-            // 13 connects route TransmitModel setter signals (added in 3M-3a-i
-            // Batch 1 Task C) into the TxChannel WDSP wrappers (added in
-            // Batch 1 Task B).  Receiver = m_txChannel so AutoConnection
-            // resolves to QueuedConnection once the channel is moved onto
-            // TxWorkerThread (a few lines below) — same pattern as the F.1 /
-            // H.1-H.3 / L.2 connects above.
+            // 27 connects route TransmitModel setter signals into the TxChannel
+            // WDSP wrappers, covering the full TX processing chain:
+            //   1-13  3M-3a-i Batch 2 — TX EQ + Leveler + ALC
+            //   14-17 3M-3a-ii Batch 3 — Phase Rotator (PhRot run + reverse +
+            //                                            corner Hz + nstages)
+            //   18-21 3M-3a-ii Batch 3 — CFC scalars (run + post-EQ run +
+            //                                         pre-comp + pre-PEQ)
+            //   22-24 3M-3a-ii Batch 3 — CFC profile arrays (collapsed into one
+            //                                                pushCfcProfile helper)
+            //   25-26 3M-3a-ii Batch 3 — CPDR (run + gain)
+            //   27    3M-3a-ii Batch 3 — CESSB (run)
+            // Receiver = m_txChannel so AutoConnection resolves to
+            // QueuedConnection once the channel is moved onto TxWorkerThread
+            // (a few lines below) — same pattern as the F.1 / H.1-H.3 / L.2
+            // connects above.
             //
             // ── Initial sync — Thetis-faithful "active TX profile" restore ──
             //
@@ -1800,7 +1809,32 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 m_txChannel->setTxEqProfile(freqs10, gains11);
             };
 
-            // Full-chain push — mirrors all 13 connect lambdas below by reading
+            // CFC profile rebuild — mirrors pushEqProfile above.  CFC operates
+            // on 10 user-visible bands.  WDSP setter signature:
+            //   SetTXACFCOMPprofile(channel, nfreqs, F[], G[], E[], Qg[], Qe[])
+            // We pass empty Qg / Qe vectors (translates to NULL inside the
+            // wrapper), opting out of per-band Q skirts — the parametric Q
+            // controls aren't yet exposed on the user surface (CFCParaEQData
+            // schema column is currently an opaque blob).  cfcomp.c:669-682
+            // [v2.10.3.13] documents the NULL semantic.
+            auto pushCfcProfile = [this]() {
+                if (!m_txChannel) { return; }
+                constexpr int kCfcBands = 10;
+                std::vector<double> F(kCfcBands);
+                std::vector<double> G(kCfcBands);
+                std::vector<double> E(kCfcBands);
+                for (int i = 0; i < kCfcBands; ++i) {
+                    F[static_cast<std::size_t>(i)] =
+                        static_cast<double>(m_transmitModel.cfcEqFreq(i));
+                    G[static_cast<std::size_t>(i)] =
+                        static_cast<double>(m_transmitModel.cfcCompression(i));
+                    E[static_cast<std::size_t>(i)] =
+                        static_cast<double>(m_transmitModel.cfcPostEqBandGain(i));
+                }
+                m_txChannel->setTxCfcProfile(F, G, E, /*Qg=*/{}, /*Qe=*/{});
+            };
+
+            // Full-chain push — mirrors all 27 connect lambdas below by reading
             // current TransmitModel state and pushing to TxChannel.  Used for
             // the initial on-connect sync (loadFromSettings already fired the
             // *Changed signals before this connect block was installed, so
@@ -1808,7 +1842,9 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             // activeProfileChanged (setActiveProfile's applyValuesToModel
             // setters short-circuit on no-op writes when profile values match
             // already-loaded live keys, so signal-driven sync isn't reliable).
-            auto pushTxProcessingChain = [this, pushEqProfile]() {
+            // Covers EQ + Leveler + ALC (3M-3a-i) AND CFC + CPDR + CESSB +
+            // PhRot (3M-3a-ii Batch 3) — full 28-property TX-chain restore.
+            auto pushTxProcessingChain = [this, pushEqProfile, pushCfcProfile]() {
                 if (!m_txChannel) { return; }
                 m_txChannel->setTxEqRunning(m_transmitModel.txEqEnabled());
                 pushEqProfile();
@@ -1823,6 +1859,33 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 m_txChannel->setTxAlcMaxGainDb(
                     static_cast<double>(m_transmitModel.txAlcMaxGain()));
                 m_txChannel->setTxAlcDecayMs(m_transmitModel.txAlcDecay());
+
+                // ── 3M-3a-ii Batch 3 — Phase Rotator (4) ──
+                m_txChannel->setStageRunning(TxChannel::Stage::PhRot,
+                    m_transmitModel.phaseRotatorEnabled());
+                m_txChannel->setTxPhrotReverse(m_transmitModel.phaseReverseEnabled());
+                m_txChannel->setTxPhrotCornerHz(
+                    static_cast<double>(m_transmitModel.phaseRotatorFreqHz()));
+                m_txChannel->setTxPhrotNstages(m_transmitModel.phaseRotatorStages());
+
+                // ── 3M-3a-ii Batch 3 — CFC scalars (4) ──
+                m_txChannel->setTxCfcRunning(m_transmitModel.cfcEnabled());
+                m_txChannel->setTxCfcPostEqRunning(m_transmitModel.cfcPostEqEnabled());
+                m_txChannel->setTxCfcPrecompDb(
+                    static_cast<double>(m_transmitModel.cfcPrecompDb()));
+                m_txChannel->setTxCfcPrePeqDb(
+                    static_cast<double>(m_transmitModel.cfcPostEqGainDb()));
+
+                // ── 3M-3a-ii Batch 3 — CFC profile arrays (1 helper) ──
+                pushCfcProfile();
+
+                // ── 3M-3a-ii Batch 3 — CPDR (2) ──
+                m_txChannel->setTxCpdrOn(m_transmitModel.cpdrOn());
+                m_txChannel->setTxCpdrGainDb(
+                    static_cast<double>(m_transmitModel.cpdrLevelDb()));
+
+                // ── 3M-3a-ii Batch 3 — CESSB (1) ──
+                m_txChannel->setTxCessbOn(m_transmitModel.cessbOn());
             };
 
             // 1. txEqEnabledChanged → setTxEqRunning.
@@ -1903,6 +1966,98 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             connect(&m_transmitModel, &TransmitModel::txAlcDecayChanged,
                     m_txChannel, [this](int ms) {
                 m_txChannel->setTxAlcDecayMs(ms);
+            });
+
+            // ── 3M-3a-ii Batch 3 — CFC / CPDR / CESSB / PhRot routing ───────
+            // 14 new connects route the 15 TransmitModel properties added in
+            // 3M-3a-ii Batch 2 into the TxChannel WDSP wrappers added in
+            // Batches 1 + 1.6.  3 array-changed signals collapse into a
+            // shared pushCfcProfile() rebuild (matches the pushEqProfile
+            // pattern at #2-#4 above).
+
+            // 14. phaseRotatorEnabledChanged → Stage::PhRot run.
+            connect(&m_transmitModel, &TransmitModel::phaseRotatorEnabledChanged,
+                    m_txChannel, [this](bool on) {
+                m_txChannel->setStageRunning(TxChannel::Stage::PhRot, on);
+            });
+
+            // 15. phaseReverseEnabledChanged → setTxPhrotReverse.
+            connect(&m_transmitModel, &TransmitModel::phaseReverseEnabledChanged,
+                    m_txChannel, [this](bool on) {
+                m_txChannel->setTxPhrotReverse(on);
+            });
+
+            // 16. phaseRotatorFreqHzChanged → setTxPhrotCornerHz.
+            connect(&m_transmitModel, &TransmitModel::phaseRotatorFreqHzChanged,
+                    m_txChannel, [this](int hz) {
+                m_txChannel->setTxPhrotCornerHz(static_cast<double>(hz));
+            });
+
+            // 17. phaseRotatorStagesChanged → setTxPhrotNstages.
+            connect(&m_transmitModel, &TransmitModel::phaseRotatorStagesChanged,
+                    m_txChannel, [this](int stages) {
+                m_txChannel->setTxPhrotNstages(stages);
+            });
+
+            // 18. cfcEnabledChanged → setTxCfcRunning.
+            connect(&m_transmitModel, &TransmitModel::cfcEnabledChanged,
+                    m_txChannel, [this](bool on) {
+                m_txChannel->setTxCfcRunning(on);
+            });
+
+            // 19. cfcPostEqEnabledChanged → setTxCfcPostEqRunning.
+            connect(&m_transmitModel, &TransmitModel::cfcPostEqEnabledChanged,
+                    m_txChannel, [this](bool on) {
+                m_txChannel->setTxCfcPostEqRunning(on);
+            });
+
+            // 20. cfcPrecompDbChanged → setTxCfcPrecompDb.
+            connect(&m_transmitModel, &TransmitModel::cfcPrecompDbChanged,
+                    m_txChannel, [this](int dB) {
+                m_txChannel->setTxCfcPrecompDb(static_cast<double>(dB));
+            });
+
+            // 21. cfcPostEqGainDbChanged → setTxCfcPrePeqDb.
+            connect(&m_transmitModel, &TransmitModel::cfcPostEqGainDbChanged,
+                    m_txChannel, [this](int dB) {
+                m_txChannel->setTxCfcPrePeqDb(static_cast<double>(dB));
+            });
+
+            // 22. cfcEqFreqChanged → rebuild full CFC Profile (any single
+            //     band edit pushes the whole 10-band F[]/G[]/E[] vector).
+            connect(&m_transmitModel, &TransmitModel::cfcEqFreqChanged,
+                    m_txChannel, [pushCfcProfile](int /*idx*/, int /*Hz*/) {
+                pushCfcProfile();
+            });
+
+            // 23. cfcCompressionChanged → rebuild full CFC Profile (G[]).
+            connect(&m_transmitModel, &TransmitModel::cfcCompressionChanged,
+                    m_txChannel, [pushCfcProfile](int /*idx*/, int /*dB*/) {
+                pushCfcProfile();
+            });
+
+            // 24. cfcPostEqBandGainChanged → rebuild full CFC Profile (E[]).
+            connect(&m_transmitModel, &TransmitModel::cfcPostEqBandGainChanged,
+                    m_txChannel, [pushCfcProfile](int /*idx*/, int /*dB*/) {
+                pushCfcProfile();
+            });
+
+            // 25. cpdrOnChanged → setTxCpdrOn.
+            connect(&m_transmitModel, &TransmitModel::cpdrOnChanged,
+                    m_txChannel, [this](bool on) {
+                m_txChannel->setTxCpdrOn(on);
+            });
+
+            // 26. cpdrLevelDbChanged → setTxCpdrGainDb.
+            connect(&m_transmitModel, &TransmitModel::cpdrLevelDbChanged,
+                    m_txChannel, [this](int dB) {
+                m_txChannel->setTxCpdrGainDb(static_cast<double>(dB));
+            });
+
+            // 27. cessbOnChanged → setTxCessbOn.
+            connect(&m_transmitModel, &TransmitModel::cessbOnChanged,
+                    m_txChannel, [this](bool on) {
+                m_txChannel->setTxCessbOn(on);
             });
 
             // Profile-activation resync.  Receiver = m_txChannel so this
