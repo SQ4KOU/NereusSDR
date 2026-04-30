@@ -159,6 +159,7 @@ private slots:
 private:
     void buildUI();
     QWidget* buildStatusStrip();    // Phase 3Q Task 5 — top-of-panel connection status widget
+    void setPillIconForRow(int row, const QString& mac);  // Pixmap pill icon (3Q polish)
     void updateButtonStates();
     void applyRowColor(int row, const RadioInfo& info);
     void populateRow(int row, const RadioInfo& info);

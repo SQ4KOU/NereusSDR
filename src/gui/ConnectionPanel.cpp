@@ -114,6 +114,9 @@ mw0lge@grange-lane.co.uk
 #include <QDateTime>
 #include <QFont>
 #include <QColor>
+#include <QPainter>
+#include <QPixmap>
+#include <QIcon>
 #include <QTimer>
 
 namespace NereusSDR {
@@ -311,7 +314,7 @@ void ConnectionPanel::buildUI()
     m_radioTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
 
     // Fixed width for narrow columns
-    m_radioTable->setColumnWidth(ColStatus,    28);
+    m_radioTable->setColumnWidth(ColStatus,    44);  // wide enough for 14px pill + margins
     m_radioTable->setColumnWidth(ColName,     180);
     m_radioTable->setColumnWidth(ColBoard,    100);
     m_radioTable->setColumnWidth(ColProtocol,  60);
@@ -671,12 +674,6 @@ void ConnectionPanel::updateStatusStrip()
 void ConnectionPanel::refreshLastSeenColumn()
 {
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    const QString connectedMac = m_radioModel->isConnected()
-        ? (m_radioModel->connection()
-           ? m_radioModel->connection()->radioInfo().macAddress
-           : QString())
-        : QString();
-
     for (int row = 0; row < m_radioTable->rowCount(); ++row) {
         QTableWidgetItem* statusCell = m_radioTable->item(row, ColStatus);
         if (!statusCell) {
@@ -691,22 +688,47 @@ void ConnectionPanel::refreshLastSeenColumn()
             lsCell->setText(relativeTime(lastSeen, now));
         }
 
-        // Refresh state pill on the status column
-        if (statusCell) {
-            const bool isConnected = (!connectedMac.isEmpty() && mac == connectedMac);
-            StatePill pill = isConnected
-                ? StatePill::Connected
-                : statePillForLastSeen(m_lastSeenMs.value(mac, 0LL), now);
-            const char* pillColor = kPillOfflineColor;
-            switch (pill) {
-                case StatePill::Online:    pillColor = kPillOnlineColor;    break;
-                case StatePill::Stale:     pillColor = kPillStaleColor;     break;
-                case StatePill::Offline:   pillColor = kPillOfflineColor;   break;
-                case StatePill::Connected: pillColor = kPillConnectedColor; break;
-            }
-            statusCell->setForeground(QColor(QString::fromLatin1(pillColor)));
-        }
+        setPillIconForRow(row, mac);
     }
+}
+
+// Paint a small coloured circle into the state-pill cell. Embedding a
+// QFrame widget via setCellWidget bypasses both the table's stylesheet
+// `color: ...` rule (which overrode setForeground) and any QIcon mode
+// quirks (which made setIcon render greyscale on macOS dark theme).
+void ConnectionPanel::setPillIconForRow(int row, const QString& mac)
+{
+    const bool isConnected = m_radioModel->isConnected()
+        && m_radioModel->connection()
+        && m_radioModel->connection()->radioInfo().macAddress == mac;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const StatePill pill = isConnected
+        ? StatePill::Connected
+        : statePillForLastSeen(m_lastSeenMs.value(mac, 0LL), now);
+    const char* pillColor = kPillOfflineColor;
+    switch (pill) {
+        case StatePill::Online:    pillColor = kPillOnlineColor;    break;
+        case StatePill::Stale:     pillColor = kPillStaleColor;     break;
+        case StatePill::Offline:   pillColor = kPillOfflineColor;   break;
+        case StatePill::Connected: pillColor = kPillConnectedColor; break;
+    }
+
+    auto* pillWidget = new QWidget();
+    pillWidget->setStyleSheet(QString::fromLatin1(
+        "QWidget {"
+        "  background-color: %1;"
+        "  border-radius: 7px;"
+        "  max-width: 14px; max-height: 14px;"
+        "  min-width: 14px; min-height: 14px;"
+        "  margin: 4px;"
+        "}").arg(QString::fromLatin1(pillColor)));
+    auto* container = new QWidget();
+    auto* layout = new QHBoxLayout(container);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->addStretch();
+    layout->addWidget(pillWidget);
+    layout->addStretch();
+    m_radioTable->setCellWidget(row, ColStatus, container);
 }
 
 // ---------------------------------------------------------------------------
@@ -754,24 +776,8 @@ void ConnectionPanel::applyRowColor(int row, const RadioInfo& info)
         }
     }
 
-    // Override the state pill dot with a StatePill-appropriate color
-    if (QTableWidgetItem* dotCell = m_radioTable->item(row, ColStatus)) {
-        const bool isConnected = m_radioModel->isConnected()
-            && m_radioModel->connection()
-            && m_radioModel->connection()->radioInfo().macAddress == info.macAddress;
-        const qint64 now = QDateTime::currentMSecsSinceEpoch();
-        const StatePill pill = isConnected
-            ? StatePill::Connected
-            : statePillForLastSeen(m_lastSeenMs.value(info.macAddress, 0LL), now);
-        const char* pillColor = kPillOfflineColor;
-        switch (pill) {
-            case StatePill::Online:    pillColor = kPillOnlineColor;    break;
-            case StatePill::Stale:     pillColor = kPillStaleColor;     break;
-            case StatePill::Offline:   pillColor = kPillOfflineColor;   break;
-            case StatePill::Connected: pillColor = kPillConnectedColor; break;
-        }
-        dotCell->setForeground(QColor(QString::fromLatin1(pillColor)));
-    }
+    // Set the state pill as a small painted circle icon — see helper below.
+    setPillIconForRow(row, info.macAddress);
 }
 
 // Populate a table row from a RadioInfo.
@@ -789,10 +795,19 @@ void ConnectionPanel::applyRowColor(int row, const RadioInfo& info)
 // MAC moves to the detail panel (already shown as "MAC: ..." in m_detailMacLabel).
 void ConnectionPanel::populateRow(int row, const RadioInfo& info)
 {
-    // Derive display strings
+    // Derive display strings — prefer the user-saved name when present
+    // (matches what they typed in the Add Radio dialog or detail panel).
+    // Fall back to the board's canonical display name, then to displayName().
     const QString& capDisplayName =
         QString::fromUtf8(BoardCapsTable::forBoard(info.boardType).displayName);
-    const QString name = capDisplayName.isEmpty() ? info.displayName() : capDisplayName;
+    QString name;
+    if (!info.name.isEmpty()) {
+        name = info.name;
+    } else if (!capDisplayName.isEmpty()) {
+        name = capDisplayName;
+    } else {
+        name = info.displayName();
+    }
 
     // Board string — HPSDRHW enum to friendly name
     QString boardStr;
@@ -829,7 +844,10 @@ void ConnectionPanel::populateRow(int row, const RadioInfo& info)
         return item;
     };
 
-    m_radioTable->setItem(row, ColStatus,   makeItem(QStringLiteral("●")));
+    // Status cell text intentionally empty — setPillIconForRow paints a
+    // colored circle pixmap as the cell icon (text overlap with icon caused
+    // the "● shows but in stylesheet color" bug from initial 3Q-5 land).
+    m_radioTable->setItem(row, ColStatus,   makeItem(QString()));
     m_radioTable->setItem(row, ColName,     makeItem(name));
     m_radioTable->setItem(row, ColBoard,    makeItem(boardStr));
     m_radioTable->setItem(row, ColProtocol, makeItem(protoStr));
@@ -914,13 +932,23 @@ void ConnectionPanel::onRadioDiscovered(const RadioInfo& info)
         return;
     }
 
-    m_discoveredRadios.insert(info.macAddress, info);
+    // Layer the user-saved name (if any) over the broadcast info — radios
+    // don't carry a name in their discovery reply, so the saved entry's
+    // user-typed name is the authoritative label for the row.
+    RadioInfo merged = info;
+    if (auto saved = AppSettings::instance().savedRadio(info.macAddress)) {
+        if (!saved->info.name.isEmpty()) {
+            merged.name = saved->info.name;
+        }
+    }
+
+    m_discoveredRadios.insert(merged.macAddress, merged);
     // Phase 3Q Task 5: record last-seen timestamp for this MAC
-    m_lastSeenMs.insert(info.macAddress, QDateTime::currentMSecsSinceEpoch());
+    m_lastSeenMs.insert(merged.macAddress, QDateTime::currentMSecsSinceEpoch());
 
     int row = m_radioTable->rowCount();
     m_radioTable->insertRow(row);
-    populateRow(row, info);
+    populateRow(row, merged);
 
     // Auto-select the first radio
     if (m_radioTable->rowCount() == 1) {
@@ -936,17 +964,27 @@ void ConnectionPanel::onRadioDiscovered(const RadioInfo& info)
 
 void ConnectionPanel::onRadioUpdated(const RadioInfo& info)
 {
-    m_discoveredRadios.insert(info.macAddress, info);
-    // Phase 3Q Task 5: refresh last-seen timestamp on update
-    m_lastSeenMs.insert(info.macAddress, QDateTime::currentMSecsSinceEpoch());
+    // Layer the user-saved name (if any) over broadcast info — same merge
+    // as onRadioDiscovered. Refresh-on-broadcast must not clobber the
+    // user-typed label.
+    RadioInfo merged = info;
+    if (auto saved = AppSettings::instance().savedRadio(info.macAddress)) {
+        if (!saved->info.name.isEmpty()) {
+            merged.name = saved->info.name;
+        }
+    }
 
-    int row = rowForMac(info.macAddress);
+    m_discoveredRadios.insert(merged.macAddress, merged);
+    // Phase 3Q Task 5: refresh last-seen timestamp on update
+    m_lastSeenMs.insert(merged.macAddress, QDateTime::currentMSecsSinceEpoch());
+
+    int row = rowForMac(merged.macAddress);
     if (row < 0) {
-        onRadioDiscovered(info);
+        onRadioDiscovered(merged);
         return;
     }
 
-    populateRow(row, info);
+    populateRow(row, merged);
     updateButtonStates();
 }
 
@@ -993,6 +1031,10 @@ void ConnectionPanel::onConnectionStateChanged()
             ? QStringLiteral("Found %1 radio(s)").arg(n)
             : QStringLiteral("Disconnected"));
     }
+    // Refresh pill icons + Last Seen now that connected/disconnected state
+    // moved — without this the Connected/Online pill stays frozen on the
+    // last-painted state until the next discovery sweep or 15 s tick.
+    refreshLastSeenColumn();
     updateButtonStates();
 }
 
