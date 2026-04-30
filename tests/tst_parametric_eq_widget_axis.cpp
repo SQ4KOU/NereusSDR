@@ -22,8 +22,6 @@
 #include <QRect>
 #include <QTest>
 
-#include <cmath>
-
 // Tester shim: friended in ParametricEqWidget.h so this subclass can
 // reach private axis/ordering helpers and member state.  The widget
 // itself remains encapsulated; only this test sees through.
