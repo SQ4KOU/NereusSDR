@@ -15,14 +15,28 @@ StatusBadge::StatusBadge(QWidget* parent) : QWidget(parent)
 
     m_iconLabel = new QLabel(this);
     m_iconLabel->setObjectName(QStringLiteral("StatusBadge_Icon"));
+    // Minimum / Fixed: don't shrink below the icon glyph's natural width.
+    m_iconLabel->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     hbox->addWidget(m_iconLabel);
 
     m_textLabel = new QLabel(this);
     m_textLabel->setObjectName(QStringLiteral("StatusBadge_Text"));
+    // Critical: default Preferred lets QHBoxLayout clip "USB" → "U" when
+    // the parent dashboard is constrained. Minimum / Fixed locks the label
+    // at its natural text width so the full label always shows.
+    m_textLabel->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     hbox->addWidget(m_textLabel);
 
     setAttribute(Qt::WA_StyledBackground, true);
     setCursor(Qt::PointingHandCursor);
+
+    // Size policy: claim sizeHint() worth of horizontal space so a parent
+    // QHBoxLayout under pressure can't squeeze the badge below its content.
+    // Without this, multi-char labels like "USB" / "2.4k" / "AGC-S" clip
+    // to single chars when the dashboard is constrained on the status bar.
+    // Vertical: Fixed so the badge stays at its natural 18 px height.
+    setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+
     applyStyle();
 }
 
@@ -31,6 +45,8 @@ void StatusBadge::setIcon(const QString& icon)
     if (m_icon == icon) { return; }
     m_icon = icon;
     m_iconLabel->setText(icon);
+    m_iconLabel->updateGeometry();
+    updateGeometry();
 }
 
 void StatusBadge::setLabel(const QString& label)
@@ -38,6 +54,14 @@ void StatusBadge::setLabel(const QString& label)
     if (m_label == label) { return; }
     m_label = label;
     m_textLabel->setText(label);
+    // Explicitly lock the badge's minimum width to its content width.
+    // QSizePolicy::Minimum alone isn't enough because Qt computes
+    // minimumSize from sizeHint AT CONSTRUCTION TIME (when text was
+    // empty), and never re-evaluates when text changes. Without this
+    // line, parent QHBoxLayouts under pressure clip "USB" → "U".
+    setMinimumWidth(sizeHint().width());
+    m_textLabel->updateGeometry();
+    updateGeometry();
 }
 
 void StatusBadge::setVariant(Variant v)

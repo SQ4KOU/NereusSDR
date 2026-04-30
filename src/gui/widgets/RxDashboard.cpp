@@ -26,6 +26,12 @@ namespace NereusSDR {
 RxDashboard::RxDashboard(QWidget* parent) : QWidget(parent)
 {
     buildUi();
+    // Dashboard claims enough horizontal space for the always-shown widgets
+    // (RX1+freq stack 120px + 3 always-on badges + spacing/margins ≈ 270 px).
+    // Without this the parent QHBoxLayout under pressure drops AGC via the
+    // resize drop-priority rules even though the spec says AGC always shows.
+    setMinimumWidth(280);
+    setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
 }
 
 void RxDashboard::buildUi()
@@ -48,12 +54,15 @@ void RxDashboard::buildUi()
     m_freqLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: #c8d8e8; font-family: 'SF Mono', Menlo, monospace;"
         " font-size: 15px; font-weight: 600; letter-spacing: 0.3px; }"));
-    // Minimum width to prevent truncation of "14.225.000" (12 chars × ~9 px = 108 px).
-    // Without this the label squeezes to a narrow strip on first paint and Qt never
-    // auto-expands it (no expanding size policy on the parent stack widget).
-    m_freqLabel->setMinimumWidth(110);
+    // Minimum width to prevent truncation of "14.225.000" (12 chars × ~9 px ≈ 110 px).
+    // Setting minWidth on the QLabel alone wasn't enough — the parent stackContainer
+    // also needs the constraint or the QHBoxLayout in the status bar squeezes both.
+    m_freqLabel->setMinimumWidth(120);
+    m_freqLabel->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     vbox->addWidget(m_rxLabel);
     vbox->addWidget(m_freqLabel);
+    stackContainer->setMinimumWidth(120);
+    stackContainer->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
     hbox->addWidget(stackContainer);
 
     // ── Always-visible badges: mode / filter / AGC ───────────────────────────

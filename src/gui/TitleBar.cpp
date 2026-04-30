@@ -284,7 +284,11 @@ void ConnectionSegment::paintEvent(QPaintEvent*)
     // (U+25CF BLACK CIRCLE), universally available in every monospace font.
     // The circle colour already encodes audio state — semantically cleaner.
     p.setPen(audioPipColor(m_audioFlow));
-    const QString pip = QStringLiteral("\xe2\x97\x8f");   // ● U+25CF — color = state
+    // Use QChar(0x25CF) directly rather than a byte-escape QStringLiteral —
+    // \xe2\x97\x8f gets misinterpreted as 3 Latin-1 codepoints (â + 2 control
+    // chars) on some compile-paths, rendering as garbage. QChar(0x25CF) is
+    // unambiguous: a single UTF-16 code unit pointing to ● (U+25CF).
+    const QString pip(QChar(0x25CF));   // ● BLACK CIRCLE — color = audio state
     p.drawText(x, textY, pip);
     m_lastPipX1 = x;
     m_lastPipX2 = x + p.fontMetrics().horizontalAdvance(pip);
