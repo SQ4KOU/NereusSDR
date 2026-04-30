@@ -304,8 +304,9 @@ private slots:
         QCOMPARE(defs.value("TwoToneFreq1").toString(), QStringLiteral("700"));
         QCOMPARE(defs.value("TwoToneDrivePowerOrigin").toString(),
                  QStringLiteral("DriveSlider"));
-        // 50 keys total: 23 mic/VOX/MON/two-tone (3M-1c) + 27 EQ/Lev/ALC (3M-3a-i G).
-        QCOMPARE(defs.size(), 50);
+        // 91 keys total: 23 mic/VOX/MON/two-tone (3M-1c) + 27 EQ/Lev/ALC
+        // (3M-3a-i G) + 41 CFC/CPDR/CESSB/PhRot (3M-3a-ii G).
+        QCOMPARE(defs.size(), 91);
     }
 
     // ─────────────────────────────────────────────────────────────────────

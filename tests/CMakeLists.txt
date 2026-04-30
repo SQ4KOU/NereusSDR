@@ -321,6 +321,17 @@ nereus_add_test(tst_transmit_model_two_tone_drive_origin)
 # btnTXProfileSave_Click / btnTXProfileDelete_Click handlers).
 nereus_add_test(tst_mic_profile_manager)
 
+# ── Phase 3M-3a-ii Batch 4: MicProfileManager CFC/CPDR/CESSB/PhRot round-trip ──
+# Verifies the 41 new bundle keys (Phase Rotator + CFC + CPDR + CESSB)
+# round-trip through AppSettings byte-for-byte, including each of the
+# 21 Thetis factory profiles' per-row deviations sourced verbatim from
+# database.cs:AddTXProfileTable [v2.10.3.13].  Covers: bundle-key presence
+# check, defaultProfileValues() for the 41 new keys, per-profile CompanderLevel
+# / CESSB_On / CFC scalars + arrays cells, full SSB *.* k CFC + AM 10k CFC
+# array overrides, CFCParaEQData blob round-trip, and 5-bool serialization
+# sanity.
+nereus_add_test(tst_mic_profile_manager_cfc_round_trip)
+
 # ── Phase 3M-1c chunk I (I.1-I.5): TwoToneController activation handler ────
 # Verifies the chkTestIMD_CheckedChanged port (setup.cs:11040-11191
 # [v2.10.3.13]): power-on precondition, MOX cycle-off-then-on flow,

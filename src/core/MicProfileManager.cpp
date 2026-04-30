@@ -132,6 +132,60 @@ const QStringList& liveKeyList()
         // ALC (2 keys) — database.cs:4592-4594 [v2.10.3.13].
         QStringLiteral("ALC_MaximumGain"),
         QStringLiteral("ALC_Decay"),
+        // ── 3M-3a-ii G — CFC + CPDR + CESSB + PhRot (41 keys) ─────────────
+        // Bundles the new TransmitModel TX-chain properties added in Batch 2
+        // and ports the CFC / CPDR / CESSB / PhRot columns byte-for-byte from
+        // the 21 Thetis factory TX profiles in database.cs:AddTXProfileTable
+        // [v2.10.3.13].  cpdrOn is intentionally NOT bundled — it is global
+        // console state, not per-profile (see brief).
+        // Phase Rotator (4) — database.cs:4726-4730 [v2.10.3.13].
+        QStringLiteral("CFCPhaseRotatorEnabled"),
+        QStringLiteral("CFCPhaseReverseEnabled"),
+        QStringLiteral("CFCPhaseRotatorFreq"),
+        QStringLiteral("CFCPhaseRotatorStages"),
+        // CFC scalars (4) — database.cs:4724-4733 [v2.10.3.13].
+        QStringLiteral("CFCEnabled"),
+        QStringLiteral("CFCPostEqEnabled"),
+        QStringLiteral("CFCPreComp"),
+        QStringLiteral("CFCPostEqGain"),
+        // CFC profile arrays (30) — database.cs:4735-4766 [v2.10.3.13].
+        QStringLiteral("CFCPreComp0"),
+        QStringLiteral("CFCPreComp1"),
+        QStringLiteral("CFCPreComp2"),
+        QStringLiteral("CFCPreComp3"),
+        QStringLiteral("CFCPreComp4"),
+        QStringLiteral("CFCPreComp5"),
+        QStringLiteral("CFCPreComp6"),
+        QStringLiteral("CFCPreComp7"),
+        QStringLiteral("CFCPreComp8"),
+        QStringLiteral("CFCPreComp9"),
+        QStringLiteral("CFCPostEqGain0"),
+        QStringLiteral("CFCPostEqGain1"),
+        QStringLiteral("CFCPostEqGain2"),
+        QStringLiteral("CFCPostEqGain3"),
+        QStringLiteral("CFCPostEqGain4"),
+        QStringLiteral("CFCPostEqGain5"),
+        QStringLiteral("CFCPostEqGain6"),
+        QStringLiteral("CFCPostEqGain7"),
+        QStringLiteral("CFCPostEqGain8"),
+        QStringLiteral("CFCPostEqGain9"),
+        QStringLiteral("CFCEqFreq0"),
+        QStringLiteral("CFCEqFreq1"),
+        QStringLiteral("CFCEqFreq2"),
+        QStringLiteral("CFCEqFreq3"),
+        QStringLiteral("CFCEqFreq4"),
+        QStringLiteral("CFCEqFreq5"),
+        QStringLiteral("CFCEqFreq6"),
+        QStringLiteral("CFCEqFreq7"),
+        QStringLiteral("CFCEqFreq8"),
+        QStringLiteral("CFCEqFreq9"),
+        // CFC blob (1) — database.cs:4768 [v2.10.3.13]; opaque, forward-compat.
+        QStringLiteral("CFCParaEQData"),
+        // CPDR (1) — database.cs:4580 [v2.10.3.13].  cpdrOn is global
+        // console state, not bundled here.
+        QStringLiteral("CompanderLevel"),
+        // CESSB (1) — database.cs:4689 [v2.10.3.13].
+        QStringLiteral("CESSB_On"),
     };
     return kKeys;
 }
@@ -270,6 +324,27 @@ QHash<QString, QVariant> eqSsbCfc()
     return out;
 }
 
+// ── 3M-3a-ii Batch 4: CFC array helpers ─────────────────────────────────
+// Helper: build a CFC override hash from per-band arrays.  The four
+// "SSB *.* k CFC" + "AM 10k CFC" factory profiles each have full 30-cell
+// CFC arrays that deviate from the defaults (CFCPreComp0..9 / CFCPostEqGain0..9
+// / CFCEqFreq0..9).  Each helper takes the three 10-element rows in order
+// and produces the corresponding override hash.  Cite line numbers passed
+// in so the inline-tag preservation script can verify the cited Thetis
+// source rows.
+QHash<QString, QVariant> cfcArrays(const int (&pre)[10],
+                                    const int (&post)[10],
+                                    const int (&freq)[10])
+{
+    QHash<QString, QVariant> out;
+    for (int i = 0; i < 10; ++i) {
+        out.insert(QStringLiteral("CFCPreComp%1").arg(i),    QString::number(pre[i]));
+        out.insert(QStringLiteral("CFCPostEqGain%1").arg(i), QString::number(post[i]));
+        out.insert(QStringLiteral("CFCEqFreq%1").arg(i),     QString::number(freq[i]));
+    }
+    return out;
+}
+
 // Merge two override hashes (b takes priority over a).
 QHash<QString, QVariant> mergeOverrides(QHash<QString, QVariant> a,
                                          const QHash<QString, QVariant>& b)
@@ -285,6 +360,9 @@ const std::vector<FactoryProfile>& factoryProfiles()
     // ── Default DX (database.cs:4777-5000) ────────────────────────────
     // EQ off, all band gains 0, default freq grid, MicGain=5.
     // From Thetis database.cs:4785-4811 [v2.10.3.13] (TXEQEnabled..MicGain rows).
+    // 3M-3a-ii: All CFC/CPDR/CESSB/PhRot values match defaults — no overrides
+    // for those (CompanderLevel=2 at 4810, CESSB_On=false at 4919, CFC scalars
+    // and arrays at 4954-4998 all match the Default row byte-for-byte).
     static const QHash<QString, QVariant> kDefaultDxOverrides = mergeOverrides(
         eqAllZeros(),
         {
@@ -296,148 +374,179 @@ const std::vector<FactoryProfile>& factoryProfiles()
     // ── Digi 1K@1500 (database.cs:5005-5231 // W4TME) ─────────────────
     // EQ off, narrow data filter, MicGain=5, Lev_On=false.
     // From Thetis database.cs:5017-5046 [v2.10.3.13].
+    // 3M-3a-ii: CompanderLevel=0 (deviates from default 2).  CESSB + CFC
+    // scalars + CFC arrays + PhRot all match defaults — no overrides for those.
     static const QHash<QString, QVariant> kDigi1500Overrides = mergeOverrides(
         eqAllZeros(),
         {
-            {QStringLiteral("TXEQEnabled"), QStringLiteral("False")},
-            {QStringLiteral("TXEQPreamp"),  QStringLiteral("0")},
-            {QStringLiteral("MicGain"),     QStringLiteral("5")},      // database.cs:5043
-            {QStringLiteral("Lev_On"),      QStringLiteral("False")},  // database.cs:5046
+            {QStringLiteral("TXEQEnabled"),    QStringLiteral("False")},
+            {QStringLiteral("TXEQPreamp"),     QStringLiteral("0")},
+            {QStringLiteral("MicGain"),        QStringLiteral("5")},      // database.cs:5043
+            {QStringLiteral("Lev_On"),         QStringLiteral("False")},  // database.cs:5046
+            {QStringLiteral("CompanderLevel"), QStringLiteral("0")},      // database.cs:5042
         });
     // ── Digi 1K@2210 (database.cs:5235-5461 // W4TME) ─────────────────
     // From Thetis database.cs:5247-5276 [v2.10.3.13].
+    // 3M-3a-ii: CompanderLevel=0 (deviates from default 2).
     static const QHash<QString, QVariant> kDigi2210Overrides = mergeOverrides(
         eqAllZeros(),
         {
-            {QStringLiteral("TXEQEnabled"), QStringLiteral("False")},
-            {QStringLiteral("TXEQPreamp"),  QStringLiteral("0")},
-            {QStringLiteral("MicGain"),     QStringLiteral("5")},      // database.cs:5273
-            {QStringLiteral("Lev_On"),      QStringLiteral("False")},  // database.cs:5276
+            {QStringLiteral("TXEQEnabled"),    QStringLiteral("False")},
+            {QStringLiteral("TXEQPreamp"),     QStringLiteral("0")},
+            {QStringLiteral("MicGain"),        QStringLiteral("5")},      // database.cs:5273
+            {QStringLiteral("Lev_On"),         QStringLiteral("False")},  // database.cs:5276
+            {QStringLiteral("CompanderLevel"), QStringLiteral("0")},      // database.cs:5272
         });
 
     // ── AM (database.cs:5468-5690) ────────────────────────────────────
     // EQ off, default freq grid, MicGain=10.  Same EQ shape as Default DX.
     // From Thetis database.cs:5476-5502 [v2.10.3.13].
+    // 3M-3a-ii: CompanderLevel=3 (deviates from default 2).
     static const QHash<QString, QVariant> kAmOverrides = mergeOverrides(
         eqAllZeros(),
         {
-            {QStringLiteral("TXEQEnabled"), QStringLiteral("False")},
-            {QStringLiteral("TXEQPreamp"),  QStringLiteral("0")},
-            {QStringLiteral("MicGain"),     QStringLiteral("10")},  // database.cs:5502
+            {QStringLiteral("TXEQEnabled"),    QStringLiteral("False")},
+            {QStringLiteral("TXEQPreamp"),     QStringLiteral("0")},
+            {QStringLiteral("MicGain"),        QStringLiteral("10")},  // database.cs:5502
+            {QStringLiteral("CompanderLevel"), QStringLiteral("3")},   // database.cs:5501
         });
     // ── Conventional (database.cs:5697-5919) ──────────────────────────
     // From Thetis database.cs:5705-5731 [v2.10.3.13].
+    // 3M-3a-ii: CompanderLevel=3 (deviates from default 2).
     static const QHash<QString, QVariant> kConventionalOverrides = mergeOverrides(
         eqAllZeros(),
         {
-            {QStringLiteral("TXEQEnabled"), QStringLiteral("False")},
-            {QStringLiteral("TXEQPreamp"),  QStringLiteral("0")},
-            {QStringLiteral("MicGain"),     QStringLiteral("10")},  // database.cs:5731
+            {QStringLiteral("TXEQEnabled"),    QStringLiteral("False")},
+            {QStringLiteral("TXEQPreamp"),     QStringLiteral("0")},
+            {QStringLiteral("MicGain"),        QStringLiteral("10")},  // database.cs:5731
+            {QStringLiteral("CompanderLevel"), QStringLiteral("3")},   // database.cs:5730
         });
 
     // ── D-104 (database.cs:5926-6148) ─────────────────────────────────
     // Astatic D-104 carbon mic — preamp -6 dB, B1/B2/B3 boost.  MicGain=25.
     // From Thetis database.cs:5934-5960 [v2.10.3.13] (EQ shape via eqD104()).
+    // 3M-3a-ii: CompanderLevel=5 (deviates from default 2).
     static const QHash<QString, QVariant> kD104Overrides = mergeOverrides(
         eqD104(),
         {
-            {QStringLiteral("TXEQEnabled"), QStringLiteral("False")},  // database.cs:5934
-            {QStringLiteral("TXEQPreamp"),  QStringLiteral("-6")},     // database.cs:5935
-            {QStringLiteral("MicGain"),     QStringLiteral("25")},     // database.cs:5960
+            {QStringLiteral("TXEQEnabled"),    QStringLiteral("False")},  // database.cs:5934
+            {QStringLiteral("TXEQPreamp"),     QStringLiteral("-6")},     // database.cs:5935
+            {QStringLiteral("MicGain"),        QStringLiteral("25")},     // database.cs:5960
+            {QStringLiteral("CompanderLevel"), QStringLiteral("5")},      // database.cs:5959
         });
     // ── D-104+CPDR (database.cs:6155-6377) ────────────────────────────
     // Same EQ shape as D-104, MicGain=20, expects external Compander on.
     // From Thetis database.cs:6163-6189 [v2.10.3.13].
+    // 3M-3a-ii: CompanderLevel=5 (deviates from default 2).
     static const QHash<QString, QVariant> kD104CpdrOverrides = mergeOverrides(
         eqD104(),
         {
-            {QStringLiteral("TXEQEnabled"), QStringLiteral("False")},  // database.cs:6163
-            {QStringLiteral("TXEQPreamp"),  QStringLiteral("-6")},     // database.cs:6164
-            {QStringLiteral("MicGain"),     QStringLiteral("20")},     // database.cs:6189
+            {QStringLiteral("TXEQEnabled"),    QStringLiteral("False")},  // database.cs:6163
+            {QStringLiteral("TXEQPreamp"),     QStringLiteral("-6")},     // database.cs:6164
+            {QStringLiteral("MicGain"),        QStringLiteral("20")},     // database.cs:6189
+            {QStringLiteral("CompanderLevel"), QStringLiteral("5")},      // database.cs:6188
         });
     // ── D-104+EQ (database.cs:6384-6606) ──────────────────────────────
     // EQ ON, same shape as D-104, MicGain=20.
     // From Thetis database.cs:6392-6418 [v2.10.3.13].
+    // 3M-3a-ii: CompanderLevel=5 (deviates from default 2).
     static const QHash<QString, QVariant> kD104EqOverrides = mergeOverrides(
         eqD104(),
         {
-            {QStringLiteral("TXEQEnabled"), QStringLiteral("True")},   // database.cs:6392
-            {QStringLiteral("TXEQPreamp"),  QStringLiteral("-6")},     // database.cs:6393
-            {QStringLiteral("MicGain"),     QStringLiteral("20")},     // database.cs:6418
+            {QStringLiteral("TXEQEnabled"),    QStringLiteral("True")},   // database.cs:6392
+            {QStringLiteral("TXEQPreamp"),     QStringLiteral("-6")},     // database.cs:6393
+            {QStringLiteral("MicGain"),        QStringLiteral("20")},     // database.cs:6418
+            {QStringLiteral("CompanderLevel"), QStringLiteral("5")},      // database.cs:6417
         });
 
     // ── DX / Contest (database.cs:6613-6835) ──────────────────────────
     // EQ off, default freq grid, MicGain=10.
     // From Thetis database.cs:6621-6647 [v2.10.3.13].
+    // 3M-3a-ii: CompanderLevel=3 (deviates from default 2).
     static const QHash<QString, QVariant> kDxContestOverrides = mergeOverrides(
         eqAllZeros(),
         {
-            {QStringLiteral("TXEQEnabled"), QStringLiteral("False")},
-            {QStringLiteral("TXEQPreamp"),  QStringLiteral("0")},
-            {QStringLiteral("MicGain"),     QStringLiteral("10")},  // database.cs:6647
+            {QStringLiteral("TXEQEnabled"),    QStringLiteral("False")},
+            {QStringLiteral("TXEQPreamp"),     QStringLiteral("0")},
+            {QStringLiteral("MicGain"),        QStringLiteral("10")},  // database.cs:6647
+            {QStringLiteral("CompanderLevel"), QStringLiteral("3")},   // database.cs:6646
         });
     // ── ESSB (database.cs:6842-7064) ──────────────────────────────────
     // EQ off, Leveler off (extended-SSB users typically run external comp).
     // From Thetis database.cs:6850-6879 [v2.10.3.13].
+    // 3M-3a-ii: CompanderLevel=3 (deviates from default 2).
     static const QHash<QString, QVariant> kEssbOverrides = mergeOverrides(
         eqAllZeros(),
         {
-            {QStringLiteral("TXEQEnabled"), QStringLiteral("False")},
-            {QStringLiteral("TXEQPreamp"),  QStringLiteral("0")},
-            {QStringLiteral("MicGain"),     QStringLiteral("10")},     // database.cs:6876
-            {QStringLiteral("Lev_On"),      QStringLiteral("False")},  // database.cs:6879
+            {QStringLiteral("TXEQEnabled"),    QStringLiteral("False")},
+            {QStringLiteral("TXEQPreamp"),     QStringLiteral("0")},
+            {QStringLiteral("MicGain"),        QStringLiteral("10")},     // database.cs:6876
+            {QStringLiteral("Lev_On"),         QStringLiteral("False")},  // database.cs:6879
+            {QStringLiteral("CompanderLevel"), QStringLiteral("3")},      // database.cs:6875
         });
     // ── HC4-5 (database.cs:7071-7293) ─────────────────────────────────
     // From Thetis database.cs:7079-7105 [v2.10.3.13].
+    // 3M-3a-ii: CompanderLevel=5 (deviates from default 2).
     static const QHash<QString, QVariant> kHc45Overrides = mergeOverrides(
         eqAllZeros(),
         {
-            {QStringLiteral("TXEQEnabled"), QStringLiteral("False")},
-            {QStringLiteral("TXEQPreamp"),  QStringLiteral("0")},
-            {QStringLiteral("MicGain"),     QStringLiteral("10")},  // database.cs:7105
+            {QStringLiteral("TXEQEnabled"),    QStringLiteral("False")},
+            {QStringLiteral("TXEQPreamp"),     QStringLiteral("0")},
+            {QStringLiteral("MicGain"),        QStringLiteral("10")},  // database.cs:7105
+            {QStringLiteral("CompanderLevel"), QStringLiteral("5")},   // database.cs:7104
         });
     // ── HC4-5+CPDR (database.cs:7300-7522) ────────────────────────────
     // From Thetis database.cs:7308-7334 [v2.10.3.13].
+    // 3M-3a-ii: CompanderLevel=5 (deviates from default 2).
     static const QHash<QString, QVariant> kHc45CpdrOverrides = mergeOverrides(
         eqAllZeros(),
         {
-            {QStringLiteral("TXEQEnabled"), QStringLiteral("False")},
-            {QStringLiteral("TXEQPreamp"),  QStringLiteral("0")},
-            {QStringLiteral("MicGain"),     QStringLiteral("10")},  // database.cs:7334
+            {QStringLiteral("TXEQEnabled"),    QStringLiteral("False")},
+            {QStringLiteral("TXEQPreamp"),     QStringLiteral("0")},
+            {QStringLiteral("MicGain"),        QStringLiteral("10")},  // database.cs:7334
+            {QStringLiteral("CompanderLevel"), QStringLiteral("5")},   // database.cs:7333
         });
     // ── PR40+W2IHY (database.cs:7529-7751) ────────────────────────────
     // From Thetis database.cs:7537-7563 [v2.10.3.13].
+    // 3M-3a-ii: CompanderLevel=3 (deviates from default 2).
     static const QHash<QString, QVariant> kPr40W2ihyOverrides = mergeOverrides(
         eqAllZeros(),
         {
-            {QStringLiteral("TXEQEnabled"), QStringLiteral("False")},
-            {QStringLiteral("TXEQPreamp"),  QStringLiteral("0")},
-            {QStringLiteral("MicGain"),     QStringLiteral("10")},  // database.cs:7563
+            {QStringLiteral("TXEQEnabled"),    QStringLiteral("False")},
+            {QStringLiteral("TXEQPreamp"),     QStringLiteral("0")},
+            {QStringLiteral("MicGain"),        QStringLiteral("10")},  // database.cs:7563
+            {QStringLiteral("CompanderLevel"), QStringLiteral("3")},   // database.cs:7562
         });
     // ── PR40+W2IHY+CPDR (database.cs:7758-7980) ───────────────────────
     // From Thetis database.cs:7766-7792 [v2.10.3.13].
+    // 3M-3a-ii: CompanderLevel=3 (deviates from default 2).
     static const QHash<QString, QVariant> kPr40W2ihyCpdrOverrides = mergeOverrides(
         eqAllZeros(),
         {
-            {QStringLiteral("TXEQEnabled"), QStringLiteral("False")},
-            {QStringLiteral("TXEQPreamp"),  QStringLiteral("0")},
-            {QStringLiteral("MicGain"),     QStringLiteral("10")},  // database.cs:7792
+            {QStringLiteral("TXEQEnabled"),    QStringLiteral("False")},
+            {QStringLiteral("TXEQPreamp"),     QStringLiteral("0")},
+            {QStringLiteral("MicGain"),        QStringLiteral("10")},  // database.cs:7792
+            {QStringLiteral("CompanderLevel"), QStringLiteral("3")},   // database.cs:7791
         });
 
     // ── PR781+EQ (database.cs:7987-8209) ──────────────────────────────
     // Heil PR-781 dynamic mic — EQ on, preamp -11 dB, B1=-6, B2=+2, B3=+8
     // (broadcast-style bass-cut + presence-peak).  MicGain=12.
     // From Thetis database.cs:7995-8021 [v2.10.3.13] (EQ shape via eqPr781Eq()).
+    // 3M-3a-ii: CompanderLevel=3 (deviates from default 2).
     static const QHash<QString, QVariant> kPr781EqOverrides = mergeOverrides(
         eqPr781Eq(),
         {
-            {QStringLiteral("TXEQEnabled"), QStringLiteral("True")},   // database.cs:7995
-            {QStringLiteral("TXEQPreamp"),  QStringLiteral("-11")},    // database.cs:7996
-            {QStringLiteral("MicGain"),     QStringLiteral("12")},     // database.cs:8021
+            {QStringLiteral("TXEQEnabled"),    QStringLiteral("True")},   // database.cs:7995
+            {QStringLiteral("TXEQPreamp"),     QStringLiteral("-11")},    // database.cs:7996
+            {QStringLiteral("MicGain"),        QStringLiteral("12")},     // database.cs:8021
+            {QStringLiteral("CompanderLevel"), QStringLiteral("3")},      // database.cs:8020
         });
     // ── PR781+EQ+CPDR (database.cs:8216-8438) ─────────────────────────
     // PR-781 EQ tuned for use with external Compander.
     // From Thetis database.cs:8224-8250 [v2.10.3.13].
+    // 3M-3a-ii: CompanderLevel=2 matches default — no CPDR override.  All other
+    // CFC/CESSB/PhRot values match defaults — no overrides for those.
     static const QHash<QString, QVariant> kPr781EqCpdrOverrides = mergeOverrides(
         eqPr781EqCpdr(),
         {
@@ -451,22 +560,83 @@ const std::vector<FactoryProfile>& factoryProfiles()
     // custom freq grid (30/70/300/500/1k/2k/3k/4k/5k/6k Hz).  EQ shape
     // delivered via eqSsbCfc(), which encodes the full 10-band shape +
     // the custom freq grid byte-for-byte from database.cs:8455-8474.
+    // 3M-3a-ii: full CFC override block — CFCEnabled+CFCPostEqEnabled true,
+    // CFCPreComp=6, CFCPostEqGain=-6, full CFC arrays from database.cs:8632-8663,
+    // CompanderLevel=1.  PhRot and CESSB match defaults.
+    static const int kSsb28PreComp[10]  = { 5, 5, 5, 4, 5, 6, 7, 8, 9, 9 };       // database.cs:8632-8641
+    static const int kSsb28PostEq[10]   = {-7,-7,-8,-8,-8,-7,-5,-4,-4,-5 };       // database.cs:8643-8652
+    static const int kSsb28EqFreq[10]   = { 100, 150, 300, 500, 750, 1250, 1750, 2000, 2600, 2900 }; // database.cs:8654-8663
     static const QHash<QString, QVariant> kSsb28CfcOverrides = mergeOverrides(
-        eqSsbCfc(),
+        mergeOverrides(eqSsbCfc(),
+                       cfcArrays(kSsb28PreComp, kSsb28PostEq, kSsb28EqFreq)),
         {
-            {QStringLiteral("TXEQEnabled"), QStringLiteral("True")},  // database.cs:8453
-            {QStringLiteral("TXEQPreamp"),  QStringLiteral("4")},     // database.cs:8454
-            {QStringLiteral("MicGain"),     QStringLiteral("10")},    // database.cs:8479
+            {QStringLiteral("TXEQEnabled"),       QStringLiteral("True")},  // database.cs:8453
+            {QStringLiteral("TXEQPreamp"),        QStringLiteral("4")},     // database.cs:8454
+            {QStringLiteral("MicGain"),           QStringLiteral("10")},    // database.cs:8479
+            {QStringLiteral("CompanderLevel"),    QStringLiteral("1")},     // database.cs:8478
+            {QStringLiteral("CFCEnabled"),        QStringLiteral("True")},  // database.cs:8621
+            {QStringLiteral("CFCPostEqEnabled"),  QStringLiteral("True")},  // database.cs:8622
+            {QStringLiteral("CFCPreComp"),        QStringLiteral("6")},     // database.cs:8629
+            {QStringLiteral("CFCPostEqGain"),     QStringLiteral("-6")},    // database.cs:8630
         });
     // ── SSB 3.0k CFC (database.cs:8674-8896) ──────────────────────────
-    // Identical EQ shape to SSB 2.8k CFC.
-    static const QHash<QString, QVariant> kSsb30CfcOverrides = kSsb28CfcOverrides;
+    // Identical EQ shape to SSB 2.8k CFC; different CFC arrays + CFCPostEqGain.
+    // From Thetis database.cs:8861-8892 [v2.10.3.13].
+    static const int kSsb30PreComp[10]  = { 6, 6, 5, 4, 5, 6, 7, 8, 9, 9 };       // database.cs:8861-8870
+    static const int kSsb30PostEq[10]   = {-4,-5,-7,-8,-8,-7,-4,-2,-1,-1 };       // database.cs:8872-8881
+    static const int kSsb30EqFreq[10]   = { 100, 150, 300, 500, 750, 1250, 1750, 2000, 2600, 3100 }; // database.cs:8883-8892
+    static const QHash<QString, QVariant> kSsb30CfcOverrides = mergeOverrides(
+        mergeOverrides(eqSsbCfc(),
+                       cfcArrays(kSsb30PreComp, kSsb30PostEq, kSsb30EqFreq)),
+        {
+            {QStringLiteral("TXEQEnabled"),       QStringLiteral("True")},  // database.cs:8682 (mirror of 28k)
+            {QStringLiteral("TXEQPreamp"),        QStringLiteral("4")},     // database.cs:8683
+            {QStringLiteral("MicGain"),           QStringLiteral("10")},    // database.cs:8708
+            {QStringLiteral("CompanderLevel"),    QStringLiteral("1")},     // database.cs:8707
+            {QStringLiteral("CFCEnabled"),        QStringLiteral("True")},  // database.cs:8850
+            {QStringLiteral("CFCPostEqEnabled"),  QStringLiteral("True")},  // database.cs:8851
+            {QStringLiteral("CFCPreComp"),        QStringLiteral("6")},     // database.cs:8858
+            {QStringLiteral("CFCPostEqGain"),     QStringLiteral("-7")},    // database.cs:8859
+        });
     // ── SSB 3.3k CFC (database.cs:8903-9125) ──────────────────────────
-    // Identical EQ shape to SSB 2.8k CFC.
-    static const QHash<QString, QVariant> kSsb33CfcOverrides = kSsb28CfcOverrides;
+    // From Thetis database.cs:9090-9121 [v2.10.3.13].
+    static const int kSsb33PreComp[10]  = { 4, 4, 3, 3, 4, 5, 6, 7, 8, 8 };       // database.cs:9090-9099
+    static const int kSsb33PostEq[10]   = {-6,-6,-7,-8,-8,-7,-5,-5,-4,-5 };       // database.cs:9101-9110
+    static const int kSsb33EqFreq[10]   = { 50, 150, 300, 500, 750, 1250, 1750, 2000, 2600, 3350 };  // database.cs:9112-9121
+    static const QHash<QString, QVariant> kSsb33CfcOverrides = mergeOverrides(
+        mergeOverrides(eqSsbCfc(),
+                       cfcArrays(kSsb33PreComp, kSsb33PostEq, kSsb33EqFreq)),
+        {
+            {QStringLiteral("TXEQEnabled"),       QStringLiteral("True")},  // database.cs:8911
+            {QStringLiteral("TXEQPreamp"),        QStringLiteral("4")},     // database.cs:8912
+            {QStringLiteral("MicGain"),           QStringLiteral("10")},    // database.cs:8937
+            {QStringLiteral("CompanderLevel"),    QStringLiteral("1")},     // database.cs:8936
+            {QStringLiteral("CFCEnabled"),        QStringLiteral("True")},  // database.cs:9079
+            {QStringLiteral("CFCPostEqEnabled"),  QStringLiteral("True")},  // database.cs:9080
+            {QStringLiteral("CFCPreComp"),        QStringLiteral("7")},     // database.cs:9087
+            {QStringLiteral("CFCPostEqGain"),     QStringLiteral("-6")},    // database.cs:9088
+        });
     // ── AM 10k CFC (database.cs:9132-9354) ────────────────────────────
     // Same EQ shape as SSB CFC profiles, used for AM with CFC.
-    static const QHash<QString, QVariant> kAm10kCfcOverrides = kSsb28CfcOverrides;
+    // CFCPhaseRotatorStages=9 here (deviates from default 8) — see
+    // database.cs:9314 [v2.10.3.13].  Full CFC arrays from database.cs:9319-9350.
+    static const int kAm10kPreComp[10]  = { 6, 5, 4, 4, 4, 5, 6, 7, 7, 7 };        // database.cs:9319-9328
+    static const int kAm10kPostEq[10]   = { 0,-1,-2,-3,-3,-2,-1, 0, 1, 1 };        // database.cs:9330-9339
+    static const int kAm10kEqFreq[10]   = { 0, 70, 250, 500, 1000, 1500, 2000, 3000, 4000, 5000 };   // database.cs:9341-9350
+    static const QHash<QString, QVariant> kAm10kCfcOverrides = mergeOverrides(
+        mergeOverrides(eqSsbCfc(),
+                       cfcArrays(kAm10kPreComp, kAm10kPostEq, kAm10kEqFreq)),
+        {
+            {QStringLiteral("TXEQEnabled"),         QStringLiteral("True")},  // database.cs:9140
+            {QStringLiteral("TXEQPreamp"),          QStringLiteral("4")},     // database.cs:9141
+            {QStringLiteral("MicGain"),             QStringLiteral("10")},    // database.cs:9166
+            {QStringLiteral("CompanderLevel"),      QStringLiteral("1")},     // database.cs:9165
+            {QStringLiteral("CFCEnabled"),          QStringLiteral("True")},  // database.cs:9308
+            {QStringLiteral("CFCPostEqEnabled"),    QStringLiteral("True")},  // database.cs:9309
+            {QStringLiteral("CFCPhaseRotatorStages"), QStringLiteral("9")},   // database.cs:9314
+            {QStringLiteral("CFCPreComp"),          QStringLiteral("6")},     // database.cs:9316
+            {QStringLiteral("CFCPostEqGain"),       QStringLiteral("-8")},    // database.cs:9317
+        });
 
     static const std::vector<FactoryProfile> kProfiles = {
         // Default DX always ships (Thetis seeds it unconditionally —
@@ -805,6 +975,44 @@ QHash<QString, QVariant> MicProfileManager::defaultProfileValues()
     out.insert(QStringLiteral("Lev_Decay"),      QStringLiteral("100"));     // database.cs:4588
     out.insert(QStringLiteral("ALC_MaximumGain"), QStringLiteral("3"));      // database.cs:4592
     out.insert(QStringLiteral("ALC_Decay"),      QStringLiteral("10"));      // database.cs:4594
+
+    // ── 3M-3a-ii G — CFC + CPDR + CESSB + PhRot defaults (41 keys) ───────
+    // From Thetis database.cs:4724-4768 [v2.10.3.13] (the "Default" factory
+    // profile row, which is also the bundle-default baseline) +
+    // database.cs:4580 (CompanderLevel) + database.cs:4689 (CESSB_On).
+    // Phase Rotator (4)
+    out.insert(QStringLiteral("CFCPhaseRotatorEnabled"), QStringLiteral("False"));   // database.cs:4726
+    out.insert(QStringLiteral("CFCPhaseReverseEnabled"), QStringLiteral("False"));   // database.cs:4727
+    out.insert(QStringLiteral("CFCPhaseRotatorFreq"),    QStringLiteral("338"));     // database.cs:4729
+    out.insert(QStringLiteral("CFCPhaseRotatorStages"),  QStringLiteral("8"));       // database.cs:4730
+    // CFC scalars (4)
+    out.insert(QStringLiteral("CFCEnabled"),         QStringLiteral("False"));       // database.cs:4724
+    out.insert(QStringLiteral("CFCPostEqEnabled"),   QStringLiteral("False"));       // database.cs:4725
+    out.insert(QStringLiteral("CFCPreComp"),         QStringLiteral("0"));           // database.cs:4732
+    out.insert(QStringLiteral("CFCPostEqGain"),      QStringLiteral("0"));           // database.cs:4733
+    // CFC profile arrays (30) — CFCPreComp0..9 = 5 × 10 (database.cs:4735-4744),
+    // CFCPostEqGain0..9 = 0 × 10 (database.cs:4746-4755), CFCEqFreq grid
+    // 0/125/250/500/1000/2000/3000/4000/5000/10000 (database.cs:4757-4766).
+    for (int i = 0; i < 10; ++i) {
+        out.insert(QStringLiteral("CFCPreComp%1").arg(i),    QStringLiteral("5"));   // database.cs:4735-4744
+        out.insert(QStringLiteral("CFCPostEqGain%1").arg(i), QStringLiteral("0"));   // database.cs:4746-4755
+    }
+    out.insert(QStringLiteral("CFCEqFreq0"), QStringLiteral("0"));      // database.cs:4757
+    out.insert(QStringLiteral("CFCEqFreq1"), QStringLiteral("125"));    // database.cs:4758
+    out.insert(QStringLiteral("CFCEqFreq2"), QStringLiteral("250"));    // database.cs:4759
+    out.insert(QStringLiteral("CFCEqFreq3"), QStringLiteral("500"));    // database.cs:4760
+    out.insert(QStringLiteral("CFCEqFreq4"), QStringLiteral("1000"));   // database.cs:4761
+    out.insert(QStringLiteral("CFCEqFreq5"), QStringLiteral("2000"));   // database.cs:4762
+    out.insert(QStringLiteral("CFCEqFreq6"), QStringLiteral("3000"));   // database.cs:4763
+    out.insert(QStringLiteral("CFCEqFreq7"), QStringLiteral("4000"));   // database.cs:4764
+    out.insert(QStringLiteral("CFCEqFreq8"), QStringLiteral("5000"));   // database.cs:4765
+    out.insert(QStringLiteral("CFCEqFreq9"), QStringLiteral("10000"));  // database.cs:4766
+    // CFC blob (1) — opaque, forward-compat for imported Thetis profiles.
+    out.insert(QStringLiteral("CFCParaEQData"), QString());                          // database.cs:4768
+    // CPDR (1)
+    out.insert(QStringLiteral("CompanderLevel"), QStringLiteral("2"));               // database.cs:4580
+    // CESSB (1)
+    out.insert(QStringLiteral("CESSB_On"), QStringLiteral("False"));                 // database.cs:4689
     return out;
 }
 
