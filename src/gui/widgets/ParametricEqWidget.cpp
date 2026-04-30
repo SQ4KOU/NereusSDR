@@ -60,7 +60,16 @@ mw0lge@grange-lane.co.uk
 
 #include "ParametricEqWidget.h"
 
+#include <QBrush>
+#include <QDateTime>
 #include <QFontMetrics>
+#include <QLinearGradient>
+#include <QPaintEvent>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPen>
+#include <QPolygonF>
+#include <QRectF>
 #include <QtGlobal>
 
 #include <algorithm>
@@ -126,9 +135,31 @@ ParametricEqWidget::ParametricEqWidget(QWidget* parent)
     setFocusPolicy(Qt::StrongFocus);
 
     // Bar chart peak-hold timer -- 33 ms cadence (~30 fps), matches WinForms Timer { Interval = 33 }
-    // at ucParametricEq.cs:428-430.  Slot wired in Task 3 (painting batch).
+    // at ucParametricEq.cs:428-430.  Slot tick body ports cs:2751-2767 (barChartPeakTimer_Tick).
     m_barChartPeakTimer = new QTimer(this);
     m_barChartPeakTimer->setInterval(33);
+
+    // Mirror Thetis init of _bar_chart_peak_last_update_utc.  C# uses
+    // DateTime.UtcNow lazily inside updateBarChartPeakTimerState, but the
+    // first applyBarChartPeakDecay call needs a sane "previous tick" so the
+    // initial elapsed_seconds delta isn't huge.  Ucparametriceq.cs:2851 also
+    // re-initializes this when the timer enables -- we do the same plus this
+    // ctor seed for safety.
+    m_barChartPeakLastUpdateMs = QDateTime::currentMSecsSinceEpoch();
+
+    connect(m_barChartPeakTimer, &QTimer::timeout, this, [this]() {
+        // From Thetis ucParametricEq.cs:2751-2767 [v2.10.3.13] -- barChartPeakTimer_Tick.
+        if (m_barChartData.isEmpty()) {
+            updateBarChartPeakTimerState();
+            return;
+        }
+        if (!m_barChartPeakHoldEnabled) {
+            updateBarChartPeakTimerState();
+            return;
+        }
+        applyBarChartPeakDecay(QDateTime::currentMSecsSinceEpoch());
+        update();
+    });
 
     resetPointsDefault();
 }
@@ -301,15 +332,15 @@ QRect ParametricEqWidget::computePlotRect() const {
 }
 
 // From Thetis ucParametricEq.cs:2002-2013 [v2.10.3.13].
-// formatDbTick (cs:2601-2614) is the C# label-builder we'll port in Batch 3.
-// For axisLabelMaxWidth we only need a *width upper bound*, so use a
-// conservative one-decimal "%.1f" string of m_dbMin/m_dbMax -- which is
-// >= every real "0", "+24", "-12.5" rendering, and also avoids pulling
-// formatDbTick forward into this batch.
+// Now that Batch 3 has ported formatDbTick (cs:2601-2614) we use it directly
+// for the real label-builder strings (e.g. "+24", "-12", "0") rather than
+// the conservative "%.1f" placeholder used in Batch 2.  Addresses Batch 2
+// code-review Minor #8 (overestimates margin for "+24" by ~3 px otherwise).
 int ParametricEqWidget::axisLabelMaxWidth() const {
     QFontMetrics fm(font());
-    QString s1 = QStringLiteral("%1").arg(m_dbMin, 0, 'f', 1);
-    QString s2 = QStringLiteral("%1").arg(m_dbMax, 0, 'f', 1);
+    double step = getYAxisStepDb();
+    QString s1 = formatDbTick(m_dbMin, step);
+    QString s2 = formatDbTick(m_dbMax, step);
     return std::max(fm.horizontalAdvance(s1), fm.horizontalAdvance(s2));
 }
 
@@ -587,6 +618,882 @@ QVector<double> ParametricEqWidget::getLogFrequencyTicks(const QRect& plot) cons
         if (keep) filtered.append(f);
     }
     return filtered;
+}
+
+// =================================================================
+// Paint helpers + bar chart timer + response-curve math
+// (Phase 3M-3a-ii follow-up Batch 3).  Every helper is a line-faithful
+// translation of ucParametricEq.cs [v2.10.3.13] -- each function carries
+// a verbatim cite immediately above its definition.  WinForms ->
+// Qt mapping notes:
+//   - Graphics.SetClip(rect) -> QPainter::save()/setClipRect()/restore()
+//   - GraphicsPath / DrawPath -> QPainterPath / QPainter::drawPath
+//   - LinearGradientBrush -> QLinearGradient set on a QBrush
+//   - SolidBrush -> stack QBrush (no IDisposable boilerplate)
+//   - Color.FromArgb(a,r,g,b) -> QColor(r,g,b,a)  -- argument order differs!
+//   - Math.Round -> std::round
+//   - DateTime.UtcNow -> QDateTime::currentMSecsSinceEpoch()
+// =================================================================
+
+// From Thetis ucParametricEq.cs:2887-2891 [v2.10.3.13].
+QString ParametricEqWidget::formatHz(double hz) const {
+    if (hz >= 1000.0) {
+        return QStringLiteral("%1 kHz").arg(hz / 1000.0, 0, 'f', 3);
+    }
+    return QStringLiteral("%1 Hz").arg(hz, 0, 'f', 0);
+}
+
+// From Thetis ucParametricEq.cs:2893-2896 [v2.10.3.13].
+QString ParametricEqWidget::formatDotReadingHz(double hz) const {
+    return QStringLiteral("%1 Hz").arg(hz, 0, 'f', 0);
+}
+
+// From Thetis ucParametricEq.cs:2898-2902 [v2.10.3.13].
+QString ParametricEqWidget::formatDb(double db) const {
+    QString sign = db >= 0.0 ? QStringLiteral("+") : QString();
+    return sign + QStringLiteral("%1 dB").arg(db, 0, 'f', 1);
+}
+
+// From Thetis ucParametricEq.cs:2904-2908 [v2.10.3.13].
+QString ParametricEqWidget::formatDotReadingDb(double db) const {
+    QString sign = db >= 0.0 ? QStringLiteral("+") : QString();
+    return sign + QStringLiteral("%1 dB").arg(db, 0, 'f', 1);
+}
+
+// From Thetis ucParametricEq.cs:2601-2614 [v2.10.3.13].
+// C# format strings:
+//   "0"     -> integer, no decimal
+//   "0.#"   -> 1 optional decimal (trailing zero suppressed)
+//   "0.##"  -> 2 optional decimals (trailing zeros suppressed)
+// Qt's QString::number / arg lacks "trailing-zero suppression" for 'f',
+// so we strip them by hand to keep behavior identical.
+QString ParametricEqWidget::formatDbTick(double db, double stepDb) const {
+    auto fmtTrimmed = [](double v, int maxDecimals) {
+        QString s = QString::number(v, 'f', maxDecimals);
+        if (maxDecimals > 0 && s.contains(QLatin1Char('.'))) {
+            int i = s.size() - 1;
+            while (i > 0 && s.at(i) == QLatin1Char('0')) --i;
+            if (s.at(i) == QLatin1Char('.')) --i;
+            s.truncate(i + 1);
+        }
+        return s;
+    };
+
+    int maxDecimals = 0; // "0"
+    double absStep = std::fabs(stepDb);
+    if (absStep < 1.0) {
+        maxDecimals = 2; // "0.##"
+    } else if (std::fabs(absStep - std::round(absStep)) > 0.000001) {
+        maxDecimals = 1; // "0.#"
+    }
+
+    if (std::fabs(db) < 0.000001) return QStringLiteral("0");
+    if (db > 0.0) return QStringLiteral("+") + fmtTrimmed(db, maxDecimals);
+    return fmtTrimmed(db, maxDecimals);
+}
+
+// From Thetis ucParametricEq.cs:2616-2630 [v2.10.3.13].
+QString ParametricEqWidget::formatHzTick(double hz) const {
+    auto fmtTrimmed = [](double v, int maxDecimals) {
+        QString s = QString::number(v, 'f', maxDecimals);
+        if (maxDecimals > 0 && s.contains(QLatin1Char('.'))) {
+            int i = s.size() - 1;
+            while (i > 0 && s.at(i) == QLatin1Char('0')) --i;
+            if (s.at(i) == QLatin1Char('.')) --i;
+            s.truncate(i + 1);
+        }
+        return s;
+    };
+
+    double absHz = std::fabs(hz);
+
+    if (absHz >= 1000.0) {
+        double khz = hz / 1000.0;
+        if (std::fabs(khz) >= 10.0) {
+            return fmtTrimmed(khz, 1) + QStringLiteral("k");
+        }
+        return fmtTrimmed(khz, 2) + QStringLiteral("k");
+    }
+
+    if (absHz >= 100.0) return fmtTrimmed(hz, 0);
+    if (absHz >=  10.0) return fmtTrimmed(hz, 1);
+    return fmtTrimmed(hz, 2);
+}
+
+// From Thetis ucParametricEq.cs:2873-2885 [v2.10.3.13].
+// Note: C# uses (p.BandId - 1) on the palette index, so band IDs starting
+// from 1 align with palette index 0.  Preserved verbatim.
+QColor ParametricEqWidget::getPointDisplayColor(int index) const {
+    const EqPoint& p = m_points.at(index);
+
+    QColor baseCol = p.bandColor;
+    if (!baseCol.isValid()) baseCol = getBandBaseColor(p.bandId - 1);
+
+    QColor dotCol = m_usePerBandColours ? baseCol : QColor(90, 200, 255);
+
+    if (index == m_selectedIndex) dotCol = QColor(255, 200, 80);
+
+    return dotCol;
+}
+
+// From Thetis ucParametricEq.cs:2694-2748 [v2.10.3.13].
+// THE core math.  Two branches:
+//   - Graphic-EQ mode (!m_parametricEq): linear interpolation between
+//     adjacent points, clamped to first/last gain at the edges.
+//   - Parametric mode: Gaussian-weighted sum.  Each point is a Gaussian
+//     centered at p.frequencyHz with FWHM = span / (q*3) (clamped to
+//     min span/6000), sigma = FWHM / 2.3548200450309493 (the
+//     2*sqrt(2*ln(2)) FWHM-to-sigma conversion).  Weight w = exp(-0.5*d^2)
+//     where d = (f - p.frequencyHz)/sigma.  Per-point contribution is
+//     p.gainDb * w; widget result is the unweighted sum.  This is the
+//     authoritative response curve for paint and CFC dispatch.
+double ParametricEqWidget::responseDbAtFrequency(double frequencyHz) const {
+    if (!m_parametricEq) {
+        if (m_points.isEmpty()) return 0.0;
+        double f = frequencyHz;
+        if (f <= m_points.first().frequencyHz) return m_points.first().gainDb;
+        if (f >= m_points.last ().frequencyHz) return m_points.last ().gainDb;
+
+        for (int i = 1; i < m_points.size(); ++i) {
+            const auto& left  = m_points.at(i - 1);
+            const auto& right = m_points.at(i);
+            if (f <= right.frequencyHz) {
+                double denom = right.frequencyHz - left.frequencyHz;
+                if (denom <= 0.0000001) return right.gainDb;
+                double t = (f - left.frequencyHz) / denom;
+                if (t < 0.0) t = 0.0;
+                if (t > 1.0) t = 1.0;
+                return left.gainDb + ((right.gainDb - left.gainDb) * t);
+            }
+        }
+        return m_points.last().gainDb;
+    }
+
+    double span = m_frequencyMaxHz - m_frequencyMinHz;
+    if (span <= 0.0) span = 1.0;
+
+    double sum = 0.0;
+    for (const auto& p : m_points) {
+        double q = clamp(p.q, m_qMin, m_qMax);
+        double fwhm = span / (q * 3.0);
+        double minFwhm = span / 6000.0;
+        if (fwhm < minFwhm) fwhm = minFwhm;
+        double sigma = fwhm / 2.3548200450309493;
+        double d = (frequencyHz - p.frequencyHz) / sigma;
+        double w = std::exp(-0.5 * d * d);
+        sum += p.gainDb * w;
+    }
+    return sum;
+}
+
+// From Thetis ucParametricEq.cs:1575-1609 [v2.10.3.13].
+void ParametricEqWidget::paintEvent(QPaintEvent* /*event*/) {
+    QPainter g(this);
+    g.setRenderHint(QPainter::Antialiasing);
+
+    QRect client = rect();
+    if (client.width() < 2 || client.height() < 2) return;
+
+    g.fillRect(client, QColor(25, 25, 25));   // BackColor (ucParametricEq.cs:443)
+
+    QRect plot = computePlotRect();
+    if (plot.width() < 2 || plot.height() < 2) return;
+
+    drawGrid(g, plot);
+
+    g.save();
+    g.setClipRect(plot);
+
+    if (m_showBandShading) drawBandShading(g, plot);
+    drawCurve (g, plot);
+    drawPoints(g, plot);
+
+    g.restore();
+
+    if (m_showAxisScales) drawAxisScales(g, plot);
+
+    drawGlobalGainHandle(g, plot);
+    drawBorder           (g, plot);
+    if (m_showReadout) drawReadout(g, plot);
+}
+
+// From Thetis ucParametricEq.cs:2061-2117 [v2.10.3.13].
+void ParametricEqWidget::drawGrid(QPainter& g, const QRect& plot) {
+    g.fillRect(plot, QColor(18, 18, 18));
+
+    drawBarChart(g, plot);
+
+    QPen gridPen(QColor(45, 45, 45), 1.0);
+    g.setPen(gridPen);
+
+    if (m_logScale) {
+        QVector<double> ticks = getLogFrequencyTicks(plot);
+        for (double t : ticks) {
+            float x = xFromFreq(plot, t);
+            g.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
+        }
+    } else {
+        constexpr int kVLines = 10;
+        for (int i = 0; i <= kVLines; ++i) {
+            float t = float(i) / float(kVLines);
+            int x = plot.left() + int(std::round(double(t) * double(plot.width())));
+            g.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
+        }
+    }
+
+    double stepDb = getYAxisStepDb();
+    double start  = std::ceil(m_dbMin / stepDb) * stepDb;
+    for (double db = start; db <= m_dbMax + 0.000001; db += stepDb) {
+        float y = yFromDb(plot, db);
+        g.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
+    }
+
+    // Zero-dB grid line: 1.5px width, brighter grey (75,75,75).
+    QPen zeroPen(QColor(75, 75, 75), 1.5);
+    g.setPen(zeroPen);
+    float y0 = yFromDb(plot, 0.0);
+    g.drawLine(QPointF(plot.left(), y0), QPointF(plot.right(), y0));
+
+    if (m_globalGainIsHorizLine) {
+        QPen globalGainPen(QColor(255, 255, 255, 180), 1.5);
+        globalGainPen.setStyle(Qt::DashLine);
+        g.setPen(globalGainPen);
+        float y = yFromDb(plot, m_globalGainDb);
+        g.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
+    }
+}
+
+// From Thetis ucParametricEq.cs:2119-2190 [v2.10.3.13].
+void ParametricEqWidget::drawBarChart(QPainter& g, const QRect& plot) {
+    if (m_barChartData.isEmpty()) return;
+
+    applyBarChartPeakDecay(QDateTime::currentMSecsSinceEpoch());
+
+    QBrush barBrush(QColor(m_barChartFillColor.red(),
+                           m_barChartFillColor.green(),
+                           m_barChartFillColor.blue(),
+                           m_barChartFillAlpha));
+    QPen   peakPen(QColor(m_barChartPeakColor.red(),
+                          m_barChartPeakColor.green(),
+                          m_barChartPeakColor.blue(),
+                          m_barChartPeakAlpha), 1.0);
+
+    int count = m_barChartData.size();
+
+    for (int i = 0; i < count; ++i) {
+        int segLeft;
+        int segRight;
+
+        if (m_logScale) {
+            double edgeLeftF  = frequencyFromNormalizedPosition(double(i)     / double(count));
+            double edgeRightF = frequencyFromNormalizedPosition(double(i + 1) / double(count));
+
+            segLeft  = int(std::round(double(xFromFreq(plot, edgeLeftF))));
+            segRight = int(std::round(double(xFromFreq(plot, edgeRightF))));
+        } else {
+            segLeft  = plot.left() + int(std::round((double(i)     * double(plot.width())) / double(count)));
+            segRight = plot.left() + int(std::round((double(i + 1) * double(plot.width())) / double(count)));
+        }
+
+        int segWidth = segRight - segLeft;
+        if (segWidth <= 0) continue;
+
+        int barWidth = segWidth > 1 ? segWidth - 1 : segWidth;
+        if (barWidth < 1) barWidth = 1;
+
+        double db  = clamp(m_barChartData.at(i), m_dbMin, m_dbMax);
+        int    top = int(std::round(double(yFromDb(plot, db))));
+        int    height = plot.bottom() - top;
+        if (height < 1) height = 1;
+        if (top < plot.top()) {
+            height -= (plot.top() - top);
+            top = plot.top();
+        }
+        if (top + height > plot.bottom()) {
+            height = plot.bottom() - top;
+        }
+
+        if (height > 0) {
+            g.fillRect(QRect(segLeft, top, barWidth, height), barBrush);
+        }
+
+        if (m_barChartPeakHoldEnabled
+            && i < m_barChartPeakData.size()) {
+            double peakDb = clamp(m_barChartPeakData.at(i), m_dbMin, m_dbMax);
+            int peakY = int(std::round(double(yFromDb(plot, peakDb))));
+            if (peakY < plot.top()) peakY = plot.top();
+            if (peakY > plot.bottom() - 1) peakY = plot.bottom() - 1;
+
+            int peakX2 = segLeft + barWidth - 1;
+            if (peakX2 < segLeft) peakX2 = segLeft;
+
+            g.setPen(peakPen);
+            g.drawLine(QPointF(segLeft, peakY), QPointF(peakX2, peakY));
+        }
+    }
+}
+
+// From Thetis ucParametricEq.cs:2192-2342 [v2.10.3.13].
+// Two branches:
+//   - Parametric: per-band Gaussian-weighted polygon (samples+2 vertices,
+//     baseline anchors at left/right plot edges) using fillPolygon.
+//   - Graphic-EQ: per-segment 4-vertex trapezoid with horizontal linear
+//     gradient between adjacent point colors.
+void ParametricEqWidget::drawBandShading(QPainter& g, const QRect& plot) {
+    if (m_points.isEmpty()) return;
+
+    if (m_parametricEq) {
+        int samples = plot.width();
+        if (samples < 64) samples = 64;
+
+        double span = m_frequencyMaxHz - m_frequencyMinHz;
+        if (span <= 0.0) span = 1.0;
+
+        float baselineY = yFromDb(plot, 0.0);
+
+        for (int band = 0; band < m_points.size(); ++band) {
+            const EqPoint& p = m_points.at(band);
+            if (std::fabs(p.gainDb) < 0.000001) continue;
+
+            double q = clamp(p.q, m_qMin, m_qMax);
+            double fwhm = span / (q * 3.0);
+            double minFwhm = span / 6000.0;
+            if (fwhm < minFwhm) fwhm = minFwhm;
+            double sigma = fwhm / 2.3548200450309493;
+
+            QColor baseCol = p.bandColor;
+            if (!baseCol.isValid()) baseCol = getBandBaseColor(band);
+
+            QColor fillCol(baseCol.red(), baseCol.green(), baseCol.blue(), m_bandShadeAlpha);
+            if (!m_usePerBandColours) {
+                fillCol = QColor(m_bandShadeColor.red(),
+                                 m_bandShadeColor.green(),
+                                 m_bandShadeColor.blue(),
+                                 m_bandShadeAlpha);
+            }
+
+            QPolygonF poly;
+            poly.reserve(samples + 2);
+            poly.append(QPointF(plot.left(), baselineY));
+
+            for (int i = 0; i < samples; ++i) {
+                double t = double(i) / double(samples - 1);
+                double f = m_frequencyMinHz + t * span;
+
+                double d = (f - p.frequencyHz) / sigma;
+                double w = std::exp(-0.5 * d * d);
+
+                double bandDb = 0.0;
+                if (w >= m_bandShadeWeightCutoff) bandDb = p.gainDb * w;
+
+                float x = m_logScale
+                    ? xFromFreq(plot, f)
+                    : float(double(plot.left()) + t * double(plot.width()));
+                float y = yFromDb(plot, bandDb);
+                poly.append(QPointF(x, y));
+            }
+
+            poly.append(QPointF(plot.right(), baselineY));
+
+            g.setPen(Qt::NoPen);
+            g.setBrush(QBrush(fillCol));
+            g.drawPolygon(poly, Qt::WindingFill);
+        }
+        return;
+    }
+
+    // Graphic-EQ mode: per-segment trapezoids w/ horizontal linear gradients.
+    float baseY = yFromDb(plot, 0.0);
+
+    double prevF = m_frequencyMinHz;
+    double prevDb = 0.0;
+    QColor prevCol;
+
+    if (!m_points.isEmpty()) {
+        prevCol = m_points.first().bandColor;
+        if (!prevCol.isValid()) prevCol = getBandBaseColor(0);
+    } else {
+        prevCol = m_bandShadeColor;
+    }
+
+    for (int i = 0; i <= m_points.size(); ++i) {
+        double nextF;
+        double nextDb;
+        QColor nextCol;
+
+        if (i < m_points.size()) {
+            const EqPoint& p = m_points.at(i);
+            nextF = p.frequencyHz;
+            nextDb = p.gainDb;
+            nextCol = p.bandColor;
+            if (!nextCol.isValid()) nextCol = getBandBaseColor(i);
+        } else {
+            nextF = m_frequencyMaxHz;
+            nextDb = 0.0;
+            if (!m_points.isEmpty()) {
+                nextCol = m_points.last().bandColor;
+                if (!nextCol.isValid()) nextCol = getBandBaseColor(m_points.size() - 1);
+            } else {
+                nextCol = m_bandShadeColor;
+            }
+        }
+
+        if (nextF < m_frequencyMinHz) nextF = m_frequencyMinHz;
+        if (nextF > m_frequencyMaxHz) nextF = m_frequencyMaxHz;
+
+        float x0 = xFromFreq(plot, prevF);
+        float x1 = xFromFreq(plot, nextF);
+        if (std::fabs(x1 - x0) < 0.5f) {
+            prevF = nextF;
+            prevDb = nextDb;
+            prevCol = nextCol;
+            continue;
+        }
+
+        float y0 = yFromDb(plot, prevDb);
+        float y1 = yFromDb(plot, nextDb);
+
+        QPolygonF poly;
+        poly.reserve(4);
+        poly.append(QPointF(x0, baseY));
+        poly.append(QPointF(x0, y0));
+        poly.append(QPointF(x1, y1));
+        poly.append(QPointF(x1, baseY));
+
+        QColor c0 = prevCol;
+        QColor c1 = nextCol;
+        if (!m_usePerBandColours) {
+            c0 = m_bandShadeColor;
+            c1 = m_bandShadeColor;
+        }
+
+        QColor a0(c0.red(), c0.green(), c0.blue(), m_bandShadeAlpha);
+        QColor a1(c1.red(), c1.green(), c1.blue(), m_bandShadeAlpha);
+
+        QLinearGradient grad(QPointF(x0, 0.0), QPointF(x1, 0.0));
+        grad.setColorAt(0.0, a0);
+        grad.setColorAt(1.0, a1);
+
+        g.setPen(Qt::NoPen);
+        g.setBrush(QBrush(grad));
+        g.drawPolygon(poly, Qt::WindingFill);
+
+        prevF = nextF;
+        prevDb = nextDb;
+        prevCol = nextCol;
+    }
+}
+
+// From Thetis ucParametricEq.cs:2344-2370 [v2.10.3.13].
+void ParametricEqWidget::drawCurve(QPainter& g, const QRect& plot) {
+    if (m_points.isEmpty()) return;
+
+    int samples = plot.width();
+    if (samples < 64) samples = 64;
+
+    QVector<QPointF> pts;
+    pts.reserve(samples);
+
+    for (int i = 0; i < samples; ++i) {
+        double t = double(i) / double(samples - 1);
+        double f = m_logScale
+            ? frequencyFromNormalizedPosition(t)
+            : (m_frequencyMinHz + t * (m_frequencyMaxHz - m_frequencyMinHz));
+
+        double db = responseDbAtFrequency(f);
+        if (!m_globalGainIsHorizLine) db = db + m_globalGainDb;
+
+        float x = m_logScale
+            ? xFromFreq(plot, f)
+            : float(double(plot.left()) + t * double(plot.width()));
+        float y = yFromDb(plot, db);
+        pts.append(QPointF(x, y));
+    }
+
+    QPen curvePen(Qt::white, 2.0);
+    g.setPen(curvePen);
+    g.setBrush(Qt::NoBrush);
+    g.drawPolyline(pts.constData(), pts.size());
+}
+
+// From Thetis ucParametricEq.cs:2372-2393 [v2.10.3.13].
+void ParametricEqWidget::drawGlobalGainHandle(QPainter& g, const QRect& plot) {
+    float y = yFromDb(plot, m_globalGainDb);
+
+    int hx = plot.right() + m_globalHandleXOffset;
+    int s  = m_globalHandleSize;
+
+    QPolygon tri;
+    tri << QPoint(hx,     int(std::round(y)))
+        << QPoint(hx + s, int(std::round(y)) - s)
+        << QPoint(hx + s, int(std::round(y)) + s);
+
+    g.setBrush(QBrush(Qt::white));
+    g.setPen(Qt::NoPen);
+    g.drawPolygon(tri);
+
+    QPen outline(QColor(40, 40, 40), 1.0);
+    g.setPen(outline);
+    g.setBrush(Qt::NoBrush);
+    g.drawPolygon(tri);
+}
+
+// From Thetis ucParametricEq.cs:2395-2426 [v2.10.3.13].
+void ParametricEqWidget::drawPoints(QPainter& g, const QRect& plot) {
+    for (int i = 0; i < m_points.size(); ++i) {
+        const EqPoint& p = m_points.at(i);
+
+        float x = xFromFreq(plot, p.frequencyHz);
+        float y = yFromDb  (plot, p.gainDb);
+
+        bool selected = (i == m_selectedIndex);
+
+        QColor dotCol = getPointDisplayColor(i);
+
+        float r = float(m_pointRadius);
+        if (selected) r = r + 1.0f;
+
+        g.setBrush(QBrush(dotCol));
+        g.setPen(Qt::NoPen);
+        g.drawEllipse(QPointF(x, y), r, r);
+
+        QPen outline(QColor(35, 35, 35), 1.0);
+        g.setPen(outline);
+        g.setBrush(Qt::NoBrush);
+        g.drawEllipse(QPointF(x, y), r, r);
+
+        if (m_showDotReadings && m_draggingPoint && i == m_dragIndex) {
+            drawDotReading(g, plot, p, x, y, r);
+        }
+    }
+}
+
+// From Thetis ucParametricEq.cs:2428-2503 [v2.10.3.13].
+// Includes inlined createRoundedRectPath (cs:2480-2503) since QPainterPath
+// builds the same arcs natively without a helper.  See the QRectF::adjusted
+// + arcMoveTo/arcTo block below.
+void ParametricEqWidget::drawDotReading(QPainter& g, const QRect& plot,
+                                        const EqPoint& p,
+                                        float dotX, float dotY, float dotRadius) {
+    QString text = QStringLiteral("F ") + formatDotReadingHz(p.frequencyHz)
+                 + QStringLiteral("   ") + (m_showDotReadingsAsComp ? QStringLiteral("C") : QStringLiteral("G"))
+                 + QStringLiteral(" ") + formatDotReadingDb(p.gainDb);
+    if (m_parametricEq) {
+        text += QStringLiteral("   Q ") + QString::number(p.q, 'f', 2);
+    }
+
+    QFontMetrics fm(font());
+    QSize textSize(fm.horizontalAdvance(text), fm.height());
+
+    int   padX     = 8;
+    int   padY     = 5;
+    qreal radius   = 8.0;
+    float gap      = 8.0f;
+    float sideGap  = 14.0f;
+    float edgePad  = 2.0f;
+    float plotCenterX = float(plot.left()) + (float(plot.width()) * 0.5f);
+    bool  preferLeft  = dotX >= plotCenterX;
+
+    QRectF panel(0.0, 0.0,
+                 textSize.width() + (padX * 2),
+                 textSize.height() + (padY * 2));
+
+    panel.moveLeft(dotX - (panel.width() * 0.5));
+    panel.moveTop (dotY - dotRadius - gap - panel.height());
+
+    bool flipBelow = panel.top() < plot.top() + edgePad;
+    if (flipBelow) {
+        panel.moveTop(dotY + dotRadius + gap);
+        panel.moveLeft(preferLeft ? (dotX - sideGap - panel.width())
+                                  : (dotX + sideGap));
+    }
+
+    if (panel.bottom() > plot.bottom() - edgePad) {
+        panel.moveTop(dotY - dotRadius - gap - panel.height());
+        panel.moveLeft(dotX - (panel.width() * 0.5));
+    }
+
+    if (panel.left()  < plot.left() + edgePad) panel.moveLeft(plot.left() + edgePad);
+    if (panel.right() > plot.right() - edgePad) panel.moveLeft(plot.right() - edgePad - panel.width());
+    if (panel.top()   < plot.top() + edgePad)  panel.moveTop (plot.top() + edgePad);
+    if (panel.bottom() > plot.bottom() - edgePad) panel.moveTop(plot.bottom() - edgePad - panel.height());
+
+    // Inlined createRoundedRectPath (cs:2480-2503).
+    QPainterPath path;
+    {
+        qreal d = radius * 2.0;
+        if (d > panel.width())  d = panel.width();
+        if (d > panel.height()) d = panel.height();
+        if (d < 2.0) {
+            path.addRect(panel);
+        } else {
+            path.addRoundedRect(panel, d * 0.5, d * 0.5);
+        }
+    }
+
+    QBrush panelBrush(QColor(18, 18, 18, 150));
+    QPen   panelPen  (QColor(255, 220, 120, 90), 1.0);
+    QBrush textBrush (QColor(255, 235, 90));
+
+    g.setBrush(panelBrush);
+    g.setPen(Qt::NoPen);
+    g.drawPath(path);
+
+    g.setBrush(Qt::NoBrush);
+    g.setPen(panelPen);
+    g.drawPath(path);
+
+    g.setPen(QPen(textBrush.color()));
+    g.drawText(QPointF(panel.left() + padX,
+                       panel.top()  + padY + fm.ascent()),
+               text);
+}
+
+// From Thetis ucParametricEq.cs:2505-2599 [v2.10.3.13].
+void ParametricEqWidget::drawAxisScales(QPainter& g, const QRect& plot) {
+    QPen   tickPen(m_axisTickColor, 1.0);
+    QBrush textBrush(m_axisTextColor);
+
+    g.setPen(tickPen);
+
+    QFontMetrics fm(font());
+
+    double stepDb  = getYAxisStepDb();
+    double startDb = std::ceil(m_dbMin / stepDb) * stepDb;
+
+    bool drewMin = false;
+    bool drewMax = false;
+
+    auto drawDbLabel = [&](double db) {
+        float y = yFromDb(plot, db);
+        g.setPen(tickPen);
+        g.drawLine(QPointF(plot.left() - m_axisTickLength, y),
+                   QPointF(plot.left(), y));
+
+        QString s = formatDbTick(db, stepDb);
+        QSizeF  sz(fm.horizontalAdvance(s), fm.height());
+        float tx = float(plot.left()) - float(m_axisTickLength) - 4.0f - float(sz.width());
+        float ty = y - float(sz.height()) * 0.5f;
+        g.setPen(QPen(textBrush.color()));
+        g.drawText(QPointF(tx, ty + fm.ascent()), s);
+    };
+
+    for (double db = startDb; db <= m_dbMax + 0.000001; db += stepDb) {
+        if (std::fabs(db - m_dbMin) < 0.000001) drewMin = true;
+        if (std::fabs(db - m_dbMax) < 0.000001) drewMax = true;
+        drawDbLabel(db);
+    }
+
+    if (!drewMin) drawDbLabel(m_dbMin);
+    if (!drewMax) drawDbLabel(m_dbMax);
+
+    double span = m_frequencyMaxHz - m_frequencyMinHz;
+    if (span <= 0.0) span = 1.0;
+
+    float tickTop    = float(plot.bottom());
+    float tickBottom = float(plot.bottom() + m_axisTickLength);
+    float labelsY    = float(plot.bottom() + m_axisTickLength + 2);
+
+    auto drawHzLabel = [&](double f) {
+        float x = xFromFreq(plot, f);
+        g.setPen(tickPen);
+        g.drawLine(QPointF(x, tickTop), QPointF(x, tickBottom));
+
+        QString s = formatHzTick(f);
+        QSizeF  sz(fm.horizontalAdvance(s), fm.height());
+        float tx = x - float(sz.width()) * 0.5f;
+        float ty = labelsY;
+        g.setPen(QPen(textBrush.color()));
+        g.drawText(QPointF(tx, ty + fm.ascent()), s);
+    };
+
+    if (m_logScale) {
+        QVector<double> ticks = getLogFrequencyTicks(plot);
+        for (double f : ticks) drawHzLabel(f);
+    } else {
+        double stepF = chooseFrequencyStep(span);
+        double first = std::ceil(m_frequencyMinHz / stepF) * stepF;
+        for (double f = first; f <= m_frequencyMaxHz + 0.000001; f += stepF) {
+            drawHzLabel(f);
+        }
+    }
+}
+
+// From Thetis ucParametricEq.cs:2645-2651 [v2.10.3.13].
+void ParametricEqWidget::drawBorder(QPainter& g, const QRect& plot) {
+    QPen border(QColor(70, 70, 70), 1.0);
+    g.setPen(border);
+    g.setBrush(Qt::NoBrush);
+    g.drawRect(plot);
+}
+
+// From Thetis ucParametricEq.cs:2653-2692 [v2.10.3.13].
+void ParametricEqWidget::drawReadout(QPainter& g, const QRect& plot) {
+    QFontMetrics fm(font());
+    int readoutY = rect().bottom() - (fm.height() + 4);
+    int x        = plot.left();
+
+    QString s;
+
+    if (m_selectedIndex >= 0 && m_selectedIndex < m_points.size()) {
+        const EqPoint& p = m_points.at(m_selectedIndex);
+        int bandId = p.bandId;
+
+        if (m_parametricEq) {
+            s = QStringLiteral("P%1  F %2  G %3  Q %4")
+                    .arg(bandId)
+                    .arg(formatHz(p.frequencyHz))
+                    .arg(formatDb(p.gainDb))
+                    .arg(p.q, 0, 'f', 2);
+            s += QStringLiteral("     Global ") + formatDb(m_globalGainDb);
+        } else {
+            s = QStringLiteral("P%1  F %2  G %3")
+                    .arg(bandId)
+                    .arg(formatHz(p.frequencyHz))
+                    .arg(formatDb(p.gainDb));
+            s += QStringLiteral("     Global ") + formatDb(m_globalGainDb);
+        }
+    } else {
+        s = QStringLiteral("Global ") + formatDb(m_globalGainDb);
+    }
+
+    g.setPen(QPen(palette().color(foregroundRole())));
+    g.drawText(QPointF(x, readoutY + fm.ascent()), s);
+}
+
+// =================================================================
+// Bar chart timer + decay (Phase 3M-3a-ii follow-up Batch 3).
+// =================================================================
+
+// From Thetis ucParametricEq.cs:1048-1105 [v2.10.3.13] -- public DrawBarChart slot.
+void ParametricEqWidget::drawBarChartData(const QVector<double>& data) {
+    if (data.isEmpty()) {
+        m_barChartData.clear();
+        m_barChartPeakData.clear();
+        m_barChartPeakHoldUntilMs.clear();
+        updateBarChartPeakTimerState();
+        update();
+        return;
+    }
+
+    qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    applyBarChartPeakDecay(nowMs);
+
+    bool resetPeaks = (m_barChartData.size() != data.size())
+                   || (m_barChartPeakData.size() != data.size())
+                   || (m_barChartPeakHoldUntilMs.size() != data.size());
+
+    m_barChartData = data;
+
+    if (resetPeaks) {
+        m_barChartPeakData.fill(0.0, data.size());
+        m_barChartPeakHoldUntilMs.fill(0, data.size());
+    }
+
+    qint64 holdUntil = nowMs + m_barChartPeakHoldMs;
+    for (int i = 0; i < m_barChartData.size(); ++i) {
+        double v = clamp(m_barChartData.at(i), m_dbMin, m_dbMax);
+        m_barChartData[i] = v;
+        if (resetPeaks || !m_barChartPeakHoldEnabled) {
+            m_barChartPeakData[i]        = v;
+            m_barChartPeakHoldUntilMs[i] = holdUntil;
+        } else if (v >= m_barChartPeakData.at(i)) {
+            m_barChartPeakData[i]        = v;
+            m_barChartPeakHoldUntilMs[i] = holdUntil;
+        } else if (m_barChartPeakData.at(i) < v) {
+            m_barChartPeakData[i] = v;
+        }
+    }
+    m_barChartPeakLastUpdateMs = nowMs;
+    updateBarChartPeakTimerState();
+    update();
+}
+
+// From Thetis ucParametricEq.cs:2769-2815 [v2.10.3.13].
+// Decay rate: m_barChartPeakDecayDbPerSecond dB / second (Thetis default 20).
+// Each tick computes elapsed seconds since the last applied tick, decays
+// every peak that's past its hold deadline by (rate * elapsed) dB but
+// never below the current bar value (the "floor").
+void ParametricEqWidget::applyBarChartPeakDecay(qint64 nowMs) {
+    if (m_barChartData.isEmpty()
+        || m_barChartPeakData.isEmpty()
+        || m_barChartPeakHoldUntilMs.isEmpty()) {
+        m_barChartPeakLastUpdateMs = nowMs;
+        return;
+    }
+
+    if (m_barChartPeakData.size() != m_barChartData.size()
+        || m_barChartPeakHoldUntilMs.size() != m_barChartData.size()) {
+        syncBarChartPeaksToData();
+        m_barChartPeakLastUpdateMs = nowMs;
+        return;
+    }
+
+    double elapsedSeconds = double(nowMs - m_barChartPeakLastUpdateMs) / 1000.0;
+    if (elapsedSeconds < 0.0) elapsedSeconds = 0.0;
+    m_barChartPeakLastUpdateMs = nowMs;
+
+    if (!m_barChartPeakHoldEnabled) {
+        syncBarChartPeaksToData();
+        return;
+    }
+
+    if (elapsedSeconds <= 0.0) return;
+
+    double decayDb = m_barChartPeakDecayDbPerSecond * elapsedSeconds;
+
+    for (int i = 0; i < m_barChartData.size(); ++i) {
+        double floorDb = clamp(m_barChartData.at(i), m_dbMin, m_dbMax);
+
+        if (m_barChartPeakData.at(i) < floorDb) {
+            m_barChartPeakData[i] = floorDb;
+            continue;
+        }
+
+        if (nowMs <= m_barChartPeakHoldUntilMs.at(i)) continue;
+
+        double newPeak = m_barChartPeakData.at(i) - decayDb;
+        if (newPeak < floorDb) newPeak = floorDb;
+        m_barChartPeakData[i] = newPeak;
+    }
+}
+
+// From Thetis ucParametricEq.cs:2817-2843 [v2.10.3.13].
+void ParametricEqWidget::syncBarChartPeaksToData() {
+    if (m_barChartData.isEmpty()) {
+        m_barChartPeakData.clear();
+        m_barChartPeakHoldUntilMs.clear();
+        return;
+    }
+
+    if (m_barChartPeakData.size() != m_barChartData.size()) {
+        m_barChartPeakData.fill(0.0, m_barChartData.size());
+    }
+    if (m_barChartPeakHoldUntilMs.size() != m_barChartData.size()) {
+        m_barChartPeakHoldUntilMs.fill(0, m_barChartData.size());
+    }
+
+    qint64 holdUntil = QDateTime::currentMSecsSinceEpoch() + m_barChartPeakHoldMs;
+
+    for (int i = 0; i < m_barChartData.size(); ++i) {
+        m_barChartPeakData[i]        = clamp(m_barChartData.at(i), m_dbMin, m_dbMax);
+        m_barChartPeakHoldUntilMs[i] = holdUntil;
+    }
+}
+
+// From Thetis ucParametricEq.cs:2845-2862 [v2.10.3.13].
+void ParametricEqWidget::updateBarChartPeakTimerState() {
+    bool shouldRun = !m_barChartData.isEmpty() && m_barChartPeakHoldEnabled;
+    if (shouldRun) {
+        if (!m_barChartPeakTimer->isActive()) {
+            m_barChartPeakLastUpdateMs = QDateTime::currentMSecsSinceEpoch();
+            m_barChartPeakTimer->start();
+        }
+    } else {
+        if (m_barChartPeakTimer->isActive()) {
+            m_barChartPeakTimer->stop();
+        }
+    }
 }
 
 } // namespace NereusSDR

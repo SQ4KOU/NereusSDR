@@ -70,13 +70,17 @@ mw0lge@grange-lane.co.uk
 #include <QVector>
 #include <QWidget>
 
+class QPaintEvent;
+class QPainter;
+
 // Forward declarations for tester classes that need access to private
 // axis/ordering helpers via `friend`. Each tester lives in its own
 // translation unit (tst_parametric_eq_widget_*.cpp) and exposes the
 // protected `using ParametricEqWidget::xFromFreq` etc. so the test
 // `QObject` can call them.  Future batches add their own friends in
 // the same block — keep them grouped.
-class ParametricEqAxisTester;          // Batch 2 (this batch)
+class ParametricEqAxisTester;          // Batch 2
+class ParametricEqPaintTester;         // Batch 3 (this batch)
 class ParametricEqInteractionTester;   // Batch 4
 class ParametricEqJsonTester;          // Batch 5
 
@@ -85,6 +89,7 @@ namespace NereusSDR {
 class ParametricEqWidget : public QWidget {
     Q_OBJECT
     friend class ::ParametricEqAxisTester;        // for tst_parametric_eq_widget_axis
+    friend class ::ParametricEqPaintTester;       // for tst_parametric_eq_widget_paint
     friend class ::ParametricEqInteractionTester; // Task 4
     friend class ::ParametricEqJsonTester;        // Task 5
 public:
@@ -120,6 +125,45 @@ public:
     // Test-friendly accessors for the palette (still private data; just exposed read-only).
     static int    defaultBandPaletteSize();
     static QColor defaultBandPaletteAt(int index);
+
+public slots:
+    // From Thetis ucParametricEq.cs:1048-1105 [v2.10.3.13] -- public DrawBarChart slot.
+    void drawBarChartData(const QVector<double>& data);
+
+protected:
+    // Paint orchestration -- From Thetis ucParametricEq.cs:1575-1609 [v2.10.3.13].
+    void paintEvent(QPaintEvent* event) override;
+
+private:
+    // Draw helpers -- From Thetis ucParametricEq.cs:1575-2748 [v2.10.3.13].
+    void drawGrid           (QPainter& g, const QRect& plot);
+    void drawBarChart       (QPainter& g, const QRect& plot);
+    void drawBandShading    (QPainter& g, const QRect& plot);
+    void drawCurve          (QPainter& g, const QRect& plot);
+    void drawGlobalGainHandle(QPainter& g, const QRect& plot);
+    void drawPoints         (QPainter& g, const QRect& plot);
+    void drawDotReading     (QPainter& g, const QRect& plot, const EqPoint& p,
+                             float dotX, float dotY, float dotRadius);
+    void drawAxisScales     (QPainter& g, const QRect& plot);
+    void drawBorder         (QPainter& g, const QRect& plot);
+    void drawReadout        (QPainter& g, const QRect& plot);
+
+    // Math: response curve at a given frequency.
+    double responseDbAtFrequency(double frequencyHz) const;
+
+    // Bar chart helpers -- From Thetis ucParametricEq.cs:2751-2862 [v2.10.3.13].
+    void   applyBarChartPeakDecay (qint64 nowMs);
+    void   syncBarChartPeaksToData();
+    void   updateBarChartPeakTimerState();
+    QColor getPointDisplayColor(int index) const;
+
+    // Tick / readout formatting.
+    QString formatDbTick(double db, double stepDb) const;
+    QString formatHzTick(double hz)               const;
+    QString formatDotReadingHz(double hz)         const;
+    QString formatDotReadingDb(double db)         const;
+    QString formatHz(double hz)                   const;
+    QString formatDb(double db)                   const;
 
 private:
     // From Thetis ucParametricEq.cs:254-274 [v2.10.3.13] -- _default_band_palette.

@@ -2521,3 +2521,6 @@ nereus_add_test(tst_parametric_eq_widget_skeleton)
 # -- Phase 3M-3a-ii follow-up Batch 2: ParametricEqWidget axis math + ordering --
 nereus_add_test(tst_parametric_eq_widget_axis)
 
+# -- Phase 3M-3a-ii follow-up Batch 3: ParametricEqWidget paintEvent + draw helpers --
+nereus_add_test(tst_parametric_eq_widget_paint)
+
