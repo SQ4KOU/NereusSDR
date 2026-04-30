@@ -61,6 +61,12 @@ warren@wpratt.com
 //                 Stage::OsCtrl setStageRunning regression.  J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-04-30 — Phase 3M-3a-ii Batch 1.5 — bundled cfcomp upgraded to
+//                 Thetis v2.10.3.13.  Qg/Qe assertions reworded from
+//                 "validated and dropped" to "live pass-through" smoke;
+//                 empty-Qg/Qe → nullptr coverage retained; length-mismatch
+//                 coverage retained.  J.J. Boyd (KG4VCF), with AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original test file. All Thetis source cites are
@@ -128,33 +134,63 @@ private slots:
 
     // ── B-3.3: setTxCfcProfile ──────────────────────────────────────────────
     //
-    // Wraps SetTXACFCOMPprofile.  Validates length consistency and (when the
-    // bundled WDSP catches up) forwards Qg/Qe arrays.  Today Qg/Qe are
-    // length-validated and dropped at the WDSP boundary.
-    // From Thetis wdsp/cfcomp.c:655-698 [v2.10.3.13] (full 7-arg variant).
-    // From third_party/wdsp/src/cfcomp.c:437-460 (TAPR v1.29 — bundled 5-arg).
+    // Wraps SetTXACFCOMPprofile.  Validates length consistency on F/G/E (and
+    // any non-empty Qg/Qe), then forwards F/G/E plus Qg/Qe (or nullptr for
+    // empty-vector skirt) into WDSP.
+    // From Thetis wdsp/cfcomp.c:656-698 [v2.10.3.13] — full 7-arg signature
+    // (bundled at third_party/wdsp/src/cfcomp.c since 3M-3a-ii Batch 1.5).
 
     void setTxCfcProfile_threeBand_doesNotCrash()
     {
         TxChannel ch(kTxChannelId);
-        // Three-band profile with empty Qg/Qe — exercises the F/G/E-only path.
+        // Three-band profile with empty Qg/Qe — exercises the
+        // empty-vector → nullptr forwarding path (linear-interpolation
+        // skirt branch in cfcomp.c:171-183).
         std::vector<double> F = {200.0, 1000.0, 3000.0};
         std::vector<double> G = {0.0,   3.0,    0.0};
         std::vector<double> E = {6.0,   6.0,    6.0};
-        std::vector<double> Qg;  // empty — Thetis-style "not provided"
-        std::vector<double> Qe;  // empty — Thetis-style "not provided"
+        std::vector<double> Qg;  // empty — forwards as nullptr
+        std::vector<double> Qe;  // empty — forwards as nullptr
         ch.setTxCfcProfile(F, G, E, Qg, Qe);
     }
 
     void setTxCfcProfile_withQgQe_doesNotCrash()
     {
         TxChannel ch(kTxChannelId);
-        // Same profile with explicit Qg/Qe present (validated for length;
-        // dropped at WDSP boundary on bundled WDSP).
+        // Same profile with explicit Qg/Qe present — exercises the live
+        // pass-through path (Gaussian-tail Q-shaped interpolation branch
+        // in cfcomp.c:184-296).
         std::vector<double> F  = {200.0, 1000.0, 3000.0};
         std::vector<double> G  = {0.0,   3.0,    0.0};
         std::vector<double> E  = {6.0,   6.0,    6.0};
         std::vector<double> Qg = {1.0,   1.0,    1.0};
+        std::vector<double> Qe = {1.0,   1.0,    1.0};
+        ch.setTxCfcProfile(F, G, E, Qg, Qe);
+    }
+
+    void setTxCfcProfile_withQgOnly_doesNotCrash()
+    {
+        TxChannel ch(kTxChannelId);
+        // Qg present, Qe empty — exercises the asymmetric skirt path
+        // (Q-shaped gain skirt + linear-interpolation ceiling skirt).
+        // Confirms either Qg or Qe may be NULL independently.
+        std::vector<double> F  = {200.0, 1000.0, 3000.0};
+        std::vector<double> G  = {0.0,   3.0,    0.0};
+        std::vector<double> E  = {6.0,   6.0,    6.0};
+        std::vector<double> Qg = {1.0,   1.0,    1.0};
+        std::vector<double> Qe;  // empty — forwards as nullptr
+        ch.setTxCfcProfile(F, G, E, Qg, Qe);
+    }
+
+    void setTxCfcProfile_withQeOnly_doesNotCrash()
+    {
+        TxChannel ch(kTxChannelId);
+        // Qe present, Qg empty — exercises the other asymmetric skirt path
+        // (linear-interpolation gain skirt + Q-shaped ceiling skirt).
+        std::vector<double> F  = {200.0, 1000.0, 3000.0};
+        std::vector<double> G  = {0.0,   3.0,    0.0};
+        std::vector<double> E  = {6.0,   6.0,    6.0};
+        std::vector<double> Qg;  // empty — forwards as nullptr
         std::vector<double> Qe = {1.0,   1.0,    1.0};
         ch.setTxCfcProfile(F, G, E, Qg, Qe);
     }

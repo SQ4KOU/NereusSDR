@@ -196,6 +196,13 @@ warren@wpratt.com
 //                 the 3M-3a-i style (direct WDSP call, version-stamped
 //                 cite).  AI-assisted transformation via Anthropic Claude
 //                 Code.
+//   2026-04-30 — Phase 3M-3a-ii Batch 1.5 — bundled cfcomp.{c,h} upgraded
+//                 from TAPR v1.29 to Thetis v2.10.3.13 (partial WDSP
+//                 upstream-sync).  setTxCfcProfile now forwards Qg/Qe
+//                 (or nullptr for empty vectors per cfcomp.c:669-682
+//                 NULL-skirt semantics) instead of dropping them at the
+//                 linker.  J.J. Boyd (KG4VCF), with AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -961,7 +968,7 @@ public:
 
     /// TX EQ — full custom-frequency profile path.
     ///
-    /// Wraps SetTXAEQProfile(channel, 10, F[11], G[11], NULL).  Used when
+    /// Wraps SetTXAEQProfile(channel, 10, F[11], G[11]).  Used when
     /// the user moves the per-band frequency sliders so the bands no
     /// longer sit at the WDSP-fixed centers used by setTxEqGraph10.
     ///
@@ -1138,24 +1145,28 @@ public:
 
     /// CFC compression profile arrays.  Wraps SetTXACFCOMPprofile.
     ///
-    /// All vectors must have the same length, `nfreqs`.  The wrapper validates
-    /// length consistency and emits a qCWarning + early-return on mismatch.
-    /// Qg / Qe are optional in Thetis v2.10.3.13 — pass empty vectors to
-    /// signal "not provided".  Empty Qg/Qe forward as nullptr to WDSP, which
-    /// matches cfcomp.c:670-682 [v2.10.3.13] semantics.
+    /// F / G / E must all have the same length, `nfreqs`.  Qg and Qe are
+    /// optional per-band Q parameters:
+    ///   - Qg controls the Q (sharpness) of the gain skirt around each F[i].
+    ///   - Qe controls the Q (sharpness) of the ceiling skirt around each F[i].
+    /// Pass an empty vector for either Qg or Qe to opt out of per-band Q on
+    /// that skirt — the wrapper forwards `nullptr` for the empty case, which
+    /// matches the Thetis WDSP NULL-skirt semantics (cfcomp.c:669-682
+    /// [v2.10.3.13]: when Qg/Qe is NULL, calc_comp falls back to linear
+    /// interpolation between bands instead of the Gaussian-tail Q-shaped
+    /// path).  Either Qg or Qe may be empty independently.
     ///
-    /// IMPORTANT — bundled WDSP arity divergence:
-    ///   The third_party/wdsp shipped with NereusSDR (TAPR v1.29) only exports
-    ///   the 5-arg variant `void SetTXACFCOMPprofile(int, int, double*,
-    ///   double*, double*)` (cfcomp.c:438 — no Qg/Qe).  This wrapper accepts
-    ///   the Thetis v2.10.3.13 7-arg surface (so callers and tests target the
-    ///   forward-compatible API), but at the linker boundary today only F, G
-    ///   and E are forwarded.  Qg / Qe are validated for length, then dropped.
-    ///   When third_party/wdsp is upgraded to v2.10.3.13 the wrapper will
-    ///   forward all five vectors.
+    /// The wrapper validates length consistency on F/G/E (and on any
+    /// non-empty Qg/Qe vector) and emits a qCWarning + early-return on
+    /// mismatch — no partial application.
     ///
-    /// From Thetis wdsp/cfcomp.c:655-698 [v2.10.3.13] — full 7-arg signature.
-    /// From third_party/wdsp/src/cfcomp.c:437-460 (TAPR v1.29) — bundled 5-arg signature.
+    /// As of Phase 3M-3a-ii Batch 1.5 (2026-04-30) the bundled
+    /// `third_party/wdsp/src/cfcomp.c` is the Thetis v2.10.3.13 version, so
+    /// Qg/Qe forward straight through to WDSP — no linker-boundary drop.
+    ///
+    /// From Thetis wdsp/cfcomp.c:656 [v2.10.3.13] — 7-arg with per-band Qg
+    /// (gain skirt Q) and Qe (ceiling skirt Q).  Either Qg or Qe may be
+    /// NULL to opt out per-skirt.
     void setTxCfcProfile(const std::vector<double>& F,
                          const std::vector<double>& G,
                          const std::vector<double>& E,

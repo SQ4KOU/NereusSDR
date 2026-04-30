@@ -1827,10 +1827,11 @@ void TxChannel::setTxEqProfile(const std::vector<double>& freqs10,
 
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
-    // From Thetis wdsp/eq.c:779-804 [v2.10.3.13] — SetTXAEQProfile(channel, nfreqs, F[], G[], Q).
+    // From Thetis wdsp/eq.c:779-804 [v2.10.3.13] — SetTXAEQProfile(channel, nfreqs, F[], G[]).
     // F is 1-indexed inside WDSP (F[0] is the unused pad slot), G is 0-indexed
-    // (G[0] = preamp).  Pass Q = NULL for graphic-EQ-style usage.  Both buffers
-    // must be at least nfreqs+1 entries; we build them fresh on the stack.
+    // (G[0] = preamp).  Both buffers must be at least nfreqs+1 entries; we
+    // build them fresh on the stack.  (Q vector is exclusive to the parametric
+    // SetTXAGrphEQProfile variant — graphic EQ doesn't take a Q.)
     //
     // Mirrors the create_eqp call at wdsp/TXA.c:111-127 [v2.10.3.13]:
     //   double default_F[11] = {0.0,  32.0, ...};  // F[0] = 0.0 pad
@@ -1847,7 +1848,7 @@ void TxChannel::setTxEqProfile(const std::vector<double>& freqs10,
     for (int i = 0; i < kNfreqs + 1; ++i) {
         G[i] = gains11[static_cast<std::size_t>(i)];
     }
-    SetTXAEQProfile(m_channelId, kNfreqs, F, G, nullptr);
+    SetTXAEQProfile(m_channelId, kNfreqs, F, G);
 #endif
 }
 
@@ -2054,27 +2055,20 @@ void TxChannel::setTxCfcProfile(const std::vector<double>& F,
 
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
-    // From Thetis wdsp/cfcomp.c:655-698 [v2.10.3.13] — SetTXACFCOMPprofile.
+    // From Thetis wdsp/cfcomp.c:656-698 [v2.10.3.13] — SetTXACFCOMPprofile.
     //
-    // Linker boundary divergence (see header doc for full rationale):
-    // bundled third_party/wdsp/src/cfcomp.c:437-460 (TAPR v1.29) only exports
-    // the 5-arg variant.  When third_party/wdsp is upgraded to v2.10.3.13
-    // the call site below grows to 7 args:
-    //
-    //   double* qg = Qg.empty() ? nullptr : const_cast<double*>(Qg.data());
-    //   double* qe = Qe.empty() ? nullptr : const_cast<double*>(Qe.data());
-    //   SetTXACFCOMPprofile(m_channelId, static_cast<int>(nfreqs),
-    //                       const_cast<double*>(F.data()),
-    //                       const_cast<double*>(G.data()),
-    //                       const_cast<double*>(E.data()), qg, qe);
-    //
-    // For now Qg/Qe arity is validated above and dropped at the WDSP boundary.
-    Q_UNUSED(Qg);
-    Q_UNUSED(Qe);
+    // As of Phase 3M-3a-ii Batch 1.5 the bundled third_party/wdsp/src/cfcomp.c
+    // is the Thetis v2.10.3.13 version, so the 7-arg signature is exported
+    // and Qg/Qe forward through.  Empty vectors map to nullptr per the
+    // WDSP NULL-skirt semantics (cfcomp.c:669-682 [v2.10.3.13]: WDSP keeps
+    // a->Qg / a->Qe unallocated and calc_comp falls back to the linear
+    // interpolation path for that skirt).
+    double* qg = Qg.empty() ? nullptr : const_cast<double*>(Qg.data());
+    double* qe = Qe.empty() ? nullptr : const_cast<double*>(Qe.data());
     SetTXACFCOMPprofile(m_channelId, static_cast<int>(nfreqs),
                         const_cast<double*>(F.data()),
                         const_cast<double*>(G.data()),
-                        const_cast<double*>(E.data()));
+                        const_cast<double*>(E.data()), qg, qe);
 #else
     Q_UNUSED(Qg);
     Q_UNUSED(Qe);

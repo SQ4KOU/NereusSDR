@@ -60,6 +60,15 @@
 //                 (TAPR v1.29) — the 7-arg variant (Qg/Qe) becomes
 //                 available when third_party/wdsp is upgraded.
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-30 — SetTXACFCOMPprofile widened from 5-arg to 7-arg
+//                 (per-band Qg / Qe pointers added) by J.J. Boyd (KG4VCF)
+//                 during 3M-3a-ii Batch 1.5 — partial WDSP upstream-sync
+//                 of cfcomp.{c,h} from TAPR v1.29 to Thetis v2.10.3.13
+//                 (bundled at third_party/wdsp/src/cfcomp.{c,h}).  The
+//                 NereusSDR C++ wrapper now forwards Qg/Qe (or nullptr per
+//                 the cfcomp.c:669-682 NULL-skirt semantics) instead of
+//                 dropping them at the linker.  AI-assisted transformation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -724,8 +733,9 @@ void SetTXAEQMP(int channel, int mp);
 // From Thetis wdsp/eq.c:779-804 [v2.10.3.13] — SetTXAEQProfile.
 //   F[0..nfreqs] freqs Hz (F[0] unused / preamp pad)
 //   G[0..nfreqs] gains dB (G[0] = preamp)
-//   Q == NULL for graphic EQ (Thetis 10-band path).
-void SetTXAEQProfile(int channel, int nfreqs, double* F, double* G, double* Q);
+// (Graphic-EQ form — no Q vector. The parametric variant
+//  SetTXAGrphEQ10 / SetTXAGrphEQProfile takes Q separately.)
+void SetTXAEQProfile(int channel, int nfreqs, double* F, double* G);
 // From Thetis wdsp/eq.c:807-816 [v2.10.3.13] — SetTXAEQCtfmode.
 void SetTXAEQCtfmode(int channel, int mode);
 // From Thetis wdsp/eq.c:819-828 [v2.10.3.13] — SetTXAEQWintype.
@@ -756,22 +766,31 @@ void SetTXACFCOMPRun(int channel, int run);
 // From Thetis wdsp/cfcomp.c:643-653 [v2.10.3.13].
 void SetTXACFCOMPPosition(int channel, int pos);
 
-// CFC profile arrays.  All five vectors must have nfreqs entries:
-//   F  - centre frequencies (Hz)
-//   G  - gain at each F (dB)
-//   E  - max-gain ceiling at each F (dB)
-//   Qg - Q for the gain skirt (NULL allowed)  [Thetis v2.10.3.13 only]
-//   Qe - Q for the ceiling skirt (NULL allowed) [Thetis v2.10.3.13 only]
-// Note: the third_party/wdsp/src bundled with NereusSDR (TAPR v1.29) ships an
-// older 5-arg signature — `void SetTXACFCOMPprofile(int, int, double*, double*,
-// double*)` (cfcomp.c:438 — no Qg/Qe).  TxChannel::setTxCfcProfile accepts the
-// Thetis v2.10.3.13 superset surface but only forwards F/G/E to the linker
-// today; Qg/Qe are validated and dropped.  When third_party/wdsp is upgraded
-// to v2.10.3.13 the wrapper passes through.
+// CFC profile arrays.  Five required vectors plus two optional Q skirts:
+//   F  - centre frequencies (Hz)               [length nfreqs]
+//   G  - gain at each F (dB)                   [length nfreqs]
+//   E  - max-gain ceiling at each F (dB)       [length nfreqs]
+//   Qg - Q for the gain skirt    (length nfreqs, or NULL to disable)
+//   Qe - Q for the ceiling skirt (length nfreqs, or NULL to disable)
 //
-// From Thetis wdsp/cfcomp.c:655-698 [v2.10.3.13] — full 7-arg signature.
-// From third_party/wdsp/src/cfcomp.c:437-460 (TAPR v1.29) — bundled 5-arg signature.
-void SetTXACFCOMPprofile(int channel, int nfreqs, double* F, double* G, double* E);
+// NULL-Qg / NULL-Qe semantics — from cfcomp.c:669-682 [v2.10.3.13]: when
+// either pointer is NULL, WDSP does not allocate the corresponding `a->Qg`
+// or `a->Qe` array and `calc_comp` falls back to the linear interpolation
+// path for that skirt (cfcomp.c:171-183).  When both are non-NULL, WDSP
+// runs the Gaussian-tail Q-shaped interpolation (cfcomp.c:184-296).
+// Either Qg or Qe may be NULL independently — they don't have to agree.
+//
+// As of Phase 3M-3a-ii Batch 1.5 (2026-04-30) the bundled
+// `third_party/wdsp/src/cfcomp.{c,h}` is the Thetis v2.10.3.13 version, so
+// this declaration matches the bundled symbol exactly — TxChannel::
+// setTxCfcProfile forwards Qg/Qe through to WDSP without the linker drop
+// that the TAPR v1.29 vintage required.
+//
+// From Thetis wdsp/cfcomp.c:656 [v2.10.3.13] — 7-arg with per-band Qg
+// (gain skirt Q) and Qe (ceiling skirt Q).  Either Qg or Qe may be NULL
+// to opt out per-skirt.
+void SetTXACFCOMPprofile(int channel, int nfreqs, double* F, double* G, double* E,
+                         double* Qg, double* Qe);
 
 // CFC pre-compression in dB.  WDSP stores pow(10, 0.05 * dB) internally and
 // pre-applies the linear gain to cfc_gain[].
