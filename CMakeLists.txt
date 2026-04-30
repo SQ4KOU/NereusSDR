@@ -466,6 +466,8 @@ set(GUI_SOURCES
     src/gui/widgets/MasterOutputWidget.cpp
     src/gui/widgets/VfoStyles.h
     src/gui/widgets/VfoWidget.cpp
+    src/gui/widgets/StatusBadge.cpp
+    src/gui/widgets/StatusBadge.h
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainer.cpp
     src/gui/containers/ContainerManager.cpp
