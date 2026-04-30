@@ -1941,9 +1941,17 @@ QString ParametricEqWidget::saveToJson() const {
 bool ParametricEqWidget::loadFromJson(const QString& json) { /* port */ }
 ```
 
-- [ ] **Step 4: Add PROVENANCE row**
+- [ ] **Step 4: Verify PROVENANCE rows are already present (landed in Task 1 — see plan correction note below)**
 
-In `docs/attribution/THETIS-PROVENANCE.md`, append:
+`docs/attribution/THETIS-PROVENANCE.md` already carries the two rows for `ParametricEqWidget.{h,cpp}` from Task 1's commit (`ca4c357`). The original plan scheduled the row addition for this Task, but Task 1's subagent correctly pulled it forward because `check-new-ports.py` runs in full-tree mode in the pre-commit hook chain — leaving the file unregistered would have blocked the Task 1 commit, and `--no-verify` is forbidden. Verify the rows are present:
+
+```bash
+grep -n "ParametricEqWidget" docs/attribution/THETIS-PROVENANCE.md
+# Expected: two rows, one for the .h and one for the .cpp, both citing
+# ucParametricEq.cs:1-3396 [v2.10.3.13].
+```
+
+If the rows are missing for any reason, add them per the original plan format:
 
 ```
 | src/gui/widgets/ParametricEqWidget.h | Project Files/Source/Console/ucParametricEq.cs | 1-3396 [v2.10.3.13] | port | thetis-samphire | UserControl port — header verbatim, EqPoint/EqJsonState classes, 18-color palette, axis math, paint, mouse/wheel, JSON marshal — Phase 3M-3a-ii follow-up |
