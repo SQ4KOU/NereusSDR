@@ -306,7 +306,9 @@ warren@wpratt.com
 #include <QCloseEvent>
 #include <QResizeEvent>
 #include <QEvent>
+#include <QHelpEvent>
 #include <QMouseEvent>
+#include <QToolTip>
 #include <QMenuBar>
 #include <QMenu>
 #include <QAction>
@@ -470,6 +472,11 @@ MainWindow::MainWindow(QWidget* parent)
         });
         connect(seg, &ConnectionSegment::contextMenuRequested,
                 this, &MainWindow::showSegmentContextMenu);
+
+        // 7. D.3: Hover tooltip — event filter delivers QHelpEvent.
+        seg->setToolTip(QString());   // suppress Qt's own tooltip; we intercept
+        seg->setAttribute(Qt::WA_AlwaysShowToolTips, false);
+        seg->installEventFilter(this);
 
         // Seed with current state (Disconnected at launch).
         seg->setState(m_radioModel->connectionState());
@@ -3368,6 +3375,19 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
+    // Phase 3Q Sub-PR-4 D.3: TitleBar ConnectionSegment hover tooltip.
+    // The segment has installEventFilter(this) in the D.2 wiring block.
+    // We intercept QHelpEvent (ToolTip) and delegate to RadioModel for the
+    // formatted multi-line string so the segment stays a thin paint layer.
+    if (m_titleBar && watched == m_titleBar->connectionSegment()
+     && event->type() == QEvent::ToolTip) {
+        auto* helpEvent = static_cast<QHelpEvent*>(event);
+        QToolTip::showText(helpEvent->globalPos(),
+                           m_radioModel->buildConnectionTooltip(),
+                           m_titleBar->connectionSegment());
+        return true;
+    }
+
     // Handle ☰ panel toggle click — label has property "isPanelToggle"
     if (event->type() == QEvent::MouseButtonPress) {
         auto* label = qobject_cast<QLabel*>(watched);

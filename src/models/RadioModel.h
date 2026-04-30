@@ -342,6 +342,13 @@ public:
     int     connectionSampleRateHz() const;   // 0 if disconnected
     QString connectionSampleRateText() const; // "192 kHz" / "—"
 
+    // Phase 3Q Sub-PR-4 D.3: Hover tooltip for the TitleBar ConnectionSegment.
+    // Returns a multi-line string with radio name, uptime, IP, MAC, protocol,
+    // firmware, sample rate, and live throughput. Disconnected state returns a
+    // short invitation to connect. Owned by RadioModel so the segment stays a
+    // thin presentation layer.
+    QString buildConnectionTooltip() const;
+
     // Phase 3Q-1: single source of truth for the connection lifecycle state.
     // UI components (TitleBar, ConnectionPanel, status bar, spectrum overlay)
     // read this instead of deriving state from RadioConnection directly.

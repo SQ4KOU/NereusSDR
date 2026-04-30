@@ -4037,4 +4037,31 @@ QString RadioModel::connectionSampleRateText() const
     return QString::number(rateHz) + QStringLiteral(" Hz");
 }
 
+// Phase 3Q Sub-PR-4 D.3 — Segment hover tooltip.
+// Jitter / packet-loss / audio-backend rows omitted until those metrics
+// have real sources — no NYI placeholders per the "no NYI" rule.
+QString RadioModel::buildConnectionTooltip() const
+{
+    if (!isConnected()) {
+        return tr("Disconnected. Click to connect.");
+    }
+
+    const double txMbps = m_connection ? m_connection->txByteRate(1000) : 0.0;
+    const double rxMbps = m_connection ? m_connection->rxByteRate(1000) : 0.0;
+
+    QString lines;
+    lines += QStringLiteral("%1 — Connected %2\n")
+                 .arg(connectedRadioName(), connectionUptimeText());
+    lines += QStringLiteral("  %1 · %2\n")
+                 .arg(connectionIpText(), connectionMacText());
+    lines += QStringLiteral("  Protocol %1 · Firmware %2 · %3\n")
+                 .arg(connectionProtocolText(),
+                      connectionFirmwareText(),
+                      connectionSampleRateText());
+    lines += QStringLiteral("  Throughput: \xe2\x96\xb2 %1 Mbps · \xe2\x96\xbc %2 Mbps")
+                 .arg(QString::number(txMbps, 'f', 1),
+                      QString::number(rxMbps, 'f', 1));
+    return lines;
+}
+
 } // namespace NereusSDR
