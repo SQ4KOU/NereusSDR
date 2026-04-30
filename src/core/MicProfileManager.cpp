@@ -1068,6 +1068,45 @@ QHash<QString, QVariant> MicProfileManager::captureLiveValues(const TransmitMode
     out.insert(QStringLiteral("Lev_Decay"),   QString::number(tx->txLevelerDecay()));
     out.insert(QStringLiteral("ALC_MaximumGain"), QString::number(tx->txAlcMaxGain()));
     out.insert(QStringLiteral("ALC_Decay"),       QString::number(tx->txAlcDecay()));
+
+    // ── 3M-3a-ii G — CFC + CPDR + CESSB + PhRot live capture (41 keys) ─────────
+    // Bundle keys + defaults match Batch 4 (commit 2b3219e); see
+    // src/core/MicProfileManager.cpp:135-188 for the kKeys list and
+    // defaultProfileValues() for baseline values.  TM getter/setter names
+    // from Batch 2 (commit 12c1b01); see src/models/TransmitModel.h.
+    // Phase Rotator (4)
+    out.insert(QStringLiteral("CFCPhaseRotatorEnabled"),
+               tx->phaseRotatorEnabled() ? QStringLiteral("True") : QStringLiteral("False"));
+    out.insert(QStringLiteral("CFCPhaseReverseEnabled"),
+               tx->phaseReverseEnabled() ? QStringLiteral("True") : QStringLiteral("False"));
+    out.insert(QStringLiteral("CFCPhaseRotatorFreq"),
+               QString::number(tx->phaseRotatorFreqHz()));
+    out.insert(QStringLiteral("CFCPhaseRotatorStages"),
+               QString::number(tx->phaseRotatorStages()));
+    // CFC scalars (4)
+    out.insert(QStringLiteral("CFCEnabled"),
+               tx->cfcEnabled() ? QStringLiteral("True") : QStringLiteral("False"));
+    out.insert(QStringLiteral("CFCPostEqEnabled"),
+               tx->cfcPostEqEnabled() ? QStringLiteral("True") : QStringLiteral("False"));
+    out.insert(QStringLiteral("CFCPreComp"),    QString::number(tx->cfcPrecompDb()));
+    out.insert(QStringLiteral("CFCPostEqGain"), QString::number(tx->cfcPostEqGainDb()));
+    // CFC profile arrays (30) — bundle keys are 0-indexed (CFC*0..9) per
+    // Thetis column naming; see brief table.
+    for (int i = 0; i < 10; ++i) {
+        out.insert(QStringLiteral("CFCEqFreq%1").arg(i),
+                   QString::number(tx->cfcEqFreq(i)));
+        out.insert(QStringLiteral("CFCPreComp%1").arg(i),
+                   QString::number(tx->cfcCompression(i)));
+        out.insert(QStringLiteral("CFCPostEqGain%1").arg(i),
+                   QString::number(tx->cfcPostEqBandGain(i)));
+    }
+    // CFC blob (1) — opaque QString fits QVariant directly.
+    out.insert(QStringLiteral("CFCParaEQData"), tx->cfcParaEqData());
+    // CPDR (1) — cpdrOn is global console state, NOT bundled.
+    out.insert(QStringLiteral("CompanderLevel"), QString::number(tx->cpdrLevelDb()));
+    // CESSB (1)
+    out.insert(QStringLiteral("CESSB_On"),
+               tx->cessbOn() ? QStringLiteral("True") : QStringLiteral("False"));
     return out;
 }
 
@@ -1135,6 +1174,50 @@ void MicProfileManager::applyValuesToModel(const QHash<QString, QVariant>& value
     tx->setTxLevelerDecay(take(QStringLiteral("Lev_Decay"), QStringLiteral("100")).toInt());
     tx->setTxAlcMaxGain(take(QStringLiteral("ALC_MaximumGain"), QStringLiteral("3")).toInt());
     tx->setTxAlcDecay(take(QStringLiteral("ALC_Decay"), QStringLiteral("10")).toInt());
+
+    // ── 3M-3a-ii G — CFC + CPDR + CESSB + PhRot apply-to-model (41 keys) ─────
+    // Bundle keys + defaults match Batch 4 (commit 2b3219e); see
+    // src/core/MicProfileManager.cpp:135-188 for the kKeys list and
+    // defaultProfileValues() for baseline values.  TM getter/setter names
+    // from Batch 2 (commit 12c1b01); see src/models/TransmitModel.h.
+    // Phase Rotator (4) — defaults from database.cs:4726-4730 [v2.10.3.13].
+    tx->setPhaseRotatorEnabled(take(QStringLiteral("CFCPhaseRotatorEnabled"),
+                                     QStringLiteral("False")) == QLatin1String("True"));
+    tx->setPhaseReverseEnabled(take(QStringLiteral("CFCPhaseReverseEnabled"),
+                                     QStringLiteral("False")) == QLatin1String("True"));
+    tx->setPhaseRotatorFreqHz(take(QStringLiteral("CFCPhaseRotatorFreq"),
+                                    QStringLiteral("338")).toInt());
+    tx->setPhaseRotatorStages(take(QStringLiteral("CFCPhaseRotatorStages"),
+                                    QStringLiteral("8")).toInt());
+    // CFC scalars (4) — defaults from database.cs:4724-4733 [v2.10.3.13].
+    tx->setCfcEnabled(take(QStringLiteral("CFCEnabled"),
+                            QStringLiteral("False")) == QLatin1String("True"));
+    tx->setCfcPostEqEnabled(take(QStringLiteral("CFCPostEqEnabled"),
+                                  QStringLiteral("False")) == QLatin1String("True"));
+    tx->setCfcPrecompDb(take(QStringLiteral("CFCPreComp"),    QStringLiteral("0")).toInt());
+    tx->setCfcPostEqGainDb(take(QStringLiteral("CFCPostEqGain"), QStringLiteral("0")).toInt());
+    // CFC profile arrays (30) — defaults from database.cs:4735-4766 [v2.10.3.13].
+    //   CFCEqFreq{0..9}    = {0, 125, 250, 500, 1000, 2000, 3000, 4000, 5000, 10000}
+    //   CFCPreComp{0..9}   = 5 (per-band G[])
+    //   CFCPostEqGain{0..9} = 0 (per-band E[])
+    static constexpr int kDefaultCfcFreq[10] = {0, 125, 250, 500, 1000, 2000, 3000, 4000, 5000, 10000};
+    static constexpr int kDefaultCfcComp[10] = {5, 5, 5, 5, 5, 5, 5, 5, 5, 5};
+    static constexpr int kDefaultCfcPostEq[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    for (int i = 0; i < 10; ++i) {
+        tx->setCfcEqFreq(i, take(QStringLiteral("CFCEqFreq%1").arg(i),
+                                  QString::number(kDefaultCfcFreq[i])).toInt());
+        tx->setCfcCompression(i, take(QStringLiteral("CFCPreComp%1").arg(i),
+                                       QString::number(kDefaultCfcComp[i])).toInt());
+        tx->setCfcPostEqBandGain(i, take(QStringLiteral("CFCPostEqGain%1").arg(i),
+                                          QString::number(kDefaultCfcPostEq[i])).toInt());
+    }
+    // CFC blob (1) — opaque QString; empty default per database.cs:4768.
+    tx->setCfcParaEqData(take(QStringLiteral("CFCParaEQData"), QString()));
+    // CPDR (1) — cpdrOn is global console state, NOT applied here.
+    tx->setCpdrLevelDb(take(QStringLiteral("CompanderLevel"), QStringLiteral("2")).toInt());
+    // CESSB (1)
+    tx->setCessbOn(take(QStringLiteral("CESSB_On"), QStringLiteral("False"))
+                        == QLatin1String("True"));
 }
 
 } // namespace NereusSDR

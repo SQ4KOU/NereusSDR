@@ -332,6 +332,17 @@ nereus_add_test(tst_mic_profile_manager)
 # sanity.
 nereus_add_test(tst_mic_profile_manager_cfc_round_trip)
 
+# ── Phase 3M-3a-ii Batch 4.5: MicProfileManager CFC/CPDR/CESSB/PhRot live path ─
+# Verifies the live capture/apply path between TransmitModel and the
+# MicProfileManager bundle for the 41 new keys, closing the gap between
+# Batch 4 (bundle keys + factory rows) and the TxCfcDialog [Save] /
+# profile-combo activation flow.  Covers: capture round-trip (TM property
+# → AppSettings bundle key), apply round-trip (bundle key → TM getter),
+# end-to-end profile-switch lifecycle (saveProfile → setActiveProfile →
+# saveProfile → setActiveProfile back), and bool serialization sanity
+# for the 5 new bool keys.
+nereus_add_test(tst_mic_profile_manager_cfc_live_path)
+
 # ── Phase 3M-1c chunk I (I.1-I.5): TwoToneController activation handler ────
 # Verifies the chkTestIMD_CheckedChanged port (setup.cs:11040-11191
 # [v2.10.3.13]): power-on precondition, MOX cycle-off-then-on flow,
