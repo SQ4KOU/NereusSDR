@@ -562,6 +562,14 @@ nereus_add_test(tst_oc_matrix)
 nereus_add_test(tst_oc_outputs_hf_tab)
 target_compile_definitions(tst_oc_outputs_hf_tab PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3L: OC Outputs SWL sub-sub-tab UI + matrix wiring ──────────────────
+# Smoke-tests construction, row 0 ↔ Band120m and row 12 ↔ Band11m sync,
+# reset clears all 13 SWL bands × 7 pins (RX + TX), and HF amateur entries
+# are isolated from SWL writes.  Replaces the QLabel placeholder previously
+# at OcOutputsTab.cpp:90-102.
+nereus_add_test(tst_oc_outputs_swl_tab)
+target_compile_definitions(tst_oc_outputs_swl_tab PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3P-D Task 3: P1RadioConnection ↔ OcMatrix codec wiring ─────────────
 # Verifies:
 #   - Without OcMatrix wired: bank 0 C2 = 0 (legacy m_ocOutput fallback).

@@ -556,6 +556,7 @@ set(GUI_SOURCES
     src/gui/setup/hardware/AntennaAlexAlex2Tab.cpp
     src/gui/setup/hardware/OcOutputsTab.cpp
     src/gui/setup/hardware/OcOutputsHfTab.cpp
+    src/gui/setup/hardware/OcOutputsSwlTab.cpp
     src/gui/setup/hardware/XvtrTab.cpp
     src/gui/setup/hardware/PureSignalTab.cpp
     src/gui/setup/hardware/DiversityTab.cpp
