@@ -232,6 +232,15 @@ ConnectionPanel::ConnectionPanel(RadioModel* model, QWidget* parent)
         for (const SavedRadio& sr : saved) {
             if (!sr.info.macAddress.isEmpty()) {
                 savedMacs.append(sr.info.macAddress);
+                // Seed m_lastSeenMs from the persisted SavedRadio.lastSeen so
+                // the pill + Last Seen column show meaningful values for
+                // saved-but-not-currently-discovered radios. Without this,
+                // every manual entry painted as a red Offline pill saying
+                // "never seen" until a broadcast scan re-found it.
+                if (sr.lastSeen.isValid()) {
+                    m_lastSeenMs.insert(sr.info.macAddress,
+                                        sr.lastSeen.toMSecsSinceEpoch());
+                }
             }
             upsertRowForInfo(sr.info, /*online=*/false);
         }
@@ -1137,6 +1146,13 @@ void ConnectionPanel::onAddManuallyClicked()
     // permanently exempt from the stale-removal sweep.
     if (!info.macAddress.isEmpty()) {
         m_radioModel->discovery()->addSavedMac(info.macAddress);
+        // If the dialog probed successfully (savedOffline=false), the radio
+        // responded just now — record that so the pill paints green Online
+        // and Last Seen reads "just now" instead of "never seen".
+        if (!dlg.savedOffline()) {
+            m_lastSeenMs.insert(info.macAddress,
+                                QDateTime::currentMSecsSinceEpoch());
+        }
     }
 
     // Add the row to the table immediately so the user sees their entry.
@@ -1205,6 +1221,10 @@ void ConnectionPanel::onEditClicked()
 
     if (!updated.macAddress.isEmpty()) {
         m_radioModel->discovery()->addSavedMac(updated.macAddress);
+        if (!dlg.savedOffline()) {
+            m_lastSeenMs.insert(updated.macAddress,
+                                QDateTime::currentMSecsSinceEpoch());
+        }
     }
 
     upsertRowForInfo(updated, /*online=*/false);
