@@ -102,6 +102,7 @@ public:
         Diversity, Calibration, Hl2IoBoard, BandwidthMonitor
     };
     bool isTabVisibleForTest(Tab t) const;
+    QString tabTextForTest(Tab t) const;
 #endif
 
 public slots:

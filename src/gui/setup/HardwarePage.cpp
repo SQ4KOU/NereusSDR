@@ -200,7 +200,16 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
     // Radio Info is always visible.
     // Remaining tabs are shown only when the connected board supports them.
     m_tabs->setTabVisible(m_antennaAlexIdx, caps.hasAlexFilters);
-    m_tabs->setTabVisible(m_ocOutputsIdx,   caps.ocOutputCount > 0);
+
+    // OC Outputs tab — visible for any board with OC pins OR for HL2 (whose
+    // I/O board pattern reuses the OcMatrix for N2ADR Filter pin assignments).
+    // mi0bot exposes tpPennyCtrl on HL2 with title "Hermes Lite Control"
+    // (setup.cs:20232 [v2.10.3.13-beta2]).
+    const bool ocTabRelevant = (caps.ocOutputCount > 0) || caps.hasIoBoardHl2;
+    m_tabs->setTabVisible(m_ocOutputsIdx, ocTabRelevant);
+    m_tabs->setTabText(m_ocOutputsIdx,
+        caps.hasIoBoardHl2 ? tr("Hermes Lite Control") : tr("OC Outputs"));
+
     m_tabs->setTabVisible(m_xvtrIdx,        caps.xvtrJackCount > 0);
     m_tabs->setTabVisible(m_pureSignalIdx,  caps.hasPureSignal);
     m_tabs->setTabVisible(m_diversityIdx,   caps.hasDiversityReceiver);
@@ -251,6 +260,22 @@ bool HardwarePage::isTabVisibleForTest(Tab t) const
         case Tab::BandwidthMonitor: return m_tabs->isTabVisible(m_bwMonitorIdx);
     }
     return false;
+}
+
+QString HardwarePage::tabTextForTest(Tab t) const
+{
+    switch (t) {
+        case Tab::RadioInfo:        return m_tabs->tabText(m_radioInfoIdx);
+        case Tab::AntennaAlex:      return m_tabs->tabText(m_antennaAlexIdx);
+        case Tab::OcOutputs:        return m_tabs->tabText(m_ocOutputsIdx);
+        case Tab::Xvtr:             return m_tabs->tabText(m_xvtrIdx);
+        case Tab::PureSignal:       return m_tabs->tabText(m_pureSignalIdx);
+        case Tab::Diversity:        return m_tabs->tabText(m_diversityIdx);
+        case Tab::Calibration:      return m_tabs->tabText(m_paCalIdx);
+        case Tab::Hl2IoBoard:       return m_tabs->tabText(m_hl2IoIdx);
+        case Tab::BandwidthMonitor: return m_tabs->tabText(m_bwMonitorIdx);
+    }
+    return {};
 }
 #endif
 
