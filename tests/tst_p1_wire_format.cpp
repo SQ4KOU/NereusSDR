@@ -298,15 +298,19 @@ private slots:
 
     // --- Per-board quirks (Task 11) ---
 
-    void hermesLiteAttenClampsTo63() {
-        // HL2 range is 0..63 per BoardCapabilities.cpp kHermesLite (6-bit, Task 11).
-        // Source: mi0bot WriteMainLoop_HL2 [@c26a8a4] — 6-bit range (0x3F mask).
+    void hermesLiteAttenClampsToSignedRange() {
+        // HL2 user-facing range: signed -28..+32 per BoardCapabilities.cpp
+        // kHermesLite. From mi0bot setup.cs:16085-16086 [v2.10.3.13-beta2]
+        // udHermesStepAttenuatorData.{Maximum=32, Minimum=-28}. The 6-bit
+        // wire mask (0x3F) folds the signed corners through `wire = 31 - userDb`.
         P1RadioConnection conn;
         conn.init();
         conn.setBoardForTest(HPSDRHW::HermesLite);
-        conn.setAttenuator(80);  // above max
-        QCOMPARE(conn.currentAttenForTest(), 63);
-        conn.setAttenuator(-5);  // below min
+        conn.setAttenuator(80);  // above max → +32
+        QCOMPARE(conn.currentAttenForTest(), 32);
+        conn.setAttenuator(-50);  // below min → -28
+        QCOMPARE(conn.currentAttenForTest(), -28);
+        conn.setAttenuator(0);
         QCOMPARE(conn.currentAttenForTest(), 0);
     }
 

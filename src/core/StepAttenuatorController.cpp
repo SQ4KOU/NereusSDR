@@ -227,6 +227,11 @@ void StepAttenuatorController::setMaxAttenuation(int dB)
     m_maxAttDb = dB;
 }
 
+void StepAttenuatorController::setMinAttenuation(int dB)
+{
+    m_minAttDb = dB;
+}
+
 // --- Per-band TX ATT storage (F.2) ---
 // From Thetis console.cs:48012-48022 [v2.10.3.13]
 //   getTXstepAttenuatorForBand / setTXstepAttenuatorForBand

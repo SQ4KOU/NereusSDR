@@ -163,7 +163,14 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
                 // Discovered during 3M-1c chunk 0 desk-review against mi0bot.
                 // From mi0bot-Thetis console.cs:10657-10658, 19164-19165, 27814-27815 [@c26a8a4]
                 // MI0BOT: Greater range for HL2
-                const int userDb = qBound(0, static_cast<int>(ctx.txStepAttn[0]), 31);
+                //
+                // Signed user-facing range: −28..+32 dB (mi0bot
+                // setup.cs:16085-16086 [v2.10.3.13-beta2]
+                // udHermesStepAttenuatorData.{Maximum=32, Minimum=-28}).
+                // Wire byte then derives via `wire = 31 - userDb`; the 6-bit
+                // mask folds the signed corners (−28 → 0x7B, 0 → 0x5F,
+                // +32 → 0x7F) into valid wire values.
+                const int userDb = qBound(-28, static_cast<int>(ctx.txStepAttn[0]), 32);
                 out[4] = quint8(((31 - userDb) & 0b00111111) | 0b01000000);
             } else {
                 // HL2 RX path: same (31 - userDb) inversion as TX. mi0bot applies
@@ -175,7 +182,10 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
                 // 3M-1c desk-review follow-up B1.
                 // From mi0bot-Thetis console.cs:11075, 11251, 19380 [@c26a8a4]
                 // MI0BOT: Greater range for HL2
-                const int rxUserDb = qBound(0, static_cast<int>(ctx.rxStepAttn[0]), 31);
+                //
+                // Signed user-facing range −28..+32 dB applies on RX as well
+                // (mi0bot setup.cs:16085-16086 [v2.10.3.13-beta2]).
+                const int rxUserDb = qBound(-28, static_cast<int>(ctx.rxStepAttn[0]), 32);
                 out[4] = quint8(((31 - rxUserDb) & 0b00111111) | 0b01000000);  // Larger range for the HL2 attenuator
             }
             return;
