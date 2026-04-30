@@ -321,6 +321,28 @@ nereus_add_test(tst_transmit_model_two_tone_drive_origin)
 # btnTXProfileSave_Click / btnTXProfileDelete_Click handlers).
 nereus_add_test(tst_mic_profile_manager)
 
+# ── Phase 3M-3a-ii Batch 4: MicProfileManager CFC/CPDR/CESSB/PhRot round-trip ──
+# Verifies the 41 new bundle keys (Phase Rotator + CFC + CPDR + CESSB)
+# round-trip through AppSettings byte-for-byte, including each of the
+# 21 Thetis factory profiles' per-row deviations sourced verbatim from
+# database.cs:AddTXProfileTable [v2.10.3.13].  Covers: bundle-key presence
+# check, defaultProfileValues() for the 41 new keys, per-profile CompanderLevel
+# / CESSB_On / CFC scalars + arrays cells, full SSB *.* k CFC + AM 10k CFC
+# array overrides, CFCParaEQData blob round-trip, and 5-bool serialization
+# sanity.
+nereus_add_test(tst_mic_profile_manager_cfc_round_trip)
+
+# ── Phase 3M-3a-ii Batch 4.5: MicProfileManager CFC/CPDR/CESSB/PhRot live path ─
+# Verifies the live capture/apply path between TransmitModel and the
+# MicProfileManager bundle for the 41 new keys, closing the gap between
+# Batch 4 (bundle keys + factory rows) and the TxCfcDialog [Save] /
+# profile-combo activation flow.  Covers: capture round-trip (TM property
+# → AppSettings bundle key), apply round-trip (bundle key → TM getter),
+# end-to-end profile-switch lifecycle (saveProfile → setActiveProfile →
+# saveProfile → setActiveProfile back), and bool serialization sanity
+# for the 5 new bool keys.
+nereus_add_test(tst_mic_profile_manager_cfc_live_path)
+
 # ── Phase 3M-1c chunk I (I.1-I.5): TwoToneController activation handler ────
 # Verifies the chkTestIMD_CheckedChanged port (setup.cs:11040-11191
 # [v2.10.3.13]): power-on precondition, MOX cycle-off-then-on flow,
@@ -1022,12 +1044,22 @@ nereus_add_test(tst_phone_applet_mic_level_gauge)
 # NereusSDR-native UI (no Thetis cite stamps required for the applet layer).
 nereus_add_test(tst_tx_applet_vox_toggle)
 
-# ── Phase 3M-3a-i Batch 2 Task F: TxApplet LEV / EQ / PROC quick toggles ────
+# ── Phase 3M-3a-i Batch 2 Task F + 3M-3a-ii cleanup: TxApplet LEV/EQ/CFC ────
 # Verifies the row of 3 checkable buttons inserted between MON volume and
 # TUNE/MOX: LEV/EQ are bidirectional with TransmitModel.txLevelerOn /
-# .txEqEnabled (objectNames: TxLevButton, TxEqButton); PROC is a disabled
-# placeholder for 3M-3a-ii (objectName: TxProcButton).
-nereus_add_test(tst_tx_applet_lev_eq_proc)
+# .txEqEnabled (objectNames: TxLevButton, TxEqButton); CFC bidirectional with
+# TransmitModel.cfcEnabled (objectName: TxCfcButton, right-click → modeless
+# TxCfcDialog).  PROC moved to PhoneCwApplet — see tst_phone_applet_proc.
+# (Renamed from tst_tx_applet_lev_eq_proc.cpp during the post-bench cleanup.)
+nereus_add_test(tst_tx_applet_lev_eq_cfc)
+
+# ── Phase 3M-3a-ii post-bench cleanup: PhoneCwApplet PROC button + slider ──
+# Verifies the PROC controls inherited un-wired from 3I-3 (NyiOverlay-marked):
+# PhoneCwProcButton bidirectional with TransmitModel.cpdrOn; PhoneCwProcSlider
+# bidirectional with TransmitModel.cpdrLevelDb (range 0..20 dB matching Thetis
+# ptbCPDR console.Designer.cs:6042-6043 [v2.10.3.13]); numeric "X dB" value
+# label mirrors slider; NyiOverlay markers absent.
+nereus_add_test(tst_phone_applet_proc)
 
 # ── Phase 3M-3a-i Batch 3 Task A.1: TxEqDialog scaffold ───────────────────
 # Verifies the modeless 10-band TX EQ dialog launched from the [EQ]
@@ -1036,6 +1068,17 @@ nereus_add_test(tst_tx_applet_lev_eq_proc)
 # and model → UI), the m_updatingFromModel echo guard, and the
 # instance() singleton pattern.
 nereus_add_test(tst_tx_eq_dialog)
+
+# ── Phase 3M-3a-ii Batch 6 Task A: TxCfcDialog (10-band CFC editor) ──────
+# Verifies the modeless 10-band CFC editor launched from the [CFC]
+# right-click on the TxApplet and from CfcSetupPage's [Configure CFC
+# bands…] button.  Confirms construction, default values from
+# TransmitModel, bidirectional binding (UI → model and model → UI) for
+# all 32 controls (profile combo + 5 buttons + 2 globals + 30 band spins),
+# echo guard, profile-bank Save/Reset path.  Layout mirrors Thetis
+# frmCFCConfig.{cs,Designer.cs} [v2.10.3.13] with NereusSDR-spin 10-row
+# grid replacing the selected-band + edit-pane.
+nereus_add_test(tst_tx_cfc_dialog)
 
 # ── Phase 3M-1b J.3: TxApplet MON toggle + monitor volume slider + mic-source badge ──
 # Verifies the model-layer contracts that TxApplet's MON button, monitor volume
@@ -1083,7 +1126,17 @@ nereus_add_test(tst_transmit_setup_block_tx)
 # the active-profile label tracks MicProfileManager::activeProfileChanged, the
 # ALC row is statically labelled "always-on", and the cross-link buttons emit
 # openSetupRequested(category, page) with the correct setup-page leaf labels.
+# Phase 3M-3a-ii Batch 5: extended with Phrot / CFC / CESSB live-binding cases.
 nereus_add_test(tst_speech_processor_page)
+
+# ── Phase 3M-3a-ii Batch 5 Task E: CfcSetupPage full implementation ──────────
+# Verifies the three group boxes (Phase Rotator / CFC / CESSB) construct,
+# initial values reflect TransmitModel defaults, bidirectional binding works
+# both directions, spinbox range clamping holds, and the [Configure CFC bands…]
+# button emits openCfcDialogRequested (Batch 6 wires the dialog).  Layout
+# mirrors Thetis tpDSPCFC tab 1:1 (setup.Designer.cs:46162-46280 [v2.10.3.13]
+# for grpPhRot).
+nereus_add_test(tst_cfc_setup_page)
 
 # ── Phase 3M-0 Task 12: Hardware Configuration group box on Setup → General ──
 # Verifies grpHardwareConfig has 4 controls + 1 warning label per
@@ -1777,6 +1830,20 @@ nereus_add_test(tst_tx_channel_cfc_cpdr_cessb_setters)
 # (Designer ranges from setup.Designer.cs), per-MAC AppSettings round-trip,
 # and multi-MAC isolation.
 nereus_add_test(tst_transmit_model_eq_lev_alc)
+
+# Plan: 3M-3a-ii Batch 2 — 15 new properties on TransmitModel covering CFC
+# (8), CPDR (2), CESSB (1), and Phase Rotator (4):
+#   - 14 TXProfile keys: CFCEnabled / CFCPostEqEnabled / CFCPreComp /
+#     CFCPostEqGain / CFCEqFreq0..9 / CFCPreComp0..9 / CFCPostEqGain0..9 /
+#     CFCParaEQData / CFCPhaseRotatorEnabled / CFCPhaseReverseEnabled /
+#     CFCPhaseRotatorFreq / CFCPhaseRotatorStages / CompanderLevel / CESSB_On
+#   - 1 global (NOT in TXProfile): cpdr/on (under hardware/<mac>/tx/cpdr/on)
+# Tests cover defaults (matching Thetis database.cs:4724-4768), signal
+# emission idempotency, range clamping (Designer ranges from
+# setup.Designer.cs udPhRotFreq/udPHROTStages, frmCFCConfig.Designer.cs
+# nudCFC_*, console.Designer.cs ptbCPDR), per-MAC AppSettings round-trip,
+# and multi-MAC isolation.
+nereus_add_test(tst_transmit_model_cfc_cpdr_cessb_phrot)
 
 # Plan: 3M-1b E.2. Exercises AudioEngine TX monitor enable + volume state
 # (setTxMonitorEnabled / setTxMonitorVolume / signals / clamping / idempotency).

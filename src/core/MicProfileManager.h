@@ -171,7 +171,8 @@ private:
     void removeProfileKeys(const QString& name);
 
     /// Capture current TransmitModel state into a live-field key→value hash.
-    /// 50 keys; matches defaultProfileValues() in shape.
+    /// 91 keys (50 mic/VOX/MON/two-tone/EQ/Lev/ALC + 41 CFC/CPDR/CESSB/PhRot);
+    /// matches defaultProfileValues() in shape.
     static QHash<QString, QVariant> captureLiveValues(const TransmitModel* tx);
 
     /// Apply a profile's key→value hash back to a TransmitModel via the

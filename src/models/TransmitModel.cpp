@@ -627,6 +627,67 @@ void TransmitModel::loadFromSettings(const QString& mac)
                        QStringLiteral("False")).toString() == QLatin1String("True"));
     setTxEqCtfmode(s.value(pfx + QLatin1String("eq/ctfmode"), QStringLiteral("0")).toInt());
     setTxEqWintype(s.value(pfx + QLatin1String("eq/wintype"), QStringLiteral("0")).toInt());
+
+    // ── Phase Rotator (3M-3a-ii Batch 2) ──────────────────────────────────
+    // Defaults from Thetis database.cs:4726-4730 [v2.10.3.13].
+    setPhaseRotatorEnabled(s.value(pfx + QLatin1String("CFCPhaseRotatorEnabled"),
+                                    QStringLiteral("False")).toString() == QLatin1String("True"));
+    setPhaseReverseEnabled(s.value(pfx + QLatin1String("CFCPhaseReverseEnabled"),
+                                    QStringLiteral("False")).toString() == QLatin1String("True"));
+    setPhaseRotatorFreqHz(s.value(pfx + QLatin1String("CFCPhaseRotatorFreq"),
+                                   QStringLiteral("338")).toInt());
+    setPhaseRotatorStages(s.value(pfx + QLatin1String("CFCPhaseRotatorStages"),
+                                   QStringLiteral("8")).toInt());
+
+    // ── CFC scalars (3M-3a-ii Batch 2) ────────────────────────────────────
+    // Defaults from Thetis database.cs:4724-4733 [v2.10.3.13].
+    setCfcEnabled(s.value(pfx + QLatin1String("CFCEnabled"),
+                           QStringLiteral("False")).toString() == QLatin1String("True"));
+    setCfcPostEqEnabled(s.value(pfx + QLatin1String("CFCPostEqEnabled"),
+                                 QStringLiteral("False")).toString() == QLatin1String("True"));
+    setCfcPrecompDb(s.value(pfx + QLatin1String("CFCPreComp"),
+                             QStringLiteral("0")).toInt());
+    setCfcPostEqGainDb(s.value(pfx + QLatin1String("CFCPostEqGain"),
+                                QStringLiteral("0")).toInt());
+
+    // ── CFC per-band arrays (3M-3a-ii Batch 2) ────────────────────────────
+    // Defaults from Thetis database.cs:4735-4766 [v2.10.3.13]:
+    //   CFCEqFreq0..9       = {0, 125, 250, 500, 1000, 2000, 3000, 4000, 5000, 10000}
+    //   CFCPreComp0..9      = all 5 (per-band G[] compression amounts)
+    //   CFCPostEqGain0..9   = all 0 (per-band E[] post-EQ gains)
+    static constexpr int kDefaultCfcFreq[10] =
+        {0, 125, 250, 500, 1000, 2000, 3000, 4000, 5000, 10000};
+    for (int i = 0; i < 10; ++i) {
+        const QString fKey = QStringLiteral("CFCEqFreq%1").arg(i);
+        const int f = s.value(pfx + fKey, QString::number(kDefaultCfcFreq[i])).toInt();
+        setCfcEqFreq(i, f);
+
+        const QString cKey = QStringLiteral("CFCPreComp%1").arg(i);
+        const int c = s.value(pfx + cKey, QStringLiteral("5")).toInt();
+        setCfcCompression(i, c);
+
+        const QString gKey = QStringLiteral("CFCPostEqGain%1").arg(i);
+        const int g = s.value(pfx + gKey, QStringLiteral("0")).toInt();
+        setCfcPostEqBandGain(i, g);
+    }
+
+    // CFC parametric-EQ blob — opaque string round-trip.
+    setCfcParaEqData(s.value(pfx + QLatin1String("CFCParaEQData"),
+                              QStringLiteral("")).toString());
+
+    // ── CPDR (3M-3a-ii Batch 2) ───────────────────────────────────────────
+    // cpdrOn lives at hardware/<mac>/tx/cpdr/on — outside the per-profile
+    // namespace, per Thetis console.cs:36430 (global console state).
+    setCpdrOn(s.value(pfx + QLatin1String("cpdr/on"),
+                       QStringLiteral("False")).toString() == QLatin1String("True"));
+    // CompanderLevel from database.cs:4580 [v2.10.3.13]: default 2 dB.
+    setCpdrLevelDb(s.value(pfx + QLatin1String("CompanderLevel"),
+                            QStringLiteral("2")).toInt());
+
+    // ── CESSB (3M-3a-ii Batch 2) ──────────────────────────────────────────
+    // Default from Thetis database.cs:4689 [v2.10.3.13]: dr["CESSB_On"] = false.
+    setCessbOn(s.value(pfx + QLatin1String("CESSB_On"),
+                        QStringLiteral("False")).toString() == QLatin1String("True"));
 }
 
 void TransmitModel::persistToSettings(const QString& mac) const
@@ -696,6 +757,40 @@ void TransmitModel::persistToSettings(const QString& mac) const
                m_txEqMp ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(pfx + QLatin1String("eq/ctfmode"),  QString::number(m_txEqCtfmode));
     s.setValue(pfx + QLatin1String("eq/wintype"),  QString::number(m_txEqWintype));
+
+    // ── Phase Rotator / CFC / CPDR / CESSB (3M-3a-ii Batch 2) ────────────
+    s.setValue(pfx + QLatin1String("CFCPhaseRotatorEnabled"),
+               m_phaseRotatorEnabled ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("CFCPhaseReverseEnabled"),
+               m_phaseReverseEnabled ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("CFCPhaseRotatorFreq"),   QString::number(m_phaseRotatorFreqHz));
+    s.setValue(pfx + QLatin1String("CFCPhaseRotatorStages"), QString::number(m_phaseRotatorStages));
+
+    s.setValue(pfx + QLatin1String("CFCEnabled"),
+               m_cfcEnabled ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("CFCPostEqEnabled"),
+               m_cfcPostEqEnabled ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("CFCPreComp"),    QString::number(m_cfcPrecompDb));
+    s.setValue(pfx + QLatin1String("CFCPostEqGain"), QString::number(m_cfcPostEqGainDb));
+
+    for (int i = 0; i < 10; ++i) {
+        s.setValue(pfx + QStringLiteral("CFCEqFreq%1").arg(i),
+                   QString::number(m_cfcEqFreqHz[static_cast<std::size_t>(i)]));
+        s.setValue(pfx + QStringLiteral("CFCPreComp%1").arg(i),
+                   QString::number(m_cfcCompressionDb[static_cast<std::size_t>(i)]));
+        s.setValue(pfx + QStringLiteral("CFCPostEqGain%1").arg(i),
+                   QString::number(m_cfcPostEqBandGainDb[static_cast<std::size_t>(i)]));
+    }
+    s.setValue(pfx + QLatin1String("CFCParaEQData"), m_cfcParaEqData);
+
+    // CPDR — cpdrOn outside profile namespace per Thetis console.cs:36430.
+    s.setValue(pfx + QLatin1String("cpdr/on"),
+               m_cpdrOn ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("CompanderLevel"), QString::number(m_cpdrLevelDb));
+
+    // CESSB.
+    s.setValue(pfx + QLatin1String("CESSB_On"),
+               m_cessbOn ? QStringLiteral("True") : QStringLiteral("False"));
 }
 
 // ── Anti-VOX properties (3M-1b C.4) ─────────────────────────────────────────
@@ -1194,6 +1289,217 @@ void TransmitModel::setTxEqWintype(int wintype)
     m_txEqWintype = wintype;
     persistOne(QStringLiteral("eq/wintype"), QString::number(m_txEqWintype));
     emit txEqWintypeChanged(wintype);
+}
+
+// ── CFC / CPDR / CESSB / Phase Rotator (3M-3a-ii Batch 2) ─────────────────
+//
+// Defaults sourced from Thetis database.cs:4724-4768 [v2.10.3.13] (TXProfile
+// factory) except cpdrOn (console.cs:36430 — global console state).
+//
+// All setters are idempotent (skip emit + persist on unchanged value) and
+// clamp to the appropriate Thetis Designer range.  Per-MAC AppSettings keys
+// match Thetis TXProfile column names exactly except cpdrOn which sits at
+// hardware/<mac>/tx/cpdr/on outside the per-profile namespace.
+
+// ── Phase Rotator ─────────────────────────────────────────────────────────
+
+void TransmitModel::setPhaseRotatorEnabled(bool on)
+{
+    if (on == m_phaseRotatorEnabled) { return; }
+    // From Thetis database.cs:4726 [v2.10.3.13]: dr["CFCPhaseRotatorEnabled"].
+    m_phaseRotatorEnabled = on;
+    persistOne(QStringLiteral("CFCPhaseRotatorEnabled"),
+               on ? QStringLiteral("True") : QStringLiteral("False"));
+    emit phaseRotatorEnabledChanged(on);
+}
+
+void TransmitModel::setPhaseReverseEnabled(bool on)
+{
+    if (on == m_phaseReverseEnabled) { return; }
+    // From Thetis database.cs:4727 [v2.10.3.13]: dr["CFCPhaseReverseEnabled"].
+    m_phaseReverseEnabled = on;
+    persistOne(QStringLiteral("CFCPhaseReverseEnabled"),
+               on ? QStringLiteral("True") : QStringLiteral("False"));
+    emit phaseReverseEnabledChanged(on);
+}
+
+void TransmitModel::setPhaseRotatorFreqHz(int hz)
+{
+    // Clamp to Thetis Designer range per setup.Designer.cs:46250-46259 [v2.10.3.13]:
+    //   udPhRotFreq.Maximum = 2000, .Minimum = 10.
+    const int clamped = std::clamp(hz, kPhaseRotatorFreqHzMin, kPhaseRotatorFreqHzMax);
+    if (clamped == m_phaseRotatorFreqHz) { return; }
+    m_phaseRotatorFreqHz = clamped;
+    persistOne(QStringLiteral("CFCPhaseRotatorFreq"), QString::number(clamped));
+    emit phaseRotatorFreqHzChanged(clamped);
+}
+
+void TransmitModel::setPhaseRotatorStages(int stages)
+{
+    // Clamp to Thetis Designer range per setup.Designer.cs:46209-46218 [v2.10.3.13]:
+    //   udPHROTStages.Maximum = 16, .Minimum = 2.
+    const int clamped = std::clamp(stages, kPhaseRotatorStagesMin, kPhaseRotatorStagesMax);
+    if (clamped == m_phaseRotatorStages) { return; }
+    m_phaseRotatorStages = clamped;
+    persistOne(QStringLiteral("CFCPhaseRotatorStages"), QString::number(clamped));
+    emit phaseRotatorStagesChanged(clamped);
+}
+
+// ── CFC scalars ───────────────────────────────────────────────────────────
+
+void TransmitModel::setCfcEnabled(bool on)
+{
+    if (on == m_cfcEnabled) { return; }
+    // From Thetis database.cs:4724 [v2.10.3.13]: dr["CFCEnabled"].
+    m_cfcEnabled = on;
+    persistOne(QStringLiteral("CFCEnabled"),
+               on ? QStringLiteral("True") : QStringLiteral("False"));
+    emit cfcEnabledChanged(on);
+}
+
+void TransmitModel::setCfcPostEqEnabled(bool on)
+{
+    if (on == m_cfcPostEqEnabled) { return; }
+    // From Thetis database.cs:4725 [v2.10.3.13]: dr["CFCPostEqEnabled"].
+    m_cfcPostEqEnabled = on;
+    persistOne(QStringLiteral("CFCPostEqEnabled"),
+               on ? QStringLiteral("True") : QStringLiteral("False"));
+    emit cfcPostEqEnabledChanged(on);
+}
+
+void TransmitModel::setCfcPrecompDb(int dB)
+{
+    // Clamp to Thetis Designer range per frmCFCConfig.Designer.cs:408-422
+    // [v2.10.3.13]:  nudCFC_precomp.Maximum = 16, .Minimum = 0.
+    const int clamped = std::clamp(dB, kCfcPrecompDbMin, kCfcPrecompDbMax);
+    if (clamped == m_cfcPrecompDb) { return; }
+    m_cfcPrecompDb = clamped;
+    persistOne(QStringLiteral("CFCPreComp"), QString::number(clamped));
+    emit cfcPrecompDbChanged(clamped);
+}
+
+void TransmitModel::setCfcPostEqGainDb(int dB)
+{
+    // Clamp to Thetis Designer range per frmCFCConfig.Designer.cs:337-351
+    // [v2.10.3.13]:  nudCFC_posteqgain.Maximum = 24, .Minimum = -24
+    // (encoded via decimal sign bit in the 4th int).
+    const int clamped = std::clamp(dB, kCfcPostEqGainDbMin, kCfcPostEqGainDbMax);
+    if (clamped == m_cfcPostEqGainDb) { return; }
+    m_cfcPostEqGainDb = clamped;
+    persistOne(QStringLiteral("CFCPostEqGain"), QString::number(clamped));
+    emit cfcPostEqGainDbChanged(clamped);
+}
+
+// ── CFC per-band arrays ───────────────────────────────────────────────────
+
+int TransmitModel::cfcEqFreq(int index) const noexcept
+{
+    if (index < 0 || index >= 10) { return 0; }
+    return m_cfcEqFreqHz[static_cast<std::size_t>(index)];
+}
+
+int TransmitModel::cfcCompression(int index) const noexcept
+{
+    if (index < 0 || index >= 10) { return 0; }
+    return m_cfcCompressionDb[static_cast<std::size_t>(index)];
+}
+
+int TransmitModel::cfcPostEqBandGain(int index) const noexcept
+{
+    if (index < 0 || index >= 10) { return 0; }
+    return m_cfcPostEqBandGainDb[static_cast<std::size_t>(index)];
+}
+
+void TransmitModel::setCfcEqFreq(int index, int hz)
+{
+    if (index < 0 || index >= 10) { return; }
+    // Clamp to Thetis Designer range per frmCFCConfig.Designer.cs:267-286
+    // [v2.10.3.13]:  nudCFC_f.Maximum = 20000, .Minimum = 0.
+    const int clamped = std::clamp(hz, kCfcEqFreqHzMin, kCfcEqFreqHzMax);
+    if (clamped == m_cfcEqFreqHz[static_cast<std::size_t>(index)]) { return; }
+    m_cfcEqFreqHz[static_cast<std::size_t>(index)] = clamped;
+    // Thetis TXProfile keys: CFCEqFreq0..CFCEqFreq9 (database.cs:4757-4766 [v2.10.3.13]).
+    persistOne(QStringLiteral("CFCEqFreq%1").arg(index), QString::number(clamped));
+    emit cfcEqFreqChanged(index, clamped);
+}
+
+void TransmitModel::setCfcCompression(int index, int dB)
+{
+    if (index < 0 || index >= 10) { return; }
+    // Clamp to Thetis Designer range per frmCFCConfig.Designer.cs:217-236
+    // [v2.10.3.13]:  nudCFC_c.Maximum = 16, .Minimum = 0.
+    const int clamped = std::clamp(dB, kCfcCompressionDbMin, kCfcCompressionDbMax);
+    if (clamped == m_cfcCompressionDb[static_cast<std::size_t>(index)]) { return; }
+    m_cfcCompressionDb[static_cast<std::size_t>(index)] = clamped;
+    // Thetis TXProfile keys: CFCPreComp0..CFCPreComp9 (database.cs:4735-4744
+    // [v2.10.3.13]) — note the column name says "PreComp" but these are
+    // the per-band G[] compression amounts.
+    persistOne(QStringLiteral("CFCPreComp%1").arg(index), QString::number(clamped));
+    emit cfcCompressionChanged(index, clamped);
+}
+
+void TransmitModel::setCfcPostEqBandGain(int index, int dB)
+{
+    if (index < 0 || index >= 10) { return; }
+    // Clamp to Thetis Designer range per frmCFCConfig.Designer.cs:564-583
+    // [v2.10.3.13]:  nudCFC_gain.Maximum = 24, .Minimum = -24.
+    const int clamped = std::clamp(dB, kCfcPostEqBandGainDbMin, kCfcPostEqBandGainDbMax);
+    if (clamped == m_cfcPostEqBandGainDb[static_cast<std::size_t>(index)]) { return; }
+    m_cfcPostEqBandGainDb[static_cast<std::size_t>(index)] = clamped;
+    // Thetis TXProfile keys: CFCPostEqGain0..CFCPostEqGain9 (database.cs:4746-4755 [v2.10.3.13]).
+    persistOne(QStringLiteral("CFCPostEqGain%1").arg(index), QString::number(clamped));
+    emit cfcPostEqBandGainChanged(index, clamped);
+}
+
+void TransmitModel::setCfcParaEqData(const QString& data)
+{
+    if (data == m_cfcParaEqData) { return; }
+    // From Thetis database.cs:4768 [v2.10.3.13]: dr["CFCParaEQData"] = "".
+    // Stored as opaque string for forward-compat round-trip with imported
+    // Thetis profiles.  No validation.
+    m_cfcParaEqData = data;
+    persistOne(QStringLiteral("CFCParaEQData"), data);
+    emit cfcParaEqDataChanged(data);
+}
+
+// ── CPDR ──────────────────────────────────────────────────────────────────
+
+void TransmitModel::setCpdrOn(bool on)
+{
+    if (on == m_cpdrOn) { return; }
+    // From Thetis console.cs:36430 [v2.10.3.13]:
+    //   SetGeneralSetting(0, OtherButtonId.COMP, chkCPDR.Checked);
+    // CPDR is global console state — NOT in TXProfile.  Persisted under
+    // hardware/<mac>/tx/cpdr/on (outside the per-profile namespace).
+    m_cpdrOn = on;
+    persistOne(QStringLiteral("cpdr/on"),
+               on ? QStringLiteral("True") : QStringLiteral("False"));
+    emit cpdrOnChanged(on);
+}
+
+void TransmitModel::setCpdrLevelDb(int dB)
+{
+    // Clamp to Thetis Designer range per console.Designer.cs:6042-6043
+    // [v2.10.3.13]:  ptbCPDR.Maximum = 20, .Minimum = 0.
+    const int clamped = std::clamp(dB, kCpdrLevelDbMin, kCpdrLevelDbMax);
+    if (clamped == m_cpdrLevelDb) { return; }
+    // From Thetis setup.cs:9307 [v2.10.3.13]:
+    //   console.CPDRLevel = (int)dr["CompanderLevel"];
+    m_cpdrLevelDb = clamped;
+    persistOne(QStringLiteral("CompanderLevel"), QString::number(clamped));
+    emit cpdrLevelDbChanged(clamped);
+}
+
+// ── CESSB ─────────────────────────────────────────────────────────────────
+
+void TransmitModel::setCessbOn(bool on)
+{
+    if (on == m_cessbOn) { return; }
+    // From Thetis database.cs:4689 [v2.10.3.13]: dr["CESSB_On"].
+    m_cessbOn = on;
+    persistOne(QStringLiteral("CESSB_On"),
+               on ? QStringLiteral("True") : QStringLiteral("False"));
+    emit cessbOnChanged(on);
 }
 
 } // namespace NereusSDR

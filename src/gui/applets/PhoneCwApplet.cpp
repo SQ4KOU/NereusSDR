@@ -340,44 +340,51 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
         row->setSpacing(4);
 
         // Control 7: PROC button (green, checkable, fixedWidth 48, fixedHeight 22)
+        // Phase 3M-3a-ii post-bench cleanup: bidirectional with
+        // TransmitModel::cpdrOn (wired in wireControls()).
         m_procBtn = new QPushButton(QStringLiteral("PROC"), page);
         m_procBtn->setCheckable(true);
         m_procBtn->setFixedWidth(48);
         m_procBtn->setFixedHeight(22);
         m_procBtn->setStyleSheet(QString(kButtonBase) + kGreenActive);
         m_procBtn->setAccessibleName(QStringLiteral("Speech processor"));
+        m_procBtn->setObjectName(QStringLiteral("PhoneCwProcButton"));
+        m_procBtn->setToolTip(QStringLiteral(
+            "CPDR speech compressor — left-click toggles."));
         row->addWidget(m_procBtn);
 
-        // Control 8: 3-position PROC slider with NOR/DX/DX+ tick labels
+        // Control 8: PROC slider (0..20 dB CPDR level) + numeric "X dB"
+        // value label above-right.  Range from Thetis ptbCPDR
+        // (console.Designer.cs:6042-6043 [v2.10.3.13]):
+        //   ptbCPDR.Maximum = 20;  ptbCPDR.Minimum = 0;
+        // Replaces the previous 3-position NOR/DX/DX+ placeholder.
         auto* procGroup = new QWidget(page);
         auto* procVbox = new QVBoxLayout(procGroup);
         procVbox->setContentsMargins(0, 0, 0, 0);
         procVbox->setSpacing(0);
 
-        auto* labelsRow = new QHBoxLayout;
-        labelsRow->setContentsMargins(0, 0, 0, 0);
-        auto* norLbl   = new QLabel(QStringLiteral("NOR"),  procGroup);
-        auto* dxLbl    = new QLabel(QStringLiteral("DX"),   procGroup);
-        auto* dxPlusLbl = new QLabel(QStringLiteral("DX+"), procGroup);
-        norLbl->setStyleSheet(kTickLabelStyle);
-        dxLbl->setStyleSheet(kTickLabelStyle);
-        dxPlusLbl->setStyleSheet(kTickLabelStyle);
-        norLbl->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
-        dxLbl->setAlignment(Qt::AlignCenter | Qt::AlignBottom);
-        dxPlusLbl->setAlignment(Qt::AlignRight | Qt::AlignBottom);
-        labelsRow->addWidget(norLbl);
-        labelsRow->addWidget(dxLbl);
-        labelsRow->addWidget(dxPlusLbl);
-        procVbox->addLayout(labelsRow);
+        // Numeric value label, right-aligned, same style family as the
+        // tick labels we just retired (kTickLabelStyle keeps the 14-px
+        // font sizing consistent with adjacent slider areas).
+        m_procValueLabel = new QLabel(QStringLiteral("0 dB"), procGroup);
+        m_procValueLabel->setStyleSheet(kTickLabelStyle);
+        m_procValueLabel->setAlignment(Qt::AlignRight | Qt::AlignBottom);
+        procVbox->addWidget(m_procValueLabel);
 
         m_procSlider = new QSlider(Qt::Horizontal, procGroup);
-        m_procSlider->setRange(0, 2);
+        // From Thetis console.Designer.cs:6042-6043 [v2.10.3.13]:
+        //   ptbCPDR.Maximum = 20;  ptbCPDR.Minimum = 0;
+        m_procSlider->setRange(0, 20);
         m_procSlider->setTickInterval(1);
         m_procSlider->setTickPosition(QSlider::NoTicks);
         m_procSlider->setPageStep(1);
         m_procSlider->setFixedHeight(14);
         m_procSlider->setStyleSheet(kSliderStyle);
-        m_procSlider->setAccessibleName(QStringLiteral("Processor level (NOR/DX/DX+)"));
+        m_procSlider->setAccessibleName(QStringLiteral("CPDR speech compressor level (dB)"));
+        m_procSlider->setObjectName(QStringLiteral("PhoneCwProcSlider"));
+        m_procSlider->setToolTip(QStringLiteral(
+            "CPDR speech compressor level (dB).  Range 0..20 dB matches "
+            "Thetis ptbCPDR."));
         procVbox->addWidget(m_procSlider);
 
         row->addWidget(procGroup, 1);
@@ -573,12 +580,11 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
     // ── Mark Phone controls NYI (wired controls NOT marked) ──────────────────
     // #1 m_levelGauge  — wired (Phase 3M-1b mic level gauge)
     // #5 m_micLevelSlider — wired (Phase 3M-1b mic gain)
+    // #7 m_procBtn / m_procSlider — wired (Phase 3M-3a-ii post-bench cleanup)
     NyiOverlay::markNyi(m_compGauge,        kNyiProc);    // #2 — Phase 3I-3
     NyiOverlay::markNyi(m_micProfileCombo,  kNyiPhone);   // #3
     NyiOverlay::markNyi(m_micSourceCombo,   kNyiPhone);   // #4
     NyiOverlay::markNyi(m_accBtn,           kNyiPhone);   // #6
-    NyiOverlay::markNyi(m_procBtn,          kNyiProc);    // #7 — Phase 3I-3
-    NyiOverlay::markNyi(m_procSlider,       kNyiProc);    // #7 slider
     NyiOverlay::markNyi(m_vaxBtn,           kNyiVax);     // #8 — Phase 3-VAX
     NyiOverlay::markNyi(m_monBtn,           kNyiPhone);   // #9
     NyiOverlay::markNyi(m_monSlider,        kNyiPhone);   // #9 slider
@@ -1118,6 +1124,69 @@ void PhoneCwApplet::wireControls()
         m_micLevelSlider->setEnabled(micInUse);
     });
 
+    // ── #7 PROC button + slider (CPDR speech compressor) ────────────────────
+    // Phase 3M-3a-ii post-bench cleanup: wires the un-wired NyiOverlay-marked
+    // PROC controls inherited from 3I-3.  The duplicate [PROC] in TxApplet
+    // was removed in the same commit.
+    //
+    //   m_procBtn    ↔ TransmitModel::cpdrOn (bidirectional, echo-guarded).
+    //   m_procSlider ↔ TransmitModel::cpdrLevelDb (bidirectional, dB range
+    //                  0..20 from console.Designer.cs:6042-6043 [v2.10.3.13]).
+    //   m_procValueLabel mirrors slider value as "X dB".
+    //
+    // Initial UI state seeded from current TM via QSignalBlocker so the
+    // setters don't bounce.
+    if (m_procBtn) {
+        {
+            QSignalBlocker b(m_procBtn);
+            m_procBtn->setChecked(tx.cpdrOn());
+        }
+        // UI → Model
+        connect(m_procBtn, &QPushButton::toggled, this, [this, &tx](bool on) {
+            if (m_updatingFromModel) { return; }
+            tx.setCpdrOn(on);
+        });
+        // Model → UI
+        connect(&tx, &TransmitModel::cpdrOnChanged, this, [this](bool on) {
+            m_updatingFromModel = true;
+            {
+                QSignalBlocker b(m_procBtn);
+                m_procBtn->setChecked(on);
+            }
+            m_updatingFromModel = false;
+        });
+    }
+
+    if (m_procSlider) {
+        {
+            QSignalBlocker b(m_procSlider);
+            m_procSlider->setValue(tx.cpdrLevelDb());
+        }
+        if (m_procValueLabel) {
+            m_procValueLabel->setText(QStringLiteral("%1 dB").arg(tx.cpdrLevelDb()));
+        }
+        // UI → Model + value-label refresh.
+        connect(m_procSlider, &QSlider::valueChanged, this, [this, &tx](int v) {
+            if (m_procValueLabel) {
+                m_procValueLabel->setText(QStringLiteral("%1 dB").arg(v));
+            }
+            if (m_updatingFromModel) { return; }
+            tx.setCpdrLevelDb(v);
+        });
+        // Model → UI
+        connect(&tx, &TransmitModel::cpdrLevelDbChanged, this, [this](int dB) {
+            m_updatingFromModel = true;
+            {
+                QSignalBlocker b(m_procSlider);
+                m_procSlider->setValue(dB);
+            }
+            if (m_procValueLabel) {
+                m_procValueLabel->setText(QStringLiteral("%1 dB").arg(dB));
+            }
+            m_updatingFromModel = false;
+        });
+    }
+
     // ── #1 Mic level gauge ────────────────────────────────────────────────────
     // 50 ms timer (20 fps) — same polling cadence as VAX/HGauge meter precedent.
     // Reads AudioEngine::pcMicInputLevel() (linear 0..1, thread-safe atomic) +
@@ -1171,6 +1240,28 @@ void PhoneCwApplet::syncFromModel()
         m_micLevelSlider->setValue(tx.micGainDb());
         m_micLevelLabel->setText(QStringLiteral("%1 dB").arg(tx.micGainDb()));
         m_micLevelSlider->setEnabled(tx.micMute());
+        m_updatingFromModel = false;
+    }
+
+    // PROC button + slider (Phase 3M-3a-ii post-bench cleanup) — bidirectional
+    // sync to TransmitModel::cpdrOn / cpdrLevelDb.
+    if (m_procBtn) {
+        TransmitModel& tx = m_model->transmitModel();
+        m_updatingFromModel = true;
+        QSignalBlocker b(m_procBtn);
+        m_procBtn->setChecked(tx.cpdrOn());
+        m_updatingFromModel = false;
+    }
+    if (m_procSlider) {
+        TransmitModel& tx = m_model->transmitModel();
+        m_updatingFromModel = true;
+        {
+            QSignalBlocker b(m_procSlider);
+            m_procSlider->setValue(tx.cpdrLevelDb());
+        }
+        if (m_procValueLabel) {
+            m_procValueLabel->setText(QStringLiteral("%1 dB").arg(tx.cpdrLevelDb()));
+        }
         m_updatingFromModel = false;
     }
     // Other controls wired in Phase 3I-1 (Phone/FM) / Phase 3I-2 (CW)

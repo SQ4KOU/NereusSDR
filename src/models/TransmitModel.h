@@ -708,6 +708,121 @@ public:
     static constexpr int    kTwoToneFreq2DelayMsMin =      0;  // setup.Designer.cs:61933-61937
     static constexpr int    kTwoToneFreq2DelayMsMax =   1000;  // setup.Designer.cs:61928-61932
 
+    // ── CFC / CPDR / CESSB / Phase Rotator properties (3M-3a-ii Batch 2) ─
+    //
+    // 15 new properties for the TXA dynamics section:
+    //
+    //   Phase Rotator (4 — deferred from 3M-3a-i §7.1):
+    //     phaseRotatorEnabled (bool)  — CFCPhaseRotatorEnabled
+    //     phaseReverseEnabled (bool)  — CFCPhaseReverseEnabled
+    //     phaseRotatorFreqHz  (int)   — CFCPhaseRotatorFreq, default 338
+    //     phaseRotatorStages  (int)   — CFCPhaseRotatorStages, default 8
+    //
+    //   CFC (8):
+    //     cfcEnabled              (bool)             — CFCEnabled
+    //     cfcPostEqEnabled        (bool)             — CFCPostEqEnabled
+    //     cfcPrecompDb            (int)              — CFCPreComp scalar
+    //     cfcPostEqGainDb         (int)              — CFCPostEqGain scalar
+    //     cfcEqFreqHz[10]         (array<int,10>)    — CFCEqFreq0..9
+    //     cfcCompressionDb[10]    (array<int,10>)    — CFCPreComp0..9 (per-band G[])
+    //     cfcPostEqBandGainDb[10] (array<int,10>)    — CFCPostEqGain0..9 (per-band E[])
+    //     cfcParaEqData           (QString)          — CFCParaEQData (opaque blob)
+    //
+    //   CPDR (2):
+    //     cpdrOn      (bool)  — global console state, NOT in TXProfile
+    //     cpdrLevelDb (int)   — CompanderLevel
+    //
+    //   CESSB (1):
+    //     cessbOn (bool)      — CESSB_On
+    //
+    // Defaults sourced from Thetis database.cs:4724-4768 [v2.10.3.13]
+    // (TXProfile factory) except cpdrOn which comes from console.cs:36430
+    // [v2.10.3.13] (SetGeneralSetting → OtherButtonId.COMP — global console
+    // state).  WDSP boot default for compressor.run is 0 (TXA.c:253).
+    //
+    // Range clamps from Thetis Designer (setup.Designer.cs and
+    // frmCFCConfig.Designer.cs [v2.10.3.13]).
+    //
+    // 14 of these 15 properties round-trip via TXProfile bundle (Batch 4).
+    // cpdrOn lives outside the profile (global console state) — persisted at
+    // hardware/<mac>/tx/cpdr/on, not in the per-profile namespace.
+
+    // ── Phase Rotator getters ─────────────────────────────────────────────
+    bool phaseRotatorEnabled() const noexcept { return m_phaseRotatorEnabled; }
+    bool phaseReverseEnabled() const noexcept { return m_phaseReverseEnabled; }
+    int  phaseRotatorFreqHz() const noexcept  { return m_phaseRotatorFreqHz; }
+    int  phaseRotatorStages() const noexcept  { return m_phaseRotatorStages; }
+
+    // ── CFC scalar getters ────────────────────────────────────────────────
+    bool cfcEnabled() const noexcept       { return m_cfcEnabled; }
+    bool cfcPostEqEnabled() const noexcept { return m_cfcPostEqEnabled; }
+    int  cfcPrecompDb() const noexcept     { return m_cfcPrecompDb; }
+    int  cfcPostEqGainDb() const noexcept  { return m_cfcPostEqGainDb; }
+
+    /// Per-band CFC EQ frequency (Hz) at index 0..9.  Returns 0 for out-of-range.
+    int cfcEqFreq(int index) const noexcept;
+    /// Per-band CFC compression amount (dB) at index 0..9.  Returns 0 for out-of-range.
+    int cfcCompression(int index) const noexcept;
+    /// Per-band CFC post-EQ gain (dB) at index 0..9.  Returns 0 for out-of-range.
+    int cfcPostEqBandGain(int index) const noexcept;
+
+    /// Opaque parametric-EQ blob.  No setter validation — pass-through for
+    /// forward-compat round-trip with imported Thetis profiles (Batch 4).
+    const QString& cfcParaEqData() const noexcept { return m_cfcParaEqData; }
+
+    // ── CPDR getters ──────────────────────────────────────────────────────
+    /// CPDR global on/off (NOT in TXProfile).  See header comment.
+    bool cpdrOn() const noexcept       { return m_cpdrOn; }
+    int  cpdrLevelDb() const noexcept  { return m_cpdrLevelDb; }
+
+    // ── CESSB getters ─────────────────────────────────────────────────────
+    bool cessbOn() const noexcept      { return m_cessbOn; }
+
+    // ── Range constants (Thetis Designer [v2.10.3.13]) ────────────────────
+    //
+    // Phase Rotator FREQ: 10..2000 Hz
+    // From Thetis setup.Designer.cs:46250-46259 [v2.10.3.13] — udPhRotFreq.
+    static constexpr int kPhaseRotatorFreqHzMin = 10;
+    static constexpr int kPhaseRotatorFreqHzMax = 2000;
+    // Phase Rotator STAGES: 2..16
+    // From Thetis setup.Designer.cs:46209-46218 [v2.10.3.13] — udPHROTStages.
+    static constexpr int kPhaseRotatorStagesMin = 2;
+    static constexpr int kPhaseRotatorStagesMax = 16;
+
+    // CFC pre-comp scalar: 0..16 dB
+    // From Thetis frmCFCConfig.Designer.cs:408-422 [v2.10.3.13] — nudCFC_precomp.
+    static constexpr int kCfcPrecompDbMin = 0;
+    static constexpr int kCfcPrecompDbMax = 16;
+    // CFC post-EQ gain scalar: -24..+24 dB
+    // From Thetis frmCFCConfig.Designer.cs:337-351 [v2.10.3.13] — nudCFC_posteqgain.
+    // The Designer encodes -24 via the C# decimal sign-bit (4th int = -2147483648),
+    // which means Maximum=24, Minimum=-24.
+    static constexpr int kCfcPostEqGainDbMin = -24;
+    static constexpr int kCfcPostEqGainDbMax =  24;
+    // CFC EQ frequency (per-band): 0..20000 Hz
+    // From Thetis frmCFCConfig.Designer.cs:267-286 [v2.10.3.13] — nudCFC_f.
+    static constexpr int kCfcEqFreqHzMin = 0;
+    static constexpr int kCfcEqFreqHzMax = 20000;
+    // CFC compression (per-band): 0..16 dB
+    // From Thetis frmCFCConfig.Designer.cs:217-236 [v2.10.3.13] — nudCFC_c.
+    // Naming note: Thetis stores these in CFCPreComp0..9 columns but the
+    // values are the per-band compression amounts (WDSP G[] vector).
+    static constexpr int kCfcCompressionDbMin = 0;
+    static constexpr int kCfcCompressionDbMax = 16;
+    // CFC post-EQ band gain (per-band): -24..+24 dB
+    // From Thetis frmCFCConfig.Designer.cs:564-583 [v2.10.3.13] — nudCFC_gain.
+    // Same C# decimal sign-bit encoding as nudCFC_posteqgain above.
+    // These are the per-band post-EQ gains (WDSP E[] vector).
+    static constexpr int kCfcPostEqBandGainDbMin = -24;
+    static constexpr int kCfcPostEqBandGainDbMax =  24;
+
+    // CPDR level: 0..20 dB
+    // From Thetis console.Designer.cs:6042-6043 [v2.10.3.13] — ptbCPDR
+    // (Maximum=20, Minimum=0).  setup.cs:9307 reads CompanderLevel into
+    // console.CPDRLevel which is the ptbCPDR value (console.cs:15683-15695).
+    static constexpr int kCpdrLevelDbMin = 0;
+    static constexpr int kCpdrLevelDbMax = 20;
+
     // ── TX EQ + Leveler + ALC properties (3M-3a-i Task C) ───────────────
     //
     // 28 new properties (23 TXProfile + 5 stand-alone + 4 globals):
@@ -816,6 +931,33 @@ public slots:
     void setTxEqCtfmode(int mode);
     void setTxEqWintype(int wintype);
 
+    // ── Phase Rotator setters (3M-3a-ii Batch 2) ─────────────────────────
+    void setPhaseRotatorEnabled(bool on);
+    void setPhaseReverseEnabled(bool on);
+    void setPhaseRotatorFreqHz(int hz);
+    void setPhaseRotatorStages(int stages);
+
+    // ── CFC setters (3M-3a-ii Batch 2) ────────────────────────────────────
+    void setCfcEnabled(bool on);
+    void setCfcPostEqEnabled(bool on);
+    void setCfcPrecompDb(int dB);
+    void setCfcPostEqGainDb(int dB);
+    /// Per-band CFC EQ frequency (Hz) at index 0..9.  No-op if index out of range.
+    void setCfcEqFreq(int index, int hz);
+    /// Per-band CFC compression amount (dB) at index 0..9.  No-op if index out of range.
+    void setCfcCompression(int index, int dB);
+    /// Per-band CFC post-EQ gain (dB) at index 0..9.  No-op if index out of range.
+    void setCfcPostEqBandGain(int index, int dB);
+    /// Opaque parametric-EQ blob.  No validation — pass-through for round-trip.
+    void setCfcParaEqData(const QString& data);
+
+    // ── CPDR setters (3M-3a-ii Batch 2) ───────────────────────────────────
+    void setCpdrOn(bool on);
+    void setCpdrLevelDb(int dB);
+
+    // ── CESSB setters (3M-3a-ii Batch 2) ──────────────────────────────────
+    void setCessbOn(bool on);
+
 signals:
     void txEqEnabledChanged(bool on);
     void txEqPreampChanged(int dB);
@@ -832,6 +974,32 @@ signals:
     void txEqMpChanged(bool mp);
     void txEqCtfmodeChanged(int mode);
     void txEqWintypeChanged(int wintype);
+
+    // ── Phase Rotator signals (3M-3a-ii Batch 2) ─────────────────────────
+    void phaseRotatorEnabledChanged(bool on);
+    void phaseReverseEnabledChanged(bool on);
+    void phaseRotatorFreqHzChanged(int hz);
+    void phaseRotatorStagesChanged(int stages);
+
+    // ── CFC signals (3M-3a-ii Batch 2) ────────────────────────────────────
+    void cfcEnabledChanged(bool on);
+    void cfcPostEqEnabledChanged(bool on);
+    void cfcPrecompDbChanged(int dB);
+    void cfcPostEqGainDbChanged(int dB);
+    /// Emitted when a per-band CFC EQ freq changes; carries index + new value.
+    void cfcEqFreqChanged(int index, int hz);
+    /// Emitted when a per-band CFC compression changes; carries index + new value.
+    void cfcCompressionChanged(int index, int dB);
+    /// Emitted when a per-band CFC post-EQ gain changes; carries index + new value.
+    void cfcPostEqBandGainChanged(int index, int dB);
+    void cfcParaEqDataChanged(const QString& data);
+
+    // ── CPDR signals (3M-3a-ii Batch 2) ───────────────────────────────────
+    void cpdrOnChanged(bool on);
+    void cpdrLevelDbChanged(int dB);
+
+    // ── CESSB signals (3M-3a-ii Batch 2) ──────────────────────────────────
+    void cessbOnChanged(bool on);
 
 public:
 
@@ -1119,6 +1287,52 @@ private:
     bool m_txEqMp      = false; // minimum-phase flag = 0
     int  m_txEqCtfmode = 0;     // cutoff mode = 0
     int  m_txEqWintype = 0;     // window type = 0
+
+    // ── CFC / CPDR / CESSB / Phase Rotator (3M-3a-ii Batch 2) ────────────
+    //
+    // Defaults sourced from Thetis database.cs:4724-4768 [v2.10.3.13]
+    // (TXProfile factory) except cpdrOn (console.cs:36430 — global).
+
+    // Phase Rotator.  database.cs:4726-4730 [v2.10.3.13].
+    bool m_phaseRotatorEnabled = false;  // dr["CFCPhaseRotatorEnabled"] = false;
+    bool m_phaseReverseEnabled = false;  // dr["CFCPhaseReverseEnabled"] = false;
+    int  m_phaseRotatorFreqHz  = 338;    // dr["CFCPhaseRotatorFreq"]    = 338;
+    int  m_phaseRotatorStages  = 8;      // dr["CFCPhaseRotatorStages"]  = 8;
+
+    // CFC scalars.  database.cs:4724-4733 [v2.10.3.13].
+    bool m_cfcEnabled       = false;  // dr["CFCEnabled"]       = false;
+    bool m_cfcPostEqEnabled = false;  // dr["CFCPostEqEnabled"] = false;
+    int  m_cfcPrecompDb     = 0;      // dr["CFCPreComp"]       = 0;
+    int  m_cfcPostEqGainDb  = 0;      // dr["CFCPostEqGain"]    = 0;
+
+    // CFC per-band frequencies.  database.cs:4757-4766 [v2.10.3.13]:
+    //   CFCEqFreq0..9 = {0, 125, 250, 500, 1000, 2000, 3000, 4000, 5000, 10000}.
+    std::array<int, 10> m_cfcEqFreqHz = {0, 125, 250, 500, 1000, 2000, 3000, 4000, 5000, 10000};
+
+    // CFC per-band compression amounts (WDSP G[] vector, stored under
+    // CFCPreComp0..9 columns).  database.cs:4735-4744 [v2.10.3.13]: all 5.
+    std::array<int, 10> m_cfcCompressionDb = {5, 5, 5, 5, 5, 5, 5, 5, 5, 5};
+
+    // CFC per-band post-EQ gains (WDSP E[] vector).  database.cs:4746-4755
+    // [v2.10.3.13]: all 0.
+    std::array<int, 10> m_cfcPostEqBandGainDb = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+    // Opaque parametric-EQ blob.  database.cs:4768 [v2.10.3.13]:
+    //   dr["CFCParaEQData"] = "";
+    QString m_cfcParaEqData;
+
+    // CPDR.  cpdrOn is global console state (NOT in TXProfile) — Thetis
+    // wires it via SetGeneralSetting(0, OtherButtonId.COMP, ...) at
+    // console.cs:36430 [v2.10.3.13].  WDSP boot default
+    // txa[ch].compressor.run = 0 (TXA.c:253 [v2.10.3.13]).
+    bool m_cpdrOn      = false;
+    // CPDR level: database.cs:4339 + 4580 [v2.10.3.13]:
+    //   dr["CompanderLevel"] = 2;
+    int  m_cpdrLevelDb = 2;
+
+    // CESSB.  database.cs:4689 [v2.10.3.13]:
+    //   dr["CESSB_On"] = false;
+    bool m_cessbOn = false;
 };
 
 } // namespace NereusSDR
