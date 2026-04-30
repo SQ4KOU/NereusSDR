@@ -215,8 +215,26 @@ void AppSettings::load()
         qWarning() << "XML parse error in settings:" << xml.errorString();
     }
 
+    int radiosCount = 0;
+    QStringList radioMacs;
+    for (auto it = m_settings.constBegin(); it != m_settings.constEnd(); ++it) {
+        if (it.key().startsWith(QStringLiteral("radios/"))) {
+            radiosCount++;
+            // Capture distinct MAC keys for the diagnostic
+            const QString rest = it.key().mid(QStringLiteral("radios/").size());
+            const int slash = rest.indexOf(QLatin1Char('/'));
+            if (slash > 0) {
+                const QString mac = rest.left(slash);
+                if (!radioMacs.contains(mac)) {
+                    radioMacs.append(mac);
+                }
+            }
+        }
+    }
     qDebug() << "Loaded" << m_settings.size() << "settings,"
-             << m_stationSettings.size() << "station settings";
+             << m_stationSettings.size() << "station settings;"
+             << radiosCount << "saved-radio keys across"
+             << radioMacs.size() << "MAC(s)";
 }
 
 void AppSettings::save()
