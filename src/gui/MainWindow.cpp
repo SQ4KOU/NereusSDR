@@ -3543,8 +3543,16 @@ void MainWindow::onConnectionStateChanged()
     // Greyed out when (a) we're already connected, OR (b) there's no
     // last-used radio in saved entries to reconnect to. Manage Radios is
     // the only way to pick a different radio.
+    //
+    // Use the model's authoritative connectionState (3Q-1) rather than
+    // RadioModel::isConnected() — the latter dereferences m_connection
+    // which can briefly disagree during teardown (m_connectionState
+    // already Disconnected but m_connection->isConnected() still true
+    // until the worker-thread teardown finishes). Without this, a
+    // Radio→Disconnect would leave Connect greyed forever.
     if (m_actConnect && m_actDisconnect && m_actProtocolInfo) {
-        const bool connected = m_radioModel->isConnected();
+        const bool connected =
+            (m_radioModel->connectionState() == ConnectionState::Connected);
         AppSettings& s = AppSettings::instance();
         const QString lastMac = s.lastConnected();
         const bool hasReconnectTarget =
