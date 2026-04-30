@@ -2518,3 +2518,6 @@ nereus_add_test(tst_network_diagnostics_dialog)
 # -- Phase 3M-3a-ii follow-up Batch 1: ParametricEqWidget skeleton --
 nereus_add_test(tst_parametric_eq_widget_skeleton)
 
+# -- Phase 3M-3a-ii follow-up Batch 2: ParametricEqWidget axis math + ordering --
+nereus_add_test(tst_parametric_eq_widget_axis)
+

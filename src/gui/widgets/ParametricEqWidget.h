@@ -64,15 +64,29 @@ mw0lge@grange-lane.co.uk
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPointF>
+#include <QRect>
 #include <QString>
 #include <QTimer>
 #include <QVector>
 #include <QWidget>
 
+// Forward declarations for tester classes that need access to private
+// axis/ordering helpers via `friend`. Each tester lives in its own
+// translation unit (tst_parametric_eq_widget_*.cpp) and exposes the
+// protected `using ParametricEqWidget::xFromFreq` etc. so the test
+// `QObject` can call them.  Future batches add their own friends in
+// the same block — keep them grouped.
+class ParametricEqAxisTester;          // Batch 2 (this batch)
+class ParametricEqInteractionTester;   // Batch 4
+class ParametricEqJsonTester;          // Batch 5
+
 namespace NereusSDR {
 
 class ParametricEqWidget : public QWidget {
     Q_OBJECT
+    friend class ::ParametricEqAxisTester;        // for tst_parametric_eq_widget_axis
+    friend class ::ParametricEqInteractionTester; // Task 4
+    friend class ::ParametricEqJsonTester;        // Task 5
 public:
     // -- Public types (mirror C# ucParametricEq.EqPoint / EqJsonState / EqJsonPoint) --
 
@@ -110,6 +124,48 @@ public:
 private:
     // From Thetis ucParametricEq.cs:254-274 [v2.10.3.13] -- _default_band_palette.
     static const QVector<QColor>& defaultBandPalette();
+
+    // Axis math -- From Thetis ucParametricEq.cs:2951-3078 [v2.10.3.13].
+    QRect  computePlotRect()                                   const;
+    int    computedPlotMarginLeft()                            const;
+    int    computedPlotMarginRight()                           const;
+    int    computedPlotMarginBottom()                          const;
+    int    axisLabelMaxWidth()                                 const;
+    float  xFromFreq(const QRect& plot, double frequencyHz)    const;
+    float  yFromDb(const QRect& plot, double db)               const;
+    double freqFromX(const QRect& plot, int x)                 const;
+    double dbFromY(const QRect& plot, int y)                   const;
+    double getNormalizedFrequencyPosition(double freqHz)       const;
+    double getNormalizedFrequencyPosition(double freqHz, double minHz, double maxHz, bool useLog) const;
+    double frequencyFromNormalizedPosition(double t)           const;
+    double frequencyFromNormalizedPosition(double t, double minHz, double maxHz, bool useLog) const;
+    double getLogFrequencyCentreHz(double minHz, double maxHz) const;
+    double getLogFrequencyShape(double centreRatio)            const;
+    QVector<double> getLogFrequencyTicks(const QRect& plot)    const;
+    double chooseFrequencyStep(double span)                    const;
+    double chooseDbStep(double span)                           const;
+    double getYAxisStepDb()                                    const;
+
+    // Hit-test -- From Thetis ucParametricEq.cs:2910-2949 [v2.10.3.13].
+    int    hitTestPoint(const QRect& plot, QPoint pt)          const;
+    bool   hitTestGlobalGainHandle(const QRect& plot, QPoint pt) const;
+
+    // Ordering / clamping -- From Thetis ucParametricEq.cs:3163-3332 [v2.10.3.13].
+    void   resetPointsDefault();
+    void   rescaleFrequencies(double oldMin, double oldMax, double newMin, double newMax);
+    void   enforceOrdering(bool enforceSpacingAll);
+    void   clampAllGains();
+    void   clampAllQ();
+
+    // Locked endpoints -- From Thetis ucParametricEq.cs:3384-3394 [v2.10.3.13].
+    bool   isFrequencyLockedIndex(int index)                   const;
+    double getLockedFrequencyForIndex(int index)               const;
+
+    // Helper -- From Thetis ucParametricEq.cs:1142-1160 [v2.10.3.13] -- band lookup.
+    EqPoint* findPointByBandId(int bandId);
+    int      indexFromBandId(int bandId)                       const;
+
+    static double clamp(double v, double lo, double hi);
 
     // -- Member state (mirrors private fields ucParametricEq.cs:276-351) --
     QVector<EqPoint> m_points;
