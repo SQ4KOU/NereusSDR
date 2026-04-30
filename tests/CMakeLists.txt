@@ -2374,3 +2374,8 @@ nereus_add_test(tst_tx_applet_profile_combo)
 #   - J.4: prompt Cancel reverts the combo to the original selection.
 nereus_add_test(tst_tx_profile_setup_page)
 
+# ── Shell-Chrome Redesign sub-PR-1: StatusBadge widget ────────────────────
+# 8 tests: defaults, setters round-trip, variant style application,
+# left/right-click signal emission. Uses QTEST_MAIN (needs QApplication
+# for QWidget mouse events).
+nereus_add_test(tst_status_badge)
