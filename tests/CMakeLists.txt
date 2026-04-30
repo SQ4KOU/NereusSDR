@@ -1029,6 +1029,14 @@ nereus_add_test(tst_tx_applet_vox_toggle)
 # placeholder for 3M-3a-ii (objectName: TxProcButton).
 nereus_add_test(tst_tx_applet_lev_eq_proc)
 
+# ── Phase 3M-3a-i Batch 3 Task A.1: TxEqDialog scaffold ───────────────────
+# Verifies the modeless 10-band TX EQ dialog launched from the [EQ]
+# right-click and Tools → TX Equalizer menu.  Confirms construction,
+# default values from TransmitModel, bidirectional binding (UI → model
+# and model → UI), the m_updatingFromModel echo guard, and the
+# instance() singleton pattern.
+nereus_add_test(tst_tx_eq_dialog)
+
 # ── Phase 3M-1b J.3: TxApplet MON toggle + monitor volume slider + mic-source badge ──
 # Verifies the model-layer contracts that TxApplet's MON button, monitor volume
 # slider, and mic-source badge depend on:
