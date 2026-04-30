@@ -106,6 +106,187 @@ public slots:
     virtual void setMox(bool enabled) = 0;
     virtual void setAntennaRouting(AntennaRouting routing) = 0;
 
+    // Push TX-side step attenuator value to hardware.
+    //
+    // From Thetis ChannelMaster/netInterface.c:1006 [v2.10.3.13]
+    // SetTxAttenData(int bits): broadcasts bits to all ADC tx_step_attn
+    // fields and triggers CmdTx() to emit the updated frame.
+    // Called by StepAttenuatorController::onMoxHardwareFlipped (F.2).
+    //
+    // Default no-op: subclasses that don't yet implement TX ATT (e.g. a
+    // stub test connection) skip silently. P1/P2 override this method.
+    virtual void setTxStepAttenuation(int /*dB*/) {}
+
+    // ── TX path (3M-1a) ────────────────────────────────────────────────
+
+    /// Push TX I/Q samples to the radio.
+    ///
+    /// `iq` points to interleaved I/Q float32 samples; `n` is the
+    /// number of complex samples (so the buffer has 2*n floats).
+    /// Implementations:
+    ///   - P1: write to EP2 zones in the 1032-byte Metis frame
+    ///     (interleaved with status bytes per the Metis spec).
+    ///   - P2: write to UDP port 1029 with the per-frame layout
+    ///     specified by OpenHPSDR Protocol 2.
+    ///
+    /// Audio-thread context: callers run this in the WDSP audio thread.
+    /// The implementation must not block; it queues to the connection
+    /// thread for actual UDP send.
+    ///
+    /// Cite: pre-code review §7.1 (P1 EP2 TX I/Q layout),
+    ///        §7.6 (P2 port 1029 TX I/Q layout).
+    virtual void sendTxIq(const float* iq, int n) = 0;
+
+    /// Set the Alex T/R relay wire bit.
+    ///
+    /// Distinct from `setMox(bool)`:
+    ///   - `setMox(true)` asserts the MOX bit on the next outbound
+    ///     frame (P1 byte 3 bit 0 / P2 high-pri byte 4 bit 1).
+    ///   - `setTrxRelay(true)` engages the Alex T/R relay path so
+    ///     the PA can drive the antenna. P1 wire bit is C3 byte 6
+    ///     bit 7 with INVERTED semantic — `1` = disabled (bypass),
+    ///     `0` = enabled (normal TX). When `enabled` is true the
+    ///     implementation writes `0` to bit 7 (engaged); when false
+    ///     (PA disabled), writes `1` (bypass).
+    ///   - P2: routed via Saturn register C0=0x24 indirect writes;
+    ///     stub for 3M-1a (deferred to 3M-3).
+    ///
+    /// `enabled` follows caller-friendly convention (true = TX path
+    /// engaged); the implementation handles the bit inversion on the
+    /// wire. State is stored in base-class `m_trxRelay`.
+    ///
+    /// 3M-1a wires this from `MoxController::hardwareFlipped` via
+    /// `RadioModel::onMoxHardwareFlipped` (Task F.1).
+    ///
+    /// Cite: pre-code review §7.2 + deskhpsdr/src/old_protocol.c:2909-2910
+    ///       (T/R relay bit C3[6] bit 7, inverted sense).
+    virtual void setTrxRelay(bool enabled) = 0;
+
+    bool isTrxRelayEngaged() const noexcept { return m_trxRelay; }
+
+    // ── Mic-jack hardware bits (3M-1b Phase G) ────────────────────────────
+
+    /// Hardware mic-jack 20 dB boost preamp.
+    ///
+    /// P1 source: Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+    ///   case 10 (C0=0x12) C2 byte: (prn->mic.mic_boost & 1) → bit 0 (0x01)
+    ///
+    /// P2 source: deskhpsdr src/new_protocol.c:1484-1486 [@120188f]
+    ///   if (mic_boost) { transmit_specific_buffer[50] |= 0x02; }
+    ///   (bit 1, mask 0x02 — different bit from P1)
+    ///
+    /// Polarity: 1 = boost on (no inversion).
+    ///
+    /// HL2 has no mic jack; the P1 implementation still writes the bit
+    /// (firmware ignores it).
+    virtual void setMicBoost(bool on) = 0;
+
+    /// Hardware mic-jack line-in path (replaces front-panel mic with line input).
+    ///
+    /// P1 source: Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+    ///   case 10 (C0=0x12) C2 byte: ((prn->mic.line_in & 1) << 1) → bit 1 (0x02)
+    ///
+    /// P2 source: deskhpsdr src/new_protocol.c:1480-1482 [@120188f]
+    ///   if (mic_linein) { transmit_specific_buffer[50] |= 0x01; }
+    ///   (bit 0, mask 0x01 — different bit position from P1)
+    ///
+    /// Polarity: 1 = line in active (no inversion).
+    ///
+    /// HL2 has no mic jack; the P1 implementation still writes the bit
+    /// (firmware ignores it).
+    virtual void setLineIn(bool on) = 0;
+
+    /// Hardware mic-jack Tip/Ring polarity selection.
+    ///
+    /// NereusSDR parameter convention: `tipHot = true` means Tip carries the
+    /// mic signal (the intuitive "tip is mic" meaning).
+    ///
+    /// POLARITY INVERSION AT THE WIRE LAYER — both upstream sources define
+    /// the field as "1 = Tip is BIAS/PTT" (i.e. Tip is NOT the mic):
+    ///   Thetis field name: mic_trs  ("TRS" = Tip-Ring-Sleeve; 1 = tip is ring)
+    ///   deskhpsdr field: mic_ptt_tip_bias_ring (1 = tip carries BIAS/PTT, not mic)
+    /// Therefore both P1 and P2 write `!tipHot` to the wire bit.
+    ///
+    /// P1 source: Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13]
+    ///   case 11 (C0=0x14) C1 byte: ((prn->mic.mic_trs & 1) << 4) → bit 4 (0x10)
+    ///   (first touch of case 11 / bank 11)
+    ///
+    /// P2 source: deskhpsdr src/new_protocol.c:1492-1494 [@120188f]
+    ///   if (mic_ptt_tip_bias_ring) { transmit_specific_buffer[50] |= 0x08; }
+    ///   (bit 3, mask 0x08 — different bit position from P1)
+    ///
+    /// HL2 has no mic jack; the P1 implementation still writes the bit
+    /// (firmware ignores it).
+    virtual void setMicTipRing(bool tipHot) = 0;
+
+    /// Hardware mic-jack phantom power (bias) enable.
+    ///
+    /// Polarity: 1 = bias on (no inversion — parameter maps directly to wire bit).
+    ///
+    /// P1 source: Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13]
+    ///   case 11 (C0=0x14) C1 byte: ((prn->mic.mic_bias & 1) << 5) → bit 5 (0x20)
+    ///   (same bank 11 / case 11 as G.3 mic_trs — both OR into C1)
+    ///
+    /// P2 source: deskhpsdr src/new_protocol.c:1496-1498 [@120188f]
+    ///   if (mic_bias_enabled) { transmit_specific_buffer[50] |= 0x10; }
+    ///   (bit 4, mask 0x10 in byte 50 — different bit position from P1)
+    ///
+    /// HL2 has no mic jack; the P1 implementation still writes the bit
+    /// (firmware ignores it).
+    virtual void setMicBias(bool on) = 0;
+
+    /// Hardware mic-jack PTT enable (Orion/ANAN front-panel PTT).
+    ///
+    /// NereusSDR parameter convention: `enabled = true` means PTT is enabled
+    /// (the intuitive meaning — front-panel PTT button is active).
+    ///
+    /// POLARITY INVERSION AT THE WIRE LAYER — both upstream sources store and
+    /// transmit the *disable* flag (i.e. "PTT disabled" is the field name):
+    ///   Thetis field name: mic_ptt  (networkproto1.c case 11 C1 bit 6 = 0x40)
+    ///     → `mic_ptt` = 1 means PTT is DISABLED (not enabled)
+    ///   deskhpsdr field: mic_ptt_enabled == 0 → set the bit  (new_protocol.c:1488)
+    ///     → bit set means PTT is DISABLED
+    ///   Thetis console.cs:19758 stores `MicPTTDisabled` (bool) — the property
+    ///     name confirms the wire semantic: 1 = disabled.
+    /// Therefore both P1 and P2 write `!enabled` to the wire bit:
+    ///   enabled=true  → PTT is enabled  → wire bit = 0 (disabled-flag cleared)
+    ///   enabled=false → PTT is disabled → wire bit = 1 (disabled-flag set)
+    ///
+    /// P1 source: Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13]
+    ///   case 11 (C0=0x14) C1 byte: ((prn->mic.mic_ptt & 1) << 6) → bit 6 (0x40)
+    ///   (same bank 11 / case 11 as G.3 mic_trs + G.4 mic_bias — all OR into C1)
+    ///
+    /// P2 source: deskhpsdr src/new_protocol.c:1488-1490 [@120188f]
+    ///   if (mic_ptt_enabled == 0) { transmit_specific_buffer[50] |= 0x04; }
+    ///   (bit 2, mask 0x04 in byte 50 — different bit position from P1)
+    ///
+    /// Cross-reference: Thetis console.cs:19764 [v2.10.3.13]
+    ///   MicPTTDisabled setter calls NetworkIO.SetMicPTT(Convert.ToInt32(value))
+    ///   confirming the UI inverts: UI "PTT off" → sets the disable flag.
+    ///
+    /// HL2 has no front-panel PTT jack; the P1 implementation still writes the
+    /// bit (firmware ignores it).
+    virtual void setMicPTT(bool enabled) = 0;
+
+    /// Hardware mic-jack XLR input select (Saturn G2 / ANAN-G2 only).
+    ///
+    /// P2-ONLY FEATURE. Saturn G2 hardware ships with an XLR balanced mic
+    /// input; this bit selects between XLR (balanced) and TRS (unbalanced).
+    ///
+    /// P2 source: deskhpsdr src/new_protocol.c:1500-1502 [@120188f]
+    ///   if (mic_input_xlr) { transmit_specific_buffer[50] |= 0x20; }
+    ///   Bit 5 (mask 0x20) of byte 50. Polarity: 1 = XLR jack selected.
+    ///   No inversion — parameter maps directly to wire bit.
+    ///
+    /// P1 implementation is STORAGE-ONLY.
+    ///   P1 hardware has no XLR jack. The setter stores m_micXlr for
+    ///   cross-board API consistency but does NOT emit any wire bytes.
+    ///   P1 case-10 and case-11 C&C bytes are unchanged regardless of value.
+    ///   Comment: "Saturn G2 P2-only feature; P1 hardware has no XLR jack."
+    ///
+    /// Default true — Saturn G2 ships with XLR-enabled configuration.
+    virtual void setMicXlr(bool xlrJack) = 0;
+
     // DEPRECATED — call setAntennaRouting directly. Kept for one release
     // cycle as a rollback hatch per docs/architecture/antenna-routing-design.md §7.7.
     // Removed in the release following 3P-I-b.
@@ -118,15 +299,37 @@ public slots:
     // --- ADC Mapping ---
     virtual int getAdcForDdc(int /*ddc*/) const { return 0; }
 
+    // --- TX output sample rate (bench fix round 3 — Issue B) ---
+    //
+    // Returns the radio's negotiated TX I/Q output sample rate in Hz.
+    // This is the rate passed to OpenChannel() as outputSampleRate, and
+    // therefore the rate at which WDSP's TXA rsmpout resampler delivers
+    // samples to fexchange2's Iout/Qout buffers.
+    //
+    // P1 (HL2/Atlas/Hermes/Angelia/Orion): TX I/Q flows into EP2 zones at
+    //   the radio's sample rate.  For single-RX operation this is always
+    //   48000 Hz (single-rate mode).  P1RadioConnection returns 48000.
+    //
+    // P2 (Saturn/ANAN-G2): TX I/Q flows to UDP port 1029 at 192000 Hz.
+    //   P2RadioConnection returns 192000 — derived from m_tx[0].samplingRate
+    //   (always 192 kHz per Thetis netInterface.c:1513 [v2.10.3.13]).
+    //
+    // Default implementation returns 48000 (correct for P1 and stubs).
+    // P2RadioConnection overrides to return 192000.
+    //
+    // From Thetis wdsp/cmaster.c:183 [v2.10.3.13] — ch_outrate parameter.
+    // From Thetis netInterface.c:1513 [v2.10.3.13] — P2 tx always 192 kHz.
+    virtual int txSampleRate() const { return 48000; }
+
     // --- Watchdog ---
     // Enable / disable the radio-side network watchdog. When enabled,
     // the radio firmware drops TX if it stops seeing C&C traffic.
     // Mirrors SetWatchdogTimer(int bits) in NetworkIOImports.cs:197-198
     // [v2.10.3.13]. Boolean only — no host-side timeout parameter.
     //
-    // 3M-0 status: stub. Stores the boolean state; the actual wire
-    // bit emit is deferred to 3M-1a pending wire-format identification
-    // (the bit position lives inside Thetis's closed ChannelMaster.dll).
+    // Wire bit emission: P1 implemented in P1RadioConnection::sendMetisStart
+    // (RUNSTOP pkt[3] bit 7 per dsopenhpsdr1.v:399-400 [@7472bd1]).
+    // P2 wire bit deferred to E.8 — see tracking comment in P2RadioConnection.cpp.
     virtual void setWatchdogEnabled(bool enabled) = 0;
 
     bool isWatchdogEnabled() const noexcept { return m_watchdogEnabled; }
@@ -158,6 +361,28 @@ signals:
     // Emitted when mic samples are available.
     void micDataReceived(const QVector<float>& samples);
 
+    /// Decoded mic-frame audio from the radio's mic-jack input.
+    ///
+    /// Emitted by P1RadioConnection on EP2 mic-byte zone arrival (Phase G);
+    /// emitted by P2RadioConnection on port-1026 packet arrival (Phase G).
+    /// Carries float-converted mic samples + frame count.
+    ///
+    /// **DirectConnection ONLY.** The pointer is only valid during the
+    /// synchronous slot dispatch — Qt signals cannot safely queue raw
+    /// pointers across threads. Subscribers (RadioMicSource in F.2) MUST
+    /// connect with Qt::DirectConnection and immediately copy the samples
+    /// into their own lock-free SPSC ring before returning.
+    ///
+    /// This matches the D.5 sip1OutputReady contract in TxChannel: the same
+    /// raw-pointer + DirectConnection pattern is used wherever the audio
+    /// thread passes data across a signal boundary.
+    ///
+    /// Sample format: float32 mono at the radio's mic sample rate
+    /// (typically 48 kHz on HPSDR family).
+    ///
+    /// Plan: 3M-1b F.4. Pre-code review §6.4.
+    void micFrameDecoded(const float* samples, int frames);
+
     // --- Meters ---
     void meterDataReceived(float forwardPower, float reversePower,
                            float supplyVoltage, float paCurrent);
@@ -187,6 +412,29 @@ signals:
     // ADC overflow detected.
     void adcOverflow(int adc);
 
+    // Mic-jack PTT input from the radio hardware, decoded from the status
+    // frame on every frame receipt.  Emitted unconditionally each frame;
+    // MoxController::onMicPttFromRadio() is idempotent on repeated same-state
+    // calls (setPttMode(Mic) is a no-op when mode unchanged; setMox(x) only
+    // advances the state machine when x differs from m_mox).
+    //
+    // Subscriber: RadioModel wires this to MoxController::onMicPttFromRadio
+    // in setupMoxController() (H.5).  The MoxController drives MOX state when
+    // mic-jack PTT changes state.
+    //
+    // P1 source: C0 byte (ControlBytesIn[0]) bit 0 of each EP6 sub-frame.
+    //   Cite: Thetis networkproto1.c:329 [v2.10.3.13]:
+    //     prn->ptt_in = ControlBytesIn[0] & 0x1;
+    //   + console.cs:25426 [v2.10.3.13]:
+    //     bool mic_ptt = (dotdashptt & 0x01) != 0; // PTT from radio
+    //
+    // P2 source: High-Priority status packet byte 4 (ReadBufp[0]) bit 0.
+    //   Cite: Thetis network.c:686-689 [v2.10.3.13]:
+    //     //Byte 0 - Bit [0] - PTT  1 = active, 0 = inactive
+    //     prn->ptt_in = prn->ReadBufp[0] & 0x1;
+    //   (ReadBufp points to raw[4] in NereusSDR — after 4-byte seq prefix.)
+    void micPttFromRadio(bool pressed);
+
     // Radio firmware info received during handshake.
     void firmwareInfoReceived(int version, const QString& details);
 
@@ -199,8 +447,81 @@ protected:
 
     // Shared boolean state for setWatchdogEnabled / isWatchdogEnabled.
     // Both P1 and P2 overrides read/write this field.
-    // 3M-0: state-tracking only; wire emit deferred to 3M-1a.
-    bool m_watchdogEnabled{false};
+    //
+    // Default TRUE: HL2 firmware (dsopenhpsdr1.v:399-400) interprets RUNSTOP
+    // byte bit 7 as watchdog_disable (1 = disabled, 0 = enabled). When this
+    // field is true, sendMetisStart/sendMetisStop write bit 7 = 0 (watchdog
+    // enabled), matching deskhpsdr's implicit behavior (buffer[3] = command
+    // with no bit-7 OR → bit 7 = 0 → watchdog active by default).
+    //
+    // 3M-0 used false here (bug): first sendMetisStart would have written
+    // bit 7 = 1 → watchdog disabled on connect. Fixed in 3M-1a Task E.5.
+    // From deskhpsdr/src/old_protocol.c:3811 [@120188f]:
+    //   buffer[3] = command;  // 0x01 start / 0x00 stop — bit 7 never set
+    bool m_watchdogEnabled{true};
+
+    // Shared state for setTrxRelay / isTrxRelayEngaged (3M-1a Task E.1).
+    // true = TX path engaged (bit 7 of P1 C3 bank 6 written as 0 — inverted
+    // sense). P2 stub; wire emit deferred to 3M-3.
+    bool m_trxRelay{false};
+
+    // Shared state for setMicBoost (3M-1b G.1).
+    // P1: emitted to case 10 (C0=0x12) C2 bit 0 (0x01).
+    // P2: emitted to transmit_specific_buffer[50] bit 1 (0x02).
+    // From Thetis networkproto1.c:581 [v2.10.3.13]; deskhpsdr new_protocol.c:1484-1486 [@120188f].
+    bool m_micBoost{false};
+
+    // Shared state for setLineIn (3M-1b G.2).
+    // P1: emitted to case 10 (C0=0x12) C2 bit 1 (0x02).
+    // P2: emitted to transmit_specific_buffer[50] bit 0 (0x01).
+    // From Thetis networkproto1.c:581 [v2.10.3.13]; deskhpsdr new_protocol.c:1480-1482 [@120188f].
+    bool m_lineIn{false};
+
+    // Shared state for setMicTipRing (3M-1b G.3).
+    // Parameter convention: true = Tip is mic (intuitive).
+    // POLARITY INVERSION: both P1 and P2 write !m_micTipRing to the wire bit.
+    // P1: emitted to case 11 (C0=0x14) C1 bit 4 (0x10) inverted.
+    // P2: emitted to transmit_specific_buffer[50] bit 3 (0x08) inverted.
+    // From Thetis networkproto1.c:597 [v2.10.3.13]; deskhpsdr new_protocol.c:1492-1494 [@120188f].
+    bool m_micTipRing{true};
+
+    // Shared state for setMicBias (3M-1b G.4).
+    // Polarity: 1 = bias on (no inversion — parameter maps directly to wire bit).
+    // Default false — bias off (per pre-code review §2.3 / §2.7 and
+    //   TransmitModel::micBias default in C.2).
+    // P1: emitted to case 11 (C0=0x14) C1 bit 5 (0x20).
+    // P2: emitted to transmit_specific_buffer[50] bit 4 (0x10).
+    // From Thetis networkproto1.c:597 [v2.10.3.13]; deskhpsdr new_protocol.c:1496-1498 [@120188f].
+    bool m_micBias{false};
+
+    // Shared state for setMicPTT (3M-1b G.5).
+    // POLARITY INVERSION: m_micPTT=true means PTT is enabled (intuitive UI semantic).
+    // Both wire ends carry the *disable* flag — setter writes !m_micPTT to the bit.
+    //   m_micPTT=true  (enabled)  → wire bit = 0 (PTT-disabled-flag cleared)
+    //   m_micPTT=false (disabled) → wire bit = 1 (PTT-disabled-flag set)
+    // Default false — PTT not enabled by default; wire bit will be 1 (disabled) by default.
+    //   This matches pre-code review §2.3 / §2.7 and TransmitModel::micPttDisabled
+    //   default (disabled=true → m_micPTT=false here) in C.2.
+    // P1: emitted to case 11 (C0=0x14) C1 bit 6 (0x40), INVERTED.
+    // P2: emitted to transmit_specific_buffer[50] bit 2 (0x04), INVERTED.
+    // From Thetis networkproto1.c:597-598 [v2.10.3.13]; deskhpsdr new_protocol.c:1488-1490 [@120188f].
+    // Thetis console.cs:19764 [v2.10.3.13] confirms MicPTTDisabled is the
+    //   UI property (storage name = disable flag) — NereusSDR flips to enabled.
+    bool m_micPTT{false};
+
+    // Shared state for setMicXlr (3M-1b G.6).
+    // P2-only wire emission. P1 stores the flag for cross-board API consistency
+    //   but does NOT emit any wire bytes. "Saturn G2 P2-only feature; P1 hardware
+    //   has no XLR jack." P1 case-10 and case-11 C&C bytes are UNCHANGED
+    //   regardless of m_micXlr value.
+    // Polarity: 1 = XLR selected (no inversion — parameter maps directly to wire bit).
+    // Default true — Saturn G2 ships with XLR-enabled configuration.
+    //   This matches pre-code review §2.7 and TransmitModel::micXlr default in C.2.
+    // P1: STORAGE-ONLY (no wire emission).
+    // P2: emitted to transmit_specific_buffer[50] bit 5 (0x20).
+    // From deskhpsdr new_protocol.c:1500-1502 [@120188f]:
+    //   if (mic_input_xlr) { transmit_specific_buffer[50] |= 0x20; }
+    bool m_micXlr{true};
 };
 
 } // namespace NereusSDR

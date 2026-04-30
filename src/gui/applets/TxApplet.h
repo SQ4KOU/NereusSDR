@@ -4,15 +4,13 @@
 // src/gui/applets/TxApplet.h  (NereusSDR)
 // =================================================================
 //
-// Source attribution (AetherSDR — GPLv3):
+// Ported from Thetis sources:
+//   Project Files/Source/Console/console.cs — chkMOX_CheckedChanged2
+//   (29311-29678 [v2.10.3.13]) and chkTUN_CheckedChanged (29978-30157
+//   [v2.10.3.13]); original licence from Thetis source is included below.
 //
-//   Copyright (C) 2024-2026  Jeremy (KK7GWY) / AetherSDR contributors
-//       — per https://github.com/ten9876/AetherSDR (GPLv3; see LICENSE
-//       and About dialog for the live contributor list)
-//
-//   This file is a port or structural derivative of AetherSDR source.
-//   AetherSDR is licensed under the GNU General Public License v3.
-//   NereusSDR is also GPLv3. Attribution follows GPLv3 §5 requirements.
+// Layout from AetherSDR TxApplet.{h,cpp} (GPLv3, see AetherSDR attribution
+// block below).
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -21,9 +19,102 @@
 //                 via Anthropic Claude Code.
 //                 Layout pattern from AetherSDR `src/gui/TxApplet.{h,cpp}`.
 //                 Wiring deferred to Phase 3M.
+//   2026-04-26 — Phase 3M-1a H.3: TUNE/MOX/Tune-Power/RF-Power deep-wired.
+//                 Out-of-phase controls hidden with TODO comments.
+//                 syncFromModel() activates. setCurrentBand(Band) added for
+//                 tune-power slider sync on band change.
+//   2026-04-28 — Phase 3M-1b J.2: VOX toggle button added below Tune Power.
+//                 Checkable, green border when active. Bidirectional with
+//                 TransmitModel::voxEnabled (default false; does NOT persist).
+//                 Right-click opens VoxSettingsPopup with 3 sliders for
+//                 threshold/gain/hang-time.
+//   2026-04-28 — Phase 3M-1b J.3: MON toggle button + monitor volume slider
+//                 added below VOX. Bidirectional with TransmitModel::monEnabled
+//                 and TransmitModel::monitorVolume (default 0.5f). Mic-source
+//                 badge added above the gauges (read-only, "PC mic"/"Radio mic").
+//   2026-04-28 — Phase 3M-1b K.2: MOX button tooltip override on DSP mode change.
+//                 tooltipForMode(DSPMode) returns a static tooltip string that
+//                 reflects the deferred-phase reason for CW and AM/FM/SAM/DSB/DRM,
+//                 or the normal "Manual transmit (MOX)" for allowed modes.
+//                 onMoxModeChanged(DSPMode) slot wired to SliceModel::dspModeChanged
+//                 via RadioModel in wireControls(). Closes Phase K.
+//   2026-04-28 — Phase 3M-1b (relocation): Mic Gain slider row (J.1) removed.
+//                 Relocated to PhoneCwApplet (#5 slot) per JJ feedback.
+//                 PhoneCwApplet now owns micGainDb wiring and mic level gauge.
+//   2026-04-29 — Phase 3M-1c J.1+J.2: TX Profile combo wired to MicProfileManager
+//                 (left-click selects, right-click → Setup → TX Profile via
+//                 txProfileMenuRequested signal); 2-TONE button wired to
+//                 TwoToneController (mirrors Thetis chk2TONE_CheckedChanged at
+//                 console.cs:44728-44760 [v2.10.3.13]).  Both bind via raw-
+//                 pointer setters that Phase L's MainWindow wiring populates.
+// =================================================================
+
+//=================================================================
+// console.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
+// Credit is given to Sizenko Alexander of Style-7 (http://www.styleseven.com/) for the Digital-7 font.
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to:
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Modifications to support the Behringer Midi controllers
+// by Chris Codella, W2PA, May 2017.  Indicated by //-W2PA comment lines.
+// Modifications for using the new database import function.  W2PA, 29 May 2017
+// Support QSK, possible with Protocol-2 firmware v1.7 (Orion-MkI and Orion-MkII), and later.  W2PA, 5 April 2019
+// Modfied heavily - Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+// Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
+
+// =================================================================
+// Source attribution (AetherSDR — GPLv3):
+//
+//   Copyright (C) 2024-2026  Jeremy (KK7GWY) / AetherSDR contributors
+//       — per https://github.com/ten9876/AetherSDR (GPLv3; see LICENSE
+//       and About dialog for the live contributor list)
+//
+//   Layout pattern from AetherSDR `src/gui/TxApplet.{h,cpp}`.
+//   AetherSDR is licensed under the GNU General Public License v3.
+//   NereusSDR is also GPLv3. Attribution follows GPLv3 §5 requirements.
 // =================================================================
 
 #include "AppletWidget.h"
+#include "models/Band.h"
+#include "core/WdspTypes.h"
 
 class QPushButton;
 class QSlider;
@@ -32,26 +123,43 @@ class QLabel;
 
 namespace NereusSDR {
 
-// TxApplet — transmit controls panel (all 15 controls, Phase 3I-1 NYI).
+class HGauge;
+class MicProfileManager;
+class TwoToneController;
+
+// TxApplet — transmit controls panel.
 //
 // Layout (AetherSDR TxApplet.cpp pattern):
+//  0.  Mic-source badge     — read-only label "PC mic"/"Radio mic" [J.3 Phase 3M-1b]
 //  1.  Forward Power gauge  — HGauge 0–120 W, red > 100 W
 //  2.  SWR gauge            — HGauge 1.0–3.0, red > 2.5
 //  3.  RF Power slider row  — label(62) + slider + value(22)
 //  4.  Tune Power slider row
+//  4b. VOX toggle button    — checkable, green border on active [J.2 Phase 3M-1b]
+//      Right-click: VoxSettingsPopup with threshold/gain/hang-time sliders.
+//  4c. MON toggle button    — checkable, blue border on active [J.3 Phase 3M-1b]
+//      Bidirectional with TransmitModel::monEnabled (default false).
+//  4d. Monitor volume slider — 0..100 → monitorVolume 0.0..1.0 [J.3 Phase 3M-1b]
+//      Default 50 (matches model default 0.5f from Thetis audio.cs:417).
 //  5.  MOX button           — checkable, red when active
 //  6.  TUNE button          — checkable, red + "TUNING..." when active
 //  7.  ATU button           — checkable
 //  8.  MEM button           — checkable
 //  9.  TX Profile combo     — "Default" item
 // 10.  Tune mode combo
-// 11.  2-Tone test button   — checkable
-// 12.  PS-A toggle          — checkable, green when active
+// 11.  2-Tone test button   — hidden until Phase 3M-3 (out-of-phase)
+// 12.  PS-A toggle          — hidden until Phase 3M-4 (out-of-phase)
 // 13.  DUP (full duplex)    — checkable
 // 14.  xPA indicator button — checkable
 // 15.  SWR protection LED   — QLabel indicator
 //
-// All controls disabled with NyiOverlay::markNyi("Phase 3I-1").
+// NOTE: Mic Gain slider was here (Row 3b, J.1) but was relocated to
+//       PhoneCwApplet (#5 slot) per JJ feedback (2026-04-28 relocation).
+//
+// Phase 3M-1a H.3: TUNE/MOX/Tune-Power/RF-Power are deep-wired.
+// Phase 3M-1b J.2: VOX toggle + VoxSettingsPopup wired.
+// Phase 3M-1b J.3: MON toggle + volume slider + mic-source badge wired.
+// Out-of-phase controls (2-Tone, PS-A) are hidden.
 class TxApplet : public AppletWidget {
     Q_OBJECT
 public:
@@ -59,21 +167,96 @@ public:
 
     QString appletId() const override { return QStringLiteral("TX"); }
     QString appletTitle() const override { return QStringLiteral("TX"); }
-    void syncFromModel() override; // NYI — empty until Phase 3I-1
+    void syncFromModel() override;
+
+    // Called by MainWindow when band changes so the Tune Power slider
+    // can reflect the stored per-band tune power.
+    // Phase 3M-1a H.3.
+    void setCurrentBand(Band band);
+
+    // K.2: MOX button tooltip override based on current DSP mode.
+    // Public static so tests can call it directly without constructing a full
+    // TxApplet instance. Returns the rejection reason for deferred modes
+    // (CW → 3M-2, AM/FM/SAM/DSB/DRM → 3M-3) or the normal tooltip otherwise.
+    static QString tooltipForMode(DSPMode mode);
+
+    // ── Phase 3M-1c J.1: TX Profile combo wiring ────────────────────────────
+    // MainWindow (Phase L) injects MicProfileManager via this setter so the
+    // combo populates from manager.profileNames() and round-trips selection
+    // via setActiveProfile.  Pass nullptr to clear (e.g. on radio
+    // disconnect).  TxApplet does NOT take ownership.
+    void setMicProfileManager(MicProfileManager* mgr);
+
+    // ── Phase 3M-1c J.2: 2-TONE button wiring ───────────────────────────────
+    // MainWindow (Phase L) injects TwoToneController via this setter.  The
+    // button's clicked-state drives controller.setActive(checked); the
+    // controller's twoToneActiveChanged signal mirrors back into the button.
+    void setTwoToneController(TwoToneController* controller);
+
+    // ── Test accessors ──────────────────────────────────────────────────────
+    // Always-on (no NEREUS_BUILD_TESTS guard) — same convention as
+    // TestTwoTonePage (matches AudioTxInputPage / RxApplet patterns).
+    QComboBox*   profileCombo()  const { return m_profileCombo; }
+    QPushButton* twoToneButton() const { return m_twoToneBtn; }
+
+signals:
+    // ── Phase 3M-1c J.1: right-click on TX Profile combo ────────────────────
+    // Mirrors Thetis comboTXProfile_MouseDown (console.cs:44519-44522
+    // [v2.10.3.13]):
+    //     if (e.Button == MouseButtons.Right) {
+    //         SetupForm.Show();
+    //         SetupForm.ActivateTXProfileTab();
+    //     }
+    //
+    // MainWindow (Phase L) connects this to a slot opening SetupDialog at
+    // the "TX Profile" page.  The signal carries no payload.
+    void txProfileMenuRequested();
 
 private:
     void buildUI();
+    void wireControls();  // called after buildUI() — attaches signals/slots
+    // J.2: VOX settings right-click popup.
+    void showVoxSettingsPopup(const QPoint& pos);
+    // K.2: slot called when SliceModel::dspModeChanged fires (via RadioModel).
+    // Updates m_moxBtn->setToolTip(tooltipForMode(mode)).
+    void onMoxModeChanged(DSPMode mode);
 
+    // ── J.1: combo refresh helpers ──────────────────────────────────────────
+    // Rebuild combo entries from m_micProfileMgr->profileNames(), preserving
+    // the currently-active profile selection where possible.  Does nothing
+    // when the manager is null.  Uses QSignalBlocker to suppress the
+    // currentTextChanged echo that would otherwise call back into the model.
+    void rebuildProfileCombo();
+
+    // ── J.1/J.2: non-owning controller pointers ─────────────────────────────
+    MicProfileManager* m_micProfileMgr{nullptr};
+    TwoToneController* m_twoToneCtrl{nullptr};
+
+    // 0. Mic-source badge (J.3 Phase 3M-1b) — read-only label above the gauges.
+    QLabel*  m_micSourceBadge = nullptr;
     // 1. Forward Power gauge
-    QWidget* m_fwdPowerGauge  = nullptr;
+    HGauge*  m_fwdPowerGauge  = nullptr;
     // 2. SWR gauge
     QWidget* m_swrGauge       = nullptr;
+    // EMA smoothing state for fwd-power gauge (Thetis-style envelope detector
+    // not yet ported; this is a simple alpha=0.25 exponential-moving-average
+    // to keep the displayed value calm — RadioStatus::powerChanged fires
+    // ~twice per hardware sample, which makes raw values visibly jittery).
+    double   m_fwdPowerSmoothedW{0.0};
     // 3. RF Power
     QSlider* m_rfPowerSlider  = nullptr;
     QLabel*  m_rfPowerValue   = nullptr;
     // 4. Tune Power
     QSlider* m_tunePwrSlider  = nullptr;
     QLabel*  m_tunePwrValue   = nullptr;
+    // 4b. VOX toggle (J.2 Phase 3M-1b)
+    QPushButton* m_voxBtn     = nullptr;
+    // 4c. MON toggle (J.3 Phase 3M-1b) — bidirectional with TransmitModel::monEnabled
+    QPushButton* m_monBtn     = nullptr;
+    // 4d. Monitor volume slider (J.3 Phase 3M-1b) — 0..100 → monitorVolume 0.0..1.0
+    //     Default 50 (matches model default 0.5f from Thetis audio.cs:417).
+    QSlider*     m_monitorVolumeSlider = nullptr;
+    QLabel*      m_monitorVolumeValue  = nullptr;
     // 5. MOX
     QPushButton* m_moxBtn     = nullptr;
     // 6. TUNE
@@ -96,6 +279,13 @@ private:
     QPushButton* m_xpaBtn     = nullptr;
     // 15. SWR protection LED
     QLabel*      m_swrProtLed = nullptr;
+
+    // Current band — used to resolve per-band tune power.
+    // Updated by setCurrentBand() when PanadapterModel::bandChanged fires.
+    Band m_currentBand{Band::Band20m};
+
+    // Flag preventing echo loops between the model and the UI.
+    bool m_updatingFromModel{false};
 };
 
 } // namespace NereusSDR

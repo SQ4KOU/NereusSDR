@@ -53,16 +53,22 @@ private slots:
 
         // Bank 11 — RX ATT 20 dB, no MOX (5-bit mask + 0x20 enable)
         // Source: networkproto1.c:601 [@501e3f5]
+        // C1 = 0x40: bit 6 (mic_ptt, INVERTED) is SET by default because
+        //   CodecContext.p1MicPTT defaults false → !false = 1 on wire (PTT disabled).
+        //   Thetis networkproto1.c:597-598 [v2.10.3.13]: ((prn->mic.mic_ptt & 1) << 6)
+        //   Preamp bits 0-3 = 0; mic_trs bit 4 = 0 (p1MicTipRing default true → !true = 0);
+        //   mic_bias bit 5 = 0 (p1MicBias default false). 3M-1b G.5.
         QTest::newRow("bank11_rx_att_20dB_ramdor_encoding")
             << 11 << false
-            << 0x14 << 0x00 << 0x00 << 0x00 << ((20 & 0x1F) | 0x20)
+            << 0x14 << 0x40 << 0x00 << 0x00 << ((20 & 0x1F) | 0x20)
             << QByteArray(R"({"rxStepAttn":[20,0,0]})");
 
         // Bank 11 — RX ATT 31 dB max
         // Source: networkproto1.c:601 [@501e3f5]
+        // C1 = 0x40: same mic_ptt default reasoning as bank11_rx_att_20dB. 3M-1b G.5.
         QTest::newRow("bank11_rx_att_31dB_max")
             << 11 << false
-            << 0x14 << 0x00 << 0x00 << 0x00 << ((31 & 0x1F) | 0x20)
+            << 0x14 << 0x40 << 0x00 << 0x00 << ((31 & 0x1F) | 0x20)
             << QByteArray(R"({"rxStepAttn":[31,0,0]})");
 
         // Bank 12 — ADC1 ATT during RX (no MOX), value 7
@@ -83,12 +89,21 @@ private slots:
             << 0x17 << (0x1F | 0x20) << (0x00 | 0x20) << 0x00 << 0x00
             << QByteArray(R"({"rxStepAttn":[0,12,0]})");  // 12 ignored under MOX
 
-        // Bank 10 — Alex HPF/LPF passthrough, PA enabled
+        // Bank 10 — Alex HPF/LPF passthrough, relay disengaged (default trxRelay=false → bit 7 = 1)
         // Source: networkproto1.c:583-590 [@501e3f5]
-        QTest::newRow("bank10_alex_passthrough_pa_on")
+        // deskhpsdr/src/old_protocol.c:2909-2910 [@120188f] — bit 7 set when relay disabled.
+        QTest::newRow("bank10_alex_passthrough_relay_off")
             << 10 << false
             << 0x12 << 0x00 << 0x40 << (0x01 | 0x80) << 0x01
-            << QByteArray(R"({"alexHpfBits":1,"alexLpfBits":1,"paEnabled":true})");
+            << QByteArray(R"({"alexHpfBits":1,"alexLpfBits":1,"trxRelay":false})");
+
+        // Bank 10 — relay engaged (trxRelay=true → bit 7 = 0, relay in normal TX path)
+        // Source: deskhpsdr/src/old_protocol.c:2909-2910 [@120188f]
+        //   bit 7 is only SET when disablePA || !pa_enabled; during normal TX it stays 0.
+        QTest::newRow("bank10_relay_engaged")
+            << 10 << false
+            << 0x12 << 0x00 << 0x40 << 0x01 << 0x01
+            << QByteArray(R"({"alexHpfBits":1,"alexLpfBits":1,"trxRelay":true})");
     }
 
     void compose() {
@@ -191,6 +206,7 @@ void TestP1CodecStandard::applyOverrides(CodecContext& ctx, const QByteArray& js
     if (o.contains("alexHpfBits"))    { ctx.alexHpfBits    = quint8(o["alexHpfBits"].toInt()); }
     if (o.contains("alexLpfBits"))    { ctx.alexLpfBits    = quint8(o["alexLpfBits"].toInt()); }
     if (o.contains("paEnabled"))      { ctx.paEnabled      = o["paEnabled"].toBool(); }
+    if (o.contains("trxRelay"))       { ctx.trxRelay       = o["trxRelay"].toBool(); }
     if (o.contains("rxStepAttn")) {
         auto arr = o["rxStepAttn"].toArray();
         for (int i = 0; i < 3 && i < arr.size(); ++i) { ctx.rxStepAttn[i] = arr[i].toInt(); }

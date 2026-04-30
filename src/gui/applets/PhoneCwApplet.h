@@ -71,6 +71,7 @@ class QSlider;
 class QPushButton;
 class QLabel;
 class QComboBox;
+class QTimer;
 
 namespace NereusSDR {
 
@@ -80,11 +81,16 @@ class HGauge;
 // FM is a separate FmApplet per the reconciled design spec.
 // Phone page: 13 controls — Phase 3I-1 / 3I-3 / 3-VAX
 // CW page:     9 controls — Phase 3I-2
+//
+// Phase 3M-1b (relocated from TxApplet J.1):
+//   #5 Mic level slider is now wired to TransmitModel::micGainDb (bidirectional).
+//   #1 Mic level gauge is now wired to AudioEngine::pcMicInputLevel() via 50ms timer.
 class PhoneCwApplet : public AppletWidget {
     Q_OBJECT
 
 public:
     explicit PhoneCwApplet(RadioModel* model, QWidget* parent = nullptr);
+    ~PhoneCwApplet() override;
 
     QString appletId()    const override { return QStringLiteral("PHCW"); }
     QString appletTitle() const override { return QStringLiteral("Phone / CW"); }
@@ -98,14 +104,23 @@ private:
     void buildPhonePage(QWidget* page);
     void buildCwPage(QWidget* page);
     void buildFmPage(QWidget* page);
+    // Phase 3M-1b: wire mic gain slider + mic level gauge timer.
+    void wireControls();
     // ── Shared ───────────────────────────────────────────────────────────────
     QStackedWidget* m_stack{nullptr};
     QButtonGroup*   m_tabGroup{nullptr};
     QPushButton*    m_phoneTabBtn{nullptr};
     QPushButton*    m_cwTabBtn{nullptr};
 
+    // ── Mic level gauge timer (Phase 3M-1b) ──────────────────────────────────
+    // Polls AudioEngine::pcMicInputLevel() at 50 ms (~20 fps) and converts the
+    // linear 0..1 amplitude to dBFS for m_levelGauge. Silent (-40 floor) when
+    // the TX input bus is not open (mic not configured / RX-only mode).
+    QTimer*  m_micLevelTimer{nullptr};
+
     // ── Phone page (13 controls) ──────────────────────────────────────────────
     // #1  Mic level gauge (HGauge -40..+10 dBFS, yellow -10, red 0)
+    //     Wired via m_micLevelTimer (Phase 3M-1b).
     HGauge*      m_levelGauge{nullptr};
     // #2  Compression gauge (HGauge -25..0 dB, reversed=true)
     HGauge*      m_compGauge{nullptr};
@@ -113,7 +128,9 @@ private:
     QComboBox*   m_micProfileCombo{nullptr};
     // #4  Mic source combo (fixed 55px)
     QComboBox*   m_micSourceCombo{nullptr};
-    // #5  Mic level slider (0-100) + inset "50"
+    // #5  Mic gain slider (per-board range, default -6 dB) + value label
+    //     Wired bidirectionally to TransmitModel::micGainDb (Phase 3M-1b).
+    //     Greyed out when TransmitModel::micMute == false (mic muted).
     QSlider*     m_micLevelSlider{nullptr};
     QLabel*      m_micLevelLabel{nullptr};
     // #6  +ACC button (green toggle, 48px)

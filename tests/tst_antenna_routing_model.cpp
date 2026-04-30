@@ -43,6 +43,14 @@ public:
         calls.append(r);
     }
     void setWatchdogEnabled(bool enabled) override { m_watchdogEnabled = enabled; }
+    void sendTxIq(const float*, int) override {}
+    void setTrxRelay(bool) override {}
+    void setMicBoost(bool) override {}
+    void setLineIn(bool) override {}
+    void setMicTipRing(bool) override {}
+    void setMicBias(bool) override {}
+    void setMicPTT(bool) override {}
+    void setMicXlr(bool) override {}
 };
 
 class TestAntennaRoutingModel : public QObject {

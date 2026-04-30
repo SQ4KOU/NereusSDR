@@ -36,7 +36,7 @@ namespace {
 //      This is the critical fallback for the #112 scenario — even when
 //      there is no ALSA default, PortAudio typically still enumerates
 //      "hw:0,0" etc., which at least lets audio reach the user.
-PaDeviceIndex resolveDevice(const PortAudioConfig& cfg,
+PaDeviceIndex resolveDevice(const PortAudioConfig& inCfg,
                             bool wantOutput,
                             int requestedChannels)
 {
@@ -44,6 +44,61 @@ PaDeviceIndex resolveDevice(const PortAudioConfig& cfg,
     if (deviceCount <= 0) {
         return paNoDevice;
     }
+
+    // macOS / Linux: when resolving a CAPTURE default and the user hasn't
+    // pinned a specific device, default-input enumeration is unreliable
+    // because virtual capture devices (Teams Audio, Zoom, NereusSDR/AetherSDR
+    // VAX, Splashtop, BlackHole, etc.) often appear as the system default
+    // and silently deliver zero samples. Prefer a real hardware mic by name.
+    PortAudioConfig effectiveCfg = inCfg;
+    // Capture-only: positive name marker for hardware mics. Used to prefer
+    // the actual hardware microphone over any virtual device that may
+    // appear in the system enumeration (Teams Audio, ZoomAudioDevice,
+    // BlackHole, NereusSDR/AetherSDR VAX/DAX, Splashtop, etc.). The
+    // virtual-mic landscape is too varied to enumerate every vendor in
+    // a deny-list, so we match the hardware naming convention instead.
+    const auto isHardwareMicName = [](const QString& name) -> bool {
+        static const char* kHardwareMicMarkers[] = {
+            "Microphone",  // CoreAudio default name for built-in / USB mics
+            "Built-in",
+            "Internal",
+            "Mic Input",
+        };
+        for (const char* marker : kHardwareMicMarkers) {
+            if (name.contains(QLatin1String(marker), Qt::CaseInsensitive)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // For CAPTURE on macOS, prefer a hardware-named device BEFORE trusting
+    // any "default". The system default (Pa or Core Audio) is frequently
+    // hijacked by virtual mics. Priority order:
+    //   1. MacBook Pro / Built-in / Internal — strong hardware match
+    //   2. anything else with "Microphone" but NOT "iPhone" (Continuity
+    //      Camera mics are often unavailable when iPhone is disconnected)
+#ifdef __APPLE__
+    if (!wantOutput && effectiveCfg.deviceName.isEmpty()) {
+        QString tier1, tier2;
+        for (int i = 0; i < deviceCount; ++i) {
+            const PaDeviceInfo* di = Pa_GetDeviceInfo(i);
+            if (!di || !di->name || di->maxInputChannels <= 0) continue;
+            const QString n = QString::fromUtf8(di->name);
+            if (n.contains(QLatin1String("iPhone"), Qt::CaseInsensitive)) continue;
+            if (tier1.isEmpty() && (n.contains(QLatin1String("MacBook"), Qt::CaseInsensitive)
+                                    || n.contains(QLatin1String("Built-in"), Qt::CaseInsensitive)
+                                    || n.contains(QLatin1String("Internal"), Qt::CaseInsensitive))) {
+                tier1 = n;
+            } else if (tier2.isEmpty() && isHardwareMicName(n)) {
+                tier2 = n;
+            }
+        }
+        if (!tier1.isEmpty()) effectiveCfg.deviceName = tier1;
+        else if (!tier2.isEmpty()) effectiveCfg.deviceName = tier2;
+    }
+#endif
+    const PortAudioConfig& cfg = effectiveCfg;
 
     auto directionOk = [wantOutput](const PaDeviceInfo* di) {
         if (!di) { return false; }
@@ -105,7 +160,9 @@ PaDeviceIndex resolveDevice(const PortAudioConfig& cfg,
             const PaDeviceIndex d = wantOutput
                 ? hai->defaultOutputDevice
                 : hai->defaultInputDevice;
-            if (d != paNoDevice && directionOk(Pa_GetDeviceInfo(d))) {
+            const PaDeviceInfo* di = (d != paNoDevice) ? Pa_GetDeviceInfo(d) : nullptr;
+            if (d != paNoDevice && directionOk(di)
+                && (wantOutput || (di && di->name && isHardwareMicName(QString::fromUtf8(di->name))))) {
                 return d;
             }
         }
@@ -115,7 +172,9 @@ PaDeviceIndex resolveDevice(const PortAudioConfig& cfg,
     const PaDeviceIndex def = wantOutput
         ? Pa_GetDefaultOutputDevice()
         : Pa_GetDefaultInputDevice();
-    if (def != paNoDevice && directionOk(Pa_GetDeviceInfo(def))) {
+    const PaDeviceInfo* defDi = (def != paNoDevice) ? Pa_GetDeviceInfo(def) : nullptr;
+    if (def != paNoDevice && directionOk(defDi)
+        && (wantOutput || (defDi && defDi->name && isHardwareMicName(QString::fromUtf8(defDi->name))))) {
         return def;
     }
 
@@ -124,13 +183,24 @@ PaDeviceIndex resolveDevice(const PortAudioConfig& cfg,
     //    direction-valid device if none does (Pa_OpenStream will then
     //    surface a clear paInvalidChannelCount error, better than
     //    silently picking step 3's default which may not even exist).
+    //    For capture, prefer devices whose name suggests hardware
+    //    (e.g. "Microphone", "Built-in") to dodge any virtual
+    //    device that snuck through.
     PaDeviceIndex anyDirection = paNoDevice;
+    PaDeviceIndex hardwareCandidate = paNoDevice;
     for (int i = 0; i < deviceCount; ++i) {
         const PaDeviceInfo* di = Pa_GetDeviceInfo(i);
         if (!directionOk(di)) { continue; }
-        if (capacityOk(di))   { return i; }
-        if (anyDirection == paNoDevice) { anyDirection = i; }
+        if (capacityOk(di)) {
+            // Capture: prefer a hardware-mic-named device.
+            if (!wantOutput && hardwareCandidate == paNoDevice && di && di->name
+                && isHardwareMicName(QString::fromUtf8(di->name))) {
+                hardwareCandidate = i;
+            }
+            if (anyDirection == paNoDevice) { anyDirection = i; }
+        }
     }
+    if (hardwareCandidate != paNoDevice) return hardwareCandidate;
     return anyDirection;
 }
 
@@ -175,7 +245,18 @@ bool PortAudioBus::open(const AudioFormat& format) {
         m_err = QStringLiteral("Pa_GetDeviceInfo returned null for resolved device");
         return false;
     }
-    params.channelCount              = format.channels;
+    // Clamp channelCount to what the device actually supports. Mono mics
+    // (e.g. "MacBook Pro Microphone") would otherwise fail Pa_OpenStream
+    // when format.channels==2 (default). Track the effective channel
+    // count so m_negFormat reflects the actual stream layout below.
+    int effectiveChannels = format.channels;
+    {
+        const int devMax = wantOutput ? di->maxOutputChannels : di->maxInputChannels;
+        if (devMax > 0 && effectiveChannels > devMax) {
+            effectiveChannels = devMax;
+        }
+    }
+    params.channelCount              = effectiveChannels;
     params.sampleFormat              = paFloat32;
     params.suggestedLatency          = wantOutput ? di->defaultLowOutputLatency
                                                   : di->defaultLowInputLatency;
@@ -198,6 +279,7 @@ bool PortAudioBus::open(const AudioFormat& format) {
 
     Pa_StartStream(m_stream);
     m_negFormat = format;
+    m_negFormat.channels = effectiveChannels;
 
     // Defensive null-check on host-API lookup. With a device handed back
     // by Pa_GetDefault{Output,Input}Device this should never be null, but

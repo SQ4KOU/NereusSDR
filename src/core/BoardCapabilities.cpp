@@ -615,6 +615,7 @@ const BoardCapabilities kHermesLite = {
     .hasBandwidthMonitor = true,
     .hasIoBoardHl2    = true,
     .hasSidetoneGenerator = true,
+    .hasMicJack       = false,  // HL2 has no radio-side mic input (3M-1b §11)
     .hasApollo        = false,  // HL2 has no Apollo port; not in RadioModelChanged() switch
     .hasAlex          = false,  // HL2 has no Alex board slot (ocOutputCount=0, hasAlexFilters=false)
     .hasPennyLane     = false,  // HL2 has no OC ext-ctrl; uses IoBoardHl2 for I2C accessories
@@ -658,6 +659,7 @@ const BoardCapabilities kHermesLiteRxOnly = {
     .hasBandwidthMonitor = true,
     .hasIoBoardHl2    = true,
     .hasSidetoneGenerator = true,
+    .hasMicJack       = false,  // HL2 RX-only has no radio-side mic input (3M-1b §11)
     .hasApollo        = false,
     .hasAlex          = false,
     .hasPennyLane     = false,
@@ -828,6 +830,14 @@ const BoardCapabilities kUnknown = {
     .hasBandwidthMonitor = false,
     .hasIoBoardHl2    = false,
     .hasSidetoneGenerator = false,
+    // Phase 3M-1b Task I.4: Unknown board uses the global TransmitModel
+    // fallback range (-50/+70) rather than the Thetis runtime defaults
+    // (-40/+10), so a user with an unidentified board still has the widest
+    // permissible slider range.
+    // From Thetis console.cs:19151-19171 [v2.10.3.13]: defaults are -40/+10;
+    // TransmitModel::kMicGainDbMin/Max = -50/+70 is NereusSDR's outer bound.
+    .micGainMinDb     = -50,
+    .micGainMaxDb     = +70,
     .hasApollo        = false,  // unknown board — all accessories disabled
     .hasAlex          = false,
     .hasPennyLane     = false,

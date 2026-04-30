@@ -241,6 +241,7 @@ mw0lge@grange-lane.co.uk
 #include "OcMatrix.h"
 #include "IoBoardHl2.h"
 #include "HermesLiteBandwidthMonitor.h"
+#include "audio/TxMicSource.h"
 #include "codec/P1CodecStandard.h"
 #include "codec/P1CodecAnvelinaPro3.h"
 #include "codec/P1CodecRedPitaya.h"
@@ -248,6 +249,7 @@ mw0lge@grange-lane.co.uk
 #include "codec/AlexFilterMap.h"
 #include "models/Band.h"
 
+#include <array>
 #include <cstdlib>
 #include <cstring>    // memset
 #include <vector>
@@ -827,8 +829,92 @@ void P1RadioConnection::setAttenuator(int dB)
     m_stepAttn[0] = dB;
 }
 void P1RadioConnection::setPreamp(bool enabled)              { m_rxPreamp[0] = enabled; }
-void P1RadioConnection::setTxDrive(int /*level*/)            { /* stub — Task 7 */ }
-void P1RadioConnection::setMox(bool enabled)                 { m_mox = enabled; }
+// ---------------------------------------------------------------------------
+// setTxDrive — 3M-1c follow-up (HL2 bench triage 2026-04-29)
+//
+// Stores the TX drive level (0-255) and forces bank 10 onto the wire on the
+// next sendCommandFrame() so the new drive level reaches the radio within
+// ≤1 EP2 frame (~2.6 ms at 380.95 pps).
+//
+// Bank 10 C1 byte carries the drive level; the codec reads ctx.txDrive which
+// is sourced from m_txDrive in buildCodecContext.  Without this setter, the
+// drive level was silently fixed at zero and HL2 / Atlas / Hermes / Angelia /
+// Orion never produced RF on TUN or SSB.  The bug was latent because the
+// 3M-1b SSB voice bench tests ran on ANAN-G2 (P2), which has its own
+// setTxDrive on P2RadioConnection that always worked.
+//
+// From Thetis ChannelMaster/networkproto1.c:579 [v2.10.3.13]:
+//   C1 = prn->tx[0].drive_level & 0xFF;
+// From mi0bot networkproto1.c:1061 [@c26a8a4]: identical encoding.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setTxDrive(int level)
+{
+    const int clamped = qBound(0, level, 255);
+    if (m_txDrive == clamped) {
+        return;  // idempotent — wire emit already in flight via round-robin
+    }
+    m_txDrive = clamped;
+    // Codex P2 safety-effect pattern: force bank 10 on the next frame so
+    // the new drive level reaches the wire within ≤1 EP2 frame.  Without
+    // this, the round-robin schedule would defer bank 10 by up to 17
+    // frames (~45 ms), which is plenty long for a TUN tap to land mid-
+    // round-robin and never see a non-zero drive.
+    m_forceBank10Next = true;
+}
+
+// ---------------------------------------------------------------------------
+// setTxStepAttenuation — 3M-1a Task F.2
+//
+// Mirrors Thetis ChannelMaster/netInterface.c:1006 SetTxAttenData(int bits)
+// [v2.10.3.13]: broadcasts the TX step attenuator value to all ADCs.
+// The P1 codec reads m_txStepAttn in composeCcBank0 / composeCcBank1 and
+// writes it to the appropriate C&C byte.
+//
+// From Thetis ChannelMaster/netInterface.c:1006-1016 [v2.10.3.13]:
+//   void SetTxAttenData(int bits) {
+//     for (i = 0; i < MAX_ADC; i++) prn->adc[i].tx_step_attn = bits;
+//     if (listenSock != INVALID_SOCKET) CmdTx();
+//   }
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setTxStepAttenuation(int dB)
+{
+    if (dB < 0)  { dB = 0; }
+    if (dB > 63) { dB = 63; }  // HL2 has 6-bit field; standard boards 5-bit
+    m_txStepAttn = dB;
+}
+// ---------------------------------------------------------------------------
+// setMox — 3M-1a Task E.3
+//
+// Wire-byte emission: the MOX bit is C0 byte 3 bit 0 (0x01) in the P1 C&C
+// bank-0 frame.  composeCcBank0Full() writes:
+//   out[0] = m_mox ? 0x01 : 0x00;
+// Source: deskhpsdr/src/old_protocol.c:3597 [@120188f]
+//   output_buffer[C0] |= 0x01;  // Always set MOX if non-CW transmitting
+// HL2 firmware cross-check: dsopenhpsdr1.v:297
+//   ds_cmd_ptt_next = eth_data[0]  // bit 0 of the C0 byte = PTT/MOX
+//
+// Codex P2 — safety-effect-first idempotent-guard pattern:
+//   1. Force a bank-0 frame on the NEXT sendCommandFrame() call so the MOX
+//      bit lands on the wire within ≤1 frame regardless of round-robin phase.
+//      This is the safety effect; it fires even on repeated calls with the
+//      same value (ensures the bit is actually emitted).
+//   2. Guard: if the requested value equals the stored value, update the
+//      flush flag and return — no further state change.
+//
+// CW gating (txmode == modeCWU/L branch from deskhpsdr:3596-3598) is 3M-2.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setMox(bool enabled)
+{
+    // Codex P2 safety effect: force bank 0 on next frame so the MOX bit
+    // is emitted within ≤1 frame of this call.
+    // Source: deskhpsdr/src/old_protocol.c:3595-3599 [@120188f]
+    m_forceBank0Next = true;
+
+    if (m_mox == enabled) {
+        return;  // idempotent — state unchanged, flush flag already set above
+    }
+    m_mox = enabled;
+}
 // ---------------------------------------------------------------------------
 // setAntennaRouting — Phase 3P-I-a
 //
@@ -857,23 +943,30 @@ void P1RadioConnection::setAntennaRouting(AntennaRouting r)
 }
 
 // ---------------------------------------------------------------------------
-// setWatchdogEnabled — Phase 3M-0 Task 5
+// setWatchdogEnabled — 3M-1a Task E.5
 //
 // Records the requested watchdog enable state in the base-class
-// m_watchdogEnabled field (shared with P2).
+// m_watchdogEnabled field (shared with P2). The wire bit is emitted by
+// sendMetisStart() and sendMetisStop() on the next start/stop cycle — not
+// immediately — matching deskhpsdr behavior (no re-send on toggle).
 //
-// From Thetis NetworkIOImports.cs:197-198 [v2.10.3.13]:
-//   [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
+// Wire format (HL2 firmware primary cite):
+//   Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400
+//     watchdog_disable <= eth_data[7]; // Bit 7 can be used to disable watchdog
+//   Inverted semantic: bit 7 = 1 means disabled, bit 7 = 0 means enabled.
+//
+// Thetis call-site (setup.cs:17986 [v2.10.3.13]):
+//   NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
+//   chkNetworkWDT.Checked == true => value 1 => watchdog ENABLED => bit 7 = 0.
+//
+// Thetis DllImport (NetworkIOImports.cs:197-198 [v2.10.3.13]):
 //   public static extern void SetWatchdogTimer(int bits);
 //
-// The callsite (setup.cs:17986 [v2.10.3.13]):
-//   NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
-//
-// TODO [3M-1a]: emit the watchdog wire bit on the next outbound C&C
-// frame. Bit position is currently unknown — Thetis dispatches via
-// ChannelMaster.dll (closed source). Identify via wire capture or
-// HL2-firmware reading; until then this is a state-tracking stub.
-// Cite: NetworkIOImports.cs:197-198 [v2.10.3.13] (DllImport entry).
+// deskhpsdr reference (deskhpsdr/src/old_protocol.c:3811 [@120188f]):
+//   buffer[3] = command;  // no bit-7 OR -- watchdog always enabled (bit 7 = 0)
+//   deskhpsdr has no user-configurable watchdog disable; it never re-sends
+//   RUNSTOP on a watchdog toggle.  NereusSDR matches: state stored here,
+//   picked up on the next sendMetisStart() / sendMetisStop() call.
 // ---------------------------------------------------------------------------
 void P1RadioConnection::setWatchdogEnabled(bool enabled)
 {
@@ -881,6 +974,384 @@ void P1RadioConnection::setWatchdogEnabled(bool enabled)
         return;
     }
     m_watchdogEnabled = enabled;
+    // No immediate re-send: matches deskhpsdr pattern (no standalone RUNSTOP
+    // packet for watchdog toggle). The new state is included in the next
+    // sendMetisStart() or sendMetisStop() call.
+}
+
+// ---------------------------------------------------------------------------
+// sendTxIq — 3M-1a Task E.2
+//
+// Porting from deskhpsdr/src/old_protocol.c:2373-2459 [@120188f]
+// (old_protocol_iq_samples) — original C logic:
+//
+//   Per sample (8 bytes each, TXRING_AUDIO_SAMPLE_BYTES = 8):
+//     TXRINGBUF[iptr++] = left_audio_sample >> 8;   // mic L hi
+//     TXRINGBUF[iptr++] = left_audio_sample;         // mic L lo
+//     TXRINGBUF[iptr++] = right_audio_sample >> 8;   // mic R hi
+//     TXRINGBUF[iptr++] = right_audio_sample;         // mic R lo
+//     TXRINGBUF[iptr++] = isample >> 8;               // I hi
+//     TXRINGBUF[iptr++] = isample;                    // I lo
+//     TXRINGBUF[iptr++] = qsample >> 8;               // Q hi
+//     TXRINGBUF[iptr++] = qsample;                    // Q lo
+//
+//   Float→int16 gain (old protocol = 16-bit, not 24-bit):
+//     gain = 32767.0  (deskhpsdr/src/transmitter.c:1541 [@120188f])
+//     isample = (long)(is * gain + (is >= 0.0 ? 0.5 : -0.5))
+//
+// Accepts n interleaved float32 I/Q pairs [I0,Q0, I1,Q1, ...] from the
+// WDSP TX channel output.  Converts each pair to 8 wire bytes and appends
+// them to the ring buffer m_txIqBuf.  If the buffer is full, excess samples
+// are dropped with a debug log (matches deskhpsdr overflow path).
+//
+// The EP2 pacer (onEp2PacerTick → sendCommandFrame) drains 63+63 = 126
+// samples per frame call via fillTxZone().
+//
+// Cite: deskhpsdr/src/old_protocol.c:458-463 [@120188f]
+//   TXRING_AUDIO_SAMPLE_BYTES   8
+//   TXRING_AUDIO_FRAMES_PER_BLOCK 126  — one SDR block (= two EP2 subframes)
+// ---------------------------------------------------------------------------
+void P1RadioConnection::sendTxIq(const float* iq, int n)
+{
+    if (n <= 0 || iq == nullptr) { return; }
+
+    // From deskhpsdr/src/transmitter.c:1541 [@120188f]
+    //   gain = 32767.0;  // 16 bit (ORIGINAL_PROTOCOL)
+    static constexpr float kGain = 32767.0f;
+
+    static constexpr int kBufBytes = kTxIqBufSamples * kTxIqBytesPerSample;
+
+    // HL2 CWX firmware workaround: clear LSB of I/Q low bytes to avoid
+    // the CWX activation-while-key-asserted misbehavior. Per
+    // deskhpsdr/src/old_protocol.c:2441-2453 [@120188f]. Cost: 1 LSB of
+    // I/Q resolution on HL2's 12-bit DAC (immaterial).
+    const bool isHl2 = (m_hardwareProfile.model == HPSDRModel::HERMESLITE);
+    const quint8 iLoMask = isHl2 ? 0xFE : 0xFF;
+    const quint8 qLoMask = isHl2 ? 0xFE : 0xFF;
+
+    for (int k = 0; k < n; ++k) {
+        // Ring-buffer full: drop sample, matching deskhpsdr overflow path.
+        // acquire: see the latest fetch_sub from the connection thread so we
+        // don't overfill after a drain.
+        if (m_txIqCount.load(std::memory_order_acquire) >= kTxIqBufSamples) {
+            qCDebug(lcConnection) << "P1 TX I/Q ring buffer overflow — dropping sample";
+            break;
+        }
+
+        const float fI = iq[k * 2];
+        const float fQ = iq[k * 2 + 1];
+
+        // Float → int16 conversion.
+        // From deskhpsdr/src/transmitter.c:1787-1788 [@120188f]
+        //   isample = (long)(is * gain + (is >= 0.0 ? 0.5 : -0.5));
+        //   qsample = (long)(qs * gain + (qs >= 0.0 ? 0.5 : -0.5));
+        auto toInt16 = [](float v) -> int16_t {
+            const float scaled = v * kGain + (v >= 0.0f ? 0.5f : -0.5f);
+            if (scaled >= 32767.0f)  { return  32767; }
+            if (scaled <= -32767.0f) { return -32767; }
+            return static_cast<int16_t>(scaled);
+        };
+        const int16_t iSample = toInt16(fI);
+        const int16_t qSample = toInt16(fQ);
+
+        // Write 8 bytes: [mic_L hi][mic_L lo][mic_R hi][mic_R lo][I hi][I lo][Q hi][Q lo]
+        // From deskhpsdr/src/old_protocol.c:2429-2458 [@120188f]
+        //   mic bytes zero — NullMicSource (3M-1b will fill them)
+        int wp = m_txIqWritePos.load(std::memory_order_relaxed);
+        m_txIqBuf[wp++] = 0;                                                      // mic_L hi
+        m_txIqBuf[wp++] = 0;                                                      // mic_L lo
+        m_txIqBuf[wp++] = 0;                                                      // mic_R hi
+        m_txIqBuf[wp++] = 0;                                                      // mic_R lo
+        m_txIqBuf[wp++] = static_cast<quint8>((iSample >> 8) & 0xFF);            // I hi
+        m_txIqBuf[wp++] = static_cast<quint8>( iSample       & iLoMask);         // I lo
+        m_txIqBuf[wp++] = static_cast<quint8>((qSample >> 8) & 0xFF);            // Q hi
+        m_txIqBuf[wp++] = static_cast<quint8>( qSample       & qLoMask);         // Q lo
+        if (wp >= kBufBytes) { wp = 0; }
+        // relaxed: single writer; the release on m_txIqCount below provides
+        // the visibility fence for the byte writes.
+        m_txIqWritePos.store(wp, std::memory_order_relaxed);
+        // release: publishes the byte writes above before the count increment
+        // is observed by the connection thread's acquire load.
+        m_txIqCount.fetch_add(1, std::memory_order_release);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// fillTxZone
+//
+// Drains exactly 63 samples from the TX I/Q ring buffer into a 504-byte EP2
+// TX data zone (63 × 8 bytes = 504 bytes).  If fewer than 63 samples are
+// buffered, the zone is zero-filled (silence — matches deskhpsdr behaviour
+// when the ring buffer underruns).
+//
+// Called from sendCommandFrame() for each of the two 504-byte zones in the
+// 1032-byte Metis EP2 frame ([16..519] and [528..1031]).
+//
+// Cite: deskhpsdr/src/old_protocol.c:545-549 [@120188f]
+//   memcpy(output_buffer + 8, &TXRINGBUF[out], 504);
+//   ozy_send_buffer();
+//   memcpy(output_buffer + 8, &TXRINGBUF[out + 504], 504);
+//   ozy_send_buffer();
+//
+// Returns true when samples were available, false on underrun.
+// ---------------------------------------------------------------------------
+bool P1RadioConnection::fillTxZone(quint8* zone63) noexcept
+{
+    static constexpr int kSamplesPerZone = 63;
+    static constexpr int kBufBytes       = kTxIqBufSamples * kTxIqBytesPerSample;
+
+    // acquire: makes the audio thread's byte writes (published via release
+    // fetch_add on m_txIqCount) visible before we read m_txIqBuf.
+    if (m_txIqCount.load(std::memory_order_acquire) < kSamplesPerZone) {
+        // Underrun — zero-fill the zone (silence).  zone63 is already zeroed
+        // by sendCommandFrame()'s memset, so no explicit fill is needed.
+        return false;
+    }
+
+    for (int i = 0; i < kSamplesPerZone; ++i) {
+        int rp = m_txIqReadPos.load(std::memory_order_relaxed);
+        zone63[i * kTxIqBytesPerSample + 0] = m_txIqBuf[rp++]; // mic_L hi
+        zone63[i * kTxIqBytesPerSample + 1] = m_txIqBuf[rp++]; // mic_L lo
+        zone63[i * kTxIqBytesPerSample + 2] = m_txIqBuf[rp++]; // mic_R hi
+        zone63[i * kTxIqBytesPerSample + 3] = m_txIqBuf[rp++]; // mic_R lo
+        zone63[i * kTxIqBytesPerSample + 4] = m_txIqBuf[rp++]; // I hi
+        zone63[i * kTxIqBytesPerSample + 5] = m_txIqBuf[rp++]; // I lo
+        zone63[i * kTxIqBytesPerSample + 6] = m_txIqBuf[rp++]; // Q hi
+        zone63[i * kTxIqBytesPerSample + 7] = m_txIqBuf[rp++]; // Q lo
+        if (rp >= kBufBytes) { rp = 0; }
+        // relaxed: single writer on this side; the acquire on m_txIqCount
+        // above already provides the required ordering fence.
+        m_txIqReadPos.store(rp, std::memory_order_relaxed);
+    }
+    // relaxed: the audio thread observes this via its acquire load on
+    // m_txIqCount before deciding whether the buffer has space.
+    m_txIqCount.fetch_sub(kSamplesPerZone, std::memory_order_relaxed);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// setTrxRelay — 3M-1a Task E.4
+//
+// Sets or clears the Alex T/R relay engage state.
+// Wire location: bank 10 (C0=0x12), C3 byte, bit 7 (0x80).
+// Semantic INVERTED vs MOX: 1 = relay disabled (PA bypass / RX-only protect),
+//                           0 = relay engaged (normal TX path).
+//
+// enabled=true  → bit 7 = 0 (relay engaged, current flows through relay)
+// enabled=false → bit 7 = 1 (relay open / PA bypassed)
+//
+// Primary cite: deskhpsdr/src/old_protocol.c:2909-2910 [@120188f]
+//   if (txband->disablePA || !pa_enabled)
+//       output_buffer[C3] |= 0x80; // disable Alex T/R relay
+//
+// HL2 note: HL2 clears C2/C3/C4 entirely for its own PA-enable path
+// (old_protocol.c:2964-2966 [@120188f]), so this bit is irrelevant for
+// HL2 hardware.  The composeCcForBank case 10 emits it only for
+// Alex-equipped boards; the codec layer handles HL2-specific encoding.
+//
+// Codex P2 pattern (safety effect before idempotent guard):
+// Force bank 10 onto the wire within ≤1 frame of this call so the relay
+// state change is immediate, matching deskhpsdr's non-deferred behaviour.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setTrxRelay(bool enabled)
+{
+    // Codex P2: force bank 10 flush BEFORE the idempotent guard so the
+    // relay bit lands on the next outbound frame regardless of whether
+    // the state actually changed.
+    // Source: deskhpsdr/src/old_protocol.c:2909-2910 [@120188f] — the
+    // reference implementation writes the T/R relay bit every command
+    // frame; we flush immediately on state change to match timing.
+    m_forceBank10Next = true;
+
+    if (m_trxRelay == enabled) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_trxRelay = enabled;
+}
+
+// ---------------------------------------------------------------------------
+// setMicBoost (3M-1b G.1)
+//
+// Sets the hardware mic-jack 20 dB boost preamp bit.
+// Wire bit: bank 10 (C0=0x12) C2 byte bit 0 (mask 0x01).
+// Polarity: 1 = boost on (no inversion).
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+//   C2 = ((prn->mic.mic_boost & 1) | ((prn->mic.line_in & 1) << 1) | ...)
+//   mic_boost occupies the lowest bit of C2.
+//
+// Flush pattern mirrors setTrxRelay (Codex P2): m_forceBank10Next is set
+// before the idempotent guard so the bit lands on the wire within ≤1 frame.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setMicBoost(bool on)
+{
+    // Codex P2: set flush flag BEFORE idempotent guard.
+    m_forceBank10Next = true;
+
+    if (m_micBoost == on) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_micBoost = on;
+}
+
+// ---------------------------------------------------------------------------
+// setLineIn (3M-1b G.2)
+//
+// Sets the hardware mic-jack line-in path bit.
+// Wire bit: bank 10 (C0=0x12) C2 byte bit 1 (mask 0x02).
+// Polarity: 1 = line in active (no inversion).
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+//   C2 = ((prn->mic.mic_boost & 1) | ((prn->mic.line_in & 1) << 1) | ...)
+//   line_in occupies bit 1 of C2 (mic_boost is bit 0).
+//
+// Flush pattern mirrors setMicBoost (Codex P2): m_forceBank10Next is set
+// before the idempotent guard so the bit lands on the wire within ≤1 frame.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setLineIn(bool on)
+{
+    // Codex P2: set flush flag BEFORE idempotent guard.
+    m_forceBank10Next = true;
+
+    if (m_lineIn == on) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_lineIn = on;
+}
+
+// ---------------------------------------------------------------------------
+// setMicTipRing (3M-1b G.3)
+//
+// Selects mic-jack Tip/Ring polarity.
+// NereusSDR parameter convention: tipHot = true → Tip carries the mic signal.
+//
+// POLARITY INVERSION AT THE WIRE LAYER:
+// Thetis field mic_trs and deskhpsdr field mic_ptt_tip_bias_ring both mean
+// "1 = Tip is BIAS/PTT" (i.e. NOT the mic).  So:
+//   tipHot = true  → Tip is mic    → wire bit CLEAR (0)
+//   tipHot = false → Tip is BIAS   → wire bit SET   (1)
+// The implementation writes (!m_micTipRing) to bit 4 of bank-11 C1.
+//
+// Wire bit: bank 11 (C0=0x14) C1 byte bit 4 (mask 0x10), INVERTED.
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13]
+//   C1 = ... | ((prn->mic.mic_trs & 1) << 4) | ...
+//   mic_trs: 1 = tip is BIAS/PTT (ring is mic), 0 = tip is mic (normal).
+//
+// First touch of case 11 / bank 11: adds m_forceBank11Next flush flag +
+// round-robin chooser extension + captureBank11ForTest/forceBank11NextForTest
+// test seams.  Bits 0-3 of C1 carry per-ADC preamp flags (Thetis quirk:
+// bit 3 = rx0 again) and are untouched by this setter (OR into C1, never AND).
+//
+// Flush pattern mirrors setLineIn (Codex P2): m_forceBank11Next is set
+// before the idempotent guard so the bit lands on the wire within ≤1 frame.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setMicTipRing(bool tipHot)
+{
+    // Codex P2: set flush flag BEFORE idempotent guard.
+    m_forceBank11Next = true;
+
+    if (m_micTipRing == tipHot) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_micTipRing = tipHot;
+}
+
+// ---------------------------------------------------------------------------
+// setMicBias (3M-1b G.4)
+//
+// Enables or disables hardware mic-jack phantom power (bias voltage).
+// Polarity: on=true → bias enabled → wire bit SET (no inversion).
+//
+// Wire bit: bank 11 (C0=0x14) C1 byte bit 5 (mask 0x20).
+// This is the SAME C1 byte as G.3 (mic_trs bit 4) — both are OR'd in.
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13]
+//   C1 = ... | ((prn->mic.mic_bias & 1) << 5) | ...
+//   mic_bias: 1 = bias on, 0 = bias off (no polarity inversion).
+//
+// Flush pattern mirrors setMicTipRing (Codex P2): m_forceBank11Next is set
+// before the idempotent guard so the bit lands on the wire within ≤1 frame.
+// Reuses m_forceBank11Next + captureBank11ForTest infrastructure added in G.3.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setMicBias(bool on)
+{
+    // Codex P2: set flush flag BEFORE idempotent guard.
+    m_forceBank11Next = true;
+
+    if (m_micBias == on) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_micBias = on;
+}
+
+// ---------------------------------------------------------------------------
+// setMicPTT (3M-1b G.5)
+//
+// Enables or disables the hardware mic-jack PTT line (Orion/ANAN front-panel).
+// NereusSDR parameter convention: enabled=true → PTT enabled (intuitive).
+//
+// POLARITY INVERSION AT THE WIRE LAYER:
+// Both Thetis and deskhpsdr carry the *disable* flag on the wire:
+//   Thetis field name: mic_ptt  (1 = PTT DISABLED)
+//   deskhpsdr: mic_ptt_enabled == 0 → set bit (bit set = PTT disabled)
+//   Thetis console.cs:19758 [v2.10.3.13]: MicPTTDisabled property name
+//     confirms the storage convention (disable flag, not enable flag).
+// Therefore the implementation writes (!enabled) to the wire bit:
+//   enabled=true  → PTT enabled  → wire bit 6 CLEAR (0)
+//   enabled=false → PTT disabled → wire bit 6 SET   (1)
+//
+// Wire bit: bank 11 (C0=0x14) C1 byte bit 6 (mask 0x40), INVERTED.
+// This is the SAME C1 byte as G.3 (bit 4) + G.4 (bit 5) — all OR'd in.
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13]:
+//   C1 = ... | ((prn->mic.mic_ptt & 1) << 6);
+//   mic_ptt: 1 = PTT disabled on wire (polarity inversion at API layer).
+//
+// Cross-reference:
+//   deskhpsdr/src/old_protocol.c:3000-3002 [@120188f]:
+//     if (mic_ptt_enabled == 0) { output_buffer[C1] |= 0x40; }  // same inversion
+//   deskhpsdr/src/new_protocol.c:1488-1490 [@120188f] — P2 byte 50 bit 2.
+//   Thetis console.cs:19764 [v2.10.3.13] — MicPTTDisabled calls SetMicPTT(value).
+//
+// Flush pattern mirrors setMicBias (Codex P2): m_forceBank11Next is set
+// BEFORE the idempotent guard so the bit lands on the wire within ≤1 frame.
+// Reuses m_forceBank11Next + captureBank11ForTest infrastructure from G.3.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setMicPTT(bool enabled)
+{
+    // Codex P2: set flush flag BEFORE idempotent guard.
+    m_forceBank11Next = true;
+
+    if (m_micPTT == enabled) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_micPTT = enabled;
+}
+
+// ---------------------------------------------------------------------------
+// setMicXlr (3M-1b G.6)
+//
+// Saturn G2 P2-only feature; P1 hardware has no XLR jack.
+// Setter stores the flag for cross-board API consistency but does NOT
+// emit any wire bytes. P1 case-10 and case-11 C&C bytes are UNCHANGED
+// regardless of m_micXlr value.
+//
+// P2 source: deskhpsdr/src/new_protocol.c:1500-1502 [@120188f]:
+//   if (mic_input_xlr) { transmit_specific_buffer[50] |= 0x20; }
+//   (byte 50 bit 5 = 0x20, polarity 1=XLR jack — no inversion)
+//   P2 implementation in P2RadioConnection::setMicXlr().
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setMicXlr(bool xlrJack)
+{
+    // Saturn G2 P2-only feature; P1 hardware has no XLR jack.
+    // Setter stores the flag for cross-board consistency but does NOT
+    // emit any wire bytes. P1 case-10 and case-11 C&C bytes are
+    // unchanged regardless of m_micXlr value.
+    if (m_micXlr == xlrJack) {
+        return;
+    }
+    m_micXlr = xlrJack;
 }
 
 // ---------------------------------------------------------------------------
@@ -993,6 +1464,42 @@ void P1RadioConnection::setBandwidthMonitor(HermesLiteBandwidthMonitor* monitor)
 }
 
 // ---------------------------------------------------------------------------
+// setTxMicSource — Phase 3M-1c TX pump v3
+//
+// Wires the RadioModel-owned TxMicSource into the connection.  Called by
+// RadioModel::connectToRadio() unconditionally (the source itself handles
+// HL2 mic16-zero quirks via the existing PC mic-source-locked mechanism).
+// The pointer is non-owning — lifetime is managed by RadioModel.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setTxMicSource(TxMicSource* src)
+{
+    // Caller contract: invoked on this connection's affinity thread.
+    // Today that is the main thread, because RadioModel::connectToRadio
+    // calls setTxMicSource at line 1764-1767 BEFORE the connection is
+    // moved to its worker thread at line 1842.  The assignment + the
+    // m_lastMicAt arming below therefore race-free with the connection-
+    // thread reads in onWatchdogTick / parseEp6Frame mic16 extraction.
+    // If a future refactor reorders these RadioModel calls, this
+    // function will need atomic / mutex protection.
+    m_txMicSource = src;
+
+    // Stage-2 review fix I3: arm the LOS timer at attach time so the
+    // 3 s zero-block injection (onWatchdogTick) fires even if the
+    // radio never delivers a mic frame.  Without this, m_lastMicAt
+    // stays default-constructed (invalid) and the mic-LOS guard at
+    // P1RadioConnection.cpp:1628 short-circuits forever — the worker
+    // would block on waitForBlock(INFINITE) with no recovery.
+    //
+    // Mirrors Thetis network.c:655-666 [v2.10.3.13] — WSA_WAIT_TIMEOUT
+    // injects zero buffer via Inbound regardless of whether real
+    // samples have been observed.  Setting m_lastMicAt = now here is
+    // equivalent to Thetis's implicit "the timer started counting the
+    // moment we attached", because the watchdog tick does
+    // sinceMicMs = now - m_lastMicAt > kMicLosTimeoutMs.
+    m_lastMicAt = QDateTime::currentDateTimeUtc();
+}
+
+// ---------------------------------------------------------------------------
 // parseI2cResponse — Phase 3P-E Task 2
 //
 // Called from the instance parseEp6Frame() when incoming C&C status byte C0
@@ -1037,6 +1544,12 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.activeRxCount  = m_activeRxCount;
     ctx.txDrive        = m_txDrive;
     ctx.paEnabled      = m_paEnabled;
+    ctx.trxRelay       = m_trxRelay;
+    ctx.p1MicBoost     = m_micBoost;
+    ctx.p1LineIn       = m_lineIn;
+    ctx.p1MicTipRing   = m_micTipRing;
+    ctx.p1MicBias      = m_micBias;     // 3M-1b G.4
+    ctx.p1MicPTT       = m_micPTT;      // 3M-1b G.5
     ctx.duplex         = m_duplex;
     ctx.diversity      = m_diversity;
     ctx.antennaIdx     = m_antennaIdx;
@@ -1186,6 +1699,23 @@ void P1RadioConnection::onWatchdogTick()
     // Source: mi0bot bandwidth_monitor.{c,h} — NereusSDR sequence-gap adaptation.
     if (m_caps && m_caps->hasBandwidthMonitor) {
         hl2CheckBandwidthMonitor();
+    }
+
+    // Phase 3M-1c TX pump v3: mic-frame LOS injection.
+    // Mirrors Thetis network.c:655-666 [v2.10.3.13] — when no UDP frame
+    // has arrived for 3000 ms, push a zero block into the TX inbound ring
+    // so the worker keeps ticking through silence (otherwise the worker
+    // would block forever on waitForBlock(INFINITE)).  We use mono-sample
+    // count == kBlockFrames so exactly one ring block is released.
+    if (m_txMicSource != nullptr && m_lastMicAt.isValid()) {
+        const qint64 sinceMicMs = m_lastMicAt.msecsTo(QDateTime::currentDateTimeUtc());
+        if (sinceMicMs > kMicLosTimeoutMs) {
+            std::array<float, TxMicSource::kBlockFrames> zeros{};
+            m_txMicSource->inbound(zeros.data(), TxMicSource::kBlockFrames);
+            // Reset the LOS timer so we inject one block per kMicLosTimeoutMs
+            // window (not one block per watchdog tick).
+            m_lastMicAt = QDateTime::currentDateTimeUtc();
+        }
     }
 
     // Silence detection applies to both Connected and Connecting states.
@@ -1365,7 +1895,34 @@ void P1RadioConnection::sendMetisStart(bool iqAndMic)
     pkt[0] = static_cast<char>(0xEF);
     pkt[1] = static_cast<char>(0xFE);
     pkt[2] = static_cast<char>(0x04);
-    pkt[3] = iqAndMic ? static_cast<char>(0x02) : static_cast<char>(0x01);
+
+    // RUNSTOP byte (pkt[3]) encodes three independent fields from the same byte:
+    //   eth_data[0] = run         (1 = start IQ/mic stream)
+    //   eth_data[1] = wide_spectrum (iqAndMic path sets 0x02)
+    //   eth_data[7] = watchdog_disable (1 = disabled, 0 = enabled -- inverted)
+    //
+    // Source: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:200-203
+    //   RUNSTOP: begin
+    //     run_next = eth_data[0];
+    //     wide_spectrum_next = eth_data[1];
+    //     runstop_watchdog_valid = 1'b1;
+    //   end
+    //
+    // Source: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400
+    //   watchdog_disable <= eth_data[7]; // Bit 7 can be used to disable watchdog
+    //
+    // deskhpsdr reference (deskhpsdr/src/old_protocol.c:3811 [@120188f]):
+    //   buffer[3] = command;  // 0x01 start -- bit 7 = 0 implicitly (watchdog enabled)
+    //   deskhpsdr never sets bit 7; watchdog is always enabled there.
+    //
+    // Thetis (setup.cs:17986 [v2.10.3.13]):
+    //   NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
+    //   When checked (enabled): passes 1 -> bit 7 = 0 (not disabled).
+    const quint8 runBits     = iqAndMic ? quint8(0x02) : quint8(0x01);
+    // From Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400 [@7472bd1]:
+    //   watchdog_disable <= eth_data[7]; -- 1=disabled, 0=enabled (inverted)
+    const quint8 watchdogBit = m_watchdogEnabled ? quint8(0x00) : quint8(0x80);
+    pkt[3] = static_cast<char>(runBits | watchdogBit);
 
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_radioInfo.port);
 }
@@ -1387,7 +1944,21 @@ void P1RadioConnection::sendMetisStop()
     pkt[0] = static_cast<char>(0xEF);
     pkt[1] = static_cast<char>(0xFE);
     pkt[2] = static_cast<char>(0x04);
-    pkt[3] = static_cast<char>(0x00);
+
+    // Stop packet (run = 0).  Watchdog bit still emitted for consistency:
+    //   eth_data[0] = 0 (stop)
+    //   eth_data[7] = watchdog_disable (inverted -- see sendMetisStart for full cite)
+    //
+    // Source: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400
+    //   watchdog_disable <= eth_data[7]; // Bit 7 can be used to disable watchdog
+    //
+    // deskhpsdr reference (deskhpsdr/src/old_protocol.c:3811 [@120188f]):
+    //   buffer[3] = command;  // 0x00 stop -- bit 7 = 0 implicitly
+    //   deskhpsdr doesn't set bit 7 on stop either; NereusSDR emits it
+    //   explicitly so the watchdog state is preserved if the radio re-reads
+    //   the last RUNSTOP byte on reconnect.
+    const quint8 watchdogBit = m_watchdogEnabled ? quint8(0x00) : quint8(0x80);
+    pkt[3] = static_cast<char>(watchdogBit); // run = 0; watchdog bit set if disabled
 
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_radioInfo.port);
 }
@@ -1423,6 +1994,29 @@ void P1RadioConnection::sendCommandFrame()
     frame[6] = static_cast<quint8>((seq >>  8) & 0xFF);
     frame[7] = static_cast<quint8>( seq        & 0xFF);
 
+    // 3M-1a E.3: if setMox() requested a bank-0 flush, reset the round-robin
+    // to 0 so this frame carries the MOX bit within ≤1 frame of the call.
+    // Source: deskhpsdr/src/old_protocol.c:3595-3599 [@120188f] — the reference
+    // implementation does not defer MOX; it sets the bit on the very next frame.
+    // 3M-1a E.4: if setTrxRelay() requested a bank-10 flush, jump to bank 10
+    // so the T/R relay bit (C3 bit 7) lands within ≤1 frame of the call.
+    // 3M-1b G.3: if setMicTipRing() requested a bank-11 flush, jump to bank 11
+    // so the mic_trs bit (C1 bit 4) lands within ≤1 frame of the call.
+    // Priority: bank 0 > bank 10 > bank 11.  Losing flags are preserved and
+    // fire on the following frame (same pattern as bank 0 vs bank 10).
+    // Source: deskhpsdr/src/old_protocol.c:2909-2910 [@120188f].
+    // Source: Thetis ChannelMaster/networkproto1.c:597 [v2.10.3.13].
+    if (m_forceBank0Next) {
+        m_ccRoundRobinIdx = 0;
+        m_forceBank0Next  = false;
+    } else if (m_forceBank10Next) {
+        m_ccRoundRobinIdx = 10;
+        m_forceBank10Next = false;
+    } else if (m_forceBank11Next) {
+        m_ccRoundRobinIdx = 11;
+        m_forceBank11Next = false;
+    }
+
     // Subframe 0: current bank
     frame[8] = 0x7F; frame[9] = 0x7F; frame[10] = 0x7F;
     quint8 cc0[5] = {};
@@ -1442,6 +2036,16 @@ void P1RadioConnection::sendCommandFrame()
 
     m_ccRoundRobinIdx++;
     if (m_ccRoundRobinIdx > maxBank) { m_ccRoundRobinIdx = 0; }
+
+    // 3M-1a E.2: fill the two 504-byte TX I/Q zones from the ring buffer.
+    // Each zone holds 63 samples × 8 bytes = 504 bytes.
+    // From deskhpsdr/src/old_protocol.c:545-549 [@120188f]:
+    //   memcpy(output_buffer + 8, &TXRINGBUF[out],       504); ozy_send_buffer();
+    //   memcpy(output_buffer + 8, &TXRINGBUF[out + 504], 504); ozy_send_buffer();
+    // frame[16..519]   = subframe 0 TX data zone (after 3-byte sync + 5-byte C&C)
+    // frame[528..1031] = subframe 1 TX data zone (after 3-byte sync + 5-byte C&C)
+    fillTxZone(frame + 16);
+    fillTxZone(frame + 528);
 
     QByteArray pkt(reinterpret_cast<const char*>(frame), 1032);
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_radioInfo.port);
@@ -1492,9 +2096,15 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
     if (pkt.size() != 1032) { return; }
 
     std::vector<std::vector<float>> perRx;
+    std::vector<float> micSamples;
     const auto* frame = reinterpret_cast<const quint8*>(pkt.constData());
 
-    if (!P1RadioConnection::parseEp6Frame(frame, m_activeRxCount, perRx)) {
+    // Phase 3M-1c TX pump v3: extract mic16 byte zone alongside RX I/Q so
+    // the network thread is the cadence source for TX (matches Thetis
+    // network.c:655-666 [v2.10.3.13] which calls Inbound() for both rx and
+    // mic in lockstep with EP6 frame arrival).
+    std::vector<float>* micOut = (m_txMicSource != nullptr) ? &micSamples : nullptr;
+    if (!P1RadioConnection::parseEp6Frame(frame, m_activeRxCount, perRx, micOut)) {
         if (!m_parseFailLogged) {
             m_parseFailLogged = true;
             qCWarning(lcConnection) << "P1: parseEp6Frame rejected frame;"
@@ -1533,6 +2143,22 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
     if ((c0_sub0 & 0x01) || (c0_sub1 & 0x01)) {
         emit adcOverflow(0);
     }
+
+    // H.5: mic_ptt extraction — P1 status frame C0 bit 0 (PTT from radio).
+    // From Thetis networkproto1.c:329 [v2.10.3.13]:
+    //   prn->ptt_in = ControlBytesIn[0] & 0x1;
+    // + console.cs:25426 [v2.10.3.13]:
+    //   bool mic_ptt = (dotdashptt & 0x01) != 0; // PTT from radio
+    //
+    // C0 is ControlBytesIn[0]; bit 0 is ptt_in.  Both sub-frames carry the
+    // same instantaneous PTT state; OR them to produce the frame-level value
+    // (matches Thetis nativeGetDotDashPTT() which reads a single prn->ptt_in
+    // accumulated across all sub-frame writes).
+    //
+    // Emitted unconditionally each frame: MoxController::onMicPttFromRadio
+    // is idempotent, so repeated false→false calls are harmless.
+    const bool micPtt = ((c0_sub0 & 0x01) != 0) || ((c0_sub1 & 0x01) != 0);
+    emit micPttFromRadio(micPtt);
 
     // Phase 3P-H Task 4: PA telemetry — extract raw 16-bit ADC counts from
     // each subframe's C&C status bytes.  Per-board scaling lives in RadioModel
@@ -1635,6 +2261,15 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
             emit iqDataReceived(r, samples);
         }
     }
+
+    // Phase 3M-1c TX pump v3: dispatch the extracted mic16 samples to
+    // TxMicSource as the cadence source for TxWorkerThread.  Mirrors
+    // Thetis networkproto1.c:410 [v2.10.3.13]:
+    //   Inbound(inid(1, 0), mic_sample_count, prn->TxReadBufp);
+    if (m_txMicSource != nullptr && !micSamples.empty()) {
+        m_txMicSource->inbound(micSamples.data(), static_cast<int>(micSamples.size()));
+        m_lastMicAt = QDateTime::currentDateTimeUtc();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1684,21 +2319,45 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
         return;
     }
 
-    case 10: // TX drive, mic, Alex HPF/LPF, PA (networkproto1.c:578-591)
+    case 10: // TX drive, mic, Alex HPF/LPF, T/R relay (networkproto1.c:578-591)
+        // C3 bit 7 (0x80) = Alex T/R relay DISABLED.  Inverted vs MOX.
+        // Write 0x80 only when relay should be disengaged (PA bypass / RX-only).
+        // m_trxRelay: true  = relay engaged (normal TX path) → bit 7 = 0;
+        //             false = relay disengaged (PA bypass)   → bit 7 = 1.
+        // From deskhpsdr/src/old_protocol.c:2909-2910 [@120188f]:
+        //   if (txband->disablePA || !pa_enabled)
+        //       output_buffer[C3] |= 0x80; // disable Alex T/R relay
+        // BUG FIX (3M-1a E.4): prior code wrote (m_paEnabled ? 0x80 : 0), which
+        // is INVERTED — it asserted "disable" when PA was enabled.  Latent from
+        // 3M-0; never surfaced because no TX I/Q was live on EP2 before E.4.
         out[0] = C0base | 0x12;
         out[1] = static_cast<quint8>(m_txDrive & 0xFF);
-        out[2] = 0x40; // line_in=0, mic_boost=0 defaults
-        out[3] = m_alexHpfBits | (m_paEnabled ? 0x80 : 0);
+        // C2: mic_boost → bit 0 (0x01); line_in → bit 1 (0x02); bit 6 always set per upstream default.
+        // From Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
+        //   C2 = ((prn->mic.mic_boost & 1) | ((prn->mic.line_in & 1) << 1) | ... | 0b01000000) & 0x7f;
+        out[2] = static_cast<quint8>((m_micBoost ? 0x01 : 0x00) | (m_lineIn ? 0x02 : 0x00) | 0x40); // 3M-1b G.1+G.2
+        out[3] = m_alexHpfBits | (m_trxRelay ? 0x00 : 0x80); // 3M-1a E.4
         out[4] = m_alexLpfBits;
         return;
 
     case 11: // Preamp control (networkproto1.c:593-601)
         out[0] = C0base | 0x14;
+        // C1: preamp bits 0-3 (bit 3 = rx0 again, Thetis quirk) + mic_trs bit 4
+        //     + mic_bias bit 5 + mic_ptt bit 6 (INVERTED).
+        // mic_trs polarity inversion: 1 = tip is BIAS/PTT → write !m_micTipRing.
+        // mic_bias polarity: 1 = bias on (no inversion) → write m_micBias.
+        // mic_ptt polarity inversion: 1 = PTT DISABLED on wire → write !m_micPTT.
+        // From Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13]
+        //   C1 = ... | ((prn->mic.mic_trs & 1) << 4) | ((prn->mic.mic_bias & 1) << 5)
+        //           | ((prn->mic.mic_ptt & 1) << 6);
         out[1] = static_cast<quint8>(
                    (m_rxPreamp[0] ? 0x01 : 0)
                  | (m_rxPreamp[1] ? 0x02 : 0)
                  | (m_rxPreamp[2] ? 0x04 : 0)
-                 | (m_rxPreamp[0] ? 0x08 : 0)); // bit3 = rx0 again (Thetis quirk)
+                 | (m_rxPreamp[0] ? 0x08 : 0)        // bit3 = rx0 again (Thetis quirk)
+                 | (!m_micTipRing ? 0x10 : 0x00)      // 3M-1b G.3 — mic_trs (inverted)
+                 | (m_micBias    ? 0x20 : 0x00)       // 3M-1b G.4 — mic_bias (no inversion)
+                 | (!m_micPTT    ? 0x40 : 0x00));     // 3M-1b G.5 — mic_ptt (INVERTED)
         out[2] = 0; // line_in_gain + puresignal
         out[3] = 0; // user digital outputs
         out[4] = static_cast<quint8>((m_stepAttn[0] & 0x1F) | 0x20); // ADC0 step ATT + enable
@@ -2013,6 +2672,16 @@ bool P1RadioConnection::parseEp6Frame(const quint8 frame[1032],
                                        int numRx,
                                        std::vector<std::vector<float>>& perRx) noexcept
 {
+    // Delegate to the mic-aware overload with a null mic output (back-compat
+    // for callers / tests that don't care about the mic16 byte zone).
+    return parseEp6Frame(frame, numRx, perRx, /*micOut=*/nullptr);
+}
+
+bool P1RadioConnection::parseEp6Frame(const quint8 frame[1032],
+                                       int numRx,
+                                       std::vector<std::vector<float>>& perRx,
+                                       std::vector<float>* micOut) noexcept
+{
     // Validate numRx range (1..7 — Thetis supports up to 7 DDCs)
     if (numRx < 1 || numRx > 7) { return false; }
 
@@ -2038,6 +2707,11 @@ bool P1RadioConnection::parseEp6Frame(const quint8 frame[1032],
         v.reserve(static_cast<size_t>(samplesPerSubframe * 2 * 2));  // 2 subframes × 2 floats/sample
     }
 
+    if (micOut != nullptr) {
+        micOut->clear();
+        micOut->reserve(static_cast<size_t>(samplesPerSubframe * 2));
+    }
+
     // Parse one 512-byte subframe; sampleStart is the offset of the first sample
     // slot within the full 1032-byte datagram.
     // Source: networkproto1.c:366 — k = 8 + isample*(6*nddc+2) + iddc*6
@@ -2053,7 +2727,26 @@ bool P1RadioConnection::parseEp6Frame(const quint8 frame[1032],
                 perRx[static_cast<size_t>(r)].push_back(i);
                 perRx[static_cast<size_t>(r)].push_back(q);
             }
-            // Mic16 bytes at offset sampleStart + s*slotBytes + numRx*6 are skipped
+            // Mic16 bytes at offset sampleStart + s*slotBytes + numRx*6.
+            // From Thetis networkproto1.c:401-404 [v2.10.3.13] — extracts a
+            // 16-bit big-endian mic sample from the slot's last two bytes
+            // (Thetis decimates by mic_decimation_factor; at 48 ksps that's
+            // factor=1 and every sample is kept).  We always run at 48 ksps
+            // mic feed, so no decimation here.
+            //   prn->TxReadBufp[2 * mic_sample_count + 0] = const_1_div_2147483648_ *
+            //       (double)(bptr[k + 0] << 24 |
+            //                bptr[k + 1] << 16);
+            //   prn->TxReadBufp[2 * mic_sample_count + 1] = 0.0;
+            // Equivalent to: (int16)(bptr[k]<<8 | bptr[k+1]) / 32768.0  — both
+            // give the same float in [-1, +1].  We use the int16/32768 form
+            // because the bytes are signed 16-bit big-endian.
+            if (micOut != nullptr) {
+                const int micOff = sampleStart + s * slotBytes + numRx * 6;
+                const int16_t mic16 = static_cast<int16_t>(
+                    (static_cast<uint16_t>(frame[micOff]) << 8) |
+                    static_cast<uint16_t>(frame[micOff + 1]));
+                micOut->push_back(static_cast<float>(mic16) / 32768.0f);
+            }
         }
     };
 
