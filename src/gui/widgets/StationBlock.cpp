@@ -19,26 +19,20 @@ StationBlock::StationBlock(QWidget* parent) : QWidget(parent)
 
     setCursor(Qt::PointingHandCursor);
     setAttribute(Qt::WA_StyledBackground, true);  // QSS background paint on QWidget subclass
+
+    // Initialise label + style for disconnected appearance up-front so
+    // the first paint already has the placeholder text and dashed-red
+    // border. m_radioName remains default-constructed (empty) so
+    // isConnectedAppearance() correctly returns false.
+    m_label->setText(QStringLiteral("Click to connect"));
     applyStyle();
-    setRadioName(QString());  // start in disconnected appearance
 }
 
 void StationBlock::setRadioName(const QString& name)
 {
-    if (m_radioName == name) {
-        // Still apply text in case label is empty on first construction
-        if (name.isEmpty() && m_label->text() != QStringLiteral("Click to connect")) {
-            m_label->setText(QStringLiteral("Click to connect"));
-            applyStyle();
-        }
-        return;
-    }
+    if (m_radioName == name) { return; }
     m_radioName = name;
-    if (name.isEmpty()) {
-        m_label->setText(QStringLiteral("Click to connect"));
-    } else {
-        m_label->setText(name);
-    }
+    m_label->setText(name.isEmpty() ? QStringLiteral("Click to connect") : name);
     applyStyle();
 }
 
