@@ -69,6 +69,14 @@
 //                 the cfcomp.c:669-682 NULL-skirt semantics) instead of
 //                 dropping them at the linker.  AI-assisted transformation
 //                 via Anthropic Claude Code.
+//   2026-04-30 — SetTXAPHROTCorner, SetTXAPHROTNstages, SetTXAPHROTReverse
+//                 declarations added by J.J. Boyd (KG4VCF) during
+//                 3M-3a-ii Batch 1.6 — TxChannel TXA phase-rotator parameter
+//                 setters that 3M-3a-i deferred (the Run flag was wired via
+//                 Stage::PhRot in 3M-1; the parameter setters belong with
+//                 the CFC tab schema work in 3M-3a-ii).  Signatures match
+//                 wdsp/iir.c:675-703 [v2.10.3.13].  AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -712,6 +720,23 @@ void SetTXAPanelRun(int channel, int run);
 // phrot (stage 3): phase rotator for SSB carrier-phase correction.
 // From Thetis wdsp/iir.c:665-670 [v2.10.3.13].
 void SetTXAPHROTRun(int channel, int run);
+
+// phrot corner frequency in Hz.  WDSP rebuilds the all-pass coefficients on
+// every set (decalc_phrot + calc_phrot) — non-trivial cost; avoid spamming.
+// csDSP-protected (cs_update).
+// From Thetis wdsp/iir.c:675-683 [v2.10.3.13].
+void SetTXAPHROTCorner(int channel, double corner);
+
+// phrot number of all-pass stages.  WDSP rebuilds the coefficient bank on
+// every set (decalc_phrot + calc_phrot) — non-trivial cost; avoid spamming.
+// csDSP-protected (cs_update).
+// From Thetis wdsp/iir.c:686-694 [v2.10.3.13].
+void SetTXAPHROTNstages(int channel, int nstages);
+
+// phrot reverse-rotation flag (cheap — just flips the sign).
+// csDSP-protected (cs_update).
+// From Thetis wdsp/iir.c:697-703 [v2.10.3.13].
+void SetTXAPHROTReverse(int channel, int reverse);
 
 // amsq (stage 5): TX AM squelch / downward expander.
 // From Thetis wdsp/amsq.c:246-252 [v2.10.3.13] and amsq.h:83.

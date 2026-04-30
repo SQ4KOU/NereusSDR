@@ -151,6 +151,19 @@ warren@wpratt.com
 //                 TxMicSource-driven cadence).  No behavioural change;
 //                 documentation refresh only.  J.J. Boyd (KG4VCF), with
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-30 — Phase 3M-3a-ii Batch 1.6 — 3 TX phase-rotator parameter
+//                 wrappers implemented by J.J. Boyd (KG4VCF):
+//                   setTxPhrotCornerHz(double) → SetTXAPHROTCorner
+//                   setTxPhrotNstages(int)     → SetTXAPHROTNstages
+//                   setTxPhrotReverse(bool)    → SetTXAPHROTReverse
+//                 Thin pass-through wrappers over wdsp/iir.c:675-703
+//                 [v2.10.3.13] on top of the WDSP boot defaults shipped
+//                 in 3M-1c.  3M-3a-i shipped Stage::PhRot + the
+//                 setStageRunning(Stage::PhRot,...) arm calling
+//                 SetTXAPHROTRun; the parameter setters were deferred to
+//                 this batch because their persistence keys live in the
+//                 Thetis tpDSPCFC tab alongside the CFC controls.
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
@@ -2155,6 +2168,55 @@ void TxChannel::setTxCessbOn(bool on)
     SetTXAosctrlRun(m_channelId, on ? 1 : 0);
 #else
     Q_UNUSED(on);
+#endif
+}
+
+// ── B-3.1: TX Phase Rotator parameter wrappers (Phase 3M-3a-ii Batch 1.6) ────
+//
+// Three thin pass-through wrappers over the TXA phrot parameter setters in
+// wdsp/iir.c:675-703 [v2.10.3.13].  3M-3a-i Stage::PhRot already wired the
+// Run flag via SetTXAPHROTRun (in setStageRunning).  These three pick up the
+// remaining tunables that the Thetis tpDSPCFC tab exposes alongside the CFC
+// controls.  All three are csDSP-protected (cs_update) inside WDSP and
+// audio-safe to call from the main thread.  See TxChannel.h wrapper docs for
+// the cost/threading rationale (Corner / Nstages call decalc_phrot +
+// calc_phrot internally; Reverse just flips the sign).
+
+void TxChannel::setTxPhrotCornerHz(double hz)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    // From Thetis wdsp/iir.c:675-683 [v2.10.3.13] — SetTXAPHROTCorner(channel, corner).
+    // csDSP-protected.  WDSP rebuilds the all-pass bank on every set
+    // (decalc_phrot + a->fc = corner + calc_phrot) — non-trivial cost.
+    SetTXAPHROTCorner(m_channelId, hz);
+#else
+    Q_UNUSED(hz);
+#endif
+}
+
+void TxChannel::setTxPhrotNstages(int nstages)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    // From Thetis wdsp/iir.c:686-694 [v2.10.3.13] — SetTXAPHROTNstages(channel, nstages).
+    // csDSP-protected.  WDSP rebuilds the coefficient bank on every set
+    // (decalc_phrot + a->nstages = nstages + calc_phrot) — non-trivial cost.
+    SetTXAPHROTNstages(m_channelId, nstages);
+#else
+    Q_UNUSED(nstages);
+#endif
+}
+
+void TxChannel::setTxPhrotReverse(bool reverse)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    // From Thetis wdsp/iir.c:697-703 [v2.10.3.13] — SetTXAPHROTReverse(channel, reverse).
+    // csDSP-protected.  Cheap — just flips a->reverse; no coefficient rebuild.
+    SetTXAPHROTReverse(m_channelId, reverse ? 1 : 0);
+#else
+    Q_UNUSED(reverse);
 #endif
 }
 

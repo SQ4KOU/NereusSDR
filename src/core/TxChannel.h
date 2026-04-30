@@ -203,6 +203,21 @@ warren@wpratt.com
 //                 NULL-skirt semantics) instead of dropping them at the
 //                 linker.  J.J. Boyd (KG4VCF), with AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-04-30 — Phase 3M-3a-ii Batch 1.6 — 3 TX phase-rotator parameter
+//                 wrappers added by J.J. Boyd (KG4VCF):
+//                   setTxPhrotCornerHz(double)  → SetTXAPHROTCorner
+//                   setTxPhrotNstages(int)      → SetTXAPHROTNstages
+//                   setTxPhrotReverse(bool)     → SetTXAPHROTReverse
+//                 Thin pass-through wrappers over wdsp/iir.c:675-703
+//                 [v2.10.3.13] on top of the WDSP boot defaults shipped
+//                 in 3M-1c.  3M-3a-i shipped Stage::PhRot + the
+//                 setStageRunning(Stage::PhRot,...) arm calling
+//                 SetTXAPHROTRun; the parameter setters were deferred to
+//                 this batch because their persistence keys
+//                 (CFCPhaseRotatorFreq / CFCPhaseRotatorStages /
+//                 CFCPhaseReverseEnabled) live in the Thetis tpDSPCFC tab
+//                 alongside the CFC controls.  AI-assisted transformation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -1228,6 +1243,42 @@ public:
     /// From Thetis wdsp/osctrl.c:142-150 [v2.10.3.13].
     /// From Thetis wdsp/TXA.c:843-868 [v2.10.3.13] — bp2.run gating.
     void setTxCessbOn(bool on);
+
+    // ── B-3.1: TX Phase Rotator parameter wrappers (Phase 3M-3a-ii Batch 1.6) ─
+    //
+    // Three thin C++ wrappers over the TXA phrot parameter section
+    // (iir.c:675-703).  3M-3a-i Stage::PhRot already wired the Run flag via
+    // SetTXAPHROTRun (setStageRunning case arm).  These three pick up the
+    // remaining tunables that the Thetis tpDSPCFC tab exposes alongside the
+    // CFC controls.  All wrappers route to TX channel kTxChannelId = 1 and
+    // inherit the standard rsmpin.p == nullptr null-guard pattern.  All are
+    // csDSP-protected (cs_update) inside WDSP, so they are safe to call from
+    // the main thread while the audio thread runs.
+
+    /// Phase-rotator corner frequency in Hz.  Wraps SetTXAPHROTCorner.
+    ///
+    /// WDSP rebuilds the all-pass coefficient bank on every set
+    /// (decalc_phrot + calc_phrot internally) — non-trivial cost; do not
+    /// spam this from a slider's continuous-change signal without rate-
+    /// limiting.
+    ///
+    /// From Thetis wdsp/iir.c:675-683 [v2.10.3.13].
+    void setTxPhrotCornerHz(double hz);
+
+    /// Phase-rotator number of all-pass stages.  Wraps SetTXAPHROTNstages.
+    ///
+    /// WDSP rebuilds the coefficient bank on every set (decalc_phrot +
+    /// calc_phrot internally) — non-trivial cost; do not spam.
+    ///
+    /// From Thetis wdsp/iir.c:686-694 [v2.10.3.13].
+    void setTxPhrotNstages(int nstages);
+
+    /// Phase-rotator reverse-rotation flag.  Wraps SetTXAPHROTReverse.
+    ///
+    /// Cheap — WDSP just flips the sign; no coefficient rebuild.
+    ///
+    /// From Thetis wdsp/iir.c:697-703 [v2.10.3.13].
+    void setTxPhrotReverse(bool reverse);
 
     // ── Per-stage Run override (3M-1a C.4) ──────────────────────────────────
     //

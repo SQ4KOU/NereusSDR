@@ -29,7 +29,8 @@ warren@wpratt.com
 // =================================================================
 //
 // Unit tests for the 9 TX CFC + CPDR + CESSB wrappers added in Phase
-// 3M-3a-ii Batch 1:
+// 3M-3a-ii Batch 1, plus the 3 TX phrot parameter wrappers added in
+// Phase 3M-3a-ii Batch 1.6:
 //
 //   CFC   (6):  setTxCfcRunning(bool)
 //               setTxCfcPosition(int)
@@ -40,6 +41,9 @@ warren@wpratt.com
 //   CPDR  (2):  setTxCpdrOn(bool)
 //               setTxCpdrGainDb(double)
 //   CESSB (1):  setTxCessbOn(bool)
+//   PhRot (3):  setTxPhrotCornerHz(double)   [3M-3a-ii Batch 1.6]
+//               setTxPhrotNstages(int)       [3M-3a-ii Batch 1.6]
+//               setTxPhrotReverse(bool)      [3M-3a-ii Batch 1.6]
 //
 // Plus regression coverage for the Stage::CfComp / Stage::Compressor /
 // Stage::OsCtrl case arms in setStageRunning (already wired in 3M-1a Task
@@ -66,6 +70,12 @@ warren@wpratt.com
 //                 "validated and dropped" to "live pass-through" smoke;
 //                 empty-Qg/Qe → nullptr coverage retained; length-mismatch
 //                 coverage retained.  J.J. Boyd (KG4VCF), with AI-assisted
+//                 transformation via Anthropic Claude Code.
+//   2026-04-30 — Phase 3M-3a-ii Batch 1.6 — extended with smoke coverage
+//                 for the 3 new TX phrot parameter wrappers
+//                 (setTxPhrotCornerHz / setTxPhrotNstages /
+//                 setTxPhrotReverse) plus a Stage::PhRot setStageRunning
+//                 regression arm.  J.J. Boyd (KG4VCF), with AI-assisted
 //                 transformation via Anthropic Claude Code.
 // =================================================================
 
@@ -419,6 +429,134 @@ private slots:
     {
         TxChannel ch(kTxChannelId);
         ch.setStageRunning(TxChannel::Stage::OsCtrl, false);
+    }
+
+    // 3M-3a-ii Batch 1.6: TX phrot parameter wrappers ─────────────────────────
+    //
+    // Three thin wrappers over the WDSP TXA phase-rotator parameter setters
+    // that 3M-3a-i deferred (the Run flag was wired via Stage::PhRot in
+    // 3M-1; the parameter setters belong with the CFC tab schema work in
+    // 3M-3a-ii — their persistence keys live in the Thetis tpDSPCFC tab).
+    //
+    //   setTxPhrotCornerHz(double)  → SetTXAPHROTCorner    (iir.c:675)
+    //   setTxPhrotNstages(int)      → SetTXAPHROTNstages   (iir.c:686)
+    //   setTxPhrotReverse(bool)     → SetTXAPHROTReverse   (iir.c:697)
+    //
+    // Test strategy: pure smoke / does-not-crash, matching the rest of the
+    // file.  WDSP setter calls fall through the rsmpin.p == nullptr null-
+    // guard in HAVE_WDSP-linked builds; HAVE_WDSP-undefined builds exercise
+    // the stub path.
+
+    // ── B-3.10: setTxPhrotCornerHz ──────────────────────────────────────────
+    //
+    // Wraps SetTXAPHROTCorner(channel, hz).
+    // From Thetis wdsp/iir.c:675-683 [v2.10.3.13].
+
+    void setTxPhrotCornerHz_typical_doesNotCrash()
+    {
+        TxChannel ch(kTxChannelId);
+        ch.setTxPhrotCornerHz(338.0);  // Thetis tpDSPCFC default freq
+    }
+
+    void setTxPhrotCornerHz_zero_doesNotCrash()
+    {
+        TxChannel ch(kTxChannelId);
+        ch.setTxPhrotCornerHz(0.0);
+    }
+
+    void setTxPhrotCornerHz_repeated_doesNotCrash()
+    {
+        TxChannel ch(kTxChannelId);
+        // Each call rebuilds the all-pass bank (decalc + calc inside WDSP).
+        // Smoke that repeated sets don't crash on an uninitialised channel.
+        ch.setTxPhrotCornerHz(200.0);
+        ch.setTxPhrotCornerHz(338.0);
+        ch.setTxPhrotCornerHz(500.0);
+    }
+
+    // ── B-3.11: setTxPhrotNstages ───────────────────────────────────────────
+    //
+    // Wraps SetTXAPHROTNstages(channel, nstages).
+    // From Thetis wdsp/iir.c:686-694 [v2.10.3.13].
+
+    void setTxPhrotNstages_typical_doesNotCrash()
+    {
+        TxChannel ch(kTxChannelId);
+        ch.setTxPhrotNstages(8);  // Thetis tpDSPCFC default stages
+    }
+
+    void setTxPhrotNstages_one_doesNotCrash()
+    {
+        TxChannel ch(kTxChannelId);
+        ch.setTxPhrotNstages(1);
+    }
+
+    void setTxPhrotNstages_repeated_doesNotCrash()
+    {
+        TxChannel ch(kTxChannelId);
+        // Each call rebuilds the coefficient bank.  Smoke repeated sets.
+        ch.setTxPhrotNstages(4);
+        ch.setTxPhrotNstages(8);
+        ch.setTxPhrotNstages(12);
+    }
+
+    // ── B-3.12: setTxPhrotReverse ───────────────────────────────────────────
+    //
+    // Wraps SetTXAPHROTReverse(channel, reverse ? 1 : 0).
+    // From Thetis wdsp/iir.c:697-703 [v2.10.3.13].  Cheap — no rebuild.
+
+    void setTxPhrotReverse_true_doesNotCrash()
+    {
+        TxChannel ch(kTxChannelId);
+        ch.setTxPhrotReverse(true);
+    }
+
+    void setTxPhrotReverse_false_doesNotCrash()
+    {
+        TxChannel ch(kTxChannelId);
+        ch.setTxPhrotReverse(false);
+    }
+
+    void setTxPhrotReverse_idempotentToggle_doesNotCrash()
+    {
+        TxChannel ch(kTxChannelId);
+        ch.setTxPhrotReverse(true);
+        ch.setTxPhrotReverse(true);   // redundant — still safe
+        ch.setTxPhrotReverse(false);
+        ch.setTxPhrotReverse(false);  // redundant — still safe
+    }
+
+    // ── Stage::PhRot in setStageRunning regression ──────────────────────────
+    //
+    // Stage::PhRot was wired to SetTXAPHROTRun in 3M-3a-i (the parameter
+    // setters above are deferred Batch 1.6 work).  Verify the case arm
+    // remains a no-throw smoke alongside the new parameter coverage.
+
+    void setStageRunning_phrot_on_doesNotCrash()
+    {
+        TxChannel ch(kTxChannelId);
+        ch.setStageRunning(TxChannel::Stage::PhRot, true);
+    }
+
+    void setStageRunning_phrot_off_doesNotCrash()
+    {
+        TxChannel ch(kTxChannelId);
+        ch.setStageRunning(TxChannel::Stage::PhRot, false);
+    }
+
+    // ── PhRot configure-then-engage sequence ────────────────────────────────
+    //
+    // Mirrors a typical Setup-page flow: configure all three parameters,
+    // then engage Stage::PhRot via setStageRunning.
+
+    void phrotConfigureSequence_doesNotCrash()
+    {
+        TxChannel ch(kTxChannelId);
+        ch.setTxPhrotCornerHz(338.0);
+        ch.setTxPhrotNstages(8);
+        ch.setTxPhrotReverse(false);
+        ch.setStageRunning(TxChannel::Stage::PhRot, true);
+        ch.setStageRunning(TxChannel::Stage::PhRot, false);
     }
 
     // ── Mixed configure-then-engage workflow ────────────────────────────────
