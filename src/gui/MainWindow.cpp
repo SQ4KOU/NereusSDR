@@ -242,6 +242,7 @@ warren@wpratt.com
 
 #include "MainWindow.h"
 #include "ConnectionPanel.h"
+#include "NetworkDiagnosticsDialog.h"
 #include "SupportDialog.h"
 #include "AboutDialog.h"
 #include "SpectrumWidget.h"
@@ -404,19 +405,71 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::showFeatureRequestDialog);
 
     // ── Phase 3Q Sub-PR-4 D.2: ConnectionSegment wiring ────────────────────
-    // Full wiring (state/RTT/rate/audio pip/click affordances) added in D.2.
-    // Minimal seed for D.1: state dot + frameTick activity pulse.
     {
         auto* seg = m_titleBar->connectionSegment();
 
-        // State dot: driven by RadioModel's parametrized signal.
+        // 1. State dot + pulse: driven by connectionStateChanged.
         connect(m_radioModel, &RadioModel::connectionStateChanged,
                 seg, &ConnectionSegment::setState);
 
-        // frameTick: forwarded from RadioModel so we never need to
-        // re-wire when m_connection is recreated.
+        // 2. frameTick: forwarded from RadioModel so we never need to
+        //    re-wire when m_connection is recreated.
         connect(m_radioModel, &RadioModel::frameReceived,
                 seg, &ConnectionSegment::frameTick);
+
+        // 3. 1 Hz rate refresh — polls connection().{tx,rx}ByteRate(1000).
+        auto* rateTimer = new QTimer(this);
+        rateTimer->setInterval(1000);
+        connect(rateTimer, &QTimer::timeout, this, [this, seg]() {
+            if (auto* conn = m_radioModel->connection()) {
+                seg->setRates(conn->txByteRate(1000), conn->rxByteRate(1000));
+            }
+        });
+        rateTimer->start();
+
+        // 4. RTT — wire from RadioConnection::pingRttMeasured.
+        //    Re-wired on every Connecting/Probing transition so the segment
+        //    always follows the live connection object (RadioModel recreates
+        //    RadioConnection on each connect cycle).
+        auto wireRtt = [this, seg]() {
+            if (auto* conn = m_radioModel->connection()) {
+                connect(conn, &RadioConnection::pingRttMeasured,
+                        seg, &ConnectionSegment::setRttMs,
+                        Qt::UniqueConnection);
+            }
+        };
+        wireRtt();
+        connect(m_radioModel, &RadioModel::connectionStateChanged, this,
+                [wireRtt](ConnectionState s) {
+                    if (s == ConnectionState::Connecting ||
+                        s == ConnectionState::Probing) {
+                        wireRtt();
+                    }
+                });
+
+        // 5. Audio flow-state → ♪ pip color.
+        if (auto* engine = m_radioModel->audioEngine()) {
+            connect(engine, &AudioEngine::flowStateChanged,
+                    seg, &ConnectionSegment::setAudioFlowState);
+        }
+
+        // 6. Click affordances.
+        connect(seg, &ConnectionSegment::rttClicked, this, [this]() {
+            auto* dlg = new NetworkDiagnosticsDialog(
+                m_radioModel, m_radioModel->audioEngine(), this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            dlg->show();
+        });
+        connect(seg, &ConnectionSegment::audioPipClicked, this, [this]() {
+            // Audio pip click also opens diagnostics — audio section
+            // is the most relevant panel for pip trouble-shooting.
+            auto* dlg = new NetworkDiagnosticsDialog(
+                m_radioModel, m_radioModel->audioEngine(), this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            dlg->show();
+        });
+        connect(seg, &ConnectionSegment::contextMenuRequested,
+                this, &MainWindow::showSegmentContextMenu);
 
         // Seed with current state (Disconnected at launch).
         seg->setState(m_radioModel->connectionState());
@@ -3384,6 +3437,40 @@ void MainWindow::showConnectionPanel()
     m_connectionPanel->show();
     m_connectionPanel->raise();
     m_connectionPanel->activateWindow();
+}
+
+// Phase 3Q Sub-PR-4 D.2 — right-click context menu on the TitleBar
+// ConnectionSegment. "Reconnect" is intentionally absent: RadioModel has no
+// public reconnect() API (tryAutoReconnect() is private to MainWindow and
+// starts a full probe + discovery cycle, which is not appropriate to invoke
+// from a context menu that the user might trigger mid-session). The user can
+// use "Connect to other radio…" to re-select the same radio.
+void MainWindow::showSegmentContextMenu(const QPoint& globalPos)
+{
+    QMenu menu(this);
+
+    menu.addAction(tr("Disconnect"), this, [this]() {
+        m_radioModel->disconnectFromRadio();
+    });
+    menu.addAction(tr("Connect to other radio…"), this, [this]() {
+        showConnectionPanel();
+    });
+    menu.addSeparator();
+    menu.addAction(tr("Network diagnostics…"), this, [this]() {
+        auto* dlg = new NetworkDiagnosticsDialog(
+            m_radioModel, m_radioModel->audioEngine(), this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->show();
+    });
+    menu.addSeparator();
+    menu.addAction(tr("Copy IP address"), this, [this]() {
+        QGuiApplication::clipboard()->setText(m_radioModel->connectionIpText());
+    });
+    menu.addAction(tr("Copy MAC address"), this, [this]() {
+        QGuiApplication::clipboard()->setText(m_radioModel->connectionMacText());
+    });
+
+    menu.exec(globalPos);
 }
 
 void MainWindow::showSupportDialog()

@@ -135,6 +135,10 @@ private slots:
     void showAudioDiagnoseDialog();
     void showFeatureRequestDialog();
     void showFeatureRequestDialogImpl();
+    // Phase 3Q Sub-PR-4 D.2: right-click context menu on the TitleBar
+    // ConnectionSegment. Items: Disconnect / Connect-to-other / Diagnostics /
+    // Copy IP / Copy MAC. "Reconnect" omitted — no RadioModel::reconnect() API.
+    void showSegmentContextMenu(const QPoint& globalPos);
 
 private:
     void buildUI();
