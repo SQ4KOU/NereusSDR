@@ -3568,9 +3568,9 @@ void MainWindow::onConnectionStateChanged()
 // Phase 3I Task 17 / Phase 3Q Task 10 — auto-reconnect on launch.
 //
 // Logic:
-//   1. Collect ALL saved radios with autoConnect = true. If none, return
-//      (cold-launch — ConnectionPanel is not auto-opened here; Task 5 handles
-//      the auto-open on the Disconnected→Connected→Disconnected transition).
+//   1. Collect ALL saved radios with autoConnect = true. If none, open the
+//      ConnectionPanel (Phase 3Q polish — design §6.1 cold-launch flow) so
+//      the user has a one-click path to a saved radio or to Add Manually.
 //   2. Pick the target MAC:
 //      - Single autoConnect entry → use it directly.
 //      - Multiple entries → most-recently-connected MAC wins (radios/lastConnected);
@@ -3599,7 +3599,15 @@ void MainWindow::tryAutoReconnect()
         }
     }
     if (autoMacs.isEmpty()) {
-        return;  // Cold launch — no auto-connect target configured.
+        // Phase 3Q polish: cold-launch panel auto-open. Design §6.1 — when
+        // there's no auto-connect target, surface the radio list so the
+        // user has a one-click path to either connect (saved radio shown)
+        // or add one (empty list). Non-modal so the app remains usable
+        // around the panel. Skipped when an auto-connect attempt is in
+        // flight (the auto-reconnect path handles its own panel open via
+        // the failure handler in Task 10).
+        showConnectionPanel();
+        return;
     }
 
     // --- Step 2: Pick the target MAC (most-recently-connected wins) ---
