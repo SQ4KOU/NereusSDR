@@ -278,15 +278,13 @@ void ConnectionSegment::paintEvent(QPaintEvent*)
     p.drawText(x, textY, rx);
     x += p.fontMetrics().horizontalAdvance(rx) + 10;
 
-    // ── 5. Vertical separator ─────────────────────────────────────────────
-    p.setPen(QColor("#304050"));
-    p.drawText(x, textY, QStringLiteral("|"));
-    x += p.fontMetrics().horizontalAdvance("|") + 6;
-
-    // ── 6. ♪ audio pip ────────────────────────────────────────────────────
+    // ── 5. ● audio pip ────────────────────────────────────────────────────
+    // Was: vertical separator "|" + ♪ (U+266A). ♪ is absent in Menlo (the
+    // SF Mono fallback on macOS), rendering as garbage. Replaced with ●
+    // (U+25CF BLACK CIRCLE), universally available in every monospace font.
+    // The circle colour already encodes audio state — semantically cleaner.
     p.setPen(audioPipColor(m_audioFlow));
-    // ♪ U+266A encoded inline as UTF-8 bytes to avoid MSVC narrow-string issues
-    const QString pip = QStringLiteral("\xe2\x99\xaa");
+    const QString pip = QStringLiteral("\xe2\x97\x8f");   // ● U+25CF — color = state
     p.drawText(x, textY, pip);
     m_lastPipX1 = x;
     m_lastPipX2 = x + p.fontMetrics().horizontalAdvance(pip);

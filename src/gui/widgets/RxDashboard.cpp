@@ -48,38 +48,39 @@ void RxDashboard::buildUi()
     m_freqLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: #c8d8e8; font-family: 'SF Mono', Menlo, monospace;"
         " font-size: 15px; font-weight: 600; letter-spacing: 0.3px; }"));
+    // Minimum width to prevent truncation of "14.225.000" (12 chars × ~9 px = 108 px).
+    // Without this the label squeezes to a narrow strip on first paint and Qt never
+    // auto-expands it (no expanding size policy on the parent stack widget).
+    m_freqLabel->setMinimumWidth(110);
     vbox->addWidget(m_rxLabel);
     vbox->addWidget(m_freqLabel);
     hbox->addWidget(stackContainer);
 
     // ── Always-visible badges: mode / filter / AGC ───────────────────────────
+    // Icons (⨎ ⚡ ⌁ ∼ ⊘ ▼) dropped: these glyphs are absent in Menlo (the
+    // SF Mono fallback on macOS without SF Mono installed) and render as
+    // garbage. The badge text labels (USB, 2.4k, AGC-S, NR2, NB, APF, SQL)
+    // are fully self-descriptive — icon prefixes are redundant.
     m_modeBadge = new StatusBadge(this);
-    m_modeBadge->setIcon(QStringLiteral("~"));
     hbox->addWidget(m_modeBadge);
 
     m_filterBadge = new StatusBadge(this);
-    m_filterBadge->setIcon(QStringLiteral("⨎")); // U+2A0E
     hbox->addWidget(m_filterBadge);
 
     m_agcBadge = new StatusBadge(this);
-    m_agcBadge->setIcon(QStringLiteral("⚡")); // U+26A1
     hbox->addWidget(m_agcBadge);
 
     // ── Active-only badges: NR / NB / APF / SQL ───────────────────────────────
     m_nrBadge = new StatusBadge(this);
-    m_nrBadge->setIcon(QStringLiteral("⌁")); // U+2301
     hbox->addWidget(m_nrBadge);
 
     m_nbBadge = new StatusBadge(this);
-    m_nbBadge->setIcon(QStringLiteral("∼")); // U+223C
     hbox->addWidget(m_nbBadge);
 
     m_apfBadge = new StatusBadge(this);
-    m_apfBadge->setIcon(QStringLiteral("⊘")); // U+2298
     hbox->addWidget(m_apfBadge);
 
     m_sqlBadge = new StatusBadge(this);
-    m_sqlBadge->setIcon(QStringLiteral("▼")); // U+25BC
     hbox->addWidget(m_sqlBadge);
 
     // Active-only badges hidden by default — "no NYI" rule

@@ -20,6 +20,10 @@ StationBlock::StationBlock(QWidget* parent) : QWidget(parent)
     setCursor(Qt::PointingHandCursor);
     setAttribute(Qt::WA_StyledBackground, true);  // QSS background paint on QWidget subclass
 
+    // Minimum width: fits "ANAN-G2 (Saturn)" (17 chars × ~9 px) + 20 px border padding.
+    // Without this the block squeezes and clips the radio name on first paint.
+    setMinimumWidth(180);
+
     // Initialise label + style for disconnected appearance up-front so
     // the first paint already has the placeholder text and dashed-red
     // border. m_radioName remains default-constructed (empty) so

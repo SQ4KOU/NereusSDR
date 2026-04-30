@@ -3618,10 +3618,18 @@ void MainWindow::onConnectionStateChanged()
     }
 
     if (m_radioModel->isConnected()) {
-        m_radioModelLabel->setText(m_radioModel->name());
+        // Board widget top line: show model code ("Saturn") not marketing name
+        // ("ANAN-G2 (Saturn)") — the marketing name truncates at status-bar widths.
+        // boardCodeName() returns the HPSDRHW enum label which is short and unambiguous.
+        {
+            const HPSDRHW board = m_radioModel->connection()->radioInfo().boardType;
+            const QString code  = QString::fromLatin1(boardCodeName(board));
+            m_radioModelLabel->setText(code);
+        }
         m_radioModelLabel->setStyleSheet(QStringLiteral(
             "QLabel { color: #c8d8e8; font-size: 12px; }"));
-        m_radioFwLabel->setText(QStringLiteral("FW %1").arg(m_radioModel->version()));
+        // Firmware: "v27" not "FW 27" — shorter, fits the compact status bar.
+        m_radioFwLabel->setText(QStringLiteral("v%1").arg(m_radioModel->version()));
         m_radioFwLabel->setStyleSheet(QStringLiteral(
             "QLabel { color: #8aa8c0; font-size: 12px; }"));
 

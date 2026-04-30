@@ -181,6 +181,27 @@ constexpr const char* displayName(HPSDRModel m) noexcept {
     return "Unknown";
 }
 
+// boardCodeName — returns the HPSDRHW enum label as a short model-code string.
+// Used in the status-bar board widget to show "Saturn" instead of the full
+// marketing name "ANAN-G2 (Saturn)" which truncates at typical status-bar widths.
+constexpr const char* boardCodeName(HPSDRHW hw) noexcept {
+    switch (hw) {
+        case HPSDRHW::Atlas:            return "Atlas";
+        case HPSDRHW::Hermes:           return "Hermes";
+        case HPSDRHW::HermesII:         return "HermesII";
+        case HPSDRHW::Angelia:          return "Angelia";
+        case HPSDRHW::Orion:            return "Orion";
+        case HPSDRHW::OrionMKII:        return "OrionMKII";
+        case HPSDRHW::HermesLite:       return "HL2";
+        case HPSDRHW::Saturn:           return "Saturn";
+        case HPSDRHW::SaturnMKII:       return "SaturnMKII";
+        case HPSDRHW::HermesLiteRxOnly: return "HL2-RX";
+        case HPSDRHW::Andromeda:        return "Andromeda";
+        case HPSDRHW::Unknown:          return "Unknown";
+    }
+    return "Unknown";
+}
+
 } // namespace NereusSDR
 
 Q_DECLARE_METATYPE(NereusSDR::HPSDRModel)
