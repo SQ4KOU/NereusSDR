@@ -14,6 +14,13 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-04-30 — Phase 3M-3a-ii post-bench cleanup: PROC button + slider
+//                 are wired bidirectionally to TransmitModel::cpdrOn /
+//                 cpdrLevelDb. Slider reconfigured 0..2 (NOR/DX/DX+
+//                 placeholder) → 0..20 dB (full Thetis ptbCPDR range,
+//                 console.Designer.cs:6042-6043 [v2.10.3.13]).  NOR/DX/DX+
+//                 labels replaced with a numeric "X dB" value display.
+//                 NyiOverlay::markNyi calls dropped on PROC button + slider.
 // =================================================================
 
 //=================================================================
@@ -135,10 +142,15 @@ private:
     QLabel*      m_micLevelLabel{nullptr};
     // #6  +ACC button (green toggle, 48px)
     QPushButton* m_accBtn{nullptr};
-    // #7  PROC button (green 48px) + slider (0-100) + inset "50"
+    // #7  PROC button (green 48px) + slider (0..20 dB CPDR level) + numeric
+    //     value label "X dB".  Slider is the full Thetis ptbCPDR range
+    //     (console.Designer.cs:6042-6043 [v2.10.3.13]).
+    //     Bidirectional with TransmitModel::cpdrOn / cpdrLevelDb (post-bench
+    //     cleanup 2026-04-30).
     QPushButton* m_procBtn{nullptr};
     QSlider*     m_procSlider{nullptr};
     QLabel*      m_procLabel{nullptr};
+    QLabel*      m_procValueLabel{nullptr};
     // #8  VAX button (blue toggle, 48px)
     QPushButton* m_vaxBtn{nullptr};
     // #9  MON button (green 48px) + slider (0-100) + inset "50"

@@ -1,38 +1,32 @@
 // no-port-check: NereusSDR-original test file.  All Thetis source cites
 // for the underlying TransmitModel properties live in TransmitModel.h.
 // =================================================================
-// tests/tst_tx_applet_lev_eq_proc.cpp  (NereusSDR)
+// tests/tst_tx_applet_lev_eq_cfc.cpp  (NereusSDR)
 // =================================================================
 //
 // Phase 3M-3a-i Batch 2 (Task F) — TxApplet LEV / EQ / PROC quick toggles.
 // Phase 3M-3a-ii Batch 6 (Task F + A) — PROC enabled + CFC button added.
+// Phase 3M-3a-ii post-bench cleanup — PROC removed from TxApplet (lives on
+// PhoneCwApplet — see tst_phone_applet_proc.cpp).  File renamed from
+// tst_tx_applet_lev_eq_proc.cpp.
 //
-// TxApplet now hosts a row of FOUR checkable buttons between the MON volume
+// TxApplet now hosts a row of THREE checkable buttons between the MON volume
 // slider and the TUNE/MOX row:
 //   LEV  — bidirectional ↔ TransmitModel::txLevelerOn (green-checked style).
 //   EQ   — bidirectional ↔ TransmitModel::txEqEnabled (green-checked style).
 //          Right-click → TxEqDialog (3M-3a-i Batch 3).
-//   PROC — bidirectional ↔ TransmitModel::cpdrOn (3M-3a-ii Batch 6 Task F).
-//          Drives WDSP TXA compressor.run via SetTXACompressorRun.
 //   CFC  — bidirectional ↔ TransmitModel::cfcEnabled (3M-3a-ii Batch 6 Task A).
 //          Right-click → modeless TxCfcDialog.
 //
-// File name retained for git history continuity even though it now also
-// covers PROC + CFC (extended in Batch 6).
-//
 // Tests:
-//   1. All four buttons exist (located by objectName).
-//   2. PROC button is enabled (was disabled placeholder pre-Batch 6).
-//   3. LEV.click() flips TransmitModel::txLevelerOn.
-//   4. EQ.click() flips TransmitModel::txEqEnabled.
-//   5. Model→UI: setTxLevelerOn(false) un-checks LEV button.
-//   6. Model→UI: setTxEqEnabled(true) checks EQ button.
-//   7. PROC tooltip mentions WDSP/CPDR (no more "coming in 3M-3a-ii").
-//   8. PROC.click() flips TransmitModel::cpdrOn.
-//   9. Model→UI: setCpdrOn(true) checks PROC button.
-//   10. CFC.click() flips TransmitModel::cfcEnabled.
-//   11. Model→UI: setCfcEnabled(true) checks CFC button.
-//   12. CFC right-click triggers requestOpenCfcDialog (single instance).
+//   1. All three buttons exist (located by objectName).
+//   2. LEV.click() flips TransmitModel::txLevelerOn.
+//   3. EQ.click() flips TransmitModel::txEqEnabled.
+//   4. Model→UI: setTxLevelerOn(false) un-checks LEV button.
+//   5. Model→UI: setTxEqEnabled(true) checks EQ button.
+//   6. CFC.click() flips TransmitModel::cfcEnabled.
+//   7. Model→UI: setCfcEnabled(true) checks CFC button.
+//   8. CFC right-click triggers requestOpenCfcDialog (single instance).
 //
 // =================================================================
 
@@ -48,7 +42,7 @@
 
 using namespace NereusSDR;
 
-class TestTxAppletLevEqProc : public QObject {
+class TestTxAppletLevEqCfc : public QObject {
     Q_OBJECT
 
 private slots:
@@ -67,36 +61,27 @@ private slots:
         AppSettings::instance().clear();
     }
 
-    // ── 1. All four buttons exist (located by objectName) ──────────────────
-    void allFourButtons_existByObjectName()
+    // ── 1. All three buttons exist (located by objectName) ─────────────────
+    //     PROC moved to PhoneCwApplet — verify it is NOT in TxApplet.
+    void allThreeButtons_existByObjectName()
     {
         RadioModel rm;
         TxApplet applet(&rm);
 
         auto* lev  = applet.findChild<QPushButton*>(QStringLiteral("TxLevButton"));
         auto* eq   = applet.findChild<QPushButton*>(QStringLiteral("TxEqButton"));
-        auto* proc = applet.findChild<QPushButton*>(QStringLiteral("TxProcButton"));
         auto* cfc  = applet.findChild<QPushButton*>(QStringLiteral("TxCfcButton"));
 
         QVERIFY(lev  != nullptr);
         QVERIFY(eq   != nullptr);
-        QVERIFY(proc != nullptr);
         QVERIFY(cfc  != nullptr);
-    }
 
-    // ── 2. PROC button is enabled (3M-3a-ii Batch 6 — was disabled) ────────
-    void procButton_isEnabled()
-    {
-        RadioModel rm;
-        TxApplet applet(&rm);
-
+        // Post-bench cleanup: PROC button must NOT exist on TxApplet anymore.
         auto* proc = applet.findChild<QPushButton*>(QStringLiteral("TxProcButton"));
-        QVERIFY(proc != nullptr);
-        QVERIFY(proc->isEnabled());
-        QVERIFY(proc->isCheckable());
+        QVERIFY(proc == nullptr);
     }
 
-    // ── 3. LEV.click() flips TransmitModel::txLevelerOn ─────────────────────
+    // ── 2. LEV.click() flips TransmitModel::txLevelerOn ─────────────────────
     void levButton_clickFlipsTxLevelerOn()
     {
         RadioModel rm;
@@ -116,7 +101,7 @@ private slots:
         QCOMPARE(rm.transmitModel().txLevelerOn(), true);
     }
 
-    // ── 4. EQ.click() flips TransmitModel::txEqEnabled ──────────────────────
+    // ── 3. EQ.click() flips TransmitModel::txEqEnabled ──────────────────────
     void eqButton_clickFlipsTxEqEnabled()
     {
         RadioModel rm;
@@ -136,7 +121,7 @@ private slots:
         QCOMPARE(rm.transmitModel().txEqEnabled(), false);
     }
 
-    // ── 5. Model→UI: setTxLevelerOn(false) un-checks LEV button ─────────────
+    // ── 4. Model→UI: setTxLevelerOn(false) un-checks LEV button ─────────────
     void setTxLevelerOn_updatesLevButton()
     {
         RadioModel rm;
@@ -156,7 +141,7 @@ private slots:
         QCOMPARE(lev->isChecked(), true);
     }
 
-    // ── 6. Model→UI: setTxEqEnabled(true) checks EQ button ──────────────────
+    // ── 5. Model→UI: setTxEqEnabled(true) checks EQ button ──────────────────
     void setTxEqEnabled_updatesEqButton()
     {
         RadioModel rm;
@@ -176,58 +161,7 @@ private slots:
         QCOMPARE(eq->isChecked(), false);
     }
 
-    // ── 7. PROC tooltip mentions CPDR / WDSP (no more "coming in 3M-3a-ii") ─
-    void procButton_tooltipMentionsCpdr()
-    {
-        RadioModel rm;
-        TxApplet applet(&rm);
-
-        auto* proc = applet.findChild<QPushButton*>(QStringLiteral("TxProcButton"));
-        QVERIFY(proc != nullptr);
-        QVERIFY(proc->toolTip().contains(QStringLiteral("CPDR")));
-        QVERIFY(!proc->toolTip().contains(QStringLiteral("coming in")));
-    }
-
-    // ── 8. PROC.click() flips TransmitModel::cpdrOn ─────────────────────────
-    void procButton_clickFlipsCpdrOn()
-    {
-        RadioModel rm;
-        TxApplet applet(&rm);
-
-        auto* proc = applet.findChild<QPushButton*>(QStringLiteral("TxProcButton"));
-        QVERIFY(proc != nullptr);
-
-        // Default cpdrOn is false (TransmitModel.h:1328).
-        QCOMPARE(rm.transmitModel().cpdrOn(), false);
-
-        proc->click();
-        QCOMPARE(rm.transmitModel().cpdrOn(), true);
-
-        proc->click();
-        QCOMPARE(rm.transmitModel().cpdrOn(), false);
-    }
-
-    // ── 9. Model→UI: setCpdrOn(true) checks PROC button ─────────────────────
-    void setCpdrOn_updatesProcButton()
-    {
-        RadioModel rm;
-        TxApplet applet(&rm);
-
-        auto* proc = applet.findChild<QPushButton*>(QStringLiteral("TxProcButton"));
-        QVERIFY(proc != nullptr);
-
-        // Sync from the default (false).
-        applet.syncFromModel();
-        QCOMPARE(proc->isChecked(), false);
-
-        rm.transmitModel().setCpdrOn(true);
-        QCOMPARE(proc->isChecked(), true);
-
-        rm.transmitModel().setCpdrOn(false);
-        QCOMPARE(proc->isChecked(), false);
-    }
-
-    // ── 10. CFC.click() flips TransmitModel::cfcEnabled ─────────────────────
+    // ── 6. CFC.click() flips TransmitModel::cfcEnabled ─────────────────────
     void cfcButton_clickFlipsCfcEnabled()
     {
         RadioModel rm;
@@ -248,7 +182,7 @@ private slots:
         QCOMPARE(rm.transmitModel().cfcEnabled(), false);
     }
 
-    // ── 11. Model→UI: setCfcEnabled(true) checks CFC button ─────────────────
+    // ── 7. Model→UI: setCfcEnabled(true) checks CFC button ─────────────────
     void setCfcEnabled_updatesCfcButton()
     {
         RadioModel rm;
@@ -267,9 +201,9 @@ private slots:
         QCOMPARE(cfc->isChecked(), false);
     }
 
-    // ── 12. requestOpenCfcDialog creates dialog (lazy) and reuses single
-    //       instance on subsequent calls.  Dialog is modeless and parented
-    //       to the applet's window.
+    // ── 8. requestOpenCfcDialog creates dialog (lazy) and reuses single
+    //      instance on subsequent calls.  Dialog is modeless and parented
+    //      to the applet's window.
     void requestOpenCfcDialog_lazyCreatesSingleInstance()
     {
         RadioModel rm;
@@ -311,5 +245,5 @@ private slots:
     }
 };
 
-QTEST_MAIN(TestTxAppletLevEqProc)
-#include "tst_tx_applet_lev_eq_proc.moc"
+QTEST_MAIN(TestTxAppletLevEqCfc)
+#include "tst_tx_applet_lev_eq_cfc.moc"

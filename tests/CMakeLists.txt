@@ -1044,12 +1044,22 @@ nereus_add_test(tst_phone_applet_mic_level_gauge)
 # NereusSDR-native UI (no Thetis cite stamps required for the applet layer).
 nereus_add_test(tst_tx_applet_vox_toggle)
 
-# ── Phase 3M-3a-i Batch 2 Task F: TxApplet LEV / EQ / PROC quick toggles ────
+# ── Phase 3M-3a-i Batch 2 Task F + 3M-3a-ii cleanup: TxApplet LEV/EQ/CFC ────
 # Verifies the row of 3 checkable buttons inserted between MON volume and
 # TUNE/MOX: LEV/EQ are bidirectional with TransmitModel.txLevelerOn /
-# .txEqEnabled (objectNames: TxLevButton, TxEqButton); PROC is a disabled
-# placeholder for 3M-3a-ii (objectName: TxProcButton).
-nereus_add_test(tst_tx_applet_lev_eq_proc)
+# .txEqEnabled (objectNames: TxLevButton, TxEqButton); CFC bidirectional with
+# TransmitModel.cfcEnabled (objectName: TxCfcButton, right-click → modeless
+# TxCfcDialog).  PROC moved to PhoneCwApplet — see tst_phone_applet_proc.
+# (Renamed from tst_tx_applet_lev_eq_proc.cpp during the post-bench cleanup.)
+nereus_add_test(tst_tx_applet_lev_eq_cfc)
+
+# ── Phase 3M-3a-ii post-bench cleanup: PhoneCwApplet PROC button + slider ──
+# Verifies the PROC controls inherited un-wired from 3I-3 (NyiOverlay-marked):
+# PhoneCwProcButton bidirectional with TransmitModel.cpdrOn; PhoneCwProcSlider
+# bidirectional with TransmitModel.cpdrLevelDb (range 0..20 dB matching Thetis
+# ptbCPDR console.Designer.cs:6042-6043 [v2.10.3.13]); numeric "X dB" value
+# label mirrors slider; NyiOverlay markers absent.
+nereus_add_test(tst_phone_applet_proc)
 
 # ── Phase 3M-3a-i Batch 3 Task A.1: TxEqDialog scaffold ───────────────────
 # Verifies the modeless 10-band TX EQ dialog launched from the [EQ]

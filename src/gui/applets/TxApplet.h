@@ -56,6 +56,10 @@
 //                 launch pattern).  requestOpenCfcDialog() public slot exposed so
 //                 CfcSetupPage's [Configure CFC bands…] button can route through
 //                 the same dialog instance.
+//   2026-04-30 — Phase 3M-3a-ii post-bench cleanup (Batch 6 H): PROC button
+//                 removed from TxApplet (was a duplicate — PhoneCwApplet had an
+//                 un-wired PROC button + slider since 3I-3 NyiOverlay-marked).
+//                 PROC wiring moved to PhoneCwApplet; row drops to [LEV][EQ][CFC].
 // =================================================================
 
 //=================================================================
@@ -277,17 +281,16 @@ private:
     //     Default 50 (matches model default 0.5f from Thetis audio.cs:417).
     QSlider*     m_monitorVolumeSlider = nullptr;
     QLabel*      m_monitorVolumeValue  = nullptr;
-    // 4e. TX-processing quick toggles — row of 4 (3M-3a-ii Batch 6 promotes
-    //     the row from 3 to 4 buttons; previous PROC placeholder is now wired):
+    // 4e. TX-processing quick toggles — row of 3 (3M-3a-ii post-bench cleanup
+    //     drops the duplicate PROC button; PROC lives on PhoneCwApplet which
+    //     already had a wired button + slider sitting un-wired since 3I-3):
     //     LEV: bidirectional ↔ TransmitModel.txLevelerOn (green-checked style)
     //     EQ:  bidirectional ↔ TransmitModel.txEqEnabled (green-checked style)
     //          right-click → TxEqDialog (3M-3a-i Batch 3)
-    //     PROC: bidirectional ↔ TransmitModel.cpdrOn (3M-3a-ii Batch 6 Task F)
     //     CFC: bidirectional ↔ TransmitModel.cfcEnabled (3M-3a-ii Batch 6 Task A)
     //          right-click → TxCfcDialog (modeless, mirrors EQ launch pattern)
     QPushButton* m_levBtn     = nullptr;
     QPushButton* m_eqBtn      = nullptr;
-    QPushButton* m_procBtn    = nullptr;
     QPushButton* m_cfcBtn     = nullptr;
     // ── 3M-3a-ii Batch 6 (Task A): modeless CFC dialog instance ─────────────
     // Lazy-created on first right-click of [CFC] or first call to

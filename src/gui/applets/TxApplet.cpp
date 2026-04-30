@@ -415,18 +415,19 @@ void TxApplet::buildUI()
         vbox->addLayout(volRow);
     }
 
-    // ── 4e. TX-processing quick toggles: [LEV] [EQ] [PROC] [CFC] ───────────
+    // ── 4e. TX-processing quick toggles: [LEV] [EQ] [CFC] ──────────────────
     // Phase 3M-3a-i Batch 2 (Task F): introduced the row of 3 (LEV/EQ/PROC).
-    // Phase 3M-3a-ii Batch 6 (Task F + A): promotes the row to 4 buttons —
-    // PROC enabled (was placeholder) and CFC added.  All four share the
-    // same VOX/MON styling family (compact 22-px-tall, expanding width,
-    // green-checked LED look).
+    // Phase 3M-3a-ii Batch 6 (Task A + F, then post-bench cleanup):
+    // PROC was promoted in Batch 6, then dropped here in the cleanup pass —
+    // PhoneCwApplet already had a wired PROC button + slider sitting un-wired
+    // since 3I-3 (NyiOverlay-marked).  Two PROC controls confused users.
+    // Row is now 3 buttons (LEV / EQ / CFC); PROC lives on PhoneCwApplet.
+    // All three share the same VOX/MON styling family (compact 22-px-tall,
+    // expanding width, green-checked LED look).
     //
     //   LEV  — checkable, bidirectional with TransmitModel::txLevelerOn.
     //   EQ   — checkable, bidirectional with TransmitModel::txEqEnabled.
     //          Left-click toggles.  Right-click → TxEqDialog (3M-3a-i Batch 3).
-    //   PROC — checkable, bidirectional with TransmitModel::cpdrOn.
-    //          Drives WDSP TXA compressor.run via SetTXACompressorRun.
     //   CFC  — checkable, bidirectional with TransmitModel::cfcEnabled.
     //          Left-click toggles.  Right-click → modeless TxCfcDialog
     //          (10-band per-band CFC editor; mirrors Thetis frmCFCConfig
@@ -464,20 +465,6 @@ void TxApplet::buildUI()
         // default menu).
         m_eqBtn->setContextMenuPolicy(Qt::CustomContextMenu);
         row->addWidget(m_eqBtn, 1);
-
-        m_procBtn = new QPushButton(QStringLiteral("PROC"), this);
-        m_procBtn->setCheckable(true);
-        m_procBtn->setFixedHeight(22);
-        m_procBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_procBtn->setStyleSheet(btnStyle);
-        m_procBtn->setAccessibleName(QStringLiteral("Speech compressor"));
-        m_procBtn->setObjectName(QStringLiteral("TxProcButton"));
-        m_procBtn->setToolTip(QStringLiteral(
-            "CPDR speech compressor — left-click toggles. Sets WDSP TXA "
-            "compressor.run via SetTXACompressorRun [v2.10.3.13]."));
-        // 3M-3a-ii Batch 6 (Task F): no longer disabled.  Wired bidirectionally
-        // to TransmitModel::cpdrOn in wireControls() below.
-        row->addWidget(m_procBtn, 1);
 
         m_cfcBtn = new QPushButton(QStringLiteral("CFC"), this);
         m_cfcBtn->setCheckable(true);
@@ -910,7 +897,7 @@ void TxApplet::wireControls()
         m_updatingFromModel = false;
     });
 
-    // ── Phase 3M-3a-i Batch 2 (Task F): LEV / EQ / PROC quick toggles ───────
+    // ── Phase 3M-3a-i Batch 2 (Task F): LEV / EQ quick toggles ──────────────
     //
     // LEV button ↔ TransmitModel::txLevelerOn (bidirectional, echo-guarded).
     if (m_levBtn) {
@@ -953,25 +940,6 @@ void TxApplet::wireControls()
             dlg->show();
             dlg->raise();
             dlg->activateWindow();
-        });
-    }
-
-    // ── Phase 3M-3a-ii Batch 6 (Task F): PROC button ↔ TransmitModel::cpdrOn ─
-    // Drives the WDSP TXA compressor.run flag via SetTXACompressorRun (TxChannel
-    // wrapper, 3M-3a-ii Batch 1).  No right-click context menu (CPDR has only
-    // enable + level; level lives elsewhere on the main-console slider).
-    if (m_procBtn) {
-        connect(m_procBtn, &QPushButton::toggled,
-                this, [this, &tx](bool on) {
-            if (m_updatingFromModel) { return; }
-            tx.setCpdrOn(on);
-        });
-        connect(&tx, &TransmitModel::cpdrOnChanged,
-                this, [this](bool on) {
-            QSignalBlocker b(m_procBtn);
-            m_updatingFromModel = true;
-            m_procBtn->setChecked(on);
-            m_updatingFromModel = false;
         });
     }
 
@@ -1090,8 +1058,9 @@ void TxApplet::syncFromModel()
         m_monitorVolumeValue->setText(QString::number(uiVal));
     }
 
-    // LEV / EQ / PROC / CFC button state (3M-3a-i Batch 2 Task F + 3M-3a-ii
-    // Batch 6 Task F + A — PROC enable + CFC button added).
+    // LEV / EQ / CFC button state (3M-3a-i Batch 2 Task F + 3M-3a-ii
+    // Batch 6 Task A — CFC button added; PROC moved to PhoneCwApplet
+    // 3M-3a-ii post-bench cleanup).
     if (m_levBtn) {
         QSignalBlocker b(m_levBtn);
         m_levBtn->setChecked(tx.txLevelerOn());
@@ -1099,10 +1068,6 @@ void TxApplet::syncFromModel()
     if (m_eqBtn) {
         QSignalBlocker b(m_eqBtn);
         m_eqBtn->setChecked(tx.txEqEnabled());
-    }
-    if (m_procBtn) {
-        QSignalBlocker b(m_procBtn);
-        m_procBtn->setChecked(tx.cpdrOn());
     }
     if (m_cfcBtn) {
         QSignalBlocker b(m_cfcBtn);
