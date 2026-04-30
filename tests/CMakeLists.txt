@@ -1778,6 +1778,20 @@ nereus_add_test(tst_tx_channel_cfc_cpdr_cessb_setters)
 # and multi-MAC isolation.
 nereus_add_test(tst_transmit_model_eq_lev_alc)
 
+# Plan: 3M-3a-ii Batch 2 — 15 new properties on TransmitModel covering CFC
+# (8), CPDR (2), CESSB (1), and Phase Rotator (4):
+#   - 14 TXProfile keys: CFCEnabled / CFCPostEqEnabled / CFCPreComp /
+#     CFCPostEqGain / CFCEqFreq0..9 / CFCPreComp0..9 / CFCPostEqGain0..9 /
+#     CFCParaEQData / CFCPhaseRotatorEnabled / CFCPhaseReverseEnabled /
+#     CFCPhaseRotatorFreq / CFCPhaseRotatorStages / CompanderLevel / CESSB_On
+#   - 1 global (NOT in TXProfile): cpdr/on (under hardware/<mac>/tx/cpdr/on)
+# Tests cover defaults (matching Thetis database.cs:4724-4768), signal
+# emission idempotency, range clamping (Designer ranges from
+# setup.Designer.cs udPhRotFreq/udPHROTStages, frmCFCConfig.Designer.cs
+# nudCFC_*, console.Designer.cs ptbCPDR), per-MAC AppSettings round-trip,
+# and multi-MAC isolation.
+nereus_add_test(tst_transmit_model_cfc_cpdr_cessb_phrot)
+
 # Plan: 3M-1b E.2. Exercises AudioEngine TX monitor enable + volume state
 # (setTxMonitorEnabled / setTxMonitorVolume / signals / clamping / idempotency).
 # Pre-code review §4.4.
