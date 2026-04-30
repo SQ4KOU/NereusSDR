@@ -31,6 +31,16 @@
 //   2026-04-29 — Phase 3M-3a-i Batch 3 (Task A.1): created by
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                 via Anthropic Claude Code.
+//   2026-04-29 — Phase 3M-3a-i Batch 4 (Task A.2): TX profile combo
+//                 + Save / Save As / Delete buttons added, wired to
+//                 RadioModel::micProfileManager().  Mirrors the Thetis
+//                 setup.cs:9505-9656 [v2.10.3.13] handler set
+//                 (comboTXProfileName_SelectedIndexChanged,
+//                  btnTXProfileSave_Click, btnTXProfileDelete_Click).
+//                 Save uses overwrite-with-current-name semantics;
+//                 Save As prompts for a new name.  Delete falls back
+//                 to the next remaining profile via the F.3
+//                 last-remaining guard in MicProfileManager.
 // =================================================================
 
 //=================================================================
@@ -76,6 +86,7 @@
 
 #include "TxEqDialog.h"
 
+#include "core/MicProfileManager.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
@@ -85,7 +96,11 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
+#include <QLineEdit>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QSpinBox>
@@ -198,6 +213,56 @@ void TxEqDialog::buildUi()
     QVBoxLayout* outer = new QVBoxLayout(this);
     outer->setContentsMargins(8, 8, 8, 8);
     outer->setSpacing(6);
+
+    // ── A.2 Profile-bank row: combo + Save / Save As / Delete ───────
+    // Mirrors Thetis setup.cs:9505-9656 [v2.10.3.13]
+    // (comboTXProfileName + btnTXProfileSave + btnTXProfileDelete).
+    // NereusSDR adds a separate Save As button (clearer UX than
+    // Thetis's overload-Save semantics) per the Batch 4 spec.
+    QHBoxLayout* profileRow = new QHBoxLayout;
+    profileRow->setSpacing(6);
+    {
+        QLabel* lbl = new QLabel(tr("Profile:"), this);
+        profileRow->addWidget(lbl);
+
+        m_profileCombo = new QComboBox(this);
+        m_profileCombo->setObjectName(QStringLiteral("TxEqProfileCombo"));
+        m_profileCombo->setEditable(false);
+        m_profileCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_profileCombo->setToolTip(tr(
+            "Active TX profile.  Switching loads the profile's saved EQ "
+            "shape (and silently updates mic gain, VOX threshold, Leveler, "
+            "and ALC settings — the same profile bank used by the TX "
+            "applet's TX-Profile combo and the Setup → Audio → TX Profile "
+            "editor)."));
+        profileRow->addWidget(m_profileCombo, 1);
+
+        m_saveBtn = new QPushButton(tr("Save"), this);
+        m_saveBtn->setObjectName(QStringLiteral("TxEqProfileSaveBtn"));
+        m_saveBtn->setToolTip(tr(
+            "Overwrite the active profile with the current TX EQ + mic + "
+            "VOX + Leveler + ALC state.  Confirms before overwriting."));
+        profileRow->addWidget(m_saveBtn);
+
+        m_saveAsBtn = new QPushButton(tr("Save As..."), this);
+        m_saveAsBtn->setObjectName(QStringLiteral("TxEqProfileSaveAsBtn"));
+        m_saveAsBtn->setToolTip(tr(
+            "Save the current state under a new profile name."));
+        profileRow->addWidget(m_saveAsBtn);
+
+        m_deleteBtn = new QPushButton(tr("Delete"), this);
+        m_deleteBtn->setObjectName(QStringLiteral("TxEqProfileDeleteBtn"));
+        m_deleteBtn->setToolTip(tr(
+            "Delete the active profile.  The last remaining profile "
+            "cannot be deleted."));
+        profileRow->addWidget(m_deleteBtn);
+    }
+    outer->addLayout(profileRow);
+
+    QFrame* sepProfile = new QFrame(this);
+    sepProfile->setFrameShape(QFrame::HLine);
+    sepProfile->setFrameShadow(QFrame::Sunken);
+    outer->addWidget(sepProfile);
 
     // ── Top strip: Enable + WDSP filter combos ──────────────────────
     QHBoxLayout* topRow = new QHBoxLayout;
@@ -387,6 +452,13 @@ void TxEqDialog::wireSignals()
     connect(m_wintypeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &TxEqDialog::onWintypeChanged);
 
+    // ── A.2 profile-bank wiring ────────────────────────────────────
+    connect(m_profileCombo, &QComboBox::currentTextChanged,
+            this, &TxEqDialog::onProfileComboChanged);
+    connect(m_saveBtn,   &QPushButton::clicked, this, &TxEqDialog::onSaveClicked);
+    connect(m_saveAsBtn, &QPushButton::clicked, this, &TxEqDialog::onSaveAsClicked);
+    connect(m_deleteBtn, &QPushButton::clicked, this, &TxEqDialog::onDeleteClicked);
+
     // ── Model → UI ────────────────────────────────────────────────
     if (!m_radio) {
         return;
@@ -409,6 +481,16 @@ void TxEqDialog::wireSignals()
             this, &TxEqDialog::syncFromModel);
     connect(&tx, &TransmitModel::txEqWintypeChanged,
             this, &TxEqDialog::syncFromModel);
+
+    // ── A.2 MicProfileManager → combo refresh + active selection ───
+    if (auto* mgr = m_radio->micProfileManager()) {
+        connect(mgr, &MicProfileManager::profileListChanged,
+                this, &TxEqDialog::refreshProfileCombo);
+        connect(mgr, &MicProfileManager::activeProfileChanged,
+                this, &TxEqDialog::onActiveProfileChanged);
+        // Initial population.
+        refreshProfileCombo();
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -534,6 +616,222 @@ void TxEqDialog::syncFromModel()
     }
 
     m_updatingFromModel = false;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// A.2 Profile-bank handlers
+// ─────────────────────────────────────────────────────────────────────
+
+void TxEqDialog::refreshProfileCombo()
+{
+    if (!m_profileCombo || !m_radio) { return; }
+    auto* mgr = m_radio->micProfileManager();
+    if (!mgr) { return; }
+
+    // Programmatic update — block currentTextChanged signal so it
+    // doesn't fire setActiveProfile during repopulation.
+    QSignalBlocker blk(m_profileCombo);
+    const QString prevSelection = m_profileCombo->currentText();
+    m_profileCombo->clear();
+    const QStringList names = mgr->profileNames();
+    m_profileCombo->addItems(names);
+
+    // Restore selection: prefer the manager's active profile;  fall back
+    // to the previously-shown text if it still exists.
+    const QString active = mgr->activeProfileName();
+    int idx = m_profileCombo->findText(active);
+    if (idx < 0) {
+        idx = m_profileCombo->findText(prevSelection);
+    }
+    if (idx >= 0) {
+        m_profileCombo->setCurrentIndex(idx);
+    } else if (!names.isEmpty()) {
+        m_profileCombo->setCurrentIndex(0);
+    }
+}
+
+void TxEqDialog::onActiveProfileChanged(const QString& name)
+{
+    if (!m_profileCombo) { return; }
+    QSignalBlocker blk(m_profileCombo);
+    const int idx = m_profileCombo->findText(name);
+    if (idx >= 0) {
+        m_profileCombo->setCurrentIndex(idx);
+    }
+}
+
+void TxEqDialog::onProfileComboChanged(const QString& name)
+{
+    if (!m_radio || name.isEmpty()) { return; }
+    auto* mgr = m_radio->micProfileManager();
+    if (!mgr) { return; }
+    // setActiveProfile pushes the saved values into TransmitModel; the
+    // model's *Changed signals fan out to syncFromModel which redraws
+    // the visible EQ controls.  Mic gain / VOX threshold / Leveler /
+    // ALC values update silently in the model.
+    mgr->setActiveProfile(name, &m_radio->transmitModel());
+}
+
+bool TxEqDialog::persistProfile(const QString& name, bool setActiveAfter)
+{
+    if (!m_radio || name.isEmpty()) { return false; }
+    auto* mgr = m_radio->micProfileManager();
+    if (!mgr) { return false; }
+    const bool ok = mgr->saveProfile(name, &m_radio->transmitModel());
+    if (ok && setActiveAfter) {
+        mgr->setActiveProfile(name, &m_radio->transmitModel());
+    }
+    return ok;
+}
+
+void TxEqDialog::onSaveClicked()
+{
+    if (!m_radio) { return; }
+    auto* mgr = m_radio->micProfileManager();
+    if (!mgr) { return; }
+
+    const QString active = mgr->activeProfileName();
+    if (active.isEmpty()) {
+        // No active profile — fall through to Save As.
+        onSaveAsClicked();
+        return;
+    }
+
+    // Confirm overwrite.  Mirrors Thetis setup.cs:9545-9612 [v2.10.3.13]
+    // btnTXProfileSave_Click — the save flow always overwrites, but
+    // NereusSDR adds the explicit confirmation prompt for safety
+    // (Thetis omits it because the field is editable and the user
+    // typed the name themselves).
+    bool overwrite = false;
+    if (m_overwriteHook) {
+        overwrite = m_overwriteHook(active);
+    } else {
+        const auto answer = QMessageBox::question(
+            this, tr("Overwrite TX Profile"),
+            tr("Overwrite profile \"%1\" with the current settings?")
+                .arg(active),
+            QMessageBox::Yes | QMessageBox::No);
+        overwrite = (answer == QMessageBox::Yes);
+    }
+    if (!overwrite) { return; }
+
+    persistProfile(active, /*setActiveAfter=*/false);
+}
+
+void TxEqDialog::onSaveAsClicked()
+{
+    if (!m_radio) { return; }
+    auto* mgr = m_radio->micProfileManager();
+    if (!mgr) { return; }
+
+    const QString seed = mgr->activeProfileName();
+
+    // Prompt for new name.
+    QString rawName;
+    bool accepted = false;
+    if (m_saveAsHook) {
+        const auto result = m_saveAsHook(seed);
+        accepted = result.first;
+        rawName = result.second;
+    } else {
+        bool ok = false;
+        rawName = QInputDialog::getText(
+            this, tr("Save TX Profile As"),
+            tr("Enter new TX profile name:"),
+            QLineEdit::Normal, seed, &ok);
+        accepted = ok;
+    }
+    if (!accepted) { return; }
+
+    // Strip commas (Thetis precedent: setup.cs:9550-9552 [v2.10.3.13]
+    // — TCI safety, so the manager's invariant is honoured at the UI
+    // layer too).
+    QString name = rawName;
+    name.replace(QLatin1Char(','), QLatin1Char('_'));
+    name = name.trimmed();
+    if (name.isEmpty()) { return; }
+
+    // If the name already exists, ask for overwrite confirmation.
+    const QStringList existing = mgr->profileNames();
+    if (existing.contains(name)) {
+        bool overwrite = false;
+        if (m_overwriteHook) {
+            overwrite = m_overwriteHook(name);
+        } else {
+            const auto answer = QMessageBox::question(
+                this, tr("Overwrite TX Profile"),
+                tr("A profile named \"%1\" already exists.  Overwrite?")
+                    .arg(name),
+                QMessageBox::Yes | QMessageBox::No);
+            overwrite = (answer == QMessageBox::Yes);
+        }
+        if (!overwrite) { return; }
+    }
+
+    persistProfile(name, /*setActiveAfter=*/true);
+}
+
+void TxEqDialog::onDeleteClicked()
+{
+    if (!m_radio) { return; }
+    auto* mgr = m_radio->micProfileManager();
+    if (!mgr) { return; }
+
+    const QString target = mgr->activeProfileName();
+    if (target.isEmpty()) { return; }
+
+    bool confirmed = false;
+    if (m_deleteHook) {
+        confirmed = m_deleteHook(target);
+    } else {
+        const auto answer = QMessageBox::question(
+            this, tr("Delete TX Profile"),
+            tr("Delete profile \"%1\"?").arg(target),
+            QMessageBox::Yes | QMessageBox::No);
+        confirmed = (answer == QMessageBox::Yes);
+    }
+    if (!confirmed) { return; }
+
+    const bool ok = mgr->deleteProfile(target);
+    if (!ok) {
+        // F.3 last-remaining guard fired.  Surface the verbatim Thetis
+        // string per setup.cs:9617-9624 [v2.10.3.13].
+        const QString msg = QStringLiteral(
+            "It is not possible to delete the last remaining TX profile");
+        if (m_rejectionHook) {
+            m_rejectionHook(msg);
+        } else {
+            QMessageBox::information(this,
+                                      tr("Cannot Delete Profile"), msg);
+        }
+    }
+    // On success the manager auto-emits activeProfileChanged → our
+    // onActiveProfileChanged updates the combo selection; profileList-
+    // Changed → refreshProfileCombo repopulates entries.
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// A.2 Test hook setters
+// ─────────────────────────────────────────────────────────────────────
+
+void TxEqDialog::setSaveAsPromptHook(SaveAsPromptHook hook)
+{
+    m_saveAsHook = std::move(hook);
+}
+
+void TxEqDialog::setOverwriteConfirmHook(OverwriteConfirmHook hook)
+{
+    m_overwriteHook = std::move(hook);
+}
+
+void TxEqDialog::setDeleteConfirmHook(DeleteConfirmHook hook)
+{
+    m_deleteHook = std::move(hook);
+}
+
+void TxEqDialog::setRejectionMessageHook(RejectionMessageHook hook)
+{
+    m_rejectionHook = std::move(hook);
 }
 
 } // namespace NereusSDR

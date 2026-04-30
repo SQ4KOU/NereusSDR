@@ -35,16 +35,20 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QSlider>
 #include <QSpinBox>
 
 #include "core/AppSettings.h"
+#include "core/MicProfileManager.h"
 #include "gui/applets/TxEqDialog.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
 using namespace NereusSDR;
+
+static const QString kMac = QStringLiteral("aa:bb:cc:dd:ee:ff");
 
 class TestTxEqDialog : public QObject {
     Q_OBJECT
@@ -256,6 +260,280 @@ private slots:
         // Cleanup — the singleton survives across tests, so delete it
         // explicitly to avoid leaks across test-method boundaries.
         delete a;
+    }
+
+    // =====================================================================
+    // Phase 3M-3a-i Batch 4 (A.2) — TX profile combo + Save/Save-As/Delete
+    // =====================================================================
+
+    // Helper: prime a RadioModel's MicProfileManager with the per-MAC scope
+    // and seed Default + 20 factory profiles.  Mirrors the wiring done in
+    // RadioModel::setupConnection (cpp:1108-1117).
+    static void primeProfileManager(RadioModel* rm) {
+        auto* mgr = rm->micProfileManager();
+        QVERIFY(mgr);
+        mgr->setMacAddress(kMac);
+        mgr->load();
+    }
+
+    // ── A.2.1 ─ Profile combo populates from MicProfileManager ──────
+    void profileCombo_populatesFromMicProfileManager()
+    {
+        RadioModel rm;
+        primeProfileManager(&rm);
+        TxEqDialog dlg(&rm);
+
+        auto* combo = dlg.profileCombo();
+        QVERIFY(combo);
+        // Default + 20 factory profiles = 21 entries.
+        QCOMPARE(combo->count(), 21);
+        // Active profile "Default" should be the current selection.
+        QCOMPARE(combo->currentText(), QStringLiteral("Default"));
+        // Factory profiles must be present.
+        QVERIFY(combo->findText(QStringLiteral("D-104+EQ"))     >= 0);
+        QVERIFY(combo->findText(QStringLiteral("PR781+EQ"))     >= 0);
+        QVERIFY(combo->findText(QStringLiteral("SSB 2.8k CFC")) >= 0);
+    }
+
+    // ── A.2.2 ─ Selecting a profile calls setActiveProfile ──────────
+    void profileCombo_selectionCallsSetActiveProfile()
+    {
+        RadioModel rm;
+        primeProfileManager(&rm);
+        TxEqDialog dlg(&rm);
+
+        auto* combo = dlg.profileCombo();
+        QVERIFY(combo);
+        QSignalSpy spy(rm.micProfileManager(),
+                       &MicProfileManager::activeProfileChanged);
+
+        combo->setCurrentText(QStringLiteral("D-104+EQ"));
+        QApplication::processEvents();
+
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toString(),
+                 QStringLiteral("D-104+EQ"));
+        QCOMPARE(rm.micProfileManager()->activeProfileName(),
+                 QStringLiteral("D-104+EQ"));
+    }
+
+    // ── A.2.3 ─ Selecting a factory profile updates the EQ controls ─
+    void profileCombo_selectingFactoryProfileUpdatesEqControls()
+    {
+        RadioModel rm;
+        primeProfileManager(&rm);
+        TxEqDialog dlg(&rm);
+        TransmitModel& tx = rm.transmitModel();
+
+        auto* combo  = dlg.profileCombo();
+        auto* enable = dlg.findChild<QCheckBox*>(QStringLiteral("TxEqEnableChk"));
+        auto* preamp = dlg.findChild<QSlider*>(QStringLiteral("TxEqPreampSlider"));
+        auto* b0     = dlg.findChild<QSlider*>(QStringLiteral("TxEqBandSlider0"));
+        QVERIFY(combo && enable && preamp && b0);
+
+        // Switch to D-104+EQ — TXEQEnabled=true, TXEQPreamp=-6, TXEQ1=7.
+        combo->setCurrentText(QStringLiteral("D-104+EQ"));
+        QApplication::processEvents();
+
+        QCOMPARE(tx.txEqEnabled(), true);
+        QCOMPARE(tx.txEqPreamp(), -6);
+        QCOMPARE(tx.txEqBand(0), 7);
+        QCOMPARE(enable->isChecked(), true);
+        QCOMPARE(preamp->value(), -6);
+        QCOMPARE(b0->value(), 7);
+    }
+
+    // ── A.2.4 ─ Save button triggers overwrite confirmation ─────────
+    void saveButton_overwritesActiveProfileAfterConfirm()
+    {
+        RadioModel rm;
+        primeProfileManager(&rm);
+        TxEqDialog dlg(&rm);
+        TransmitModel& tx = rm.transmitModel();
+
+        // Capture overwrite confirmation prompt; accept.
+        QString overwriteName;
+        dlg.setOverwriteConfirmHook([&overwriteName](const QString& n) {
+            overwriteName = n;
+            return true;
+        });
+
+        // Mutate model and click Save.
+        tx.setTxEqPreamp(11);
+        dlg.saveBtn()->click();
+        QApplication::processEvents();
+
+        QCOMPARE(overwriteName, QStringLiteral("Default"));
+        // Verify the saved value.
+        QCOMPARE(AppSettings::instance().value(
+                     QStringLiteral("hardware/%1/tx/profile/Default/TXEQPreamp")
+                         .arg(kMac)).toString(),
+                 QStringLiteral("11"));
+    }
+
+    // ── A.2.5 ─ Save button: declining overwrite is a no-op ─────────
+    void saveButton_declinedOverwriteIsNoop()
+    {
+        RadioModel rm;
+        primeProfileManager(&rm);
+        TxEqDialog dlg(&rm);
+        TransmitModel& tx = rm.transmitModel();
+
+        // Decline overwrite.
+        dlg.setOverwriteConfirmHook([](const QString&) { return false; });
+
+        tx.setTxEqPreamp(7);
+        dlg.saveBtn()->click();
+        QApplication::processEvents();
+
+        // Default's TXEQPreamp must remain at the seeded value (0).
+        QCOMPARE(AppSettings::instance().value(
+                     QStringLiteral("hardware/%1/tx/profile/Default/TXEQPreamp")
+                         .arg(kMac)).toString(),
+                 QStringLiteral("0"));
+    }
+
+    // ── A.2.6 ─ Save As button creates new profile + sets active ────
+    void saveAsButton_createsNewProfileAndActivates()
+    {
+        RadioModel rm;
+        primeProfileManager(&rm);
+        TxEqDialog dlg(&rm);
+        TransmitModel& tx = rm.transmitModel();
+
+        const int initialCount = dlg.profileCombo()->count();
+
+        // Hook the Save As prompt.
+        dlg.setSaveAsPromptHook([](const QString& /*seed*/) {
+            return std::make_pair(true, QStringLiteral("My Custom EQ"));
+        });
+
+        tx.setTxEqPreamp(8);
+        tx.setTxEqEnabled(true);
+        dlg.saveAsBtn()->click();
+        QApplication::processEvents();
+
+        // New profile present.
+        QCOMPARE(dlg.profileCombo()->count(), initialCount + 1);
+        QVERIFY(dlg.profileCombo()->findText(QStringLiteral("My Custom EQ")) >= 0);
+        // Becomes active.
+        QCOMPARE(rm.micProfileManager()->activeProfileName(),
+                 QStringLiteral("My Custom EQ"));
+        QCOMPARE(dlg.profileCombo()->currentText(),
+                 QStringLiteral("My Custom EQ"));
+        // Saved values present.
+        QCOMPARE(AppSettings::instance().value(
+                     QStringLiteral("hardware/%1/tx/profile/My Custom EQ/TXEQPreamp")
+                         .arg(kMac)).toString(),
+                 QStringLiteral("8"));
+    }
+
+    // ── A.2.7 ─ Save As: comma in name is sanitized ─────────────────
+    void saveAsButton_stripsCommas()
+    {
+        RadioModel rm;
+        primeProfileManager(&rm);
+        TxEqDialog dlg(&rm);
+
+        dlg.setSaveAsPromptHook([](const QString&) {
+            return std::make_pair(true, QStringLiteral("Bad,Name,Profile"));
+        });
+
+        dlg.saveAsBtn()->click();
+        QApplication::processEvents();
+
+        QVERIFY(dlg.profileCombo()->findText(QStringLiteral("Bad_Name_Profile")) >= 0);
+        QVERIFY(dlg.profileCombo()->findText(QStringLiteral("Bad,Name,Profile")) < 0);
+    }
+
+    // ── A.2.8 ─ Delete button removes active profile ────────────────
+    void deleteButton_removesActiveProfile()
+    {
+        RadioModel rm;
+        primeProfileManager(&rm);
+        TxEqDialog dlg(&rm);
+
+        // Switch to D-104+EQ then delete.
+        dlg.profileCombo()->setCurrentText(QStringLiteral("D-104+EQ"));
+        QApplication::processEvents();
+        const int countBefore = dlg.profileCombo()->count();
+
+        dlg.setDeleteConfirmHook([](const QString&) { return true; });
+        dlg.deleteBtn()->click();
+        QApplication::processEvents();
+
+        QCOMPARE(dlg.profileCombo()->count(), countBefore - 1);
+        QVERIFY(dlg.profileCombo()->findText(QStringLiteral("D-104+EQ")) < 0);
+        // Active falls back to the next remaining (sorted lexicographically).
+        QVERIFY(rm.micProfileManager()->activeProfileName()
+                != QStringLiteral("D-104+EQ"));
+    }
+
+    // ── A.2.9 ─ Delete: declined confirmation is a no-op ────────────
+    void deleteButton_declinedIsNoop()
+    {
+        RadioModel rm;
+        primeProfileManager(&rm);
+        TxEqDialog dlg(&rm);
+
+        const int countBefore = dlg.profileCombo()->count();
+
+        dlg.setDeleteConfirmHook([](const QString&) { return false; });
+        dlg.deleteBtn()->click();
+        QApplication::processEvents();
+
+        QCOMPARE(dlg.profileCombo()->count(), countBefore);
+    }
+
+    // ── A.2.10 ─ Delete: last-remaining surfaces verbatim Thetis msg ─
+    void deleteButton_lastRemainingShowsVerbatimThetisString()
+    {
+        RadioModel rm;
+        primeProfileManager(&rm);
+        // Reduce to last remaining.
+        for (const QString& n : rm.micProfileManager()->profileNames()) {
+            if (n == QStringLiteral("Default")) { continue; }
+            rm.micProfileManager()->deleteProfile(n);
+        }
+        QCOMPARE(rm.micProfileManager()->profileNames().size(), 1);
+
+        TxEqDialog dlg(&rm);
+
+        QString rejectionMsg;
+        dlg.setRejectionMessageHook([&rejectionMsg](const QString& msg) {
+            rejectionMsg = msg;
+        });
+        dlg.setDeleteConfirmHook([](const QString&) { return true; });
+
+        dlg.deleteBtn()->click();
+        QApplication::processEvents();
+
+        QVERIFY2(rejectionMsg.contains(
+                     QStringLiteral("It is not possible to delete the last remaining TX profile")),
+                 qPrintable(QStringLiteral("captured rejection message: ") + rejectionMsg));
+    }
+
+    // ── A.2.11 ─ External activeProfileChanged updates combo (no echo) ─
+    void activeProfileChanged_updatesComboNoEcho()
+    {
+        RadioModel rm;
+        primeProfileManager(&rm);
+        TxEqDialog dlg(&rm);
+
+        QSignalSpy spy(rm.micProfileManager(),
+                       &MicProfileManager::activeProfileChanged);
+
+        // External setActiveProfile → manager emits activeProfileChanged
+        // → dialog's onActiveProfileChanged updates combo.  Because the
+        // combo update uses a QSignalBlocker, the combo's currentText-
+        // Changed slot does NOT re-fire setActiveProfile (no echo).
+        rm.micProfileManager()->setActiveProfile(
+            QStringLiteral("AM"), &rm.transmitModel());
+        QApplication::processEvents();
+
+        // Single emission — echo guard works.
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(dlg.profileCombo()->currentText(), QStringLiteral("AM"));
     }
 };
 

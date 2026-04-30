@@ -28,6 +28,19 @@
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                 via Anthropic Claude Code.  Modeless singleton
 //                 dialog; bidirectional binding to TransmitModel.
+//   2026-04-29 — Phase 3M-3a-i Batch 4 (Task A.2): TX profile combo
+//                 + Save / Save As / Delete buttons added by
+//                 J.J. Boyd (KG4VCF), with AI-assisted transformation
+//                 via Anthropic Claude Code.  The combo populates from
+//                 MicProfileManager::profileNames() — Thetis has no
+//                 separate "TX EQ profile" so the same profile bank
+//                 used by TxApplet's TX-Profile combo and the Setup
+//                 → Audio → TX Profile editor is exposed here.
+//                 Selecting a profile updates the visible EQ controls
+//                 AND silently updates mic gain / VOX / Leveler / ALC
+//                 (their UI homes are elsewhere).  Mirrors Thetis
+//                 setup.cs:9505-9656 [v2.10.3.13] btnTXProfileSave_Click
+//                 / btnTXProfileDelete_Click semantics.
 // =================================================================
 
 //=================================================================
@@ -76,14 +89,17 @@
 #include <QDialog>
 #include <QPointer>
 #include <array>
+#include <functional>
 
 class QCheckBox;
 class QComboBox;
+class QPushButton;
 class QSlider;
 class QSpinBox;
 
 namespace NereusSDR {
 
+class MicProfileManager;
 class RadioModel;
 class TransmitModel;
 
@@ -127,6 +143,26 @@ public:
     // hide preserves the singleton).
     static TxEqDialog* instance(RadioModel* radio, QWidget* parent = nullptr);
 
+    // ── A.2 test seams ─────────────────────────────────────────────
+    // Override the QInputDialog::getText / QMessageBox::question modal
+    // chain with deterministic hooks.  When unset, the dialog falls
+    // back to the real Qt dialogs (production behaviour).
+    using SaveAsPromptHook       = std::function<std::pair<bool, QString>(const QString& seed)>;
+    using OverwriteConfirmHook   = std::function<bool(const QString& name)>;
+    using DeleteConfirmHook      = std::function<bool(const QString& name)>;
+    using RejectionMessageHook   = std::function<void(const QString& msg)>;
+
+    void setSaveAsPromptHook    (SaveAsPromptHook hook);
+    void setOverwriteConfirmHook(OverwriteConfirmHook hook);
+    void setDeleteConfirmHook   (DeleteConfirmHook hook);
+    void setRejectionMessageHook(RejectionMessageHook hook);
+
+    // ── A.2 widget accessors for tests ─────────────────────────────
+    QComboBox*   profileCombo() const { return m_profileCombo; }
+    QPushButton* saveBtn()      const { return m_saveBtn; }
+    QPushButton* saveAsBtn()    const { return m_saveAsBtn; }
+    QPushButton* deleteBtn()    const { return m_deleteBtn; }
+
 private slots:
     // ── User-driven control changes → TransmitModel ────────────────
     void onEnableToggled(bool on);
@@ -138,26 +174,53 @@ private slots:
     void onCtfmodeChanged(int mode);
     void onWintypeChanged(int wintype);
 
+    // ── A.2 profile-bank handlers ──────────────────────────────────
+    void onProfileComboChanged(const QString& name);
+    void onSaveClicked();
+    void onSaveAsClicked();
+    void onDeleteClicked();
+
     // ── Model → UI sync (echo-guarded) ─────────────────────────────
     void syncFromModel();
+
+    // ── Profile manager → combo refresh ────────────────────────────
+    void refreshProfileCombo();
+    void onActiveProfileChanged(const QString& name);
 
 private:
     void buildUi();
     void wireSignals();
 
+    // Helper: actually write the named profile + set active (no prompts).
+    // Returns true on success.  Used by the Save / Save-As paths after
+    // the prompt flow has resolved the target name.
+    bool persistProfile(const QString& name, bool setActiveAfter);
+
     QPointer<RadioModel> m_radio;          // non-owning
     bool m_updatingFromModel = false;
 
-    QCheckBox* m_enableChk     = nullptr;
-    QSlider*   m_preampSlider  = nullptr;
-    QSpinBox*  m_preampSpin    = nullptr;
+    QCheckBox*    m_enableChk     = nullptr;
+    QSlider*      m_preampSlider  = nullptr;
+    QSpinBox*     m_preampSpin    = nullptr;
     std::array<QSlider*,  10> m_bandSliders{};
     std::array<QSpinBox*, 10> m_bandSpins{};
     std::array<QSpinBox*, 10> m_freqSpins{};
-    QSpinBox*  m_ncSpin        = nullptr;
-    QCheckBox* m_mpChk         = nullptr;
-    QComboBox* m_ctfmodeCombo  = nullptr;
-    QComboBox* m_wintypeCombo  = nullptr;
+    QSpinBox*     m_ncSpin        = nullptr;
+    QCheckBox*    m_mpChk         = nullptr;
+    QComboBox*    m_ctfmodeCombo  = nullptr;
+    QComboBox*    m_wintypeCombo  = nullptr;
+
+    // ── A.2 profile-bank widgets ───────────────────────────────────
+    QComboBox*    m_profileCombo  = nullptr;
+    QPushButton*  m_saveBtn       = nullptr;
+    QPushButton*  m_saveAsBtn     = nullptr;
+    QPushButton*  m_deleteBtn     = nullptr;
+
+    // ── A.2 test hooks (unset → real Qt dialogs are used) ──────────
+    SaveAsPromptHook     m_saveAsHook;
+    OverwriteConfirmHook m_overwriteHook;
+    DeleteConfirmHook    m_deleteHook;
+    RejectionMessageHook m_rejectionHook;
 };
 
 } // namespace NereusSDR
