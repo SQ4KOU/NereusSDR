@@ -2379,3 +2379,8 @@ nereus_add_test(tst_tx_profile_setup_page)
 # left/right-click signal emission. Uses QTEST_MAIN (needs QApplication
 # for QWidget mouse events).
 nereus_add_test(tst_status_badge)
+
+# ── Shell-Chrome Redesign sub-PR-1: StationBlock widget ───────────────────
+# 5 tests: default/setRadioName/empty-name appearance switching, click +
+# right-click signal emission gated on appearance.
+nereus_add_test(tst_station_block)
