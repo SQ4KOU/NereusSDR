@@ -21,18 +21,21 @@ StatusBadge::StatusBadge(QWidget* parent) : QWidget(parent)
     m_textLabel->setObjectName(QStringLiteral("StatusBadge_Text"));
     hbox->addWidget(m_textLabel);
 
+    setAttribute(Qt::WA_StyledBackground, true);
     setCursor(Qt::PointingHandCursor);
     applyStyle();
 }
 
 void StatusBadge::setIcon(const QString& icon)
 {
+    if (m_icon == icon) { return; }
     m_icon = icon;
     m_iconLabel->setText(icon);
 }
 
 void StatusBadge::setLabel(const QString& label)
 {
+    if (m_label == label) { return; }
     m_label = label;
     m_textLabel->setText(label);
 }
