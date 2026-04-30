@@ -56,6 +56,12 @@ private:
     void reapplyDropPriority();
 
     QSet<StatusBadge*> m_droppedBadges;   // badges hidden by resize, not by feature-off
+    bool               m_inReapplyDropPriority{false};   // re-entry guard — setting badge
+                                                          // visibility triggers a layout
+                                                          // update which can re-fire
+                                                          // resizeEvent before this method
+                                                          // unwinds, invalidating the QSet
+                                                          // iterator. See I.1 crash fix.
 
     SliceModel*  m_slice{nullptr};
 

@@ -105,31 +105,43 @@ void RxDashboard::resizeEvent(QResizeEvent* event)
 
 void RxDashboard::reapplyDropPriority()
 {
+    // Re-entry guard: setVisible() triggers a layout update which can re-fire
+    // resizeEvent before this method unwinds. Without the guard, the recursive
+    // call iterates m_droppedBadges while the outer call is still mutating it,
+    // crashing on iterator invalidation (segfault observed at PID 66366).
+    if (m_inReapplyDropPriority) { return; }
+    m_inReapplyDropPriority = true;
+
     // First: try to restore any badges we previously force-dropped, IF
     // their feature is still active (i.e., the host hasn't hidden them
-    // for a feature-off reason — those should stay hidden).
-    for (auto* b : m_droppedBadges) {
+    // for a feature-off reason — those should stay hidden). Take a local
+    // copy so the iteration is immune to concurrent modification (defence
+    // in depth on top of the re-entry guard).
+    const QSet<StatusBadge*> dropped = m_droppedBadges;
+    m_droppedBadges.clear();
+    for (auto* b : dropped) {
         if (b) { b->setVisible(true); }
     }
-    m_droppedBadges.clear();
 
     // If we're now over budget, drop badges in priority order until we fit.
     const int budget       = width();
     int       contentWidth = sizeHint().width();
-    if (contentWidth <= budget) { return; }
-
-    // Drop priority: SQL → APF(ANF) → NB → NR → AGC. Filter width never drops.
-    StatusBadge* dropOrder[] = {
-        m_sqlBadge, m_apfBadge, m_nbBadge, m_nrBadge, m_agcBadge
-    };
-    for (auto* b : dropOrder) {
-        if (contentWidth <= budget) { break; }
-        if (b && b->isVisible()) {
-            contentWidth -= (b->sizeHint().width() + 6);   // +6 for layout spacing
-            b->setVisible(false);
-            m_droppedBadges.insert(b);
+    if (contentWidth > budget) {
+        // Drop priority: SQL → APF(ANF) → NB → NR → AGC. Filter never drops.
+        StatusBadge* dropOrder[] = {
+            m_sqlBadge, m_apfBadge, m_nbBadge, m_nrBadge, m_agcBadge
+        };
+        for (auto* b : dropOrder) {
+            if (contentWidth <= budget) { break; }
+            if (b && b->isVisible()) {
+                contentWidth -= (b->sizeHint().width() + 6);
+                b->setVisible(false);
+                m_droppedBadges.insert(b);
+            }
         }
     }
+
+    m_inReapplyDropPriority = false;
 }
 
 void RxDashboard::bindSlice(SliceModel* slice)
