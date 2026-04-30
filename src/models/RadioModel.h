@@ -90,6 +90,7 @@
 #include "core/safety/TxInhibitMonitor.h"
 #include "core/safety/BandPlanGuard.h"
 
+#include <QDateTime>
 #include <QObject>
 #include <QString>
 #include <QList>
@@ -327,6 +328,19 @@ public:
     const BoardCapabilities& boardCapabilities() const;
 
     bool isConnected() const;
+
+    // ── Phase 3Q sub-PR-3: NetworkDiagnosticsDialog text accessors ───────────
+    // Each returns an em-dash placeholder ("—") when disconnected.
+    // m_connectionStartedAt is set in setConnectionState() on the
+    // Connected → anything transition; cleared on non-Connected states.
+    QString connectionUptimeText() const;     // "14m 32s" / "—"
+    QString connectedRadioName() const;       // RadioInfo.name / "—"
+    QString connectionProtocolText() const;   // "1" or "2" / "—"
+    QString connectionFirmwareText() const;   // "v27" / "—"
+    QString connectionIpText() const;         // "192.168.x.y : port" / "—"
+    QString connectionMacText() const;        // "AA:BB:CC:DD:EE:FF" / "—"
+    int     connectionSampleRateHz() const;   // 0 if disconnected
+    QString connectionSampleRateText() const; // "192 kHz" / "—"
 
     // Phase 3Q-1: single source of truth for the connection lifecycle state.
     // UI components (TitleBar, ConnectionPanel, status bar, spectrum overlay)
@@ -733,6 +747,16 @@ private:
     // Phase 3Q-1: RadioModel-level connection state machine.
     // Drives UI (TitleBar, ConnectionPanel, status bar, spectrum overlay).
     ConnectionState m_connectionState{ConnectionState::Disconnected};
+
+    // Phase 3Q sub-PR-3: uptime tracking for NetworkDiagnosticsDialog.
+    // Set to current time on Connected transition, cleared (default-constructed)
+    // on any non-Connected state. connectionUptimeText() reads this.
+    QDateTime m_connectionStartedAt;
+
+    // Phase 3Q sub-PR-3: sample rate as last pushed to the wire.
+    // Written from the wireSampleRateChanged path in connectToRadio().
+    // connectionSampleRateHz() / connectionSampleRateText() read this.
+    int m_connectionSampleRateHz{0};
 
     // Reconnect state
     RadioInfo m_lastRadioInfo;

@@ -264,6 +264,7 @@ warren@wpratt.com
 #include <algorithm>
 #include <cmath>
 
+#include <QDateTime>
 #include <QMetaObject>
 #include <QStandardPaths>
 #include <QThread>
@@ -2103,6 +2104,8 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // Tell MainWindow / FFTEngine / SpectrumWidget the wire rate so bin math
     // matches the persisted hardware rate. Without this the FFT uses a stale
     // rate and compresses/expands the spectrum incorrectly.
+    // Phase 3Q sub-PR-3: persist so connectionSampleRateHz() can report it.
+    m_connectionSampleRateHz = wireSampleRate;
     emit wireSampleRateChanged(static_cast<double>(wireSampleRate));
 
     qCDebug(lcConnection) << "Connecting to" << info.displayName()
@@ -3458,6 +3461,14 @@ void RadioModel::setConnectionState(ConnectionState s)
         return;
     }
     m_connectionState = s;
+    // Phase 3Q sub-PR-3: track when we become connected so
+    // connectionUptimeText() can produce a human-readable elapsed time.
+    if (s == ConnectionState::Connected) {
+        m_connectionStartedAt = QDateTime::currentDateTime();
+    } else {
+        m_connectionStartedAt = QDateTime{}; // clear — uptime is meaningless
+        m_connectionSampleRateHz = 0;
+    }
     emit connectionStateChanged(s);
 }
 
@@ -3937,6 +3948,93 @@ void RadioModel::onMoxHardwareFlipped(bool isTx)
             }
         }
     }
+}
+
+// ── Phase 3Q sub-PR-3: NetworkDiagnosticsDialog text accessors ──────────────
+// Each accessor is thin — it reads already-held state and formats it.
+// Returns "—" (em-dash) in any disconnected/unresolved case so callers
+// never need to guard against null or empty strings.
+
+QString RadioModel::connectionUptimeText() const
+{
+    if (!m_connectionStartedAt.isValid()) {
+        return QStringLiteral("—");
+    }
+    const qint64 elapsedSec = m_connectionStartedAt.secsTo(QDateTime::currentDateTime());
+    if (elapsedSec < 0) {
+        return QStringLiteral("—");
+    }
+    const qint64 h  = elapsedSec / 3600;
+    const qint64 m  = (elapsedSec % 3600) / 60;
+    const qint64 s  = elapsedSec % 60;
+    if (h > 0) {
+        return QString::asprintf("%lldh %02lldm %02llds",
+                                 static_cast<long long>(h),
+                                 static_cast<long long>(m),
+                                 static_cast<long long>(s));
+    }
+    return QString::asprintf("%lldm %02llds",
+                             static_cast<long long>(m),
+                             static_cast<long long>(s));
+}
+
+QString RadioModel::connectedRadioName() const
+{
+    if (!isConnected() || m_lastRadioInfo.name.isEmpty()) {
+        return QStringLiteral("—");
+    }
+    return m_lastRadioInfo.name;
+}
+
+QString RadioModel::connectionProtocolText() const
+{
+    if (!isConnected()) {
+        return QStringLiteral("—");
+    }
+    return QString::number(static_cast<int>(m_lastRadioInfo.protocol));
+}
+
+QString RadioModel::connectionFirmwareText() const
+{
+    if (!isConnected() || m_lastRadioInfo.firmwareVersion <= 0) {
+        return QStringLiteral("—");
+    }
+    return QStringLiteral("v") + QString::number(m_lastRadioInfo.firmwareVersion);
+}
+
+QString RadioModel::connectionIpText() const
+{
+    if (!isConnected()) {
+        return QStringLiteral("—");
+    }
+    return m_lastRadioInfo.address.toString()
+           + QStringLiteral(" : ")
+           + QString::number(m_lastRadioInfo.port);
+}
+
+QString RadioModel::connectionMacText() const
+{
+    if (!isConnected() || m_lastRadioInfo.macAddress.isEmpty()) {
+        return QStringLiteral("—");
+    }
+    return m_lastRadioInfo.macAddress;
+}
+
+int RadioModel::connectionSampleRateHz() const
+{
+    return isConnected() ? m_connectionSampleRateHz : 0;
+}
+
+QString RadioModel::connectionSampleRateText() const
+{
+    const int rateHz = connectionSampleRateHz();
+    if (rateHz <= 0) {
+        return QStringLiteral("—");
+    }
+    if (rateHz % 1000 == 0) {
+        return QString::number(rateHz / 1000) + QStringLiteral(" kHz");
+    }
+    return QString::number(rateHz) + QStringLiteral(" Hz");
 }
 
 } // namespace NereusSDR
