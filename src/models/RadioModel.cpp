@@ -1743,17 +1743,37 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             // TxWorkerThread (a few lines below) — same pattern as the F.1 /
             // H.1-H.3 / L.2 connects above.
             //
-            // ── ALC default reconciliation (path b — passive on initial state) ──
+            // ── Initial sync — Thetis-faithful "active TX profile" restore ──
             //
-            // TransmitModel default Lev_MaxGain=15 dB / ALC_MaximumGain=3 dB
-            // (Thetis database.cs:4592 [v2.10.3.13]) intentionally diverges
-            // from WdspEngine.cpp:437 boot SetTXAALCMaxGain(0.0).  We do NOT
-            // push the model's initial values to TxChannel on connect — the
-            // WDSP boot defaults stick until the user moves a slider.  This
-            // mirrors Thetis's UI policy where TXProfile values DISPLAY in
-            // Setup but only push to WDSP on profile activation or "Update"
-            // click; it also avoids an on-connect ALC bump from the deskhpsdr-
-            // safe 0 dB boot up to 3 dB before the user has consented.
+            // Thetis applies the active TX profile on boot (setup.cs:9535-9541
+            // [v2.10.3.13] — loadTXProfile invoked from console.cs init), which
+            // pushes Lev_MaxGain=15 / ALC_MaximumGain=3 / EQ shape / etc. into
+            // WDSP via the cmaster setters.  The "WDSP boot defaults stick
+            // until the user moves a slider" policy that originally lived here
+            // (path b — passive on initial state) was a NereusSDR-original
+            // safety stance that broke persisted-state restoration: a user
+            // who toggled TXEQ on, set a custom band shape, restarted, would
+            // see TXEQ ON in the UI while WDSP silently ran with EQ off and
+            // flat band gains.  Codex P1 review on PR #154 flagged this.
+            //
+            // Fix (Option C — profile-faithful): a `pushTxProcessingChain`
+            // helper reads current TransmitModel state and pushes all 13
+            // properties to TxChannel via the WDSP wrappers.  Called once
+            // here (after the 13 connects but before moveToThread, so the
+            // setter calls run on the main thread BEFORE TxWorkerThread
+            // takes over — same pattern documented at line 1879-1881).  Also
+            // wired to MicProfileManager::activeProfileChanged so future
+            // user-driven profile picks (TxEqDialog combo, TxProfileSetupPage)
+            // resync WDSP — necessary because applyValuesToModel routes through
+            // TransmitModel setters, and the setters short-circuit on no-op
+            // writes (value already matches), so the *Changed signal chain
+            // can't be relied on alone.
+            //
+            // Consent for the on-boot ALC bump (0 dB WDSP boot → 3 dB Thetis
+            // default) is captured at "user is running NereusSDR with the
+            // shipped Default profile" — same consent model Thetis itself
+            // uses.  Users who want WDSP boot defaults can save a profile
+            // with ALC_MaximumGain=0 and activate it.
             //
             // ── TX EQ unified path: always SetTXAEQProfile ──
             //
@@ -1778,6 +1798,31 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                         static_cast<double>(m_transmitModel.txEqBand(i));
                 }
                 m_txChannel->setTxEqProfile(freqs10, gains11);
+            };
+
+            // Full-chain push — mirrors all 13 connect lambdas below by reading
+            // current TransmitModel state and pushing to TxChannel.  Used for
+            // the initial on-connect sync (loadFromSettings already fired the
+            // *Changed signals before this connect block was installed, so
+            // they were dropped on the floor) and for MicProfileManager::
+            // activeProfileChanged (setActiveProfile's applyValuesToModel
+            // setters short-circuit on no-op writes when profile values match
+            // already-loaded live keys, so signal-driven sync isn't reliable).
+            auto pushTxProcessingChain = [this, pushEqProfile]() {
+                if (!m_txChannel) { return; }
+                m_txChannel->setTxEqRunning(m_transmitModel.txEqEnabled());
+                pushEqProfile();
+                m_txChannel->setTxEqNc(m_transmitModel.txEqNc());
+                m_txChannel->setTxEqMp(m_transmitModel.txEqMp());
+                m_txChannel->setTxEqCtfmode(m_transmitModel.txEqCtfmode());
+                m_txChannel->setTxEqWintype(m_transmitModel.txEqWintype());
+                m_txChannel->setTxLevelerOn(m_transmitModel.txLevelerOn());
+                m_txChannel->setTxLevelerTopDb(
+                    static_cast<double>(m_transmitModel.txLevelerMaxGain()));
+                m_txChannel->setTxLevelerDecayMs(m_transmitModel.txLevelerDecay());
+                m_txChannel->setTxAlcMaxGainDb(
+                    static_cast<double>(m_transmitModel.txAlcMaxGain()));
+                m_txChannel->setTxAlcDecayMs(m_transmitModel.txAlcDecay());
             };
 
             // 1. txEqEnabledChanged → setTxEqRunning.
@@ -1859,6 +1904,26 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                     m_txChannel, [this](int ms) {
                 m_txChannel->setTxAlcDecayMs(ms);
             });
+
+            // Profile-activation resync.  Receiver = m_txChannel so this
+            // becomes a QueuedConnection once moveToThread runs below; the
+            // helper executes on TxWorkerThread for race-free WDSP setter
+            // calls.  Triggered by user-driven profile picks (TxEqDialog,
+            // TxProfileSetupPage) — see design comment above for why
+            // signal-driven sync via setActiveProfile alone isn't reliable.
+            if (m_micProfileMgr) {
+                connect(m_micProfileMgr, &MicProfileManager::activeProfileChanged,
+                        m_txChannel, [pushTxProcessingChain](const QString& /*name*/) {
+                    pushTxProcessingChain();
+                });
+            }
+
+            // Initial sync — push current TransmitModel state (loaded by
+            // loadFromSettings at line 1106) into TxChannel before the worker
+            // thread takes over.  Runs on the main thread; subsequent setter
+            // calls land on TxWorkerThread via the queued connections above.
+            // See line 1879-1881 for the design pattern this mirrors.
+            pushTxProcessingChain();
 
             // ── 3M-1c TX pump architecture redesign: TxWorkerThread setup ──────
             //
