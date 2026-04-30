@@ -43,7 +43,7 @@ void RxDashboard::buildUi()
     m_rxLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: #5fa8ff; font-family: 'SF Mono', Menlo, monospace;"
         " font-size: 9px; font-weight: 600; letter-spacing: 1px; }"));
-    m_freqLabel = new QLabel(QStringLiteral("\xe2\x80\x94"), stackContainer); // em dash
+    m_freqLabel = new QLabel(QStringLiteral("—"), stackContainer); // em dash
     m_freqLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: #c8d8e8; font-family: 'SF Mono', Menlo, monospace;"
         " font-size: 15px; font-weight: 600; letter-spacing: 0.3px; }"));
@@ -57,28 +57,28 @@ void RxDashboard::buildUi()
     hbox->addWidget(m_modeBadge);
 
     m_filterBadge = new StatusBadge(this);
-    m_filterBadge->setIcon(QStringLiteral("\xe2\xa8\x8e")); // ⨎ U+2A0E
+    m_filterBadge->setIcon(QStringLiteral("⨎")); // U+2A0E
     hbox->addWidget(m_filterBadge);
 
     m_agcBadge = new StatusBadge(this);
-    m_agcBadge->setIcon(QStringLiteral("\xe2\x9a\xa1")); // ⚡ U+26A1
+    m_agcBadge->setIcon(QStringLiteral("⚡")); // U+26A1
     hbox->addWidget(m_agcBadge);
 
     // ── Active-only badges: NR / NB / APF / SQL ───────────────────────────────
     m_nrBadge = new StatusBadge(this);
-    m_nrBadge->setIcon(QStringLiteral("\xe2\x8c\x81")); // ⌁ U+2301
+    m_nrBadge->setIcon(QStringLiteral("⌁")); // U+2301
     hbox->addWidget(m_nrBadge);
 
     m_nbBadge = new StatusBadge(this);
-    m_nbBadge->setIcon(QStringLiteral("\xe2\x88\xbc")); // ∼ U+223C
+    m_nbBadge->setIcon(QStringLiteral("∼")); // U+223C
     hbox->addWidget(m_nbBadge);
 
     m_apfBadge = new StatusBadge(this);
-    m_apfBadge->setIcon(QStringLiteral("\xe2\x8a\x98")); // ⊘ U+2298
+    m_apfBadge->setIcon(QStringLiteral("⊘")); // U+2298
     hbox->addWidget(m_apfBadge);
 
     m_sqlBadge = new StatusBadge(this);
-    m_sqlBadge->setIcon(QStringLiteral("\xe2\x96\xbc")); // ▼ U+25BC
+    m_sqlBadge->setIcon(QStringLiteral("▼")); // U+25BC
     hbox->addWidget(m_sqlBadge);
 
     // Active-only badges hidden by default — "no NYI" rule
@@ -88,11 +88,11 @@ void RxDashboard::buildUi()
     m_sqlBadge->setVisible(false);
 
     // Always-shown badges: placeholder state until bound
-    m_modeBadge->setLabel(QStringLiteral("\xe2\x80\x94"));
+    m_modeBadge->setLabel(QStringLiteral("—"));
     m_modeBadge->setVariant(StatusBadge::Variant::Info);
-    m_filterBadge->setLabel(QStringLiteral("\xe2\x80\x94"));
+    m_filterBadge->setLabel(QStringLiteral("—"));
     m_filterBadge->setVariant(StatusBadge::Variant::On);
-    m_agcBadge->setLabel(QStringLiteral("\xe2\x80\x94"));
+    m_agcBadge->setLabel(QStringLiteral("—"));
     m_agcBadge->setVariant(StatusBadge::Variant::Info);
 }
 
@@ -137,7 +137,7 @@ void RxDashboard::bindSlice(SliceModel* slice)
 void RxDashboard::onFrequencyChanged(double hz)
 {
     if (hz <= 0.0) {
-        m_freqLabel->setText(QStringLiteral("\xe2\x80\x94"));
+        m_freqLabel->setText(QStringLiteral("—"));
         return;
     }
     const qint64 totalHz = static_cast<qint64>(hz + 0.5);
@@ -155,7 +155,7 @@ void RxDashboard::onModeChanged(int mode)
 {
     // Use SliceModel::modeName() static helper (verified present in SliceModel.h).
     const QString name = SliceModel::modeName(static_cast<DSPMode>(mode));
-    m_modeBadge->setLabel(name.isEmpty() ? QStringLiteral("\xe2\x80\x94") : name);
+    m_modeBadge->setLabel(name.isEmpty() ? QStringLiteral("—") : name);
     m_modeBadge->setVariant(StatusBadge::Variant::Info);
 }
 
@@ -170,7 +170,7 @@ void RxDashboard::onFilterChanged(int low, int high)
     } else if (width > 0) {
         text = QString::number(width);
     } else {
-        text = QStringLiteral("\xe2\x80\x94");
+        text = QStringLiteral("—");
     }
     m_filterBadge->setLabel(text);
     m_filterBadge->setVariant(StatusBadge::Variant::On);
@@ -185,7 +185,7 @@ void RxDashboard::onAgcChanged(int agcMode)
         sizeof(kAgcLetters) / sizeof(kAgcLetters[0]));
     const QString letter = (agcMode >= 0 && agcMode < kAgcCount)
         ? QString::fromLatin1(kAgcLetters[agcMode])
-        : QStringLiteral("\xe2\x80\x94");
+        : QStringLiteral("—");
     m_agcBadge->setLabel(letter);
     m_agcBadge->setVariant(StatusBadge::Variant::Info);
 }

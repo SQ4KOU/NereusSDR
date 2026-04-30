@@ -249,6 +249,7 @@ warren@wpratt.com
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "widgets/VfoWidget.h"
+#include "widgets/RxDashboard.h"
 #include "core/RxChannel.h"
 #include "core/TxChannel.h"  // H.2: setTxChannel wiring
 #include "core/ReceiverManager.h"
@@ -803,6 +804,15 @@ void MainWindow::buildUI()
     connect(m_radioModel, &RadioModel::sliceAdded, this, [this](int index) {
         if (index == 0) {
             wireSliceToSpectrum();
+        }
+    });
+
+    // Phase 3Q Sub-PR-6 (F.1): bind RxDashboard to slice(0) once it exists.
+    // buildStatusBar() runs before connectToRadio() so slices().isEmpty() at
+    // construction time; defer binding to sliceAdded.
+    connect(m_radioModel, &RadioModel::sliceAdded, this, [this](int index) {
+        if (index == 0 && m_rxDashboard) {
+            m_rxDashboard->bindSlice(m_radioModel->slices().at(0));
         }
     });
 
@@ -2464,29 +2474,18 @@ void MainWindow::buildStatusBar()
 
     hbox->addWidget(radioInfoWidget);
 
-    // ── Phase 3Q-7: verbose connection-info strip ─────────────────────────────
-    // Monospace detail label: sample rate · protocol · firmware · MAC when
-    // connected; "No radio connected" + last-connected breadcrumb when not.
-    // Visible at all times; content is updated by onConnectionStateChanged().
+    // ── Phase 3Q Sub-PR-6 (F.1): RxDashboard ────────────────────────────────
+    // Replaces the Phase 3Q-7 verbose connection-info strip (those fields now
+    // live in the segment tooltip / NetworkDiagnosticsDialog).
+    // Bound to slice(0); when disconnected the badges show placeholder "—"
+    // until the slice receives live values from the radio.
     hbox->addWidget(makeSep());
-    m_statusConnInfo = new QLabel(barWidget);
-    m_statusConnInfo->setStyleSheet(QStringLiteral(
-        "QLabel { color: #8090a8; font-family: 'SF Mono', Menlo, monospace;"
-        " font-size: 11px; }"));
-    m_statusConnInfo->setToolTip(QStringLiteral(
-        "Connection details — sample rate, protocol, firmware, MAC"));
-    // Initialise with disconnected state; onConnectionStateChanged() will
-    // overwrite this as soon as the model emits its first state signal.
-    m_statusConnInfo->setText(QStringLiteral("🔴  No radio connected"));
-    hbox->addWidget(m_statusConnInfo);
-
-    // Green "● live" indicator — visible only while connected.
-    m_statusLiveDot = new QLabel(QStringLiteral("● live"), barWidget);
-    m_statusLiveDot->setStyleSheet(QStringLiteral(
-        "QLabel { color: #5fff8a; font-size: 11px; }"));
-    m_statusLiveDot->setToolTip(QStringLiteral("Radio is connected and streaming"));
-    m_statusLiveDot->setVisible(false);
-    hbox->addWidget(m_statusLiveDot);
+    m_rxDashboard = new RxDashboard(barWidget);
+    const auto& slices = m_radioModel->slices();
+    if (!slices.isEmpty()) {
+        m_rxDashboard->bindSlice(slices.at(0));
+    }
+    hbox->addWidget(m_rxDashboard);
 
     // ── Stretch ───────────────────────────────────────────────────────────────
     hbox->addStretch(1);
@@ -3540,24 +3539,10 @@ void MainWindow::onConnectionStateChanged()
         // connectionStateChanged → ConnectionSegment::setState (see D.2 wiring
         // block in the constructor).
 
-        // Phase 3Q-7: update the verbose status-bar connection-info strip.
-        // Fields: maxSampleRate (Hz → kHz), protocol (P1/P2),
-        // firmwareVersion (int), macAddress (QString).
-        if (m_statusConnInfo && m_statusLiveDot) {
-            if (auto* conn = m_radioModel->connection()) {
-                const RadioInfo& info = conn->radioInfo();
-                const QString proto =
-                    info.protocol == ProtocolVersion::Protocol2
-                        ? QStringLiteral("P2") : QStringLiteral("P1");
-                m_statusConnInfo->setText(QStringLiteral(
-                    "Sample rate %1 kHz · %2 · fw %3 · MAC %4")
-                    .arg(info.maxSampleRate / 1000)
-                    .arg(proto)
-                    .arg(info.firmwareVersion)
-                    .arg(info.macAddress));
-            }
-            m_statusLiveDot->setVisible(true);
-        }
+        // Phase 3Q Sub-PR-6 (F.1): RxDashboard is always bound to slice(0)
+        // from buildStatusBar(). No per-connect rebind needed — the slice
+        // stays the same object across connect/disconnect cycles.
+        // (Connection details moved to segment tooltip / NetworkDiagnosticsDialog.)
 
         // Wire step attenuator controller to the live radio connection
         // and set max attenuation from board capabilities.
@@ -3599,28 +3584,10 @@ void MainWindow::onConnectionStateChanged()
         // Disconnect step attenuator from radio
         m_stepAttController->setRadioConnection(nullptr);
 
-        // Phase 3Q-7: update verbose status-bar strip to disconnected state.
-        // Show a "last connected X" breadcrumb using the typed AppSettings API
-        // so the user can see which radio was last active without opening the
-        // connection panel.
-        if (m_statusConnInfo && m_statusLiveDot) {
-            AppSettings& s = AppSettings::instance();
-            const QString lastMac = s.lastConnected();
-            QString breadcrumb;
-            if (!lastMac.isEmpty()) {
-                const auto saved = s.savedRadio(lastMac);
-                if (saved.has_value() && !saved->info.name.isEmpty()) {
-                    breadcrumb = QStringLiteral("   last connected %1")
-                        .arg(saved->info.name);
-                }
-            }
-            m_statusConnInfo->setText(
-                QStringLiteral("🔴  No radio connected"
-                               " — click the connection indicator"
-                               " or the Connect menu item%1")
-                .arg(breadcrumb));
-            m_statusLiveDot->setVisible(false);
-        }
+        // Phase 3Q Sub-PR-6 (F.1): RxDashboard shows placeholder "—" when
+        // disconnected automatically (slice values reset to defaults). No
+        // per-disconnect update needed here.
+        // (The "last connected" breadcrumb moved to the segment tooltip in D.2.)
 
         // Phase 3Q Task 5 — auto-open: on disconnect (after having been connected),
         // open the ConnectionPanel so the user can reconnect.
