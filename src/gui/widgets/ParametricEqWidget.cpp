@@ -107,6 +107,16 @@ QColor ParametricEqWidget::defaultBandPaletteAt(int index) {
     return p.at(index);
 }
 
+// From Thetis ucParametricEq.cs:2864-2871 [v2.10.3.13].
+QColor ParametricEqWidget::getBandBaseColor(int index) {
+    const auto& palette = defaultBandPalette();
+    int n = palette.size();
+    if (n <= 0) return QColor(200, 200, 200);
+    int idx = index % n;
+    if (idx < 0) idx = 0;
+    return palette.at(idx);
+}
+
 // From Thetis ucParametricEq.cs:360-447 [v2.10.3.13] -- public ucParametricEq() ctor.
 ParametricEqWidget::ParametricEqWidget(QWidget* parent)
     : QWidget(parent)
@@ -383,14 +393,6 @@ double ParametricEqWidget::getLockedFrequencyForIndex(int index) const {
     return m_points.at(index).frequencyHz;
 }
 
-// From Thetis ucParametricEq.cs:1152-1160 [v2.10.3.13] -- findPointByBandId.
-ParametricEqWidget::EqPoint* ParametricEqWidget::findPointByBandId(int bandId) {
-    for (auto& p : m_points) {
-        if (p.bandId == bandId) return &p;
-    }
-    return nullptr;
-}
-
 // From Thetis ucParametricEq.cs:1142-1150 [v2.10.3.13] -- GetIndexFromBandId.
 int ParametricEqWidget::indexFromBandId(int bandId) const {
     for (int i = 0; i < m_points.size(); ++i) {
@@ -441,6 +443,9 @@ void ParametricEqWidget::enforceOrdering(bool enforceSpacingAll) {
 
     // Re-resolve indices by bandId after sort.
     m_selectedIndex = (selectedBandId >= 0) ? indexFromBandId(selectedBandId) : -1;
+    // TODO(Batch 4): emit selectedIndexChanged(isDragging()) when m_selectedIndex
+    // actually changes -- Thetis raises this at ucParametricEq.cs:3249 and 3257.
+    // Signal not declared until Batch 4 (mouse + wheel + signals).
     m_dragIndex     = (dragBandId >= 0)     ? indexFromBandId(dragBandId)     : -1;
 
     for (auto& p : m_points) {
@@ -476,9 +481,6 @@ void ParametricEqWidget::enforceOrdering(bool enforceSpacingAll) {
 }
 
 // From Thetis ucParametricEq.cs:3163-3197 [v2.10.3.13].
-// Note: C# calls getBandBaseColor(i) (cs:2864-2871) which is just
-// _default_band_palette[i % palette.Length]; we inline that here since
-// Batch 1 already exposed the palette via defaultBandPalette().
 void ParametricEqWidget::resetPointsDefault() {
     m_points.clear();
     int count = m_bandCount;
@@ -496,11 +498,10 @@ void ParametricEqWidget::resetPointsDefault() {
     double span = m_frequencyMaxHz - m_frequencyMinHz;
     if (span <= 0.0) span = 1.0;
 
-    const auto& palette = defaultBandPalette();
     for (int i = 0; i < count; ++i) {
         double t = double(i) / double(count - 1);
         double f = m_frequencyMinHz + t * span;
-        QColor col = palette.at(i % palette.size());
+        QColor col = getBandBaseColor(i);
         m_points.append(EqPoint(i + 1, col, f, 0.0, 4.0));
     }
 

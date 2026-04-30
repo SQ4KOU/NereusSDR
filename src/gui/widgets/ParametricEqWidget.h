@@ -125,6 +125,9 @@ private:
     // From Thetis ucParametricEq.cs:254-274 [v2.10.3.13] -- _default_band_palette.
     static const QVector<QColor>& defaultBandPalette();
 
+    // Band colour resolution -- From Thetis ucParametricEq.cs:2864-2871 [v2.10.3.13].
+    static QColor getBandBaseColor(int index);
+
     // Axis math -- From Thetis ucParametricEq.cs:2951-3078 [v2.10.3.13].
     QRect  computePlotRect()                                   const;
     int    computedPlotMarginLeft()                            const;
@@ -161,8 +164,7 @@ private:
     bool   isFrequencyLockedIndex(int index)                   const;
     double getLockedFrequencyForIndex(int index)               const;
 
-    // Helper -- From Thetis ucParametricEq.cs:1142-1160 [v2.10.3.13] -- band lookup.
-    EqPoint* findPointByBandId(int bandId);
+    // Helper -- From Thetis ucParametricEq.cs:1142-1150 [v2.10.3.13] -- band lookup.
     int      indexFromBandId(int bandId)                       const;
 
     static double clamp(double v, double lo, double hi);
