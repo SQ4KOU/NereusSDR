@@ -466,6 +466,8 @@ set(GUI_SOURCES
     src/gui/widgets/MasterOutputWidget.cpp
     src/gui/widgets/VfoStyles.h
     src/gui/widgets/VfoWidget.cpp
+    src/gui/widgets/MetricLabel.cpp
+    src/gui/widgets/MetricLabel.h
     src/gui/widgets/StatusBadge.cpp
     src/gui/widgets/StatusBadge.h
     src/gui/widgets/RxDashboard.cpp

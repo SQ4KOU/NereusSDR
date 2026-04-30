@@ -2390,6 +2390,10 @@ nereus_add_test(tst_rx_dashboard)
 # for QWidget mouse events).
 nereus_add_test(tst_status_badge)
 
+# ── Shell-Chrome Redesign sub-PR-8: MetricLabel ───────────────────────────
+# 4 tests: ctor stores label+value, setLabel/setValue round-trip, idempotent.
+nereus_add_test(tst_metric_label)
+
 # ── Shell-Chrome Redesign sub-PR-1: StationBlock widget ───────────────────
 # 5 tests: default/setRadioName/empty-name appearance switching, click +
 # right-click signal emission gated on appearance.
