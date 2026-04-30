@@ -1074,6 +1074,42 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         m_ocMatrix.setMacAddress(info.macAddress);
         m_ocMatrix.load();
 
+        // Reconcile the OcMatrix to the persisted N2ADR Filter setting at
+        // app launch.  Without this, a matrix populated by a prior session's
+        // N2ADR-on toggle survives indefinitely even after the user disables
+        // N2ADR — including across app restarts.  The Hl2IoBoardTab's
+        // restoreSettings() does the same thing but only fires when the user
+        // opens Setup; this hook ensures the matrix is always in sync from
+        // the very first composeCcForBank call.
+        const QString n2adrKey = QStringLiteral("hl2IoBoard/n2adrFilter");
+        const bool n2adrOn = AppSettings::instance()
+                                 .value(n2adrKey, QStringLiteral("False"))
+                                 .toString() == QStringLiteral("True");
+        for (int b = 0; b < int(Band::Count); ++b) {
+            for (int pin = 0; pin < 7; ++pin) {
+                m_ocMatrix.setPin(static_cast<Band>(b), pin, false, false);
+                m_ocMatrix.setPin(static_cast<Band>(b), pin, true,  false);
+            }
+        }
+        if (n2adrOn) {
+            auto setBand = [this](Band band, std::initializer_list<int> rxBits,
+                                  std::initializer_list<int> txBits) {
+                for (int b : rxBits) { m_ocMatrix.setPin(band, b, false, true); }
+                for (int b : txBits) { m_ocMatrix.setPin(band, b, true,  true); }
+            };
+            setBand(Band::Band160m, {0},     {0});
+            setBand(Band::Band80m,  {1, 6},  {1});
+            setBand(Band::Band60m,  {2, 6},  {2});
+            setBand(Band::Band40m,  {2, 6},  {2});
+            setBand(Band::Band30m,  {3, 6},  {3});
+            setBand(Band::Band20m,  {3, 6},  {3});
+            setBand(Band::Band17m,  {4, 6},  {4});
+            setBand(Band::Band15m,  {4, 6},  {4});
+            setBand(Band::Band12m,  {5, 6},  {5});
+            setBand(Band::Band10m,  {5, 6},  {5});
+        }
+        m_ocMatrix.save();
+
         // Load per-MAC Alex antenna controller state so Antenna Control UI
         // and future protocol codecs read the correct per-band antenna assignments.
         // Phase 3P-F Task 3. Pattern mirrors OcMatrix above.

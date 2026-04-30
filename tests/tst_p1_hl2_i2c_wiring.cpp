@@ -40,11 +40,17 @@ private slots:
         IoBoardHl2 io;
         conn.setIoBoard(&io);
 
+        // Fire-and-forget write to register 0x05 of the I/O board at 0x1D.
+        // mi0bot's NetworkIO.I2CWrite(1, 0x1D, 0x05, 0x42) maps to:
+        //   bus=0/1 (test uses 0), address=0x1D, control=0x05 (sub-address),
+        //   writeData=0x42, isRead=false, needsResponse=false.
         IoBoardHl2::I2cTxn txn;
-        txn.bus       = 0;
-        txn.address   = 0x1D;                     // general I/O register address
-        txn.control   = IoBoardHl2::CtrlWrite | IoBoardHl2::CtrlStop;  // 0x02 (write+stop)
-        txn.writeData = 0x42;
+        txn.bus           = 0;
+        txn.address       = 0x1D;   // general I/O register device
+        txn.control       = 0x05;   // sub-address (= register 5, REG_CONTROL)
+        txn.writeData     = 0x42;
+        txn.isRead        = false;
+        txn.needsResponse = false;
         io.enqueueI2c(txn);
         QCOMPARE(io.i2cQueueDepth(), 1);
 
@@ -53,16 +59,15 @@ private slots:
 
         // C0: XmitBit (0, not MOX) | (0x3c << 1) | (ctrl_request=0 << 7)
         //   = 0 | 0x78 | 0 = 0x78
-        // ctrl_request bit is 0 because CtrlRequest (0x04) is not set in txn.control (0x02)
         QCOMPARE(int(buf[0]), 0x78);
 
-        // C1 = 0x06 (write, not read — CtrlRead=0x01 not set in 0x02)
+        // C1 = 0x06 (write — isRead=false)
         QCOMPARE(int(buf[1]), 0x06);
 
         // C2 = 0x80 | 0x1D = 0x9D (stop request + address)
         QCOMPARE(int(buf[2]), 0x9D);
 
-        // C3 = txn.control = 0x02
+        // C3 = txn.control = 0x05 (sub-address)
         QCOMPARE(int(buf[3]), int(txn.control));
 
         // C4 = txn.writeData = 0x42
@@ -74,6 +79,7 @@ private slots:
 
     // I2C bus 1 → C0 chip select uses 0x3d not 0x3c.
     // Source: mi0bot networkproto1.c:918 [@c26a8a4]: "I2C1 0x3d"
+    // Models the HW-version probe: I2CReadInitiate(1, 0x41, 0).
     void bus1_uses_0x3d_chip_select() {
         P1RadioConnection conn(nullptr);
         conn.setBoardForTest(HPSDRHW::HermesLite);
@@ -81,10 +87,12 @@ private slots:
         conn.setIoBoard(&io);
 
         IoBoardHl2::I2cTxn txn;
-        txn.bus       = 1;
-        txn.address   = 0x41;
-        txn.control   = IoBoardHl2::CtrlRead | IoBoardHl2::CtrlStop;  // 0x03
-        txn.writeData = 0x00;
+        txn.bus           = 1;
+        txn.address       = 0x41;   // HW version device
+        txn.control       = 0x00;   // sub-address (HW version register)
+        txn.writeData     = 0x00;
+        txn.isRead        = true;
+        txn.needsResponse = false;  // this test doesn't check ctrl_request
         io.enqueueI2c(txn);
 
         quint8 buf[5] = {};
@@ -93,26 +101,28 @@ private slots:
         // C0 for bus 1 = 0 | (0x3d << 1) | 0 = 0x7a
         QCOMPARE(int(buf[0]), 0x7a);
 
-        // C1 = 0x07 (read — CtrlRead=0x01 set in 0x03)
+        // C1 = 0x07 (read — isRead=true)
         QCOMPARE(int(buf[1]), 0x07);
 
         // C2 = 0x80 | 0x41 = 0xC1
         QCOMPARE(int(buf[2]), 0xC1);
     }
 
-    // ctrl_request bit set → bit 7 of C0 set.
+    // needsResponse=true → bit 7 of C0 set (ctrl_request).
     // Source: mi0bot networkproto1.c:914 [@c26a8a4]: "(prn->i2c.ctrl_request << 7)"
-    void ctrl_request_set_in_txn_control_sets_c0_bit7() {
+    void needs_response_sets_c0_bit7() {
         P1RadioConnection conn(nullptr);
         conn.setBoardForTest(HPSDRHW::HermesLite);
         IoBoardHl2 io;
         conn.setIoBoard(&io);
 
         IoBoardHl2::I2cTxn txn;
-        txn.bus       = 0;
-        txn.address   = 0x1D;
-        txn.control   = IoBoardHl2::CtrlRequest;  // 0x04 — ctrl_request bit set
-        txn.writeData = 0x00;
+        txn.bus           = 0;
+        txn.address       = 0x1D;
+        txn.control       = 0x00;
+        txn.writeData     = 0x00;
+        txn.isRead        = false;
+        txn.needsResponse = true;  // → ctrl_request bit set on wire
         io.enqueueI2c(txn);
 
         quint8 buf[5] = {};
@@ -131,10 +141,12 @@ private slots:
         conn.setIoBoard(&io);
 
         IoBoardHl2::I2cTxn txn;
-        txn.bus       = 0;
-        txn.address   = 0x82;  // > 0x7F → 0x82 >> 1 = 0x41
-        txn.control   = IoBoardHl2::CtrlWrite;
-        txn.writeData = 0x00;
+        txn.bus           = 0;
+        txn.address       = 0x82;  // > 0x7F → 0x82 >> 1 = 0x41
+        txn.control       = 0x00;
+        txn.writeData     = 0x00;
+        txn.isRead        = false;
+        txn.needsResponse = false;
         io.enqueueI2c(txn);
 
         quint8 buf[5] = {};
@@ -153,10 +165,12 @@ private slots:
         conn.setIoBoard(&io);  // noop — Hermes uses P1CodecStandard, not P1CodecHl2
 
         IoBoardHl2::I2cTxn txn;
-        txn.bus       = 0;
-        txn.address   = 0x1D;
-        txn.control   = IoBoardHl2::CtrlWrite;
-        txn.writeData = 0xFF;
+        txn.bus           = 0;
+        txn.address       = 0x1D;
+        txn.control       = 0x00;
+        txn.writeData     = 0xFF;
+        txn.isRead        = false;
+        txn.needsResponse = false;
         io.enqueueI2c(txn);
 
         quint8 buf[5] = {};
@@ -225,7 +239,8 @@ private slots:
 
         IoBoardHl2::I2cTxn txn;
         txn.bus = 0; txn.address = 0x1D;
-        txn.control = IoBoardHl2::CtrlWrite; txn.writeData = 0x01;
+        txn.control = 0x00; txn.writeData = 0x01;
+        txn.isRead = false; txn.needsResponse = false;
         io.enqueueI2c(txn);
 
         quint8 buf[5] = {};

@@ -18,8 +18,11 @@ private slots:
         QVERIFY(codec.usesI2cIntercept());
     }
 
-    // Bank 11 C4 — RX path: 6-bit mask + 0x40 enable
-    // Source: mi0bot networkproto1.c:1102 [@c26a8a4]
+    // Bank 11 C4 — RX path: 6-bit mask + 0x40 enable WITH (31 - userDb)
+    // inversion. HL2 firmware treats higher values as MORE attenuation, so
+    // mi0bot inverts at 3 callsites (console.cs:11075/11251/19380); without
+    // the inversion, slider value 31 reaches HL2 as zero attenuation.
+    // Source: mi0bot networkproto1.c:1102 + console.cs:11075/11251/19380 [@c26a8a4]
     void bank11_rx_att_20dB_hl2_encoding() {
         P1CodecHl2 codec;
         CodecContext ctx;
@@ -28,7 +31,8 @@ private slots:
         quint8 out[5] = {};
         codec.composeCcForBank(11, ctx, out);
         QCOMPARE(int(out[0]), 0x14);
-        QCOMPARE(int(out[4]), (20 & 0x3F) | 0x40);  // 0x54
+        // userDb=20 → wire = (31-20) | 0x40 = 11 | 0x40 = 0x4B
+        QCOMPARE(int(out[4]), ((31 - 20) & 0x3F) | 0x40);
     }
 
     // Bank 11 C4 — TX path: uses txStepAttn[0] not rxStepAttn[0]
@@ -88,14 +92,18 @@ private slots:
         QCOMPARE(int(out_clamp[4]), 0x40);
     }
 
-    // Bank 11 C4 — full 6-bit range (HL2 supports 0-63)
-    void bank11_rx_att_63dB_full_hl2_range() {
+    // Bank 11 C4 — RX path range. HL2 user-facing slider is clamped to 0-31
+    // (matching mi0bot's udHermesStepAttenuatorData.Maximum = 31 at
+    // setup.cs:2113-2115); inputs above 31 clamp to 31, which post-inversion
+    // maps to wire byte 0x40 (= 0 | 0x40 = HL2 maximum attenuation).
+    void bank11_rx_att_clamps_above_31() {
         P1CodecHl2 codec;
         CodecContext ctx;
         ctx.rxStepAttn[0] = 63;
         quint8 out[5] = {};
         codec.composeCcForBank(11, ctx, out);
-        QCOMPARE(int(out[4]), 0x3F | 0x40);  // 0x7F
+        // Clamped to 31 → wire = (31-31) | 0x40 = 0x40
+        QCOMPARE(int(out[4]), 0x40);
     }
 
     // Bank 12 — HL2 has same MOX behavior as Standard (forces 0x1F under MOX),

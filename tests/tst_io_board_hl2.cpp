@@ -22,7 +22,7 @@ private slots:
         IoBoardHl2::I2cTxn txn{
             .bus       = 0,
             .address   = 0x20,
-            .control   = IoBoardHl2::CtrlStop,
+            .control   = 0x00,   // sub-address (test only checks queue depth)
             .writeData = 0x42,
         };
         QVERIFY(io.enqueueI2c(txn));
