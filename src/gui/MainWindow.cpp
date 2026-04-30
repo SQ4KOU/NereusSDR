@@ -1464,24 +1464,37 @@ void MainWindow::buildMenuBar()
             }
             AppSettings& s = AppSettings::instance();
             const QString lastMac = s.lastConnected();
-            if (lastMac.isEmpty() || !s.savedRadio(lastMac).has_value()) {
+            const auto saved = s.savedRadio(lastMac);
+            if (!saved.has_value()) {
                 return;  // enablement should have prevented this
             }
-            // Fast-profile rediscovery + connect when the saved MAC responds
-            // (same flow as tryAutoReconnect / the failure-path retry).
+            // Unicast probe targeted at the saved IP — cleaner than a
+            // broadcast scan + radioDiscovered listener: no leaked listeners
+            // when the radio doesn't reply, and works across VPN tunnels
+            // that drop broadcast traffic. Phase 3Q-2 wired probeAddress;
+            // this menu item now uses it directly. (Earlier broadcast-listen
+            // implementation leaked a connect-on-mac-match listener that
+            // would auto-reconnect to LOCAL radio on later scans even after
+            // the user explicitly disconnected — bug reported 2026-04-30.)
             RadioDiscovery* disc = m_radioModel->discovery();
-            disc->setProfile(DiscoveryProfile::Fast);
             QMetaObject::Connection* connPtr = new QMetaObject::Connection;
+            QMetaObject::Connection* failPtr = new QMetaObject::Connection;
+            auto cleanup = [connPtr, failPtr]() {
+                QObject::disconnect(*connPtr);
+                delete connPtr;
+                QObject::disconnect(*failPtr);
+                delete failPtr;
+            };
             *connPtr = connect(disc, &RadioDiscovery::radioDiscovered,
-                this, [this, lastMac, connPtr](const RadioInfo& found) {
+                this, [this, lastMac, cleanup](const RadioInfo& found) {
                     if (found.macAddress != lastMac) {
-                        return;
+                        return;  // probe reply for a different radio — wait
                     }
                     if (m_radioModel->isConnected()) {
+                        cleanup();
                         return;
                     }
-                    QObject::disconnect(*connPtr);
-                    delete connPtr;
+                    cleanup();
                     RadioInfo ri = found;
                     HPSDRModel mo = AppSettings::instance().modelOverride(ri.macAddress);
                     if (mo != HPSDRModel::FIRST) {
@@ -1489,7 +1502,13 @@ void MainWindow::buildMenuBar()
                     }
                     m_radioModel->connectToRadio(ri);
                 });
-            disc->startDiscovery();
+            *failPtr = connect(disc, &RadioDiscovery::probeFailed,
+                this, [cleanup, lastMac](const QHostAddress&, quint16) {
+                    qCInfo(lcConnection) << "Connect: probe failed for"
+                                         << lastMac;
+                    cleanup();
+                });
+            disc->probeAddress(saved->info.address, saved->info.port);
         });
     m_actConnect->setToolTip(QStringLiteral(
         "Reconnect to the last-used radio (greyed out when there's nothing to reconnect to)"));
