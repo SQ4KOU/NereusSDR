@@ -132,6 +132,7 @@
 // 15.  SWR protection LED — QLabel indicator (NYI — 3M-3)
 
 #include "TxApplet.h"
+#include "TxEqDialog.h"
 #include "NyiOverlay.h"
 #include "gui/HGauge.h"
 #include "gui/StyleConstants.h"
@@ -445,8 +446,8 @@ void TxApplet::buildUI()
         m_eqBtn->setAccessibleName(QStringLiteral("TX EQ enable"));
         m_eqBtn->setObjectName(QStringLiteral("TxEqButton"));
         m_eqBtn->setToolTip(QStringLiteral(
-            "TX 10-band parametric/graphic EQ.  Left-click to toggle.\n"
-            "Right-click to open the EQ dialog (coming in 3M-3a-i Batch 3)."));
+            "TX 10-band graphic EQ.  Left-click to toggle.\n"
+            "Right-click to open the EQ dialog."));
         // Custom context-menu policy so right-click hits a slot (not the
         // default menu).
         m_eqBtn->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -914,9 +915,16 @@ void TxApplet::wireControls()
             m_eqBtn->setChecked(on);
             m_updatingFromModel = false;
         });
+        // Right-click → open TxEqDialog (Phase 3M-3a-i Batch 3 A.1).
+        // Modeless singleton; show + raise + activateWindow so a
+        // hidden-but-alive instance is brought forward.
         connect(m_eqBtn, &QPushButton::customContextMenuRequested,
-                this, [](const QPoint& /*pos*/) {
-            qCDebug(lcDsp) << "TxEqDialog launch — coming in 3M-3a-i Batch 3";
+                this, [this](const QPoint& /*pos*/) {
+            if (!m_model) { return; }
+            TxEqDialog* dlg = TxEqDialog::instance(m_model, this);
+            dlg->show();
+            dlg->raise();
+            dlg->activateWindow();
         });
     }
 
