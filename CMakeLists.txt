@@ -386,6 +386,7 @@ set(CORE_SOURCES
     src/core/ModelPaths.cpp
     src/core/accessories/AlexController.cpp
     src/core/accessories/ApolloController.cpp
+    src/core/accessories/N2adrPreset.cpp
     src/core/accessories/PennyLaneController.cpp
     src/core/audio/MasterMixer.cpp
     src/core/audio/PcMicSource.cpp

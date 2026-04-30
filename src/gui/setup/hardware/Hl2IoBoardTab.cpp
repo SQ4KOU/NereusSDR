@@ -128,7 +128,7 @@
 #include "core/OcMatrix.h"
 #include "core/P1RadioConnection.h"
 #include "core/RadioDiscovery.h"
-#include "models/Band.h"
+#include "core/accessories/N2adrPreset.h"
 #include "models/RadioModel.h"
 
 #include <QCheckBox>
@@ -919,34 +919,18 @@ void Hl2IoBoardTab::onRegisterPollTick()
 // N2ADR Filter board toggle — sole control surface for N2ADR on HL2.
 //
 // Source: mi0bot setup.cs:14311-14424 chkHERCULES_CheckedChanged [@c26a8a4]
-// (HERMESLITE branch lines 14324-14368). mi0bot's chkHERCULES is BOTH the
+// (HERMESLITE branch lines 14324-14368).  mi0bot's chkHERCULES is BOTH the
 // enable AND the preset trigger:
 //   case true:  clear all chkPenOC* checkboxes, then set the per-band cells
-//               that match the N2ADR filter wiring
-//   case false: clear all chkPenOC* checkboxes
+//               that match the N2ADR filter wiring (10 ham + 13 SWL).
+//   case false: clear all chkPenOC* checkboxes.
 //
 // NereusSDR mirrors that exactly: this checkbox is the single source of
-// truth for N2ADR. Toggling on populates the OcMatrix with the per-band
-// pattern; toggling off wipes it. No separate "apply preset" step.
-//
-// Per-band OC bit table (decoded from setup.cs:14326-14344 RX cells +
-// :14345-14354 TX cells, with mi0bot's `chkPenOC<rcv|xmit><band><pin>`
-// naming convention where pin 1 → bit 0, pin 7 → bit 6, per setup.cs:12908):
-//
-//   Band  RX pins (bits)        TX pins (bits)
-//   160m  pin 1 (bit 0)         pin 1 (bit 0)
-//    80m  pin 2 + pin 7 (1,6)   pin 2 (bit 1)
-//    60m  pin 3 + pin 7 (2,6)   pin 3 (bit 2)
-//    40m  pin 3 + pin 7 (2,6)   pin 3 (bit 2)
-//    30m  pin 4 + pin 7 (3,6)   pin 4 (bit 3)
-//    20m  pin 4 + pin 7 (3,6)   pin 4 (bit 3)
-//    17m  pin 5 + pin 7 (4,6)   pin 5 (bit 4)
-//    15m  pin 5 + pin 7 (4,6)   pin 5 (bit 4)
-//    12m  pin 6 + pin 7 (5,6)   pin 6 (bit 5)
-//    10m  pin 6 + pin 7 (5,6)   pin 6 (bit 5)
-//
-// Pin 7 (bit 6) is the "RX active" relay (asserted on RX above 160m, never
-// on TX). Pin pairs 60/40, 30/20, 17/15, 12/10 share LPFs (standard pairing).
+// truth for N2ADR.  Toggling on populates the shared OcMatrix with the
+// per-band pattern; toggling off wipes it.  No separate "apply preset"
+// step.  The per-band write table lives in N2adrPreset so that this
+// handler and RadioModel's app-launch reconcile share one source of
+// truth (Phase 3L extraction — was duplicated until 2026-04-30).
 void Hl2IoBoardTab::onN2adrToggled(bool checked)
 {
     // Key MUST match HardwarePage's "hl2IoBoard/" filter prefix
@@ -958,37 +942,7 @@ void Hl2IoBoardTab::onN2adrToggled(bool checked)
     if (!m_model) { return; }
     OcMatrix& oc = m_model->ocMatrixMutable();
 
-    // Step 1 — wipe every cell on every band/pin/{rx,tx}. Mi0bot does this
-    // unconditionally before populating (setup.cs:14315-14322 case true and
-    // :14414-14422 case false). This DOES destroy any other manual OC pin
-    // configuration the user may have made — matches mi0bot's "N2ADR owns
-    // the OC matrix while enabled" model.
-    for (int b = 0; b < int(Band::Count); ++b) {
-        for (int pin = 0; pin < 7; ++pin) {
-            oc.setPin(static_cast<Band>(b), pin, false, false);  // RX
-            oc.setPin(static_cast<Band>(b), pin, true,  false);  // TX
-        }
-    }
-
-    if (checked) {
-        // Step 2 — populate the N2ADR per-band pattern.
-        // Helper: set RX (and optionally TX) pins for a band.
-        auto setBand = [&](Band band, std::initializer_list<int> rxBits,
-                           std::initializer_list<int> txBits) {
-            for (int b : rxBits) { oc.setPin(band, b, false, true); }
-            for (int b : txBits) { oc.setPin(band, b, true,  true); }
-        };
-        setBand(Band::Band160m, {0},     {0});
-        setBand(Band::Band80m,  {1, 6},  {1});
-        setBand(Band::Band60m,  {2, 6},  {2});
-        setBand(Band::Band40m,  {2, 6},  {2});
-        setBand(Band::Band30m,  {3, 6},  {3});
-        setBand(Band::Band20m,  {3, 6},  {3});
-        setBand(Band::Band17m,  {4, 6},  {4});
-        setBand(Band::Band15m,  {4, 6},  {4});
-        setBand(Band::Band12m,  {5, 6},  {5});
-        setBand(Band::Band10m,  {5, 6},  {5});
-    }
+    applyN2adrPreset(oc, checked);
 
     // Persist whichever state we just composed (cleared or populated).
     oc.save();

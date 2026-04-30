@@ -570,6 +570,15 @@ target_compile_definitions(tst_oc_outputs_hf_tab PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_oc_outputs_swl_tab)
 target_compile_definitions(tst_oc_outputs_swl_tab PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3L: N2ADR Filter preset helper ─────────────────────────────────────
+# Locks the per-band write table that backs both the N2ADR UI toggle
+# (Hl2IoBoardTab::onN2adrToggled) and the app-launch reconcile
+# (RadioModel::handleConnect).  Verifies 10 ham-band ham entries + 13 SWL
+# pin-7 RX entries, the disable-wipes-all behaviour, that pre-existing
+# manual entries are wiped on enable, and idempotency.
+nereus_add_test(tst_n2adr_preset)
+target_compile_definitions(tst_n2adr_preset PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3P-D Task 3: P1RadioConnection ↔ OcMatrix codec wiring ─────────────
 # Verifies:
 #   - Without OcMatrix wired: bank 0 C2 = 0 (legacy m_ocOutput fallback).
