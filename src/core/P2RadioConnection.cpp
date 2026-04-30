@@ -1912,6 +1912,10 @@ void P2RadioConnection::sendCmdHighPriority()
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 3);
     // Shell-chrome sub-PR-2 B.1: record egress bytes for ▲ Mbps readout.
     recordBytesSent(static_cast<qint64>(pkt.size()));
+    // Shell-chrome sub-PR-2 B.2: bracket C&C round-trip for ping RTT.
+    // P2 high-priority command → high-priority status reply (100 ms cadence).
+    // We note send here; receive is noted in processHighPriorityStatus.
+    notePingSent();
 }
 
 void P2RadioConnection::sendCmdRx()
@@ -2139,6 +2143,11 @@ void P2RadioConnection::processHighPriorityStatus(const QByteArray& data)
         emit paTelemetryUpdated(fwdRaw, revRaw, exciterRaw,
                                 userAdc0Raw, userAdc1Raw, supplyRaw);
     }
+
+    // Shell-chrome sub-PR-2 B.2: complete the ping RTT measurement.
+    // The High-Priority status packet is the inbound leg of the
+    // high-priority command → status exchange (100 ms cadence).
+    notePingReceived();
 
     emit meterDataReceived(0.0f, 0.0f, 0.0f, 0.0f);
 }

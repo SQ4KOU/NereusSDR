@@ -92,6 +92,16 @@ public:
     void recordBytesSent(qint64 n);
     void recordBytesReceived(qint64 n);
 
+    // Ping RTT measurement via existing C&C round-trip.
+    // Call notePingSent() just before emitting an outbound command and
+    // notePingReceived() when the corresponding inbound status arrives.
+    // A single outstanding exchange is tracked; the first valid pair
+    // within 5 s emits pingRttMeasured(int rttMs). Duplicate receives
+    // and receives-without-sends are silently ignored.
+    // Drives the ConnectionSegment "X ms" latency readout (sub-PR-2).
+    void notePingSent();
+    void notePingReceived();
+
 public slots:
     // Must be called on the worker thread after moveToThread().
     // Creates sockets, timers, and other thread-local resources.
@@ -347,6 +357,12 @@ public slots:
     bool isWatchdogEnabled() const noexcept { return m_watchdogEnabled; }
 
 signals:
+    // --- Telemetry ---
+    // Emitted when a C&C round-trip completes. rttMs is the elapsed time
+    // in milliseconds between notePingSent() and notePingReceived().
+    // Drives the ConnectionSegment "X ms" latency readout (sub-PR-2).
+    void pingRttMeasured(int rttMs);
+
     // --- State ---
     void connectionStateChanged(NereusSDR::ConnectionState state);
     void errorOccurred(NereusSDR::RadioConnectionError code, const QString& message);
@@ -457,6 +473,9 @@ private:
 
     static double rateFromSamples(const QList<ByteSample>& samples, int windowMs);
     static void   pruneSamples(QList<ByteSample>& samples, qint64 nowMs, int windowMs);
+
+    // Ping RTT state. Zero means no outstanding ping.
+    qint64 m_pingSentMs{0};
 
 protected:
     void setState(ConnectionState newState);

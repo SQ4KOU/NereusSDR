@@ -83,4 +83,24 @@ double RadioConnection::rateFromSamples(const QList<ByteSample>& samples, int wi
     return (totalBytes * 8.0) / (windowMs * 1000.0);
 }
 
+// ---------------------------------------------------------------------------
+// Ping RTT measurement via existing C&C round-trip
+// ---------------------------------------------------------------------------
+
+void RadioConnection::notePingSent()
+{
+    m_pingSentMs = QDateTime::currentMSecsSinceEpoch();
+}
+
+void RadioConnection::notePingReceived()
+{
+    if (m_pingSentMs == 0) { return; }
+    const qint64 nowMs   = QDateTime::currentMSecsSinceEpoch();
+    const qint64 elapsed = nowMs - m_pingSentMs;
+    m_pingSentMs = 0;
+    if (elapsed >= 0 && elapsed <= 5000) {
+        emit pingRttMeasured(static_cast<int>(elapsed));
+    }
+}
+
 } // namespace NereusSDR

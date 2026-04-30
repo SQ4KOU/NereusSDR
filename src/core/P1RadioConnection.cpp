@@ -2059,6 +2059,11 @@ void P1RadioConnection::sendCommandFrame()
 
     // Shell-chrome sub-PR-2 B.1: record egress bytes for ▲ Mbps readout.
     recordBytesSent(static_cast<qint64>(pkt.size()));
+
+    // Shell-chrome sub-PR-2 B.2: bracket C&C round-trip for ping RTT.
+    // P1 EP2 → EP6 is the existing once-per-frame (380.95 pps) exchange.
+    // We note send here; receive is noted in parseEp6Frame on the success path.
+    notePingSent();
 }
 
 // ---------------------------------------------------------------------------
@@ -2251,6 +2256,10 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
         emit paTelemetryUpdated(m_paFwdRaw, m_paRevRaw, m_paExciterRaw,
                                 m_paUserAdc0Raw, m_paUserAdc1Raw, m_paSupplyRaw);
     }
+
+    // Shell-chrome sub-PR-2 B.2: complete the ping RTT measurement.
+    // Each valid EP6 frame constitutes the inbound leg of the EP2→EP6 exchange.
+    notePingReceived();
 
     // Emit iqDataReceived for each receiver
     // Contract: hwReceiverIndex (0-based), interleaved float I/Q pairs, [-1, 1]

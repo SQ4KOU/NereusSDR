@@ -2389,3 +2389,7 @@ nereus_add_test(tst_station_block)
 # 4 tests: zero-init, in-window accumulation, out-of-window aging, tx/rx
 # independence. QTEST_APPLESS_MAIN — no QApplication needed.
 nereus_add_test(tst_radio_connection_byte_rates)
+
+# ── Shell-Chrome Redesign sub-PR-2: ping RTT signal ───────────────────────
+# 3 tests: emit-on-rtt, duplicate-receive-suppression, receive-without-send.
+nereus_add_test(tst_radio_connection_ping_rtt)
