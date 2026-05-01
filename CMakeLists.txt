@@ -49,6 +49,18 @@ else()
 endif()
 
 # --------------------------------------------------------------------------
+# zlib (Phase 3M-3a-ii follow-up — gzip+base64url envelope helper for
+# the parametric-EQ blob round-trip with Thetis profile storage)
+# --------------------------------------------------------------------------
+# CMake's bundled FindZLIB module locates zlib on every supported host:
+#   - macOS: SDK at /Library/Developer/CommandLineTools/.../usr/include/zlib.h
+#   - Linux: distro package (zlib1g-dev / zlib-devel)
+#   - Windows: vcpkg or pre-built bundled with the toolchain
+# Hard-required because ParaEqEnvelope is in the always-on TX pipeline.
+find_package(ZLIB REQUIRED)
+message(STATUS "zlib ${ZLIB_VERSION_STRING} found at ${ZLIB_INCLUDE_DIRS}")
+
+# --------------------------------------------------------------------------
 # PortAudio v19 (Phase 3O VAX — PortAudioBus fallback for IAudioBus)
 # --------------------------------------------------------------------------
 include(FetchContent)
@@ -371,6 +383,7 @@ set(CORE_SOURCES
     src/core/NbFamily.h
     src/core/MoxController.cpp
     src/core/MicProfileManager.cpp
+    src/core/ParaEqEnvelope.cpp
     src/core/TwoToneController.cpp
     src/core/FFTEngine.cpp
     src/core/NoiseFloorEstimator.cpp
@@ -713,6 +726,7 @@ target_link_libraries(NereusSDRObjs PUBLIC
     Qt6::Network
     Qt6::Multimedia
     Qt6::Svg
+    ZLIB::ZLIB
 )
 
 if(WIN32)

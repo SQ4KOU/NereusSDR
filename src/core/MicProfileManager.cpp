@@ -125,6 +125,12 @@ const QStringList& liveKeyList()
         QStringLiteral("TxEqFreq8"),
         QStringLiteral("TxEqFreq9"),
         QStringLiteral("TxEqFreq10"),
+        // TX EQ parametric blob (1) — Phase 3M-3a-ii follow-up Batch 6.
+        // Opaque gzip+base64url envelope produced by ParaEqEnvelope wrapping
+        // the ParametricEqWidget JSON; mirror of CFCParaEQData (Batch 4) for
+        // the TX EQ slot.  No Thetis database.cs row — TXProfile column ships
+        // empty until ucParametricEq populates it.
+        QStringLiteral("TXParaEQData"),
         // Leveler (3 keys) — database.cs:4584-4588 [v2.10.3.13].
         QStringLiteral("Lev_On"),
         QStringLiteral("Lev_MaxGain"),
@@ -970,6 +976,10 @@ QHash<QString, QVariant> MicProfileManager::defaultProfileValues()
     out.insert(QStringLiteral("TxEqFreq8"),      QStringLiteral("4000"));    // WDSP TXA.c:112 default_F[8]
     out.insert(QStringLiteral("TxEqFreq9"),      QStringLiteral("8000"));    // WDSP TXA.c:112 default_F[9]
     out.insert(QStringLiteral("TxEqFreq10"),     QStringLiteral("16000"));   // WDSP TXA.c:112 default_F[10]
+    // TX EQ blob (1) — opaque, forward-compat for imported Thetis profiles.
+    // No Thetis database.cs row; column ships empty.  Phase 3M-3a-ii follow-up
+    // Batch 6.
+    out.insert(QStringLiteral("TXParaEQData"),   QString());
     out.insert(QStringLiteral("Lev_On"),         QStringLiteral("True"));    // database.cs:4584
     out.insert(QStringLiteral("Lev_MaxGain"),    QStringLiteral("15"));      // database.cs:4586
     out.insert(QStringLiteral("Lev_Decay"),      QStringLiteral("100"));     // database.cs:4588
@@ -1062,6 +1072,9 @@ QHash<QString, QVariant> MicProfileManager::captureLiveValues(const TransmitMode
         out.insert(QStringLiteral("TxEqFreq%1").arg(i + 1),
                    QString::number(tx->txEqFreq(i)));
     }
+    // TX EQ blob (1) — opaque QString fits QVariant directly.  Phase 3M-3a-ii
+    // follow-up Batch 6.
+    out.insert(QStringLiteral("TXParaEQData"), tx->txEqParaEqData());
     out.insert(QStringLiteral("Lev_On"),
                tx->txLevelerOn() ? QStringLiteral("True") : QStringLiteral("False"));
     out.insert(QStringLiteral("Lev_MaxGain"), QString::number(tx->txLevelerMaxGain()));
@@ -1168,6 +1181,9 @@ void MicProfileManager::applyValuesToModel(const QHash<QString, QVariant>& value
         tx->setTxEqFreq(i, take(QStringLiteral("TxEqFreq%1").arg(i + 1),
                                  QString::number(kDefaultF[i])).toInt());
     }
+    // TX EQ blob (1) — opaque QString; empty default (no Thetis row).  Phase
+    // 3M-3a-ii follow-up Batch 6.
+    tx->setTxEqParaEqData(take(QStringLiteral("TXParaEQData"), QString()));
     tx->setTxLevelerOn(take(QStringLiteral("Lev_On"), QStringLiteral("True"))
                             == QLatin1String("True"));
     tx->setTxLevelerMaxGain(take(QStringLiteral("Lev_MaxGain"), QStringLiteral("15")).toInt());

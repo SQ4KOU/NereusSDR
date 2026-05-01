@@ -343,6 +343,25 @@ nereus_add_test(tst_mic_profile_manager_cfc_round_trip)
 # for the 5 new bool keys.
 nereus_add_test(tst_mic_profile_manager_cfc_live_path)
 
+# ── Phase 3M-3a-ii follow-up Batch 6: ParaEqEnvelope helper tests ────
+# Verifies the gzip+base64url envelope helper that wraps the
+# ParametricEqWidget JSON for storage in TXProfile blobs (TXParaEQData /
+# CFCParaEQData).  Mirrors Thetis Common.cs Compress_gzip /
+# Decompress_gzip [v2.10.3.13] byte-for-byte (modulo gzip mtime) so
+# Thetis-produced blobs decode cleanly into NereusSDR.  Covers ASCII +
+# Unicode round-trip, multi-chunk inflate (10+KB JSON), Thetis fixture
+# decode (Python-pinned, mtime=0), invalid base64 / non-gzip / truncated
+# stream all returning std::nullopt.
+nereus_add_test(tst_para_eq_envelope)
+
+# ── Phase 3M-3a-ii follow-up Batch 6: TXParaEQData bundle round-trip ──
+# Closes the gap between the new TransmitModel.txEqParaEqData property
+# and the MicProfileManager bundle key TXParaEQData.  Covers: bundle-
+# key presence + empty default, capture path (TM -> bundle), apply path
+# (bundle -> TM), independence from CFCParaEQData (no key collision /
+# swapped getters), and empty-blob preservation across save+reload.
+nereus_add_test(tst_mic_profile_manager_para_eq_round_trip)
+
 # ── Phase 3M-1c chunk I (I.1-I.5): TwoToneController activation handler ────
 # Verifies the chkTestIMD_CheckedChanged port (setup.cs:11040-11191
 # [v2.10.3.13]): power-on precondition, MOX cycle-off-then-on flow,
