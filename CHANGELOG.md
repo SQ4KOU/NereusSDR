@@ -228,9 +228,20 @@ and the chrome layer that surrounds it.
 - **`CMakeLists`** — adds `find_package(ZLIB REQUIRED)` + `ZLIB::ZLIB`
   link.
 
+- **Bench feedback (in-branch fixes before PR open):** dialog-level QSS
+  block added to both `TxCfcDialog` and `TxEqDialog` constructors so the
+  default Qt6 widgets (spinboxes / combos / radios / checkboxes /
+  group-boxes / labels / buttons) pick up the project dark theme — the
+  rewrites had been inheriting the system Qt6 default style and rendered
+  dark-on-dark. `TxEqDialog`'s parametric Reset button was a no-op
+  because it called `setBandCount(currentCount)` which early-returns at
+  `ucParametricEq.cs:583 [v2.10.3.13]`; now synthesizes flat-default
+  arrays inline (gain=0, q=4, evenly spaced freq) and calls
+  `setPointsData` directly, mirroring `TxCfcDialog::onResetCompClicked`.
+
 - **Total impact:** 9074 insertions / 1407 deletions across 31 files;
-  102 new automated test slots; full ctest 261 / 261 green at HEAD
-  `dbbcbfa`. Bench verification on ANAN-G2 pending JJ.
+  102 new automated test slots; full ctest **280 / 280 green** at HEAD
+  `e733fa6` (post-rebase onto current `main` at `f40f5a0`).
 
   Inline cite scan: 1739 cites validated against upstream sources
   (`verify-inline-tag-preservation.py`); 289 / 289 Thetis files pass
