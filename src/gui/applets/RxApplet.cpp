@@ -1066,6 +1066,19 @@ void RxApplet::setBoardCapabilities(const BoardCapabilities& caps)
     const bool showAnt = caps.hasAlex && caps.antennaInputCount >= 3;
     if (m_rxAntBtn) { m_rxAntBtn->setVisible(showAnt); }
     if (m_txAntBtn) { m_txAntBtn->setVisible(showAnt); }
+
+    // hermes-filter-debug Bug 1: re-range the S-ATT spinbox from caps on
+    // every board change.  The construction-time setRange (line 599) runs
+    // before any radio is identified and may pick up the default 0..31 if
+    // boardCapabilities() is uninitialised; the post-connect block in
+    // connectSlice() only fires when the slice happens to be re-set after
+    // the radio is up.  This hook is the canonical board-driven path: it
+    // runs on every currentRadioChanged emission (MainWindow.cpp:1400-1403)
+    // so HL2's signed -28..+32 range (mi0bot setup.cs:16085-16086
+    // [v2.10.3.13-beta2]) takes effect as soon as caps are known.
+    if (m_stepAttSpin && caps.attenuator.present) {
+        m_stepAttSpin->setRange(caps.attenuator.minDb, caps.attenuator.maxDb);
+    }
 }
 
 // ── Model → UI sync ───────────────────────────────────────────────────────────

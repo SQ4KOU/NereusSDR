@@ -661,6 +661,30 @@ nereus_add_test(tst_hermes_lite_bandwidth_monitor)
 nereus_add_test(tst_hl2_io_board_tab)
 target_compile_definitions(tst_hl2_io_board_tab PRIVATE NEREUS_BUILD_TESTS)
 
+# ── hermes-filter-debug Bug 2: N2ADR per-MAC persistence + migration ─────────
+# Round-trip via setHardwareValue/hardwareValue, multi-MAC isolation, and
+# AppSettings::migrateLegacyN2adrFilter (global → per-MAC, HL2-only filter,
+# idempotency, preserve-explicit-per-MAC). Pure AppSettings/QTemporaryDir
+# unit tests; QTEST_APPLESS_MAIN.
+nereus_add_test(tst_hl2_n2adr_persistence)
+
+# ── hermes-filter-debug Bug 2: Hl2IoBoardTab N2ADR-toggle behaviour ──────────
+# Smoke-style behavioural tests for the rewired toggle path:
+#   * onN2adrToggled emits settingChanged (per-MAC routing via HardwarePage).
+#   * applyN2adrMatrix populates / wipes OcMatrix.
+#   * restoreSettings does NOT wipe matrix when the n2adrFilter key is
+#     absent (the regression that made the filter "always start disabled").
+#   * restoreSettings does not echo settingChanged back to HardwarePage.
+nereus_add_test(tst_hl2_io_board_tab_n2adr)
+target_compile_definitions(tst_hl2_io_board_tab_n2adr PRIVATE NEREUS_BUILD_TESTS)
+
+# ── hermes-filter-debug Bug 1: HL2 step-att signed range ─────────────────────
+# Verifies StepAttenuatorController honours a negative minAttenuation
+# (no clamp-to-zero) and that RxApplet::setBoardCapabilities propagates the
+# board-driven range to its S-ATT spinbox.
+nereus_add_test(tst_hl2_step_att_range)
+target_compile_definitions(tst_hl2_step_att_range PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3P-F Task 1: AlexController model — per-band antennas + Block-TX ───
 # Verifies per-band TX/RX/RX-only antenna arrays (14 bands, default Ant 1),
 # isolation (one band's assignment doesn't affect others), Block-TX safety

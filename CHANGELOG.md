@@ -251,6 +251,65 @@ and the chrome layer that surrounds it.
   Verification matrix at
   [`docs/architecture/phase3m-3a-ii-followup-parametriceq-verification/README.md`](docs/architecture/phase3m-3a-ii-followup-parametriceq-verification/README.md).
 
+### Fixed (hermes-filter-debug — HL2 N2ADR + S-ATT bench bugs)
+
+Two HL2 bugs JJ caught while running on a Hermes Lite 2 the day after
+the 3Q chrome layer landed. Both were silent (no warnings, no logs);
+each had a non-obvious root cause that took source-first digging
+through mi0bot to settle.
+
+- **HL2 step-attenuator UI clamped at 0 dB despite the signed
+  `-28..+32` range advertised in `BoardCapabilities`.** The
+  `StepAttenuatorController` clamp at `setAttenuation` was correct,
+  but three UI sites never received the negative bound:
+  `RxApplet::setBoardCapabilities` only updated antenna-button
+  visibility (not the spinbox range); `GeneralOptionsPage` re-ranged
+  the RX1 / RX2 spinboxes from `m_ctrl->maxAttenuation()` but
+  hardcoded `0` for the minimum; `RadioModel::connectToRadio` never
+  pushed the connected board's `attenuator.{minDb, maxDb}` into the
+  controller. Fix wires all three so HL2 sees `-28..+32`
+  (mi0bot `setup.cs:16085-16086 [v2.10.3.13-beta2]`) end-to-end on
+  every connect; legacy `0..31` boards unaffected.
+
+- **N2ADR Filter board enable lost on app restart — and the Setup
+  tab actively destroyed the persisted state.** Write side
+  (`Hl2IoBoardTab::onN2adrToggled`) wrote to global
+  `"hl2IoBoard/n2adrFilter"`; `HardwarePage::restoreSettings` read
+  per-MAC `hardware/<mac>/hl2IoBoard/n2adrFilter`. Per-MAC was always
+  empty, so restore defaulted `checked = false`, then unconditionally
+  fired `onN2adrToggled(false)` — wiping the global key AND the
+  OcMatrix every time the user opened Setup → HL2 I/O. Fix routes
+  the write through `settingChanged()` → `HardwarePage::wire()` →
+  `setHardwareValue(mac, ...)` (the path every other Hardware sub-tab
+  uses). `RadioModel::connectToRadio` reads per-MAC.
+  `restoreSettings` is no-op when the key is absent (a missing key
+  means "no explicit user intent yet" — leave the matrix alone).
+  One-shot migration `AppSettings::migrateLegacyN2adrFilter`
+  (called from `main.cpp`) copies any pre-existing global value
+  into `hardware/<mac>/...` for every saved HL2, then deletes the
+  global; non-HL2 saved radios are skipped (`chkHERCULES` on a
+  non-HERMESLITE radio is Apollo, not N2ADR — mi0bot
+  `setup.cs:14369-14412 [@c26a8a4]`).
+
+  **Why per-MAC and not mirror upstream global:** mi0bot's effective
+  per-radio semantic comes from per-DB-file scoping
+  (`database.cs:64 [@c26a8a4]`); multi-radio Thetis users swap files
+  via `ImportDatabase` (`database.cs:11237 [@c26a8a4]`). NereusSDR
+  achieves the same property via MAC scoping in one settings file —
+  matches every other HL2 setting (OcMatrix, HL2 Options, Alex,
+  calibration).
+
+  22 new unit tests added: persistence round-trip + multi-MAC
+  isolation + 5 migration cases + behavioural regression guard for
+  the matrix-wipe-on-Setup-open scenario + controller signed range
+  + RxApplet caps→spinbox propagation. **Codex review caught two
+  follow-ups (PR #160) addressed in-branch: P1 — preserve the
+  legacy global key when no HL2 saved radios exist yet so a future
+  migration run can still pick it up; P2 — reset the N2ADR checkbox
+  to false on missing-key restore so a re-used `Hl2IoBoardTab`
+  instance doesn't show stale state from the previously selected
+  radio.**
+
 ### Added (Phase 3M-3a-ii — TX Dynamics: CFC + CPDR + CESSB + Phase Rotator)
 
 - **CFC (Continuous Frequency Compressor) — 10-band freq compander.** New
