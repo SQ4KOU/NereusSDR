@@ -127,6 +127,7 @@
 
 #include "core/AppSettings.h"
 #include "core/ParaEqEnvelope.h"
+#include "core/TxChannel.h"
 #include "gui/StyleConstants.h"
 #include "gui/widgets/ParametricEqWidget.h"
 #include "models/RadioModel.h"
@@ -1006,6 +1007,18 @@ void TxEqDialog::onLegacyToggled(bool legacy)
     AppSettings::instance().setValue(
         QLatin1String(kLegacyToggleSettingsKey),
         legacy ? QStringLiteral("True") : QStringLiteral("False"));
+
+    // Push the active mode's curve to WDSP immediately so toggling
+    // alone takes audible effect (without this the user would have
+    // to also nudge a control on the newly-active panel before the
+    // audio path picked up the curve).  See the
+    // pushParametricCurveToWdsp / pushLegacyCurveToWdsp comments for
+    // why each helper was needed.
+    if (legacy) {
+        pushLegacyCurveToWdsp();
+    } else {
+        pushParametricCurveToWdsp();
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1272,25 +1285,100 @@ void TxEqDialog::pushParametricToModel()
     tx.setTxEqParaEqData(
         ParaEqEnvelope::encode(m_parametricWidget->saveToJson()));
 
-    // 2. Drive WDSP via the existing legacy scalar path (Codex P1 #1 on
-    //    PR #159).  Without this step, dragging a parametric band would
-    //    update stored metadata but never change transmitted EQ audio --
-    //    WDSP only listens to txEqPreampChanged / txEqBandChanged /
-    //    txEqFreqChanged, all of which trigger SetTXAEQProfile rebuild
-    //    via RadioModel.cpp:1924-1939.  Sample the parametric curve at
-    //    each legacy band's frequency and push the resulting gain; the
-    //    legacy band frequencies themselves are user-configurable in the
-    //    legacy panel and are intentionally left untouched here so the
-    //    user's legacy-mode settings are preserved when they toggle back.
-    tx.setTxEqPreamp(static_cast<int>(std::round(m_parametricWidget->globalGainDb())));
-    for (int i = 0; i < 10; ++i) {
-        const int    freqHz     = tx.txEqFreq(i);
-        const double gainAtFreq =
-            m_parametricWidget->responseDbAtFrequency(static_cast<double>(freqHz));
-        tx.setTxEqBand(i, static_cast<int>(std::round(gainAtFreq)));
-    }
+    // 2. Push the parametric curve directly to WDSP via
+    //    TxChannel::setTxEqProfile (Codex P1 #1 on PR #159 + the
+    //    follow-up self-review of dd03b70).  See
+    //    pushParametricCurveToWdsp for the F[10]/G[11] build rules.
+    //
+    //    Why NOT push via the legacy txEqBand/txEqFreq/txEqPreamp
+    //    setter chain (the dd03b70 approach):
+    //      - rounding to int loses parametric precision (4.6 dB -> 5)
+    //      - sampling at the LEGACY ISO grid discards the user's
+    //        chosen parametric band centers
+    //      - mutating tx.txEqBand[] etc. corrupts the user's legacy
+    //        settings on toggle-back
+    //      - 11 emissions per drag triggers 11 WDSP profile rebuilds
+    //        when only one is needed
+    //    Direct push avoids all four.
+    pushParametricCurveToWdsp();
 
     m_updatingFromModel = false;
+}
+
+// Build the WDSP (F[10], G[11]) shape from the parametric widget's
+// current state and push via TxChannel::setTxEqProfile.  Called on
+// every parametric edit (from pushParametricToModel) and on toggle
+// INTO parametric mode (from onLegacyToggled).
+//
+// WDSP TX EQ has a fixed 10-band shape; the parametric widget has
+// 5/10/18 bands with arbitrary centers + Q.  This helper resolves
+// the count mismatch:
+//   - 10-band parametric: 1:1 push of (freq, gain) -- parametric
+//     peaks land at the user's exact frequencies.
+//   - 5/18-band parametric: sample the curve at 10 equally-spaced
+//     freqs across the parametric range -- the curve's Gaussian-
+//     weighted-sum interpolation captures the Q effect at whatever
+//     resolution 10 sample points allow.
+// Q is intrinsically lost at the WDSP layer because WDSP TX EQ is
+// graphic-EQ topology; the curve sampling is the best Thetis-faithful
+// approximation (Thetis itself does the same -- ucParametricEq feeds
+// SetTXAEQProfile with sampled F+G arrays, never with biquad coeffs).
+void TxEqDialog::pushParametricCurveToWdsp()
+{
+    if (!m_radio || !m_parametricWidget) { return; }
+    auto* ch = m_radio->txChannel();
+    if (!ch) { return; }
+
+    std::vector<double> freqs(10);
+    std::vector<double> gains(11);
+    gains[0] = m_parametricWidget->globalGainDb();  // preamp slot
+
+    const int n = m_parametricWidget->bandCount();
+    if (n == 10) {
+        for (int i = 0; i < 10; ++i) {
+            double f = 0.0, g = 0.0, q = 0.0;
+            m_parametricWidget->getPointData(i, f, g, q);
+            freqs[i]   = f;
+            gains[i+1] = g;
+        }
+    } else {
+        const double minHz = m_parametricWidget->frequencyMinHz();
+        const double maxHz = m_parametricWidget->frequencyMaxHz();
+        const double step  = (maxHz > minHz) ? (maxHz - minHz) / 9.0 : 0.0;
+        for (int i = 0; i < 10; ++i) {
+            const double f = minHz + step * i;
+            freqs[i]   = f;
+            gains[i+1] = m_parametricWidget->responseDbAtFrequency(f);
+        }
+    }
+    ch->setTxEqProfile(freqs, gains);
+}
+
+// Build the WDSP (F[10], G[11]) shape from the legacy
+// txEqFreq/txEqBand/txEqPreamp model fields and push via
+// TxChannel::setTxEqProfile.  Called on toggle BACK to legacy mode
+// so WDSP restores the legacy curve immediately.
+//
+// Without this helper, the legacy-panel sliders' per-band setters
+// only push to WDSP on user edit (via RadioModel.cpp:1924-1939's
+// pushEqProfile lambda).  Toggling legacy with no edit would leave
+// the previous parametric curve on WDSP until the user nudged a
+// slider -- a confusing UX dead zone.
+void TxEqDialog::pushLegacyCurveToWdsp()
+{
+    if (!m_radio) { return; }
+    auto* ch = m_radio->txChannel();
+    if (!ch) { return; }
+    TransmitModel& tx = m_radio->transmitModel();
+
+    std::vector<double> freqs(10);
+    std::vector<double> gains(11);
+    gains[0] = static_cast<double>(tx.txEqPreamp());
+    for (int i = 0; i < 10; ++i) {
+        freqs[i]   = static_cast<double>(tx.txEqFreq(i));
+        gains[i+1] = static_cast<double>(tx.txEqBand(i));
+    }
+    ch->setTxEqProfile(freqs, gains);
 }
 
 // Codex P1 #2 on PR #159: profile activation fires

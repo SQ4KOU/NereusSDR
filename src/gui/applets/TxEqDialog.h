@@ -254,8 +254,24 @@ private:
     // selected ParametricEqWidget point.
     void updateEditRowFromSelection();
     // Push the current ParametricEqWidget points into TransmitModel::
-    // setTxEqParaEqData (JSON round-trip).
+    // setTxEqParaEqData (JSON round-trip) AND push the parametric
+    // curve directly to WDSP via pushParametricCurveToWdsp().
     void pushParametricToModel();
+
+    // Build (F[10], G[11]) from parametric widget state and push via
+    // TxChannel::setTxEqProfile.  Called on every parametric edit
+    // (from pushParametricToModel) and on toggle into parametric mode
+    // (from onLegacyToggled) so WDSP switches curves immediately
+    // without waiting for the user's first edit.
+    void pushParametricCurveToWdsp();
+
+    // Build (F[10], G[11]) from legacy txEqFreq/txEqBand/txEqPreamp
+    // model state and push via TxChannel::setTxEqProfile.  Called on
+    // toggle BACK to legacy mode so WDSP restores the legacy curve
+    // immediately (the legacy slider setters re-fire pushEqProfile
+    // via RadioModel only on user edit; without this, the parametric
+    // curve would persist on WDSP until the user nudged a slider).
+    void pushLegacyCurveToWdsp();
 
     QPointer<RadioModel> m_radio;          // non-owning
     bool m_updatingFromModel = false;
