@@ -121,7 +121,6 @@
 
 #include "Hl2IoBoardTab.h"
 
-#include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
 #include "core/HermesLiteBandwidthMonitor.h"
 #include "core/HpsdrModel.h"
@@ -933,19 +932,29 @@ void Hl2IoBoardTab::onRegisterPollTick()
 // step.  The per-band write table lives in N2adrPreset so that this
 // handler and RadioModel's app-launch reconcile share one source of
 // truth (Phase 3L extraction — was duplicated until 2026-04-30).
+//
+// hermes-filter-debug Bug 2: emit settingChanged() instead of writing
+// AppSettings directly.  HardwarePage's wire() lambda routes the signal
+// through onTabSettingChanged() → setHardwareValue(mac, ...) so the value
+// lands at hardware/<mac>/hl2IoBoard/n2adrFilter.  Mirrors Thetis's
+// effective per-radio semantic (each Thetis DB file ≈ one radio,
+// database.cs:64 [@c26a8a4]) within NereusSDR's multi-radio settings model.
 void Hl2IoBoardTab::onN2adrToggled(bool checked)
 {
-    // Key MUST match HardwarePage's "hl2IoBoard/" filter prefix
-    // (HardwarePage.cpp:232) so restoreSettings() receives this on next launch.
-    AppSettings::instance().setValue(
-        QStringLiteral("hl2IoBoard/n2adrFilter"),
-        checked ? QStringLiteral("True") : QStringLiteral("False"));
+    emit settingChanged(QStringLiteral("n2adrFilter"),
+                        checked ? QStringLiteral("True")
+                                : QStringLiteral("False"));
+    applyN2adrMatrix(checked);
+}
 
+// Matrix-only side of the N2ADR toggle.  Extracted from onN2adrToggled so
+// restoreSettings() can reapply persisted state without echoing a redundant
+// write back through the wire() persistence path.
+void Hl2IoBoardTab::applyN2adrMatrix(bool checked)
+{
     if (!m_model) { return; }
     OcMatrix& oc = m_model->ocMatrixMutable();
-
     applyN2adrPreset(oc, checked);
-
     // Persist whichever state we just composed (cleared or populated).
     oc.save();
 }
@@ -986,11 +995,13 @@ void Hl2IoBoardTab::onResetClicked()
             .arg(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss.zzz"))));
 }
 
-// ── HardwarePage compatibility stubs ─────────────────────────────────────────
-// This tab is self-populating via RadioModel signals; populate() and
-// restoreSettings() are no-ops.  The generic wire() lambda in HardwarePage
-// connects settingChanged() — emitted by onN2adrToggled() via AppSettings
-// directly (the wire() path is therefore redundant but harmless).
+// ── HardwarePage compatibility hooks ─────────────────────────────────────────
+// populate() is a no-op here — board detection and register state arrive via
+// RadioModel/IoBoardHl2 signals.  restoreSettings() reapplies the persisted
+// N2ADR filter state from the per-MAC store HardwarePage feeds in.
+// settingChanged() emissions originate from onN2adrToggled() and are routed
+// through HardwarePage::wire() → onTabSettingChanged() →
+// setHardwareValue(mac, ...).
 
 void Hl2IoBoardTab::populate(const RadioInfo& /*info*/, const BoardCapabilities& /*caps*/)
 {
@@ -1003,23 +1014,28 @@ void Hl2IoBoardTab::restoreSettings(const QMap<QString, QVariant>& settings)
     // Restore N2ADR filter checkbox + RECONCILE the OcMatrix to match.
     //
     // Without the reconcile call, an OcMatrix populated from a prior session
-    // can survive a wrong-key persistence bug (the checkbox state didn't
-    // round-trip until we corrected the key from "hl2/" to "hl2IoBoard/")
-    // — leaving the matrix populated even while the checkbox shows unchecked.
-    // The MCP23008 on the HL2's smallio companion is then driven on every
-    // band change and the user hears relay clicks they can't disable.
+    // can survive a wrong-key persistence bug — leaving the matrix populated
+    // even while the checkbox shows unchecked.  The MCP23008 on the HL2's
+    // smallio companion is then driven on every band change and the user
+    // hears relay clicks they can't disable.
     //
-    // Fire onN2adrToggled() unconditionally (defaulting to False when the key
-    // is absent) so the matrix is always wiped/populated to match the
-    // persisted intent at app start.
+    // hermes-filter-debug Bug 2: only reconcile when the persisted key is
+    // ACTUALLY present.  A missing key means "this radio has never had
+    // N2ADR explicitly set" — leave the matrix and checkbox alone rather
+    // than wiping back to False (which previously turned every Setup-tab
+    // open on a fresh launch into a destructive reset).  Apply via
+    // applyN2adrMatrix (matrix-only) so we don't echo settingChanged back
+    // through HardwarePage::onTabSettingChanged immediately after reading.
     const auto it = settings.constFind(QStringLiteral("n2adrFilter"));
-    const bool checked = (it != settings.constEnd()
-                          && it.value().toString() == QStringLiteral("True"));
+    if (it == settings.constEnd()) {
+        return;
+    }
+    const bool checked = it.value().toString() == QStringLiteral("True");
     {
         QSignalBlocker blocker(m_n2adrFilter);
         m_n2adrFilter->setChecked(checked);
     }
-    onN2adrToggled(checked);
+    applyN2adrMatrix(checked);
 }
 
 // ── Phase 3P-H Task 5c test seams ────────────────────────────────────────────

@@ -816,4 +816,40 @@ void AppSettings::migrateVaxSchemaV1ToV2()
     s.save();
 }
 
+// ---------------------------------------------------------------------------
+// hermes-filter-debug Bug 2: legacy global N2ADR filter → per-MAC migration
+// ---------------------------------------------------------------------------
+
+void AppSettings::migrateLegacyN2adrFilter(AppSettings& s)
+{
+    static constexpr auto kLegacyKey = QLatin1String("hl2IoBoard/n2adrFilter");
+    if (!s.contains(QString(kLegacyKey))) {
+        return;  // no legacy key → nothing to do (also the idempotent path)
+    }
+
+    const QString legacyValue = s.value(QString(kLegacyKey)).toString();
+
+    // Copy to per-MAC for every saved HL2.  Multiple HL2s inherit the same
+    // global value as a starting point; the user can flip individual radios
+    // afterwards and the per-MAC store keeps them independent.
+    int migratedCount = 0;
+    for (const SavedRadio& r : s.savedRadios()) {
+        if (r.info.boardType != HPSDRHW::HermesLite) {
+            continue;
+        }
+        // Don't overwrite an explicitly-set per-MAC value (defensive — a user
+        // who has already flipped this on the new schema should win).
+        if (s.hardwareValue(r.info.macAddress, QString(kLegacyKey)).isValid()) {
+            continue;
+        }
+        s.setHardwareValue(r.info.macAddress, QString(kLegacyKey), legacyValue);
+        ++migratedCount;
+    }
+
+    s.remove(QString(kLegacyKey));
+    qDebug() << "Migrated legacy N2ADR filter setting (" << legacyValue
+             << ") to" << migratedCount << "HL2 saved radio(s)";
+    s.save();
+}
+
 } // namespace NereusSDR

@@ -154,6 +154,11 @@ public:
     // Triggers one manual pass through updateBwDisplay().
     void pollBandwidthNowForTest();
 
+    // hermes-filter-debug Bug 2 test seam: directly trigger the user-toggle
+    // path without finding the (private) m_n2adrFilter QCheckBox.  Drives
+    // settingChanged emission + applyN2adrMatrix in one call.
+    void triggerN2adrToggleForTest(bool checked) { onN2adrToggled(checked); }
+
 signals:
     void settingChanged(const QString& key, const QVariant& value);
 
@@ -174,6 +179,12 @@ private:
     void buildConfigAndRegisterRow(QVBoxLayout* outer);
     void buildStateMachineRow(QVBoxLayout* outer);
     void buildI2cAndBandwidthRow(QVBoxLayout* outer);
+
+    // hermes-filter-debug Bug 2: matrix-mutation half of N2ADR toggling,
+    // separated from settingChanged emission so restoreSettings() can
+    // reapply the matrix without echoing a redundant write back through
+    // the wire() persistence path.
+    void applyN2adrMatrix(bool checked);
 
     void updateStatusBar(bool detected);
     void refreshAllRegisters();

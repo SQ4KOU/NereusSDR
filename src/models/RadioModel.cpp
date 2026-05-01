@@ -232,6 +232,7 @@ warren@wpratt.com
 // TxMicRouter is already included via RadioModel.h (for std::unique_ptr destructor).
 #include "core/MoxController.h"
 #include "core/MicProfileManager.h"
+#include "core/StepAttenuatorController.h"
 #include "core/TwoToneController.h"
 #include "core/accessories/N2adrPreset.h"
 #include "core/TxChannel.h"
@@ -1069,6 +1070,19 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                           << "effectiveBoard=" << static_cast<int>(m_hardwareProfile.effectiveBoard)
                           << "adcCount=" << m_hardwareProfile.adcCount;
 
+    // hermes-filter-debug Bug 1: push the connected board's attenuator range
+    // into StepAttenuatorController so consumers (RxApplet S-ATT spinbox,
+    // GeneralOptionsPage spinboxes) read board-correct min/max.  Default
+    // controller bounds are 0..31; HL2 needs the signed -28..+32 range
+    // (mi0bot setup.cs:16085-16086 [v2.10.3.13-beta2]).  Without this sync,
+    // the spinbox UI clamps any negative dB the user types back to 0 even
+    // though BoardCapabilities advertises the wider range.
+    if (m_stepAttController) {
+        const auto& atten = boardCapabilities().attenuator;
+        m_stepAttController->setMinAttenuation(atten.minDb);
+        m_stepAttController->setMaxAttenuation(atten.maxDb);
+    }
+
     // Load per-MAC OC matrix state so the codec layer (P1/P2 buildCodecContext)
     // reads the correct per-band OC byte from the first C&C frame onwards.
     // Phase 3P-D Task 3.
@@ -1089,9 +1103,16 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // added 13 SWL pin-7 RX entries via that helper — without them
         // the OcOutputsSwlTab would always render blank even after the
         // user enabled N2ADR.
+        // hermes-filter-debug Bug 2: read PER-MAC, not global.  The legacy
+        // global "hl2IoBoard/n2adrFilter" key has already been migrated into
+        // hardware/<mac>/hl2IoBoard/n2adrFilter at app start by
+        // AppSettings::migrateLegacyN2adrFilter (see main.cpp).  This read
+        // matches the write side (Hl2IoBoardTab::onN2adrToggled →
+        // HardwarePage::wire() → setHardwareValue).
         const QString n2adrKey = QStringLiteral("hl2IoBoard/n2adrFilter");
         const bool n2adrOn = AppSettings::instance()
-                                 .value(n2adrKey, QStringLiteral("False"))
+                                 .hardwareValue(info.macAddress, n2adrKey,
+                                                QStringLiteral("False"))
                                  .toString() == QStringLiteral("True");
         applyN2adrPreset(m_ocMatrix, n2adrOn);
         m_ocMatrix.save();
