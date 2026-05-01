@@ -4058,9 +4058,14 @@ QString RadioModel::buildConnectionTooltip() const
                  .arg(connectionProtocolText(),
                       connectionFirmwareText(),
                       connectionSampleRateText());
-    lines += QStringLiteral("  Throughput: \xe2\x96\xb2 %1 Mbps · \xe2\x96\xbc %2 Mbps")
-                 .arg(QString::number(txMbps, 'f', 1),
-                      QString::number(rxMbps, 'f', 1));
+    // Build glyphs via QChar rather than UTF-8 byte-escape strings —
+    // ebe9030 documented that "\xe2\x96…" sequences inside QStringLiteral
+    // get misinterpreted as Latin-1 codepoints on the macOS compile
+    // path, rendering as garbage. QChar(0x25B2) = ▲, QChar(0x25BC) = ▼.
+    lines += QStringLiteral("  Throughput: ") + QChar(0x25B2)
+           + QStringLiteral(" %1 Mbps · ").arg(QString::number(txMbps, 'f', 1))
+           + QChar(0x25BC)
+           + QStringLiteral(" %1 Mbps").arg(QString::number(rxMbps, 'f', 1));
     return lines;
 }
 

@@ -158,11 +158,35 @@ void ConnectionSegment::setRates(double rxMbps, double txMbps)
 
 void ConnectionSegment::setRttMs(int ms)
 {
-    if (m_rttMs == ms) {
+    // Track the latest raw value so callers can read it back for
+    // diagnostics; the painted value comes from smoothedRttMs().
+    m_rttMs = ms;
+
+    // Negative samples ("no rtt available") clear the smoothing queue
+    // — re-attaching produces "— ms" until real samples flow again.
+    if (ms < 0) {
+        m_rttSamples.clear();
+        update();
         return;
     }
-    m_rttMs = ms;
+
+    m_rttSamples.enqueue(ms);
+    while (m_rttSamples.size() > kRttSmoothingWindow) {
+        m_rttSamples.dequeue();
+    }
     update();
+}
+
+int ConnectionSegment::smoothedRttMs() const noexcept
+{
+    if (m_rttSamples.isEmpty()) {
+        return m_rttMs;   // -1 when there's been no real sample yet
+    }
+    qint64 sum = 0;
+    for (int sample : m_rttSamples) {
+        sum += sample;
+    }
+    return static_cast<int>(sum / m_rttSamples.size());
 }
 
 void ConnectionSegment::setAudioFlowState(AudioEngine::FlowState s)
@@ -256,25 +280,47 @@ void ConnectionSegment::paintEvent(QPaintEvent*)
         return;
     }
 
-    // ── 2. ▲ Mbps (tx uplink) ─────────────────────────────────────────────
+    // ── 2. ▲ Mbps — NereusSDR → radio (commands; small, kbps territory) ──
+    // Reads m_txMbps which is the call-site's "client→radio" byte rate
+    // (RadioConnection::txByteRate, recorded per outbound packet at
+    // RadioConnection.cpp:1914 [@HEAD]). Client perspective: ▲ = up
+    // = uploading commands to the radio.
+    //
+    // Glyph is built via QChar(0x25B2) rather than a UTF-8 byte-escape
+    // string passed to QString::asprintf — same fix as ebe9030 applied
+    // to the audio pip. asprintf with a leading "\xe2\x96\xb2" prefix
+    // gets misinterpreted as Latin-1 codepoints on the macOS compile
+    // path, rendering as garbage rather than a triangle.
     p.setPen(QColor("#a0d8a0"));
-    const QString tx = QString::asprintf("\xe2\x96\xb2 %.1f", m_txMbps);   // ▲
+    const QString tx = QChar(0x25B2) + QString::asprintf(" %.1f Mbps", m_txMbps);
     p.drawText(x, textY, tx);
     x += p.fontMetrics().horizontalAdvance(tx) + 10;
 
-    // ── 3. RTT readout — clickable region ─────────────────────────────────
-    p.setPen(rttColor(m_rttMs));
-    const QString rttText = (m_rttMs < 0)
-        ? QStringLiteral("\xe2\x80\x94 ms")               // — ms
-        : QString::asprintf("%d ms", m_rttMs);
+    // ── 3. RTT readout (smoothed) — clickable region ──────────────────────
+    // Uses the rolling-mean smoothedRttMs() so the readout calms instead
+    // of jumping per-ping. Color thresholds operate on the smoothed
+    // value too, so the green/yellow/red transitions don't flicker.
+    const int rttDisplay = smoothedRttMs();
+    p.setPen(rttColor(rttDisplay));
+    // QChar(0x2014) for the em-dash placeholder — same byte-escape
+    // misinterpretation risk as the Mbps glyphs above; build via QChar.
+    const QString rttText = (rttDisplay < 0)
+        ? QChar(0x2014) + QStringLiteral(" ms")
+        : QString::asprintf("%d ms", rttDisplay);
     p.drawText(x, textY, rttText);
     m_lastRttX1 = x;
     m_lastRttX2 = x + p.fontMetrics().horizontalAdvance(rttText);
     x = m_lastRttX2 + 10;
 
-    // ── 4. ▼ Mbps (rx downlink) ───────────────────────────────────────────
+    // ── 4. ▼ Mbps — radio → NereusSDR (I/Q stream; large, Mbps) ──────────
+    // Reads m_rxMbps which is the call-site's "radio→client" byte rate
+    // (RadioConnection::rxByteRate, recorded per inbound packet at
+    // RadioConnection.cpp:1272 [@HEAD]). Client perspective: ▼ = down
+    // = downloading I/Q from the radio.
+    //
+    // QChar(0x25BC) for the same reason as the up-triangle above.
     p.setPen(QColor("#a0d8a0"));
-    const QString rx = QString::asprintf("\xe2\x96\xbc %.1f", m_rxMbps);   // ▼
+    const QString rx = QChar(0x25BC) + QString::asprintf(" %.1f Mbps", m_rxMbps);
     p.drawText(x, textY, rx);
     x += p.fontMetrics().horizontalAdvance(rx) + 10;
 

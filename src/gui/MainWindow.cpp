@@ -301,6 +301,8 @@ warren@wpratt.com
 #include "widgets/StationBlock.h"
 #include "widgets/MetricLabel.h"
 #include "widgets/StatusBadge.h"
+#include "widgets/AdcOverloadBadge.h"
+#include "widgets/OverflowChip.h"
 #include "core/AudioDeviceConfig.h"
 #include "core/AudioEngine.h"
 #include "core/audio/VirtualCableDetector.h"
@@ -345,6 +347,12 @@ warren@wpratt.com
 
 #ifdef Q_OS_MAC
 #include <sys/resource.h>
+// host_processor_info — system-wide CPU ticks for the System CPU toggle.
+// Mirrors Thetis's PerformanceCounter("Processor Information",
+// "% Processor Utility", "_Total") (console.cs:20697-20700) on macOS.
+#include <mach/mach.h>
+#include <mach/mach_host.h>
+#include <mach/processor_info.h>
 #endif
 
 namespace NereusSDR {
@@ -428,7 +436,14 @@ MainWindow::MainWindow(QWidget* parent)
         rateTimer->setInterval(1000);
         connect(rateTimer, &QTimer::timeout, this, [this, seg]() {
             if (auto* conn = m_radioModel->connection()) {
-                seg->setRates(conn->txByteRate(1000), conn->rxByteRate(1000));
+                // setRates(rxMbps, txMbps) — first arg names the "radio→client"
+                // direction (m_rxMbps), second names "client→radio" (m_txMbps).
+                // Earlier revisions passed these reversed, which made the ▲/▼
+                // glyphs read in radio perspective rather than the client's.
+                // Spec §Affordances reads the segment from the operator's
+                // (client's) point of view: ▲ = NereusSDR uploading to radio
+                // (commands), ▼ = radio downloading to NereusSDR (I/Q).
+                seg->setRates(conn->rxByteRate(1000), conn->txByteRate(1000));
             }
         });
         rateTimer->start();
@@ -2360,9 +2375,11 @@ void MainWindow::buildStatusBar()
         "QStatusBar { background: #0a0a14; border-top: 1px solid #203040; }"
         "QStatusBar::item { border: none; }"));
 
-    // Wrapper widget for the full-width custom layout
-    QWidget* barWidget = new QWidget(sb);
-    barWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    // Wrapper widget for the full-width custom layout. Stored as a
+    // member so reapplyRightStripDropPriority() can read its width.
+    m_chromeBarWidget = new QWidget(sb);
+    m_chromeBarWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    QWidget* barWidget = m_chromeBarWidget;   // local alias keeps existing code below tidy
     QHBoxLayout* hbox = new QHBoxLayout(barWidget);
     hbox->setContentsMargins(6, 0, 6, 0);
     hbox->setSpacing(6);
@@ -2519,110 +2536,16 @@ void MainWindow::buildStatusBar()
         }
     });
 
-    // ── ADC Overload indicator ─────────────────────────────────────────────
-    // Status-bar warning label positioned immediately left of the STATION
-    // block. Mirrors Thetis's ucInfoBar Warning() — yellow while any ADC's
-    // hysteresis level > 0, red when any level > 3, hidden after 2 s of
-    // no new overload events (independent auto-hide timer).
-    //
-    // Source-first port of Thetis pollOverloadSyncSeqErr + ucInfoBar.Warning:
-    //   console.cs:21323        adc_names[] = { "ADC0", "ADC1", "ADC2" }
-    //   console.cs:21359-21389  per-ADC level counter + sWarning build
-    //                            (level>0 → append "{adc_names[i]} Overload   ";
-    //                             any level>3 → red_warning)
-    //   ucInfoBar.cs:911-933    Warning(msg, red_warning, show_duration):
-    //                            ForeColor = red ? Red : Yellow;
-    //                            Visible=true; _warningTimer.Start()
-    // [@501e3f5]
-    m_adcOvlLabel = new QLabel(barWidget);
-    m_adcOvlLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: #FFD700; font-size: 12px; font-weight: bold;"
-        " border: none; background: transparent; padding: 0 4px; }"));
-    // 2026-04-30 layout-overflow fix: dropped the previous fixed-width 180 px
-    // reservation because on the 1280-px window it left the layout 112 px
-    // overbudget, causing ADC0 Overload yellow text to render on top of
-    // STATION + dashboard badges. Now: alignment-only, hidden when idle.
-    // STATION will shift slightly when overload fires, accepted trade-off.
-    m_adcOvlLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_adcOvlLabel->setText(QString());
-    m_adcOvlLabel->setVisible(false);   // start hidden; setText handler shows it
-    hbox->addWidget(m_adcOvlLabel);
-    hbox->addSpacing(12);
-
-    // Auto-hide timer mirrors Thetis ucInfoBar._warningTimer — single-shot
-    // 2000 ms, restarts on each overload event so a single hit keeps the
-    // label visible for the full 2 s even after the per-ADC level decays.
-    // Source: ucInfoBar.cs:927-932 + console.cs:21388 show_duration=2000
-    // [@501e3f5]
-    m_adcOvlHideTimer = new QTimer(this);
-    m_adcOvlHideTimer->setSingleShot(true);
-    m_adcOvlHideTimer->setInterval(2000);
-    connect(m_adcOvlHideTimer, &QTimer::timeout, this, [this]() {
-        // Clear text only — label widget stays in the layout at its
-        // 2026-04-30 layout fix: hide the label entirely when idle so it
-        // claims 0 px and doesn't crowd STATION on narrow windows.
-        if (m_adcOvlLabel) {
-            m_adcOvlLabel->setText(QString());
-            m_adcOvlLabel->setVisible(false);
-        }
-    });
-
-    connect(m_stepAttController, &StepAttenuatorController::overloadStatusChanged,
-            this, [this](int /*adc*/, OverloadLevel /*level*/) {
-        // Thetis adc_names table — console.cs:21323 [@501e3f5]
-        static const char* const kAdcNames[3] = { "ADC0", "ADC1", "ADC2" };
-
-        // Build warning text per Thetis console.cs:21359-21389 [@501e3f5]:
-        //   for each ADC: if level > 0, append "{adc_names[i]} Overload   "
-        //   red_warning = any level > 3
-        QString text;
-        bool anyRed = false;
-        for (int i = 0; i < 3; ++i) {
-            const OverloadLevel lvl = m_stepAttController->overloadLevel(i);
-            if (lvl != OverloadLevel::None) {
-                text += QStringLiteral("%1 Overload   ").arg(
-                    QString::fromLatin1(kAdcNames[i]));
-                // console.cs:21369 [@501e3f5] — "turn red after 3 cycles of
-                // overload". Our levelToSeverity() maps level > 3 → Red.
-                if (lvl == OverloadLevel::Red) {
-                    anyRed = true;
-                }
-            }
-        }
-        text = text.trimmed();  // Thetis: sWarning = sWarning.Trim()
-
-        if (text.isEmpty()) {
-            // No ADC currently above level 0. Don't clear the text yet —
-            // let the 2 s auto-hide timer expire so a just-cleared
-            // overload stays visible for the remainder of its 2 s window.
-            return;
-        }
-
-        // ucInfoBar.cs:928 [@501e3f5] — red_warning ? Red : Yellow
-        const QString color = anyRed ? QStringLiteral("#FF3333")
-                                     : QStringLiteral("#FFD700");
-        m_adcOvlLabel->setStyleSheet(
-            QStringLiteral("QLabel { color: %1; font-size: 12px; font-weight: bold;"
-                           " border: none; background: transparent;"
-                           " padding: 0 4px; }").arg(color));
-        m_adcOvlLabel->setText(text);
-        m_adcOvlLabel->setVisible(true);   // show when overload fires
-
-        // Restart auto-hide — matches Thetis: _warningTimer.Stop(); .Start();
-        // (ucInfoBar.cs:927+932 [@501e3f5]).
-        m_adcOvlHideTimer->start();
-
-        // Tooltip: per-ADC detail.
-        QString tip;
-        for (int i = 0; i < 3; ++i) {
-            if (m_stepAttController->overloadLevel(i) != OverloadLevel::None) {
-                if (!tip.isEmpty()) { tip += QStringLiteral("\n"); }
-                tip += QStringLiteral("%1: overload").arg(
-                    QString::fromLatin1(kAdcNames[i]));
-            }
-        }
-        m_adcOvlLabel->setToolTip(tip);
-    });
+    // ── ADC Overload alarm: lives in the right-side strip ──────────────────
+    // Earlier revisions of the Phase 3Q chrome work parked the alarm
+    // between the dashboard and STATION block. That violated layout-
+    // stability rule §278.4 ("STATION sits between two flex:1 spacers.
+    // Activity in the middle or right sections never moves it.")
+    // because the label's text width grew when overload fired and
+    // pushed STATION sideways. The alarm is now an AdcOverloadBadge
+    // built further down with the other right-side status badges,
+    // between PA OK and TX, where its size changes consume the right-
+    // side strip's stretch space rather than the STATION anchor.
 
     hbox->addWidget(m_stationBlock);
 
@@ -2654,45 +2577,68 @@ void MainWindow::buildStatusBar()
     };
 
     // CAT Serial — NYI until Phase 3K; kept as static indicator, no live signal
-    hbox->addWidget(makeIndicator(QStringLiteral("CAT"), QStringLiteral("Off")));
-    hbox->addWidget(makeSep());
+    m_catIndicator = makeIndicator(QStringLiteral("CAT"), QStringLiteral("Off"));
+    hbox->addWidget(m_catIndicator);
+    m_catSep = makeSep();
+    hbox->addWidget(m_catSep);
 
     // TCI — NYI until Phase 3J; kept as static indicator, no live signal
-    hbox->addWidget(makeIndicator(QStringLiteral("TCI"), QStringLiteral("Off")));
-    hbox->addWidget(makeSep());
+    m_tciIndicator = makeIndicator(QStringLiteral("TCI"), QStringLiteral("Off"));
+    hbox->addWidget(m_tciIndicator);
+    m_tciSep = makeSep();
+    hbox->addWidget(m_tciSep);
 
-    // ── sub-PR-8: PSU + PA voltage MetricLabels ───────────────────────────
-    // PSU fires on all radios via RadioConnection::supplyVoltsChanged.
-    // PA (user_adc0) fires only on ORIONMKII / 8000D / 7000DLE via
-    // RadioConnection::userAdc0Changed; hidden by default, shown on first signal.
-    m_psuVoltLabel = new MetricLabel(QStringLiteral("PSU"),
-                                     QStringLiteral("—"), barWidget);
-    hbox->addWidget(m_psuVoltLabel);
-
+    // ── PA / supply voltage (MKII-class boards only) ──────────────────────
+    // Earlier revisions of this section showed a "PSU" widget driven by
+    // the supply_volts (AIN6) channel. Source-first audit against Thetis
+    // [v2.10.3.13] proved that channel is never displayed in Thetis —
+    // computeHermesDCVoltage() exists but has zero callers, and the only
+    // voltage status indicator (toolStripStatusLabel_Volts) reads
+    // _MKIIPAVolts which is convertToVolts(getUserADC0()) — i.e. the PA
+    // drain voltage on AIN3. On a G2 / 8000D / 7000DLE the PA drain IS
+    // the supply voltage minus a small drop, so this single number
+    // covers what the user wants to know.
+    //
+    // This widget is hidden by default and shown on the first
+    // userAdc0Changed signal (which only fires for MKII-class boards
+    // per the gate at P2RadioConnection.cpp:2153-2164). Non-MKII
+    // boards (Hermes, Atlas) get no voltage display, matching Thetis
+    // (HardwareSpecific.HasVolts gate).
     m_paVoltLabel = new MetricLabel(QStringLiteral("PA"),
                                     QStringLiteral("—"), barWidget);
-    m_paVoltLabel->setVisible(false);   // shown only on radios that report user_adc0
+    m_paVoltLabel->setVisible(false);
     hbox->addWidget(m_paVoltLabel);
-    hbox->addWidget(makeSep());
+    m_paVoltLabelSep = makeSep();
+    m_paVoltLabelSep->setVisible(false);
+    hbox->addWidget(m_paVoltLabelSep);
 
     // Wire voltage signals: re-bind on every new connection, reset on disconnect.
     connect(m_radioModel, &RadioModel::connectionStateChanged, this,
             [this](ConnectionState s) {
         if (s != ConnectionState::Connected) {
-            m_psuVoltLabel->setValue(QStringLiteral("—"));
+            const bool wasShown = m_paVoltLabel->isVisible();
             m_paVoltLabel->setVisible(false);
+            if (m_paVoltLabelSep) { m_paVoltLabelSep->setVisible(false); }
+            if (wasShown) {
+                // PA volt widget just disappeared — drops may unwind.
+                // force=true: budget hasn't moved but content width has.
+                reapplyRightStripDropPriority(/*force=*/true);
+            }
         }
         if (auto* conn = m_radioModel->connection()) {
             // conn is a new object on each reconnect — no deduplication needed.
             // Qt::UniqueConnection is not supported for lambda connects anyway.
-            connect(conn, &RadioConnection::supplyVoltsChanged, this,
-                    [this](float v) {
-                m_psuVoltLabel->setValue(QString::asprintf("%.1fV", static_cast<double>(v)));
-            });
             connect(conn, &RadioConnection::userAdc0Changed, this,
                     [this](float v) {
+                const bool wasHidden = !m_paVoltLabel->isVisible();
                 m_paVoltLabel->setValue(QString::asprintf("%.1fV", static_cast<double>(v)));
                 m_paVoltLabel->setVisible(true);
+                if (m_paVoltLabelSep) { m_paVoltLabelSep->setVisible(true); }
+                if (wasHidden) {
+                    // PA volt widget just appeared — recompute drops.
+                    // force=true: budget hasn't moved but content width has.
+                    reapplyRightStripDropPriority(/*force=*/true);
+                }
             });
         }
     });
@@ -2702,7 +2648,8 @@ void MainWindow::buildStatusBar()
     m_cpuMetric = new MetricLabel(QStringLiteral("CPU"),
                                   QStringLiteral("—"), barWidget);
     hbox->addWidget(m_cpuMetric);
-    hbox->addWidget(makeSep());
+    m_cpuMetricSep = makeSep();
+    hbox->addWidget(m_cpuMetricSep);
 
     // ── Phase 3M-0 Task 14: TX Inhibit indicator ─────────────────────────
     // Red "TX INHIBIT" pill — hidden by default; shown when
@@ -2723,19 +2670,114 @@ void MainWindow::buildStatusBar()
     // Signal wiring lands in Task 17 (same as the original QLabel).
     m_paStatusBadge = new StatusBadge(barWidget);
     m_paStatusBadge->setObjectName(QStringLiteral("paStatusBadge"));
-    m_paStatusBadge->setIcon(QStringLiteral("✓"));
+    // SVG-backed icon — earlier revisions used the U+2713 CHECK MARK
+    // glyph, which renders inconsistently across the SF Mono / Menlo /
+    // monospace fallback chain (boxed or kerned wrong on platforms
+    // without SF Mono installed). The SVG is rendered at 14 logical
+    // px and tinted with the variant's foreground color.
+    m_paStatusBadge->setSvgIcon(QStringLiteral(":/icons/badge-check.svg"));
     m_paStatusBadge->setLabel(QStringLiteral("PA"));
     m_paStatusBadge->setVariant(StatusBadge::Variant::On);
     m_paStatusBadge->setToolTip(tr("PA Status — OK"));
     hbox->addWidget(m_paStatusBadge);
-    hbox->addWidget(makeSep());
+    m_paStatusBadgeSep = makeSep();
+    hbox->addWidget(m_paStatusBadgeSep);
+
+    // ── ADC overload alarm — stacked badge between PA OK and TX ───────────
+    // Hidden by default; shown when StepAttenuatorController emits an
+    // overload event, hidden again 2 s after the latest event by the
+    // timer below. The trailing separator is captured + toggled with
+    // the badge so the strip closes seamlessly when the alarm clears
+    // (otherwise we'd leave a dangling "··" run).
+    //
+    // Source-first port of Thetis pollOverloadSyncSeqErr + ucInfoBar.Warning
+    // [@501e3f5]:
+    //   console.cs:21323        adc_names[] = { "ADC0", "ADC1", "ADC2" }
+    //   console.cs:21359-21389  per-ADC level counter; level>0 → warn,
+    //                            any level>3 → red_warning
+    //   ucInfoBar.cs:911-933    Warning(msg, red_warning, show_duration):
+    //                            ForeColor = red ? Red : Yellow;
+    //                            Visible=true; _warningTimer.Start()
+    m_adcOvlBadge = new AdcOverloadBadge(barWidget);
+    m_adcOvlBadge->setObjectName(QStringLiteral("adcOvlBadge"));
+    m_adcOvlBadge->setVisible(false);
+    hbox->addWidget(m_adcOvlBadge);
+    m_adcOvlSep = makeSep();
+    m_adcOvlSep->setVisible(false);
+    hbox->addWidget(m_adcOvlSep);
+
+    // Auto-hide timer mirrors Thetis ucInfoBar._warningTimer — single-shot
+    // 2000 ms, restarts on each overload event so a single hit keeps the
+    // alarm visible for the full 2 s even after the per-ADC level decays.
+    // Source: ucInfoBar.cs:927-932 + console.cs:21388 show_duration=2000
+    // [@501e3f5].
+    m_adcOvlHideTimer = new QTimer(this);
+    m_adcOvlHideTimer->setSingleShot(true);
+    m_adcOvlHideTimer->setInterval(2000);
+    connect(m_adcOvlHideTimer, &QTimer::timeout, this, [this]() {
+        if (m_adcOvlBadge) { m_adcOvlBadge->setVisible(false); }
+        if (m_adcOvlSep)   { m_adcOvlSep->setVisible(false); }
+        // Required width of the strip just shrank — recompute drops.
+        // force=true: budget hasn't moved but content width has.
+        reapplyRightStripDropPriority(/*force=*/true);
+    });
+
+    connect(m_stepAttController, &StepAttenuatorController::overloadStatusChanged,
+            this, [this](int /*adc*/, OverloadLevel /*level*/) {
+        // Thetis adc_names table — console.cs:21323 [@501e3f5]
+        static const char* const kAdcNames[3] = { "ADC0", "ADC1", "ADC2" };
+
+        // Build the alarm state: which ADCs are firing, plus highest
+        // severity. Thetis console.cs:21359-21389 [@501e3f5] —
+        // red_warning is any level > 3; our levelToSeverity() maps that
+        // to OverloadLevel::Red.
+        bool anyRed = false;
+        QString shownAdcs;
+        QString tip;
+        for (int i = 0; i < 3; ++i) {
+            const OverloadLevel lvl = m_stepAttController->overloadLevel(i);
+            if (lvl == OverloadLevel::None) { continue; }
+            if (lvl == OverloadLevel::Red) { anyRed = true; }
+            if (!shownAdcs.isEmpty()) { shownAdcs += QStringLiteral("/"); }
+            shownAdcs += QString::number(i);
+            if (!tip.isEmpty()) { tip += QStringLiteral("\n"); }
+            tip += QStringLiteral("%1: overload").arg(
+                QString::fromLatin1(kAdcNames[i]));
+        }
+
+        if (shownAdcs.isEmpty()) {
+            // No ADC currently above level 0 — let the 2 s auto-hide
+            // timer expire so a just-cleared overload stays visible
+            // for the remainder of its window. Matches Thetis.
+            return;
+        }
+
+        m_adcOvlBadge->setAdcs(shownAdcs);
+        // ucInfoBar.cs:928 [@501e3f5] — red_warning ? Red : Yellow.
+        m_adcOvlBadge->setVariant(anyRed ? AdcOverloadBadge::Variant::Tx
+                                         : AdcOverloadBadge::Variant::Warn);
+        m_adcOvlBadge->setToolTip(tip);
+        m_adcOvlBadge->setVisible(true);
+        if (m_adcOvlSep) { m_adcOvlSep->setVisible(true); }
+
+        // Required width of the strip just grew — drop something else
+        // if the new total exceeds budget.
+        // force=true: budget hasn't moved but content width has.
+        reapplyRightStripDropPriority(/*force=*/true);
+
+        // Restart auto-hide — Thetis: _warningTimer.Stop(); .Start();
+        // (ucInfoBar.cs:927+932 [@501e3f5]).
+        m_adcOvlHideTimer->start();
+    });
 
     // ── sub-PR-8: Canonical TX StatusBadge ───────────────────────────────
     // Solid red (Variant::Tx) when MoxController emits moxStateChanged(true).
     // Dim (Variant::Off) at rest. No flash per design spec.
     m_txStatusBadge = new StatusBadge(barWidget);
     m_txStatusBadge->setObjectName(QStringLiteral("txStatusBadge"));
-    m_txStatusBadge->setIcon(QStringLiteral("●"));
+    // SVG-backed icon — see PA badge note above for rationale. The dot
+    // shape matches the U+25CF BLACK CIRCLE glyph it replaces.
+    m_txStatusBadge->setSvgIcon(QStringLiteral(":/icons/badge-dot.svg"));
     m_txStatusBadge->setLabel(QStringLiteral("TX"));
     m_txStatusBadge->setVariant(StatusBadge::Variant::Off);
     m_txStatusBadge->setToolTip(tr("Receive (MOX off)"));
@@ -2755,29 +2797,36 @@ void MainWindow::buildStatusBar()
         });
     }
 
+    // ── OverflowChip — surfaces drop-list contents when the strip is tight
+    // Sits just before the clock so the "…" appears at the right end of
+    // the strip whenever ≥ 1 right-strip item has been dropped to fit.
+    // Hidden when the drop list is empty.
+    m_overflowChip = new OverflowChip(barWidget);
+    hbox->addWidget(m_overflowChip);
+
     // Time display: stacked UTC + date / local
     // Top row: UTC time (hh:mm:ss UTC)
     // Bottom row: date + local time
     {
-        auto* timeWidget = new QWidget(barWidget);
-        timeWidget->setMinimumWidth(130);
-        QVBoxLayout* tvl = new QVBoxLayout(timeWidget);
+        m_timeWidget = new QWidget(barWidget);
+        m_timeWidget->setMinimumWidth(130);
+        QVBoxLayout* tvl = new QVBoxLayout(m_timeWidget);
         tvl->setContentsMargins(0, 0, 0, 0);
         tvl->setSpacing(0);
 
-        m_utcTimeLabel = new QLabel(timeWidget);
+        m_utcTimeLabel = new QLabel(m_timeWidget);
         m_utcTimeLabel->setStyleSheet(QStringLiteral(
             "QLabel { color: #8aa8c0; font-size: 11px; }"));
         m_utcTimeLabel->setToolTip(QStringLiteral("UTC time"));
         tvl->addWidget(m_utcTimeLabel);
 
-        auto* localDateLabel = new QLabel(timeWidget);
+        auto* localDateLabel = new QLabel(m_timeWidget);
         localDateLabel->setStyleSheet(QStringLiteral(
             "QLabel { color: #607080; font-size: 11px; }"));
         localDateLabel->setToolTip(QStringLiteral("Local date/time"));
         tvl->addWidget(localDateLabel);
 
-        hbox->addWidget(timeWidget);
+        hbox->addWidget(m_timeWidget);
 
         // Combined clock timer — 1s updates for UTC+date+local
         m_clockTimer = new QTimer(this);
@@ -2796,43 +2845,39 @@ void MainWindow::buildStatusBar()
         m_clockTimer->start(1000);
     }
 
-    // ── CPU usage timer (1.5s, macOS getrusage) ───────────────────────────────
-    // Track cumulative CPU time between samples to compute percentage.
-    // From macOS man page: getrusage(RUSAGE_SELF, &ru) gives ru_utime + ru_stime.
+    // ── CPU usage timer ──────────────────────────────────────────────────────
+    // Two sources, user-toggleable via right-click on m_cpuMetric:
+    //   System  (default) — host_processor_info / whole-machine CPU,
+    //                       mirrors Thetis _total_cpu_usage PerformanceCounter.
+    //   App     — getrusage(RUSAGE_SELF), this process only,
+    //                       mirrors Thetis Common.ProcessCPUUsage.
+    // 1 s tick rate matches Thetis cpu_meter_delay (console.cs:20102).
+    // Smoothed value via 0.8/0.2 mix per Thetis console.cs:26224.
 #ifdef Q_OS_MAC
+    // Restore persisted toggle (default System per Thetis default).
+    m_cpuShowSystem = (AppSettings::instance()
+                          .value(QStringLiteral("CpuShowSystem"),
+                                 QStringLiteral("True"))
+                          .toString() == QStringLiteral("True"));
+
+    m_cpuMetric->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_cpuMetric, &QWidget::customContextMenuRequested,
+            this, &MainWindow::onCpuMenuRequested);
+    m_cpuMetric->setToolTip(
+        tr("Right-click to switch between System and App CPU usage"));
+
     m_cpuTimer = new QTimer(this);
-    // Snapshot state for delta calculation
-    struct timeval prevUser{0, 0};
-    struct timeval prevSys{0, 0};
-    qint64 prevWallUs = QDateTime::currentMSecsSinceEpoch() * 1000LL;
-
-    connect(m_cpuTimer, &QTimer::timeout, this,
-            [this, prevUser, prevSys, prevWallUs]() mutable {
-        struct rusage ru{};
-        if (getrusage(RUSAGE_SELF, &ru) != 0) { return; }
-
-        qint64 nowUs = QDateTime::currentMSecsSinceEpoch() * 1000LL;
-        qint64 wallDelta = nowUs - prevWallUs;
-        if (wallDelta <= 0) { return; }
-
-        auto toUs = [](const struct timeval& tv) -> qint64 {
-            return static_cast<qint64>(tv.tv_sec) * 1'000'000LL + tv.tv_usec;
-        };
-        qint64 userDelta = toUs(ru.ru_utime) - toUs(prevUser);
-        qint64 sysDelta  = toUs(ru.ru_stime) - toUs(prevSys);
-        double cpuPct = 100.0 * static_cast<double>(userDelta + sysDelta)
-                        / static_cast<double>(wallDelta);
-
-        prevUser    = ru.ru_utime;
-        prevSys     = ru.ru_stime;
-        prevWallUs  = nowUs;
-
+    connect(m_cpuTimer, &QTimer::timeout, this, [this]() {
+        const double pct = m_cpuShowSystem ? readSystemCpuPercent()
+                                           : readProcessCpuPercent();
+        // Thetis smoothing: smoothed = smoothed*0.8 + new*0.2
+        m_cpuSmoothedPct = m_cpuSmoothedPct * 0.8 + pct * 0.2;
         if (m_cpuMetric) {
-            m_cpuMetric->setValue(
-                QString::asprintf("%.1f%%", cpuPct));
+            m_cpuMetric->setValue(QString::asprintf("%.0f%%",
+                                                    m_cpuSmoothedPct));
         }
     });
-    m_cpuTimer->start(1500);
+    m_cpuTimer->start(1000);
 #endif
 
     // Add the full-width bar widget to the status bar
@@ -3407,6 +3452,239 @@ void MainWindow::wireSliceToSpectrum()
     }
 }
 
+void MainWindow::reapplyRightStripDropPriority(bool force)
+{
+    // No work if the chrome bar isn't built yet (called pre-construction
+    // from a stray signal) or the OverflowChip is missing.
+    if (!m_chromeBarWidget || !m_overflowChip) { return; }
+
+    // Hysteresis: if the strip width hasn't moved past a 30 px window
+    // since our last decision and no content-change site flagged
+    // force=true, return early. Without this gate, resizeEvent fires on
+    // every pixel of a manual drag, and at boundary widths the
+    // setVisible() toggles below re-fire resize at a slightly different
+    // width, looping. Content-change call sites (voltage handler, ADC
+    // overload timer) pass force=true since the budget hasn't moved but
+    // the required width has — the deadband would otherwise skip work
+    // we genuinely need.
+    constexpr int kDeadbandPx = 30;
+    const int gateBudget = m_chromeBarWidget->width();
+    if (!force && m_rightStripSettled
+        && qAbs(gateBudget - m_rightStripLastBudget) < kDeadbandPx) {
+        return;
+    }
+
+    // Drop priority — spec §286-290:
+    //   PA OK → CAT/TCI → PSU/PA → CPU → time
+    // Each entry pairs the primary widget with its trailing separator
+    // so they hide + show together (no dangling "··" runs). Time has
+    // no trailing separator. CAT and TCI are listed as a pair per spec
+    // ("CAT/TCI") and we drop them together to avoid the "TCI but no
+    // CAT" half-state.
+    struct DropEntry {
+        QWidget* primary{nullptr};
+        QWidget* sep{nullptr};
+        QString  name;
+    };
+    const QVector<QVector<DropEntry>> priorityGroups = {
+        // 1. PA OK badge — drops first (least operationally critical
+        //    among the right-strip items per spec; user can still see
+        //    fault state via the dialog or dashboard).
+        {{ m_paStatusBadge, m_paStatusBadgeSep, tr("PA OK") }},
+        // 2. CAT + TCI — drop together as a pair.
+        {
+            { m_catIndicator, m_catSep, tr("CAT") },
+            { m_tciIndicator, m_tciSep, tr("TCI") },
+        },
+        // 3. PA voltage (MKII-class only; widget is hidden on non-MKII boards
+        //    — drop logic skips invisible widgets so this is a no-op there).
+        {{ m_paVoltLabel, m_paVoltLabelSep, tr("PA voltage") }},
+        // 4. CPU.
+        {{ m_cpuMetric, m_cpuMetricSep, tr("CPU") }},
+        // 5. Time — drops last; if it goes the strip is essentially empty.
+        {{ m_timeWidget, nullptr, tr("Clock") }},
+    };
+
+    // Phase 1: restore everything (the window may have grown since the
+    // last pass). Iterate every entry and force visible. The
+    // OverflowChip itself drops its contents to start fresh.
+    for (const auto& group : priorityGroups) {
+        for (const auto& e : group) {
+            if (e.primary) { e.primary->setVisible(true); }
+            if (e.sep)     { e.sep->setVisible(true); }
+        }
+    }
+    m_overflowChip->setDroppedItems({});
+
+    // Force layout to recompute sizeHints with the new visibility state.
+    if (auto* lay = m_chromeBarWidget->layout()) { lay->activate(); }
+
+    auto* hbox = qobject_cast<QHBoxLayout*>(m_chromeBarWidget->layout());
+    if (!hbox) { return; }
+
+    // Helper: total width of all currently-visible non-stretch widgets +
+    // their separators + the layout's spacings + content margins.
+    auto requiredWidth = [hbox]() -> int {
+        int w = 0;
+        const int spacing = hbox->spacing();
+        int visibleCount = 0;
+        for (int i = 0; i < hbox->count(); ++i) {
+            QLayoutItem* it = hbox->itemAt(i);
+            if (auto* widget = it->widget()) {
+                if (widget->isVisibleTo(widget->parentWidget())) {
+                    w += widget->sizeHint().width();
+                    ++visibleCount;
+                }
+            } else if (auto* sp = it->spacerItem()) {
+                // Stretches don't add to required width; fixed spacers do.
+                if (sp->expandingDirections() == Qt::Orientations()) {
+                    w += sp->sizeHint().width();
+                }
+            }
+        }
+        if (visibleCount > 1) {
+            w += spacing * (visibleCount - 1);
+        }
+        const auto m = hbox->contentsMargins();
+        w += m.left() + m.right();
+        return w;
+    };
+
+    const int budget = gateBudget;
+    QStringList dropped;
+
+    // Phase 2: drop priority groups in order until the strip fits.
+    for (const auto& group : priorityGroups) {
+        if (requiredWidth() <= budget) { break; }
+        for (const auto& e : group) {
+            if (e.primary) { e.primary->setVisible(false); }
+            if (e.sep)     { e.sep->setVisible(false); }
+            if (!e.name.isEmpty()) { dropped << e.name; }
+        }
+        if (auto* lay = m_chromeBarWidget->layout()) { lay->activate(); }
+    }
+
+    m_overflowChip->setDroppedItems(dropped);
+    m_rightStripLastBudget = budget;
+    m_rightStripSettled = true;
+}
+
+// ── CPU usage source toggle ──────────────────────────────────────────────────
+// Right-click menu on the CPU MetricLabel — System / App radio choice.
+// Mirrors Thetis's toolStripDropDownButton_CPU with systemToolStripMenuItem
+// and thetisOnlyToolStripMenuItem (console.cs:44230-44247). Persists the
+// choice in AppSettings under "CpuShowSystem".
+void MainWindow::onCpuMenuRequested(const QPoint& localPos)
+{
+    if (!m_cpuMetric) { return; }
+
+    QMenu menu(this);
+    QAction* sysAct = menu.addAction(tr("System"));
+    sysAct->setCheckable(true);
+    sysAct->setChecked(m_cpuShowSystem);
+    QAction* appAct = menu.addAction(tr("App (NereusSDR)"));
+    appAct->setCheckable(true);
+    appAct->setChecked(!m_cpuShowSystem);
+
+    QAction* chosen = menu.exec(m_cpuMetric->mapToGlobal(localPos));
+    if (!chosen) { return; }
+
+    const bool newSys = (chosen == sysAct);
+    if (newSys == m_cpuShowSystem) { return; }
+
+    m_cpuShowSystem = newSys;
+    AppSettings::instance().setValue(
+        QStringLiteral("CpuShowSystem"),
+        newSys ? QStringLiteral("True") : QStringLiteral("False"));
+
+    // Reset delta state and smoothing so the next reading starts cleanly.
+    m_cpuSmoothedPct = 0.0;
+    m_cpuProcPrevWallUs = 0;
+    m_cpuProcPrevUserUs = 0;
+    m_cpuProcPrevSysUs = 0;
+    m_cpuSysPrevTotal = 0;
+    m_cpuSysPrevIdle = 0;
+    m_cpuMetric->setValue(QStringLiteral("—"));
+}
+
+double MainWindow::readProcessCpuPercent()
+{
+    struct rusage ru{};
+    if (getrusage(RUSAGE_SELF, &ru) != 0) { return 0.0; }
+
+    const qint64 nowUs = QDateTime::currentMSecsSinceEpoch() * 1000LL;
+    auto toUs = [](const struct timeval& tv) -> qint64 {
+        return static_cast<qint64>(tv.tv_sec) * 1'000'000LL + tv.tv_usec;
+    };
+    const qint64 userUs = toUs(ru.ru_utime);
+    const qint64 sysUs  = toUs(ru.ru_stime);
+
+    if (m_cpuProcPrevWallUs == 0) {
+        // First-call sentinel — capture baseline, return 0 this round.
+        m_cpuProcPrevWallUs = nowUs;
+        m_cpuProcPrevUserUs = userUs;
+        m_cpuProcPrevSysUs  = sysUs;
+        return 0.0;
+    }
+
+    const qint64 wallDelta = nowUs - m_cpuProcPrevWallUs;
+    if (wallDelta <= 0) { return 0.0; }
+
+    const qint64 cpuDelta = (userUs - m_cpuProcPrevUserUs)
+                          + (sysUs  - m_cpuProcPrevSysUs);
+
+    m_cpuProcPrevWallUs = nowUs;
+    m_cpuProcPrevUserUs = userUs;
+    m_cpuProcPrevSysUs  = sysUs;
+
+    return 100.0 * static_cast<double>(cpuDelta)
+                 / static_cast<double>(wallDelta);
+}
+
+#ifdef Q_OS_MAC
+double MainWindow::readSystemCpuPercent()
+{
+    natural_t                 cpuCount = 0;
+    processor_info_array_t    info     = nullptr;
+    mach_msg_type_number_t    numInfo  = 0;
+
+    if (host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO,
+                            &cpuCount, &info, &numInfo) != KERN_SUCCESS) {
+        return 0.0;
+    }
+
+    quint64 totalNow = 0;
+    quint64 idleNow  = 0;
+    auto* cpus = reinterpret_cast<processor_cpu_load_info_t>(info);
+    for (natural_t i = 0; i < cpuCount; ++i) {
+        for (int s = 0; s < CPU_STATE_MAX; ++s) {
+            totalNow += cpus[i].cpu_ticks[s];
+        }
+        idleNow += cpus[i].cpu_ticks[CPU_STATE_IDLE];
+    }
+
+    vm_deallocate(mach_task_self(),
+                  reinterpret_cast<vm_address_t>(info),
+                  static_cast<vm_size_t>(numInfo) * sizeof(integer_t));
+
+    if (m_cpuSysPrevTotal == 0) {
+        // First-call sentinel — capture baseline, return 0 this round.
+        m_cpuSysPrevTotal = totalNow;
+        m_cpuSysPrevIdle  = idleNow;
+        return 0.0;
+    }
+
+    const quint64 totalDelta = totalNow - m_cpuSysPrevTotal;
+    const quint64 idleDelta  = idleNow  - m_cpuSysPrevIdle;
+    m_cpuSysPrevTotal = totalNow;
+    m_cpuSysPrevIdle  = idleNow;
+
+    if (totalDelta == 0) { return 0.0; }
+    return 100.0 * (1.0 - static_cast<double>(idleDelta)
+                              / static_cast<double>(totalDelta));
+}
+#endif
+
 void MainWindow::resizeEvent(QResizeEvent* event)
 {
     QMainWindow::resizeEvent(event);
@@ -3421,6 +3699,10 @@ void MainWindow::resizeEvent(QResizeEvent* event)
             m_containerManager->updateDockedPositions(m_hDelta, m_vDelta);
         }
     }
+
+    // Re-run progressive drop on the right-side strip. Window grew →
+    // restore items; window shrank → drop more. Spec §286-294.
+    reapplyRightStripDropPriority();
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)

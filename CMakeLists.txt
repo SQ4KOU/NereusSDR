@@ -470,6 +470,12 @@ set(GUI_SOURCES
     src/gui/widgets/MetricLabel.h
     src/gui/widgets/StatusBadge.cpp
     src/gui/widgets/StatusBadge.h
+    src/gui/widgets/AdcOverloadBadge.cpp
+    src/gui/widgets/AdcOverloadBadge.h
+    src/gui/widgets/OverflowChip.cpp
+    src/gui/widgets/OverflowChip.h
+    src/gui/widgets/BadgePair.cpp
+    src/gui/widgets/BadgePair.h
     src/gui/widgets/RxDashboard.cpp
     src/gui/widgets/RxDashboard.h
     src/gui/widgets/StationBlock.cpp

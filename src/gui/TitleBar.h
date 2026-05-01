@@ -63,6 +63,7 @@
 #include "core/AudioEngine.h"
 #include "core/ConnectionState.h"
 
+#include <QQueue>
 #include <QTimer>
 #include <QWidget>
 
@@ -108,6 +109,11 @@ public:
     int                      rttMs() const noexcept { return m_rttMs; }
     AudioEngine::FlowState   audioFlowState() const noexcept { return m_audioFlow; }
 
+    // Smoothed RTT — mean of the last N samples in m_rttSamples (capped
+    // at kRttSmoothingWindow). Returns the latest sample if only one
+    // sample has been seen, or -1 if no samples at all.
+    int                      smoothedRttMs() const noexcept;
+
     // Hit-test rect accessors — populated after the first paintEvent.
     // Exposed publicly so callers can verify click regions (e.g. in tests).
     QRect rttRect() const;
@@ -140,6 +146,14 @@ private:
     AudioEngine::FlowState  m_audioFlow{AudioEngine::FlowState::Dead};
     QTimer                  m_pulseTimer;
     bool                    m_pulseOn{false};
+
+    // RTT smoothing — rolling window of the last N samples. setRttMs()
+    // pushes; the painter and color-threshold both consume the mean
+    // from smoothedRttMs(). Window size of 10 is a "wee bit" calmer
+    // than per-sample painting (one sample arrives ~1/sec) — adjust
+    // kRttSmoothingWindow if the readout becomes lethargic.
+    static constexpr int kRttSmoothingWindow = 10;
+    QQueue<int>           m_rttSamples;
 
     // Stored during paintEvent so mousePressEvent can hit-test without
     // re-computing geometry. Mutable because they are written inside const-

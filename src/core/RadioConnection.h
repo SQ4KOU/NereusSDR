@@ -506,6 +506,13 @@ private:
     qint64 m_pingSentMs{0};
 
     // Voltage conversion helpers.
+    // convertSupplyVolts: 3.3V ADC ref + (4.7+0.82)/0.82 divider — Thetis-faithful
+    //                     port of computeHermesDCVoltage (which is itself dead
+    //                     code in Thetis — see source-first audit notes near the
+    //                     PA volt label declaration in MainWindow.h).
+    // convertMkiiPaVolts: 5.0V ADC ref + (22+1)/1.1 divider — Thetis-faithful
+    //                     port of convertToVolts (the formula Thetis actually
+    //                     uses to display voltage on MkII-class boards).
     static float convertSupplyVolts(quint16 raw);
     static float convertMkiiPaVolts(quint16 raw);
 

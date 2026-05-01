@@ -98,6 +98,8 @@ class RxDashboard;
 class StationBlock;
 class MetricLabel;
 class StatusBadge;
+class AdcOverloadBadge;
+class OverflowChip;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -155,6 +157,35 @@ private:
     void tryAutoReconnect();
     void wireSliceToSpectrum();
 
+    // Re-runs the right-side strip's progressive-drop logic per design
+    // §286-294. Restores all drop candidates first (in case the window
+    // grew), then walks the priority order — PA OK → CAT/TCI →
+    // PSU/PA → CPU → time — hiding items + their trailing separators
+    // until the strip's required width fits the budget. The
+    // OverflowChip is updated with the human names of any items that
+    // were dropped this pass.
+    //
+    // Called from resizeEvent + after any visibility toggle of an
+    // optional widget (ADC badge appearing, PA voltage row showing on
+    // first user_adc0 signal, etc.) since those events change the
+    // required width without firing a window resize.
+    // force=true bypasses the budget-deadband hysteresis. Pass true when
+    // calling from a content-change site (badge visibility toggle, voltage
+    // row hidden/shown) — those don't move the strip's available width but
+    // do change the required width, so the deadband on width alone would
+    // skip the re-evaluation. Resize-driven calls leave force=false.
+    void reapplyRightStripDropPriority(bool force = false);
+
+    // CPU usage helpers — return instantaneous percent since the last call.
+    // First call after a toggle returns 0 (delta-state reset). The timer
+    // applies Thetis-style smoothing on top.
+    double readProcessCpuPercent();   // getrusage(RUSAGE_SELF)
+#ifdef Q_OS_MAC
+    double readSystemCpuPercent();    // host_processor_info — macOS-only
+#endif
+    // Right-click menu on m_cpuMetric — System / App radio choice.
+    void onCpuMenuRequested(const QPoint& localPos);
+
     // Phase 3O Sub-Phase 11 Task 11b — first-launch / startup rescan
     // hook. Scheduled via QTimer::singleShot(0, ...) from the
     // constructor so it runs after the event loop starts and the UI
@@ -185,11 +216,57 @@ private:
     QThread*            m_fftThread{nullptr};
     ClarityController*  m_clarityController{nullptr};
     class StepAttenuatorController* m_stepAttController{nullptr};
-    QLabel* m_adcOvlLabel{nullptr};
-    // 2-second auto-hide timer for the ADC-overload label. Mirrors Thetis's
-    // ucInfoBar._warningTimer: restarts on each overload event, hides the
-    // label when elapsed — independent of the level-decay state tracked in
-    // StepAttenuatorController. Source: Thetis ucInfoBar.cs:927-932 [@501e3f5]
+    // Right-side strip wrapper widget — the inner QWidget hosting the
+    // QHBoxLayout that the buildStatusBar() routine populates. Stored
+    // as a member so reapplyRightStripDropPriority() can read its
+    // available width.
+    QWidget* m_chromeBarWidget{nullptr};
+
+    // Hysteresis state for reapplyRightStripDropPriority — without a
+    // deadband the function re-evaluates on every resize event, and at
+    // boundary widths the show/hide of indicator widgets re-fires
+    // resize, looping. Same flash-class issue as RxDashboard's pair
+    // stacking. See reapplyRightStripDropPriority() for details.
+    int  m_rightStripLastBudget{-1};
+    bool m_rightStripSettled{false};
+
+    // Right-side strip drop targets — captured so the drop-priority
+    // pass can hide them + their trailing separators in priority order.
+    // Each non-separator widget has a paired separator pointer so the
+    // pair hides + shows together (no dangling "··" runs).
+    QWidget* m_catIndicator{nullptr};
+    QLabel*  m_catSep{nullptr};
+    QWidget* m_tciIndicator{nullptr};
+    QLabel*  m_tciSep{nullptr};
+    QLabel*  m_paVoltLabelSep{nullptr};
+    QLabel*  m_paStatusBadgeSep{nullptr};
+    QLabel*  m_cpuMetricSep{nullptr};
+    QWidget* m_timeWidget{nullptr};
+
+    // OverflowChip — "…" pill that surfaces drop-list contents via its
+    // hover tooltip. Hidden when the drop list is empty.
+    OverflowChip* m_overflowChip{nullptr};
+
+    // (Earlier revisions had a "voltage stack" wrapper holding PSU above
+    //  PA. The PSU widget was source-first audited against Thetis 2026-04-30
+    //  and removed — Thetis never displays AIN6/supply_volts. The PA volt
+    //  label below is the sole supply indicator; it lives directly in the
+    //  hbox now with no wrapper.)
+    // ADC overload alarm — stacked "ADCx / OVERLOAD" badge living in the
+    // right-side strip between PA OK and TX. Width changes consume the
+    // strip's right stretch space rather than shifting the STATION
+    // anchor (layout-stability rule §278.4). Hidden when no ADC is in
+    // overload; setVariant() flips between Warn (yellow) / Tx (red) per
+    // Thetis severity rules (ucInfoBar.cs:928 [@501e3f5]).
+    AdcOverloadBadge* m_adcOvlBadge{nullptr};
+    // Trailing separator paired with the badge — hides + shows together
+    // so the strip closes seamlessly when the alarm clears.
+    QLabel* m_adcOvlSep{nullptr};
+    // 2-second auto-hide timer for the ADC-overload alarm. Mirrors
+    // Thetis ucInfoBar._warningTimer: restarts on each overload event,
+    // hides the badge when elapsed — independent of the level-decay
+    // state tracked in StepAttenuatorController. Source:
+    // ucInfoBar.cs:927-932 [@501e3f5]
     QTimer* m_adcOvlHideTimer{nullptr};
 
     // Re-entrancy guard: prevents centerChanged from firing a second
@@ -249,10 +326,26 @@ private:
     QAction* m_actProtocolInfo = nullptr;
 
     // Status bar members (Task 13 / sub-PR-8 restyle)
-    MetricLabel* m_psuVoltLabel{nullptr};   // "PSU  13.8V" — all radios
-    MetricLabel* m_paVoltLabel{nullptr};    // "PA  13.8V"  — ORIONMKII/8000D/7000DLE only
+    MetricLabel* m_paVoltLabel{nullptr};    // "PA  13.8V"  — MKII-class only (Saturn / G2 / 8000D / 7000DLE / OrionMkII / Anvelina Pro 3); Thetis-faithful — see PSU drop note above
     MetricLabel* m_cpuMetric{nullptr};      // "CPU  19.1%"
     QTimer*      m_cpuTimer{nullptr};
+
+    // CPU usage source — System (whole machine) or App (this process).
+    // Thetis equivalent: m_bShowSystemCPUUsage (console.cs:20668), default
+    // true. Right-click on m_cpuMetric pops a menu with the two choices,
+    // matching Thetis's toolStripDropDownButton_CPU. Persisted as
+    // AppSettings "CpuShowSystem" ("True"/"False"). Smoothed reading is
+    // updated via 0.8 * prev + 0.2 * new (matches Thetis console.cs:26224).
+    bool   m_cpuShowSystem{true};
+    double m_cpuSmoothedPct{0.0};
+    // Process-CPU delta state (getrusage). Reset on toggle so the next
+    // reading starts fresh rather than reporting accumulated cross-mode delta.
+    qint64 m_cpuProcPrevWallUs{0};
+    qint64 m_cpuProcPrevUserUs{0};
+    qint64 m_cpuProcPrevSysUs{0};
+    // System-CPU delta state (host_processor_info). Same reset rule as above.
+    quint64 m_cpuSysPrevTotal{0};
+    quint64 m_cpuSysPrevIdle{0};
     QVector<int> m_splitterSizesBeforeHide;  // saved splitter sizes for ☰ toggle
 
     // Status bar safety indicators (Phase 3M-0 Task 14 / sub-PR-8 restyle)

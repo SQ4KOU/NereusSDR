@@ -29,12 +29,24 @@ public:
     explicit StatusBadge(QWidget* parent = nullptr);
 
     // The icon character (e.g. "~", "⨎", "⌁"). Single-character glyphs only.
+    // Prefer setSvgIcon() for new code — fonts vary across platforms and
+    // many monospace fallbacks lack the geometric/dingbat symbols we want
+    // for status iconography. Setting an SVG icon clears any glyph icon
+    // and vice versa.
     void setIcon(const QString& icon);
+    // SVG-resource icon path (e.g. ":/icons/badge-check.svg"). The SVG is
+    // rendered at 14×14 logical px and tinted with the variant's
+    // foreground color via QPainter::CompositionMode_SourceIn — the SVG's
+    // own colors are discarded, so authoring SVGs with any non-zero alpha
+    // works (we recommend solid white for legibility while editing). The
+    // icon re-tints automatically on setVariant().
+    void setSvgIcon(const QString& resourcePath);
     // Label text (e.g. "USB", "2.4k", "NR2").
     void setLabel(const QString& label);
     void setVariant(Variant v);
 
     QString icon() const noexcept { return m_icon; }
+    QString svgIcon() const noexcept { return m_svgIcon; }
     QString label() const noexcept { return m_label; }
     Variant variant() const noexcept { return m_variant; }
 
@@ -47,8 +59,12 @@ protected:
 
 private:
     void applyStyle();
+    void renderSvgIcon();
+    void recomputeMinimumWidth();
+    QColor variantForegroundColor() const;
 
     QString  m_icon;
+    QString  m_svgIcon;
     QString  m_label;
     Variant  m_variant{Variant::Info};
     QLabel*  m_iconLabel{nullptr};

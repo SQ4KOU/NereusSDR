@@ -113,27 +113,54 @@ void RadioConnection::notePingReceived()
 // Voltage signals — supply_volts + user_adc0
 // ---------------------------------------------------------------------------
 
-// Hermes DC voltage formula.
-// From Thetis console.cs computeHermesDCVoltage() [v2.10.3.13]:
+// Hermes DC voltage formula — Thetis-faithful port of console.cs
+// computeHermesDCVoltage() [v2.10.3.13]:
 //   V = (raw / 4095) * 3.3 * ((4.7 + 0.82) / 0.82)
 //       = (raw / 4095) * 3.3 * 6.7317...
 //   where 4.7 kΩ and 0.82 kΩ are the resistor divider values (Hermes schematic).
+//
+// NOTE: in Thetis, computeHermesDCVoltage is defined but has zero callers —
+// no UI surface displays it. We inherit the same dead-code status: the
+// signal is emitted but no widget consumes it (MainWindow's PA volt label
+// reads userAdc0 / convertMkiiPaVolts, matching Thetis behavior). Keeping
+// the function preserves source-first parity if a future surface needs it.
 float RadioConnection::convertSupplyVolts(quint16 raw)
 {
     return (raw / 4095.0f) * 3.3f * (5.52f / 0.82f);
 }
 
 // MKII PA voltage formula.
-// From Thetis console.cs computeMKIIPaVoltage() [v2.10.3.13]:
-//   V = (raw / 4095) * 3.3 * 25.5
+// From Thetis console.cs convertToVolts() [v2.10.3.13]:
+//   float volt_div = (22.0f + 1.0f) / 1.1f;     // 23/1.1 ≈ 20.909
+//   float volts    = (IOreading / 4095.0f) * 5.0f;
+//   volts = volts * volt_div;
+//   return volts;
+// (console.cs:24886-24892 — the readMKIIPAVoltsAmps consumer at
+//  line 24881 is what fills _MKIIPAVolts, which the status bar at
+//  line 26175 displays as "{0:#0.0}V".)
+//
+// Earlier revisions of this function used (raw/4095) * 3.3 * 25.5 —
+// which is wrong on both axes: ADC reference is 5.0V (not 3.3V) and
+// divider is 23/1.1 (not 25.5). The combined error was a 0.805
+// scaling factor — actual 13.8V PA showed as 11.0V. Bug caught
+// 2026-04-30 against a live ANAN-G2.
+//
 // Applies to ORIONMKII / ANAN-8000D / ANAN-7000DLE / ANAN-G2 PA drain sense.
 float RadioConnection::convertMkiiPaVolts(quint16 raw)
 {
-    return (raw / 4095.0f) * 3.3f * 25.5f;
+    constexpr float kVoltDiv = (22.0f + 1.0f) / 1.1f;   // (R1 + R2) / R2
+    constexpr float kAdcRef  = 5.0f;
+    return (raw / 4095.0f) * kAdcRef * kVoltDiv;
 }
 
 void RadioConnection::handleSupplyRaw(quint16 raw)
 {
+    // Thetis-faithful: applies the Hermes formula (3.3V × 6.73). In
+    // Thetis the equivalent function is dead code — no UI displays
+    // supply_volts. We emit anyway for completeness; consumers (if any)
+    // are responsible for understanding that AIN6 on MkII-class boards
+    // does NOT report the user's main 13.8V supply (use userAdc0 / the
+    // PA volt label for that — that's what Thetis displays).
     const float v = convertSupplyVolts(raw);
     if (qAbs(v - m_lastSupplyVolts) < 0.05f) { return; }
     m_lastSupplyVolts = v;

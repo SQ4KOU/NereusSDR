@@ -195,8 +195,12 @@ AntennaAlexAlex2Tab::AntennaAlexAlex2Tab(RadioModel* model, QWidget* parent)
     // Right-aligned "Currently selected" label — Phase H Task 5a.
     // Driven from updateActiveLeds() which mirrors setAlex2HPF/LPF
     // range-match logic (Thetis console.cs:7060-7299) [@501e3f5].
+    // Glyphs built via QChar — \xe2\x80\x94 (em-dash) and \xc2\xb7 (middle
+    // dot) byte-escapes inside QStringLiteral / tr() get misinterpreted
+    // as Latin-1 codepoints on the macOS compile path (ebe9030 docs).
     m_selectedLabel = new QLabel(
-        tr("Currently selected: HPF \xe2\x80\x94 \xc2\xb7 LPF \xe2\x80\x94"),
+        tr("Currently selected: HPF %1 %2 LPF %3")
+            .arg(QChar(0x2014), QChar(0x00B7), QChar(0x2014)),
         statusFrame);
     m_selectedLabel->setStyleSheet(
         QStringLiteral("QLabel { color: palette(mid); font-size: 10px; }"));
@@ -350,8 +354,11 @@ AntennaAlexAlex2Tab::AntennaAlexAlex2Tab(RadioModel* model, QWidget* parent)
 
     // Note: no master toggles for LPF — RX-only path.
     // Source: Thetis panelAlex2LPFControl has no master toggle checkboxes [@501e3f5]
+    // Em-dash via QChar — see ebe9030 fix rationale.
     auto* lpfNote = new QLabel(
-        QStringLiteral("<i>(no master toggles \xe2\x80\x94 RX-only path)</i>"), lpfGroup);
+        QStringLiteral("<i>(no master toggles ") + QChar(0x2014)
+            + QStringLiteral(" RX-only path)</i>"),
+        lpfGroup);
     lpfNote->setWordWrap(true);
     lpfVBox->addWidget(lpfNote);
 
@@ -699,13 +706,13 @@ void AntennaAlexAlex2Tab::updateActiveLeds()
 
     // Update the selected-filter summary label.
     if (m_selectedLabel) {
-        QString hpfText = tr("\xe2\x80\x94");  // em-dash
+        QString hpfText = QChar(0x2014);  // em-dash, via QChar — see ebe9030 docs
         if (hpfIdx == kBypassLedIndex) {
             hpfText = tr("BP");
         } else if (hpfIdx >= 0 && static_cast<std::size_t>(hpfIdx) < hpfBands().size()) {
             hpfText = tr(hpfBands()[hpfIdx].label);
         }
-        QString lpfText = tr("\xe2\x80\x94");
+        QString lpfText = QChar(0x2014);
         if (lpfIdx >= 0 && static_cast<std::size_t>(lpfIdx) < lpfBands().size()) {
             lpfText = tr(lpfBands()[lpfIdx].label);
         }
