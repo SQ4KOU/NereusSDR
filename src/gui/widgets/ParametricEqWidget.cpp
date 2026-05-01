@@ -633,6 +633,12 @@ QVector<double> ParametricEqWidget::getLogFrequencyTicks(const QRect& plot) cons
 //   - Color.FromArgb(a,r,g,b) -> QColor(r,g,b,a)  -- argument order differs!
 //   - Math.Round -> std::round
 //   - DateTime.UtcNow -> QDateTime::currentMSecsSinceEpoch()
+//   - Qt QRect::right()/bottom() return x+width-1/y+height-1 (last pixel,
+//     inclusive) whereas WinForms Rectangle.Right/Bottom return x+width
+//     (exclusive).  Hit boxes + pixel placement are internally consistent
+//     against Qt semantics, so user behavior is preserved -- but a side-by-
+//     side screenshot vs Thetis on Windows will show a 1-px shift on the
+//     right + bottom edges of the plot rect.  Not a bug; document only.
 // =================================================================
 
 // From Thetis ucParametricEq.cs:2887-2891 [v2.10.3.13].
