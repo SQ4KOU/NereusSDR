@@ -823,7 +823,18 @@ void P1RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
     // Source: console.cs:6830-6942 [@501e3f5]
     // Upstream inline attribution preserved verbatim:
     //   :6830  || (HardwareSpecific.Hardware == HPSDRHW.HermesIII)) //DK1HLM
-    if (receiverIndex == 0 && m_caps && m_caps->hasAlexFilters) {
+    //
+    // HL2 carve-out: HL2 has hasAlexFilters=false (no Alex card slot) but
+    // mi0bot's WriteMainLoop_HL2 still emits these bits at bank 10 C3/C4
+    // (networkproto1.c:1086-1093 [v2.10.3.14-beta1]) — the HL2 firmware
+    // and the optional N2ADR I/O board read them to engage the band-correct
+    // LPF/HPF.  Without them the HL2 PA can't safely engage on TX and the
+    // T/R relay flutters.  Compute the bits for HL2 too, gated on the
+    // hardware profile so other "no Alex" boards (Atlas, basic Hermes)
+    // remain byte-identical to pre-fix behavior.
+    if (receiverIndex == 0
+        && (   (m_caps && m_caps->hasAlexFilters)
+            || m_hardwareProfile.model == HPSDRModel::HERMESLITE)) {
         m_alexHpfBits = codec::alex::computeHpf(double(frequencyHz) / 1e6);
     }
 }
@@ -833,7 +844,12 @@ void P1RadioConnection::setTxFrequency(quint64 frequencyHz)
     m_txFreqHz = frequencyHz;
     // TX freq drives Alex LPF — recompute on every change.
     // Source: console.cs:7168-7234 [@501e3f5]
-    if (m_caps && m_caps->hasAlexFilters) {
+    //
+    // HL2 carve-out: see setReceiverFrequency above.  mi0bot
+    // networkproto1.c:1090-1093 [v2.10.3.14-beta1] emits these bits on HL2
+    // even though it has no Alex card.
+    if (   (m_caps && m_caps->hasAlexFilters)
+        || m_hardwareProfile.model == HPSDRModel::HERMESLITE) {
         m_alexLpfBits = codec::alex::computeLpf(double(frequencyHz) / 1e6);
     }
 }
@@ -1690,7 +1706,16 @@ CodecContext P1RadioConnection::buildCodecContext() const
     for (int i = 0; i < 3; ++i) { ctx.rxPreamp[i]   = m_rxPreamp[i]; }
     for (int i = 0; i < 3; ++i) { ctx.dither[i]     = m_dither[i]; }
     for (int i = 0; i < 3; ++i) { ctx.random[i]     = m_random[i]; }
-    // HL2-only fields default to 0 / false; populated by Phase E.
+    // HL2-only fields.  ptt_hang and tx_latency MUST be the mi0bot HL2
+    // defaults (12 and 20) — without them the HL2 firmware drops the PTT
+    // immediately on any TX-buffer underrun and the T/R relay flutters.
+    // Source: mi0bot ChannelMaster/netInterface.c:1713-1714 [v2.10.3.14-beta1]
+    //   prn->tx[i].tx_latency = 20;  // MI0BOT: HL2
+    //   prn->tx[i].ptt_hang   = 12;  // MI0BOT: HL2
+    if (m_hardwareProfile.model == HPSDRModel::HERMESLITE) {
+        ctx.hl2PttHang   = 12;   // 5-bit field (bank 17 C3): 12 frames hang
+        ctx.hl2TxLatency = 20;   // 7-bit field (bank 17 C4): 20 sample latency
+    }
     return ctx;
 }
 

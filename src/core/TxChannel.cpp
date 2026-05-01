@@ -595,14 +595,27 @@ void TxChannel::setRunning(bool on)
     }
 
     if (on) {
-        // Activate cfir: custom CIC FIR filter required for Protocol 2 output.
-        // From Thetis wdsp/cfir.c:233-238 [v2.10.3.13] — SetTXACFIRRun.
-        // From Thetis cmaster.cs:526-527 [v2.10.3.13]:
-        //   // setup CFIR to run; it will always be ON with new protocol firmware
-        //   WDSP.SetTXACFIRRun(txch, true);
-        // (Diagnostic test confirmed: disabling cfir does NOT change the gen1
-        //  output amplitude — bench bug isn't in cfir.  See bench-handoff doc.)
-        SetTXACFIRRun(m_channelId, 1);   // cfir.c:233 [v2.10.3.13]
+        // CFIR is the CIC-compensating FIR filter that exists in the TXA
+        // pipeline AFTER gen1 (TUNE tone insertion).  It is REQUIRED only for
+        // Protocol 2's higher sample rates / multi-stage CIC interpolators
+        // and MUST be OFF on Protocol 1.  Authoritative source:
+        //   Thetis ChannelMaster/cmaster.cs:525-533 [v2.10.3.14]:
+        //     if (CurrentRadioProtocol == RadioProtocol.USB) //p1
+        //         WDSP.SetTXACFIRRun(txch, false);
+        //     else
+        //         WDSP.SetTXACFIRRun(txch, true);
+        //
+        // Critical bug fix (2026-05-01): the prior code unconditionally turned
+        // CFIR ON, copying the P2-side citation (cmaster.cs:531-533) without
+        // the protocol gate.  On HL2 (P1, 48 kHz native) the unmatched CFIR
+        // attenuated the post-gen tone by ~13 dB at the wire — bench-measured
+        // TX I/Q peak was 0.214 vs Thetis bench peak of 0.98 at the same
+        // mag=0.99999 tune-tone setting, leading to a "very weak signal on
+        // nearby receiver" symptom and ~3 W meter reading on HL2+.
+        //
+        // For 3M-1 we only support P1; explicitly turn CFIR OFF.  When P2 TX
+        // is added (3F / 3M-4), gate this on the connection's protocol.
+        SetTXACFIRRun(m_channelId, 0);   // P1: CFIR OFF — matches Thetis cmaster.cs:527
 
         // Turn the TXA channel ON: state=1, dmode=0 (immediate start, no flush).
         // From Thetis console.cs:29595 [v2.10.3.13] — RX→TX transition:
@@ -615,9 +628,8 @@ void TxChannel::setRunning(bool on)
         //   (preceded by: Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE [console.cs:29603])
         SetChannelState(m_channelId, 0, 1);   // channel.c:259 [v2.10.3.13]
 
-        // Deactivate cfir after channel drain so no residual samples process.
-        // From Thetis wdsp/cfir.c:233-238 [v2.10.3.13] — SetTXACFIRRun.
-        SetTXACFIRRun(m_channelId, 0);   // cfir.c:233 [v2.10.3.13]
+        // CFIR was already OFF for P1; explicit OFF here is a no-op safety.
+        SetTXACFIRRun(m_channelId, 0);
     }
 #endif // HAVE_WDSP
 }

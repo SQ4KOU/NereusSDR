@@ -403,6 +403,7 @@ private:
     // the factor changes (matches netInterface.c:1310).
     int     m_micDecimationFactor{1};
     int     m_micDecimationCount{0};
+
     quint64 m_rxFreqHz[7]{};
     quint64 m_txFreqHz{0};
     bool    m_mox{false};
