@@ -305,7 +305,15 @@ signals:
     void detectedChanged(bool detected);
     // Emitted when applyI2cReadResponse() stores a new EP6 response.
     // Consumers: Phase 3P-E Task 3 state machine, HL2 I/O diagnostics page.
+    //
+    // `returnedSubAddress` is the sub-address (register byte) of the
+    // matching outstanding read — popped from the pending-read FIFO at
+    // emit time.  Consumers that need to disambiguate two reads from the
+    // same device (e.g. REG_FIRMWARE_MAJOR / REG_FIRMWARE_MINOR both at
+    // I2C addr 0x1d) must gate on `(returnedAddress, returnedSubAddress)`,
+    // not just `returnedAddress`.  Phase 3L Codex P2 fix.
     void i2cReadResponseReceived(quint8 returnedAddress,
+                                 quint8 returnedSubAddress,
                                  quint8 b0, quint8 b1, quint8 b2, quint8 b3);
 
     // Diagnostic tap: emitted from the HL2 codec just after it composes the

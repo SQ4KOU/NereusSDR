@@ -228,11 +228,13 @@ Hl2IoBoardTab::Hl2IoBoardTab(RadioModel* model, QWidget* parent)
                         .toUpper());
             });
     connect(m_ioBoard, &IoBoardHl2::i2cReadResponseReceived,
-            this, [this](quint8 retAddr, quint8 b0, quint8 b1, quint8 b2, quint8 b3) {
+            this, [this](quint8 retAddr, quint8 retSubAddr,
+                         quint8 b0, quint8 b1, quint8 b2, quint8 b3) {
                 appendI2cLogEntry(
-                    QStringLiteral("[%1]  IN ret=%2 C1=%3 C2=%4 C3=%5 C4=%6")
+                    QStringLiteral("[%1]  IN ret=%2 sub=%3 C1=%4 C2=%5 C3=%6 C4=%7")
                         .arg(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss.zzz")))
-                        .arg(retAddr, 2, 16, QLatin1Char('0'))
+                        .arg(retAddr,    2, 16, QLatin1Char('0'))
+                        .arg(retSubAddr, 2, 16, QLatin1Char('0'))
                         .arg(b0, 2, 16, QLatin1Char('0'))
                         .arg(b1, 2, 16, QLatin1Char('0'))
                         .arg(b2, 2, 16, QLatin1Char('0'))

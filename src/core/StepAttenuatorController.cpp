@@ -186,7 +186,13 @@ void StepAttenuatorController::setBand(Band band)
 
 void StepAttenuatorController::setAttenuation(int dB, int rx)
 {
-    if (dB < 0) { dB = 0; }
+    // Clamp to the active board's signed range.  HL2 advertises
+    // [m_minAttDb=-28, m_maxAttDb=+32] (mi0bot setup.cs:1087-1088
+    // [v2.10.3.13-beta2]); legacy ANAN/Hermes boards keep m_minAttDb=0
+    // so behaviour is unchanged for them.  Without honouring m_minAttDb
+    // here, any negative HL2 value selected in the RX UI gets snapped
+    // back to 0 before reaching P1RadioConnection — Codex P1 in PR #157.
+    if (dB < m_minAttDb) { dB = m_minAttDb; }
     if (dB > m_maxAttDb) { dB = m_maxAttDb; }
     if (m_attDb == dB) { return; }
     m_attDb = dB;

@@ -383,7 +383,8 @@ void Hl2OptionsTab::buildI2cControl(QWidget* parent)
     // Push read responses into the byte labels as they arrive.
     if (m_ioBoard) {
         connect(m_ioBoard, &IoBoardHl2::i2cReadResponseReceived, this,
-                [this](quint8 /*retAddr*/, quint8 b0, quint8 b1, quint8 b2, quint8 b3) {
+                [this](quint8 /*retAddr*/, quint8 /*retSubAddr*/,
+                       quint8 b0, quint8 b1, quint8 b2, quint8 b3) {
                     auto fmt = [](quint8 v) {
                         return QStringLiteral("%1").arg(v, 2, 16, QLatin1Char('0'))
                                                    .toUpper();

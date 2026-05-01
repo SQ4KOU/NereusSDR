@@ -249,7 +249,10 @@ private:
     };
     Hl2ProbeStep m_hl2ProbeStep{Hl2ProbeStep::Idle};
     bool         m_hl2ProbeWired{false};   // one-shot signal-connect guard
-    void hl2ProbeAdvance();   // dispatch next step
+    // Dispatch next step.  retAddr/retSubAddr identify the I2C read whose
+    // response just arrived (zero+zero from the initial bootstrap call so
+    // the Idle state's transition fires).  Phase 3L Codex P2 fix on PR #157.
+    void hl2ProbeAdvance(quint8 retAddr, quint8 retSubAddr);
 
     // hl2CheckBandwidthMonitor — drives the HermesLiteBandwidthMonitor tick.
     //   When m_bwMonitor is wired, delegates to m_bwMonitor->tick() which runs

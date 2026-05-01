@@ -2500,20 +2500,30 @@ void P1RadioConnection::hl2SendIoBoardInit()
     // IoBoardHl2::i2cReadResponseReceived signal.  Source: [@c26a8a4]
     m_hl2ProbeStep = Hl2ProbeStep::Idle;
     if (!m_hl2ProbeWired) {
-        connect(m_ioBoard, &IoBoardHl2::i2cReadResponseReceived,
-                this, [this](quint8, quint8, quint8, quint8, quint8) {
-                    hl2ProbeAdvance();
+        // Gate the step machine on (retAddr, retSubAddr) matching the
+        // expected (deviceAddr, register) for the current step.  Without
+        // this gate, unrelated I2C reads (e.g. from the new Hl2OptionsTab
+        // manual R/W tool, or NEREUS_HL2_I2C_SCAN traffic) would advance
+        // the probe out of order — false aborts or misleading "init
+        // complete" before the intended registers were probed.  Codex P2
+        // on PR #157.
+        connect(m_ioBoard, &IoBoardHl2::i2cReadResponseReceived, this,
+                [this](quint8 retAddr, quint8 retSubAddr,
+                       quint8, quint8, quint8, quint8) {
+                    hl2ProbeAdvance(retAddr, retSubAddr);
                 });
         m_hl2ProbeWired = true;
     }
-    hl2ProbeAdvance();
+    // Initial dispatch: bootstrap from Idle.  No retAddr/retSubAddr
+    // because no read has fired yet — Idle ignores them.
+    hl2ProbeAdvance(/*retAddr=*/0, /*retSubAddr=*/0);
 
     if (qEnvironmentVariableIntValue("NEREUS_HL2_I2C_SCAN") != 0) {
         requestI2cBusScan();
     }
 }
 
-void P1RadioConnection::hl2ProbeAdvance()
+void P1RadioConnection::hl2ProbeAdvance(quint8 retAddr, quint8 retSubAddr)
 {
     if (!m_caps || !m_caps->hasIoBoardHl2 || !m_ioBoard) { return; }
     using Reg = IoBoardHl2::Register;
@@ -2539,6 +2549,13 @@ void P1RadioConnection::hl2ProbeAdvance()
         m_ioBoard->enqueueI2c(txn);
     };
 
+    // Helper: did the just-received response match the read this step
+    // is waiting on?  If not, the response belongs to some other consumer
+    // (manual R/W tool, bus scan) and the step machine must NOT advance.
+    auto matches = [retAddr, retSubAddr](quint8 wantAddr, quint8 wantSub) {
+        return retAddr == wantAddr && retSubAddr == wantSub;
+    };
+
     switch (m_hl2ProbeStep) {
         case Hl2ProbeStep::Idle:
             qCInfo(lcConnection) << "HL2: probe step 1 — reading HW version";
@@ -2547,6 +2564,10 @@ void P1RadioConnection::hl2ProbeAdvance()
             return;
 
         case Hl2ProbeStep::WaitingForHwVersion:
+            if (!matches(IoBoardHl2::kI2cAddrHwVersion, 0)) {
+                // Stray response (likely from manual R/W tool) — ignore.
+                return;
+            }
             // Response landed.  IoBoardHl2 has already routed C4 → setHardwareVersion()
             // and called setDetected() if it matched 0xF1.  If not detected,
             // abort the probe — mi0bot does the same (console.cs:25810).
@@ -2564,6 +2585,10 @@ void P1RadioConnection::hl2ProbeAdvance()
             return;
 
         case Hl2ProbeStep::WaitingForFwMajor:
+            if (!matches(IoBoardHl2::kI2cAddrGeneral,
+                         static_cast<quint8>(Reg::REG_FIRMWARE_MAJOR))) {
+                return;
+            }
             qCInfo(lcConnection) << "HL2: FW major received — reading FW minor";
             enqueueRead(IoBoardHl2::kI2cAddrGeneral,
                         static_cast<quint8>(Reg::REG_FIRMWARE_MINOR));
@@ -2571,6 +2596,10 @@ void P1RadioConnection::hl2ProbeAdvance()
             return;
 
         case Hl2ProbeStep::WaitingForFwMinor:
+            if (!matches(IoBoardHl2::kI2cAddrGeneral,
+                         static_cast<quint8>(Reg::REG_FIRMWARE_MINOR))) {
+                return;
+            }
             // Mi0bot writes REG_CONTROL=1 to enable the board after version check.
             // Source: console.cs:25831 — `ioBoard.writeRequest(REG_CONTROL, 1);`
             qCInfo(lcConnection) << "HL2: FW minor received — writing REG_CONTROL=1 (init)";
