@@ -38,8 +38,6 @@
 #include <QTest>
 #include <QWheelEvent>
 
-#include <cmath>
-
 // Tester shim: friended in ParametricEqWidget.h so this subclass can
 // reach private state for hand-computed expecteds.  We keep public
 // access tight: only what the test needs.
