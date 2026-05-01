@@ -15,9 +15,15 @@
 //   2026-04-30 — Reimplemented in C++20/Qt6 for NereusSDR by
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                 via Anthropic Claude Code.  Phase 3M-3a-ii follow-up
-//                 sub-PR Batch 1: skeleton + EqPoint/EqJsonState classes
-//                 + default 18-color palette + ctor with verbatim
-//                 ucParametricEq.cs:360-447 defaults.
+//                 sub-PR Batches 1-5: full ucParametricEq Qt6 port --
+//                 skeleton + EqPoint/EqJsonState classes + default 18-
+//                 color palette + ctor with verbatim ucParametricEq.cs:
+//                 360-447 defaults (B1), axis math + ordering + reset
+//                 (B2), paintEvent + 10 draw helpers + bar chart timer
+//                 (B3), mouse + wheel + 6 signals (B4), JSON marshal +
+//                 public API + point-edit (B5).  Widget is feature-
+//                 complete; Tasks 8 + 9 wire it into TxCfcDialog and
+//                 TxEqDialog.
 // =================================================================
 
 /*  ucParametricEq.cs

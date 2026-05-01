@@ -102,6 +102,7 @@ private slots:
     void loadFromJsonRejectsBandCountMismatch();
     void loadFromJsonRejectsBadFreqRange();
     void loadFromJsonResetPathOnBandCountChange();
+    void loadFromJsonProducesIdenticalReSerialization();
 };
 
 // -- Helpers --
@@ -305,7 +306,13 @@ void TestParametricEqJson::loadFromJsonRoundTripPreservesData() {
 void TestParametricEqJson::loadFromJsonRetainsExistingBandIds() {
     ParametricEqJsonTester w;
 
-    // Snapshot existing bandIds before the load.
+    // Mutate two bandIds to sentinel values so we can prove loadFromJson
+    // preserves them when band_count matches (rather than re-running
+    // resetPointsDefault which would assign 1..N).
+    w.pointsMut()[3].bandId = 999;
+    w.pointsMut()[7].bandId = 1234;
+
+    // Snapshot existing bandIds (post-mutation) before the load.
     QVector<int> originalBandIds;
     for (const auto& p : w.pointsConst()) originalBandIds.append(p.bandId);
     QCOMPARE(originalBandIds.size(), 10);
@@ -326,10 +333,15 @@ void TestParametricEqJson::loadFromJsonRetainsExistingBandIds() {
 
     QVERIFY(w.loadFromJson(json));
 
-    // bandIds must be preserved verbatim.
+    // bandIds must be preserved verbatim, including the sentinel mutations.
     for (int i = 0; i < w.pointCount(); ++i) {
         QCOMPARE(w.pointsConst().at(i).bandId, originalBandIds.at(i));
     }
+    // Spot-check the sentinels directly -- proves loadFromJson did NOT
+    // accidentally re-run resetPointsDefault (which would have written
+    // bandId = idx + 1 = 4 and 8 here).
+    QCOMPARE(w.pointsConst().at(3).bandId, 999);
+    QCOMPARE(w.pointsConst().at(7).bandId, 1234);
 }
 
 // Garbage JSON -> false, no crash.
@@ -523,6 +535,24 @@ void TestParametricEqJson::loadFromJsonResetPathOnBandCountChange() {
     for (int i = 0; i < 5; ++i) {
         QCOMPARE(w.pointsConst().at(i).bandId, i + 1);
     }
+}
+
+// Strongest round-trip invariant: load(save(state)) re-serializes byte-
+// identical to the original save.  Catches any sneaky precision drift
+// hiding in the load path (e.g. an extra clamp / round / coercion that
+// the saver doesn't reverse).
+void TestParametricEqJson::loadFromJsonProducesIdenticalReSerialization() {
+    ParametricEqJsonTester saver;
+    saver.seedBandsLinear();
+    saver.setGlobalGainDirect(4.7);
+    saver.setParametricEq(true);
+    QString json1 = saver.saveToJson();
+
+    ParametricEqJsonTester loader;
+    QVERIFY(loader.loadFromJson(json1));
+
+    QString json2 = loader.saveToJson();
+    QCOMPARE(json2, json1);  // byte-identical
 }
 
 QTEST_MAIN(TestParametricEqJson)
