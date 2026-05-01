@@ -170,10 +170,14 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
     }
 
     if (m_ctrl) {
-        // Re-range setup spinboxes from board capabilities (may be 61 dB).
-        int maxDb = m_ctrl->maxAttenuation();
-        m_spnRx1StepAttValue->setRange(0, maxDb);
-        m_spnRx2StepAttValue->setRange(0, maxDb);
+        // hermes-filter-debug Bug 1: pull BOTH bounds from the controller —
+        // HL2 uses the signed -28..+32 range (mi0bot setup.cs:16085-16086
+        // [v2.10.3.13-beta2]).  The previous hardcoded `0` minimum clamped
+        // any HL2 negative-dB value the user typed back to zero.
+        const int minDb = m_ctrl->minAttenuation();
+        const int maxDb = m_ctrl->maxAttenuation();
+        m_spnRx1StepAttValue->setRange(minDb, maxDb);
+        m_spnRx2StepAttValue->setRange(minDb, maxDb);
         connectController();
     }
 }
@@ -205,6 +209,18 @@ void GeneralOptionsPage::onCurrentRadioChanged(const NereusSDR::RadioInfo& /*inf
 {
     if (model()) {
         setReceiveOnlyVisible(model()->boardCapabilities().isRxOnlySku);
+
+        // hermes-filter-debug Bug 1: re-range the step-att spinboxes when
+        // the connected board changes (e.g. user switches HL2 ↔ ANAN-G2
+        // without restarting Setup).  The controller min/max are pushed
+        // by RadioModel::connectToRadio from boardCapabilities().attenuator
+        // before this signal fires.
+        if (m_ctrl && m_spnRx1StepAttValue && m_spnRx2StepAttValue) {
+            const int minDb = m_ctrl->minAttenuation();
+            const int maxDb = m_ctrl->maxAttenuation();
+            m_spnRx1StepAttValue->setRange(minDb, maxDb);
+            m_spnRx2StepAttValue->setRange(minDb, maxDb);
+        }
     }
 }
 

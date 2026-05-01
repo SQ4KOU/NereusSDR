@@ -206,6 +206,12 @@ int main(int argc, char* argv[])
     // Phase 3O schema migration — must run before any AppSettings reads.
     NereusSDR::AppSettings::migrateVaxSchemaV1ToV2();
 
+    // hermes-filter-debug Bug 2: legacy global "hl2IoBoard/n2adrFilter" key
+    // → per-MAC scope under hardware/<mac>/hl2IoBoard/n2adrFilter for every
+    // saved HL2.  Idempotent.
+    NereusSDR::AppSettings::migrateLegacyN2adrFilter(
+        NereusSDR::AppSettings::instance());
+
     // Restore logging category toggles from settings
     NereusSDR::LogManager::instance().loadSettings();
 

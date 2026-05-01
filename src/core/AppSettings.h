@@ -302,6 +302,21 @@ public:
     // See docs/architecture/2026-04-19-vax-design.md §5.5.
     static void migrateVaxSchemaV1ToV2();
 
+    // One-shot migration: legacy global "hl2IoBoard/n2adrFilter" (Bug 2 in
+    // hermes-filter-debug) → per-MAC "hardware/<mac>/hl2IoBoard/n2adrFilter"
+    // for every saved radio whose boardType is HermesLite. Removes the global
+    // key after migration. Idempotent (no-op if global key absent).
+    //
+    // Why per-MAC: NereusSDR scopes radio-specific settings under
+    // hardware/<mac>/ to support multi-radio installations from a single
+    // settings file. Thetis (mi0bot) achieves the same effective semantic
+    // by swapping DB files per radio (database.cs:11237 ImportDatabase
+    // [@c26a8a4]); we do it within one file via MAC scoping.
+    //
+    // Test-friendly: takes AppSettings& so unit tests can drive an isolated
+    // instance via QTemporaryDir without touching the singleton.
+    static void migrateLegacyN2adrFilter(AppSettings& s);
+
 private:
     // Private default constructor — used only by instance().
     AppSettings();
