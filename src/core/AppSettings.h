@@ -219,6 +219,17 @@ public:
     HPSDRModel modelOverride(const QString& macKey) const;
     void setModelOverride(const QString& macKey, HPSDRModel model);
 
+    // Migrate all fields stored under oldKey to newKey (Phase 3Q Task 12).
+    // Intended for the "saved offline → probed successfully → real MAC known"
+    // transition: moves a synthetic "manual-<ip>-<port>" entry to the real
+    // MAC address key so user customisations (name, autoConnect, pinToMac, etc.)
+    // survive the first successful probe.
+    //
+    // No-op when oldKey == newKey or oldKey has no stored entry.
+    // After migration the oldKey entry is fully removed; newKey entry reflects
+    // all fields from oldKey, with info.macAddress set to newKey.
+    void migrateRadioKey(const QString& oldKey, const QString& newKey);
+
     // -------------------------------------------------------------------------
     // Per-slice-per-band DSP state (Phase 3G-10 Stage 2 — S2.P).
     //

@@ -156,7 +156,9 @@ void RadioDiscovery::startDiscovery()
     emit discoveryStarted();
     scanAllNics();                              // one-shot NIC walk
     if (!m_staleTimer.isActive()) {
-        m_staleTimer.start(kStaleTimeoutMs);
+        // Sweep interval matches the discovered-only timeout so the first sweep
+        // fires no earlier than a radio can be considered stale (design §7.4).
+        m_staleTimer.start(kDiscoveredOnlyTimeoutMs);
     }
     emit discoveryFinished();
 }
@@ -490,9 +492,15 @@ void RadioDiscovery::onStaleCheck()
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     QStringList stale;
 
+    // Design §7.4: two permanent exemptions from stale removal —
+    //   1. Connected MAC (already connected, stops sending beacons; existing rule).
+    //   2. Saved MACs (AppSettings entries): rows stay in the panel forever;
+    //      the pill transitions Stale → Offline on age but the entry is never removed.
+    // Discovered-only radios (not in m_savedMacs) age out at kDiscoveredOnlyTimeoutMs.
     for (auto it = m_lastSeen.constBegin(); it != m_lastSeen.constEnd(); ++it) {
         if (it.key() == m_connectedMac) { continue; }
-        if (now - it.value() > kStaleTimeoutMs) {
+        if (m_savedMacs.contains(it.key())) { continue; }  // saved never age out
+        if (now - it.value() > kDiscoveredOnlyTimeoutMs) {
             stale.append(it.key());
         }
     }
@@ -503,6 +511,71 @@ void RadioDiscovery::onStaleCheck()
         m_lastSeen.remove(mac);
         emit radioLost(mac);
     }
+}
+
+// probeAddress — unicast P1+P2 probe for a single IP:port.
+// From Phase 3Q design §7.2.
+// Reuses parseP1Reply / parseP2Reply exactly as the broadcast scan path does.
+void RadioDiscovery::probeAddress(const QHostAddress& addr,
+                                  quint16 port,
+                                  std::chrono::milliseconds timeout)
+{
+    auto* sock = new QUdpSocket(this);
+    sock->bind(QHostAddress::AnyIPv4, 0);
+
+    auto* timer = new QTimer(this);
+    timer->setSingleShot(true);
+
+    auto cleanup = [sock, timer]() {
+        timer->stop();
+        timer->deleteLater();
+        sock->close();
+        sock->deleteLater();
+    };
+
+    // Reply handler — try P1 first, then P2.
+    // Reply path doesn't need addr/port; the parsers read them from the datagram.
+    connect(sock, &QUdpSocket::readyRead, this, [this, sock, cleanup]() {
+        while (sock->hasPendingDatagrams()) {
+            QByteArray buf;
+            buf.resize(int(sock->pendingDatagramSize()));
+            QHostAddress src;
+            quint16 srcPort = 0;
+            sock->readDatagram(buf.data(), buf.size(), &src, &srcPort);
+
+            RadioInfo info;
+            if (parseP1Reply(buf, src, info) || parseP2Reply(buf, src, info)) {
+                m_radios.insert(info.macAddress, info);
+                m_lastSeen.insert(info.macAddress, QDateTime::currentMSecsSinceEpoch());
+                emit radioDiscovered(info);
+                cleanup();
+                return;
+            }
+        }
+    });
+
+    // Timeout → emit failure and clean up.
+    connect(timer, &QTimer::timeout, this, [this, addr, port, cleanup]() {
+        emit probeFailed(addr, port);
+        cleanup();
+    });
+
+    // Send P1 + P2 probes in parallel.
+    // Both must be padded to the full discovery-frame size — real OpenHPSDR
+    // firmware ignores short probes (only the broadcast scan path was sending
+    // padded frames before; this matches scanAllNics's p1Packet/p2Packet shape).
+    QByteArray p1Packet(63, 0);
+    p1Packet[0] = static_cast<char>(0xEF);
+    p1Packet[1] = static_cast<char>(0xFE);
+    p1Packet[2] = static_cast<char>(0x02);
+
+    QByteArray p2Packet(60, 0);
+    p2Packet[4] = static_cast<char>(0x02);
+
+    sock->writeDatagram(p1Packet, addr, port);
+    sock->writeDatagram(p2Packet, addr, port);
+
+    timer->start(int(timeout.count()));
 }
 
 } // namespace NereusSDR

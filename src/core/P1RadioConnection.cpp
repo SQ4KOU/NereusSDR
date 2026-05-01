@@ -603,6 +603,13 @@ void P1RadioConnection::init()
     m_reconnectTimer->setSingleShot(true);
     connect(m_reconnectTimer, &QTimer::timeout, this, &P1RadioConnection::onReconnectTimeout);
 
+    // Connect watchdog — single-shot; fires kConnectTimeoutMs after connectToRadio()
+    // if no first ep6 frame arrives. Emits connectFailed(Timeout, ...).
+    // Cancelled on first good ep6 in onReadyRead(). Design §4.1.
+    m_connectWatchdog = new QTimer(this);
+    m_connectWatchdog->setSingleShot(true);
+    connect(m_connectWatchdog, &QTimer::timeout, this, &P1RadioConnection::onConnectTimeout);
+
     qCDebug(lcConnection) << "P1: init() socket port:" << m_socket->localPort();
 }
 
@@ -718,6 +725,12 @@ void P1RadioConnection::connectToRadio(const RadioInfo& info)
     m_ep2PacerTimer->start();
     setState(ConnectionState::Connected);
 
+    // Arm the connect watchdog: if no first ep6 arrives within kConnectTimeoutMs,
+    // emit connectFailed(Timeout, ...). onReadyRead() cancels this on first good frame.
+    if (m_connectWatchdog) {
+        m_connectWatchdog->start(kConnectTimeoutMs);
+    }
+
     qCDebug(lcConnection) << "P1: Connected (metis-start sent)";
 }
 
@@ -739,6 +752,11 @@ void P1RadioConnection::disconnect()
     }
     if (m_reconnectTimer) {
         m_reconnectTimer->stop();
+    }
+    // Cancel the connect watchdog so intentional disconnect() does not
+    // trigger connectFailed() after the user has already moved on.
+    if (m_connectWatchdog) {
+        m_connectWatchdog->stop();
     }
 
     // Clear reconnect state on explicit disconnect.
@@ -1631,6 +1649,16 @@ void P1RadioConnection::onReadyRead()
             // Source: NereusSDR design doc §3.6 — successful data resets the retry counter.
             m_lastEp6At = QDateTime::currentDateTimeUtc();
 
+            // Cancel the connect watchdog — first good ep6 means we reached
+            // the radio successfully. Design §4.1.
+            if (m_connectWatchdog && m_connectWatchdog->isActive()) {
+                m_connectWatchdog->stop();
+            }
+
+            // Per-frame activity signal for TitleBar LED (throttled to 10 Hz
+            // by the receiver). Design §4.1.
+            emit frameReceived();
+
             // Diagnostic: log the first EP6 frame of this session so
             // remote debugging can tell "connected but no data" apart
             // from "connected and streaming".
@@ -1658,6 +1686,9 @@ void P1RadioConnection::onReadyRead()
             // Source: mi0bot bandwidth_monitor.c:74-78 bandwidth_monitor_in() [@c26a8a4]
             if (m_bwMonitor) { m_bwMonitor->recordEp6Bytes(data.size()); }
 
+            // Shell-chrome sub-PR-2 B.1: record ingress bytes for ▼ Mbps readout.
+            recordBytesReceived(static_cast<qint64>(data.size()));
+
             parseEp6Frame(data);
         }
     }
@@ -1671,7 +1702,7 @@ void P1RadioConnection::onReadyRead()
 // (onEp2PacerTick) to match Thetis' 381 pps audio-clock cadence.
 //
 // Detects ep6 silence: if no frame has arrived for kWatchdogSilenceMs,
-// transitions to Error and arms the reconnect timer.
+// transitions to LinkLost and arms the reconnect timer (Phase 3Q-1).
 // Applies to both Connected (initial silence detection) and Connecting
 // (reconnect attempt timed out — the retry got no response).
 // Source: NereusSDR design doc §3.6.
@@ -1720,13 +1751,15 @@ void P1RadioConnection::onWatchdogTick()
     if (silenceMs > kWatchdogSilenceMs) {
         qCWarning(lcConnection) << "P1: Watchdog — ep6 silent for" << silenceMs
                                 << "ms (state=" << static_cast<int>(cs)
-                                << "); transitioning to Error and scheduling reconnect";
+                                << "); transitioning to LinkLost and scheduling reconnect";
         m_watchdogTimer->stop();
         if (m_ep2PacerTimer) {
             m_ep2PacerTimer->stop();
         }
         m_reconnectedLogged = false;
-        setState(ConnectionState::Error);
+        // Phase 3Q-1: ConnectionState::Error removed from the 5-value enum.
+        // Watchdog timeout (was Connected, frames stopped) → LinkLost.
+        setState(ConnectionState::LinkLost);
         emit errorOccurred(RadioConnectionError::NoDataTimeout,
                            QStringLiteral("Radio stopped responding"));
 
@@ -1785,7 +1818,7 @@ void P1RadioConnection::onEp2PacerTick()
 // onReconnectTimeout
 //
 // Called when the single-shot reconnect timer fires.
-// Implements bounded retries: up to kMaxReconnectAttempts, then stays in Error.
+// Implements bounded retries: up to kMaxReconnectAttempts, then stays in LinkLost.
 // Source: NereusSDR design doc §3.6.
 // ---------------------------------------------------------------------------
 void P1RadioConnection::onReconnectTimeout()
@@ -1795,7 +1828,7 @@ void P1RadioConnection::onReconnectTimeout()
 
     if (m_reconnectAttempts >= kMaxReconnectAttempts) {
         qCWarning(lcConnection) << "P1: Reconnect — bounded retries exhausted after"
-                                << kMaxReconnectAttempts << "attempts; staying in Error";
+                                << kMaxReconnectAttempts << "attempts; staying in LinkLost";
         // Stay in Error — user must explicitly call connectToRadio() to reset.
         return;
     }
@@ -1834,6 +1867,34 @@ void P1RadioConnection::onReconnectTimeout()
     // But we schedule a fallback in case no ep6 data arrives within the window
     // (i.e., watchdog trips again → re-arms reconnect timer).
     // No extra start() needed; see onWatchdogTick for the arming path.
+}
+
+// ---------------------------------------------------------------------------
+// onConnectTimeout — Phase 3Q Task 3
+//
+// Fires kConnectTimeoutMs after connectToRadio() if no first ep6 frame
+// arrived. The radio is either unreachable (wrong IP, powered off, VPN
+// blocking UDP) or too slow to reply within the budget.
+// Emits connectFailed(Timeout, ...) so the UI can surface a typed message.
+// onReadyRead() cancels this timer on the first valid ep6 frame.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::onConnectTimeout()
+{
+    // Guard: intentional disconnect() races are harmless (disconnect() stops
+    // the timer, but if both fire in the same event-loop turn, check here).
+    if (m_intentionalDisconnect) { return; }
+
+    // Guard: if we somehow received a first frame already (timer fired late),
+    // do nothing.
+    if (m_lastEp6At.isValid()) { return; }
+
+    qCWarning(lcConnection) << "P1: Connect watchdog fired — no ep6 frame within"
+                            << kConnectTimeoutMs << "ms; emitting connectFailed(Timeout)";
+
+    emit connectFailed(ConnectFailure::Timeout,
+                       QStringLiteral("No response from radio within %1 ms — "
+                                      "check IP address, radio power, and network")
+                           .arg(kConnectTimeoutMs));
 }
 
 // ---------------------------------------------------------------------------
@@ -2014,6 +2075,14 @@ void P1RadioConnection::sendCommandFrame()
     // Phase 3P-E Task 3: record ep2 egress bytes for bandwidth monitor.
     // Source: mi0bot bandwidth_monitor.c:80-84 bandwidth_monitor_out() [@c26a8a4]
     if (m_bwMonitor) { m_bwMonitor->recordEp2Bytes(pkt.size()); }
+
+    // Shell-chrome sub-PR-2 B.1: record egress bytes for ▲ Mbps readout.
+    recordBytesSent(static_cast<qint64>(pkt.size()));
+
+    // Shell-chrome sub-PR-2 B.2: bracket C&C round-trip for ping RTT.
+    // P1 EP2 → EP6 is the existing once-per-frame (380.95 pps) exchange.
+    // We note send here; receive is noted in parseEp6Frame on the success path.
+    notePingSent();
 }
 
 // ---------------------------------------------------------------------------
@@ -2184,6 +2253,21 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
             m_paRevRaw      = rev;
             m_paUserAdc0Raw = userAdc0;
             telemetryDirty  = true;
+            // Shell-chrome sub-PR-2 B.3: emit userAdc0Changed for MKII-class boards.
+            // Matches gate in RadioModel scalePaVolts() [RadioModel.cpp:402-417].
+            // From Thetis networkproto1.c:346 [@501e3f5] — user_adc0 AIN3 MKII PA Volts
+            switch (m_hardwareProfile.model) {
+            case HPSDRModel::ORIONMKII:
+            case HPSDRModel::ANAN8000D:
+            case HPSDRModel::ANAN7000D:
+            case HPSDRModel::ANAN_G2:
+            case HPSDRModel::ANAN_G2_1K:
+            case HPSDRModel::ANVELINAPRO3:
+                handleUserAdc0Raw(userAdc0);
+                break;
+            default:
+                break;
+            }
             break;
         }
         case 0x18: {
@@ -2196,6 +2280,9 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
             m_paUserAdc1Raw = userAdc1;
             m_paSupplyRaw   = supply;
             telemetryDirty  = true;
+            // Shell-chrome sub-PR-2 B.3: emit supplyVoltsChanged for all radios.
+            // From Thetis networkproto1.c:350 [@501e3f5] — supply_volts AIN6 Hermes Volts //[2.10.3.13]MW0LGE
+            handleSupplyRaw(supply);
             break;
         }
         default:
@@ -2206,6 +2293,10 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
         emit paTelemetryUpdated(m_paFwdRaw, m_paRevRaw, m_paExciterRaw,
                                 m_paUserAdc0Raw, m_paUserAdc1Raw, m_paSupplyRaw);
     }
+
+    // Shell-chrome sub-PR-2 B.2: complete the ping RTT measurement.
+    // Each valid EP6 frame constitutes the inbound leg of the EP2→EP6 exchange.
+    notePingReceived();
 
     // Emit iqDataReceived for each receiver
     // Contract: hwReceiverIndex (0-based), interleaved float I/Q pairs, [-1, 1]

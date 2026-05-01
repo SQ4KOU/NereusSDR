@@ -265,6 +265,7 @@ warren@wpratt.com
 #include <algorithm>
 #include <cmath>
 
+#include <QDateTime>
 #include <QMetaObject>
 #include <QStandardPaths>
 #include <QThread>
@@ -2284,6 +2285,8 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // Tell MainWindow / FFTEngine / SpectrumWidget the wire rate so bin math
     // matches the persisted hardware rate. Without this the FFT uses a stale
     // rate and compresses/expands the spectrum incorrectly.
+    // Phase 3Q sub-PR-3: persist so connectionSampleRateHz() can report it.
+    m_connectionSampleRateHz = wireSampleRate;
     emit wireSampleRateChanged(static_cast<double>(wireSampleRate));
 
     qCDebug(lcConnection) << "Connecting to" << info.displayName()
@@ -2357,6 +2360,13 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
             Qt::QueuedConnection);
     m_dspThread->start();
 
+    // Phase 3Q-6: forward frame ticks to RadioModel::frameReceived() so
+    // TitleBar::ConnectionSegment can pulse its activity LED. Using a
+    // forwarding signal here means the segment never holds a raw
+    // RadioConnection* that could be recreated on reconnect.
+    connect(m_connection, &RadioConnection::frameReceived,
+            this, &RadioModel::frameReceived);
+
     // Meter data → MeterModel
     connect(m_connection, &RadioConnection::meterDataReceived,
             this, [](float fwd, float rev, float voltage, float current) {
@@ -2383,7 +2393,7 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
         const double paA    = scalePaAmps(userAdc1Raw, model);
         const double paTemp = scalePaTemperatureCelsius(0, model);
         Q_UNUSED(paV);       // RadioStatus does not expose PA volts directly (per its design header)
-        Q_UNUSED(supplyRaw); // supply_volts surfaced via computeHermesDCVoltage in a later step
+        Q_UNUSED(supplyRaw); // supply_volts surfaced via RadioConnection::supplyVoltsChanged signal (sub-PR-2 B.3)
 
         m_radioStatus.setForwardPower(fwdW);
         m_radioStatus.setReflectedPower(revW);
@@ -2409,6 +2419,23 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
             this, [](NereusSDR::RadioConnectionError code, const QString& msg) {
         Q_UNUSED(code);
         qCWarning(lcConnection) << "Connection error:" << msg;
+    });
+
+    // Phase 3Q Task 10: auto-connect failure path.
+    // When tryAutoReconnect() arms m_autoConnectInProgress, forward the
+    // first connectFailed() emission as autoConnectFailed() so MainWindow
+    // can open the ConnectionPanel and surface a status-bar message.
+    // The flag is cleared immediately so a later user-initiated Connect
+    // does not re-trigger this path.
+    connect(m_connection, &RadioConnection::connectFailed,
+            this, [this](NereusSDR::ConnectFailure reason, const QString& detail) {
+        Q_UNUSED(detail);
+        if (m_autoConnectInProgress) {
+            const QString mac = m_autoConnectChosenMac;
+            m_autoConnectInProgress = false;
+            m_autoConnectChosenMac.clear();
+            emit autoConnectFailed(mac, reason);
+        }
     });
 
     // ReceiverManager → RadioConnection (hardware updates)
@@ -3564,6 +3591,13 @@ void RadioModel::teardownConnection()
     // are thread-affined to the worker and destroying them on any other
     // thread emits cross-thread warnings and can crash on Windows.
     teardownWorkerThreadedConnection(m_connection, m_connThread);
+
+    // Phase 3Q polish: above disconnect() severed connectionStateChanged
+    // before the RadioConnection's own setState(Disconnected) ran, so the
+    // model's state machine never sees the transition and sticks at
+    // Connected. Force it here so the panel strip + TitleBar + bottom
+    // status bar all flip to Disconnected after a Radio→Disconnect.
+    setConnectionState(ConnectionState::Disconnected);
 }
 
 // Phase 3G-9b — 7 smooth-default recipe values. See docs/architecture/waterfall-tuning.md.
@@ -3602,13 +3636,38 @@ void RadioModel::applyClaritySmoothDefaults()
         QStringLiteral("True"));
 }
 
+void RadioModel::setConnectionState(ConnectionState s)
+{
+    if (m_connectionState == s) {
+        return;
+    }
+    m_connectionState = s;
+    // Phase 3Q sub-PR-3: track when we become connected so
+    // connectionUptimeText() can produce a human-readable elapsed time.
+    if (s == ConnectionState::Connected) {
+        m_connectionStartedAt = QDateTime::currentDateTime();
+    } else {
+        m_connectionStartedAt = QDateTime{}; // clear — uptime is meaningless
+        m_connectionSampleRateHz = 0;
+    }
+    emit connectionStateChanged(s);
+}
+
 void RadioModel::onConnectionStateChanged(ConnectionState state)
 {
-    emit connectionStateChanged();
+    // Phase 3Q-1: route through setConnectionState() so m_connectionState
+    // stays in sync and the signal carries the new state value.
+    setConnectionState(state);
 
     switch (state) {
     case ConnectionState::Connected:
         qCDebug(lcConnection) << "Connected to" << m_name;
+        // Phase 3Q Task 10: auto-connect succeeded — disarm the in-progress
+        // flag so a later user-initiated Connect does not trip the failure path.
+        if (m_autoConnectInProgress) {
+            m_autoConnectInProgress = false;
+            m_autoConnectChosenMac.clear();
+        }
         // ── 3M-1c Phase L.2: TwoToneController power-on gate ─────────────────
         // The controller's setActive(true) refuses to engage unless powerOn
         // is true (mirrors !console.PowerOn at setup.cs:11063 [v2.10.3.13]).
@@ -3656,8 +3715,11 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
     case ConnectionState::Connecting:
         qCDebug(lcConnection) << "Connecting to" << m_name << "...";
         break;
-    case ConnectionState::Error:
-        qCWarning(lcConnection) << "Connection error for" << m_name;
+    case ConnectionState::Probing:
+        qCDebug(lcConnection) << "Probing for" << m_name << "...";
+        break;
+    case ConnectionState::LinkLost:
+        qCWarning(lcConnection) << "Link lost to" << m_name;
         m_discovery->clearConnectedMac();
         // 3M-1c L.2: same as Disconnected — drop the power-on gate.
         if (m_twoToneController) {
@@ -4067,6 +4129,125 @@ void RadioModel::onMoxHardwareFlipped(bool isTx)
             }
         }
     }
+}
+
+// ── Phase 3Q sub-PR-3: NetworkDiagnosticsDialog text accessors ──────────────
+// Each accessor is thin — it reads already-held state and formats it.
+// Returns "—" (em-dash) in any disconnected/unresolved case so callers
+// never need to guard against null or empty strings.
+
+QString RadioModel::connectionUptimeText() const
+{
+    if (!m_connectionStartedAt.isValid()) {
+        return QStringLiteral("—");
+    }
+    const qint64 elapsedSec = m_connectionStartedAt.secsTo(QDateTime::currentDateTime());
+    if (elapsedSec < 0) {
+        return QStringLiteral("—");
+    }
+    const qint64 h  = elapsedSec / 3600;
+    const qint64 m  = (elapsedSec % 3600) / 60;
+    const qint64 s  = elapsedSec % 60;
+    if (h > 0) {
+        return QString::asprintf("%lldh %02lldm %02llds",
+                                 static_cast<long long>(h),
+                                 static_cast<long long>(m),
+                                 static_cast<long long>(s));
+    }
+    return QString::asprintf("%lldm %02llds",
+                             static_cast<long long>(m),
+                             static_cast<long long>(s));
+}
+
+QString RadioModel::connectedRadioName() const
+{
+    if (!isConnected() || m_lastRadioInfo.name.isEmpty()) {
+        return QStringLiteral("—");
+    }
+    return m_lastRadioInfo.name;
+}
+
+QString RadioModel::connectionProtocolText() const
+{
+    if (!isConnected()) {
+        return QStringLiteral("—");
+    }
+    return QString::number(static_cast<int>(m_lastRadioInfo.protocol));
+}
+
+QString RadioModel::connectionFirmwareText() const
+{
+    if (!isConnected() || m_lastRadioInfo.firmwareVersion <= 0) {
+        return QStringLiteral("—");
+    }
+    return QStringLiteral("v") + QString::number(m_lastRadioInfo.firmwareVersion);
+}
+
+QString RadioModel::connectionIpText() const
+{
+    if (!isConnected()) {
+        return QStringLiteral("—");
+    }
+    return m_lastRadioInfo.address.toString()
+           + QStringLiteral(" : ")
+           + QString::number(m_lastRadioInfo.port);
+}
+
+QString RadioModel::connectionMacText() const
+{
+    if (!isConnected() || m_lastRadioInfo.macAddress.isEmpty()) {
+        return QStringLiteral("—");
+    }
+    return m_lastRadioInfo.macAddress;
+}
+
+int RadioModel::connectionSampleRateHz() const
+{
+    return isConnected() ? m_connectionSampleRateHz : 0;
+}
+
+QString RadioModel::connectionSampleRateText() const
+{
+    const int rateHz = connectionSampleRateHz();
+    if (rateHz <= 0) {
+        return QStringLiteral("—");
+    }
+    if (rateHz % 1000 == 0) {
+        return QString::number(rateHz / 1000) + QStringLiteral(" kHz");
+    }
+    return QString::number(rateHz) + QStringLiteral(" Hz");
+}
+
+// Phase 3Q Sub-PR-4 D.3 — Segment hover tooltip.
+// Jitter / packet-loss / audio-backend rows omitted until those metrics
+// have real sources — no NYI placeholders per the "no NYI" rule.
+QString RadioModel::buildConnectionTooltip() const
+{
+    if (!isConnected()) {
+        return tr("Disconnected. Click to connect.");
+    }
+
+    const double txMbps = m_connection ? m_connection->txByteRate(1000) : 0.0;
+    const double rxMbps = m_connection ? m_connection->rxByteRate(1000) : 0.0;
+
+    QString lines;
+    lines += QStringLiteral("%1 — Connected %2\n")
+                 .arg(connectedRadioName(), connectionUptimeText());
+    lines += QStringLiteral("  %1 · %2\n")
+                 .arg(connectionIpText(), connectionMacText());
+    lines += QStringLiteral("  Protocol %1 · Firmware %2 · %3\n")
+                 .arg(connectionProtocolText(),
+                      connectionFirmwareText(),
+                      connectionSampleRateText());
+    // Build glyphs via QChar rather than UTF-8 byte-escape strings —
+    // ebe9030 documented that "\xe2\x96…" sequences inside QStringLiteral
+    // get misinterpreted as Latin-1 codepoints on the macOS compile
+    // path, rendering as garbage. QChar(0x25B2) = ▲, QChar(0x25BC) = ▼.
+    lines += QStringLiteral("  Throughput: ") + QChar(0x25B2)
+           + QStringLiteral(" %1 Mbps · ").arg(QString::number(txMbps, 'f', 1))
+           + QChar(0x25BC)
+           + QStringLiteral(" %1 Mbps").arg(QString::number(rxMbps, 'f', 1));
+    return lines;
 }
 
 } // namespace NereusSDR

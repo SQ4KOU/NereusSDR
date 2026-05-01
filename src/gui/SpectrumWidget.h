@@ -157,8 +157,15 @@ mw0lge@grange-lane.co.uk
 #include <QPoint>
 #include <QMap>
 #include <QTimer>
+#include <QPropertyAnimation>
 
 #include <utility>
+
+#include "core/ConnectionState.h"
+
+QT_BEGIN_NAMESPACE
+class QLabel;
+QT_END_NAMESPACE
 
 // GPU spectrum: QRhiWidget base class for Metal/Vulkan/D3D12 rendering.
 // CPU fallback: QWidget with QPainter.
@@ -242,6 +249,10 @@ const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count);
 // From gpu-waterfall.md lines 274-289
 class SpectrumWidget : public SpectrumBaseClass {
     Q_OBJECT
+
+    // Phase 3Q-8: animated dim factor for the disconnect overlay.
+    // 1.0 = no dim (connected), 0.4 = 60% dim (disconnected, after 800 ms fade).
+    Q_PROPERTY(float disconnectFade READ disconnectFade WRITE setDisconnectFade)
 
 public:
     explicit SpectrumWidget(QWidget* parent = nullptr);
@@ -497,6 +508,10 @@ public slots:
     VfoWidget* vfoWidget(int sliceIndex) const;
     void updateVfoPositions();
 
+public slots:
+    // Phase 3Q-8: update connection state for the disconnect overlay.
+    void setConnectionState(NereusSDR::ConnectionState s);
+
     // Feed a new FFT frame. binsDbm are dBm values, one per frequency bin.
     // Called from the main thread after FFTEngine delivers the frame.
     void updateSpectrum(int receiverId, const QVector<float>& binsDbm);
@@ -511,6 +526,10 @@ public slots:
     void clearWaterfallHistory();
 
 signals:
+    // Phase 3Q-8: emitted on a left-click while not Connected.
+    // MainWindow wires this to showConnectionPanel().
+    void disconnectedClickRequest();
+
     // Emitted when user clicks on spectrum/waterfall to tune
     void frequencyClicked(double hz);
     // Emitted when user drags a filter edge
@@ -544,6 +563,18 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
 
 private:
+    // ---- Phase 3Q-8: disconnect overlay state ----
+    // The CPU paintEvent path can paint a QPainter overlay, but the GPU
+    // (QRhi) path early-returns and refuses QPainter. To work in both modes
+    // we use a child QLabel — Qt composites it on top of the QRhi surface.
+    NereusSDR::ConnectionState m_connState{NereusSDR::ConnectionState::Disconnected};
+    float m_disconnectFade{1.0f};  // animated; 1.0 connected, 0.4 disconnected
+    QPropertyAnimation* m_fadeAnim{nullptr};
+    QLabel* m_disconnectLabel{nullptr};
+
+    float disconnectFade() const { return m_disconnectFade; }
+    void  setDisconnectFade(float f) { m_disconnectFade = f; update(); }
+
     // ---- Drawing helpers ----
     void drawGrid(QPainter& p, const QRect& specRect);
     void drawSpectrum(QPainter& p, const QRect& specRect);
@@ -615,8 +646,13 @@ private:
     double m_sampleRateHz{768000.0};    // DDC sample rate
 
     // ---- Display range ----
-    // From Thetis display.cs:1743-1754
-    float  m_refLevel{-36.0f};        // top of display (dBm)
+    // From Thetis display.cs:1743-1754. Init values must match the
+    // ship defaults in loadSettings() (SpectrumWidget.cpp ~line 392) —
+    // any divergence shows up if a code path reads these before
+    // loadSettings runs, and the slider in SetupDialog briefly shows
+    // the stale value. Calibrated 2026-04-30 against a residential
+    // HF noise floor; see loadSettings comment for rationale.
+    float  m_refLevel{-48.0f};        // top of display (dBm)
     float  m_dynamicRange{68.0f};     // range in dB (bottom = refLevel - dynamicRange)
 
     // ---- Waterfall ----
@@ -658,11 +694,12 @@ private:
     // From AetherSDR SpectrumWidget defaults + Thetis display.cs:2522-2536
     WfColorScheme m_wfColorScheme{WfColorScheme::Default};
     int    m_wfColorGain{45};         // 0-100
-    int    m_wfBlackLevel{98};        // 0-125
+    int    m_wfBlackLevel{104};       // 0-125 — keep in sync with loadSettings ship default
     // Waterfall uses its own dBm range (narrower than spectrum for better contrast).
     // Seed values; WfAgc (default on) continuously recomputes these at runtime.
-    float  m_wfHighThreshold{-50.0f};
-    float  m_wfLowThreshold{-110.0f};
+    // Ship defaults — keep in sync with loadSettings (SpectrumWidget.cpp)
+    float  m_wfHighThreshold{-62.0f};
+    float  m_wfLowThreshold{-122.0f};
 
     // ---- Smoothing constant ----
     // From AetherSDR SpectrumWidget.h:417 — SMOOTH_ALPHA = 0.35f

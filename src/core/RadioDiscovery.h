@@ -64,6 +64,10 @@ mw0lge@grange-lane.co.uk
 #include <QTimer>
 #include <QMap>
 #include <QMetaType>
+#include <QSet>
+#include <QStringList>
+
+#include <chrono>
 
 namespace NereusSDR {
 
@@ -182,9 +186,28 @@ public:
     // Mark a MAC as currently-connected so onStaleCheck will not emit
     // radioLost for it. Once a radio is streaming (P1 ep6 / P2 DDC),
     // it stops replying to discovery broadcasts, so the stale timer
-    // would otherwise fire ~15s after every healthy connect.
+    // would otherwise fire after the discovered-only timeout.
     void setConnectedMac(const QString& mac) { m_connectedMac = mac; }
     void clearConnectedMac() { m_connectedMac.clear(); }
+
+    // Saved-MAC tracking — design §7.4.
+    // Radios in this set are never removed by onStaleCheck; they stay in the
+    // panel (pill transitions Stale → Offline) but the row is permanent.
+    // Call setSavedMacs from ConnectionPanel after seeding from AppSettings.
+    void setSavedMacs(const QStringList& macs) { m_savedMacs = QSet<QString>(macs.begin(), macs.end()); }
+    void addSavedMac(const QString& mac) { m_savedMacs.insert(mac); }
+    void removeSavedMac(const QString& mac) { m_savedMacs.remove(mac); }
+
+#ifdef NEREUS_BUILD_TESTS
+    // Test-only hooks — only compiled when NEREUS_BUILD_TESTS is defined.
+    // Allow unit tests to inject a stale lastSeen entry and trigger the sweep
+    // without needing a real UDP scan. Not part of the public API.
+    void injectLastSeenForTest(const QString& mac, const RadioInfo& info, qint64 lastSeenMs) {
+        m_radios.insert(mac, info);
+        m_lastSeen.insert(mac, lastSeenMs);
+    }
+    void forceStaleCheckForTest() { onStaleCheck(); }
+#endif
 
     // Public static parsers — exposed for unit-testing in Task 5.
     // Both return true on a valid discovery reply and populate 'out'.
@@ -192,20 +215,36 @@ public:
     static bool parseP1Reply(const QByteArray& bytes, const QHostAddress& source, RadioInfo& out);
     static bool parseP2Reply(const QByteArray& bytes, const QHostAddress& source, RadioInfo& out);
 
+    // Send a unicast P1+P2 probe in parallel to the given address.
+    // On reply: emits radioDiscovered() with parsed RadioInfo.
+    // On timeout: emits probeFailed() with the address that was probed.
+    //
+    // Used by the Add Radio dialog and saved-row Connect path to validate
+    // reachability before opening a full connection. Times out fast (1.5 s
+    // default) so users get a clear error instead of a UDP-ghost long wait.
+    //
+    // From Phase 3Q design §7.2.
+    void probeAddress(const QHostAddress& addr,
+                      quint16 port = 1024,
+                      std::chrono::milliseconds timeout = std::chrono::milliseconds(1500));
+
 signals:
     void discoveryStarted();
     void discoveryFinished();
     void radioDiscovered(const NereusSDR::RadioInfo& info);
     void radioUpdated(const NereusSDR::RadioInfo& info);
     void radioLost(const QString& macAddress);
+    void probeFailed(const QHostAddress& addr, quint16 port);
 
 private slots:
     void onStaleCheck();
 
 private:
-    static constexpr quint16 kDiscoveryPort   = 1024;
+    static constexpr quint16 kDiscoveryPort    = 1024;
     static constexpr int kContinuousIntervalMs = 5000;   // re-run NIC walk every 5s during active monitoring
-    static constexpr int kStaleTimeoutMs       = 15000;
+    // Design §7.4: discovered-only radios age out at 60 s (raised from 15 s).
+    // Connected MAC and saved MACs are always exempt regardless of this value.
+    static constexpr int kDiscoveredOnlyTimeoutMs = 60 * 1000;
 
     // MAC extraction from raw bytes
     static QString macToString(const char* bytes);
@@ -222,6 +261,7 @@ private:
     QMap<QString, RadioInfo> m_radios;   // keyed by MAC address
     QMap<QString, qint64> m_lastSeen;    // MAC -> timestamp
     QString m_connectedMac;              // MAC currently in use by a RadioConnection; exempt from stale-removal
+    QSet<QString>  m_savedMacs;          // Design §7.4: MACs that are saved in AppSettings; exempt from stale-removal
 };
 
 } // namespace NereusSDR

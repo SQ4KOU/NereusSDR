@@ -425,6 +425,12 @@ void P2RadioConnection::init()
         m_p2HeartbeatCycle = (m_p2HeartbeatCycle + 1) % 8;
     });
 
+    // Connect watchdog — single-shot; fires kConnectTimeoutMs after
+    // connectToRadio() if no first DDC I/Q frame arrives. Phase 3Q Task 3.
+    m_connectWatchdog = new QTimer(this);
+    m_connectWatchdog->setSingleShot(true);
+    connect(m_connectWatchdog, &QTimer::timeout, this, &P2RadioConnection::onConnectTimeout);
+
     qCDebug(lcConnection) << "P2: init() socket port:" << m_socket->localPort();
 }
 
@@ -543,6 +549,13 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     m_p2HeartbeatTimer->start();
 
     setState(ConnectionState::Connected);
+
+    // Arm the connect watchdog: if no first DDC I/Q frame arrives within
+    // kConnectTimeoutMs, emit connectFailed(Timeout, ...).
+    // processIqPacket() cancels this on the first valid frame. Phase 3Q Task 3.
+    if (m_connectWatchdog) {
+        m_connectWatchdog->start(kConnectTimeoutMs);
+    }
 }
 
 // Porting from Thetis SendStop() network.c:372
@@ -563,6 +576,11 @@ void P2RadioConnection::disconnect()
     }
     if (m_reconnectTimer) {
         m_reconnectTimer->stop();
+    }
+    // Cancel the connect watchdog so intentional disconnect() does not
+    // trigger connectFailed() after the user has already moved on.
+    if (m_connectWatchdog) {
+        m_connectWatchdog->stop();
     }
 
     if (m_running && m_socket && !m_radioInfo.address.isNull()) {
@@ -1250,6 +1268,8 @@ void P2RadioConnection::onReadyRead()
             if (data.size() != 1444) {
                 break;  // check for malformed packet
             }
+            // Shell-chrome sub-PR-2 B.1: record IQ ingress bytes for ▼ Mbps readout.
+            recordBytesReceived(static_cast<qint64>(data.size()));
             int ddc = portIdx - 10;
             processIqPacket(data, ddc);
             break;
@@ -1890,6 +1910,12 @@ void P2RadioConnection::sendCmdHighPriority()
     // sendPacket(listenSock, packetbuf, BUFLEN, prn->base_outbound_port + 3);
     QByteArray pkt(buf, sizeof(buf));
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 3);
+    // Shell-chrome sub-PR-2 B.1: record egress bytes for ▲ Mbps readout.
+    recordBytesSent(static_cast<qint64>(pkt.size()));
+    // Shell-chrome sub-PR-2 B.2: bracket C&C round-trip for ping RTT.
+    // P2 high-priority command → high-priority status reply (100 ms cadence).
+    // We note send here; receive is noted in processHighPriorityStatus.
+    notePingSent();
 }
 
 void P2RadioConnection::sendCmdRx()
@@ -1974,11 +2000,45 @@ void P2RadioConnection::processIqPacket(const QByteArray& data, int ddcIndex)
     if (m_totalIqPackets == 1) {
         qCDebug(lcConnection) << "P2: First I/Q packet! DDC" << ddcIndex
                               << "seq:" << seq << "spp:" << spp;
+
+        // Cancel the connect watchdog — first valid DDC frame means we
+        // reached the radio successfully. Design §4.1.
+        if (m_connectWatchdog && m_connectWatchdog->isActive()) {
+            m_connectWatchdog->stop();
+        }
     } else if (m_totalIqPackets % 10000 == 0) {
         qCDebug(lcProtocol) << "P2: I/Q packets:" << m_totalIqPackets;
     }
 
+    // Per-frame activity signal for TitleBar LED (throttled to 10 Hz by
+    // the receiver). Design §4.1.
+    emit frameReceived();
+
     emit iqDataReceived(ddcIndex, buf);
+}
+
+// ---------------------------------------------------------------------------
+// onConnectTimeout — Phase 3Q Task 3
+//
+// Fires kConnectTimeoutMs after connectToRadio() if no first DDC I/Q frame
+// arrived. Emits connectFailed(Timeout, ...) so the UI can surface a typed
+// error instead of leaving the spinner running forever.
+// processIqPacket() cancels this timer on the first valid frame.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::onConnectTimeout()
+{
+    if (m_intentionalDisconnect) { return; }
+
+    // Guard: if we somehow received a first frame already, do nothing.
+    if (m_totalIqPackets > 0) { return; }
+
+    qCWarning(lcConnection) << "P2: Connect watchdog fired — no DDC I/Q frame within"
+                            << kConnectTimeoutMs << "ms; emitting connectFailed(Timeout)";
+
+    emit connectFailed(ConnectFailure::Timeout,
+                       QStringLiteral("No response from radio within %1 ms — "
+                                      "check IP address, radio power, and network")
+                           .arg(kConnectTimeoutMs));
 }
 
 // Porting from Thetis ReadUDPFrame:519-532 — High Priority C&C status
@@ -2082,7 +2142,32 @@ void P2RadioConnection::processHighPriorityStatus(const QByteArray& data)
 
         emit paTelemetryUpdated(fwdRaw, revRaw, exciterRaw,
                                 userAdc0Raw, userAdc1Raw, supplyRaw);
+
+        // Shell-chrome sub-PR-2 B.3: emit voltage signals.
+        // handleSupplyRaw applies for all radios (supply_volts AIN6).
+        // From Thetis network.c:738 [@501e3f5] — supply_volts
+        handleSupplyRaw(supplyRaw);
+        // handleUserAdc0Raw gated on MKII-class boards (PA drain sense AIN3).
+        // Matches gate in RadioModel scalePaVolts() [RadioModel.cpp:402-417].
+        // From Thetis network.c:747 [@501e3f5] — user_adc0 AIN3 PA Volts
+        switch (m_hardwareProfile.model) {
+        case HPSDRModel::ORIONMKII:
+        case HPSDRModel::ANAN8000D:
+        case HPSDRModel::ANAN7000D:
+        case HPSDRModel::ANAN_G2:
+        case HPSDRModel::ANAN_G2_1K:
+        case HPSDRModel::ANVELINAPRO3:
+            handleUserAdc0Raw(userAdc0Raw);
+            break;
+        default:
+            break;
+        }
     }
+
+    // Shell-chrome sub-PR-2 B.2: complete the ping RTT measurement.
+    // The High-Priority status packet is the inbound leg of the
+    // high-priority command → status exchange (100 ms cadence).
+    notePingReceived();
 
     emit meterDataReceived(0.0f, 0.0f, 0.0f, 0.0f);
 }

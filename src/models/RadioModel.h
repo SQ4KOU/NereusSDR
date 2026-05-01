@@ -67,6 +67,7 @@
 
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
+#include "core/ConnectionState.h"
 #include "Band.h"
 #include "BandPlanManager.h"
 #include "SliceModel.h"
@@ -90,6 +91,7 @@
 #include "core/safety/TxInhibitMonitor.h"
 #include "core/safety/BandPlanGuard.h"
 
+#include <QDateTime>
 #include <QObject>
 #include <QString>
 #include <QList>
@@ -334,6 +336,36 @@ public:
 
     bool isConnected() const;
 
+    // ── Phase 3Q sub-PR-3: NetworkDiagnosticsDialog text accessors ───────────
+    // Each returns an em-dash placeholder ("—") when disconnected.
+    // m_connectionStartedAt is set in setConnectionState() on the
+    // Connected → anything transition; cleared on non-Connected states.
+    QString connectionUptimeText() const;     // "14m 32s" / "—"
+    QString connectedRadioName() const;       // RadioInfo.name / "—"
+    QString connectionProtocolText() const;   // "1" or "2" / "—"
+    QString connectionFirmwareText() const;   // "v27" / "—"
+    QString connectionIpText() const;         // "192.168.x.y : port" / "—"
+    QString connectionMacText() const;        // "AA:BB:CC:DD:EE:FF" / "—"
+    int     connectionSampleRateHz() const;   // 0 if disconnected
+    QString connectionSampleRateText() const; // "192 kHz" / "—"
+
+    // Phase 3Q Sub-PR-4 D.3: Hover tooltip for the TitleBar ConnectionSegment.
+    // Returns a multi-line string with radio name, uptime, IP, MAC, protocol,
+    // firmware, sample rate, and live throughput. Disconnected state returns a
+    // short invitation to connect. Owned by RadioModel so the segment stays a
+    // thin presentation layer.
+    QString buildConnectionTooltip() const;
+
+    // Phase 3Q-1: single source of truth for the connection lifecycle state.
+    // UI components (TitleBar, ConnectionPanel, status bar, spectrum overlay)
+    // read this instead of deriving state from RadioConnection directly.
+    ConnectionState connectionState() const { return m_connectionState; }
+
+    // Test-only: allow tests to drive transitions without standing up
+    // a fake RadioConnection. Production transitions go through the
+    // private setConnectionState() called from connection signals.
+    void setConnectionStateForTest(ConnectionState s) { setConnectionState(s); }
+
 #ifdef NEREUS_BUILD_TESTS
 public:
     // Test-only: inject board caps without a live radio connection.
@@ -450,6 +482,22 @@ public:
     void connectToRadio(const RadioInfo& info);
     void disconnectFromRadio();
 
+    // Phase 3Q Task 10: arm / disarm the auto-connect-in-progress flag.
+    // Called by MainWindow::tryAutoReconnect() before and after the probe.
+    // When armed, RadioModel::wireConnectionSignals wires RadioConnection::connectFailed
+    // to emit autoConnectFailed(mac, reason) and then disarms automatically.
+    void setAutoConnectInProgress(bool inProgress, const QString& chosenMac = {}) {
+        m_autoConnectInProgress = inProgress;
+        m_autoConnectChosenMac  = inProgress ? chosenMac : QString{};
+    }
+
+    // Phase 3Q Task 10: called by MainWindow when multiple saved radios have
+    // autoConnect = true. Emits autoConnectAmbiguous so the MainWindow lambda
+    // can post the status-bar warning without the caller reaching into our signals.
+    void notifyAutoConnectAmbiguous(int count, const QString& chosenMac) {
+        emit autoConnectAmbiguous(count, chosenMac);
+    }
+
     // ── Phase 3M-0 Task 6: Ganymede PA-trip live state ───────────────────────
     // G8NJJ: handlers for Ganymede 500W PA protection
     // From Thetis Andromeda/Andromeda.cs:914-948 [v2.10.3.13]
@@ -529,7 +577,11 @@ public slots:
 
 signals:
     void infoChanged();
-    void connectionStateChanged();
+    // Phase 3Q-1: parametrized — state passed so UI consumers can act without
+    // a secondary RadioModel::connectionState() read under race conditions.
+    // Existing no-arg slot connections (ConnectionPanel, MainWindow, SpectrumWidget)
+    // remain valid: Qt discards excess signal args when slot arity is lower.
+    void connectionStateChanged(NereusSDR::ConnectionState newState);
     // Emitted when the on-air sample rate for the current connection is
     // known. MainWindow reacts by updating FFTEngine + SpectrumWidget so
     // bin math matches the wire rate (P1=192k, P2=768k).
@@ -547,6 +599,12 @@ signals:
     // Raw interleaved I/Q for spectrum display (tapped before WDSP processing)
     void rawIqData(const QVector<float>& interleavedIQ);
 
+    // Phase 3Q-6: forwarded from the active RadioConnection::frameReceived()
+    // so TitleBar::ConnectionSegment can pulse its activity LED without
+    // holding a reference to a connection that may be recreated on reconnect.
+    // Re-emitted from wireConnectionSignals() for every new connection.
+    void frameReceived();
+
     // Emitted when onBandButtonClicked short-circuits in a user-visible way
     // (locked slice, XVTR no-seed). MainWindow connects this to the status
     // bar so the user learns why their band click did nothing — prevents
@@ -560,6 +618,22 @@ signals:
     // (CATHandleAmplifierTripMessage). G8NJJ: handlers for Ganymede 500W PA protection.
     void paTrippedChanged(bool tripped);
 
+    // Phase 3Q Task 10: auto-connect failure signals.
+    //
+    // autoConnectFailed — emitted when an auto-connect-on-launch attempt fails
+    // (RadioConnection::connectFailed fires while m_autoConnectInProgress is set).
+    // `mac`    — the saved-radio MAC key that was attempted.
+    // `reason` — typed failure code (Timeout is the most common: radio unreachable).
+    // MainWindow reacts by opening the ConnectionPanel and posting a status-bar message.
+    void autoConnectFailed(const QString& mac, NereusSDR::ConnectFailure reason);
+
+    // autoConnectAmbiguous — emitted when tryAutoReconnect finds more than one
+    // saved radio with autoConnect = true. The most-recently-connected MAC wins;
+    // MainWindow surfaces a one-time status-bar warning pointing to Manage Radios.
+    // `count`      — total number of autoConnect-flagged radios.
+    // `chosenMac`  — the MAC selected (most recently connected).
+    void autoConnectAmbiguous(int count, const QString& chosenMac);
+
     // ── Phase 3M-1a Task G.4: TUNE refused ──────────────────────────────────
     // Emitted when setTune(true) is called but the power-on guard fires
     // (radio not connected / audio engine not active).
@@ -572,6 +646,10 @@ private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
 
 private:
+    // Phase 3Q-1: drives the RadioModel-level connection state machine.
+    // Guards against redundant transitions (no emit if state unchanged).
+    void setConnectionState(ConnectionState s);
+
     // Pushes AlexController's per-band antenna state to the connection.
     // Full port of Thetis HPSDR/Alex.cs:310-413 UpdateAlexAntSelection.
     // Phase 3P-I-b (T6): adds isTx branch, Ext1/Ext2OnTx mapping, xvtrActive
@@ -686,6 +764,20 @@ private:
     QString m_version;
     HardwareProfile m_hardwareProfile;
 
+    // Phase 3Q-1: RadioModel-level connection state machine.
+    // Drives UI (TitleBar, ConnectionPanel, status bar, spectrum overlay).
+    ConnectionState m_connectionState{ConnectionState::Disconnected};
+
+    // Phase 3Q sub-PR-3: uptime tracking for NetworkDiagnosticsDialog.
+    // Set to current time on Connected transition, cleared (default-constructed)
+    // on any non-Connected state. connectionUptimeText() reads this.
+    QDateTime m_connectionStartedAt;
+
+    // Phase 3Q sub-PR-3: sample rate as last pushed to the wire.
+    // Written from the wireSampleRateChanged path in connectToRadio().
+    // connectionSampleRateHz() / connectionSampleRateText() read this.
+    int m_connectionSampleRateHz{0};
+
     // Reconnect state
     RadioInfo m_lastRadioInfo;
     bool m_intentionalDisconnect{false};
@@ -725,6 +817,13 @@ private:
     bool m_paTripped{false};
     // From Thetis Andromeda/Andromeda.cs:854-866 [v2.10.3.13] (_ganymedePresent / GanymedePresent setter).
     bool m_ganymedePresent{false};
+
+    // Phase 3Q Task 10: auto-connect failure path.
+    // Set by MainWindow::tryAutoReconnect() before starting the probe;
+    // cleared (to false / empty) on success OR failure so that a subsequent
+    // user-initiated Connect does not trip the failure handler.
+    bool    m_autoConnectInProgress{false};
+    QString m_autoConnectChosenMac;
 
     // AGC bidirectional sync guard — prevents infinite feedback loop between
     // agcThresholdChanged and rfGainChanged handlers.

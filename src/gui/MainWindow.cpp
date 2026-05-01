@@ -242,12 +242,14 @@ warren@wpratt.com
 
 #include "MainWindow.h"
 #include "ConnectionPanel.h"
+#include "NetworkDiagnosticsDialog.h"
 #include "SupportDialog.h"
 #include "AboutDialog.h"
 #include "SpectrumWidget.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "widgets/VfoWidget.h"
+#include "widgets/RxDashboard.h"
 #include "core/RxChannel.h"
 #include "core/TxChannel.h"  // H.2: setTxChannel wiring
 #include "core/ReceiverManager.h"
@@ -296,6 +298,11 @@ warren@wpratt.com
 #  include "VaxLinuxFirstRunDialog.h"
 #endif
 #include "widgets/MasterOutputWidget.h"
+#include "widgets/StationBlock.h"
+#include "widgets/MetricLabel.h"
+#include "widgets/StatusBadge.h"
+#include "widgets/AdcOverloadBadge.h"
+#include "widgets/OverflowChip.h"
 #include "core/AudioDeviceConfig.h"
 #include "core/AudioEngine.h"
 #include "core/audio/VirtualCableDetector.h"
@@ -305,7 +312,9 @@ warren@wpratt.com
 #include <QCloseEvent>
 #include <QResizeEvent>
 #include <QEvent>
+#include <QHelpEvent>
 #include <QMouseEvent>
+#include <QToolTip>
 #include <QMenuBar>
 #include <QMenu>
 #include <QAction>
@@ -323,6 +332,7 @@ warren@wpratt.com
 #include <QMessageBox>
 #include <QTimer>
 #include <QThread>
+#include <QFile>          // /proc/stat reader for Linux system-CPU path
 #include <QPushButton>
 #include <QClipboard>
 #include <QDesktopServices>
@@ -336,8 +346,21 @@ warren@wpratt.com
 
 #include <cstdlib>
 
-#ifdef Q_OS_MAC
+// Cross-platform CPU usage readers — see readProcessCpuPercent and
+// readSystemCpuPercent below. POSIX side (macOS / Linux) shares
+// getrusage for process CPU; macOS adds host_processor_info for system
+// CPU; Linux reads /proc/stat; Windows uses GetProcessTimes /
+// GetSystemTimes. Each branch is gated by Q_OS_*.
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
 #include <sys/resource.h>
+#endif
+#ifdef Q_OS_MAC
+#include <mach/mach.h>
+#include <mach/mach_host.h>
+#include <mach/processor_info.h>
+#endif
+#ifdef Q_OS_WIN
+#include <windows.h>
 #endif
 
 namespace NereusSDR {
@@ -403,6 +426,104 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_titleBar, &TitleBar::featureRequestClicked,
             this, &MainWindow::showFeatureRequestDialog);
 
+    // ── Phase 3Q Sub-PR-4 D.2: ConnectionSegment wiring ────────────────────
+    {
+        auto* seg = m_titleBar->connectionSegment();
+
+        // 1. State dot + pulse: driven by connectionStateChanged.
+        connect(m_radioModel, &RadioModel::connectionStateChanged,
+                seg, &ConnectionSegment::setState);
+
+        // 2. frameTick: forwarded from RadioModel so we never need to
+        //    re-wire when m_connection is recreated.
+        connect(m_radioModel, &RadioModel::frameReceived,
+                seg, &ConnectionSegment::frameTick);
+
+        // 3. 1 Hz rate refresh — polls connection().{tx,rx}ByteRate(1000).
+        auto* rateTimer = new QTimer(this);
+        rateTimer->setInterval(1000);
+        connect(rateTimer, &QTimer::timeout, this, [this, seg]() {
+            if (auto* conn = m_radioModel->connection()) {
+                // setRates(rxMbps, txMbps) — first arg names the "radio→client"
+                // direction (m_rxMbps), second names "client→radio" (m_txMbps).
+                // Earlier revisions passed these reversed, which made the ▲/▼
+                // glyphs read in radio perspective rather than the client's.
+                // Spec §Affordances reads the segment from the operator's
+                // (client's) point of view: ▲ = NereusSDR uploading to radio
+                // (commands), ▼ = radio downloading to NereusSDR (I/Q).
+                seg->setRates(conn->rxByteRate(1000), conn->txByteRate(1000));
+            }
+        });
+        rateTimer->start();
+
+        // 4. RTT — wire from RadioConnection::pingRttMeasured.
+        //    Re-wired on every Connecting/Probing transition so the segment
+        //    always follows the live connection object (RadioModel recreates
+        //    RadioConnection on each connect cycle).
+        auto wireRtt = [this, seg]() {
+            if (auto* conn = m_radioModel->connection()) {
+                connect(conn, &RadioConnection::pingRttMeasured,
+                        seg, &ConnectionSegment::setRttMs,
+                        Qt::UniqueConnection);
+            }
+        };
+        wireRtt();
+        connect(m_radioModel, &RadioModel::connectionStateChanged, this,
+                [wireRtt](ConnectionState s) {
+                    if (s == ConnectionState::Connecting ||
+                        s == ConnectionState::Probing) {
+                        wireRtt();
+                    }
+                });
+
+        // 5. Audio flow-state → ♪ pip color.
+        if (auto* engine = m_radioModel->audioEngine()) {
+            connect(engine, &AudioEngine::flowStateChanged,
+                    seg, &ConnectionSegment::setAudioFlowState);
+        }
+
+        // 6. Click affordances.
+        // The segment's mousePressEvent (TitleBar.cpp:382-387) routes
+        // anywhere-click in the disconnected state to rttClicked so a
+        // single signal covers both "click for diagnostics" (when
+        // connected) and "click to connect" (when disconnected). Branch
+        // here on the live connection state to honor the "Click to
+        // connect" affordance the segment paints — without this branch,
+        // a disconnected click trapped the user in NetworkDiagnostics
+        // instead of opening the connection panel (Codex P2 review
+        // against PR #158, MainWindow.cpp:482).
+        connect(seg, &ConnectionSegment::rttClicked, this, [this]() {
+            const auto state = m_radioModel->connectionState();
+            if (state == ConnectionState::Disconnected
+                || state == ConnectionState::LinkLost) {
+                showConnectionPanel();
+                return;
+            }
+            auto* dlg = new NetworkDiagnosticsDialog(
+                m_radioModel, m_radioModel->audioEngine(), this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            dlg->show();
+        });
+        connect(seg, &ConnectionSegment::audioPipClicked, this, [this]() {
+            // Audio pip click also opens diagnostics — audio section
+            // is the most relevant panel for pip trouble-shooting.
+            auto* dlg = new NetworkDiagnosticsDialog(
+                m_radioModel, m_radioModel->audioEngine(), this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            dlg->show();
+        });
+        connect(seg, &ConnectionSegment::contextMenuRequested,
+                this, &MainWindow::showSegmentContextMenu);
+
+        // 7. D.3: Hover tooltip — event filter delivers QHelpEvent.
+        seg->setToolTip(QString());   // suppress Qt's own tooltip; we intercept
+        seg->setAttribute(Qt::WA_AlwaysShowToolTips, false);
+        seg->installEventFilter(this);
+
+        // Seed with current state (Disconnected at launch).
+        seg->setState(m_radioModel->connectionState());
+    }
+
     buildStatusBar();
     applyDarkTheme();
 
@@ -418,6 +539,45 @@ MainWindow::MainWindow(QWidget* parent)
         if (QStatusBar* sb = statusBar()) {
             sb->showMessage(reason, 3000);
         }
+    });
+
+    // Phase 3Q Task 10: auto-connect failure / ambiguity surface.
+    //
+    // autoConnectFailed — the probe timed out or the radio rejected the
+    // handshake. Open the ConnectionPanel, highlight the failed target,
+    // and post an 8-second status-bar explanation.
+    connect(m_radioModel, &RadioModel::autoConnectFailed,
+            this, [this](const QString& mac, NereusSDR::ConnectFailure reason) {
+        showConnectionPanel();
+        if (m_connectionPanel) {
+            m_connectionPanel->highlightMac(mac);
+        }
+        const auto saved = AppSettings::instance().savedRadio(mac);
+        const QString name = (saved.has_value() && !saved->info.name.isEmpty())
+            ? saved->info.name : mac;
+        const QString reasonText =
+            (reason == NereusSDR::ConnectFailure::Timeout)
+                ? QStringLiteral("isn't reachable from this network")
+                : QStringLiteral("returned an error");
+        statusBar()->showMessage(
+            QStringLiteral("Auto-connect target %1 %2. Pick a different radio or update the address.")
+                .arg(name, reasonText),
+            8000);
+    });
+
+    // autoConnectAmbiguous — multiple radios have AutoConnect = true.
+    // The most-recently-connected MAC was chosen; post a 6-second advisory
+    // pointing the user at Manage Radios for cleanup.
+    connect(m_radioModel, &RadioModel::autoConnectAmbiguous,
+            this, [this](int count, const QString& chosenMac) {
+        const auto saved = AppSettings::instance().savedRadio(chosenMac);
+        const QString name = (saved.has_value() && !saved->info.name.isEmpty())
+            ? saved->info.name : chosenMac;
+        statusBar()->showMessage(
+            QStringLiteral("%1 radios marked Auto-connect on launch. Using %2 (most recent). "
+                           "Adjust in Manage Radios.")
+                .arg(count).arg(name),
+            6000);
     });
 
     // WDSP wisdom progress dialog — shown as a modal window during first-run
@@ -688,6 +848,15 @@ void MainWindow::buildUI()
         }
     });
 
+    // Phase 3Q Sub-PR-6 (F.1): bind RxDashboard to slice(0) once it exists.
+    // buildStatusBar() runs before connectToRadio() so slices().isEmpty() at
+    // construction time; defer binding to sliceAdded.
+    connect(m_radioModel, &RadioModel::sliceAdded, this, [this](int index) {
+        if (index == 0 && m_rxDashboard) {
+            m_rxDashboard->bindSlice(m_radioModel->slices().at(0));
+        }
+    });
+
     // Create FFTEngine on a worker thread (spectrum thread from architecture).
     // Sample rate starts at P2 default (768k); RadioModel::wireSampleRateChanged
     // updates it to the actual wire rate on each connect (P1=192k, P2=768k).
@@ -746,6 +915,10 @@ void MainWindow::buildUI()
             m_spectrumWidget->clearWaterfallHistory();
         }
     });
+
+    // Phase 3Q-8: clicking the spectrum while disconnected opens ConnectionPanel.
+    connect(m_spectrumWidget, &SpectrumWidget::disconnectedClickRequest,
+            this, &MainWindow::showConnectionPanel);
 
     // Wire BandPlanManager → SpectrumWidget so the bandplan strip renders on launch.
     m_spectrumWidget->setBandPlanManager(&m_radioModel->bandPlanManagerMutable());
@@ -841,7 +1014,10 @@ void MainWindow::buildUI()
     // flag on SpectrumWidget so legacy AGC knows to stand down.
     {
         auto& s = AppSettings::instance();
-        bool clarityOn = s.value(QStringLiteral("ClarityEnabled"), QStringLiteral("False"))
+        // Ship default 2026-04-30: Clarity ON for fresh installs. Auto-tuning
+        // the noise floor is the better first-launch experience than asking
+        // the user to find and toggle the setting themselves.
+        bool clarityOn = s.value(QStringLiteral("ClarityEnabled"), QStringLiteral("True"))
                             .toString() == QStringLiteral("True");
         m_clarityController->setEnabled(clarityOn);
         m_spectrumWidget->setClarityActive(clarityOn);
@@ -1387,59 +1563,135 @@ void MainWindow::buildMenuBar()
     // =========================================================================
     // RADIO
     // =========================================================================
+    // ── Radio menu — 3Q-9: role-based items with state-aware enablement ──────
     QMenu* radioMenu = menuBar()->addMenu(QStringLiteral("&Radio"));
 
-    radioMenu->addAction(QStringLiteral("&Discover..."), QKeySequence(Qt::CTRL | Qt::Key_K),
-                         this, &MainWindow::showConnectionPanel);
+    // Connect (⌘K) — reconnects to the last-used radio. Greyed out when there
+    // is no actionable target (currently connected, or no lastConnected MAC,
+    // or the lastConnected MAC isn't in saved radios). Manage Radios is the
+    // ONLY menu item whose job is to open the Connection Panel; Connect is
+    // strictly a one-click reconnect.
+    m_actConnect = radioMenu->addAction(QStringLiteral("&Connect"),
+        QKeySequence(Qt::CTRL | Qt::Key_K),
+        this, [this]() {
+            if (m_radioModel->isConnected()) {
+                return;
+            }
+            AppSettings& s = AppSettings::instance();
+            const QString lastMac = s.lastConnected();
+            const auto saved = s.savedRadio(lastMac);
+            if (!saved.has_value()) {
+                return;  // enablement should have prevented this
+            }
+            // Unicast probe targeted at the saved IP — cleaner than a
+            // broadcast scan + radioDiscovered listener: no leaked listeners
+            // when the radio doesn't reply, and works across VPN tunnels
+            // that drop broadcast traffic. Phase 3Q-2 wired probeAddress;
+            // this menu item now uses it directly. (Earlier broadcast-listen
+            // implementation leaked a connect-on-mac-match listener that
+            // would auto-reconnect to LOCAL radio on later scans even after
+            // the user explicitly disconnected — bug reported 2026-04-30.)
+            RadioDiscovery* disc = m_radioModel->discovery();
+            QMetaObject::Connection* connPtr = new QMetaObject::Connection;
+            QMetaObject::Connection* failPtr = new QMetaObject::Connection;
+            auto cleanup = [connPtr, failPtr]() {
+                QObject::disconnect(*connPtr);
+                delete connPtr;
+                QObject::disconnect(*failPtr);
+                delete failPtr;
+            };
+            *connPtr = connect(disc, &RadioDiscovery::radioDiscovered,
+                this, [this, lastMac, cleanup](const RadioInfo& found) {
+                    if (found.macAddress != lastMac) {
+                        return;  // probe reply for a different radio — wait
+                    }
+                    if (m_radioModel->isConnected()) {
+                        cleanup();
+                        return;
+                    }
+                    cleanup();
+                    RadioInfo ri = found;
+                    HPSDRModel mo = AppSettings::instance().modelOverride(ri.macAddress);
+                    if (mo != HPSDRModel::FIRST) {
+                        ri.modelOverride = mo;
+                    }
+                    m_radioModel->connectToRadio(ri);
+                });
+            *failPtr = connect(disc, &RadioDiscovery::probeFailed,
+                this, [cleanup, lastMac](const QHostAddress&, quint16) {
+                    qCInfo(lcConnection) << "Connect: probe failed for"
+                                         << lastMac;
+                    cleanup();
+                });
+            disc->probeAddress(saved->info.address, saved->info.port);
+        });
+    m_actConnect->setToolTip(QStringLiteral(
+        "Reconnect to the last-used radio (greyed out when there's nothing to reconnect to)"));
 
-    {
-        QAction* connectAction = radioMenu->addAction(QStringLiteral("&Connect"),
-            this, [this]() {
-                // Connect uses last known radio — opens panel if not connected
-                if (!m_radioModel->isConnected()) {
-                    showConnectionPanel();
-                }
-            });
-        connectAction->setToolTip(QStringLiteral("Connect to last radio"));
-    }
-
-    radioMenu->addAction(QStringLiteral("&Disconnect"), this, [this]() {
-        m_radioModel->disconnectFromRadio();
-    });
+    // Disconnect (⌘⇧K) — disabled while disconnected.
+    m_actDisconnect = radioMenu->addAction(QStringLiteral("&Disconnect"),
+        QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_K),
+        this, [this]() { m_radioModel->disconnectFromRadio(); });
+    m_actDisconnect->setToolTip(QStringLiteral("Disconnect from the current radio"));
 
     radioMenu->addSeparator();
 
-    radioMenu->addAction(QStringLiteral("&Radio Setup..."), this, [this]() {
-        if (!m_radioModel->isConnected()) {
-            showConnectionPanel();
-            return;
-        }
-        showConnectionPanel();
-    });
+    // Manage Radios — always enabled; sole purpose is to open the panel
+    // (which has its own ↻ Scan button for fresh broadcast discovery).
+    m_actManageRadios = radioMenu->addAction(QStringLiteral("&Manage Radios…"),
+        this, &MainWindow::showConnectionPanel);
+    m_actManageRadios->setToolTip(QStringLiteral(
+        "Open the Connection Panel (radio list + ↻ Scan)"));
+
+    radioMenu->addSeparator();
+
     {
-        QAction* antennaSetupAction = radioMenu->addAction(QStringLiteral("&Antenna Setup..."));
+        QAction* antennaSetupAction = radioMenu->addAction(QStringLiteral("&Antenna Setup…"));
         antennaSetupAction->setEnabled(false);
         antennaSetupAction->setToolTip(QStringLiteral("NYI — Phase X"));
     }
     {
-        QAction* transvertersAction = radioMenu->addAction(QStringLiteral("Trans&verters..."));
+        QAction* transvertersAction = radioMenu->addAction(QStringLiteral("Trans&verters…"));
         transvertersAction->setEnabled(false);
         transvertersAction->setToolTip(QStringLiteral("NYI — Phase X"));
     }
 
     radioMenu->addSeparator();
 
-    radioMenu->addAction(QStringLiteral("&Protocol Info"), this, [this]() {
-        if (m_radioModel->isConnected()) {
+    // Protocol Info — disabled while disconnected; shows a QMessageBox with
+    // the connected radio's protocol, firmware, and address info.
+    m_actProtocolInfo = radioMenu->addAction(QStringLiteral("&Protocol Info"),
+        this, [this]() {
+            if (!m_radioModel->isConnected()) {
+                return;
+            }
             RadioInfo info = m_radioModel->connection()->radioInfo();
-            QString msg = QStringLiteral("Radio: %1\nProtocol: P%2\nFirmware: %3\nMAC: %4\nIP: %5")
-                .arg(info.displayName())
-                .arg(static_cast<int>(info.protocol))
-                .arg(info.firmwareVersion)
-                .arg(info.macAddress, info.address.toString());
-            qCDebug(lcConnection) << msg;
-        }
-    });
+            const QString proto =
+                info.protocol == ProtocolVersion::Protocol2
+                    ? QStringLiteral("P2") : QStringLiteral("P1");
+            const QString msg =
+                QStringLiteral("Radio:    %1\nProtocol: %2\nFirmware: %3\nMAC:      %4\nIP:       %5")
+                    .arg(info.displayName())
+                    .arg(proto)
+                    .arg(info.firmwareVersion)
+                    .arg(info.macAddress, info.address.toString());
+            QMessageBox::information(this, QStringLiteral("Protocol Info"), msg);
+        });
+    m_actProtocolInfo->setToolTip(QStringLiteral(
+        "Show connected radio protocol, firmware, and address details"));
+
+    // Initial enablement (before any connectionStateChanged fires). Connect
+    // is enabled only when there's a last-used radio in saved entries — i.e.
+    // when "reconnect" actually has a target.
+    {
+        AppSettings& s = AppSettings::instance();
+        const QString lastMac = s.lastConnected();
+        const bool hasReconnectTarget =
+            !lastMac.isEmpty() && s.savedRadio(lastMac).has_value();
+        m_actConnect->setEnabled(hasReconnectTarget);
+    }
+    m_actDisconnect->setEnabled(false);
+    m_actProtocolInfo->setEnabled(false);
 
     // =========================================================================
     // VIEW
@@ -2155,9 +2407,11 @@ void MainWindow::buildStatusBar()
         "QStatusBar { background: #0a0a14; border-top: 1px solid #203040; }"
         "QStatusBar::item { border: none; }"));
 
-    // Wrapper widget for the full-width custom layout
-    QWidget* barWidget = new QWidget(sb);
-    barWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    // Wrapper widget for the full-width custom layout. Stored as a
+    // member so reapplyRightStripDropPriority() can read its width.
+    m_chromeBarWidget = new QWidget(sb);
+    m_chromeBarWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    QWidget* barWidget = m_chromeBarWidget;   // local alias keeps existing code below tidy
     QHBoxLayout* hbox = new QHBoxLayout(barWidget);
     hbox->setContentsMargins(6, 0, 6, 0);
     hbox->setSpacing(6);
@@ -2272,135 +2526,60 @@ void MainWindow::buildStatusBar()
 
     hbox->addWidget(radioInfoWidget);
 
+    // ── Phase 3Q Sub-PR-6 (F.1): RxDashboard ────────────────────────────────
+    // Replaces the Phase 3Q-7 verbose connection-info strip (those fields now
+    // live in the segment tooltip / NetworkDiagnosticsDialog).
+    // Bound to slice(0); when disconnected the badges show placeholder "—"
+    // until the slice receives live values from the radio.
+    hbox->addWidget(makeSep());
+    m_rxDashboard = new RxDashboard(barWidget);
+    const auto& slices = m_radioModel->slices();
+    if (!slices.isEmpty()) {
+        m_rxDashboard->bindSlice(slices.at(0));
+    }
+    hbox->addWidget(m_rxDashboard);
+
     // ── Stretch ───────────────────────────────────────────────────────────────
     hbox->addStretch(1);
 
-    // ── Center section: STATION callsign ─────────────────────────────────────
-    auto* stationContainer = new QWidget(barWidget);
-    stationContainer->setStyleSheet(QStringLiteral(
-        "QWidget { border: 1px solid rgba(0,180,216,80); background: #0a0a14;"
-        " padding: 1px 10px; border-radius: 3px; }"));
-    QHBoxLayout* stationHbox = new QHBoxLayout(stationContainer);
-    stationHbox->setContentsMargins(0, 0, 0, 0);
-    stationHbox->setSpacing(6);
-
-    auto* stationLabel = new QLabel(QStringLiteral("STATION:"), stationContainer);
-    stationLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: #00b4d8; font-size: 13px; border: none;"
-        " background: transparent; padding: 0; }"));
-    stationHbox->addWidget(stationLabel);
-
-    m_callsignLabel = new QLabel(stationContainer);
-    QString callsign = AppSettings::instance().value(
-        QStringLiteral("StationCallsign"), QStringLiteral("NereusSDR")).toString();
-    m_callsignLabel->setText(callsign);
-    m_callsignLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: #c8d8e8; font-size: 13px; font-weight: bold;"
-        " border: none; background: transparent; padding: 0; }"));
-    stationHbox->addWidget(m_callsignLabel);
-
-    // ── ADC Overload indicator ─────────────────────────────────────────────
-    // Status-bar warning label positioned immediately left of the STATION
-    // block. Mirrors Thetis's ucInfoBar Warning() — yellow while any ADC's
-    // hysteresis level > 0, red when any level > 3, hidden after 2 s of
-    // no new overload events (independent auto-hide timer).
-    //
-    // Source-first port of Thetis pollOverloadSyncSeqErr + ucInfoBar.Warning:
-    //   console.cs:21323        adc_names[] = { "ADC0", "ADC1", "ADC2" }
-    //   console.cs:21359-21389  per-ADC level counter + sWarning build
-    //                            (level>0 → append "{adc_names[i]} Overload   ";
-    //                             any level>3 → red_warning)
-    //   ucInfoBar.cs:911-933    Warning(msg, red_warning, show_duration):
-    //                            ForeColor = red ? Red : Yellow;
-    //                            Visible=true; _warningTimer.Start()
-    // [@501e3f5]
-    m_adcOvlLabel = new QLabel(barWidget);
-    m_adcOvlLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: #FFD700; font-size: 12px; font-weight: bold;"
-        " border: none; background: transparent; padding: 0 4px; }"));
-    // Reserve fixed width so the label appearing/disappearing does NOT
-    // shove STATION left/right when an overload fires. Width fits the
-    // common "ADCx Overload" case; multi-ADC strings elide with "…".
-    m_adcOvlLabel->setFixedWidth(180);
-    m_adcOvlLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_adcOvlLabel->setText(QString());  // empty when idle; no hide/show churn
-    // Explicit gap between the overload label and the STATION block so
-    // flashing text never visually touches the STATION border.
-    hbox->addWidget(m_adcOvlLabel);
-    hbox->addSpacing(12);
-
-    // Auto-hide timer mirrors Thetis ucInfoBar._warningTimer — single-shot
-    // 2000 ms, restarts on each overload event so a single hit keeps the
-    // label visible for the full 2 s even after the per-ADC level decays.
-    // Source: ucInfoBar.cs:927-932 + console.cs:21388 show_duration=2000
-    // [@501e3f5]
-    m_adcOvlHideTimer = new QTimer(this);
-    m_adcOvlHideTimer->setSingleShot(true);
-    m_adcOvlHideTimer->setInterval(2000);
-    connect(m_adcOvlHideTimer, &QTimer::timeout, this, [this]() {
-        // Clear text only — label widget stays in the layout at its
-        // reserved width so STATION doesn't re-flow. Matches Thetis's
-        // ucInfoBar pattern where the lbl control keeps its position.
-        if (m_adcOvlLabel) { m_adcOvlLabel->setText(QString()); }
+    // ── Center section: STATION — radio-name anchor (Sub-PR-7 G.1) ───────────
+    // The old cyan "STATION: NereusSDR" box is replaced by a StationBlock that
+    // shows the connected radio's name. Click → opens ConnectionPanel. Right-
+    // click → Disconnect / Edit radio… / Forget radio. Disconnected appearance:
+    // dashed-red border + italic "Click to connect" placeholder.
+    // The StationCallsign AppSettings key is preserved on disk for a potential
+    // future operator-callsign surface; it is no longer shown in status chrome.
+    m_stationBlock = new StationBlock(barWidget);
+    connect(m_stationBlock, &StationBlock::clicked,
+            this, &MainWindow::showConnectionPanel);
+    connect(m_stationBlock, &StationBlock::contextMenuRequested,
+            this, &MainWindow::showStationContextMenu);
+    // Update the block's name on connection state changes.
+    connect(m_radioModel, &RadioModel::currentRadioChanged, this,
+            [this](const NereusSDR::RadioInfo& info) {
+        const bool connected =
+            (m_radioModel->connectionState() == ConnectionState::Connected);
+        m_stationBlock->setRadioName(connected ? info.name : QString());
+    });
+    connect(m_radioModel, &RadioModel::connectionStateChanged, this,
+            [this](ConnectionState s) {
+        if (s != ConnectionState::Connected) {
+            m_stationBlock->setRadioName(QString());
+        }
     });
 
-    connect(m_stepAttController, &StepAttenuatorController::overloadStatusChanged,
-            this, [this](int /*adc*/, OverloadLevel /*level*/) {
-        // Thetis adc_names table — console.cs:21323 [@501e3f5]
-        static const char* const kAdcNames[3] = { "ADC0", "ADC1", "ADC2" };
+    // ── ADC Overload alarm: lives in the right-side strip ──────────────────
+    // Earlier revisions of the Phase 3Q chrome work parked the alarm
+    // between the dashboard and STATION block. That violated layout-
+    // stability rule §278.4 ("STATION sits between two flex:1 spacers.
+    // Activity in the middle or right sections never moves it.")
+    // because the label's text width grew when overload fired and
+    // pushed STATION sideways. The alarm is now an AdcOverloadBadge
+    // built further down with the other right-side status badges,
+    // between PA OK and TX, where its size changes consume the right-
+    // side strip's stretch space rather than the STATION anchor.
 
-        // Build warning text per Thetis console.cs:21359-21389 [@501e3f5]:
-        //   for each ADC: if level > 0, append "{adc_names[i]} Overload   "
-        //   red_warning = any level > 3
-        QString text;
-        bool anyRed = false;
-        for (int i = 0; i < 3; ++i) {
-            const OverloadLevel lvl = m_stepAttController->overloadLevel(i);
-            if (lvl != OverloadLevel::None) {
-                text += QStringLiteral("%1 Overload   ").arg(
-                    QString::fromLatin1(kAdcNames[i]));
-                // console.cs:21369 [@501e3f5] — "turn red after 3 cycles of
-                // overload". Our levelToSeverity() maps level > 3 → Red.
-                if (lvl == OverloadLevel::Red) {
-                    anyRed = true;
-                }
-            }
-        }
-        text = text.trimmed();  // Thetis: sWarning = sWarning.Trim()
-
-        if (text.isEmpty()) {
-            // No ADC currently above level 0. Don't clear the text yet —
-            // let the 2 s auto-hide timer expire so a just-cleared
-            // overload stays visible for the remainder of its 2 s window.
-            return;
-        }
-
-        // ucInfoBar.cs:928 [@501e3f5] — red_warning ? Red : Yellow
-        const QString color = anyRed ? QStringLiteral("#FF3333")
-                                     : QStringLiteral("#FFD700");
-        m_adcOvlLabel->setStyleSheet(
-            QStringLiteral("QLabel { color: %1; font-size: 12px; font-weight: bold;"
-                           " border: none; background: transparent;"
-                           " padding: 0 4px; }").arg(color));
-        m_adcOvlLabel->setText(text);
-
-        // Restart auto-hide — matches Thetis: _warningTimer.Stop(); .Start();
-        // (ucInfoBar.cs:927+932 [@501e3f5]).
-        m_adcOvlHideTimer->start();
-
-        // Tooltip: per-ADC detail.
-        QString tip;
-        for (int i = 0; i < 3; ++i) {
-            if (m_stepAttController->overloadLevel(i) != OverloadLevel::None) {
-                if (!tip.isEmpty()) { tip += QStringLiteral("\n"); }
-                tip += QStringLiteral("%1: overload").arg(
-                    QString::fromLatin1(kAdcNames[i]));
-            }
-        }
-        m_adcOvlLabel->setToolTip(tip);
-    });
-
-    hbox->addWidget(stationContainer);
+    hbox->addWidget(m_stationBlock);
 
     // ── Stretch ───────────────────────────────────────────────────────────────
     hbox->addStretch(1);
@@ -2429,28 +2608,80 @@ void MainWindow::buildStatusBar()
         return w;
     };
 
-    // CAT Serial
-    hbox->addWidget(makeIndicator(QStringLiteral("CAT"), QStringLiteral("Off")));
-    hbox->addWidget(makeSep());
+    // CAT Serial — NYI until Phase 3K; kept as static indicator, no live signal
+    m_catIndicator = makeIndicator(QStringLiteral("CAT"), QStringLiteral("Off"));
+    hbox->addWidget(m_catIndicator);
+    m_catSep = makeSep();
+    hbox->addWidget(m_catSep);
 
-    // TCI
-    hbox->addWidget(makeIndicator(QStringLiteral("TCI"), QStringLiteral("Off")));
-    hbox->addWidget(makeSep());
+    // TCI — NYI until Phase 3J; kept as static indicator, no live signal
+    m_tciIndicator = makeIndicator(QStringLiteral("TCI"), QStringLiteral("Off"));
+    hbox->addWidget(m_tciIndicator);
+    m_tciSep = makeSep();
+    hbox->addWidget(m_tciSep);
 
-    // PA Voltage
-    hbox->addWidget(makeIndicator(QStringLiteral("PA"), QStringLiteral("— V")));
-    hbox->addWidget(makeSep());
+    // ── PA / supply voltage (MKII-class boards only) ──────────────────────
+    // Earlier revisions of this section showed a "PSU" widget driven by
+    // the supply_volts (AIN6) channel. Source-first audit against Thetis
+    // [v2.10.3.13] proved that channel is never displayed in Thetis —
+    // computeHermesDCVoltage() exists but has zero callers, and the only
+    // voltage status indicator (toolStripStatusLabel_Volts) reads
+    // _MKIIPAVolts which is convertToVolts(getUserADC0()) — i.e. the PA
+    // drain voltage on AIN3. On a G2 / 8000D / 7000DLE the PA drain IS
+    // the supply voltage minus a small drop, so this single number
+    // covers what the user wants to know.
+    //
+    // This widget is hidden by default and shown on the first
+    // userAdc0Changed signal (which only fires for MKII-class boards
+    // per the gate at P2RadioConnection.cpp:2153-2164). Non-MKII
+    // boards (Hermes, Atlas) get no voltage display, matching Thetis
+    // (HardwareSpecific.HasVolts gate).
+    m_paVoltLabel = new MetricLabel(QStringLiteral("PA"),
+                                    QStringLiteral("—"), barWidget);
+    m_paVoltLabel->setVisible(false);
+    hbox->addWidget(m_paVoltLabel);
+    m_paVoltLabelSep = makeSep();
+    m_paVoltLabelSep->setVisible(false);
+    hbox->addWidget(m_paVoltLabelSep);
 
-    // CPU usage — stacked "CPU: X.X%" / "Mem: —"
-    // Wired to 1.5s QTimer using getrusage (macOS / POSIX).
-    {
-        QWidget* cpuWidget = makeIndicator(
-            QStringLiteral("CPU: —"), QStringLiteral("Mem: —"),
-            &m_cpuTopLabel, &m_cpuBotLabel);
-        cpuWidget->setMinimumWidth(72);
-        hbox->addWidget(cpuWidget);
-    }
-    hbox->addWidget(makeSep());
+    // Wire voltage signals: re-bind on every new connection, reset on disconnect.
+    connect(m_radioModel, &RadioModel::connectionStateChanged, this,
+            [this](ConnectionState s) {
+        if (s != ConnectionState::Connected) {
+            const bool wasShown = m_paVoltLabel->isVisible();
+            m_paVoltLabel->setVisible(false);
+            if (m_paVoltLabelSep) { m_paVoltLabelSep->setVisible(false); }
+            if (wasShown) {
+                // PA volt widget just disappeared — drops may unwind.
+                // force=true: budget hasn't moved but content width has.
+                reapplyRightStripDropPriority(/*force=*/true);
+            }
+        }
+        if (auto* conn = m_radioModel->connection()) {
+            // conn is a new object on each reconnect — no deduplication needed.
+            // Qt::UniqueConnection is not supported for lambda connects anyway.
+            connect(conn, &RadioConnection::userAdc0Changed, this,
+                    [this](float v) {
+                const bool wasHidden = !m_paVoltLabel->isVisible();
+                m_paVoltLabel->setValue(QString::asprintf("%.1fV", static_cast<double>(v)));
+                m_paVoltLabel->setVisible(true);
+                if (m_paVoltLabelSep) { m_paVoltLabelSep->setVisible(true); }
+                if (wasHidden) {
+                    // PA volt widget just appeared — recompute drops.
+                    // force=true: budget hasn't moved but content width has.
+                    reapplyRightStripDropPriority(/*force=*/true);
+                }
+            });
+        }
+    });
+
+    // ── sub-PR-8: CPU MetricLabel ─────────────────────────────────────────
+    // Replaces the old stacked "CPU: —" / "Mem: —" makeIndicator pair.
+    m_cpuMetric = new MetricLabel(QStringLiteral("CPU"),
+                                  QStringLiteral("—"), barWidget);
+    hbox->addWidget(m_cpuMetric);
+    m_cpuMetricSep = makeSep();
+    hbox->addWidget(m_cpuMetricSep);
 
     // ── Phase 3M-0 Task 14: TX Inhibit indicator ─────────────────────────
     // Red "TX INHIBIT" pill — hidden by default; shown when
@@ -2465,49 +2696,169 @@ void MainWindow::buildStatusBar()
     m_txInhibitLabel->setVisible(false);  // hidden until inhibit asserts
     hbox->addWidget(m_txInhibitLabel);
 
-    // ── Phase 3M-0 Task 14: PA Status badge ─────────────────────────────
-    // "PA OK" (green) / "PA FAULT" (red) badge driven by
-    // RadioModel::paTripped(). Default state is OK; setPaTripped() flips
-    // the text, colour, and tooltip. Signal wiring lands in Task 17.
-    m_paStatusBadge = new QLabel(QStringLiteral("PA OK"), barWidget);
+    // ── sub-PR-8: PA Status StatusBadge ──────────────────────────────────
+    // Variant::On (green ✓ PA OK) / Variant::Tx (red ✓ PA FAULT).
+    // Driven by RadioModel::paTripped(); setPaTripped() flips the variant.
+    // Signal wiring lands in Task 17 (same as the original QLabel).
+    m_paStatusBadge = new StatusBadge(barWidget);
     m_paStatusBadge->setObjectName(QStringLiteral("paStatusBadge"));
-    m_paStatusBadge->setStyleSheet(QStringLiteral(
-        "QLabel { color: #60ff60; font-weight: bold; font-size: 11px; padding: 2px 6px; }"));
+    // SVG-backed icon — earlier revisions used the U+2713 CHECK MARK
+    // glyph, which renders inconsistently across the SF Mono / Menlo /
+    // monospace fallback chain (boxed or kerned wrong on platforms
+    // without SF Mono installed). The SVG is rendered at 14 logical
+    // px and tinted with the variant's foreground color.
+    m_paStatusBadge->setSvgIcon(QStringLiteral(":/icons/badge-check.svg"));
+    m_paStatusBadge->setLabel(QStringLiteral("PA"));
+    m_paStatusBadge->setVariant(StatusBadge::Variant::On);
     m_paStatusBadge->setToolTip(tr("PA Status — OK"));
     hbox->addWidget(m_paStatusBadge);
+    m_paStatusBadgeSep = makeSep();
+    hbox->addWidget(m_paStatusBadgeSep);
+
+    // ── ADC overload alarm — stacked badge between PA OK and TX ───────────
+    // Hidden by default; shown when StepAttenuatorController emits an
+    // overload event, hidden again 2 s after the latest event by the
+    // timer below. The trailing separator is captured + toggled with
+    // the badge so the strip closes seamlessly when the alarm clears
+    // (otherwise we'd leave a dangling "··" run).
+    //
+    // Source-first port of Thetis pollOverloadSyncSeqErr + ucInfoBar.Warning
+    // [@501e3f5]:
+    //   console.cs:21323        adc_names[] = { "ADC0", "ADC1", "ADC2" }
+    //   console.cs:21359-21389  per-ADC level counter; level>0 → warn,
+    //                            any level>3 → red_warning
+    //   ucInfoBar.cs:911-933    Warning(msg, red_warning, show_duration):
+    //                            ForeColor = red ? Red : Yellow;
+    //                            Visible=true; _warningTimer.Start()
+    m_adcOvlBadge = new AdcOverloadBadge(barWidget);
+    m_adcOvlBadge->setObjectName(QStringLiteral("adcOvlBadge"));
+    m_adcOvlBadge->setVisible(false);
+    hbox->addWidget(m_adcOvlBadge);
+    m_adcOvlSep = makeSep();
+    m_adcOvlSep->setVisible(false);
+    hbox->addWidget(m_adcOvlSep);
+
+    // Auto-hide timer mirrors Thetis ucInfoBar._warningTimer — single-shot
+    // 2000 ms, restarts on each overload event so a single hit keeps the
+    // alarm visible for the full 2 s even after the per-ADC level decays.
+    // Source: ucInfoBar.cs:927-932 + console.cs:21388 show_duration=2000
+    // [@501e3f5].
+    m_adcOvlHideTimer = new QTimer(this);
+    m_adcOvlHideTimer->setSingleShot(true);
+    m_adcOvlHideTimer->setInterval(2000);
+    connect(m_adcOvlHideTimer, &QTimer::timeout, this, [this]() {
+        if (m_adcOvlBadge) { m_adcOvlBadge->setVisible(false); }
+        if (m_adcOvlSep)   { m_adcOvlSep->setVisible(false); }
+        // Required width of the strip just shrank — recompute drops.
+        // force=true: budget hasn't moved but content width has.
+        reapplyRightStripDropPriority(/*force=*/true);
+    });
+
+    connect(m_stepAttController, &StepAttenuatorController::overloadStatusChanged,
+            this, [this](int /*adc*/, OverloadLevel /*level*/) {
+        // Thetis adc_names table — console.cs:21323 [@501e3f5]
+        static const char* const kAdcNames[3] = { "ADC0", "ADC1", "ADC2" };
+
+        // Build the alarm state: which ADCs are firing, plus highest
+        // severity. Thetis console.cs:21359-21389 [@501e3f5] —
+        // red_warning is any level > 3; our levelToSeverity() maps that
+        // to OverloadLevel::Red.
+        bool anyRed = false;
+        QString shownAdcs;
+        QString tip;
+        for (int i = 0; i < 3; ++i) {
+            const OverloadLevel lvl = m_stepAttController->overloadLevel(i);
+            if (lvl == OverloadLevel::None) { continue; }
+            if (lvl == OverloadLevel::Red) { anyRed = true; }
+            if (!shownAdcs.isEmpty()) { shownAdcs += QStringLiteral("/"); }
+            shownAdcs += QString::number(i);
+            if (!tip.isEmpty()) { tip += QStringLiteral("\n"); }
+            tip += QStringLiteral("%1: overload").arg(
+                QString::fromLatin1(kAdcNames[i]));
+        }
+
+        if (shownAdcs.isEmpty()) {
+            // No ADC currently above level 0 — let the 2 s auto-hide
+            // timer expire so a just-cleared overload stays visible
+            // for the remainder of its window. Matches Thetis.
+            return;
+        }
+
+        m_adcOvlBadge->setAdcs(shownAdcs);
+        // ucInfoBar.cs:928 [@501e3f5] — red_warning ? Red : Yellow.
+        m_adcOvlBadge->setVariant(anyRed ? AdcOverloadBadge::Variant::Tx
+                                         : AdcOverloadBadge::Variant::Warn);
+        m_adcOvlBadge->setToolTip(tip);
+        m_adcOvlBadge->setVisible(true);
+        if (m_adcOvlSep) { m_adcOvlSep->setVisible(true); }
+
+        // Required width of the strip just grew — drop something else
+        // if the new total exceeds budget.
+        // force=true: budget hasn't moved but content width has.
+        reapplyRightStripDropPriority(/*force=*/true);
+
+        // Restart auto-hide — Thetis: _warningTimer.Stop(); .Start();
+        // (ucInfoBar.cs:927+932 [@501e3f5]).
+        m_adcOvlHideTimer->start();
+    });
+
+    // ── sub-PR-8: Canonical TX StatusBadge ───────────────────────────────
+    // Solid red (Variant::Tx) when MoxController emits moxStateChanged(true).
+    // Dim (Variant::Off) at rest. No flash per design spec.
+    m_txStatusBadge = new StatusBadge(barWidget);
+    m_txStatusBadge->setObjectName(QStringLiteral("txStatusBadge"));
+    // SVG-backed icon — see PA badge note above for rationale. The dot
+    // shape matches the U+25CF BLACK CIRCLE glyph it replaces.
+    m_txStatusBadge->setSvgIcon(QStringLiteral(":/icons/badge-dot.svg"));
+    m_txStatusBadge->setLabel(QStringLiteral("TX"));
+    m_txStatusBadge->setVariant(StatusBadge::Variant::Off);
+    m_txStatusBadge->setToolTip(tr("Receive (MOX off)"));
+    hbox->addWidget(m_txStatusBadge);
     hbox->addWidget(makeSep());
 
-    // TX indicator — dim red when not transmitting; bright red when TX active (NYI)
-    auto* txLabel = new QLabel(QStringLiteral("TX"), barWidget);
-    txLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: rgba(180,40,40,120); font-weight: bold; font-size: 14px; }"));
-    txLabel->setToolTip(QStringLiteral("Transmit (NYI)"));
-    hbox->addWidget(txLabel);
-    hbox->addWidget(makeSep());
+    // Wire TX badge to MoxController. MoxController lives on m_radioModel;
+    // both are created before buildStatusBar() runs.
+    if (MoxController* mox = m_radioModel->moxController()) {
+        // Qt::UniqueConnection is not supported for lambda connects — this
+        // connect runs once at construction so no deduplication is needed.
+        connect(mox, &MoxController::moxStateChanged, this, [this](bool tx) {
+            m_txStatusBadge->setVariant(tx ? StatusBadge::Variant::Tx
+                                           : StatusBadge::Variant::Off);
+            m_txStatusBadge->setToolTip(tx ? tr("Transmitting (MOX engaged)")
+                                           : tr("Receive (MOX off)"));
+        });
+    }
+
+    // ── OverflowChip — surfaces drop-list contents when the strip is tight
+    // Sits just before the clock so the "…" appears at the right end of
+    // the strip whenever ≥ 1 right-strip item has been dropped to fit.
+    // Hidden when the drop list is empty.
+    m_overflowChip = new OverflowChip(barWidget);
+    hbox->addWidget(m_overflowChip);
 
     // Time display: stacked UTC + date / local
     // Top row: UTC time (hh:mm:ss UTC)
     // Bottom row: date + local time
     {
-        auto* timeWidget = new QWidget(barWidget);
-        timeWidget->setMinimumWidth(130);
-        QVBoxLayout* tvl = new QVBoxLayout(timeWidget);
+        m_timeWidget = new QWidget(barWidget);
+        m_timeWidget->setMinimumWidth(130);
+        QVBoxLayout* tvl = new QVBoxLayout(m_timeWidget);
         tvl->setContentsMargins(0, 0, 0, 0);
         tvl->setSpacing(0);
 
-        m_utcTimeLabel = new QLabel(timeWidget);
+        m_utcTimeLabel = new QLabel(m_timeWidget);
         m_utcTimeLabel->setStyleSheet(QStringLiteral(
             "QLabel { color: #8aa8c0; font-size: 11px; }"));
         m_utcTimeLabel->setToolTip(QStringLiteral("UTC time"));
         tvl->addWidget(m_utcTimeLabel);
 
-        auto* localDateLabel = new QLabel(timeWidget);
+        auto* localDateLabel = new QLabel(m_timeWidget);
         localDateLabel->setStyleSheet(QStringLiteral(
             "QLabel { color: #607080; font-size: 11px; }"));
         localDateLabel->setToolTip(QStringLiteral("Local date/time"));
         tvl->addWidget(localDateLabel);
 
-        hbox->addWidget(timeWidget);
+        hbox->addWidget(m_timeWidget);
 
         // Combined clock timer — 1s updates for UTC+date+local
         m_clockTimer = new QTimer(this);
@@ -2526,65 +2877,57 @@ void MainWindow::buildStatusBar()
         m_clockTimer->start(1000);
     }
 
-    // ── CPU usage timer (1.5s, macOS getrusage) ───────────────────────────────
-    // Track cumulative CPU time between samples to compute percentage.
-    // From macOS man page: getrusage(RUSAGE_SELF, &ru) gives ru_utime + ru_stime.
-#ifdef Q_OS_MAC
+    // ── CPU usage timer ──────────────────────────────────────────────────────
+    // Two sources, user-toggleable via right-click on m_cpuMetric:
+    //   System  (default) — host_processor_info / whole-machine CPU,
+    //                       mirrors Thetis _total_cpu_usage PerformanceCounter.
+    //   App     — getrusage(RUSAGE_SELF), this process only,
+    //                       mirrors Thetis Common.ProcessCPUUsage.
+    // 1 s tick rate matches Thetis cpu_meter_delay (console.cs:20102).
+    // Smoothed value via 0.8/0.2 mix per Thetis console.cs:26224.
+    // Restore persisted toggle (default System per Thetis default).
+    // Wired on every supported platform — readSystemCpuPercent /
+    // readProcessCpuPercent are cross-platform (macOS / Linux / Windows).
+    m_cpuShowSystem = (AppSettings::instance()
+                          .value(QStringLiteral("CpuShowSystem"),
+                                 QStringLiteral("True"))
+                          .toString() == QStringLiteral("True"));
+
+    m_cpuMetric->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_cpuMetric, &QWidget::customContextMenuRequested,
+            this, &MainWindow::onCpuMenuRequested);
+    m_cpuMetric->setToolTip(
+        tr("Right-click to switch between System and App CPU usage"));
+
     m_cpuTimer = new QTimer(this);
-    // Snapshot state for delta calculation
-    struct timeval prevUser{0, 0};
-    struct timeval prevSys{0, 0};
-    qint64 prevWallUs = QDateTime::currentMSecsSinceEpoch() * 1000LL;
-
-    connect(m_cpuTimer, &QTimer::timeout, this,
-            [this, prevUser, prevSys, prevWallUs]() mutable {
-        struct rusage ru{};
-        if (getrusage(RUSAGE_SELF, &ru) != 0) { return; }
-
-        qint64 nowUs = QDateTime::currentMSecsSinceEpoch() * 1000LL;
-        qint64 wallDelta = nowUs - prevWallUs;
-        if (wallDelta <= 0) { return; }
-
-        auto toUs = [](const struct timeval& tv) -> qint64 {
-            return static_cast<qint64>(tv.tv_sec) * 1'000'000LL + tv.tv_usec;
-        };
-        qint64 userDelta = toUs(ru.ru_utime) - toUs(prevUser);
-        qint64 sysDelta  = toUs(ru.ru_stime) - toUs(prevSys);
-        double cpuPct = 100.0 * static_cast<double>(userDelta + sysDelta)
-                        / static_cast<double>(wallDelta);
-
-        prevUser    = ru.ru_utime;
-        prevSys     = ru.ru_stime;
-        prevWallUs  = nowUs;
-
-        if (m_cpuTopLabel) {
-            m_cpuTopLabel->setText(
-                QStringLiteral("CPU: %1%").arg(cpuPct, 0, 'f', 1));
+    connect(m_cpuTimer, &QTimer::timeout, this, [this]() {
+        const double pct = m_cpuShowSystem ? readSystemCpuPercent()
+                                           : readProcessCpuPercent();
+        // Thetis smoothing: smoothed = smoothed*0.8 + new*0.2
+        m_cpuSmoothedPct = m_cpuSmoothedPct * 0.8 + pct * 0.2;
+        if (m_cpuMetric) {
+            m_cpuMetric->setValue(QString::asprintf("%.0f%%",
+                                                    m_cpuSmoothedPct));
         }
     });
-    m_cpuTimer->start(1500);
-#endif
+    m_cpuTimer->start(1000);
 
     // Add the full-width bar widget to the status bar
     sb->addWidget(barWidget, 1);
 }
 
-// ── Phase 3M-0 Task 14: PA trip badge update ─────────────────────────────────
+// ── Phase 3M-0 Task 14 / sub-PR-8: PA trip badge update ──────────────────────
 // Called by Task 17 wiring when RadioModel::paTrippedChanged fires.
-// Updates badge text, colour, and tooltip atomically so there is never
-// a state where text and colour are out of sync.
+// Flips the StatusBadge variant (On = green ✓ PA OK; Tx = red ✓ PA FAULT)
+// and updates the tooltip atomically.
 void MainWindow::setPaTripped(bool tripped)
 {
     if (!m_paStatusBadge) { return; }
     if (tripped) {
-        m_paStatusBadge->setText(QStringLiteral("PA FAULT"));
-        m_paStatusBadge->setStyleSheet(QStringLiteral(
-            "QLabel { color: #ff6060; font-weight: bold; font-size: 11px; padding: 2px 6px; }"));
+        m_paStatusBadge->setVariant(StatusBadge::Variant::Tx);
         m_paStatusBadge->setToolTip(tr("PA Status — FAULT (PA tripped, MOX dropped)"));
     } else {
-        m_paStatusBadge->setText(QStringLiteral("PA OK"));
-        m_paStatusBadge->setStyleSheet(QStringLiteral(
-            "QLabel { color: #60ff60; font-weight: bold; font-size: 11px; padding: 2px 6px; }"));
+        m_paStatusBadge->setVariant(StatusBadge::Variant::On);
         m_paStatusBadge->setToolTip(tr("PA Status — OK"));
     }
 }
@@ -3165,6 +3508,313 @@ void MainWindow::wireSliceToSpectrum()
     }
 }
 
+void MainWindow::reapplyRightStripDropPriority(bool force)
+{
+    // No work if the chrome bar isn't built yet (called pre-construction
+    // from a stray signal) or the OverflowChip is missing.
+    if (!m_chromeBarWidget || !m_overflowChip) { return; }
+
+    // Hysteresis: if the strip width hasn't moved past a 30 px window
+    // since our last decision and no content-change site flagged
+    // force=true, return early. Without this gate, resizeEvent fires on
+    // every pixel of a manual drag, and at boundary widths the
+    // setVisible() toggles below re-fire resize at a slightly different
+    // width, looping. Content-change call sites (voltage handler, ADC
+    // overload timer) pass force=true since the budget hasn't moved but
+    // the required width has — the deadband would otherwise skip work
+    // we genuinely need.
+    constexpr int kDeadbandPx = 30;
+    const int gateBudget = m_chromeBarWidget->width();
+    if (!force && m_rightStripSettled
+        && qAbs(gateBudget - m_rightStripLastBudget) < kDeadbandPx) {
+        return;
+    }
+
+    // Drop priority — spec §286-290:
+    //   PA OK → CAT/TCI → PSU/PA → CPU → time
+    // Each entry pairs the primary widget with its trailing separator
+    // so they hide + show together (no dangling "··" runs). Time has
+    // no trailing separator. CAT and TCI are listed as a pair per spec
+    // ("CAT/TCI") and we drop them together to avoid the "TCI but no
+    // CAT" half-state.
+    struct DropEntry {
+        QWidget* primary{nullptr};
+        QWidget* sep{nullptr};
+        QString  name;
+    };
+    const QVector<QVector<DropEntry>> priorityGroups = {
+        // 1. PA OK badge — drops first (least operationally critical
+        //    among the right-strip items per spec; user can still see
+        //    fault state via the dialog or dashboard).
+        {{ m_paStatusBadge, m_paStatusBadgeSep, tr("PA OK") }},
+        // 2. CAT + TCI — drop together as a pair.
+        {
+            { m_catIndicator, m_catSep, tr("CAT") },
+            { m_tciIndicator, m_tciSep, tr("TCI") },
+        },
+        // 3. PA voltage (MKII-class only; widget is hidden on non-MKII boards
+        //    — drop logic skips invisible widgets so this is a no-op there).
+        {{ m_paVoltLabel, m_paVoltLabelSep, tr("PA voltage") }},
+        // 4. CPU.
+        {{ m_cpuMetric, m_cpuMetricSep, tr("CPU") }},
+        // 5. Time — drops last; if it goes the strip is essentially empty.
+        {{ m_timeWidget, nullptr, tr("Clock") }},
+    };
+
+    // Phase 1: restore everything (the window may have grown since the
+    // last pass). Iterate every entry and force visible. The
+    // OverflowChip itself drops its contents to start fresh.
+    for (const auto& group : priorityGroups) {
+        for (const auto& e : group) {
+            if (e.primary) { e.primary->setVisible(true); }
+            if (e.sep)     { e.sep->setVisible(true); }
+        }
+    }
+    m_overflowChip->setDroppedItems({});
+
+    // Force layout to recompute sizeHints with the new visibility state.
+    if (auto* lay = m_chromeBarWidget->layout()) { lay->activate(); }
+
+    auto* hbox = qobject_cast<QHBoxLayout*>(m_chromeBarWidget->layout());
+    if (!hbox) { return; }
+
+    // Helper: total width of all currently-visible non-stretch widgets +
+    // their separators + the layout's spacings + content margins.
+    auto requiredWidth = [hbox]() -> int {
+        int w = 0;
+        const int spacing = hbox->spacing();
+        int visibleCount = 0;
+        for (int i = 0; i < hbox->count(); ++i) {
+            QLayoutItem* it = hbox->itemAt(i);
+            if (auto* widget = it->widget()) {
+                if (widget->isVisibleTo(widget->parentWidget())) {
+                    w += widget->sizeHint().width();
+                    ++visibleCount;
+                }
+            } else if (auto* sp = it->spacerItem()) {
+                // Stretches don't add to required width; fixed spacers do.
+                if (sp->expandingDirections() == Qt::Orientations()) {
+                    w += sp->sizeHint().width();
+                }
+            }
+        }
+        if (visibleCount > 1) {
+            w += spacing * (visibleCount - 1);
+        }
+        const auto m = hbox->contentsMargins();
+        w += m.left() + m.right();
+        return w;
+    };
+
+    const int budget = gateBudget;
+    QStringList dropped;
+
+    // Phase 2: drop priority groups in order until the strip fits.
+    for (const auto& group : priorityGroups) {
+        if (requiredWidth() <= budget) { break; }
+        for (const auto& e : group) {
+            if (e.primary) { e.primary->setVisible(false); }
+            if (e.sep)     { e.sep->setVisible(false); }
+            if (!e.name.isEmpty()) { dropped << e.name; }
+        }
+        if (auto* lay = m_chromeBarWidget->layout()) { lay->activate(); }
+    }
+
+    m_overflowChip->setDroppedItems(dropped);
+    m_rightStripLastBudget = budget;
+    m_rightStripSettled = true;
+}
+
+// ── CPU usage source toggle ──────────────────────────────────────────────────
+// Right-click menu on the CPU MetricLabel — System / App radio choice.
+// Mirrors Thetis's toolStripDropDownButton_CPU with systemToolStripMenuItem
+// and thetisOnlyToolStripMenuItem (console.cs:44230-44247). Persists the
+// choice in AppSettings under "CpuShowSystem".
+void MainWindow::onCpuMenuRequested(const QPoint& localPos)
+{
+    if (!m_cpuMetric) { return; }
+
+    QMenu menu(this);
+    QAction* sysAct = menu.addAction(tr("System"));
+    sysAct->setCheckable(true);
+    sysAct->setChecked(m_cpuShowSystem);
+    QAction* appAct = menu.addAction(tr("App (NereusSDR)"));
+    appAct->setCheckable(true);
+    appAct->setChecked(!m_cpuShowSystem);
+
+    QAction* chosen = menu.exec(m_cpuMetric->mapToGlobal(localPos));
+    if (!chosen) { return; }
+
+    const bool newSys = (chosen == sysAct);
+    if (newSys == m_cpuShowSystem) { return; }
+
+    m_cpuShowSystem = newSys;
+    AppSettings::instance().setValue(
+        QStringLiteral("CpuShowSystem"),
+        newSys ? QStringLiteral("True") : QStringLiteral("False"));
+
+    // Reset delta state and smoothing so the next reading starts cleanly.
+    m_cpuSmoothedPct = 0.0;
+    m_cpuProcPrevWallUs = 0;
+    m_cpuProcPrevUserUs = 0;
+    m_cpuProcPrevSysUs = 0;
+    m_cpuSysPrevTotal = 0;
+    m_cpuSysPrevIdle = 0;
+    m_cpuMetric->setValue(QStringLiteral("—"));
+}
+
+double MainWindow::readProcessCpuPercent()
+{
+    // Per-platform "process CPU time since boot" readers — return user +
+    // kernel time consumed by this process expressed in microseconds.
+    // POSIX (macOS / Linux) uses getrusage; Windows uses GetProcessTimes
+    // and converts the FILETIME tick counter (100 ns) to microseconds.
+    qint64       userUs = 0;
+    qint64       sysUs  = 0;
+    const qint64 nowUs  = QDateTime::currentMSecsSinceEpoch() * 1000LL;
+
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
+    struct rusage ru{};
+    if (getrusage(RUSAGE_SELF, &ru) != 0) { return 0.0; }
+    auto toUs = [](const struct timeval& tv) -> qint64 {
+        return static_cast<qint64>(tv.tv_sec) * 1'000'000LL
+             + static_cast<qint64>(tv.tv_usec);
+    };
+    userUs = toUs(ru.ru_utime);
+    sysUs  = toUs(ru.ru_stime);
+#elif defined(Q_OS_WIN)
+    FILETIME ftCreation{}, ftExit{}, ftKernel{}, ftUser{};
+    if (!GetProcessTimes(GetCurrentProcess(),
+                         &ftCreation, &ftExit, &ftKernel, &ftUser)) {
+        return 0.0;
+    }
+    auto fileTimeToUs = [](const FILETIME& ft) -> qint64 {
+        ULARGE_INTEGER u{};
+        u.LowPart  = ft.dwLowDateTime;
+        u.HighPart = ft.dwHighDateTime;
+        return static_cast<qint64>(u.QuadPart / 10);  // 100 ns -> µs
+    };
+    userUs = fileTimeToUs(ftUser);
+    sysUs  = fileTimeToUs(ftKernel);
+#else
+    return 0.0;
+#endif
+
+    if (m_cpuProcPrevWallUs == 0) {
+        // First-call sentinel — capture baseline, return 0 this round.
+        m_cpuProcPrevWallUs = nowUs;
+        m_cpuProcPrevUserUs = userUs;
+        m_cpuProcPrevSysUs  = sysUs;
+        return 0.0;
+    }
+
+    const qint64 wallDelta = nowUs - m_cpuProcPrevWallUs;
+    if (wallDelta <= 0) { return 0.0; }
+
+    const qint64 cpuDelta = (userUs - m_cpuProcPrevUserUs)
+                          + (sysUs  - m_cpuProcPrevSysUs);
+
+    m_cpuProcPrevWallUs = nowUs;
+    m_cpuProcPrevUserUs = userUs;
+    m_cpuProcPrevSysUs  = sysUs;
+
+    return 100.0 * static_cast<double>(cpuDelta)
+                 / static_cast<double>(wallDelta);
+}
+
+double MainWindow::readSystemCpuPercent()
+{
+    // Per-platform "system CPU time since boot" readers. The CPU usage
+    // formula is the same across all three: percent = 100 * (1 - dIdle / dTotal).
+    // What differs is how each OS exposes the underlying tick counters.
+    //
+    // - macOS: host_processor_info(PROCESSOR_CPU_LOAD_INFO) → per-CPU
+    //   tick counters; sum across cores.
+    // - Linux: /proc/stat first line "cpu  user nice system idle iowait
+    //   irq softirq steal guest guest_nice" — total = sum, idle = the
+    //   `idle` field (not iowait, matching `top`/`htop` convention).
+    // - Windows: GetSystemTimes → idle/kernel/user as FILETIMEs (100 ns).
+    //   Note kernel time on Windows *includes* idle, so total = kernel +
+    //   user; the percent formula above still holds.
+    quint64 totalNow = 0;
+    quint64 idleNow  = 0;
+
+#if defined(Q_OS_MAC)
+    natural_t                 cpuCount = 0;
+    processor_info_array_t    info     = nullptr;
+    mach_msg_type_number_t    numInfo  = 0;
+
+    if (host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO,
+                            &cpuCount, &info, &numInfo) != KERN_SUCCESS) {
+        return 0.0;
+    }
+
+    auto* cpus = reinterpret_cast<processor_cpu_load_info_t>(info);
+    for (natural_t i = 0; i < cpuCount; ++i) {
+        for (int s = 0; s < CPU_STATE_MAX; ++s) {
+            totalNow += cpus[i].cpu_ticks[s];
+        }
+        idleNow += cpus[i].cpu_ticks[CPU_STATE_IDLE];
+    }
+
+    vm_deallocate(mach_task_self(),
+                  reinterpret_cast<vm_address_t>(info),
+                  static_cast<vm_size_t>(numInfo) * sizeof(integer_t));
+#elif defined(Q_OS_LINUX)
+    QFile f(QStringLiteral("/proc/stat"));
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) { return 0.0; }
+    const QByteArray line = f.readLine();
+    f.close();
+
+    // Tokenize on whitespace; first token is "cpu", remaining are tick
+    // counts. Empty entries from the doubled space after "cpu" get filtered.
+    const QList<QByteArray> rawParts = line.split(' ');
+    QList<quint64> vals;
+    vals.reserve(10);
+    for (int i = 1; i < rawParts.size() && vals.size() < 10; ++i) {
+        if (rawParts[i].isEmpty()) { continue; }
+        bool ok = false;
+        const quint64 v = rawParts[i].toULongLong(&ok);
+        if (ok) { vals.append(v); }
+    }
+    if (vals.size() < 4) { return 0.0; }
+    for (auto v : vals) { totalNow += v; }
+    idleNow = vals[3];   // idle field; iowait NOT counted as idle (top convention)
+#elif defined(Q_OS_WIN)
+    FILETIME ftIdle{}, ftKernel{}, ftUser{};
+    if (!GetSystemTimes(&ftIdle, &ftKernel, &ftUser)) { return 0.0; }
+    auto fileTimeToTicks = [](const FILETIME& ft) -> quint64 {
+        ULARGE_INTEGER u{};
+        u.LowPart  = ft.dwLowDateTime;
+        u.HighPart = ft.dwHighDateTime;
+        return static_cast<quint64>(u.QuadPart);
+    };
+    const quint64 idle   = fileTimeToTicks(ftIdle);
+    const quint64 kernel = fileTimeToTicks(ftKernel);   // includes idle
+    const quint64 user   = fileTimeToTicks(ftUser);
+    totalNow = kernel + user;
+    idleNow  = idle;
+#else
+    return 0.0;
+#endif
+
+    if (m_cpuSysPrevTotal == 0) {
+        // First-call sentinel — capture baseline, return 0 this round.
+        m_cpuSysPrevTotal = totalNow;
+        m_cpuSysPrevIdle  = idleNow;
+        return 0.0;
+    }
+
+    const quint64 totalDelta = totalNow - m_cpuSysPrevTotal;
+    const quint64 idleDelta  = idleNow  - m_cpuSysPrevIdle;
+    m_cpuSysPrevTotal = totalNow;
+    m_cpuSysPrevIdle  = idleNow;
+
+    if (totalDelta == 0) { return 0.0; }
+    return 100.0 * (1.0 - static_cast<double>(idleDelta)
+                              / static_cast<double>(totalDelta));
+}
+
 void MainWindow::resizeEvent(QResizeEvent* event)
 {
     QMainWindow::resizeEvent(event);
@@ -3179,10 +3829,27 @@ void MainWindow::resizeEvent(QResizeEvent* event)
             m_containerManager->updateDockedPositions(m_hDelta, m_vDelta);
         }
     }
+
+    // Re-run progressive drop on the right-side strip. Window grew →
+    // restore items; window shrank → drop more. Spec §286-294.
+    reapplyRightStripDropPriority();
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
+    // Phase 3Q Sub-PR-4 D.3: TitleBar ConnectionSegment hover tooltip.
+    // The segment has installEventFilter(this) in the D.2 wiring block.
+    // We intercept QHelpEvent (ToolTip) and delegate to RadioModel for the
+    // formatted multi-line string so the segment stays a thin paint layer.
+    if (m_titleBar && watched == m_titleBar->connectionSegment()
+     && event->type() == QEvent::ToolTip) {
+        auto* helpEvent = static_cast<QHelpEvent*>(event);
+        QToolTip::showText(helpEvent->globalPos(),
+                           m_radioModel->buildConnectionTooltip(),
+                           m_titleBar->connectionSegment());
+        return true;
+    }
+
     // Handle ☰ panel toggle click — label has property "isPanelToggle"
     if (event->type() == QEvent::MouseButtonPress) {
         auto* label = qobject_cast<QLabel*>(watched);
@@ -3254,6 +3921,84 @@ void MainWindow::showConnectionPanel()
     m_connectionPanel->activateWindow();
 }
 
+// Phase 3Q Sub-PR-4 D.2 — right-click context menu on the TitleBar
+// ConnectionSegment. "Reconnect" is intentionally absent: RadioModel has no
+// public reconnect() API (tryAutoReconnect() is private to MainWindow and
+// starts a full probe + discovery cycle, which is not appropriate to invoke
+// from a context menu that the user might trigger mid-session). The user can
+// use "Connect to other radio…" to re-select the same radio.
+void MainWindow::showSegmentContextMenu(const QPoint& globalPos)
+{
+    QMenu menu(this);
+
+    menu.addAction(tr("Disconnect"), this, [this]() {
+        m_radioModel->disconnectFromRadio();
+    });
+    menu.addAction(tr("Connect to other radio…"), this, [this]() {
+        showConnectionPanel();
+    });
+    menu.addSeparator();
+    menu.addAction(tr("Network diagnostics…"), this, [this]() {
+        auto* dlg = new NetworkDiagnosticsDialog(
+            m_radioModel, m_radioModel->audioEngine(), this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->show();
+    });
+    menu.addSeparator();
+    menu.addAction(tr("Copy IP address"), this, [this]() {
+        QGuiApplication::clipboard()->setText(m_radioModel->connectionIpText());
+    });
+    menu.addAction(tr("Copy MAC address"), this, [this]() {
+        QGuiApplication::clipboard()->setText(m_radioModel->connectionMacText());
+    });
+
+    menu.exec(globalPos);
+}
+
+void MainWindow::showStationContextMenu(const QPoint& globalPos)
+{
+    // Only show when connected — StationBlock only emits contextMenuRequested
+    // in connected appearance, but guard here defensively.
+    if (m_radioModel->connectionState() != ConnectionState::Connected) {
+        return;
+    }
+
+    QMenu menu(this);
+
+    menu.addAction(tr("Disconnect"), this, [this]() {
+        m_radioModel->disconnectFromRadio();
+    });
+
+    // "Edit radio…" — open ConnectionPanel so the user can edit the currently
+    // connected radio's settings (model override, etc.). The panel pre-selects
+    // by highlighted MAC when available; if not connected, user clicks the row.
+    menu.addAction(tr("Edit radio…"), this, [this]() {
+        showConnectionPanel();
+        if (m_connectionPanel) {
+            const QString mac =
+                m_radioModel->connection()
+                    ? m_radioModel->connection()->radioInfo().macAddress
+                    : QString();
+            if (!mac.isEmpty()) {
+                m_connectionPanel->highlightMac(mac);
+            }
+        }
+    });
+
+    menu.addAction(tr("Forget radio"), this, [this]() {
+        const QString mac =
+            m_radioModel->connection()
+                ? m_radioModel->connection()->radioInfo().macAddress
+                : QString();
+        m_radioModel->disconnectFromRadio();
+        if (!mac.isEmpty()) {
+            AppSettings::instance().forgetRadio(mac);
+        }
+    });
+
+    menu.exec(globalPos);
+}
+
 void MainWindow::showSupportDialog()
 {
     if (!m_supportDialog) {
@@ -3283,13 +4028,36 @@ void MainWindow::showAudioDiagnoseDialog()
 
 void MainWindow::onConnectionStateChanged()
 {
+    // Phase 3Q-8: forward state to the spectrum widget for the disconnect overlay.
+    if (m_spectrumWidget) {
+        m_spectrumWidget->setConnectionState(m_radioModel->connectionState());
+    }
+
     if (m_radioModel->isConnected()) {
-        m_radioModelLabel->setText(m_radioModel->name());
+        // Board widget top line: show model code ("Saturn") not marketing name
+        // ("ANAN-G2 (Saturn)") — the marketing name truncates at status-bar widths.
+        // boardCodeName() returns the HPSDRHW enum label which is short and unambiguous.
+        {
+            const HPSDRHW board = m_radioModel->connection()->radioInfo().boardType;
+            const QString code  = QString::fromLatin1(boardCodeName(board));
+            m_radioModelLabel->setText(code);
+        }
         m_radioModelLabel->setStyleSheet(QStringLiteral(
             "QLabel { color: #c8d8e8; font-size: 12px; }"));
-        m_radioFwLabel->setText(QStringLiteral("FW %1").arg(m_radioModel->version()));
+        // Firmware: "v27" not "FW 27" — shorter, fits the compact status bar.
+        m_radioFwLabel->setText(QStringLiteral("v%1").arg(m_radioModel->version()));
         m_radioFwLabel->setStyleSheet(QStringLiteral(
             "QLabel { color: #8aa8c0; font-size: 12px; }"));
+
+        // Phase 3Q-6/D.1: setRadio() removed — radio identity moves to the
+        // STATION block (sub-PR-7). Segment state is already driven by
+        // connectionStateChanged → ConnectionSegment::setState (see D.2 wiring
+        // block in the constructor).
+
+        // Phase 3Q Sub-PR-6 (F.1): RxDashboard is always bound to slice(0)
+        // from buildStatusBar(). No per-connect rebind needed — the slice
+        // stays the same object across connect/disconnect cycles.
+        // (Connection details moved to segment tooltip / NetworkDiagnosticsDialog.)
 
         // Wire step attenuator controller to the live radio connection
         // and set max attenuation from board capabilities.
@@ -3304,6 +4072,17 @@ void MainWindow::onConnectionStateChanged()
         m_stepAttController->setIsHpsdrBoard(
             m_radioModel->connection()->radioInfo().boardType == HPSDRHW::Atlas);
         m_stepAttController->loadSettings(m_radioModel->connection()->radioInfo().macAddress);
+
+        // Phase 3Q Task 5 — auto-close: 1 s after connect, accept() the panel if open.
+        // Fires on transitions TO Connected only (not on repeated Connected emits).
+        if (m_connectionPanel && m_connectionPanel->isVisible()) {
+            QTimer::singleShot(1000, this, [this]() {
+                if (m_connectionPanel && m_connectionPanel->isVisible()
+                    && m_radioModel->isConnected()) {
+                    m_connectionPanel->accept();
+                }
+            });
+        }
     } else {
         m_radioModelLabel->setText(QStringLiteral("—"));
         m_radioModelLabel->setStyleSheet(QStringLiteral(
@@ -3319,42 +4098,120 @@ void MainWindow::onConnectionStateChanged()
 
         // Disconnect step attenuator from radio
         m_stepAttController->setRadioConnection(nullptr);
+
+        // Phase 3Q Sub-PR-6 (F.1): RxDashboard shows placeholder "—" when
+        // disconnected automatically (slice values reset to defaults). No
+        // per-disconnect update needed here.
+        // (The "last connected" breadcrumb moved to the segment tooltip in D.2.)
+
+        // Phase 3Q Task 5 — auto-open: on disconnect (after having been connected),
+        // open the ConnectionPanel so the user can reconnect.
+        // Guard: m_autoReconnectInProgress suppresses the panel during background
+        // auto-reconnect (Task 17), and the very first state read at startup is
+        // Disconnected which should not open the panel.
+        // The panel itself is non-modal (show/raise), matching the current pattern.
+        if (!m_autoReconnectInProgress) {
+            // Only open if we were previously connected (transition from Connected,
+            // not the initial Disconnected state at startup). We detect this by
+            // checking if the model has ever reported a radio name — set on connect.
+            if (!m_radioModel->name().isEmpty()) {
+                showConnectionPanel();
+            }
+        }
+    }
+
+    // 3Q-9 (post-feedback simplification): Connect is "reconnect to last".
+    // Greyed out when (a) we're already connected, OR (b) there's no
+    // last-used radio in saved entries to reconnect to. Manage Radios is
+    // the only way to pick a different radio.
+    //
+    // Use the model's authoritative connectionState (3Q-1) rather than
+    // RadioModel::isConnected() — the latter dereferences m_connection
+    // which can briefly disagree during teardown (m_connectionState
+    // already Disconnected but m_connection->isConnected() still true
+    // until the worker-thread teardown finishes). Without this, a
+    // Radio→Disconnect would leave Connect greyed forever.
+    if (m_actConnect && m_actDisconnect && m_actProtocolInfo) {
+        const bool connected =
+            (m_radioModel->connectionState() == ConnectionState::Connected);
+        AppSettings& s = AppSettings::instance();
+        const QString lastMac = s.lastConnected();
+        const bool hasReconnectTarget =
+            !connected
+            && !lastMac.isEmpty()
+            && s.savedRadio(lastMac).has_value();
+        m_actConnect->setEnabled(hasReconnectTarget);
+        m_actDisconnect->setEnabled(connected);
+        m_actProtocolInfo->setEnabled(connected);
     }
 }
 
-// Phase 3I Task 17 — auto-reconnect on launch.
+// Phase 3I Task 17 / Phase 3Q Task 10 — auto-reconnect on launch.
 //
 // Logic:
-//   1. Read radios/lastConnected from AppSettings (set by ConnectionPanel
-//      whenever the user explicitly connects).
-//   2. Look up the SavedRadio entry; bail silently if missing or
-//      autoConnect == false.
-//   3a. pinToMac=true  → run a Fast-profile discovery, connect when the
-//      same MAC is seen.  A 3-second kill timer stops the attempt if no
-//      reply arrives — ConnectionPanel is unaffected.
-//   3b. pinToMac=false → direct connect using the saved IP (faster;
-//      if the IP drifted the user just opens ConnectionPanel and rescans).
+//   1. Collect ALL saved radios with autoConnect = true. If none, open the
+//      ConnectionPanel (Phase 3Q polish — design §6.1 cold-launch flow) so
+//      the user has a one-click path to a saved radio or to Add Manually.
+//   2. Pick the target MAC:
+//      - Single autoConnect entry → use it directly.
+//      - Multiple entries → most-recently-connected MAC wins (radios/lastConnected);
+//        a one-time status-bar warning is posted via RadioModel::autoConnectAmbiguous.
+//   3a. pinToMac=true  → run a Fast-profile discovery, connect when the same MAC
+//      is seen. A 3-second kill timer fires if the MAC never appears; on timeout
+//      the ConnectionPanel opens with the target row highlighted and a status-bar
+//      message explains why.  RadioModel's m_autoConnectInProgress flag ensures
+//      the RadioConnection::connectFailed signal (if the radio replies but fails)
+//      also surfaces via RadioModel::autoConnectFailed → MainWindow lambdas.
+//   3b. pinToMac=false → direct connect to saved IP. Arm m_autoConnectInProgress
+//      so RadioConnection::connectFailed is forwarded as autoConnectFailed.
 //
-// The m_autoReconnectInProgress flag gates the 3-second cleanup so it
-// does not call stopDiscovery() if the user has already launched a manual
-// scan via ConnectionPanel::onStartDiscoveryClicked.
+// m_autoReconnectInProgress gates the disconnect auto-open in onConnectionStateChanged
+// so the background probe does not flash the ConnectionPanel while in flight.
 void MainWindow::tryAutoReconnect()
 {
     AppSettings& s = AppSettings::instance();
+
+    // --- Step 1: Collect all autoConnect-flagged saved radios ---
+    const QList<SavedRadio> allSaved = s.savedRadios();
+    QStringList autoMacs;
+    for (const SavedRadio& sr : allSaved) {
+        if (sr.autoConnect) {
+            autoMacs << sr.info.macAddress;
+        }
+    }
+    if (autoMacs.isEmpty()) {
+        // Phase 3Q polish: cold-launch panel auto-open. Design §6.1 — when
+        // there's no auto-connect target, surface the radio list so the
+        // user has a one-click path to either connect (saved radio shown)
+        // or add one (empty list). Non-modal so the app remains usable
+        // around the panel. Skipped when an auto-connect attempt is in
+        // flight (the auto-reconnect path handles its own panel open via
+        // the failure handler in Task 10).
+        showConnectionPanel();
+        return;
+    }
+
+    // --- Step 2: Pick the target MAC (most-recently-connected wins) ---
     const QString lastMac = s.lastConnected();
-    if (lastMac.isEmpty()) {
-        return;
+    QString chosenMac = autoMacs.first();
+    if (autoMacs.size() > 1) {
+        if (autoMacs.contains(lastMac)) {
+            chosenMac = lastMac;
+        }
+        // Warn once — notifyAutoConnectAmbiguous emits the signal; the
+        // MainWindow lambda wired in buildUI surfaces it as a status-bar message.
+        m_radioModel->notifyAutoConnectAmbiguous(autoMacs.size(), chosenMac);
+    } else if (chosenMac != lastMac && !lastMac.isEmpty()) {
+        // Single autoConnect entry but it's not the most recently connected.
+        // Still proceed — the user may have switched their autoConnect flag.
     }
 
-    const auto saved = s.savedRadio(lastMac);
+    const auto saved = s.savedRadio(chosenMac);
     if (!saved.has_value()) {
-        return;
-    }
-    if (!saved->autoConnect) {
-        return;
+        return;  // Shouldn't happen — entry disappeared between the two reads.
     }
 
-    qCInfo(lcConnection) << "Auto-reconnect: attempting" << lastMac
+    qCInfo(lcConnection) << "Auto-reconnect: attempting" << chosenMac
                          << "at" << saved->info.address.toString()
                          << "(pinToMac=" << saved->pinToMac << ")";
 
@@ -3365,11 +4222,17 @@ void MainWindow::tryAutoReconnect()
         disc->setProfile(DiscoveryProfile::Fast);
         m_autoReconnectInProgress = true;
 
-        // Listen for a radio that matches our saved MAC
+        // Arm the RadioModel flag so RadioConnection::connectFailed (which fires
+        // if the radio replies but fails the handshake) is forwarded as
+        // RadioModel::autoConnectFailed. This covers the pinToMac discovery-found
+        // but connect-failed path; the timeout path below handles unreachable.
+        m_radioModel->setAutoConnectInProgress(true, chosenMac);
+
+        // Listen for a radio that matches our chosen MAC
         QMetaObject::Connection* connPtr = new QMetaObject::Connection;
         *connPtr = connect(disc, &RadioDiscovery::radioDiscovered,
-            this, [this, lastMac, connPtr](const RadioInfo& found) {
-            if (found.macAddress != lastMac) {
+            this, [this, chosenMac, connPtr](const RadioInfo& found) {
+            if (found.macAddress != chosenMac) {
                 return;
             }
             if (m_radioModel->isConnected()) {
@@ -3381,7 +4244,11 @@ void MainWindow::tryAutoReconnect()
             QObject::disconnect(*connPtr);
             delete connPtr;
             m_autoReconnectInProgress = false;
-            // Load persisted model override for auto-reconnect (Phase 3I-RP)
+            // Note: do NOT disarm m_radioModel->setAutoConnectInProgress here —
+            // connectToRadio runs asynchronously and we want connectFailed to
+            // still be forwarded if the handshake itself fails. RadioModel's
+            // onConnectionStateChanged(Connected) disarms on success;
+            // wireConnectionSignals' connectFailed handler disarms on failure.
             RadioInfo ri = found;
             HPSDRModel mo = AppSettings::instance().modelOverride(ri.macAddress);
             if (mo != HPSDRModel::FIRST) {
@@ -3393,27 +4260,47 @@ void MainWindow::tryAutoReconnect()
         // Kick off the Fast-profile discovery
         disc->startDiscovery();
 
-        // 3-second hard timeout — give up silently if MAC never appears
-        QTimer::singleShot(3000, this, [this, connPtr]() {
+        // 3-second hard timeout — if the MAC never appears, the radio is
+        // unreachable on this network. Open the panel + post a status message.
+        QTimer::singleShot(3000, this, [this, chosenMac, connPtr]() {
             if (!m_autoReconnectInProgress) {
-                // Already connected (lambda cleaned up) — nothing to do
+                // Already connected (discovery lambda cleaned up) — nothing to do.
                 return;
             }
-            qCInfo(lcConnection) << "Auto-reconnect: 3-second timeout — giving up silently";
+            qCInfo(lcConnection) << "Auto-reconnect: 3-second timeout — radio not found";
             // Disconnect the listener so it doesn't fire on later scans
             QObject::disconnect(*connPtr);
             delete connPtr;
             m_autoReconnectInProgress = false;
+            // Disarm RadioModel flag — the Timeout path is surfaced here directly
+            // (not via connectFailed, which only fires after a reply is received).
+            m_radioModel->setAutoConnectInProgress(false);
             // Stop the discovery pass we started; restore SafeDefault profile
             // so the user's next manual scan uses the full timing.
             m_radioModel->discovery()->stopDiscovery();
             m_radioModel->discovery()->setProfile(DiscoveryProfile::SafeDefault);
+            // Phase 3Q Task 10: surface the failure — open panel + status bar.
+            const QString name = AppSettings::instance()
+                .savedRadio(chosenMac)
+                .value_or(SavedRadio{})
+                .info.name;
+            const QString displayName = name.isEmpty() ? chosenMac : name;
+            showConnectionPanel();
+            if (m_connectionPanel) {
+                m_connectionPanel->highlightMac(chosenMac);
+            }
+            statusBar()->showMessage(
+                QStringLiteral("Auto-connect target %1 isn't reachable from this network. "
+                               "Pick a different radio or update the address.")
+                    .arg(displayName),
+                8000);
         });
     } else {
         // No MAC pinning — direct connect to saved IP address.
-        // Silent failure: if the radio doesn't respond, RadioConnection's
-        // internal state machine eventually times out without any popup.
+        // Arm m_autoConnectInProgress so that RadioConnection::connectFailed
+        // is forwarded as RadioModel::autoConnectFailed → MainWindow lambdas.
         if (!m_radioModel->isConnected()) {
+            m_radioModel->setAutoConnectInProgress(true, chosenMac);
             // Load persisted model override for auto-reconnect (Phase 3I-RP)
             RadioInfo ri = saved->info;
             HPSDRModel mo = AppSettings::instance().modelOverride(ri.macAddress);

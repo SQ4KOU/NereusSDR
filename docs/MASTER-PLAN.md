@@ -176,6 +176,10 @@ NereusSDR is an independent cross-platform SDR client deeply informed by the wor
 
 **RxApplet Tier 1 wired:** mode, AGC, AF gain, and filter presets fully wired to SliceModel
 
+### Up Next (parallel pair after v0.2.3)
+- **Phase 3Q — Connection Workflow Refactor** (in progress on `feature/phase3q-connection-workflow-refactor`; chrome layer landing first). Triggered by user report of WireGuard-tunneled HL2 not connecting via manual entry. Spec: [docs/architecture/2026-04-26-connection-workflow-refactor-design.md](architecture/2026-04-26-connection-workflow-refactor-design.md). The shell-chrome / status-bar / dashboard / SVG-icon work + ship-default calibration (commit c656fad + follow-ups) is the first PR; the unicast-probe + ConnectionPanel + AddRadioDialog rebuild + spectrum disconnect overlay land in subsequent PRs on the same branch.
+- **Phase 3M-1 — Basic SSB TX** (next major epic). TxChannel WDSP wrapper, MOX state machine, TX I/Q output. No file overlap with 3Q.
+
 ### CI Status: GREEN
 - Build passes on Ubuntu 24.04 with Qt6, cmake, ninja, fftw3
 - Windows local build passes with Qt 6.11.0 / MinGW 13.1
@@ -590,6 +594,31 @@ Files touched: `MainWindow.h`, `MainWindow.cpp`. No new source files. Requires Q
 
 Independent of all other phases — no file overlap with 3G-9, 3G-10, 3G-13, or 3M-*.
 
+### Phase 3Q: Connection Workflow Refactor
+**Goal:** Make the connect / discover / disconnect flow coherent so a user on a Layer-3 VPN (WireGuard, ZeroTier, etc.) can reach a remote radio reliably, and so the disconnected state actually announces itself instead of just freezing the spectrum. Triggered by an April 2026 user report (HL2 across a WireGuard tunnel couldn't be reached via the existing manual entry path).
+
+Design spec: [docs/architecture/2026-04-26-connection-workflow-refactor-design.md](architecture/2026-04-26-connection-workflow-refactor-design.md)
+
+Scope:
+
+- **Single state machine** — `Disconnected → Probing → Connecting → Connected → (Disconnected | LinkLost)` with broadcast scan and unicast probe as different *triggers* into the same path. Replaces today's broadcast-only-then-blind-connect flow.
+- **Unicast probe** in `RadioDiscovery::probeAddress(addr, port, timeout)` — 1.5 s timeout, parallel P1 + P2, parses replies via the existing `parseP1Reply()` / `parseP2Reply()` helpers. New code path (today is broadcast-only).
+- **TitleBar connection segment** — state dot · radio name · IP · ▲▼ Mbps · activity LED that pulses on each ep6/DDC frame · click opens panel · right-click for Reconnect/Disconnect/Manage Radios. Drops into the existing 32 px `TitleBar` widget where the file header already noted the connection-state UI was deferred.
+- **Status bar verbose strip** — sample rate · firmware · MAC · packets/s · drops · "● live" when connected; red dot + "No radio connected" + "last connected ANAN-G2 · 14:23 today" breadcrumb when disconnected.
+- **ConnectionPanel polish** — modal kept (today's behavior); status strip up top with inline Disconnect; state-pill column (🟢 Online <60 s · 🟡 Stale 60 s–5 min · 🔴 Offline) replaces the bare `●`; Last Seen column replaces MAC; single ↻ Scan in the table header replaces Start/Stop Discovery; Disconnect moves out of the bottom strip into the status strip; Auto-connect-on-launch checkbox added to the detail panel; auto-opens on launch + on disconnect; auto-closes 1 s after Connected.
+- **Add Radio dialog rebuild** — replaces the 9-board picker at `AddCustomRadioDialog.cpp:294-302` with a 16-SKU model dropdown organized by silicon family in `<optgroup>`s ("Auto-detect" first, then Atlas / Hermes (3) / Hermes II (2) / Angelia / Orion / Orion MkII (5) / Hermes Lite 2 / Saturn (2)). Two action buttons: `Probe and connect now` and `Save offline`. Failure path keeps the dialog open with form preserved + red error band; success path auto-closes and lands the row in the table tagged "(probe)".
+- **Radio menu rework** — `Connect (⌘K) · Disconnect (⌘⇧K) · Discover Now · Manage Radios… · Antenna Setup… (NYI) · Transverters… (NYI) · Protocol Info` with state-aware enablement (Connect/Disconnect mutually exclusive; Protocol Info follows connection). Replaces today's four-item-three-aliases set.
+- **Spectrum disconnect overlay** — 800 ms fade to ~40 % opacity + DISCONNECTED label + click-anywhere-to-open-panel. Multi-cue feedback closes the loop on the "spectrum just freezes" complaint.
+- **Stale policy change** — saved radios *never* age out (today they get dropped at 15 s); discovered-only radios age out at 60 s (raised from 15 s, long enough not to flap); connected MAC stays exempt.
+- **Auto-connect-on-launch** — uses the existing per-radio `AppSettings::autoConnect` flag; on failure the panel auto-opens with the target highlighted offline + a status-bar diagnostic. Multi-flag case picks most-recent-connected MAC + one-time setup-bar warning.
+- **macKey migration** — offline entries saved with the synthetic `manual-<IP>-<port>` key get migrated under the real MAC on first probe success, preserving Name / Model / Auto-connect / Pin-to-MAC.
+
+Files touched: `src/gui/{TitleBar,MainWindow,ConnectionPanel,AddCustomRadioDialog,SpectrumWidget}.{h,cpp}`, `src/core/{RadioDiscovery,RadioConnection,AppSettings}.{h,cpp}`, `src/models/RadioModel.{h,cpp}`. No new files except possibly a small `ConnectionState` enum header.
+
+Open decisions (deferred per design §10): HL2 variant SKUs (HL Plus, RX-only, etc. not yet in `HPSDRModel`), async discovery rewrite (synchronous scan stays for now), background unicast pings of saved radios (not in this phase), link-lost auto-retry (none — explicit user click), auto-close-on-connect timing (1 s), multi-auto-connect-radio behavior.
+
+No file-level overlap with 3M-1 — runs in parallel with the TX epic. Expected to land before 3M-1 completes (it's the smaller piece and Miguel's pain blocks more users than no-TX-yet does).
+
 ### Phase 3M-1: Basic SSB TX  **[Complete — 2026-04-29]**
 **Status:** Shipped via three sub-phases — 3M-1a TUNE-only first RF (PR #144),
 3M-1b SSB voice + mic-jack family (PR #149), 3M-1c polish + persistence +
@@ -876,16 +905,14 @@ Success criteria (subset, see spec §14 for full list):
 
 ---
 
-## Recommended Next Steps: Phase 3G-9 + Phase 3G-10 (parallel polish pair before 3M-1)
+## Recommended Next Steps: Phase 3Q + Phase 3M-1 (parallel pair after v0.2.3)
 
-Phase 3I shipped the entire ANAN/Hermes P1 family end-to-end. Before putting RF on the air, two polish phases tighten the RX surface in parallel:
+v0.2.3 shipped 2026-04-24 with the RX epic, NB family, 7-filter NR stack, PipeWire-native Linux audio, and Alex antenna integration all complete. Two phases come next, runnable in parallel:
 
-- **Phase 3G-9 — Display Refactor.** Source-first audit, verbatim-or-rewritten tooltip port, slider/spinbox refactor, then smooth defaults + Clarity Blue palette, then the Clarity adaptive auto-tune feature. Design spec at `docs/architecture/2026-04-15-display-refactor-design.md`. 3G-9 is three sequential PRs; 3G-9a is mechanical and can start immediately.
-- **Phase 3G-10 — RX DSP Parity + AetherSDR Flag Port.** Two-stage phase: **Stage 1 (complete — PRs #28 + #30)** ported the AetherSDR `VfoWidget` visual shell with faithful color/font/layout fidelity, rewriting all four tab panes (4×2 DSP grid, AudioTab AGC 5-button row, ModeTab quick-mode buttons, X/RIT tab), embedding mode containers with mode-driven visibility, and adding a tooltip coverage test. **Stage 2 (next)** wires every RX-side DSP NYI stub (AGC threshold/hang/slope/attack/decay, squelch SSB/AM/FM, EMNR, SNB, APF, RIT/XIT, mute, pan, binaural, lock, and the FM/DIG/RTTY/CW mode-specific flag containers) through `SliceModel → RxChannel → WDSP`. Introduces per-slice-per-band bandstack persistence for DSP state. Design spec at `docs/architecture/2026-04-15-phase3g10-rx-dsp-flag-design.md`.
+- **Phase 3Q — Connection Workflow Refactor.** Triggered by an April 2026 user report: an HL2 across a WireGuard tunnel couldn't be reached through the existing manual-entry path, and the disconnect state gave no feedback beyond a frozen spectrum. Single state machine, new unicast-probe code path, modal ConnectionPanel polish (state pills, Last Seen column, ↻ Scan, inline Disconnect), rebuilt Add Radio dialog with model-aware SKU picker (16 SKUs by silicon family replacing the 9-board picker), Radio menu cleanup (no more four-item-three-aliases), spectrum disconnect overlay. Design spec at [docs/architecture/2026-04-26-connection-workflow-refactor-design.md](architecture/2026-04-26-connection-workflow-refactor-design.md). Touches `src/gui/{TitleBar, MainWindow, ConnectionPanel, AddCustomRadioDialog, SpectrumWidget}` + `src/core/{RadioDiscovery, RadioConnection, AppSettings}` + `src/models/RadioModel`.
+- **Phase 3M-1 — Basic SSB TX.** TxChannel WDSP wrapper, mic input via QAudioSource, MOX state machine ported from `console.cs:29311-29650`, TX I/Q output to port 1029. Proves the TX path end-to-end and unblocks 3M-2..4, 3F, 3H. Touches `src/core/TxChannel` (new), the AudioEngine input path, RadioConnection TX paths, and the MOX state in RadioModel.
 
-3G-9 touches the Display category; 3G-10 touches the VFO flag and RX DSP wiring. The two phases have no file-level overlap and ship in parallel.
-
-After 3G-9 + 3G-10 the next highest-value phase is TX — taking a working RX-only setup and putting a signal on the air. See Phase 3M-1 below for scope.
+3Q and 3M-1 have no file-level overlap and ship in parallel. 3Q is the smaller piece and is expected to land first — it directly unblocks remote-operating users on Layer-3 VPNs and addresses the most-visible UX complaint, while 3M-1 is a multi-week effort that brings a whole new subsystem online.
 
 Phases 3A–3E, 3G-1 through 3G-8, and 3-UI are all complete. The radio connects,
 demodulates audio, renders live GPU spectrum + waterfall, supports full VFO tuning with
@@ -924,7 +951,7 @@ Execution order: **3M-1..4 → 3F → 3H → 3J+** (all 3G-* RX prep and 3P all-
 
 3G-9, 3G-10, 3G-13, and 3G-14 touch disjoint subsystems from each other and from 3M-* — they can all run in parallel if desired. 3G-9 owns the Display setup surface; 3G-10 owns the VFO flag and RX DSP wiring; 3G-13 owns the step attenuator + ADC overload protection (protocol layer + Setup Options + RxApplet ATT row + status bar); 3G-14 owns the 💡 issue reporter (menu bar corner widget + dialog).
 
-Independent phases (can start anytime): 3G-14 (issue reporter), 3J (TCI — depends on 3O IAudioBus contract), 3K (CAT), 3L (P1), 3M (Recording), **3O (VAX audio routing — depends on 3B, 3G-8, 3G-10 Stage 2; all complete)**.
+Independent phases (can start anytime): **3Q (Connection Workflow Refactor — design complete, ready to plan; runs in parallel with 3M-1)**, 3G-14 (issue reporter — complete), 3J (TCI — depends on 3O IAudioBus contract), 3K (CAT), 3L (P1), 3M (Recording), **3O (VAX audio routing — depends on 3B, 3G-8, 3G-10 Stage 2; all complete)**.
 
 ---
 

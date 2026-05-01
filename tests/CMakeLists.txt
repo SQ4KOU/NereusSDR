@@ -456,6 +456,12 @@ nereus_add_test(tst_master_output_widget)
 # the menu-re-parent + in-window render on macOS.
 nereus_add_test(tst_title_bar)
 
+# ── Shell-Chrome Redesign sub-PR-4 D.1: ConnectionSegment v2 ─────────────────
+# 5 tests: state queries, rates+RTT round-trip, RTT-region left-click emits
+# rttClicked(), right-click emits contextMenuRequested(), audio flow-state
+# setter round-trip across all four FlowState values.
+nereus_add_test(tst_connection_segment_v2)
+
 # ── Phase 3O Sub-Phase 9 Task 9.2a: AudioEngine VAX gain/mute/tx-gain ────────
 # Exercises setVaxRxGain / setVaxMuted / setVaxTxGain and their effect on the
 # rxBlockReady tee — unity passthrough, half-gain scaling, muted-skip, signal
@@ -864,6 +870,13 @@ nereus_add_test(tst_tx_inhibit_monitor)
 # HL2 cite: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400.
 nereus_add_test(tst_radio_connection_watchdog)
 
+# ── Phase 3Q Task 3: ConnectFailure enum + connectFailed() signal ─────────────
+# 2 tests: emitsTypedFailureOnUnreachable (RFC 5737 black-hole, 2s connect
+# watchdog must fire ConnectFailure::Timeout) and noFailureOnIntentionalDisconnect
+# (disconnect() before watchdog fires must not emit connectFailed).
+# NereusSDR-original infrastructure; no Thetis attribution needed.
+nereus_add_test(tst_radio_connection_failure)
+
 # ── Phase 3M-1a Task E.1: TX virtual interface on RadioConnection ──────────
 # 16 tests assert:
 #   - sendTxIq() is callable on P1 + P2 without crash (stub bodies; wire
@@ -1202,6 +1215,35 @@ nereus_add_test(tst_mainwindow_status_bar_safety)
 # AlexAnt[23]RxOnly + DisableHfPa (3), Region/Extended/RxOnly/NetworkWDT (4),
 # PreventTxOnDifferentBandToRx (1). Uses QTemporaryDir for full isolation.
 nereus_add_test(tst_phase3m0_persistence_audit)
+
+# ── Phase 3Q Task 1: ConnectionState enum + RadioModel state exposure ─────────
+# 3 tests: initial state Disconnected, signal on transition, no signal for
+# redundant transition. NereusSDR-original (no upstream port).
+nereus_add_test(tst_connection_state)
+
+# ── Phase 3Q Task 2: RadioDiscovery::probeAddress() unicast probe ─────────────
+# 2 tests: success path fills RadioInfo from P1 reply (FakeP1Probe loopback),
+# timeout emits probeFailed(addr, port). Backbone for manual-IP + VPN paths.
+nereus_add_test(tst_radio_discovery_probe)
+target_link_libraries(tst_radio_discovery_probe PRIVATE Qt6::Network)
+
+# ── Phase 3Q Task 4: AddCustomRadioDialog — SKU model picker + action buttons ──
+# 4 tests: Auto-detect at index 0, all 16 SKUs present in modelCombo,
+# saveOfflineButton + probeButton objectNames accessible via findChild.
+nereus_add_test(tst_add_custom_radio_dialog)
+
+# ── Phase 3Q Task 5: ConnectionPanel state pills — threshold logic ─────────────
+# 4 tests: online < 60s, stale 60s-5min, offline > 5min, offline when never seen.
+# Exercises statePillForLastSeen() static method — pure function, no radio required.
+# NereusSDR-original; no Thetis attribution needed.
+nereus_add_test(tst_connection_panel_state_pills)
+
+# ── Phase 3Q Task 12: AppSettings::migrateRadioKey — synthetic → real-MAC ────
+# 6 tests: core migration (name+autoConnect), pinToMac preserved, same-key no-op,
+# absent-key no-op, IP+port preserved, no orphan keys after migration.
+# Uses QTemporaryDir for full isolation; QTEST_APPLESS_MAIN (no QApplication).
+# NereusSDR-original; no Thetis attribution needed.
+nereus_add_test(tst_app_settings_migration)
 
 # ── Phase 3M-1a Task B.1: PttMode enum (Thetis PTTMode port) ─────────────────
 # Verifies all 9 values (None/Manual/Mic/Cw/X2/Cat/Vox/Space/Tci) have
@@ -2431,3 +2473,44 @@ nereus_add_test(tst_tx_applet_profile_combo)
 #   - J.4: prompt Cancel reverts the combo to the original selection.
 nereus_add_test(tst_tx_profile_setup_page)
 
+# ── Shell-Chrome Redesign sub-PR-5: RxDashboard ───────────────────────────
+# 4 tests: unbound construction, bind, rebind, active-only badge visibility.
+nereus_add_test(tst_rx_dashboard)
+
+# ── Shell-Chrome Redesign sub-PR-1: StatusBadge widget ────────────────────
+# 8 tests: defaults, setters round-trip, variant style application,
+# left/right-click signal emission. Uses QTEST_MAIN (needs QApplication
+# for QWidget mouse events).
+nereus_add_test(tst_status_badge)
+
+# ── Shell-Chrome Redesign sub-PR-8: MetricLabel ───────────────────────────
+# 4 tests: ctor stores label+value, setLabel/setValue round-trip, idempotent.
+nereus_add_test(tst_metric_label)
+
+# ── Shell-Chrome Redesign sub-PR-1: StationBlock widget ───────────────────
+# 5 tests: default/setRadioName/empty-name appearance switching, click +
+# right-click signal emission gated on appearance.
+nereus_add_test(tst_station_block)
+
+# ── Shell-Chrome Redesign sub-PR-2: byte-rate counters ────────────────────
+# 4 tests: zero-init, in-window accumulation, out-of-window aging, tx/rx
+# independence. QTEST_APPLESS_MAIN — no QApplication needed.
+nereus_add_test(tst_radio_connection_byte_rates)
+
+# ── Shell-Chrome Redesign sub-PR-2: ping RTT signal ───────────────────────
+# 3 tests: emit-on-rtt, duplicate-receive-suppression, receive-without-send.
+nereus_add_test(tst_radio_connection_ping_rtt)
+
+# ── Shell-Chrome Redesign sub-PR-2: voltage signals ───────────────────────
+# 3 tests: PSU Hermes-DC formula, MKII PA formula, identical-raw suppression.
+nereus_add_test(tst_radio_connection_supply_volts)
+
+# ── Shell-Chrome Redesign sub-PR-2: AudioEngine flow state ────────────────
+# 5 tests: initial Dead, Healthy on feed, Underrun on single, Stalled on
+# persistent, identical-state suppression.
+nereus_add_test(tst_audio_engine_flow_state)
+
+# ── Shell-Chrome Redesign sub-PR-3: NetworkDiagnosticsDialog ──────────────
+# 4 tests: null-safe construction, refresh on disconnected model, reset
+# clears counters, signal-wire safety. QTEST_MAIN — needs QApplication.
+nereus_add_test(tst_network_diagnostics_dialog)

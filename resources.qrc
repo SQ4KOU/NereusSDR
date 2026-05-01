@@ -20,5 +20,14 @@
         <file alias="NereusSDR.png">resources/icons/NereusSDR.png</file>
         <file alias="spin-up.svg">resources/icons/spin-up.svg</file>
         <file alias="spin-down.svg">resources/icons/spin-down.svg</file>
+        <file alias="badge-check.svg">resources/icons/badge-check.svg</file>
+        <file alias="badge-dot.svg">resources/icons/badge-dot.svg</file>
+        <file alias="badge-mode.svg">resources/icons/badge-mode.svg</file>
+        <file alias="badge-filter.svg">resources/icons/badge-filter.svg</file>
+        <file alias="badge-agc.svg">resources/icons/badge-agc.svg</file>
+        <file alias="badge-nr.svg">resources/icons/badge-nr.svg</file>
+        <file alias="badge-nb.svg">resources/icons/badge-nb.svg</file>
+        <file alias="badge-apf.svg">resources/icons/badge-apf.svg</file>
+        <file alias="badge-sql.svg">resources/icons/badge-sql.svg</file>
     </qresource>
 </RCC>

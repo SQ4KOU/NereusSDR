@@ -120,6 +120,8 @@
 #include "models/BandPlanManager.h"
 
 #include <QHoverEvent>
+#include <QLabel>
+#include <QPropertyAnimation>
 
 #include <QDateTime>
 #include <QTimeZone>
@@ -342,6 +344,18 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
             rebuildWaterfallViewport();
         }
     });
+
+    // Phase 3Q-8: child label for the disconnect overlay. Composites in both
+    // CPU and GPU paint paths (QRhi early-returns from paintEvent so a QPainter
+    // overlay there would crash; a child QWidget gets stacked by Qt instead).
+    m_disconnectLabel = new QLabel(QStringLiteral("DISCONNECTED"), this);
+    m_disconnectLabel->setAlignment(Qt::AlignCenter);
+    m_disconnectLabel->setStyleSheet(QStringLiteral(
+        "QLabel { background-color: rgba(10, 12, 20, 200);"
+        " color: #c14848; font-size: 36pt; font-weight: bold;"
+        " letter-spacing: 8px; }"));
+    m_disconnectLabel->hide();
+    m_disconnectLabel->installEventFilter(this);
 }
 
 SpectrumWidget::~SpectrumWidget() = default;
@@ -375,9 +389,17 @@ void SpectrumWidget::loadSettings()
         return ok ? v : def;
     };
 
-    m_refLevel       = readFloat(QStringLiteral("DisplayGridMax"), -36.0f);
-    m_dynamicRange   = readFloat(QStringLiteral("DisplayGridMax"), -36.0f)
-                     - readFloat(QStringLiteral("DisplayGridMin"), -104.0f);
+    // Ship defaults — calibrated 2026-04-30 against a live ANAN-G2 with
+    // a typical residential noise floor (-115 to -120 dBm in the
+    // amateur HF bands). Earlier defaults ran 12 dB hotter (Grid -36 /
+    // -104, Wf -50 / -110, Wf black 98) and gave a noisy first-launch
+    // experience — band noise jammed the bottom of the panadapter and
+    // lit up the waterfall floor. Shifting the entire reference plane
+    // down 12 dB gives a clean "noise sits low" first impression.
+    // Dynamic range (68 dB grid, 60 dB waterfall) is unchanged.
+    m_refLevel       = readFloat(QStringLiteral("DisplayGridMax"), -48.0f);
+    m_dynamicRange   = readFloat(QStringLiteral("DisplayGridMax"), -48.0f)
+                     - readFloat(QStringLiteral("DisplayGridMin"), -116.0f);
     m_spectrumFrac   = readFloat(QStringLiteral("DisplaySpectrumFrac"), 0.40f);
 
     // Phase 3G-12: persist the spectrum zoom level (visible bandwidth)
@@ -387,9 +409,9 @@ void SpectrumWidget::loadSettings()
     m_bandwidthHz    = static_cast<double>(
                           readFloat(QStringLiteral("DisplayBandwidth"), 192000.0f));
     m_wfColorGain    = readInt(QStringLiteral("DisplayWfColorGain"), 45);
-    m_wfBlackLevel   = readInt(QStringLiteral("DisplayWfBlackLevel"), 98);
-    m_wfHighThreshold = readFloat(QStringLiteral("DisplayWfHighLevel"), -50.0f);
-    m_wfLowThreshold = readFloat(QStringLiteral("DisplayWfLowLevel"), -110.0f);
+    m_wfBlackLevel   = readInt(QStringLiteral("DisplayWfBlackLevel"), 104);
+    m_wfHighThreshold = readFloat(QStringLiteral("DisplayWfHighLevel"), -62.0f);
+    m_wfLowThreshold = readFloat(QStringLiteral("DisplayWfLowLevel"), -122.0f);
     m_fillAlpha      = readFloat(QStringLiteral("DisplayFftFillAlpha"), 0.70f);
     m_panFill        = s.value(settingsKey(QStringLiteral("DisplayPanFill"), m_panIndex),
                                QStringLiteral("True")).toString() == QStringLiteral("True");
@@ -1185,6 +1207,15 @@ void SpectrumWidget::resizeEvent(QResizeEvent* event)
         m_mouseOverlay->raise();
     }
 
+    // Keep disconnect label sized to the widget; raise so QRhi surface
+    // doesn't paint over it on the next frame.
+    if (m_disconnectLabel) {
+        m_disconnectLabel->setGeometry(0, 0, width(), height());
+        if (m_disconnectLabel->isVisible()) {
+            m_disconnectLabel->raise();
+        }
+    }
+
     // Recreate waterfall image at new size
     int w = width();
     int h = height();
@@ -1300,6 +1331,10 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
     // From Thetis display.cs:1569-1593 [v2.10.3.13] Display.MOX setter.
     // Phase 3M-1a H.1.
     paintMoxOverlay(p);
+
+    // Phase 3Q-8: disconnect overlay is now a child QLabel (m_disconnectLabel)
+    // so it composites in both CPU and GPU paint paths. Show/hide handled in
+    // setConnectionState; geometry tracked in resizeEvent.
 
     // Reposition VFO flag widgets every frame — ensures flag tracks marker
     // exactly with no frame delay. From AetherSDR: updatePosition called
@@ -2687,6 +2722,18 @@ void SpectrumWidget::paintMoxOverlay(QPainter& p)
 // This eventFilter forwards them to our mouseMoveEvent/mousePressEvent/etc.
 bool SpectrumWidget::eventFilter(QObject* obj, QEvent* ev)
 {
+    // Phase 3Q-8: clicks on the disconnect-overlay label open the connection panel.
+    if (obj == m_disconnectLabel) {
+        if (ev->type() == QEvent::MouseButtonPress) {
+            auto* me = static_cast<QMouseEvent*>(ev);
+            if (me->button() == Qt::LeftButton) {
+                emit disconnectedClickRequest();
+                return true;
+            }
+        }
+        return false;
+    }
+
     if (obj == m_mouseOverlay) {
         switch (ev->type()) {
         case QEvent::MouseMove: {
@@ -2747,6 +2794,14 @@ static int specHFromHeight(int widgetH, float spectrumFrac, int chromeH)
 
 void SpectrumWidget::mousePressEvent(QMouseEvent* event)
 {
+    // Phase 3Q-8: while disconnected, swallow all left-clicks and signal
+    // MainWindow to open the ConnectionPanel instead.
+    if (m_connState != ConnectionState::Connected
+        && event->button() == Qt::LeftButton) {
+        emit disconnectedClickRequest();
+        return;
+    }
+
     int w = width();
     int h = height();
     int specH = specHFromHeight(h, m_spectrumFrac, kFreqScaleH + kDividerH);
@@ -4054,6 +4109,46 @@ void SpectrumWidget::updateVfoPositions()
             vfo->raise();
         }
     }
+}
+
+// ---- Phase 3Q-8: disconnect overlay ----------------------------------------
+
+void SpectrumWidget::setConnectionState(ConnectionState s)
+{
+    if (m_connState == s) {
+        return;
+    }
+    const bool wasConnected = (m_connState == ConnectionState::Connected);
+    const bool isConnected = (s == ConnectionState::Connected);
+    m_connState = s;
+
+    if (wasConnected && !isConnected) {
+        // Connected → not-Connected: fade dim factor 1.0 → 0.4 over 800 ms.
+        if (!m_fadeAnim) {
+            m_fadeAnim = new QPropertyAnimation(this, "disconnectFade");
+            m_fadeAnim->setDuration(800);
+        }
+        m_fadeAnim->stop();
+        m_fadeAnim->setStartValue(1.0f);
+        m_fadeAnim->setEndValue(0.4f);
+        m_fadeAnim->start();
+    } else if (!wasConnected && isConnected) {
+        // not-Connected → Connected: snap back to full opacity.
+        if (m_fadeAnim) {
+            m_fadeAnim->stop();
+        }
+        m_disconnectFade = 1.0f;
+    }
+
+    // Show/hide the child overlay label and keep it sized + on top.
+    if (m_disconnectLabel) {
+        m_disconnectLabel->setGeometry(0, 0, width(), height());
+        m_disconnectLabel->setVisible(!isConnected);
+        if (!isConnected) {
+            m_disconnectLabel->raise();
+        }
+    }
+    update();
 }
 
 } // namespace NereusSDR

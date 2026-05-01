@@ -142,30 +142,189 @@ void AppSettings::initFilePath()
 // ---------------------------------------------------------------------------
 // XML key encoding helpers
 //
-// XML element names cannot contain '/' or ':'.  Keys like
-// "radios/aa:bb:cc/name" are encoded for storage and decoded on load.
-//   '/' → "__s__"   (slash)
-//   ':' → "__c__"   (colon)
-// Existing simple keys (PascalCase, no special chars) are unaffected.
+// Settings keys can contain hierarchical separators and Thetis-derived
+// profile names (e.g. "D-104+CPDR") whose characters are NOT valid XML 1.0
+// NameChars. We per-character escape every non-NameChar to a __token__
+// sentinel so the resulting element name is parseable by QXmlStreamReader.
+//
+// Escape table (single source of truth — encode and decode mirror it):
+//   ':' '/' '[' ']' '+' ' ' '?' '&' '#' '(' ')' ',' '@' '!' '*' '\'' '"'
+//   '=' ';' '<' '>' '{' '}' '|' '$' '%' '^' '~' '`' '\\'
+//
+// Bug fix 2026-04-30: pre-fix builds wrote element names with literal '+',
+// causing QXmlStreamReader to bail mid-file, silently dropping every
+// element after the first malformed one (in particular all radios/* keys
+// alphabetically after hardware/...). sanitizeXmlForLoad() pre-processes
+// the file text so older corrupt files round-trip cleanly on first load
+// after upgrade — once the next save() runs they are well-formed.
 // ---------------------------------------------------------------------------
 
 static QString encodeXmlKey(const QString& key)
 {
-    QString out = key;
-    out.replace(QLatin1String(":"),  QLatin1String("__c__"));
-    out.replace(QLatin1String("/"),  QLatin1String("__s__"));
-    out.replace(QLatin1String("["),  QLatin1String("__lb__"));
-    out.replace(QLatin1String("]"),  QLatin1String("__rb__"));
+    QString out;
+    out.reserve(key.size());
+    for (QChar c : key) {
+        switch (c.unicode()) {
+            case ':':  out += QLatin1String("__c__");     break;
+            case '/':  out += QLatin1String("__s__");     break;
+            case '[':  out += QLatin1String("__lb__");    break;
+            case ']':  out += QLatin1String("__rb__");    break;
+            case '+':  out += QLatin1String("__plus__");  break;
+            case ' ':  out += QLatin1String("__sp__");    break;
+            case '?':  out += QLatin1String("__qm__");    break;
+            case '&':  out += QLatin1String("__amp__");   break;
+            case '#':  out += QLatin1String("__hash__");  break;
+            case '(':  out += QLatin1String("__lp__");    break;
+            case ')':  out += QLatin1String("__rp__");    break;
+            case ',':  out += QLatin1String("__cm__");    break;
+            case '@':  out += QLatin1String("__at__");    break;
+            case '!':  out += QLatin1String("__excl__");  break;
+            case '*':  out += QLatin1String("__ast__");   break;
+            case '\'': out += QLatin1String("__sq__");    break;
+            case '"':  out += QLatin1String("__dq__");    break;
+            case '=':  out += QLatin1String("__eq__");    break;
+            case ';':  out += QLatin1String("__sc__");    break;
+            case '<':  out += QLatin1String("__lt__");    break;
+            case '>':  out += QLatin1String("__gt__");    break;
+            case '{':  out += QLatin1String("__lc__");    break;
+            case '}':  out += QLatin1String("__rc__");    break;
+            case '|':  out += QLatin1String("__pipe__");  break;
+            case '$':  out += QLatin1String("__dlr__");   break;
+            case '%':  out += QLatin1String("__pct__");   break;
+            case '^':  out += QLatin1String("__caret__"); break;
+            case '~':  out += QLatin1String("__tilde__"); break;
+            case '`':  out += QLatin1String("__bt__");    break;
+            case '\\': out += QLatin1String("__bs__");    break;
+            default:   out += c;                          break;
+        }
+    }
     return out;
 }
 
 static QString decodeXmlKey(const QString& tag)
 {
     QString out = tag;
-    out.replace(QLatin1String("__c__"),  QLatin1String(":"));
-    out.replace(QLatin1String("__s__"),  QLatin1String("/"));
-    out.replace(QLatin1String("__lb__"), QLatin1String("["));
-    out.replace(QLatin1String("__rb__"), QLatin1String("]"));
+    out.replace(QLatin1String("__c__"),     QLatin1String(":"));
+    out.replace(QLatin1String("__s__"),     QLatin1String("/"));
+    out.replace(QLatin1String("__lb__"),    QLatin1String("["));
+    out.replace(QLatin1String("__rb__"),    QLatin1String("]"));
+    out.replace(QLatin1String("__plus__"),  QLatin1String("+"));
+    out.replace(QLatin1String("__sp__"),    QLatin1String(" "));
+    out.replace(QLatin1String("__qm__"),    QLatin1String("?"));
+    out.replace(QLatin1String("__amp__"),   QLatin1String("&"));
+    out.replace(QLatin1String("__hash__"),  QLatin1String("#"));
+    out.replace(QLatin1String("__lp__"),    QLatin1String("("));
+    out.replace(QLatin1String("__rp__"),    QLatin1String(")"));
+    out.replace(QLatin1String("__cm__"),    QLatin1String(","));
+    out.replace(QLatin1String("__at__"),    QLatin1String("@"));
+    out.replace(QLatin1String("__excl__"),  QLatin1String("!"));
+    out.replace(QLatin1String("__ast__"),   QLatin1String("*"));
+    out.replace(QLatin1String("__sq__"),    QLatin1String("'"));
+    out.replace(QLatin1String("__dq__"),    QLatin1String("\""));
+    out.replace(QLatin1String("__eq__"),    QLatin1String("="));
+    out.replace(QLatin1String("__sc__"),    QLatin1String(";"));
+    out.replace(QLatin1String("__lt__"),    QLatin1String("<"));
+    out.replace(QLatin1String("__gt__"),    QLatin1String(">"));
+    out.replace(QLatin1String("__lc__"),    QLatin1String("{"));
+    out.replace(QLatin1String("__rc__"),    QLatin1String("}"));
+    out.replace(QLatin1String("__pipe__"),  QLatin1String("|"));
+    out.replace(QLatin1String("__dlr__"),   QLatin1String("$"));
+    out.replace(QLatin1String("__pct__"),   QLatin1String("%"));
+    out.replace(QLatin1String("__caret__"), QLatin1String("^"));
+    out.replace(QLatin1String("__tilde__"), QLatin1String("~"));
+    out.replace(QLatin1String("__bt__"),    QLatin1String("`"));
+    out.replace(QLatin1String("__bs__"),    QLatin1String("\\"));
+    return out;
+}
+
+// One-shot recovery for files written by pre-2026-04-30 builds. Scan the
+// raw XML and escape any non-NameChar found in element-name position. The
+// scanner is structural (not regex) so it correctly skips comments, PIs,
+// attribute values, and CDATA — only element names are touched. Files
+// already well-formed pass through unchanged.
+static QString sanitizeXmlForLoad(const QString& text)
+{
+    QString out;
+    out.reserve(text.size());
+    int i = 0;
+    const int n = text.size();
+    while (i < n) {
+        const QChar c = text.at(i);
+        if (c != QLatin1Char('<')) {
+            out += c;
+            i++;
+            continue;
+        }
+        // Found '<'. Determine kind: '<?' (PI), '<!' (comment/doctype),
+        // '</' (end tag), or '<' (start tag).
+        out += c;
+        i++;
+        if (i >= n) {
+            break;
+        }
+        const QChar next = text.at(i);
+        if (next == QLatin1Char('?') || next == QLatin1Char('!')) {
+            // Pass through unchanged until matching '>'
+            while (i < n) {
+                out += text.at(i);
+                if (text.at(i) == QLatin1Char('>')) {
+                    i++;
+                    break;
+                }
+                i++;
+            }
+            continue;
+        }
+        if (next == QLatin1Char('/')) {
+            out += next;
+            i++;
+        }
+        // Now positioned at start of element name. Escape any char that
+        // isn't valid in NameChar. Stop at whitespace, '/', or '>'.
+        while (i < n) {
+            const QChar nc = text.at(i);
+            if (nc == QLatin1Char('>') || nc == QLatin1Char('/') || nc.isSpace()) {
+                break;
+            }
+            switch (nc.unicode()) {
+                case '+':  out += QLatin1String("__plus__");  break;
+                case ' ':  out += QLatin1String("__sp__");    break;
+                case '?':  out += QLatin1String("__qm__");    break;
+                case '&':  out += QLatin1String("__amp__");   break;
+                case '#':  out += QLatin1String("__hash__");  break;
+                case '(':  out += QLatin1String("__lp__");    break;
+                case ')':  out += QLatin1String("__rp__");    break;
+                case ',':  out += QLatin1String("__cm__");    break;
+                case '@':  out += QLatin1String("__at__");    break;
+                case '!':  out += QLatin1String("__excl__");  break;
+                case '*':  out += QLatin1String("__ast__");   break;
+                case '\'': out += QLatin1String("__sq__");    break;
+                case '"':  out += QLatin1String("__dq__");    break;
+                case '=':  out += QLatin1String("__eq__");    break;
+                case ';':  out += QLatin1String("__sc__");    break;
+                case '{':  out += QLatin1String("__lc__");    break;
+                case '}':  out += QLatin1String("__rc__");    break;
+                case '|':  out += QLatin1String("__pipe__");  break;
+                case '$':  out += QLatin1String("__dlr__");   break;
+                case '%':  out += QLatin1String("__pct__");   break;
+                case '^':  out += QLatin1String("__caret__"); break;
+                case '~':  out += QLatin1String("__tilde__"); break;
+                case '`':  out += QLatin1String("__bt__");    break;
+                case '\\': out += QLatin1String("__bs__");    break;
+                default:   out += nc;                         break;
+            }
+            i++;
+        }
+        // Pass through rest of open tag (attributes, '/>', '>')
+        while (i < n) {
+            out += text.at(i);
+            if (text.at(i) == QLatin1Char('>')) {
+                i++;
+                break;
+            }
+            i++;
+        }
+    }
     return out;
 }
 
@@ -177,7 +336,16 @@ void AppSettings::load()
         return;
     }
 
-    QXmlStreamReader xml(&file);
+    // Read the entire file as UTF-8 text and run it through the recovery
+    // sanitizer before parsing. Pre-2026-04-30 builds wrote element names
+    // with literal '+' (and other non-NameChars from Thetis profile names),
+    // which causes QXmlStreamReader to bail mid-file. The sanitizer escapes
+    // those chars structurally; well-formed files pass through unchanged.
+    const QString rawXml      = QString::fromUtf8(file.readAll());
+    const QString sanitizedXml = sanitizeXmlForLoad(rawXml);
+    file.close();
+
+    QXmlStreamReader xml(sanitizedXml);
     QString currentStation;
     bool inStation = false;
 
@@ -215,8 +383,26 @@ void AppSettings::load()
         qWarning() << "XML parse error in settings:" << xml.errorString();
     }
 
+    int radiosCount = 0;
+    QStringList radioMacs;
+    for (auto it = m_settings.constBegin(); it != m_settings.constEnd(); ++it) {
+        if (it.key().startsWith(QStringLiteral("radios/"))) {
+            radiosCount++;
+            // Capture distinct MAC keys for the diagnostic
+            const QString rest = it.key().mid(QStringLiteral("radios/").size());
+            const int slash = rest.indexOf(QLatin1Char('/'));
+            if (slash > 0) {
+                const QString mac = rest.left(slash);
+                if (!radioMacs.contains(mac)) {
+                    radioMacs.append(mac);
+                }
+            }
+        }
+    }
     qDebug() << "Loaded" << m_settings.size() << "settings,"
-             << m_stationSettings.size() << "station settings";
+             << m_stationSettings.size() << "station settings;"
+             << radiosCount << "saved-radio keys across"
+             << radioMacs.size() << "MAC(s)";
 }
 
 void AppSettings::save()
@@ -564,6 +750,37 @@ void AppSettings::setModelOverride(const QString& macKey, HPSDRModel model)
     const QString prefix = radioKeyPrefix(macKey);
     m_settings.insert(prefix + QStringLiteral("modelOverride"),
                       QString::number(static_cast<int>(model)));
+}
+
+// ---------------------------------------------------------------------------
+// Radio-key migration (Phase 3Q Task 12)
+// ---------------------------------------------------------------------------
+
+void AppSettings::migrateRadioKey(const QString& oldKey, const QString& newKey)
+{
+    if (oldKey == newKey) {
+        return;
+    }
+
+    // Read all fields stored under the old key via the typed accessor.
+    // Returns std::nullopt when no entry exists — nothing to migrate.
+    std::optional<SavedRadio> saved = savedRadio(oldKey);
+    if (!saved.has_value()) {
+        return;
+    }
+
+    // Promote the MAC address field to the real MAC so saveRadio() derives
+    // the correct key (saveRadio uses info.macAddress when non-empty, else
+    // falls back to "manual-<ip>-<port>").
+    saved->info.macAddress = newKey;
+
+    // Remove the old synthetic entry before writing the new one so there is
+    // no window where both keys co-exist in the settings map.
+    forgetRadio(oldKey);
+
+    // Re-persist under the real-MAC key.  saveRadio() overwrites lastSeen with
+    // QDateTime::currentDateTimeUtc() — acceptable for a first-probe migration.
+    saveRadio(saved->info, saved->pinToMac, saved->autoConnect);
 }
 
 // ---------------------------------------------------------------------------

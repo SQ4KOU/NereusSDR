@@ -183,6 +183,9 @@ private slots:
     void onWatchdogTick();
     void onEp2PacerTick();
     void onReconnectTimeout();
+    // Fires kConnectTimeoutMs after connectToRadio() if no first ep6 frame
+    // arrives. Emits connectFailed(Timeout, ...) — Phase 3Q Task 3.
+    void onConnectTimeout();
 
 private:
     // --- Wire format (networkproto1.c) — implemented in Tasks 7 & 8 ---
@@ -278,6 +281,10 @@ private:
     QElapsedTimer m_ep2PacerClock;
     qint64        m_ep2PacketsSent{0};
     QTimer*       m_reconnectTimer{nullptr};
+    // Single-shot timer — fires kConnectTimeoutMs after connectToRadio() if
+    // no first ep6 frame arrives. Emits connectFailed(Timeout, ...). Cancelled
+    // on first good ep6 in onReadyRead(). Created in init(), Qt-parent-owned.
+    QTimer*       m_connectWatchdog{nullptr};
 
     bool        m_running{false};
     bool        m_intentionalDisconnect{false};
@@ -293,6 +300,9 @@ private:
     // 25 ms watchdog tick for silence detection only. EP2 pacing has moved
     // to m_ep2PacerTimer (kEp2PacerIntervalMs) — see onEp2PacerTick.
     static constexpr int kWatchdogTickMs       = 25;            // watchdog silence-detection cadence
+    // Connect watchdog: fires this many ms after connectToRadio() if no first
+    // ep6 frame arrives → emits connectFailed(Timeout, ...). Design §4.1.
+    static constexpr int kConnectTimeoutMs     = 2000;
     // Mic-frame LOS timeout — after this long without a successful mic16
     // dispatch, inject a zero block into TxMicSource so the worker keeps
     // ticking through silence.  Matches Thetis network.c:656 [v2.10.3.13]:

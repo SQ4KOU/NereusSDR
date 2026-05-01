@@ -6,9 +6,12 @@
 // (P1RadioConnection.cpp, P2RadioConnection.cpp); no upstream code is
 // reproduced in this header.
 
+#include "ConnectionState.h"
 #include "RadioDiscovery.h"
 #include "HardwareProfile.h"
 
+#include <QDateTime>
+#include <QList>
 #include <QObject>
 #include <QVector>
 
@@ -16,6 +19,17 @@
 #include <memory>
 
 namespace NereusSDR {
+
+// Structured failure taxonomy for the initial connect attempt — design §4.1.
+// Emitted by connectFailed() when connectToRadio() cannot reach Connected state.
+// The UI (TitleBar, ConnectionPanel) maps these to human-readable messages.
+enum class ConnectFailure : int {
+    Unreachable     = 0,  // OS reports "destination unreachable" (ICMP unreach)
+    Timeout         = 1,  // No reply / no first frame within the connect budget
+    MalformedReply  = 2,  // Response received but the frame parser rejected it
+    ProtocolMismatch = 3, // Reply valid but P1/P2 version mismatch
+    IncompatibleBoard = 4 // Reply valid but boardType is not supported
+};
 
 // Structured error taxonomy — design doc §6.1.
 enum class RadioConnectionError {
@@ -29,14 +43,6 @@ enum class RadioConnectionError {
     NoDataTimeout,
     UnknownBoardType,
     ProtocolMismatch
-};
-
-// Connection state for a radio.
-enum class ConnectionState {
-    Disconnected,
-    Connecting,
-    Connected,
-    Error
 };
 
 // Antenna routing parameters — Phase 3P-I-a.
@@ -75,6 +81,46 @@ public:
 
     void setHardwareProfile(const HardwareProfile& profile) { m_hardwareProfile = profile; }
     const HardwareProfile& hardwareProfile() const { return m_hardwareProfile; }
+
+    // Rolling-window throughput accessors. **Returns Mbps** (not bytes/sec
+    // — the "ByteRate" name predates the implementation, kept for ABI
+    // stability). Used by ConnectionSegment ▲▼ readouts and the network
+    // diagnostics dialog. Bugs land easy here: 2026-04-30 the dialog
+    // applied a second `* 8 / 1e6` conversion and TX/RX always read 0.
+    // If you're computing throughput, use these values directly as Mbps.
+    double txByteRate(int windowMs) const;
+    double rxByteRate(int windowMs) const;
+
+    // Hooks the protocol implementations call on each successful packet.
+    // Public so subclasses (P1/P2) and tests can drive the counter.
+    void recordBytesSent(qint64 n);
+    void recordBytesReceived(qint64 n);
+
+    // Ping RTT measurement via existing C&C round-trip.
+    // Call notePingSent() just before emitting an outbound command and
+    // notePingReceived() when the corresponding inbound status arrives.
+    // A single outstanding exchange is tracked; the first valid pair
+    // within 5 s emits pingRttMeasured(int rttMs). Duplicate receives
+    // and receives-without-sends are silently ignored.
+    // Drives the ConnectionSegment "X ms" latency readout (sub-PR-2).
+    void notePingSent();
+    void notePingReceived();
+
+    // Voltage signal handlers — called by P1/P2 after extracting raw ADC counts.
+    // Apply per-board scaling and emit supplyVoltsChanged / userAdc0Changed
+    // when the value changes by more than 50 mV (identical-raw suppression).
+    //
+    // handleSupplyRaw: Hermes DC-volts formula from Thetis
+    //   console.cs computeHermesDCVoltage() [v2.10.3.13].
+    //   Applies to all radios (supply_volts / AIN6 / P1 case 0x18 / P2 bytes 45-46).
+    //
+    // handleUserAdc0Raw: MKII PA-volts formula from Thetis
+    //   console.cs computeMKIIPaVoltage() [v2.10.3.13].
+    //   Applies to ORIONMKII / ANAN8000D / ANAN7000D / ANAN-G2 family only
+    //   (user_adc0 / AIN3 / P1 case 0x10 / P2 bytes 53-54). Callers
+    //   are responsible for gating by board type before calling.
+    void handleSupplyRaw(quint16 raw);
+    void handleUserAdc0Raw(quint16 raw);
 
 public slots:
     // Must be called on the worker thread after moveToThread().
@@ -331,9 +377,40 @@ public slots:
     bool isWatchdogEnabled() const noexcept { return m_watchdogEnabled; }
 
 signals:
+    // --- Telemetry ---
+    // Emitted when a C&C round-trip completes. rttMs is the elapsed time
+    // in milliseconds between notePingSent() and notePingReceived().
+    // Drives the ConnectionSegment "X ms" latency readout (sub-PR-2).
+    void pingRttMeasured(int rttMs);
+
+    // PSU supply voltage (V) from supply_volts (P1 AIN6 / P2 bytes 45-46).
+    // Converted via Hermes DC-volts formula (console.cs computeHermesDCVoltage()
+    // [v2.10.3.13]). Emitted at most once per 50 mV change.
+    // Drives the redesigned right-side strip "PSU X.XV" metric (sub-PR-2).
+    void supplyVoltsChanged(float volts);
+
+    // PA drain voltage (V) from user_adc0 (P1 AIN3 / P2 bytes 53-54).
+    // ORIONMKII / ANAN-8000D / ANAN-7000DLE / ANAN-G2 family only.
+    // Converted via MKII PA-volts formula (console.cs computeMKIIPaVoltage()
+    // [v2.10.3.13]). Emitted at most once per 50 mV change.
+    void userAdc0Changed(float volts);
+
     // --- State ---
     void connectionStateChanged(NereusSDR::ConnectionState state);
     void errorOccurred(NereusSDR::RadioConnectionError code, const QString& message);
+
+    // Emitted once per valid ep6 (P1) or DDC I/Q (P2) frame arrival.
+    // The TitleBar activity LED throttles this to ≤10 Hz visible refresh —
+    // the emitter fires at the full frame rate; throttling is the receiver's job.
+    // Design doc §4.1.
+    void frameReceived();
+
+    // Emitted when connectToRadio() fails to reach the Connected state.
+    // reason carries a typed failure code; detail is a plain-English
+    // explanation suitable for display in the ConnectionPanel / TitleBar.
+    // Fully-qualified type names required for Qt MOC queued-connection support.
+    // Design doc §4.1.
+    void connectFailed(NereusSDR::ConnectFailure reason, QString detail);
 
     // --- Data ---
     // Emitted for each receiver's I/Q block.
@@ -420,6 +497,33 @@ signals:
 
     // Radio firmware info received during handshake.
     void firmwareInfoReceived(int version, const QString& details);
+
+private:
+    struct ByteSample { qint64 ms; qint64 bytes; };
+    mutable QList<ByteSample> m_txSamples;
+    mutable QList<ByteSample> m_rxSamples;
+
+    static double rateFromSamples(const QList<ByteSample>& samples, int windowMs);
+    static void   pruneSamples(QList<ByteSample>& samples, qint64 nowMs, int windowMs);
+
+    // Ping RTT state. Zero means no outstanding ping.
+    qint64 m_pingSentMs{0};
+
+    // Voltage conversion helpers.
+    // convertSupplyVolts: 3.3V ADC ref + (4.7+0.82)/0.82 divider — Thetis-faithful
+    //                     port of computeHermesDCVoltage (which is itself dead
+    //                     code in Thetis — see source-first audit notes near the
+    //                     PA volt label declaration in MainWindow.h).
+    // convertMkiiPaVolts: 5.0V ADC ref + (22+1)/1.1 divider — Thetis-faithful
+    //                     port of convertToVolts (the formula Thetis actually
+    //                     uses to display voltage on MkII-class boards).
+    static float convertSupplyVolts(quint16 raw);
+    static float convertMkiiPaVolts(quint16 raw);
+
+    // Last-emitted voltage values for identical-raw suppression (50 mV epsilon).
+    // Initialised to -1 so the first call always emits.
+    float m_lastSupplyVolts{-1.0f};
+    float m_lastUserAdc0Volts{-1.0f};
 
 protected:
     void setState(ConnectionState newState);
@@ -509,5 +613,5 @@ protected:
 
 } // namespace NereusSDR
 
-Q_DECLARE_METATYPE(NereusSDR::ConnectionState)
 Q_DECLARE_METATYPE(NereusSDR::RadioConnectionError)
+Q_DECLARE_METATYPE(NereusSDR::ConnectFailure)

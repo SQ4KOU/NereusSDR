@@ -2,6 +2,186 @@
 
 ## [Unreleased]
 
+### Added (Phase 3Q — Connection Workflow Refactor / connect-flow rebuild)
+
+Triggered by an April 2026 user report: an HL2 across a WireGuard
+tunnel couldn't be reached through the existing manual-entry path,
+and the disconnect state gave no feedback beyond a frozen spectrum.
+This entry covers the connect / discover / disconnect flow rebuild
+and the chrome layer that surrounds it.
+
+- **Single ConnectionState state machine** — `Disconnected → Probing →
+  Connecting → Connected → (Disconnected | LinkLost)` with broadcast
+  scan and unicast probe as different *triggers* into the same path.
+  Replaces the earlier broadcast-only-then-blind-connect flow.
+
+- **Unicast probe** — `RadioDiscovery::probeAddress(addr, port, timeout)`
+  with 1.5 s timeout, parallel P1 + P2 attempts, parses replies via the
+  existing P1 / P2 reply helpers. Lets the Connect menu and the manual
+  Add Radio dialog reach radios that aren't reachable via UDP broadcast
+  (Layer-3 VPNs like WireGuard / ZeroTier / Tailscale).
+
+- **Add Radio dialog rebuild** — replaces the 9-board picker with a
+  16-SKU model dropdown organized by silicon family in `<optgroup>`s
+  (Auto-detect first, then Atlas / Hermes (3) / Hermes II (2) /
+  Angelia / Orion / Orion MkII (5) / Hermes Lite 2 / Saturn (2)).
+  Two action buttons — `Probe and connect now` and `Save offline`.
+  Failure path keeps the dialog open with form preserved + red
+  error band; success path auto-closes and lands the row in the
+  table tagged "(probe)".
+
+- **ConnectionPanel polish.** Modal kept; status strip up top with
+  inline Disconnect; state-pill column (🟢 Online <60 s · 🟡 Stale
+  60 s–5 min · 🔴 Offline) replaces the bare `●`; Last Seen column
+  replaces MAC; single ↻ Scan in the table header replaces
+  Start/Stop Discovery; Auto-connect-on-launch checkbox added to the
+  detail panel; auto-opens on launch + on disconnect; auto-closes
+  1 s after Connected.
+
+- **Radio menu rework.** `Connect (⌘K) · Disconnect (⌘⇧K) · Discover
+  Now · Manage Radios… · Antenna Setup… (NYI) · Transverters… (NYI) ·
+  Protocol Info` with state-aware enablement (Connect/Disconnect
+  mutually exclusive; Protocol Info follows connection). Replaces
+  the prior four-item-three-aliases set.
+
+- **Spectrum disconnect overlay** — 800 ms fade to ~40 % opacity +
+  DISCONNECTED label + click-anywhere-to-open-panel. Multi-cue
+  feedback closes the loop on the "spectrum just freezes when the
+  radio drops" complaint.
+
+- **Stale policy change.** Saved radios *never* age out (previously
+  dropped at 15 s); discovered-only radios age out at 60 s (raised
+  from 15 s, long enough not to flap); the connected MAC stays
+  exempt.
+
+- **Auto-connect-on-launch** — uses the existing per-radio
+  `AppSettings::autoConnect` flag; on failure the panel auto-opens
+  with the target highlighted offline + a status-bar diagnostic.
+  Multi-flag case picks most-recent-connected MAC + a one-time
+  setup-bar warning.
+
+- **macKey migration.** Offline entries saved with the synthetic
+  `manual-<IP>-<port>` key get migrated under the real MAC on first
+  probe success, preserving Name / Model / Auto-connect / Pin-to-MAC.
+
+### Added (Phase 3Q — chrome layer)
+
+- **Title-bar ConnectionSegment.** Collapses the old verbose connection
+  text into a compact `[state dot] [▲ tx Mbps] [RTT ms] [▼ rx Mbps] [♪ audio]`
+  segment that lives in the macOS title bar. Click opens the connection
+  panel, right-click pops Reconnect / Disconnect / Manage Radios, hover
+  shows a multi-line diagnostic tooltip with full IP / MAC / protocol /
+  firmware / sample rate / throughput. The state dot color encodes
+  connection state and pulses on each ep6 / DDC frame so the user can
+  see "the radio is talking to me" at a glance.
+
+- **RxDashboard with BadgePair drop ladder.** A 3-stage responsive
+  dashboard in the status bar replacing the old free-text strip: at
+  full width, three side-by-side `BadgePair`s show `[mode] [filter]
+  [AGC] [NR] [NB] [APF]` plus a lone `SQL`; on a narrower window the
+  pairs stack vertically (medium); on the narrowest, badges drop in
+  priority order. Mode + filter never drop. A 30 px hysteresis
+  deadband prevents the boundary-stack-flash that v0.2.3 testing
+  surfaced.
+
+- **StationBlock anchor.** The center "STATION" cell becomes a clickable
+  block bearing the connected radio's name (or "Click to connect" with
+  a dashed-red border when offline). Click opens the connection panel;
+  right-click offers Disconnect / Edit radio… / Forget radio.
+
+- **Right-side strip restyle.** CAT / TCI / PA voltage / CPU / PA-OK /
+  TX status now use the new `MetricLabel` and `StatusBadge` widgets
+  with consistent typography. Drop-priority shrinks the strip in a
+  fixed order on narrow windows and surfaces dropped items via an
+  `OverflowChip` (`…`) with a hover tooltip.
+
+- **AdcOverloadBadge** — stacked `ADCx` / `OVERLOAD` two-row badge
+  living between PA-OK and TX. Yellow on any ADC level > 0, red on
+  any > 3 (Thetis severity rules), 2 s auto-hide.
+
+- **SVG icon system on StatusBadge.** New `setSvgIcon(":/icons/...")`
+  API renders SVG via `QSvgRenderer` with `CompositionMode_SourceIn`
+  tinting; auto re-tints on `setVariant()`. Replaces the Unicode
+  glyph prefixes that rendered inconsistently across font fallbacks.
+  Nine SVGs ship: `badge-check`, `badge-dot`, `badge-mode` (sine
+  wave), `badge-filter` (passband curve), `badge-agc` (lightning),
+  `badge-nr` (smoothing wave), `badge-nb` (impulse spike), `badge-apf`
+  (notch), `badge-sql` (threshold chevron).
+
+- **CPU System / App toggle.** Right-click the CPU MetricLabel to
+  switch between system-wide CPU usage and this-process-only.
+  Mirrors Thetis's `m_bShowSystemCPUUsage`. Persisted as
+  `CpuShowSystem` (defaults to System). 1 s tick rate, 0.8 / 0.2
+  smoothing, integer percent display — all matching Thetis.
+
+- **Min-filtered RTT.** The title-bar RTT readout now uses the
+  2nd-smallest of a rolling 10-sample window instead of the mean.
+  The previous mean-based smoother showed `~half_cadence` on
+  sub-millisecond LAN connections (because the radio's status-packet
+  cadence — P1 2.6 ms, P2 100 ms — adds bracket noise to every
+  measurement) and showed random low values on WAN connections
+  (because lucky-aligned samples pulled the mean down). Same min-filter
+  technique TCP BBR uses.
+
+### Changed (Phase 3Q — ship defaults aligned to live-radio testing)
+
+- **Spectrum / waterfall ship defaults shifted down 12 dB** to match a
+  typical residential HF noise floor: `DisplayGridMax -36→-48`,
+  `DisplayGridMin -104→-116`, `DisplayWfHighLevel -50→-62`,
+  `DisplayWfLowLevel -110→-122`, `DisplayWfBlackLevel 98→104`.
+  Dynamic range (68 dB grid, 60 dB waterfall) is unchanged. Earlier
+  defaults gave a noisy first-launch impression — band noise jammed
+  the bottom of the panadapter and lit up the waterfall floor.
+
+- **Clarity defaults to ON** for fresh installs. Auto-tuning the noise
+  floor is the better first-launch experience than asking the user
+  to find and toggle the setting.
+
+- **PSU widget removed from status bar and Network Diagnostics dialog.**
+  Source-first audit against Thetis [v2.10.3.13] confirmed
+  `supply_volts` (AIN6) is dead data in Thetis —
+  `computeHermesDCVoltage()` exists but has zero callers, and the
+  only voltage status indicator (`toolStripStatusLabel_Volts`) reads
+  `_MKIIPAVolts` which is `convertToVolts(getUserADC0)` — i.e. the
+  PA drain voltage on AIN3. The PA volt label is now the sole supply
+  indicator on MkII-class boards (Saturn / G2 / 8000D / 7000DLE /
+  OrionMkII / Anvelina Pro 3), matching Thetis behaviour.
+
+### Fixed (Phase 3Q — bench-caught bugs)
+
+- **PA voltage formula correction.** `convertMkiiPaVolts` now uses
+  5.0 V ADC reference and `(22+1)/1.1` divider per Thetis
+  `convertToVolts` (`console.cs:24886-24892` [v2.10.3.13]). Prior
+  formula used 3.3 V × 25.5 — wrong on both axes; the combined error
+  was a 0.805 scaling factor (13.8 V actual displayed as 11.0 V).
+  Verified live on ANAN-G2: now reads 13.3 V.
+
+- **Network Diagnostics TX / RX rate.** Dialog was applying a redundant
+  `* 8 / 1e6` conversion to values that were already in Mbps,
+  producing 0.00 Mbps for any real throughput. Fixed and the
+  `RadioConnection::txByteRate / rxByteRate` API doc strengthened
+  to flag the misleading "ByteRate" name (returns Mbps).
+
+- **Glyph encoding sweep.** Continuation of the v0.2.3 ebe9030 fix —
+  on the macOS compile path, `\xe2\x96…` byte-escape strings inside
+  `QString::asprintf` and `QStringLiteral` get misinterpreted as
+  Latin-1 codepoints. Switched to `QChar(0x25B2)` / `QChar(0x25BC)` /
+  `QChar(0x2014)` for: TitleBar painted Mbps `▲ ▼` glyphs, RTT
+  em-dash placeholder, RadioModel connection tooltip, and four
+  em-dash sites in `AntennaAlexAlex2Tab`.
+
+- **Header initializer drift.** `m_refLevel`, `m_wfBlackLevel`,
+  `m_wfHighThreshold`, `m_wfLowThreshold` member initializers in
+  `SpectrumWidget.h` synced to the new ship defaults so any code
+  path that reads these before `loadSettings()` runs sees the right
+  values, not the stale `-50 / -110 / 98 / -36` from earlier work.
+
+- **Network Diagnostics honesty.** Jitter / packet loss / packet gap
+  rows previously showed hardcoded `0 ms` / `0.0%` / `—` placeholders
+  that read as "perfect network" rather than "not measured". All
+  three now show em-dash with a "Not yet measured" tooltip until
+  proper protocol-level instrumentation lands.
+
 ### Added (Phase 3M-3a-ii — TX Dynamics: CFC + CPDR + CESSB + Phase Rotator)
 
 - **CFC (Continuous Frequency Compressor) — 10-band freq compander.** New

@@ -42,6 +42,13 @@
 //                 wires that to showFeatureRequestDialog. Matches
 //                 AetherSDR's pattern of the feature button being the
 //                 rightmost strip element.
+//   2026-04-27 — Phase 3Q-6: implemented ConnectionSegment — state dot,
+//                 radio name/IP text, ▲▼ Mbps readout, and 10 Hz
+//                 throttled activity LED. Inserted at position 1 in the
+//                 hbox (just after the menu bar). Design §4.1.
+//   2026-04-30 — Phase 3Q Sub-PR-4 D.1: replaced ConnectionSegment body
+//                 per shell-chrome redesign spec §4.1. See TitleBar.h for
+//                 the full change description.
 // =================================================================
 
 #include "TitleBar.h"
@@ -52,6 +59,7 @@
 #include <QIcon>
 #include <QLabel>
 #include <QMenuBar>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
 #include <QPixmap>
@@ -59,8 +67,10 @@
 #include <QPushButton>
 #include <QSize>
 #include <QSizePolicy>
+#include <QTimer>
 
 namespace NereusSDR {
+
 
 namespace {
 
@@ -92,6 +102,297 @@ constexpr int kStripHeight = 32;
 
 } // namespace
 
+// =========================================================================
+// ConnectionSegment implementation  (Phase 3Q Sub-PR-4 D.1)
+// =========================================================================
+
+ConnectionSegment::ConnectionSegment(QWidget* parent)
+    : QWidget(parent)
+{
+    setFixedHeight(30);
+    setMinimumWidth(200);
+    setCursor(Qt::PointingHandCursor);
+    setMouseTracking(true);
+    setAttribute(Qt::WA_StyledBackground, true);
+
+    // Pulse timer — drives the state-dot animation. 750 ms half-period gives
+    // a 1.5 s full cycle: visible and calm for streaming (not frantic).
+    m_pulseTimer.setInterval(750);
+    connect(&m_pulseTimer, &QTimer::timeout, this, [this]() {
+        m_pulseOn = !m_pulseOn;
+        update();
+    });
+    m_pulseTimer.start();
+}
+
+void ConnectionSegment::setState(ConnectionState s)
+{
+    if (m_state == s) {
+        return;
+    }
+    m_state = s;
+
+    // Pulse while there is interesting transient state to show.
+    if (s == ConnectionState::Connected   ||
+        s == ConnectionState::Probing     ||
+        s == ConnectionState::Connecting  ||
+        s == ConnectionState::LinkLost) {
+        m_pulseTimer.start();
+    } else {
+        m_pulseTimer.stop();
+        m_pulseOn = false;
+    }
+    update();
+}
+
+void ConnectionSegment::setRates(double rxMbps, double txMbps)
+{
+    if (qFuzzyCompare(m_rxMbps + 1.0, rxMbps + 1.0) &&
+        qFuzzyCompare(m_txMbps + 1.0, txMbps + 1.0)) {
+        return;
+    }
+    m_rxMbps = rxMbps;
+    m_txMbps = txMbps;
+    update();
+}
+
+void ConnectionSegment::setRttMs(int ms)
+{
+    // Track the latest raw value so callers can read it back for
+    // diagnostics; the painted value comes from smoothedRttMs().
+    m_rttMs = ms;
+
+    // Negative samples ("no rtt available") clear the smoothing queue
+    // — re-attaching produces "— ms" until real samples flow again.
+    if (ms < 0) {
+        m_rttSamples.clear();
+        update();
+        return;
+    }
+
+    m_rttSamples.enqueue(ms);
+    while (m_rttSamples.size() > kRttSmoothingWindow) {
+        m_rttSamples.dequeue();
+    }
+    update();
+}
+
+int ConnectionSegment::smoothedRttMs() const noexcept
+{
+    if (m_rttSamples.isEmpty()) {
+        return m_rttMs;   // -1 when there's been no real sample yet
+    }
+
+    // Min-filtered RTT — 2nd-smallest of the rolling window.
+    //
+    // The radio sends status packets on its own periodic cadence
+    // (P1: 380.95 pps → 2.6 ms; P2: 100 ms HighPriority status)
+    // independent of our outbound commands. Each measured sample is
+    // therefore  true_RTT + uniform(0, cadence)  — the additive term
+    // is bracket noise from how long the radio waited before its next
+    // status emit. A rolling MEAN preserves that noise and produces
+    // two pathological readings:
+    //   - LAN with sub-ms RTT reads ~half the cadence (P1 floor ~1.3 ms)
+    //   - WAN with cadence-sized RTT becomes random noise — a few
+    //     "lucky" samples where status arrived right after our cmd
+    //     can pull the mean way below true_RTT.
+    //
+    // The MINIMUM across a window approaches true_RTT (the lucky
+    // sample where the radio's cadence noise was ~0). Same technique
+    // TCP BBR uses for its RTT estimator. We use the 2nd-smallest
+    // (rather than the absolute minimum) to winsorize a single
+    // anomalously-low outlier — protects against a transient
+    // sub-millisecond glitch pulling the display below the true RTT.
+    if (m_rttSamples.size() == 1) {
+        return m_rttSamples.first();
+    }
+    QList<int> sorted;
+    sorted.reserve(m_rttSamples.size());
+    for (int s : m_rttSamples) { sorted.append(s); }
+    std::sort(sorted.begin(), sorted.end());
+    return sorted.at(1);
+}
+
+void ConnectionSegment::setAudioFlowState(AudioEngine::FlowState s)
+{
+    if (m_audioFlow == s) {
+        return;
+    }
+    m_audioFlow = s;
+    update();
+}
+
+void ConnectionSegment::frameTick()
+{
+    // Throttled activity tick — for now just nudges a repaint so the
+    // pulse looks "live". The pulse timer above already drives the
+    // animation; this slot exists for future per-frame visual cues.
+    update();
+}
+
+QColor ConnectionSegment::stateDotColor() const
+{
+    switch (m_state) {
+        case ConnectionState::Connected:
+            // m_pulseOn alternates → slow green pulse encoding streaming activity
+            return m_pulseOn ? QColor("#5fff8a") : QColor("#3fcf6a");
+        case ConnectionState::Probing:
+        case ConnectionState::Connecting:
+            return m_pulseOn ? QColor("#5fa8ff") : QColor("#3f78cf");
+        case ConnectionState::LinkLost:
+            return m_pulseOn ? QColor("#ff8c00") : QColor("#cf6c00");
+        case ConnectionState::Disconnected:
+            return QColor("#ff4040");
+    }
+    return QColor("#607080");
+}
+
+QColor ConnectionSegment::rttColor(int rttMs) const
+{
+    if (rttMs < 0)    { return QColor("#607080"); }
+    if (rttMs < 50)   { return QColor("#5fff8a"); }
+    if (rttMs < 150)  { return QColor("#ffd700"); }
+    return QColor("#ff6060");
+}
+
+QColor ConnectionSegment::audioPipColor(AudioEngine::FlowState s) const
+{
+    switch (s) {
+        case AudioEngine::FlowState::Healthy:  return QColor("#5fa8ff");
+        case AudioEngine::FlowState::Underrun: return QColor("#ffd700");
+        case AudioEngine::FlowState::Stalled:  return QColor("#ff6060");
+        case AudioEngine::FlowState::Dead:     return QColor("#404858");
+    }
+    return QColor("#404858");
+}
+
+QRect ConnectionSegment::rttRect() const
+{
+    return QRect(m_lastRttX1, 0, m_lastRttX2 - m_lastRttX1, height());
+}
+
+QRect ConnectionSegment::audioPipRect() const
+{
+    return QRect(m_lastPipX1, 0, m_lastPipX2 - m_lastPipX1, height());
+}
+
+void ConnectionSegment::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    // Background
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor("#0f1420"));
+    p.drawRoundedRect(rect(), 3, 3);
+
+    p.setFont(QFont(QStringLiteral("SF Mono"), 10, QFont::DemiBold));
+
+    // ── 1. State-encoding dot ──────────────────────────────────────────────
+    const QRect dotRect(8, height() / 2 - 5, 10, 10);
+    p.setBrush(stateDotColor());
+    p.drawEllipse(dotRect);
+
+    int x = dotRect.right() + 8;
+    const int textY = height() / 2 + 4;
+
+    if (m_state == ConnectionState::Disconnected) {
+        p.setPen(QColor("#607080"));
+        p.drawText(x, textY, tr("Disconnected — click to connect"));
+        m_lastRttX1 = m_lastRttX2 = 0;
+        m_lastPipX1 = m_lastPipX2 = 0;
+        return;
+    }
+
+    // ── 2. ▲ Mbps — NereusSDR → radio (commands; small, kbps territory) ──
+    // Reads m_txMbps which is the call-site's "client→radio" byte rate
+    // (RadioConnection::txByteRate, recorded per outbound packet at
+    // RadioConnection.cpp:1914 [@HEAD]). Client perspective: ▲ = up
+    // = uploading commands to the radio.
+    //
+    // Glyph is built via QChar(0x25B2) rather than a UTF-8 byte-escape
+    // string passed to QString::asprintf — same fix as ebe9030 applied
+    // to the audio pip. asprintf with a leading "\xe2\x96\xb2" prefix
+    // gets misinterpreted as Latin-1 codepoints on the macOS compile
+    // path, rendering as garbage rather than a triangle.
+    p.setPen(QColor("#a0d8a0"));
+    const QString tx = QChar(0x25B2) + QString::asprintf(" %.1f Mbps", m_txMbps);
+    p.drawText(x, textY, tx);
+    x += p.fontMetrics().horizontalAdvance(tx) + 10;
+
+    // ── 3. RTT readout (smoothed) — clickable region ──────────────────────
+    // Uses the rolling-mean smoothedRttMs() so the readout calms instead
+    // of jumping per-ping. Color thresholds operate on the smoothed
+    // value too, so the green/yellow/red transitions don't flicker.
+    const int rttDisplay = smoothedRttMs();
+    p.setPen(rttColor(rttDisplay));
+    // QChar(0x2014) for the em-dash placeholder — same byte-escape
+    // misinterpretation risk as the Mbps glyphs above; build via QChar.
+    const QString rttText = (rttDisplay < 0)
+        ? QChar(0x2014) + QStringLiteral(" ms")
+        : QString::asprintf("%d ms", rttDisplay);
+    p.drawText(x, textY, rttText);
+    m_lastRttX1 = x;
+    m_lastRttX2 = x + p.fontMetrics().horizontalAdvance(rttText);
+    x = m_lastRttX2 + 10;
+
+    // ── 4. ▼ Mbps — radio → NereusSDR (I/Q stream; large, Mbps) ──────────
+    // Reads m_rxMbps which is the call-site's "radio→client" byte rate
+    // (RadioConnection::rxByteRate, recorded per inbound packet at
+    // RadioConnection.cpp:1272 [@HEAD]). Client perspective: ▼ = down
+    // = downloading I/Q from the radio.
+    //
+    // QChar(0x25BC) for the same reason as the up-triangle above.
+    p.setPen(QColor("#a0d8a0"));
+    const QString rx = QChar(0x25BC) + QString::asprintf(" %.1f Mbps", m_rxMbps);
+    p.drawText(x, textY, rx);
+    x += p.fontMetrics().horizontalAdvance(rx) + 10;
+
+    // ── 5. ● audio pip ────────────────────────────────────────────────────
+    // Was: vertical separator "|" + ♪ (U+266A). ♪ is absent in Menlo (the
+    // SF Mono fallback on macOS), rendering as garbage. Replaced with ●
+    // (U+25CF BLACK CIRCLE), universally available in every monospace font.
+    // The circle colour already encodes audio state — semantically cleaner.
+    p.setPen(audioPipColor(m_audioFlow));
+    // Use QChar(0x25CF) directly rather than a byte-escape QStringLiteral —
+    // \xe2\x97\x8f gets misinterpreted as 3 Latin-1 codepoints (â + 2 control
+    // chars) on some compile-paths, rendering as garbage. QChar(0x25CF) is
+    // unambiguous: a single UTF-16 code unit pointing to ● (U+25CF).
+    const QString pip(QChar(0x25CF));   // ● BLACK CIRCLE — color = audio state
+    p.drawText(x, textY, pip);
+    m_lastPipX1 = x;
+    m_lastPipX2 = x + p.fontMetrics().horizontalAdvance(pip);
+}
+
+void ConnectionSegment::mousePressEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::RightButton) {
+        emit contextMenuRequested(event->globalPosition().toPoint());
+        return;
+    }
+    if (event->button() == Qt::LeftButton) {
+        if (rttRect().contains(event->pos())) {
+            emit rttClicked();
+            return;
+        }
+        if (audioPipRect().contains(event->pos())) {
+            emit audioPipClicked();
+            return;
+        }
+        // Disconnected-state: anywhere-click routes to rttClicked so the
+        // host can wire both to the Connect / Diagnostics dialog.
+        if (m_state == ConnectionState::Disconnected) {
+            emit rttClicked();
+            return;
+        }
+    }
+    QWidget::mousePressEvent(event);
+}
+
+// =========================================================================
+// TitleBar implementation
+// =========================================================================
+
 TitleBar::TitleBar(AudioEngine* audio, QWidget* parent)
     : QWidget(parent)
 {
@@ -103,7 +404,16 @@ TitleBar::TitleBar(AudioEngine* audio, QWidget* parent)
     m_hbox->setSpacing(kSpacing);
 
     // Position 0 is reserved for the menu bar (inserted via setMenuBar()).
-    // Until setMenuBar() runs, the layout is [stretch][app-name][stretch][master].
+    // The ConnectionSegment sits at position 1 (or 0 before the menu is
+    // inserted), between the menu bar and the centre label stretch.
+
+    // ── ConnectionSegment — Phase 3Q-6 ─────────────────────────────────
+    // Inserted as the first item. setMenuBar() will prepend the menu bar
+    // at index 0 pushing this to index 1. Until setMenuBar() runs the
+    // segment sits at index 0 — acceptable; it just moves right once the
+    // menu arrives.
+    m_connectionSegment = new ConnectionSegment(this);
+    m_hbox->addWidget(m_connectionSegment);
 
     // ── Left stretch ───────────────────────────────────────────────────────
     m_hbox->addStretch(1);

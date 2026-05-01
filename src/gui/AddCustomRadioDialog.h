@@ -13,6 +13,11 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-04-27 — Phase 3Q Task 4: replaced board (HPSDRHW) dropdown with
+//                 16-SKU model (HPSDRModel) picker; replaced OK/Cancel button
+//                 row with Probe-and-connect / Save-offline / Cancel; added
+//                 inline error/info band and probing overlay helpers. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  frmAddCustomRadio.cs
@@ -69,6 +74,7 @@ class QComboBox;
 class QCheckBox;
 class QPushButton;
 class QLabel;
+class QFrame;
 
 namespace NereusSDR {
 
@@ -88,29 +94,66 @@ public:
     // Whether the user ticked "Auto-connect on launch"
     bool autoConnect() const;
 
+    // Whether the user used "Save offline" (no probe was attempted).
+    // When false the dialog accepted via a successful probe.
+    bool savedOffline() const { return m_savedOffline; }
+
+    // Pre-populate the form for editing an existing saved radio.
+    // Call before exec(). Switches the title to "Edit Radio" and seeds
+    // m_probedInfo so result() returns the same MAC on save (otherwise
+    // the synthetic-MAC path would create a duplicate row).
+    void setEditTarget(const RadioInfo& info, bool pinToMac, bool autoConnect);
+
 private slots:
-    void onTestClicked();
-    void onAccept();
+    void onProbeClicked();
+    void onSaveOfflineClicked();
     void validateFields();
-    void onBoardChanged(int index);
+    void onModelChanged(int index);
 
 private:
     void buildUi();
-    void populateBoardCombo();
+    void populateModelCombo();
     void populateProtocolCombo();
 
+    // Inline feedback helpers
+    void showInlineError(const QString& message);
+    void showInlineInfo(const QString& message);
+    void clearInlineBand();
+    void showProbingOverlay();
+    void hideProbingOverlay();
+
+    // Form fields (unchanged from original)
     QLineEdit*   m_nameEdit{nullptr};
     QLineEdit*   m_ipEdit{nullptr};
     QSpinBox*    m_portSpin{nullptr};
     QLineEdit*   m_macEdit{nullptr};
-    QComboBox*   m_boardCombo{nullptr};
+
+    // Phase 3Q Task 4: model combo replaces board combo
+    QComboBox*   m_modelCombo{nullptr};   // HPSDRModel SKU picker (objectName: "modelCombo")
     QComboBox*   m_protocolCombo{nullptr};
     QCheckBox*   m_pinToMacCheck{nullptr};
     QCheckBox*   m_autoConnectCheck{nullptr};
-    QPushButton* m_testButton{nullptr};
-    QLabel*      m_testResultLabel{nullptr};
-    QPushButton* m_okButton{nullptr};
-    QPushButton* m_cancelButton{nullptr};
+
+    // Phase 3Q Task 4: action buttons replace OK/Cancel
+    QPushButton* m_probeButton{nullptr};       // objectName: "probeButton"
+    QPushButton* m_saveOfflineButton{nullptr}; // objectName: "saveOfflineButton"
+
+    // Inline feedback band (shown/hidden as needed)
+    QFrame*      m_feedbackFrame{nullptr};
+    QLabel*      m_feedbackLabel{nullptr};
+
+    // Probed result — populated on successful probe OR pre-populated by
+    // setEditTarget() to carry the existing MAC across edits without
+    // synthesising a duplicate MANUAL: key. The flag below disambiguates
+    // the two sources: only a real probe makes m_probedInfo authoritative
+    // for IP/port/protocol/model. Without that gate, edit-flow IP/port/
+    // protocol/model changes silently lost in result() — Codex review
+    // P1 against PR #158, src/gui/AddCustomRadioDialog.cpp:760.
+    RadioInfo    m_probedInfo;
+    bool         m_probedInfoFromProbe{false};
+
+    // Flag set when user chose "Save offline" instead of probing
+    bool         m_savedOffline{false};
 };
 
 } // namespace NereusSDR

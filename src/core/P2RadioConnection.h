@@ -276,6 +276,9 @@ private slots:
     void onReadyRead();
     void onKeepAliveTick();
     void onReconnectTimeout();
+    // Fires kConnectTimeoutMs after connectToRadio() if no first DDC I/Q frame
+    // arrives. Emits connectFailed(Timeout, ...) — Phase 3Q Task 3.
+    void onConnectTimeout();
 
 private:
     // --- Phase 3P-B: per-board codec chosen at connectToRadio() time ---
@@ -342,6 +345,15 @@ private:
     QTimer* m_keepAliveTimer{nullptr};
     QTimer* m_reconnectTimer{nullptr};
     QTimer* m_txIqTimer{nullptr};
+    // Single-shot connect watchdog — fires kConnectTimeoutMs after
+    // connectToRadio() if no first DDC I/Q frame arrives. Emits
+    // connectFailed(Timeout, ...). Cancelled in processIqPacket() on first
+    // valid frame. Created in init(), Qt-parent-owned. Phase 3Q Task 3.
+    QTimer* m_connectWatchdog{nullptr};
+
+    // Connect watchdog budget — 2 s matches P1.
+    static constexpr int kConnectTimeoutMs = 2000;
+
     // Periodic protocol heartbeat: fires every 100 ms while connected and
     // dispatches HighPri / RX-spec / TX-spec / General on the cycling cadence
     // documented in deskhpsdr/src/new_protocol.c:2870-2898 [@120188f].
