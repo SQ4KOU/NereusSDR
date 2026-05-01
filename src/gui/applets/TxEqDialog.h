@@ -232,6 +232,12 @@ private slots:
 
     // ── Model → UI sync (echo-guarded) ─────────────────────────────
     void syncFromModel();
+    // Loads txEqParaEqData JSON into the parametric widget.  Called on
+    // initial sync AND on the model's txEqParaEqDataChanged signal so
+    // profile activation re-populates the parametric panel.  Without
+    // this, the next user edit would overwrite the just-loaded curve
+    // (Codex P1 #2 on PR #159).
+    void syncParametricFromModel();
 
 protected:
     // Hide-on-close per Thetis frmCFCConfig.cs:477-482 [v2.10.3.13]

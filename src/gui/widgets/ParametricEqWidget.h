@@ -101,6 +101,15 @@ class ParametricEqWidget : public QWidget {
     friend class ::ParametricEqInteractionTester; // Task 4
     friend class ::ParametricEqJsonTester;        // Task 5
 public:
+    // -- Public math helper (was private; promoted in PR #159 follow-up so
+    //    consumers like TxEqDialog can sample the curve at WDSP band centers
+    //    to drive the legacy scalar TX EQ path).  Pure const helper, no side
+    //    effects.  Returns the response curve dB at the given frequency: in
+    //    parametric mode this is the Gaussian-weighted sum of all points; in
+    //    graphic-EQ mode it's the linear interpolation between adjacent
+    //    points.  From Thetis ucParametricEq.cs:2694-2748 [v2.10.3.13].
+    double responseDbAtFrequency(double frequencyHz) const;
+
     // -- Public types (mirror C# ucParametricEq.EqPoint / EqJsonState / EqJsonPoint) --
 
     // From Thetis ucParametricEq.cs:54-105 [v2.10.3.13] -- sealed class EqPoint.
@@ -321,9 +330,6 @@ private:
     void drawAxisScales     (QPainter& g, const QRect& plot);
     void drawBorder         (QPainter& g, const QRect& plot);
     void drawReadout        (QPainter& g, const QRect& plot);
-
-    // Math: response curve at a given frequency.
-    double responseDbAtFrequency(double frequencyHz) const;
 
     // Bar chart helpers -- From Thetis ucParametricEq.cs:2751-2862 [v2.10.3.13].
     void   applyBarChartPeakDecay (qint64 nowMs);

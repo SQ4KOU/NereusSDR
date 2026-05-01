@@ -909,6 +909,13 @@ void TxEqDialog::wireSignals()
             this, &TxEqDialog::syncFromModel);
     connect(&tx, &TransmitModel::txEqWintypeChanged,
             this, &TxEqDialog::syncFromModel);
+
+    // Codex P1 #2 on PR #159: profile activation fires
+    // txEqParaEqDataChanged; without this connect, the parametric widget
+    // stays at defaults after a profile load and the next user edit
+    // overwrites the just-loaded curve.
+    connect(&tx, &TransmitModel::txEqParaEqDataChanged,
+            this, &TxEqDialog::syncParametricFromModel);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1255,8 +1262,51 @@ void TxEqDialog::pushParametricToModel()
 {
     if (!m_radio || !m_parametricWidget || m_updatingFromModel) { return; }
     m_updatingFromModel = true;
-    m_radio->transmitModel().setTxEqParaEqData(
-        m_parametricWidget->saveToJson());
+    TransmitModel& tx = m_radio->transmitModel();
+
+    // 1. Persist the parametric blob (consumed by profile save / load
+    //    and by syncParametricFromModel on the next active-profile flip).
+    tx.setTxEqParaEqData(m_parametricWidget->saveToJson());
+
+    // 2. Drive WDSP via the existing legacy scalar path (Codex P1 #1 on
+    //    PR #159).  Without this step, dragging a parametric band would
+    //    update stored metadata but never change transmitted EQ audio --
+    //    WDSP only listens to txEqPreampChanged / txEqBandChanged /
+    //    txEqFreqChanged, all of which trigger SetTXAEQProfile rebuild
+    //    via RadioModel.cpp:1924-1939.  Sample the parametric curve at
+    //    each legacy band's frequency and push the resulting gain; the
+    //    legacy band frequencies themselves are user-configurable in the
+    //    legacy panel and are intentionally left untouched here so the
+    //    user's legacy-mode settings are preserved when they toggle back.
+    tx.setTxEqPreamp(static_cast<int>(std::round(m_parametricWidget->globalGainDb())));
+    for (int i = 0; i < 10; ++i) {
+        const int    freqHz     = tx.txEqFreq(i);
+        const double gainAtFreq =
+            m_parametricWidget->responseDbAtFrequency(static_cast<double>(freqHz));
+        tx.setTxEqBand(i, static_cast<int>(std::round(gainAtFreq)));
+    }
+
+    m_updatingFromModel = false;
+}
+
+// Codex P1 #2 on PR #159: profile activation fires
+// txEqParaEqDataChanged on the model, but we previously only subscribed
+// to legacy TX EQ signals -- so the parametric widget would stay at
+// defaults after profile load and the next user edit (which goes
+// through pushParametricToModel) would overwrite the just-loaded curve.
+// This slot loads the JSON blob into the widget under a signal blocker
+// so the load itself doesn't trigger a feedback push back to the model.
+void TxEqDialog::syncParametricFromModel()
+{
+    if (!m_radio || !m_parametricWidget || m_updatingFromModel) { return; }
+    const QString json = m_radio->transmitModel().txEqParaEqData();
+    if (json.isEmpty()) { return; }
+    m_updatingFromModel = true;
+    {
+        QSignalBlocker b(m_parametricWidget);
+        m_parametricWidget->loadFromJson(json);
+    }
+    updateEditRowFromSelection();
     m_updatingFromModel = false;
 }
 
@@ -1311,6 +1361,11 @@ void TxEqDialog::syncFromModel()
     }
 
     m_updatingFromModel = false;
+
+    // Hydrate the parametric widget from the stored JSON blob (Codex P1 #2
+    // on PR #159).  Initial profile-load path -- subsequent updates fire
+    // via the txEqParaEqDataChanged signal wired in wireSignals().
+    syncParametricFromModel();
 }
 
 // ─────────────────────────────────────────────────────────────────────
