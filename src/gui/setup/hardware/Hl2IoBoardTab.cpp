@@ -125,7 +125,10 @@
 #include "core/BoardCapabilities.h"
 #include "core/HermesLiteBandwidthMonitor.h"
 #include "core/HpsdrModel.h"
+#include "core/OcMatrix.h"
+#include "core/P1RadioConnection.h"
 #include "core/RadioDiscovery.h"
+#include "core/accessories/N2adrPreset.h"
 #include "models/RadioModel.h"
 
 #include <QCheckBox>
@@ -210,6 +213,36 @@ Hl2IoBoardTab::Hl2IoBoardTab(RadioModel* model, QWidget* parent)
             this, &Hl2IoBoardTab::onStepAdvanced);
     connect(m_ioBoard, &IoBoardHl2::i2cQueueChanged,
             this, &Hl2IoBoardTab::onI2cQueueChanged);
+    // Raw wire-byte taps — log every composed (OUT) and every parsed (IN) frame
+    // so a wire-format mismatch is visible side-by-side.
+    connect(m_ioBoard, &IoBoardHl2::i2cTxComposed,
+            this, [this](quint8 c0, quint8 c1, quint8 c2, quint8 c3, quint8 c4) {
+                appendI2cLogEntry(
+                    QStringLiteral("[%1] OUT C0=%2 C1=%3 C2=%4 C3=%5 C4=%6")
+                        .arg(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss.zzz")))
+                        .arg(c0, 2, 16, QLatin1Char('0'))
+                        .arg(c1, 2, 16, QLatin1Char('0'))
+                        .arg(c2, 2, 16, QLatin1Char('0'))
+                        .arg(c3, 2, 16, QLatin1Char('0'))
+                        .arg(c4, 2, 16, QLatin1Char('0'))
+                        .toUpper());
+            });
+    connect(m_ioBoard, &IoBoardHl2::i2cReadResponseReceived,
+            this, [this](quint8 retAddr, quint8 retSubAddr,
+                         quint8 b0, quint8 b1, quint8 b2, quint8 b3) {
+                appendI2cLogEntry(
+                    QStringLiteral("[%1]  IN ret=%2 sub=%3 C1=%4 C2=%5 C3=%6 C4=%7")
+                        .arg(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss.zzz")))
+                        .arg(retAddr,    2, 16, QLatin1Char('0'))
+                        .arg(retSubAddr, 2, 16, QLatin1Char('0'))
+                        .arg(b0, 2, 16, QLatin1Char('0'))
+                        .arg(b1, 2, 16, QLatin1Char('0'))
+                        .arg(b2, 2, 16, QLatin1Char('0'))
+                        .arg(b3, 2, 16, QLatin1Char('0'))
+                        .toUpper());
+            });
+    connect(m_ioBoard, &IoBoardHl2::currentOcByteChanged,
+            this, &Hl2IoBoardTab::updateOcIndicator);
     connect(m_bwMonitor, &HermesLiteBandwidthMonitor::throttledChanged,
             this, &Hl2IoBoardTab::onThrottledChanged);
 
@@ -260,11 +293,43 @@ void Hl2IoBoardTab::buildStatusBar(QVBoxLayout* outer)
     m_statusLed = makeLed(m_statusFrame);
     row->addWidget(m_statusLed);
 
-    m_statusLabel = new QLabel(tr("HL2 I/O board: Not detected"), m_statusFrame);
+    m_statusLabel = new QLabel(
+        tr("mi0bot custom I/O board (0x41): Not detected"), m_statusFrame);
+    m_statusLabel->setToolTip(tr(
+        "Detection of mi0bot's custom HL2 daughterboard at I2C address 0x41.\n"
+        "If you only have the N2ADR Filter and/or smallio companion boards,\n"
+        "this will (correctly) say Not detected — those boards don't speak\n"
+        "this I2C protocol.  The N2ADR is driven by OC pins (see Live OC pin\n"
+        "state below + Setup → Hardware → OC Outputs → HF for the matrix)."));
     QFont bold = m_statusLabel->font();
     bold.setBold(true);
     m_statusLabel->setFont(bold);
     row->addWidget(m_statusLabel);
+
+    // Live OC byte indicator — band, hex, MOX, and 7 pin LEDs.
+    row->addSpacing(16);
+    row->addWidget(new QLabel(tr("OC bank 0:"), m_statusFrame));
+    m_ocBandLabel = new QLabel(QStringLiteral("—"), m_statusFrame);
+    m_ocBandLabel->setStyleSheet(QStringLiteral("color: #aaa; font-size: 10px;"));
+    row->addWidget(m_ocBandLabel);
+    m_ocByteLabel = new QLabel(QStringLiteral("0x00"), m_statusFrame);
+    m_ocByteLabel->setStyleSheet(QStringLiteral(
+        "color: #ddd; font-family: monospace; font-weight: bold;"));
+    row->addWidget(m_ocByteLabel);
+    m_ocMoxLabel = new QLabel(QStringLiteral("RX"), m_statusFrame);
+    m_ocMoxLabel->setStyleSheet(QStringLiteral(
+        "color: #6699ff; font-weight: bold;"));
+    row->addWidget(m_ocMoxLabel);
+    for (int i = 0; i < 7; ++i) {
+        auto* led = new QFrame(m_statusFrame);
+        led->setFixedSize(10, 10);
+        led->setFrameShape(QFrame::StyledPanel);
+        led->setStyleSheet(QStringLiteral(
+            "QFrame { background: #222; border: 1px solid #555; border-radius: 5px; }"));
+        led->setToolTip(tr("OC pin %1").arg(i + 1));
+        m_ocPinLeds[i] = led;
+        row->addWidget(led);
+    }
 
     row->addStretch();
 
@@ -554,16 +619,49 @@ void Hl2IoBoardTab::updateStatusBar(bool detected)
     setLedColor(m_statusLed, detected);
 
     if (detected) {
-        m_statusLabel->setText(tr("HL2 I/O board: Active"));
+        m_statusLabel->setText(tr("mi0bot custom I/O board (0x41): Active"));
         m_statusFrame->setStyleSheet(QStringLiteral(
             "QFrame { background: #1a2f1a; border: 1px solid #2a5a2a; border-radius: 4px; }"));
         m_lastProbeLabel->setText(
             QStringLiteral("Last probe: %1")
                 .arg(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss"))));
     } else {
-        m_statusLabel->setText(tr("HL2 I/O board: Not detected"));
+        m_statusLabel->setText(tr("mi0bot custom I/O board (0x41): Not detected"));
         m_statusFrame->setStyleSheet(QStringLiteral(
             "QFrame { background: #2a2a2a; border: 1px solid #444; border-radius: 4px; }"));
+    }
+}
+
+// ── updateOcIndicator ─────────────────────────────────────────────────────────
+
+void Hl2IoBoardTab::updateOcIndicator(quint8 ocByte, int bandIdx, bool mox)
+{
+    static constexpr const char* kBandLabels[] = {
+        "160m", "80m", "60m", "40m", "30m", "20m", "17m",
+        "15m", "12m", "10m", "6m", "GEN", "WWV", "XVTR"
+    };
+    if (m_ocBandLabel) {
+        const QString name = (bandIdx >= 0 && bandIdx < int(sizeof(kBandLabels)/sizeof(*kBandLabels)))
+                             ? QString::fromLatin1(kBandLabels[bandIdx])
+                             : QString::number(bandIdx);
+        m_ocBandLabel->setText(QStringLiteral("band=%1").arg(name));
+    }
+    if (m_ocByteLabel) {
+        m_ocByteLabel->setText(
+            QStringLiteral("0x%1").arg(ocByte, 2, 16, QLatin1Char('0')).toUpper());
+    }
+    if (m_ocMoxLabel) {
+        m_ocMoxLabel->setText(mox ? QStringLiteral("TX") : QStringLiteral("RX"));
+        m_ocMoxLabel->setStyleSheet(
+            mox ? QStringLiteral("color: #ff6655; font-weight: bold;")
+                : QStringLiteral("color: #6699ff; font-weight: bold;"));
+    }
+    for (int i = 0; i < 7; ++i) {
+        if (!m_ocPinLeds[i]) { continue; }
+        const bool on = (ocByte & (1u << i)) != 0;
+        m_ocPinLeds[i]->setStyleSheet(
+            on ? QStringLiteral("QFrame { background: #44ff44; border: 1px solid #88ff88; border-radius: 5px; }")
+               : QStringLiteral("QFrame { background: #222; border: 1px solid #555; border-radius: 5px; }"));
     }
 }
 
@@ -820,24 +918,55 @@ void Hl2IoBoardTab::onRegisterPollTick()
     refreshAllRegisters();
 }
 
-// From mi0bot setup.cs:20234-20238 — chkHERCULES_CheckedChanged [@c26a8a4]
-// N2ADR Filter board enable persisted to AppSettings.
+// N2ADR Filter board toggle — sole control surface for N2ADR on HL2.
+//
+// Source: mi0bot setup.cs:14311-14424 chkHERCULES_CheckedChanged [@c26a8a4]
+// (HERMESLITE branch lines 14324-14368).  mi0bot's chkHERCULES is BOTH the
+// enable AND the preset trigger:
+//   case true:  clear all chkPenOC* checkboxes, then set the per-band cells
+//               that match the N2ADR filter wiring (10 ham + 13 SWL).
+//   case false: clear all chkPenOC* checkboxes.
+//
+// NereusSDR mirrors that exactly: this checkbox is the single source of
+// truth for N2ADR.  Toggling on populates the shared OcMatrix with the
+// per-band pattern; toggling off wipes it.  No separate "apply preset"
+// step.  The per-band write table lives in N2adrPreset so that this
+// handler and RadioModel's app-launch reconcile share one source of
+// truth (Phase 3L extraction — was duplicated until 2026-04-30).
 void Hl2IoBoardTab::onN2adrToggled(bool checked)
 {
+    // Key MUST match HardwarePage's "hl2IoBoard/" filter prefix
+    // (HardwarePage.cpp:232) so restoreSettings() receives this on next launch.
     AppSettings::instance().setValue(
-        QStringLiteral("hl2/n2adrFilter"),
+        QStringLiteral("hl2IoBoard/n2adrFilter"),
         checked ? QStringLiteral("True") : QStringLiteral("False"));
+
+    if (!m_model) { return; }
+    OcMatrix& oc = m_model->ocMatrixMutable();
+
+    applyN2adrPreset(oc, checked);
+
+    // Persist whichever state we just composed (cleared or populated).
+    oc.save();
 }
 
 void Hl2IoBoardTab::onProbeClicked()
 {
-    // Mark a probe attempt in the log.
-    // Actual probing is driven by P1CodecHl2 via the I2C queue (Task 2).
-    // This button provides a user-visible timestamp so users can correlate
-    // with the state machine activity.
+    // Trigger a real probe — enqueues 3 I2C reads (HW version + FW major +
+    // FW minor) on the IoBoardHl2 queue.  Wire encoder drains them on the
+    // next ep2 frames; responses populate IoBoardHl2 register state and
+    // setDetected.  Noop on non-HL2 boards or before connect.
+    bool issued = false;
+    if (auto* p1 = qobject_cast<P1RadioConnection*>(m_model->connection())) {
+        p1->requestIoBoardProbe();
+        issued = true;
+    }
+
     appendI2cLogEntry(
-        QStringLiteral("[%1] *** User-initiated probe ***")
-            .arg(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss.zzz"))));
+        QStringLiteral("[%1] *** User-initiated probe %2 ***")
+            .arg(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss.zzz")))
+            .arg(issued ? QStringLiteral("(3 reads enqueued)")
+                        : QStringLiteral("(no P1 connection — skipped)")));
     m_lastProbeLabel->setText(
         QStringLiteral("Last probe: %1")
             .arg(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss"))));
@@ -871,13 +1000,26 @@ void Hl2IoBoardTab::populate(const RadioInfo& /*info*/, const BoardCapabilities&
 
 void Hl2IoBoardTab::restoreSettings(const QMap<QString, QVariant>& settings)
 {
-    // Restore N2ADR filter checkbox from persisted settings if present.
+    // Restore N2ADR filter checkbox + RECONCILE the OcMatrix to match.
+    //
+    // Without the reconcile call, an OcMatrix populated from a prior session
+    // can survive a wrong-key persistence bug (the checkbox state didn't
+    // round-trip until we corrected the key from "hl2/" to "hl2IoBoard/")
+    // — leaving the matrix populated even while the checkbox shows unchecked.
+    // The MCP23008 on the HL2's smallio companion is then driven on every
+    // band change and the user hears relay clicks they can't disable.
+    //
+    // Fire onN2adrToggled() unconditionally (defaulting to False when the key
+    // is absent) so the matrix is always wiped/populated to match the
+    // persisted intent at app start.
     const auto it = settings.constFind(QStringLiteral("n2adrFilter"));
-    if (it != settings.constEnd()) {
-        const bool checked = (it.value().toString() == QStringLiteral("True"));
+    const bool checked = (it != settings.constEnd()
+                          && it.value().toString() == QStringLiteral("True"));
+    {
         QSignalBlocker blocker(m_n2adrFilter);
         m_n2adrFilter->setChecked(checked);
     }
+    onN2adrToggled(checked);
 }
 
 // ── Phase 3P-H Task 5c test seams ────────────────────────────────────────────

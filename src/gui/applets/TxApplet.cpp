@@ -35,6 +35,14 @@
 //                 RadioModel active-slice accessor so the MOX button tooltip
 //                 reflects the rejection reason for CW/AM/FM/etc. modes.
 //                 Closes Phase K.
+//   2026-04-30 — Phase 3M-3a-ii Batch 6 (Task F + A): PROC button enabled and
+//                 bidirectionally wired to TransmitModel::cpdrOn.  CFC button
+//                 added next to PROC, bidirectional with cfcEnabled, right-
+//                 click opens modeless TxCfcDialog (single instance kept alive
+//                 across opens — same pattern as TxEqDialog).
+//                 requestOpenCfcDialog() public slot exposed so CfcSetupPage's
+//                 [Configure CFC bands…] button routes to the same dialog
+//                 instance via a MainWindow-side signal connection.
 // =================================================================
 
 //=================================================================
@@ -133,6 +141,7 @@
 
 #include "TxApplet.h"
 #include "TxEqDialog.h"
+#include "TxCfcDialog.h"
 #include "NyiOverlay.h"
 #include "gui/HGauge.h"
 #include "gui/StyleConstants.h"
@@ -406,18 +415,23 @@ void TxApplet::buildUI()
         vbox->addLayout(volRow);
     }
 
-    // ── 4e. TX-processing quick toggles: [LEV] [EQ] [PROC] ─────────────────
-    // Phase 3M-3a-i Batch 2 (Task F): single row of 3 checkable buttons sitting
-    // between MON volume slider and the TUNE/MOX row.  Mirrors the
-    // VOX/MON button styling family (compact 22-px-tall, expanding width,
-    // green-checked LED look).
+    // ── 4e. TX-processing quick toggles: [LEV] [EQ] [CFC] ──────────────────
+    // Phase 3M-3a-i Batch 2 (Task F): introduced the row of 3 (LEV/EQ/PROC).
+    // Phase 3M-3a-ii Batch 6 (Task A + F, then post-bench cleanup):
+    // PROC was promoted in Batch 6, then dropped here in the cleanup pass —
+    // PhoneCwApplet already had a wired PROC button + slider sitting un-wired
+    // since 3I-3 (NyiOverlay-marked).  Two PROC controls confused users.
+    // Row is now 3 buttons (LEV / EQ / CFC); PROC lives on PhoneCwApplet.
+    // All three share the same VOX/MON styling family (compact 22-px-tall,
+    // expanding width, green-checked LED look).
     //
     //   LEV  — checkable, bidirectional with TransmitModel::txLevelerOn.
     //   EQ   — checkable, bidirectional with TransmitModel::txEqEnabled.
-    //          Left-click toggles.  Right-click is reserved for the
-    //          TxEqDialog launch (lands in 3M-3a-i Batch 3); for now a
-    //          customContextMenuRequested handler logs a placeholder.
-    //   PROC — DISABLED placeholder for Speech Processor (3M-3a-ii).
+    //          Left-click toggles.  Right-click → TxEqDialog (3M-3a-i Batch 3).
+    //   CFC  — checkable, bidirectional with TransmitModel::cfcEnabled.
+    //          Left-click toggles.  Right-click → modeless TxCfcDialog
+    //          (10-band per-band CFC editor; mirrors Thetis frmCFCConfig
+    //          [v2.10.3.13]).
     //
     {
         auto* row = new QHBoxLayout;
@@ -452,17 +466,19 @@ void TxApplet::buildUI()
         m_eqBtn->setContextMenuPolicy(Qt::CustomContextMenu);
         row->addWidget(m_eqBtn, 1);
 
-        m_procBtn = new QPushButton(QStringLiteral("PROC"), this);
-        m_procBtn->setCheckable(true);
-        m_procBtn->setFixedHeight(22);
-        m_procBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_procBtn->setStyleSheet(btnStyle);
-        m_procBtn->setAccessibleName(QStringLiteral("Speech compressor"));
-        m_procBtn->setObjectName(QStringLiteral("TxProcButton"));
-        m_procBtn->setToolTip(QStringLiteral(
-            "Speech compressor — coming in 3M-3a-ii"));
-        m_procBtn->setEnabled(false);  // 3M-3a-ii placeholder
-        row->addWidget(m_procBtn, 1);
+        m_cfcBtn = new QPushButton(QStringLiteral("CFC"), this);
+        m_cfcBtn->setCheckable(true);
+        m_cfcBtn->setFixedHeight(22);
+        m_cfcBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_cfcBtn->setStyleSheet(btnStyle);
+        m_cfcBtn->setAccessibleName(QStringLiteral("Continuous Frequency Compressor enable"));
+        m_cfcBtn->setObjectName(QStringLiteral("TxCfcButton"));
+        m_cfcBtn->setToolTip(QStringLiteral(
+            "CFC — 10-band continuous frequency compressor. Left-click to "
+            "toggle. Right-click to open the CFC dialog."));
+        // Right-click → modeless TxCfcDialog (mirrors EQ button pattern).
+        m_cfcBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+        row->addWidget(m_cfcBtn, 1);
 
         vbox->addLayout(row);
     }
@@ -881,7 +897,7 @@ void TxApplet::wireControls()
         m_updatingFromModel = false;
     });
 
-    // ── Phase 3M-3a-i Batch 2 (Task F): LEV / EQ / PROC quick toggles ───────
+    // ── Phase 3M-3a-i Batch 2 (Task F): LEV / EQ quick toggles ──────────────
     //
     // LEV button ↔ TransmitModel::txLevelerOn (bidirectional, echo-guarded).
     if (m_levBtn) {
@@ -927,7 +943,27 @@ void TxApplet::wireControls()
         });
     }
 
-    // PROC button is permanently disabled (3M-3a-ii placeholder); no wiring.
+    // ── Phase 3M-3a-ii Batch 6 (Task A): CFC button ↔ TransmitModel::cfcEnabled
+    // Right-click opens the modeless TxCfcDialog (lazy-create singleton kept
+    // alive for fast re-opens — same pattern as TxEqDialog).
+    if (m_cfcBtn) {
+        connect(m_cfcBtn, &QPushButton::toggled,
+                this, [this, &tx](bool on) {
+            if (m_updatingFromModel) { return; }
+            tx.setCfcEnabled(on);
+        });
+        connect(&tx, &TransmitModel::cfcEnabledChanged,
+                this, [this](bool on) {
+            QSignalBlocker b(m_cfcBtn);
+            m_updatingFromModel = true;
+            m_cfcBtn->setChecked(on);
+            m_updatingFromModel = false;
+        });
+        connect(m_cfcBtn, &QPushButton::customContextMenuRequested,
+                this, [this](const QPoint& /*pos*/) {
+            requestOpenCfcDialog();
+        });
+    }
 
     // ── Mic-source badge ← TransmitModel::micSourceChanged ───────────────────
     // Phase 3M-1b J.3. Read-only: updates badge text on signal, no user interaction.
@@ -1022,8 +1058,9 @@ void TxApplet::syncFromModel()
         m_monitorVolumeValue->setText(QString::number(uiVal));
     }
 
-    // LEV / EQ button state (3M-3a-i Batch 2 Task F)
-    // PROC stays disabled — no model state to sync.
+    // LEV / EQ / CFC button state (3M-3a-i Batch 2 Task F + 3M-3a-ii
+    // Batch 6 Task A — CFC button added; PROC moved to PhoneCwApplet
+    // 3M-3a-ii post-bench cleanup).
     if (m_levBtn) {
         QSignalBlocker b(m_levBtn);
         m_levBtn->setChecked(tx.txLevelerOn());
@@ -1031,6 +1068,10 @@ void TxApplet::syncFromModel()
     if (m_eqBtn) {
         QSignalBlocker b(m_eqBtn);
         m_eqBtn->setChecked(tx.txEqEnabled());
+    }
+    if (m_cfcBtn) {
+        QSignalBlocker b(m_cfcBtn);
+        m_cfcBtn->setChecked(tx.cfcEnabled());
     }
 
     // Mic-source badge (J.3 Phase 3M-1b)
@@ -1236,6 +1277,38 @@ void TxApplet::setTwoToneController(TwoToneController* controller)
         m_twoToneBtn->setChecked(m_twoToneCtrl->isActive());
         m_updatingFromModel = false;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3M-3a-ii Batch 6 (Task A) — requestOpenCfcDialog
+//
+// Open (or raise) the modeless TxCfcDialog.  Lazy-creates the dialog on first
+// call so the construction cost is only paid when the user actually opens
+// CFC settings.  The dialog is parented to this applet's top-level window so
+// it floats freely; modal flag is forced false in TxCfcDialog's ctor.  We
+// don't deleteLater() the dialog on close — keep it alive across opens for
+// fast re-show, mirroring the TxEqDialog singleton pattern.
+//
+// Public-slot entry point so external surfaces can reuse the same instance:
+//   - [CFC] button right-click → customContextMenuRequested → this slot.
+//   - CfcSetupPage's [Configure CFC bands…] button → MainWindow connects its
+//     openCfcDialogRequested signal to this slot.
+//   - Future Tools menu item → connects to this slot.
+// ---------------------------------------------------------------------------
+void TxApplet::requestOpenCfcDialog()
+{
+    if (!m_model) { return; }
+
+    if (!m_cfcDialog) {
+        QWidget* host = window();
+        m_cfcDialog = new TxCfcDialog(
+            &m_model->transmitModel(),
+            m_model->micProfileManager(),
+            host ? host : static_cast<QWidget*>(this));
+    }
+    m_cfcDialog->show();
+    m_cfcDialog->raise();
+    m_cfcDialog->activateWindow();
 }
 
 // ---------------------------------------------------------------------------

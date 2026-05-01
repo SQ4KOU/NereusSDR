@@ -170,7 +170,13 @@ public:
     static constexpr quint8 kI2cAddrGeneral    = 0x1D;  // general registers at 0x1d
     static constexpr quint8 kI2cAddrHwVersion  = 0x41;  // hardware version at 0x41 reg 0
 
-    // I2C TLV control byte bits per mi0bot network.h:120-124 [@c26a8a4]
+    // Upstream i2c_control bitfield per mi0bot network.h:120-124 [@c26a8a4].
+    // These describe the GLOBAL bits mi0bot keeps on prn->i2c (ctrl_read,
+    // ctrl_request, ctrl_error, ctrl_read_available). NereusSDR moves
+    // ctrl_read / ctrl_request to per-txn flags (I2cTxn::isRead /
+    // needsResponse) and ctrl_read_available to I2cReadResponse::available.
+    // Kept here as wire-format reference values; not used for queue-entry
+    // composition.
     static constexpr quint8 CtrlRead          = 0x01;  // bit 00: 1=read, 0=write
     static constexpr quint8 CtrlStop          = 0x02;  // bit 01: stop after txn
     static constexpr quint8 CtrlRequest       = 0x04;  // bit 02: issue request
@@ -178,13 +184,28 @@ public:
     static constexpr quint8 CtrlReadAvailable = 0x10;  // bit 04: read result ready
     static constexpr quint8 CtrlWrite         = 0x00;  // alias for clarity (bit 0 clear)
 
-    // I2C queue entry — POD matching mi0bot network.h:i2c_queue[] struct layout
-    // per network.h:133-138 [@c26a8a4].
+    // I2C queue entry.
+    //
+    // mi0bot's queue entry (network.h:133-138 [@c26a8a4]) carries only bus /
+    // address / control / write_data; read/request flags live on the global
+    // prn->i2c struct (ctrl_read / ctrl_request) and are set by I2CReadInitiate
+    // / I2CWriteInitiate.  The wire encoder reads the globals at compose time.
+    //
+    // NereusSDR moves the flags onto the queue entry so multiple back-to-back
+    // transactions (e.g. the HW-version probe + firmware-version reads) can
+    // each carry their own intent without stomping global state.  The wire
+    // encoder still emits exactly the same bytes — it just sources the flags
+    // per-txn instead of from globals.
+    //
+    // `control` is the C3 wire byte (= I2C sub-address / register index for
+    // register-based devices), preserving mi0bot's queue-entry semantics.
     struct I2cTxn {
         quint8 bus{0};
         quint8 address{0};
-        quint8 control{0};
-        quint8 writeData{0};
+        quint8 control{0};        // C3 wire byte — I2C sub-address / register
+        quint8 writeData{0};      // C4 wire byte
+        bool   isRead{false};     // → C1 = 0x07 (read) vs 0x06 (write)
+        bool   needsResponse{false}; // → C0 bit 7 (ctrl_request)
         std::array<quint8, 4> readData{};
     };
 
@@ -220,6 +241,26 @@ public:
     bool   i2cQueueIsEmpty() const;
     bool   i2cQueueIsFull() const;
     void   clearI2cQueue();
+
+    // ── Pending-read FIFO ──
+    // Mi0bot tracks one in-flight read at a time (IoBoardHl2.cs:142-143
+    // `lastReadRequest`) because I2CReadInitiate refuses new reads while one
+    // is pending. NereusSDR allows multiple reads to be queued back-to-back
+    // (the HL2 firmware processes I2C in queue order and responses arrive in
+    // the same order), so we mirror the queue with a parallel FIFO of
+    // pending reads — each codec dequeue of a read txn pushes a record;
+    // each EP6 I2C response pops the oldest record and routes the bytes to
+    // the right destination via applyI2cReadResponse().
+    // Source: mi0bot IoBoardHl2.cs:129-170 [@c26a8a4]
+    struct PendingRead {
+        quint8 deviceAddress{0};
+        quint8 subAddress{0};
+    };
+    bool pushPendingRead(const PendingRead& r);   // codec calls on dequeue
+    bool popPendingRead(PendingRead& out);        // dispatcher pops oldest
+    bool hasPendingRead() const;
+    int  pendingReadDepth() const;
+    void clearPendingReads();
 
     // ── 12-step state machine ──
     // Mirrors the switch(state++) in mi0bot console.cs:25844-25928 [@c26a8a4].
@@ -264,8 +305,28 @@ signals:
     void detectedChanged(bool detected);
     // Emitted when applyI2cReadResponse() stores a new EP6 response.
     // Consumers: Phase 3P-E Task 3 state machine, HL2 I/O diagnostics page.
+    //
+    // `returnedSubAddress` is the sub-address (register byte) of the
+    // matching outstanding read — popped from the pending-read FIFO at
+    // emit time.  Consumers that need to disambiguate two reads from the
+    // same device (e.g. REG_FIRMWARE_MAJOR / REG_FIRMWARE_MINOR both at
+    // I2C addr 0x1d) must gate on `(returnedAddress, returnedSubAddress)`,
+    // not just `returnedAddress`.  Phase 3L Codex P2 fix.
     void i2cReadResponseReceived(quint8 returnedAddress,
+                                 quint8 returnedSubAddress,
                                  quint8 b0, quint8 b1, quint8 b2, quint8 b3);
+
+    // Diagnostic tap: emitted from the HL2 codec just after it composes the
+    // outbound I2C wire bytes for the next ep2 frame.  The diagnostics page
+    // logs both the OUT bytes (this signal) and the IN bytes
+    // (i2cReadResponseReceived) so a wire-format mismatch is visible side-by-side.
+    void i2cTxComposed(quint8 c0, quint8 c1, quint8 c2, quint8 c3, quint8 c4);
+
+    // Diagnostic tap: emitted from buildCodecContext() whenever the resolved
+    // bank-0 OC byte changes (band switch or MOX flip).  Drives the live OC
+    // pin grid + hex label on the HL2 I/O Board diagnostic page so the user
+    // can see exactly which OC pins are active for the current band/MOX state.
+    void currentOcByteChanged(quint8 ocByte, int bandIdx, bool mox);
 
 private:
     // Circular FIFO for I2C queue (oldest entry at head, newest at tail-1).
@@ -289,6 +350,13 @@ private:
 
     // Last EP6 I2C read response — mirrors prn->i2c.read_data[] + flag.
     I2cReadResponse m_lastI2cRead{};
+
+    // Pending-read FIFO — parallel to m_i2cQueue.  Each codec dequeue of a
+    // read txn pushes a record; each EP6 response pops the oldest.
+    std::array<PendingRead, kMaxI2cQueue> m_pendingReads{};
+    int m_pendingHead{0};
+    int m_pendingTail{0};
+    int m_pendingCount{0};
 };
 
 } // namespace NereusSDR

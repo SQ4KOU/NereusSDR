@@ -163,10 +163,30 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
                 // Discovered during 3M-1c chunk 0 desk-review against mi0bot.
                 // From mi0bot-Thetis console.cs:10657-10658, 19164-19165, 27814-27815 [@c26a8a4]
                 // MI0BOT: Greater range for HL2
-                const int userDb = qBound(0, static_cast<int>(ctx.txStepAttn[0]), 31);
+                //
+                // Signed user-facing range: −28..+32 dB (mi0bot
+                // setup.cs:16085-16086 [v2.10.3.13-beta2]
+                // udHermesStepAttenuatorData.{Maximum=32, Minimum=-28}).
+                // Wire byte then derives via `wire = 31 - userDb`; the 6-bit
+                // mask folds the signed corners (−28 → 0x7B, 0 → 0x5F,
+                // +32 → 0x7F) into valid wire values.
+                const int userDb = qBound(-28, static_cast<int>(ctx.txStepAttn[0]), 32);
                 out[4] = quint8(((31 - userDb) & 0b00111111) | 0b01000000);
             } else {
-                out[4] = quint8((ctx.rxStepAttn[0] & 0b00111111) | 0b01000000);  // Larger range for the HL2 attenuator
+                // HL2 RX path: same (31 - userDb) inversion as TX. mi0bot applies
+                // the inversion at three console.cs callsites (RX1 ADC0
+                // attenuator, RX2 ADC0 attenuator, and the SetADC1StepAttenData
+                // bridge).  Without it, slider value 31 reaches HL2 firmware as
+                // zero attenuation — RX ATT controls feel reversed and "max
+                // attenuation" actually disables the attenuator.  Closes
+                // 3M-1c desk-review follow-up B1.
+                // From mi0bot-Thetis console.cs:11075, 11251, 19380 [@c26a8a4]
+                // MI0BOT: Greater range for HL2
+                //
+                // Signed user-facing range −28..+32 dB applies on RX as well
+                // (mi0bot setup.cs:16085-16086 [v2.10.3.13-beta2]).
+                const int rxUserDb = qBound(-28, static_cast<int>(ctx.rxStepAttn[0]), 32);
+                out[4] = quint8(((31 - rxUserDb) & 0b00111111) | 0b01000000);  // Larger range for the HL2 attenuator
             }
             return;
         }
@@ -231,12 +251,15 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
 // Wire layout (ported from mi0bot networkproto1.c:895-943 [@c26a8a4]):
 //   C0 = XmitBit | (I2C chip addr << 1) | (ctrl_request << 7)
 //        I2C chip addr: 0x3c for bus 0 (I2C1), 0x3d for bus 1 (I2C2)
-//        ctrl_request: bit 2 (0x04) of txn.control
-//   C1 = 0x07 (read) or 0x06 (write)   — ctrl_read: bit 0 (0x01) of txn.control
-//   C2 = 0x80 | address                — device 7-bit address with stop bit
+//        ctrl_request comes from txn.needsResponse (was prn->i2c.ctrl_request
+//        global in mi0bot — moved per-txn for back-to-back independence).
+//   C1 = 0x07 (read) or 0x06 (write) — driven by txn.isRead (was
+//        prn->i2c.ctrl_read global in mi0bot).
+//   C2 = 0x80 | address              — device 7-bit address with stop bit.
 //        If address > 0x7F, right-shift by 1 to strip the r/w bit.
-//   C3 = txn.control                   — I2C control byte (verbatim)
-//   C4 = txn.writeData                 — write data byte
+//   C3 = txn.control                 — I2C sub-address / register byte.
+//                                      Matches mi0bot queue entry .control.
+//   C4 = txn.writeData               — write data byte.
 //
 // Returns true if a frame was composed and the txn dequeued; false if queue
 // was empty or m_io is null.
@@ -247,13 +270,19 @@ bool P1CodecHl2::tryComposeI2cFrame(quint8 out[5], bool mox) const
     IoBoardHl2::I2cTxn txn;
     if (!m_io->dequeueI2c(txn)) { return false; }
 
+    // Record the read so applyI2cReadResponse() can route the bytes to the
+    // right destination (HW version → m_hardwareVersion, register read →
+    // registers[sub..sub+3]).  FIFO order matches the wire request order.
+    if (txn.isRead) {
+        m_io->pushPendingRead({txn.address, txn.control});
+    }
+
     for (int i = 0; i < 5; ++i) { out[i] = 0; }
 
     // C0: XmitBit in bit 0, I2C chip select in bits 1-7, ctrl_request in bit 7.
     // Source: mi0bot networkproto1.c:912-919 [@c26a8a4]
-    const quint8 xmitBit   = mox ? quint8(0x01) : quint8(0x00);
-    // ctrl_request is bit 2 of txn.control (IoBoardHl2::CtrlRequest = 0x04)
-    const quint8 ctrlReq   = (txn.control & IoBoardHl2::CtrlRequest) ? quint8(0x01) : quint8(0x00);
+    const quint8 xmitBit = mox ? quint8(0x01) : quint8(0x00);
+    const quint8 ctrlReq = txn.needsResponse ? quint8(0x01) : quint8(0x00);
     if (txn.bus == 0) {
         out[0] = xmitBit | quint8(0x3c << 1) | quint8(ctrlReq << 7);  // I2C1 0x3c
     } else {
@@ -262,9 +291,7 @@ bool P1CodecHl2::tryComposeI2cFrame(quint8 out[5], bool mox) const
 
     // C1: 0x07 = read, 0x06 = write.
     // Source: mi0bot networkproto1.c:930-935 [@c26a8a4]
-    // ctrl_read is bit 0 of txn.control (IoBoardHl2::CtrlRead = 0x01)
-    const bool ctrlRead = (txn.control & IoBoardHl2::CtrlRead) != 0;
-    out[1] = ctrlRead ? quint8(0x07) : quint8(0x06);
+    out[1] = txn.isRead ? quint8(0x07) : quint8(0x06);
 
     // C2: 0x80 | device address (stop bit). Address > 0x7F → shift right to strip r/w bit.
     // Source: mi0bot networkproto1.c:921-928 [@c26a8a4]
@@ -272,7 +299,7 @@ bool P1CodecHl2::tryComposeI2cFrame(quint8 out[5], bool mox) const
     if (address > 0x7F) { address = address >> 1; }
     out[2] = quint8(0x80) | address;  // Stop request
 
-    // C3: I2C register / control byte verbatim.
+    // C3: I2C sub-address / register byte verbatim.
     // Source: mi0bot networkproto1.c:939 [@c26a8a4]
     out[3] = txn.control;
 
@@ -280,6 +307,10 @@ bool P1CodecHl2::tryComposeI2cFrame(quint8 out[5], bool mox) const
     // Source: mi0bot networkproto1.c:940 [@c26a8a4]
     out[4] = txn.writeData;
 
+    emit m_io->i2cTxComposed(out[0], out[1], out[2], out[3], out[4]);
+    qDebug("HL2 I2C OUT: C0=%02X C1=%02X C2=%02X C3=%02X C4=%02X (bus=%u addr=%02X reg=%02X read=%d req=%d)",
+           out[0], out[1], out[2], out[3], out[4],
+           txn.bus, txn.address, txn.control, int(txn.isRead), int(txn.needsResponse));
     return true;
 }
 

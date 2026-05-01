@@ -151,6 +151,42 @@ void IoBoardHl2::clearI2cQueue()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Pending-read FIFO
+//
+// Mi0bot (IoBoardHl2.cs:142-143) records one in-flight read at a time. We
+// allow back-to-back reads via a parallel FIFO matching the txn queue order.
+// Each codec dequeue of a read txn pushes a record; each EP6 response pops
+// the oldest record so applyI2cReadResponse() can steer bytes to the right
+// destination (hardwareVersion for 0x41, registers[] slot for 0x1D).
+// ─────────────────────────────────────────────────────────────────────────────
+
+bool IoBoardHl2::pushPendingRead(const PendingRead& r)
+{
+    if (m_pendingCount >= kMaxI2cQueue) { return false; }
+    m_pendingReads[m_pendingTail] = r;
+    m_pendingTail = (m_pendingTail + 1) % kMaxI2cQueue;
+    ++m_pendingCount;
+    return true;
+}
+
+bool IoBoardHl2::popPendingRead(PendingRead& out)
+{
+    if (m_pendingCount <= 0) { return false; }
+    out = m_pendingReads[m_pendingHead];
+    m_pendingHead = (m_pendingHead + 1) % kMaxI2cQueue;
+    --m_pendingCount;
+    return true;
+}
+
+bool IoBoardHl2::hasPendingRead()  const { return m_pendingCount > 0; }
+int  IoBoardHl2::pendingReadDepth() const { return m_pendingCount; }
+
+void IoBoardHl2::clearPendingReads()
+{
+    m_pendingHead = m_pendingTail = m_pendingCount = 0;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 12-step state machine
 //
 // Mirrors the UpdateIOBoard() switch(state++) per mi0bot console.cs:25844-25928
@@ -240,7 +276,64 @@ void IoBoardHl2::applyI2cReadResponse(quint8 c0, quint8 c1, quint8 c2,
     m_lastI2cRead.returnedAddress = static_cast<quint8>(c0 & 0x7F);
     m_lastI2cRead.data = {c1, c2, c3, c4};
     m_lastI2cRead.available = true;
-    emit i2cReadResponseReceived(m_lastI2cRead.returnedAddress, c1, c2, c3, c4);
+    qDebug("HL2 I2C IN:  C0=%02X C1=%02X C2=%02X C3=%02X C4=%02X (ret=%02X pendingDepth=%d)",
+           c0, c1, c2, c3, c4, m_lastI2cRead.returnedAddress, m_pendingCount);
+
+    // Pop the matching pending-read FIRST and route bytes to their
+    // destination BEFORE emitting the signal.  Consumers that read back
+    // IoBoardHl2 state from the response signal (e.g. the HL2 probe FSM
+    // checking isDetected()) depend on the routing being complete by the
+    // time their slot fires.  Pre-3L the emit ran first and the FSM
+    // raced against setHardwareVersion — silently broken for tests but
+    // worked on real hardware because of frame timing.
+    //
+    // From mi0bot IoBoardHl2.cs:148-170 readResponse() [@c26a8a4]:
+    //   if (lastReadRequest == (int)Registers.HardwareVersion)
+    //       hardwareVersion = read_data[3];
+    //   else {
+    //       registers[lastReadRequest+0] = read_data[3];
+    //       registers[lastReadRequest+1] = read_data[2];
+    //       registers[lastReadRequest+2] = read_data[1];
+    //       registers[lastReadRequest+3] = read_data[0];
+    //   }
+    //
+    // Mi0bot's read_data[0..3] map to wire bytes (C1..C4). The byte order
+    // upstream stores into the register slots is REVERSED relative to wire
+    // order (read_data[3]=C4 → registers[lastReadRequest+0]).
+    PendingRead pr;
+    const bool havePending = popPendingRead(pr);
+
+    if (havePending) {
+        if (pr.deviceAddress == kI2cAddrHwVersion) {
+            // Special device: HW version sits at I2C addr 0x41 reg 0.
+            // Mi0bot stores read_data[3] (= C4) into the dedicated
+            // hardwareVersion field.
+            setHardwareVersion(c4);
+            // setDetected if version matches the known good ID (0xF1).
+            // Source: mi0bot IoBoardHl2.cs:82-85 HardwareVersion.Version_1 [@c26a8a4]
+            setDetected(c4 == kHardwareVersion1);
+        } else {
+            // General register read — fan four bytes into the 4-byte
+            // sub-register block starting at the requested sub-address.
+            const int base = static_cast<int>(pr.subAddress);
+            if (base >= 0 && base + 3 < kRegisterArraySize) {
+                m_registers[base + 0] = c4;  // read_data[3]
+                m_registers[base + 1] = c3;  // read_data[2]
+                m_registers[base + 2] = c2;  // read_data[1]
+                m_registers[base + 3] = c1;  // read_data[0]
+                emit registerChanged(static_cast<Register>(base + 0), c4);
+            }
+        }
+    }
+
+    // Phase 3L Codex P2: signal carries (returnedAddress, returnedSubAddress)
+    // so consumers can gate on (deviceAddr, register) when multiple
+    // outstanding reads share a device address (probe FW major vs FW
+    // minor at 0x1d).  Emit AFTER routing so slot handlers see a
+    // consistent IoBoardHl2 state.
+    emit i2cReadResponseReceived(m_lastI2cRead.returnedAddress,
+                                 havePending ? pr.subAddress : quint8(0),
+                                 c1, c2, c3, c4);
 }
 
 void IoBoardHl2::clearI2cReadAvailable()

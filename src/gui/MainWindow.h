@@ -186,6 +186,13 @@ private:
     // Right-click menu on m_cpuMetric — System / App radio choice.
     void onCpuMenuRequested(const QPoint& localPos);
 
+    // Phase 3M-3a-ii Batch 6 (Task 3): one-shot wiring helper called from
+    // every SetupDialog construction site.  Connects the dialog's
+    // cfcDialogRequested signal to TxApplet::requestOpenCfcDialog so the
+    // [Configure CFC bands…] button on Setup → DSP → CFC reuses the same
+    // modeless dialog instance owned by the TxApplet.
+    void wireSetupDialog(class SetupDialog* dialog);
+
     // Phase 3O Sub-Phase 11 Task 11b — first-launch / startup rescan
     // hook. Scheduled via QTimer::singleShot(0, ...) from the
     // constructor so it runs after the event loop starts and the UI
@@ -369,6 +376,10 @@ private:
 
     // Applets (Phase 3-UI)
     class RxApplet* m_rxApplet{nullptr};
+    // Phase 3M-3a-ii Batch 6: cached so SetupDialog instances can route
+    // CfcSetupPage's [Configure CFC bands…] button to the same modeless
+    // TxCfcDialog instance owned by TxApplet (m_cfcDialog).
+    class TxApplet* m_txApplet{nullptr};
     class PhoneCwApplet* m_phoneCwApplet{nullptr};
     class EqApplet* m_eqApplet{nullptr};
     class VaxApplet* m_vaxApplet{nullptr};

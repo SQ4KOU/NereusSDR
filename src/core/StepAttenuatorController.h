@@ -162,9 +162,14 @@ public:
     // Set preamp mode (e.g. from UI).
     void setPreampMode(PreampMode mode);
 
-    // Maximum attenuator value (hardware limit, typically 31 dB).
+    // Attenuator value bounds (hardware limits).
+    //   Most boards: 0..31 dB unsigned.
+    //   HL2 (mi0bot setup.cs:16085-16086 [v2.10.3.13-beta2]): −28..+32 dB
+    //     signed; wire byte derives via `wire = 31 - userDb` in P1CodecHl2.
     int maxAttenuation() const { return m_maxAttDb; }
     void setMaxAttenuation(int dB);
+    int minAttenuation() const { return m_minAttDb; }
+    void setMinAttenuation(int dB);
 
     // --- TX-path configuration (F.2) ---
     //
@@ -285,8 +290,9 @@ private:
     static constexpr int kMaxOverloadLevel = 5;
     // From Thetis console.cs:21369 — red threshold.
     static constexpr int kRedThreshold = 3;
-    // Default max step attenuator (dB).
+    // Default step attenuator bounds (dB).
     static constexpr int kDefaultMaxAttDb = 31;
+    static constexpr int kDefaultMinAttDb = 0;
     // Tick interval (ms) — Thetis pollOverloadSyncSeqErr ~400ms,
     // NereusSDR uses 100ms for snappier response.
     static constexpr int kTickIntervalMs = 100;
@@ -308,6 +314,7 @@ private:
     PreampMode m_preampMode = PreampMode::Off;
     bool m_stepAttEnabled = true;
     int m_maxAttDb = kDefaultMaxAttDb;
+    int m_minAttDb = kDefaultMinAttDb;
 
     // Auto-att configuration.
     bool m_autoAttEnabled = false;
@@ -365,7 +372,11 @@ private:
     // Thetis default: 31 dB per band (console.cs:1810 [v2.10.3.13]):
     //   setTXstepAttenuatorForBand((Band)i, 31);
     // NereusSDR default: 0 (no TX ATT until user configures it).
-    std::array<int, static_cast<size_t>(Band::Count)> m_txAttByBand{};
+    // Per-band TX ATT spans HF amateur + GEN/WWV/XVTR only.  SWL bands
+    // (Band::SwlFirst..SwlLast, Phase 3L extension) inherit ham-band
+    // values — the HL2 ATT chip is a single hardware register regardless
+    // of the SWL slice you tune to.  Sized at Band::SwlFirst (=14).
+    std::array<int, static_cast<size_t>(Band::SwlFirst)> m_txAttByBand{};
 
     // HPSDR-only preamp save/restore (F.2).
     // Distinct from m_classicSavedPreamp (which is for the auto-att

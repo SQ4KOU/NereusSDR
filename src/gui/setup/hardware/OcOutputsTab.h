@@ -65,6 +65,7 @@ namespace NereusSDR {
 class RadioModel;
 class OcMatrix;
 class OcOutputsHfTab;
+class OcOutputsSwlTab;
 struct RadioInfo;
 struct BoardCapabilities;
 
@@ -106,7 +107,8 @@ private:
     OcMatrix*        m_ocMatrix{nullptr};   // non-owning — owned by RadioModel (Phase 3P-D Task 3)
     QTabWidget*      m_subTabs{nullptr};
     OcOutputsHfTab*  m_hfTab{nullptr};
-    QWidget*         m_swlTab{nullptr};     // placeholder for follow-up commit
+    OcOutputsSwlTab* m_swlTab{nullptr};
+    QWidget*         m_vhfTab{nullptr};     // placeholder for tab-count parity
 };
 
 } // namespace NereusSDR

@@ -444,16 +444,70 @@ private slots:
         ctrl.setTickTimerEnabled(false);
 
         // Write a distinct value per band.
-        for (int b = 0; b < static_cast<int>(Band::Count); ++b) {
+        // Per-band TX ATT is HF amateur + GEN/WWV/XVTR; SWL bands
+        // (Phase 3L Band enum extension) inherit ham values.
+        for (int b = 0; b < static_cast<int>(Band::SwlFirst); ++b) {
             ctrl.setTxAttenuationForBand(static_cast<Band>(b), b);
         }
 
         // Read back and verify.
-        for (int b = 0; b < static_cast<int>(Band::Count); ++b) {
+        // Per-band TX ATT is HF amateur + GEN/WWV/XVTR; SWL bands
+        // (Phase 3L Band enum extension) inherit ham values.
+        for (int b = 0; b < static_cast<int>(Band::SwlFirst); ++b) {
             int expected = b;
             int got = ctrl.txAttenuationForBand(static_cast<Band>(b));
             QCOMPARE(got, expected);
         }
+    }
+
+    // ── Phase 3L: signed HL2 ATT range honoured by setAttenuation clamp ───────
+    // Codex P1 in PR #157: setAttenuation() was hard-clamping below zero, so
+    // any negative value the HL2 user picked got snapped back to 0 before
+    // reaching the codec.  After the fix, the lower bound is m_minAttDb
+    // (set via setMinAttenuation), not literal 0.
+    void setAttenuation_clampsToSignedMin_forHl2Range()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setMinAttenuation(-28);   // mi0bot HL2 lower bound
+        ctrl.setMaxAttenuation(32);    // mi0bot HL2 upper bound
+
+        // Negative-but-in-range values must round-trip unchanged.
+        ctrl.setAttenuation(-15, /*rx=*/0);
+        QCOMPARE(ctrl.attenuatorDb(), -15);
+
+        ctrl.setAttenuation(-28, /*rx=*/0);
+        QCOMPARE(ctrl.attenuatorDb(), -28);
+
+        // Below-min values clamp to m_minAttDb, not to 0.
+        ctrl.setAttenuation(-100, /*rx=*/0);
+        QCOMPARE(ctrl.attenuatorDb(), -28);
+
+        // Above-max values clamp to m_maxAttDb (existing behaviour preserved).
+        ctrl.setAttenuation(999, /*rx=*/0);
+        QCOMPARE(ctrl.attenuatorDb(), 32);
+
+        // Zero in the middle of the HL2 range works (regression check —
+        // the old clamp made this the de-facto floor).
+        ctrl.setAttenuation(0, /*rx=*/0);
+        QCOMPARE(ctrl.attenuatorDb(), 0);
+    }
+
+    // Legacy boards (ANAN/Hermes) keep m_minAttDb=0 and behaviour is
+    // identical to pre-PR #157 — negative inputs still snap to 0.
+    void setAttenuation_legacyZeroMin_unchanged()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        // Default m_minAttDb is 0; m_maxAttDb default whatever — set to 31.
+        ctrl.setMaxAttenuation(31);
+
+        ctrl.setAttenuation(-5, /*rx=*/0);
+        QCOMPARE(ctrl.attenuatorDb(), 0);
+        ctrl.setAttenuation(15, /*rx=*/0);
+        QCOMPARE(ctrl.attenuatorDb(), 15);
+        ctrl.setAttenuation(99, /*rx=*/0);
+        QCOMPARE(ctrl.attenuatorDb(), 31);
     }
 
     // ── Test 12: no connection — graceful no-op ───────────────────────────────

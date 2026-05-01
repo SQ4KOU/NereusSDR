@@ -30,13 +30,14 @@ private slots:
         }
     }
 
-    // HL2 S-ATT slider must accept 0–63 dB (6-bit LNA range).
-    void hl2_slider_max_is_63()
+    // HL2 S-ATT slider uses signed −28..+32 dB range (mi0bot
+    // setup.cs:16085-16086 [v2.10.3.13-beta2] udHermesStepAttenuatorData).
+    void hl2_slider_max_is_signed_range()
     {
         RadioModel model;
         model.setBoardForTest(HPSDRHW::HermesLite);
         RxApplet applet(nullptr, &model);
-        QCOMPARE(applet.stepAttMaxForTest(), 63);
+        QCOMPARE(applet.stepAttMaxForTest(), 32);
     }
 
     // All standard-attenuator boards stay at 0–31 dB (no Alex present at

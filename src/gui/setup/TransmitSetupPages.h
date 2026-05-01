@@ -113,7 +113,9 @@ private:
     // per-band in the setup dialog. Thetis uses a single udTXTunePower (setup.cs:5262
     // [v2.10.3.13]) that updates one slot on band change; NereusSDR lets the user
     // view and edit all 14 slots simultaneously.
-    static constexpr int kBandCount = static_cast<int>(Band::Count);  // 14
+    // HF amateur + GEN/WWV/XVTR only (Band::SwlFirst == 14).  SWL bands
+    // (Phase 3L extension) have no TX power slot — TX is HF-only on HL2.
+    static constexpr int kBandCount = static_cast<int>(Band::SwlFirst);  // 14
     std::array<QSpinBox*, kBandCount> m_tunePwrSpins{};
 
     // Section: PA
@@ -162,10 +164,12 @@ private:
     QPushButton* m_deleteBtn{nullptr};
     QPushButton* m_copyBtn{nullptr};
 
-    // Section: Compression
-    QCheckBox* m_compressorToggle{nullptr};
-    QSlider*   m_gainSlider{nullptr};
-    QCheckBox* m_cessbToggle{nullptr};
+    // ── Phase 3M-3a-ii Batch 5: Compression section removed.
+    // CPDR + CESSB controls now live on Setup → DSP → CFC (CESSB group)
+    // and on the dashboard / TxApplet [PROC] toggle.  The orphan
+    // m_compressorToggle / m_gainSlider / m_cessbToggle disabled stubs
+    // violated master-design meta rule §2.2.1 (no half-shipped
+    // placeholders) and have been removed.
 };
 
 // ---------------------------------------------------------------------------

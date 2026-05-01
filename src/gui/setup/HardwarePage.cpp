@@ -67,6 +67,7 @@
 #include "hardware/DiversityTab.h"
 #include "hardware/CalibrationTab.h"
 #include "hardware/Hl2IoBoardTab.h"
+#include "hardware/Hl2OptionsTab.h"
 #include "hardware/BandwidthMonitorTab.h"
 
 #include "core/AppSettings.h"
@@ -102,6 +103,7 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
     m_pureSignalTab   = new PureSignalTab(model, this);
     m_diversityTab    = new DiversityTab(model, this);
     m_paCalTab        = new CalibrationTab(model, this);
+    m_hl2OptionsTab   = new Hl2OptionsTab(model, this);
     m_hl2IoTab        = new Hl2IoBoardTab(model, this);
     m_bwMonitorTab    = new BandwidthMonitorTab(model, this);
 
@@ -113,6 +115,7 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
     m_pureSignalIdx  = m_tabs->addTab(m_pureSignalTab,  tr("PureSignal"));
     m_diversityIdx   = m_tabs->addTab(m_diversityTab,   tr("Diversity"));
     m_paCalIdx       = m_tabs->addTab(m_paCalTab,       tr("Calibration"));
+    m_hl2OptionsIdx  = m_tabs->addTab(m_hl2OptionsTab,  tr("HL2 Options"));
     m_hl2IoIdx       = m_tabs->addTab(m_hl2IoTab,       tr("HL2 I/O"));
     m_bwMonitorIdx   = m_tabs->addTab(m_bwMonitorTab,   tr("Bandwidth Monitor"));
 
@@ -133,6 +136,7 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
     wire(m_pureSignalTab,  QStringLiteral("pureSignal"));
     wire(m_diversityTab,   QStringLiteral("diversity"));
     wire(m_paCalTab,       QStringLiteral("paCalibration"));
+    wire(m_hl2OptionsTab,  QStringLiteral("hl2Options"));
     wire(m_hl2IoTab,       QStringLiteral("hl2IoBoard"));
     wire(m_bwMonitorTab,   QStringLiteral("bandwidthMonitor"));
 
@@ -200,11 +204,21 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
     // Radio Info is always visible.
     // Remaining tabs are shown only when the connected board supports them.
     m_tabs->setTabVisible(m_antennaAlexIdx, caps.hasAlexFilters);
-    m_tabs->setTabVisible(m_ocOutputsIdx,   caps.ocOutputCount > 0);
+
+    // OC Outputs tab — visible for any board with OC pins OR for HL2 (whose
+    // I/O board pattern reuses the OcMatrix for N2ADR Filter pin assignments).
+    // mi0bot exposes tpPennyCtrl on HL2 with title "Hermes Lite Control"
+    // (setup.cs:20232 [v2.10.3.13-beta2]).
+    const bool ocTabRelevant = (caps.ocOutputCount > 0) || caps.hasIoBoardHl2;
+    m_tabs->setTabVisible(m_ocOutputsIdx, ocTabRelevant);
+    m_tabs->setTabText(m_ocOutputsIdx,
+        caps.hasIoBoardHl2 ? tr("Hermes Lite Control") : tr("OC Outputs"));
+
     m_tabs->setTabVisible(m_xvtrIdx,        caps.xvtrJackCount > 0);
     m_tabs->setTabVisible(m_pureSignalIdx,  caps.hasPureSignal);
     m_tabs->setTabVisible(m_diversityIdx,   caps.hasDiversityReceiver);
     m_tabs->setTabVisible(m_paCalIdx,       caps.hasPaProfile);
+    m_tabs->setTabVisible(m_hl2OptionsIdx,  caps.hasIoBoardHl2);
     m_tabs->setTabVisible(m_hl2IoIdx,       caps.hasIoBoardHl2);
     m_tabs->setTabVisible(m_bwMonitorIdx,   caps.hasBandwidthMonitor);
 
@@ -216,6 +230,7 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
     m_pureSignalTab->populate(info, caps);
     m_diversityTab->populate(info, caps);
     m_paCalTab->populate(info, caps);
+    m_hl2OptionsTab->populate(info, caps);
     m_hl2IoTab->populate(info, caps);
     m_bwMonitorTab->populate(info, caps);
 
@@ -229,6 +244,7 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
         m_pureSignalTab->restoreSettings(  filterPrefix(all, QStringLiteral("pureSignal/")));
         m_diversityTab->restoreSettings(   filterPrefix(all, QStringLiteral("diversity/")));
         m_paCalTab->restoreSettings(       filterPrefix(all, QStringLiteral("paCalibration/")));
+        m_hl2OptionsTab->restoreSettings(  filterPrefix(all, QStringLiteral("hl2Options/")));
         m_hl2IoTab->restoreSettings(       filterPrefix(all, QStringLiteral("hl2IoBoard/")));
         m_bwMonitorTab->restoreSettings(   filterPrefix(all, QStringLiteral("bandwidthMonitor/")));
     }
@@ -247,10 +263,28 @@ bool HardwarePage::isTabVisibleForTest(Tab t) const
         case Tab::PureSignal:       return m_tabs->isTabVisible(m_pureSignalIdx);
         case Tab::Diversity:        return m_tabs->isTabVisible(m_diversityIdx);
         case Tab::Calibration:      return m_tabs->isTabVisible(m_paCalIdx);
+        case Tab::Hl2Options:       return m_tabs->isTabVisible(m_hl2OptionsIdx);
         case Tab::Hl2IoBoard:       return m_tabs->isTabVisible(m_hl2IoIdx);
         case Tab::BandwidthMonitor: return m_tabs->isTabVisible(m_bwMonitorIdx);
     }
     return false;
+}
+
+QString HardwarePage::tabTextForTest(Tab t) const
+{
+    switch (t) {
+        case Tab::RadioInfo:        return m_tabs->tabText(m_radioInfoIdx);
+        case Tab::AntennaAlex:      return m_tabs->tabText(m_antennaAlexIdx);
+        case Tab::OcOutputs:        return m_tabs->tabText(m_ocOutputsIdx);
+        case Tab::Xvtr:             return m_tabs->tabText(m_xvtrIdx);
+        case Tab::PureSignal:       return m_tabs->tabText(m_pureSignalIdx);
+        case Tab::Diversity:        return m_tabs->tabText(m_diversityIdx);
+        case Tab::Calibration:      return m_tabs->tabText(m_paCalIdx);
+        case Tab::Hl2Options:       return m_tabs->tabText(m_hl2OptionsIdx);
+        case Tab::Hl2IoBoard:       return m_tabs->tabText(m_hl2IoIdx);
+        case Tab::BandwidthMonitor: return m_tabs->tabText(m_bwMonitorIdx);
+    }
+    return {};
 }
 #endif
 

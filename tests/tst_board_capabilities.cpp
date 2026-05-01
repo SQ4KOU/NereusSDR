@@ -99,8 +99,11 @@ private slots:
         QVERIFY(caps.hasIoBoardHl2);
         QVERIFY(!caps.hasAlexFilters);
         QCOMPARE(caps.ocOutputCount, 0);
-        // HL2 maxDb bumped to 63 (6-bit range) — Phase 3P-A Task 11
-        QCOMPARE(caps.attenuator.maxDb, 63);
+        // HL2 user-facing range: signed -28..+32 dB (mi0bot setup.cs:16085-16086
+        // [v2.10.3.13-beta2] udHermesStepAttenuatorData.{Maximum, Minimum}).
+        // Wire conversion `wire = 31 - userDb` lives in P1CodecHl2.
+        QCOMPARE(caps.attenuator.minDb, -28);
+        QCOMPARE(caps.attenuator.maxDb, 32);
     }
 
     // Phase 3P-A Task 11: Attenuator encoding parameters —
@@ -119,7 +122,10 @@ private slots:
         QCOMPARE(int(caps.attenuator.mask),       0x3F);
         QCOMPARE(int(caps.attenuator.enableBit),  0x40);
         QVERIFY(caps.attenuator.moxBranchesAtt);
-        QCOMPARE(caps.attenuator.maxDb, 63);
+        // mi0bot signed user-facing range. The 6-bit wire field expresses the
+        // entire span via `wire = 31 - userDb` clamped through the 0x3F mask.
+        QCOMPARE(caps.attenuator.minDb, -28);
+        QCOMPARE(caps.attenuator.maxDb, 32);
     }
 
     void orionmkii_attenuator_5bit_no_mox_branch() {

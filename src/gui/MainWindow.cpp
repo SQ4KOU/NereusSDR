@@ -1380,7 +1380,11 @@ void MainWindow::populateDefaultMeter()
     });
 
     // TxApplet — NYI shell (Phase 3I-1)
+    // 3M-3a-ii Batch 6: cache pointer in m_txApplet so SetupDialog
+    // instances can wire CfcSetupPage's [Configure CFC bands…] button
+    // through to TxApplet::requestOpenCfcDialog.
     auto* txApplet = new TxApplet(m_radioModel, nullptr);
+    m_txApplet = txApplet;
     panel->addApplet(txApplet);
 
     // ── 3M-1c Phase L: hand TxApplet the controllers it needs ──────────────
@@ -1408,6 +1412,7 @@ void MainWindow::populateDefaultMeter()
     connect(txApplet, &TxApplet::txProfileMenuRequested, this, [this]() {
         auto* dialog = new SetupDialog(m_radioModel, this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
+        wireSetupDialog(dialog);
         dialog->selectPage(QStringLiteral("TX Profile"));
         dialog->show();
     });
@@ -1502,6 +1507,7 @@ void MainWindow::buildMenuBar()
             this, [this]() {
                 auto* dialog = new SetupDialog(m_radioModel, this);
                 dialog->setAttribute(Qt::WA_DeleteOnClose);
+                wireSetupDialog(dialog);
                 dialog->show();
             });
         settingsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Comma));
@@ -2912,6 +2918,26 @@ void MainWindow::setTxInhibited(bool inhibited)
     m_txInhibitLabel->setVisible(inhibited);
 }
 
+// ---------------------------------------------------------------------------
+// Phase 3M-3a-ii Batch 6 (Task 3) — wireSetupDialog
+//
+// Centralized helper called from every SetupDialog construction site.  Wires
+// the dialog's cfcDialogRequested signal (forwarded from CfcSetupPage's
+// [Configure CFC bands…] button) to TxApplet::requestOpenCfcDialog so the
+// modeless TxCfcDialog instance owned by the TxApplet is reused.
+//
+// Pre-condition: m_txApplet is set (TxApplet is created during early UI
+// build-out, well before any of the user-triggered SetupDialog opens).
+// ---------------------------------------------------------------------------
+void MainWindow::wireSetupDialog(SetupDialog* dialog)
+{
+    if (!dialog) { return; }
+    if (m_txApplet) {
+        connect(dialog, &SetupDialog::cfcDialogRequested,
+                m_txApplet, &TxApplet::requestOpenCfcDialog);
+    }
+}
+
 void MainWindow::wireSliceToSpectrum()
 {
     SliceModel* slice = m_radioModel->activeSlice();
@@ -3226,6 +3252,7 @@ void MainWindow::wireSliceToSpectrum()
     connect(vfo, &VfoWidget::openSetupRequested, this, [this]() {
         auto* dialog = new SetupDialog(m_radioModel, this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
+        wireSetupDialog(dialog);
         dialog->selectPage(QStringLiteral("AGC/ALC"));
         dialog->show();
     });
@@ -3236,6 +3263,7 @@ void MainWindow::wireSliceToSpectrum()
     connect(vfo, &VfoWidget::openNbSetupRequested, this, [this]() {
         auto* dialog = new SetupDialog(m_radioModel, this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
+        wireSetupDialog(dialog);
         dialog->selectPage(QStringLiteral("NB/SNB"));
         dialog->show();
     });
@@ -3248,6 +3276,7 @@ void MainWindow::wireSliceToSpectrum()
             [this](NereusSDR::NrSlot slot) {
         auto* dialog = new SetupDialog(m_radioModel, this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
+        wireSetupDialog(dialog);
         dialog->selectPage(QStringLiteral("NR/ANF"));
         // Deep-link to the sub-tab matching the NR slot the user clicked
         // (Task 18 polish 2026-04-23 — previously always opened NR1).
@@ -3431,6 +3460,7 @@ void MainWindow::wireSliceToSpectrum()
         connect(m_rxApplet, &RxApplet::openSetupRequested, this, [this]() {
             auto* dialog = new SetupDialog(m_radioModel, this);
             dialog->setAttribute(Qt::WA_DeleteOnClose);
+            wireSetupDialog(dialog);
             dialog->selectPage(QStringLiteral("AGC/ALC"));
             dialog->show();
         });
@@ -4300,6 +4330,7 @@ void MainWindow::checkVaxFirstRun()
             [this](const QString& pageLabel) {
         auto* dialog = new SetupDialog(m_radioModel, this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
+        wireSetupDialog(dialog);
         dialog->selectPage(pageLabel);
         dialog->show();
     });
