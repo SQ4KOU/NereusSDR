@@ -332,6 +332,7 @@ warren@wpratt.com
 #include <QMessageBox>
 #include <QTimer>
 #include <QThread>
+#include <QFile>          // /proc/stat reader for Linux system-CPU path
 #include <QPushButton>
 #include <QClipboard>
 #include <QDesktopServices>
@@ -345,14 +346,21 @@ warren@wpratt.com
 
 #include <cstdlib>
 
-#ifdef Q_OS_MAC
+// Cross-platform CPU usage readers — see readProcessCpuPercent and
+// readSystemCpuPercent below. POSIX side (macOS / Linux) shares
+// getrusage for process CPU; macOS adds host_processor_info for system
+// CPU; Linux reads /proc/stat; Windows uses GetProcessTimes /
+// GetSystemTimes. Each branch is gated by Q_OS_*.
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
 #include <sys/resource.h>
-// host_processor_info — system-wide CPU ticks for the System CPU toggle.
-// Mirrors Thetis's PerformanceCounter("Processor Information",
-// "% Processor Utility", "_Total") (console.cs:20697-20700) on macOS.
+#endif
+#ifdef Q_OS_MAC
 #include <mach/mach.h>
 #include <mach/mach_host.h>
 #include <mach/processor_info.h>
+#endif
+#ifdef Q_OS_WIN
+#include <windows.h>
 #endif
 
 namespace NereusSDR {
@@ -2877,8 +2885,9 @@ void MainWindow::buildStatusBar()
     //                       mirrors Thetis Common.ProcessCPUUsage.
     // 1 s tick rate matches Thetis cpu_meter_delay (console.cs:20102).
     // Smoothed value via 0.8/0.2 mix per Thetis console.cs:26224.
-#ifdef Q_OS_MAC
     // Restore persisted toggle (default System per Thetis default).
+    // Wired on every supported platform — readSystemCpuPercent /
+    // readProcessCpuPercent are cross-platform (macOS / Linux / Windows).
     m_cpuShowSystem = (AppSettings::instance()
                           .value(QStringLiteral("CpuShowSystem"),
                                  QStringLiteral("True"))
@@ -2902,7 +2911,6 @@ void MainWindow::buildStatusBar()
         }
     });
     m_cpuTimer->start(1000);
-#endif
 
     // Add the full-width bar widget to the status bar
     sb->addWidget(barWidget, 1);
@@ -3657,15 +3665,40 @@ void MainWindow::onCpuMenuRequested(const QPoint& localPos)
 
 double MainWindow::readProcessCpuPercent()
 {
+    // Per-platform "process CPU time since boot" readers — return user +
+    // kernel time consumed by this process expressed in microseconds.
+    // POSIX (macOS / Linux) uses getrusage; Windows uses GetProcessTimes
+    // and converts the FILETIME tick counter (100 ns) to microseconds.
+    qint64       userUs = 0;
+    qint64       sysUs  = 0;
+    const qint64 nowUs  = QDateTime::currentMSecsSinceEpoch() * 1000LL;
+
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
     struct rusage ru{};
     if (getrusage(RUSAGE_SELF, &ru) != 0) { return 0.0; }
-
-    const qint64 nowUs = QDateTime::currentMSecsSinceEpoch() * 1000LL;
     auto toUs = [](const struct timeval& tv) -> qint64 {
-        return static_cast<qint64>(tv.tv_sec) * 1'000'000LL + tv.tv_usec;
+        return static_cast<qint64>(tv.tv_sec) * 1'000'000LL
+             + static_cast<qint64>(tv.tv_usec);
     };
-    const qint64 userUs = toUs(ru.ru_utime);
-    const qint64 sysUs  = toUs(ru.ru_stime);
+    userUs = toUs(ru.ru_utime);
+    sysUs  = toUs(ru.ru_stime);
+#elif defined(Q_OS_WIN)
+    FILETIME ftCreation{}, ftExit{}, ftKernel{}, ftUser{};
+    if (!GetProcessTimes(GetCurrentProcess(),
+                         &ftCreation, &ftExit, &ftKernel, &ftUser)) {
+        return 0.0;
+    }
+    auto fileTimeToUs = [](const FILETIME& ft) -> qint64 {
+        ULARGE_INTEGER u{};
+        u.LowPart  = ft.dwLowDateTime;
+        u.HighPart = ft.dwHighDateTime;
+        return static_cast<qint64>(u.QuadPart / 10);  // 100 ns -> µs
+    };
+    userUs = fileTimeToUs(ftUser);
+    sysUs  = fileTimeToUs(ftKernel);
+#else
+    return 0.0;
+#endif
 
     if (m_cpuProcPrevWallUs == 0) {
         // First-call sentinel — capture baseline, return 0 this round.
@@ -3689,9 +3722,24 @@ double MainWindow::readProcessCpuPercent()
                  / static_cast<double>(wallDelta);
 }
 
-#ifdef Q_OS_MAC
 double MainWindow::readSystemCpuPercent()
 {
+    // Per-platform "system CPU time since boot" readers. The CPU usage
+    // formula is the same across all three: percent = 100 * (1 - dIdle / dTotal).
+    // What differs is how each OS exposes the underlying tick counters.
+    //
+    // - macOS: host_processor_info(PROCESSOR_CPU_LOAD_INFO) → per-CPU
+    //   tick counters; sum across cores.
+    // - Linux: /proc/stat first line "cpu  user nice system idle iowait
+    //   irq softirq steal guest guest_nice" — total = sum, idle = the
+    //   `idle` field (not iowait, matching `top`/`htop` convention).
+    // - Windows: GetSystemTimes → idle/kernel/user as FILETIMEs (100 ns).
+    //   Note kernel time on Windows *includes* idle, so total = kernel +
+    //   user; the percent formula above still holds.
+    quint64 totalNow = 0;
+    quint64 idleNow  = 0;
+
+#if defined(Q_OS_MAC)
     natural_t                 cpuCount = 0;
     processor_info_array_t    info     = nullptr;
     mach_msg_type_number_t    numInfo  = 0;
@@ -3701,8 +3749,6 @@ double MainWindow::readSystemCpuPercent()
         return 0.0;
     }
 
-    quint64 totalNow = 0;
-    quint64 idleNow  = 0;
     auto* cpus = reinterpret_cast<processor_cpu_load_info_t>(info);
     for (natural_t i = 0; i < cpuCount; ++i) {
         for (int s = 0; s < CPU_STATE_MAX; ++s) {
@@ -3714,6 +3760,43 @@ double MainWindow::readSystemCpuPercent()
     vm_deallocate(mach_task_self(),
                   reinterpret_cast<vm_address_t>(info),
                   static_cast<vm_size_t>(numInfo) * sizeof(integer_t));
+#elif defined(Q_OS_LINUX)
+    QFile f(QStringLiteral("/proc/stat"));
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) { return 0.0; }
+    const QByteArray line = f.readLine();
+    f.close();
+
+    // Tokenize on whitespace; first token is "cpu", remaining are tick
+    // counts. Empty entries from the doubled space after "cpu" get filtered.
+    const QList<QByteArray> rawParts = line.split(' ');
+    QList<quint64> vals;
+    vals.reserve(10);
+    for (int i = 1; i < rawParts.size() && vals.size() < 10; ++i) {
+        if (rawParts[i].isEmpty()) { continue; }
+        bool ok = false;
+        const quint64 v = rawParts[i].toULongLong(&ok);
+        if (ok) { vals.append(v); }
+    }
+    if (vals.size() < 4) { return 0.0; }
+    for (auto v : vals) { totalNow += v; }
+    idleNow = vals[3];   // idle field; iowait NOT counted as idle (top convention)
+#elif defined(Q_OS_WIN)
+    FILETIME ftIdle{}, ftKernel{}, ftUser{};
+    if (!GetSystemTimes(&ftIdle, &ftKernel, &ftUser)) { return 0.0; }
+    auto fileTimeToTicks = [](const FILETIME& ft) -> quint64 {
+        ULARGE_INTEGER u{};
+        u.LowPart  = ft.dwLowDateTime;
+        u.HighPart = ft.dwHighDateTime;
+        return static_cast<quint64>(u.QuadPart);
+    };
+    const quint64 idle   = fileTimeToTicks(ftIdle);
+    const quint64 kernel = fileTimeToTicks(ftKernel);   // includes idle
+    const quint64 user   = fileTimeToTicks(ftUser);
+    totalNow = kernel + user;
+    idleNow  = idle;
+#else
+    return 0.0;
+#endif
 
     if (m_cpuSysPrevTotal == 0) {
         // First-call sentinel — capture baseline, return 0 this round.
@@ -3731,7 +3814,6 @@ double MainWindow::readSystemCpuPercent()
     return 100.0 * (1.0 - static_cast<double>(idleDelta)
                               / static_cast<double>(totalDelta));
 }
-#endif
 
 void MainWindow::resizeEvent(QResizeEvent* event)
 {

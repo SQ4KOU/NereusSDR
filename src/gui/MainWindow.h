@@ -178,11 +178,14 @@ private:
 
     // CPU usage helpers — return instantaneous percent since the last call.
     // First call after a toggle returns 0 (delta-state reset). The timer
-    // applies Thetis-style smoothing on top.
-    double readProcessCpuPercent();   // getrusage(RUSAGE_SELF)
-#ifdef Q_OS_MAC
-    double readSystemCpuPercent();    // host_processor_info — macOS-only
-#endif
+    // applies Thetis-style smoothing on top. Both helpers branch internally
+    // on Q_OS_MAC / Q_OS_LINUX / Q_OS_WIN; declared on every platform so
+    // the timer wiring in buildStatusBar() doesn't need a platform guard.
+    //   process: getrusage(RUSAGE_SELF) on POSIX, GetProcessTimes on Windows
+    //   system : host_processor_info on macOS, /proc/stat on Linux,
+    //            GetSystemTimes on Windows
+    double readProcessCpuPercent();
+    double readSystemCpuPercent();
     // Right-click menu on m_cpuMetric — System / App radio choice.
     void onCpuMenuRequested(const QPoint& localPos);
 
