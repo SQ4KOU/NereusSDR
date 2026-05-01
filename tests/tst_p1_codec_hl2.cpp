@@ -256,6 +256,51 @@ private slots:
         QCOMPARE(int(out[3]) & 0x7F, 0x01);
         QCOMPARE(int(out[4]), 0x01);
     }
+
+    // Bank 10 C2 must include bit 3 (0x08) on HL2 — mi0bot repurposes the
+    // ApolloTuner bit as the HL2 PA-enable signal.  Without this bit set,
+    // the HL2 firmware treats MOX assertions as "want to TX but PA not
+    // enabled" and oscillates the T/R relay.
+    //
+    // Source:
+    //   mi0bot ChannelMaster/networkproto1.c:1084-1085 [v2.10.3.14-beta1]
+    //     C2 = ((mic_boost & 1) | ((line_in & 1) << 1) | ApolloFilt |
+    //           ApolloTuner | ApolloATU | ApolloFiltSelect | 0b01000000) & 0x7f;
+    //   mi0bot ChannelMaster/netInterface.c:582-588 [v2.10.3.14-beta1]
+    //     EnableApolloTuner(int bits): bits != 0 → ApolloTuner = 0x8 else 0
+    //   mi0bot ChannelMaster/netInterface.c:629-635 [v2.10.3.14-beta1]
+    //     DisablePA on HL2 routes through EnableApolloTuner(!bit).
+    void bank10_c2_pa_enable_bit_set_for_hl2() {
+        P1CodecHl2 codec;
+        CodecContext ctx;
+        // Default ctx — no mic boost, no line in, no caller PA toggle.
+        // mi0bot's tx[0].pa defaults to 0 (PA enabled), so EnableApolloTuner(1)
+        // sets ApolloTuner = 0x8 by default — bit 3 of bank 10 C2 is set.
+        quint8 out[5] = {};
+        codec.composeCcForBank(10, ctx, out);
+        QVERIFY2((out[2] & 0x08) != 0,
+                 "bank 10 C2 bit 3 (HL2 PA enable / mi0bot ApolloTuner) must be set");
+        // Bit 6 (always-on default mask 0x40) must remain set.
+        QVERIFY2((out[2] & 0x40) != 0,
+                 "bank 10 C2 bit 6 (always-on default mask) must remain set");
+    }
+
+    // Confirm the bit is also present when other bank-10 C2 flags are on
+    // (mic_boost, line_in) — bit 3 must persist regardless of those toggles.
+    void bank10_c2_pa_enable_bit_set_with_micBoost_and_lineIn() {
+        P1CodecHl2 codec;
+        CodecContext ctx;
+        ctx.p1MicBoost = true;
+        ctx.p1LineIn   = true;
+        quint8 out[5] = {};
+        codec.composeCcForBank(10, ctx, out);
+        QCOMPARE(int(out[2] & 0x01), 0x01);  // mic_boost preserved
+        QCOMPARE(int(out[2] & 0x02), 0x02);  // line_in preserved
+        QVERIFY2((out[2] & 0x08) != 0,
+                 "bank 10 C2 bit 3 (HL2 PA enable) must coexist with mic_boost / line_in");
+        QVERIFY2((out[2] & 0x40) != 0,
+                 "bank 10 C2 bit 6 (always-on) must remain set");
+    }
 };
 
 QTEST_APPLESS_MAIN(TestP1CodecHl2)

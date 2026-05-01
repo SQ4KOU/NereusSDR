@@ -105,20 +105,40 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
         }
 
         // Bank 10 — TX drive, mic boost, Alex HPF/LPF, T/R relay
-        // Source: mi0bot networkproto1.c:1060-1090 [@c26a8a4 / matches @501e3f5]
+        // Source: mi0bot networkproto1.c:1081-1094 [v2.10.3.14-beta1]
         // HL2 note: deskhpsdr clears C2/C3/C4 entirely for HL2 PA-enable
         // (old_protocol.c:2964-2966 [@120188f]) — HL2 firmware (control.v:211-214)
         // does NOT decode C3 bit 7 (Alex T/R relay).  We still write trxRelay
         // here for correctness; HL2 FW ignores the bit.
         // T/R relay bit (C3 bit 7) is INVERTED: 0 = engaged, 1 = disabled.
         // Source: deskhpsdr/src/old_protocol.c:2909-2910 [@120188f]
+        //
+        // C2 bit 3 = HL2 PA-enable (repurposed `ApolloTuner` slot per mi0bot).
+        // mi0bot routes DisablePA() on HL2 through EnableApolloTuner(!bit), so
+        // the bit follows tx[0].pa polarity inverted: PA enabled ⇒ bit set,
+        // PA disabled ⇒ bit cleared.  We emit bit set always — NereusSDR has
+        // no user-facing "Disable PA" wiring for HL2 yet, and PA-enabled is
+        // the only state in which TUNE / MOX produce RF.  Without this bit,
+        // the HL2 FPGA sees MOX asserted with PA-not-enabled and the T/R
+        // relay flutters because it cannot reconcile.  This was the root
+        // cause of the "rapid relay clicking on TUNE" bench symptom.
+        // From mi0bot ChannelMaster/networkproto1.c:1084-1085 [v2.10.3.14-beta1]:
+        //   C2 = ((mic_boost & 1) | ((line_in & 1) << 1) | ApolloFilt |
+        //         ApolloTuner | ApolloATU | ApolloFiltSelect | 0b01000000) & 0x7f;
+        // From mi0bot ChannelMaster/netInterface.c:582-588 [v2.10.3.14-beta1]:
+        //   EnableApolloTuner(bits): bits != 0 ⇒ ApolloTuner = 0x8 else 0
+        // From mi0bot ChannelMaster/netInterface.c:629-635 [v2.10.3.14-beta1]:
+        //   DisablePA on HL2 routes through EnableApolloTuner(!bit)
         case 10:
             out[0] = C0base | 0x12;
             out[1] = quint8(ctx.txDrive & 0xFF);
-            // C2: mic_boost → bit 0 (0x01); line_in → bit 1 (0x02); bit 6 always set per upstream default.
-            // From Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
-            //   C2 = ((prn->mic.mic_boost & 1) | ((prn->mic.line_in & 1) << 1) | ... | 0b01000000) & 0x7f;
-            out[2] = quint8((ctx.p1MicBoost ? 0x01 : 0x00) | (ctx.p1LineIn ? 0x02 : 0x00) | 0x40);
+            // C2: mic_boost (bit 0) | line_in (bit 1) | HL2 PA enable (bit 3)
+            //     | always-on default (bit 6).
+            out[2] = quint8(
+                (ctx.p1MicBoost ? 0x01 : 0x00) |
+                (ctx.p1LineIn   ? 0x02 : 0x00) |
+                /*HL2 PA enable*/ 0x08 |
+                /*always-on*/     0x40);
             out[3] = quint8(ctx.alexHpfBits | (ctx.trxRelay ? 0x00 : 0x80));  // T/R relay engaged (INVERTED: 1 = disabled)
             out[4] = quint8(ctx.alexLpfBits);
             return;
