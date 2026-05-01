@@ -119,10 +119,12 @@ private slots:
         Hl2IoBoardTab tab(&model);
 
         IoBoardHl2::I2cTxn txn{};
-        txn.bus     = IoBoardHl2::kI2cBusIndex;
-        txn.address = IoBoardHl2::kI2cAddrGeneral;
-        txn.control = IoBoardHl2::CtrlWrite;
-        txn.writeData = 0xAB;
+        txn.bus           = IoBoardHl2::kI2cBusIndex;
+        txn.address       = IoBoardHl2::kI2cAddrGeneral;
+        txn.control       = 0x05;   // sub-address (REG_CONTROL)
+        txn.writeData     = 0xAB;
+        txn.isRead        = false;
+        txn.needsResponse = false;
 
         model.ioBoardMutable().enqueueI2c(txn);
         QCOMPARE(model.ioBoard().i2cQueueDepth(), 1);

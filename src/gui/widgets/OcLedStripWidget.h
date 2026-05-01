@@ -1,24 +1,30 @@
 #pragma once
 
 // =================================================================
-// src/gui/setup/hardware/OcOutputsTab.h  (NereusSDR)
+// src/gui/widgets/OcLedStripWidget.h  (NereusSDR)
 // =================================================================
 //
-// Ported from Thetis source:
-//   Project Files/Source/Console/setup.designer.cs:tpOCHFControl,
-//   tpOCSWLControl (tcOCOutputs container tab pages)
+// Ported from mi0bot-Thetis source:
+//   Project Files/Source/Console/ucOCLedStrip.cs
+//   (mi0bot v2.10.3.13-beta2 / @c26a8a4)
+//
+// Reusable N-bit LED strip — one LED per bit of a `quint8` byte.
+// Used by Hl2OptionsTab's I/O Pin State group box for the output (8 LED)
+// and input (6 LED) strips, and shared with Hl2IoBoardTab's status bar
+// 7-pin OC indicator.  Mirrors mi0bot's `ucOCLedStrip` UserControl
+// (Bits + DisplayBits properties, plus optional click-to-toggle).
 //
 // =================================================================
 // Modification history (NereusSDR):
-//   2026-04-17 — Initial placeholder stub. J.J. Boyd (KG4VCF).
-//   2026-04-20 — Refactored into parent QTabWidget hosting two sub-sub-tabs:
-//                HF (OcOutputsHfTab — full RX/TX matrix + actions + USB BCD
-//                + Ext PA + live OC state) and SWL (placeholder for a
-//                follow-up commit). Phase 3P-D Task 2. J.J. Boyd (KG4VCF).
+//   2026-04-30 — New for Phase 3L HL2 Filter visibility brainstorm.
+//                Reusable extraction of the inline LED strip from
+//                Hl2IoBoardTab status bar (Hl2IoBoardTab.cpp:321-330).
+//                J.J. Boyd (KG4VCF), with AI-assisted transformation
+//                via Anthropic Claude Code.
 // =================================================================
-
+//
 //=================================================================
-// setup.designer.cs
+// ucOCLedStrip.cs (mi0bot fork)
 //=================================================================
 // Thetis is a C# implementation of a Software Defined Radio.
 // Copyright (C) 2004-2009  FlexRadio Systems
@@ -55,60 +61,58 @@
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
-#include <QVariant>
-#include <QWidget>
+#include <QFrame>
+#include <QtGlobal>
+#include <vector>
 
-class QTabWidget;
+class QHBoxLayout;
 
 namespace NereusSDR {
 
-class RadioModel;
-class OcMatrix;
-class OcOutputsHfTab;
-class OcOutputsSwlTab;
-struct RadioInfo;
-struct BoardCapabilities;
-
-// OcOutputsTab — parent "OC Outputs" tab in Hardware Config.
-//
-// Hosts two sub-sub-tabs that mirror Thetis tcOCOutputs:
-//   0. HF  — OcOutputsHfTab (full RX/TX matrix + pin actions + USB BCD
-//             + Ext PA + live OC pin state) — Phase 3P-D Task 2
-//   1. SWL — placeholder; same matrix shape with SWL band plan — follow-up
-//
-// State is backed by an OcMatrix instance (Phase 3P-D Task 1) which handles
-// per-MAC AppSettings persistence under hardware/<mac>/oc/...
-//
-// Source: Thetis tcOCOutputs (setup.designer.cs tpOCHFControl + tpOCSWLControl)
-// [@501e3f5]
-class OcOutputsTab : public QWidget {
+// Reusable 1..8 bit LED strip.  Mirrors mi0bot's ucOCLedStrip:
+//   - `bits()`/`setBits()`            ↔ ucOCLedStrip.Bits
+//   - `displayBits()`/`setDisplayBits()` ↔ ucOCLedStrip.DisplayBits
+//   - `setInteractive(bool)`          ↔ click handler hookup (off = read-only)
+//   - `pinClicked(int idx)`           ↔ ucOCLedStrip.MouseDown event
+class OcLedStripWidget : public QFrame {
     Q_OBJECT
 public:
-    explicit OcOutputsTab(RadioModel* model, QWidget* parent = nullptr);
+    explicit OcLedStripWidget(QWidget* parent = nullptr);
 
-    // Called by HardwarePage when a radio connects. Extracts the MAC address
-    // and triggers OcMatrix::load() to hydrate per-MAC state.
-    void populate(const RadioInfo& info, const BoardCapabilities& caps);
+    // Number of LEDs to render (1..8, default 8).
+    int  displayBits() const { return m_displayBits; }
+    void setDisplayBits(int bits);
 
-    // Called by HardwarePage on app restore. State is owned by OcMatrix
-    // (AppSettings under hardware/<mac>/oc/...) — this is a no-op stub so
-    // the HardwarePage API contract is met without extra coupling.
-    void restoreSettings(const QMap<QString, QVariant>& settings);
+    // Current bit state (lower `displayBits()` bits are rendered).
+    quint8 bits() const { return m_bits; }
+    void   setBits(quint8 b);
+
+    // When true, clicking a LED emits pinClicked(idx).  When false the
+    // strip is read-only.  Default = false.
+    bool isInteractive() const { return m_interactive; }
+    void setInteractive(bool on);
+
+    // Per-LED tooltip override (default: "OC pin <idx+1>").
+    void setLedTooltip(int idx, const QString& tooltip);
 
 signals:
-    // Present for HardwarePage API compatibility. OcOutputsTab routes all
-    // state through OcMatrix (AppSettings), so this signal is never emitted
-    // from this tab — the write-through path used by other tabs does not
-    // apply here. HardwarePage connects to it but will never receive a firing.
-    void settingChanged(const QString& key, const QVariant& value);
+    // Emitted when the user clicks a LED in interactive mode.  `idx` is
+    // 0-based.  Caller is expected to compose the matching wire-side
+    // toggle (e.g. IoBoardHl2::enqueueI2c with the new mask).
+    void pinClicked(int idx);
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
-    RadioModel*      m_model{nullptr};
-    OcMatrix*        m_ocMatrix{nullptr};   // non-owning — owned by RadioModel (Phase 3P-D Task 3)
-    QTabWidget*      m_subTabs{nullptr};
-    OcOutputsHfTab*  m_hfTab{nullptr};
-    OcOutputsSwlTab* m_swlTab{nullptr};
-    QWidget*         m_vhfTab{nullptr};     // placeholder for tab-count parity
+    void rebuild();
+    void refreshLedColors();
+
+    QHBoxLayout*           m_row{nullptr};
+    std::vector<QFrame*>   m_leds;
+    quint8                 m_bits{0};
+    int                    m_displayBits{8};
+    bool                   m_interactive{false};
 };
 
 } // namespace NereusSDR

@@ -33,7 +33,8 @@ static BoardCapabilities makeHermesCaps()
     return BoardCapsTable::forBoard(HPSDRHW::Hermes);
 }
 
-// Helper: build an HL2 BoardCapabilities with attenuator.maxDb=63 + hasIoBoardHl2.
+// Helper: build an HL2 BoardCapabilities with signed −28..+32 dB attenuator
+// range (mi0bot setup.cs:16085-16086 [v2.10.3.13-beta2]) + hasIoBoardHl2.
 static BoardCapabilities makeHl2Caps()
 {
     return BoardCapsTable::forBoard(HPSDRHW::HermesLite);
@@ -64,11 +65,12 @@ private slots:
 
     // ── S-ATT clamp checks ────────────────────────────────────────────────
 
-    void att45_onHl2_caps63_noIssue()
+    void att30_onHl2_signedRange_noIssue()
     {
-        // HL2 maxDb=63 → persisted 45 dB is within range → no Warning.
+        // HL2 user-facing range: signed −28..+32 dB (mi0bot setup.cs:16085-16086
+        // [v2.10.3.13-beta2]). Persisted 30 dB is within range → no Warning.
         testSettings().setValue(
-            QStringLiteral("hardware/%1/sAtt").arg(kTestMac), 45);
+            QStringLiteral("hardware/%1/sAtt").arg(kTestMac), 30);
 
         SettingsHygiene h;
         h.validate(kTestMac, makeHl2Caps());

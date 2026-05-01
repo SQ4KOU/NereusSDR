@@ -584,15 +584,19 @@ void RxApplet::buildUi()
         m_attStack->addWidget(m_preampCombo);
 
         // Page 1: Step att spinbox (S-ATT mode — step att enabled)
-        // Phase 3P-A Task 15: initialize max from BoardCapabilities so HL2
-        // (maxDb=63) is correct at widget creation, not only after connect.
+        // Phase 3P-A Task 15: initialize range from BoardCapabilities so HL2
+        // (signed −28..+32 per mi0bot setup.cs:16085-16086 [v2.10.3.13-beta2])
+        // is correct at widget creation, not only after connect.
         // From Thetis setup.cs:15765 [v2.10.3.13].
         {
-            const int initMax = (m_model && m_model->boardCapabilities().attenuator.present)
-                ? m_model->boardCapabilities().attenuator.maxDb
-                : 31;
+            const bool capsPresent =
+                m_model && m_model->boardCapabilities().attenuator.present;
+            const int initMin = capsPresent
+                ? m_model->boardCapabilities().attenuator.minDb : 0;
+            const int initMax = capsPresent
+                ? m_model->boardCapabilities().attenuator.maxDb : 31;
             m_stepAttSpin = new QSpinBox(this);
-            m_stepAttSpin->setRange(0, initMax);
+            m_stepAttSpin->setRange(initMin, initMax);
         }
         m_stepAttSpin->setSuffix(QStringLiteral(" dB"));
         m_stepAttSpin->setFixedWidth(70);
@@ -1228,9 +1232,13 @@ void RxApplet::connectSlice(SliceModel* s)
 
             // Set step att spinbox range from board capabilities.
             // From Thetis setup.cs:15765 udHermesStepAttenuatorData max.
+            // HL2 uses signed range (mi0bot setup.cs:16085-16086
+            // [v2.10.3.13-beta2] Maximum=32, Minimum=-28); pull both bounds.
             const int maxDb = BoardCapsTable::stepAttMaxDb(
                 info.boardType, caps.hasAlexFilters);
-            m_stepAttSpin->setRange(0, maxDb);
+            const int minDb = caps.attenuator.minDb;
+            m_stepAttSpin->setRange(minDb, maxDb);
+            attCtrl->setMinAttenuation(minDb);
             attCtrl->setMaxAttenuation(maxDb);
         }
 

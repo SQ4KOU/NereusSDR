@@ -1397,6 +1397,15 @@ void P1RadioConnection::selectCodec()
         case HPM::REDPITAYA:    m_codec = std::make_unique<P1CodecRedPitaya>();    break;
         default:                m_codec = std::make_unique<P1CodecStandard>();     break;
     }
+    // RadioModel calls setIoBoard() BEFORE the connection thread starts (and
+    // therefore before applyBoardQuirks() runs selectCodec()), so the cached
+    // pointer is already in m_ioBoard but did not land on the freshly-built
+    // codec.  Push it now so HL2 I2C compose works on the very first frame.
+    if (m_ioBoard) {
+        if (auto* hl2Codec = dynamic_cast<P1CodecHl2*>(m_codec.get())) {
+            hl2Codec->setIoBoard(m_ioBoard);
+        }
+    }
     qCInfo(lcConnection) << "P1: selected codec for HPSDRModel" << int(m_hardwareProfile.model);
 }
 
@@ -1549,6 +1558,16 @@ CodecContext P1RadioConnection::buildCodecContext() const
         ctx.ocByte = m_ocMatrix->maskFor(currentBand, m_mox);
     } else {
         ctx.ocByte = m_ocOutput;
+    }
+    if (ctx.ocByte != m_lastOcByteLogged) {
+        const int bandIdx = int(bandFromFrequency(static_cast<double>(m_rxFreqHz[0])));
+        qDebug("HL2 ocByte=0x%02X band=%d mox=%d (matrix=%p)",
+               ctx.ocByte, bandIdx, int(m_mox),
+               static_cast<const void*>(m_ocMatrix));
+        if (m_ioBoard) {
+            emit m_ioBoard->currentOcByteChanged(ctx.ocByte, bandIdx, m_mox);
+        }
+        m_lastOcByteLogged = ctx.ocByte;
     }
     ctx.adcCtrl        = m_adcCtrl;
     ctx.alexHpfBits    = m_alexHpfBits;
@@ -2443,38 +2462,195 @@ void P1RadioConnection::checkFirmwareMinimum(int)  { /* superseded by connectToR
 // hl2SendIoBoardInit
 //
 // Called from connectToRadio() after applyBoardQuirks() when
-// m_caps->hasIoBoardHl2 is true.
+// m_caps->hasIoBoardHl2 is true; also reachable from the user-initiated
+// "Probe" button on Setup → Hardware → HL2 I/O Board.
 //
-// Source: mi0bot IoBoardHl2.cs — IOBoard singleton, readRequest() at lines
-//   129-145 initiates I2C reads:
-//     • addr 0x41, reg 0 → hardware version   (IoBoardHl2.cs:133-136)
-//     • addr 0x1d, reg REG_FIRMWARE_MAJOR (9)  (IoBoardHl2.cs:139)
-//     • addr 0x1d, reg REG_FIRMWARE_MINOR (10) (IoBoardHl2.cs:139)
+// Enqueues 3 I2C read transactions on the IoBoardHl2 queue:
+//   1. bus=1, addr=0x41, reg=0   → HW version   (sets m_hardwareVersion +
+//                                                setDetected if version==0xF1)
+//   2. bus=1, addr=0x1d, reg=9   → FW major     (REG_FIRMWARE_MAJOR)
+//   3. bus=1, addr=0x1d, reg=10  → FW minor     (REG_FIRMWARE_MINOR)
 //
-// The C# side calls NetworkIO.I2CReadInitiate / I2CWrite which are P/Invoke
-// into ChannelMaster.dll.  The underlying wire encoding is handled by the
-// DLL's own I2C framing over ep2; there is no standalone TLV byte sequence
-// in IoBoardHl2.cs that can be extracted and sent verbatim.
+// The wire encoder (P1CodecHl2::tryComposeI2cFrame) drains the queue one
+// transaction per ep2 frame, pushing each read into IoBoardHl2's pending-read
+// FIFO. Inbound responses (parseI2cResponse → applyI2cReadResponse) pop the
+// oldest pending-read and steer the bytes to the right destination
+// (hardwareVersion or m_registers[]).
 //
-// TODO(3I-T12): When Phase 3L lands, locate the I2C-over-ep2 wire encoding
-//   in ChannelMaster/network.c and port the full I2C read/write sequence so
-//   that NereusSDR can probe the HL2 I/O board hardware version and register
-//   map at startup.  For now we log a notice and return; the standard metis
-//   start sequence is sufficient for HL2 RX operation without the I/O board.
+// Source: mi0bot IoBoardHl2.cs:129-145 readRequest() [@c26a8a4]
+//         mi0bot ChannelMaster/netInterface.c:1471-1499 I2CReadInitiate [@c26a8a4]
 // ---------------------------------------------------------------------------
+void P1RadioConnection::requestIoBoardProbe()
+{
+    hl2SendIoBoardInit();
+}
+
 void P1RadioConnection::hl2SendIoBoardInit()
 {
     if (!m_caps || !m_caps->hasIoBoardHl2) { return; }
+    if (!m_ioBoard) {
+        qCWarning(lcConnection) << "HL2: I/O board init — m_ioBoard not wired; skipping probe";
+        return;
+    }
 
-    // Source: mi0bot IoBoardHl2.cs:83-125 — IOBoard Registers enum:
-    //   HardwareVersion  = -1 (I2C addr 0x41, reg 0)
-    //   REG_FIRMWARE_MAJOR = 9, REG_FIRMWARE_MINOR = 10 (I2C addr 0x1d)
-    //   All accessed via NetworkIO.I2CReadInitiate(bus=1, addr, reg).
-    //
-    // The I2C read/write wire format is internal to ChannelMaster.dll.
-    // TODO(3I-T12): Port ChannelMaster I2C-over-ep2 framing for full init.
-    qCInfo(lcConnection) << "HL2: I/O board init — I2C probe deferred (TODO(3I-T12));"
-                         << "standard metis start is sufficient for RX";
+    // mi0bot enforces ONE outstanding read at a time.  I2CReadInitiate refuses
+    // when in_index != out_index (netInterface.c:1478), and the C# driver
+    // busy-waits for each response before issuing the next (console.cs:25796-
+    // 25808).  We mirror that protocol via a step machine driven off the
+    // IoBoardHl2::i2cReadResponseReceived signal.  Source: [@c26a8a4]
+    m_hl2ProbeStep = Hl2ProbeStep::Idle;
+    if (!m_hl2ProbeWired) {
+        // Gate the step machine on (retAddr, retSubAddr) matching the
+        // expected (deviceAddr, register) for the current step.  Without
+        // this gate, unrelated I2C reads (e.g. from the new Hl2OptionsTab
+        // manual R/W tool, or NEREUS_HL2_I2C_SCAN traffic) would advance
+        // the probe out of order — false aborts or misleading "init
+        // complete" before the intended registers were probed.  Codex P2
+        // on PR #157.
+        connect(m_ioBoard, &IoBoardHl2::i2cReadResponseReceived, this,
+                [this](quint8 retAddr, quint8 retSubAddr,
+                       quint8, quint8, quint8, quint8) {
+                    hl2ProbeAdvance(retAddr, retSubAddr);
+                });
+        m_hl2ProbeWired = true;
+    }
+    // Initial dispatch: bootstrap from Idle.  No retAddr/retSubAddr
+    // because no read has fired yet — Idle ignores them.
+    hl2ProbeAdvance(/*retAddr=*/0, /*retSubAddr=*/0);
+
+    if (qEnvironmentVariableIntValue("NEREUS_HL2_I2C_SCAN") != 0) {
+        requestI2cBusScan();
+    }
+}
+
+void P1RadioConnection::hl2ProbeAdvance(quint8 retAddr, quint8 retSubAddr)
+{
+    if (!m_caps || !m_caps->hasIoBoardHl2 || !m_ioBoard) { return; }
+    using Reg = IoBoardHl2::Register;
+
+    auto enqueueRead = [this](quint8 deviceAddr, quint8 subAddr) {
+        IoBoardHl2::I2cTxn txn;
+        txn.bus = IoBoardHl2::kI2cBusIndex;
+        txn.address = deviceAddr;
+        txn.control = subAddr;
+        txn.writeData = 0x00;
+        txn.isRead = true;
+        txn.needsResponse = true;
+        m_ioBoard->enqueueI2c(txn);
+    };
+    auto enqueueWrite = [this](quint8 deviceAddr, quint8 subAddr, quint8 data) {
+        IoBoardHl2::I2cTxn txn;
+        txn.bus = IoBoardHl2::kI2cBusIndex;
+        txn.address = deviceAddr;
+        txn.control = subAddr;
+        txn.writeData = data;
+        txn.isRead = false;
+        txn.needsResponse = false;
+        m_ioBoard->enqueueI2c(txn);
+    };
+
+    // Helper: did the just-received response match the read this step
+    // is waiting on?  If not, the response belongs to some other consumer
+    // (manual R/W tool, bus scan) and the step machine must NOT advance.
+    auto matches = [retAddr, retSubAddr](quint8 wantAddr, quint8 wantSub) {
+        return retAddr == wantAddr && retSubAddr == wantSub;
+    };
+
+    switch (m_hl2ProbeStep) {
+        case Hl2ProbeStep::Idle:
+            qCInfo(lcConnection) << "HL2: probe step 1 — reading HW version";
+            enqueueRead(IoBoardHl2::kI2cAddrHwVersion, 0);
+            m_hl2ProbeStep = Hl2ProbeStep::WaitingForHwVersion;
+            return;
+
+        case Hl2ProbeStep::WaitingForHwVersion:
+            if (!matches(IoBoardHl2::kI2cAddrHwVersion, 0)) {
+                // Stray response (likely from manual R/W tool) — ignore.
+                return;
+            }
+            // Response landed.  IoBoardHl2 has already routed C4 → setHardwareVersion()
+            // and called setDetected() if it matched 0xF1.  If not detected,
+            // abort the probe — mi0bot does the same (console.cs:25810).
+            if (!m_ioBoard->isDetected()) {
+                qCInfo(lcConnection) << "HL2: HW version =" << Qt::hex
+                                     << m_ioBoard->hardwareVersion()
+                                     << "(expected 0xF1) — I/O board absent, probe aborted";
+                m_hl2ProbeStep = Hl2ProbeStep::Done;
+                return;
+            }
+            qCInfo(lcConnection) << "HL2: HW version 0xF1 confirmed — reading FW major";
+            enqueueRead(IoBoardHl2::kI2cAddrGeneral,
+                        static_cast<quint8>(Reg::REG_FIRMWARE_MAJOR));
+            m_hl2ProbeStep = Hl2ProbeStep::WaitingForFwMajor;
+            return;
+
+        case Hl2ProbeStep::WaitingForFwMajor:
+            if (!matches(IoBoardHl2::kI2cAddrGeneral,
+                         static_cast<quint8>(Reg::REG_FIRMWARE_MAJOR))) {
+                return;
+            }
+            qCInfo(lcConnection) << "HL2: FW major received — reading FW minor";
+            enqueueRead(IoBoardHl2::kI2cAddrGeneral,
+                        static_cast<quint8>(Reg::REG_FIRMWARE_MINOR));
+            m_hl2ProbeStep = Hl2ProbeStep::WaitingForFwMinor;
+            return;
+
+        case Hl2ProbeStep::WaitingForFwMinor:
+            if (!matches(IoBoardHl2::kI2cAddrGeneral,
+                         static_cast<quint8>(Reg::REG_FIRMWARE_MINOR))) {
+                return;
+            }
+            // Mi0bot writes REG_CONTROL=1 to enable the board after version check.
+            // Source: console.cs:25831 — `ioBoard.writeRequest(REG_CONTROL, 1);`
+            qCInfo(lcConnection) << "HL2: FW minor received — writing REG_CONTROL=1 (init)";
+            enqueueWrite(IoBoardHl2::kI2cAddrGeneral,
+                         static_cast<quint8>(Reg::REG_CONTROL), 1);
+            // Writes don't have responses we wait for; advance immediately.
+            m_hl2ProbeStep = Hl2ProbeStep::Done;
+            qCInfo(lcConnection) << "HL2: I/O board init complete";
+            return;
+
+        case Hl2ProbeStep::WaitingForControlInitAck:
+        case Hl2ProbeStep::Done:
+            return;
+    }
+}
+
+void P1RadioConnection::requestI2cBusScan()
+{
+    if (!m_caps || !m_caps->hasIoBoardHl2 || !m_ioBoard) {
+        qCWarning(lcConnection) << "HL2: I2C bus scan — caps/ioboard not wired; skipping";
+        return;
+    }
+    // Curated probe set — 32 slot queue, common HL2 companion-board addresses:
+    //   0x20-0x27 = MCP23008/MCP23017 GPIO expanders (HL2 smallio uses 0x20)
+    //   0x1D, 0x41 = mi0bot custom IoBoardHl2 (general regs / HW version)
+    //   0x40-0x4F = INA219, PCA9685, TMP102 sensor range
+    //   0x68-0x6F = DS3231 RTC, MPU6050, etc.
+    static const std::array<quint8, 14> kProbeAddrs = {{
+        0x1D,
+        0x20, 0x21, 0x22, 0x23,
+        0x40, 0x41, 0x42, 0x44,
+        0x48, 0x4A, 0x4C,
+        0x50, 0x68,
+    }};
+    int enqueued = 0;
+    for (quint8 bus : {quint8(0), quint8(1)}) {
+        for (quint8 addr : kProbeAddrs) {
+            IoBoardHl2::I2cTxn txn;
+            txn.bus           = bus;
+            txn.address       = addr;
+            txn.control       = 0;
+            txn.writeData     = 0;
+            txn.isRead        = true;
+            txn.needsResponse = true;
+            if (m_ioBoard->enqueueI2c(txn)) { ++enqueued; }
+            else { goto done; }  // queue full
+        }
+    }
+done:
+    qCInfo(lcConnection) << "HL2: I2C bus scan — enqueued" << enqueued
+                         << "address probes across bus 0 + bus 1";
 }
 
 // ---------------------------------------------------------------------------

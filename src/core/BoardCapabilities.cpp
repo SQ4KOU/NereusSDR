@@ -596,9 +596,12 @@ const BoardCapabilities kHermesLite = {
     .maxReceivers     = 4,
     .sampleRates      = {48000, 96000, 192000, 384000, 0, 0},
     .maxSampleRate    = 384000,
-    // HL2: 6-bit range (mi0bot WriteMainLoop_HL2 [@c26a8a4]).
-    // maxDb=63 (0x3F full 6-bit range); mask=0x3F; enableBit=0x40; MOX branches ATT.
-    .attenuator       = {0, 63, 1, true, 0x3F, 0x40, true},
+    // HL2: signed user-facing range −28..+32 dB (mi0bot setup.cs:16085-16086
+    // [v2.10.3.13-beta2] udHermesStepAttenuatorData.{Maximum=32, Minimum=-28}).
+    // Wire conversion `wire = 31 - userDb` lives in P1CodecHl2.cpp; mask=0x3F,
+    // enableBit=0x40 (6-bit field per mi0bot WriteMainLoop_HL2 [@c26a8a4]);
+    // MOX branches ATT.
+    .attenuator       = {-28, 32, 1, true, 0x3F, 0x40, true},
     .preamp           = {false, false},
     .ocOutputCount    = 0,
     .hasAlexFilters   = false,
@@ -640,7 +643,9 @@ const BoardCapabilities kHermesLiteRxOnly = {
     .maxReceivers     = 4,
     .sampleRates      = {48000, 96000, 192000, 384000, 0, 0},
     .maxSampleRate    = 384000,
-    .attenuator       = {0, 63, 1, true, 0x3F, 0x40, true},
+    // HL2 RX-only inherits the standard HL2 signed −28..+32 dB ATT range
+    // (mi0bot setup.cs:16085-16086 [v2.10.3.13-beta2]).
+    .attenuator       = {-28, 32, 1, true, 0x3F, 0x40, true},
     .preamp           = {false, false},
     .ocOutputCount    = 0,
     .hasAlexFilters   = false,

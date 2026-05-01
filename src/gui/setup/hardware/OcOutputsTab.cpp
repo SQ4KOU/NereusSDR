@@ -13,6 +13,10 @@
 //                HF (OcOutputsHfTab — full RX/TX matrix + actions + USB BCD
 //                + Ext PA + live OC state) and SWL (placeholder for a
 //                follow-up commit). Phase 3P-D Task 2. J.J. Boyd (KG4VCF).
+//   2026-04-30 — SWL placeholder replaced with real OcOutputsSwlTab (13
+//                SWL bands × 7 pins matrix + reset).  Phase 3L HL2 Filter
+//                visibility brainstorm.  J.J. Boyd (KG4VCF), with
+//                AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -55,6 +59,7 @@
 
 #include "OcOutputsTab.h"
 #include "OcOutputsHfTab.h"
+#include "OcOutputsSwlTab.h"
 
 #include "core/BoardCapabilities.h"
 #include "core/OcMatrix.h"
@@ -85,20 +90,31 @@ OcOutputsTab::OcOutputsTab(RadioModel* model, QWidget* parent)
     m_hfTab = new OcOutputsHfTab(model, m_ocMatrix, this);
     m_subTabs->addTab(m_hfTab, tr("HF"));
 
-    // ── SWL sub-sub-tab (placeholder — follow-up commit) ─────────────────
-    // Source: Thetis tpOCSWLControl (setup.designer.cs) [@501e3f5]
-    m_swlTab = new QWidget(this);
+    // ── VHF sub-sub-tab (placeholder — Phase 3L follow-up) ────────────────
+    // mi0bot mirrors HF onto a VHF tab for transverter / 2m+ band plans
+    // (setup.designer.cs:tpOCVHFControl, grpExtCtrlVHF, btnCtrlVHFReset
+    // [v2.10.3.13-beta2]).  Stubbed here for tab-count parity with mi0bot —
+    // wiring a real VHF matrix needs the XVTR plan (Phase 3F+ XVTR) to
+    // settle first since "VHF band" is not first-class in OpenHPSDR P1
+    // without a transverter mapping layer.
+    m_vhfTab = new QWidget(this);
     {
-        auto* swlLayout = new QVBoxLayout(m_swlTab);
+        auto* vhfLayout = new QVBoxLayout(m_vhfTab);
         auto* placeholder = new QLabel(
-            tr("SWL band plan — coming in a follow-up commit"), m_swlTab);
+            tr("VHF band plan — pending XVTR mapping (Phase 3F+)"), m_vhfTab);
         placeholder->setAlignment(Qt::AlignCenter);
         placeholder->setStyleSheet(QStringLiteral(
             "color: rgba(255,255,255,0.5); font-style: italic;"));
-        swlLayout->addStretch();
-        swlLayout->addWidget(placeholder);
-        swlLayout->addStretch();
+        vhfLayout->addStretch();
+        vhfLayout->addWidget(placeholder);
+        vhfLayout->addStretch();
     }
+    m_subTabs->addTab(m_vhfTab, tr("VHF"));
+
+    // ── SWL sub-sub-tab (Phase 3L HL2 Filter visibility) ──────────────────
+    // Source: Thetis tpOCSWLControl (setup.designer.cs) [@501e3f5]
+    // mi0bot setup.designer.cs:tpOCSWLControl, grpExtCtrlSWL [v2.10.3.13-beta2]
+    m_swlTab = new OcOutputsSwlTab(model, m_ocMatrix, this);
     m_subTabs->addTab(m_swlTab, tr("SWL"));
 
     layout->addWidget(m_subTabs);

@@ -562,6 +562,32 @@ nereus_add_test(tst_oc_matrix)
 nereus_add_test(tst_oc_outputs_hf_tab)
 target_compile_definitions(tst_oc_outputs_hf_tab PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3L: OC Outputs SWL sub-sub-tab UI + matrix wiring ──────────────────
+# Smoke-tests construction, row 0 ↔ Band120m and row 12 ↔ Band11m sync,
+# reset clears all 13 SWL bands × 7 pins (RX + TX), and HF amateur entries
+# are isolated from SWL writes.  Replaces the QLabel placeholder previously
+# at OcOutputsTab.cpp:90-102.
+nereus_add_test(tst_oc_outputs_swl_tab)
+target_compile_definitions(tst_oc_outputs_swl_tab PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3L: N2ADR Filter preset helper ─────────────────────────────────────
+# Locks the per-band write table that backs both the N2ADR UI toggle
+# (Hl2IoBoardTab::onN2adrToggled) and the app-launch reconcile
+# (RadioModel::handleConnect).  Verifies 10 ham-band ham entries + 13 SWL
+# pin-7 RX entries, the disable-wipes-all behaviour, that pre-existing
+# manual entries are wiped on enable, and idempotency.
+nereus_add_test(tst_n2adr_preset)
+target_compile_definitions(tst_n2adr_preset PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3L: HL2 Options tab + model ────────────────────────────────────────
+# Hl2OptionsModel: 9-knob defaults match mi0bot designer values verbatim,
+# range-clamping per mi0bot setup.designer.cs, idempotent setters, per-MAC
+# AppSettings round-trip.
+# Hl2OptionsTab: construction smoke, model→UI sync, output LED strip
+# reflects IoBoardHl2::currentOcByteChanged, I2C Write button gating.
+nereus_add_test(tst_hl2_options_tab)
+target_compile_definitions(tst_hl2_options_tab PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3P-D Task 3: P1RadioConnection ↔ OcMatrix codec wiring ─────────────
 # Verifies:
 #   - Without OcMatrix wired: bank 0 C2 = 0 (legacy m_ocOutput fallback).

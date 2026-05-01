@@ -195,6 +195,16 @@ private:
     QLabel*  m_i2cAddrLabel{nullptr};
     QLabel*  m_lastProbeLabel{nullptr};
 
+    // ── Live OC byte indicator ────────────────────────────────────────────────
+    // Shows current band, ocByte hex, and 7 pin LEDs for the per-band pattern
+    // currently being sent on bank 0 C2.  Updates on band/MOX change via
+    // IoBoardHl2::currentOcByteChanged signal from buildCodecContext().
+    QLabel*  m_ocBandLabel{nullptr};
+    QLabel*  m_ocByteLabel{nullptr};
+    QLabel*  m_ocMoxLabel{nullptr};
+    std::array<QFrame*, 7> m_ocPinLeds{};
+    void updateOcIndicator(quint8 ocByte, int bandIdx, bool mox);
+
     // ── Configuration (left column) ───────────────────────────────────────────
     // From mi0bot setup.cs:20234-20238 chkHERCULES [@c26a8a4]
     QCheckBox*   m_n2adrFilter{nullptr};

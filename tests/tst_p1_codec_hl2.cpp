@@ -18,8 +18,11 @@ private slots:
         QVERIFY(codec.usesI2cIntercept());
     }
 
-    // Bank 11 C4 — RX path: 6-bit mask + 0x40 enable
-    // Source: mi0bot networkproto1.c:1102 [@c26a8a4]
+    // Bank 11 C4 — RX path: 6-bit mask + 0x40 enable WITH (31 - userDb)
+    // inversion. HL2 firmware treats higher values as MORE attenuation, so
+    // mi0bot inverts at 3 callsites (console.cs:11075/11251/19380); without
+    // the inversion, slider value 31 reaches HL2 as zero attenuation.
+    // Source: mi0bot networkproto1.c:1102 + console.cs:11075/11251/19380 [@c26a8a4]
     void bank11_rx_att_20dB_hl2_encoding() {
         P1CodecHl2 codec;
         CodecContext ctx;
@@ -28,7 +31,8 @@ private slots:
         quint8 out[5] = {};
         codec.composeCcForBank(11, ctx, out);
         QCOMPARE(int(out[0]), 0x14);
-        QCOMPARE(int(out[4]), (20 & 0x3F) | 0x40);  // 0x54
+        // userDb=20 → wire = (31-20) | 0x40 = 11 | 0x40 = 0x4B
+        QCOMPARE(int(out[4]), ((31 - 20) & 0x3F) | 0x40);
     }
 
     // Bank 11 C4 — TX path: uses txStepAttn[0] not rxStepAttn[0]
@@ -81,21 +85,68 @@ private slots:
         codec.composeCcForBank(11, ctx, out_mid);
         QCOMPARE(int(out_mid[4]), 0x50);
 
-        // Out-of-range input is clamped: userDb=63 → clamped to 31 → wire 0x40
+        // Out-of-range high input is clamped to +32 (signed max).
+        // userDb=63 → clamped to +32 → wire = (31-32) & 0x3F | 0x40 = 0x7F.
         ctx.txStepAttn[0] = 63;
         quint8 out_clamp[5] = {};
         codec.composeCcForBank(11, ctx, out_clamp);
-        QCOMPARE(int(out_clamp[4]), 0x40);
+        QCOMPARE(int(out_clamp[4]), 0x7F);
     }
 
-    // Bank 11 C4 — full 6-bit range (HL2 supports 0-63)
-    void bank11_rx_att_63dB_full_hl2_range() {
+    // Bank 11 C4 — RX path range. HL2 user-facing slider is signed
+    // −28..+32 dB (mi0bot setup.cs:16085-16086 [v2.10.3.13-beta2]
+    // udHermesStepAttenuatorData.{Maximum=32, Minimum=-28}). Inputs outside
+    // that range clamp to the corner; the (31 - userDb) inversion folds the
+    // clamped value into the 6-bit wire field.
+    void bank11_rx_att_signed_range_corners() {
         P1CodecHl2 codec;
-        CodecContext ctx;
-        ctx.rxStepAttn[0] = 63;
-        quint8 out[5] = {};
-        codec.composeCcForBank(11, ctx, out);
-        QCOMPARE(int(out[4]), 0x3F | 0x40);  // 0x7F
+
+        // Negative corner: userDb=-28 → wire = (31-(-28)) & 0x3F | 0x40
+        //                = 59 & 0x3F | 0x40 = 0x3B | 0x40 = 0x7B.
+        {
+            CodecContext ctx;
+            ctx.rxStepAttn[0] = -28;
+            quint8 out[5] = {};
+            codec.composeCcForBank(11, ctx, out);
+            QCOMPARE(int(out[4]), 0x7B);
+        }
+
+        // Zero (mi0bot default): userDb=0 → wire = 31 | 0x40 = 0x5F.
+        {
+            CodecContext ctx;
+            ctx.rxStepAttn[0] = 0;
+            quint8 out[5] = {};
+            codec.composeCcForBank(11, ctx, out);
+            QCOMPARE(int(out[4]), 0x5F);
+        }
+
+        // Positive corner: userDb=+32 → wire = (31-32) & 0x3F | 0x40
+        //                = -1 & 0x3F | 0x40 = 0x3F | 0x40 = 0x7F.
+        {
+            CodecContext ctx;
+            ctx.rxStepAttn[0] = 32;
+            quint8 out[5] = {};
+            codec.composeCcForBank(11, ctx, out);
+            QCOMPARE(int(out[4]), 0x7F);
+        }
+
+        // Out-of-range low: userDb=-100 → clamped to -28 → wire 0x7B.
+        {
+            CodecContext ctx;
+            ctx.rxStepAttn[0] = -100;
+            quint8 out[5] = {};
+            codec.composeCcForBank(11, ctx, out);
+            QCOMPARE(int(out[4]), 0x7B);
+        }
+
+        // Out-of-range high: userDb=+100 → clamped to +32 → wire 0x7F.
+        {
+            CodecContext ctx;
+            ctx.rxStepAttn[0] = 100;
+            quint8 out[5] = {};
+            codec.composeCcForBank(11, ctx, out);
+            QCOMPARE(int(out[4]), 0x7F);
+        }
     }
 
     // Bank 12 — HL2 has same MOX behavior as Standard (forces 0x1F under MOX),

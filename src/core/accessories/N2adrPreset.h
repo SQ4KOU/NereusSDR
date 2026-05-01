@@ -1,24 +1,35 @@
 #pragma once
 
 // =================================================================
-// src/gui/setup/hardware/OcOutputsTab.h  (NereusSDR)
+// src/core/accessories/N2adrPreset.h  (NereusSDR)
 // =================================================================
 //
-// Ported from Thetis source:
-//   Project Files/Source/Console/setup.designer.cs:tpOCHFControl,
-//   tpOCSWLControl (tcOCOutputs container tab pages)
+// Ported from mi0bot-Thetis source:
+//   Project Files/Source/Console/setup.cs:chkHERCULES_CheckedChanged
+//   (mi0bot v2.10.3.13-beta2 / @c26a8a4, lines 14311-14424 — HERMESLITE
+//   branch lines 14324-14368)
+//
+// Single source of truth for the N2ADR Filter preset that populates the
+// shared OcMatrix when the user enables the "N2ADR Filter board" toggle
+// in Hl2IoBoardTab.  Two callers (Hl2IoBoardTab::onN2adrToggled and
+// RadioModel::handleConnect's app-launch reconcile) used to carry
+// duplicate per-band tables; this helper centralises them so future
+// upstream resyncs only touch one place.
 //
 // =================================================================
 // Modification history (NereusSDR):
-//   2026-04-17 — Initial placeholder stub. J.J. Boyd (KG4VCF).
-//   2026-04-20 — Refactored into parent QTabWidget hosting two sub-sub-tabs:
-//                HF (OcOutputsHfTab — full RX/TX matrix + actions + USB BCD
-//                + Ext PA + live OC state) and SWL (placeholder for a
-//                follow-up commit). Phase 3P-D Task 2. J.J. Boyd (KG4VCF).
+//   2026-04-30 — Extracted from Hl2IoBoardTab.cpp:950-995 + RadioModel.cpp
+//                :1077-1111 to centralise the per-band write table.  Adds
+//                the 13 SWL bands × pin-7 RX entries (mi0bot setup.cs
+//                :14346-14358) that were previously missing — closes the
+//                Phase 3L HL2 N2ADR visibility gap (the SWL OC matrix sub-
+//                tab was a placeholder until this commit).
+//                J.J. Boyd (KG4VCF), with AI-assisted transformation via
+//                Anthropic Claude Code.
 // =================================================================
-
+//
 //=================================================================
-// setup.designer.cs
+// setup.cs (mi0bot fork)
 //=================================================================
 // Thetis is a C# implementation of a Software Defined Radio.
 // Copyright (C) 2004-2009  FlexRadio Systems
@@ -55,60 +66,27 @@
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
-#include <QVariant>
-#include <QWidget>
-
-class QTabWidget;
-
 namespace NereusSDR {
 
-class RadioModel;
 class OcMatrix;
-class OcOutputsHfTab;
-class OcOutputsSwlTab;
-struct RadioInfo;
-struct BoardCapabilities;
 
-// OcOutputsTab — parent "OC Outputs" tab in Hardware Config.
+// Apply the N2ADR Filter preset to `oc`.
 //
-// Hosts two sub-sub-tabs that mirror Thetis tcOCOutputs:
-//   0. HF  — OcOutputsHfTab (full RX/TX matrix + pin actions + USB BCD
-//             + Ext PA + live OC pin state) — Phase 3P-D Task 2
-//   1. SWL — placeholder; same matrix shape with SWL band plan — follow-up
+//   enabled = true:   wipes every band/pin/{rx,tx} cell, then populates
+//                     the per-band pattern that matches the N2ADR filter
+//                     wiring (10 ham bands + 13 SWL bands, RX pin-7
+//                     auto-fill).  Mirrors mi0bot setup.cs:14315-14368
+//                     (case true).
 //
-// State is backed by an OcMatrix instance (Phase 3P-D Task 1) which handles
-// per-MAC AppSettings persistence under hardware/<mac>/oc/...
+//   enabled = false:  wipes every cell.  Mirrors mi0bot setup.cs
+//                     :14414-14422 (case false).
 //
-// Source: Thetis tcOCOutputs (setup.designer.cs tpOCHFControl + tpOCSWLControl)
-// [@501e3f5]
-class OcOutputsTab : public QWidget {
-    Q_OBJECT
-public:
-    explicit OcOutputsTab(RadioModel* model, QWidget* parent = nullptr);
-
-    // Called by HardwarePage when a radio connects. Extracts the MAC address
-    // and triggers OcMatrix::load() to hydrate per-MAC state.
-    void populate(const RadioInfo& info, const BoardCapabilities& caps);
-
-    // Called by HardwarePage on app restore. State is owned by OcMatrix
-    // (AppSettings under hardware/<mac>/oc/...) — this is a no-op stub so
-    // the HardwarePage API contract is met without extra coupling.
-    void restoreSettings(const QMap<QString, QVariant>& settings);
-
-signals:
-    // Present for HardwarePage API compatibility. OcOutputsTab routes all
-    // state through OcMatrix (AppSettings), so this signal is never emitted
-    // from this tab — the write-through path used by other tabs does not
-    // apply here. HardwarePage connects to it but will never receive a firing.
-    void settingChanged(const QString& key, const QVariant& value);
-
-private:
-    RadioModel*      m_model{nullptr};
-    OcMatrix*        m_ocMatrix{nullptr};   // non-owning — owned by RadioModel (Phase 3P-D Task 3)
-    QTabWidget*      m_subTabs{nullptr};
-    OcOutputsHfTab*  m_hfTab{nullptr};
-    OcOutputsSwlTab* m_swlTab{nullptr};
-    QWidget*         m_vhfTab{nullptr};     // placeholder for tab-count parity
-};
+// In both branches the wipe destroys any other manual OC pin
+// configuration the user may have made — this matches mi0bot's "N2ADR
+// owns the OC matrix while enabled" model exactly.
+//
+// Caller is responsible for OcMatrix::save() afterwards if persistence
+// is required (Hl2IoBoardTab does; the codec layer does not).
+void applyN2adrPreset(OcMatrix& oc, bool enabled);
 
 } // namespace NereusSDR

@@ -165,6 +165,19 @@ public slots:
     void setMicPTT(bool enabled) override;
     void setMicXlr(bool xlrJack) override;
 
+    // HL2-specific: enqueue the I/O board probe (HW version + FW major/minor
+    // reads). Public entry point for the Setup → Hardware → HL2 I/O Board
+    // tab's "Probe" button; also called from connectToRadio() at startup.
+    // Noop on non-HL2 boards.
+    void requestIoBoardProbe();
+
+    // Diagnostic: enqueue a read to every standard 7-bit I2C address (0x08..0x77)
+    // on bus 1 / sub-register 0 so we can discover what device IS on the bus
+    // when the IoBoardHl2 mi0bot probe (0x41/0x1D) returns floating-bus 0xFF.
+    // The IoBoardHl2 dispatch will route each response into the lastI2cRead
+    // signal which the Setup → HL2 I/O page logs raw.
+    void requestI2cBusScan();
+
 private slots:
     void onReadyRead();
     void onWatchdogTick();
@@ -221,6 +234,25 @@ private:
     //     Full I2C init sequence is deferred (TODO(3I-T12)); the standard
     //     NetworkIO start path already handles HL2 ep2 init.
     void hl2SendIoBoardInit();
+
+    // Step machine for the mi0bot probe sequence.  mi0bot's I2CReadInitiate
+    // refuses to enqueue if `in_index != out_index` (queue not empty), so reads
+    // must be sequenced ONE AT A TIME.  Driver: i2cReadResponseReceived signal
+    // from IoBoardHl2.  Source: console.cs:25796-25831 [@c26a8a4]
+    enum class Hl2ProbeStep {
+        Idle,
+        WaitingForHwVersion,
+        WaitingForFwMajor,
+        WaitingForFwMinor,
+        WaitingForControlInitAck,
+        Done
+    };
+    Hl2ProbeStep m_hl2ProbeStep{Hl2ProbeStep::Idle};
+    bool         m_hl2ProbeWired{false};   // one-shot signal-connect guard
+    // Dispatch next step.  retAddr/retSubAddr identify the I2C read whose
+    // response just arrived (zero+zero from the initial bootstrap call so
+    // the Idle state's transition fires).  Phase 3L Codex P2 fix on PR #157.
+    void hl2ProbeAdvance(quint8 retAddr, quint8 retSubAddr);
 
     // hl2CheckBandwidthMonitor — drives the HermesLiteBandwidthMonitor tick.
     //   When m_bwMonitor is wired, delegates to m_bwMonitor->tick() which runs
@@ -384,6 +416,9 @@ private:
     bool    m_duplex{true};
     bool    m_diversity{false};
     quint8  m_ocOutput{0};
+    // Diagnostic: log a single line whenever the resolved ocByte changes.
+    // mutable so const buildCodecContext() can update it.
+    mutable int m_lastOcByteLogged{0xFFFF};
     quint16 m_adcCtrl{0};          // ADC-to-DDC assignment bits
 
     // Reconnect log guard

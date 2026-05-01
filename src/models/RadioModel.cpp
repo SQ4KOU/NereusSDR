@@ -233,6 +233,7 @@ warren@wpratt.com
 #include "core/MoxController.h"
 #include "core/MicProfileManager.h"
 #include "core/TwoToneController.h"
+#include "core/accessories/N2adrPreset.h"
 #include "core/TxChannel.h"
 // 3M-1c TX pump architecture redesign — dedicated worker thread for
 // TX DSP pump (replaces D.1/E.1/L.4 chain).
@@ -1074,6 +1075,26 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         m_ocMatrix.setMacAddress(info.macAddress);
         m_ocMatrix.load();
 
+        // Reconcile the OcMatrix to the persisted N2ADR Filter setting at
+        // app launch.  Without this, a matrix populated by a prior session's
+        // N2ADR-on toggle survives indefinitely even after the user disables
+        // N2ADR — including across app restarts.  The Hl2IoBoardTab's
+        // restoreSettings() does the same thing but only fires when the user
+        // opens Setup; this hook ensures the matrix is always in sync from
+        // the very first composeCcForBank call.
+        //
+        // Per-band write table lives in N2adrPreset so the toggle handler
+        // and this reconcile share one source of truth.  Phase 3L also
+        // added 13 SWL pin-7 RX entries via that helper — without them
+        // the OcOutputsSwlTab would always render blank even after the
+        // user enabled N2ADR.
+        const QString n2adrKey = QStringLiteral("hl2IoBoard/n2adrFilter");
+        const bool n2adrOn = AppSettings::instance()
+                                 .value(n2adrKey, QStringLiteral("False"))
+                                 .toString() == QStringLiteral("True");
+        applyN2adrPreset(m_ocMatrix, n2adrOn);
+        m_ocMatrix.save();
+
         // Load per-MAC Alex antenna controller state so Antenna Control UI
         // and future protocol codecs read the correct per-band antenna assignments.
         // Phase 3P-F Task 3. Pattern mirrors OcMatrix above.
@@ -1089,6 +1110,11 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // Phase 3P-F Task 5b.
         m_pennyLaneController.setMacAddress(info.macAddress);
         m_pennyLaneController.load();
+
+        // Load per-MAC HL2 Options (9 mi0bot tpHL2Options knobs).
+        // Phase 3L commit #9.  Wire-format emission deferred to follow-up PR.
+        m_hl2Options.setMacAddress(info.macAddress);
+        m_hl2Options.load();
 
         // Load per-MAC calibration state (freq correction factor, level offsets, etc.).
         // Phase 3P-G. Pushed to P2RadioConnection via setCalibrationController() below.
