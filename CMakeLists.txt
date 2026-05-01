@@ -49,6 +49,38 @@ else()
 endif()
 
 # --------------------------------------------------------------------------
+# zlib (Phase 3M-3a-ii follow-up — gzip+base64url envelope helper for
+# the parametric-EQ blob round-trip with Thetis profile storage)
+# --------------------------------------------------------------------------
+# Hard-required because ParaEqEnvelope is in the always-on TX pipeline.
+#
+# macOS:  SDK ships zlib at /Library/Developer/CommandLineTools/.../usr/include/zlib.h
+# Linux:  distro package zlib1g-dev / zlib-devel
+# Windows MinGW: Qt's bundled mingw_64 toolchain has no findable zlib (ci.yml
+#   Windows job hits "Could NOT find ZLIB (missing: ZLIB_LIBRARY ...)" at
+#   configure time). Vendor zlib via FetchContent on Windows only — same
+#   approach the PortAudio block below uses for its dep.
+if(WIN32)
+    include(FetchContent)
+    FetchContent_Declare(
+        zlib
+        GIT_REPOSITORY https://github.com/madler/zlib.git
+        GIT_TAG        v1.3.1
+    )
+    set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "Skip zlib examples" FORCE)
+    FetchContent_MakeAvailable(zlib)
+    if(NOT TARGET ZLIB::ZLIB)
+        # zlib's CMake exports `zlibstatic` (and `zlib` for shared); alias to
+        # the conventional ZLIB::ZLIB name so call sites stay portable.
+        add_library(ZLIB::ZLIB ALIAS zlibstatic)
+    endif()
+    message(STATUS "zlib (vendored via FetchContent) — Windows MinGW build")
+else()
+    find_package(ZLIB REQUIRED)
+    message(STATUS "zlib ${ZLIB_VERSION_STRING} found at ${ZLIB_INCLUDE_DIRS}")
+endif()
+
+# --------------------------------------------------------------------------
 # PortAudio v19 (Phase 3O VAX — PortAudioBus fallback for IAudioBus)
 # --------------------------------------------------------------------------
 include(FetchContent)
@@ -371,6 +403,7 @@ set(CORE_SOURCES
     src/core/NbFamily.h
     src/core/MoxController.cpp
     src/core/MicProfileManager.cpp
+    src/core/ParaEqEnvelope.cpp
     src/core/TwoToneController.cpp
     src/core/FFTEngine.cpp
     src/core/NoiseFloorEstimator.cpp
@@ -458,6 +491,8 @@ set(GUI_SOURCES
     src/gui/widgets/MeterSlider.h
     src/gui/widgets/MeterSlider.cpp
     src/gui/widgets/OcLedStripWidget.cpp
+    src/gui/widgets/ParametricEqWidget.h
+    src/gui/widgets/ParametricEqWidget.cpp
     src/gui/widgets/ResetSlider.h
     src/gui/widgets/ScrollableLabel.cpp
     src/gui/widgets/TriBtn.h
@@ -711,6 +746,7 @@ target_link_libraries(NereusSDRObjs PUBLIC
     Qt6::Network
     Qt6::Multimedia
     Qt6::Svg
+    ZLIB::ZLIB
 )
 
 if(WIN32)

@@ -43,6 +43,13 @@
 //                 TuneSlider / Fixed) ported from Thetis enums.cs:456-461;
 //                 default DriveSlider per console.cs:46553 [v2.10.3.13].
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-30 — txEqParaEqData (QString) opaque blob (Phase 3M-3a-ii
+//                 follow-up Batch 6) — mirror of cfcParaEqData (Batch 2)
+//                 for the TX EQ slot.  ParametricEqWidget produces /
+//                 consumes the inner JSON; MicProfileManager wraps it
+//                 through ParaEqEnvelope (gzip+base64url) before storing
+//                 under the bundle key TXParaEQData.  Empty default.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -885,6 +892,16 @@ public:
     int  txEqCtfmode() const noexcept       { return m_txEqCtfmode; }
     int  txEqWintype() const noexcept       { return m_txEqWintype; }
 
+    /// Opaque parametric-EQ blob for the TX EQ (separate from CFC's
+    /// CFCParaEQData blob).  No setter validation — pass-through for
+    /// forward-compat round-trip with imported Thetis profiles.
+    /// ParametricEqWidget produces / consumes the inner JSON;
+    /// MicProfileManager wraps it through ParaEqEnvelope before
+    /// storing under the bundle key TXParaEQData.
+    /// Phase 3M-3a-ii follow-up Batch 6 — mirrors cfcParaEqData()
+    /// (3M-3a-ii Batch 2) for the TX EQ slot in TXProfile.
+    const QString& txEqParaEqData() const noexcept { return m_txEqParaEqData; }
+
     // ── Range constants (Thetis Designer setup.Designer.cs [v2.10.3.13]) ──
     //
     // Leveler MaxGain: 0..20 dB (udDSPLevelerThreshold:38718-38738).
@@ -930,6 +947,9 @@ public slots:
     void setTxEqMp(bool mp);
     void setTxEqCtfmode(int mode);
     void setTxEqWintype(int wintype);
+    /// Opaque parametric-EQ blob for the TX EQ (3M-3a-ii follow-up Batch 6).
+    /// No validation — pass-through for round-trip.  Mirrors setCfcParaEqData.
+    void setTxEqParaEqData(const QString& data);
 
     // ── Phase Rotator setters (3M-3a-ii Batch 2) ─────────────────────────
     void setPhaseRotatorEnabled(bool on);
@@ -974,6 +994,8 @@ signals:
     void txEqMpChanged(bool mp);
     void txEqCtfmodeChanged(int mode);
     void txEqWintypeChanged(int wintype);
+    /// 3M-3a-ii follow-up Batch 6 — TX EQ parametric blob round-trip.
+    void txEqParaEqDataChanged(const QString& data);
 
     // ── Phase Rotator signals (3M-3a-ii Batch 2) ─────────────────────────
     void phaseRotatorEnabledChanged(bool on);
@@ -1289,6 +1311,11 @@ private:
     bool m_txEqMp      = false; // minimum-phase flag = 0
     int  m_txEqCtfmode = 0;     // cutoff mode = 0
     int  m_txEqWintype = 0;     // window type = 0
+
+    // Opaque parametric-EQ blob for the TX EQ (3M-3a-ii follow-up Batch 6).
+    // Empty by default (no Thetis database.cs default — TXProfile column
+    // ships empty until the ucParametricEq dialog populates it).
+    QString m_txEqParaEqData;
 
     // ── CFC / CPDR / CESSB / Phase Rotator (3M-3a-ii Batch 2) ────────────
     //

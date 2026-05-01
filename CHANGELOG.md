@@ -182,6 +182,75 @@ and the chrome layer that surrounds it.
   three now show em-dash with a "Not yet measured" tooltip until
   proper protocol-level instrumentation lands.
 
+### Added (Phase 3M-3a-ii follow-up — `ucParametricEq` Qt6 port)
+
+- **`src/gui/widgets/ParametricEqWidget`** (NEW, ~3160 LOC h+cpp) — full
+  Qt6 port of Thetis's `ucParametricEq.cs` (Richard Samphire MW0LGE,
+  3396 LOC C# WinForms control). Five-batch port: skeleton + EqPoint /
+  EqJsonState classes (B1), axis math + ordering + reset (B2),
+  `paintEvent` + 10 draw helpers + 33 ms peak-hold bar-chart timer
+  (B3), mouse + wheel + 6 Qt signals (B4), JSON marshal + 34-property
+  public API (B5). All ports cite `ucParametricEq.cs [v2.10.3.13]`
+  inline; GPLv2 + Samphire dual-license header preserved byte-for-byte.
+  47 named test slots across 5 test files (4 + 10 + 7 + 10 + 16).
+
+- **`src/core/ParaEqEnvelope`** (NEW, ~330 LOC h+cpp) — gzip + base64url
+  envelope helper mirroring Thetis `Common.cs Compress_gzip` /
+  `Decompress_gzip [v2.10.3.13]`. Byte-identical encode output with
+  Thetis (verified via Python-fixture decode test). 9 test slots.
+
+- **`src/models/TransmitModel`** — new `txEqParaEqData` field (mirror of
+  existing `cfcParaEqData` pattern), with getter / setter / signal.
+
+- **`src/core/MicProfileManager`** — new `TXParaEQData` bundle key
+  wired into capture + apply paths (50 → 51 keys; 91 → 92 total bundle
+  keys). 8 test slots in `tst_mic_profile_manager_para_eq_round_trip`.
+
+- **`src/core/TxChannel::getCfcDisplayCompression`** (NEW) — WDSP
+  wrapper for live CFC compression display data, used by `TxCfcDialog`'s
+  50 ms bar-chart timer. 6 test slots.
+
+- **`src/gui/applets/TxCfcDialog`** — full Thetis-verbatim rewrite.
+  Drops the spartan profile combo (TxApplet hosts profile management).
+  Embeds two cross-synced `ParametricEqWidget` instances (compression
+  + post-EQ curves) with 50 ms live bar chart, 5/10/18-band radios,
+  freq-range spinboxes, three checkboxes (`Use Q Factors` / `Live
+  Update` / `Log scale`), two reset buttons, OG CFC Guide LinkLabel.
+  Hide-on-close. 21 test slots (was 12).
+
+- **`src/gui/applets/TxEqDialog`** — adds parametric panel behind
+  `Legacy EQ` toggle (persists via AppSettings
+  `TxEqDialog/UsingLegacyEQ`). Drops profile combo. Fixes legacy
+  band-column slider/spinbox/header styling regression with
+  `Style::sliderVStyle()` / `kSpinBoxStyle` / `kTextPrimary`. 11 test
+  slots.
+
+- **`CMakeLists`** — adds `find_package(ZLIB REQUIRED)` + `ZLIB::ZLIB`
+  link.
+
+- **Bench feedback (in-branch fixes before PR open):** dialog-level QSS
+  block added to both `TxCfcDialog` and `TxEqDialog` constructors so the
+  default Qt6 widgets (spinboxes / combos / radios / checkboxes /
+  group-boxes / labels / buttons) pick up the project dark theme — the
+  rewrites had been inheriting the system Qt6 default style and rendered
+  dark-on-dark. `TxEqDialog`'s parametric Reset button was a no-op
+  because it called `setBandCount(currentCount)` which early-returns at
+  `ucParametricEq.cs:583 [v2.10.3.13]`; now synthesizes flat-default
+  arrays inline (gain=0, q=4, evenly spaced freq) and calls
+  `setPointsData` directly, mirroring `TxCfcDialog::onResetCompClicked`.
+
+- **Total impact:** 9074 insertions / 1407 deletions across 31 files;
+  102 new automated test slots; full ctest **280 / 280 green** at HEAD
+  `e733fa6` (post-rebase onto current `main` at `f40f5a0`).
+
+  Inline cite scan: 1739 cites validated against upstream sources
+  (`verify-inline-tag-preservation.py`); 289 / 289 Thetis files pass
+  header check; PROVENANCE registered for both `ParametricEqWidget`
+  and `ParaEqEnvelope`. Closes the plan at
+  [`docs/architecture/phase3m-3a-ii-followup-parametriceq-plan.md`](docs/architecture/phase3m-3a-ii-followup-parametriceq-plan.md).
+  Verification matrix at
+  [`docs/architecture/phase3m-3a-ii-followup-parametriceq-verification/README.md`](docs/architecture/phase3m-3a-ii-followup-parametriceq-verification/README.md).
+
 ### Added (Phase 3M-3a-ii — TX Dynamics: CFC + CPDR + CESSB + Phase Rotator)
 
 - **CFC (Continuous Frequency Compressor) — 10-band freq compander.** New

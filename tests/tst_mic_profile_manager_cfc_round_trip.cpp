@@ -95,8 +95,9 @@ private slots:
         // CESSB (1) — database.cs:4689.
         QVERIFY(defs.contains(QStringLiteral("CESSB_On")));
 
-        // Total bundle = 50 (existing) + 41 (new) = 91 keys.
-        QCOMPARE(defs.size(), 91);
+        // Total bundle = 50 (existing) + 1 TXParaEQData (3M-3a-ii follow-up
+        // Batch 6) + 41 (new) = 92 keys.
+        QCOMPARE(defs.size(), 92);
     }
 
     // =========================================================================

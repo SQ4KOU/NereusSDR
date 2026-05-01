@@ -1,0 +1,493 @@
+#pragma once
+
+// =================================================================
+// src/gui/widgets/ParametricEqWidget.h  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis source:
+//   Project Files/Source/Console/ucParametricEq.cs [v2.10.3.13],
+//   original licence from Thetis source is included below.
+//   Sole author: Richard Samphire (MW0LGE) — GPLv2-or-later with
+//   Samphire dual-licensing.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-04-30 — Reimplemented in C++20/Qt6 for NereusSDR by
+//                 J.J. Boyd (KG4VCF), with AI-assisted transformation
+//                 via Anthropic Claude Code.  Phase 3M-3a-ii follow-up
+//                 sub-PR Batches 1-5: full ucParametricEq Qt6 port --
+//                 skeleton + EqPoint/EqJsonState classes + default 18-
+//                 color palette + ctor with verbatim ucParametricEq.cs:
+//                 360-447 defaults (B1), axis math + ordering + reset
+//                 (B2), paintEvent + 10 draw helpers + bar chart timer
+//                 (B3), mouse + wheel + 6 signals (B4), JSON marshal +
+//                 public API + point-edit (B5).  Widget is feature-
+//                 complete; Tasks 8 + 9 wire it into TxCfcDialog and
+//                 TxEqDialog.
+// =================================================================
+
+/*  ucParametricEq.cs
+
+This file is part of a program that implements a Software-Defined Radio.
+
+This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+
+Copyright (C) 2020-2026 Richard Samphire MW0LGE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+mw0lge@grange-lane.co.uk
+*/
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+#include <QColor>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QPointF>
+#include <QRect>
+#include <QString>
+#include <QTimer>
+#include <QVector>
+#include <QWidget>
+
+class QPaintEvent;
+class QPainter;
+class QMouseEvent;
+class QWheelEvent;
+
+// Forward declarations for tester classes that need access to private
+// axis/ordering helpers via `friend`. Each tester lives in its own
+// translation unit (tst_parametric_eq_widget_*.cpp) and exposes the
+// protected `using ParametricEqWidget::xFromFreq` etc. so the test
+// `QObject` can call them.  Future batches add their own friends in
+// the same block — keep them grouped.
+class ParametricEqAxisTester;          // Batch 2
+class ParametricEqPaintTester;         // Batch 3 (this batch)
+class ParametricEqInteractionTester;   // Batch 4
+class ParametricEqJsonTester;          // Batch 5
+
+namespace NereusSDR {
+
+class ParametricEqWidget : public QWidget {
+    Q_OBJECT
+    friend class ::ParametricEqAxisTester;        // for tst_parametric_eq_widget_axis
+    friend class ::ParametricEqPaintTester;       // for tst_parametric_eq_widget_paint
+    friend class ::ParametricEqInteractionTester; // Task 4
+    friend class ::ParametricEqJsonTester;        // Task 5
+public:
+    // -- Public math helper (was private; promoted in PR #159 follow-up so
+    //    consumers like TxEqDialog can sample the curve at WDSP band centers
+    //    to drive the legacy scalar TX EQ path).  Pure const helper, no side
+    //    effects.  Returns the response curve dB at the given frequency: in
+    //    parametric mode this is the Gaussian-weighted sum of all points; in
+    //    graphic-EQ mode it's the linear interpolation between adjacent
+    //    points.  From Thetis ucParametricEq.cs:2694-2748 [v2.10.3.13].
+    double responseDbAtFrequency(double frequencyHz) const;
+
+    // -- Public types (mirror C# ucParametricEq.EqPoint / EqJsonState / EqJsonPoint) --
+
+    // From Thetis ucParametricEq.cs:54-105 [v2.10.3.13] -- sealed class EqPoint.
+    struct EqPoint {
+        int     bandId       = 0;
+        QColor  bandColor;          // QColor() means "use palette default" (Color.Empty in C#)
+        double  frequencyHz  = 0.0;
+        double  gainDb       = 0.0;
+        double  q            = 4.0;
+
+        EqPoint() = default;
+        EqPoint(int id, QColor color, double f, double g, double qVal)
+            : bandId(id), bandColor(std::move(color)),
+              frequencyHz(f), gainDb(g), q(qVal) {}
+    };
+
+    // From Thetis ucParametricEq.cs:220-240 [v2.10.3.13] -- EqJsonState.
+    struct EqJsonState {
+        int                bandCount     = 10;
+        bool               parametricEq  = true;
+        double             globalGainDb  = 0.0;
+        double             frequencyMinHz = 0.0;
+        double             frequencyMaxHz = 4000.0;
+        QVector<EqPoint>   points;        // FrequencyHz / GainDb / Q only -- ignore bandId/color
+    };
+
+    explicit ParametricEqWidget(QWidget* parent = nullptr);
+    ~ParametricEqWidget() override;
+
+    // Test-friendly accessors for the palette (still private data; just exposed read-only).
+    static int    defaultBandPaletteSize();
+    static QColor defaultBandPaletteAt(int index);
+
+    // -- Public Q-style getters/setters mirroring [Category] properties at
+    //    ucParametricEq.cs:449-1005 [v2.10.3.13].  Each setter follows the
+    //    Thetis early-return + clamp + side-effect pattern verbatim.
+
+    // EQ category -- ucParametricEq.cs:577-1005 [v2.10.3.13].
+    int    bandCount()                       const { return m_bandCount; }
+    void   setBandCount(int count);                                       // cs:577-603
+
+    double frequencyMinHz()                  const { return m_frequencyMinHz; }
+    void   setFrequencyMinHz(double hz);                                  // cs:605-624
+
+    double frequencyMaxHz()                  const { return m_frequencyMaxHz; }
+    void   setFrequencyMaxHz(double hz);                                  // cs:626-645
+
+    bool   logScale()                        const { return m_logScale; }
+    void   setLogScale(bool on);                                          // cs:647-660
+
+    double dbMin()                           const { return m_dbMin; }
+    void   setDbMin(double db);                                           // cs:662-681
+
+    double dbMax()                           const { return m_dbMax; }
+    void   setDbMax(double db);                                           // cs:683-702
+
+    double globalGainDb()                    const { return m_globalGainDb; }
+    void   setGlobalGainDb(double db);                                    // cs:704-720
+
+    bool   globalGainIsHorizLine()           const { return m_globalGainIsHorizLine; }
+    void   setGlobalGainIsHorizLine(bool on);                             // cs:722-735
+
+    bool   showReadout()                     const { return m_showReadout; }
+    void   setShowReadout(bool on);                                       // cs:737-746
+
+    bool   showDotReadings()                 const { return m_showDotReadings; }
+    void   setShowDotReadings(bool on);                                   // cs:748-761
+
+    bool   showDotReadingsAsComp()           const { return m_showDotReadingsAsComp; }
+    void   setShowDotReadingsAsComp(bool on);                             // cs:763-776
+
+    double minPointSpacingHz()               const { return m_minPointSpacingHz; }
+    void   setMinPointSpacingHz(double hz);                               // cs:778-792
+
+    bool   allowPointReorder()               const { return m_allowPointReorder; }
+    void   setAllowPointReorder(bool on);                                 // cs:794-807
+
+    bool   parametricEq()                    const { return m_parametricEq; }
+    void   setParametricEq(bool on);                                      // cs:809-820
+
+    double qMin()                            const { return m_qMin; }
+    void   setQMin(double q);                                             // cs:822-837
+
+    double qMax()                            const { return m_qMax; }
+    void   setQMax(double q);                                             // cs:839-854
+
+    bool   showBandShading()                 const { return m_showBandShading; }
+    void   setShowBandShading(bool on);                                   // cs:856-865
+
+    bool   usePerBandColours()               const { return m_usePerBandColours; }
+    void   setUsePerBandColours(bool on);                                 // cs:867-876
+
+    QColor bandShadeColor()                  const { return m_bandShadeColor; }
+    void   setBandShadeColor(const QColor& c);                            // cs:878-887
+
+    int    bandShadeAlpha()                  const { return m_bandShadeAlpha; }
+    void   setBandShadeAlpha(int alpha);                                  // cs:889-901
+
+    double bandShadeWeightCutoff()           const { return m_bandShadeWeightCutoff; }
+    void   setBandShadeWeightCutoff(double cutoff);                       // cs:903-915
+
+    bool   showAxisScales()                  const { return m_showAxisScales; }
+    void   setShowAxisScales(bool on);                                    // cs:917-926
+
+    int    axisTickLength()                  const { return m_axisTickLength; }
+    void   setAxisTickLength(int len);                                    // cs:928-940
+
+    QColor axisTextColor()                   const { return m_axisTextColor; }
+    void   setAxisTextColor(const QColor& c);                             // cs:942-951
+
+    QColor axisTickColor()                   const { return m_axisTickColor; }
+    void   setAxisTickColor(const QColor& c);                             // cs:953-962
+
+    double yAxisStepDb()                     const { return m_yAxisStepDb; }
+    void   setYAxisStepDb(double step);                                   // cs:559-575
+
+    int    selectedIndex()                   const { return m_selectedIndex; }
+    void   setSelectedIndex(int index);                                   // cs:970-1005
+
+    // From Thetis ucParametricEq.cs:964-968 [v2.10.3.13] -- IReadOnlyList<EqPoint>
+    // accessor.  Read-only by API contract; mutators must go through
+    // setPointHz / setPointData / setPointsData.
+    const QVector<EqPoint>& points()         const { return m_points; }
+
+    // Bar Chart category -- ucParametricEq.cs:449-557 [v2.10.3.13].
+    bool   barChartPeakHoldEnabled()         const { return m_barChartPeakHoldEnabled; }
+    void   setBarChartPeakHoldEnabled(bool on);                           // cs:449-470
+
+    int    barChartPeakHoldMs()              const { return m_barChartPeakHoldMs; }
+    void   setBarChartPeakHoldMs(int ms);                                 // cs:472-485
+
+    double barChartPeakDecayDbPerSecond()    const { return m_barChartPeakDecayDbPerSecond; }
+    void   setBarChartPeakDecayDbPerSecond(double dbPerSec);              // cs:487-501
+
+    QColor barChartFillColor()               const { return m_barChartFillColor; }
+    void   setBarChartFillColor(const QColor& c);                         // cs:503-512
+
+    int    barChartFillAlpha()               const { return m_barChartFillAlpha; }
+    void   setBarChartFillAlpha(int alpha);                               // cs:514-529
+
+    QColor barChartPeakColor()               const { return m_barChartPeakColor; }
+    void   setBarChartPeakColor(const QColor& c);                         // cs:531-540
+
+    int    barChartPeakAlpha()               const { return m_barChartPeakAlpha; }
+    void   setBarChartPeakAlpha(int alpha);                               // cs:542-557
+
+    // -- Point-edit public API (mirror cs:1134-1351 [v2.10.3.13]). --
+    // From Thetis ucParametricEq.cs:1134-1140 [v2.10.3.13] -- SetPointHz.
+    bool   setPointHz(int bandId, double frequencyHz, bool isDragging = false);
+
+    // From Thetis ucParametricEq.cs:1142-1150 [v2.10.3.13] -- GetIndexFromBandId.
+    int    getIndexFromBandId(int bandId)        const { return indexFromBandId(bandId); }
+
+    // From Thetis ucParametricEq.cs:1246-1258 [v2.10.3.13] -- GetPointData.
+    void   getPointData(int index, double& frequencyHz, double& gainDb, double& q) const;
+
+    // From Thetis ucParametricEq.cs:1260-1288 [v2.10.3.13] -- SetPointData.
+    bool   setPointData(int index, double frequencyHz, double gainDb, double q);
+
+    // From Thetis ucParametricEq.cs:1290-1309 [v2.10.3.13] -- GetPointsData.
+    void   getPointsData(QVector<double>& frequencyHz, QVector<double>& gainDb,
+                         QVector<double>& q) const;
+
+    // From Thetis ucParametricEq.cs:1311-1351 [v2.10.3.13] -- SetPointsData.
+    bool   setPointsData(const QVector<double>& frequencyHz,
+                         const QVector<double>& gainDb,
+                         const QVector<double>& q);
+
+    // -- JSON marshal (mirror cs:1460-1573 [v2.10.3.13]). --
+    // From Thetis ucParametricEq.cs:1460-1486 [v2.10.3.13] -- SaveToJson.
+    QString saveToJson() const;
+
+    // From Thetis ucParametricEq.cs:1488-1573 [v2.10.3.13] -- LoadFromJson.
+    bool    loadFromJson(const QString& json);
+
+public slots:
+    // From Thetis ucParametricEq.cs:1048-1105 [v2.10.3.13] -- public DrawBarChart slot.
+    void drawBarChartData(const QVector<double>& data);
+
+signals:
+    // From Thetis ucParametricEq.cs:353-358 [v2.10.3.13] -- public events.
+    // PointsChanged / GlobalGainChanged / SelectedIndexChanged carry an
+    // is_dragging bool so downstream consumers can throttle expensive
+    // reactions (e.g. a CFC re-dispatch) until the user releases the mouse.
+    // PointDataChanged carries the resolved point payload.  PointSelected /
+    // PointUnselected fire when the highlight moves between bands.
+    void pointsChanged          (bool isDragging);
+    void globalGainChanged      (bool isDragging);
+    void selectedIndexChanged   (bool isDragging);
+    void pointDataChanged       (int index, int bandId,
+                                 double frequencyHz, double gainDb, double q,
+                                 bool isDragging);
+    void pointSelected          (int index, int bandId,
+                                 double frequencyHz, double gainDb, double q);
+    void pointUnselected        (int index, int bandId,
+                                 double frequencyHz, double gainDb, double q);
+
+protected:
+    // Paint orchestration -- From Thetis ucParametricEq.cs:1575-1609 [v2.10.3.13].
+    void paintEvent(QPaintEvent* event) override;
+
+    // Interaction handlers -- From Thetis ucParametricEq.cs:1625-1995 [v2.10.3.13].
+    void mousePressEvent  (QMouseEvent* event) override;
+    void mouseMoveEvent   (QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void wheelEvent       (QWheelEvent* event) override;
+
+private:
+    // Draw helpers -- From Thetis ucParametricEq.cs:1575-2748 [v2.10.3.13].
+    void drawGrid           (QPainter& g, const QRect& plot);
+    void drawBarChart       (QPainter& g, const QRect& plot);
+    void drawBandShading    (QPainter& g, const QRect& plot);
+    void drawCurve          (QPainter& g, const QRect& plot);
+    void drawGlobalGainHandle(QPainter& g, const QRect& plot);
+    void drawPoints         (QPainter& g, const QRect& plot);
+    void drawDotReading     (QPainter& g, const QRect& plot, const EqPoint& p,
+                             float dotX, float dotY, float dotRadius);
+    void drawAxisScales     (QPainter& g, const QRect& plot);
+    void drawBorder         (QPainter& g, const QRect& plot);
+    void drawReadout        (QPainter& g, const QRect& plot);
+
+    // Bar chart helpers -- From Thetis ucParametricEq.cs:2751-2862 [v2.10.3.13].
+    void   applyBarChartPeakDecay (qint64 nowMs);
+    void   syncBarChartPeaksToData();
+    void   updateBarChartPeakTimerState();
+    QColor getPointDisplayColor(int index) const;
+
+    // Tick / readout formatting.
+    QString formatDbTick(double db, double stepDb) const;
+    QString formatHzTick(double hz)               const;
+    QString formatDotReadingHz(double hz)         const;
+    QString formatDotReadingDb(double db)         const;
+    QString formatHz(double hz)                   const;
+    QString formatDb(double db)                   const;
+
+private:
+    // From Thetis ucParametricEq.cs:254-274 [v2.10.3.13] -- _default_band_palette.
+    static const QVector<QColor>& defaultBandPalette();
+
+    // Band colour resolution -- From Thetis ucParametricEq.cs:2864-2871 [v2.10.3.13].
+    static QColor getBandBaseColor(int index);
+
+    // Axis math -- From Thetis ucParametricEq.cs:2951-3078 [v2.10.3.13].
+    QRect  computePlotRect()                                   const;
+    int    computedPlotMarginLeft()                            const;
+    int    computedPlotMarginRight()                           const;
+    int    computedPlotMarginBottom()                          const;
+    int    axisLabelMaxWidth()                                 const;
+    float  xFromFreq(const QRect& plot, double frequencyHz)    const;
+    float  yFromDb(const QRect& plot, double db)               const;
+    double freqFromX(const QRect& plot, int x)                 const;
+    double dbFromY(const QRect& plot, int y)                   const;
+    double getNormalizedFrequencyPosition(double freqHz)       const;
+    double getNormalizedFrequencyPosition(double freqHz, double minHz, double maxHz, bool useLog) const;
+    double frequencyFromNormalizedPosition(double t)           const;
+    double frequencyFromNormalizedPosition(double t, double minHz, double maxHz, bool useLog) const;
+    double getLogFrequencyCentreHz(double minHz, double maxHz) const;
+    double getLogFrequencyShape(double centreRatio)            const;
+    QVector<double> getLogFrequencyTicks(const QRect& plot)    const;
+    double chooseFrequencyStep(double span)                    const;
+    double chooseDbStep(double span)                           const;
+    double getYAxisStepDb()                                    const;
+
+    // Hit-test -- From Thetis ucParametricEq.cs:2910-2949 [v2.10.3.13].
+    int    hitTestPoint(const QRect& plot, QPoint pt)          const;
+    bool   hitTestGlobalGainHandle(const QRect& plot, QPoint pt) const;
+
+    // Ordering / clamping -- From Thetis ucParametricEq.cs:3163-3332 [v2.10.3.13].
+    void   resetPointsDefault();
+    void   rescaleFrequencies(double oldMin, double oldMax, double newMin, double newMax);
+    void   enforceOrdering(bool enforceSpacingAll);
+    void   clampAllGains();
+    void   clampAllQ();
+
+    // Locked endpoints -- From Thetis ucParametricEq.cs:3384-3394 [v2.10.3.13].
+    bool   isFrequencyLockedIndex(int index)                   const;
+    double getLockedFrequencyForIndex(int index)               const;
+
+    // Helper -- From Thetis ucParametricEq.cs:1142-1150 [v2.10.3.13] -- band lookup.
+    int      indexFromBandId(int bandId)                       const;
+
+    // From Thetis ucParametricEq.cs:1162-1244 [v2.10.3.13] -- private helper used
+    // by both setPointHz and (future) drag commit; not exposed publicly because
+    // callers should use the bandId-keyed setPointHz overload.
+    bool     setPointHzInternal(int index, double frequencyHz, bool isDragging);
+
+    // From Thetis ucParametricEq.cs:1997-2000 [v2.10.3.13].
+    bool     isDraggingNow()                                   const;
+
+    // From Thetis ucParametricEq.cs:1025-1039, 3334-3363 [v2.10.3.13] -- raise*
+    // helpers.  These are private signal forwarders so the call sites stay
+    // 1:1 with the C# source.  The `raisePointDataChanged` overload takes
+    // the index explicitly (rather than calling QVector::indexOf and
+    // requiring EqPoint::operator==): EqPoint is a value type without a
+    // natural equality, so the caller threads the resolved index through.
+    void     raisePointsChanged       (bool isDragging);
+    void     raiseGlobalGainChanged   (bool isDragging);
+    void     raiseSelectedIndexChanged(bool isDragging);
+    void     raisePointSelected       (int index, const EqPoint& p);
+    void     raisePointUnselected     (int index, const EqPoint& p);
+    void     raisePointDataChanged    (int index, const EqPoint& p, bool isDragging);
+
+    static double clamp(double v, double lo, double hi);
+
+    // -- Member state (mirrors private fields ucParametricEq.cs:276-351) --
+    QVector<EqPoint> m_points;
+    int              m_bandCount               = 10;
+
+    double           m_frequencyMinHz          = 0.0;
+    double           m_frequencyMaxHz          = 4000.0;
+
+    double           m_dbMin                   = -24.0;
+    double           m_dbMax                   =  24.0;
+
+    double           m_globalGainDb            = 0.0;
+    bool             m_globalGainIsHorizLine   = false;
+
+    int              m_selectedIndex           = -1;
+    int              m_dragIndex               = -1;
+    bool             m_draggingGlobalGain      = false;
+    bool             m_draggingPoint           = false;
+
+    // Margins, hit radii, axis ticks, palette flags, etc. -- defaults below match
+    // ucParametricEq.cs:367-447 verbatim.
+    int              m_plotMarginLeft          = 30;
+    int              m_plotMarginRight         = 28;
+    int              m_plotMarginTop           = 14;
+    int              m_plotMarginBottom        = 62;
+    double           m_yAxisStepDb             = 0.0;
+    int              m_pointRadius             = 5;
+    int              m_hitRadius               = 11;
+    double           m_qMin                    = 0.2;
+    double           m_qMax                    = 30.0;
+    double           m_minPointSpacingHz       = 5.0;
+    bool             m_allowPointReorder       = true;
+    bool             m_parametricEq            = true;
+    bool             m_showReadout             = true;
+    bool             m_showDotReadings         = false;
+    bool             m_showDotReadingsAsComp   = false;
+    int              m_globalHandleXOffset     = 6;
+    int              m_globalHandleSize        = 10;
+    int              m_globalHitExtra          = 6;
+    bool             m_showBandShading         = true;
+    bool             m_usePerBandColours       = true;
+    QColor           m_bandShadeColor          {200, 200, 200};
+    int              m_bandShadeAlpha          = 70;
+    double           m_bandShadeWeightCutoff   = 0.002;
+    bool             m_showAxisScales          = true;
+    QColor           m_axisTextColor           {170, 170, 170};
+    QColor           m_axisTickColor           {80,  80,  80};
+    int              m_axisTickLength          = 6;
+    bool             m_logScale                = false;
+
+    // Bar chart state (ucParametricEq.cs:340-351).
+    QVector<double>  m_barChartData;
+    QVector<double>  m_barChartPeakData;
+    QVector<qint64>  m_barChartPeakHoldUntilMs;
+    qint64           m_barChartPeakLastUpdateMs = 0;
+    QTimer*          m_barChartPeakTimer       = nullptr;
+    QColor           m_barChartFillColor       {0, 120, 255};
+    int              m_barChartFillAlpha       = 120;
+    QColor           m_barChartPeakColor       {160, 210, 255};
+    int              m_barChartPeakAlpha       = 230;
+    bool             m_barChartPeakHoldEnabled = true;
+    int              m_barChartPeakHoldMs      = 1000;
+    double           m_barChartPeakDecayDbPerSecond = 20.0;
+
+    // Drag-commit dirty flags (ucParametricEq.cs:296-299).
+    // C# tracks the active drag with EqPoint reference identity
+    // (`_drag_point_ref`); C++ does not need a parallel field because
+    // m_points stores by value and m_dragIndex (re-resolved by
+    // enforceOrdering's bandId lookup) is the canonical post-sort slot.
+    // Caching a pointer-into-vector would dangle if m_points were ever
+    // resized -- e.g. a future loadFromJson swapping vector contents
+    // mid-drag.  Always read via m_points.at(m_dragIndex).
+    bool             m_dragDirtyPoint          = false;
+    bool             m_dragDirtyGlobalGain     = false;
+    bool             m_dragDirtySelectedIndex  = false;
+};
+
+} // namespace NereusSDR

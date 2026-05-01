@@ -1303,8 +1303,12 @@ void TxApplet::requestOpenCfcDialog()
         QWidget* host = window();
         m_cfcDialog = new TxCfcDialog(
             &m_model->transmitModel(),
-            m_model->micProfileManager(),
+            m_model->txChannel(),
             host ? host : static_cast<QWidget*>(this));
+    } else {
+        // Connection may have come up since the dialog was created.
+        // Refresh the TxChannel pointer so the bar chart timer can poll WDSP.
+        m_cfcDialog->setTxChannel(m_model->txChannel());
     }
     m_cfcDialog->show();
     m_cfcDialog->raise();

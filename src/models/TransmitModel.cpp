@@ -633,6 +633,12 @@ void TransmitModel::loadFromSettings(const QString& mac)
     setTxEqCtfmode(s.value(pfx + QLatin1String("eq/ctfmode"), QStringLiteral("0")).toInt());
     setTxEqWintype(s.value(pfx + QLatin1String("eq/wintype"), QStringLiteral("0")).toInt());
 
+    // TX EQ parametric blob — opaque string round-trip.  Phase 3M-3a-ii
+    // follow-up Batch 6.  No Thetis database.cs default — TXProfile column
+    // ships empty until ucParametricEq populates it.
+    setTxEqParaEqData(s.value(pfx + QLatin1String("TXParaEQData"),
+                                QStringLiteral("")).toString());
+
     // ── Phase Rotator (3M-3a-ii Batch 2) ──────────────────────────────────
     // Defaults from Thetis database.cs:4726-4730 [v2.10.3.13].
     setPhaseRotatorEnabled(s.value(pfx + QLatin1String("CFCPhaseRotatorEnabled"),
@@ -762,6 +768,9 @@ void TransmitModel::persistToSettings(const QString& mac) const
                m_txEqMp ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(pfx + QLatin1String("eq/ctfmode"),  QString::number(m_txEqCtfmode));
     s.setValue(pfx + QLatin1String("eq/wintype"),  QString::number(m_txEqWintype));
+
+    // TX EQ parametric blob (3M-3a-ii follow-up Batch 6).
+    s.setValue(pfx + QLatin1String("TXParaEQData"), m_txEqParaEqData);
 
     // ── Phase Rotator / CFC / CPDR / CESSB (3M-3a-ii Batch 2) ────────────
     s.setValue(pfx + QLatin1String("CFCPhaseRotatorEnabled"),
@@ -1294,6 +1303,19 @@ void TransmitModel::setTxEqWintype(int wintype)
     m_txEqWintype = wintype;
     persistOne(QStringLiteral("eq/wintype"), QString::number(m_txEqWintype));
     emit txEqWintypeChanged(wintype);
+}
+
+void TransmitModel::setTxEqParaEqData(const QString& data)
+{
+    if (data == m_txEqParaEqData) { return; }
+    // 3M-3a-ii follow-up Batch 6 — opaque blob, no validation.  Mirror of
+    // setCfcParaEqData (Batch 2).  Stored under per-MAC AppSettings key
+    // "TXParaEQData" alongside the other TX EQ profile fields; the
+    // ParametricEqWidget layer wraps/unwraps the inner JSON via
+    // ParaEqEnvelope (gzip+base64url) so this stays a pass-through.
+    m_txEqParaEqData = data;
+    persistOne(QStringLiteral("TXParaEQData"), data);
+    emit txEqParaEqDataChanged(data);
 }
 
 // ── CFC / CPDR / CESSB / Phase Rotator (3M-3a-ii Batch 2) ─────────────────

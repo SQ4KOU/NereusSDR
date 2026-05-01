@@ -9,12 +9,14 @@
 //   setup.cs:9615-9656 [v2.10.3.13] — btnTXProfileDelete_Click
 //
 // NereusSDR collapses the Thetis many-table TXProfile schema (~206 columns
-// in DB.ds.Tables["TXProfile"]) to the live-fields-only subset (50 keys =
-// 15 mic/VOX/MON + 7 two-tone + 1 drive-power-source enum + 22 EQ + 3
-// Leveler + 2 ALC).  19 of Thetis's 21 factory profiles are deferred to
-// 3M-3a sub-PRs that ship CFC / DEXP backends; 3M-3a-i G adds the EQ +
-// Leveler + ALC bundle on top of the 3M-1c chunk-F base (which seeded
-// only the "Default" profile).
+// in DB.ds.Tables["TXProfile"]) to the live-fields-only subset (51 keys =
+// 15 mic/VOX/MON + 7 two-tone + 1 drive-power-source enum + 22 EQ + 1
+// TX EQ blob + 3 Leveler + 2 ALC).  19 of Thetis's 21 factory profiles
+// are deferred to 3M-3a sub-PRs that ship CFC / DEXP backends; 3M-3a-i G
+// adds the EQ + Leveler + ALC bundle on top of the 3M-1c chunk-F base
+// (which seeded only the "Default" profile).  The TX EQ parametric blob
+// (TXParaEQData) is the 51st live key; landed in Phase 3M-3a-ii follow-up
+// Batch 6 alongside the ParametricEqWidget JSON port.
 //
 // Per-MAC AppSettings layout (parallel to hardware/<mac>/tx/<key> from
 // TransmitModel L.2):
@@ -171,8 +173,8 @@ private:
     void removeProfileKeys(const QString& name);
 
     /// Capture current TransmitModel state into a live-field key→value hash.
-    /// 91 keys (50 mic/VOX/MON/two-tone/EQ/Lev/ALC + 41 CFC/CPDR/CESSB/PhRot);
-    /// matches defaultProfileValues() in shape.
+    /// 92 keys (51 mic/VOX/MON/two-tone/EQ/Lev/ALC/TXParaEQData + 41
+    /// CFC/CPDR/CESSB/PhRot); matches defaultProfileValues() in shape.
     static QHash<QString, QVariant> captureLiveValues(const TransmitModel* tx);
 
     /// Apply a profile's key→value hash back to a TransmitModel via the
