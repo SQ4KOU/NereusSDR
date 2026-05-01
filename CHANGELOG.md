@@ -2,7 +2,69 @@
 
 ## [Unreleased]
 
-### Added (Phase 3Q — Connection Workflow Refactor / chrome polish)
+### Added (Phase 3Q — Connection Workflow Refactor / connect-flow rebuild)
+
+Triggered by an April 2026 user report: an HL2 across a WireGuard
+tunnel couldn't be reached through the existing manual-entry path,
+and the disconnect state gave no feedback beyond a frozen spectrum.
+This entry covers the connect / discover / disconnect flow rebuild
+and the chrome layer that surrounds it.
+
+- **Single ConnectionState state machine** — `Disconnected → Probing →
+  Connecting → Connected → (Disconnected | LinkLost)` with broadcast
+  scan and unicast probe as different *triggers* into the same path.
+  Replaces the earlier broadcast-only-then-blind-connect flow.
+
+- **Unicast probe** — `RadioDiscovery::probeAddress(addr, port, timeout)`
+  with 1.5 s timeout, parallel P1 + P2 attempts, parses replies via the
+  existing P1 / P2 reply helpers. Lets the Connect menu and the manual
+  Add Radio dialog reach radios that aren't reachable via UDP broadcast
+  (Layer-3 VPNs like WireGuard / ZeroTier / Tailscale).
+
+- **Add Radio dialog rebuild** — replaces the 9-board picker with a
+  16-SKU model dropdown organized by silicon family in `<optgroup>`s
+  (Auto-detect first, then Atlas / Hermes (3) / Hermes II (2) /
+  Angelia / Orion / Orion MkII (5) / Hermes Lite 2 / Saturn (2)).
+  Two action buttons — `Probe and connect now` and `Save offline`.
+  Failure path keeps the dialog open with form preserved + red
+  error band; success path auto-closes and lands the row in the
+  table tagged "(probe)".
+
+- **ConnectionPanel polish.** Modal kept; status strip up top with
+  inline Disconnect; state-pill column (🟢 Online <60 s · 🟡 Stale
+  60 s–5 min · 🔴 Offline) replaces the bare `●`; Last Seen column
+  replaces MAC; single ↻ Scan in the table header replaces
+  Start/Stop Discovery; Auto-connect-on-launch checkbox added to the
+  detail panel; auto-opens on launch + on disconnect; auto-closes
+  1 s after Connected.
+
+- **Radio menu rework.** `Connect (⌘K) · Disconnect (⌘⇧K) · Discover
+  Now · Manage Radios… · Antenna Setup… (NYI) · Transverters… (NYI) ·
+  Protocol Info` with state-aware enablement (Connect/Disconnect
+  mutually exclusive; Protocol Info follows connection). Replaces
+  the prior four-item-three-aliases set.
+
+- **Spectrum disconnect overlay** — 800 ms fade to ~40 % opacity +
+  DISCONNECTED label + click-anywhere-to-open-panel. Multi-cue
+  feedback closes the loop on the "spectrum just freezes when the
+  radio drops" complaint.
+
+- **Stale policy change.** Saved radios *never* age out (previously
+  dropped at 15 s); discovered-only radios age out at 60 s (raised
+  from 15 s, long enough not to flap); the connected MAC stays
+  exempt.
+
+- **Auto-connect-on-launch** — uses the existing per-radio
+  `AppSettings::autoConnect` flag; on failure the panel auto-opens
+  with the target highlighted offline + a status-bar diagnostic.
+  Multi-flag case picks most-recent-connected MAC + a one-time
+  setup-bar warning.
+
+- **macKey migration.** Offline entries saved with the synthetic
+  `manual-<IP>-<port>` key get migrated under the real MAC on first
+  probe success, preserving Name / Model / Auto-connect / Pin-to-MAC.
+
+### Added (Phase 3Q — chrome layer)
 
 - **Title-bar ConnectionSegment.** Collapses the old verbose connection
   text into a compact `[state dot] [▲ tx Mbps] [RTT ms] [▼ rx Mbps] [♪ audio]`
