@@ -69,6 +69,9 @@ public:
 
     int getAdcForDdc(int ddc) const override;
 
+    // Protocol identifier — 1 for OpenHPSDR P1.  See RadioConnection::protocolVersion.
+    int protocolVersion() const override { return 1; }
+
     // Wire-format compose helpers — static, testable in isolation.
     // Each implementation cites its Thetis source line.
     static void composeEp2Frame(quint8 out[1032], quint32 seq, int ccAddress,
