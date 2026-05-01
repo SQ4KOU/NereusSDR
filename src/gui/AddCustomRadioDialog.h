@@ -142,8 +142,15 @@ private:
     QFrame*      m_feedbackFrame{nullptr};
     QLabel*      m_feedbackLabel{nullptr};
 
-    // Probed result — populated on successful probe, caller reads via result()
+    // Probed result — populated on successful probe OR pre-populated by
+    // setEditTarget() to carry the existing MAC across edits without
+    // synthesising a duplicate MANUAL: key. The flag below disambiguates
+    // the two sources: only a real probe makes m_probedInfo authoritative
+    // for IP/port/protocol/model. Without that gate, edit-flow IP/port/
+    // protocol/model changes silently lost in result() — Codex review
+    // P1 against PR #158, src/gui/AddCustomRadioDialog.cpp:760.
     RadioInfo    m_probedInfo;
+    bool         m_probedInfoFromProbe{false};
 
     // Flag set when user chose "Save offline" instead of probing
     bool         m_savedOffline{false};

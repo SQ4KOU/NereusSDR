@@ -175,11 +175,17 @@ void AddCustomRadioDialog::setEditTarget(const RadioInfo& info,
     m_pinToMacCheck->setChecked(pinToMac);
     m_autoConnectCheck->setChecked(autoConnect);
 
-    // Seed m_probedInfo with the existing entry so result() returns the
+    // Seed m_probedInfo with the existing entry so result() reuses the
     // same MAC on save — otherwise an edit of a probe-verified entry
     // would synthesise a new MANUAL: key and split into a duplicate row.
+    // m_probedInfoFromProbe stays false: this is *not* a probe-verified
+    // payload, so result() must build from the live form fields rather
+    // than echoing this stale snapshot back. (Codex P1 review against
+    // PR #158 — without this gate, IP/port/protocol/model edits were
+    // silently discarded; only the name was overlaid on save.)
     if (!info.macAddress.startsWith(QStringLiteral("MANUAL:"))) {
         m_probedInfo = info;
+        m_probedInfoFromProbe = false;
     }
 
     validateFields();  // re-evaluate Save button enablement
@@ -534,6 +540,7 @@ void AddCustomRadioDialog::onProbeClicked()
     connect(disc, &RadioDiscovery::radioDiscovered, this,
             [this, disc](const RadioInfo& info) {
                 m_probedInfo = info;
+                m_probedInfoFromProbe = true;   // real probe — result() trusts this payload
 
                 // User-picked model overrides the probe-detected silicon family default.
                 // Only override when the user chose something other than Auto-detect.
@@ -754,10 +761,15 @@ void AddCustomRadioDialog::hideProbingOverlay()
 
 RadioInfo AddCustomRadioDialog::result() const
 {
-    // If probe succeeded, return the probed info — but layer the user-entered
-    // Name on top so the row in the panel uses what the user typed (probe
-    // replies don't carry a name).
-    if (!m_savedOffline && m_probedInfo.macAddress.length() > 0) {
+    // Probe-then-save path: m_probedInfo carries a real probe payload and
+    // m_probedInfoFromProbe gates this branch. The flag exists to
+    // disambiguate from setEditTarget(), which also pre-populates
+    // m_probedInfo (to keep the existing MAC stable across edits) but
+    // does not constitute a verified probe — falling through that case
+    // dropped IP/port/protocol/model edits on the floor (Codex P1
+    // review against PR #158, AddCustomRadioDialog.cpp:760).
+    if (!m_savedOffline && m_probedInfoFromProbe
+        && m_probedInfo.macAddress.length() > 0) {
         RadioInfo verified = m_probedInfo;
         const QString userName = m_nameEdit->text().trimmed();
         if (!userName.isEmpty()) {

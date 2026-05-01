@@ -475,7 +475,22 @@ MainWindow::MainWindow(QWidget* parent)
         }
 
         // 6. Click affordances.
+        // The segment's mousePressEvent (TitleBar.cpp:382-387) routes
+        // anywhere-click in the disconnected state to rttClicked so a
+        // single signal covers both "click for diagnostics" (when
+        // connected) and "click to connect" (when disconnected). Branch
+        // here on the live connection state to honor the "Click to
+        // connect" affordance the segment paints — without this branch,
+        // a disconnected click trapped the user in NetworkDiagnostics
+        // instead of opening the connection panel (Codex P2 review
+        // against PR #158, MainWindow.cpp:482).
         connect(seg, &ConnectionSegment::rttClicked, this, [this]() {
+            const auto state = m_radioModel->connectionState();
+            if (state == ConnectionState::Disconnected
+                || state == ConnectionState::LinkLost) {
+                showConnectionPanel();
+                return;
+            }
             auto* dlg = new NetworkDiagnosticsDialog(
                 m_radioModel, m_radioModel->audioEngine(), this);
             dlg->setAttribute(Qt::WA_DeleteOnClose);
