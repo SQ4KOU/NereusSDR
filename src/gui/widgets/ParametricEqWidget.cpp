@@ -531,7 +531,6 @@ void ParametricEqWidget::resetPointsDefault() {
     m_dragIndex          = -1;
     m_draggingPoint      = false;
     m_draggingGlobalGain = false;
-    m_dragPointRef           = nullptr;
     m_dragDirtyPoint         = false;
     m_dragDirtyGlobalGain    = false;
     m_dragDirtySelectedIndex = false;
@@ -1622,7 +1621,6 @@ void ParametricEqWidget::mousePressEvent(QMouseEvent* event) {
         m_draggingGlobalGain = true;
         m_draggingPoint      = false;
         m_dragIndex          = -1;
-        m_dragPointRef       = nullptr;
         m_dragDirtyPoint         = false;
         m_dragDirtyGlobalGain    = false;
         m_dragDirtySelectedIndex = false;
@@ -1637,7 +1635,6 @@ void ParametricEqWidget::mousePressEvent(QMouseEvent* event) {
             m_draggingPoint      = true;
             m_draggingGlobalGain = false;
             m_dragIndex          = idx;
-            m_dragPointRef       = &m_points[idx];
             m_dragDirtyPoint         = false;
             m_dragDirtyGlobalGain    = false;
             m_dragDirtySelectedIndex = false;
@@ -1747,12 +1744,11 @@ void ParametricEqWidget::mouseMoveEvent(QMouseEvent* event) {
 
             m_dragDirtyPoint = true;
 
-            // After enforceOrdering, m_dragIndex and m_dragPointRef may have
-            // been re-resolved; recapture both before raising the data signal.
+            // After enforceOrdering, m_dragIndex may have been re-resolved
+            // by the bandId lookup; reread the point fresh from m_points
+            // before raising the data signal.
             int curIdx = m_dragIndex;
             if (curIdx >= 0 && curIdx < m_points.size()) {
-                m_dragPointRef = &m_points[curIdx];
-
                 raisePointsChanged(true);
                 const EqPoint& curP = m_points.at(curIdx);
                 if (qAbs(curP.frequencyHz - oldF) > 0.000001
@@ -1789,7 +1785,6 @@ void ParametricEqWidget::mouseMoveEvent(QMouseEvent* event) {
 void ParametricEqWidget::mouseReleaseEvent(QMouseEvent* /*event*/) {
     bool wasDraggingPoint    = m_draggingPoint;
     bool wasDraggingGlobal   = m_draggingGlobalGain;
-    EqPoint* dragRef         = m_dragPointRef;
     int dragIdx              = m_dragIndex;
     bool pointDirty          = m_dragDirtyPoint;
     bool globalDirty         = m_dragDirtyGlobalGain;
@@ -1798,15 +1793,18 @@ void ParametricEqWidget::mouseReleaseEvent(QMouseEvent* /*event*/) {
     m_draggingGlobalGain     = false;
     m_draggingPoint          = false;
     m_dragIndex              = -1;
-    m_dragPointRef           = nullptr;
     m_dragDirtyPoint         = false;
     m_dragDirtyGlobalGain    = false;
     m_dragDirtySelectedIndex = false;
 
+    // Use m_points.at(dragIdx) directly rather than a cached pointer.
+    // m_dragIndex is the post-sort canonical slot from enforceOrdering's
+    // bandId re-resolution; pointer-into-vector caching would dangle if
+    // m_points were ever resized (e.g. Task 5 loadFromJson).
     if (wasDraggingPoint && pointDirty) {
         raisePointsChanged(false);
-        if (dragRef && dragIdx >= 0 && dragIdx < m_points.size()) {
-            raisePointDataChanged(dragIdx, *dragRef, false);
+        if (dragIdx >= 0 && dragIdx < m_points.size()) {
+            raisePointDataChanged(dragIdx, m_points.at(dragIdx), false);
         }
     }
 

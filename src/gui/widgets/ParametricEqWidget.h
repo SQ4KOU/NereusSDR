@@ -326,7 +326,13 @@ private:
     double           m_barChartPeakDecayDbPerSecond = 20.0;
 
     // Drag-commit dirty flags (ucParametricEq.cs:296-299).
-    EqPoint*         m_dragPointRef            = nullptr;
+    // C# tracks the active drag with EqPoint reference identity
+    // (`_drag_point_ref`); C++ does not need a parallel field because
+    // m_points stores by value and m_dragIndex (re-resolved by
+    // enforceOrdering's bandId lookup) is the canonical post-sort slot.
+    // Caching a pointer-into-vector would dangle if m_points were ever
+    // resized -- e.g. a future loadFromJson swapping vector contents
+    // mid-drag.  Always read via m_points.at(m_dragIndex).
     bool             m_dragDirtyPoint          = false;
     bool             m_dragDirtyGlobalGain     = false;
     bool             m_dragDirtySelectedIndex  = false;

@@ -473,6 +473,29 @@ void TestParametricEqInteraction::releaseFiresFinalNonDraggingSignal() {
     QSignalSpy spyPC (&w, &NereusSDR::ParametricEqWidget::pointsChanged);
     QSignalSpy spyPDC(&w, &NereusSDR::ParametricEqWidget::pointDataChanged);
 
+    // Pin signal-emit order: downstream observers (future TxCfcDialog
+    // CFC-redispatch) depend on pointsChanged firing before
+    // pointDataChanged.  See mouseReleaseEvent body cs:1803-1844 /
+    // ParametricEqWidget.cpp:1788-1822.
+    //
+    // This drag setup only marks m_dragDirtyPoint (no global-drag, no
+    // mid-drag reorder), so only the first if-block fires:
+    //   1. raisePointsChanged(false)
+    //   2. raisePointDataChanged(dragIdx, ..., false)
+    // wasDraggingGlobal && globalDirty -> false (band drag, not global).
+    // selectedDirty -> false (no mid-drag reorder triggered the
+    // m_dragDirtySelectedIndex flag).  A 3-band reorder test that
+    // exercises selectedDirty's release path is queued as Task 5.
+    QStringList emitOrder;
+    QObject::connect(&w, &NereusSDR::ParametricEqWidget::pointsChanged,
+                     [&]() { emitOrder << QStringLiteral("pointsChanged"); });
+    QObject::connect(&w, &NereusSDR::ParametricEqWidget::pointDataChanged,
+                     [&]() { emitOrder << QStringLiteral("pointDataChanged"); });
+    QObject::connect(&w, &NereusSDR::ParametricEqWidget::globalGainChanged,
+                     [&]() { emitOrder << QStringLiteral("globalGainChanged"); });
+    QObject::connect(&w, &NereusSDR::ParametricEqWidget::selectedIndexChanged,
+                     [&]() { emitOrder << QStringLiteral("selectedIndexChanged"); });
+
     QTest::mouseRelease(&w, Qt::LeftButton, Qt::NoModifier, moved);
 
     // Release fires exactly one pointsChanged(false) + one pointDataChanged(false).
@@ -480,6 +503,15 @@ void TestParametricEqInteraction::releaseFiresFinalNonDraggingSignal() {
     QCOMPARE(spyPDC.count(), 1);
     QCOMPARE(spyPC.last().at(0).toBool(),  false);
     QCOMPARE(spyPDC.last().at(5).toBool(), false);
+
+    // Order matches mouseReleaseEvent body cs:1803-1844 /
+    // ParametricEqWidget.cpp:1788-1822: pointsChanged before
+    // pointDataChanged.  No globalGainChanged / selectedIndexChanged
+    // fired because their dirty flags weren't set in this drag scenario.
+    QCOMPARE(emitOrder, (QStringList{
+        QStringLiteral("pointsChanged"),
+        QStringLiteral("pointDataChanged"),
+    }));
 
     // No longer dragging.
     QVERIFY(!w.draggingPoint());
@@ -497,6 +529,17 @@ void TestParametricEqInteraction::clickOnEmptyAreaDeselects() {
     w.setSelectedIndex(idx);
     QCOMPARE(w.selectedIndex(), idx);
 
+    // Capture the previously-selected band's full data BEFORE the empty-
+    // area click so we can verify the pointUnselected payload reflects
+    // that band, NOT the empty-click position.  A regression that emitted
+    // pointUnselected(idx, 0, 0.0, 0.0, 0.0) (zeroed payload) would still
+    // pass an index-only assertion.
+    const auto& prevP = w.pointsConst().at(idx);
+    int    prevBandId = prevP.bandId;
+    double prevFreq   = prevP.frequencyHz;
+    double prevGain   = prevP.gainDb;
+    double prevQ      = prevP.q;
+
     QSignalSpy spyUnsel(&w, &NereusSDR::ParametricEqWidget::pointUnselected);
     QSignalSpy spyIdxCh(&w, &NereusSDR::ParametricEqWidget::selectedIndexChanged);
 
@@ -512,8 +555,16 @@ void TestParametricEqInteraction::clickOnEmptyAreaDeselects() {
     QCOMPARE(spyUnsel.count(), 1);
     QCOMPARE(spyIdxCh.count(), 1);
 
+    // Verify ALL 5 payload args match the previously-selected band, not
+    // the empty-click position.  raisePointUnselected uses the cached
+    // oldPoint snapshot from setSelectedIndex (cs:1033-1039 /
+    // ParametricEqWidget.cpp:1561-1564).
     auto unsel = spyUnsel.takeFirst();
-    QCOMPARE(unsel.at(0).toInt(), idx);
+    QCOMPARE(unsel.at(0).toInt(),    idx);
+    QCOMPARE(unsel.at(1).toInt(),    prevBandId);
+    QCOMPARE(unsel.at(2).toDouble(), prevFreq);
+    QCOMPARE(unsel.at(3).toDouble(), prevGain);
+    QCOMPARE(unsel.at(4).toDouble(), prevQ);
 
     QTest::mouseRelease(&w, Qt::LeftButton, Qt::NoModifier, emptySpot);
 }
