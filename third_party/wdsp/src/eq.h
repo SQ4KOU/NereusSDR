@@ -67,13 +67,13 @@ extern void setSamplerate_eqp (EQP a, int rate);
 
 extern void setSize_eqp (EQP a, int size);
 
-__declspec (dllexport) void SetRXAEQNC (int channel, int nc);
+void SetRXAEQNC (int channel, int nc);
 
-__declspec (dllexport) void SetRXAEQMP (int channel, int mp);
+void SetRXAEQMP (int channel, int mp);
 
-__declspec (dllexport) void SetTXAEQNC (int channel, int nc);
+void SetTXAEQNC (int channel, int nc);
 
-__declspec (dllexport) void SetTXAEQMP (int channel, int mp);
+void SetTXAEQMP (int channel, int mp);
 
 #endif
 

@@ -184,7 +184,7 @@ extern void setDSPBuffsize_txa (int channel);
 
 // TXA Properties
 
-extern __declspec (dllexport) void SetTXAMode (int channel, int mode);
+extern void SetTXAMode (int channel, int mode);
 
 extern void TXAResCheck (int channel);
 

@@ -76,15 +76,15 @@ extern void desize_iqc (IQC a);
 
 // TXA Properties
 
-extern __declspec (dllexport)  void GetTXAiqcValues (int channel, double* cm, double* cc, double* cs);
+extern  void GetTXAiqcValues (int channel, double* cm, double* cc, double* cs);
 
-extern __declspec (dllexport)  void SetTXAiqcValues (int channel, double* cm, double* cc, double* cs);
+extern  void SetTXAiqcValues (int channel, double* cm, double* cc, double* cs);
 
-extern __declspec (dllexport)  void SetTXAiqcSwap (int channel, double* cm, double* cc, double* cs);
+extern  void SetTXAiqcSwap (int channel, double* cm, double* cc, double* cs);
 
-extern __declspec (dllexport)  void SetTXAiqcStart (int channel, double* cm, double* cc, double* cs);
+extern  void SetTXAiqcStart (int channel, double* cm, double* cc, double* cs);
 
-extern __declspec (dllexport)  void SetTXAiqcEnd (int channel);
+extern  void SetTXAiqcEnd (int channel);
 
 void GetTXAiqcDogCount (int channel, int* count);
 

@@ -211,7 +211,7 @@ extern void setDSPBuffsize_rxa (int channel);
 
 // RXA Properties
 
-extern __declspec (dllexport) void SetRXAMode (int channel, int mode);
+extern void SetRXAMode (int channel, int mode);
 
 extern void RXAResCheck (int channel);
 

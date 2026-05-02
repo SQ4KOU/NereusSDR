@@ -47,10 +47,10 @@ extern void destroy_div (MDIV pdiv);
 
 extern void xdiv (MDIV pdiv);
 
-extern __declspec(dllexport) void xdivEXT (int id, int nsamples, double **in, double *out);
+extern void xdivEXT (int id, int nsamples, double **in, double *out);
 
-extern __declspec(dllexport) void create_divEXT (int id, int run, int nr, int size);
+extern void create_divEXT (int id, int run, int nr, int size);
 
-extern __declspec(dllexport) void destroy_divEXT (int id);
+extern void destroy_divEXT (int id);
 
 #endif

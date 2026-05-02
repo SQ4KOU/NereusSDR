@@ -72,16 +72,16 @@ extern void setSize_fmmod (FMMOD a, int size);
 
 // TXA Properties
 
-extern __declspec (dllexport) void SetTXAFMDeviation (int channel, double deviation);
+extern void SetTXAFMDeviation (int channel, double deviation);
 
-extern __declspec (dllexport) void SetTXACTCSSFreq (int channel, double freq);
+extern void SetTXACTCSSFreq (int channel, double freq);
 
-extern __declspec (dllexport) void SetTXACTCSSRun (int channel, int run);
+extern void SetTXACTCSSRun (int channel, int run);
 
-extern __declspec (dllexport) void SetTXAFMMP (int channel, int mp);
+extern void SetTXAFMMP (int channel, int mp);
 
-extern __declspec (dllexport) void SetTXAFMNC (int channel, int nc);
+extern void SetTXAFMNC (int channel, int nc);
 
-extern __declspec (dllexport) void SetTXAFMAFFreqs (int channel, double low, double high);
+extern void SetTXAFMAFFreqs (int channel, double low, double high);
 
 #endif

@@ -2,12 +2,5 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- NereusSDRVAX is an Audio Server Plugin (CoreAudio HAL plugin).
-         It loads into coreaudiod and uses only the AudioServerPlugIn API,
-         no third-party dylibs. The empty entitlements dict is
-         intentional — hardened runtime alone (via codesign --options
-         runtime) provides the right defaults for this plugin. If
-         notarization rejects with library-validation complaints, add
-         com.apple.security.cs.disable-library-validation here. -->
 </dict>
 </plist>

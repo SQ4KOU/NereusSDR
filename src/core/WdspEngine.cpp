@@ -130,58 +130,72 @@ bool WdspEngine::initialize(const QString& configDir)
 
     // Note: Thetis wisdom files are NOT reusable — FFTW wisdom is specific
     // to the exact FFTW build. Copying across builds hangs on import.
-    bool needsGeneration = needsWisdomGeneration(m_configDir);
-    QByteArray configPath = m_configDir.toUtf8();
+    //
+    // Always run wisdom load/regenerate on a worker thread with progress UI.
+    // We previously had a "fast path" that called WDSPwisdom synchronously on
+    // the main thread when wdspWisdom00 already existed, on the assumption
+    // that sync load is instant.  That assumption is wrong: WDSPwisdom
+    // silently regenerates any plans missing from the cached file, which
+    // can take minutes — the main thread freezes (beach ball on macOS) with
+    // no progress dialog because wisdomProgress is never emitted.
+    //
+    // The MainWindow handler at MainWindow.cpp:583 already guards
+    //   if (!m_wisdomDialog && percent < 100) { create dialog; }
+    // so a genuinely cached/fast load that completes before the 250 ms poll
+    // never pops a dialog.  Only sub-poll fast loads stay silent — which is
+    // fine, the user doesn't need feedback for a sub-second operation.
+    // Detect whether wisdom file already exists — controls impulse-cache
+    // deletion AND the wisdomWasRebuilt flag passed to finishInitialization()
+    // (Task 4.3 needs this to decide whether to load a stale on-disk impulse
+    // cache after a wisdom rebuild).
+    const bool needsGeneration = needsWisdomGeneration(m_configDir);
 
-    if (!needsGeneration) {
-        // Fast path: wisdom file exists — WDSPwisdom just loads it (instant).
-        // Safe to call on main thread.
-        qCInfo(lcDsp) << "Loading existing WDSP wisdom file...";
-        WDSPwisdom(configPath.data());
-        qCInfo(lcDsp) << "WDSP wisdom loaded";
-        finishInitialization(/*wisdomWasRebuilt=*/false);
-    } else {
-        // Slow path: generate wisdom on a background thread with progress.
-        // Wisdom rebuild also invalidates any saved impulse cache —
-        // From Thetis radio.cs:140-152 [v2.10.3.13]: delete impulse_cache.dat
-        // when wisdom is rebuilt so we start afresh.
-        qCInfo(lcDsp) << "Generating WDSP wisdom (first run, may take several minutes)...";
-
+    // Wisdom rebuild also invalidates any saved impulse cache —
+    // From Thetis radio.cs:140-152 [v2.10.3.13]: delete impulse_cache.bin
+    // when wisdom is rebuilt so we start afresh.
+    if (needsGeneration) {
         QString cacheFile = m_configDir + QStringLiteral("impulse_cache.bin");
         if (QFile::exists(cacheFile)) {
             QFile::remove(cacheFile);
             qCInfo(lcDsp) << "Deleted stale impulse cache (wisdom rebuilt)";
         }
-
-        auto* wisdomThread = QThread::create([configPath]() {
-            WDSPwisdom(const_cast<char*>(configPath.constData()));
-        });
-        wisdomThread->setObjectName(QStringLiteral("WisdomThread"));
-
-        // Poll wisdom_get_status() for progress updates
-        auto* pollTimer = new QTimer(this);
-        pollTimer->setInterval(250);
-
-        connect(wisdomThread, &QThread::finished, this, [this, wisdomThread, pollTimer]() {
-            pollTimer->stop();
-            pollTimer->deleteLater();
-            wisdomThread->deleteLater();
-            emit wisdomProgress(100, QStringLiteral("FFTW planning complete"));
-            finishInitialization(/*wisdomWasRebuilt=*/true);
-        });
-
-        connect(pollTimer, &QTimer::timeout, this, [this]() {
-            char* status = wisdom_get_status();
-            if (status && status[0] != '\0') {
-                int pct = estimateWisdomPercent(status);
-                QString msg = QString::fromUtf8(status).trimmed();
-                emit wisdomProgress(pct, msg);
-            }
-        });
-
-        wisdomThread->start();
-        pollTimer->start();
     }
+
+    QByteArray configPath = m_configDir.toUtf8();
+
+    qCInfo(lcDsp) << "Initializing WDSP wisdom on background thread"
+                  << "(load if cached, regenerate any missing plans)"
+                  << "needsGeneration=" << needsGeneration;
+
+    auto* wisdomThread = QThread::create([configPath]() {
+        WDSPwisdom(const_cast<char*>(configPath.constData()));
+    });
+    wisdomThread->setObjectName(QStringLiteral("WisdomThread"));
+
+    // Poll wisdom_get_status() for progress updates
+    auto* pollTimer = new QTimer(this);
+    pollTimer->setInterval(250);
+
+    connect(wisdomThread, &QThread::finished, this,
+            [this, wisdomThread, pollTimer, needsGeneration]() {
+        pollTimer->stop();
+        pollTimer->deleteLater();
+        wisdomThread->deleteLater();
+        emit wisdomProgress(100, QStringLiteral("FFTW planning complete"));
+        finishInitialization(/*wisdomWasRebuilt=*/needsGeneration);
+    });
+
+    connect(pollTimer, &QTimer::timeout, this, [this]() {
+        char* status = wisdom_get_status();
+        if (status && status[0] != '\0') {
+            int pct = estimateWisdomPercent(status);
+            QString msg = QString::fromUtf8(status).trimmed();
+            emit wisdomProgress(pct, msg);
+        }
+    });
+
+    wisdomThread->start();
+    pollTimer->start();
     return true;
 
 #else
@@ -613,6 +627,16 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
     // The 31 TXA stages (create_txa()) are live; TxChannel provides the typed
     // C++ facade.  unique_ptr destructor handles cleanup automatically on erase().
     //
+    // Parent argument: nullptr — DO NOT pass `this` here.  RadioModel::
+    // connectToRadio does m_txChannel->moveToThread(workerThread) shortly
+    // after createTxChannel returns, and Qt's invariant is that a QObject
+    // with a parent CANNOT be moved across threads (silent failure with one
+    // warning, then TxWorkerThread::run drains sendPostedEvents on a
+    // wrong-thread channel forever, generating an event-flood storm).
+    // Ownership stays with std::unique_ptr in m_txChannels — the Qt parent
+    // is redundant.  See tst_wdsp_engine_tx_channel.cpp:
+    // createdTxChannelHasNoQtParentForThreadAffinity for the regression test.
+    //
     // Bench fix round 3 (Issue A): pass inputBufferSize and outputBufferSize so
     // TxChannel sizes its fexchange0 buffers correctly.  (3M-1c TX pump v3
     // changed the production callsite from fexchange2 → fexchange0; the
@@ -626,7 +650,7 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
     // From Thetis wdsp/cmaster.c:179-183 [v2.10.3.13] — in_size / ch_outrate.
     // From Thetis wdsp/cmsetup.c:106-110 [v2.10.3.13] — getbuffsize(48000)==64.
     const int outputBufferSize = inputBufferSize * outputSampleRate / inputSampleRate;
-    auto wrapper = std::make_unique<TxChannel>(channelId, inputBufferSize, outputBufferSize, this);
+    auto wrapper = std::make_unique<TxChannel>(channelId, inputBufferSize, outputBufferSize, nullptr);
     TxChannel* raw = wrapper.get();
     m_txChannels.emplace(channelId, std::move(wrapper));
 

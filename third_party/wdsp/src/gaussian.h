@@ -71,12 +71,12 @@ extern void setGain_gaussian(GAUSSIAN a, double gain);
 
 extern void CalcGaussianFilter(GAUSSIAN a, double f_center, double bandwidth, double gain);
 
-extern __declspec (dllexport) void SetRXAGaussianRun(int channel, int run);
+extern void SetRXAGaussianRun(int channel, int run);
 
-extern __declspec (dllexport) void SetRXAGaussianFreqs(int channel, double f_center, double bandwidth);
+extern void SetRXAGaussianFreqs(int channel, double f_center, double bandwidth);
 
-extern __declspec (dllexport) void SetRXAGaussianGain(int channel, double gain);
+extern void SetRXAGaussianGain(int channel, double gain);
 
-extern __declspec (dllexport) void SetRXAGaussianNC(int channel, int nc);
+extern void SetRXAGaussianNC(int channel, int nc);
 
 #endif

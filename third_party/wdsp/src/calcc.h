@@ -140,7 +140,7 @@ extern void destroy_calcc (CALCC a);
 
 extern void flush_calcc (CALCC a);
 
-extern __declspec(dllexport) void pscc (int channel, int size, double* tx, double* rx);
+extern void pscc (int channel, int size, double* tx, double* rx);
 
 extern void __cdecl PSSaveCorrection(void* pargs);
 
