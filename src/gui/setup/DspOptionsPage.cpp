@@ -88,6 +88,7 @@
 
 #include "core/AppSettings.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -181,6 +182,83 @@ DspOptionsPage::DspOptionsPage(RadioModel* model, QWidget* parent)
     buildUI();
 }
 
+// ── Per-mode live-apply wiring (Task 4.2) ─────────────────────────────────────
+//
+// When the combo changes:
+//   1. Persist to AppSettings (always — applies on next mode-switch if not live).
+//   2. Determine whether the combo's mode group matches the current slice mode.
+//      - "Phone" group: USB, LSB, AM, SAM, DSB
+//      - "Cw"    group: CWU, CWL
+//      - "Dig"   group: DIGU, DIGL, SPEC, DRM
+//      - "Fm"    group: FM
+//   3. If mode matches, call RadioModel::rebuildDspOptionsForMode(currentMode)
+//      which triggers RxChannel::onModeChanged() + TxChannel::onModeChanged()
+//      and emits dspChangeMeasured(ms) if a rebuild occurred.
+//
+// comboMode is the representative DSPMode for the group (e.g. DSPMode::USB for
+// the Phone group). The actual comparison uses modeGroupMatches() below.
+//
+// NereusSDR-original — design Section 4B.
+
+namespace {
+
+// Returns true if actualMode belongs to the same DSP-Options mode group as
+// comboMode. Only the group membership matters for the live-apply gate.
+bool modeGroupMatches(DSPMode actualMode, DSPMode comboMode)
+{
+    // Map each to its key-part suffix, then compare.
+    auto keyPart = [](DSPMode m) -> int {
+        switch (m) {
+            case DSPMode::USB:
+            case DSPMode::LSB:
+            case DSPMode::AM:
+            case DSPMode::SAM:
+            case DSPMode::DSB:
+                return 0;  // Phone
+            case DSPMode::CWU:
+            case DSPMode::CWL:
+                return 1;  // Cw
+            case DSPMode::DIGU:
+            case DSPMode::DIGL:
+            case DSPMode::SPEC:
+            case DSPMode::DRM:
+                return 2;  // Dig
+            case DSPMode::FM:
+                return 3;  // Fm
+            default:
+                return 0;  // Phone
+        }
+    };
+    return keyPart(actualMode) == keyPart(comboMode);
+}
+
+}  // namespace (anon, Task 4.2 helpers)
+
+void DspOptionsPage::wireComboWithLiveApply(QComboBox* combo,
+                                             DSPMode   comboMode,
+                                             const QString& key)
+{
+    QObject::connect(combo, &QComboBox::currentTextChanged,
+        this, [this, key, comboMode](const QString& v) {
+            // 1. Always persist — applies on next mode-switch if not live.
+            AppSettings::instance().setValue(key, v);
+
+            // 2. Live-apply if radio is connected and current mode matches.
+            RadioModel* rm = model();
+            if (!rm) {
+                return;
+            }
+            const SliceModel* slice = rm->sliceAt(0);
+            if (!slice) {
+                return;
+            }
+            const DSPMode currentMode = slice->dspMode();
+            if (modeGroupMatches(currentMode, comboMode)) {
+                rm->rebuildDspOptionsForMode(currentMode);
+            }
+        });
+}
+
 // ── UI build ──────────────────────────────────────────────────────────────────
 
 void DspOptionsPage::buildUI()
@@ -206,8 +284,13 @@ void DspOptionsPage::buildUI()
     // warning icon placed in column 2 of first row only
     m_warnBufferSize = makeWarningIcon(bufGroup);
 
+    // Task 4.2: addBufRow now takes a representative DSPMode so the combo
+    // can trigger a live-apply rebuild when its mode group matches the active
+    // slice mode (design Section 4B). DSPMode::USB = Phone group,
+    // DSPMode::CWU = CW group, DSPMode::DIGU = Dig group, DSPMode::FM = FM group.
     auto addBufRow = [&](const QString& modeLabel, QComboBox*& combo,
-                         const QString& key, const QString& def) {
+                         const QString& key, const QString& def,
+                         DSPMode comboMode) {
         bufGrid->addWidget(new QLabel(modeLabel, bufGroup), row, 0);
         combo = makeCombo(bufGroup, kBufferSizes);
         // toolTip from Thetis: "Sets DSP internal Buffer Size -- larger yields sharper filters, more latency"
@@ -218,19 +301,19 @@ void DspOptionsPage::buildUI()
             bufGrid->addWidget(m_warnBufferSize, row, 2);
         }
         loadCombo(combo, key, def);
-        wireComboPersist(combo, key);
+        wireComboWithLiveApply(combo, comboMode, key);
         row++;
     };
 
     // From Thetis grpDSPBufPhone.Text = "SSB/AM" [v2.10.3.13]
     // Default DisplayMember = "64" (Phone TX) / "64" (Phone RX); NereusSDR default 256.
-    addBufRow(tr("Phone (SSB/AM)"), m_bufPhone, "DspOptionsBufferSizePhone", "256");
+    addBufRow(tr("Phone (SSB/AM)"), m_bufPhone, "DspOptionsBufferSizePhone", "256", DSPMode::USB);
     // From Thetis grpDSPBufCW.Text = "CW" [v2.10.3.13]; CW is RX-only in Thetis buffer group
-    addBufRow(tr("CW"),             m_bufCw,    "DspOptionsBufferSizeCw",    "256");
+    addBufRow(tr("CW"),             m_bufCw,    "DspOptionsBufferSizeCw",    "256", DSPMode::CWU);
     // From Thetis grpDSPBufDig.Text = "Digital" [v2.10.3.13]
-    addBufRow(tr("Digital"),        m_bufDig,   "DspOptionsBufferSizeDig",   "256");
+    addBufRow(tr("Digital"),        m_bufDig,   "DspOptionsBufferSizeDig",   "256", DSPMode::DIGU);
     // From Thetis grpDSPBufFM.Text = "FM" [v2.10.3.13]
-    addBufRow(tr("FM"),             m_bufFm,    "DspOptionsBufferSizeFm",    "256");
+    addBufRow(tr("FM"),             m_bufFm,    "DspOptionsBufferSizeFm",    "256", DSPMode::FM);
 
     layout->addWidget(bufGroup);
 
@@ -248,8 +331,10 @@ void DspOptionsPage::buildUI()
     row = 0;
     m_warnFilterSize = makeWarningIcon(filtGroup);
 
+    // Task 4.2: addFiltRow takes comboMode for live-apply wiring.
     auto addFiltRow = [&](const QString& modeLabel, QComboBox*& combo,
-                          const QString& key, const QString& def) {
+                          const QString& key, const QString& def,
+                          DSPMode comboMode) {
         filtGrid->addWidget(new QLabel(modeLabel, filtGroup), row, 0);
         combo = makeCombo(filtGroup, kFilterSizes);
         // toolTip from Thetis (same tooltip as buffer): "Sets DSP internal Buffer Size..."
@@ -260,19 +345,19 @@ void DspOptionsPage::buildUI()
             filtGrid->addWidget(m_warnFilterSize, row, 2);
         }
         loadCombo(combo, key, def);
-        wireComboPersist(combo, key);
+        wireComboWithLiveApply(combo, comboMode, key);
         row++;
     };
 
     // From Thetis grpDSPFiltSizePhone.Text = "SSB/AM" [v2.10.3.13]
     // comboDSPPhoneRXFiltSize.DisplayMember = "2048"; NereusSDR default "4096"
-    addFiltRow(tr("Phone (SSB/AM)"), m_filtSizePhone, "DspOptionsFilterSizePhone", "4096");
+    addFiltRow(tr("Phone (SSB/AM)"), m_filtSizePhone, "DspOptionsFilterSizePhone", "4096", DSPMode::USB);
     // From Thetis grpDSPFiltSizeCW.Text = "CW" [v2.10.3.13]
-    addFiltRow(tr("CW"),             m_filtSizeCw,    "DspOptionsFilterSizeCw",    "4096");
+    addFiltRow(tr("CW"),             m_filtSizeCw,    "DspOptionsFilterSizeCw",    "4096", DSPMode::CWU);
     // From Thetis grpDSPFiltSizeDig.Text = "Digital" [v2.10.3.13]
-    addFiltRow(tr("Digital"),        m_filtSizeDig,   "DspOptionsFilterSizeDig",   "4096");
+    addFiltRow(tr("Digital"),        m_filtSizeDig,   "DspOptionsFilterSizeDig",   "4096", DSPMode::DIGU);
     // From Thetis grpDSPFiltSizeFM.Text = "FM" [v2.10.3.13]
-    addFiltRow(tr("FM"),             m_filtSizeFm,    "DspOptionsFilterSizeFm",    "4096");
+    addFiltRow(tr("FM"),             m_filtSizeFm,    "DspOptionsFilterSizeFm",    "4096", DSPMode::FM);
 
     layout->addWidget(filtGroup);
 
@@ -290,8 +375,10 @@ void DspOptionsPage::buildUI()
     row = 0;
     m_warnBufferType = makeWarningIcon(filtTypeGroup);
 
+    // Task 4.2: addTypeRow takes comboMode for live-apply wiring.
     auto addTypeRow = [&](const QString& rowLabel, QComboBox*& combo,
-                          const QString& key, const QString& def) {
+                          const QString& key, const QString& def,
+                          DSPMode comboMode) {
         filtTypeGrid->addWidget(new QLabel(rowLabel, filtTypeGroup), row, 0);
         combo = makeCombo(filtTypeGroup, kFilterTypes);
         // toolTip from Thetis: "Select 'Low Latency' (Minimum Phase) or 'Linear Phase' Filters"
@@ -303,21 +390,21 @@ void DspOptionsPage::buildUI()
             filtTypeGrid->addWidget(m_warnBufferType, row, 2);
         }
         loadCombo(combo, key, def);
-        wireComboPersist(combo, key);
+        wireComboWithLiveApply(combo, comboMode, key);
         row++;
     };
 
     // From Thetis grpDSPFiltTypePhone — comboDSPPhoneRXFiltType / comboDSPPhoneTXFiltType [v2.10.3.13]
-    addTypeRow(tr("Phone RX"), m_filtTypePhoneRx, "DspOptionsFilterTypePhoneRx", "Low Latency");
-    addTypeRow(tr("Phone TX"), m_filtTypePhoneTx, "DspOptionsFilterTypePhoneTx", "Linear Phase");
+    addTypeRow(tr("Phone RX"), m_filtTypePhoneRx, "DspOptionsFilterTypePhoneRx", "Low Latency", DSPMode::USB);
+    addTypeRow(tr("Phone TX"), m_filtTypePhoneTx, "DspOptionsFilterTypePhoneTx", "Linear Phase", DSPMode::USB);
     // From Thetis grpDSPFiltTypeCW — comboDSPCWRXFiltType only (no TX) [v2.10.3.13]
-    addTypeRow(tr("CW RX"),    m_filtTypeCwRx,    "DspOptionsFilterTypeCwRx",    "Low Latency");
+    addTypeRow(tr("CW RX"),    m_filtTypeCwRx,    "DspOptionsFilterTypeCwRx",    "Low Latency",  DSPMode::CWU);
     // From Thetis grpDSPFiltTypeDig — comboDSPDigRXFiltType / comboDSPDigTXFiltType [v2.10.3.13]
-    addTypeRow(tr("Digital RX"), m_filtTypeDigRx, "DspOptionsFilterTypeDigRx",   "Linear Phase");
-    addTypeRow(tr("Digital TX"), m_filtTypeDigTx, "DspOptionsFilterTypeDigTx",   "Linear Phase");
+    addTypeRow(tr("Digital RX"), m_filtTypeDigRx, "DspOptionsFilterTypeDigRx",   "Linear Phase", DSPMode::DIGU);
+    addTypeRow(tr("Digital TX"), m_filtTypeDigTx, "DspOptionsFilterTypeDigTx",   "Linear Phase", DSPMode::DIGU);
     // From Thetis grpDSPFiltTypeFM — comboDSPFMRXFiltType / comboDSPFMTXFiltType [v2.10.3.13]
-    addTypeRow(tr("FM RX"),    m_filtTypeFmRx,    "DspOptionsFilterTypeFmRx",    "Low Latency");
-    addTypeRow(tr("FM TX"),    m_filtTypeFmTx,    "DspOptionsFilterTypeFmTx",    "Linear Phase");
+    addTypeRow(tr("FM RX"),    m_filtTypeFmRx,    "DspOptionsFilterTypeFmRx",    "Low Latency",  DSPMode::FM);
+    addTypeRow(tr("FM TX"),    m_filtTypeFmTx,    "DspOptionsFilterTypeFmTx",    "Linear Phase", DSPMode::FM);
 
     layout->addWidget(filtTypeGroup);
 

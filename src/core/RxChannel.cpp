@@ -246,6 +246,7 @@ warren@wpratt.com
 */
 
 #include "RxChannel.h"
+#include "AppSettings.h"
 #include "LogCategories.h"
 #include "NbFamily.h"
 #include "WdspEngine.h"
@@ -1704,6 +1705,110 @@ void RxChannel::applyState(const RxChannelState& s)
 qint64 RxChannel::rebuild(WdspEngine& engine, const ChannelConfig& cfg)
 {
     return engine.rebuildRxChannel(m_channelId, cfg);
+}
+
+// ---------------------------------------------------------------------------
+// Per-mode DSP-Options live-apply (Task 4.2)
+// ---------------------------------------------------------------------------
+//
+// Reads the per-mode AppSettings keys for newMode and calls rebuild() if any
+// value differs from the current channel config (m_bufferSize, m_filterSize,
+// m_filterType). The cacheImpulse / highResFilterCharacteristics keys are
+// global (not per-mode) and are also forwarded to ChannelConfig.
+//
+// Returns elapsed ms if rebuild occurred, 0 if nothing changed, -1 if no
+// engine is attached or the channel is not in the engine.
+//
+// NereusSDR-original — no Thetis source ported; the per-mode key naming
+// mirrors the DspOptionsPage AppSettings keys (design Section 4B).
+
+namespace {
+
+// Maps DSPMode to the DspOptions key suffix used in AppSettings.
+// From design Section 4B — Phone covers SSB/AM/SAM/DSB, CW covers
+// CWU/CWL, Dig covers DIGU/DIGL/DSB/SPEC/DRM, FM covers FM.
+//
+// NereusSDR-original helper — no Thetis source ported.
+QString rxModeKeyPart(DSPMode mode)
+{
+    switch (mode) {
+        case DSPMode::USB:
+        case DSPMode::LSB:
+        case DSPMode::AM:
+        case DSPMode::SAM:
+        case DSPMode::DSB:
+            return QStringLiteral("Phone");
+        case DSPMode::CWU:
+        case DSPMode::CWL:
+            return QStringLiteral("Cw");
+        case DSPMode::DIGU:
+        case DSPMode::DIGL:
+        case DSPMode::SPEC:
+        case DSPMode::DRM:
+            return QStringLiteral("Dig");
+        case DSPMode::FM:
+            return QStringLiteral("Fm");
+        default:
+            return QStringLiteral("Phone");
+    }
+}
+
+}  // namespace
+
+qint64 RxChannel::onModeChanged(DSPMode newMode)
+{
+    if (!m_wdspEngine) {
+        return 0;
+    }
+
+    auto& s = AppSettings::instance();
+    const QString modeKey = rxModeKeyPart(newMode);
+
+    // Read per-mode buffer and filter settings.
+    // Defaults match DspOptionsPage construction-time defaults.
+    const int newBufSize   = s.value("DspOptionsBufferSize" + modeKey, 256).toInt();
+    const int newFiltSize  = s.value("DspOptionsFilterSize" + modeKey, 4096).toInt();
+
+    // Filter type — RX-side key (separate from TX).
+    const QString typeKey  = "DspOptionsFilterType" + modeKey + "Rx";
+    const QString typeStr  = s.value(typeKey, "Low Latency").toString();
+    const int newFiltType  = (typeStr == "Low Latency") ? 0 : 1;
+
+    // Global (non-per-mode) keys.
+    const bool newCacheImpulse     = s.value("DspOptionsCacheImpulse", "False").toString() == "True";
+    const bool newCacheSaveRestore = s.value("DspOptionsCacheImpulseSaveRestore", "False").toString() == "True";
+    const bool newHighRes          = s.value("DspOptionsHighResFilterCharacteristics", "False").toString() == "True";
+
+    // Skip rebuild if nothing actually changed.
+    if (newBufSize  == m_bufferSize &&
+        newFiltSize == m_filterSize &&
+        newFiltType == m_filterType) {
+        return 0;
+    }
+
+    ChannelConfig cfg;
+    cfg.sampleRate                  = m_sampleRate;
+    cfg.bufferSize                  = newBufSize;
+    cfg.filterSize                  = newFiltSize;
+    cfg.filterType                  = newFiltType;
+    cfg.cacheImpulse                = newCacheImpulse;
+    cfg.cacheImpulseSaveRestore     = newCacheSaveRestore;
+    cfg.highResFilterCharacteristics = newHighRes;
+
+    qCInfo(lcDsp) << "RxChannel::onModeChanged: mode=" << static_cast<int>(newMode)
+                  << "key=" << modeKey
+                  << "bufSize:" << m_bufferSize << "->" << newBufSize
+                  << "filtSize:" << m_filterSize << "->" << newFiltSize
+                  << "filtType:" << m_filterType << "->" << newFiltType;
+
+    const qint64 elapsed = rebuild(*m_wdspEngine, cfg);
+
+    if (elapsed >= 0) {
+        m_filterSize = newFiltSize;
+        m_filterType = newFiltType;
+    }
+
+    return elapsed;
 }
 
 // ---------------------------------------------------------------------------

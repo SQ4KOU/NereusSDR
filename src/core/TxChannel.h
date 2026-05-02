@@ -1355,6 +1355,21 @@ public:
     // TX worker thread is not currently running (setRunning(false) first).
     qint64 rebuild(WdspEngine& engine, const ChannelConfig& cfg);
 
+    // ── Per-mode DSP-Options live-apply (Task 4.2) ───────────────────────────
+    //
+    // Called when SliceModel emits dspModeChanged. Reads per-mode DSP-Options
+    // AppSettings keys (DspOptionsBufferSize<Mode>, DspOptionsFilterSize<Mode>,
+    // DspOptionsFilterType<Mode>Tx) for the new mode and triggers rebuild()
+    // if any value differs from the currently active channel config.
+    //
+    // Returns elapsed milliseconds if a rebuild occurred (≥ 0), 0 if nothing
+    // changed, or -1 if the channel was not found in the engine.
+    //
+    // Thread safety: call on main thread only; caller must ensure the TX
+    // worker thread is quiesced (setRunning(false)) before calling.
+    void setWdspEngine(WdspEngine* engine) { m_wdspEngine = engine; }
+    qint64 onModeChanged(DSPMode newMode);
+
     // ── Per-stage Run override (3M-1a C.4) ──────────────────────────────────
     //
     // Activate or deactivate a single TXA pipeline stage by name.
@@ -1727,6 +1742,21 @@ private:
 
     // PureSignal carry — 3M-4 work
     bool    m_pureSignalEnabled {false};
+
+    // ── Task 4.2: per-mode DSP-Options live-apply ────────────────────────────
+    // Non-owning pointer to the WdspEngine set by RadioModel after channel
+    // creation. Required for onModeChanged() to call rebuild().
+    WdspEngine* m_wdspEngine{nullptr};
+
+    // Current filter size and filter type — tracked here so onModeChanged()
+    // can skip rebuild when nothing actually changed.
+    // Default matches WdspEngine::kTxDspBufferSize (2048, deskhpsdr-derived);
+    // see WdspEngine.h for canonical definition. Buffer size is not tracked
+    // because TxChannel is always created with a fixed 64-sample input buffer
+    // (RadioModel: createTxChannel(1, 64, ...)).
+    // From WdspEngine.h kTxDspBufferSize = 2048 [NereusSDR-original].
+    int m_txFilterSize{2048};
+    int m_txFilterType{0};   // 0 = LowLatency, 1 = LinearPhase
 };
 
 } // namespace NereusSDR

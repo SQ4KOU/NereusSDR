@@ -65,6 +65,7 @@
 
 #pragma once
 
+#include "core/WdspTypes.h"  // DSPMode
 #include "gui/SetupPage.h"
 
 class QComboBox;
@@ -105,6 +106,16 @@ public:
 
 private:
     void buildUI();
+
+    // Wire a per-mode combo to persist to AppSettings AND trigger a WDSP
+    // channel rebuild if the combo's mode matches the current slice mode
+    // (design Section 4B: live-apply if same mode, persist-only otherwise).
+    //
+    // comboMode: the DSPMode group this combo belongs to (e.g., DSPMode::USB
+    //            for the Phone buffer combo, DSPMode::CWU for CW).
+    // key: AppSettings key (e.g., "DspOptionsBufferSizePhone").
+    void wireComboWithLiveApply(QComboBox* combo, DSPMode comboMode,
+                                const QString& key);
 
     // ── Group 1: Buffer Size ─────────────────────────────────────────────────
     // From Thetis setup.Designer.cs grpDSPBufPhone/CW/Dig/FM [v2.10.3.13].

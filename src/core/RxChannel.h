@@ -639,6 +639,23 @@ public:
 
     double getMeter(RxMeterType type) const;
 
+    // --- Per-mode DSP-Options live-apply (Task 4.2) ---
+    //
+    // Called when SliceModel emits dspModeChanged. Reads per-mode DSP-Options
+    // AppSettings keys (DspOptionsBufferSize<Mode>, DspOptionsFilterSize<Mode>,
+    // DspOptionsFilterType<Mode>Rx) for the new mode and triggers rebuild()
+    // if any buffer/filter/filter-type setting differs from the currently
+    // active channel config.
+    //
+    // Returns elapsed milliseconds if a rebuild occurred (≥ 0), 0 if nothing
+    // changed, or -1 if the channel was not found in the engine.
+    //
+    // Thread safety: call on main thread only. Requires m_wdspEngine to have
+    // been set via setWdspEngine() before this slot fires.
+    void setWdspEngine(WdspEngine* engine) { m_wdspEngine = engine; }
+
+    qint64 onModeChanged(DSPMode newMode);
+
 signals:
     void modeChanged(NereusSDR::DSPMode mode);
     void agcModeChanged(NereusSDR::AGCMode mode);
@@ -770,6 +787,17 @@ private:
 
     // NR mode carry (setActiveNr(NrSlot) is the primary API)
     int  m_nrMode{0};
+
+    // ── Task 4.2: per-mode DSP-Options live-apply ────────────────────────────
+    // Non-owning pointer to the WdspEngine set by RadioModel after channel
+    // creation. Required for onModeChanged() to call rebuild().
+    WdspEngine* m_wdspEngine{nullptr};
+
+    // Current filter size and filter type — tracked here so onModeChanged()
+    // can skip rebuild when nothing actually changed.
+    // Defaults match ChannelConfig defaults (filterSize=4096, filterType=0=LowLatency).
+    int m_filterSize{4096};
+    int m_filterType{0};   // 0 = LowLatency, 1 = LinearPhase
 };
 
 } // namespace NereusSDR

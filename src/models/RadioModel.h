@@ -436,6 +436,21 @@ public:
     // Returns the active-RX count last pushed to hardware (0 when disconnected).
     int connectionActiveRxCount() const { return m_connectionActiveRxCount; }
 
+    // Task 4.2 — Per-mode DSP-Options live-apply (called from DspOptionsPage).
+    //
+    // Reads the per-mode AppSettings keys for forMode and calls
+    // RxChannel::onModeChanged() (+ TxChannel::onModeChanged()) if WDSP is
+    // initialized and a channel exists.  No-op if disconnected or uninitialized.
+    //
+    // Emits dspChangeMeasured(elapsedMs) if a WDSP channel rebuild occurred.
+    //
+    // DspOptionsPage calls this when a combo changes and the combo's mode
+    // matches the current slice mode (design Section 4B: live-apply if same
+    // mode, persist-only otherwise — applies on next mode-switch).
+    //
+    // Must be called on the main thread.
+    void rebuildDspOptionsForMode(DSPMode forMode);
+
     // Phase 3Q Sub-PR-4 D.3: Hover tooltip for the TitleBar ConnectionSegment.
     // Returns a multi-line string with radio name, uptime, IP, MAC, protocol,
     // firmware, sample rate, and live throughput. Disconnected state returns a

@@ -1275,6 +1275,10 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // moved there.  See the "TX channel creation deferred" block right
         // after m_connection = conn.release().
         if (rxCh) {
+            // Task 4.2: give RxChannel a handle to WdspEngine so onModeChanged()
+            // can call rebuild() when the active mode's DSP-Options settings change.
+            rxCh->setWdspEngine(m_wdspEngine);
+
             // Apply slice state to WDSP channel (no longer hardcoded)
             if (m_activeSlice) {
                 rxCh->setMode(m_activeSlice->dspMode());
@@ -1455,6 +1459,10 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                                                     /*outputSampleRate=*/txOutRate);
         if (m_txChannel) {
             m_txChannel->setConnection(m_connection);
+
+            // Task 4.2: give TxChannel a handle to WdspEngine so onModeChanged()
+            // can call rebuild() when the active mode's DSP-Options settings change.
+            m_txChannel->setWdspEngine(m_wdspEngine);
 
             // ── L.1: construct Pc + Radio mic sources + composite router ──────────
             // Construct after m_connection is live so RadioMicSource has a valid
@@ -2564,10 +2572,28 @@ void RadioModel::wireSliceSignals()
     });
 
     // Mode → WDSP
+    // setMode: push the demodulation mode to WDSP immediately.
+    // onModeChanged (Task 4.2): read per-mode DSP-Options AppSettings (buffer/
+    // filter/filter-type) and rebuild the WDSP channel if any setting changed.
+    // dspChangeMeasured is emitted with elapsed ms when a rebuild occurs.
     connect(slice, &SliceModel::dspModeChanged, this, [this](DSPMode mode) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setMode(mode);
+            const qint64 elapsed = rxCh->onModeChanged(mode);
+            if (elapsed > 0) {
+                emit dspChangeMeasured(elapsed);
+            }
+        }
+        // TX channel: onModeChanged triggers a rebuild if filter/type changed.
+        // TX worker is already quiesced during mode changes (MoxController
+        // clears MOX before mode-switch). Guard: m_txChannel may be null
+        // (not yet created if no radio is connected, or during teardown).
+        if (m_txChannel) {
+            const qint64 txElapsed = m_txChannel->onModeChanged(mode);
+            if (txElapsed > 0) {
+                emit dspChangeMeasured(txElapsed);
+            }
         }
         scheduleSettingsSave();
     });
@@ -4564,6 +4590,41 @@ qint64 RadioModel::setActiveRxCountLive(int newCount)
 
     emit dspChangeMeasured(elapsedMs);
     return elapsedMs;
+}
+
+// ---------------------------------------------------------------------------
+// Task 4.2 — rebuildDspOptionsForMode
+//
+// Called from DspOptionsPage when a per-mode combo changes and the combo's
+// mode matches the current active slice mode (design Section 4B).
+// Delegates to RxChannel::onModeChanged() and TxChannel::onModeChanged(),
+// then emits dspChangeMeasured(ms) if a rebuild occurred.
+//
+// No-op guard: returns immediately if WDSP is not initialized or no
+// RxChannel exists (e.g., disconnected, during teardown).
+//
+// NereusSDR-original infrastructure — no Thetis source ported here.
+// ---------------------------------------------------------------------------
+void RadioModel::rebuildDspOptionsForMode(DSPMode forMode)
+{
+    if (!m_wdspEngine || !m_wdspEngine->isInitialized()) {
+        return;
+    }
+
+    if (RxChannel* rxCh = m_wdspEngine->rxChannel(0)) {
+        const qint64 elapsed = rxCh->onModeChanged(forMode);
+        if (elapsed > 0) {
+            emit dspChangeMeasured(elapsed);
+        }
+    }
+
+    // TX channel — guard: may be null (not created until radio connects).
+    if (m_txChannel) {
+        const qint64 txElapsed = m_txChannel->onModeChanged(forMode);
+        if (txElapsed > 0) {
+            emit dspChangeMeasured(txElapsed);
+        }
+    }
 }
 
 // Phase 3Q Sub-PR-4 D.3 — Segment hover tooltip.

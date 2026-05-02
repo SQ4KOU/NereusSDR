@@ -167,6 +167,7 @@ warren@wpratt.com
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
+#include "AppSettings.h"
 #include "LogCategories.h"
 #include "RadioConnection.h"
 #include "TxMicRouter.h"
@@ -2416,6 +2417,102 @@ void TxChannel::applyState(const TxChannelState& s)
 qint64 TxChannel::rebuild(WdspEngine& engine, const ChannelConfig& cfg)
 {
     return engine.rebuildTxChannel(m_channelId, cfg);
+}
+
+// ---------------------------------------------------------------------------
+// Per-mode DSP-Options live-apply (Task 4.2)
+// ---------------------------------------------------------------------------
+//
+// Reads per-mode AppSettings keys for newMode and calls rebuild() if any
+// filter/filter-type value differs from the current channel config.
+// Buffer size is not per-mode for TX — TxChannel always uses a fixed 64-sample
+// input buffer at 48 kHz (hardcoded in RadioModel::connectToRadio).
+// Filter size and filter type share the same per-mode keys as RxChannel
+// (DspOptionsFilterSize<Mode> / DspOptionsFilterType<Mode>Tx).
+//
+// NereusSDR-original — no Thetis source ported; the per-mode key naming
+// mirrors the DspOptionsPage AppSettings keys (design Section 4B).
+
+namespace {
+
+QString txModeKeyPart(DSPMode mode)
+{
+    switch (mode) {
+        case DSPMode::USB:
+        case DSPMode::LSB:
+        case DSPMode::AM:
+        case DSPMode::SAM:
+        case DSPMode::DSB:
+            return QStringLiteral("Phone");
+        case DSPMode::CWU:
+        case DSPMode::CWL:
+            return QStringLiteral("Cw");
+        case DSPMode::DIGU:
+        case DSPMode::DIGL:
+        case DSPMode::SPEC:
+        case DSPMode::DRM:
+            return QStringLiteral("Dig");
+        case DSPMode::FM:
+            return QStringLiteral("Fm");
+        default:
+            return QStringLiteral("Phone");
+    }
+}
+
+}  // namespace
+
+qint64 TxChannel::onModeChanged(DSPMode newMode)
+{
+    if (!m_wdspEngine) {
+        return 0;
+    }
+
+    auto& s = AppSettings::instance();
+    const QString modeKey = txModeKeyPart(newMode);
+
+    // Filter size — TX shares the same key as RX (per-mode, no RX/TX split).
+    const int newFiltSize  = s.value("DspOptionsFilterSize" + modeKey, 4096).toInt();
+
+    // Filter type — TX-side key (separate from RX).
+    // Note: CW has no TX filter-type combo in Thetis (RX only). For CW mode
+    // we fall through to the LinearPhase default — this matches Thetis behavior
+    // where the TX CW filter type is not exposed.
+    const QString typeKey  = "DspOptionsFilterType" + modeKey + "Tx";
+    const QString typeStr  = s.value(typeKey, "Linear Phase").toString();
+    const int newFiltType  = (typeStr == "Low Latency") ? 0 : 1;
+
+    // Global (non-per-mode) keys.
+    const bool newCacheImpulse     = s.value("DspOptionsCacheImpulse", "False").toString() == "True";
+    const bool newCacheSaveRestore = s.value("DspOptionsCacheImpulseSaveRestore", "False").toString() == "True";
+    const bool newHighRes          = s.value("DspOptionsHighResFilterCharacteristics", "False").toString() == "True";
+
+    // Skip rebuild if nothing actually changed.
+    if (newFiltSize == m_txFilterSize && newFiltType == m_txFilterType) {
+        return 0;
+    }
+
+    ChannelConfig cfg;
+    cfg.sampleRate                  = WdspEngine::kTxDspSampleRate;
+    cfg.bufferSize                  = 64;   // Fixed TX input buffer (RadioModel default)
+    cfg.filterSize                  = newFiltSize;
+    cfg.filterType                  = newFiltType;
+    cfg.cacheImpulse                = newCacheImpulse;
+    cfg.cacheImpulseSaveRestore     = newCacheSaveRestore;
+    cfg.highResFilterCharacteristics = newHighRes;
+
+    qCInfo(lcDsp) << "TxChannel::onModeChanged: mode=" << static_cast<int>(newMode)
+                  << "key=" << modeKey
+                  << "filtSize:" << m_txFilterSize << "->" << newFiltSize
+                  << "filtType:" << m_txFilterType << "->" << newFiltType;
+
+    const qint64 elapsed = rebuild(*m_wdspEngine, cfg);
+
+    if (elapsed >= 0) {
+        m_txFilterSize = newFiltSize;
+        m_txFilterType = newFiltType;
+    }
+
+    return elapsed;
 }
 
 } // namespace NereusSDR

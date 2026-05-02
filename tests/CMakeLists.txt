@@ -2641,6 +2641,29 @@ nereus_add_test(tst_active_rx_count_live_apply)
 # these tests verify the signal protocol.
 nereus_add_test(tst_dsp_change_timer)
 
+# ── Task 4.2: Per-mode buffer/filter/filter-type live-apply ─────────────────
+# Tests RxChannel::onModeChanged() and TxChannel::onModeChanged() guard paths
+# (no WDSP required — verifies the equality guard, key-part routing, and the
+# rebuild call path). Also verifies RadioModel::rebuildDspOptionsForMode()
+# no-ops when disconnected.
+#
+# Test cases:
+#   rx_no_engine_returns_zero — no WdspEngine attached → 0
+#   rx_engine_attached_channel_not_in_map_returns_minus_one — engine attached,
+#     channel not created → rebuild returns -1
+#   rx_same_settings_returns_zero_no_rebuild — bufSize/filtSize/filtType all
+#     match AppSettings → equality guard fires → 0
+#   rx_cw_mode_reads_cw_key_suffix — CWU/CWL use "Cw" key suffix → 0
+#   rx_dig_mode_reads_dig_key_suffix — DIGU/DIGL use "Dig" key suffix → 0
+#   rx_fm_mode_reads_fm_key_suffix — FM uses "Fm" key suffix → 0
+#   rx_changed_filter_size_triggers_rebuild_attempt — 8192!=4096 → -1
+#   rx_changed_filter_type_triggers_rebuild_attempt — LinearPhase!=LowLatency → -1
+#   tx_no_engine_returns_zero — TxChannel without engine → 0
+#   tx_same_settings_returns_zero — both values match → 0
+#   tx_changed_filter_size_triggers_rebuild_attempt — 4096!=2048 → -1
+#   radiomodel_rebuild_noop_when_disconnected — no emission when disconnected
+nereus_add_test(tst_dsp_options_per_mode_apply)
+
 # ── Task 2.1: Detector + Averaging split (handwave fix from 3G-8) ─────────
 # Ported from Thetis specHPSDR.cs:302-415 [v2.10.3.13] DetTypePan / DetTypeWF
 # / AverageMode / AverageModeWF integer codes.
