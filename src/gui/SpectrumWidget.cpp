@@ -1881,6 +1881,23 @@ void SpectrumWidget::updateSpectrum(int receiverId, const QVector<float>& binsDb
         m_peakBlobs.tickFrame(fps, intervalMs > 0 ? intervalMs : 33);
     }
 
+    // Force the GPU overlay texture to re-render every spectrum frame when
+    // any per-frame overlay feature is active. paintEvent's CPU path runs
+    // drawSpectrum() (which calls paintActivePeakHoldTrace + paintPeakBlobs)
+    // every frame, but the GPU path bakes overlays into m_overlayStatic
+    // which is only re-rendered when m_overlayStaticDirty is set. Without
+    // this nudge, peak hold + blobs would only update on Setup-driven state
+    // changes (Bug discovered post-merge, 2026-05-02).
+    //
+    // TODO: refactor to a separate m_overlayDynamic layer so the static
+    // chrome (grid, scales, band plan) doesn't repaint every frame. For
+    // now, accept the per-frame full-overlay re-render — it's still cheap
+    // (small QImage, single texture upload) and the alternative is no
+    // visible peak indicator at all in GPU mode.
+    if (m_activePeakHold.enabled() || m_peakBlobs.enabled()) {
+        m_overlayStaticDirty = true;
+    }
+
     // Push unsmoothed data to waterfall (sharper signal edges)
     // From gpu-waterfall.md:908
     pushWaterfallRow(binsDbm);
@@ -2334,15 +2351,24 @@ void SpectrumWidget::paintPeakBlobs(QPainter& p, const QRect& specRect,
         const int y = dbmToY(blob.max_dBm, specRect);
 
         // Draw ellipse — From Thetis display.cs:5507 [v2.10.3.13]
-        //   g.DrawEllipse(m_bDX2_PeakBlob, ...)
-        p.setPen(QPen(m_peakBlobColor, 2));
+        //   _d2dRenderTarget.DrawEllipse(m_objEllipse, m_bDX2_PeakBlob);
+        // where m_objEllipse is `new SharpDX.Direct2D1.Ellipse(Vector2.Zero, 5f, 5f)`
+        // (radius 5 DIPs) and DrawEllipse defaults to 1px stroke.
+        //
+        // NereusSDR uses radius 3 (not 5) because Qt6/QPainter on HiDPI
+        // (Retina/2x) scales drawEllipse by devicePixelRatio, while Direct2D
+        // on Thetis's typical Windows 1x-DPI display does not. Radius 3 in
+        // logical pixels yields a visual size matching Thetis's 5-radius
+        // physical-pixel render on a 1x display.
+        p.setPen(QPen(m_peakBlobColor, 1));
         p.setBrush(Qt::NoBrush);
-        p.drawEllipse(QPoint(x, y), 4, 4);
+        p.drawEllipse(QPoint(x, y), 3, 3);
 
         // Draw dBm text label — From Thetis display.cs:5508 [v2.10.3.13]
-        //   g.DrawString(entry.max_dBm.ToString("F1"), ..., m_bDX2_PeakBlobText, ...)
+        //   _d2dRenderTarget.DrawText(..., new RectangleF(
+        //       m_objEllipse.Point.X + 6, m_objEllipse.Point.Y - 8, ...));
         p.setPen(m_peakBlobTextColor);
-        p.drawText(x + 6, y - 6, QString::number(static_cast<double>(blob.max_dBm), 'f', 1));
+        p.drawText(x + 5, y - 6, QString::number(static_cast<double>(blob.max_dBm), 'f', 1));
     }
 
     p.setRenderHint(QPainter::Antialiasing, false);
@@ -4578,6 +4604,26 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             // invalidation keys track every setter that feeds this plus
             // VFO/filter changes via setVfoFrequency/setFilterOffset.
             drawWaterfallChrome(p, wfRect);
+
+            // Per-frame dynamic overlays — Active Peak Hold trace + Peak
+            // Blobs (Tasks 2.5/2.6). The CPU paintEvent path calls these
+            // from drawSpectrum() every frame; the GPU path needs them
+            // baked into the overlay texture. updateSpectrum() forces
+            // m_overlayStaticDirty=true when either is enabled so this
+            // block runs every frame in that mode.
+            if ((m_activePeakHold.enabled() || m_peakBlobs.enabled()) &&
+                !m_smoothed.isEmpty()) {
+                auto [firstBin, lastBin] = visibleBinRange(m_smoothed.size());
+                const int count = lastBin - firstBin + 1;
+                const float xStep = static_cast<float>(specRect.width()) /
+                                    qMax(1, count);
+                if (m_activePeakHold.enabled() && m_activePeakHold.size() > 0) {
+                    paintActivePeakHoldTrace(p, specRect, firstBin, lastBin, xStep);
+                }
+                if (m_peakBlobs.enabled() && !m_peakBlobs.blobs().isEmpty()) {
+                    paintPeakBlobs(p, specRect, firstBin, lastBin, xStep);
+                }
+            }
 
             // FPS overlay for GPU mode (QPainter path draws its own
             // counter in paintEvent). Drawn into the cached overlay
