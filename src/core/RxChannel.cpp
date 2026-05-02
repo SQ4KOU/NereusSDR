@@ -589,6 +589,10 @@ NereusSDR::NbMode RxChannel::nbMode() const
 
 void RxChannel::setNrEnabled(bool enabled)
 {
+    if (enabled == m_nrEnabled.load()) {
+        return;
+    }
+
     m_nrEnabled.store(enabled);
 
 #ifdef HAVE_WDSP
@@ -598,6 +602,10 @@ void RxChannel::setNrEnabled(bool enabled)
 
 void RxChannel::setAnfEnabled(bool enabled)
 {
+    if (enabled == m_anfEnabled.load()) {
+        return;
+    }
+
     m_anfEnabled.store(enabled);
 
 #ifdef HAVE_WDSP
@@ -1274,6 +1282,12 @@ void RxChannel::setBinauralEnabled(bool enabled)
 
 void RxChannel::setShiftFrequency(double offsetHz)
 {
+    if (offsetHz == m_shiftOffsetHz) {
+        return;
+    }
+
+    m_shiftOffsetHz = offsetHz;
+
 #ifdef HAVE_WDSP
     if (std::abs(offsetHz) < 0.5) {
         // No offset — disable shift for efficiency
@@ -1459,5 +1473,209 @@ void RxChannel::setMnrAlpha(float) {}
 void RxChannel::setMnrBias(float) {}
 void RxChannel::setMnrGsmooth(float) {}
 #endif
+
+// ---------------------------------------------------------------------------
+// Filter convenience setters — single-axis carry setters (Task 1.2)
+// Store int mirror values only; applyState() calls setFilterFreqs() once
+// with both values to apply to WDSP. This avoids double-firing WDSP when
+// restoring state (applyState sets low then high; only one WDSP call needed).
+// If you need to push a single-axis filter change live, use setFilterFreqs().
+// ---------------------------------------------------------------------------
+
+void RxChannel::setFilterLow(int lowHz)
+{
+    m_filterLowInt = lowHz;
+    m_filterLow = static_cast<double>(lowHz);  // keep double carry in sync
+}
+
+void RxChannel::setFilterHigh(int highHz)
+{
+    m_filterHighInt = highHz;
+    m_filterHigh = static_cast<double>(highHz);  // keep double carry in sync
+}
+
+// ---------------------------------------------------------------------------
+// EQ carry setters (Task 1.2 — no WDSP wiring yet)
+// Carry-only for state preservation; WDSP SetRXAGrphEQ wiring in EQ task.
+// ---------------------------------------------------------------------------
+
+void RxChannel::setEqEnabled(bool enabled)
+{
+    m_eqEnabled = enabled;
+}
+
+void RxChannel::setEqPreamp(int preampDb)
+{
+    m_eqPreampDb = preampDb;
+}
+
+void RxChannel::setEqBand(int bandIndex, int gainDb)
+{
+    if (bandIndex >= 0 && bandIndex < 10) {
+        m_eqBandsDb[bandIndex] = gainDb;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Squelch unified carry setters (Task 1.2)
+// Carry-only; per-mode SSQL/AMSQ/FMSQ are still the primary API.
+// ---------------------------------------------------------------------------
+
+void RxChannel::setSquelchEnabled(bool enabled)
+{
+    m_squelchEnabled = enabled;
+}
+
+void RxChannel::setSquelchThreshold(int thresholdDb)
+{
+    m_squelchThresholdDb = thresholdDb;
+}
+
+// ---------------------------------------------------------------------------
+// RIT offset carry setter (Task 1.2 — no WDSP wiring yet)
+// ---------------------------------------------------------------------------
+
+void RxChannel::setRitOffset(int ritHz)
+{
+    m_ritOffsetHz = ritHz;
+}
+
+// ---------------------------------------------------------------------------
+// Antenna index carry setter (Task 1.2 — routed via AlexController)
+// ---------------------------------------------------------------------------
+
+void RxChannel::setAntennaIndex(int index)
+{
+    m_antennaIndex = index;
+}
+
+// ---------------------------------------------------------------------------
+// Shift offset convenience alias (Task 1.2)
+// Delegates to setShiftFrequency and keeps the carry field in sync.
+// ---------------------------------------------------------------------------
+
+void RxChannel::setShiftOffset(double offsetHz)
+{
+    // setShiftFrequency now maintains m_shiftOffsetHz and has the WDSP call.
+    setShiftFrequency(offsetHz);
+}
+
+// ---------------------------------------------------------------------------
+// NB enabled carry setter (Task 1.2)
+// Carry-only bool; NbFamily::setMode is the primary API.
+// ---------------------------------------------------------------------------
+
+void RxChannel::setNbEnabled(bool enabled)
+{
+    m_nbEnabled = enabled;
+}
+
+// ---------------------------------------------------------------------------
+// NR mode carry setter (Task 1.2)
+// Carry-only int; setActiveNr(NrSlot) is the primary API.
+// ---------------------------------------------------------------------------
+
+void RxChannel::setNrMode(int nrMode)
+{
+    m_nrMode = nrMode;
+}
+
+// ---------------------------------------------------------------------------
+// State snapshot / restore (Task 1.2)
+// captureState() reads all DSP state into a portable RxChannelState struct.
+// applyState() restores from that struct by calling all individual setters.
+// ---------------------------------------------------------------------------
+
+RxChannelState RxChannel::captureState() const
+{
+    RxChannelState s;
+
+    s.mode                = static_cast<SliceModel::Mode>(m_mode.load());
+    s.filterLowHz         = m_filterLowInt;
+    s.filterHighHz        = m_filterHighInt;
+
+    // AGC
+    s.agcMode             = m_agcMode.load();
+    s.agcAttackMs         = m_agcAttack.load();
+    s.agcDecayMs          = m_agcDecay.load();
+    s.agcHangMs           = m_agcHang.load();
+    s.agcSlope            = m_agcSlope.load();
+    s.agcMaxGainDb        = m_agcMaxGain.load();
+    s.agcFixedGainDb      = m_agcFixedGain.load();
+    s.agcHangThresholdPct = m_agcHangThreshold.load();
+
+    // Noise blanker
+    s.nbEnabled           = m_nbEnabled;
+    s.nbMode              = static_cast<int>(nbMode());
+
+    // Noise reduction
+    s.nrEnabled           = m_nrEnabled.load();
+    s.nrMode              = m_nrMode;
+    s.anfEnabled          = m_anfEnabled.load();
+
+    // EQ
+    s.eqEnabled           = m_eqEnabled;
+    s.eqPreampDb          = m_eqPreampDb;
+    for (int i = 0; i < 10; ++i) {
+        s.eqBandsDb[i] = m_eqBandsDb[i];
+    }
+
+    // Squelch
+    s.squelchEnabled      = m_squelchEnabled;
+    s.squelchThresholdDb  = m_squelchThresholdDb;
+
+    // RIT, antenna, shift offset
+    s.ritOffsetHz         = m_ritOffsetHz;
+    s.antennaIndex        = m_antennaIndex;
+    s.shiftOffsetHz       = m_shiftOffsetHz;
+
+    return s;
+}
+
+void RxChannel::applyState(const RxChannelState& s)
+{
+    setMode(s.mode);
+    // Apply both filter edges atomically via setFilterFreqs (one WDSP call).
+    // setFilterLow/setFilterHigh are carry-only; setFilterFreqs is the WDSP path.
+    setFilterLow(s.filterLowHz);
+    setFilterHigh(s.filterHighHz);
+    setFilterFreqs(static_cast<double>(s.filterLowHz),
+                   static_cast<double>(s.filterHighHz));
+
+    // AGC
+    setAgcMode(static_cast<AGCMode>(s.agcMode));
+    setAgcAttack(s.agcAttackMs);
+    setAgcDecay(s.agcDecayMs);
+    setAgcHang(s.agcHangMs);
+    setAgcSlope(s.agcSlope);
+    setAgcMaxGain(s.agcMaxGainDb);
+    setAgcFixedGain(s.agcFixedGainDb);
+    setAgcHangThreshold(s.agcHangThresholdPct);
+
+    // Noise blanker
+    setNbEnabled(s.nbEnabled);
+    setNbMode(static_cast<NbMode>(s.nbMode));
+
+    // Noise reduction
+    setNrEnabled(s.nrEnabled);
+    setNrMode(s.nrMode);
+    setAnfEnabled(s.anfEnabled);
+
+    // EQ
+    setEqEnabled(s.eqEnabled);
+    setEqPreamp(s.eqPreampDb);
+    for (int i = 0; i < 10; ++i) {
+        setEqBand(i, s.eqBandsDb[i]);
+    }
+
+    // Squelch
+    setSquelchEnabled(s.squelchEnabled);
+    setSquelchThreshold(s.squelchThresholdDb);
+
+    // RIT, antenna, shift offset
+    setRitOffset(s.ritOffsetHz);
+    setAntennaIndex(s.antennaIndex);
+    setShiftOffset(s.shiftOffsetHz);
+}
 
 } // namespace NereusSDR

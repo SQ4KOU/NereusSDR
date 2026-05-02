@@ -198,6 +198,7 @@ warren@wpratt.com
 
 #include "NbFamily.h"
 #include "WdspTypes.h"
+#include "dsp/RxChannelState.h"
 
 #ifdef HAVE_DFNR
 #include "DeepFilterFilter.h"
@@ -533,6 +534,45 @@ public:
 
     void setShiftFrequency(double offsetHz);
 
+    // --- Filter convenience setters (single-axis) ---
+    // Thin wrappers that remember the pending low/high and call setFilterFreqs.
+    // Carry-only for state preservation in captureState/applyState; WDSP wiring
+    // is via setFilterFreqs which is called when both low+high are applied.
+    void setFilterLow(int lowHz);
+    void setFilterHigh(int highHz);
+
+    // --- EQ carry fields (wired to WDSP in a later task) ---
+    // Carry-only for state preservation; no WDSP calls until EQ task lands.
+    void setEqEnabled(bool enabled);
+    void setEqPreamp(int preampDb);
+    void setEqBand(int bandIndex, int gainDb);
+
+    // --- Squelch carry (single unified squelch for state round-trip) ---
+    // Carry-only; per-mode squelch (SSQL/AMSQ/FMSQ) is still the primary API.
+    void setSquelchEnabled(bool enabled);
+    void setSquelchThreshold(int thresholdDb);
+
+    // --- RIT offset (carry; wired to WDSP in RIT task) ---
+    void setRitOffset(int ritHz);
+
+    // --- Antenna index (carry; routed via AlexController in antenna task) ---
+    void setAntennaIndex(int index);
+
+    // --- Shift offset (convenience alias for setShiftFrequency) ---
+    void setShiftOffset(double offsetHz);
+
+    // --- NB enabled (carry; NbFamily is the primary API) ---
+    void setNbEnabled(bool enabled);
+
+    // --- NR mode (carry; setActiveNr(NrSlot) is the primary API) ---
+    void setNrMode(int nrMode);
+
+    // --- State snapshot / restore (Task 1.2) ---
+    // Capture all DSP state into a portable struct.
+    // Restore the same state (calls all setters above).
+    RxChannelState captureState() const;
+    void applyState(const RxChannelState& state);
+
     // --- Channel state ---
 
     bool isActive() const { return m_active.load(); }
@@ -665,6 +705,37 @@ private:
     // Cached filter state
     double m_filterLow{150.0};
     double m_filterHigh{2850.0};
+
+    // --- Carry-only fields for captureState/applyState round-trip ---
+    // These hold state that will be wired to WDSP in later tasks.
+    // The single-axis filter setters below store here and feed setFilterFreqs.
+    int  m_filterLowInt{150};     // mirror of m_filterLow as int (setFilterLow/High carry)
+    int  m_filterHighInt{2850};   // mirror of m_filterHigh as int
+
+    // EQ — carry until EQ task wires SetRXAGrphEQ
+    bool m_eqEnabled{false};
+    int  m_eqPreampDb{0};
+    int  m_eqBandsDb[10]{0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+    // Squelch unified carry (per-mode SSQL/AMSQ/FMSQ are still primary)
+    bool m_squelchEnabled{false};
+    int  m_squelchThresholdDb{-150};
+
+    // RIT offset carry (wired in RIT task)
+    int  m_ritOffsetHz{0};
+
+    // Antenna index carry (routed via AlexController in antenna task)
+    int  m_antennaIndex{0};
+
+    // Shift offset carry (mirrors what was last passed to setShiftFrequency)
+    double m_shiftOffsetHz{0.0};
+
+    // NB enabled carry (NbFamily is the primary API; this is a convenience bool
+    // that reflects whether NbMode != Off)
+    bool m_nbEnabled{false};
+
+    // NR mode carry (setActiveNr(NrSlot) is the primary API)
+    int  m_nrMode{0};
 };
 
 } // namespace NereusSDR
