@@ -392,6 +392,10 @@ public:
     // --- Auto AGC-T visual update (Task 6) ---
     void updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double offset);
 
+    // --- Small filter display mode (Task 3.4 — Appearance > Meter Styles) ---
+    void setSmallFilterMode(bool small);
+    bool smallFilterMode() const { return m_smallFilterMode; }
+
     // --- Slice coupling (for mode container binding only) ---
     void setSlice(SliceModel* slice);
 
@@ -526,6 +530,7 @@ private:
                             // existing behavior during discovery.
     bool m_hasRxBypassRelay{false};    // Phase 3P-I-b T9 — BYPS button gate (caps)
     bool m_hasRxOutOnTxUi{false};      // Phase 3P-I-b T9 — BYPS button gate (SKU)
+    bool m_smallFilterMode{false};     // Task 3.4 — small filter display
 
     // --- Header row ---
     QPushButton* m_rxAntBtn{nullptr};

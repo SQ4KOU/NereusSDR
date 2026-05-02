@@ -51,6 +51,9 @@ private:
     QComboBox* m_typeCombo{nullptr};       // Arc/Bar/Digital
     QCheckBox* m_peakHoldToggle{nullptr};
     QSlider*   m_decayRateSlider{nullptr};
+
+    // Section: VFO Flag
+    QCheckBox* m_smallModeFilterToggle{nullptr};
 };
 
 // ---------------------------------------------------------------------------
