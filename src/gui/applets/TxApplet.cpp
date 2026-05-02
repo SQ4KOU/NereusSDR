@@ -613,12 +613,12 @@ void TxApplet::buildUI()
         // D9 status label — orange tint, right-aligned, 9 px bold.
         // Displays e.g. "100-2900 Hz · 2.8k BW" (asymmetric) or "±2900 Hz · 5.8k BW"
         // (symmetric modes).  Refreshed by filterChanged + dspModeChanged.
-        // matches future Style::kTxFilterOverlayLabel — Cluster E
         m_txFilterStatusLabel = new QLabel(this);
         m_txFilterStatusLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         m_txFilterStatusLabel->setStyleSheet(QStringLiteral(
-            "QLabel { color: #ffaa70; font-size: 9px; font-weight: bold; }"
-        ));
+            // Plan 4 D9 (Cluster E): colour centralised in Style::kTxFilterOverlayLabel.
+            "QLabel { color: %1; font-size: 9px; font-weight: bold; }"
+        ).arg(QLatin1String(Style::kTxFilterOverlayLabel)));
         m_txFilterStatusLabel->setAccessibleName(QStringLiteral("TX filter status"));
         vbox->addWidget(m_txFilterStatusLabel);
     }

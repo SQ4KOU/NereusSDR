@@ -319,4 +319,22 @@ inline void applyDarkPageStyle(QWidget* w)
     ).arg(kAppBg, kTextPrimary, kBorder, kButtonBg, kAccent, kButtonHover, kTextSecondary));
 }
 
+// ── TX / RX filter overlay palette ────────────────────────────────────────────
+// Plan 4 D9 (Cluster E).  Used by SpectrumWidget::drawTxFilterOverlay() and
+// SpectrumWidget::drawTxFilterWaterfallColumn().
+// Colours are NereusSDR-original; no Thetis upstream equivalent (Thetis uses
+// hard-coded GDI+ brushes without named constants).
+
+// TX filter overlay — translucent orange.
+// Customisable via ColorSwatchButton on Setup → Display → TX Display per
+// docs/architecture/ui-audit-polish-plan.md §E1.D9b.
+constexpr auto kTxFilterOverlayFill   = "rgba(255, 120, 60, 46)";
+constexpr auto kTxFilterOverlayBorder = "#ff7833";
+constexpr auto kTxFilterOverlayLabel  = "#ffaa70";
+
+// RX filter overlay — translucent cyan.
+// Border reuses kAccent (#00b4d8); only the fill variant is new.
+// Customisable on Setup → Display → Spectrum Defaults.
+constexpr auto kRxFilterOverlayFill   = "rgba(0, 180, 216, 80)";
+
 } // namespace NereusSDR::Style
