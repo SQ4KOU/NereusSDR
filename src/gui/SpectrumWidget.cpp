@@ -2564,17 +2564,33 @@ void SpectrumWidget::drawVfoMarker(QPainter& p, const QRect& specRect, const QRe
     }
     int fW = xHi - xLo;
 
+    // Reserve the bandplan strip at the bottom of specRect (drawBandPlan paints
+    // colored segments there with transparent gaps; without this clip the
+    // translucent passband colour bleeds through the gaps and visually sits
+    // "in front of" the bandplan strip).  Same height calc as drawBandPlan:
+    // bandH = m_bandPlanFontSize + 4 when a bandplan manager is bound.
+    const int bandPlanH = (m_bandPlanMgr && m_bandPlanFontSize > 0)
+                          ? (m_bandPlanFontSize + 4) : 0;
+    const int specBottomClipped = specRect.bottom() - bandPlanH;
+    const int specHeightClipped = std::max(0, specBottomClipped - specRect.top());
+
     // Spectrum passband fill — Plan 4 D9b: user-pickable m_rxFilterColor.
     // Previously hardcoded AetherSDR cyan alpha=35/25; now single user colour.
-    p.fillRect(xLo, specRect.top(), fW, specRect.height(), m_rxFilterColor);
+    if (specHeightClipped > 0) {
+        p.fillRect(xLo, specRect.top(), fW, specHeightClipped, m_rxFilterColor);
+    }
 
     // Waterfall passband fill — Plan 4 D9b: same user-pickable colour.
     p.fillRect(xLo, wfRect.top(), fW, wfRect.height(), m_rxFilterColor);
 
     // Filter edge lines — from AetherSDR line 3237: slice color, alpha=130
+    // Clip the spectrum-side edge to specBottomClipped so the line stops at
+    // the bandplan strip's top edge.
     p.setPen(QPen(QColor(kSliceR, kSliceG, kSliceB, 130), 1));
-    p.drawLine(xLo, specRect.top(), xLo, wfRect.bottom());
-    p.drawLine(xHi, specRect.top(), xHi, wfRect.bottom());
+    p.drawLine(xLo, specRect.top(), xLo, specBottomClipped);
+    p.drawLine(xLo, wfRect.top(),   xLo, wfRect.bottom());
+    p.drawLine(xHi, specRect.top(), xHi, specBottomClipped);
+    p.drawLine(xHi, wfRect.top(),   xHi, wfRect.bottom());
 
     // VFO center line — from AetherSDR line 3281: slice color, alpha=220, width=2
     // Width narrows to 1 when filter edge is ≤4px away (CW modes)
@@ -2950,8 +2966,22 @@ void SpectrumWidget::drawTxFilterOverlay(QPainter& p, const QRect& specRect)
     }
     const int bandW = right - left;
 
+    // Reserve the bandplan strip at the bottom of specRect (drawBandPlan paints
+    // colored segments there but leaves transparent gaps between segments;
+    // without this clip the translucent filter colour would bleed through the
+    // gaps and visually sit "in front of" the bandplan strip).  Mirrors the
+    // height calculation in drawBandPlan: bandH = m_bandPlanFontSize + 4 when a
+    // bandplan manager is bound, else 0.
+    const int bandPlanH = (m_bandPlanMgr && m_bandPlanFontSize > 0)
+                          ? (m_bandPlanFontSize + 4) : 0;
+    const int filterBottom = specRect.bottom() - bandPlanH;
+    const int filterH      = std::max(0, filterBottom - specRect.top());
+    if (filterH <= 0) {
+        return;
+    }
+
     // Fill band with translucent orange.
-    p.fillRect(QRect(left, specRect.top(), bandW, specRect.height()),
+    p.fillRect(QRect(left, specRect.top(), bandW, filterH),
                m_txFilterColor);
 
     // Border lines — 2 px solid orange.
@@ -2959,10 +2989,10 @@ void SpectrumWidget::drawTxFilterOverlay(QPainter& p, const QRect& specRect)
     p.save();
     p.setPen(QPen(borderColor, 2));
     if (xLow >= specRect.left()) {
-        p.drawLine(xLow, specRect.top(), xLow, specRect.bottom());
+        p.drawLine(xLow, specRect.top(), xLow, filterBottom);
     }
     if (xHigh <= specRect.right()) {
-        p.drawLine(xHigh, specRect.top(), xHigh, specRect.bottom());
+        p.drawLine(xHigh, specRect.top(), xHigh, filterBottom);
     }
     p.restore();
 
@@ -4050,6 +4080,14 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 // Passing the clipped specRect would put the strip INSIDE the spectrum.
                 drawDbmScale(p, QRect(0, 0, w, specH));
             }
+            // Plan 4 D9 (Cluster E): TX filter overlay on panadapter (GPU path).
+            // Painted BEFORE drawBandPlan + drawFreqScale so the bandplan colored
+            // bars + freq labels overpaint the translucent filter band — matches
+            // the QPainter path's z-order (filter under bandplan/freq) and lets
+            // the floating VfoWidget child render naturally on top.
+            if (m_txFilterVisible) {
+                drawTxFilterOverlay(p, specRect);
+            }
             drawBandPlan(p, specRect);
             // Sub-epic E: time-scale + LIVE button on the right edge of the
             // waterfall area. Same FULL-WIDTH wfRect contract as the QPainter
@@ -4067,13 +4105,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             drawTimeScale(p, wfRectFull);
             drawVfoMarker(p, specRect, wfRect);
             drawOffScreenIndicator(p, specRect, wfRect);
-
-            // Plan 4 D9 (Cluster E): TX filter overlay on panadapter (GPU path).
-            // Same call as the QPainter path — drawTxFilterOverlay uses a
-            // QPainter& passed from the overlay texture painter `p`.
-            if (m_txFilterVisible) {
-                drawTxFilterOverlay(p, specRect);
-            }
 
             // Phase 3G-8 commit 10: waterfall chrome (filter/zero line/
             // timestamp/opacity dim) lands in the overlay texture on GPU

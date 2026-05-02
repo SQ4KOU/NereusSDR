@@ -1973,22 +1973,28 @@ void VfoWidget::setSlice(SliceModel* slice)
 // ---- Floating control buttons (AetherSDR pattern) ----
 // Close, Lock, Record, Play — rendered on parent SpectrumWidget
 
+// Plan 4 follow-up: opaque backgrounds so the floating buttons remain
+// visible when a coloured filter overlay (TX or RX) is painted underneath
+// them.  Original alpha=15/40 was nearly transparent; against the new
+// translucent filter bands the buttons effectively disappeared.  The dark
+// blue base matches the spectrum chrome palette and stays distinct from
+// either filter colour.
 static const char* kFloatingBtn =
     "QPushButton {"
-    "  background: rgba(255,255,255,15); border: none;"
+    "  background: rgba(20,30,50,230); border: 1px solid rgba(80,100,130,180);"
     "  border-radius: 10px; color: #c8d8e8; font-size: 11px; padding: 0;"
     "}"
     "QPushButton:hover {"
-    "  background: rgba(255,255,255,40);"
+    "  background: rgba(40,55,80,240);"
     "}";
 
 static const char* kFloatingBtnClose =
     "QPushButton {"
-    "  background: rgba(255,255,255,15); border: none;"
+    "  background: rgba(20,30,50,230); border: 1px solid rgba(80,100,130,180);"
     "  border-radius: 10px; color: #c8d8e8; font-size: 11px; padding: 0;"
     "}"
     "QPushButton:hover {"
-    "  background: rgba(204,32,32,180); color: #ffffff;"
+    "  background: rgba(204,32,32,220); color: #ffffff;"
     "}";
 
 void VfoWidget::buildFloatingButtons()
@@ -2126,6 +2132,7 @@ void VfoWidget::positionFloatingButtons()
     }
 
     int btnY = y();
+
     QPushButton* btns[] = {m_closeBtn, m_lockBtn, m_recBtn, m_playBtn};
     for (QPushButton* btn : btns) {
         btn->move(btnX, btnY);
