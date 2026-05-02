@@ -1,5 +1,7 @@
 // NereusSDR-original test — no Thetis source ported here.
 // No upstream attribution required (NereusSDR warning-icon logic test).
+// no-port-check: Thetis filename references below are citation context for the
+// production code under test (DspOptionsPage), not a port of this test file.
 //
 // Tests for Task 4.5: Warning icon visibility driven by Thetis validity rules.
 //

@@ -866,4 +866,33 @@ void AppSettings::migrateLegacyN2adrFilter(AppSettings& s)
     s.save();
 }
 
+// ---------------------------------------------------------------------------
+// v0.3.0 settings schema migration
+// ---------------------------------------------------------------------------
+
+void AppSettings::ensureSettingsAtVersion(int currentVersion)
+{
+    const QString versionKey = QStringLiteral("SettingsSchemaVersion");
+    const int storedVersion = value(versionKey, QStringLiteral("0")).toString().toInt();
+
+    if (storedVersion >= currentVersion) {
+        return;  // already at-or-past current version
+    }
+
+    // v0 → v3 migration (covers v0.2.x → v0.3.0)
+    if (storedVersion < 3 && currentVersion >= 3) {
+        qDebug() << "Migrating settings to schema v3 (NereusSDR v0.3.0)";
+
+        // Retire keys whose semantics changed in v0.3.0:
+        remove(QStringLiteral("DisplayAverageMode"));           // split into Detector + Averaging (Task 2.1)
+        remove(QStringLiteral("DisplayPeakHold"));              // promoted to ActivePeakHold... (Task 2.5)
+        remove(QStringLiteral("DisplayPeakHoldDelayMs"));       // → DisplayActivePeakHoldDurationMs (Task 2.5)
+        remove(QStringLiteral("DisplayReverseWaterfallScroll")); // W5 removed (Task 2.8)
+
+        qDebug() << "Settings migration to schema v3 complete";
+    }
+
+    setValue(versionKey, QString::number(currentVersion));
+}
+
 } // namespace NereusSDR
