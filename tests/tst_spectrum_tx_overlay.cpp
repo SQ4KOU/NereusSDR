@@ -157,6 +157,56 @@ private slots:
         QVERIFY(amIqHighAbs > centerHz);
         QVERIFY(amIqLowAbs  < amIqHighAbs);
     }
+
+    // ── 7. setTxFilterColor persists to AppSettings ──────────────────────
+    // Plan 4 D9b (Cluster F): TX filter overlay color setter + persistence.
+    void setTxFilterColorPersists() {
+        AppSettings::instance().clear();
+        SpectrumWidget w;
+        w.setPanIndex(0);
+
+        const QColor testColor(255, 0, 0, 100);
+        w.setTxFilterColor(testColor);
+
+        // Getter returns the new color.
+        QCOMPARE(w.txFilterColor(), testColor);
+
+        // AppSettings key was written.  Pan 0 key has no numeric suffix.
+        auto& s = AppSettings::instance();
+        const QString stored = s.value(QStringLiteral("DisplayTxFilterColor")).toString();
+        QVERIFY2(!stored.isEmpty(), "DisplayTxFilterColor not persisted");
+        const QColor roundTrip = QColor::fromString(stored);
+        QVERIFY2(roundTrip.isValid(), "Stored color is not a valid color string");
+        QCOMPARE(roundTrip.red(),   testColor.red());
+        QCOMPARE(roundTrip.green(), testColor.green());
+        QCOMPARE(roundTrip.blue(),  testColor.blue());
+        QCOMPARE(roundTrip.alpha(), testColor.alpha());
+    }
+
+    // ── 8. setRxFilterColor persists to AppSettings ──────────────────────
+    // Plan 4 D9b (Cluster F): RX filter overlay color setter + persistence.
+    void setRxFilterColorPersists() {
+        AppSettings::instance().clear();
+        SpectrumWidget w;
+        w.setPanIndex(0);
+
+        const QColor testColor(0, 255, 100, 60);
+        w.setRxFilterColor(testColor);
+
+        // Getter returns the new color.
+        QCOMPARE(w.rxFilterColor(), testColor);
+
+        // AppSettings key was written.  Pan 0 key has no numeric suffix.
+        auto& s = AppSettings::instance();
+        const QString stored = s.value(QStringLiteral("DisplayRxFilterColor")).toString();
+        QVERIFY2(!stored.isEmpty(), "DisplayRxFilterColor not persisted");
+        const QColor roundTrip = QColor::fromString(stored);
+        QVERIFY2(roundTrip.isValid(), "Stored color is not a valid color string");
+        QCOMPARE(roundTrip.red(),   testColor.red());
+        QCOMPARE(roundTrip.green(), testColor.green());
+        QCOMPARE(roundTrip.blue(),  testColor.blue());
+        QCOMPARE(roundTrip.alpha(), testColor.alpha());
+    }
 };
 
 QTEST_MAIN(TstSpectrumTxOverlay)

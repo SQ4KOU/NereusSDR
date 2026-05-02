@@ -515,6 +515,9 @@ void SpectrumWidget::loadSettings()
     m_gridTextColor = readColor(QStringLiteral("DisplayGridTextColor"), m_gridTextColor);
     m_zeroLineColor = readColor(QStringLiteral("DisplayZeroLineColor"), m_zeroLineColor);
     m_bandEdgeColor = readColor(QStringLiteral("DisplayBandEdgeColor"), m_bandEdgeColor);
+    // Plan 4 D9b (Cluster F): TX / RX filter overlay colors.
+    m_txFilterColor = readColor(QStringLiteral("DisplayTxFilterColor"), m_txFilterColor);
+    m_rxFilterColor = readColor(QStringLiteral("DisplayRxFilterColor"), m_rxFilterColor);
 }
 
 void SpectrumWidget::saveSettings()
@@ -604,6 +607,9 @@ void SpectrumWidget::saveSettings()
     writeColor(QStringLiteral("DisplayGridTextColor"), m_gridTextColor);
     writeColor(QStringLiteral("DisplayZeroLineColor"), m_zeroLineColor);
     writeColor(QStringLiteral("DisplayBandEdgeColor"), m_bandEdgeColor);
+    // Plan 4 D9b (Cluster F): TX / RX filter overlay colors.
+    writeColor(QStringLiteral("DisplayTxFilterColor"), m_txFilterColor);
+    writeColor(QStringLiteral("DisplayRxFilterColor"), m_rxFilterColor);
 }
 
 void SpectrumWidget::scheduleSettingsSave()
@@ -2475,13 +2481,12 @@ void SpectrumWidget::drawVfoMarker(QPainter& p, const QRect& specRect, const QRe
     }
     int fW = xHi - xLo;
 
-    // Spectrum passband fill — from AetherSDR line 3232: alpha=35
-    p.fillRect(xLo, specRect.top(), fW, specRect.height(),
-               QColor(kSliceR, kSliceG, kSliceB, 35));
+    // Spectrum passband fill — Plan 4 D9b: user-pickable m_rxFilterColor.
+    // Previously hardcoded AetherSDR cyan alpha=35/25; now single user colour.
+    p.fillRect(xLo, specRect.top(), fW, specRect.height(), m_rxFilterColor);
 
-    // Waterfall passband fill — from AetherSDR line 3234: alpha=25
-    p.fillRect(xLo, wfRect.top(), fW, wfRect.height(),
-               QColor(kSliceR, kSliceG, kSliceB, 25));
+    // Waterfall passband fill — Plan 4 D9b: same user-pickable colour.
+    p.fillRect(xLo, wfRect.top(), fW, wfRect.height(), m_rxFilterColor);
 
     // Filter edge lines — from AetherSDR line 3237: slice color, alpha=130
     p.setPen(QPen(QColor(kSliceR, kSliceG, kSliceB, 130), 1));
@@ -2742,6 +2747,45 @@ void SpectrumWidget::setTxMode(DSPMode mode)
         markOverlayDirty();
         update();
     }
+}
+
+// ---------------------------------------------------------------------------
+// setTxFilterColor()
+//
+// Plan 4 D9b (Cluster F).  User-pickable TX passband overlay fill colour.
+// Persists per-pan to DisplayTxFilterColor (AppSettings "#RRGGBBAA").
+// ---------------------------------------------------------------------------
+void SpectrumWidget::setTxFilterColor(const QColor& c)
+{
+    if (!c.isValid() || m_txFilterColor == c) {
+        return;
+    }
+    m_txFilterColor = c;
+    auto& s = AppSettings::instance();
+    s.setValue(settingsKey(QStringLiteral("DisplayTxFilterColor"), m_panIndex),
+               c.name(QColor::HexArgb));
+    markOverlayDirty();
+    update();
+}
+
+// ---------------------------------------------------------------------------
+// setRxFilterColor()
+//
+// Plan 4 D9b (Cluster F).  User-pickable RX passband overlay fill colour.
+// Replaces the formerly hardcoded AetherSDR cyan at two fillRect sites.
+// Persists per-pan to DisplayRxFilterColor (AppSettings "#RRGGBBAA").
+// ---------------------------------------------------------------------------
+void SpectrumWidget::setRxFilterColor(const QColor& c)
+{
+    if (!c.isValid() || m_rxFilterColor == c) {
+        return;
+    }
+    m_rxFilterColor = c;
+    auto& s = AppSettings::instance();
+    s.setValue(settingsKey(QStringLiteral("DisplayRxFilterColor"), m_panIndex),
+               c.name(QColor::HexArgb));
+    markOverlayDirty();
+    update();
 }
 
 // ---------------------------------------------------------------------------

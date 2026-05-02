@@ -506,6 +506,18 @@ public slots:
     int txFilterLow()  const noexcept { return m_txFilterLow; }
     int txFilterHigh() const noexcept { return m_txFilterHigh; }
 
+    // ---- TX / RX filter overlay colors (Plan 4 D9b, Cluster F) ----
+
+    /// Set the TX passband overlay fill colour and opacity.
+    /// Persists to DisplayTxFilterColor (per-pan AppSettings key).
+    void setTxFilterColor(const QColor& c);
+    QColor txFilterColor() const noexcept { return m_txFilterColor; }
+
+    /// Set the RX passband overlay fill colour and opacity.
+    /// Persists to DisplayRxFilterColor (per-pan AppSettings key).
+    void setRxFilterColor(const QColor& c);
+    QColor rxFilterColor() const noexcept { return m_rxFilterColor; }
+
     // ---- Per-pan settings persistence ----
     void setPanIndex(int idx) { m_panIndex = idx; }
     int  panIndex() const { return m_panIndex; }
@@ -917,6 +929,9 @@ private:
     int     m_txFilterHigh{2900}; // default matches TransmitModel::m_filterHigh
     DSPMode m_txMode{DSPMode::USB};
     QColor  m_txFilterColor{255, 120, 60, 46}; // matches kTxFilterOverlayFill default
+    // Plan 4 D9b (Cluster F): user-pickable RX filter overlay color.
+    // Default matches Style::kRxFilterOverlayFill = "rgba(0, 180, 216, 80)".
+    QColor  m_rxFilterColor{0x00, 0xb4, 0xd8, 80};
 
 #ifdef NEREUS_GPU_SPECTRUM
     bool m_rhiInitialized{false};

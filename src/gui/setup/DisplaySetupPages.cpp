@@ -460,6 +460,28 @@ void SpectrumDefaultsPage::buildUI()
 
     contentLayout()->addWidget(colorGroup);
 
+    // --- Section: RX Filter Overlay (Plan 4 D9b) ---
+    // Allows the user to choose the RX passband overlay fill colour + opacity.
+    auto* rxFilterGroup = new QGroupBox(QStringLiteral("RX Filter Overlay"), this);
+    auto* rxFilterForm  = new QFormLayout(rxFilterGroup);
+    rxFilterForm->setSpacing(6);
+
+    QColor initialRx(0x00, 0xb4, 0xd8, 80);   // matches Style::kRxFilterOverlayFill default
+    if (auto* w = sw) {
+        initialRx = w->rxFilterColor();
+    }
+    auto* rxColorBtn = new ColorSwatchButton(initialRx, rxFilterGroup);
+    rxColorBtn->setToolTip(QStringLiteral(
+        "Click to choose the RX passband overlay colour and opacity. "
+        "Shown on the panadapter and waterfall slice band."));
+    connect(rxColorBtn, &ColorSwatchButton::colorChanged, this, [this](const QColor& c) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setRxFilterColor(c);
+        }
+    });
+    rxFilterForm->addRow(QStringLiteral("Color && Opacity:"), rxColorBtn);
+    contentLayout()->addWidget(rxFilterGroup);
+
     // --- Section: Calibration ---
     auto* calGroup = new QGroupBox(QStringLiteral("Calibration & Peak Hold"), this);
     auto* calForm  = new QFormLayout(calGroup);
@@ -1273,6 +1295,29 @@ void TxDisplayPage::buildUI()
     specForm->addRow(QStringLiteral("Cal Offset:"), m_calOffsetSpin);
 
     contentLayout()->addWidget(specGroup);
+
+    // --- Section: TX Filter Overlay (Plan 4 D9b) ---
+    // Allows the user to choose the TX passband overlay fill colour + opacity.
+    auto* txFilterGroup = new QGroupBox(QStringLiteral("TX Filter Overlay"), this);
+    auto* txFilterForm  = new QFormLayout(txFilterGroup);
+    txFilterForm->setSpacing(6);
+
+    QColor initialTx(0xff, 0x78, 0x33, 46);   // matches Style::kTxFilterOverlayFill default
+    if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+        initialTx = w->txFilterColor();
+    }
+    auto* txColorBtn = new ColorSwatchButton(initialTx, txFilterGroup);
+    txColorBtn->setToolTip(QStringLiteral(
+        "Click to choose the TX passband overlay colour and opacity. "
+        "Shown on the panadapter (always) and on the waterfall during MOX."));
+    connect(txColorBtn, &ColorSwatchButton::colorChanged, this, [this](const QColor& c) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setTxFilterColor(c);
+        }
+    });
+    txFilterForm->addRow(QStringLiteral("Color && Opacity:"), txColorBtn);
+    contentLayout()->addWidget(txFilterGroup);
+
     contentLayout()->addStretch();
 }
 
