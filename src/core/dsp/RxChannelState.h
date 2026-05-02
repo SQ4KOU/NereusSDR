@@ -1,3 +1,5 @@
+// no-port-check: NereusSDR-original struct; the doc comment below names Thetis
+// source files only to explain the default-value provenance, not to port code.
 #pragma once
 
 #include "models/SliceModel.h"   // for Mode enum (alias of DSPMode)
@@ -6,6 +8,15 @@ namespace NereusSDR {
 
 /// Snapshot of all per-channel DSP state that survives a rebuild.
 /// Captured before WDSP channel destroy; reapplied after recreate.
+///
+/// **Default values:** These are the Thetis-visible "first-launch UI defaults"
+/// from `console.cs` and `setup.cs` (e.g. `mode = USB`, `agcMode = 0` for the
+/// initial UI state Thetis shows on fresh installation). They do NOT match
+/// `RxChannel`'s constructor defaults (`mode = LSB`, `agcMode = Med`), which
+/// reflect the WDSP wire-level defaults from `cmaster.c`. Always populate this
+/// struct via `RxChannel::captureState()` before calling `applyState()` —
+/// default-constructing an `RxChannelState` and applying it will push the UI
+/// defaults to WDSP, which is rarely what you want.
 struct RxChannelState {
     SliceModel::Mode mode               = SliceModel::Mode::USB;
     int    filterLowHz              = 200;

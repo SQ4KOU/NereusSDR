@@ -79,11 +79,13 @@ private slots:
         state.agcFixedGainDb   = 20;
         state.agcHangThresholdPct = 0;
 
-        // Carry-only fields — safe to set to any non-default value.
-        // setFilterLow/setFilterHigh pre-update m_filterLow/High doubles so
-        // the subsequent setFilterFreqs() in applyState early-returns.
-        state.filterLowHz       = 250;
-        state.filterHighHz      = 2750;
+        // Filter: applyState() calls setFilterFreqs() directly (the WDSP path).
+        // To avoid calling WDSP on the unopened test channel, use values that
+        // match the RxChannel constructor defaults so setFilterFreqs' equality
+        // guard fires and returns early.  The carry-only round-trip for
+        // non-default filter values is covered by capture_returns_current_state.
+        state.filterLowHz       = 150;   // RxChannel default m_filterLow
+        state.filterHighHz      = 2850;  // RxChannel default m_filterHigh
         state.eqEnabled         = true;
         state.eqPreampDb        = 6;
         state.eqBandsDb[0]      = -3;
@@ -103,9 +105,9 @@ private slots:
         QCOMPARE(verify.mode, SliceModel::Mode::LSB);
         QCOMPARE(verify.agcMode, static_cast<int>(AGCMode::Med));
 
-        // Carry-only fields must round-trip exactly
-        QCOMPARE(verify.filterLowHz,        250);
-        QCOMPARE(verify.filterHighHz,       2750);
+        // Filter values round-trip via setFilterFreqs' int carry update
+        QCOMPARE(verify.filterLowHz,        150);
+        QCOMPARE(verify.filterHighHz,       2850);
         QCOMPARE(verify.eqEnabled,          true);
         QCOMPARE(verify.eqPreampDb,         6);
         QCOMPARE(verify.eqBandsDb[0],       -3);

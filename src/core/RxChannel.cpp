@@ -336,8 +336,13 @@ void RxChannel::setFilterFreqs(double lowHz, double highHz)
         return;
     }
 
-    m_filterLow = lowHz;
+    m_filterLow  = lowHz;
     m_filterHigh = highHz;
+    // Keep int carry fields in sync so captureState() sees consistent values
+    // regardless of whether the caller used setFilterFreqs() directly or
+    // went through setFilterLow/setFilterHigh first.
+    m_filterLowInt  = static_cast<int>(std::round(lowHz));
+    m_filterHighInt = static_cast<int>(std::round(highHz));
 
 #ifdef HAVE_WDSP
     // From Thetis rxa.cs:110-111, radio.cs:603-604 — both bp1 and nbp0
@@ -1476,10 +1481,11 @@ void RxChannel::setMnrGsmooth(float) {}
 
 // ---------------------------------------------------------------------------
 // Filter convenience setters — single-axis carry setters (Task 1.2)
-// Store int mirror values only; applyState() calls setFilterFreqs() once
-// with both values to apply to WDSP. This avoids double-firing WDSP when
-// restoring state (applyState sets low then high; only one WDSP call needed).
-// If you need to push a single-axis filter change live, use setFilterFreqs().
+// Store int mirror values and sync the double carries; do NOT call WDSP.
+// These are used by callers (e.g. SliceModel filter-preset machinery) that
+// need to update one edge without triggering a WDSP push. A subsequent call
+// to setFilterFreqs() will push both edges together in one WDSP call.
+// applyState() uses setFilterFreqs() directly — not these setters.
 // ---------------------------------------------------------------------------
 
 void RxChannel::setFilterLow(int lowHz)
@@ -1635,10 +1641,13 @@ RxChannelState RxChannel::captureState() const
 void RxChannel::applyState(const RxChannelState& s)
 {
     setMode(s.mode);
-    // Apply both filter edges atomically via setFilterFreqs (one WDSP call).
-    // setFilterLow/setFilterHigh are carry-only; setFilterFreqs is the WDSP path.
-    setFilterLow(s.filterLowHz);
-    setFilterHigh(s.filterHighHz);
+    // setFilterFreqs is the canonical live-apply path: pushes both edges to
+    // WDSP in one call and emits filterChanged. The carry-only setFilterLow/
+    // setFilterHigh setters are NOT called here — calling them first would
+    // sync m_filterLow/m_filterHigh to the new values, causing setFilterFreqs
+    // to hit its equality guard and early-return without touching WDSP.
+    // setFilterFreqs() also updates m_filterLowInt/m_filterHighInt, so
+    // captureState() after applyState() sees consistent int carry values.
     setFilterFreqs(static_cast<double>(s.filterLowHz),
                    static_cast<double>(s.filterHighHz));
 
