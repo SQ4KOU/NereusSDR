@@ -292,6 +292,8 @@ warren@wpratt.com
 //                 `console.cs`; see Copyright block.
 // =================================================================
 
+#include "core/BoardCapabilities.h"
+#include "core/SkuUiProfile.h"
 #include "core/WdspTypes.h"
 #include "models/SliceModel.h"
 #include "VfoLevelBar.h"
@@ -307,10 +309,11 @@ warren@wpratt.com
 #include <QLineEdit>
 #include <QPointer>
 
+#include <optional>
+
 namespace NereusSDR {
 
 class VaxChannelSelector;  // forward declaration — full include in VfoWidget.cpp
-struct BoardCapabilities;  // forward declaration — Phase 3P-I-a T15
 enum class HPSDRModel : int;  // forward declaration — Phase 3P-I-b T9
 
 // Floating VFO flag widget — AetherSDR pattern.
@@ -526,6 +529,10 @@ private:
                             // existing behavior during discovery.
     bool m_hasRxBypassRelay{false};    // Phase 3P-I-b T9 — BYPS button gate (caps)
     bool m_hasRxOutOnTxUi{false};      // Phase 3P-I-b T9 — BYPS button gate (SKU)
+
+    // B3: stored caps + SKU profile for AntennaPopupBuilder in popup lambdas.
+    std::optional<BoardCapabilities> m_popupCaps;
+    std::optional<SkuUiProfile>      m_popupSku;
 
     // --- Header row ---
     QPushButton* m_rxAntBtn{nullptr};

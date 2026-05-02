@@ -266,6 +266,7 @@ warren@wpratt.com
 #include "VfoWidget.h"
 #include "DspParamPopup.h"
 #include "VaxChannelSelector.h"
+#include "gui/AntennaPopupBuilder.h"
 #include "gui/applets/NyiOverlay.h"
 #include "core/BoardCapabilities.h"
 #include "core/SkuUiProfile.h"
@@ -474,18 +475,27 @@ void VfoWidget::buildHeaderRow()
     // From Thetis console.resx:8277 — chkRxAnt.ToolTip
     m_rxAntBtn->setToolTip(QStringLiteral("Toggles receive antenna between RX and TX antennas for RX1"));
     connect(m_rxAntBtn, &QPushButton::clicked, this, [this]() {
+        // B3: AntennaPopupBuilder — capability-gated popup (Phase 3P-I-a T22).
         QMenu menu(this);
-        menu.setStyleSheet(QString::fromLatin1(kPopupMenu));   // Phase 3P-I-a T15 — issue #98
-        for (const QString& ant : m_antennaList) {
-            QAction* act = menu.addAction(ant);
-            act->setCheckable(true);
-            act->setChecked(ant == m_rxAntBtn->text());
+        const QString cur = m_rxAntBtn->text();
+        if (m_popupCaps && m_popupSku) {
+            AntennaPopupBuilder::populate(&menu, *m_popupCaps, *m_popupSku,
+                AntennaPopupBuilder::Mode::RX, cur);
+        } else {
+            for (const QString& ant : m_antennaList) {
+                QAction* act = menu.addAction(ant);
+                act->setCheckable(true);
+                act->setChecked(ant == cur);
+            }
         }
+        menu.setStyleSheet(QString::fromLatin1(kPopupMenu));   // Phase 3P-I-a T15 — issue #98
         QAction* sel = menu.exec(m_rxAntBtn->mapToGlobal(
             QPoint(0, m_rxAntBtn->height())));
         if (sel) {
-            m_rxAntBtn->setText(sel->text());
-            emit rxAntennaChanged(sel->text());
+            const QString text = sel->data().isValid() ? sel->data().toString()
+                                                       : sel->text();
+            m_rxAntBtn->setText(text);
+            emit rxAntennaChanged(text);
         }
     });
     hdr->addWidget(m_rxAntBtn);
@@ -521,18 +531,27 @@ void VfoWidget::buildHeaderRow()
     // via Alex board setup in Setup dialog, not via a main-window toggle)
     m_txAntBtn->setToolTip(QStringLiteral("Select TX antenna"));
     connect(m_txAntBtn, &QPushButton::clicked, this, [this]() {
+        // B3: AntennaPopupBuilder TX mode — only main ANT1-3 (Phase 3P-I-a T22).
         QMenu menu(this);
-        menu.setStyleSheet(QString::fromLatin1(kPopupMenu));   // Phase 3P-I-a T15 — issue #98
-        for (const QString& ant : m_antennaList) {
-            QAction* act = menu.addAction(ant);
-            act->setCheckable(true);
-            act->setChecked(ant == m_txAntBtn->text());
+        const QString cur = m_txAntBtn->text();
+        if (m_popupCaps && m_popupSku) {
+            AntennaPopupBuilder::populate(&menu, *m_popupCaps, *m_popupSku,
+                AntennaPopupBuilder::Mode::TX, cur);
+        } else {
+            for (const QString& ant : m_antennaList) {
+                QAction* act = menu.addAction(ant);
+                act->setCheckable(true);
+                act->setChecked(ant == cur);
+            }
         }
+        menu.setStyleSheet(QString::fromLatin1(kPopupMenu));   // Phase 3P-I-a T15 — issue #98
         QAction* sel = menu.exec(m_txAntBtn->mapToGlobal(
             QPoint(0, m_txAntBtn->height())));
         if (sel) {
-            m_txAntBtn->setText(sel->text());
-            emit txAntennaChanged(sel->text());
+            const QString text = sel->data().isValid() ? sel->data().toString()
+                                                       : sel->text();
+            m_txAntBtn->setText(text);
+            emit txAntennaChanged(text);
         }
     });
     hdr->addWidget(m_txAntBtn);
@@ -2404,6 +2423,9 @@ void VfoWidget::setBoardCapabilities(const BoardCapabilities& caps)
     if (m_rxAntBtn) { m_rxAntBtn->setVisible(showAnt); }
     if (m_txAntBtn) { m_txAntBtn->setVisible(showAnt); }
     if (m_rxBypassBtn) { m_rxBypassBtn->setVisible(m_hasRxBypassRelay && m_hasRxOutOnTxUi); }
+
+    // B3: store for AntennaPopupBuilder in popup lambdas.
+    m_popupCaps = caps;
 }
 
 // Phase 3P-I-b T9 — per-SKU BYPS button gate. Called by MainWindow on
@@ -2420,6 +2442,9 @@ void VfoWidget::setHpsdrSku(HPSDRModel sku)
     const SkuUiProfile profile = skuUiProfileFor(sku);
     m_hasRxOutOnTxUi = profile.hasRxOutOnTx;
     if (m_rxBypassBtn) { m_rxBypassBtn->setVisible(m_hasRxBypassRelay && m_hasRxOutOnTxUi); }
+
+    // B3: store for AntennaPopupBuilder in popup lambdas.
+    m_popupSku = profile;
 }
 
 // Phase 3P-I-b T9 — reflect AlexController::rxOutOnTx into the BYPS button.
