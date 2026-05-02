@@ -85,6 +85,7 @@
 #include "models/RadioModel.h"
 #include "gui/meters/MeterItem.h"
 #include "gui/meters/MeterPoller.h"
+#include "gui/meters/HistoryGraphItem.h"
 #include "gui/containers/ContainerManager.h"
 
 #include <QVBoxLayout>
@@ -319,7 +320,9 @@ void MultimeterPage::connectSignals()
             }
         });
 
-    // Signal history enable — persists only (HistoryGraphItem in Task 3.3)
+    // Signal history enable — persists only (Task 3.3)
+    // The enable flag is a UI setting; actual visibility is controlled by the
+    // container that holds the HistoryGraphItem and its binding configuration.
     connect(m_signalHistoryEnable, &QCheckBox::toggled, this,
         [](bool v) {
             AppSettings::instance().setValue(
@@ -327,10 +330,18 @@ void MultimeterPage::connectSignals()
                 v ? QStringLiteral("True") : QStringLiteral("False"));
         });
 
-    // Signal history duration — persists only (HistoryGraphItem in Task 3.3)
+    // Signal history duration — persists + broadcasts to all HistoryGraphItem instances (Task 3.3)
     connect(m_signalHistoryDurationMs, QOverload<int>::of(&QSpinBox::valueChanged), this,
-        [](int v) {
+        [this](int v) {
             AppSettings::instance().setValue(QStringLiteral("MultimeterSignalHistoryDurationMs"), v);
+            // Task 3.3: broadcast duration to all HistoryGraphItem instances
+            if (auto* cm = model() ? model()->containerManager() : nullptr) {
+                cm->forEachMeterItem([v](MeterItem* item) {
+                    if (auto* h = qobject_cast<HistoryGraphItem*>(item)) {
+                        h->setDurationMs(v);
+                    }
+                });
+            }
         });
 
     // Cross-link

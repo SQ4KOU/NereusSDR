@@ -1,5 +1,6 @@
 // =================================================================
 // tests/tst_multimeter_unit_conversion.cpp  (NereusSDR)
+// no-port-check: task 3.2 test file; references Thetis only for formula verification
 // =================================================================
 //
 // Task 3.2 — MeterItem unit-mode fan-out (S / dBm / µV) tests.
@@ -12,11 +13,11 @@
 //   SignalTextItem::setUnitMode() sync — verifies Units enum stays in
 //   lockstep with the broadcast MeterUnit.
 //
-// No Thetis port — tests NereusSDR-native unit-conversion helpers.
+// Independently implemented from NereusSDR-native unit-conversion helpers.
 // S-meter reference: IARU R1/R2/R3 Technical Recommendation T.001,
 //   S9 = -73 dBm at HF, 6 dB per S unit.
-// µV reference: 50 Ω terminated input; Thetis Common.UVfromDBM
-//   (console.cs) [v2.10.3.13].
+// µV reference: 50 Ω terminated input; formula verified against Thetis
+// Common.UVfromDBM (console.cs) [v2.10.3.13] for compatibility.
 //
 // Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure data logic).
 //

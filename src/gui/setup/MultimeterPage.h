@@ -91,6 +91,8 @@ class QPushButton;
 class QGroupBox;
 
 namespace NereusSDR {
+class HistoryGraphItem;
+class MeterItem;
 
 // ---------------------------------------------------------------------------
 // Display > Multimeter

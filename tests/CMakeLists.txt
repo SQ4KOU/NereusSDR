@@ -2716,3 +2716,9 @@ nereus_add_test(tst_multimeter_timing)
 # SignalTextItem::setUnitMode() overrides base to sync per-item Units enum.
 # Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure data logic).
 nereus_add_test(tst_multimeter_unit_conversion)
+
+# HistoryGraphItem duration setting (Task 3.3).
+# setDurationMs / durationMs round-trips, serialization v1/v2, capacity computation,
+# AppSettings persistence of MultimeterSignalHistoryDurationMs + Enable flag.
+# Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure MeterItem logic).
+nereus_add_test(tst_signal_history)
