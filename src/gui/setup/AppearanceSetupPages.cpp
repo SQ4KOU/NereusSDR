@@ -16,39 +16,6 @@ namespace NereusSDR {
 
 namespace {
 
-void applyDarkStyle(QWidget* w)
-{
-    w->setStyleSheet(QStringLiteral(
-        "QGroupBox { color: #8090a0; font-size: 11px;"
-        "  border: 1px solid #203040; border-radius: 4px;"
-        "  margin-top: 8px; padding-top: 4px; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
-        "QLabel { color: #c8d8e8; }"
-        "QComboBox { background: #1a2a3a; color: #c8d8e8; border: 1px solid #203040;"
-        "  border-radius: 3px; padding: 2px 6px; }"
-        "QComboBox::drop-down { border: none; }"
-        "QComboBox QAbstractItemView { background: #1a2a3a; color: #c8d8e8;"
-        "  selection-background-color: #00b4d8; }"
-        "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -4px 0;"
-        "  border-radius: 6px; }"
-        "QSlider::sub-page:horizontal { background: #00b4d8; border-radius: 2px; }"
-        "QSpinBox { background: #1a2a3a; color: #c8d8e8;"
-        "  border: 1px solid #203040; border-radius: 3px; padding: 1px 4px; }"
-        // Up/down buttons: rely on Fusion + app-level dark palette
-        // (see main.cpp / AppTheme.h). Styling the subcontrols here
-        // would erase the native arrow images.
-        "QCheckBox { color: #c8d8e8; }"
-        "QCheckBox::indicator { width: 14px; height: 14px; background: #1a2a3a;"
-        "  border: 1px solid #203040; border-radius: 2px; }"
-        "QCheckBox::indicator:checked { background: #00b4d8; border-color: #00b4d8; }"
-        "QPushButton { background: #1a2a3a; color: #c8d8e8; border: 1px solid #203040;"
-        "  border-radius: 3px; padding: 3px 12px; }"
-        "QPushButton:hover { background: #203040; }"
-        "QPushButton:pressed { background: #00b4d8; color: #0f0f1a; }"
-    ));
-}
-
 // Build a color swatch placeholder label.
 QLabel* makeColorSwatch(const QString& label, const QString& hexColor, QWidget* parent)
 {
@@ -76,7 +43,7 @@ ColorsThemePage::ColorsThemePage(RadioModel* model, QWidget* parent)
 
 void ColorsThemePage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     // --- Section: Background ---
     auto* bgGroup = new QGroupBox(QStringLiteral("Background"), this);
@@ -134,7 +101,7 @@ MeterStylesPage::MeterStylesPage(RadioModel* model, QWidget* parent)
 
 void MeterStylesPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     // --- Section: S-Meter ---
     auto* smGroup = new QGroupBox(QStringLiteral("S-Meter"), this);
@@ -176,7 +143,7 @@ GradientsPage::GradientsPage(RadioModel* model, QWidget* parent)
 
 void GradientsPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     // --- Section: Waterfall Gradient ---
     auto* gradGroup = new QGroupBox(QStringLiteral("Waterfall Gradient"), this);
@@ -218,7 +185,7 @@ SkinsPage::SkinsPage(RadioModel* model, QWidget* parent)
 
 void SkinsPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     // --- Section: Skins ---
     auto* skinGroup = new QGroupBox(QStringLiteral("Skins"), this);
@@ -274,7 +241,7 @@ CollapsibleDisplayPage::CollapsibleDisplayPage(RadioModel* model, QWidget* paren
 
 void CollapsibleDisplayPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     // --- Section: Collapsible ---
     auto* colGroup = new QGroupBox(QStringLiteral("Collapsible"), this);
