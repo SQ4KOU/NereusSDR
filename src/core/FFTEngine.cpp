@@ -114,6 +114,17 @@ void FFTEngine::setOutputFps(int fps)
     m_targetFps.store(qBound(1, fps, 60));
 }
 
+// From Thetis setup.designer.cs:33732 udDisplayDecimation [v2.10.3.13].
+// Range 1..32; 1 = no decimation (every sample is used).
+void FFTEngine::setDecimation(int factor)
+{
+    if (factor < 1 || factor > 32) { return; }
+    m_decimation.store(factor);
+    // Reset the counter so the new factor takes effect cleanly on the
+    // next feedIQ call rather than mid-stride.
+    m_decimationCounter = 0;
+}
+
 void FFTEngine::feedIQ(const QVector<float>& interleavedIQ)
 {
 #ifdef HAVE_FFTW3
@@ -124,9 +135,20 @@ void FFTEngine::feedIQ(const QVector<float>& interleavedIQ)
         replanFft();
     }
 
-    // Append interleaved I/Q to accumulation buffer
+    // Append interleaved I/Q to accumulation buffer, honouring decimation.
+    // From Thetis setup.designer.cs:33732 udDisplayDecimation [v2.10.3.13]:
+    // only every Nth sample pair is passed to the FFT accumulator (N=decimation).
+    const int dec = m_decimation.load();
     int numPairs = interleavedIQ.size() / 2;
     for (int i = 0; i < numPairs; ++i) {
+        // Decimation: skip all but every Nth pair
+        if (dec > 1) {
+            if (m_decimationCounter != 0) {
+                m_decimationCounter = (m_decimationCounter + 1) % dec;
+                continue;
+            }
+            m_decimationCounter = (m_decimationCounter + 1) % dec;
+        }
         if (m_iqWritePos >= m_currentFftSize) {
             // Buffer full — process and reset
             processFrame();

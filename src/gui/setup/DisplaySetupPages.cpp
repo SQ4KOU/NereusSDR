@@ -84,7 +84,10 @@
 #include <QPushButton>
 #include <QMessageBox>
 
+#include <QGuiApplication>
+#include <QScreen>
 #include <algorithm>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -223,6 +226,53 @@ void SpectrumDefaultsPage::loadFromRenderer()
 
     if (m_dataLineColorBtn) { m_dataLineColorBtn->setColor(sw->fillColor()); }
     if (m_dataFillColorBtn) { m_dataFillColorBtn->setColor(sw->fillColor()); }
+
+    // Task 2.3: sync overlay controls.
+    if (m_showMHzOnCursorToggle) {
+        QSignalBlocker b(m_showMHzOnCursorToggle);
+        m_showMHzOnCursorToggle->setChecked(sw->showMHzOnCursor());
+    }
+    if (m_showBinWidthToggle) {
+        QSignalBlocker b(m_showBinWidthToggle);
+        m_showBinWidthToggle->setChecked(sw->showBinWidth());
+        if (m_binWidthReadout) {
+            const double bw = sw->binWidthHz();
+            m_binWidthReadout->setText(
+                bw > 0.0
+                    ? QStringLiteral("%1 Hz/bin").arg(bw, 0, 'f', 3)
+                    : QStringLiteral("— Hz/bin"));
+        }
+    }
+    if (m_showNoiseFloorToggle) {
+        QSignalBlocker b(m_showNoiseFloorToggle);
+        m_showNoiseFloorToggle->setChecked(sw->showNoiseFloor());
+    }
+    if (m_noiseFloorPositionCombo) {
+        QSignalBlocker b(m_noiseFloorPositionCombo);
+        m_noiseFloorPositionCombo->setCurrentIndex(
+            static_cast<int>(sw->showNoiseFloorPosition()));
+    }
+    if (m_dispNormalizeToggle) {
+        QSignalBlocker b(m_dispNormalizeToggle);
+        m_dispNormalizeToggle->setChecked(sw->dispNormalize());
+    }
+    if (m_showPeakValueOverlayToggle) {
+        QSignalBlocker b(m_showPeakValueOverlayToggle);
+        m_showPeakValueOverlayToggle->setChecked(sw->showPeakValueOverlay());
+    }
+    if (m_peakValuePositionCombo) {
+        QSignalBlocker b(m_peakValuePositionCombo);
+        m_peakValuePositionCombo->setCurrentIndex(
+            static_cast<int>(sw->peakValuePosition()));
+    }
+    if (m_peakTextDelaySpin) {
+        QSignalBlocker b(m_peakTextDelaySpin);
+        m_peakTextDelaySpin->setValue(sw->peakTextDelayMs());
+    }
+    if (m_decimationSpin && fe) {
+        QSignalBlocker b(m_decimationSpin);
+        m_decimationSpin->setValue(fe->decimation());
+    }
 }
 
 void SpectrumDefaultsPage::buildUI()
@@ -440,9 +490,16 @@ void SpectrumDefaultsPage::buildUI()
     m_decimationSpin = new QSpinBox(renderGroup);
     m_decimationSpin->setRange(1, 32);
     m_decimationSpin->setValue(1);
-    // Thetis: setup.designer.cs:33732 (udDisplayDecimation)
+    // Thetis: setup.designer.cs:33732 (udDisplayDecimation) [v2.10.3.13]
+    // Thetis original: "Display decimation. Higher the number, the lower the resolution."
     m_decimationSpin->setToolTip(QStringLiteral("Display decimation. Higher the number, the lower the resolution."));
-    // Scaffolded only — FFTEngine decimation hook deferred to a future phase.
+    // Task 2.3: wire to FFTEngine::setDecimation().
+    connect(m_decimationSpin, qOverload<int>(&QSpinBox::valueChanged),
+            this, [this](int v) {
+        if (model() && model()->fftEngine()) {
+            model()->fftEngine()->setDecimation(v);
+        }
+    });
     renderForm->addRow(QStringLiteral("Decimation:"), m_decimationSpin);
 
     m_fillToggle = new QCheckBox(QStringLiteral("Fill under trace"), renderGroup);
@@ -598,6 +655,210 @@ void SpectrumDefaultsPage::buildUI()
     calForm->addRow(QStringLiteral("Peak Delay:"), m_peakHoldDelaySpin);
 
     contentLayout()->addWidget(calGroup);
+
+    // --- Section: Spectrum Overlays (Task 2.3) ---
+    // Groups the 4 corner-text overlay controls as a discrete block.
+    // Helper lambda for the 4-item position combo (shared by NF and Peak).
+    auto makeOverlayPositionCombo = [](QWidget* parent) -> QComboBox* {
+        auto* c = new QComboBox(parent);
+        c->addItems({QStringLiteral("Top Left"),    QStringLiteral("Top Right"),
+                     QStringLiteral("Bottom Left"), QStringLiteral("Bottom Right")});
+        return c;
+    };
+
+    auto* overlayGroup = new QGroupBox(QStringLiteral("Spectrum Overlays"), this);
+    auto* overlayForm  = new QFormLayout(overlayGroup);
+    overlayForm->setSpacing(6);
+
+    // ShowMHzOnCursor — always show the cursor freq label.
+    // From Thetis setup.designer.cs:33043 [v2.10.3.13] chkShowMHzOnCursor.
+    // Thetis original: "Show Frequency in MHz"
+    m_showMHzOnCursorToggle = new QCheckBox(
+        QStringLiteral("Show cursor frequency"), overlayGroup);
+    m_showMHzOnCursorToggle->setToolTip(QStringLiteral(
+        "Always display the frequency at the cursor position in the spectrum area."));
+    connect(m_showMHzOnCursorToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setShowMHzOnCursor(on);
+        }
+        AppSettings::instance().setValue(
+            QStringLiteral("DisplayShowMHzOnCursor"),
+            on ? QStringLiteral("True") : QStringLiteral("False"));
+    });
+    overlayForm->addRow(QString(), m_showMHzOnCursorToggle);
+
+    // ShowBinWidth — live bin-width readout.
+    // From Thetis setup.cs:7061 [v2.10.3.13] lblDisplayBinWidth.
+    m_showBinWidthToggle = new QCheckBox(
+        QStringLiteral("Show bin width"), overlayGroup);
+    m_showBinWidthToggle->setToolTip(QStringLiteral(
+        "Display the current FFT bin width (sample rate / FFT size) in the spectrum corner."));
+    m_binWidthReadout = new QLabel(QStringLiteral("— Hz/bin"), overlayGroup);
+    m_binWidthReadout->setToolTip(QStringLiteral("Current FFT bin width in Hz."));
+    connect(m_showBinWidthToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setShowBinWidth(on);
+            if (on) {
+                const double bw = w->binWidthHz();
+                m_binWidthReadout->setText(
+                    bw > 0.0
+                        ? QStringLiteral("%1 Hz/bin").arg(bw, 0, 'f', 3)
+                        : QStringLiteral("— Hz/bin"));
+            }
+        }
+        AppSettings::instance().setValue(
+            QStringLiteral("DisplayShowBinWidth"),
+            on ? QStringLiteral("True") : QStringLiteral("False"));
+    });
+    {
+        auto* row = new QWidget(overlayGroup);
+        auto* hl  = new QHBoxLayout(row);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->addWidget(m_showBinWidthToggle);
+        hl->addSpacing(8);
+        hl->addWidget(m_binWidthReadout);
+        hl->addStretch();
+        overlayForm->addRow(QString(), row);
+    }
+
+    // ShowNoiseFloor + position.
+    // From Thetis display.cs:2304-2308 [v2.10.3.13] m_bShowNoiseFloorDBM.
+    // Thetis original: rendered in DrawSpectrumDX2D at display.cs:5440.
+    m_showNoiseFloorToggle = new QCheckBox(
+        QStringLiteral("Show noise floor"), overlayGroup);
+    m_showNoiseFloorToggle->setToolTip(QStringLiteral(
+        "Display the estimated noise floor level as a text readout in the spectrum corner."));
+    m_noiseFloorPositionCombo = makeOverlayPositionCombo(overlayGroup);
+    m_noiseFloorPositionCombo->setCurrentIndex(2);  // Bottom Left default
+    m_noiseFloorPositionCombo->setToolTip(QStringLiteral("Corner position for the noise floor readout."));
+    connect(m_showNoiseFloorToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setShowNoiseFloor(on);
+        }
+        AppSettings::instance().setValue(
+            QStringLiteral("DisplayShowNoiseFloor"),
+            on ? QStringLiteral("True") : QStringLiteral("False"));
+    });
+    connect(m_noiseFloorPositionCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setShowNoiseFloorPosition(
+                static_cast<SpectrumWidget::OverlayPosition>(i));
+        }
+        AppSettings::instance().setValue(
+            QStringLiteral("DisplayShowNoiseFloorPosition"),
+            QString::number(i));
+    });
+    {
+        auto* row = new QWidget(overlayGroup);
+        auto* hl  = new QHBoxLayout(row);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->addWidget(m_showNoiseFloorToggle);
+        hl->addSpacing(8);
+        hl->addWidget(m_noiseFloorPositionCombo);
+        hl->addStretch();
+        overlayForm->addRow(QString(), row);
+    }
+
+    // DispNormalize — normalize spectrum trace to 1 Hz bandwidth.
+    // From Thetis specHPSDR.cs:325 [v2.10.3.13] NormOneHzPan;
+    // wired from setup.cs:18093-18099 chkDispNormalize_CheckedChanged.
+    // Thetis original: "Normalize to 1 Hz"
+    m_dispNormalizeToggle = new QCheckBox(
+        QStringLiteral("Normalize trace"), overlayGroup);
+    m_dispNormalizeToggle->setToolTip(QStringLiteral(
+        "Normalize the spectrum trace to a 1 Hz reference bandwidth. "
+        "Only active for Average, Sample, or RMS detector modes."));
+    connect(m_dispNormalizeToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setDispNormalize(on);
+        }
+        AppSettings::instance().setValue(
+            QStringLiteral("DisplayDispNormalize"),
+            on ? QStringLiteral("True") : QStringLiteral("False"));
+    });
+    overlayForm->addRow(QString(), m_dispNormalizeToggle);
+
+    // ShowPeakValueOverlay + position + delay.
+    // From Thetis console.cs:20073-20080 [v2.10.3.13] PeakTextDelay default=500ms.
+    // Color default DodgerBlue from console.cs:20278 [v2.10.3.13].
+    m_showPeakValueOverlayToggle = new QCheckBox(
+        QStringLiteral("Show peak value overlay"), overlayGroup);
+    m_showPeakValueOverlayToggle->setToolTip(QStringLiteral(
+        "Display the peak signal level and frequency as a text overlay in the spectrum corner."));
+    m_peakValuePositionCombo = makeOverlayPositionCombo(overlayGroup);
+    m_peakValuePositionCombo->setCurrentIndex(1);  // Top Right default
+    m_peakValuePositionCombo->setToolTip(QStringLiteral("Corner position for the peak value readout."));
+    m_peakTextDelaySpin = new QSpinBox(overlayGroup);
+    m_peakTextDelaySpin->setRange(50, 10000);
+    m_peakTextDelaySpin->setSingleStep(50);
+    m_peakTextDelaySpin->setSuffix(QStringLiteral(" ms"));
+    // From Thetis console.cs:20073 [v2.10.3.13]: peak_text_delay = 500.
+    m_peakTextDelaySpin->setValue(500);
+    m_peakTextDelaySpin->setToolTip(QStringLiteral(
+        "Refresh interval for the peak value overlay in milliseconds."));
+    connect(m_showPeakValueOverlayToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setShowPeakValueOverlay(on);
+        }
+        AppSettings::instance().setValue(
+            QStringLiteral("DisplayShowPeakValueOverlay"),
+            on ? QStringLiteral("True") : QStringLiteral("False"));
+    });
+    connect(m_peakValuePositionCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setPeakValuePosition(
+                static_cast<SpectrumWidget::OverlayPosition>(i));
+        }
+        AppSettings::instance().setValue(
+            QStringLiteral("DisplayPeakValuePosition"),
+            QString::number(i));
+    });
+    connect(m_peakTextDelaySpin, qOverload<int>(&QSpinBox::valueChanged),
+            this, [this](int ms) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setPeakTextDelayMs(ms);
+        }
+        AppSettings::instance().setValue(
+            QStringLiteral("DisplayPeakTextDelayMs"),
+            QString::number(ms));
+    });
+    {
+        auto* row = new QWidget(overlayGroup);
+        auto* hl  = new QHBoxLayout(row);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->addWidget(m_showPeakValueOverlayToggle);
+        hl->addSpacing(8);
+        hl->addWidget(m_peakValuePositionCombo);
+        hl->addSpacing(8);
+        hl->addWidget(m_peakTextDelaySpin);
+        hl->addStretch();
+        overlayForm->addRow(QString(), row);
+    }
+
+    // GetMonitorHz button — query the screen refresh rate and snap the FPS slider.
+    // From Thetis setup.designer.cs:2038 [v2.10.3.13] btnGetMonitorHz;
+    // wired from setup.cs:32208 btnGetMonitorHz_Click → udDisplayFPS.Value = refreshRate.
+    auto* monitorHzBtn = new QPushButton(
+        QStringLiteral("Get Monitor Hz"), overlayGroup);
+    monitorHzBtn->setToolTip(QStringLiteral(
+        "Query the primary screen refresh rate and snap the FPS slider to the nearest valid value."));
+    connect(monitorHzBtn, &QPushButton::clicked, this, [this]() {
+        // From Thetis setup.cs:32208 btnGetMonitorHz_Click [v2.10.3.13]:
+        //   udDisplayFPS.Value = (decimal)Display.GetCurrentMonitorRefreshRate(console);
+        // Qt equivalent: QScreen::refreshRate() on the primary screen.
+        if (auto* screen = QGuiApplication::primaryScreen()) {
+            const int hz = qBound(10, static_cast<int>(std::round(screen->refreshRate())), 60);
+            if (m_fpSlider) {
+                m_fpSlider->setValue(hz);
+                // pushFps is connected to m_fpSlider::valueChanged so it fires automatically.
+            }
+        }
+    });
+    overlayForm->addRow(QString(), monitorHzBtn);
+
+    contentLayout()->addWidget(overlayGroup);
 
     // --- Section: Thread ---
     auto* threadGroup = new QGroupBox(QStringLiteral("Thread"), this);

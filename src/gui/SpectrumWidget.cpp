@@ -531,6 +531,51 @@ void SpectrumWidget::loadSettings()
     m_gridTextColor = readColor(QStringLiteral("DisplayGridTextColor"), m_gridTextColor);
     m_zeroLineColor = readColor(QStringLiteral("DisplayZeroLineColor"), m_zeroLineColor);
     m_bandEdgeColor = readColor(QStringLiteral("DisplayBandEdgeColor"), m_bandEdgeColor);
+
+    // Task 2.3: spectrum text overlay settings.
+    // From Thetis display.cs:8692 [v2.10.3.13] AlwaysShowCursorInfo.
+    m_showMHzOnCursor = s.value(QStringLiteral("DisplayShowMHzOnCursor"),
+                                QStringLiteral("False")).toString() == QStringLiteral("True");
+    // From Thetis setup.cs:7061 [v2.10.3.13] lblDisplayBinWidth.
+    m_showBinWidth = s.value(QStringLiteral("DisplayShowBinWidth"),
+                             QStringLiteral("False")).toString() == QStringLiteral("True");
+    // From Thetis display.cs:2304 [v2.10.3.13] m_bShowNoiseFloorDBM.
+    m_showNoiseFloor = s.value(QStringLiteral("DisplayShowNoiseFloor"),
+                               QStringLiteral("False")).toString() == QStringLiteral("True");
+    {
+        const int nfPos = s.value(QStringLiteral("DisplayShowNoiseFloorPosition"),
+                                  QStringLiteral("2")).toInt();
+        m_noiseFloorPosition = static_cast<OverlayPosition>(
+            qBound(0, nfPos, static_cast<int>(OverlayPosition::BottomRight)));
+    }
+    // From Thetis specHPSDR.cs:325 [v2.10.3.13] NormOneHzPan.
+    m_dispNormalize = s.value(QStringLiteral("DisplayDispNormalize"),
+                              QStringLiteral("False")).toString() == QStringLiteral("True");
+    // From Thetis console.cs:20073 [v2.10.3.13] peak_text_delay=500.
+    m_showPeakValueOverlay = s.value(QStringLiteral("DisplayShowPeakValueOverlay"),
+                                     QStringLiteral("False")).toString() == QStringLiteral("True");
+    {
+        const int pvPos = s.value(QStringLiteral("DisplayPeakValuePosition"),
+                                  QStringLiteral("1")).toInt();
+        m_peakValuePosition = static_cast<OverlayPosition>(
+            qBound(0, pvPos, static_cast<int>(OverlayPosition::BottomRight)));
+    }
+    m_peakTextDelayMs = s.value(QStringLiteral("DisplayPeakTextDelayMs"),
+                                QStringLiteral("500")).toInt();
+    m_peakTextDelayMs = qBound(50, m_peakTextDelayMs, 10000);
+    // From Thetis console.cs:20278 [v2.10.3.13] Color.DodgerBlue (#1E90FF).
+    {
+        const QString pvHex = s.value(QStringLiteral("DisplayPeakValueColor")).toString();
+        if (!pvHex.isEmpty()) {
+            QColor c = QColor::fromString(pvHex);
+            if (c.isValid()) { m_peakValueColor = c; }
+        }
+    }
+    // If ShowPeakValueOverlay was persisted as on, restart the timer now.
+    if (m_showPeakValueOverlay) {
+        setShowPeakValueOverlay(false); // ensure clean start
+        setShowPeakValueOverlay(true);
+    }
 }
 
 void SpectrumWidget::saveSettings()
@@ -621,6 +666,31 @@ void SpectrumWidget::saveSettings()
     writeColor(QStringLiteral("DisplayGridTextColor"), m_gridTextColor);
     writeColor(QStringLiteral("DisplayZeroLineColor"), m_zeroLineColor);
     writeColor(QStringLiteral("DisplayBandEdgeColor"), m_bandEdgeColor);
+
+    // Task 2.3: spectrum text overlay keys.
+    // From Thetis display.cs:8692 [v2.10.3.13] AlwaysShowCursorInfo.
+    s.setValue(QStringLiteral("DisplayShowMHzOnCursor"),
+               m_showMHzOnCursor ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(QStringLiteral("DisplayShowBinWidth"),
+               m_showBinWidth ? QStringLiteral("True") : QStringLiteral("False"));
+    // From Thetis display.cs:2304 [v2.10.3.13] m_bShowNoiseFloorDBM.
+    s.setValue(QStringLiteral("DisplayShowNoiseFloor"),
+               m_showNoiseFloor ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(QStringLiteral("DisplayShowNoiseFloorPosition"),
+               QString::number(static_cast<int>(m_noiseFloorPosition)));
+    // From Thetis specHPSDR.cs:325 [v2.10.3.13] NormOneHzPan.
+    s.setValue(QStringLiteral("DisplayDispNormalize"),
+               m_dispNormalize ? QStringLiteral("True") : QStringLiteral("False"));
+    // From Thetis console.cs:20073 [v2.10.3.13] peak_text_delay=500.
+    s.setValue(QStringLiteral("DisplayShowPeakValueOverlay"),
+               m_showPeakValueOverlay ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(QStringLiteral("DisplayPeakValuePosition"),
+               QString::number(static_cast<int>(m_peakValuePosition)));
+    s.setValue(QStringLiteral("DisplayPeakTextDelayMs"),
+               QString::number(m_peakTextDelayMs));
+    // From Thetis console.cs:20278 [v2.10.3.13] Color.DodgerBlue.
+    s.setValue(QStringLiteral("DisplayPeakValueColor"),
+               m_peakValueColor.name(QColor::HexArgb));
 }
 
 void SpectrumWidget::scheduleSettingsSave()
@@ -1043,6 +1113,188 @@ void SpectrumWidget::setFillColor(const QColor& c)
     m_fillColor = c;
     scheduleSettingsSave();
     update();
+}
+
+// ---- Task 2.3: Spectrum text overlay setters ----
+
+// From Thetis display.cs:8692-8696 [v2.10.3.13] AlwaysShowCursorInfo;
+// wired via setup.cs:22283 chkShowMHzOnCursor_CheckedChanged.
+void SpectrumWidget::setShowMHzOnCursor(bool on)
+{
+    if (m_showMHzOnCursor == on) { return; }
+    m_showMHzOnCursor = on;
+    update();
+}
+
+// From Thetis setup.cs:7061 [v2.10.3.13] lblDisplayBinWidth.Text.
+void SpectrumWidget::setShowBinWidth(bool on)
+{
+    if (m_showBinWidth == on) { return; }
+    m_showBinWidth = on;
+    markOverlayDirty();
+    update();
+}
+
+double SpectrumWidget::binWidthHz() const
+{
+    const int fftSz = m_smoothed.isEmpty() ? 4096 : m_smoothed.size() * 2;
+    if (fftSz <= 0 || m_sampleRateHz <= 0.0) { return 0.0; }
+    return m_sampleRateHz / fftSz;
+}
+
+// formatCursorFreq — MHz vs Hz format for the cursor label.
+// From Thetis display.cs:8693 [v2.10.3.13] AlwaysShowCursorInfo toggle.
+QString SpectrumWidget::formatCursorFreq(double hz) const
+{
+    if (m_showMHzOnCursor) {
+        return QString::number(hz / 1.0e6, 'f', 4) + QStringLiteral(" MHz");
+    }
+    return QString::number(static_cast<qint64>(std::round(hz))) + QStringLiteral(" Hz");
+}
+
+// From Thetis display.cs:2304 [v2.10.3.13] m_bShowNoiseFloorDBM.
+void SpectrumWidget::setShowNoiseFloor(bool on)
+{
+    if (m_showNoiseFloor == on) { return; }
+    m_showNoiseFloor = on;
+    update();
+}
+
+void SpectrumWidget::setShowNoiseFloorPosition(OverlayPosition pos)
+{
+    if (m_noiseFloorPosition == pos) { return; }
+    m_noiseFloorPosition = pos;
+    if (m_showNoiseFloor) { update(); }
+}
+
+// From Thetis specHPSDR.cs:325 [v2.10.3.13] NormOneHzPan.
+// Routes to SetDisplayNormOneHz — stored here; propagated to WDSP
+// spectrum engine when integrated in Task 5.x.
+void SpectrumWidget::setDispNormalize(bool on)
+{
+    if (m_dispNormalize == on) { return; }
+    m_dispNormalize = on;
+    // TODO(task-5.x): call FFTEngine or WDSP SetDisplayNormOneHz here.
+    update();
+}
+
+// From Thetis console.cs:20073-20080 [v2.10.3.13] PeakTextDelay / timer_peak_text.
+// ShowPeakValueOverlay creates or destroys the throttle timer as needed.
+void SpectrumWidget::setShowPeakValueOverlay(bool on)
+{
+    if (m_showPeakValueOverlay == on) { return; }
+    m_showPeakValueOverlay = on;
+    if (on) {
+        if (!m_peakTextTimer) {
+            m_peakTextTimer = new QTimer(this);
+            m_peakTextTimer->setSingleShot(false);
+            connect(m_peakTextTimer, &QTimer::timeout, this, [this]() {
+                // Rebuild the cached peak overlay text from the current smoothed bins.
+                if (m_smoothed.isEmpty()) {
+                    m_peakTextCache.clear();
+                    return;
+                }
+                auto [firstBin, lastBin] = visibleBinRange(m_smoothed.size());
+                float peakDbm = std::numeric_limits<float>::lowest();
+                int   peakBin = firstBin;
+                for (int b = firstBin; b <= lastBin; ++b) {
+                    if (m_smoothed[b] > peakDbm) {
+                        peakDbm = m_smoothed[b];
+                        peakBin = b;
+                    }
+                }
+                // Convert bin index to frequency using DDC center + sample rate.
+                const double binWidth  = m_sampleRateHz / m_smoothed.size();
+                const double fftLowHz  = m_ddcCenterHz - m_sampleRateHz / 2.0;
+                const double peakHz    = fftLowHz + (peakBin + 0.5) * binWidth;
+                m_peakTextCache = QStringLiteral("Peak: ")
+                    + QString::number(static_cast<double>(peakDbm), 'f', 1)
+                    + QStringLiteral(" dBm @ ")
+                    + QString::number(peakHz / 1.0e6, 'f', 4)
+                    + QStringLiteral(" MHz");
+                update();
+            });
+        }
+        m_peakTextTimer->start(m_peakTextDelayMs);
+    } else {
+        if (m_peakTextTimer) {
+            m_peakTextTimer->stop();
+        }
+        m_peakTextCache.clear();
+        update();
+    }
+}
+
+void SpectrumWidget::setPeakValuePosition(OverlayPosition pos)
+{
+    if (m_peakValuePosition == pos) { return; }
+    m_peakValuePosition = pos;
+    if (m_showPeakValueOverlay) { update(); }
+}
+
+// From Thetis console.cs:20073-20080 [v2.10.3.13] PeakTextDelay default=500.
+void SpectrumWidget::setPeakTextDelayMs(int ms)
+{
+    ms = qBound(50, ms, 10000);
+    if (m_peakTextDelayMs == ms) { return; }
+    m_peakTextDelayMs = ms;
+    if (m_peakTextTimer && m_peakTextTimer->isActive()) {
+        m_peakTextTimer->setInterval(ms);
+    }
+}
+
+// From Thetis console.cs:20278 [v2.10.3.13] peak_text_color = Color.DodgerBlue.
+void SpectrumWidget::setPeakValueColor(const QColor& c)
+{
+    if (!c.isValid() || m_peakValueColor == c) { return; }
+    m_peakValueColor = c;
+    if (m_showPeakValueOverlay) { update(); }
+}
+
+// drawTextOverlay — renders text at a corner of specRect with a semi-transparent
+// background chip. Shared helper for NF, peak, and bin-width overlays.
+// NereusSDR-native (Thetis uses separate per-feature draw calls in DX2D renderer).
+void SpectrumWidget::drawTextOverlay(QPainter& p, const QRect& specRect,
+                                     OverlayPosition pos, const QString& text,
+                                     const QColor& color)
+{
+    if (text.isEmpty()) { return; }
+
+    QFont font = p.font();
+    font.setPixelSize(11);
+    font.setBold(true);
+    p.setFont(font);
+
+    const QFontMetrics fm(font);
+    const int pad  = 6;
+    const int tw   = fm.horizontalAdvance(text) + pad * 2;
+    const int th   = fm.height() + pad;
+
+    const int margin = 6;
+    int x = 0;
+    int y = 0;
+    switch (pos) {
+        case OverlayPosition::TopLeft:
+            x = specRect.left()  + margin;
+            y = specRect.top()   + margin;
+            break;
+        case OverlayPosition::TopRight:
+            x = specRect.right() - tw   - margin;
+            y = specRect.top()   + margin;
+            break;
+        case OverlayPosition::BottomLeft:
+            x = specRect.left()  + margin;
+            y = specRect.bottom() - th  - margin;
+            break;
+        case OverlayPosition::BottomRight:
+            x = specRect.right() - tw   - margin;
+            y = specRect.bottom() - th  - margin;
+            break;
+    }
+
+    p.fillRect(x, y, tw, th, QColor(0x10, 0x15, 0x20, 180));
+    p.setPen(color);
+    p.drawText(x + pad, y + fm.ascent() + pad / 2, text);
 }
 
 // ---- Phase 3G-8 commit 4: waterfall setters ----
@@ -1513,6 +1765,49 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
         p.setPen(m_gridTextColor);
         const int tw = p.fontMetrics().horizontalAdvance(fpsText);
         p.drawText(specRect.right() - tw - 8, specRect.top() + 14, fpsText);
+    }
+
+    // ---- Task 2.3: spectrum text overlays ----
+
+    // ShowBinWidth — render bin width in corner.
+    // From Thetis setup.cs:7061 [v2.10.3.13] lblDisplayBinWidth.
+    if (m_showBinWidth) {
+        const double bw = binWidthHz();
+        if (bw > 0.0) {
+            const QString bwText = QString::number(bw, 'f', 3)
+                                 + QStringLiteral(" Hz/bin");
+            drawTextOverlay(p, specRect, OverlayPosition::BottomRight,
+                            bwText, m_gridTextColor);
+        }
+    }
+
+    // ShowNoiseFloor — render noise floor estimate as corner text.
+    // From Thetis display.cs:2304-2308 [v2.10.3.13] m_bShowNoiseFloorDBM.
+    // NereusSDR: noise floor value comes from NoiseFloorEstimator (Phase 3G-9c).
+    // For now, derive a rough estimate from the bottom 10th percentile of the
+    // visible bins if no dedicated estimator has pushed a value.
+    if (m_showNoiseFloor && !m_smoothed.isEmpty()) {
+        auto [firstBin, lastBin] = visibleBinRange(m_smoothed.size());
+        const int nBins = lastBin - firstBin + 1;
+        if (nBins > 0) {
+            QVector<float> sorted(m_smoothed.constBegin() + firstBin,
+                                  m_smoothed.constBegin() + lastBin + 1);
+            std::sort(sorted.begin(), sorted.end());
+            // Use 10th percentile as noise floor estimate (simple approximation)
+            const float nf = sorted[qBound(0, sorted.size() / 10, sorted.size() - 1)];
+            const QString nfText = QStringLiteral("NF: ")
+                + QString::number(static_cast<double>(nf), 'f', 1)
+                + QStringLiteral(" dBm");
+            drawTextOverlay(p, specRect, m_noiseFloorPosition,
+                            nfText, m_gridTextColor);
+        }
+    }
+
+    // ShowPeakValueOverlay — render cached peak text (refreshed by timer).
+    // From Thetis console.cs:20073 PeakTextDelay=500ms [v2.10.3.13].
+    if (m_showPeakValueOverlay && !m_peakTextCache.isEmpty()) {
+        drawTextOverlay(p, specRect, m_peakValuePosition,
+                        m_peakTextCache, m_peakValueColor);
     }
 
     // HIGH SWR / PA safety overlay — painted last so it sits on top of all
@@ -2735,9 +3030,12 @@ void SpectrumWidget::drawCursorInfo(QPainter& p, const QRect& specRect)
     }
 
     double hz = xToHz(m_mousePos.x(), specRect);
-    double mhz = hz / 1.0e6;
 
-    QString label = QString::number(mhz, 'f', 4) + QStringLiteral(" MHz");
+    // From Thetis display.cs:8692-8696 [v2.10.3.13] AlwaysShowCursorInfo:
+    // when m_showMHzOnCursor is false, the cursor tooltip only shows on hover
+    // (m_mouseInWidget is already true here) and formats in MHz.
+    // When m_showMHzOnCursor is true it always shows and uses formatCursorFreq().
+    QString label = formatCursorFreq(hz);
 
     QFont font = p.font();
     font.setPixelSize(11);

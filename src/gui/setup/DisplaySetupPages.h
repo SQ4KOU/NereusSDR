@@ -118,6 +118,22 @@ private:
 
     // Section: Thread (S17)
     QComboBox*      m_threadPriorityCombo{nullptr};
+
+    // Section: Spectrum Overlays (Task 2.3)
+    // From Thetis setup.designer.cs:33043 [v2.10.3.13] chkShowMHzOnCursor
+    QCheckBox* m_showMHzOnCursorToggle{nullptr};
+    // From Thetis setup.cs:7061 [v2.10.3.13] lblDisplayBinWidth
+    QCheckBox* m_showBinWidthToggle{nullptr};
+    QLabel*    m_binWidthReadout{nullptr};
+    // From Thetis display.cs:2304 [v2.10.3.13] m_bShowNoiseFloorDBM
+    QCheckBox* m_showNoiseFloorToggle{nullptr};
+    QComboBox* m_noiseFloorPositionCombo{nullptr};
+    // From Thetis specHPSDR.cs:325 [v2.10.3.13] NormOneHzPan
+    QCheckBox* m_dispNormalizeToggle{nullptr};
+    // From Thetis console.cs:20073 [v2.10.3.13] PeakTextDelay
+    QCheckBox* m_showPeakValueOverlayToggle{nullptr};
+    QComboBox* m_peakValuePositionCombo{nullptr};
+    QSpinBox*  m_peakTextDelaySpin{nullptr};
 };
 
 // ---------------------------------------------------------------------------

@@ -500,6 +500,65 @@ public:
     void setBandEdgeColor(const QColor& c);
     QColor bandEdgeColor() const { return m_bandEdgeColor; }
 
+    // ---- Task 2.3: Spectrum text overlays ----
+    // Corner-text overlays: noise floor dBm, peak dBm @ MHz, bin width readout.
+    // MHz cursor format is applied to the cursor-hover label in drawCursorInfo.
+
+    // OverlayPosition: 4-corner placement for corner-text overlays.
+    // NereusSDR-native enum; Thetis uses fixed positions (e.g. infoBar is top).
+    enum class OverlayPosition { TopLeft, TopRight, BottomLeft, BottomRight };
+
+    // ShowMHzOnCursor — always display the cursor freq label (not just on Shift).
+    // From Thetis display.cs:8692-8696 [v2.10.3.13] AlwaysShowCursorInfo;
+    // wired from setup.cs:22283 chkShowMHzOnCursor_CheckedChanged.
+    void setShowMHzOnCursor(bool on);
+    bool showMHzOnCursor() const { return m_showMHzOnCursor; }
+
+    // formatCursorFreq — format a frequency value for the cursor label.
+    // When m_showMHzOnCursor is true: "7.1735 MHz"; otherwise: "7173500 Hz".
+    // Exposed for unit tests (pure function, no widget state side-effects).
+    // From Thetis display.cs:8693 [v2.10.3.13] AlwaysShowCursorInfo.
+    QString formatCursorFreq(double hz) const;
+
+    // ShowBinWidth — toggle bin-width readout label in spectrum corner.
+    // Displays sampleRate / fftSize in kHz (e.g. "11.719 Hz/bin").
+    // From Thetis setup.cs:7061 lblDisplayBinWidth.Text [v2.10.3.13].
+    void setShowBinWidth(bool on);
+    bool showBinWidth() const { return m_showBinWidth; }
+    // binWidthHz — returns current bin width; exposed for unit tests.
+    double binWidthHz() const;
+
+    // ShowNoiseFloor — render noise-floor estimate as corner text overlay.
+    // From Thetis display.cs:2304-2308 ShowNoiseFloorDBM [v2.10.3.13];
+    // rendered at display.cs:5440 in DrawSpectrumDX2D.
+    void setShowNoiseFloor(bool on);
+    bool showNoiseFloor() const { return m_showNoiseFloor; }
+    void setShowNoiseFloorPosition(OverlayPosition pos);
+    OverlayPosition showNoiseFloorPosition() const { return m_noiseFloorPosition; }
+
+    // DispNormalize — normalize-to-1-Hz before display.
+    // Routes to SetDisplayNormOneHz in the WDSP spectrum engine.
+    // From Thetis specHPSDR.cs:291-293 [v2.10.3.13] NormOneHzPan property;
+    // wired from setup.cs:18093-18099 chkDispNormalize_CheckedChanged.
+    // Note: In Thetis this calls SpecHPSDRDLL.SetDisplayNormOneHz (a WDSP
+    // call); NereusSDR stores the flag and propagates it to FFTEngine when
+    // the WDSP spectrum engine is integrated (Task 5.x).
+    void setDispNormalize(bool on);
+    bool dispNormalize() const { return m_dispNormalize; }
+
+    // ShowPeakValueOverlay — scan visible bins, render "Peak: X.X dBm @ Y.YYYY MHz"
+    // as corner text. Refreshed on a timer throttled by m_peakTextDelayMs.
+    // From Thetis console.cs:20073 PeakTextDelay default=500ms [v2.10.3.13].
+    // PeakTextColor default DodgerBlue from console.cs:20278 [v2.10.3.13].
+    void setShowPeakValueOverlay(bool on);
+    bool showPeakValueOverlay() const { return m_showPeakValueOverlay; }
+    void setPeakValuePosition(OverlayPosition pos);
+    OverlayPosition peakValuePosition() const { return m_peakValuePosition; }
+    void setPeakTextDelayMs(int ms);
+    int  peakTextDelayMs() const { return m_peakTextDelayMs; }
+    void setPeakValueColor(const QColor& c);
+    QColor peakValueColor() const { return m_peakValueColor; }
+
     // ---- HIGH SWR / PA safety overlay ----
     // Ported from Thetis display.cs:4183-4201 [v2.10.3.13]
     // Mirrors the DX2D "HIGH SWR" warning block: red centred text +
@@ -888,6 +947,41 @@ private:
 
     // ---- Overlay menu ----
     SpectrumOverlayMenu* m_overlayMenu{nullptr};
+
+    // ---- Task 2.3: Spectrum text overlay state ----
+
+    // From Thetis display.cs:8692 [v2.10.3.13] AlwaysShowCursorInfo
+    bool m_showMHzOnCursor{false};
+
+    // From Thetis setup.cs:7061 [v2.10.3.13] lblDisplayBinWidth
+    bool m_showBinWidth{false};
+
+    // From Thetis display.cs:2304 [v2.10.3.13] m_bShowNoiseFloorDBM (default true in Thetis;
+    // NereusSDR defaults off so the overlay is opt-in rather than on by default)
+    bool            m_showNoiseFloor{false};
+    OverlayPosition m_noiseFloorPosition{OverlayPosition::BottomLeft};
+
+    // From Thetis specHPSDR.cs:325 [v2.10.3.13] NormOneHzPan
+    bool m_dispNormalize{false};
+
+    // From Thetis console.cs:20073 peak_text_delay=500 [v2.10.3.13]
+    // Color from console.cs:20278 Color.DodgerBlue [v2.10.3.13]
+    bool            m_showPeakValueOverlay{false};
+    OverlayPosition m_peakValuePosition{OverlayPosition::TopRight};
+    int             m_peakTextDelayMs{500};
+    // From Thetis console.cs:20278 [v2.10.3.13]: Color.DodgerBlue = #1E90FF
+    QColor          m_peakValueColor{0x1E, 0x90, 0xFF};
+
+    // Peak text overlay refresh timer — throttled by m_peakTextDelayMs.
+    QTimer*         m_peakTextTimer{nullptr};
+    // Current cached peak overlay text (refreshed by timer, rendered every frame).
+    QString         m_peakTextCache;
+
+    // drawTextOverlay helper — renders a text string at a corner position on
+    // the spectrum rect, using the given colour.
+    void drawTextOverlay(QPainter& p, const QRect& specRect,
+                         OverlayPosition pos, const QString& text,
+                         const QColor& color);
 
     // ---- Coalesced settings save ----
     void scheduleSettingsSave();

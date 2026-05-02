@@ -117,6 +117,13 @@ public:
     void setOutputFps(int fps);
     int  outputFps() const { return m_targetFps.load(); }
 
+    // setDecimation — apply I/Q decimation before FFT processing.
+    // Only every Nth I/Q sample pair is passed to the FFT accumulator.
+    // Higher decimation reduces effective bandwidth and FFT resolution,
+    // mirroring Thetis setup.designer.cs:33732 udDisplayDecimation [v2.10.3.13].
+    void setDecimation(int factor);
+    int  decimation() const { return m_decimation.load(); }
+
 public slots:
     // Feed raw interleaved I/Q samples from RadioConnection.
     // Format: [I0, Q0, I1, Q1, ...] as float pairs.
@@ -142,9 +149,13 @@ private:
     std::atomic<int>    m_windowFunc{static_cast<int>(WindowFunction::BlackmanHarris4)};
     std::atomic<double> m_sampleRate{48000.0};
     std::atomic<int>    m_targetFps{30};
+    // From Thetis setup.designer.cs:33732 udDisplayDecimation [v2.10.3.13].
+    // Range 1..32; 1 = no decimation (pass every sample).
+    std::atomic<int>    m_decimation{1};
 
     // Internal state (only accessed on worker thread)
     int m_currentFftSize{0};  // last planned size (triggers replan on mismatch)
+    int m_decimationCounter{0};  // counts input sample pairs; reset each decimation pass
 
 #ifdef HAVE_FFTW3
     fftwf_complex* m_fftIn{nullptr};

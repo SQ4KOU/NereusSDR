@@ -2640,3 +2640,16 @@ nereus_add_test(tst_dsp_change_timer)
 #   Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free).
 nereus_add_test(tst_detector_modes)
 nereus_add_test(tst_averaging_modes)
+
+# ── Task 2.3: Spectrum Defaults overlay group + decimation wire-up ──────────
+# Tests for SpectrumWidget overlay setters (ShowMHzOnCursor / ShowBinWidth /
+# ShowNoiseFloor / DispNormalize / ShowPeakValueOverlay) and FFTEngine
+# decimation (setDecimation range clamp + roundtrip).
+#
+# tst_spectrum_overlays: accessor roundtrips + default-value asserts.
+#   formatCursorFreq Hz vs MHz format verified for on/off states.
+#   PeakTextDelay default=500ms from Thetis console.cs:20073 [v2.10.3.13].
+#   PeakValueColor default DodgerBlue (#1E90FF) from console.cs:20278 [v2.10.3.13].
+#   FFTEngine::setDecimation range [1..32] enforced; out-of-range rejected.
+#   Uses QTEST_MAIN (QApplication required for SpectrumWidget construction).
+nereus_add_test(tst_spectrum_overlays)
