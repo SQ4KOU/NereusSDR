@@ -1,3 +1,8 @@
+// no-port-check: unit test for ported logic. The test code itself is
+// NereusSDR-original; the upstream license headers below are carried
+// because the logic under test derives from Thetis display.cs. The
+// production ported file (PeakBlobDetector) is the attributable unit.
+//
 // =================================================================
 // tests/tst_peak_blob_detector.cpp  (NereusSDR)
 // =================================================================

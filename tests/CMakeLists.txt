@@ -852,6 +852,11 @@ nereus_add_test(tst_bandplan_manager)
 # drift in the cap is caught by the build.
 nereus_add_test(tst_waterfall_scrollback)
 
+# ── Task 2.8: WaterfallDefaultsPage changes (NF-AGC, Stop-on-TX, W5 removal) ─
+# NF-AGC setter round-trips, offset clamp, stop-on-TX setter round-trips,
+# and smoke test for setActivePeakHoldTxActive + setWaterfallStopOnTx combo.
+nereus_add_test(tst_waterfall_defaults_changes)
+
 # ── Phase 3M-0 Task 2: BandPlanGuard region tables + 60m channels ─────────
 # Pure data + pure predicates; no Qt parent, no signals.
 # 12 table-driven tests cover US/UK/Japan 60m channelization, extended bypass,

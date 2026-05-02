@@ -470,8 +470,13 @@ void SpectrumWidget::loadSettings()
     // Phase 3G-8 commit 4: waterfall renderer state.
     m_wfAgcEnabled = s.value(settingsKey(QStringLiteral("DisplayWfAgc"), m_panIndex),
                              QStringLiteral("True")).toString() == QStringLiteral("True");
-    m_wfReverseScroll = s.value(settingsKey(QStringLiteral("DisplayWfReverseScroll"), m_panIndex),
-                                QStringLiteral("False")).toString() == QStringLiteral("True");
+    // Task 2.8: NF-AGC settings (DisplayWfReverseScroll key intentionally not
+    // read here — W5 removed; key migration handled in Task 5.1).
+    m_wfNfAgcEnabled = s.value(settingsKey(QStringLiteral("WaterfallNFAGCEnabled"), m_panIndex),
+                               QStringLiteral("False")).toString() == QStringLiteral("True");
+    m_wfNfAgcOffsetDb = readInt(QStringLiteral("WaterfallAGCOffsetDb"), 0);
+    m_wfStopOnTx = s.value(settingsKey(QStringLiteral("WaterfallStopOnTx"), m_panIndex),
+                           QStringLiteral("False")).toString() == QStringLiteral("True");
     m_wfOpacity          = readInt(QStringLiteral("DisplayWfOpacity"), 100);
     m_wfUpdatePeriodMs   = readInt(QStringLiteral("DisplayWfUpdatePeriodMs"), 30);
 
@@ -624,8 +629,13 @@ void SpectrumWidget::saveSettings()
     // Phase 3G-8 commit 4: waterfall renderer state.
     s.setValue(settingsKey(QStringLiteral("DisplayWfAgc"), m_panIndex),
               m_wfAgcEnabled ? QStringLiteral("True") : QStringLiteral("False"));
-    s.setValue(settingsKey(QStringLiteral("DisplayWfReverseScroll"), m_panIndex),
-              m_wfReverseScroll ? QStringLiteral("True") : QStringLiteral("False"));
+    // Task 2.8: NF-AGC + Stop-on-TX (DisplayWfReverseScroll intentionally not
+    // written; W5 removed — key migration in Task 5.1).
+    s.setValue(settingsKey(QStringLiteral("WaterfallNFAGCEnabled"), m_panIndex),
+              m_wfNfAgcEnabled ? QStringLiteral("True") : QStringLiteral("False"));
+    writeInt(QStringLiteral("WaterfallAGCOffsetDb"), m_wfNfAgcOffsetDb);
+    s.setValue(settingsKey(QStringLiteral("WaterfallStopOnTx"), m_panIndex),
+              m_wfStopOnTx ? QStringLiteral("True") : QStringLiteral("False"));
     writeInt(QStringLiteral("DisplayWfOpacity"), m_wfOpacity);
     writeInt(QStringLiteral("DisplayWfUpdatePeriodMs"), m_wfUpdatePeriodMs);
     s.setValue(settingsKey(QStringLiteral("DisplayWaterfallHistoryMs"), m_panIndex),
@@ -1418,12 +1428,28 @@ void SpectrumWidget::setClarityActive(bool on)
     m_clarityActive = on;
 }
 
-void SpectrumWidget::setWfReverseScroll(bool on)
+// Task 2.8: NF-AGC — auto-track waterfall thresholds to noise floor + offset.
+void SpectrumWidget::setWaterfallNFAGCEnabled(bool on)
 {
-    if (m_wfReverseScroll == on) { return; }
-    m_wfReverseScroll = on;
+    if (m_wfNfAgcEnabled == on) { return; }
+    m_wfNfAgcEnabled = on;
     scheduleSettingsSave();
-    update();
+}
+
+void SpectrumWidget::setWaterfallAGCOffsetDb(int db)
+{
+    db = qBound(-60, db, 60);
+    if (m_wfNfAgcOffsetDb == db) { return; }
+    m_wfNfAgcOffsetDb = db;
+    scheduleSettingsSave();
+}
+
+// Task 2.8: Stop-on-TX — gate pushWaterfallRow() while TX is active.
+void SpectrumWidget::setWaterfallStopOnTx(bool on)
+{
+    if (m_wfStopOnTx == on) { return; }
+    m_wfStopOnTx = on;
+    scheduleSettingsSave();
 }
 
 void SpectrumWidget::setWfOpacity(int percent)
@@ -2246,38 +2272,21 @@ void SpectrumWidget::drawWaterfall(QPainter& p, const QRect& wfRect)
     }
 
     // Ring buffer display — newest row at top, oldest at bottom (normal scroll).
-    // Reverse scroll flips that vertically: oldest at top, newest at bottom.
     // From Thetis display.cs:7719-7729: new row written at top, old content shifts down.
+    // W5 (reverse scroll) removed in Task 2.8; migration in Task 5.1.
     int wfH = m_waterfall.height();
 
-    if (!m_wfReverseScroll) {
-        // Part 1 (top of screen): from writeRow to end of image
-        int part1Rows = wfH - m_wfWriteRow;
-        if (part1Rows > 0) {
-            QRect src(0, m_wfWriteRow, m_waterfall.width(), part1Rows);
-            QRect dst(wfRect.left(), wfRect.top(), wfRect.width(), part1Rows);
-            p.drawImage(dst, m_waterfall, src);
-        }
-        if (m_wfWriteRow > 0) {
-            QRect src(0, 0, m_waterfall.width(), m_wfWriteRow);
-            QRect dst(wfRect.left(), wfRect.top() + part1Rows, wfRect.width(), m_wfWriteRow);
-            p.drawImage(dst, m_waterfall, src);
-        }
-    } else {
-        // Reverse: oldest row at top, newest at bottom. writeRow points at
-        // the newest row, so we render backward.
-        int part1Rows = m_wfWriteRow + 1;
-        int part2Rows = wfH - part1Rows;
-        if (part2Rows > 0) {
-            QRect src(0, m_wfWriteRow + 1, m_waterfall.width(), part2Rows);
-            QRect dst(wfRect.left(), wfRect.top(), wfRect.width(), part2Rows);
-            p.drawImage(dst, m_waterfall, src);
-        }
-        if (part1Rows > 0) {
-            QRect src(0, 0, m_waterfall.width(), part1Rows);
-            QRect dst(wfRect.left(), wfRect.top() + part2Rows, wfRect.width(), part1Rows);
-            p.drawImage(dst, m_waterfall, src);
-        }
+    // Part 1 (top of screen): from writeRow to end of image
+    int part1Rows = wfH - m_wfWriteRow;
+    if (part1Rows > 0) {
+        QRect src(0, m_wfWriteRow, m_waterfall.width(), part1Rows);
+        QRect dst(wfRect.left(), wfRect.top(), wfRect.width(), part1Rows);
+        p.drawImage(dst, m_waterfall, src);
+    }
+    if (m_wfWriteRow > 0) {
+        QRect src(0, 0, m_waterfall.width(), m_wfWriteRow);
+        QRect dst(wfRect.left(), wfRect.top() + part1Rows, wfRect.width(), m_wfWriteRow);
+        p.drawImage(dst, m_waterfall, src);
     }
 
     if (!qFuzzyCompare(opacity, 1.0f)) {
@@ -2988,11 +2997,18 @@ void SpectrumWidget::reprojectWaterfall(double oldCenterHz, double oldBandwidthH
 //
 // Phase 3G-8 commit 4: respects m_wfUpdatePeriodMs (rate-limit),
 // m_wfAverageMode (waterfall-specific averaging), m_wfAgcEnabled (auto
-// level tracking), m_wfUseSpectrumMinMax (borrow spectrum thresholds),
-// m_wfReverseScroll (write at opposite end of ring so newest is bottom).
+// level tracking), m_wfUseSpectrumMinMax (borrow spectrum thresholds).
+// Task 2.8: m_wfStopOnTx gates push during TX; m_wfNfAgcEnabled drives
+// thresholds from 10th-percentile noise floor + m_wfNfAgcOffsetDb.
+// W5 (m_wfReverseScroll) removed — key migration deferred to Task 5.1.
 void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
 {
     if (m_waterfall.isNull()) {
+        return;
+    }
+
+    // Task 2.8: Stop-on-TX — skip if TX active and feature enabled.
+    if (m_wfStopOnTx && m_activePeakHold.txActive()) {
         return;
     }
 
@@ -3067,14 +3083,35 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
         m_wfLowThreshold  = m_refLevel - m_dynamicRange;
     }
 
-    int h = m_waterfall.height();
-    // Decrement (normal) or increment (reverse) write pointer so the newest
-    // row lands at the appropriate edge.
-    if (m_wfReverseScroll) {
-        m_wfWriteRow = (m_wfWriteRow + 1) % h;
-    } else {
-        m_wfWriteRow = (m_wfWriteRow - 1 + h) % h;
+    // Task 2.8: NF-AGC — override thresholds from 10th-percentile noise floor
+    // + configured offset.  Takes priority over spectrum-min-max but yields to
+    // the existing legacy AGC (which is a different feature).  When both NF-AGC
+    // and legacy AGC are enabled, legacy AGC already ran above and this block
+    // re-applies on top; they address different use-cases so co-existence is
+    // intentional (NF-AGC is the Thetis-parity "noise floor tracker" variant).
+    if (m_wfNfAgcEnabled && !m_clarityActive) {
+        auto [fb, lb] = visibleBinRange(src->size());
+        const int nv = lb - fb + 1;
+        if (nv > 0) {
+            QVector<float> sorted(src->constBegin() + fb,
+                                  src->constBegin() + lb + 1);
+            std::sort(sorted.begin(), sorted.end());
+            // 10th-percentile as noise floor proxy (same approximation used in
+            // the ShowNoiseFloor overlay — consistent per-widget convention).
+            const float nf = sorted[qBound(0, sorted.size() / 10, sorted.size() - 1)];
+            const float offsetF = static_cast<float>(m_wfNfAgcOffsetDb);
+            // Low threshold = noise floor + offset (typically negative, e.g. -10)
+            // High threshold = low + 60 dB palette range so colours don't collapse.
+            m_wfLowThreshold  = nf + offsetF;
+            m_wfHighThreshold = m_wfLowThreshold + 60.0f;
+        }
     }
+
+    int h = m_waterfall.height();
+    // Decrement write pointer so newest row is always at m_wfWriteRow (normal
+    // scroll: newest row at top, content shifts down toward older rows).
+    // W5 (reverse scroll) removed in Task 2.8; migration in Task 5.1.
+    m_wfWriteRow = (m_wfWriteRow - 1 + h) % h;
 
     int w = m_waterfall.width();
     QRgb* scanline = reinterpret_cast<QRgb*>(m_waterfall.scanLine(m_wfWriteRow));

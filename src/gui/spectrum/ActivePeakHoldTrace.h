@@ -109,6 +109,7 @@ public:
     // From Thetis display.cs m_bActivePeakHold / MOX interaction [v2.10.3.13].
     void setOnTx(bool o)                { m_onTx = o; }
     void setTxActive(bool t)            { m_txActive = t; }
+    bool txActive() const               { return m_txActive; }
 
     // ---- Per-frame operations ----
 

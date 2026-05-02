@@ -967,7 +967,6 @@ void WaterfallDefaultsPage::loadFromRenderer()
     QSignalBlocker b3(m_agcToggle);
     QSignalBlocker b4(m_useSpectrumMinMaxToggle);
     QSignalBlocker b5(m_updatePeriodSlider);
-    QSignalBlocker b6(m_reverseToggle);
     QSignalBlocker b7(m_opacitySlider);
     QSignalBlocker b8(m_colorSchemeCombo);
     QSignalBlocker b9(m_wfAveragingCombo);
@@ -983,8 +982,21 @@ void WaterfallDefaultsPage::loadFromRenderer()
     m_agcToggle->setChecked(sw->wfAgcEnabled());
     m_useSpectrumMinMaxToggle->setChecked(sw->wfUseSpectrumMinMax());
     m_updatePeriodSlider->setValue(sw->wfUpdatePeriodMs());
-    m_reverseToggle->setChecked(sw->wfReverseScroll());
     m_opacitySlider->setValue(sw->wfOpacity());
+
+    // Task 2.8: NF-AGC + Stop-on-TX
+    if (m_wfNfAgcEnable) {
+        QSignalBlocker bn(m_wfNfAgcEnable);
+        m_wfNfAgcEnable->setChecked(sw->waterfallNFAGCEnabled());
+    }
+    if (m_wfAgcOffsetDb) {
+        QSignalBlocker bo(m_wfAgcOffsetDb);
+        m_wfAgcOffsetDb->setValue(sw->waterfallAGCOffsetDb());
+    }
+    if (m_wfStopOnTx) {
+        QSignalBlocker bs(m_wfStopOnTx);
+        m_wfStopOnTx->setChecked(sw->waterfallStopOnTx());
+    }
     m_colorSchemeCombo->setCurrentIndex(static_cast<int>(sw->wfColorScheme()));
     m_wfAveragingCombo->setCurrentIndex(static_cast<int>(sw->wfAverageMode()));
     // Task 2.1: sync new waterfall split combos.
@@ -1019,6 +1031,27 @@ void WaterfallDefaultsPage::loadFromRenderer()
         m_historyDepthCombo->setCurrentIndex(idx);
     }
     updateEffectiveDepthLabel();
+    updateDelayLabel();
+}
+
+// Task 2.8: live "Delay: NN.N s" readout.
+// Computes approximate time span visible in the waterfall:
+//   delay_seconds = waterfall_pixel_height × update_period_ms / 1000
+// The waterfall pixel height is the QImage height when available, otherwise
+// we use a typical 512px stand-in so the label is always meaningful.
+void WaterfallDefaultsPage::updateDelayLabel()
+{
+    auto* sw = model() ? model()->spectrumWidget() : nullptr;
+    if (!sw || !m_delayLabel) { return; }
+    const int periodMs = std::max(1, sw->wfUpdatePeriodMs());
+    // Use the current SpectrumWidget pixel height as a proxy for visible rows.
+    // When the widget is not yet shown, this may be 0 — fall back to 512.
+    const int visibleRows = std::max(1, sw->height());
+    const double delaySec = static_cast<double>(visibleRows) *
+                            static_cast<double>(periodMs) / 1000.0;
+    m_delayLabel->setText(
+        QStringLiteral("Delay: %1 s")
+            .arg(delaySec, 0, 'f', 1));
 }
 
 void WaterfallDefaultsPage::updateEffectiveDepthLabel()
@@ -1113,7 +1146,68 @@ void WaterfallDefaultsPage::buildUI()
             this, [](const QColor&) { /* stored via AppSettings on save */ });
     levForm->addRow(QStringLiteral("Low Color:"), m_lowColorBtn);
 
+    // Task 2.8: Copy spectrum min/max → waterfall thresholds button.
+    m_copySpecMinMaxBtn = new QPushButton(
+        QStringLiteral("Copy spectrum min/max → waterfall thresholds"), levGroup);
+    m_copySpecMinMaxBtn->setToolTip(
+        QStringLiteral("Copies the current spectrum display dB max and dB min values "
+                       "into the waterfall High Threshold and Low Threshold above."));
+    connect(m_copySpecMinMaxBtn, &QPushButton::clicked, this, [this]() {
+        auto* sw = model() ? model()->spectrumWidget() : nullptr;
+        if (!sw) { return; }
+        // Spectrum top = refLevel(); spectrum bottom = refLevel() - dynamicRange().
+        const float high = sw->refLevel();
+        const float low  = sw->refLevel() - sw->dynamicRange();
+        // Apply to widget (triggers scheduleSettingsSave internally).
+        sw->setWfHighThreshold(high);
+        sw->setWfLowThreshold(low);
+        // Sync spinboxes in this page to the new values.
+        if (m_highThresholdSlider) {
+            QSignalBlocker bh(m_highThresholdSlider);
+            m_highThresholdSlider->setValue(static_cast<int>(high));
+        }
+        if (m_lowThresholdSlider) {
+            QSignalBlocker bl(m_lowThresholdSlider);
+            m_lowThresholdSlider->setValue(static_cast<int>(low));
+        }
+    });
+    levForm->addRow(QString(), m_copySpecMinMaxBtn);
+
     contentLayout()->addWidget(levGroup);
+
+    // --- Section: Waterfall NF-AGC (Task 2.8) ---
+    auto* nfAgcGroup = new QGroupBox(QStringLiteral("Waterfall NF-AGC"), this);
+    auto* nfAgcForm  = new QFormLayout(nfAgcGroup);
+    nfAgcForm->setSpacing(6);
+
+    m_wfNfAgcEnable = new QCheckBox(QStringLiteral("Enable NF-AGC"), nfAgcGroup);
+    m_wfNfAgcEnable->setToolTip(
+        QStringLiteral("When enabled, the waterfall low/high thresholds automatically "
+                       "track the estimated noise floor. The offset below sets how far "
+                       "below the noise floor the low threshold is placed."));
+    connect(m_wfNfAgcEnable, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWaterfallNFAGCEnabled(on);
+        }
+    });
+    nfAgcForm->addRow(QString(), m_wfNfAgcEnable);
+
+    m_wfAgcOffsetDb = new QSpinBox(nfAgcGroup);
+    m_wfAgcOffsetDb->setRange(-60, 60);
+    m_wfAgcOffsetDb->setSuffix(QStringLiteral(" dB"));
+    m_wfAgcOffsetDb->setValue(0);
+    m_wfAgcOffsetDb->setToolTip(
+        QStringLiteral("Offset applied above the estimated noise floor when computing "
+                       "the waterfall low threshold. Negative values place the low "
+                       "threshold below the noise floor (recommended)."));
+    connect(m_wfAgcOffsetDb, qOverload<int>(&QSpinBox::valueChanged), this, [this](int v) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWaterfallAGCOffsetDb(v);
+        }
+    });
+    nfAgcForm->addRow(QStringLiteral("NF offset:"), m_wfAgcOffsetDb);
+
+    contentLayout()->addWidget(nfAgcGroup);
 
     // --- Section: Display ---
     auto* dispGroup = new QGroupBox(QStringLiteral("Display"), this);
@@ -1131,19 +1225,32 @@ void WaterfallDefaultsPage::buildUI()
                 w->setWfUpdatePeriodMs(v);
             }
             updateEffectiveDepthLabel();
+            updateDelayLabel();
         });
         dispForm->addRow(QStringLiteral("Update Period:"), row.container);
     }
 
-    m_reverseToggle = new QCheckBox(QStringLiteral("Reverse scroll"), dispGroup);
-    // NereusSDR extension — no Thetis equivalent
-    m_reverseToggle->setToolTip(QStringLiteral("Waterfall normally scrolls top to bottom (newest at top). When checked, scrolls bottom to top (newest at bottom)."));
-    connect(m_reverseToggle, &QCheckBox::toggled, this, [this](bool on) {
+    // Task 2.8: Calculated Delay readout — live "Delay: NN.N s".
+    // Computed from waterfall height × update period; not persisted.
+    m_delayLabel = new QLabel(dispGroup);
+    m_delayLabel->setStyleSheet(QStringLiteral("color: #80a0b0;"));
+    m_delayLabel->setToolTip(
+        QStringLiteral("Approximate time covered by the visible waterfall display "
+                       "(rows × update period). Longer periods or larger display heights "
+                       "increase the delay span."));
+    dispForm->addRow(QString(), m_delayLabel);
+
+    // Task 2.8: Stop-on-TX.
+    m_wfStopOnTx = new QCheckBox(QStringLiteral("Stop on TX"), dispGroup);
+    m_wfStopOnTx->setToolTip(
+        QStringLiteral("Pause the waterfall while transmitting. "
+                       "Resumes automatically when TX ends."));
+    connect(m_wfStopOnTx, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
-            w->setWfReverseScroll(on);
+            w->setWaterfallStopOnTx(on);
         }
     });
-    dispForm->addRow(QString(), m_reverseToggle);
+    dispForm->addRow(QString(), m_wfStopOnTx);
 
     {
         auto row = makeSliderRow(0, 100, 100, QStringLiteral("%"), dispGroup);

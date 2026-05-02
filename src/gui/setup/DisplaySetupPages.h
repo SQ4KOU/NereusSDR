@@ -67,6 +67,7 @@ class QSpinBox;
 class QDoubleSpinBox;
 class QCheckBox;
 class QLabel;
+class QPushButton;
 
 namespace NereusSDR {
 
@@ -162,6 +163,7 @@ private:
     void buildUI();
     void loadFromRenderer();
     void updateEffectiveDepthLabel();
+    void updateDelayLabel();          // Task 2.8: live "Delay: NN.N s" readout
 
     // Section: Levels
     QSlider*           m_highThresholdSlider{nullptr};
@@ -170,9 +172,14 @@ private:
     ColorSwatchButton* m_lowColorBtn{nullptr};                // W10
     QCheckBox*         m_useSpectrumMinMaxToggle{nullptr};    // W15
 
+    // Section: NF-AGC (Task 2.8)
+    QCheckBox* m_wfNfAgcEnable{nullptr};   // WaterfallNFAGCEnabled
+    QSpinBox*  m_wfAgcOffsetDb{nullptr};   // WaterfallAGCOffsetDb (-60..+60)
+
     // Section: Display
     QSlider*   m_updatePeriodSlider{nullptr};
-    QCheckBox* m_reverseToggle{nullptr};
+    QLabel*    m_delayLabel{nullptr};      // Task 2.8: live "Delay: NN.N s" readout
+    QCheckBox* m_wfStopOnTx{nullptr};      // Task 2.8: WaterfallStopOnTx
     QSlider*   m_opacitySlider{nullptr};
     QComboBox* m_colorSchemeCombo{nullptr};  // 7 schemes
     QComboBox* m_wfAveragingCombo{nullptr};  // W16 (legacy)
@@ -180,6 +187,9 @@ private:
     // From Thetis comboDispWFDetector/comboDispWFAveraging [v2.10.3.13].
     QComboBox* m_waterfallDetectorCombo{nullptr};  // Peak/Rosenfell/Average/Sample
     QComboBox* m_waterfallAveragingCombo{nullptr}; // None/Recursive/Time Window/Log Recursive
+
+    // Task 2.8: Copy spectrum min/max → waterfall thresholds button
+    QPushButton* m_copySpecMinMaxBtn{nullptr};
 
     // Section: Overlays
     QCheckBox* m_showRxFilterToggle{nullptr};

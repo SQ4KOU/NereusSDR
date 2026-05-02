@@ -458,8 +458,14 @@ public:
     bool wfAgcEnabled() const { return m_wfAgcEnabled; }
     void setClarityActive(bool on);
     bool clarityActive() const { return m_clarityActive; }
-    void setWfReverseScroll(bool on);
-    bool wfReverseScroll() const { return m_wfReverseScroll; }
+    // NF-AGC: auto-track waterfall thresholds to noise floor + offset.
+    void setWaterfallNFAGCEnabled(bool on);
+    bool waterfallNFAGCEnabled() const { return m_wfNfAgcEnabled; }
+    void setWaterfallAGCOffsetDb(int db);
+    int  waterfallAGCOffsetDb() const { return m_wfNfAgcOffsetDb; }
+    // Stop-on-TX: pause pushWaterfallRow() while TX is active.
+    void setWaterfallStopOnTx(bool on);
+    bool waterfallStopOnTx() const { return m_wfStopOnTx; }
     void setWfOpacity(int percent);          // 0..100
     int  wfOpacity() const { return m_wfOpacity; }
     void setWfUpdatePeriodMs(int ms);
@@ -938,7 +944,11 @@ private:
 
     bool  m_wfAgcEnabled{true};
     bool  m_clarityActive{false};     // Phase 3G-9c: suppresses legacy AGC when Clarity drives thresholds
-    bool  m_wfReverseScroll{false};
+    // NF-AGC: Task 2.8 — auto-track thresholds to noise floor + offset.
+    bool  m_wfNfAgcEnabled{false};
+    int   m_wfNfAgcOffsetDb{0};       // offset applied above/below noise floor
+    // Stop-on-TX: Task 2.8 — gate pushWaterfallRow() while TX is active.
+    bool  m_wfStopOnTx{false};
     int   m_wfOpacity{100};           // 0..100
     int   m_wfUpdatePeriodMs{30};     // NereusSDR default per §10 divergence
     bool  m_wfUseSpectrumMinMax{false};
