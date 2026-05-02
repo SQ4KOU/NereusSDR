@@ -197,6 +197,7 @@ public slots:
     void setMicBias(bool on) override;
     void setLineInGain(int gain) override;
     void setUserDigOut(quint8 dig) override;
+    void setPuresignalRun(bool run) override;
     void setMicPTT(bool enabled) override;
     void setMicXlr(bool xlrJack) override;
 

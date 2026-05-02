@@ -113,6 +113,7 @@ public:
     void setMicBias(bool) override {}
     void setLineInGain(int) override {}
     void setUserDigOut(quint8) override {}
+    void setPuresignalRun(bool) override {}
     void setMicPTT(bool) override {}
     void setMicXlr(bool) override {}
 };

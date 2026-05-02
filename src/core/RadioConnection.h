@@ -311,6 +311,24 @@ public slots:
     /// Default 0 = all 4 user-dig-out pins low.
     virtual void setUserDigOut(quint8 dig) = 0;
 
+    /// Set PureSignal feedback DDC routing-active flag.  Maps to Thetis prn->puresignal_run.
+    /// Source: Thetis ChannelMaster/networkproto1.c:600 [v2.10.3.13]
+    ///   C2 = (prn->mic.line_in_gain & 0b00011111) | ((prn->puresignal_run & 1) << 6);
+    /// P1: bank 11 C2 bit 6 (mask 0x40).
+    /// P2: NO DIRECT WIRE-BIT — PureSignal feedback DDC routing on P2 is
+    ///     handled by the feedback DDC plumbing planned for 3M-4.  The P2
+    ///     override stores into base m_puresignalRun for symmetric API only;
+    ///     it does NOT emit anything on the wire until 3M-4.
+    ///
+    /// Semantic: tracks whether PureSignal feedback DDC routing is currently
+    /// *active*.  Distinct from BoardCapabilities.hasPureSignal (capability)
+    /// and from TransmitModel::puresignalEnabled (user toggle).  Until 3M-4
+    /// lights up the actual feedback DDC routing, the PureSignalApplet
+    /// "Enable" toggle is the proxy that drives this — wiring done in
+    /// Task 2.5 of the P1 full-parity epic, not here.
+    /// Default false = PureSignal feedback DDC NOT routing.
+    virtual void setPuresignalRun(bool run) = 0;
+
     /// Hardware mic-jack PTT enable (Orion/ANAN front-panel PTT).
     ///
     /// NereusSDR parameter convention: `enabled = true` means PTT is enabled
@@ -630,6 +648,15 @@ protected:
     // From Thetis ChannelMaster/networkproto1.c:601 [v2.10.3.13]:
     //   C3 = prn->user_dig_out & 0b00001111;
     quint8 m_userDigOut{0};
+
+    // Shared state for setPuresignalRun (Task 2.3 of P1 full-parity epic).
+    // Bool flag tracking whether PureSignal feedback DDC routing is active.
+    // Default false = NOT routing.
+    // P1: emitted to case 11 (C0=0x14) C2 bit 6 (mask 0x40) via ctx.p1PuresignalRun.
+    // P2: STORAGE-ONLY (no wire emission — PS feedback DDC routing is 3M-4 deferred).
+    // From Thetis ChannelMaster/networkproto1.c:600 [v2.10.3.13]:
+    //   C2 = (prn->mic.line_in_gain & 0b00011111) | ((prn->puresignal_run & 1) << 6);
+    bool m_puresignalRun{false};
 
     // Shared state for setMicPTT (3M-1b G.5).
     // POLARITY INVERSION: m_micPTT=true means PTT is enabled (intuitive UI semantic).

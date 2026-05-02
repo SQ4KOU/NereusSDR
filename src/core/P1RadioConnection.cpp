@@ -1458,6 +1458,44 @@ void P1RadioConnection::setUserDigOut(quint8 dig)
 }
 
 // ---------------------------------------------------------------------------
+// setPuresignalRun (Task 2.3 of P1 full-parity epic)
+//
+// Updates m_puresignalRun (shared base member) and arms m_forceBank11Next so
+// the new puresignal-run flag lands on the wire within ≤1 frame of the call.
+// Bool field — wire bit 6 of bank 11 C2.
+//
+// Wire bytes: bank 11 (C0=0x14) C2 bit 6 (mask 0x40) — the same C2 byte that
+// also carries line_in_gain (low 5 bits, Task 2.1).  Both fields OR together
+// into the same byte; this setter only flips bit 6, never touching the low
+// 5 bits — see test §3 (cross-bit guard for line_in_gain).
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:600 [v2.10.3.13]
+//   C2 = (prn->mic.line_in_gain & 0b00011111) | ((prn->puresignal_run & 1) << 6);
+//
+// Semantic: this flag tracks whether PureSignal feedback DDC routing is
+// currently *active* on the wire — distinct from BoardCapabilities.hasPureSignal
+// (capability) and from TransmitModel::puresignalEnabled (user toggle).  The
+// wiring from PureSignalApplet's "Enable" toggle to this setter is Task 2.5,
+// not this task; until 3M-4 lights up the actual feedback DDC routing, the
+// applet toggle is the proxy that drives this flag.
+//
+// Flush pattern mirrors setLineInGain / setUserDigOut (Codex P2):
+// m_forceBank11Next is set BEFORE the idempotent guard so the bit lands on
+// the wire within ≤1 frame.  Reuses m_forceBank11Next + captureBank11ForTest
+// infrastructure from G.3.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setPuresignalRun(bool run)
+{
+    // Codex P2: set flush flag BEFORE idempotent guard.
+    m_forceBank11Next = true;
+
+    if (m_puresignalRun == run) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_puresignalRun = run;
+}
+
+// ---------------------------------------------------------------------------
 // setMicPTT (3M-1b G.5)
 //
 // Enables or disables the hardware mic-jack PTT line (Orion/ANAN front-panel).
@@ -1733,6 +1771,7 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.p1MicBias      = m_micBias;     // 3M-1b G.4
     ctx.p1LineInGain   = m_lineInGain;  // Task 2.1 of P1 full-parity epic
     ctx.p1UserDigOut   = m_userDigOut;  // Task 2.2 of P1 full-parity epic
+    ctx.p1PuresignalRun = m_puresignalRun;  // Task 2.3 of P1 full-parity epic
     ctx.p1MicPTT       = m_micPTT;      // 3M-1b G.5
     ctx.duplex         = m_duplex;
     ctx.diversity      = m_diversity;
