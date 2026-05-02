@@ -162,6 +162,7 @@ mw0lge@grange-lane.co.uk
 #include <utility>
 
 #include "core/ConnectionState.h"
+#include "core/WdspTypes.h"  // DSPMode — for TX filter IQ-space mapping (Plan 4 D9)
 
 QT_BEGIN_NAMESPACE
 class QLabel;
@@ -488,6 +489,23 @@ public slots:
     // From Thetis display.cs:2481 [v2.10.3.13].
     void setTxFilterVisible(bool on);
 
+    // ---- TX filter overlay (Plan 4 D9, Cluster E) ----
+
+    /// Set the TX filter audio-Hz range.  Triggers a panadapter overlay
+    /// repaint (always) and a waterfall column repaint (MOX-gated via
+    /// existing m_moxOverlay).
+    /// Source: NereusSDR-original glue; per-mode IQ-space mapping follows
+    /// deskhpsdr/transmitter.c:2136-2186 [@120188f].
+    void setTxFilterRange(int audioLowHz, int audioHighHz);
+
+    /// Set the DSP mode so the TX filter overlay uses the correct IQ-space
+    /// sign convention (USB positive, LSB negated+swapped, AM symmetric).
+    /// Wired from SliceModel::dspModeChanged in MainWindow::wireSliceToSpectrum.
+    void setTxMode(DSPMode mode);
+
+    int txFilterLow()  const noexcept { return m_txFilterLow; }
+    int txFilterHigh() const noexcept { return m_txFilterHigh; }
+
     // ---- Per-pan settings persistence ----
     void setPanIndex(int idx) { m_panIndex = idx; }
     int  panIndex() const { return m_panIndex; }
@@ -552,6 +570,12 @@ signals:
 
     // Emitted when CTUN mode changes
     void ctunEnabledChanged(bool enabled);
+
+    // Plan 4 D9 test seam: fires from drawTxFilterOverlay() after pixel
+    // coordinates are computed.  Production code ignores this signal;
+    // tests use QSignalSpy to verify paint was triggered with the right band.
+    // Same pattern as TxChannel::txFilterApplied (Plan 4 D8).
+    void txFilterOverlayPainted(int xLeft, int xRight);
 
 protected:
 #ifdef NEREUS_GPU_SPECTRUM
@@ -619,6 +643,20 @@ private:
 
     void drawVfoMarker(QPainter& p, const QRect& specRect, const QRect& wfRect);
     void drawCursorInfo(QPainter& p, const QRect& specRect);
+
+    // ---- TX filter overlay (Plan 4 D9, Cluster E) ----
+    // drawTxFilterOverlay: panadapter band fill + border lines + label.
+    //   Called when m_txFilterVisible is set; gating is at the call site.
+    // drawTxFilterWaterfallColumn: waterfall column fill, MOX-gated.
+    //   Called when m_showTxFilterOnRxWaterfall && m_moxOverlay.
+    // Per deskhpsdr/transmitter.c:2136-2186 [@120188f] for IQ-space mapping.
+    void drawTxFilterOverlay(QPainter& p, const QRect& specRect);
+    void drawTxFilterWaterfallColumn(QPainter& p, const QRect& wfRect);
+
+    // Shared audio→IQ-space conversion used by both draw methods.
+    // Returns {iqLowHz, iqHighHz} signed offsets from the VFO center.
+    // Per deskhpsdr/transmitter.c:2136-2186 [@120188f].
+    std::pair<int,int> txAudioToIq(int audioLow, int audioHigh, DSPMode mode) const;
 
     // ---- Coordinate helpers ----
     int    hzToX(double hz, const QRect& r) const;
@@ -870,6 +908,15 @@ private:
     // TX filter visibility in spectrum panel.
     // From Thetis display.cs:2481 [v2.10.3.13]: DrawTXFilter flag.
     bool  m_txFilterVisible{false};
+
+    // ---- TX filter overlay range + mode (Plan 4 D9, Cluster E) ----
+    // Audio-Hz edges of the TX passband; updated by setTxFilterRange().
+    // IQ-space conversion (per deskhpsdr/transmitter.c:2136-2186 [@120188f])
+    // is applied at draw time using m_txMode.
+    int     m_txFilterLow{100};   // default matches TransmitModel::m_filterLow
+    int     m_txFilterHigh{2900}; // default matches TransmitModel::m_filterHigh
+    DSPMode m_txMode{DSPMode::USB};
+    QColor  m_txFilterColor{255, 120, 60, 46}; // matches kTxFilterOverlayFill default
 
 #ifdef NEREUS_GPU_SPECTRUM
     bool m_rhiInitialized{false};

@@ -2629,3 +2629,9 @@ nereus_add_test(tst_tx_bandwidth_persistence)
 # per-mode IQ-space sign convention verified via QSignalSpy on txFilterApplied.
 # Per docs/superpowers/plans/2026-05-01-tx-bandwidth.md §Task 6.
 nereus_add_test(tst_tx_filter_offset_to_wdsp)
+
+# ── Plan 4 Task 7+8 (D9): TX filter overlay palette + paint ──────────────────
+# 6 tests: setTxFilterRange stores values, no-op on same values, paint signal
+# fires after show, USB/LSB/AM per-mode IQ-space coordinate mapping verified.
+# Per docs/superpowers/plans/2026-05-01-tx-bandwidth.md §Task 7/8.
+nereus_add_test(tst_spectrum_tx_overlay)
