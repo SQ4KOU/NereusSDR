@@ -2613,6 +2613,12 @@ nereus_add_test(tst_tx_channel_rebuild)
 # (c) nPoints ≤ 0 returns empty.  Guarded with HAVE_WDSP + HAVE_FFTW3.
 nereus_add_test(tst_filter_high_resolution)
 
+# ── Task 4.4: FilterDisplayItem high-resolution mode ─────────────────────
+# Verifies: setHighResolution/highResolution round-trip, idempotency,
+# bindRxChannel(nullptr) safety, paint-with-nullptr-channel no-crash,
+# bind-and-clear lifecycle.
+nereus_add_test(tst_filter_display_high_resolution)
+
 # ── Task 1.6: RadioModel::setSampleRateLive() coordinator ────────────────
 # Guard-path contracts (no live WDSP or connection required):
 #   changes_rate_without_dropping_channel — unconnected → returns -1,

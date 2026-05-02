@@ -89,6 +89,9 @@
 #include "core/AppSettings.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "gui/containers/ContainerManager.h"
+#include "gui/meters/FilterDisplayItem.h"
+#include "gui/meters/MeterItem.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -451,7 +454,22 @@ void DspOptionsPage::buildUI()
            "is shown instead."));
 
     loadCheck(m_highResFilterChars, "DspOptionsHighResFilterCharacteristics", false);
-    wireCheckPersist(m_highResFilterChars, "DspOptionsHighResFilterCharacteristics");
+
+    // Task 4.4: persist + broadcast to all live FilterDisplayItem instances.
+    // Pattern mirrors MultimeterPage::connectSignals() unit-mode fan-out.
+    connect(m_highResFilterChars, &QCheckBox::toggled, this,
+        [this](bool v) {
+            AppSettings::instance().setValue(
+                QStringLiteral("DspOptionsHighResFilterCharacteristics"),
+                v ? QStringLiteral("True") : QStringLiteral("False"));
+            if (auto* cm = model() ? model()->containerManager() : nullptr) {
+                cm->forEachMeterItem([v](MeterItem* item) {
+                    if (auto* fdi = qobject_cast<FilterDisplayItem*>(item)) {
+                        fdi->setHighResolution(v);
+                    }
+                });
+            }
+        });
 
     layout->addWidget(m_highResFilterChars);
 
