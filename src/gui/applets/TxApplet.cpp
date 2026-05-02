@@ -369,7 +369,9 @@ void TxApplet::buildUI()
         m_monBtn->setChecked(false);  // default: OFF — plan §0 row 9 safety rule
         m_monBtn->setFixedHeight(22);
         m_monBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        // Blue checked style: blue border + slightly tinted bg when active.
+        // MON button intentionally uses dark-navy/cyan (#001a33 bg / #3399ff border)
+        // to distinguish from generic blue toggles (kBlueBg=#0070c0/kBlueBorder=#0090e0).
+        // NereusSDR-original one-off — do NOT snap to Style::kBlueBg / kBlueBorder.
         m_monBtn->setStyleSheet(Style::buttonBaseStyle()
             + QStringLiteral("QPushButton:checked {"
                              " background: #001a33;"
@@ -598,7 +600,9 @@ void TxApplet::buildUI()
             "(configure in Setup → Test → Two-Tone)."));
         row->addWidget(m_twoToneBtn, 1);
 
-        // PS-A: green when checked — #006030 bg matches AetherSDR APD button
+        // PS-A: green when checked — #006030/#008040 are a darker green than kGreenBg=#006040.
+        // Flagged for 3M-4 PureSignal phase review; do NOT snap to Style::kGreenBg/kGreenBorder
+        // until PureSignal colors are audited against Thetis APD button palette.
         m_psaBtn = new QPushButton(QStringLiteral("PS-A"), this);
         m_psaBtn->setCheckable(true);
         m_psaBtn->setFixedHeight(22);
