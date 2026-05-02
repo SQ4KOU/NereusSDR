@@ -51,6 +51,9 @@ nereus_add_test(tst_noise_floor_estimator)
 nereus_add_test(tst_noise_floor_tracker)
 nereus_add_test(tst_clarity_controller)
 
+# ── Task 2.10: per-band NF-estimate priming (NereusSDR-original) ─────────
+nereus_add_test(tst_per_band_nf_priming)
+
 # ── Phase 3I radio-connector tests ────────────────────────────────────────
 nereus_add_test(tst_hpsdr_enums)
 nereus_add_test(tst_board_capabilities)

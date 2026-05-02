@@ -1088,6 +1088,75 @@ void MainWindow::buildUI()
     connect(m_clarityController, &ClarityController::noiseFloorChanged,
             m_spectrumWidget, &SpectrumWidget::onNoiseFloorChanged);
 
+    // Task 2.10: per-band NF priming — settle detector.
+    // NereusSDR-original — no Thetis equivalent.
+    //
+    // On each noiseFloorChanged tick, keep a 2-second sliding window of NF
+    // samples. When variance drops below 1 dB for a sustained window of ≥30
+    // samples (≈ 15 s / cadence-0.5s = 30 ticks), save the current floor to
+    // the panadapter's per-band NF slot so the next band-switch can snap
+    // instantly instead of cold-starting from zero.
+    {
+        struct NFHistoryEntry { qint64 t; float value; };
+        struct SettleState {
+            QList<NFHistoryEntry> history;
+        };
+        auto settle = QSharedPointer<SettleState>::create();
+
+        PanadapterModel* pan0 = m_radioModel->panadapters().isEmpty()
+                                ? nullptr
+                                : m_radioModel->panadapters().first();
+        if (pan0) {
+            connect(m_clarityController, &ClarityController::noiseFloorChanged,
+                    this, [pan0, settle](float nf) {
+                const qint64 now = QDateTime::currentMSecsSinceEpoch();
+                settle->history.append({now, nf});
+
+                // Trim to 2-second window.
+                const qint64 cutoff = now - 2000;
+                while (!settle->history.isEmpty() && settle->history.first().t < cutoff) {
+                    settle->history.removeFirst();
+                }
+
+                // Compute variance when we have ≥30 samples (~30 cadence ticks).
+                if (settle->history.size() >= 30) {
+                    float sum = 0.0f;
+                    for (const auto& e : std::as_const(settle->history)) { sum += e.value; }
+                    const float mean = sum / static_cast<float>(settle->history.size());
+                    float sqSum = 0.0f;
+                    for (const auto& e : std::as_const(settle->history)) {
+                        const float d = e.value - mean;
+                        sqSum += d * d;
+                    }
+                    const float variance = sqSum / static_cast<float>(settle->history.size());
+
+                    if (variance < 1.0f) {
+                        // NereusSDR-original — no Thetis equivalent.
+                        // NF settled within 1 dB variance over 2s; save for this band.
+                        pan0->setBandNFEstimate(pan0->band(), nf);
+                    }
+                }
+            });
+
+            // Task 2.10: band-change → prime ClarityController EWMA with stored NF.
+            // NereusSDR-original — no Thetis equivalent.
+            //
+            // PanadapterModel::bandChanged fires when the pan center crosses a band
+            // boundary. snapToFloor() seeds the EWMA (m_smoothedFloor) and emits
+            // waterfallThresholdsChanged immediately so the waterfall snaps to the
+            // remembered state rather than cold-starting from an uninitialized floor.
+            // NaN is ignored by snapToFloor (band with no stored data is a no-op).
+            connect(pan0, &PanadapterModel::bandChanged,
+                    this, [this, pan0](NereusSDR::Band newBand) {
+                // NereusSDR-original — no Thetis equivalent.
+                // Prime estimator with last-seen NF for this band to eliminate
+                // cold-start visual jump after band change.
+                const float storedNF = pan0->bandNFEstimate(newBand);
+                m_clarityController->snapToFloor(storedNF);
+            });
+        }
+    }
+
     // When Clarity pauses or is disabled, let legacy AGC resume.
     connect(m_clarityController, &ClarityController::pausedChanged,
             m_spectrumWidget, [this](bool paused) {
