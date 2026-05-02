@@ -1,13 +1,14 @@
 #pragma once
 
 #include "core/WdspTypes.h"
+#include "models/SliceModel.h"
 
 namespace NereusSDR {
 
 /// Snapshot of all per-channel DSP state that survives a rebuild.
 /// Captured before WDSP channel destroy; reapplied after recreate.
 struct RxChannelState {
-    DSPMode mode                    = DSPMode::USB;
+    SliceModel::Mode mode               = SliceModel::Mode::USB;
     int    filterLowHz              = 200;
     int    filterHighHz             = 2700;
 

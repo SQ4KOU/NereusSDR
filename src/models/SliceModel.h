@@ -262,6 +262,10 @@ class SliceModel : public QObject {
     Q_PROPERTY(int    rttyShiftHz     READ rttyShiftHz     WRITE setRttyShiftHz     NOTIFY rttyShiftHzChanged)
 
 public:
+    /// Type alias so RxChannelState/TxChannelState can reference SliceModel::Mode
+    /// (matches the design contract; underlying type is the canonical DSPMode enum).
+    using Mode = DSPMode;
+
     explicit SliceModel(QObject* parent = nullptr);
     // Convenience constructor that initialises m_sliceIndex directly.
     explicit SliceModel(int sliceId, QObject* parent = nullptr);
