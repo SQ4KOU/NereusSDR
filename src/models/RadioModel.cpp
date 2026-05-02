@@ -3225,8 +3225,8 @@ void RadioModel::wireSliceSignals()
 
 // Load persisted VFO state from AppSettings into a slice.
 // Migrates legacy flat keys first, then restores per-band state for the
-// current band (derived from the panadapter center frequency or the slice
-// default frequency).
+// last-used band (or, when no LastBand marker exists, falls back to the
+// panadapter's center frequency band, then to the slice's default freq).
 void RadioModel::loadSliceState(SliceModel* slice)
 {
     if (!slice) {
@@ -3236,10 +3236,18 @@ void RadioModel::loadSliceState(SliceModel* slice)
     // One-shot migration of legacy Vfo* flat keys. No-op if already migrated.
     SliceModel::migrateLegacyKeys();
 
-    // Derive current band. Use the first panadapter's band if available;
-    // otherwise fall back to bandFromFrequency on the slice's default freq.
+    // Pick the band to restore. Priority order:
+    //   1. Slice<N>/LastBand — written by saveToSettings on every save, so
+    //      this lands on the user's actual last-used band/frequency.
+    //   2. Panadapter band — only useful if the panadapter's center freq
+    //      is itself restored from somewhere; today it defaults to
+    //      14.225 MHz so this branch reduces to "always 20m" without (1).
+    //   3. bandFromFrequency on the slice's default freq — startup fallback
+    //      when neither (1) nor (2) is available (fresh install).
     Band currentBand = Band::Band20m;
-    if (!m_panadapters.isEmpty()) {
+    if (auto lastBand = SliceModel::loadLastBandFromSettings(slice->sliceIndex())) {
+        currentBand = *lastBand;
+    } else if (!m_panadapters.isEmpty()) {
         currentBand = m_panadapters.first()->band();
     } else {
         currentBand = bandFromFrequency(slice->frequency());
@@ -3247,6 +3255,15 @@ void RadioModel::loadSliceState(SliceModel* slice)
     m_lastBand = currentBand;
 
     slice->restoreFromSettings(currentBand);
+
+    // Push restored frequency to the panadapter so the spectrum display
+    // lands on the same band as the slice. Without this the panadapter
+    // stays parked at its 14.225 MHz default and the user sees the slice
+    // jump to (say) 7.236 MHz on a panadapter still rendering 20m.
+    // SpectrumWidget center freq follows from the panadapter on startup.
+    if (!m_panadapters.isEmpty()) {
+        m_panadapters.first()->setCenterFrequency(slice->frequency());
+    }
 
     qCInfo(lcDsp) << "Loaded slice state for band:"
                   << bandKeyName(currentBand)
