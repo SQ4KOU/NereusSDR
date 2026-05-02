@@ -64,11 +64,11 @@ extern void setSamplerate_emphp (EMPHP a, int rate);
 
 extern void setSize_emphp (EMPHP a, int size);
 
-__declspec (dllexport) void SetTXAFMEmphMP (int channel, int mp);
+void SetTXAFMEmphMP (int channel, int mp);
 
-__declspec (dllexport) void SetTXAFMEmphNC (int channel, int nc);
+void SetTXAFMEmphNC (int channel, int nc);
 
-__declspec (dllexport) void SetTXAFMPreEmphFreqs(int channel, double low, double high);
+void SetTXAFMPreEmphFreqs(int channel, double low, double high);
 
 #endif
 

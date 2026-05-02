@@ -159,12 +159,12 @@ typedef struct _dp
 
 extern DP pdisp[];
 
-extern __declspec( dllexport )
+extern 
 void CreateAnalyzer (	int disp,
 						int *success,
 						char *app_data_path);
 
-extern __declspec( dllexport )
+extern 
 void XCreateAnalyzer (	int disp,
 						int *success,	//writes '0' to success if all went well, <0 if mem alloc failed
 						int m_size,		//maximum fft size to be used
@@ -173,38 +173,38 @@ void XCreateAnalyzer (	int disp,
 						char *app_data_path
 					 );
 
-extern __declspec( dllexport )   
+extern 
 void DestroyAnalyzer(int disp);
 
-extern __declspec( dllexport )   
+extern 
 void SetCalibration (	int disp,
 						int set_num,				//identifier for this calibration data set
 						int n_points,				//number of calibration points in the set
 						double (*cal)[dMAX_M+1]		//pointer to the calibration table, first
 					);
 
-extern __declspec( dllexport )   
+extern 
 void OpenBuffer(int disp, int ss, int LO, void **Ipointer, void **Qpointer);
 
-extern __declspec( dllexport )   
+extern 
 void CloseBuffer(int disp, int ss, int LO);
 
-extern __declspec( dllexport )
+extern 
 void Spectrum(int disp, int ss, int LO, dINREAL* pI, dINREAL* pQ);
 
-extern __declspec( dllexport )
+extern 
 void Spectrum2(int run, int disp, int ss, int LO, dINREAL* pbuff);
 
-extern __declspec( dllexport )
+extern 
 void Spectrum0(int run, int disp, int ss, int LO, double* pbuff);
 
-extern __declspec( dllexport )
+extern 
 void SnapSpectrum(	int disp,
 					int ss,
 					int LO,
 					double *snap_buff);
 
-extern __declspec( dllexport )
+extern 
 void SnapSpectrumTimeout (int disp,
 	                      int ss,
 	                      int LO,

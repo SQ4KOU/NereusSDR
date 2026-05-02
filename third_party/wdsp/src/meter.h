@@ -64,10 +64,10 @@ extern void setSize_meter (METER a, int size);
 
 // RXA Properties
 
-extern __declspec (dllexport) double GetRXAMeter (int channel, int mt);
+extern double GetRXAMeter (int channel, int mt);
 
 // TXA Properties
 
-extern __declspec (dllexport) double GetTXAMeter (int channel, int mt);
+extern double GetTXAMeter (int channel, int mt);
 
 #endif

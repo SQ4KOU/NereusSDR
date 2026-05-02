@@ -144,5 +144,5 @@ typedef double complex[2];
 #ifdef WDSP_STATIC_BUILD
   #define PORT
 #else
-  #define PORT							__declspec( dllexport )
+  #define PORT							
 #endif

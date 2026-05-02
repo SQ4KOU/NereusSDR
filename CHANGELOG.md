@@ -1,5 +1,446 @@
 # Changelog
 
+## [0.3.0] - 2026-05-01
+
+### Features
+- feat(applet): TxEqDialog parametric panel + style fix (Batch 9)
+- feat(applet): TxCfcDialog full Thetis-verbatim rewrite (Batch 8)
+- feat(core): TxChannel::getCfcDisplayCompression WDSP wrapper (Batch 7)
+- feat(core): ParaEqEnvelope + TransmitModel.txEqParaEqData (Batch 6)
+- feat(widget): ParametricEqWidget JSON + public API + test (Batch 5)
+- feat(widget): ParametricEqWidget mouse + wheel + 6 signals (Batch 4)
+- feat(widget): ParametricEqWidget paintEvent + 10 draw helpers (Batch 3)
+- feat(widget): ParametricEqWidget axis math + ordering (Batch 2)
+- feat(widget): ParametricEqWidget skeleton + palette + ctor (Batch 1)
+- feat(chrome): finish 3Q chrome — SVG icons, glyph encoding, voltage source-first, CPU toggle
+- feat(hl2): Hl2OptionsTab — Hermes Lite Options + I2C Control + I/O Pin State
+- feat(hl2): N2ADR HERCULES toggle writes 13 SWL pin-7 entries (closes 30% gap)
+- feat(hl2): real OcOutputsSwlTab — 13 SWL bands × 7 pins matrix (mi0bot parity)
+- feat(widgets): RxDashboard drop-priority on narrow window
+- feat(mainwindow): restyle right-side strip — PSU/PA/CPU MetricLabel + TX StatusBadge
+- feat(model): extend Band enum with 13 SWL bands (mi0bot parity for HL2 N2ADR)
+- feat(widgets): add MetricLabel — labelled-metric pair for status strip
+- feat(mainwindow): swap m_callsignLabel for StationBlock — radio-name anchor
+- feat(mainwindow): replace m_statusConnInfo with RxDashboard (F.1)
+- feat(widgets): RxDashboard — RX1 + freq + mode/filter/AGC + active-only NR/NB/APF/SQL
+- feat(mainwindow): segment hover tooltip — aggregated diagnostic body
+- feat(mainwindow): wire ConnectionSegment to RadioModel + AudioEngine
+- feat(titlebar): rebuild ConnectionSegment — single dot + RTT + audio pip
+- feat(hl2): relabel OC Outputs → "Hermes Lite Control" + extend visibility for HL2
+- feat(gui): NetworkDiagnosticsDialog — 4-section diagnostic grid
+- feat(hl2): bring-up carry-forward — sequenced I2C probe + persistence + diagnostic surface
+- feat(audio): flowStateChanged signal — Healthy/Underrun/Stalled/Dead FSM
+- feat(connection): supplyVoltsChanged + userAdc0Changed signals
+- feat(connection): pingRttMeasured signal — RTT from C&C round-trip
+- feat(connection): rolling byte-rate counters for ▲▼ Mbps readout
+- feat(widgets): add StationBlock — clickable bordered radio-name anchor
+- feat(widgets): add StatusBadge — icon-prefix pill with 5 colour variants
+- feat(profile): MicProfileManager live capture/apply for CFC/CPDR/CESSB/PhRot (3M-3a-ii G.2)
+- feat(applet): TxApplet PROC + CFC enable + TxCfcDialog (3M-3a-ii F + A)
+- feat(connection): cold-launch ConnectionPanel auto-open (3Q polish)
+- feat(setup): CFC page (PhRot + CFC + CESSB) + dashboard live status (3M-3a-ii E)
+- feat(connection): edit saved radio entries (3Q polish)
+- feat(profile): MicProfileManager bundles 41 CFC/CPDR/CESSB/PhRot keys (3M-3a-ii G)
+- feat(model): wire TM → TxChannel routing for CFC/CPDR/CESSB/PhRot (3M-3a-ii D)
+- feat(model): TransmitModel CFC/CPDR/CESSB/PhRot properties (3M-3a-ii C)
+- feat(tx): add TxChannel phrot Corner/Nstages/Reverse wrappers (3M-3a-ii B.2)
+- feat(tx): add TxChannel CFC + CPDR + CESSB wrappers (3M-3a-ii B)
+- feat(setup): SpeechProcessorPage rewrite as TX dashboard (3M-3a-i E)
+- feat(applet): TxEqDialog adds profile combo + Save/Save-As/Delete (3M-3a-i A.2)
+- feat(profile): port 20 Thetis factory TX profiles verbatim (3M-3a-i A.2)
+- feat(applet): wire EQ right-click + Tools menu to TxEqDialog launch (3M-3a-i A.1)
+- feat(applet): TxEqDialog scaffold — 10-band sliders + freq spinboxes + preamp + Nc/Mp/Ctfmode/Wintype (3M-3a-i A.1)
+- feat(applet): TxApplet quick-toggle row [LEV] [EQ] [PROC] (3M-3a-i F)
+- feat(setup): AgcAlcSetupPage adds TX Leveler + TX ALC sections (3M-3a-i D)
+- feat(model): wire TransmitModel→TxChannel TX EQ + Lev + ALC routing (3M-3a-i Batch 2)
+- feat(profile): MicProfileManager bundles 27 EQ/Lev/ALC keys (3M-3a-i G)
+- feat(model): TransmitModel TX EQ + Leveler + ALC properties (3M-3a-i C)
+- feat(tx): add TxChannel EQ + Leveler/ALC wrappers (3M-3a-i B)
+- feat(3m-1c): RadioModel TxMicSource lifecycle + AudioEngine PC override gate
+- feat(3m-1c): VOX defensive guards on all 5 DEXP-touching setters
+- feat(3m-1c): P2 port 1026 mic frame parsing → TxMicSource
+- feat(3m-1c): P1 EP6 mic16 extraction → TxMicSource
+- feat(3m-1c): TxMicSource — Thetis Inbound/cm_main port
+- feat(3m-1c): Phase L — cross-cutting wiring + 720→256 mic re-blocker
+- feat(3m-1c): Phase J — TxApplet 2-TONE button + profile combo + Setup TX Profile page (J.1-J.4)
+- feat(3m-1c): Phase I — TwoToneController activation handler (I.1-I.5)
+- feat(3m-1c): Phase H — Setup → Test → Two-Tone page
+- feat(3m-1c): Phase G — VFO Flag TX badge wire-up + Phase L routing demo
+- feat(3m-1c): Phase F — MicProfileManager class (load/save/delete/setActive)
+- feat(3m-1c): Phase E.2-E.6 — 12 TXA PostGen wrapper setters
+- feat(3m-1c): Phase E.1 — TxChannel push-driven refactor
+- feat(3m-1c): Phase D.1/D.2 — AudioEngine micBlockReady signal + clearMicBuffer
+- feat(3m-1c): Phase C.2/C.3/C.4 — multicast Pre/Post MOX state-change signals
+- feat(3m-1c): Phase B.3 — add DrivePowerSource enum + TwoToneDrivePowerSource property
+- feat(3m-1c): Phase B.2 — add 7 two-tone test properties to TransmitModel
+- feat(3m-1c): Phase B.1 — rename 15 TransmitModel keys to Thetis column names
+- feat(3n-5.5): wire Developer ID signing + notarization for macOS
+- feat(tx): wire WDSP Leveler stage with upstream defaults — pull from 3M-3a
+- feat(3m-1b): L.3 Mic-source HL2 force-Pc on connect — Phase L complete
+- feat(3m-1b): L.2 AppSettings persistence per-MAC for TransmitModel
+- feat(3m-1b): L.1 RadioModel owns Pc/Radio mic sources + composite router
+- feat(3m-1b): K.2 MOX rejection toast + tooltip override — Phase K complete
+- feat(3m-1b): K.1 BandPlanGuard SSB-mode allow-list for TX
+- feat(3m-1b): J.3 TxApplet MON toggle + volume slider + mic-source badge — Phase J complete
+- feat(3m-1b): J.2 TxApplet VOX toggle button + settings popup
+- feat(3m-1b): J.1 TxApplet Mic Gain slider
+- feat(3m-1b): I.4 Mic gain slider per-board range + I.3 nit fixes
+- feat(3m-1b): I.3 Radio Mic settings group with per-family layout
+- feat(3m-1b): I.2 PC Mic settings group on AudioTxInputPage
+- feat(3m-1b): I.1 AudioTxInputPage skeleton + TransmitModel::micSource
+- feat(3m-1b): H.5 mic_ptt extraction from P1/P2 status frames — Phase H complete
+- feat(3m-1b): H.4 MoxController PTT-source dispatch (MIC/CAT/VOX/SPACE/X2)
+- feat(3m-1b): H.3 MoxController VOX hang-time + anti-VOX gain + anti-VOX source
+- feat(3m-1b): H.2 MoxController::setVoxThreshold with mic-boost-aware scaling
+- feat(3m-1b): H.1 MoxController::setVoxEnabled with voice-family mode-gate
+- feat(3m-1b): G.6 wire setMicXlr (P2-only byte-50 bit 5; P1 storage-only) — Phase G complete
+- feat(3m-1b): G.5 wire setMicPTT (P1 case-11 C1 bit 6 + P2 byte-50 bit 2, polarity inverted)
+- feat(3m-1b): G.4 wire setMicBias (P1 case-11 C1 bit 5 + P2 byte-50 bit 4)
+- feat(3m-1b): G.3 wire setMicTipRing (P1 case-11 C1 bit 4 + P2 byte-50 bit 3, polarity inverted)
+- feat(3m-1b): G.2 wire setLineIn (P1 case-10 C2 bit 1 + P2 byte-50 bit 0)
+- feat(3m-1b): G.1 wire setMicBoost (P1 case-10 C2 bit 0 + P2 byte-50 bit 1)
+- feat(3m-1b): F.3 add CompositeTxMicRouter — selector with HL2 force-PC + MOX-locked switching
+- feat(3m-1b): F.2 add RadioMicSource — SPSC ring drained by audio thread
+- feat(3m-1b): F.4 add RadioConnection::micFrameDecoded Qt signal
+- feat(3m-1b): F.1 add PcMicSource — TxMicRouter impl tapping AudioEngine::pullTxMic
+- feat(3m-1b): E.3 add AudioEngine::txMonitorBlockReady slot for TXA siphon mix
+- feat(3m-1b): E.2 add AudioEngine TX monitor enable + volume state
+- feat(3m-1b): E.1 add AudioEngine::pullTxMic for PcMicSource tap
+- feat(3m-1b): D.7 add TxChannel TX meter readouts (TxMic + ALC live; 4 deferred)
+- feat(3m-1b): D.6 add TxChannel mic-mute path via setMicPreamp + recomputeTxAPanelGain1
+- feat(3m-1b): D.5 add TxChannel::sip1OutputReady signal for MON siphon
+- feat(3m-1b): D.4 expand TxChannel::setStageRunning to MicMeter/AlcMeter/AmMod/FmMod
+- feat(3m-1b): D.3 add TxChannel VOX/anti-VOX WDSP wrappers (5x)
+- feat(3m-1b): D.2 add TxChannel per-mode TXA config setters
+- feat(3m-1b): add TransmitModel MON properties (2x)
+- feat(3m-1b): add TransmitModel anti-VOX properties (2x)
+- feat(3m-1b): add TransmitModel VOX properties (4x)
+- feat(3m-1b): add TransmitModel mic-jack flag properties (8x)
+- feat(3m-1b): add TransmitModel::micGainDb + derived micPreampLinear
+- feat(settings): migrate manual-IP-port macKey to real MAC on probe success (3Q-12)
+- feat(discovery): saved radios never age out; discovered-only at 60s (3Q-11)
+- feat(connection): auto-connect failure path + multi-flag handling (3Q-10)
+- feat(3m-1b): add BoardCapabilities::hasMicJack flag
+- feat(menu): role-based Radio menu — Connect/Disconnect mutually exclusive (3Q-9)
+- feat(spectrum): disconnect overlay — fade + DISCONNECTED + click-to-open (3Q-8)
+- feat(statusbar): verbose connection-info strip (3Q-7)
+- feat(titlebar): connection segment with state dot, rates, activity LED (3Q-6)
+- feat(connection): ConnectionPanel polish — pills, Last Seen, status strip (3Q-5)
+- feat(connection): rebuild Add Radio dialog with model-aware SKU picker (3Q-4)
+- feat(connection): structured ConnectFailure + frameReceived signal (3Q-3)
+- feat(discovery): add RadioDiscovery::probeAddress() unicast probe (3Q-2)
+- feat(connection): introduce ConnectionState enum on RadioModel (3Q-1)
+- feat(ui): H.4 PowerPaPage Power/TunePwr/ATTOnTX/ForceATT activation (3M-1a)
+- feat(ui): H.3 TxApplet TUN/Tune-Power/RF-Power/MOX activation (3M-1a)
+- feat(ui): H.2 MeterPoller TX bindings on MOX (3M-1a)
+- feat(ui): H.1 SpectrumWidget MOX overlay wiring (3M-1a)
+- feat(3m-1a): G.4 RadioModel::setTune TUN orchestrator
+- feat(tx): G.3 TransmitModel tunePowerByBand[14] + per-MAC persistence (3M-1a)
+- feat(ui): G.2 wire Receive Only checkbox visibility from caps.isRxOnlySku (3M-1a)
+- feat(3m-1a): G.1 — RadioModel integration (MoxController + TxChannel + TxMicRouter)
+- feat(safety): F.3 port SwrProtectionController source-first TODOs (3M-1a)
+- feat(tx): F.2 StepAttenuatorController TX-path activation (3M-1a)
+- feat(tx): F.1 RadioModel onMoxHardwareFlipped slot (3M-1a)
+- feat(tx): implement P2 sendTxIq with 24-bit BE SPSC ring (3M-1a E.6)
+- feat(tx): P1 setWatchdogEnabled wire-byte emission (RUNSTOP pkt[3] bit 7) (3M-1a Task E.5)
+- feat(tx): P1 setTrxRelay wire-byte emission (C3 bank 10 bit 7) (3M-1a Task E.4)
+- feat(tx): P1 setMox wire-byte emission (C0 byte 3 bit 0) (3M-1a Task E.3)
+- feat(tx): P1 sendTxIq wire format (EP2 zones, 16-bit I/Q) (3M-1a Task E.2)
+- feat(tx): RadioConnection TX virtuals — sendTxIq + setTrxRelay (3M-1a Task E.1)
+- feat(tx): TxMicRouter interface + NullMicSource stub (3M-1a Task D.1)
+- feat(tx): TxChannel setRunning + 3M-1a active stages (3M-1a Task C.4)
+- feat(tx): TxChannel setTuneTone via gen1 PostGen (3M-1a Task C.3)
+- feat(tx): TxChannel skeleton — 31-stage TXA pipeline (3M-1a Task C.2)
+- feat(tx): WdspEngine TX channel API (3M-1a Task C.1)
+- feat(tx): MoxController setTune slot with manualMox flag (3M-1a Task B.5)
+- feat(tx): MoxController 6 phase signals with Codex P1 boundary (3M-1a Task B.4)
+- feat(tx): MoxController 6 QTimer chains (3M-1a Task B.3)
+- feat(tx): MoxController skeleton with Codex P2 ordering (3M-1a Task B.2)
+- feat(tx): port Thetis PTTMode enum as PttMode (3M-1a Task B.1)
+- feat(spectrum): raise rewind cap to 16384 rows (~8 min default rewind)
+- feat(setup): add waterfall rewind depth dropdown (E task 11)
+- feat(spectrum): debounce history resize + period change (E task 10)
+- feat(spectrum): pan/zoom reproject + largeShift clear (E task 9)
+- feat(model): wire 3M-0 safety controllers into RadioModel + MainWindow
+- feat(ui): status-bar TX Inhibit indicator + PA Status badge
+- feat(setup): General → Options → prevent-different-band toggle
+- feat(setup): General → Hardware Configuration group
+- feat(setup): Block-TX antennas + Disable HF PA group boxes on Setup → Transmit
+- feat(setup): External TX Inhibit group box on Setup → Transmit
+- feat(setup): SWR Protection group box on Setup → Transmit
+- feat(spectrum): static "HIGH SWR" overlay (inert until 3M-1a)
+- feat(safety): per-board PA scaling table + MeterPoller telemetry routing
+- feat(radio-model): paTripped() live state + Ganymede CAT trip handler
+- feat(connection): setWatchdogEnabled(bool) stub on RadioConnection + P1/P2
+- feat(safety): TxInhibitMonitor — GPIO poll + 4-source inhibit aggregator
+- feat(safety): add SwrProtectionController — Phase 3M-0 Task 3
+- feat(safety): BandPlanGuard with 60m channel tables + isValidTxFreq
+- feat(caps): isRxOnlySku + canDriveGanymede for 3M-0 safety net
+- feat(spectrum): paint timescale strip + LIVE button (E task 8)
+- feat(spectrum): wire scrub gesture + LIVE click handlers (E task 7)
+- feat(spectrum): add timescale + LIVE button rects (E task 6)
+- feat(spectrum): add setWaterfallLive + paused-strip width (E task 5)
+- feat(spectrum): wire scrollback into push + clear paths (E task 4)
+- feat(spectrum): add ring buffer write paths (sub-epic E task 3)
+- feat(spectrum): add scrollback math helpers + capacity tests (E task 2)
+- feat(spectrum): add scrollback state + method decls (sub-epic E task 1)
+- feat(view-menu): wire View → Band Plan to AetherSDR pattern
+- feat(setup-display): bandplan region + label-size controls
+- feat(mainwindow): wire BandPlanManager → SpectrumWidget
+- feat(spectrum): port drawBandPlan from AetherSDR
+- feat(spectrum): add BandPlanManager hookup + font-size knob
+- feat(radiomodel): own BandPlanManager + load on init
+- feat(bandplan): port BandPlanManager from AetherSDR
+- feat(bandplan): add rac-canada bandplan JSON
+
+### Fixes
+- fix(p1/p2): gate WDSP CFIR on protocol — restore P2 ANAN TX path
+- fix(p1/hl2): align WDSP TX path + bank-17/11/10 wire bytes with Thetis
+- fix(p1/hl2): set bank 10 C2 bit 3 to enable HL2 PA on TX
+- fix(p1/hl2): decimate radio-rate mic to 48 kHz before TxMicSource
+- fix(hl2): address Codex P1 + P2 review on PR #160
+- fix(hl2): N2ADR per-MAC persistence + signed S-ATT spinbox range
+- fix(test): update parametric-edit test for direct-WDSP push contract
+- fix(applet): TxEqDialog parametric WDSP push -- direct profile, not legacy scalars
+- fix(applet): encode TX parametric EQ profile blobs
+- fix(applet): wire parametric EQ to WDSP + sync from model on profile load
+- fix(cmake): vendor zlib via FetchContent on Windows MinGW
+- fix(applet): TxEqDialog parametric Reset button now actually resets
+- fix(applet): apply project styles to TxCfc/TxEq dialog widgets
+- fix(applet): drop unused <algorithm> include in TxEqDialog
+- fix(widget): apply Task 5 code review feedback
+- fix(widget): apply Task 4 code review feedback
+- fix(test): drop unused <cmath> include in interaction test
+- fix(widget): apply Task 2 code review feedback
+- fix(test): drop unused <cmath> include in axis test
+- fix(cpu): real cross-platform CPU counting on Linux + Windows
+- fix(connection): address Codex P1 + P2 review on PR #158
+- fix(diagnostics): RTT min-filter + PSU drop + Mbps fix + ship defaults + NYI honesty
+- fix(hl2): address Codex P1 + P2 review comments on PR #157
+- fix(chrome): partial layout-overflow fixes (WIP — ADC repositioning pending)
+- fix(chrome): badge content clipping + audio-pip QChar — render fix follow-up
+- fix(chrome): rendering issues — glyph fallbacks + min-widths + board code
+- fix(widgets): RxDashboard re-entry guard — segfault on resize
+- fix(hl2): signed −28..+32 dB step attenuator user range (mi0bot parity)
+- fix(widgets): StationBlock — clean short-circuit, single applyStyle in ctor
+- fix(widgets): StatusBadge — paint background + guard idempotent setters
+- fix(settings): escape '+' and other non-NameChars in XML keys
+- fix(applet): wire PhoneCw PROC, drop duplicate from TxApplet (3M-3a-ii H)
+- fix(menu): Connect enablement reads connectionState, not isConnected (3Q polish)
+- fix(connection): manual entries seed m_lastSeenMs so pill+Last Seen are accurate (3Q polish)
+- fix(connection): force Disconnected state on teardown — strip + bar stuck "Connected" (3Q polish)
+- fix(connection): seed-from-saved entries also populate m_discoveredRadios (3Q polish)
+- fix(menu): Connect uses unicast probe — no listener leak on miss (3Q polish)
+- fix(connection): live-test polish — pill widget + name preservation + seed-from-disk (3Q polish)
+- fix(tx): push TX processing chain to WDSP on connect + profile activation
+- fix(3m-1c): two-tone level — convert dB→linear before TXPostGen mag
+- fix(3m-1c): marshal teardown setTxMicSource(nullptr) onto conn thread
+- fix(3m-1c): P1 setTxDrive — port stub to working setter (HL2 bench triage)
+- fix(3m-1c): refine C1 to sendPostedEvents + I3 invariant + test polish
+- fix(3m-1c): arm m_lastMicAt at TxMicSource attach (I3)
+- fix(3m-1c): zero-fill PC-mic short pulls in TxWorkerThread (I2)
+- fix(3m-1c): add QCoreApplication::processEvents to TxWorkerThread::run (C1)
+- fix(display): smooth spectrum repaint with timer-driven update loop
+- fix(3m-1c): route MoxController→TxChannel lambdas via Queued dispatch
+- fix(3m-1c): bump silence-drive threshold past mic-burst gap (SSB voice fix)
+- fix(3m-1c): E.1 bench regression — restore TUN + SSB voice TX (no pump)
+- fix(3m-1c): Phase L fixup — add 5 missing 2-tone signal connects + initial pushes
+- fix(3m-1c): Phase K — initial-state-sync audit (TX monitor enable + volume)
+- fix(3m-1c): correct chunk 1 attribution to AetherSDR + NereusSDR-native
+- fix(3m-1c): HL2 TX step att — apply 31-N inversion in P1CodecHl2
+- fix(3m-1c): HL2 PA scaling — add HermesLite case to paScalingFor
+- fix(3n-5.5): use documented `list-keychains` (plural) for search-list write
+- fix(3m-1b): address Codex P1+P1+P2 review on PR #149
+- fix(tx): zero-fill partial mic-pull + skip fexchange2 on empty pull
+- fix(tx): push initial micPreamp on TxChannel attach so SSB has gain
+- fix(mox): gate onMicPttFromRadio(false) on PttMode==Mic to prevent un-key
+- fix(ui): apply mic-gain to PhoneCwApplet level gauge so slider drives the meter
+- fix(audio): pick hardware mic + clamp channels + permanent mic-permission key
+- fix(audio): eager-open TX input mic on AudioEngine::start
+- fix(3m-1b): E.4 RX-leak-during-MOX fold via activeSlice gate in rxBlockReady
+- fix(connection): seed panel table from saved radios on construction (3Q polish)
+- fix(connection): split Add Radio dialog into Probe (verify) + Save (3Q polish)
+- fix(connection): Add Radio dialog verifies + saves; user connects from row (3Q polish)
+- fix(connection): hold probing overlay for 700ms min on dialog probe success (3Q polish)
+- fix(connection): live-test polish across Phase 3Q surface
+- fix(3m-1b): close deskhpsdr discover script regex coverage gaps
+- fix(3m-1b): add DL1YCF to deskhpsdr corpus via "by NAME" regex
+- fix(discovery): clean up Task 2 — unused captures + PROVENANCE row (3Q-2 follow-up)
+- fix(tx): wire TransmitModel::powerChanged → setTxDrive (Codex review)
+- fix(tx): TxApplet per-band TUN-power slider + fwd-power gauge live data
+- fix(tx): TX I/Q UDP destination port 1028 → 1029 (first RF on the air!)
+- fix(tx): reorder TxChannel ctor init list to match declaration order
+- fix(tx): TxChannel buffer size + P2 output rate (bench round 3)
+- fix(tx): bench fixes — re-enable P2 TX consumer + RX mute on MOX
+- fix(tx): wire TxChannel TX I/Q production loop to RadioConnection
+- fix(safety): wire setAlexFwdLimit + setTunePowerSliderValue from setTune
+- fix(ui): H.1-H.4 review fixups (QPointer + band wiring + ATT test)
+- fix(tx): G.4 cold-off guard + ordering fidelity + missing test coverage
+- fix(tx): G.3 drop s.save() from TransmitModel::save() (match AlexController)
+- fix(tx): G.3 preserve //[2.10.3.5]MW0LGE author tag + test no-port-check
+- fix(ui): G.2 sibling-field reset + named slot + 5th test
+- fix(tx): G.1 prevent WDSP-init lambda accumulation across reconnect
+- fix(safety): F.3 setTunePowerSliderValue clamp + setAlexFwdLimit doc
+- fix(safety): F.3 preserve K2UE attribution at ANAN-8000D branch
+- fix(tx): F.2 cross-thread dispatch + HPSDR setter wiring + cite fix
+- fix(tx): F.1 cross-thread dispatch + public slots declaration
+- fix(p2): E.7 setMox cleanup + drive-gate XVTR doc + m_mox threading note
+- fix(p2): wire m_mox to byte 4 bit 1 + out-of-band drive gate (E.7)
+- fix(tx): E.6 add keep-in-sync comment to P2 TX IQ drain loop
+- fix(tx): E.5 stub-comment + drift-risk + HL2 stamp polish
+- fix(tx): E.4 codec-path polarity propagation + flush priority docs
+- fix(tx): E.2 critical fixups (atomic ring + cites + HL2 LSB workaround)
+- fix(tx): remove unused <cstdint> include from P1RadioConnection.h (E.2 cleanup)
+- fix(tx): E.1 fixups (naming alignment + idempotency + log level)
+- fix(tx): C.4 fixups (explicit case arms + cite range + warning text)
+- fix(tx): QFAIL -> QSKIP in C.3 HAVE_WDSP skeleton tests
+- fix(tx): C.3 fixups (precision parity + attribution gaps)
+- fix(tx): C.1 ownership + comments (code-review fixups)
+- fix(tx): apply B.2 code-review fixups (CMakeLists + Q_DECLARE_METATYPE)
+- fix(spectrum): guard GPU sentinels with NEREUS_GPU_SPECTRUM (CI #1)
+- fix(spectrum): address Codex P1 + P2 on PR #140
+- fix(spectrum): post-live-test fixes for sub-epic E
+- fix(setup): use kMaxWaterfallHistoryRows constant (E task 11 review)
+- fix(safety): address Codex P1+P2 review on PR #139
+- fix(spectrum): wire debounce timer to resizeEvent (E task 10 review)
+- fix(spectrum): invalidate GPU overlay on pause/scrub (E task 8 review)
+- fix(safety): preserve verbatim Thetis inline author tags + thread-affinity doc
+- fix(safety): close BandPlanGuard channel/range gaps + reviewer follow-ups
+- fix(spectrum): wire scrollback flush to disconnect signal (E task 4 review)
+- fix(spectrum): add m_wfTexFullUpload to viewport rebuild (E task 3 review)
+- fix(dsp-menu): full RX DSP parity in top menu, drop overlay flyout
+- fix(theme): suppress orange NYI badge — keep disable + tooltip only
+- fix(theme): drop kSpinBoxStyle subcontrol override so app baseline arrows render
+- fix(build): link Qt6::Svg so macdeployqt bundles libqsvg.dylib
+
+### Docs
+- docs(changelog): hermes-filter-debug HL2 N2ADR + S-ATT fixes
+- docs(3M-3a-ii-followup): refresh PR-DRAFT + CHANGELOG for PR open
+- docs(3M-3a-ii-followup): verification matrix + CHANGELOG (Batch 10)
+- docs(widget): document Qt rect semantics divergence in paint notes
+- docs(plan): apply Task 1 code review feedback to Tasks 3 + 5
+- docs(plan): mark PROVENANCE rows as already-landed in Task 1
+- docs(3M-3a-ii-followup): ParametricEq port plan (10 batches)
+- docs(changelog): expand Phase 3Q section to cover full connect-flow rebuild
+- docs(arch): shell-chrome redesign verification matrix — 20 scenarios
+- docs(hl2): Phase 3L visibility brainstorm — design + lean implementation plan
+- docs(arch): shell-chrome redesign implementation plan — 9 sub-PRs
+- docs(arch): shell-chrome redesign spec — TitleBar/status-bar/STATION/segment
+- docs(3M-3a-ii): mark complete + queue ParametricEq widget hand-off
+- docs: CLAUDE.md mark 3M-3a-i Complete pending bench, 3M-3a-ii next
+- docs(arch): 3M-3a-i verification matrix extension + commit summary (3M-3a-i I)
+- docs(3m-3): pull forward — schedule swap with 3M-2 (HL2 audit gate)
+- docs(3m-1c): verification matrix — TX pump v3 + Stage-2 fixes + HL2 + Codex
+- docs(3m-1c): refresh v2-era doc comments to reflect v3 redesign (I1)
+- docs(3m-1c): plan v3 supersedes v2 — Thetis-faithful semaphore-wake
+- docs(3m-1c): correct TxChannel cross-thread audit doc-comments
+- docs(3m-1c): TX pump redesign execution status + 720 misread corrections
+- docs(3m-1c): TX pump architecture redesign plan + post-code review amendment
+- docs(3m-1c): M.7 — post-code Thetis review
+- docs(3m-1c): M.6 — verification matrix update (22 new rows)
+- docs(3m-1c): C.1 finalize — update stale MoxController::moxChanged refs
+- docs(3m-1c): implementation plan with TDD task list per chunk
+- docs(3m-1c): pre-code Thetis review for chunks 1-9
+- docs(3m-1c): chunk 0 — HL2 TX path desk-review vs mi0bot-Thetis
+- docs(3m-1c): add chunk 0 — HL2 TX path desk-review vs mi0bot-Thetis
+- docs(3m-1c): design spec — polish & persistence
+- docs(build): fix Arch PipeWire package name (libpipewire → pipewire)
+- docs(3m-1b): M.7 post-code Thetis review — Phase M autonomous tasks complete
+- docs(3m-1b): M.6 verification matrix extension — 17 rows for 3M-1b
+- docs(3m-1b): implementation plan for mic + SSB voice
+- docs(3m-1b): Thetis pre-code review for mic + SSB voice
+- docs(build): document missing Linux deps (qt6-svg, jack, alsa, pipewire)
+- docs(captures): add Thetis TUN-engaged pcap findings + next-session prompt
+- docs: execution handoff prompt for Phase 3Q
+- docs: implementation plan for Phase 3Q (Connection Workflow Refactor)
+- docs: introduce Phase 3Q (Connection Workflow Refactor) design + master plan placement
+- docs(3m-1a): I.5 post-code Thetis review §2
+- docs(3m-1a): I.4 verification matrix extension (TUNE-only First RF)
+- docs(p2): E.8 — annotate setWatchdogEnabled stub with §7.8 deferral
+- docs(3m-1a): add §7.11 — P1 16-bit vs P2 24-bit TX I/Q sample format
+- docs(tx): D.1 doc clarifications (zero-return + alloc constraint + wire breadcrumb)
+- docs(tx): C.2 fixups (stale Approach-A comments + 25→31 stage count)
+- docs(tx): fix off-by-one cmaster.c line cites in TX slew constants (C.1 fixup)
+- docs(tx): B.5 polish (typo + signal divider + contract notes)
+- docs(tx): correct B.4 phase-signal docs + typos (B.4 review fixups)
+- docs(3m-1a): disambiguate Thetis PttMode from existing PttSource
+- docs(architecture): Phase 3M-1a TUNE-only First RF plan
+- docs(architecture): Phase 3M-1a Thetis pre-code review
+- docs: changelog entry for sub-epic E (E task 13)
+- docs(phase3g): add sub-epic E verification matrix (E task 12)
+- docs(plan): mark task 10 step 3 deferred (E task 10 review polish)
+- docs(3m-0): verification matrix for PA safety foundation
+- docs(plan): clarify task 8 wfRect-width contract for drawTimeScale
+- docs(phase3g-rx-epic-e): add waterfall scrollback implementation plan
+- docs(architecture): Phase 3M-0 PA Safety Foundation implementation plan
+- docs(architecture): apply pre-code Thetis review corrections to 3M TX design
+- docs(architecture): Phase 3M TX epic master design
+- docs: audit phase status table — mark 3G-9b/c / 3G-13 / 3G-14 / 3P-H / 3P-I-b complete
+- docs(verify): retarget matrix rows 6-9 to View → Band Plan
+- docs(verify): 12-row manual matrix for bandplan port
+- docs(vax): surface VAX in README + add alpha-guide step 15
+- docs(plan): Phase 3G RX Epic sub-epic D — Bandplan overlay
+
+### CI / Build
+- chore(attribution): fix CI tag-preservation FAILs on PR #161
+- chore(connection): strip 3Q diagnostic logging — root cause was duplicate app instances
+- chore(attribution): regenerate contributor indexes after cfcomp PROVENANCE rows
+- chore(attribution): finish cfcomp.{c,h} provenance for Batch B.1 sync
+- chore(wdsp): partial sync cfcomp.{c,h} → Thetis v2.10.3.13 for Qg/Qe (3M-3a-ii B.1)
+- chore: drop 3 unused includes (TxApplet/MainWindow/TransmitSetupPages)
+- chore(profile): drop unused kProfileSubpath const
+- chore(build): fix POST_BUILD PlistBuddy invocation for mic-permission gate
+- chore(ui): drop unused <gui/StyleConstants.h> from PhoneCwApplet.cpp
+- chore(3m-1b): L.1 cleanup — drop unused <memory> from ownership test
+- chore(3m-1b): J.3 cleanup — drop unused <cmath> from tst_tx_applet_mon
+- chore(3m-1b): J.2 cleanup — drop unused <functional> from VoxSettingsPopup.h
+- chore(3m-1b): I.4 cleanup — fix kUnknown field-designator order + drop unused include
+- chore(3m-1b): I.2 cleanup — remove unused <core/audio/CompositeTxMicRouter.h> in test
+- chore(3m-1b): H.2 cleanup — move <cmath> from .h to .cpp + drop unused <limits> in test
+- chore(3m-1b): F.2 cleanup — remove 2 unused includes
+- chore(3m-1b): D.3 cleanup — move <cmath> to .cpp + wdsp_api history
+- chore(3m-1b): D.2 move <stdexcept> include from TxChannel.h to .cpp
+- chore(3m-1b): D.1 cleanup — remove redundant public: label + unused include
+- chore(3m-1b): register deskhpsdr as recognised upstream
+- chore(tx): strip 3M-1a bench-debug instrumentation
+- chore(safety): add v-prefix to MW0LGE cite stamps
+- chore(safety): add clsBandStackManager.cs + setup.designer.cs headers
+- chore(caps): extend forBoard data table + spacing/comment polish
+- ci: pin mi0bot-Thetis to c26a8a4 to fix tag-preservation drift
+- ci: install Qt6::Svg dev headers across all platforms
+
+### Other
+- style(3m-1c): regroup AudioEngine public/public-slots blocks (I6)
+- style(3m-1c): TxWorkerThread::run uses unique_ptr<QTimer> for RAII
+- wip(tx): 5 wire-protocol fixes from first-RF debug session
+- wip(tx): bench-debug checkpoint — first-RF path almost there
+- revert(setup-display): remove Bandplan Overlay group box
+- style(radiomodel): regroup BandPlanManager include with model headers
+
+### Tests
+- test(gui): tst_network_diagnostics_dialog — 4 cases for null-safety + reset
+- test(widgets): tst_station_block — 5 cases for appearance + click signals
+- test(widgets): tst_status_badge — 8 cases for variant + signal coverage
+- test(3m-1c): add cross-thread queued-delivery regression tests for C1
+- test(3m-1c): widen cross-thread race test to MoxController-routed setVoxRun
+- test(3m-1c): RadioModel TxWorkerThread ownership test
+- test(3m-1b): I.5 verify chk20dbMicBoost → VOX threshold scaling integration
+- test(3m-1b): D.1 verify real mic-router drives fexchange2 with Q=0
+- test(3m-1b): close 3 minor C.3 review items
+- test(3m-1b): close idempotent-guard test coverage for C.2 mic-jack flags
+- test(tx): assert no spurious moxStateChanged in rapid-toggle test (B.3 I-1)
+- test(persistence): audit 15 AppSettings keys round-trip for 3M-0
+- test(safety): add per-sample foldback test + TODO deferred conditions
+- test(bandplan): failing tests for BandPlanManager loader
+
+### Refactors
+- refactor(3m-1c): TxWorkerThread semaphore-wake (no QTimer)
+- refactor(3m-1c): TxChannel fexchange2→fexchange0 + interleaved double + 64-block
+- refactor(3m-1c): TX pump architecture redesign — TxWorkerThread
+- refactor(ui): relocate Mic Gain slider TxApplet → PhoneCwApplet + wire mic level gauge
+- refactor(safety): name kPollIntervalMs constant per plan spec
+
+
 ## [Unreleased]
 
 ### Added (Phase 3Q — Connection Workflow Refactor / connect-flow rebuild)

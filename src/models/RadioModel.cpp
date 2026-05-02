@@ -268,6 +268,7 @@ warren@wpratt.com
 #include <cmath>
 
 #include <QDateTime>
+#include <QEventLoop>
 #include <QMetaObject>
 #include <QStandardPaths>
 #include <QThread>
@@ -824,9 +825,18 @@ RadioModel::RadioModel(QObject* parent)
             [this](int power) {
         if (m_transmitModel.isTune()) { return; }
         if (!m_connection)            { return; }
+        // Scale percent (0-100) → wire byte (0-255).  Mirrors mi0bot
+        // NetworkIO.cs:209-211 [v2.10.3.14-beta1]:
+        //   int i = (int)(255 * f * _swr_protect);  // f normalised 0..1
+        //   SetOutputPowerFactor(i);
+        // setTxDrive's contract is the wire byte (0-255); m_transmitModel
+        // power is 0-100 percent.  Without this scaling, 50% power was
+        // reaching the wire as drive_level=50 (~20 % of max) and bench
+        // RF output measured 0 W.
+        const int wireDrive = qBound(0, (power * 255) / 100, 255);
         auto* conn = m_connection;
-        QMetaObject::invokeMethod(conn, [conn, power]() {
-            conn->setTxDrive(power);
+        QMetaObject::invokeMethod(conn, [conn, wireDrive]() {
+            conn->setTxDrive(wireDrive);
         });
     });
 }
@@ -1420,6 +1430,36 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         qCInfo(lcDsp) << "WDSP ready — RX channel 0 active, audio started";
     }, Qt::SingleShotConnection);
     m_wdspEngine->initialize(configDir);
+
+    // WDSP wisdom now ALWAYS runs on a worker thread (WdspEngine::initialize
+    // dropped its sync fast path so the user gets a progress dialog whenever
+    // FFTW regenerates plans).  But the rest of this function — TX channel
+    // creation at line ~1452, the SingleShot lambda above that creates the
+    // RX channel, etc. — was written against the old sync contract where
+    // m_initialized was true by the time initialize() returned.
+    //
+    // Block here while the wisdom worker finishes, pumping the Qt event loop
+    // so the MainWindow wisdom progress dialog (connected to wisdomProgress)
+    // renders and updates.  The dialog is Qt::ApplicationModal (see
+    // MainWindow.cpp:600) so other windows are blocked from interaction
+    // during the wait — no re-entrant Connect-clicks or similar.
+    //
+    // Order: register the listener BEFORE checking isInitialized().  Qt's
+    // current threading semantics make the check-then-connect race
+    // theoretically impossible (no event pump between the read and the
+    // connect), but the canonical wait-for-signal idiom is connect → check
+    // → exec — robust against future Qt internals changes and trivially
+    // race-proof regardless of when the worker's QThread::finished posts.
+    QEventLoop wisdomLoop;
+    QMetaObject::Connection waitConn = QObject::connect(
+        m_wdspEngine, &WdspEngine::initializedChanged,
+        &wisdomLoop, [&wisdomLoop](bool ok) {
+            if (ok) wisdomLoop.quit();
+        });
+    if (!m_wdspEngine->isInitialized()) {
+        wisdomLoop.exec();
+    }
+    QObject::disconnect(waitConn);
 
     // Factory-create the connection (no parent — will be moved to thread)
     auto conn = RadioConnection::create(info);
@@ -3166,6 +3206,22 @@ void RadioModel::wireSliceSignals()
     connect(slice, &SliceModel::rttyMarkHzChanged,  this, updateRttyFilter);
     connect(slice, &SliceModel::rttyShiftHzChanged, this, updateRttyFilter);
 
+    // Persistence-only wires — slice properties whose only side-effect is
+    // "save the new value." Without these, changes are stored on the in-
+    // memory slice but never written to AppSettings until something else
+    // (a band crossing, an antenna change, etc.) happens to trigger
+    // scheduleSettingsSave(). User-visible bug: tweak step (or lock, or
+    // RIT, or XIT) and close the app — value reverts on next launch.
+    // The dspModeChanged / filterChanged / agcModeChanged etc. handlers
+    // above already call scheduleSettingsSave() as part of their main
+    // job; this block covers the gaps.
+    connect(slice, &SliceModel::stepHzChanged,    this, [this](int) { scheduleSettingsSave(); });
+    connect(slice, &SliceModel::lockedChanged,    this, [this](bool) { scheduleSettingsSave(); });
+    connect(slice, &SliceModel::ritEnabledChanged, this, [this](bool) { scheduleSettingsSave(); });
+    connect(slice, &SliceModel::ritHzChanged,     this, [this](int) { scheduleSettingsSave(); });
+    connect(slice, &SliceModel::xitEnabledChanged, this, [this](bool) { scheduleSettingsSave(); });
+    connect(slice, &SliceModel::xitHzChanged,     this, [this](int) { scheduleSettingsSave(); });
+
     // XIT stored for 3M-1 (TX phase) to consume on keydown. No RX effect in 3G-10.
 
     // AF gain → AudioEngine volume
@@ -3259,8 +3315,8 @@ void RadioModel::wireSliceSignals()
 
 // Load persisted VFO state from AppSettings into a slice.
 // Migrates legacy flat keys first, then restores per-band state for the
-// current band (derived from the panadapter center frequency or the slice
-// default frequency).
+// last-used band (or, when no LastBand marker exists, falls back to the
+// panadapter's center frequency band, then to the slice's default freq).
 void RadioModel::loadSliceState(SliceModel* slice)
 {
     if (!slice) {
@@ -3270,10 +3326,18 @@ void RadioModel::loadSliceState(SliceModel* slice)
     // One-shot migration of legacy Vfo* flat keys. No-op if already migrated.
     SliceModel::migrateLegacyKeys();
 
-    // Derive current band. Use the first panadapter's band if available;
-    // otherwise fall back to bandFromFrequency on the slice's default freq.
+    // Pick the band to restore. Priority order:
+    //   1. Slice<N>/LastBand — written by saveToSettings on every save, so
+    //      this lands on the user's actual last-used band/frequency.
+    //   2. Panadapter band — only useful if the panadapter's center freq
+    //      is itself restored from somewhere; today it defaults to
+    //      14.225 MHz so this branch reduces to "always 20m" without (1).
+    //   3. bandFromFrequency on the slice's default freq — startup fallback
+    //      when neither (1) nor (2) is available (fresh install).
     Band currentBand = Band::Band20m;
-    if (!m_panadapters.isEmpty()) {
+    if (auto lastBand = SliceModel::loadLastBandFromSettings(slice->sliceIndex())) {
+        currentBand = *lastBand;
+    } else if (!m_panadapters.isEmpty()) {
         currentBand = m_panadapters.first()->band();
     } else {
         currentBand = bandFromFrequency(slice->frequency());
@@ -3281,6 +3345,15 @@ void RadioModel::loadSliceState(SliceModel* slice)
     m_lastBand = currentBand;
 
     slice->restoreFromSettings(currentBand);
+
+    // Push restored frequency to the panadapter so the spectrum display
+    // lands on the same band as the slice. Without this the panadapter
+    // stays parked at its 14.225 MHz default and the user sees the slice
+    // jump to (say) 7.236 MHz on a panadapter still rendering 20m.
+    // SpectrumWidget center freq follows from the panadapter on startup.
+    if (!m_panadapters.isEmpty()) {
+        m_panadapters.first()->setCenterFrequency(slice->frequency());
+    }
 
     qCInfo(lcDsp) << "Loaded slice state for band:"
                   << bandKeyName(currentBand)
@@ -3425,6 +3498,22 @@ void RadioModel::scheduleSettingsSave()
     });
 }
 
+// Force-run any pending coalesced slice save synchronously. Without this,
+// the 500 ms QTimer in scheduleSettingsSave() can't fire while the main
+// thread is inside MainWindow::closeEvent → teardownConnection (synchronous,
+// blocks on QThread::wait calls), so the user's last AF / step / freq /
+// lock / RIT change before close gets dropped on the floor. The pending
+// QTimer is left in place; if it fires after this it will redundantly
+// re-save the same state, which is harmless.
+void RadioModel::flushPendingSettingsSave()
+{
+    if (!m_settingsSaveScheduled) {
+        return;
+    }
+    m_settingsSaveScheduled = false;
+    saveSliceState(m_activeSlice);
+}
+
 // Persist current slice state to AppSettings (per-band + session state).
 // Also flushes AlexController persistence if the dirty flag was set —
 // see the antennaChanged / blockTxChanged handlers in wireSliceSignals.
@@ -3455,6 +3544,14 @@ void RadioModel::teardownConnection()
     if (!m_connection) {
         return;
     }
+
+    // Flush any pending coalesced slice save FIRST so the user's last
+    // AF / step / freq / lock / RIT tweak isn't lost to the 500 ms
+    // debounce in scheduleSettingsSave(). The QTimer there can't fire
+    // while teardown is running on the main thread, so without this an
+    // immediate close-after-tweak silently drops the change. Cheap and
+    // idempotent — no-op when nothing's pending.
+    flushPendingSettingsSave();
 
     // 3M-1a G.1 fixup: drop any prior WdspEngine::initializedChanged subscribers
     // we registered in connectToRadio(). Without this, each reconnect cycle
@@ -4018,10 +4115,45 @@ void RadioModel::setTune(bool on)
                                     ? bandFromFrequency(m_activeSlice->frequency())
                                     : m_lastBand;
         const int tunePower = m_transmitModel.tunePowerForBand(currentBand);
+        // Scale percent (0-100) → wire byte (0-255). See setTxDrive scaling
+        // comment in connection-power lambda above for the mi0bot citation.
+        const int wireTuneDrive = qBound(0, (tunePower * 255) / 100, 255);
         if (m_connection) {
             auto* conn = m_connection;
-            QMetaObject::invokeMethod(conn, [conn, tunePower]() {
-                conn->setTxDrive(tunePower);
+            QMetaObject::invokeMethod(conn, [conn, wireTuneDrive]() {
+                conn->setTxDrive(wireTuneDrive);
+            });
+        }
+
+        // ── PUSH TUNE-ADJUSTED TX VFO (carrier-on-dial) ────────────────────────
+        // Thetis offsets the TX VFO by ±cw_pitch when TUNE is on so the
+        // resulting carrier (TX_VFO + audio_tone_freq) lands exactly on dial
+        // freq, not at dial±cw_pitch.
+        //
+        // From Thetis ChannelMaster/console.cs:31788-31810 [v2.10.3.13]:
+        //   case DSPMode.USB / DIGU / DSB:
+        //     if (chkTUN.Checked) tx_freq -= cw_pitch * 1e-6;
+        //   case DSPMode.LSB / DIGL:
+        //     if (chkTUN.Checked) tx_freq += cw_pitch * 1e-6;
+        //   case DSPMode.AM / SAM / FM:
+        //     if (chkTUN.Checked) tx_freq -= cw_pitch * 1e-6;
+        //
+        // Equivalent formula: TX_VFO = dial − signedFreq, where signedFreq is
+        // the audio-rate tune tone frequency we passed to setTuneTone above:
+        //   USB/DIGU/CWU/AM/SAM/FM/DSB → signedFreq = +cw_pitch → TX_VFO = dial − cw_pitch
+        //   LSB/DIGL/CWL              → signedFreq = −cw_pitch → TX_VFO = dial + cw_pitch
+        // After the radio's TX DDC mixes audio tone onto TX_VFO, the carrier
+        // at RF = TX_VFO + signedFreq = dial.
+        if (m_activeSlice && m_connection) {
+            const quint64 dialHz =
+                static_cast<quint64>(m_activeSlice->frequency());
+            const qint64 adjustedTxHz =
+                static_cast<qint64>(dialHz) - static_cast<qint64>(signedFreq);
+            const quint64 wireHz =
+                (adjustedTxHz < 0) ? 0 : static_cast<quint64>(adjustedTxHz);
+            auto* conn = m_connection;
+            QMetaObject::invokeMethod(conn, [conn, wireHz]() {
+                conn->setTxFrequency(wireHz);
             });
         }
 
@@ -4101,9 +4233,25 @@ void RadioModel::setTune(bool on)
         //   //MW0LGE_22b  [original inline comment from console.cs:30033]
         if (m_connection) {
             auto* conn = m_connection;
-            const int savedPwr = m_savedPowerPct;
-            QMetaObject::invokeMethod(conn, [conn, savedPwr]() {
-                conn->setTxDrive(savedPwr);
+            // Scale percent (0-100) → wire byte (0-255). See setTxDrive scaling
+            // comment in connection-power lambda for the mi0bot citation.
+            const int savedWireDrive = qBound(0, (m_savedPowerPct * 255) / 100, 255);
+            QMetaObject::invokeMethod(conn, [conn, savedWireDrive]() {
+                conn->setTxDrive(savedWireDrive);
+            });
+        }
+
+        // ── RESTORE TX VFO (un-offset from cw_pitch) ───────────────────────────
+        // Mirrors Thetis console.cs:31788-31810 [v2.10.3.13] which only
+        // applies the ±cw_pitch tx_freq offset while chkTUN.Checked == true.
+        // Once TUNE drops, txtVFOAFreq_LostFocus recomputes tx_freq without
+        // the offset so the carrier returns to dial freq.
+        if (m_activeSlice && m_connection) {
+            const quint64 dialHz =
+                static_cast<quint64>(m_activeSlice->frequency());
+            auto* conn = m_connection;
+            QMetaObject::invokeMethod(conn, [conn, dialHz]() {
+                conn->setTxFrequency(dialHz);
             });
         }
 

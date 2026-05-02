@@ -57,8 +57,8 @@ extern void setSize_compressor (COMPRESSOR a, int size);
 
 // TXA Properties
 
-extern __declspec (dllexport) void SetTXACompressorRun (int channel, int run);
+extern void SetTXACompressorRun (int channel, int run);
 
-extern __declspec (dllexport) void SetTXACompressorGain (int channel, double gain);
+extern void SetTXACompressorGain (int channel, double gain);
 
 #endif

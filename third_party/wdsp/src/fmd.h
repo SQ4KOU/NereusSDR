@@ -97,14 +97,14 @@ extern void setSize_fmd (FMD a, int size);
 
 // RXA Properties
 
-extern __declspec (dllexport) void SetRXAFMDeviation (int channel, double deviation);
+extern void SetRXAFMDeviation (int channel, double deviation);
 
-extern __declspec (dllexport) void SetRXAFMNCde (int channel, int nc);
+extern void SetRXAFMNCde (int channel, int nc);
 
-extern __declspec (dllexport) void SetRXAFMMPde (int channel, int mp);
+extern void SetRXAFMMPde (int channel, int mp);
 
-extern __declspec (dllexport) void SetRXAFMNCaud (int channel, int nc);
+extern void SetRXAFMNCaud (int channel, int nc);
 
-extern __declspec (dllexport) void SetRXAFMMPaud (int channel, int mp);
+extern void SetRXAFMMPaud (int channel, int mp);
 
 #endif
