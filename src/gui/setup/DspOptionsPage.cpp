@@ -418,13 +418,16 @@ void DspOptionsPage::buildUI()
     m_cacheImpulse = new QCheckBox(tr("Enable WDSP impulse caching"), cacheGroup);
     m_cacheImpulse->setToolTip(
         tr("Cache filter impulse responses in memory for faster channel rebuilds. "
-           "Trades memory for first-rebuild latency."));
+           "Trades memory for first-rebuild latency. "
+           "Takes effect on the next radio connect or channel rebuild."));
 
     m_cacheImpulseSaveRestore = new QCheckBox(
         tr("Persist impulse cache to disk between sessions"), cacheGroup);
     m_cacheImpulseSaveRestore->setToolTip(
         tr("Save the impulse cache to disk on shutdown and reload on next launch. "
-           "Eliminates the first-rebuild cost after restarting NereusSDR."));
+           "Eliminates the first-rebuild cost after restarting NereusSDR. "
+           "Warning: the cache file can become very large. "
+           "Takes effect on the next radio connect or channel rebuild."));
 
     loadCheck(m_cacheImpulse,            "DspOptionsCacheImpulse",            false);
     loadCheck(m_cacheImpulseSaveRestore, "DspOptionsCacheImpulseSaveRestore",  false);

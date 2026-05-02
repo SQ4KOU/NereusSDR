@@ -41,11 +41,13 @@ warren@wpratt.com
 #include "WdspEngine.h"
 #include "RxChannel.h"
 #include "TxChannel.h"
+#include "AppSettings.h"
 #include "LogCategories.h"
 #include "wdsp_api.h"
 
 #include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QThread>
@@ -137,10 +139,19 @@ bool WdspEngine::initialize(const QString& configDir)
         qCInfo(lcDsp) << "Loading existing WDSP wisdom file...";
         WDSPwisdom(configPath.data());
         qCInfo(lcDsp) << "WDSP wisdom loaded";
-        finishInitialization();
+        finishInitialization(/*wisdomWasRebuilt=*/false);
     } else {
         // Slow path: generate wisdom on a background thread with progress.
+        // Wisdom rebuild also invalidates any saved impulse cache —
+        // From Thetis radio.cs:140-152 [v2.10.3.13]: delete impulse_cache.dat
+        // when wisdom is rebuilt so we start afresh.
         qCInfo(lcDsp) << "Generating WDSP wisdom (first run, may take several minutes)...";
+
+        QString cacheFile = m_configDir + QStringLiteral("impulse_cache.bin");
+        if (QFile::exists(cacheFile)) {
+            QFile::remove(cacheFile);
+            qCInfo(lcDsp) << "Deleted stale impulse cache (wisdom rebuilt)";
+        }
 
         auto* wisdomThread = QThread::create([configPath]() {
             WDSPwisdom(const_cast<char*>(configPath.constData()));
@@ -156,7 +167,7 @@ bool WdspEngine::initialize(const QString& configDir)
             pollTimer->deleteLater();
             wisdomThread->deleteLater();
             emit wisdomProgress(100, QStringLiteral("FFTW planning complete"));
-            finishInitialization();
+            finishInitialization(/*wisdomWasRebuilt=*/true);
         });
 
         connect(pollTimer, &QTimer::timeout, this, [this]() {
@@ -182,25 +193,45 @@ bool WdspEngine::initialize(const QString& configDir)
 #endif
 }
 
-void WdspEngine::finishInitialization()
+void WdspEngine::finishInitialization(bool wisdomWasRebuilt)
 {
 #ifdef HAVE_WDSP
     qCInfo(lcDsp) << "WDSP wisdom initialized";
 
-    // Initialize impulse cache for faster filter coefficient computation
-    init_impulse_cache(1);
+    // Read AppSettings flags.
+    // From Thetis radio.cs:153-158 [v2.10.3.13] — CacheImpulse/CacheImpulseSaveRestore.
+    const auto& s = AppSettings::instance();
+    const bool cacheEnabled  = s.value("DspOptionsCacheImpulse",            "False").toString() == "True";
+    const bool saveRestore   = s.value("DspOptionsCacheImpulseSaveRestore",  "False").toString() == "True";
 
-    // Load cached impulse data if available
-    QString cacheFile = m_configDir + QStringLiteral("/impulse_cache.bin");
-    QByteArray cachePath = cacheFile.toUtf8();
-    if (QFile::exists(cacheFile)) {
-        int cacheResult = read_impulse_cache(cachePath.constData());
-        qCDebug(lcDsp) << "Impulse cache loaded, result:" << cacheResult;
+    // From Thetis radio.cs:153 [v2.10.3.13]:
+    //   WDSP.init_impulse_cache(_cache_impulse ? 1 : 0);
+    // init_impulse_cache allocates the internal cache structure (use=1) or
+    // sets it up in disabled mode (use=0). Must be called before any channel
+    // is opened. Takes effect at channel-create time.
+    init_impulse_cache(cacheEnabled ? 1 : 0);
+    qCInfo(lcDsp) << "WDSP impulse cache" << (cacheEnabled ? "enabled" : "disabled");
+
+    // From Thetis radio.cs:155-158 [v2.10.3.13]:
+    //   if (_cache_impulse_save_restore && !rebuilt)
+    //       WDSP.read_impulse_cache(...);
+    // Skip loading if wisdom was just rebuilt — the old cache is stale.
+    if (saveRestore && !wisdomWasRebuilt) {
+        QString cacheFile = m_configDir + QStringLiteral("impulse_cache.bin");
+        if (QFile::exists(cacheFile)) {
+            QByteArray cachePath = cacheFile.toUtf8();
+            int cacheResult = read_impulse_cache(cachePath.constData());
+            qCDebug(lcDsp) << "Impulse cache loaded from disk, result:" << cacheResult;
+        }
     }
 
     m_initialized = true;
     emit initializedChanged(true);
     qCInfo(lcDsp) << "WDSP initialized successfully";
+#else
+    Q_UNUSED(wisdomWasRebuilt);
+    m_initialized = true;
+    emit initializedChanged(true);
 #endif
 }
 
@@ -240,11 +271,33 @@ void WdspEngine::shutdown()
     }
 
 #ifdef HAVE_WDSP
-    // Save impulse cache for next startup
-    QString cacheFile = m_configDir + QStringLiteral("/impulse_cache.bin");
-    QByteArray cachePath = cacheFile.toUtf8();
-    save_impulse_cache(cachePath.constData());
-    qCDebug(lcDsp) << "Impulse cache saved";
+    // From Thetis radio.cs:163-177 [v2.10.3.13] (DestroyDSP):
+    //   if (_cache_impulse && _cache_impulse_save_restore)
+    //       WDSP.save_impulse_cache(...)
+    //   else
+    //       // try to remove file if exists
+    //       File.Delete(file)
+    {
+        const auto& s = AppSettings::instance();
+        const bool cacheEnabled = s.value("DspOptionsCacheImpulse",           "False").toString() == "True";
+        const bool saveRestore  = s.value("DspOptionsCacheImpulseSaveRestore", "False").toString() == "True";
+
+        QString cacheFile = m_configDir + QStringLiteral("impulse_cache.bin");
+
+        if (cacheEnabled && saveRestore) {
+            QByteArray cachePath = cacheFile.toUtf8();
+            int saveResult = save_impulse_cache(cachePath.constData());
+            qCInfo(lcDsp) << "Impulse cache saved to disk, result:" << saveResult;
+        } else {
+            // Remove any stale file so a future session with save-restore
+            // disabled doesn't accidentally load old data.
+            // From Thetis radio.cs:170-175 [v2.10.3.13].
+            if (QFile::exists(cacheFile)) {
+                QFile::remove(cacheFile);
+                qCDebug(lcDsp) << "Removed stale impulse cache file (save-restore disabled)";
+            }
+        }
+    }
 
     destroy_impulse_cache();
 #endif

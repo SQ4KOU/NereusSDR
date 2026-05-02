@@ -253,8 +253,14 @@ private:
     bool m_initialized{false};
     QString m_configDir;
 
-    // Finish initialization after WDSPwisdom completes (called from timer)
-    void finishInitialization();
+    // True when wisdom was regenerated this session.
+    // Used by finishInitialization() to skip loading a now-stale impulse
+    // cache file (mirrors Thetis radio.cs:151-158 [v2.10.3.13] rebuilt guard).
+    bool m_wisdomWasRebuilt{false};
+
+    // Finish initialization after WDSPwisdom completes.
+    // wisdomWasRebuilt: true when WDSPwisdom generated a new file this session.
+    void finishInitialization(bool wisdomWasRebuilt);
 
     // RX channels keyed by WDSP channel ID.
     std::map<int, std::unique_ptr<RxChannel>> m_rxChannels;

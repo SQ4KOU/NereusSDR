@@ -2664,6 +2664,22 @@ nereus_add_test(tst_dsp_change_timer)
 #   radiomodel_rebuild_noop_when_disconnected — no emission when disconnected
 nereus_add_test(tst_dsp_options_per_mode_apply)
 
+# ── Task 4.3: Filter Impulse Cache toggle persistence ─────────────────────────
+# AppSettings round-trip for DspOptionsCacheImpulse and
+# DspOptionsCacheImpulseSaveRestore. Both default to "False". The WdspEngine
+# reads these flags at finishInitialization() and shutdown(); they take effect
+# at engine-init time, not live (see design Section 4C).
+#
+# Tests:
+#   cache_impulse_default_false — remove key → default is "False"
+#   cache_impulse_round_trip_true — set "True" → reads back "True"
+#   cache_impulse_round_trip_false — set "False" → reads back "False"
+#   cache_save_restore_default_false — remove key → default is "False"
+#   cache_save_restore_round_trip_true — set "True" → reads back "True"
+#   cache_save_restore_round_trip_false — set "False" → reads back "False"
+#   cache_impulse_and_save_restore_are_independent — orthogonal flags
+nereus_add_test(tst_dsp_options_persistence)
+
 # ── Task 2.1: Detector + Averaging split (handwave fix from 3G-8) ─────────
 # Ported from Thetis specHPSDR.cs:302-415 [v2.10.3.13] DetTypePan / DetTypeWF
 # / AverageMode / AverageModeWF integer codes.
