@@ -246,7 +246,6 @@ void TxApplet::buildUI()
                               QStringLiteral("2.5"), QStringLiteral("3")});
     swrGauge->setAccessibleName(QStringLiteral("SWR gauge"));
     m_swrGauge = swrGauge;
-    NyiOverlay::markNyi(swrGauge, QStringLiteral("Phase 3I-1"));
     vbox->addWidget(swrGauge);
 
     // ── 3. RF Power slider row ───────────────────────────────────────────────
@@ -709,9 +708,12 @@ void TxApplet::wireControls()
     //       RadioModel.cpp:572).  Without this throttle the digit
     //       characters update too fast to read.
     connect(&m_model->radioStatus(), &RadioStatus::powerChanged,
-            this, [this](double fwdW, double /*revW*/, double /*swr*/) {
+            this, [this](double fwdW, double /*revW*/, double swr) {
         constexpr double kAlpha = 0.30;
         m_fwdPowerSmoothedW = kAlpha * fwdW + (1.0 - kAlpha) * m_fwdPowerSmoothedW;
+        if (m_swrGauge) {
+            m_swrGauge->setValue(swr);
+        }
     });
     auto* fwdGaugeRefreshTimer = new QTimer(this);
     fwdGaugeRefreshTimer->setInterval(50);   // 20 Hz UI refresh

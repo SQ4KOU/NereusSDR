@@ -261,7 +261,7 @@ private:
     // 1. Forward Power gauge
     HGauge*  m_fwdPowerGauge  = nullptr;
     // 2. SWR gauge
-    QWidget* m_swrGauge       = nullptr;
+    HGauge*  m_swrGauge       = nullptr;
     // EMA smoothing state for fwd-power gauge (Thetis-style envelope detector
     // not yet ported; this is a simple alpha=0.25 exponential-moving-average
     // to keep the displayed value calm — RadioStatus::powerChanged fires
