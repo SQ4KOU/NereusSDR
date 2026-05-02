@@ -242,7 +242,6 @@ warren@wpratt.com
 #include "WdspTypes.h"
 #include "dsp/ChannelConfig.h"
 #include "dsp/TxChannelState.h"
-#include "models/SliceModel.h"
 
 namespace NereusSDR {
 
