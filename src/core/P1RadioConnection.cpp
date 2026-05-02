@@ -1424,6 +1424,40 @@ void P1RadioConnection::setLineInGain(int gain)
 }
 
 // ---------------------------------------------------------------------------
+// setUserDigOut (Task 2.2 of P1 full-parity epic)
+//
+// Updates m_userDigOut (shared base member) and arms m_forceBank11Next so
+// the new user-dig-out value lands on the wire within ≤1 frame of the call.
+// 4-bit field (0..15) — masked at the API boundary via & 0x0F so values above
+// 15 silently wrap to the low nibble (the codec also masks via & 0x0F, so
+// stored state matches the wire bytes 1:1 either way).
+//
+// Wire bytes: bank 11 (C0=0x14) C3 low 4 bits — the same bank as
+// setLineInGain (C2) and setMicBias / setMicTipRing / setMicPTT (C1), all of
+// which OR into different bytes of the same case-11 frame.
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:601 [v2.10.3.13]
+//   C3 = prn->user_dig_out & 0b00001111;
+//
+// Flush pattern mirrors setLineInGain / setMicBias (Codex P2): m_forceBank11Next
+// is set BEFORE the idempotent guard so the bits land on the wire within
+// ≤1 frame.  Reuses m_forceBank11Next + captureBank11ForTest infrastructure
+// from G.3.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setUserDigOut(quint8 dig)
+{
+    const quint8 masked = dig & 0x0F;
+
+    // Codex P2: set flush flag BEFORE idempotent guard.
+    m_forceBank11Next = true;
+
+    if (m_userDigOut == masked) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_userDigOut = masked;
+}
+
+// ---------------------------------------------------------------------------
 // setMicPTT (3M-1b G.5)
 //
 // Enables or disables the hardware mic-jack PTT line (Orion/ANAN front-panel).
@@ -1698,6 +1732,7 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.p1MicTipRing   = m_micTipRing;
     ctx.p1MicBias      = m_micBias;     // 3M-1b G.4
     ctx.p1LineInGain   = m_lineInGain;  // Task 2.1 of P1 full-parity epic
+    ctx.p1UserDigOut   = m_userDigOut;  // Task 2.2 of P1 full-parity epic
     ctx.p1MicPTT       = m_micPTT;      // 3M-1b G.5
     ctx.duplex         = m_duplex;
     ctx.diversity      = m_diversity;

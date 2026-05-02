@@ -229,6 +229,7 @@ public slots:
     void setMicTipRing(bool tipHot) override;
     void setMicBias(bool on) override;
     void setLineInGain(int gain) override;
+    void setUserDigOut(quint8 dig) override;
     void setMicPTT(bool enabled) override;
     void setMicXlr(bool xlrJack) override;
 

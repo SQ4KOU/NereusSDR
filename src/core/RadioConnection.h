@@ -299,6 +299,18 @@ public slots:
     /// Default 0 = no line-in attenuation.
     virtual void setLineInGain(int gain) = 0;
 
+    /// Set user digital outputs (0-15, low 4 bits).  Maps to Thetis prn->user_dig_out.
+    /// Source: Thetis ChannelMaster/networkproto1.c:601 [v2.10.3.13]
+    ///   C3 = prn->user_dig_out & 0b00001111;
+    /// P1: bank 11 C3 low 4 bits.  Drives the 4 user-controllable digital pins
+    ///     on the Penny/Hermes Ctrl accessory header.
+    /// P2: NO EQUIVALENT — user_dig_out is a P1/Penny-only feature with no
+    ///     corresponding byte in CmdHighPriority.  The P2 override stores into
+    ///     base m_userDigOut for symmetric API only; it does NOT emit anything
+    ///     on the wire.
+    /// Default 0 = all 4 user-dig-out pins low.
+    virtual void setUserDigOut(quint8 dig) = 0;
+
     /// Hardware mic-jack PTT enable (Orion/ANAN front-panel PTT).
     ///
     /// NereusSDR parameter convention: `enabled = true` means PTT is enabled
@@ -610,6 +622,14 @@ protected:
     // From Thetis ChannelMaster/networkproto1.c:600 [v2.10.3.13]:
     //   C2 = (prn->mic.line_in_gain & 0b00011111) | ((prn->puresignal_run & 1) << 6);
     int m_lineInGain{0};
+
+    // Shared state for setUserDigOut (Task 2.2 of P1 full-parity epic).
+    // 4-bit field (0-15).  Default 0 = all 4 user-dig-out pins low.
+    // P1: emitted to case 11 (C0=0x14) C3 low 4 bits via ctx.p1UserDigOut.
+    // P2: STORAGE-ONLY (no wire emission — user_dig_out is P1/Penny-only).
+    // From Thetis ChannelMaster/networkproto1.c:601 [v2.10.3.13]:
+    //   C3 = prn->user_dig_out & 0b00001111;
+    quint8 m_userDigOut{0};
 
     // Shared state for setMicPTT (3M-1b G.5).
     // POLARITY INVERSION: m_micPTT=true means PTT is enabled (intuitive UI semantic).

@@ -1094,6 +1094,32 @@ void P2RadioConnection::setLineInGain(int gain)
 }
 
 // ---------------------------------------------------------------------------
+// setUserDigOut (Task 2.2 of P1 full-parity epic) — P2 path
+//
+// P1-ONLY FEATURE.  user_dig_out drives the 4 user-controllable digital pins
+// on the Penny / Hermes Ctrl accessory header — a P1 hardware feature with
+// no equivalent in P2.  Thetis P2 (network.c CmdHighPriority) carries no
+// byte for prn->user_dig_out: the field exists in the prn struct but is
+// only read by the P1 networkproto1.c case-11 emitter (line 601).
+//
+// This override therefore does NOT touch the wire.  It stores the value in
+// the shared base m_userDigOut for symmetric-API consistency only — callers
+// that want to set user_dig_out on a P2 connection get a silent no-op on
+// the wire (the value is preserved in base storage for debug visibility,
+// matching the P1 path's m_userDigOut semantics).
+//
+// Source: absence-of-byte in Thetis ChannelMaster/network.c CmdHighPriority
+// frame layout — searched the P2 emitter; user_dig_out has no corresponding
+// byte position.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setUserDigOut(quint8 dig)
+{
+    // Mask to low 4 bits at the API boundary — symmetric with P1.
+    m_userDigOut = dig & 0x0F;
+    // No wire emission: P2 has no user_dig_out byte in CmdHighPriority.
+}
+
+// ---------------------------------------------------------------------------
 // setMicPTT (3M-1b G.5)
 //
 // Enables or disables the hardware mic-jack PTT line (Orion/ANAN front-panel).

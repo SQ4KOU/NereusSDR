@@ -108,6 +108,27 @@ nereus_add_test(tst_p1_codec_standard_freq_bank_xmitbit)
 nereus_add_test(tst_p1_line_in_gain_setter)
 target_compile_definitions(tst_p1_line_in_gain_setter PRIVATE NEREUS_BUILD_TESTS)
 
+# ── P1 full-parity Task 2.2: P1RadioConnection::setUserDigOut virtual ────────
+# 13 tests pin the user_dig_out field (bank 11 C3 low 4 bits, mask 0x0F) in
+# P1RadioConnection::setUserDigOut():
+#   1.  Default state: C3 low 4 bits = 0 (m_userDigOut default 0).
+#   2.  setUserDigOut(0) → C3 low 4 bits = 0 (explicit zero).
+#   3.  setUserDigOut(0x0A) → C3 low 4 bits = 0x0A (alternating bits).
+#   4.  setUserDigOut(0x0F) → C3 low 4 bits = 0x0F (max).
+#   5.  setUserDigOut(0xFF) → C3 = 0x0F (high-nibble masked off).
+#   6.  Cross-bit guard: setUserDigOut leaves C1 (mic bits) unchanged.
+#   7.  Cross-bit guard: setUserDigOut leaves C2 (line_in/puresignal) unchanged.
+#   8.  Bank 11 C0 address remains 0x14.
+#   9.  Round-trip: 0 → 0x07 → 0 produces correct bit values.
+#  10.  setUserDigOut sets m_forceBank11Next (Codex P2 flush pattern).
+#  11.  Repeated same-value call still sets the flush flag.
+#  12.  Idempotency: setUserDigOut(0x0A) twice doesn't crash.
+#  13.  Codec path (HL2): C3 emits 0 unconditionally — documents intentional
+#       codec divergence (HL2 has no Penny header); flush flag still fires.
+# Source: Thetis ChannelMaster/networkproto1.c:601 [v2.10.3.13].
+nereus_add_test(tst_p1_user_dig_out_setter)
+target_compile_definitions(tst_p1_user_dig_out_setter PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3P-A P1CodecAnvelinaPro3 bank 17 extra OC (Task 7) ──
 nereus_add_test(tst_p1_codec_anvelina_pro3)
 

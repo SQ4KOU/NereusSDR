@@ -121,6 +121,7 @@ public:
     void setMicTipRing(bool) override {}
     void setMicBias(bool) override {}
     void setLineInGain(int) override {}
+    void setUserDigOut(quint8) override {}
     void setMicPTT(bool) override {}
     void setMicXlr(bool) override {}
     void sendTxIq(const float*, int) override {}  // consume silently
