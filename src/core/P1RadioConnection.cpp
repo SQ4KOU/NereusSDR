@@ -848,6 +848,35 @@ void P1RadioConnection::restartStreamWithRate(int newSampleRate)
     sendPrimingBurst(3);
 }
 
+// ---------------------------------------------------------------------------
+// restartStreamWithCount — Task 1.7 (active-RX-count live-apply, P1 path)
+//
+// Updates m_activeRxCount then stops → primes → starts the EP6 stream so
+// the radio re-arms with the new per-frame slot count (bank-0 C0 bits 8-10
+// encode nrx-1).  parseEp6Frame() reads m_activeRxCount fresh on every call;
+// there is no per-receiver cache to invalidate.
+//
+// Mirrors restartStreamWithRate() (Task 1.6) — same stop+prime+start cycle.
+//
+// Cite: networkproto1.c WriteMainLoop bank-0 C0 nrx field [v2.10.3.13].
+// ---------------------------------------------------------------------------
+void P1RadioConnection::restartStreamWithCount(int newActiveRxCount)
+{
+    if (!m_running) {
+        // Not yet streaming — record the count; bank-0 picks it up at start.
+        m_activeRxCount = newActiveRxCount;
+        return;
+    }
+    if (newActiveRxCount == m_activeRxCount) {
+        return;  // idempotent
+    }
+    m_activeRxCount = newActiveRxCount;
+    sendMetisStop();
+    sendPrimingBurst(3);
+    sendMetisStart(false);
+    sendPrimingBurst(3);
+}
+
 void P1RadioConnection::setAttenuator(int dB)
 {
     // Source: specHPSDR.cs per-HPSDRHW branches + BoardCapabilities registry.

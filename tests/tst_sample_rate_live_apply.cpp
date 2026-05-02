@@ -1,12 +1,14 @@
 // =================================================================
 // tests/tst_sample_rate_live_apply.cpp  (NereusSDR)
 // =================================================================
+// no-port-check: NereusSDR-original test infrastructure; the Thetis filename
+// reference below is a comment-only provenance note, not a code port.
 //
 // NereusSDR-original infrastructure — no Thetis source ported here.
 // RadioModel::setSampleRateLive() is a NereusSDR coordinator; the P1
 // restart it delegates to mirrors the onReconnectTimeout() sequence
-// from P1RadioConnection (itself ported from networkproto1.c
-// SendStopToMetis / SendStartToMetis [v2.10.3.13]).
+// from P1RadioConnection (itself ported from
+// ChannelMaster/networkproto1.c SendStopToMetis/SendStartToMetis [v2.10.3.13]).
 //
 // Test scope (Task 1.6):
 //   changes_rate_without_dropping_channel —

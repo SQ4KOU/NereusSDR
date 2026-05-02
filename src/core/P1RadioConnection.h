@@ -165,6 +165,26 @@ public slots:
     // Cite: networkproto1.c onReconnectTimeout restart pattern
     // [v2.10.3.13] — sendMetisStop + sendPrimingBurst(3) + sendMetisStart.
     void restartStreamWithRate(int newSampleRate);
+
+    // Task 1.7: live-apply an active-RX-count change to a running P1 connection.
+    //
+    // Updates m_activeRxCount then issues sendMetisStop() + sendPrimingBurst(3)
+    // + sendMetisStart() so the radio re-arms its EP6 sender with the new
+    // per-frame slot count encoded in bank-0 C0 bits 8-10 (nrx-1).
+    //
+    // P1 EP6 frame parsing: parseEp6Frame() takes numRx as a parameter on
+    // every call (not cached); it reads m_activeRxCount from the instance
+    // method overload.  Updating m_activeRxCount is therefore sufficient to
+    // handle the mid-stream count change — no MetisFrameParser rework needed.
+    //
+    // Must be called on the connection thread (invoke via QMetaObject::
+    // invokeMethod(Qt::QueuedConnection) from the main thread).
+    //
+    // No-op when m_running is false or when count equals m_activeRxCount.
+    //
+    // Cite: networkproto1.c WriteMainLoop bank-0 C0 nrx bits [v2.10.3.13]
+    // — same stop+prime+start cycle as restartStreamWithRate().
+    void restartStreamWithCount(int newActiveRxCount);
     void setAttenuator(int dB) override;
     void setPreamp(bool enabled) override;
     void setTxDrive(int level) override;

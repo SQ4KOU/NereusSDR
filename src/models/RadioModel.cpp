@@ -2311,6 +2311,10 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     m_connectionSampleRateHz = wireSampleRate;
     emit wireSampleRateChanged(static_cast<double>(wireSampleRate));
 
+    // Task 1.7: record active-RX count so setActiveRxCountLive() can
+    // report idempotent (same-count) calls correctly.
+    m_connectionActiveRxCount = activeRxCount;
+
     qCDebug(lcConnection) << "Connecting to" << info.displayName()
                           << "P" << static_cast<int>(info.protocol);
 }
@@ -3671,6 +3675,7 @@ void RadioModel::setConnectionState(ConnectionState s)
     } else {
         m_connectionStartedAt = QDateTime{}; // clear — uptime is meaningless
         m_connectionSampleRateHz = 0;
+        m_connectionActiveRxCount = 0;       // Task 1.7: reset on disconnect
     }
     emit connectionStateChanged(s);
 }
@@ -4390,6 +4395,172 @@ qint64 RadioModel::setSampleRateLive(int newRateHz)
     qCInfo(lcConnection) << "setSampleRateLive: done in" << elapsedMs << "ms";
 
     // TODO(Task 1.8): emit dspChangeMeasured(elapsedMs) once the signal exists.
+    return elapsedMs;
+}
+
+// ---------------------------------------------------------------------------
+// setActiveRxCountLive — Task 1.7
+//
+// Active-RX-count live-apply coordinator.  Enables/disables the secondary
+// receiver without disconnect/reconnect.  Strategy A (both P1 and P2):
+//
+//   P1 note: The plan (design §5D) flagged a potential need to rework
+//   "MetisFrameParser" for mid-stream count changes.  Investigation found no
+//   separate MetisFrameParser class — EP6 parsing lives in P1RadioConnection::
+//   parseEp6Frame(frame, numRx, ...) which accepts numRx as a parameter on
+//   every call and reads m_activeRxCount from the instance overload.  There is
+//   no per-receiver cache to invalidate.  Full live-apply (Strategy A) is
+//   therefore possible without any parser rework.
+//
+//   P2 note: setActiveReceiverCount() already calls sendCmdRx() when running,
+//   which re-encodes the DDC enable bits in the next CmdRx packet.  No
+//   additional stop/start cycle is needed on P2.
+//
+// NereusSDR-original infrastructure — no Thetis source ported here.
+// Mirrors setSampleRateLive() (Task 1.6) in structure.
+// ---------------------------------------------------------------------------
+qint64 RadioModel::setActiveRxCountLive(int newCount)
+{
+    QElapsedTimer t;
+    t.start();
+
+    // Idempotent — safe when disconnected; avoids spurious warning on redundant
+    // calls from the settings-restore path.
+    if (newCount == m_connectionActiveRxCount) {
+        return 0;
+    }
+
+    // Guard: nothing to do if disconnected or WDSP not initialized.
+    if (!m_connection || !m_wdspEngine || !m_wdspEngine->isInitialized()) {
+        qCWarning(lcConnection) << "setActiveRxCountLive: no active connection "
+                                   "or WDSP not initialized — ignoring";
+        return -1;
+    }
+
+    // Clamp to board capability.
+    const int maxRx = m_hardwareProfile.caps ? m_hardwareProfile.caps->maxReceivers : 1;
+    const int clamped = qBound(1, newCount, maxRx);
+    qCInfo(lcConnection) << "setActiveRxCountLive:" << m_connectionActiveRxCount
+                         << "->" << clamped;
+
+    // ── Step 1: Quiesce DSP worker ────────────────────────────────────────────
+    // Same pattern as setSampleRateLive step 1: disconnect I/Q feed and flush.
+    if (m_dspWorker && m_receiverManager) {
+        QObject::disconnect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
+                            m_dspWorker, &RxDspWorker::processIqBatch);
+        if (m_dspThread && m_dspThread->isRunning()) {
+            QMetaObject::invokeMethod(m_dspWorker,
+                                      &RxDspWorker::resetAccumulator,
+                                      Qt::BlockingQueuedConnection);
+        }
+    }
+
+    // Stop TX pump — defensive; setActiveRxCountLive shouldn't be called
+    // while transmitting, but guard here as in setSampleRateLive.
+    if (m_txWorker) {
+        m_txWorker->stopPump();
+        if (m_txChannel) {
+            m_txChannel->moveToThread(this->thread());
+        }
+    }
+
+    // ── Step 2: Pause AudioEngine ─────────────────────────────────────────────
+    m_audioEngine->pauseInput();
+
+    // ── Step 3: Create / destroy WDSP RX channels ────────────────────────────
+    // For each newly-needed receiver (index 1..clamped-1): create RxChannel.
+    // For each receiver being removed (index clamped..m_connectionActiveRxCount-1):
+    // destroy RxChannel.
+    //
+    // Channel 0 always exists and is never touched here.
+    const int wdspRate   = m_connectionSampleRateHz > 0 ? m_connectionSampleRateHz : 48000;
+    const int wdspInSize = bufferSizeForRate(wdspRate);
+
+    if (clamped > m_connectionActiveRxCount) {
+        // Adding receivers.
+        for (int ch = m_connectionActiveRxCount; ch < clamped; ++ch) {
+            if (!m_wdspEngine->rxChannel(ch)) {
+                m_wdspEngine->createRxChannel(ch, wdspInSize, 4096,
+                                              wdspRate, 48000, 48000);
+                qCInfo(lcConnection) << "setActiveRxCountLive: created WDSP RX channel" << ch;
+            }
+        }
+    } else {
+        // Removing receivers.
+        for (int ch = m_connectionActiveRxCount - 1; ch >= clamped; --ch) {
+            if (ch > 0 && m_wdspEngine->rxChannel(ch)) {
+                m_wdspEngine->destroyRxChannel(ch);
+                qCInfo(lcConnection) << "setActiveRxCountLive: destroyed WDSP RX channel" << ch;
+            }
+        }
+    }
+
+    // ── Step 4: Reconfigure ReceiverManager DDC mapping ──────────────────────
+    if (m_receiverManager) {
+        if (clamped > m_connectionActiveRxCount) {
+            // Activate receivers 1..clamped-1.  Create them if they don't exist.
+            for (int rx = m_connectionActiveRxCount; rx < clamped; ++rx) {
+                if (m_receiverManager->receiverConfig(rx).receiverIndex < 0) {
+                    int created = m_receiverManager->createReceiver();
+                    Q_UNUSED(created)
+                }
+                m_receiverManager->activateReceiver(rx);
+            }
+        } else {
+            // Deactivate receivers clamped..m_connectionActiveRxCount-1.
+            for (int rx = m_connectionActiveRxCount - 1; rx >= clamped; --rx) {
+                m_receiverManager->deactivateReceiver(rx);
+            }
+        }
+    }
+
+    // ── Step 5: Update hardware ───────────────────────────────────────────────
+    if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+        // P1: update m_activeRxCount and restart the EP6 stream so the radio
+        // re-arms with the new per-frame slot count.  restartStreamWithCount()
+        // mirrors restartStreamWithRate(): stop + prime(3) + start + prime(3).
+        // Must run on the connection thread.
+        QMetaObject::invokeMethod(p1, [p1, clamped]() {
+            p1->restartStreamWithCount(clamped);
+        }, Qt::QueuedConnection);
+    } else {
+        // P2 (and future protocol variants): setActiveReceiverCount() calls
+        // sendCmdRx() when running — no stop/start cycle needed.
+        QMetaObject::invokeMethod(m_connection,
+                                  [conn = m_connection, clamped]() {
+            conn->setActiveReceiverCount(clamped);
+        }, Qt::QueuedConnection);
+    }
+
+    // ── Step 6: Restart TX pump ───────────────────────────────────────────────
+    if (m_txWorker && m_txChannel) {
+        m_txChannel->moveToThread(m_txWorker.get());
+        m_txWorker->startPump();
+    }
+
+    // ── Step 7: Reconnect DSP worker I/Q feed ─────────────────────────────────
+    if (m_dspWorker && m_receiverManager) {
+        connect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
+                m_dspWorker, &RxDspWorker::processIqBatch,
+                Qt::QueuedConnection);
+    }
+
+    // Resume AudioEngine.
+    m_audioEngine->resumeInput();
+
+    // ── Step 8: Update state, persist, emit ──────────────────────────────────
+    m_connectionActiveRxCount = clamped;
+    emit activeRxCountChanged(clamped);
+
+    if (!m_lastRadioInfo.macAddress.isEmpty()) {
+        AppSettings::instance().setHardwareValue(
+            m_lastRadioInfo.macAddress,
+            QStringLiteral("radioInfo/activeRxCount"),
+            clamped);
+    }
+
+    const qint64 elapsedMs = t.elapsed();
+    qCInfo(lcConnection) << "setActiveRxCountLive: done in" << elapsedMs << "ms";
     return elapsedMs;
 }
 

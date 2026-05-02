@@ -383,6 +383,49 @@ public:
     //     exists.
     qint64 setSampleRateLive(int newRateHz);
 
+    // Task 1.7 — Active-RX-count live-apply coordinator.
+    //
+    // Enables or disables the secondary receiver (RX2) without disconnecting.
+    // The sequence mirrors setSampleRateLive() (Task 1.6):
+    //   1. Quiesce the DSP worker (stop I/Q feed into RxDspWorker).
+    //   2. Pause AudioEngine.
+    //   3. Create/destroy WDSP RX channels to match the new count.
+    //   4. Update ReceiverManager DDC mapping (activate/deactivate receivers).
+    //   5. Update the hardware:
+    //      - P1: update m_activeRxCount in P1RadioConnection so the next
+    //            bank-0 C&C frame encodes the correct nrx bits, then issue
+    //            a stop+prime+start cycle so the radio re-arms EP6 with the
+    //            new per-frame slot count.  The static parseEp6Frame already
+    //            accepts numRx as a parameter; m_activeRxCount in the instance
+    //            is used on every parse call, so updating it is sufficient —
+    //            no MetisFrameParser rework required (MetisFrameParser does not
+    //            exist as a separate class; parsing is in P1RadioConnection).
+    //      - P2: setActiveReceiverCount() already sends sendCmdRx() when
+    //            running, which updates DDC enable bits in the hardware.
+    //   6. Reconnect DSP worker I/Q feed (resume DSP worker).
+    //   7. Resume AudioEngine.
+    //   8. Persist the new count per-MAC, update m_connectionActiveRxCount, and
+    //      emit activeRxCountChanged(newCount).
+    //
+    // Returns elapsed milliseconds.  Returns -1 if no connection is active or
+    // WDSP is not initialized.  Returns 0 if newCount == current count
+    // (idempotent).
+    //
+    // Must be called on the main thread.
+    //
+    // Note on P1 MetisFrameParser: the plan (design §5D) flagged a potential
+    // need to rework MetisFrameParser to handle mid-stream RX-count changes.
+    // Investigation found that no separate MetisFrameParser class exists —
+    // EP6 parsing is in P1RadioConnection::parseEp6Frame(frame, numRx, ...)
+    // which accepts numRx as a parameter on every call and reads
+    // m_activeRxCount from the instance.  There is no per-receiver cache to
+    // invalidate.  Strategy A (full live-apply, both protocols) is therefore
+    // possible without any parser rework.
+    qint64 setActiveRxCountLive(int newCount);
+
+    // Returns the active-RX count last pushed to hardware (0 when disconnected).
+    int connectionActiveRxCount() const { return m_connectionActiveRxCount; }
+
     // Phase 3Q Sub-PR-4 D.3: Hover tooltip for the TitleBar ConnectionSegment.
     // Returns a multi-line string with radio name, uptime, IP, MAC, protocol,
     // firmware, sample rate, and live throughput. Disconnected state returns a
@@ -620,6 +663,9 @@ signals:
     // known. MainWindow reacts by updating FFTEngine + SpectrumWidget so
     // bin math matches the wire rate (P1=192k, P2=768k).
     void wireSampleRateChanged(double rateHz);
+    // Task 1.7: emitted after setActiveRxCountLive() successfully applies
+    // the new receiver count to both hardware and WDSP channels.
+    void activeRxCountChanged(int newCount);
     // Fires on each transition to Connected with the RadioInfo of the live
     // connection. HardwarePage (Phase 3I) listens to this to repopulate
     // sub-tabs with per-radio fields.
@@ -811,6 +857,11 @@ private:
     // Written from the wireSampleRateChanged path in connectToRadio().
     // connectionSampleRateHz() / connectionSampleRateText() read this.
     int m_connectionSampleRateHz{0};
+
+    // Task 1.7: active-RX count last pushed to the wire (0 = disconnected).
+    // Updated by setActiveRxCountLive() after hardware reconfiguration completes.
+    // Also written by connectToRadio() via the resolveActiveRxCount() call.
+    int m_connectionActiveRxCount{0};
 
     // Reconnect state
     RadioInfo m_lastRadioInfo;

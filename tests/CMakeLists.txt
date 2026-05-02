@@ -2604,3 +2604,14 @@ nereus_add_test(tst_filter_high_resolution)
 #   signal_not_emitted_when_guard_fires — wireSampleRateChanged not emitted.
 #   signal_not_emitted_on_same_rate — wireSampleRateChanged not emitted.
 nereus_add_test(tst_sample_rate_live_apply)
+
+# ── Task 1.7: RadioModel::setActiveRxCountLive() coordinator ─────────────
+# Guard-path contracts (no live WDSP or connection required):
+#   not_connected_returns_minus_one — disconnected → returns -1,
+#     connectionActiveRxCount() stays at 0.
+#   idempotent_same_count_returns_zero — same count as current → returns 0.
+#   rebuild_completes_under_glitch_budget — elapsed < 200 ms (guard path
+#     returns immediately; full timing verified on bench in Task 1.8).
+#   signal_not_emitted_when_guard_fires — activeRxCountChanged not emitted.
+#   signal_not_emitted_on_same_count — activeRxCountChanged not emitted.
+nereus_add_test(tst_active_rx_count_live_apply)
