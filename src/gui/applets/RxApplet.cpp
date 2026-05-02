@@ -117,7 +117,6 @@
 //============================================================================================//
 
 #include "RxApplet.h"
-#include "NyiOverlay.h"
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
 #include "core/SkuUiProfile.h"
