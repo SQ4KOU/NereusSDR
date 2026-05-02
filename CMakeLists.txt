@@ -401,6 +401,8 @@ set(CORE_SOURCES
     src/core/TxWorkerThread.cpp
     src/core/NbFamily.cpp
     src/core/NbFamily.h
+    src/core/dsp/ChannelConfig.h
+    src/core/dsp/RxChannelState.h
     src/core/MoxController.cpp
     src/core/MicProfileManager.cpp
     src/core/ParaEqEnvelope.cpp
