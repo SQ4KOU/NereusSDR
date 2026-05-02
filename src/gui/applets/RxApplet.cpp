@@ -492,7 +492,7 @@ void RxApplet::buildUi()
         row->setSpacing(4);
 
         // Control 12: Mute button (18×18, emoji 🔊/🔇)
-        // NYI — SliceModel has no setMuted() yet
+        // Wired to SliceModel::setMuted() — §B4 ui-polish-cross-surface.
         m_muteBtn = new QPushButton(QString::fromUtf8("\xF0\x9F\x94\x8A"), this); // 🔊
         m_muteBtn->setCheckable(true);
         m_muteBtn->setFixedSize(18, 18);
@@ -506,10 +506,10 @@ void RxApplet::buildUi()
             m_muteBtn->setText(muted
                 ? QString::fromUtf8("\xF0\x9F\x94\x87")    // 🔇
                 : QString::fromUtf8("\xF0\x9F\x94\x8A"));  // 🔊
-            // TODO Phase 3I: m_slice->setMuted(muted);
+            if (m_updatingFromModel || !m_slice) { return; }
+            m_slice->setMuted(muted);
         });
         row->addWidget(m_muteBtn);
-        NyiOverlay::markNyi(m_muteBtn, QStringLiteral("Phase 3I"));
 
         // AF gain slider removed: TitleBar master volume + VfoWidget per-slice
         // AF control are the canonical 2 surfaces (§B4 ui-polish-cross-surface).
@@ -517,8 +517,9 @@ void RxApplet::buildUi()
         rightCol->addLayout(row);
     }
 
-    // Control 13: Audio pan slider (NYI)
-    // L ←→ R, center = 50
+    // Control 13: Audio pan slider — L ←→ R, center = 50
+    // Wired to SliceModel::setAudioPan() — §B4 ui-polish-cross-surface.
+    // Slider range 0–100, center 50 → mapped to SliceModel pan range −1.0..+1.0.
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
@@ -534,6 +535,10 @@ void RxApplet::buildUi()
         m_panSlider->setValue(50);
         m_panSlider->setFixedHeight(18);
         m_panSlider->setStyleSheet(Style::sliderHStyle());
+        connect(m_panSlider, &QSlider::valueChanged, this, [this](int val) {
+            if (m_updatingFromModel || !m_slice) { return; }
+            m_slice->setAudioPan((val - 50) / 50.0);
+        });
         row->addWidget(m_panSlider, 1);
 
         auto* rLbl = new QLabel(QStringLiteral("R"), this);
@@ -543,16 +548,21 @@ void RxApplet::buildUi()
         row->addWidget(rLbl);
 
         rightCol->addLayout(row);
-        NyiOverlay::markNyi(m_panSlider, QStringLiteral("Phase 3I"));
     }
 
-    // Control 14: Squelch toggle + slider (NYI)
-    // greenToggle(fixedWidth 52) + QSlider
+    // Control 14: Squelch toggle + slider
+    // Wired to SliceModel::setSsqlEnabled() / setSsqlThresh() — §B4.
+    // Slider 0–100 maps directly to ssqlThresh double (same units used by
+    // SliceModel default of 16.0; VfoWidget uses the same 0–100 range).
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
         m_sqlBtn = greenToggle(QStringLiteral("SQL"), 52, 20);
+        connect(m_sqlBtn, &QPushButton::toggled, this, [this](bool on) {
+            if (m_updatingFromModel || !m_slice) { return; }
+            m_slice->setSsqlEnabled(on);
+        });
         row->addWidget(m_sqlBtn);
 
         m_sqlSlider = new QSlider(Qt::Horizontal, this);
@@ -560,11 +570,13 @@ void RxApplet::buildUi()
         m_sqlSlider->setValue(20);
         m_sqlSlider->setFixedHeight(18);
         m_sqlSlider->setStyleSheet(Style::sliderHStyle());
+        connect(m_sqlSlider, &QSlider::valueChanged, this, [this](int val) {
+            if (m_updatingFromModel || !m_slice) { return; }
+            m_slice->setSsqlThresh(static_cast<double>(val));
+        });
         row->addWidget(m_sqlSlider, 1);
 
         rightCol->addLayout(row);
-        NyiOverlay::markNyi(m_sqlBtn,    QStringLiteral("Phase 3I"));
-        NyiOverlay::markNyi(m_sqlSlider, QStringLiteral("Phase 3I"));
     }
 
     // NB controls intentionally absent from RxApplet per strict Thetis parity:
@@ -1128,6 +1140,29 @@ void RxApplet::syncFromModel()
 
     // AF gain slider removed — see §B4.
 
+    // Mute / Pan / SQL — wired in §B4
+    {
+        QSignalBlocker bl(m_muteBtn);
+        const bool muted = m_slice->muted();
+        m_muteBtn->setChecked(muted);
+        m_muteBtn->setText(muted
+            ? QString::fromUtf8("\xF0\x9F\x94\x87")    // 🔇
+            : QString::fromUtf8("\xF0\x9F\x94\x8A"));  // 🔊
+    }
+    {
+        QSignalBlocker bl(m_panSlider);
+        // SliceModel pan: −1.0..+1.0 → slider 0..100 (center = 50)
+        m_panSlider->setValue(qRound(m_slice->audioPan() * 50.0 + 50.0));
+    }
+    {
+        QSignalBlocker bl(m_sqlBtn);
+        m_sqlBtn->setChecked(m_slice->ssqlEnabled());
+    }
+    {
+        QSignalBlocker bl(m_sqlSlider);
+        m_sqlSlider->setValue(qRound(m_slice->ssqlThresh()));
+    }
+
     // Antenna buttons
     m_rxAntBtn->setText(m_slice->rxAntenna());
     m_txAntBtn->setText(m_slice->txAntenna());
@@ -1194,6 +1229,27 @@ void RxApplet::connectSlice(SliceModel* s)
     });
 
     // AF gain slider removed from RxApplet (§B4) — signal handled by VfoWidget.
+
+    // Mute / Pan / SQL model → UI sync (§B4)
+    connect(s, &SliceModel::mutedChanged, this, [this](bool on) {
+        QSignalBlocker bl(m_muteBtn);
+        m_muteBtn->setChecked(on);
+        m_muteBtn->setText(on
+            ? QString::fromUtf8("\xF0\x9F\x94\x87")    // 🔇
+            : QString::fromUtf8("\xF0\x9F\x94\x8A"));  // 🔊
+    });
+    connect(s, &SliceModel::audioPanChanged, this, [this](double pan) {
+        QSignalBlocker bl(m_panSlider);
+        m_panSlider->setValue(qRound(pan * 50.0 + 50.0));
+    });
+    connect(s, &SliceModel::ssqlEnabledChanged, this, [this](bool on) {
+        QSignalBlocker bl(m_sqlBtn);
+        m_sqlBtn->setChecked(on);
+    });
+    connect(s, &SliceModel::ssqlThreshChanged, this, [this](double thresh) {
+        QSignalBlocker bl(m_sqlSlider);
+        m_sqlSlider->setValue(qRound(thresh));
+    });
 
     // Filter change → update label + buttons + passband widget
     connect(s, &SliceModel::filterChanged, this, [this](int lo, int hi) {
