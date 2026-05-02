@@ -2686,6 +2686,35 @@ nereus_add_test(tst_dsp_options_per_mode_apply)
 #   cache_impulse_and_save_restore_are_independent — orthogonal flags
 nereus_add_test(tst_dsp_options_persistence)
 
+# ── Task 4.5: Warning icon logic — Thetis validity rules ──────────────────────
+# Ported from Thetis console.cs:38797-38807 + setup.cs:22391-22400 [v2.10.3.13].
+#
+# Validity rules: warnings show when settings differ across modes:
+#   bufferSizeDifferentRX  = !(phone==fm && fm==cw && cw==dig)  (4-way RX)
+#   bufferSizeDifferentTX  = !(phone==fm && fm==dig)            (3-way TX; no CW TX)
+#   (same pattern for filter size; filter type uses separate RX/TX type combos)
+#   pbWarningBufferSize.Visible = bufferSizeDifferentRX || bufferSizeDifferentTX
+#   pbWarningFilterSize.Visible = filterSizeDifferentRX || filterSizeDifferentTX
+#   pbWarningBufferType.Visible = filterTypeDifferentRX || filterTypeDifferentTX
+#
+# Tests the static helpers DspOptionsPage::comboValuesDiffer4 / comboValuesDiffer3
+# and the composite OR logic for each warning label.
+#
+#   differ4_all_equal_returns_false — 4 equal combos → false
+#   differ4_one_different_returns_true — 1 of 4 differs → true
+#   differ4_two_different_returns_true — 2 of 4 differ → true
+#   differ4_all_different_returns_true — all 4 differ → true
+#   differ3_all_equal_returns_false — 3 equal combos → false
+#   differ3_one_different_returns_true — 1 of 3 differs → true
+#   differ3_two_different_returns_true — 2 of 3 differ → true
+#   buffer_warn_fires_on_rx_side_only — RX side differs, TX uniform → warning
+#   buffer_warn_fires_on_tx_side_only — FM differs → both sides diverge → warning
+#   buffer_warn_hidden_when_all_match — all 4 equal → no warning
+#   filter_size_same_logic_as_buffer — all equal: no warn; CW changed: warn
+#   filter_type_rx_3_of_4_equal_fires — 3 of 4 RX types equal, 1 differs → warn
+#   filter_type_all_rx_equal_no_warning — all RX equal AND all TX equal → no warn
+nereus_add_test(tst_dsp_options_warning_logic)
+
 # ── Task 2.1: Detector + Averaging split (handwave fix from 3G-8) ─────────
 # Ported from Thetis specHPSDR.cs:302-415 [v2.10.3.13] DetTypePan / DetTypeWF
 # / AverageMode / AverageModeWF integer codes.

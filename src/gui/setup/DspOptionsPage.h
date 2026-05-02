@@ -104,6 +104,16 @@ class DspOptionsPage : public SetupPage {
 public:
     explicit DspOptionsPage(RadioModel* model, QWidget* parent = nullptr);
 
+    // ── Public static helpers (also exposed for unit tests) ──────────────────
+    //
+    // From Thetis console.cs:38797-38803 [v2.10.3.13] — "Different" checks.
+    // Returns true when the combo values are NOT all equal (warning condition).
+    // 4-way: phone/cw/dig/fm  (RX side — all 4 modes).
+    // 3-way: phone/dig/fm     (TX side — CW has no TX buf combo in Thetis).
+    static bool comboValuesDiffer4(QComboBox* a, QComboBox* b,
+                                   QComboBox* c, QComboBox* d);
+    static bool comboValuesDiffer3(QComboBox* a, QComboBox* b, QComboBox* c);
+
 private:
     void buildUI();
 
@@ -158,10 +168,26 @@ private:
     // Subscribes to RadioModel::dspChangeMeasured(qint64) in Task 4.6.
     QLabel*    m_timeToLastChangeLabel{nullptr};
 
-    // ── Warning icons (Task 4.5 wires visibility logic) ──────────────────────
+    // ── Warning icons ────────────────────────────────────────────────────────
+    // Visibility driven by recomputeWarnings() (Task 4.5).
+    // Ported from Thetis console.cs:38797-38807 + setup.cs:22391-22400 [v2.10.3.13].
     QLabel*    m_warnBufferSize{nullptr};
     QLabel*    m_warnFilterSize{nullptr};
     QLabel*    m_warnBufferType{nullptr};
+
+    // Recomputes and applies warning-icon visibility.
+    // Called on every combo change and once at end of constructor.
+    //
+    // From Thetis console.cs:38797-38807 [v2.10.3.13] — UpdateDSP() validity logic:
+    //   bufferSizeDifferentRX  = !(phone==fm && fm==cw && cw==dig)    (4-way RX)
+    //   filterSizeDifferentRX  = !(phone==fm && fm==cw && cw==dig)
+    //   filterTypeDifferentRX  = !(phone==fm && fm==cw && cw==dig)
+    //   bufferSizeDifferentTX  = !(phone==fm && fm==dig)              (3-way TX; no CW TX)
+    //   filterSizeDifferentTX  = !(phone==fm && fm==dig)
+    //   filterTypeDifferentTX  = !(phone==fm && fm==dig)
+    // NereusSDR collapses RX+TX to per-mode combos; RX maps to the 4 mode combos,
+    // TX maps to the 3 TX-capable mode combos (phone/dig/fm — no CW TX buf in Thetis).
+    void recomputeWarnings();
 };
 
 }  // namespace NereusSDR

@@ -528,6 +528,136 @@ void DspOptionsPage::buildUI()
     }
 
     layout->addWidget(m_timeToLastChangeLabel);
+
+    // =========================================================================
+    // Task 4.5: Warning icon wiring
+    //
+    // From Thetis console.cs:38797-38807 [v2.10.3.13] — wire every combo that
+    // contributes to any of the three warning conditions so that recomputeWarnings()
+    // is called on every change.
+    //
+    // Buffer-size combos (4 RX + 3 TX-equivalent modes):
+    auto wireWarn = [this](QComboBox* combo) {
+        QObject::connect(combo, &QComboBox::currentTextChanged,
+            this, [this]() { recomputeWarnings(); });
+    };
+    wireWarn(m_bufPhone);
+    wireWarn(m_bufCw);
+    wireWarn(m_bufDig);
+    wireWarn(m_bufFm);
+    // Filter-size combos:
+    wireWarn(m_filtSizePhone);
+    wireWarn(m_filtSizeCw);
+    wireWarn(m_filtSizeDig);
+    wireWarn(m_filtSizeFm);
+    // Filter-type combos (all 7 type combos contribute to filterTypeDifferent*):
+    wireWarn(m_filtTypePhoneRx);
+    wireWarn(m_filtTypePhoneTx);
+    wireWarn(m_filtTypeCwRx);
+    wireWarn(m_filtTypeDigRx);
+    wireWarn(m_filtTypeDigTx);
+    wireWarn(m_filtTypeFmRx);
+    wireWarn(m_filtTypeFmTx);
+
+    // Apply initial state immediately (persisted values may already be mismatched).
+    recomputeWarnings();
+}
+
+// ── Warning visibility logic (Task 4.5) ───────────────────────────────────────
+//
+// Porting from Thetis console.cs:38797-38807 + setup.cs:22391-22400 [v2.10.3.13].
+//
+// Original C# from UpdateDSP() in console.cs:
+//
+//   bool bufferSizeDifferentRX = !(dsp_buf_phone_rx == dsp_buf_fm_rx &&
+//                                   dsp_buf_fm_rx == dsp_buf_cw_rx &&
+//                                   dsp_buf_cw_rx == dsp_buf_dig_rx);
+//   bool filterSizeDifferentRX = !(dsp_filt_size_phone_rx == dsp_filt_size_fm_rx &&
+//                                   dsp_filt_size_fm_rx == dsp_filt_size_cw_rx &&
+//                                   dsp_filt_size_cw_rx == dsp_filt_size_dig_rx);
+//   bool filterTypeDifferentRX = !(dsp_filt_type_phone_rx == dsp_filt_type_fm_rx &&
+//                                   dsp_filt_type_fm_rx == dsp_filt_type_cw_rx &&
+//                                   dsp_filt_type_cw_rx == dsp_filt_type_dig_rx);
+//   bool bufferSizeDifferentTX = !(dsp_buf_phone_tx == dsp_buf_fm_tx &&
+//                                   dsp_buf_fm_tx == dsp_buf_dig_tx);
+//   bool filterSizeDifferentTX = !(dsp_filt_size_phone_tx == dsp_filt_size_fm_tx &&
+//                                   dsp_filt_size_fm_tx == dsp_filt_size_dig_tx);
+//   bool filterTypeDifferentTX = !(dsp_filt_type_phone_tx == dsp_filt_type_fm_tx &&
+//                                   dsp_filt_type_fm_tx == dsp_filt_type_dig_tx);
+//
+//   pbWarningBufferSize.Visible = bufferSizeDifferentRX || bufferSizeDifferentTX;
+//   pbWarningFilterSize.Visible = filterSizeDifferentRX || filterSizeDifferentTX;
+//   pbWarningBufferType.Visible = filterTypeDifferentRX || filterTypeDifferentTX;
+//
+// NereusSDR mapping:
+//   RX side: 4 combos (phone, cw, dig, fm) — exact 4-way Thetis RX check.
+//   TX side: NereusSDR collapses RX+TX to per-mode combos, so we re-use the
+//            same 3 combos phone/dig/fm for the TX-side check (CW has no TX
+//            buffer combo in Thetis — Thetis omits CW from the TX set).
+//   For filter type: Thetis checks the type for each direction separately
+//            (phone_rx, fm_rx, cw_rx, dig_rx vs phone_tx, fm_tx, dig_tx).
+//            NereusSDR has separate PhoneRx/PhoneTx/CwRx/DigRx/DigTx/FmRx/FmTx
+//            combos — we apply the same all-equal test across those sets.
+
+// static
+bool DspOptionsPage::comboValuesDiffer4(QComboBox* a, QComboBox* b,
+                                         QComboBox* c, QComboBox* d)
+{
+    const QString va = a->currentText();
+    return !(va == b->currentText() &&
+             va == c->currentText() &&
+             va == d->currentText());
+}
+
+// static
+bool DspOptionsPage::comboValuesDiffer3(QComboBox* a, QComboBox* b,
+                                         QComboBox* c)
+{
+    const QString va = a->currentText();
+    return !(va == b->currentText() &&
+             va == c->currentText());
+}
+
+void DspOptionsPage::recomputeWarnings()
+{
+    // From Thetis console.cs:38797-38803 [v2.10.3.13] — UpdateDSP() validity checks.
+
+    // Buffer size: RX 4-way (phone/cw/dig/fm) OR TX 3-way (phone/dig/fm).
+    // NereusSDR uses one combo per mode that applies to both RX and TX channels,
+    // so both checks use the same per-mode combos (TX lacks CW buffer in Thetis).
+    const bool bufferSizeDifferentRX = comboValuesDiffer4(m_bufPhone, m_bufCw,
+                                                           m_bufDig, m_bufFm);
+    const bool bufferSizeDifferentTX = comboValuesDiffer3(m_bufPhone, m_bufDig,
+                                                           m_bufFm);
+    m_warnBufferSize->setVisible(bufferSizeDifferentRX || bufferSizeDifferentTX);
+    m_warnBufferSize->setToolTip(
+        tr("Buffer sizes differ across modes — WDSP will use the mode-specific "
+           "value and no implicit conversion happens. Set all modes to the same "
+           "buffer size if you want a consistent configuration."));
+
+    // Filter size: same all-equal logic on filter-size combos.
+    const bool filterSizeDifferentRX = comboValuesDiffer4(m_filtSizePhone, m_filtSizeCw,
+                                                           m_filtSizeDig, m_filtSizeFm);
+    const bool filterSizeDifferentTX = comboValuesDiffer3(m_filtSizePhone, m_filtSizeDig,
+                                                           m_filtSizeFm);
+    m_warnFilterSize->setVisible(filterSizeDifferentRX || filterSizeDifferentTX);
+    m_warnFilterSize->setToolTip(
+        tr("Filter sizes differ across modes — WDSP will use the mode-specific "
+           "value. Set all modes to the same filter size for a consistent "
+           "configuration."));
+
+    // Filter type: Thetis checks RX types (phone_rx, fm_rx, cw_rx, dig_rx all equal)
+    // and TX types (phone_tx, fm_tx, dig_tx all equal) separately.
+    // NereusSDR has separate RX/TX type combos per mode.
+    const bool filterTypeDifferentRX =
+        comboValuesDiffer4(m_filtTypePhoneRx, m_filtTypeCwRx,
+                           m_filtTypeDigRx,   m_filtTypeFmRx);
+    const bool filterTypeDifferentTX =
+        comboValuesDiffer3(m_filtTypePhoneTx, m_filtTypeDigTx, m_filtTypeFmTx);
+    m_warnBufferType->setVisible(filterTypeDifferentRX || filterTypeDifferentTX);
+    m_warnBufferType->setToolTip(
+        tr("Filter types differ across modes — some modes use Linear Phase and "
+           "others use Low Latency. WDSP will use the mode-specific type."));
 }
 
 }  // namespace NereusSDR
