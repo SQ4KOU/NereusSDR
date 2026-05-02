@@ -220,6 +220,8 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/gui/meters/WebImageItem.h | Project Files/Source/Console/MeterManager.cs | 14165+ | port | thetis-samphire | clsWebImage |
 | src/gui/setup/DisplaySetupPages.cpp | Project Files/Source/Console/display.cs | 1372 | port | thetis-samphire | RX1DisplayCalOffset |
 | src/gui/setup/DisplaySetupPages.h | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | Display tab sections |
+| src/gui/setup/SpectrumPeaksPage.cpp | Project Files/Source/Console/display.cs | 4395-4419; 4593-4714; 8434-8435 | reference | thetis-samphire | NereusSDR-original page structure; constants (NumberOfPeakBlobs, BlobPeakHoldMS, PeakBlobFall, OrangeRed/Chartreuse defaults) ported verbatim from display.cs; rendering logic deferred to Tasks 2.5/2.6 |
+| src/gui/setup/SpectrumPeaksPage.h | Project Files/Source/Console/display.cs | 4395-4714 | reference | thetis-samphire | NereusSDR-original page header; member declarations mirror display.cs ShowPeakBlobs/BlobPeakHold property set |
 | src/gui/setup/DspSetupPages.cpp | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | tabDSP AGC/Noise/NoiseBlanker/CW/AMSAM/FM/VOX/CFC/MNF controls |
 | src/gui/setup/DspSetupPages.h | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | DSP setup page declarations; pairs with DspSetupPages.cpp |
 | src/gui/setup/GeneralOptionsPage.cpp | Project Files/Source/Console/setup.cs | full | port | thetis-samphire | grpHermesStepAttenuator, groupBoxTS47, chkAutoATTRx1/2 |
@@ -312,6 +314,7 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | tests/tst_radio_status.cpp | Project Files/Source/Console/console.cs; Project Files/Source/Console/HPSDR/NetworkIOImports.cs | 6642-6659; 261-267 | port | multi-source | SWR test vectors from console.cs:6642 SWR(adc_fwd,adc_rev) [@501e3f5]; getFwdPower/getRevPower DllImport declarations from NetworkIOImports.cs:264-267 [@501e3f5] |
 | tests/tst_averaging_modes.cpp | Project Files/Source/Console/specHPSDR.cs | 383-415 | port | thetis-samphire | SpectrumWidget::applyAveraging() helper; tests AverageMode enum codes (0=None 1=Recursive 2=TimeWindow 3=LogRecursive) |
 | tests/tst_detector_modes.cpp | Project Files/Source/Console/specHPSDR.cs | 383-415 | port | thetis-samphire | Companion to tst_averaging_modes; tests SpectrumWidget detector modes |
+| tests/tst_spectrum_overlays.cpp | Project Files/Source/Console/display.cs; Project Files/Source/Console/console.cs | 2304; 20073; 7061 | port | thetis-samphire | Task 2.3 — tests SpectrumWidget overlay setters (ShowNoiseFloor, ShowBinWidth, ShowMHzOnCursor, PeakValueOverlay) and FFTEngine decimation; display.cs:2304 m_bShowNoiseFloorDBM, console.cs:20073 PeakTextDelay, display.cs lblDisplayBinWidth |
 
 ## Files derived from mi0bot/Thetis-HL2
 

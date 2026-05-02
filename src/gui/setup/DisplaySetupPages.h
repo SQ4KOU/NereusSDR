@@ -83,6 +83,15 @@ class SpectrumDefaultsPage : public SetupPage {
 public:
     explicit SpectrumDefaultsPage(RadioModel* model, QWidget* parent = nullptr);
 
+signals:
+    /// Emitted when the user clicks "Configure peaks →".
+    /// SetupDialog connects to selectPage("Spectrum Peaks").
+    void navigateToSpectrumPeaksRequested();
+
+    /// Emitted when the user clicks "Configure multimeter →".
+    /// SetupDialog will connect to selectPage("Multimeter") in Task 3.1.
+    void navigateToMultimeterRequested();
+
 private:
     void buildUI();
     void loadFromRenderer();
@@ -118,6 +127,10 @@ private:
 
     // Section: Thread (S17)
     QComboBox*      m_threadPriorityCombo{nullptr};
+
+    // Section: Cross-links (Task 2.4)
+    QPushButton*    m_configurePeaksBtn{nullptr};
+    QPushButton*    m_configureMultimeterBtn{nullptr};
 
     // Section: Spectrum Overlays (Task 2.3)
     // From Thetis setup.designer.cs:33043 [v2.10.3.13] chkShowMHzOnCursor

@@ -18,6 +18,7 @@
 #include "setup/DspSetupPages.h"
 // Display
 #include "setup/DisplaySetupPages.h"
+#include "setup/SpectrumPeaksPage.h"
 // Transmit
 #include "setup/TransmitSetupPages.h"
 // Appearance
@@ -235,7 +236,24 @@ void SetupDialog::buildTree()
 
     // ── Display ───────────────────────────────────────────────────────────────
     QTreeWidgetItem* display = addCategory("Display");
-    add(display, "Spectrum Defaults",  new SpectrumDefaultsPage(m_model));
+
+    // Task 2.4: SpectrumDefaultsPage gains cross-link buttons to Spectrum Peaks
+    // (and a forward-reference to Multimeter which lands in Task 3.1).
+    auto* specDefaultsPage = new SpectrumDefaultsPage(m_model);
+    add(display, "Spectrum Defaults", specDefaultsPage);
+    connect(specDefaultsPage, &SpectrumDefaultsPage::navigateToSpectrumPeaksRequested,
+            this, [this]() { selectPage(QStringLiteral("Spectrum Peaks")); });
+    // Multimeter page does not exist yet (Task 3.1); the signal is defined but
+    // unconnected until that task wires it.
+    // connect(specDefaultsPage, &SpectrumDefaultsPage::navigateToMultimeterRequested,
+    //         this, [this]() { selectPage(QStringLiteral("Multimeter")); });
+
+    // Task 2.4: Spectrum Peaks page — skeleton with APH + Blob controls + back cross-link.
+    auto* specPeaksPage = new SpectrumPeaksPage(m_model);
+    add(display, "Spectrum Peaks",    specPeaksPage);
+    connect(specPeaksPage, &SpectrumPeaksPage::backToSpectrumDefaultsRequested,
+            this, [this]() { selectPage(QStringLiteral("Spectrum Defaults")); });
+
     add(display, "Waterfall Defaults", new WaterfallDefaultsPage(m_model));
     add(display, "Grid & Scales",      new GridScalesPage(m_model));
     add(display, "RX2 Display",        new Rx2DisplayPage(m_model));

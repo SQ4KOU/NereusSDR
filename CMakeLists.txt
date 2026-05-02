@@ -631,6 +631,7 @@ set(GUI_SOURCES
     src/gui/setup/DeviceCard.cpp
     src/gui/setup/DspSetupPages.cpp
     src/gui/setup/DisplaySetupPages.cpp
+    src/gui/setup/SpectrumPeaksPage.cpp
     src/gui/setup/SetupHelpers.cpp
     src/gui/setup/TransmitSetupPages.cpp
     src/gui/setup/AppearanceSetupPages.cpp

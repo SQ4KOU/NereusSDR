@@ -892,6 +892,55 @@ void SpectrumDefaultsPage::buildUI()
     threadForm->addRow(QStringLiteral("Display Thread Priority:"), m_threadPriorityCombo);
 
     contentLayout()->addWidget(threadGroup);
+
+    // ── Cross-links (Task 2.4) ────────────────────────────────────────────────
+    // Hint lines for forward-looking moves documented in the design (Task 3.6 / 3.4).
+    auto* hintVolts = new QLabel(
+        QStringLiteral("ANAN-8000DLE volts/amps moved to Hardware → ANAN-8000DLE."), this);
+    hintVolts->setStyleSheet(QStringLiteral(
+        "QLabel { color: #607080; font-style: italic; font-size: 10px; }"));
+    contentLayout()->addWidget(hintVolts);
+
+    auto* hintFilter = new QLabel(
+        QStringLiteral("Small filter on VFOs moved to Appearance → VFO Flag."), this);
+    hintFilter->setStyleSheet(QStringLiteral(
+        "QLabel { color: #607080; font-style: italic; font-size: 10px; }"));
+    contentLayout()->addWidget(hintFilter);
+
+    const QString crossLinkStyle = QStringLiteral(
+        "QPushButton { background: #1a2a3a; color: #8aa8c0; border: 1px solid #203040;"
+        "  border-radius: 3px; padding: 4px 10px; }"
+        "QPushButton:hover { background: #203040; color: #c8d8e8; }");
+
+    auto* crossLinkRow = new QWidget(this);
+    auto* crossLinkLayout = new QHBoxLayout(crossLinkRow);
+    crossLinkLayout->setContentsMargins(0, 4, 0, 0);
+    crossLinkLayout->setSpacing(8);
+
+    m_configurePeaksBtn = new QPushButton(
+        QStringLiteral("Configure peaks →"), crossLinkRow);
+    m_configurePeaksBtn->setToolTip(QStringLiteral(
+        "Open Display → Spectrum Peaks to configure Active Peak Hold and Peak Blobs."));
+    m_configurePeaksBtn->setStyleSheet(crossLinkStyle);
+    connect(m_configurePeaksBtn, &QPushButton::clicked,
+            this, &SpectrumDefaultsPage::navigateToSpectrumPeaksRequested);
+    crossLinkLayout->addWidget(m_configurePeaksBtn);
+
+    m_configureMultimeterBtn = new QPushButton(
+        QStringLiteral("Configure multimeter →"), crossLinkRow);
+    m_configureMultimeterBtn->setToolTip(QStringLiteral(
+        "Open Display → Multimeter to configure the on-screen level meter. "
+        "Available after Task 3.1."));
+    m_configureMultimeterBtn->setStyleSheet(crossLinkStyle);
+    // Multimeter page lands in Task 3.1; signal is wired in SetupDialog at that time.
+    // The button is defined here so SetupDialog can connect it without touching this file again.
+    connect(m_configureMultimeterBtn, &QPushButton::clicked,
+            this, &SpectrumDefaultsPage::navigateToMultimeterRequested);
+    crossLinkLayout->addWidget(m_configureMultimeterBtn);
+
+    crossLinkLayout->addStretch();
+    contentLayout()->addWidget(crossLinkRow);
+
     contentLayout()->addStretch();
 
     Q_UNUSED(sw);
