@@ -141,22 +141,23 @@ namespace NereusSDR {
 
 class RadioModel;
 class CalibrationController;
-class PaCalibrationGroup;
 struct RadioInfo;
 struct BoardCapabilities;
 
 // CalibrationTab -- Hardware -> Calibration Setup page.
 //
-// Hosts 6 group boxes matching Thetis General -> Calibration 1:1:
+// Hosts 5 group boxes matching Thetis General -> Calibration 1:1:
 //   1. Freq Cal -- frequency calibration trigger + helptext
 //   2. Level Cal -- reference freq/level + per-RX 6m LNA offsets
 //   3. HPSDR Freq Cal Diagnostic -- correction factor + 10 MHz ext ref toggle
 //   4. TX Display Cal -- TX display dB offset
 //   5. PA Current (A) calculation -- sensitivity/offset (preserved from PaCalibrationTab)
-//   6. PA Forward Power Calibration -- per-board cal-point spinbox group
-//        (added 2026-05-02 in Section 3.3 of the P1 full-parity epic; ports
-//        Thetis ud{10|100|200}PA{N}W spinbox blocks setup.cs:5404-5594
-//        [v2.10.3.13])
+//
+// Setup IA reshape Phase 3A (2026-05-02) migrated the per-board PA forward-
+// power cal spinbox group out to PA → Watt Meter (PaWattMeterPage); see
+// docs/architecture/2026-05-02-p1-full-parity-plan.md Setup IA reshape Phase 3A.
+// Phase 3B will relabel Group 5 → "Volts/Amps Calibration" + rename internal
+// members for Thetis-faithful naming (groupBoxTS27 / udAmpSens / udAmpVoff).
 //
 // Backed by CalibrationController (Phase 3P-G). Per-MAC persistence via
 // AppSettings under hardware/<mac>/cal/ + hardware/<mac>/paCalibration/.
@@ -220,11 +221,9 @@ private:
     QPushButton*    m_paDefaultBtn{nullptr};
     QCheckBox*      m_logVoltsAmpsCheck{nullptr};  // chkLogVoltsAmps -- console.cs:27457 [@501e3f5]
 
-    // -- Group 6: Per-board PA forward-power calibration ----------------------
-    // Source: Thetis console.cs:6691-6724 CalibratedPAPower + setup.cs:5404-5594
-    //         ud{10|100|200}PA{N}W spinboxes [v2.10.3.13]. Added 2026-05-02
-    //         in Section 3.3 of the P1 full-parity epic.
-    PaCalibrationGroup* m_paCalGroup{nullptr};
+    // Note: the per-board PA forward-power cal spinbox group (PaCalibrationGroup)
+    // was migrated to PA → Watt Meter (PaWattMeterPage) on 2026-05-02 as part of
+    // Setup IA reshape Phase 3A.  See docs/architecture/2026-05-02-p1-full-parity-plan.md.
 
     // Echo-loop guard: prevents model->UI update from triggering UI->model write
     bool m_updatingFromModel{false};

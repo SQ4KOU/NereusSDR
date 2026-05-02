@@ -917,10 +917,13 @@ nereus_add_test(tst_pa_cal_swr_foldback)
 target_compile_definitions(tst_pa_cal_swr_foldback PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3P-G commit 2: CalibrationTab UI smoke tests ───────────────────────
-# Verifies construction doesn't crash, 6 group boxes present
+# Verifies construction doesn't crash, 5 group boxes present
 # (Freq Cal / Level Cal / HPSDR Freq Cal Diagnostic / TX Display Cal /
-# PA Current / PA Forward Power Calibration), controller->UI sync, and
-# UI->controller write-back. Group 6 added 2026-05-02 (P1 full-parity §3.3).
+# PA Current), controller->UI sync, and UI->controller write-back.
+# Group 6 (PA Forward Power Calibration / PaCalibrationGroup) was migrated
+# to PA → Watt Meter on 2026-05-02 (Setup IA reshape Phase 3A) — so the
+# tab is back to 5 groups; see tst_pa_watt_meter_page for the migrated
+# group's integration coverage.
 nereus_add_test(tst_calibration_tab)
 target_compile_definitions(tst_calibration_tab PRIVATE NEREUS_BUILD_TESTS)
 
@@ -935,6 +938,15 @@ target_compile_definitions(tst_calibration_tab PRIVATE NEREUS_BUILD_TESTS)
 # [v2.10.3.13 @501e3f51].
 nereus_add_test(tst_pa_calibration_group)
 target_compile_definitions(tst_pa_calibration_group PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Setup IA reshape Phase 3A: PaCalibrationGroup integrated into ────────────
+# PA → Watt Meter (PaWattMeterPage). Verifies the page hosts exactly one
+# PaCalibrationGroup child, populates from the controller's profile at
+# construction, and rebuilds on CalibrationController::paCalProfileChanged
+# (radio-swap path). The widget itself is exercised by tst_pa_calibration_group;
+# this test pins the host integration only.
+nereus_add_test(tst_pa_watt_meter_page)
+target_compile_definitions(tst_pa_watt_meter_page PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3P-H Task 5a: Alex-2 Filters live LED selection ────────────────────
 # Verifies AntennaAlexAlex2Tab::updateActiveLeds() follows Thetis

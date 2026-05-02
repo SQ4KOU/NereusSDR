@@ -63,6 +63,11 @@
 
 #include "PaSetupPages.h"
 
+#include "core/CalibrationController.h"
+#include "core/PaCalProfile.h"
+#include "gui/setup/hardware/PaCalibrationGroup.h"
+#include "models/RadioModel.h"
+
 #include <QLabel>
 #include <QVBoxLayout>
 
@@ -123,16 +128,54 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
 // ── PaWattMeterPage ──────────────────────────────────────────────────────────
 //
 // Mirrors Thetis tpWattMeter (setup.designer.cs:49304-49309 [v2.10.3.13]).
-// Phase 3 migrates PaCalibrationGroup + Show PA Values toggle into this
-// page from the existing Hardware → Calibration tab.
+// Phase 3A hosts the per-board PA forward-power cal-point spinbox group
+// (PaCalibrationGroup); Phase 3+ adds the Show PA Values toggle.
+//
+// Wiring mirrors what previously lived in CalibrationTab.cpp:
+//   * Construct PaCalibrationGroup parented to this page.
+//   * Initial populate() from the controller's current PaCalProfile board class
+//     (None on a fresh model — group will hide).
+//   * Subscribe to paCalProfileChanged so the spinbox set rebuilds whenever the
+//     bound radio's board class changes (radio swap or first connect).
+//
+// Source: Thetis console.cs:6691-6724 CalibratedPAPower [v2.10.3.13] — per-
+// board cal-table family selection.
 PaWattMeterPage::PaWattMeterPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("Watt Meter"), model, parent)
 {
-    auto* lbl = buildPlaceholderLabel(QStringLiteral(
-        "Watt Meter — content lands in Phase 3 (cal spinboxes + Show PA Values panel).\n"
-        "\n"
-        "Source: Thetis setup.designer.cs:49304-49309 [v2.10.3.13]"));
-    contentLayout()->insertWidget(contentLayout()->count() - 1, lbl);
+    if (!model) {
+        // Without a model we have nothing to populate the cal group from.
+        // Fall back to a brief placeholder so tests / model-less previews still
+        // render something coherent.
+        auto* lbl = buildPlaceholderLabel(QStringLiteral(
+            "Watt Meter — requires a connected radio model.\n"
+            "\n"
+            "Source: Thetis setup.designer.cs:49304-49309 [v2.10.3.13]"));
+        contentLayout()->insertWidget(contentLayout()->count() - 1, lbl);
+        return;
+    }
+
+    auto* calCtrl = &model->calibrationControllerMutable();
+    m_paCalGroup = new PaCalibrationGroup(this);
+
+    // Insert before the trailing stretch SetupPage::init() appended so the
+    // group renders flush with the page top — matches PaGainByBandPage above.
+    contentLayout()->insertWidget(contentLayout()->count() - 1, m_paCalGroup);
+
+    // Initial populate from the controller's current profile (None hides the
+    // group; live profile change rebuilds via the lambda below).
+    m_paCalGroup->populate(calCtrl, calCtrl->paCalProfile().boardClass);
+
+    // Repopulate on radio swap / first connect — board class can flip from
+    // None → Anan10/100/8000 once RadioModel seeds m_paCalProfile from the
+    // hardware profile.  Mirrors the connect block previously living in
+    // CalibrationTab::CalibrationTab (Section 3.3 of the P1 full-parity epic).
+    connect(calCtrl, &CalibrationController::paCalProfileChanged,
+            this, [this, calCtrl]() {
+        if (m_paCalGroup) {
+            m_paCalGroup->populate(calCtrl, calCtrl->paCalProfile().boardClass);
+        }
+    });
 }
 
 // ── PaValuesPage ─────────────────────────────────────────────────────────────

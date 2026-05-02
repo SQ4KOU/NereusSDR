@@ -77,6 +77,8 @@
 
 namespace NereusSDR {
 
+class PaCalibrationGroup;
+
 // ---------------------------------------------------------------------------
 // PA > PA Gain
 // Mirrors Thetis tpGainByBand (setup.designer.cs:47386-47525 [v2.10.3.13]).
@@ -91,13 +93,18 @@ public:
 // ---------------------------------------------------------------------------
 // PA > Watt Meter
 // Mirrors Thetis tpWattMeter (setup.designer.cs:49304-49309 [v2.10.3.13]).
-// Phase 2 placeholder — Phase 3 migrates the cal spinboxes + Show PA Values
-// toggle here from the existing Hardware → Calibration tab.
+// Phase 3A migrates the per-board PA forward-power cal-point spinbox group
+// (PaCalibrationGroup) here from the Hardware → Calibration tab; the group
+// is rebuilt on `CalibrationController::paCalProfileChanged` (radio swap).
+// Phase 3+ adds the Show PA Values toggle.
 // ---------------------------------------------------------------------------
 class PaWattMeterPage : public SetupPage {
     Q_OBJECT
 public:
     explicit PaWattMeterPage(RadioModel* model, QWidget* parent = nullptr);
+
+private:
+    PaCalibrationGroup* m_paCalGroup{nullptr};
 };
 
 // ---------------------------------------------------------------------------

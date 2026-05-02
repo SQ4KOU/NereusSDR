@@ -58,9 +58,15 @@ void TstPaSetupPages::pa_gain_page_constructs_with_placeholder_label()
 
 void TstPaSetupPages::pa_watt_meter_page_constructs_with_placeholder_label()
 {
+    // Setup IA reshape Phase 3A (2026-05-02): the placeholder body was
+    // replaced wholesale with the live PaCalibrationGroup migrated from
+    // Hardware → Calibration.  When constructed without a model, the
+    // page falls back to a brief "requires a connected radio model"
+    // hint label so model-less previews still render coherently.
+    // Live-group integration coverage lives in tst_pa_watt_meter_page.
     PaWattMeterPage page(/*model=*/nullptr);
-    QVERIFY2(labelContains(page, QStringLiteral("Phase 3")),
-             "PaWattMeterPage placeholder must mention 'Phase 3'");
+    QVERIFY2(labelContains(page, QStringLiteral("requires a connected radio model")),
+             "PaWattMeterPage model-less fallback must hint at the model requirement");
 }
 
 void TstPaSetupPages::pa_values_page_constructs_with_placeholder_label()
