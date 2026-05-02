@@ -92,14 +92,14 @@
 
 namespace NereusSDR {
 
-// CW column widths (from AetherSDR PhoneCwApplet.cpp)
+// Column widths shared across Phone / FM pages (from AetherSDR PhoneCwApplet.cpp)
 static constexpr int kLeftColW = 70;
 static constexpr int kValueW   = 36;
-static constexpr int kGap      = 4;
+// kGap (4) removed — only used by the CW page, now a placeholder (Phase 3M-2).
 
 // NYI phase tags
 static const QString kNyiPhone  = QStringLiteral("Phase 3I-1");
-static const QString kNyiCw     = QStringLiteral("Phase 3I-2");
+// kNyiCw removed — CW page is now a placeholder (Phase 3M-2 deferred).
 static const QString kNyiProc   = QStringLiteral("Phase 3I-3");
 static const QString kNyiVax    = QStringLiteral("Phase 3-VAX");
 static const QString kNyiFm     = QStringLiteral("Phase 3I-1");
@@ -581,225 +581,30 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
     NyiOverlay::markNyi(m_amCarSlider,      kNyiProc);    // #13 — Phase 3I-3
 }
 
-// ── CW page (9 controls) ──────────────────────────────────────────────────────
+// ── CW page — placeholder until Phase 3M-2 ───────────────────────────────────
+// Per docs/superpowers/plans/2026-05-01-ui-polish-right-panel.md §Task 7.
+// CW TX (speed, pitch, sidetone, break-in, iambic, firmware keyer) is deferred
+// to Phase 3M-2. The original 9-control NYI page has been replaced with a
+// single placeholder message so users aren't left clicking dead controls.
 
 void PhoneCwApplet::buildCwPage(QWidget* page)
 {
-    // From AetherSDR PhoneCwApplet.cpp buildCwPanel():
-    // contentsMargins(4,2,4,6), spacing 4
-    auto* vbox = new QVBoxLayout(page);
-    vbox->setContentsMargins(4, 2, 4, 6);
-    vbox->setSpacing(4);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(8, 24, 8, 24);
+    layout->setAlignment(Qt::AlignCenter);
 
-    // ── Control 1: ALC gauge (0–100, redStart 80) ────────────────────────────
-    m_alcGauge = new HGauge(page);
-    m_alcGauge->setRange(0.0, 100.0);
-    m_alcGauge->setRedStart(80.0);
-    m_alcGauge->setTitle(QStringLiteral("ALC"));
-    m_alcGauge->setTickLabels({QStringLiteral("0"),  QStringLiteral("25"),
-                                QStringLiteral("50"), QStringLiteral("75"),
-                                QStringLiteral("100")});
-    m_alcGauge->setAccessibleName(QStringLiteral("ALC gauge"));
-    vbox->addWidget(m_alcGauge);
-    vbox->addSpacing(2);
-
-    // ── Control 2: CW speed slider (1–60 WPM) ───────────────────────────────
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
-
-        auto* lbl = new QLabel(QStringLiteral("Speed:"), page);
-        lbl->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(NereusSDR::Style::kTextSecondary));
-        lbl->setFixedWidth(kLeftColW);
-        row->addWidget(lbl);
-
-        row->addSpacing(kGap);
-
-        m_speedSlider = new QSlider(Qt::Horizontal, page);
-        m_speedSlider->setRange(1, 60);
-        m_speedSlider->setValue(20);
-        m_speedSlider->setStyleSheet(NereusSDR::Style::sliderHStyle());
-        m_speedSlider->setAccessibleName(QStringLiteral("CW speed (WPM)"));
-        row->addWidget(m_speedSlider, 1);
-
-        m_speedLabel = new QLabel(QStringLiteral("20"), page);
-        m_speedLabel->setStyleSheet(NereusSDR::Style::insetValueStyle());
-        m_speedLabel->setFixedWidth(kValueW);
-        m_speedLabel->setAlignment(Qt::AlignCenter);
-        row->addWidget(m_speedLabel);
-
-        vbox->addLayout(row);
-    }
-
-    // ── Control 3: CW pitch + TriBtn steppers ───────────────────────────────
-    // Pitch range 100–6000 Hz, step 10
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
-
-        auto* lbl = new QLabel(QStringLiteral("Pitch:"), page);
-        lbl->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(NereusSDR::Style::kTextSecondary));
-        lbl->setFixedWidth(kLeftColW);
-        row->addWidget(lbl);
-
-        row->addSpacing(kGap);
-
-        m_pitchDown = new TriBtn(TriBtn::Left, page);
-        m_pitchDown->setAccessibleName(QStringLiteral("CW pitch down"));
-        row->addWidget(m_pitchDown);
-
-        m_pitchLabel = new QLabel(QStringLiteral("700 Hz"), page);
-        m_pitchLabel->setAlignment(Qt::AlignCenter);
-        m_pitchLabel->setAccessibleName(QStringLiteral("CW pitch frequency"));
-        m_pitchLabel->setStyleSheet(
-            QStringLiteral("QLabel { font-size: 10px; background: %1; border: 1px solid %2; "
-                           "border-radius: 3px; padding: 1px 3px; color: %3; }")
-            .arg(NereusSDR::Style::kInsetBg,
-                 NereusSDR::Style::kInsetBorder,
-                 NereusSDR::Style::kTextPrimary));
-        row->addWidget(m_pitchLabel, 1);
-
-        m_pitchUp = new TriBtn(TriBtn::Right, page);
-        m_pitchUp->setAccessibleName(QStringLiteral("CW pitch up"));
-        row->addWidget(m_pitchUp);
-
-        row->addStretch();
-
-        vbox->addLayout(row);
-    }
-
-    // ── Control 4: Delay slider ──────────────────────────────────────────────
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
-
-        auto* lbl = new QLabel(QStringLiteral("Delay:"), page);
-        lbl->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(NereusSDR::Style::kTextSecondary));
-        lbl->setFixedWidth(kLeftColW);
-        row->addWidget(lbl);
-
-        row->addSpacing(kGap);
-
-        m_delaySlider = new QSlider(Qt::Horizontal, page);
-        m_delaySlider->setRange(0, 2000);
-        m_delaySlider->setValue(500);
-        m_delaySlider->setSingleStep(10);
-        m_delaySlider->setPageStep(100);
-        m_delaySlider->setStyleSheet(NereusSDR::Style::sliderHStyle());
-        m_delaySlider->setAccessibleName(QStringLiteral("CW break-in delay (ms)"));
-        row->addWidget(m_delaySlider, 1);
-
-        m_delayLabel = new QLabel(QStringLiteral("500"), page);
-        m_delayLabel->setStyleSheet(NereusSDR::Style::insetValueStyle());
-        m_delayLabel->setFixedWidth(kValueW);
-        m_delayLabel->setAlignment(Qt::AlignCenter);
-        row->addWidget(m_delayLabel);
-
-        vbox->addLayout(row);
-    }
-
-    // ── Control 5: Sidetone toggle + slider ─────────────────────────────────
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
-
-        // QPushButton(green, "Sidetone", fixedWidth 70)
-        m_sidetoneBtn = new QPushButton(QStringLiteral("Sidetone"), page);
-        m_sidetoneBtn->setCheckable(true);
-        m_sidetoneBtn->setFixedHeight(22);
-        m_sidetoneBtn->setFixedWidth(kLeftColW);
-        m_sidetoneBtn->setStyleSheet(phoneButtonStyle() + NereusSDR::Style::greenCheckedStyle());
-        m_sidetoneBtn->setAccessibleName(QStringLiteral("CW sidetone"));
-        row->addWidget(m_sidetoneBtn);
-
-        row->addSpacing(kGap);
-
-        m_sidetoneSlider = new QSlider(Qt::Horizontal, page);
-        m_sidetoneSlider->setRange(0, 100);
-        m_sidetoneSlider->setValue(50);
-        m_sidetoneSlider->setStyleSheet(NereusSDR::Style::sliderHStyle());
-        m_sidetoneSlider->setAccessibleName(QStringLiteral("Sidetone volume"));
-        row->addWidget(m_sidetoneSlider, 1);
-
-        auto* stLabel = new QLabel(QStringLiteral("50"), page);
-        stLabel->setStyleSheet(NereusSDR::Style::insetValueStyle());
-        stLabel->setFixedWidth(kValueW);
-        stLabel->setAlignment(Qt::AlignCenter);
-        row->addWidget(stLabel);
-
-        vbox->addLayout(row);
-    }
-
-    // ── Controls 6-8: QSK / Iambic / Firmware keyer toggles ─────────────────
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
-
-        // Control 6: Break-in (QSK) toggle (green)
-        m_breakinBtn = new QPushButton(QStringLiteral("QSK"), page);
-        m_breakinBtn->setCheckable(true);
-        m_breakinBtn->setFixedHeight(22);
-        m_breakinBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_breakinBtn->setStyleSheet(phoneButtonStyle() + NereusSDR::Style::greenCheckedStyle());
-        m_breakinBtn->setAccessibleName(QStringLiteral("CW break-in / QSK"));
-        row->addWidget(m_breakinBtn, 1);
-
-        // Control 7: Iambic toggle (blue)
-        m_iambicBtn = new QPushButton(QStringLiteral("Iambic"), page);
-        m_iambicBtn->setCheckable(true);
-        m_iambicBtn->setFixedHeight(22);
-        m_iambicBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_iambicBtn->setStyleSheet(phoneButtonStyle() + NereusSDR::Style::blueCheckedStyle());
-        m_iambicBtn->setAccessibleName(QStringLiteral("Iambic paddle keyer"));
-        row->addWidget(m_iambicBtn, 1);
-
-        // Control 8: Firmware keyer toggle
-        m_fwKeyerBtn = new QPushButton(QStringLiteral("FW Keyer"), page);
-        m_fwKeyerBtn->setCheckable(true);
-        m_fwKeyerBtn->setFixedHeight(22);
-        m_fwKeyerBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_fwKeyerBtn->setStyleSheet(phoneButtonStyle() + NereusSDR::Style::greenCheckedStyle());
-        m_fwKeyerBtn->setAccessibleName(QStringLiteral("Firmware CW keyer"));
-        row->addWidget(m_fwKeyerBtn, 1);
-
-        vbox->addLayout(row);
-    }
-
-    // ── Control 9: CW pan slider (L–R) ──────────────────────────────────────
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
-
-        auto* lLbl = new QLabel(QStringLiteral("L"), page);
-        lLbl->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(NereusSDR::Style::kTextSecondary));
-        row->addWidget(lLbl);
-
-        m_cwPanSlider = new QSlider(Qt::Horizontal, page);
-        m_cwPanSlider->setRange(0, 100);
-        m_cwPanSlider->setValue(50);
-        m_cwPanSlider->setStyleSheet(NereusSDR::Style::sliderHStyle());
-        m_cwPanSlider->setAccessibleName(QStringLiteral("CW audio pan"));
-        row->addWidget(m_cwPanSlider, 1);
-
-        auto* rLbl = new QLabel(QStringLiteral("R"), page);
-        rLbl->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(NereusSDR::Style::kTextSecondary));
-        row->addWidget(rLbl);
-
-        vbox->addLayout(row);
-    }
-
-    // ── Mark all CW controls NYI (Phase 3I-2) ────────────────────────────────
-    NyiOverlay::markNyi(m_alcGauge,       kNyiCw);
-    NyiOverlay::markNyi(m_speedSlider,    kNyiCw);
-    NyiOverlay::markNyi(m_pitchDown,      kNyiCw);
-    NyiOverlay::markNyi(m_pitchUp,        kNyiCw);
-    NyiOverlay::markNyi(m_delaySlider,    kNyiCw);
-    NyiOverlay::markNyi(m_sidetoneBtn,    kNyiCw);
-    NyiOverlay::markNyi(m_sidetoneSlider, kNyiCw);
-    NyiOverlay::markNyi(m_breakinBtn,     kNyiCw);
-    NyiOverlay::markNyi(m_iambicBtn,      kNyiCw);
-    NyiOverlay::markNyi(m_fwKeyerBtn,     kNyiCw);
-    NyiOverlay::markNyi(m_cwPanSlider,    kNyiCw);
+    auto* label = new QLabel(QStringLiteral(
+        "CW TX coming in Phase 3M-2.\n\n"
+        "Speed, pitch, sidetone, break-in, iambic, firmware keyer\n"
+        "controls will appear here when CW TX is wired up.\n\n"
+        "For now, see Setup \xe2\x86\x92 DSP \xe2\x86\x92 CW for available CW config."
+    ), page);
+    label->setAlignment(Qt::AlignCenter);
+    label->setWordWrap(true);
+    label->setStyleSheet(QStringLiteral(
+        "QLabel { color: %1; font-size: 11px; }"
+    ).arg(NereusSDR::Style::kTextSecondary));
+    layout->addWidget(label);
 }
 
 // ── FM page (8 controls) ──────────────────────────────────────────────────────
