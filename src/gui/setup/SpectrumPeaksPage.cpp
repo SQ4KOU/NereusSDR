@@ -66,7 +66,9 @@
 
 #include "SpectrumPeaksPage.h"
 #include "gui/ColorSwatchButton.h"
+#include "gui/SpectrumWidget.h"
 #include "core/AppSettings.h"
+#include "models/RadioModel.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -156,31 +158,75 @@ SpectrumPeaksPage::SpectrumPeaksPage(RadioModel* model, QWidget* parent)
     m_blobTextColor->setColor(QColor::fromString(
         s.value(QStringLiteral("DisplayPeakBlobTextColor"), QStringLiteral("#7FFF00FF")).toString()));
 
-    // ── Persist on change ─────────────────────────────────────────────────────
-    // Rendering hooks land in Tasks 2.5 / 2.6; this skeleton wires to AppSettings only.
+    // ── Apply persisted values to SpectrumWidget (Task 2.5) ──────────────────
+    // Push loaded settings into the widget so Active Peak Hold is active on
+    // first launch even before any control is touched.
+    // Note: 'model' here is the constructor parameter (RadioModel*), not the
+    // SetupPage::model() accessor (which is the same pointer but we must
+    // disambiguate from the parameter name in this scope).
+    if (model != nullptr) {
+        if (auto* sw = model->spectrumWidget()) {
+            sw->setActivePeakHoldEnabled(m_aphEnable->isChecked());
+            sw->setActivePeakHoldDurationMs(m_aphDurationMs->value());
+            sw->setActivePeakHoldDropDbPerSec(static_cast<double>(m_aphDropDbPerSec->value()));
+            sw->setActivePeakHoldFill(m_aphFill->isChecked());
+            sw->setActivePeakHoldOnTx(m_aphOnTx->isChecked());
+        }
+    }
 
-    connect(m_aphEnable, &QCheckBox::toggled, this, [](bool v) {
+    // ── Persist on change + live-wire to SpectrumWidget ──────────────────────
+    // Each connect saves to AppSettings AND calls the matching SpectrumWidget
+    // setter immediately so the display updates without reopening Setup.
+    // The lambdas capture 'this' and call SetupPage::model() (not the
+    // constructor parameter; that is out of scope after construction).
+
+    connect(m_aphEnable, &QCheckBox::toggled, this, [this](bool v) {
         AppSettings::instance().setValue(
             QStringLiteral("DisplayActivePeakHoldEnabled"),
             v ? QStringLiteral("True") : QStringLiteral("False"));
+        if (auto* m = SetupPage::model()) {
+            if (auto* sw = m->spectrumWidget()) {
+                sw->setActivePeakHoldEnabled(v);
+            }
+        }
     });
-    connect(m_aphDurationMs, qOverload<int>(&QSpinBox::valueChanged), this, [](int v) {
+    connect(m_aphDurationMs, qOverload<int>(&QSpinBox::valueChanged), this, [this](int v) {
         AppSettings::instance().setValue(
             QStringLiteral("DisplayActivePeakHoldDurationMs"), QString::number(v));
+        if (auto* m = SetupPage::model()) {
+            if (auto* sw = m->spectrumWidget()) {
+                sw->setActivePeakHoldDurationMs(v);
+            }
+        }
     });
-    connect(m_aphDropDbPerSec, qOverload<int>(&QSpinBox::valueChanged), this, [](int v) {
+    connect(m_aphDropDbPerSec, qOverload<int>(&QSpinBox::valueChanged), this, [this](int v) {
         AppSettings::instance().setValue(
             QStringLiteral("DisplayActivePeakHoldDropDbPerSec"), QString::number(v));
+        if (auto* m = SetupPage::model()) {
+            if (auto* sw = m->spectrumWidget()) {
+                sw->setActivePeakHoldDropDbPerSec(static_cast<double>(v));
+            }
+        }
     });
-    connect(m_aphFill, &QCheckBox::toggled, this, [](bool v) {
+    connect(m_aphFill, &QCheckBox::toggled, this, [this](bool v) {
         AppSettings::instance().setValue(
             QStringLiteral("DisplayActivePeakHoldFill"),
             v ? QStringLiteral("True") : QStringLiteral("False"));
+        if (auto* m = SetupPage::model()) {
+            if (auto* sw = m->spectrumWidget()) {
+                sw->setActivePeakHoldFill(v);
+            }
+        }
     });
-    connect(m_aphOnTx, &QCheckBox::toggled, this, [](bool v) {
+    connect(m_aphOnTx, &QCheckBox::toggled, this, [this](bool v) {
         AppSettings::instance().setValue(
             QStringLiteral("DisplayActivePeakHoldOnTx"),
             v ? QStringLiteral("True") : QStringLiteral("False"));
+        if (auto* m = SetupPage::model()) {
+            if (auto* sw = m->spectrumWidget()) {
+                sw->setActivePeakHoldOnTx(v);
+            }
+        }
     });
 
     connect(m_blobEnable, &QCheckBox::toggled, this, [](bool v) {

@@ -159,6 +159,8 @@ mw0lge@grange-lane.co.uk
 #include <QTimer>
 #include <QPropertyAnimation>
 
+#include "spectrum/ActivePeakHoldTrace.h"
+
 #include <utility>
 
 #include "core/ConnectionState.h"
@@ -378,6 +380,23 @@ public:
     bool peakHoldEnabled() const { return m_peakHoldEnabled; }
     void setPeakHoldDelayMs(int ms);
     int  peakHoldDelayMs() const { return m_peakHoldDelayMs; }
+
+    // ---- Active Peak Hold trace (Task 2.5) ----
+    // Per-bin max tracking with configurable hold / decay / fill / TX gating.
+    // Rendered as a separate pass in drawSpectrum() (Q14.1 locked decision).
+    // From Thetis display.cs m_bActivePeakHold [v2.10.3.13].
+    void setActivePeakHoldEnabled(bool on);
+    void setActivePeakHoldDurationMs(int ms);
+    void setActivePeakHoldDropDbPerSec(double r);
+    void setActivePeakHoldFill(bool on);
+    void setActivePeakHoldOnTx(bool on);
+    // Called by RadioModel on MOX state change (MoxController::moxStateChanged).
+    void setActivePeakHoldTxActive(bool tx);
+
+    bool   activePeakHoldEnabled()    const { return m_activePeakHold.enabled(); }
+    int    activePeakHoldDurationMs() const { return m_activePeakHold.durationMs(); }
+    double activePeakHoldDropDbPerSec() const { return m_activePeakHold.dropDbPerSec(); }
+    bool   activePeakHoldFill()        const { return m_activePeakHold.fill(); }
 
     // Trace fill (under-the-curve shaded region).
     void setPanFillEnabled(bool on);
@@ -705,6 +724,11 @@ private:
     // ---- Drawing helpers ----
     void drawGrid(QPainter& p, const QRect& specRect);
     void drawSpectrum(QPainter& p, const QRect& specRect);
+    // Active Peak Hold separate render pass (Q14.1). Called from drawSpectrum()
+    // after the fill path so the peak trace sits on top of fill but below
+    // the live trace line. From Thetis display.cs m_bActivePeakHold [v2.10.3.13].
+    void paintActivePeakHoldTrace(QPainter& p, const QRect& specRect,
+                                  int firstBin, int lastBin, float xStep);
     void drawWaterfall(QPainter& p, const QRect& wfRect);
     // HIGH SWR / PA safety overlay — ported from display.cs:4183-4201 [v2.10.3.13]
     void paintHighSwrOverlay(QPainter& p);
@@ -864,6 +888,11 @@ private:
     int         m_peakHoldDelayMs{2000};
     QVector<float> m_peakHoldBins;
     QTimer*     m_peakHoldDecayTimer{nullptr};
+
+    // Active Peak Hold trace (Task 2.5). Separate from the legacy peak hold
+    // above; rendered as a distinct pass per Q14.1.
+    // From Thetis display.cs m_bActivePeakHold [v2.10.3.13].
+    ActivePeakHoldTrace m_activePeakHold;
 
     float       m_lineWidth{1.5f};
     bool        m_gradientEnabled{false};

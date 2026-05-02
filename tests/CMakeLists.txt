@@ -2641,6 +2641,17 @@ nereus_add_test(tst_dsp_change_timer)
 nereus_add_test(tst_detector_modes)
 nereus_add_test(tst_averaging_modes)
 
+# ── Task 2.5: ActivePeakHoldTrace ────────────────────────────────────────────
+# Unit tests for the per-bin peak-hold trace:
+#   peak_value_persists_until_decay: hold + 0.2 dB/frame decay verified
+#   on_tx_state_disables_update: onTx=false freezes peaks during TX
+#   on_tx_state_allows_update_when_onTx_true: onTx=true keeps updating
+#   clear_resets_peaks: all bins back to -inf
+#   resize_updates_size_and_clears: size changes + implicit clear
+#   disabled_does_not_update_or_decay: no-op when !enabled
+#   Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure data logic).
+nereus_add_test(tst_active_peak_hold)
+
 # ── Task 2.3: Spectrum Defaults overlay group + decimation wire-up ──────────
 # Tests for SpectrumWidget overlay setters (ShowMHzOnCursor / ShowBinWidth /
 # ShowNoiseFloor / DispNormalize / ShowPeakValueOverlay) and FFTEngine

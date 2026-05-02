@@ -1050,6 +1050,44 @@ void SpectrumWidget::setPeakHoldDelayMs(int ms)
     scheduleSettingsSave();
 }
 
+// ---- Active Peak Hold trace setters (Task 2.5) ----
+// From Thetis display.cs m_bActivePeakHold / groupBoxTS21 [v2.10.3.13].
+
+void SpectrumWidget::setActivePeakHoldEnabled(bool on)
+{
+    m_activePeakHold.setEnabled(on);
+    if (!on) {
+        m_activePeakHold.clear();
+    }
+    update();
+}
+
+void SpectrumWidget::setActivePeakHoldDurationMs(int ms)
+{
+    m_activePeakHold.setDurationMs(qBound(100, ms, 60000));
+}
+
+void SpectrumWidget::setActivePeakHoldDropDbPerSec(double r)
+{
+    m_activePeakHold.setDropDbPerSec(qBound(0.1, r, 120.0));
+}
+
+void SpectrumWidget::setActivePeakHoldFill(bool on)
+{
+    m_activePeakHold.setFill(on);
+    update();
+}
+
+void SpectrumWidget::setActivePeakHoldOnTx(bool on)
+{
+    m_activePeakHold.setOnTx(on);
+}
+
+void SpectrumWidget::setActivePeakHoldTxActive(bool tx)
+{
+    m_activePeakHold.setTxActive(tx);
+}
+
 void SpectrumWidget::setPanFillEnabled(bool on)
 {
     if (m_panFill == on) {
@@ -1635,6 +1673,21 @@ void SpectrumWidget::updateSpectrum(int receiverId, const QVector<float>& binsDb
         }
     }
 
+    // Active Peak Hold trace update (Task 2.5).
+    // Resize if bin count changed, then feed the smoothed bins and tick decay.
+    // From Thetis display.cs m_bActivePeakHold [v2.10.3.13].
+    if (m_activePeakHold.enabled()) {
+        if (m_activePeakHold.size() != m_smoothed.size()) {
+            m_activePeakHold.resize(m_smoothed.size());
+        }
+        m_activePeakHold.update(m_smoothed);
+        // Tick decay using the current display FPS (derived from timer interval).
+        // 33 ms default → ~30 fps; avoid division by zero.
+        const int intervalMs = m_displayTimer.interval();
+        const int fps = (intervalMs > 0) ? qMax(1, 1000 / intervalMs) : 30;
+        m_activePeakHold.tickFrame(fps);
+    }
+
     // Push unsmoothed data to waterfall (sharper signal edges)
     // From gpu-waterfall.md:908
     pushWaterfallRow(binsDbm);
@@ -1942,6 +1995,15 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
         }
     }
 
+    // Active Peak Hold separate render pass (Q14.1 locked: separate pass,
+    // not composited with main trace). Drawn after fill so it sits on top
+    // of the shaded area, but before the live trace line.
+    // From Thetis display.cs m_bActivePeakHold [v2.10.3.13].
+    if (m_activePeakHold.enabled() &&
+        m_activePeakHold.size() == m_smoothed.size()) {
+        paintActivePeakHoldTrace(p, specRect, firstBin, lastBin, xStep);
+    }
+
     // Peak hold trace underneath the main trace so the live line stays
     // visually on top.
     if (m_peakHoldEnabled && m_peakHoldBins.size() == m_smoothed.size()) {
@@ -1975,6 +2037,68 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
             p.drawLine(specRect.left(), zy, specRect.right(), zy);
         }
     }
+}
+
+// ---- Active Peak Hold trace render pass (Q14.1 separate pass) ----
+// Ported from Thetis display.cs m_bActivePeakHold decay/render path [v2.10.3.13].
+// Draws a polyline through the per-bin peak values. When fill mode is enabled,
+// shades the region between the peak trace and the current live trace.
+// Called from drawSpectrum() with the same firstBin/lastBin/xStep so both
+// traces use identical x/y coordinate mapping.
+void SpectrumWidget::paintActivePeakHoldTrace(QPainter& p, const QRect& specRect,
+                                              int firstBin, int lastBin, float xStep)
+{
+    const int count = lastBin - firstBin + 1;
+    if (count < 2) {
+        return;
+    }
+
+    // Build polyline for the peak trace (same x mapping as main trace).
+    QVector<QPointF> peakPoints(count);
+    for (int j = 0; j < count; ++j) {
+        float x = specRect.left() + static_cast<float>(j) * xStep;
+        float peakDbm = m_activePeakHold.peak(firstBin + j);
+        // Clamp -inf to display bottom so the fill path closes cleanly.
+        if (!std::isfinite(peakDbm)) {
+            peakDbm = m_refLevel - m_dynamicRange;
+        }
+        float y = dbmToYf(peakDbm, specRect);
+        peakPoints[j] = QPointF(x, y);
+    }
+
+    // Optional fill between peak trace and current live trace.
+    // Only drawn when both traces are available and fill mode is on.
+    if (m_activePeakHold.fill() && !m_smoothed.isEmpty()) {
+        auto [fb, lb] = visibleBinRange(m_smoothed.size());
+        const int liveCount = lb - fb + 1;
+        if (liveCount == count) {
+            QPainterPath fillPath;
+            // Trace from left along the peak trace...
+            fillPath.moveTo(peakPoints.first());
+            for (int j = 1; j < count; ++j) {
+                fillPath.lineTo(peakPoints[j]);
+            }
+            // ...then back along the live trace in reverse.
+            for (int j = count - 1; j >= 0; --j) {
+                float x = specRect.left() + static_cast<float>(j) * xStep;
+                float y = dbmToYf(m_smoothed[fb + j], specRect);
+                fillPath.lineTo(QPointF(x, y));
+            }
+            fillPath.closeSubpath();
+
+            QColor fillCol = m_fillColor;
+            fillCol.setAlphaF(0.18f);  // subtle fill between traces
+            p.fillPath(fillPath, fillCol);
+        }
+    }
+
+    // Draw the peak trace line — dashed magenta-tinted variant of the fill color.
+    QColor peakCol = m_fillColor;
+    peakCol.setAlphaF(0.75f);
+    QPen peakPen(peakCol, qMax(1.0f, m_lineWidth * 0.85f));
+    peakPen.setStyle(Qt::DashLine);
+    p.setPen(peakPen);
+    p.drawPolyline(peakPoints.data(), count);
 }
 
 // ---- Waterfall drawing ----
