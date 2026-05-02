@@ -189,13 +189,24 @@ PaCalBoardClass paCalBoardClassFor(HPSDRModel model) noexcept {
         case HPSDRModel::ORIONMKII:
             return PaCalBoardClass::Anan100;
 
-        // Hermes Lite 2 — NereusSDR-internal placeholder. Thetis would route
-        // this to `default: interval = 10.0f`, but HL2 ships with a ~5 W PA
-        // and the 100 W spinbox set is meaningless. The dedicated HermesLite
-        // class with 0.5 W intervals is reserved for the 3M-2 CW-TX phase
-        // where HL2-specific PA cal will be confirmed against bench data.
+        // Hermes Lite 2 — grouped with ANAN10/ANAN10E for PA cal.
+        // From mi0bot setup.cs:5463-5466 [v2.10.3.13-beta2] — HL2 uses the
+        // same `ud10PA1W..ud10PA10W` spinbox set, same 1 W intervals, same
+        // 10 W max as ANAN10/ANAN10E:
+        //
+        //     case HPSDRModel.HERMESLITE:     // MI0BOT: HL2
+        //     case HPSDRModel.ANAN10:
+        //     case HPSDRModel.ANAN10E:
+        //         rv = (float)ud10PA1W.Value;
+        //
+        // Confirmed by mi0bot setup.cs:6432-6435 [v2.10.3.13-beta2] which
+        // does `grp10WattMeterTrim.BringToFront()` on the HL2 branch (i.e.
+        // the 10 W meter trim group, not the 100 W). An earlier NereusSDR
+        // placeholder used a separate `HermesLite` class (0.5 W intervals
+        // / 5 W max) added by Task 3.1; dropped 2026-05-02 after upstream
+        // verification.
         case HPSDRModel::HERMESLITE:   //MI0BOT
-            return PaCalBoardClass::HermesLite;
+            return PaCalBoardClass::Anan10;
 
         // Sentinels — `FIRST` (-1) and `LAST` (16) are not real models.
         case HPSDRModel::FIRST:
@@ -234,12 +245,6 @@ PaCalProfile PaCalProfile::defaults(PaCalBoardClass cls) noexcept {
             p.watts = {0.0f, 20.0f, 40.0f, 60.0f, 80.0f, 100.0f,
                        120.0f, 140.0f, 160.0f, 180.0f, 200.0f};
             break;
-        case PaCalBoardClass::HermesLite:
-            // NereusSDR placeholder — 0.5 W intervals, 5 W max. Will be
-            // confirmed in 3M-2 CW-TX work.
-            p.watts = {0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 2.5f,
-                       3.0f, 3.5f, 4.0f, 4.5f, 5.0f};
-            break;
         case PaCalBoardClass::None:
             // value-initialized to all zeros above.
             break;
@@ -254,7 +259,6 @@ float PaCalProfile::interval() const noexcept {
         case PaCalBoardClass::Anan10:     return 1.0f;
         case PaCalBoardClass::Anan100:    return 10.0f;
         case PaCalBoardClass::Anan8000:   return 20.0f;
-        case PaCalBoardClass::HermesLite: return 0.5f;
         case PaCalBoardClass::None:       return 0.0f;
     }
     return 0.0f;

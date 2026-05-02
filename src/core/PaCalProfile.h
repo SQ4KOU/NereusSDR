@@ -134,17 +134,23 @@ namespace NereusSDR {
 /// determined by which Thetis spinbox-set drives that model's `CalibratedPAPower`
 /// lookup table:
 ///
-///   - `Anan10`     — `ud10PA1W` … `ud10PA10W`   (1 W intervals, 10 W max)
+///   - `Anan10`     — `ud10PA1W` … `ud10PA10W`   (1 W intervals, 10 W max).
+///                    Used by ANAN-10 / ANAN-10E AND Hermes Lite 2 — mi0bot
+///                    `setup.cs:5463-5466` and `:6432-6435` [v2.10.3.13-beta2]
+///                    explicitly group HERMESLITE with ANAN10/ANAN10E for PA
+///                    cal: same `ud10PA{1..10}W` spinbox set, same 1 W
+///                    intervals, same 10 W max, and `grp10WattMeterTrim`
+///                    `BringToFront()` is taken on the HL2 branch.
 ///   - `Anan100`    — `ud100PA10W` … `ud100PA100W` (10 W intervals, 100 W max)
 ///   - `Anan8000`   — `ud200PA20W` … `ud200PA200W` (20 W intervals, 200 W max)
-///   - `HermesLite` — NereusSDR-internal placeholder (0.5 W intervals, 5 W max);
-///                    Thetis has no HL2-specific cal-table case (HL2 falls
-///                    through to the `default:` 10 W branch upstream). The
-///                    `HermesLite` class is reserved for the 3M-2 CW-TX work
-///                    where HL2-specific power calibration will be confirmed.
 ///   - `None`       — board has no integrated PA (Atlas/HPSDR kit). UI
 ///                    suppresses the PA-cal group entirely; `interpolate`
 ///                    short-circuits to identity.
+///
+/// (An earlier NereusSDR placeholder `HermesLite` class with 0.5 W intervals
+/// / 5 W max was added by Task 3.1 before the upstream check; it was dropped
+/// 2026-05-02 once mi0bot's grouping was verified. HL2 now routes through
+/// `Anan10` byte-for-byte with mi0bot.)
 ///
 /// From Thetis console.cs:6691-6768 [v2.10.3.13] — CalibratedPAPower + PowerKernel:
 /// the `switch (HardwareSpecific.Model)` selects an `interval` (1.0/10.0/20.0)
@@ -156,10 +162,11 @@ namespace NereusSDR {
 ///   :6739 REDPITAYA   //DH1KLM
 enum class PaCalBoardClass {
     None,        ///< Board has no integrated PA — Atlas / HPSDR kit, HL2 RX-only kit.
-    Anan10,      ///< ANAN-10 / ANAN-10E — 1 W intervals (Thetis console.cs:6745-6748 [v2.10.3.13]).
+    Anan10,      ///< ANAN-10 / ANAN-10E / Hermes Lite 2 — 1 W intervals, 10 W max
+                 ///< (Thetis console.cs:6745-6748 [v2.10.3.13]; HL2 grouping
+                 ///< per mi0bot setup.cs:5463-5466 [v2.10.3.13-beta2]).
     Anan100,     ///< ANAN-100 / 100B / 100D / 200D / 7000DLE / G2 / G2-1K / Anvelina Pro 3 / RedPitaya / Hermes / OrionMkII — 10 W intervals.
     Anan8000,    ///< ANAN-8000DLE — 20 W intervals (Thetis console.cs:6742-6744 [v2.10.3.13]).
-    HermesLite,  ///< Hermes Lite 2 — 0.5 W intervals (NereusSDR placeholder; Thetis falls to default 10 W; will be confirmed in 3M-2 CW work).
 };
 
 /// Map an `HPSDRModel` to its PA-calibration board class.
@@ -173,13 +180,17 @@ enum class PaCalBoardClass {
 ///   :6739 REDPITAYA   //DH1KLM
 ///
 ///   - ANAN10 / ANAN10E              → `Anan10`     (interval 1.0)
+///   - HERMESLITE                     → `Anan10`     (interval 1.0, mi0bot
+///                                                     setup.cs:5463-5466
+///                                                     [v2.10.3.13-beta2] —
+///                                                     HL2 grouped with
+///                                                     ANAN10/ANAN10E for cal)
 ///   - ANAN8000D                      → `Anan8000`   (interval 20.0)
 ///   - ANAN100D / ANAN7000D /
 ///     ANVELINAPRO3 / ANAN_G2 /       // G8NJJ on G2 / G2_1K
 ///     ANAN_G2_1K / REDPITAYA         → `Anan100`    (interval 10.0, explicit case //DH1KLM on REDPITAYA)
 ///   - ANAN100 / ANAN100B / ANAN200D /
 ///     HERMES / ORIONMKII             → `Anan100`    (interval 10.0, default branch)
-///   - HERMESLITE                     → `HermesLite` (NereusSDR-internal placeholder, MI0BOT-contributed enum value)
 ///   - HPSDR (Atlas/Metis kit)        → `None`       (NereusSDR-internal — Atlas
 ///                                                     has no integrated PA; FWD
 ///                                                     power meter is suppressed)
@@ -240,10 +251,9 @@ struct PaCalProfile {
     float interpolate(float rawWatts) const noexcept;
 
     /// Per-class watts-between-spinbox-labels interval.
-    ///   - `Anan10`     → 1.0f
+    ///   - `Anan10`     → 1.0f  (ANAN-10 / ANAN-10E / HL2)
     ///   - `Anan100`    → 10.0f
     ///   - `Anan8000`   → 20.0f
-    ///   - `HermesLite` → 0.5f
     ///   - `None`       → 0.0f
     float interval() const noexcept;
 };

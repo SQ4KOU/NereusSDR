@@ -15,7 +15,8 @@
 //     labelTextForTest(1) == "1 W", labelTextForTest(10) == "10 W", visible.
 //   - populate_anan100_uses_10W_intervals: labels "10 W" .. "100 W".
 //   - populate_anan8000_uses_20W_intervals: labels "20 W" .. "200 W".
-//   - populate_hermeslite_uses_half_w_intervals: labels "0.5 W" .. "5 W".
+//   - populate_hermeslite_uses_anan10_intervals: HL2 maps to Anan10 per
+//     mi0bot setup.cs:5463-5466 [v2.10.3.13-beta2 @c26a8a4]; labels "1 W" .. "10 W".
 //   - populate_none_hides_group: setVisible(false) when boardClass == None.
 //   - spinbox_change_writes_to_controller: setSpinValueForTest writes
 //     m_calCtrl->paCalProfile().watts[idx].
@@ -44,7 +45,7 @@ private slots:
     void populate_anan10_creates_10_labelled_spinboxes();
     void populate_anan100_uses_10W_intervals();
     void populate_anan8000_uses_20W_intervals();
-    void populate_hermeslite_uses_half_w_intervals();
+    void populate_hermeslite_uses_anan10_intervals();
     void populate_none_hides_group();
     void spinbox_change_writes_to_controller();
     void controller_paCalPointChanged_updates_spinbox();
@@ -95,15 +96,22 @@ void TstPaCalibrationGroup::populate_anan8000_uses_20W_intervals()
     QCOMPARE(grp.labelTextForTest(10), QString("200 W"));
 }
 
-void TstPaCalibrationGroup::populate_hermeslite_uses_half_w_intervals()
+void TstPaCalibrationGroup::populate_hermeslite_uses_anan10_intervals()
 {
+    // mi0bot setup.cs:5463-5466 [v2.10.3.13-beta2 @c26a8a4] — HL2 grouped
+    // with ANAN10/ANAN10E for PA cal: same ud10PA1W..ud10PA10W spinbox
+    // set, same 1 W intervals, same 10 W max. So when the widget is
+    // populated for HL2 it must render the Anan10 way: labels "1 W" through
+    // "10 W". Earlier NereusSDR placeholder used a separate HermesLite
+    // class (0.5 W intervals / 5 W max); dropped 2026-05-02 after upstream
+    // verification.
     CalibrationController ctrl;
     PaCalibrationGroup grp;
-    grp.populate(&ctrl, PaCalBoardClass::HermesLite);
+    grp.populate(&ctrl, PaCalBoardClass::Anan10);
 
     QCOMPARE(grp.spinBoxCountForTest(), 10);
-    QCOMPARE(grp.labelTextForTest(1), QString("0.5 W"));
-    QCOMPARE(grp.labelTextForTest(10), QString("5 W"));
+    QCOMPARE(grp.labelTextForTest(1), QString("1 W"));
+    QCOMPARE(grp.labelTextForTest(10), QString("10 W"));
 }
 
 void TstPaCalibrationGroup::populate_none_hides_group()

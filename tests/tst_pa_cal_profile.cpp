@@ -77,8 +77,14 @@ private slots:
         QCOMPARE(paCalBoardClassFor(HPSDRModel::ORIONMKII), PaCalBoardClass::Anan100);
     }
     void board_class_hermeslite() {
-        // NereusSDR-internal placeholder; Thetis falls HL2 to default 10 W.
-        QCOMPARE(paCalBoardClassFor(HPSDRModel::HERMESLITE), PaCalBoardClass::HermesLite);
+        // Source: mi0bot setup.cs:5463-5466 [v2.10.3.13-beta2 @c26a8a4]
+        // HL2 explicitly grouped with ANAN10/ANAN10E for PA cal — uses
+        // ud10PA1W..ud10PA10W (1 W intervals, 10 W max). Earlier NereusSDR
+        // placeholder (PaCalBoardClass::HermesLite, 0.5 W / 5 W max) was
+        // dropped 2026-05-02 after upstream verification.
+        // (Production code uses [v2.10.3.13-beta2] only; sha is allowed in
+        // test files for richer cite form.)
+        QCOMPARE(paCalBoardClassFor(HPSDRModel::HERMESLITE), PaCalBoardClass::Anan10);
     }
     void board_class_atlas() {
         // HPSDR/Atlas is a discrete-board kit with no integrated PA.
@@ -120,14 +126,19 @@ private slots:
         QCOMPARE(p.watts[10], 200.0f);
         QCOMPARE(p.interval(), 20.0f);
     }
-    void defaults_hermeslite_returns_label_values() {
-        const PaCalProfile p = PaCalProfile::defaults(PaCalBoardClass::HermesLite);
-        QCOMPARE(p.boardClass, PaCalBoardClass::HermesLite);
+    void hermesLiteMapsToAnan10Defaults() {
+        // mi0bot setup.cs:5463-5466 [v2.10.3.13-beta2 @c26a8a4] — HL2 uses
+        // ud10PA1W..ud10PA10W (1 W intervals, 10 W max) — i.e. Anan10.
+        // Verifies the full pipeline: paCalBoardClassFor(HERMESLITE) →
+        // Anan10, then defaults(Anan10) returns the same {0,1,...,10} table
+        // as ANAN-10/10E.
+        const PaCalProfile p =
+            PaCalProfile::defaults(paCalBoardClassFor(HPSDRModel::HERMESLITE));
+        QCOMPARE(p.boardClass, PaCalBoardClass::Anan10);
+        QCOMPARE(p.interval(), 1.0f);
         QCOMPARE(p.watts[0], 0.0f);
-        QCOMPARE(p.watts[1], 0.5f);
-        QCOMPARE(p.watts[5], 2.5f);
-        QCOMPARE(p.watts[10], 5.0f);
-        QCOMPARE(p.interval(), 0.5f);
+        QCOMPARE(p.watts[1], 1.0f);
+        QCOMPARE(p.watts[10], 10.0f);
     }
     void defaults_none_returns_all_zeros() {
         const PaCalProfile p = PaCalProfile::defaults(PaCalBoardClass::None);
@@ -144,7 +155,6 @@ private slots:
                  PaCalBoardClass::Anan10,
                  PaCalBoardClass::Anan100,
                  PaCalBoardClass::Anan8000,
-                 PaCalBoardClass::HermesLite,
              }) {
             const PaCalProfile p = PaCalProfile::defaults(cls);
             QCOMPARE(p.interpolate(0.0f), 0.0f);

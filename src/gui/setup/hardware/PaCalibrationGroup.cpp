@@ -137,8 +137,9 @@ namespace NereusSDR {
 namespace {
 
 // Per-class spinbox range/step. Mirrors the per-board ud{10|100|200}PA{N}W
-// blocks in setup.cs:5404-5594 [v2.10.3.13]; HermesLite is the NereusSDR
-// placeholder noted in PaCalProfile.h pending 3M-2.
+// blocks in setup.cs:5404-5594 [v2.10.3.13]. HL2 maps to Anan10 per mi0bot
+// setup.cs:5463-5466 [v2.10.3.13-beta2] (HL2 grouped with ANAN10/ANAN10E
+// for PA cal: shared ud10PA1W..ud10PA10W spinbox set).
 struct ClassSpec {
     double  rangeMax;
     double  step;
@@ -151,7 +152,6 @@ ClassSpec specFor(PaCalBoardClass cls) noexcept
         case PaCalBoardClass::Anan10:     return {15.0,  0.1,  2};
         case PaCalBoardClass::Anan100:    return {150.0, 1.0,  2};
         case PaCalBoardClass::Anan8000:   return {300.0, 1.0,  2};
-        case PaCalBoardClass::HermesLite: return {7.5,   0.05, 3};
         case PaCalBoardClass::None:
         default:                          return {0.0,   0.0,  0};
     }
