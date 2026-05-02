@@ -2623,3 +2623,9 @@ nereus_add_test(tst_b8_overlay_signals)
 # isActiveProfileModified detects drift and clears after saveActiveProfile.
 # Per docs/superpowers/plans/2026-05-01-tx-bandwidth.md §Task 2.
 nereus_add_test(tst_tx_bandwidth_persistence)
+
+# ── Plan 4 Task 6 (D8): TX filter debounce + per-mode IQ-space mapping ────────
+# 9 tests: debounce coalesces rapid calls, USB/LSB/AM/DIGU/DIGL/FM/DSB/CWL
+# per-mode IQ-space sign convention verified via QSignalSpy on txFilterApplied.
+# Per docs/superpowers/plans/2026-05-01-tx-bandwidth.md §Task 6.
+nereus_add_test(tst_tx_filter_offset_to_wdsp)
