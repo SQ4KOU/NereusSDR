@@ -248,7 +248,10 @@ warren@wpratt.com
 #include "RxChannel.h"
 #include "LogCategories.h"
 #include "NbFamily.h"
+#include "WdspEngine.h"
 #include "wdsp_api.h"
+
+#include <QElapsedTimer>
 
 #ifdef HAVE_DFNR
 #include "DeepFilterFilter.h"
@@ -1685,6 +1688,15 @@ void RxChannel::applyState(const RxChannelState& s)
     setRitOffset(s.ritOffsetHz);
     setAntennaIndex(s.antennaIndex);
     setShiftOffset(s.shiftOffsetHz);
+}
+
+// ---------------------------------------------------------------------------
+// Channel rebuild (Task 1.3)
+// ---------------------------------------------------------------------------
+
+qint64 RxChannel::rebuild(WdspEngine& engine, const ChannelConfig& cfg)
+{
+    return engine.rebuildRxChannel(m_channelId, cfg);
 }
 
 } // namespace NereusSDR

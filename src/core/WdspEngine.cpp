@@ -45,6 +45,7 @@ warren@wpratt.com
 #include "wdsp_api.h"
 
 #include <QDir>
+#include <QElapsedTimer>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QThread>
@@ -364,6 +365,87 @@ RxChannel* WdspEngine::rxChannel(int channelId) const
         return it->second.get();
     }
     return nullptr;
+}
+
+qint64 WdspEngine::rebuildRxChannel(int channelId, const ChannelConfig& cfg)
+{
+    auto it = m_rxChannels.find(channelId);
+    if (it == m_rxChannels.end()) {
+        qCWarning(lcDsp) << "rebuildRxChannel: channel" << channelId << "not found";
+        return -1;
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+
+    // Capture DSP state before tearing down the channel.
+    const RxChannelState state = it->second->captureState();
+
+#ifdef HAVE_WDSP
+    // Deactivate with drain before closing (mirrors destroyRxChannel).
+    SetChannelState(channelId, 0, 1);
+
+    // NB / NB2 destroy is owned by ~NbFamily inside ~RxChannel destructor.
+    // Do NOT add destroy_anbEXT/nobEXT here.
+
+    // Close the old WDSP channel.
+    CloseChannel(channelId);
+#endif
+
+    // Destroy the old RxChannel C++ wrapper (runs ~NbFamily, ~DeepFilterFilter, etc.).
+    m_rxChannels.erase(it);
+    qCInfo(lcDsp) << "Rebuild: closed RX channel" << channelId;
+
+#ifdef HAVE_WDSP
+    // Recreate the WDSP channel with the new config.
+    OpenChannel(
+        channelId,
+        cfg.bufferSize,             // in_size
+        cfg.filterSize,             // dsp_size
+        cfg.sampleRate,             // input sample rate
+        cfg.sampleRate,             // dsp sample rate
+        cfg.sampleRate,             // output sample rate
+        0,                          // type: 0=RX
+        0,                          // state: 0=off initially
+        0.010,                      // tdelayup  — from Thetis cmaster.c:82
+        0.025,                      // tslewup   — from Thetis cmaster.c:83
+        0.000,                      // tdelaydown — from Thetis cmaster.c:84
+        0.010,                      // tslewdown — from Thetis cmaster.c:85
+        1);                         // bfo: block until output available
+
+    // Re-seed WDSP defaults to match the RxChannel constructor defaults —
+    // same pattern as createRxChannel() so that applyState() early-return
+    // guards fire correctly for values that haven't changed.
+    SetRXAMode(channelId, static_cast<int>(DSPMode::LSB));
+    SetRXABandpassFreqs(channelId, -2850.0, -150.0);
+    RXANBPSetFreqs(channelId, -2850.0, -150.0);
+    SetRXAAGCMode(channelId, static_cast<int>(AGCMode::Med));
+    SetRXAAGCTop(channelId, 80.0);
+    SetRXAPanelBinaural(channelId, 0);
+
+    qCInfo(lcDsp) << "Rebuild: opened RX channel" << channelId
+                  << "bufSize=" << cfg.bufferSize
+                  << "rate=" << cfg.sampleRate;
+#endif
+
+    // Construct a new RxChannel C++ wrapper.
+    auto channel = std::make_unique<RxChannel>(channelId, cfg.bufferSize,
+                                               cfg.sampleRate, this);
+    RxChannel* ptr = channel.get();
+
+#ifdef HAVE_WDSP
+    // Re-seed SNB defaults (same pattern as createRxChannel).
+    if (auto* nb = ptr->nb()) { nb->seedSnbFromSettings(); }
+#endif
+
+    m_rxChannels.emplace(channelId, std::move(channel));
+
+    // Reapply captured DSP state to the new channel.
+    ptr->applyState(state);
+
+    qCInfo(lcDsp) << "Rebuild: RX channel" << channelId << "ready in"
+                  << timer.elapsed() << "ms";
+    return timer.elapsed();
 }
 
 // ---------------------------------------------------------------------------

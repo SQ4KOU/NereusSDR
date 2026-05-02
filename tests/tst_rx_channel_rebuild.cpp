@@ -21,9 +21,26 @@
 //   set any WDSP-wired fields to match the RxChannel constructor defaults,
 //   otherwise the early-return guard doesn't fire and WDSP is called on the
 //   unopened test channel.
+//
+// Design note (Task 1.3 — rebuild):
+//   RxChannel does NOT own its WDSP channel — WdspEngine does.
+//   RxChannel::rebuild(engine, cfg) delegates to engine.rebuildRxChannel()
+//   which owns the destroy/recreate/reapply cycle.
+//
+//   In the CI unit-test build (no WDSP), WdspEngine is never initialized, so
+//   createRxChannel() returns nullptr and rebuildRxChannel() returns -1 for
+//   channels not in its map. Tests verify the API contracts under these
+//   conditions rather than requiring a live WDSP session.
+//
+//   The state-preservation contract (carry-only fields survive rebuild) is
+//   verified by constructing an RxChannel directly and exercising the
+//   captureState/applyState round-trip that rebuildRxChannel() relies on
+//   internally — the same mechanism tested in Task 1.2.
 
 #include <QtTest/QtTest>
 #include "core/RxChannel.h"
+#include "core/WdspEngine.h"
+#include "core/dsp/ChannelConfig.h"
 #include "core/dsp/RxChannelState.h"
 
 using namespace NereusSDR;
@@ -118,6 +135,128 @@ private slots:
         QCOMPARE(verify.antennaIndex,       2);
         QCOMPARE(verify.nbEnabled,          true);
         QCOMPARE(verify.nrMode,             1);
+    }
+
+    // ── Task 1.3: WdspEngine::rebuildRxChannel API contracts ─────────────────
+
+    // Without WDSP initialized, rebuildRxChannel must return -1 (channel not
+    // in map — can never have been created without an initialized engine).
+    void rebuildRxChannel_returns_minus_one_when_channel_not_found()
+    {
+        WdspEngine engine;  // uninitialized — no WDSP
+        ChannelConfig cfg;
+        cfg.sampleRate  = 48000;
+        cfg.bufferSize  = 512;
+        cfg.filterSize  = 4096;
+        cfg.filterType  = 0;
+
+        const qint64 result = engine.rebuildRxChannel(99, cfg);
+        QCOMPARE(result, qint64(-1));
+    }
+
+    // rebuildRxChannel is idempotent on a non-existent channel ID (no crash,
+    // no state change in the engine map).
+    void rebuildRxChannel_is_safe_with_unknown_channel()
+    {
+        WdspEngine engine;
+        ChannelConfig cfg;
+        // Two calls — neither must crash.
+        engine.rebuildRxChannel(0, cfg);
+        engine.rebuildRxChannel(0, cfg);
+        // Engine rxChannel lookup still returns nullptr (nothing was created).
+        QVERIFY(engine.rxChannel(0) == nullptr);
+    }
+
+    // ── Task 1.3: RxChannel::rebuild() forwarding ────────────────────────────
+    //
+    // rebuild(engine, cfg) must delegate to engine.rebuildRxChannel() and
+    // forward its return value. Verifies the forwarding is wired correctly.
+    //
+    // Uses a directly-constructed RxChannel (not owned by WdspEngine), so
+    // engine.rebuildRxChannel(kTestChannel, cfg) returns -1 (not in map) —
+    // which is the expected result for this channel ID in the engine.
+    void rebuild_forwards_to_engine_and_returns_its_result()
+    {
+        RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
+
+        WdspEngine engine;  // uninitialized — kTestChannel not in its map
+        ChannelConfig cfg;
+        cfg.sampleRate  = 48000;
+        cfg.bufferSize  = 512;
+        cfg.filterSize  = 4096;
+        cfg.filterType  = 0;
+
+        const qint64 result = ch.rebuild(engine, cfg);
+        // Channel not in engine map → engine returns -1 → rebuild returns -1.
+        QCOMPARE(result, qint64(-1));
+    }
+
+    // ── Task 1.3: state preservation contract ───────────────────────────────
+    //
+    // This test verifies that the captureState/applyState round-trip that
+    // WdspEngine::rebuildRxChannel() relies on works correctly for carry-only
+    // fields set to non-default values.
+    //
+    // This is not a full end-to-end rebuild test (that requires a live WDSP
+    // session) but it pins the mechanism that rebuild correctness depends on.
+    //
+    // Design constraint: In a WDSP-enabled build, the RxChannel constructor
+    // calls create_anbEXT/create_nobEXT on the channel ID. Two RxChannel
+    // objects with the SAME channel ID would double-create and then
+    // double-destroy the WDSP noise blanker — a use-after-free. Use a
+    // distinct channel ID (kAltTestChannel = 98) for the "rebuilt" object
+    // to avoid this.
+    void rebuild_preserves_state_with_new_buffer_size()
+    {
+        // Channel 99: the "original" — set carry-only fields, capture state.
+        RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
+        ch.setFilterLow(200);
+        ch.setFilterHigh(2700);
+        ch.setEqEnabled(true);
+        ch.setEqPreamp(6);
+        ch.setRitOffset(300);
+        ch.setAntennaIndex(2);
+        ch.setNbEnabled(true);
+        ch.setNrMode(1);
+
+        // 1. Capture state (as rebuildRxChannel does before CloseChannel).
+        const RxChannelState captured = ch.captureState();
+
+        // 2. Construct a fresh channel with a new buffer size (distinct ID to
+        //    avoid WDSP double-create of anbEXT/nobEXT on channel 99).
+        //    Channel 98 = "rebuilt" — only used for the applyState call.
+        static constexpr int kAltTestChannel = 98;
+        RxChannel rebuilt(kAltTestChannel, 512 /* new buf */, kTestRate);
+
+        // 3. Reapply state to the new channel.
+        //    Use WDSP-wired fields at their RxChannel constructor defaults to
+        //    avoid WDSP calls on the never-Opened test channels (same pattern
+        //    as apply_round_trips_through_capture above).
+        RxChannelState toApply = captured;
+        toApply.mode                = SliceModel::Mode::LSB;   // RxChannel ctor default
+        toApply.agcMode             = static_cast<int>(AGCMode::Med);
+        toApply.agcAttackMs         = 2;
+        toApply.agcDecayMs          = 250;
+        toApply.agcHangMs           = 250;
+        toApply.agcSlope            = 0;
+        toApply.agcMaxGainDb        = 90;
+        toApply.agcFixedGainDb      = 20;
+        toApply.agcHangThresholdPct = 0;
+        toApply.filterLowHz         = 150;   // RxChannel ctor default
+        toApply.filterHighHz        = 2850;  // RxChannel ctor default
+        rebuilt.applyState(toApply);
+
+        // 4. Verify carry-only fields survived the round-trip.
+        const RxChannelState verify = rebuilt.captureState();
+        QCOMPARE(verify.eqEnabled,        true);
+        QCOMPARE(verify.eqPreampDb,       6);
+        QCOMPARE(verify.ritOffsetHz,      300);
+        QCOMPARE(verify.antennaIndex,     2);
+        QCOMPARE(verify.nbEnabled,        true);
+        QCOMPARE(verify.nrMode,           1);
+        // Filter values match what we applied (ctor defaults in this test).
+        QCOMPARE(verify.filterLowHz,      150);
+        QCOMPARE(verify.filterHighHz,     2850);
     }
 };
 

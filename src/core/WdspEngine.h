@@ -83,6 +83,7 @@ warren@wpratt.com
 */
 
 #include "WdspTypes.h"
+#include "dsp/ChannelConfig.h"
 
 #include <QObject>
 #include <QString>
@@ -152,6 +153,17 @@ public:
 
     // Look up an existing RX channel by WDSP channel ID.
     RxChannel* rxChannel(int channelId) const;
+
+    // Rebuild an RX channel in-place: capture state, destroy the existing
+    // WDSP channel, recreate with new config, reapply state.
+    //
+    // Returns elapsed milliseconds (≥ 0 on success). Returns -1 if the
+    // channel ID is not found or WdspEngine is not initialized.
+    //
+    // Thread safety: call on main thread only. The audio thread must not
+    // be feeding samples into the channel during rebuild (caller is
+    // responsible for pausing the feed).
+    qint64 rebuildRxChannel(int channelId, const ChannelConfig& cfg);
 
     // --- TX Channel management ---
 

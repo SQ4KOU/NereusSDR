@@ -198,6 +198,7 @@ warren@wpratt.com
 
 #include "NbFamily.h"
 #include "WdspTypes.h"
+#include "dsp/ChannelConfig.h"
 #include "dsp/RxChannelState.h"
 
 #ifdef HAVE_DFNR
@@ -215,6 +216,8 @@ warren@wpratt.com
 #include <memory>
 
 namespace NereusSDR {
+
+class WdspEngine;  // forward declaration for rebuild()
 
 // Per-receiver WDSP channel wrapper.
 //
@@ -572,6 +575,18 @@ public:
     // Restore the same state (calls all setters above).
     RxChannelState captureState() const;
     void applyState(const RxChannelState& state);
+
+    // --- Channel rebuild (Task 1.3) ---
+    // Tear down the WDSP channel, recreate with new config, reapply
+    // captured state. Delegates to WdspEngine::rebuildRxChannel().
+    //
+    // Returns elapsed milliseconds (≥ 0 on success). Returns -1 if
+    // the channel was not found in the engine (should not happen in
+    // normal operation — the engine owns all channels).
+    //
+    // Thread safety: call on main thread only. Caller must ensure the
+    // audio thread is not currently processing samples on this channel.
+    qint64 rebuild(WdspEngine& engine, const ChannelConfig& cfg);
 
     // --- Channel state ---
 
