@@ -105,18 +105,17 @@ void SupportDialog::buildUI()
     m_logViewer->setReadOnly(true);
     m_logViewer->setMaximumBlockCount(kMaxLogViewLines);
     m_logViewer->setFont(QFont(QStringLiteral("Consolas"), 9));
-    // §D: #203040 = Style::kBorderSubtle, #00b4d8 = Style::kAccent.
-    // §D exceptions: bg #0a0a14 (≈ kPanelBg #0a0a18 but 4-blue different — kept exact);
-    //   fg #a0b0c0 (off-palette warm-blue for log text readability).
+    // §D: #0a0a14 = Style::kStatusBarBg, #203040 = Style::kBorderSubtle, #00b4d8 = Style::kAccent.
+    // §D exception: fg #a0b0c0 (off-palette warm-blue for log text readability).
     m_logViewer->setStyleSheet(
         QStringLiteral(
             "QPlainTextEdit {"
-            "  background: #0a0a14;"             // §D exception: log bg (≈ kPanelBg)
+            "  background: %1;"                  // Style::kStatusBarBg
             "  color: #a0b0c0;"                  // §D exception: log text warm-blue
-            "  border: 1px solid %1;"            // Style::kBorderSubtle
-            "  selection-background-color: %2;"  // Style::kAccent
+            "  border: 1px solid %2;"            // Style::kBorderSubtle
+            "  selection-background-color: %3;"  // Style::kAccent
             "}")
-        .arg(Style::kBorderSubtle, Style::kAccent));
+        .arg(Style::kStatusBarBg, Style::kBorderSubtle, Style::kAccent));
     mainLayout->addWidget(m_logViewer, 1);  // stretch factor 1
 
     // --- Action Buttons ---
