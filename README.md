@@ -2,19 +2,18 @@
 
 **A cross-platform SDR console for OpenHPSDR radios**
 
-> 📖 **Alpha testers — start here:** [docs/debugging/v0.2.3-alpha-tester-smoketest.md](docs/debugging/v0.2.3-alpha-tester-smoketest.md)
+> 📖 **Alpha testers — start here:** [docs/debugging/v0.3.0-alpha-tester-smoketest.md](docs/debugging/v0.3.0-alpha-tester-smoketest.md)
 >
-> Full v0.2.3 walkthrough of what to try, what "success" looks like on
-> your OpenHPSDR radio, and — just as important — which UI controls are
-> intentionally stubbed so you don't file bugs against them. Includes
-> 19 numbered steps from launch → live SSB QSO → quit, plus
-> v0.2.3-specific tests for the dBm scale strip (step 12), the DSP grid
-> + 7-filter NR family (step 13), Alex antenna routing per-band
-> (step 14), VAX audio routing (step 15), and the new Linux PipeWire
-> audio bridge (step 16).
-> Earlier-release walkthroughs remain at
-> [docs/debugging/alpha-tester-hl2-smoke-test.md](docs/debugging/alpha-tester-hl2-smoke-test.md)
-> for historical reference.
+> v0.3.0 is the first transmit-capable build — the walkthrough adds explicit
+> steps for SSB voice TX (TUNE on dummy load → voice → EQ/Leveler/CFC chain),
+> the unicast-probe VPN-reach test, the rebuilt Hermes Lite 2 configuration
+> tabs (Hermes Lite Options + I/O Pin State + N2ADR HERCULES + SWL matrix),
+> the PA-voltage regression check on MkII boards, and the new status-bar
+> redesign. **Hermes Lite 2 owners: do NOT bench-TX yet** — ATT/filter
+> safety audit pending. Earlier-release walkthroughs remain at
+> [docs/debugging/v0.2.3-alpha-tester-smoketest.md](docs/debugging/v0.2.3-alpha-tester-smoketest.md)
+> and [docs/debugging/alpha-tester-hl2-smoke-test.md](docs/debugging/alpha-tester-hl2-smoke-test.md)
+> for historical reference and unchanged receive-side coverage.
 >
 > — J.J. Boyd ~ KG4VCF
 
@@ -42,8 +41,8 @@ Works with any radio implementing OpenHPSDR Protocol 1 or Protocol 2:
 
 ## Releases & Installation
 
-Pre-built binaries for Linux (AppImage, x86_64 + aarch64), macOS (DMG, Apple
-Silicon + Intel), and Windows (NSIS installer + portable ZIP, x64) are
+Pre-built binaries for Linux (AppImage, x86_64 + aarch64), macOS (DMG +
+PKG, Apple Silicon), and Windows (NSIS installer + portable ZIP, x64) are
 published as GitHub Releases:
 
 **<https://github.com/boydsoftprez/NereusSDR/releases>**
@@ -60,12 +59,17 @@ sha256sum -c SHA256SUMS.txt
 > are obtained, macOS users will need to right-click → Open the DMG on first
 > launch, and Windows users will see a SmartScreen warning to click through.
 > Linux is unaffected. See the per-release notes for details.
+>
+> **v0.3.0 update:** macOS DMG and PKG are now Apple Developer ID-signed
+> and notarized — Gatekeeper accepts them on first launch. Windows installer
+> remains unsigned (Authenticode certificate pending); SmartScreen "More
+> info → Run anyway" still applies.
 
 ---
 
 ## Current Status
 
-**Current release: v0.2.3** (2026-04-24). Builds on v0.2.2 with the **Phase 3G RX experience epic** (Sub-epic A — AetherSDR-style dBm strip with hover/wheel-zoom and arrow clicks; Sub-epic B — full Thetis NB family port with NbFamily wrapper, cycling NB button, per-slice-per-band persistence; Sub-epic C-1 — 7-filter NR stack: NR1/2/3/4 plus DFNR DeepFilterNet3 neural NR and macOS-native MNR Apple Accelerate MMSE-Wiener), the **Phase 3P-I-a/b Alex antenna integration** (`AlexController` pump driving full `Alex.cs:310-413` composition, RX-only antennas with SKU-driven labels, Alex-2 Filters sub-tab gating, RX-Bypass 3rd VFO flag button, P1 bank0 C3 bits 5-7 + P2 Alex0 bits 8-11 wire-locked), and a **Linux PipeWire-native audio bridge** (`PipeWireBus`, `PipeWireStream`, `PipeWireThreadLoop`, lock-free SPSC ring, full backend detection / auto-open dialog, AudioOutputPage with per-slice routing, Help → Diagnose audio backend). Earlier-shipped 3O VAX, 3P-A…H, and the v0.2.2 maintenance fixes still apply. **3M-1: Basic SSB TX** shipped 2026-04-29 (PRs #144 / #149 / #152 — TUNE-only first RF, SSB voice, polish + Thetis-faithful semaphore-wake TX pump v3 + HL2 P1 setTxDrive triage). Next implementation phase is **3M-3: TX Processing Chain** (pulled forward; 3M-2 CW TX deferred until after 3M-3 + HL2 ATT/filter safety audit).
+**Current release: v0.3.0** (2026-05-02). The first transmit-capable build. **SSB voice transmit** ships end-to-end on Protocol 1 and Protocol 2 with the full Thetis-faithful audio processing chain (TX EQ + Leveler + ALC in 3M-3a-i, CFC + CPDR + CESSB + Phase Rotator in 3M-3a-ii, plus the parametric EQ widget port and 21 factory mic profiles). The **Phase 3Q connection workflow rebuild** replaces broadcast-only-then-blind-connect with a single state machine + unicast probe that reaches radios across Layer-3 VPN tunnels (WireGuard / ZeroTier / Tailscale), a 16-SKU model picker, auto-connect-on-launch, and a spectrum disconnect overlay. **Hermes Lite 2 configuration surface expanded** with a new Hermes Lite Options tab (I2C control, I/O pin state), an N2ADR HERCULES toggle that writes all 13 SWL pin-7 entries, a signed −28..+32 dB step-attenuator range, and per-MAC persistence; bigger gaps elsewhere in the app remain. The **status-bar chrome was redesigned** with a compact title-bar connection segment, drop-priority receive badges, ADC overload indicator, station-name anchor, and a CPU System/App toggle. Build infrastructure moved to **Qt 6.8 LTS** (3-year support window) on all platforms; macOS DMG/PKG now signed and notarized. Earlier-shipped 3G RX-Epic, 3P-A…I antenna integration, 3O VAX + Linux PipeWire, and the v0.2.x maintenance fixes still apply. **3M-2 CW TX** still deferred until after the HL2 ATT/filter safety audit closes; **3M-4 PureSignal**, **3F multi-panadapter**, **3H skins**, **3J TCI**, **3K CAT** remain not-started.
 
 ### What's working end-to-end today
 
@@ -79,15 +83,21 @@ sha256sum -c SHA256SUMS.txt
 - **Step attenuator + ADC overload** — `StepAttenuatorController` with Classic + Adaptive auto-attenuation modes, hysteresis, per-MAC persistence. P1/P2 `adcOverflow` signal from frame parsers, OVL status badge in RxApplet, per-model preamp items from Thetis `SetComboPreampForHPSDR`.
 - **Container / meter system** — GPU-rendered meter engine (QRhi 3-pipeline), 31 `MeterItem` types, 38+ ItemGroup presets (S-Meter, Power/SWR, ALC, ANANMM 7-needle, CrossNeedle, Magic Eye, History, SignalText, TX bar meters), full Thetis-parity Container Settings Dialog (3-column layout, per-item property editors), MMIO external-data subsystem (UDP / TCP-listen / TCP-client / Serial transports; JSON / XML / RAW formats).
 - **VAX audio routing** — NereusSDR-native multi-channel audio bus. `IAudioBus` abstraction with 5 platform backends (CoreAudio HAL plugin on macOS, PulseAudio pipes / pactl on Linux, PortAudio on Windows). First-run VAX dialog auto-detects Windows virtual-cable families (VB-Audio / VAC / Voicemeeter / Dante / FlexRadio DAX); `MasterOutputWidget` in the menu bar; Setup → Audio sub-tabs (Devices / VAX / TCI / Advanced); per-slice VAX channel assignment on the VFO Flag, persisted under `Slice<N>/`.
-- **App polish** — Help → About NereusSDR (version / Qt / WDSP / GPG fingerprint / heritage credits), 💡 AI-assisted issue reporter in the menu bar corner (structured prompts, submits to the `bug_report.yml` / `feature_request.yml` GitHub templates), radio-model override persistence, P1 full 17-bank C&C round-robin.
-- **Packaging** — `release.yml` prepare → build×3 → sign-and-publish pipeline. GPG-signed alpha artifacts: Linux AppImage (x86_64 + aarch64), macOS Apple Silicon DMG, Windows portable ZIP + NSIS installer.
+- **SSB voice transmit** — TxChannel, mic input pipeline (Pc / Radio / Composite sources), MOX state machine, I/Q output on Protocol 1 and Protocol 2. **TX speech processing chain**: 10-band parametric TX EQ, TX Leveler, TX ALC (3M-3a-i); CFC multi-band compressor, CPDR companding/drive ratio, CESSB controlled-envelope SSB, Phase Rotator (3M-3a-ii). 21 factory mic profiles ported verbatim from Thetis; profile manager with Save / Save-As / Delete; two-tone IMD test mode; VOX / DEXP / Anti-VOX. **Hermes Lite 2 TX is wired but not bench-cleared** — ATT/filter safety audit pending.
+- **Connection workflow (Phase 3Q)** — single state-machine-driven `Disconnected → Probing → Connecting → Connected → (LinkLost | Disconnected)`. **Unicast probe** reaches radios across Layer-3 VPN tunnels (WireGuard / ZeroTier / Tailscale). 16-SKU model picker organized by silicon family in the Add Radio dialog. Auto-connect-on-launch with per-radio toggle. Spectrum disconnect overlay (fade + click-to-recover) replaces the v0.2.x "frozen spectrum" mystery state.
+- **Status-bar chrome** — title-bar `ConnectionSegment` shows `[state dot] [▲ tx Mbps] [RTT ms] [▼ rx Mbps] [♪ audio]` with hover tooltip and right-click menu. Receive-info `BadgePair` ladder drops in priority order on narrow windows (mode + filter never drop). `StationBlock` clickable radio-name anchor. `AdcOverloadBadge` (yellow > 0, red > 3, 2 s auto-hide). CPU System / App right-click toggle. SVG icon system on `StatusBadge`. Min-filtered RTT for accurate sub-millisecond LAN ping readout.
+- **Hermes Lite 2 configuration surface** — new Hermes Lite Options tab (I2C control, I/O pin state), N2ADR HERCULES toggle writing all 13 SWL pin-7 entries, signed −28..+32 dB step-attenuator range, 13 SWL bands × 7 pins matrix, full per-MAC persistence. Bigger gaps elsewhere in the app remain; this expands a previously-thin HL2 surface.
+- **App polish** — Help → About NereusSDR (version / Qt / WDSP / GPG fingerprint / heritage credits), 💡 AI-assisted issue reporter in the menu bar corner (structured prompts, submits to the `bug_report.yml` / `feature_request.yml` GitHub templates), radio-model override persistence, P1 full 17-bank C&C round-robin, `NetworkDiagnosticsDialog` 4-section health grid.
+- **Packaging** — `release.yml` prepare → build×3 → sign-and-publish pipeline. **macOS DMG and PKG are now Apple Developer ID-signed and notarized** in v0.3.0+; Windows installer remains unsigned (Authenticode certificate pending). All artifacts GPG-signed via `SHA256SUMS.txt.asc`. Per-platform artifacts: Linux AppImage (x86_64 + aarch64), macOS Apple Silicon DMG + PKG, Windows portable ZIP + NSIS installer.
 
 ### Deferred / not yet implemented
 
-- **TX pipeline** (Phase 3M-1 through 3M-4) — TxChannel, mic input, MOX state machine, 18-stage TXA chain, PureSignal feedback DDC.
+- ~~**TX pipeline 3M-1 (Basic SSB TX)** + **3M-3a-i / 3M-3a-ii (TX Processing — EQ / Leveler / ALC / CFC / CPDR / CESSB / Phase Rotator)**~~ — shipped in v0.3.0.
+- **TX pipeline 3M-2 (CW TX)** — sidetone, firmware keyer, QSK / break-in. Deferred until after the HL2 ATT/filter safety audit closes.
+- **TX pipeline 3M-4 (PureSignal)** — feedback DDC, calcc / IQC engine, PSForm, AmpView.
 - **Multi-panadapter** (Phase 3F) — DDC assignment, FFTRouter, PanadapterStack, RX2 enable.
 - ~~**HL2 `IoBoardHl2`** (Phase 3L)~~ — completed via Phase 3P-E: I2C TLV queue + 12-step state machine + bandwidth-monitor two-pointer byte-rate compute + NereusSDR throttle-detection layer; `P1CodecHl2` now intercepts C&C frames to inject I2C TLV payloads.
-- **Skin system** (Phase 3H), **TCI + Spots** (Phase 3J), **CAT/rigctld** (Phase 3K), **WAV/IQ recording** (Phase 3M).
+- **Skin system** (Phase 3H), **TCI + Spots** (Phase 3J), **CAT/rigctld** (Phase 3K), **WAV/IQ recording** (Phase 3M-recording).
 
 ---
 
@@ -117,12 +127,16 @@ sha256sum -c SHA256SUMS.txt
 - Interactive button grids — band (14), mode, filter, antenna, tuning step, macro — with hover/click feedback
 - Full UI skeleton — 12 applets, 9-menu bar, 47-page SetupDialog, SpectrumOverlayPanel with 5 flyout sub-panels, status bar
 - Help → About dialog + 💡 AI-assisted issue reporter wired to the GitHub issue tracker
-- GPG-signed cross-platform alpha builds (Linux AppImage ×2 archs, macOS DMG, Windows portable ZIP + NSIS installer)
+- SSB voice transmit + speech processing chain (TX EQ + Leveler + ALC + CFC + CPDR + CESSB + Phase Rotator), 21 factory mic profiles, two-tone IMD test
+- Connection workflow with state machine + unicast probe + auto-connect-on-launch + disconnect overlay (Phase 3Q)
+- Hermes Lite 2 configuration tabs (Hermes Lite Options + I/O Pin State + N2ADR HERCULES + SWL matrix + signed S-ATT range, all per-MAC)
+- Status-bar redesign — title-bar connection segment, drop-priority receive badges, ADC overload indicator, station-name anchor, CPU System/App toggle
+- GPG-signed cross-platform builds — Linux AppImage ×2 archs, macOS Apple Silicon DMG + PKG (Developer ID-signed + notarized in v0.3.0+), Windows portable ZIP + NSIS installer
 
 **Planned (see Roadmap):**
-- **Phase 3M-1 Basic SSB TX** — TxChannel, mic input, MOX state machine, I/Q output (next up)
-- **Phase 3M-2 CW TX** — sidetone, firmware keyer, QSK/break-in
-- **Phase 3M-3 TX Processing** — 18-stage TXA chain + TX-side RX DSP additions
+- **Phase 3M-3a-iii TX Processing tail** — DEXP/VOX + AM-Squelch (next up)
+- **Phase 3M-3b FM-mode work** — pre-emphasis (deferred from 3M-3a-ii)
+- **Phase 3M-2 CW TX** — sidetone, firmware keyer, QSK/break-in (after HL2 ATT/filter safety audit)
 - **Phase 3M-4 PureSignal** — feedback DDC, calcc/IQC engine, PA linearization
 - **Phase 3F Multi-Panadapter** — DDC assignment (including PS states), FFTRouter, PanadapterStack, RX2 enable
 - **Phase 3H Skin System** — Thetis-inspired skin format with 4-pan support and legacy-skin import
@@ -181,8 +195,12 @@ sha256sum -c SHA256SUMS.txt
 | **3N: Packaging** | Consolidated `release.yml`, `/release` skill, GPG-signed alpha builds: Linux AppImage ×2 archs, macOS Apple Silicon DMG, Windows portable ZIP + NSIS installer | **Complete** |
 | **3O: VAX Audio Routing** | NereusSDR-native multi-channel audio bus — 5 platform backends + first-run virtual-cable auto-detect (VB-Audio / VAC / Voicemeeter / Dante / DAX) + `MasterOutputWidget` + Setup → Audio sub-tabs + per-slice VAX channel persistence | **Complete** |
 | **3P: All-Board Radio-Control Parity** | 8 stacked sub-phases (A-H) delivering: HL2 BPF + S-ATT bug fixes, per-board P1/P2 codec subclasses, Alex-1/2 Filters live-LED sub-sub-tabs, OC Outputs matrix page, Calibration page (incl. freq-correction factor), Antenna Control per-band grid, HL2 I/O (closes Phase 3L), Accessories (Alex/Apollo/Penny), Diagnostics → Radio Status dashboard + 4 sibling sub-tabs, attribution enforcement pipeline. After merge: NereusSDR's **hardware / radio-plumbing / status-readout surfaces are userland-complete vs Thetis** — DSP-parameter / Transmit / CAT / Appearance / Keyboard Setup pages are still page shells with disabled controls pending later phases (see the [alpha-tester guide](docs/debugging/alpha-tester-hl2-smoke-test.md) for the honest wired-vs-stub breakdown). | **Complete** |
-| **3M-1: Basic SSB TX** | TxChannel, mic input, MOX state machine, I/Q output. Sub-phases 3M-1a TUNE-only first RF (PR #144) → 3M-1b SSB voice + mic-jack family (PR #149) → 3M-1c polish + Thetis-faithful semaphore-wake TX pump v3 + HL2 setTxDrive triage + Codex P1/P2 fixes (PR #152). | **Complete (2026-04-29)** |
-| **3M-3: TX Processing** | 18-stage TXA chain (Equalizer / Pre-emphasis / Leveler / CFC / CESSB Compressor / Phase Rotator / AM-Squelch / ALC) + Setup pages + TX-side RX DSP additions. Pulled forward 2026-04-29 — was after 3M-2 CW TX; swapped because it doesn't need HL2 hardware bench (DSP stages introspectable on ANAN-G2) and lets HL2 ATT/filter safety audit run in parallel. | **Next** |
+| **3M-1: Basic SSB TX** | TxChannel, mic input, MOX state machine, I/Q output. Sub-phases 3M-1a TUNE-only first RF (PR #144) → 3M-1b SSB voice + mic-jack family (PR #149) → 3M-1c polish + Thetis-faithful semaphore-wake TX pump v3 + HL2 setTxDrive triage + Codex P1/P2 fixes (PR #152). | **Complete (shipped in v0.3.0)** |
+| **3Q: Connection Workflow Refactor** | Single ConnectionState state machine + unicast probe (works through Layer-3 VPNs) + Add Radio dialog rebuild (16-SKU model picker) + ConnectionPanel polish + auto-connect-on-launch + spectrum disconnect overlay + status-bar chrome layer (ConnectionSegment / RxDashboard / StationBlock / AdcOverloadBadge / SVG icon system / CPU toggle / min-filtered RTT) + PA voltage formula correction + macOS Developer ID signing + notarization. | **Complete (shipped in v0.3.0)** |
+| **3M-3a-i: TX Speech Processor I** | TX EQ (10-band parametric) + TX Leveler + TX ALC. TxChannel WDSP wrappers, TransmitModel schema, MicProfileManager bundles 27 EQ/Lev/ALC keys, 20 Thetis factory mic profiles ported verbatim, AgcAlcSetupPage TX sections, TxApplet `[LEV] [EQ] [PROC]` toggle row, TxEqDialog modeless editor, SpeechProcessorPage rewrite as TX dashboard. | **Complete (shipped in v0.3.0)** |
+| **3M-3a-ii: TX Speech Processor II** | CFC (Continuous Frequency Compressor) + CPDR (Compander Pre-Distortion / drive ratio) + CESSB (Controlled-Envelope SSB) + Phase Rotator. TxChannel wrappers, TransmitModel +15 properties, MicProfileManager +41 keys, 21st mic profile, CfcSetupPage rewrite, TxCfcDialog modeless editor, full ParametricEqWidget Qt6 port (~3160 LOC, used by TxEq + TxCfc dialogs), ParaEqEnvelope (gzip + base64url helper). | **Complete (shipped in v0.3.0)** |
+| **3M-3a-iii: TX Speech Processor III** | DEXP/VOX + AM-Squelch (AMSQ) WDSP setters + dialogs. | **Next** |
+| **3M-3b: FM-mode TX work** | Pre-emphasis (de-scoped from 3M-3a-ii to FM-mode follow-up). | Planned |
 | 3M-2: CW TX | Sidetone, firmware keyer, QSK/break-in. Deferred until 3M-3 ships AND the HL2 ATT/filter safety audit closes (so an HL2 can be CW-bench'd safely). Absorbs the HL2 CWX bit-3 follow-up. | Planned |
 | 3M-4: PureSignal | Feedback DDC, calcc/IQC engine, PA linearization | Planned |
 | 3F: Multi-Panadapter | DDC assignment (incl. PS states), FFTRouter, PanadapterStack, enable RX2 | Planned |
