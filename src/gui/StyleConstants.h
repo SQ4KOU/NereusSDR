@@ -278,37 +278,45 @@ constexpr auto kButtonStyle =
 //
 // Per docs/architecture/ui-audit-polish-plan.md §A3.
 //
-// Note: this helper uses the canonical kBorder (#205070) and
-// padding-top: 12 px values, NOT the drifted #203040 / 4 px that
-// previously appeared in the 4 local copies. The drift is intentionally
-// fixed — pages that used the local copies will gain 8 px of QGroupBox
-// padding-top, matching the rest of the app.
+// Two intentional drift corrections vs the local copies:
+// - QGroupBox border uses kBorder (#205070), not the locals' #203040.
+// - QGroupBox padding-top is 12 px, not the locals' 4 px (an 8 px
+//   header-position shift, matching the rest of the app).
+// All other rules match the locals byte-for-byte so callers see no
+// other visual change.
 inline void applyDarkPageStyle(QWidget* w)
 {
     if (!w) { return; }
     w->setStyleSheet(QStringLiteral(
         "QWidget { background: %1; color: %2; }"
-        "QGroupBox { border: 1px solid %3; border-radius: 4px;"
-        "  margin-top: 8px; padding-top: 12px; font-weight: bold; color: %4; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
+        "QGroupBox { color: %7; font-size: 11px;"
+        "  border: 1px solid %3; border-radius: 4px;"
+        "  margin-top: 8px; padding-top: 12px; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
         "QLabel { color: %2; }"
-        "QComboBox { background: %5; border: 1px solid %3;"
-        "  border-radius: 3px; color: %2; padding: 2px 4px; }"
-        "QComboBox QAbstractItemView { background: %5; color: %2; "
-        "  selection-background-color: %6; }"
-        "QSlider::groove:horizontal { background: %5; height: 4px;"
+        "QComboBox { background: %4; color: %2; border: 1px solid %3;"
+        "  border-radius: 3px; padding: 2px 6px; }"
+        "QComboBox::drop-down { border: none; }"
+        "QComboBox QAbstractItemView { background: %4; color: %2;"
+        "  selection-background-color: %5; }"
+        "QSlider::groove:horizontal { background: %4; height: 4px;"
         "  border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: %6; width: 12px;"
-        "  height: 12px; border-radius: 6px; margin: -4px 0; }"
-        "QSpinBox, QDoubleSpinBox { background: %5; border: 1px solid %3;"
-        "  border-radius: 3px; color: %2; padding: 2px 4px; }"
+        "QSlider::handle:horizontal { background: %5; width: 12px;"
+        "  margin: -4px 0; border-radius: 6px; }"
+        "QSlider::sub-page:horizontal { background: %5; border-radius: 2px; }"
+        "QSpinBox, QDoubleSpinBox { background: %4; color: %2;"
+        "  border: 1px solid %3; border-radius: 3px; padding: 1px 4px; }"
         "QCheckBox { color: %2; }"
-        "QLineEdit { background: %5; border: 1px solid %3;"
-        "  border-radius: 3px; color: %2; padding: 2px 4px; }"
-        "QPushButton { background: %5; border: 1px solid %3;"
-        "  border-radius: 3px; color: %2; padding: 3px 10px; }"
-        "QPushButton:hover { background: %7; }"
-    ).arg(kAppBg, kTextPrimary, kBorder, kTitleText, kButtonBg, kAccent, kButtonHover));
+        "QCheckBox::indicator { width: 14px; height: 14px; background: %4;"
+        "  border: 1px solid %3; border-radius: 2px; }"
+        "QCheckBox::indicator:checked { background: %5; border-color: %5; }"
+        "QLineEdit { background: %4; color: %2; border: 1px solid %3;"
+        "  border-radius: 3px; padding: 2px 6px; }"
+        "QPushButton { background: %4; color: %2; border: 1px solid %3;"
+        "  border-radius: 3px; padding: 3px 12px; }"
+        "QPushButton:hover { background: %6; }"
+        "QPushButton:pressed { background: %5; color: %1; }"
+    ).arg(kAppBg, kTextPrimary, kBorder, kButtonBg, kAccent, kButtonHover, kTextSecondary));
 }
 
 } // namespace NereusSDR::Style
