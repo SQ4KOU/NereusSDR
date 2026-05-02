@@ -595,6 +595,7 @@ set(GUI_SOURCES
     src/gui/meters/ClockItem.cpp
     src/gui/meters/ClickBoxItem.cpp
     src/gui/meters/DataOutItem.cpp
+    src/gui/AntennaPopupBuilder.cpp
     src/gui/HGauge.cpp
     src/gui/ColorSwatchButton.cpp
     src/gui/SpectrumOverlayPanel.cpp

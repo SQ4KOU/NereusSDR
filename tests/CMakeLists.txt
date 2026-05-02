@@ -2585,3 +2585,10 @@ nereus_add_test(tst_parametric_eq_widget_json)
 
 # -- UI Polish Foundation A1: AppletPanelWidget scrollbar gutter --
 nereus_add_test(tst_applet_panel_gutter)
+
+# ── UI Polish Foundation B3: AntennaPopupBuilder capability-gated popup factory ──
+# 5 tests cover Tier 1 (full Alex + bypass), Tier 2 (mid Alex, no bypass),
+# Tier 3 (no Alex, at most 1 entry), TX mode (no RX-only section), and
+# labels() round-trip. Uses actual BoardCapabilities + SkuUiProfile flags.
+# Per docs/superpowers/plans/2026-05-01-ui-polish-cross-surface.md §B3.
+nereus_add_test(tst_antenna_popup_builder)
