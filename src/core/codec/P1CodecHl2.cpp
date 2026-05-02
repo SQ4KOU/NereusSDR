@@ -188,6 +188,7 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
         //   EnableApolloTuner(bits): bits != 0 ⇒ ApolloTuner = 0x8 else 0
         // From mi0bot ChannelMaster/netInterface.c:629-635 [v2.10.3.14-beta1]:
         //   DisablePA on HL2 routes through EnableApolloTuner(!bit)
+        // MI0BOT: This call used on HL2 to enable/disable PA  [original inline comment from netInterface.c:629]
         case 10:
             out[0] = C0base | 0x12;
             out[1] = quint8(ctx.txDrive & 0xFF);

@@ -3999,7 +3999,7 @@ void RadioModel::setTune(bool on)
         // resulting carrier (TX_VFO + audio_tone_freq) lands exactly on dial
         // freq, not at dial±cw_pitch.
         //
-        // From Thetis ChannelMaster/console.cs:31840-31862 [v2.10.3.14]:
+        // From Thetis ChannelMaster/console.cs:31788-31810 [v2.10.3.13]:
         //   case DSPMode.USB / DIGU / DSB:
         //     if (chkTUN.Checked) tx_freq -= cw_pitch * 1e-6;
         //   case DSPMode.LSB / DIGL:
@@ -4111,7 +4111,7 @@ void RadioModel::setTune(bool on)
         }
 
         // ── RESTORE TX VFO (un-offset from cw_pitch) ───────────────────────────
-        // Mirrors Thetis console.cs:31840-31862 [v2.10.3.14] which only
+        // Mirrors Thetis console.cs:31788-31810 [v2.10.3.13] which only
         // applies the ±cw_pitch tx_freq offset while chkTUN.Checked == true.
         // Once TUNE drops, txtVFOAFreq_LostFocus recomputes tx_freq without
         // the offset so the carrier returns to dial freq.
