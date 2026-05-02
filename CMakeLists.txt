@@ -632,6 +632,7 @@ set(GUI_SOURCES
     src/gui/setup/AudioVaxPage.cpp
     src/gui/setup/DeviceCard.cpp
     src/gui/setup/DspSetupPages.cpp
+    src/gui/setup/DspOptionsPage.cpp
     src/gui/setup/DisplaySetupPages.cpp
     src/gui/setup/SpectrumPeaksPage.cpp
     src/gui/setup/MultimeterPage.cpp

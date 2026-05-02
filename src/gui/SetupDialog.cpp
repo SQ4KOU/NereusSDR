@@ -16,6 +16,7 @@
 #include "setup/AudioAdvancedPage.h"
 // DSP
 #include "setup/DspSetupPages.h"
+#include "setup/DspOptionsPage.h"   // Task 4.1
 // Display
 #include "setup/DisplaySetupPages.h"
 #include "setup/SpectrumPeaksPage.h"
@@ -251,6 +252,11 @@ void SetupDialog::buildTree()
             this,    &SetupDialog::cfcDialogRequested);
 
     add(dsp, "MNF",      new MnfSetupPage(m_model));
+
+    // Task 4.1: DSP → Options page (buffer/filter size+type, impulse cache,
+    // high-res filter characteristics, time-to-last-change readout).
+    // Mirrors Thetis tpDSPOptions tab (design Section 4A).
+    add(dsp, "Options",  new DspOptionsPage(m_model));
 
     // ── Display ───────────────────────────────────────────────────────────────
     QTreeWidgetItem* display = addCategory("Display");

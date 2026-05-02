@@ -1,0 +1,156 @@
+// =================================================================
+// src/gui/setup/DspOptionsPage.h  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis source:
+//   Project Files/Source/Console/setup.cs
+//   Project Files/Source/Console/setup.Designer.cs
+//   original licence from Thetis source is included below
+//
+// Thetis version: v2.10.3.13 (git commit 501e3f5)
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-05-01 — Ported in C++20/Qt6 for NereusSDR by J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via
+//                 Anthropic Claude Code.
+//                 Task 4.1: DspOptionsPage skeleton + 18 controls.
+//                 Mirrors Thetis DSP Options tab (design Section 4A).
+// =================================================================
+
+//=================================================================
+// setup.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to:
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Continual modifications Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//=================================================================
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+#pragma once
+
+#include "gui/SetupPage.h"
+
+class QComboBox;
+class QCheckBox;
+class QLabel;
+class QGroupBox;
+
+namespace NereusSDR {
+
+// Setup → DSP → Options page.
+//
+// Mirrors Thetis tpDSPOptions tab layout (design Section 4A).
+// Four group boxes + 1 standalone checkbox + readout label + 3 warning icons.
+//
+// Group 1 — Buffer Size (IQcomp): 4 combos (Phone/CW/Digital/FM)
+//   From Thetis setup.Designer.cs grpDSPBufferSize [v2.10.3.13].
+//   Each combo has RX and TX in Thetis; NereusSDR collapses to per-mode
+//   (Task 4.2 applies the same value to both RX and TX channels).
+//
+// Group 2 — Filter Size (taps): 4 combos (Phone/CW/Digital/FM)
+//   From Thetis setup.Designer.cs grpDSPFilterSize [v2.10.3.13].
+//
+// Group 3 — Filter Type: 7 combos (Phone RX/TX, CW RX, Dig RX/TX, FM RX/TX)
+//   From Thetis setup.Designer.cs grpDSPFiltTypePhone / grpDSPFiltTypeDig /
+//   grpDSPFiltTypeCW / grpDSPFiltTypeFM [v2.10.3.13].
+//
+// Group 4 — Filter Impulse Cache: 2 checkboxes
+//   Wired in Task 4.3.
+//
+// Standalone: High-resolution filter characteristics checkbox (Task 4.4).
+// Time-to-last-change readout: subscribes to RadioModel::dspChangeMeasured in Task 4.6.
+// Warning icons: visibility logic wired in Task 4.5.
+
+class DspOptionsPage : public SetupPage {
+    Q_OBJECT
+public:
+    explicit DspOptionsPage(RadioModel* model, QWidget* parent = nullptr);
+
+private:
+    void buildUI();
+
+    // ── Group 1: Buffer Size ─────────────────────────────────────────────────
+    // From Thetis setup.Designer.cs grpDSPBufPhone/CW/Dig/FM [v2.10.3.13].
+    // comboDSPPhoneRXBuf Items: "64","128","256","512","1024"
+    QComboBox* m_bufPhone{nullptr};
+    QComboBox* m_bufCw{nullptr};
+    QComboBox* m_bufDig{nullptr};
+    QComboBox* m_bufFm{nullptr};
+
+    // ── Group 2: Filter Size ─────────────────────────────────────────────────
+    // From Thetis setup.Designer.cs grpDSPFiltSizePhone/CW/Dig/FM [v2.10.3.13].
+    // comboDSPPhoneRXFiltSize Items: "1024","2048","4096","8192","16384"
+    QComboBox* m_filtSizePhone{nullptr};
+    QComboBox* m_filtSizeCw{nullptr};
+    QComboBox* m_filtSizeDig{nullptr};
+    QComboBox* m_filtSizeFm{nullptr};
+
+    // ── Group 3: Filter Type ─────────────────────────────────────────────────
+    // From Thetis setup.Designer.cs grpDSPFiltType* [v2.10.3.13].
+    // comboDSPPhoneRXFiltType Items: "Linear Phase","Low Latency"
+    // CW has RX only — Thetis has no comboDSPCWTXFiltType.
+    QComboBox* m_filtTypePhoneRx{nullptr};
+    QComboBox* m_filtTypePhoneTx{nullptr};
+    QComboBox* m_filtTypeCwRx{nullptr};
+    QComboBox* m_filtTypeDigRx{nullptr};
+    QComboBox* m_filtTypeDigTx{nullptr};
+    QComboBox* m_filtTypeFmRx{nullptr};
+    QComboBox* m_filtTypeFmTx{nullptr};
+
+    // ── Group 4: Impulse Cache ───────────────────────────────────────────────
+    // Wired to WDSP impulse cache API in Task 4.3.
+    QCheckBox* m_cacheImpulse{nullptr};
+    QCheckBox* m_cacheImpulseSaveRestore{nullptr};
+
+    // ── Standalone ───────────────────────────────────────────────────────────
+    // Task 4.4 wires this to FilterDisplayItem rendering.
+    QCheckBox* m_highResFilterChars{nullptr};
+
+    // ── Live readout ─────────────────────────────────────────────────────────
+    // Subscribes to RadioModel::dspChangeMeasured(qint64) in Task 4.6.
+    QLabel*    m_timeToLastChangeLabel{nullptr};
+
+    // ── Warning icons (Task 4.5 wires visibility logic) ──────────────────────
+    QLabel*    m_warnBufferSize{nullptr};
+    QLabel*    m_warnFilterSize{nullptr};
+    QLabel*    m_warnBufferType{nullptr};
+};
+
+}  // namespace NereusSDR
