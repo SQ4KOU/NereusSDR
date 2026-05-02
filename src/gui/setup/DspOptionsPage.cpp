@@ -87,6 +87,8 @@
 #include "DspOptionsPage.h"
 
 #include "core/AppSettings.h"
+#include "core/RxChannel.h"
+#include "core/WdspEngine.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "gui/containers/ContainerManager.h"
@@ -455,21 +457,52 @@ void DspOptionsPage::buildUI()
 
     loadCheck(m_highResFilterChars, "DspOptionsHighResFilterCharacteristics", false);
 
-    // Task 4.4: persist + broadcast to all live FilterDisplayItem instances.
-    // Pattern mirrors MultimeterPage::connectSignals() unit-mode fan-out.
-    connect(m_highResFilterChars, &QCheckBox::toggled, this,
-        [this](bool v) {
-            AppSettings::instance().setValue(
-                QStringLiteral("DspOptionsHighResFilterCharacteristics"),
-                v ? QStringLiteral("True") : QStringLiteral("False"));
-            if (auto* cm = model() ? model()->containerManager() : nullptr) {
-                cm->forEachMeterItem([v](MeterItem* item) {
-                    if (auto* fdi = qobject_cast<FilterDisplayItem*>(item)) {
-                        fdi->setHighResolution(v);
-                    }
-                });
+    // Task 4.4: helper that fans out high-res mode + RxChannel binding to all
+    // live FilterDisplayItem instances.  Extracted so it can be called both on
+    // initial construction (to apply the persisted value) and on toggle.
+    //
+    // bindRxChannel(rxCh) is called unconditionally: when high-res is ON the
+    // channel supplies the FIR curve; when OFF the pointer is held but unused
+    // (paintHighResolutionFilterCurve is gated on m_highResolution).  A nullptr
+    // channel causes paintHighResolutionFilterCurve to return early gracefully.
+    auto applyHighResFanOut = [this](bool v) {
+        AppSettings::instance().setValue(
+            QStringLiteral("DspOptionsHighResFilterCharacteristics"),
+            v ? QStringLiteral("True") : QStringLiteral("False"));
+
+        RadioModel* rm = model();
+        ContainerManager* cm = rm ? rm->containerManager() : nullptr;
+        if (!cm) {
+            return;
+        }
+
+        RxChannel* rxCh = (rm && rm->wdspEngine())
+            ? rm->wdspEngine()->rxChannel(0)
+            : nullptr;
+
+        cm->forEachMeterItem([v, rxCh](MeterItem* item) {
+            if (auto* fdi = qobject_cast<FilterDisplayItem*>(item)) {
+                fdi->bindRxChannel(rxCh);
+                fdi->setHighResolution(v);
             }
         });
+    };
+
+    // Wire toggle → persist + fan-out.
+    connect(m_highResFilterChars, &QCheckBox::toggled, this, applyHighResFanOut);
+
+    // Initial bind: apply the persisted value immediately so any FilterDisplayItem
+    // instances that already exist pick up both the mode and the channel binding
+    // before the first paint.
+    // NOTE: ContainerManager::forEachMeterItem() is safe to call during buildUI()
+    // because SetupDialog is constructed after all containers are initialised.
+    {
+        const bool persistedHighRes =
+            AppSettings::instance().value(
+                QStringLiteral("DspOptionsHighResFilterCharacteristics"),
+                QStringLiteral("False")).toString() == QLatin1String("True");
+        applyHighResFanOut(persistedHighRes);
+    }
 
     layout->addWidget(m_highResFilterChars);
 
