@@ -919,11 +919,12 @@ target_compile_definitions(tst_pa_cal_swr_foldback PRIVATE NEREUS_BUILD_TESTS)
 # ── Phase 3P-G commit 2: CalibrationTab UI smoke tests ───────────────────────
 # Verifies construction doesn't crash, 5 group boxes present
 # (Freq Cal / Level Cal / HPSDR Freq Cal Diagnostic / TX Display Cal /
-# PA Current), controller->UI sync, and UI->controller write-back.
+# Volts/Amps Calibration), controller->UI sync, and UI->controller write-back.
 # Group 6 (PA Forward Power Calibration / PaCalibrationGroup) was migrated
 # to PA → Watt Meter on 2026-05-02 (Setup IA reshape Phase 3A) — so the
 # tab is back to 5 groups; see tst_pa_watt_meter_page for the migrated
-# group's integration coverage.
+# group's integration coverage.  Group 5 was relabelled from "PA Current (A)
+# calculation" to "Volts/Amps Calibration" 2026-05-02 (Phase 3B).
 nereus_add_test(tst_calibration_tab)
 target_compile_definitions(tst_calibration_tab PRIVATE NEREUS_BUILD_TESTS)
 
