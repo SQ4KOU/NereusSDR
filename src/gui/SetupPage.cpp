@@ -177,11 +177,7 @@ QPushButton* SetupPage::addLabeledButton(const QString& label, const QString& bu
     addLabeledToggle(target, label, btn);  // reuse row layout
     // Re-style as a plain button (not a toggle)
     btn->setCheckable(false);
-    btn->setStyleSheet(
-        "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
-        "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 3px 10px; }"
-        "QPushButton:hover { background: #203040; }"
-        "QPushButton:pressed { background: #00b4d8; color: #0f0f1a; }");
+    btn->setStyleSheet(Style::kButtonStyle);
     return btn;
 }
 
