@@ -132,7 +132,6 @@
 #include "PaCalibrationGroup.h"
 #include "core/BoardCapabilities.h"
 #include "core/CalibrationController.h"
-#include "core/HardwareProfile.h"
 #include "core/PaCalProfile.h"
 #include "core/RadioDiscovery.h"
 #include "models/RadioModel.h"
