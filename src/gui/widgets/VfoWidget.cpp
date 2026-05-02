@@ -1399,18 +1399,12 @@ void VfoWidget::buildXRitTab()
         vbox->addLayout(row);
     }
 
-    // --- Bottom row: LOCK + STEP cycle ---
+    // --- Bottom row: STEP cycle ---
+    // Lock button removed (B7) — redundant with Close-strip Lock. The Close-strip
+    // Lock is always visible; the X/RIT-tab Lock required a tab switch to access.
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
-
-        m_xritLockBtn = new QPushButton(QStringLiteral("LOCK"), ritWidget);
-        m_xritLockBtn->setCheckable(true);
-        m_xritLockBtn->setStyleSheet(vfoDspToggleStyle());
-        m_xritLockBtn->setFixedHeight(22);
-        // From Thetis console.resx:5787 — chkVFOLock.ToolTip
-        m_xritLockBtn->setToolTip(QStringLiteral("Keeps the VFO from changing while in the middle of a QSO."));
-        row->addWidget(m_xritLockBtn);
 
         // Step cycle button — NOT NYI (wires to live SliceModel::setStepHz)
         m_stepCycleBtn = new QPushButton(
@@ -1472,19 +1466,13 @@ void VfoWidget::buildXRitTab()
         }
     });
 
-    connect(m_xritLockBtn, &QPushButton::toggled, this, [this](bool on) {
-        if (!m_updatingFromModel) {
-            applyLockedState(on);
-        }
-    });
-
     connect(m_stepCycleBtn, &QPushButton::clicked, this, [this]() {
         emit stepCycleRequested();
     });
 
     // RIT controls are live — no NYI badge.
     // XIT controls are live (B6) — no NYI badge.
-    // LOCK is live in S2.9 — no NYI badge.
+    // LOCK removed from this tab (B7) — still present in Close-strip.
 
     m_tabStack->addWidget(ritWidget);
 }
@@ -2063,9 +2051,10 @@ void VfoWidget::buildFloatingButtons()
 }
 
 // ---- Lock state: applyLockedState + setLocked (S1.8a review — I3) ----
-// applyLockedState is the single path for all lock changes — called by both
-// the floating m_lockBtn toggled lambda and the X/RIT m_xritLockBtn toggled
-// lambda.  setLocked is the inbound edge driven by SliceModel::lockedChanged.
+// applyLockedState is the single path for all lock changes — called by the
+// floating m_lockBtn toggled lambda.  setLocked is the inbound edge driven
+// by SliceModel::lockedChanged.
+// X/RIT-tab Lock removed in B7 (redundant with Close-strip Lock).
 
 void VfoWidget::applyLockedState(bool on)
 {
@@ -2090,13 +2079,6 @@ void VfoWidget::applyLockedState(bool on)
         } else {
             m_lockBtn->setStyleSheet(kFloatingBtn);
         }
-        m_updatingFromModel = wasUpdating;
-    }
-
-    // Drive X/RIT lock button — same pattern.
-    if (m_xritLockBtn) {
-        m_updatingFromModel = true;
-        m_xritLockBtn->setChecked(on);
         m_updatingFromModel = wasUpdating;
     }
 

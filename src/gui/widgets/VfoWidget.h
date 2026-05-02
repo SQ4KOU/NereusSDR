@@ -368,7 +368,7 @@ public:
     void setXitEnabled(bool v);
     void setXitHz(int hz);
 
-    // --- Lock state setter (S1.8a review — syncs both m_lockBtn and m_xritLockBtn) ---
+    // --- Lock state setter (S1.8a review — syncs m_lockBtn / Close-strip) ---
     void setLocked(bool v);
 
     // --- DSP tab state setters (S1.8b — guarded against re-emit) ---
@@ -510,9 +510,9 @@ private:
     // Guard to prevent signal re-emission during model updates
     bool m_updatingFromModel{false};
 
-    // Internal helper — update m_locked + drive both lock buttons + emit lockChanged.
-    // Called by both the floating m_lockBtn toggled lambda and m_xritLockBtn toggled
-    // lambda so both paths are in sync.  Must be called outside m_updatingFromModel.
+    // Internal helper — update m_locked + drive Close-strip lock button + emit lockChanged.
+    // Called by the floating m_lockBtn toggled lambda.  X/RIT-tab Lock removed (B7).
+    // Must be called outside m_updatingFromModel.
     void applyLockedState(bool on);
 
     // Slice identity
@@ -613,7 +613,6 @@ private:
     QPushButton*   m_xitBtn{nullptr};
     ScrollableLabel* m_xitLabel{nullptr};
     QPushButton*   m_xitZeroBtn{nullptr};
-    QPushButton*   m_xritLockBtn{nullptr};
     QPushButton*   m_stepCycleBtn{nullptr};
 
     // --- Floating control buttons (AetherSDR pattern) ---
