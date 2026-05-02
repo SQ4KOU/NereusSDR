@@ -282,6 +282,12 @@ public:
     void setStepAttController(class StepAttenuatorController* c) { m_stepAttController = c; }
     NoiseFloorTracker* noiseFloorTracker() const { return m_noiseFloorTracker; }
     void setNoiseFloorTracker(NoiseFloorTracker* t) { m_noiseFloorTracker = t; }
+    // Task 3.1: MeterPoller view hook so MultimeterPage can apply live
+    // polling-interval and averaging-window changes without a MainWindow
+    // round-trip.  Non-owning; MainWindow calls setMeterPoller() after
+    // creating MeterPoller (see MainWindow.cpp construction block).
+    class MeterPoller* meterPoller() const { return m_meterPoller; }
+    void setMeterPoller(class MeterPoller* p) { m_meterPoller = p; }
     QTimer* autoAgcTimer() const { return m_autoAgcTimer; }
 
     // 3M-1a G.1: expose MoxController so MainWindow can wire
@@ -923,6 +929,8 @@ private:
     // From Thetis v2.10.3.13 console.cs:46057 — tmrAutoAGC (500ms interval)
     QTimer* m_autoAgcTimer{nullptr};
     NoiseFloorTracker* m_noiseFloorTracker{nullptr};
+    // Task 3.1 view hook — non-owning, set by MainWindow.
+    class MeterPoller*  m_meterPoller{nullptr};
 
     // ── 3M-1a G.4: TUN state save/restore ───────────────────────────────────
     // Fields that preserve pre-TUN state across the setTune(true)/setTune(false)

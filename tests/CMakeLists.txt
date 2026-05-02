@@ -2692,3 +2692,18 @@ nereus_add_test(tst_peak_blob_detector)
 #   FFTEngine::setDecimation range [1..32] enforced; out-of-range rejected.
 #   Uses QTEST_MAIN (QApplication required for SpectrumWidget construction).
 nereus_add_test(tst_spectrum_overlays)
+
+# ── Task 3.1: MultimeterPage + configurable MeterPoller timing ───────────────
+# Verifies new setIntervalMs/intervalMs and setAverageWindow/averageWindow
+# round-trip accessors on MeterPoller (added for MultimeterPage live wire-up).
+#   poll_interval_round_trips: setIntervalMs(50) → intervalMs() == 50
+#   poll_interval_default_is_100ms: default matches Thetis 100ms [v2.10.3.13]
+#   interval_clamped_below_minimum: 0 → clamped to ≥ 10ms
+#   interval_clamped_above_maximum: 99999 → clamped to ≤ 2000ms
+#   interval_boundary_10ms/2000ms_accepted: exact boundary values accepted
+#   average_window_round_trips: setAverageWindow(8) → averageWindow() == 8
+#   average_window_default_is_1: default 1 (no averaging) [v2.10.3.13]
+#   average_window clamped [1..32] + boundary tests
+#   interval_and_window_are_independent: both setters coexist without clobbering
+#   Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure accessor logic).
+nereus_add_test(tst_multimeter_timing)

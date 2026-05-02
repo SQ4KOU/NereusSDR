@@ -13,6 +13,10 @@
 //   2026-04-26 — Phase 3M-1a H.2: TX meter bindings.  setTxChannel(),
 //                 setInTx(bool) slot, pollTxMeters() helper.
 //                 Cite: Thetis dsp.cs:999-1050 [v2.10.3.13] CalculateTXMeter.
+//   2026-05-01 — Task 3.1: setIntervalMs/intervalMs + setAverageWindow/averageWindow
+//                 accessors for MultimeterPage live wire-up.
+//                 Corresponds to Thetis udDisplayMeterDelay + udDisplayMeterAvg
+//                 (display.cs) [v2.10.3.13].
 // =================================================================
 
 /*  MeterManager.cs
@@ -57,6 +61,8 @@ mw0lge@grange-lane.co.uk
 
 #include "MeterPoller.h"
 #include "MeterWidget.h"
+
+#include <algorithm>  // std::clamp (Task 3.1 setIntervalMs / setAverageWindow)
 #include "MeterItem.h"
 #include "core/RxChannel.h"
 #include "core/TxChannel.h"
@@ -131,6 +137,35 @@ void MeterPoller::removeTarget(MeterWidget* widget)
     m_targets.removeAll(QPointer<MeterWidget>(nullptr));
 }
 
+// ── Task 3.1: MultimeterPage-facing interval API ─────────────────────────────
+// setIntervalMs / intervalMs: preferred interface for MultimeterPage.
+// Clamps to [10..2000] matching the MultimeterPage spinbox range so a
+// spurious 0 from a default-constructed AppSettings value can't stall the
+// timer.  Corresponds to Thetis udDisplayMeterDelay (display.cs) [v2.10.3.13].
+void MeterPoller::setIntervalMs(int ms)
+{
+    m_timer.setInterval(std::clamp(ms, 10, 2000));
+}
+
+int MeterPoller::intervalMs() const
+{
+    return m_timer.interval();
+}
+
+// setAverageWindow: store the averaging window size; full dispatch in Task 3.2.
+// Clamps to [1..32] matching MultimeterPage spinbox range.
+// From Thetis udDisplayMeterAvg (display.cs) [v2.10.3.13].
+void MeterPoller::setAverageWindow(int n)
+{
+    m_avgWindow = std::clamp(n, 1, 32);
+}
+
+int MeterPoller::averageWindow() const
+{
+    return m_avgWindow;
+}
+
+// ── Legacy interval API (backward-compat, delegates to setIntervalMs) ────────
 void MeterPoller::setInterval(int ms)
 {
     m_timer.setInterval(ms);

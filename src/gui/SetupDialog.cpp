@@ -19,6 +19,7 @@
 // Display
 #include "setup/DisplaySetupPages.h"
 #include "setup/SpectrumPeaksPage.h"
+#include "setup/MultimeterPage.h"     // Task 3.1
 // Transmit
 #include "setup/TransmitSetupPages.h"
 // Appearance
@@ -243,10 +244,9 @@ void SetupDialog::buildTree()
     add(display, "Spectrum Defaults", specDefaultsPage);
     connect(specDefaultsPage, &SpectrumDefaultsPage::navigateToSpectrumPeaksRequested,
             this, [this]() { selectPage(QStringLiteral("Spectrum Peaks")); });
-    // Multimeter page does not exist yet (Task 3.1); the signal is defined but
-    // unconnected until that task wires it.
-    // connect(specDefaultsPage, &SpectrumDefaultsPage::navigateToMultimeterRequested,
-    //         this, [this]() { selectPage(QStringLiteral("Multimeter")); });
+    // Task 3.1: Multimeter page now exists — wire the cross-link.
+    connect(specDefaultsPage, &SpectrumDefaultsPage::navigateToMultimeterRequested,
+            this, [this]() { selectPage(QStringLiteral("Multimeter")); });
 
     // Task 2.4: Spectrum Peaks page — skeleton with APH + Blob controls + back cross-link.
     auto* specPeaksPage = new SpectrumPeaksPage(m_model);
@@ -256,6 +256,15 @@ void SetupDialog::buildTree()
 
     add(display, "Waterfall Defaults", new WaterfallDefaultsPage(m_model));
     add(display, "Grid & Scales",      new GridScalesPage(m_model));
+
+    // Task 3.1: Display → Multimeter — 8 multimeter globals + unit-mode + signal history.
+    // Folded from Thetis Display→General Multimeter group per design Section 3A.
+    // Cross-link: ← Spectrum Defaults / SpectrumDefaultsPage → Multimeter.
+    auto* multimeterPage = new MultimeterPage(m_model);
+    add(display, "Multimeter", multimeterPage);
+    connect(multimeterPage, &MultimeterPage::backToSpectrumDefaultsRequested,
+            this, [this]() { selectPage(QStringLiteral("Spectrum Defaults")); });
+
     add(display, "RX2 Display",        new Rx2DisplayPage(m_model));
     add(display, "TX Display",         new TxDisplayPage(m_model));
 

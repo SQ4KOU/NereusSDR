@@ -800,6 +800,10 @@ void MainWindow::buildUI()
     // container's meter sat orphaned and bars never received setValue()
     // calls, the root of the "BarMeter not drawing" symptom.
     m_meterPoller = new MeterPoller(this);
+    // Task 3.1: expose MeterPoller via RadioModel so MultimeterPage can
+    // apply live interval + averaging-window changes without a MainWindow
+    // round-trip.  Non-owning; RadioModel stores the pointer only.
+    m_radioModel->setMeterPoller(m_meterPoller);
     connect(m_containerManager, &ContainerManager::meterReadyForPolling,
             this, [this](MeterWidget* meter) {
         if (!meter || !m_meterPoller) { return; }
