@@ -267,6 +267,7 @@ warren@wpratt.com
 #include <cmath>
 
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QMetaObject>
 #include <QStandardPaths>
 #include <QThread>
@@ -4237,6 +4238,159 @@ QString RadioModel::connectionSampleRateText() const
         return QString::number(rateHz / 1000) + QStringLiteral(" kHz");
     }
     return QString::number(rateHz) + QStringLiteral(" Hz");
+}
+
+// ---------------------------------------------------------------------------
+// setSampleRateLive — Task 1.6
+//
+// Sample-rate live-apply coordinator.  Implements the 7-step sequence
+// described in the design doc (thetis-display-dsp-parity-design.md §5C).
+//
+// NereusSDR-original infrastructure — no Thetis source ported here.
+// The P1 restart pattern mirrors the onReconnectTimeout() sequence in
+// P1RadioConnection (itself ported from networkproto1.c SendStopToMetis /
+// SendStartToMetis [v2.10.3.13]).
+// ---------------------------------------------------------------------------
+qint64 RadioModel::setSampleRateLive(int newRateHz)
+{
+    QElapsedTimer t;
+    t.start();
+
+    // Idempotent check first — safe even when disconnected, avoids the
+    // spurious warning log on redundant calls from the settings-restore path.
+    if (newRateHz == m_connectionSampleRateHz) {
+        return 0;
+    }
+
+    // Guard: nothing to do if disconnected or WDSP not initialized.
+    if (!m_connection || !m_wdspEngine || !m_wdspEngine->isInitialized()) {
+        qCWarning(lcConnection) << "setSampleRateLive: no active connection "
+                                   "or WDSP not initialized — ignoring";
+        return -1;
+    }
+
+    qCInfo(lcConnection) << "setSampleRateLive:" << m_connectionSampleRateHz
+                         << "Hz ->" << newRateHz << "Hz";
+
+    // ── Step 1: Quiesce DSP worker ────────────────────────────────────────
+    // Disconnect the I/Q feed so no new batches land in the worker while
+    // the WDSP channel is being rebuilt.  resetAccumulator() via
+    // BlockingQueuedConnection ensures any in-flight batch completes
+    // before we proceed.
+    if (m_dspWorker && m_receiverManager) {
+        QObject::disconnect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
+                            m_dspWorker, &RxDspWorker::processIqBatch);
+        if (m_dspThread && m_dspThread->isRunning()) {
+            QMetaObject::invokeMethod(m_dspWorker,
+                                      &RxDspWorker::resetAccumulator,
+                                      Qt::BlockingQueuedConnection);
+        }
+    }
+
+    // Stop TX pump before touching the TX channel.
+    // TODO(Task 1.6): emit tuneRefused / drop MOX if m_isTuning — for now
+    // callers should ensure MOX is off before calling setSampleRateLive.
+    if (m_txWorker) {
+        m_txWorker->stopPump();
+        if (m_txChannel) {
+            m_txChannel->moveToThread(this->thread());
+        }
+    }
+
+    // ── Step 2: Pause AudioEngine (hook for future active-drain impl) ─────
+    m_audioEngine->pauseInput();
+
+    // ── Step 3: Rebuild WDSP channels ─────────────────────────────────────
+    const int newInSize = bufferSizeForRate(newRateHz);
+    {
+        ChannelConfig rxCfg;
+        rxCfg.sampleRate = newRateHz;
+        rxCfg.bufferSize = newInSize;
+        // filterSize and filterType: keep existing values (rebuild reads them
+        // from AppSettings in the production DspOptionsPage path; here we use
+        // the WDSP defaults so the caller only has to pass the rate).
+        m_wdspEngine->rebuildRxChannel(0, rxCfg);
+    }
+    if (m_txChannel) {
+        ChannelConfig txCfg;
+        // TX channel uses fixed DSP rate (96 kHz) and output rate from the
+        // connection (P1 = 48 kHz, P2 = 192 kHz).  Only the input rate tracks
+        // the wire sample rate.
+        txCfg.sampleRate = newRateHz;
+        txCfg.bufferSize = 256;  // From WdspEngine::createTxChannel default
+        m_wdspEngine->rebuildTxChannel(1, txCfg);
+    }
+
+    // ── Step 4: Reconfigure hardware ──────────────────────────────────────
+    // P2: setSampleRate() already calls sendCmdRx() + sendCmdTx() when running.
+    // P1: stop + update rate + priming burst + start via restartStreamWithRate.
+    //
+    // Both calls are queued to the connection thread via invokeMethod.
+    if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+        // restartStreamWithRate performs the stop/prime/start cycle.
+        // Must run on the connection thread; use QueuedConnection — we do
+        // NOT block here to avoid holding the main thread during the radio
+        // restart latency (~10-50 ms).
+        //
+        // TODO(Task 1.6 follow-up): consider BlockingQueuedConnection if
+        // tests need deterministic ordering.  For now the DSP worker is
+        // already stopped so there is no race between the restart and
+        // incoming EP6 frames.
+        QMetaObject::invokeMethod(p1, [p1, newRateHz]() {
+            p1->restartStreamWithRate(newRateHz);
+        }, Qt::QueuedConnection);
+    } else {
+        // P2 (and future protocol variants): setSampleRate sends the updated
+        // command packets from the connection thread.
+        QMetaObject::invokeMethod(m_connection,
+                                  [conn = m_connection, newRateHz]() {
+            conn->setSampleRate(newRateHz);
+        }, Qt::QueuedConnection);
+    }
+
+    // ── Step 5: AudioEngine reinit (hook) ─────────────────────────────────
+    // WDSP always outputs 64 samples @ 48 kHz regardless of wire rate, so
+    // AudioEngine's speakers bus does not need to be reopened.
+    m_audioEngine->reinitForSampleRate(newRateHz);
+
+    // ── Step 6: Update RxDspWorker buffer sizes ───────────────────────────
+    if (m_dspWorker) {
+        m_dspWorker->setBufferSizes(newInSize, 64);
+    }
+
+    // ── Step 7: Restart TX pump ───────────────────────────────────────────
+    if (m_txWorker && m_txChannel) {
+        m_txChannel->moveToThread(m_txWorker.get());
+        m_txWorker->startPump();
+    }
+
+    // ── Step 8: Reconnect DSP worker I/Q feed ────────────────────────────
+    if (m_dspWorker && m_receiverManager) {
+        connect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
+                m_dspWorker, &RxDspWorker::processIqBatch,
+                Qt::QueuedConnection);
+    }
+
+    // Resume AudioEngine (hook — no-op in current implementation).
+    m_audioEngine->resumeInput();
+
+    // ── Step 9: Update state and emit ─────────────────────────────────────
+    m_connectionSampleRateHz = newRateHz;
+    emit wireSampleRateChanged(static_cast<double>(newRateHz));
+
+    // Persist the new rate per-MAC so the next connect picks it up.
+    if (!m_lastRadioInfo.macAddress.isEmpty()) {
+        AppSettings::instance().setHardwareValue(
+            m_lastRadioInfo.macAddress,
+            QStringLiteral("radioInfo/sampleRate"),
+            newRateHz);
+    }
+
+    const qint64 elapsedMs = t.elapsed();
+    qCInfo(lcConnection) << "setSampleRateLive: done in" << elapsedMs << "ms";
+
+    // TODO(Task 1.8): emit dspChangeMeasured(elapsedMs) once the signal exists.
+    return elapsedMs;
 }
 
 // Phase 3Q Sub-PR-4 D.3 — Segment hover tooltip.

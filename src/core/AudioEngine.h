@@ -193,6 +193,31 @@ public:
     void stop();
     bool isRunning() const { return m_running; }
 
+    // Task 1.6 — Sample-rate live-apply coordination hooks.
+    //
+    // pauseInput() / resumeInput() bracket the WDSP channel rebuild during a
+    // sample-rate change.  In the current architecture the AudioEngine is
+    // passively driven by the DSP worker (rxBlockReady() is called by
+    // RxDspWorker on its thread — not by AudioEngine on its own timer).
+    // Stopping the DSP worker's I/Q feed before rebuild and restarting it
+    // after is sufficient to quiesce audio; these methods are coordination
+    // hooks for clarity and for future active-drain (PipeWire/PortAudio
+    // restart) implementations.
+    //
+    // reinitForSampleRate() notifies AudioEngine that the pipeline rate has
+    // changed and buffer sizes should be updated.  The bus layer (PortAudio /
+    // CoreAudio / PipeWire) negotiates frame sizes at open time, not per-block,
+    // so the speakers bus does not need to be closed and reopened for a sample-
+    // rate change on the WDSP side (WDSP always delivers 64-sample / 48 kHz
+    // audio to AudioEngine regardless of the wire rate).  The method is a hook
+    // for future implementations (e.g. VAX rate tracking) and records the new
+    // wire rate for diagnostics.
+    //
+    // Thread safety: must be called from the main thread (same thread as start/stop).
+    void pauseInput();
+    void resumeInput();
+    void reinitForSampleRate(int newWireRateHz);
+
     // Phase 3O: per-endpoint IAudioBus ownership.
     //
     // Live-reconfig contract (Sub-Phase 12 Task 12.2): setSpeakersConfig

@@ -354,6 +354,57 @@ void AudioEngine::stop()
     qCInfo(lcAudio) << "AudioEngine stopped";
 }
 
+// ---------------------------------------------------------------------------
+// pauseInput / resumeInput / reinitForSampleRate — Task 1.6
+//
+// Coordination hooks for the sample-rate live-apply coordinator in RadioModel.
+//
+// In the current architecture AudioEngine is driven purely passively:
+// RxDspWorker calls rxBlockReady() from the DSP thread; AudioEngine does not
+// have its own pump timer.  Quiescing audio during a rate change is therefore
+// accomplished by stopping the I/Q feed into the DSP worker (done by
+// RadioModel::setSampleRateLive before calling rebuild), not by stopping
+// AudioEngine itself.
+//
+// pauseInput() and resumeInput() are coordination markers — they log the
+// transition and are the natural extension point for future implementations
+// that require an explicit bus close/reopen (e.g. PipeWire rate negotiation
+// on a rate-constrained device).
+//
+// reinitForSampleRate() records the new wire rate for diagnostics and is
+// the extension point for VAX-rate tracking in Phase 3M.  WDSP always
+// delivers 64-sample / 48 kHz audio blocks to AudioEngine regardless of
+// the wire rate, so the speakers bus does NOT need to be closed and reopened.
+// ---------------------------------------------------------------------------
+void AudioEngine::pauseInput()
+{
+    qCDebug(lcAudio) << "AudioEngine: pauseInput (sample-rate live-apply quiesce)";
+    // Hook: future active-drain implementations (PipeWire, PortAudio restart)
+    // go here.  For now the caller (RadioModel::setSampleRateLive) stops the
+    // DSP worker feed before calling this; the bus drains naturally via the
+    // absence of rxBlockReady() calls.
+}
+
+void AudioEngine::resumeInput()
+{
+    qCDebug(lcAudio) << "AudioEngine: resumeInput (sample-rate live-apply resume)";
+    // Hook: counterpart to pauseInput(). Future active-drain implementations
+    // re-open the bus here.  Current architecture: DSP worker resumes feeding
+    // after RadioModel::setSampleRateLive reconnects the I/Q signal.
+}
+
+void AudioEngine::reinitForSampleRate(int newWireRateHz)
+{
+    // WDSP decimates input_rate → 48 kHz and always delivers 64-sample
+    // blocks to AudioEngine.  The speakers bus frame-size is set at open
+    // time and does not need to change when the wire rate changes.
+    // This method is a forward-compatibility hook for VAX rate tracking
+    // and PipeWire per-stream rate negotiation (Phase 3M).
+    qCDebug(lcAudio) << "AudioEngine: reinitForSampleRate" << newWireRateHz
+                     << "Hz (note: WDSP output remains 64 samples @ 48 kHz; "
+                        "bus does not need to be reopened)";
+}
+
 std::unique_ptr<IAudioBus> AudioEngine::makeBus(const AudioDeviceConfig& cfg,
                                                 bool capture)
 {

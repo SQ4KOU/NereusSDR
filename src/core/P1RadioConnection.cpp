@@ -816,6 +816,38 @@ void P1RadioConnection::setTxFrequency(quint64 frequencyHz)
 }
 void P1RadioConnection::setActiveReceiverCount(int count)    { m_activeRxCount = count; }
 void P1RadioConnection::setSampleRate(int sampleRate)        { m_sampleRate = sampleRate; }
+
+// ---------------------------------------------------------------------------
+// restartStreamWithRate — Task 1.6 (sample-rate live-apply, P1 path)
+//
+// Issues sendMetisStop() + sendPrimingBurst(3) + sendMetisStart() so the
+// radio re-arms its EP6 sender with the new sample rate encoded in bank-0
+// C0 bits 24-25.  Pattern mirrors the onReconnectTimeout() restart (lines
+// 1848-1858) which already demonstrates that stop→prime→start is safe
+// mid-session.
+//
+// Cite: networkproto1.c WriteMainLoop / MetisReadThreadMainLoop restart
+// pattern [v2.10.3.13] — see onReconnectTimeout for the NereusSDR
+// adaptation of the same sequence.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::restartStreamWithRate(int newSampleRate)
+{
+    if (!m_running) {
+        // Not yet streaming — just record the rate; it will be picked up
+        // by sendMetisStart() when the connection actually starts.
+        m_sampleRate = newSampleRate;
+        return;
+    }
+    if (newSampleRate == m_sampleRate) {
+        return;  // idempotent
+    }
+    m_sampleRate = newSampleRate;
+    sendMetisStop();
+    sendPrimingBurst(3);
+    sendMetisStart(false);
+    sendPrimingBurst(3);
+}
+
 void P1RadioConnection::setAttenuator(int dB)
 {
     // Source: specHPSDR.cs per-HPSDRHW branches + BoardCapabilities registry.

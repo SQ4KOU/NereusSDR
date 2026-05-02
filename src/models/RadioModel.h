@@ -349,6 +349,40 @@ public:
     int     connectionSampleRateHz() const;   // 0 if disconnected
     QString connectionSampleRateText() const; // "192 kHz" / "—"
 
+    // Task 1.6 — Sample-rate live-apply coordinator.
+    //
+    // Changes the sample rate of the active radio connection without
+    // disconnecting.  The sequence is:
+    //   1. Quiesce the DSP worker (stop I/Q feed into RxDspWorker).
+    //   2. Notify AudioEngine of the impending change (pauseInput hook).
+    //   3. Rebuild all WDSP channels with the new rate.
+    //   4. Update the hardware:
+    //      - P1: stop + re-arm EP6 sender with new rate + start.
+    //      - P2: send updated CmdRx/CmdTx (already contains new rate).
+    //   5. Update RxDspWorker buffer sizes to match the new rate.
+    //   6. Reconnect the I/Q feed into RxDspWorker (resume DSP worker).
+    //   7. Notify AudioEngine (resumeInput hook).
+    //   8. Persist the new rate, update m_connectionSampleRateHz, and
+    //      emit wireSampleRateChanged(newRateHz).
+    //
+    // Returns elapsed milliseconds for the whole operation.  Returns -1
+    // if no connection is active or WDSP is not initialized.
+    //
+    // Must be called on the main thread.
+    //
+    // Caveats:
+    //   - P1 restart is untested on live hardware (design §5C risk note).
+    //     A brief audio dropout (one buffer interval) is expected on P1;
+    //     P2 is glitch-free in practice.
+    //   - TxWorkerThread is stopped before TX channel rebuild and restarted
+    //     after.  If MOX is asserted during the change, MOX is silently
+    //     dropped.  Callers should ensure MOX is off before calling.
+    //   - dspChangeMeasured(qint64) signal (Task 1.8) is not yet emitted;
+    //     the elapsed time is returned synchronously instead.
+    //     TODO(Task 1.8): emit dspChangeMeasured(elapsed) once the signal
+    //     exists.
+    qint64 setSampleRateLive(int newRateHz);
+
     // Phase 3Q Sub-PR-4 D.3: Hover tooltip for the TitleBar ConnectionSegment.
     // Returns a multi-line string with radio name, uptime, IP, MAC, protocol,
     // firmware, sample rate, and live throughput. Disconnected state returns a

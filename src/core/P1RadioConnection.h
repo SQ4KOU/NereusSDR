@@ -149,6 +149,22 @@ public slots:
     void setTxFrequency(quint64 frequencyHz) override;
     void setActiveReceiverCount(int count) override;
     void setSampleRate(int sampleRate) override;
+
+    // Task 1.6: live-apply a sample-rate change to a running P1 connection.
+    //
+    // Updates m_sampleRate then issues sendMetisStop() + priming burst +
+    // sendMetisStart() so the radio re-arms its EP6 sender with the new
+    // sample rate encoded in bank-0 C0 bits 24-25.
+    //
+    // Must be called on the connection thread (invoke via QMetaObject::
+    // invokeMethod(Qt::QueuedConnection) from the main thread).
+    //
+    // No-op when m_running is false (not yet connected) or when the
+    // given rate equals the current m_sampleRate (idempotent).
+    //
+    // Cite: networkproto1.c onReconnectTimeout restart pattern
+    // [v2.10.3.13] — sendMetisStop + sendPrimingBurst(3) + sendMetisStart.
+    void restartStreamWithRate(int newSampleRate);
     void setAttenuator(int dB) override;
     void setPreamp(bool enabled) override;
     void setTxDrive(int level) override;

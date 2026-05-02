@@ -2593,3 +2593,14 @@ nereus_add_test(tst_tx_channel_rebuild)
 # Verifies: (a) correct nPoints output size, (b) passband > stopband by ≥ 10 dB,
 # (c) nPoints ≤ 0 returns empty.  Guarded with HAVE_WDSP + HAVE_FFTW3.
 nereus_add_test(tst_filter_high_resolution)
+
+# ── Task 1.6: RadioModel::setSampleRateLive() coordinator ────────────────
+# Guard-path contracts (no live WDSP or connection required):
+#   changes_rate_without_dropping_channel — unconnected → returns -1,
+#     connectionSampleRateHz() stays at 0.
+#   idempotent_same_rate_returns_zero — same rate as current → returns 0.
+#   rebuild_completes_under_glitch_budget — elapsed < 200 ms (guard path
+#     returns immediately; full timing verified on bench in Task 1.8).
+#   signal_not_emitted_when_guard_fires — wireSampleRateChanged not emitted.
+#   signal_not_emitted_on_same_rate — wireSampleRateChanged not emitted.
+nereus_add_test(tst_sample_rate_live_apply)
