@@ -203,6 +203,15 @@ void SpectrumDefaultsPage::loadFromRenderer()
 
     m_fpSlider->setValue(fe->outputFps());
     m_averagingCombo->setCurrentIndex(static_cast<int>(sw->averageMode()));
+    // Task 2.1: sync new split combos.
+    if (m_spectrumDetectorCombo) {
+        QSignalBlocker bd(m_spectrumDetectorCombo);
+        m_spectrumDetectorCombo->setCurrentIndex(static_cast<int>(sw->spectrumDetector()));
+    }
+    if (m_spectrumAveragingCombo) {
+        QSignalBlocker ba(m_spectrumAveragingCombo);
+        m_spectrumAveragingCombo->setCurrentIndex(static_cast<int>(sw->spectrumAveraging()));
+    }
     m_fillToggle->setChecked(sw->panFillEnabled());
     m_fillAlphaSlider->setValue(static_cast<int>(sw->fillAlpha() * 100.0f));
     m_lineWidthSlider->setValue(qBound(1, static_cast<int>(sw->lineWidth()), 3));
@@ -358,6 +367,54 @@ void SpectrumDefaultsPage::buildUI()
         }
     });
     renderForm->addRow(QStringLiteral("Averaging:"), m_averagingCombo);
+
+    // Task 2.1: Detector + Averaging split (handwave fix from 3G-8).
+    // Ported from Thetis comboDispPanDetector [v2.10.3.13]
+    // (setup.designer.cs:34876): Peak / Rosenfell / Average / Sample / RMS.
+    // RX1 scope dropped — pan-agnostic per design Section 1B.
+    m_spectrumDetectorCombo = new QComboBox(renderGroup);
+    m_spectrumDetectorCombo->addItems({
+        QStringLiteral("Peak"),
+        QStringLiteral("Rosenfell"),
+        QStringLiteral("Average"),
+        QStringLiteral("Sample"),
+        QStringLiteral("RMS")
+    });
+    // Thetis: setup.designer.cs:34876 (comboDispPanDetector) [v2.10.3.13] — no upstream tooltip; rewritten
+    m_spectrumDetectorCombo->setToolTip(QStringLiteral(
+        "Spectrum bin-reduction policy. Peak takes the maximum bin in each display pixel. "
+        "Rosenfell alternates max/min for a classic spectrum look. Average takes the "
+        "arithmetic mean. Sample takes the first bin. RMS computes root-mean-square power."));
+    connect(m_spectrumDetectorCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setSpectrumDetector(static_cast<SpectrumDetector>(i));
+        }
+    });
+    renderForm->addRow(QStringLiteral("Spectrum Detector:"), m_spectrumDetectorCombo);
+
+    // Ported from Thetis comboDispPanAveraging [v2.10.3.13]
+    // (setup.designer.cs:34835): None / Recursive / Time Window / Log Recursive.
+    m_spectrumAveragingCombo = new QComboBox(renderGroup);
+    m_spectrumAveragingCombo->addItems({
+        QStringLiteral("None"),
+        QStringLiteral("Recursive"),
+        QStringLiteral("Time Window"),
+        QStringLiteral("Log Recursive")
+    });
+    // Thetis: setup.designer.cs:34835 (comboDispPanAveraging) [v2.10.3.13] — no upstream tooltip; rewritten
+    m_spectrumAveragingCombo->setToolTip(QStringLiteral(
+        "Spectrum frame-averaging mode. None shows raw FFT output per frame. "
+        "Recursive exponentially smooths in linear power space. "
+        "Time Window approximates a sliding average. "
+        "Log Recursive smooths in the dB domain for a more natural look at low levels."));
+    connect(m_spectrumAveragingCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setSpectrumAveraging(static_cast<SpectrumAveraging>(i));
+        }
+    });
+    renderForm->addRow(QStringLiteral("Spectrum Averaging:"), m_spectrumAveragingCombo);
 
     m_averagingTimeSpin = new QSpinBox(renderGroup);
     m_averagingTimeSpin->setRange(10, 5000);
@@ -619,6 +676,15 @@ void WaterfallDefaultsPage::loadFromRenderer()
     m_opacitySlider->setValue(sw->wfOpacity());
     m_colorSchemeCombo->setCurrentIndex(static_cast<int>(sw->wfColorScheme()));
     m_wfAveragingCombo->setCurrentIndex(static_cast<int>(sw->wfAverageMode()));
+    // Task 2.1: sync new waterfall split combos.
+    if (m_waterfallDetectorCombo) {
+        QSignalBlocker bwd(m_waterfallDetectorCombo);
+        m_waterfallDetectorCombo->setCurrentIndex(static_cast<int>(sw->waterfallDetector()));
+    }
+    if (m_waterfallAveragingCombo) {
+        QSignalBlocker bwa(m_waterfallAveragingCombo);
+        m_waterfallAveragingCombo->setCurrentIndex(static_cast<int>(sw->waterfallAveraging()));
+    }
     m_showRxFilterToggle->setChecked(sw->showRxFilterOnWaterfall());
     m_showTxFilterToggle->setChecked(sw->showTxFilterOnRxWaterfall());
     m_showRxZeroLineToggle->setChecked(sw->showRxZeroLineOnWaterfall());
@@ -818,6 +884,54 @@ void WaterfallDefaultsPage::buildUI()
         }
     });
     dispForm->addRow(QStringLiteral("WF Averaging:"), m_wfAveragingCombo);
+
+    // Task 2.1: Detector + Averaging split for waterfall (handwave fix from 3G-8).
+    // Ported from Thetis comboDispWFDetector [v2.10.3.13]
+    // (setup.designer.cs:34461): Peak / Rosenfell / Average / Sample.
+    // Note: WF detector has 4 items (no RMS); Pan detector has 5 (with RMS).
+    // RX1 scope dropped — pan-agnostic per design Section 1B.
+    m_waterfallDetectorCombo = new QComboBox(dispGroup);
+    m_waterfallDetectorCombo->addItems({
+        QStringLiteral("Peak"),
+        QStringLiteral("Rosenfell"),
+        QStringLiteral("Average"),
+        QStringLiteral("Sample")
+    });
+    // Thetis: setup.designer.cs:34461 (comboDispWFDetector) [v2.10.3.13] — no upstream tooltip; rewritten
+    m_waterfallDetectorCombo->setToolTip(QStringLiteral(
+        "Waterfall bin-reduction policy. Peak takes the maximum bin per pixel. "
+        "Rosenfell alternates max/min. Average takes the arithmetic mean. "
+        "Sample takes the first bin."));
+    connect(m_waterfallDetectorCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWaterfallDetector(static_cast<SpectrumDetector>(i));
+        }
+    });
+    dispForm->addRow(QStringLiteral("WF Detector:"), m_waterfallDetectorCombo);
+
+    // Ported from Thetis comboDispWFAveraging [v2.10.3.13]
+    // (setup.designer.cs:34436): None / Recursive / Time Window / Log Recursive.
+    m_waterfallAveragingCombo = new QComboBox(dispGroup);
+    m_waterfallAveragingCombo->addItems({
+        QStringLiteral("None"),
+        QStringLiteral("Recursive"),
+        QStringLiteral("Time Window"),
+        QStringLiteral("Log Recursive")
+    });
+    // Thetis: setup.designer.cs:34436 (comboDispWFAveraging) [v2.10.3.13] — no upstream tooltip; rewritten
+    m_waterfallAveragingCombo->setToolTip(QStringLiteral(
+        "Waterfall frame-averaging mode. None shows raw FFT output per row. "
+        "Recursive exponentially smooths in linear power space. "
+        "Time Window approximates a sliding average. "
+        "Log Recursive smooths in the dB domain for better low-signal visibility."));
+    connect(m_waterfallAveragingCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWaterfallAveraging(static_cast<SpectrumAveraging>(i));
+        }
+    });
+    dispForm->addRow(QStringLiteral("WF Averaging (new):"), m_waterfallAveragingCombo);
 
     contentLayout()->addWidget(dispGroup);
 

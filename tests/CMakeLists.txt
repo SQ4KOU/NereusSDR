@@ -2621,3 +2621,22 @@ nereus_add_test(tst_active_rx_count_live_apply)
 # and can be spied on. Actual emission is tested on live hardware;
 # these tests verify the signal protocol.
 nereus_add_test(tst_dsp_change_timer)
+
+# ── Task 2.1: Detector + Averaging split (handwave fix from 3G-8) ─────────
+# Ported from Thetis specHPSDR.cs:302-415 [v2.10.3.13] DetTypePan / DetTypeWF
+# / AverageMode / AverageModeWF integer codes.
+#
+# tst_detector_modes: pure math over SpectrumWidget::applyDetector().
+#   Peak returns max in window; Rosenfell alternates max/min per pixel;
+#   Average computes arithmetic mean; Sample takes first bin;
+#   RMS computes root-mean-square; empty input / zero outputBins are no-ops.
+#   Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free).
+#
+# tst_averaging_modes: pure math over SpectrumWidget::applyAveraging().
+#   None passes through unchanged; Recursive exponential smoothing;
+#   TimeWindow uses slower effective alpha (0.33×); LogRecursive blends
+#   in linear power domain then converts back to dB; bootstrap on empty
+#   state; size-mismatch resets to new frame.
+#   Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free).
+nereus_add_test(tst_detector_modes)
+nereus_add_test(tst_averaging_modes)

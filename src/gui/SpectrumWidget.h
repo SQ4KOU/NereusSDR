@@ -229,6 +229,39 @@ enum class AverageMode : int {
     Count
 };
 
+// Spectrum detector type. Ported from Thetis comboDispPanDetector /
+// comboDispWFDetector (setup.designer.cs:34876 + setup.designer.cs:34461
+// [v2.10.3.13]).  Thetis items: Peak / Rosenfell / Average / Sample / RMS
+// (Pan only has RMS; WF has 4 items).
+// Applied during bin reduction: when N FFT bins are mapped to M display
+// pixels, this policy decides which value is chosen.
+// From Thetis specHPSDR.cs:302-321 [v2.10.3.13] DetTypePan / DetTypeWF
+// → SetDisplayDetectorMode(disp, pixout, mode).
+enum class SpectrumDetector : int {
+    Peak       = 0, // take max bin in window (Thetis "Peak")
+    Rosenfell  = 1, // Rosenfell: alternate max/min per pixel (Thetis "Rosenfell")
+    Average    = 2, // arithmetic mean of bins in window (Thetis "Average")
+    Sample     = 3, // take first bin in window (Thetis "Sample")
+    RMS        = 4, // root-mean-square of bins in window — Pan only; Thetis "RMS"
+    Count
+};
+
+// Spectrum averaging mode (split from legacy AverageMode for Thetis parity).
+// Ported from Thetis comboDispPanAveraging / comboDispWFAveraging
+// (setup.designer.cs:34835 / setup.designer.cs:34436 [v2.10.3.13]).
+// Items: None / Recursive / Time Window / Log Recursive (4 items, both combos).
+// Applied across frames: each new FFT result is mixed with the running
+// history buffer per the chosen policy.
+// From Thetis specHPSDR.cs:383-415 [v2.10.3.13] AverageMode / AverageModeWF
+// → SetDisplayAverageMode(disp, pixout, mode).
+enum class SpectrumAveraging : int {
+    None         = 0, // pass frame through unchanged (Thetis "None")
+    Recursive    = 1, // exponential decay in linear domain (Thetis "Recursive")
+    TimeWindow   = 2, // sliding time window (Thetis "Time Window")
+    LogRecursive = 3, // exponential decay in log/dB domain (Thetis "Log Recursive")
+    Count
+};
+
 // Gradient stop for waterfall color mapping.
 struct WfGradientStop { float pos; int r, g, b; };
 
@@ -296,9 +329,44 @@ public:
 
     // ---- Spectrum renderer controls (Phase 3G-8 commit 3) ----
 
-    // Averaging mode applied in updateSpectrum() before drawing.
+    // Legacy combined averaging mode — kept for backward compat (existing
+    // callers not yet migrated).  Routes internally to setSpectrumAveraging().
+    // Retired key: DisplayAverageMode (migration in Task 5.1).
     void setAverageMode(AverageMode m);
     AverageMode averageMode() const { return m_averageMode; }
+
+    // ---- Detector + Averaging split (Task 2.1, handwave fix from 3G-8) ----
+    // Ported from Thetis specHPSDR.cs:302-415 [v2.10.3.13] DetTypePan /
+    // DetTypeWF / AverageMode / AverageModeWF.
+    // RX1 scope dropped; NereusSDR applies as global panadapter default
+    // with per-pan override via ContainerSettings dialog (3G-6 pattern).
+
+    // Spectrum (panadapter) detector — bin-reduction policy.
+    // From Thetis comboDispPanDetector [v2.10.3.13] (setup.designer.cs:34876).
+    void setSpectrumDetector(SpectrumDetector d);
+    SpectrumDetector spectrumDetector() const { return m_spectrumDetector; }
+
+    // Spectrum (panadapter) averaging — frame-smoothing policy.
+    // From Thetis comboDispPanAveraging [v2.10.3.13] (setup.designer.cs:34835).
+    void setSpectrumAveraging(SpectrumAveraging a);
+    SpectrumAveraging spectrumAveraging() const { return m_spectrumAveraging; }
+
+    // Waterfall detector — bin-reduction policy for waterfall rows.
+    // From Thetis comboDispWFDetector [v2.10.3.13] (setup.designer.cs:34461).
+    void setWaterfallDetector(SpectrumDetector d);
+    SpectrumDetector waterfallDetector() const { return m_waterfallDetector; }
+
+    // Waterfall averaging — frame-smoothing policy for waterfall rows.
+    // From Thetis comboDispWFAveraging [v2.10.3.13] (setup.designer.cs:34436).
+    void setWaterfallAveraging(SpectrumAveraging a);
+    SpectrumAveraging waterfallAveraging() const { return m_waterfallAveraging; }
+
+    // Static helpers for detector/averaging math. Exposed for unit tests.
+    // From Thetis specHPSDR.cs:302-415 [v2.10.3.13].
+    static void applyDetector(const QVector<float>& input, QVector<float>& output,
+                              SpectrumDetector mode, int outputBins);
+    static void applyAveraging(const QVector<float>& newFrame, QVector<float>& state,
+                               SpectrumAveraging mode, float alpha);
 
     // Smoothing time constant for Weighted / Logarithmic / TimeWindow.
     // 0.0 = no smoothing, 1.0 = infinite smoothing. Default kSmoothAlpha.
@@ -725,6 +793,13 @@ private:
 
     AverageMode m_averageMode{AverageMode::Logarithmic};
     float       m_averageAlpha{0.05f};  // 0..1 exp-smoothing factor
+
+    // ---- Task 2.1: Detector + Averaging split (handwave fix from 3G-8) ----
+    // Ported from Thetis specHPSDR.cs:302-415 [v2.10.3.13].
+    SpectrumDetector  m_spectrumDetector{SpectrumDetector::Peak};
+    SpectrumAveraging m_spectrumAveraging{SpectrumAveraging::LogRecursive};
+    SpectrumDetector  m_waterfallDetector{SpectrumDetector::Peak};
+    SpectrumAveraging m_waterfallAveraging{SpectrumAveraging::None};
 
     bool        m_peakHoldEnabled{false};
     int         m_peakHoldDelayMs{2000};

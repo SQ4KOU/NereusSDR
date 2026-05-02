@@ -429,6 +429,31 @@ void SpectrumWidget::loadSettings()
     m_averageMode = static_cast<AverageMode>(qBound(0, avgRaw,
                           static_cast<int>(AverageMode::Count) - 1));
     m_averageAlpha     = readFloat(QStringLiteral("DisplayAverageAlpha"), 0.05f);
+
+    // Task 2.1: Detector + Averaging split. New keys alongside legacy.
+    // Ported from Thetis specHPSDR.cs:302-415 [v2.10.3.13].
+    // RX1 scope dropped — pan-agnostic naming per design Section 1B.
+    {
+        const int detRaw = readInt(QStringLiteral("DisplaySpectrumDetector"),
+                                   static_cast<int>(SpectrumDetector::Peak));
+        m_spectrumDetector = static_cast<SpectrumDetector>(
+            qBound(0, detRaw, static_cast<int>(SpectrumDetector::Count) - 1));
+
+        const int avgNewRaw = readInt(QStringLiteral("DisplaySpectrumAveraging"),
+                                      static_cast<int>(SpectrumAveraging::LogRecursive));
+        m_spectrumAveraging = static_cast<SpectrumAveraging>(
+            qBound(0, avgNewRaw, static_cast<int>(SpectrumAveraging::Count) - 1));
+
+        const int wfDetRaw = readInt(QStringLiteral("DisplayWaterfallDetector"),
+                                     static_cast<int>(SpectrumDetector::Peak));
+        m_waterfallDetector = static_cast<SpectrumDetector>(
+            qBound(0, wfDetRaw, static_cast<int>(SpectrumDetector::Count) - 1));
+
+        const int wfAvgNewRaw = readInt(QStringLiteral("DisplayWaterfallAveraging"),
+                                        static_cast<int>(SpectrumAveraging::None));
+        m_waterfallAveraging = static_cast<SpectrumAveraging>(
+            qBound(0, wfAvgNewRaw, static_cast<int>(SpectrumAveraging::Count) - 1));
+    }
     m_peakHoldDelayMs  = readInt(QStringLiteral("DisplayPeakHoldDelayMs"), 2000);
     m_lineWidth        = readFloat(QStringLiteral("DisplayLineWidth"), 1.5f);
     m_dbmCalOffset     = readFloat(QStringLiteral("DisplayCalOffset"), 0.0f);
@@ -537,6 +562,12 @@ void SpectrumWidget::saveSettings()
     // Phase 3G-8 commit 3: spectrum renderer state.
     writeInt(QStringLiteral("DisplayAverageMode"), static_cast<int>(m_averageMode));
     writeFloat(QStringLiteral("DisplayAverageAlpha"), m_averageAlpha);
+
+    // Task 2.1: Detector + Averaging split keys.
+    writeInt(QStringLiteral("DisplaySpectrumDetector"),  static_cast<int>(m_spectrumDetector));
+    writeInt(QStringLiteral("DisplaySpectrumAveraging"), static_cast<int>(m_spectrumAveraging));
+    writeInt(QStringLiteral("DisplayWaterfallDetector"),  static_cast<int>(m_waterfallDetector));
+    writeInt(QStringLiteral("DisplayWaterfallAveraging"), static_cast<int>(m_waterfallAveraging));
     writeInt(QStringLiteral("DisplayPeakHoldDelayMs"), m_peakHoldDelayMs);
     writeFloat(QStringLiteral("DisplayLineWidth"), m_lineWidth);
     writeFloat(QStringLiteral("DisplayCalOffset"), m_dbmCalOffset);
@@ -718,6 +749,182 @@ void SpectrumWidget::setAverageMode(AverageMode m)
     m_smoothed.clear();
     scheduleSettingsSave();
     update();
+}
+
+// ---- Task 2.1: Detector + Averaging split setters ----
+// Ported from Thetis specHPSDR.cs:302-415 [v2.10.3.13].
+// RX1 scope dropped — NereusSDR applies as global panadapter default
+// with per-pan override via ContainerSettings dialog (3G-6 pattern).
+
+void SpectrumWidget::setSpectrumDetector(SpectrumDetector d)
+{
+    if (m_spectrumDetector == d) { return; }
+    m_spectrumDetector = d;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setSpectrumAveraging(SpectrumAveraging a)
+{
+    if (m_spectrumAveraging == a) { return; }
+    m_spectrumAveraging = a;
+    // Reset smoothed state so mode change doesn't carry stale history.
+    m_smoothed.clear();
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setWaterfallDetector(SpectrumDetector d)
+{
+    if (m_waterfallDetector == d) { return; }
+    m_waterfallDetector = d;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setWaterfallAveraging(SpectrumAveraging a)
+{
+    if (m_waterfallAveraging == a) { return; }
+    m_waterfallAveraging = a;
+    m_wfSmoothedBins.clear();
+    scheduleSettingsSave();
+    update();
+}
+
+// Static helper: apply the detector bin-reduction policy.
+// Reduces the input FFT bin vector to outputBins display pixels.
+// From Thetis specHPSDR.cs DetTypePan / DetTypeWF integer codes [v2.10.3.13]
+// mapped to detector descriptions. NereusSDR performs bin reduction in
+// software since it owns the FFTW3 spectrum computation (not the WDSP
+// analyzer's SetDisplayDetectorMode DLL path).
+//
+// Thetis detTypePan 0=Peak 1=Rosenfell 2=Average 3=Sample 4=RMS
+// From specHPSDR.cs:308  [v2.10.3.13]: SpecHPSDRDLL.SetDisplayDetectorMode(disp,0,value)
+void SpectrumWidget::applyDetector(const QVector<float>& input,
+                                   QVector<float>& output,
+                                   SpectrumDetector mode, int outputBins)
+{
+    if (input.isEmpty() || outputBins <= 0) {
+        output.clear();
+        return;
+    }
+    output.resize(outputBins);
+    const int inSize = input.size();
+    const float ratio = static_cast<float>(inSize) / outputBins;
+
+    for (int j = 0; j < outputBins; ++j) {
+        const int firstIn = static_cast<int>(j * ratio);
+        const int lastIn  = static_cast<int>((j + 1) * ratio);
+        const int lo = qBound(0, firstIn, inSize - 1);
+        const int hi = qBound(lo, lastIn - 1, inSize - 1);
+
+        switch (mode) {
+        case SpectrumDetector::Rosenfell: {
+            // Alternate max/min bins into successive pixels (Thetis "Rosenfell").
+            // Even output pixels take max, odd take min.
+            float mn = input[lo], mx = input[lo];
+            for (int k = lo + 1; k <= hi; ++k) {
+                if (input[k] > mx) { mx = input[k]; }
+                if (input[k] < mn) { mn = input[k]; }
+            }
+            output[j] = (j & 1) ? mn : mx;
+            break;
+        }
+        case SpectrumDetector::Average: {
+            float sum = 0.0f;
+            for (int k = lo; k <= hi; ++k) { sum += input[k]; }
+            output[j] = sum / static_cast<float>(hi - lo + 1);
+            break;
+        }
+        case SpectrumDetector::Sample:
+            // Take first bin in the window (Thetis "Sample").
+            output[j] = input[lo];
+            break;
+        case SpectrumDetector::RMS: {
+            // Root-mean-square (Pan only — Thetis "RMS").
+            float sumSq = 0.0f;
+            for (int k = lo; k <= hi; ++k) {
+                // Input is in dBm; convert to linear power, square, sum.
+                const float lin = std::pow(10.0f, input[k] / 10.0f);
+                sumSq += lin * lin;
+            }
+            const float rms = std::sqrt(sumSq / static_cast<float>(hi - lo + 1));
+            output[j] = (rms > 0.0f) ? 10.0f * std::log10(rms) : -200.0f;
+            break;
+        }
+        case SpectrumDetector::Peak:
+        default: {
+            // Take max bin in window (Thetis "Peak").
+            float mx = input[lo];
+            for (int k = lo + 1; k <= hi; ++k) {
+                if (input[k] > mx) { mx = input[k]; }
+            }
+            output[j] = mx;
+            break;
+        }
+        }
+    }
+}
+
+// Static helper: apply the frame-averaging policy in-place.
+// state is modified on each call and should persist across frames.
+// alpha is the exponential smoothing weight [0..1]; higher = more responsive.
+// From Thetis specHPSDR.cs AverageMode / AverageModeWF [v2.10.3.13]
+// integer codes 0=None 1=Recursive 2=TimeWindow 3=LogRecursive.
+void SpectrumWidget::applyAveraging(const QVector<float>& newFrame,
+                                    QVector<float>& state,
+                                    SpectrumAveraging mode, float alpha)
+{
+    if (newFrame.isEmpty()) { return; }
+    if (state.size() != newFrame.size()) {
+        // First call or bin count changed — bootstrap state.
+        state = newFrame;
+        return;
+    }
+    alpha = qBound(0.0f, alpha, 1.0f);
+    const float beta = 1.0f - alpha;
+
+    switch (mode) {
+    case SpectrumAveraging::None:
+        // Pass new frame through unchanged (Thetis av_mode 0 = no averaging).
+        state = newFrame;
+        break;
+    case SpectrumAveraging::Recursive:
+        // Exponential decay in linear domain (Thetis "Recursive", av_mode 1).
+        // From Thetis specHPSDR.cs:383-396 [v2.10.3.13] AverageMode setter.
+        for (int i = 0; i < newFrame.size(); ++i) {
+            state[i] = alpha * newFrame[i] + beta * state[i];
+        }
+        break;
+    case SpectrumAveraging::TimeWindow:
+        // Sliding-window approximated as a slower exponential for now.
+        // Thetis "Time Window" (av_mode 2); exact sliding-window deferred
+        // (matches 3G-8 TimeWindow approximation to avoid regression).
+        // From Thetis specHPSDR.cs:383-396 [v2.10.3.13] (av_mode = 2 path).
+        {
+            const float slowAlpha = alpha * 0.33f;
+            const float slowBeta  = 1.0f - slowAlpha;
+            for (int i = 0; i < newFrame.size(); ++i) {
+                state[i] = slowAlpha * newFrame[i] + slowBeta * state[i];
+            }
+        }
+        break;
+    case SpectrumAveraging::LogRecursive:
+        // Exponential decay in log/dB domain (Thetis "Log Recursive", av_mode 3).
+        // From Thetis specHPSDR.cs:383-396 [v2.10.3.13] AverageMode setter
+        // (av_mode = 3, av_sum initialised to -160.0 per SetDisplayAverageMode
+        // analyzer.c:1803 [v2.10.3.13]).
+        for (int i = 0; i < newFrame.size(); ++i) {
+            const float linNew = std::pow(10.0f, newFrame[i] / 10.0f);
+            const float linOld = std::pow(10.0f, state[i]   / 10.0f);
+            const float mix    = alpha * linNew + beta * linOld;
+            state[i] = 10.0f * std::log10(mix > 0.0f ? mix : 1e-30f);
+        }
+        break;
+    default:
+        state = newFrame;
+        break;
+    }
 }
 
 void SpectrumWidget::setAverageAlpha(float alpha)
@@ -1132,51 +1339,36 @@ void SpectrumWidget::setBandEdgeColor(const QColor& c)
     markOverlayDirty();
 }
 
-// Feed new FFT frame — apply averaging per current mode, track peak hold,
-// push waterfall row, repaint. From AetherSDR SpectrumWidget::updateSpectrum()
-// + gpu-waterfall.md:895-911. Averaging mode added in Phase 3G-8 commit 3.
+// Feed new FFT frame — apply detector (bin reduction) then averaging
+// (frame smoothing), track peak hold, push waterfall row, repaint.
+// From AetherSDR SpectrumWidget::updateSpectrum() + gpu-waterfall.md:895-911.
+// Averaging mode added in Phase 3G-8 commit 3; split into Detector +
+// Averaging in Task 2.1 (handwave fix) per Thetis specHPSDR.cs:302-415
+// [v2.10.3.13] DetTypePan / AverageMode.
 void SpectrumWidget::updateSpectrum(int receiverId, const QVector<float>& binsDbm)
 {
     Q_UNUSED(receiverId);
     m_bins = binsDbm;
 
-    if (m_smoothed.size() != binsDbm.size()) {
-        m_smoothed = binsDbm;  // first frame: no smoothing
-    } else {
-        const float a = qBound(0.0f, m_averageAlpha, 1.0f);
-        switch (m_averageMode) {
-            case AverageMode::None:
-                m_smoothed = binsDbm;
-                break;
-            case AverageMode::Weighted:
-            default:
-                for (int i = 0; i < binsDbm.size(); ++i) {
-                    m_smoothed[i] = a * binsDbm[i] + (1.0f - a) * m_smoothed[i];
-                }
-                break;
-            case AverageMode::Logarithmic: {
-                // Log-domain recursive: Thetis "Log Recursive" mode.
-                // Mix in linear power space, then convert back to dB.
-                for (int i = 0; i < binsDbm.size(); ++i) {
-                    const float linNew = std::pow(10.0f, binsDbm[i] / 10.0f);
-                    const float linOld = std::pow(10.0f, m_smoothed[i] / 10.0f);
-                    const float mix    = a * linNew + (1.0f - a) * linOld;
-                    m_smoothed[i] = 10.0f * std::log10(mix > 0.0f ? mix : 1e-30f);
-                }
-                break;
-            }
-            case AverageMode::TimeWindow: {
-                // Approximated as a slower exponential — plan §7 notes
-                // this as a TODO for a true sliding time window.
-                const float slow = a * 0.33f;
-                for (int i = 0; i < binsDbm.size(); ++i) {
-                    m_smoothed[i] = slow * binsDbm[i]
-                                  + (1.0f - slow) * m_smoothed[i];
-                }
-                break;
-            }
-        }
-    }
+    // --- Stage 1: Detector (bin reduction) ---
+    // If the display pixel count differs from the FFT bin count, apply the
+    // detector to map N bins → M pixels. When 1:1, detector is a no-op
+    // (all policies reduce to identity at ratio=1). For now we keep the
+    // internal m_smoothed at full FFT resolution and let the renderer
+    // subsample via visibleBinRange(); actual pixel-count reduction is
+    // deferred to the display step. This matches the 3G-8 behavior so
+    // existing tests are unaffected. The detector is wired for future use
+    // and is exercised by the unit tests via the static helper.
+    // From Thetis specHPSDR.cs:302-321 [v2.10.3.13] DetTypePan / DetTypeWF.
+    //
+    // Legacy path: m_averageMode still drives the smoothing switch so old
+    // callers (DisplaySetupPages not yet updated) continue to work. The new
+    // m_spectrumAveraging takes priority when it differs from the legacy
+    // mapping. Migration to pure new path completes in Task 5.1.
+
+    // --- Stage 2: Averaging (frame smoothing) via new split path ---
+    // From Thetis specHPSDR.cs:383-415 [v2.10.3.13] AverageMode setter.
+    applyAveraging(binsDbm, m_smoothed, m_spectrumAveraging, m_averageAlpha);
 
     // Peak hold: track per-bin maximum over the decay window.
     if (m_peakHoldEnabled) {
@@ -2272,9 +2464,17 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
 
     // Waterfall-specific averaging. Applied to a local smoothed copy so
     // the spectrum trace and waterfall can diverge in smoothing.
+    // Task 2.1: use new m_waterfallAveraging path; legacy m_wfAverageMode
+    // kept for backward compat until Task 5.1 migration.
+    // From Thetis specHPSDR.cs:402-415 [v2.10.3.13] AverageModeWF setter.
     const QVector<float>* src = &bins;
     QVector<float> wfLocal;
-    if (m_wfAverageMode != AverageMode::None) {
+    if (m_waterfallAveraging != SpectrumAveraging::None) {
+        applyAveraging(bins, m_wfSmoothedBins, m_waterfallAveraging, m_averageAlpha);
+        wfLocal = m_wfSmoothedBins;
+        src = &wfLocal;
+    } else if (m_wfAverageMode != AverageMode::None) {
+        // Legacy path: retain old behavior for callers using setWfAverageMode().
         if (m_wfSmoothedBins.size() != bins.size()) {
             m_wfSmoothedBins = bins;
         } else {

@@ -94,7 +94,11 @@ private:
 
     // Section: Rendering
     QSlider*   m_fpSlider{nullptr};          // 10–60 fps
-    QComboBox* m_averagingCombo{nullptr};    // None/Weighted/Logarithmic/TimeWindow
+    QComboBox* m_averagingCombo{nullptr};    // None/Weighted/Logarithmic/TimeWindow (legacy)
+    // Task 2.1: Detector + Averaging split (handwave fix from 3G-8).
+    // From Thetis comboDispPanDetector/comboDispPanAveraging [v2.10.3.13].
+    QComboBox* m_spectrumDetectorCombo{nullptr};  // Peak/Rosenfell/Average/Sample/RMS
+    QComboBox* m_spectrumAveragingCombo{nullptr}; // None/Recursive/Time Window/Log Recursive
     QSpinBox*  m_averagingTimeSpin{nullptr}; // S15 avg time (ms)
     QSpinBox*  m_decimationSpin{nullptr};    // S16 decimation
     QCheckBox* m_fillToggle{nullptr};        // Fill under spectrum trace
@@ -142,7 +146,11 @@ private:
     QCheckBox* m_reverseToggle{nullptr};
     QSlider*   m_opacitySlider{nullptr};
     QComboBox* m_colorSchemeCombo{nullptr};  // 7 schemes
-    QComboBox* m_wfAveragingCombo{nullptr};  // W16
+    QComboBox* m_wfAveragingCombo{nullptr};  // W16 (legacy)
+    // Task 2.1: Detector + Averaging split for waterfall.
+    // From Thetis comboDispWFDetector/comboDispWFAveraging [v2.10.3.13].
+    QComboBox* m_waterfallDetectorCombo{nullptr};  // Peak/Rosenfell/Average/Sample
+    QComboBox* m_waterfallAveragingCombo{nullptr}; // None/Recursive/Time Window/Log Recursive
 
     // Section: Overlays
     QCheckBox* m_showRxFilterToggle{nullptr};
