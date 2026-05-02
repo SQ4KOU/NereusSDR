@@ -234,7 +234,12 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
     m_tabs->setTabVisible(m_xvtrIdx,        caps.xvtrJackCount > 0);
     m_tabs->setTabVisible(m_pureSignalIdx,  caps.hasPureSignal);
     m_tabs->setTabVisible(m_diversityIdx,   caps.hasDiversityReceiver);
-    m_tabs->setTabVisible(m_paCalIdx,       caps.hasPaProfile);
+    // Calibration tab is always visible — its 4 remaining groups (Freq Cal,
+    // Level Cal, HPSDR Diag, TX Display) apply to every board, and Group 5
+    // (Volts/Amps Cal) is harmless on boards without integrated PA. PA-cal
+    // spinboxes (formerly Group 6) moved to PA → Watt Meter in IA reshape
+    // Phase 3, gated there on caps.hasPaProfile via the PA top-level
+    // category gate in SetupDialog.cpp.
     m_tabs->setTabVisible(m_hl2OptionsIdx,  caps.hasIoBoardHl2);
     m_tabs->setTabVisible(m_hl2IoIdx,       caps.hasIoBoardHl2);
     m_tabs->setTabVisible(m_bwMonitorIdx,   caps.hasBandwidthMonitor);
