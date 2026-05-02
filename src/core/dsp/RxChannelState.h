@@ -1,7 +1,6 @@
 #pragma once
 
-#include "core/WdspTypes.h"
-#include "models/SliceModel.h"
+#include "models/SliceModel.h"   // for Mode enum (alias of DSPMode)
 
 namespace NereusSDR {
 
