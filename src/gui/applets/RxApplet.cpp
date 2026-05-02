@@ -628,6 +628,7 @@ void RxApplet::buildUi()
         // Tier 1 wired → SliceModel::setAgcMode()
         m_agcCombo = new QComboBox(this);
         m_agcCombo->addItem(QStringLiteral("Off"),  static_cast<int>(AGCMode::Off));
+        m_agcCombo->addItem(QStringLiteral("Long"), static_cast<int>(AGCMode::Long));
         m_agcCombo->addItem(QStringLiteral("Slow"), static_cast<int>(AGCMode::Slow));
         m_agcCombo->addItem(QStringLiteral("Med"),  static_cast<int>(AGCMode::Med));
         m_agcCombo->addItem(QStringLiteral("Fast"), static_cast<int>(AGCMode::Fast));
