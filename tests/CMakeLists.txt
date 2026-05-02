@@ -54,6 +54,9 @@ nereus_add_test(tst_clarity_controller)
 # ── Task 2.10: per-band NF-estimate priming (NereusSDR-original) ─────────
 nereus_add_test(tst_per_band_nf_priming)
 
+# ── Task 2.11: Clarity + NF-aware grid coexistence (NereusSDR-original) ────
+nereus_add_test(tst_clarity_nf_grid_coexistence)
+
 # ── Phase 3I radio-connector tests ────────────────────────────────────────
 nereus_add_test(tst_hpsdr_enums)
 nereus_add_test(tst_board_capabilities)
