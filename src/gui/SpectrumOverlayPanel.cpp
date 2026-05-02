@@ -723,6 +723,9 @@ void SpectrumOverlayPanel::buildDisplayFlyout()
 
         connect(m_fillAlphaSlider, &QSlider::valueChanged, this, [this](int v) {
             m_fillAlphaLabel->setText(QString::number(v));
+            // B8 fix-up: emit so MainWindow can forward to SpectrumWidget::setFillAlpha.
+            // int 0..100 → float 0.0..1.0.
+            emit fillAlphaChanged(static_cast<float>(v) / 100.0f);
         });
         ++row;
     }

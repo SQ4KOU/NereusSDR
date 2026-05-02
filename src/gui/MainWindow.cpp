@@ -1128,6 +1128,12 @@ void MainWindow::buildUI()
         connect(m_overlayPanel, &SpectrumOverlayPanel::fillColorChanged,
                 m_spectrumWidget, &SpectrumWidget::setFillColor);
 
+        // B8 fix-up: wire Fill Alpha slider to SpectrumWidget::setFillAlpha.
+        // The slider emitted fillAlphaChanged but had no connect — opacity
+        // never reached the renderer.
+        connect(m_overlayPanel, &SpectrumOverlayPanel::fillAlphaChanged,
+                m_spectrumWidget, &SpectrumWidget::setFillAlpha);
+
         // B8 Task 24: wire "More Display Options →" link to Setup → Display.
         connect(m_overlayPanel, &SpectrumOverlayPanel::openSetupRequested,
                 this, [this](const QString& page) {

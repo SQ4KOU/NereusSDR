@@ -87,6 +87,7 @@ signals:
     void colorSchemeChanged(int scheme);
     void cursorFreqVisibleChanged(bool on);  // B8 Task 21
     void fillColorChanged(const QColor& color); // B8 Task 22
+    void fillAlphaChanged(float alpha);  // 0.0..1.0  B8 fix-up
     void openSetupRequested(const QString& page); // B8 Task 24
 
     // Zoom buttons
