@@ -1488,80 +1488,25 @@ void VfoWidget::rebuildFilterButtons(DSPMode mode)
     grid->setSpacing(2);
     grid->setContentsMargins(0, 0, 0, 0);
 
-    // Per-mode filter presets — ported from Thetis console.cs:5180-5575
-    // Showing a selection of useful widths for each mode family
-    struct Preset { const char* label; int low; int high; };
-
-    QVector<Preset> presets;
-    switch (mode) {
-    case DSPMode::LSB:
-        // From Thetis console.cs:5191-5231 (LSB F1-F10)
-        presets = {{"5.0K",-5100,-100}, {"3.8K",-3900,-100}, {"2.9K",-3000,-100},
-                   {"2.7K",-2800,-100}, {"2.4K",-2500,-100}, {"1.8K",-1900,-100}};
-        break;
-    case DSPMode::USB:
-        // From Thetis console.cs:5233-5273 (USB F1-F10)
-        presets = {{"5.0K",100,5100}, {"3.8K",100,3900}, {"2.9K",100,3000},
-                   {"2.7K",100,2800}, {"2.4K",100,2500}, {"1.8K",100,1900}};
-        break;
-    case DSPMode::CWL:
-    case DSPMode::CWU: {
-        // From Thetis console.cs:5359-5441 — centered on cw_pitch (600 Hz)
-        int sign = (mode == DSPMode::CWL) ? -1 : 1;
-        int p = 600;  // From Thetis display.cs:1023
-        presets = {{"1.0K", sign*(p-500), sign*(p+500)},
-                   {"500",  sign*(p-250), sign*(p+250)},
-                   {"400",  sign*(p-200), sign*(p+200)},
-                   {"250",  sign*(p-125), sign*(p+125)},
-                   {"100",  sign*(p-50),  sign*(p+50)}};
-        break;
-    }
-    case DSPMode::AM:
-    case DSPMode::SAM:
-        // From Thetis console.cs:5443-5525 (AM/SAM F1-F10)
-        presets = {{"20K",-10000,10000}, {"10K",-5000,5000}, {"8.0K",-4000,4000},
-                   {"6.0K",-3000,3000}, {"5.0K",-2500,2500}};
-        break;
-    case DSPMode::FM:
-        presets = {{"16K",-8000,8000}, {"12K",-6000,6000}, {"8.0K",-4000,4000}};
-        break;
-    case DSPMode::DIGU: {
-        // From Thetis console.cs:5317-5357, offset=1500
-        int o = 1500;
-        presets = {{"3.0K",o-1500,o+1500}, {"2.0K",o-1000,o+1000},
-                   {"1.0K",o-500,o+500}, {"600",o-300,o+300}};
-        break;
-    }
-    case DSPMode::DIGL: {
-        // From Thetis console.cs:5275-5315, offset=2210
-        int o = 2210;
-        presets = {{"3.0K",-(o+1500),-(o-1500)}, {"2.0K",-(o+1000),-(o-1000)},
-                   {"1.0K",-(o+500),-(o-500)}, {"600",-(o+300),-(o-300)}};
-        break;
-    }
-    case DSPMode::DSB:
-        // From Thetis console.cs:5527-5575 [v2.10.3.13] (DSB F1-F10) — symmetric passband
-        presets = {{"10K",-5000,5000}, {"8.0K",-4000,4000}, {"6.6K",-3300,3300},
-                   {"5.0K",-2500,2500}, {"4.0K",-2000,2000}};
-        break;
-    case DSPMode::DRM:
-        // DRM requires a wide ~10 kHz channel; offer standard DRM widths
-        presets = {{"20K",-10000,10000}, {"10K",-5000,5000}};
-        break;
-    default:
-        presets = {{"10K",-5000,5000}, {"6.0K",-3000,3000}};
-        break;
-    }
-
+    // Compact 5-6-preset subset for the VFO flag — sourced from
+    // SliceModel::commonPresetsForMode() (Thetis main-panel filter buttons).
+    // Full 10-preset list is in SliceModel::presetsForMode() used by RxApplet.
+    const auto pairs = SliceModel::commonPresetsForMode(mode);
     auto [defLow, defHigh] = SliceModel::defaultFilterForMode(mode);
 
-    for (const auto& p : presets) {
-        auto* btn = new QPushButton(QString::fromLatin1(p.label), m_filterBtnContainer);
+    for (const auto& [low, high] : pairs) {
+        const int widthHz = qAbs(high - low);
+        QString label;
+        if (widthHz >= 1000) {
+            label = QStringLiteral("%1K").arg(widthHz / 1000.0, 0, 'g', 2);
+        } else {
+            label = QStringLiteral("%1").arg(widthHz);
+        }
+
+        auto* btn = new QPushButton(label, m_filterBtnContainer);
         btn->setCheckable(true);
         btn->setStyleSheet(vfoModeBtnStyle());
         btn->setFixedHeight(26);
-        int low = p.low;
-        int high = p.high;
         btn->setProperty("filterLow", low);
         btn->setProperty("filterHigh", high);
         // Tooltip: show the filter edges so the user knows what they're selecting

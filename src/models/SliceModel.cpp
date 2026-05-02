@@ -998,6 +998,56 @@ QList<std::pair<int, int>> SliceModel::presetsForMode(DSPMode mode)
 }
 
 // ---------------------------------------------------------------------------
+// Common (compact) per-mode filter preset subset
+// ---------------------------------------------------------------------------
+
+// Per Thetis main-panel filter buttons. Subset of presetsForMode() — 5-6 entries per mode
+// for VfoWidget's compact flag context. Values match Thetis console.cs F-button layout.
+QList<std::pair<int, int>> SliceModel::commonPresetsForMode(DSPMode mode)
+{
+    switch (mode) {
+    case DSPMode::USB:
+        return {{100,2400}, {100,2700}, {100,2900}, {100,3000}, {100,3200}};
+    case DSPMode::LSB:
+        return {{-2400,-100}, {-2700,-100}, {-2900,-100}, {-3000,-100}, {-3200,-100}};
+    case DSPMode::CWU:
+    case DSPMode::CWL: {
+        // From Thetis display.cs:1023 [v2.10.3.13]
+        static constexpr int kCwPitch = 600;
+        const int sign = (mode == DSPMode::CWL) ? -1 : 1;
+        return { {sign*(kCwPitch-50),  sign*(kCwPitch+50)},
+                 {sign*(kCwPitch-100), sign*(kCwPitch+100)},
+                 {sign*(kCwPitch-150), sign*(kCwPitch+150)},
+                 {sign*(kCwPitch-250), sign*(kCwPitch+250)},
+                 {sign*(kCwPitch-500), sign*(kCwPitch+500)} };
+    }
+    case DSPMode::AM:
+    case DSPMode::SAM:
+        return {{-2900,2900}, {-3500,3500}, {-5000,5000}};
+    case DSPMode::FM:
+        return {{-3000,3000}, {-5000,5000}, {-8000,8000}};
+    case DSPMode::DIGU:
+    case DSPMode::DIGL: {
+        // From Thetis console.cs:14636,14671 [v2.10.3.13]
+        //reset preset filter's center frequency - W4TME  [original inline comment from console.cs:14647,14682]
+        const int o = (mode == DSPMode::DIGU) ? 1500 : 2210;
+        const int sign = (mode == DSPMode::DIGL) ? -1 : 1;
+        return { {sign*(o-1350), sign*(o+1350)},
+                 {sign*(o-1450), sign*(o+1450)},
+                 {sign*(o-1500), sign*(o+1500)},
+                 {sign*(o-1650), sign*(o+1650)},
+                 {sign*(o-1750), sign*(o+1750)} };
+    }
+    case DSPMode::DSB:
+        return {{-2900,2900}, {-3500,3500}};
+    case DSPMode::DRM:
+        return {{-5000,5000}};
+    default:
+        return {{100, 3000}};
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Mode name utilities
 // ---------------------------------------------------------------------------
 

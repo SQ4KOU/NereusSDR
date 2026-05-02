@@ -587,6 +587,10 @@ public:
     // Each pair is (low_hz, high_hz) relative to the carrier.
     static QList<std::pair<int, int>> presetsForMode(DSPMode mode);
 
+    // Returns the 5-6 most-common filter presets for the given mode,
+    // matching Thetis main-panel filter buttons (compact subset of presetsForMode).
+    static QList<std::pair<int, int>> commonPresetsForMode(DSPMode mode);
+
     // Returns human-readable mode name (e.g., DSPMode::LSB → "LSB")
     static QString modeName(DSPMode mode);
 
