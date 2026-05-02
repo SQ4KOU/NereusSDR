@@ -669,6 +669,12 @@ MainWindow::MainWindow(QWidget* parent)
     // harmless. (Preserved from main PR #13 alongside Phase 3I's
     // singleShot auto-reconnect above.)
     connect(qApp, &QCoreApplication::aboutToQuit, this, [this]() {
+        // Same flush as closeEvent — covers the signal-shutdown path
+        // (SIGTERM, force-quit, debugger detach) where closeEvent
+        // doesn't run. Idempotent when closeEvent already flushed.
+        if (m_radioModel) {
+            m_radioModel->flushPendingSettingsSave();
+        }
         if (m_containerManager) {
             m_containerManager->saveState();
         }
@@ -4454,6 +4460,13 @@ void MainWindow::checkVaxFirstRun()
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    // Force-run any pending coalesced slice save BEFORE we tear anything
+    // down. The 500 ms debounce in RadioModel::scheduleSettingsSave can't
+    // fire while this handler runs synchronously (event loop blocked on
+    // QThread::wait below); without this flush the user's last AF / step /
+    // freq / lock / RIT change is silently dropped on close.
+    m_radioModel->flushPendingSettingsSave();
+
     // Stop discovery to prevent new signals during shutdown
     m_radioModel->discovery()->stopDiscovery();
 
