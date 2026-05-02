@@ -4394,7 +4394,7 @@ qint64 RadioModel::setSampleRateLive(int newRateHz)
     const qint64 elapsedMs = t.elapsed();
     qCInfo(lcConnection) << "setSampleRateLive: done in" << elapsedMs << "ms";
 
-    // TODO(Task 1.8): emit dspChangeMeasured(elapsedMs) once the signal exists.
+    emit dspChangeMeasured(elapsedMs);
     return elapsedMs;
 }
 
@@ -4561,6 +4561,8 @@ qint64 RadioModel::setActiveRxCountLive(int newCount)
 
     const qint64 elapsedMs = t.elapsed();
     qCInfo(lcConnection) << "setActiveRxCountLive: done in" << elapsedMs << "ms";
+
+    emit dspChangeMeasured(elapsedMs);
     return elapsedMs;
 }
 

@@ -2615,3 +2615,9 @@ nereus_add_test(tst_sample_rate_live_apply)
 #   signal_not_emitted_when_guard_fires — activeRxCountChanged not emitted.
 #   signal_not_emitted_on_same_count — activeRxCountChanged not emitted.
 nereus_add_test(tst_active_rx_count_live_apply)
+
+# Task 1.8: dspChangeMeasured signal existence and emission test.
+# Tests that RadioModel::dspChangeMeasured(qint64) signal exists
+# and can be spied on. Actual emission is tested on live hardware;
+# these tests verify the signal protocol.
+nereus_add_test(tst_dsp_change_timer)

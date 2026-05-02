@@ -377,10 +377,8 @@ public:
     //   - TxWorkerThread is stopped before TX channel rebuild and restarted
     //     after.  If MOX is asserted during the change, MOX is silently
     //     dropped.  Callers should ensure MOX is off before calling.
-    //   - dspChangeMeasured(qint64) signal (Task 1.8) is not yet emitted;
-    //     the elapsed time is returned synchronously instead.
-    //     TODO(Task 1.8): emit dspChangeMeasured(elapsed) once the signal
-    //     exists.
+    //   - dspChangeMeasured(qint64) signal (Task 1.8) is emitted on completion.
+    //     The elapsed time is also returned synchronously.
     qint64 setSampleRateLive(int newRateHz);
 
     // Task 1.7 — Active-RX-count live-apply coordinator.
@@ -697,6 +695,13 @@ signals:
     // From Thetis Andromeda/Andromeda.cs:914-920 [v2.10.3.13]
     // (CATHandleAmplifierTripMessage). G8NJJ: handlers for Ganymede 500W PA protection.
     void paTrippedChanged(bool tripped);
+
+    // Task 1.8: DSP rebuild elapsed time signal.
+    // Emitted whenever a live DSP change (sample rate, active RX count,
+    // DSP-Options buffer/filter changes) completes. The argument is the
+    // elapsed wall-clock milliseconds for the rebuild. Used by
+    // DspOptionsPage's "Time to last change" readout.
+    void dspChangeMeasured(qint64 elapsedMs);
 
     // Phase 3Q Task 10: auto-connect failure signals.
     //
