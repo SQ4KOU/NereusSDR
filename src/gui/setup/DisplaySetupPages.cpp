@@ -321,7 +321,8 @@ void SpectrumDefaultsPage::buildUI()
     m_windowCombo = new QComboBox(fftGroup);
     m_windowCombo->addItems({QStringLiteral("Blackman-Harris"), QStringLiteral("Hann"),
                              QStringLiteral("Hamming"),         QStringLiteral("Flat-Top")});
-    // NereusSDR extension — no Thetis equivalent (Thetis hardcodes Blackman-Harris 4-term)
+    // From Thetis setup.Designer.cs:34962 [v2.10.3.13] — comboDispWinType
+    //   FFT window selection (NereusSDR exposes 4 of 7 Thetis options for common cases)
     m_windowCombo->setToolTip(QStringLiteral("FFT window function. Blackman-Harris offers best sidelobe rejection; Flat-Top is best for amplitude accuracy."));
     connect(m_windowCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int i) {

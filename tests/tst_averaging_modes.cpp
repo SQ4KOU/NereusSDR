@@ -1,11 +1,40 @@
-// tst_averaging_modes.cpp
+// =================================================================
+// tests/tst_averaging_modes.cpp  (NereusSDR)
+// =================================================================
 //
 // Task 2.1 — Detector + Averaging split (handwave fix from 3G-8).
 // Tests for SpectrumWidget::applyAveraging() static helper.
 //
-// Ported from Thetis specHPSDR.cs:383-415 [v2.10.3.13] AverageMode /
-// AverageModeWF integer codes 0=None 1=Recursive 2=TimeWindow 3=LogRecursive.
+// Ported from Thetis source:
+//   Project Files/Source/Console/HPSDR/specHPSDR.cs:383-415, original licence from Thetis source is included below
 //
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-05-01 — Ported in C++20/Qt6 for NereusSDR by J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via Anthropic
+//                 Claude Code.
+// =================================================================
+
+//=================================================================
+// specHPSDR.cs
+//=================================================================
+// Copyright (C) 2010-2018  Doug Wigley
+//
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation; either version 2 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+//=================================================================
+
 // Tests call the static helper directly (no QApplication needed — WDSP-free).
 
 #include <QtTest/QtTest>

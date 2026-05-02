@@ -310,6 +310,8 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | tests/tst_slice_squelch.cpp | Project Files/Source/Console/radio.cs | 1185-1329; 1164-1178; 1274-1291; 1293-1329 | port | thetis-samphire | |
 | tests/tst_step_attenuator_controller.cpp | Project Files/Source/Console/console.cs | 21359-21382; 21366; 21369; 21373-21375; 21378; 21548-21567 | port | thetis-samphire | |
 | tests/tst_radio_status.cpp | Project Files/Source/Console/console.cs; Project Files/Source/Console/HPSDR/NetworkIOImports.cs | 6642-6659; 261-267 | port | multi-source | SWR test vectors from console.cs:6642 SWR(adc_fwd,adc_rev) [@501e3f5]; getFwdPower/getRevPower DllImport declarations from NetworkIOImports.cs:264-267 [@501e3f5] |
+| tests/tst_averaging_modes.cpp | Project Files/Source/Console/specHPSDR.cs | 383-415 | port | thetis-samphire | SpectrumWidget::applyAveraging() helper; tests AverageMode enum codes (0=None 1=Recursive 2=TimeWindow 3=LogRecursive) |
+| tests/tst_detector_modes.cpp | Project Files/Source/Console/specHPSDR.cs | 383-415 | port | thetis-samphire | Companion to tst_averaging_modes; tests SpectrumWidget detector modes |
 
 ## Files derived from mi0bot/Thetis-HL2
 
