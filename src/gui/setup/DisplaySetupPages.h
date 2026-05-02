@@ -238,6 +238,16 @@ private:
     ColorSwatchButton* m_gridTextColorBtn{nullptr};   // G12
     ColorSwatchButton* m_zeroLineColorBtn{nullptr};   // G13
     ColorSwatchButton* m_bandEdgeColorBtn{nullptr};   // G6
+
+    // Section: Noise-Floor Tracking (Task 2.9)
+    // From Thetis setup.cs:24202-24213 [v2.10.3.13] chkAdjustGridMinToNFRX1.
+    // RX1 scope dropped; NereusSDR applies as global panadapter default.
+    QCheckBox*   m_adjustGridMinToNF{nullptr};  // DisplayAdjustGridMinToNoiseFloor
+    QSpinBox*    m_nfOffsetGridFollow{nullptr}; // DisplayNFOffsetGridFollow (dB, -60..+60)
+    QCheckBox*   m_maintainNFAdjustDelta{nullptr}; // DisplayMaintainNFAdjustDelta
+
+    // Task 2.9: Copy waterfall thresholds → spectrum min/max (reverse of Task 2.8).
+    QPushButton* m_copyWfToSpecBtn{nullptr};
 };
 
 // ---------------------------------------------------------------------------

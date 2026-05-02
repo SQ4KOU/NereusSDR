@@ -581,6 +581,17 @@ void SpectrumWidget::loadSettings()
         setShowPeakValueOverlay(false); // ensure clean start
         setShowPeakValueOverlay(true);
     }
+
+    // Task 2.9: NF-aware grid settings.
+    // From Thetis setup.cs:24202-24213 [v2.10.3.13] chkAdjustGridMinToNFRX1.
+    // RX1 scope dropped; NereusSDR applies as global panadapter default.
+    m_adjustGridMinToNF = s.value(QStringLiteral("DisplayAdjustGridMinToNoiseFloor"),
+                                  QStringLiteral("False")).toString() == QStringLiteral("True");
+    m_nfOffsetGridFollow = s.value(QStringLiteral("DisplayNFOffsetGridFollow"),
+                                   QStringLiteral("0")).toInt();
+    m_nfOffsetGridFollow = qBound(-60, m_nfOffsetGridFollow, 60);
+    m_maintainNFAdjustDelta = s.value(QStringLiteral("DisplayMaintainNFAdjustDelta"),
+                                      QStringLiteral("False")).toString() == QStringLiteral("True");
 }
 
 void SpectrumWidget::saveSettings()
@@ -701,6 +712,16 @@ void SpectrumWidget::saveSettings()
     // From Thetis console.cs:20278 [v2.10.3.13] Color.DodgerBlue.
     s.setValue(QStringLiteral("DisplayPeakValueColor"),
                m_peakValueColor.name(QColor::HexArgb));
+
+    // Task 2.9: NF-aware grid settings.
+    // From Thetis setup.cs:24202-24213 [v2.10.3.13] chkAdjustGridMinToNFRX1.
+    // RX1 scope dropped; NereusSDR applies as global panadapter default.
+    s.setValue(QStringLiteral("DisplayAdjustGridMinToNoiseFloor"),
+               m_adjustGridMinToNF ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(QStringLiteral("DisplayNFOffsetGridFollow"),
+               QString::number(m_nfOffsetGridFollow));
+    s.setValue(QStringLiteral("DisplayMaintainNFAdjustDelta"),
+               m_maintainNFAdjustDelta ? QStringLiteral("True") : QStringLiteral("False"));
 }
 
 void SpectrumWidget::scheduleSettingsSave()
@@ -808,6 +829,9 @@ void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
     m_refLevel = maxDbm;
     m_dynamicRange = maxDbm - minDbm;
     update();
+    // Note: callers that invoke setDbmRange deliberately (Copy button, user drag)
+    // schedule their own save. The NF-aware grid onNoiseFloorChanged() avoids
+    // scheduling saves because it fires at 500ms cadence.
 }
 
 void SpectrumWidget::setWfColorScheme(WfColorScheme scheme)
@@ -1264,6 +1288,66 @@ void SpectrumWidget::setShowNoiseFloorPosition(OverlayPosition pos)
     if (m_noiseFloorPosition == pos) { return; }
     m_noiseFloorPosition = pos;
     if (m_showNoiseFloor) { update(); }
+}
+
+// ---- NF-aware grid (Task 2.9) ----
+// From Thetis setup.cs:24202-24213 [v2.10.3.13]
+// — RX1 scope dropped; NereusSDR applies as global panadapter default
+//   with per-pan override via ContainerSettings dialog (3G-6 pattern).
+
+void SpectrumWidget::setAdjustGridMinToNoiseFloor(bool on)
+{
+    if (m_adjustGridMinToNF == on) { return; }
+    m_adjustGridMinToNF = on;
+    scheduleSettingsSave();
+}
+
+void SpectrumWidget::setNFOffsetGridFollow(int db)
+{
+    db = qBound(-60, db, 60);
+    if (m_nfOffsetGridFollow == db) { return; }
+    m_nfOffsetGridFollow = db;
+    scheduleSettingsSave();
+}
+
+void SpectrumWidget::setMaintainNFAdjustDelta(bool on)
+{
+    if (m_maintainNFAdjustDelta == on) { return; }
+    m_maintainNFAdjustDelta = on;
+    scheduleSettingsSave();
+}
+
+// From Thetis console.cs:46074-46086 [v2.10.3.13] tmrAutoAGC_Tick NF grid block:
+//   float setPoint = _lastRX1NoiseFloor - _RX1NFoffsetGridFollow;
+//   float fDelta = (float)Math.Abs(SetupForm.DisplayGridMax - SetupForm.DisplayGridMin);
+//   if (Math.Abs(SetupForm.DisplayGridMin - setPoint) >= 2)
+//   {
+//       SetupForm.DisplayGridMin = setPoint;
+//       if (_maintainNFAdjustDeltaRX1) SetupForm.DisplayGridMax = setPoint + fDelta;
+//   }
+// NereusSDR adaptation: offset is added rather than subtracted (default 0 vs Thetis
+// default +5); semantically equivalent when user enters a negative offset value.
+void SpectrumWidget::onNoiseFloorChanged(float nfDbm)
+{
+    if (!m_adjustGridMinToNF) { return; }
+
+    const float oldMin = m_refLevel - m_dynamicRange;
+    const float oldMax = m_refLevel;
+    const float delta  = std::abs(oldMax - oldMin);  // From Thetis: abs() guards against inverted range
+
+    const float proposedMin = nfDbm + static_cast<float>(m_nfOffsetGridFollow);
+
+    // From Thetis console.cs:46082 [v2.10.3.13]: only move if delta >= 2 dB
+    if (std::abs(oldMin - proposedMin) < 2.0f) { return; }
+
+    const float newMin = proposedMin;
+    const float newMax = m_maintainNFAdjustDelta ? (newMin + delta) : oldMax;
+
+    // Update display range directly — do NOT call scheduleSettingsSave() here
+    // because the NF-tracking loop fires at 500ms cadence and would flood
+    // disk writes. The range reverts to persisted values on next app launch;
+    // live NF-tracking then re-adjusts it within the first cadence cycle.
+    setDbmRange(newMin, newMax);
 }
 
 // From Thetis specHPSDR.cs:325 [v2.10.3.13] NormOneHzPan.

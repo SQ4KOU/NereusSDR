@@ -1081,6 +1081,13 @@ void MainWindow::buildUI()
         m_spectrumWidget->setWfHighThreshold(high);
     });
 
+    // Clarity → SpectrumWidget NF-aware grid (Task 2.9).
+    // NereusSDR-original — no Thetis equivalent.
+    // noiseFloorChanged fires after EWMA smoothing but before the deadband
+    // gate so the grid tracks the floor at every cadence tick.
+    connect(m_clarityController, &ClarityController::noiseFloorChanged,
+            m_spectrumWidget, &SpectrumWidget::onNoiseFloorChanged);
+
     // When Clarity pauses or is disabled, let legacy AGC resume.
     connect(m_clarityController, &ClarityController::pausedChanged,
             m_spectrumWidget, [this](bool paused) {

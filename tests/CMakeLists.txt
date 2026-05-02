@@ -857,6 +857,14 @@ nereus_add_test(tst_waterfall_scrollback)
 # and smoke test for setActivePeakHoldTxActive + setWaterfallStopOnTx combo.
 nereus_add_test(tst_waterfall_defaults_changes)
 
+# ── Task 2.9: NF-aware grid + Copy button + NoiseFloorEstimator::prime() ─────
+# Thetis source: console.cs:46074-46086 [v2.10.3.13] GridMinFollowsNFRX1 /
+# tmrAutoAGC_Tick NF grid block. NereusSDR-original: global panadapter default.
+# Tests: offset_shifts_grid_min, maintain_delta, disabled_no_change, deadband
+# suppression + allow at 2dB, positive offset, prime() store + update + no
+# interference with estimate().
+nereus_add_test(tst_nf_aware_grid)
+
 # ── Phase 3M-0 Task 2: BandPlanGuard region tables + 60m channels ─────────
 # Pure data + pure predicates; no Qt parent, no signals.
 # 12 table-driven tests cover US/UK/Japan 60m channelization, extended bypass,

@@ -86,6 +86,7 @@
 
 #include <QGuiApplication>
 #include <QScreen>
+#include <QTimer>
 #include <algorithm>
 #include <cmath>
 
@@ -1534,6 +1535,21 @@ void GridScalesPage::loadFromRenderer()
     if (m_bandEdgeColorBtn) { m_bandEdgeColorBtn->setColor(sw->bandEdgeColor()); }
 
     applyBandSlot(pan);
+
+    // Task 2.9: NF tracking controls.
+    // From Thetis setup.cs:24202-24213 [v2.10.3.13] chkAdjustGridMinToNFRX1.
+    if (m_adjustGridMinToNF) {
+        QSignalBlocker bNf(m_adjustGridMinToNF);
+        m_adjustGridMinToNF->setChecked(sw->adjustGridMinToNoiseFloor());
+    }
+    if (m_nfOffsetGridFollow) {
+        QSignalBlocker bOff(m_nfOffsetGridFollow);
+        m_nfOffsetGridFollow->setValue(sw->nfOffsetGridFollow());
+    }
+    if (m_maintainNFAdjustDelta) {
+        QSignalBlocker bMaint(m_maintainNFAdjustDelta);
+        m_maintainNFAdjustDelta->setChecked(sw->maintainNFAdjustDelta());
+    }
 }
 
 void GridScalesPage::buildUI()
@@ -1726,7 +1742,117 @@ void GridScalesPage::buildUI()
     colForm->addRow(QStringLiteral("Band Edge Color:"), m_bandEdgeColorBtn);
 
     contentLayout()->addWidget(colGroup);
+
+    // --- Section: Noise-Floor Tracking (Task 2.9) ---
+    // From Thetis setup.cs:24202-24213 [v2.10.3.13] chkAdjustGridMinToNFRX1
+    // — RX1 scope dropped; NereusSDR applies as global panadapter default
+    //   with per-pan override via ContainerSettings dialog (3G-6 pattern).
+    auto* nfGroup = new QGroupBox(QStringLiteral("Noise-Floor Tracking"), this);
+    auto* nfForm  = new QFormLayout(nfGroup);
+    nfForm->setSpacing(6);
+
+    m_adjustGridMinToNF = new QCheckBox(
+        QStringLiteral("Adjust grid min to track noise floor"), nfGroup);
+    // From Thetis setup.cs:24202 [v2.10.3.13] chkAdjustGridMinToNFRX1
+    m_adjustGridMinToNF->setToolTip(
+        QStringLiteral("When enabled, the lower grid boundary automatically follows the "
+                       "live noise floor estimate. The grid min is set to NF + offset."));
+    connect(m_adjustGridMinToNF, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setAdjustGridMinToNoiseFloor(on);  // calls scheduleSettingsSave internally
+        }
+        if (m_nfOffsetGridFollow) { m_nfOffsetGridFollow->setEnabled(on); }
+        if (m_maintainNFAdjustDelta) { m_maintainNFAdjustDelta->setEnabled(on); }
+    });
+    nfForm->addRow(QString(), m_adjustGridMinToNF);
+
+    m_nfOffsetGridFollow = new QSpinBox(nfGroup);
+    m_nfOffsetGridFollow->setRange(-60, 60);
+    m_nfOffsetGridFollow->setValue(0);
+    m_nfOffsetGridFollow->setSuffix(QStringLiteral(" dB"));
+    m_nfOffsetGridFollow->setEnabled(false);
+    // From Thetis console.cs:46035-46040 [v2.10.3.13] _RX1NFoffsetGridFollow = 5f.
+    // NereusSDR: range -60..+60, default 0. Offset is added to NF estimate.
+    m_nfOffsetGridFollow->setToolTip(
+        QStringLiteral("Offset added to the noise floor estimate to compute the grid min. "
+                       "Use a negative value to place the grid min below the noise floor. "
+                       "(Thetis default is -5 dB below NF; equivalent here as offset -5.)"));
+    connect(m_nfOffsetGridFollow, qOverload<int>(&QSpinBox::valueChanged),
+            this, [this](int db) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setNFOffsetGridFollow(db);  // calls scheduleSettingsSave internally
+        }
+    });
+    nfForm->addRow(QStringLiteral("NF offset:"), m_nfOffsetGridFollow);
+
+    m_maintainNFAdjustDelta = new QCheckBox(
+        QStringLiteral("Maintain grid range (move max with min)"), nfGroup);
+    m_maintainNFAdjustDelta->setEnabled(false);
+    // From Thetis console.cs:46085 [v2.10.3.13] _maintainNFAdjustDeltaRX1.
+    m_maintainNFAdjustDelta->setToolTip(
+        QStringLiteral("When enabled, the grid max is also moved so the dB range stays "
+                       "constant as the grid min tracks the noise floor."));
+    connect(m_maintainNFAdjustDelta, &QCheckBox::toggled, this, [this](bool on) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setMaintainNFAdjustDelta(on);  // calls scheduleSettingsSave internally
+        }
+    });
+    nfForm->addRow(QString(), m_maintainNFAdjustDelta);
+
+    contentLayout()->addWidget(nfGroup);
+
+    // --- Task 2.9: Copy waterfall thresholds → spectrum min/max ---
+    // Reverse direction of Task 2.8's Copy spectrum min/max → waterfall.
+    auto* copyGroup = new QGroupBox(QStringLiteral("Copy"), this);
+    auto* copyForm  = new QFormLayout(copyGroup);
+    copyForm->setSpacing(6);
+
+    m_copyWfToSpecBtn = new QPushButton(
+        QStringLiteral("Copy waterfall thresholds → spectrum min/max"), copyGroup);
+    m_copyWfToSpecBtn->setToolTip(
+        QStringLiteral("Copies the current waterfall High Threshold and Low Threshold "
+                       "into the spectrum dB max and dB min for the current band."));
+    connect(m_copyWfToSpecBtn, &QPushButton::clicked, this, [this]() {
+        auto* sw = model() ? model()->spectrumWidget() : nullptr;
+        if (!sw) { return; }
+        // Waterfall high → spectrum top (refLevel); waterfall low → spectrum bottom.
+        const float wfHigh = sw->wfHighThreshold();
+        const float wfLow  = sw->wfLowThreshold();
+        // Apply to spectrum display range. setDbmRange() doesn't call save
+        // internally, so explicitly request a coalesced settings save.
+        sw->setDbmRange(wfLow, wfHigh);
+        sw->requestSettingsSave();
+        // Sync per-band grid spinboxes on this page to the new values.
+        if (auto* pan = firstPan(model())) {
+            pan->setPerBandDbMax(pan->band(), qRound(wfHigh));
+            pan->setPerBandDbMin(pan->band(), qRound(wfLow));
+            // Refresh spinbox displays without triggering extra pan writes.
+            if (m_dbMaxSpin) {
+                QSignalBlocker bmax(m_dbMaxSpin);
+                m_dbMaxSpin->setValue(qRound(wfHigh));
+            }
+            if (m_dbMinSpin) {
+                QSignalBlocker bmin(m_dbMinSpin);
+                m_dbMinSpin->setValue(qRound(wfLow));
+            }
+        }
+    });
+    copyForm->addRow(QString(), m_copyWfToSpecBtn);
+
+    contentLayout()->addWidget(copyGroup);
+
     contentLayout()->addStretch();
+
+    // Sync enabled-state of NF sub-controls on construction after loadFromRenderer().
+    // (loadFromRenderer runs before buildUI in the constructor, so the controls
+    // don't exist yet when loadFromRenderer fires — re-apply the enabled gate here.)
+    // Done via a post-construction deferred call: Qt will execute it after the
+    // constructor returns, by which time loadFromRenderer has set m_adjustGridMinToNF.
+    QTimer::singleShot(0, this, [this]() {
+        bool nfOn = m_adjustGridMinToNF && m_adjustGridMinToNF->isChecked();
+        if (m_nfOffsetGridFollow) { m_nfOffsetGridFollow->setEnabled(nfOn); }
+        if (m_maintainNFAdjustDelta) { m_maintainNFAdjustDelta->setEnabled(nfOn); }
+    });
 }
 
 // ---------------------------------------------------------------------------

@@ -581,6 +581,42 @@ public:
     void setShowNoiseFloorPosition(OverlayPosition pos);
     OverlayPosition showNoiseFloorPosition() const { return m_noiseFloorPosition; }
 
+    // ---- NF-aware grid (Task 2.9) ----
+    // When enabled, the grid lower bound auto-tracks the live noise floor
+    // estimate delivered via onNoiseFloorChanged(). Ported from Thetis
+    // console.cs:46074-46086 [v2.10.3.13] GridMinFollowsNFRX1 / tmrAutoAGC_Tick.
+    // RX1 scope dropped; NereusSDR applies as a global panadapter default
+    // with per-pan override via ContainerSettings dialog (3G-6 pattern).
+    // From Thetis setup.cs:24202-24213 [v2.10.3.13]
+    // — RX1 scope dropped; NereusSDR applies as global panadapter default
+    //   with per-pan override via ContainerSettings dialog (3G-6 pattern).
+    void setAdjustGridMinToNoiseFloor(bool on);
+    bool adjustGridMinToNoiseFloor() const { return m_adjustGridMinToNF; }
+
+    // Offset added to the NF estimate to compute the new grid min.
+    // From Thetis console.cs:46035 _RX1NFoffsetGridFollow = 5f [v2.10.3.13]
+    // — NereusSDR uses a range of -60..+60 with default 0 (see design 2E).
+    //   Thetis subtracts the offset (setPoint = nf - offset) with default +5;
+    //   NereusSDR adds the offset (proposedMin = nf + offset) with default 0,
+    //   preserving equivalent semantics when the user enters a negative value.
+    void setNFOffsetGridFollow(int db);
+    int  nfOffsetGridFollow() const { return m_nfOffsetGridFollow; }
+
+    // When true, move grid max by the same delta to preserve the dB range.
+    // From Thetis console.cs:46085 _maintainNFAdjustDeltaRX1 [v2.10.3.13].
+    void setMaintainNFAdjustDelta(bool on);
+    bool maintainNFAdjustDelta() const { return m_maintainNFAdjustDelta; }
+
+    // Accessors for the current grid min/max in dBm (derived from
+    // m_refLevel / m_dynamicRange). Read back by tests and GridScalesPage.
+    int gridMin() const { return qRound(m_refLevel - m_dynamicRange); }
+    int gridMax() const { return qRound(m_refLevel); }
+
+    // Test helper: directly fire the NF-changed handler without needing
+    // a live ClarityController. Exposed in tests only; production code
+    // uses the onNoiseFloorChanged() slot via signal/slot connection.
+    void testApplyNoiseFloor(float nfDbm) { onNoiseFloorChanged(nfDbm); }
+
     // DispNormalize — normalize-to-1-Hz before display.
     // Routes to SetDisplayNormOneHz in the WDSP spectrum engine.
     // From Thetis specHPSDR.cs:291-293 [v2.10.3.13] NormOneHzPan property;
@@ -660,6 +696,10 @@ public slots:
     int  panIndex() const { return m_panIndex; }
     void loadSettings();
     void saveSettings();
+    // Public coalesced-save trigger. Used by setup pages that call setDbmRange()
+    // directly (which has no internal save) and need to ensure the new range
+    // is persisted (e.g. Task 2.9 Copy button, per-band NF priming).
+    void requestSettingsSave() { scheduleSettingsSave(); }
 
     // ---- VFO / filter overlay ----
     void setVfoFrequency(double hz);
@@ -687,6 +727,11 @@ public slots:
     // Feed a new FFT frame. binsDbm are dBm values, one per frequency bin.
     // Called from the main thread after FFTEngine delivers the frame.
     void updateSpectrum(int receiverId, const QVector<float>& binsDbm);
+
+    // NF-aware grid slot — wired to ClarityController::noiseFloorChanged in MainWindow.
+    // From Thetis console.cs:46074-46086 [v2.10.3.13] tmrAutoAGC_Tick NF grid block.
+    // NereusSDR-original: global panadapter default, no RX1/RX2 split.
+    void onNoiseFloorChanged(float nfDbm);
 
     // ── Waterfall scrollback (sub-epic E) ─────────────────────────────────
     // Reset the rewind ring buffer back to empty + live state. Public so
@@ -1033,6 +1078,14 @@ private:
     // NereusSDR defaults off so the overlay is opt-in rather than on by default)
     bool            m_showNoiseFloor{false};
     OverlayPosition m_noiseFloorPosition{OverlayPosition::BottomLeft};
+
+    // ---- NF-aware grid (Task 2.9) ----
+    // From Thetis console.cs:46025-46085 [v2.10.3.13] GridMinFollowsNFRX1,
+    // _RX1NFoffsetGridFollow, _maintainNFAdjustDeltaRX1.
+    // NereusSDR-original: applied as global default; RX1-scope dropped.
+    bool m_adjustGridMinToNF{false};
+    int  m_nfOffsetGridFollow{0};    // dB offset added to NF estimate (default 0)
+    bool m_maintainNFAdjustDelta{false};
 
     // From Thetis specHPSDR.cs:325 [v2.10.3.13] NormOneHzPan
     bool m_dispNormalize{false};
