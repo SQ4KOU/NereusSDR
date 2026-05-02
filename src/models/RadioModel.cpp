@@ -267,6 +267,7 @@ warren@wpratt.com
 #include <cmath>
 
 #include <QDateTime>
+#include <QEventLoop>
 #include <QMetaObject>
 #include <QStandardPaths>
 #include <QThread>
@@ -1428,6 +1429,29 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         qCInfo(lcDsp) << "WDSP ready — RX channel 0 active, audio started";
     }, Qt::SingleShotConnection);
     m_wdspEngine->initialize(configDir);
+
+    // WDSP wisdom now ALWAYS runs on a worker thread (WdspEngine::initialize
+    // dropped its sync fast path so the user gets a progress dialog whenever
+    // FFTW regenerates plans).  But the rest of this function — TX channel
+    // creation at line ~1452, the SingleShot lambda above that creates the
+    // RX channel, etc. — was written against the old sync contract where
+    // m_initialized was true by the time initialize() returned.
+    //
+    // Block here while the wisdom worker finishes, pumping the Qt event loop
+    // so the MainWindow wisdom progress dialog (connected to wisdomProgress)
+    // renders and updates.  The dialog is Qt::ApplicationModal (see
+    // MainWindow.cpp:600) so other windows are blocked from interaction
+    // during the wait — no re-entrant Connect-clicks or similar.
+    if (!m_wdspEngine->isInitialized()) {
+        QEventLoop wisdomLoop;
+        QMetaObject::Connection waitConn = QObject::connect(
+            m_wdspEngine, &WdspEngine::initializedChanged,
+            &wisdomLoop, [&wisdomLoop](bool ok) {
+                if (ok) wisdomLoop.quit();
+            });
+        wisdomLoop.exec();
+        QObject::disconnect(waitConn);
+    }
 
     // Factory-create the connection (no parent — will be moved to thread)
     auto conn = RadioConnection::create(info);
