@@ -68,6 +68,6 @@ extern void setSize_cbl (CBL a, int size);
 
 // RXA Properties
 
-extern __declspec (dllexport) void SetRXACBLRun(int channel, int setit);
+extern void SetRXACBLRun(int channel, int setit);
 
 #endif

@@ -87,10 +87,10 @@ extern void setSize_fmsq (FMSQ a, int size);
 
 // RXA Properties
 
-extern __declspec (dllexport) void SetRXAFMSQThreshold (int channel, double threshold);
+extern void SetRXAFMSQThreshold (int channel, double threshold);
 
-extern __declspec (dllexport) void SetRXAFMSQNC (int channel, int nc);
+extern void SetRXAFMSQNC (int channel, int nc);
 
-extern __declspec (dllexport) void SetRXAFMSQMP (int channel, int mp);
+extern void SetRXAFMSQMP (int channel, int mp);
 
 #endif

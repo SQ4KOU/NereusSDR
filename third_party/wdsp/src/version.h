@@ -9,5 +9,5 @@ MW0LGE
 #include "../Console/Versions.cs"
 #endif
 
-__declspec (dllexport) int GetCMVersion();
+int GetCMVersion();
 

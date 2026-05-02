@@ -119,7 +119,7 @@ extern void setSamplerate_snba (SNBA a, int rate);
 
 extern void setSize_snba (SNBA a, int size);
 
-__declspec (dllexport) void SetRXASNBAOutputBandwidth (int channel, double flow, double fhigh);
+void SetRXASNBAOutputBandwidth (int channel, double flow, double fhigh);
 
 typedef struct _bpsnba
 {
@@ -169,8 +169,8 @@ extern void xbpsnbaout (BPSNBA a, int position);
 
 extern void recalc_bpsnba_filter (BPSNBA a, int update);
 
-__declspec (dllexport) void RXABPSNBASetNC (int channel, int nc);
+void RXABPSNBASetNC (int channel, int nc);
 
-__declspec (dllexport) void RXABPSNBASetMP (int channel, int mp);
+void RXABPSNBASetMP (int channel, int mp);
 
 #endif
