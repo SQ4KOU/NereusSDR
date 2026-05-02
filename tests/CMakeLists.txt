@@ -327,6 +327,15 @@ nereus_add_test(tst_band_change_recursion_guard)
 # ── Step attenuator / ADC overload detection ─────────────────────────────
 nereus_add_test(tst_step_attenuator_controller)
 
+# ── BoardCapabilities flag-wiring (P1 full-parity §4) ────────────────────
+# Verifies populated-but-previously-unconsumed BoardCapabilities flags now
+# affect runtime behaviour:
+#   §4.1 hasStepAttenuatorCal — gates AutoAttMode::Adaptive selection
+#                                (silent-coerce to Classic when false)
+#   §4.2 hasSidetoneGenerator  — reserved
+#   §4.3 hasPennyLane          — reserved
+nereus_add_test(tst_board_capability_flag_wiring)
+
 # ── Issue #118: band-button auto-mode ────────────────────────────────────
 nereus_add_test(tst_band_from_name)
 nereus_add_test(tst_slice_has_settings_for)
