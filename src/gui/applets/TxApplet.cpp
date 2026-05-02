@@ -318,6 +318,43 @@ void TxApplet::buildUI()
         vbox->addLayout(row);
     }
 
+    // ── Button row: TUNE + MOX (50% each) ──────────────────────────────────
+    // Positioned above VOX+MON for action-button prominence
+    // (docs/superpowers/plans/2026-05-01-ui-polish-right-panel.md §Task 5).
+    // ATU + MEM removed (ATU phase, no plan yet; MEM = channel-memory phase).
+    // MOX: red active (#cc2222 bg, #ff4444 border, white text)
+    // TUNE: red active when tuning, text becomes "TUNING..."
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(2);
+
+        const QString btnStyle = Style::buttonBaseStyle()
+            + QStringLiteral("QPushButton { padding: 2px; }");
+        const QString redChecked = Style::redCheckedStyle();
+
+        m_tuneBtn = new QPushButton(QStringLiteral("TUNE"), this);
+        m_tuneBtn->setCheckable(true);
+        m_tuneBtn->setFixedHeight(22);
+        m_tuneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_tuneBtn->setStyleSheet(btnStyle + redChecked);
+        m_tuneBtn->setEnabled(true);  // Phase 3M-1a H.3: wired
+        m_tuneBtn->setAccessibleName(QStringLiteral("Tune carrier"));
+        m_tuneBtn->setToolTip(QStringLiteral("Enable TUNE carrier (single-tone CW)"));
+        row->addWidget(m_tuneBtn, 1);
+
+        m_moxBtn = new QPushButton(QStringLiteral("MOX"), this);
+        m_moxBtn->setCheckable(true);
+        m_moxBtn->setFixedHeight(22);
+        m_moxBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_moxBtn->setStyleSheet(btnStyle + redChecked);
+        m_moxBtn->setEnabled(true);  // Phase 3M-1a H.3: wired
+        m_moxBtn->setAccessibleName(QStringLiteral("MOX transmit"));
+        m_moxBtn->setToolTip(QStringLiteral("Manual transmit (MOX)"));
+        row->addWidget(m_moxBtn, 1);
+
+        vbox->addLayout(row);
+    }
+
     // ── 4b. VOX toggle button ─────────────────────────────────────────────────
     // Phase 3M-1b J.2: below Tune Power slider.
     // Checkable: green border when active (greenCheckedStyle()).
@@ -480,41 +517,6 @@ void TxApplet::buildUI()
         // Right-click → modeless TxCfcDialog (mirrors EQ button pattern).
         m_cfcBtn->setContextMenuPolicy(Qt::CustomContextMenu);
         row->addWidget(m_cfcBtn, 1);
-
-        vbox->addLayout(row);
-    }
-
-    // ── Button row: TUNE + MOX (50% each) ──────────────────────────────────
-    // ATU + MEM removed (ATU phase, no plan yet; MEM = channel-memory phase).
-    // MOX: red active (#cc2222 bg, #ff4444 border, white text)
-    // TUNE: red active when tuning, text becomes "TUNING..."
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(2);
-
-        const QString btnStyle = Style::buttonBaseStyle()
-            + QStringLiteral("QPushButton { padding: 2px; }");
-        const QString redChecked = Style::redCheckedStyle();
-
-        m_tuneBtn = new QPushButton(QStringLiteral("TUNE"), this);
-        m_tuneBtn->setCheckable(true);
-        m_tuneBtn->setFixedHeight(22);
-        m_tuneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_tuneBtn->setStyleSheet(btnStyle + redChecked);
-        m_tuneBtn->setEnabled(true);  // Phase 3M-1a H.3: wired
-        m_tuneBtn->setAccessibleName(QStringLiteral("Tune carrier"));
-        m_tuneBtn->setToolTip(QStringLiteral("Enable TUNE carrier (single-tone CW)"));
-        row->addWidget(m_tuneBtn, 1);
-
-        m_moxBtn = new QPushButton(QStringLiteral("MOX"), this);
-        m_moxBtn->setCheckable(true);
-        m_moxBtn->setFixedHeight(22);
-        m_moxBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_moxBtn->setStyleSheet(btnStyle + redChecked);
-        m_moxBtn->setEnabled(true);  // Phase 3M-1a H.3: wired
-        m_moxBtn->setAccessibleName(QStringLiteral("MOX transmit"));
-        m_moxBtn->setToolTip(QStringLiteral("Manual transmit (MOX)"));
-        row->addWidget(m_moxBtn, 1);
 
         vbox->addLayout(row);
     }
