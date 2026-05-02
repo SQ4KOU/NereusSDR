@@ -251,8 +251,6 @@ warren@wpratt.com
 #include "WdspEngine.h"
 #include "wdsp_api.h"
 
-#include <QElapsedTimer>
-
 #ifdef HAVE_DFNR
 #include "DeepFilterFilter.h"
 #endif

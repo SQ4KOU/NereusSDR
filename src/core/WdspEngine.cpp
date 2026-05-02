@@ -369,6 +369,11 @@ RxChannel* WdspEngine::rxChannel(int channelId) const
 
 qint64 WdspEngine::rebuildRxChannel(int channelId, const ChannelConfig& cfg)
 {
+    if (!m_initialized) {
+        qCWarning(lcDsp) << "rebuildRxChannel: WDSP not initialized";
+        return -1;
+    }
+
     auto it = m_rxChannels.find(channelId);
     if (it == m_rxChannels.end()) {
         qCWarning(lcDsp) << "rebuildRxChannel: channel" << channelId << "not found";
@@ -443,9 +448,10 @@ qint64 WdspEngine::rebuildRxChannel(int channelId, const ChannelConfig& cfg)
     // Reapply captured DSP state to the new channel.
     ptr->applyState(state);
 
+    const qint64 elapsedMs = timer.elapsed();
     qCInfo(lcDsp) << "Rebuild: RX channel" << channelId << "ready in"
-                  << timer.elapsed() << "ms";
-    return timer.elapsed();
+                  << elapsedMs << "ms";
+    return elapsedMs;
 }
 
 // ---------------------------------------------------------------------------
