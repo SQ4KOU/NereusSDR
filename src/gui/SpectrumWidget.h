@@ -160,6 +160,7 @@ mw0lge@grange-lane.co.uk
 #include <QPropertyAnimation>
 
 #include "spectrum/ActivePeakHoldTrace.h"
+#include "spectrum/PeakBlobDetector.h"
 
 #include <utility>
 
@@ -397,6 +398,25 @@ public:
     int    activePeakHoldDurationMs() const { return m_activePeakHold.durationMs(); }
     double activePeakHoldDropDbPerSec() const { return m_activePeakHold.dropDbPerSec(); }
     bool   activePeakHoldFill()        const { return m_activePeakHold.fill(); }
+
+    // ---- Peak Blobs (Task 2.6) ----
+    // Top-N peak markers with labeled ellipses. Rendered as a separate QPainter
+    // pass in drawSpectrum() after the Active Peak Hold trace.
+    // Defaults mirror Thetis Display.cs:4395-4714 [v2.10.3.13].
+    void setPeakBlobsEnabled(bool e);
+    void setPeakBlobsCount(int n);
+    void setPeakBlobsInsideFilterOnly(bool i);
+    void setPeakBlobsHoldEnabled(bool h);
+    void setPeakBlobsHoldMs(int ms);
+    void setPeakBlobsHoldDrop(bool d);
+    void setPeakBlobsFallDbPerSec(double r);
+    void setPeakBlobColor(const QColor& c);
+    void setPeakBlobTextColor(const QColor& c);
+
+    bool   peakBlobsEnabled()     const { return m_peakBlobs.enabled(); }
+    int    peakBlobsCount()       const { return m_peakBlobs.count(); }
+    QColor peakBlobColor()        const { return m_peakBlobColor; }
+    QColor peakBlobTextColor()    const { return m_peakBlobTextColor; }
 
     // Trace fill (under-the-curve shaded region).
     void setPanFillEnabled(bool on);
@@ -729,6 +749,12 @@ private:
     // the live trace line. From Thetis display.cs m_bActivePeakHold [v2.10.3.13].
     void paintActivePeakHoldTrace(QPainter& p, const QRect& specRect,
                                   int firstBin, int lastBin, float xStep);
+    // Peak Blobs render pass (Task 2.6). Draws labeled ellipses at the top-N
+    // local maxima. Called from drawSpectrum() after the live trace line so
+    // the blobs sit on top of all spectrum content.
+    // From Thetis display.cs:5453-5508 [v2.10.3.13].
+    void paintPeakBlobs(QPainter& p, const QRect& specRect,
+                        int firstBin, int lastBin, float xStep);
     void drawWaterfall(QPainter& p, const QRect& wfRect);
     // HIGH SWR / PA safety overlay — ported from display.cs:4183-4201 [v2.10.3.13]
     void paintHighSwrOverlay(QPainter& p);
@@ -893,6 +919,14 @@ private:
     // above; rendered as a distinct pass per Q14.1.
     // From Thetis display.cs m_bActivePeakHold [v2.10.3.13].
     ActivePeakHoldTrace m_activePeakHold;
+
+    // Peak Blobs detector (Task 2.6). Top-N local maxima with hold/decay.
+    // From Thetis display.cs:4395-4714, 5453-5508 [v2.10.3.13].
+    PeakBlobDetector m_peakBlobs;
+    // From Thetis display.cs:8434 [v2.10.3.13] m_bDX2_PeakBlob = Color.OrangeRed
+    QColor m_peakBlobColor{0xFF, 0x45, 0x00, 0xFF};
+    // From Thetis display.cs:8435 [v2.10.3.13] m_bDX2_PeakBlobText = Color.Chartreuse
+    QColor m_peakBlobTextColor{0x7F, 0xFF, 0x00, 0xFF};
 
     float       m_lineWidth{1.5f};
     bool        m_gradientEnabled{false};

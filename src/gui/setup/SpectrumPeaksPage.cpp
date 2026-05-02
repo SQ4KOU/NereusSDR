@@ -158,19 +158,31 @@ SpectrumPeaksPage::SpectrumPeaksPage(RadioModel* model, QWidget* parent)
     m_blobTextColor->setColor(QColor::fromString(
         s.value(QStringLiteral("DisplayPeakBlobTextColor"), QStringLiteral("#7FFF00FF")).toString()));
 
-    // ── Apply persisted values to SpectrumWidget (Task 2.5) ──────────────────
-    // Push loaded settings into the widget so Active Peak Hold is active on
-    // first launch even before any control is touched.
+    // ── Apply persisted values to SpectrumWidget (Tasks 2.5 + 2.6) ─────────
+    // Push loaded settings into the widget so Active Peak Hold and Peak Blobs
+    // are active on first launch even before any control is touched.
     // Note: 'model' here is the constructor parameter (RadioModel*), not the
     // SetupPage::model() accessor (which is the same pointer but we must
     // disambiguate from the parameter name in this scope).
     if (model != nullptr) {
         if (auto* sw = model->spectrumWidget()) {
+            // Active Peak Hold
             sw->setActivePeakHoldEnabled(m_aphEnable->isChecked());
             sw->setActivePeakHoldDurationMs(m_aphDurationMs->value());
             sw->setActivePeakHoldDropDbPerSec(static_cast<double>(m_aphDropDbPerSec->value()));
             sw->setActivePeakHoldFill(m_aphFill->isChecked());
             sw->setActivePeakHoldOnTx(m_aphOnTx->isChecked());
+
+            // Peak Blobs
+            sw->setPeakBlobsEnabled(m_blobEnable->isChecked());
+            sw->setPeakBlobsCount(m_blobCount->value());
+            sw->setPeakBlobsInsideFilterOnly(m_blobInsideFilter->isChecked());
+            sw->setPeakBlobsHoldEnabled(m_blobHoldEnable->isChecked());
+            sw->setPeakBlobsHoldMs(m_blobHoldMs->value());
+            sw->setPeakBlobsHoldDrop(m_blobHoldDrop->isChecked());
+            sw->setPeakBlobsFallDbPerSec(static_cast<double>(m_blobFallDbPerSec->value()));
+            sw->setPeakBlobColor(m_blobColor->color());
+            sw->setPeakBlobTextColor(m_blobTextColor->color());
         }
     }
 
@@ -229,47 +241,76 @@ SpectrumPeaksPage::SpectrumPeaksPage(RadioModel* model, QWidget* parent)
         }
     });
 
-    connect(m_blobEnable, &QCheckBox::toggled, this, [](bool v) {
+    connect(m_blobEnable, &QCheckBox::toggled, this, [this](bool v) {
         AppSettings::instance().setValue(
             QStringLiteral("DisplayPeakBlobsEnabled"),
             v ? QStringLiteral("True") : QStringLiteral("False"));
+        if (auto* m = SetupPage::model()) {
+            if (auto* sw = m->spectrumWidget()) { sw->setPeakBlobsEnabled(v); }
+        }
     });
-    connect(m_blobCount, qOverload<int>(&QSpinBox::valueChanged), this, [](int v) {
+    connect(m_blobCount, qOverload<int>(&QSpinBox::valueChanged), this, [this](int v) {
         AppSettings::instance().setValue(
             QStringLiteral("DisplayPeakBlobsCount"), QString::number(v));
+        if (auto* m = SetupPage::model()) {
+            if (auto* sw = m->spectrumWidget()) { sw->setPeakBlobsCount(v); }
+        }
     });
-    connect(m_blobInsideFilter, &QCheckBox::toggled, this, [](bool v) {
+    connect(m_blobInsideFilter, &QCheckBox::toggled, this, [this](bool v) {
         AppSettings::instance().setValue(
             QStringLiteral("DisplayPeakBlobsInsideFilterOnly"),
             v ? QStringLiteral("True") : QStringLiteral("False"));
+        if (auto* m = SetupPage::model()) {
+            if (auto* sw = m->spectrumWidget()) { sw->setPeakBlobsInsideFilterOnly(v); }
+        }
     });
-    connect(m_blobHoldEnable, &QCheckBox::toggled, this, [](bool v) {
+    connect(m_blobHoldEnable, &QCheckBox::toggled, this, [this](bool v) {
         AppSettings::instance().setValue(
             QStringLiteral("DisplayPeakBlobsHoldEnabled"),
             v ? QStringLiteral("True") : QStringLiteral("False"));
+        if (auto* m = SetupPage::model()) {
+            if (auto* sw = m->spectrumWidget()) { sw->setPeakBlobsHoldEnabled(v); }
+        }
     });
-    connect(m_blobHoldMs, qOverload<int>(&QSpinBox::valueChanged), this, [](int v) {
+    connect(m_blobHoldMs, qOverload<int>(&QSpinBox::valueChanged), this, [this](int v) {
         AppSettings::instance().setValue(
             QStringLiteral("DisplayPeakBlobsHoldMs"), QString::number(v));
+        if (auto* m = SetupPage::model()) {
+            if (auto* sw = m->spectrumWidget()) { sw->setPeakBlobsHoldMs(v); }
+        }
     });
-    connect(m_blobHoldDrop, &QCheckBox::toggled, this, [](bool v) {
+    connect(m_blobHoldDrop, &QCheckBox::toggled, this, [this](bool v) {
         AppSettings::instance().setValue(
             QStringLiteral("DisplayPeakBlobsHoldDrop"),
             v ? QStringLiteral("True") : QStringLiteral("False"));
+        if (auto* m = SetupPage::model()) {
+            if (auto* sw = m->spectrumWidget()) { sw->setPeakBlobsHoldDrop(v); }
+        }
     });
-    connect(m_blobFallDbPerSec, qOverload<int>(&QSpinBox::valueChanged), this, [](int v) {
+    connect(m_blobFallDbPerSec, qOverload<int>(&QSpinBox::valueChanged), this, [this](int v) {
         AppSettings::instance().setValue(
             QStringLiteral("DisplayPeakBlobsFallDbPerSec"), QString::number(v));
+        if (auto* m = SetupPage::model()) {
+            if (auto* sw = m->spectrumWidget()) {
+                sw->setPeakBlobsFallDbPerSec(static_cast<double>(v));
+            }
+        }
     });
-    connect(m_blobColor, &ColorSwatchButton::colorChanged, this, [](const QColor& c) {
+    connect(m_blobColor, &ColorSwatchButton::colorChanged, this, [this](const QColor& c) {
         AppSettings::instance().setValue(
             QStringLiteral("DisplayPeakBlobColor"),
             ColorSwatchButton::colorToHex(c));
+        if (auto* m = SetupPage::model()) {
+            if (auto* sw = m->spectrumWidget()) { sw->setPeakBlobColor(c); }
+        }
     });
-    connect(m_blobTextColor, &ColorSwatchButton::colorChanged, this, [](const QColor& c) {
+    connect(m_blobTextColor, &ColorSwatchButton::colorChanged, this, [this](const QColor& c) {
         AppSettings::instance().setValue(
             QStringLiteral("DisplayPeakBlobTextColor"),
             ColorSwatchButton::colorToHex(c));
+        if (auto* m = SetupPage::model()) {
+            if (auto* sw = m->spectrumWidget()) { sw->setPeakBlobTextColor(c); }
+        }
     });
 }
 

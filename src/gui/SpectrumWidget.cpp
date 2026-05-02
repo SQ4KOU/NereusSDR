@@ -1088,6 +1088,57 @@ void SpectrumWidget::setActivePeakHoldTxActive(bool tx)
     m_activePeakHold.setTxActive(tx);
 }
 
+// ---- Peak Blobs (Task 2.6) ----
+// From Thetis display.cs:4395-4714 [v2.10.3.13]
+
+void SpectrumWidget::setPeakBlobsEnabled(bool e)
+{
+    m_peakBlobs.setEnabled(e);
+    update();
+}
+
+void SpectrumWidget::setPeakBlobsCount(int n)
+{
+    m_peakBlobs.setCount(n);
+}
+
+void SpectrumWidget::setPeakBlobsInsideFilterOnly(bool i)
+{
+    m_peakBlobs.setInsideFilterOnly(i);
+}
+
+void SpectrumWidget::setPeakBlobsHoldEnabled(bool h)
+{
+    m_peakBlobs.setHoldEnabled(h);
+}
+
+void SpectrumWidget::setPeakBlobsHoldMs(int ms)
+{
+    m_peakBlobs.setHoldMs(ms);
+}
+
+void SpectrumWidget::setPeakBlobsHoldDrop(bool d)
+{
+    m_peakBlobs.setHoldDrop(d);
+}
+
+void SpectrumWidget::setPeakBlobsFallDbPerSec(double r)
+{
+    m_peakBlobs.setFallDbPerSec(r);
+}
+
+void SpectrumWidget::setPeakBlobColor(const QColor& c)
+{
+    m_peakBlobColor = c;
+    update();
+}
+
+void SpectrumWidget::setPeakBlobTextColor(const QColor& c)
+{
+    m_peakBlobTextColor = c;
+    update();
+}
+
 void SpectrumWidget::setPanFillEnabled(bool on)
 {
     if (m_panFill == on) {
@@ -1676,6 +1727,9 @@ void SpectrumWidget::updateSpectrum(int receiverId, const QVector<float>& binsDb
     // Active Peak Hold trace update (Task 2.5).
     // Resize if bin count changed, then feed the smoothed bins and tick decay.
     // From Thetis display.cs m_bActivePeakHold [v2.10.3.13].
+    const int intervalMs = m_displayTimer.interval();
+    const int fps = (intervalMs > 0) ? qMax(1, 1000 / intervalMs) : 30;
+
     if (m_activePeakHold.enabled()) {
         if (m_activePeakHold.size() != m_smoothed.size()) {
             m_activePeakHold.resize(m_smoothed.size());
@@ -1683,9 +1737,30 @@ void SpectrumWidget::updateSpectrum(int receiverId, const QVector<float>& binsDb
         m_activePeakHold.update(m_smoothed);
         // Tick decay using the current display FPS (derived from timer interval).
         // 33 ms default → ~30 fps; avoid division by zero.
-        const int intervalMs = m_displayTimer.interval();
-        const int fps = (intervalMs > 0) ? qMax(1, 1000 / intervalMs) : 30;
         m_activePeakHold.tickFrame(fps);
+    }
+
+    // Peak Blob detector update (Task 2.6).
+    // Compute filter passband bin range from m_vfoHz + m_filterLowHz/HighHz,
+    // then convert Hz offsets to bin indices using DDC center + sample rate.
+    // From Thetis display.cs:5453-5508 [v2.10.3.13].
+    if (m_peakBlobs.enabled() && !m_smoothed.isEmpty()) {
+        int filterLowBin  = 0;
+        int filterHighBin = m_smoothed.size() - 1;
+        if (m_peakBlobs.insideOnly() && m_sampleRateHz > 0.0) {
+            const double binWidth = m_sampleRateHz / m_smoothed.size();
+            const double fftLowHz = m_ddcCenterHz - m_sampleRateHz / 2.0;
+            const double loHz = m_vfoHz + m_filterLowHz;
+            const double hiHz = m_vfoHz + m_filterHighHz;
+            filterLowBin  = qBound(0,
+                static_cast<int>(std::floor((loHz - fftLowHz) / binWidth)),
+                m_smoothed.size() - 1);
+            filterHighBin = qBound(0,
+                static_cast<int>(std::ceil((hiHz - fftLowHz) / binWidth)),
+                m_smoothed.size() - 1);
+        }
+        m_peakBlobs.update(m_smoothed, filterLowBin, filterHighBin);
+        m_peakBlobs.tickFrame(fps, intervalMs > 0 ? intervalMs : 33);
     }
 
     // Push unsmoothed data to waterfall (sharper signal edges)
@@ -2028,6 +2103,12 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
     p.setPen(tracePen);
     p.drawPolyline(points.data(), count);
 
+    // Peak Blobs render pass (Task 2.6) — drawn on top of the live trace line.
+    // From Thetis display.cs:5453-5508 [v2.10.3.13].
+    if (m_peakBlobs.enabled() && !m_peakBlobs.blobs().isEmpty()) {
+        paintPeakBlobs(p, specRect, firstBin, lastBin, xStep);
+    }
+
     // Zero line (0 dBm) — Phase 3G-8 commit 5 (G7).
     if (m_showZeroLine) {
         const int zy = dbmToY(0.0f, specRect);
@@ -2099,6 +2180,54 @@ void SpectrumWidget::paintActivePeakHoldTrace(QPainter& p, const QRect& specRect
     peakPen.setStyle(Qt::DashLine);
     p.setPen(peakPen);
     p.drawPolyline(peakPoints.data(), count);
+}
+
+// ---- Peak Blobs render pass (Task 2.6) ----
+// Ported from Thetis display.cs:5507-5508 [v2.10.3.13] — ellipse + text labels
+// at each local-maximum blob position. Called from drawSpectrum() after the
+// live trace line so blobs sit on top of all other spectrum content.
+void SpectrumWidget::paintPeakBlobs(QPainter& p, const QRect& specRect,
+                                    int firstBin, int lastBin, float xStep)
+{
+    Q_UNUSED(xStep)  // x is computed from bin→Hz→pixel via hzToX for accuracy
+
+    if (m_smoothed.isEmpty() || m_sampleRateHz <= 0.0) {
+        return;
+    }
+
+    const int  nBins      = m_smoothed.size();
+    const double binWidth  = m_sampleRateHz / nBins;
+    const double fftLowHz  = m_ddcCenterHz - m_sampleRateHz / 2.0;
+
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    for (const auto& blob : m_peakBlobs.blobs()) {
+        // Guard: only render blobs whose bin falls within the visible range.
+        if (blob.binIndex < firstBin || blob.binIndex > lastBin) {
+            continue;
+        }
+
+        // Bin center frequency → pixel X.
+        const double freqHz = fftLowHz + (blob.binIndex + 0.5) * binWidth;
+        const int x = hzToX(freqHz, specRect);
+
+        // dBm value → pixel Y.
+        // From Thetis display.cs:5507 [v2.10.3.13] — position at the peak dBm.
+        const int y = dbmToY(blob.max_dBm, specRect);
+
+        // Draw ellipse — From Thetis display.cs:5507 [v2.10.3.13]
+        //   g.DrawEllipse(m_bDX2_PeakBlob, ...)
+        p.setPen(QPen(m_peakBlobColor, 2));
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(QPoint(x, y), 4, 4);
+
+        // Draw dBm text label — From Thetis display.cs:5508 [v2.10.3.13]
+        //   g.DrawString(entry.max_dBm.ToString("F1"), ..., m_bDX2_PeakBlobText, ...)
+        p.setPen(m_peakBlobTextColor);
+        p.drawText(x + 6, y - 6, QString::number(static_cast<double>(blob.max_dBm), 'f', 1));
+    }
+
+    p.setRenderHint(QPainter::Antialiasing, false);
 }
 
 // ---- Waterfall drawing ----

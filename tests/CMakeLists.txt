@@ -2652,6 +2652,15 @@ nereus_add_test(tst_averaging_modes)
 #   Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure data logic).
 nereus_add_test(tst_active_peak_hold)
 
+# ── Task 2.6: PeakBlobDetector — top-N peak detector with hold/decay ────────
+# Verifies: default construction, disabled clears blobs, empty bins, top-N
+# selection + sort, count-clamp, inside-filter constraint, hold merge,
+# post-hold decay, hold-disabled path, and the Thetis verbatim decay formula
+# (entry.max_dBm -= m_dBmPerSecondPeakBlobFall / (float)m_nFps;
+#  Display.cs:5483 [v2.10.3.13]).
+# Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure data logic).
+nereus_add_test(tst_peak_blob_detector)
+
 # ── Task 2.3: Spectrum Defaults overlay group + decimation wire-up ──────────
 # Tests for SpectrumWidget overlay setters (ShowMHzOnCursor / ShowBinWidth /
 # ShowNoiseFloor / DispNormalize / ShowPeakValueOverlay) and FFTEngine
