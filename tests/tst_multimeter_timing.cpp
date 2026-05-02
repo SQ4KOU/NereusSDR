@@ -1,3 +1,5 @@
+// no-port-check: inline Thetis cite on line 43 records default-value origin only;
+//                this test is independently implemented — not a port of MeterManager.cs.
 // =================================================================
 // tests/tst_multimeter_timing.cpp  (NereusSDR)
 // =================================================================

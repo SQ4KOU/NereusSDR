@@ -288,6 +288,12 @@ public:
     // creating MeterPoller (see MainWindow.cpp construction block).
     class MeterPoller* meterPoller() const { return m_meterPoller; }
     void setMeterPoller(class MeterPoller* p) { m_meterPoller = p; }
+    // Task 3.2: ContainerManager view hook so MultimeterPage can broadcast
+    // unit-mode changes to all live MeterItems via forEachMeterItem().
+    // Non-owning; MainWindow calls setContainerManager() after creating
+    // ContainerManager (same pattern as setMeterPoller above).
+    class ContainerManager* containerManager() const { return m_containerManager; }
+    void setContainerManager(class ContainerManager* cm) { m_containerManager = cm; }
     QTimer* autoAgcTimer() const { return m_autoAgcTimer; }
 
     // 3M-1a G.1: expose MoxController so MainWindow can wire
@@ -930,7 +936,9 @@ private:
     QTimer* m_autoAgcTimer{nullptr};
     NoiseFloorTracker* m_noiseFloorTracker{nullptr};
     // Task 3.1 view hook — non-owning, set by MainWindow.
-    class MeterPoller*  m_meterPoller{nullptr};
+    class MeterPoller*      m_meterPoller{nullptr};
+    // Task 3.2 view hook — non-owning, set by MainWindow.
+    class ContainerManager* m_containerManager{nullptr};
 
     // ── 3M-1a G.4: TUN state save/restore ───────────────────────────────────
     // Fields that preserve pre-TUN state across the setTune(true)/setTune(false)

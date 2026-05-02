@@ -804,6 +804,9 @@ void MainWindow::buildUI()
     // apply live interval + averaging-window changes without a MainWindow
     // round-trip.  Non-owning; RadioModel stores the pointer only.
     m_radioModel->setMeterPoller(m_meterPoller);
+    // Task 3.2: expose ContainerManager via RadioModel so MultimeterPage
+    // can broadcast unit-mode changes to all live MeterItems.
+    m_radioModel->setContainerManager(m_containerManager);
     connect(m_containerManager, &ContainerManager::meterReadyForPolling,
             this, [this](MeterWidget* meter) {
         if (!meter || !m_meterPoller) { return; }

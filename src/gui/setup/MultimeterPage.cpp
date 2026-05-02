@@ -83,7 +83,9 @@
 #include "MultimeterPage.h"
 #include "core/AppSettings.h"
 #include "models/RadioModel.h"
+#include "gui/meters/MeterItem.h"
 #include "gui/meters/MeterPoller.h"
+#include "gui/containers/ContainerManager.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -230,6 +232,26 @@ void MultimeterPage::loadSettings()
         p->setIntervalMs(m_delayMs->value());
         p->setAverageWindow(m_avgWindow->value());
     }
+
+    // Task 3.2: apply persisted unit-mode + show-decimal to all live
+    // MeterItems at setup-page open time.  connectSignals() hasn't run yet
+    // so we drive the broadcast directly here.  ContainerManager may not be
+    // populated at first launch (items are created later), but on subsequent
+    // opens of the Setup dialog this carries the persisted choice into items
+    // that were created during the session.
+    if (auto* cm = model() ? model()->containerManager() : nullptr) {
+        const QString unitStr = m_unitMode->currentText();
+        const MeterItem::MeterUnit unit = (unitStr == QStringLiteral("S"))
+            ? MeterItem::MeterUnit::S
+            : (unitStr == QStringLiteral("uV"))
+                ? MeterItem::MeterUnit::uV
+                : MeterItem::MeterUnit::dBm;
+        const bool dec = m_showDecimal->isChecked();
+        cm->forEachMeterItem([unit, dec](MeterItem* item) {
+            item->setUnitMode(unit);
+            item->setShowDecimal(dec);
+        });
+    }
 }
 
 void MultimeterPage::connectSignals()
@@ -264,18 +286,37 @@ void MultimeterPage::connectSignals()
     connect(m_digitalDelayMs, QOverload<int>::of(&QSpinBox::valueChanged), this,
         [](int v) { AppSettings::instance().setValue(QStringLiteral("MultimeterDigitalDelayMs"), v); });
 
-    // Show decimal — persists only (TextItem / SignalTextItem consume in Task 3.2)
+    // Show decimal — persists + broadcasts to all bound MeterItems (Task 3.2)
     connect(m_showDecimal, &QCheckBox::toggled, this,
-        [](bool v) {
+        [this](bool v) {
             AppSettings::instance().setValue(
                 QStringLiteral("MultimeterShowDecimal"),
                 v ? QStringLiteral("True") : QStringLiteral("False"));
+            // Fan-out to all live MeterItem instances
+            if (auto* cm = model() ? model()->containerManager() : nullptr) {
+                cm->forEachMeterItem([v](MeterItem* item) {
+                    item->setShowDecimal(v);
+                });
+            }
         });
 
-    // Unit mode — persists only (MeterItem subclass fan-out in Task 3.2)
+    // Unit mode — persists + broadcasts to all bound MeterItems (Task 3.2)
+    // Fan-out: MultimeterPage combo → ContainerManager::forEachMeterItem →
+    // MeterItem::setUnitMode() on every live item.  SignalTextItem overrides
+    // setUnitMode() to also sync its own per-item Units enum.
     connect(m_unitMode, &QComboBox::currentTextChanged, this,
-        [](const QString& v) {
+        [this](const QString& v) {
             AppSettings::instance().setValue(QStringLiteral("MultimeterUnitMode"), v);
+            const MeterItem::MeterUnit unit = (v == QStringLiteral("S"))
+                ? MeterItem::MeterUnit::S
+                : (v == QStringLiteral("uV"))
+                    ? MeterItem::MeterUnit::uV
+                    : MeterItem::MeterUnit::dBm;
+            if (auto* cm = model() ? model()->containerManager() : nullptr) {
+                cm->forEachMeterItem([unit](MeterItem* item) {
+                    item->setUnitMode(unit);
+                });
+            }
         });
 
     // Signal history enable — persists only (HistoryGraphItem in Task 3.3)

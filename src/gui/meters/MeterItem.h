@@ -143,6 +143,22 @@ public:
         OverlayDynamic   // Pipeline 3 (per-update)
     };
 
+    // Unit mode for signal-level readouts. Corresponds to Thetis
+    // radSReading / radDBM / radUV radio buttons (console.cs / display.cs).
+    // Fan-out controlled by MultimeterPage → MultimeterUnitMode AppSettings key.
+    enum class MeterUnit { S, dBm, uV };
+
+    // Format a signal-level dBm value in the requested unit.
+    // S: IARU S-meter scale — S9 = -73 dBm at HF, 6 dB per S unit.
+    // dBm: plain numeric string (with or without decimal).
+    // uV: microvolts at 50Ω derived from dBm.
+    static QString formatValue(float dBm, MeterUnit unit, bool decimal = true);
+
+    virtual void setUnitMode(MeterUnit u)   { m_unitMode = u; }
+    MeterUnit unitMode() const              { return m_unitMode; }
+    void setShowDecimal(bool d)             { m_showDecimal = d; }
+    bool showDecimal() const                { return m_showDecimal; }
+
     explicit MeterItem(QObject* parent = nullptr) : QObject(parent) {}
     ~MeterItem() override = default;
 
@@ -306,6 +322,13 @@ protected:
     // instead of the WDSP-backed bindingId() path.
     QUuid   m_mmioGuid;
     QString m_mmioVariable;
+
+    // Task 3.2 — unit-mode fan-out (S / dBm / µV).
+    // Set by MultimeterPage → ContainerManager::forEachMeterItem broadcast.
+    // Subclasses that display signal-level readouts consult m_unitMode /
+    // m_showDecimal in their paint() text-format path.
+    MeterUnit m_unitMode{MeterUnit::dBm};
+    bool      m_showDecimal{true};
 };
 
 // ---------------------------------------------------------------------------

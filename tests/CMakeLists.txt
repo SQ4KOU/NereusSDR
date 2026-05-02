@@ -2707,3 +2707,12 @@ nereus_add_test(tst_spectrum_overlays)
 #   interval_and_window_are_independent: both setters coexist without clobbering
 #   Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure accessor logic).
 nereus_add_test(tst_multimeter_timing)
+
+# ── Task 3.2: MeterItem unit-mode fan-out (S / dBm / µV) ────────────────────
+# formatValue() static helper for all three units.
+# S-meter boundary values: S0 = -127 dBm, S9 = -73 dBm, S9+30 = -43 dBm.
+# µV formula: V = sqrt(P * 50 Ω), P = 10^(dBm/10) * 1e-3 W.  -73 dBm ≈ 50 µV.
+# setUnitMode / unitMode / setShowDecimal / showDecimal round-trips.
+# SignalTextItem::setUnitMode() overrides base to sync per-item Units enum.
+# Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure data logic).
+nereus_add_test(tst_multimeter_unit_conversion)
