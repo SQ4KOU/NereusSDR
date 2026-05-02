@@ -29,6 +29,7 @@ private slots:
     void page_constructs_with_PaCalibrationGroup_child();
     void group_populated_from_controller_on_construction();
     void page_repopulates_on_paCalProfileChanged();
+    void persistence_round_trip_through_page();
 };
 
 // ---------------------------------------------------------------------------
@@ -85,6 +86,69 @@ void TstPaWattMeterPage::page_repopulates_on_paCalProfileChanged()
     QCOMPARE(grp->spinBoxCountForTest(), 10);
     QCOMPARE(grp->labelTextForTest(1), QString("1 W"));
     QCOMPARE(grp->labelTextForTest(10), QString("10 W"));
+}
+
+// ---------------------------------------------------------------------------
+// IA reshape Phase 7 — end-to-end persistence integration test.
+//
+// Proves that PA cal-point persistence survives the page-host migration
+// (Phase 3A moved PaCalibrationGroup from CalibrationTab → PaWattMeterPage):
+//
+//   1. Construct a model + page tied to a test MAC.
+//   2. Mutate a cal-point spinbox via the test seam (simulating user edit).
+//   3. controller.save() — writes hardware/<mac>/paCalibration/calPointN.
+//   4. Destroy page + controller (simulates dialog close).
+//   5. Construct a fresh model + controller, set same MAC, load().
+//   6. Construct a fresh page; verify the spinbox shows the saved value.
+//
+// If this passes, the spinbox→controller→AppSettings→controller→spinbox
+// path is intact end-to-end through the new page host. Existing layered
+// tests (tst_calibration_controller_pa_cal::persistence_roundTrip,
+// tst_pa_calibration_group::spinbox_change_writes_to_controller) cover
+// the model and widget independently; this catches glue regressions.
+// ---------------------------------------------------------------------------
+void TstPaWattMeterPage::persistence_round_trip_through_page()
+{
+    const QString testMac = QStringLiteral("AA:BB:CC:DD:EE:42");
+
+    // --- Phase A: open page, mutate spinbox, save ---
+    {
+        RadioModel model;
+        auto& ctrl = model.calibrationControllerMutable();
+        ctrl.setMacAddress(testMac);
+        ctrl.setPaCalProfile(PaCalProfile::defaults(PaCalBoardClass::Anan100));
+
+        PaWattMeterPage page(&model);
+        auto* grp = page.findChild<PaCalibrationGroup*>();
+        QVERIFY(grp != nullptr);
+        QCOMPARE(grp->spinBoxCountForTest(), 10);
+
+        // Simulate user editing cal point 5 to a non-default value.
+        grp->setSpinValueForTest(5, 47.5);
+        QCOMPARE(ctrl.paCalProfile().watts[5], 47.5f);
+
+        ctrl.save();
+    }
+
+    // --- Phase B: fresh model + page, same MAC, load ---
+    {
+        RadioModel model;
+        auto& ctrl = model.calibrationControllerMutable();
+        ctrl.setMacAddress(testMac);
+        ctrl.load();
+
+        PaWattMeterPage page(&model);
+        auto* grp = page.findChild<PaCalibrationGroup*>();
+        QVERIFY(grp != nullptr);
+
+        // After load + page construction, the spinbox should show the
+        // persisted value, not the factory default (50.0 for Anan100 idx 5).
+        QCOMPARE(grp->spinValueForTest(5), 47.5);
+        QCOMPARE(ctrl.paCalProfile().watts[5], 47.5f);
+        // Untouched indices retain factory defaults.
+        QCOMPARE(grp->spinValueForTest(1), 10.0);
+        QCOMPARE(grp->spinValueForTest(10), 100.0);
+    }
 }
 
 QTEST_MAIN(TstPaWattMeterPage)
