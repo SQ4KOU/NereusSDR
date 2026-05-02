@@ -454,7 +454,11 @@ void SpectrumWidget::loadSettings()
         m_waterfallAveraging = static_cast<SpectrumAveraging>(
             qBound(0, wfAvgNewRaw, static_cast<int>(SpectrumAveraging::Count) - 1));
     }
-    m_peakHoldDelayMs  = readInt(QStringLiteral("DisplayPeakHoldDelayMs"), 2000);
+    // DisplayPeakHoldDelayMs is a retired key (v0.3.0 migration removes it).
+    // The legacy static peak hold uses DisplayPeakHoldResetMs (renamed to avoid
+    // collision with the retired key and with DisplayActivePeakHoldDurationMs
+    // which belongs to the new ActivePeakHold system introduced in Task 2.5).
+    m_peakHoldDelayMs  = readInt(QStringLiteral("DisplayPeakHoldResetMs"), 2000);
     m_lineWidth        = readFloat(QStringLiteral("DisplayLineWidth"), 1.5f);
     m_dbmCalOffset     = readFloat(QStringLiteral("DisplayCalOffset"), 0.0f);
     const bool peakOn = s.value(settingsKey(QStringLiteral("DisplayPeakHoldEnabled"), m_panIndex),
@@ -621,7 +625,10 @@ void SpectrumWidget::saveSettings()
               m_ctunEnabled ? QStringLiteral("True") : QStringLiteral("False"));
 
     // Phase 3G-8 commit 3: spectrum renderer state.
-    writeInt(QStringLiteral("DisplayAverageMode"), static_cast<int>(m_averageMode));
+    // Note: DisplayAverageMode is a retired key (v0.3.0 migration removes it).
+    // Do NOT write it here; the canonical save is the Detector + Averaging split
+    // keys below (Task 2.1). Reading is still done above as a legacy fallback for
+    // settings files that have not yet been migrated.
     writeFloat(QStringLiteral("DisplayAverageAlpha"), m_averageAlpha);
 
     // Task 2.1: Detector + Averaging split keys.
@@ -629,7 +636,7 @@ void SpectrumWidget::saveSettings()
     writeInt(QStringLiteral("DisplaySpectrumAveraging"), static_cast<int>(m_spectrumAveraging));
     writeInt(QStringLiteral("DisplayWaterfallDetector"),  static_cast<int>(m_waterfallDetector));
     writeInt(QStringLiteral("DisplayWaterfallAveraging"), static_cast<int>(m_waterfallAveraging));
-    writeInt(QStringLiteral("DisplayPeakHoldDelayMs"), m_peakHoldDelayMs);
+    writeInt(QStringLiteral("DisplayPeakHoldResetMs"), m_peakHoldDelayMs); // renamed from retired DisplayPeakHoldDelayMs
     writeFloat(QStringLiteral("DisplayLineWidth"), m_lineWidth);
     writeFloat(QStringLiteral("DisplayCalOffset"), m_dbmCalOffset);
     s.setValue(settingsKey(QStringLiteral("DisplayPeakHoldEnabled"), m_panIndex),
@@ -1319,7 +1326,7 @@ void SpectrumWidget::setMaintainNFAdjustDelta(bool on)
 
 // From Thetis console.cs:46074-46086 [v2.10.3.13] tmrAutoAGC_Tick NF grid block:
 //   float setPoint = _lastRX1NoiseFloor - _RX1NFoffsetGridFollow;
-//   float fDelta = (float)Math.Abs(SetupForm.DisplayGridMax - SetupForm.DisplayGridMin);
+//   float fDelta = (float)Math.Abs(SetupForm.DisplayGridMax - SetupForm.DisplayGridMin); // abs incase //MW0LGE [2.9.0.7]
 //   if (Math.Abs(SetupForm.DisplayGridMin - setPoint) >= 2)
 //   {
 //       SetupForm.DisplayGridMin = setPoint;
@@ -1333,7 +1340,8 @@ void SpectrumWidget::onNoiseFloorChanged(float nfDbm)
 
     const float oldMin = m_refLevel - m_dynamicRange;
     const float oldMax = m_refLevel;
-    const float delta  = std::abs(oldMax - oldMin);  // From Thetis: abs() guards against inverted range
+    // abs incase //MW0LGE [2.9.0.7] [original inline comment from console.cs:46081]
+    const float delta  = std::abs(oldMax - oldMin);
 
     const float proposedMin = nfDbm + static_cast<float>(m_nfOffsetGridFollow);
 

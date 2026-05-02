@@ -1789,6 +1789,7 @@ void GridScalesPage::buildUI()
         QStringLiteral("Maintain grid range (move max with min)"), nfGroup);
     m_maintainNFAdjustDelta->setEnabled(false);
     // From Thetis console.cs:46085 [v2.10.3.13] _maintainNFAdjustDeltaRX1.
+    // Range delta uses std::abs() guard: abs incase //MW0LGE [2.9.0.7] [original inline comment from console.cs:46081]
     m_maintainNFAdjustDelta->setToolTip(
         QStringLiteral("When enabled, the grid max is also moved so the dB range stays "
                        "constant as the grid min tracks the noise floor."));

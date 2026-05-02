@@ -604,6 +604,7 @@ public:
 
     // When true, move grid max by the same delta to preserve the dB range.
     // From Thetis console.cs:46085 _maintainNFAdjustDeltaRX1 [v2.10.3.13].
+    // NF grid range guard: abs incase //MW0LGE [2.9.0.7] [original inline comment from console.cs:46081]
     void setMaintainNFAdjustDelta(bool on);
     bool maintainNFAdjustDelta() const { return m_maintainNFAdjustDelta; }
 
@@ -730,6 +731,7 @@ public slots:
 
     // NF-aware grid slot — wired to ClarityController::noiseFloorChanged in MainWindow.
     // From Thetis console.cs:46074-46086 [v2.10.3.13] tmrAutoAGC_Tick NF grid block.
+    // Range delta uses std::abs() — abs incase //MW0LGE [2.9.0.7] [original inline comment from console.cs:46081]
     // NereusSDR-original: global panadapter default, no RX1/RX2 split.
     void onNoiseFloorChanged(float nfDbm);
 
@@ -973,6 +975,8 @@ private:
 
     // Peak Blobs detector (Task 2.6). Top-N local maxima with hold/decay.
     // From Thetis display.cs:4395-4714, 5453-5508 [v2.10.3.13].
+    // Inline attribution from ported range — display.cs:4829 //MW0LGE [2.10.1.0] fix issue #137;
+    // display.cs:4972 //[2.10.3.9]MW0LGE raw grid control option; display.cs:5109 //MW0LGE not used.
     PeakBlobDetector m_peakBlobs;
     // From Thetis display.cs:8434 [v2.10.3.13] m_bDX2_PeakBlob = Color.OrangeRed
     QColor m_peakBlobColor{0xFF, 0x45, 0x00, 0xFF};
@@ -1082,6 +1086,7 @@ private:
     // ---- NF-aware grid (Task 2.9) ----
     // From Thetis console.cs:46025-46085 [v2.10.3.13] GridMinFollowsNFRX1,
     // _RX1NFoffsetGridFollow, _maintainNFAdjustDeltaRX1.
+    // abs() guard on fDelta: abs incase //MW0LGE [2.9.0.7] [original inline comment from console.cs:46081]
     // NereusSDR-original: applied as global default; RX1-scope dropped.
     bool m_adjustGridMinToNF{false};
     int  m_nfOffsetGridFollow{0};    // dB offset added to NF estimate (default 0)

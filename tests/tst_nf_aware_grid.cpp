@@ -33,6 +33,7 @@ private slots:
     {
         // From Thetis console.cs:46080 [v2.10.3.13]:
         //   float setPoint = _lastRX1NoiseFloor - _RX1NFoffsetGridFollow;
+        //   float fDelta = (float)Math.Abs(...); // abs incase //MW0LGE [2.9.0.7] [console.cs:46081]
         // NereusSDR: proposedMin = nf + offset (addition semantics, offset -10
         // is equivalent to Thetis offset +10 with subtraction).
         SpectrumWidget w;
@@ -53,6 +54,7 @@ private slots:
     {
         // From Thetis console.cs:46085 [v2.10.3.13]:
         //   if (_maintainNFAdjustDeltaRX1) SetupForm.DisplayGridMax = setPoint + fDelta;
+        // fDelta guarded with abs incase //MW0LGE [2.9.0.7] [original inline comment from console.cs:46081]
         SpectrumWidget w;
         // Range: max=-30, min=-130, delta=100 dB.
         w.setDbmRange(-130.0f, -30.0f);
@@ -84,6 +86,7 @@ private slots:
     {
         // From Thetis console.cs:46082 [v2.10.3.13]:
         //   if (Math.Abs(SetupForm.DisplayGridMin - setPoint) >= 2)
+        // fDelta for range: abs incase //MW0LGE [2.9.0.7] [original inline comment from console.cs:46081]
         // Changes < 2 dB from current grid min are ignored.
         SpectrumWidget w;
         // Start with min=-110 (so refLevel - dynamicRange = -110).
