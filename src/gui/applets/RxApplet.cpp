@@ -624,17 +624,27 @@ void RxApplet::buildUi()
         rightCol->addLayout(row);
     }
 
-    // Controls 9 + 10: AGC combo + AGC threshold slider
+    // Controls 9 + 10: AGC combo + AGC threshold slider (Option B layout).
     // From AetherSDR RxApplet.cpp lines 738-768
-    // AGC-T container moved to a dedicated full-width row below (bench feedback
-    // Plan 3 review — shared row left slider only ~40 px wide, unusable).
+    // Bench feedback after 39dbdd2: AGC-T slider was still cramped even with
+    // its own row because auxiliary widgets (label 40 + value 32 + AUTO 30 =
+    // ~102 px fixed) consumed most of the right-column width. Meanwhile the
+    // AGC mode combo "Med" sat in its own row with empty space to the right.
+    // Option B: combine AGC combo + AGC-T header into one header row; slider
+    // gets its own full-container-width row immediately below.
     {
-        auto* agcRow = new QHBoxLayout;
-        agcRow->setSpacing(4);
+        m_agcTContainer = new QWidget(this);
+        auto* containerLayout = new QVBoxLayout(m_agcTContainer);
+        containerLayout->setContentsMargins(0, 0, 0, 0);
+        containerLayout->setSpacing(2);
 
-        // Control 9: AGC combo (fixedWidth 52), items: Off/Slow/Med/Fast
+        // Header row: AGC mode combo | AGC-T label | stretch | dB value | AUTO
+        auto* headerRow = new QHBoxLayout;
+        headerRow->setSpacing(4);
+
+        // Control 9: AGC combo (fixedWidth 52), items: Off/Long/Slow/Med/Fast
         // Tier 1 wired → SliceModel::setAgcMode()
-        m_agcCombo = new QComboBox(this);
+        m_agcCombo = new QComboBox(m_agcTContainer);
         m_agcCombo->addItem(QStringLiteral("Off"),  static_cast<int>(AGCMode::Off));
         m_agcCombo->addItem(QStringLiteral("Long"), static_cast<int>(AGCMode::Long));
         m_agcCombo->addItem(QStringLiteral("Slow"), static_cast<int>(AGCMode::Slow));
@@ -652,46 +662,21 @@ void RxApplet::buildUi()
                 m_agcCombo->itemData(idx).toInt());
             m_slice->setAgcMode(mode);
         });
-        agcRow->addWidget(m_agcCombo);
-        rightCol->addLayout(agcRow);
-    }
+        headerRow->addWidget(m_agcCombo);
 
-    // Control 10: AGC threshold slider — full-width row (moved from agcRow).
-    // Wrapped in container with AUTO badge, dB readout, info sub-line
-    // (matches VfoWidget Task 6). Previously shared with AGC combo, leaving
-    // the slider only ~40 px wide. Now takes the row formerly used by the
-    // Mute button (removed §B4 bench review), getting the full applet width.
-    {
-        m_agcTContainer = new QWidget(this);
-        auto* containerLayout = new QVBoxLayout(m_agcTContainer);
-        containerLayout->setContentsMargins(0, 0, 0, 0);
-        containerLayout->setSpacing(1);
-
-        // First row: AGC-T label + slider + dB value + AUTO badge
-        auto* sliderRow = new QHBoxLayout;
+        // Control 10 header: "AGC-T" label
         m_agcTLabelWidget = new QLabel(QStringLiteral("AGC-T"), m_agcTContainer);
         m_agcTLabelWidget->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(Style::kLabelMid));
         m_agcTLabelWidget->setFixedWidth(40);
-        sliderRow->addWidget(m_agcTLabelWidget);
+        headerRow->addWidget(m_agcTLabelWidget);
 
-        // From Thetis Project Files/Source/Console/console.cs:45977 — agc_thresh_point
-        m_agcTSlider = new QSlider(Qt::Horizontal, m_agcTContainer);
-        m_agcTSlider->setRange(-160, 0);
-        m_agcTSlider->setValue(-20);
-        m_agcTSlider->setFixedHeight(18);
-        m_agcTSlider->setStyleSheet(
-            QStringLiteral("QSlider::groove:horizontal { background: %1; height: 6px; border-radius: 3px; }"
-                            "QSlider::handle:horizontal { background: %2; width: 12px; margin: -3px 0; border-radius: 6px; }")
-                .arg(Style::kButtonBg, Style::kAccent));
-        // From Thetis console.resx:8397 — ptbRF.ToolTip (ptbRF is the AGC-T slider)
-        m_agcTSlider->setToolTip(QStringLiteral("AGC Max Gain - Operates similarly to traditional RF Gain. Right click AUTO based on noise floor."));
-        sliderRow->addWidget(m_agcTSlider);
+        headerRow->addStretch(1);
 
         m_agcTLabel = new QLabel(QStringLiteral("-20"), m_agcTContainer);
         m_agcTLabel->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(Style::kTextPrimary));
         m_agcTLabel->setFixedWidth(32);
         m_agcTLabel->setAlignment(Qt::AlignRight);
-        sliderRow->addWidget(m_agcTLabel);
+        headerRow->addWidget(m_agcTLabel);
 
         // §A2 one-offs for AUTO badge (inactive state):
         // #1a1a1a = near-black bg (darker than kDisabledBg #1a1a2a — no blue tint).
@@ -711,9 +696,23 @@ void RxApplet::buildUi()
         connect(m_agcAutoLabel, &QPushButton::clicked, this, [this]() {
             emit autoAgcToggled(!m_autoAgcActive);
         });
-        sliderRow->addWidget(m_agcAutoLabel);
+        headerRow->addWidget(m_agcAutoLabel);
 
-        containerLayout->addLayout(sliderRow);
+        containerLayout->addLayout(headerRow);
+
+        // Slider row: full container width — no sibling widgets.
+        // From Thetis Project Files/Source/Console/console.cs:45977 — agc_thresh_point
+        m_agcTSlider = new QSlider(Qt::Horizontal, m_agcTContainer);
+        m_agcTSlider->setRange(-160, 0);
+        m_agcTSlider->setValue(-20);
+        m_agcTSlider->setFixedHeight(18);
+        m_agcTSlider->setStyleSheet(
+            QStringLiteral("QSlider::groove:horizontal { background: %1; height: 6px; border-radius: 3px; }"
+                            "QSlider::handle:horizontal { background: %2; width: 12px; margin: -3px 0; border-radius: 6px; }")
+                .arg(Style::kButtonBg, Style::kAccent));
+        // From Thetis console.resx:8397 — ptbRF.ToolTip (ptbRF is the AGC-T slider)
+        m_agcTSlider->setToolTip(QStringLiteral("AGC Max Gain - Operates similarly to traditional RF Gain. Right click AUTO based on noise floor."));
+        containerLayout->addWidget(m_agcTSlider);
 
         // Second row: info sub-line (hidden by default)
         m_agcInfoLabel = new QLabel(m_agcTContainer);
