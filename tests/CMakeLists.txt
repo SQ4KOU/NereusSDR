@@ -169,6 +169,26 @@ target_compile_definitions(tst_p1_puresignal_run_setter PRIVATE NEREUS_BUILD_TES
 nereus_add_test(tst_radio_model_puresignal_run_wiring)
 target_compile_definitions(tst_radio_model_puresignal_run_wiring PRIVATE NEREUS_BUILD_TESTS)
 
+# ── P1 full-parity Task 3.1: PaCalProfile model + interpolation ──────────────
+# Tests the per-board PA calibration model: paCalBoardClassFor() mapping for
+# every HPSDRModel value, defaults() factory tables for each board class, and
+# interpolate() matching Thetis console.cs:6691-6768 CalibratedPAPower +
+# PowerKernel [v2.10.3.13]:
+#   - Board-class mapping: 17 cases covering every HPSDRModel + sentinels.
+#   - defaults(): Anan10/Anan100/Anan8000/HermesLite cal tables match the
+#     ud{10,100,200}PA{N}W spinbox label values + None returns all zeros.
+#   - interpolate(0): zero-passthrough across all classes.
+#   - interpolate identity: default tables round-trip raw → raw at cal points
+#     and between cal points.
+#   - interpolate at calibrated points: user cal tables recover the spinbox
+#     LABEL value (Thetis PowerKernel returns idx*interval, not table[idx]).
+#   - interpolate between calibrated points: piecewise-linear.
+#   - interpolate above max: linear extrapolation of the last segment.
+#   - interpolate None class: identity passthrough.
+#   - interpolate below zero: identity on default tables.
+#   - interpolate degenerate zero-span: defensive guard, no crash.
+nereus_add_test(tst_pa_cal_profile)
+
 # ── Phase 3P-A P1CodecAnvelinaPro3 bank 17 extra OC (Task 7) ──
 nereus_add_test(tst_p1_codec_anvelina_pro3)
 
