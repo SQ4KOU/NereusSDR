@@ -663,7 +663,6 @@ void TxApplet::buildUI()
         ).arg(Style::kTextInactive));
         m_swrProtLed->setAlignment(Qt::AlignCenter);
         m_swrProtLed->setAccessibleName(QStringLiteral("SWR protection indicator"));
-        NyiOverlay::markNyi(m_swrProtLed, QStringLiteral("Phase 3I-1"));
         insetLayout->addWidget(m_swrProtLed);
 
         row->addWidget(inset, 3); // ~60%
@@ -723,6 +722,26 @@ void TxApplet::wireControls()
         }
     });
     fwdGaugeRefreshTimer->start();
+
+    // ── SWR Prot LED ← SwrProtectionController::highSwrChanged ─────────────
+    // SwrProtectionController (Phase 3G-13) emits highSwrChanged(bool) when
+    // the radio's SWR-protection state changes. Light the LED amber when
+    // high-SWR protection is active; dim it when cleared.
+    {
+        auto updateSwrProtLed = [this](bool isHigh) {
+            if (!m_swrProtLed) { return; }
+            const QString color = isHigh ? QStringLiteral("#ffaa00")
+                                         : Style::kTextInactive;
+            m_swrProtLed->setStyleSheet(QStringLiteral(
+                "QLabel { color: %1; font-size: 9px; font-weight: bold; }"
+            ).arg(color));
+        };
+        connect(&m_model->swrProt(),
+                &safety::SwrProtectionController::highSwrChanged,
+                this, updateSwrProtLed);
+        // Initialise to current state.
+        updateSwrProtLed(m_model->swrProt().highSwr());
+    }
 
     // ── RF Power slider → TransmitModel::setPower(int) ──────────────────────
     // From Thetis chkMOX_CheckedChanged2 power flow [v2.10.3.13]:
