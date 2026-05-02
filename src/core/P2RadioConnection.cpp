@@ -1068,6 +1068,32 @@ void P2RadioConnection::setMicBias(bool on)
 }
 
 // ---------------------------------------------------------------------------
+// setLineInGain (Task 2.1 of P1 full-parity epic) — P2 path
+//
+// Bridges the new RadioConnection::setLineInGain virtual to P2's existing
+// m_mic.lineInGain field, which is already plumbed onto byte 51 of
+// CmdHighPriority (sendCmdTx() emits buf[51] = m_mic.lineInGain at the
+// 100 ms pacer tick).  Store, clamp to 5 bits, mirror into shared base
+// storage for cross-API consistency, and let the next high-priority frame
+// carry the new value.
+//
+// Source: Thetis ChannelMaster/network.c CmdHighPriority byte 51 — line_in_gain
+// (P2 mic struct already wired pre-this-task; this bridges the new virtual).
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setLineInGain(int gain)
+{
+    const int clamped = qBound(0, gain, 31);
+    if (m_mic.lineInGain == clamped) {
+        return;  // idempotent — 100 ms heartbeat covers any state drift
+    }
+    m_mic.lineInGain = clamped;
+    m_lineInGain = clamped;  // keep base storage in sync (debug visibility, no functional dependency)
+    if (m_running && m_socket) {
+        sendCmdTx();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // setMicPTT (3M-1b G.5)
 //
 // Enables or disables the hardware mic-jack PTT line (Orion/ANAN front-panel).

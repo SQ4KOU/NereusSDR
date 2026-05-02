@@ -29,6 +29,7 @@ public:
     void setLineIn(bool) override {}
     void setMicTipRing(bool) override {}
     void setMicBias(bool) override {}
+    void setLineInGain(int) override {}
     void setMicPTT(bool) override {}
     void setMicXlr(bool) override {}
     void setWatchdogEnabled(bool) override {}

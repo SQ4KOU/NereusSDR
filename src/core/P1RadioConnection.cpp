@@ -1392,6 +1392,38 @@ void P1RadioConnection::setMicBias(bool on)
 }
 
 // ---------------------------------------------------------------------------
+// setLineInGain (Task 2.1 of P1 full-parity epic)
+//
+// Updates m_lineInGain (shared base member) and arms m_forceBank11Next so
+// the new line-in-gain value lands on the wire within ≤1 frame of the call.
+// 5-bit field (0..31) — clamped at the API boundary.  Higher values produce
+// greater line-in attenuation per Thetis upstream semantic.
+//
+// Wire bytes: bank 11 (C0=0x14) C2 low 5 bits.  C2 also carries
+// puresignal_run at bit 6 (Task 2.5 plumbing); both bits OR into the same
+// codec C2 byte and never collide.
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:600 [v2.10.3.13]
+//   C2 = (prn->mic.line_in_gain & 0b00011111) | ((prn->puresignal_run & 1) << 6);
+//
+// Flush pattern mirrors setMicBias (Codex P2): m_forceBank11Next is set
+// BEFORE the idempotent guard so the bit lands on the wire within ≤1 frame.
+// Reuses m_forceBank11Next + captureBank11ForTest infrastructure from G.3.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setLineInGain(int gain)
+{
+    const int clamped = qBound(0, gain, 31);
+
+    // Codex P2: set flush flag BEFORE idempotent guard.
+    m_forceBank11Next = true;
+
+    if (m_lineInGain == clamped) {
+        return;  // idempotent — flush flag already set above
+    }
+    m_lineInGain = clamped;
+}
+
+// ---------------------------------------------------------------------------
 // setMicPTT (3M-1b G.5)
 //
 // Enables or disables the hardware mic-jack PTT line (Orion/ANAN front-panel).
@@ -1665,6 +1697,7 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.p1LineIn       = m_lineIn;
     ctx.p1MicTipRing   = m_micTipRing;
     ctx.p1MicBias      = m_micBias;     // 3M-1b G.4
+    ctx.p1LineInGain   = m_lineInGain;  // Task 2.1 of P1 full-parity epic
     ctx.p1MicPTT       = m_micPTT;      // 3M-1b G.5
     ctx.duplex         = m_duplex;
     ctx.diversity      = m_diversity;

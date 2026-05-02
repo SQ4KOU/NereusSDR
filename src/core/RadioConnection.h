@@ -290,6 +290,15 @@ public slots:
     /// (firmware ignores it).
     virtual void setMicBias(bool on) = 0;
 
+    /// Set mic line-in gain (0-31, 5 bits).  Maps to Thetis prn->mic.line_in_gain.
+    /// Source: Thetis ChannelMaster/networkproto1.c:600 [v2.10.3.13]
+    ///   C2 = (prn->mic.line_in_gain & 0b00011111) | ((prn->puresignal_run & 1) << 6);
+    /// P1: bank 11 C2 low 5 bits.
+    /// P2: byte 51 of CmdHighPriority (already wired pre-this-virtual via the
+    ///     P2 mic struct; the P2 override bridges this virtual to that path).
+    /// Default 0 = no line-in attenuation.
+    virtual void setLineInGain(int gain) = 0;
+
     /// Hardware mic-jack PTT enable (Orion/ANAN front-panel PTT).
     ///
     /// NereusSDR parameter convention: `enabled = true` means PTT is enabled
@@ -593,6 +602,14 @@ protected:
     // P2: emitted to transmit_specific_buffer[50] bit 4 (0x10).
     // From Thetis networkproto1.c:597 [v2.10.3.13]; deskhpsdr new_protocol.c:1496-1498 [@120188f].
     bool m_micBias{false};
+
+    // Shared state for setLineInGain (Task 2.1 of P1 full-parity epic).
+    // 5-bit field (0-31).  Default 0 = no line-in attenuation.
+    // P1: emitted to case 11 (C0=0x14) C2 low 5 bits via ctx.p1LineInGain.
+    // P2: bridged into m_mic.lineInGain → byte 51 of CmdHighPriority.
+    // From Thetis ChannelMaster/networkproto1.c:600 [v2.10.3.13]:
+    //   C2 = (prn->mic.line_in_gain & 0b00011111) | ((prn->puresignal_run & 1) << 6);
+    int m_lineInGain{0};
 
     // Shared state for setMicPTT (3M-1b G.5).
     // POLARITY INVERSION: m_micPTT=true means PTT is enabled (intuitive UI semantic).

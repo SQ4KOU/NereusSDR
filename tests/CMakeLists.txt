@@ -88,6 +88,26 @@ nereus_add_test(tst_p1_codec_standard_bank11_polarity)
 # on the wire — including frequency banks (1, 2, 3, 5-9).
 nereus_add_test(tst_p1_codec_standard_freq_bank_xmitbit)
 
+# ── P1 full-parity Task 2.1: P1RadioConnection::setLineInGain virtual ────────
+# 12 tests pin the line_in_gain field (bank 11 C2 low 5 bits, mask 0x1F) in
+# P1RadioConnection::setLineInGain():
+#   1.  Default state: C2 low 5 bits = 0 (m_lineInGain default 0).
+#   2.  setLineInGain(15) → C2 low 5 bits = 0x0F.
+#   3.  setLineInGain(31) → C2 low 5 bits = 0x1F (max).
+#   4.  setLineInGain(-5) → clamps to 0 (after first storing non-zero).
+#   5.  setLineInGain(50) → clamps to 31.
+#   6.  setLineInGain does NOT touch C2 bit 6 (puresignal_run cross-bit guard).
+#   7.  Bank 11 C0 address remains 0x14.
+#   8.  Round-trip: 0 → 23 → 0 produces correct bit values.
+#   9.  setLineInGain sets m_forceBank11Next (Codex P2 flush pattern).
+#  10.  Repeated same-value call still sets the flush flag.
+#  11.  Idempotency: setLineInGain(15) twice doesn't crash.
+#  12.  Codec path (HL2): C2 emits 0 unconditionally — documents intentional
+#       codec divergence (HL2 has no mic jack); flush flag still fires.
+# Source: Thetis ChannelMaster/networkproto1.c:600 [v2.10.3.13].
+nereus_add_test(tst_p1_line_in_gain_setter)
+target_compile_definitions(tst_p1_line_in_gain_setter PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3P-A P1CodecAnvelinaPro3 bank 17 extra OC (Task 7) ──
 nereus_add_test(tst_p1_codec_anvelina_pro3)
 
