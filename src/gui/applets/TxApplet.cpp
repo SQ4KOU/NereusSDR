@@ -484,8 +484,8 @@ void TxApplet::buildUI()
         vbox->addLayout(row);
     }
 
-    // ── Button row: TUNE + MOX + ATU + MEM (25% each) ─────────────────────
-    // Matches AetherSDR TxApplet.cpp:155–203 (single 4-button row)
+    // ── Button row: TUNE + MOX (50% each) ──────────────────────────────────
+    // ATU + MEM removed (ATU phase, no plan yet; MEM = channel-memory phase).
     // MOX: red active (#cc2222 bg, #ff4444 border, white text)
     // TUNE: red active when tuning, text becomes "TUNING..."
     {
@@ -516,28 +516,11 @@ void TxApplet::buildUI()
         m_moxBtn->setToolTip(QStringLiteral("Manual transmit (MOX)"));
         row->addWidget(m_moxBtn, 1);
 
-        m_atuBtn = new QPushButton(QStringLiteral("ATU"), this);
-        m_atuBtn->setCheckable(true);
-        m_atuBtn->setFixedHeight(22);
-        m_atuBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_atuBtn->setStyleSheet(btnStyle);
-        m_atuBtn->setAccessibleName(QStringLiteral("Antenna tuner"));
-        NyiOverlay::markNyi(m_atuBtn, QStringLiteral("Phase 3I-1"));
-        row->addWidget(m_atuBtn, 1);
-
-        m_memBtn = new QPushButton(QStringLiteral("MEM"), this);
-        m_memBtn->setCheckable(true);
-        m_memBtn->setFixedHeight(22);
-        m_memBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_memBtn->setStyleSheet(btnStyle);
-        m_memBtn->setAccessibleName(QStringLiteral("ATU memory"));
-        NyiOverlay::markNyi(m_memBtn, QStringLiteral("Phase 3I-1"));
-        row->addWidget(m_memBtn, 1);
-
         vbox->addLayout(row);
     }
 
-    // ── Profile combo row (50%) + tune mode combo (50%) ─────────────────────
+    // ── Profile combo row (full width) ──────────────────────────────────────
+    // Tune Mode combo removed (ATU phase, no plan yet).
     // (AetherSDR TxApplet.cpp:131–153)
     {
         auto* row = new QHBoxLayout;
@@ -560,16 +543,6 @@ void TxApplet::buildUI()
         // customContextMenuRequested instead of the default popup.
         m_profileCombo->setContextMenuPolicy(Qt::CustomContextMenu);
         row->addWidget(m_profileCombo, 1);
-
-        m_tuneModeCombo = new QComboBox(this);
-        m_tuneModeCombo->addItem(QStringLiteral("Auto"));
-        m_tuneModeCombo->addItem(QStringLiteral("Manual"));
-        m_tuneModeCombo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_tuneModeCombo->setFixedHeight(22);
-        applyComboStyle(m_tuneModeCombo);
-        m_tuneModeCombo->setAccessibleName(QStringLiteral("Tune mode"));
-        NyiOverlay::markNyi(m_tuneModeCombo, QStringLiteral("Phase 3I-1"));
-        row->addWidget(m_tuneModeCombo, 1);
 
         vbox->addLayout(row);
     }
@@ -615,31 +588,16 @@ void TxApplet::buildUI()
         NyiOverlay::markNyi(m_psaBtn, QStringLiteral("Phase 3M-4"));
         row->addWidget(m_psaBtn, 1);
 
-        m_dupBtn = new QPushButton(QStringLiteral("DUP"), this);
-        m_dupBtn->setCheckable(true);
-        m_dupBtn->setFixedHeight(22);
-        m_dupBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_dupBtn->setAccessibleName(QStringLiteral("Full duplex"));
-        NyiOverlay::markNyi(m_dupBtn, QStringLiteral("Phase 3M-3"));
-        row->addWidget(m_dupBtn, 1);
-
         vbox->addLayout(row);
     }
 
-    // ── APD/xPA row: xPA button + inset container ────────────────────────────
-    // Inset: fixedHeight 22, bg #0a0a18, border #1e2e3e  (AetherSDR TxApplet.cpp:224–253)
+    // ── SWR protection LED inset ─────────────────────────────────────────────
+    // xPA button removed (external-PA hardware-specific phase, no plan yet).
+    // SWR Prot LED now occupies its own full-width inset row.
+    // Inset: fixedHeight 22, bg #0a0a18, border #1e2e3e (AetherSDR TxApplet.cpp:224–253)
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
-
-        m_xpaBtn = new QPushButton(QStringLiteral("xPA"), this);
-        m_xpaBtn->setCheckable(true);
-        m_xpaBtn->setFixedHeight(22);
-        m_xpaBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_xpaBtn->setStyleSheet(Style::buttonBaseStyle() + Style::greenCheckedStyle());
-        m_xpaBtn->setAccessibleName(QStringLiteral("External PA indicator"));
-        NyiOverlay::markNyi(m_xpaBtn, QStringLiteral("Phase 3I-1"));
-        row->addWidget(m_xpaBtn, 2); // ~40%
 
         // Inset container for SWR protection LED (styled like AetherSDR atuInset)
         auto* inset = new QWidget(this);
@@ -665,7 +623,7 @@ void TxApplet::buildUI()
         m_swrProtLed->setAccessibleName(QStringLiteral("SWR protection indicator"));
         insetLayout->addWidget(m_swrProtLed);
 
-        row->addWidget(inset, 3); // ~60%
+        row->addWidget(inset, 1); // full width (xPA removed)
         vbox->addLayout(row);
     }
 

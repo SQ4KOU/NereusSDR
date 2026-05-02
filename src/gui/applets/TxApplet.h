@@ -300,24 +300,20 @@ private:
     QPushButton* m_moxBtn     = nullptr;
     // 6. TUNE
     QPushButton* m_tuneBtn    = nullptr;
-    // 7. ATU
-    QPushButton* m_atuBtn     = nullptr;
-    // 8. MEM
-    QPushButton* m_memBtn     = nullptr;
-    // 9. TX Profile combo
+    // 7. TX Profile combo
     QComboBox*   m_profileCombo = nullptr;
-    // 10. Tune mode combo
-    QComboBox*   m_tuneModeCombo = nullptr;
-    // 11. 2-Tone test
+    // 8. 2-Tone test
     QPushButton* m_twoToneBtn = nullptr;
-    // 12. PS-A
+    // 9. PS-A (hidden until 3M-4 PureSignal)
     QPushButton* m_psaBtn     = nullptr;
-    // 13. DUP (full duplex)
-    QPushButton* m_dupBtn     = nullptr;
-    // 14. xPA indicator
-    QPushButton* m_xpaBtn     = nullptr;
-    // 15. SWR protection LED
+    // 10. SWR protection LED (wired to SwrProtectionController::highSwrChanged)
     QLabel*      m_swrProtLed = nullptr;
+    // Removed NYI members (re-add when their phases ship):
+    //   m_atuBtn      — ATU phase (no plan yet)
+    //   m_memBtn      — channel-memory phase
+    //   m_tuneModeCombo — ATU phase (no plan yet)
+    //   m_dupBtn      — full-duplex audio routing phase
+    //   m_xpaBtn      — external-PA hardware-specific phase
 
     // Current band — used to resolve per-band tune power.
     // Updated by setCurrentBand() when PanadapterModel::bandChanged fires.
