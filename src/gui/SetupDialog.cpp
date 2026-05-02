@@ -319,7 +319,7 @@ void SetupDialog::buildTree()
     add(diagnostics, "Logs",               new LogsPage);
     add(diagnostics, "Signal Generator",   new DiagSignalGeneratorPage);
     add(diagnostics, "Hardware Tests",     new DiagHardwareTestsPage);
-    add(diagnostics, "Logging",            new DiagLoggingPage);
+    add(diagnostics, "Logging & Performance", new DiagLoggingPage);
 
     m_tree->expandAll();
 }
