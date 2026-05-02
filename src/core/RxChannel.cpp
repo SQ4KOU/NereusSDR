@@ -259,6 +259,15 @@ warren@wpratt.com
 #include "MacNRFilter.h"
 #endif
 
+// filterResponseMagnitudes() uses fir_bandpass() from WDSP and fftw_* from FFTW3.
+// Both are guarded below with #if defined(HAVE_WDSP) && defined(HAVE_FFTW3).
+#if defined(HAVE_WDSP) && defined(HAVE_FFTW3)
+extern "C" {
+#include "fir.h"         // fir_bandpass() — third_party/wdsp/src/fir.h (C linkage)
+}
+#include <fftw3.h>       // fftw_plan_dft_1d, fftw_execute, fftw_alloc_complex, etc.
+#endif
+
 #include <cmath>
 
 namespace NereusSDR {
@@ -1695,6 +1704,149 @@ void RxChannel::applyState(const RxChannelState& s)
 qint64 RxChannel::rebuild(WdspEngine& engine, const ChannelConfig& cfg)
 {
     return engine.rebuildRxChannel(m_channelId, cfg);
+}
+
+// ---------------------------------------------------------------------------
+// Filter frequency response (Task 1.5)
+// ---------------------------------------------------------------------------
+//
+// NereusSDR-original — no Thetis source ported; algorithm is generic FFT-of-
+// filter-taps.  Uses WDSP fir_bandpass() because it is the exact function
+// that WDSP's CalcBandpassFilter() calls internally, so the synthesized taps
+// match the filter WDSP is actually running.  The taps are zero-padded into a
+// double-precision FFTW3 FFT of size fftSize, then the positive half-spectrum
+// magnitude is decimated to nPoints output samples.
+//
+// Approach: Option B (synthesized via fir_bandpass).
+// Fallback:  returns empty QVector when HAVE_WDSP or HAVE_FFTW3 absent.
+
+QVector<float> RxChannel::filterResponseMagnitudes(int nPoints) const
+{
+    if (nPoints <= 0) {
+        return {};
+    }
+
+#if defined(HAVE_WDSP) && defined(HAVE_FFTW3)
+    // Number of FIR taps.  The default WDSP BANDPASS uses nc = 1025 taps
+    // (a power-of-two-plus-one) with wintype=1 (7-term Blackman-Harris) and
+    // rtype=0 (real output) at gain=1.  We replicate those choices here.
+    // WDSP fir_bandpass() normalises frequencies in [0, 0.5) relative to
+    // samplerate (it computes ft = (f_high - f_low) / (2.0 * samplerate)).
+    static constexpr int kTapCount = 1025;  // nc default for BANDPASS struct
+
+    // f_low and f_high in Hz (signed; can be negative for LSB).
+    const double fLow  = m_filterLow;
+    const double fHigh = m_filterHigh;
+    const double sr    = static_cast<double>(m_sampleRate);
+
+    // Synthesise filter taps using the exact WDSP function.
+    // rtype=0 → real coefficients (N doubles), not complex pairs.
+    // scale=1.0 (no gain correction needed here; we normalise the response).
+    // The return pointer is owned by WDSP's impulse cache — do NOT free it.
+    const double* taps = fir_bandpass(kTapCount, fLow, fHigh, sr,
+                                      /*wintype=*/ 1,
+                                      /*rtype=*/   0,
+                                      /*scale=*/   1.0);
+    if (!taps) {
+        return {};
+    }
+
+    // Zero-pad taps into a double-precision FFTW3 buffer.
+    // FFT size must be >= kTapCount; use next power-of-two >= 4096 to ensure
+    // sufficient frequency resolution for the display (≥ 4 Hz/bin at 48 kHz).
+    // A 4096-point FFT gives 48000 / 4096 ≈ 11.7 Hz/bin.
+    constexpr int kFftSize = 4096;
+    static_assert(kFftSize >= kTapCount, "FFT size must exceed tap count");
+
+    // Allocate aligned FFTW3 buffers.
+    fftw_complex* in  = fftw_alloc_complex(kFftSize);
+    fftw_complex* out = fftw_alloc_complex(kFftSize);
+    if (!in || !out) {
+        if (in)  { fftw_free(in);  }
+        if (out) { fftw_free(out); }
+        return {};
+    }
+
+    // Zero-fill, then copy real taps into the real part of the input buffer.
+    for (int i = 0; i < kFftSize; ++i) {
+        in[i][0] = 0.0;
+        in[i][1] = 0.0;
+    }
+    for (int i = 0; i < kTapCount; ++i) {
+        in[i][0] = taps[i];
+    }
+
+    // Use FFTW_ESTIMATE to avoid touching the global FFTW wisdom/mutex.
+    fftw_plan plan = fftw_plan_dft_1d(kFftSize, in, out, FFTW_FORWARD, FFTW_ESTIMATE);
+    if (!plan) {
+        fftw_free(in);
+        fftw_free(out);
+        return {};
+    }
+
+    fftw_execute(plan);
+    fftw_destroy_plan(plan);
+
+    // Compute magnitude in dB for the positive half-spectrum [0, sampleRate/2].
+    // out[0..kFftSize/2] covers DC to Nyquist — kFftSize/2 + 1 unique bins.
+    const int halfSize = kFftSize / 2 + 1;  // DC + positive frequencies
+
+    // Decimate to nPoints output samples by linear interpolation over the
+    // positive half-spectrum.  Index j in [0, halfSize-1] maps to frequency
+    // j * (sampleRate/2) / (halfSize - 1).  We want nPoints uniformly
+    // spaced samples of the magnitude from 0 Hz to sampleRate/2.
+    QVector<float> result(nPoints);
+
+    const double floatHalfSize = static_cast<double>(halfSize - 1);
+    const double floatNPoints  = static_cast<double>(nPoints - 1 > 0 ? nPoints - 1 : 1);
+
+    // Find peak magnitude for normalisation (reference = peak = 0 dB).
+    double peakMag = 0.0;
+    for (int j = 0; j < halfSize; ++j) {
+        const double re  = out[j][0];
+        const double im  = out[j][1];
+        const double mag = std::sqrt(re * re + im * im);
+        if (mag > peakMag) {
+            peakMag = mag;
+        }
+    }
+    if (peakMag < 1e-30) {
+        peakMag = 1e-30;  // Guard against all-zero filter (no crash)
+    }
+
+    for (int i = 0; i < nPoints; ++i) {
+        // Map output sample index i → fractional bin index in [0, halfSize-1].
+        const double fracIdx = static_cast<double>(i) / floatNPoints * floatHalfSize;
+        const int    idx0    = static_cast<int>(fracIdx);
+        const int    idx1    = (idx0 + 1 < halfSize) ? idx0 + 1 : idx0;
+        const double frac    = fracIdx - static_cast<double>(idx0);
+
+        // Linear-interpolate magnitude (not dB) for smooth curve.
+        auto binMag = [&](int j) -> double {
+            const double re = out[j][0];
+            const double im = out[j][1];
+            return std::sqrt(re * re + im * im);
+        };
+
+        const double mag = binMag(idx0) * (1.0 - frac) + binMag(idx1) * frac;
+
+        // Convert to dB, normalised to peak (0 dB = passband).
+        // Clamp at -120 dB to avoid -inf in dead stopband.
+        const double magDb = 20.0 * std::log10(mag / peakMag);
+        result[i] = static_cast<float>(std::max(magDb, -120.0));
+    }
+
+    fftw_free(in);
+    fftw_free(out);
+
+    return result;
+
+#else
+    // WDSP or FFTW3 not available — return empty vector so callers can
+    // gracefully skip high-resolution rendering.
+    Q_UNUSED(nPoints);
+    return {};
+#endif
 }
 
 } // namespace NereusSDR

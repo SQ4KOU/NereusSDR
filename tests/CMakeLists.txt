@@ -2588,3 +2588,8 @@ nereus_add_test(tst_rx_channel_rebuild)
 
 # ── Task 1.4: TxChannel captureState/applyState + WdspEngine::rebuildTxChannel
 nereus_add_test(tst_tx_channel_rebuild)
+
+# ── Task 1.5: RxChannel::filterResponseMagnitudes() accessor ─────────────
+# Verifies: (a) correct nPoints output size, (b) passband > stopband by ≥ 10 dB,
+# (c) nPoints ≤ 0 returns empty.  Guarded with HAVE_WDSP + HAVE_FFTW3.
+nereus_add_test(tst_filter_high_resolution)

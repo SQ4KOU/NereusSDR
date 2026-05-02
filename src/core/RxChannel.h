@@ -570,6 +570,25 @@ public:
     // --- NR mode (carry; setActiveNr(NrSlot) is the primary API) ---
     void setNrMode(int nrMode);
 
+    // --- Filter frequency response (Task 1.5) ---
+
+    /// Returns the FFT magnitude (in dB) of the current filter taps, sampled
+    /// at nPoints uniformly across [0, sampleRate/2].  For the high-resolution
+    /// filter graph (Section 4D, DspOptionsHighResFilterCharacteristics).
+    ///
+    /// Implementation:
+    ///   Option B (synthesized) — uses WDSP's fir_bandpass() with the same
+    ///   arguments that the internal BANDPASS struct uses, then computes the
+    ///   DFT magnitude via FFTW3 double-precision.  This matches the actual
+    ///   WDSP filter response because fir_bandpass() is the exact function
+    ///   that CalcBandpassFilter() calls internally.
+    ///
+    ///   Requires HAVE_WDSP and HAVE_FFTW3.  Returns an empty vector when
+    ///   either is absent or when nPoints <= 0.
+    ///
+    /// NereusSDR-original — no Thetis source ported; algorithm is generic.
+    QVector<float> filterResponseMagnitudes(int nPoints) const;
+
     // --- State snapshot / restore (Task 1.2) ---
     // Capture all DSP state into a portable struct.
     // Restore the same state (calls all setters above).
