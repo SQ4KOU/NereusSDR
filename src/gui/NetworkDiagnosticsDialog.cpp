@@ -27,6 +27,7 @@
 // =================================================================
 
 #include "gui/NetworkDiagnosticsDialog.h"
+#include "StyleConstants.h"
 #include "models/RadioModel.h"
 #include "core/AudioEngine.h"
 #include "core/RadioConnection.h"
@@ -47,23 +48,33 @@ namespace NereusSDR {
 // ─── styling constants ────────────────────────────────────────────────────────
 // Color palette matches the shell-chrome redesign (docs/architecture/
 // 2026-04-30-shell-chrome-redesign-design.md).
+// Per docs/architecture/ui-audit-polish-plan.md §D — Task 23.
+// All color values verified against StyleConstants.h:
+//   Style::kTextPrimary = #c8d8e8  (kValueStyle color — exact match)
+//   Style::kTitleText   = #8aa8c0  (kFieldStyle color — exact match)
+//   Style::kBorderSubtle = #203040 (kSectionHeaderStyle border — exact match)
+//
+// §D exception (no canonical match):
+//   #5fa8ff — diagnostic section header blue; brighter than kAccent (#00b4d8),
+//              and has cyan/blue rather than cyan tint. Kept with note.
+//   Monospace font stack is diagnostics-specific (all three constants).
 static constexpr const char* kValueStyle =
-    "color: #c8d8e8;"
+    "color: #c8d8e8;"           // Style::kTextPrimary
     "font-family: 'SF Mono', Menlo, monospace;"
     "font-size: 11px;";
 
 static constexpr const char* kFieldStyle =
-    "color: #8aa8c0;"
+    "color: #8aa8c0;"           // Style::kTitleText
     "font-family: 'SF Mono', Menlo, monospace;"
     "font-size: 11px;";
 
 static constexpr const char* kSectionHeaderStyle =
-    "color: #5fa8ff;"
+    "color: #5fa8ff;"           // §D exception: diagnostics section header blue
     "font-family: 'SF Mono', Menlo, monospace;"
     "font-size: 11px;"
     "font-weight: bold;"
     "padding: 6px 0;"
-    "border-bottom: 1px solid #203040;";
+    "border-bottom: 1px solid #203040;";  // Style::kBorderSubtle
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -179,8 +190,10 @@ void NetworkDiagnosticsDialog::buildTelemetrySection(QGridLayout* grid, int& row
 
 void NetworkDiagnosticsDialog::buildUi()
 {
+    // §D exception: #141c28 — diagnostics dialog bg; darker blue-black than
+    // kAppBg (#0f0f1a) to visually separate from the main window.
     setStyleSheet(QStringLiteral(
-        "QDialog { background: #141c28; }"
+        "QDialog { background: #141c28; }"  // §D exception: diagnostics-specific bg
         "QLabel  { background: transparent; }"
     ));
 
@@ -211,35 +224,45 @@ void NetworkDiagnosticsDialog::buildUi()
     btnRow->addStretch();
 
     QPushButton* resetBtn = new QPushButton(tr("Reset session stats"), this);
-    resetBtn->setStyleSheet(QStringLiteral(
-        "QPushButton {"
-        "  color: #8aa8c0;"
-        "  background: #1e2c3a;"
-        "  border: 1px solid #2e4050;"
-        "  border-radius: 3px;"
-        "  padding: 4px 10px;"
-        "  font-size: 11px;"
-        "}"
-        "QPushButton:hover { background: #253545; }"
-        "QPushButton:pressed { background: #1a2530; }"
-    ));
+    // §D: color #8aa8c0 = Style::kTitleText (exact match).
+    // §D exceptions: bg #1e2c3a / border #2e4050 / hover #253545 / pressed #1a2530
+    //   — diagnostics button surface; between kButtonBg (#1a2a3a) and kBorderSubtle
+    //   (#203040), chosen to contrast with the #141c28 dialog bg.
+    resetBtn->setStyleSheet(
+        QStringLiteral(
+            "QPushButton {"
+            "  color: %1;"                       // Style::kTitleText
+            "  background: #1e2c3a;"             // §D exception: diagnostics btn bg
+            "  border: 1px solid #2e4050;"       // §D exception: diagnostics btn border
+            "  border-radius: 3px;"
+            "  padding: 4px 10px;"
+            "  font-size: 11px;"
+            "}"
+            "QPushButton:hover { background: #253545; }"   // §D exception
+            "QPushButton:pressed { background: #1a2530; }" // §D exception
+        ).arg(Style::kTitleText));
     connect(resetBtn, &QPushButton::clicked,
             this, &NetworkDiagnosticsDialog::onResetSessionStats);
     btnRow->addWidget(resetBtn);
 
     QPushButton* closeBtn = new QPushButton(tr("Close"), this);
-    closeBtn->setStyleSheet(QStringLiteral(
-        "QPushButton {"
-        "  color: #c8d8e8;"
-        "  background: #1e3050;"
-        "  border: 1px solid #2e4060;"
-        "  border-radius: 3px;"
-        "  padding: 4px 16px;"
-        "  font-size: 11px;"
-        "}"
-        "QPushButton:hover { background: #253d60; }"
-        "QPushButton:pressed { background: #1a2a48; }"
-    ));
+    // §D: color #c8d8e8 = Style::kTextPrimary (exact match).
+    // §D exceptions: bg #1e3050 / border #2e4060 / hover #253d60 / pressed #1a2a48
+    //   — diagnostics close button uses a more prominent blue tint to distinguish
+    //   it from the reset button; no canonical match.
+    closeBtn->setStyleSheet(
+        QStringLiteral(
+            "QPushButton {"
+            "  color: %1;"                       // Style::kTextPrimary
+            "  background: #1e3050;"             // §D exception: diagnostics close btn bg
+            "  border: 1px solid #2e4060;"       // §D exception
+            "  border-radius: 3px;"
+            "  padding: 4px 16px;"
+            "  font-size: 11px;"
+            "}"
+            "QPushButton:hover { background: #253d60; }"   // §D exception
+            "QPushButton:pressed { background: #1a2a48; }" // §D exception
+        ).arg(Style::kTextPrimary));
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
     btnRow->addWidget(closeBtn);
 
