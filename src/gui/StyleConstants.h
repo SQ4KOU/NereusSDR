@@ -26,6 +26,7 @@
 
 #pragma once
 #include <QString>
+#include <QWidget>
 
 namespace NereusSDR::Style {
 
@@ -37,6 +38,9 @@ constexpr auto kTextSecondary   = "#8090a0";
 constexpr auto kTextTertiary    = "#708090";
 constexpr auto kTextScale       = "#607080";
 constexpr auto kTextInactive    = "#405060";
+// NereusSDR-original — used in 5+ places for AGC-T / pan / similar labels;
+// sits between kTextSecondary (#8090a0) and kTextScale (#607080).
+constexpr auto kLabelMid        = "#8899aa";
 constexpr auto kAccent          = "#00b4d8";
 constexpr auto kTitleText       = "#8aa8c0";
 
@@ -145,6 +149,22 @@ inline QString redCheckedStyle()
     ).arg(kRedBg, kRedText, kRedBorder);
 }
 
+// DSP toggle — brighter green than the kGreenBg action buttons.
+// Used by VfoWidget DSP tab and SpectrumOverlayPanel DSP toggles.
+// Source: NereusSDR-original. Distinct semantic from action-button
+// "checked" state because DSP toggles communicate "feature on" not
+// "action engaged."
+constexpr auto kDspToggleBg     = "#1a6030";
+constexpr auto kDspToggleBorder = "#20a040";
+constexpr auto kDspToggleText   = "#80ff80";
+
+inline QString dspToggleStyle()
+{
+    return QStringLiteral(
+        "QPushButton:checked { background: %1; color: %2; border: 1px solid %3; }"
+    ).arg(kDspToggleBg, kDspToggleText, kDspToggleBorder);
+}
+
 inline QString sliderHStyle()
 {
     return QStringLiteral(
@@ -232,6 +252,13 @@ constexpr auto kSpinBoxStyle =
     "QSpinBox { background: #1a2a3a; border: 1px solid #304050;"
     " border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }";
 
+constexpr auto kDoubleSpinBoxStyle =
+    "QDoubleSpinBox { background: #1a2a3a; border: 1px solid #304050;"
+    " border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }";
+
+// Backwards-compat wrapper for places that prefer a function form.
+inline QString doubleSpinBoxStyle() { return QString::fromLatin1(kDoubleSpinBoxStyle); }
+
 constexpr auto kSliderStyle =
     "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
     "QSlider::handle:horizontal { background: #00b4d8; width: 12px;"
@@ -242,5 +269,46 @@ constexpr auto kButtonStyle =
     " border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 3px 10px; }"
     "QPushButton:hover { background: #203040; }"
     "QPushButton:pressed { background: #00b4d8; color: #0f0f1a; }";
+
+// Apply the canonical "dark page" stylesheet to a Setup page that lays
+// itself out manually (i.e. doesn't inherit the SetupPage::addLabeledX
+// helper-based widgets). Replaces the 4 byte-for-byte copies of
+// applyDarkStyle() that previously lived in TransmitSetupPages,
+// DisplaySetupPages, AppearanceSetupPages, GeneralOptionsPage.
+//
+// Per docs/architecture/ui-audit-polish-plan.md §A3.
+//
+// Note: this helper uses the canonical kBorder (#205070) and
+// padding-top: 12 px values, NOT the drifted #203040 / 4 px that
+// previously appeared in the 4 local copies. The drift is intentionally
+// fixed — pages that used the local copies will gain 8 px of QGroupBox
+// padding-top, matching the rest of the app.
+inline void applyDarkPageStyle(QWidget* w)
+{
+    if (!w) { return; }
+    w->setStyleSheet(QStringLiteral(
+        "QWidget { background: %1; color: %2; }"
+        "QGroupBox { border: 1px solid %3; border-radius: 4px;"
+        "  margin-top: 8px; padding-top: 12px; font-weight: bold; color: %4; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
+        "QLabel { color: %2; }"
+        "QComboBox { background: %5; border: 1px solid %3;"
+        "  border-radius: 3px; color: %2; padding: 2px 4px; }"
+        "QComboBox QAbstractItemView { background: %5; color: %2; "
+        "  selection-background-color: %6; }"
+        "QSlider::groove:horizontal { background: %5; height: 4px;"
+        "  border-radius: 2px; }"
+        "QSlider::handle:horizontal { background: %6; width: 12px;"
+        "  height: 12px; border-radius: 6px; margin: -4px 0; }"
+        "QSpinBox, QDoubleSpinBox { background: %5; border: 1px solid %3;"
+        "  border-radius: 3px; color: %2; padding: 2px 4px; }"
+        "QCheckBox { color: %2; }"
+        "QLineEdit { background: %5; border: 1px solid %3;"
+        "  border-radius: 3px; color: %2; padding: 2px 4px; }"
+        "QPushButton { background: %5; border: 1px solid %3;"
+        "  border-radius: 3px; color: %2; padding: 3px 10px; }"
+        "QPushButton:hover { background: %7; }"
+    ).arg(kAppBg, kTextPrimary, kBorder, kTitleText, kButtonBg, kAccent, kButtonHover));
+}
 
 } // namespace NereusSDR::Style
