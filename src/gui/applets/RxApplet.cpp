@@ -1180,6 +1180,16 @@ void RxApplet::syncFromModel()
         m_sqlSlider->setValue(qRound(m_slice->ssqlThresh()));
     }
 
+    // AGC-T slider initial pull (§B1 fix-up).
+    if (m_agcTSlider) {
+        QSignalBlocker bl(m_agcTSlider);
+        const int t = m_slice->agcThreshold();
+        m_agcTSlider->setValue(t);
+        if (m_agcTLabel) {
+            m_agcTLabel->setText(QString::number(t));
+        }
+    }
+
     // Antenna buttons
     m_rxAntBtn->setText(m_slice->rxAntenna());
     m_txAntBtn->setText(m_slice->txAntenna());
@@ -1278,6 +1288,21 @@ void RxApplet::connectSlice(SliceModel* s)
     connect(s, &SliceModel::ssqlThreshChanged, this, [this](double thresh) {
         QSignalBlocker bl(m_sqlSlider);
         m_sqlSlider->setValue(qRound(thresh));
+    });
+
+    // AGC-T slider model→UI sync (§B1 fix-up).
+    // The B1 alignment commits added AGC-T writing (m_slice->setAgcThreshold)
+    // but omitted the reverse direction, leaving VfoWidget and RxApplet sliders
+    // decoupled. Use QSignalBlocker to avoid the echo loop identical to the
+    // muted/audioPan/ssqlThresh connects above.
+    connect(s, &SliceModel::agcThresholdChanged, this, [this](int v) {
+        if (m_agcTSlider) {
+            QSignalBlocker bl(m_agcTSlider);
+            m_agcTSlider->setValue(v);
+            if (m_agcTLabel) {
+                m_agcTLabel->setText(QString::number(v));
+            }
+        }
     });
 
     // Filter change → update label + buttons + passband widget
