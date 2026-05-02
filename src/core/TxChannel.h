@@ -240,11 +240,15 @@ warren@wpratt.com
 #include <vector>
 
 #include "WdspTypes.h"
+#include "dsp/ChannelConfig.h"
+#include "dsp/TxChannelState.h"
+#include "models/SliceModel.h"
 
 namespace NereusSDR {
 
 class RadioConnection;
 class TxMicRouter;
+class WdspEngine;  // forward declaration for rebuild()
 
 // Per-transmitter WDSP channel wrapper.
 //
@@ -1325,6 +1329,33 @@ public:
     /// false without touching WDSP.
     bool getCfcDisplayCompression(double* compValues, int bufferSize) noexcept;
 
+    // ── State snapshot / restore (Task 1.4) ─────────────────────────────────
+    //
+    // captureState() snapshots all per-channel TX DSP carry state into a
+    // portable struct.  applyState() restores it by calling all setters.
+    //
+    // These are the building blocks for WdspEngine::rebuildTxChannel():
+    //   1. captureState() before CloseChannel
+    //   2. OpenChannel + seed WDSP defaults
+    //   3. applyState() on the new TxChannel wrapper
+    //
+    // Thread safety: call on main thread only.
+    TxChannelState captureState() const;
+    void applyState(const TxChannelState& state);
+
+    // ── Channel rebuild (Task 1.4) ────────────────────────────────────────────
+    //
+    // Tear down the WDSP TX channel, recreate with new config, reapply
+    // captured state.  Delegates to WdspEngine::rebuildTxChannel().
+    //
+    // Returns elapsed milliseconds (≥ 0 on success).  Returns -1 if the
+    // channel was not found in the engine (should not happen in normal
+    // operation — the engine owns all channels).
+    //
+    // Thread safety: call on main thread only.  Caller must ensure the
+    // TX worker thread is not currently running (setRunning(false) first).
+    qint64 rebuild(WdspEngine& engine, const ChannelConfig& cfg);
+
     // ── Per-stage Run override (3M-1a C.4) ──────────────────────────────────
     //
     // Activate or deactivate a single TXA pipeline stage by name.
@@ -1642,6 +1673,61 @@ private:
     double m_postGenTTPulseToneFreq2Cache = 0.0;
     double m_postGenTTPulseMag1Cache      = 0.0;
     double m_postGenTTPulseMag2Cache      = 0.0;
+
+    // ── Carry-only fields for captureState/applyState round-trip (Task 1.4) ───
+    //
+    // These fields hold state that either:
+    //   (a) has no WDSP change-detection guard (setTxBandpass calls WDSP
+    //       unconditionally, so we only ever call it with the same value that
+    //       WDSP already has — carry stores the last-set int pair), or
+    //   (b) is not yet wired to WDSP (EQ, micGain, pureSignal).
+    //
+    // The leveler/ALC/CFC/phrot/cessb/cpdr fields shadow the corresponding
+    // WDSP-wired setters (setTxLevelerOn etc.) so captureState() can read them
+    // back without querying WDSP.  Each carry field is updated by its setter
+    // in TxChannel.cpp alongside the WDSP call.
+
+    // Mode + filter carry
+    DSPMode m_mode         {DSPMode::USB};   // carry; setTxMode also calls WDSP
+    int     m_filterLowHz  {200};            // carry; setTxBandpass also calls WDSP
+    int     m_filterHighHz {2700};           // carry; setTxBandpass also calls WDSP
+
+    // Mic / EQ carry — wired to WDSP in later tasks
+    int     m_micGainDb    {0};
+    bool    m_eqEnabled    {false};
+    int     m_eqPreampDb   {0};
+    int     m_eqBandsDb[10]{0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+    // Leveler carry (mirrors WDSP-wired setTxLevelerOn/TopDb/DecayMs)
+    bool    m_levelerOn        {false};
+    double  m_levelerMaxGainDb {15.0};
+    int     m_levelerDecayMs   {100};
+
+    // ALC carry (mirrors WDSP-wired setTxAlcMaxGainDb/DecayMs)
+    double  m_alcMaxGainDb     {3.0};
+    int     m_alcDecayMs       {10};
+
+    // CFC carry (mirrors WDSP-wired setTxCfcRunning/PostEqRunning/PrecompDb/PrePeqDb)
+    bool    m_cfcOn            {false};
+    bool    m_cfcPostEqOn      {false};
+    double  m_cfcPrecompDb     {0.0};
+    double  m_cfcPostEqGainDb  {0.0};
+
+    // Phase rotator carry (mirrors WDSP-wired setTxPhrotCornerHz/Nstages/Reverse)
+    bool    m_phaseRotatorOn      {false};
+    double  m_phaseRotatorFreqHz  {338.0};
+    int     m_phaseRotatorStages  {8};
+    bool    m_phaseRotatorReverse {false};
+
+    // CESSB carry (mirrors WDSP-wired setTxCessbOn)
+    bool    m_cessbOn  {false};
+
+    // CPDR carry (mirrors WDSP-wired setTxCpdrOn/GainDb)
+    bool    m_cpdrOn       {false};
+    double  m_cpdrLevelDb  {0.0};
+
+    // PureSignal carry — 3M-4 work
+    bool    m_pureSignalEnabled {false};
 };
 
 } // namespace NereusSDR

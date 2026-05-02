@@ -610,4 +610,102 @@ TxChannel* WdspEngine::txChannel(int channelId) const
     return nullptr;
 }
 
+qint64 WdspEngine::rebuildTxChannel(int channelId, const ChannelConfig& cfg)
+{
+    if (!m_initialized) {
+        qCWarning(lcDsp) << "rebuildTxChannel: WDSP not initialized";
+        return -1;
+    }
+
+    auto it = m_txChannels.find(channelId);
+    if (it == m_txChannels.end()) {
+        qCWarning(lcDsp) << "rebuildTxChannel: channel" << channelId << "not found";
+        return -1;
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+
+    // Capture DSP state before tearing down the channel.
+    const TxChannelState state = it->second->captureState();
+
+#ifdef HAVE_WDSP
+    // Deactivate with drain before closing (mirrors destroyTxChannel).
+    // dmode=1: drain-mode close per Thetis console.cs:29607 [v2.10.3.13].
+    SetChannelState(channelId, 0, 1);
+
+    // Close the old WDSP TX channel.
+    CloseChannel(channelId);
+#endif
+
+    // Destroy the old TxChannel C++ wrapper.
+    m_txChannels.erase(it);
+    qCInfo(lcDsp) << "Rebuild: closed TX channel" << channelId;
+
+#ifdef HAVE_WDSP
+    // Recreate the WDSP TX channel with the new config.
+    // Use the same OpenChannel arguments as createTxChannel() — kTxChannelType=1,
+    // kTxBlockOnOutput=1, and the TX-specific slew constants.
+    // cfg.bufferSize = new in_size; cfg.filterSize = new dsp_size.
+    // For TX dsp_rate we reuse kTxDspSampleRate (96000) — the ChannelConfig
+    // struct carries a single sampleRate field intended for the I/O rates.
+    OpenChannel(
+        channelId,
+        cfg.bufferSize,             // in_size (new input block size)
+        cfg.filterSize,             // dsp_size
+        cfg.sampleRate,             // input sample rate
+        kTxDspSampleRate,           // dsp sample rate — always 96 kHz for TX
+        cfg.sampleRate,             // output sample rate
+        kTxChannelType,             // type=1 (TX)
+        0,                          // initial state: off
+        0.000,                      // tdelayup  — from cmaster.c:186
+        kTxTSlewUpSecs,             // tslewup 0.010 s — from cmaster.c:187
+        0.000,                      // tdelaydown — from cmaster.c:188
+        kTxTSlewDownSecs,           // tslewdown 0.010 s — from cmaster.c:189
+        kTxBlockOnOutput);          // bfo=1 — from cmaster.c:190
+
+    // Re-seed TX defaults — same block as createTxChannel() so that
+    // applyState() setter guards fire correctly for unchanged values.
+    SetTXABandpassWindow(channelId, 1);
+    SetTXABandpassRun(channelId, 1);
+    SetTXAAMSQRun(channelId, 0);
+    SetTXAALCAttack(channelId, 1);
+    SetTXAALCDecay(channelId, 10);
+    SetTXAALCMaxGain(channelId, 0.0);
+    SetTXAALCSt(channelId, 1);
+    SetTXALevelerAttack(channelId, 1);
+    SetTXALevelerDecay(channelId, 100);
+    SetTXALevelerTop(channelId, 15.0);
+    SetTXALevelerSt(channelId, 1);
+    SetTXAPreGenMode(channelId, 0);
+    SetTXAPreGenToneMag(channelId, 0.0);
+    SetTXAPreGenToneFreq(channelId, 0.0);
+    SetTXAPreGenRun(channelId, 0);
+    SetTXAPanelRun(channelId, 1);
+    SetTXAPanelSelect(channelId, 2);
+    SetTXAPostGenRun(channelId, 0);
+
+    qCInfo(lcDsp) << "Rebuild: opened TX channel" << channelId
+                  << "bufSize=" << cfg.bufferSize
+                  << "rate=" << cfg.sampleRate;
+#endif
+
+    // Construct a new TxChannel C++ wrapper.
+    // outputBufferSize = inputBufferSize × outputSampleRate / inputSampleRate
+    // (same ratio math as createTxChannel — integer multiply-then-divide is safe).
+    const int outputBufferSize = cfg.bufferSize * cfg.sampleRate / cfg.sampleRate;
+    auto channel = std::make_unique<TxChannel>(channelId, cfg.bufferSize,
+                                               outputBufferSize, this);
+    TxChannel* ptr = channel.get();
+    m_txChannels.emplace(channelId, std::move(channel));
+
+    // Reapply captured DSP state to the new channel.
+    ptr->applyState(state);
+
+    const qint64 elapsedMs = timer.elapsed();
+    qCInfo(lcDsp) << "Rebuild: TX channel" << channelId << "ready in"
+                  << elapsedMs << "ms";
+    return elapsedMs;
+}
+
 } // namespace NereusSDR

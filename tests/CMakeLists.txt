@@ -2585,3 +2585,6 @@ nereus_add_test(tst_parametric_eq_widget_json)
 
 # ── Task 1.2: RxChannel captureState/applyState round-trip ───────────────
 nereus_add_test(tst_rx_channel_rebuild)
+
+# ── Task 1.4: TxChannel captureState/applyState + WdspEngine::rebuildTxChannel
+nereus_add_test(tst_tx_channel_rebuild)

@@ -234,6 +234,16 @@ public:
     // always non-null (wrapper is always constructed alongside the WDSP channel).
     TxChannel* txChannel(int channelId) const;
 
+    // Rebuild a TX channel in-place: capture state, destroy the existing
+    // WDSP channel, recreate with new config, reapply state.
+    //
+    // Returns elapsed milliseconds (≥ 0 on success). Returns -1 if the
+    // channel ID is not found or WdspEngine is not initialized.
+    //
+    // Thread safety: call on main thread only. The TX worker thread must not
+    // be running (setRunning(false) + thread stop before calling this).
+    qint64 rebuildTxChannel(int channelId, const ChannelConfig& cfg);
+
 signals:
     void initializedChanged(bool initialized);
     // Emitted during wisdom generation. percent=0-100, status=what's being planned.

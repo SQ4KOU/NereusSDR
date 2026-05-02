@@ -170,6 +170,7 @@ warren@wpratt.com
 #include "LogCategories.h"
 #include "RadioConnection.h"
 #include "TxMicRouter.h"
+#include "WdspEngine.h"  // for rebuild() delegate to WdspEngine::rebuildTxChannel()
 
 #include <algorithm>
 #include <cmath>        // std::isnan — NaN sentinel for double idempotent guards (D.3)
@@ -677,6 +678,7 @@ void TxChannel::setStageRunning(Stage s, bool run)
     // phrot (stage 3): phase rotator for SSB carrier-phase correction.
     // From Thetis wdsp/iir.c:665-670 [v2.10.3.13].
     case Stage::PhRot:
+        m_phaseRotatorOn = run;  // carry — mirrors WDSP run flag for captureState
 #ifdef HAVE_WDSP
         SetTXAPHROTRun(m_channelId, r);    // iir.c:665 [v2.10.3.13]
 #endif
@@ -913,6 +915,7 @@ void TxChannel::setStageRunning(Stage s, bool run)
 // ---------------------------------------------------------------------------
 void TxChannel::setTxMode(DSPMode mode)
 {
+    m_mode = mode;  // carry — always updated regardless of WDSP state
 #ifdef HAVE_WDSP
     // From Thetis radio.cs:2670-2696 [v2.10.3.13]
     if (txa[m_channelId].rsmpin.p == nullptr) {
@@ -952,6 +955,8 @@ void TxChannel::setTxMode(DSPMode mode)
 // ---------------------------------------------------------------------------
 void TxChannel::setTxBandpass(int lowHz, int highHz)
 {
+    m_filterLowHz  = lowHz;   // carry — always updated regardless of WDSP state
+    m_filterHighHz = highHz;  // carry
 #ifdef HAVE_WDSP
     // From Thetis radio.cs:2730-2780 [v2.10.3.13]
     if (txa[m_channelId].rsmpin.p == nullptr) {
@@ -1922,6 +1927,7 @@ void TxChannel::setTxEqWintype(int wintype)
 
 void TxChannel::setTxLevelerOn(bool on)
 {
+    m_levelerOn = on;  // carry
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/wcpAGC.c:613-618 [v2.10.3.13] — SetTXALevelerSt(channel, state).
@@ -1936,6 +1942,7 @@ void TxChannel::setTxLevelerOn(bool on)
 
 void TxChannel::setTxLevelerTopDb(double dB)
 {
+    m_levelerMaxGainDb = dB;  // carry
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/wcpAGC.c:647-650 [v2.10.3.13] — SetTXALevelerTop(channel, maxgain).
@@ -1950,6 +1957,7 @@ void TxChannel::setTxLevelerTopDb(double dB)
 
 void TxChannel::setTxLevelerDecayMs(int ms)
 {
+    m_levelerDecayMs = ms;  // carry
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/wcpAGC.c:629-635 [v2.10.3.13] — SetTXALevelerDecay(channel, decay).
@@ -1963,6 +1971,7 @@ void TxChannel::setTxLevelerDecayMs(int ms)
 
 void TxChannel::setTxAlcMaxGainDb(double dB)
 {
+    m_alcMaxGainDb = dB;  // carry
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/wcpAGC.c:603-610 [v2.10.3.13] — SetTXAALCMaxGain(channel, maxgain).
@@ -1977,6 +1986,7 @@ void TxChannel::setTxAlcMaxGainDb(double dB)
 
 void TxChannel::setTxAlcDecayMs(int ms)
 {
+    m_alcDecayMs = ms;  // carry
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/wcpAGC.c:585-592 [v2.10.3.13] — SetTXAALCDecay(channel, decay).
@@ -2002,6 +2012,7 @@ void TxChannel::setTxAlcDecayMs(int ms)
 
 void TxChannel::setTxCfcRunning(bool on)
 {
+    m_cfcOn = on;  // carry
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/cfcomp.c:632-641 [v2.10.3.13] — SetTXACFCOMPRun(channel, run).
@@ -2090,6 +2101,7 @@ void TxChannel::setTxCfcProfile(const std::vector<double>& F,
 
 void TxChannel::setTxCfcPrecompDb(double dB)
 {
+    m_cfcPrecompDb = dB;  // carry
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/cfcomp.c:700-715 [v2.10.3.13] — SetTXACFCOMPPrecomp(channel, precomp).
@@ -2103,6 +2115,7 @@ void TxChannel::setTxCfcPrecompDb(double dB)
 
 void TxChannel::setTxCfcPostEqRunning(bool on)
 {
+    m_cfcPostEqOn = on;  // carry
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/cfcomp.c:717-727 [v2.10.3.13] — SetTXACFCOMPPeqRun(channel, run).
@@ -2115,6 +2128,7 @@ void TxChannel::setTxCfcPostEqRunning(bool on)
 
 void TxChannel::setTxCfcPrePeqDb(double dB)
 {
+    m_cfcPostEqGainDb = dB;  // carry
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/cfcomp.c:729-737 [v2.10.3.13] — SetTXACFCOMPPrePeq(channel, prepeq).
@@ -2127,6 +2141,7 @@ void TxChannel::setTxCfcPrePeqDb(double dB)
 
 void TxChannel::setTxCpdrOn(bool on)
 {
+    m_cpdrOn = on;  // carry
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/compress.c:99-109 [v2.10.3.13] — SetTXACompressorRun(channel, run).
@@ -2141,6 +2156,7 @@ void TxChannel::setTxCpdrOn(bool on)
 
 void TxChannel::setTxCpdrGainDb(double dB)
 {
+    m_cpdrLevelDb = dB;  // carry
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/compress.c:111-117 [v2.10.3.13] — SetTXACompressorGain(channel, gain).
@@ -2153,6 +2169,7 @@ void TxChannel::setTxCpdrGainDb(double dB)
 
 void TxChannel::setTxCessbOn(bool on)
 {
+    m_cessbOn = on;  // carry
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/osctrl.c:142-150 [v2.10.3.13] — SetTXAosctrlRun(channel, run).
@@ -2184,6 +2201,7 @@ void TxChannel::setTxCessbOn(bool on)
 
 void TxChannel::setTxPhrotCornerHz(double hz)
 {
+    m_phaseRotatorFreqHz = hz;  // carry
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/iir.c:675-683 [v2.10.3.13] — SetTXAPHROTCorner(channel, corner).
@@ -2197,6 +2215,7 @@ void TxChannel::setTxPhrotCornerHz(double hz)
 
 void TxChannel::setTxPhrotNstages(int nstages)
 {
+    m_phaseRotatorStages = nstages;  // carry
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/iir.c:686-694 [v2.10.3.13] — SetTXAPHROTNstages(channel, nstages).
@@ -2210,6 +2229,7 @@ void TxChannel::setTxPhrotNstages(int nstages)
 
 void TxChannel::setTxPhrotReverse(bool reverse)
 {
+    m_phaseRotatorReverse = reverse;  // carry
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/iir.c:697-703 [v2.10.3.13] — SetTXAPHROTReverse(channel, reverse).
@@ -2254,6 +2274,148 @@ bool TxChannel::getCfcDisplayCompression(double* compValues, int bufferSize) noe
     Q_UNUSED(bufferSize);
     return false;
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// captureState() — snapshot all TX DSP carry state (Task 1.4)
+// ---------------------------------------------------------------------------
+TxChannelState TxChannel::captureState() const
+{
+    TxChannelState s;
+
+    // Mode + filter carry
+    s.mode         = m_mode;
+    s.filterLowHz  = m_filterLowHz;
+    s.filterHighHz = m_filterHighHz;
+
+    // Mic / EQ carry
+    s.micGainDb  = m_micGainDb;
+    s.eqEnabled  = m_eqEnabled;
+    s.eqPreampDb = m_eqPreampDb;
+    for (int i = 0; i < 10; ++i) {
+        s.eqBandsDb[i] = m_eqBandsDb[i];
+    }
+
+    // Leveler carry
+    s.levelerOn        = m_levelerOn;
+    s.levelerMaxGainDb = m_levelerMaxGainDb;
+    s.levelerDecayMs   = m_levelerDecayMs;
+
+    // ALC carry
+    s.alcMaxGainDb = m_alcMaxGainDb;
+    s.alcDecayMs   = m_alcDecayMs;
+
+    // CFC carry
+    s.cfcOn           = m_cfcOn;
+    s.cfcPostEqOn     = m_cfcPostEqOn;
+    s.cfcPrecompDb    = m_cfcPrecompDb;
+    s.cfcPostEqGainDb = m_cfcPostEqGainDb;
+
+    // Phase rotator carry
+    s.phaseRotatorOn      = m_phaseRotatorOn;
+    s.phaseRotatorFreqHz  = m_phaseRotatorFreqHz;
+    s.phaseRotatorStages  = m_phaseRotatorStages;
+    s.phaseRotatorReverse = m_phaseRotatorReverse;
+
+    // CESSB carry
+    s.cessbOn = m_cessbOn;
+
+    // CPDR carry
+    s.cpdrOn      = m_cpdrOn;
+    s.cpdrLevelDb = m_cpdrLevelDb;
+
+    // PureSignal carry (3M-4 — carry-only)
+    s.pureSignalEnabled = m_pureSignalEnabled;
+
+    return s;
+}
+
+// ---------------------------------------------------------------------------
+// applyState() — restore TX DSP carry state (Task 1.4)
+//
+// Calls all setters. WDSP-wired setters will issue WDSP API calls only if
+// HAVE_WDSP is defined AND the channel has been opened (rsmpin.p != nullptr).
+// In unit-test builds without WDSP (or on an unopened channel) the WDSP-wired
+// setters are no-ops, so only the carry fields are updated.
+// ---------------------------------------------------------------------------
+void TxChannel::applyState(const TxChannelState& s)
+{
+    // Mode carry + WDSP-wired
+    m_mode = s.mode;
+    setTxMode(s.mode);
+
+    // Filter carry + WDSP-wired
+    m_filterLowHz  = s.filterLowHz;
+    m_filterHighHz = s.filterHighHz;
+    setTxBandpass(s.filterLowHz, s.filterHighHz);
+
+    // Mic / EQ carry only — no WDSP call yet
+    m_micGainDb  = s.micGainDb;
+    m_eqEnabled  = s.eqEnabled;
+    m_eqPreampDb = s.eqPreampDb;
+    for (int i = 0; i < 10; ++i) {
+        m_eqBandsDb[i] = s.eqBandsDb[i];
+    }
+
+    // Leveler carry + WDSP-wired
+    m_levelerOn        = s.levelerOn;
+    m_levelerMaxGainDb = s.levelerMaxGainDb;
+    m_levelerDecayMs   = s.levelerDecayMs;
+    setTxLevelerOn(s.levelerOn);
+    setTxLevelerTopDb(s.levelerMaxGainDb);
+    setTxLevelerDecayMs(s.levelerDecayMs);
+
+    // ALC carry + WDSP-wired
+    m_alcMaxGainDb = s.alcMaxGainDb;
+    m_alcDecayMs   = s.alcDecayMs;
+    setTxAlcMaxGainDb(s.alcMaxGainDb);
+    setTxAlcDecayMs(s.alcDecayMs);
+
+    // CFC carry + WDSP-wired
+    m_cfcOn           = s.cfcOn;
+    m_cfcPostEqOn     = s.cfcPostEqOn;
+    m_cfcPrecompDb    = s.cfcPrecompDb;
+    m_cfcPostEqGainDb = s.cfcPostEqGainDb;
+    setTxCfcRunning(s.cfcOn);
+    setTxCfcPostEqRunning(s.cfcPostEqOn);
+    setTxCfcPrecompDb(s.cfcPrecompDb);
+    setTxCfcPrePeqDb(s.cfcPostEqGainDb);
+
+    // Phase rotator carry + WDSP-wired
+    m_phaseRotatorOn      = s.phaseRotatorOn;
+    m_phaseRotatorFreqHz  = s.phaseRotatorFreqHz;
+    m_phaseRotatorStages  = s.phaseRotatorStages;
+    m_phaseRotatorReverse = s.phaseRotatorReverse;
+    setTxPhrotCornerHz(s.phaseRotatorFreqHz);
+    setTxPhrotNstages(s.phaseRotatorStages);
+    setTxPhrotReverse(s.phaseRotatorReverse);
+    // PhRot run gate is handled by setStageRunning(Stage::PhRot, on)
+    setStageRunning(Stage::PhRot, s.phaseRotatorOn);
+
+    // CESSB carry + WDSP-wired
+    m_cessbOn = s.cessbOn;
+    setTxCessbOn(s.cessbOn);
+
+    // CPDR carry + WDSP-wired
+    m_cpdrOn      = s.cpdrOn;
+    m_cpdrLevelDb = s.cpdrLevelDb;
+    setTxCpdrOn(s.cpdrOn);
+    setTxCpdrGainDb(s.cpdrLevelDb);
+
+    // PureSignal carry only — 3M-4 work
+    m_pureSignalEnabled = s.pureSignalEnabled;
+}
+
+// ---------------------------------------------------------------------------
+// rebuild() — delegate to WdspEngine::rebuildTxChannel() (Task 1.4)
+//
+// WdspEngine owns m_txChannels and is therefore the only class that can
+// destroy + recreate the WDSP channel. TxChannel::rebuild is a one-line
+// delegate matching the pattern from RxChannel::rebuild (Task 1.3).
+// ---------------------------------------------------------------------------
+qint64 TxChannel::rebuild(WdspEngine& engine, const ChannelConfig& cfg)
+{
+    return engine.rebuildTxChannel(m_channelId, cfg);
 }
 
 } // namespace NereusSDR
