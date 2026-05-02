@@ -24,6 +24,7 @@
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "gui/StyleConstants.h"
 #include "gui/widgets/MeterSlider.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -44,31 +45,37 @@ namespace NereusSDR {
 
 namespace {
 
-// Style constants match AetherSDR DaxApplet.cpp palette + STYLEGUIDE.md
-// applet rows. kSectionStyle is applied at the applet root so the body
-// inherits the transparent-row look; kGreenToggle / kDimLabel /
-// kStatusLabel mirror DaxApplet.cpp:17-33 verbatim aside from the
-// DAX→VAX text rename.
-constexpr const char* kSectionStyle =
-    "QWidget { background: transparent; }"
-    "QLabel { color: #8090a0; font-size: 11px; }"
-    "QPushButton { background: #1a2a3a; border: 1px solid #205070;"
-    "  border-radius: 3px; padding: 2px 8px; font-size: 11px; font-weight: bold; color: #c8d8e8; }"
-    "QPushButton:hover { background: #204060; }";
+// §A2 exception — vaxSectionStyle(): root-widget stylesheet sets a
+// transparent background and generic QPushButton/QLabel defaults for all
+// child widgets. Colors use canonical palette constants, but font-size
+// (11px) and button padding (2px 8px) differ from Style::buttonBaseStyle()
+// (10px / 2px 4px), so a file-local helper is required per §A2 rules.
+static inline QString vaxSectionStyle()
+{
+    return QStringLiteral(
+        "QWidget { background: transparent; }"
+        "QLabel { color: %1; font-size: 11px; }"
+        "QPushButton { background: %2; border: 1px solid %3;"
+        "  border-radius: 3px; padding: 2px 8px; font-size: 11px; font-weight: bold; color: %4; }"
+        "QPushButton:hover { background: %5; }"
+    ).arg(Style::kTextSecondary, Style::kButtonBg, Style::kBorder,
+          Style::kTextPrimary, Style::kButtonAltHover);
+}
 
-const QString kGreenToggle =
-    "QPushButton { background: #1a2a3a; border: 1px solid #205070; border-radius: 3px;"
-    " color: #c8d8e8; font-size: 11px; font-weight: bold; padding: 2px 8px; }"
-    "QPushButton:hover { background: #204060; }"
-    "QPushButton:checked { background: #006040; color: #00ff88; border: 1px solid #00a060; }";
-
-constexpr const char* kDimLabel =
-    "QLabel { color: #8090a0; font-size: 11px; }";
-
-const QString kStatusLabel = "QLabel { color: #506070; font-size: 11px; }";
-
-constexpr const char* kDeviceLabel =
-    "QLabel { color: #506070; font-size: 10px; }";
+// §A2 exception — vaxButtonStyle(): Mute toggle base style. Uses 11px
+// font-size and 2px 8px padding (matching original AetherSDR DaxApplet.cpp),
+// versus Style::buttonBaseStyle() which uses 10px / 2px 4px. A file-local
+// helper is required to avoid a visible size regression. Combine with
+// Style::greenCheckedStyle() at call sites.
+static inline QString vaxButtonStyle()
+{
+    return QStringLiteral(
+        "QPushButton { background: %1; border: 1px solid %2; border-radius: 3px;"
+        " color: %3; font-size: 11px; font-weight: bold; padding: 2px 8px; }"
+        "QPushButton:hover { background: %4; }"
+    ).arg(Style::kButtonBg, Style::kBorder, Style::kTextPrimary,
+          Style::kButtonAltHover);
+}
 
 // Slice letters A..H by sliceId — matches AetherSDR DaxApplet.cpp:159.
 // NereusSDR tops out at 8 slices (same as AetherSDR) so a static 8-char
@@ -98,7 +105,7 @@ VaxApplet::VaxApplet(RadioModel* model, AudioEngine* audio, QWidget* parent)
 
 void VaxApplet::buildUi()
 {
-    setStyleSheet(QString::fromLatin1(kSectionStyle));
+    setStyleSheet(vaxSectionStyle());
 
     auto& settings = AppSettings::instance();
 
@@ -124,12 +131,12 @@ void VaxApplet::buildUi()
         row->setSpacing(4);
 
         auto* chLabel = new QLabel(QStringLiteral("VAX %1:").arg(channel), body);
-        chLabel->setStyleSheet(QString::fromLatin1(kDimLabel));
+        chLabel->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 11px; }").arg(Style::kTextSecondary));
         chLabel->setFixedWidth(44);
         row->addWidget(chLabel);
 
         m_tagsLbl[i] = new QLabel(QStringLiteral("\u2014"), body);
-        m_tagsLbl[i]->setStyleSheet(kStatusLabel);
+        m_tagsLbl[i]->setStyleSheet(QStringLiteral("QLabel { color: #506070; font-size: 11px; }"));
         m_tagsLbl[i]->setFixedWidth(56);
         row->addWidget(m_tagsLbl[i]);
 
@@ -160,7 +167,7 @@ void VaxApplet::buildUi()
 
         m_muteBtn[i] = new QPushButton(QStringLiteral("Mute"), body);
         m_muteBtn[i]->setCheckable(true);
-        m_muteBtn[i]->setStyleSheet(kGreenToggle);
+        m_muteBtn[i]->setStyleSheet(vaxButtonStyle() + Style::greenCheckedStyle());
         m_muteBtn[i]->setFixedSize(46, 20);
         m_muteBtn[i]->setToolTip(
             QStringLiteral("Mute VAX channel %1 (suppresses the tap without"
@@ -194,7 +201,7 @@ void VaxApplet::buildUi()
         devRow->setContentsMargins(48, 0, 0, 0);
         devRow->setSpacing(0);
         m_deviceLbl[i] = new QLabel(deviceLabelFor(channel), body);
-        m_deviceLbl[i]->setStyleSheet(QString::fromLatin1(kDeviceLabel));
+        m_deviceLbl[i]->setStyleSheet(QStringLiteral("QLabel { color: #506070; font-size: 10px; }"));
         devRow->addWidget(m_deviceLbl[i]);
         devRow->addStretch();
         vbox->addLayout(devRow);
@@ -216,12 +223,12 @@ void VaxApplet::buildUi()
         row->setSpacing(4);
 
         auto* txLabel = new QLabel(QStringLiteral("TX:"), body);
-        txLabel->setStyleSheet(QString::fromLatin1(kDimLabel));
+        txLabel->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 11px; }").arg(Style::kTextSecondary));
         txLabel->setFixedWidth(44);
         row->addWidget(txLabel);
 
         m_txTagsLbl = new QLabel(QStringLiteral("\u2014"), body);
-        m_txTagsLbl->setStyleSheet(kStatusLabel);
+        m_txTagsLbl->setStyleSheet(QStringLiteral("QLabel { color: #506070; font-size: 11px; }"));
         m_txTagsLbl->setFixedWidth(56);
         row->addWidget(m_txTagsLbl);
 
