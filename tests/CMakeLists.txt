@@ -77,6 +77,11 @@ nereus_add_test(tst_alex_filter_map)
 # ── Phase 3P-A P1CodecStandard ramdor WriteMainLoop port (Task 5+6) ──
 nereus_add_test(tst_p1_codec_standard)
 
+# ── P1 full-parity Task 1.1: P1CodecStandard mic_ptt direct polarity ──
+# Closes the gap PR #161 left for non-HL2 boards (relay flutter root cause
+# on ANAN-10E/HermesII; same fix as HL2 commit ca8cd73).
+nereus_add_test(tst_p1_codec_standard_bank11_polarity)
+
 # ── Phase 3P-A P1CodecAnvelinaPro3 bank 17 extra OC (Task 7) ──
 nereus_add_test(tst_p1_codec_anvelina_pro3)
 
