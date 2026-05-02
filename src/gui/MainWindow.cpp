@@ -2745,6 +2745,18 @@ void MainWindow::buildStatusBar()
             // Qt::UniqueConnection is not supported for lambda connects anyway.
             connect(conn, &RadioConnection::userAdc0Changed, this,
                     [this](float v) {
+                // Task 3.6: ANAN-8000DLE user preference gate.
+                // For ANAN-8000D radios, consult the "Show volts/amps in title
+                // bar" AppSettings key (default true). For other MKII-class
+                // boards (7000DLE, AnvelinaPro3) the gate is always open —
+                // those boards don't have the per-SKU preference checkbox.
+                const bool is8000D = (m_radioModel &&
+                    m_radioModel->hardwareProfile().model == HPSDRModel::ANAN8000D);
+                const bool showVolts = !is8000D ||
+                    AppSettings::instance().value(
+                        QStringLiteral("HardwareAnan8000DleShowVoltsAmps"),
+                        QStringLiteral("True")).toString() == QStringLiteral("True");
+                if (!showVolts) { return; }
                 const bool wasHidden = !m_paVoltLabel->isVisible();
                 m_paVoltLabel->setValue(QString::asprintf("%.1fV", static_cast<double>(v)));
                 m_paVoltLabel->setVisible(true);
@@ -2993,7 +3005,13 @@ void MainWindow::buildStatusBar()
                                                     m_cpuSmoothedPct));
         }
     });
-    m_cpuTimer->start(1000);
+    // Task 3.6: restore persisted rate (default 1 Hz = 1000 ms interval).
+    {
+        const int savedHz = AppSettings::instance().value(
+            QStringLiteral("GeneralCpuMeterUpdateRateHz"), 1).toInt();
+        const int clampedHz = qBound(1, savedHz, 30);
+        m_cpuTimer->start(1000 / clampedHz);
+    }
 
     // Add the full-width bar widget to the status bar
     sb->addWidget(barWidget, 1);
@@ -3024,6 +3042,39 @@ void MainWindow::setTxInhibited(bool inhibited)
     m_txInhibitLabel->setVisible(inhibited);
 }
 
+// ── Task 3.6: CPU meter rate ─────────────────────────────────────────────────
+// Live-applies the CPU meter update interval from GeneralOptionsPage spinbox.
+// Restarts m_cpuTimer with the new period. hz is clamped to [1, 30] so a
+// zero or negative value from a misconfigured spinbox cannot stop the timer.
+void MainWindow::setCpuTimerIntervalHz(int hz)
+{
+    if (!m_cpuTimer) { return; }
+    const int clamped = qBound(1, hz, 30);
+    m_cpuTimer->setInterval(1000 / clamped);
+}
+
+// ── Task 3.6: ANAN-8000DLE volts/amps visibility ────────────────────────────
+// Called when the "Show volts/amps in title bar" checkbox on Hardware →
+// Radio Info is toggled.  Only has visible effect for ANAN-8000D radios
+// (m_paVoltLabel is already hidden for non-MKII boards by the hardware gate
+// in buildStatusBar(); this gives the user an additional opt-out).
+void MainWindow::setVoltsAmpsVisible(bool visible)
+{
+    if (!m_paVoltLabel) { return; }
+    // Only change visibility when the widget is already populated (i.e. a
+    // MKII-class radio is connected and has sent at least one userAdc0Changed
+    // signal). If not yet shown, the user preference is stored in AppSettings
+    // and consulted by the userAdc0Changed lambda in buildStatusBar().
+    if (!visible && m_paVoltLabel->isVisible()) {
+        m_paVoltLabel->setVisible(false);
+        if (m_paVoltLabelSep) { m_paVoltLabelSep->setVisible(false); }
+        reapplyRightStripDropPriority(/*force=*/true);
+    }
+    // Note: toggling back to visible=true does not force-show the widget;
+    // the next userAdc0Changed will re-show it. This avoids showing a stale
+    // "—" value before the first ADC reading arrives.
+}
+
 // ---------------------------------------------------------------------------
 // Phase 3M-3a-ii Batch 6 (Task 3) — wireSetupDialog
 //
@@ -3042,6 +3093,12 @@ void MainWindow::wireSetupDialog(SetupDialog* dialog)
         connect(dialog, &SetupDialog::cfcDialogRequested,
                 m_txApplet, &TxApplet::requestOpenCfcDialog);
     }
+    // Task 3.6: CPU meter rate live-apply.
+    connect(dialog, &SetupDialog::cpuMeterRateChanged,
+            this,   &MainWindow::setCpuTimerIntervalHz);
+    // Task 3.6: ANAN-8000DLE volts/amps live-apply.
+    connect(dialog, &SetupDialog::anan8000DleVoltsAmpsChanged,
+            this,   &MainWindow::setVoltsAmpsVisible);
 }
 
 void MainWindow::wireSliceToSpectrum()

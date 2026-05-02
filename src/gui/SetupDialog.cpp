@@ -185,11 +185,28 @@ void SetupDialog::buildTree()
     add(general, "Startup & Preferences", new StartupPrefsPage(m_model));
     add(general, "UI Scale & Theme",       new UiScalePage(m_model));
     add(general, "Navigation",             new NavigationPage(m_model));
-    add(general, "Options",                new GeneralOptionsPage(m_model));
+
+    // Task 3.6: CPU meter rate spinbox — forward signal up to SetupDialog so
+    // MainWindow's wireSetupDialog() can connect it to setCpuTimerIntervalHz().
+    {
+        auto* optionsPage = new GeneralOptionsPage(m_model);
+        add(general, "Options", optionsPage);
+        connect(optionsPage, &GeneralOptionsPage::cpuMeterRateChanged,
+                this,        &SetupDialog::cpuMeterRateChanged);
+    }
 
     // ── Hardware ─────────────────────────────────────────────────────────────
     QTreeWidgetItem* hardware = addCategory("Hardware");
-    add(hardware, "Hardware Config", new HardwarePage(m_model));
+
+    // Task 3.6: ANAN-8000DLE volts/amps toggle — forward signal up to
+    // SetupDialog so MainWindow's wireSetupDialog() can connect it to
+    // setVoltsAmpsVisible().
+    {
+        auto* hwPage = new HardwarePage(m_model);
+        add(hardware, "Hardware Config", hwPage);
+        connect(hwPage, &HardwarePage::anan8000DleVoltsAmpsChanged,
+                this,   &SetupDialog::anan8000DleVoltsAmpsChanged);
+    }
 
     // ── Audio ─────────────────────────────────────────────────────────────────
     QTreeWidgetItem* audio = addCategory("Audio");
