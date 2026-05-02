@@ -1103,6 +1103,22 @@ void MainWindow::buildUI()
         });
         connect(m_overlayPanel, &SpectrumOverlayPanel::clarityRetuneRequested,
                 m_clarityController, &ClarityController::retuneNow);
+
+        // B8 Task 20: wire Display-flyout orphaned signals to SpectrumWidget.
+        // These three signals were emitted but never connected — moving the
+        // WF Gain / WF Black Level sliders and the Scheme combo did nothing.
+        connect(m_overlayPanel, &SpectrumOverlayPanel::wfColorGainChanged,
+                m_spectrumWidget, &SpectrumWidget::setWfColorGain);
+        connect(m_overlayPanel, &SpectrumOverlayPanel::wfBlackLevelChanged,
+                m_spectrumWidget, &SpectrumWidget::setWfBlackLevel);
+        connect(m_overlayPanel, &SpectrumOverlayPanel::colorSchemeChanged,
+                m_spectrumWidget, [this](int idx) {
+            // colorSchemeChanged carries a raw combo index (int); setWfColorScheme
+            // takes the WfColorScheme enum — adapt with a bounds-checked cast.
+            const int schemeCount = static_cast<int>(WfColorScheme::Count);
+            m_spectrumWidget->setWfColorScheme(
+                static_cast<WfColorScheme>(qBound(0, idx, schemeCount - 1)));
+        });
     }
 
     // Wire: zoom changes → adjust FFT size for appropriate bin resolution

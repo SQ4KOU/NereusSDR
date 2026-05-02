@@ -2601,3 +2601,10 @@ nereus_add_test(tst_antenna_popup_builder)
 # Per docs/superpowers/plans/2026-05-01-ui-polish-cross-surface.md §B6.
 nereus_add_test(tst_xit_offset_application)
 target_compile_definitions(tst_xit_offset_application PRIVATE NEREUS_BUILD_TESTS)
+
+# ── UI Polish Foundation B8 Task 20: SpectrumOverlayPanel Display-flyout signals ──
+# TDD: verifies wfColorGainChanged / wfBlackLevelChanged / colorSchemeChanged
+# emit correctly from Display-flyout controls.  Manual-connect tests verify
+# the lambda wiring pattern MainWindow uses.
+# Per docs/superpowers/plans/2026-05-01-ui-polish-cross-surface.md §B8.
+nereus_add_test(tst_b8_overlay_signals)

@@ -639,6 +639,7 @@ void SpectrumOverlayPanel::buildDisplayFlyout()
         grid->addWidget(lbl, row, 0, 1, 2);
 
         m_colorSchemeCmb = new QComboBox;
+        m_colorSchemeCmb->setObjectName(QStringLiteral("colorSchemeCmb"));
         m_colorSchemeCmb->setFixedHeight(18);
         m_colorSchemeCmb->addItems({"Classic", "Phosphor", "Sunrise", "Inverted"});
         grid->addWidget(m_colorSchemeCmb, row, 2, 1, 2);
@@ -654,6 +655,7 @@ void SpectrumOverlayPanel::buildDisplayFlyout()
         grid->addWidget(lbl, row, 0);
 
         m_wfGainSlider = new QSlider(Qt::Horizontal);
+        m_wfGainSlider->setObjectName(QStringLiteral("wfGainSlider"));
         m_wfGainSlider->setRange(0, 100);
         m_wfGainSlider->setValue(50);
         m_wfGainSlider->setStyleSheet(sliderStyle);
@@ -680,6 +682,7 @@ void SpectrumOverlayPanel::buildDisplayFlyout()
         grid->addWidget(lbl, row, 0);
 
         m_wfBlackSlider = new QSlider(Qt::Horizontal);
+        m_wfBlackSlider->setObjectName(QStringLiteral("wfBlackSlider"));
         m_wfBlackSlider->setRange(0, 100);
         m_wfBlackSlider->setValue(15);
         m_wfBlackSlider->setStyleSheet(sliderStyle);

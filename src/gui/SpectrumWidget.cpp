@@ -702,6 +702,23 @@ void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
 void SpectrumWidget::setWfColorScheme(WfColorScheme scheme)
 {
     m_wfColorScheme = scheme;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setWfColorGain(int gain)
+{
+    if (m_wfColorGain == gain) { return; }
+    m_wfColorGain = gain;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setWfBlackLevel(int level)
+{
+    if (m_wfBlackLevel == level) { return; }
+    m_wfBlackLevel = level;
+    scheduleSettingsSave();
     update();
 }
 
