@@ -234,6 +234,7 @@ warren@wpratt.com
 #include "core/MicProfileManager.h"
 #include "core/StepAttenuatorController.h"
 #include "core/TwoToneController.h"
+#include "models/FilterPresetStore.h"
 #include "core/accessories/N2adrPreset.h"
 #include "core/TxChannel.h"
 // 3M-1c TX pump architecture redesign — dedicated worker thread for
@@ -260,6 +261,7 @@ warren@wpratt.com
 #include "core/LogCategories.h"
 #include "core/NoiseFloorTracker.h"
 #include "core/ModelPaths.h"
+#include "core/SkuUiProfile.h"
 #include "core/wdsp_api.h"
 #include "gui/SpectrumWidget.h"
 
@@ -803,6 +805,11 @@ RadioModel::RadioModel(QObject* parent)
     m_twoToneController = new TwoToneController(this);
     m_twoToneController->setTransmitModel(&m_transmitModel);
     m_twoToneController->setMoxController(m_moxController);
+
+    // ── Stage C2: FilterPresetStore ───────────────────────────────────────────
+    // Wraps Thetis-verbatim defaults from SliceModel::presetsForMode with a
+    // user-override layer persisted in AppSettings (keys: "filters/<mode>/<slot>/…").
+    m_filterPresetStore = new FilterPresetStore(this);
 
     // 3M-1a (Codex review on PR #144): wire RF-Power-slider movements to
     // the radio's drive byte.  Without this, the slider updates UI/model
@@ -2179,6 +2186,28 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 });
             }
 
+            // Plan 4 D8: per-profile TX filter → WDSP via 50 ms debounce.
+            //
+            // TransmitModel lives on the main thread; TxChannel lives on
+            // TxWorkerThread (moved below).  We route through the intermediate
+            // RadioModel::txFilterRequest signal so Qt auto-connection selects
+            // QueuedConnection for TxChannel::requestFilterChange — ensuring the
+            // debounce timer and WDSP call execute on the audio thread.
+            //
+            // Step 1: main-thread lambda captures active slice DSP mode and
+            //         re-emits as txFilterRequest(low, high, mode).
+            connect(&m_transmitModel, &TransmitModel::filterChanged,
+                    this, [this](int audioLow, int audioHigh) {
+                DSPMode mode = m_activeSlice ? m_activeSlice->dspMode()
+                                             : DSPMode::USB;
+                emit txFilterRequest(audioLow, audioHigh, mode);
+            });
+            // Step 2: txFilterRequest (main thread sender) → requestFilterChange
+            //         (audio thread slot).  Auto-connection becomes QueuedConnection
+            //         after moveToThread below.
+            connect(this, &RadioModel::txFilterRequest,
+                    m_txChannel, &TxChannel::requestFilterChange);
+
             // Initial sync — push current TransmitModel state (loaded by
             // loadFromSettings at line 1106) into TxChannel before the worker
             // thread takes over.  Runs on the main thread; subsequent setter
@@ -2679,11 +2708,14 @@ void RadioModel::wireSliceSignals()
         if (rxIdx >= 0) {
             m_receiverManager->setReceiverFrequency(rxIdx, static_cast<quint64>(freq));
         }
-        // TX follows RX (simplex)
+        // TX follows RX (simplex), with XIT offset applied.
+        // XIT offsets the TX NCO without moving the RX DDC — mirroring Thetis
+        // console.cs VFO_Pots pattern where chkXIT shifts only the TX frequency.
         if (m_connection) {
-            quint64 freqHz = static_cast<quint64>(freq);
-            QMetaObject::invokeMethod(m_connection, [conn = m_connection, freqHz]() {
-                conn->setTxFrequency(freqHz);
+            const qint64 xitOffset = slice->xitEnabled() ? static_cast<qint64>(slice->xitHz()) : 0LL;
+            const quint64 txFreqHz = static_cast<quint64>(static_cast<qint64>(freq) + xitOffset);
+            QMetaObject::invokeMethod(m_connection, [conn = m_connection, txFreqHz]() {
+                conn->setTxFrequency(txFreqHz);
             });
         }
         // Track band from VFO frequency so per-band saves target the correct
@@ -3285,6 +3317,21 @@ void RadioModel::wireSliceSignals()
     connect(slice, &SliceModel::diguOffsetHzChanged, this, updateShiftFrequency);
     connect(slice, &SliceModel::dspModeChanged,      this, updateShiftFrequency);
 
+    // XIT change → push updated TX frequency (offset from current VFO freq).
+    // Parallel to the RIT updateShiftFrequency pattern above: when XIT state
+    // changes, recompute and push the new TX NCO frequency.  The VFO frequency
+    // itself does not change — only the TX NCO offset.
+    auto updateTxFrequency = [this, slice]() {
+        if (!m_connection) { return; }
+        const qint64 xitOffset = slice->xitEnabled() ? static_cast<qint64>(slice->xitHz()) : 0LL;
+        const quint64 txFreqHz = static_cast<quint64>(static_cast<qint64>(slice->frequency()) + xitOffset);
+        QMetaObject::invokeMethod(m_connection, [conn = m_connection, txFreqHz]() {
+            conn->setTxFrequency(txFreqHz);
+        });
+    };
+    connect(slice, &SliceModel::xitEnabledChanged, this, updateTxFrequency);
+    connect(slice, &SliceModel::xitHzChanged,      this, updateTxFrequency);
+
     // RTTY mark + shift → bandpass filter
     //
     // RTTY uses two audio tones: mark (freq1 = 2295 Hz) and space (freq0 = 2125 Hz).
@@ -3367,10 +3414,30 @@ void RadioModel::wireSliceSignals()
     // persistence uniform across all UI surfaces
     // (see docs/architecture/antenna-routing-design.md §5.1).
     connect(slice, &SliceModel::rxAntennaChanged, this, [this](const QString& ant) {
-        int antNum = 1;
-        if (ant == QLatin1String("ANT2")) { antNum = 2; }
-        else if (ant == QLatin1String("ANT3")) { antNum = 3; }
-        m_alexController.setRxAnt(m_lastBand, antNum);
+        // ANT1/2/3 → setRxAnt (direct hardware port). Non-ANT/non-bypass
+        // labels (EXT1, EXT2, XVTR, RX1, RX2, BYPS…) → setRxOnlyAnt with
+        // the 1-based position in SkuUiProfile::rxOnlyLabels, mirroring the
+        // routing used by RxApplet's popup handler (RxApplet.cpp:279-293).
+        // "RX out on TX" is a bypass toggle handled separately, not here.
+        // Fixes SpectrumOverlayPanel antenna combo silently no-op'ing for
+        // non-ANT selections (B3 fix-up).
+        // Source: same routing as RxApplet popup handler (RxApplet.cpp:279-293).
+        if (ant.startsWith(QStringLiteral("ANT"))) {
+            int antNum = 1;
+            if (ant == QLatin1String("ANT2")) { antNum = 2; }
+            else if (ant == QLatin1String("ANT3")) { antNum = 3; }
+            m_alexController.setRxAnt(m_lastBand, antNum);
+        } else if (ant != QStringLiteral("RX out on TX")) {
+            // RX-only label: find 1-based position in SkuUiProfile::rxOnlyLabels.
+            const SkuUiProfile sku = skuUiProfileFor(m_hardwareProfile.model);
+            const auto& lbls = sku.rxOnlyLabels;
+            for (int i = 0; i < static_cast<int>(lbls.size()); ++i) {
+                if (lbls[static_cast<size_t>(i)] == ant) {
+                    m_alexController.setRxOnlyAnt(m_lastBand, i + 1);
+                    break;
+                }
+            }
+        }
         scheduleSettingsSave();
     });
     connect(slice, &SliceModel::txAntennaChanged, this, [this](const QString& ant) {
@@ -3382,7 +3449,9 @@ void RadioModel::wireSliceSignals()
         scheduleSettingsSave();
     });
 
-    // Send initial frequency to radio (after connection init completes)
+    // Send initial frequency to radio (after connection init completes).
+    // XIT offset applied here too so on-connect TX NCO matches the stored
+    // XIT state without needing a separate update trigger.
     QTimer::singleShot(100, this, [this, slice]() {
         if (m_connection && m_connection->isConnected()) {
             int rxIdx = slice->receiverIndex();
@@ -3390,8 +3459,10 @@ void RadioModel::wireSliceSignals()
             if (rxIdx >= 0) {
                 m_receiverManager->setReceiverFrequency(rxIdx, freqHz);
             }
-            QMetaObject::invokeMethod(m_connection, [conn = m_connection, freqHz]() {
-                conn->setTxFrequency(freqHz);
+            const qint64 xitOffset = slice->xitEnabled() ? static_cast<qint64>(slice->xitHz()) : 0LL;
+            const quint64 txFreqHz = static_cast<quint64>(static_cast<qint64>(freqHz) + xitOffset);
+            QMetaObject::invokeMethod(m_connection, [conn = m_connection, txFreqHz]() {
+                conn->setTxFrequency(txFreqHz);
             });
         }
     });

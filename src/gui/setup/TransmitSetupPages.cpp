@@ -90,6 +90,7 @@
 //============================================================================================//
 
 #include "TransmitSetupPages.h"
+#include "gui/StyleConstants.h"
 #include "core/AppSettings.h"
 #include "core/MicProfileManager.h"
 #include "models/RadioModel.h"
@@ -115,45 +116,6 @@
 
 namespace NereusSDR {
 
-namespace {
-
-void applyDarkStyle(QWidget* w)
-{
-    w->setStyleSheet(QStringLiteral(
-        "QGroupBox { color: #8090a0; font-size: 11px;"
-        "  border: 1px solid #203040; border-radius: 4px;"
-        "  margin-top: 8px; padding-top: 4px; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
-        "QLabel { color: #c8d8e8; }"
-        "QComboBox { background: #1a2a3a; color: #c8d8e8; border: 1px solid #203040;"
-        "  border-radius: 3px; padding: 2px 6px; }"
-        "QComboBox::drop-down { border: none; }"
-        "QComboBox QAbstractItemView { background: #1a2a3a; color: #c8d8e8;"
-        "  selection-background-color: #00b4d8; }"
-        "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -4px 0;"
-        "  border-radius: 6px; }"
-        "QSlider::sub-page:horizontal { background: #00b4d8; border-radius: 2px; }"
-        "QSpinBox, QDoubleSpinBox { background: #1a2a3a; color: #c8d8e8;"
-        "  border: 1px solid #203040; border-radius: 3px; padding: 1px 4px; }"
-        // Up/down buttons: rely on Fusion + app-level dark palette
-        // (see main.cpp / AppTheme.h). Styling the subcontrols here
-        // would erase the native arrow images.
-        "QCheckBox { color: #c8d8e8; }"
-        "QCheckBox::indicator { width: 14px; height: 14px; background: #1a2a3a;"
-        "  border: 1px solid #203040; border-radius: 2px; }"
-        "QCheckBox::indicator:checked { background: #00b4d8; border-color: #00b4d8; }"
-        "QLineEdit { background: #1a2a3a; color: #c8d8e8; border: 1px solid #203040;"
-        "  border-radius: 3px; padding: 2px 6px; }"
-        "QPushButton { background: #1a2a3a; color: #c8d8e8; border: 1px solid #203040;"
-        "  border-radius: 3px; padding: 3px 12px; }"
-        "QPushButton:hover { background: #203040; }"
-        "QPushButton:pressed { background: #00b4d8; color: #0f0f1a; }"
-    ));
-}
-
-} // anonymous namespace
-
 // ---------------------------------------------------------------------------
 // PowerPage
 // ---------------------------------------------------------------------------
@@ -166,7 +128,7 @@ PowerPage::PowerPage(RadioModel* model, QWidget* parent)
 
 void PowerPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     buildPowerGroup();
     buildTunePowerGroup();
@@ -549,7 +511,7 @@ TxProfilesPage::TxProfilesPage(RadioModel* model, QWidget* parent)
 
 void TxProfilesPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     // --- Section: Profile ---
     auto* profGroup = new QGroupBox(QStringLiteral("Profile"), this);
@@ -643,7 +605,7 @@ SpeechProcessorPage::SpeechProcessorPage(RadioModel* model, QWidget* parent)
 
 void SpeechProcessorPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     buildActiveProfileSection();
     buildStageStatusSection();
@@ -1090,7 +1052,7 @@ PureSignalPage::PureSignalPage(RadioModel* model, QWidget* parent)
 
 void PureSignalPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     // --- Section: PureSignal ---
     auto* psGroup = new QGroupBox(QStringLiteral("PureSignal"), this);

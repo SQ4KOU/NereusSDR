@@ -99,7 +99,7 @@ void LedItemEditor::buildTypeSpecific()
             notifyChanged();
         }
     });
-    addRow(QStringLiteral("True colour"), m_btnTrueColour);
+    addRow(QStringLiteral("True color"), m_btnTrueColour);
 
     m_btnFalseColour = new QPushButton(this);
     m_btnFalseColour->setFixedSize(40, 18);
@@ -115,7 +115,7 @@ void LedItemEditor::buildTypeSpecific()
             notifyChanged();
         }
     });
-    addRow(QStringLiteral("False colour"), m_btnFalseColour);
+    addRow(QStringLiteral("False color"), m_btnFalseColour);
 
     // Panel
     m_chkShowPanel = makeCheckRow(QStringLiteral("Show panel"));

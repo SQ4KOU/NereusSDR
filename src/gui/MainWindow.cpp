@@ -1080,6 +1080,18 @@ void MainWindow::buildUI()
     connect(&m_radioModel->transmitModel(), &TransmitModel::moxChanged,
             m_clarityController, &ClarityController::setTransmitting);
 
+    // Plan 4 D9 (Cluster E): TX filter audio range → spectrum overlay.
+    // TransmitModel::filterChanged carries (low, high) audio Hz; SpectrumWidget
+    // converts to IQ-space at draw time using m_txMode (set below via slice).
+    if (m_spectrumWidget) {
+        connect(&m_radioModel->transmitModel(), &TransmitModel::filterChanged,
+                m_spectrumWidget, &SpectrumWidget::setTxFilterRange);
+
+        // Initial sync from current TransmitModel state.
+        const auto& txModel = m_radioModel->transmitModel();
+        m_spectrumWidget->setTxFilterRange(txModel.filterLow(), txModel.filterHigh());
+    }
+
     // Clarity → SpectrumWidget threshold update + clarityActive flag
     connect(m_clarityController, &ClarityController::waterfallThresholdsChanged,
             m_spectrumWidget, [this](float low, float high) {
@@ -1110,6 +1122,46 @@ void MainWindow::buildUI()
         });
         connect(m_overlayPanel, &SpectrumOverlayPanel::clarityRetuneRequested,
                 m_clarityController, &ClarityController::retuneNow);
+
+        // B8 Task 20: wire Display-flyout orphaned signals to SpectrumWidget.
+        // These three signals were emitted but never connected — moving the
+        // WF Gain / WF Black Level sliders and the Scheme combo did nothing.
+        connect(m_overlayPanel, &SpectrumOverlayPanel::wfColorGainChanged,
+                m_spectrumWidget, &SpectrumWidget::setWfColorGain);
+        connect(m_overlayPanel, &SpectrumOverlayPanel::wfBlackLevelChanged,
+                m_spectrumWidget, &SpectrumWidget::setWfBlackLevel);
+        connect(m_overlayPanel, &SpectrumOverlayPanel::colorSchemeChanged,
+                m_spectrumWidget, [this](int idx) {
+            // colorSchemeChanged carries a raw combo index (int); setWfColorScheme
+            // takes the WfColorScheme enum — adapt with a bounds-checked cast.
+            const int schemeCount = static_cast<int>(WfColorScheme::Count);
+            m_spectrumWidget->setWfColorScheme(
+                static_cast<WfColorScheme>(qBound(0, idx, schemeCount - 1)));
+        });
+
+        // B8 Task 21: wire Cursor Freq toggle to SpectrumWidget visibility guard.
+        connect(m_overlayPanel, &SpectrumOverlayPanel::cursorFreqVisibleChanged,
+                m_spectrumWidget, &SpectrumWidget::setCursorFreqVisible);
+
+        // B8 Task 22: wire Fill Color button to SpectrumWidget::setFillColor.
+        connect(m_overlayPanel, &SpectrumOverlayPanel::fillColorChanged,
+                m_spectrumWidget, &SpectrumWidget::setFillColor);
+
+        // B8 fix-up: wire Fill Alpha slider to SpectrumWidget::setFillAlpha.
+        // The slider emitted fillAlphaChanged but had no connect — opacity
+        // never reached the renderer.
+        connect(m_overlayPanel, &SpectrumOverlayPanel::fillAlphaChanged,
+                m_spectrumWidget, &SpectrumWidget::setFillAlpha);
+
+        // B8 Task 24: wire "More Display Options →" link to Setup → Display.
+        connect(m_overlayPanel, &SpectrumOverlayPanel::openSetupRequested,
+                this, [this](const QString& page) {
+            auto* dialog = new SetupDialog(m_radioModel, this);
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            wireSetupDialog(dialog);
+            dialog->selectPage(page);
+            dialog->show();
+        });
     }
 
     // Wire: zoom changes → adjust FFT size for appropriate bin resolution
@@ -1403,10 +1455,13 @@ void MainWindow::populateDefaultMeter()
 
     // Phase 3P-I-a T16 — push board caps into RxApplet so ANT buttons
     // hide on HL2/Atlas. Matches the VFO Flag wiring below (T15).
+    // B3: also push SKU profile so AntennaPopupBuilder knows rxOnlyLabels.
     m_rxApplet->setBoardCapabilities(m_radioModel->boardCapabilities());
+    m_rxApplet->setHpsdrSku(m_radioModel->hardwareProfile().model);
     connect(m_radioModel, &RadioModel::currentRadioChanged, m_rxApplet,
             [this]() {
         m_rxApplet->setBoardCapabilities(m_radioModel->boardCapabilities());
+        m_rxApplet->setHpsdrSku(m_radioModel->hardwareProfile().model);
     });
 
     // TxApplet — NYI shell (Phase 3I-1)
@@ -1500,9 +1555,13 @@ void MainWindow::populateDefaultMeter()
     m_phoneCwApplet = new PhoneCwApplet(m_radioModel, nullptr);
     panel->addApplet(m_phoneCwApplet);
 
-    // EqApplet — 10-band EQ, NYI (Phase 3I-3)
-    m_eqApplet = new EqApplet(m_radioModel, nullptr);
-    panel->addApplet(m_eqApplet);
+    // Ghost applets — hidden per docs/superpowers/plans/2026-05-01-ui-polish-right-panel.md §Task 6.
+    // These applets are entirely placeholder-only today (no wired controls).
+    // Showing them is misleading — users click e.g. "Equalizer" and nothing happens.
+    // Uncomment each when its feature phase ships (one-line re-enable).
+    //
+    // m_eqApplet = new EqApplet(m_radioModel, nullptr);           // TODO 3I-3: TX/RX EQ wiring
+    // panel->addApplet(m_eqApplet);
 
     // VaxApplet — per-VAX-channel gain + mute + level meters
     // (Phase 3O Sub-Phase 9 Task 9.2b).
@@ -1510,19 +1569,21 @@ void MainWindow::populateDefaultMeter()
                                 m_radioModel->audioEngine(), nullptr);
     panel->addApplet(m_vaxApplet);
 
-    // Tasks 7-10: NYI applets created but NOT added to the container.
-    // Task 15 (final assembly) will wire these via the Containers menu.
-    m_digitalApplet    = new DigitalApplet(m_radioModel, nullptr);
-    m_pureSignalApplet = new PureSignalApplet(m_radioModel, nullptr);
-    m_diversityApplet  = new DiversityApplet(m_radioModel, nullptr);
-    m_cwxApplet        = new CwxApplet(m_radioModel, nullptr);
-    m_dvkApplet        = new DvkApplet(m_radioModel, nullptr);
-    m_catApplet        = new CatApplet(m_radioModel, nullptr);
-    m_tunerApplet      = new TunerApplet(m_radioModel, nullptr);
+    // Ghost applets: constructed but not added to the panel or the Containers menu
+    // until their feature phases ship. Uncomment the construction + addContainerToggle
+    // call (in buildMenuBar) together when the feature lands.
+    //
+    // m_digitalApplet    = new DigitalApplet(m_radioModel, nullptr);    // TODO 3-VAX
+    // m_pureSignalApplet = new PureSignalApplet(m_radioModel, nullptr); // TODO 3M-4 (PureSignal)
+    // m_diversityApplet  = new DiversityApplet(m_radioModel, nullptr);  // TODO 3F (multi-RX)
+    // m_cwxApplet        = new CwxApplet(m_radioModel, nullptr);        // TODO 3M-2 (CW TX)
+    // m_dvkApplet        = new DvkApplet(m_radioModel, nullptr);        // TODO 3M-1 (DVK)
+    // m_catApplet        = new CatApplet(m_radioModel, nullptr);        // TODO 3J/3K/3-VAX
+    // m_tunerApplet      = new TunerApplet(m_radioModel, nullptr);      // TODO ATU phase
 
     c0->setContent(panel);
     qCDebug(lcMeter) << "Installed default meter layout: S-Meter + Power/SWR + ALC";
-    qCDebug(lcContainer) << "Container #0: Meters + RxApplet + TxApplet + PhoneCwApplet + EqApplet (10-band)";
+    qCDebug(lcContainer) << "Container #0: Meters + RxApplet + TxApplet + PhoneCwApplet + VaxApplet";
 }
 
 void MainWindow::buildMenuBar()
@@ -2266,30 +2327,37 @@ void MainWindow::buildMenuBar()
 
     containersMenu->addSeparator();
 
-    // Dynamic show/hide toggles for the 7 optional applets in Container #0.
+    // Dynamic show/hide toggles for optional applets in Container #0.
     // Checked = visible in panel; unchecked = hidden/removed.
-    // All 7 are hidden by default; user enables as needed.
-    auto addContainerToggle = [&](const QString& name, AppletWidget* applet, bool defaultVisible) {
-        auto* action = containersMenu->addAction(name);
-        action->setCheckable(true);
-        action->setChecked(defaultVisible);
-        connect(action, &QAction::toggled, this, [this, applet](bool show) {
-            if (!m_appletPanel) { return; }
-            if (show) {
-                m_appletPanel->addApplet(applet);
-            } else {
-                m_appletPanel->removeApplet(applet);
-            }
-        });
-    };
+    // Currently commented out (ghost applets hidden per
+    // docs/superpowers/plans/2026-05-01-ui-polish-right-panel.md §Task 6).
+    // Re-enable by un-commenting the lambda AND the addContainerToggle calls below,
+    // alongside the construction block in buildDefaultContainerLayout().
+    //
+    // auto addContainerToggle = [&](const QString& name, AppletWidget* applet, bool defaultVisible) {
+    //     auto* action = containersMenu->addAction(name);
+    //     action->setCheckable(true);
+    //     action->setChecked(defaultVisible);
+    //     connect(action, &QAction::toggled, this, [this, applet](bool show) {
+    //         if (!m_appletPanel) { return; }
+    //         if (show) {
+    //             m_appletPanel->addApplet(applet);
+    //         } else {
+    //             m_appletPanel->removeApplet(applet);
+    //         }
+    //     });
+    // };
 
-    addContainerToggle(QStringLiteral("Digital / VAC"), m_digitalApplet,    false);
-    addContainerToggle(QStringLiteral("PureSignal"),    m_pureSignalApplet, false);
-    addContainerToggle(QStringLiteral("Diversity"),     m_diversityApplet,  false);
-    addContainerToggle(QStringLiteral("CW Keyer"),      m_cwxApplet,        false);
-    addContainerToggle(QStringLiteral("Voice Keyer"),   m_dvkApplet,        false);
-    addContainerToggle(QStringLiteral("CAT / TCI"),     m_catApplet,        false);
-    addContainerToggle(QStringLiteral("ATU Control"),   m_tunerApplet,      false);
+    // Ghost-applet Containers menu entries — disabled until feature phases ship.
+    // Re-enable alongside the construction block in buildDefaultContainerLayout().
+    //
+    // addContainerToggle(QStringLiteral("Digital / VAC"), m_digitalApplet,    false); // TODO 3-VAX
+    // addContainerToggle(QStringLiteral("PureSignal"),    m_pureSignalApplet, false); // TODO 3M-4
+    // addContainerToggle(QStringLiteral("Diversity"),     m_diversityApplet,  false); // TODO 3F
+    // addContainerToggle(QStringLiteral("CW Keyer"),      m_cwxApplet,        false); // TODO 3M-2
+    // addContainerToggle(QStringLiteral("Voice Keyer"),   m_dvkApplet,        false); // TODO 3M-1
+    // addContainerToggle(QStringLiteral("CAT / TCI"),     m_catApplet,        false); // TODO 3J/3K
+    // addContainerToggle(QStringLiteral("ATU Control"),   m_tunerApplet,      false); // TODO ATU
 
     // =========================================================================
     // TOOLS
@@ -3025,6 +3093,9 @@ void MainWindow::wireSliceToSpectrum()
     connect(&m_radioModel->alexController(), &AlexController::rxOutOnTxChanged,
             vfo, &VfoWidget::setRxBypassActive);
 
+    // Stage C2: wire FilterPresetStore so VFO flag filter buttons use user overrides.
+    vfo->setFilterPresetStore(m_radioModel->filterPresetStore());
+
     // --- Slice → spectrum display ---
 
     // VFO frequency change → move VFO marker
@@ -3082,7 +3153,35 @@ void MainWindow::wireSliceToSpectrum()
         vfo->setFilter(low, high);
     });
 
+    // Plan 4 D9 (Cluster E): initial TX mode push so the overlay has the right
+    // IQ-space sign convention before the first paint.
+    if (m_spectrumWidget) {
+        m_spectrumWidget->setTxMode(slice->dspMode());
+        // Initial XIT offset push + signal wires below so the TX overlay
+        // centers on the actual TX frequency (RX VFO + XIT) rather than the
+        // RX VFO alone.  Codex review feedback on PR #166.
+        const int initialXitOffset = slice->xitEnabled() ? slice->xitHz() : 0;
+        m_spectrumWidget->setTxVfoOffsetHz(initialXitOffset);
+    }
+
+    // XIT-enabled toggle and XIT-Hz changes both feed the spectrum's TX
+    // overlay center.  When enabled flips off, the offset goes to zero;
+    // when on, the offset tracks xitHz.
+    auto pushXitOffset = [this, slice]() {
+        if (!m_spectrumWidget) { return; }
+        m_spectrumWidget->setTxVfoOffsetHz(slice->xitEnabled() ? slice->xitHz() : 0);
+    };
+    connect(slice, &SliceModel::xitEnabledChanged, this,
+            [pushXitOffset](bool /*enabled*/) { pushXitOffset(); });
+    connect(slice, &SliceModel::xitHzChanged, this,
+            [pushXitOffset](int /*hz*/) { pushXitOffset(); });
+
     connect(slice, &SliceModel::dspModeChanged, this, [this, vfo](DSPMode mode) {
+        // Plan 4 D9 (Cluster E): keep TX mode in sync so drawTxFilterOverlay
+        // maps audio Hz to the correct IQ-space sideband.
+        if (m_spectrumWidget) {
+            m_spectrumWidget->setTxMode(mode);
+        }
         vfo->setMode(mode);
         // Switch PhoneCwApplet page based on active mode
         if (m_phoneCwApplet) {
@@ -3176,6 +3275,14 @@ void MainWindow::wireSliceToSpectrum()
 
     connect(vfo, &VfoWidget::filterChanged, this, [slice](int low, int high) {
         slice->setFilter(low, high);
+    });
+
+    // Shift+click on a filter preset on the flag — snap TX passband to
+    // match the RX preset's audio Hz range (Thetis-style alignment shortcut).
+    connect(vfo, &VfoWidget::txFilterMatchRequested, this,
+            [this](int audioLow, int audioHigh) {
+        m_radioModel->transmitModel().setFilterLow(audioLow);
+        m_radioModel->transmitModel().setFilterHigh(audioHigh);
     });
 
     connect(vfo, &VfoWidget::agcModeChanged, this, [slice](AGCMode mode) {

@@ -222,6 +222,10 @@ private slots:
     // writes ctx.p1MicPTT (direct, since PR #161 / commit ca8cd73); HL2 FW
     // ignores the bit.  Source: mi0bot networkproto1.c:1101 [v2.10.3.14-beta1]
     //   C1 = ... | ((mic.mic_ptt & 1) << 6);
+    // Note: the standard (non-HL2) codec was inverted polarity in v0.3.0 and
+    // earlier; the post-PR-#165 fix at commit 4cb780b switched it to direct
+    // too, which is why the assertion above (test #1-12) flipped from the
+    // pre-merge expectation.
     void setMicPTTTrue_hl2CodecPath_c1Bit6Set() {
         P1RadioConnection conn;
         conn.setBoardForTest(HPSDRHW::HermesLite);  // → P1CodecHl2

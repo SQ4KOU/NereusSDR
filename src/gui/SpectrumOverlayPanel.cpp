@@ -38,8 +38,11 @@
 
 #include "SpectrumOverlayPanel.h"
 
+#include "StyleConstants.h"
 #include "core/AntennaLabels.h"
 #include "core/BoardCapabilities.h"
+#include "core/SkuUiProfile.h"
+#include "gui/AntennaPopupBuilder.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -69,58 +72,81 @@ static constexpr int kBandBtnH = 26;
 static constexpr int kPad      = 2;
 static constexpr int kGap      = 2;
 
-// Stylesheets — verbatim from AetherSDR SpectrumOverlayMenu.cpp
-static const QString kPanelStyle =
-    "QWidget { background: rgba(15, 15, 26, 220); "
-    "border: 1px solid #304050; border-radius: 3px; }";
+// Translucent overlay colours — intentionally NOT in StyleConstants.h because
+// they are designed to alpha-blend over the changing spectrum background (the
+// translucency is inherent to their purpose, not incidental). All opaque
+// panel/button colours have been consolidated to Style:: canonical helpers.
+// Per docs/architecture/ui-audit-polish-plan.md §A2 — "tightly-scoped local
+// blocks for legitimate exceptions."
+namespace OverlayColors {
+    // Flyout panel backgrounds (verbatim from AetherSDR SpectrumOverlayMenu.cpp)
+    constexpr auto kPanelStyle =
+        "QWidget { background: rgba(15, 15, 26, 220); "
+        "border: 1px solid #304050; border-radius: 3px; }";
 
-static const QString kLabelStyle =
-    "QLabel { background: transparent; border: none; "
-    "color: #8aa8c0; font-size: 10px; font-weight: bold; }";
+    // Label style for rows inside translucent flyout panels.
+    // Transparent background is required here because the label must not
+    // occlude the panel's own rgba layer. Color (#8aa8c0 = Style::kTitleText)
+    // has a canonical equivalent but the full rule (transparent bg, no border,
+    // 10 px bold) does not — keeping it co-located with the other overlay rules.
+    constexpr auto kLabelStyle =
+        "QLabel { background: transparent; border: none; "
+        "color: #8aa8c0; font-size: 10px; font-weight: bold; }";
 
-static const QString kSliderStyle =
-    "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; "
-    "border-radius: 2px; }"
-    "QSlider::handle:horizontal { background: #c8d8e8; width: 10px; "
-    "margin: -4px 0; border-radius: 5px; }";
+    // Menu strip buttons — fully transparent/semi-transparent fills that
+    // blend with the spectrum below.
+    constexpr auto kMenuBtnNormal =
+        "QPushButton { background: rgba(20, 30, 45, 240); "
+        "border: 1px solid rgba(255, 255, 255, 40); border-radius: 2px; "
+        "color: #c8d8e8; font-size: 11px; font-weight: bold; }"
+        "QPushButton:hover { background: rgba(0, 112, 192, 180); "
+        "border: 1px solid #0090e0; }";
 
-static const QString kMenuBtnNormal =
-    "QPushButton { background: rgba(20, 30, 45, 240); "
-    "border: 1px solid rgba(255, 255, 255, 40); border-radius: 2px; "
-    "color: #c8d8e8; font-size: 11px; font-weight: bold; }"
-    "QPushButton:hover { background: rgba(0, 112, 192, 180); "
-    "border: 1px solid #0090e0; }";
+    constexpr auto kMenuBtnActive =
+        "QPushButton { background: rgba(0, 112, 192, 180); "
+        "border: 1px solid #0090e0; border-radius: 2px; "
+        "color: #ffffff; font-size: 11px; font-weight: bold; }";
 
-static const QString kMenuBtnActive =
-    "QPushButton { background: rgba(0, 112, 192, 180); "
-    "border: 1px solid #0090e0; border-radius: 2px; "
-    "color: #ffffff; font-size: 11px; font-weight: bold; }";
+    constexpr auto kMenuBtnDisabled =
+        "QPushButton { background: rgba(20, 30, 45, 180); "
+        "border: 1px solid rgba(255, 255, 255, 15); border-radius: 2px; "
+        "color: #556070; font-size: 11px; font-weight: bold; }";
+} // namespace OverlayColors
 
-static const QString kMenuBtnDisabled =
-    "QPushButton { background: rgba(20, 30, 45, 180); "
-    "border: 1px solid rgba(255, 255, 255, 15); border-radius: 2px; "
-    "color: #556070; font-size: 11px; font-weight: bold; }";
+// File-local helpers for opaque styles that diverge from the canonical
+// Style:: helpers (per §A2 exception pattern — verified byte-by-byte):
 
-static const QString kDspBtnStyle =
-    "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
-    "border-radius: 2px; color: #c8d8e8; font-size: 10px; font-weight: bold; "
-    "padding: 1px 2px; }"
-    "QPushButton:checked { background: #1a6030; color: #ffffff; "
-    "border: 1px solid #20a040; }"
-    "QPushButton:hover { border: 1px solid #0090e0; }";
+// overlaySliderStyle — diverges from Style::sliderHStyle() on two counts:
+//   - groove bg: #1a2a3a (Style::kButtonBg) vs Style::sliderHStyle() kGroove (#203040)
+//   - handle bg: #c8d8e8 (Style::kTextPrimary, grey-white) vs kAccent (#00b4d8, cyan)
+//   - handle margin: -4px 0 vs sliderHStyle()'s -3px 0
+// These are deliberate — the overlay slider uses a low-contrast white handle
+// that is legible against the translucent panel rather than the main spectrum
+// accent colour.
+static inline QString overlaySliderStyle()
+{
+    return QStringLiteral(
+        "QSlider::groove:horizontal { background: %1; height: 4px; border-radius: 2px; }"
+        "QSlider::handle:horizontal { background: %2; width: 10px; margin: -4px 0; border-radius: 5px; }"
+    ).arg(Style::kButtonBg, Style::kTextPrimary);
+}
 
-static const QString kDisplayToggleStyle =
-    "QPushButton { background: #1a2a3a; color: #c8d8e8; border: 1px solid #205070;"
-    " border-radius: 3px; font-size: 10px; font-weight: bold; padding: 2px 6px; }"
-    "QPushButton:hover { background: #204060; }"
-    "QPushButton:checked { background: #006040; color: #00ff88; border-color: #00a060; }";
+// overlayDisplayToggleStyle — diverges from Style::buttonBaseStyle() + Style::greenCheckedStyle():
+//   - padding: 2px 6px vs buttonBaseStyle()'s 2px 4px (wider pill shape for display toggles)
+// All other tokens match: bg kButtonBg, border kBorder, color kTextPrimary, 10px bold,
+// border-radius 3px, hover kButtonAltHover, checked bg/text/border kGreen*.
+static inline QString overlayDisplayToggleStyle()
+{
+    return Style::buttonBaseStyle().replace("padding: 2px 4px", "padding: 2px 6px")
+         + Style::greenCheckedStyle();
+}
 
 // Helper: create a standard menu button
 static QPushButton* makeMenuBtn(const QString& text, QWidget* parent)
 {
     auto* btn = new QPushButton(text, parent);
     btn->setFixedSize(kBtnW, kBtnH);
-    btn->setStyleSheet(kMenuBtnNormal);
+    btn->setStyleSheet(OverlayColors::kMenuBtnNormal);
     return btn;
 }
 
@@ -129,7 +155,7 @@ static QPushButton* makeDisabledBtn(const QString& text, QWidget* parent)
 {
     auto* btn = new QPushButton(text, parent);
     btn->setFixedSize(kBtnW, kBtnH);
-    btn->setStyleSheet(kMenuBtnDisabled);
+    btn->setStyleSheet(OverlayColors::kMenuBtnDisabled);
     btn->setEnabled(false);
     btn->setToolTip("Not yet implemented");
     return btn;
@@ -307,7 +333,7 @@ void SpectrumOverlayPanel::hideFlyout()
         m_activeFlyout = nullptr;
     }
     if (m_activeButton) {
-        m_activeButton->setStyleSheet(kMenuBtnNormal);
+        m_activeButton->setStyleSheet(OverlayColors::kMenuBtnNormal);
         m_activeButton = nullptr;
     }
 }
@@ -352,7 +378,7 @@ void SpectrumOverlayPanel::toggle()
 void SpectrumOverlayPanel::buildBandFlyout()
 {
     m_bandFlyout = new QWidget(parentWidget());
-    m_bandFlyout->setStyleSheet(kPanelStyle);
+    m_bandFlyout->setStyleSheet(OverlayColors::kPanelStyle);
     m_bandFlyout->hide();
 
     auto* grid = new QGridLayout(m_bandFlyout);
@@ -410,7 +436,7 @@ void SpectrumOverlayPanel::toggleBandFlyout()
     m_bandFlyout->show();
     m_activeFlyout = m_bandFlyout;
     m_activeButton = bandBtn;
-    bandBtn->setStyleSheet(kMenuBtnActive);
+    bandBtn->setStyleSheet(OverlayColors::kMenuBtnActive);
 }
 
 // ── ANT flyout ────────────────────────────────────────────────────────────────
@@ -418,7 +444,7 @@ void SpectrumOverlayPanel::toggleBandFlyout()
 void SpectrumOverlayPanel::buildAntFlyout()
 {
     m_antFlyout = new QWidget(parentWidget());
-    m_antFlyout->setStyleSheet(kPanelStyle);
+    m_antFlyout->setStyleSheet(OverlayColors::kPanelStyle);
     m_antFlyout->hide();
 
     auto* vbox = new QVBoxLayout(m_antFlyout);
@@ -438,7 +464,7 @@ void SpectrumOverlayPanel::buildAntFlyout()
         row->setContentsMargins(0, 0, 0, 0);
         row->setSpacing(4);
         auto* lbl = new QLabel("RX Ant:");
-        lbl->setStyleSheet(kLabelStyle);
+        lbl->setStyleSheet(OverlayColors::kLabelStyle);
         lbl->setFixedWidth(kLabelW);
         row->addWidget(lbl);
         m_rxAntCmb = new QComboBox;
@@ -473,7 +499,7 @@ void SpectrumOverlayPanel::buildAntFlyout()
         row->setContentsMargins(0, 0, 0, 0);
         row->setSpacing(4);
         auto* lbl = new QLabel("TX Ant:");
-        lbl->setStyleSheet(kLabelStyle);
+        lbl->setStyleSheet(OverlayColors::kLabelStyle);
         lbl->setFixedWidth(kLabelW);
         row->addWidget(lbl);
         m_txAntCmb = new QComboBox;
@@ -499,7 +525,7 @@ void SpectrumOverlayPanel::buildAntFlyout()
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
         auto* lbl = new QLabel("RF Gain:");
-        lbl->setStyleSheet(kLabelStyle);
+        lbl->setStyleSheet(OverlayColors::kLabelStyle);
         lbl->setFixedWidth(kLabelW);
         row->addWidget(lbl);
 
@@ -510,12 +536,12 @@ void SpectrumOverlayPanel::buildAntFlyout()
         m_rfGainSlider->setPageStep(8);
         m_rfGainSlider->setTickInterval(8);
         m_rfGainSlider->setTickPosition(QSlider::TicksBelow);
-        m_rfGainSlider->setStyleSheet(kSliderStyle);
+        m_rfGainSlider->setStyleSheet(overlaySliderStyle());
         m_rfGainSlider->setToolTip("RF Gain: −8 to +32 dB (8 dB steps)");
         row->addWidget(m_rfGainSlider, 1);
 
         m_rfGainLabel = new QLabel("0 dB");
-        m_rfGainLabel->setStyleSheet(kLabelStyle);
+        m_rfGainLabel->setStyleSheet(OverlayColors::kLabelStyle);
         m_rfGainLabel->setFixedWidth(36);
         m_rfGainLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         row->addWidget(m_rfGainLabel);
@@ -575,7 +601,7 @@ void SpectrumOverlayPanel::toggleAntFlyout()
     m_antFlyout->show();
     m_activeFlyout = m_antFlyout;
     m_activeButton = antBtn;
-    antBtn->setStyleSheet(kMenuBtnActive);
+    antBtn->setStyleSheet(OverlayColors::kMenuBtnActive);
 }
 
 // ── Display flyout ────────────────────────────────────────────────────────────
@@ -583,7 +609,7 @@ void SpectrumOverlayPanel::toggleAntFlyout()
 void SpectrumOverlayPanel::buildDisplayFlyout()
 {
     m_displayFlyout = new QWidget(parentWidget());
-    m_displayFlyout->setStyleSheet(kPanelStyle);
+    m_displayFlyout->setStyleSheet(OverlayColors::kPanelStyle);
     m_displayFlyout->hide();
 
     auto* grid = new QGridLayout(m_displayFlyout);
@@ -613,6 +639,7 @@ void SpectrumOverlayPanel::buildDisplayFlyout()
         grid->addWidget(lbl, row, 0, 1, 2);
 
         m_colorSchemeCmb = new QComboBox;
+        m_colorSchemeCmb->setObjectName(QStringLiteral("colorSchemeCmb"));
         m_colorSchemeCmb->setFixedHeight(18);
         m_colorSchemeCmb->addItems({"Classic", "Phosphor", "Sunrise", "Inverted"});
         grid->addWidget(m_colorSchemeCmb, row, 2, 1, 2);
@@ -628,6 +655,7 @@ void SpectrumOverlayPanel::buildDisplayFlyout()
         grid->addWidget(lbl, row, 0);
 
         m_wfGainSlider = new QSlider(Qt::Horizontal);
+        m_wfGainSlider->setObjectName(QStringLiteral("wfGainSlider"));
         m_wfGainSlider->setRange(0, 100);
         m_wfGainSlider->setValue(50);
         m_wfGainSlider->setStyleSheet(sliderStyle);
@@ -654,6 +682,7 @@ void SpectrumOverlayPanel::buildDisplayFlyout()
         grid->addWidget(lbl, row, 0);
 
         m_wfBlackSlider = new QSlider(Qt::Horizontal);
+        m_wfBlackSlider->setObjectName(QStringLiteral("wfBlackSlider"));
         m_wfBlackSlider->setRange(0, 100);
         m_wfBlackSlider->setValue(15);
         m_wfBlackSlider->setStyleSheet(sliderStyle);
@@ -694,6 +723,9 @@ void SpectrumOverlayPanel::buildDisplayFlyout()
 
         connect(m_fillAlphaSlider, &QSlider::valueChanged, this, [this](int v) {
             m_fillAlphaLabel->setText(QString::number(v));
+            // B8 fix-up: emit so MainWindow can forward to SpectrumWidget::setFillAlpha.
+            // int 0..100 → float 0.0..1.0.
+            emit fillAlphaChanged(static_cast<float>(v) / 100.0f);
         });
         ++row;
     }
@@ -718,6 +750,7 @@ void SpectrumOverlayPanel::buildDisplayFlyout()
                 m_fillColorBtn->setStyleSheet(
                     QString("QPushButton { background: %1; border: 1px solid #506070;"
                             " border-radius: 2px; }").arg(c.name()));
+                emit fillColorChanged(c);  // B8 Task 22
             }
         });
         ++row;
@@ -733,7 +766,7 @@ void SpectrumOverlayPanel::buildDisplayFlyout()
         m_showGridBtn->setCheckable(true);
         m_showGridBtn->setChecked(true);
         m_showGridBtn->setFixedSize(36, 18);
-        m_showGridBtn->setStyleSheet(kDisplayToggleStyle);
+        m_showGridBtn->setStyleSheet(overlayDisplayToggleStyle());
         m_showGridBtn->setToolTip("Show or hide frequency and dB grid lines");
         grid->addWidget(m_showGridBtn, row, 2, 1, 2);
         connect(m_showGridBtn, &QPushButton::toggled, this, [this](bool on) {
@@ -750,96 +783,25 @@ void SpectrumOverlayPanel::buildDisplayFlyout()
 
         m_cursorFreqBtn = new QPushButton("Off");
         m_cursorFreqBtn->setCheckable(true);
-        m_cursorFreqBtn->setChecked(false);
+        m_cursorFreqBtn->setChecked(true);   // default on — matches SpectrumWidget default
+        m_cursorFreqBtn->setText("On");
         m_cursorFreqBtn->setFixedSize(36, 18);
-        m_cursorFreqBtn->setStyleSheet(kDisplayToggleStyle);
+        m_cursorFreqBtn->setStyleSheet(overlayDisplayToggleStyle());
         m_cursorFreqBtn->setToolTip("Show frequency at mouse cursor position");
         grid->addWidget(m_cursorFreqBtn, row, 3, Qt::AlignRight);
         connect(m_cursorFreqBtn, &QPushButton::toggled, this, [this](bool on) {
             m_cursorFreqBtn->setText(on ? "On" : "Off");
-        });
-        ++row;
-    }
-
-    // Heat Map toggle
-    {
-        auto* lbl = new QLabel("Heat Map:");
-        lbl->setStyleSheet(labelStyle);
-        grid->addWidget(lbl, row, 0, 1, 2);
-
-        m_heatMapBtn = new QPushButton("Off");
-        m_heatMapBtn->setCheckable(true);
-        m_heatMapBtn->setChecked(false);
-        m_heatMapBtn->setFixedSize(36, 18);
-        m_heatMapBtn->setStyleSheet(
-            "QPushButton { background: #1a2a3a; color: #8090a0; border: 1px solid #304050;"
-            " border-radius: 3px; font-size: 10px; font-weight: bold; }"
-            "QPushButton:checked { background: #006040; color: #00ff88; border: 1px solid #00a060; }");
-        m_heatMapBtn->setToolTip("Colors spectrum trace by signal strength");
-        grid->addWidget(m_heatMapBtn, row, 2, 1, 2);
-        connect(m_heatMapBtn, &QPushButton::toggled, this, [this](bool on) {
-            m_heatMapBtn->setText(on ? "On" : "Off");
-        });
-        ++row;
-    }
-
-    // Noise Floor toggle + position slider
-    {
-        auto* lbl = new QLabel("Noise Floor:");
-        lbl->setStyleSheet(labelStyle);
-        grid->addWidget(lbl, row, 0);
-
-        m_noiseFloorBtn = new QPushButton("Off");
-        m_noiseFloorBtn->setCheckable(true);
-        m_noiseFloorBtn->setChecked(false);
-        m_noiseFloorBtn->setFixedSize(36, 18);
-        m_noiseFloorBtn->setStyleSheet(kDisplayToggleStyle);
-        m_noiseFloorBtn->setToolTip("Show noise floor reference line on spectrum");
-        grid->addWidget(m_noiseFloorBtn, row, 1);
-
-        m_noiseFloorSlider = new QSlider(Qt::Horizontal);
-        m_noiseFloorSlider->setRange(0, 100);
-        m_noiseFloorSlider->setValue(75);
-        m_noiseFloorSlider->setStyleSheet(sliderStyle);
-        m_noiseFloorSlider->setToolTip("Vertical position of noise floor reference line");
-        grid->addWidget(m_noiseFloorSlider, row, 2);
-
-        m_noiseFloorLabel = new QLabel("75");
-        m_noiseFloorLabel->setStyleSheet(valStyle);
-        m_noiseFloorLabel->setFixedWidth(28);
-        m_noiseFloorLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        grid->addWidget(m_noiseFloorLabel, row, 3);
-
-        connect(m_noiseFloorBtn, &QPushButton::toggled, this, [this](bool on) {
-            m_noiseFloorBtn->setText(on ? "On" : "Off");
-            m_noiseFloorSlider->setEnabled(on);
-        });
-        connect(m_noiseFloorSlider, &QSlider::valueChanged, this, [this](int v) {
-            m_noiseFloorLabel->setText(QString::number(v));
-        });
-        ++row;
-    }
-
-    // Weighted Average toggle
-    {
-        auto* lbl = new QLabel("Weighted Avg:");
-        lbl->setStyleSheet(labelStyle);
-        grid->addWidget(lbl, row, 0, 1, 2);
-
-        m_weightedAvgBtn = new QPushButton("Off");
-        m_weightedAvgBtn->setCheckable(true);
-        m_weightedAvgBtn->setChecked(false);
-        m_weightedAvgBtn->setFixedSize(36, 18);
-        m_weightedAvgBtn->setStyleSheet(kDisplayToggleStyle);
-        m_weightedAvgBtn->setToolTip("Weight recent FFT frames more heavily for faster signal response");
-        grid->addWidget(m_weightedAvgBtn, row, 3, Qt::AlignRight);
-        connect(m_weightedAvgBtn, &QPushButton::toggled, this, [this](bool on) {
-            m_weightedAvgBtn->setText(on ? "On" : "Off");
+            emit cursorFreqVisibleChanged(on);  // B8 Task 21
         });
         ++row;
     }
 
     // Phase 3G-9c: Clarity adaptive tuning — status badge + Re-tune button
+    // NOTE: Heat Map / Noise Floor / Weighted Avg toggles were removed (B8
+    // Task 23). They were pure label-update theatre with no signal/model state.
+    // Noise floor estimation uses NoiseFloorEstimator + ClarityController (the
+    // canonical path). Heat Map gradient control is in Setup → Display → Gradient.
+    // Weighted Average is configurable in Setup → Display → Average Mode.
     {
         auto* lbl = new QLabel("Clarity:");
         lbl->setStyleSheet(labelStyle);
@@ -876,15 +838,20 @@ void SpectrumOverlayPanel::buildDisplayFlyout()
         ++row;
     }
 
-    // "More Display Options →" footer link
+    // "More Display Options →" footer link — B8 Task 24: wired to Setup → Display.
     {
         auto* moreLbl = new QLabel("<a href=\"#more\" style=\"color: #00b4d8; "
                                    "text-decoration: none; font-size: 10px;\">"
                                    "More Display Options &#x2192;</a>");
         moreLbl->setTextFormat(Qt::RichText);
         moreLbl->setTextInteractionFlags(Qt::TextBrowserInteraction);
-        moreLbl->setToolTip("Open full display settings (NYI)");
+        moreLbl->setToolTip("Open full display settings in Setup → Display");
         grid->addWidget(moreLbl, row, 0, 1, 4);
+        // linkActivated fires when the anchor is clicked; ignore the href value
+        // and always navigate to the Display page.
+        connect(moreLbl, &QLabel::linkActivated, this, [this](const QString&) {
+            emit openSetupRequested(QStringLiteral("Display"));
+        });
         ++row;
     }
 
@@ -909,7 +876,7 @@ void SpectrumOverlayPanel::toggleDisplayFlyout()
     m_displayFlyout->show();
     m_activeFlyout = m_displayFlyout;
     m_activeButton = dispBtn;
-    dispBtn->setStyleSheet(kMenuBtnActive);
+    dispBtn->setStyleSheet(OverlayColors::kMenuBtnActive);
 }
 
 // ── VAX flyout ────────────────────────────────────────────────────────────────
@@ -917,7 +884,7 @@ void SpectrumOverlayPanel::toggleDisplayFlyout()
 void SpectrumOverlayPanel::buildVaxFlyout()
 {
     m_vaxFlyout = new QWidget(parentWidget());
-    m_vaxFlyout->setStyleSheet(kPanelStyle);
+    m_vaxFlyout->setStyleSheet(OverlayColors::kPanelStyle);
     m_vaxFlyout->hide();
 
     auto* vb = new QVBoxLayout(m_vaxFlyout);
@@ -929,7 +896,7 @@ void SpectrumOverlayPanel::buildVaxFlyout()
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
         auto* lbl = new QLabel("VAX Ch");
-        lbl->setStyleSheet(kLabelStyle);
+        lbl->setStyleSheet(OverlayColors::kLabelStyle);
         row->addWidget(lbl);
         m_vaxCmb = new QComboBox;
         m_vaxCmb->setObjectName(QStringLiteral("vaxCombo"));
@@ -963,7 +930,7 @@ void SpectrumOverlayPanel::buildVaxFlyout()
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
         auto* lbl = new QLabel("IQ Ch");
-        lbl->setStyleSheet(kLabelStyle);
+        lbl->setStyleSheet(OverlayColors::kLabelStyle);
         row->addWidget(lbl);
         m_vaxIqCmb = new QComboBox;
         m_vaxIqCmb->setObjectName(QStringLiteral("vaxIqCombo"));
@@ -1128,8 +1095,19 @@ void SpectrumOverlayPanel::setBoardCapabilities(const BoardCapabilities& caps)
 {
     if (!m_rxAntCmb || !m_txAntCmb) { return; }
 
-    const QStringList labels = antennaLabels(caps);
-    const bool show = !labels.isEmpty();
+    // B3: use AntennaPopupBuilder::labels() for the capability-gated list.
+    // Derive SkuUiProfile from RadioModel (already accessible) so RX-only
+    // labels (EXT1/EXT2/XVTR/BYPS/RX1/RX2) appear when rxOnlyAntennaCount > 0.
+    // Falls back to antennaLabels(caps) (ANT1-3 only) when no model is set.
+    const SkuUiProfile sku = m_radioModel
+        ? skuUiProfileFor(m_radioModel->hardwareProfile().model)
+        : SkuUiProfile{};
+
+    const QStringList rxLabels = AntennaPopupBuilder::labels(caps, sku,
+        AntennaPopupBuilder::Mode::RX);
+    const QStringList txLabels = AntennaPopupBuilder::labels(caps, sku,
+        AntennaPopupBuilder::Mode::TX);
+    const bool show = !rxLabels.isEmpty();
 
     // Suppress widget→model echo while we clear + refill the combos.
     // Clearing a combo emits currentTextChanged("") and addItems()
@@ -1138,8 +1116,8 @@ void SpectrumOverlayPanel::setBoardCapabilities(const BoardCapabilities& caps)
     m_updatingFromModel = true;
     m_rxAntCmb->clear();
     m_txAntCmb->clear();
-    m_rxAntCmb->addItems(labels);
-    m_txAntCmb->addItems(labels);
+    m_rxAntCmb->addItems(rxLabels);
+    m_txAntCmb->addItems(txLabels);
     m_updatingFromModel = false;
 
     if (m_rxAntRow) { m_rxAntRow->setVisible(show); }
@@ -1177,7 +1155,7 @@ void SpectrumOverlayPanel::toggleVaxFlyout()
     m_vaxFlyout->show();
     m_activeFlyout = m_vaxFlyout;
     m_activeButton = vaxBtn;
-    vaxBtn->setStyleSheet(kMenuBtnActive);
+    vaxBtn->setStyleSheet(OverlayColors::kMenuBtnActive);
 }
 
 void SpectrumOverlayPanel::wheelEvent(QWheelEvent* event) { event->accept(); }

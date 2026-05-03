@@ -177,11 +177,7 @@ QPushButton* SetupPage::addLabeledButton(const QString& label, const QString& bu
     addLabeledToggle(target, label, btn);  // reuse row layout
     // Re-style as a plain button (not a toggle)
     btn->setCheckable(false);
-    btn->setStyleSheet(
-        "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
-        "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 3px 10px; }"
-        "QPushButton:hover { background: #203040; }"
-        "QPushButton:pressed { background: #00b4d8; color: #0f0f1a; }");
+    btn->setStyleSheet(Style::kButtonStyle);
     return btn;
 }
 
@@ -227,23 +223,14 @@ QHBoxLayout* SetupPage::makeLabeledRow(QLayout* parent, const QString& labelText
 
 QHBoxLayout* SetupPage::addLabeledCombo(QLayout* parent, const QString& label, QComboBox* combo)
 {
-    combo->setStyleSheet(
-        "QComboBox { background: #1a2a3a; border: 1px solid #304050; "
-        "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }"
-        "QComboBox::drop-down { border: none; }"
-        "QComboBox QAbstractItemView { background: #1a2a3a; color: #c8d8e8; "
-        "selection-background-color: #00b4d8; }");
+    combo->setStyleSheet(Style::kComboStyle);
     return makeLabeledRow(parent, label, combo);
 }
 
 QHBoxLayout* SetupPage::addLabeledSlider(QLayout* parent, const QString& label,
                                           QSlider* slider, QLabel* valueLabel)
 {
-    slider->setStyleSheet(
-        "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; "
-        "border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: #00b4d8; width: 12px; "
-        "height: 12px; border-radius: 6px; margin: -4px 0; }");
+    slider->setStyleSheet(Style::kSliderStyle);
 
     if (valueLabel != nullptr) {
         valueLabel->setStyleSheet("QLabel { color: #00c8ff; font-size: 12px; "
@@ -291,9 +278,7 @@ QHBoxLayout* SetupPage::addLabeledSpinner(QLayout* parent, const QString& label,
 
 QHBoxLayout* SetupPage::addLabeledEdit(QLayout* parent, const QString& label, QLineEdit* edit)
 {
-    edit->setStyleSheet(
-        "QLineEdit { background: #1a2a3a; border: 1px solid #304050; "
-        "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }");
+    edit->setStyleSheet(Style::kLineEditStyle);
     return makeLabeledRow(parent, label, edit);
 }
 

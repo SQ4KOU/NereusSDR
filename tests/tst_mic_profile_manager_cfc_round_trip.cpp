@@ -101,8 +101,9 @@ private slots:
         QVERIFY(defs.contains(QStringLiteral("Mic_UserDigOut")));
 
         // Total bundle = 50 (existing) + 1 TXParaEQData (3M-3a-ii follow-up
-        // Batch 6) + 41 (new) + 2 (P1 full-parity Task 2.4) = 94 keys.
-        QCOMPARE(defs.size(), 94);
+        // Batch 6) + 41 (new CFC/PhRot) + 2 FilterLow/FilterHigh (Plan 4 D1)
+        // + 2 line_in_gain/user_dig_out (P1 full-parity Task 2.4) = 96 keys.
+        QCOMPARE(defs.size(), 96);
     }
 
     // =========================================================================

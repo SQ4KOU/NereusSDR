@@ -162,6 +162,7 @@ mw0lge@grange-lane.co.uk
 #include <utility>
 
 #include "core/ConnectionState.h"
+#include "core/WdspTypes.h"  // DSPMode — for TX filter IQ-space mapping (Plan 4 D9)
 
 QT_BEGIN_NAMESPACE
 class QLabel;
@@ -289,9 +290,9 @@ public:
     // ---- Waterfall settings ----
     void setWfColorScheme(WfColorScheme scheme);
     WfColorScheme wfColorScheme() const { return m_wfColorScheme; }
-    void setWfColorGain(int gain) { m_wfColorGain = gain; }
+    void setWfColorGain(int gain);
     int  wfColorGain() const { return m_wfColorGain; }
-    void setWfBlackLevel(int level) { m_wfBlackLevel = level; }
+    void setWfBlackLevel(int level);
     int  wfBlackLevel() const { return m_wfBlackLevel; }
 
     // ---- Spectrum renderer controls (Phase 3G-8 commit 3) ----
@@ -412,6 +413,11 @@ public:
     void setShowFps(bool on);
     bool showFps() const { return m_showFps; }
 
+    // B8 Task 21: cursor frequency readout visibility.
+    // Default true (matches the previously always-on behavior).
+    void setCursorFreqVisible(bool on);
+    bool cursorFreqVisible() const noexcept { return m_showCursorFreq; }
+
     void setFreqLabelAlign(FreqLabelAlign a);
     FreqLabelAlign freqLabelAlign() const { return m_freqLabelAlign; }
 
@@ -427,8 +433,33 @@ public:
     QColor hGridColor() const { return m_hGridColor; }
     void setGridTextColor(const QColor& c);
     QColor gridTextColor() const { return m_gridTextColor; }
-    void setZeroLineColor(const QColor& c);
-    QColor zeroLineColor() const { return m_zeroLineColor; }
+    // Plan 4 D9c-1: zero-line color split into separate RX and TX colors.
+    // RX default: red (Thetis convention).
+    // TX default: amber (NereusSDR-original — distinguishes during split TX).
+    void setRxZeroLineColor(const QColor& c);
+    QColor rxZeroLineColor() const noexcept { return m_rxZeroLineColor; }
+
+    void setTxZeroLineColor(const QColor& c);
+    QColor txZeroLineColor() const noexcept { return m_txZeroLineColor; }
+
+    /// Reset all user-customisable Plan 4 D9/D9c display colors to compile-time
+    /// defaults.  Gives users an escape hatch from broken color combinations.
+    /// Plan 4 D9c-3 — scoped to TX filter, RX filter, RX zero line, TX zero
+    /// line only.  Plan 5+ may extend the scope.
+    void resetDisplayColorsToDefaults();
+
+    // Plan 4 D9c-4 — forward-compat scaffolding.  No paint code yet — these
+    // colors light up only when:
+    //   - TNF (Tracking Notch Filter) feature ships
+    //   - SubRX (3F multi-pan / multi-RX) ships
+    // Persisted now so user-customised colors survive across the version
+    // that adds the feature.
+    void setTnfFilterColor(const QColor& c);
+    QColor tnfFilterColor() const noexcept { return m_tnfFilterColor; }
+
+    void setSubRxFilterColor(const QColor& c);
+    QColor subRxFilterColor() const noexcept { return m_subRxFilterColor; }
+
     void setBandEdgeColor(const QColor& c);
     QColor bandEdgeColor() const { return m_bandEdgeColor; }
 
@@ -482,6 +513,41 @@ public slots:
     // Slot driven from DisplayPage DrawTXFilter checkbox.
     // From Thetis display.cs:2481 [v2.10.3.13].
     void setTxFilterVisible(bool on);
+
+    // ---- TX filter overlay (Plan 4 D9, Cluster E) ----
+
+    /// Set the TX filter audio-Hz range.  Triggers a panadapter overlay
+    /// repaint (always) and a waterfall column repaint (MOX-gated via
+    /// existing m_moxOverlay).
+    /// Source: NereusSDR-original glue; per-mode IQ-space mapping follows
+    /// deskhpsdr/transmitter.c:2136-2186 [@120188f].
+    void setTxFilterRange(int audioLowHz, int audioHighHz);
+
+    /// Set the DSP mode so the TX filter overlay uses the correct IQ-space
+    /// sign convention (USB positive, LSB negated+swapped, AM symmetric).
+    /// Wired from SliceModel::dspModeChanged in MainWindow::wireSliceToSpectrum.
+    void setTxMode(DSPMode mode);
+
+    /// Signed Hz offset added to m_vfoHz when computing the TX overlay
+    /// position.  Tracks the slice's active XIT offset (xitEnabled ? xitHz : 0)
+    /// so the orange band centers on the actual TX frequency, not the RX VFO.
+    /// Wired from SliceModel::xitEnabledChanged + xitHzChanged in MainWindow.
+    void setTxVfoOffsetHz(int offsetHz);
+
+    int txFilterLow()  const noexcept { return m_txFilterLow; }
+    int txFilterHigh() const noexcept { return m_txFilterHigh; }
+
+    // ---- TX / RX filter overlay colors (Plan 4 D9b, Cluster F) ----
+
+    /// Set the TX passband overlay fill colour and opacity.
+    /// Persists to DisplayTxFilterColor (per-pan AppSettings key).
+    void setTxFilterColor(const QColor& c);
+    QColor txFilterColor() const noexcept { return m_txFilterColor; }
+
+    /// Set the RX passband overlay fill colour and opacity.
+    /// Persists to DisplayRxFilterColor (per-pan AppSettings key).
+    void setRxFilterColor(const QColor& c);
+    QColor rxFilterColor() const noexcept { return m_rxFilterColor; }
 
     // ---- Per-pan settings persistence ----
     void setPanIndex(int idx) { m_panIndex = idx; }
@@ -547,6 +613,12 @@ signals:
 
     // Emitted when CTUN mode changes
     void ctunEnabledChanged(bool enabled);
+
+    // Plan 4 D9 test seam: fires from drawTxFilterOverlay() after pixel
+    // coordinates are computed.  Production code ignores this signal;
+    // tests use QSignalSpy to verify paint was triggered with the right band.
+    // Same pattern as TxChannel::txFilterApplied (Plan 4 D8).
+    void txFilterOverlayPainted(int xLeft, int xRight);
 
 protected:
 #ifdef NEREUS_GPU_SPECTRUM
@@ -614,6 +686,20 @@ private:
 
     void drawVfoMarker(QPainter& p, const QRect& specRect, const QRect& wfRect);
     void drawCursorInfo(QPainter& p, const QRect& specRect);
+
+    // ---- TX filter overlay (Plan 4 D9, Cluster E) ----
+    // drawTxFilterOverlay: panadapter band fill + border lines + label.
+    //   Called when m_txFilterVisible is set; gating is at the call site.
+    // drawTxFilterWaterfallColumn: waterfall column fill, MOX-gated.
+    //   Called when m_showTxFilterOnRxWaterfall && m_moxOverlay.
+    // Per deskhpsdr/transmitter.c:2136-2186 [@120188f] for IQ-space mapping.
+    void drawTxFilterOverlay(QPainter& p, const QRect& specRect);
+    void drawTxFilterWaterfallColumn(QPainter& p, const QRect& wfRect);
+
+    // Shared audio→IQ-space conversion used by both draw methods.
+    // Returns {iqLowHz, iqHighHz} signed offsets from the VFO center.
+    // Per deskhpsdr/transmitter.c:2136-2186 [@120188f].
+    std::pair<int,int> txAudioToIq(int audioLow, int audioHigh, DSPMode mode) const;
 
     // ---- Coordinate helpers ----
     int    hzToX(double hz, const QRect& r) const;
@@ -774,6 +860,7 @@ private:
     bool  m_showZeroLine{false};
     bool  m_showFps{false};
     bool  m_dbmScaleVisible{true};  // right-edge dBm strip; false → spectrum fills full width
+    bool  m_showCursorFreq{true};   // B8 Task 21: cursor frequency readout; default on
     FreqLabelAlign m_freqLabelAlign{FreqLabelAlign::Center};
 
     NereusSDR::BandPlanManager* m_bandPlanMgr{nullptr};   // non-owning
@@ -783,8 +870,14 @@ private:
     QColor m_gridFineColor{255, 255, 255, 20};   // 1/5 step fine grid
     QColor m_hGridColor{255, 255, 255, 40};      // horizontal dBm grid
     QColor m_gridTextColor{255, 255, 0};         // yellow text default
-    QColor m_zeroLineColor{255, 0, 0};           // red default (Thetis)
+    // Plan 4 D9c-1: split zero-line color into RX + TX.
+    QColor m_rxZeroLineColor{255, 0, 0};         // red default (Thetis convention)
+    QColor m_txZeroLineColor{255, 184, 0};       // amber default (NereusSDR-original)
     QColor m_bandEdgeColor{255, 0, 0};           // red default (Thetis)
+
+    // Plan 4 D9c-4: TNF + SubRX forward-compat scaffolding.  No paint yet.
+    QColor m_tnfFilterColor  {255,  80,  80,  80};   // red translucent placeholder
+    QColor m_subRxFilterColor{180,   0, 220,  80};   // purple translucent placeholder
 
     // FPS overlay tracking
     int    m_fpsFrameCount{0};
@@ -864,6 +957,22 @@ private:
     // TX filter visibility in spectrum panel.
     // From Thetis display.cs:2481 [v2.10.3.13]: DrawTXFilter flag.
     bool  m_txFilterVisible{false};
+
+    // ---- TX filter overlay range + mode (Plan 4 D9, Cluster E) ----
+    // Audio-Hz edges of the TX passband; updated by setTxFilterRange().
+    // IQ-space conversion (per deskhpsdr/transmitter.c:2136-2186 [@120188f])
+    // is applied at draw time using m_txMode.
+    int     m_txFilterLow{100};   // default matches TransmitModel::m_filterLow
+    int     m_txFilterHigh{2900}; // default matches TransmitModel::m_filterHigh
+    DSPMode m_txMode{DSPMode::USB};
+    // Signed Hz offset added to m_vfoHz for the TX overlay position so the
+    // orange band tracks XIT shifts (xitEnabled ? xitHz : 0).  Updated via
+    // setTxVfoOffsetHz from MainWindow on SliceModel xit signals.
+    int     m_txVfoOffsetHz{0};
+    QColor  m_txFilterColor{255, 120, 60, 46}; // matches kTxFilterOverlayFill default
+    // Plan 4 D9b (Cluster F): user-pickable RX filter overlay color.
+    // Default matches Style::kRxFilterOverlayFill = "rgba(0, 180, 216, 80)".
+    QColor  m_rxFilterColor{0x00, 0xb4, 0xd8, 80};
 
 #ifdef NEREUS_GPU_SPECTRUM
     bool m_rhiInitialized{false};

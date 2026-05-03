@@ -1,4 +1,5 @@
 #include "SupportDialog.h"
+#include "StyleConstants.h"
 #include "core/LogCategories.h"
 #include "core/SupportBundle.h"
 #include "models/RadioModel.h"
@@ -50,7 +51,7 @@ void SupportDialog::buildUI()
         auto* cb = new QCheckBox(cat.label, catGroup);
         cb->setToolTip(cat.description);
         cb->setChecked(cat.enabled);
-        cb->setStyleSheet(QStringLiteral("QCheckBox { color: #c8d8e8; }"));
+        cb->setStyleSheet(QStringLiteral("QCheckBox { color: %1; }").arg(Style::kTextPrimary));
 
         connect(cb, &QCheckBox::toggled, this, [this, id = cat.id](bool on) {
             onCategoryToggled(id, on);
@@ -87,13 +88,15 @@ void SupportDialog::buildUI()
     // --- Log File Info ---
     auto* logInfoLayout = new QHBoxLayout();
     m_logPathLabel = new QLabel(this);
-    m_logPathLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: #607080; font-family: monospace; font-size: 11px; }"));
+    m_logPathLabel->setStyleSheet(
+        QStringLiteral("QLabel { color: %1; font-family: monospace; font-size: 11px; }")
+        .arg(Style::kTextScale));
     logInfoLayout->addWidget(m_logPathLabel, 1);
 
     m_logSizeLabel = new QLabel(this);
-    m_logSizeLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: #607080; font-size: 11px; }"));
+    m_logSizeLabel->setStyleSheet(
+        QStringLiteral("QLabel { color: %1; font-size: 11px; }")
+        .arg(Style::kTextScale));
     logInfoLayout->addWidget(m_logSizeLabel);
     mainLayout->addLayout(logInfoLayout);
 
@@ -102,13 +105,17 @@ void SupportDialog::buildUI()
     m_logViewer->setReadOnly(true);
     m_logViewer->setMaximumBlockCount(kMaxLogViewLines);
     m_logViewer->setFont(QFont(QStringLiteral("Consolas"), 9));
-    m_logViewer->setStyleSheet(QStringLiteral(
-        "QPlainTextEdit {"
-        "  background: #0a0a14;"
-        "  color: #a0b0c0;"
-        "  border: 1px solid #203040;"
-        "  selection-background-color: #00b4d8;"
-        "}"));
+    // §D: #0a0a14 = Style::kStatusBarBg, #203040 = Style::kBorderSubtle, #00b4d8 = Style::kAccent.
+    // §D exception: fg #a0b0c0 (off-palette warm-blue for log text readability).
+    m_logViewer->setStyleSheet(
+        QStringLiteral(
+            "QPlainTextEdit {"
+            "  background: %1;"                  // Style::kStatusBarBg
+            "  color: #a0b0c0;"                  // §D exception: log text warm-blue
+            "  border: 1px solid %2;"            // Style::kBorderSubtle
+            "  selection-background-color: %3;"  // Style::kAccent
+            "}")
+        .arg(Style::kStatusBarBg, Style::kBorderSubtle, Style::kAccent));
     mainLayout->addWidget(m_logViewer, 1);  // stretch factor 1
 
     // --- Action Buttons ---
@@ -133,16 +140,19 @@ void SupportDialog::buildUI()
 
     auto* bundleBtn = new QPushButton(QStringLiteral("Create Support Bundle"), this);
     bundleBtn->setAutoDefault(false);
-    bundleBtn->setStyleSheet(QStringLiteral(
-        "QPushButton {"
-        "  background: #00b4d8;"
-        "  color: #ffffff;"
-        "  border: none;"
-        "  border-radius: 4px;"
-        "  padding: 6px 14px;"
-        "  font-weight: bold;"
-        "}"
-        "QPushButton:hover { background: #0096b7; }"));
+    // §D: bg = Style::kAccent. Hover #0096b7 = accent-dark; no canonical match.
+    bundleBtn->setStyleSheet(
+        QStringLiteral(
+            "QPushButton {"
+            "  background: %1;"          // Style::kAccent
+            "  color: #ffffff;"
+            "  border: none;"
+            "  border-radius: 4px;"
+            "  padding: 6px 14px;"
+            "  font-weight: bold;"
+            "}"
+            "QPushButton:hover { background: #0096b7; }")  // §D exception: accent-dark hover
+        .arg(Style::kAccent));
     connect(bundleBtn, &QPushButton::clicked, this, &SupportDialog::onCreateBundle);
     btnLayout->addWidget(bundleBtn);
 
@@ -150,33 +160,39 @@ void SupportDialog::buildUI()
 
     // --- Status ---
     m_statusLabel = new QLabel(this);
-    m_statusLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: #8090a0; font-size: 11px; }"));
+    m_statusLabel->setStyleSheet(
+        QStringLiteral("QLabel { color: %1; font-size: 11px; }")
+        .arg(Style::kTextSecondary));
     mainLayout->addWidget(m_statusLabel);
 
-    // Dialog theme
-    setStyleSheet(QStringLiteral(
-        "QDialog { background: #0f0f1a; }"
-        "QGroupBox {"
-        "  color: #8090a0;"
-        "  border: 1px solid #203040;"
-        "  border-radius: 4px;"
-        "  margin-top: 8px;"
-        "  padding-top: 14px;"
-        "}"
-        "QGroupBox::title {"
-        "  subcontrol-origin: margin;"
-        "  left: 10px;"
-        "  padding: 0 3px;"
-        "}"
-        "QPushButton {"
-        "  background: #304050;"
-        "  color: #c8d8e8;"
-        "  border: 1px solid #405060;"
-        "  border-radius: 3px;"
-        "  padding: 5px 12px;"
-        "}"
-        "QPushButton:hover { background: #405060; }"));
+    // Dialog theme. §D: #0f0f1a = kAppBg, #8090a0 = kTextSecondary,
+    // #203040 = kBorderSubtle, #304050 = kOverlayBorder, #c8d8e8 = kTextPrimary.
+    // §D exception: #405060 — button border/hover; off-palette (no canonical match).
+    setStyleSheet(
+        QStringLiteral(
+            "QDialog { background: %1; }"
+            "QGroupBox {"
+            "  color: %2;"
+            "  border: 1px solid %3;"
+            "  border-radius: 4px;"
+            "  margin-top: 8px;"
+            "  padding-top: 14px;"
+            "}"
+            "QGroupBox::title {"
+            "  subcontrol-origin: margin;"
+            "  left: 10px;"
+            "  padding: 0 3px;"
+            "}"
+            "QPushButton {"
+            "  background: %4;"
+            "  color: %5;"
+            "  border: 1px solid #405060;"    // §D exception: off-palette border
+            "  border-radius: 3px;"
+            "  padding: 5px 12px;"
+            "}"
+            "QPushButton:hover { background: #405060; }")  // §D exception
+        .arg(Style::kAppBg, Style::kTextSecondary, Style::kBorderSubtle,
+             Style::kOverlayBorder, Style::kTextPrimary));
 }
 
 void SupportDialog::refreshLogViewer()
@@ -298,11 +314,15 @@ void SupportDialog::onCreateBundle()
     msgBox.setInformativeText(QStringLiteral(
         "Attach this file when filing a bug report at\n"
         "github.com/boydsoftprez/NereusSDR/issues"));
-    msgBox.setStyleSheet(QStringLiteral(
-        "QMessageBox { background: #0f0f1a; color: #c8d8e8; }"
-        "QLabel { color: #c8d8e8; }"
-        "QPushButton { background: #304050; color: #c8d8e8; border: 1px solid #405060;"
-        "  border-radius: 3px; padding: 5px 12px; }"));
+    // §D: #0f0f1a = kAppBg, #c8d8e8 = kTextPrimary, #304050 = kOverlayBorder.
+    // §D exception: #405060 — button border; off-palette (matches dialog theme above).
+    msgBox.setStyleSheet(
+        QStringLiteral(
+            "QMessageBox { background: %1; color: %2; }"
+            "QLabel { color: %2; }"
+            "QPushButton { background: %3; color: %2; border: 1px solid #405060;"  // §D exception
+            "  border-radius: 3px; padding: 5px 12px; }")
+        .arg(Style::kAppBg, Style::kTextPrimary, Style::kOverlayBorder));
 
     auto* openBtn = msgBox.addButton(QStringLiteral("Open Folder"), QMessageBox::ActionRole);
     auto* issueBtn = msgBox.addButton(QStringLiteral("File an Issue"), QMessageBox::ActionRole);

@@ -167,41 +167,22 @@ private:
     QPushButton* m_dexpBtn{nullptr};
     QSlider*     m_dexpSlider{nullptr};
     QLabel*      m_dexpLabel{nullptr};
-    // #12 TX filter Low/High sliders + 2 insets
-    QSlider*     m_txFiltLowSlider{nullptr};
-    QLabel*      m_txFiltLowLabel{nullptr};
-    QSlider*     m_txFiltHighSlider{nullptr};
-    QLabel*      m_txFiltHighLabel{nullptr};
+    // #12 TX filter Low/High sliders removed — superseded by TxApplet
+    // Lo/Hi spinboxes (Plan 4 Cluster C); the sliders here were NYI and
+    // never reached WDSP.
+
     // #13 AM Carrier level slider (0-100) + inset "25"
     QSlider*     m_amCarSlider{nullptr};
     QLabel*      m_amCarLabel{nullptr};
 
-    // ── CW page (9 controls) ─────────────────────────────────────────────────
-    // #1  ALC gauge (HGauge 0-100, yellow/red 80)
-    HGauge*      m_alcGauge{nullptr};
-    // #2  CW speed slider (1-60 WPM) + inset "20"
-    QSlider*     m_speedSlider{nullptr};
-    QLabel*      m_speedLabel{nullptr};
-    // #3  CW pitch stepper ◀ [inset "600 Hz" 56px] ▶
-    QPushButton* m_pitchDown{nullptr};
-    QLabel*      m_pitchLabel{nullptr};
-    QPushButton* m_pitchUp{nullptr};
-    // #4  Delay slider (0-1000ms) + inset "300"
-    QSlider*     m_delaySlider{nullptr};
-    QLabel*      m_delayLabel{nullptr};
-    // #5  Sidetone toggle (48px) + slider + inset "50"
-    QPushButton* m_sidetoneBtn{nullptr};
-    QSlider*     m_sidetoneSlider{nullptr};
-    QLabel*      m_sidetoneLabel{nullptr};
-    // #6  Break-in (QSK) amber toggle
-    QPushButton* m_breakinBtn{nullptr};
-    // #7  Iambic blue toggle
-    QPushButton* m_iambicBtn{nullptr};
-    // #8  Firmware keyer green toggle
-    QPushButton* m_fwKeyerBtn{nullptr};
-    // #9  CW pan slider (-100..100) + inset "C"
-    QSlider*     m_cwPanSlider{nullptr};
-    QLabel*      m_cwPanLabel{nullptr};
+    // ── CW page — placeholder (Phase 3M-2 deferred) ─────────────────────────
+    // CW member variables removed per
+    // docs/superpowers/plans/2026-05-01-ui-polish-right-panel.md §Task 7.
+    // Re-add alongside the buildCwPage() implementation when 3M-2 lands:
+    //   m_alcGauge, m_speedSlider, m_speedLabel, m_pitchDown, m_pitchLabel,
+    //   m_pitchUp, m_delaySlider, m_delayLabel, m_sidetoneBtn,
+    //   m_sidetoneSlider, m_sidetoneLabel, m_breakinBtn, m_iambicBtn,
+    //   m_fwKeyerBtn, m_cwPanSlider, m_cwPanLabel.
 
     // ── FM page (8 controls) ─────────────────────────────────────────────────
     // #1  FM MIC slider (0-100) + inset value

@@ -84,7 +84,7 @@ void TextOverlayItemEditor::buildTypeSpecific()
             notifyChanged();
         }
     });
-    addRow(QStringLiteral("Colour 1"), m_btnColour1);
+    addRow(QStringLiteral("Color 1"), m_btnColour1);
 
     m_btnBackColour1 = new QPushButton(this);
     m_btnBackColour1->setFixedSize(40, 18);
@@ -100,7 +100,7 @@ void TextOverlayItemEditor::buildTypeSpecific()
             notifyChanged();
         }
     });
-    addRow(QStringLiteral("Back colour 1"), m_btnBackColour1);
+    addRow(QStringLiteral("Back color 1"), m_btnBackColour1);
 
     m_chkShowBack1 = makeCheckRow(QStringLiteral("Show back 1"));
     connect(m_chkShowBack1, &QCheckBox::toggled, this, [this](bool on) {
@@ -166,7 +166,7 @@ void TextOverlayItemEditor::buildTypeSpecific()
             notifyChanged();
         }
     });
-    addRow(QStringLiteral("Colour 2"), m_btnColour2);
+    addRow(QStringLiteral("Color 2"), m_btnColour2);
 
     m_btnBackColour2 = new QPushButton(this);
     m_btnBackColour2->setFixedSize(40, 18);
@@ -182,7 +182,7 @@ void TextOverlayItemEditor::buildTypeSpecific()
             notifyChanged();
         }
     });
-    addRow(QStringLiteral("Back colour 2"), m_btnBackColour2);
+    addRow(QStringLiteral("Back color 2"), m_btnBackColour2);
 
     m_chkShowBack2 = makeCheckRow(QStringLiteral("Show back 2"));
     connect(m_chkShowBack2, &QCheckBox::toggled, this, [this](bool on) {

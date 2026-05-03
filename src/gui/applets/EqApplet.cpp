@@ -28,6 +28,7 @@
 #include "EqApplet.h"
 #include "NyiOverlay.h"
 #include "gui/ComboStyle.h"
+#include "gui/StyleConstants.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -101,13 +102,6 @@ static const QString kGreenActive =
 static const QString kBlueActive =
     "QPushButton:checked { background-color: #0070c0; color: #ffffff; "
     "border: 1px solid #0090e0; }";
-
-// Vertical slider: groove width 4px, handle height 10px width 16px margin 0 -6px.
-// From AetherSDR EqApplet.cpp kVSliderStyle.
-static constexpr const char* kVSliderStyle =
-    "QSlider::groove:vertical { width: 4px; background: #203040; border-radius: 2px; }"
-    "QSlider::handle:vertical { height: 10px; width: 16px; margin: 0 -6px;"
-    " background: #00b4d8; border-radius: 5px; }";
 
 // 10-band frequency labels: 32/63/125/250/500/1k/2k/4k/8k/16k Hz.
 static constexpr int kEqBandCount = 10;
@@ -262,7 +256,7 @@ void EqApplet::buildUI()
             slider->setRange(-10, 10);
             slider->setValue(0);
             slider->setTickPosition(QSlider::NoTicks);
-            slider->setStyleSheet(QString::fromLatin1(kVSliderStyle));
+            slider->setStyleSheet(NereusSDR::Style::sliderVStyle());
             slider->setFixedHeight(100);
             slider->setToolTip(
                 QStringLiteral("%1 Hz band, \u221210 to +10 dB").arg(

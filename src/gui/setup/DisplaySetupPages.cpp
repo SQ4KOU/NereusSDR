@@ -60,7 +60,6 @@
 
 #include "DisplaySetupPages.h"
 #include "SetupHelpers.h"
-#include "gui/ColorSwatchButton.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/StyleConstants.h"
 #include "core/FFTEngine.h"
@@ -93,39 +92,6 @@ namespace NereusSDR {
 // ---------------------------------------------------------------------------
 
 namespace {
-
-// Apply the project-wide dark-theme stylesheet to a widget.
-void applyDarkStyle(QWidget* w)
-{
-    w->setStyleSheet(QStringLiteral(
-        "QGroupBox { color: #8090a0; font-size: 11px;"
-        "  border: 1px solid #203040; border-radius: 4px;"
-        "  margin-top: 8px; padding-top: 4px; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
-        "QLabel { color: #c8d8e8; }"
-        "QComboBox { background: #1a2a3a; color: #c8d8e8; border: 1px solid #203040;"
-        "  border-radius: 3px; padding: 2px 6px; }"
-        "QComboBox::drop-down { border: none; }"
-        "QComboBox QAbstractItemView { background: #1a2a3a; color: #c8d8e8;"
-        "  selection-background-color: #00b4d8; }"
-        "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -4px 0;"
-        "  border-radius: 6px; }"
-        "QSlider::sub-page:horizontal { background: #00b4d8; border-radius: 2px; }"
-        "QSpinBox, QDoubleSpinBox { background: #1a2a3a; color: #c8d8e8;"
-        "  border: 1px solid #203040; border-radius: 3px; padding: 1px 4px; }"
-        // Up/down buttons left to Fusion native rendering: the moment
-        // we style the subcontrol, Qt drops the native arrow image
-        // and we'd need to provide our own. With the app-level dark
-        // palette installed in main.cpp, Fusion paints the native
-        // arrows in the right color against the surrounding QSpinBox
-        // background.
-        "QCheckBox { color: #c8d8e8; }"
-        "QCheckBox::indicator { width: 14px; height: 14px; background: #1a2a3a;"
-        "  border: 1px solid #203040; border-radius: 2px; }"
-        "QCheckBox::indicator:checked { background: #00b4d8; border-color: #00b4d8; }"
-    ));
-}
 
 // Build a color swatch placeholder label (NYI — no color picker yet).
 QLabel* makeColorSwatch(const QString& label, const QString& hexColor, QWidget* parent)
@@ -179,11 +145,10 @@ void SpectrumDefaultsPage::loadFromRenderer()
     QSignalBlocker b6(m_fillAlphaSlider);
     QSignalBlocker b7(m_lineWidthSlider);
     QSignalBlocker b8(m_gradientToggle);
-    QSignalBlocker b9(m_dataLineAlphaSlider);
-    QSignalBlocker b10(m_calOffsetSpin);
-    QSignalBlocker b11(m_peakHoldToggle);
-    QSignalBlocker b12(m_peakHoldDelaySpin);
-    QSignalBlocker b13(m_threadPriorityCombo);
+    QSignalBlocker b9(m_calOffsetSpin);
+    QSignalBlocker b10(m_peakHoldToggle);
+    QSignalBlocker b11(m_peakHoldDelaySpin);
+    QSignalBlocker b12(m_threadPriorityCombo);
 
     // FFT size — map actual FFT size to combo index.
     const int fs = fe->fftSize();
@@ -207,18 +172,15 @@ void SpectrumDefaultsPage::loadFromRenderer()
     m_fillAlphaSlider->setValue(static_cast<int>(sw->fillAlpha() * 100.0f));
     m_lineWidthSlider->setValue(qBound(1, static_cast<int>(sw->lineWidth()), 3));
     m_gradientToggle->setChecked(sw->gradientEnabled());
-    m_dataLineAlphaSlider->setValue(sw->fillColor().alpha());
     m_calOffsetSpin->setValue(static_cast<double>(sw->dbmCalOffset()));
     m_peakHoldToggle->setChecked(sw->peakHoldEnabled());
     m_peakHoldDelaySpin->setValue(sw->peakHoldDelayMs());
-
-    if (m_dataLineColorBtn) { m_dataLineColorBtn->setColor(sw->fillColor()); }
-    if (m_dataFillColorBtn) { m_dataFillColorBtn->setColor(sw->fillColor()); }
+    // Colour pickers (S11/S12/S13) moved to Setup → Appearance → Colors & Theme.
 }
 
 void SpectrumDefaultsPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     // Phase 3G-9b: Reset to Smooth Defaults button. Destructive — shows
     // a confirmation dialog before overwriting because it resets the
@@ -430,7 +392,7 @@ void SpectrumDefaultsPage::buildUI()
     m_gradientToggle = new QCheckBox(QStringLiteral("Trace gradient"), renderGroup);
     // Thetis: setup.designer.cs:53918 (chkDataLineGradient) — rewritten (grammar fix)
     // Thetis original: "The data line is also uses the gradient if checked"
-    m_gradientToggle->setToolTip(QStringLiteral("When checked, the spectrum trace line renders with the gradient colour applied."));
+    m_gradientToggle->setToolTip(QStringLiteral("When checked, the spectrum trace line renders with the gradient color applied."));
     connect(m_gradientToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setGradientEnabled(on);
@@ -439,59 +401,6 @@ void SpectrumDefaultsPage::buildUI()
     renderForm->addRow(QString(), m_gradientToggle);
 
     contentLayout()->addWidget(renderGroup);
-
-    // --- Section: Colors ---
-    auto* colorGroup = new QGroupBox(QStringLiteral("Trace Colors"), this);
-    auto* colorForm  = new QFormLayout(colorGroup);
-    colorForm->setSpacing(6);
-
-    const QColor initLine = sw ? sw->fillColor() : QColor(0x00, 0xe5, 0xff);
-    m_dataLineColorBtn = new ColorSwatchButton(initLine, colorGroup);
-    // Thetis: setup.designer.cs:3234 (clrbtnDataLine) — no upstream tooltip; rewritten
-    // Thetis original: (none)
-    m_dataLineColorBtn->setToolTip(QStringLiteral("Click to choose the spectrum trace line colour."));
-    connect(m_dataLineColorBtn, &ColorSwatchButton::colorChanged,
-            this, [this](const QColor& c) {
-        // SpectrumWidget currently uses one colour for both line and fill.
-        // Plan §6 S11/S13 allow splitting once the renderer grows a
-        // dedicated m_dataLineColor; for now both pickers set the shared
-        // fill colour.
-        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
-            w->setFillColor(c);
-        }
-    });
-    colorForm->addRow(QStringLiteral("Data Line Color:"), m_dataLineColorBtn);
-
-    {
-        auto row = makeSliderRow(0, 255, 230, QString(), colorGroup);
-        m_dataLineAlphaSlider = row.slider;
-        // Thetis: setup.designer.cs:3214 (tbDataLineAlpha) — no upstream tooltip; rewritten
-        // Thetis original: (none)
-        m_dataLineAlphaSlider->setToolTip(QStringLiteral("Opacity of the spectrum trace line (0 = invisible, 255 = fully opaque)."));
-        row.spin->setToolTip(QStringLiteral("Opacity of the spectrum trace line (0 = invisible, 255 = fully opaque)."));
-        connect(m_dataLineAlphaSlider, &QSlider::valueChanged, this, [this](int a) {
-            if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
-                QColor c = w->fillColor();
-                c.setAlpha(a);
-                w->setFillColor(c);
-            }
-        });
-        colorForm->addRow(QStringLiteral("Line Alpha:"), row.container);
-    }
-
-    m_dataFillColorBtn = new ColorSwatchButton(initLine, colorGroup);
-    // Thetis: setup.designer.cs:3217 (clrbtnDataFill) — no upstream tooltip; rewritten
-    // Thetis original: (none)
-    m_dataFillColorBtn->setToolTip(QStringLiteral("Click to choose the spectrum fill area colour (applied under the trace when Fill is enabled)."));
-    connect(m_dataFillColorBtn, &ColorSwatchButton::colorChanged,
-            this, [this](const QColor& c) {
-        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
-            w->setFillColor(c);
-        }
-    });
-    colorForm->addRow(QStringLiteral("Data Fill Color:"), m_dataFillColorBtn);
-
-    contentLayout()->addWidget(colorGroup);
 
     // --- Section: Calibration ---
     auto* calGroup = new QGroupBox(QStringLiteral("Calibration & Peak Hold"), this);
@@ -573,6 +482,15 @@ void SpectrumDefaultsPage::buildUI()
     threadForm->addRow(QStringLiteral("Display Thread Priority:"), m_threadPriorityCombo);
 
     contentLayout()->addWidget(threadGroup);
+
+    // Colour pickers for trace, grid, passband, and zero lines have moved to
+    // Setup → Appearance → Colors & Theme (consolidated in one place).
+    auto* colorHint = new QLabel(QStringLiteral(
+        "Spectrum / waterfall colours: Setup → Appearance → Colors & Theme."), this);
+    colorHint->setStyleSheet(QStringLiteral(
+        "QLabel { color: #607080; font-style: italic; padding: 6px; }"));
+    contentLayout()->addWidget(colorHint);
+
     contentLayout()->addStretch();
 
     Q_UNUSED(sw);
@@ -626,7 +544,7 @@ void WaterfallDefaultsPage::loadFromRenderer()
     m_timestampPosCombo->setCurrentIndex(static_cast<int>(sw->wfTimestampPosition()));
     m_timestampModeCombo->setCurrentIndex(static_cast<int>(sw->wfTimestampMode()));
 
-    if (m_lowColorBtn) { m_lowColorBtn->setColor(QColor(Qt::black)); }
+    // Low Color picker moved to Setup → Appearance → Colors & Theme.
 
     // Sub-epic E task 11: sync history-depth dropdown to current value.
     if (m_historyDepthCombo) {
@@ -669,7 +587,7 @@ void WaterfallDefaultsPage::updateEffectiveDepthLabel()
 
 void WaterfallDefaultsPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     // --- Section: Levels ---
     auto* levGroup = new QGroupBox(QStringLiteral("Levels"), this);
@@ -724,17 +642,7 @@ void WaterfallDefaultsPage::buildUI()
     });
     levForm->addRow(QString(), m_useSpectrumMinMaxToggle);
 
-    m_lowColorBtn = new ColorSwatchButton(QColor(Qt::black), levGroup);
-    // Thetis: setup.designer.cs:34176 (clrbtnWaterfallLow)
-    m_lowColorBtn->setToolTip(QStringLiteral("The Color to use when the signal level is at or below the low level set above."));
-    // Waterfall "low" colour is conceptually the 0.0 stop of the gradient —
-    // exposed here for plan §4.2 W10 parity. SpectrumWidget currently uses
-    // gradient tables from wfSchemeStops() so the user's custom value is
-    // recorded in AppSettings for future Custom-scheme wiring, but it does
-    // not rebuild the gradient on the fly yet.
-    connect(m_lowColorBtn, &ColorSwatchButton::colorChanged,
-            this, [](const QColor&) { /* stored via AppSettings on save */ });
-    levForm->addRow(QStringLiteral("Low Color:"), m_lowColorBtn);
+    // Low Color (W10) moved to Setup → Appearance → Colors & Theme.
 
     contentLayout()->addWidget(levGroup);
 
@@ -793,7 +701,7 @@ void WaterfallDefaultsPage::buildUI()
     });
     // Thetis: setup.designer.cs:34110 (comboColorPalette) — rewritten
     // Thetis original: "Sets the color scheme"
-    m_colorSchemeCombo->setToolTip(QStringLiteral("Waterfall colour palette. Each scheme maps signal level to a different colour gradient from low (dark) to high (bright)."));
+    m_colorSchemeCombo->setToolTip(QStringLiteral("Waterfall color palette. Each scheme maps signal level to a different color gradient from low (dark) to high (bright)."));
     connect(m_colorSchemeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int i) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -939,6 +847,14 @@ void WaterfallDefaultsPage::buildUI()
     timeForm->addRow(QStringLiteral("Timestamp Mode:"), m_timestampModeCombo);
 
     contentLayout()->addWidget(timeGroup);
+
+    // Low Level Color (W10) has moved to Setup → Appearance → Colors & Theme.
+    auto* wfColorHint = new QLabel(QStringLiteral(
+        "Spectrum / waterfall colours: Setup → Appearance → Colors & Theme."), this);
+    wfColorHint->setStyleSheet(QStringLiteral(
+        "QLabel { color: #607080; font-style: italic; padding: 6px; }"));
+    contentLayout()->addWidget(wfColorHint);
+
     contentLayout()->addStretch();
 }
 
@@ -994,19 +910,14 @@ void GridScalesPage::loadFromRenderer()
     m_zeroLineToggle->setChecked(sw->showZeroLine());
     m_showFpsToggle->setChecked(sw->showFps());
 
-    if (m_gridColorBtn)     { m_gridColorBtn->setColor(sw->gridColor()); }
-    if (m_gridFineColorBtn) { m_gridFineColorBtn->setColor(sw->gridFineColor()); }
-    if (m_hGridColorBtn)    { m_hGridColorBtn->setColor(sw->hGridColor()); }
-    if (m_gridTextColorBtn) { m_gridTextColorBtn->setColor(sw->gridTextColor()); }
-    if (m_zeroLineColorBtn) { m_zeroLineColorBtn->setColor(sw->zeroLineColor()); }
-    if (m_bandEdgeColorBtn) { m_bandEdgeColorBtn->setColor(sw->bandEdgeColor()); }
+    // Colour pickers (G6/G9–G13) moved to Setup → Appearance → Colors & Theme.
 
     applyBandSlot(pan);
 }
 
 void GridScalesPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     // --- Section: Grid ---
     auto* gridGroup = new QGroupBox(QStringLiteral("Grid"), this);
@@ -1140,60 +1051,14 @@ void GridScalesPage::buildUI()
 
     contentLayout()->addWidget(lblGroup);
 
-    // --- Section: Colors ---
-    auto* colGroup = new QGroupBox(QStringLiteral("Colors"), this);
-    auto* colForm  = new QFormLayout(colGroup);
-    colForm->setSpacing(6);
+    // Grid/zero-line/band-edge colour pickers (G6/G9–G13) moved to
+    // Setup → Appearance → Colors & Theme (consolidated colour panel).
+    auto* gridColorHint = new QLabel(QStringLiteral(
+        "Spectrum / waterfall colours: Setup → Appearance → Colors & Theme."), this);
+    gridColorHint->setStyleSheet(QStringLiteral(
+        "QLabel { color: #607080; font-style: italic; padding: 6px; }"));
+    contentLayout()->addWidget(gridColorHint);
 
-    auto makeBtn = [this](QWidget* parent, const QColor& init,
-                          void (SpectrumWidget::*setter)(const QColor&)) {
-        auto* btn = new ColorSwatchButton(init, parent);
-        connect(btn, &ColorSwatchButton::colorChanged,
-                this, [this, setter](const QColor& c) {
-            if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
-                (w->*setter)(c);
-            }
-        });
-        return btn;
-    };
-
-    m_gridColorBtn     = makeBtn(colGroup, QColor(255, 255, 255, 40), &SpectrumWidget::setGridColor);
-    // Thetis: setup.designer.cs:3202 (clrbtnGrid) — rewritten
-    // Thetis original: (none)
-    m_gridColorBtn->setToolTip(QStringLiteral("Colour of the major vertical grid lines on the panadapter."));
-    colForm->addRow(QStringLiteral("Grid Color:"), m_gridColorBtn);
-
-    m_gridFineColorBtn = makeBtn(colGroup, QColor(255, 255, 255, 20), &SpectrumWidget::setGridFineColor);
-    // Thetis: setup.designer.cs:3198 (clrbtnGridFine) — rewritten
-    // Thetis original: (none)
-    m_gridFineColorBtn->setToolTip(QStringLiteral("Colour of the minor (fine) grid lines between major grid lines on the panadapter."));
-    colForm->addRow(QStringLiteral("Grid Fine Color:"), m_gridFineColorBtn);
-
-    m_hGridColorBtn    = makeBtn(colGroup, QColor(255, 255, 255, 40), &SpectrumWidget::setHGridColor);
-    // Thetis: setup.designer.cs:3193 (clrbtnHGridColor) — rewritten
-    // Thetis original: (none)
-    m_hGridColorBtn->setToolTip(QStringLiteral("Colour of the horizontal dB grid lines on the panadapter."));
-    colForm->addRow(QStringLiteral("H-Grid Color:"), m_hGridColorBtn);
-
-    m_gridTextColorBtn = makeBtn(colGroup, QColor(255, 255, 0), &SpectrumWidget::setGridTextColor);
-    // Thetis: setup.designer.cs:3206 (clrbtnText) — rewritten
-    // Thetis original: (none)
-    m_gridTextColorBtn->setToolTip(QStringLiteral("Colour of the frequency and dB labels drawn on the panadapter grid."));
-    colForm->addRow(QStringLiteral("Text Color:"), m_gridTextColorBtn);
-
-    m_zeroLineColorBtn = makeBtn(colGroup, QColor(255, 0, 0), &SpectrumWidget::setZeroLineColor);
-    // Thetis: setup.designer.cs:3204 (clrbtnZeroLine) — rewritten
-    // Thetis original: (none)
-    m_zeroLineColorBtn->setToolTip(QStringLiteral("Colour of the zero line (0 dBm marker) drawn on the panadapter when Show zero line is checked."));
-    colForm->addRow(QStringLiteral("Zero Line Color:"), m_zeroLineColorBtn);
-
-    m_bandEdgeColorBtn = makeBtn(colGroup, QColor(255, 0, 0), &SpectrumWidget::setBandEdgeColor);
-    // Thetis: setup.designer.cs:3232 (clrbtnBandEdge) — rewritten
-    // Thetis original: (none)
-    m_bandEdgeColorBtn->setToolTip(QStringLiteral("Colour of the band edge markers drawn at the amateur band boundaries on the panadapter."));
-    colForm->addRow(QStringLiteral("Band Edge Color:"), m_bandEdgeColorBtn);
-
-    contentLayout()->addWidget(colGroup);
     contentLayout()->addStretch();
 }
 
@@ -1209,7 +1074,7 @@ Rx2DisplayPage::Rx2DisplayPage(RadioModel* model, QWidget* parent)
 
 void Rx2DisplayPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     // --- Section: RX2 Spectrum ---
     auto* specGroup = new QGroupBox(QStringLiteral("RX2 Spectrum"), this);
@@ -1276,7 +1141,7 @@ TxDisplayPage::TxDisplayPage(RadioModel* model, QWidget* parent)
 
 void TxDisplayPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     // --- Section: TX Spectrum ---
     auto* specGroup = new QGroupBox(QStringLiteral("TX Spectrum"), this);
@@ -1306,6 +1171,10 @@ void TxDisplayPage::buildUI()
     specForm->addRow(QStringLiteral("Cal Offset:"), m_calOffsetSpin);
 
     contentLayout()->addWidget(specGroup);
+
+    // TX passband overlay colour picker moved to Setup → Appearance →
+    // Colors & Theme alongside the RX passband picker (Plan 4 D9b follow-up).
+
     contentLayout()->addStretch();
 }
 

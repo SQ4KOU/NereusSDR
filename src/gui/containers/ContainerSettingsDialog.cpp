@@ -1533,7 +1533,7 @@ QString ContainerSettingsDialog::typeTagDisplayName(const QString& tag)
     static const QMap<QString, QString> kDisplayNames = {
         // Core types
         { QStringLiteral("BAR"),           QStringLiteral("Bar Meter") },
-        { QStringLiteral("SOLID"),         QStringLiteral("Solid Colour") },
+        { QStringLiteral("SOLID"),         QStringLiteral("Solid Color") },
         { QStringLiteral("IMAGE"),         QStringLiteral("Image") },
         { QStringLiteral("SCALE"),         QStringLiteral("Scale") },
         { QStringLiteral("TEXT"),          QStringLiteral("Text Readout") },

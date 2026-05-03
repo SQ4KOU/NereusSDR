@@ -127,6 +127,8 @@ class MicProfileManager;
 class TwoToneController;
 // 3M-1c TX pump architecture redesign — TxWorkerThread.
 class TxWorkerThread;
+// Stage C2 filter preset editor — user-override layer over Thetis defaults.
+class FilterPresetStore;
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
@@ -302,6 +304,11 @@ public:
     // Non-owning; lifetime is RadioModel's lifetime.
     TwoToneController* twoToneController() const { return m_twoToneController; }
 
+    // Stage C2: expose FilterPresetStore so RxApplet, VfoWidget, and
+    // FilterPresetsSetupPage can read/write user-customised presets.
+    // Constructed once in RadioModel ctor; lifetime is RadioModel's lifetime.
+    FilterPresetStore* filterPresetStore() const { return m_filterPresetStore; }
+
     // 3M-1a G.1: expose TxChannel view so TxApplet and G.4 TUNE function
     // can call setTuneTone / setRunning without depending on WdspEngine.
     // Non-owning; WdspEngine owns the channel. Null until WDSP initializes.
@@ -381,6 +388,10 @@ public:
     // state handler, and override board capabilities. Production code
     // must never use these.
     void injectConnectionForTest(RadioConnection* conn) { m_connection = conn; }
+    // B6 — XIT: allow tests to trigger wireSliceSignals() directly after
+    // injecting a mock connection, mirroring what wireConnectionSignals() does
+    // when a real radio connects.
+    void wireSliceSignalsForTest() { wireSliceSignals(); }
     void setLastBandForTest(NereusSDR::Band b) {
         const bool cross = (b != m_lastBand);
         m_lastBand = b;
@@ -672,6 +683,23 @@ signals:
     // NereusSDR equivalent: emit signal; UI reacts with a toast or status bar message.
     // Subscribers should uncheck the TUN button and display `reason` to the user.
     void tuneRefused(const QString& reason);
+
+    // ── Plan 4 D8: per-profile TX filter relay signal ─────────────────────────
+    //
+    // Intermediate signal that carries the 3-arg filter request (audio Hz + mode)
+    // from the main-thread lambda (subscribed to TransmitModel::filterChanged)
+    // across to TxChannel::requestFilterChange on the audio thread.
+    //
+    // TransmitModel lives on the main thread; TxChannel lives on TxWorkerThread
+    // after RadioModel's moveToThread call.  A direct lambda-connect from
+    // TransmitModel::filterChanged → m_txChannel lambda would fire on the main
+    // thread (because TransmitModel is the sender and its thread is main).
+    // Routing through this intermediate signal ensures Qt auto-connection
+    // selects QueuedConnection for TxChannel::requestFilterChange, which runs
+    // the slot on TxWorkerThread where the debounce timer is live.
+    //
+    // NereusSDR-original glue (no Thetis equivalent needed).
+    void txFilterRequest(int audioLowHz, int audioHighHz, NereusSDR::DSPMode mode);
 
 private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
@@ -1021,6 +1049,10 @@ private:
     // happens inside stopPump, but reset only after the worker is torn
     // down so the consumer side is fully disconnected).
     std::unique_ptr<class TxMicSource> m_txMicSource;
+
+    // Stage C2 — filter preset user-override store.
+    // Constructed in RadioModel ctor; QObject child so dtor cleans up.
+    FilterPresetStore* m_filterPresetStore{nullptr};
 };
 
 } // namespace NereusSDR

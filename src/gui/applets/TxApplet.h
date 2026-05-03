@@ -60,6 +60,8 @@
 //                 removed from TxApplet (was a duplicate — PhoneCwApplet had an
 //                 un-wired PROC button + slider since 3I-3 NyiOverlay-marked).
 //                 PROC wiring moved to PhoneCwApplet; row drops to [LEV][EQ][CFC].
+//   2026-05-02 — Plan 4 Cluster C (Task 4 / D2+D3+D9-status): TX BW spinbox
+//                 row + status label added.  See TxApplet.cpp for details.
 // =================================================================
 
 //=================================================================
@@ -133,6 +135,7 @@ class QPushButton;
 class QSlider;
 class QComboBox;
 class QLabel;
+class QSpinBox;
 
 namespace NereusSDR {
 
@@ -261,7 +264,7 @@ private:
     // 1. Forward Power gauge
     HGauge*  m_fwdPowerGauge  = nullptr;
     // 2. SWR gauge
-    QWidget* m_swrGauge       = nullptr;
+    HGauge*  m_swrGauge       = nullptr;
     // EMA smoothing state for fwd-power gauge (Thetis-style envelope detector
     // not yet ported; this is a simple alpha=0.25 exponential-moving-average
     // to keep the displayed value calm — RadioStatus::powerChanged fires
@@ -300,24 +303,31 @@ private:
     QPushButton* m_moxBtn     = nullptr;
     // 6. TUNE
     QPushButton* m_tuneBtn    = nullptr;
-    // 7. ATU
-    QPushButton* m_atuBtn     = nullptr;
-    // 8. MEM
-    QPushButton* m_memBtn     = nullptr;
-    // 9. TX Profile combo
+    // 7. TX Profile combo
     QComboBox*   m_profileCombo = nullptr;
-    // 10. Tune mode combo
-    QComboBox*   m_tuneModeCombo = nullptr;
-    // 11. 2-Tone test
+    // 8. 2-Tone test
     QPushButton* m_twoToneBtn = nullptr;
-    // 12. PS-A
+    // 9. PS-A (hidden until 3M-4 PureSignal)
     QPushButton* m_psaBtn     = nullptr;
-    // 13. DUP (full duplex)
-    QPushButton* m_dupBtn     = nullptr;
-    // 14. xPA indicator
-    QPushButton* m_xpaBtn     = nullptr;
-    // 15. SWR protection LED
+    // ── Plan 4 Cluster C (Task 4 / D2+D3+D9-status): TX BW spinbox row ─────────
+    // Low/High cutoff spinboxes (Hz) — bidirectional with TransmitModel::filterLow
+    // and filterHigh via the filterChanged(int,int) signal.
+    QSpinBox*    m_txFilterLowSpin{nullptr};
+    QSpinBox*    m_txFilterHighSpin{nullptr};
+    // Status label below the spinbox row — shows "100-2900 Hz · 2.8k BW" or
+    // "±2900 Hz · 5.8k BW" depending on whether the active slice mode is
+    // symmetric.  Orange tint (#ffaa70) matches the future Style::kTxFilterOverlayLabel
+    // constant (Cluster E will add it to StyleConstants.h).
+    QLabel*      m_txFilterStatusLabel{nullptr};
+
+    // 10. SWR protection LED (wired to SwrProtectionController::highSwrChanged)
     QLabel*      m_swrProtLed = nullptr;
+    // Removed NYI members (re-add when their phases ship):
+    //   m_atuBtn      — ATU phase (no plan yet)
+    //   m_memBtn      — channel-memory phase
+    //   m_tuneModeCombo — ATU phase (no plan yet)
+    //   m_dupBtn      — full-duplex audio routing phase
+    //   m_xpaBtn      — external-PA hardware-specific phase
 
     // Current band — used to resolve per-band tune power.
     // Updated by setCurrentBand() when PanadapterModel::bandChanged fires.

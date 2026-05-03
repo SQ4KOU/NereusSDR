@@ -164,6 +164,14 @@ warren@wpratt.com
 //                 this batch because their persistence keys live in the
 //                 Thetis tpDSPCFC tab alongside the CFC controls.
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-05-02 — Plan 4 D8: requestFilterChange / applyPendingFilter /
+//                 applyTxFilterForMode implemented by J.J. Boyd (KG4VCF).
+//                 50 ms debounce QTimer wired in constructor.  Per-mode
+//                 IQ-space mapping is NereusSDR-original glue identical
+//                 to the TUN bandpass logic at setTuneTone():505-528,
+//                 cited from deskhpsdr/transmitter.c:2136-2186 [@120188f].
+//                 The TUN path at lines 520-528 is untouched.
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
@@ -276,6 +284,22 @@ TxChannel::TxChannel(int channelId,
     // and zero-fill on partial pull — superseded.
     //
     // Plan: docs/architecture/phase3m-1c-tx-pump-architecture-plan.md
+
+    // Plan 4 D8 + bench-fix: the original 50 ms QTimer-based debounce was
+    // removed because TxWorkerThread::run() is a custom semaphore-wake loop
+    // (not QThread::exec()).  QTimer events only dispatch when processEvents()
+    // is called between audio frames, which makes the timer unreliable —
+    // bench-confirmed by JJ on ANAN-G2: spinbox changes never reached
+    // SetTXABandpassFreqs.  See requestFilterChange comment for details.
+    //
+    // The timer + slot are retained as no-op members for ABI stability of the
+    // public API surface (tst_tx_filter_offset_to_wdsp still references the
+    // signal); requestFilterChange now calls applyTxFilterForMode directly.
+    m_filterDebounceTimer.setParent(this);
+    m_filterDebounceTimer.setSingleShot(true);
+    m_filterDebounceTimer.setInterval(50);
+    connect(&m_filterDebounceTimer, &QTimer::timeout,
+            this, &TxChannel::applyPendingFilter);
 
     qCInfo(lcDsp) << "TxChannel" << m_channelId
                   << "wrapper constructed; WDSP TXA pipeline (31 stages)"
@@ -976,6 +1000,101 @@ void TxChannel::setTxBandpass(int lowHz, int highHz)
     Q_UNUSED(lowHz);
     Q_UNUSED(highHz);
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// requestFilterChange()
+//
+// Plan 4 D8 — NereusSDR-original glue that wires TransmitModel::filterChanged
+// into the WDSP bandpass via a 50 ms debounce.
+//
+// Stores the pending audio-space values and (re)starts the single-shot debounce
+// timer.  Rapid successive calls (e.g. spinbox arrow-key held down) coalesce
+// to a single applyPendingFilter() fire once the user pauses.
+// ---------------------------------------------------------------------------
+void TxChannel::requestFilterChange(int audioLowHz, int audioHighHz, DSPMode mode)
+{
+    // Plan 4 D8 follow-up — the original 50 ms QTimer-based debounce did not
+    // work on TxWorkerThread.  TxWorkerThread::run() is a custom semaphore-
+    // wake loop (not QThread::exec()), so QTimer events only get dispatched
+    // when processEvents() is called between audio frames — which means the
+    // timer effectively never fires while not transmitting, and even during
+    // TX the dispatch cadence is unreliable on macOS.  Bench-confirmed by
+    // JJ on ANAN-G2: TX BW spinbox changes never reached SetTXABandpassFreqs.
+    //
+    // Apply directly.  Rapid UI events (spinbox arrow-key held down) still
+    // coalesce naturally via Qt's queued-event compression on the worker
+    // thread.  The slot is cheap (mode dispatch + WDSP setter call), so the
+    // per-tick cost is acceptable even without explicit debouncing.
+    m_pendingAudioLow  = audioLowHz;
+    m_pendingAudioHigh = audioHighHz;
+    m_pendingMode      = mode;
+    applyTxFilterForMode(audioLowHz, audioHighHz, mode);
+}
+
+// ---------------------------------------------------------------------------
+// applyPendingFilter()
+//
+// Called when m_filterDebounceTimer fires (50 ms after the last
+// requestFilterChange call).  Delegates to applyTxFilterForMode with the
+// stored pending values.
+// ---------------------------------------------------------------------------
+void TxChannel::applyPendingFilter()
+{
+    applyTxFilterForMode(m_pendingAudioLow, m_pendingAudioHigh, m_pendingMode);
+}
+
+// ---------------------------------------------------------------------------
+// applyTxFilterForMode()
+//
+// NereusSDR-original glue: maps audio-space Hz to IQ-space (signed) per mode,
+// emits txFilterApplied, then calls setTxBandpass.
+//
+// Per-mode IQ-space sign convention from deskhpsdr/transmitter.c:2136-2186
+// [@120188f] (same source as the TUN bandpass mapping at setTuneTone()
+// lines 520-528 — the TUN path is NOT modified here; this function is called
+// only from applyPendingFilter, never from setTuneTone):
+//
+//   USB family (USB / DIGU / CWU / SPEC / others): IQ = [+audioLow, +audioHigh]
+//   LSB family (LSB / DIGL / CWL):                 IQ = [-audioHigh, -audioLow]
+//   Symmetric  (AM / SAM / DSB / FM / DRM):        IQ = [-audioHigh, +audioHigh]
+//     (low ignored for symmetric; only audioHigh defines the bandwidth)
+//
+// CW modes:  CWL → LSB family, CWU → USB family.  The tune-tone path swaps
+// CWL→LSB and CWU→USB upstream (MoxController G.4) before calling setTuneTone,
+// so reaching this function with a CW mode is unusual but handled safely.
+// ---------------------------------------------------------------------------
+void TxChannel::applyTxFilterForMode(int audioLowHz, int audioHighHz, DSPMode mode)
+{
+    // Per deskhpsdr/transmitter.c:2136-2186 [@120188f] — tx_set_filter per-mode
+    // IQ-space sign convention.  Same mapping as setTuneTone() lines 520-528.
+    auto isLsbFamily = [](DSPMode m) {
+        return m == DSPMode::LSB || m == DSPMode::DIGL || m == DSPMode::CWL;
+    };
+    auto isSymmetric = [](DSPMode m) {
+        return m == DSPMode::AM  || m == DSPMode::SAM
+            || m == DSPMode::DSB || m == DSPMode::FM
+            || m == DSPMode::DRM;
+    };
+
+    int iqLow, iqHigh;
+    if (isLsbFamily(mode)) {
+        // LSB family: negate and swap — bandpass sits below the carrier.
+        iqLow  = -audioHighHz;
+        iqHigh = -audioLowHz;
+    } else if (isSymmetric(mode)) {
+        // Symmetric modes: equal sidebands around the carrier.
+        iqLow  = -audioHighHz;
+        iqHigh = +audioHighHz;
+    } else {
+        // USB family (USB / DIGU / CWU / SPEC / others): positive sideband.
+        iqLow  = +audioLowHz;
+        iqHigh = +audioHighHz;
+    }
+
+    // Signal first so QSignalSpy sees the values before the WDSP call.
+    emit txFilterApplied(iqLow, iqHigh);
+    setTxBandpass(iqLow, iqHigh);
 }
 
 // ---------------------------------------------------------------------------

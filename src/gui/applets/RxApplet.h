@@ -121,12 +121,19 @@
 #pragma once
 
 #include "AppletWidget.h"
+#include "core/BoardCapabilities.h"
+#include "core/SkuUiProfile.h"
+#include "core/WdspTypes.h"
 #include "gui/widgets/TriBtn.h"
 #include "models/Band.h"
 
+#include <QList>
 #include <QPushButton>
 #include <QStringList>
 #include <QVector>
+
+#include <optional>
+#include <utility>
 
 class QCheckBox;
 class QComboBox;
@@ -140,7 +147,7 @@ class QStackedWidget;
 
 namespace NereusSDR {
 
-struct BoardCapabilities;
+enum class HPSDRModel : int;
 class FilterPassbandWidget;
 class PanadapterModel;
 class SliceModel;
@@ -158,8 +165,8 @@ class SliceModel;
 //  8.  FilterPassband widget (ported from AetherSDR, Tier 1 wired)
 //  9.  AGC combo (Tier 1 wired)
 //  10. AGC threshold slider (NYI — setAgcThreshold not in SliceModel yet)
-//  11. AF gain slider (Tier 1 wired)
-//  12. Mute button (NYI — setMuted not in SliceModel yet)
+//  11. AF gain slider (removed §B4 — TitleBar + VfoWidget cover it)
+//  12. Mute button (removed §B4 bench review — VfoWidget + TitleBar are the 2 surfaces)
 //  13. Audio pan slider (NYI)
 //  14. Squelch toggle + slider (NYI)
 //  15. RIT toggle + offset + zero (NYI)
@@ -192,6 +199,10 @@ public slots:
     // Hidden on HL2/Atlas and any board without an Alex front-end.
     void setBoardCapabilities(const NereusSDR::BoardCapabilities& caps);
 
+    // Per-SKU UI overlay for antenna popup (B3) — mirrors VfoWidget::setHpsdrSku.
+    // Called by MainWindow on currentRadioChanged after setBoardCapabilities.
+    void setHpsdrSku(NereusSDR::HPSDRModel sku);
+
 #ifdef NEREUS_BUILD_TESTS
 public:
     // Test-only: returns current step-att spinbox maximum (for range assertions).
@@ -222,9 +233,9 @@ private:
     void connectSlice(SliceModel* s);
     void disconnectSlice(SliceModel* s);
     void updateFilterLabel();
-    void rebuildFilterButtons();
+    void rebuildFilterButtons(DSPMode mode);
     void updateFilterButtons();
-    void applyFilterPreset(int widthHz);
+    void applyFilterPreset(int low, int high);
 
     // Phase 3P-F Task 4: read AlexController per-band assignments and push
     // them into SliceModel so the antenna buttons reflect the active band.
@@ -237,9 +248,15 @@ private:
     PanadapterModel* m_pan   = nullptr;  // observed for bandChanged (Phase 3P-F Task 4)
     QStringList m_antList{QStringLiteral("ANT1"), QStringLiteral("ANT2"), QStringLiteral("ANT3")};
 
-    // Filter preset widths by mode (USB default)
-    QVector<int> m_filterWidths{1800, 2100, 2400, 2700, 2900, 3300,
-                                 500,  800, 1200, 1600};
+    // Stored board capabilities and SKU profile for antenna popup construction
+    // (AntennaPopupBuilder B3). Populated by setBoardCapabilities() + setHpsdrSku().
+    // Optional so we can detect "not yet set" (null = no radio connected).
+    std::optional<BoardCapabilities> m_popupCaps;
+    std::optional<SkuUiProfile>      m_popupSku;
+
+    // Filter presets for the active mode — (low_hz, high_hz) pairs from SliceModel::presetsForMode().
+    // Rebuilt on every dspModeChanged via rebuildFilterButtons(mode).
+    QList<std::pair<int, int>> m_filterPresets;
 
     // ── Row 1: badge | lock | rx ant | tx ant | filter label ──────────────
     QLabel*      m_sliceBadge     = nullptr;   // Control 1
@@ -266,10 +283,7 @@ private:
     FilterPassbandWidget* m_filterPassband = nullptr;
 
     // ── Right column ──────────────────────────────────────────────────────
-    // Controls 11 + 12: Mute + AF gain
-    QPushButton* m_muteBtn     = nullptr;   // Control 12
-    QSlider*     m_afSlider    = nullptr;   // Control 11
-
+    // Mute button removed §B4 bench review — VfoWidget + TitleBar are the 2 surfaces.
     // Control 13: Audio pan
     QSlider*     m_panSlider   = nullptr;
 

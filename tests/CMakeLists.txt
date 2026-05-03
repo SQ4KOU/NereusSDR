@@ -2796,3 +2796,54 @@ nereus_add_test(tst_parametric_eq_widget_interaction)
 
 # -- Phase 3M-3a-ii follow-up Batch 5: ParametricEqWidget JSON marshal + public API --
 nereus_add_test(tst_parametric_eq_widget_json)
+
+# -- UI Polish Foundation A1: AppletPanelWidget scrollbar gutter --
+nereus_add_test(tst_applet_panel_gutter)
+
+# ── UI Polish Foundation B3: AntennaPopupBuilder capability-gated popup factory ──
+# 5 tests cover Tier 1 (full Alex + bypass), Tier 2 (mid Alex, no bypass),
+# Tier 3 (no Alex, at most 1 entry), TX mode (no RX-only section), and
+# labels() round-trip. Uses actual BoardCapabilities + SkuUiProfile flags.
+# Per docs/superpowers/plans/2026-05-01-ui-polish-cross-surface.md §B3.
+nereus_add_test(tst_antenna_popup_builder)
+
+# ── UI Polish Foundation B6: XIT offset application in RadioModel ────────────
+# TDD: verifies that wireSliceSignals() applies xitHz to setTxFrequency,
+# mirroring the Thetis chkXIT TX NCO shift pattern.
+# 5 tests: disabled XIT no shift, enabled+Hz shift, enable/disable toggle,
+# negative offset subtracts, zero offset sends base freq.
+# Per docs/superpowers/plans/2026-05-01-ui-polish-cross-surface.md §B6.
+nereus_add_test(tst_xit_offset_application)
+target_compile_definitions(tst_xit_offset_application PRIVATE NEREUS_BUILD_TESTS)
+
+# ── UI Polish Foundation B8 Task 20: SpectrumOverlayPanel Display-flyout signals ──
+# TDD: verifies wfColorGainChanged / wfBlackLevelChanged / colorSchemeChanged
+# emit correctly from Display-flyout controls.  Manual-connect tests verify
+# the lambda wiring pattern MainWindow uses.
+# Per docs/superpowers/plans/2026-05-01-ui-polish-cross-surface.md §B8.
+nereus_add_test(tst_b8_overlay_signals)
+
+# ── Plan 4 Task 2 (D1): FilterLow/FilterHigh schema + MicProfile persistence ─
+# 3 tests: filter values persist across profile save/switch/activate cycle,
+# activating a profile pushes filter values into TransmitModel (filterChanged),
+# isActiveProfileModified detects drift and clears after saveActiveProfile.
+# Per docs/superpowers/plans/2026-05-01-tx-bandwidth.md §Task 2.
+nereus_add_test(tst_tx_bandwidth_persistence)
+
+# ── Plan 4 Task 6 (D8): TX filter debounce + per-mode IQ-space mapping ────────
+# 9 tests: debounce coalesces rapid calls, USB/LSB/AM/DIGU/DIGL/FM/DSB/CWL
+# per-mode IQ-space sign convention verified via QSignalSpy on txFilterApplied.
+# Per docs/superpowers/plans/2026-05-01-tx-bandwidth.md §Task 6.
+nereus_add_test(tst_tx_filter_offset_to_wdsp)
+
+# ── Plan 4 Task 7+8 (D9): TX filter overlay palette + paint ──────────────────
+# 6 tests: setTxFilterRange stores values, no-op on same values, paint signal
+# fires after show, USB/LSB/AM per-mode IQ-space coordinate mapping verified.
+# Per docs/superpowers/plans/2026-05-01-tx-bandwidth.md §Task 7/8.
+nereus_add_test(tst_spectrum_tx_overlay)
+
+# ── Stage C2: FilterPresetStore user-customisable presets ────────────────────
+# 5 tests: defaults match SliceModel::presetsForMode verbatim, setPreset
+# round-trips through AppSettings, resetPreset restores Thetis default,
+# setPresetsForMode reorder persists, presetsChanged fires on every mutator.
+nereus_add_test(tst_filter_preset_store)
