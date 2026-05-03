@@ -1270,6 +1270,16 @@ nereus_add_test(tst_radio_model_pa_tripped)
 # Ports Thetis console.cs:25008-25072 [v2.10.3.13] (computeAlexFwdPower).
 nereus_add_test(tst_pa_scaling)
 
+# ── Phase 1 Agent 1B (issue #167 PA cal hotfix): public PaTelemetryScaling ───
+# 8 tests pin scaleFwdPowerWatts byte-for-byte parity with the existing
+# private RadioModel.cpp helper (ANAN8000D 3 raw values + HL2 default-branch
+# 3 values + FIRST sentinel + zero-raw clamps), and pin scaleFwdRevVoltage
+# per-board curve at 2 raw values per major SKU (HERMES / ORIONMKII /
+# ANAN_G2 / HL2). Ports Thetis console.cs:25008-25072 [v2.10.3.13]
+# (computeAlexFwdPower) — RadioModel.cpp call-site migration deferred to
+# Phase 4 Agent 4A.
+nereus_add_test(tst_pa_telemetry_scaling)
+
 # ── Phase 3M-0 Task 8: SpectrumWidget "HIGH SWR" overlay state ───────────────
 # Verifies setHighSwrOverlay(active, foldback) stores state, foldback flag
 # toggles independently, and repeated calls with same args are idempotent.

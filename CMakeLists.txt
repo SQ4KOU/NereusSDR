@@ -413,6 +413,7 @@ set(CORE_SOURCES
     src/core/CalibrationController.cpp
     src/core/PaCalProfile.cpp
     src/core/PaGainProfile.cpp
+    src/core/PaTelemetryScaling.cpp
     src/core/OcMatrix.cpp
     src/core/RadioStatus.cpp
     src/core/SettingsHygiene.cpp
