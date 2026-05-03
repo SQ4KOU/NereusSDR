@@ -84,6 +84,8 @@ private slots:
         // dropped 2026-05-02 after upstream verification.
         // (Production code uses [v2.10.3.13-beta2] only; sha is allowed in
         // test files for richer cite form.)
+        // Upstream inline tag preserved verbatim from mi0bot setup.cs:5463:
+        //   case HPSDRModel.HERMESLITE:     // MI0BOT: HL2
         QCOMPARE(paCalBoardClassFor(HPSDRModel::HERMESLITE), PaCalBoardClass::Anan10);
     }
     void board_class_atlas() {
