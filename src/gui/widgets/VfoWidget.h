@@ -429,6 +429,10 @@ signals:
     void frequencyChanged(double hz);
     void modeChanged(NereusSDR::DSPMode mode);
     void filterChanged(int low, int high);
+    // Shift+click on a filter preset — TX passband should snap to match
+    // the RX preset's audio Hz range.  MainWindow wires this to
+    // TransmitModel::setFilterLow/setFilterHigh.
+    void txFilterMatchRequested(int audioLow, int audioHigh);
     void agcModeChanged(NereusSDR::AGCMode mode);
     void afGainChanged(int gain);
     void rfGainChanged(int gain);

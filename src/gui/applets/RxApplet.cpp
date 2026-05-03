@@ -117,6 +117,9 @@
 //============================================================================================//
 
 #include "RxApplet.h"
+
+#include <QGuiApplication>
+
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
 #include "core/SkuUiProfile.h"
@@ -1029,8 +1032,31 @@ void RxApplet::rebuildFilterButtons(DSPMode mode)
 
         const int low  = fp.low;
         const int high = fp.high;
-        connect(btn, &QPushButton::clicked, this, [this, low, high] {
+        connect(btn, &QPushButton::clicked, this, [this, low, high, mode] {
             applyFilterPreset(low, high);
+            // Shift+click — also snap the TX passband to match the RX preset
+            // (Thetis-style alignment shortcut).  Convert IQ-space preset
+            // values to TX audio Hz: LSB family flips magnitude order, USB
+            // family is identity, symmetric uses (0, |high|).
+            if (QGuiApplication::keyboardModifiers() & Qt::ShiftModifier) {
+                if (!m_model) { return; }
+                const bool isSymmetric =
+                    mode == DSPMode::AM || mode == DSPMode::SAM
+                 || mode == DSPMode::DSB || mode == DSPMode::FM
+                 || mode == DSPMode::DRM;
+                int audioLow, audioHigh;
+                if (isSymmetric) {
+                    audioLow  = 0;
+                    audioHigh = qAbs(high);
+                } else {
+                    const int aLow  = qAbs(low);
+                    const int aHigh = qAbs(high);
+                    audioLow  = qMin(aLow, aHigh);
+                    audioHigh = qMax(aLow, aHigh);
+                }
+                m_model->transmitModel().setFilterLow(audioLow);
+                m_model->transmitModel().setFilterHigh(audioHigh);
+            }
         });
 
         // Stage C2: right-click context menu → edit / reset this preset.

@@ -277,6 +277,7 @@ warren@wpratt.com
 #include "models/SliceModel.h"
 #include "gui/widgets/FilterPresetEditDialog.h"
 
+#include <QGuiApplication>
 #include <QPainter>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -1545,8 +1546,11 @@ void VfoWidget::rebuildFilterButtons(DSPMode mode)
         if (low == defLow && high == defHigh) {
             btn->setChecked(true);
         }
-        // Exclusive toggle: click selects this preset, emits filterChanged
-        connect(btn, &QPushButton::clicked, this, [this, low, high, btn](bool checked) {
+        // Exclusive toggle: click selects this preset, emits filterChanged.
+        // Shift+click also emits txFilterMatchRequested so the TX passband
+        // snaps to the same audio Hz range as the RX (Thetis-style
+        // alignment shortcut).
+        connect(btn, &QPushButton::clicked, this, [this, low, high, mode, btn](bool checked) {
             if (!checked) {
                 // Don't allow unchecking the active preset — keep it toggled on
                 btn->setChecked(true);
@@ -1560,6 +1564,26 @@ void VfoWidget::rebuildFilterButtons(DSPMode mode)
             }
             if (!m_updatingFromModel) {
                 emit filterChanged(low, high);
+                if (QGuiApplication::keyboardModifiers() & Qt::ShiftModifier) {
+                    // Convert IQ-space preset to TX audio Hz: LSB family
+                    // flips magnitude order, USB family is identity,
+                    // symmetric uses (0, |high|).
+                    const bool isSymmetric =
+                        mode == DSPMode::AM || mode == DSPMode::SAM
+                     || mode == DSPMode::DSB || mode == DSPMode::FM
+                     || mode == DSPMode::DRM;
+                    int audioLow, audioHigh;
+                    if (isSymmetric) {
+                        audioLow  = 0;
+                        audioHigh = qAbs(high);
+                    } else {
+                        const int aLow  = qAbs(low);
+                        const int aHigh = qAbs(high);
+                        audioLow  = qMin(aLow, aHigh);
+                        audioHigh = qMax(aLow, aHigh);
+                    }
+                    emit txFilterMatchRequested(audioLow, audioHigh);
+                }
             }
         });
 

@@ -3260,6 +3260,14 @@ void MainWindow::wireSliceToSpectrum()
         slice->setFilter(low, high);
     });
 
+    // Shift+click on a filter preset on the flag — snap TX passband to
+    // match the RX preset's audio Hz range (Thetis-style alignment shortcut).
+    connect(vfo, &VfoWidget::txFilterMatchRequested, this,
+            [this](int audioLow, int audioHigh) {
+        m_radioModel->transmitModel().setFilterLow(audioLow);
+        m_radioModel->transmitModel().setFilterHigh(audioHigh);
+    });
+
     connect(vfo, &VfoWidget::agcModeChanged, this, [slice](AGCMode mode) {
         slice->setAgcMode(mode);
     });

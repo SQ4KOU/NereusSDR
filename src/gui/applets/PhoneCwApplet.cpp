@@ -489,48 +489,10 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
         vbox->addLayout(row);
     }
 
-    // ── Control 13: TX filter Low/High Cut sliders ───────────────────────────
-    {
-        // Low Cut row
-        auto* lowRow = new QHBoxLayout;
-        lowRow->setSpacing(4);
-        auto* lowLbl = new QLabel(QStringLiteral("TX Lo:"), page);
-        lowLbl->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(NereusSDR::Style::kTextSecondary));
-        lowLbl->setFixedWidth(40);
-        lowRow->addWidget(lowLbl);
-        m_txFiltLowSlider = new QSlider(Qt::Horizontal, page);
-        m_txFiltLowSlider->setRange(0, 500);
-        m_txFiltLowSlider->setValue(100);
-        m_txFiltLowSlider->setStyleSheet(NereusSDR::Style::sliderHStyle());
-        m_txFiltLowSlider->setAccessibleName(QStringLiteral("TX filter low cut"));
-        lowRow->addWidget(m_txFiltLowSlider, 1);
-        auto* lowValLbl = new QLabel(QStringLiteral("100"), page);
-        lowValLbl->setStyleSheet(NereusSDR::Style::insetValueStyle());
-        lowValLbl->setFixedWidth(30);
-        lowValLbl->setAlignment(Qt::AlignCenter);
-        lowRow->addWidget(lowValLbl);
-        vbox->addLayout(lowRow);
-
-        // High Cut row
-        auto* highRow = new QHBoxLayout;
-        highRow->setSpacing(4);
-        auto* highLbl = new QLabel(QStringLiteral("TX Hi:"), page);
-        highLbl->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(NereusSDR::Style::kTextSecondary));
-        highLbl->setFixedWidth(40);
-        highRow->addWidget(highLbl);
-        m_txFiltHighSlider = new QSlider(Qt::Horizontal, page);
-        m_txFiltHighSlider->setRange(500, 5000);
-        m_txFiltHighSlider->setValue(2800);
-        m_txFiltHighSlider->setStyleSheet(NereusSDR::Style::sliderHStyle());
-        m_txFiltHighSlider->setAccessibleName(QStringLiteral("TX filter high cut"));
-        highRow->addWidget(m_txFiltHighSlider, 1);
-        auto* highValLbl = new QLabel(QStringLiteral("2800"), page);
-        highValLbl->setStyleSheet(NereusSDR::Style::insetValueStyle());
-        highValLbl->setFixedWidth(30);
-        highValLbl->setAlignment(Qt::AlignCenter);
-        highRow->addWidget(highValLbl);
-        vbox->addLayout(highRow);
-    }
+    // TX filter Low/High Cut sliders removed — superseded by the Lo/Hi
+    // spinboxes on TxApplet (Plan 4 Cluster C) which are wired end-to-end
+    // through TransmitModel::filterChanged → SetTXABandpassFreqs.  These
+    // sliders were NYI placeholders that never reached WDSP.
 
     // ── Control 13: AM Carrier level slider (0-100) + inset "25" ────────────
     // Spec: Phase 3I-3
@@ -575,8 +537,6 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
     NyiOverlay::markNyi(m_voxDlySlider,     kNyiProc);    // #10 delay
     NyiOverlay::markNyi(m_dexpBtn,          kNyiProc);    // #11 — Phase 3I-3
     NyiOverlay::markNyi(m_dexpSlider,       kNyiProc);    // #11 slider
-    NyiOverlay::markNyi(m_txFiltLowSlider,  kNyiProc);    // #12 — Phase 3I-3
-    NyiOverlay::markNyi(m_txFiltHighSlider, kNyiProc);    // #12 hi
     NyiOverlay::markNyi(m_amCarSlider,      kNyiProc);    // #13 — Phase 3I-3
 }
 

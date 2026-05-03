@@ -167,11 +167,10 @@ private:
     QPushButton* m_dexpBtn{nullptr};
     QSlider*     m_dexpSlider{nullptr};
     QLabel*      m_dexpLabel{nullptr};
-    // #12 TX filter Low/High sliders + 2 insets
-    QSlider*     m_txFiltLowSlider{nullptr};
-    QLabel*      m_txFiltLowLabel{nullptr};
-    QSlider*     m_txFiltHighSlider{nullptr};
-    QLabel*      m_txFiltHighLabel{nullptr};
+    // #12 TX filter Low/High sliders removed — superseded by TxApplet
+    // Lo/Hi spinboxes (Plan 4 Cluster C); the sliders here were NYI and
+    // never reached WDSP.
+
     // #13 AM Carrier level slider (0-100) + inset "25"
     QSlider*     m_amCarSlider{nullptr};
     QLabel*      m_amCarLabel{nullptr};
