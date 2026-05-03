@@ -122,15 +122,20 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     // NereusSDR-original — the Thetis tab is widget-only with no narrative
     // text — and may be tweaked freely; the test only pins on the "3M-3"
     // future-phase tag.
+    // Placeholder text deliberately uses ASCII-only punctuation: the
+    // disabled-italic font fallback on some macOS system-font versions
+    // renders Unicode bullets (U+2022) and em-dashes (U+2014) as tofu
+    // boxes despite identical chars rendering correctly in normal-state
+    // labels elsewhere in the app.  Verified at PR-time on JJ's bench.
     auto* lbl = buildPlaceholderLabel(QStringLiteral(
-        "PA Gain by Band — coming in Phase 3M-3.\n"
+        "PA Gain by Band -- coming in Phase 3M-3.\n"
         "\n"
         "This page will host:\n"
-        "  \xE2\x80\xA2 Per-band gain spinboxes (11 HF + 14 VHF bands)\n"
-        "  \xE2\x80\xA2 PA Profile selector + new/copy/delete/reset buttons\n"
-        "  \xE2\x80\xA2 Auto-cal sweep panel (target watts, all-bands/selected-bands,\n"
+        "  - Per-band gain spinboxes (11 HF + 14 VHF bands)\n"
+        "  - PA Profile selector + new/copy/delete/reset buttons\n"
+        "  - Auto-cal sweep panel (target watts, all-bands/selected-bands,\n"
         "    11 per-band include checkboxes, \"Use Advanced Calibration Routine\")\n"
-        "  \xE2\x80\xA2 TX-Profile / PA-Profile recovery linkage warning\n"
+        "  - TX-Profile / PA-Profile recovery linkage warning\n"
         "\n"
         "Source: Thetis setup.designer.cs:47386-47525 [v2.10.3.13]\n"
         "        + chkAutoPACalibrate at line 49084"));
@@ -161,8 +166,10 @@ PaWattMeterPage::PaWattMeterPage(RadioModel* model, QWidget* parent)
         // Without a model we have nothing to populate the cal group from.
         // Fall back to a brief placeholder so tests / model-less previews still
         // render something coherent.
+        // ASCII em-dash (--) for the disabled-italic placeholder; see
+        // PaGainByBandPage above for the rationale.
         auto* lbl = buildPlaceholderLabel(QStringLiteral(
-            "Watt Meter — requires a connected radio model.\n"
+            "Watt Meter -- requires a connected radio model.\n"
             "\n"
             "Source: Thetis setup.designer.cs:49304-49309 [v2.10.3.13]"));
         contentLayout()->insertWidget(contentLayout()->count() - 1, lbl);
