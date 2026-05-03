@@ -80,6 +80,25 @@
 //                 3C's setPowerUsingTargetDbm wrapper builds on this.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-05-03 — Phase 3 Agent 3C of issue #167: setPowerUsingTargetDbm()
+//                 deep-parity wrapper — full port of Thetis
+//                 SetPowerUsingTargetDBM (console.cs:46645-46762
+//                 [v2.10.3.13]) integrating Phase 3A scaffolding +
+//                 Phase 3B math kernel into the unified API. All three
+//                 txMode branches (0=normal, 1=tune, 2=2-tone) and
+//                 drive-source enum routing for tune/2-tone modes;
+//                 power_by_band write side-effect on txMode 0; bConstrain
+//                 out-param false on Fixed drive source; ATT-on-TX-on-
+//                 power-change safety gate (//[2.10.3.5]MW0LGE tag
+//                 preserved verbatim) — pushes ATT_on_TX=31dB via
+//                 StepAttenuatorController when PS-active + power
+//                 changes.  Adds m_twoToneActive / m_tuneDrivePowerSource
+//                 / m_tunePower fields (matching Thetis chk2TONE,
+//                 _tuneDrivePowerSource, tune_power) and
+//                 audioVolumeChanged signal.  XVTR translation NOT
+//                 ported — sentinel fallback in computeAudioVolume
+//                 catches Band::XVTR.  J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -148,6 +167,7 @@
 namespace NereusSDR {
 
 class PaProfile;
+class StepAttenuatorController;
 
 // VAX slot: which audio source owns the transmitter.
 // MicDirect = hardware mic, Vax1–Vax4 = virtual audio crossbar slots.
@@ -421,6 +441,117 @@ public:
     double computeAudioVolume(const PaProfile& profile,
                               Band band,
                               int sliderWatts) const noexcept;
+
+    // ── Two-tone active state (#167 Phase 3C scaffolding) ────────────────
+    //
+    // Mirrors Thetis chk2TONE.Checked at console.cs:46653, 46667-46668
+    // [v2.10.3.13].  TwoToneController owns the live state machine; this
+    // mirror property exists so setPowerUsingTargetDbm can resolve
+    // txMode == 2 without coupling TransmitModel to TwoToneController.
+    // RadioModel wires TwoToneController::twoToneActiveChanged into
+    // TransmitModel::setTwoToneActive (deferred wiring; tests drive it
+    // directly).
+    bool isTwoToneActive() const noexcept { return m_twoToneActive; }
+    void setTwoToneActive(bool active);
+
+    // ── Tune drive-power source (#167 Phase 3C) ───────────────────────────
+    //
+    // Mirrors Thetis _tuneDrivePowerSource at console.cs:46552
+    // [v2.10.3.13]:
+    //   private DrivePowerSource _tuneDrivePowerSource = DrivePowerSource.DRIVE_SLIDER;
+    // Default DriveSlider.  Used by setPowerUsingTargetDbm txMode 1
+    // (tune) branch — drives whether the slider value comes from PWR,
+    // TUN, or the FIXED setup-page value.
+    //
+    // Persisted per-MAC under hardware/<mac>/tx/TuneDrivePowerOrigin
+    // (mirrors the existing TwoToneDrivePowerOrigin key).
+    DrivePowerSource tuneDrivePowerSource() const noexcept {
+        return m_tuneDrivePowerSource;
+    }
+    void setTuneDrivePowerSource(DrivePowerSource source);
+
+    // ── Fixed tune power (#167 Phase 3C) ──────────────────────────────────
+    //
+    // Mirrors Thetis tune_power at console.cs:17229-17242 [v2.10.3.13]:
+    //   private int tune_power;  // power setting to use when TUN button is pressed
+    // The fixed-mode tune power slot.  Used by setPowerUsingTargetDbm
+    // txMode 1 branch when _tuneDrivePowerSource == FIXED — bypasses
+    // both PWR and TUN sliders for a setup-page-fixed value (e.g. 10 W
+    // for low-power tune).
+    //
+    // Range clamped to [0, 100].  Persisted per-MAC under
+    // hardware/<mac>/tx/FixedTunePower.
+    //
+    // Default 10 W (NereusSDR-original safer default; Thetis Designer
+    // defaults to 0 which is non-functional).
+    int  tunePower() const noexcept { return m_tunePower; }
+    void setTunePower(int watts);
+
+    /// Inject the StepAttenuatorController for the ATT-on-TX safety gate.
+    /// nullptr -> gate becomes no-op (used in tests + before RadioModel
+    /// wires up).  Caller retains ownership; TransmitModel does not
+    /// take ownership.  Mirrors RadioModel's stepAttController() pattern.
+    void setStepAttenuatorController(StepAttenuatorController* ctrl);
+
+    /// Result struct mirroring Thetis SetPowerUsingTargetDBM return +
+    /// out-params.
+    ///
+    /// From Thetis console.cs:46645 [v2.10.3.13]:
+    ///   public int SetPowerUsingTargetDBM(out bool bConstrain,
+    ///                                     out double targetdBm,
+    ///                                     bool bSetPower,
+    ///                                     bool bFromTune,
+    ///                                     bool bTwoTone)
+    /// returns int (the constrained slider value); also stores
+    /// audioVolume for the caller to compose wire_byte and iq_gain.
+    struct TxPowerResult {
+        int    newPower;     ///< Thetis return: constrained slider value (0..100).
+        double targetDbm;    ///< Thetis out double: dBm target.
+        bool   bConstrain;   ///< Thetis out bool: false on FIXED drive source.
+        double audioVolume;  ///< Composed audio output level [0, 1.0].
+    };
+
+    /// Deep-parity port of Thetis SetPowerUsingTargetDBM (console.cs:46645-46762
+    /// [v2.10.3.13]). Routes all three txMode branches (normal / tune / 2tone)
+    /// and both drive-source enums through the unified math kernel.
+    ///
+    /// Inputs:
+    ///   - profile:    The active PA gain profile (owned by PaProfileManager;
+    ///                 caller resolves via paProfileManager()->activeProfile()).
+    ///   - currentBand: Current TX band; identifies the per-band gain row +
+    ///                  the slot to write back to on txMode 0.
+    ///   - bSetPower: When false, returns the constrained newPower without
+    ///                applying audio_volume side-effects (caller is just
+    ///                probing the math — Thetis console.cs:46738).
+    ///   - bFromTune: Caller is the TUN button handler (txMode = 1 outside
+    ///                of MOX).  Thetis console.cs:46655.
+    ///   - bTwoTone:  Caller is the 2-tone test (txMode = 2 outside of MOX).
+    ///                Thetis console.cs:46657.
+    ///
+    /// Side-effects when bSetPower is true:
+    ///   1. txMode 0: writes back into m_powerByBand[currentBand]
+    ///      (matches console.cs:46676).
+    ///   2. ATT-on-TX safety gate: if pureSignalActive() &&
+    ///      forceAttwhenPowerChangesWhenPSAon && (new_pwr > m_lastPower ||
+    ///      _anddecreased), pushes ATT_on_TX = 31 dB via
+    ///      stepAttenuatorController->setAttOnTxValue(31).  Updates
+    ///      m_lastPower (console.cs:46740-46748 [v2.10.3.13]
+    ///      //[2.10.3.5]MW0LGE).
+    ///   3. Emits audioVolumeChanged(audio_volume) signal so RadioModel
+    ///      call sites can pump it to TxChannel + RadioConnection.
+    ///
+    /// XVTR translation NOT ported (NereusSDR has only one XVTR slot;
+    /// sentinel fallback in computeAudioVolume catches that case).
+    ///
+    /// Caller composes:
+    ///   wire_byte = clamp(int(audioVolume * 1.02 * 255), 0, 255)
+    ///                                                    // audio.cs:268
+    ///   iq_gain   = audioVolume * swrProtect             // cmaster.cs:1117
+    TxPowerResult setPowerUsingTargetDbm(const PaProfile& activeProfile,
+                                         Band currentBand,
+                                         bool bSetPower,
+                                         bool bFromTune,
+                                         bool bTwoTone);
 
     /// Restore all per-band tune-power values from AppSettings under the
     /// current MAC scope.  No-op when no MAC has been set.
@@ -1412,6 +1543,22 @@ signals:
     /// See Thetis console.cs:29302 [v2.10.3.13].
     void forceAttwhenPowerChangesWhenPSAonAndDecreasedChanged(bool on);
 
+    // ── PA-cal hotfix Phase 3C signals ────────────────────────────────────
+    /// Emitted when isTwoToneActive() changes.  Mirrors Thetis chk2TONE
+    /// CheckedChanged at console.cs:30000-30002 [v2.10.3.13].
+    void twoToneActiveChanged(bool active);
+    /// Emitted when tuneDrivePowerSource() changes.  Mirrors Thetis
+    /// TuneDrivePowerOrigin setter at console.cs:46554-46575 [v2.10.3.13].
+    void tuneDrivePowerSourceChanged(DrivePowerSource source);
+    /// Emitted when tunePower() (fixed) changes.  Mirrors Thetis
+    /// tune_power setter at console.cs:17229-17242 [v2.10.3.13].
+    void tunePowerChanged(int watts);
+    /// Emitted by setPowerUsingTargetDbm when bSetPower=true.
+    /// Caller (RadioModel drive-slider lambda + TUNE handler) pumps:
+    ///   wire_byte = clamp(int(volume * 1.02 * 255), 0, 255) -> setTxDrive
+    ///   iq_gain   = volume * swrProtect                       -> TxChannel::setTxFixedGain
+    void audioVolumeChanged(double volume);
+
     // ── Mic gain signals (3M-1b C.1) ──────────────────────────────────────
     /// Emitted when micGainDb changes (carries the clamped dB value).
     void micGainDbChanged(int dB);
@@ -1512,6 +1659,46 @@ private:
     bool m_forceAttwhenPowerChangesWhenPSAon{true};            //MW0LGE [2.9.3.5]
     bool m_forceAttwhenPowerChangesWhenPSAonAndDecreased{false};
     int  m_lastPower{-1};
+
+    // ── PA-cal hotfix Phase 3C state ──────────────────────────────────────
+    //
+    // Two-tone active mirror of TwoToneController state.  Mirrors Thetis
+    // chk2TONE.Checked.  Set externally via setTwoToneActive (RadioModel
+    // wires TwoToneController::twoToneActiveChanged in production; tests
+    // drive directly).
+    bool m_twoToneActive{false};
+    // Tune drive-power source.  Default DriveSlider per Thetis
+    // console.cs:46552 [v2.10.3.13]:
+    //   private DrivePowerSource _tuneDrivePowerSource = DRIVE_SLIDER;
+    DrivePowerSource m_tuneDrivePowerSource{DrivePowerSource::DriveSlider};
+    // Fixed tune power slot.  Mirrors Thetis tune_power (console.cs:17229
+    // [v2.10.3.13]).  Default 10 W (NereusSDR-original safer; Thetis
+    // Designer ships 0).
+    int  m_tunePower{10};
+    // StepAttenuatorController for ATT-on-TX safety gate (#167 Phase 3C).
+    // Non-owning pointer; nullptr until RadioModel injects via
+    // setStepAttenuatorController(); when nullptr the gate becomes a no-op.
+    StepAttenuatorController* m_stepAttCtrl{nullptr};
+
+#ifdef NEREUS_BUILD_TESTS
+    // Test seam (Phase 3C) — overrides pureSignalActive() return when set.
+    // Phase 3A's predicate returns false unconditionally; this seam lets
+    // tests flip it to true to exercise the ATT-on-TX gate without the
+    // 3M-4 PureSignal feedback DDC wiring in place.  The seam is
+    // intentionally a tri-state (-1 = no override; 0 = false; 1 = true)
+    // so the default unset state preserves Phase 3A semantics in
+    // production-style code paths that compile in NEREUS_BUILD_TESTS
+    // mode (e.g. a unit test that doesn't care about PS state).
+public:
+    void setPureSignalActiveForTest(bool on) noexcept {
+        m_pureSignalActiveOverride = on ? 1 : 0;
+    }
+    void clearPureSignalActiveForTest() noexcept {
+        m_pureSignalActiveOverride = -1;
+    }
+private:
+    int m_pureSignalActiveOverride{-1};
+#endif
 
     // Per-MAC AppSettings scope (mirrors AlexController pattern).
     QString m_mac;

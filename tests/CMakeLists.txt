@@ -514,6 +514,23 @@ nereus_add_test(tst_transmit_model_pa_scaffold)
 #                                            output power" sentinel comment).
 nereus_add_test(tst_transmit_model_compute_audio_volume)
 
+# ── Phase 3 Agent 3C of #167: TransmitModel::setPowerUsingTargetDbm wrapper ──
+# Verifies the deep-parity port of Thetis SetPowerUsingTargetDBM
+# (console.cs:46645-46762 [v2.10.3.13]) integrating Phase 3A scaffolding +
+# Phase 3B math kernel into a unified API:
+#   - All three txMode branches (0=normal, 1=tune, 2=2tone)
+#   - Drive-source enum routing for tune/2tone (DriveSlider/TuneSlider/Fixed)
+#   - power_by_band write side-effect on txMode 0 (matches console.cs:46676)
+#   - bConstrain out-param: false on Fixed drive source per console.cs:46688
+#   - ATT-on-TX-on-power-change safety gate firing/dormant/decrease cases
+#     (//[2.10.3.5]MW0LGE tag preserved verbatim) — pushes ATT_on_TX=31dB
+#     via injected StepAttenuatorController when PS-active + power changes
+#   - K2GX integration regression (ANAN-8000DLE 80m TUN slider 50)
+#   - audioVolumeChanged signal payload parity with computeAudioVolume
+#   - XVTR / power=0 / null-controller edge cases
+# Source: console.cs:46645-46762 [v2.10.3.13] (SetPowerUsingTargetDBM full).
+nereus_add_test(tst_transmit_model_set_power_using_dbm)
+
 # ── Phase 3M-1c F: MicProfileManager (load/save/delete/setActive) ────────────
 # Verifies the per-MAC mic-profile-bank API: F.1 class skeleton + load/save,
 # F.2 save with overwrite + comma-strip, F.3 delete with last-profile guard
