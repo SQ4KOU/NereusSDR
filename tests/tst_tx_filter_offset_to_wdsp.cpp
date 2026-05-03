@@ -60,30 +60,36 @@ private:
 
 private slots:
 
-    // ── 1. Debounce coalesces rapid calls ────────────────────────────────────
-    // Five rapid requestFilterChange calls with different values must produce
-    // exactly one txFilterApplied emission, and it must carry the LAST value.
-    void debounceFiresOnceAfterRapidChanges()
+    // ── 1. Direct-apply on every requestFilterChange ─────────────────────────
+    // The original 50 ms QTimer-based debounce was removed in commit c4c6d99
+    // because TxWorkerThread runs a custom semaphore-wake loop (not
+    // QThread::exec()) — QTimer events never dispatched there, and the WDSP
+    // bandpass call never reached the radio.  Bench-confirmed by JJ on
+    // ANAN-G2: TX BW spinbox didn't change actual transmitted bandwidth
+    // until the timer was dropped in favor of direct apply.
+    //
+    // Contract: every requestFilterChange call produces exactly one
+    // txFilterApplied emission with that call's IQ-mapped values.  Rapid UI
+    // events still coalesce naturally via Qt's queued-event compression on
+    // the worker thread.
+    void rapidChangesEachEmitOnce()
     {
         TxChannel ch(1);
         QSignalSpy spy(&ch, &TxChannel::txFilterApplied);
 
-        // Rapid-fire 5 calls — each restarts the 50 ms timer.
         ch.requestFilterChange(100, 2900, DSPMode::USB);
         ch.requestFilterChange(200, 2800, DSPMode::USB);
         ch.requestFilterChange(300, 2700, DSPMode::USB);
         ch.requestFilterChange(400, 2600, DSPMode::USB);
         ch.requestFilterChange(500, 2500, DSPMode::USB);  // last
 
-        // Wait long enough for the debounce to fire.
-        spy.wait(120);
+        // Direct-apply: each call emits synchronously — no wait needed.
+        QCOMPARE(spy.count(), 5);
 
-        QCOMPARE(spy.count(), 1);
-
-        // The emitted IQ values must correspond to the LAST call (500, 2500, USB).
-        // USB family: iqLow = +audioLow, iqHigh = +audioHigh → +500, +2500.
-        const int iqLow  = spy.first().at(0).toInt();
-        const int iqHigh = spy.first().at(1).toInt();
+        // The LAST emission must carry the LAST call's values
+        // (USB family: iqLow = +audioLow, iqHigh = +audioHigh → +500, +2500).
+        const int iqLow  = spy.last().at(0).toInt();
+        const int iqHigh = spy.last().at(1).toInt();
         QCOMPARE(iqLow,  +500);
         QCOMPARE(iqHigh, +2500);
     }
