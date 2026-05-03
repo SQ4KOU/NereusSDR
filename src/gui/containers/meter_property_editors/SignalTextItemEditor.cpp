@@ -121,7 +121,7 @@ void SignalTextItemEditor::buildTypeSpecific()
             notifyChanged();
         }
     });
-    addRow(QStringLiteral("Colour"), m_btnColour);
+    addRow(QStringLiteral("Color"), m_btnColour);
 
     m_btnPeakColour = new QPushButton(this);
     m_btnPeakColour->setFixedSize(40, 18);
@@ -137,7 +137,7 @@ void SignalTextItemEditor::buildTypeSpecific()
             notifyChanged();
         }
     });
-    addRow(QStringLiteral("Peak colour"), m_btnPeakColour);
+    addRow(QStringLiteral("Peak color"), m_btnPeakColour);
 
     m_btnMarkerColour = new QPushButton(this);
     m_btnMarkerColour->setFixedSize(40, 18);
@@ -153,7 +153,7 @@ void SignalTextItemEditor::buildTypeSpecific()
             notifyChanged();
         }
     });
-    addRow(QStringLiteral("Marker colour"), m_btnMarkerColour);
+    addRow(QStringLiteral("Marker color"), m_btnMarkerColour);
 
     // Font
     m_fontCombo = new QFontComboBox(this);

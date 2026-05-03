@@ -75,7 +75,7 @@ void ColorsThemePage::buildUI()
         &SpectrumWidget::setGridColor);
     // Thetis: setup.designer.cs:3202 (clrbtnGrid) — rewritten
     // Thetis original: (none)
-    m_gridColorBtn->setToolTip(QStringLiteral("Colour of the major vertical grid lines on the panadapter."));
+    m_gridColorBtn->setToolTip(QStringLiteral("Color of the major vertical grid lines on the panadapter."));
     specForm->addRow(QStringLiteral("Grid Color:"), m_gridColorBtn);
 
     // Grid Fine Color — moved from Display → Grid & Scales "Colors" group (G10).
@@ -85,7 +85,7 @@ void ColorsThemePage::buildUI()
         &SpectrumWidget::setGridFineColor);
     // Thetis: setup.designer.cs:3198 (clrbtnGridFine) — rewritten
     // Thetis original: (none)
-    m_gridFineColorBtn->setToolTip(QStringLiteral("Colour of the minor (fine) grid lines between major grid lines on the panadapter."));
+    m_gridFineColorBtn->setToolTip(QStringLiteral("Color of the minor (fine) grid lines between major grid lines on the panadapter."));
     specForm->addRow(QStringLiteral("Grid Fine Color:"), m_gridFineColorBtn);
 
     // H-Grid Color — moved from Display → Grid & Scales "Colors" group (G11).
@@ -95,7 +95,7 @@ void ColorsThemePage::buildUI()
         &SpectrumWidget::setHGridColor);
     // Thetis: setup.designer.cs:3193 (clrbtnHGridColor) — rewritten
     // Thetis original: (none)
-    m_hGridColorBtn->setToolTip(QStringLiteral("Colour of the horizontal dB grid lines on the panadapter."));
+    m_hGridColorBtn->setToolTip(QStringLiteral("Color of the horizontal dB grid lines on the panadapter."));
     specForm->addRow(QStringLiteral("H-Grid Color:"), m_hGridColorBtn);
 
     // Grid Text Color — moved from Display → Grid & Scales "Colors" group (G12).
@@ -105,7 +105,7 @@ void ColorsThemePage::buildUI()
         &SpectrumWidget::setGridTextColor);
     // Thetis: setup.designer.cs:3206 (clrbtnText) — rewritten
     // Thetis original: (none)
-    m_gridTextColorBtn->setToolTip(QStringLiteral("Colour of the frequency and dB labels drawn on the panadapter grid."));
+    m_gridTextColorBtn->setToolTip(QStringLiteral("Color of the frequency and dB labels drawn on the panadapter grid."));
     specForm->addRow(QStringLiteral("Grid Text Color:"), m_gridTextColorBtn);
 
     // Band Edge Color — moved from Display → Grid & Scales "Colors" group (G6).
@@ -115,7 +115,7 @@ void ColorsThemePage::buildUI()
         &SpectrumWidget::setBandEdgeColor);
     // Thetis: setup.designer.cs:3232 (clrbtnBandEdge) — rewritten
     // Thetis original: (none)
-    m_bandEdgeColorBtn->setToolTip(QStringLiteral("Colour of the band edge markers drawn at the amateur band boundaries on the panadapter."));
+    m_bandEdgeColorBtn->setToolTip(QStringLiteral("Color of the band edge markers drawn at the amateur band boundaries on the panadapter."));
     specForm->addRow(QStringLiteral("Band Edge Color:"), m_bandEdgeColorBtn);
 
     // RX Zero Line Color — moved from Display → Grid & Scales "Colors" group (G13).

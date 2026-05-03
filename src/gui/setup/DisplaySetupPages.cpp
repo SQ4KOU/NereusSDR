@@ -392,7 +392,7 @@ void SpectrumDefaultsPage::buildUI()
     m_gradientToggle = new QCheckBox(QStringLiteral("Trace gradient"), renderGroup);
     // Thetis: setup.designer.cs:53918 (chkDataLineGradient) — rewritten (grammar fix)
     // Thetis original: "The data line is also uses the gradient if checked"
-    m_gradientToggle->setToolTip(QStringLiteral("When checked, the spectrum trace line renders with the gradient colour applied."));
+    m_gradientToggle->setToolTip(QStringLiteral("When checked, the spectrum trace line renders with the gradient color applied."));
     connect(m_gradientToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setGradientEnabled(on);
@@ -701,7 +701,7 @@ void WaterfallDefaultsPage::buildUI()
     });
     // Thetis: setup.designer.cs:34110 (comboColorPalette) — rewritten
     // Thetis original: "Sets the color scheme"
-    m_colorSchemeCombo->setToolTip(QStringLiteral("Waterfall colour palette. Each scheme maps signal level to a different colour gradient from low (dark) to high (bright)."));
+    m_colorSchemeCombo->setToolTip(QStringLiteral("Waterfall color palette. Each scheme maps signal level to a different color gradient from low (dark) to high (bright)."));
     connect(m_colorSchemeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int i) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
