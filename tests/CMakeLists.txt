@@ -592,6 +592,14 @@ nereus_add_test(tst_mic_profile_manager_para_eq_round_trip)
 # the existing 3M-1b K.1 SSB-mode allow-list rule).
 nereus_add_test(tst_two_tone_controller)
 
+# ── Phase 4 Agent 4B of #167: TwoToneController PA-cal integration ────────
+# Verifies start()/stop() route through Phase 3C
+# TransmitModel::setPowerUsingTargetDbm with bTwoTone=true so the PA gain
+# compensation applies during the IMD test (txMode=2 routing per
+# console.cs:46693-46708 [v2.10.3.13]).  Covers all three drive-source
+# enums (DriveSlider/TuneSlider/Fixed) plus the null-manager guards.
+nereus_add_test(tst_two_tone_controller_pa_cal_integration)
+
 # ── Phase 3O VAX schema migration ─────────────────────────────────────────
 nereus_add_test(tst_app_settings_vax_migration)
 
