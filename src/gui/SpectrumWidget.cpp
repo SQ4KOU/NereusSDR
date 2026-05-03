@@ -425,11 +425,23 @@ void SpectrumWidget::loadSettings()
                           static_cast<int>(WfColorScheme::Count) - 1));
 
     // Phase 3G-8 commit 3: spectrum renderer state.
+    // DisplayAverageMode + DisplayAverageAlpha are retired keys (v0.3.0
+    // migration removes the mode key; the alpha key is retired by the
+    // schema-v4 migration below — alphas now derive from per-side ms time
+    // constants via the Thetis α = exp(-1/(fps×τ)) formula).
     const int avgRaw = readInt(QStringLiteral("DisplayAverageMode"),
                                static_cast<int>(AverageMode::Logarithmic));
     m_averageMode = static_cast<AverageMode>(qBound(0, avgRaw,
                           static_cast<int>(AverageMode::Count) - 1));
-    m_averageAlpha     = readFloat(QStringLiteral("DisplayAverageAlpha"), 0.05f);
+
+    // Per-side averaging time constants. Defaults match Thetis (setup.cs
+    // udDisplayAVGTime = 30 ms, udDisplayAVTimeWF = 120 ms). Range matches
+    // Thetis: 1..9999 ms, but we clamp at 10 ms to keep the UI step sane.
+    m_spectrumAverageTimeMs = qBound(10,
+        readInt(QStringLiteral("DisplaySpectrumAverageTimeMs"), 30), 9999);
+    m_waterfallAverageTimeMs = qBound(10,
+        readInt(QStringLiteral("DisplayWaterfallAverageTimeMs"), 120), 9999);
+    recomputeAverageAlphas();
 
     // Task 2.1: Detector + Averaging split. New keys alongside legacy.
     // Ported from Thetis specHPSDR.cs:302-415 [v2.10.3.13].
@@ -719,11 +731,11 @@ void SpectrumWidget::saveSettings()
               m_ctunEnabled ? QStringLiteral("True") : QStringLiteral("False"));
 
     // Phase 3G-8 commit 3: spectrum renderer state.
-    // Note: DisplayAverageMode is a retired key (v0.3.0 migration removes it).
-    // Do NOT write it here; the canonical save is the Detector + Averaging split
-    // keys below (Task 2.1). Reading is still done above as a legacy fallback for
-    // settings files that have not yet been migrated.
-    writeFloat(QStringLiteral("DisplayAverageAlpha"), m_averageAlpha);
+    // DisplayAverageMode + DisplayAverageAlpha are retired keys (v0.3.0
+    // and schema-v4 migrations remove them). Canonical save is the Detector +
+    // Averaging split keys + the per-side averaging time constants below.
+    writeInt(QStringLiteral("DisplaySpectrumAverageTimeMs"), m_spectrumAverageTimeMs);
+    writeInt(QStringLiteral("DisplayWaterfallAverageTimeMs"), m_waterfallAverageTimeMs);
 
     // Task 2.1: Detector + Averaging split keys.
     writeInt(QStringLiteral("DisplaySpectrumDetector"),  static_cast<int>(m_spectrumDetector));
@@ -1164,11 +1176,57 @@ void SpectrumWidget::applyAveraging(const QVector<float>& newFrame,
 
 void SpectrumWidget::setAverageAlpha(float alpha)
 {
+    // DEPRECATED — overrides only the spectrum alpha. Kept for callers not
+    // yet migrated to the time-constant API. The next setSpectrumAverageTimeMs
+    // / FPS change will recompute and overwrite this value.
     alpha = qBound(0.0f, alpha, 1.0f);
-    if (qFuzzyCompare(m_averageAlpha, alpha)) {
+    if (qFuzzyCompare(m_spectrumAverageAlpha, alpha)) {
         return;
     }
-    m_averageAlpha = alpha;
+    m_spectrumAverageAlpha = alpha;
+    scheduleSettingsSave();
+}
+
+// From Thetis specHPSDR.cs:351-380 [v2.10.3.13] — AvTau / AvTauWF setters
+// compute the per-side back-multiplier α via Math.Exp(-1.0 / (frame_rate * tau)).
+// We mirror that exactly: τ in seconds, fps from the live display timer.
+void SpectrumWidget::recomputeAverageAlphas()
+{
+    // Live FPS — derived from the display timer's interval. Fall back to 30
+    // when the timer hasn't started yet (loadSettings runs before the timer
+    // is armed). This matches the fallback used in updateSpectrum().
+    const int intervalMs = m_displayTimer.interval();
+    const int fps = (intervalMs > 0) ? qMax(1, 1000 / intervalMs) : 30;
+
+    auto computeAlpha = [fps](int timeMs) -> float {
+        const double tauSec = qMax(timeMs, 1) / 1000.0;
+        // α = exp(-1 / (fps × τ)). Matches Thetis specHPSDR.cs:358 / :374.
+        const double a = std::exp(-1.0 / (static_cast<double>(fps) * tauSec));
+        return static_cast<float>(qBound(0.0, a, 1.0));
+    };
+    m_spectrumAverageAlpha  = computeAlpha(m_spectrumAverageTimeMs);
+    m_waterfallAverageAlpha = computeAlpha(m_waterfallAverageTimeMs);
+}
+
+void SpectrumWidget::setSpectrumAverageTimeMs(int ms)
+{
+    ms = qBound(10, ms, 9999);
+    if (m_spectrumAverageTimeMs == ms) {
+        return;
+    }
+    m_spectrumAverageTimeMs = ms;
+    recomputeAverageAlphas();
+    scheduleSettingsSave();
+}
+
+void SpectrumWidget::setWaterfallAverageTimeMs(int ms)
+{
+    ms = qBound(10, ms, 9999);
+    if (m_waterfallAverageTimeMs == ms) {
+        return;
+    }
+    m_waterfallAverageTimeMs = ms;
+    recomputeAverageAlphas();
     scheduleSettingsSave();
 }
 
@@ -2042,7 +2100,9 @@ void SpectrumWidget::updateSpectrum(int receiverId, const QVector<float>& binsDb
 
     // --- Stage 2: Averaging (frame smoothing) via new split path ---
     // From Thetis specHPSDR.cs:383-415 [v2.10.3.13] AverageMode setter.
-    applyAveraging(binsDbm, m_smoothed, m_spectrumAveraging, m_averageAlpha);
+    // Spectrum and waterfall use independent alphas computed from per-side
+    // time constants — see recomputeAverageAlphas().
+    applyAveraging(binsDbm, m_smoothed, m_spectrumAveraging, m_spectrumAverageAlpha);
 
     // Peak hold: track per-bin maximum over the decay window.
     if (m_peakHoldEnabled) {
@@ -3405,7 +3465,7 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
     const QVector<float>* src = &bins;
     QVector<float> wfLocal;
     if (m_waterfallAveraging != SpectrumAveraging::None) {
-        applyAveraging(bins, m_wfSmoothedBins, m_waterfallAveraging, m_averageAlpha);
+        applyAveraging(bins, m_wfSmoothedBins, m_waterfallAveraging, m_waterfallAverageAlpha);
         wfLocal = m_wfSmoothedBins;
         src = &wfLocal;
     } else if (m_wfAverageMode != AverageMode::None) {
@@ -3413,7 +3473,7 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
         if (m_wfSmoothedBins.size() != bins.size()) {
             m_wfSmoothedBins = bins;
         } else {
-            const float a = qBound(0.0f, m_averageAlpha, 1.0f);
+            const float a = qBound(0.0f, m_waterfallAverageAlpha, 1.0f);
             for (int i = 0; i < bins.size(); ++i) {
                 m_wfSmoothedBins[i] = a * bins[i]
                                     + (1.0f - a) * m_wfSmoothedBins[i];
@@ -3789,6 +3849,9 @@ void SpectrumWidget::setDisplayFps(int fps)
 {
     const int clamped = qBound(1, fps, 60);
     m_displayTimer.setInterval(1000 / clamped);
+    // Averaging alphas depend on fps via Thetis α = exp(-1/(fps×τ)).
+    // Recompute so the smoothing time constants stay correct after a rate change.
+    recomputeAverageAlphas();
 }
 
 void SpectrumWidget::setMoxOverlay(bool isTx)

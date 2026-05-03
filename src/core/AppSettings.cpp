@@ -892,6 +892,18 @@ void AppSettings::ensureSettingsAtVersion(int currentVersion)
         qDebug() << "Settings migration to schema v3 complete";
     }
 
+    // v3 → v4 migration (averaging-math fix). Retires the bare alpha key —
+    // alpha is now derived per-side from millisecond time constants via
+    // Thetis math (specHPSDR.cs:351-380 [v2.10.3.13]). Anyone with a v3
+    // settings file gets default 30 ms / 120 ms (Thetis defaults) on next
+    // load; the old alpha value is unrecoverable as a τ without knowing the
+    // historical fps, and the math was wrong anyway.
+    if (storedVersion < 4 && currentVersion >= 4) {
+        qDebug() << "Migrating settings to schema v4 (averaging math fix)";
+        remove(QStringLiteral("DisplayAverageAlpha"));
+        qDebug() << "Settings migration to schema v4 complete";
+    }
+
     setValue(versionKey, QString::number(currentVersion));
 }
 

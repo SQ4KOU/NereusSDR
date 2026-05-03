@@ -373,9 +373,30 @@ public:
                                SpectrumAveraging mode, float alpha);
 
     // Smoothing time constant for Weighted / Logarithmic / TimeWindow.
-    // 0.0 = no smoothing, 1.0 = infinite smoothing. Default kSmoothAlpha.
+    // 0.0 = no smoothing, 1.0 = infinite smoothing.
+    //
+    // DEPRECATED: use setSpectrumAverageTimeMs / setWaterfallAverageTimeMs
+    // — those compute alpha from the time constant + frame rate via the
+    // Thetis formula α = exp(-1 / (fps × τ)) per specHPSDR.cs:351-380
+    // [v2.10.3.13]. The bare alpha setter is kept only for callers not yet
+    // migrated; it overwrites the spectrum alpha and is clobbered on the
+    // next time-spin or fps change.
     void setAverageAlpha(float alpha);
-    float averageAlpha() const { return m_averageAlpha; }
+    float averageAlpha() const { return m_spectrumAverageAlpha; }
+
+    // Per-side averaging time constants (milliseconds, ms→τ via /1000).
+    // Drives both spectrum and waterfall paths independently — Thetis
+    // specHPSDR.cs has separate AvTau / AvTauWF setters that each compute
+    // a back-multiplier α via Math.Exp(-1.0 / (frame_rate * tau)).
+    // From Thetis specHPSDR.cs:351-380 [v2.10.3.13] — AvTau / AvTauWF.
+    // From Thetis setup.cs udDisplayAVGTime_ValueChanged (default 30 ms)
+    // and udDisplayAVTimeWF_ValueChanged (default 120 ms).
+    void setSpectrumAverageTimeMs(int ms);
+    int  spectrumAverageTimeMs() const { return m_spectrumAverageTimeMs; }
+    void setWaterfallAverageTimeMs(int ms);
+    int  waterfallAverageTimeMs() const { return m_waterfallAverageTimeMs; }
+    float spectrumAverageAlpha() const { return m_spectrumAverageAlpha; }
+    float waterfallAverageAlpha() const { return m_waterfallAverageAlpha; }
 
     // Peak hold: track per-bin max, decay after delay.
     void setPeakHoldEnabled(bool on);
@@ -1047,7 +1068,16 @@ private:
     // ---- Phase 3G-8 commit 3: spectrum renderer state ----
 
     AverageMode m_averageMode{AverageMode::Logarithmic};
-    float       m_averageAlpha{0.05f};  // 0..1 exp-smoothing factor
+    // Spectrum + waterfall averaging time constants in milliseconds, with
+    // per-side back-multiplier alphas computed via Thetis math:
+    //   α = exp(-1 / (fps × τ))  [specHPSDR.cs:358 / :374, v2.10.3.13]
+    // Defaults match Thetis (setup.cs udDisplayAVGTime_ValueChanged = 30 ms,
+    // udDisplayAVTimeWF_ValueChanged = 120 ms).
+    int         m_spectrumAverageTimeMs{30};
+    int         m_waterfallAverageTimeMs{120};
+    // Recomputed by recomputeAverageAlphas() whenever fps or time changes.
+    float       m_spectrumAverageAlpha{0.0f};
+    float       m_waterfallAverageAlpha{0.0f};
 
     // ---- Task 2.1: Detector + Averaging split (handwave fix from 3G-8) ----
     // Ported from Thetis specHPSDR.cs:302-415 [v2.10.3.13].
@@ -1222,6 +1252,12 @@ private:
     // ---- Coalesced settings save ----
     void scheduleSettingsSave();
     bool m_settingsSaveScheduled{false};
+
+    // Recompute m_spectrumAverageAlpha + m_waterfallAverageAlpha from the
+    // current per-side time constants and live FPS using the Thetis formula:
+    //   α = exp(-1 / (fps × τ_seconds))
+    // From Thetis specHPSDR.cs:351-380 [v2.10.3.13] AvTau / AvTauWF setters.
+    void recomputeAverageAlphas();
 
     // ---- Mouse state ----
     bool   m_draggingDbm{false};

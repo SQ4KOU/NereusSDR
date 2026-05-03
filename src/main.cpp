@@ -212,9 +212,11 @@ int main(int argc, char* argv[])
     NereusSDR::AppSettings::migrateLegacyN2adrFilter(
         NereusSDR::AppSettings::instance());
 
-    // v0.3.0 settings schema migration — must run after load(), after other
-    // migrations. Removes retired display keys; sets SettingsSchemaVersion=3.
-    NereusSDR::AppSettings::instance().ensureSettingsAtVersion(3);
+    // v0.3.0 / v0.3.x settings schema migrations — must run after load(),
+    // after other migrations. v3 retires legacy display keys; v4 retires
+    // DisplayAverageAlpha after the averaging-math fix moved to per-side
+    // millisecond time constants.
+    NereusSDR::AppSettings::instance().ensureSettingsAtVersion(4);
 
     // Restore logging category toggles from settings
     NereusSDR::LogManager::instance().loadSettings();

@@ -103,7 +103,9 @@ private:
 
     // Section: Rendering
     QSlider*   m_fpSlider{nullptr};          // 10–60 fps
-    QComboBox* m_averagingCombo{nullptr};    // None/Weighted/Logarithmic/TimeWindow (legacy)
+    // Legacy "Averaging" combo removed in v0.3.0; setAverageMode() no longer
+    // drives the renderer. m_spectrumAveragingCombo + m_spectrumAvgTimeSpin
+    // (Thetis-faithful split) are the canonical controls.
     // Task 2.1: Detector + Averaging split (handwave fix from 3G-8).
     // From Thetis comboDispPanDetector/comboDispPanAveraging [v2.10.3.13].
     QComboBox* m_spectrumDetectorCombo{nullptr};  // Peak/Rosenfell/Average/Sample/RMS
@@ -178,11 +180,15 @@ private:
     QCheckBox* m_wfStopOnTx{nullptr};      // Task 2.8: WaterfallStopOnTx
     QSlider*   m_opacitySlider{nullptr};
     QComboBox* m_colorSchemeCombo{nullptr};  // 7 schemes
-    QComboBox* m_wfAveragingCombo{nullptr};  // W16 (legacy)
+    // W16 legacy combo removed in v0.3.0; the Thetis-faithful split combos
+    // m_waterfallDetectorCombo + m_waterfallAveragingCombo (below) replace it.
     // Task 2.1: Detector + Averaging split for waterfall.
     // From Thetis comboDispWFDetector/comboDispWFAveraging [v2.10.3.13].
     QComboBox* m_waterfallDetectorCombo{nullptr};  // Peak/Rosenfell/Average/Sample
     QComboBox* m_waterfallAveragingCombo{nullptr}; // None/Recursive/Time Window/Log Recursive
+    // Waterfall averaging time constant (independent from spectrum).
+    // From Thetis udDisplayAVTimeWF [v2.10.3.13] (setup.designer.cs:2086).
+    QSpinBox*  m_waterfallAvgTimeSpin{nullptr};
 
     // Task 2.8: Copy spectrum min/max → waterfall thresholds button
     QPushButton* m_copySpecMinMaxBtn{nullptr};

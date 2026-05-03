@@ -144,7 +144,6 @@ void SpectrumDefaultsPage::loadFromRenderer()
     QSignalBlocker b1(m_fftSizeCombo);
     QSignalBlocker b2(m_windowCombo);
     QSignalBlocker b3(m_fpSlider);
-    QSignalBlocker b4(m_averagingCombo);
     QSignalBlocker b5(m_fillToggle);
     QSignalBlocker b6(m_fillAlphaSlider);
     QSignalBlocker b7(m_lineWidthSlider);
@@ -171,7 +170,6 @@ void SpectrumDefaultsPage::loadFromRenderer()
     }
 
     m_fpSlider->setValue(fe->outputFps());
-    m_averagingCombo->setCurrentIndex(static_cast<int>(sw->averageMode()));
     // Task 2.1: sync new split combos.
     if (m_spectrumDetectorCombo) {
         QSignalBlocker bd(m_spectrumDetectorCombo);
@@ -180,6 +178,10 @@ void SpectrumDefaultsPage::loadFromRenderer()
     if (m_spectrumAveragingCombo) {
         QSignalBlocker ba(m_spectrumAveragingCombo);
         m_spectrumAveragingCombo->setCurrentIndex(static_cast<int>(sw->spectrumAveraging()));
+    }
+    if (m_averagingTimeSpin) {
+        QSignalBlocker bt(m_averagingTimeSpin);
+        m_averagingTimeSpin->setValue(sw->spectrumAverageTimeMs());
     }
     m_fillToggle->setChecked(sw->panFillEnabled());
     m_fillAlphaSlider->setValue(static_cast<int>(sw->fillAlpha() * 100.0f));
@@ -369,19 +371,13 @@ void SpectrumDefaultsPage::buildUI()
         renderForm->addRow(QStringLiteral("FPS:"), row.container);
     }
 
-    m_averagingCombo = new QComboBox(renderGroup);
-    m_averagingCombo->addItems({QStringLiteral("None"), QStringLiteral("Weighted"),
-                                QStringLiteral("Logarithmic"), QStringLiteral("Time Window")});
-    // Thetis: setup.designer.cs:34835 (comboDispPanAveraging) — no upstream tooltip; rewritten
-    // Thetis original: (none)
-    m_averagingCombo->setToolTip(QStringLiteral("Panadapter spectrum averaging mode. Weighted and Time Window smooth the display; None shows raw FFT output."));
-    connect(m_averagingCombo, qOverload<int>(&QComboBox::currentIndexChanged),
-            this, [this](int i) {
-        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
-            w->setAverageMode(static_cast<AverageMode>(i));
-        }
-    });
-    renderForm->addRow(QStringLiteral("Averaging:"), m_averagingCombo);
+    // Legacy "Averaging" combo (None / Weighted / Logarithmic / Time Window)
+    // was a NereusSDR-only UI duplicate that pre-dated the Thetis-faithful
+    // split below. Its setAverageMode() calls write only to m_averageMode
+    // which the renderer no longer reads — m_spectrumAveraging drives the
+    // actual smoothing. Combo removed to stop confusing users with two
+    // averaging mode pickers; the legacy enum + setter survive for any
+    // external callers and migrate via SettingsSchemaVersion=4 below.
 
     // Task 2.1: Detector + Averaging split (handwave fix from 3G-8).
     // Ported from Thetis comboDispPanDetector [v2.10.3.13]
@@ -431,25 +427,28 @@ void SpectrumDefaultsPage::buildUI()
     });
     renderForm->addRow(QStringLiteral("Spectrum Averaging:"), m_spectrumAveragingCombo);
 
+    // Spectrum (panadapter) averaging time constant.
+    // From Thetis udDisplayAVGTime [v2.10.3.13] (setup.designer.cs:34902).
+    // Default 30 ms matches Thetis. Range 10..9999 ms (Thetis 1..9999, but
+    // the lower bound was bumped to 10 ms to keep the UI step coherent).
+    // Spec widget computes α = exp(-1/(fps×τ)) internally; no hand-rolled
+    // ms→alpha math here.
     m_averagingTimeSpin = new QSpinBox(renderGroup);
-    m_averagingTimeSpin->setRange(10, 5000);
+    m_averagingTimeSpin->setRange(10, 9999);
     m_averagingTimeSpin->setSingleStep(10);
     m_averagingTimeSpin->setSuffix(QStringLiteral(" ms"));
-    m_averagingTimeSpin->setValue(100);
-    // Thetis: setup.designer.cs:34902 (udDisplayAVGTime) — rewritten
-    // Thetis original: "When averaging, use this number of buffers to calculate the average."
-    // Rewritten because NereusSDR expresses this as a millisecond window that's
-    // converted to a smoothing alpha, not a discrete buffer count.
-    m_averagingTimeSpin->setToolTip(QStringLiteral("Duration of the averaging window in milliseconds. Longer = heavier smoothing, slower response to signal changes."));
+    m_averagingTimeSpin->setValue(30);
+    m_averagingTimeSpin->setToolTip(QStringLiteral(
+        "Spectrum averaging time constant. Larger = heavier smoothing, "
+        "slower response. Translates to a frame-by-frame alpha via "
+        "α = exp(−1 / (fps × τ)) per Thetis."));
     connect(m_averagingTimeSpin, qOverload<int>(&QSpinBox::valueChanged),
             this, [this](int ms) {
-        // Translate ms to an alpha between 0.05 (slow) and 0.95 (fast).
-        const float a = qBound(0.05f, 1.0f - (ms / 5000.0f), 0.95f);
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
-            w->setAverageAlpha(a);
+            w->setSpectrumAverageTimeMs(ms);
         }
     });
-    renderForm->addRow(QStringLiteral("Averaging Time:"), m_averagingTimeSpin);
+    renderForm->addRow(QStringLiteral("Spectrum Avg Time:"), m_averagingTimeSpin);
 
     m_decimationSpin = new QSpinBox(renderGroup);
     m_decimationSpin->setRange(1, 32);
@@ -888,7 +887,7 @@ void WaterfallDefaultsPage::loadFromRenderer()
     QSignalBlocker b5(m_updatePeriodSlider);
     QSignalBlocker b7(m_opacitySlider);
     QSignalBlocker b8(m_colorSchemeCombo);
-    QSignalBlocker b9(m_wfAveragingCombo);
+    // m_wfAveragingCombo legacy combo removed — no signal blocker needed.
     QSignalBlocker b10(m_showRxFilterToggle);
     QSignalBlocker b11(m_showTxFilterToggle);
     QSignalBlocker b12(m_showRxZeroLineToggle);
@@ -917,7 +916,7 @@ void WaterfallDefaultsPage::loadFromRenderer()
         m_wfStopOnTx->setChecked(sw->waterfallStopOnTx());
     }
     m_colorSchemeCombo->setCurrentIndex(static_cast<int>(sw->wfColorScheme()));
-    m_wfAveragingCombo->setCurrentIndex(static_cast<int>(sw->wfAverageMode()));
+    // m_wfAveragingCombo legacy combo removed — sync via m_waterfallAveragingCombo below.
     // Task 2.1: sync new waterfall split combos.
     if (m_waterfallDetectorCombo) {
         QSignalBlocker bwd(m_waterfallDetectorCombo);
@@ -926,6 +925,10 @@ void WaterfallDefaultsPage::loadFromRenderer()
     if (m_waterfallAveragingCombo) {
         QSignalBlocker bwa(m_waterfallAveragingCombo);
         m_waterfallAveragingCombo->setCurrentIndex(static_cast<int>(sw->waterfallAveraging()));
+    }
+    if (m_waterfallAvgTimeSpin) {
+        QSignalBlocker bwt(m_waterfallAvgTimeSpin);
+        m_waterfallAvgTimeSpin->setValue(sw->waterfallAverageTimeMs());
     }
     m_showRxFilterToggle->setChecked(sw->showRxFilterOnWaterfall());
     m_showTxFilterToggle->setChecked(sw->showTxFilterOnRxWaterfall());
@@ -1196,21 +1199,12 @@ void WaterfallDefaultsPage::buildUI()
     });
     dispForm->addRow(QStringLiteral("Color Scheme:"), m_colorSchemeCombo);
 
-    m_wfAveragingCombo = new QComboBox(dispGroup);
-    m_wfAveragingCombo->addItems({
-        QStringLiteral("None"), QStringLiteral("Weighted"),
-        QStringLiteral("Logarithmic"), QStringLiteral("Time Window")
-    });
-    // Thetis: setup.designer.cs:2083 (comboDispWFAveraging) — rewritten
-    // Thetis original: (none)
-    m_wfAveragingCombo->setToolTip(QStringLiteral("Waterfall averaging mode. Weighted and Time Window smooth rapid signal changes; None shows raw FFT output per row."));
-    connect(m_wfAveragingCombo, qOverload<int>(&QComboBox::currentIndexChanged),
-            this, [this](int i) {
-        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
-            w->setWfAverageMode(static_cast<AverageMode>(i));
-        }
-    });
-    dispForm->addRow(QStringLiteral("WF Averaging:"), m_wfAveragingCombo);
+    // Legacy "WF Averaging" combo (None / Weighted / Logarithmic / Time Window)
+    // was a NereusSDR-only UI duplicate. Its setWfAverageMode() calls write
+    // only to m_wfAverageMode which the renderer consults only when the new
+    // m_waterfallAveraging is None — i.e. it's a fallback path with no
+    // independent UI value. Combo removed; the legacy enum + setter survive
+    // for any external callers and migrate via SettingsSchemaVersion=4.
 
     // Task 2.1: Detector + Averaging split for waterfall (handwave fix from 3G-8).
     // Ported from Thetis comboDispWFDetector [v2.10.3.13]
@@ -1258,7 +1252,27 @@ void WaterfallDefaultsPage::buildUI()
             w->setWaterfallAveraging(static_cast<SpectrumAveraging>(i));
         }
     });
-    dispForm->addRow(QStringLiteral("WF Averaging (new):"), m_waterfallAveragingCombo);
+    dispForm->addRow(QStringLiteral("WF Averaging:"), m_waterfallAveragingCombo);
+
+    // Waterfall averaging time constant — independent from spectrum.
+    // From Thetis udDisplayAVTimeWF [v2.10.3.13] (setup.designer.cs:2086).
+    // Default 120 ms matches Thetis. Range 10..9999 ms.
+    m_waterfallAvgTimeSpin = new QSpinBox(dispGroup);
+    m_waterfallAvgTimeSpin->setRange(10, 9999);
+    m_waterfallAvgTimeSpin->setSingleStep(10);
+    m_waterfallAvgTimeSpin->setSuffix(QStringLiteral(" ms"));
+    m_waterfallAvgTimeSpin->setValue(120);
+    m_waterfallAvgTimeSpin->setToolTip(QStringLiteral(
+        "Waterfall averaging time constant. Independent from the spectrum "
+        "averaging time. Larger = heavier smoothing. Translates to a "
+        "frame-by-frame alpha via α = exp(−1 / (fps × τ)) per Thetis."));
+    connect(m_waterfallAvgTimeSpin, qOverload<int>(&QSpinBox::valueChanged),
+            this, [this](int ms) {
+        if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+            w->setWaterfallAverageTimeMs(ms);
+        }
+    });
+    dispForm->addRow(QStringLiteral("WF Avg Time:"), m_waterfallAvgTimeSpin);
 
     contentLayout()->addWidget(dispGroup);
 
