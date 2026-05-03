@@ -216,6 +216,21 @@ nereus_add_test(tst_pa_gain_profile)
 #   - dataFromString rejects malformed inputs (wrong field count) → false.
 nereus_add_test(tst_pa_profile)
 
+# ── Phase 2 Agent 2B of issue #167: PaProfileManager ─────────────────────────
+# Per-MAC bank for PaProfile instances. Mirrors MicProfileManager API verbatim.
+# Factory regen on first connect (16 Default-<model> + Bypass) per Thetis
+# initPAProfiles (setup.cs:23295-23316 [v2.10.3.13]). Stored profiles win
+# over factory defaults per Thetis RecoverPAProfiles (setup.cs:1920-1959
+# [v2.10.3.13]) — explicit Reset Defaults button is the only path to refresh
+# from canonical tables.
+# Covers: first-launch seeding (16 + Bypass + active=Default-<model>),
+# reconnect preserves stored profiles, per-MAC isolation, save overwrites
+# without re-emitting profileListChanged, delete + last-profile guard,
+# setActiveProfile non-existent returns false, active-profile-on-connect
+# 3-case logic (NereusSDR-spin), regenerateFactoryDefaults restores factory
+# but leaves customs alone, activeProfile() accessor.
+nereus_add_test(tst_pa_profile_manager)
+
 # ── Phase 3P-A P1CodecAnvelinaPro3 bank 17 extra OC (Task 7) ──
 nereus_add_test(tst_p1_codec_anvelina_pro3)
 
