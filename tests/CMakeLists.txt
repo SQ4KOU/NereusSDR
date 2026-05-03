@@ -196,6 +196,26 @@ nereus_add_test(tst_pa_cal_profile)
 # regression spotlight: ANAN-8000DLE 80m == 50.5f exactly.
 nereus_add_test(tst_pa_gain_profile)
 
+# ── Issue #167 Phase 2 Agent 2A: PaProfile editable per-instance gain table ──
+# Faithful port of Thetis PAProfile (setup.cs:23763-24046 [v2.10.3.13]).
+# Covers:
+#   - Construction + ResetGainDefaultsForModel pulls factory rows from
+#     PaGainProfile (ANAN-8000DLE 80m = 50.5f).
+#   - GetGainForBand(driveValue == -1) returns base; with driveValue applies
+#     calcDriveAdjust subtraction.
+#   - calcDriveAdjust 9-step lerp boundaries: drive=0/100 short-circuit to 0,
+#     exact step idx 1/5/9, mid-lerp idx 0/5/9.
+#   - Setters silently no-op on out-of-range Band / stepIndex (matches
+#     Thetis Band.FIRST/LAST guard).
+#   - copySettings deep-copies gainValues / gainAdjust / maxPower /
+#     useMaxPower; leaves name / model / isFactoryDefault unchanged.
+#   - dataToString emits exactly 171 pipe-delimited fields (3 + 14 + 126 + 28).
+#   - dataToString → dataFromString round-trip on randomly-filled profile.
+#   - Default constructor produces valid empty state (all gains 100.0f
+#     sentinel matching Thetis init loop).
+#   - dataFromString rejects malformed inputs (wrong field count) → false.
+nereus_add_test(tst_pa_profile)
+
 # ── Phase 3P-A P1CodecAnvelinaPro3 bank 17 extra OC (Task 7) ──
 nereus_add_test(tst_p1_codec_anvelina_pro3)
 
