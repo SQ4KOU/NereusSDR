@@ -1489,17 +1489,23 @@ void VfoWidget::rebuildFilterButtons(DSPMode mode)
         delete m_filterBtnContainer->layout();
     }
 
-    auto* grid = new QHBoxLayout(m_filterBtnContainer);
+    auto* grid = new QGridLayout(m_filterBtnContainer);
     grid->setSpacing(2);
     grid->setContentsMargins(0, 0, 0, 0);
 
-    // Compact 5-6-preset subset for the VFO flag — sourced from
-    // SliceModel::commonPresetsForMode() (Thetis main-panel filter buttons).
-    // Full 10-preset list is in SliceModel::presetsForMode() used by RxApplet.
-    const auto pairs = SliceModel::commonPresetsForMode(mode);
+    // Full 10-preset list — same source of truth as RxApplet so the flag's
+    // filter grid is uniform with the RX applet's filter grid. Sourced from
+    // SliceModel::presetsForMode() (Thetis console.cs:5180-5575 [v2.10.3.13]
+    // — InitFilterPresets, F1-F10 per mode). 3-column layout matches
+    // RxApplet's 3-column grid (i/kCols × i%kCols positioning).
+    const auto pairs = SliceModel::presetsForMode(mode);
     auto [defLow, defHigh] = SliceModel::defaultFilterForMode(mode);
 
-    for (const auto& [low, high] : pairs) {
+    static constexpr int kCols = 3;
+    const int count = qMin(static_cast<int>(pairs.size()), 10);
+
+    for (int i = 0; i < count; ++i) {
+        const auto [low, high] = pairs[i];
         const int widthHz = qAbs(high - low);
         QString label;
         if (widthHz >= 1000) {
@@ -1511,7 +1517,7 @@ void VfoWidget::rebuildFilterButtons(DSPMode mode)
         auto* btn = new QPushButton(label, m_filterBtnContainer);
         btn->setCheckable(true);
         btn->setStyleSheet(vfoModeBtnStyle());
-        btn->setFixedHeight(26);
+        btn->setFixedHeight(22);
         btn->setProperty("filterLow", low);
         btn->setProperty("filterHigh", high);
         // Tooltip: show the filter edges so the user knows what they're selecting
@@ -1538,7 +1544,7 @@ void VfoWidget::rebuildFilterButtons(DSPMode mode)
                 emit filterChanged(low, high);
             }
         });
-        grid->addWidget(btn);
+        grid->addWidget(btn, i / kCols, i % kCols);
     }
 
     m_filterBtnContainer->setLayout(grid);
