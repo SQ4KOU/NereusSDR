@@ -69,6 +69,17 @@
 //                 kernel itself (computeAudioVolume / setPowerUsingTargetDbm)
 //                 lands in Phases 3B / 3C. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-05-03 — Phase 3 Agent 3B of issue #167: computeAudioVolume()
+//                 math kernel — faithful port of Thetis SetPowerUsingTargetDBM
+//                 dBm-target math (console.cs:46720-46751 [v2.10.3.13])
+//                 with two NereusSDR-original safety short-circuits:
+//                 sliderWatts <= 0 returns 0.0; gbb >= 99.5 returns
+//                 clamp(sliderWatts/100, 0, 1) linear fallback for HL2
+//                 PA-bypass / Bypass profile / out-of-range Band. Pure
+//                 function: no state mutation, no signal emission. Phase
+//                 3C's setPowerUsingTargetDbm wrapper builds on this.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -135,6 +146,8 @@
 #include <cmath>
 
 namespace NereusSDR {
+
+class PaProfile;
 
 // VAX slot: which audio source owns the transmitter.
 // MicDirect = hardware mic, Vax1–Vax4 = virtual audio crossbar slots.
@@ -363,6 +376,51 @@ public:
     /// whether the gate fires.  For Phase 3A scaffolding only — Phase
     /// 3M-4 will replace the body with the live PS-A check.
     bool pureSignalActive() const noexcept;
+
+    /// Compute the normalized audio output level for the given (band,
+    /// sliderWatts) using the supplied active PA profile.
+    ///
+    /// Faithful port of the math kernel from Thetis SetPowerUsingTargetDBM
+    /// (console.cs:46720-46751 [v2.10.3.13]):
+    ///
+    ///   target_dbm   = 10 * log10(sliderWatts * 1000)
+    ///   gbb          = profile.getGainForBand(band, sliderWatts)
+    ///   target_dbm  -= gbb
+    ///   target_volts = sqrt(10^(target_dbm * 0.1) * 0.05)   // E = sqrt(P*R), R=50
+    ///   audio_volume = min(target_volts / 0.8, 1.0)
+    ///
+    /// Three short-circuits (in evaluation order):
+    ///   1. sliderWatts <= 0 -> returns 0.0 (Thetis console.cs:46749-46751).
+    ///   2. gbb >= 99.5      -> NereusSDR-original deviation: returns
+    ///                          clamp(sliderWatts / 100.0, 0, 1) linear
+    ///                          fallback.  Catches HL2 PA-bypass HF bands
+    ///                          (gbb=100 sentinel per mi0bot
+    ///                          clsHardwareSpecific.cs:484
+    ///                          [v2.10.3.13-beta2] "100 is no output
+    ///                          power"), the NereusSDR Bypass profile,
+    ///                          AND out-of-range Bands (PaProfile::
+    ///                          getGainForBand sentinel = 1000).
+    ///                          Preserves pre-v0.3.2 transmit behavior on
+    ///                          these paths so the hotfix doesn't regress
+    ///                          HL2 users.
+    ///   3. otherwise         -> Thetis dBm-target math.
+    ///
+    /// Pure function: no side-effects, no signal emission, no state
+    /// mutation.  Caller composes:
+    ///   wire_byte = clamp(int(audio_volume * 1.02 * 255), 0, 255)
+    ///                                                    // audio.cs:268
+    ///   iq_gain   = audio_volume * swrProtect            // cmaster.cs:1117
+    ///
+    /// Range: [0.0, 1.0].  Always finite (no NaN / Inf even for
+    /// pathological inputs like INT_MAX / INT_MIN).
+    ///
+    /// `const` even though it doesn't read any TransmitModel state —
+    /// placement on TransmitModel matches Thetis topology
+    /// (Console::SetPowerUsingTargetDBM is a Console method) and lets
+    /// Phase 3C's setPowerUsingTargetDbm wrapper call it inline.
+    double computeAudioVolume(const PaProfile& profile,
+                              Band band,
+                              int sliderWatts) const noexcept;
 
     /// Restore all per-band tune-power values from AppSettings under the
     /// current MAC scope.  No-op when no MAC has been set.

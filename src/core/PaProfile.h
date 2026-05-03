@@ -21,6 +21,12 @@
 //                 PaGainProfile (Phase 1A). NereusSDR-canonical 14-band
 //                 layout (Thetis used Band.LAST = 42; NereusSDR has 14
 //                 PA-relevant bands — 11 HF + 6m + GEN/WWV/XVTR).
+//   2026-05-03 — Phase 3 Agent 3B of issue #167: getGainForBand()
+//                 out-of-range return restored to Thetis-faithful
+//                 1000.0f sentinel (was 0.0f Phase 2A deviation —
+//                 see PaProfile.cpp note for safety rationale).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -149,7 +155,11 @@ public:
     /// `calcDriveAdjust(b, driveValue)` to subtract the corresponding
     /// 9-step lerp value from the base.
     ///
-    /// Out-of-range Band (i.e. SWL slots `Band::Band120m`+) returns 0.0f.
+    /// Out-of-range Band (i.e. SWL slots `Band::Band120m`+ or any raw int
+    /// cast outside [0, kBandCount)) returns the 1000.0f Thetis sentinel
+    /// (setup.cs:23866 [v2.10.3.13]).  `TransmitModel::computeAudioVolume`
+    /// (Phase 3B) consults `gbb >= 99.5` to short-circuit to its linear
+    /// fallback, so the sentinel feeds the safety net automatically.
     float getGainForBand(Band b, int driveValue = -1) const noexcept;
 
     /// Read the per-band drive-step adjust matrix at `[b, stepIndex]`.

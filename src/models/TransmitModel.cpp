@@ -126,10 +126,18 @@
 //                 kernel itself (computeAudioVolume / setPowerUsingTargetDbm)
 //                 lands in Phases 3B / 3C. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-05-03 — Phase 3 Agent 3B of issue #167: computeAudioVolume()
+//                 math kernel — faithful port of Thetis SetPowerUsingTargetDBM
+//                 dBm-target math (console.cs:46720-46751 [v2.10.3.13])
+//                 with two NereusSDR-original safety short-circuits
+//                 (sliderWatts <= 0 → 0.0; gbb >= 99.5 → linear fallback).
+//                 Pure function: no state mutation, no signal emission.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TransmitModel.h"
 #include "core/AppSettings.h"
+#include "core/PaProfile.h"
 
 #include <algorithm>
 #include <cmath>
@@ -575,6 +583,100 @@ bool TransmitModel::pureSignalActive() const noexcept
     // "Returns false until 3M-4 PureSignal lands ... the gate is dormant
     // but present."
     return false;
+}
+
+// ── computeAudioVolume math kernel (#167 Phase 3B) ──────────────────────────
+//
+// From Thetis console.cs:46720-46734 [v2.10.3.13] — SetPowerUsingTargetDBM
+// math kernel (ATT-on-TX-on-power-change gate at 46740-46748 lands in
+// Phase 3C; sliderWatts==0 short-circuit at 46749-46751 ported below).
+// The K2GX field report (>300 W output on a 200 W ANAN-8000DLE at low
+// TUNE slider positions) was caused by the previous linear-only drive-
+// scaling lambda in RadioModel.cpp:830-853 which had no per-band PA gain
+// compensation.  This kernel ports the dBm-target math that Thetis uses
+// to translate (sliderWatts, band, profile) into the audio-volume scalar
+// that drives both the wire byte (audio.cs:268) and the IQ gain
+// (cmaster.cs:1117).
+//
+// Two NereusSDR-original safety short-circuits run BEFORE the dBm math:
+//
+//   1. sliderWatts <= 0 returns 0.0 exactly.  Matches Thetis's
+//      console.cs:46749-46751 branch:
+//          if (new_pwr == 0) { Audio.RadioVolume = 0.0; ... }
+//      Including negatives in the same branch is a NereusSDR-original safety
+//      addition — Thetis's `int new_pwr` came from a clamped slider so
+//      negatives weren't reachable upstream; in NereusSDR computeAudioVolume
+//      can be called from tests + external callers, so failing-loud-zero is
+//      the safe behavior.
+//
+//   2. gbb >= 99.5 returns clamp(sliderWatts / 100.0, 0, 1) linear fallback.
+//      NereusSDR-original deviation: HL2 PA-bypass sentinel preserves
+//      pre-v0.3.2 transmit behavior.  See mi0bot
+//      clsHardwareSpecific.cs:484 [v2.10.3.13-beta2] "100 is no output power".
+//      The 99.5 threshold catches: (a) HL2 HF bands (gbb=100), (b) NereusSDR
+//      Bypass profile (every band gbb=100), (c) any out-of-range Band cast
+//      (PaProfile::getGainForBand sentinel = 1000).  Without this short-
+//      circuit, HL2 80m at 100 W slider would produce audio_volume ≈ 0.0009
+//      (effectively silent on the air) — a regression from v0.3.1 which
+//      worked for HL2 users by virtue of having no PA-gain compensation.
+//
+// The math itself is the canonical Thetis sequence:
+//
+//   target_dbm   = 10 * log10(sliderWatts * 1000)
+//   gbb          = profile.getGainForBand(band, sliderWatts)
+//   target_dbm  -= gbb
+//   target_volts = sqrt(10^(target_dbm * 0.1) * 0.05)
+//                = sqrt(P * R) where R=50  (E = sqrt(P*R) RMS volts on 50Ω)
+//   audio_volume = min(target_volts / 0.8, 1.0)
+//
+// Always finite (no NaN / Inf) for any int input — even INT_MAX produces a
+// finite (then-clamped) result via std::pow.
+double TransmitModel::computeAudioVolume(const PaProfile& profile,
+                                         Band band,
+                                         int sliderWatts) const noexcept
+{
+    // From Thetis console.cs:46749-46751 [v2.10.3.13] — sliderWatts == 0 path.
+    // Negative slider → also returns 0 (NereusSDR-original safety).
+    if (sliderWatts <= 0) {
+        return 0.0;
+    }
+
+    // NereusSDR-original deviation: HL2 PA-bypass sentinel preserves pre-
+    // v0.3.2 transmit behavior. See mi0bot clsHardwareSpecific.cs:484
+    // [v2.10.3.13-beta2] "100 is no output power".
+    //
+    // The 99.5 threshold (vs. exact == 100.0f) handles float-precision noise
+    // from UI round-trips.  Out-of-range Band hits this path via
+    // PaProfile::getGainForBand returning the 1000 sentinel — the safety
+    // net catches programming errors (raw int casts to Band) instead of
+    // silently producing audio_volume = 1.0.
+    const float gbb = profile.getGainForBand(band, sliderWatts);
+    if (gbb >= 99.5f) {
+        const double linear = static_cast<double>(sliderWatts) / 100.0;
+        return std::clamp(linear, 0.0, 1.0);
+    }
+
+    // From Thetis console.cs:46720-46724 [v2.10.3.13]:
+    //   double target_dbm = 10 * (double)Math.Log10((double)new_pwr * 1000);
+    //   ...
+    //   target_dbm -= gbb;
+    const double targetDbmRaw =
+        10.0 * std::log10(static_cast<double>(sliderWatts) * 1000.0);
+    const double targetDbm = targetDbmRaw - static_cast<double>(gbb);
+
+    // From Thetis console.cs:46734 [v2.10.3.13]:
+    //   double target_volts = Math.Sqrt(Math.Pow(10, target_dbm * 0.1) * 0.05);
+    //                         // E = Sqrt(P * R)
+    const double targetVolts =
+        std::sqrt(std::pow(10.0, targetDbm * 0.1) * 0.05);
+
+    // From Thetis console.cs:46758 [v2.10.3.13]:
+    //   Audio.RadioVolume = (double)Math.Min((target_volts / 0.8), 1.0);
+    const double audioVolume = std::min(targetVolts / 0.8, 1.0);
+
+    // Defensive: clamp lower bound to 0.0.  std::pow / std::sqrt should
+    // never return negative for finite input, but guarantee the contract.
+    return std::clamp(audioVolume, 0.0, 1.0);
 }
 
 void TransmitModel::setMacAddress(const QString& mac)

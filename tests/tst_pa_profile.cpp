@@ -159,8 +159,24 @@ private slots:
         p.setGainForBand(Band::Band120m, 99.0f);
         // Band80m unaffected.
         QCOMPARE(p.getGainForBand(Band::Band80m), before);
-        // Out-of-range getter returns 0 (matching Thetis return-default behaviour).
-        QCOMPARE(p.getGainForBand(Band::Band120m), 0.0f);
+        // Out-of-range getter returns the 1000.0f Thetis sentinel
+        // (setup.cs:23866 [v2.10.3.13]) — feeds the gbb >= 99.5 safety
+        // short-circuit in TransmitModel::computeAudioVolume.
+        QCOMPARE(p.getGainForBand(Band::Band120m), 1000.0f);
+    }
+
+    // ── 5b. XVTR (band index 13) is IN-range — no sentinel ───────────────
+    // XVTR is the last in-range slot (index 13 of [0, 14)).  After
+    // construction with HPSDRModel::ANAN8000D, `defaultPaGainsForBand`
+    // returns 100.0f for XVTR (no Thetis equivalent in the gain table —
+    // PaGainProfile's NereusSDR-spin sentinel for non-HF slots).  The
+    // getter must NOT trip the 1000-sentinel branch.
+    void get_gain_for_band_xvtr_in_range_no_sentinel() {
+        PaProfile p(QStringLiteral("p"), HPSDRModel::ANAN8000D, true);
+        // XVTR slot's factory value comes from PaGainProfile sentinel (100.0f),
+        // not the out-of-range 1000.0f sentinel.
+        QCOMPARE(p.getGainForBand(Band::XVTR), 100.0f);
+        QCOMPARE(p.getGainForBand(Band::XVTR, 50), 100.0f);  // no adjust set
     }
 
     void set_adjust_out_of_range_no_ops() {

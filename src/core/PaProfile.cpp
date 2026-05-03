@@ -11,6 +11,14 @@
 //   2026-05-03 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code. Phase 2 Agent 2A of issue #167.
+//   2026-05-03 — Phase 3 Agent 3B of issue #167: restored Thetis-faithful
+//                 1000.0f sentinel return from getGainForBand() for
+//                 out-of-range Band (was 0.0f from Phase 2A — that
+//                 deviation silently bypassed the gbb >= 99.5 safety
+//                 short-circuit in TransmitModel::computeAudioVolume
+//                 and produced audio_volume = 1.0 on out-of-range
+//                 Band casts).  J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -154,19 +162,24 @@ bool PaProfile::inRange(Band b) noexcept {
     return idx >= 0 && idx < kBandCount;
 }
 
-// From Thetis setup.cs:23914-23922 [v2.10.3.13] — GetGainForBand(Band, int):
+// From Thetis setup.cs:23866 [v2.10.3.13] — GetGainForBand(Band, int):
 //   if (!((int)b > (int)Band.FIRST && (int)b < (int)Band.LAST)) return 1000;
 //   if (nDriveValue == -1)
 //       return _gainValues[(int)b];
 //   else
 //       return _gainValues[(int)b] - calcDriveAdjust(b, nDriveValue);
 //
-// NereusSDR deviation: out-of-range Band returns 0.0f (vs Thetis 1000) so
-// downstream math kernels see a benign sentinel rather than a poison value.
-// SWL bands and out-of-window indices fall here.
+// Thetis-faithful sentinel: out-of-range Band returns 1000.0f (a value
+// well above any realistic PA gain).  Downstream `computeAudioVolume`
+// short-circuits on `gbb >= 99.5` to its linear fallback, so the
+// sentinel feeds the safety net automatically.  An earlier Phase 2A
+// implementation returned 0.0f here, which silently bypassed the
+// safety short-circuit and produced audio_volume = 1.0 (full rail) on
+// out-of-range Band casts — a fail-loud safety regression that #167
+// Phase 3B restored to Thetis-faithful behavior.
 float PaProfile::getGainForBand(Band b, int driveValue) const noexcept {
     if (!inRange(b)) {
-        return 0.0f;
+        return 1000.0f;
     }
     const int idx = static_cast<int>(b);
     if (driveValue == -1) {

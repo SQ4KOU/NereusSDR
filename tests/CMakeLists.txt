@@ -497,6 +497,23 @@ nereus_add_test(tst_transmit_model_two_tone_drive_origin)
 #         console.cs:29298 [v2.10.3.13] (_lastPower reset on toggle).
 nereus_add_test(tst_transmit_model_pa_scaffold)
 
+# ── Phase 3 Agent 3B of #167: TransmitModel::computeAudioVolume math kernel ──
+# Verifies the dBm-target math kernel that translates (sliderWatts, band,
+# active PA profile) into a normalized audio output level in [0, 1.0]:
+#   - K2GX regression (CRITICAL, ship-blocking) — ANAN-8000DLE 80m at 100/200W
+#   - sliderWatts <= 0 short-circuit returns 0.0
+#   - HL2 sentinel (gbb >= 99.5) — linear fallback at 80m, dBm math at 6m
+#   - NereusSDR Bypass profile (all-100.0f) hits the same linear fallback
+#   - Safety ceiling matrix: every (HPSDRModel, Band) at radio's spec'd max
+#     watts produces audio_volume <= 1.0; tightest cell ANAN-8000D B10M @ 200W
+#   - Out-of-range Band hits sentinel via PaProfile::getGainForBand 1000-fallback
+#   - No NaN / Inf for pathological inputs (INT_MAX, INT_MIN, negative)
+#   - Drive-step lerp adjust applied at exact-step inputs
+# Source: console.cs:46720-46751 [v2.10.3.13] (SetPowerUsingTargetDBM math);
+#         mi0bot clsHardwareSpecific.cs:484 [v2.10.3.13-beta2] ("100 is no
+#                                            output power" sentinel comment).
+nereus_add_test(tst_transmit_model_compute_audio_volume)
+
 # ── Phase 3M-1c F: MicProfileManager (load/save/delete/setActive) ────────────
 # Verifies the per-MAC mic-profile-bank API: F.1 class skeleton + load/save,
 # F.2 save with overwrite + comma-strip, F.3 delete with last-profile guard
