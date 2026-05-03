@@ -531,6 +531,23 @@ nereus_add_test(tst_transmit_model_compute_audio_volume)
 # Source: console.cs:46645-46762 [v2.10.3.13] (SetPowerUsingTargetDBM full).
 nereus_add_test(tst_transmit_model_set_power_using_dbm)
 
+# ── Phase 4 Agent 4A of #167: RadioModel drive-path topology + K2GX repro ────
+# Wire-byte / IQ-scalar topology (audio.cs:262-271 wire NO SWR / cmaster.cs:
+# 1115-1119 IQ HAS SWR) verification for the drive-slider lambda + TUNE
+# engagement path.  K2GX regression test pinned: ANAN-8000DLE 80m TUNE
+# slider=50 -> wire byte 47..50 (vs. pre-hotfix 127).
+# Covers:
+#   §1 K2GX regression (ship-blocking)
+#   §2 Drive-slider lambda at slider=100
+#   §3 HL2 sentinel preserves linear behaviour
+#   §4 HL2 6m uses dBm math
+#   §5 SWR foldback applies to IQ ONLY, not wire byte
+#   §6 TUNE engagement triggers full math chain
+#   §7 No active profile -> graceful no-op
+#   §8 PaTelemetryScaling::scaleFwdPowerWatts public lift parity
+nereus_add_test(tst_radio_model_drive_path)
+target_compile_definitions(tst_radio_model_drive_path PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1c F: MicProfileManager (load/save/delete/setActive) ────────────
 # Verifies the per-MAC mic-profile-bank API: F.1 class skeleton + load/save,
 # F.2 save with overwrite + comma-strip, F.3 delete with last-profile guard
