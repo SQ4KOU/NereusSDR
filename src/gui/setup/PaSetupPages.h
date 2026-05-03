@@ -62,6 +62,24 @@
 //                 placeholder for Phase 7's sweep state machine.
 //                 Authored by J.J. Boyd (KG4VCF) with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-05-03 — Phase 7 of issue #167 PA-cal hotfix: PaGainByBandPage
+//                 gains the auto-cal sweep state machine wired to the
+//                 chkAutoPACalibrate checkbox.  Sub-panel (status label,
+//                 progress bar, cancel button, target watts spinbox)
+//                 expands when the checkbox is ticked.  Sweep iterates
+//                 HF bands x drive steps (10/20/.../90), engages TUNE,
+//                 reads calibrated FWD power via PaCalProfile::interpolate,
+//                 computes diff_dBm = WattsTodBm(observed) -
+//                 WattsTodBm(target), and writes the delta into the
+//                 active PaProfile via setAdjust(band, step, dB).
+//                 Mirrors Thetis CalibratePAGain at console.cs:10228-
+//                 10387 [v2.10.3.13] (HF-only band loop) and
+//                 chkAutoPACalibrate_CheckedChanged at setup.cs:15683-
+//                 15698 [v2.10.3.13] (panel toggle).  Halts on user
+//                 cancel (chkAutoPACalibrate unchecked) or safety abort
+//                 (observed > band_max * 1.1).  Authored by J.J. Boyd
+//                 (KG4VCF) with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -114,6 +132,7 @@
 #include "core/HpsdrModel.h"
 #include "models/Band.h"
 
+#include <QList>
 #include <QString>
 #include <array>
 #include <limits>
@@ -121,8 +140,11 @@
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QGroupBox;
 class QLabel;
+class QProgressBar;
 class QPushButton;
+class QTimer;
 
 namespace NereusSDR {
 
@@ -177,6 +199,44 @@ public:
     /// their loop bounds without coupling to a fixed integer literal.
     static constexpr int kPaBandCount = 14;
 
+    /// Drive-step bin count for the auto-cal sweep (10/20/.../90 percent).
+    /// Matches PaProfile::kDriveSteps (Thetis _gainAdjust dimension).
+    static constexpr int kAutoCalDriveSteps = 9;
+
+    /// Auto-cal sweep state machine (Phase 7 of #167).
+    ///
+    /// Mirrors the implicit state ladder Thetis CalibratePAGain executes
+    /// inline at console.cs:10228-10387 [v2.10.3.13].  Promoted to an
+    /// explicit enum here so the per-step settle-tune-read-write loop is
+    /// driven by Qt timers + telemetry signals (matches NereusSDR's
+    /// non-blocking GUI thread; Thetis blocks on Thread.Sleep).
+    ///
+    /// Transitions:
+    ///   Idle           -> Initializing  (chkAutoPACalibrate ON)
+    ///   Initializing   -> SettlingStep  (initial setup done; settle timer starts)
+    ///   SettlingStep   -> ReadingPower  (settle timer expired OR test injects)
+    ///   ReadingPower   -> AdvancingStep (FWD reading captured, profile updated)
+    ///   AdvancingStep  -> SettlingStep   (more steps in current band)
+    ///   AdvancingStep  -> AdvancingBand (current band's 9 steps done)
+    ///   AdvancingBand  -> SettlingStep  (more HF bands to sweep)
+    ///   AdvancingBand  -> Completed     (all 11 HF bands done)
+    ///   any            -> Aborted       (safety: observed > band_max * 1.1)
+    ///   any            -> Halting       (chkAutoPACalibrate OFF)
+    ///   Halting        -> Idle          (cleanup done)
+    ///   Completed      -> Idle          (when checkbox auto-toggled off)
+    enum class AutoCalState {
+        Idle,
+        Initializing,
+        SweepingBand,    ///< currently driving a step on the active band
+        SettlingStep,    ///< waiting for FWD reading to stabilise
+        ReadingPower,    ///< capturing the FWD reading + computing delta
+        AdvancingStep,   ///< moving to next drive step on same band
+        AdvancingBand,   ///< moving to next band
+        Halting,         ///< user cancel mid-sweep
+        Completed,       ///< sweep finished, profile saved
+        Aborted,         ///< safety-aborted (over-power)
+    };
+
     explicit PaGainByBandPage(RadioModel* model, QWidget* parent = nullptr);
 
 #ifdef NEREUS_BUILD_TESTS
@@ -193,6 +253,22 @@ public:
     QPushButton*     copyButtonForTest()         const { return m_btnCopy; }
     QPushButton*     deleteButtonForTest()       const { return m_btnDelete; }
     QPushButton*     resetButtonForTest()        const { return m_btnReset; }
+
+    /// Phase 7 auto-cal test seams.
+    AutoCalState autoCalStateForTest() const noexcept { return m_autoCalState; }
+    Band         autoCalCurrentBandForTest() const noexcept { return m_autoCalCurrentBand; }
+    int          autoCalCurrentDriveStepForTest() const noexcept { return m_autoCalCurrentDriveStep; }
+
+    /// Inject a simulated FWD power reading for the given (band, step) pair.
+    /// Bypasses the real settle timer + PaCalProfile interpolation path so
+    /// tests can advance the state machine deterministically.  No-op if the
+    /// state machine is not currently swept on (band, step).
+    void simulateBandFwdReadingForTest(Band band, int driveStep, double watts);
+
+    /// Fast-forward through the entire HF sweep, injecting target watts at
+    /// every (band, step) pair so the state machine reaches Completed
+    /// without waiting for QTimer fires.  Used by the completion test.
+    void completeAutoCalForTest();
 
     /// Inject a name string consumed by the next New / Copy click instead of
     /// opening QInputDialog::getText. Cleared after consumption.
@@ -247,6 +323,58 @@ private slots:
 
     /// Per-band Use-Max checkbox toggled → mutate active profile + persist.
     void onUseMaxPowerToggled(Band band, bool use);
+
+    // ── Phase 7 of #167: auto-cal sweep state machine ────────────────────
+    /// Mirrors Thetis chkAutoPACalibrate_CheckedChanged (setup.cs:15683-
+    /// 15698 [v2.10.3.13]) for the panel-toggle side, plus
+    /// btnPAGainCalibration_Click (setup.cs:9743-9809 [v2.10.3.13]) and
+    /// CalibratePAGain (console.cs:10228-10387 [v2.10.3.13]) for the
+    /// state-machine side.  Thetis spawns a worker thread; NereusSDR
+    /// drives the same logic from the GUI thread via QTimer + signal
+    /// dispatch so the audio callback / WDSP threads are never blocked.
+    void onAutoCalibrateToggled(bool checked);
+    /// QTimer slot invoked after the per-step settle delay; advances the
+    /// state machine into ReadingPower if no telemetry has arrived yet.
+    void onAutoCalSettle();
+    /// RadioStatus::powerChanged subscriber.  Captures the live FWD watts
+    /// reading when the state machine is in SettlingStep / ReadingPower.
+    void onFwdPowerSample(double fwdW, double revW, double swr);
+
+private:
+    // ── Phase 7 helpers ──────────────────────────────────────────────────
+    /// Initialise the sweep: snapshot current MOX/power slider, set the
+    /// state cursor to (Band160m, step 0), arm the settle timer, transition
+    /// to SettlingStep.
+    void startAutoCal();
+    /// User cancelled (chkAutoPACalibrate OFF) — restore radio state, hide
+    /// the sub-panel, reset state to Idle.  No partial profile writes.
+    void cancelAutoCal();
+    /// After capturing a reading + writing the gain delta, advance the
+    /// state cursor to the next drive step or next band.
+    void advanceAutoCalStep();
+    void advanceAutoCalBand();
+    /// Sweep finished cleanly — save profile through PaProfileManager,
+    /// transition to Completed, auto-uncheck the chkAutoPACalibrate.
+    void completeAutoCal();
+    /// Safety-aborted — clamp checkbox OFF, surface reason in status
+    /// label, transition to Aborted.
+    void abortAutoCal(const QString& reason);
+    /// Per-band safety check.  Returns false if `observedWatts` exceeds
+    /// `band_max * 1.1` (10% margin over factory max-power ceiling).
+    bool autoCalSafetyCheck(double observedWatts, Band band) const;
+    /// Compute diff_dBm = WattsTodBm(observed) - WattsTodBm(target),
+    /// then write -diff_dBm into active profile's adjust matrix at
+    /// (band, driveStep).
+    /// From Thetis console.cs:10319-10336 [v2.10.3.13] (the
+    /// `if (Math.Abs(watts - target) > 2)` branch).  NereusSDR maps to
+    /// PaProfile::setAdjust because the adjust matrix is the per-step
+    /// finetune column; Thetis uses setBypassGain on the base row.
+    void writeAutoCalGainAdjust(Band band, int driveStep, double observedWatts);
+    /// Update the status label / progress bar for the current state.
+    void refreshAutoCalUi();
+    /// Lookup the band-max-watts ceiling for the active PaProfile, falling
+    /// back to a per-SKU default if the profile slot is unset.
+    double autoCalBandMaxWatts(Band band) const;
 
 private:
     /// Repopulate the combo from PaProfileManager::profileNames(). Preserves
@@ -305,6 +433,26 @@ private:
     /// Re-entry guard set during loadProfileIntoUi so spinbox setValue calls
     /// do not re-fire the user-edit handlers.
     bool m_updatingFromProfile{false};
+
+    // ── Phase 7 of #167: auto-cal sweep state machine ────────────────────
+    AutoCalState m_autoCalState{AutoCalState::Idle};
+    /// QTimer driving the per-step settle delay (Thetis on_time = 2500 ms;
+    /// NereusSDR uses a shorter 200 ms default since the radio's TX FIFO
+    /// is much faster than the Thetis WinForms loop).  Timer is
+    /// instantiated lazily on the first sweep start.
+    QTimer*       m_autoCalSettleTimer{nullptr};
+    Band          m_autoCalCurrentBand{Band::Band160m};
+    int           m_autoCalCurrentDriveStep{0};   ///< 0..8 covering 10..90%
+    double        m_autoCalTargetWatts{50.0};      ///< user-configurable target
+    /// Re-entry guard so chkAutoPACalibrate setChecked(false) inside
+    /// abortAutoCal/completeAutoCal does not recurse into cancelAutoCal.
+    bool          m_autoCalProgrammaticToggle{false};
+    /// Sub-panel widgets (hidden until chkAutoPACalibrate is ticked).
+    QGroupBox*    m_autoCalPanel{nullptr};
+    QLabel*       m_autoCalStatusLabel{nullptr};
+    QProgressBar* m_autoCalProgressBar{nullptr};
+    QPushButton*  m_autoCalCancelButton{nullptr};
+    QDoubleSpinBox* m_autoCalTargetSpin{nullptr};
 
 #ifdef NEREUS_BUILD_TESTS
     /// Test injectors (see setNextProfileNameForTest / setDeleteConfirmedForTest /

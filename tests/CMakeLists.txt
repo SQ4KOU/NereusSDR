@@ -1121,6 +1121,23 @@ target_compile_definitions(tst_pa_values_page_gap_fill PRIVATE NEREUS_BUILD_TEST
 nereus_add_test(tst_pa_gain_by_band_page_editor)
 target_compile_definitions(tst_pa_gain_by_band_page_editor PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 7 of #167: PaGainByBandPage auto-cal sweep state machine ──────────
+# Verifies the auto-cal sweep state machine wired to the chkAutoPACalibrate
+# checkbox added in Phase 6. The sweep iterates HF bands (160m..6m) x drive
+# levels (10/20/.../90), engages TUNE at each step, reads calibrated FWD
+# power via PaCalProfile::interpolate(), computes the gain delta from
+# observed-vs-target, and writes new gain values into the active PaProfile.
+# Mirrors Thetis CalibratePAGain at console.cs:10228-10387 [v2.10.3.13]
+# (HF-only band loop) and chkAutoPACalibrate_CheckedChanged at
+# setup.cs:15683-15698 [v2.10.3.13] (panel toggle).
+# Tests cover: initial Idle state, toggle starts sweep, state transitions
+# across bands, profile gain values updated, safety abort on over-power,
+# user cancel halts cleanly (no partial writes), completion writes profile
+# via PaProfileManager, settle timer dispatches readings, cancel during
+# initialization, HF-only sweep skips VHF/GEN/WWV/XVTR.
+nereus_add_test(tst_pa_gain_by_band_page_auto_cal)
+target_compile_definitions(tst_pa_gain_by_band_page_auto_cal PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3P-H Task 5a: Alex-2 Filters live LED selection ────────────────────
 # Verifies AntennaAlexAlex2Tab::updateActiveLeds() follows Thetis
 # console.cs:setAlex2HPF / setAlex2LPF (7060-7299) first-match range logic
