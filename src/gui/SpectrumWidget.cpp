@@ -1391,10 +1391,13 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
     drawVfoMarker(p, specRect, wfRect);
     drawOffScreenIndicator(p, specRect, wfRect);
 
-    // Plan 4 D9 (Cluster E): TX filter overlay on panadapter.
-    // Always drawn when m_txFilterVisible is set; waterfall column is MOX-gated
-    // (see drawWaterfall where Q_UNUSED was replaced with the gated call).
-    if (m_txFilterVisible) {
+    // Plan 4 D9 (Cluster E) + follow-up (option A): TX filter overlay on
+    // panadapter, MOX-gated.  Pairs with the !m_moxOverlay gate on the RX
+    // passband fill in drawVfoMarker — the panadapter shows EITHER the
+    // cyan RX shadow (RX state) OR the orange TX band (MOX/TUNE state),
+    // never both.  m_txFilterVisible is the user toggle (Setup → Display);
+    // m_moxOverlay is the live TX-state gate.
+    if (m_txFilterVisible && m_moxOverlay) {
         drawTxFilterOverlay(p, specRect);
     }
 
@@ -2574,14 +2577,20 @@ void SpectrumWidget::drawVfoMarker(QPainter& p, const QRect& specRect, const QRe
     const int specBottomClipped = specRect.bottom() - bandPlanH;
     const int specHeightClipped = std::max(0, specBottomClipped - specRect.top());
 
-    // Spectrum passband fill — Plan 4 D9b: user-pickable m_rxFilterColor.
-    // Previously hardcoded AetherSDR cyan alpha=35/25; now single user colour.
-    if (specHeightClipped > 0) {
-        p.fillRect(xLo, specRect.top(), fW, specHeightClipped, m_rxFilterColor);
-    }
+    // Plan 4 follow-up (option A): MOX-gate the RX passband fill so it
+    // disappears during TX/TUNE.  The TX filter overlay (drawTxFilterOverlay)
+    // takes over in that state — gives the user a clear visual swap between
+    // the cyan RX shadow and the orange TX band on MOX/TUNE engage.
+    if (!m_moxOverlay) {
+        // Spectrum passband fill — Plan 4 D9b: user-pickable m_rxFilterColor.
+        // Previously hardcoded AetherSDR cyan alpha=35/25; now single user colour.
+        if (specHeightClipped > 0) {
+            p.fillRect(xLo, specRect.top(), fW, specHeightClipped, m_rxFilterColor);
+        }
 
-    // Waterfall passband fill — Plan 4 D9b: same user-pickable colour.
-    p.fillRect(xLo, wfRect.top(), fW, wfRect.height(), m_rxFilterColor);
+        // Waterfall passband fill — Plan 4 D9b: same user-pickable colour.
+        p.fillRect(xLo, wfRect.top(), fW, wfRect.height(), m_rxFilterColor);
+    }
 
     // Filter edge lines — from AetherSDR line 3237: slice color, alpha=130
     // Clip the spectrum-side edge to specBottomClipped so the line stops at
@@ -4080,12 +4089,12 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 // Passing the clipped specRect would put the strip INSIDE the spectrum.
                 drawDbmScale(p, QRect(0, 0, w, specH));
             }
-            // Plan 4 D9 (Cluster E): TX filter overlay on panadapter (GPU path).
-            // Painted BEFORE drawBandPlan + drawFreqScale so the bandplan colored
-            // bars + freq labels overpaint the translucent filter band — matches
-            // the QPainter path's z-order (filter under bandplan/freq) and lets
-            // the floating VfoWidget child render naturally on top.
-            if (m_txFilterVisible) {
+            // Plan 4 D9 (Cluster E) + follow-up (option A): TX filter overlay
+            // on panadapter (GPU path), MOX-gated.  Painted BEFORE drawBandPlan
+            // + drawFreqScale so they overpaint the translucent filter band —
+            // matches the QPainter path's z-order.  Same MOX gate as the
+            // QPainter call site to keep both paths in lockstep.
+            if (m_txFilterVisible && m_moxOverlay) {
                 drawTxFilterOverlay(p, specRect);
             }
             drawBandPlan(p, specRect);
