@@ -115,6 +115,7 @@
 #include "SpectrumWidget.h"
 #include "SpectrumOverlayMenu.h"
 #include "widgets/VfoWidget.h"
+#include "ColorSwatchButton.h"
 #include "core/AppSettings.h"
 #include "dbm_strip_math.h"
 #include "models/BandPlanManager.h"
@@ -469,6 +470,67 @@ void SpectrumWidget::loadSettings()
     // Delay the peak hold enable path until the timer infra is ready.
     if (peakOn) {
         setPeakHoldEnabled(true);
+    }
+
+    // Tasks 2.5 / 2.6 — Active Peak Hold + Peak Blobs persisted state.
+    // SpectrumPeaksPage owns the UI but the renderer needs the persisted
+    // values at app-start time. Without this load the peak features stay at
+    // PeakBlobDetector / ActivePeakHoldTrace defaults until the user opens
+    // Setup → Display → Spectrum Peaks even when the on-disk toggles are on.
+    {
+        // Active Peak Hold
+        const bool aphOn = s.value(QStringLiteral("DisplayActivePeakHoldEnabled"),
+                                   QStringLiteral("False")).toString() == QStringLiteral("True");
+        const int aphDur = s.value(QStringLiteral("DisplayActivePeakHoldDurationMs"),
+                                   QStringLiteral("2000")).toInt();
+        const int aphDrop = s.value(QStringLiteral("DisplayActivePeakHoldDropDbPerSec"),
+                                    QStringLiteral("6")).toInt();
+        const bool aphFill = s.value(QStringLiteral("DisplayActivePeakHoldFill"),
+                                     QStringLiteral("False")).toString() == QStringLiteral("True");
+        const bool aphOnTx = s.value(QStringLiteral("DisplayActivePeakHoldOnTx"),
+                                     QStringLiteral("False")).toString() == QStringLiteral("True");
+        m_activePeakHold.setDurationMs(qBound(100, aphDur, 60000));
+        m_activePeakHold.setDropDbPerSec(qBound(0.1, static_cast<double>(aphDrop), 120.0));
+        m_activePeakHold.setFill(aphFill);
+        m_activePeakHold.setOnTx(aphOnTx);
+        if (aphOn) {
+            m_activePeakHold.setEnabled(true);
+        }
+
+        // Peak Blobs — NereusSDR ships disabled by default (deviation from
+        // Thetis Display.cs:4395 [v2.10.3.13] m_bPeakBlobMaximums = true).
+        const bool blobOn = s.value(QStringLiteral("DisplayPeakBlobsEnabled"),
+                                    QStringLiteral("False")).toString() == QStringLiteral("True");
+        const int blobCount = s.value(QStringLiteral("DisplayPeakBlobsCount"),
+                                      QStringLiteral("3")).toInt();
+        const bool blobInside = s.value(QStringLiteral("DisplayPeakBlobsInsideFilterOnly"),
+                                        QStringLiteral("False")).toString() == QStringLiteral("True");
+        const bool blobHold = s.value(QStringLiteral("DisplayPeakBlobsHoldEnabled"),
+                                      QStringLiteral("False")).toString() == QStringLiteral("True");
+        const int blobHoldMs = s.value(QStringLiteral("DisplayPeakBlobsHoldMs"),
+                                       QStringLiteral("500")).toInt();
+        const bool blobHoldDrop = s.value(QStringLiteral("DisplayPeakBlobsHoldDrop"),
+                                          QStringLiteral("False")).toString() == QStringLiteral("True");
+        const int blobFall = s.value(QStringLiteral("DisplayPeakBlobsFallDbPerSec"),
+                                     QStringLiteral("6")).toInt();
+        m_peakBlobs.setCount(qMax(1, blobCount));
+        m_peakBlobs.setInsideFilterOnly(blobInside);
+        m_peakBlobs.setHoldEnabled(blobHold);
+        m_peakBlobs.setHoldMs(blobHoldMs);
+        m_peakBlobs.setHoldDrop(blobHoldDrop);
+        m_peakBlobs.setFallDbPerSec(static_cast<double>(blobFall));
+        if (blobOn) {
+            m_peakBlobs.setEnabled(true);
+        }
+
+        // Persisted format is "#RRGGBBAA" via ColorSwatchButton::colorToHex;
+        // use the matching colorFromHex helper so alpha lands correctly.
+        m_peakBlobColor = ColorSwatchButton::colorFromHex(
+            s.value(QStringLiteral("DisplayPeakBlobColor"),
+                    QStringLiteral("#FF4500FF")).toString());
+        m_peakBlobTextColor = ColorSwatchButton::colorFromHex(
+            s.value(QStringLiteral("DisplayPeakBlobTextColor"),
+                    QStringLiteral("#7FFF00FF")).toString());
     }
 
     // Phase 3G-8 commit 4: waterfall renderer state.
@@ -1156,6 +1218,10 @@ void SpectrumWidget::setActivePeakHoldEnabled(bool on)
     if (!on) {
         m_activePeakHold.clear();
     }
+    // Force GPU overlay rebuild now — the per-frame nudge in updateSpectrum()
+    // only fires once spectrum frames arrive, leaving a stale overlay between
+    // the toggle and the next frame.
+    m_overlayStaticDirty = true;
     update();
 }
 
@@ -1191,6 +1257,8 @@ void SpectrumWidget::setActivePeakHoldTxActive(bool tx)
 void SpectrumWidget::setPeakBlobsEnabled(bool e)
 {
     m_peakBlobs.setEnabled(e);
+    // Force GPU overlay rebuild now (see setActivePeakHoldEnabled comment).
+    m_overlayStaticDirty = true;
     update();
 }
 

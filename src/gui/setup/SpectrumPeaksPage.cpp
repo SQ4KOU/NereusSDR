@@ -126,9 +126,10 @@ SpectrumPeaksPage::SpectrumPeaksPage(RadioModel* model, QWidget* parent)
         == QStringLiteral("True"));
 
     // Peak Blobs
-    // From Thetis Display.cs:4395 [v2.10.3.13] m_bPeakBlobMaximums = true (enabled by default)
+    // Thetis Display.cs:4395 [v2.10.3.13] ships m_bPeakBlobMaximums = true.
+    // NereusSDR deviation: default OFF so first-launch is a clean panadapter.
     m_blobEnable->setChecked(
-        s.value(QStringLiteral("DisplayPeakBlobsEnabled"), QStringLiteral("True")).toString()
+        s.value(QStringLiteral("DisplayPeakBlobsEnabled"), QStringLiteral("False")).toString()
         == QStringLiteral("True"));
     // From Thetis Display.cs:4407 [v2.10.3.13] m_nNumberOfMaximums = 3
     m_blobCount->setValue(
@@ -151,11 +152,13 @@ SpectrumPeaksPage::SpectrumPeaksPage(RadioModel* model, QWidget* parent)
     // From Thetis Display.cs:4697 [v2.10.3.13] m_dBmPerSecondPeakBlobFall = 6.0f
     m_blobFallDbPerSec->setValue(
         s.value(QStringLiteral("DisplayPeakBlobsFallDbPerSec"), 6).toInt());
-    // From Thetis display.cs:8434 [v2.10.3.13] m_bDX2_PeakBlob = OrangeRed (#FF4500, fully opaque)
-    m_blobColor->setColor(QColor::fromString(
+    // From Thetis display.cs:8434 [v2.10.3.13] m_bDX2_PeakBlob = OrangeRed (#FF4500, fully opaque).
+    // Persisted format is "#RRGGBBAA" via ColorSwatchButton::colorToHex; use the
+    // matching colorFromHex helper so alpha lands in the right channel.
+    m_blobColor->setColor(ColorSwatchButton::colorFromHex(
         s.value(QStringLiteral("DisplayPeakBlobColor"), QStringLiteral("#FF4500FF")).toString()));
     // From Thetis display.cs:8435 [v2.10.3.13] m_bDX2_PeakBlobText = Chartreuse (#7FFF00, fully opaque)
-    m_blobTextColor->setColor(QColor::fromString(
+    m_blobTextColor->setColor(ColorSwatchButton::colorFromHex(
         s.value(QStringLiteral("DisplayPeakBlobTextColor"), QStringLiteral("#7FFF00FF")).toString()));
 
     // ── Apply persisted values to SpectrumWidget (Tasks 2.5 + 2.6) ─────────
