@@ -27,7 +27,7 @@ void SolidColourItemEditor::setItem(MeterItem* item)
 
 void SolidColourItemEditor::buildTypeSpecific()
 {
-    addHeader(QStringLiteral("Solid colour"));
+    addHeader(QStringLiteral("Solid color"));
 
     m_btnColour = new QPushButton(this);
     m_btnColour->setFixedSize(40, 18);
@@ -35,7 +35,7 @@ void SolidColourItemEditor::buildTypeSpecific()
         SolidColourItem* solid = qobject_cast<SolidColourItem*>(m_item);
         if (!solid) { return; }
         const QColor chosen = QColorDialog::getColor(solid->colour(), this,
-                                                     QStringLiteral("Fill colour"),
+                                                     QStringLiteral("Fill color"),
                                                      QColorDialog::ShowAlphaChannel);
         if (chosen.isValid()) {
             solid->setColour(chosen);
@@ -45,7 +45,7 @@ void SolidColourItemEditor::buildTypeSpecific()
             notifyChanged();
         }
     });
-    addRow(QStringLiteral("Colour"), m_btnColour);
+    addRow(QStringLiteral("Color"), m_btnColour);
 }
 
 } // namespace NereusSDR

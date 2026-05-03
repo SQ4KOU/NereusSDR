@@ -58,6 +58,7 @@
 //============================================================================================//
 
 #include "GeneralOptionsPage.h"
+#include "gui/StyleConstants.h"
 #include "models/RadioModel.h"
 #include "core/BoardCapabilities.h"
 #include "core/StepAttenuatorController.h"
@@ -75,31 +76,6 @@
 namespace NereusSDR {
 
 namespace {
-
-void applyDarkStyle(QWidget* w)
-{
-    w->setStyleSheet(QStringLiteral(
-        "QGroupBox { color: #8090a0; font-size: 11px;"
-        "  border: 1px solid #203040; border-radius: 4px;"
-        "  margin-top: 8px; padding-top: 4px; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
-        "QLabel { color: #c8d8e8; }"
-        "QComboBox { background: #1a2a3a; color: #c8d8e8; border: 1px solid #203040;"
-        "  border-radius: 3px; padding: 2px 6px; }"
-        "QComboBox::drop-down { border: none; }"
-        "QComboBox QAbstractItemView { background: #1a2a3a; color: #c8d8e8;"
-        "  selection-background-color: #00b4d8; }"
-        "QSpinBox { background: #1a2a3a; color: #c8d8e8;"
-        "  border: 1px solid #203040; border-radius: 3px; padding: 1px 4px; }"
-        // Up/down buttons: rely on Fusion + app-level dark palette
-        // (see main.cpp / AppTheme.h). Styling the subcontrols here
-        // would erase the native arrow images.
-        "QCheckBox { color: #c8d8e8; }"
-        "QCheckBox::indicator { width: 14px; height: 14px; background: #1a2a3a;"
-        "  border: 1px solid #203040; border-radius: 2px; }"
-        "QCheckBox::indicator:checked { background: #00b4d8; border-color: #00b4d8; }"
-    ));
-}
 
 // Helper: create a dB spinbox (0-31, suffix " dB", width 80).
 QSpinBox* makeDbSpinBox(QWidget* parent)
@@ -146,7 +122,7 @@ QSpinBox* makeHoldSpinBox(QWidget* parent)
 GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("Options"), model, parent)
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
     m_ctrl = model ? model->stepAttController() : nullptr;
 
     buildHardwareConfigGroup();

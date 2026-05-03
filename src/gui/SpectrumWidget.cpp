@@ -505,8 +505,21 @@ void SpectrumWidget::loadSettings()
                             static_cast<int>(TimestampMode::Count) - 1));
     m_showRxFilterOnWaterfall = s.value(settingsKey(QStringLiteral("DisplayShowRxFilterOnWaterfall"), m_panIndex),
                                         QStringLiteral("False")).toString() == QStringLiteral("True");
+    // Default True — same rationale as DisplayDrawTxFilter above: the TX
+    // overlay should be visible during MOX out of the box.  The waterfall
+    // column is independently MOX-gated at the call site.
     m_showTxFilterOnRxWaterfall = s.value(settingsKey(QStringLiteral("DisplayShowTxFilterOnRxWaterfall"), m_panIndex),
-                                          QStringLiteral("False")).toString() == QStringLiteral("True");
+                                          QStringLiteral("True")).toString() == QStringLiteral("True");
+    // Plan 4 D9 (Cluster E): persist DrawTXFilter flag.
+    // From Thetis display.cs:2481 [v2.10.3.13]: DrawTXFilter property.
+    // Until the Setup → Display TX Display page has a wired checkbox,
+    // the user can set this in AppSettings XML directly.
+    // Default True: pairs with the MOX-gated TX overlay paint at the call
+    // sites (m_txFilterVisible && m_moxOverlay).  Without this, MOX flips
+    // m_moxOverlay true, the RX cyan correctly hides, but the TX orange
+    // never paints — the panadapter goes "clear" during TX/TUNE.
+    m_txFilterVisible = s.value(settingsKey(QStringLiteral("DisplayDrawTxFilter"), m_panIndex),
+                                QStringLiteral("True")).toString() == QStringLiteral("True");
     m_showRxZeroLineOnWaterfall = s.value(settingsKey(QStringLiteral("DisplayShowRxZeroLine"), m_panIndex),
                                           QStringLiteral("False")).toString() == QStringLiteral("True");
     m_showTxZeroLineOnWaterfall = s.value(settingsKey(QStringLiteral("DisplayShowTxZeroLine"), m_panIndex),
@@ -519,6 +532,9 @@ void SpectrumWidget::loadSettings()
                              QStringLiteral("False")).toString() == QStringLiteral("True");
     m_showFps = s.value(settingsKey(QStringLiteral("DisplayShowFps"), m_panIndex),
                         QStringLiteral("False")).toString() == QStringLiteral("True");
+    // B8 Task 21: cursor frequency readout persists across restarts.
+    m_showCursorFreq = s.value(settingsKey(QStringLiteral("DisplayShowCursorFreq"), m_panIndex),
+                               QStringLiteral("True")).toString() == QStringLiteral("True");
     m_dbmScaleVisible = s.value(settingsKey(QStringLiteral("DisplayDbmScaleVisible"), m_panIndex),
                                 QStringLiteral("True")).toString() == QStringLiteral("True");
     m_bandPlanFontSize = s.value(QStringLiteral("BandPlanFontSize"),
@@ -538,8 +554,18 @@ void SpectrumWidget::loadSettings()
     m_gridFineColor = readColor(QStringLiteral("DisplayGridFineColor"), m_gridFineColor);
     m_hGridColor    = readColor(QStringLiteral("DisplayHGridColor"), m_hGridColor);
     m_gridTextColor = readColor(QStringLiteral("DisplayGridTextColor"), m_gridTextColor);
-    m_zeroLineColor = readColor(QStringLiteral("DisplayZeroLineColor"), m_zeroLineColor);
+    // Plan 4 D9c-1: old single key "DisplayZeroLineColor" dropped (branch not
+    // yet on main — no migration burden).  Load the split RX/TX keys.
+    m_rxZeroLineColor = readColor(QStringLiteral("DisplayRxZeroLineColor"), m_rxZeroLineColor);
+    m_txZeroLineColor = readColor(QStringLiteral("DisplayTxZeroLineColor"), m_txZeroLineColor);
     m_bandEdgeColor = readColor(QStringLiteral("DisplayBandEdgeColor"), m_bandEdgeColor);
+
+    // Plan 4 D9b (Cluster F): TX / RX filter overlay colors.
+    m_txFilterColor = readColor(QStringLiteral("DisplayTxFilterColor"), m_txFilterColor);
+    m_rxFilterColor = readColor(QStringLiteral("DisplayRxFilterColor"), m_rxFilterColor);
+    // Plan 4 D9c-4: TNF + SubRX scaffolding colors.
+    m_tnfFilterColor   = readColor(QStringLiteral("DisplayTnfFilterColor"),   m_tnfFilterColor);
+    m_subRxFilterColor = readColor(QStringLiteral("DisplaySubRxFilterColor"), m_subRxFilterColor);
 
     // Task 2.3: spectrum text overlay settings.
     // From Thetis display.cs:8692 [v2.10.3.13] AlwaysShowCursorInfo.
@@ -667,6 +693,9 @@ void SpectrumWidget::saveSettings()
               m_showRxFilterOnWaterfall ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(settingsKey(QStringLiteral("DisplayShowTxFilterOnRxWaterfall"), m_panIndex),
               m_showTxFilterOnRxWaterfall ? QStringLiteral("True") : QStringLiteral("False"));
+    // Plan 4 D9 (Cluster E): persist DrawTXFilter flag.
+    s.setValue(settingsKey(QStringLiteral("DisplayDrawTxFilter"), m_panIndex),
+              m_txFilterVisible ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(settingsKey(QStringLiteral("DisplayShowRxZeroLine"), m_panIndex),
               m_showRxZeroLineOnWaterfall ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(settingsKey(QStringLiteral("DisplayShowTxZeroLine"), m_panIndex),
@@ -679,6 +708,8 @@ void SpectrumWidget::saveSettings()
               m_showZeroLine ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(settingsKey(QStringLiteral("DisplayShowFps"), m_panIndex),
               m_showFps ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(settingsKey(QStringLiteral("DisplayShowCursorFreq"), m_panIndex),
+              m_showCursorFreq ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(settingsKey(QStringLiteral("DisplayDbmScaleVisible"), m_panIndex),
               m_dbmScaleVisible ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(QStringLiteral("BandPlanFontSize"),
@@ -692,8 +723,16 @@ void SpectrumWidget::saveSettings()
     writeColor(QStringLiteral("DisplayGridFineColor"), m_gridFineColor);
     writeColor(QStringLiteral("DisplayHGridColor"),    m_hGridColor);
     writeColor(QStringLiteral("DisplayGridTextColor"), m_gridTextColor);
-    writeColor(QStringLiteral("DisplayZeroLineColor"), m_zeroLineColor);
+    // Plan 4 D9c-1: split zero-line color — write RX + TX keys.
+    writeColor(QStringLiteral("DisplayRxZeroLineColor"), m_rxZeroLineColor);
+    writeColor(QStringLiteral("DisplayTxZeroLineColor"), m_txZeroLineColor);
     writeColor(QStringLiteral("DisplayBandEdgeColor"), m_bandEdgeColor);
+    // Plan 4 D9b (Cluster F): TX / RX filter overlay colors.
+    writeColor(QStringLiteral("DisplayTxFilterColor"), m_txFilterColor);
+    writeColor(QStringLiteral("DisplayRxFilterColor"), m_rxFilterColor);
+    // Plan 4 D9c-4: TNF + SubRX scaffolding colors.
+    writeColor(QStringLiteral("DisplayTnfFilterColor"),   m_tnfFilterColor);
+    writeColor(QStringLiteral("DisplaySubRxFilterColor"), m_subRxFilterColor);
 
     // Task 2.3: spectrum text overlay keys.
     // From Thetis display.cs:8692 [v2.10.3.13] AlwaysShowCursorInfo.
@@ -844,6 +883,23 @@ void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
 void SpectrumWidget::setWfColorScheme(WfColorScheme scheme)
 {
     m_wfColorScheme = scheme;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setWfColorGain(int gain)
+{
+    if (m_wfColorGain == gain) { return; }
+    m_wfColorGain = gain;
+    scheduleSettingsSave();
+    update();
+}
+
+void SpectrumWidget::setWfBlackLevel(int level)
+{
+    if (m_wfBlackLevel == level) { return; }
+    m_wfBlackLevel = level;
+    scheduleSettingsSave();
     update();
 }
 
@@ -1692,6 +1748,14 @@ void SpectrumWidget::setShowFps(bool on)
     markOverlayDirty();
 }
 
+void SpectrumWidget::setCursorFreqVisible(bool on)
+{
+    if (m_showCursorFreq == on) { return; }
+    m_showCursorFreq = on;
+    scheduleSettingsSave();
+    markOverlayDirty();
+}
+
 void SpectrumWidget::setDbmScaleVisible(bool on)
 {
     if (m_dbmScaleVisible == on) { return; }
@@ -1782,12 +1846,81 @@ void SpectrumWidget::setGridTextColor(const QColor& c)
     markOverlayDirty();
 }
 
-void SpectrumWidget::setZeroLineColor(const QColor& c)
+// Plan 4 D9c-1: zero-line color split into RX + TX.
+// Old setZeroLineColor(c) replaced by setRxZeroLineColor(c) + setTxZeroLineColor(c).
+// Both setters write immediately (matching D9b setTxFilterColor / setRxFilterColor)
+// rather than using the 500 ms scheduleSettingsSave() — ensures persistence is
+// observable synchronously in tests and after crash.
+void SpectrumWidget::setRxZeroLineColor(const QColor& c)
 {
-    if (!c.isValid() || m_zeroLineColor == c) { return; }
-    m_zeroLineColor = c;
-    scheduleSettingsSave();
+    if (!c.isValid() || m_rxZeroLineColor == c) { return; }
+    m_rxZeroLineColor = c;
+    AppSettings::instance().setValue(
+        settingsKey(QStringLiteral("DisplayRxZeroLineColor"), m_panIndex),
+        c.name(QColor::HexArgb));
     markOverlayDirty();
+    update();
+}
+
+void SpectrumWidget::setTxZeroLineColor(const QColor& c)
+{
+    if (!c.isValid() || m_txZeroLineColor == c) { return; }
+    m_txZeroLineColor = c;
+    AppSettings::instance().setValue(
+        settingsKey(QStringLiteral("DisplayTxZeroLineColor"), m_panIndex),
+        c.name(QColor::HexArgb));
+    markOverlayDirty();
+    update();
+}
+
+// Plan 4 D9c-3 + Colors & Theme consolidation: reset every theme colour
+// exposed via Setup → Appearance → Colors & Theme.
+// Original 4 Plan 4 D9/D9c colors are preserved exactly so
+// tst_spectrum_tx_overlay::resetDisplayColorsToDefaults() still passes.
+void SpectrumWidget::resetDisplayColorsToDefaults()
+{
+    // Spectrum trace & fill
+    setFillColor(QColor(0x00, 0xe5, 0xff));             // default cyan trace
+
+    // Grid colours — defaults match compile-time member initialisers in SpectrumWidget.h
+    setGridColor(QColor(255, 255, 255, 40));             // m_gridColor default
+    setGridFineColor(QColor(255, 255, 255, 20));         // m_gridFineColor default
+    setHGridColor(QColor(255, 255, 255, 40));            // m_hGridColor default
+    setGridTextColor(QColor(255, 255, 0));               // m_gridTextColor default (yellow)
+    setBandEdgeColor(QColor(255, 0, 0));                 // m_bandEdgeColor default (red)
+
+    // Zero-line colours — Plan 4 D9c-1 (unchanged values, kept for test compat)
+    setRxZeroLineColor(QColor(255, 0, 0));               // red — Thetis convention
+    setTxZeroLineColor(QColor(255, 184, 0));             // amber — NereusSDR-original
+
+    // Passband overlay colours — Plan 4 D9b (unchanged values, kept for test compat)
+    setRxFilterColor(QColor(0, 180, 216, 80));           // matches kRxFilterOverlayFill
+    setTxFilterColor(QColor(255, 120, 60, 46));          // matches kTxFilterOverlayFill
+
+    // Waterfall low colour — no backing setter yet; reset handled on the
+    // ColorsThemePage side (resets the swatch to Qt::black).
+}
+
+// Plan 4 D9c-4: TNF + SubRX scaffolding setters.  No paint code consumes these
+// yet.  Persisted so user choices survive the future feature ship.
+void SpectrumWidget::setTnfFilterColor(const QColor& c)
+{
+    if (!c.isValid() || m_tnfFilterColor == c) { return; }
+    m_tnfFilterColor = c;
+    AppSettings::instance().setValue(
+        settingsKey(QStringLiteral("DisplayTnfFilterColor"), m_panIndex),
+        c.name(QColor::HexArgb));
+    // No update() — no paint code consumes this yet.
+}
+
+void SpectrumWidget::setSubRxFilterColor(const QColor& c)
+{
+    if (!c.isValid() || m_subRxFilterColor == c) { return; }
+    m_subRxFilterColor = c;
+    AppSettings::instance().setValue(
+        settingsKey(QStringLiteral("DisplaySubRxFilterColor"), m_panIndex),
+        c.name(QColor::HexArgb));
+    // No update() — no paint code consumes this yet.
 }
 
 void SpectrumWidget::setBandEdgeColor(const QColor& c)
@@ -1990,6 +2123,17 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
     drawWaterfall(p, wfRect);
     drawVfoMarker(p, specRect, wfRect);
     drawOffScreenIndicator(p, specRect, wfRect);
+
+    // Plan 4 D9 (Cluster E) + follow-up (option A): TX filter overlay on
+    // panadapter, MOX-gated.  Pairs with the !m_moxOverlay gate on the RX
+    // passband fill in drawVfoMarker — the panadapter shows EITHER the
+    // cyan RX shadow (RX state) OR the orange TX band (MOX/TUNE state),
+    // never both.  m_txFilterVisible is the user toggle (Setup → Display);
+    // m_moxOverlay is the live TX-state gate.
+    if (m_txFilterVisible && m_moxOverlay) {
+        drawTxFilterOverlay(p, specRect);
+    }
+
     drawFreqScale(p, freqRect);
     if (m_dbmScaleVisible) {
         // drawDbmScale needs the FULL-WIDTH spectrum-vertical rect so the strip
@@ -2004,7 +2148,10 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
     // strip lands in the same right-edge column as the dBm scale strip.
     const QRect wfRectFull(0, wfRect.top(), width(), wfRect.height());
     drawTimeScale(p, wfRectFull);
-    drawCursorInfo(p, specRect);
+    // B8 Task 21: guard cursor frequency readout by m_showCursorFreq.
+    if (m_showCursorFreq) {
+        drawCursorInfo(p, specRect);
+    }
 
     // FPS overlay (Phase 3G-8 commit 5 / G8 ShowFPS). Cheap rolling counter
     // updated once per second. QPainter fallback path only; GPU path prints
@@ -2245,12 +2392,24 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
     }
 
     // Zero line (0 dBm) — Phase 3G-8 commit 5 (G7).
+    // Plan 4 D9c-1: uses m_rxZeroLineColor (was m_zeroLineColor).
     if (m_showZeroLine) {
         const int zy = dbmToY(0.0f, specRect);
         if (zy >= specRect.top() && zy <= specRect.bottom()) {
-            QPen zeroPen(m_zeroLineColor, 1, Qt::DashLine);
+            QPen zeroPen(m_rxZeroLineColor, 1, Qt::DashLine);
             p.setPen(zeroPen);
             p.drawLine(specRect.left(), zy, specRect.right(), zy);
+        }
+    }
+
+    // TX zero line on panadapter — Plan 4 D9c-1.  MOX-gated so the TX
+    // centre-frequency marker only appears when transmitting.
+    if (m_moxOverlay && m_vfoHz > 0.0) {
+        const int tx_x = hzToX(m_vfoHz, specRect);
+        if (tx_x >= specRect.left() && tx_x <= specRect.right()) {
+            QPen txZeroPen(m_txZeroLineColor, 1, Qt::DashLine);
+            p.setPen(txZeroPen);
+            p.drawLine(tx_x, specRect.top(), tx_x, specRect.bottom());
         }
     }
 }
@@ -2445,17 +2604,28 @@ void SpectrumWidget::drawWaterfallChrome(QPainter& p, const QRect& wfRect)
         }
     }
 
-    // TX filter overlay on the RX waterfall — currently unused until the
-    // TX state model exposes a TX VFO/filter pair (post-3I-1). Scaffolding
-    // in place so commit 7's checkbox wiring has a renderer hook.
-    Q_UNUSED(m_showTxFilterOnRxWaterfall);
-    Q_UNUSED(m_showTxZeroLineOnWaterfall);
-
+    // Plan 4 D9 (Cluster E): TX filter column on waterfall, MOX-gated.
+    // m_showTxFilterOnRxWaterfall: user preference (Setup → Display).
+    // m_moxOverlay: reused from H.1 (3M-1a); set by MoxController.
+    if (m_showTxFilterOnRxWaterfall && m_moxOverlay) {
+        drawTxFilterWaterfallColumn(p, wfRect);
+    }
+    // Plan 4 D9c-1: RX zero-line uses m_rxZeroLineColor (was hardcoded red 180).
     if (m_showRxZeroLineOnWaterfall && m_vfoHz > 0.0) {
         const int x = hzToX(m_vfoHz, wfRect);
         if (x >= wfRect.left() && x <= wfRect.right()) {
-            QPen zeroPen(QColor(255, 0, 0, 180), 1);
+            QPen zeroPen(m_rxZeroLineColor, 1);
             p.setPen(zeroPen);
+            p.drawLine(x, wfRect.top(), x, wfRect.bottom());
+        }
+    }
+
+    // Plan 4 D9c-1: TX zero-line on waterfall — MOX-gated.
+    if (m_showTxZeroLineOnWaterfall && m_moxOverlay && m_vfoHz > 0.0) {
+        const int x = hzToX(m_vfoHz, wfRect);
+        if (x >= wfRect.left() && x <= wfRect.right()) {
+            QPen txZeroPen(m_txZeroLineColor, 1);
+            p.setPen(txZeroPen);
             p.drawLine(x, wfRect.top(), x, wfRect.bottom());
         }
     }
@@ -3326,18 +3496,39 @@ void SpectrumWidget::drawVfoMarker(QPainter& p, const QRect& specRect, const QRe
     }
     int fW = xHi - xLo;
 
-    // Spectrum passband fill — from AetherSDR line 3232: alpha=35
-    p.fillRect(xLo, specRect.top(), fW, specRect.height(),
-               QColor(kSliceR, kSliceG, kSliceB, 35));
+    // Reserve the bandplan strip at the bottom of specRect (drawBandPlan paints
+    // colored segments there with transparent gaps; without this clip the
+    // translucent passband colour bleeds through the gaps and visually sits
+    // "in front of" the bandplan strip).  Same height calc as drawBandPlan:
+    // bandH = m_bandPlanFontSize + 4 when a bandplan manager is bound.
+    const int bandPlanH = (m_bandPlanMgr && m_bandPlanFontSize > 0)
+                          ? (m_bandPlanFontSize + 4) : 0;
+    const int specBottomClipped = specRect.bottom() - bandPlanH;
+    const int specHeightClipped = std::max(0, specBottomClipped - specRect.top());
 
-    // Waterfall passband fill — from AetherSDR line 3234: alpha=25
-    p.fillRect(xLo, wfRect.top(), fW, wfRect.height(),
-               QColor(kSliceR, kSliceG, kSliceB, 25));
+    // Plan 4 follow-up (option A): MOX-gate the RX passband fill so it
+    // disappears during TX/TUNE.  The TX filter overlay (drawTxFilterOverlay)
+    // takes over in that state — gives the user a clear visual swap between
+    // the cyan RX shadow and the orange TX band on MOX/TUNE engage.
+    if (!m_moxOverlay) {
+        // Spectrum passband fill — Plan 4 D9b: user-pickable m_rxFilterColor.
+        // Previously hardcoded AetherSDR cyan alpha=35/25; now single user colour.
+        if (specHeightClipped > 0) {
+            p.fillRect(xLo, specRect.top(), fW, specHeightClipped, m_rxFilterColor);
+        }
+
+        // Waterfall passband fill — Plan 4 D9b: same user-pickable colour.
+        p.fillRect(xLo, wfRect.top(), fW, wfRect.height(), m_rxFilterColor);
+    }
 
     // Filter edge lines — from AetherSDR line 3237: slice color, alpha=130
+    // Clip the spectrum-side edge to specBottomClipped so the line stops at
+    // the bandplan strip's top edge.
     p.setPen(QPen(QColor(kSliceR, kSliceG, kSliceB, 130), 1));
-    p.drawLine(xLo, specRect.top(), xLo, wfRect.bottom());
-    p.drawLine(xHi, specRect.top(), xHi, wfRect.bottom());
+    p.drawLine(xLo, specRect.top(), xLo, specBottomClipped);
+    p.drawLine(xLo, wfRect.top(),   xLo, wfRect.bottom());
+    p.drawLine(xHi, specRect.top(), xHi, specBottomClipped);
+    p.drawLine(xHi, wfRect.top(),   xHi, wfRect.bottom());
 
     // VFO center line — from AetherSDR line 3281: slice color, alpha=220, width=2
     // Width narrows to 1 when filter edge is ≤4px away (CW modes)
@@ -3524,6 +3715,10 @@ void SpectrumWidget::setMoxOverlay(bool isTx)
     }
     m_moxOverlay = isTx;
     markOverlayDirty();
+    update();   // ensure QPainter path repaints immediately on MOX flip;
+                // markOverlayDirty alone waits for the next natural QRhi
+                // frame and was visibly laggy on bench (the panadapter went
+                // "clear" briefly between cyan RX shadow + orange TX band).
 }
 
 // From Thetis display.cs:4840 [v2.10.3.13]:
@@ -3554,6 +3749,284 @@ void SpectrumWidget::setTxFilterVisible(bool on)
     }
     m_txFilterVisible = on;
     markOverlayDirty();
+}
+
+// ---------------------------------------------------------------------------
+// setTxFilterRange()
+//
+// Plan 4 D9 (Cluster E).  Stores the TX audio-Hz passband edges and triggers
+// a panadapter overlay repaint.  Waterfall column repaint is MOX-gated at the
+// call site (see drawTxFilterWaterfallColumn).
+//
+// Source: NereusSDR-original.  IQ-space conversion follows
+//   deskhpsdr/transmitter.c:2136-2186 [@120188f]
+// which is the same mapping used by TxChannel::applyTxFilterForMode
+// (TxChannel.cpp:1047-1078).
+// ---------------------------------------------------------------------------
+void SpectrumWidget::setTxFilterRange(int audioLowHz, int audioHighHz)
+{
+    if (m_txFilterLow == audioLowHz && m_txFilterHigh == audioHighHz) {
+        return;
+    }
+    m_txFilterLow  = audioLowHz;
+    m_txFilterHigh = audioHighHz;
+    markOverlayDirty();
+    update();
+}
+
+// ---------------------------------------------------------------------------
+// setTxMode()
+//
+// Plan 4 D9 (Cluster E).  Records the active DSP mode so drawTxFilterOverlay
+// applies the correct IQ-space sign convention (USB positive, LSB
+// negated+swapped, AM/FM/DSB symmetric).
+// ---------------------------------------------------------------------------
+void SpectrumWidget::setTxMode(DSPMode mode)
+{
+    if (m_txMode == mode) {
+        return;
+    }
+    m_txMode = mode;
+    if (m_txFilterVisible) {
+        markOverlayDirty();
+        update();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setTxVfoOffsetHz()
+//
+// Plan 4 D9 + post-merge Codex review fix.  Signed Hz offset added to m_vfoHz
+// when computing the TX overlay position.  Tracks the slice's active XIT
+// offset (xitEnabled ? xitHz : 0) so the orange band centers on the actual
+// transmit frequency, not the RX VFO.  Wired from SliceModel xit signals
+// in MainWindow::wireSliceToSpectrum.
+// ---------------------------------------------------------------------------
+void SpectrumWidget::setTxVfoOffsetHz(int offsetHz)
+{
+    if (m_txVfoOffsetHz == offsetHz) {
+        return;
+    }
+    m_txVfoOffsetHz = offsetHz;
+    if (m_txFilterVisible) {
+        markOverlayDirty();
+        update();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setTxFilterColor()
+//
+// Plan 4 D9b (Cluster F).  User-pickable TX passband overlay fill colour.
+// Persists per-pan to DisplayTxFilterColor (AppSettings "#RRGGBBAA").
+// ---------------------------------------------------------------------------
+void SpectrumWidget::setTxFilterColor(const QColor& c)
+{
+    if (!c.isValid() || m_txFilterColor == c) {
+        return;
+    }
+    m_txFilterColor = c;
+    auto& s = AppSettings::instance();
+    s.setValue(settingsKey(QStringLiteral("DisplayTxFilterColor"), m_panIndex),
+               c.name(QColor::HexArgb));
+    markOverlayDirty();
+    update();
+}
+
+// ---------------------------------------------------------------------------
+// setRxFilterColor()
+//
+// Plan 4 D9b (Cluster F).  User-pickable RX passband overlay fill colour.
+// Replaces the formerly hardcoded AetherSDR cyan at two fillRect sites.
+// Persists per-pan to DisplayRxFilterColor (AppSettings "#RRGGBBAA").
+// ---------------------------------------------------------------------------
+void SpectrumWidget::setRxFilterColor(const QColor& c)
+{
+    if (!c.isValid() || m_rxFilterColor == c) {
+        return;
+    }
+    m_rxFilterColor = c;
+    auto& s = AppSettings::instance();
+    s.setValue(settingsKey(QStringLiteral("DisplayRxFilterColor"), m_panIndex),
+               c.name(QColor::HexArgb));
+    markOverlayDirty();
+    update();
+}
+
+// ---------------------------------------------------------------------------
+// txAudioToIq()
+//
+// Converts audio-Hz passband [audioLow, audioHigh] to IQ-space signed offsets
+// from the VFO center.  Matches TxChannel::applyTxFilterForMode exactly.
+//
+// Per deskhpsdr/transmitter.c:2136-2186 [@120188f] — tx_set_filter per-mode
+// IQ-space sign convention.
+// ---------------------------------------------------------------------------
+std::pair<int,int> SpectrumWidget::txAudioToIq(int audioLow, int audioHigh,
+                                                DSPMode mode) const
+{
+    // LSB family: bandpass sits below the carrier — negate and swap.
+    auto isLsbFamily = [](DSPMode m) {
+        return m == DSPMode::LSB || m == DSPMode::DIGL || m == DSPMode::CWL;
+    };
+    // Symmetric modes: equal sidebands around the carrier.
+    auto isSymmetric = [](DSPMode m) {
+        return m == DSPMode::AM  || m == DSPMode::SAM
+            || m == DSPMode::DSB || m == DSPMode::FM
+            || m == DSPMode::DRM;
+    };
+
+    int iqLow, iqHigh;
+    if (isLsbFamily(mode)) {
+        iqLow  = -audioHigh;
+        iqHigh = -audioLow;
+    } else if (isSymmetric(mode)) {
+        iqLow  = -audioHigh;
+        iqHigh = +audioHigh;
+    } else {
+        // USB family (USB / DIGU / CWU / SPEC / others): positive sideband.
+        iqLow  = +audioLow;
+        iqHigh = +audioHigh;
+    }
+    return {iqLow, iqHigh};
+}
+
+// ---------------------------------------------------------------------------
+// drawTxFilterOverlay()
+//
+// Plan 4 D9 (Cluster E).  Panadapter TX filter band fill + border lines +
+// inline label.  Always drawn when m_txFilterVisible is set (called from the
+// main paint sequence regardless of MOX state — Thetis shows the TX filter
+// band on the spectrum even in RX mode to hint where TX will land).
+//
+// Source: NereusSDR-original rendering.  IQ-space mapping per
+//   deskhpsdr/transmitter.c:2136-2186 [@120188f].
+// ---------------------------------------------------------------------------
+void SpectrumWidget::drawTxFilterOverlay(QPainter& p, const QRect& specRect)
+{
+    if (m_vfoHz <= 0.0) {
+        return;
+    }
+
+    auto [iqLow, iqHigh] = txAudioToIq(m_txFilterLow, m_txFilterHigh, m_txMode);
+
+    // m_txVfoOffsetHz tracks the active XIT offset so the overlay centers
+    // on the actual TX frequency rather than the RX VFO.  Zero when XIT is
+    // disabled or the slice has no XIT.
+    const double txCenter = m_vfoHz + static_cast<double>(m_txVfoOffsetHz);
+    const double absLow  = txCenter + static_cast<double>(iqLow);
+    const double absHigh = txCenter + static_cast<double>(iqHigh);
+
+    int xLow  = hzToX(absLow,  specRect);
+    int xHigh = hzToX(absHigh, specRect);
+
+    // Ensure xLow ≤ xHigh (defensive; IQ mapping should already order them).
+    if (xLow > xHigh) {
+        std::swap(xLow, xHigh);
+    }
+
+    // Emit test seam before any painting so QSignalSpy sees the values.
+    emit txFilterOverlayPainted(xLow, xHigh);
+
+    // Clamp to visible rect.
+    const int left  = std::max(xLow,  specRect.left());
+    const int right = std::min(xHigh, specRect.right());
+    if (left >= right) {
+        return;
+    }
+    const int bandW = right - left;
+
+    // Reserve the bandplan strip at the bottom of specRect (drawBandPlan paints
+    // colored segments there but leaves transparent gaps between segments;
+    // without this clip the translucent filter colour would bleed through the
+    // gaps and visually sit "in front of" the bandplan strip).  Mirrors the
+    // height calculation in drawBandPlan: bandH = m_bandPlanFontSize + 4 when a
+    // bandplan manager is bound, else 0.
+    const int bandPlanH = (m_bandPlanMgr && m_bandPlanFontSize > 0)
+                          ? (m_bandPlanFontSize + 4) : 0;
+    const int filterBottom = specRect.bottom() - bandPlanH;
+    const int filterH      = std::max(0, filterBottom - specRect.top());
+    if (filterH <= 0) {
+        return;
+    }
+
+    // Fill band with translucent orange.
+    p.fillRect(QRect(left, specRect.top(), bandW, filterH),
+               m_txFilterColor);
+
+    // Border lines — 2 px solid orange.
+    const QColor borderColor(0xff, 0x78, 0x33);  // kTxFilterOverlayBorder
+    p.save();
+    p.setPen(QPen(borderColor, 2));
+    if (xLow >= specRect.left()) {
+        p.drawLine(xLow, specRect.top(), xLow, filterBottom);
+    }
+    if (xHigh <= specRect.right()) {
+        p.drawLine(xHigh, specRect.top(), xHigh, filterBottom);
+    }
+    p.restore();
+
+    // Inline label — kTxFilterOverlayLabel (#ffaa70), 9 px, top-left inside band.
+    // Format: "TX <low>-<high> Hz"
+    {
+        const QString label = QStringLiteral("TX %1-%2 Hz")
+                                  .arg(m_txFilterLow)
+                                  .arg(m_txFilterHigh);
+        const QColor labelColor(0xff, 0xaa, 0x70);  // kTxFilterOverlayLabel
+        p.save();
+        QFont f = p.font();
+        f.setPixelSize(9);
+        p.setFont(f);
+        p.setPen(labelColor);
+        // 8 px left-pad from the left edge, 4 px top-pad.
+        const int labelX = left + 8;
+        const int labelY = specRect.top() + 4 + p.fontMetrics().ascent();
+        if (labelX + p.fontMetrics().horizontalAdvance(label) <= right) {
+            p.drawText(labelX, labelY, label);
+        }
+        p.restore();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// drawTxFilterWaterfallColumn()
+//
+// Plan 4 D9 (Cluster E).  Waterfall column fill for the TX filter band.
+// Only called when m_showTxFilterOnRxWaterfall && m_moxOverlay.
+// Same IQ-space mapping as drawTxFilterOverlay.
+//
+// Source: NereusSDR-original rendering.  IQ-space mapping per
+//   deskhpsdr/transmitter.c:2136-2186 [@120188f].
+// ---------------------------------------------------------------------------
+void SpectrumWidget::drawTxFilterWaterfallColumn(QPainter& p, const QRect& wfRect)
+{
+    if (m_vfoHz <= 0.0) {
+        return;
+    }
+
+    auto [iqLow, iqHigh] = txAudioToIq(m_txFilterLow, m_txFilterHigh, m_txMode);
+
+    // m_txVfoOffsetHz tracks active XIT offset — same rationale as in
+    // drawTxFilterOverlay (panadapter side); kept in lockstep.
+    const double txCenter = m_vfoHz + static_cast<double>(m_txVfoOffsetHz);
+    const double absLow  = txCenter + static_cast<double>(iqLow);
+    const double absHigh = txCenter + static_cast<double>(iqHigh);
+
+    int xLow  = hzToX(absLow,  wfRect);
+    int xHigh = hzToX(absHigh, wfRect);
+    if (xLow > xHigh) {
+        std::swap(xLow, xHigh);
+    }
+
+    const int left  = std::max(xLow,  wfRect.left());
+    const int right = std::min(xHigh, wfRect.right());
+    if (left >= right) {
+        return;
+    }
+    const int bandW = right - left;
+
+    // Fill the entire current waterfall row height with translucent orange.
+    p.fillRect(QRect(left, wfRect.top(), bandW, wfRect.height()), m_txFilterColor);
 }
 
 // Paint "HIGH SWR" (and optionally "POWER FOLD BACK") text centred on the
@@ -4580,6 +5053,14 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 // Passing the clipped specRect would put the strip INSIDE the spectrum.
                 drawDbmScale(p, QRect(0, 0, w, specH));
             }
+            // Plan 4 D9 (Cluster E) + follow-up (option A): TX filter overlay
+            // on panadapter (GPU path), MOX-gated.  Painted BEFORE drawBandPlan
+            // + drawFreqScale so they overpaint the translucent filter band —
+            // matches the QPainter path's z-order.  Same MOX gate as the
+            // QPainter call site to keep both paths in lockstep.
+            if (m_txFilterVisible && m_moxOverlay) {
+                drawTxFilterOverlay(p, specRect);
+            }
             drawBandPlan(p, specRect);
             // Sub-epic E: time-scale + LIVE button on the right edge of the
             // waterfall area. Same FULL-WIDTH wfRect contract as the QPainter
@@ -4651,8 +5132,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 p.drawText(specRect.right() - tw - 8, specRect.top() + 14, fpsText);
             }
 
-            // Cursor info
-            if (m_mouseInWidget) {
+            // Cursor info — guarded by m_showCursorFreq (B8 Task 21).
+            if (m_showCursorFreq && m_mouseInWidget) {
                 drawCursorInfo(p, specRect);
             }
 

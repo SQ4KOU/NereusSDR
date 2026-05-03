@@ -104,6 +104,15 @@
 
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
+// =================================================================
+// Modification history (NereusSDR) — continued:
+//   2026-05-02 — filterLow / filterHigh properties + filterChanged signal
+//                 + filterDisplayText + per-MAC persistence under
+//                 hardware/<mac>/tx/FilterLow and FilterHigh.
+//                 NereusSDR-original (Plan 4 Cluster A, Task 2/D1).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// =================================================================
+
 #include "TransmitModel.h"
 #include "core/AppSettings.h"
 
@@ -218,6 +227,19 @@ void TransmitModel::setPureSigEnabled(bool enabled)
         m_pureSigEnabled = enabled;
         emit pureSigChanged(enabled);
     }
+}
+
+void TransmitModel::setSwrProtectFactor(float f)
+{
+    // Clamp to [0.0, 1.0]; mi0bot NetworkIO.cs:209-211 [v2.10.3.14-beta1]
+    // applies _swr_protect ≤ 1.0 inside the wire-byte multiply, so any
+    // value > 1.0 would over-amplify drive — clamp defensively.
+    const float clamped = std::clamp(f, 0.0f, 1.0f);
+    if (qFuzzyCompare(m_swrProtectFactor, clamped)) {
+        return;
+    }
+    m_swrProtectFactor = clamped;
+    emit swrProtectFactorChanged(clamped);
 }
 
 void TransmitModel::setTxOwnerSlot(VaxSlot s)
@@ -367,6 +389,30 @@ void TransmitModel::setMicPttDisabled(bool disabled)
     m_micPttDisabled = disabled;
     persistOne(QStringLiteral("Mic_PTT_Disabled"), disabled ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
     emit micPttDisabledChanged(disabled);
+}
+
+// ── line_in_gain + user_dig_out setters (Task 2.4 of P1 full-parity epic) ─
+
+void TransmitModel::setLineInGain(int gain)
+{
+    // Clamp to bank 11 C2 low 5 bits per Thetis networkproto1.c:600 [v2.10.3.13]:
+    //   C2 = (prn->mic.line_in_gain & 0b00011111) | ...
+    const int clamped = std::clamp(gain, 0, 31);
+    if (clamped == m_lineInGain) { return; }  // idempotent guard
+    m_lineInGain = clamped;
+    persistOne(QStringLiteral("LineInGain"), QString::number(m_lineInGain));  // L.2 auto-persist
+    emit lineInGainChanged(clamped);
+}
+
+void TransmitModel::setUserDigOut(int dig)
+{
+    // Mask to bank 11 C3 low 4 bits per Thetis networkproto1.c:601 [v2.10.3.13]:
+    //   C3 = prn->user_dig_out & 0b00001111;
+    const int masked = dig & 0x0F;
+    if (masked == m_userDigOut) { return; }  // idempotent guard
+    m_userDigOut = masked;
+    persistOne(QStringLiteral("UserDigOut"), QString::number(m_userDigOut));  // L.2 auto-persist
+    emit userDigOutChanged(masked);
 }
 
 // ── Per-band tune power (G.3) ─────────────────────────────────────────────
@@ -521,6 +567,38 @@ void TransmitModel::loadFromSettings(const QString& mac)
     const bool micPttDisabled = s.value(pfx + QLatin1String("Mic_PTT_Disabled"),
                                          QStringLiteral("False")).toString() == QLatin1String("True");
     setMicPttDisabled(micPttDisabled);
+
+    // ── line_in_gain + user_dig_out (Task 2.4 of P1 full-parity epic) ────
+    // Defaults from Thetis ChannelMaster/networkproto1.c:600-601 [v2.10.3.13]:
+    //   line_in_gain default 0 (no line-in attenuation),
+    //   user_dig_out default 0 (all 4 user digital pins low).
+    const int lineInGain = s.value(pfx + QLatin1String("LineInGain"),
+                                     QStringLiteral("0")).toInt();
+    setLineInGain(lineInGain);
+    const int userDigOut = s.value(pfx + QLatin1String("UserDigOut"),
+                                     QStringLiteral("0")).toInt();
+    setUserDigOut(userDigOut);
+
+    // ── pureSig (Task 2.5 of P1 full-parity epic) ────────────────────────
+    // Loads the user PureSignal-enable toggle from the existing per-MAC
+    // hardware/<mac>/pureSignal/enabled key (set by HardwarePage's
+    // PureSignalTab "Enable" checkbox via setHardwareValue).  The model
+    // property is the single source of truth at runtime; the load here
+    // seeds it on connect so the initial-push in
+    // RadioModel::connectToRadio carries the persisted state to the
+    // wire-bit setter.
+    //
+    // Default false = PureSignal feedback DDC NOT routing.  Matches Thetis
+    // PSForm.cs:234 [v2.10.3.13] _psenabled = false initial state.
+    //
+    // NOTE: this read uses the pureSignal/ namespace (NOT tx/) to share
+    // storage with HardwarePage::onTabSettingChanged.  setPureSigEnabled
+    // intentionally does NOT auto-persist — HardwarePage owns persistence
+    // for this key, model is read-only on connect.
+    const bool pureSigOn = s.value(
+        QStringLiteral("hardware/%1/pureSignal/enabled").arg(mac),
+        QStringLiteral("False")).toString() == QLatin1String("True");
+    setPureSigEnabled(pureSigOn);
 
     // ── VOX properties (voxEnabled NOT loaded — safety: always false) ─────
     const int voxThresholdDb = s.value(pfx + QLatin1String("Dexp_Threshold"),
@@ -699,6 +777,14 @@ void TransmitModel::loadFromSettings(const QString& mac)
     // Default from Thetis database.cs:4689 [v2.10.3.13]: dr["CESSB_On"] = false.
     setCessbOn(s.value(pfx + QLatin1String("CESSB_On"),
                         QStringLiteral("False")).toString() == QLatin1String("True"));
+
+    // ── TX filter bandwidth (Plan 4 D1) ───────────────────────────────────
+    // Defaults 100/2900 — USB voice typical SSB (NereusSDR-original, Plan 4
+    // spec §Task 2).
+    setFilterLow(s.value(pfx + QLatin1String("FilterLow"),
+                          QStringLiteral("100")).toInt());
+    setFilterHigh(s.value(pfx + QLatin1String("FilterHigh"),
+                           QStringLiteral("2900")).toInt());
 }
 
 void TransmitModel::persistToSettings(const QString& mac) const
@@ -717,6 +803,10 @@ void TransmitModel::persistToSettings(const QString& mac) const
     s.setValue(pfx + QLatin1String("Mic_TipRing"),       m_micTipRing      ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(pfx + QLatin1String("Mic_Bias"),          m_micBias         ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(pfx + QLatin1String("Mic_PTT_Disabled"),   m_micPttDisabled  ? QStringLiteral("True") : QStringLiteral("False"));
+
+    // ── line_in_gain + user_dig_out (Task 2.4) ───────────────────────────
+    s.setValue(pfx + QLatin1String("LineInGain"),         QString::number(m_lineInGain));
+    s.setValue(pfx + QLatin1String("UserDigOut"),         QString::number(m_userDigOut));
 
     // ── VOX properties (voxEnabled excluded — safety) ────────────────────
     s.setValue(pfx + QLatin1String("Dexp_Threshold"),   QString::number(m_voxThresholdDb));
@@ -805,6 +895,10 @@ void TransmitModel::persistToSettings(const QString& mac) const
     // CESSB.
     s.setValue(pfx + QLatin1String("CESSB_On"),
                m_cessbOn ? QStringLiteral("True") : QStringLiteral("False"));
+
+    // ── TX filter bandwidth (Plan 4 D1) ───────────────────────────────────
+    s.setValue(pfx + QLatin1String("FilterLow"),  QString::number(m_filterLow));
+    s.setValue(pfx + QLatin1String("FilterHigh"), QString::number(m_filterHigh));
 }
 
 // ── Anti-VOX properties (3M-1b C.4) ─────────────────────────────────────────
@@ -1527,6 +1621,74 @@ void TransmitModel::setCessbOn(bool on)
     persistOne(QStringLiteral("CESSB_On"),
                on ? QStringLiteral("True") : QStringLiteral("False"));
     emit cessbOnChanged(on);
+}
+
+// ── TX filter bandwidth (Plan 4 D1) ─────────────────────────────────────────
+//
+// NereusSDR-original properties.  FilterLow/FilterHigh are the DSP bandpass
+// filter edges (Hz) that will be fed to WDSP SetTXABandpassFreqs in Plan 4
+// D8.  Defaults 100/2900 match the USB voice typical SSB range — the same
+// values Thetis ships for the "Default" USB profile row in database.cs
+// (Plan 4 spec §Task 2).
+//
+// Swap-on-commit: prevents an inverted range from reaching WDSP.  When
+// setFilterLow(hz) is called with hz > m_filterHigh, the stored high value
+// is swapped into the low slot and hz is stored in the high slot.  The
+// converse applies to setFilterHigh.  This keeps low ≤ high at all times.
+//
+// Per-MAC persistence: hardware/<mac>/tx/FilterLow and FilterHigh,
+// consistent with the L.2 namespace used by all other persisted TX props.
+
+void TransmitModel::setFilterLow(int hz)
+{
+    // Swap-on-commit: if the new low would exceed the current high, flip them.
+    if (hz > m_filterHigh) {
+        std::swap(hz, m_filterHigh);
+        persistOne(QStringLiteral("FilterHigh"), QString::number(m_filterHigh));
+    }
+    if (m_filterLow == hz) { return; }
+    m_filterLow = hz;
+    persistOne(QStringLiteral("FilterLow"), QString::number(m_filterLow));
+    emit filterChanged(m_filterLow, m_filterHigh);
+}
+
+void TransmitModel::setFilterHigh(int hz)
+{
+    // Swap-on-commit: if the new high would be less than the current low, flip.
+    if (hz < m_filterLow) {
+        std::swap(hz, m_filterLow);
+        persistOne(QStringLiteral("FilterLow"), QString::number(m_filterLow));
+    }
+    if (m_filterHigh == hz) { return; }
+    m_filterHigh = hz;
+    persistOne(QStringLiteral("FilterHigh"), QString::number(m_filterHigh));
+    emit filterChanged(m_filterLow, m_filterHigh);
+}
+
+QString TransmitModel::filterDisplayText(DSPMode mode) const
+{
+    // Symmetric modes (AM/SAM/DSB/FM): display as ±half-bandwidth.
+    // Asymmetric modes (USB/LSB/CWU/CWL/DIGU/DIGL/SPEC/DRM): display as low–high.
+    const bool isSymmetric = (mode == DSPMode::AM  ||
+                              mode == DSPMode::SAM  ||
+                              mode == DSPMode::DSB  ||
+                              mode == DSPMode::FM);
+
+    const int bw = m_filterHigh - m_filterLow;
+    const double bwKhz = bw / 1000.0;
+
+    if (isSymmetric) {
+        // Represent as ±half-bandwidth from carrier.
+        const int halfBw = bw / 2;
+        return QStringLiteral("±%1 Hz · %2k BW")
+            .arg(halfBw)
+            .arg(bwKhz, 0, 'f', 1);
+    }
+
+    return QStringLiteral("%1–%2 Hz · %3k BW")
+        .arg(m_filterLow)
+        .arg(m_filterHigh)
+        .arg(bwKhz, 0, 'f', 1);
 }
 
 } // namespace NereusSDR

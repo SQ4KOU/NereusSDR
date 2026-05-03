@@ -42,7 +42,7 @@ void SpacerItemEditor::buildTypeSpecific()
         SpacerItem* spacer = qobject_cast<SpacerItem*>(m_item);
         if (!spacer) { return; }
         const QColor chosen = QColorDialog::getColor(spacer->colour1(), this,
-                                                     QStringLiteral("Colour 1"),
+                                                     QStringLiteral("Color 1"),
                                                      QColorDialog::ShowAlphaChannel);
         if (chosen.isValid()) {
             spacer->setColour1(chosen);
@@ -52,7 +52,7 @@ void SpacerItemEditor::buildTypeSpecific()
             notifyChanged();
         }
     });
-    addRow(QStringLiteral("Colour 1"), m_btnColour1);
+    addRow(QStringLiteral("Color 1"), m_btnColour1);
 
     // Colour 2
     m_btnColour2 = new QPushButton(this);
@@ -61,7 +61,7 @@ void SpacerItemEditor::buildTypeSpecific()
         SpacerItem* spacer = qobject_cast<SpacerItem*>(m_item);
         if (!spacer) { return; }
         const QColor chosen = QColorDialog::getColor(spacer->colour2(), this,
-                                                     QStringLiteral("Colour 2"),
+                                                     QStringLiteral("Color 2"),
                                                      QColorDialog::ShowAlphaChannel);
         if (chosen.isValid()) {
             spacer->setColour2(chosen);
@@ -71,7 +71,7 @@ void SpacerItemEditor::buildTypeSpecific()
             notifyChanged();
         }
     });
-    addRow(QStringLiteral("Colour 2"), m_btnColour2);
+    addRow(QStringLiteral("Color 2"), m_btnColour2);
 
     // Padding
     m_spinPadding = makeDoubleRow(QStringLiteral("Padding"), 0.0, 1.0, 0.01, 3);

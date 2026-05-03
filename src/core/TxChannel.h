@@ -228,11 +228,22 @@ warren@wpratt.com
 //                 = 48000.0 = TX dsp_rate / 2) so consumers don't reinvent
 //                 them.  AI-assisted transformation via Anthropic Claude
 //                 Code.
+//   2026-05-02 — Plan 4 D8: requestFilterChange / applyPendingFilter /
+//                 applyTxFilterForMode (debounced per-profile TX filter wiring)
+//                 + txFilterApplied signal added by J.J. Boyd (KG4VCF).
+//                 50 ms QTimer debounce coalesces rapid spinbox-arrow calls.
+//                 applyTxFilterForMode maps audio Hz → IQ-space sign convention
+//                 per deskhpsdr/transmitter.c:2136-2186 [@120188f] (same cite
+//                 as the TUN bandpass at setTuneTone() lines 505-528 — the TUN
+//                 path is unaffected; this helper runs only from the debounce
+//                 timer, not from setTuneTone).  AI-assisted transformation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
 
 #include <QObject>
+#include <QTimer>
 
 #include <array>    // std::array — TX EQ 10-band graphic vector (3M-3a-i B-1)
 #include <atomic>   // std::atomic<bool> — m_running cross-thread mirror (3M-1c TxWorkerThread)
@@ -1477,6 +1488,25 @@ public:
 #endif // NEREUS_BUILD_TESTS
 
 public slots:
+    // ── Per-profile TX filter debounce (Plan 4 D8) ───────────────────────────
+
+    /// Request a TX filter change (audio Hz, mode-agnostic).  Coalesces rapid
+    /// successive calls via a 50 ms debounce so spinbox arrow-clicks don't spam
+    /// WDSP.  When the timer fires, applyTxFilterForMode maps the audio Hz
+    /// values to IQ-space per the current mode and calls setTxBandpass.
+    ///
+    /// Cross-thread safe: designed for auto-queued connection from
+    /// TransmitModel::filterChanged (main thread) → TxChannel (audio thread)
+    /// via RadioModel::txFilterRequest intermediate signal.  Qt auto-connection
+    /// routes to QueuedConnection once TxChannel has been moved to
+    /// TxWorkerThread, so QTimer::start() executes on the timer's owning
+    /// thread.
+    ///
+    /// NereusSDR-original glue.  Per-mode mapping is identical to the TUN
+    /// bandpass in setTuneTone() (TxChannel.cpp:505-528), cited from
+    /// deskhpsdr/transmitter.c:2136-2186 [@120188f].
+    void requestFilterChange(int audioLowHz, int audioHighHz, DSPMode mode);
+
     // ── TX pump slot (Phase 3M-1c TX pump architecture redesign v3) ──────────
     //
     /// LEGACY / TEST-ONLY: drive one fexchange0 cycle from a mono float
@@ -1523,6 +1553,17 @@ public slots:
     void driveOneTxBlockFromInterleaved(const double* interleavedIn);
 
 signals:
+    // ── Per-profile TX filter applied (Plan 4 D8) ────────────────────────────
+    //
+    /// Emitted from applyTxFilterForMode after computing IQ-space values and
+    /// before calling setTxBandpass.  Carries the IQ-space values (signed,
+    /// post-mode-mapping) so tests can verify both that the debounce fired AND
+    /// that the per-mode mapping is correct.
+    ///
+    /// Production code may ignore this signal — the actual WDSP call happens
+    /// via setTxBandpass immediately after the emit.  Tests wire a QSignalSpy.
+    void txFilterApplied(int lowHzIq, int highHzIq);
+
     // ── MON siphon signal (3M-1b D.5) ────────────────────────────────────────
     //
     /// Emitted on the audio thread inside driveOneTxBlock() after every
@@ -1552,7 +1593,29 @@ signals:
     /// Plan: 3M-1b D.5 (this commit). Pre-code review §4.3.
     void sip1OutputReady(const float* samples, int frames);
 
+private slots:
+    // ── Per-profile TX filter (Plan 4 D8) — debounce fire slot ───────────────
+
+    /// Called when m_filterDebounceTimer fires.  Reads m_pending* fields
+    /// and invokes applyTxFilterForMode + setTxBandpass.
+    void applyPendingFilter();
+
 private:
+    // ── Per-profile TX filter (Plan 4 D8) — private helper ───────────────────
+
+    /// Map (audioLow, audioHigh, mode) → IQ-space (signed) and call
+    /// setTxBandpass.  Emits txFilterApplied(iqLow, iqHigh) before the WDSP
+    /// call so tests can spy on the result.
+    ///
+    /// Per-mode mapping from deskhpsdr/transmitter.c:2136-2186 [@120188f]
+    /// (same cite as setTuneTone() TUN bandpass at TxChannel.cpp:505-528 —
+    /// the TUN path is NOT touched; this helper runs only from the debounce
+    /// timer, never from setTuneTone):
+    ///   USB family (USB / DIGU / CWU / others): IQ = [+low, +high]
+    ///   LSB family (LSB / DIGL / CWL):          IQ = [-high, -low]
+    ///   Symmetric  (AM / SAM / DSB / FM / DRM): IQ = [-high, +high]
+    void applyTxFilterForMode(int audioLowHz, int audioHighHz, DSPMode mode);
+
     // ── TX I/Q production loop internals ────────────────────────────────────
     //
     // History (deleted machinery):
@@ -1757,6 +1820,22 @@ private:
     // From WdspEngine.h kTxDspBufferSize = 2048 [NereusSDR-original].
     int m_txFilterSize{2048};
     int m_txFilterType{0};   // 0 = LowLatency, 1 = LinearPhase
+
+    // ── Per-profile TX filter debounce (Plan 4 D8) ───────────────────────────
+    //
+    // 50 ms single-shot timer — matches the magnitude of Thetis's
+    // SetTXFilter coalescing behaviour (rapid UI spinbox ticks coalesce
+    // to one WDSP call once the user pauses).  Pending audio-space values
+    // are stored here and consumed by applyPendingFilter() on timeout.
+    //
+    // Thread affinity: the timer is owned by TxChannel, which is moved
+    // to TxWorkerThread in RadioModel.  After moveToThread, all start()
+    // calls (via requestFilterChange, which arrives as a QueuedConnection)
+    // run on the worker thread — fully thread-safe by Qt's timer design.
+    QTimer  m_filterDebounceTimer;
+    int     m_pendingAudioLow  = 0;
+    int     m_pendingAudioHigh = 0;
+    DSPMode m_pendingMode      = DSPMode::USB;
 };
 
 } // namespace NereusSDR

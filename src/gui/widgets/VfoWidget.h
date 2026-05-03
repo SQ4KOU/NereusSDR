@@ -292,6 +292,8 @@ warren@wpratt.com
 //                 `console.cs`; see Copyright block.
 // =================================================================
 
+#include "core/BoardCapabilities.h"
+#include "core/SkuUiProfile.h"
 #include "core/WdspTypes.h"
 #include "models/SliceModel.h"
 #include "VfoLevelBar.h"
@@ -307,10 +309,11 @@ warren@wpratt.com
 #include <QLineEdit>
 #include <QPointer>
 
+#include <optional>
+
 namespace NereusSDR {
 
 class VaxChannelSelector;  // forward declaration — full include in VfoWidget.cpp
-struct BoardCapabilities;  // forward declaration — Phase 3P-I-a T15
 enum class HPSDRModel : int;  // forward declaration — Phase 3P-I-b T9
 
 // Floating VFO flag widget — AetherSDR pattern.
@@ -365,7 +368,7 @@ public:
     void setXitEnabled(bool v);
     void setXitHz(int hz);
 
-    // --- Lock state setter (S1.8a review — syncs both m_lockBtn and m_xritLockBtn) ---
+    // --- Lock state setter (S1.8a review — syncs m_lockBtn / Close-strip) ---
     void setLocked(bool v);
 
     // --- DSP tab state setters (S1.8b — guarded against re-emit) ---
@@ -399,6 +402,12 @@ public:
     // --- Slice coupling (for mode container binding only) ---
     void setSlice(SliceModel* slice);
 
+    // --- Stage C2: FilterPresetStore coupling ---
+    // When set, rebuildFilterButtons reads user overrides from the store and
+    // the right-click context menu on each filter button opens the edit dialog.
+    // When nullptr, falls back to SliceModel::presetsForMode (Thetis defaults).
+    void setFilterPresetStore(class FilterPresetStore* store);
+
     // --- Positioning ---
 
     // Reposition the flag at the given pixel x of the VFO marker.
@@ -424,6 +433,10 @@ signals:
     void frequencyChanged(double hz);
     void modeChanged(NereusSDR::DSPMode mode);
     void filterChanged(int low, int high);
+    // Shift+click on a filter preset — TX passband should snap to match
+    // the RX preset's audio Hz range.  MainWindow wires this to
+    // TransmitModel::setFilterLow/setFilterHigh.
+    void txFilterMatchRequested(int audioLow, int audioHigh);
     void agcModeChanged(NereusSDR::AGCMode mode);
     void afGainChanged(int gain);
     void rfGainChanged(int gain);
@@ -511,9 +524,13 @@ private:
     // Guard to prevent signal re-emission during model updates
     bool m_updatingFromModel{false};
 
-    // Internal helper — update m_locked + drive both lock buttons + emit lockChanged.
-    // Called by both the floating m_lockBtn toggled lambda and m_xritLockBtn toggled
-    // lambda so both paths are in sync.  Must be called outside m_updatingFromModel.
+    // Stage C2: optional user-override preset store.
+    // Non-owning; lifetime managed by RadioModel.  Null until MainWindow wires it.
+    class FilterPresetStore* m_filterPresetStore{nullptr};
+
+    // Internal helper — update m_locked + drive Close-strip lock button + emit lockChanged.
+    // Called by the floating m_lockBtn toggled lambda.  X/RIT-tab Lock removed (B7).
+    // Must be called outside m_updatingFromModel.
     void applyLockedState(bool on);
 
     // Slice identity
@@ -531,6 +548,10 @@ private:
     bool m_hasRxBypassRelay{false};    // Phase 3P-I-b T9 — BYPS button gate (caps)
     bool m_hasRxOutOnTxUi{false};      // Phase 3P-I-b T9 — BYPS button gate (SKU)
     bool m_smallFilterMode{false};     // Task 3.4 — small filter display
+
+    // B3: stored caps + SKU profile for AntennaPopupBuilder in popup lambdas.
+    std::optional<BoardCapabilities> m_popupCaps;
+    std::optional<SkuUiProfile>      m_popupSku;
 
     // --- Header row ---
     QPushButton* m_rxAntBtn{nullptr};
@@ -611,7 +632,6 @@ private:
     QPushButton*   m_xitBtn{nullptr};
     ScrollableLabel* m_xitLabel{nullptr};
     QPushButton*   m_xitZeroBtn{nullptr};
-    QPushButton*   m_xritLockBtn{nullptr};
     QPushButton*   m_stepCycleBtn{nullptr};
 
     // --- Floating control buttons (AetherSDR pattern) ---

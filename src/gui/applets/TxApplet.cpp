@@ -43,6 +43,12 @@
 //                 requestOpenCfcDialog() public slot exposed so CfcSetupPage's
 //                 [Configure CFC bands…] button routes to the same dialog
 //                 instance via a MainWindow-side signal connection.
+//   2026-05-02 — Plan 4 Cluster C (Task 4 / D2+D3+D9-status): TX BW spinbox
+//                 row added below Profile combo — Lo/Hi QSpinBox pair
+//                 bidirectional with TransmitModel::filterLow/filterHigh;
+//                 orange status label shows filter description text.
+//                 Wired via filterChanged(int,int) + dspModeChanged refresh.
+//                 syncFromModel() extended to seed spinboxes + status label.
 // =================================================================
 
 //=================================================================
@@ -164,6 +170,7 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QSpinBox>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -246,7 +253,6 @@ void TxApplet::buildUI()
                               QStringLiteral("2.5"), QStringLiteral("3")});
     swrGauge->setAccessibleName(QStringLiteral("SWR gauge"));
     m_swrGauge = swrGauge;
-    NyiOverlay::markNyi(swrGauge, QStringLiteral("Phase 3I-1"));
     vbox->addWidget(swrGauge);
 
     // ── 3. RF Power slider row ───────────────────────────────────────────────
@@ -319,6 +325,43 @@ void TxApplet::buildUI()
         vbox->addLayout(row);
     }
 
+    // ── Button row: TUNE + MOX (50% each) ──────────────────────────────────
+    // Positioned above VOX+MON for action-button prominence
+    // (docs/superpowers/plans/2026-05-01-ui-polish-right-panel.md §Task 5).
+    // ATU + MEM removed (ATU phase, no plan yet; MEM = channel-memory phase).
+    // MOX: red active (#cc2222 bg, #ff4444 border, white text)
+    // TUNE: red active when tuning, text becomes "TUNING..."
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(2);
+
+        const QString btnStyle = Style::buttonBaseStyle()
+            + QStringLiteral("QPushButton { padding: 2px; }");
+        const QString redChecked = Style::redCheckedStyle();
+
+        m_tuneBtn = new QPushButton(QStringLiteral("TUNE"), this);
+        m_tuneBtn->setCheckable(true);
+        m_tuneBtn->setFixedHeight(22);
+        m_tuneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_tuneBtn->setStyleSheet(btnStyle + redChecked);
+        m_tuneBtn->setEnabled(true);  // Phase 3M-1a H.3: wired
+        m_tuneBtn->setAccessibleName(QStringLiteral("Tune carrier"));
+        m_tuneBtn->setToolTip(QStringLiteral("Enable TUNE carrier (single-tone CW)"));
+        row->addWidget(m_tuneBtn, 1);
+
+        m_moxBtn = new QPushButton(QStringLiteral("MOX"), this);
+        m_moxBtn->setCheckable(true);
+        m_moxBtn->setFixedHeight(22);
+        m_moxBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_moxBtn->setStyleSheet(btnStyle + redChecked);
+        m_moxBtn->setEnabled(true);  // Phase 3M-1a H.3: wired
+        m_moxBtn->setAccessibleName(QStringLiteral("MOX transmit"));
+        m_moxBtn->setToolTip(QStringLiteral("Manual transmit (MOX)"));
+        row->addWidget(m_moxBtn, 1);
+
+        vbox->addLayout(row);
+    }
+
     // ── 4b. VOX toggle button ─────────────────────────────────────────────────
     // Phase 3M-1b J.2: below Tune Power slider.
     // Checkable: green border when active (greenCheckedStyle()).
@@ -369,7 +412,9 @@ void TxApplet::buildUI()
         m_monBtn->setChecked(false);  // default: OFF — plan §0 row 9 safety rule
         m_monBtn->setFixedHeight(22);
         m_monBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        // Blue checked style: blue border + slightly tinted bg when active.
+        // MON button intentionally uses dark-navy/cyan (#001a33 bg / #3399ff border)
+        // to distinguish from generic blue toggles (kBlueBg=#0070c0/kBlueBorder=#0090e0).
+        // NereusSDR-original one-off — do NOT snap to Style::kBlueBg / kBlueBorder.
         m_monBtn->setStyleSheet(Style::buttonBaseStyle()
             + QStringLiteral("QPushButton:checked {"
                              " background: #001a33;"
@@ -483,60 +528,8 @@ void TxApplet::buildUI()
         vbox->addLayout(row);
     }
 
-    // ── Button row: TUNE + MOX + ATU + MEM (25% each) ─────────────────────
-    // Matches AetherSDR TxApplet.cpp:155–203 (single 4-button row)
-    // MOX: red active (#cc2222 bg, #ff4444 border, white text)
-    // TUNE: red active when tuning, text becomes "TUNING..."
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(2);
-
-        const QString btnStyle = Style::buttonBaseStyle()
-            + QStringLiteral("QPushButton { padding: 2px; }");
-        const QString redChecked = Style::redCheckedStyle();
-
-        m_tuneBtn = new QPushButton(QStringLiteral("TUNE"), this);
-        m_tuneBtn->setCheckable(true);
-        m_tuneBtn->setFixedHeight(22);
-        m_tuneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_tuneBtn->setStyleSheet(btnStyle + redChecked);
-        m_tuneBtn->setEnabled(true);  // Phase 3M-1a H.3: wired
-        m_tuneBtn->setAccessibleName(QStringLiteral("Tune carrier"));
-        m_tuneBtn->setToolTip(QStringLiteral("Enable TUNE carrier (single-tone CW)"));
-        row->addWidget(m_tuneBtn, 1);
-
-        m_moxBtn = new QPushButton(QStringLiteral("MOX"), this);
-        m_moxBtn->setCheckable(true);
-        m_moxBtn->setFixedHeight(22);
-        m_moxBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_moxBtn->setStyleSheet(btnStyle + redChecked);
-        m_moxBtn->setEnabled(true);  // Phase 3M-1a H.3: wired
-        m_moxBtn->setAccessibleName(QStringLiteral("MOX transmit"));
-        m_moxBtn->setToolTip(QStringLiteral("Manual transmit (MOX)"));
-        row->addWidget(m_moxBtn, 1);
-
-        m_atuBtn = new QPushButton(QStringLiteral("ATU"), this);
-        m_atuBtn->setCheckable(true);
-        m_atuBtn->setFixedHeight(22);
-        m_atuBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_atuBtn->setStyleSheet(btnStyle);
-        m_atuBtn->setAccessibleName(QStringLiteral("Antenna tuner"));
-        NyiOverlay::markNyi(m_atuBtn, QStringLiteral("Phase 3I-1"));
-        row->addWidget(m_atuBtn, 1);
-
-        m_memBtn = new QPushButton(QStringLiteral("MEM"), this);
-        m_memBtn->setCheckable(true);
-        m_memBtn->setFixedHeight(22);
-        m_memBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_memBtn->setStyleSheet(btnStyle);
-        m_memBtn->setAccessibleName(QStringLiteral("ATU memory"));
-        NyiOverlay::markNyi(m_memBtn, QStringLiteral("Phase 3I-1"));
-        row->addWidget(m_memBtn, 1);
-
-        vbox->addLayout(row);
-    }
-
-    // ── Profile combo row (50%) + tune mode combo (50%) ─────────────────────
+    // ── Profile combo row (full width) ──────────────────────────────────────
+    // Tune Mode combo removed (ATU phase, no plan yet).
     // (AetherSDR TxApplet.cpp:131–153)
     {
         auto* row = new QHBoxLayout;
@@ -560,17 +553,74 @@ void TxApplet::buildUI()
         m_profileCombo->setContextMenuPolicy(Qt::CustomContextMenu);
         row->addWidget(m_profileCombo, 1);
 
-        m_tuneModeCombo = new QComboBox(this);
-        m_tuneModeCombo->addItem(QStringLiteral("Auto"));
-        m_tuneModeCombo->addItem(QStringLiteral("Manual"));
-        m_tuneModeCombo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_tuneModeCombo->setFixedHeight(22);
-        applyComboStyle(m_tuneModeCombo);
-        m_tuneModeCombo->setAccessibleName(QStringLiteral("Tune mode"));
-        NyiOverlay::markNyi(m_tuneModeCombo, QStringLiteral("Phase 3I-1"));
-        row->addWidget(m_tuneModeCombo, 1);
-
         vbox->addLayout(row);
+    }
+
+    // ── Plan 4 Cluster C (Task 4 / D2+D3+D9-status): TX BW spinbox row ──────
+    // Low/High cutoff spinboxes for the TX bandpass filter.  Bidirectional with
+    // TransmitModel::filterLow / filterHigh (wired in wireControls).  Defaults
+    // 100 / 2900 Hz from the model (m_filterLow{100} / m_filterHigh{2900}).
+    {
+        auto* bwRow = new QHBoxLayout;
+        bwRow->setSpacing(4);
+
+        // "TX BW" section label — 56 px wide, bold, kTitleText colour, 10 px.
+        auto* bwLbl = new QLabel(QStringLiteral("TX BW"), this);
+        bwLbl->setFixedWidth(56);
+        bwLbl->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-size: 10px; font-weight: bold; }"
+        ).arg(Style::kTitleText));
+        bwRow->addWidget(bwLbl);
+
+        // "Lo" sub-label
+        auto* loLbl = new QLabel(QStringLiteral("Lo"), this);
+        loLbl->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-size: 9.5px; }"
+        ).arg(Style::kTextSecondary));
+        bwRow->addWidget(loLbl);
+
+        // Low-cutoff spinbox — range [0, 5000] Hz
+        m_txFilterLowSpin = new QSpinBox(this);
+        m_txFilterLowSpin->setRange(0, 5000);
+        m_txFilterLowSpin->setSuffix(QStringLiteral(" Hz"));
+        m_txFilterLowSpin->setStyleSheet(QString::fromLatin1(Style::kSpinBoxStyle));
+        m_txFilterLowSpin->setMinimumWidth(72);
+        m_txFilterLowSpin->setAccessibleName(QStringLiteral("TX filter low cutoff"));
+        m_txFilterLowSpin->setToolTip(QStringLiteral(
+            "TX bandpass filter lower cutoff (Hz).  0 Hz for voice SSB modes."));
+        bwRow->addWidget(m_txFilterLowSpin);
+
+        // "Hi" sub-label
+        auto* hiLbl = new QLabel(QStringLiteral("Hi"), this);
+        hiLbl->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-size: 9.5px; }"
+        ).arg(Style::kTextSecondary));
+        bwRow->addWidget(hiLbl);
+
+        // High-cutoff spinbox — range [200, 10000] Hz
+        m_txFilterHighSpin = new QSpinBox(this);
+        m_txFilterHighSpin->setRange(200, 10000);
+        m_txFilterHighSpin->setSuffix(QStringLiteral(" Hz"));
+        m_txFilterHighSpin->setStyleSheet(QString::fromLatin1(Style::kSpinBoxStyle));
+        m_txFilterHighSpin->setMinimumWidth(72);
+        m_txFilterHighSpin->setAccessibleName(QStringLiteral("TX filter high cutoff"));
+        m_txFilterHighSpin->setToolTip(QStringLiteral(
+            "TX bandpass filter upper cutoff (Hz).  2900 Hz for typical SSB voice."));
+        bwRow->addWidget(m_txFilterHighSpin);
+
+        vbox->addLayout(bwRow);
+
+        // D9 status label — orange tint, right-aligned, 9 px bold.
+        // Displays e.g. "100-2900 Hz · 2.8k BW" (asymmetric) or "±2900 Hz · 5.8k BW"
+        // (symmetric modes).  Refreshed by filterChanged + dspModeChanged.
+        m_txFilterStatusLabel = new QLabel(this);
+        m_txFilterStatusLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        m_txFilterStatusLabel->setStyleSheet(QStringLiteral(
+            // Plan 4 D9 (Cluster E): colour centralised in Style::kTxFilterOverlayLabel.
+            "QLabel { color: %1; font-size: 9px; font-weight: bold; }"
+        ).arg(QLatin1String(Style::kTxFilterOverlayLabel)));
+        m_txFilterStatusLabel->setAccessibleName(QStringLiteral("TX filter status"));
+        vbox->addWidget(m_txFilterStatusLabel);
     }
 
     // ── Button row 3: 2-Tone + PS-A + DUP ───────────────────────────────────
@@ -598,7 +648,9 @@ void TxApplet::buildUI()
             "(configure in Setup → Test → Two-Tone)."));
         row->addWidget(m_twoToneBtn, 1);
 
-        // PS-A: green when checked — #006030 bg matches AetherSDR APD button
+        // PS-A: green when checked — #006030/#008040 are a darker green than kGreenBg=#006040.
+        // Flagged for 3M-4 PureSignal phase review; do NOT snap to Style::kGreenBg/kGreenBorder
+        // until PureSignal colors are audited against Thetis APD button palette.
         m_psaBtn = new QPushButton(QStringLiteral("PS-A"), this);
         m_psaBtn->setCheckable(true);
         m_psaBtn->setFixedHeight(22);
@@ -612,31 +664,16 @@ void TxApplet::buildUI()
         NyiOverlay::markNyi(m_psaBtn, QStringLiteral("Phase 3M-4"));
         row->addWidget(m_psaBtn, 1);
 
-        m_dupBtn = new QPushButton(QStringLiteral("DUP"), this);
-        m_dupBtn->setCheckable(true);
-        m_dupBtn->setFixedHeight(22);
-        m_dupBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_dupBtn->setAccessibleName(QStringLiteral("Full duplex"));
-        NyiOverlay::markNyi(m_dupBtn, QStringLiteral("Phase 3M-3"));
-        row->addWidget(m_dupBtn, 1);
-
         vbox->addLayout(row);
     }
 
-    // ── APD/xPA row: xPA button + inset container ────────────────────────────
-    // Inset: fixedHeight 22, bg #0a0a18, border #1e2e3e  (AetherSDR TxApplet.cpp:224–253)
+    // ── SWR protection LED inset ─────────────────────────────────────────────
+    // xPA button removed (external-PA hardware-specific phase, no plan yet).
+    // SWR Prot LED now occupies its own full-width inset row.
+    // Inset: fixedHeight 22, bg #0a0a18, border #1e2e3e (AetherSDR TxApplet.cpp:224–253)
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
-
-        m_xpaBtn = new QPushButton(QStringLiteral("xPA"), this);
-        m_xpaBtn->setCheckable(true);
-        m_xpaBtn->setFixedHeight(22);
-        m_xpaBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_xpaBtn->setStyleSheet(Style::buttonBaseStyle() + Style::greenCheckedStyle());
-        m_xpaBtn->setAccessibleName(QStringLiteral("External PA indicator"));
-        NyiOverlay::markNyi(m_xpaBtn, QStringLiteral("Phase 3I-1"));
-        row->addWidget(m_xpaBtn, 2); // ~40%
 
         // Inset container for SWR protection LED (styled like AetherSDR atuInset)
         auto* inset = new QWidget(this);
@@ -660,10 +697,9 @@ void TxApplet::buildUI()
         ).arg(Style::kTextInactive));
         m_swrProtLed->setAlignment(Qt::AlignCenter);
         m_swrProtLed->setAccessibleName(QStringLiteral("SWR protection indicator"));
-        NyiOverlay::markNyi(m_swrProtLed, QStringLiteral("Phase 3I-1"));
         insetLayout->addWidget(m_swrProtLed);
 
-        row->addWidget(inset, 3); // ~60%
+        row->addWidget(inset, 1); // full width (xPA removed)
         vbox->addLayout(row);
     }
 
@@ -705,9 +741,12 @@ void TxApplet::wireControls()
     //       RadioModel.cpp:572).  Without this throttle the digit
     //       characters update too fast to read.
     connect(&m_model->radioStatus(), &RadioStatus::powerChanged,
-            this, [this](double fwdW, double /*revW*/, double /*swr*/) {
+            this, [this](double fwdW, double /*revW*/, double swr) {
         constexpr double kAlpha = 0.30;
         m_fwdPowerSmoothedW = kAlpha * fwdW + (1.0 - kAlpha) * m_fwdPowerSmoothedW;
+        if (m_swrGauge) {
+            m_swrGauge->setValue(swr);
+        }
     });
     auto* fwdGaugeRefreshTimer = new QTimer(this);
     fwdGaugeRefreshTimer->setInterval(50);   // 20 Hz UI refresh
@@ -717,6 +756,26 @@ void TxApplet::wireControls()
         }
     });
     fwdGaugeRefreshTimer->start();
+
+    // ── SWR Prot LED ← SwrProtectionController::highSwrChanged ─────────────
+    // SwrProtectionController (Phase 3G-13) emits highSwrChanged(bool) when
+    // the radio's SWR-protection state changes. Light the LED amber when
+    // high-SWR protection is active; dim it when cleared.
+    {
+        auto updateSwrProtLed = [this](bool isHigh) {
+            if (!m_swrProtLed) { return; }
+            const QString color = isHigh ? QStringLiteral("#ffaa00")
+                                         : Style::kTextInactive;
+            m_swrProtLed->setStyleSheet(QStringLiteral(
+                "QLabel { color: %1; font-size: 9px; font-weight: bold; }"
+            ).arg(color));
+        };
+        connect(&m_model->swrProt(),
+                &safety::SwrProtectionController::highSwrChanged,
+                this, updateSwrProtLed);
+        // Initialise to current state.
+        updateSwrProtLed(m_model->swrProt().highSwr());
+    }
 
     // ── RF Power slider → TransmitModel::setPower(int) ──────────────────────
     // From Thetis chkMOX_CheckedChanged2 power flow [v2.10.3.13]:
@@ -997,6 +1056,63 @@ void TxApplet::wireControls()
         emit txProfileMenuRequested();
     });
 
+    // ── Plan 4 Cluster C (Task 4 / D2+D3): TX BW spinbox wiring ─────────────
+    //
+    // UI → Model: spinbox valueChanged → setFilterLow / setFilterHigh.
+    //             m_updatingFromModel guard prevents echo loops.
+    // Model → UI: TransmitModel::filterChanged(int,int) → QSignalBlocker on
+    //             both spinboxes, then setValue + refresh status label.
+    // Status label refresh helper (shared by filterChanged and dspModeChanged).
+    auto refreshFilterStatus = [this]() {
+        if (!m_txFilterStatusLabel || !m_model) { return; }
+        SliceModel* slice = m_model->activeSlice();
+        const DSPMode mode = slice ? slice->dspMode() : DSPMode::USB;
+        m_txFilterStatusLabel->setText(
+            m_model->transmitModel().filterDisplayText(mode));
+    };
+
+    if (m_txFilterLowSpin) {
+        connect(m_txFilterLowSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+                this, [this](int v) {
+            if (m_updatingFromModel) { return; }
+            m_model->transmitModel().setFilterLow(v);
+        });
+    }
+    if (m_txFilterHighSpin) {
+        connect(m_txFilterHighSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+                this, [this](int v) {
+            if (m_updatingFromModel) { return; }
+            m_model->transmitModel().setFilterHigh(v);
+        });
+    }
+
+    // Model → spinboxes + status label on filterChanged.
+    connect(&tx, &TransmitModel::filterChanged,
+            this, [this, refreshFilterStatus](int low, int high) {
+        m_updatingFromModel = true;
+        if (m_txFilterLowSpin) {
+            QSignalBlocker bLo(m_txFilterLowSpin);
+            m_txFilterLowSpin->setValue(low);
+        }
+        if (m_txFilterHighSpin) {
+            QSignalBlocker bHi(m_txFilterHighSpin);
+            m_txFilterHighSpin->setValue(high);
+        }
+        m_updatingFromModel = false;
+        refreshFilterStatus();
+    });
+
+    // Status label refresh on DSP mode change (symmetric ↔ asymmetric format).
+    // Piggybacks on the same active-slice connect block used by K.2 above.
+    if (SliceModel* slice = m_model->activeSlice()) {
+        connect(slice, &SliceModel::dspModeChanged,
+                this, [refreshFilterStatus](DSPMode) {
+            refreshFilterStatus();
+        });
+        // Set initial status label text.
+        refreshFilterStatus();
+    }
+
     // ── Phase 3M-1c J.2 ─ 2-TONE button wiring ───────────────────────────────
     // toggled → TwoToneController::setActive.  Echo-guarded.
     connect(m_twoToneBtn, &QPushButton::toggled, this, [this](bool on) {
@@ -1072,6 +1188,21 @@ void TxApplet::syncFromModel()
     if (m_cfcBtn) {
         QSignalBlocker b(m_cfcBtn);
         m_cfcBtn->setChecked(tx.cfcEnabled());
+    }
+
+    // TX BW spinboxes + status label (Plan 4 Cluster C Task 4 / D2+D3+D9)
+    if (m_txFilterLowSpin) {
+        QSignalBlocker bLo(m_txFilterLowSpin);
+        m_txFilterLowSpin->setValue(tx.filterLow());
+    }
+    if (m_txFilterHighSpin) {
+        QSignalBlocker bHi(m_txFilterHighSpin);
+        m_txFilterHighSpin->setValue(tx.filterHigh());
+    }
+    if (m_txFilterStatusLabel) {
+        SliceModel* slice = m_model->activeSlice();
+        const DSPMode mode = slice ? slice->dspMode() : DSPMode::USB;
+        m_txFilterStatusLabel->setText(tx.filterDisplayText(mode));
     }
 
     // Mic-source badge (J.3 Phase 3M-1b)

@@ -266,12 +266,18 @@ warren@wpratt.com
 #include "VfoWidget.h"
 #include "DspParamPopup.h"
 #include "VaxChannelSelector.h"
+#include "gui/AntennaPopupBuilder.h"
 #include "gui/applets/NyiOverlay.h"
 #include "core/BoardCapabilities.h"
 #include "core/SkuUiProfile.h"
 #include "core/HpsdrModel.h"
+#include "gui/StyleConstants.h"
 #include "gui/styles/PopupMenuStyle.h"
+#include "models/FilterPresetStore.h"
+#include "models/SliceModel.h"
+#include "gui/widgets/FilterPresetEditDialog.h"
 
+#include <QGuiApplication>
 #include <QPainter>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -287,50 +293,93 @@ warren@wpratt.com
 
 namespace NereusSDR {
 
-// Styles — matching dark theme from CONTRIBUTING.md
-static const char* kFlatBtn =
-    "QPushButton {"
-    "  background: transparent; border: none;"
-    "  padding: 1px 4px; font-size: 11px; font-weight: bold;"
-    "}";
+// File-local style helpers — §A2 exception: each diverges from canonical
+// Style:: on font-size (13px vs 10px), border colour (#304050 vs #205070),
+// or hover behaviour (border-change vs bg-change). Do NOT collapse into
+// canonical without re-auditing those visual properties first.
 
-static const char* kTabBtn =
-    "QPushButton {"
-    "  background: transparent; border: none;"
-    "  color: #6888a0; font-size: 12px; font-weight: bold;"
-    "  padding: 2px 6px;"
-    "}"
-    "QPushButton:checked {"
-    "  color: #00b4d8;"
-    "  border-bottom: 2px solid #00b4d8;"
-    "}";
+// Transparent/borderless antenna-row buttons (11px, 1px 4px padding).
+// Diverges from buttonBaseStyle(): transparent bg, no border, larger font.
+// Used with colour override suffix: e.g. vfoFlatBtnStyle() + "QPushButton { color: … }"
+static inline QString vfoFlatBtnStyle()
+{
+    return QStringLiteral(
+        "QPushButton {"
+        "  background: transparent; border: none;"
+        "  padding: 1px 4px; font-size: 11px; font-weight: bold;"
+        "}"
+    );
+}
 
-// From AetherSDR VfoWidget.cpp:158-162 — kDspToggle style
-static const char* kDspToggle =
-    "QPushButton {"
-    "  background: #1a2a3a; border: 1px solid #304050;"
-    "  border-radius: 2px; color: #c8d8e8;"
-    "  font-size: 13px; font-weight: bold;"
-    "  padding: 2px 4px; min-width: 32px;"
-    "}"
-    "QPushButton:checked {"
-    "  background: #1a6030; color: #ffffff;"
-    "  border: 1px solid #20a040;"
-    "}"
-    "QPushButton:hover {"
-    "  border: 1px solid #0090e0;"
-    "}";
+// Tab-row selector buttons (12px, underline indicator, muted-blue default).
+// Diverges from buttonBaseStyle(): transparent bg, underline :checked indicator,
+// different font-size and base colour.
+static inline QString vfoTabBtnStyle()
+{
+    return QStringLiteral(
+        "QPushButton {"
+        "  background: transparent; border: none;"
+        "  color: #6888a0; font-size: 12px; font-weight: bold;"
+        "  padding: 2px 6px;"
+        "}"
+        "QPushButton:checked {"
+        "  color: %1;"
+        "  border-bottom: 2px solid %1;"
+        "}"
+    ).arg(NereusSDR::Style::kAccent);
+}
 
-// From VfoStyles.h kModeBtn — blue-checked mode/filter button (AetherSDR pattern)
-static const char* kModeBtn =
-    "QPushButton {"
-    "  background: #1a2a3a; border: 1px solid #304050; border-radius: 2px;"
-    "  color: #c8d8e8; font-size: 13px; font-weight: bold; padding: 3px;"
-    "}"
-    "QPushButton:checked {"
-    "  background: #0070c0; color: #ffffff; border: 1px solid #0090e0;"
-    "}"
-    "QPushButton:hover { border: 1px solid #0090e0; }";
+// DSP toggle buttons (13px, border-change hover, green :checked).
+// From AetherSDR VfoWidget.cpp:158-162.
+// Diverges from buttonBaseStyle()+dspToggleStyle(): 13px vs 10px font-size;
+// unchecked border #304050 vs #205070; hover changes border not background;
+// checked text #ffffff vs kDspToggleText (#80ff80).
+static inline QString vfoDspToggleStyle()
+{
+    return QStringLiteral(
+        "QPushButton {"
+        "  background: %1; border: 1px solid %6;"
+        "  border-radius: 2px; color: %2;"
+        "  font-size: 13px; font-weight: bold;"
+        "  padding: 2px 4px; min-width: 32px;"
+        "}"
+        "QPushButton:checked {"
+        "  background: %3; color: #ffffff;"
+        "  border: 1px solid %4;"
+        "}"
+        "QPushButton:hover {"
+        "  border: 1px solid %5;"
+        "}"
+    ).arg(NereusSDR::Style::kButtonBg,
+          NereusSDR::Style::kTextPrimary,
+          NereusSDR::Style::kDspToggleBg,
+          NereusSDR::Style::kDspToggleBorder,
+          NereusSDR::Style::kBlueBorder,
+          NereusSDR::Style::kOverlayBorder);
+}
+
+// Mode/filter preset buttons (13px, border-change hover, blue :checked).
+// From VfoStyles.h kModeBtn — blue-checked mode/filter button (AetherSDR pattern).
+// Diverges from buttonBaseStyle()+blueCheckedStyle(): 13px vs 10px font-size;
+// unchecked border #304050 vs #205070; hover changes border not background.
+static inline QString vfoModeBtnStyle()
+{
+    return QStringLiteral(
+        "QPushButton {"
+        "  background: %1; border: 1px solid %6; border-radius: 2px;"
+        "  color: %2; font-size: 13px; font-weight: bold; padding: 3px;"
+        "}"
+        "QPushButton:checked {"
+        "  background: %3; color: %4; border: 1px solid %5;"
+        "}"
+        "QPushButton:hover { border: 1px solid %5; }"
+    ).arg(NereusSDR::Style::kButtonBg,
+          NereusSDR::Style::kTextPrimary,
+          NereusSDR::Style::kBlueBg,
+          NereusSDR::Style::kBlueText,
+          NereusSDR::Style::kBlueBorder,
+          NereusSDR::Style::kOverlayBorder);
+}
 
 // ---- Construction ----
 
@@ -424,24 +473,33 @@ void VfoWidget::buildHeaderRow()
     // RX antenna button (blue)
     m_rxAntBtn = new QPushButton(QStringLiteral("ANT1"), this);
     m_rxAntBtn->setObjectName(QStringLiteral("m_rxAntBtn"));
-    m_rxAntBtn->setStyleSheet(QString(kFlatBtn) +
+    m_rxAntBtn->setStyleSheet(vfoFlatBtnStyle() +
         QStringLiteral("QPushButton { color: #4488ff; }"));
     m_rxAntBtn->setFixedHeight(18);
     // From Thetis console.resx:8277 — chkRxAnt.ToolTip
     m_rxAntBtn->setToolTip(QStringLiteral("Toggles receive antenna between RX and TX antennas for RX1"));
     connect(m_rxAntBtn, &QPushButton::clicked, this, [this]() {
+        // B3: AntennaPopupBuilder — capability-gated popup (Phase 3P-I-a T22).
         QMenu menu(this);
-        menu.setStyleSheet(QString::fromLatin1(kPopupMenu));   // Phase 3P-I-a T15 — issue #98
-        for (const QString& ant : m_antennaList) {
-            QAction* act = menu.addAction(ant);
-            act->setCheckable(true);
-            act->setChecked(ant == m_rxAntBtn->text());
+        const QString cur = m_rxAntBtn->text();
+        if (m_popupCaps && m_popupSku) {
+            AntennaPopupBuilder::populate(&menu, *m_popupCaps, *m_popupSku,
+                AntennaPopupBuilder::Mode::RX, cur);
+        } else {
+            for (const QString& ant : m_antennaList) {
+                QAction* act = menu.addAction(ant);
+                act->setCheckable(true);
+                act->setChecked(ant == cur);
+            }
         }
+        menu.setStyleSheet(QString::fromLatin1(kPopupMenu));   // Phase 3P-I-a T15 — issue #98
         QAction* sel = menu.exec(m_rxAntBtn->mapToGlobal(
             QPoint(0, m_rxAntBtn->height())));
         if (sel) {
-            m_rxAntBtn->setText(sel->text());
-            emit rxAntennaChanged(sel->text());
+            const QString text = sel->data().isValid() ? sel->data().toString()
+                                                       : sel->text();
+            m_rxAntBtn->setText(text);
+            emit rxAntennaChanged(text);
         }
     });
     hdr->addWidget(m_rxAntBtn);
@@ -453,7 +511,7 @@ void VfoWidget::buildHeaderRow()
     m_rxBypassBtn = new QPushButton(QStringLiteral("BYPS"), this);
     m_rxBypassBtn->setObjectName(QStringLiteral("m_rxBypassBtn"));
     m_rxBypassBtn->setCheckable(true);
-    m_rxBypassBtn->setStyleSheet(QString(kFlatBtn) +
+    m_rxBypassBtn->setStyleSheet(vfoFlatBtnStyle() +
         QStringLiteral("QPushButton { color: #888888; }"
                        "QPushButton:checked { color: #ffcc44; background: #2a2a1a; }"));
     m_rxBypassBtn->setFixedHeight(18);
@@ -470,25 +528,34 @@ void VfoWidget::buildHeaderRow()
     // TX antenna button (red)
     m_txAntBtn = new QPushButton(QStringLiteral("ANT1"), this);
     m_txAntBtn->setObjectName(QStringLiteral("m_txAntBtn"));
-    m_txAntBtn->setStyleSheet(QString(kFlatBtn) +
+    m_txAntBtn->setStyleSheet(vfoFlatBtnStyle() +
         QStringLiteral("QPushButton { color: #ff4444; }"));
     m_txAntBtn->setFixedHeight(18);
     // NereusSDR native — no single Thetis TX-antenna tooltip (TX ant is configured
     // via Alex board setup in Setup dialog, not via a main-window toggle)
     m_txAntBtn->setToolTip(QStringLiteral("Select TX antenna"));
     connect(m_txAntBtn, &QPushButton::clicked, this, [this]() {
+        // B3: AntennaPopupBuilder TX mode — only main ANT1-3 (Phase 3P-I-a T22).
         QMenu menu(this);
-        menu.setStyleSheet(QString::fromLatin1(kPopupMenu));   // Phase 3P-I-a T15 — issue #98
-        for (const QString& ant : m_antennaList) {
-            QAction* act = menu.addAction(ant);
-            act->setCheckable(true);
-            act->setChecked(ant == m_txAntBtn->text());
+        const QString cur = m_txAntBtn->text();
+        if (m_popupCaps && m_popupSku) {
+            AntennaPopupBuilder::populate(&menu, *m_popupCaps, *m_popupSku,
+                AntennaPopupBuilder::Mode::TX, cur);
+        } else {
+            for (const QString& ant : m_antennaList) {
+                QAction* act = menu.addAction(ant);
+                act->setCheckable(true);
+                act->setChecked(ant == cur);
+            }
         }
+        menu.setStyleSheet(QString::fromLatin1(kPopupMenu));   // Phase 3P-I-a T15 — issue #98
         QAction* sel = menu.exec(m_txAntBtn->mapToGlobal(
             QPoint(0, m_txAntBtn->height())));
         if (sel) {
-            m_txAntBtn->setText(sel->text());
-            emit txAntennaChanged(sel->text());
+            const QString text = sel->data().isValid() ? sel->data().toString()
+                                                       : sel->text();
+            m_txAntBtn->setText(text);
+            emit txAntennaChanged(text);
         }
     });
     hdr->addWidget(m_txAntBtn);
@@ -629,7 +696,7 @@ void VfoWidget::buildTabBar()
 
         auto* btn = new QPushButton(tabLabels[i], this);
         btn->setCheckable(true);
-        btn->setStyleSheet(kTabBtn);
+        btn->setStyleSheet(vfoTabBtnStyle());
         btn->setFixedHeight(24);  // 24px from AetherSDR
         btn->setToolTip(QString::fromLatin1(kTabTooltips[i]));
         connect(btn, &QPushButton::clicked, this, [this, i]() {
@@ -678,7 +745,7 @@ void VfoWidget::buildAudioTab()
     {
         auto* row = new QHBoxLayout;
         auto* label = new QLabel(QStringLiteral("AF"), audioWidget);
-        label->setStyleSheet(QStringLiteral("color: #8899aa; font-size: 11px;"));
+        label->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(NereusSDR::Style::kLabelMid));
         label->setFixedWidth(24);
         row->addWidget(label);
 
@@ -726,7 +793,7 @@ void VfoWidget::buildAudioTab()
             m_agcBtns[i] = new QPushButton(
                 QString::fromLatin1(kAgcLabels[i]), audioWidget);
             m_agcBtns[i]->setCheckable(true);
-            m_agcBtns[i]->setStyleSheet(kDspToggle);
+            m_agcBtns[i]->setStyleSheet(vfoDspToggleStyle());
             m_agcBtns[i]->setToolTip(QString::fromLatin1(kAgcTooltips[i]));
             row->addWidget(m_agcBtns[i]);
         }
@@ -759,7 +826,7 @@ void VfoWidget::buildAudioTab()
     {
         auto* row = new QHBoxLayout;
         auto* label = new QLabel(QStringLiteral("Pan"), audioWidget);
-        label->setStyleSheet(QStringLiteral("color: #8899aa; font-size: 11px;"));
+        label->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(NereusSDR::Style::kLabelMid));
         label->setFixedWidth(24);
         row->addWidget(label);
 
@@ -795,13 +862,13 @@ void VfoWidget::buildAudioTab()
 
         m_muteBtn = new QPushButton(QStringLiteral("Mute"), audioWidget);
         m_muteBtn->setCheckable(true);
-        m_muteBtn->setStyleSheet(kDspToggle);
+        m_muteBtn->setStyleSheet(vfoDspToggleStyle());
         m_muteBtn->setToolTip(QStringLiteral("Mute RX audio output (SetRXAPanelRun)\nFrom Thetis dsp.cs:393 — WDSP patchpanel.c:126"));
         row->addWidget(m_muteBtn);
 
         m_binBtn = new QPushButton(QStringLiteral("BIN"), audioWidget);
         m_binBtn->setCheckable(true);
-        m_binBtn->setStyleSheet(kDspToggle);
+        m_binBtn->setStyleSheet(vfoDspToggleStyle());
         m_binBtn->setToolTip(QStringLiteral("Binaural audio: I/Q channels separate for headphone stereo image (SetRXAPanelBinaural)\nFrom Thetis radio.cs:1145 — WDSP patchpanel.c:187"));
         row->addWidget(m_binBtn);
 
@@ -827,7 +894,7 @@ void VfoWidget::buildAudioTab()
 
         m_sqlBtn = new QPushButton(QStringLiteral("SQL"), audioWidget);
         m_sqlBtn->setCheckable(true);
-        m_sqlBtn->setStyleSheet(kDspToggle);
+        m_sqlBtn->setStyleSheet(vfoDspToggleStyle());
         m_sqlBtn->setFixedWidth(40);
         // From Thetis console.resx:5631 — chkSquelch.ToolTip
         m_sqlBtn->setToolTip(QStringLiteral("Squelch Enable"));
@@ -869,7 +936,7 @@ void VfoWidget::buildAudioTab()
         // First row: AGC-T label + slider + dB value + AUTO badge
         auto* row = new QHBoxLayout;
         m_agcTLabelWidget = new QLabel(QStringLiteral("AGC-T"), m_agcTContainer);
-        m_agcTLabelWidget->setStyleSheet(QStringLiteral("color: #8899aa; font-size: 11px;"));
+        m_agcTLabelWidget->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(NereusSDR::Style::kLabelMid));
         m_agcTLabelWidget->setFixedWidth(40);
         row->addWidget(m_agcTLabelWidget);
 
@@ -877,9 +944,6 @@ void VfoWidget::buildAudioTab()
         m_agcTSlider->setRange(-160, 0);
         m_agcTSlider->setSingleStep(1);
         m_agcTSlider->setValue(-20);
-        // Thetis: slider right = more gain. WDSP threshold is inverse
-        // (lower threshold = more gain), so invert the visual direction.
-        m_agcTSlider->setInvertedAppearance(true);
         m_agcTSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
@@ -959,7 +1023,7 @@ void VfoWidget::buildDspTab()
     auto makeToggle = [dspWidget](const QString& label) -> QPushButton* {
         auto* btn = new QPushButton(label, dspWidget);
         btn->setCheckable(true);
-        btn->setStyleSheet(kDspToggle);
+        btn->setStyleSheet(vfoDspToggleStyle());
         return btn;
     };
 
@@ -1098,7 +1162,7 @@ void VfoWidget::buildDspTab()
         apfRow->addWidget(m_apfTuneSlider);
 
         m_apfTuneLabel = new QLabel(QStringLiteral("0 Hz"), dspWidget);
-        m_apfTuneLabel->setStyleSheet(QStringLiteral("color: #8899aa; font-size: 11px;"));
+        m_apfTuneLabel->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(NereusSDR::Style::kLabelMid));
         m_apfTuneLabel->setFixedWidth(44);
         m_apfTuneLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         apfRow->addWidget(m_apfTuneLabel);
@@ -1207,12 +1271,14 @@ void VfoWidget::buildModeTab()
         // rather than a combo box. No single Thetis control has an equivalent tooltip.
         m_modeCmb->setToolTip(QStringLiteral("Select demodulation mode"));
         // From Thetis enums.cs DSPMode — common modes
+        // 11 modes — parity with RxApplet; order follows Thetis enums.cs DSPMode enum
         m_modeCmb->addItems({
             QStringLiteral("LSB"), QStringLiteral("USB"),
             QStringLiteral("AM"), QStringLiteral("CWL"),
             QStringLiteral("CWU"), QStringLiteral("FM"),
             QStringLiteral("DIGU"), QStringLiteral("DIGL"),
-            QStringLiteral("SAM")
+            QStringLiteral("SAM"), QStringLiteral("DSB"),
+            QStringLiteral("DRM")
         });
         m_modeCmb->setCurrentText(QStringLiteral("USB"));
         m_modeCmb->setStyleSheet(
@@ -1276,7 +1342,7 @@ void VfoWidget::buildXRitTab()
 
         m_ritBtn = new QPushButton(QStringLiteral("RIT"), ritWidget);
         m_ritBtn->setCheckable(true);
-        m_ritBtn->setStyleSheet(kDspToggle);
+        m_ritBtn->setStyleSheet(vfoDspToggleStyle());
         m_ritBtn->setFixedHeight(22);
         // From Thetis console.resx:4335 — chkRIT.ToolTip
         m_ritBtn->setToolTip(QStringLiteral("Receive Incremental Tuning - offset RX frequency by value below in Hz."));
@@ -1309,10 +1375,11 @@ void VfoWidget::buildXRitTab()
 
         m_xitBtn = new QPushButton(QStringLiteral("XIT"), ritWidget);
         m_xitBtn->setCheckable(true);
-        m_xitBtn->setStyleSheet(kDspToggle);
+        m_xitBtn->setStyleSheet(vfoDspToggleStyle());
         m_xitBtn->setFixedHeight(22);
         // From Thetis console.resx:4416 — chkXIT.ToolTip
         // XIT stored in SliceModel for Phase 3M-1 TX use; client offset displayed now.
+        // XIT wired in B6 — TX NCO shift functional.
         m_xitBtn->setToolTip(QStringLiteral("Transmit Incremental Tuning - offset TX frequency by the value below in Hz."));
         row->addWidget(m_xitBtn);
 
@@ -1336,18 +1403,12 @@ void VfoWidget::buildXRitTab()
         vbox->addLayout(row);
     }
 
-    // --- Bottom row: LOCK + STEP cycle ---
+    // --- Bottom row: STEP cycle ---
+    // Lock button removed (B7) — redundant with Close-strip Lock. The Close-strip
+    // Lock is always visible; the X/RIT-tab Lock required a tab switch to access.
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
-
-        m_xritLockBtn = new QPushButton(QStringLiteral("LOCK"), ritWidget);
-        m_xritLockBtn->setCheckable(true);
-        m_xritLockBtn->setStyleSheet(kDspToggle);
-        m_xritLockBtn->setFixedHeight(22);
-        // From Thetis console.resx:5787 — chkVFOLock.ToolTip
-        m_xritLockBtn->setToolTip(QStringLiteral("Keeps the VFO from changing while in the middle of a QSO."));
-        row->addWidget(m_xritLockBtn);
 
         // Step cycle button — NOT NYI (wires to live SliceModel::setStepHz)
         m_stepCycleBtn = new QPushButton(
@@ -1409,22 +1470,13 @@ void VfoWidget::buildXRitTab()
         }
     });
 
-    connect(m_xritLockBtn, &QPushButton::toggled, this, [this](bool on) {
-        if (!m_updatingFromModel) {
-            applyLockedState(on);
-        }
-    });
-
     connect(m_stepCycleBtn, &QPushButton::clicked, this, [this]() {
         emit stepCycleRequested();
     });
 
     // RIT controls are live — no NYI badge.
-    // XIT stored for 3M-1 (TX phase); keep NYI badge with TX note.
-    NyiOverlay::markNyi(m_xitBtn,      QStringLiteral("XIT — TX gated by Phase 3M-1"));
-    NyiOverlay::markNyi(m_xitLabel,    QStringLiteral("XIT — TX gated by Phase 3M-1"));
-    NyiOverlay::markNyi(m_xitZeroBtn,  QStringLiteral("XIT — TX gated by Phase 3M-1"));
-    // LOCK is live in S2.9 — no NYI badge.
+    // XIT controls are live (B6) — no NYI badge.
+    // LOCK removed from this tab (B7) — still present in Close-strip.
 
     m_tabStack->addWidget(ritWidget);
 }
@@ -1441,86 +1493,64 @@ void VfoWidget::rebuildFilterButtons(DSPMode mode)
         delete m_filterBtnContainer->layout();
     }
 
-    auto* grid = new QHBoxLayout(m_filterBtnContainer);
+    auto* grid = new QGridLayout(m_filterBtnContainer);
     grid->setSpacing(2);
     grid->setContentsMargins(0, 0, 0, 0);
 
-    // Per-mode filter presets — ported from Thetis console.cs:5180-5575
-    // Showing a selection of useful widths for each mode family
-    struct Preset { const char* label; int low; int high; };
-
-    QVector<Preset> presets;
-    switch (mode) {
-    case DSPMode::LSB:
-        // From Thetis console.cs:5191-5231 (LSB F1-F10)
-        presets = {{"5.0K",-5100,-100}, {"3.8K",-3900,-100}, {"2.9K",-3000,-100},
-                   {"2.7K",-2800,-100}, {"2.4K",-2500,-100}, {"1.8K",-1900,-100}};
-        break;
-    case DSPMode::USB:
-        // From Thetis console.cs:5233-5273 (USB F1-F10)
-        presets = {{"5.0K",100,5100}, {"3.8K",100,3900}, {"2.9K",100,3000},
-                   {"2.7K",100,2800}, {"2.4K",100,2500}, {"1.8K",100,1900}};
-        break;
-    case DSPMode::CWL:
-    case DSPMode::CWU: {
-        // From Thetis console.cs:5359-5441 — centered on cw_pitch (600 Hz)
-        int sign = (mode == DSPMode::CWL) ? -1 : 1;
-        int p = 600;  // From Thetis display.cs:1023
-        presets = {{"1.0K", sign*(p-500), sign*(p+500)},
-                   {"500",  sign*(p-250), sign*(p+250)},
-                   {"400",  sign*(p-200), sign*(p+200)},
-                   {"250",  sign*(p-125), sign*(p+125)},
-                   {"100",  sign*(p-50),  sign*(p+50)}};
-        break;
-    }
-    case DSPMode::AM:
-    case DSPMode::SAM:
-        // From Thetis console.cs:5443-5525 (AM/SAM F1-F10)
-        presets = {{"20K",-10000,10000}, {"10K",-5000,5000}, {"8.0K",-4000,4000},
-                   {"6.0K",-3000,3000}, {"5.0K",-2500,2500}};
-        break;
-    case DSPMode::FM:
-        presets = {{"16K",-8000,8000}, {"12K",-6000,6000}, {"8.0K",-4000,4000}};
-        break;
-    case DSPMode::DIGU: {
-        // From Thetis console.cs:5317-5357, offset=1500
-        int o = 1500;
-        presets = {{"3.0K",o-1500,o+1500}, {"2.0K",o-1000,o+1000},
-                   {"1.0K",o-500,o+500}, {"600",o-300,o+300}};
-        break;
-    }
-    case DSPMode::DIGL: {
-        // From Thetis console.cs:5275-5315, offset=2210
-        int o = 2210;
-        presets = {{"3.0K",-(o+1500),-(o-1500)}, {"2.0K",-(o+1000),-(o-1000)},
-                   {"1.0K",-(o+500),-(o-500)}, {"600",-(o+300),-(o-300)}};
-        break;
-    }
-    default:
-        presets = {{"10K",-5000,5000}, {"6.0K",-3000,3000}};
-        break;
+    // Stage C2: prefer FilterPresetStore (user overrides over Thetis defaults).
+    // Fall back to SliceModel::presetsForMode if no store is available.
+    // InitFilterPresets source: Thetis console.cs:5180-5575 [v2.10.3.13].
+    // 3-column layout matches RxApplet's 3-column grid (i/kCols × i%kCols).
+    QList<FilterPreset> storePresets;
+    if (m_filterPresetStore) {
+        storePresets = m_filterPresetStore->presetsForMode(mode);
+    } else {
+        const auto pairs = SliceModel::presetsForMode(mode);
+        for (int idx = 0; idx < pairs.size(); ++idx) {
+            FilterPreset fp;
+            fp.name = QStringLiteral("F%1").arg(idx + 1);
+            fp.low  = pairs[idx].first;
+            fp.high = pairs[idx].second;
+            storePresets.append(fp);
+        }
     }
 
     auto [defLow, defHigh] = SliceModel::defaultFilterForMode(mode);
 
-    for (const auto& p : presets) {
-        auto* btn = new QPushButton(QString::fromLatin1(p.label), m_filterBtnContainer);
+    static constexpr int kCols = 3;
+    const int count = qMin(storePresets.size(), 10);
+
+    for (int i = 0; i < count; ++i) {
+        const FilterPreset& fp = storePresets[i];
+        const int low  = fp.low;
+        const int high = fp.high;
+        const int widthHz = qAbs(high - low);
+        QString label;
+        if (widthHz >= 1000) {
+            label = QStringLiteral("%1K").arg(widthHz / 1000.0, 0, 'g', 2);
+        } else {
+            label = QStringLiteral("%1").arg(widthHz);
+        }
+
+        auto* btn = new QPushButton(label, m_filterBtnContainer);
         btn->setCheckable(true);
-        btn->setStyleSheet(kModeBtn);
-        btn->setFixedHeight(26);
-        int low = p.low;
-        int high = p.high;
+        btn->setStyleSheet(vfoModeBtnStyle());
+        btn->setFixedHeight(22);
         btn->setProperty("filterLow", low);
         btn->setProperty("filterHigh", high);
-        // Tooltip: show the filter edges so the user knows what they're selecting
-        btn->setToolTip(QStringLiteral("Select filter preset: %1 Hz to %2 Hz")
+        // Tooltip: show name + filter edges
+        btn->setToolTip(QStringLiteral("%1: %2 Hz to %3 Hz")
+            .arg(fp.name.isEmpty() ? QStringLiteral("F%1").arg(i + 1) : fp.name)
             .arg(low).arg(high));
         // Check if this matches current filter
         if (low == defLow && high == defHigh) {
             btn->setChecked(true);
         }
-        // Exclusive toggle: click selects this preset, emits filterChanged
-        connect(btn, &QPushButton::clicked, this, [this, low, high, btn](bool checked) {
+        // Exclusive toggle: click selects this preset, emits filterChanged.
+        // Shift+click also emits txFilterMatchRequested so the TX passband
+        // snaps to the same audio Hz range as the RX (Thetis-style
+        // alignment shortcut).
+        connect(btn, &QPushButton::clicked, this, [this, low, high, mode, btn](bool checked) {
             if (!checked) {
                 // Don't allow unchecking the active preset — keep it toggled on
                 btn->setChecked(true);
@@ -1534,12 +1564,78 @@ void VfoWidget::rebuildFilterButtons(DSPMode mode)
             }
             if (!m_updatingFromModel) {
                 emit filterChanged(low, high);
+                if (QGuiApplication::keyboardModifiers() & Qt::ShiftModifier) {
+                    // Convert IQ-space preset to TX audio Hz: LSB family
+                    // flips magnitude order, USB family is identity,
+                    // symmetric uses (0, |high|).
+                    const bool isSymmetric =
+                        mode == DSPMode::AM || mode == DSPMode::SAM
+                     || mode == DSPMode::DSB || mode == DSPMode::FM
+                     || mode == DSPMode::DRM;
+                    int audioLow, audioHigh;
+                    if (isSymmetric) {
+                        audioLow  = 0;
+                        audioHigh = qAbs(high);
+                    } else {
+                        const int aLow  = qAbs(low);
+                        const int aHigh = qAbs(high);
+                        audioLow  = qMin(aLow, aHigh);
+                        audioHigh = qMax(aLow, aHigh);
+                    }
+                    emit txFilterMatchRequested(audioLow, audioHigh);
+                }
             }
         });
-        grid->addWidget(btn);
+
+        // Stage C2: right-click context menu → edit / reset this preset.
+        btn->setContextMenuPolicy(Qt::CustomContextMenu);
+        const int slot = i;
+        connect(btn, &QPushButton::customContextMenuRequested, this,
+                [this, slot, mode](const QPoint& pos) {
+            if (!m_filterPresetStore) { return; }
+            QMenu menu(this);
+            menu.setStyleSheet(QString::fromLatin1(kPopupMenu));  // Stage C2 — issue #98 parity
+            QAction* editAct  = menu.addAction(QStringLiteral("Edit this preset…"));
+            QAction* resetAct = menu.addAction(QStringLiteral("Reset this preset"));
+            QAction* chosen = menu.exec(qobject_cast<QWidget*>(sender())->mapToGlobal(pos));
+            if (chosen == editAct) {
+                auto* dlg = new FilterPresetEditDialog(m_filterPresetStore, mode, slot, this);
+                dlg->setAttribute(Qt::WA_DeleteOnClose);
+                dlg->exec();
+            } else if (chosen == resetAct) {
+                m_filterPresetStore->resetPreset(mode, slot);
+            }
+        });
+
+        grid->addWidget(btn, i / kCols, i % kCols);
     }
 
     m_filterBtnContainer->setLayout(grid);
+}
+
+// ---- Stage C2: FilterPresetStore coupling ----
+
+void VfoWidget::setFilterPresetStore(FilterPresetStore* store)
+{
+    // Disconnect from old store if any.
+    if (m_filterPresetStore) {
+        disconnect(m_filterPresetStore, &FilterPresetStore::presetsChanged,
+                   this, nullptr);
+    }
+    m_filterPresetStore = store;
+    if (m_filterPresetStore) {
+        connect(m_filterPresetStore, &FilterPresetStore::presetsChanged,
+                this, [this](DSPMode mode) {
+            // Only rebuild when the changed mode matches the currently-shown mode.
+            if (mode == m_currentMode) {
+                rebuildFilterButtons(mode);
+                // The active highlight is restored by setFilter() which the model
+                // will call (or already has set via the filterChanged guard path).
+            }
+        });
+    }
+    // Rebuild immediately so existing buttons reflect the store state.
+    rebuildFilterButtons(m_currentMode);
 }
 
 // ---- State setters (guarded) ----
@@ -1971,22 +2067,28 @@ void VfoWidget::setSlice(SliceModel* slice)
 // ---- Floating control buttons (AetherSDR pattern) ----
 // Close, Lock, Record, Play — rendered on parent SpectrumWidget
 
+// Plan 4 follow-up: opaque backgrounds so the floating buttons remain
+// visible when a coloured filter overlay (TX or RX) is painted underneath
+// them.  Original alpha=15/40 was nearly transparent; against the new
+// translucent filter bands the buttons effectively disappeared.  The dark
+// blue base matches the spectrum chrome palette and stays distinct from
+// either filter colour.
 static const char* kFloatingBtn =
     "QPushButton {"
-    "  background: rgba(255,255,255,15); border: none;"
+    "  background: rgba(20,30,50,230); border: 1px solid rgba(80,100,130,180);"
     "  border-radius: 10px; color: #c8d8e8; font-size: 11px; padding: 0;"
     "}"
     "QPushButton:hover {"
-    "  background: rgba(255,255,255,40);"
+    "  background: rgba(40,55,80,240);"
     "}";
 
 static const char* kFloatingBtnClose =
     "QPushButton {"
-    "  background: rgba(255,255,255,15); border: none;"
+    "  background: rgba(20,30,50,230); border: 1px solid rgba(80,100,130,180);"
     "  border-radius: 10px; color: #c8d8e8; font-size: 11px; padding: 0;"
     "}"
     "QPushButton:hover {"
-    "  background: rgba(204,32,32,180); color: #ffffff;"
+    "  background: rgba(204,32,32,220); color: #ffffff;"
     "}";
 
 void VfoWidget::buildFloatingButtons()
@@ -2049,9 +2151,10 @@ void VfoWidget::buildFloatingButtons()
 }
 
 // ---- Lock state: applyLockedState + setLocked (S1.8a review — I3) ----
-// applyLockedState is the single path for all lock changes — called by both
-// the floating m_lockBtn toggled lambda and the X/RIT m_xritLockBtn toggled
-// lambda.  setLocked is the inbound edge driven by SliceModel::lockedChanged.
+// applyLockedState is the single path for all lock changes — called by the
+// floating m_lockBtn toggled lambda.  setLocked is the inbound edge driven
+// by SliceModel::lockedChanged.
+// X/RIT-tab Lock removed in B7 (redundant with Close-strip Lock).
 
 void VfoWidget::applyLockedState(bool on)
 {
@@ -2076,13 +2179,6 @@ void VfoWidget::applyLockedState(bool on)
         } else {
             m_lockBtn->setStyleSheet(kFloatingBtn);
         }
-        m_updatingFromModel = wasUpdating;
-    }
-
-    // Drive X/RIT lock button — same pattern.
-    if (m_xritLockBtn) {
-        m_updatingFromModel = true;
-        m_xritLockBtn->setChecked(on);
         m_updatingFromModel = wasUpdating;
     }
 
@@ -2130,6 +2226,7 @@ void VfoWidget::positionFloatingButtons()
     }
 
     int btnY = y();
+
     QPushButton* btns[] = {m_closeBtn, m_lockBtn, m_recBtn, m_playBtn};
     for (QPushButton* btn : btns) {
         btn->move(btnX, btnY);
@@ -2407,6 +2504,9 @@ void VfoWidget::setBoardCapabilities(const BoardCapabilities& caps)
     if (m_rxAntBtn) { m_rxAntBtn->setVisible(showAnt); }
     if (m_txAntBtn) { m_txAntBtn->setVisible(showAnt); }
     if (m_rxBypassBtn) { m_rxBypassBtn->setVisible(m_hasRxBypassRelay && m_hasRxOutOnTxUi); }
+
+    // B3: store for AntennaPopupBuilder in popup lambdas.
+    m_popupCaps = caps;
 }
 
 // Phase 3P-I-b T9 — per-SKU BYPS button gate. Called by MainWindow on
@@ -2423,6 +2523,9 @@ void VfoWidget::setHpsdrSku(HPSDRModel sku)
     const SkuUiProfile profile = skuUiProfileFor(sku);
     m_hasRxOutOnTxUi = profile.hasRxOutOnTx;
     if (m_rxBypassBtn) { m_rxBypassBtn->setVisible(m_hasRxBypassRelay && m_hasRxOutOnTxUi); }
+
+    // B3: store for AntennaPopupBuilder in popup lambdas.
+    m_popupSku = profile;
 }
 
 // Phase 3P-I-b T9 — reflect AlexController::rxOutOnTx into the BYPS button.

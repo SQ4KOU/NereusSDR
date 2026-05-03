@@ -914,6 +914,140 @@ std::pair<int, int> SliceModel::defaultFilterForMode(DSPMode mode)
 }
 
 // ---------------------------------------------------------------------------
+// Full per-mode filter preset table
+// ---------------------------------------------------------------------------
+
+// From Thetis console.cs:5180-5575 [v2.10.3.13] — InitFilterPresets (F1-F10 per mode).
+// Returns (low_hz, high_hz) pairs in Thetis F1→F10 order. The full list drives
+// RxApplet's 10-button filter grid; VfoWidget uses commonPresetsForMode() (a subset).
+QList<std::pair<int, int>> SliceModel::presetsForMode(DSPMode mode)
+{
+    // From Thetis display.cs:1023 [v2.10.3.13]
+    static constexpr int kCwPitch    = 600;
+    // From Thetis console.cs:14636 [v2.10.3.13]
+    static constexpr int kDiguOffset = 1500;
+    // From Thetis console.cs:14671 [v2.10.3.13]
+    static constexpr int kDiglOffset = 2210;
+
+    switch (mode) {
+    case DSPMode::LSB:
+        // From Thetis console.cs:5191-5231 [v2.10.3.13] — LSB F1-F10
+        return { {-5100,-100}, {-4500,-100}, {-3900,-100}, {-3300,-100},
+                 {-3000,-100}, {-2700,-100}, {-2400,-100}, {-1800,-100},
+                 {-1200,-100}, {-600,-100} };
+    case DSPMode::USB:
+        // From Thetis console.cs:5233-5273 [v2.10.3.13] — USB F1-F10
+        return { {100,5100}, {100,4500}, {100,3900}, {100,3300},
+                 {100,3000}, {100,2700}, {100,2400}, {100,1800},
+                 {100,1200}, {100,600} };
+    case DSPMode::DSB:
+        // From Thetis console.cs:5527-5575 [v2.10.3.13] — DSB F1-F10, symmetric
+        return { {-5100,5100}, {-4500,4500}, {-3900,3900}, {-3300,3300},
+                 {-3000,3000}, {-2700,2700}, {-2400,2400}, {-1800,1800},
+                 {-1200,1200}, {-600,600} };
+    case DSPMode::CWL:
+        // From Thetis console.cs:5359-5399 [v2.10.3.13] — CWL F1-F10 (lower sideband CW)
+        return { {-(kCwPitch+750), -(kCwPitch-750)}, {-(kCwPitch+500), -(kCwPitch-500)},
+                 {-(kCwPitch+400), -(kCwPitch-400)}, {-(kCwPitch+300), -(kCwPitch-300)},
+                 {-(kCwPitch+200), -(kCwPitch-200)}, {-(kCwPitch+125), -(kCwPitch-125)},
+                 {-(kCwPitch+50),  -(kCwPitch-50)},  {-(kCwPitch+25),  -(kCwPitch-25)},
+                 {-(kCwPitch+12),  -(kCwPitch-12)},  {-(kCwPitch+6),   -(kCwPitch-6)} };
+    case DSPMode::CWU:
+        // From Thetis console.cs:5401-5441 [v2.10.3.13] — CWU F1-F10 (upper sideband CW)
+        return { {kCwPitch-750, kCwPitch+750}, {kCwPitch-500, kCwPitch+500},
+                 {kCwPitch-400, kCwPitch+400}, {kCwPitch-300, kCwPitch+300},
+                 {kCwPitch-200, kCwPitch+200}, {kCwPitch-125, kCwPitch+125},
+                 {kCwPitch-50,  kCwPitch+50},  {kCwPitch-25,  kCwPitch+25},
+                 {kCwPitch-12,  kCwPitch+12},  {kCwPitch-6,   kCwPitch+6} };
+    case DSPMode::FM:
+        // From Thetis console.cs:5527 region [v2.10.3.13] — FM uses wide symmetric filters
+        return { {-8000,8000}, {-6000,6000}, {-4000,4000} };
+    case DSPMode::AM:
+        // From Thetis console.cs:5443-5483 [v2.10.3.13] — AM F1-F10, symmetric
+        return { {-10000,10000}, {-6000,6000}, {-5000,5000},
+                 {-4000,4000},   {-3000,3000}, {-2500,2500},
+                 {-2000,2000},   {-1500,1500}, {-1000,1000}, {-500,500} };
+    case DSPMode::DIGU:
+        // From Thetis console.cs:5317-5357 [v2.10.3.13] — DIGU F1-F10
+        return { {kDiguOffset-3000, kDiguOffset+3000}, {kDiguOffset-2000, kDiguOffset+2000},
+                 {kDiguOffset-1500, kDiguOffset+1500}, {kDiguOffset-1000, kDiguOffset+1000},
+                 {kDiguOffset-500,  kDiguOffset+500},  {kDiguOffset-300,  kDiguOffset+300},
+                 {kDiguOffset-150,  kDiguOffset+150},  {kDiguOffset-100,  kDiguOffset+100},
+                 {kDiguOffset-50,   kDiguOffset+50},   {kDiguOffset-25,   kDiguOffset+25} };
+    case DSPMode::SPEC:
+        // Passthrough wideband
+        return { {-5000,5000} };
+    case DSPMode::DIGL:
+        // From Thetis console.cs:5275-5315 [v2.10.3.13] — DIGL F1-F10
+        return { {-(kDiglOffset+3000), -(kDiglOffset-3000)}, {-(kDiglOffset+2000), -(kDiglOffset-2000)},
+                 {-(kDiglOffset+1500), -(kDiglOffset-1500)}, {-(kDiglOffset+1000), -(kDiglOffset-1000)},
+                 {-(kDiglOffset+500),  -(kDiglOffset-500)},  {-(kDiglOffset+300),  -(kDiglOffset-300)},
+                 {-(kDiglOffset+150),  -(kDiglOffset-150)},  {-(kDiglOffset+100),  -(kDiglOffset-100)},
+                 {-(kDiglOffset+50),   -(kDiglOffset-50)},   {-(kDiglOffset+25),   -(kDiglOffset-25)} };
+    case DSPMode::SAM:
+        // From Thetis console.cs:5485-5525 [v2.10.3.13] — SAM F1-F10, symmetric
+        return { {-10000,10000}, {-6000,6000}, {-5000,5000},
+                 {-4000,4000},   {-3000,3000}, {-2500,2500},
+                 {-2000,2000},   {-1500,1500}, {-1000,1000}, {-500,500} };
+    case DSPMode::DRM:
+        // DRM: wide digital AM-like filters
+        return { {-10000,10000}, {-5000,5000} };
+    }
+    // Fallback
+    return { {100, 3000} };
+}
+
+// ---------------------------------------------------------------------------
+// Common (compact) per-mode filter preset subset
+// ---------------------------------------------------------------------------
+
+// Per Thetis main-panel filter buttons. Subset of presetsForMode() — 5-6 entries per mode
+// for VfoWidget's compact flag context. Values match Thetis console.cs F-button layout.
+QList<std::pair<int, int>> SliceModel::commonPresetsForMode(DSPMode mode)
+{
+    switch (mode) {
+    case DSPMode::USB:
+        return {{100,2400}, {100,2700}, {100,2900}, {100,3000}, {100,3200}};
+    case DSPMode::LSB:
+        return {{-2400,-100}, {-2700,-100}, {-2900,-100}, {-3000,-100}, {-3200,-100}};
+    case DSPMode::CWU:
+    case DSPMode::CWL: {
+        // From Thetis display.cs:1023 [v2.10.3.13]
+        static constexpr int kCwPitch = 600;
+        const int sign = (mode == DSPMode::CWL) ? -1 : 1;
+        return { {sign*(kCwPitch-50),  sign*(kCwPitch+50)},
+                 {sign*(kCwPitch-100), sign*(kCwPitch+100)},
+                 {sign*(kCwPitch-150), sign*(kCwPitch+150)},
+                 {sign*(kCwPitch-250), sign*(kCwPitch+250)},
+                 {sign*(kCwPitch-500), sign*(kCwPitch+500)} };
+    }
+    case DSPMode::AM:
+    case DSPMode::SAM:
+        return {{-2900,2900}, {-3500,3500}, {-5000,5000}};
+    case DSPMode::FM:
+        return {{-3000,3000}, {-5000,5000}, {-8000,8000}};
+    case DSPMode::DIGU:
+    case DSPMode::DIGL: {
+        // From Thetis console.cs:14636,14671 [v2.10.3.13]
+        //reset preset filter's center frequency - W4TME  [original inline comment from console.cs:14647,14682]
+        const int o = (mode == DSPMode::DIGU) ? 1500 : 2210;
+        const int sign = (mode == DSPMode::DIGL) ? -1 : 1;
+        return { {sign*(o-1350), sign*(o+1350)},
+                 {sign*(o-1450), sign*(o+1450)},
+                 {sign*(o-1500), sign*(o+1500)},
+                 {sign*(o-1650), sign*(o+1650)},
+                 {sign*(o-1750), sign*(o+1750)} };
+    }
+    case DSPMode::DSB:
+        return {{-2900,2900}, {-3500,3500}};
+    case DSPMode::DRM:
+        return {{-5000,5000}};
+    default:
+        return {{100, 3000}};
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Mode name utilities
 // ---------------------------------------------------------------------------
 
@@ -1083,6 +1217,12 @@ void SliceModel::saveToSettings(Band band)
     s.setValue(sp + QStringLiteral("RxAntenna"),  m_rxAntenna);
     s.setValue(sp + QStringLiteral("TxAntenna"),  m_txAntenna);
 
+    // Track the most recently saved band so RadioModel::loadSliceState() on
+    // the next launch can land on the user's actual last-used frequency,
+    // not the panadapter's 14.225 MHz default. Per-band Frequency keys
+    // already store the per-band freq; this just records "which band was
+    // active last." Read via SliceModel::loadLastBandFromSettings().
+    s.setValue(sp + QStringLiteral("LastBand"), bandKeyName(band));
 }
 
 void SliceModel::restoreFromSettings(Band band)
@@ -1380,6 +1520,31 @@ void SliceModel::migrateLegacyKeys()
     s.remove(QStringLiteral("VfoRfGain"));
     s.remove(QStringLiteral("VfoRxAntenna"));
     s.remove(QStringLiteral("VfoTxAntenna"));
+}
+
+// Reads Slice<N>/LastBand and parses it back to a Band. Returns
+// std::nullopt on missing key (fresh install / pre-LastBand settings)
+// or unparseable values. Static so RadioModel can call this before
+// constructing any slice.
+std::optional<Band> SliceModel::loadLastBandFromSettings(int sliceIndex)
+{
+    auto& s = AppSettings::instance();
+    const QString key = slicePrefix(sliceIndex) + QStringLiteral("LastBand");
+    if (!s.contains(key)) {
+        return std::nullopt;
+    }
+    const QString name = s.value(key).toString();
+    if (name.isEmpty()) {
+        return std::nullopt;
+    }
+    // bandFromName handles both label form ("20m") and short form ("20"),
+    // plus GEN/WWV/XVTR. Falls back to Band::GEN on unknown input — guard
+    // against that so a corrupted key doesn't silently land on GEN.
+    const Band parsed = bandFromName(name);
+    if (parsed == Band::GEN && name != QLatin1String("GEN")) {
+        return std::nullopt;
+    }
+    return parsed;
 }
 
 // ---------------------------------------------------------------------------

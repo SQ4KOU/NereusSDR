@@ -104,6 +104,7 @@
 //  unique_ptr<MicReBlocker> destructor.  The TX pump architecture
 //  redesign (2026-04-29) deleted MicReBlocker; replaced with
 //  TxWorkerThread which drives TxChannel directly.)
+#include <algorithm>  // std::clamp (used by computeWireDriveForTest)
 #include <memory>  // std::unique_ptr
 
 namespace NereusSDR {
@@ -126,6 +127,8 @@ class MicProfileManager;
 class TwoToneController;
 // 3M-1c TX pump architecture redesign — TxWorkerThread.
 class TxWorkerThread;
+// Stage C2 filter preset editor — user-override layer over Thetis defaults.
+class FilterPresetStore;
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
@@ -313,6 +316,11 @@ public:
     // Non-owning; lifetime is RadioModel's lifetime.
     TwoToneController* twoToneController() const { return m_twoToneController; }
 
+    // Stage C2: expose FilterPresetStore so RxApplet, VfoWidget, and
+    // FilterPresetsSetupPage can read/write user-customised presets.
+    // Constructed once in RadioModel ctor; lifetime is RadioModel's lifetime.
+    FilterPresetStore* filterPresetStore() const { return m_filterPresetStore; }
+
     // 3M-1a G.1: expose TxChannel view so TxApplet and G.4 TUNE function
     // can call setTuneTone / setRunning without depending on WdspEngine.
     // Non-owning; WdspEngine owns the channel. Null until WDSP initializes.
@@ -482,6 +490,10 @@ public:
     // state handler, and override board capabilities. Production code
     // must never use these.
     void injectConnectionForTest(RadioConnection* conn) { m_connection = conn; }
+    // B6 — XIT: allow tests to trigger wireSliceSignals() directly after
+    // injecting a mock connection, mirroring what wireConnectionSignals() does
+    // when a real radio connects.
+    void wireSliceSignalsForTest() { wireSliceSignals(); }
     void setLastBandForTest(NereusSDR::Band b) {
         const bool cross = (b != m_lastBand);
         m_lastBand = b;
@@ -538,6 +550,36 @@ public:
         emit currentRadioChanged(NereusSDR::RadioInfo{});
     }
     NereusSDR::Band lastBand() const { return m_lastBand; }
+
+    // P1 full-parity §3.4 test hook — invoke the per-sample PA telemetry
+    // handler directly without spinning up the full wireConnectionSignals
+    // pipeline (which constructs DSP threads and the RxDspWorker).  Mirrors
+    // the existing on*ForTest pattern (setConnectionStateForTest /
+    // onConnectedForTest / setLastBandForTest).  Production code reaches
+    // the same handler via the lambda installed in wireConnectionSignals.
+    void handlePaTelemetryForTest(quint16 fwdRaw, quint16 revRaw,
+                                  quint16 exciterRaw, quint16 userAdc0Raw,
+                                  quint16 userAdc1Raw, quint16 supplyRaw) {
+        handlePaTelemetry(fwdRaw, revRaw, exciterRaw,
+                          userAdc0Raw, userAdc1Raw, supplyRaw);
+    }
+
+    // P1 full-parity §3.5 test seam — pure-function counterpart of the
+    // percent-to-wire-byte SWR-foldback formula inlined at every
+    // setTxDrive call site (voice powerChanged lambda, TUNE-engage,
+    // TUNE-restore).  Tests assert against this helper to verify the
+    // formula in isolation; production callsites use the same three-line
+    // expression (see RadioModel.cpp).  A regression in the helper is a
+    // regression in the inlined production code by construction.
+    //
+    // Source: mi0bot NetworkIO.cs:209-211 [v2.10.3.14-beta1]
+    //   int i = (int)(255 * f * _swr_protect);   // f normalised 0..1,
+    //                                            // _swr_protect ≤ 1.0
+    static int computeWireDriveForTest(int powerPct, float swrProtectFactor) {
+        const float f          = std::clamp(powerPct / 100.0f, 0.0f, 1.0f);
+        const float swrProtect = std::clamp(swrProtectFactor, 0.0f, 1.0f);
+        return std::clamp(int(255.0f * f * swrProtect), 0, 255);
+    }
 
     // 3M-1b L.1 test seams: expose raw pointers into the mic-source strategy
     // objects so ownership, threading, and lifecycle tests can inspect state
@@ -754,6 +796,23 @@ signals:
     // Subscribers should uncheck the TUN button and display `reason` to the user.
     void tuneRefused(const QString& reason);
 
+    // ── Plan 4 D8: per-profile TX filter relay signal ─────────────────────────
+    //
+    // Intermediate signal that carries the 3-arg filter request (audio Hz + mode)
+    // from the main-thread lambda (subscribed to TransmitModel::filterChanged)
+    // across to TxChannel::requestFilterChange on the audio thread.
+    //
+    // TransmitModel lives on the main thread; TxChannel lives on TxWorkerThread
+    // after RadioModel's moveToThread call.  A direct lambda-connect from
+    // TransmitModel::filterChanged → m_txChannel lambda would fire on the main
+    // thread (because TransmitModel is the sender and its thread is main).
+    // Routing through this intermediate signal ensures Qt auto-connection
+    // selects QueuedConnection for TxChannel::requestFilterChange, which runs
+    // the slot on TxWorkerThread where the debounce timer is live.
+    //
+    // NereusSDR-original glue (no Thetis equivalent needed).
+    void txFilterRequest(int audioLowHz, int audioHighHz, NereusSDR::DSPMode mode);
+
 private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
 
@@ -775,10 +834,35 @@ private:
     void wireConnectionSignals(int wdspInSize);
     void wireSliceSignals();
     void teardownConnection();
+
+    // P1 full-parity §3.4 — per-sample PA telemetry handler.
+    // Applies per-board ADC→watts scaling (scaleFwdPowerWatts /
+    // scaleRevPowerWatts / scalePaVolts / scalePaAmps), routes the FWD
+    // reading through CalibrationController::calibratedFwdPowerWatts()
+    // (Thetis console.cs:6691-6724 CalibratedPAPower [v2.10.3.13]) and
+    // publishes the calibrated values to RadioStatus + SwrProtectionController.
+    //
+    // Wired by wireConnectionSignals to RadioConnection::paTelemetryUpdated
+    // via a thin forwarding lambda.  Extracted from that lambda so the test
+    // hook handlePaTelemetryForTest can drive it directly without spinning
+    // up the full wireConnectionSignals DSP-thread pipeline.
+    void handlePaTelemetry(quint16 fwdRaw, quint16 revRaw, quint16 exciterRaw,
+                           quint16 userAdc0Raw, quint16 userAdc1Raw,
+                           quint16 supplyRaw);
     void loadSliceState(SliceModel* slice);
     void saveSliceState(SliceModel* slice);
     void scheduleSettingsSave();
 
+public:
+    // Force-run any pending coalesced slice save synchronously. Call this
+    // from app-quit paths (MainWindow::closeEvent, aboutToQuit) and at the
+    // top of teardownConnection() so the 500 ms debounce in
+    // scheduleSettingsSave() can't swallow the user's last AF / step / freq
+    // tweak when they immediately close the app. No-op when nothing's
+    // pending. Idempotent — calling repeatedly is safe.
+    void flushPendingSettingsSave();
+
+private:
     // Sub-components (owned, main thread)
     RadioDiscovery*  m_discovery{nullptr};
     ReceiverManager* m_receiverManager{nullptr};
@@ -1086,6 +1170,10 @@ private:
     // happens inside stopPump, but reset only after the worker is torn
     // down so the consumer side is fully disconnected).
     std::unique_ptr<class TxMicSource> m_txMicSource;
+
+    // Stage C2 — filter preset user-override store.
+    // Constructed in RadioModel ctor; QObject child so dtor cleans up.
+    FilterPresetStore* m_filterPresetStore{nullptr};
 };
 
 } // namespace NereusSDR

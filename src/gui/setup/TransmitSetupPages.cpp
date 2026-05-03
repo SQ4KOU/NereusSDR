@@ -11,6 +11,8 @@
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
 //   2026-04-26 — Phase 3M-1a H.4: Power & PA page activation: Max Power
+//                 [page renamed to "Power" 2026-05-02 in IA reshape Phase 6;
+//                  PA-specific groups now live under the top-level PA category]
 //                 slider wired to TransmitModel::setPower; per-band tune-
 //                 power spinboxes wired to TransmitModel::setTunePowerForBand;
 //                 ATTOnTX checkbox wired to StepAttenuatorController::setAttOnTxEnabled;
@@ -88,6 +90,7 @@
 //============================================================================================//
 
 #include "TransmitSetupPages.h"
+#include "gui/StyleConstants.h"
 #include "core/AppSettings.h"
 #include "core/MicProfileManager.h"
 #include "models/RadioModel.h"
@@ -113,94 +116,47 @@
 
 namespace NereusSDR {
 
-namespace {
-
-void applyDarkStyle(QWidget* w)
-{
-    w->setStyleSheet(QStringLiteral(
-        "QGroupBox { color: #8090a0; font-size: 11px;"
-        "  border: 1px solid #203040; border-radius: 4px;"
-        "  margin-top: 8px; padding-top: 4px; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
-        "QLabel { color: #c8d8e8; }"
-        "QComboBox { background: #1a2a3a; color: #c8d8e8; border: 1px solid #203040;"
-        "  border-radius: 3px; padding: 2px 6px; }"
-        "QComboBox::drop-down { border: none; }"
-        "QComboBox QAbstractItemView { background: #1a2a3a; color: #c8d8e8;"
-        "  selection-background-color: #00b4d8; }"
-        "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -4px 0;"
-        "  border-radius: 6px; }"
-        "QSlider::sub-page:horizontal { background: #00b4d8; border-radius: 2px; }"
-        "QSpinBox, QDoubleSpinBox { background: #1a2a3a; color: #c8d8e8;"
-        "  border: 1px solid #203040; border-radius: 3px; padding: 1px 4px; }"
-        // Up/down buttons: rely on Fusion + app-level dark palette
-        // (see main.cpp / AppTheme.h). Styling the subcontrols here
-        // would erase the native arrow images.
-        "QCheckBox { color: #c8d8e8; }"
-        "QCheckBox::indicator { width: 14px; height: 14px; background: #1a2a3a;"
-        "  border: 1px solid #203040; border-radius: 2px; }"
-        "QCheckBox::indicator:checked { background: #00b4d8; border-color: #00b4d8; }"
-        "QLineEdit { background: #1a2a3a; color: #c8d8e8; border: 1px solid #203040;"
-        "  border-radius: 3px; padding: 2px 6px; }"
-        "QPushButton { background: #1a2a3a; color: #c8d8e8; border: 1px solid #203040;"
-        "  border-radius: 3px; padding: 3px 12px; }"
-        "QPushButton:hover { background: #203040; }"
-        "QPushButton:pressed { background: #00b4d8; color: #0f0f1a; }"
-    ));
-}
-
-} // anonymous namespace
-
 // ---------------------------------------------------------------------------
-// PowerPaPage
+// PowerPage
 // ---------------------------------------------------------------------------
 
-PowerPaPage::PowerPaPage(RadioModel* model, QWidget* parent)
-    : SetupPage(QStringLiteral("Power & PA"), model, parent)
+PowerPage::PowerPage(RadioModel* model, QWidget* parent)
+    : SetupPage(QStringLiteral("Power"), model, parent)
 {
     buildUI();
 }
 
-void PowerPaPage::buildUI()
+void PowerPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     buildPowerGroup();
     buildTunePowerGroup();
-
-    // --- Section: PA ---
-    auto* paGroup = new QGroupBox(QStringLiteral("PA"), this);
-    auto* paForm  = new QFormLayout(paGroup);
-    paForm->setSpacing(6);
-
-    m_perBandGainLabel = new QLabel(QStringLiteral("(Per-band gain table — not yet implemented)"), paGroup);
-    m_perBandGainLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: #607080; font-style: italic; }"));
-    m_perBandGainLabel->setEnabled(false);
-    paForm->addRow(QStringLiteral("Band Gain:"), m_perBandGainLabel);
-
-    m_fanControlCombo = new QComboBox(paGroup);
-    m_fanControlCombo->addItems({QStringLiteral("Off"), QStringLiteral("Low"),
-                                 QStringLiteral("Med"), QStringLiteral("High"),
-                                 QStringLiteral("Auto")});
-    m_fanControlCombo->setCurrentText(QStringLiteral("Auto"));
-    m_fanControlCombo->setEnabled(false);  // NYI
-    m_fanControlCombo->setToolTip(QStringLiteral("PA fan control — not yet implemented"));
-    paForm->addRow(QStringLiteral("Fan Control:"), m_fanControlCombo);
-
-    contentLayout()->addWidget(paGroup);
-
     buildSwrProtectionGroup();
     buildExternalTxInhibitGroup();
     buildBlockTxAntennaGroup();
     buildHfPaGroup();
 
+    // TODO(future): Thetis Transmit tab also has these groups not yet
+    // covered by NereusSDR. Tracked separately from this PR; pre-existing
+    // gaps, not introduced by the IA reshape.
+    //   - grpPATune (TUN power mode: fixed/drive-slider/tune-slider radio
+    //                + comboTXTUNMeter selector)
+    //   - chkPulsedTune + grpPulsedTune (pulsed tune mode)
+    //   - chkRecoverPAProfileFromTXProfile (TX↔PA profile linkage)
+    //   - chkLimitExtAmpOnOverload (external amp overload limiter)
+    //   - udTXFilterLowSave / udTXFilterHighSave (saved TX filter values)
+    //   - grpTXAM (AM carrier level — udTXAMCarrierLevel)
+    //   - grpTXMonitor (TX audio monitor level — udTXAF)
+    //   - grpTXFilter (TX filter cutoff)
+    //   - chkTXExpert (Expert mode unlock)
+    // Source: Thetis setup.designer.cs:46313-46339 tpTransmit [v2.10.3.13]
+
     contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
-// PowerPaPage::buildPowerGroup — H.4
+// PowerPage::buildPowerGroup — H.4
 // ---------------------------------------------------------------------------
 //
 // Wires:
@@ -208,11 +164,11 @@ void PowerPaPage::buildUI()
 //     From Thetis console.cs:4822 [v2.10.3.13] TXF power setter.
 //  2. chkATTOnTX → StepAttenuatorController::setAttOnTxEnabled(bool)
 //     From Thetis setup.designer.cs:5926-5939 [v2.10.3.13] + setup.cs:15452-15455.
-//     NereusSDR places this in Power & PA (tpAlexAntCtrl in Thetis).
+//     NereusSDR places this on the Power page (tpAlexAntCtrl in Thetis).
 //  3. chkForceATTwhenPSAoff → StepAttenuatorController::setForceAttWhenPsOff(bool)
 //     From Thetis setup.designer.cs:5660-5671 [v2.10.3.13] + setup.cs:24264-24268.
 //     //MW0LGE [2.9.0.7] added  [original inline comment from console.cs:29285]
-void PowerPaPage::buildPowerGroup()
+void PowerPage::buildPowerGroup()
 {
     auto* pwrGroup = new QGroupBox(QStringLiteral("Power"), this);
     auto* pwrForm  = new QFormLayout(pwrGroup);
@@ -298,7 +254,7 @@ void PowerPaPage::buildPowerGroup()
 }
 
 // ---------------------------------------------------------------------------
-// PowerPaPage::buildTunePowerGroup — H.4
+// PowerPage::buildTunePowerGroup — H.4
 // ---------------------------------------------------------------------------
 //
 // Per-band tune-power spinboxes.
@@ -306,7 +262,7 @@ void PowerPaPage::buildPowerGroup()
 // directly in the setup dialog so the operator can set per-band tune power without
 // having to visit each band from the main VFO.  Thetis uses a single udTXTunePower
 // (setup.cs:5262 [v2.10.3.13]) that updates one slot on band change.
-void PowerPaPage::buildTunePowerGroup()
+void PowerPage::buildTunePowerGroup()
 {
     auto* group  = new QGroupBox(QStringLiteral("Tune Power (per band)"), this);
     auto* grid   = new QGridLayout(group);
@@ -359,12 +315,12 @@ void PowerPaPage::buildTunePowerGroup()
 }
 
 // ---------------------------------------------------------------------------
-// PowerPaPage helpers (Tasks 9-11)
+// PowerPage helpers (Tasks 9-11)
 // ---------------------------------------------------------------------------
 
 // Task 9 — SWR Protection
 // From Thetis setup.designer.cs:5793-5924 [v2.10.3.13]
-void PowerPaPage::buildSwrProtectionGroup()
+void PowerPage::buildSwrProtectionGroup()
 {
     auto& s = AppSettings::instance();
 
@@ -441,7 +397,7 @@ void PowerPaPage::buildSwrProtectionGroup()
 
 // Task 10 — External TX Inhibit
 // From Thetis setup.designer.cs:46626-46657 [v2.10.3.13]
-void PowerPaPage::buildExternalTxInhibitGroup()
+void PowerPage::buildExternalTxInhibitGroup()
 {
     auto& s = AppSettings::instance();
 
@@ -481,7 +437,7 @@ void PowerPaPage::buildExternalTxInhibitGroup()
 // NereusSDR-original label and tooltip — Thetis ships these as unlabelled
 // column-header checkboxes per setup.designer.cs:6704-6724 [v2.10.3.13];
 // we add accessible copy. AppSettings keys mirror AlexController (Task 3P-F).
-void PowerPaPage::buildBlockTxAntennaGroup()
+void PowerPage::buildBlockTxAntennaGroup()
 {
     auto& s = AppSettings::instance();
 
@@ -519,7 +475,7 @@ void PowerPaPage::buildBlockTxAntennaGroup()
 
 // Task 11b — PA Control (Disable HF PA)
 // From Thetis setup.designer.cs:5780-5791 [v2.10.3.13]
-void PowerPaPage::buildHfPaGroup()
+void PowerPage::buildHfPaGroup()
 {
     auto& s = AppSettings::instance();
 
@@ -555,7 +511,7 @@ TxProfilesPage::TxProfilesPage(RadioModel* model, QWidget* parent)
 
 void TxProfilesPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     // --- Section: Profile ---
     auto* profGroup = new QGroupBox(QStringLiteral("Profile"), this);
@@ -649,7 +605,7 @@ SpeechProcessorPage::SpeechProcessorPage(RadioModel* model, QWidget* parent)
 
 void SpeechProcessorPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     buildActiveProfileSection();
     buildStageStatusSection();
@@ -1096,7 +1052,7 @@ PureSignalPage::PureSignalPage(RadioModel* model, QWidget* parent)
 
 void PureSignalPage::buildUI()
 {
-    applyDarkStyle(this);
+    NereusSDR::Style::applyDarkPageStyle(this);
 
     // --- Section: PureSignal ---
     auto* psGroup = new QGroupBox(QStringLiteral("PureSignal"), this);

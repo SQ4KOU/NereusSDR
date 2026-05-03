@@ -26,6 +26,7 @@
 
 #pragma once
 #include <QString>
+#include <QWidget>
 
 namespace NereusSDR::Style {
 
@@ -37,6 +38,9 @@ constexpr auto kTextSecondary   = "#8090a0";
 constexpr auto kTextTertiary    = "#708090";
 constexpr auto kTextScale       = "#607080";
 constexpr auto kTextInactive    = "#405060";
+// NereusSDR-original — used in 5+ places for AGC-T / pan / similar labels;
+// sits between kTextSecondary (#8090a0) and kTextScale (#607080).
+constexpr auto kLabelMid        = "#8899aa";
 constexpr auto kAccent          = "#00b4d8";
 constexpr auto kTitleText       = "#8aa8c0";
 
@@ -145,6 +149,22 @@ inline QString redCheckedStyle()
     ).arg(kRedBg, kRedText, kRedBorder);
 }
 
+// DSP toggle — brighter green than the kGreenBg action buttons.
+// Used by VfoWidget DSP tab and SpectrumOverlayPanel DSP toggles.
+// Source: NereusSDR-original. Distinct semantic from action-button
+// "checked" state because DSP toggles communicate "feature on" not
+// "action engaged."
+constexpr auto kDspToggleBg     = "#1a6030";
+constexpr auto kDspToggleBorder = "#20a040";
+constexpr auto kDspToggleText   = "#80ff80";
+
+inline QString dspToggleStyle()
+{
+    return QStringLiteral(
+        "QPushButton:checked { background: %1; color: %2; border: 1px solid %3; }"
+    ).arg(kDspToggleBg, kDspToggleText, kDspToggleBorder);
+}
+
 inline QString sliderHStyle()
 {
     return QStringLiteral(
@@ -232,6 +252,13 @@ constexpr auto kSpinBoxStyle =
     "QSpinBox { background: #1a2a3a; border: 1px solid #304050;"
     " border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }";
 
+constexpr auto kDoubleSpinBoxStyle =
+    "QDoubleSpinBox { background: #1a2a3a; border: 1px solid #304050;"
+    " border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }";
+
+// Backwards-compat wrapper for places that prefer a function form.
+inline QString doubleSpinBoxStyle() { return QString::fromLatin1(kDoubleSpinBoxStyle); }
+
 constexpr auto kSliderStyle =
     "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
     "QSlider::handle:horizontal { background: #00b4d8; width: 12px;"
@@ -242,5 +269,72 @@ constexpr auto kButtonStyle =
     " border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 3px 10px; }"
     "QPushButton:hover { background: #203040; }"
     "QPushButton:pressed { background: #00b4d8; color: #0f0f1a; }";
+
+// Apply the canonical "dark page" stylesheet to a Setup page that lays
+// itself out manually (i.e. doesn't inherit the SetupPage::addLabeledX
+// helper-based widgets). Replaces the 4 byte-for-byte copies of
+// applyDarkStyle() that previously lived in TransmitSetupPages,
+// DisplaySetupPages, AppearanceSetupPages, GeneralOptionsPage.
+//
+// Per docs/architecture/ui-audit-polish-plan.md §A3.
+//
+// Two intentional drift corrections vs the local copies:
+// - QGroupBox border uses kBorder (#205070), not the locals' #203040.
+// - QGroupBox padding-top is 12 px, not the locals' 4 px (an 8 px
+//   header-position shift, matching the rest of the app).
+// All other rules match the locals byte-for-byte so callers see no
+// other visual change.
+inline void applyDarkPageStyle(QWidget* w)
+{
+    if (!w) { return; }
+    w->setStyleSheet(QStringLiteral(
+        "QWidget { background: %1; color: %2; }"
+        "QGroupBox { color: %7; font-size: 11px;"
+        "  border: 1px solid %3; border-radius: 4px;"
+        "  margin-top: 8px; padding-top: 12px; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
+        "QLabel { color: %2; }"
+        "QComboBox { background: %4; color: %2; border: 1px solid %3;"
+        "  border-radius: 3px; padding: 2px 6px; }"
+        "QComboBox::drop-down { border: none; }"
+        "QComboBox QAbstractItemView { background: %4; color: %2;"
+        "  selection-background-color: %5; }"
+        "QSlider::groove:horizontal { background: %4; height: 4px;"
+        "  border-radius: 2px; }"
+        "QSlider::handle:horizontal { background: %5; width: 12px;"
+        "  margin: -4px 0; border-radius: 6px; }"
+        "QSlider::sub-page:horizontal { background: %5; border-radius: 2px; }"
+        "QSpinBox, QDoubleSpinBox { background: %4; color: %2;"
+        "  border: 1px solid %3; border-radius: 3px; padding: 1px 4px; }"
+        "QCheckBox { color: %2; }"
+        "QCheckBox::indicator { width: 14px; height: 14px; background: %4;"
+        "  border: 1px solid %3; border-radius: 2px; }"
+        "QCheckBox::indicator:checked { background: %5; border-color: %5; }"
+        "QLineEdit { background: %4; color: %2; border: 1px solid %3;"
+        "  border-radius: 3px; padding: 2px 6px; }"
+        "QPushButton { background: %4; color: %2; border: 1px solid %3;"
+        "  border-radius: 3px; padding: 3px 12px; }"
+        "QPushButton:hover { background: %6; }"
+        "QPushButton:pressed { background: %5; color: %1; }"
+    ).arg(kAppBg, kTextPrimary, kBorder, kButtonBg, kAccent, kButtonHover, kTextSecondary));
+}
+
+// ── TX / RX filter overlay palette ────────────────────────────────────────────
+// Plan 4 D9 (Cluster E).  Used by SpectrumWidget::drawTxFilterOverlay() and
+// SpectrumWidget::drawTxFilterWaterfallColumn().
+// Colours are NereusSDR-original; no Thetis upstream equivalent (Thetis uses
+// hard-coded GDI+ brushes without named constants).
+
+// TX filter overlay — translucent orange.
+// Customisable via ColorSwatchButton on Setup → Display → TX Display per
+// docs/architecture/ui-audit-polish-plan.md §E1.D9b.
+constexpr auto kTxFilterOverlayFill   = "rgba(255, 120, 60, 46)";
+constexpr auto kTxFilterOverlayBorder = "#ff7833";
+constexpr auto kTxFilterOverlayLabel  = "#ffaa70";
+
+// RX filter overlay — translucent cyan.
+// Border reuses kAccent (#00b4d8); only the fill variant is new.
+// Customisable on Setup → Display → Spectrum Defaults.
+constexpr auto kRxFilterOverlayFill   = "rgba(0, 180, 216, 80)";
 
 } // namespace NereusSDR::Style

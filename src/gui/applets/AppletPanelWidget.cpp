@@ -78,7 +78,10 @@ AppletPanelWidget::AppletPanelWidget(QWidget* parent)
     auto* stackWidget = new QWidget(m_scrollArea);
     stackWidget->setStyleSheet(QStringLiteral("background: %1;").arg(Style::kPanelBg));
     m_stackLayout = new QVBoxLayout(stackWidget);
-    m_stackLayout->setContentsMargins(0, 0, 0, 0);
+    // 8 px matches the QScrollBar:vertical width in the stylesheet above;
+    // Qt::ScrollBarAsNeeded means the gutter is wasted when the bar hides,
+    // but 8 px is negligible and avoids a layout reflow on bar show/hide.
+    m_stackLayout->setContentsMargins(0, 0, 8, 0);
     m_stackLayout->setSpacing(0);
     m_stackLayout->addStretch();
 

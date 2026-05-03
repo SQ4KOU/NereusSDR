@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(NereusSDR VERSION 0.3.0 LANGUAGES C CXX)
+project(NereusSDR VERSION 0.3.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -413,6 +413,7 @@ set(CORE_SOURCES
     src/core/ClarityController.cpp
     src/core/StepAttenuatorController.cpp
     src/core/CalibrationController.cpp
+    src/core/PaCalProfile.cpp
     src/core/OcMatrix.cpp
     src/core/RadioStatus.cpp
     src/core/SettingsHygiene.cpp
@@ -471,6 +472,7 @@ set(MODEL_SOURCES
     src/models/PanadapterModel.cpp
     src/models/MeterModel.cpp
     src/models/TransmitModel.cpp
+    src/models/FilterPresetStore.cpp
 )
 
 set(GUI_SOURCES
@@ -490,6 +492,7 @@ set(GUI_SOURCES
     src/gui/widgets/DspParamPopup.cpp
     src/gui/widgets/VoxSettingsPopup.cpp
     src/gui/widgets/FilterPassbandWidget.cpp
+    src/gui/widgets/FilterPresetEditDialog.cpp
     src/gui/widgets/GuardedComboBox.h
     src/gui/widgets/GuardedSlider.h
     src/gui/widgets/MeterSlider.h
@@ -599,6 +602,7 @@ set(GUI_SOURCES
     src/gui/meters/ClockItem.cpp
     src/gui/meters/ClickBoxItem.cpp
     src/gui/meters/DataOutItem.cpp
+    src/gui/AntennaPopupBuilder.cpp
     src/gui/HGauge.cpp
     src/gui/ColorSwatchButton.cpp
     src/gui/SpectrumOverlayPanel.cpp
@@ -607,6 +611,7 @@ set(GUI_SOURCES
     src/gui/setup/GeneralSetupPages.cpp
     src/gui/setup/GeneralOptionsPage.cpp
     src/gui/setup/HardwarePage.cpp
+    src/gui/setup/PaSetupPages.cpp
     src/gui/setup/hardware/RadioInfoTab.cpp
     src/gui/setup/hardware/AntennaAlexTab.cpp
     src/gui/setup/hardware/AntennaAlexAntennaControlTab.cpp
@@ -619,6 +624,7 @@ set(GUI_SOURCES
     src/gui/setup/hardware/PureSignalTab.cpp
     src/gui/setup/hardware/DiversityTab.cpp
     src/gui/setup/hardware/CalibrationTab.cpp
+    src/gui/setup/hardware/PaCalibrationGroup.cpp
     src/gui/setup/hardware/Hl2IoBoardTab.cpp
     src/gui/setup/hardware/Hl2OptionsTab.cpp
     src/gui/setup/hardware/BandwidthMonitorTab.cpp
@@ -633,6 +639,7 @@ set(GUI_SOURCES
     src/gui/setup/DeviceCard.cpp
     src/gui/setup/DspSetupPages.cpp
     src/gui/setup/DspOptionsPage.cpp
+    src/gui/setup/FilterPresetsSetupPage.cpp
     src/gui/setup/DisplaySetupPages.cpp
     src/gui/setup/SpectrumPeaksPage.cpp
     src/gui/setup/MultimeterPage.cpp

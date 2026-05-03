@@ -113,6 +113,7 @@
 
 #include "FmApplet.h"
 #include "gui/widgets/TriBtn.h"
+#include "gui/StyleConstants.h"
 #include "NyiOverlay.h"
 
 #include <QComboBox>
@@ -125,44 +126,29 @@
 namespace NereusSDR {
 
 // --------------------------------------------------------------------------
-// Style constants
+// File-local style helpers
 // --------------------------------------------------------------------------
 
-// Blue active state (deviation buttons, stereo button)
-static const char* kBlueActive =
-    "QPushButton {"
-    "  background: #1a2a3a; color: #c8d8e8;"
-    "  border: 1px solid #205070; border-radius: 3px;"
-    "  padding: 2px 4px; font-size: 10px; font-weight: bold;"
-    "}"
-    "QPushButton:hover { background: #203040; }"
-    "QPushButton:checked {"
-    "  background: #0070c0; color: #ffffff; border: 1px solid #0090e0;"
-    "}";
-
-// Green active state (CTCSS enable, Simplex)
-static const char* kGreenActive =
-    "QPushButton {"
-    "  background: #1a2a3a; color: #c8d8e8;"
-    "  border: 1px solid #205070; border-radius: 3px;"
-    "  padding: 2px 4px; font-size: 10px; font-weight: bold;"
-    "}"
-    "QPushButton:hover { background: #203040; }"
-    "QPushButton:checked {"
-    "  background: #006040; color: #00ff88; border: 1px solid #00a060;"
-    "}";
-
-// Inset value label (offset display)
-static const char* kInsetValue =
-    "QLabel {"
-    "  font-size: 10px;"
-    "  background: #0a0a18; border: 1px solid #1e2e3e; border-radius: 3px;"
-    "  padding: 1px 2px; color: #c8d8e8;"
-    "}";
-
-// Section label style
-static const char* kSectionLabel =
-    "QLabel { color: #8090a0; font-size: 10px; }";
+// §A2 legitimate exception: FmApplet buttons share the canonical base
+// (background: #1a2a3a / border: #205070 / text: #c8d8e8) but use
+// kButtonHover (#203040) rather than kButtonAltHover (#204060) used by
+// Style::buttonBaseStyle(). Preserving the original hover to avoid an
+// unreviewed visual change. Checked states delegate to the canonical
+// blueCheckedStyle() / greenCheckedStyle() helpers.
+static inline QString fmButtonStyle()
+{
+    return QStringLiteral(
+        "QPushButton {"
+        "  background: %1; color: %2;"
+        "  border: 1px solid %3; border-radius: 3px;"
+        "  padding: 2px 4px; font-size: 10px; font-weight: bold;"
+        "}"
+        "QPushButton:hover { background: %4; }"
+    ).arg(Style::kButtonBg,
+          Style::kTextPrimary,
+          Style::kBorder,
+          Style::kButtonHover);
+}
 
 // --------------------------------------------------------------------------
 // FmApplet
@@ -189,7 +175,7 @@ void FmApplet::buildUI()
         row->setSpacing(4);
 
         auto* lbl = new QLabel(QStringLiteral("FM Mic"), this);
-        lbl->setStyleSheet(kSectionLabel);
+        lbl->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(NereusSDR::Style::kTextSecondary));
         lbl->setFixedWidth(44);
         row->addWidget(lbl);
 
@@ -200,7 +186,7 @@ void FmApplet::buildUI()
         row->addWidget(m_micSlider, 1);
 
         m_micValueLbl = new QLabel(QStringLiteral("50"), this);
-        m_micValueLbl->setStyleSheet(kInsetValue);
+        m_micValueLbl->setStyleSheet(Style::insetValueStyle());
         m_micValueLbl->setFixedWidth(30);
         m_micValueLbl->setAlignment(Qt::AlignCenter);
         row->addWidget(m_micValueLbl);
@@ -216,7 +202,7 @@ void FmApplet::buildUI()
         row->setSpacing(4);
 
         auto* lbl = new QLabel(QStringLiteral("Dev"), this);
-        lbl->setStyleSheet(kSectionLabel);
+        lbl->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(NereusSDR::Style::kTextSecondary));
         lbl->setFixedWidth(44);
         row->addWidget(lbl);
 
@@ -224,13 +210,13 @@ void FmApplet::buildUI()
         m_dev5kBtn->setCheckable(true);
         m_dev5kBtn->setChecked(true);
         m_dev5kBtn->setFixedHeight(22);
-        m_dev5kBtn->setStyleSheet(kBlueActive);
+        m_dev5kBtn->setStyleSheet(fmButtonStyle() + Style::blueCheckedStyle());
         row->addWidget(m_dev5kBtn, 1);
 
         m_dev25kBtn = new QPushButton(QStringLiteral("2.5k"), this);
         m_dev25kBtn->setCheckable(true);
         m_dev25kBtn->setFixedHeight(22);
-        m_dev25kBtn->setStyleSheet(kBlueActive);
+        m_dev25kBtn->setStyleSheet(fmButtonStyle() + Style::blueCheckedStyle());
         row->addWidget(m_dev25kBtn, 1);
 
         root->addLayout(row);
@@ -247,7 +233,7 @@ void FmApplet::buildUI()
         m_ctcssBtn->setCheckable(true);
         m_ctcssBtn->setFixedHeight(22);
         m_ctcssBtn->setFixedWidth(52);
-        m_ctcssBtn->setStyleSheet(kGreenActive);
+        m_ctcssBtn->setStyleSheet(fmButtonStyle() + Style::greenCheckedStyle());
         row->addWidget(m_ctcssBtn);
 
         m_ctcssCombo = new QComboBox(this);
@@ -284,7 +270,7 @@ void FmApplet::buildUI()
         m_simplexBtn = new QPushButton(QStringLiteral("Simplex"), this);
         m_simplexBtn->setCheckable(true);
         m_simplexBtn->setFixedHeight(22);
-        m_simplexBtn->setStyleSheet(kGreenActive);
+        m_simplexBtn->setStyleSheet(fmButtonStyle() + Style::greenCheckedStyle());
         row->addWidget(m_simplexBtn, 1);
 
         root->addLayout(row);
@@ -298,7 +284,7 @@ void FmApplet::buildUI()
         row->setSpacing(4);
 
         auto* lbl = new QLabel(QStringLiteral("Offset"), this);
-        lbl->setStyleSheet(kSectionLabel);
+        lbl->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(NereusSDR::Style::kTextSecondary));
         lbl->setFixedWidth(44);
         row->addWidget(lbl);
 
@@ -306,7 +292,7 @@ void FmApplet::buildUI()
         row->addWidget(stepLeft);
 
         m_offsetLbl = new QLabel(QStringLiteral("0.600 MHz"), this);
-        m_offsetLbl->setStyleSheet(kInsetValue);
+        m_offsetLbl->setStyleSheet(Style::insetValueStyle());
         m_offsetLbl->setFixedWidth(60);
         m_offsetLbl->setAlignment(Qt::AlignCenter);
         row->addWidget(m_offsetLbl);
@@ -325,7 +311,7 @@ void FmApplet::buildUI()
         row->setSpacing(4);
 
         auto* lbl = new QLabel(QStringLiteral("Dir"), this);
-        lbl->setStyleSheet(kSectionLabel);
+        lbl->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(NereusSDR::Style::kTextSecondary));
         lbl->setFixedWidth(44);
         row->addWidget(lbl);
 
@@ -333,19 +319,19 @@ void FmApplet::buildUI()
         m_offsetNegBtn->setCheckable(true);
         m_offsetNegBtn->setChecked(true);
         m_offsetNegBtn->setFixedHeight(22);
-        m_offsetNegBtn->setStyleSheet(kBlueActive);
+        m_offsetNegBtn->setStyleSheet(fmButtonStyle() + Style::blueCheckedStyle());
         row->addWidget(m_offsetNegBtn, 1);
 
         m_offsetPosBtn = new QPushButton(QStringLiteral("+"), this);
         m_offsetPosBtn->setCheckable(true);
         m_offsetPosBtn->setFixedHeight(22);
-        m_offsetPosBtn->setStyleSheet(kBlueActive);
+        m_offsetPosBtn->setStyleSheet(fmButtonStyle() + Style::blueCheckedStyle());
         row->addWidget(m_offsetPosBtn, 1);
 
         m_offsetRevBtn = new QPushButton(QStringLiteral("Rev"), this);
         m_offsetRevBtn->setCheckable(true);
         m_offsetRevBtn->setFixedHeight(22);
-        m_offsetRevBtn->setStyleSheet(kBlueActive);
+        m_offsetRevBtn->setStyleSheet(fmButtonStyle() + Style::blueCheckedStyle());
         row->addWidget(m_offsetRevBtn, 1);
 
         root->addLayout(row);
@@ -359,7 +345,7 @@ void FmApplet::buildUI()
         row->setSpacing(4);
 
         auto* lbl = new QLabel(QStringLiteral("Profile"), this);
-        lbl->setStyleSheet(kSectionLabel);
+        lbl->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(NereusSDR::Style::kTextSecondary));
         lbl->setFixedWidth(44);
         row->addWidget(lbl);
 

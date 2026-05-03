@@ -64,7 +64,7 @@ void FadeCoverItemEditor::buildTypeSpecific()
         FadeCoverItem* fade = qobject_cast<FadeCoverItem*>(m_item);
         if (!fade) { return; }
         const QColor chosen = QColorDialog::getColor(fade->colour1(), this,
-                                                     QStringLiteral("Colour 1"),
+                                                     QStringLiteral("Color 1"),
                                                      QColorDialog::ShowAlphaChannel);
         if (chosen.isValid()) {
             fade->setColour1(chosen);
@@ -74,7 +74,7 @@ void FadeCoverItemEditor::buildTypeSpecific()
             notifyChanged();
         }
     });
-    addRow(QStringLiteral("Colour 1"), m_btnColour1);
+    addRow(QStringLiteral("Color 1"), m_btnColour1);
 
     // Colour 2
     m_btnColour2 = new QPushButton(this);
@@ -83,7 +83,7 @@ void FadeCoverItemEditor::buildTypeSpecific()
         FadeCoverItem* fade = qobject_cast<FadeCoverItem*>(m_item);
         if (!fade) { return; }
         const QColor chosen = QColorDialog::getColor(fade->colour2(), this,
-                                                     QStringLiteral("Colour 2"),
+                                                     QStringLiteral("Color 2"),
                                                      QColorDialog::ShowAlphaChannel);
         if (chosen.isValid()) {
             fade->setColour2(chosen);
@@ -93,7 +93,7 @@ void FadeCoverItemEditor::buildTypeSpecific()
             notifyChanged();
         }
     });
-    addRow(QStringLiteral("Colour 2"), m_btnColour2);
+    addRow(QStringLiteral("Color 2"), m_btnColour2);
 
     // Alpha
     m_spinAlpha = makeDoubleRow(QStringLiteral("Alpha"), 0.0, 1.0, 0.01, 2);
