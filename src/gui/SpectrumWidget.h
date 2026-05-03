@@ -392,6 +392,12 @@ public:
     void setActivePeakHoldDropDbPerSec(double r);
     void setActivePeakHoldFill(bool on);
     void setActivePeakHoldOnTx(bool on);
+    // NereusSDR-original — Thetis ties the peak trace colour to the data-line
+    // colour. We expose it separately so the user can keep a distinct peak
+    // hold colour even when "Reset to Smooth Defaults" recolours the live
+    // trace (which would otherwise hide the peak trace behind a same-coloured
+    // solid line).
+    void setActivePeakHoldColor(const QColor& c);
     // Called by RadioModel on MOX state change (MoxController::moxStateChanged).
     void setActivePeakHoldTxActive(bool tx);
 
@@ -399,6 +405,7 @@ public:
     int    activePeakHoldDurationMs() const { return m_activePeakHold.durationMs(); }
     double activePeakHoldDropDbPerSec() const { return m_activePeakHold.dropDbPerSec(); }
     bool   activePeakHoldFill()        const { return m_activePeakHold.fill(); }
+    QColor activePeakHoldColor()      const { return m_activePeakHoldColor; }
 
     // ---- Peak Blobs (Task 2.6) ----
     // Top-N peak markers with labeled ellipses. Rendered as a separate QPainter
@@ -1058,6 +1065,11 @@ private:
     // above; rendered as a distinct pass per Q14.1.
     // From Thetis display.cs m_bActivePeakHold [v2.10.3.13].
     ActivePeakHoldTrace m_activePeakHold;
+    // NereusSDR-original — distinct trace colour so the peak trace stays
+    // visible even when the data-line colour is changed (e.g. "Reset to
+    // Smooth Defaults" sets the data line to white). Default gold for high
+    // contrast against the typical clarity-blue palette and against white.
+    QColor m_activePeakHoldColor{0xFF, 0xD7, 0x00, 0xFF};
 
     // Peak Blobs detector (Task 2.6). Top-N local maxima with hold/decay.
     // From Thetis display.cs:4395-4714, 5453-5508 [v2.10.3.13].

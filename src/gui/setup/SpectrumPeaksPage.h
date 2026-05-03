@@ -95,12 +95,15 @@ private:
     void buildUI();
 
     // Active Peak Hold group (5 ctrls — full impl in Task 2.5)
-    QGroupBox* m_aphGroup{nullptr};
-    QCheckBox* m_aphEnable{nullptr};
-    QSpinBox*  m_aphDurationMs{nullptr};
-    QSpinBox*  m_aphDropDbPerSec{nullptr};
-    QCheckBox* m_aphFill{nullptr};
-    QCheckBox* m_aphOnTx{nullptr};
+    // + 1 NereusSDR-original colour picker so the trace stays visible when
+    // the data-line colour is changed (e.g. Smooth Defaults sets it white).
+    QGroupBox*         m_aphGroup{nullptr};
+    QCheckBox*         m_aphEnable{nullptr};
+    QSpinBox*          m_aphDurationMs{nullptr};
+    QSpinBox*          m_aphDropDbPerSec{nullptr};
+    QCheckBox*         m_aphFill{nullptr};
+    QCheckBox*         m_aphOnTx{nullptr};
+    ColorSwatchButton* m_aphColor{nullptr};
 
     // Peak Blobs group (7 ctrls + 2 colors — full impl in Task 2.6)
     // From Thetis Display.cs:4395-4714 [v2.10.3.13]

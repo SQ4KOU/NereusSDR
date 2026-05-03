@@ -496,6 +496,12 @@ void SpectrumWidget::loadSettings()
         if (aphOn) {
             m_activePeakHold.setEnabled(true);
         }
+        // NereusSDR-original — distinct peak trace colour so it stays visible
+        // when the data-line colour is changed (e.g. Smooth Defaults paints
+        // the live trace pure white). Default gold (#FFD700FF).
+        m_activePeakHoldColor = ColorSwatchButton::colorFromHex(
+            s.value(QStringLiteral("DisplayActivePeakHoldColor"),
+                    QStringLiteral("#FFD700FF")).toString());
 
         // Peak Blobs — NereusSDR ships disabled by default (deviation from
         // Thetis Display.cs:4395 [v2.10.3.13] m_bPeakBlobMaximums = true).
@@ -1249,6 +1255,14 @@ void SpectrumWidget::setActivePeakHoldOnTx(bool on)
 void SpectrumWidget::setActivePeakHoldTxActive(bool tx)
 {
     m_activePeakHold.setTxActive(tx);
+}
+
+void SpectrumWidget::setActivePeakHoldColor(const QColor& c)
+{
+    m_activePeakHoldColor = c;
+    // Force GPU overlay rebuild so the new colour shows immediately.
+    m_overlayStaticDirty = true;
+    update();
 }
 
 // ---- Peak Blobs (Task 2.6) ----
@@ -2420,15 +2434,6 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
         }
     }
 
-    // Active Peak Hold separate render pass (Q14.1 locked: separate pass,
-    // not composited with main trace). Drawn after fill so it sits on top
-    // of the shaded area, but before the live trace line.
-    // From Thetis display.cs m_bActivePeakHold [v2.10.3.13].
-    if (m_activePeakHold.enabled() &&
-        m_activePeakHold.size() == m_smoothed.size()) {
-        paintActivePeakHoldTrace(p, specRect, firstBin, lastBin, xStep);
-    }
-
     // Peak hold trace underneath the main trace so the live line stays
     // visually on top.
     if (m_peakHoldEnabled && m_peakHoldBins.size() == m_smoothed.size()) {
@@ -2452,6 +2457,16 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
     QPen tracePen(m_fillColor, m_lineWidth);
     p.setPen(tracePen);
     p.drawPolyline(points.data(), count);
+
+    // Active Peak Hold trace (Task 2.5) — Q14.1 separate pass. Drawn AFTER
+    // the live trace so the dashed peak line sits on top and stays visible
+    // even when peaks ≈ live bins (decay catches up to current spectrum
+    // values). Uses m_activePeakHoldColor for contrast against m_fillColor.
+    // From Thetis display.cs m_bActivePeakHold [v2.10.3.13].
+    if (m_activePeakHold.enabled() &&
+        m_activePeakHold.size() == m_smoothed.size()) {
+        paintActivePeakHoldTrace(p, specRect, firstBin, lastBin, xStep);
+    }
 
     // Peak Blobs render pass (Task 2.6) — drawn on top of the live trace line.
     // From Thetis display.cs:5453-5508 [v2.10.3.13].
@@ -2529,16 +2544,16 @@ void SpectrumWidget::paintActivePeakHoldTrace(QPainter& p, const QRect& specRect
             }
             fillPath.closeSubpath();
 
-            QColor fillCol = m_fillColor;
+            QColor fillCol = m_activePeakHoldColor;
             fillCol.setAlphaF(0.18f);  // subtle fill between traces
             p.fillPath(fillPath, fillCol);
         }
     }
 
-    // Draw the peak trace line — dashed magenta-tinted variant of the fill color.
-    QColor peakCol = m_fillColor;
-    peakCol.setAlphaF(0.75f);
-    QPen peakPen(peakCol, qMax(1.0f, m_lineWidth * 0.85f));
+    // Draw the peak trace line in its own colour so it stays visible against
+    // the live data-line trace (which inherits m_fillColor). Dashed style
+    // makes it easy to distinguish from the solid live trace.
+    QPen peakPen(m_activePeakHoldColor, qMax(1.0f, m_lineWidth));
     peakPen.setStyle(Qt::DashLine);
     p.setPen(peakPen);
     p.drawPolyline(peakPoints.data(), count);

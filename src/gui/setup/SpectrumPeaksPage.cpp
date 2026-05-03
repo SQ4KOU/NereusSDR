@@ -124,6 +124,12 @@ SpectrumPeaksPage::SpectrumPeaksPage(RadioModel* model, QWidget* parent)
     m_aphOnTx->setChecked(
         s.value(QStringLiteral("DisplayActivePeakHoldOnTx"), QStringLiteral("False")).toString()
         == QStringLiteral("True"));
+    // NereusSDR-original — distinct trace colour. Default gold (#FFD700FF)
+    // contrasts against typical clarity-blue spectrum and pure-white
+    // Smooth-Defaults data line. Persisted format is "#RRGGBBAA".
+    m_aphColor->setColor(ColorSwatchButton::colorFromHex(
+        s.value(QStringLiteral("DisplayActivePeakHoldColor"),
+                QStringLiteral("#FFD700FF")).toString()));
 
     // Peak Blobs
     // Thetis Display.cs:4395 [v2.10.3.13] ships m_bPeakBlobMaximums = true.
@@ -175,6 +181,7 @@ SpectrumPeaksPage::SpectrumPeaksPage(RadioModel* model, QWidget* parent)
             sw->setActivePeakHoldDropDbPerSec(static_cast<double>(m_aphDropDbPerSec->value()));
             sw->setActivePeakHoldFill(m_aphFill->isChecked());
             sw->setActivePeakHoldOnTx(m_aphOnTx->isChecked());
+            sw->setActivePeakHoldColor(m_aphColor->color());
 
             // Peak Blobs
             sw->setPeakBlobsEnabled(m_blobEnable->isChecked());
@@ -241,6 +248,14 @@ SpectrumPeaksPage::SpectrumPeaksPage(RadioModel* model, QWidget* parent)
             if (auto* sw = m->spectrumWidget()) {
                 sw->setActivePeakHoldOnTx(v);
             }
+        }
+    });
+    connect(m_aphColor, &ColorSwatchButton::colorChanged, this, [this](const QColor& c) {
+        AppSettings::instance().setValue(
+            QStringLiteral("DisplayActivePeakHoldColor"),
+            ColorSwatchButton::colorToHex(c));
+        if (auto* m = SetupPage::model()) {
+            if (auto* sw = m->spectrumWidget()) { sw->setActivePeakHoldColor(c); }
         }
     });
 
@@ -361,6 +376,16 @@ void SpectrumPeaksPage::buildUI()
         "Continue updating the peak trace while transmitting. "
         "When off, the trace is frozen during TX."));
     aphForm->addRow(QString(), m_aphOnTx);
+
+    // Placeholder colour; setColor() is called in the constructor after buildUI().
+    // Gold default contrasts well against typical clarity-blue and white live traces.
+    m_aphColor = new ColorSwatchButton(QColor(0xFF, 0xD7, 0x00, 0xFF), m_aphGroup);
+    m_aphColor->setToolTip(QStringLiteral(
+        "Color of the dashed Active Peak Hold trace. Set this to a hue "
+        "different from the live data-line color so the peak trace stays "
+        "visible (e.g. after Reset to Smooth Defaults paints the live "
+        "trace white)."));
+    aphForm->addRow(QStringLiteral("Trace color:"), m_aphColor);
 
     contentLayout()->addWidget(m_aphGroup);
 
