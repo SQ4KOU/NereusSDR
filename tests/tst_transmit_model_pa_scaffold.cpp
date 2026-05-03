@@ -9,7 +9,7 @@
 // Phase 3 Agent 3A of issue #167.
 //
 // Covers:
-//   - Per-band normal-mode power (m_powerByBand[14], default 100 W)
+//   - Per-band normal-mode power (m_powerByBand[14], default 50 W)
 //   - 3 ATT-on-TX-on-power-change safety properties
 //     (forceAttwhenPSAoff, forceAttwhenPowerChangesWhenPSAon,
 //      forceAttwhenPowerChangesWhenPSAonAndDecreased)
@@ -18,7 +18,7 @@
 //     until 3M-4 PureSignal phase wires the live PS feedback DDC)
 //
 // Source references (cite comments only — no Thetis logic in tests):
-//   console.cs:1817 [v2.10.3.13]      — limitPower_by_band default 100 W
+//   console.cs:1813-1814 [v2.10.3.13] — power_by_band default 50 W
 //   console.cs:29285-29310 [v2.10.3.13] — three ATT-on-TX safety props
 //   console.cs:29298 [v2.10.3.13]     — _lastPower reset on toggle
 // =================================================================
@@ -44,16 +44,16 @@ private slots:
     // §1  Per-band normal-mode power array
     // =========================================================================
 
-    // §1.1 — powerForBand() default 100 W on every band on first init.
-    void powerForBand_defaultsTo100WForAllBands() {
+    // §1.1 — powerForBand() default 50 W on every band on first init.
+    void powerForBand_defaultsTo50WForAllBands() {
         TransmitModel t;
         // Per-band normal-mode power covers HF amateur + GEN/WWV/XVTR (14).
         for (int i = 0; i < static_cast<int>(Band::SwlFirst); ++i) {
-            QCOMPARE(t.powerForBand(static_cast<Band>(i)), 100);
+            QCOMPARE(t.powerForBand(static_cast<Band>(i)), 50);
         }
     }
 
-    // §1.2 — setPowerForBand clamps above 100 W to 100.
+    // §1.2 — setPowerForBand clamps above 100 W (slider upper bound) to 100.
     void setPowerForBand_clampsAbove100() {
         TransmitModel t;
         t.setPowerForBand(Band::Band20m, 200);
@@ -97,8 +97,8 @@ private slots:
         QCOMPARE(t2.powerForBand(Band::Band20m), 75);
         QCOMPARE(t2.powerForBand(Band::Band40m), 30);
         QCOMPARE(t2.powerForBand(Band::Band6m),  10);
-        // Bands we didn't set should still be 100 W default.
-        QCOMPARE(t2.powerForBand(Band::Band80m), 100);
+        // Bands we didn't set should still be 50 W default.
+        QCOMPARE(t2.powerForBand(Band::Band80m), 50);
     }
 
     // =========================================================================

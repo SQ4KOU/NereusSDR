@@ -55,7 +55,7 @@
 //                 NereusSDR-original (Plan 4 Cluster A, Task 2/D1).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-05-03 — Phase 3 Agent 3A of issue #167 (PA-cal hotfix scaffolding):
-//                 m_powerByBand[14] (default 100 W; per-band normal-mode
+//                 m_powerByBand[14] (default 50 W; per-band normal-mode
 //                 power array parallel to m_tunePowerByBand) +
 //                 powerForBand / setPowerForBand + powerByBandChanged
 //                 signal; 3 Thetis ATT-on-TX-on-power-change safety
@@ -286,21 +286,21 @@ public:
     // SetPowerUsingTargetDBM (#167 Phase 3C) writes back into on a
     // txMode 0 (normal-mode) commit.
     //
-    // From Thetis console.cs:1817 [v2.10.3.13]:
-    //     limitPower_by_band = new int[(int)Band.LAST];
-    //     for (int i = 0; i < (int)Band.LAST; i++) limitPower_by_band[i] = 100;
-    // (Thetis itself initialises power_by_band to 50 W at console.cs:1814,
-    // but the math kernel needs the band-max ceiling — 100 W per the
-    // limitPower_by_band default — as the normal-mode default for the dBm
-    // compensator.  Phase 3C's setPowerUsingTargetDbm txMode 0 branch
-    // writes back into m_powerByBand[band] via setPower side-effect.)
+    // From Thetis console.cs:1813-1814 [v2.10.3.13]:
+    //     power_by_band = new int[(int)Band.LAST];
+    //     for (int i = 0; i < (int)Band.LAST; i++) power_by_band[i] = 50;
+    // (Thetis safety-first default — users dial up from 50 per band.
+    // limitPower_by_band[14] (console.cs:1816-1817 [v2.10.3.13]) is a
+    // separate band-max ceiling array we do NOT port here.  Phase 3C's
+    // setPowerUsingTargetDbm txMode 0 branch writes back into
+    // m_powerByBand[band] via setPower side-effect.)
     //
     // HF amateur + GEN/WWV/XVTR only (Band::SwlFirst == 14).  Phase 3L
     // SWL bands inherit ham-band values — no separate per-SWL TX power.
 
     /// Return the normal-mode power value (watts) for the given band.
-    /// Default 100 W on first init.  Returns 100 as a safe fallback for
-    /// out-of-range band values.
+    /// Default 50 W on first init (Thetis power_by_band parity).
+    /// Returns 50 as a safe fallback for out-of-range band values.
     int  powerForBand(Band band) const;
 
     /// Set the normal-mode power value (watts) for the given band.
@@ -1439,8 +1439,8 @@ private:
     std::array<int, static_cast<std::size_t>(Band::SwlFirst)> m_tunePowerByBand{};
 
     // Per-band normal-mode power storage.
-    // From Thetis console.cs:1817 [v2.10.3.13] — limitPower_by_band default
-    // 100 W per band.  NereusSDR uses 100 W as the normal-mode default for
+    // From Thetis console.cs:1813-1814 [v2.10.3.13] — power_by_band default
+    // 50 W per band (Thetis safety-first).  Used as the slider source for
     // the dBm compensator (Phase 3A scaffolding for #167 Phase 3C math
     // kernel).  Initialised in the constructor.
     std::array<int, static_cast<std::size_t>(Band::SwlFirst)> m_powerByBand{};

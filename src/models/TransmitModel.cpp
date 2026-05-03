@@ -112,7 +112,7 @@
 //                 NereusSDR-original (Plan 4 Cluster A, Task 2/D1).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-05-03 — Phase 3 Agent 3A of issue #167 (PA-cal hotfix scaffolding):
-//                 m_powerByBand[14] (default 100 W; per-band normal-mode
+//                 m_powerByBand[14] (default 50 W; per-band normal-mode
 //                 power array parallel to m_tunePowerByBand) +
 //                 powerForBand / setPowerForBand + powerByBandChanged
 //                 signal; 3 Thetis ATT-on-TX-on-power-change safety
@@ -201,16 +201,16 @@ TransmitModel::TransmitModel(QObject* parent)
     //   for (int i = 0; i < (int)Band.LAST; i++) tunePower_by_band[i] = 50;
     m_tunePowerByBand.fill(50);
 
-    // Initialise per-band normal-mode power to 100W (#167 Phase 3A).
-    // From Thetis console.cs:1817 [v2.10.3.13]:
-    //   limitPower_by_band = new int[(int)Band.LAST];
-    //   for (int i = 0; i < (int)Band.LAST; i++) limitPower_by_band[i] = 100;
-    // (Thetis power_by_band itself defaults to 50 at console.cs:1814; the
-    //  100 W default here matches limitPower_by_band — the band-max ceiling
-    //  used by the dBm compensator's setPowerUsingTargetDbm math kernel
-    //  in Phase 3C.  Carries over the safety-first NereusSDR default
-    //  recorded in plan §"Carry-over story".)
-    m_powerByBand.fill(100);
+    // Initialise per-band normal-mode power to 50W (#167 Phase 3A).
+    // From Thetis console.cs:1813-1814 [v2.10.3.13]:
+    //   power_by_band = new int[(int)Band.LAST];
+    //   for (int i = 0; i < (int)Band.LAST; i++) power_by_band[i] = 50;
+    // (Thetis safety-first default; users dial up from 50 per band.
+    //  limitPower_by_band[14] (console.cs:1816-1817 [v2.10.3.13]) is a
+    //  separate band-max ceiling array we do NOT port here — Phase 3C's
+    //  setPowerUsingTargetDbm math kernel sources its slider value from
+    //  this powerByBand array, the ceiling check is independent.)
+    m_powerByBand.fill(50);
 }
 
 TransmitModel::~TransmitModel() = default;
@@ -480,8 +480,8 @@ int TransmitModel::powerForBand(Band band) const
 
 void TransmitModel::setPowerForBand(Band band, int watts)
 {
-    // From Thetis console.cs:1817 [v2.10.3.13] — limitPower_by_band default
-    // 100 W per band; NereusSDR uses 100 W as the normal-mode default for
+    // From Thetis console.cs:1813-1814 [v2.10.3.13] — power_by_band default
+    // 50 W per band (Thetis safety-first).  Used as the slider source for
     // the dBm compensator (Phase 3A scaffolding for #167 Phase 3C math
     // kernel).  Phase 3C's setPowerUsingTargetDbm txMode 0 branch writes
     // back into m_powerByBand[band] via setPower side-effect (matches
@@ -926,15 +926,15 @@ void TransmitModel::loadFromSettings(const QString& mac)
     //
     // Per-band normal-mode power array.  Lives under a SEPARATE top-level
     // scope (hardware/<mac>/powerByBand/), parallel to tunePowerByBand —
-    // not nested under tx/.  Default 100 W per band on first init.
-    // From Thetis console.cs:1817 [v2.10.3.13] — limitPower_by_band default.
+    // not nested under tx/.  Default 50 W per band on first init.
+    // From Thetis console.cs:1813-1814 [v2.10.3.13] — power_by_band default.
     {
         const QString powerPfx =
             QStringLiteral("hardware/%1/powerByBand/").arg(mac);
         for (int i = 0; i < kBandCount; ++i) {
             const Band band = static_cast<Band>(i);
             const QString key = powerPfx + bandKeyName(band);
-            const int v = s.value(key, QStringLiteral("100")).toInt();
+            const int v = s.value(key, QStringLiteral("50")).toInt();
             // Direct assignment (bypass setPowerForBand) — load is the
             // canonical state restore; setter would re-persist, emit, and
             // clamp.  We clamp here ourselves to keep AppSettings tampering
