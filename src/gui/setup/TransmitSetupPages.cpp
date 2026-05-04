@@ -61,6 +61,16 @@
 //                 horizontal scroll; the grid keeps everything inside
 //                 the dialog without panning.  Bidirectional bindings
 //                 unchanged.
+//   2026-05-04 — Bench polish: DexpVoxPage QGridLayout now inserts BEFORE
+//                 the auto-trailing stretch in SetupPage::init() rather
+//                 than appending after it.  The previous code sandwiched
+//                 the grid between the auto-stretch and an explicit
+//                 trailing addStretch(), centring the boxes vertically
+//                 when the dialog page area was taller than the grid.
+//                 The fix mirrors SetupPage::addSection's
+//                 insertWidget(stretchIndex, group) pattern so the boxes
+//                 cluster at the top of the page like every other
+//                 Setup-page family.
 // =================================================================
 
 //=================================================================
@@ -1187,8 +1197,9 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     //   col 0 (rows 0+1, spanned)  : VOX / DEXP big box
     //   col 1 row 0                : Audio LookAhead small box
     //   col 1 row 1                : Side-Channel Trigger Filter small box
-    // Top-justified by appending contentLayout()->addStretch() after the grid
-    // (already present further down).
+    // Top-justified by inserting the QGridLayout BEFORE the auto-trailing
+    // stretch added in SetupPage::init() (SetupPage.cpp:90).  See the
+    // insertLayout block at the bottom of the buildUI for the mechanism.
     auto* row = new QGridLayout;
     row->setSpacing(12);
 
@@ -1447,8 +1458,19 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // AlignTop keeps the box from stretching vertically inside its grid cell.
     row->addWidget(scfGrp, 1, 1, Qt::AlignTop);
 
-    contentLayout()->addLayout(row);
-    contentLayout()->addStretch();
+    // Top-justify the grid: insert the QGridLayout BEFORE the auto-trailing
+    // stretch added by SetupPage::init() (SetupPage.cpp:90 [m_contentLayout
+    // ->addStretch(1)]).  The previous code called contentLayout()->addLayout
+    // followed by addStretch(), which left the grid sandwiched between the
+    // auto-stretch (above) and the new explicit stretch (below) — vertically
+    // centring the boxes when the dialog page area was taller than the grid.
+    // Mirrors the pattern in SetupPage::addSection (SetupPage.cpp:126-127)
+    // which uses insertWidget(stretchIndex, group) for the same reason.
+    // Bench feedback 2026-05-04.
+    {
+        const int stretchIndex = contentLayout()->count() - 1;
+        contentLayout()->insertLayout(stretchIndex, row);
+    }
 
     // ══════════════════════════════════════════════════════════════════════════
     // ── Bidirectional bindings ───────────────────────────────────────────────
