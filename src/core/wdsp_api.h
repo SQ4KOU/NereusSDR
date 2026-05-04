@@ -95,6 +95,14 @@
 //                 18924 [v2.10.3.13]).  Signatures match wdsp/dexp.c:518,
 //                 531 [v2.10.3.13].  AI-assisted transformation via
 //                 Anthropic Claude Code.
+//   2026-05-03 — SetDEXPLowCut, SetDEXPHighCut, SetDEXPRunSideChannelFilter
+//                 declarations added by J.J. Boyd (KG4VCF) during
+//                 3M-3a-iii Task 4 — TxChannel DEXP side-channel filter
+//                 wrappers.  LowCut/HighCut take Hz on both sides (no
+//                 conversion); RunSideChannelFilter is the band-pass
+//                 master enable for the detector input.  Signatures
+//                 match wdsp/dexp.c:582, 594, 606 [v2.10.3.13].
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -965,6 +973,23 @@ void SetDEXPReleaseTime(int id, double time);
 //   SetDEXPHysteresisRatio: cmaster.cs:184-185
 void SetDEXPExpansionRatio(int id, double ratio);
 void SetDEXPHysteresisRatio(int id, double ratio);
+
+// DEXP side-channel filter setters (Phase 3M-3a-iii Task 4).
+// LowCut / HighCut are Hz on both sides (no conversion).  RunSideChannelFilter
+// is the master enable for the band-pass that shapes the detector input
+// (NOT the audio that gets gated).  WDSP takes int for bool parameters
+// (0=false, 1=true).
+// From Thetis wdsp/dexp.c [v2.10.3.13]:
+//   SetDEXPLowCut:                dexp.c:582 — side-channel filter low cut (Hz)
+//   SetDEXPHighCut:               dexp.c:594 — side-channel filter high cut (Hz)
+//   SetDEXPRunSideChannelFilter:  dexp.c:606 — filter master enable
+// Cited from Thetis cmaster.cs [v2.10.3.13]:
+//   SetDEXPLowCut:                cmaster.cs:190-191
+//   SetDEXPHighCut:               cmaster.cs:193-194
+//   SetDEXPRunSideChannelFilter:  cmaster.cs:196-197
+void SetDEXPLowCut(int id, double lowcut);
+void SetDEXPHighCut(int id, double highcut);
+void SetDEXPRunSideChannelFilter(int id, int run);
 
 // Anti-VOX — wires SetAntiVOXRun and SetAntiVOXGain.
 // WDSP takes int for bool parameters (0=false, 1=true).

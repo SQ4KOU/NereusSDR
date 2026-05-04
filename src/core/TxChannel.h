@@ -789,6 +789,67 @@ public:
     /// stored dB value.
     void setDexpHysteresisRatio(double ratioDb);
 
+    // ── DEXP side-channel filter wrappers (3M-3a-iii Task 4) ────────────────
+    //
+    // The side-channel filter is the band-pass that shapes the signal
+    // feeding the DEXP detector (NOT the audio that gets gated).  Used to
+    // narrow detection to the speech band so off-band hum / breath noise
+    // doesn't keep VOX up.  Thetis exposes these on the VOX/DEXP Setup
+    // page in the "Side Channel Filter" group (chkSCFEnable / udSCFLowCut
+    // / udSCFHighCut — setup.cs:18933-18948 [v2.10.3.13]).
+    //
+    // Range 100..10000 Hz on both cut frequencies, defaults 500 Hz LowCut
+    // and 1500 Hz HighCut, both clamped at the wrapper boundary
+    // (setup.Designer.cs:45187-45245 [v2.10.3.13]).
+
+    /// DEXP side-channel filter low-cut frequency (Hz).
+    ///
+    /// From Thetis cmaster.cs:190-191 [v2.10.3.13] — SetDEXPLowCut DLL
+    /// import.  WDSP impl: wdsp/dexp.c:582 [v2.10.3.13]; comment at
+    /// dexp.c:584 "Set side-channel filter low_cut (Hertz)." — same
+    /// units on both sides, no conversion needed.
+    /// Thetis call-site: setup.cs:18939-18943 udSCFLowCut_ValueChanged:
+    ///   cmaster.SetDEXPLowCut(0, (double)udSCFLowCut.Value);
+    ///
+    /// Range 100..10000 Hz (setup.Designer.cs:45230-45235 [v2.10.3.13]).
+    /// Default 500 Hz (setup.Designer.cs:45240-45245).
+    ///
+    /// Idempotent: NaN-aware first-call sentinel; qFuzzyCompare on doubles.
+    void setDexpLowCut(double lowCutHz);
+
+    /// DEXP side-channel filter high-cut frequency (Hz).
+    ///
+    /// From Thetis cmaster.cs:193-194 [v2.10.3.13] — SetDEXPHighCut DLL
+    /// import.  WDSP impl: wdsp/dexp.c:594 [v2.10.3.13]; comment at
+    /// dexp.c:596 "Set side-channel filter high_cut (Hertz)." — same
+    /// units on both sides, no conversion needed.
+    /// Thetis call-site: setup.cs:18945-18949 udSCFHighCut_ValueChanged:
+    ///   cmaster.SetDEXPHighCut(0, (double)udSCFHighCut.Value);
+    ///
+    /// Range 100..10000 Hz (setup.Designer.cs:45200-45205 [v2.10.3.13]).
+    /// Default 1500 Hz (setup.Designer.cs:45210-45215).
+    ///
+    /// Idempotent: NaN-aware first-call sentinel; qFuzzyCompare on doubles.
+    void setDexpHighCut(double highCutHz);
+
+    /// DEXP side-channel filter master enable.
+    ///
+    /// From Thetis cmaster.cs:196-197 [v2.10.3.13] —
+    /// SetDEXPRunSideChannelFilter DLL import.  WDSP impl: wdsp/dexp.c:606
+    /// [v2.10.3.13]; comment at dexp.c:608 "Turn OFF/ON the side-channel
+    /// filter and its compensating delay."
+    /// Thetis call-site: setup.cs:18933-18937 chkSCFEnable_CheckedChanged:
+    ///   cmaster.SetDEXPRunSideChannelFilter(0, chkSCFEnable.Checked);
+    ///
+    /// Thetis ships chkSCFEnable as DEFAULT CHECKED
+    /// (setup.Designer.cs:45250-45251 [v2.10.3.13]) — caller (UI/model)
+    /// is responsible for pushing true at startup if Thetis-default
+    /// behavior is desired; the cache initialises to false to match the
+    /// WDSP create_dexp boot state (a->run_filt = 0).
+    ///
+    /// Idempotent: bool `==` guard against m_dexpRunSideChannelFilterLast.
+    void setDexpRunSideChannelFilter(bool run);
+
     // ── Mic preamp / mic-mute path (3M-1b D.6) ──────────────────────────────
 
     /// Set the mic preamp linear scalar pushed to WDSP via SetTXAPanelGain1.
@@ -1564,6 +1625,11 @@ public:
     double lastDexpExpansionRatioDbForTest()  const noexcept { return m_dexpExpansionRatioDbLast; }
     double lastDexpHysteresisRatioDbForTest() const noexcept { return m_dexpHysteresisRatioDbLast; }
 
+    // ── Test seams (Phase 3M-3a-iii Task 4) — DEXP side-channel filter ─────
+    double lastDexpLowCutHzForTest()              const noexcept { return m_dexpLowCutHzLast; }
+    double lastDexpHighCutHzForTest()             const noexcept { return m_dexpHighCutHzLast; }
+    bool   lastDexpRunSideChannelFilterForTest()  const noexcept { return m_dexpRunSideChannelFilterLast; }
+
     // ── Test seam (Phase 3M-1b D.6) — mic preamp last-value read-back ────────
     //
     // Allow tests to verify:
@@ -1823,6 +1889,17 @@ private:
     // Both initialise to quiet_NaN so the first call always passes the guard.
     double m_dexpExpansionRatioDbLast  = std::numeric_limits<double>::quiet_NaN();
     double m_dexpHysteresisRatioDbLast = std::numeric_limits<double>::quiet_NaN();
+
+    // ── DEXP side-channel filter last-set values (3M-3a-iii Task 4) ─────────
+    //
+    // LowCut / HighCut are Hz at both the wrapper and WDSP boundaries (no
+    // unit conversion).  RunSideChannelFilter caches false to match the
+    // create_dexp WDSP boot state (a->run_filt = 0); Thetis ships
+    // chkSCFEnable as default CHECKED but the caller is responsible for
+    // pushing that initial value at startup.
+    double m_dexpLowCutHzLast              = std::numeric_limits<double>::quiet_NaN();
+    double m_dexpHighCutHzLast             = std::numeric_limits<double>::quiet_NaN();
+    bool   m_dexpRunSideChannelFilterLast  = false;
 
     // ── Mic preamp last-set value (D.6) ──────────────────────────────────────
     //

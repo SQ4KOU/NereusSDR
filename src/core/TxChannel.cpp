@@ -199,6 +199,19 @@ warren@wpratt.com
 //                 0..30 dB (Expansion) and 0..10 dB (Hysteresis) per
 //                 setup.Designer.cs:44845-44905 [v2.10.3.13].  AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-05-03 — Phase 3M-3a-iii Task 4: setDexpLowCut(double),
+//                 setDexpHighCut(double), setDexpRunSideChannelFilter(bool)
+//                 wrappers implemented by J.J. Boyd (KG4VCF).  These
+//                 control the side-channel band-pass filter that shapes
+//                 the DEXP detector input (NOT the audio that gets
+//                 gated).  Hz on both sides (no unit conversion); ranges
+//                 100..10000 Hz on both cuts per setup.Designer.cs:
+//                 45200-45245 [v2.10.3.13].  Thetis ships chkSCFEnable
+//                 as default CHECKED (setup.Designer.cs:45250-45251
+//                 [v2.10.3.13]); the wrapper cache initialises false
+//                 to match WDSP's create_dexp boot state and the caller
+//                 must push true at startup for Thetis-default behavior.
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
@@ -1635,6 +1648,143 @@ void TxChannel::setDexpHysteresisRatio(double ratioDb)
     //   cmaster.SetDEXPHysteresisRatio(0,
     //                                  Math.Pow(10.0, -(double)udDEXPHysteresisRatio.Value / 20.0));
     SetDEXPHysteresisRatio(m_channelId, std::pow(10.0, -clamped / 20.0));
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// setDexpLowCut()  — Phase 3M-3a-iii Task 4
+//
+// Set the side-channel band-pass filter low-cut frequency (Hz).
+//
+// Porting from Thetis cmaster.cs:190-191 [v2.10.3.13] — SetDEXPLowCut:
+//   [DllImport("wdsp.dll", EntryPoint = "SetDEXPLowCut", ...)]
+//   public static extern void SetDEXPLowCut(int id, double lowcut);
+//
+// Units: Hz on both sides (wdsp/dexp.c:584 [v2.10.3.13] comment "Set
+// side-channel filter low_cut (Hertz)."  No unit conversion needed.
+// Thetis call-site: setup.cs:18939-18943 udSCFLowCut_ValueChanged:
+//   private void udSCFLowCut_ValueChanged(object sender, EventArgs e)
+//   {
+//       if (initializing) return;
+//       cmaster.SetDEXPLowCut(0, (double)udSCFLowCut.Value);
+//   }
+//
+// Range 100..10000 Hz (setup.Designer.cs:45230-45235 [v2.10.3.13]).
+// Default 500 Hz (setup.Designer.cs:45240-45245).
+//
+// Idempotent guard: NaN-aware first-call sentinel + qFuzzyCompare on the
+// post-clamp Hz value.
+//
+// From Thetis wdsp/dexp.c:582 [v2.10.3.13] — SetDEXPLowCut impl.
+// ---------------------------------------------------------------------------
+void TxChannel::setDexpLowCut(double lowCutHz)
+{
+    // Range 100..10000 Hz per setup.Designer.cs:45230-45235 [v2.10.3.13].
+    const double clamped = std::clamp(lowCutHz, 100.0, 10000.0);
+    if (!std::isnan(m_dexpLowCutHzLast)
+        && qFuzzyCompare(clamped, m_dexpLowCutHzLast)) {
+        return;  // idempotent guard
+    }
+    m_dexpLowCutHzLast = clamped;
+#ifdef HAVE_WDSP
+    // From Thetis cmaster.cs:190-191 [v2.10.3.13]
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    // Phase 3M-1c TX pump v3: pdexp[ch] null-guard — see setVoxRun for rationale.
+    if (pdexp[m_channelId] == nullptr) return;
+    SetDEXPLowCut(m_channelId, clamped);  // Hz, no conversion
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// setDexpHighCut()  — Phase 3M-3a-iii Task 4
+//
+// Set the side-channel band-pass filter high-cut frequency (Hz).
+//
+// Porting from Thetis cmaster.cs:193-194 [v2.10.3.13] — SetDEXPHighCut:
+//   [DllImport("wdsp.dll", EntryPoint = "SetDEXPHighCut", ...)]
+//   public static extern void SetDEXPHighCut(int id, double highcut);
+//
+// Units: Hz on both sides (wdsp/dexp.c:596 [v2.10.3.13] comment "Set
+// side-channel filter high_cut (Hertz)."  No unit conversion needed.
+// Thetis call-site: setup.cs:18945-18949 udSCFHighCut_ValueChanged:
+//   private void udSCFHighCut_ValueChanged(object sender, EventArgs e)
+//   {
+//       if (initializing) return;
+//       cmaster.SetDEXPHighCut(0, (double)udSCFHighCut.Value);
+//   }
+//
+// Range 100..10000 Hz (setup.Designer.cs:45200-45205 [v2.10.3.13]).
+// Default 1500 Hz (setup.Designer.cs:45210-45215).
+//
+// Idempotent guard: NaN-aware first-call sentinel + qFuzzyCompare on the
+// post-clamp Hz value.
+//
+// From Thetis wdsp/dexp.c:594 [v2.10.3.13] — SetDEXPHighCut impl.
+// ---------------------------------------------------------------------------
+void TxChannel::setDexpHighCut(double highCutHz)
+{
+    // Range 100..10000 Hz per setup.Designer.cs:45200-45205 [v2.10.3.13].
+    const double clamped = std::clamp(highCutHz, 100.0, 10000.0);
+    if (!std::isnan(m_dexpHighCutHzLast)
+        && qFuzzyCompare(clamped, m_dexpHighCutHzLast)) {
+        return;  // idempotent guard
+    }
+    m_dexpHighCutHzLast = clamped;
+#ifdef HAVE_WDSP
+    // From Thetis cmaster.cs:193-194 [v2.10.3.13]
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    // Phase 3M-1c TX pump v3: pdexp[ch] null-guard — see setVoxRun for rationale.
+    if (pdexp[m_channelId] == nullptr) return;
+    SetDEXPHighCut(m_channelId, clamped);  // Hz, no conversion
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// setDexpRunSideChannelFilter()  — Phase 3M-3a-iii Task 4
+//
+// Enable or disable the side-channel band-pass filter (the master enable
+// for the detector-input shaping filter).
+//
+// Porting from Thetis cmaster.cs:196-197 [v2.10.3.13] —
+// SetDEXPRunSideChannelFilter:
+//   [DllImport("wdsp.dll", EntryPoint = "SetDEXPRunSideChannelFilter", ...)]
+//   public static extern void SetDEXPRunSideChannelFilter(int id, bool run);
+//
+// WDSP impl wdsp/dexp.c:606 [v2.10.3.13]; comment at dexp.c:608 "Turn
+// OFF/ON the side-channel filter and its compensating delay."
+//
+// Thetis call-site setup.cs:18933-18937 [v2.10.3.13]:
+//   private void chkSCFEnable_CheckedChanged(object sender, EventArgs e)
+//   {
+//       if (initializing) return;
+//       cmaster.SetDEXPRunSideChannelFilter(0, chkSCFEnable.Checked);
+//   }
+//
+// Thetis ships chkSCFEnable as DEFAULT CHECKED
+// (setup.Designer.cs:45250-45251 [v2.10.3.13]:
+// chkSCFEnable.Checked = true), but the wrapper-side cache initialises
+// to false to match the WDSP create_dexp boot state (a->run_filt = 0).
+// Caller (UI/model) must push true at startup if Thetis-default behavior
+// is desired.
+//
+// Idempotent: bool `==` guard against m_dexpRunSideChannelFilterLast.
+// WDSP signature uses `int` for the bool parameter; explicit cast
+// applied (matches setVoxRun / setDexpRun).
+//
+// From Thetis wdsp/dexp.c:606 [v2.10.3.13] — SetDEXPRunSideChannelFilter impl.
+// ---------------------------------------------------------------------------
+void TxChannel::setDexpRunSideChannelFilter(bool run)
+{
+    if (run == m_dexpRunSideChannelFilterLast) return;  // idempotent guard
+    m_dexpRunSideChannelFilterLast = run;
+#ifdef HAVE_WDSP
+    // From Thetis cmaster.cs:196-197 [v2.10.3.13]
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    // Phase 3M-1c TX pump v3: pdexp[ch] null-guard — see setVoxRun for rationale.
+    if (pdexp[m_channelId] == nullptr) return;
+    SetDEXPRunSideChannelFilter(m_channelId, run ? 1 : 0);
+#else
+    Q_UNUSED(run);
 #endif
 }
 

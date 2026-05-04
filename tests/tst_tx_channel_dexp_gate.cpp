@@ -131,6 +131,82 @@ private slots:
         ch.setDexpHysteresisRatio(15.0);
         QCOMPARE(ch.lastDexpHysteresisRatioDbForTest(), 10.0);
     }
+
+    // --------------------------------------------------------------
+    // setDexpLowCut / setDexpHighCut / setDexpRunSideChannelFilter
+    // (Phase 3M-3a-iii Task 4)
+    //
+    // Thetis Setup UI: VOX/DEXP page → "Side Channel Filter" group
+    //   chkSCFEnable             default CHECKED  (setup.Designer.cs:45250)
+    //   udSCFLowCut    100..10000 Hz default 500   (setup.Designer.cs:45219-45245)
+    //   udSCFHighCut   100..10000 Hz default 1500  (setup.Designer.cs:45189-45215)
+    // Call-sites: setup.cs:18933-18948 [v2.10.3.13]
+    //   chkSCFEnable_CheckedChanged  → SetDEXPRunSideChannelFilter
+    //   udSCFLowCut_ValueChanged     → SetDEXPLowCut    (Hz, no unit conv)
+    //   udSCFHighCut_ValueChanged    → SetDEXPHighCut   (Hz, no unit conv)
+    // --------------------------------------------------------------
+
+    void setDexpLowCut_inRange() {
+        TxChannel ch(kChannelId);
+        QVERIFY(std::isnan(ch.lastDexpLowCutHzForTest()));
+        ch.setDexpLowCut(500.0);
+        QCOMPARE(ch.lastDexpLowCutHzForTest(), 500.0);
+        ch.setDexpLowCut(2000.0);
+        QCOMPARE(ch.lastDexpLowCutHzForTest(), 2000.0);
+    }
+    void setDexpLowCut_clampedLow() {
+        // Below Thetis minimum of 100 Hz gets clamped to 100.
+        TxChannel ch(kChannelId);
+        ch.setDexpLowCut(-50.0);
+        QCOMPARE(ch.lastDexpLowCutHzForTest(), 100.0);
+        ch.setDexpLowCut(50.0);
+        QCOMPARE(ch.lastDexpLowCutHzForTest(), 100.0);
+    }
+    void setDexpLowCut_clampedHigh() {
+        // Above Thetis maximum of 10000 Hz gets clamped to 10000.
+        TxChannel ch(kChannelId);
+        ch.setDexpLowCut(25000.0);
+        QCOMPARE(ch.lastDexpLowCutHzForTest(), 10000.0);
+    }
+    void setDexpLowCut_idempotent() {
+        TxChannel ch(kChannelId);
+        ch.setDexpLowCut(500.0);
+        ch.setDexpLowCut(500.0);
+        QCOMPARE(ch.lastDexpLowCutHzForTest(), 500.0);
+    }
+    void setDexpHighCut_inRange() {
+        TxChannel ch(kChannelId);
+        QVERIFY(std::isnan(ch.lastDexpHighCutHzForTest()));
+        ch.setDexpHighCut(1500.0);
+        QCOMPARE(ch.lastDexpHighCutHzForTest(), 1500.0);
+        ch.setDexpHighCut(5000.0);
+        QCOMPARE(ch.lastDexpHighCutHzForTest(), 5000.0);
+    }
+    void setDexpHighCut_clampedLow() {
+        TxChannel ch(kChannelId);
+        ch.setDexpHighCut(-10.0);
+        QCOMPARE(ch.lastDexpHighCutHzForTest(), 100.0);
+    }
+    void setDexpHighCut_clampedHigh() {
+        TxChannel ch(kChannelId);
+        ch.setDexpHighCut(15000.0);
+        QCOMPARE(ch.lastDexpHighCutHzForTest(), 10000.0);
+    }
+    void setDexpRunSideChannelFilter_idempotent() {
+        TxChannel ch(kChannelId);
+        // Default is false (cache init); Thetis ships chkSCFEnable CHECKED
+        // but the wrapper-side cache initialises to false to match the
+        // create_dexp WDSP boot state (a->run_filt = 0).  Caller (UI/model)
+        // is responsible for pushing true at startup if Thetis-default
+        // behavior is desired.
+        QCOMPARE(ch.lastDexpRunSideChannelFilterForTest(), false);
+        ch.setDexpRunSideChannelFilter(true);
+        QCOMPARE(ch.lastDexpRunSideChannelFilterForTest(), true);
+        ch.setDexpRunSideChannelFilter(true);   // idempotent re-call
+        QCOMPARE(ch.lastDexpRunSideChannelFilterForTest(), true);
+        ch.setDexpRunSideChannelFilter(false);
+        QCOMPARE(ch.lastDexpRunSideChannelFilterForTest(), false);
+    }
 };
 
 QTEST_APPLESS_MAIN(TstTxChannelDexpGate)
