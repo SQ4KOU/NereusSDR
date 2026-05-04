@@ -76,6 +76,23 @@
 //                 (setup.cs:19812-20310 [v2.10.3.13]).
 //                 Authored by J.J. Boyd (KG4VCF) with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-05-03 — v0.3.2 pre-tag cleanup pass (issue #167):
+//                 Stream A — m_attOnTxWarning informational label dropped.
+//                 The ATT-on-TX safety subsystem is scaffolded for Phase
+//                 3M-4 PureSignal but has no observable behaviour in
+//                 v0.3.2 (pureSignalActive() returns false unconditionally;
+//                 the gate never fires). The user-facing UI surface
+//                 lands with PureSignal in 3M-4.
+//                 Stream B — E1-E10 source-first remediations from the
+//                 parity audit: panelAutoPACalibrate disclaimer (E1),
+//                 validateProfileName helper (E3), max-power 0.1
+//                 step / 1 decimal precision (E4), repurposing comment
+//                 on m_warningLabel (E5), chkPANewCal hidden by default
+//                 (E6), block-header on warning row group (E7), Default-
+//                 fallback after delete (E8), dynamic group title on
+//                 loadProfileIntoUi (E9). Authored by J.J. Boyd (KG4VCF)
+//                 with AI-assisted implementation via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -233,18 +250,22 @@ bool isPaEditableBand(Band b) noexcept {
 
 }  // namespace
 
-// ── Phase 8 (#167) helper: build the four informational warning rows ─────────
+// ── Phase 8 (#167) helper: build the informational warning rows ──────────────
 //
 // Extracted out of PaGainByBandPage's constructor so it can run in both the
 // model-less (test fixture / headless preview) and live editor paths. The
 // labels are always created; applyCapabilityVisibility() toggles them per
 // the BoardCapabilities flags.
+//
+// v0.3.2 cleanup: m_attOnTxWarning was dropped here. The ATT-on-TX safety
+// subsystem is scaffolded for Phase 3M-4 PureSignal but has no observable
+// behaviour in v0.3.2 (pureSignalActive() returns false unconditionally; the
+// gate never fires). The user-facing UI surface lands with PureSignal in 3M-4.
 namespace {
 void buildPhase8WarningRows(
     QLabel*& noPaSupportBanner,
     QLabel*& ganymedeWarning,
     QLabel*& psWarning,
-    QLabel*& attOnTxWarning,
     QWidget* parent,
     QBoxLayout* contentLayout)
 {
@@ -276,16 +297,6 @@ void buildPhase8WarningRows(
     psWarning->setWordWrap(true);
     psWarning->setVisible(false);
     contentLayout->insertWidget(contentLayout->count() - 1, psWarning);
-
-    attOnTxWarning = new QLabel(QStringLiteral(
-        "ATT on TX safety gate: when PureSignal is enabled and drive power "
-        "changes, the receive step attenuator forces 31 dB to protect the "
-        "feedback ADC. See Setup -> General -> Options for the gate flags."), parent);
-    attOnTxWarning->setStyleSheet(QStringLiteral(
-        "QLabel { color: #80b0d0; padding: 8px; }"));
-    attOnTxWarning->setWordWrap(true);
-    attOnTxWarning->setVisible(false);
-    contentLayout->insertWidget(contentLayout->count() - 1, attOnTxWarning);
 }
 } // namespace
 
@@ -308,9 +319,11 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
         // placeholder's enabled flag rides the same editorEnabled boolean.
         m_placeholderLabel = lbl;
         // Build the Phase 8 informational warning rows so the test seams
-        // have non-null targets to toggle visibility on.
+        // have non-null targets to toggle visibility on. (m_attOnTxWarning
+        // dropped in v0.3.2 cleanup; ATT-on-TX UI lands with PureSignal in
+        // Phase 3M-4 — see CHANGELOG ATT-on-TX entry.)
         buildPhase8WarningRows(m_noPaSupportBanner, m_ganymedeWarning,
-                               m_psWarning, m_attOnTxWarning,
+                               m_psWarning,
                                this, contentLayout());
         return;
     }
@@ -369,6 +382,11 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     m_warningIcon->setVisible(false);
     warningRow->addWidget(m_warningIcon);
 
+    // NereusSDR-spin: m_warningLabel is repurposed as a per-band gain divergence
+    // indicator. Thetis lblPAProfileWarning ships verbatim 5-line red text
+    // describing TX-Profile / PA-Profile recovery linkage
+    // (setup.designer.cs:47487-47499 [v2.10.3.13]) which is a 3M-4 PureSignal
+    // follow-up.
     m_warningLabel = new QLabel(QStringLiteral(
         "PA profile has been modified from factory defaults."), this);
     m_warningLabel->setStyleSheet(QStringLiteral(
@@ -380,13 +398,20 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     m_newCalCheck->setToolTip(QStringLiteral(
         "Thetis-specific 'new calibration' mode marker.  No NereusSDR-side "
         "behavior is hooked to it yet — tracked for parity only."));
+    // From Thetis chkPANewCal Visible=false default at setup.designer.cs:47417
+    // [v2.10.3.13]; Thetis Ctrl+Alt+A keyhandler (setup.cs:12490-12498) unhides
+    // it. NereusSDR has no live behaviour wired to NewCal mode (deferred to
+    // 3M-4 PureSignal calibration overhaul); hide by default to avoid shipping
+    // an inert toggle.
+    m_newCalCheck->setVisible(false);
     warningRow->addWidget(m_newCalCheck);
 
     contentLayout()->insertLayout(contentLayout()->count() - 1, warningRow);
 
     // ── Main grid: PA Gain by Band (dB) ──────────────────────────────────
     // 14 bands x (band label + gain + 9 adjusts + max-power + use-max)
-    auto* gainGroup = new QGroupBox(QStringLiteral("PA Gain by Band (dB)"), this);
+    m_gainByBandGroup = new QGroupBox(QStringLiteral("PA Gain by Band (dB)"), this);
+    auto* gainGroup = m_gainByBandGroup;
     auto* grid = new QGridLayout(gainGroup);
     grid->setHorizontalSpacing(4);
     grid->setVerticalSpacing(2);
@@ -411,6 +436,11 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     grid->addWidget(hdrUse, row, kColUseMaxPower);
     ++row;
 
+    // NereusSDR-spin: 14 per-band columns expand chkUsePowerOnDrvTunPA +
+    // nudMaxPowerForBandPA which Thetis renders as a single shared row pivoting
+    // on _adjustingBand (setup.cs:24142-24173 + setup.designer.cs:47515-47568
+    // [v2.10.3.13]). Step + decimals matched to Thetis precision.
+    //
     // Per-band rows: 14 entries.
     // From Thetis nud160M..nudVHF13 setup.designer.cs:47386-47525 [v2.10.3.13].
     for (int n = 0; n < kPaBandCount; ++n) {
@@ -450,7 +480,9 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
 
         // Per-band max-power column.
         // From Thetis nudMaxPowerForBandPA + chkUsePowerOnDrvTunPA [v2.10.3.13].
-        m_maxPowerSpins[n] = buildSpin(0.0, 1500.0, 1.0, 0, gainGroup);
+        // 0..1500 W range, 0.1 W single-step (Thetis nudMaxPowerForBandPA.TinyStep=true),
+        // 1 decimal (Thetis DecimalPlaces=1, setup.designer.cs:47541 [v2.10.3.13]).
+        m_maxPowerSpins[n] = buildSpin(0.0, 1500.0, 0.1, 1, gainGroup);
         m_maxPowerSpins[n]->setToolTip(QStringLiteral(
             "Per-band max-power ceiling in watts for %1.")
             .arg(bandLabel(band)));
@@ -487,6 +519,14 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     contentLayout()->insertWidget(contentLayout()->count() - 1,
                                    m_autoCalibrateCheck);
 
+    // NereusSDR-spin: m_autoCalPanel ships 4 of Thetis's 17 panelAutoPACalibrate
+    // sub-controls. Per-band selectors (chkPA160..chkPA6), radPACalAllBands /
+    // radPACalSelBands, chkBypassANANPASettings, and explicit btnPAGainCalibration
+    // are deferred follow-ups (see pa-calibration-hotfix.md §6 + remediation
+    // backlog F1). Auto-cal currently sweeps unconditional 11 HF bands.
+    //
+    // From Thetis panelAutoPACalibrate setup.designer.cs:49094-49299 [v2.10.3.13].
+    //
     // Sub-panel: status / progress / cancel / target watts.  Hidden until
     // the user ticks chkAutoPACalibrate (Thetis panelAutoPACalibrate.Visible
     // = false at construction; setup.designer.cs:49119 [v2.10.3.13]).
@@ -571,16 +611,26 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     connect(&model->radioStatus(), &RadioStatus::powerChanged,
             this, &PaGainByBandPage::onFwdPowerSample);
 
-    // ── Phase 8 (#167) capability-gated informational warning rows ────────
-    // All four labels are constructed visible by default; applyCapabilityVisibility
-    // toggles them per the connected board's BoardCapabilities flags. The
-    // initial visibility (before any radio connects) follows the safest
-    // default: banner shown (caps.hasPaProfile is conservative-false), and
-    // Ganymede / PS / ATT warnings hidden. Plain QLabel (not
-    // buildPlaceholderLabel) so the warning copy renders in the normal-state
-    // font, distinct from the disabled-italic placeholder bodies elsewhere.
-    // Inline cite: Thetis comboRadioModel_SelectedIndexChanged
-    // setup.cs:19812-20310 [v2.10.3.13] — per-SKU PA tab visibility.
+    // ── NereusSDR-original: per-SKU informational warning labels ─────────────
+    //
+    // 3 labels with no Thetis equivalent. Driven by BoardCapabilities
+    // (NereusSDR-spin collapse of comboRadioModel_SelectedIndexChanged
+    // setup.cs:19812-20310 [v2.10.3.13]). Visibility toggled by
+    // applyCapabilityVisibility(...).
+    //
+    // - m_noPaSupportBanner   shown when !caps.hasPaProfile
+    // - m_ganymedeWarning     shown when caps.canDriveGanymede
+    // - m_psWarning           shown when caps.hasPureSignal
+    //
+    // (m_attOnTxWarning was originally part of this block but was dropped in
+    //  v0.3.2 cleanup — see CHANGELOG ATT-on-TX entry. The ATT-on-TX UI lands
+    //  with PureSignal in Phase 3M-4.)
+    //
+    // All labels are constructed visible by default for the safest first-paint;
+    // applyCapabilityVisibility() resolves the actual state once a radio
+    // connects. Plain QLabel (not buildPlaceholderLabel) so the warning copy
+    // renders in the normal-state font, distinct from the disabled-italic
+    // placeholder bodies elsewhere.
 
     m_noPaSupportBanner = new QLabel(QStringLiteral(
         "This radio does not support per-band PA gain calibration.\n"
@@ -610,16 +660,6 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     m_psWarning->setWordWrap(true);
     m_psWarning->setVisible(false);
     contentLayout()->insertWidget(contentLayout()->count() - 1, m_psWarning);
-
-    m_attOnTxWarning = new QLabel(QStringLiteral(
-        "ATT on TX safety gate: when PureSignal is enabled and drive power "
-        "changes, the receive step attenuator forces 31 dB to protect the "
-        "feedback ADC. See Setup -> General -> Options for the gate flags."), this);
-    m_attOnTxWarning->setStyleSheet(QStringLiteral(
-        "QLabel { color: #80b0d0; padding: 8px; }"));
-    m_attOnTxWarning->setWordWrap(true);
-    m_attOnTxWarning->setVisible(false);
-    contentLayout()->insertWidget(contentLayout()->count() - 1, m_attOnTxWarning);
 
     // Initial population.
     rebuildProfileCombo();
@@ -701,12 +741,10 @@ void PaGainByBandPage::applyCapabilityVisibility(const BoardCapabilities& caps)
     }
 
     // ── ATT-on-TX informational row ─────────────────────────────────────
-    // Hidden when caps.hasStepAttenuatorCal=false. Thetis surfaces
-    // labelATTOnTX / udATTOnTX (setup.cs:19849-19850 [v2.10.3.13]) only on
-    // boards with a calibrated step attenuator chain.
-    if (m_attOnTxWarning) {
-        m_attOnTxWarning->setVisible(caps.hasStepAttenuatorCal);
-    }
+    // Dropped in v0.3.2 cleanup. The ATT-on-TX safety subsystem is scaffolded
+    // for Phase 3M-4 PureSignal but has no observable behaviour in v0.3.2;
+    // the user-facing UI surface lands with PureSignal in 3M-4.
+    // (Field caps.hasStepAttenuatorCal is still consulted by other components.)
 }
 
 #ifdef NEREUS_BUILD_TESTS
@@ -747,11 +785,6 @@ bool PaGainByBandPage::isGanymedeWarningVisibleForTest() const
 bool PaGainByBandPage::isPsWarningVisibleForTest() const
 {
     return m_psWarning && m_psWarning->isVisibleTo(this);
-}
-
-bool PaGainByBandPage::isAttOnTxWarningVisibleForTest() const
-{
-    return m_attOnTxWarning && m_attOnTxWarning->isVisibleTo(this);
 }
 #endif
 
@@ -798,6 +831,14 @@ void PaGainByBandPage::loadProfileIntoUi(const PaProfile& profile)
 
     m_updatingFromProfile = false;
 
+    // Mirrors Thetis updatePAControls at setup.cs:22884-22905 [v2.10.3.13]:
+    // group title rewrites to "<profile> - PA Gain By Band (dB)" so the user
+    // sees which profile's values they're editing.
+    if (m_gainByBandGroup) {
+        m_gainByBandGroup->setTitle(
+            tr("%1 — PA Gain By Band (dB)").arg(profile.name()));
+    }
+
     warnIfProfileDiverged();
 }
 
@@ -833,6 +874,29 @@ void PaGainByBandPage::warnIfProfileDiverged()
 }
 
 // ── User-edit handlers ───────────────────────────────────────────────────────
+
+bool PaGainByBandPage::validateProfileName(const QString& name) const
+{
+    // Mirrors Thetis validatePAProfileName at setup.cs:22944-22966
+    // [v2.10.3.13]: reject reserved "Default" prefix and collisions with
+    // existing profile names.
+    if (name.startsWith(QStringLiteral("Default"), Qt::CaseInsensitive)) {
+        QMessageBox::warning(const_cast<PaGainByBandPage*>(this),
+            tr("Invalid profile name"),
+            tr("Profile names starting with \"Default\" are reserved for "
+               "factory entries. Choose a different name."));
+        return false;
+    }
+    if (m_paProfileManager
+        && m_paProfileManager->profileNames().contains(name, Qt::CaseInsensitive)) {
+        QMessageBox::warning(const_cast<PaGainByBandPage*>(this),
+            tr("Duplicate profile name"),
+            tr("A profile named \"%1\" already exists. Choose a different name.")
+                .arg(name));
+        return false;
+    }
+    return true;
+}
 
 void PaGainByBandPage::onProfileSelected(const QString& name)
 {
@@ -872,6 +936,9 @@ void PaGainByBandPage::onNewProfile()
     if (!accepted) { return; }
     name = name.trimmed();
     if (name.isEmpty()) { return; }
+    if (!validateProfileName(name)) {
+        return;  // user shown a message box; abort the op
+    }
 
     // Seed from the connected HPSDRModel — same Thetis precedent
     // (HardwareSpecific.Model is the connected model in setup.cs:22991).
@@ -909,6 +976,9 @@ void PaGainByBandPage::onCopyProfile()
     if (!accepted) { return; }
     name = name.trimmed();
     if (name.isEmpty()) { return; }
+    if (!validateProfileName(name)) {
+        return;  // user shown a message box; abort the op
+    }
 
     // Same Thetis pattern: build a new profile not associated with a model
     // (HPSDRModel::FIRST sentinel) then deep-copy the source data over.
@@ -952,6 +1022,28 @@ void PaGainByBandPage::onDeleteProfile()
         QMessageBox::information(
             this, tr("Cannot Delete Profile"),
             tr("It is not possible to delete the last remaining PA profile."));
+        return;
+    }
+
+    // Mirrors Thetis btnDeletePAProfile_Click at setup.cs:23015-23024 [v2.10.3.13]:
+    // after delete, select Default - <connectedModel> if available, else first
+    // remaining profile.
+    const QString defaultName = QStringLiteral("Default - %1")
+        .arg(QString::fromUtf8(displayName(m_connectedModel)));
+    QString nextActive;
+    if (m_paProfileManager->profileNames().contains(defaultName)) {
+        nextActive = defaultName;
+    } else if (!m_paProfileManager->profileNames().isEmpty()) {
+        nextActive = m_paProfileManager->profileNames().first();
+    }
+    if (!nextActive.isEmpty()) {
+        m_paProfileManager->setActiveProfile(nextActive);
+        if (m_profileCombo) {
+            m_profileCombo->setCurrentText(nextActive);
+        }
+        if (const PaProfile* p = m_paProfileManager->profileByName(nextActive)) {
+            loadProfileIntoUi(*p);
+        }
     }
 }
 

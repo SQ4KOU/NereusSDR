@@ -318,9 +318,14 @@ if (new_pwr != m_lastPower
 
 ### PureSignal future-proofing
 
-`pureSignalActive()` is a `TransmitModel` predicate that returns
-`false` until 3M-4 PureSignal lands. The PS feedback DDC and
-`chkFWCATUBypass` live wiring don't exist yet, so the gate is dormant.
+**The ATT-on-TX subsystem in v0.3.2 has no observable behaviour. The
+`pureSignalActive()` predicate returns false unconditionally; the
+gate never fires. The state and gate logic are scaffolding for Phase
+3M-4.** The PS feedback DDC and `chkFWCATUBypass` live wiring don't
+exist yet, so there is no UI surface for the safety toggles in v0.3.2
+either — the previous `m_attOnTxWarning` informational label was
+dropped from `PaGainByBandPage` to avoid implying configurability that
+isn't there.
 
 But the structure is here:
 
@@ -333,7 +338,9 @@ But the structure is here:
   `[2.10.3.6]MW0LGE att_fixes #399`).
 
 When 3M-4 lands, flipping `pureSignalActive()` to read the live PS
-state activates the gate without further structural changes.
+state activates the gate without further structural changes. The
+informational UI surface (warning row + Setup → General → Options
+toggles) is also re-added at that point.
 
 ### Test seam
 
@@ -369,7 +376,7 @@ pages instead of two.
 | `btnDeletePAProfile` | `m_btnDelete` (QPushButton) | ✅ Phase 6 |
 | `btnResetPAProfile` (Reset Defaults) | `m_btnReset` (QPushButton) | ✅ Phase 6 |
 | `chkAutoPACalibrate` | `m_autoCalibrateCheck` (QCheckBox) | ✅ Phase 6 |
-| `panelAutoPACalibrate` (sweep config) | `m_autoCalPanel` (QGroupBox: target W spinbox + status label + progress bar + cancel button) | ✅ Phase 7 |
+| `panelAutoPACalibrate` (sweep config) | `m_autoCalPanel` (QGroupBox: target W spinbox + status label + progress bar + cancel button) | ⚠️ Partial (Phase 7) — 4 of 17 sub-controls ported; per-band selectors, all-vs-selected radio pair, ANAN bypass, explicit Calibrate trigger deferred to F1. |
 
 NereusSDR-spin densification: Thetis ships only the row for the
 currently-selected band via `panelAdjustGain`. NereusSDR exposes the
@@ -410,6 +417,25 @@ Phase 5B uses the new public `PaTelemetryScaling::scaleFwdPowerWatts`
 / `scaleFwdRevVoltage` helpers (Phase 1B). These were lifted out of
 `RadioModel.cpp` private file-scope so the page can call them
 directly.
+
+### NereusSDR-original additions (no Thetis equivalent)
+
+The following PA Setup controls have no upstream parallel and were added as
+NereusSDR-spin enhancements:
+
+| Control | Reason |
+|---|---|
+| PA Current label (PaValuesPage) | Native ANAN/G2 telemetry; Thetis ships no equivalent on Setup pages |
+| PA Temperature label (PaValuesPage) | Same |
+| ADC Overload label (PaValuesPage) | Native NereusSDR ADC overflow status display |
+| Reset Peak/Min button + 6 PeakMin trackers (PaValuesPage) | Running peak/min on telemetry; Thetis textboxes are instantaneous-only |
+| m_noPaSupportBanner (PaGainByBandPage) | NereusSDR per-SKU UX: explicit banner when caps.hasPaProfile=false (RX-only kits, etc.) |
+| m_ganymedeWarning (PaGainByBandPage) | NereusSDR per-SKU UX: Andromeda Ganymede 500W PA tab follow-up notice |
+| m_psWarning (PaGainByBandPage) | NereusSDR per-SKU UX: PureSignal-related PA/TX-Profile recovery linkage notice |
+
+(`m_attOnTxWarning` was originally part of this block; dropped in v0.3.2
+cleanup — see CHANGELOG ATT-on-TX entry. The ATT-on-TX UI lands with
+PureSignal in Phase 3M-4.)
 
 ---
 

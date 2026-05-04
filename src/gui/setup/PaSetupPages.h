@@ -98,6 +98,11 @@
 //                 (setup.cs:19812-20310 [v2.10.3.13]).  Authored by
 //                 J.J. Boyd (KG4VCF) with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-05-03 — v0.3.2 pre-tag cleanup (issue #167): drop
+//                 m_attOnTxWarning (ATT-on-TX UI lands with PureSignal in
+//                 Phase 3M-4) + E1-E10 source-first remediations from
+//                 parity audit. Authored by J.J. Boyd (KG4VCF) with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -293,7 +298,6 @@ public:
     bool isNoPaSupportBannerVisibleForTest()  const;
     bool isGanymedeWarningVisibleForTest()    const;
     bool isPsWarningVisibleForTest()          const;
-    bool isAttOnTxWarningVisibleForTest()     const;
 
     /// Phase 7 auto-cal test seams.
     AutoCalState autoCalStateForTest() const noexcept { return m_autoCalState; }
@@ -431,6 +435,12 @@ private:
     /// warning icon + label accordingly.
     void warnIfProfileDiverged();
 
+    /// Block reserved names ("Default*") and existing profile collisions.
+    /// Mirrors Thetis validatePAProfileName at setup.cs:22944-22966
+    /// [v2.10.3.13]. Returns true if the name is acceptable; false (and
+    /// shows a QMessageBox::warning) if it must be rejected.
+    bool validateProfileName(const QString& name) const;
+
     /// Connect a freshly-built spinbox/checkbox to its handler. Wraps
     /// connect() so we can apply m_updatingFromProfile suppression uniformly.
     void wireGainSpin(QDoubleSpinBox* spin, Band band);
@@ -457,6 +467,11 @@ private:
     QCheckBox*    m_newCalCheck{nullptr};        // chkPANewCal
     QCheckBox*    m_autoCalibrateCheck{nullptr}; // chkAutoPACalibrate
 
+    /// grpGainByBandPA equivalent. Title rebuilt in loadProfileIntoUi to show
+    /// the active profile name (matches Thetis updatePAControls
+    /// setup.cs:22884-22905 [v2.10.3.13]).
+    QGroupBox*    m_gainByBandGroup{nullptr};
+
     /// Per-band PA gain spinboxes (nud160M..nudVHF13 in Thetis terms).
     /// Index by static_cast<int>(Band) for the 14 PA-relevant bands
     /// (Band160m..XVTR). SWL bands are not editable here.
@@ -478,12 +493,16 @@ private:
     // ── Phase 8 of #167: per-SKU informational warning labels ────────────
     // Each is constructed at PaGainByBandPage build time; visibility is
     // toggled by applyCapabilityVisibility() per the BoardCapabilities
-    // flags. Defaults (before any radio connects): banner shown,
-    // Ganymede / PS / ATT warnings hidden.
+    // flags. Defaults (before any radio connects): banner shown, Ganymede
+    // and PS warnings hidden.
+    //
+    // (m_attOnTxWarning was originally part of this group but was dropped in
+    //  the v0.3.2 cleanup pass — the ATT-on-TX safety subsystem has no
+    //  observable behaviour until PureSignal lands in Phase 3M-4. The UI
+    //  surface is added back when PS arrives.)
     QLabel* m_noPaSupportBanner{nullptr};   // shown when !caps.hasPaProfile
     QLabel* m_ganymedeWarning{nullptr};     // shown when caps.canDriveGanymede
     QLabel* m_psWarning{nullptr};           // shown when caps.hasPureSignal
-    QLabel* m_attOnTxWarning{nullptr};      // shown when caps.hasStepAttenuatorCal
 
     // Phase 8 of #167: model-less placeholder. Set only when the page is
     // constructed without a live RadioModel (test fixture / headless

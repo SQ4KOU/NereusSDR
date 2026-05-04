@@ -16,11 +16,17 @@
 - **PA Gain page** (Setup → PA → PA Gain): ported from Thetis tpGainByBand (setup.designer.cs:47386-47525 [v2.10.3.13]). 14-band gain spinbox grid, 14×9 drive-step adjust matrix, per-band max-power column, profile combo with New / Copy / Delete / Reset Defaults buttons, warning icon + label, chkPANewCal toggle, chkAutoPACalibrate with auto-cal sweep state machine (HF-only band loop, per-step settle via QTimer, FWD reading via RadioStatus, gain delta written into the active profile).
 - **Watt Meter page**: Thetis tpWattMeter parity. Existing PaCalibrationGroup + new chkPAValues "Show PA Values page" toggle + Reset PA Values button.
 - **PA Values page** (NereusSDR-spin promotion): closed the 4-label gap from v0.3.1 (Raw FWD power, Drive, FWD voltage, REV voltage) via the new public PaTelemetryScaling helpers (lifted from RadioModel.cpp private helpers). Running peak/min tracking on six telemetry values + in-page Reset button.
-- **Per-SKU visibility**: `BoardCapabilities`-driven. PA category hidden on RX-only SKUs; editor controls disabled with "no PA support" banner when `caps.hasPaProfile=false` (Atlas / RedPitaya); informational warnings for Ganymede 500 W follow-up, PureSignal recovery linkage, ATT-on-TX gate. Mirrors Thetis comboRadioModel_SelectedIndexChanged (setup.cs:19812-20310 [v2.10.3.13]).
+- **Per-SKU visibility**: `BoardCapabilities`-driven. PA category hidden on RX-only SKUs; editor controls disabled with "no PA support" banner when `caps.hasPaProfile=false` (Atlas / RedPitaya); informational warnings for Ganymede 500 W follow-up and PureSignal recovery linkage. Mirrors Thetis comboRadioModel_SelectedIndexChanged (setup.cs:19812-20310 [v2.10.3.13]).
 
 ### TX
 - **TwoToneController** routes through the new math kernel (`bTwoTone=true` so txMode=2 selects `_2ToneDrivePowerSource`; gain compensation applies during the IMD test).
-- **ATT-on-TX-on-power-change safety gate** wired through `StepAttenuatorController::setAttOnTxValue`. Three Thetis safety properties added: `forceAttwhenPSAoff` (default true), `forceAttwhenPowerChangesWhenPSAon` (default true), `forceAttwhenPowerChangesWhenPSAonAndDecreased` (default false). PS gate is dormant until PureSignal lands in 3M-4 (predicate returns false), but the structure is in place.
+- **ATT-on-TX-on-power-change safety scaffolding** added: when PureSignal arrives in
+  Phase 3M-4, the safety gate that forces TX attenuator to 31 dB on drive-power changes
+  (preventing RX frontend over-drive via the PS feedback DDC) will activate automatically —
+  no further wiring needed. **In v0.3.2 this subsystem has no observable behaviour**
+  because PureSignal is not yet implemented; the predicate gating the safety check
+  returns false unconditionally. The state and tests pre-stage the 3M-4 enablement.
+  See `docs/architecture/pa-calibration-hotfix.md` §5.
 - New `TransmitModel::computeAudioVolume(profile, band, sliderWatts)` math kernel (HL2 sentinel + Bypass-profile short-circuit + Thetis dBm math).
 - New `TransmitModel::setPowerUsingTargetDbm(...)` deep-parity wrapper (all txMode branches + drive-source enum routing + power_by_band write side-effect on txMode 0 + ATT-on-TX gate + audioVolumeChanged signal).
 - New `m_powerByBand[14]` per-band normal-mode power array (default 100 W per `limitPower_by_band` console.cs:1817 [v2.10.3.13]).

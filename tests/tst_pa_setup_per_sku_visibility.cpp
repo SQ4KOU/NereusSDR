@@ -17,7 +17,9 @@
 //   caps.isRxOnlySku         — true  → entire PA category should hide
 //   caps.canDriveGanymede    — true  → Ganymede 500W warning visible
 //   caps.hasPureSignal       — true  → PA/TX-Profile recovery warning visible
-//   caps.hasStepAttenuatorCal — false → ATT-on-TX-on-power-change hidden
+//
+// ATT-on-TX visibility was tested in v0.3.2-rc; the m_attOnTxWarning label
+// was dropped in the v0.3.2 pre-tag cleanup pass (PR follow-up to 3M-4).
 
 #include <QtTest/QtTest>
 #include <QLabel>
@@ -58,9 +60,9 @@ private slots:
     void andromeda_sku_shows_ganymede_warning();
     void puresignal_radio_shows_ps_warning();
 
-    // ── ATT-on-TX gate visibility (informational text on PaGainByBandPage)
-    //    when caps.hasStepAttenuatorCal is false.
-    void no_step_atten_cal_hides_att_on_tx_warning();
+    // ATT-on-TX warning dropped in v0.3.2 cleanup; see 3M-4 follow-up issue.
+    // The corresponding test case (no_step_atten_cal_hides_att_on_tx_warning)
+    // was removed alongside the m_attOnTxWarning label.
 };
 
 namespace {
@@ -305,18 +307,11 @@ void TstPaSetupPerSkuVisibility::puresignal_radio_shows_ps_warning()
              "PureSignal-capable radio must show the PA/TX-Profile recovery linkage warning");
 }
 
-// hasStepAttenuatorCal=false: ATT-on-TX informational warning row stays
-// hidden (the radio's PA setup pages never surface that gate at all).
-void TstPaSetupPerSkuVisibility::no_step_atten_cal_hides_att_on_tx_warning()
-{
-    PaGainByBandPage page(/*model=*/nullptr);
-    page.applyCapabilityVisibility(
-        makeCapsForVisibility(/*hasPa=*/true, /*rxOnly=*/false,
-                               /*ganymede=*/false, /*ps=*/false,
-                               /*stepAttCal=*/false));
-    QVERIFY2(!page.isAttOnTxWarningVisibleForTest(),
-             "Boards without hasStepAttenuatorCal must hide ATT-on-TX warnings");
-}
+// ATT-on-TX warning dropped in v0.3.2 cleanup; see 3M-4 follow-up issue.
+// The original test case (no_step_atten_cal_hides_att_on_tx_warning) was
+// removed alongside the m_attOnTxWarning label. The ATT-on-TX UI surface
+// will be re-added when PureSignal lands in Phase 3M-4 and the predicate
+// gating the safety subsystem starts returning true.
 
 QTEST_MAIN(TstPaSetupPerSkuVisibility)
 #include "tst_pa_setup_per_sku_visibility.moc"
