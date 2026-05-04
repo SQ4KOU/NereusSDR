@@ -224,18 +224,18 @@ void TxApplet::buildUI()
         vbox->addWidget(m_micSourceBadge);
     }
 
-    // ── 1. Forward Power gauge ── 0–120 W, redStart 100 W ───────────────────
-    // Ticks: 0 / 40 / 80 / 100 / 120  (AetherSDR TxApplet.cpp:71)
+    // ── 1. Forward Power gauge — per-SKU scale ──────────────────────────────
+    // Default ticks at construction match the Hermes-class 100 W radio
+    // (0 / 40 / 80 / 100 / 120 — AetherSDR TxApplet.cpp:71); rescaleFwdGaugeForModel()
+    // reapplies a per-SKU range when RadioModel::currentRadioChanged fires
+    // (wired in wireControls()).  Bench-reported #167 follow-up: HL2 reading
+    // 1-5 W on a 0-120 W scale was a barely-visible sliver; per-SKU scaling
+    // gives each radio a properly-sized meter.
     auto* fwdGauge = new HGauge(this);
-    fwdGauge->setRange(0.0, 120.0);
-    fwdGauge->setRedStart(100.0);
-    fwdGauge->setYellowStart(100.0); // same as red — no distinct yellow zone
     fwdGauge->setTitle(QStringLiteral("RF Pwr"));
-    fwdGauge->setTickLabels({QStringLiteral("0"), QStringLiteral("40"),
-                              QStringLiteral("80"), QStringLiteral("100"),
-                              QStringLiteral("120")});
     fwdGauge->setAccessibleName(QStringLiteral("Forward power gauge"));
     m_fwdPowerGauge = fwdGauge;
+    rescaleFwdGaugeForModel(HPSDRModel::FIRST);   // sentinel default until model known
     // 3M-1a (2026-04-27): wired to RadioStatus::powerChanged in
     // wireControls() — the gauge displays radio-reported forward
     // power in watts (scaleFwdPowerWatts'd at the model side).
@@ -778,6 +778,19 @@ void TxApplet::wireControls()
         });
     }
 
+    // Per-SKU RF Pwr gauge rescale.  Bench-reported #167 follow-up: the
+    // 0-120 W default scale made HL2 (5 W) and ANAN-G2-1K (1000 W) both
+    // unreadable.  Subscribe to currentRadioChanged so the gauge ticks
+    // and red-zone redraw whenever the active radio changes.
+    connect(m_model, &RadioModel::currentRadioChanged, this,
+            [this](const NereusSDR::RadioInfo&) {
+        rescaleFwdGaugeForModel(m_model->hardwareProfile().model);
+    });
+    // Apply the current model's scale at wireControls() time so cold-launch
+    // (or reconnect-on-startup) lands a properly-sized gauge before the
+    // first telemetry sample.
+    rescaleFwdGaugeForModel(m_model->hardwareProfile().model);
+
     // ── SWR Prot LED ← SwrProtectionController::highSwrChanged ─────────────
     // SwrProtectionController (Phase 3G-13) emits highSwrChanged(bool) when
     // the radio's SWR-protection state changes. Light the LED amber when
@@ -1297,6 +1310,37 @@ void TxApplet::showVoxSettingsPopup(const QPoint& pos)
         ? m_voxBtn->mapToGlobal(pos)
         : mapToGlobal(pos);
     popup->showAt(globalPos);
+}
+
+void TxApplet::rescaleFwdGaugeForModel(HPSDRModel model)
+{
+    if (!m_fwdPowerGauge) { return; }
+
+    // Per-SKU PA ceiling from HpsdrModel.h paMaxWattsFor().  Bench-reported
+    // #167 follow-up: 0-120 W default scale made HL2 (5 W max) and
+    // ANAN-G2-1K (1000 W max) both show meaningless bar widths.
+    const int maxW   = paMaxWattsFor(model);
+    const double red = static_cast<double>(maxW);
+    const double top = red * 1.2;   // 20% headroom past the red zone
+
+    m_fwdPowerGauge->setRange(0.0, top);
+    m_fwdPowerGauge->setRedStart(red);
+    m_fwdPowerGauge->setYellowStart(red);   // no distinct yellow zone
+
+    // Pick five ticks proportional to the new range: 0 / 1/3 / 2/3 / red / top.
+    // For HL2 (red=5): 0 / 1.7 / 3.3 / 5 / 6.  For ANAN-100 (red=100):
+    // 0 / 33 / 67 / 100 / 120.  For ANAN-G2-1K (red=1000): 0 / 333 / 667 / 1000 / 1200.
+    auto fmt = [maxW](double v) {
+        return (maxW <= 10) ? QString::number(v, 'f', 1)   // sub-watt resolution for QRP
+                            : QString::number(qRound(v));
+    };
+    m_fwdPowerGauge->setTickLabels({
+        fmt(0.0),
+        fmt(red / 3.0),
+        fmt(2.0 * red / 3.0),
+        fmt(red),
+        fmt(top),
+    });
 }
 
 void TxApplet::setCurrentBand(Band band)
