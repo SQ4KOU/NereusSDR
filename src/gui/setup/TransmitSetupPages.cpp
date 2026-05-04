@@ -1181,6 +1181,15 @@ void addLabelledRow(QGridLayout* grid, int row, const QString& labelText, QWidge
 DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("DEXP/VOX"), model, parent)
 {
+    // 2026-05-04 bench polish: align with the Setup-page family by
+    // applying the canonical dark page stylesheet.  Without this the
+    // QSpinBox / QDoubleSpinBox / QGroupBox widgets ship with Qt-default
+    // borders that look mismatched against CfcSetupPage / AgcAlcSetupPage
+    // and the rest of the Setup pages.  Same one-line call PowerPage
+    // (line 160), TxProfilesPage (543), SpeechProcessorPage (637),
+    // PureSignalPage (1084) all use.
+    NereusSDR::Style::applyDarkPageStyle(this);
+
     if (!model) {
         // No model — show empty placeholder (matches CfcSetupPage no-model path).
         return;
