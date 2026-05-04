@@ -884,7 +884,7 @@ RadioModel::RadioModel(QObject* parent)
 
     // Bench-reported #167 follow-up: power meters stick after un-key.
     // Root cause: handlePaTelemetry only fires while the radio is sending
-    // PA telemetry (typically only during MOX/TUNE).  When transmit ends
+    // PA telemetry (typically only during transmit).  When transmit ends
     // the telemetry pump stops and RadioStatus retains the last-known
     // forward / reflected / SWR / PA-current values, so subscribed labels
     // and meters keep displaying the last sample.  On the falling edge we
@@ -892,23 +892,22 @@ RadioModel::RadioModel(QObject* parent)
     // a clean idle reading.  PA temperature is left alone (it's a slow
     // physical quantity and the last reading is still meaningful post-key).
     //
-    // Subscribed to BOTH moxChanged AND tuneChanged because TransmitModel
-    // tracks them as independent flags — TUNE engages MoxController's wire
-    // state machine but does NOT propagate to TransmitModel.m_mox, so a
-    // moxChanged-only subscriber would never fire on TUNE release.
-    auto zeroTxStatus = [this](bool active) {
-        if (active) { return; }    // rising-edge: telemetry pump takes over
-        // Only zero if the OTHER flag is also off — otherwise we'd zero
-        // mid-transmission (e.g. user toggles MOX off while TUNE is still
-        // on, or vice versa).
-        if (m_transmitModel.isMox() || m_transmitModel.isTune()) { return; }
-        m_radioStatus.setForwardPower(0.0);
-        m_radioStatus.setReflectedPower(0.0);
-        m_radioStatus.setExciterPowerMw(0);
-        m_radioStatus.setPaCurrent(0.0);
-    };
-    connect(&m_transmitModel, &TransmitModel::moxChanged, this, zeroTxStatus);
-    connect(&m_transmitModel, &TransmitModel::tuneChanged, this, zeroTxStatus);
+    // Subscribed to MoxController::moxStateChanged because that's the
+    // authoritative wire-level TX boundary.  TransmitModel's m_mox / m_tune
+    // flags are orphan state — never set true by any code path — so
+    // subscribing to those signals would never fire.  MoxController fires
+    // moxStateChanged(false) at the END of every TX→RX walk (both MOX
+    // un-key and TUNE release), which is exactly when we want to zero.
+    if (m_moxController) {
+        connect(m_moxController, &MoxController::moxStateChanged, this,
+                [this](bool active) {
+            if (active) { return; }   // rising-edge: telemetry pump takes over
+            m_radioStatus.setForwardPower(0.0);
+            m_radioStatus.setReflectedPower(0.0);
+            m_radioStatus.setExciterPowerMw(0);
+            m_radioStatus.setPaCurrent(0.0);
+        });
+    }
 }
 
 RadioModel::~RadioModel()
@@ -2774,12 +2773,18 @@ void RadioModel::handlePaTelemetry(quint16 fwdRaw, quint16 revRaw,
     // Power / SWR bars after the falling-edge handler tried to zero them.
     // Force the TX-domain readings to 0 when not transmitting so the
     // meters show the physical truth (no TX → no forward power).
-    // Predicate: isMox() OR isTune() — TUNE engages the MoxController state
-    // machine but does NOT set TransmitModel.m_mox (independent flags), so
-    // gating on isMox() alone would force-zero during TUNE.  PA current /
-    // temperature / supply voltage are slow physical quantities valid
-    // off-air; leave those samples alone.
-    const bool inTx = m_transmitModel.isMox() || m_transmitModel.isTune();
+    //
+    // Predicate: MoxController::state() == MoxState::Tx — the authoritative
+    // wire-level TX-active state.  TransmitModel's m_mox / m_tune flags are
+    // orphan state in the current codebase (never set true by any code
+    // path), so consulting them returned false during TUNE and force-zeroed
+    // the meters mid-transmit.  MoxController is the single source of truth
+    // for whether the radio is actually transmitting RF.
+    //
+    // PA current / temperature / supply voltage are slow physical
+    // quantities valid off-air; leave those samples alone.
+    const bool inTx = m_moxController
+                       && m_moxController->state() == MoxState::Tx;
     m_radioStatus.setForwardPower(inTx ? fwdWCal : 0.0);
     m_radioStatus.setReflectedPower(inTx ? revW : 0.0);
     m_radioStatus.setExciterPowerMw(inTx ? static_cast<int>(exciterRaw) : 0);
