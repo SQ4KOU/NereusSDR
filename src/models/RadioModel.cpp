@@ -884,21 +884,31 @@ RadioModel::RadioModel(QObject* parent)
 
     // Bench-reported #167 follow-up: power meters stick after un-key.
     // Root cause: handlePaTelemetry only fires while the radio is sending
-    // PA telemetry (typically only during MOX/TUNE).  When MOX goes false
+    // PA telemetry (typically only during MOX/TUNE).  When transmit ends
     // the telemetry pump stops and RadioStatus retains the last-known
     // forward / reflected / SWR / PA-current values, so subscribed labels
-    // and meters keep displaying the last sample.  On MOX falling-edge we
+    // and meters keep displaying the last sample.  On the falling edge we
     // explicitly zero the power-related telemetry so every subscriber sees
     // a clean idle reading.  PA temperature is left alone (it's a slow
     // physical quantity and the last reading is still meaningful post-key).
-    connect(&m_transmitModel, &TransmitModel::moxChanged, this,
-            [this](bool mox) {
-        if (mox) { return; }       // MOX rising-edge: telemetry pump takes over
+    //
+    // Subscribed to BOTH moxChanged AND tuneChanged because TransmitModel
+    // tracks them as independent flags — TUNE engages MoxController's wire
+    // state machine but does NOT propagate to TransmitModel.m_mox, so a
+    // moxChanged-only subscriber would never fire on TUNE release.
+    auto zeroTxStatus = [this](bool active) {
+        if (active) { return; }    // rising-edge: telemetry pump takes over
+        // Only zero if the OTHER flag is also off — otherwise we'd zero
+        // mid-transmission (e.g. user toggles MOX off while TUNE is still
+        // on, or vice versa).
+        if (m_transmitModel.isMox() || m_transmitModel.isTune()) { return; }
         m_radioStatus.setForwardPower(0.0);
         m_radioStatus.setReflectedPower(0.0);
         m_radioStatus.setExciterPowerMw(0);
         m_radioStatus.setPaCurrent(0.0);
-    });
+    };
+    connect(&m_transmitModel, &TransmitModel::moxChanged, this, zeroTxStatus);
+    connect(&m_transmitModel, &TransmitModel::tuneChanged, this, zeroTxStatus);
 }
 
 RadioModel::~RadioModel()
@@ -2757,20 +2767,22 @@ void RadioModel::handlePaTelemetry(quint16 fwdRaw, quint16 revRaw,
     const double fwdWCal = double(
         m_calController.calibratedFwdPowerWatts(static_cast<float>(fwdW)));
 
-    // Bench-reported #167 follow-up: when MOX is off, the radio still emits
-    // P2 high-priority status frames containing residue alex_fwd / alex_rev
-    // values (last sample echo + directional-coupler noise floor).  Pushing
-    // those non-zero residue values to RadioStatus re-fills the Power / SWR
-    // bars after the moxChanged falling-edge handler tried to zero them.
-    // Force the TX-domain readings to 0 when MOX is off so the meters show
-    // the physical truth (no TX → no forward power) and don't oscillate
-    // back into a stale-sample stuck state.  PA current / temperature /
-    // supply voltage are slow physical quantities valid off-air; leave
-    // those samples alone.
-    const bool inMox = m_transmitModel.isMox();
-    m_radioStatus.setForwardPower(inMox ? fwdWCal : 0.0);
-    m_radioStatus.setReflectedPower(inMox ? revW : 0.0);
-    m_radioStatus.setExciterPowerMw(inMox ? static_cast<int>(exciterRaw) : 0);
+    // Bench-reported #167 follow-up: when not transmitting, the radio still
+    // emits P2 high-priority status frames containing residue alex_fwd /
+    // alex_rev values (last sample echo + directional-coupler noise floor).
+    // Pushing those non-zero residue values to RadioStatus re-fills the
+    // Power / SWR bars after the falling-edge handler tried to zero them.
+    // Force the TX-domain readings to 0 when not transmitting so the
+    // meters show the physical truth (no TX → no forward power).
+    // Predicate: isMox() OR isTune() — TUNE engages the MoxController state
+    // machine but does NOT set TransmitModel.m_mox (independent flags), so
+    // gating on isMox() alone would force-zero during TUNE.  PA current /
+    // temperature / supply voltage are slow physical quantities valid
+    // off-air; leave those samples alone.
+    const bool inTx = m_transmitModel.isMox() || m_transmitModel.isTune();
+    m_radioStatus.setForwardPower(inTx ? fwdWCal : 0.0);
+    m_radioStatus.setReflectedPower(inTx ? revW : 0.0);
+    m_radioStatus.setExciterPowerMw(inTx ? static_cast<int>(exciterRaw) : 0);
     m_radioStatus.setPaCurrent(paA);
     // Only push temp when we have a real source (non-zero); leaves the
     // last-known value alone otherwise so a stale 0 doesn't overwrite a
