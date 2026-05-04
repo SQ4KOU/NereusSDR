@@ -356,6 +356,16 @@ double scaleRevPowerWatts(quint16 adcRaw, HPSDRModel model)
     case HPSDRModel::ANAN8000D:
         bridge_volt = 0.08;  refvoltage = 5.0; adc_cal_offset = 16;
         break;
+    // From mi0bot console.cs:25195-25199 [v2.10.3.13-beta2] — HL2 has its
+    // own coupler scaling for the REV side, same bridge_volt as the FWD
+    // side.  Bench-reported #167 follow-up: without this case, HL2 fell
+    // through to the default {0.09, 3.3, 3} triplet which is 16.7×
+    // wrong — the resulting refl/fwd ratio inflated by the same factor
+    // pegged the SWR meter at the upper rail (>3.0) on a 50Ω dummy load.
+    //   //MI0BOT: HL2  [original inline comment from mi0bot console.cs:25195]
+    case HPSDRModel::HERMESLITE:
+        bridge_volt = 1.5;   refvoltage = 3.3; adc_cal_offset = 6;
+        break;
     default:
         bridge_volt = 0.09; refvoltage = 3.3; adc_cal_offset = 3;
         break;
