@@ -1440,6 +1440,14 @@ nereus_add_test(tst_speech_processor_page)
 # for grpPhRot).
 nereus_add_test(tst_cfc_setup_page)
 
+# ── Phase 3M-3a-iii Task 14: DexpVoxPage full implementation ─────────────────
+# Verifies the three group boxes (VOX / DEXP, Audio LookAhead, Side-Channel
+# Trigger Filter) construct, all 14 controls exist with verbatim Thetis object
+# names, initial values reflect TransmitModel defaults, bidirectional binding
+# works in both directions, and group titles match Thetis verbatim.  Layout
+# mirrors Thetis tpDSPVOXDE tab 1:1 (setup.designer.cs:44763-45260 [v2.10.3.13]).
+nereus_add_test(tst_dexp_vox_setup_page)
+
 # ── Phase 3M-0 Task 12: Hardware Configuration group box on Setup → General ──
 # Verifies grpHardwareConfig has 4 controls + 1 warning label per
 # Thetis tpGeneralHardware (setup.designer.cs:8045-8396 [v2.10.3.13]):

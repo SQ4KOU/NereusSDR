@@ -287,6 +287,15 @@ void SetupDialog::buildTree()
 
     add(transmit, "PureSignal",         new PureSignalPage(m_model));
 
+    // Phase 3M-3a-iii Task 14: full DexpVoxPage that mirrors Thetis tpDSPVOXDE
+    // 1:1 (setup.designer.cs:44763-45260 [v2.10.3.13]).  Registered as the
+    // "DEXP/VOX" leaf so PhoneCwApplet's Task 15 right-click target
+    // (SetupDialog::selectPage("DEXP/VOX")) lands here.  This is distinct
+    // from the legacy DSP > VOX/DEXP placeholder above (line 245), which
+    // remains a lightweight 4-control disabled stub for back-compat with
+    // the Thetis tpDSPVOX tab IA.
+    add(transmit, "DEXP/VOX",           new DexpVoxPage(m_model));
+
     // ── Appearance ────────────────────────────────────────────────────────────
     QTreeWidgetItem* appearance = addCategory("Appearance");
     add(appearance, "Colors & Theme",       new ColorsThemePage(m_model));
