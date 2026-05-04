@@ -34,7 +34,7 @@ The user-visible result: an operator with VOX engaged sees their live mic peak a
 ### Out of scope (deferred)
 
 - TX AMSQ (`SetTXAAMSQRun/MutedGain/Threshold`). Thetis does not wire these in stock, and per the source-first directive ("if Thetis has it we want it... we are porting this application") we do not invent the surface. Folded into 3M-3b alongside other AM-mode TX work.
-- Side-channel HP/LP filter UI. The 3 wrappers (`SetDEXPLowCut/HighCut/RunSideChannelFilter`) ARE in scope as TxChannel surface (full WDSP coverage), but no Setup or applet UI is exposed for them. Thetis ships these as dead WDSP setters with no UI; we match that.
+- (Originally listed: SCF UI. **Pulled in-scope mid-port 2026-05-03** after Batch B agent's source-first read found `grpSCF` on tpDSPVOXDE. See §3.2 grpSCF row, §17, and Task 14 in the implementation plan.)
 - Anti-VOX deep UI (multi-source selector, `cmaster.CMSetAntiVoxSourceWhat`). Already deferred to 3M-3c per master design §7.5.
 - Pre-emphasis (`emph.c` family). Already deferred to 3M-3b per master design §7.4.
 
@@ -55,9 +55,9 @@ Every Thetis cite in this document uses `[v2.10.3.13]`. The tag is 7 commits beh
 | `SetDEXPExpansionRatio` | `cmaster.cs:181-182` | `double` linear (`Math.Pow(10, dB/20)`) | 1.0 dB raw → 1.122 linear | NO (new) |
 | `SetDEXPHysteresisRatio` | `cmaster.cs:184-185` | `double` linear (`Math.Pow(10, dB/20)`) | 2.0 dB raw → 1.259 linear | NO (new) |
 | `SetDEXPAttackThreshold` | `cmaster.cs:187-188` | `double` linear (`Math.Pow(10, dB/20)`) | -20 dB raw → 0.1 linear | YES (3M-1b: `setVoxAttackThreshold`) |
-| `SetDEXPLowCut` | `cmaster.cs:190-191` | `double` Hz | (no UI; default unset) | NO (new) |
-| `SetDEXPHighCut` | `cmaster.cs:193-194` | `double` Hz | (no UI; default unset) | NO (new) |
-| `SetDEXPRunSideChannelFilter` | `cmaster.cs:196-197` | `bool` | (no UI; default unset) | NO (new) |
+| `SetDEXPLowCut` | `cmaster.cs:190-191` | `double` Hz | 500 (udSCFLowCut.Value, line 45240) | NO (new) |
+| `SetDEXPHighCut` | `cmaster.cs:193-194` | `double` Hz | 1500 (udSCFHighCut.Value, line 45210) | NO (new) |
+| `SetDEXPRunSideChannelFilter` | `cmaster.cs:196-197` | `bool` | **CHECKED** (chkSCFEnable.Checked, line 45250) | NO (new) |
 | `SetDEXPRunAudioDelay` | `cmaster.cs:202-203` | `bool` | **CHECKED** (Thetis default true) | NO (new) |
 | `SetDEXPAudioDelay` | `cmaster.cs:205-206` | `double` seconds (ms/1000) | 60 ms | NO (new) |
 
