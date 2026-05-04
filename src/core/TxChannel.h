@@ -238,6 +238,22 @@ warren@wpratt.com
 //                 path is unaffected; this helper runs only from the debounce
 //                 timer, not from setTuneTone).  AI-assisted transformation
 //                 via Anthropic Claude Code.
+//   2026-05-03 — Phase 3M-3a-iii Task 20 (bench fix) — setDexpBuffer() +
+//                 pumpDexp() public methods added by J.J. Boyd (KG4VCF).
+//                 pumpDexp() copies the worker-thread-owned mic block into
+//                 the WdspEngine-owned per-channel DEXP buffer (set once
+//                 via setDexpBuffer at TX-channel-create time) and invokes
+//                 xdexp(channelId), mirroring Thetis cmaster.c:388
+//                 [v2.10.3.13] xdexp(tx) call BEFORE fexchange0.  Two new
+//                 private members (m_dexpBuffer raw pointer + size in
+//                 doubles) hold the buffer-pointer-and-size pair.  This
+//                 closes the gap that made Task 17's pushvox callback
+//                 registration silently no-op via the pdexp[id]==nullptr
+//                 guard — pdexp[id] was permanently nullptr because
+//                 create_dexp had never been called.  See WdspEngine.cpp
+//                 createTxChannel for the full root-cause / buffer-
+//                 architecture narrative.  AI-assisted transformation
+//                 via Anthropic Claude Code.
 //   2026-05-04 — Phase 3M-3a-iii Task 17 (bench fix) — voxActiveChanged(bool)
 //                 Qt signal + s_pushVoxCallback() static C-callable bridge +
 //                 s_voxKeyInstance lookup pointer + registerVoxCallback() /
@@ -279,6 +295,7 @@ warren@wpratt.com
 
 #include <array>    // std::array — TX EQ 10-band graphic vector (3M-3a-i B-1)
 #include <atomic>   // std::atomic<bool> — m_running cross-thread mirror (3M-1c TxWorkerThread)
+#include <cstddef>  // std::size_t — DEXP buffer size (3M-3a-iii Task 20)
 #include <limits>   // std::numeric_limits — quiet_NaN() initialiser (D.3)
 #include <vector>
 
@@ -1902,6 +1919,50 @@ public slots:
     ///               pcm->xmtr[tx].out[0], &error);
     void driveOneTxBlockFromInterleaved(const double* interleavedIn);
 
+    // ── DEXP per-block driver (3M-3a-iii Task 20) ────────────────────────────
+    //
+    /// Wire the WdspEngine-owned DEXP I/O buffer pointer into this wrapper.
+    ///
+    /// `dexpBuf` MUST point to the same `std::vector<double>::data()` that
+    /// was passed to `create_dexp` for this channel (WdspEngine retains
+    /// ownership; this wrapper holds a non-owning raw pointer).  `size`
+    /// is the buffer length in DOUBLES — must equal 2 * inputBufferSize
+    /// (the DEXP module wants `size` complex samples == 2*size doubles).
+    ///
+    /// Called once by WdspEngine::createTxChannel right after construction
+    /// so pumpDexp() has a valid destination for its per-block memcpy.
+    /// Pass nullptr / 0 to detach (e.g. on disconnect — also implicit when
+    /// the wrapper is destroyed).
+    void setDexpBuffer(double* dexpBuf, std::size_t sizeDoubles);
+
+    /// Pump one audio block through the WDSP DEXP detector and run xdexp().
+    ///
+    /// `interleavedIn` MUST point to 2 * m_inputBufferSize doubles
+    /// (interleaved I0,Q0,I1,Q1,...).  The block is copied byte-for-byte
+    /// into the WdspEngine-owned per-channel DEXP buffer (the buffer that
+    /// was passed to create_dexp at TX-channel-create time), then xdexp()
+    /// is invoked.  WDSP fires the pushvox callback synchronously from
+    /// inside xdexp() if the mic envelope crosses the attack threshold or
+    /// if the HOLD timer expires after audio drops below threshold.
+    ///
+    /// Mirrors Thetis cmaster.c:388 [v2.10.3.13] xdexp(tx) call BEFORE
+    /// fexchange0 at cmaster.c:389.  NereusSDR uses a parallel-only buffer
+    /// architecture (see WdspEngine.cpp create_dexp comment) so the DEXP
+    /// output is discarded — only the VOX-keying side effect of xdexp()
+    /// is observable downstream.
+    ///
+    /// Thread context: called from TxWorkerThread.  WDSP synchronizes
+    /// internally via dexp.cs_update.
+    ///
+    /// Null-safe: skips the WDSP call if pdexp[channelId] is nullptr OR if
+    /// the WdspEngine-owned DEXP buffer pointer is unavailable (no-op
+    /// degradation in test builds that constructed TxChannel directly
+    /// without going through WdspEngine::createTxChannel).
+    ///
+    /// From Thetis wdsp/cmaster.c:388 [v2.10.3.13] — `xdexp (tx)`.
+    /// From Thetis wdsp/dexp.c:266-396 [v2.10.3.13] — xdexp impl.
+    void pumpDexp(const double* interleavedIn);
+
 signals:
     // ── Per-profile TX filter applied (Plan 4 D8) ────────────────────────────
     //
@@ -2136,6 +2197,23 @@ private:
     // Clears s_voxKeyInstance and re-registers nullptr with WDSP so a
     // late callback after destruction is a no-op.  Called from the dtor.
     void unregisterVoxCallback();
+
+    // ── Phase 3M-3a-iii Task 20 — DEXP per-block driver buffer ──────────────
+    //
+    // Non-owning pointer to the WdspEngine-owned per-channel DEXP buffer
+    // that was passed to create_dexp at TX-channel-create time (see
+    // WdspEngine.cpp createTxChannel).  Set once by WdspEngine::
+    // createTxChannel via setDexpBuffer right after construction; stays
+    // valid for the life of the wrapper because WdspEngine destroys the
+    // C++ wrapper (m_txChannels.erase) AFTER it tears down the DEXP
+    // module (destroy_dexp).
+    //
+    // Initialised nullptr so pumpDexp degrades to a no-op in test builds
+    // that construct TxChannel directly without going through
+    // WdspEngine::createTxChannel.  Size is in DOUBLES (2 * complex
+    // samples) — matches the create_dexp `size` argument doubled.
+    double*     m_dexpBuffer{nullptr};
+    std::size_t m_dexpBufferSizeDoubles{0};
 
     // ── VOX / anti-VOX last-set values (D.3) ─────────────────────────────────
     //

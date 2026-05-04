@@ -1717,6 +1717,27 @@ target_compile_definitions(tst_mox_controller_mic_ptt_extraction PRIVATE NEREUS_
 #   Channel ID: WDSP.id(1, 0) = CMsubrcvr * CMrcvr = 1 with single-RX layout.
 nereus_add_test(tst_wdsp_engine_tx_channel)
 
+# ── Phase 3M-3a-iii Task 20: WdspEngine DEXP DSP-instance lifecycle ──────────
+# The bench-failing fix: before Task 20, pdexp[1] was permanently nullptr
+# after createTxChannel because create_dexp had never been ported into
+# NereusSDR's TX-init path.  Every SetDEXP* setter and the SendCBPushDexpVox
+# callback registration silently no-op'd via their pdexp[id] null guards;
+# VOX-keying never engaged MOX because xdexp() never ran.
+# Verifies:
+#   createTxChannel populates pdexp[1] (non-null) - the assertion that
+#     proves the fix vs. the bench-failing baseline;
+#   destroy + recreate cycle is consistent (create_dexp runs again on
+#     the second create);
+#   TxChannel::pumpDexp is null-safe before WdspEngine wires the buffer
+#     pointer (test builds that construct TxChannel directly without
+#     going through WdspEngine::createTxChannel must not segfault).
+# Source map (all [v2.10.3.13]):
+#   wdsp/cmaster.c:130-157 - Thetis create_dexp call site (default args);
+#   wdsp/cmaster.c:267     - Thetis destroy_dexp call site (BEFORE CloseChannel);
+#   wdsp/dexp.c:187-227    - create_dexp impl: allocates DEXP, stores pdexp[id];
+#   wdsp/dexp.c:230-239    - destroy_dexp impl: frees, but does NOT null pdexp[id].
+nereus_add_test(tst_wdsp_engine_dexp_init)
+
 # ── Phase 3M-1a Task C.2: TxChannel 31-stage TXA pipeline skeleton ────────────
 # Verifies:
 #   Stage::kStageCount == 31 (authoritative from wdsp/TXA.c:31-479 [v2.10.3.13]);

@@ -172,6 +172,21 @@ warren@wpratt.com
 //                 cited from deskhpsdr/transmitter.c:2136-2186 [@120188f].
 //                 The TUN path at lines 520-528 is untouched.
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-05-03 — Phase 3M-3a-iii Task 20 (bench fix): setDexpBuffer() +
+//                 pumpDexp() helpers implemented by J.J. Boyd (KG4VCF).
+//                 pumpDexp() copies the worker-thread-owned mic block
+//                 into the WdspEngine-owned per-channel DEXP buffer (set
+//                 once via setDexpBuffer at TX-channel-create time) and
+//                 invokes xdexp(channelId), mirroring Thetis cmaster.c:388
+//                 [v2.10.3.13] xdexp(tx) call BEFORE fexchange0.  Same
+//                 null-guard pattern as the existing setVox* / DEXP
+//                 setters.  Critical correctness fix — without this, the
+//                 entire DEXP feature was a no-op shell because the
+//                 create_dexp call had never been ported into NereusSDR's
+//                 createTxChannel.  See the WdspEngine.cpp comment block
+//                 at the create_dexp callsite for the full root-cause /
+//                 buffer-architecture narrative.  AI-assisted transformation
+//                 via Anthropic Claude Code.
 //   2026-05-04 — Phase 3M-3a-iii Task 17 (bench fix): static
 //                 s_pushVoxCallback() bridge + s_voxKeyInstance lookup +
 //                 registerVoxCallback() / unregisterVoxCallback() helpers
@@ -557,6 +572,75 @@ void TxChannel::unregisterVoxCallback()
     if (s_voxKeyInstance == this) {
         s_voxKeyInstance = nullptr;
     }
+}
+
+// ---------------------------------------------------------------------------
+// setDexpBuffer() — Phase 3M-3a-iii Task 20
+//
+// Wires the WdspEngine-owned DEXP I/O buffer pointer into this wrapper so
+// pumpDexp() has a valid destination for its per-block memcpy.
+//
+// `dexpBuf` is a non-owning raw pointer; ownership stays with WdspEngine's
+// per-channel m_dexpBuffers entry.  `sizeDoubles` is the buffer length in
+// DOUBLES (== 2 * complex samples) and must equal 2 * inputBufferSize so
+// the per-block memcpy in pumpDexp covers the entire DEXP detection window.
+// nullptr / 0 detaches (e.g. on disconnect).
+// ---------------------------------------------------------------------------
+void TxChannel::setDexpBuffer(double* dexpBuf, std::size_t sizeDoubles)
+{
+    m_dexpBuffer = dexpBuf;
+    m_dexpBufferSizeDoubles = sizeDoubles;
+}
+
+// ---------------------------------------------------------------------------
+// pumpDexp() — Phase 3M-3a-iii Task 20
+//
+// Pump one audio block through the WDSP DEXP detector and run xdexp().
+// Mirrors Thetis cmaster.c:388 [v2.10.3.13] xdexp(tx) call BEFORE
+// fexchange0 at cmaster.c:389.
+//
+// Buffer architecture is PARALLEL-ONLY in NereusSDR (see WdspEngine.cpp
+// create_dexp callsite for the full narrative): the block is copied
+// byte-for-byte into the WdspEngine-owned per-channel DEXP buffer, then
+// xdexp() runs.  The DEXP module's output is discarded — only the
+// VOX-keying side effect (pushvox callback firing inside the DEXP state
+// machine, see dexp.c:330,339 [v2.10.3.13]) is observable downstream.
+//
+// Null-safe degradation: skips the WDSP call if any precondition is
+// missing (no buffer pointer, no input pointer, pdexp[id] null in test
+// builds, or txa[].rsmpin.p null).  Production callsites always have
+// every precondition satisfied because WdspEngine::createTxChannel
+// orders create_dexp BEFORE constructing the wrapper AND wires the
+// buffer pointer immediately after.
+// ---------------------------------------------------------------------------
+void TxChannel::pumpDexp(const double* interleavedIn)
+{
+    if (interleavedIn == nullptr || m_dexpBuffer == nullptr ||
+        m_dexpBufferSizeDoubles == 0) {
+        return;
+    }
+#ifdef HAVE_WDSP
+    // Same null-guard pair as setVoxRun / registerVoxCallback / all DEXP
+    // setters in this file.  Test builds never drove OpenChannel(type=1)
+    // so txa[].rsmpin.p is nullptr; calling xdexp on a missing DEXP module
+    // would dereference null.
+    if (txa[m_channelId].rsmpin.p == nullptr) {
+        return;
+    }
+    if (pdexp[m_channelId] == nullptr) {
+        return;
+    }
+    // Copy the worker-thread-owned mic block into the WDSP-visible DEXP
+    // buffer, then drive the per-block detector.  WDSP synchronises
+    // internally via dexp.cs_update; no additional locking needed here.
+    std::memcpy(m_dexpBuffer, interleavedIn, m_dexpBufferSizeDoubles * sizeof(double));
+    xdexp(m_channelId);
+#else
+    // Non-HAVE_WDSP build: still copy into the buffer so the storage
+    // exercise path matches between configs (the DEXP module isn't there
+    // to consume it, but the memcpy itself stays exercised).
+    std::memcpy(m_dexpBuffer, interleavedIn, m_dexpBufferSizeDoubles * sizeof(double));
+#endif
 }
 
 // ---------------------------------------------------------------------------

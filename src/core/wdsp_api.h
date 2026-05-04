@@ -86,6 +86,8 @@
 //                 __stdcall on Windows and to nothing on Linux/macOS, mirroring
 //                 WDSP's own linux_port.h:65 shim.  AI-assisted transformation
 //                 via Anthropic Claude Code.
+//   2026-05-03 — Task 20 (KG4VCF/Claude): create_dexp, destroy_dexp, xdexp,
+//                 SetDEXPIOBuffers added; wdsp/dexp.c:187,230,266,436 [v2.10.3.13].
 //   2026-05-03 — Phase 3M-3a-iii Tasks 1-6 by J.J. Boyd (KG4VCF):
 //                 SetDEXPRun, SetDEXPDetectorTau, SetDEXPAttackTime,
 //                 SetDEXPReleaseTime (Tasks 1-2: envelope/timing,
@@ -1034,6 +1036,61 @@ void SetDEXPAudioDelay(int id, double delay);
 //   SetAntiVOXGain: cmaster.cs:211-212
 void SetAntiVOXRun(int id, int run);
 void SetAntiVOXGain(int id, double gain);
+
+// DEXP lifecycle + per-block driver (Phase 3M-3a-iii Task 20 — bench fix).
+//
+// The DEXP DSP module instantiation that was missing from NereusSDR's
+// TX-init path until 2026-05-03.  Without these the entire DEXP feature
+// (every SetDEXP* setter, the pushvox callback registration, the
+// audio-domain expansion, AND the VOX-keying state machine) was a no-op
+// shell — pdexp[id] stayed permanently nullptr and every wrapper bailed
+// out via its null-guard.  Bench-confirmed VOX-keying failure:
+// `[VOXDIAG] registerVoxCallback ch= 1 SKIPPED: pdexp NULL`.
+//
+// WdspEngine::createTxChannel now invokes create_dexp() right after
+// OpenChannel(type=1), mirroring Thetis ChannelMaster create_xmtr at
+// cmaster.c:130-157 [v2.10.3.13] (which calls create_dexp before any
+// downstream wrapper construction).  After this commit pdexp[1] is
+// non-null when the TxChannel C++ wrapper's constructor runs and
+// registerVoxCallback() succeeds.
+//
+// xdexp() runs once per audio block from TxWorkerThread::dispatchOneBlock,
+// mirroring Thetis cmaster.c:388 [v2.10.3.13] (xdexp BEFORE fexchange0).
+// destroy_dexp() runs from WdspEngine::destroyTxChannel before
+// CloseChannel — mirrors cmaster.c:267 [v2.10.3.13] (destroy_dexp before
+// CloseChannel in destroy_xmtr).  SetDEXPIOBuffers re-points the in/out
+// buffer pair while the DEXP is live; NereusSDR's parallel-only buffer
+// architecture (see WdspEngine.cpp comment at the create_dexp callsite)
+// does not call SetDEXPIOBuffers per block, but the declaration is here
+// for future use should the pipeline switch to chain-inserted DEXP.
+//
+// pushvox parameter on create_dexp: NereusSDR passes nullptr at create
+// time; TxChannel::registerVoxCallback (3M-3a-iii Task 17) registers the
+// real callback later via SendCBPushDexpVox.  This avoids ordering
+// problems — registerVoxCallback runs from the TxChannel constructor
+// AFTER createTxChannel returns, so pdexp[id] is already non-null when
+// the registration happens.
+//
+// From Thetis wdsp/dexp.c [v2.10.3.13]:
+//   create_dexp:       dexp.c:187-227 — allocates DEXP struct, stores in pdexp[id]
+//   destroy_dexp:      dexp.c:230-239 — deallocates struct, clears pdexp[id]
+//   xdexp:             dexp.c:266-396 — per-block driver (envelope + state machine)
+//   SetDEXPIOBuffers:  dexp.c:436-448 — re-point in/out buffers (heavy: rebuilds filter)
+// Cited from Thetis cmaster.c [v2.10.3.13]:
+//   create_dexp call:  cmaster.c:130-157 (default args verbatim from this site)
+//   xdexp call:        cmaster.c:388     (BEFORE fexchange0 at cmaster.c:389)
+//   destroy_dexp call: cmaster.c:267     (BEFORE CloseChannel at cmaster.c:265)
+void create_dexp(int id, int run_dexp, int size, double* in, double* out, int rate,
+                 double dettau, double tattack, double tdecay, double thold,
+                 double exp_ratio, double hyst_ratio, double attack_thresh,
+                 int nc, int wtype, double lowcut, double highcut,
+                 int run_filt, int run_vox, int run_audelay, double audelay,
+                 void (NEREUS_STDCALL *pushvox)(int id, int active),
+                 int antivox_run, int antivox_size, int antivox_rate,
+                 double antivox_gain, double antivox_tau);
+void destroy_dexp(int id);
+void xdexp(int id);
+void SetDEXPIOBuffers(int id, double* in, double* out);
 
 // DEXP pushvox callback registration (Phase 3M-3a-iii Task 17 — bench fix).
 //
