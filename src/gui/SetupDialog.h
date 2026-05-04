@@ -76,6 +76,15 @@ private:
     PaGainByBandPage* m_paGainPage     = nullptr;
     PaWattMeterPage*  m_paWattMeterPage= nullptr;
     PaValuesPage*     m_paValuesPage   = nullptr;
+
+#ifdef NEREUS_BUILD_TESTS
+public:
+    // Phase 9 of #167: test seams for verifying the cross-page wiring
+    // connect() between PaWattMeterPage::resetPaValuesRequested and
+    // PaValuesPage::resetPaValues() set up at the end of buildTree().
+    PaWattMeterPage* paWattMeterPageForTest() const { return m_paWattMeterPage; }
+    PaValuesPage*    paValuesPageForTest()    const { return m_paValuesPage;    }
+#endif
 };
 
 } // namespace NereusSDR

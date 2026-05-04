@@ -18,6 +18,14 @@
 //                 comboRadioModel_SelectedIndexChanged
 //                 (setup.cs:19812-20310 [v2.10.3.13 @501e3f51]).
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-05-03 — PA calibration safety hotfix Phase 9 (#167): added
+//                 cross-page connect() in buildTree() that routes
+//                 PaWattMeterPage::resetPaValuesRequested (Phase 5A)
+//                 to PaValuesPage::resetPaValues() (Phase 5B). Mirrors
+//                 Thetis btnResetPAValues_Click (setup.cs:16346-16357
+//                 [v2.10.3.13 @501e3f51]). Deferred from Phase 5 so
+//                 Agents 5A and 5B could land in parallel without
+//                 touching this file.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -260,6 +268,18 @@ void SetupDialog::buildTree()
     m_paGainItem      = add(m_paCategoryItem, "PA Gain",    m_paGainPage);
     m_paWattMeterItem = add(m_paCategoryItem, "Watt Meter", m_paWattMeterPage);
     m_paValuesItem    = add(m_paCategoryItem, "PA Values",  m_paValuesPage);
+
+    // Phase 9 of #167: cross-wire PaWattMeterPage's [Reset PA Values] button
+    // (Phase 5A — emits resetPaValuesRequested) to PaValuesPage's
+    // resetPaValues() public slot (Phase 5B — clears peak/min trackers).
+    // Deferred from Phase 5 to keep agents 5A and 5B mutually parallel and
+    // conflict-free; the connect lands here once both pages exist.
+    // Mirrors Thetis btnResetPAValues_Click (setup.cs:16346-16357
+    // [v2.10.3.13 @501e3f51]) — Thetis blanks the textbox text directly
+    // from the same panel; NereusSDR fans out to a peer page since the
+    // PA Values readout was promoted to its own dedicated page.
+    connect(m_paWattMeterPage, &PaWattMeterPage::resetPaValuesRequested,
+            m_paValuesPage,    &PaValuesPage::resetPaValues);
 
     // ── Audio ─────────────────────────────────────────────────────────────────
     QTreeWidgetItem* audio = addCategory("Audio");

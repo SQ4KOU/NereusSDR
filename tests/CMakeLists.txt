@@ -1644,6 +1644,17 @@ nereus_add_test(tst_pa_setup_pages)
 nereus_add_test(tst_pa_setup_per_sku_visibility)
 target_compile_definitions(tst_pa_setup_per_sku_visibility PRIVATE NEREUS_BUILD_TESTS)
 
+# ── PA calibration safety hotfix Phase 9: SetupDialog cross-page Reset wiring ─
+# Verifies the connect() in SetupDialog::buildTree() that routes
+# PaWattMeterPage::resetPaValuesRequested (Phase 5A) into
+# PaValuesPage::resetPaValues() (Phase 5B). Drives the WattMeter page's
+# Reset button through its Phase 5A test seam, then asserts the Values
+# page's running peak/min trackers collapse to current — only possible
+# if SetupDialog actually wired the cross-page connect.
+# Source: Thetis btnResetPAValues_Click (setup.cs:16346-16357 [v2.10.3.13]).
+nereus_add_test(tst_setup_dialog_pa_reset_wiring)
+target_compile_definitions(tst_setup_dialog_pa_reset_wiring PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-0 Task 14: MainWindow status-bar TX Inhibit + PA Status badge ───
 # Tests the label-state logic for the two safety indicator widgets added to
 # the MainWindow status bar:
