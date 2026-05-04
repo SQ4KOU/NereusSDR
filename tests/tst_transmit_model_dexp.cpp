@@ -374,6 +374,101 @@ private slots:
         t2.loadFromSettings(kMac);
         QCOMPARE(t2.dexpHysteresisRatioDb(), 5.5);
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // TASK 9 — DEXP look-ahead properties (2 props)
+    //   dexpLookAheadEnabled, dexpLookAheadMs
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    // ── Defaults match Thetis ──────────────────────────────────────
+
+    void default_dexpLookAheadEnabled_isTrue() {
+        // setup.Designer.cs:44808 [v2.10.3.13] - chkDEXPLookAheadEnable.Checked=true.
+        // This is the ONLY DEXP boolean defaulting true.
+        TransmitModel t;
+        QCOMPARE(t.dexpLookAheadEnabled(), true);
+    }
+
+    void default_dexpLookAheadMs_is60() {
+        // setup.Designer.cs:44788 [v2.10.3.13] - udDEXPLookAhead.Value=60.
+        TransmitModel t;
+        QCOMPARE(t.dexpLookAheadMs(), 60.0);
+    }
+
+    // ── Round-trip + signal emission ──────────────────────────────
+
+    void setDexpLookAheadEnabled_roundTrip_emitsSignal() {
+        TransmitModel t;
+        QSignalSpy spy(&t, &TransmitModel::dexpLookAheadEnabledChanged);
+        t.setDexpLookAheadEnabled(false);  // flip from default true
+        QCOMPARE(t.dexpLookAheadEnabled(), false);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).toBool(), false);
+    }
+
+    void setDexpLookAheadMs_roundTrip_emitsSignal() {
+        TransmitModel t;
+        QSignalSpy spy(&t, &TransmitModel::dexpLookAheadMsChanged);
+        t.setDexpLookAheadMs(120.0);
+        QCOMPARE(t.dexpLookAheadMs(), 120.0);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).toDouble(), 120.0);
+    }
+
+    // ── Idempotent guards ──────────────────────────────────────────
+
+    void idempotent_dexpLookAheadEnabled_default_noSignal() {
+        TransmitModel t;
+        QSignalSpy spy(&t, &TransmitModel::dexpLookAheadEnabledChanged);
+        t.setDexpLookAheadEnabled(true);  // default
+        QCOMPARE(spy.count(), 0);
+    }
+
+    void idempotent_dexpLookAheadMs_default_noSignal() {
+        TransmitModel t;
+        QSignalSpy spy(&t, &TransmitModel::dexpLookAheadMsChanged);
+        t.setDexpLookAheadMs(60.0);  // default
+        QCOMPARE(spy.count(), 0);
+    }
+
+    // ── Range clamps ───────────────────────────────────────────────
+    // udDEXPLookAhead: 10..999 (setup.Designer.cs:44773-44782 [v2.10.3.13])
+
+    void dexpLookAheadMs_clampBelowMin() {
+        TransmitModel t;
+        t.setDexpLookAheadMs(1.0);
+        QCOMPARE(t.dexpLookAheadMs(), TransmitModel::kDexpLookAheadMsMin);
+    }
+
+    void dexpLookAheadMs_clampAboveMax() {
+        TransmitModel t;
+        t.setDexpLookAheadMs(5000.0);
+        QCOMPARE(t.dexpLookAheadMs(), TransmitModel::kDexpLookAheadMsMax);
+    }
+
+    // ── Persistence across instances ──────────────────────────────
+
+    void dexpLookAheadEnabled_persistsAcrossInstances() {
+        {
+            TransmitModel t;
+            t.loadFromSettings(kMac);
+            t.setDexpLookAheadEnabled(false);  // flip from default true
+        }
+        TransmitModel t2;
+        t2.loadFromSettings(kMac);
+        QCOMPARE(t2.dexpLookAheadEnabled(), false);
+    }
+
+    void dexpLookAheadMs_persistsAcrossInstances() {
+        {
+            TransmitModel t;
+            t.loadFromSettings(kMac);
+            t.setDexpLookAheadMs(150.0);
+        }
+        TransmitModel t2;
+        t2.loadFromSettings(kMac);
+        QCOMPARE(t2.dexpLookAheadMs(), 150.0);
+    }
 };
 
 QTEST_APPLESS_MAIN(TstTransmitModelDexp)

@@ -635,6 +635,15 @@ void TransmitModel::loadFromSettings(const QString& mac)
     setDexpHysteresisRatioDb(s.value(pfx + QLatin1String("DEXP_HysteresisRatioDb"),
                                       QStringLiteral("2")).toDouble());
 
+    // ── DEXP look-ahead properties (3M-3a-iii Task 9) — both persist ──────
+    // Defaults from Thetis setup.Designer.cs [v2.10.3.13]:
+    //   chkDEXPLookAheadEnable.Checked=true (line 44808)
+    //   udDEXPLookAhead.Value=60            (line 44788)
+    setDexpLookAheadEnabled(s.value(pfx + QLatin1String("DEXP_LookAheadEnabled"),
+                                     QStringLiteral("True")).toString() == QLatin1String("True"));
+    setDexpLookAheadMs(s.value(pfx + QLatin1String("DEXP_LookAheadMs"),
+                                QStringLiteral("60")).toDouble());
+
     // ── Anti-VOX properties ───────────────────────────────────────────────
     // antiVoxGainDb: default 0 (NereusSDR-original safe starting point)
     const int antiVoxGainDb = s.value(pfx + QLatin1String("AntiVox_Gain"),
@@ -847,6 +856,11 @@ void TransmitModel::persistToSettings(const QString& mac) const
     // ── DEXP gate-ratio properties (3M-3a-iii Task 8) — both persist ──────
     s.setValue(pfx + QLatin1String("DEXP_ExpansionRatioDb"),  QString::number(m_dexpExpansionRatioDb));
     s.setValue(pfx + QLatin1String("DEXP_HysteresisRatioDb"), QString::number(m_dexpHysteresisRatioDb));
+
+    // ── DEXP look-ahead properties (3M-3a-iii Task 9) — both persist ──────
+    s.setValue(pfx + QLatin1String("DEXP_LookAheadEnabled"),
+               m_dexpLookAheadEnabled ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("DEXP_LookAheadMs"), QString::number(m_dexpLookAheadMs));
 
     // ── Anti-VOX properties ───────────────────────────────────────────────
     s.setValue(pfx + QLatin1String("AntiVox_Gain"),    QString::number(m_antiVoxGainDb));
@@ -1197,6 +1211,41 @@ void TransmitModel::setDexpHysteresisRatioDb(double dB)
     m_dexpHysteresisRatioDb = clamped;
     persistOne(QStringLiteral("DEXP_HysteresisRatioDb"), QString::number(clamped));
     emit dexpHysteresisRatioDbChanged(clamped);
+}
+
+// ── DEXP look-ahead properties (3M-3a-iii Task 9) ──────────────────────────
+//
+// Audio look-ahead controls.  Bound to grpDEXPLookAhead in Setup -> Audio ->
+// VOX/DEXP per Thetis setup.Designer.cs:44755+ [v2.10.3.13].
+//
+// Defaults:
+//   chkDEXPLookAheadEnable.Checked=true (line 44808)
+//                  -- the only DEXP boolean defaulting true
+//   udDEXPLookAhead.Value=60            (line 44788)
+//
+// Range:
+//   udDEXPLookAhead: Min=10, Max=999  (line 44773-44782; units: ms)
+//
+// Both persist.
+
+void TransmitModel::setDexpLookAheadEnabled(bool on)
+{
+    if (on == m_dexpLookAheadEnabled) { return; }  // idempotent guard
+    m_dexpLookAheadEnabled = on;
+    persistOne(QStringLiteral("DEXP_LookAheadEnabled"),
+               on ? QStringLiteral("True") : QStringLiteral("False"));
+    emit dexpLookAheadEnabledChanged(on);
+}
+
+void TransmitModel::setDexpLookAheadMs(double ms)
+{
+    // Clamp to udDEXPLookAhead range per setup.Designer.cs:44773-44782 [v2.10.3.13]:
+    //   udDEXPLookAhead.Maximum = 999, udDEXPLookAhead.Minimum = 10  (units: ms)
+    const double clamped = std::clamp(ms, kDexpLookAheadMsMin, kDexpLookAheadMsMax);
+    if (qFuzzyCompare(clamped, m_dexpLookAheadMs)) { return; }  // idempotent guard
+    m_dexpLookAheadMs = clamped;
+    persistOne(QStringLiteral("DEXP_LookAheadMs"), QString::number(clamped));
+    emit dexpLookAheadMsChanged(clamped);
 }
 
 // ── Two-tone test properties (3M-1c B.2) ────────────────────────────────────

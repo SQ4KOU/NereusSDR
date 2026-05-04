@@ -736,6 +736,34 @@ public:
     static constexpr double kDexpHysteresisRatioDbMin =  0.0;
     static constexpr double kDexpHysteresisRatioDbMax = 10.0;
 
+    // ── DEXP look-ahead properties (3M-3a-iii Task 9) ─────────────────────
+    //
+    // Audio look-ahead controls.  Bound to grpDEXPLookAhead in Setup -> Audio ->
+    // VOX/DEXP per Thetis setup.Designer.cs:44755+ [v2.10.3.13].
+    //
+    // The look-ahead engages the WDSP audio buffer so VOX can fire just before
+    // the first syllable instead of clipping it.  Both properties persist.
+    //
+    // dexpLookAheadEnabled is the only DEXP boolean that ships TRUE.
+
+    /// DEXP audio look-ahead enable toggle.  Default TRUE per Thetis
+    /// chkDEXPLookAheadEnable.Checked=true at setup.Designer.cs:44808 [v2.10.3.13].
+    bool dexpLookAheadEnabled() const noexcept { return m_dexpLookAheadEnabled; }
+
+    /// DEXP audio look-ahead time in milliseconds.  Clamped to
+    /// [kDexpLookAheadMsMin, kDexpLookAheadMsMax].  Default 60.0 ms.
+    ///
+    /// From Thetis setup.Designer.cs:44788 [v2.10.3.13] - udDEXPLookAhead.Value=60.
+    /// Range from setup.Designer.cs:44773-44782 [v2.10.3.13]:
+    ///   udDEXPLookAhead.Maximum=999, udDEXPLookAhead.Minimum=10.
+    double dexpLookAheadMs() const noexcept { return m_dexpLookAheadMs; }
+
+    // DEXP look-ahead range constants.
+    // From Thetis setup.Designer.cs:44773-44782 [v2.10.3.13]:
+    //   udDEXPLookAhead: Min=10, Max=999 (units: ms)
+    static constexpr double kDexpLookAheadMsMin =  10.0;
+    static constexpr double kDexpLookAheadMsMax = 999.0;
+
     // ── Mic source (3M-1b I.1) ────────────────────────────────────────────────
     //
     // NereusSDR-native property — Thetis bakes mic-source selection directly
@@ -1308,6 +1336,10 @@ public slots:
     void setDexpExpansionRatioDb(double dB);
     void setDexpHysteresisRatioDb(double dB);
 
+    // ── DEXP look-ahead setters (3M-3a-iii Task 9) ─────────────────────────
+    void setDexpLookAheadEnabled(bool on);
+    void setDexpLookAheadMs(double ms);
+
     // ── Two-tone setters (3M-1c B.2) ───────────────────────────────────────
     void setTwoToneFreq1(int hz);
     void setTwoToneFreq2(int hz);
@@ -1378,6 +1410,10 @@ signals:
     // ── DEXP gate-ratio signals (3M-3a-iii Task 8) ────────────────────────
     void dexpExpansionRatioDbChanged(double dB);
     void dexpHysteresisRatioDbChanged(double dB);
+
+    // ── DEXP look-ahead signals (3M-3a-iii Task 9) ────────────────────────
+    void dexpLookAheadEnabledChanged(bool on);
+    void dexpLookAheadMsChanged(double ms);
 
     // ── Mic source signals (3M-1b I.1) ────────────────────────────────────────
     /// Emitted when micSource changes. Not emitted on idempotent calls.
@@ -1509,6 +1545,15 @@ private:
     // Both persist.
     double m_dexpExpansionRatioDb  = 10.0;
     double m_dexpHysteresisRatioDb =  2.0;
+
+    // ── DEXP look-ahead properties (3M-3a-iii Task 9) ────────────────────
+    // From Thetis setup.Designer.cs [v2.10.3.13]:
+    //   chkDEXPLookAheadEnable.Checked=true (line 44808)
+    //                  -- the only DEXP boolean defaulting true
+    //   udDEXPLookAhead.Value=60            (line 44788)
+    // Both persist.
+    bool   m_dexpLookAheadEnabled = true;
+    double m_dexpLookAheadMs      = 60.0;
 
     // ── Mic source (3M-1b I.1 + L.3) ───────────────────────────────────
     // NereusSDR-native. Default Pc (always available; Radio is opt-in).
