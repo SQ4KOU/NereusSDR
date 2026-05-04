@@ -85,8 +85,9 @@ struct PaFwdTriplet {
     int    adcCalOffset;   // adc_cal_offset — zero-offset correction
 };
 
-// From Thetis console.cs:25008-25053 [v2.10.3.13] — computeAlexFwdPower
-// per-board switch.  Returns {bridge_volt, refvoltage, adc_cal_offset}.
+// From Thetis console.cs:25008 [v2.10.3.13] — computeAlexFwdPower entry,
+// per-board switch body cited per case below.  Returns
+// {bridge_volt, refvoltage, adc_cal_offset}.
 //
 // Boards without an explicit case (HERMES, ANAN10/10E, HPSDR, FIRST/LAST
 // sentinels) fall through to the default triplet, matching the existing
