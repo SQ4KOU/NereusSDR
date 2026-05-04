@@ -1989,6 +1989,27 @@ target_compile_definitions(tst_tx_channel_dexp_envelope PRIVATE NEREUS_BUILD_TES
 nereus_add_test(tst_tx_channel_dexp_gate)
 target_compile_definitions(tst_tx_channel_dexp_gate PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-3a-iii Task 17 (bench fix): TxChannel DEXP pushvox bridge ───────
+#
+# Verifies the WDSP DEXP threshold-crossing callback bridge that was missed
+# in the original 3M-3a-iii plan and surfaced on JJ's bench (clicking [VOX]
+# correctly set run_vox=1 in WDSP but mic envelope crossings never reached
+# MoxController because the WDSP callback was never registered).
+#
+# Test seam: TxChannel::invokePushVoxForTest(int id, int active) is exposed
+# under NEREUS_BUILD_TESTS as a static method that forwards to the static
+# s_pushVoxCallback bridge.  WDSP normally invokes the bridge from inside
+# `xdexp` on the audio worker thread; the seam lets tests drive it
+# synchronously without a live mic stream / DEXP detector.
+#
+# Source references [v2.10.3.13]:
+#   wdsp/dexp.c:330,339      — pushvox firing points (active=1 attack, =0 release)
+#   wdsp/dexp.c:399-403      — SendCBPushDexpVox setter signature
+#   cmaster.cs:1125          — Thetis analogue registration callsite
+#   cmaster.cs:1903-1906     — Thetis VOX.PushVox callback body
+nereus_add_test(tst_tx_channel_pushvox_callback)
+target_compile_definitions(tst_tx_channel_pushvox_callback PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1b Task D.4: TxChannel::setStageRunning expansion ───────────────
 # Verifies Panel (existing), MicMeter, AlcMeter, AmMod, FmMod dispatch.
 # MicMeter/AlcMeter: always-on meter stages — no public WDSP Run setter (meter.c);

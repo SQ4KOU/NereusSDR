@@ -77,6 +77,15 @@
 //                 the CFC tab schema work in 3M-3a-ii).  Signatures match
 //                 wdsp/iir.c:675-703 [v2.10.3.13].  AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-05-04 — SendCBPushDexpVox declaration added by J.J. Boyd (KG4VCF)
+//                 during Phase 3M-3a-iii Task 17 (bench-surfaced VOX wire-up
+//                 bug fix).  Registers the WDSP DEXP threshold-crossing
+//                 callback that drives MOX engagement on mic envelope
+//                 attack/release.  Signature matches wdsp/dexp.c:399-403
+//                 [v2.10.3.13] with a NEREUS_STDCALL macro that maps to
+//                 __stdcall on Windows and to nothing on Linux/macOS, mirroring
+//                 WDSP's own linux_port.h:65 shim.  AI-assisted transformation
+//                 via Anthropic Claude Code.
 //   2026-05-03 — Phase 3M-3a-iii Tasks 1-6 by J.J. Boyd (KG4VCF):
 //                 SetDEXPRun, SetDEXPDetectorTau, SetDEXPAttackTime,
 //                 SetDEXPReleaseTime (Tasks 1-2: envelope/timing,
@@ -201,6 +210,20 @@ warren@wpratt.com
 */
 
 #pragma once
+
+// NEREUS_STDCALL — calling-convention shim for WDSP function-pointer
+// callbacks.  Defined OUTSIDE the HAVE_WDSP guard so consumers (TxChannel's
+// pushvox bridge) can declare a portable callback signature in test builds
+// that don't link WDSP.  On Windows the underlying WDSP function pointer
+// types use __stdcall (see e.g. wdsp/dexp.c:399 [v2.10.3.13]); on
+// Linux/macOS WDSP's third_party/wdsp/src/linux_port.h:65 maps __stdcall
+// to nothing, so on those platforms the shim is a no-op and the
+// signature collapses to a plain C function pointer.
+#if defined(_WIN32) || defined(Q_OS_WIN)
+#  define NEREUS_STDCALL __stdcall
+#else
+#  define NEREUS_STDCALL
+#endif
 
 #ifdef HAVE_WDSP
 
@@ -1011,6 +1034,40 @@ void SetDEXPAudioDelay(int id, double delay);
 //   SetAntiVOXGain: cmaster.cs:211-212
 void SetAntiVOXRun(int id, int run);
 void SetAntiVOXGain(int id, double gain);
+
+// DEXP pushvox callback registration (Phase 3M-3a-iii Task 17 — bench fix).
+//
+// Register a callback that WDSP fires from the audio worker thread when the
+// DEXP detector's state machine transitions LOW→ATTACK (mic envelope crossed
+// the attack threshold, active=1) or when the HOLD timer expires after audio
+// drops below threshold (active=0).  The callback drives MOX engagement —
+// without it, SetDEXPRunVox(id, 1) sets WDSP's a->run_vox = 1 but threshold-
+// crossings have nowhere to go (a->pushvox is NULL).
+//
+// On Windows the underlying WDSP function pointer carries __stdcall; on
+// Linux/macOS WDSP's linux_port.h:65 shims `#define __stdcall` to nothing,
+// so the callback ABI matches a plain C function pointer there.  The
+// NEREUS_STDCALL macro (defined OUTSIDE the HAVE_WDSP guard, at the
+// bottom of this header) keeps the consumer-side function-pointer
+// signature byte-compatible with the WDSP-side typedef on every
+// platform — and stays available in test builds that don't define
+// HAVE_WDSP, so TxChannel's static callback declaration always
+// resolves regardless of whether WDSP is linked.
+//
+// From Thetis wdsp/dexp.c:399-403 [v2.10.3.13]:
+//   PORT void SendCBPushDexpVox (int id, void (__stdcall *pushvox)(int id, int active))
+//   { DEXP a = pdexp[id]; ... a->pushvox = pushvox; ... }
+//
+// The Thetis Console-side analogue lives in cmaster.cs:1903-1906 [v2.10.3.13]
+// as `VOX.PushVox(int id, int active) { Audio.VOXActive = (active == 1); }`,
+// registered via cmaster.cs:1125 `SendCBPushVox(0, PushVoxDel)` against the
+// ChannelMaster wrapper VOX (cmaster/vox.c:99-101 — same pushvox semantics
+// at a different point in the pipeline).  NereusSDR has no ChannelMaster
+// shim layer; we register against WDSP's DEXP pushvox directly and route
+// the callback into MoxController::onVoxActive via a Qt signal — direct
+// signal-driven MOX engagement instead of Thetis's Audio.VOXActive +
+// PollPTT polling loop.
+void SendCBPushDexpVox(int id, void (NEREUS_STDCALL *pushvox)(int id, int active));
 
 // DEXP peak signal readback (Phase 3M-3a-iii Task 6).
 // Returns the live audio peak observed by the DEXP detector.  Output is

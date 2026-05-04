@@ -753,7 +753,10 @@ RadioModel::RadioModel(QObject* parent)
     // the phase-H comment block is self-contained.
     //
     //   onCatPtt: 3K — full CAT integration (rigctld / serial / network)
-    //   onVoxActive: 3M-3a or via TxChannel TX-meter polling (WDSP DEXP output)
+    //   onVoxActive: WIRED in 3M-3a-iii Task 17 (bench fix, 2026-05-04) via
+    //     TxChannel::voxActiveChanged — see connectToRadio() H.1 block for
+    //     the connect() callsite. The wire-up was deferred from 3M-1b and
+    //     omitted from the 3M-3a-iii plan; JJ's bench surfaced the gap.
     //   onSpacePtt: 3M-3a — UI keyboard handler (MainWindow keyPressEvent)
     //   onX2Ptt: 3M-3a or later — X2 status-frame parsing in RadioConnection
 
@@ -1811,6 +1814,35 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                     m_txChannel, [this](bool run) {
                 m_txChannel->setVoxRun(run);
             });
+
+            // ── Phase 3M-3a-iii Task 17 (bench fix) ───────────────────────────
+            //
+            // TxChannel::voxActiveChanged → MoxController::onVoxActive.
+            //
+            // This closes the deferred wire from 3M-1b
+            // (RadioModel.cpp:756 — "onVoxActive: 3M-3a or via TxChannel
+            // TX-meter polling (WDSP DEXP output)") that the 3M-3a-iii
+            // implementation plan did not capture as a task.  Without it
+            // [VOX] correctly enables run_vox=1 in WDSP but mic envelope
+            // crossings never reach MoxController — VOX silently fails to
+            // key the radio.  TxChannel registers the WDSP DEXP pushvox
+            // callback in its constructor; the callback emits this signal
+            // from the WDSP audio worker thread.  Qt::AutoConnection
+            // promotes to QueuedConnection across the worker→main-thread
+            // boundary, so MoxController::onVoxActive runs on the main
+            // thread (its declared affinity — see MoxController H.5
+            // comment block in this same RadioModel ctor).
+            //
+            // Thetis analogue: cmaster.cs:1903-1906 [v2.10.3.13] —
+            //   `VOX.PushVox(int id, int active)
+            //    { Audio.VOXActive = (active == 1); }`
+            // wired by cmaster.cs:1125 [v2.10.3.13]
+            //   `SendCBPushVox(0, PushVoxDel)`.
+            // Thetis sets `Audio.VOXActive` and lets the PollPTT loop
+            // notice on its next tick; NereusSDR uses direct signal-driven
+            // engagement (no polling).
+            connect(m_txChannel, &TxChannel::voxActiveChanged,
+                    m_moxController, &MoxController::onVoxActive);
 
             // H.2 — voxThresholdRequested → setVoxAttackThreshold.
             // From Thetis cmaster.cs:1054-1059 [v2.10.3.13] — CMSetTXAVoxThresh.

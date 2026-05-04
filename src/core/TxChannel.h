@@ -238,6 +238,24 @@ warren@wpratt.com
 //                 path is unaffected; this helper runs only from the debounce
 //                 timer, not from setTuneTone).  AI-assisted transformation
 //                 via Anthropic Claude Code.
+//   2026-05-04 — Phase 3M-3a-iii Task 17 (bench fix) — voxActiveChanged(bool)
+//                 Qt signal + s_pushVoxCallback() static C-callable bridge +
+//                 s_voxKeyInstance lookup pointer + registerVoxCallback() /
+//                 unregisterVoxCallback() helpers added by J.J. Boyd (KG4VCF).
+//                 Closes the deferred wire from 3M-1b RadioModel.cpp:756
+//                 ("onVoxActive: 3M-3a or via TxChannel TX-meter polling
+//                 (WDSP DEXP output)") that the 3M-3a-iii plan did not
+//                 capture as a task — JJ caught it on the post-3M-3a-iii
+//                 bench: clicking [VOX] correctly set run_vox=1 in WDSP
+//                 (via existing setVoxRun → SetDEXPRunVox) but mic envelope
+//                 crossings never reached MoxController because the WDSP
+//                 callback was never registered (a->pushvox = NULL).
+//                 The bridge mirrors Thetis cmaster.cs:1903-1906 +
+//                 cmaster.cs:1125 [v2.10.3.13] (VOX.PushVox →
+//                 SendCBPushVox(0, PushVoxDel)) but routes through a
+//                 Qt signal to MoxController::onVoxActive instead of
+//                 Thetis's Audio.VOXActive + PollPTT polling loop.
+//                 AI-assisted transformation via Anthropic Claude Code.
 //   2026-05-03 — Phase 3M-3a-iii Task 6 — getDexpPeakSignal() and
 //                 getTxMicMeterDb() read accessors added by J.J. Boyd
 //                 (KG4VCF).  Both `const noexcept`, safe to call from the
@@ -265,6 +283,7 @@ warren@wpratt.com
 #include <vector>
 
 #include "WdspTypes.h"
+#include "wdsp_api.h"  // NEREUS_STDCALL macro for s_pushVoxCallback (Task 17)
 
 namespace NereusSDR {
 
@@ -1770,6 +1789,18 @@ public:
     //   (b) Zero-value (mute case) stores 0.0 correctly.
     //   (c) Idempotent guard fires on duplicate calls (value unchanged).
     double lastMicPreampForTest()             const noexcept { return m_micPreampLast; }
+
+    // ── Test seam (Phase 3M-3a-iii Task 17) — DEXP pushvox bridge ──────────
+    //
+    // Synchronously invoke the static pushvox bridge for the given channel
+    // id with the given active flag.  Used by tst_tx_channel_pushvox_callback
+    // to verify that the bridge looks up the correct TxChannel instance and
+    // emits voxActiveChanged with the matching bool value.  WDSP itself
+    // calls `s_pushVoxCallback` from inside `xdexp` on the audio thread —
+    // tests cannot easily drive that path, so the seam invokes it directly.
+    static void invokePushVoxForTest(int id, int active) {
+        s_pushVoxCallback(id, active);
+    }
 #endif // NEREUS_BUILD_TESTS
 
 public slots:
@@ -1878,6 +1909,32 @@ signals:
     /// Plan: 3M-1b D.5 (this commit). Pre-code review §4.3.
     void sip1OutputReady(const float* samples, int frames);
 
+    // ── Phase 3M-3a-iii Task 17 — DEXP pushvox bridge signal ─────────────────
+    //
+    /// Emitted from the WDSP DEXP detector's pushvox callback when the mic
+    /// envelope crosses the attack threshold (active=true) or when the
+    /// HOLD timer expires after audio drops back below the threshold
+    /// (active=false).
+    ///
+    /// **Thread context:** emitted from the WDSP audio worker thread (the
+    /// thread that drives `xdexp` inside `fexchange0` — for NereusSDR that
+    /// is `TxWorkerThread`).  Receivers in the GUI / main thread receive
+    /// via Qt::QueuedConnection automatically (Qt::AutoConnection
+    /// promotes to QueuedConnection on a thread crossing).  Receivers
+    /// MUST be thread-safe with respect to that auto-promotion — they
+    /// must not assume direct synchronous delivery.
+    ///
+    /// Wired by RadioModel::connectToRadio() to
+    /// MoxController::onVoxActive(bool), which actively keys MOX (sets
+    /// PttMode::Vox + setMox(active)).
+    ///
+    /// From Thetis wdsp/dexp.c:330,339 [v2.10.3.13] — pushvox firing points
+    /// in DEXP's state machine.  The Thetis Console-side analogue is
+    /// VOX.PushVox at cmaster.cs:1903-1906 [v2.10.3.13] which sets
+    /// `Audio.VOXActive = (active == 1)`; NereusSDR uses direct
+    /// signal-driven MOX engagement instead of polling.
+    void voxActiveChanged(bool active);
+
 private slots:
     // ── Per-profile TX filter (Plan 4 D8) — debounce fire slot ───────────────
 
@@ -1979,6 +2036,45 @@ private:
     // on the channel's thread (worker after moveToThread); driveOneTxBlock
     // reads it on the same thread.
     std::atomic<bool> m_running{false};
+
+    // ── Phase 3M-3a-iii Task 17 — DEXP pushvox bridge ────────────────────────
+    //
+    // C-callable bridge that WDSP invokes from inside `xdexp` when the DEXP
+    // detector's state machine transitions LOW→ATTACK or when the HOLD
+    // timer expires.  Looks up the TxChannel instance for the given WDSP
+    // channel id (via s_voxKeyInstance) and emits voxActiveChanged with
+    // the matching bool value.  RadioModel routes that signal into
+    // MoxController::onVoxActive for direct MOX engagement.
+    //
+    // The signature MUST match the WDSP-side typedef byte-for-byte
+    // (NEREUS_STDCALL maps to __stdcall on Windows, nothing elsewhere —
+    // see wdsp_api.h SendCBPushDexpVox doc).  Cast to the underlying
+    // function-pointer type happens implicitly at the SendCBPushDexpVox
+    // callsite in TxChannel::registerVoxCallback().
+    //
+    // Thread context: WDSP audio worker thread (TxWorkerThread for
+    // NereusSDR).  Emitting a Qt signal here is safe because Qt's
+    // AutoConnection promotes to QueuedConnection on a thread crossing.
+    static void NEREUS_STDCALL s_pushVoxCallback(int id, int active);
+
+    // Single-instance lookup table.  3M-3a-iii ships exactly one TxChannel
+    // (channel id 1) — phase 3F multi-pan TX will turn this into a small
+    // std::array<TxChannel*, N> indexed by id.  Set in registerVoxCallback,
+    // cleared in unregisterVoxCallback and the dtor.
+    static TxChannel* s_voxKeyInstance;
+
+    // Wires SendCBPushDexpVox(m_channelId, &s_pushVoxCallback) and stores
+    // `this` in s_voxKeyInstance.  Called once from the constructor —
+    // Thetis create_xmtr (cmaster.c:130-157 [v2.10.3.13]) has already
+    // run create_dexp by the time WdspEngine::createTxChannel constructs
+    // this wrapper, so pdexp[m_channelId] is non-null and the WDSP setter
+    // is safe to call (matches the rsmpin.p / pdexp guards used throughout
+    // the existing DEXP setters).
+    void registerVoxCallback();
+
+    // Clears s_voxKeyInstance and re-registers nullptr with WDSP so a
+    // late callback after destruction is a no-op.  Called from the dtor.
+    void unregisterVoxCallback();
 
     // ── VOX / anti-VOX last-set values (D.3) ─────────────────────────────────
     //

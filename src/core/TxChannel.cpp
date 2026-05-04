@@ -172,6 +172,26 @@ warren@wpratt.com
 //                 cited from deskhpsdr/transmitter.c:2136-2186 [@120188f].
 //                 The TUN path at lines 520-528 is untouched.
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-05-04 — Phase 3M-3a-iii Task 17 (bench fix): static
+//                 s_pushVoxCallback() bridge + s_voxKeyInstance lookup +
+//                 registerVoxCallback() / unregisterVoxCallback() helpers
+//                 implemented by J.J. Boyd (KG4VCF).  Constructor calls
+//                 registerVoxCallback() AFTER WDSP TXA pipeline init has
+//                 set up the DEXP detector (cmaster.c:130-157
+//                 [v2.10.3.13] — create_dexp runs before OpenChannel
+//                 returns, so pdexp[m_channelId] is non-null at this
+//                 point).  Destructor calls unregisterVoxCallback() so a
+//                 late callback fired post-dtor on the audio worker thread
+//                 dereferences nullptr (the bridge's defensive null
+//                 check makes that a no-op) instead of a stale this.
+//                 Closes the deferred wire from 3M-1b RadioModel.cpp:756
+//                 ("onVoxActive: 3M-3a or via TxChannel TX-meter polling
+//                 (WDSP DEXP output)") that the 3M-3a-iii implementation
+//                 plan did not capture as a task.  Caught on JJ's bench
+//                 of the post-3M-3a-iii build: clicking [VOX] correctly
+//                 set run_vox=1 in WDSP but mic envelope crossings never
+//                 reached MoxController.  AI-assisted transformation via
+//                 Anthropic Claude Code.
 //   2026-05-03 — Phase 3M-3a-iii Tasks 1-2: setDexpRun(bool),
 //                 setDexpDetectorTau(double), setDexpAttackTime(double),
 //                 setDexpReleaseTime(double) wrappers implemented by
@@ -289,6 +309,36 @@ extern DEXP pdexp[];
 namespace NereusSDR {
 
 // ---------------------------------------------------------------------------
+// Phase 3M-3a-iii Task 17 — DEXP pushvox bridge static members
+//
+// s_voxKeyInstance is the single-instance lookup table for the WDSP DEXP
+// pushvox callback.  3M-3a-iii ships exactly one TxChannel (channel id 1);
+// phase 3F multi-pan TX will turn this into a small std::array indexed by id.
+//
+// s_pushVoxCallback is the C-callable bridge that WDSP fires from inside
+// `xdexp` (wdsp/dexp.c:330,339 [v2.10.3.13]) on the audio worker thread
+// (TxWorkerThread for NereusSDR).  Looks up the instance via the channel
+// id passed by WDSP and emits voxActiveChanged — RadioModel routes that
+// signal into MoxController::onVoxActive (Qt::AutoConnection promotes to
+// QueuedConnection across threads).
+//
+// Defensive: if the lookup misses (instance null, or wrong channel id, or
+// callback fires after the dtor cleared the slot), the bridge is a no-op.
+// Without this guard a stray callback fired during teardown would
+// dereference a stale pointer.
+// ---------------------------------------------------------------------------
+TxChannel* TxChannel::s_voxKeyInstance = nullptr;
+
+void NEREUS_STDCALL TxChannel::s_pushVoxCallback(int id, int active)
+{
+    TxChannel* inst = s_voxKeyInstance;
+    if (inst == nullptr || inst->m_channelId != id) {
+        return;
+    }
+    emit inst->voxActiveChanged(active != 0);
+}
+
+// ---------------------------------------------------------------------------
 // Constructor
 //
 // The WDSP-side TXA channel (all 31 pipeline stages) was already constructed
@@ -377,9 +427,117 @@ TxChannel::TxChannel(int channelId,
                   << "wrapper constructed; WDSP TXA pipeline (31 stages)"
                   << "inBuf=" << m_inputBufferSize
                   << "outBuf=" << m_outputBufferSize;
+
+    // Phase 3M-3a-iii Task 17 (bench fix): register the WDSP DEXP pushvox
+    // callback so threshold crossings drive MoxController::onVoxActive
+    // through the voxActiveChanged Qt signal.  Without this, [VOX] toggles
+    // run_vox=1 in WDSP but mic envelope crossings have nowhere to go
+    // (a->pushvox is NULL).  See registerVoxCallback() comment block for
+    // the full root-cause + fix narrative.
+    registerVoxCallback();
 }
 
-TxChannel::~TxChannel() = default;
+TxChannel::~TxChannel()
+{
+    // Phase 3M-3a-iii Task 17: clear s_voxKeyInstance and re-register
+    // nullptr with WDSP so a late callback fired after destruction is a
+    // no-op.  Order matters: must run BEFORE the QObject base-class
+    // destructor invalidates the QObject so the WDSP unregister call
+    // doesn't risk emitting from a dead object.
+    unregisterVoxCallback();
+}
+
+// ---------------------------------------------------------------------------
+// registerVoxCallback() — Phase 3M-3a-iii Task 17 (bench fix)
+//
+// Stores `this` in s_voxKeyInstance and wires SendCBPushDexpVox(channel,
+// &s_pushVoxCallback) so the WDSP DEXP detector's threshold-crossing
+// callback fires through to MoxController::onVoxActive via the Qt signal
+// bridge.
+//
+// The registration is safe to issue here because Thetis create_xmtr
+// (cmaster.c:130-157 [v2.10.3.13]) calls create_dexp BEFORE OpenChannel
+// returns, and NereusSDR's WdspEngine::createTxChannel mirrors that order
+// (OpenChannel(type=1) constructs the full TXA pipeline including DEXP
+// before this constructor runs).  pdexp[m_channelId] is therefore non-null
+// at this point — the same invariant the existing setVoxRun / setDexpRun
+// wrappers rely on.
+//
+// One-instance assumption: 3M-3a-iii ships exactly one TxChannel (channel
+// id 1).  Construction of a second TxChannel would silently overwrite
+// s_voxKeyInstance — phase 3F multi-pan TX must replace the bare static
+// pointer with a small std::array<TxChannel*, N> indexed by m_channelId.
+// A diagnostic warning fires if the slot is already occupied so that
+// future regressions (or test fixtures that construct two TxChannels)
+// surface immediately.
+//
+// Cite: Thetis cmaster.cs:1125 [v2.10.3.13] — analogous registration
+// against the ChannelMaster wrapper VOX (`SendCBPushVox(0, PushVoxDel)`).
+// NereusSDR has no ChannelMaster shim, so the registration goes against
+// WDSP's DEXP pushvox directly (wdsp/dexp.c:399-403 [v2.10.3.13]).
+// ---------------------------------------------------------------------------
+void TxChannel::registerVoxCallback()
+{
+    if (s_voxKeyInstance != nullptr && s_voxKeyInstance != this) {
+        // Diagnostic: another TxChannel already owns the slot.  Phase 3F
+        // multi-pan TX should replace this static pointer with a per-id
+        // table; for 3M-3a-iii one-TxChannel-only is the contract.
+        qCWarning(lcDsp) << "TxChannel" << m_channelId
+                         << "registerVoxCallback: s_voxKeyInstance already set"
+                         << "to channel" << s_voxKeyInstance->m_channelId
+                         << "— overwriting (phase 3F follow-up: per-id table).";
+    }
+    s_voxKeyInstance = this;
+#ifdef HAVE_WDSP
+    // Phase 3M-1c TX pump v3: pdexp[ch] + txa.rsmpin.p null-guards.  Test
+    // builds construct TxChannel directly without going through
+    // WdspEngine::createTxChannel → OpenChannel(type=1), so neither
+    // pdexp[m_channelId] nor txa[m_channelId].rsmpin.p is allocated and
+    // SendCBPushDexpVox would dereference null (dexp.c:402:
+    // `DEXP a = pdexp[id]; ... a->pushvox = pushvox;`).  Same pattern as
+    // setVoxRun / setDexpRun / all other DEXP setters in this file.
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (pdexp[m_channelId] == nullptr) return;
+    // From Thetis wdsp/dexp.c:399-403 [v2.10.3.13] — SendCBPushDexpVox impl.
+    // Cite: Thetis cmaster.cs:1125 [v2.10.3.13] — analogous registration.
+    SendCBPushDexpVox(m_channelId, &TxChannel::s_pushVoxCallback);
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// unregisterVoxCallback() — Phase 3M-3a-iii Task 17 (bench fix)
+//
+// Symmetric tear-down for registerVoxCallback().  Re-registers nullptr with
+// WDSP so any in-flight callback (e.g. one already dispatched on the audio
+// worker thread but not yet executed) becomes a no-op when it runs, and
+// clears s_voxKeyInstance.
+//
+// The HAVE_WDSP guard mirrors registerVoxCallback().  Skipping the WDSP
+// call in test builds is safe: those builds either don't link WDSP at all
+// (no callback to unregister) or never exercise the SendCBPushDexpVox
+// path that sets a->pushvox to a non-null value.
+// ---------------------------------------------------------------------------
+void TxChannel::unregisterVoxCallback()
+{
+#ifdef HAVE_WDSP
+    // Same null-guard pair as registerVoxCallback (and all DEXP setters in
+    // this file).  Test builds never drove OpenChannel(type=1) so pdexp[]
+    // is null and the WDSP unregister would crash; production builds
+    // always have a live DEXP at dtor time.
+    if (txa[m_channelId].rsmpin.p == nullptr) {
+        // Skip WDSP call; still clear the lookup pointer below.
+    } else if (pdexp[m_channelId] == nullptr) {
+        // Skip WDSP call; still clear the lookup pointer below.
+    } else {
+        // Pass nullptr so any callback already in flight on the WDSP worker
+        // thread becomes a no-op when it executes.
+        SendCBPushDexpVox(m_channelId, nullptr);
+    }
+#endif
+    if (s_voxKeyInstance == this) {
+        s_voxKeyInstance = nullptr;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // stageRunningDefault()
