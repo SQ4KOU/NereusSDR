@@ -2886,6 +2886,12 @@ nereus_add_test(tst_parametric_eq_widget_interaction)
 # -- Phase 3M-3a-ii follow-up Batch 5: ParametricEqWidget JSON marshal + public API --
 nereus_add_test(tst_parametric_eq_widget_json)
 
+# -- Phase 3M-3a-iii Task 13: DexpPeakMeter widget (VOX/DEXP live peak strip) --
+# 5 tests: default-construct paint safety, signal-level clamp to [0,1], green
+# peak fill, red threshold marker, red above-threshold overlay (mirrors Thetis
+# picVOX_Paint:28958-28959 [v2.10.3.13] visual recipe).
+nereus_add_test(tst_dexp_peak_meter)
+
 # -- UI Polish Foundation A1: AppletPanelWidget scrollbar gutter --
 nereus_add_test(tst_applet_panel_gutter)
 
