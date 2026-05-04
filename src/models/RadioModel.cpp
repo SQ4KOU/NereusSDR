@@ -4624,18 +4624,62 @@ void RadioModel::setTune(bool on)
         // power restore, VFO un-offset) is deferred.
         m_pendingTuneOff = true;
 
+        // Capture MOX state BEFORE calling MoxController::setTune so we can
+        // detect the "MOX already RX" path that would otherwise strand the
+        // latch.  Codex P1 catch on PR #180: setMox(false)'s idempotent guard
+        // (MoxController.cpp:461) emits no TX→RX phase signals when m_mox is
+        // already false, so no rxReady fires and the deferred completion
+        // never runs — m_pendingTuneOff sits latched, and a later unrelated
+        // rxReady (from a normal PTT cycle) consumes the stale latch.
+        //
+        // This mirrors Thetis exactly. In Thetis the post-MOX work runs
+        // unconditionally because `await Task.Delay(100)` at console.cs:30107
+        // [v2.10.3.13] lives in the TUN handler — not in chkMOX_CheckedChanged2
+        // — so it fires regardless of whether the chkMOX assignment triggered
+        // a walk.  WinForms silently no-ops `chkMOX.Checked = false` when it
+        // is already false, but the next line in chkTUN_CheckedChanged still
+        // awaits 100 ms and then sets gen1.run = 0.
+        //
+        // Bug window for this guard: something has to drop MOX externally
+        // while m_isTuning is still latched (e.g. PA-fault trip dropping
+        // MOX, manual MOX click during TUN, or future PureSignal /
+        // SwrProtectionController force-unkey paths).  Narrow but real.
+        const bool moxWasOn = (m_moxController != nullptr)
+                              && m_moxController->isMox();
+
         // ── RELEASE MOX via MoxController ────────────────────────────────────
         // Cite: console.cs:30106 [v2.10.3.13]: chkMOX.Checked = false;
-        // MoxController::setTune(false) drives the full TX→RX walk (B.5),
-        // which fires hardwareFlipped(false) synchronously and then chains
-        // keyUpDelayTimer (mox_delay) → txaFlushed → pttOutDelayTimer
-        // (ptt_out_delay) → rxReady.
+        // MoxController::setTune(false) drives the full TX→RX walk (B.5)
+        // when MOX is on: it fires hardwareFlipped(false) synchronously and
+        // then chains keyUpDelayTimer (mox_delay) → txaFlushed →
+        // pttOutDelayTimer (ptt_out_delay) → rxReady.  Always called (even
+        // when MOX is already off) because it also clears m_manualMox and
+        // emits manualMoxChanged(false) — Cite: console.cs:30142 [v2.10.3.13].
         if (m_moxController) {
             m_moxController->setTune(false);
         }
 
+        if (!moxWasOn) {
+            // No TX→RX walk will fire because MoxController::setMox(false)
+            // hit its idempotent guard.  Schedule completeTuneOff directly
+            // off a QTimer::singleShot so the deferred path still gets a
+            // turn.  The settle delay matches m_tuneOffSettleMs both for
+            // ordering symmetry with the walk path and because Thetis's
+            // `await Task.Delay(100)` (console.cs:30107 [v2.10.3.13]) is
+            // unconditional — it fires whether or not the chkMOX assignment
+            // triggered a walk.  The lambda re-checks the latch in case a
+            // fresh setTune(true) clears it before the timer fires.
+            QTimer::singleShot(m_tuneOffSettleMs, this, [this]() {
+                if (!m_pendingTuneOff) {
+                    return;
+                }
+                completeTuneOff();
+            });
+        }
+
         // The remainder of the TUN-off work runs from completeTuneOff()
-        // when MoxController::rxReady fires + m_tuneOffSettleMs elapses.
+        // when MoxController::rxReady fires + m_tuneOffSettleMs elapses
+        // (walk path), or directly from the singleShot above (no-walk path).
         // Wired in the RadioModel constructor next to F.1.
     }
 }

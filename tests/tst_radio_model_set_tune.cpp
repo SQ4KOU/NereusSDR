@@ -888,6 +888,83 @@ private slots:
     // Instead we verify the simpler invariant: after setTune(false), pump
     // through completion, and re-engage TUN-on; the second cycle behaves
     // identically (no stale state poisons it).
+    // ── 22. Issue #177 + Codex P1: TUN-off when MOX already RX still completes ──
+    //
+    // Codex caught a P1 stranded-latch case in PR #180 review: if MOX was
+    // already in RX state when setTune(false) is called (e.g., a safety trip
+    // dropped MOX while TUN was still latched, a manual MOX click during
+    // TUN, or a future PureSignal / SwrProtectionController force-unkey
+    // path), MoxController::setMox(false) hits the idempotent guard and
+    // emits no TX→RX phase signals.  No rxReady fires, m_pendingTuneOff
+    // stays latched, and a later unrelated rxReady from a normal PTT cycle
+    // would consume the stale latch and apply stale TUN-off state.
+    //
+    // The fix detects MOX-already-off in setTune(false) and schedules
+    // completeTuneOff directly via QTimer::singleShot, bypassing rxReady.
+    // This mirrors Thetis console.cs:30107 [v2.10.3.13] `await Task.Delay(100)`
+    // which is unconditional (fires whether or not chkMOX assignment
+    // triggered a walk — WinForms silently no-ops same-value assignment).
+    void tuneOffWithMoxAlreadyOffStillCompletes()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn);
+        std::unique_ptr<MockConnection> connOwner(conn);
+
+        auto* slice = model.activeSlice();
+        QVERIFY(slice != nullptr);
+        slice->setDspMode(DSPMode::USB);
+
+        if (PaProfileManager* pm = model.paProfileManager()) {
+            pm->setMacAddress(QStringLiteral("AABBCCDDEEFF"));
+            pm->load(HPSDRModel::HERMES);
+        }
+
+        model.transmitModel().setPower(80);
+
+        // Engage TUN.  This sets m_isTuning=true and engages MOX.
+        model.setTune(true);
+        pump();
+        QVERIFY(model.moxController()->isMox());
+        QVERIFY(model.isTune());
+
+        // Externally drop MOX (simulates a safety trip / PA fault / manual
+        // MOX click during TUN).  m_isTuning remains true; MOX is now off.
+        // Note: this drives the MOX state machine through a real TX→RX walk
+        // so we must pump to drain the chained timers.
+        model.moxController()->setMox(false);
+        pump();
+        QVERIFY(!model.moxController()->isMox());
+        QVERIFY(model.isTune());          // m_isTuning still latched
+        QVERIFY(!model.tuneOffPendingForTest());
+
+        // Click TUN-off.  With the Codex fix, this must complete cleanly
+        // even though MoxController::setTune(false) → setMox(false) hits
+        // the idempotent guard and emits no rxReady.  The fallback
+        // QTimer::singleShot in setTune(false) drives completeTuneOff.
+        const int logBefore = conn->txDriveLog.size();
+        model.setTune(false);
+        QVERIFY2(model.tuneOffPendingForTest(),
+                 "setTune(false) must arm the latch even when MOX was already off");
+
+        // Pump the event loop.  This drives:
+        //   QTimer::singleShot(0, ...) fallback → completeTuneOff
+        //   completeTuneOff queues setTxDrive (synchronous same-thread Auto)
+        pump();
+
+        // Latch must be cleared and the saved-power wire byte must have
+        // been pushed via the fallback path.  Without the Codex fix this
+        // assertion fails (the latch sits forever, no setTxDrive call).
+        QVERIFY2(!model.tuneOffPendingForTest(),
+                 "completeTuneOff must run even when MOX was already off");
+        QVERIFY2(conn->txDriveLog.size() > logBefore,
+                 "saved-power wire byte must be pushed via fallback path");
+        QVERIFY2(!model.isTune(),
+                 "completeTuneOff must clear m_isTuning");
+
+        model.injectConnectionForTest(nullptr);
+    }
+
     void tuneOffCycleIsRepeatable()
     {
         RadioModel model;
