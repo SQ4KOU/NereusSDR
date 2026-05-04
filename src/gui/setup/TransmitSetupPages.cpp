@@ -52,6 +52,15 @@
 //                 "Transmit" SetupDialog category.  PhoneCwApplet
 //                 right-click in Task 15 will route here via
 //                 SetupDialog::selectPage("DEXP/VOX").
+//   2026-05-03 — Bench polish: DexpVoxPage outer layout switched from
+//                 a single QHBoxLayout (three boxes side-by-side) to a
+//                 2x2 QGridLayout (VOX/DEXP big box spanning column 0
+//                 rows 0+1; Audio LookAhead top-right; Side-Channel
+//                 Trigger Filter bottom-right).  The horizontal layout
+//                 exceeded standard Setup-dialog width and forced
+//                 horizontal scroll; the grid keeps everything inside
+//                 the dialog without panning.  Bidirectional bindings
+//                 unchanged.
 // =================================================================
 
 //=================================================================
@@ -1169,8 +1178,18 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
 
     TransmitModel& tx = model->transmitModel();
 
-    // ── Three side-by-side group boxes inside a QHBoxLayout ──────────────────
-    auto* row = new QHBoxLayout;
+    // ── 2x2 grid: VOX/DEXP big box spans col-0 rows; small boxes stacked col-1 ─
+    //
+    // 2026-05-03 bench polish: switched from a single horizontal QHBoxLayout
+    // (three boxes side-by-side) to a 2x2 QGridLayout because the original
+    // arrangement exceeded the standard Setup-dialog width and forced
+    // horizontal scroll.  New shape:
+    //   col 0 (rows 0+1, spanned)  : VOX / DEXP big box
+    //   col 1 row 0                : Audio LookAhead small box
+    //   col 1 row 1                : Side-Channel Trigger Filter small box
+    // Top-justified by appending contentLayout()->addStretch() after the grid
+    // (already present further down).
+    auto* row = new QGridLayout;
     row->setSpacing(12);
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1328,7 +1347,8 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     dexpVoxLay->addLayout(dexpVoxGrid);
     dexpVoxLay->addStretch();
 
-    row->addWidget(dexpVoxGrp);
+    // VOX/DEXP big box — column 0, spans both rows (row=0, col=0, rowSpan=2, colSpan=1).
+    row->addWidget(dexpVoxGrp, 0, 0, 2, 1);
 
     // ══════════════════════════════════════════════════════════════════════════
     // ── Group 2: Audio LookAhead ─────────────────────────────────────────────
@@ -1368,7 +1388,9 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     lookAheadLay->addLayout(lookAheadGrid);
     lookAheadLay->addStretch();
 
-    row->addWidget(lookAheadGrp);
+    // Audio LookAhead small box — column 1, row 0 (top-right cell).
+    // AlignTop keeps the box from stretching vertically inside its grid cell.
+    row->addWidget(lookAheadGrp, 0, 1, Qt::AlignTop);
 
     // ══════════════════════════════════════════════════════════════════════════
     // ── Group 3: Side-Channel Trigger Filter ─────────────────────────────────
@@ -1421,9 +1443,10 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     scfLay->addLayout(scfGrid);
     scfLay->addStretch();
 
-    row->addWidget(scfGrp);
+    // Side-Channel Trigger Filter small box — column 1, row 1 (bottom-right cell).
+    // AlignTop keeps the box from stretching vertically inside its grid cell.
+    row->addWidget(scfGrp, 1, 1, Qt::AlignTop);
 
-    row->addStretch();
     contentLayout()->addLayout(row);
     contentLayout()->addStretch();
 
