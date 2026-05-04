@@ -850,6 +850,55 @@ public:
     /// Idempotent: bool `==` guard against m_dexpRunSideChannelFilterLast.
     void setDexpRunSideChannelFilter(bool run);
 
+    // ── DEXP audio look-ahead wrappers (3M-3a-iii Task 5) ───────────────────
+    //
+    // The look-ahead path delays the audio by N ms so the DEXP detector can
+    // peek at samples that haven't been gated yet — this lets VOX or the
+    // expander open BEFORE the first syllable instead of clipping it.
+    // Two setters: a master enable bool + a delay-ms double.
+    //
+    // Thetis exposes these on the VOX/DEXP Setup page in the "Audio
+    // LookAhead" group (chkDEXPLookAheadEnable / udDEXPLookAhead —
+    // setup.cs:18951-18962 [v2.10.3.13]).  Note Thetis ALSO ANDs the user
+    // checkbox with the global VOX or DEXP enable at the call-site
+    // (setup.cs:18954: enable = chk.Checked && (vox.Checked || dexp.Checked))
+    // — that gating is a UI-layer responsibility; the wrapper just pushes
+    // the bool the caller hands it.
+
+    /// DEXP audio look-ahead master enable.
+    ///
+    /// From Thetis cmaster.cs:202-203 [v2.10.3.13] — SetDEXPRunAudioDelay
+    /// DLL import.  WDSP impl: wdsp/dexp.c:626 [v2.10.3.13]; comment at
+    /// dexp.c:628 "Turn OFF/ON audio delay line."
+    /// Thetis call-site: setup.cs:18951-18956 chkDEXPLookAheadEnable_CheckedChanged:
+    ///   bool enable = chkDEXPLookAheadEnable.Checked
+    ///                 && (chkVOXEnable.Checked || chkDEXPEnable.Checked);
+    ///   cmaster.SetDEXPRunAudioDelay(0, enable);
+    ///
+    /// Thetis ships chkDEXPLookAheadEnable as DEFAULT CHECKED
+    /// (setup.Designer.cs:44808-44809 [v2.10.3.13]) — caller (UI/model)
+    /// is responsible for pushing true at startup if Thetis-default
+    /// behavior is desired; the cache initialises to false to match the
+    /// WDSP create_dexp boot state (a->run_audelay = 0).
+    ///
+    /// Idempotent: bool `==` guard against m_dexpRunAudioDelayLast.
+    void setDexpRunAudioDelay(bool run);
+
+    /// DEXP audio look-ahead delay (ms at the wrapper, seconds at WDSP).
+    ///
+    /// From Thetis cmaster.cs:205-206 [v2.10.3.13] — SetDEXPAudioDelay DLL
+    /// import.  WDSP impl: wdsp/dexp.c:636 [v2.10.3.13]; units are seconds
+    /// (wdsp/dexp.c:638 comment "Set the audio delay, seconds.").
+    /// Thetis call-site: setup.cs:18958-18962 udDEXPLookAhead_ValueChanged:
+    ///   cmaster.SetDEXPAudioDelay(0, (double)udDEXPLookAhead.Value / 1000.0);
+    ///
+    /// Wrapper takes ms (matches Thetis spinbox); divides by 1000.0
+    /// before WDSP push.  Range 10..999 ms (clamped at the wrapper
+    /// boundary).  Default: 60 ms (setup.Designer.cs:44788 [v2.10.3.13]).
+    ///
+    /// Idempotent: NaN-aware first-call sentinel; qFuzzyCompare on doubles.
+    void setDexpAudioDelay(double delayMs);
+
     // ── Mic preamp / mic-mute path (3M-1b D.6) ──────────────────────────────
 
     /// Set the mic preamp linear scalar pushed to WDSP via SetTXAPanelGain1.
@@ -1630,6 +1679,10 @@ public:
     double lastDexpHighCutHzForTest()             const noexcept { return m_dexpHighCutHzLast; }
     bool   lastDexpRunSideChannelFilterForTest()  const noexcept { return m_dexpRunSideChannelFilterLast; }
 
+    // ── Test seams (Phase 3M-3a-iii Task 5) — DEXP audio look-ahead ────────
+    bool   lastDexpRunAudioDelayForTest()         const noexcept { return m_dexpRunAudioDelayLast; }
+    double lastDexpAudioDelayMsForTest()          const noexcept { return m_dexpAudioDelayMsLast; }
+
     // ── Test seam (Phase 3M-1b D.6) — mic preamp last-value read-back ────────
     //
     // Allow tests to verify:
@@ -1900,6 +1953,16 @@ private:
     double m_dexpLowCutHzLast              = std::numeric_limits<double>::quiet_NaN();
     double m_dexpHighCutHzLast             = std::numeric_limits<double>::quiet_NaN();
     bool   m_dexpRunSideChannelFilterLast  = false;
+
+    // ── DEXP audio look-ahead last-set values (3M-3a-iii Task 5) ────────────
+    //
+    // RunAudioDelay caches false to match the create_dexp WDSP boot state
+    // (a->run_audelay = 0); Thetis ships chkDEXPLookAheadEnable as default
+    // CHECKED but the caller must push true at startup for that.  AudioDelay
+    // is NaN-init so the first call always passes the guard; ms→s conversion
+    // happens on the WDSP boundary (setup.cs:18961 / wdsp/dexp.c:638).
+    bool   m_dexpRunAudioDelayLast         = false;
+    double m_dexpAudioDelayMsLast          = std::numeric_limits<double>::quiet_NaN();
 
     // ── Mic preamp last-set value (D.6) ──────────────────────────────────────
     //

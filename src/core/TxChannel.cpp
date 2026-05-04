@@ -212,6 +212,21 @@ warren@wpratt.com
 //                 to match WDSP's create_dexp boot state and the caller
 //                 must push true at startup for Thetis-default behavior.
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-05-03 — Phase 3M-3a-iii Task 5: setDexpRunAudioDelay(bool)
+//                 and setDexpAudioDelay(double) wrappers implemented
+//                 by J.J. Boyd (KG4VCF).  These control the audio
+//                 look-ahead delay line that lets VOX or the expander
+//                 fire BEFORE the first syllable instead of clipping
+//                 it.  AudioDelay takes ms at the wrapper, divides by
+//                 1000.0 before WDSP push (matching setup.cs:18961
+//                 [v2.10.3.13]).  Range 10..999 ms, default 60 (per
+//                 setup.Designer.cs:44765-44793).  Thetis ships
+//                 chkDEXPLookAheadEnable as default CHECKED
+//                 (setup.Designer.cs:44808-44809 [v2.10.3.13]); the
+//                 wrapper cache initialises false to match WDSP's
+//                 create_dexp boot state and the caller must push true
+//                 at startup for Thetis-default behavior.
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
@@ -1785,6 +1800,106 @@ void TxChannel::setDexpRunSideChannelFilter(bool run)
     SetDEXPRunSideChannelFilter(m_channelId, run ? 1 : 0);
 #else
     Q_UNUSED(run);
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// setDexpRunAudioDelay()  — Phase 3M-3a-iii Task 5
+//
+// Enable or disable the DEXP audio delay line (look-ahead).  When ON, the
+// audio is delayed by N ms so the DEXP detector can peek at samples that
+// haven't been gated yet — VOX or the expander can open BEFORE the first
+// syllable instead of clipping it.
+//
+// Porting from Thetis cmaster.cs:202-203 [v2.10.3.13] — SetDEXPRunAudioDelay:
+//   [DllImport("wdsp.dll", EntryPoint = "SetDEXPRunAudioDelay", ...)]
+//   public static extern void SetDEXPRunAudioDelay(int id, bool run);
+//
+// WDSP impl wdsp/dexp.c:626 [v2.10.3.13]; comment at dexp.c:628 "Turn
+// OFF/ON audio delay line."
+//
+// Thetis call-site setup.cs:18951-18956 [v2.10.3.13]:
+//   private void chkDEXPLookAheadEnable_CheckedChanged(object sender, EventArgs e)
+//   {
+//       if (initializing) return;
+//       bool enable = chkDEXPLookAheadEnable.Checked
+//                     && (chkVOXEnable.Checked || chkDEXPEnable.Checked);
+//       cmaster.SetDEXPRunAudioDelay(0, enable);
+//   }
+//
+// Note Thetis ANDs the user checkbox with the global VOX or DEXP enable
+// at the call-site — that gating is a UI-layer responsibility; the
+// wrapper just pushes the bool the caller hands it.
+//
+// Thetis ships chkDEXPLookAheadEnable as DEFAULT CHECKED
+// (setup.Designer.cs:44808-44809 [v2.10.3.13]), but the wrapper-side
+// cache initialises to false to match the WDSP create_dexp boot state
+// (a->run_audelay = 0).  Caller (UI/model) is responsible for pushing
+// true at startup if Thetis-default behavior is desired.
+//
+// Idempotent: bool `==` guard against m_dexpRunAudioDelayLast.
+// WDSP signature uses `int` for the bool parameter; explicit cast applied.
+//
+// From Thetis wdsp/dexp.c:626 [v2.10.3.13] — SetDEXPRunAudioDelay impl.
+// ---------------------------------------------------------------------------
+void TxChannel::setDexpRunAudioDelay(bool run)
+{
+    if (run == m_dexpRunAudioDelayLast) return;  // idempotent guard
+    m_dexpRunAudioDelayLast = run;
+#ifdef HAVE_WDSP
+    // From Thetis cmaster.cs:202-203 [v2.10.3.13]
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    // Phase 3M-1c TX pump v3: pdexp[ch] null-guard — see setVoxRun for rationale.
+    if (pdexp[m_channelId] == nullptr) return;
+    SetDEXPRunAudioDelay(m_channelId, run ? 1 : 0);
+#else
+    Q_UNUSED(run);
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// setDexpAudioDelay()  — Phase 3M-3a-iii Task 5
+//
+// Set the DEXP audio look-ahead delay (ms at the wrapper, seconds at WDSP).
+//
+// Porting from Thetis cmaster.cs:205-206 [v2.10.3.13] — SetDEXPAudioDelay:
+//   [DllImport("wdsp.dll", EntryPoint = "SetDEXPAudioDelay", ...)]
+//   public static extern void SetDEXPAudioDelay(int id, double delay);
+//
+// Units: seconds at the WDSP boundary (wdsp/dexp.c:638 [v2.10.3.13]
+// comment "Set the audio delay, seconds.").
+// Thetis converts from ms at the call-site (setup.cs:18958-18962 [v2.10.3.13]):
+//   private void udDEXPLookAhead_ValueChanged(object sender, EventArgs e)
+//   {
+//       if (initializing) return;
+//       cmaster.SetDEXPAudioDelay(0, (double)udDEXPLookAhead.Value / 1000.0);
+//   }
+//
+// Range 10..999 ms (setup.Designer.cs:44773-44782 [v2.10.3.13]).  Default
+// 60 ms (setup.Designer.cs:44788).
+//
+// Idempotent guard: NaN-aware first-call sentinel + qFuzzyCompare on the
+// post-clamp ms value (matches the timing setters' pattern).
+//
+// From Thetis wdsp/dexp.c:636 [v2.10.3.13] — SetDEXPAudioDelay impl.
+// ---------------------------------------------------------------------------
+void TxChannel::setDexpAudioDelay(double delayMs)
+{
+    // Range 10..999 ms per setup.Designer.cs:44773-44782 [v2.10.3.13].
+    const double clamped = std::clamp(delayMs, 10.0, 999.0);
+    if (!std::isnan(m_dexpAudioDelayMsLast)
+        && qFuzzyCompare(clamped, m_dexpAudioDelayMsLast)) {
+        return;  // idempotent guard
+    }
+    m_dexpAudioDelayMsLast = clamped;
+#ifdef HAVE_WDSP
+    // From Thetis cmaster.cs:205-206 [v2.10.3.13]
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    // Phase 3M-1c TX pump v3: pdexp[ch] null-guard — see setVoxRun for rationale.
+    if (pdexp[m_channelId] == nullptr) return;
+    // ms→seconds for WDSP, matching setup.cs:18961 [v2.10.3.13]:
+    //   cmaster.SetDEXPAudioDelay(0, (double)udDEXPLookAhead.Value / 1000.0);
+    SetDEXPAudioDelay(m_channelId, clamped / 1000.0);
 #endif
 }
 

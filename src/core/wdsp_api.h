@@ -77,32 +77,23 @@
 //                 the CFC tab schema work in 3M-3a-ii).  Signatures match
 //                 wdsp/iir.c:675-703 [v2.10.3.13].  AI-assisted
 //                 transformation via Anthropic Claude Code.
-//   2026-05-03 — SetDEXPRun, SetDEXPDetectorTau, SetDEXPAttackTime,
-//                 SetDEXPReleaseTime declarations added by J.J. Boyd
-//                 (KG4VCF) during 3M-3a-iii Tasks 1-2 — TxChannel DEXP
-//                 envelope/timing wrappers (SetDEXPRun is the audio-domain
-//                 master enable, separate from the existing SetDEXPRunVox).
-//                 Signatures match wdsp/dexp.c:407, 466, 479, 492
+//   2026-05-03 — Phase 3M-3a-iii Tasks 1-5 by J.J. Boyd (KG4VCF):
+//                 SetDEXPRun, SetDEXPDetectorTau, SetDEXPAttackTime,
+//                 SetDEXPReleaseTime (Tasks 1-2: envelope/timing,
+//                 wdsp/dexp.c:407, 466, 479, 492 [v2.10.3.13]),
+//                 SetDEXPExpansionRatio, SetDEXPHysteresisRatio (Task 3:
+//                 dB→linear via Math.Pow(10, ±dB/20.0) — POSITIVE sign
+//                 for Expansion, NEGATIVE for Hysteresis per setup.cs:
+//                 18918, 18924 [v2.10.3.13]; wdsp/dexp.c:518, 531),
+//                 SetDEXPLowCut, SetDEXPHighCut, SetDEXPRunSideChannelFilter
+//                 (Task 4: side-channel band-pass for the detector input,
+//                 Hz on both sides; wdsp/dexp.c:582, 594, 606),
+//                 SetDEXPRunAudioDelay, SetDEXPAudioDelay (Task 5: audio
+//                 look-ahead so VOX/expander can fire BEFORE the first
+//                 syllable; ms→s /1000.0 conv at WDSP boundary per
+//                 setup.cs:18961; wdsp/dexp.c:626, 636).  All signatures
 //                 [v2.10.3.13].  AI-assisted transformation via Anthropic
 //                 Claude Code.
-//   2026-05-03 — SetDEXPExpansionRatio, SetDEXPHysteresisRatio
-//                 declarations added by J.J. Boyd (KG4VCF) during
-//                 3M-3a-iii Task 3 — TxChannel DEXP gate/ratio
-//                 wrappers.  Both take linear ratio at the WDSP
-//                 boundary; the dB→linear conversion happens in the
-//                 wrapper via Math.Pow(10, ±dB/20.0) (POSITIVE sign for
-//                 Expansion, NEGATIVE for Hysteresis per setup.cs:18918,
-//                 18924 [v2.10.3.13]).  Signatures match wdsp/dexp.c:518,
-//                 531 [v2.10.3.13].  AI-assisted transformation via
-//                 Anthropic Claude Code.
-//   2026-05-03 — SetDEXPLowCut, SetDEXPHighCut, SetDEXPRunSideChannelFilter
-//                 declarations added by J.J. Boyd (KG4VCF) during
-//                 3M-3a-iii Task 4 — TxChannel DEXP side-channel filter
-//                 wrappers.  LowCut/HighCut take Hz on both sides (no
-//                 conversion); RunSideChannelFilter is the band-pass
-//                 master enable for the detector input.  Signatures
-//                 match wdsp/dexp.c:582, 594, 606 [v2.10.3.13].
-//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -990,6 +981,22 @@ void SetDEXPHysteresisRatio(int id, double ratio);
 void SetDEXPLowCut(int id, double lowcut);
 void SetDEXPHighCut(int id, double highcut);
 void SetDEXPRunSideChannelFilter(int id, int run);
+
+// DEXP audio look-ahead setters (Phase 3M-3a-iii Task 5).
+// SetDEXPAudioDelay takes seconds (Thetis converts ms→s at the call-site
+// via /1000.0 — setup.cs:18961 [v2.10.3.13]).  RunAudioDelay is the
+// look-ahead master enable; Thetis ships chkDEXPLookAheadEnable as
+// DEFAULT CHECKED (setup.Designer.cs:44808-44809 [v2.10.3.13]) so VOX/
+// expander can fire JUST BEFORE the first syllable instead of clipping
+// it.  WDSP takes int for bool parameters (0=false, 1=true).
+// From Thetis wdsp/dexp.c [v2.10.3.13]:
+//   SetDEXPRunAudioDelay:  dexp.c:626 — audio delay-line master enable
+//   SetDEXPAudioDelay:     dexp.c:636 — audio delay (seconds)
+// Cited from Thetis cmaster.cs [v2.10.3.13]:
+//   SetDEXPRunAudioDelay:  cmaster.cs:202-203
+//   SetDEXPAudioDelay:     cmaster.cs:205-206
+void SetDEXPRunAudioDelay(int id, int run);
+void SetDEXPAudioDelay(int id, double delay);
 
 // Anti-VOX — wires SetAntiVOXRun and SetAntiVOXGain.
 // WDSP takes int for bool parameters (0=false, 1=true).

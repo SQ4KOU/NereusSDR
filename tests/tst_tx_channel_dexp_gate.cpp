@@ -207,6 +207,62 @@ private slots:
         ch.setDexpRunSideChannelFilter(false);
         QCOMPARE(ch.lastDexpRunSideChannelFilterForTest(), false);
     }
+
+    // --------------------------------------------------------------
+    // setDexpRunAudioDelay (audio look-ahead master enable)
+    // setDexpAudioDelay    (range 10..999 ms, default 60)
+    // (Phase 3M-3a-iii Task 5)
+    //
+    // Thetis Setup UI: VOX/DEXP page → "Audio LookAhead" group
+    //   chkDEXPLookAheadEnable  default CHECKED   (setup.Designer.cs:44808)
+    //   udDEXPLookAhead         10..999 ms def 60 (setup.Designer.cs:44765-44793)
+    //
+    // Thetis ships chkDEXPLookAheadEnable as DEFAULT TRUE: the look-ahead
+    // buffer lets VOX fire just BEFORE the first syllable instead of
+    // clipping it.  But Thetis also AND's the user check with vox/dexp
+    // enable (setup.cs:18954: enable = chkDEXPLookAheadEnable.Checked &&
+    // (chkVOXEnable.Checked || chkDEXPEnable.Checked)) — caller is
+    // responsible for that gating; the wrapper just pushes the bool.
+    //
+    // Cache init false matches WDSP create_dexp (a->run_audelay = 0).
+    // --------------------------------------------------------------
+
+    void setDexpRunAudioDelay_idempotent() {
+        TxChannel ch(kChannelId);
+        QCOMPARE(ch.lastDexpRunAudioDelayForTest(), false);
+        ch.setDexpRunAudioDelay(true);
+        QCOMPARE(ch.lastDexpRunAudioDelayForTest(), true);
+        ch.setDexpRunAudioDelay(true);   // idempotent re-call
+        QCOMPARE(ch.lastDexpRunAudioDelayForTest(), true);
+        ch.setDexpRunAudioDelay(false);
+        QCOMPARE(ch.lastDexpRunAudioDelayForTest(), false);
+    }
+    void setDexpAudioDelay_inRange() {
+        TxChannel ch(kChannelId);
+        QVERIFY(std::isnan(ch.lastDexpAudioDelayMsForTest()));
+        ch.setDexpAudioDelay(60.0);
+        QCOMPARE(ch.lastDexpAudioDelayMsForTest(), 60.0);
+        ch.setDexpAudioDelay(500.0);
+        QCOMPARE(ch.lastDexpAudioDelayMsForTest(), 500.0);
+    }
+    void setDexpAudioDelay_clampedLow() {
+        // Below Thetis minimum of 10 ms gets clamped to 10.
+        TxChannel ch(kChannelId);
+        ch.setDexpAudioDelay(5.0);
+        QCOMPARE(ch.lastDexpAudioDelayMsForTest(), 10.0);
+    }
+    void setDexpAudioDelay_clampedHigh() {
+        // Above Thetis maximum of 999 ms gets clamped to 999.
+        TxChannel ch(kChannelId);
+        ch.setDexpAudioDelay(2000.0);
+        QCOMPARE(ch.lastDexpAudioDelayMsForTest(), 999.0);
+    }
+    void setDexpAudioDelay_idempotent() {
+        TxChannel ch(kChannelId);
+        ch.setDexpAudioDelay(60.0);
+        ch.setDexpAudioDelay(60.0);
+        QCOMPARE(ch.lastDexpAudioDelayMsForTest(), 60.0);
+    }
 };
 
 QTEST_APPLESS_MAIN(TstTxChannelDexpGate)
