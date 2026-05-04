@@ -93,6 +93,24 @@
 //                 loadProfileIntoUi (E9). Authored by J.J. Boyd (KG4VCF)
 //                 with AI-assisted implementation via Anthropic Claude
 //                 Code.
+//   2026-05-03 — Phase 8.5 of issue #167 PA-cal hotfix: pre-tag styling
+//                 alignment pass. Applies Style::applyDarkPageStyle(this)
+//                 to all three PA page constructors so they inherit the
+//                 canonical dark palette + QGroupBox / QPushButton /
+//                 QCheckBox / QSpinBox / QDoubleSpinBox / QComboBox /
+//                 QSlider / QLineEdit / QLabel rules already used by
+//                 every other Setup page. Replaces inline color literals
+//                 with named StyleConstants on the divergence warning
+//                 label (kAmberWarn), abort error label (kRedBorder),
+//                 auto-cal status label (kTextScale), placeholder labels
+//                 (kTextScale via helper), and the 3 informational banner
+//                 labels (warning/info banner helpers). Standardises
+//                 spinbox column widths in the 14x9 adjust grid + matches
+//                 the 4 profile-lifecycle button widths so columns / rows
+//                 line up. Centers grid header labels. Per STYLEGUIDE.md.
+//                 Behaviour unchanged; pure visual. Authored by J.J. Boyd
+//                 (KG4VCF) with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -154,6 +172,7 @@
 #include "core/PaTelemetryScaling.h"
 #include "core/RadioConnection.h"
 #include "core/RadioStatus.h"
+#include "gui/StyleConstants.h"
 #include "gui/setup/hardware/PaCalibrationGroup.h"
 #include "gui/widgets/MetricLabel.h"
 #include "models/Band.h"
@@ -185,22 +204,59 @@ namespace NereusSDR {
 
 namespace {
 
+// Per STYLEGUIDE.md and StyleConstants.h conventions.
 // Shared muted-italic style for placeholder labels — matches the
 // "coming in Phase X" tone used by the existing Power & PA fake-PA-group
-// placeholder this category eventually replaces.
-constexpr auto kPlaceholderStyle =
-    "QLabel { color: #607080; font-style: italic; padding: 8px; }";
+// placeholder this category eventually replaces. Color matches
+// Style::kTextScale (#607080) — the canonical muted-text shade.
+QString placeholderStyle()
+{
+    return QStringLiteral(
+        "QLabel { color: %1; font-style: italic; padding: 8px; }")
+        .arg(Style::kTextScale);
+}
 
 // Build a placeholder label, install the muted style, disable focus.
 QLabel* buildPlaceholderLabel(const QString& body)
 {
     auto* lbl = new QLabel(body);
-    lbl->setStyleSheet(QString::fromLatin1(kPlaceholderStyle));
+    lbl->setStyleSheet(placeholderStyle());
     lbl->setWordWrap(true);
     lbl->setEnabled(false);                  // visual-only; never accepts focus
     lbl->setTextInteractionFlags(Qt::NoTextInteraction);
     return lbl;
 }
+
+// Per STYLEGUIDE.md / StyleConstants.h: information banners use a calmer
+// blue-cyan; warning banners use amber-orange. These are the two banner
+// roles called out in the styling brief — extracted into helpers so the
+// per-SKU informational rows on PaGainByBandPage stay visually consistent
+// and so the duplicated "model-less path" / "live editor path" build
+// blocks don't drift.
+constexpr auto kBannerWarningColor = "#d09060";  // amber, fits NereusSDR amber palette
+constexpr auto kBannerInfoColor    = "#80b0d0";  // cyan-blue, fits accent palette
+
+QString bannerWarningStyle()
+{
+    return QStringLiteral(
+        "QLabel { color: %1; padding: 8px; font-style: italic; }")
+        .arg(kBannerWarningColor);
+}
+
+QString bannerInfoStyle()
+{
+    return QStringLiteral(
+        "QLabel { color: %1; padding: 8px; }")
+        .arg(kBannerInfoColor);
+}
+
+// Per STYLEGUIDE.md: column / per-band spinbox widths are picked here so the
+// 14-row × 9-column adjust matrix lines up cleanly. Without these, native
+// QDoubleSpinBox sizing varies per-platform and column edges drift.
+constexpr int kGainSpinWidth      = 64;   // 0..100 dB, 1 decimal
+constexpr int kAdjustSpinWidth    = 56;   // -10..+10 dB, 1 decimal — narrower
+constexpr int kMaxPowerSpinWidth  = 72;   // 0..1500 W, 1 decimal — wider for "1500.0"
+constexpr int kBandLabelWidth     = 56;   // band names ("160m" .. "XVTR")
 
 } // namespace
 
@@ -269,11 +325,12 @@ void buildPhase8WarningRows(
     QWidget* parent,
     QBoxLayout* contentLayout)
 {
+    // Per STYLEGUIDE.md and StyleConstants.h conventions.
+    // Banner colors: warning (amber) / info (cyan-blue) — see helpers above.
     noPaSupportBanner = new QLabel(QStringLiteral(
         "This radio does not support per-band PA gain calibration.\n"
         "PA gain by band is unavailable for the connected board class."), parent);
-    noPaSupportBanner->setStyleSheet(QStringLiteral(
-        "QLabel { color: #d09060; padding: 8px; font-style: italic; }"));
+    noPaSupportBanner->setStyleSheet(bannerWarningStyle());
     noPaSupportBanner->setWordWrap(true);
     noPaSupportBanner->setVisible(true);
     contentLayout->insertWidget(contentLayout->count() - 1, noPaSupportBanner);
@@ -282,8 +339,7 @@ void buildPhase8WarningRows(
         "ANAN Ganymede 500W PA support is a follow-up to this PR. The "
         "standard PA Gain table below applies to the radio's internal PA. "
         "Ganymede-specific PA calibration will arrive in a separate Setup tab."), parent);
-    ganymedeWarning->setStyleSheet(QStringLiteral(
-        "QLabel { color: #80b0d0; padding: 8px; }"));
+    ganymedeWarning->setStyleSheet(bannerInfoStyle());
     ganymedeWarning->setWordWrap(true);
     ganymedeWarning->setVisible(false);
     contentLayout->insertWidget(contentLayout->count() - 1, ganymedeWarning);
@@ -292,8 +348,7 @@ void buildPhase8WarningRows(
         "PA Profile / TX Profile recovery linkage active. PureSignal "
         "feedback can re-tune the PA gain table; see Setup -> Transmit "
         "-> PureSignal for details."), parent);
-    psWarning->setStyleSheet(QStringLiteral(
-        "QLabel { color: #80b0d0; padding: 8px; }"));
+    psWarning->setStyleSheet(bannerInfoStyle());
     psWarning->setWordWrap(true);
     psWarning->setVisible(false);
     contentLayout->insertWidget(contentLayout->count() - 1, psWarning);
@@ -303,6 +358,14 @@ void buildPhase8WarningRows(
 PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("PA Gain"), model, parent)
 {
+    // Per STYLEGUIDE.md and StyleConstants.h conventions.
+    // Apply the canonical dark page palette (background, group-box title,
+    // QPushButton / QComboBox / QSpinBox / QDoubleSpinBox / QCheckBox /
+    // QSlider / QLineEdit / QLabel rules). Mirrors the pattern used by every
+    // other Setup page (Power, Display, Appearance, GeneralOptions, ...);
+    // without it the page renders against the system theme.
+    Style::applyDarkPageStyle(this);
+
     // Resolve PaProfileManager from the model. Without it (model-less preview /
     // headless test fixture) we render an inert placeholder for the editor
     // surface but still build the Phase 8 informational warning labels so
@@ -333,6 +396,10 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     // ── Top toolbar row: combo + lifecycle buttons ───────────────────────
     // From Thetis comboPAProfile + btnNewPAProfile / btnCopyPAProfile /
     // btnDeletePAProfile / btnResetPAProfile [v2.10.3.13].
+    //
+    // Per STYLEGUIDE.md layout polish: the combo stretches (factor 1) so it
+    // fills the page width; the 4 lifecycle buttons get matched fixed widths
+    // (90 px) so they line up cleanly regardless of label length.
     auto* toolbar = new QHBoxLayout;
     toolbar->setSpacing(6);
 
@@ -343,24 +410,30 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
         "audio-volume scalar that prevents over-power on high-gain finals."));
     toolbar->addWidget(m_profileCombo, 1);
 
+    constexpr int kLifecycleButtonWidth = 110;  // wide enough for "Reset Defaults"
+
     m_btnNew = new QPushButton(QStringLiteral("New"), this);
+    m_btnNew->setMinimumWidth(kLifecycleButtonWidth);
     m_btnNew->setToolTip(QStringLiteral(
         "Create a new empty profile seeded from the connected radio's "
         "factory PA gain row."));
     toolbar->addWidget(m_btnNew);
 
     m_btnCopy = new QPushButton(QStringLiteral("Copy"), this);
+    m_btnCopy->setMinimumWidth(kLifecycleButtonWidth);
     m_btnCopy->setToolTip(QStringLiteral(
         "Duplicate the active profile under a new name."));
     toolbar->addWidget(m_btnCopy);
 
     m_btnDelete = new QPushButton(QStringLiteral("Delete"), this);
+    m_btnDelete->setMinimumWidth(kLifecycleButtonWidth);
     m_btnDelete->setToolTip(QStringLiteral(
         "Delete the active profile.  The last remaining profile cannot be "
         "deleted."));
     toolbar->addWidget(m_btnDelete);
 
     m_btnReset = new QPushButton(QStringLiteral("Reset Defaults"), this);
+    m_btnReset->setMinimumWidth(kLifecycleButtonWidth);
     m_btnReset->setToolTip(QStringLiteral(
         "Re-seed the active profile from the canonical factory PA gain row "
         "for its model.  Drive-step adjusts and max-power columns are "
@@ -389,15 +462,22 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     // follow-up.
     m_warningLabel = new QLabel(QStringLiteral(
         "PA profile has been modified from factory defaults."), this);
+    // Per STYLEGUIDE.md: divergence indicator uses the amber-warning palette
+    // shade. Style::kAmberWarn is the canonical "approaching limit" color
+    // already used by gauges (gauge yellow zone) and the AGC/SWR warning UI.
     m_warningLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: #d8a000; font-style: italic; }"));
+        "QLabel { color: %1; font-style: italic; }").arg(Style::kAmberWarn));
     m_warningLabel->setVisible(false);
     warningRow->addWidget(m_warningLabel, 1);
 
     m_newCalCheck = new QCheckBox(QStringLiteral("New Cal"), this);
+    // From Thetis chkPANewCal at setup.designer.cs:47417 [v2.10.3.13] —
+    // a "new calibration" mode marker. Per feedback_no_cites_in_user_strings,
+    // the user-visible tooltip stays plain English; the upstream cite is
+    // kept in this source comment.
     m_newCalCheck->setToolTip(QStringLiteral(
-        "Thetis-specific 'new calibration' mode marker.  No NereusSDR-side "
-        "behavior is hooked to it yet — tracked for parity only."));
+        "New-calibration mode marker. No client-side behaviour is hooked "
+        "to it yet — tracked for parity only."));
     // From Thetis chkPANewCal Visible=false default at setup.designer.cs:47417
     // [v2.10.3.13]; Thetis Ctrl+Alt+A keyhandler (setup.cs:12490-12498) unhides
     // it. NereusSDR has no live behaviour wired to NewCal mode (deferred to
@@ -420,18 +500,27 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     // 47420-47525 [v2.10.3.13]) — labels are NereusSDR-original (Thetis
     // pre-renders headers via lblDriveHeader + per-step lblPAAdjustNN labels;
     // we use a plain QGridLayout header row).
+    //
+    // Per STYLEGUIDE.md layout polish: header labels are center-aligned so
+    // they line up with the spinboxes below (which render numeric content
+    // right-aligned by default but are visually centered within their fixed
+    // column width).
     int row = 0;
     auto* hdrBand = new QLabel(QStringLiteral("Band"), gainGroup);
     auto* hdrGain = new QLabel(QStringLiteral("Gain (dB)"), gainGroup);
+    hdrGain->setAlignment(Qt::AlignCenter);
     grid->addWidget(hdrBand, row, kColBand);
     grid->addWidget(hdrGain, row, kColGain);
     for (int step = 0; step < kColAdjustCount; ++step) {
         const int drivePct = (step + 1) * 10;
         auto* lbl = new QLabel(QStringLiteral("%1%").arg(drivePct), gainGroup);
+        lbl->setAlignment(Qt::AlignCenter);
         grid->addWidget(lbl, row, kAdjustColumnFirst + step);
     }
     auto* hdrMax = new QLabel(QStringLiteral("Max W"), gainGroup);
+    hdrMax->setAlignment(Qt::AlignCenter);
     auto* hdrUse = new QLabel(QStringLiteral("Use Max"), gainGroup);
+    hdrUse->setAlignment(Qt::AlignCenter);
     grid->addWidget(hdrMax, row, kColMaxPower);
     grid->addWidget(hdrUse, row, kColUseMaxPower);
     ++row;
@@ -449,13 +538,15 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
             continue;
         }
 
-        // Band label.
+        // Band label. Fixed width so the column edge is consistent across
+        // all 14 rows (per STYLEGUIDE.md layout polish).
         auto* bandLbl = new QLabel(bandLabel(band), gainGroup);
-        bandLbl->setMinimumWidth(48);
+        bandLbl->setFixedWidth(kBandLabelWidth);
         grid->addWidget(bandLbl, row, kColBand);
 
         // Per-band gain spinbox (0..100 dB, 0.1 step, 1 decimal).
         m_gainSpins[n] = buildSpin(0.0, 100.0, 0.1, 1, gainGroup);
+        m_gainSpins[n]->setFixedWidth(kGainSpinWidth);
         m_gainSpins[n]->setToolTip(QStringLiteral(
             "PA gain compensation for %1 in dB.  Subtracted from the "
             "target dBm to compute the audio-volume scalar that drives "
@@ -470,6 +561,7 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
         // their full per-step compensation table).
         for (int step = 0; step < kColAdjustCount; ++step) {
             auto* spin = buildSpin(-10.0, 10.0, 0.1, 1, gainGroup);
+            spin->setFixedWidth(kAdjustSpinWidth);
             spin->setToolTip(QStringLiteral(
                 "Per-step adjust at %1%% drive for %2.")
                 .arg((step + 1) * 10).arg(bandLabel(band)));
@@ -483,6 +575,7 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
         // 0..1500 W range, 0.1 W single-step (Thetis nudMaxPowerForBandPA.TinyStep=true),
         // 1 decimal (Thetis DecimalPlaces=1, setup.designer.cs:47541 [v2.10.3.13]).
         m_maxPowerSpins[n] = buildSpin(0.0, 1500.0, 0.1, 1, gainGroup);
+        m_maxPowerSpins[n]->setFixedWidth(kMaxPowerSpinWidth);
         m_maxPowerSpins[n]->setToolTip(QStringLiteral(
             "Per-band max-power ceiling in watts for %1.")
             .arg(bandLabel(band)));
@@ -534,11 +627,19 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     m_autoCalPanel->setVisible(false);
     auto* autoCalForm = new QFormLayout(m_autoCalPanel);
 
+    // Per STYLEGUIDE.md: status text in muted-italic uses the kTextScale
+    // shade (matches placeholder bodies above and gauge tick labels in
+    // their normal/disabled state).
     m_autoCalStatusLabel = new QLabel(QStringLiteral("Idle"), m_autoCalPanel);
     m_autoCalStatusLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: #607080; font-style: italic; }"));
+        "QLabel { color: %1; font-style: italic; }").arg(Style::kTextScale));
     autoCalForm->addRow(QStringLiteral("Status:"), m_autoCalStatusLabel);
 
+    // TODO: add Style::kProgressBar once defined — for now the dark-page
+    // QProgressBar inherits no rules from applyDarkPageStyle (no rule
+    // exists for QProgressBar in StyleConstants.h yet). Native rendering
+    // is acceptable as a fallback; revisit when a follow-up adds a
+    // styled progress-bar block to StyleConstants.
     m_autoCalProgressBar = new QProgressBar(m_autoCalPanel);
     m_autoCalProgressBar->setRange(0, 100);
     m_autoCalProgressBar->setValue(0);
@@ -632,11 +733,12 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     // renders in the normal-state font, distinct from the disabled-italic
     // placeholder bodies elsewhere.
 
+    // Per STYLEGUIDE.md and StyleConstants.h conventions.
+    // Banner colors: warning (amber) / info (cyan-blue) — see helpers above.
     m_noPaSupportBanner = new QLabel(QStringLiteral(
         "This radio does not support per-band PA gain calibration.\n"
         "PA gain by band is unavailable for the connected board class."), this);
-    m_noPaSupportBanner->setStyleSheet(QStringLiteral(
-        "QLabel { color: #d09060; padding: 8px; font-style: italic; }"));
+    m_noPaSupportBanner->setStyleSheet(bannerWarningStyle());
     m_noPaSupportBanner->setWordWrap(true);
     m_noPaSupportBanner->setVisible(true);  // safest default: shown until caps prove PA support
     contentLayout()->insertWidget(contentLayout()->count() - 1, m_noPaSupportBanner);
@@ -645,8 +747,7 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
         "ANAN Ganymede 500W PA support is a follow-up to this PR. The "
         "standard PA Gain table below applies to the radio's internal PA. "
         "Ganymede-specific PA calibration will arrive in a separate Setup tab."), this);
-    m_ganymedeWarning->setStyleSheet(QStringLiteral(
-        "QLabel { color: #80b0d0; padding: 8px; }"));
+    m_ganymedeWarning->setStyleSheet(bannerInfoStyle());
     m_ganymedeWarning->setWordWrap(true);
     m_ganymedeWarning->setVisible(false);
     contentLayout()->insertWidget(contentLayout()->count() - 1, m_ganymedeWarning);
@@ -655,8 +756,7 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
         "PA Profile / TX Profile recovery linkage active. PureSignal "
         "feedback can re-tune the PA gain table; see Setup -> Transmit "
         "-> PureSignal for details."), this);
-    m_psWarning->setStyleSheet(QStringLiteral(
-        "QLabel { color: #80b0d0; padding: 8px; }"));
+    m_psWarning->setStyleSheet(bannerInfoStyle());
     m_psWarning->setWordWrap(true);
     m_psWarning->setVisible(false);
     contentLayout()->insertWidget(contentLayout()->count() - 1, m_psWarning);
@@ -1408,8 +1508,11 @@ void PaGainByBandPage::abortAutoCal(const QString& reason)
     m_autoCalState = AutoCalState::Aborted;
     if (m_autoCalStatusLabel) {
         m_autoCalStatusLabel->setText(reason);
+        // Per STYLEGUIDE.md: error text uses the danger/red palette shade.
+        // Style::kRedBorder (#ff4444) is the canonical "danger / over-limit"
+        // color shared with gauge red zones and TX-overload badges.
         m_autoCalStatusLabel->setStyleSheet(QStringLiteral(
-            "QLabel { color: #c04040; font-weight: bold; }"));
+            "QLabel { color: %1; font-weight: bold; }").arg(Style::kRedBorder));
     }
     // Auto-uncheck so user can re-attempt.
     if (m_autoCalibrateCheck && m_autoCalibrateCheck->isChecked()) {
@@ -1519,8 +1622,10 @@ void PaGainByBandPage::refreshAutoCalUi()
 
     m_autoCalStatusLabel->setText(status);
     if (!error) {
+        // Per STYLEGUIDE.md: muted-italic status restores the kTextScale
+        // shade (matches the auto-cal panel's idle-state look).
         m_autoCalStatusLabel->setStyleSheet(QStringLiteral(
-            "QLabel { color: #607080; font-style: italic; }"));
+            "QLabel { color: %1; font-style: italic; }").arg(Style::kTextScale));
     }
     m_autoCalProgressBar->setValue(progressPercent);
 }
@@ -1691,6 +1796,12 @@ QCheckBox* PaGainByBandPage::useMaxPowerCheckForTest(Band b) const
 PaWattMeterPage::PaWattMeterPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("Watt Meter"), model, parent)
 {
+    // Per STYLEGUIDE.md and StyleConstants.h conventions.
+    // Apply the canonical dark page palette so QGroupBox / QPushButton /
+    // QCheckBox / QLabel inherit the project look (matches every other
+    // Setup page).
+    Style::applyDarkPageStyle(this);
+
     if (!model) {
         // Without a model we have nothing to populate the cal group from.
         // Fall back to a brief placeholder so tests / model-less previews still
@@ -1860,6 +1971,11 @@ void PaWattMeterPage::clickResetPaValuesForTest()
 PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("PA Values"), model, parent)
 {
+    // Per STYLEGUIDE.md and StyleConstants.h conventions.
+    // Apply the canonical dark page palette. QGroupBox titles + the embedded
+    // MetricLabel widgets inherit consistent typography from this rule.
+    Style::applyDarkPageStyle(this);
+
     if (!model) {
         // Model-less preview path: render a brief hint label so the page
         // doesn't ship as an empty widget when Setup is opened before a

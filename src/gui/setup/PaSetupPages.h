@@ -103,6 +103,12 @@
 //                 Phase 3M-4) + E1-E10 source-first remediations from
 //                 parity audit. Authored by J.J. Boyd (KG4VCF) with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-05-03 — Phase 8.5 of #167 styling alignment pass: applies
+//                 Style::applyDarkPageStyle on all three pages + named
+//                 StyleConstants in place of inline color literals + grid
+//                 column-width polish. Per STYLEGUIDE.md. Pure visual,
+//                 behaviour unchanged. AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
