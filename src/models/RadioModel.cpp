@@ -1999,6 +1999,24 @@ void RadioModel::connectToRadio(const RadioInfo& info)
 
                 // ── 3M-3a-ii Batch 3 — CESSB (1) ──
                 m_txChannel->setTxCessbOn(m_transmitModel.cessbOn());
+
+                // ── 3M-3a-iii Tasks 7-10 — DEXP (11) ──
+                // Initial-sync push for the 11 DEXP TM properties so a
+                // freshly-loaded profile (or a setActiveProfile invocation
+                // whose setters short-circuit on no-op writes) has its DEXP
+                // state reflected at WDSP. Mirrors the EQ/Lev/ALC + CFC/PhRot
+                // initial-sync rationale documented above (~line 1869-1898).
+                m_txChannel->setDexpRun(m_transmitModel.dexpEnabled());
+                m_txChannel->setDexpDetectorTau(m_transmitModel.dexpDetectorTauMs());
+                m_txChannel->setDexpAttackTime(m_transmitModel.dexpAttackTimeMs());
+                m_txChannel->setDexpReleaseTime(m_transmitModel.dexpReleaseTimeMs());
+                m_txChannel->setDexpExpansionRatio(m_transmitModel.dexpExpansionRatioDb());
+                m_txChannel->setDexpHysteresisRatio(m_transmitModel.dexpHysteresisRatioDb());
+                m_txChannel->setDexpRunAudioDelay(m_transmitModel.dexpLookAheadEnabled());
+                m_txChannel->setDexpAudioDelay(m_transmitModel.dexpLookAheadMs());
+                m_txChannel->setDexpLowCut(m_transmitModel.dexpLowCutHz());
+                m_txChannel->setDexpHighCut(m_transmitModel.dexpHighCutHz());
+                m_txChannel->setDexpRunSideChannelFilter(m_transmitModel.dexpSideChannelFilterEnabled());
             };
 
             // 1. txEqEnabledChanged → setTxEqRunning.
@@ -2171,6 +2189,93 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             connect(&m_transmitModel, &TransmitModel::cessbOnChanged,
                     m_txChannel, [this](bool on) {
                 m_txChannel->setTxCessbOn(on);
+            });
+
+            // ── 3M-3a-iii Tasks 7-10 — DEXP routing (11 connects) ──────────
+            //
+            // Routes the 11 new DEXP TransmitModel properties added in Tasks
+            // 7-10 (envelope / gate ratios / look-ahead / side-channel
+            // filter) into the TxChannel WDSP wrappers added in Tasks 1-5.
+            // Receiver = m_txChannel so AutoConnection resolves to
+            // QueuedConnection once moveToThread runs below — same pattern as
+            // the F.1 / H.1-H.3 / 3M-3a-i/ii TX-chain connects above.
+            //
+            // No MoxController gating layer for DEXP (unlike VOX which goes
+            // TM → MoxController → TxChannel for dB→linear + mic-boost
+            // scaling): the DEXP TxChannel wrappers do their own ms→seconds
+            // and dB→linear conversions internally (see TxChannel.h:706-914),
+            // so the model layer pushes the user-visible value directly.
+            //
+            // Naming note: TM property names use "Ms" / "Db" / "Hz" suffixes
+            // for clarity at the call-site, while TxChannel wrapper names
+            // drop the unit suffix because the wrapper docstring documents
+            // the unit unambiguously (e.g. setDexpDetectorTau takes ms,
+            // setDexpExpansionRatio takes dB).
+
+            // 28. dexpEnabledChanged → setDexpRun.
+            connect(&m_transmitModel, &TransmitModel::dexpEnabledChanged,
+                    m_txChannel, [this](bool on) {
+                m_txChannel->setDexpRun(on);
+            });
+
+            // 29. dexpDetectorTauMsChanged → setDexpDetectorTau.
+            connect(&m_transmitModel, &TransmitModel::dexpDetectorTauMsChanged,
+                    m_txChannel, [this](double tauMs) {
+                m_txChannel->setDexpDetectorTau(tauMs);
+            });
+
+            // 30. dexpAttackTimeMsChanged → setDexpAttackTime.
+            connect(&m_transmitModel, &TransmitModel::dexpAttackTimeMsChanged,
+                    m_txChannel, [this](double attackMs) {
+                m_txChannel->setDexpAttackTime(attackMs);
+            });
+
+            // 31. dexpReleaseTimeMsChanged → setDexpReleaseTime.
+            connect(&m_transmitModel, &TransmitModel::dexpReleaseTimeMsChanged,
+                    m_txChannel, [this](double releaseMs) {
+                m_txChannel->setDexpReleaseTime(releaseMs);
+            });
+
+            // 32. dexpExpansionRatioDbChanged → setDexpExpansionRatio.
+            connect(&m_transmitModel, &TransmitModel::dexpExpansionRatioDbChanged,
+                    m_txChannel, [this](double dB) {
+                m_txChannel->setDexpExpansionRatio(dB);
+            });
+
+            // 33. dexpHysteresisRatioDbChanged → setDexpHysteresisRatio.
+            connect(&m_transmitModel, &TransmitModel::dexpHysteresisRatioDbChanged,
+                    m_txChannel, [this](double dB) {
+                m_txChannel->setDexpHysteresisRatio(dB);
+            });
+
+            // 34. dexpLookAheadEnabledChanged → setDexpRunAudioDelay.
+            connect(&m_transmitModel, &TransmitModel::dexpLookAheadEnabledChanged,
+                    m_txChannel, [this](bool on) {
+                m_txChannel->setDexpRunAudioDelay(on);
+            });
+
+            // 35. dexpLookAheadMsChanged → setDexpAudioDelay.
+            connect(&m_transmitModel, &TransmitModel::dexpLookAheadMsChanged,
+                    m_txChannel, [this](double delayMs) {
+                m_txChannel->setDexpAudioDelay(delayMs);
+            });
+
+            // 36. dexpLowCutHzChanged → setDexpLowCut.
+            connect(&m_transmitModel, &TransmitModel::dexpLowCutHzChanged,
+                    m_txChannel, [this](double hz) {
+                m_txChannel->setDexpLowCut(hz);
+            });
+
+            // 37. dexpHighCutHzChanged → setDexpHighCut.
+            connect(&m_transmitModel, &TransmitModel::dexpHighCutHzChanged,
+                    m_txChannel, [this](double hz) {
+                m_txChannel->setDexpHighCut(hz);
+            });
+
+            // 38. dexpSideChannelFilterEnabledChanged → setDexpRunSideChannelFilter.
+            connect(&m_transmitModel, &TransmitModel::dexpSideChannelFilterEnabledChanged,
+                    m_txChannel, [this](bool on) {
+                m_txChannel->setDexpRunSideChannelFilter(on);
             });
 
             // Profile-activation resync.  Receiver = m_txChannel so this

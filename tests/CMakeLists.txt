@@ -1815,6 +1815,17 @@ target_compile_definitions(tst_radio_model_g1_wiring PRIVATE NEREUS_BUILD_TESTS)
 # correctness) that the RadioModel-installed lambdas consume.
 nereus_add_test(tst_radio_model_eq_lev_alc_wiring)
 
+# ── Phase 3M-3a-iii Task 12: TransmitModel→TxChannel DEXP routing ────────────
+# Verifies the 11 connect() pairings for the new DEXP signals
+# (envelope/gate ratios/look-ahead/SCF) added in Tasks 7-10. Mirrors the
+# eq_lev_alc_wiring pattern: m_txChannel stays null in unit-test builds (no
+# WDSP); the test confirms the model-side fan-out (signal-on-setter,
+# idempotent guard, signal-payload correctness) that the RadioModel-installed
+# lambdas consume, plus the on-connect push surface (pushTxProcessingChain
+# reads each TM getter and pushes the loaded default to TxChannel; we verify
+# the getter surface returns the Thetis Designer defaults).
+nereus_add_test(tst_radio_model_dexp_routing)
+
 # ── Phase 3M-1a Task F.1: RadioModel::onMoxHardwareFlipped slot ──────────────
 # Verifies the three-step fan-out in Thetis HdwMOXChanged order (§2.3):
 #   1. Alex antenna routing (applyAlexAntennaForBand → setAntennaRouting)
