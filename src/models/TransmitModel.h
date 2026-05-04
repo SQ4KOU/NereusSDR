@@ -764,6 +764,48 @@ public:
     static constexpr double kDexpLookAheadMsMin =  10.0;
     static constexpr double kDexpLookAheadMsMax = 999.0;
 
+    // ── DEXP side-channel filter properties (3M-3a-iii Task 10) ───────────
+    //
+    // Side-channel HP/LP filter trio used by the DEXP detector to gate which
+    // audio frequencies trigger VOX/DEXP.  Bound to grpSCF in Setup -> Audio ->
+    // VOX/DEXP per Thetis setup.Designer.cs:45153+ [v2.10.3.13].
+    //
+    // Plan scope correction (2026-05-03): originally these were planned as
+    // model-only / no-UI properties, but a source-first re-read by the Batch B
+    // agent surfaced grpSCF on tpDSPVOXDE — so they DO get UI binding
+    // (lands in Task 14, the DexpVoxPage Setup-page work).  Defaults below
+    // therefore match the Thetis Designer values verbatim.
+    //
+    // All three persist.
+
+    /// DEXP side-channel filter low cut-off frequency in Hz.  Clamped to
+    /// [kDexpFilterCutHzMin, kDexpFilterCutHzMax].  Default 500.0 Hz.
+    ///
+    /// From Thetis setup.Designer.cs:45240 [v2.10.3.13] - udSCFLowCut.Value=500.
+    /// Range from setup.Designer.cs:45225-45234 [v2.10.3.13]:
+    ///   udSCFLowCut.Maximum=10000, udSCFLowCut.Minimum=100.
+    double dexpLowCutHz() const noexcept { return m_dexpLowCutHz; }
+
+    /// DEXP side-channel filter high cut-off frequency in Hz.  Clamped to
+    /// [kDexpFilterCutHzMin, kDexpFilterCutHzMax].  Default 1500.0 Hz.
+    ///
+    /// From Thetis setup.Designer.cs:45210 [v2.10.3.13] - udSCFHighCut.Value=1500.
+    /// Range from setup.Designer.cs:45195-45204 [v2.10.3.13]:
+    ///   udSCFHighCut.Maximum=10000, udSCFHighCut.Minimum=100.
+    double dexpHighCutHz() const noexcept { return m_dexpHighCutHz; }
+
+    /// DEXP side-channel filter enable toggle.  Default TRUE per Thetis
+    /// chkSCFEnable.Checked=true at setup.Designer.cs:45250 [v2.10.3.13].
+    bool dexpSideChannelFilterEnabled() const noexcept { return m_dexpSideChannelFilterEnabled; }
+
+    // DEXP side-channel filter range constants.
+    // From Thetis setup.Designer.cs [v2.10.3.13]:
+    //   udSCFLowCut + udSCFHighCut both: Min=100, Max=10000 (units: Hz)
+    //   (lines 45195-45234)
+    // Range matches Task 4 wrapper clamps in TxChannel::setDexpLowCut/HighCut.
+    static constexpr double kDexpFilterCutHzMin =   100.0;
+    static constexpr double kDexpFilterCutHzMax = 10000.0;
+
     // ── Mic source (3M-1b I.1) ────────────────────────────────────────────────
     //
     // NereusSDR-native property — Thetis bakes mic-source selection directly
@@ -1340,6 +1382,11 @@ public slots:
     void setDexpLookAheadEnabled(bool on);
     void setDexpLookAheadMs(double ms);
 
+    // ── DEXP side-channel filter setters (3M-3a-iii Task 10) ───────────────
+    void setDexpLowCutHz(double hz);
+    void setDexpHighCutHz(double hz);
+    void setDexpSideChannelFilterEnabled(bool on);
+
     // ── Two-tone setters (3M-1c B.2) ───────────────────────────────────────
     void setTwoToneFreq1(int hz);
     void setTwoToneFreq2(int hz);
@@ -1414,6 +1461,11 @@ signals:
     // ── DEXP look-ahead signals (3M-3a-iii Task 9) ────────────────────────
     void dexpLookAheadEnabledChanged(bool on);
     void dexpLookAheadMsChanged(double ms);
+
+    // ── DEXP side-channel filter signals (3M-3a-iii Task 10) ──────────────
+    void dexpLowCutHzChanged(double hz);
+    void dexpHighCutHzChanged(double hz);
+    void dexpSideChannelFilterEnabledChanged(bool on);
 
     // ── Mic source signals (3M-1b I.1) ────────────────────────────────────────
     /// Emitted when micSource changes. Not emitted on idempotent calls.
@@ -1554,6 +1606,16 @@ private:
     // Both persist.
     bool   m_dexpLookAheadEnabled = true;
     double m_dexpLookAheadMs      = 60.0;
+
+    // ── DEXP side-channel filter properties (3M-3a-iii Task 10) ──────────
+    // From Thetis setup.Designer.cs [v2.10.3.13]:
+    //   udSCFLowCut.Value=500   (line 45240)
+    //   udSCFHighCut.Value=1500 (line 45210)
+    //   chkSCFEnable.Checked=true (line 45250)
+    // All three persist.
+    double m_dexpLowCutHz                  =  500.0;
+    double m_dexpHighCutHz                 = 1500.0;
+    bool   m_dexpSideChannelFilterEnabled  = true;
 
     // ── Mic source (3M-1b I.1 + L.3) ───────────────────────────────────
     // NereusSDR-native. Default Pc (always available; Radio is opt-in).

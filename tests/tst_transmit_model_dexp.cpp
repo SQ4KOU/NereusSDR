@@ -469,6 +469,146 @@ private slots:
         t2.loadFromSettings(kMac);
         QCOMPARE(t2.dexpLookAheadMs(), 150.0);
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // TASK 10 — DEXP side-channel filter properties (3 props)
+    //   dexpLowCutHz, dexpHighCutHz, dexpSideChannelFilterEnabled
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    // ── Defaults match Thetis ──────────────────────────────────────
+
+    void default_dexpLowCutHz_is500() {
+        // setup.Designer.cs:45240 [v2.10.3.13] - udSCFLowCut.Value=500.
+        TransmitModel t;
+        QCOMPARE(t.dexpLowCutHz(), 500.0);
+    }
+
+    void default_dexpHighCutHz_is1500() {
+        // setup.Designer.cs:45210 [v2.10.3.13] - udSCFHighCut.Value=1500.
+        TransmitModel t;
+        QCOMPARE(t.dexpHighCutHz(), 1500.0);
+    }
+
+    void default_dexpSideChannelFilterEnabled_isTrue() {
+        // setup.Designer.cs:45250 [v2.10.3.13] - chkSCFEnable.Checked=true.
+        TransmitModel t;
+        QCOMPARE(t.dexpSideChannelFilterEnabled(), true);
+    }
+
+    // ── Round-trip + signal emission ──────────────────────────────
+
+    void setDexpLowCutHz_roundTrip_emitsSignal() {
+        TransmitModel t;
+        QSignalSpy spy(&t, &TransmitModel::dexpLowCutHzChanged);
+        t.setDexpLowCutHz(300.0);
+        QCOMPARE(t.dexpLowCutHz(), 300.0);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).toDouble(), 300.0);
+    }
+
+    void setDexpHighCutHz_roundTrip_emitsSignal() {
+        TransmitModel t;
+        QSignalSpy spy(&t, &TransmitModel::dexpHighCutHzChanged);
+        t.setDexpHighCutHz(2500.0);
+        QCOMPARE(t.dexpHighCutHz(), 2500.0);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).toDouble(), 2500.0);
+    }
+
+    void setDexpSideChannelFilterEnabled_roundTrip_emitsSignal() {
+        TransmitModel t;
+        QSignalSpy spy(&t, &TransmitModel::dexpSideChannelFilterEnabledChanged);
+        t.setDexpSideChannelFilterEnabled(false);  // flip from default true
+        QCOMPARE(t.dexpSideChannelFilterEnabled(), false);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).toBool(), false);
+    }
+
+    // ── Idempotent guards ──────────────────────────────────────────
+
+    void idempotent_dexpLowCutHz_default_noSignal() {
+        TransmitModel t;
+        QSignalSpy spy(&t, &TransmitModel::dexpLowCutHzChanged);
+        t.setDexpLowCutHz(500.0);  // default
+        QCOMPARE(spy.count(), 0);
+    }
+
+    void idempotent_dexpHighCutHz_default_noSignal() {
+        TransmitModel t;
+        QSignalSpy spy(&t, &TransmitModel::dexpHighCutHzChanged);
+        t.setDexpHighCutHz(1500.0);  // default
+        QCOMPARE(spy.count(), 0);
+    }
+
+    void idempotent_dexpSideChannelFilterEnabled_default_noSignal() {
+        TransmitModel t;
+        QSignalSpy spy(&t, &TransmitModel::dexpSideChannelFilterEnabledChanged);
+        t.setDexpSideChannelFilterEnabled(true);  // default
+        QCOMPARE(spy.count(), 0);
+    }
+
+    // ── Range clamps ───────────────────────────────────────────────
+    // udSCFLowCut + udSCFHighCut both: 100..10000 Hz
+    // (setup.Designer.cs:45195-45234 [v2.10.3.13])
+
+    void dexpLowCutHz_clampBelowMin() {
+        TransmitModel t;
+        t.setDexpLowCutHz(50.0);
+        QCOMPARE(t.dexpLowCutHz(), TransmitModel::kDexpFilterCutHzMin);
+    }
+
+    void dexpLowCutHz_clampAboveMax() {
+        TransmitModel t;
+        t.setDexpLowCutHz(20000.0);
+        QCOMPARE(t.dexpLowCutHz(), TransmitModel::kDexpFilterCutHzMax);
+    }
+
+    void dexpHighCutHz_clampBelowMin() {
+        TransmitModel t;
+        t.setDexpHighCutHz(50.0);
+        QCOMPARE(t.dexpHighCutHz(), TransmitModel::kDexpFilterCutHzMin);
+    }
+
+    void dexpHighCutHz_clampAboveMax() {
+        TransmitModel t;
+        t.setDexpHighCutHz(20000.0);
+        QCOMPARE(t.dexpHighCutHz(), TransmitModel::kDexpFilterCutHzMax);
+    }
+
+    // ── Persistence across instances ──────────────────────────────
+
+    void dexpLowCutHz_persistsAcrossInstances() {
+        {
+            TransmitModel t;
+            t.loadFromSettings(kMac);
+            t.setDexpLowCutHz(400.0);
+        }
+        TransmitModel t2;
+        t2.loadFromSettings(kMac);
+        QCOMPARE(t2.dexpLowCutHz(), 400.0);
+    }
+
+    void dexpHighCutHz_persistsAcrossInstances() {
+        {
+            TransmitModel t;
+            t.loadFromSettings(kMac);
+            t.setDexpHighCutHz(2200.0);
+        }
+        TransmitModel t2;
+        t2.loadFromSettings(kMac);
+        QCOMPARE(t2.dexpHighCutHz(), 2200.0);
+    }
+
+    void dexpSideChannelFilterEnabled_persistsAcrossInstances() {
+        {
+            TransmitModel t;
+            t.loadFromSettings(kMac);
+            t.setDexpSideChannelFilterEnabled(false);  // flip from default true
+        }
+        TransmitModel t2;
+        t2.loadFromSettings(kMac);
+        QCOMPARE(t2.dexpSideChannelFilterEnabled(), false);
+    }
 };
 
 QTEST_APPLESS_MAIN(TstTransmitModelDexp)

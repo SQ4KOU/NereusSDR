@@ -644,6 +644,19 @@ void TransmitModel::loadFromSettings(const QString& mac)
     setDexpLookAheadMs(s.value(pfx + QLatin1String("DEXP_LookAheadMs"),
                                 QStringLiteral("60")).toDouble());
 
+    // ── DEXP side-channel filter properties (3M-3a-iii Task 10) — all persist ─
+    // Defaults from Thetis setup.Designer.cs [v2.10.3.13]:
+    //   udSCFLowCut.Value=500     (line 45240)
+    //   udSCFHighCut.Value=1500   (line 45210)
+    //   chkSCFEnable.Checked=true (line 45250)
+    setDexpLowCutHz(s.value(pfx + QLatin1String("DEXP_LowCutHz"),
+                             QStringLiteral("500")).toDouble());
+    setDexpHighCutHz(s.value(pfx + QLatin1String("DEXP_HighCutHz"),
+                              QStringLiteral("1500")).toDouble());
+    setDexpSideChannelFilterEnabled(
+        s.value(pfx + QLatin1String("DEXP_SideChannelFilterEnabled"),
+                QStringLiteral("True")).toString() == QLatin1String("True"));
+
     // ── Anti-VOX properties ───────────────────────────────────────────────
     // antiVoxGainDb: default 0 (NereusSDR-original safe starting point)
     const int antiVoxGainDb = s.value(pfx + QLatin1String("AntiVox_Gain"),
@@ -861,6 +874,12 @@ void TransmitModel::persistToSettings(const QString& mac) const
     s.setValue(pfx + QLatin1String("DEXP_LookAheadEnabled"),
                m_dexpLookAheadEnabled ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(pfx + QLatin1String("DEXP_LookAheadMs"), QString::number(m_dexpLookAheadMs));
+
+    // ── DEXP side-channel filter properties (3M-3a-iii Task 10) — all persist ─
+    s.setValue(pfx + QLatin1String("DEXP_LowCutHz"),  QString::number(m_dexpLowCutHz));
+    s.setValue(pfx + QLatin1String("DEXP_HighCutHz"), QString::number(m_dexpHighCutHz));
+    s.setValue(pfx + QLatin1String("DEXP_SideChannelFilterEnabled"),
+               m_dexpSideChannelFilterEnabled ? QStringLiteral("True") : QStringLiteral("False"));
 
     // ── Anti-VOX properties ───────────────────────────────────────────────
     s.setValue(pfx + QLatin1String("AntiVox_Gain"),    QString::number(m_antiVoxGainDb));
@@ -1246,6 +1265,61 @@ void TransmitModel::setDexpLookAheadMs(double ms)
     m_dexpLookAheadMs = clamped;
     persistOne(QStringLiteral("DEXP_LookAheadMs"), QString::number(clamped));
     emit dexpLookAheadMsChanged(clamped);
+}
+
+// ── DEXP side-channel filter properties (3M-3a-iii Task 10) ────────────────
+//
+// Side-channel HP/LP filter trio used by the DEXP detector to gate which
+// audio frequencies trigger VOX/DEXP.  Bound to grpSCF in Setup -> Audio ->
+// VOX/DEXP per Thetis setup.Designer.cs:45153+ [v2.10.3.13].
+//
+// Plan scope correction (2026-05-03): originally these were planned as
+// model-only / no-UI properties, but a source-first re-read by the Batch B
+// agent surfaced grpSCF on tpDSPVOXDE -- so they DO get UI binding
+// (lands in Task 14, the DexpVoxPage Setup-page work).  Defaults below
+// therefore match the Thetis Designer values verbatim.
+//
+// Defaults:
+//   udSCFLowCut.Value=500     (line 45240)
+//   udSCFHighCut.Value=1500   (line 45210)
+//   chkSCFEnable.Checked=true (line 45250)
+//
+// Range:
+//   udSCFLowCut + udSCFHighCut both: Min=100, Max=10000 (units: Hz)
+//   (lines 45195-45234)
+// Range matches Task 4 wrapper clamps in TxChannel::setDexpLowCut/HighCut.
+//
+// All three persist.
+
+void TransmitModel::setDexpLowCutHz(double hz)
+{
+    // Clamp to udSCFLowCut range per setup.Designer.cs:45225-45234 [v2.10.3.13]:
+    //   udSCFLowCut.Maximum = 10000, udSCFLowCut.Minimum = 100  (units: Hz)
+    const double clamped = std::clamp(hz, kDexpFilterCutHzMin, kDexpFilterCutHzMax);
+    if (qFuzzyCompare(clamped, m_dexpLowCutHz)) { return; }  // idempotent guard
+    m_dexpLowCutHz = clamped;
+    persistOne(QStringLiteral("DEXP_LowCutHz"), QString::number(clamped));
+    emit dexpLowCutHzChanged(clamped);
+}
+
+void TransmitModel::setDexpHighCutHz(double hz)
+{
+    // Clamp to udSCFHighCut range per setup.Designer.cs:45195-45204 [v2.10.3.13]:
+    //   udSCFHighCut.Maximum = 10000, udSCFHighCut.Minimum = 100  (units: Hz)
+    const double clamped = std::clamp(hz, kDexpFilterCutHzMin, kDexpFilterCutHzMax);
+    if (qFuzzyCompare(clamped, m_dexpHighCutHz)) { return; }  // idempotent guard
+    m_dexpHighCutHz = clamped;
+    persistOne(QStringLiteral("DEXP_HighCutHz"), QString::number(clamped));
+    emit dexpHighCutHzChanged(clamped);
+}
+
+void TransmitModel::setDexpSideChannelFilterEnabled(bool on)
+{
+    if (on == m_dexpSideChannelFilterEnabled) { return; }  // idempotent guard
+    m_dexpSideChannelFilterEnabled = on;
+    persistOne(QStringLiteral("DEXP_SideChannelFilterEnabled"),
+               on ? QStringLiteral("True") : QStringLiteral("False"));
+    emit dexpSideChannelFilterEnabledChanged(on);
 }
 
 // ── Two-tone test properties (3M-1c B.2) ────────────────────────────────────
