@@ -3830,9 +3830,11 @@ qint64 TxChannel::onModeChanged(DSPMode newMode)
     const QString typeStr  = s.value(typeKey, QStringLiteral("Low Latency")).toString();
     const int newFiltType  = (typeStr == QStringLiteral("Low Latency")) ? 0 : 1;
 
-    // Skip if nothing changed.
+    // Skip if nothing changed.  Sentinel -1 means "no change" so RadioModel
+    // can distinguish from "applied in 0 ms" (in-place WDSP setters
+    // routinely finish sub-millisecond).
     if (newFiltSize == m_txFilterSize && newFiltType == m_txFilterType) {
-        return 0;
+        return -1;
     }
 
     qCInfo(lcDsp) << "TxChannel::onModeChanged: mode=" << static_cast<int>(newMode)

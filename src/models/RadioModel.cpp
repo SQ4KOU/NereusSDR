@@ -3277,7 +3277,9 @@ void RadioModel::wireSliceSignals()
         if (rxCh) {
             rxCh->setMode(mode);
             const qint64 elapsed = rxCh->onModeChanged(mode);
-            if (elapsed > 0) {
+            // -1 = no change; 0+ = applied (in-place WDSP setters routinely
+            // finish sub-millisecond, so 0 ms is a legitimate elapsed time).
+            if (elapsed >= 0) {
                 emit dspChangeMeasured(elapsed);
             }
         }
@@ -3296,7 +3298,7 @@ void RadioModel::wireSliceSignals()
         // the in-place setters, so the live-apply is safe to restore.
         if (m_txChannel) {
             const qint64 txElapsed = m_txChannel->onModeChanged(mode);
-            if (txElapsed > 0) {
+            if (txElapsed >= 0) {
                 emit dspChangeMeasured(txElapsed);
             }
         }
@@ -5762,9 +5764,11 @@ void RadioModel::rebuildDspOptionsForMode(DSPMode forMode)
         return;
     }
 
+    // -1 = no change; 0+ = applied (in-place WDSP setters routinely finish
+    // sub-millisecond, so 0 ms is a legitimate elapsed time).
     if (RxChannel* rxCh = m_wdspEngine->rxChannel(0)) {
         const qint64 elapsed = rxCh->onModeChanged(forMode);
-        if (elapsed > 0) {
+        if (elapsed >= 0) {
             emit dspChangeMeasured(elapsed);
         }
     }
@@ -5772,7 +5776,7 @@ void RadioModel::rebuildDspOptionsForMode(DSPMode forMode)
     // TX channel — guard: may be null (not created until radio connects).
     if (m_txChannel) {
         const qint64 txElapsed = m_txChannel->onModeChanged(forMode);
-        if (txElapsed > 0) {
+        if (txElapsed >= 0) {
             emit dspChangeMeasured(txElapsed);
         }
     }

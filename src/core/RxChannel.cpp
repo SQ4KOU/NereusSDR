@@ -1847,9 +1847,11 @@ qint64 RxChannel::onModeChanged(DSPMode newMode)
     const int newFiltType  = (typeStr == QStringLiteral("Low Latency")) ? 0 : 1;
 
     // Skip if nothing changed.  Each setter has its own idempotent guard,
-    // but bailing here avoids the timer/log overhead.
+    // but bailing here avoids the timer/log overhead.  Sentinel -1 means
+    // "no change" so RadioModel can distinguish from "applied in 0 ms"
+    // (in-place WDSP setters routinely finish sub-millisecond).
     if (newFiltSize == m_filterSize && newFiltType == m_filterType) {
-        return 0;
+        return -1;
     }
 
     qCInfo(lcDsp) << "RxChannel::onModeChanged: mode=" << static_cast<int>(newMode)
