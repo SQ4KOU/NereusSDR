@@ -450,6 +450,27 @@ private:
     // Classic mode undo path and serves a different purpose).
     PreampMode m_savedPreampMode{PreampMode::Off};
 
+    // Saved RX att for restore on TX→RX (#175 follow-up bench, 2026-05-04).
+    //
+    // Stashed by onMoxHardwareFlipped(true) before swapping m_attDb to txAtt;
+    // read back on onMoxHardwareFlipped(false).  Init to 0 (matches default
+    // RX att); only meaningful between MOX flips.
+    //
+    // Why a separate field instead of overwriting
+    // m_bandState[currentBand].attDb: the per-band slot is the user's
+    // RX-time setting and must stay untouched.  If we wrote txAtt into it on
+    // RX→TX, then a band-change while transmitting would corrupt the stored
+    // RX value.  m_savedRxAttDbForTx is a transient TX-window stash.
+    //
+    // Mirrors Thetis behavior — mi0bot console.cs:29960-30002
+    // [v2.10.3.13-beta2] updateAttNudsCombos() swaps a separate
+    // udTXStepAttData spinbox over udRX1StepAttData during MOX, and restores
+    // the RX-time spinbox on un-key.  NereusSDR has a single S-ATT spinbox
+    // bound to attenuationChanged, so we emit the TX value into m_attDb +
+    // attenuationChanged on RX→TX, then restore on TX→RX.  User-visible
+    // result is identical: "the spinbox jumped to 31 during TX".
+    int m_savedRxAttDbForTx{0};
+
     // Internal tick timer.
     QTimer m_tickTimer;
 

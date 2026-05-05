@@ -480,6 +480,29 @@ void StepAttenuatorController::onMoxHardwareFlipped(bool isTx)
             if (shouldForce31Db(m_currentDspMode, psOff)) {
                 txAtt = 31; // reset when PS is OFF or in CW mode
             }
+
+            // Issue #175 follow-up bench (2026-05-04 JJ): the S-ATT spinbox
+            // on RxApplet binds to attenuationChanged, so to make it follow
+            // the live applied attenuation during TX (matching Thetis), we
+            // stash the current RX att and emit the TX value here.
+            //
+            // Mirrors mi0bot console.cs:29960-30002 [v2.10.3.13-beta2]
+            // updateAttNudsCombos() — Thetis swaps a separate udTXStepAttData
+            // spinbox over udRX1StepAttData during MOX (same screen position,
+            // different control).  NereusSDR has a single bound spinbox so
+            // we update m_attDb + emit instead.  User-visible result is
+            // identical: "the spinbox jumped to 31 during TX".
+            //
+            // Do NOT overwrite m_bandState[currentBand].attDb — that's the
+            // user's RX-time setting and must survive the TX window untouched
+            // (a band change during MOX would otherwise corrupt the stored
+            // RX value).  Use the dedicated m_savedRxAttDbForTx stash.
+            m_savedRxAttDbForTx = m_attDb;
+            if (m_attDb != txAtt) {
+                m_attDb = txAtt;
+                emit attenuationChanged(txAtt);
+            }
+
             // Marshalled to connection thread — m_connection is connection-thread owned.
             if (m_connection) {
                 RadioConnection* conn = m_connection.get();
@@ -497,10 +520,8 @@ void StepAttenuatorController::onMoxHardwareFlipped(bool isTx)
             // HPSDR: restore the preamp mode saved at TX start.
             restoreRxPreampMode();
         } else {
-            // Standard board: re-apply the current band's RX ATT.
-            // setBand() with the same band is a no-op (idempotent guard),
-            // so we call a direct restore of m_bandState.
-            // Clear TX ATT back to 0.
+            // Standard board: clear TX ATT back to 0 + restore the saved RX
+            // att so the S-ATT spinbox tracks the un-keyed value.
             // From Thetis console.cs:29658 [v2.10.3.13]:
             //   NetworkIO.SetTxAttenData(0);
             //   Display.TXAttenuatorOffset = 0; //[2.10.3.6]MW0LGE att_fixes
@@ -514,7 +535,25 @@ void StepAttenuatorController::onMoxHardwareFlipped(bool isTx)
 #ifdef NEREUS_BUILD_TESTS
             m_lastTxStepAttDb = 0;
 #endif
-            // Restore RX ATT: re-apply stored per-band value.
+
+            // Issue #175 follow-up bench (2026-05-04 JJ): restore the RX att
+            // we stashed on RX→TX so the spinbox snaps back to the un-keyed
+            // value.  Mirrors Thetis updateAttNudsCombos() un-keying its
+            // udTXStepAttData overlay and re-exposing udRX1StepAttData
+            // (mi0bot console.cs:30004-30018 [v2.10.3.13-beta2]).
+            //
+            // Use direct emit rather than setAttenuation() to avoid pushing
+            // to connection (connection layer already cleared TX ATT above;
+            // the RX att will get re-pushed on the next CC bank that reads
+            // m_stepAttn — already-stored unchanged from before MOX).
+            //
+            // Then re-sync m_bandState entry in case the band-state RX att
+            // diverged during MOX (defensive — should not happen in 3M-1
+            // single-RX scope, but cheap to verify).
+            if (m_attDb != m_savedRxAttDbForTx) {
+                m_attDb = m_savedRxAttDbForTx;
+                emit attenuationChanged(m_attDb);
+            }
             auto it = m_bandState.find(static_cast<int>(m_currentBand));
             if (it != m_bandState.end() && it->second.attDb != m_attDb) {
                 setAttenuation(it->second.attDb, 0);

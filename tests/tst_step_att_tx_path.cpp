@@ -532,6 +532,109 @@ private slots:
 
         delete ctrl;
     }
+
+    // ── Issue #175 follow-up bench (2026-05-04 JJ): S-ATT spinbox tracks TX ──
+    // The S-ATT spinbox on RxApplet binds to attenuationChanged.  When MOX
+    // engages with ATT-on-TX enabled, the controller must emit the live TX
+    // value so the spinbox follows the applied attenuation (matching Thetis
+    // updateAttNudsCombos() at mi0bot console.cs:29960-30002 [v2.10.3.13-beta2]
+    // which overlays udTXStepAttData over udRX1StepAttData during MOX).
+    //
+    // On TX→RX the spinbox must restore to the user's RX-time setting that
+    // was stashed before the MOX flip.
+    void onMoxHardwareFlipped_emitsAttChanged_forceCwOrPsOff()
+    {
+        // Setup: standard (non-HPSDR) board, ATT-on-TX enabled, force-31
+        // active (PS off + forceFlag → shouldForce31Db == true on USB).
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setIsHpsdrBoard(false);
+        ctrl.setAttOnTxEnabled(true);
+        ctrl.setForceAttWhenPsOff(true);
+        ctrl.setPsActive(false);                      // PS off → force path armed
+        ctrl.setCurrentDspMode(DSPMode::USB);
+        ctrl.setBand(Band::Band20m);
+        ctrl.setAttenuation(10, /*rx=*/0);            // user's RX-time setting
+        QCOMPARE(ctrl.attenuatorDb(), 10);
+
+        QSignalSpy spy(&ctrl, &StepAttenuatorController::attenuationChanged);
+        spy.clear();   // discard any from setAttenuation above
+
+        // RX→TX: spinbox should jump to 31 (force-31 path).
+        ctrl.onMoxHardwareFlipped(true);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toInt(), 31);
+        QCOMPARE(ctrl.attenuatorDb(), 31);
+
+        // TX→RX: spinbox should restore to 10.
+        ctrl.onMoxHardwareFlipped(false);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toInt(), 10);
+        QCOMPARE(ctrl.attenuatorDb(), 10);
+    }
+
+    // Issue #175 follow-up: ATT-on-TX enabled + per-band TX value set + no
+    // force-31 condition → spinbox tracks the per-band TX value, not 31.
+    void onMoxHardwareFlipped_emitsPerBandTxValue_whenNoForce()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setIsHpsdrBoard(false);
+        ctrl.setAttOnTxEnabled(true);
+        ctrl.setForceAttWhenPsOff(true);
+        ctrl.setPsActive(true);                       // PS on → force path disarmed
+        ctrl.setCurrentDspMode(DSPMode::USB);
+        ctrl.setBand(Band::Band20m);
+        ctrl.setTxAttenuationForBand(Band::Band20m, 17);  // per-band TX = 17
+        ctrl.setAttenuation(5, /*rx=*/0);             // user's RX-time setting
+
+        QSignalSpy spy(&ctrl, &StepAttenuatorController::attenuationChanged);
+        spy.clear();
+
+        // RX→TX: spinbox should reflect the per-band TX value (17), not 31.
+        ctrl.onMoxHardwareFlipped(true);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toInt(), 17);
+        QCOMPARE(ctrl.attenuatorDb(), 17);
+
+        // TX→RX: spinbox restores to 5.
+        ctrl.onMoxHardwareFlipped(false);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toInt(), 5);
+        QCOMPARE(ctrl.attenuatorDb(), 5);
+    }
+
+    // Issue #175 follow-up: when TX value happens to equal current RX value
+    // (e.g. user sets per-band TX = 0 and current RX = 0), the no-change
+    // guard suppresses redundant emissions.  The MOX→TX→RX cycle must
+    // still leave m_attDb at the user's RX value (restored from the stash
+    // even when no signal was emitted).
+    void onMoxHardwareFlipped_noEmit_whenTxEqualsRx_keepsRxValue()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setIsHpsdrBoard(false);
+        ctrl.setAttOnTxEnabled(true);
+        ctrl.setForceAttWhenPsOff(true);
+        ctrl.setPsActive(true);                       // PS on
+        ctrl.setCurrentDspMode(DSPMode::USB);
+        ctrl.setBand(Band::Band20m);
+        ctrl.setTxAttenuationForBand(Band::Band20m, 8);
+        ctrl.setAttenuation(8, /*rx=*/0);             // RX == TX
+
+        QSignalSpy spy(&ctrl, &StepAttenuatorController::attenuationChanged);
+        spy.clear();
+
+        // RX→TX: TX==RX, no signal emitted, m_attDb still 8.
+        ctrl.onMoxHardwareFlipped(true);
+        QCOMPARE(spy.count(), 0);
+        QCOMPARE(ctrl.attenuatorDb(), 8);
+
+        // TX→RX: RX still == 8, no signal emitted.
+        ctrl.onMoxHardwareFlipped(false);
+        QCOMPARE(spy.count(), 0);
+        QCOMPARE(ctrl.attenuatorDb(), 8);
+    }
 };
 
 QTEST_MAIN(TestStepAttTxPath)
