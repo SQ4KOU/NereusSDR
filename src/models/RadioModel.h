@@ -125,6 +125,12 @@ class CompositeTxMicRouter;
 // (chunk F) + the TwoToneController activation orchestrator (chunk I).
 class MicProfileManager;
 class TwoToneController;
+// Phase 4 Agent 4A of issue #167: PaProfileManager forward declaration.
+// RadioModel owns the per-MAC PA gain profile bank (parallel to
+// MicProfileManager); the active profile is passed by reference to
+// TransmitModel::setPowerUsingTargetDbm at every drive-slider /
+// TUNE / two-tone callsite.
+class PaProfileManager;
 // 3M-1c TX pump architecture redesign — TxWorkerThread.
 class TxWorkerThread;
 // Stage C2 filter preset editor — user-override layer over Thetis defaults.
@@ -282,7 +288,12 @@ public:
     class ClarityController* clarityController() const { return m_clarityController; }
     void setClarityController(class ClarityController* c) { m_clarityController = c; }
     class StepAttenuatorController* stepAttController() const { return m_stepAttController; }
-    void setStepAttController(class StepAttenuatorController* c) { m_stepAttController = c; }
+    // Phase 4 Agent 4A of issue #167 — also propagates to TransmitModel
+    // so the ATT-on-TX-on-power-change safety gate inside
+    // setPowerUsingTargetDbm can call ctrl->setAttOnTxValue(31) when the
+    // gate fires (Thetis console.cs:46740-46748 [v2.10.3.13] [2.10.3.5]MW0LGE).
+    // Implementation in RadioModel.cpp.
+    void setStepAttController(class StepAttenuatorController* c);
     NoiseFloorTracker* noiseFloorTracker() const { return m_noiseFloorTracker; }
     void setNoiseFloorTracker(NoiseFloorTracker* t) { m_noiseFloorTracker = t; }
     // Task 3.1: MeterPoller view hook so MultimeterPage can apply live
@@ -310,6 +321,15 @@ public:
     // TxProfileSetupPage (J.3 ctor).  Non-owning; lifetime is RadioModel's
     // lifetime.  See header §3M-1c L.1 for the construction + connect flow.
     MicProfileManager* micProfileManager() const { return m_micProfileMgr; }
+
+    // Phase 4 Agent 4A of issue #167: expose PaProfileManager so the future
+    // PaGainByBandPage (Phase 6 Agent 6A) and tests can hand the per-MAC
+    // profile bank around.  Non-owning; lifetime is RadioModel's lifetime.
+    // Constructed once in the RadioModel ctor; setMacAddress + load() are
+    // called per-connect inside connectToRadio() (mirrors MicProfileManager
+    // wiring at lines ~1191).  Active profile is passed by reference to
+    // TransmitModel::setPowerUsingTargetDbm at every callsite.
+    PaProfileManager* paProfileManager() const { return m_paProfileManager; }
 
     // 3M-1c Phase L.2: expose TwoToneController so MainWindow can hand it to
     // TxApplet (J.2 setter) for the 2-TONE button + status mirror.
@@ -494,6 +514,10 @@ public:
     // injecting a mock connection, mirroring what wireConnectionSignals() does
     // when a real radio connects.
     void wireSliceSignalsForTest() { wireSliceSignals(); }
+    // Issue #182 — invoke the mic_ptt_disabled wiring helper directly so
+    // tst_radio_model_mic_ptt_wire can verify the signal/slot bind + prime
+    // path without spinning up the full wireConnectionSignals pipeline.
+    void wireMicPttDisabledForTest() { connectMicPttDisabledSignal(); }
     void setLastBandForTest(NereusSDR::Band b) {
         const bool cross = (b != m_lastBand);
         m_lastBand = b;
@@ -537,6 +561,20 @@ public:
         m_testCapsOverride     = true;
         m_testCapsHasMicJack   = hasMicJack;
     }
+    // Issue #177 — drive the tune-off settle delay synchronously in tests.
+    // Production default is 100 ms (mirrors `await Task.Delay(100)` at Thetis
+    // console.cs:30107 [v2.10.3.13]).  Setting this to 0 makes completeTuneOff
+    // schedule on the next event loop iteration, so QCoreApplication::processEvents
+    // can drive the deferred completion synchronously.
+    void setTuneOffSettleMsForTest(int ms) noexcept { m_tuneOffSettleMs = ms; }
+    bool tuneOffPendingForTest()          const noexcept { return m_pendingTuneOff; }
+
+    // TUN state, exported for H.3 UI polling and for issue #177 tests.
+    // True between setTune(true) and the completion of the corresponding
+    // setTune(false) → completeTuneOff() chain.
+    // Cite: Thetis console.cs:30010 [v2.10.3.13] — _tuning = true (read by
+    // many UI/meter/PA paths in console.cs).
+    bool isTune() const noexcept { return m_isTuning; }
     // 3M-1b I.3: inject HPSDRHW board type to select the per-family Radio Mic
     // group box in AudioTxInputPage without a live radio connection.
     // Does not reset other test-cap flags — independent of hasMicJack.
@@ -560,8 +598,17 @@ public:
     void handlePaTelemetryForTest(quint16 fwdRaw, quint16 revRaw,
                                   quint16 exciterRaw, quint16 userAdc0Raw,
                                   quint16 userAdc1Raw, quint16 supplyRaw) {
+        // The test seam injects telemetry as if the radio were
+        // transmitting — bypass the MOX gate that handlePaTelemetry
+        // applies in production (which forces TX-domain readings to 0
+        // when MoxController state != Tx so late samples don't refill
+        // the meters after un-key).  Tests calling this seam mean
+        // "behave as if in TX"; flipping the flag lets the routing
+        // pipeline run exactly as it would on a live transmit sample.
+        m_forceTxForTest = true;
         handlePaTelemetry(fwdRaw, revRaw, exciterRaw,
                           userAdc0Raw, userAdc1Raw, supplyRaw);
+        m_forceTxForTest = false;
     }
 
     // P1 full-parity §3.5 test seam — pure-function counterpart of the
@@ -619,6 +666,23 @@ public:
     // Use between simulated reconnects in the same test.
     void simulateDisconnectForTest() {
         m_transmitModel.setMicSourceLocked(false);
+    }
+
+    // Phase 4 Agent 4A of issue #167 — test seam to inject a non-owning
+    // TxChannel pointer so the drive-slider / TUNE rewrite tests can spy on
+    // setTxFixedGain() without standing up the full WdspEngine pipeline.
+    // Production code never calls this — m_txChannel is wired by the
+    // WDSP-init lambda inside connectToRadio() (see "createTxChannel(1)"
+    // around RadioModel.cpp:1514).
+    void injectTxChannelForTest(class TxChannel* ch) { m_txChannel = ch; }
+
+    // Phase 4 Agent 4A of issue #167 — test seam to inject the HPSDRModel
+    // hardware profile directly. setBoardForTest(HPSDRHW::OrionMKII) maps
+    // through defaultModelForBoard() to ORIONMKII (the *first* model
+    // matching that board), but K2GX's regression specifically pins
+    // ANAN8000D values; this seam lets tests pick the exact HPSDRModel.
+    void setHpsdrModelForTest(HPSDRModel m) {
+        m_hardwareProfile = ::NereusSDR::profileForModel(m);
     }
 #endif
 
@@ -740,6 +804,22 @@ signals:
     void sliceAdded(int index);
     void sliceRemoved(int index);
     void activeSliceChanged(int index);
+    // Emitted once at the end of loadSliceState() after the slice has been
+    // restored from AppSettings. Mirrors Thetis console.cs:27204 [v2.10.3.13]
+    // chkPower_CheckedChanged calling txtVFOAFreq_LostFocus() as the
+    // explicit "push state to display" step at power-on. Listeners
+    // (MainWindow, SpectrumWidget bridge) push the now-correct slice
+    // freq/mode/filter into views, since the wireSliceToSpectrum() seed
+    // ran with the slice's pre-restore default values.
+    void sliceStateRestored(int index);
+    // Issue #153 sub-bug 2 — diagnostic + test observation hook.
+    // Emitted by pushTxModeAndBandpass() when an active slice exists,
+    // BEFORE the queued setter dispatch to TxWorkerThread.  Carries the
+    // slice's current DSPMode + audio-space filter cutoffs.  Tests use
+    // it as a proxy for "push helper triggered with X"; production code
+    // can wire it into diagnostic logging.
+    void txModeAndBandpassPushed(NereusSDR::DSPMode mode,
+                                 int audioLowHz, int audioHighHz);
     void panadapterAdded(int index);
     void panadapterRemoved(int index);
 
@@ -835,6 +915,30 @@ private:
     void wireSliceSignals();
     void teardownConnection();
 
+    // Issue #182 — wire TransmitModel::micPttDisabledChanged →
+    // RadioConnection::setMicPTTDisabled and prime the connection with the
+    // current model value once.  Extracted so the connect() can be exercised
+    // in isolation by tst_radio_model_mic_ptt_wire without needing to spin
+    // up the full DSP-thread pipeline that wireConnectionSignals starts.
+    void connectMicPttDisabledSignal();
+
+    // Issue #177 — deferred completion of the TUN-off path.
+    //
+    // Called from the rxReady → settle-timer slot wired in the constructor.
+    // Performs everything that used to run synchronously inside setTune(false)
+    // EXCEPT the MoxController::setTune(false) call: gen1 OFF, DSP-mode
+    // restore (CWL/CWU), tune-power restore through the dBm path, TX VFO
+    // un-offset, and the m_isTuning / m_pendingTuneOff state clears.
+    //
+    // Cite: Thetis console.cs:30106-30148 [v2.10.3.13] — chkTUN_CheckedChanged
+    // TUN-off branch.  Thetis runs the equivalent block AFTER
+    // chkMOX.Checked = false (which is synchronous and blocks ~30 ms inside
+    // chkMOX_CheckedChanged2) and AFTER `await Task.Delay(100)`.  In NereusSDR
+    // this method is invoked from a QTimer::singleShot(m_tuneOffSettleMs)
+    // chained off MoxController::rxReady, so the same total ~130 ms gap
+    // separates the user's click from gen1 going off.
+    void completeTuneOff();
+
     // P1 full-parity §3.4 — per-sample PA telemetry handler.
     // Applies per-board ADC→watts scaling (scaleFwdPowerWatts /
     // scaleRevPowerWatts / scalePaVolts / scalePaAmps), routes the FWD
@@ -849,7 +953,6 @@ private:
     void handlePaTelemetry(quint16 fwdRaw, quint16 revRaw, quint16 exciterRaw,
                            quint16 userAdc0Raw, quint16 userAdc1Raw,
                            quint16 supplyRaw);
-    void loadSliceState(SliceModel* slice);
     void saveSliceState(SliceModel* slice);
     void scheduleSettingsSave();
 
@@ -861,6 +964,49 @@ public:
     // tweak when they immediately close the app. No-op when nothing's
     // pending. Idempotent — calling repeatedly is safe.
     void flushPendingSettingsSave();
+
+    // Restore a slice's persisted state from AppSettings.  Public so unit
+    // tests can drive it without spinning up the full connectToRadio()
+    // pipeline.  Production callers: connectToRadio() at RadioModel.cpp
+    // line ~1377 — fires once per session per slice on Connected. Emits
+    // sliceStateRestored(index) on completion (see comment on the signal).
+    void loadSliceState(SliceModel* slice);
+
+    // Issue #153 sub-bug 2 — push the active slice's DSPMode + the
+    // user's configured TX bandpass (TransmitModel::filterLow/High) to
+    // TxChannel.  No-op if no active slice.
+    //
+    // Filter source is TransmitModel, NOT SliceModel.  TransmitModel
+    // stores audio-space TX cutoffs (positive, low<=high invariant),
+    // which is what TxChannel::requestFilterChange + applyTxFilterForMode
+    // expect.  SliceModel filter values are RX-passband IQ-space
+    // (negative for LSB-family); routing them through
+    // applyTxFilterForMode would double-negate on LSB and clobber
+    // any user-configured TX bandwidth on every connect/MOX.  Mirrors
+    // the canonical wire at RadioModel.cpp:2550-2560 which sources
+    // audio cutoffs from TransmitModel::filterChanged.
+    //
+    // Read happens on RadioModel's main thread; the TxChannel setter
+    // call is queued to TxWorkerThread via QMetaObject::invokeMethod
+    // (receiver=m_txChannel) so the receiver-thread invariant holds —
+    // mirrors the F.1 / F.2 / H.1 wires inside connectToRadio's txSetup
+    // lambda.  Emits txModeAndBandpassPushed(mode, audioLow, audioHigh)
+    // before the queued dispatch as a test/diagnostic observation hook
+    // (fires even when m_txChannel is null so test fixtures can drive
+    // the helper without standing up the full TX pipeline).
+    //
+    // Wire targets (set up inside the txSetup lambda + wireSliceSignals):
+    //   - createTxChannel success → pushTxModeAndBandpass (initial seed)
+    //   - SliceModel::dspModeChanged → pushTxModeAndBandpass
+    //   - MoxController::txAboutToBegin → pushTxModeAndBandpass
+    //
+    // Source-of-truth: Thetis SetTXFilters at console.cs:8091 +
+    // CurrentDSPMode setter at radio.cs:2670-2696 [v2.10.3.13], wired
+    // into the mode-change handler at console.cs:33937 [v2.10.3.13].
+    // The MOX-engage trigger is NereusSDR's belt-and-suspenders re-seed
+    // (Thetis seeds at mode-change only; we additionally re-seed at
+    // MOX-engage so prior TUN-state desync cannot starve SSB MOX).
+    void pushTxModeAndBandpass();
 
 private:
     // Sub-components (owned, main thread)
@@ -1012,6 +1158,14 @@ private:
     HPSDRHW  m_testCapsHw{HPSDRHW::Unknown};        // 3M-1b I.3: injected via setCapsHwForTest
 #endif
 
+    // Test-only override for the handlePaTelemetry MOX gate.
+    // Toggled true by handlePaTelemetryForTest() before the call and false
+    // after, simulating "the radio just sent us a transmit sample" without
+    // requiring the full MoxController state machine to be driven into
+    // MoxState::Tx.  Always false in production code paths.
+    // Bench-reported #167 follow-up.
+    bool     m_forceTxForTest{false};
+
     // Phase 3M-0 Task 6: Ganymede PA-trip live state.
     // From Thetis Andromeda/Andromeda.cs:914 [v2.10.3.13] (_ganymede_pa_issue volatile bool).
     // G8NJJ: handlers for Ganymede 500W PA protection
@@ -1065,6 +1219,34 @@ private:
     //   exported for H.3 UI polling.
     //   Cite: Thetis console.cs:30010 [v2.10.3.13] — _tuning = true.
     bool m_isTuning{false};
+
+    // ── Issue #177 fix — Thetis-faithful TUN-off ordering ────────────────────
+    //
+    // m_pendingTuneOff: latched true at the START of the setTune(false) path,
+    //   cleared inside completeTuneOff().  setTune(false) now only kicks off
+    //   the MoxController TX→RX walk; the rest (gen1 off, mode restore, drive
+    //   restore, VFO restore) runs from completeTuneOff() AFTER MoxController
+    //   emits rxReady AND an additional 100 ms settle elapses.
+    //
+    //   This mirrors Thetis console.cs:30106-30109 [v2.10.3.13]:
+    //     chkMOX.Checked = false;        // synchronously walks TX→RX (~30 ms)
+    //     await Task.Delay(100);
+    //     radio.GetDSPTX(0).TXPostGenRun = 0;
+    //
+    //   Without the deferral, gen1 was killed at T+0 while the WDSP TX channel
+    //   was still pumping fexchange0 (setRunning(false) does not fire until
+    //   txaFlushed at T+10 ms).  The hard step at gen1's output produced a
+    //   filter-ringing transient through the 31-stage TXA chain that briefly
+    //   exceeded steady-state amplitude on the wire.  Combined with the wire
+    //   drive byte staying at TUNE level for one EP2 frame after MOX-off
+    //   (round-robin priority bank0 > bank10), this produced an RF spike past
+    //   the radio's spec at high tune-slider settings.  Issue #177.
+    bool m_pendingTuneOff{false};
+
+    // m_tuneOffSettleMs: explicit 100 ms wait between MoxController::rxReady
+    //   and completeTuneOff().  Mirrors `await Task.Delay(100)` at Thetis
+    //   console.cs:30107 [v2.10.3.13].  Tests override via the *ForTest seam.
+    int m_tuneOffSettleMs{100};
 
     // ── 3M-1a G.1: TX-side integration ──────────────────────────────────────
     // Master design §5.1.1; pre-code review §1.6 + §2.5.
@@ -1139,6 +1321,14 @@ private:
     // connectToRadio(); setMacAddress("") is called in teardownConnection so
     // mutators silently no-op while no radio is selected.
     MicProfileManager* m_micProfileMgr{nullptr};
+
+    // Phase 4 Agent 4A of issue #167 — PaProfileManager.  QObject child of
+    // RadioModel; mirrors m_micProfileMgr lifecycle exactly.  Constructed
+    // once in the ctor; setMacAddress + load(connectedModel) are called
+    // per-connect inside connectToRadio().  The active profile is read at
+    // every drive-slider / TUNE callsite via paProfileManager()->activeProfile()
+    // and passed by reference to TransmitModel::setPowerUsingTargetDbm.
+    PaProfileManager* m_paProfileManager{nullptr};
     //
     // L.2 — TwoToneController (chunk I).  QObject child of RadioModel.
     // Construction-time deps that DON'T require a live connection

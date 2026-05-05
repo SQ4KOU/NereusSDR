@@ -23,6 +23,7 @@
 //   2026-04-28 — Phase 3M-1b J.2: VOX toggle button added below Tune Power.
 //                 Checkable, green border when active. Bidirectional with
 //                 TransmitModel::voxEnabled. Right-click opens VoxSettingsPopup.
+//                 (REMOVED 2026-05-03 in 3M-3a-iii Task 16 — see entry below.)
 //   2026-04-28 — Phase 3M-1b J.3: MON toggle button + monitor volume slider
 //                 added below VOX. Bidirectional with TransmitModel::monEnabled
 //                 and monitorVolume (default 0.5f, Thetis audio.cs:417). Mic-source
@@ -49,6 +50,14 @@
 //                 orange status label shows filter description text.
 //                 Wired via filterChanged(int,int) + dspModeChanged refresh.
 //                 syncFromModel() extended to seed spinboxes + status label.
+//   2026-05-04 — Phase 3M-3a-iii bench polish: VOX row relocated from
+//                 PhoneCwApplet Phone tab (Control #10) back to TxApplet as
+//                 a full row directly under TUNE/MOX (Option B - full row).
+//                 VOX button + threshold slider + DexpPeakMeter strip + Hold
+//                 slider all move as a unit, plus the 100 ms peak-meter
+//                 poller (now TxApplet::pollVoxMeter) and the right-click
+//                 → Setup → Transmit → DEXP/VOX signal handling.  DEXP row
+//                 stays on PhoneCwApplet — only VOX moves.
 // =================================================================
 
 //=================================================================
@@ -116,8 +125,9 @@
 
 // TxApplet — TX control panel.
 // Phase 3M-1a H.3: TUNE/MOX/Tune-Power/RF-Power deep-wired.
-// Phase 3M-1b J.2: VOX toggle + VoxSettingsPopup wired.
 // Phase 3M-1b J.3: MON toggle + monitor volume slider + mic-source badge wired.
+// Phase 3M-3a-iii bench polish (2026-05-04): VOX row relocated back from
+//   PhoneCwApplet — full row [VOX btn][threshold + peak strip][Hold slider].
 // Out-of-phase controls (2-Tone, PS-A) hidden.
 //
 // Control inventory:
@@ -127,8 +137,12 @@
 //  3.  RF Power slider   + label + value  [WIRED — 3M-1a H.3]
 //  4.  Tune Power slider + label + value  [WIRED — 3M-1a H.3]
 //      (Mic Gain slider relocated to PhoneCwApplet — 2026-04-28 relocation)
-//  4b. VOX toggle button — checkable, green:checked style  [WIRED — 3M-1b J.2]
-//      Right-click opens VoxSettingsPopup (threshold/gain/hang-time).
+//  4a. TUNE + MOX button row [WIRED — 3M-1a H.3]
+//  4b. VOX row — [VOX btn][Threshold slider + DexpPeakMeter strip][-N dB]
+//      [Hold slider 1..2000 ms][N ms]  [WIRED — 3M-3a-iii bench polish]
+//      Bidirectional with voxEnabled / voxThresholdDb / voxHangTimeMs.
+//      Right-click VOX → openSetupRequested("Transmit", "DEXP/VOX").
+//      Relocated from PhoneCwApplet Phone tab Control #10.
 //  4c. MON toggle button — checkable, blue:checked style  [WIRED — 3M-1b J.3]
 //      Bidirectional with TransmitModel::monEnabled (default false).
 //  4d. Monitor volume slider — 0..100 → monitorVolume 0.0..1.0  [WIRED — 3M-1b J.3]
@@ -152,12 +166,13 @@
 #include "gui/HGauge.h"
 #include "gui/StyleConstants.h"
 #include "gui/ComboStyle.h"
-#include "gui/widgets/VoxSettingsPopup.h"
+#include "gui/widgets/DexpPeakMeter.h"
 #include "core/audio/CompositeTxMicRouter.h"
 #include "core/MicProfileManager.h"
 #include "core/MoxController.h"
 #include "core/RadioStatus.h"
 #include "core/TwoToneController.h"
+#include "core/TxChannel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -174,6 +189,9 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
+
+#include <algorithm>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -224,18 +242,18 @@ void TxApplet::buildUI()
         vbox->addWidget(m_micSourceBadge);
     }
 
-    // ── 1. Forward Power gauge ── 0–120 W, redStart 100 W ───────────────────
-    // Ticks: 0 / 40 / 80 / 100 / 120  (AetherSDR TxApplet.cpp:71)
+    // ── 1. Forward Power gauge — per-SKU scale ──────────────────────────────
+    // Default ticks at construction match the Hermes-class 100 W radio
+    // (0 / 40 / 80 / 100 / 120 — AetherSDR TxApplet.cpp:71); rescaleFwdGaugeForModel()
+    // reapplies a per-SKU range when RadioModel::currentRadioChanged fires
+    // (wired in wireControls()).  Bench-reported #167 follow-up: HL2 reading
+    // 1-5 W on a 0-120 W scale was a barely-visible sliver; per-SKU scaling
+    // gives each radio a properly-sized meter.
     auto* fwdGauge = new HGauge(this);
-    fwdGauge->setRange(0.0, 120.0);
-    fwdGauge->setRedStart(100.0);
-    fwdGauge->setYellowStart(100.0); // same as red — no distinct yellow zone
     fwdGauge->setTitle(QStringLiteral("RF Pwr"));
-    fwdGauge->setTickLabels({QStringLiteral("0"), QStringLiteral("40"),
-                              QStringLiteral("80"), QStringLiteral("100"),
-                              QStringLiteral("120")});
     fwdGauge->setAccessibleName(QStringLiteral("Forward power gauge"));
     m_fwdPowerGauge = fwdGauge;
+    rescaleFwdGaugeForModel(HPSDRModel::FIRST);   // sentinel default until model known
     // 3M-1a (2026-04-27): wired to RadioStatus::powerChanged in
     // wireControls() — the gauge displays radio-reported forward
     // power in watts (scaleFwdPowerWatts'd at the model side).
@@ -262,6 +280,7 @@ void TxApplet::buildUI()
         rfSlider->setRange(0, 100);
         rfSlider->setValue(100);
         rfSlider->setAccessibleName(QStringLiteral("RF power"));
+        rfSlider->setObjectName(QStringLiteral("TxRfPowerSlider"));
 
         auto* rfValue = new QLabel(QStringLiteral("100"), this);
         rfValue->setFixedWidth(22);
@@ -362,34 +381,91 @@ void TxApplet::buildUI()
         vbox->addLayout(row);
     }
 
-    // ── 4b. VOX toggle button ─────────────────────────────────────────────────
-    // Phase 3M-1b J.2: below Tune Power slider.
-    // Checkable: green border when active (greenCheckedStyle()).
-    // voxEnabled does NOT persist — safety: VOX always loads OFF (plan §0 row 8).
-    // Right-click → showVoxSettingsPopup(pos) for threshold/gain/hang-time.
+    // ── 4b. VOX row (3M-3a-iii bench polish 2026-05-04) ───────────────────────
+    // Relocated from PhoneCwApplet (Phone tab Control #10).  Operators
+    // wanted the VOX engage surface next to MOX/TUNE on the right pane
+    // where they engage TX, not buried on the Phone tab.  Full row moves
+    // as a unit including the live DexpPeakMeter strip + 100 ms poller.
+    //
+    // Layout (Option B - full row):
+    //   [VOX btn 48px] | { Threshold slider top, DexpPeakMeter strip
+    //   below } | [-20 dB inset] | [Hold slider 1..2000 ms] | [500 ms inset]
+    //
+    // Threshold slider range -80..0 dB matches Thetis ptbVOX
+    // (console.Designer.cs:6018-6019 [v2.10.3.13]).  Hold slider range
+    // 1..2000 ms matches Thetis udDEXPHold (setup.designer.cs:45005-45013
+    // [v2.10.3.13]).  Default values mirror Thetis ptbVOX.Value=-20
+    // (console.Designer.cs:6024) and udDEXPHold.Value=500
+    // (setup.designer.cs:45020).
+    //
+    // Slider-stack: a small QVBoxLayout wraps the threshold slider (top)
+    // and DexpPeakMeter (below) so the live mic peak strip sits directly
+    // under the threshold knob — matches Thetis picVOX placement.
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
         m_voxBtn = new QPushButton(QStringLiteral("VOX"), this);
         m_voxBtn->setCheckable(true);
-        m_voxBtn->setChecked(false);  // default: OFF — plan §0 row 8 safety rule
+        m_voxBtn->setFixedWidth(48);
         m_voxBtn->setFixedHeight(22);
-        m_voxBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        m_voxBtn->setStyleSheet(Style::buttonBaseStyle() + Style::greenCheckedStyle());
-        m_voxBtn->setAccessibleName(QStringLiteral("VOX enable"));
+        m_voxBtn->setStyleSheet(Style::buttonBaseStyle()
+                                + Style::greenCheckedStyle());
+        m_voxBtn->setAccessibleName(QStringLiteral("VOX voice-operated transmit"));
+        m_voxBtn->setObjectName(QStringLiteral("TxVoxButton"));
         m_voxBtn->setToolTip(QStringLiteral(
-            "Voice-operated TX (VOX). Left-click to toggle.\n"
-            "Right-click for threshold/gain/hang-time settings.\n"
-            "Does NOT persist across restarts (safety)."));
-        // Custom context menu policy so right-click emits customContextMenuRequested.
+            "VOX — voice-operated transmit.  Left-click to toggle.\n"
+            "Right-click to open the DEXP/VOX setup page."));
+        // CustomContextMenu so right-click hits the openSetupRequested slot
+        // instead of the default platform menu.
         m_voxBtn->setContextMenuPolicy(Qt::CustomContextMenu);
-        row->addWidget(m_voxBtn, 1);
+        row->addWidget(m_voxBtn);
 
-        // Right-hand spacer so the button occupies ≈half the applet width
-        // (matching Thetis UI density where VOX is a single small button, not
-        // the full row). A stretch absorbs the remaining space.
-        row->addStretch();
+        // Threshold slider-stack: slider on top, DexpPeakMeter strip below.
+        auto* voxStackGroup = new QWidget(this);
+        auto* voxStackVbox = new QVBoxLayout(voxStackGroup);
+        voxStackVbox->setContentsMargins(0, 0, 0, 0);
+        voxStackVbox->setSpacing(1);
+
+        m_voxSlider = new QSlider(Qt::Horizontal, voxStackGroup);
+        // From Thetis console.Designer.cs:6018-6019 [v2.10.3.13]:
+        //   ptbVOX.Maximum = 0; ptbVOX.Minimum = -80;
+        m_voxSlider->setRange(-80, 0);
+        m_voxSlider->setValue(-20);
+        m_voxSlider->setFixedHeight(14);
+        m_voxSlider->setStyleSheet(Style::sliderHStyle());
+        m_voxSlider->setAccessibleName(QStringLiteral("VOX threshold (dB)"));
+        m_voxSlider->setObjectName(QStringLiteral("TxVoxThresholdSlider"));
+        voxStackVbox->addWidget(m_voxSlider);
+
+        m_voxPeakMeter = new DexpPeakMeter(voxStackGroup);
+        m_voxPeakMeter->setObjectName(QStringLiteral("TxVoxPeakMeter"));
+        m_voxPeakMeter->setAccessibleName(QStringLiteral("VOX live mic peak"));
+        voxStackVbox->addWidget(m_voxPeakMeter);
+
+        row->addWidget(voxStackGroup, 1);
+
+        m_voxLvlLabel = new QLabel(QStringLiteral("-20 dB"), this);
+        m_voxLvlLabel->setStyleSheet(Style::insetValueStyle());
+        m_voxLvlLabel->setFixedWidth(38);
+        m_voxLvlLabel->setAlignment(Qt::AlignCenter);
+        row->addWidget(m_voxLvlLabel);
+
+        m_voxDlySlider = new QSlider(Qt::Horizontal, this);
+        // From Thetis setup.designer.cs:45005-45013 [v2.10.3.13]:
+        //   udDEXPHold.Maximum = 2000; udDEXPHold.Minimum = 1; (units: ms)
+        m_voxDlySlider->setRange(1, 2000);
+        m_voxDlySlider->setValue(500);
+        m_voxDlySlider->setStyleSheet(Style::sliderHStyle());
+        m_voxDlySlider->setAccessibleName(QStringLiteral("VOX hold time (ms)"));
+        m_voxDlySlider->setObjectName(QStringLiteral("TxVoxHoldSlider"));
+        row->addWidget(m_voxDlySlider, 1);
+
+        m_voxDlyLabel = new QLabel(QStringLiteral("500 ms"), this);
+        m_voxDlyLabel->setStyleSheet(Style::insetValueStyle());
+        m_voxDlyLabel->setFixedWidth(42);
+        m_voxDlyLabel->setAlignment(Qt::AlignCenter);
+        row->addWidget(m_voxDlyLabel);
 
         vbox->addLayout(row);
     }
@@ -757,6 +833,40 @@ void TxApplet::wireControls()
     });
     fwdGaugeRefreshTimer->start();
 
+    // Bench-reported #167 follow-up: TxApplet's RF Pwr / SWR HGauges have
+    // their own EMA smoothing (m_fwdPowerSmoothedW, alpha=0.30) separate
+    // from the MeterPanel's BarItem stack.  A single zero from
+    // RadioStatus::powerChanged after un-key only walks the smoothed
+    // value down by 30% (e.g. 60 → 42), then no more updates flow so the
+    // gauge stays stuck at ~42.  Snap the smoothed state to 0 on MOX
+    // falling-edge so the gauge clears instantly — same idea as the
+    // BarItem clearSmoothing path in MeterPoller::setInTx.  Subscribed
+    // to MoxController::moxStateChanged (the authoritative TX boundary,
+    // covers MOX un-key AND TUNE release) rather than orphan
+    // TransmitModel::moxChanged signals.
+    if (m_model && m_model->moxController()) {
+        connect(m_model->moxController(), &MoxController::moxStateChanged,
+                this, [this](bool active) {
+            if (active) { return; }      // rising-edge: smoothing takes over
+            m_fwdPowerSmoothedW = 0.0;
+            if (m_fwdPowerGauge) { m_fwdPowerGauge->setValue(0.0); }
+            if (m_swrGauge)      { m_swrGauge->setValue(1.0); }
+        });
+    }
+
+    // Per-SKU RF Pwr gauge rescale.  Bench-reported #167 follow-up: the
+    // 0-120 W default scale made HL2 (5 W) and ANAN-G2-1K (1000 W) both
+    // unreadable.  Subscribe to currentRadioChanged so the gauge ticks
+    // and red-zone redraw whenever the active radio changes.
+    connect(m_model, &RadioModel::currentRadioChanged, this,
+            [this](const NereusSDR::RadioInfo&) {
+        rescaleFwdGaugeForModel(m_model->hardwareProfile().model);
+    });
+    // Apply the current model's scale at wireControls() time so cold-launch
+    // (or reconnect-on-startup) lands a properly-sized gauge before the
+    // first telemetry sample.
+    rescaleFwdGaugeForModel(m_model->hardwareProfile().model);
+
     // ── SWR Prot LED ← SwrProtectionController::highSwrChanged ─────────────
     // SwrProtectionController (Phase 3G-13) emits highSwrChanged(bool) when
     // the radio's SWR-protection state changes. Light the LED amber when
@@ -784,6 +894,29 @@ void TxApplet::wireControls()
         if (m_updatingFromModel) { return; }
         m_rfPowerValue->setText(QString::number(val));
         tx.setPower(val);
+        // Per-band write: matches Thetis ptbPWR_Scroll at console.cs:28642
+        // [v2.10.3.13] (`power_by_band[(int)_tx_band] = ptbPWR.Value;`).
+        // Without this, the per-band slot only updates indirectly via the
+        // setPowerUsingTargetDbm txMode-0 side-effect (TransmitModel.cpp:825),
+        // which is gated on connected radio + loaded PA profile + !TUNE.
+        // Result: slider moves while disconnected (or before profiles load)
+        // never persist across restart.  setPowerForBand auto-persists to
+        // hardware/<mac>/powerByBand/<band> when m_persistMac is non-empty.
+        //
+        // Source the band from the active slice (the canonical TX band per
+        // RadioModel.cpp:903-905), NOT m_currentBand.  m_currentBand tracks
+        // UI state and is fed by both PanadapterModel::bandChanged AND
+        // SliceModel::frequencyChanged, so it can drift to the panadapter
+        // band on CTUN pans without slice retune — writing through it would
+        // silently corrupt other bands' stored values.  txBand() falls back
+        // to m_currentBand when the active slice is unavailable.
+        tx.setPowerForBand(txBand(), val);
+        // Symmetric to the tune-slider auto-switch above: touching the RF
+        // Power slider restores the tune source to DriveSlider so the
+        // setPowerUsingTargetDbm txMode 1 branch reads tx.power() during
+        // TUNE.  Last-touched-slider-wins UX. From Thetis console.cs:46553
+        // [v2.10.3.13] DrivePowerSource.DRIVE_SLIDER is the canonical default.
+        tx.setTuneDrivePowerSource(DrivePowerSource::DriveSlider);
     });
 
     // Reverse: TransmitModel::powerChanged → slider
@@ -803,6 +936,17 @@ void TxApplet::wireControls()
         if (m_updatingFromModel) { return; }
         m_tunePwrValue->setText(QString::number(val));
         tx.setTunePowerForBand(m_currentBand, val);
+        // When the user touches the tune slider, switch the tune drive
+        // source so TUNE actually reads from tunePowerForBand instead of
+        // the regular drive slider (the default per Thetis console.cs:46553
+        // [v2.10.3.13]).  Without this the tune slider is dead UI: its
+        // value persists per-band but the math kernel
+        // (TransmitModel::setPowerUsingTargetDbm txMode 1) only consults
+        // tunePowerForBand when m_tuneDrivePowerSource == TuneSlider.
+        // NereusSDR-spin: Thetis exposes _tuneDrivePowerSource via a
+        // separate Setup combo; NereusSDR follows last-touched-slider-wins
+        // UX so users don't need to know the enum exists.
+        tx.setTuneDrivePowerSource(DrivePowerSource::TuneSlider);
     });
 
     // Reverse: TransmitModel::tunePowerByBandChanged → slider (only for current band)
@@ -897,27 +1041,126 @@ void TxApplet::wireControls()
         }
     }
 
-    // ── VOX toggle button ↔ TransmitModel::voxEnabled ────────────────────────
-    // Phase 3M-1b J.2.
-    // UI → Model: toggled → setVoxEnabled (with m_updatingFromModel guard).
-    // Model → UI: voxEnabledChanged → update checked state with QSignalBlocker.
-    // Right-click → showVoxSettingsPopup.
-    connect(m_voxBtn, &QPushButton::toggled, this, [this, &tx](bool on) {
-        if (m_updatingFromModel) { return; }
-        tx.setVoxEnabled(on);
-    });
+    // ── 4b. VOX row wiring (3M-3a-iii bench polish 2026-05-04) ────────────────
+    //
+    // Bidirectional binds for [VOX] toggle + threshold/hold sliders, plus
+    // right-click → openSetupRequested("Transmit", "DEXP/VOX") and a 100 ms
+    // QTimer driving m_voxPeakMeter (TxApplet::pollVoxMeter).
+    // Mirrors the wiring pattern from PhoneCwApplet (Phase 3M-3a-iii Task
+    // 15) — relocated here as part of the 2026-05-04 bench polish.
 
-    connect(&tx, &TransmitModel::voxEnabledChanged, this, [this](bool on) {
-        QSignalBlocker b(m_voxBtn);
-        m_updatingFromModel = true;
-        m_voxBtn->setChecked(on);
-        m_updatingFromModel = false;
-    });
+    // ── VOX [ON] toggle ↔ TransmitModel::voxEnabled ──────────────────────────
+    if (m_voxBtn) {
+        {
+            QSignalBlocker b(m_voxBtn);
+            m_voxBtn->setChecked(tx.voxEnabled());
+        }
+        // UI → Model
+        connect(m_voxBtn, &QPushButton::toggled, this, [this, &tx](bool on) {
+            if (m_updatingFromModel) { return; }
+            tx.setVoxEnabled(on);
+        });
+        // Model → UI
+        connect(&tx, &TransmitModel::voxEnabledChanged, this, [this](bool on) {
+            m_updatingFromModel = true;
+            {
+                QSignalBlocker b(m_voxBtn);
+                m_voxBtn->setChecked(on);
+            }
+            m_updatingFromModel = false;
+        });
+    }
 
-    connect(m_voxBtn, &QPushButton::customContextMenuRequested,
-            this, [this](const QPoint& pos) {
-        showVoxSettingsPopup(pos);
-    });
+    // ── VOX threshold slider ↔ TransmitModel::voxThresholdDb ─────────────────
+    // Range -80..0 dB from console.Designer.cs:6018-6019 [v2.10.3.13]
+    // (already set in buildUI).  Default value -20 dB matches Thetis
+    // ptbVOX.Value=-20 (console.Designer.cs:6024 [v2.10.3.13]).
+    if (m_voxSlider) {
+        {
+            QSignalBlocker b(m_voxSlider);
+            m_voxSlider->setValue(tx.voxThresholdDb());
+        }
+        if (m_voxLvlLabel) {
+            m_voxLvlLabel->setText(QStringLiteral("%1 dB").arg(tx.voxThresholdDb()));
+        }
+        // UI → Model + label refresh
+        connect(m_voxSlider, &QSlider::valueChanged, this, [this, &tx](int dB) {
+            if (m_voxLvlLabel) {
+                m_voxLvlLabel->setText(QStringLiteral("%1 dB").arg(dB));
+            }
+            if (m_updatingFromModel) { return; }
+            tx.setVoxThresholdDb(dB);
+        });
+        // Model → UI
+        connect(&tx, &TransmitModel::voxThresholdDbChanged, this, [this](int dB) {
+            m_updatingFromModel = true;
+            {
+                QSignalBlocker b(m_voxSlider);
+                m_voxSlider->setValue(dB);
+            }
+            if (m_voxLvlLabel) {
+                m_voxLvlLabel->setText(QStringLiteral("%1 dB").arg(dB));
+            }
+            m_updatingFromModel = false;
+        });
+    }
+
+    // ── VOX Hold slider ↔ TransmitModel::voxHangTimeMs ───────────────────────
+    // Range 1..2000 ms from setup.designer.cs:45005-45013 [v2.10.3.13]
+    // (already set in buildUI).  Default 500 ms matches udDEXPHold.Value
+    // (setup.designer.cs:45020 [v2.10.3.13]).
+    if (m_voxDlySlider) {
+        {
+            QSignalBlocker b(m_voxDlySlider);
+            m_voxDlySlider->setValue(tx.voxHangTimeMs());
+        }
+        if (m_voxDlyLabel) {
+            m_voxDlyLabel->setText(QStringLiteral("%1 ms").arg(tx.voxHangTimeMs()));
+        }
+        // UI → Model + label refresh
+        connect(m_voxDlySlider, &QSlider::valueChanged, this, [this, &tx](int ms) {
+            if (m_voxDlyLabel) {
+                m_voxDlyLabel->setText(QStringLiteral("%1 ms").arg(ms));
+            }
+            if (m_updatingFromModel) { return; }
+            tx.setVoxHangTimeMs(ms);
+        });
+        // Model → UI
+        connect(&tx, &TransmitModel::voxHangTimeMsChanged, this, [this](int ms) {
+            m_updatingFromModel = true;
+            {
+                QSignalBlocker b(m_voxDlySlider);
+                m_voxDlySlider->setValue(ms);
+            }
+            if (m_voxDlyLabel) {
+                m_voxDlyLabel->setText(QStringLiteral("%1 ms").arg(ms));
+            }
+            m_updatingFromModel = false;
+        });
+    }
+
+    // ── Right-click on VOX → emit openSetupRequested ─────────────────────────
+    // Mirrors PhoneCwApplet's DEXP-button right-click pattern.  MainWindow
+    // listens and jumps the SetupDialog to the "DEXP/VOX" leaf page.
+    if (m_voxBtn) {
+        connect(m_voxBtn, &QPushButton::customContextMenuRequested, this,
+                [this](const QPoint&) {
+            emit openSetupRequested(QStringLiteral("Transmit"),
+                                    QStringLiteral("DEXP/VOX"));
+        });
+    }
+
+    // ── 100 ms timer driving m_voxPeakMeter ──────────────────────────────────
+    // Cadence matches Thetis UpdateNoiseGate Task.Delay(100) at
+    // console.cs:25347 [v2.10.3.13].  Stops automatically when the applet
+    // is destroyed (parented to `this`).  Continuous (NOT MOX-gated) since
+    // GetDEXPPeakSignal is the live DEXP detector envelope, not the
+    // TX-pipeline meter.
+    m_voxMeterTimer = new QTimer(this);
+    m_voxMeterTimer->setInterval(100);
+    connect(m_voxMeterTimer, &QTimer::timeout,
+            this, &TxApplet::pollVoxMeter);
+    m_voxMeterTimer->start();
 
     // ── MON toggle button ↔ TransmitModel::monEnabled ────────────────────────
     // Phase 3M-1b J.3.
@@ -1149,13 +1392,34 @@ void TxApplet::syncFromModel()
         m_tunePwrValue->setText(QString::number(tunePwr));
     }
 
-    // VOX button state (J.2 Phase 3M-1b)
-    // voxEnabled intentionally loads as OFF — plan §0 row 8 safety rule.
-    // We still read the model so that if setVoxEnabled was called programmatically
-    // before the applet was shown, the UI reflects the actual model state.
+    // VOX [ON] toggle + Threshold slider + Hold slider
+    // (3M-3a-iii bench polish 2026-05-04 — relocated from PhoneCwApplet).
+    // Bidirectional sync to TransmitModel::voxEnabled / voxThresholdDb /
+    // voxHangTimeMs.  Note: voxEnabled is NEVER persisted (safety: VOX
+    // always starts OFF), but we still pull whatever the current model
+    // state is so any other UI surface (e.g. Setup → DEXP/VOX page) stays
+    // in agreement.
     if (m_voxBtn) {
         QSignalBlocker bv(m_voxBtn);
         m_voxBtn->setChecked(tx.voxEnabled());
+    }
+    if (m_voxSlider) {
+        {
+            QSignalBlocker b(m_voxSlider);
+            m_voxSlider->setValue(tx.voxThresholdDb());
+        }
+        if (m_voxLvlLabel) {
+            m_voxLvlLabel->setText(QStringLiteral("%1 dB").arg(tx.voxThresholdDb()));
+        }
+    }
+    if (m_voxDlySlider) {
+        {
+            QSignalBlocker b(m_voxDlySlider);
+            m_voxDlySlider->setValue(tx.voxHangTimeMs());
+        }
+        if (m_voxDlyLabel) {
+            m_voxDlyLabel->setText(QStringLiteral("%1 ms").arg(tx.voxHangTimeMs()));
+        }
     }
 
     // MON button state (J.3 Phase 3M-1b)
@@ -1227,54 +1491,106 @@ void TxApplet::syncFromModel()
     m_updatingFromModel = false;
 }
 
-// ── Phase 3M-1b J.2: showVoxSettingsPopup ────────────────────────────────────
-//
-// Opens a VoxSettingsPopup anchored near the VOX button. The popup is
-// auto-delete (Qt::Popup + WA_DeleteOnClose) so no ownership management is
-// needed here. Each slider in the popup drives the corresponding TransmitModel
-// setter via a direct signal connection.
-void TxApplet::showVoxSettingsPopup(const QPoint& pos)
+// (Phase 3M-1b J.2 showVoxSettingsPopup removed in 3M-3a-iii Task 16 —
+//  the wired VOX surface lives on PhoneCwApplet now, and the per-parameter
+//  popup gave way to right-click → Setup → Transmit → DEXP/VOX.)
+
+void TxApplet::rescaleFwdGaugeForModel(HPSDRModel model)
 {
-    if (!m_model) { return; }
+    if (!m_fwdPowerGauge) { return; }
 
-    TransmitModel& tx = m_model->transmitModel();
+    // Per-SKU PA ceiling from HpsdrModel.h paMaxWattsFor().  Bench-reported
+    // #167 follow-up: 0-120 W default scale made HL2 (5 W max) and
+    // ANAN-G2-1K (1000 W max) both show meaningless bar widths.
+    const int maxW   = paMaxWattsFor(model);
+    const double red = static_cast<double>(maxW);
+    const double top = red * 1.2;   // 20% headroom past the red zone
 
-    // Construct the popup with the current model values so sliders start in sync.
-    auto* popup = new VoxSettingsPopup(
-        tx.voxThresholdDb(),
-        tx.voxGainScalar(),
-        tx.voxHangTimeMs(),
-        nullptr);  // Qt::Popup window manages its own lifetime
+    m_fwdPowerGauge->setRange(0.0, top);
+    m_fwdPowerGauge->setRedStart(red);
+    m_fwdPowerGauge->setYellowStart(red);   // no distinct yellow zone
 
-    // Wire popup signals → model setters.
-    connect(popup, &VoxSettingsPopup::thresholdDbChanged,
-            &tx,   &TransmitModel::setVoxThresholdDb);
-    connect(popup, &VoxSettingsPopup::gainScalarChanged,
-            &tx,   &TransmitModel::setVoxGainScalar);
-    connect(popup, &VoxSettingsPopup::hangTimeMsChanged,
-            &tx,   &TransmitModel::setVoxHangTimeMs);
+    // Pick five ticks proportional to the new range: 0 / 1/3 / 2/3 / red / top.
+    // For HL2 (red=5): 0 / 1.7 / 3.3 / 5 / 6.  For ANAN-100 (red=100):
+    // 0 / 33 / 67 / 100 / 120.  For ANAN-G2-1K (red=1000): 0 / 333 / 667 / 1000 / 1200.
+    auto fmt = [maxW](double v) {
+        return (maxW <= 10) ? QString::number(v, 'f', 1)   // sub-watt resolution for QRP
+                            : QString::number(qRound(v));
+    };
+    m_fwdPowerGauge->setTickLabels({
+        fmt(0.0),
+        fmt(red / 3.0),
+        fmt(2.0 * red / 3.0),
+        fmt(red),
+        fmt(top),
+    });
+}
 
-    // Map the button-local position to global so showAt() can position correctly.
-    const QPoint globalPos = m_voxBtn
-        ? m_voxBtn->mapToGlobal(pos)
-        : mapToGlobal(pos);
-    popup->showAt(globalPos);
+// Canonical TX band — derived from the active slice's frequency (which
+// is what RadioModel.cpp:903-905 uses to compose the TX wire byte).
+// Falls back to m_currentBand when:
+//   - m_model is null (early bootstrap — TxApplet exists before
+//     RadioModel pointer wired up; see TxApplet ctor parent),
+//   - activeSlice() is null (no slice yet — first launch before
+//     addSlice fires, or post-disconnect cleanup state).
+// In both fallback cases m_currentBand is the best information we have
+// and is what the pre-fix code already used.
+Band TxApplet::txBand() const
+{
+    if (!m_model) { return m_currentBand; }
+    SliceModel* slice = m_model->activeSlice();
+    if (!slice) { return m_currentBand; }
+    return bandFromFrequency(slice->frequency());
 }
 
 void TxApplet::setCurrentBand(Band band)
 {
-    if (m_currentBand == band) { return; }
+    // No same-band early-return: the bootstrap call from
+    // MainWindow.cpp:1578 (`txApplet->setCurrentBand(pan0->band())`) fires
+    // with band == m_currentBand-default (Band20m) when the panadapter
+    // also opens on 20m, and we still need that call to push the loaded
+    // per-band slider values into the UI on first paint.  Re-running the
+    // sync on identical input is idempotent — QSlider::setValue same-value
+    // is a no-op, and TransmitModel::setPower / setTunePowerForBand have
+    // their own same-value early-returns — so the cost is negligible and
+    // the win is correct first-paint behaviour after loadFromSettings.
     m_currentBand = band;
 
     if (!m_model) { return; }
 
-    // Update the Tune Power slider to reflect the stored value for the new band.
-    const int tunePwr = m_model->transmitModel().tunePowerForBand(band);
-    QSignalBlocker b(m_tunePwrSlider);
-    m_updatingFromModel = true;
-    m_tunePwrSlider->setValue(tunePwr);
-    m_tunePwrValue->setText(QString::number(tunePwr));
-    m_updatingFromModel = false;
+    auto& tx = m_model->transmitModel();
+
+    // Update the Tune Power slider to reflect the per-band stored value.
+    {
+        const int tunePwr = tx.tunePowerForBand(band);
+        QSignalBlocker b(m_tunePwrSlider);
+        m_updatingFromModel = true;
+        m_tunePwrSlider->setValue(tunePwr);
+        m_tunePwrValue->setText(QString::number(tunePwr));
+        m_updatingFromModel = false;
+    }
+
+    // Update the RF Power slider to reflect the per-band stored value —
+    // ONLY when the band passed in is the canonical TX band (i.e. the
+    // active slice's band).  Matches Thetis TXBand setter at
+    // console.cs:17513 [v2.10.3.13] (`PWR = power_by_band[(int)value];`),
+    // where `_tx_band` is single-source-of-truth for TX state.
+    //
+    // Why the gate: setCurrentBand is wired in MainWindow to BOTH
+    // PanadapterModel::bandChanged and SliceModel::frequencyChanged, so it
+    // can fire from a CTUN pan that does NOT change the slice.  Recalling
+    // the panadapter band's RF power into the live slider would (a) jump
+    // the displayed value off the actual TX band, and (b) leak that
+    // wrong value back into the active slice's band slot via the
+    // setPowerUsingTargetDbm txMode-0 side-effect on the next powerChanged
+    // emission — silently corrupting per-band storage.
+    //
+    // Routed through setPower so the existing reverse-binding lambda
+    // (TxApplet.cpp:905) paints the slider; setPower's same-value
+    // early-return makes the no-band-change call free.
+    if (band == txBand()) {
+        tx.setPower(tx.powerForBand(band));
+    }
 }
 
 // ── Phase 3M-1b K.2: tooltipForMode ──────────────────────────────────────────
@@ -1333,6 +1649,41 @@ void TxApplet::onMoxModeChanged(DSPMode mode)
     if (m_moxBtn) {
         m_moxBtn->setToolTip(tooltipForMode(mode));
     }
+}
+
+// ── pollVoxMeter — Phase 3M-3a-iii bench polish 2026-05-04 ─────────────────
+// 100 ms tick that drives m_voxPeakMeter on the TX right pane.
+//
+//   VOX peak (linear amplitude from TxChannel::getDexpPeakSignal()):
+//     • 20 * log10(linear) → dB.
+//     • Map -80..0 dB → 0..1 normalized (range matches Thetis ptbVOX scale
+//       per console.Designer.cs:6018-6019 [v2.10.3.13]).
+//     • Threshold marker pulled from TransmitModel::voxThresholdDb() and
+//       mapped through the same -80..0 → 0..1 transform.
+//
+// Continuous (NOT MOX-gated) since GetDEXPPeakSignal is the live DEXP
+// detector envelope, not the TX-pipeline meter.  Same rationale as the
+// PhoneCwApplet::pollDexpMeters comment — see that file for the full
+// narrative.  Relocated from PhoneCwApplet as part of the 2026-05-04 bench
+// polish (VOX row moved to TxApplet under TUNE/MOX).
+void TxApplet::pollVoxMeter()
+{
+    if (!m_model) { return; }
+    TxChannel* ch = m_model->txChannel();
+    if (!ch || !m_voxPeakMeter) { return; }
+
+    // VOX peak: linear amplitude → dB → 0..1 over -80..0 range.
+    const double linearPeak = ch->getDexpPeakSignal();
+    const double voxPeakDb  = (linearPeak > 0.0)
+        ? 20.0 * std::log10(linearPeak)
+        : -80.0;
+    const double voxPeak01  = std::clamp((voxPeakDb + 80.0) / 80.0, 0.0, 1.0);
+    m_voxPeakMeter->setSignalLevel(voxPeak01);
+
+    // VOX threshold marker: voxThresholdDb is in -80..0 dB range.
+    const int thDb = m_model->transmitModel().voxThresholdDb();
+    m_voxPeakMeter->setThresholdMarker(
+        std::clamp((thDb + 80.0) / 80.0, 0.0, 1.0));
 }
 
 // ---------------------------------------------------------------------------

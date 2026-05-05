@@ -780,6 +780,28 @@ void MainWindow::buildUI()
     connect(m_radioModel, &RadioModel::currentRadioChanged, this,
             pushCapsToAllContainers);
 
+    // Per-SKU power-meter rescale.  Bench-reported #167 follow-up: the
+    // top MeterPanel BarItem stack ships with a 0-120 W default that
+    // makes HL2 (5 W) a sliver and ANAN-G2-1K (1000 W) saturate.  When
+    // the active radio changes, ask every MeterWidget to rescale its
+    // PowerBar / PowerScale pair to the new SKU's PA ceiling.  Same
+    // paMaxWattsFor() helper TxApplet uses for its RF Pwr HGauge so
+    // both meter surfaces share a single source of truth.
+    auto rescaleAllPowerMeters = [this]() {
+        const HPSDRModel m = m_radioModel->hardwareProfile().model;
+        const int maxW     = paMaxWattsFor(m);
+        if (m_meterWidget) {
+            m_meterWidget->rescalePowerMeters(maxW);
+        }
+        for (ContainerWidget* c : m_containerManager->allContainers()) {
+            for (MeterWidget* mw : c->findChildren<MeterWidget*>()) {
+                mw->rescalePowerMeters(maxW);
+            }
+        }
+    };
+    connect(m_radioModel, &RadioModel::currentRadioChanged, this,
+            rescaleAllPowerMeters);
+
     // Issue #118 — helper: wire a container's bandClicked signal through
     // the RadioModel handler. Invoked from the containerAdded callback,
     // which fires for every container materialized by ContainerManager
@@ -859,6 +881,49 @@ void MainWindow::buildUI()
     connect(m_radioModel, &RadioModel::sliceAdded, this, [this](int index) {
         if (index == 0) {
             wireSliceToSpectrum();
+        }
+    });
+
+    // Push restored slice state into spectrum + VFO views once
+    // RadioModel::loadSliceState() completes.
+    //
+    // wireSliceToSpectrum() above runs at sliceAdded() time — BEFORE
+    // loadSliceState() runs inside connectToRadio.  At that earlier moment
+    // the slice still holds its pre-restore default values, so the
+    // spectrum widget's m_ddcCenterHz, center freq, and VFO freq were
+    // seeded with the default (typically 14.225 MHz / 20m).  After
+    // loadSliceState() restores the persisted band/freq/mode/filter,
+    // SliceModel::frequencyChanged is gated by qFuzzyCompare and by the
+    // CTUN-shift branch in wireSliceToSpectrum's frequencyChanged lambda
+    // (the offScreen path that calls setDdcCenterFrequency only fires
+    // when persisted freq is OUTSIDE default ±halfBw).  Without an
+    // explicit re-push, m_ddcCenterHz stays at the default and spectrum
+    // bin labels point to the wrong band of RF until the first dial-
+    // tune crosses the offScreen threshold.
+    //
+    // Mirrors Thetis txtVFOAFreq_LostFocus's unconditional Display.VFOA
+    // / Display.CentreFreqRX1 push at console.cs:31272 + 15378
+    // [v2.10.3.13], invoked from chkPower_CheckedChanged at
+    // console.cs:27204 [v2.10.3.13] as the explicit "push state to
+    // display" step on power-on.
+    connect(m_radioModel, &RadioModel::sliceStateRestored, this,
+            [this](int index) {
+        if (index != 0 || !m_spectrumWidget) {
+            return;
+        }
+        SliceModel* slice = m_radioModel->activeSlice();
+        if (!slice) {
+            return;
+        }
+        const double freq = slice->frequency();
+        m_spectrumWidget->setCenterFrequency(freq);
+        m_spectrumWidget->setDdcCenterFrequency(freq);
+        m_spectrumWidget->setVfoFrequency(freq);
+        m_spectrumWidget->setFilterOffset(slice->filterLow(), slice->filterHigh());
+        if (m_vfoWidget) {
+            m_vfoWidget->setFrequency(freq);
+            m_vfoWidget->setMode(slice->dspMode());
+            m_vfoWidget->setFilter(slice->filterLow(), slice->filterHigh());
         }
     });
 
@@ -3745,6 +3810,40 @@ void MainWindow::wireSliceToSpectrum()
         // RxApplet openNbSetupRequested wiring removed 2026-04-22 —
         // RxApplet no longer hosts any NB controls (strict Thetis parity).
         // VfoWidget::openNbSetupRequested above handles the NB→Setup hop.
+    }
+
+    // --- PhoneCwApplet → Setup → Transmit → DEXP/VOX page (Phase 3M-3a-iii Task 15).
+    // Right-click on the DEXP [ON] button on the Phone tab opens the
+    // SetupDialog and jumps to the DexpVoxPage leaf (Task 14).  Mirrors
+    // the SpeechProcessorPage cross-link pattern (TransmitSetupPages.h:201).
+    // (VOX-button right-click moved to TxApplet 2026-05-04 with the rest
+    // of the VOX surface — see the TxApplet connect just below.)
+    if (m_phoneCwApplet) {
+        connect(m_phoneCwApplet, &PhoneCwApplet::openSetupRequested, this,
+                [this](const QString& /*category*/, const QString& page) {
+            auto* dialog = new SetupDialog(m_radioModel, this);
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            wireSetupDialog(dialog);
+            dialog->selectPage(page);
+            dialog->show();
+            dialog->raise();
+        });
+    }
+
+    // --- TxApplet → Setup → Transmit → DEXP/VOX page (3M-3a-iii bench polish 2026-05-04).
+    // Right-click on the VOX button (relocated from PhoneCwApplet) opens
+    // the same DexpVoxPage leaf.  Same lambda body as the PhoneCwApplet
+    // connect above.
+    if (m_txApplet) {
+        connect(m_txApplet, &TxApplet::openSetupRequested, this,
+                [this](const QString& /*category*/, const QString& page) {
+            auto* dialog = new SetupDialog(m_radioModel, this);
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            wireSetupDialog(dialog);
+            dialog->selectPage(page);
+            dialog->show();
+            dialog->raise();
+        });
     }
 
     // --- Wire overlay Band flyout to RadioModel band-click handler (#118) ---

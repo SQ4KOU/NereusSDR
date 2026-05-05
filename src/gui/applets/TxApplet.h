@@ -28,6 +28,7 @@
 //                 TransmitModel::voxEnabled (default false; does NOT persist).
 //                 Right-click opens VoxSettingsPopup with 3 sliders for
 //                 threshold/gain/hang-time.
+//                 (REMOVED 2026-05-03 — see 3M-3a-iii Task 16 entry below.)
 //   2026-04-28 — Phase 3M-1b J.3: MON toggle button + monitor volume slider
 //                 added below VOX. Bidirectional with TransmitModel::monEnabled
 //                 and TransmitModel::monitorVolume (default 0.5f). Mic-source
@@ -62,6 +63,22 @@
 //                 PROC wiring moved to PhoneCwApplet; row drops to [LEV][EQ][CFC].
 //   2026-05-02 — Plan 4 Cluster C (Task 4 / D2+D3+D9-status): TX BW spinbox
 //                 row + status label added.  See TxApplet.cpp for details.
+//   2026-05-03 — Phase 3M-3a-iii Task 16: VOX toggle button removed from TxApplet
+//                 (was a duplicate — PhoneCwApplet now owns the canonical VOX
+//                 surface as part of the 3M-3a-iii Phone-tab DEXP/VOX wiring).
+//                 Same dedup pattern as 3M-3a-ii PROC cleanup.  VoxSettingsPopup
+//                 widget retired alongside (no remaining callers).
+//   2026-05-04 — Phase 3M-3a-iii bench polish: VOX row relocated from
+//                 PhoneCwApplet (Phone tab Control #10) back to TxApplet as
+//                 a full row directly under TUNE/MOX (Option B).  Operators
+//                 want the VOX engage surface next to MOX/TUNE on the right
+//                 pane where they engage TX, not buried on the Phone tab.
+//                 The full row moves as a unit: [VOX btn][threshold slider
+//                 + DexpPeakMeter strip][threshold value label][Hold slider]
+//                 [Hold value label].  Right-click on VOX still opens
+//                 Setup → Transmit → DEXP/VOX (mirrors PhoneCwApplet's DEXP
+//                 button pattern).  100 ms VOX peak-meter poller moves with
+//                 the row.  DEXP row stays on PhoneCwApplet — only VOX moves.
 // =================================================================
 
 //=================================================================
@@ -129,6 +146,7 @@
 
 #include "AppletWidget.h"
 #include "models/Band.h"
+#include "core/HpsdrModel.h"   // HPSDRModel for rescaleFwdGaugeForModel
 #include "core/WdspTypes.h"
 
 class QPushButton;
@@ -136,6 +154,7 @@ class QSlider;
 class QComboBox;
 class QLabel;
 class QSpinBox;
+class QTimer;
 
 namespace NereusSDR {
 
@@ -143,6 +162,7 @@ class HGauge;
 class MicProfileManager;
 class TwoToneController;
 class TxCfcDialog;
+class DexpPeakMeter;
 
 // TxApplet — transmit controls panel.
 //
@@ -151,9 +171,14 @@ class TxCfcDialog;
 //  1.  Forward Power gauge  — HGauge 0–120 W, red > 100 W
 //  2.  SWR gauge            — HGauge 1.0–3.0, red > 2.5
 //  3.  RF Power slider row  — label(62) + slider + value(22)
-//  4.  Tune Power slider row
-//  4b. VOX toggle button    — checkable, green border on active [J.2 Phase 3M-1b]
-//      Right-click: VoxSettingsPopup with threshold/gain/hang-time sliders.
+//  4a. Tune Power slider row
+//  4a. TUNE + MOX button row (50% each)
+//  4b. VOX row [3M-3a-iii bench polish 2026-05-04]
+//      [VOX btn 48px] [Threshold slider + DexpPeakMeter stack][-N dB inset]
+//      [Hold slider 1..2000 ms][N ms inset]
+//      Bidirectional with TransmitModel::voxEnabled / voxThresholdDb /
+//      voxHangTimeMs.  Right-click on VOX → openSetupRequested("Transmit",
+//      "DEXP/VOX").  Relocated from PhoneCwApplet Phone tab Control #10.
 //  4c. MON toggle button    — checkable, blue border on active [J.3 Phase 3M-1b]
 //      Bidirectional with TransmitModel::monEnabled (default false).
 //  4d. Monitor volume slider — 0..100 → monitorVolume 0.0..1.0 [J.3 Phase 3M-1b]
@@ -174,8 +199,11 @@ class TxCfcDialog;
 //       PhoneCwApplet (#5 slot) per JJ feedback (2026-04-28 relocation).
 //
 // Phase 3M-1a H.3: TUNE/MOX/Tune-Power/RF-Power are deep-wired.
-// Phase 3M-1b J.2: VOX toggle + VoxSettingsPopup wired.
 // Phase 3M-1b J.3: MON toggle + volume slider + mic-source badge wired.
+// Phase 3M-3a-iii bench polish (2026-05-04): VOX row relocated from
+//   PhoneCwApplet (Phone tab #10) back to TxApplet — operators wanted the
+//   VOX engage surface next to MOX/TUNE on the right pane.  Full row moves
+//   as a unit including the live DexpPeakMeter strip + 100 ms poller.
 // Out-of-phase controls (2-Tone, PS-A) are hidden.
 class TxApplet : public AppletWidget {
     Q_OBJECT
@@ -190,6 +218,12 @@ public:
     // can reflect the stored per-band tune power.
     // Phase 3M-1a H.3.
     void setCurrentBand(Band band);
+
+    // Rescale the RF Pwr HGauge ticks + redzone for the connected SKU's
+    // PA ceiling.  Called from currentRadioChanged subscriber wired in
+    // wireControls().  HPSDRModel::FIRST is a safe sentinel default
+    // (yields 100 W ceiling).  Bench-reported #167 follow-up.
+    void rescaleFwdGaugeForModel(HPSDRModel model);
 
     // K.2: MOX button tooltip override based on current DSP mode.
     // Public static so tests can call it directly without constructing a full
@@ -239,14 +273,43 @@ signals:
     // the "TX Profile" page.  The signal carries no payload.
     void txProfileMenuRequested();
 
+    // ── Phase 3M-3a-iii bench polish (2026-05-04) ──────────────────────────
+    /// Right-click on the VOX button opens Setup → Transmit → DEXP/VOX.
+    /// Mirrors PhoneCwApplet::openSetupRequested (kept on PhoneCwApplet for
+    /// the DEXP row).  MainWindow listens and jumps the SetupDialog to the
+    /// requested leaf page.  `category` is informational (currently always
+    /// "Transmit"); `page` is the SetupDialog leaf-item label (currently
+    /// always "DEXP/VOX").
+    void openSetupRequested(const QString& category, const QString& page);
+
+private slots:
+    /// Phase 3M-3a-iii bench polish (2026-05-04): 100 ms timer slot — pulls
+    /// live VOX peak from TxChannel::getDexpPeakSignal(), maps it to 0..1
+    /// and pushes to m_voxPeakMeter; pulls voxThresholdDb from TM and pushes
+    /// the threshold marker line.  Continuous (NOT MOX-gated) since
+    /// GetDEXPPeakSignal is the live DEXP detector envelope, not the
+    /// TX-pipeline meter.  Cadence matches Thetis UpdateNoiseGate
+    /// Task.Delay(100) at console.cs:25347 [v2.10.3.13].
+    void pollVoxMeter();
+
 private:
     void buildUI();
     void wireControls();  // called after buildUI() — attaches signals/slots
-    // J.2: VOX settings right-click popup.
-    void showVoxSettingsPopup(const QPoint& pos);
     // K.2: slot called when SliceModel::dspModeChanged fires (via RadioModel).
     // Updates m_moxBtn->setToolTip(tooltipForMode(mode)).
     void onMoxModeChanged(DSPMode mode);
+
+    // Canonical TX band derived from the active slice's frequency.  This
+    // is the band the radio actually transmits on (RadioModel.cpp:903-905
+    // uses the same expression for the TX wire path).  Distinct from
+    // m_currentBand, which tracks UI state and is fed by both
+    // PanadapterModel::bandChanged AND SliceModel::frequencyChanged from
+    // MainWindow — m_currentBand can drift to the panadapter band when
+    // the user pans without retuning the slice (CTUN), so it is NOT safe
+    // to use as the storage key for per-band TX state.  Falls back to
+    // m_currentBand when the active slice is unavailable (early bootstrap
+    // or after disconnection).
+    Band txBand() const;
 
     // ── J.1: combo refresh helpers ──────────────────────────────────────────
     // Rebuild combo entries from m_micProfileMgr->profileNames(), preserving
@@ -276,8 +339,25 @@ private:
     // 4. Tune Power
     QSlider* m_tunePwrSlider  = nullptr;
     QLabel*  m_tunePwrValue   = nullptr;
-    // 4b. VOX toggle (J.2 Phase 3M-1b)
-    QPushButton* m_voxBtn     = nullptr;
+    // ── 4b. VOX row (3M-3a-iii bench polish 2026-05-04) ───────────────────
+    // Relocated from PhoneCwApplet (Phone tab Control #10).  Layout:
+    //   [VOX btn 48px] [Threshold slider + DexpPeakMeter stack][-N dB inset]
+    //   [Hold slider 1..2000 ms][N ms inset]
+    // Threshold range -80..0 dB matches Thetis ptbVOX
+    // (console.Designer.cs:6018-6019 [v2.10.3.13]).
+    // Hold range 1..2000 ms matches Thetis udDEXPHold
+    // (setup.designer.cs:45005-45013 [v2.10.3.13]).
+    // Bidirectional with TransmitModel::voxEnabled / voxThresholdDb /
+    // voxHangTimeMs.  Right-click on the VOX button → openSetupRequested.
+    QPushButton*    m_voxBtn{nullptr};
+    QSlider*        m_voxSlider{nullptr};         // VOX threshold (-80..0 dB)
+    QLabel*         m_voxLvlLabel{nullptr};
+    QSlider*        m_voxDlySlider{nullptr};      // Hold time (1..2000 ms)
+    QLabel*         m_voxDlyLabel{nullptr};
+    DexpPeakMeter*  m_voxPeakMeter{nullptr};
+    // 100 ms QTimer driving m_voxPeakMeter.  Cadence matches Thetis
+    // UpdateNoiseGate Task.Delay(100) at console.cs:25347 [v2.10.3.13].
+    QTimer*         m_voxMeterTimer{nullptr};
     // 4c. MON toggle (J.3 Phase 3M-1b) — bidirectional with TransmitModel::monEnabled
     QPushButton* m_monBtn     = nullptr;
     // 4d. Monitor volume slider (J.3 Phase 3M-1b) — 0..100 → monitorVolume 0.0..1.0

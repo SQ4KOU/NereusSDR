@@ -15,6 +15,26 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
+//                 hotfix — K2GX field report).  Drive-slider lambda
+//                 (lines ~830) and TUNE-engagement path (lines ~4280)
+//                 rewritten to route through
+//                 TransmitModel::setPowerUsingTargetDbm (Phase 3C deep-
+//                 parity port of Thetis SetPowerUsingTargetDBM,
+//                 console.cs:46645-46762 [v2.10.3.13]).  Wire-byte /
+//                 IQ-scalar topology corrected per Thetis MW0LGE-canonical
+//                 (audio.cs:262-271 wire NO SWR / cmaster.cs:1115-1119 IQ
+//                 HAS SWR via TxChannel::setTxFixedGain).  Replaces the
+//                 previous fork-specific linear formula (cited to mi0bot
+//                 NetworkIO.cs:209-211 [v2.10.3.14-beta1]) that produced
+//                 K2GX's >300 W output on a 200 W ANAN-8000DLE at 80m
+//                 TUN slider=50.  Adds RadioModel ownership of
+//                 PaProfileManager (mirrors MicProfileManager pattern);
+//                 active profile passed by const-ref to setPowerUsingTargetDbm
+//                 at every callsite.  Adds StepAttenuatorController
+//                 propagation to TransmitModel::setStepAttenuatorController
+//                 inside RadioModel::setStepAttController.  J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -232,6 +252,9 @@ warren@wpratt.com
 // TxMicRouter is already included via RadioModel.h (for std::unique_ptr destructor).
 #include "core/MoxController.h"
 #include "core/MicProfileManager.h"
+#include "core/PaProfile.h"
+#include "core/PaProfileManager.h"
+#include "core/PaTelemetryScaling.h"
 #include "core/StepAttenuatorController.h"
 #include "core/TwoToneController.h"
 #include "models/FilterPresetStore.h"
@@ -292,61 +315,13 @@ namespace NereusSDR {
 // preserved exactly per CLAUDE.md "Constants and Magic Numbers" rule.
 namespace {
 
-// From Thetis console.cs:25008-25072 [@501e3f5] computeAlexFwdPower():
-//   float volts = (adc - adc_cal_offset) / 4095.0f * refvoltage;
-//   if (volts < 0) volts = 0;
-//   float watts = Math.Pow(volts, 2) / bridge_volt;
-//
-// Upstream inline attribution preserved verbatim:
-//   :25007  case HPSDRModel.ANAN_G1: //N1GP G1 added
-//   :25038  case HPSDRModel.REDPITAYA: //DH1KLM
-//
-// Bridge constants per HPSDRModel:
-//   ANAN100/100B/100D : bridge=0.095  refV=3.3  cal=6
-//   ANAN200D          : bridge=0.108  refV=5.0  cal=4
-//   ANAN7000D/G2/RP   : bridge=0.12   refV=5.0  cal=32
-//   ORIONMKII/8000D   : bridge=0.08   refV=5.0  cal=18
-//   default           : bridge=0.09   refV=3.3  cal=6
-double scaleFwdPowerWatts(quint16 adcRaw, HPSDRModel model)
-{
-    double bridge_volt   = 0.09;
-    double refvoltage    = 3.3;
-    int    adc_cal_offset = 6;
-
-    switch (model) {
-    case HPSDRModel::ANAN100:
-    case HPSDRModel::ANAN100B:
-    case HPSDRModel::ANAN100D:
-        bridge_volt = 0.095; refvoltage = 3.3; adc_cal_offset = 6;
-        break;
-    case HPSDRModel::ANAN200D:
-        bridge_volt = 0.108; refvoltage = 5.0; adc_cal_offset = 4;
-        break;
-    case HPSDRModel::ANAN7000D:
-    case HPSDRModel::ANVELINAPRO3:
-    case HPSDRModel::ANAN_G2:
-    case HPSDRModel::ANAN_G2_1K:             // !K will need different scaling
-    case HPSDRModel::REDPITAYA: //DH1KLM
-        bridge_volt = 0.12;  refvoltage = 5.0; adc_cal_offset = 32;
-        break;
-    case HPSDRModel::ORIONMKII:
-    case HPSDRModel::ANAN8000D:
-        bridge_volt = 0.08;  refvoltage = 5.0; adc_cal_offset = 18;
-        break;
-    default:
-        // From Thetis console.cs:25049-25053 [@501e3f5] — default case
-        bridge_volt = 0.09; refvoltage = 3.3; adc_cal_offset = 6;
-        break;
-    }
-
-    double adc = static_cast<double>(adcRaw);
-    if (adc < 0) { adc = 0; }
-    double volts = (adc - adc_cal_offset) / 4095.0 * refvoltage;
-    if (volts < 0) { volts = 0; }
-    double watts = (volts * volts) / bridge_volt;
-    if (watts < 0) { watts = 0; }
-    return watts;
-}
+// scaleFwdPowerWatts: lifted from this anonymous namespace into the
+// public PaTelemetryScaling API in Phase 1 Agent 1B of issue #167.
+// See src/core/PaTelemetryScaling.{h,cpp} — same Thetis-canonical math
+// (computeAlexFwdPower at console.cs:25008-25072 [v2.10.3.13 @501e3f5]),
+// same per-board triplet table, same default-case fallthrough.  The
+// callsite in handlePaTelemetry now reads NereusSDR::scaleFwdPowerWatts
+// (Phase 4 Agent 4A migration).
 
 // From Thetis console.cs:24928-24996 [@501e3f5] computeRefPower():
 //   identical formula shape; bridge constants differ + 6m carve-out.
@@ -381,6 +356,16 @@ double scaleRevPowerWatts(quint16 adcRaw, HPSDRModel model)
     case HPSDRModel::ORIONMKII:
     case HPSDRModel::ANAN8000D:
         bridge_volt = 0.08;  refvoltage = 5.0; adc_cal_offset = 16;
+        break;
+    // From mi0bot console.cs:25195-25199 [v2.10.3.13-beta2] — HL2 has its
+    // own coupler scaling for the REV side, same bridge_volt as the FWD
+    // side.  Bench-reported #167 follow-up: without this case, HL2 fell
+    // through to the default {0.09, 3.3, 3} triplet which is 16.7×
+    // wrong — the resulting refl/fwd ratio inflated by the same factor
+    // pegged the SWR meter at the upper rail (>3.0) on a 50Ω dummy load.
+    //   //MI0BOT: HL2  [original inline comment from mi0bot console.cs:25195]
+    case HPSDRModel::HERMESLITE:
+        bridge_volt = 1.5;   refvoltage = 3.3; adc_cal_offset = 6;
         break;
     default:
         bridge_volt = 0.09; refvoltage = 3.3; adc_cal_offset = 3;
@@ -639,6 +624,39 @@ RadioModel::RadioModel(QObject* parent)
             this, &RadioModel::onMoxHardwareFlipped,
             Qt::QueuedConnection);
 
+    // Issue #177 fix — Thetis-faithful TUN-off ordering.
+    //
+    // setTune(false) latches m_pendingTuneOff and kicks off the MoxController
+    // TX→RX walk, then returns immediately.  When MoxController emits rxReady
+    // (TX→RX phase 4 of 4 — RX channels active, MOX wire bit dropped, WDSP TX
+    // off), we wait an additional m_tuneOffSettleMs (default 100) and then
+    // call completeTuneOff() to kill gen1, restore the DSP mode, restore the
+    // power slider, and un-offset the TX VFO.
+    //
+    // From Thetis console.cs:30106-30109 [v2.10.3.13] — chkTUN_CheckedChanged
+    // else-branch:
+    //     chkMOX.Checked = false;          // synchronously walks TX→RX (~30 ms blocking)
+    //     await Task.Delay(100);
+    //     radio.GetDSPTX(0).TXPostGenRun = 0;
+    //
+    // The deferred completion prevents the gen1-off transient from reaching
+    // the radio while the WDSP TX channel is still pumping (issue #177).
+    connect(m_moxController, &MoxController::rxReady, this, [this]() {
+        if (!m_pendingTuneOff) {
+            return;
+        }
+        QTimer::singleShot(m_tuneOffSettleMs, this, [this]() {
+            // Re-check the latch: a fresh setTune(true) (or a teardown) can
+            // clear it between rxReady and the timer firing.  In that case the
+            // deferred completion is a no-op because the new TUN-on path has
+            // already established fresh saved state and re-engaged MOX.
+            if (!m_pendingTuneOff) {
+                return;
+            }
+            completeTuneOff();
+        });
+    });
+
     // MoxController::txReady → TxChannel::setRunning(true) and
     // MoxController::txaFlushed → TxChannel::setRunning(false) are wired in
     // connectToRadio() once m_txChannel is live (see the "MoxController →
@@ -754,7 +772,10 @@ RadioModel::RadioModel(QObject* parent)
     // the phase-H comment block is self-contained.
     //
     //   onCatPtt: 3K — full CAT integration (rigctld / serial / network)
-    //   onVoxActive: 3M-3a or via TxChannel TX-meter polling (WDSP DEXP output)
+    //   onVoxActive: WIRED in 3M-3a-iii Task 17 (bench fix, 2026-05-04) via
+    //     TxChannel::voxActiveChanged — see connectToRadio() H.1 block for
+    //     the connect() callsite. The wire-up was deferred from 3M-1b and
+    //     omitted from the 3M-3a-iii plan; JJ's bench surfaced the gap.
     //   onSpacePtt: 3M-3a — UI keyboard handler (MainWindow keyPressEvent)
     //   onX2Ptt: 3M-3a or later — X2 status-frame parsing in RadioConnection
 
@@ -781,6 +802,24 @@ RadioModel::RadioModel(QObject* parent)
     // AppSettings.  The activeProfileChanged signal is consumed by the UI
     // (TxApplet J.1 + TxProfileSetupPage J.3) for combo-selection mirror.
     m_micProfileMgr = new MicProfileManager(this);
+
+    // ── Phase 4 Agent 4A of #167: PaProfileManager ───────────────────────────
+    //
+    // Per-MAC bank holding 16 "Default - <model>" factory profiles + 1 Bypass
+    // profile, each carrying a 14-band x 9-drive-step PA gain table.
+    // Constructed once at RadioModel-ctor time; setMacAddress +
+    // load(connectedModel) are called per-connect inside connectToRadio()
+    // (mirrors MicProfileManager wiring exactly).  Empty MAC is a silent
+    // no-op per the PaProfileManager.h contract.  Qt parent=this so the
+    // dtor frees it.
+    //
+    // The active profile is read at every drive-slider / TUNE / two-tone
+    // callsite via paProfileManager()->activeProfile() and passed by const
+    // reference to TransmitModel::setPowerUsingTargetDbm.  Per-call pass-
+    // through (vs. injecting a manager pointer into TransmitModel) keeps
+    // the coupling lower — TransmitModel stays a pure data + math model
+    // with no manager dependencies.
+    m_paProfileManager = new PaProfileManager(this);
 
     // ── 3M-1c Phase L.2: TwoToneController ────────────────────────────────────
     //
@@ -825,33 +864,97 @@ RadioModel::RadioModel(QObject* parent)
     // accepted into the model but not pushed to the wire, matching
     // Thetis behaviour.
     //
-    // Has no observable effect on 3M-1a's TUNE-only path (the slider has
-    // no role in TUN), but keeps the UI/wire in sync for any non-TUN TX
-    // path.  3M-1b voice TX will exercise this connection in earnest.
+    // Phase 4 Agent 4A of issue #167 (K2GX safety hotfix) — replaces the
+    // previous linear `wire = clamp(int(255*f*swrProtect),0,255)` formula
+    // (cited to mi0bot NetworkIO.cs:209-211 [v2.10.3.14-beta1] — fork-
+    // specific divergence) with the Thetis-canonical dBm-target chain:
+    //
+    //   wire_byte = clamp(int(audio_volume * 1.02 * 255), 0, 255)
+    //               From Thetis audio.cs:262-271 [v2.10.3.13] —
+    //               `NetworkIO.SetOutputPower((float)(value * 1.02))`.
+    //               NO SWR factor on wire byte (MW0LGE-canonical topology).
+    //
+    //   iq_gain   = audio_volume * swrProtect
+    //               From Thetis cmaster.cs:1115-1119 [v2.10.3.13] —
+    //               `level = RadioVolume * HighSWRScale` ->
+    //               `SetTXFixedGain(0, level, level)`. SWR factor lives HERE.
+    //
+    // The asymmetry is intentional per MW0LGE topology — the wire byte
+    // never sees the SWR foldback, only the IQ scalar fed into the WDSP
+    // TX chain does.  DO NOT "fix" this by adding swrProtect to the wire
+    // byte; doing so reverts the K2GX safety regression.
+    //
+    // Pre-hotfix: ANAN-8000DLE 80m TUN at slider=50 produced wire_byte=127
+    // (=> ~300W on a 200W radio).  Post-hotfix: wire_byte=49 (=> ~85W).
+    // Ratio matches the band's 50.5 dB PA gain compensation.
     connect(&m_transmitModel, &TransmitModel::powerChanged, this,
-            [this](int power) {
+            [this](int /*power*/) {
         if (m_transmitModel.isTune()) { return; }
         if (!m_connection)            { return; }
-        // Scale percent (0-100) → wire byte (0-255), with SWR-protection
-        // foldback applied per mi0bot NetworkIO.cs:209-211 [v2.10.3.14-beta1]:
-        //   int i = (int)(255 * f * _swr_protect);   // f normalised 0..1,
-        //                                            // _swr_protect ≤ 1.0
-        //   SetOutputPowerFactor(i);
-        // setTxDrive's contract is the wire byte (0-255); m_transmitModel
-        // power is 0-100 percent.  Without this scaling, 50% power was
-        // reaching the wire as drive_level=50 (~20 % of max) and bench
-        // RF output measured 0 W.  Default swrProtectFactor=1.0 → identity
-        // to the prior `(power * 255) / 100` formula; foldback wires up
-        // when SwrProtectionController drives the factor (follow-up).
-        const float f          = std::clamp(power / 100.0f, 0.0f, 1.0f);
+        // Active-profile resolution.  Without a loaded PaProfileManager
+        // (MAC scope not set, or first-launch state before factory regen),
+        // activeProfile() returns nullptr and we silently no-op — same
+        // contract as MicProfileManager when not yet loaded.  The user
+        // sees no wire byte change until the profile bank is live.
+        if (!m_paProfileManager)      { return; }
+        const PaProfile* activeProfile =
+            m_paProfileManager->activeProfile();
+        if (!activeProfile)           { return; }
+
+        const Band currentBand = m_activeSlice
+                                    ? bandFromFrequency(m_activeSlice->frequency())
+                                    : m_lastBand;
+
+        // Phase 3C deep-parity wrapper: computes audio_volume + applies
+        // ATT-on-TX safety gate (PS-active dormant until 3M-4).  txMode 0
+        // (normal): bFromTune=false, bTwoTone=false.
+        const auto result = m_transmitModel.setPowerUsingTargetDbm(
+            *activeProfile, currentBand, /*bSetPower=*/true,
+            /*bFromTune=*/false, /*bTwoTone=*/false);
+
+        // Compose wire byte + IQ scalar per Thetis topology cited above.
         const float swrProtect =
             std::clamp(m_transmitModel.swrProtectFactor(), 0.0f, 1.0f);
-        const int wireDrive = std::clamp(int(255.0f * f * swrProtect), 0, 255);
+        const int wireDrive = std::clamp(
+            int(result.audioVolume * 1.02 * 255.0), 0, 255);
+        const double iqGain =
+            result.audioVolume * static_cast<double>(swrProtect);
+
+        if (m_txChannel) {
+            m_txChannel->setTxFixedGain(iqGain);
+        }
         auto* conn = m_connection;
         QMetaObject::invokeMethod(conn, [conn, wireDrive]() {
             conn->setTxDrive(wireDrive);
         });
     });
+
+    // Bench-reported #167 follow-up: power meters stick after un-key.
+    // Root cause: handlePaTelemetry only fires while the radio is sending
+    // PA telemetry (typically only during transmit).  When transmit ends
+    // the telemetry pump stops and RadioStatus retains the last-known
+    // forward / reflected / SWR / PA-current values, so subscribed labels
+    // and meters keep displaying the last sample.  On the falling edge we
+    // explicitly zero the power-related telemetry so every subscriber sees
+    // a clean idle reading.  PA temperature is left alone (it's a slow
+    // physical quantity and the last reading is still meaningful post-key).
+    //
+    // Subscribed to MoxController::moxStateChanged because that's the
+    // authoritative wire-level TX boundary.  TransmitModel's m_mox / m_tune
+    // flags are orphan state — never set true by any code path — so
+    // subscribing to those signals would never fire.  MoxController fires
+    // moxStateChanged(false) at the END of every TX→RX walk (both MOX
+    // un-key and TUNE release), which is exactly when we want to zero.
+    if (m_moxController) {
+        connect(m_moxController, &MoxController::moxStateChanged, this,
+                [this](bool active) {
+            if (active) { return; }   // rising-edge: telemetry pump takes over
+            m_radioStatus.setForwardPower(0.0);
+            m_radioStatus.setReflectedPower(0.0);
+            m_radioStatus.setExciterPowerMw(0);
+            m_radioStatus.setPaCurrent(0.0);
+        });
+    }
 }
 
 RadioModel::~RadioModel()
@@ -864,6 +967,26 @@ RadioModel::~RadioModel()
 bool RadioModel::isConnected() const
 {
     return m_connection && m_connection->isConnected();
+}
+
+void RadioModel::setStepAttController(StepAttenuatorController* c)
+{
+    // Phase 4 Agent 4A of issue #167 — propagate to TransmitModel so the
+    // ATT-on-TX safety gate inside setPowerUsingTargetDbm has a live
+    // controller pointer.  Mirrors the existing m_stepAttController setter
+    // pattern; non-owning on both sides.
+    //
+    // From Thetis console.cs:46740-46748 [v2.10.3.13]:
+    //   //[2.10.3.5]MW0LGE max tx attenuation when power is increased and PS is enabled
+    //   if (new_pwr != _lastPower && chkFWCATUBypass.Checked && _forceATTwhenPowerChangesWhenPSAon)
+    //   { ... SetupForm.ATTOnTX = 31; ... }
+    //
+    // The PS-active gate (chkFWCATUBypass.Checked equivalent) is dormant
+    // until 3M-4 PureSignal lands; until then the structure is in place
+    // but the gate never fires (TransmitModel::pureSignalActive() returns
+    // false unconditionally per Phase 3A).
+    m_stepAttController = c;
+    m_transmitModel.setStepAttenuatorController(c);
 }
 
 const BoardCapabilities& RadioModel::boardCapabilities() const
@@ -1133,13 +1256,30 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // AppSettings::migrateLegacyN2adrFilter (see main.cpp).  This read
         // matches the write side (Hl2IoBoardTab::onN2adrToggled →
         // HardwarePage::wire() → setHardwareValue).
-        const QString n2adrKey = QStringLiteral("hl2IoBoard/n2adrFilter");
-        const bool n2adrOn = AppSettings::instance()
-                                 .hardwareValue(info.macAddress, n2adrKey,
-                                                QStringLiteral("False"))
-                                 .toString() == QStringLiteral("True");
-        applyN2adrPreset(m_ocMatrix, n2adrOn);
-        m_ocMatrix.save();
+        //
+        // Issue #174: default to True (key absent → enabled).  Strict
+        // mi0bot port from setup.designer.cs:17466-17467 [v2.10.3.13-beta2]:
+        //   this.chkHERCULES.Checked = true;
+        //   this.chkHERCULES.CheckState = CheckState.Checked;
+        // Users plug in the N2ADR filter board and expect it to "just work"
+        // out of the box; the previous False default forced manual opt-in
+        // and was a recurring support burden.
+        //
+        // Issue #174 (PR #188 review): gate this block on HL2 family.
+        // applyN2adrPreset unconditionally wipes the entire OC matrix
+        // before conditionally repopulating (N2adrPreset.cpp:73-78), so
+        // running it on a non-HL2 board would destroy any user-configured
+        // OC pin patterns on every connect.  N2ADR is an HL2 accessory;
+        // non-HL2 boards have no business in this code path.
+        if (boardCapabilities().hasIoBoardHl2) {
+            const QString n2adrKey = QStringLiteral("hl2IoBoard/n2adrFilter");
+            const bool n2adrOn = AppSettings::instance()
+                                     .hardwareValue(info.macAddress, n2adrKey,
+                                                    QStringLiteral("True"))
+                                     .toString() == QStringLiteral("True");
+            applyN2adrPreset(m_ocMatrix, n2adrOn);
+            m_ocMatrix.save();
+        }
 
         // Load per-MAC Alex antenna controller state so Antenna Control UI
         // and future protocol codecs read the correct per-band antenna assignments.
@@ -1198,6 +1338,20 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         if (m_micProfileMgr) {
             m_micProfileMgr->setMacAddress(info.macAddress);
             m_micProfileMgr->load();
+        }
+
+        // ── Phase 4 Agent 4A of #167: per-MAC PaProfileManager scope ─────────
+        //
+        // Set the MAC scope and seed the 16 "Default - <model>" + Bypass
+        // factory profiles on first launch (per PaProfileManager::load
+        // contract).  Active-profile-on-connect logic resolves to either the
+        // stored active key, "Default - <connectedModel>", or the first
+        // factory profile.  Mirrors MicProfileManager wiring above.
+        // setMacAddress("") is called in teardownConnection so all mutators
+        // silently no-op while no radio is selected.
+        if (m_paProfileManager) {
+            m_paProfileManager->setMacAddress(info.macAddress);
+            m_paProfileManager->load(m_hardwareProfile.model);
         }
 
         // L.3: HL2 force-Pc on connect.
@@ -1516,13 +1670,38 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // getbuffsize(48000) at cmsetup.c:106-110 [v2.10.3.13] exactly.
         // Output buffer = 64 * txOutRate / 48000 — at 48 kHz out: 64; at
         // 192 kHz out (P2 G2): 256.
-        m_txChannel = m_wdspEngine->createTxChannel(/*channelId=*/1,
-                                                    /*inputBufferSize=*/64,
-                                                    /*dspBufferSize=*/WdspEngine::kTxDspBufferSize,
-                                                    /*inputSampleRate=*/48000,
-                                                    /*dspSampleRate=*/WdspEngine::kTxDspSampleRate,
-                                                    /*outputSampleRate=*/txOutRate);
-        if (m_txChannel) {
+        //
+        // Issue #153 sub-bug 1 — cold-start TxChannel race fix.
+        //
+        // On cold start (no cached FFTW wisdom), WdspEngine::initialize
+        // runs async and only emits initializedChanged(true) AFTER wisdom
+        // is generated (~15 min on a fresh install).  connectToRadio()
+        // runs synchronously, so the immediate createTxChannel attempt
+        // returns nullptr and the previous code logged a warning and
+        // gave up — TUN and MOX both produced silence for the rest of
+        // the session until reconnect.
+        //
+        // Wrap the entire create+wire body in a captured lambda so the
+        // exact same code path can run later when WdspEngine becomes
+        // initialized.  Hot-cache (wisdom present): txSetup() runs and
+        // succeeds inline.  Cold-start: txSetup() returns early at the
+        // createTxChannel-returns-nullptr guard, the retry registration
+        // below fires the same lambda once initializedChanged(true)
+        // lands, and the body runs verbatim.
+        auto txSetup = [this, txOutRate]() {
+            if (m_txChannel) {
+                return;
+            }
+            m_txChannel = m_wdspEngine->createTxChannel(
+                /*channelId=*/1,
+                /*inputBufferSize=*/64,
+                /*dspBufferSize=*/WdspEngine::kTxDspBufferSize,
+                /*inputSampleRate=*/48000,
+                /*dspSampleRate=*/WdspEngine::kTxDspSampleRate,
+                /*outputSampleRate=*/txOutRate);
+            if (!m_txChannel) {
+                return;
+            }
             m_txChannel->setConnection(m_connection);
 
             // Task 4.2: give TxChannel a handle to WdspEngine so onModeChanged()
@@ -1821,6 +2000,90 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 m_txChannel->setVoxRun(run);
             });
 
+            // Issue #153 sub-bug 2 — txAboutToBegin → pushTxModeAndBandpass.
+            //
+            // MoxController phase-1 signal fires synchronously BEFORE the
+            // rfDelay timer that gates txReady (MoxController.cpp:505-507
+            // [@501e3f5]).  pushTxModeAndBandpass dispatches setTxMode +
+            // requestFilterChange to TxWorkerThread; the queued setters
+            // settle well before rfDelay completes (~50 ms typical) and
+            // txReady → setRunning(true) above starts the channel.
+            //
+            // Belt-and-suspenders re-seed at MOX-engage even though the
+            // initial seed below + the dspModeChanged seed in
+            // wireSliceSignals already cover the no-mode-change case.
+            // Defends against any state desync caused by other code
+            // paths writing TXA mode/bp0 (TUN, future PureSignal, etc.).
+            connect(m_moxController, &MoxController::txAboutToBegin,
+                    this, &RadioModel::pushTxModeAndBandpass);
+
+            // ── Phase 3M-3a-iii Task 17 (bench fix) ───────────────────────────
+            //
+            // TxChannel::voxActiveChanged → MoxController::onVoxActive.
+            //
+            // This closes the deferred wire from 3M-1b
+            // (RadioModel.cpp:756 — "onVoxActive: 3M-3a or via TxChannel
+            // TX-meter polling (WDSP DEXP output)") that the 3M-3a-iii
+            // implementation plan did not capture as a task.  Without it
+            // [VOX] correctly enables run_vox=1 in WDSP but mic envelope
+            // crossings never reach MoxController — VOX silently fails to
+            // key the radio.  TxChannel registers the WDSP DEXP pushvox
+            // callback in its constructor; the callback emits this signal
+            // from the WDSP audio worker thread.  Qt::AutoConnection
+            // promotes to QueuedConnection across the worker→main-thread
+            // boundary, so MoxController::onVoxActive runs on the main
+            // thread (its declared affinity — see MoxController H.5
+            // comment block in this same RadioModel ctor).
+            //
+            // Thetis analogue: cmaster.cs:1903-1906 [v2.10.3.13] —
+            //   `VOX.PushVox(int id, int active)
+            //    { Audio.VOXActive = (active == 1); }`
+            // wired by cmaster.cs:1125 [v2.10.3.13]
+            //   `SendCBPushVox(0, PushVoxDel)`.
+            // Thetis sets `Audio.VOXActive` and lets the PollPTT loop
+            // notice on its next tick; NereusSDR uses direct signal-driven
+            // engagement (no polling).
+            connect(m_txChannel, &TxChannel::voxActiveChanged,
+                    m_moxController, &MoxController::onVoxActive);
+
+            // ── Phase 3M-3a-iii Task 18 (bench fix) ───────────────────────────
+            //
+            // TransmitModel::voxEnabledChanged → TxChannel::setVoxListening.
+            //
+            // VOX-listening mode forces the TXA pipeline pump to run when
+            // VOX is enabled, so the WDSP DEXP detector can monitor mic
+            // envelope even when MOX is off.  Without this gate the pump
+            // only runs during MOX (driveOneTxBlock + driveOneTxBlockFromInter
+            // leaved both early-return on !m_running), creating a chicken-
+            // and-egg that prevents VOX from ever keying (DEXP can't fire
+            // pushvox if it never sees mic).
+            //
+            // Wired in parallel with the existing TM::voxEnabledChanged
+            // → MoxController::setVoxEnabled connect at the top of this
+            // ctor (~line 669-670).  Both fire on the same TM signal:
+            // MoxController gates VOX policy at the engagement layer;
+            // TxChannel pumps the DSP so the policy can be evaluated.
+            //
+            // Receiver=m_txChannel + AutoConnection auto-routes to
+            // QueuedConnection when m_txChannel lives on TxWorkerThread,
+            // matching the H.1 voxRunRequested → setVoxRun pattern above.
+            //
+            // From Thetis wdsp/dexp.c:304 [v2.10.3.13]:
+            //   "DEXP code runs continuously so it can be used to trigger
+            //    VOX also."
+            // Thetis's TXA pipeline pumps continuously after channel-open
+            // (HPSDR EP6 audio cadence drives ChannelMaster, not MOX);
+            // Audio.VOXEnabled in audio.cs:168-192 [v2.10.3.13] only
+            // flips DEXP's run_vox flag via cmaster.CMSetTXAVoxRun(0).
+            // NereusSDR's TxWorkerThread + m_running gate is a power-saving
+            // departure from Thetis (no pumping when neither MOX nor VOX
+            // is in play); this connect restores Thetis-equivalent VOX
+            // detection while keeping power saving everywhere else.
+            connect(&m_transmitModel, &TransmitModel::voxEnabledChanged,
+                    m_txChannel, [this](bool on) {
+                m_txChannel->setVoxListening(on);
+            });
+
             // H.2 — voxThresholdRequested → setVoxAttackThreshold.
             // From Thetis cmaster.cs:1054-1059 [v2.10.3.13] — CMSetTXAVoxThresh.
             connect(m_moxController, &MoxController::voxThresholdRequested,
@@ -2008,6 +2271,24 @@ void RadioModel::connectToRadio(const RadioInfo& info)
 
                 // ── 3M-3a-ii Batch 3 — CESSB (1) ──
                 m_txChannel->setTxCessbOn(m_transmitModel.cessbOn());
+
+                // ── 3M-3a-iii Tasks 7-10 — DEXP (11) ──
+                // Initial-sync push for the 11 DEXP TM properties so a
+                // freshly-loaded profile (or a setActiveProfile invocation
+                // whose setters short-circuit on no-op writes) has its DEXP
+                // state reflected at WDSP. Mirrors the EQ/Lev/ALC + CFC/PhRot
+                // initial-sync rationale documented above (~line 1869-1898).
+                m_txChannel->setDexpRun(m_transmitModel.dexpEnabled());
+                m_txChannel->setDexpDetectorTau(m_transmitModel.dexpDetectorTauMs());
+                m_txChannel->setDexpAttackTime(m_transmitModel.dexpAttackTimeMs());
+                m_txChannel->setDexpReleaseTime(m_transmitModel.dexpReleaseTimeMs());
+                m_txChannel->setDexpExpansionRatio(m_transmitModel.dexpExpansionRatioDb());
+                m_txChannel->setDexpHysteresisRatio(m_transmitModel.dexpHysteresisRatioDb());
+                m_txChannel->setDexpRunAudioDelay(m_transmitModel.dexpLookAheadEnabled());
+                m_txChannel->setDexpAudioDelay(m_transmitModel.dexpLookAheadMs());
+                m_txChannel->setDexpLowCut(m_transmitModel.dexpLowCutHz());
+                m_txChannel->setDexpHighCut(m_transmitModel.dexpHighCutHz());
+                m_txChannel->setDexpRunSideChannelFilter(m_transmitModel.dexpSideChannelFilterEnabled());
             };
 
             // 1. txEqEnabledChanged → setTxEqRunning.
@@ -2182,6 +2463,93 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 m_txChannel->setTxCessbOn(on);
             });
 
+            // ── 3M-3a-iii Tasks 7-10 — DEXP routing (11 connects) ──────────
+            //
+            // Routes the 11 new DEXP TransmitModel properties added in Tasks
+            // 7-10 (envelope / gate ratios / look-ahead / side-channel
+            // filter) into the TxChannel WDSP wrappers added in Tasks 1-5.
+            // Receiver = m_txChannel so AutoConnection resolves to
+            // QueuedConnection once moveToThread runs below — same pattern as
+            // the F.1 / H.1-H.3 / 3M-3a-i/ii TX-chain connects above.
+            //
+            // No MoxController gating layer for DEXP (unlike VOX which goes
+            // TM → MoxController → TxChannel for dB→linear + mic-boost
+            // scaling): the DEXP TxChannel wrappers do their own ms→seconds
+            // and dB→linear conversions internally (see TxChannel.h:706-914),
+            // so the model layer pushes the user-visible value directly.
+            //
+            // Naming note: TM property names use "Ms" / "Db" / "Hz" suffixes
+            // for clarity at the call-site, while TxChannel wrapper names
+            // drop the unit suffix because the wrapper docstring documents
+            // the unit unambiguously (e.g. setDexpDetectorTau takes ms,
+            // setDexpExpansionRatio takes dB).
+
+            // 28. dexpEnabledChanged → setDexpRun.
+            connect(&m_transmitModel, &TransmitModel::dexpEnabledChanged,
+                    m_txChannel, [this](bool on) {
+                m_txChannel->setDexpRun(on);
+            });
+
+            // 29. dexpDetectorTauMsChanged → setDexpDetectorTau.
+            connect(&m_transmitModel, &TransmitModel::dexpDetectorTauMsChanged,
+                    m_txChannel, [this](double tauMs) {
+                m_txChannel->setDexpDetectorTau(tauMs);
+            });
+
+            // 30. dexpAttackTimeMsChanged → setDexpAttackTime.
+            connect(&m_transmitModel, &TransmitModel::dexpAttackTimeMsChanged,
+                    m_txChannel, [this](double attackMs) {
+                m_txChannel->setDexpAttackTime(attackMs);
+            });
+
+            // 31. dexpReleaseTimeMsChanged → setDexpReleaseTime.
+            connect(&m_transmitModel, &TransmitModel::dexpReleaseTimeMsChanged,
+                    m_txChannel, [this](double releaseMs) {
+                m_txChannel->setDexpReleaseTime(releaseMs);
+            });
+
+            // 32. dexpExpansionRatioDbChanged → setDexpExpansionRatio.
+            connect(&m_transmitModel, &TransmitModel::dexpExpansionRatioDbChanged,
+                    m_txChannel, [this](double dB) {
+                m_txChannel->setDexpExpansionRatio(dB);
+            });
+
+            // 33. dexpHysteresisRatioDbChanged → setDexpHysteresisRatio.
+            connect(&m_transmitModel, &TransmitModel::dexpHysteresisRatioDbChanged,
+                    m_txChannel, [this](double dB) {
+                m_txChannel->setDexpHysteresisRatio(dB);
+            });
+
+            // 34. dexpLookAheadEnabledChanged → setDexpRunAudioDelay.
+            connect(&m_transmitModel, &TransmitModel::dexpLookAheadEnabledChanged,
+                    m_txChannel, [this](bool on) {
+                m_txChannel->setDexpRunAudioDelay(on);
+            });
+
+            // 35. dexpLookAheadMsChanged → setDexpAudioDelay.
+            connect(&m_transmitModel, &TransmitModel::dexpLookAheadMsChanged,
+                    m_txChannel, [this](double delayMs) {
+                m_txChannel->setDexpAudioDelay(delayMs);
+            });
+
+            // 36. dexpLowCutHzChanged → setDexpLowCut.
+            connect(&m_transmitModel, &TransmitModel::dexpLowCutHzChanged,
+                    m_txChannel, [this](double hz) {
+                m_txChannel->setDexpLowCut(hz);
+            });
+
+            // 37. dexpHighCutHzChanged → setDexpHighCut.
+            connect(&m_transmitModel, &TransmitModel::dexpHighCutHzChanged,
+                    m_txChannel, [this](double hz) {
+                m_txChannel->setDexpHighCut(hz);
+            });
+
+            // 38. dexpSideChannelFilterEnabledChanged → setDexpRunSideChannelFilter.
+            connect(&m_transmitModel, &TransmitModel::dexpSideChannelFilterEnabledChanged,
+                    m_txChannel, [this](bool on) {
+                m_txChannel->setDexpRunSideChannelFilter(on);
+            });
+
             // Profile-activation resync.  Receiver = m_txChannel so this
             // becomes a QueuedConnection once moveToThread runs below; the
             // helper executes on TxWorkerThread for race-free WDSP setter
@@ -2302,9 +2670,57 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             qCInfo(lcDsp) << "G.1: TX channel 1 created (deferred until conn live)"
                           << "outRate=" << txOutRate
                           << "— SSB voice path ready (L.1 composite router wired).";
-        } else {
-            qCWarning(lcDsp) << "G.1: deferred createTxChannel(1) returned nullptr —"
-                                " TUNE will be unavailable until next reconnect.";
+
+            // Issue #153 sub-bug 2 — initial TXA mode/bandpass seed.
+            //
+            // m_txChannel is alive, m_activeSlice is non-null (loadSliceState
+            // ran earlier in connectToRadio at line ~1377 and restored the
+            // persisted dspMode + filterLow/filterHigh).  Push them now so
+            // SSB MOX no longer requires a prior TUN press to seed TXA
+            // mode (default LSB) and bp0 cutoffs (default -5000..-100).
+            //
+            // Source: Thetis SetTXFilters at console.cs:8091 [v2.10.3.13]
+            // + CurrentDSPMode setter at radio.cs:2670-2696 [v2.10.3.13];
+            // Thetis seeds at mode-change (console.cs:33937) + at
+            // chkPower → txtVFOAFreq_LostFocus path indirectly via the
+            // SetupTxFilters() preamble.  NereusSDR consolidates into
+            // one helper called at three triggers (this is trigger #1 of 3).
+            pushTxModeAndBandpass();
+        };  // end of txSetup lambda
+        txSetup();
+
+        if (!m_txChannel) {
+            // Issue #153 sub-bug 1 — cold-start retry hook.
+            //
+            // WDSP not yet initialized at connectToRadio time (typical
+            // first-launch case with no cached FFTW wisdom — async wisdom
+            // build can take ~15 minutes on a fresh install).  Register a
+            // one-shot connect to WdspEngine::initializedChanged(true)
+            // that re-runs the captured txSetup lambda.  receiver=this so
+            // the slot runs on RadioModel's main thread; QMetaObject
+            // disconnects automatically when this RadioModel is destroyed.
+            //
+            // The retry self-disconnects on first successful run.  If WDSP
+            // never initializes (e.g. wisdom build aborted) the connection
+            // remains harmlessly attached until RadioModel teardown.
+            auto retry = std::make_shared<QMetaObject::Connection>();
+            *retry = connect(m_wdspEngine, &WdspEngine::initializedChanged,
+                             this,
+                             [this, retry, txSetup = std::move(txSetup)](bool ready) {
+                if (!ready || m_txChannel) {
+                    return;
+                }
+                txSetup();
+                if (m_txChannel) {
+                    QObject::disconnect(*retry);
+                    qCInfo(lcDsp) << "Issue #153 sub-bug 1: TxChannel deferred-create "
+                                     "succeeded after WdspEngine::initializedChanged(true).";
+                }
+            }, Qt::UniqueConnection);
+            qCWarning(lcDsp) << "Issue #153 sub-bug 1: createTxChannel(1) returned nullptr "
+                                "at connect-time (WDSP not yet initialized — likely cold-"
+                                "start with no cached wisdom).  Registered one-shot retry "
+                                "on WdspEngine::initializedChanged.";
         }
     }
 
@@ -2629,6 +3045,22 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
         });
     });
 
+    // ── Issue #182: TransmitModel::micPttDisabled → RadioConnection wire bit ──
+    // Mirror the persisted user preference onto the radio firmware and prime
+    // the connection with the current model value so a fresh connect honours
+    // whatever the user last saved (the Setup -> Audio -> TX Input ->
+    // Mic PTT Disabled checkbox).
+    //
+    // Source: Thetis console.cs:19761-19764 [v2.10.3.13+501e3f51]:
+    //   set {
+    //       mic_ptt_disabled = value;
+    //       NetworkIO.SetMicPTT(Convert.ToInt32(value));
+    //   }
+    // The MicPTTDisabled property setter pushes to NetworkIO unconditionally,
+    // so the radio sees every UI flip.  NereusSDR mirrors that via a queued
+    // signal/slot bind here, and primes once below.
+    connectMicPttDisabledSignal();
+
     // ── Task 2.5 of P1 full-parity epic: pureSig → setPuresignalRun ─────────
     // Wire the user PureSignal-enable toggle to the wire-bit setter added in
     // Task 2.3.  Direct signal→slot bind (bool→bool, no adapter needed).
@@ -2664,7 +3096,15 @@ void RadioModel::handlePaTelemetry(quint16 fwdRaw, quint16 revRaw,
                                    quint16 userAdc1Raw, quint16 supplyRaw)
 {
     const HPSDRModel model = m_hardwareProfile.model;
-    const double fwdW   = scaleFwdPowerWatts(fwdRaw, model);
+    // Phase 4 Agent 4A of issue #167 — scaleFwdPowerWatts lifted from this
+    // file's anonymous namespace into the public PaTelemetryScaling API
+    // (Phase 1B).  Same Thetis-canonical math, same per-board triplet
+    // table; reusing the public symbol keeps the future PaValuesPage Raw
+    // FWD watts label and this telemetry handler in lockstep.  Remaining
+    // private helpers (scaleRevPowerWatts / scalePaVolts / scalePaAmps /
+    // scalePaTemperatureCelsius) stay file-scope until they get their
+    // own public surface.
+    const double fwdW   = NereusSDR::scaleFwdPowerWatts(model, fwdRaw);
     const double revW   = scaleRevPowerWatts(revRaw, model);
     const double paV    = scalePaVolts(userAdc0Raw, model);
     const double paA    = scalePaAmps(userAdc1Raw, model);
@@ -2680,9 +3120,32 @@ void RadioModel::handlePaTelemetry(quint16 fwdRaw, quint16 revRaw,
     const double fwdWCal = double(
         m_calController.calibratedFwdPowerWatts(static_cast<float>(fwdW)));
 
-    m_radioStatus.setForwardPower(fwdWCal);
-    m_radioStatus.setReflectedPower(revW);
-    m_radioStatus.setExciterPowerMw(static_cast<int>(exciterRaw));
+    // Bench-reported #167 follow-up: when not transmitting, the radio still
+    // emits P2 high-priority status frames containing residue alex_fwd /
+    // alex_rev values (last sample echo + directional-coupler noise floor).
+    // Pushing those non-zero residue values to RadioStatus re-fills the
+    // Power / SWR bars after the falling-edge handler tried to zero them.
+    // Force the TX-domain readings to 0 when not transmitting so the
+    // meters show the physical truth (no TX → no forward power).
+    //
+    // Predicate: MoxController::state() == MoxState::Tx — the authoritative
+    // wire-level TX-active state.  TransmitModel's m_mox / m_tune flags are
+    // orphan state in the current codebase (never set true by any code
+    // path), so consulting them returned false during TUNE and force-zeroed
+    // the meters mid-transmit.  MoxController is the single source of truth
+    // for whether the radio is actually transmitting RF.
+    //
+    // PA current / temperature / supply voltage are slow physical
+    // quantities valid off-air; leave those samples alone.
+    // Test-seam override: handlePaTelemetryForTest sets m_forceTxForTest
+    // to simulate a transmit sample without driving the full MoxController
+    // state machine.  Production code paths leave the flag false.
+    const bool inTx = m_forceTxForTest
+                       || (m_moxController
+                            && m_moxController->state() == MoxState::Tx);
+    m_radioStatus.setForwardPower(inTx ? fwdWCal : 0.0);
+    m_radioStatus.setReflectedPower(inTx ? revW : 0.0);
+    m_radioStatus.setExciterPowerMw(inTx ? static_cast<int>(exciterRaw) : 0);
     m_radioStatus.setPaCurrent(paA);
     // Only push temp when we have a real source (non-zero); leaves the
     // last-known value alone otherwise so a stale 0 doesn't overwrite a
@@ -2702,6 +3165,40 @@ void RadioModel::handlePaTelemetry(quint16 fwdRaw, quint16 revRaw,
     m_swrProt.ingest(static_cast<float>(fwdW),
                      static_cast<float>(revW),
                      m_transmitModel.isTune());
+}
+
+// Issue #182 — TransmitModel::micPttDisabled → RadioConnection wire bit.
+//
+// Mirrors the persisted user preference onto the radio firmware (the Setup
+// -> Audio -> TX Input -> "Mic PTT Disabled" checkbox), and primes the
+// connection with the current model value once so a fresh connect honours
+// whatever the user last saved.  Tests reach this helper through the
+// wireMicPttDisabledForTest() seam to avoid the full wireConnectionSignals
+// DSP-thread pipeline.
+//
+// Source: Thetis console.cs:19761-19764 [v2.10.3.13+501e3f51]:
+//   set {
+//       mic_ptt_disabled = value;
+//       NetworkIO.SetMicPTT(Convert.ToInt32(value));
+//   }
+// The MicPTTDisabled property setter pushes to NetworkIO unconditionally on
+// every UI flip; this helper does the equivalent through the Qt signal/slot
+// system (queued because the connection lives on its own worker thread).
+void RadioModel::connectMicPttDisabledSignal()
+{
+    if (!m_connection) {
+        return;
+    }
+    QObject::connect(&m_transmitModel, &TransmitModel::micPttDisabledChanged,
+                     m_connection, &RadioConnection::setMicPTTDisabled,
+                     Qt::QueuedConnection);
+    // Prime: push the current model value so the wire bit reflects the user
+    // preference even before the first toggle.  Queued so production callers
+    // on the main thread don't synchronously block on the connection thread.
+    QMetaObject::invokeMethod(m_connection, [conn = m_connection,
+                                             d = m_transmitModel.micPttDisabled()]() {
+        conn->setMicPTTDisabled(d);
+    }, Qt::QueuedConnection);
 }
 
 // Wire active slice signals to WDSP channel and radio hardware.
@@ -2794,6 +3291,13 @@ void RadioModel::wireSliceSignals()
                 emit dspChangeMeasured(txElapsed);
             }
         }
+        // Issue #153 sub-bug 2 — TX-side mode + bandpass push (trigger #2
+        // of 3).  Mirrors Thetis console.cs:33937 [v2.10.3.13] mode-change
+        // handler calling SetTXFilters + (CurrentDSPMode setter) →
+        // SetTXAMode.  Without this, the user can change slice mode while
+        // not transmitting and the next MOX would still use the previous
+        // mode's TXA setup.
+        pushTxModeAndBandpass();
         scheduleSettingsSave();
     });
 
@@ -3547,6 +4051,75 @@ void RadioModel::loadSliceState(SliceModel* slice)
                   << slice->frequency() / 1e6 << "MHz"
                   << "AGC:" << static_cast<int>(slice->agcMode())
                   << "AF:" << slice->afGain() << "RF:" << slice->rfGain();
+
+    // Unconditional state-restored hook for view layer.
+    //
+    // wireSliceToSpectrum() runs at sliceAdded() time — BEFORE this function —
+    // so it seeds m_spectrumWidget->setDdcCenterFrequency() / setCenterFrequency
+    // / setVfoFrequency with the slice's PRE-restore default values.  After
+    // restoreFromSettings() above, the slice now holds the persisted values,
+    // but the spectrum widget will only learn about them via
+    // SliceModel::frequencyChanged, which is gated:
+    //   (a) qFuzzyCompare guard at SliceModel.cpp:145 — no emit if equal;
+    //   (b) MainWindow::wireSliceToSpectrum lambda's offScreen test — with
+    //       CTUN=true (default) and persisted freq within ±halfBw of the
+    //       default seed, the lambda hits the CTUN-shift branch and never
+    //       calls setDdcCenterFrequency.
+    //
+    // This unconditional emit gives MainWindow an explicit hook to push the
+    // now-correct slice freq/mode/filter into the spectrum widget and VFO
+    // flag — mirroring Thetis chkPower_CheckedChanged calling
+    // txtVFOAFreq_LostFocus() unconditionally at console.cs:27204
+    // [v2.10.3.13] as the explicit "push state to display" step at power-on.
+    emit sliceStateRestored(slice->sliceIndex());
+}
+
+// Issue #153 sub-bug 2 — push the active slice's DSPMode + the user's
+// configured TX bandpass to TxChannel.  See header comment for wire
+// targets and Thetis source-of-truth cites.  Called by all three
+// triggers (createTxChannel post-create, SliceModel::dspModeChanged,
+// MoxController::txAboutToBegin).
+//
+// Filter source is m_transmitModel (NOT m_activeSlice).  TransmitModel
+// stores audio-space TX cutoffs (positive, low <= high enforced by
+// setFilterLow/High swap-on-commit at TransmitModel.cpp:2526-2549),
+// which is what TxChannel::requestFilterChange + applyTxFilterForMode
+// expect.  SliceModel::filterLow/High are RX-passband IQ-space values
+// (negative for LSB-family modes); routing those through
+// applyTxFilterForMode would double-negate on LSB and silently
+// overwrite any user-configured TX bandwidth on every connect/MOX.
+// Mirrors the canonical wire at RadioModel.cpp:2550-2560 which reads
+// audioLow/audioHigh straight from TransmitModel::filterChanged.
+void RadioModel::pushTxModeAndBandpass()
+{
+    if (!m_activeSlice) {
+        return;
+    }
+    const DSPMode mode      = m_activeSlice->dspMode();
+    const int     audioLow  = m_transmitModel.filterLow();
+    const int     audioHigh = m_transmitModel.filterHigh();
+
+    // Diagnostic / test-observation hook fires unconditionally (m_txChannel
+    // can be null during odd lifecycle moments — addSlice before
+    // connectToRadio's WDSP-init lambda runs — and tests rely on the
+    // emit to verify the trigger pipeline without standing up the full
+    // TX pipeline).
+    emit txModeAndBandpassPushed(mode, audioLow, audioHigh);
+
+    if (!m_txChannel) {
+        return;
+    }
+
+    // Queue the WDSP setter call to TxWorkerThread.  receiver=m_txChannel
+    // routes via auto-queued connection; the lambda body runs on the
+    // worker thread, where setTxMode / requestFilterChange are then
+    // same-thread direct calls.  Mirrors the F.1 / F.2 / H.1 wires inside
+    // connectToRadio's txSetup lambda (RadioModel.cpp ~1957).
+    QMetaObject::invokeMethod(m_txChannel,
+                              [tx = m_txChannel, mode, audioLow, audioHigh]() {
+        tx->setTxMode(mode);
+        tx->requestFilterChange(audioLow, audioHigh, mode);
+    });
 }
 
 // Apply AlexController state to the wire. Called from three triggers:
@@ -3769,6 +4342,15 @@ void RadioModel::teardownConnection()
         m_transmitModel.persistToSettings(m_lastRadioInfo.macAddress);
     }
 
+    // Issue #177 — clear any in-flight TUN-off bookkeeping.  If we are
+    // tearing down mid-walk, MoxController::rxReady will never fire (timers
+    // are stopped) so the deferred completion would otherwise stay armed
+    // across the next connect.  Clearing the latch + m_isTuning matches
+    // Thetis chkTUN_CheckedChanged's _tuning=false reset (console.cs:30122
+    // [v2.10.3.13]) at session end.
+    m_pendingTuneOff = false;
+    m_isTuning       = false;
+
     // L.3: Release the HL2 mic-source lock on disconnect.
     // A subsequent connectToRadio() to a non-HL2 radio must be free to use
     // MicSource::Radio if the user selects it.  The lock is re-engaged
@@ -3881,6 +4463,15 @@ void RadioModel::teardownConnection()
     // mutators silently no-op until the next connectToRadio() sets a new MAC.
     if (m_micProfileMgr) {
         m_micProfileMgr->setMacAddress(QString());
+    }
+
+    // Phase 4 Agent 4A of #167: drop PaProfileManager MAC scope (mirrors
+    // MicProfileManager teardown above).  Subsequent activeProfile() reads
+    // return nullptr until the next connectToRadio() sets a new MAC, so the
+    // drive-slider / TUNE callsites silently no-op (their early-return
+    // guard `if (!activeProfile)` covers this).
+    if (m_paProfileManager) {
+        m_paProfileManager->setMacAddress(QString());
     }
 
     // P1 full-parity §3.2: reset PA forward-power cal profile to None so a
@@ -4231,6 +4822,15 @@ void RadioModel::setTune(bool on)
         // matches Thetis ordering for future maintainers reading side-by-side.
         m_isTuning = true;
 
+        // Issue #177 — cancel any pending TUN-off completion.  If the user
+        // double-clicks TUN (off → on within the rxReady + 100 ms settle
+        // window) we are mid-walk: the rxReady slot has not yet fired or has
+        // scheduled a singleShot that has not fired.  Clearing this flag
+        // makes both the rxReady slot and the QTimer body no-op when they
+        // run, leaving this fresh TUN-on path as the sole authority on saved
+        // state and MOX engagement.
+        m_pendingTuneOff = false;
+
         // ── SAVE meter mode ────────────────────────────────────────────────────
         // Cite: console.cs:30011 [v2.10.3.13]:
         //   old_meter_tx_mode_before_tune = current_meter_tx_mode;
@@ -4304,26 +4904,65 @@ void RadioModel::setTune(bool on)
         //   int new_pwr = SetPowerUsingTargetDBM(..., true, true, false);
         //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED) PWR = new_pwr;
         //
-        // 3M-1a: uses TransmitModel::tunePowerForBand() directly.
-        // Full SetPowerUsingTargetDBM dBm-target logic deferred to 3M-3a.
+        // Phase 4 Agent 4A of issue #167 (K2GX safety hotfix) — routed
+        // through TransmitModel::setPowerUsingTargetDbm (Phase 3C deep-
+        // parity wrapper).  bFromTune=true selects txMode 1 inside the
+        // wrapper; the wrapper resolves the slider-source enum
+        // (DriveSlider / TuneSlider / Fixed) per Thetis console.cs:46679-
+        // 46692 [v2.10.3.13].
+        //
+        // Wire-byte vs IQ-scalar topology (matches drive-slider lambda
+        // above):
+        //   wire_byte = clamp(int(audio_volume * 1.02 * 255), 0, 255)
+        //               From Thetis audio.cs:262-271 [v2.10.3.13]. NO SWR.
+        //   iq_gain   = audio_volume * swrProtect
+        //               From Thetis cmaster.cs:1115-1119 [v2.10.3.13].
+        //               SWR factor lives HERE — DO NOT add to wire byte.
+        //
+        // Pre-hotfix linear formula at this site:
+        //   wire = clamp(int(255 * tunePower/100 * swrProtect), 0, 255)
+        // shipped K2GX's >300W on 200W radio.  This rewrite is the
+        // K2GX safety fix proper.
         const Band currentBand = m_activeSlice
                                     ? bandFromFrequency(m_activeSlice->frequency())
                                     : m_lastBand;
+
+        // tunePower retained as a local for the SwrProtectionController
+        // setters below — those setters drive the tune-bypass / alex_fwd
+        // floor based on the SLIDER value (Thetis console.cs:26020-26067
+        // [v2.10.3.13] reads ptbPWR.Value, not the post-PA-gain
+        // audio_volume).  The wire byte itself goes through the dBm
+        // wrapper; the SWR controller stays slider-driven per upstream.
         const int tunePower = m_transmitModel.tunePowerForBand(currentBand);
-        // Scale percent (0-100) → wire byte (0-255) with SWR-protection
-        // foldback. See setTxDrive scaling comment in connection-power
-        // lambda above for the mi0bot NetworkIO.cs:209-211 [v2.10.3.14-beta1]
-        // citation. Default factor=1.0 → identity to prior formula.
-        const float fTune          = std::clamp(tunePower / 100.0f, 0.0f, 1.0f);
-        const float swrProtectTune =
-            std::clamp(m_transmitModel.swrProtectFactor(), 0.0f, 1.0f);
-        const int wireTuneDrive =
-            std::clamp(int(255.0f * fTune * swrProtectTune), 0, 255);
-        if (m_connection) {
-            auto* conn = m_connection;
-            QMetaObject::invokeMethod(conn, [conn, wireTuneDrive]() {
-                conn->setTxDrive(wireTuneDrive);
-            });
+
+        if (m_paProfileManager) {
+            const PaProfile* activeProfile = m_paProfileManager->activeProfile();
+            if (activeProfile) {
+                const auto result = m_transmitModel.setPowerUsingTargetDbm(
+                    *activeProfile, currentBand, /*bSetPower=*/true,
+                    /*bFromTune=*/true, /*bTwoTone=*/false);
+
+                const float swrProtect =
+                    std::clamp(m_transmitModel.swrProtectFactor(), 0.0f, 1.0f);
+                const int wireTuneDrive = std::clamp(
+                    int(result.audioVolume * 1.02 * 255.0), 0, 255);
+                const double iqGain =
+                    result.audioVolume * static_cast<double>(swrProtect);
+
+                if (m_txChannel) {
+                    m_txChannel->setTxFixedGain(iqGain);
+                }
+                if (m_connection) {
+                    auto* conn = m_connection;
+                    QMetaObject::invokeMethod(conn, [conn, wireTuneDrive]() {
+                        conn->setTxDrive(wireTuneDrive);
+                    });
+                }
+            }
+            // No active profile loaded -> silently no-op the TUNE power
+            // push.  The downstream MoxController / setTuneTone path still
+            // engages MOX + tone, but no drive byte is sent.  Safer than
+            // sending stale wire bytes from a previous radio's profile.
         }
 
         // ── PUSH TUNE-ADJUSTED TX VFO (carrier-on-dial) ────────────────────────
@@ -4403,74 +5042,211 @@ void RadioModel::setTune(bool on)
             return;
         }
 
+        // Issue #177 fix — Thetis-faithful TUN-off ordering.
+        //
+        // From Thetis console.cs:30106-30109 [v2.10.3.13]:
+        //   chkMOX.Checked = false;        // synchronous walk TX→RX (~30 ms)
+        //   await Task.Delay(100);
+        //   radio.GetDSPTX(0).TXPostGenRun = 0;
+        //
+        // Thetis's chkMOX setter blocks the UI thread inside chkMOX_CheckedChanged2
+        // through Thread.Sleep(mox_delay=10) + Thread.Sleep(ptt_out_delay=20),
+        // then waits an additional 100 ms before turning gen1 off.  By the time
+        // gen1.run is set to 0, the WDSP TX channel has already been disabled
+        // (line 29607) and is no longer producing samples — so the hard step at
+        // gen1's output never enters a running TXA chain and there is no
+        // filter-ringing transient.
+        //
+        // NereusSDR's MoxController is timer-based (non-blocking).  We latch
+        // m_pendingTuneOff and let the rxReady → settle-timer slot wired in
+        // the constructor invoke completeTuneOff() at T+30+m_tuneOffSettleMs ms.
+        // Until then, the rest of the TUN-off work (gen1 off, mode restore,
+        // power restore, VFO un-offset) is deferred.
+        m_pendingTuneOff = true;
+
+        // Capture MOX state BEFORE calling MoxController::setTune so we can
+        // detect the "MOX already RX" path that would otherwise strand the
+        // latch.  Codex P1 catch on PR #180: setMox(false)'s idempotent guard
+        // (MoxController.cpp:461) emits no TX→RX phase signals when m_mox is
+        // already false, so no rxReady fires and the deferred completion
+        // never runs — m_pendingTuneOff sits latched, and a later unrelated
+        // rxReady (from a normal PTT cycle) consumes the stale latch.
+        //
+        // This mirrors Thetis exactly. In Thetis the post-MOX work runs
+        // unconditionally because `await Task.Delay(100)` at console.cs:30107
+        // [v2.10.3.13] lives in the TUN handler — not in chkMOX_CheckedChanged2
+        // — so it fires regardless of whether the chkMOX assignment triggered
+        // a walk.  WinForms silently no-ops `chkMOX.Checked = false` when it
+        // is already false, but the next line in chkTUN_CheckedChanged still
+        // awaits 100 ms and then sets gen1.run = 0.
+        //
+        // Bug window for this guard: something has to drop MOX externally
+        // while m_isTuning is still latched (e.g. PA-fault trip dropping
+        // MOX, manual MOX click during TUN, or future PureSignal /
+        // SwrProtectionController force-unkey paths).  Narrow but real.
+        const bool moxWasOn = (m_moxController != nullptr)
+                              && m_moxController->isMox();
+
         // ── RELEASE MOX via MoxController ────────────────────────────────────
-        // Cite: console.cs:30105 [v2.10.3.13]: chkMOX.Checked = false;
-        // MoxController::setTune(false) drives the full TX→RX walk (B.5).
+        // Cite: console.cs:30106 [v2.10.3.13]: chkMOX.Checked = false;
+        // MoxController::setTune(false) drives the full TX→RX walk (B.5)
+        // when MOX is on: it fires hardwareFlipped(false) synchronously and
+        // then chains keyUpDelayTimer (mox_delay) → txaFlushed →
+        // pttOutDelayTimer (ptt_out_delay) → rxReady.  Always called (even
+        // when MOX is already off) because it also clears m_manualMox and
+        // emits manualMoxChanged(false) — Cite: console.cs:30142 [v2.10.3.13].
         if (m_moxController) {
             m_moxController->setTune(false);
         }
 
-        // ── RELEASE TUNE TONE ──────────────────────────────────────────────────
-        // Cite: console.cs:30109 [v2.10.3.13]: radio.GetDSPTX(0).TXPostGenRun = 0;
-        if (m_txChannel) {
-            m_txChannel->setTuneTone(false, 0.0, 0.0);
+        if (!moxWasOn) {
+            // No TX→RX walk will fire because MoxController::setMox(false)
+            // hit its idempotent guard.  Schedule completeTuneOff directly
+            // off a QTimer::singleShot so the deferred path still gets a
+            // turn.  The settle delay matches m_tuneOffSettleMs both for
+            // ordering symmetry with the walk path and because Thetis's
+            // `await Task.Delay(100)` (console.cs:30107 [v2.10.3.13]) is
+            // unconditional — it fires whether or not the chkMOX assignment
+            // triggered a walk.  The lambda re-checks the latch in case a
+            // fresh setTune(true) clears it before the timer fires.
+            QTimer::singleShot(m_tuneOffSettleMs, this, [this]() {
+                if (!m_pendingTuneOff) {
+                    return;
+                }
+                completeTuneOff();
+            });
         }
 
-        // ── RESTORE DSP MODE if swapped ────────────────────────────────────────
-        // Cite: console.cs:30112-30122 [v2.10.3.13]:
-        //   switch (old_dsp_mode) { case CWL: case CWU:
-        //       radio.GetDSPTX(0).CurrentDSPMode = old_dsp_mode; ... }
-        if (m_activeSlice) {
-            const bool wasSwapped = (m_savedTxDspMode == DSPMode::CWL ||
-                                     m_savedTxDspMode == DSPMode::CWU);
-            if (wasSwapped) {
-                m_activeSlice->setDspMode(m_savedTxDspMode);
-            }
-        }
+        // The remainder of the TUN-off work runs from completeTuneOff()
+        // when MoxController::rxReady fires + m_tuneOffSettleMs elapses
+        // (walk path), or directly from the singleShot above (no-walk path).
+        // Wired in the RadioModel constructor next to F.1.
+    }
+}
 
-        // ── RESTORE POWER ──────────────────────────────────────────────────────
-        // Cite: console.cs:30129-30132 [v2.10.3.13]:
-        //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED) PWR = PreviousPWR;
-        //   //MW0LGE_22b  [original inline comment from console.cs:30033]
-        if (m_connection) {
-            auto* conn = m_connection;
-            // Scale percent (0-100) → wire byte (0-255) with SWR-protection
-            // foldback. See setTxDrive scaling comment in connection-power
-            // lambda for the mi0bot NetworkIO.cs:209-211 [v2.10.3.14-beta1]
-            // citation. Default factor=1.0 → identity to prior formula.
-            const float fSaved          = std::clamp(m_savedPowerPct / 100.0f, 0.0f, 1.0f);
+// ---------------------------------------------------------------------------
+// completeTuneOff — Thetis-faithful TUN-off completion (issue #177).
+//
+// Invoked from a QTimer::singleShot(m_tuneOffSettleMs) chained off
+// MoxController::rxReady.  By this point the TX→RX walk has finished, the
+// MOX wire bit is off, the WDSP TX channel has been drained and stopped
+// (txaFlushed → setRunning(false)), and the radio's PA is no longer
+// transmitting.  Cutting gen1 here cannot cause a filter-ringing transient
+// to reach the wire because the TXA chain has stopped processing.
+//
+// Mirrors Thetis console.cs:30109-30134 [v2.10.3.13]:
+//   radio.GetDSPTX(0).TXPostGenRun = 0;     // 30109 — gen1 OFF
+//   ...
+//   switch (old_dsp_mode) { case CWL/CWU: restore }   // 30113-30121
+//   _tuning = false;                        // 30122
+//   updateVFOFreqs(false, true);            // 30124 — un-offset TX VFO
+//   if (_tuneDrivePowerSource == FIXED) PWR = PreviousPWR;   // 30130-30134
+//   //MW0LGE_22b  [original inline comment from console.cs:30033]
+//
+// Idempotent: re-checks m_pendingTuneOff and bails if a fresh setTune(true)
+// or a teardown has cleared it.  The constructor lambda also guards before
+// dispatching here, but a defense-in-depth check makes the contract
+// explicit at this entry point.
+// ---------------------------------------------------------------------------
+void RadioModel::completeTuneOff()
+{
+    if (!m_pendingTuneOff) {
+        return;
+    }
+    m_pendingTuneOff = false;
+
+    // ── RELEASE TUNE TONE ──────────────────────────────────────────────────
+    // Cite: console.cs:30109 [v2.10.3.13]: radio.GetDSPTX(0).TXPostGenRun = 0;
+    // The TX channel has already been stopped by F.1 txaFlushed → setRunning(false),
+    // so this gen1 update lands on an idle TXA chain — no transient.
+    if (m_txChannel) {
+        m_txChannel->setTuneTone(false, 0.0, 0.0);
+    }
+
+    // ── RESTORE DSP MODE if swapped ────────────────────────────────────────
+    // Cite: console.cs:30112-30122 [v2.10.3.13]:
+    //   switch (old_dsp_mode) { case CWL: case CWU:
+    //       radio.GetDSPTX(0).CurrentDSPMode = old_dsp_mode; ... }
+    if (m_activeSlice) {
+        const bool wasSwapped = (m_savedTxDspMode == DSPMode::CWL ||
+                                 m_savedTxDspMode == DSPMode::CWU);
+        if (wasSwapped) {
+            m_activeSlice->setDspMode(m_savedTxDspMode);
+        }
+    }
+
+    // ── RESTORE POWER ──────────────────────────────────────────────────────
+    // Cite: console.cs:30129-30132 [v2.10.3.13]:
+    //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED) PWR = PreviousPWR;
+    //   //MW0LGE_22b  [original inline comment from console.cs:30033]
+    //
+    // Codex P1 follow-up to PR #178 — route the restore through the
+    // calibrated dBm path, NOT the old linear formula.  Previously
+    // this site computed wire_byte = clamp(int(255 * pct/100 * swr),
+    // 0, 255) and wrote it directly via setTxDrive(), which left the
+    // radio holding a pre-hotfix linear byte after TUN-off.  In the
+    // common flow "TUN on → TUN off → MOX without moving slider",
+    // MOX would engage with that stale linear byte → K2GX-class
+    // over-drive on high-gain PAs.
+    //
+    // Same composition as the drive-slider lambda + TUNE-on rewrite:
+    //   wire_byte = clamp(int(audio_volume * 1.02 * 255), 0, 255)
+    //               From audio.cs:262-271 [v2.10.3.13]; NO SWR factor.
+    //   iq_gain   = audio_volume * swrProtect
+    //               From cmaster.cs:1115-1119 [v2.10.3.13]; SWR HERE.
+    // bFromTune=false routes through txMode 0 (drive-slider source)
+    // since TUN is now off and the user's saved drive-slider value
+    // is the canonical post-restore source.
+    m_transmitModel.setPower(m_savedPowerPct);
+    const Band offBand = m_activeSlice
+                            ? bandFromFrequency(m_activeSlice->frequency())
+                            : m_lastBand;
+    if (m_paProfileManager) {
+        const PaProfile* activeProfile = m_paProfileManager->activeProfile();
+        if (activeProfile) {
+            const auto result = m_transmitModel.setPowerUsingTargetDbm(
+                *activeProfile, offBand, /*bSetPower=*/true,
+                /*bFromTune=*/false, /*bTwoTone=*/false);
             const float swrProtectSaved =
                 std::clamp(m_transmitModel.swrProtectFactor(), 0.0f, 1.0f);
-            const int savedWireDrive =
-                std::clamp(int(255.0f * fSaved * swrProtectSaved), 0, 255);
-            QMetaObject::invokeMethod(conn, [conn, savedWireDrive]() {
-                conn->setTxDrive(savedWireDrive);
-            });
+            const int savedWireDrive = std::clamp(
+                int(result.audioVolume * 1.02 * 255.0), 0, 255);
+            const double iqGain = result.audioVolume
+                                   * static_cast<double>(swrProtectSaved);
+            if (m_txChannel) {
+                m_txChannel->setTxFixedGain(iqGain);
+            }
+            if (m_connection) {
+                auto* conn = m_connection;
+                QMetaObject::invokeMethod(conn, [conn, savedWireDrive]() {
+                    conn->setTxDrive(savedWireDrive);
+                });
+            }
         }
-
-        // ── RESTORE TX VFO (un-offset from cw_pitch) ───────────────────────────
-        // Mirrors Thetis console.cs:31788-31810 [v2.10.3.13] which only
-        // applies the ±cw_pitch tx_freq offset while chkTUN.Checked == true.
-        // Once TUNE drops, txtVFOAFreq_LostFocus recomputes tx_freq without
-        // the offset so the carrier returns to dial freq.
-        if (m_activeSlice && m_connection) {
-            const quint64 dialHz =
-                static_cast<quint64>(m_activeSlice->frequency());
-            auto* conn = m_connection;
-            QMetaObject::invokeMethod(conn, [conn, dialHz]() {
-                conn->setTxFrequency(dialHz);
-            });
-        }
-
-        // ── RESTORE METER MODE ─────────────────────────────────────────────────
-        // Cite: console.cs:30136-30137 [v2.10.3.13]:
-        //   if (current_meter_tx_mode != old_meter_tx_mode_before_tune) //MW0LGE_21j
-        //       CurrentMeterTXMode = old_meter_tx_mode_before_tune;
-        // NereusSDR: deferred to H.3 (no MeterModel setTxDisplayMode() yet).
-        // [H.3 hook: restore meterModel().setTxDisplayMode(savedMode) here]
-
-        m_isTuning = false;
     }
+
+    // ── RESTORE TX VFO (un-offset from cw_pitch) ───────────────────────────
+    // Mirrors Thetis console.cs:31788-31810 [v2.10.3.13] which only
+    // applies the ±cw_pitch tx_freq offset while chkTUN.Checked == true.
+    // Once TUNE drops, txtVFOAFreq_LostFocus recomputes tx_freq without
+    // the offset so the carrier returns to dial freq.
+    if (m_activeSlice && m_connection) {
+        const quint64 dialHz =
+            static_cast<quint64>(m_activeSlice->frequency());
+        auto* conn = m_connection;
+        QMetaObject::invokeMethod(conn, [conn, dialHz]() {
+            conn->setTxFrequency(dialHz);
+        });
+    }
+
+    // ── RESTORE METER MODE ─────────────────────────────────────────────────
+    // Cite: console.cs:30136-30137 [v2.10.3.13]:
+    //   if (current_meter_tx_mode != old_meter_tx_mode_before_tune) //MW0LGE_21j
+    //       CurrentMeterTXMode = old_meter_tx_mode_before_tune;
+    // NereusSDR: deferred to H.3 (no MeterModel setTxDisplayMode() yet).
+    // [H.3 hook: restore meterModel().setTxDisplayMode(savedMode) here]
+
+    m_isTuning = false;
 }
 
 void RadioModel::onMoxHardwareFlipped(bool isTx)

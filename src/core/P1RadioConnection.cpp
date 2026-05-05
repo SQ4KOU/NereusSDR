@@ -1560,32 +1560,31 @@ void P1RadioConnection::setPuresignalRun(bool run)
 }
 
 // ---------------------------------------------------------------------------
-// setMicPTT (3M-1b G.5)
+// setMicPTTDisabled (issue #182 — renamed from setMicPTT for parameter
+// parity with Thetis MicPTTDisabled / mic_ptt_disabled storage name).
 //
-// Enables or disables the hardware mic-jack PTT line (Orion/ANAN front-panel).
-// NereusSDR API contract: enabled=true → PTT enabled → wire bit 6 SET; this
-// is direct polarity, mirroring Thetis networkproto1.c:597-598 [v2.10.3.13]
-// (commit @501e3f51):
-//   C1 = ... | ((prn->mic.mic_ptt & 1) << 6);
+// Wire convention matches Thetis byte-for-byte:
+//   disabled=true  → wire bit 6 SET   (firmware ignores mic-jack PTT line)
+//   disabled=false → wire bit 6 CLEAR (firmware honors mic-jack PTT line)
 //
-// Wire bit: bank 11 (C0=0x14) C1 byte bit 6 (mask 0x40), DIRECT polarity.
+// Wire bit: bank 11 (C0=0x14) C1 byte bit 6 (mask 0x40), direct polarity.
 // This is the SAME C1 byte as G.3 (bit 4) + G.4 (bit 5) — all OR'd in.
 //
-// Pre-fix history: the codec wrote `!enabled` to the wire (inverted),
-// mirroring the same bug PR #161 fixed in P1CodecHl2 (commit ca8cd73).  With
-// the default m_micPTT=false, the inverted code put bit 6 = 1 every CC frame;
-// Hermes-class firmware reads bit 6 as "track mic-jack tip as PTT source" and
-// the floating mic tip caused phantom PTT signals fighting software MOX —
-// rapid T/R relay flutter on TUNE/TX (ANAN-10E bench symptom).  Codec is now
-// direct; setMicPTT(true) sets the wire bit, setMicPTT(false) clears it.
+// From Thetis console.cs:19757-19766 [v2.10.3.13+501e3f51]:
+//   private bool mic_ptt_disabled = false;        // default PTT enabled
+//   public bool MicPTTDisabled {
+//       set {
+//           mic_ptt_disabled = value;
+//           NetworkIO.SetMicPTT(Convert.ToInt32(value));
+//       }
+//   }
+// From Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13+501e3f51]:
+//   C1 = ... | ((prn->mic.mic_ptt & 1) << 6);
 //
 // Cross-reference notes:
 //   deskhpsdr/src/old_protocol.c:3000-3002 [@120188f]: deskhpsdr's
 //     `mic_ptt_enabled` is a higher-level wrapper that inverts before
 //     writing the wire field; the wire field itself (mic_ptt) is direct.
-//   Thetis console.cs:19758 [v2.10.3.13]: `MicPTTDisabled` property is a
-//     UI-facing inverted view; it calls `NetworkIO.SetMicPTT(disabled?1:0)`,
-//     and the wire field is direct.
 //   deskhpsdr/src/new_protocol.c:1488-1490 [@120188f] — P2 byte 50 bit 2
 //     (P2 mic_ptt path, separate codec, same direct-polarity convention).
 //
@@ -1593,15 +1592,15 @@ void P1RadioConnection::setPuresignalRun(bool run)
 // BEFORE the idempotent guard so the bit lands on the wire within ≤1 frame.
 // Reuses m_forceBank11Next + captureBank11ForTest infrastructure from G.3.
 // ---------------------------------------------------------------------------
-void P1RadioConnection::setMicPTT(bool enabled)
+void P1RadioConnection::setMicPTTDisabled(bool disabled)
 {
     // Codex P2: set flush flag BEFORE idempotent guard.
     m_forceBank11Next = true;
 
-    if (m_micPTT == enabled) {
+    if (m_micPTTDisabled == disabled) {
         return;  // idempotent — flush flag already set above
     }
-    m_micPTT = enabled;
+    m_micPTTDisabled = disabled;
 }
 
 // ---------------------------------------------------------------------------
@@ -1836,7 +1835,7 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.p1LineInGain   = m_lineInGain;  // Task 2.1 of P1 full-parity epic
     ctx.p1UserDigOut   = m_userDigOut;  // Task 2.2 of P1 full-parity epic
     ctx.p1PuresignalRun = m_puresignalRun;  // Task 2.3 of P1 full-parity epic
-    ctx.p1MicPTT       = m_micPTT;      // 3M-1b G.5
+    ctx.p1MicPTTDisabled = m_micPTTDisabled;  // 3M-1b G.5; renamed for issue #182
     ctx.duplex         = m_duplex;
     ctx.diversity      = m_diversity;
     ctx.antennaIdx     = m_antennaIdx;
@@ -2436,9 +2435,12 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
         return;
     }
 
-    //[2.10.3.13]MW0LGE adc_overload accumulated (or'd) across EP6 frames, cleared only by reader [Thetis networkproto1.c:335]
-    // From Thetis networkproto1.c — ADC overflow in C&C status bytes.
-    // C0[0] bit 0 = LT2208 overflow (ADC0).
+    // Cache each subframe's C0 byte for the mic_ptt extraction below.
+    // ADC overflow does NOT live in C0 — per Thetis networkproto1.c:332-355
+    // [v2.10.3.13] it lives in C1 bit 0 of case-0x00 frames and in
+    // C1/C2/C3 bit 0 of case-0x20 frames.  See the C0-type switch lower
+    // in this function.
+    //
     // Phase 3P-E Task 2: C0 bit 7 = I2C response frame (HL2 only).
     // Source: mi0bot networkproto1.c:478-493 [@c26a8a4]
     const quint8 c0_sub0 = frame[11];
@@ -2455,10 +2457,6 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
             parseI2cResponse(c0, frame[base + 4], frame[base + 5],
                              frame[base + 6], frame[base + 7]);
         }
-    }
-
-    if ((c0_sub0 & 0x01) || (c0_sub1 & 0x01)) {
-        emit adcOverflow(0);
     }
 
     // H.5: mic_ptt extraction — P1 status frame C0 bit 0 (PTT from radio).
@@ -2516,12 +2514,24 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
             continue;
         }
         // Source: networkproto1.c:332 — switch (ControlBytesIn[0] & 0xf8)
-        // Adjacent upstream cases 0x00/0x20 (networkproto1.c:335/353/354/355)
-        // each preserve `// only cleared by getAndResetADC_Overload(), or'ed
-        // with existing state //[2.10.3.13]MW0LGE` — inline attribution that
-        // survives verbatim in the port even though ADC-overload extraction
-        // happens in parseEp6Frame(), not here.
+        // Cases 0x00/0x20 carry ADC-overload bits (one per ADC); the
+        // `//[2.10.3.13]MW0LGE only cleared by getAndResetADC_Overload(),
+        // or'ed with existing state` inline attributions are preserved
+        // verbatim within each case body below.  In NereusSDR the SAC
+        // hysteresis state machine (StepAttenuatorController) plays the
+        // role of `getAndResetADC_Overload()` — it OR-accumulates every
+        // adcOverflow() emission until its 100 ms tick consumes them.
         switch (c0 & 0xF8) {
+        case 0x00: {
+            // Issue #176 fix — ADC0 overload reported in C1 bit 0.
+            // From Thetis networkproto1.c:335 [v2.10.3.13]:
+            //   prn->adc[0].adc_overload = prn->adc[0].adc_overload || ControlBytesIn[1] & 0x01;
+            //   // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+            if (c1 & 0x01) {
+                emit adcOverflow(0);
+            }
+            break;
+        }
         case 0x08: {
             // From Thetis networkproto1.c:339 [@501e3f5] — exciter_power AIN5
             const quint16 exciter = static_cast<quint16>((c1 << 8) | c2);
@@ -2570,6 +2580,17 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
             // Shell-chrome sub-PR-2 B.3: emit supplyVoltsChanged for all radios.
             // From Thetis networkproto1.c:350 [@501e3f5] — supply_volts AIN6 Hermes Volts //[2.10.3.13]MW0LGE
             handleSupplyRaw(supply);
+            break;
+        }
+        case 0x20: {
+            // Issue #176 fix — multi-ADC overload report (Orion / ANAN-8000 class).
+            // From Thetis networkproto1.c:353-355 [v2.10.3.13]:
+            //   prn->adc[0].adc_overload = prn->adc[0].adc_overload || ControlBytesIn[1] & 1;        // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+            //   prn->adc[1].adc_overload = prn->adc[1].adc_overload || (ControlBytesIn[2] & 1) << 1; // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+            //   prn->adc[2].adc_overload = prn->adc[2].adc_overload || (ControlBytesIn[3] & 1) << 2; // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+            if (c1 & 0x01) { emit adcOverflow(0); }
+            if (c2 & 0x01) { emit adcOverflow(1); }
+            if (c3 & 0x01) { emit adcOverflow(2); }
             break;
         }
         default:
@@ -2698,28 +2719,25 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
     case 11: // Preamp control (networkproto1.c:593-601)
         out[0] = C0base | 0x14;
         // C1: preamp bits 0-3 (bit 3 = rx0 again, Thetis quirk) + mic_trs bit 4
-        //     + mic_bias bit 5 + mic_ptt bit 6 (INVERTED — LEGACY ONLY).
+        //     + mic_bias bit 5 + mic_ptt bit 6.
         // mic_trs polarity inversion: 1 = tip is BIAS/PTT → write !m_micTipRing.
         // mic_bias polarity: 1 = bias on (no inversion) → write m_micBias.
-        // mic_ptt polarity inversion: 1 = PTT DISABLED on wire → write !m_micPTT.
-        // TODO(legacy-codec-cleanup): same mic_ptt inversion bug as the codec
-        // path; flip when re-enabling NEREUS_USE_LEGACY_P1_CODEC=1.  P1CodecStandard
-        // (the production path) was flipped to direct polarity in the same
-        // commit that introduced this TODO; this legacy compose path is
-        // kept inverted only because it is unreachable in shipped builds
-        // (gated by the env var).  See P1CodecStandard.cpp:bank11 for the
-        // direct-polarity wire formula and Thetis cite.
-        // From Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13]
+        // mic_ptt polarity: direct → write m_micPTTDisabled (Thetis convention,
+        // bit set = PTT disabled at firmware). Matches the codec path; both
+        // ramped to direct in the issue #182 follow-up.
+        // From Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13+501e3f51]
         //   C1 = ... | ((prn->mic.mic_trs & 1) << 4) | ((prn->mic.mic_bias & 1) << 5)
         //           | ((prn->mic.mic_ptt & 1) << 6);
+        // From Thetis console.cs:19764 [v2.10.3.13+501e3f51]:
+        //   NetworkIO.SetMicPTT(Convert.ToInt32(mic_ptt_disabled));
         out[1] = static_cast<quint8>(
                    (m_rxPreamp[0] ? 0x01 : 0)
                  | (m_rxPreamp[1] ? 0x02 : 0)
                  | (m_rxPreamp[2] ? 0x04 : 0)
-                 | (m_rxPreamp[0] ? 0x08 : 0)        // bit3 = rx0 again (Thetis quirk)
-                 | (!m_micTipRing ? 0x10 : 0x00)      // 3M-1b G.3 — mic_trs (inverted)
-                 | (m_micBias    ? 0x20 : 0x00)       // 3M-1b G.4 — mic_bias (no inversion)
-                 | (!m_micPTT    ? 0x40 : 0x00));     // 3M-1b G.5 — mic_ptt (INVERTED — LEGACY ONLY; see TODO above)
+                 | (m_rxPreamp[0] ? 0x08 : 0)            // bit3 = rx0 again (Thetis quirk)
+                 | (!m_micTipRing      ? 0x10 : 0x00)    // 3M-1b G.3 — mic_trs (inverted)
+                 | (m_micBias          ? 0x20 : 0x00)    // 3M-1b G.4 — mic_bias (no inversion)
+                 | (m_micPTTDisabled   ? 0x40 : 0x00));  // 3M-1b G.5 — mic_ptt (direct, issue #182)
         out[2] = 0; // line_in_gain + puresignal
         out[3] = 0; // user digital outputs
         out[4] = static_cast<quint8>((m_stepAttn[0] & 0x1F) | 0x20); // ADC0 step ATT + enable

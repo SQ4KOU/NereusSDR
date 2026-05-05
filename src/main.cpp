@@ -212,10 +212,15 @@ int main(int argc, char* argv[])
     NereusSDR::AppSettings::migrateLegacyN2adrFilter(
         NereusSDR::AppSettings::instance());
 
+    // Issue #174: drop the orphan "hardware/oc/n2adrFilter" key written by
+    // the now-removed OcOutputsHfTab checkbox.  Idempotent.
+    NereusSDR::AppSettings::removeOrphanOcN2adrFilter(
+        NereusSDR::AppSettings::instance());
+
     // v0.3.0 / v0.3.x settings schema migrations — must run after load(),
-    // after other migrations. v3 retires legacy display keys; v4 retires
-    // DisplayAverageAlpha after the averaging-math fix moved to per-side
-    // millisecond time constants.
+    // after other one-shot migrations above. v3 retires legacy display
+    // keys; v4 retires DisplayAverageAlpha after the averaging-math fix
+    // moved to per-side millisecond time constants.
     NereusSDR::AppSettings::instance().ensureSettingsAtVersion(4);
 
     // Restore logging category toggles from settings

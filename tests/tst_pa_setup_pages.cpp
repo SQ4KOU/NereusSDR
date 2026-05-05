@@ -8,10 +8,10 @@
 // expose a placeholder QLabel hinting at the future-phase tag.
 //
 // Source attribution (lives in production headers, not the test):
-//   Thetis tpPowerAmplifier   setup.designer.cs:47366-47371 [v2.10.3.13 @501e3f51]
-//   Thetis tpGainByBand       setup.designer.cs:47386-47525 [v2.10.3.13 @501e3f51]
-//   Thetis tpWattMeter        setup.designer.cs:49304-49309 [v2.10.3.13 @501e3f51]
-//   Thetis panelPAValues      setup.designer.cs:51155-51177 [v2.10.3.13 @501e3f51]
+//   Thetis tpPowerAmplifier   setup.designer.cs:47366-47371 [v2.10.3.13+501e3f51]
+//   Thetis tpGainByBand       setup.designer.cs:47386-47525 [v2.10.3.13+501e3f51]
+//   Thetis tpWattMeter        setup.designer.cs:49304-49309 [v2.10.3.13+501e3f51]
+//   Thetis panelPAValues      setup.designer.cs:51155-51177 [v2.10.3.13+501e3f51]
 
 #include <QtTest/QtTest>
 #include <QLabel>
@@ -51,9 +51,15 @@ bool labelContains(const QWidget& page, const QString& needle)
 
 void TstPaSetupPages::pa_gain_page_constructs_with_placeholder_label()
 {
+    // Phase 6 of #167 (2026-05-03): the placeholder body was replaced
+    // wholesale with the live PA Gain editor backed by PaProfileManager.
+    // When constructed without a model, the page falls back to a brief
+    // "requires a connected RadioModel with PaProfileManager" hint label
+    // so model-less previews still render coherently.  Live-editor
+    // integration coverage lives in tst_pa_gain_by_band_page_editor.
     PaGainByBandPage page(/*model=*/nullptr);
-    QVERIFY2(labelContains(page, QStringLiteral("3M-3")),
-             "PaGainByBandPage placeholder must mention the future phase tag '3M-3'");
+    QVERIFY2(labelContains(page, QStringLiteral("requires a connected RadioModel")),
+             "PaGainByBandPage model-less fallback must hint at the model requirement");
 }
 
 void TstPaSetupPages::pa_watt_meter_page_constructs_with_placeholder_label()

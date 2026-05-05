@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(NereusSDR VERSION 0.3.1 LANGUAGES C CXX)
+project(NereusSDR VERSION 0.3.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -414,6 +414,10 @@ set(CORE_SOURCES
     src/core/StepAttenuatorController.cpp
     src/core/CalibrationController.cpp
     src/core/PaCalProfile.cpp
+    src/core/PaGainProfile.cpp
+    src/core/PaProfile.cpp
+    src/core/PaProfileManager.cpp
+    src/core/PaTelemetryScaling.cpp
     src/core/OcMatrix.cpp
     src/core/RadioStatus.cpp
     src/core/SettingsHygiene.cpp
@@ -489,8 +493,9 @@ set(GUI_SOURCES
     src/gui/dbm_strip_math.cpp
     src/gui/SpectrumOverlayMenu.cpp
     src/gui/widgets/CenterMarkSlider.h
+    src/gui/widgets/DexpPeakMeter.h
+    src/gui/widgets/DexpPeakMeter.cpp
     src/gui/widgets/DspParamPopup.cpp
-    src/gui/widgets/VoxSettingsPopup.cpp
     src/gui/widgets/FilterPassbandWidget.cpp
     src/gui/widgets/FilterPresetEditDialog.cpp
     src/gui/widgets/GuardedComboBox.h

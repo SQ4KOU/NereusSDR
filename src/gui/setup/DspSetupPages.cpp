@@ -1647,7 +1647,7 @@ CwSetupPage::CwSetupPage(RadioModel* model, QWidget* parent)
     // directly — there's no row-level QWidget to toggle.  Default:
     // hidden until a board with hasSidetoneGenerator=true connects.
     //
-    // Thetis upstream comparison (setup.cs [v2.10.3.13 @501e3f51]
+    // Thetis upstream comparison (setup.cs [v2.10.3.13+501e3f51]
     // chkSideTones / chkDSPKeyerSidetone[_software]):  Thetis does NOT
     // board-gate its sidetone controls — they're always visible and
     // mutually-exclusive via the toggle logic at setup.cs:8823-8854.
@@ -1842,56 +1842,12 @@ FmSetupPage::FmSetupPage(RadioModel* model, QWidget* parent)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// VoxDexpSetupPage
+// (VoxDexpSetupPage placeholder removed in 3M-3a-iii Task 16 — the wired
+//  page lives at Setup → Transmit → DEXP/VOX (DexpVoxPage from Task 14).
+//  The old stub had 4 disabled placeholder sliders and never wired to
+//  anything; two leaves with similar names under different categories was
+//  confusing, so the stub was retired.)
 // ══════════════════════════════════════════════════════════════════════════════
-//
-// From Thetis setup.cs — tabDSP / tabPageVOX controls:
-//   tbVOXThreshold, tbVOXGain, tbVOXDelay, tbAntiVOXGain,
-//   tbDEXPThreshold, tbDEXPAttack, tbDEXPRelease
-//
-VoxDexpSetupPage::VoxDexpSetupPage(RadioModel* model, QWidget* parent)
-    : SetupPage("VOX/DEXP", model, parent)
-{
-    // ── VOX ───────────────────────────────────────────────────────────────────
-    QGroupBox* voxGrp = addSection("VOX");
-    QVBoxLayout* voxLay = qobject_cast<QVBoxLayout*>(voxGrp->layout());
-
-    auto* voxThresh = new QSlider(Qt::Horizontal);
-    voxThresh->setRange(0, 100);
-    addLabeledSlider(voxLay, "Threshold", voxThresh);
-
-    auto* voxGain = new QSlider(Qt::Horizontal);
-    voxGain->setRange(0, 100);
-    addLabeledSlider(voxLay, "Gain", voxGain);
-
-    auto* voxDelay = new QSlider(Qt::Horizontal);
-    voxDelay->setRange(0, 2000);
-    addLabeledSlider(voxLay, "Delay (ms)", voxDelay);
-
-    auto* antiVoxGain = new QSlider(Qt::Horizontal);
-    antiVoxGain->setRange(0, 100);
-    addLabeledSlider(voxLay, "Anti-VOX Gain", antiVoxGain);
-
-    disableGroup(voxGrp);
-
-    // ── DEXP ──────────────────────────────────────────────────────────────────
-    QGroupBox* dexpGrp = addSection("DEXP");
-    QVBoxLayout* dexpLay = qobject_cast<QVBoxLayout*>(dexpGrp->layout());
-
-    auto* dexpThresh = new QSlider(Qt::Horizontal);
-    dexpThresh->setRange(0, 100);
-    addLabeledSlider(dexpLay, "Threshold", dexpThresh);
-
-    auto* dexpAttack = new QSlider(Qt::Horizontal);
-    dexpAttack->setRange(0, 2000);
-    addLabeledSlider(dexpLay, "Attack (ms)", dexpAttack);
-
-    auto* dexpRelease = new QSlider(Qt::Horizontal);
-    dexpRelease->setRange(0, 2000);
-    addLabeledSlider(dexpLay, "Release (ms)", dexpRelease);
-
-    disableGroup(dexpGrp);
-}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // CfcSetupPage

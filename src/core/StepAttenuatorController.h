@@ -10,6 +10,13 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-05-03 — Added setAttOnTxValue / attOnTxValue setter pair (Phase 1
+//                 Agent 1D of #167) — the ATT-on-TX-on-power-change safety
+//                 gate used by TransmitModel::setPowerUsingTargetDbm
+//                 (Thetis console.cs:46740-46748 [v2.10.3.13]).  Mirrors
+//                 Thetis SetupForm.ATTOnTX (mi0bot setup.cs:3988-4017
+//                 [v2.10.3.13]); range clamped to [m_minAttDb, 31].
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -228,6 +235,32 @@ public:
     void setTxAttenuationForBand(Band band, int dB);
     int txAttenuationForBand(Band band) const;
 
+    /// Set the step-attenuator value applied during TX (MOX-engaged) on
+    /// the current TX band.  Mirrors Thetis SetupForm.ATTOnTX setter:
+    ///   - mi0bot setup.cs:3988-4017 [v2.10.3.13] (HL2 fork: −28..31 range)
+    ///   - ramdor setup.cs:3957-3977 [v2.10.3.13] (legacy: 0..31 range)
+    /// chains into Thetis console.cs:10600-10625 TxAttenData setter
+    /// [v2.10.3.13] (//[2.10.3.6]MW0LGE att_fixes), which:
+    ///   1. validateTXStepAttData clamps to spinbox limits
+    ///   2. setTXstepAttenuatorForBand(_tx_band, value) writes per-band slot
+    ///   3. NetworkIO.SetTxAttenData(value) pushes to hardware when m_bATTonTX
+    ///
+    /// Used by TransmitModel::setPowerUsingTargetDbm to force max ATT (31)
+    /// when PS-A is active and drive power changes
+    /// (console.cs:46740-46748 [v2.10.3.13] //[2.10.3.5]MW0LGE).
+    ///
+    /// Range: clamped to [m_minAttDb, 31].  Default m_minAttDb=0 (legacy
+    /// boards); HL2 widens to −28 via setMinAttenuation(-28) on connect.
+    /// Thetis ATTOnTX always caps at 31 regardless of board.
+    ///
+    /// Persists per-MAC via the existing per-band TX ATT storage
+    /// (saveSettings/loadSettings).  No-op when m_attOnTxEnabled=false:
+    /// the per-band slot still updates, but no hardware push occurs (the
+    /// MOX-on path in onMoxHardwareFlipped already short-circuits to 0
+    /// when ATT-on-TX is disabled).
+    void setAttOnTxValue(int dB);
+    int  attOnTxValue() const;
+
     // shouldForce31Db predicate.
     //
     // Returns true ⟺ the TX attenuator must be forced to 31 dB.
@@ -301,6 +334,12 @@ signals:
 
     // Emitted when step-att-enabled changes (ATT ↔ S-ATT mode switch).
     void stepAttEnabledChanged(bool enabled);
+
+    // Emitted when the user toggles "Auto Attenuate RX1 Enable" in
+    // Setup → General → Options.  RxApplet listens here to flip the
+    // S-ATT label to A-ATT on HL2 boards (mi0bot console.cs:21342-21365
+    // [v2.10.3.13-beta2] AutoAttRX1 property: lblPreamp.Text = "A-ATT").
+    void autoAttEnabledChanged(bool enabled);
 
     // Emitted when ADC-linked state changes (both RX share same ADC).
     void adcLinkedChanged(bool linked);
