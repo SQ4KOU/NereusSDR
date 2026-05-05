@@ -73,7 +73,6 @@
 //============================================================================================//
 
 #include "gui/SetupPage.h"
-#include "models/Band.h"
 #include "models/TransmitModel.h"   // DrivePowerSource enum (Issue #175 Task 8)
 #include "core/HpsdrModel.h"        // HPSDRModel enum + spinbox helpers (Issue #175 Task 8)
 

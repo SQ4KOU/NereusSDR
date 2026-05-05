@@ -32,7 +32,6 @@
 #include "gui/setup/TransmitSetupPages.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
-#include "core/HpsdrModel.h"
 #include "core/StepAttenuatorController.h"
 
 using namespace NereusSDR;

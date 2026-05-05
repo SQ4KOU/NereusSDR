@@ -149,7 +149,6 @@
 #include "core/MicProfileManager.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
-#include "models/Band.h"
 #include "core/StepAttenuatorController.h"
 #include "gui/applets/TxEqDialog.h"
 
