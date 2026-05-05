@@ -97,6 +97,7 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -154,13 +155,10 @@ void loadCombo(QComboBox* combo, const QString& key, const QString& def)
     }
 }
 
-void wireComboPersist(QComboBox* combo, const QString& key)
-{
-    QObject::connect(combo, &QComboBox::currentTextChanged,
-        combo, [key](const QString& v) {
-            AppSettings::instance().setValue(key, v);
-        });
-}
+// wireComboPersist removed in v0.3.x — every combo now goes through
+// DspOptionsPage::wireComboWithLiveApply, which both persists and
+// triggers a live-apply rebuild when the combo's mode group matches
+// the active slice.
 
 void loadCheck(QCheckBox* check, const QString& key, bool def)
 {
@@ -268,150 +266,193 @@ void DspOptionsPage::wireComboWithLiveApply(QComboBox* combo,
 
 void DspOptionsPage::buildUI()
 {
-    // SetupPage provides a QVBoxLayout via contentLayout(); we add our groups
-    // to it directly to match Thetis's tpDSPOptions tab layout (Section 4A).
+    // Layout matches Thetis tpDSPOptions [v2.10.3.13]: one HBox row of three
+    // outer groups (Buffer Size, Filter Size, Filter Type), each holding 4
+    // stacked inner mode sub-groups (SSB/AM, FM, CW, Digital).  Per-mode
+    // sub-groups have RX + TX combos for Phone/FM/Digital and RX-only for
+    // CW (Thetis console.cs:38891-38897 [v2.10.3.13] — CW TX is firmware-
+    // handled and has no UI control).
+    //
+    // Thetis pixel-coord reference (setup.Designer.cs, all [v2.10.3.13]):
+    //   grpDSPBufferSize  at x=  8, w=120, h=320
+    //   grpDSPFilterSize  at x=134, w=120, h=320
+    //   grpDSPFilterType  at x=260, w=153, h=320
+    //   Inner sub-groups stack at y=16/88/160/232 (SSB/AM, FM, CW, Digital).
+
     QVBoxLayout* layout = contentLayout();
 
-    // =========================================================================
-    // Group 1: Buffer Size (IQcomp)
-    // From Thetis setup.Designer.cs grpDSPBufferSize [v2.10.3.13]:
-    //   grpDSPBufferSize.Text = "Buffer Size (IQcomp)"
-    //   Contains sub-groups: grpDSPBufPhone("SSB/AM"), grpDSPBufCW("CW"),
-    //                        grpDSPBufDig("Digital"), grpDSPBufFM("FM")
-    // NereusSDR collapses RX+TX to a single per-mode combo.
-    // =========================================================================
-    auto* bufGroup = new QGroupBox(tr("Buffer Size (IQcomp)"), this);
-    auto* bufGrid  = new QGridLayout(bufGroup);
-    bufGrid->setColumnStretch(1, 1);
+    // One warning icon per outer category — visibility logic in
+    // recomputeWarnings() (Task 4.5, ported from Thetis console.cs:38797-38807).
+    m_warnBufferSize = makeWarningIcon(this);
+    m_warnFilterSize = makeWarningIcon(this);
+    m_warnBufferType = makeWarningIcon(this);
 
-    int row = 0;
+    // Helper: build a per-mode sub-group with RX (and optionally TX) combo.
+    // Empty txDef → no TX combo (CW pattern).
+    auto buildModeSubgroup = [this](const QString& title,
+                                    const QStringList& items,
+                                    const QString& keyPrefix,
+                                    const QString& modeKey,
+                                    DSPMode comboMode,
+                                    const QString& rxDef,
+                                    const QString& txDef,
+                                    const QString& comboTooltip,
+                                    QComboBox*& outRx,
+                                    QComboBox*& outTx) -> QGroupBox*
+    {
+        auto* g = new QGroupBox(title);
+        auto* form = new QFormLayout(g);
+        form->setSpacing(2);
+        form->setContentsMargins(8, 4, 8, 6);
 
-    // warning icon placed in column 2 of first row only
-    m_warnBufferSize = makeWarningIcon(bufGroup);
+        outRx = makeCombo(g, items);
+        outRx->setToolTip(comboTooltip);
+        loadCombo(outRx, keyPrefix + modeKey + QStringLiteral("Rx"), rxDef);
+        wireComboWithLiveApply(outRx, comboMode,
+                               keyPrefix + modeKey + QStringLiteral("Rx"));
+        form->addRow(tr("RX:"), outRx);
 
-    // Task 4.2: addBufRow now takes a representative DSPMode so the combo
-    // can trigger a live-apply rebuild when its mode group matches the active
-    // slice mode (design Section 4B). DSPMode::USB = Phone group,
-    // DSPMode::CWU = CW group, DSPMode::DIGU = Dig group, DSPMode::FM = FM group.
-    auto addBufRow = [&](const QString& modeLabel, QComboBox*& combo,
-                         const QString& key, const QString& def,
-                         DSPMode comboMode) {
-        bufGrid->addWidget(new QLabel(modeLabel, bufGroup), row, 0);
-        combo = makeCombo(bufGroup, kBufferSizes);
-        // toolTip from Thetis: "Sets DSP internal Buffer Size -- larger yields sharper filters, more latency"
-        combo->setToolTip(tr("Sets DSP internal buffer size — larger values yield sharper "
-                             "filters but add latency."));
-        bufGrid->addWidget(combo, row, 1);
-        if (row == 0) {
-            bufGrid->addWidget(m_warnBufferSize, row, 2);
+        if (!txDef.isEmpty()) {
+            outTx = makeCombo(g, items);
+            outTx->setToolTip(comboTooltip);
+            loadCombo(outTx, keyPrefix + modeKey + QStringLiteral("Tx"), txDef);
+            wireComboWithLiveApply(outTx, comboMode,
+                                   keyPrefix + modeKey + QStringLiteral("Tx"));
+            form->addRow(tr("TX:"), outTx);
+        } else {
+            outTx = nullptr;
         }
-        loadCombo(combo, key, def);
-        wireComboWithLiveApply(combo, comboMode, key);
-        row++;
+        return g;
     };
 
-    // From Thetis grpDSPBufPhone.Text = "SSB/AM" [v2.10.3.13]
-    // Default DisplayMember = "64" (Phone TX) / "64" (Phone RX); NereusSDR default 256.
-    addBufRow(tr("Phone (SSB/AM)"), m_bufPhone, "DspOptionsBufferSizePhone", "256", DSPMode::USB);
-    // From Thetis grpDSPBufCW.Text = "CW" [v2.10.3.13]; CW is RX-only in Thetis buffer group
-    addBufRow(tr("CW"),             m_bufCw,    "DspOptionsBufferSizeCw",    "256", DSPMode::CWU);
-    // From Thetis grpDSPBufDig.Text = "Digital" [v2.10.3.13]
-    addBufRow(tr("Digital"),        m_bufDig,   "DspOptionsBufferSizeDig",   "256", DSPMode::DIGU);
-    // From Thetis grpDSPBufFM.Text = "FM" [v2.10.3.13]
-    addBufRow(tr("FM"),             m_bufFm,    "DspOptionsBufferSizeFm",    "256", DSPMode::FM);
+    // Helper: build an outer column = title + 4 mode sub-groups + warning
+    // icon at the bottom.  Inner-group titles are Thetis-verbatim
+    // ("SSB/AM"/"FM"/"CW"/"Digital" per setup.Designer.cs:grpDSPBuf*.Text
+    // [v2.10.3.13]).
+    auto buildColumn = [&](const QString& outerTitle,
+                           QGroupBox* phoneSub,
+                           QGroupBox* fmSub,
+                           QGroupBox* cwSub,
+                           QGroupBox* digSub,
+                           QLabel*    warnIcon) -> QGroupBox*
+    {
+        auto* col = new QGroupBox(outerTitle);
+        auto* v = new QVBoxLayout(col);
+        v->setSpacing(4);
+        v->setContentsMargins(6, 8, 6, 6);
+        v->addWidget(phoneSub);  // SSB/AM (Thetis y=16)
+        v->addWidget(fmSub);     // FM     (Thetis y=88)
+        v->addWidget(cwSub);     // CW     (Thetis y=160)
+        v->addWidget(digSub);    // Digital(Thetis y=232)
+        v->addStretch();
 
-    layout->addWidget(bufGroup);
-
-    // =========================================================================
-    // Group 2: Filter Size (taps)
-    // From Thetis setup.Designer.cs grpDSPFilterSize [v2.10.3.13]:
-    //   grpDSPFilterSize (outer container), sub-groups per mode.
-    //   comboDSPPhoneRXFiltSize.DisplayMember = "2048" (Phone RX default)
-    // NereusSDR collapses RX+TX to per-mode.
-    // =========================================================================
-    auto* filtGroup = new QGroupBox(tr("Filter Size (taps)"), this);
-    auto* filtGrid  = new QGridLayout(filtGroup);
-    filtGrid->setColumnStretch(1, 1);
-
-    row = 0;
-    m_warnFilterSize = makeWarningIcon(filtGroup);
-
-    // Task 4.2: addFiltRow takes comboMode for live-apply wiring.
-    auto addFiltRow = [&](const QString& modeLabel, QComboBox*& combo,
-                          const QString& key, const QString& def,
-                          DSPMode comboMode) {
-        filtGrid->addWidget(new QLabel(modeLabel, filtGroup), row, 0);
-        combo = makeCombo(filtGroup, kFilterSizes);
-        // toolTip from Thetis (same tooltip as buffer): "Sets DSP internal Buffer Size..."
-        combo->setToolTip(tr("Sets the FIR filter length — larger values yield sharper "
-                             "filter skirts but add CPU and latency."));
-        filtGrid->addWidget(combo, row, 1);
-        if (row == 0) {
-            filtGrid->addWidget(m_warnFilterSize, row, 2);
-        }
-        loadCombo(combo, key, def);
-        wireComboWithLiveApply(combo, comboMode, key);
-        row++;
+        auto* warnRow = new QHBoxLayout();
+        warnRow->addStretch();
+        warnRow->addWidget(warnIcon);
+        v->addLayout(warnRow);
+        return col;
     };
 
-    // From Thetis grpDSPFiltSizePhone.Text = "SSB/AM" [v2.10.3.13]
-    // comboDSPPhoneRXFiltSize.DisplayMember = "2048"; NereusSDR default "4096"
-    addFiltRow(tr("Phone (SSB/AM)"), m_filtSizePhone, "DspOptionsFilterSizePhone", "4096", DSPMode::USB);
-    // From Thetis grpDSPFiltSizeCW.Text = "CW" [v2.10.3.13]
-    addFiltRow(tr("CW"),             m_filtSizeCw,    "DspOptionsFilterSizeCw",    "4096", DSPMode::CWU);
-    // From Thetis grpDSPFiltSizeDig.Text = "Digital" [v2.10.3.13]
-    addFiltRow(tr("Digital"),        m_filtSizeDig,   "DspOptionsFilterSizeDig",   "4096", DSPMode::DIGU);
-    // From Thetis grpDSPFiltSizeFM.Text = "FM" [v2.10.3.13]
-    addFiltRow(tr("FM"),             m_filtSizeFm,    "DspOptionsFilterSizeFm",    "4096", DSPMode::FM);
+    // ── Outer column 1: Buffer Size (IQcomp) ────────────────────────────────
+    // From Thetis setup.Designer.cs:grpDSPBufferSize.Text = "Buffer Size (IQcomp)".
+    // Defaults from Thetis console.cs:39073-39139 [v2.10.3.13]:
+    //   dsp_buf_phone_rx = 64    dsp_buf_phone_tx = 64
+    //   dsp_buf_fm_rx    = 256   dsp_buf_fm_tx    = 128
+    //   dsp_buf_cw_rx    = 64    (no CW TX)
+    //   dsp_buf_dig_rx   = 64    dsp_buf_dig_tx   = 64
+    const QString kBufTooltip = tr(
+        "Sets the DSP internal buffer size — larger values yield sharper "
+        "filters but add latency.");
 
-    layout->addWidget(filtGroup);
+    QComboBox* unusedTxStub = nullptr;
+    auto* bufPhone = buildModeSubgroup(tr("SSB/AM"), kBufferSizes,
+        QStringLiteral("DspOptionsBufferSize"), QStringLiteral("Phone"),
+        DSPMode::USB, QStringLiteral("64"), QStringLiteral("64"),
+        kBufTooltip, m_bufPhoneRx, m_bufPhoneTx);
+    auto* bufFm    = buildModeSubgroup(tr("FM"), kBufferSizes,
+        QStringLiteral("DspOptionsBufferSize"), QStringLiteral("Fm"),
+        DSPMode::FM, QStringLiteral("256"), QStringLiteral("128"),
+        kBufTooltip, m_bufFmRx, m_bufFmTx);
+    auto* bufCw    = buildModeSubgroup(tr("CW"), kBufferSizes,
+        QStringLiteral("DspOptionsBufferSize"), QStringLiteral("Cw"),
+        DSPMode::CWU, QStringLiteral("64"), QString(),
+        kBufTooltip, m_bufCwRx, unusedTxStub);
+    auto* bufDig   = buildModeSubgroup(tr("Digital"), kBufferSizes,
+        QStringLiteral("DspOptionsBufferSize"), QStringLiteral("Dig"),
+        DSPMode::DIGU, QStringLiteral("64"), QStringLiteral("64"),
+        kBufTooltip, m_bufDigRx, m_bufDigTx);
+    auto* bufColumn = buildColumn(tr("Buffer Size (IQcomp)"),
+                                  bufPhone, bufFm, bufCw, bufDig,
+                                  m_warnBufferSize);
 
-    // =========================================================================
-    // Group 3: Filter Type
-    // From Thetis setup.Designer.cs grpDSPFiltTypePhone/CW/Dig/FM [v2.10.3.13]:
-    //   comboDSPPhoneRXFiltType.Items = {"Linear Phase","Low Latency"}
-    //   toolTip: "Select 'Low Latency' (Minimum Phase) or 'Linear Phase' Filters"
-    //   CW has RX only — no comboDSPCWTXFiltType in Thetis.
-    // =========================================================================
-    auto* filtTypeGroup = new QGroupBox(tr("Filter Type"), this);
-    auto* filtTypeGrid  = new QGridLayout(filtTypeGroup);
-    filtTypeGrid->setColumnStretch(1, 1);
+    // ── Outer column 2: Filter Size (taps) ──────────────────────────────────
+    // From Thetis setup.Designer.cs:grpDSPFilterSize.Text = "Filter Size (taps)".
+    // Defaults from Thetis console.cs:39141-39216 [v2.10.3.13] — all 4096
+    // for every mode/direction.
+    const QString kFiltTooltip = tr(
+        "Sets the FIR filter length — larger values yield sharper "
+        "filter skirts but add CPU and latency.");
 
-    row = 0;
-    m_warnBufferType = makeWarningIcon(filtTypeGroup);
+    auto* fszPhone = buildModeSubgroup(tr("SSB/AM"), kFilterSizes,
+        QStringLiteral("DspOptionsFilterSize"), QStringLiteral("Phone"),
+        DSPMode::USB, QStringLiteral("4096"), QStringLiteral("4096"),
+        kFiltTooltip, m_filtSizePhoneRx, m_filtSizePhoneTx);
+    auto* fszFm    = buildModeSubgroup(tr("FM"), kFilterSizes,
+        QStringLiteral("DspOptionsFilterSize"), QStringLiteral("Fm"),
+        DSPMode::FM, QStringLiteral("4096"), QStringLiteral("4096"),
+        kFiltTooltip, m_filtSizeFmRx, m_filtSizeFmTx);
+    auto* fszCw    = buildModeSubgroup(tr("CW"), kFilterSizes,
+        QStringLiteral("DspOptionsFilterSize"), QStringLiteral("Cw"),
+        DSPMode::CWU, QStringLiteral("4096"), QString(),
+        kFiltTooltip, m_filtSizeCwRx, unusedTxStub);
+    auto* fszDig   = buildModeSubgroup(tr("Digital"), kFilterSizes,
+        QStringLiteral("DspOptionsFilterSize"), QStringLiteral("Dig"),
+        DSPMode::DIGU, QStringLiteral("4096"), QStringLiteral("4096"),
+        kFiltTooltip, m_filtSizeDigRx, m_filtSizeDigTx);
+    auto* fszColumn = buildColumn(tr("Filter Size (taps)"),
+                                  fszPhone, fszFm, fszCw, fszDig,
+                                  m_warnFilterSize);
 
-    // Task 4.2: addTypeRow takes comboMode for live-apply wiring.
-    auto addTypeRow = [&](const QString& rowLabel, QComboBox*& combo,
-                          const QString& key, const QString& def,
-                          DSPMode comboMode) {
-        filtTypeGrid->addWidget(new QLabel(rowLabel, filtTypeGroup), row, 0);
-        combo = makeCombo(filtTypeGroup, kFilterTypes);
-        // toolTip from Thetis: "Select 'Low Latency' (Minimum Phase) or 'Linear Phase' Filters"
-        combo->setToolTip(tr("Select 'Low Latency' (minimum phase) or 'Linear Phase' filters. "
-                             "Linear Phase has symmetric delay; Low Latency uses minimum-phase "
-                             "design with less group delay."));
-        filtTypeGrid->addWidget(combo, row, 1);
-        if (row == 0) {
-            filtTypeGrid->addWidget(m_warnBufferType, row, 2);
-        }
-        loadCombo(combo, key, def);
-        wireComboWithLiveApply(combo, comboMode, key);
-        row++;
-    };
+    // ── Outer column 3: Filter Type ─────────────────────────────────────────
+    // From Thetis setup.Designer.cs:grpDSPFilterType.Text = "Filter Type".
+    // Items: "Linear Phase", "Low Latency"  (index 0 = Linear Phase).
+    // Defaults from Thetis console.cs:39218-39284 [v2.10.3.13] — every
+    // mode/direction defaults to DSPFilterType.Low_Latency.
+    const QString kTypeTooltip = tr(
+        "Select 'Low Latency' (minimum phase) or 'Linear Phase' filters. "
+        "Linear Phase has symmetric delay; Low Latency uses minimum-phase "
+        "design with less group delay.");
 
-    // From Thetis grpDSPFiltTypePhone — comboDSPPhoneRXFiltType / comboDSPPhoneTXFiltType [v2.10.3.13]
-    addTypeRow(tr("Phone RX"), m_filtTypePhoneRx, "DspOptionsFilterTypePhoneRx", "Low Latency", DSPMode::USB);
-    addTypeRow(tr("Phone TX"), m_filtTypePhoneTx, "DspOptionsFilterTypePhoneTx", "Linear Phase", DSPMode::USB);
-    // From Thetis grpDSPFiltTypeCW — comboDSPCWRXFiltType only (no TX) [v2.10.3.13]
-    addTypeRow(tr("CW RX"),    m_filtTypeCwRx,    "DspOptionsFilterTypeCwRx",    "Low Latency",  DSPMode::CWU);
-    // From Thetis grpDSPFiltTypeDig — comboDSPDigRXFiltType / comboDSPDigTXFiltType [v2.10.3.13]
-    addTypeRow(tr("Digital RX"), m_filtTypeDigRx, "DspOptionsFilterTypeDigRx",   "Linear Phase", DSPMode::DIGU);
-    addTypeRow(tr("Digital TX"), m_filtTypeDigTx, "DspOptionsFilterTypeDigTx",   "Linear Phase", DSPMode::DIGU);
-    // From Thetis grpDSPFiltTypeFM — comboDSPFMRXFiltType / comboDSPFMTXFiltType [v2.10.3.13]
-    addTypeRow(tr("FM RX"),    m_filtTypeFmRx,    "DspOptionsFilterTypeFmRx",    "Low Latency",  DSPMode::FM);
-    addTypeRow(tr("FM TX"),    m_filtTypeFmTx,    "DspOptionsFilterTypeFmTx",    "Linear Phase", DSPMode::FM);
+    auto* ftPhone = buildModeSubgroup(tr("SSB/AM"), kFilterTypes,
+        QStringLiteral("DspOptionsFilterType"), QStringLiteral("Phone"),
+        DSPMode::USB, QStringLiteral("Low Latency"),
+        QStringLiteral("Low Latency"),
+        kTypeTooltip, m_filtTypePhoneRx, m_filtTypePhoneTx);
+    auto* ftFm    = buildModeSubgroup(tr("FM"), kFilterTypes,
+        QStringLiteral("DspOptionsFilterType"), QStringLiteral("Fm"),
+        DSPMode::FM, QStringLiteral("Low Latency"),
+        QStringLiteral("Low Latency"),
+        kTypeTooltip, m_filtTypeFmRx, m_filtTypeFmTx);
+    auto* ftCw    = buildModeSubgroup(tr("CW"), kFilterTypes,
+        QStringLiteral("DspOptionsFilterType"), QStringLiteral("Cw"),
+        DSPMode::CWU, QStringLiteral("Low Latency"), QString(),
+        kTypeTooltip, m_filtTypeCwRx, unusedTxStub);
+    auto* ftDig   = buildModeSubgroup(tr("Digital"), kFilterTypes,
+        QStringLiteral("DspOptionsFilterType"), QStringLiteral("Dig"),
+        DSPMode::DIGU, QStringLiteral("Low Latency"),
+        QStringLiteral("Low Latency"),
+        kTypeTooltip, m_filtTypeDigRx, m_filtTypeDigTx);
+    auto* ftColumn = buildColumn(tr("Filter Type"),
+                                 ftPhone, ftFm, ftCw, ftDig,
+                                 m_warnBufferType);
 
-    layout->addWidget(filtTypeGroup);
+    // ── Assemble three outer columns into a single HBox row ─────────────────
+    auto* topRow = new QHBoxLayout();
+    topRow->setSpacing(8);
+    topRow->addWidget(bufColumn);
+    topRow->addWidget(fszColumn);
+    topRow->addWidget(ftColumn);
+    layout->addLayout(topRow);
 
     // =========================================================================
     // Group 4: Filter Impulse Cache
@@ -541,23 +582,21 @@ void DspOptionsPage::buildUI()
         QObject::connect(combo, &QComboBox::currentTextChanged,
             this, [this]() { recomputeWarnings(); });
     };
-    wireWarn(m_bufPhone);
-    wireWarn(m_bufCw);
-    wireWarn(m_bufDig);
-    wireWarn(m_bufFm);
-    // Filter-size combos:
-    wireWarn(m_filtSizePhone);
-    wireWarn(m_filtSizeCw);
-    wireWarn(m_filtSizeDig);
-    wireWarn(m_filtSizeFm);
-    // Filter-type combos (all 7 type combos contribute to filterTypeDifferent*):
-    wireWarn(m_filtTypePhoneRx);
-    wireWarn(m_filtTypePhoneTx);
+    // Buffer-size combos (4 RX + 3 TX — CW has no TX combo per Thetis):
+    wireWarn(m_bufPhoneRx); wireWarn(m_bufPhoneTx);
+    wireWarn(m_bufFmRx);    wireWarn(m_bufFmTx);
+    wireWarn(m_bufCwRx);
+    wireWarn(m_bufDigRx);   wireWarn(m_bufDigTx);
+    // Filter-size combos (same shape):
+    wireWarn(m_filtSizePhoneRx); wireWarn(m_filtSizePhoneTx);
+    wireWarn(m_filtSizeFmRx);    wireWarn(m_filtSizeFmTx);
+    wireWarn(m_filtSizeCwRx);
+    wireWarn(m_filtSizeDigRx);   wireWarn(m_filtSizeDigTx);
+    // Filter-type combos:
+    wireWarn(m_filtTypePhoneRx); wireWarn(m_filtTypePhoneTx);
+    wireWarn(m_filtTypeFmRx);    wireWarn(m_filtTypeFmTx);
     wireWarn(m_filtTypeCwRx);
-    wireWarn(m_filtTypeDigRx);
-    wireWarn(m_filtTypeDigTx);
-    wireWarn(m_filtTypeFmRx);
-    wireWarn(m_filtTypeFmTx);
+    wireWarn(m_filtTypeDigRx);   wireWarn(m_filtTypeDigTx);
 
     // Apply initial state immediately (persisted values may already be mismatched).
     recomputeWarnings();
@@ -620,40 +659,34 @@ bool DspOptionsPage::comboValuesDiffer3(QComboBox* a, QComboBox* b,
 
 void DspOptionsPage::recomputeWarnings()
 {
-    // From Thetis console.cs:38797-38803 [v2.10.3.13] — UpdateDSP() validity checks.
+    // From Thetis console.cs:38797-38803 [v2.10.3.13] — UpdateDSP() validity
+    // checks.  RX side: 4-way diff over (phone, fm, cw, dig).  TX side:
+    // 3-way diff over (phone, fm, dig) — Thetis has no CW TX buffer.
 
-    // Buffer size: RX 4-way (phone/cw/dig/fm) OR TX 3-way (phone/dig/fm).
-    // NereusSDR uses one combo per mode that applies to both RX and TX channels,
-    // so both checks use the same per-mode combos (TX lacks CW buffer in Thetis).
-    const bool bufferSizeDifferentRX = comboValuesDiffer4(m_bufPhone, m_bufCw,
-                                                           m_bufDig, m_bufFm);
-    const bool bufferSizeDifferentTX = comboValuesDiffer3(m_bufPhone, m_bufDig,
-                                                           m_bufFm);
+    const bool bufferSizeDifferentRX = comboValuesDiffer4(
+        m_bufPhoneRx, m_bufFmRx, m_bufCwRx, m_bufDigRx);
+    const bool bufferSizeDifferentTX = comboValuesDiffer3(
+        m_bufPhoneTx, m_bufFmTx, m_bufDigTx);
     m_warnBufferSize->setVisible(bufferSizeDifferentRX || bufferSizeDifferentTX);
     m_warnBufferSize->setToolTip(
         tr("Buffer sizes differ across modes — WDSP will use the mode-specific "
            "value and no implicit conversion happens. Set all modes to the same "
            "buffer size if you want a consistent configuration."));
 
-    // Filter size: same all-equal logic on filter-size combos.
-    const bool filterSizeDifferentRX = comboValuesDiffer4(m_filtSizePhone, m_filtSizeCw,
-                                                           m_filtSizeDig, m_filtSizeFm);
-    const bool filterSizeDifferentTX = comboValuesDiffer3(m_filtSizePhone, m_filtSizeDig,
-                                                           m_filtSizeFm);
+    const bool filterSizeDifferentRX = comboValuesDiffer4(
+        m_filtSizePhoneRx, m_filtSizeFmRx, m_filtSizeCwRx, m_filtSizeDigRx);
+    const bool filterSizeDifferentTX = comboValuesDiffer3(
+        m_filtSizePhoneTx, m_filtSizeFmTx, m_filtSizeDigTx);
     m_warnFilterSize->setVisible(filterSizeDifferentRX || filterSizeDifferentTX);
     m_warnFilterSize->setToolTip(
         tr("Filter sizes differ across modes — WDSP will use the mode-specific "
            "value. Set all modes to the same filter size for a consistent "
            "configuration."));
 
-    // Filter type: Thetis checks RX types (phone_rx, fm_rx, cw_rx, dig_rx all equal)
-    // and TX types (phone_tx, fm_tx, dig_tx all equal) separately.
-    // NereusSDR has separate RX/TX type combos per mode.
-    const bool filterTypeDifferentRX =
-        comboValuesDiffer4(m_filtTypePhoneRx, m_filtTypeCwRx,
-                           m_filtTypeDigRx,   m_filtTypeFmRx);
-    const bool filterTypeDifferentTX =
-        comboValuesDiffer3(m_filtTypePhoneTx, m_filtTypeDigTx, m_filtTypeFmTx);
+    const bool filterTypeDifferentRX = comboValuesDiffer4(
+        m_filtTypePhoneRx, m_filtTypeFmRx, m_filtTypeCwRx, m_filtTypeDigRx);
+    const bool filterTypeDifferentTX = comboValuesDiffer3(
+        m_filtTypePhoneTx, m_filtTypeFmTx, m_filtTypeDigTx);
     m_warnBufferType->setVisible(filterTypeDifferentRX || filterTypeDifferentTX);
     m_warnBufferType->setToolTip(
         tr("Filter types differ across modes — some modes use Linear Phase and "

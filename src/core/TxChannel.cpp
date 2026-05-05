@@ -3812,16 +3812,23 @@ qint64 TxChannel::onModeChanged(DSPMode newMode)
     auto& s = AppSettings::instance();
     const QString modeKey = txModeKeyPart(newMode);
 
-    // Filter size — TX shares the same key as RX (per-mode, no RX/TX split).
-    const int newFiltSize  = s.value("DspOptionsFilterSize" + modeKey, 4096).toInt();
+    // Read per-mode TX-side filter settings — Thetis-faithful split keys
+    // post schema-v5 (radio.cs:2628-2662 [v2.10.3.13] DSPTX persists
+    // FilterSize and FilterType independently from DSPRX).
+    //
+    // Note: CW has no TX combo in Thetis (firmware-handled per
+    // console.cs:38891-38897 [v2.10.3.13]); for CW mode the read falls
+    // back to the default — m_txFilterSize/Type stay at their construction
+    // values and the early-out below skips the setter calls.  Default
+    // matches Thetis console.cs:39218-39284 — Low_Latency for every mode.
+    const int newFiltSize  =
+        s.value(QStringLiteral("DspOptionsFilterSize") + modeKey + QStringLiteral("Tx"),
+                4096).toInt();
 
-    // Filter type — TX-side key (separate from RX).
-    // Note: CW has no TX filter-type combo in Thetis (RX only).  For CW mode
-    // we fall through to the LinearPhase default — matches Thetis behavior
-    // where the TX CW filter type is not exposed.
-    const QString typeKey  = "DspOptionsFilterType" + modeKey + "Tx";
-    const QString typeStr  = s.value(typeKey, "Linear Phase").toString();
-    const int newFiltType  = (typeStr == "Low Latency") ? 0 : 1;
+    const QString typeKey  =
+        QStringLiteral("DspOptionsFilterType") + modeKey + QStringLiteral("Tx");
+    const QString typeStr  = s.value(typeKey, QStringLiteral("Low Latency")).toString();
+    const int newFiltType  = (typeStr == QStringLiteral("Low Latency")) ? 0 : 1;
 
     // Skip if nothing changed.
     if (newFiltSize == m_txFilterSize && newFiltType == m_txFilterType) {

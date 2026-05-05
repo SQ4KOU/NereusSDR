@@ -1832,14 +1832,19 @@ qint64 RxChannel::onModeChanged(DSPMode newMode)
     auto& s = AppSettings::instance();
     const QString modeKey = rxModeKeyPart(newMode);
 
-    // Read per-mode filter settings (buffer size live-apply for RX is not
-    // wired today — m_bufferSize is set at construction time and the WDSP
-    // SetDSPBuffsize wire-up is deferred; see commit 1b4ba06 message).
-    const int newFiltSize  = s.value("DspOptionsFilterSize" + modeKey, 4096).toInt();
+    // Read per-mode RX-side filter settings — Thetis-faithful split keys
+    // post schema-v5 (radio.cs:540-574 [v2.10.3.13] DSPRX persists FilterSize
+    // and FilterType independently from DSPTX).  Buffer size live-apply for
+    // RX is not wired today — m_bufferSize is set at construction time and
+    // the WDSP SetDSPBuffsize wire-up is deferred.
+    const int newFiltSize  =
+        s.value(QStringLiteral("DspOptionsFilterSize") + modeKey + QStringLiteral("Rx"),
+                4096).toInt();
 
-    const QString typeKey  = "DspOptionsFilterType" + modeKey + "Rx";
-    const QString typeStr  = s.value(typeKey, "Low Latency").toString();
-    const int newFiltType  = (typeStr == "Low Latency") ? 0 : 1;
+    const QString typeKey  =
+        QStringLiteral("DspOptionsFilterType") + modeKey + QStringLiteral("Rx");
+    const QString typeStr  = s.value(typeKey, QStringLiteral("Low Latency")).toString();
+    const int newFiltType  = (typeStr == QStringLiteral("Low Latency")) ? 0 : 1;
 
     // Skip if nothing changed.  Each setter has its own idempotent guard,
     // but bailing here avoids the timer/log overhead.

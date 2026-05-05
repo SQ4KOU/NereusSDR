@@ -127,21 +127,29 @@ private:
     void wireComboWithLiveApply(QComboBox* combo, DSPMode comboMode,
                                 const QString& key);
 
-    // ── Group 1: Buffer Size ─────────────────────────────────────────────────
-    // From Thetis setup.Designer.cs grpDSPBufPhone/CW/Dig/FM [v2.10.3.13].
-    // comboDSPPhoneRXBuf Items: "64","128","256","512","1024"
-    QComboBox* m_bufPhone{nullptr};
-    QComboBox* m_bufCw{nullptr};
-    QComboBox* m_bufDig{nullptr};
-    QComboBox* m_bufFm{nullptr};
+    // ── Group 1: Buffer Size (RX + TX per mode, Thetis-faithful split) ──────
+    // From Thetis setup.Designer.cs grpDSPBufPhone/FM/CW/Dig [v2.10.3.13].
+    // comboDSPPhoneRXBuf Items: "64","128","256","512","1024".
+    // CW has RX only — Thetis omits CW TX (firmware-handled per
+    // console.cs:38891-38897 [v2.10.3.13]).
+    QComboBox* m_bufPhoneRx{nullptr};
+    QComboBox* m_bufPhoneTx{nullptr};
+    QComboBox* m_bufFmRx{nullptr};
+    QComboBox* m_bufFmTx{nullptr};
+    QComboBox* m_bufCwRx{nullptr};      // CW RX only — no TX
+    QComboBox* m_bufDigRx{nullptr};
+    QComboBox* m_bufDigTx{nullptr};
 
-    // ── Group 2: Filter Size ─────────────────────────────────────────────────
-    // From Thetis setup.Designer.cs grpDSPFiltSizePhone/CW/Dig/FM [v2.10.3.13].
-    // comboDSPPhoneRXFiltSize Items: "1024","2048","4096","8192","16384"
-    QComboBox* m_filtSizePhone{nullptr};
-    QComboBox* m_filtSizeCw{nullptr};
-    QComboBox* m_filtSizeDig{nullptr};
-    QComboBox* m_filtSizeFm{nullptr};
+    // ── Group 2: Filter Size (RX + TX per mode) ─────────────────────────────
+    // From Thetis setup.Designer.cs grpDSPFiltSizePhone/FM/CW/Dig [v2.10.3.13].
+    // comboDSPPhoneRXFiltSize Items: "1024","2048","4096","8192","16384".
+    QComboBox* m_filtSizePhoneRx{nullptr};
+    QComboBox* m_filtSizePhoneTx{nullptr};
+    QComboBox* m_filtSizeFmRx{nullptr};
+    QComboBox* m_filtSizeFmTx{nullptr};
+    QComboBox* m_filtSizeCwRx{nullptr}; // CW RX only — no TX
+    QComboBox* m_filtSizeDigRx{nullptr};
+    QComboBox* m_filtSizeDigTx{nullptr};
 
     // ── Group 3: Filter Type ─────────────────────────────────────────────────
     // From Thetis setup.Designer.cs grpDSPFiltType* [v2.10.3.13].
