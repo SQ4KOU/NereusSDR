@@ -3993,19 +3993,30 @@ void RadioModel::loadSliceState(SliceModel* slice)
     emit sliceStateRestored(slice->sliceIndex());
 }
 
-// Issue #153 sub-bug 2 — push the active slice's DSPMode + audio-space
-// filter cutoffs to TxChannel.  See header comment for the wire targets
-// and source-of-truth Thetis cites.  This is the helper called by all
-// three triggers (createTxChannel post-create, SliceModel::dspModeChanged,
+// Issue #153 sub-bug 2 — push the active slice's DSPMode + the user's
+// configured TX bandpass to TxChannel.  See header comment for wire
+// targets and Thetis source-of-truth cites.  Called by all three
+// triggers (createTxChannel post-create, SliceModel::dspModeChanged,
 // MoxController::txAboutToBegin).
+//
+// Filter source is m_transmitModel (NOT m_activeSlice).  TransmitModel
+// stores audio-space TX cutoffs (positive, low <= high enforced by
+// setFilterLow/High swap-on-commit at TransmitModel.cpp:2526-2549),
+// which is what TxChannel::requestFilterChange + applyTxFilterForMode
+// expect.  SliceModel::filterLow/High are RX-passband IQ-space values
+// (negative for LSB-family modes); routing those through
+// applyTxFilterForMode would double-negate on LSB and silently
+// overwrite any user-configured TX bandwidth on every connect/MOX.
+// Mirrors the canonical wire at RadioModel.cpp:2550-2560 which reads
+// audioLow/audioHigh straight from TransmitModel::filterChanged.
 void RadioModel::pushTxModeAndBandpass()
 {
     if (!m_activeSlice) {
         return;
     }
     const DSPMode mode      = m_activeSlice->dspMode();
-    const int     audioLow  = m_activeSlice->filterLow();
-    const int     audioHigh = m_activeSlice->filterHigh();
+    const int     audioLow  = m_transmitModel.filterLow();
+    const int     audioHigh = m_transmitModel.filterHigh();
 
     // Diagnostic / test-observation hook fires unconditionally (m_txChannel
     // can be null during odd lifecycle moments — addSlice before

@@ -1,3 +1,8 @@
+// no-port-check: NereusSDR-original test for the pushTxModeAndBandpass
+// helper.  The TXA.c reference below is a Thetis source-of-truth cite
+// for design context (the WDSP defaults that make the bug visible),
+// not a port — no Thetis code is translated in this file.
+//
 // tst_radio_model_push_tx_mode_and_bandpass.cpp
 //
 // Issue #153 sub-bug 2 — SSB MOX TXA seeding.
@@ -23,6 +28,7 @@
 #include <QtTest/QtTest>
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 #include "core/WdspTypes.h"
 
 using namespace NereusSDR;
@@ -32,9 +38,13 @@ class TestRadioModelPushTxModeAndBandpass : public QObject
     Q_OBJECT
 
 private slots:
-    // ── Contract: helper emits signal with current slice mode/filter ────────
+    // ── Contract: helper emits signal with slice mode + TransmitModel filter ──
+    //
+    // TX bandpass source is TransmitModel (audio-space, low<=high), NOT
+    // SliceModel (RX-passband IQ-space, negative for LSB).  See
+    // RadioModel::pushTxModeAndBandpass header comment for why.
 
-    void pushEmitsSignalWithCurrentSliceState()
+    void pushEmitsSignalWithSliceModeAndTransmitFilter()
     {
         RadioModel model;
         const int idx = model.addSlice();
@@ -43,7 +53,8 @@ private slots:
         QVERIFY(slice != nullptr);
 
         slice->setDspMode(DSPMode::USB);
-        slice->setFilter(150, 2850);  // audio-space USB voice cutoffs
+        model.transmitModel().setFilterLow(150);
+        model.transmitModel().setFilterHigh(2850);
 
         QSignalSpy spy(&model, &RadioModel::txModeAndBandpassPushed);
         model.pushTxModeAndBandpass();
@@ -54,30 +65,37 @@ private slots:
         QCOMPARE(spy.at(0).at(2).toInt(), 2850);
     }
 
-    // ── Contract: helper picks up freshly-restored slice values ─────────────
+    // ── Contract: cutoffs stay audio-space across LSB↔USB mode changes ──────
     //
-    // Mirrors the connect-time path: loadSliceState restores the slice's
-    // dspMode + filter, then the txSetup wiring runs pushTxModeAndBandpass
-    // as the initial seed.  Verifies the helper reads CURRENT slice state
-    // each call (no stale cache).
+    // Verifies the bug Codex flagged on PR #189: prior implementation read
+    // cutoffs from SliceModel::filterLow/High, which are negative on LSB.
+    // applyTxFilterForMode would then double-negate, producing a
+    // wrong-sided TXA bandpass on first MOX after an LSB selection.
+    // Reading from TransmitModel keeps cutoffs positive across all modes;
+    // the mode parameter alone drives the IQ-space sign mapping inside
+    // applyTxFilterForMode.
 
-    void pushReflectsModeChanges()
+    void pushKeepsCutoffsPositiveAcrossModeChanges()
     {
         RadioModel model;
         model.addSlice();
         SliceModel* slice = model.activeSlice();
         QVERIFY(slice != nullptr);
 
-        slice->setDspMode(DSPMode::LSB);
-        slice->setFilter(-2850, -150);
+        // User-configured TX BW stays the same regardless of slice mode.
+        model.transmitModel().setFilterLow(150);
+        model.transmitModel().setFilterHigh(2850);
 
         QSignalSpy spy(&model, &RadioModel::txModeAndBandpassPushed);
+
+        slice->setDspMode(DSPMode::LSB);
         model.pushTxModeAndBandpass();
         QCOMPARE(spy.count(), 1);
         QCOMPARE(spy.at(0).at(0).value<DSPMode>(), DSPMode::LSB);
+        QCOMPARE(spy.at(0).at(1).toInt(), 150);   // audio-space, NOT -2850
+        QCOMPARE(spy.at(0).at(2).toInt(), 2850);  // audio-space, NOT -150
 
         slice->setDspMode(DSPMode::USB);
-        slice->setFilter(150, 2850);
         model.pushTxModeAndBandpass();
         QCOMPARE(spy.count(), 2);
         QCOMPARE(spy.at(1).at(0).value<DSPMode>(), DSPMode::USB);

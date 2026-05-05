@@ -849,8 +849,19 @@ public:
     // sliceStateRestored(index) on completion (see comment on the signal).
     void loadSliceState(SliceModel* slice);
 
-    // Issue #153 sub-bug 2 — push the active slice's DSPMode +
-    // audio-space filter cutoffs to TxChannel.  No-op if no active slice.
+    // Issue #153 sub-bug 2 — push the active slice's DSPMode + the
+    // user's configured TX bandpass (TransmitModel::filterLow/High) to
+    // TxChannel.  No-op if no active slice.
+    //
+    // Filter source is TransmitModel, NOT SliceModel.  TransmitModel
+    // stores audio-space TX cutoffs (positive, low<=high invariant),
+    // which is what TxChannel::requestFilterChange + applyTxFilterForMode
+    // expect.  SliceModel filter values are RX-passband IQ-space
+    // (negative for LSB-family); routing them through
+    // applyTxFilterForMode would double-negate on LSB and clobber
+    // any user-configured TX bandwidth on every connect/MOX.  Mirrors
+    // the canonical wire at RadioModel.cpp:2550-2560 which sources
+    // audio cutoffs from TransmitModel::filterChanged.
     //
     // Read happens on RadioModel's main thread; the TxChannel setter
     // call is queued to TxWorkerThread via QMetaObject::invokeMethod
