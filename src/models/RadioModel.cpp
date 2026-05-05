@@ -3281,10 +3281,19 @@ void RadioModel::wireSliceSignals()
                 emit dspChangeMeasured(elapsed);
             }
         }
-        // TX channel: onModeChanged triggers a rebuild if filter/type changed.
-        // TX worker is already quiesced during mode changes (MoxController
-        // clears MOX before mode-switch). Guard: m_txChannel may be null
-        // (not yet created if no radio is connected, or during teardown).
+        // TX channel: live-apply per-mode filter size + filter type via the
+        // in-place WDSP entry points (TXASetNC / TXASetMP — radio.cs:2628 /
+        // 2647 [v2.10.3.13]).  Each setter internally quiesces the channel
+        // via SetChannelState's flushflag handshake (channel.c:259-297
+        // [v2.10.3.13]) — safe to call from the main thread while
+        // TxWorkerThread is alive.
+        //
+        // The earlier 2026-05-05 hot-fix that disabled this call was
+        // working around a different bug: TxChannel::onModeChanged called
+        // WdspEngine::rebuildTxChannel() (close-and-reopen) which raced
+        // with the running worker and SIGSEGV'd on band change.
+        // commits 1ed5464/1b4ba06/fd5c807 swapped the rebuild path for
+        // the in-place setters, so the live-apply is safe to restore.
         if (m_txChannel) {
             const qint64 txElapsed = m_txChannel->onModeChanged(mode);
             if (txElapsed > 0) {
