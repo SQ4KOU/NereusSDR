@@ -323,6 +323,8 @@ warren@wpratt.com
 #include "TxMicRouter.h"
 #include "WdspEngine.h"  // for rebuild() delegate to WdspEngine::rebuildTxChannel()
 
+#include <QElapsedTimer>
+
 #include <algorithm>
 #include <cmath>        // std::isnan — NaN sentinel for double idempotent guards (D.3)
 #include <cstring>
@@ -3807,10 +3809,6 @@ QString txModeKeyPart(DSPMode mode)
 
 qint64 TxChannel::onModeChanged(DSPMode newMode)
 {
-    if (!m_wdspEngine) {
-        return 0;
-    }
-
     auto& s = AppSettings::instance();
     const QString modeKey = txModeKeyPart(newMode);
 
@@ -3818,45 +3816,33 @@ qint64 TxChannel::onModeChanged(DSPMode newMode)
     const int newFiltSize  = s.value("DspOptionsFilterSize" + modeKey, 4096).toInt();
 
     // Filter type — TX-side key (separate from RX).
-    // Note: CW has no TX filter-type combo in Thetis (RX only). For CW mode
-    // we fall through to the LinearPhase default — this matches Thetis behavior
+    // Note: CW has no TX filter-type combo in Thetis (RX only).  For CW mode
+    // we fall through to the LinearPhase default — matches Thetis behavior
     // where the TX CW filter type is not exposed.
     const QString typeKey  = "DspOptionsFilterType" + modeKey + "Tx";
     const QString typeStr  = s.value(typeKey, "Linear Phase").toString();
     const int newFiltType  = (typeStr == "Low Latency") ? 0 : 1;
 
-    // Global (non-per-mode) keys.
-    const bool newCacheImpulse     = s.value("DspOptionsCacheImpulse", "False").toString() == "True";
-    const bool newCacheSaveRestore = s.value("DspOptionsCacheImpulseSaveRestore", "False").toString() == "True";
-    const bool newHighRes          = s.value("DspOptionsHighResFilterCharacteristics", "False").toString() == "True";
-
-    // Skip rebuild if nothing actually changed.
+    // Skip if nothing changed.
     if (newFiltSize == m_txFilterSize && newFiltType == m_txFilterType) {
         return 0;
     }
-
-    ChannelConfig cfg;
-    cfg.sampleRate                  = WdspEngine::kTxDspSampleRate;
-    cfg.bufferSize                  = 64;   // Fixed TX input buffer (RadioModel default)
-    cfg.filterSize                  = newFiltSize;
-    cfg.filterType                  = newFiltType;
-    cfg.cacheImpulse                = newCacheImpulse;
-    cfg.cacheImpulseSaveRestore     = newCacheSaveRestore;
-    cfg.highResFilterCharacteristics = newHighRes;
 
     qCInfo(lcDsp) << "TxChannel::onModeChanged: mode=" << static_cast<int>(newMode)
                   << "key=" << modeKey
                   << "filtSize:" << m_txFilterSize << "->" << newFiltSize
                   << "filtType:" << m_txFilterType << "->" << newFiltType;
 
-    const qint64 elapsed = rebuild(*m_wdspEngine, cfg);
-
-    if (elapsed >= 0) {
-        m_txFilterSize = newFiltSize;
-        m_txFilterType = newFiltType;
-    }
-
-    return elapsed;
+    // Apply via the in-place WDSP entry points.  Each call internally
+    // quiesces + reconfigures + restores via SetChannelState's flushflag
+    // handshake — same path Thetis takes from radio.cs:2628 / 2647
+    // [v2.10.3.13].  Safe to call from main thread while TxWorkerThread
+    // is running.
+    QElapsedTimer t;
+    t.start();
+    setTxFilterSizeSamples(newFiltSize);
+    setTxFilterTypeLinearPhase(newFiltType == 1);
+    return t.elapsed();
 }
 
 // ── TX fixed-gain output level (issue #167 Phase 1 Agent 1C) ────────────────

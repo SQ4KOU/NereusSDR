@@ -252,6 +252,8 @@ warren@wpratt.com
 #include "WdspEngine.h"
 #include "wdsp_api.h"
 
+#include <QElapsedTimer>
+
 #ifdef HAVE_DFNR
 #include "DeepFilterFilter.h"
 #endif
@@ -1827,58 +1829,38 @@ QString rxModeKeyPart(DSPMode mode)
 
 qint64 RxChannel::onModeChanged(DSPMode newMode)
 {
-    if (!m_wdspEngine) {
-        return 0;
-    }
-
     auto& s = AppSettings::instance();
     const QString modeKey = rxModeKeyPart(newMode);
 
-    // Read per-mode buffer and filter settings.
-    // Defaults match DspOptionsPage construction-time defaults.
-    const int newBufSize   = s.value("DspOptionsBufferSize" + modeKey, 256).toInt();
+    // Read per-mode filter settings (buffer size live-apply for RX is not
+    // wired today — m_bufferSize is set at construction time and the WDSP
+    // SetDSPBuffsize wire-up is deferred; see commit 1b4ba06 message).
     const int newFiltSize  = s.value("DspOptionsFilterSize" + modeKey, 4096).toInt();
 
-    // Filter type — RX-side key (separate from TX).
     const QString typeKey  = "DspOptionsFilterType" + modeKey + "Rx";
     const QString typeStr  = s.value(typeKey, "Low Latency").toString();
     const int newFiltType  = (typeStr == "Low Latency") ? 0 : 1;
 
-    // Global (non-per-mode) keys.
-    const bool newCacheImpulse     = s.value("DspOptionsCacheImpulse", "False").toString() == "True";
-    const bool newCacheSaveRestore = s.value("DspOptionsCacheImpulseSaveRestore", "False").toString() == "True";
-    const bool newHighRes          = s.value("DspOptionsHighResFilterCharacteristics", "False").toString() == "True";
-
-    // Skip rebuild if nothing actually changed.
-    if (newBufSize  == m_bufferSize &&
-        newFiltSize == m_filterSize &&
-        newFiltType == m_filterType) {
+    // Skip if nothing changed.  Each setter has its own idempotent guard,
+    // but bailing here avoids the timer/log overhead.
+    if (newFiltSize == m_filterSize && newFiltType == m_filterType) {
         return 0;
     }
 
-    ChannelConfig cfg;
-    cfg.sampleRate                  = m_sampleRate;
-    cfg.bufferSize                  = newBufSize;
-    cfg.filterSize                  = newFiltSize;
-    cfg.filterType                  = newFiltType;
-    cfg.cacheImpulse                = newCacheImpulse;
-    cfg.cacheImpulseSaveRestore     = newCacheSaveRestore;
-    cfg.highResFilterCharacteristics = newHighRes;
-
     qCInfo(lcDsp) << "RxChannel::onModeChanged: mode=" << static_cast<int>(newMode)
                   << "key=" << modeKey
-                  << "bufSize:" << m_bufferSize << "->" << newBufSize
                   << "filtSize:" << m_filterSize << "->" << newFiltSize
                   << "filtType:" << m_filterType << "->" << newFiltType;
 
-    const qint64 elapsed = rebuild(*m_wdspEngine, cfg);
-
-    if (elapsed >= 0) {
-        m_filterSize = newFiltSize;
-        m_filterType = newFiltType;
-    }
-
-    return elapsed;
+    // Apply via the in-place WDSP entry points.  Each call internally
+    // quiesces + reconfigures + restores via SetChannelState's flushflag
+    // handshake — same path Thetis takes from radio.cs:540 / 559
+    // [v2.10.3.13].  No external worker quiesce required.
+    QElapsedTimer t;
+    t.start();
+    setFilterSizeSamples(newFiltSize);
+    setFilterTypeLinearPhase(newFiltType == 1);
+    return t.elapsed();
 }
 
 // ---------------------------------------------------------------------------
