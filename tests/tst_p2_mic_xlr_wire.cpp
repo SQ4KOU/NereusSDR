@@ -100,9 +100,9 @@ private slots:
     // Bit 5 (0x20) must not collide with G.1-G.5 bits (0x1F).
     // All five lower bits must remain at their default state.
     // G.1 (mic_boost=false → 0), G.2 (line_in=false → 0),
-    // G.5 (mic_ptt disabled → bit 2 SET = 0x04 — micControl{0x24} default,
-    //   flipped to 0x20 by the issue #182 follow-up commit),
-    // G.3 (tip-ring=true → bit 3 CLEAR), G.4 (mic_bias=false → bit 4 CLEAR).
+    // G.5 (mic_ptt_disabled=false → bit 2 CLEAR — micControl{0x20} default
+    //   post issue #182), G.3 (tip-ring=true → bit 3 CLEAR),
+    // G.4 (mic_bias=false → bit 4 CLEAR).
     // Source: deskhpsdr/src/new_protocol.c:1480-1500 [@120188f]
     void setMicXlrTrue_doesNotTouchBits0to4() {
         P2RadioConnection conn;
@@ -113,8 +113,8 @@ private slots:
         QCOMPARE(int(buf[50] & 0x20), 0x20);
         QCOMPARE(int(buf[50] & 0x02), 0);
         QCOMPARE(int(buf[50] & 0x01), 0);
-        // Bit 2 (mic_ptt disabled, default micControl{0x24}) must be 1.
-        QCOMPARE(int(buf[50] & 0x04), 0x04);
+        // Bit 2 (mic_ptt_disabled, default false → PTT enabled) must be clear.
+        QCOMPARE(int(buf[50] & 0x04), 0);
         QCOMPARE(int(buf[50] & 0x08), 0);
         QCOMPARE(int(buf[50] & 0x10), 0);
     }
@@ -126,8 +126,8 @@ private slots:
         quint8 buf[60] = {};
         conn.composeCmdTxForTest(buf);
         QCOMPARE(int(buf[50] & 0x20), 0);
-        // Bit 2 (mic_ptt disabled, default micControl{0x24}) must still be 1.
-        QCOMPARE(int(buf[50] & 0x04), 0x04);
+        // Bit 2 (mic_ptt_disabled, default false → PTT enabled) must be clear.
+        QCOMPARE(int(buf[50] & 0x04), 0);
         QCOMPARE(int(buf[50] & 0x01), 0);
         QCOMPARE(int(buf[50] & 0x02), 0);
         QCOMPARE(int(buf[50] & 0x08), 0);

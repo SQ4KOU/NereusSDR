@@ -527,19 +527,23 @@ private:
     //   Bit 4: Mic Bias (0=disabled, 1=enabled)
     //   Bit 5: Balanced Input (0=disabled, 1=enabled, Saturn only)
     //
-    // Initial value 0x24: reflects two default-set bits:
-    //   bit 2 (0x04) SET = PTT disabled at firmware. Note that this is
-    //     INCONSISTENT with m_micPTTDisabled=false (matching Thetis default),
-    //     but this commit only renames the API; the issue #182 follow-up flips
-    //     this to 0x20 and adds the model→connection wiring that primes the
-    //     value at connect time.
+    // Initial value 0x20: reflects one default-set bit:
+    //   bit 2 (0x04) CLEAR = PTT enabled at firmware (matches m_micPTTDisabled=false
+    //     default in RadioConnection.h — direct polarity: false = 0 on wire).
+    //     From Thetis console.cs:19757 [v2.10.3.13 @501e3f51]:
+    //       private bool mic_ptt_disabled = false;
     //   bit 5 (0x20) SET = XLR jack selected by default (matches m_micXlr=true
     //     default in RadioConnection.h — no inversion: true = 1 on wire).
     //     deskhpsdr src/new_protocol.c:1500-1502 [@120188f]: mic_input_xlr → set bit.
     //     Saturn G2 ships with XLR-enabled config; default true per pre-code review §2.7.
     // Bit 3 CLEAR = Tip-is-mic (matches m_micTipRing=true default — !true = 0 on wire).
+    //
+    // Issue #182: bit 2 was previously SET (0x24) to mark "PTT disabled" out of
+    // the box, which orphaned the mic-jack PTT line on every Protocol 2 OrionMKII
+    // / Saturn family board because no model→connection wiring ever cleared it.
+    // Default now matches Thetis mic_ptt_disabled=false out of the box.
     struct MicState {
-        unsigned char micControl{0x24};  // PTT disabled (bit 2) + XLR selected (bit 5)
+        unsigned char micControl{0x20};  // PTT enabled (bit 2 clear) + XLR selected (bit 5)
         int lineInGain{0};
     };
     MicState m_mic;

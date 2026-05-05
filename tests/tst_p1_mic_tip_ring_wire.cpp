@@ -111,27 +111,24 @@ private slots:
         conn.setMicTipRing(false);
 
         const QByteArray bank11 = conn.captureBank11ForTest();
-        // Bit 4 (0x10) is set by setMicTipRing(false); bit 6 (0x40) is ALSO set
-        // because the legacy compose path still inverts mic_ptt (default
-        // m_micPTTDisabled=false → !false = 1 on wire). Total C1 = 0x50.
-        // The follow-up issue #182 commit flips the legacy path to direct and
-        // updates this assertion to 0x10.
-        // Source: Thetis networkproto1.c:597-598 [v2.10.3.13]
-        QCOMPARE(int(quint8(bank11[1])), 0x50);
+        // Post issue #182: bit 4 (0x10) is set by setMicTipRing(false); bit 6
+        // (mic_ptt direct, default disabled=false) is CLEAR. Bits 0-3 and bit 5
+        // are 0. Total C1 should equal 0x10.
+        // Source: Thetis console.cs:19757 [v2.10.3.13 @501e3f51]:
+        //   private bool mic_ptt_disabled = false;
+        QCOMPARE(int(quint8(bank11[1])), 0x10);
     }
 
-    // ── 7. setMicTipRing(true) does NOT clobber C1 bits 0-3 ─────────────────
-    // In default state with tipHot=true, C1 has ONLY bit 6 set (legacy path
-    // inversion: mic_ptt default false → !false = 1 → bit 6 set).
-    // Bit 4 (mic_trs) is 0 (tipHot=true), bit 5 (mic_bias) is 0 (default false).
-    // The follow-up issue #182 commit flips the legacy path to direct and
-    // updates this assertion to 0x00.
-    void setMicTipRingTrue_c1BitsAllZeroExceptPtt() {
+    // ── 7. setMicTipRing(true) leaves C1 entirely zero in default state ─────
+    // Post issue #182: with tipHot=true, mic_ptt direct (default false), bias
+    // default false, no preamps set, C1 = 0x00.
+    void setMicTipRingTrue_c1BitsAllZero() {
         P1RadioConnection conn;
         conn.setMicTipRing(true);
 
         const QByteArray bank11 = conn.captureBank11ForTest();
-        QCOMPARE(int(quint8(bank11[1])), 0x40);
+        // mic_trs=0 (tipHot=true → !true=0), mic_bias=0, mic_ptt direct=0.
+        QCOMPARE(int(quint8(bank11[1])), 0x00);
     }
 
     // ── 8. Flush flag: setMicTipRing sets m_forceBank11Next ──────────────────

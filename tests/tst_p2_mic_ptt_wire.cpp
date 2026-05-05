@@ -47,16 +47,18 @@ class TestP2MicPttWire : public QObject {
     Q_OBJECT
 private slots:
 
-    // ── 1. Default state: byte 50 bit 2 is SET (PTT disabled at firmware) ────
-    // micControl{0x24} ships with bit 2 SET out of the box. The model state
-    // (m_micPTTDisabled = false) is inconsistent with the wire default in
-    // this commit; the issue #182 follow-up flips the default to {0x20} so
-    // both sides agree on "PTT enabled at firmware".
-    void defaultState_byte50Bit2IsSet() {
+    // ── 1. Default state: byte 50 bit 2 is CLEAR (PTT enabled at firmware) ───
+    // m_micPTTDisabled defaults false (matches Thetis console.cs:19757), so
+    // CmdTx byte 50 bit 2 must be 0 (firmware honors mic-jack PTT).
+    //
+    // Pre-fix (issue #182): MicState::micControl{0x24} shipped with bit 2 SET
+    // out of the box, which orphaned the mic-jack PTT line on every Protocol 2
+    // OrionMKII / Saturn family board. Default now matches Thetis exactly.
+    void defaultState_byte50Bit2IsClear() {
         P2RadioConnection conn;
         quint8 buf[60] = {};
         conn.composeCmdTxForTest(buf);
-        QCOMPARE(int(buf[50] & 0x04), 0x04);
+        QCOMPARE(int(buf[50] & 0x04), 0);
     }
 
     // ── 2. setMicPTTDisabled(true) → byte 50 bit 2 SET ───────────────────────
@@ -82,15 +84,18 @@ private slots:
         QCOMPARE(int(buf[50] & 0x04), 0);
     }
 
-    // ── 4. Round-trip: setMicPTTDisabled(true) then (false) then (true) ─────
-    // Starts with an explicit setMicPTTDisabled(true) to escape the
-    // micControl{0x24} ↔ m_micPTTDisabled{false} default inconsistency present
-    // in this commit (the issue #182 follow-up resolves that by flipping the
-    // micControl default to {0x20}).
-    void roundTrip_trueFalseTrue() {
+    // ── 4. Round-trip: false → true → false ──────────────────────────────────
+    // Now that micControl{0x20} matches m_micPTTDisabled{false} (issue #182),
+    // the default starts in a consistent "PTT enabled" wire state.
+    void roundTrip_falseToTrueToFalse() {
         P2RadioConnection conn;
 
-        conn.setMicPTTDisabled(true);   // establish a known wire state
+        // Start from default. Bit 2 should be clear.
+        quint8 buf0[60] = {};
+        conn.composeCmdTxForTest(buf0);
+        QCOMPARE(int(buf0[50] & 0x04), 0);
+
+        conn.setMicPTTDisabled(true);
         quint8 buf1[60] = {};
         conn.composeCmdTxForTest(buf1);
         QCOMPARE(int(buf1[50] & 0x04), 0x04);
@@ -99,11 +104,6 @@ private slots:
         quint8 buf2[60] = {};
         conn.composeCmdTxForTest(buf2);
         QCOMPARE(int(buf2[50] & 0x04), 0);
-
-        conn.setMicPTTDisabled(true);
-        quint8 buf3[60] = {};
-        conn.composeCmdTxForTest(buf3);
-        QCOMPARE(int(buf3[50] & 0x04), 0x04);
     }
 
     // ── 5. setMicPTTDisabled(true) does NOT touch byte-50 bits 0-1 ──────────

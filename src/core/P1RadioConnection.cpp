@@ -2633,18 +2633,17 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
     case 11: // Preamp control (networkproto1.c:593-601)
         out[0] = C0base | 0x14;
         // C1: preamp bits 0-3 (bit 3 = rx0 again, Thetis quirk) + mic_trs bit 4
-        //     + mic_bias bit 5 + mic_ptt bit 6 (INVERTED — LEGACY ONLY).
+        //     + mic_bias bit 5 + mic_ptt bit 6.
         // mic_trs polarity inversion: 1 = tip is BIAS/PTT → write !m_micTipRing.
         // mic_bias polarity: 1 = bias on (no inversion) → write m_micBias.
-        // mic_ptt polarity: legacy compose retains pre-issue-#182 inversion
-        //   (writes !m_micPTTDisabled). The follow-up issue #182 commit flips
-        //   this to direct so the legacy path matches the codec path.
-        // TODO(legacy-codec-cleanup): same mic_ptt inversion as the prior codec
-        //   path; gated by NEREUS_USE_LEGACY_P1_CODEC=1 so unreachable in shipped
-        //   builds, but the test suite hits this path when no codec is installed.
-        // From Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13]
+        // mic_ptt polarity: direct → write m_micPTTDisabled (Thetis convention,
+        // bit set = PTT disabled at firmware). Matches the codec path; both
+        // ramped to direct in the issue #182 follow-up.
+        // From Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13 @501e3f51]
         //   C1 = ... | ((prn->mic.mic_trs & 1) << 4) | ((prn->mic.mic_bias & 1) << 5)
         //           | ((prn->mic.mic_ptt & 1) << 6);
+        // From Thetis console.cs:19764 [v2.10.3.13 @501e3f51]:
+        //   NetworkIO.SetMicPTT(Convert.ToInt32(mic_ptt_disabled));
         out[1] = static_cast<quint8>(
                    (m_rxPreamp[0] ? 0x01 : 0)
                  | (m_rxPreamp[1] ? 0x02 : 0)
@@ -2652,7 +2651,7 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
                  | (m_rxPreamp[0] ? 0x08 : 0)            // bit3 = rx0 again (Thetis quirk)
                  | (!m_micTipRing      ? 0x10 : 0x00)    // 3M-1b G.3 — mic_trs (inverted)
                  | (m_micBias          ? 0x20 : 0x00)    // 3M-1b G.4 — mic_bias (no inversion)
-                 | (!m_micPTTDisabled  ? 0x40 : 0x00));  // 3M-1b G.5 — mic_ptt (legacy inversion; flipped in issue #182 follow-up)
+                 | (m_micPTTDisabled   ? 0x40 : 0x00));  // 3M-1b G.5 — mic_ptt (direct, issue #182)
         out[2] = 0; // line_in_gain + puresignal
         out[3] = 0; // user digital outputs
         out[4] = static_cast<quint8>((m_stepAttn[0] & 0x1F) | 0x20); // ADC0 step ATT + enable

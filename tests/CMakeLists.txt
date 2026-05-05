@@ -2738,6 +2738,19 @@ target_compile_definitions(tst_p1_mic_ptt_wire PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_p2_mic_ptt_wire)
 target_compile_definitions(tst_p2_mic_ptt_wire PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Issue #182: model -> connection mic_ptt_disabled wiring ─────────────────
+# Coverage:
+#   1. Toggling TransmitModel::micPttDisabled = true reaches the connection.
+#   2. Toggling back to false also propagates (round-trip).
+#   3. Connect-time prime pushes the current model value once.
+# Pre-fix: no connect() existed between TransmitModel::micPttDisabledChanged
+# and RadioConnection::setMicPTTDisabled, so the Setup checkbox never reached
+# the wire on either protocol. Post-fix wires the signal in
+# RadioModel::wireConnectionSignals + adds connect-time priming.
+# Source cite: Thetis console.cs:19757-19766 [v2.10.3.13 @501e3f51].
+nereus_add_test(tst_radio_model_mic_ptt_wire)
+target_compile_definitions(tst_radio_model_mic_ptt_wire PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1b Task G.6: P1 mic_xlr storage-only ──────────────────────────
 # 8 tests verify that P1RadioConnection::setMicXlr() is STORAGE-ONLY.
 # Saturn G2 P2-only feature — P1 hardware has no XLR jack. No wire emission.

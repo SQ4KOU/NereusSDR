@@ -108,10 +108,12 @@ private slots:
         QCOMPARE(int(buf[50] & 0x02), 0);
     }
 
-    // ── 6. Bits 2 (G.5) and 5 (G.6) set by default; others unaffected ───────
-    // micControl{0x24} ships with bit 2 SET (PTT disabled at firmware) and
-    // bit 5 SET (XLR selected). The issue #182 follow-up commit flips bit 2
-    // back to 0 and updates the assertions below to match.
+    // ── 6. Bit 5 (G.6) set by default; bit 2 (G.5, post issue #182) clear; ──
+    //      bits 3-4,6-7 unaffected.
+    // Post issue #182: bit 2 (0x04) CLEAR by default (m_micPTTDisabled=false →
+    //   PTT enabled at firmware on wire; matches Thetis console.cs:19757
+    //   [v2.10.3.13 @501e3f51] private bool mic_ptt_disabled = false).
+    // After G.6: bit 5 (0x20) SET by default (m_micXlr=true → XLR selected).
     // setLineIn must not change bits 2, 5, or 3-4, 6-7.
     // Source: deskhpsdr/src/new_protocol.c:1480-1482 [@120188f]
     void byte50UpperBits_unaffectedByLineIn() {
@@ -119,9 +121,10 @@ private slots:
         conn.setLineIn(true);
         quint8 buf[60] = {};
         conn.composeCmdTxForTest(buf);
-        // Bits 2+5 set; bits 3,4,6,7 (0xD8) must be 0.
-        QCOMPARE(int(buf[50] & 0xD8), 0);
-        QCOMPARE(int(buf[50] & 0x04), 0x04);
+        // Post issue #182: only bit 5 (0x20) is set by default.
+        // Bits 2,3,4,6,7 (0xDC) must be 0 — not set by setLineIn or defaults.
+        QCOMPARE(int(buf[50] & 0xDC), 0);
+        QCOMPARE(int(buf[50] & 0x04), 0);
         QCOMPARE(int(buf[50] & 0x20), 0x20);
     }
 
