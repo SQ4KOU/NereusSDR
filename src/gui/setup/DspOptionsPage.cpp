@@ -91,6 +91,7 @@
 #include "core/WdspEngine.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "gui/StyleConstants.h"
 #include "gui/containers/ContainerManager.h"
 #include "gui/meters/FilterDisplayItem.h"
 #include "gui/meters/MeterItem.h"
@@ -278,6 +279,11 @@ void DspOptionsPage::buildUI()
     //   grpDSPFilterSize  at x=134, w=120, h=320
     //   grpDSPFilterType  at x=260, w=153, h=320
     //   Inner sub-groups stack at y=16/88/160/232 (SSB/AM, FM, CW, Digital).
+
+    // Apply the canonical dark page stylesheet so this page matches the
+    // rest of the Setup dialog (StyleConstants.h:287 — same helper used by
+    // TransmitSetupPages, DisplaySetupPages, AppearanceSetupPages, etc.).
+    Style::applyDarkPageStyle(this);
 
     QVBoxLayout* layout = contentLayout();
 
