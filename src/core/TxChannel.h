@@ -1744,6 +1744,23 @@ public:
     // TX worker thread is not currently running (setRunning(false) first).
     qint64 rebuild(WdspEngine& engine, const ChannelConfig& cfg);
 
+    // ── In-place filter resize / filter type change ─────────────────────────
+    //
+    // Wraps the WDSP entry points that Thetis calls from its DSPTX property
+    // setters at radio.cs:2628 / 2647 [v2.10.3.13]:
+    //   FilterSize → WDSP.TXASetNC
+    //   FilterType → WDSP.TXASetMP
+    //
+    // These are SAFE to call from the main thread while the TxWorkerThread
+    // is running — TXASetNC/TXASetMP internally quiesce via SetChannelState's
+    // flushflag handshake (third_party/wdsp/src/channel.c:259-297
+    // [v2.10.3.13]) before reconfiguring all dependent subsystems, then
+    // restore the prior run state.  No external worker quiesce required.
+    //
+    // Idempotent: a no-op when the new value matches the cached current value.
+    void setTxFilterSizeSamples(int nc);
+    void setTxFilterTypeLinearPhase(bool linearPhase);
+
     // ── Per-mode DSP-Options live-apply (Task 4.2) ───────────────────────────
     //
     // Called when SliceModel emits dspModeChanged. Reads per-mode DSP-Options

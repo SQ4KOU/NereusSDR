@@ -607,6 +607,23 @@ public:
     // audio thread is not currently processing samples on this channel.
     qint64 rebuild(WdspEngine& engine, const ChannelConfig& cfg);
 
+    // ── In-place filter resize / filter type change ─────────────────────────
+    //
+    // Wraps the WDSP entry points that Thetis calls from its DSPRX property
+    // setters at radio.cs:540 / 559 [v2.10.3.13]:
+    //   FilterSize → WDSP.RXASetNC
+    //   FilterType → WDSP.RXASetMP
+    //
+    // These are SAFE to call from the main thread while the audio worker is
+    // alive — RXASetNC/RXASetMP internally quiesce via SetChannelState's
+    // flushflag handshake (third_party/wdsp/src/channel.c:259-297
+    // [v2.10.3.13]) before reconfiguring all dependent subsystems, then
+    // restore the prior run state.  No external worker quiesce required.
+    //
+    // Idempotent: a no-op when the new value matches the cached current value.
+    void setFilterSizeSamples(int nc);
+    void setFilterTypeLinearPhase(bool linearPhase);
+
     // --- Channel state ---
 
     bool isActive() const { return m_active.load(); }

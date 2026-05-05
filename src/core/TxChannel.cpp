@@ -3682,11 +3682,81 @@ void TxChannel::applyState(const TxChannelState& s)
 }
 
 // ---------------------------------------------------------------------------
+// In-place TX filter resize / filter type change
+// ---------------------------------------------------------------------------
+//
+// Wraps the WDSP entry points that Thetis calls from its DSPTX property
+// setters at radio.cs:2628-2662 [v2.10.3.13]:
+//
+//   public int FilterSize {
+//       set {
+//           filter_size = value;
+//           if (update) {
+//               if (value != filter_size_dsp || force) {
+//                   WDSP.TXASetNC(WDSP.id(thread, 0), value);
+//                   filter_size_dsp = value;
+//               }
+//           }
+//       }
+//   }
+//   public DSPFilterType FilterType {
+//       set {
+//           filter_type = value;
+//           if (update) {
+//               if (value != filter_type_dsp || force) {
+//                   WDSP.TXASetMP(WDSP.id(thread, 0), Convert.ToBoolean(value));
+//                   filter_type_dsp = value;
+//               }
+//           }
+//       }
+//   }
+//
+// TXASetNC and TXASetMP at third_party/wdsp/src/TXA.c:909-928 [v2.10.3.13]
+// internally quiesce the channel via SetChannelState(channel, 0, 1) — the
+// cm_main flushflag handshake at channel.c:259-297 [v2.10.3.13] — reconfigure
+// every dependent subsystem, then restore the prior run state.  Safe to call
+// from the main thread while the TxWorkerThread is running.
+
+void TxChannel::setTxFilterSizeSamples(int nc)
+{
+    if (nc <= 0 || nc == m_txFilterSize) {
+        return;
+    }
+    m_txFilterSize = nc;
+#ifdef HAVE_WDSP
+    // From Thetis radio.cs:2628 [v2.10.3.13] DSPTX.FilterSize setter.
+    TXASetNC(m_channelId, nc);
+#endif
+}
+
+void TxChannel::setTxFilterTypeLinearPhase(bool linearPhase)
+{
+    const int newType = linearPhase ? 1 : 0;
+    if (newType == m_txFilterType) {
+        return;
+    }
+    m_txFilterType = newType;
+#ifdef HAVE_WDSP
+    // From Thetis radio.cs:2647 [v2.10.3.13] DSPTX.FilterType setter:
+    //   WDSP.TXASetMP(WDSP.id(thread, 0), Convert.ToBoolean(value));
+    // C# Convert.ToBoolean((int)DSPFilterType) maps Low_Latency=0 → false,
+    // Linear_Phase=1 → true.  We pass the already-translated 0/1.
+    TXASetMP(m_channelId, newType);
+#endif
+}
+
+// ---------------------------------------------------------------------------
 // rebuild() — delegate to WdspEngine::rebuildTxChannel() (Task 1.4)
 //
+// LEGACY heavy-rebuild path retained for sample-rate live-apply where a
+// full close-and-reopen may be required.  NOT USED for filter size / filter
+// type changes — those go through setTxFilterSizeSamples /
+// setTxFilterTypeLinearPhase above which use the in-place WDSP entry points
+// (mirrors Thetis radio.cs:2628 + 2647 [v2.10.3.13]).
+//
 // WdspEngine owns m_txChannels and is therefore the only class that can
-// destroy + recreate the WDSP channel. TxChannel::rebuild is a one-line
-// delegate matching the pattern from RxChannel::rebuild (Task 1.3).
+// destroy + recreate the WDSP channel.  TxChannel::rebuild is a one-line
+// delegate matching the pattern from RxChannel::rebuild.
 // ---------------------------------------------------------------------------
 qint64 TxChannel::rebuild(WdspEngine& engine, const ChannelConfig& cfg)
 {
