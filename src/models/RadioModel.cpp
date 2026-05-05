@@ -2545,6 +2545,18 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 m_txChannel->setDexpRunSideChannelFilter(on);
             });
 
+            // 39. txPostGenToneMagChanged → setPostGenToneMag.
+            // Task 10: routes the HL2 sub-step DSP modulation value written by
+            // TransmitModel::setPowerUsingTargetDbm (Task 4) into WDSP via
+            // TxChannel::setPostGenToneMag → SetTXAPostGenToneMag (gen.c:800
+            // [v2.10.3.13]).  Without this connect the modulation magnitude
+            // computed in the HL2 path (mi0bot setup.cs:1501-1509
+            // [v2.10.3.13-beta2]) never reaches the DSP engine.
+            connect(&m_transmitModel, &TransmitModel::txPostGenToneMagChanged,
+                    m_txChannel, [this](double mag) {
+                m_txChannel->setPostGenToneMag(mag);
+            });
+
             // Profile-activation resync.  Receiver = m_txChannel so this
             // becomes a QueuedConnection once moveToThread runs below; the
             // helper executes on TxWorkerThread for race-free WDSP setter
@@ -4562,6 +4574,15 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
         if (!m_lastRadioInfo.macAddress.isEmpty()) {
             m_settingsHygiene.validate(m_lastRadioInfo.macAddress, boardCapabilities());
         }
+        // Task 10 (#175): push the connected hardware model into TransmitModel
+        // so the m_hpsdrModel field (added in Task 6) is non-FIRST before any
+        // user TX action fires.  This activates the HL2 polymorphic clamp in
+        // setTunePowerForBand (Task 7), the HL2 DSP modulation sub-step in
+        // setPowerUsingTargetDbm (Task 4), and the HL2 audio-volume formula in
+        // computeAudioVolume (Task 5).  Must be set BEFORE the emit so any
+        // slot connected to currentRadioChanged that reads transmitModel()
+        // already sees the correct model.
+        m_transmitModel.setHpsdrModel(m_hardwareProfile.model);
         // Phase 3I — fan out to HardwarePage so its sub-tabs populate with
         // the connected radio's fields (Radio Info labels, sample rate,
         // capability-gated tab visibility, per-MAC settings restore).
