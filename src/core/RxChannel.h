@@ -624,6 +624,28 @@ public:
     void setFilterSizeSamples(int nc);
     void setFilterTypeLinearPhase(bool linearPhase);
 
+    // ── DSP block size (live-apply via WDSP SetDSPBuffsize) ─────────────────
+    //
+    // Wraps the WDSP entry point Thetis calls from DSPRX.BufferSize setter
+    // at radio.cs:521 [v2.10.3.13]:
+    //   WDSP.SetDSPBuffsize(WDSP.id(thread, subrx), value);
+    //
+    // Thetis invariant from console.cs:38911 [v2.10.3.13]:
+    //   if (filtsize < bufsize) bufsize = filtsize;
+    // i.e. buffer size must never exceed filter size.  Required by WDSP
+    // fircore — firmin.c:135 [v2.10.3.13] computes nfor = nc / size and
+    // crashes at fftw_execute(NULL) if nc < size.  This setter silently
+    // clamps `size` down to `m_filterSize` to maintain the invariant
+    // (matches Thetis behaviour exactly — user's selection in the UI
+    // combo may differ from the actual applied value).
+    //
+    // Internally calls SetDSPBuffsize, which quiesces via SetChannelState
+    // and rebuilds the DSP graph with the new block size — heavier than
+    // RXASetNC but still safe to call while the audio worker is alive.
+    // Channel.c:181-194 [v2.10.3.13] for the WDSP-side semantics.
+    void setDspBufferSizeSamples(int size);
+    int  dspBlockSize() const { return m_dspBlockSize; }
+
     // --- Channel state ---
 
     bool isActive() const { return m_active.load(); }
@@ -810,11 +832,19 @@ private:
     // creation. Required for onModeChanged() to call rebuild().
     WdspEngine* m_wdspEngine{nullptr};
 
-    // Current filter size and filter type — tracked here so onModeChanged()
-    // can skip rebuild when nothing actually changed.
-    // Defaults match ChannelConfig defaults (filterSize=4096, filterType=0=LowLatency).
+    // Current filter size, filter type, and DSP block size — tracked here
+    // so the in-place WDSP setters can skip when nothing changed and so
+    // setFilterSizeSamples can enforce the Thetis invariant
+    // (filter >= buffer per console.cs:38911 [v2.10.3.13]).
+    //
+    // Defaults: filterSize=4096 + filterType=0 from ChannelConfig defaults.
+    // m_dspBlockSize=4096 matches the value RadioModel::connectToRadio
+    // passes to WdspEngine::createRxChannel (RadioModel.cpp:1445 — the
+    // dsp_size argument to OpenChannel).  WDSP fircore.size is set there
+    // and stays in sync with m_dspBlockSize through setDspBufferSizeSamples.
     int m_filterSize{4096};
-    int m_filterType{0};   // 0 = LowLatency, 1 = LinearPhase
+    int m_filterType{0};      // 0 = LowLatency, 1 = LinearPhase
+    int m_dspBlockSize{4096}; // matches createRxChannel dsp_size
 };
 
 } // namespace NereusSDR

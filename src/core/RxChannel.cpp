@@ -1736,10 +1736,55 @@ void RxChannel::applyState(const RxChannelState& s)
 // every dependent subsystem, then restore the prior run state.  Safe to call
 // from the main thread while the WDSP worker is alive.
 
+void RxChannel::setDspBufferSizeSamples(int size)
+{
+    if (size <= 0) {
+        return;
+    }
+    // Thetis invariant (console.cs:38911 [v2.10.3.13]):
+    //   if (filtsize < bufsize) bufsize = filtsize;
+    // Equivalent to: buffer must never exceed filter.  WDSP fircore relies
+    // on this — nfor = nc/size in firmin.c:135 [v2.10.3.13] gives 0 when
+    // nc < size, leading to null FFTW plans and SIGSEGV in the audio
+    // thread.  Mirror Thetis: silently clamp buffer down to filter.
+    if (size > m_filterSize) {
+        qCWarning(lcDsp) << "RxChannel::setDspBufferSizeSamples: requested size="
+                          << size << "exceeds current filter size=" << m_filterSize
+                          << "— clamping to filter (Thetis console.cs:38911 invariant).";
+        size = m_filterSize;
+    }
+    if (size == m_dspBlockSize) {
+        return;
+    }
+    m_dspBlockSize = size;
+#ifdef HAVE_WDSP
+    // From Thetis radio.cs:521 [v2.10.3.13] DSPRX.BufferSize setter:
+    //   WDSP.SetDSPBuffsize(WDSP.id(thread, subrx), value);
+    // SetDSPBuffsize at channel.c:181 [v2.10.3.13] internally quiesces via
+    // SetChannelState's flushflag handshake, then runs a full DSP destroy
+    // + rebuild with the new dsp_size.  Heavier than RXASetNC but still
+    // safe to call from main thread while audio worker is alive.
+    SetDSPBuffsize(m_channelId, size);
+#endif
+}
+
 void RxChannel::setFilterSizeSamples(int nc)
 {
     if (nc <= 0 || nc == m_filterSize) {
         return;
+    }
+    // Thetis invariant (console.cs:38911 [v2.10.3.13]): filter >= buffer.
+    // If new filter is smaller than the current DSP block size, shrink
+    // the buffer FIRST so the WDSP fircore precondition (nc >= size,
+    // firmin.c:135 [v2.10.3.13]) is satisfied when RXASetNC runs.  Order
+    // mirrors Thetis UpdateDSP: BufferSize setter (radio.cs:521) is
+    // called before FilterSize setter (radio.cs:540) at console.cs:38918+.
+    if (nc < m_dspBlockSize) {
+        m_dspBlockSize = nc;
+#ifdef HAVE_WDSP
+        // From Thetis radio.cs:521 [v2.10.3.13] DSPRX.BufferSize setter.
+        SetDSPBuffsize(m_channelId, nc);
+#endif
     }
     m_filterSize = nc;
 #ifdef HAVE_WDSP
@@ -1832,11 +1877,13 @@ qint64 RxChannel::onModeChanged(DSPMode newMode)
     auto& s = AppSettings::instance();
     const QString modeKey = rxModeKeyPart(newMode);
 
-    // Read per-mode RX-side filter settings — Thetis-faithful split keys
-    // post schema-v5 (radio.cs:540-574 [v2.10.3.13] DSPRX persists FilterSize
-    // and FilterType independently from DSPTX).  Buffer size live-apply for
-    // RX is not wired today — m_bufferSize is set at construction time and
-    // the WDSP SetDSPBuffsize wire-up is deferred.
+    // Read per-mode RX-side DSP settings — Thetis-faithful split keys
+    // post schema-v5 (radio.cs:519-574 [v2.10.3.13] DSPRX persists
+    // BufferSize, FilterSize, and FilterType independently from DSPTX).
+    const int newBufSize   =
+        s.value(QStringLiteral("DspOptionsBufferSize") + modeKey + QStringLiteral("Rx"),
+                64).toInt();
+
     const int newFiltSize  =
         s.value(QStringLiteral("DspOptionsFilterSize") + modeKey + QStringLiteral("Rx"),
                 4096).toInt();
@@ -1850,22 +1897,35 @@ qint64 RxChannel::onModeChanged(DSPMode newMode)
     // but bailing here avoids the timer/log overhead.  Sentinel -1 means
     // "no change" so RadioModel can distinguish from "applied in 0 ms"
     // (in-place WDSP setters routinely finish sub-millisecond).
-    if (newFiltSize == m_filterSize && newFiltType == m_filterType) {
+    if (newBufSize == m_dspBlockSize && newFiltSize == m_filterSize &&
+        newFiltType == m_filterType) {
         return -1;
     }
 
     qCInfo(lcDsp) << "RxChannel::onModeChanged: mode=" << static_cast<int>(newMode)
                   << "key=" << modeKey
+                  << "bufSize:" << m_dspBlockSize << "->" << newBufSize
                   << "filtSize:" << m_filterSize << "->" << newFiltSize
                   << "filtType:" << m_filterType << "->" << newFiltType;
 
-    // Apply via the in-place WDSP entry points.  Each call internally
-    // quiesces + reconfigures + restores via SetChannelState's flushflag
-    // handshake — same path Thetis takes from radio.cs:540 / 559
-    // [v2.10.3.13].  No external worker quiesce required.
+    // Apply order matters — Thetis pushes BufferSize first, FilterSize
+    // second (UpdateDSP at console.cs:38918+ [v2.10.3.13]).  Each setter
+    // internally enforces the filter >= buffer invariant (radio.cs:521 +
+    // 540 [v2.10.3.13] respectively) so out-of-order user input still
+    // produces a valid WDSP state.  Each WDSP entry point quiesces via
+    // SetChannelState's flushflag handshake — safe to call from the main
+    // thread while audio worker is alive.
     QElapsedTimer t;
     t.start();
+    // setFilterSizeSamples cascades a buffer shrink internally when filter
+    // < dsp_size, so apply filter BEFORE buffer.  If we did it the Thetis
+    // order (buffer first), a smaller filter coming later would still
+    // trigger its own internal buffer shrink — same end state, but the
+    // filter-first path avoids one redundant SetDSPBuffsize call.  When
+    // buffer is going LARGER (or equal), the filter setter doesn't
+    // cascade and the explicit buffer setter does the work.
     setFilterSizeSamples(newFiltSize);
+    setDspBufferSizeSamples(newBufSize);
     setFilterTypeLinearPhase(newFiltType == 1);
     return t.elapsed();
 }

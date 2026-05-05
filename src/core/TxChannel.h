@@ -1761,6 +1761,22 @@ public:
     void setTxFilterSizeSamples(int nc);
     void setTxFilterTypeLinearPhase(bool linearPhase);
 
+    // ── DSP block size (live-apply via WDSP SetDSPBuffsize) ─────────────────
+    //
+    // Wraps the WDSP entry point Thetis calls from DSPTX.BufferSize setter
+    // at radio.cs:2606 [v2.10.3.13]:
+    //   WDSP.SetDSPBuffsize(WDSP.id(thread, 0), value);
+    //
+    // Thetis invariant from console.cs:38911 [v2.10.3.13]: buffer must
+    // never exceed filter (otherwise fircore nfor = nc/size = 0 →
+    // SIGSEGV — firmin.c:135 [v2.10.3.13]).  Setter silently clamps
+    // `size` down to m_txFilterSize.  Internally calls SetDSPBuffsize
+    // (channel.c:181 [v2.10.3.13]) which quiesces via SetChannelState
+    // and rebuilds the DSP graph — heavier than TXASetNC but safe to
+    // call from main thread while TxWorkerThread is running.
+    void setTxDspBufferSizeSamples(int size);
+    int  txDspBlockSize() const { return m_txDspBlockSize; }
+
     // ── Per-mode DSP-Options live-apply (Task 4.2) ───────────────────────────
     //
     // Called when SliceModel emits dspModeChanged. Reads per-mode DSP-Options
@@ -2514,6 +2530,13 @@ private:
     // From WdspEngine.h kTxDspBufferSize = 2048 [NereusSDR-original].
     int m_txFilterSize{2048};
     int m_txFilterType{0};   // 0 = LowLatency, 1 = LinearPhase
+    // m_txDspBlockSize defaults to WdspEngine::kTxDspBufferSize (2048,
+    // deskhpsdr-derived) — matches the dsp_size argument
+    // WdspEngine::createTxChannel passes to OpenChannel (createTxChannel
+    // at WdspEngine.cpp:566 [@HEAD]).  Tracked through
+    // setTxDspBufferSizeSamples + setTxFilterSizeSamples cascade to keep
+    // the Thetis invariant filter >= buffer (console.cs:38911 [v2.10.3.13]).
+    int m_txDspBlockSize{2048};
 
     // ── Per-profile TX filter debounce (Plan 4 D8) ───────────────────────────
     //
