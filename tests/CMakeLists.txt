@@ -3341,3 +3341,16 @@ nereus_add_test(tst_transmit_model_tx_post_gen_tone_mag)
 #   non-HL2 model  -> pass-through (mag unchanged, new_pwr equals slider).
 # Source: mi0bot-Thetis console.cs:47660-47673 [v2.10.3.13-beta2].
 nereus_add_test(tst_transmit_model_hl2_dbm)
+
+# ── Issue #175 Task 5: HL2 audio-volume formula in computeAudioVolume ─────────
+# 5 tests covering the mi0bot HL2 branch ((hl2Power * gbb/100) / 93.75)
+# placed BEFORE the gbb >= 99.5 sentinel so HL2 HF bands actually use the
+# formula instead of falling into the legacy linear path:
+#   §1 HL2 40m (gbb=100) at full   -> clamps to 1.0
+#   §2 HL2 40m (gbb=100) at zero   -> 0.0 (sliderWatts<=0 short-circuit)
+#   §3 HL2 40m (gbb=100) at mid    -> 50/93.75 exactly
+#   §4 HL2 6m  (gbb=38.8) at full  -> (99 * 0.388) / 93.75
+#   §5 ANAN-100 model on a Bypass profile -> legacy linear fallback (0.5),
+#                                           differs from the HL2 formula value.
+# Source: mi0bot-Thetis console.cs:47775-47778 [v2.10.3.13-beta2].
+nereus_add_test(tst_transmit_model_hl2_audio_volume)

@@ -652,12 +652,38 @@ bool TransmitModel::pureSignalActive() const noexcept
 // finite (then-clamped) result via std::pow.
 double TransmitModel::computeAudioVolume(const PaProfile& profile,
                                          Band band,
-                                         int sliderWatts) const noexcept
+                                         int sliderWatts,
+                                         HPSDRModel model) const noexcept
 {
     // From Thetis console.cs:46749-46751 [v2.10.3.13] — sliderWatts == 0 path.
     // Negative slider → also returns 0 (NereusSDR-original safety).
     if (sliderWatts <= 0) {
         return 0.0;
+    }
+
+    const float gbb = profile.getGainForBand(band, sliderWatts);
+
+    // From mi0bot-Thetis console.cs:47775-47778 [v2.10.3.13-beta2]:
+    //   Audio.RadioVolume = (double)Math.Min((hl2Power * (gbb / 100)) / 93.75, 1.0);  // MI0BOT: We want to jump in steps of 16 but getting 6.
+    //                                                                                 // Drive value is 0-255 but only top 4 bits used.
+    //                                                                                 // Need to correct for multiplication of 1.02 in Radio volume
+    //                                                                                 // Formula - 1/((16/6)/(255/1.02))
+    //
+    // Branch order: HL2 path runs BEFORE the gbb >= 99.5 sentinel.  On HL2
+    // HF bands gbb=100 (sentinel value), but mi0bot uses
+    // (hl2Power * gbb/100) / 93.75 directly — the sentinel was a
+    // NereusSDR-original linear fallback for radios with no PA-gain
+    // compensation; mi0bot has explicit HL2 math.  Without this ordering,
+    // HL2 HF bands would short-circuit into the legacy path and never use
+    // mi0bot's formula.
+    //
+    // mi0bot's own comment notes the divisor 93.75 has a known empirical
+    // discrepancy with the derived value (~95.6 from 1/((16/6)/(255/1.02))).
+    // Copying verbatim per source-first; the discrepancy is upstream-known.
+    if (model == HPSDRModel::HERMESLITE) {
+        const double hl2Power = static_cast<double>(sliderWatts);
+        const double v = (hl2Power * (static_cast<double>(gbb) / 100.0)) / 93.75;
+        return std::clamp(v, 0.0, 1.0);
     }
 
     // NereusSDR-original deviation: HL2 PA-bypass sentinel preserves pre-
@@ -669,7 +695,6 @@ double TransmitModel::computeAudioVolume(const PaProfile& profile,
     // PaProfile::getGainForBand returning the 1000 sentinel — the safety
     // net catches programming errors (raw int casts to Band) instead of
     // silently producing audio_volume = 1.0.
-    const float gbb = profile.getGainForBand(band, sliderWatts);
     if (gbb >= 99.5f) {
         const double linear = static_cast<double>(sliderWatts) / 100.0;
         return std::clamp(linear, 0.0, 1.0);
@@ -937,11 +962,14 @@ TransmitModel::TxPowerResult TransmitModel::setPowerUsingTargetDbm(
             - static_cast<double>(gbb);
     }
 
-    // Math kernel (Phase 3B) — translates (sliderWatts, band, profile) into
-    // [0, 1.0] audio_volume.  Pure function; same kernel called from every
-    // path so HL2 sentinel + Bypass profile + sliderWatts==0 short-circuits
-    // are uniform.
-    result.audioVolume = computeAudioVolume(activeProfile, currentBand, new_pwr);
+    // Math kernel (Phase 3B + #175 Task 5) — translates
+    // (sliderWatts, band, profile, model) into [0, 1.0] audio_volume.
+    // Pure function; same kernel called from every path so HL2 sentinel +
+    // Bypass profile + sliderWatts==0 short-circuits + mi0bot HL2 formula
+    // are uniform.  `model` threads the hardware kind through so HL2 takes
+    // mi0bot's (hl2Power * gbb/100) / 93.75 path.
+    result.audioVolume =
+        computeAudioVolume(activeProfile, currentBand, new_pwr, model);
 
     // From Thetis console.cs:46738 [v2.10.3.13]:
     //   if (!bSetPower) return new_pwr;

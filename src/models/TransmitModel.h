@@ -439,9 +439,16 @@ public:
     /// placement on TransmitModel matches Thetis topology
     /// (Console::SetPowerUsingTargetDBM is a Console method) and lets
     /// Phase 3C's setPowerUsingTargetDbm wrapper call it inline.
+    /// `model` selects between the legacy NereusSDR-original sentinel-fallback
+    /// path and mi0bot's HL2-specific audio-volume formula
+    /// ((hl2Power * gbb/100) / 93.75 — see implementation comment).
+    /// Defaults to HPSDRModel::FIRST so the legacy 3-arg call sites keep
+    /// working unchanged; HL2 callers (RadioModel TX path) thread the live
+    /// hardware model through.  Issue #175 Task 5.
     double computeAudioVolume(const PaProfile& profile,
                               Band band,
-                              int sliderWatts) const noexcept;
+                              int sliderWatts,
+                              HPSDRModel model = HPSDRModel::FIRST) const noexcept;
 
     // ── Two-tone active state (#167 Phase 3C scaffolding) ────────────────
     //
