@@ -1255,13 +1255,30 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // AppSettings::migrateLegacyN2adrFilter (see main.cpp).  This read
         // matches the write side (Hl2IoBoardTab::onN2adrToggled →
         // HardwarePage::wire() → setHardwareValue).
-        const QString n2adrKey = QStringLiteral("hl2IoBoard/n2adrFilter");
-        const bool n2adrOn = AppSettings::instance()
-                                 .hardwareValue(info.macAddress, n2adrKey,
-                                                QStringLiteral("False"))
-                                 .toString() == QStringLiteral("True");
-        applyN2adrPreset(m_ocMatrix, n2adrOn);
-        m_ocMatrix.save();
+        //
+        // Issue #174: default to True (key absent → enabled).  Strict
+        // mi0bot port from setup.designer.cs:17466-17467 [v2.10.3.13-beta2]:
+        //   this.chkHERCULES.Checked = true;
+        //   this.chkHERCULES.CheckState = CheckState.Checked;
+        // Users plug in the N2ADR filter board and expect it to "just work"
+        // out of the box; the previous False default forced manual opt-in
+        // and was a recurring support burden.
+        //
+        // Issue #174 (PR #188 review): gate this block on HL2 family.
+        // applyN2adrPreset unconditionally wipes the entire OC matrix
+        // before conditionally repopulating (N2adrPreset.cpp:73-78), so
+        // running it on a non-HL2 board would destroy any user-configured
+        // OC pin patterns on every connect.  N2ADR is an HL2 accessory;
+        // non-HL2 boards have no business in this code path.
+        if (boardCapabilities().hasIoBoardHl2) {
+            const QString n2adrKey = QStringLiteral("hl2IoBoard/n2adrFilter");
+            const bool n2adrOn = AppSettings::instance()
+                                     .hardwareValue(info.macAddress, n2adrKey,
+                                                    QStringLiteral("True"))
+                                     .toString() == QStringLiteral("True");
+            applyN2adrPreset(m_ocMatrix, n2adrOn);
+            m_ocMatrix.save();
+        }
 
         // Load per-MAC Alex antenna controller state so Antenna Control UI
         // and future protocol codecs read the correct per-band antenna assignments.
