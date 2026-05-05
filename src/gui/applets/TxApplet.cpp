@@ -280,6 +280,7 @@ void TxApplet::buildUI()
         rfSlider->setRange(0, 100);
         rfSlider->setValue(100);
         rfSlider->setAccessibleName(QStringLiteral("RF power"));
+        rfSlider->setObjectName(QStringLiteral("TxRfPowerSlider"));
 
         auto* rfValue = new QLabel(QStringLiteral("100"), this);
         rfValue->setFixedWidth(22);
@@ -893,6 +894,15 @@ void TxApplet::wireControls()
         if (m_updatingFromModel) { return; }
         m_rfPowerValue->setText(QString::number(val));
         tx.setPower(val);
+        // Per-band write: matches Thetis ptbPWR_Scroll at console.cs:28642
+        // [v2.10.3.13] (`power_by_band[(int)_tx_band] = ptbPWR.Value;`).
+        // Without this, the per-band slot only updates indirectly via the
+        // setPowerUsingTargetDbm txMode-0 side-effect (TransmitModel.cpp:825),
+        // which is gated on connected radio + loaded PA profile + !TUNE.
+        // Result: slider moves while disconnected (or before profiles load)
+        // never persist across restart.  setPowerForBand auto-persists to
+        // hardware/<mac>/powerByBand/<band> when m_persistMac is non-empty.
+        tx.setPowerForBand(m_currentBand, val);
         // Symmetric to the tune-slider auto-switch above: touching the RF
         // Power slider restores the tune source to DriveSlider so the
         // setPowerUsingTargetDbm txMode 1 branch reads tx.power() during
@@ -1510,18 +1520,38 @@ void TxApplet::rescaleFwdGaugeForModel(HPSDRModel model)
 
 void TxApplet::setCurrentBand(Band band)
 {
-    if (m_currentBand == band) { return; }
+    // No same-band early-return: the bootstrap call from
+    // MainWindow.cpp:1578 (`txApplet->setCurrentBand(pan0->band())`) fires
+    // with band == m_currentBand-default (Band20m) when the panadapter
+    // also opens on 20m, and we still need that call to push the loaded
+    // per-band slider values into the UI on first paint.  Re-running the
+    // sync on identical input is idempotent — QSlider::setValue same-value
+    // is a no-op, and TransmitModel::setPower / setTunePowerForBand have
+    // their own same-value early-returns — so the cost is negligible and
+    // the win is correct first-paint behaviour after loadFromSettings.
     m_currentBand = band;
 
     if (!m_model) { return; }
 
-    // Update the Tune Power slider to reflect the stored value for the new band.
-    const int tunePwr = m_model->transmitModel().tunePowerForBand(band);
-    QSignalBlocker b(m_tunePwrSlider);
-    m_updatingFromModel = true;
-    m_tunePwrSlider->setValue(tunePwr);
-    m_tunePwrValue->setText(QString::number(tunePwr));
-    m_updatingFromModel = false;
+    auto& tx = m_model->transmitModel();
+
+    // Update the Tune Power slider to reflect the per-band stored value.
+    {
+        const int tunePwr = tx.tunePowerForBand(band);
+        QSignalBlocker b(m_tunePwrSlider);
+        m_updatingFromModel = true;
+        m_tunePwrSlider->setValue(tunePwr);
+        m_tunePwrValue->setText(QString::number(tunePwr));
+        m_updatingFromModel = false;
+    }
+
+    // Update the RF Power slider to reflect the per-band stored value.
+    // Matches Thetis TXBand setter at console.cs:17513 [v2.10.3.13]
+    // (`PWR = power_by_band[(int)value];`).  Routed through setPower so
+    // the existing reverse-binding lambda (TxApplet.cpp:905) paints the
+    // slider; setPower's same-value early-return makes the no-band-change
+    // call free.
+    tx.setPower(tx.powerForBand(band));
 }
 
 // ── Phase 3M-1b K.2: tooltipForMode ──────────────────────────────────────────
