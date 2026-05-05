@@ -3318,3 +3318,11 @@ nereus_add_test(tst_filter_preset_store)
 # Source: mi0bot-Thetis console.cs:2101-2108 + setup.cs:20328-20331 +
 #         console.cs:29245-29274 [v2.10.3.13-beta2].
 nereus_add_test(tst_hpsdr_model_pa_constants)
+
+# ── Issue #175 Task 2: TxChannel::setPostGenToneMag WDSP wrapper ──────────────
+# 2 tests asserting round-trip store-and-retrieve for the thin C++ wrapper
+# around SetTXAPostGenToneMag (third_party/wdsp/src/gen.c:800-805 [v2.10.3.13]).
+# Used by Task 4 (TransmitModel::setPowerUsingTargetDbm) for HL2 sub-step
+# DSP audio-gain modulation.
+# Source: mi0bot-Thetis console.cs:47666 [v2.10.3.13-beta2].
+nereus_add_test(tst_tx_channel_post_gen_tone_mag)
