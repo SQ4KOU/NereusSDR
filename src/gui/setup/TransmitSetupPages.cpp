@@ -84,6 +84,10 @@
 //                 migration step).  applyHpsdrModel() extends to refresh
 //                 the per-band grid bounds + displayed values on
 //                 RadioModel::currentRadioChanged.
+//   2026-05-04 — Issue #175 Wave 1: TxProfilesPage placeholder body
+//                 dropped (5 disabled-stub controls with no Thetis
+//                 upstream).  Live TX-profile editor lives at Setup →
+//                 Audio → TX Profile.
 // =================================================================
 
 //=================================================================
@@ -152,7 +156,6 @@
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
-#include <QLineEdit>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QButtonGroup>
@@ -913,59 +916,26 @@ void TxProfilesPage::buildUI()
 {
     NereusSDR::Style::applyDarkPageStyle(this);
 
-    // --- Section: Profile ---
-    auto* profGroup = new QGroupBox(QStringLiteral("Profile"), this);
-    auto* profLayout = new QVBoxLayout(profGroup);
-    profLayout->setSpacing(6);
-
-    m_profileListLabel = new QLabel(QStringLiteral("(Profile list — not yet implemented)"), profGroup);
-    m_profileListLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: #607080; font-style: italic; "
+    // Issue #175 Wave 1 follow-up — page body was a fully disabled
+    // placeholder (5 controls all setEnabled(false), zero connect()).
+    // The live TX-profile editor lives at Setup → Audio → TX Profile
+    // (TxProfileSetupPage, fully wired to MicProfileManager).  Thetis
+    // ships grpTXProfile (combo + Save/Delete) directly on tpTransmit
+    // at mi0bot setup.designer.cs:47829-47836 [v2.10.3.13-beta2];
+    // no dedicated "TX Profiles" tab page exists upstream.  Leaf
+    // retained in SetupDialog tree per JJ's direction (IA reshape
+    // decisions deferred to a separate audit).
+    auto* info = new QLabel(
+        QStringLiteral("TX Profile editing has moved to Setup → Audio "
+                       "→ TX Profile."),
+        this);
+    info->setAlignment(Qt::AlignCenter);
+    info->setWordWrap(true);
+    info->setStyleSheet(QStringLiteral(
+        "QLabel { color: #b0c0d0; font-style: italic; "
         " background: #1a2a3a; border: 1px solid #203040; "
-        " border-radius: 3px; padding: 8px; }"));
-    m_profileListLabel->setMinimumHeight(80);
-    m_profileListLabel->setEnabled(false);
-    m_profileListLabel->setAlignment(Qt::AlignCenter);
-    profLayout->addWidget(m_profileListLabel);
-
-    auto* nameRow = new QHBoxLayout();
-    nameRow->addWidget(new QLabel(QStringLiteral("Name:"), profGroup));
-    m_nameEdit = new QLineEdit(profGroup);
-    m_nameEdit->setPlaceholderText(QStringLiteral("Profile name"));
-    m_nameEdit->setEnabled(false);  // NYI
-    m_nameEdit->setToolTip(QStringLiteral("TX profile name — not yet implemented"));
-    nameRow->addWidget(m_nameEdit, 1);
-    profLayout->addLayout(nameRow);
-
-    auto* btnRow = new QHBoxLayout();
-    m_newBtn = new QPushButton(QStringLiteral("New"), profGroup);
-    m_newBtn->setEnabled(false);  // NYI
-    m_newBtn->setToolTip(QStringLiteral("New TX profile — not yet implemented"));
-    m_newBtn->setAutoDefault(false);
-    btnRow->addWidget(m_newBtn);
-
-    m_deleteBtn = new QPushButton(QStringLiteral("Delete"), profGroup);
-    m_deleteBtn->setEnabled(false);  // NYI
-    m_deleteBtn->setToolTip(QStringLiteral("Delete TX profile — not yet implemented"));
-    m_deleteBtn->setAutoDefault(false);
-    btnRow->addWidget(m_deleteBtn);
-
-    m_copyBtn = new QPushButton(QStringLiteral("Copy"), profGroup);
-    m_copyBtn->setEnabled(false);  // NYI
-    m_copyBtn->setToolTip(QStringLiteral("Copy TX profile — not yet implemented"));
-    m_copyBtn->setAutoDefault(false);
-    btnRow->addWidget(m_copyBtn);
-
-    btnRow->addStretch();
-    profLayout->addLayout(btnRow);
-
-    contentLayout()->addWidget(profGroup);
-
-    // ── Phase 3M-3a-ii Batch 5: Compression section removed.
-    // CPDR enable + gain + CESSB live on Setup → DSP → CFC (Batch 5) and
-    // on the TxApplet [PROC] quick-toggle / dashboard.  The previous
-    // disabled-stub trio violated master-design meta rule §2.2.1 (no
-    // half-shipped placeholders).
+        " border-radius: 3px; padding: 12px; }"));
+    contentLayout()->addWidget(info);
 
     contentLayout()->addStretch();
 }

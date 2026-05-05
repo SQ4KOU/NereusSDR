@@ -15,6 +15,10 @@
 //   2026-05-03 — Phase 3M-3a-iii Task 14: added DexpVoxPage (mirrors
 //                 Thetis tpDSPVOXDE 1:1 — setup.designer.cs:44763-45260
 //                 [v2.10.3.13]).
+//   2026-05-04 — Issue #175 Wave 1: TxProfilesPage placeholder body
+//                 dropped (5 disabled-stub controls with no Thetis
+//                 upstream).  Live TX-profile editor lives at Setup →
+//                 Audio → TX Profile.
 // =================================================================
 
 //=================================================================
@@ -75,7 +79,6 @@ class QSpinBox;
 class QDoubleSpinBox;
 class QCheckBox;
 class QLabel;
-class QLineEdit;
 class QPushButton;
 class QRadioButton;
 class QButtonGroup;
@@ -200,6 +203,14 @@ private:
 
 // ---------------------------------------------------------------------------
 // Transmit > TX Profiles
+//
+// Issue #175 Wave 1 follow-up — page body reduced to a single explanatory
+// label.  The live TX-profile editor lives at Setup → Audio → TX Profile
+// (TxProfileSetupPage, fully wired to MicProfileManager).  Thetis ships
+// grpTXProfile (combo + Save/Delete) directly on tpTransmit at mi0bot
+// setup.designer.cs:47829-47836 [v2.10.3.13-beta2]; no dedicated "TX
+// Profiles" tab page exists upstream.  Leaf retained in SetupDialog tree
+// per JJ's direction (IA reshape decisions deferred to a separate audit).
 // ---------------------------------------------------------------------------
 class TxProfilesPage : public SetupPage {
     Q_OBJECT
@@ -208,20 +219,6 @@ public:
 
 private:
     void buildUI();
-
-    // Section: Profile
-    QLabel*      m_profileListLabel{nullptr};  // placeholder for future list
-    QLineEdit*   m_nameEdit{nullptr};
-    QPushButton* m_newBtn{nullptr};
-    QPushButton* m_deleteBtn{nullptr};
-    QPushButton* m_copyBtn{nullptr};
-
-    // ── Phase 3M-3a-ii Batch 5: Compression section removed.
-    // CPDR + CESSB controls now live on Setup → DSP → CFC (CESSB group)
-    // and on the dashboard / TxApplet [PROC] toggle.  The orphan
-    // m_compressorToggle / m_gainSlider / m_cessbToggle disabled stubs
-    // violated master-design meta rule §2.2.1 (no half-shipped
-    // placeholders) and have been removed.
 };
 
 // ---------------------------------------------------------------------------
