@@ -919,6 +919,62 @@ void AppSettings::ensureSettingsAtVersion(int currentVersion)
         qDebug() << "Settings migration to schema v4 complete";
     }
 
+    // v4 → v5 migration (Thetis-faithful DSP-Options layout).
+    //
+    // Thetis's Display → DSP Options page exposes separate RX and TX combos
+    // for buffer size and filter size on every mode that has TX (Phone, FM,
+    // Digital — CW TX is firmware-handled per Thetis console.cs:38891-38897
+    // [v2.10.3.13]).  NereusSDR collapsed those into single <Mode> keys
+    // shared between RX and TX channels.  This migration splits them back:
+    //
+    //   DspOptionsBufferSize<Mode>   → <Mode>Rx + <Mode>Tx (preserved value)
+    //   DspOptionsFilterSize<Mode>   → <Mode>Rx + <Mode>Tx (preserved value)
+    //
+    // Strategy: read old shared value, seed BOTH new keys with it, remove
+    // the old key.  Existing customisation carries forward identically;
+    // users can later differentiate RX vs TX in the new UI.  For CW we
+    // only seed <Mode>Rx — there is no TX combo to populate.
+    //
+    // From Thetis radio.cs:519-574 / 2604-2662 [v2.10.3.13] — DSPRX/DSPTX
+    // each persist BufferSize / FilterSize independently.
+    if (storedVersion < 5 && currentVersion >= 5) {
+        qDebug() << "Migrating settings to schema v5 (DSP-Options RX/TX split)";
+
+        struct ModeSpec {
+            QString modeKey;     // "Phone", "Cw", "Dig", "Fm"
+            bool    hasTx;       // false for Cw — firmware-handled
+        };
+        const ModeSpec modes[] = {
+            { QStringLiteral("Phone"), true  },
+            { QStringLiteral("Cw"),    false },
+            { QStringLiteral("Dig"),   true  },
+            { QStringLiteral("Fm"),    true  },
+        };
+
+        auto split = [&](const QString& family, const ModeSpec& spec) {
+            const QString oldKey = family + spec.modeKey;
+            const QString rxKey  = family + spec.modeKey + QStringLiteral("Rx");
+            const QString txKey  = family + spec.modeKey + QStringLiteral("Tx");
+            if (contains(oldKey)) {
+                const QString val = value(oldKey).toString();
+                if (!contains(rxKey)) {
+                    setValue(rxKey, val);
+                }
+                if (spec.hasTx && !contains(txKey)) {
+                    setValue(txKey, val);
+                }
+                remove(oldKey);
+            }
+        };
+
+        for (const auto& spec : modes) {
+            split(QStringLiteral("DspOptionsBufferSize"), spec);
+            split(QStringLiteral("DspOptionsFilterSize"), spec);
+        }
+
+        qDebug() << "Settings migration to schema v5 complete";
+    }
+
     setValue(versionKey, QString::number(currentVersion));
 }
 
