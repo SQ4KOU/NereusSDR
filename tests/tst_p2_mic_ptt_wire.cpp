@@ -12,7 +12,7 @@
 //   setMicPTTDisabled(true)  → bit 2 SET   (PTT disabled at firmware)
 //
 // Source cite:
-//   Thetis console.cs:19757-19766 [v2.10.3.13 @501e3f51]
+//   Thetis console.cs:19757-19766 [v2.10.3.13+501e3f51]
 //     private bool mic_ptt_disabled = false;        // default PTT enabled
 //     public bool MicPTTDisabled {
 //         set {
@@ -63,7 +63,7 @@ private slots:
 
     // ── 2. setMicPTTDisabled(true) → byte 50 bit 2 SET ───────────────────────
     // disabled=true → wire bit 2 = 1 (firmware ignores mic-jack PTT line).
-    // Source: Thetis console.cs:19764 [v2.10.3.13 @501e3f51]
+    // Source: Thetis console.cs:19764 [v2.10.3.13+501e3f51]
     //   NetworkIO.SetMicPTT(Convert.ToInt32(value));   // value=true → 1
     void setMicPTTDisabledTrue_byte50Bit2IsSet() {
         P2RadioConnection conn;

@@ -335,7 +335,7 @@ public slots:
     ///   disabled = true  → PTT disabled at firmware → wire bit = 1
     ///   disabled = false → PTT enabled  at firmware → wire bit = 0  (default)
     ///
-    /// Source: Thetis console.cs:19757-19766 [v2.10.3.13 @501e3f51]
+    /// Source: Thetis console.cs:19757-19766 [v2.10.3.13+501e3f51]
     ///   private bool mic_ptt_disabled = false;        // default PTT enabled
     ///   public bool MicPTTDisabled {
     ///       set {
@@ -344,7 +344,7 @@ public slots:
     ///       }
     ///   }
     ///
-    /// P1 wire field: Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13 @501e3f51]
+    /// P1 wire field: Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13+501e3f51]
     ///   case 11 (C0=0x14) C1 byte: ((prn->mic.mic_ptt & 1) << 6) → bit 6 (0x40), DIRECT
     /// P2 wire field: deskhpsdr src/new_protocol.c:1488-1490 [@120188f]
     ///   if (mic_ptt_enabled == 0) { transmit_specific_buffer[50] |= 0x04; }  // byte 50 bit 2
@@ -654,7 +654,7 @@ protected:
     // to match Thetis MicPTTDisabled / mic_ptt_disabled storage name exactly).
     // Direct polarity: m_micPTTDisabled=true means PTT is disabled at the
     // firmware (wire bit = 1). Default false — PTT enabled by default,
-    // matching Thetis console.cs:19757 [v2.10.3.13 @501e3f51]:
+    // matching Thetis console.cs:19757 [v2.10.3.13+501e3f51]:
     //   private bool mic_ptt_disabled = false;
     // P1 wire: case 11 (C0=0x14) C1 bit 6 (0x40), direct.
     // P2 wire: transmit_specific_buffer[50] bit 2 (0x04), direct.

@@ -192,9 +192,9 @@ struct CodecContext {
     //   p1MicPTTDisabled = false → wire bit 6 = 0 → PTT enabled  (default)
     //   p1MicPTTDisabled = true  → wire bit 6 = 1 → PTT disabled
     //
-    // From Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13 @501e3f51]:
+    // From Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13+501e3f51]:
     //   C1 = ... | ((prn->mic.mic_ptt & 1) << 6);
-    // From Thetis console.cs:19757-19764 [v2.10.3.13 @501e3f51]:
+    // From Thetis console.cs:19757-19764 [v2.10.3.13+501e3f51]:
     //   private bool mic_ptt_disabled = false;
     //   NetworkIO.SetMicPTT(Convert.ToInt32(mic_ptt_disabled));
     //
@@ -223,7 +223,7 @@ struct CodecContext {
     bool    p1PuresignalRun{false};
 
     // User digital outputs — prn->user_dig_out, low 4 bits (0-15).
-    // Source: Thetis ChannelMaster/networkproto1.c:601 [v2.10.3.13 @501e3f51]
+    // Source: Thetis ChannelMaster/networkproto1.c:601 [v2.10.3.13+501e3f51]
     //   C3 = prn->user_dig_out & 0b00001111;
     // P1 wire: bank 11 C3 low 4 bits.
     // Drives the 4 user-controllable digital pins on the radio's accessory

@@ -2,7 +2,7 @@
 
 **Status:** design (2026-05-05)
 **Author:** J.J. Boyd ~ KG4VCF, AI-assisted via Anthropic Claude Code
-**Thetis source stamp:** `[v2.10.3.13 @501e3f51]`
+**Thetis source stamp:** `[v2.10.3.13+501e3f51]`
 **Scope owner:** single PR; no sub-project decomposition
 
 ---
@@ -415,4 +415,4 @@ implementation plan that follows this doc.
 - Builds on prior 3M-1b mic-jack family infrastructure (commits in PR #149).
 - Mechanically follows the issue #182 wire-up pattern (commit `f8d335f`).
 - Thetis source root: `/Users/j.j.boyd/Thetis/Project Files/Source/`,
-  stamp `[v2.10.3.13 @501e3f51]`.
+  stamp `[v2.10.3.13+501e3f51]`.

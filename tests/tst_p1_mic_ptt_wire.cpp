@@ -12,7 +12,7 @@
 //   setMicPTTDisabled(true)  → wire bit 6 SET   (PTT disabled at firmware)
 //
 // Source cite:
-//   Thetis console.cs:19757-19766 [v2.10.3.13 @501e3f51]
+//   Thetis console.cs:19757-19766 [v2.10.3.13+501e3f51]
 //     private bool mic_ptt_disabled = false;        // default PTT enabled
 //     public bool MicPTTDisabled {
 //         set {
@@ -20,7 +20,7 @@
 //             NetworkIO.SetMicPTT(Convert.ToInt32(value));
 //         }
 //     }
-//   Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13 @501e3f51]
+//   Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13+501e3f51]
 //     case 11: C1 = ... | ((prn->mic.mic_ptt & 1) << 6);
 //     → mic_ptt is bit 6 (mask 0x40) of C1 in bank 11, direct polarity.
 //
@@ -59,7 +59,7 @@ private slots:
 
     // ── 2. setMicPTTDisabled(true) → C1 bit 6 SET (PTT disabled at firmware) ─
     // disabled=true → wire bit 6 = 1 (firmware ignores mic-jack PTT line).
-    // Source: Thetis console.cs:19764 [v2.10.3.13 @501e3f51]
+    // Source: Thetis console.cs:19764 [v2.10.3.13+501e3f51]
     //   NetworkIO.SetMicPTT(Convert.ToInt32(value));   // value=true → 1
     void setMicPTTDisabledTrue_c1Bit6IsSet() {
         P1RadioConnection conn;
@@ -99,7 +99,7 @@ private slots:
     // ── 5. Bank 11 C0 address must be 0x14 ────────────────────────────────────
     // Bank 11's C0 byte carries address 0x14 (bits 7..1). After setMicPTTDisabled,
     // C1 changes but C0 must still have address 0x14.
-    // Source: Thetis networkproto1.c:594 [v2.10.3.13 @501e3f51] — C0 |= 0x14
+    // Source: Thetis networkproto1.c:594 [v2.10.3.13+501e3f51] — C0 |= 0x14
     void c0AddressIs0x14() {
         P1RadioConnection conn;
         conn.setBoardForTest(HPSDRHW::HermesII);  // → P1CodecStandard
@@ -230,7 +230,7 @@ private slots:
     // setMicBias(true)     → bit 5 = 1 (mic_bias, no inversion)
     // setMicPTTDisabled(false) → bit 6 = 0 (mic_ptt, direct: PTT enabled → 0)
     // C1 & 0x70 must equal 0x30 (bits 4 + 5 set, bit 6 clear).
-    // Source: Thetis networkproto1.c:597-598 [v2.10.3.13 @501e3f51]
+    // Source: Thetis networkproto1.c:597-598 [v2.10.3.13+501e3f51]
     void setMicTrsAndBiasAndPTT_composeCorrectlyOnC1() {
         P1RadioConnection conn;
         conn.setBoardForTest(HPSDRHW::HermesII);  // → P1CodecStandard

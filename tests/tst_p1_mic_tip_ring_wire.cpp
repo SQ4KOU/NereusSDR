@@ -114,7 +114,7 @@ private slots:
         // Post issue #182: bit 4 (0x10) is set by setMicTipRing(false); bit 6
         // (mic_ptt direct, default disabled=false) is CLEAR. Bits 0-3 and bit 5
         // are 0. Total C1 should equal 0x10.
-        // Source: Thetis console.cs:19757 [v2.10.3.13 @501e3f51]:
+        // Source: Thetis console.cs:19757 [v2.10.3.13+501e3f51]:
         //   private bool mic_ptt_disabled = false;
         QCOMPARE(int(quint8(bank11[1])), 0x10);
     }

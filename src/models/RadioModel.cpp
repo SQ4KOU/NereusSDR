@@ -3038,7 +3038,7 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
     // whatever the user last saved (the Setup -> Audio -> TX Input ->
     // Mic PTT Disabled checkbox).
     //
-    // Source: Thetis console.cs:19761-19764 [v2.10.3.13 @501e3f51]:
+    // Source: Thetis console.cs:19761-19764 [v2.10.3.13+501e3f51]:
     //   set {
     //       mic_ptt_disabled = value;
     //       NetworkIO.SetMicPTT(Convert.ToInt32(value));
@@ -3163,7 +3163,7 @@ void RadioModel::handlePaTelemetry(quint16 fwdRaw, quint16 revRaw,
 // wireMicPttDisabledForTest() seam to avoid the full wireConnectionSignals
 // DSP-thread pipeline.
 //
-// Source: Thetis console.cs:19761-19764 [v2.10.3.13 @501e3f51]:
+// Source: Thetis console.cs:19761-19764 [v2.10.3.13+501e3f51]:
 //   set {
 //       mic_ptt_disabled = value;
 //       NetworkIO.SetMicPTT(Convert.ToInt32(value));

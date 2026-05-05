@@ -126,12 +126,12 @@ private slots:
     // ── 8. setMicBias(true) produces C1 = 0x20 in default state (post issue #182) ──
     // With no preamp set, no mic_trs override: bit 5 (mic_bias) is set.
     // mic_ptt bit 6 stays clear because m_micPTTDisabled defaults false (PTT
-    // enabled), matching Thetis console.cs:19757 [v2.10.3.13 @501e3f51]:
+    // enabled), matching Thetis console.cs:19757 [v2.10.3.13+501e3f51]:
     //   private bool mic_ptt_disabled = false;
     // Pre-fix the inverted-polarity legacy path emitted bit 6 = 1 by default;
     // the issue #182 follow-up flipped the legacy path to direct, so the bit
     // is now 0 by default.
-    // Source: Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13 @501e3f51]
+    // Source: Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13+501e3f51]
     void setMicBiasTrue_c1IsExactly0x20InDefaultState() {
         P1RadioConnection conn;
         conn.setMicBias(true);

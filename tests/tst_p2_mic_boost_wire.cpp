@@ -113,7 +113,7 @@ private slots:
     //      bits 3-4,6-7 unaffected.
     // Post issue #182: bit 2 (0x04) CLEAR by default (m_micPTTDisabled=false →
     //   PTT enabled at firmware on wire; matches Thetis console.cs:19757
-    //   [v2.10.3.13 @501e3f51] private bool mic_ptt_disabled = false).
+    //   [v2.10.3.13+501e3f51] private bool mic_ptt_disabled = false).
     // After G.6: bit 5 (0x20) SET by default (m_micXlr=true → XLR selected).
     // setMicBoost must not change bits 2, 5, or 3-4, 6-7.
     // Source: deskhpsdr/src/new_protocol.c:1484-1486 [@120188f]

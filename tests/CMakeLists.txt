@@ -1072,7 +1072,7 @@ nereus_add_test(tst_calibration_controller)
 # Verifies setPaCalProfile / setPaCalPoint signals + de-dup, idx-zero +
 # out-of-range guards, calibratedFwdPowerWatts forwarding, and per-MAC
 # AppSettings round-trip for boardClass + 10 cal-point watts entries.
-# Source: Thetis console.cs:6691-6724 CalibratedPAPower [v2.10.3.13 @501e3f51].
+# Source: Thetis console.cs:6691-6724 CalibratedPAPower [v2.10.3.13+501e3f51].
 nereus_add_test(tst_calibration_controller_pa_cal)
 
 # ── P1 full-parity §3.4: alex_fwd routing through CalibratedPAPower ─────────
@@ -1080,7 +1080,7 @@ nereus_add_test(tst_calibration_controller_pa_cal)
 # through CalibrationController::calibratedFwdPowerWatts before publishing
 # to RadioStatus.  Identity (no profile) and active (Anan100 with mutated
 # watts[5]) paths plus a guard that the reflected-power path is unaffected.
-# Source: Thetis console.cs:6691-6724 CalibratedPAPower [v2.10.3.13 @501e3f51].
+# Source: Thetis console.cs:6691-6724 CalibratedPAPower [v2.10.3.13+501e3f51].
 nereus_add_test(tst_radio_model_pa_cal_routing)
 
 # ── P1 full-parity §3.5: SWR-foldback drive scaling ─────────────────────────
@@ -1115,7 +1115,7 @@ target_compile_definitions(tst_calibration_tab PRIVATE NEREUS_BUILD_TESTS)
 # controller→spinbox sync via paCalPointChanged; repopulate rebuilds; echo-
 # loop guard prevents recursion.
 # Source: Thetis setup.cs:5404-5594 ud{10|100|200}PA{N}W spinbox blocks
-# [v2.10.3.13 @501e3f51].
+# [v2.10.3.13+501e3f51].
 nereus_add_test(tst_pa_calibration_group)
 target_compile_definitions(tst_pa_calibration_group PRIVATE NEREUS_BUILD_TESTS)
 
@@ -1712,7 +1712,7 @@ nereus_add_test(tst_pa_setup_pages)
 # BoardCapabilities flags the visibility wiring consumes (hasPaProfile,
 # isRxOnlySku, canDriveGanymede, hasPureSignal, hasStepAttenuatorCal) per
 # the per-SKU matrix derived from Thetis comboRadioModel_SelectedIndexChanged
-# (setup.cs:19812-20310 [v2.10.3.13 @501e3f51]). Test matrix covers all 16
+# (setup.cs:19812-20310 [v2.10.3.13+501e3f51]). Test matrix covers all 16
 # HPSDRModel values + RX-only + Ganymede + PureSignal scenarios (19 cases).
 nereus_add_test(tst_pa_setup_per_sku_visibility)
 target_compile_definitions(tst_pa_setup_per_sku_visibility PRIVATE NEREUS_BUILD_TESTS)
@@ -2954,7 +2954,7 @@ target_compile_definitions(tst_p2_mic_ptt_wire PRIVATE NEREUS_BUILD_TESTS)
 # and RadioConnection::setMicPTTDisabled, so the Setup checkbox never reached
 # the wire on either protocol. Post-fix wires the signal in
 # RadioModel::wireConnectionSignals + adds connect-time priming.
-# Source cite: Thetis console.cs:19757-19766 [v2.10.3.13 @501e3f51].
+# Source cite: Thetis console.cs:19757-19766 [v2.10.3.13+501e3f51].
 nereus_add_test(tst_radio_model_mic_ptt_wire)
 target_compile_definitions(tst_radio_model_mic_ptt_wire PRIVATE NEREUS_BUILD_TESTS)
 

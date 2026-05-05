@@ -51,7 +51,7 @@
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-04-28 — setMicBias (G.4): byte 50 bit 4 (0x10), polarity 1=on. deskhpsdr new_protocol.c:1496-1498 [@120188f]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-04-28 — setMicPTT (G.5): byte 50 bit 2 (0x04, INVERTED). deskhpsdr new_protocol.c:1488-1490 [@120188f]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
-//   2026-05-04 — setMicPTT renamed to setMicPTTDisabled (issue #182): direct polarity matches Thetis console.cs:19757-19766 [v2.10.3.13 @501e3f51]; default MicState::micControl flipped 0x24→0x20 so PTT is enabled at firmware out of the box. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-05-04 — setMicPTT renamed to setMicPTTDisabled (issue #182): direct polarity matches Thetis console.cs:19757-19766 [v2.10.3.13+501e3f51]; default MicState::micControl flipped 0x24→0x20 so PTT is enabled at firmware out of the box. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-04-28 — setMicXlr (G.6): byte 50 bit 5 (0x20), P2-only, polarity 1=XLR. deskhpsdr new_protocol.c:1500-1502 [@120188f]. MicState::micControl default updated 0x04 -> 0x24. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -1161,7 +1161,7 @@ void P2RadioConnection::setPuresignalRun(bool run)
 //
 // Wire byte: transmit_specific_buffer[50] bit 2 (mask 0x04), direct polarity.
 //
-// From Thetis console.cs:19757-19766 [v2.10.3.13 @501e3f51]:
+// From Thetis console.cs:19757-19766 [v2.10.3.13+501e3f51]:
 //   private bool mic_ptt_disabled = false;        // default PTT enabled
 //   public bool MicPTTDisabled {
 //       set {
@@ -1186,7 +1186,7 @@ void P2RadioConnection::setMicPTTDisabled(bool disabled)
     }
     m_micPTTDisabled = disabled;
     // Direct polarity: disabled=true → SET bit 2; disabled=false → CLEAR bit 2.
-    // From Thetis console.cs:19764 [v2.10.3.13 @501e3f51]:
+    // From Thetis console.cs:19764 [v2.10.3.13+501e3f51]:
     //   NetworkIO.SetMicPTT(Convert.ToInt32(mic_ptt_disabled));
     if (disabled) {
         m_mic.micControl |= 0x04;

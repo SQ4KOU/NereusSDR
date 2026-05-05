@@ -216,7 +216,7 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
             // mic_trs polarity inversion: wire bit set when tip is BIAS/PTT (!tipHot).
             // mic_bias polarity: 1 = bias on (no inversion).
             // mic_ptt polarity: direct — bit set when PTT is disabled at firmware,
-            // matching Thetis console.cs:19764 [v2.10.3.13 @501e3f51]:
+            // matching Thetis console.cs:19764 [v2.10.3.13+501e3f51]:
             //   NetworkIO.SetMicPTT(Convert.ToInt32(mic_ptt_disabled));
             // From mi0bot ChannelMaster/networkproto1.c:1101 [v2.10.3.14-beta1 @c26a8a4]:
             //   C1 = ... | ((mic.mic_ptt & 1) << 6);

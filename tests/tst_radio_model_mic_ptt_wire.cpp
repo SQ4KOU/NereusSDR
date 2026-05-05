@@ -24,7 +24,7 @@
 //     and primes the connection with the current model value once at boot.
 //
 // Source cite (no Thetis logic translated here, comments only):
-//   Thetis console.cs:19757-19766 [v2.10.3.13 @501e3f51]
+//   Thetis console.cs:19757-19766 [v2.10.3.13+501e3f51]
 //     private bool mic_ptt_disabled = false;        // default: PTT enabled
 //     public bool MicPTTDisabled {
 //         set {
@@ -32,7 +32,7 @@
 //             NetworkIO.SetMicPTT(Convert.ToInt32(value));   // disabled?1:0
 //         }
 //     }
-//   Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13 @501e3f51]
+//   Thetis ChannelMaster/networkproto1.c:597-598 [v2.10.3.13+501e3f51]
 //     C1 = ... | ((prn->mic.mic_ptt & 1) << 6);     // direct write to wire
 // =================================================================
 
@@ -169,7 +169,7 @@ private slots:
     // has to be asserted before they can transmit. This mirrors the Thetis
     // pattern where every NetworkIO.SetXxx is called once at radio init.
     //
-    // Source cite: Thetis console.cs:19757 [v2.10.3.13 @501e3f51] —
+    // Source cite: Thetis console.cs:19757 [v2.10.3.13+501e3f51] —
     //   default mic_ptt_disabled = false. Persistence layer round-trips
     //   this through TransmitModel.
     void connectTimePrime_pushesCurrentModelValueOnce()
