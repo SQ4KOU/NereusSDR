@@ -3309,3 +3309,12 @@ nereus_add_test(tst_spectrum_tx_overlay)
 # round-trips through AppSettings, resetPreset restores Thetis default,
 # setPresetsForMode reorder persists, presetsChanged fires on every mutator.
 nereus_add_test(tst_filter_preset_store)
+
+# ── Issue #175 Task 1: per-SKU PA UI constants for HL2 mi0bot parity ─────────
+# 5 tests asserting the 9 constexpr helpers + 2 attenuator constants added
+# in HpsdrModel.h for HL2 (HERMESLITE) mi0bot-Thetis slider/spinbox parity:
+#   hl2_rfPowerSlider, hl2_tuneSlider, hl2_fixedTuneSpinbox, hl2_attenuator,
+#   anan100_default_100W, ananG2_1k_default_100W_slider.
+# Source: mi0bot-Thetis console.cs:2101-2108 + setup.cs:20328-20331 +
+#         console.cs:29245-29274 [v2.10.3.13-beta2].
+nereus_add_test(tst_hpsdr_model_pa_constants)
