@@ -105,12 +105,15 @@ warren@wpratt.com
 class TestWdspEngineTxChannel;
 // Phase 3M-3a-iii Task 20: same pattern for the create_dexp lifecycle test.
 class TstWdspEngineDexpInit;
+// Phase 3M-4 Task 4: same pattern for the PsFeedbackChannel lifecycle test.
+class TstPsFeedbackChannel;
 #endif
 
 namespace NereusSDR {
 
 class RxChannel;
 class TxChannel;
+class PsFeedbackChannel;
 
 // Central WDSP manager. Owns all RxChannel instances and manages
 // system-level initialization (FFTW wisdom, impulse cache).
@@ -239,6 +242,41 @@ public:
     // always non-null (wrapper is always constructed alongside the WDSP channel).
     TxChannel* txChannel(int channelId) const;
 
+    // --- PureSignal feedback channel management (Phase 3M-4 Task 4) ---
+
+    // PS feedback channel id.  Type=0 (RX) per WDSP channel.c convention.
+    // Slot 5 per the wdsp-integration.md §11.1 documented channel-id design
+    // (0=RX1, 1-4 reserved for RX1-div / RX2 / RX2-div / TX, 5=PS feedback).
+    // Avoids collision with the current actual code (0=RX1, 1=TX) and leaves
+    // headroom for future RX2 / diversity slots without renumbering.
+    static constexpr int kPsFeedbackChannelId   = 5;
+    static constexpr int kPsFeedbackChannelType = 0;   // RX type (cmaster.c:184)
+
+    // Default PS feedback rate for G2-class boards per cmaster.cs:424
+    // [v2.10.3.13] (`ps_rate = 192000`).  HL2 uses rx1_rate via the
+    // BoardCapabilities::psSampleRate=0 sentinel; the PureSignal coordinator
+    // (Task 7) re-applies the per-board rate before MOX.
+    static constexpr int kPsFeedbackDefaultSampleRate = 192000;
+
+    // Look up the PureSignal feedback channel wrapper.  Returns nullptr
+    // until openPsFeedbackChannel() (called from finishInitialization in
+    // production builds, or from openPsFeedbackChannelForTesting() in
+    // tests) has run.
+    PsFeedbackChannel* psFeedbackChannel() const;
+
+#ifdef NEREUS_BUILD_TESTS
+    // Test-only helper that synchronously opens the PS feedback channel
+    // without going through the async wisdom path.  Mirrors the
+    // m_initialized=true friend-access trick from
+    // tst_wdsp_engine_dexp_init.cpp; safe to call only after
+    // m_initialized=true was set via friend access.
+    //
+    // Production code path: openPsFeedbackChannel() is invoked from
+    // finishInitialization() right after the impulse cache loads.  Tests
+    // bypass that to avoid the 30-60s wisdom build.
+    void openPsFeedbackChannelForTesting();
+#endif
+
 signals:
     void initializedChanged(bool initialized);
     // Emitted during wisdom generation. percent=0-100, status=what's being planned.
@@ -284,6 +322,25 @@ private:
     // so the ordering is correct.
     std::map<int, std::vector<double>> m_dexpBuffers;
 
+    // Phase 3M-4 Task 4: PureSignal feedback RX channel.  Single instance
+    // per WdspEngine, opened during finishInitialization() (or via the
+    // openPsFeedbackChannelForTesting() helper in NEREUS_BUILD_TESTS
+    // builds).  Held as unique_ptr — destruction order matters: the
+    // destructor (~WdspEngine via shutdown()) must run CloseChannel(5)
+    // BEFORE the unique_ptr destructor erases the wrapper, mirroring the
+    // destroyTxChannel / destroyRxChannel lifecycle.
+    std::unique_ptr<PsFeedbackChannel> m_psFeedbackChannel;
+
+    // Open the WDSP-side PS feedback channel (OpenChannel + state=1) and
+    // construct the wrapper.  Idempotent — second call returns silently.
+    // Called from finishInitialization() in production, or from
+    // openPsFeedbackChannelForTesting() under NEREUS_BUILD_TESTS.
+    void openPsFeedbackChannel();
+
+    // Close the WDSP-side PS feedback channel and destroy the wrapper.
+    // Idempotent — called from shutdown() when the engine is torn down.
+    void closePsFeedbackChannel();
+
 #ifdef NEREUS_BUILD_TESTS
     // Test-only friend: lets unit tests bypass async wisdom load by setting
     // m_initialized = true directly so they can exercise createTxChannel /
@@ -292,6 +349,8 @@ private:
     friend class ::TestWdspEngineTxChannel;
     // Phase 3M-3a-iii Task 20: same friendship for the create_dexp test.
     friend class ::TstWdspEngineDexpInit;
+    // Phase 3M-4 Task 4: same friendship for the PsFeedbackChannel test.
+    friend class ::TstPsFeedbackChannel;
 #endif
 };
 

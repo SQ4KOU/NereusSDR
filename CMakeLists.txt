@@ -398,6 +398,7 @@ set(CORE_SOURCES
     src/core/WdspEngine.cpp
     src/core/RxChannel.cpp
     src/core/TxChannel.cpp
+    src/core/PsFeedbackChannel.cpp
     src/core/TxWorkerThread.cpp
     src/core/NbFamily.cpp
     src/core/NbFamily.h

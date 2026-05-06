@@ -104,6 +104,18 @@ nereus_add_test(tst_wdsp_ps_smoke)
 #         Thetis cmaster.cs:143-147 [v2.10.3.13].
 nereus_add_test(tst_tx_channel_ps_setters)
 
+# ── Phase 3M-4 Task 4: PsFeedbackChannel wrapper (WDSP feedback RX channel) ──
+# 4 tests covering channel-id uniqueness, sample-rate round-trip, activity
+# counter, and distinctness from the existing TX channel id (1).  The
+# PsFeedbackChannel is the host-side handle to the WDSP feedback RX channel
+# that calcc reads autonomously via pscc() (calcc.c:617 [v2.10.3.13]).
+# WdspEngine owns one instance, opened during initialize() (or via
+# openPsFeedbackChannelForTesting() in the test path) at channel id 5 per
+# the wdsp-integration.md §11.1 documented design.
+# Source: NereusSDR-original wrapper.  No Thetis source; Thetis manages
+#         WDSP channels via ChannelMaster.dll (see ps_sync_stub.c).
+nereus_add_test(tst_ps_feedback_channel)
+
 # ── Phase 3M-1b Task B.1: BoardCapabilities::hasMicJack flag ─────────────────
 # Parametrized over all HPSDRHW enum values.
 # HL2 and HermesLiteRxOnly → false; all other boards → true.

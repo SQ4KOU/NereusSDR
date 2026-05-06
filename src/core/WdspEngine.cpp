@@ -55,6 +55,7 @@ warren@wpratt.com
 #include "WdspEngine.h"
 #include "RxChannel.h"
 #include "TxChannel.h"
+#include "PsFeedbackChannel.h"
 #include "LogCategories.h"
 #include "wdsp_api.h"
 
@@ -216,6 +217,16 @@ void WdspEngine::finishInitialization()
     }
 
     m_initialized = true;
+
+    // Phase 3M-4 Task 4: open the PureSignal feedback RX channel.  Unlike
+    // RX1 / TX channels (which are opened lazily by RadioModel::
+    // connectToRadio() because they depend on per-board sample rates), the
+    // PS feedback channel can be opened with the G2-class default rate
+    // (192000); the PureSignal coordinator (Task 7) re-applies rx1_rate
+    // for HL2 boards before MOX.  Opening here keeps the lifecycle
+    // symmetric with init_impulse_cache (one-shot, engine-owned).
+    openPsFeedbackChannel();
+
     emit initializedChanged(true);
     qCInfo(lcDsp) << "WDSP initialized successfully";
 #endif
@@ -244,6 +255,13 @@ void WdspEngine::shutdown()
             destroyTxChannel(id);
         }
     }
+
+    // Phase 3M-4 Task 4: close the PS feedback RX channel BEFORE the
+    // primary RX channels.  Although calcc reads autonomously, the
+    // PureSignal coordinator (Task 7) connects the PS feedback wrapper
+    // back to the codec sample stream — closing it first ensures no
+    // PS-feedback writes happen against a torn-down WDSP channel.
+    closePsFeedbackChannel();
 
     // Destroy all RX channels (collect IDs first to avoid iterator invalidation)
     {
@@ -707,5 +725,99 @@ TxChannel* WdspEngine::txChannel(int channelId) const
     }
     return nullptr;
 }
+
+// ---------------------------------------------------------------------------
+// PureSignal feedback channel management (Phase 3M-4 Task 4)
+// ---------------------------------------------------------------------------
+
+void WdspEngine::openPsFeedbackChannel()
+{
+    if (m_psFeedbackChannel) {
+        return;   // idempotent — already open
+    }
+
+    // OpenChannel parameters mirror createRxChannel (the existing RX
+    // pattern at WdspEngine.cpp:311-324) — type=0 (RX), bfo=1, the same
+    // tdelayup/tslewup/tdelaydown/tslewdown envelope.  The per-board PS
+    // sample-rate divergence is handled later via setSampleRate(); here we
+    // open with the G2-class default so the channel is live right after
+    // wisdom completes.
+    //
+    // Buffer sizes (in_size / dsp_size) match the RX-1 defaults at
+    // RadioModel.cpp:1458 (createRxChannel(0, wdspInSize, 4096, ...)) when
+    // wdspInSize=64 — we use the canonical 64 / 4096 here to keep the
+    // ring-buffer math identical to the live RX-1 channel.  The PureSignal
+    // coordinator (Task 7) re-applies per-board input rates before MOX, so
+    // these are init-time defaults only.
+    constexpr int kPsInputBufferSize = 64;     // matches RX-1 wdspInSize default
+    constexpr int kPsDspBufferSize   = 4096;   // matches RX-1 dsp_size
+    constexpr int kPsDspSampleRate   = 48000;  // RX DSP rate (post-decimation)
+    constexpr int kPsOutputSampleRate = 48000; // RX output rate
+
+#ifdef HAVE_WDSP
+    // From Thetis cmaster.c:72-86 (create_rcvr OpenChannel call) [v2.10.3.13]
+    OpenChannel(
+        kPsFeedbackChannelId,
+        kPsInputBufferSize,                 // in_size
+        kPsDspBufferSize,                   // dsp_size
+        kPsFeedbackDefaultSampleRate,       // input sample rate (192000 default)
+        kPsDspSampleRate,                   // dsp sample rate
+        kPsOutputSampleRate,                // output sample rate
+        kPsFeedbackChannelType,             // type=0 (RX) — from cmaster.c:184
+        0,                                  // state: 0=off initially
+        0.010,                              // tdelayup  — from cmaster.c:82
+        0.025,                              // tslewup   — from cmaster.c:83
+        0.000,                              // tdelaydown — from cmaster.c:84
+        0.010,                              // tslewdown — from cmaster.c:85
+        1);                                 // bfo: block until output available
+
+    // Activate the channel immediately.  Mirrors createRxChannel's pattern
+    // where SetRXAMode et al. run on a state=0 channel and the channel is
+    // activated lazily; for PS feedback we activate up front because calcc
+    // reads autonomously and expects the channel live.  state=1, dmode=0
+    // (no drain — channel isn't running yet).
+    SetChannelState(kPsFeedbackChannelId, 1, 0);
+
+    qCInfo(lcDsp) << "Opened PS feedback RX channel"
+                  << kPsFeedbackChannelId
+                  << "rate=" << kPsFeedbackDefaultSampleRate;
+#endif
+
+    m_psFeedbackChannel = std::make_unique<PsFeedbackChannel>(
+        kPsFeedbackChannelId, this);
+}
+
+void WdspEngine::closePsFeedbackChannel()
+{
+    if (!m_psFeedbackChannel) {
+        return;
+    }
+
+#ifdef HAVE_WDSP
+    // Deactivate with drain before closing.  dmode=1: drain-mode close
+    // (mirrors destroyRxChannel pattern at WdspEngine.cpp:381).
+    SetChannelState(kPsFeedbackChannelId, 0, 1);
+    CloseChannel(kPsFeedbackChannelId);
+    qCInfo(lcDsp) << "Closed PS feedback RX channel" << kPsFeedbackChannelId;
+#endif
+
+    m_psFeedbackChannel.reset();
+}
+
+PsFeedbackChannel* WdspEngine::psFeedbackChannel() const
+{
+    return m_psFeedbackChannel.get();
+}
+
+#ifdef NEREUS_BUILD_TESTS
+void WdspEngine::openPsFeedbackChannelForTesting()
+{
+    // Test path: caller has set m_initialized=true via friend access.
+    // openPsFeedbackChannel() doesn't itself require m_initialized (it's
+    // a private helper that finishInitialization invokes after setting
+    // the flag), so this is just a public entry point for tests.
+    openPsFeedbackChannel();
+}
+#endif
 
 } // namespace NereusSDR
