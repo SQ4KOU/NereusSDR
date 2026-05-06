@@ -284,6 +284,39 @@ struct BoardCapabilities {
     bool canDriveGanymede {false};
 
     bool hasPureSignal;
+
+    // Phase 3M-4 Task 1: PureSignal hardware-default peak (per-protocol).
+    //
+    // From Thetis clsHardwareSpecific.cs:285-310 PSDefaultPeak [v2.10.3.13]:
+    //   P1 (USB protocol, all boards):  return 0.4072
+    //   P2 (UDP protocol, default):     return 0.2899
+    //   P2 HPSDRHW.Saturn:              return 0.6121
+    // Plus mi0bot HL2 override at clsHardwareSpecific.cs:300-330
+    // [v2.10.3.13-beta2]:
+    //   P1 HPSDRHW.HermesLite:          return 0.233
+    //   P2 HPSDRHW.HermesLite:          return 0.233
+    //
+    // Type is double in Thetis (public static double PSDefaultPeak); preserved.
+    // Used by PsForm to flag drift via pbWarningSetPk (PSForm.cs:802).
+    // Boards without PureSignal keep the 0.0 default (irrelevant; gated by
+    // hasPureSignal).
+    double psDefaultPeak {0.0};
+
+    // Phase 3M-4 Task 1: PureSignal feedback channel sample rate during MOX.
+    //
+    // 192000 for G2-class boards (cmaster.cs:424 ps_rate=192000 [v2.10.3.13]).
+    // 0 sentinel = "use current rx1_rate" for HL2.  When MOX is asserted with
+    // PS on, mi0bot console.cs:8472-8488 [v2.10.3.13-beta2] overrides the
+    // default ps_rate path:
+    //   if (hpsdr_model == HPSDRModel.HERMESLITE) // MI0BOT: HL2 can work at a high sample rate
+    //   {
+    //       Rate[0] = rx1_rate;
+    //       Rate[1] = rx1_rate;
+    //   }
+    // Consumed by per-board codec applyPureSignalDdcConfig() and the
+    // PureSignal coordinator.
+    int psSampleRate {192000};
+
     bool hasDiversityReceiver;
     bool hasStepAttenuatorCal;
     bool hasPaProfile;

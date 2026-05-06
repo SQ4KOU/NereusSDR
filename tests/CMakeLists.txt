@@ -71,6 +71,14 @@ nereus_add_test(tst_clarity_controller)
 nereus_add_test(tst_hpsdr_enums)
 nereus_add_test(tst_board_capabilities)
 
+# ── Phase 3M-4 Task 1: PureSignal cap fields (psDefaultPeak + psSampleRate) ──
+# 3 tests covering ANAN-G2 (P2 default 0.2899, psSampleRate=192000),
+# HermesLite (mi0bot HL2 override 0.233, psSampleRate=0 sentinel for
+# rx1_rate per mi0bot console.cs:8472-8488), and Atlas (no PureSignal).
+# Source: ramdor clsHardwareSpecific.cs:285-310 [v2.10.3.13] +
+#         mi0bot clsHardwareSpecific.cs:300-330 [v2.10.3.13-beta2].
+nereus_add_test(tst_puresignal_caps)
+
 # ── Phase 3M-1b Task B.1: BoardCapabilities::hasMicJack flag ─────────────────
 # Parametrized over all HPSDRHW enum values.
 # HL2 and HermesLiteRxOnly → false; all other boards → true.

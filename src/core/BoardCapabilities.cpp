@@ -408,6 +408,13 @@ const BoardCapabilities kHermesII = {
     .hasRxBypassRelay = true,
     .rxOnlyAntennaCount = 3,
     .hasPureSignal    = true,
+    // PureSignal hardware-default peak: P1 default 0.4072.
+    // From Thetis clsHardwareSpecific.cs:297 [v2.10.3.13]
+    //   if (NetworkIO.CurrentRadioProtocol == RadioProtocol.USB) // protocol 1
+    //   { ... default: return 0.4072; ... }
+    .psDefaultPeak    = 0.4072,
+    // PS feedback rate: 192000 (cmaster.cs:424 ps_rate=192000 [v2.10.3.13]).
+    .psSampleRate     = 192000,
     .hasDiversityReceiver = false,
     .hasStepAttenuatorCal = true,
     .hasPaProfile     = true,
@@ -455,6 +462,11 @@ const BoardCapabilities kAngelia = {
     .hasRxBypassRelay = true,
     .rxOnlyAntennaCount = 3,
     .hasPureSignal    = true,
+    // PureSignal hardware-default peak: P1 default 0.4072.
+    // From Thetis clsHardwareSpecific.cs:297 [v2.10.3.13] (P1 default branch).
+    .psDefaultPeak    = 0.4072,
+    // PS feedback rate: 192000 (cmaster.cs:424 ps_rate=192000 [v2.10.3.13]).
+    .psSampleRate     = 192000,
     .hasDiversityReceiver = true,
     .hasStepAttenuatorCal = true,
     .hasPaProfile     = true,
@@ -500,6 +512,11 @@ const BoardCapabilities kOrion = {
     .hasRxBypassRelay = true,
     .rxOnlyAntennaCount = 3,
     .hasPureSignal    = true,
+    // PureSignal hardware-default peak: P1 default 0.4072.
+    // From Thetis clsHardwareSpecific.cs:297 [v2.10.3.13] (P1 default branch).
+    .psDefaultPeak    = 0.4072,
+    // PS feedback rate: 192000 (cmaster.cs:424 ps_rate=192000 [v2.10.3.13]).
+    .psSampleRate     = 192000,
     .hasDiversityReceiver = true,
     .hasStepAttenuatorCal = true,
     .hasPaProfile     = true,
@@ -546,6 +563,13 @@ const BoardCapabilities kOrionMKII = {
     .hasRxBypassRelay = true,
     .rxOnlyAntennaCount = 3,
     .hasPureSignal    = true,
+    // PureSignal hardware-default peak: P2 default 0.2899.
+    // From Thetis clsHardwareSpecific.cs:307 [v2.10.3.13]
+    //   else // protocol 2
+    //   { ... default: return 0.2899; ... }
+    .psDefaultPeak    = 0.2899,
+    // PS feedback rate: 192000 (cmaster.cs:424 ps_rate=192000 [v2.10.3.13]).
+    .psSampleRate     = 192000,
     .hasDiversityReceiver = true,
     .hasStepAttenuatorCal = true,
     .hasPaProfile     = true,
@@ -624,6 +648,29 @@ const BoardCapabilities kHermesLite = {
     .hasRxBypassRelay = false,
     .rxOnlyAntennaCount = 0,
     .hasPureSignal    = false,
+    // Phase 3M-4 Task 1: HL2 PureSignal capability fields populated for
+    // forward-compat — when HL2 PureSignal is enabled in a future task, the
+    // mi0bot HL2 override values are already in place.
+    //
+    // PureSignal hardware-default peak: HL2-specific 0.233.  MI0BOT.
+    // From mi0bot-Thetis clsHardwareSpecific.cs:312 [v2.10.3.13-beta2]
+    //   if (NetworkIO.CurrentRadioProtocol == RadioProtocol.USB) // protocol 1
+    //   { case HPSDRHW.HermesLite: return 0.233; ... }
+    .psDefaultPeak    = 0.233,
+    // PS feedback rate: 0 sentinel = "use rx1_rate" for HL2.  MI0BOT.
+    // From mi0bot-Thetis console.cs:8472-8488 [v2.10.3.13-beta2]:
+    //   else // transmitting and PS is ON
+    //   {
+    //       ...
+    //       if (hpsdr_model == HPSDRModel.HERMESLITE) // MI0BOT: HL2 can work at a high sample rate
+    //       {
+    //           Rate[0] = rx1_rate;
+    //           Rate[1] = rx1_rate;
+    //       }
+    //       else
+    //       { Rate[0] = ps_rate; Rate[1] = ps_rate; }
+    //   }
+    .psSampleRate     = 0,
     .hasDiversityReceiver = false,
     .hasStepAttenuatorCal = false,
     .hasPaProfile     = true,        // mi0bot setup.cs:6432-6435 [v2.10.3.13-beta2]
@@ -675,6 +722,11 @@ const BoardCapabilities kHermesLiteRxOnly = {
     .isRxOnlySku      = true,   // HL2 RX-only kit — no TX driver board
     .canDriveGanymede = false,
     .hasPureSignal    = false,
+    // Phase 3M-4 Task 1: PS capability fields irrelevant on RX-only SKU
+    // (no TX, so no PureSignal feedback path).  Populated to match HL2
+    // family for table consistency.  Source: mirrors kHermesLite.
+    .psDefaultPeak    = 0.233,
+    .psSampleRate     = 0,
     .hasDiversityReceiver = false,
     .hasStepAttenuatorCal = false,
     .hasPaProfile     = false,
@@ -724,6 +776,13 @@ const BoardCapabilities kSaturn = {
     .hasRxBypassRelay = true,
     .rxOnlyAntennaCount = 3,
     .hasPureSignal    = true,
+    // PureSignal hardware-default peak: Saturn P2 special case 0.6121.
+    // From Thetis clsHardwareSpecific.cs:304-305 [v2.10.3.13]
+    //   else // protocol 2
+    //   { case HPSDRHW.Saturn: return 0.6121; ... }
+    .psDefaultPeak    = 0.6121,
+    // PS feedback rate: 192000 (cmaster.cs:424 ps_rate=192000 [v2.10.3.13]).
+    .psSampleRate     = 192000,
     .hasDiversityReceiver = true,
     .hasStepAttenuatorCal = true,
     .hasPaProfile     = true,
@@ -767,6 +826,16 @@ const BoardCapabilities kSaturnMKII = {
     .hasRxBypassRelay = true,
     .rxOnlyAntennaCount = 3,
     .hasPureSignal    = true,
+    // PureSignal hardware-default peak: Saturn-derived P2 case 0.6121.
+    // From Thetis clsHardwareSpecific.cs:304-305 [v2.10.3.13]
+    //   else // protocol 2
+    //   { case HPSDRHW.Saturn: return 0.6121; ... }
+    // SaturnMKII is the planned MkII board revision of Saturn (enums.cs:398
+    // "ANAN-G2: MKII board?"); inherits the Saturn PS branch by derivation
+    // until upstream adds a distinct case.
+    .psDefaultPeak    = 0.6121,
+    // PS feedback rate: 192000 (cmaster.cs:424 ps_rate=192000 [v2.10.3.13]).
+    .psSampleRate     = 192000,
     .hasDiversityReceiver = true,
     .hasStepAttenuatorCal = true,
     .hasPaProfile     = true,
@@ -811,6 +880,15 @@ const BoardCapabilities kAndromeda = {
     .isRxOnlySku      = false,
     .canDriveGanymede = true,   // Andromeda console drives Ganymede 500W PA (Andromeda.cs:914-920 [v2.10.3.13])
     .hasPureSignal    = true,
+    // Phase 3M-4 Task 1: PureSignal hardware-default peak.
+    // Andromeda is a NereusSDR-original SKU slot — no upstream Thetis HPSDRHW
+    // enum entry for it.  Thetis clsHardwareSpecific.cs:300-310 PSDefaultPeak
+    // [v2.10.3.13] only special-cases HPSDRHW.Saturn (=10) on the P2 branch
+    // (returns 0.6121); all other P2 hardware values fall through to the
+    // default branch returning 0.2899.  Andromeda gets the P2 default.
+    .psDefaultPeak    = 0.2899,
+    // PS feedback rate: 192000 (cmaster.cs:424 ps_rate=192000 [v2.10.3.13]).
+    .psSampleRate     = 192000,
     .hasDiversityReceiver = true,
     .hasStepAttenuatorCal = true,
     .hasPaProfile     = true,
