@@ -16,6 +16,10 @@ WDSP (Warren Pratt NR0V's DSP library) is vendored in `third_party/wdsp/`.
 | --- | --- | --- | --- |
 | `third_party/wdsp/src/cfcomp.c` | Partial sync to Thetis v2.10.3.13 (commit `501e3f5`) | `../Thetis/Project Files/Source/wdsp/cfcomp.c` | 2026-04-30 |
 | `third_party/wdsp/src/cfcomp.h` | Partial sync to Thetis v2.10.3.13 (commit `501e3f5`) | `../Thetis/Project Files/Source/wdsp/cfcomp.h` | 2026-04-30 |
+| `third_party/wdsp/src/calcc.c` | Verbatim vendor of Thetis v2.10.3.13 (commit `501e3f5`) | `../Thetis/Project Files/Source/wdsp/calcc.c` | 2026-05-06 |
+| `third_party/wdsp/src/calcc.h` | Verbatim vendor of Thetis v2.10.3.13 (commit `501e3f5`) | `../Thetis/Project Files/Source/wdsp/calcc.h` | 2026-05-06 |
+| `third_party/wdsp/src/iqc.c` | Verbatim vendor of Thetis v2.10.3.13 (commit `501e3f5`) | `../Thetis/Project Files/Source/wdsp/iqc.c` | 2026-05-06 |
+| `third_party/wdsp/src/iqc.h` | Verbatim vendor of Thetis v2.10.3.13 (commit `501e3f5`) | `../Thetis/Project Files/Source/wdsp/iqc.h` | 2026-05-06 |
 
 **Reason:** Phase 3M-3a-ii needs per-band Qg (gain skirt Q) and Qe (ceiling
 skirt Q) on the SetTXACFCOMPprofile setter so the CFC dialog can ship with
@@ -38,6 +42,7 @@ for the full-sync procedure.
 | File | Status | Reason | Date |
 | --- | --- | --- | --- |
 | `third_party/wdsp/src/txgain_stub.c` | NereusSDR-original glue stub (GPLv2-or-later, J.J. Boyd KG4VCF) | Provides `SetTXFixedGain` / `SetTXFixedGainRun` symbols so the bundled `wdsp_static` library exposes the API surface that Thetis's ChannelMaster module exports (`Project Files/Source/ChannelMaster/txgain.c [v2.10.3.13]`). NereusSDR has not yet ported the wider ChannelMaster module (only individual primitives like `cmbuffs.c` have landed in `src/core/audio/TxMicSource.{cpp,h}`); the stub stores per-channel `(Igain, Qgain)` plus a run flag in a flat static so the linker resolves and the C++ wrapper at `src/core/TxChannel.cpp::setTxFixedGain` (issue #167 Phase 1 Agent 1C) can be unit-tested. A future ChannelMaster-port phase can replace this stub with the byte-for-byte port of `txgain.c`. | 2026-05-03 |
+| `third_party/wdsp/src/ps_sync_stub.c` | NereusSDR-original glue stub (GPLv2-or-later, J.J. Boyd KG4VCF) | Provides `SetPSRxIdx` / `SetPSTxIdx` symbols so the bundled `wdsp_static` library exposes the API surface that Thetis's ChannelMaster module exports (`Project Files/Source/ChannelMaster/sync.c:69-79 [v2.10.3.13]`). Same convention as `txgain_stub.c`; the stub stores per-id RX/TX feedback indices in a flat static so the linker resolves and the C++ wrappers at `src/core/TxChannel.cpp::setPSRxIdx` / `setPSTxIdx` (Phase 3M-4 Task 3) can be unit-tested. cmaster.cs:533-534 [v2.10.3.13] only ever calls these once at PS init with `txid = 0`, so the non-atomic store is sufficient until real ChannelMaster wiring lands. A future ChannelMaster-port phase can replace this stub with the byte-for-byte port of `sync.c`. | 2026-05-06 |
 
 The glue stub is GPLv2-or-later (compatible with the rest of `wdsp_static`)
 and carries a verbatim NereusSDR-authored GPL header so

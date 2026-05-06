@@ -108,6 +108,7 @@
 //                 caller per console.cs:28952-28954; wdsp/dexp.c:647-654;
 //                 cmaster.cs:163-164).  All signatures [v2.10.3.13].
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-05-06 — 3M-4 T3 (KG4VCF): PS decls.
 // =================================================================
 
 /*  wdsp.cs
@@ -1139,6 +1140,65 @@ void SendCBPushDexpVox(int id, void (NEREUS_STDCALL *pushvox)(int id, int active
 //   [DllImport("wdsp.dll", EntryPoint = "GetDEXPPeakSignal", ...)]
 //   public static extern void GetDEXPPeakSignal(int id, double* peak);
 void GetDEXPPeakSignal(int id, double* peak);
+
+// ---------------------------------------------------------------------------
+// PureSignal API (calcc.c + cmaster.cs routing)
+//
+// Adaptive-predistortion calibration engine.  19 calcc entries control the
+// CALCC state machine (run, mox, reset, mancal, automode, turnon, loopdelay,
+// moxdelay, txdelay, hwpeak, ptol, feedbackrate, pinmode, mapmode, stabilize,
+// intsandspi) plus 4 readers (info[16], hwpeak, maxtx, disp×7).  2 routing
+// entries (SetPSRxIdx / SetPSTxIdx) wire the CMaster RX/TX feedback streams.
+//
+// All 19 calcc functions take a TXA channel id and operate on
+// txa[channel].calcc.p (pointer is created by create_calcc inside
+// create_txa() at TXA.c:405 [v2.10.3.13]).  Calls are csDSP-protected at
+// the WDSP boundary.  The routing functions take a "txid" (0 for primary
+// transmitter) and a stream index; per cmaster.cs:533-534 [v2.10.3.13]
+// "all current models use Stream0 for RX feedback / Stream1 for TX
+// feedback" — the values do not change across boards.
+//
+// SetPSTXDelay returns the actual delay applied (calcc.c:1001-1021
+// [v2.10.3.13] — the engine snaps to a fractional 20 ns delay step
+// derived from the feedback sample rate).  GetPSDisp takes seven output
+// buffers feeding the AmpView Ref / MagAmp / PhsAmp / MagCorr / PhsCorr /
+// MagCorrSmooth / PhsCorrSmooth series; sizing is `nsamps` doubles for
+// x/ym/yc/ys and `ints * 4` doubles for cm/cc/cs (calcc.c:1058-1070).
+// GetPSInfo writes 16 ints (calcc.c:927 — `memcpy(info, a->info,
+// 16 * sizeof(int))`).
+//
+// From Thetis wdsp/calcc.c:891-1132 [v2.10.3.13]
+// + Thetis cmaster.cs:143-147 [v2.10.3.13] (channel routing).
+// ---------------------------------------------------------------------------
+
+void SetPSRunCal(int channel, int run);
+void SetPSMox(int channel, int mox);
+void GetPSInfo(int channel, int* info);
+void SetPSReset(int channel, int reset);
+void SetPSMancal(int channel, int mancal);
+void SetPSAutomode(int channel, int automode);
+void SetPSTurnon(int channel, int turnon);
+void SetPSControl(int channel, int reset, int mancal, int automode, int turnon);
+void SetPSLoopDelay(int channel, double delay);
+void SetPSMoxDelay(int channel, double delay);
+double SetPSTXDelay(int channel, double delay);
+void SetPSHWPeak(int channel, double peak);
+void GetPSHWPeak(int channel, double* peak);
+void GetPSMaxTX(int channel, double* maxtx);
+void SetPSPtol(int channel, double ptol);
+void GetPSDisp(int channel, double* x, double* ym, double* yc, double* ys,
+               double* cm, double* cc, double* cs);
+void SetPSFeedbackRate(int channel, int rate);
+void SetPSPinMode(int channel, int pin);
+void SetPSMapMode(int channel, int map);
+void SetPSStabilize(int channel, int stbl);
+void SetPSIntsAndSpi(int channel, int ints, int spi);
+
+// Channel routing.  From Thetis cmaster.cs:143-147 [v2.10.3.13].  Comment in
+// cmaster.cs:533-534: "txid = 0, all current models use Stream0 for RX
+// feedback / Stream1 for TX feedback" — mi0bot HL2 fork unchanged.
+void SetPSRxIdx(int id, int idx);
+void SetPSTxIdx(int id, int idx);
 
 } // extern "C"
 

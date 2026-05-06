@@ -88,6 +88,22 @@ nereus_add_test(tst_puresignal_caps)
 # Source: Thetis wdsp/calcc.c:891-1132 [v2.10.3.13] @501e3f51.
 nereus_add_test(tst_wdsp_ps_smoke)
 
+# ── Phase 3M-4 Task 3: TxChannel PureSignal API wrappers (22 functions) ──
+# Smoke tests for the 22 PS API wrappers added in Task 3:
+#   19 calcc setters/readers (setPSRunCal, setPSMox, setPSReset, setPSMancal,
+#     setPSAutomode, setPSTurnon, setPSControl, setPSLoopDelay, setPSMoxDelay,
+#     setPSTXDelay → returns double, setPSHWPeak, getPSHWPeak, getPSMaxTX,
+#     setPSPtol, getPSDisp → 7 buffers, setPSFeedbackRate, setPSPinMode,
+#     setPSMapMode, setPSStabilize, setPSIntsAndSpi, getPSInfo → int[16])
+#   plus 2 static channel-routing helpers (setPSRxIdx, setPSTxIdx) for the
+#     Stream0/Stream1 RX/TX feedback wiring per cmaster.cs:533-534.
+# Same does-not-crash strategy as B-1/B-2/B-3 PS smoke tests.  Wrappers
+# null-guard on `txa[m_channelId].rsmpin.p == nullptr` so calls on a bare
+# `TxChannel ch(1)` are safe in HAVE_WDSP-linked builds.
+# Source: Thetis wdsp/calcc.c:891-1132 [v2.10.3.13] +
+#         Thetis cmaster.cs:143-147 [v2.10.3.13].
+nereus_add_test(tst_tx_channel_ps_setters)
+
 # ── Phase 3M-1b Task B.1: BoardCapabilities::hasMicJack flag ─────────────────
 # Parametrized over all HPSDRHW enum values.
 # HL2 and HermesLiteRxOnly → false; all other boards → true.

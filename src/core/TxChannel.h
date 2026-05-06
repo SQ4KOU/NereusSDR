@@ -298,6 +298,17 @@ warren@wpratt.com
 //                 Qt signal to MoxController::onVoxActive instead of
 //                 Thetis's Audio.VOXActive + PollPTT polling loop.
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-05-06 — Phase 3M-4 Task 3 by J.J. Boyd (KG4VCF): 22 PureSignal API
+//                 wrappers declared (setPSRunCal/Mox/Reset/Mancal/Automode/
+//                 Turnon/Control/LoopDelay/MoxDelay/TXDelay/HWPeak/Ptol/
+//                 FeedbackRate/PinMode/MapMode/Stabilize/IntsAndSpi setters,
+//                 getPSInfo/HWPeak/MaxTX/Disp readers, plus 2 static
+//                 setPSRxIdx/setPSTxIdx routing helpers).  Each instance
+//                 method delegates to the matching WDSP entry point
+//                 with m_channelId as the channel arg.  Source: Thetis
+//                 wdsp/calcc.c:891-1132 [v2.10.3.13] + Thetis
+//                 cmaster.cs:143-147 [v2.10.3.13].  AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -1820,6 +1831,152 @@ public:
     //
     // From Thetis wdsp/ source files [v2.10.3.13] — individual Set*Run APIs.
     void setStageRunning(Stage s, bool run);
+
+    // ── PureSignal API (Phase 3M-4 Task 3) ──────────────────────────────────
+    //
+    // Adaptive-predistortion calibration engine wrappers.  Each instance
+    // method delegates to the matching WDSP entry point with m_channelId as
+    // the channel arg.  All 19 instance setters/readers operate on the
+    // CALCC struct created by create_calcc inside create_txa() at
+    // wdsp/TXA.c:405 [v2.10.3.13]; calls are csDSP-protected at the WDSP
+    // boundary.  Each wrapper guards against an unopened TX channel via
+    // `txa[m_channelId].rsmpin.p == nullptr` (matches the existing CFC /
+    // DEXP wrapper convention; the calcc pointer is created together with
+    // rsmpin inside create_txa, so the rsmpin sentinel covers both).
+    //
+    // The 2 static routing helpers (setPSRxIdx / setPSTxIdx) wire the
+    // CMaster RX/TX feedback streams; per Thetis cmaster.cs:533-534
+    // [v2.10.3.13] "all current models use Stream0 for RX feedback /
+    // Stream1 for TX feedback" — fixed at PS init, never per-channel.
+    //
+    // setPSTXDelay returns the actual delay applied (calcc.c:1001-1021
+    // [v2.10.3.13] — the engine snaps to a fractional 20 ns step derived
+    // from the feedback sample rate).  getPSDisp's seven output buffers
+    // feed AmpView's Ref / MagAmp / PhsAmp / MagCorr / PhsCorr /
+    // MagCorrSmooth / PhsCorrSmooth display series; sizing is `nsamps`
+    // doubles for x/ym/yc/ys and `ints * 4` doubles for cm/cc/cs.
+    // getPSInfo writes 16 ints (calcc.c:927 [v2.10.3.13] — `memcpy(info,
+    // a->info, 16 * sizeof(int))`).
+    //
+    // From Thetis wdsp/calcc.c:891-1132 [v2.10.3.13] +
+    //      Thetis cmaster.cs:143-147 [v2.10.3.13] (channel routing).
+
+    /// Set the calcc run flag.  Wraps SetPSRunCal(channelId, run).
+    /// From Thetis wdsp/calcc.c:899 [v2.10.3.13].
+    void setPSRunCal(int run);
+
+    /// Set the calcc MOX flag (engages PS calibration when MOX is up).
+    /// Wraps SetPSMox(channelId, mox ? 1 : 0).
+    /// From Thetis wdsp/calcc.c:909 [v2.10.3.13].
+    void setPSMox(bool mox);
+
+    /// Read the 16-int CALCC info status array.  `info16` MUST point to
+    /// at least int[16].  Wraps GetPSInfo.
+    /// From Thetis wdsp/calcc.c:922 [v2.10.3.13].
+    void getPSInfo(int* info16);
+
+    /// Set the calcc reset gate.  Wraps SetPSReset(channelId, reset ? 1 : 0).
+    /// From Thetis wdsp/calcc.c:932 [v2.10.3.13].
+    void setPSReset(bool reset);
+
+    /// Set the calcc manual-cal gate.  Wraps SetPSMancal.
+    /// From Thetis wdsp/calcc.c:942 [v2.10.3.13].
+    void setPSMancal(bool mancal);
+
+    /// Set the calcc automode gate.  Wraps SetPSAutomode.
+    /// From Thetis wdsp/calcc.c:950 [v2.10.3.13].
+    void setPSAutomode(bool automode);
+
+    /// Set the calcc turnon gate.  Wraps SetPSTurnon.
+    /// From Thetis wdsp/calcc.c:958 [v2.10.3.13].
+    void setPSTurnon(bool turnon);
+
+    /// Set all four CALCC control gates atomically (held under cs_update).
+    /// Wraps SetPSControl(channelId, reset, mancal, automode, turnon).
+    /// Thetis ForcePS pattern (PSForm.cs ForcePS [v2.10.3.13]) calls
+    /// `SetPSControl(_txachannel, 1, 0, 0, 0)` to force the engine to LRESET.
+    /// From Thetis wdsp/calcc.c:966 [v2.10.3.13].
+    void setPSControl(int reset, int mancal, int automode, int turnon);
+
+    /// Set the loop-delay seconds (sample count = rate * delay).
+    /// Wraps SetPSLoopDelay.
+    /// From Thetis wdsp/calcc.c:979 [v2.10.3.13].
+    void setPSLoopDelay(double seconds);
+
+    /// Set the MOX-delay seconds (sample count = rate * moxdelay).
+    /// Wraps SetPSMoxDelay.
+    /// From Thetis wdsp/calcc.c:990 [v2.10.3.13].
+    void setPSMoxDelay(double seconds);
+
+    /// Set the TX-vs-RX feedback delay seconds and return the engine-
+    /// applied value (snaps to 20 ns fractional steps inside WDSP).
+    /// Negative values shift to RX delay path.  Wraps SetPSTXDelay.
+    /// From Thetis wdsp/calcc.c:1001 [v2.10.3.13] — returns double.
+    double setPSTXDelay(double seconds);
+
+    /// Set the hardware peak normalisation point (default 0.2899 for ANAN-G2,
+    /// per cmaster.cs:536 [v2.10.3.13]).  Wraps SetPSHWPeak; the engine
+    /// stores `hw_scale = 1.0 / peak` internally (calcc.c:1029).
+    /// From Thetis wdsp/calcc.c:1024 [v2.10.3.13].
+    void setPSHWPeak(double peak);
+
+    /// Read back the configured HW peak (`peak = 1.0 / hw_scale`).
+    /// Wraps GetPSHWPeak; returns the round-trip value of the last
+    /// setPSHWPeak.  From Thetis wdsp/calcc.c:1034 [v2.10.3.13].
+    double getPSHWPeak();
+
+    /// Read the live envelope-max-TX scalar observed by calcc since the last
+    /// reset.  Wraps GetPSMaxTX (returns `ctrl.env_maxtx`).
+    /// From Thetis wdsp/calcc.c:1042 [v2.10.3.13].
+    double getPSMaxTX();
+
+    /// Set the calibration-tolerance threshold.  Wraps SetPSPtol.
+    /// From Thetis wdsp/calcc.c:1050 [v2.10.3.13].
+    void setPSPtol(double ptol);
+
+    /// Read seven AmpView display arrays (Ref / MagAmp / PhsAmp / MagCorr /
+    /// PhsCorr / MagCorrSmooth / PhsCorrSmooth).  Each pointer must address
+    /// at least `nsamps` (x/ym/yc/ys) or `ints * 4` (cm/cc/cs) doubles.
+    /// Wraps GetPSDisp; csDSP-protected at the WDSP boundary.
+    /// From Thetis wdsp/calcc.c:1058 [v2.10.3.13] — 7 output buffers.
+    void getPSDisp(double* x, double* ym, double* yc, double* ys,
+                   double* cm, double* cc, double* cs);
+
+    /// Set the feedback sample rate (Hz).  Recomputes loopdelay/moxdelay
+    /// sample counts and rebuilds the TX/RX delay lines.  Cmaster.cs:535
+    /// calls this with `ps_rate` (192000 for ANAN-G2).
+    /// Wraps SetPSFeedbackRate.
+    /// From Thetis wdsp/calcc.c:1073 [v2.10.3.13].
+    void setPSFeedbackRate(int rate);
+
+    /// Set the PIN-aware mode flag.  Wraps SetPSPinMode.
+    /// From Thetis wdsp/calcc.c:1102 [v2.10.3.13].
+    void setPSPinMode(bool pin);
+
+    /// Set the calcc map mode.  Wraps SetPSMapMode.
+    /// From Thetis wdsp/calcc.c:1110 [v2.10.3.13].
+    void setPSMapMode(bool map);
+
+    /// Set the calcc stabilization flag.  Wraps SetPSStabilize.
+    /// From Thetis wdsp/calcc.c:1118 [v2.10.3.13].
+    void setPSStabilize(bool stbl);
+
+    /// Set per-FFT-mask interval count and SPI flag together.  Wraps
+    /// SetPSIntsAndSpi.  From Thetis wdsp/calcc.c:1140 [v2.10.3.13].
+    void setPSIntsAndSpi(int ints, int spi);
+
+    // Channel routing (STATIC — global, not per-channel).  Called once at
+    // PS init.  Per Thetis cmaster.cs:533-534 [v2.10.3.13] "txid = 0, all
+    // current models use Stream0 for RX feedback / Stream1 for TX feedback"
+    // — values fixed across all current OpenHPSDR boards.
+    //
+    /// Wraps SetPSRxIdx(txid, idx).
+    /// From Thetis cmaster.cs:146-147 [v2.10.3.13].
+    static void setPSRxIdx(int txid, int idx);
+
+    /// Wraps SetPSTxIdx(txid, idx).
+    /// From Thetis cmaster.cs:143-144 [v2.10.3.13].
+    static void setPSTxIdx(int txid, int idx);
 
 #ifdef NEREUS_BUILD_TESTS
     // ── Test seam (Phase 3M-1b D.1, updated for 3M-1c E.1 push model) ─────
