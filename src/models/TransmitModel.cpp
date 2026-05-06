@@ -1202,9 +1202,12 @@ void TransmitModel::loadFromSettings(const QString& mac)
     // micSource: default Pc (NereusSDR-native; always safe and available)
     const QString micSourceStr = s.value(pfx + QLatin1String("Mic_Source"),
                                           QStringLiteral("Pc")).toString();
-    const MicSource micSource = (micSourceStr == QLatin1String("Radio"))
-                                    ? MicSource::Radio
-                                    : MicSource::Pc;
+    MicSource micSource = MicSource::Pc;
+    if (micSourceStr == QLatin1String("Radio")) {
+        micSource = MicSource::Radio;
+    } else if (micSourceStr == QLatin1String("Vax")) {
+        micSource = MicSource::Vax;
+    }
     setMicSource(micSource);
 
     // ── Two-tone test properties (3M-1c B.2) ──────────────────────────────
@@ -1474,8 +1477,16 @@ void TransmitModel::persistToSettings(const QString& mac) const
     s.setValue(pfx + QLatin1String("MonitorVolume"),    QString::number(static_cast<double>(m_monitorVolume)));
 
     // ── Mic source ────────────────────────────────────────────────────────
-    s.setValue(pfx + QLatin1String("Mic_Source"),
-               m_micSource == MicSource::Radio ? QStringLiteral("Radio") : QStringLiteral("Pc"));
+    {
+        QString micSourceStr;
+        switch (m_micSource) {
+            case MicSource::Radio: micSourceStr = QStringLiteral("Radio"); break;
+            case MicSource::Vax:   micSourceStr = QStringLiteral("Vax");   break;
+            case MicSource::Pc:
+            default:               micSourceStr = QStringLiteral("Pc");    break;
+        }
+        s.setValue(pfx + QLatin1String("Mic_Source"), micSourceStr);
+    }
 
     // ── Two-tone test properties (3M-1c B.2) ──────────────────────────────
     s.setValue(pfx + QLatin1String("TwoToneFreq1"),       QString::number(m_twoToneFreq1));
@@ -2055,8 +2066,14 @@ void TransmitModel::setMicSource(MicSource source)
 
     if (source == m_micSource) { return; }  // idempotent guard
     m_micSource = source;
-    persistOne(QStringLiteral("Mic_Source"),
-               source == MicSource::Radio ? QStringLiteral("Radio") : QStringLiteral("Pc"));  // L.2 auto-persist
+    QString persistStr;
+    switch (source) {
+        case MicSource::Radio: persistStr = QStringLiteral("Radio"); break;
+        case MicSource::Vax:   persistStr = QStringLiteral("Vax");   break;
+        case MicSource::Pc:
+        default:               persistStr = QStringLiteral("Pc");    break;
+    }
+    persistOne(QStringLiteral("Mic_Source"), persistStr);  // L.2 auto-persist
     emit micSourceChanged(source);
 }
 

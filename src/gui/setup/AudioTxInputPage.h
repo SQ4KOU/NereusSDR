@@ -205,6 +205,10 @@ private:
     QButtonGroup*  m_buttonGroup{nullptr};
     QRadioButton*  m_pcMicBtn{nullptr};
     QRadioButton*  m_radioMicBtn{nullptr};
+    // VAX TX virtual device — added 2026-05-06 (eager-borg-d64bed).
+    // Selecting routes the TX mic to /nereussdr-vax-tx shm fed by
+    // 3rd-party apps writing to "NereusSDR TX" CoreAudio device.
+    QRadioButton*  m_vaxMicBtn{nullptr};
 
     // ── PC Mic group box (I.2) ────────────────────────────────────────────
     QGroupBox*   m_pcMicGroup{nullptr};
