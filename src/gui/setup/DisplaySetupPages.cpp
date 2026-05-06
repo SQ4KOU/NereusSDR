@@ -478,7 +478,14 @@ void SpectrumDefaultsPage::buildUI()
 
         // FFT size set.  Atomic store + deferred replan + emits
         // spectrumSettingsChanged when oldSize != newSize.
-        if (fe) { fe->setFftSize(newSize); }
+        // Baseline is set FIRST so the auto-zoom lambda (wired to
+        // bandwidthChangeRequested) treats this slider value as the new
+        // K target on its next bandwidth event.  Without this the zoom
+        // lambda would compute against a stale baseline.
+        if (fe) {
+            fe->setFftSizeBaseline(newSize);
+            fe->setFftSize(newSize);
+        }
 
         // Bin-width readout, fresh from newSize.  Format "N3" = 3 decimal
         // places per Thetis setup.cs:16152 [v2.10.3.13].

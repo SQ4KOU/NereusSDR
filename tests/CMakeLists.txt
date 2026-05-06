@@ -3442,6 +3442,14 @@ nereus_add_test(tst_window_functions)
 # returns plain sampleRate / fftSize (legacy * 2 bug removed).
 nereus_add_test(tst_fft_size_slider)
 
+# Phase 2-polish-3 -- auto-zoom FFT math.  NereusSDR-original (Thetis does
+# not auto-replan on zoom).  Verifies setFftSizeBaseline round-trip +
+# rejection rules, and exercises the bandwidthChangeRequested lambda's
+# formula via an inline copy: targetSize = baseline * sampleRate / bwHz,
+# floored at baseline, capped at 262144, with [0.66, 1.5] hysteresis
+# bracket.
+nereus_add_test(tst_auto_zoom_fft)
+
 # ── Task 2.5: ActivePeakHoldTrace ────────────────────────────────────────────
 # Unit tests for the per-bin peak-hold trace:
 #   peak_value_persists_until_decay: hold + 0.2 dB/frame decay verified

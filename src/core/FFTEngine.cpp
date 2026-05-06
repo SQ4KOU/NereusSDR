@@ -148,6 +148,18 @@ void FFTEngine::setFftSizeOffsetDb(double db)
     m_fftSizeOffsetDb.store(db);
 }
 
+// FFT-size baseline (NereusSDR-original).  Same validity check as
+// setFftSize: powers of two in [1024, kMaxFftSize].  Unlike setFftSize,
+// this does NOT trigger a replan -- it's pure state for the auto-zoom
+// lambda to read.  Set by the DisplaySetupPages slider handler alongside
+// setFftSize so they stay in lock-step at the user's intent.
+void FFTEngine::setFftSizeBaseline(int size)
+{
+    if (size < 1024 || size > kMaxFftSize) { return; }
+    if ((size & (size - 1)) != 0) { return; }
+    m_fftSizeBaseline.store(size);
+}
+
 // Modified Bessel function of the first kind, order 0.  Verbatim port of
 // WDSP analyzer.c:33-50 [v2.10.3.13] (Numerical Recipes polynomial
 // approximations: low-x branch via 6th-order series in (x/3.75)^2,

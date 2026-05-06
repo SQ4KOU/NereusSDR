@@ -1318,22 +1318,56 @@ void MainWindow::buildUI()
         });
     }
 
-    // Wire: zoom changes → adjust FFT size for appropriate bin resolution
-    // Target: ~500-1000 bins across the visible bandwidth for good detail
+    // Wire: zoom changes -> auto-replan FFT size to maintain constant
+    // bins-per-pixel across zoom levels.  NereusSDR-original (Thetis
+    // does not auto-replan on zoom; the user manually picks FFT size).
+    //
+    // Math: the slider's "FFT size at full DDC bandwidth" baseline
+    // implies a target K = baseline / displayWidth bins per pixel.
+    // To maintain K as bwHz narrows (zoom in), the FFT size must scale
+    // inversely with bwHz:
+    //   targetSize = baseline * sampleRate / bwHz
+    //
+    // Cap at kMaxFftSize (262144) -- with the FFTEngine overlap path,
+    // 30 fps is sustainable to the cap.  Floor at the slider baseline
+    // (we never replan BELOW the user's chosen value, even if the
+    // formula computes lower at very wide bandwidth).
+    //
+    // Hysteresis: only replan when computed/current is outside
+    // [0.66, 1.5].  This avoids replan thrash on smooth zoom drag --
+    // a small bandwidth change that would land within the same power-
+    // of-two bracket gets ignored.
     connect(m_spectrumWidget, &SpectrumWidget::bandwidthChangeRequested,
             this, [this](double bwHz) {
-        // Pick FFT size so bin_width ≈ bw / 1000 (aim for ~1000 bins across display)
-        // bin_width = sampleRate / fftSize → fftSize = sampleRate / bin_width
-        double sampleRate = m_spectrumWidget->sampleRate();
-        int targetBins = 1000;
-        int desiredSize = static_cast<int>(sampleRate * targetBins / bwHz);
-        // Round up to next power of 2, clamp to valid range
-        int fftSize = 1024;
-        while (fftSize < desiredSize && fftSize < 65536) {
-            fftSize *= 2;
+        if (!m_fftEngine || !m_spectrumWidget) { return; }
+        const double sampleRate = m_spectrumWidget->sampleRate();
+        if (sampleRate <= 0.0 || bwHz <= 0.0) { return; }
+
+        const int baseline = m_fftEngine->fftSizeBaseline();
+        const double scale = sampleRate / bwHz;        // 1.0 at full bw
+        double desired = static_cast<double>(baseline) * scale;
+
+        // Round up to next power of 2.
+        int targetSize = 1024;
+        while (targetSize < desired && targetSize < 262144) {
+            targetSize *= 2;
         }
-        fftSize = std::clamp(fftSize, 1024, 65536);
-        m_fftEngine->setFftSize(fftSize);
+        // Floor at baseline (slider's choice always honoured).
+        targetSize = std::max(targetSize, baseline);
+        // Cap at kMaxFftSize.
+        targetSize = std::clamp(targetSize, 1024, 262144);
+
+        // Hysteresis: only replan if outside [current * 2/3, current * 3/2].
+        const int currentSize = m_fftEngine->fftSize();
+        if (currentSize > 0) {
+            const double ratio = static_cast<double>(targetSize)
+                                 / static_cast<double>(currentSize);
+            if (ratio > 0.66 && ratio < 1.5) {
+                return;  // small enough change to ignore
+            }
+        }
+
+        m_fftEngine->setFftSize(targetSize);
     });
 
     m_fftThread->start();

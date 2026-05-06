@@ -133,6 +133,17 @@ public:
     void setFftSizeOffsetDb(double db);
     double fftSizeOffsetDb() const { return m_fftSizeOffsetDb.load(); }
 
+    // FFT-size baseline -- the user's slider-set "FFT size at full DDC
+    // bandwidth (bwHz == sampleRate)" choice.  NereusSDR-original auto-zoom
+    // (no Thetis equivalent) uses this as the target K = baseline /
+    // displayWidth bins-per-pixel; on zoom, computes the FFT size needed
+    // to maintain the same K and replans accordingly.  Slider handler
+    // sets this, auto-zoom reads it as the floor (fftSize never goes
+    // below baseline).  See MainWindow auto-zoom lambda for the
+    // baseline * sampleRate / bwHz formula.
+    void setFftSizeBaseline(int size);
+    int  fftSizeBaseline() const { return m_fftSizeBaseline.load(); }
+
     void setSampleRate(double rateHz);
     double sampleRate() const { return m_sampleRate.load(); }
 
@@ -222,6 +233,10 @@ private:
     // FFT size display calibration offset (dB).  Updated by the slider
     // handler to slider.Value * 2 per Thetis setup.cs:16154 [v2.10.3.13].
     std::atomic<double> m_fftSizeOffsetDb{0.0};
+    // User's slider-set FFT size baseline (NereusSDR-original auto-zoom
+    // anchor).  Default matches m_fftSize so first-launch behavior is
+    // identical to a system without auto-zoom (slider == FFT size).
+    std::atomic<int>    m_fftSizeBaseline{4096};
     std::atomic<double> m_sampleRate{48000.0};
     std::atomic<int>    m_targetFps{30};
     // From Thetis setup.designer.cs:33732 udDisplayDecimation [v2.10.3.13].
