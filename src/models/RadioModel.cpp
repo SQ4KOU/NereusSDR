@@ -248,6 +248,7 @@ warren@wpratt.com
 #include "RadioModel.h"
 #include "BandDefaults.h"
 #include "RxDspWorker.h"
+#include "core/FFTEngine.h"
 // 3M-1a G.1: TX-side integration — MoxController + TxChannel view.
 // TxMicRouter is already included via RadioModel.h (for std::unique_ptr destructor).
 #include "core/MoxController.h"
@@ -3445,11 +3446,27 @@ void RadioModel::wireSliceSignals()
         const double noiseFloor = static_cast<double>(m_noiseFloorTracker->noiseFloor());
 
         // From Thetis v2.10.3.13 console.cs:33292-33319 — agcCalOffset(rx)
-        // Simplified: 0.0f for FIXD (NereusSDR AGCMode::Off), 2.0f for others
-        // Full formula: 2.0f + (DisplayCalOffset + PreampOffset - AlexPreampOffset - FFTSizeOffset)
-        // Alex/preamp/FFT-size offsets land with spectrum knee line overlay
-        const float calOffset = (slice->agcMode() == AGCMode::Off)
-            ? 0.0f : 2.0f;
+        // Full Thetis formula:
+        //   FIXD:    0.0
+        //   default: 2.0 + (DisplayCalOffset + PreampOffset - AlexPreampOffset
+        //                    - FFTSizeOffset)
+        //
+        // FFTSizeOffset (Display.cs:1389-1397 [v2.10.3.13]) is set to
+        // slider.Value * 2 dB on every FFT slider scroll (setup.cs:16154).
+        // Without subtracting it, the AGC threshold drifts up to 12 dB
+        // across the slider's 0..6 range (each step adds 2 dB to the
+        // visible noise floor as bin width halves).
+        //
+        // PreampOffset / AlexPreampOffset still TBD (separate scope: lands
+        // with the spectrum knee-line overlay work).  They sum to ~0 on
+        // most current radios so the AGC drift was negligible until the
+        // FFT slider made FFTSizeOffset user-tunable.
+        float calOffset = 0.0f;
+        if (slice->agcMode() != AGCMode::Off) {
+            const double fftOffsetDb = m_fftEngine
+                ? m_fftEngine->fftSizeOffsetDb() : 0.0;
+            calOffset = 2.0f - static_cast<float>(fftOffsetDb);
+        }
 
         // From Thetis v2.10.3.13 console.cs:45965-45968 — apply cal offset
         const double threshold = (noiseFloor + slice->autoAgcOffset())

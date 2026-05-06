@@ -1,3 +1,6 @@
+// no-port-check: unit tests for FFTEngine windows; cites Thetis source
+// for ENB sanity ranges and combo item ordering, no logic ported.
+//
 // =================================================================
 // tests/tst_window_functions.cpp  (NereusSDR)
 // =================================================================

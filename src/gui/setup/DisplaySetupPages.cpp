@@ -68,10 +68,12 @@
 #include "models/Band.h"
 #include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
+#include "core/NoiseFloorTracker.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
 #include <QSlider>
@@ -167,6 +169,15 @@ void SpectrumDefaultsPage::loadFromRenderer()
     m_fftSizeSlider->setValue(sliderVal);
     if (m_fftSizeReadout) {
         m_fftSizeReadout->setText(QString::number(fs));
+    }
+    // Bin-width prefix-style readout (Thetis-faithful).  Mirrors Thetis
+    // setup.cs:16151-16152 [v2.10.3.13]: bin_width = SampleRate / FFTSize,
+    // formatted "N3" (3 decimals).
+    if (m_binWidthLabel) {
+        const double sampleRate = fe->sampleRate();
+        const double bw = (fs > 0) ? sampleRate / fs : 0.0;
+        m_binWidthLabel->setText(
+            bw > 0.0 ? QString::number(bw, 'f', 3) : QStringLiteral("0.000"));
     }
 
     // FFT window -- enum value matches combo index 1:1 (both follow WDSP
@@ -317,67 +328,118 @@ void SpectrumDefaultsPage::buildUI()
     auto* sw = model() ? model()->spectrumWidget() : nullptr;
     auto* fe = model() ? model()->fftEngine() : nullptr;
 
-    // --- Section: FFT ---
-    auto* fftGroup = new QGroupBox(QStringLiteral("FFT"), this);
-    auto* fftForm  = new QFormLayout(fftGroup);
-    fftForm->setSpacing(6);
+    // --- Section: Fast Fourier Transform ---
+    // Layout mirrors Thetis grpDisplayRX1Pan at setup.designer.cs:34920-35054
+    // [v2.10.3.13].  Group title verbatim "Fast Fourier Transform" (per
+    // :34937).  Inner controls (10 total in Thetis):
+    //   - "Size" centered header label (labelTS139 @ x=118)
+    //   - tbDisplayFFTSize slider (Max=6, Value=5)
+    //   - "Min" / "Max" endpoint labels flanking the slider (labelTS145 / 146)
+    //   - "Bin Width (Hz)" prefix + bisque numeric readout (labelTS142 +
+    //     lblDisplayBinWidth at y=79)
+    //   - "FFT Size" prefix + bisque numeric readout (labelTS425 +
+    //     lblRX1FFT_size at y=79)  -- BOTH readouts on the same row
+    //   - "Window" prefix + combo (labelTS147 + comboDispWinType at y=101)
+    //
+    // Qt port uses QGridLayout (4 cols x 4 rows) since QFormLayout cannot
+    // express the 4-cell "prefix + value + prefix + value" pattern Thetis
+    // uses for the bin-width / FFT-size readout row.
+    auto* fftGroup = new QGroupBox(
+        QStringLiteral("Fast Fourier Transform"), this);
+    auto* fftGrid = new QGridLayout(fftGroup);
+    fftGrid->setSpacing(6);
+    fftGrid->setColumnStretch(0, 0);
+    fftGrid->setColumnStretch(1, 1);   // bin-width value cell stretches
+    fftGrid->setColumnStretch(2, 0);
+    fftGrid->setColumnStretch(3, 1);   // FFT-size value cell stretches
+
+    // Stylesheet for sunken numeric readouts.  Thetis uses Bisque
+    // (System.Drawing.Color.Bisque, RGB(255, 228, 196)) on a light
+    // WinForms background.  NereusSDR's dark theme inverts the contrast:
+    // recessed dark inset with cyan-accent text reads as "live data
+    // cell" against the page's slightly-lighter group background.
+    // Token sources:
+    //   kInsetBg     = #0a0a18  (StyleConstants.h:53)
+    //   kInsetBorder = #1e2e3e  (StyleConstants.h:54)
+    //   kAccent      = #00b4d8  (StyleConstants.h:44)  -- cyan readout text
+    const QString readoutStyle = QStringLiteral(
+        "QLabel { background-color: #0a0a18; color: #00b4d8; "
+        "border: 1px solid #1e2e3e; padding: 1px 6px; "
+        "font-family: Menlo, Consolas, monospace; }");
+
+    // Row 0: centered "Size" header label.  Mirrors Thetis labelTS139
+    // ("Size") at (118, 13) [v2.10.3.13] -- centered horizontally over
+    // the slider's middle.
+    auto* sizeHeader = new QLabel(QStringLiteral("Size"), fftGroup);
+    sizeHeader->setAlignment(Qt::AlignHCenter);
+    fftGrid->addWidget(sizeHeader, 0, 1, 1, 2);  // span cols 1-2 (centered)
+
+    // Row 1: "Min" + slider + "Max".  Min/Max are Thetis labelTS145/146
+    // at (6, 41) / (227, 41) [v2.10.3.13] -- show the slider's value
+    // extremes textually since the slider has no tick marks.
+    auto* minLabel = new QLabel(QStringLiteral("Min"), fftGroup);
+    auto* maxLabel = new QLabel(QStringLiteral("Max"), fftGroup);
+    minLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    maxLabel->setAlignment(Qt::AlignLeft  | Qt::AlignVCenter);
 
     // Phase 2: FFT size slider, range 0..6, default 5 (=131072 bins).
-    // From Thetis setup.designer.cs:35043 [v2.10.3.13] tbDisplayFFTSize
-    // (Maximum=6, Value=5).  Mapping per setup.cs:16142:
+    // From Thetis setup.designer.cs:35043-35053 [v2.10.3.13] tbDisplayFFTSize
+    // (Maximum=6, Value=5, no tick marks).  Mapping per setup.cs:16148:
     //   FFTSize = 4096 * Math.Pow(2, Math.Floor(slider.Value))
     // i.e. slider 0..6 -> {4096, 8192, 16384, 32768, 65536, 131072, 262144}.
     m_fftSizeSlider = new QSlider(Qt::Horizontal, fftGroup);
     m_fftSizeSlider->setRange(0, 6);
     m_fftSizeSlider->setSingleStep(1);
     m_fftSizeSlider->setPageStep(1);
-    m_fftSizeSlider->setTickPosition(QSlider::TicksBelow);
-    m_fftSizeSlider->setTickInterval(1);
-    m_fftSizeSlider->setValue(0);  // synced from FFTEngine in loadFromRenderer
+    m_fftSizeSlider->setTickPosition(QSlider::NoTicks);
+    m_fftSizeSlider->setValue(5);
     m_fftSizeSlider->setToolTip(QStringLiteral(
         "FFT size used for spectrum analysis. Range 4096 to 262144 in "
         "powers of two. Larger = finer frequency resolution and a smaller "
         "bin width, at higher CPU cost."));
-    m_fftSizeReadout = new QLabel(QStringLiteral("4096"), fftGroup);
+    fftGrid->addWidget(minLabel,         1, 0);
+    fftGrid->addWidget(m_fftSizeSlider,  1, 1, 1, 2);  // span cols 1-2
+    fftGrid->addWidget(maxLabel,         1, 3);
+
+    // Row 2: bin-width readout + FFT-size readout, side by side per
+    // Thetis (both at y=79).  Each pair is a "prefix label + bisque
+    // sunken numeric cell".
+
+    // "Bin Width (Hz)" prefix + value cell.  Thetis labelTS142
+    // ("Bin Width (Hz)") at (6, 79) + lblDisplayBinWidth at (87, 79)
+    // [v2.10.3.13].
+    auto* binWidthPrefix =
+        new QLabel(QStringLiteral("Bin Width (Hz)"), fftGroup);
+    m_binWidthLabel = new QLabel(QStringLiteral("0.000"), fftGroup);
+    m_binWidthLabel->setMinimumWidth(54);
+    m_binWidthLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_binWidthLabel->setStyleSheet(readoutStyle);
+    m_binWidthLabel->setToolTip(QStringLiteral(
+        "Live bin width in Hz (sample rate / FFT size)."));
+
+    // "FFT Size" prefix + value cell.  Thetis labelTS425 ("FFT Size") at
+    // (143, 79) + lblRX1FFT_size at (196, 79) [v2.10.3.13].
+    auto* fftSizePrefix = new QLabel(QStringLiteral("FFT Size"), fftGroup);
+    m_fftSizeReadout = new QLabel(QStringLiteral("131072"), fftGroup);
     m_fftSizeReadout->setMinimumWidth(54);
+    m_fftSizeReadout->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_fftSizeReadout->setStyleSheet(readoutStyle);
     m_fftSizeReadout->setToolTip(QStringLiteral(
         "Current FFT size in bins (4096 * 2^slider)."));
-    connect(m_fftSizeSlider, &QSlider::valueChanged,
-            this, [this](int v) {
-        const int newSize = 4096 << qBound(0, v, 6);
-        if (m_fftSizeReadout) {
-            m_fftSizeReadout->setText(QString::number(newSize));
-        }
-        if (model() && model()->fftEngine()) {
-            model()->fftEngine()->setFftSize(newSize);
-        }
-        // Bin-width readout: live update from new size.  Mirrors Thetis
-        // setup.cs:16151-16152 [v2.10.3.13] -- lblDisplayBinWidth.Text
-        // refreshes each time the slider scrolls.
-        if (m_binWidthReadout && model() && model()->spectrumWidget()) {
-            const double bw = model()->spectrumWidget()->binWidthHz();
-            m_binWidthReadout->setText(
-                bw > 0.0
-                    ? QStringLiteral("%1 Hz/bin").arg(bw, 0, 'f', 3)
-                    : QStringLiteral("- Hz/bin"));
-        }
-    });
-    {
-        // Slider + numeric readout share the FormLayout row so the combo
-        // labels align with the slider's left edge as before.
-        auto* row = new QWidget(fftGroup);
-        auto* hl  = new QHBoxLayout(row);
-        hl->setContentsMargins(0, 0, 0, 0);
-        hl->setSpacing(6);
-        hl->addWidget(m_fftSizeSlider);
-        hl->addWidget(m_fftSizeReadout);
-        fftForm->addRow(QStringLiteral("FFT Size:"), row);
-    }
 
-    // Phase 2: Window combo with all 7 Thetis-faithful items, indexes
-    // matching WindowFunction enum 1:1 (both follow WDSP analyzer.c case
-    // ordering -- setup.designer.cs:34966-34973 [v2.10.3.13]).
+    fftGrid->addWidget(binWidthPrefix,   2, 0);
+    fftGrid->addWidget(m_binWidthLabel,  2, 1);
+    fftGrid->addWidget(fftSizePrefix,    2, 2);
+    fftGrid->addWidget(m_fftSizeReadout, 2, 3);
+
+    // Row 3: "Window" prefix + combo.  Thetis labelTS147 ("Window") at
+    // (6, 101) + comboDispWinType at (83, 101) [v2.10.3.13].
+    auto* windowPrefix = new QLabel(QStringLiteral("Window"), fftGroup);
     m_windowCombo = new QComboBox(fftGroup);
+    // 7 items, ordering verbatim per Thetis comboDispWinType.Items at
+    // setup.designer.cs:34966-34973 [v2.10.3.13].  Combo index maps 1:1
+    // to WindowFunction enum integer (both follow WDSP analyzer.c case
+    // ordering, so no remap needed).
     m_windowCombo->addItems({
         QStringLiteral("Rectangular"),         // WindowFunction::Rectangular     (0)
         QStringLiteral("Blackman-Harris 4T"),  // WindowFunction::BlackmanHarris4 (1)
@@ -392,6 +454,66 @@ void SpectrumDefaultsPage::buildUI()
         "the worst sidelobes. Blackman-Harris (4T or 7T) gives strong "
         "sidelobe rejection. Flat-Top is best for amplitude calibration. "
         "Kaiser is parameterised (KaiserPi shape parameter)."));
+    fftGrid->addWidget(windowPrefix,  3, 0);
+    fftGrid->addWidget(m_windowCombo, 3, 1, 1, 3);  // span cols 1-3
+
+    // Slider valueChanged handler.  Mirrors Thetis tbDisplayFFTSize_Scroll
+    // at setup.cs:16142-16166 [v2.10.3.13] -- the nine-action sequence
+    // (skip mutex/UpdateRXSpectrumDisplayVars/InitFFTFillTime per design
+    // notes; everything else ported).
+    connect(m_fftSizeSlider, &QSlider::valueChanged,
+            this, [this](int v) {
+        v = qBound(0, v, 6);
+        const int newSize = 4096 << v;
+
+        // Size readout (mirrors lblRX1FFT_size update at setup.cs:16153
+        // [v2.10.3.13]).
+        if (m_fftSizeReadout) {
+            m_fftSizeReadout->setText(QString::number(newSize));
+        }
+
+        if (!model()) { return; }
+        auto* fe = model()->fftEngine();
+        auto* sw = model()->spectrumWidget();
+
+        // FFT size set.  Atomic store + deferred replan + emits
+        // spectrumSettingsChanged when oldSize != newSize.
+        if (fe) { fe->setFftSize(newSize); }
+
+        // Bin-width readout, fresh from newSize.  Format "N3" = 3 decimal
+        // places per Thetis setup.cs:16152 [v2.10.3.13].
+        if (m_binWidthLabel && fe) {
+            const double sampleRate = fe->sampleRate();
+            const double bw = (newSize > 0) ? sampleRate / newSize : 0.0;
+            m_binWidthLabel->setText(
+                bw > 0.0 ? QString::number(bw, 'f', 3)
+                         : QStringLiteral("0.000"));
+        }
+
+        // Mirror to on-spectrum overlay (NereusSDR-original; the
+        // overlay toggle gates the spectrum-corner readout).
+        if (m_binWidthReadout && sw) {
+            const double bw = sw->binWidthHz();
+            m_binWidthReadout->setText(
+                bw > 0.0 ? QStringLiteral("%1 Hz/bin").arg(bw, 0, 'f', 3)
+                         : QStringLiteral("- Hz/bin"));
+        }
+
+        // FFTSizeOffset = slider.Value * 2 dB.  Mirrors Thetis
+        // setup.cs:16154 [v2.10.3.13]:
+        //   Display.RX1FFTSizeOffset = tbDisplayFFTSize.Value * 2;
+        // Subtracted from agc_cal_offset in RadioModel auto-AGC (full
+        // formula at console.cs:33304).
+        if (fe) { fe->setFftSizeOffsetDb(static_cast<double>(v) * 2.0); }
+
+        // Fast-attack noise-floor reset.  Mirrors Thetis setup.cs:16156:
+        //   Display.FastAttackNoiseFloorRX1 = true;
+        if (auto* nf = model()->noiseFloorTracker()) {
+            nf->triggerFastAttack();
+        }
+    });
+
+    // Window combo handler.
     connect(m_windowCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int i) {
         if (!model() || !model()->fftEngine()) { return; }
@@ -401,7 +523,6 @@ void SpectrumDefaultsPage::buildUI()
         model()->fftEngine()->setWindowFunction(
             static_cast<WindowFunction>(clamped));
     });
-    fftForm->addRow(QStringLiteral("Window:"), m_windowCombo);
 
     contentLayout()->addWidget(fftGroup);
 

@@ -104,6 +104,12 @@ private:
     // m_fftSizeReadout shows the current size as text alongside the slider.
     QSlider*   m_fftSizeSlider{nullptr};
     QLabel*    m_fftSizeReadout{nullptr};
+    // Always-visible bin-width readout in the FFT group, paired with the
+    // "Bin Width (Hz)" prefix label.  Mirrors Thetis lblDisplayBinWidth at
+    // setup.designer.cs:35010-35021 [v2.10.3.13].  Distinct from
+    // m_binWidthReadout (Overlays group, gates the on-spectrum corner
+    // overlay -- a NereusSDR-original control).
+    QLabel*    m_binWidthLabel{nullptr};
     // Window combo: 7 Thetis-faithful items (Rectangular / Blackman-Harris
     // 4T / Hann / Flat-Top / Hamming / Kaiser / Blackman-Harris 7T) per
     // setup.designer.cs:34966-34973 [v2.10.3.13].  Combo index maps 1:1

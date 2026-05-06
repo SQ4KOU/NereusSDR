@@ -1414,13 +1414,15 @@ void SpectrumWidget::setShowBinWidth(bool on)
 
 double SpectrumWidget::binWidthHz() const
 {
-    // Pre-existing semantic: callers expect "the half-bin width" here per
-    // the legacy m_smoothed.size() * 2 formula.  m_fullLinearBins is the
-    // full FFT (sized fftSize), so multiplying by 2 reproduces the old
-    // returned value bit-for-bit.  Suspicion of a stale * 2 in the legacy
-    // path is documented as a follow-up; this commit preserves behavior.
+    // Bin width = sample rate / FFT size.  Plain divide; no factor of 2.
+    // From Thetis setup.cs:16151 [v2.10.3.13]:
+    //   bin_width = SampleRateRX1 / GetSpecRX(0).FFTSize
+    // The legacy * 2 multiplier (preserved through 1A.4 as a "suspicious
+    // math" follow-up) was a pre-1A.4 bug that returned half the actual
+    // bin width.  Phase 2 source-first port drops it.  m_fullLinearBins
+    // is sized to the full FFT (matches FFTEngine::fftSize()).
     const int fftSz = m_fullLinearBins.isEmpty() ? 4096
-                                                 : m_fullLinearBins.size() * 2;
+                                                 : m_fullLinearBins.size();
     if (fftSz <= 0 || m_sampleRateHz <= 0.0) { return 0.0; }
     return m_sampleRateHz / fftSz;
 }

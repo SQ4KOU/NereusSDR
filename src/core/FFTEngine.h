@@ -122,6 +122,17 @@ public:
     void setKaiserPi(double pi);
     double kaiserPi() const { return m_kaiserPi.load(); }
 
+    // FFT size display calibration offset, in dB.  Higher FFT sizes raise
+    // the noise floor on the spectrum render (because each bin sees a
+    // smaller slice of the input power).  Thetis compensates by setting
+    // this offset to slider.Value * 2 dB on every FFT slider scroll
+    // (setup.cs:16154 [v2.10.3.13]) and subtracting it from agc_cal_offset
+    // (console.cs:33304).  Without the compensation, the AGC threshold
+    // drifts up to 12 dB across the slider's 0..6 range.
+    // From Thetis Display.cs:1389-1397 [v2.10.3.13] RX1FFTSizeOffset.
+    void setFftSizeOffsetDb(double db);
+    double fftSizeOffsetDb() const { return m_fftSizeOffsetDb.load(); }
+
     void setSampleRate(double rateHz);
     double sampleRate() const { return m_sampleRate.load(); }
 
@@ -186,6 +197,14 @@ signals:
     void fftReadyLinear(int receiverId, const QVector<float>& binsLinear,
                         double windowEnb, double dbmOffset);
 
+    // Emitted whenever a setFftSize() call results in an actual size
+    // change (oldSize != newSize).  Mirrors Thetis
+    // SpectrumSettingsChangedHandlers?.Invoke(rx) at setup.cs:16164
+    // [v2.10.3.13] -- Thetis subscribers (chrome / waterfall / AGC panel)
+    // refresh their derived state.  NereusSDR has no subscribers today;
+    // emitted for forward compatibility.
+    void spectrumSettingsChanged(int receiverId);
+
 private:
     void replanFft();
     void computeWindow();
@@ -200,6 +219,9 @@ private:
     // Kaiser window shape parameter.  Default 14.0 from Thetis specHPSDR.cs:
     // 145 [v2.10.3.13] private double kaiser_pi = 14.0.
     std::atomic<double> m_kaiserPi{14.0};
+    // FFT size display calibration offset (dB).  Updated by the slider
+    // handler to slider.Value * 2 per Thetis setup.cs:16154 [v2.10.3.13].
+    std::atomic<double> m_fftSizeOffsetDb{0.0};
     std::atomic<double> m_sampleRate{48000.0};
     std::atomic<int>    m_targetFps{30};
     // From Thetis setup.designer.cs:33732 udDisplayDecimation [v2.10.3.13].
@@ -237,8 +259,12 @@ private:
     // matching analyzer.c:368-441 [v2.10.3.13].
     double m_windowEnb{1.0};
 
-    // From Thetis display.cs:215
-    static constexpr int kMaxFftSize = 65536;
+    // Maximum FFT size.  Sized to match the Thetis FFT slider's high end
+    // (4096 << 6 = 262144 bins).  Setting fftSize beyond this is rejected
+    // by setFftSize().
+    // From Thetis tbDisplayFFTSize.Maximum=6 + setup.cs:16148 [v2.10.3.13]
+    // FFTSize = 4096 * Math.Pow(2, slider.Value).
+    static constexpr int kMaxFftSize = 262144;
 };
 
 } // namespace NereusSDR

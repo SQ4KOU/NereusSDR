@@ -95,8 +95,24 @@ void FFTEngine::setFftSize(int size)
     if ((size & (size - 1)) != 0) {
         return;
     }
-    // Defer to next feedIQ call — coalesces rapid slider changes
+    // Capture the size we'll appear-to-be at after this call.  The actual
+    // m_currentFftSize change is deferred to the next feedIQ replan, but
+    // m_fftSize.load() already returns the new value to outside callers,
+    // so the comparison must use it as the post-state -- old vs new is
+    // captured against m_fftSize.load() before the store below.
+    const int oldSize = m_fftSize.load();
+    if (oldSize != size) {
+        m_fftSize.store(size);
+    }
+    // Defer the actual replan to next feedIQ call -- coalesces rapid
+    // slider changes into a single replan.
     m_pendingFftSize.store(size);
+    if (oldSize != size) {
+        // Mirrors Thetis setup.cs:16162-16165 [v2.10.3.13]:
+        //   if (old_fft != ...FFTSize)
+        //       SpectrumSettingsChangedHandlers?.Invoke(1);
+        emit spectrumSettingsChanged(m_receiverId);
+    }
 }
 
 void FFTEngine::setWindowFunction(WindowFunction wf)
@@ -111,6 +127,15 @@ void FFTEngine::setKaiserPi(double pi)
 {
     if (pi <= 0.0) { return; }
     m_kaiserPi.store(pi);
+}
+
+// FFT size display calibration offset.  Mirrors Thetis Display.cs:1393-1396
+// [v2.10.3.13] RX1FFTSizeOffset setter (a plain field assignment with no
+// side effects).  Consumers (RadioModel auto-AGC) read via
+// fftSizeOffsetDb() each time they recompute the cal offset.
+void FFTEngine::setFftSizeOffsetDb(double db)
+{
+    m_fftSizeOffsetDb.store(db);
 }
 
 // Modified Bessel function of the first kind, order 0.  Verbatim port of

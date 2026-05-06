@@ -3435,6 +3435,13 @@ nereus_add_test(tst_spectrum_pipeline_modes)
 # range for each window, Kaiser PiAlpha setter clamps non-positive input.
 nereus_add_test(tst_window_functions)
 
+# Phase 2-polish -- FFT size slider semantics.  Verifies slider 0..6 maps
+# to {4096..262144} per Thetis setup.cs:16148 [v2.10.3.13]; fftSizeOffsetDb
+# round-trips per setup.cs:16154 (slider.Value * 2); spectrumSettingsChanged
+# fires only on actual size change per setup.cs:16162-16165; binWidthHz()
+# returns plain sampleRate / fftSize (legacy * 2 bug removed).
+nereus_add_test(tst_fft_size_slider)
+
 # ── Task 2.5: ActivePeakHoldTrace ────────────────────────────────────────────
 # Unit tests for the per-bin peak-hold trace:
 #   peak_value_persists_until_decay: hold + 0.2 dB/frame decay verified
