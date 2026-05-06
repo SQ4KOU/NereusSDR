@@ -366,6 +366,15 @@ public:
     void setWaterfallAveraging(SpectrumAveraging a);
     SpectrumAveraging waterfallAveraging() const { return m_waterfallAveraging; }
 
+    // Read-only access to post-pipeline output arrays (dBm display pixels).
+    // Exposed for tests that drive updateSpectrumLinear() and need to
+    // assert the avenger output for a given detector + averaging combo.
+    // Pipeline contract: m_renderedPixels is sized to displayWidth and
+    // contains the spectrum trace data; m_wfRenderedPixels is the same
+    // shape for the waterfall plane.
+    const QVector<float>& renderedPixels()   const { return m_renderedPixels;   }
+    const QVector<float>& wfRenderedPixels() const { return m_wfRenderedPixels; }
+
     // Static helper for detector math. Exposed for unit tests.
     // Note: legacy bin-reduction helper, kept for tst_detector_modes;
     // production rendering uses applySpectrumDetector() (free function in

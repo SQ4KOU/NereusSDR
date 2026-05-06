@@ -3416,6 +3416,18 @@ nereus_add_test(tst_dsp_options_warning_logic)
 # running app.  Direct SpectrumAvenger unit tests are a follow-up item.
 nereus_add_test(tst_detector_modes)
 
+# Phase 1B verification -- exhaustive sweep of every detector x averaging
+# combination through SpectrumWidget::updateSpectrumLinear():
+#   spectrum  5 detectors x 4 averagings = 20
+#   waterfall 4 detectors x 4 averagings = 16
+#   total                                = 36
+# Plus mode-switch / averaging-switch / empty-input edge cases.
+# Mirrors the Thetis Pan / WF combo item lists from
+# setup.designer.cs:34843-34847 / :34868-34873 / :34436-34440 / :34461-34465
+# [v2.10.3.13].  Asserts pipeline output is sized to displayWidth and all
+# pixels finite (no NaN / Inf from any detector x averaging combo).
+nereus_add_test(tst_spectrum_pipeline_modes)
+
 # ── Task 2.5: ActivePeakHoldTrace ────────────────────────────────────────────
 # Unit tests for the per-bin peak-hold trace:
 #   peak_value_persists_until_decay: hold + 0.2 dB/frame decay verified
