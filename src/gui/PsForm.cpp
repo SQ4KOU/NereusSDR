@@ -78,6 +78,7 @@ mw0lge@grange-lane.co.uk
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include "AmpViewWindow.h"
 #include "core/AppSettings.h"
 #include "core/PureSignal.h"
 
@@ -816,13 +817,30 @@ void PsForm::onResetClicked()
 
 void PsForm::onAmpViewClicked()
 {
-    // Task 9 will replace this stub with AmpViewWindow lifecycle.  For
-    // now display a placeholder dialog so the user gets feedback that
-    // the button is recognized.  From Thetis PSForm.cs:454-464
-    // btnPSAmpView_Click [v2.10.3.13] would spin up a separate STA
-    // thread for the AmpView Form.
-    QMessageBox::information(this, tr("AmpView"),
-        tr("AmpView is not yet implemented (Phase 3M-4 Task 9)."));
+    // From Thetis PSForm.cs:454-464 btnPSAmpView_Click [v2.10.3.13]:
+    //   if (ampv == null) { ampv = new AmpView(this); ampv.Show(); ... }
+    //   else { ampv.WindowState = FormWindowState.Normal; ampv.Show(); }
+    //   FixAmpViewOnTop();
+    //
+    // Lazy-construct on first click; reuse the singleton on subsequent
+    // clicks.  The dialog is parented to PsForm so it survives PsForm
+    // close/reopen.  AmpView.cs FormClosed [v2.10.3.13] sets PSForm.ampv
+    // to null so a new instance is created next time; NereusSDR keeps
+    // the dialog alive (hide-on-close) — matches the TxEqDialog +
+    // PsForm singleton pattern.
+    if (!m_ampView) {
+        m_ampView = new AmpViewWindow(m_radioModel, m_pureSignal, this);
+    }
+    m_ampView->show();
+    m_ampView->raise();
+    m_ampView->activateWindow();
+
+    // Mirror the parent's Always-On-Top state (PsForm FixAmpViewOnTop
+    // equivalent).  Always pass the current chkPSOnTop state so the
+    // child tracks any toggle that happened while AmpView was hidden.
+    if (m_chkOnTop) {
+        m_ampView->setStayOnTopFromParent(m_chkOnTop->isChecked());
+    }
 }
 
 void PsForm::onDefaultPeaksClicked()
@@ -851,6 +869,14 @@ void PsForm::onAlwaysOnTopToggled(bool on)
     setWindowFlags(flags);
     if (wasVisible) {
         show();
+    }
+
+    // Propagate to AmpView (FixAmpViewOnTop equivalent — Thetis PSForm
+    // helper that keeps the AmpView dialog tracking the parent's
+    // Always-On-Top state).  Only fires if the AmpView dialog has been
+    // lazily constructed already.
+    if (m_ampView) {
+        m_ampView->setStayOnTopFromParent(on);
     }
 }
 

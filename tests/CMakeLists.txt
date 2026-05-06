@@ -137,6 +137,19 @@ nereus_add_test(tst_puresignal_coordinator)
 # Thetis PSForm.cs:574-590 [v2.10.3.13] CorrectionsBeingApplied predicate.
 nereus_add_test(tst_psform)
 
+# ── Phase 3M-4 Task 9: AmpViewWindow modeless dialog ─────────────────────────
+# Source-first port of Thetis AmpView.cs (528 LOC) [v2.10.3.13].  Tests verify
+# title "AmpView 1.0" verbatim, ClientSize 564x401 / MinSize 440x380, 4 toolbar
+# checkboxes exist by objectName at exact Thetis x positions
+# (chkAVShowGain @ 7,378 / chkAVPhaseZoom @ 242,378 / chkAVLowRes @ 404,378
+# / chkStayOnTop @ 490,378), 5 named chart series (Ref / MagAmp / PhsAmp /
+# MagCorr / PhsCorr), default chkAVLowRes Checked per AmpView.Designer.cs:
+# 182-183 [v2.10.3.13], toggle persistence to AppSettings, stay-on-top window
+# flag application, chart axis ranges (Mag 1.0/2.0 + Phase 180/45) matching
+# AmpView.cs:435-482 [v2.10.3.13], and lowResStride() == 4 per AmpView.cs:
+# 457-463 [v2.10.3.13].
+nereus_add_test(tst_ampview_window)
+
 # ── Phase 3M-1b Task B.1: BoardCapabilities::hasMicJack flag ─────────────────
 # Parametrized over all HPSDRHW enum values.
 # HL2 and HermesLiteRxOnly → false; all other boards → true.

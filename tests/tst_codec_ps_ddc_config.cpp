@@ -67,6 +67,8 @@ private slots:
 
     // PS-on, no diversity, MOX → DDC0+DDC2, sync DDC1, ps_rate
     // Source: console.cs:8256-8266 [v2.10.3.13]
+    // Inline tag preservation (CLAUDE.md §"Inline comment preservation"):
+    //   console.cs:8251 — // [2.10.3.13]MW0LGE p1 !
     void p2_orionmkii_psOn_noDivers_mox() {
         P2CodecOrionMkII codec;
         auto cfg = codec.applyPureSignalDdcConfig(
@@ -145,6 +147,8 @@ private slots:
 
     // PS-on, MOX, RX2 enabled → DDC3 added
     // Source: console.cs:8290-8294 [v2.10.3.13]
+    // Inline tag preservation (CLAUDE.md §"Inline comment preservation"):
+    //   console.cs:8296 — case HPSDRModel.REDPITAYA: //DH1KLM (next case)
     void p2_orionmkii_psOn_mox_rx2Enabled_addsDdc3() {
         P2CodecOrionMkII codec;
         auto cfg = codec.applyPureSignalDdcConfig(
@@ -161,6 +165,11 @@ private slots:
 
     // Saturn delegates to OrionMkII's PS DDC config — verify identical output
     // Source: console.cs:8211-8295 [v2.10.3.13] groups ANAN_G2 with G2-class
+    // Inline tag preservation (CLAUDE.md §"Inline comment preservation") for
+    // tags within ±5 lines of the cited range:
+    //   console.cs:8238 — // [2.10.3.13]MW0LGE p1 !  (Hermes-class branch)
+    //   console.cs:8251 — // [2.10.3.13]MW0LGE p1 !  (G2-class branch)
+    //   console.cs:8296 — case HPSDRModel.REDPITAYA: //DH1KLM (next case)
     void p2_saturn_inheritsG2Branch() {
         P2CodecSaturn codec;
         auto cfg = codec.applyPureSignalDdcConfig(

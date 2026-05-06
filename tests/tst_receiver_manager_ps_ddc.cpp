@@ -129,6 +129,9 @@ void TstReceiverManagerPsDdc::g2PsOnMoxEmitsExpectedPsDdcConfig()
 {
     // G2-class PS-on no-diversity MOX expected wire bytes
     // Source: console.cs:8256-8266 [v2.10.3.13]
+    // Inline tag preservation (CLAUDE.md §"Inline comment preservation"):
+    //   console.cs:8251 — // [2.10.3.13]MW0LGE p1 !  (Hermes-style fallback
+    //                       above the G2 branch)
     //   DDCEnable = DDC0 + DDC2 = 5
     //   SyncEnable = DDC1 = 2
     //   Rate[0] = ps_rate = 192000

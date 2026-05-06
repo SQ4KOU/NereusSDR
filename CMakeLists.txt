@@ -481,6 +481,8 @@ set(MODEL_SOURCES
 
 set(GUI_SOURCES
     src/gui/MainWindow.cpp
+    src/gui/AmpViewChart.cpp
+    src/gui/AmpViewWindow.cpp
     src/gui/PsForm.cpp
     src/gui/TitleBar.cpp
     src/gui/ConnectionPanel.cpp

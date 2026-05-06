@@ -546,6 +546,34 @@ void PureSignal::applyBoardCapabilities(const BoardCapabilities& caps)
     }
 }
 
+// ── AmpView buffer feed (Task 9) ───────────────────────────────────────────
+//
+// From Thetis AmpView.cs:371-392 [v2.10.3.13] — the unsafe { fixed } block
+// inside timer1_Tick that pins seven managed double[] arrays and forwards
+// their addresses into puresignal.GetPSDisp.  NereusSDR doesn't need GC
+// pinning so the wrapper is a simple pass-through to TxChannel::getPSDisp
+// (which holds the WDSP boundary).
+//
+// Inline tag preservation (per CLAUDE.md §"Inline comment preservation"):
+// upstream AmpView.cs:397 carries
+//   //disp_data(); // MW0LGE [2.9.0.8] changed to an add once, update points method.
+// — explanatory tag for a refactor; NereusSDR follows the post-refactor
+// init-once / update-points path by structure (no pre-refactor disp_data
+// path ever existed in this port).
+
+bool PureSignal::fillAmpViewBuffers(double* x,  double* ym, double* yc, double* ys,
+                                    double* cm, double* cc, double* cs)
+{
+    if (!m_tx) {
+        return false;
+    }
+    if (!x || !ym || !yc || !ys || !cm || !cc || !cs) {
+        return false;
+    }
+    m_tx->getPSDisp(x, ym, yc, ys, cm, cc, cs);
+    return true;
+}
+
 void PureSignal::setTimersEnabled(bool on)
 {
     if (on) {

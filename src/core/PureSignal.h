@@ -321,6 +321,39 @@ public:
     // config.
     void applyBoardCapabilities(const BoardCapabilities& caps);
 
+    // ── AmpView buffer feed (Task 9) ──────────────────────────────────────
+    //
+    // Thetis defaults are ints=16, spi=256 (PSForm.cs:351-369 [v2.10.3.13]).
+    // The comboPSTint handler at PSForm.cs:857-885 [v2.10.3.13] mutates them
+    // when the user changes the index; for Phase 3M-4 we keep the ints/spi
+    // pair fixed at the Thetis default (the combo wire-through is deferred
+    // per the comment in setTint() in this file).  AmpView reads back via
+    // the accessors below for buffer sizing.
+    int    psInts() const noexcept { return m_psInts; }
+    int    psSpi()  const noexcept { return m_psSpi;  }
+
+    // Pull the seven raw GetPSDisp output buffers from the wrapped
+    // TxChannel.  The caller MUST ensure the pointers address arrays of:
+    //   x  / ym / yc / ys → at least psInts() * psSpi() doubles
+    //   cm / cc / cs      → at least psInts() * 4         doubles
+    // Returns true when the buffers were filled (TxChannel wired + WDSP
+    // GetPSDisp executed); false when no TX channel is bound (e.g. before
+    // a radio connects, in unit tests).
+    //
+    // From Thetis AmpView.cs:371-392 [v2.10.3.13] — the unsafe { fixed }
+    // block inside timer1_Tick that pins the seven managed double[] arrays
+    // and forwards their addresses into puresignal.GetPSDisp.  NereusSDR
+    // doesn't need GC pinning (raw double* are passed by AmpViewWindow),
+    // so the wrapper is the simple pass-through below.
+    //
+    // Inline tag preservation (per CLAUDE.md §"Inline comment preservation"):
+    // upstream AmpView.cs:397 carries
+    //   //disp_data(); // MW0LGE [2.9.0.8] changed to an add once, update points method.
+    // — explanatory tag for a refactor that NereusSDR follows by structure
+    // (we never had the pre-refactor disp_data path).
+    bool fillAmpViewBuffers(double* x,  double* ym, double* yc, double* ys,
+                            double* cm, double* cc, double* cs);
+
     // ── State accessors for tests ─────────────────────────────────────────
     AutoAttenuateState autoAttenuateState() const noexcept { return m_aaState; }
 
@@ -460,6 +493,16 @@ private:
     bool   m_loopback{false};       // checkLoopback default unchecked
     bool   m_show2Tone{false};      // chkShow2ToneMeasurements default unchecked
     double m_hwPeak{0.0};           // populated by applyBoardCapabilities
+
+    // ── AmpView buffer-sizing (Task 9) ────────────────────────────────────
+    // Defaults match Thetis PSForm.cs:351 / 361 [v2.10.3.13]:
+    //   private int _ints = 16;
+    //   private int _spi  = 256;
+    // The comboPSTint handler (PSForm.cs:857-885 [v2.10.3.13]) cycles
+    // between (16,256) / (8,512) / (4,1024); NereusSDR keeps the default
+    // pair until the combo wire-through is implemented.
+    int m_psInts{16};
+    int m_psSpi{256};
 
     // Per-tick info[] snapshots for HasInfoChanged equivalence.  Sized 16
     // per Thetis _info / _oldInfo layout (PSForm.cs:1061-1062 [v2.10.3.13]).

@@ -83,6 +83,7 @@ class QWidget;
 
 namespace NereusSDR {
 
+class AmpViewWindow;
 class RadioModel;
 class PureSignal;
 
@@ -257,6 +258,12 @@ private:
     // widget individually.  See Thetis PSForm.cs:894-902 [v2.10.3.13].
     QVector<QWidget*> m_advancedSectionWidgets;
     bool m_advancedCollapsed{false};
+
+    // Lazy-constructed AmpView dialog (Task 9).  PsForm owns the lifetime
+    // (parented at construction) so it survives across PsForm close/reopen
+    // cycles.  Mirrors Thetis PSForm.cs:454-464 btnPSAmpView_Click +
+    // PSForm.cs FixAmpViewOnTop pattern [v2.10.3.13].
+    AmpViewWindow* m_ampView{nullptr};
 };
 
 } // namespace NereusSDR
