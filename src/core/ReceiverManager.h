@@ -69,7 +69,13 @@
 #include <QVector>
 #include <QMap>
 
+#include "codec/CodecContext.h"   // PsDdcConfig + Q_DECLARE_METATYPE
+#include "HpsdrModel.h"           // HPSDRModel
+
 namespace NereusSDR {
+
+class IP1Codec;
+class IP2Codec;
 
 // Per-receiver configuration state.
 struct ReceiverConfig {
@@ -151,6 +157,68 @@ public:
     // Routes to the correct logical receiver.
     void feedIqData(int hwReceiverIndex, const QVector<float>& samples);
 
+    // -------------------------------------------------------------------
+    // Phase 3M-4 Task 6: PureSignal DDC orchestration
+    //
+    // Mirrors the per-board switch in Thetis console.cs:8186-8538
+    // UpdateDDCs() [v2.10.3.13] (and mi0bot console.cs:8409-8488
+    // [v2.10.3.13-beta2] for HL2). State-shadowing setters drive the
+    // codec dispatch; the codec layer (Task 5) returns the wire-byte
+    // PsDdcConfig and ReceiverManager re-emits it via ddcConfigChanged
+    // for RadioConnection to consume (the wire-byte writer wiring lands
+    // in Task 7 / a Phase-3F refactor).
+    //
+    // Codec injection is via setter (not constructor) because:
+    //   1. ReceiverManager is constructed in RadioModel's ctor before
+    //      the connected radio's protocol/board is known.  The codec
+    //      selection happens later when applyHardwareInfo() runs.
+    //   2. Two separate setters (P1 / P2) keep the IP1Codec / IP2Codec
+    //      type split clean — RadioModel only ever wires one based on
+    //      the protocol, and the other stays nullptr.
+    //   3. Codec lifetime is owned by the connection (P1/P2RadioConnection
+    //      hold std::unique_ptr<I*Codec>).  ReceiverManager stores a raw
+    //      pointer with non-owning semantics and clears it on reset()
+    //      (RadioModel::teardownConnection clears the codec ptr first).
+    //
+    // The setters are non-owning observers; the caller retains lifetime
+    // ownership.  Pass nullptr to clear (called from reset()).
+    void setP1Codec(IP1Codec* codec);
+    void setP2Codec(IP2Codec* codec);
+
+    // The connected radio's HPSDRModel — required because the codec layer
+    // dispatches on this enum (e.g. P1CodecStandard maps multiple HpsdrModel
+    // values to distinct UpdateDDCs branches).
+    void setHpsdrModel(HPSDRModel model);
+
+    // PureSignal master enable (TX-side).  When true and MOX is also true,
+    // the per-board codec emits the PS-on DDC layout (G2: DDC0+DDC2 with
+    // ps_rate=192000; HL2: DDC0 with rx1_rate, etc.).
+    void setPureSignalEnabled(bool on);
+
+    // MOX (transmit) state.  PS DDC layout differs MOX-on vs MOX-off
+    // (cal armed but TX off → DDC2 RX-only; MOX → full PS dual-stream).
+    void setMox(bool on);
+
+    // Diversity master enable.  Combines with PS in some board branches
+    // (G2-class same as no-diversity per console.cs:8267-8277, but other
+    // branches differ).
+    void setDiversityEnabled(bool on);
+
+    // RX1 / RX2 sample rates (Hz).  HL2 uses rx1_rate as PS feedback rate;
+    // G2-class uses ps_rate=192000 regardless.
+    void setRx1Rate(int rateHz);
+    void setRx2Rate(int rateHz);
+
+    // RX2 enable.  When true, additional DDC (DDC3 on G2-class, DDC1 on
+    // HL2 PS-off path) is added to ddcEnable.
+    void setRx2Enabled(bool on);
+
+    // ADC control register shadows.  G2-class PS-on cntrl1 formula is
+    // (rx_adc_ctrl1 & 0xf3) | 0x08 — preserves caller's bits 0,1,4..7,
+    // overrides bits 2-3 with 0x08.  cntrl2 is masked similarly per-codec.
+    void setRxAdcCtrl1(quint8 reg);
+    void setRxAdcCtrl2(quint8 reg);
+
 signals:
     void activeReceiverCountChanged(int count);
     void receiverCreated(int receiverIndex);
@@ -170,9 +238,25 @@ signals:
     // I/Q data routed to the appropriate receiver (by logical index).
     void iqDataForReceiver(int receiverIndex, const QVector<float>& samples);
 
+    // Phase 3M-4 Task 6: emitted whenever ReceiverManager re-runs the
+    // per-board PS DDC computation (either codec dispatch).  Carries the
+    // wire-byte map; the consumer (RadioConnection follow-up) writes it
+    // to the radio via NetworkIO.EnableRxs / SetDDCRate / SetADC_cntrl*
+    // (per Thetis console.cs:8527-8534 [v2.10.3.13]).
+    void ddcConfigChanged(const NereusSDR::PsDdcConfig& config);
+
 private:
     // Rebuild hardware DDC mapping after receiver changes.
     void rebuildHardwareMapping();
+
+    // Phase 3M-4 Task 6: re-runs the per-board PS DDC computation by
+    // dispatching to the injected codec's applyPureSignalDdcConfig() and
+    // re-emitting the result.  Called from every state setter on actual
+    // change.  No-op when no codec is injected (graceful pre-connect path).
+    //
+    // Source: orchestration of Thetis console.cs:8186-8538 UpdateDDCs()
+    // [v2.10.3.13]; the per-board switch lives in the codec layer.
+    void updateDdcAssignment();
 
     int m_maxReceivers{7};
     int m_nextWdspChannel{0};
@@ -187,6 +271,29 @@ private:
     // Diagnostic: one-shot logging of first successful and first dropped feedIqData
     bool m_firstForwardLogged{false};
     bool m_firstDropLogged{false};
+
+    // -------------------------------------------------------------------
+    // Phase 3M-4 Task 6: PureSignal DDC orchestration state
+    //
+    // Non-owning codec pointers — set by RadioModel post-connect via
+    // setP1Codec / setP2Codec; cleared by reset().  P2 takes precedence
+    // when both are non-null (defensive — RadioModel only sets one).
+    IP1Codec* m_p1Codec{nullptr};
+    IP2Codec* m_p2Codec{nullptr};
+
+    // Connected radio's HPSDRModel — required by codec dispatch.
+    HPSDRModel m_hpsdrModel{HPSDRModel::HPSDR};
+
+    // Shadow of last-emitted live state.  Setters compare against these
+    // and skip the codec dispatch when the new value matches (idempotence).
+    bool   m_psEnabled{false};
+    bool   m_moxState{false};
+    bool   m_diversityEnabled{false};
+    int    m_rx1Rate{48000};
+    int    m_rx2Rate{48000};
+    bool   m_rx2Enabled{false};
+    quint8 m_rxAdcCtrl1{0};
+    quint8 m_rxAdcCtrl2{0};
 
     static const ReceiverConfig kInvalidConfig;
 };

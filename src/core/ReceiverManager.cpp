@@ -66,6 +66,9 @@
 #include "ReceiverManager.h"
 #include "LogCategories.h"
 
+#include "codec/IP1Codec.h"
+#include "codec/IP2Codec.h"
+
 namespace NereusSDR {
 
 const ReceiverConfig ReceiverManager::kInvalidConfig{};
@@ -129,6 +132,22 @@ void ReceiverManager::reset()
     m_nextWdspChannel = 0;
     m_firstForwardLogged = false;
     m_firstDropLogged = false;
+
+    // Phase 3M-4 Task 6: clear codec pointers + PS state on disconnect.
+    // The codecs are owned by P1/P2RadioConnection, which is destroyed
+    // during teardownConnection — leaving stale pointers here would crash
+    // any subsequent state setter that fires before the next connect.
+    m_p1Codec = nullptr;
+    m_p2Codec = nullptr;
+    m_hpsdrModel = HPSDRModel::HPSDR;
+    m_psEnabled = false;
+    m_moxState = false;
+    m_diversityEnabled = false;
+    m_rx1Rate = 48000;
+    m_rx2Rate = 48000;
+    m_rx2Enabled = false;
+    m_rxAdcCtrl1 = 0;
+    m_rxAdcCtrl2 = 0;
 
     for (int idx : indices) {
         emit receiverDestroyed(idx);
@@ -332,6 +351,158 @@ void ReceiverManager::rebuildHardwareMapping()
             emit hardwareFrequencyChanged(it->hardwareRx, it->frequencyHz);
         }
     }
+}
+
+// =====================================================================
+// Phase 3M-4 Task 6: PureSignal DDC orchestration
+//
+// Setters shadow the live state and call updateDdcAssignment() on actual
+// change.  updateDdcAssignment() dispatches to the injected per-board
+// codec's applyPureSignalDdcConfig() (Task 5) and re-emits the wire-byte
+// PsDdcConfig via ddcConfigChanged for RadioConnection to consume.
+//
+// Source: orchestration of Thetis console.cs:8186-8538 UpdateDDCs()
+// [v2.10.3.13]; the per-board switch lives in the codec layer.
+// =====================================================================
+
+void ReceiverManager::setP1Codec(IP1Codec* codec)
+{
+    if (m_p1Codec == codec) {
+        return;
+    }
+    m_p1Codec = codec;
+    qCDebug(lcReceiver) << "ReceiverManager: P1 codec" << (codec ? "set" : "cleared");
+    updateDdcAssignment();
+}
+
+void ReceiverManager::setP2Codec(IP2Codec* codec)
+{
+    if (m_p2Codec == codec) {
+        return;
+    }
+    m_p2Codec = codec;
+    qCDebug(lcReceiver) << "ReceiverManager: P2 codec" << (codec ? "set" : "cleared");
+    updateDdcAssignment();
+}
+
+void ReceiverManager::setHpsdrModel(HPSDRModel model)
+{
+    if (m_hpsdrModel == model) {
+        return;
+    }
+    m_hpsdrModel = model;
+    updateDdcAssignment();
+}
+
+void ReceiverManager::setPureSignalEnabled(bool on)
+{
+    if (m_psEnabled == on) {
+        return;
+    }
+    m_psEnabled = on;
+    updateDdcAssignment();
+}
+
+void ReceiverManager::setMox(bool on)
+{
+    if (m_moxState == on) {
+        return;
+    }
+    m_moxState = on;
+    updateDdcAssignment();
+}
+
+void ReceiverManager::setDiversityEnabled(bool on)
+{
+    if (m_diversityEnabled == on) {
+        return;
+    }
+    m_diversityEnabled = on;
+    updateDdcAssignment();
+}
+
+void ReceiverManager::setRx1Rate(int rateHz)
+{
+    if (m_rx1Rate == rateHz) {
+        return;
+    }
+    m_rx1Rate = rateHz;
+    updateDdcAssignment();
+}
+
+void ReceiverManager::setRx2Rate(int rateHz)
+{
+    if (m_rx2Rate == rateHz) {
+        return;
+    }
+    m_rx2Rate = rateHz;
+    updateDdcAssignment();
+}
+
+void ReceiverManager::setRx2Enabled(bool on)
+{
+    if (m_rx2Enabled == on) {
+        return;
+    }
+    m_rx2Enabled = on;
+    updateDdcAssignment();
+}
+
+void ReceiverManager::setRxAdcCtrl1(quint8 reg)
+{
+    if (m_rxAdcCtrl1 == reg) {
+        return;
+    }
+    m_rxAdcCtrl1 = reg;
+    updateDdcAssignment();
+}
+
+void ReceiverManager::setRxAdcCtrl2(quint8 reg)
+{
+    if (m_rxAdcCtrl2 == reg) {
+        return;
+    }
+    m_rxAdcCtrl2 = reg;
+    updateDdcAssignment();
+}
+
+void ReceiverManager::updateDdcAssignment()
+{
+    // Defensive: when both codecs are non-null, P2 wins.  RadioModel only
+    // ever sets one based on the connected protocol; pinning the order
+    // means a future bug that sets both can't silently route through the
+    // wrong protocol layer.  When neither is set (pre-connect / post-reset),
+    // skip silently — RadioModel will install the codec on the next
+    // applyHardwareInfo() and re-trigger via the seeded state setters.
+    PsDdcConfig config{};
+    if (m_p2Codec) {
+        config = m_p2Codec->applyPureSignalDdcConfig(
+            m_hpsdrModel,
+            m_psEnabled,
+            m_diversityEnabled,
+            m_moxState,
+            m_rx1Rate,
+            m_rx2Rate,
+            m_rx2Enabled,
+            m_rxAdcCtrl1,
+            m_rxAdcCtrl2);
+    } else if (m_p1Codec) {
+        config = m_p1Codec->applyPureSignalDdcConfig(
+            m_hpsdrModel,
+            m_psEnabled,
+            m_diversityEnabled,
+            m_moxState,
+            m_rx1Rate,
+            m_rx2Rate,
+            m_rx2Enabled,
+            m_rxAdcCtrl1,
+            m_rxAdcCtrl2);
+    } else {
+        // No codec injected — nothing to emit.
+        return;
+    }
+
+    emit ddcConfigChanged(config);
 }
 
 } // namespace NereusSDR

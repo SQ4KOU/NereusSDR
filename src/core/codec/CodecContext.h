@@ -18,6 +18,7 @@
 #pragma once
 
 #include <QtGlobal>
+#include <QMetaType>
 #include <cstdint>
 
 namespace NereusSDR {
@@ -310,3 +311,8 @@ struct PsDdcConfig {
 };
 
 } // namespace NereusSDR
+
+// Phase 3M-4 Task 6: PsDdcConfig must round-trip through Qt's signal/slot
+// queue (ReceiverManager::ddcConfigChanged → RadioConnection consumer) and
+// through QSignalSpy in tests, so it needs a metatype declaration.
+Q_DECLARE_METATYPE(NereusSDR::PsDdcConfig)

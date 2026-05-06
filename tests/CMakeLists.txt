@@ -326,6 +326,15 @@ nereus_add_test(tst_p2_codec_saturn)
 #   - HPSDR (Atlas) returns all zeros sentinel
 nereus_add_test(tst_codec_ps_ddc_config)
 
+# ── Phase 3M-4 Task 6: ReceiverManager UpdateDDCs PS branch ──────────────
+# Verifies the ReceiverManager state setters (PS / MOX / diversity / RX
+# rates / RX2 enable / ADC ctrl shadow) dispatch through the injected
+# per-board codec's applyPureSignalDdcConfig() and re-emit the resulting
+# PsDdcConfig via ddcConfigChanged for RadioConnection consumption (a
+# follow-up task wires that up).  Ports the orchestration of Thetis
+# console.cs:8186-8538 UpdateDDCs() [v2.10.3.13].
+nereus_add_test(tst_receiver_manager_ps_ddc)
+
 # ── Phase 3P-B Task 7: regression-freeze gate ────────────────────────────
 nereus_add_test(tst_p2_regression_freeze)
 
