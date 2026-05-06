@@ -134,6 +134,16 @@ void SpectrumDefaultsPage::pushFps(int fps)
     if (auto* sw = model()->spectrumWidget()) {
         sw->setDisplayFps(fps);
     }
+    // Defensive: explicitly mirror to the spin readout.  makeSliderRow
+    // wires a bidirectional slider<->spin connect that should already do
+    // this, but JJ reported the spin readout sticking at 30 even when the
+    // slider was driven to 60 (and the FFTEngine actually received 60
+    // via this very pushFps call).  An extra setValue here is harmless
+    // when the sync is working and a guaranteed fix when it isn't.
+    if (m_fpSpin && m_fpSpin->value() != fps) {
+        QSignalBlocker block(m_fpSpin);
+        m_fpSpin->setValue(fps);
+    }
 }
 
 void SpectrumDefaultsPage::loadFromRenderer()
@@ -541,6 +551,7 @@ void SpectrumDefaultsPage::buildUI()
     {
         auto row = makeSliderRow(10, 60, 30, QStringLiteral(" fps"), renderGroup);
         m_fpSlider = row.slider;
+        m_fpSpin   = row.spin;
         // Thetis: setup.designer.cs:33856 (udDisplayFPS) — Thetis original: "Frames Per Second (approximate)" (placeholder); rewritten
         m_fpSlider->setToolTip(QStringLiteral("Spectrum/waterfall redraw rate. Higher = smoother animation at cost of CPU."));
         row.spin->setToolTip(QStringLiteral("Spectrum/waterfall redraw rate. Higher = smoother animation at cost of CPU."));

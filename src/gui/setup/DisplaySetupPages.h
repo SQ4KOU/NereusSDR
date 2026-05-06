@@ -119,6 +119,13 @@ private:
 
     // Section: Rendering
     QSlider*   m_fpSlider{nullptr};          // 10–60 fps
+    // Defensive secondary reference to the FPS spin readout cell.  The
+    // bidirectional slider-spin sync wired in makeSliderRow should keep
+    // them in lockstep, but pushFps explicitly sets m_fpSpin->setValue()
+    // as a belt-and-braces measure -- JJ reported the spin readout
+    // sticking at 30 even when slider was at 60, suggesting the
+    // makeSliderRow connect doesn't fire reliably under some conditions.
+    QSpinBox*  m_fpSpin{nullptr};
     // Legacy "Averaging" combo removed in v0.3.0; setAverageMode() no longer
     // drives the renderer. m_spectrumAveragingCombo + m_spectrumAvgTimeSpin
     // (Thetis-faithful split) are the canonical controls.
