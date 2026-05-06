@@ -138,6 +138,15 @@ public:
 signals:
     void settingChanged(const QString& key, const QVariant& value);
 
+    // Phase 3M-4 Task 11: HPF Bypass on PureSignal feedback toggle.
+    // Emitted whenever m_hpfBypassOnPs changes after the IMD warning gate
+    // resolves (or instantly when re-checking).  RadioModel routes this to
+    // the live PureSignal feedback path so the BPF/HPF safety state takes
+    // effect without requiring a Setup dialog close.
+    // From Thetis setup.cs:29274-29292 [v2.10.3.13] (chkDisableHPFonPS_CheckedChanged
+    // — setter cascades to console.DisableHPFonPS).
+    void hpfBypassOnPsChanged(bool checked);
+
 private slots:
     void onHpfCheckChanged(bool checked, const QString& settingsKey);
     void onHpfSpinChanged(double value, const QString& settingsKey);
@@ -145,6 +154,20 @@ private slots:
     void onBpf1CheckChanged(bool checked, const QString& settingsKey);
     void onBpf1SpinChanged(double value, const QString& settingsKey);
     void onMasterCheckChanged(bool checked, const QString& settingsKey);
+
+public:
+    // Test seam — controls whether the IMD warning modal dialog is suppressed.
+    // When enabled, the handler treats every confirmation as "OK" (i.e. the
+    // toggle is allowed to land unchecked) without invoking QMessageBox::exec().
+    // tst_setup_deltas uses the cancel-emulation seam below to verify the
+    // revert path; the OK-emulation default exercises the persist+emit path.
+    enum class TestImdResult { ConfirmOk, ConfirmCancel };
+    void setImdWarningResultForTest(TestImdResult result);
+
+    // Test seam — bypass-the-dialog wire for the m_hpfBypassOnPs checkbox.
+    // Drives QCheckBox::toggled exactly as the user would.  Tests must call
+    // setImdWarningResultForTest() first to seed the auto-confirm path.
+    QCheckBox* hpfBypassOnPsCheckboxForTest() const { return m_hpfBypassOnPs; }
 
 private:
     // Band descriptor for HPF/BPF1 row construction.
@@ -224,6 +247,13 @@ private:
     // Cached indices of currently-highlighted rows (-1 = none lit).
     int m_activeHpfIndex{-1};
     int m_activeLpfIndex{-1};
+
+    // Phase 3M-4 Task 11: IMD warning dialog auto-result for tests.
+    // When std::nullopt the handler shows a real QMessageBox::exec() modal.
+    // When set, the handler skips the modal and treats it as the indicated
+    // outcome (ConfirmOk = proceed unchecked; ConfirmCancel = revert).
+    enum class ImdAutoResult { None, Ok, Cancel };
+    ImdAutoResult m_imdAutoResult{ImdAutoResult::None};
 
     // Recompute LED highlight from m_currentFreqHz and current spinbox
     // values. Source: Thetis console.cs:setAlexHPF / setAlexLPF —

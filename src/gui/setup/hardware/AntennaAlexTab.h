@@ -98,6 +98,12 @@ public:
 signals:
     void settingChanged(const QString& key, const QVariant& value);
 
+    // Phase 3M-4 Task 11: pass-through for AntennaAlexAlex1Tab::hpfBypassOnPsChanged.
+    // RadioModel/SetupDialog routes this to PureSignal::setHpfBypassOnPs (NereusSDR-
+    // original setter that mirrors Thetis console.DisableHPFonPS path).
+    // From Thetis setup.cs:29274-29292 [v2.10.3.13].
+    void hpfBypassOnPsChanged(bool checked);
+
 private:
     RadioModel*   m_model{nullptr};
 

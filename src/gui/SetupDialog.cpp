@@ -31,6 +31,7 @@
 #include "SetupDialog.h"
 #include "SetupPage.h"
 #include "core/BoardCapabilities.h"
+#include "core/PureSignal.h"
 #include "models/RadioModel.h"
 
 // General
@@ -236,7 +237,25 @@ void SetupDialog::buildTree()
     add(general, "Startup & Preferences", new StartupPrefsPage(m_model));
     add(general, "UI Scale & Theme",       new UiScalePage(m_model));
     add(general, "Navigation",             new NavigationPage(m_model));
-    add(general, "Options",                new GeneralOptionsPage(m_model));
+    {
+        // Phase 3M-4 Task 11: forward GeneralOptionsPage's PureSignal Info
+        // Bar checkbox signals to the live PureSignal coordinator so the
+        // bottom-banner FB indicator reflects the new state without having
+        // to close the Setup dialog.  The page handles its own AppSettings
+        // persistence; this connect handles the live wire only.
+        // Mirrors Thetis chkHideFeebackLevel_CheckedChanged + chkSwapREDBluePSAColours_CheckedChanged
+        // (setup.cs handlers fan out to puresignal.HideFeedback / InvertRedBlue).
+        auto* genOpts = new GeneralOptionsPage(m_model);
+        if (m_model) {
+            if (auto* ps = m_model->pureSignal()) {
+                connect(genOpts, &GeneralOptionsPage::hideFeedbackLevelChanged,
+                        ps,      &PureSignal::setHideFeedback);
+                connect(genOpts, &GeneralOptionsPage::invertRedBluePsaChanged,
+                        ps,      &PureSignal::setInvertRedBlue);
+            }
+        }
+        add(general, "Options", genOpts);
+    }
 
     // ── Hardware ─────────────────────────────────────────────────────────────
     QTreeWidgetItem* hardware = addCategory("Hardware");

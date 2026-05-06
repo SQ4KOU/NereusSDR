@@ -163,6 +163,21 @@ nereus_add_test(tst_ampview_window)
 # "Showing level, " prefix gating.
 nereus_add_test(tst_psa_indicator)
 
+# ── Phase 3M-4 Task 11: Setup deltas for PureSignal ──────────────────────────
+# (1) AntennaAlexAlex1Tab "HPF Bypass on PureSignal feedback" toggle now
+#     shows the IMD warning dialog when un-checked (multi-paragraph text
+#     verbatim from Thetis setup.cs:29274-29292 [v2.10.3.13]).  Cancel
+#     reverts via QSignalBlocker.  Emits new hpfBypassOnPsChanged signal.
+# (2) GeneralOptionsPage gains 2 PureSignal Info Bar checkboxes that
+#     mirror Thetis groupBoxTS23 controls (setup.designer.cs:10567-10632
+#     [v2.10.3.13]): chkHideFeebackLevel + chkSwapREDBluePSAColours.
+#     User-visible text uses corrected spelling; Thetis typo "Feeback"
+#     preserved only in source-cite for traceability.
+# Test seam (setImdWarningResultForTest) lets tests drive both the
+# Cancel-revert path and the OK-persist path without invoking a real
+# QMessageBox::exec() modal.
+nereus_add_test(tst_setup_deltas)
+
 # ── Phase 3M-1b Task B.1: BoardCapabilities::hasMicJack flag ─────────────────
 # Parametrized over all HPSDRHW enum values.
 # HL2 and HermesLiteRxOnly → false; all other boards → true.

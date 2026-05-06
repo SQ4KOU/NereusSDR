@@ -60,9 +60,10 @@
 #include "GeneralOptionsPage.h"
 #include "gui/StyleConstants.h"
 #include "models/RadioModel.h"
-#include "core/BoardCapabilities.h"
-#include "core/StepAttenuatorController.h"
 #include "core/AppSettings.h"
+#include "core/BoardCapabilities.h"
+#include "core/PureSignal.h"
+#include "core/StepAttenuatorController.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -71,6 +72,7 @@
 #include <QLabel>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QSignalBlocker>
 #include <QSpinBox>
 
 namespace NereusSDR {
@@ -323,6 +325,11 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
 // Options group
 // From Thetis setup.designer.cs:9050-9059 [v2.10.3.13] (grpGeneralOptions)
 // Controls: chkPreventTXonDifferentBandToRX
+//
+// Phase 3M-4 Task 11 also folds in two PureSignal Info Bar checkboxes that
+// Thetis hosts on a separate "Info Bar (below spectrum)" groupBoxTS23 inside
+// tpOptions2 (setup.designer.cs:10567-10632 [v2.10.3.13]).  NereusSDR's
+// shallower Setup IA puts them in the existing General Options group.
 // ---------------------------------------------------------------------------
 
 void GeneralOptionsPage::buildOptionsGroup()
@@ -347,6 +354,75 @@ void GeneralOptionsPage::buildOptionsGroup()
                                           on ? QStringLiteral("True") : QStringLiteral("False"));
     });
     vbox->addWidget(m_chkPreventTXonDifferentBandToRX);
+
+    // ── Phase 3M-4 Task 11: PureSignal Info Bar checkboxes ─────────────────
+    //
+    // From Thetis setup.designer.cs:10567-10597 [v2.10.3.13] chkHideFeebackLevel:
+    //   "Hide feedback level number" (designer text), tooltip: "Hide the
+    //   feedback level from the info bar".  Thetis preserves the typo
+    //   "Feeback" in the objectName — NereusSDR uses corrected spelling
+    //   in user-visible text, source-cite preserves the typo for traceability.
+    // The "Mirror of FB-label right-click" tooltip cue is NereusSDR-original
+    // (Thetis has no banner-click hook explanation in tooltip).
+    m_chkHideFeedback = new QCheckBox(tr("Hide feedback level"), group);
+    m_chkHideFeedback->setObjectName(QStringLiteral("chkHideFeedbackLevel"));
+    m_chkHideFeedback->setToolTip(
+        tr("When checked, the bottom-banner FB indicator shows \"Feedback\" "
+           "text instead of the numeric level. Mirror of FB-label right-click."));
+    m_chkHideFeedback->setChecked(
+        AppSettings::instance().value(QStringLiteral("HideFeedbackLevel"),
+                                       QStringLiteral("False")).toString() == QStringLiteral("True"));
+    connect(m_chkHideFeedback, &QCheckBox::toggled, this, [this](bool on) {
+        AppSettings::instance().setValue(QStringLiteral("HideFeedbackLevel"),
+                                          on ? QStringLiteral("True") : QStringLiteral("False"));
+        emit hideFeedbackLevelChanged(on);
+    });
+    vbox->addWidget(m_chkHideFeedback);
+
+    // From Thetis setup.designer.cs:10619-10630 [v2.10.3.13] chkSwapREDBluePSAColours:
+    //   "Swap red and blue PS-A feeback" (designer text — typo preserved
+    //   here as a source-cite reference; NereusSDR uses corrected spelling
+    //   "feedback colours" in the user-visible text).
+    m_chkSwapRedBlue = new QCheckBox(
+        tr("Swap red and blue PS-A feedback colours"), group);
+    m_chkSwapRedBlue->setObjectName(QStringLiteral("chkSwapREDBluePSAColours"));
+    m_chkSwapRedBlue->setToolTip(
+        tr("For users with red/blue color blindness or alternate display "
+           "preferences. Mirror of FB-label left-click."));
+    m_chkSwapRedBlue->setChecked(
+        AppSettings::instance().value(QStringLiteral("InvertRedBluePsa"),
+                                       QStringLiteral("False")).toString() == QStringLiteral("True"));
+    connect(m_chkSwapRedBlue, &QCheckBox::toggled, this, [this](bool on) {
+        AppSettings::instance().setValue(QStringLiteral("InvertRedBluePsa"),
+                                          on ? QStringLiteral("True") : QStringLiteral("False"));
+        emit invertRedBluePsaChanged(on);
+    });
+    vbox->addWidget(m_chkSwapRedBlue);
+
+    // Bidirectional sync: when PureSignal flips state from another source
+    // (e.g. PsaIndicatorWidget left/right click on the bottom-banner FB
+    // label per ucInfoBar.cs:1042-1054 [v2.10.3.13]), reflect the change
+    // here without echoing back through the toggled lambdas above.
+    if (auto* radio = this->model()) {
+        if (auto* ps = radio->pureSignal()) {
+            connect(ps, &PureSignal::hideFeedbackChanged, this,
+                    [this](bool on) {
+                        if (m_chkHideFeedback &&
+                            m_chkHideFeedback->isChecked() != on) {
+                            QSignalBlocker block(m_chkHideFeedback);
+                            m_chkHideFeedback->setChecked(on);
+                        }
+                    });
+            connect(ps, &PureSignal::invertRedBlueChanged, this,
+                    [this](bool on) {
+                        if (m_chkSwapRedBlue &&
+                            m_chkSwapRedBlue->isChecked() != on) {
+                            QSignalBlocker block(m_chkSwapRedBlue);
+                            m_chkSwapRedBlue->setChecked(on);
+                        }
+                    });
+        }
+    }
 
     contentLayout()->addWidget(group);
 }

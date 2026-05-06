@@ -132,6 +132,14 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
     };
     wire(m_radioInfoTab,   QStringLiteral("radioInfo"));
     wire(m_antennaAlexTab, QStringLiteral("antennaAlex"));
+
+    // Phase 3M-4 Task 11: pass-through for the IMD-warning-gated HPF Bypass
+    // on PureSignal feedback toggle.  Originates in AntennaAlexAlex1Tab,
+    // bubbles through AntennaAlexTab; HardwarePage re-emits so SetupDialog
+    // can wire it to the live PureSignal coordinator without traversing the
+    // settingChanged key namespace.
+    connect(m_antennaAlexTab, &AntennaAlexTab::hpfBypassOnPsChanged,
+            this,             &HardwarePage::hpfBypassOnPsChanged);
     wire(m_ocOutputsTab,   QStringLiteral("ocOutputs"));
     wire(m_xvtrTab,        QStringLiteral("xvtr"));
     wire(m_pureSignalTab,  QStringLiteral("pureSignal"));

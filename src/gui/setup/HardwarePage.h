@@ -106,6 +106,13 @@ public:
     QString tabTextForTest(Tab t) const;
 #endif
 
+signals:
+    // Phase 3M-4 Task 11: pass-through for the IMD-warning-gated HPF Bypass
+    // on PureSignal feedback toggle.  Originates in AntennaAlexAlex1Tab,
+    // re-emitted by AntennaAlexTab; HardwarePage forwards to SetupDialog
+    // which wires it to the live PureSignal coordinator.
+    void hpfBypassOnPsChanged(bool checked);
+
 public slots:
     // Reconciles tab visibility from BoardCapabilities flags and restores
     // persisted values for the incoming radio's MAC.
