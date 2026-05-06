@@ -3428,6 +3428,13 @@ nereus_add_test(tst_detector_modes)
 # pixels finite (no NaN / Inf from any detector x averaging combo).
 nereus_add_test(tst_spectrum_pipeline_modes)
 
+# Phase 2 -- FFTEngine window function ports (Rectangular / BH-4T / Hann /
+# Flat-Top / Hamming / Kaiser / BH-7T) per WDSP analyzer.c:52-173 +
+# Thetis combo item ordering (setup.designer.cs:34966-34973 [v2.10.3.13]).
+# Verifies enum values match WDSP wire format, ENB falls in the published
+# range for each window, Kaiser PiAlpha setter clamps non-positive input.
+nereus_add_test(tst_window_functions)
+
 # ── Task 2.5: ActivePeakHoldTrace ────────────────────────────────────────────
 # Unit tests for the per-bin peak-hold trace:
 #   peak_value_persists_until_decay: hold + 0.2 dB/frame decay verified

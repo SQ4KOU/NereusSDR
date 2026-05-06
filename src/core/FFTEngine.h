@@ -73,16 +73,20 @@
 namespace NereusSDR {
 
 // Window function types for FFT pre-processing.
-// From Thetis: these match the WDSP SetAnalyzer window options.
+// Integer values match Thetis WDSP analyzer.c:52-173 [v2.10.3.13]
+// new_window() switch type codes exactly, so the values are wire-compatible
+// with Thetis's combo and any future WDSP API surface.  Enum order also
+// matches Thetis comboDispWinType item ordering (setup.designer.cs:34966-
+// 34973 [v2.10.3.13]) so combo-index == enum-value with no remap.
 enum class WindowFunction : int {
-    None = 0,
-    Hanning,
-    Hamming,
-    BlackmanHarris4,   // 4-term Blackman-Harris (default, -92 dB sidelobes)
-    BlackmanHarris7,   // 7-term Blackman-Harris
-    Kaiser,
-    Flat,              // flat-top for calibration
-    Count
+    Rectangular        = 0,  // analyzer.c case 0
+    BlackmanHarris4    = 1,  // 4-term Blackman-Harris, analyzer.c case 1
+    Hann               = 2,  // analyzer.c case 2
+    FlatTop            = 3,  // flat-top for calibration, analyzer.c case 3
+    Hamming            = 4,  // analyzer.c case 4
+    Kaiser             = 5,  // parameterised by KaiserPi, analyzer.c case 5
+    BlackmanHarris7    = 6,  // 7-term Blackman-Harris, analyzer.c case 6
+    Count              = 7
 };
 
 // Per-receiver FFT computation engine.
@@ -110,6 +114,13 @@ public:
     WindowFunction windowFunction() const {
         return static_cast<WindowFunction>(m_windowFunc.load());
     }
+
+    // Kaiser window shape parameter (PiAlpha = pi * alpha).  Higher values
+    // narrow the main lobe + raise sidelobes; lower values widen.  Only
+    // applied when windowFunction() == Kaiser.
+    // From Thetis specHPSDR.cs:145 [v2.10.3.13] private double kaiser_pi = 14.0;
+    void setKaiserPi(double pi);
+    double kaiserPi() const { return m_kaiserPi.load(); }
 
     void setSampleRate(double rateHz);
     double sampleRate() const { return m_sampleRate.load(); }
@@ -186,6 +197,9 @@ private:
     std::atomic<int>    m_fftSize{4096};
     std::atomic<int>    m_pendingFftSize{0};  // 0 = no change pending
     std::atomic<int>    m_windowFunc{static_cast<int>(WindowFunction::BlackmanHarris4)};
+    // Kaiser window shape parameter.  Default 14.0 from Thetis specHPSDR.cs:
+    // 145 [v2.10.3.13] private double kaiser_pi = 14.0.
+    std::atomic<double> m_kaiserPi{14.0};
     std::atomic<double> m_sampleRate{48000.0};
     std::atomic<int>    m_targetFps{30};
     // From Thetis setup.designer.cs:33732 udDisplayDecimation [v2.10.3.13].

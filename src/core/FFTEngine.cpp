@@ -104,6 +104,41 @@ void FFTEngine::setWindowFunction(WindowFunction wf)
     m_windowFunc.store(static_cast<int>(wf));
 }
 
+// From Thetis specHPSDR.cs:145 [v2.10.3.13] -- Kaiser window shape parameter.
+// Range mirrors Thetis's runtime range (any positive double); Thetis's UI
+// surfaces a numeric editor rather than a slider for this control.
+void FFTEngine::setKaiserPi(double pi)
+{
+    if (pi <= 0.0) { return; }
+    m_kaiserPi.store(pi);
+}
+
+// Modified Bessel function of the first kind, order 0.  Verbatim port of
+// WDSP analyzer.c:33-50 [v2.10.3.13] (Numerical Recipes polynomial
+// approximations: low-x branch via 6th-order series in (x/3.75)^2,
+// high-x branch via asymptotic expansion).  Used by the Kaiser window
+// constructor in computeWindow().
+//
+// From WDSP analyzer.c:7 -- Copyright (C) 2012 David McQuate, WA8YWQ
+// "Kaiser window & Bessel function added".
+static double bessi0(double x)
+{
+    double ax, ans, y;
+    if ((ax = std::fabs(x)) < 3.75) {
+        y = x / 3.75;
+        y = y * y;
+        ans = 1.0 + y * (3.5156229 + y * (3.0899424 + y * (1.2067492
+            + y * (0.2659732 + y * (0.360768e-1 + y * 0.45813e-2)))));
+    } else {
+        y = 3.75 / ax;
+        ans = (std::exp(ax) / std::sqrt(ax)) * (0.39894228 + y * (0.1328592e-1
+            + y * (0.225319e-2 + y * (-0.157565e-2 + y * (0.916281e-2
+            + y * (-0.2057706e-1 + y * (0.2635537e-1 + y * (-0.1647633e-1
+            + y * 0.392377e-2))))))));
+    }
+    return ans;
+}
+
 void FFTEngine::setSampleRate(double rateHz)
 {
     m_sampleRate.store(rateHz);
@@ -212,65 +247,108 @@ void FFTEngine::computeWindow()
 
     WindowFunction wf = static_cast<WindowFunction>(m_windowFunc.load());
 
+    // All 7 cases mirror WDSP analyzer.c:52-173 [v2.10.3.13] new_window()
+    // switch ordering exactly (case 0 = Rectangular ... case 6 = BH-7T).
+    // WDSP normalises the window in-place by inv_coherent_gain at line 79
+    // / 95 / 113 / 128 / 144 / 168; NereusSDR keeps the raw window and
+    // applies the gain compensation post-FFT via m_dbmOffset (computed
+    // below from sum), so coefficient values here are the bare
+    // mathematical definitions without WDSP's normalisation step.
+    const double pi = M_PI;
+    const double arg0 = (size > 1) ? 2.0 * pi / static_cast<double>(size - 1) : 0.0;
+
     switch (wf) {
+    case WindowFunction::Rectangular:
+        // From WDSP analyzer.c:59-66 [v2.10.3.13] case 0 -- all 1.0.
+        std::fill(m_window.begin(), m_window.end(), 1.0f);
+        break;
+
     case WindowFunction::BlackmanHarris4: {
-        // 4-term Blackman-Harris — from gpu-waterfall.md:190-200
-        constexpr float a0 = 0.35875f;
-        constexpr float a1 = 0.48829f;
-        constexpr float a2 = 0.14128f;
-        constexpr float a3 = 0.01168f;
+        // From WDSP analyzer.c:67-83 [v2.10.3.13] case 1 -- 4-term BH.
         for (int i = 0; i < size; ++i) {
-            float n = static_cast<float>(i) / static_cast<float>(size);
-            m_window[i] = a0
-                        - a1 * std::cos(2.0f * static_cast<float>(M_PI) * n)
-                        + a2 * std::cos(4.0f * static_cast<float>(M_PI) * n)
-                        - a3 * std::cos(6.0f * static_cast<float>(M_PI) * n);
+            const double a = arg0 * static_cast<double>(i);
+            m_window[i] = static_cast<float>(
+                  0.35875
+                - 0.48829 * std::cos(a)
+                + 0.14128 * std::cos(2.0 * a)
+                - 0.01168 * std::cos(3.0 * a));
         }
         break;
     }
-    case WindowFunction::Hanning:
+
+    case WindowFunction::Hann:
+        // From WDSP analyzer.c:84-99 [v2.10.3.13] case 2 -- Hann.
         for (int i = 0; i < size; ++i) {
-            float n = static_cast<float>(i) / static_cast<float>(size);
-            m_window[i] = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(M_PI) * n));
+            m_window[i] = static_cast<float>(
+                0.5 * (1.0 - std::cos(static_cast<double>(i) * arg0)));
         }
         break;
+
+    case WindowFunction::FlatTop:
+        // From WDSP analyzer.c:100-116 [v2.10.3.13] case 3 -- 5-term flat-top
+        // (note: WDSP's flat-top uses the .21557895 / .41663158 / .277263158
+        // / .083578947 / .006947368 normalised coefficients, which differ
+        // from the un-normalised set NereusSDR previously shipped).
+        for (int i = 0; i < size; ++i) {
+            const double a = arg0 * static_cast<double>(i);
+            m_window[i] = static_cast<float>(
+                  0.21557895
+                - 0.41663158  * std::cos(a)
+                + 0.277263158 * std::cos(2.0 * a)
+                - 0.083578947 * std::cos(3.0 * a)
+                + 0.006947368 * std::cos(4.0 * a));
+        }
+        break;
+
     case WindowFunction::Hamming:
+        // From WDSP analyzer.c:117-132 [v2.10.3.13] case 4 -- Hamming.
         for (int i = 0; i < size; ++i) {
-            float n = static_cast<float>(i) / static_cast<float>(size);
-            m_window[i] = 0.54f - 0.46f * std::cos(2.0f * static_cast<float>(M_PI) * n);
+            m_window[i] = static_cast<float>(
+                0.54 - 0.46 * std::cos(static_cast<double>(i) * arg0));
         }
         break;
-    case WindowFunction::Flat:
-        // Flat-top for calibration — minimal scalloping loss
+
+    case WindowFunction::Kaiser: {
+        // From WDSP analyzer.c:133-148 [v2.10.3.13] case 5 -- Kaiser via
+        // bessi0 (modified Bessel function of the first kind, order 0).
+        // I(beta * sqrt(1 - (2i/(N-1) - 1)^2)) / I(beta), beta = PiAlpha.
+        const double piAlpha = m_kaiserPi.load();
+        const double i0Beta  = bessi0(piAlpha);
+        const double denom   = static_cast<double>(size - 1);
         for (int i = 0; i < size; ++i) {
-            float n = static_cast<float>(i) / static_cast<float>(size);
-            float pi = static_cast<float>(M_PI);
-            m_window[i] = 1.0f
-                        - 1.93f  * std::cos(2.0f * pi * n)
-                        + 1.29f  * std::cos(4.0f * pi * n)
-                        - 0.388f * std::cos(6.0f * pi * n)
-                        + 0.028f * std::cos(8.0f * pi * n);
+            const double t = (denom > 0.0)
+                ? (2.0 * static_cast<double>(i) / denom - 1.0)
+                : 0.0;
+            const double arg = piAlpha * std::sqrt(std::max(0.0, 1.0 - t * t));
+            m_window[i] = static_cast<float>(bessi0(arg) / i0Beta);
         }
         break;
-    case WindowFunction::None:
-        std::fill(m_window.begin(), m_window.end(), 1.0f);
+    }
+
+    case WindowFunction::BlackmanHarris7: {
+        // From WDSP analyzer.c:149-172 [v2.10.3.13] case 6 -- 7-term BH
+        // expressed as a Chebyshev polynomial in cos(arg).  Note the
+        // WDSP source uses Horner-form evaluation; coefficients preserved
+        // verbatim including scientific notation.
+        for (int i = 0; i < size; ++i) {
+            const double c = std::cos(arg0 * static_cast<double>(i));
+            m_window[i] = static_cast<float>(
+                + 6.3964424114390378e-02
+                + c * (- 2.3993864599352804e-01
+                + c * (+ 3.5015956323820469e-01
+                + c * (- 2.4774111897080783e-01
+                + c * (+ 8.5438256055858031e-02
+                + c * (- 1.2320203369293225e-02
+                + c * (+ 4.3778825791773474e-04 ))))))
+            );
+        }
         break;
+    }
+
+    case WindowFunction::Count:
     default:
-        // BlackmanHarris7, Kaiser — TODO: implement when needed
-        // For now fall back to BlackmanHarris4
-        {
-            constexpr float a0 = 0.35875f;
-            constexpr float a1 = 0.48829f;
-            constexpr float a2 = 0.14128f;
-            constexpr float a3 = 0.01168f;
-            for (int i = 0; i < size; ++i) {
-                float n = static_cast<float>(i) / static_cast<float>(size);
-                m_window[i] = a0
-                            - a1 * std::cos(2.0f * static_cast<float>(M_PI) * n)
-                            + a2 * std::cos(4.0f * static_cast<float>(M_PI) * n)
-                            - a3 * std::cos(6.0f * static_cast<float>(M_PI) * n);
-            }
-        }
+        // Sentinel value -- treat as Rectangular to avoid undefined state.
+        std::fill(m_window.begin(), m_window.end(), 1.0f);
         break;
     }
 

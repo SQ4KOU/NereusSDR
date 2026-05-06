@@ -141,7 +141,7 @@ void SpectrumDefaultsPage::loadFromRenderer()
     auto* fe = model()->fftEngine();
     if (!sw || !fe) { return; }
 
-    QSignalBlocker b1(m_fftSizeCombo);
+    QSignalBlocker b1(m_fftSizeSlider);
     QSignalBlocker b2(m_windowCombo);
     QSignalBlocker b3(m_fpSlider);
     QSignalBlocker b5(m_fillToggle);
@@ -153,21 +153,25 @@ void SpectrumDefaultsPage::loadFromRenderer()
     QSignalBlocker b11(m_peakHoldDelaySpin);
     QSignalBlocker b12(m_threadPriorityCombo);
 
-    // FFT size — map actual FFT size to combo index.
+    // FFT size -- recover slider value from current FFT size via log2 /
+    // (4096) per Thetis setup.cs:16142 [v2.10.3.13]
+    //   FFTSize = 4096 * Math.Pow(2, Math.Floor(slider.Value))
+    // Inverse: slider = log2(FFTSize / 4096), clamped to [0, 6].
     const int fs = fe->fftSize();
-    const QString fsText = QString::number(fs);
-    const int idx = m_fftSizeCombo->findText(fsText);
-    if (idx >= 0) { m_fftSizeCombo->setCurrentIndex(idx); }
-
-    // FFT window — enum → index (5 enum values but 4 UI options; map
-    // BlackmanHarris4 → Blackman-Harris, Hanning → Hann, Hamming → Hamming,
-    // Flat → Flat-Top. BlackmanHarris7 / Kaiser / None fall back to BH4).
-    switch (fe->windowFunction()) {
-        case WindowFunction::Hanning: m_windowCombo->setCurrentIndex(1); break;
-        case WindowFunction::Hamming: m_windowCombo->setCurrentIndex(2); break;
-        case WindowFunction::Flat:    m_windowCombo->setCurrentIndex(3); break;
-        default:                      m_windowCombo->setCurrentIndex(0); break;
+    int sliderVal = 0;
+    if (fs > 4096) {
+        int n = fs / 4096;
+        while (n > 1 && sliderVal < 6) { n >>= 1; ++sliderVal; }
     }
+    sliderVal = qBound(0, sliderVal, 6);
+    m_fftSizeSlider->setValue(sliderVal);
+    if (m_fftSizeReadout) {
+        m_fftSizeReadout->setText(QString::number(fs));
+    }
+
+    // FFT window -- enum value matches combo index 1:1 (both follow WDSP
+    // analyzer.c:52-173 [v2.10.3.13] case ordering).
+    m_windowCombo->setCurrentIndex(static_cast<int>(fe->windowFunction()));
 
     m_fpSlider->setValue(fe->outputFps());
     // Task 2.1: sync new split combos.
@@ -318,39 +322,84 @@ void SpectrumDefaultsPage::buildUI()
     auto* fftForm  = new QFormLayout(fftGroup);
     fftForm->setSpacing(6);
 
-    m_fftSizeCombo = new QComboBox(fftGroup);
-    m_fftSizeCombo->addItems({QStringLiteral("1024"), QStringLiteral("2048"),
-                              QStringLiteral("4096"), QStringLiteral("8192"),
-                              QStringLiteral("16384")});
-    m_fftSizeCombo->setCurrentText(QStringLiteral("4096"));
-    // Thetis: setup.designer.cs:35043 (tbDisplayFFTSize) — no upstream tooltip; rewritten
-    // Thetis original: (none)
-    m_fftSizeCombo->setToolTip(QStringLiteral("FFT size used for spectrum analysis. Larger = finer frequency resolution at higher CPU cost."));
-    connect(m_fftSizeCombo, &QComboBox::currentTextChanged,
-            this, [this](const QString& txt) {
+    // Phase 2: FFT size slider, range 0..6, default 5 (=131072 bins).
+    // From Thetis setup.designer.cs:35043 [v2.10.3.13] tbDisplayFFTSize
+    // (Maximum=6, Value=5).  Mapping per setup.cs:16142:
+    //   FFTSize = 4096 * Math.Pow(2, Math.Floor(slider.Value))
+    // i.e. slider 0..6 -> {4096, 8192, 16384, 32768, 65536, 131072, 262144}.
+    m_fftSizeSlider = new QSlider(Qt::Horizontal, fftGroup);
+    m_fftSizeSlider->setRange(0, 6);
+    m_fftSizeSlider->setSingleStep(1);
+    m_fftSizeSlider->setPageStep(1);
+    m_fftSizeSlider->setTickPosition(QSlider::TicksBelow);
+    m_fftSizeSlider->setTickInterval(1);
+    m_fftSizeSlider->setValue(0);  // synced from FFTEngine in loadFromRenderer
+    m_fftSizeSlider->setToolTip(QStringLiteral(
+        "FFT size used for spectrum analysis. Range 4096 to 262144 in "
+        "powers of two. Larger = finer frequency resolution and a smaller "
+        "bin width, at higher CPU cost."));
+    m_fftSizeReadout = new QLabel(QStringLiteral("4096"), fftGroup);
+    m_fftSizeReadout->setMinimumWidth(54);
+    m_fftSizeReadout->setToolTip(QStringLiteral(
+        "Current FFT size in bins (4096 * 2^slider)."));
+    connect(m_fftSizeSlider, &QSlider::valueChanged,
+            this, [this](int v) {
+        const int newSize = 4096 << qBound(0, v, 6);
+        if (m_fftSizeReadout) {
+            m_fftSizeReadout->setText(QString::number(newSize));
+        }
         if (model() && model()->fftEngine()) {
-            model()->fftEngine()->setFftSize(txt.toInt());
+            model()->fftEngine()->setFftSize(newSize);
+        }
+        // Bin-width readout: live update from new size.  Mirrors Thetis
+        // setup.cs:16151-16152 [v2.10.3.13] -- lblDisplayBinWidth.Text
+        // refreshes each time the slider scrolls.
+        if (m_binWidthReadout && model() && model()->spectrumWidget()) {
+            const double bw = model()->spectrumWidget()->binWidthHz();
+            m_binWidthReadout->setText(
+                bw > 0.0
+                    ? QStringLiteral("%1 Hz/bin").arg(bw, 0, 'f', 3)
+                    : QStringLiteral("- Hz/bin"));
         }
     });
-    fftForm->addRow(QStringLiteral("FFT Size:"), m_fftSizeCombo);
+    {
+        // Slider + numeric readout share the FormLayout row so the combo
+        // labels align with the slider's left edge as before.
+        auto* row = new QWidget(fftGroup);
+        auto* hl  = new QHBoxLayout(row);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->setSpacing(6);
+        hl->addWidget(m_fftSizeSlider);
+        hl->addWidget(m_fftSizeReadout);
+        fftForm->addRow(QStringLiteral("FFT Size:"), row);
+    }
 
+    // Phase 2: Window combo with all 7 Thetis-faithful items, indexes
+    // matching WindowFunction enum 1:1 (both follow WDSP analyzer.c case
+    // ordering -- setup.designer.cs:34966-34973 [v2.10.3.13]).
     m_windowCombo = new QComboBox(fftGroup);
-    m_windowCombo->addItems({QStringLiteral("Blackman-Harris"), QStringLiteral("Hann"),
-                             QStringLiteral("Hamming"),         QStringLiteral("Flat-Top")});
-    // From Thetis setup.Designer.cs:34962 [v2.10.3.13] — comboDispWinType
-    //   FFT window selection (NereusSDR exposes 4 of 7 Thetis options for common cases)
-    m_windowCombo->setToolTip(QStringLiteral("FFT window function. Blackman-Harris offers best sidelobe rejection; Flat-Top is best for amplitude accuracy."));
+    m_windowCombo->addItems({
+        QStringLiteral("Rectangular"),         // WindowFunction::Rectangular     (0)
+        QStringLiteral("Blackman-Harris 4T"),  // WindowFunction::BlackmanHarris4 (1)
+        QStringLiteral("Hann"),                // WindowFunction::Hann            (2)
+        QStringLiteral("Flat-Top"),            // WindowFunction::FlatTop         (3)
+        QStringLiteral("Hamming"),             // WindowFunction::Hamming         (4)
+        QStringLiteral("Kaiser"),              // WindowFunction::Kaiser          (5)
+        QStringLiteral("Blackman-Harris 7T")   // WindowFunction::BlackmanHarris7 (6)
+    });
+    m_windowCombo->setToolTip(QStringLiteral(
+        "FFT window function. Rectangular has the narrowest main lobe but "
+        "the worst sidelobes. Blackman-Harris (4T or 7T) gives strong "
+        "sidelobe rejection. Flat-Top is best for amplitude calibration. "
+        "Kaiser is parameterised (KaiserPi shape parameter)."));
     connect(m_windowCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int i) {
         if (!model() || !model()->fftEngine()) { return; }
-        WindowFunction wf = WindowFunction::BlackmanHarris4;
-        switch (i) {
-            case 0: wf = WindowFunction::BlackmanHarris4; break;
-            case 1: wf = WindowFunction::Hanning; break;
-            case 2: wf = WindowFunction::Hamming; break;
-            case 3: wf = WindowFunction::Flat; break;
-        }
-        model()->fftEngine()->setWindowFunction(wf);
+        const int clamped = qBound(0,
+            i,
+            static_cast<int>(WindowFunction::Count) - 1);
+        model()->fftEngine()->setWindowFunction(
+            static_cast<WindowFunction>(clamped));
     });
     fftForm->addRow(QStringLiteral("Window:"), m_windowCombo);
 

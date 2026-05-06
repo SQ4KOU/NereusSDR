@@ -98,8 +98,18 @@ private:
     void pushFps(int fps);
 
     // Section: FFT
-    QComboBox* m_fftSizeCombo{nullptr};      // 1024/2048/4096/8192/16384
-    QComboBox* m_windowCombo{nullptr};       // Blackman-Harris/Hann/Hamming/Flat-Top
+    // Phase 2: FFT size is a 0..6 slider (Thetis tbDisplayFFTSize per
+    // setup.designer.cs:35043 [v2.10.3.13]).  Slider value maps to
+    // 4096 << v -> {4096, 8192, 16384, 32768, 65536, 131072, 262144}.
+    // m_fftSizeReadout shows the current size as text alongside the slider.
+    QSlider*   m_fftSizeSlider{nullptr};
+    QLabel*    m_fftSizeReadout{nullptr};
+    // Window combo: 7 Thetis-faithful items (Rectangular / Blackman-Harris
+    // 4T / Hann / Flat-Top / Hamming / Kaiser / Blackman-Harris 7T) per
+    // setup.designer.cs:34966-34973 [v2.10.3.13].  Combo index maps 1:1
+    // to WindowFunction enum integer value (both follow WDSP analyzer.c
+    // case codes).
+    QComboBox* m_windowCombo{nullptr};
 
     // Section: Rendering
     QSlider*   m_fpSlider{nullptr};          // 10–60 fps
