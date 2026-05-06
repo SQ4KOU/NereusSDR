@@ -353,11 +353,18 @@ void FFTEngine::processFrame()
     m_frameTimer.restart();
     m_frameTimerStarted = true;
 
-    // Emit both signals in lock-step.  Existing dBm consumers stay on
-    // fftReady; the new Thetis-faithful detector/avenger pipeline (Phase
-    // 1A.4) subscribes to fftReadyLinear.
+    // Emit both signals in lock-step.  fftReady serves chrome / AGC
+    // consumers that need full-band dBm (ClarityController, NoiseFloorTracker);
+    // fftReadyLinear feeds the Thetis-faithful spectrum render pipeline
+    // (detector + avenger) which operates on linear-domain bins.  The
+    // downstream detector needs windowEnb for invEnb scaling (analyzer.c:
+    // 368-441 [v2.10.3.13]) and the avenger needs dbmOffset to apply the
+    // window coherent-gain compensation that binsDbm gets via the +offset
+    // term at line 348 above.  Both ride the same signal — keeps slot
+    // and bins in lock-step without a separate setter coordination dance.
     emit fftReady(m_receiverId, binsDbm);
-    emit fftReadyLinear(m_receiverId, binsLinear);
+    emit fftReadyLinear(m_receiverId, binsLinear,
+                        m_windowEnb, static_cast<double>(m_dbmOffset));
 #endif
 }
 

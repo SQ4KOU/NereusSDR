@@ -3409,14 +3409,12 @@ nereus_add_test(tst_dsp_options_warning_logic)
 #   RMS computes root-mean-square; empty input / zero outputBins are no-ops.
 #   Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free).
 #
-# tst_averaging_modes: pure math over SpectrumWidget::applyAveraging().
-#   None passes through unchanged; Recursive exponential smoothing;
-#   TimeWindow uses slower effective alpha (0.33×); LogRecursive blends
-#   in linear power domain then converts back to dB; bootstrap on empty
-#   state; size-mismatch resets to new frame.
-#   Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free).
+# Note: tst_averaging_modes was retired with the SpectrumWidget::applyAveraging
+# static helper.  Frame averaging is now performed by SpectrumAvenger
+# (verbatim WDSP analyzer.c:464-554 [v2.10.3.13] port) on linear-power
+# display pixels; coverage of that path is exercised end-to-end via the
+# running app.  Direct SpectrumAvenger unit tests are a follow-up item.
 nereus_add_test(tst_detector_modes)
-nereus_add_test(tst_averaging_modes)
 
 # ── Task 2.5: ActivePeakHoldTrace ────────────────────────────────────────────
 # Unit tests for the per-bin peak-hold trace:

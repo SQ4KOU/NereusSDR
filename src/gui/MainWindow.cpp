@@ -974,9 +974,15 @@ void MainWindow::buildUI()
     connect(m_radioModel, &RadioModel::rawIqData,
             m_fftEngine, &FFTEngine::feedIQ);
 
-    // Wire: FFTEngine FFT bins → SpectrumWidget (auto-queued: spectrum → main thread)
-    connect(m_fftEngine, &FFTEngine::fftReady,
-            m_spectrumWidget, &SpectrumWidget::updateSpectrum);
+    // Wire: FFTEngine linear-power frame -> SpectrumWidget render pipeline
+    // (auto-queued: spectrum thread -> main thread).  fftReadyLinear carries
+    // the raw |X[k]|² bins plus windowEnb + dbmOffset metadata so the
+    // detector + avenger pipeline reproduces the legacy fftReady dBm output
+    // (FFTEngine.cpp:348 [v2.10.3.13]) at display-pixel resolution.  fftReady
+    // (full-bin dBm) is kept as a separate signal for chrome / AGC consumers
+    // (ClarityController, NoiseFloorTracker) wired below.
+    connect(m_fftEngine, &FFTEngine::fftReadyLinear,
+            m_spectrumWidget, &SpectrumWidget::updateSpectrumLinear);
 
     // Phase 3G-8: expose view hooks on RadioModel so Display setup pages can
     // reach the renderer / FFT engine without depending on MainWindow.

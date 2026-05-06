@@ -111,8 +111,8 @@ void TestWaterfallDefaultsChanges::stopOnTx_skipsRowWhenTxActive()
     w.setWaterfallStopOnTx(true);
     w.setActivePeakHoldTxActive(true);
     // Calling pushWaterfallRow (private) requires a public entry; the method
-    // is exercised indirectly via updateSpectrum, which we can't call headless.
-    // Verify the setter combination is at minimum non-crashing.
+    // is exercised indirectly via updateSpectrumLinear, which we can't call
+    // headless.  Verify the setter combination is at minimum non-crashing.
     QVERIFY(w.waterfallStopOnTx());
     // No crash = pass.
 }

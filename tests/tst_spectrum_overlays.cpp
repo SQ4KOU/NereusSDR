@@ -119,8 +119,8 @@ private slots:
     // From Thetis setup.cs:7061 [v2.10.3.13] lblDisplayBinWidth.
     void bin_width_hz_default_is_nonzero()
     {
-        // SpectrumWidget default: m_sampleRateHz=768000, m_smoothed is empty
-        // so binWidthHz uses a fallback FFT size of 4096.
+        // SpectrumWidget default: m_sampleRateHz=768000, m_fullLinearBins
+        // is empty so binWidthHz uses a fallback FFT size of 4096.
         SpectrumWidget w;
         // With no FFT data, binWidthHz returns 768000 / 4096 ≈ 187.5 Hz.
         const double bw = w.binWidthHz();

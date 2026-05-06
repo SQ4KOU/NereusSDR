@@ -161,6 +161,7 @@ mw0lge@grange-lane.co.uk
 
 #include "spectrum/ActivePeakHoldTrace.h"
 #include "spectrum/PeakBlobDetector.h"
+#include "spectrum/SpectrumAvenger.h"
 
 #include <utility>
 
@@ -365,12 +366,13 @@ public:
     void setWaterfallAveraging(SpectrumAveraging a);
     SpectrumAveraging waterfallAveraging() const { return m_waterfallAveraging; }
 
-    // Static helpers for detector/averaging math. Exposed for unit tests.
-    // From Thetis specHPSDR.cs:302-415 [v2.10.3.13].
+    // Static helper for detector math. Exposed for unit tests.
+    // Note: legacy bin-reduction helper, kept for tst_detector_modes;
+    // production rendering uses applySpectrumDetector() (free function in
+    // spectrum/SpectrumDetector.h, verbatim WDSP analyzer.c port) instead.
+    // From Thetis specHPSDR.cs:302-321 [v2.10.3.13] DetTypePan / DetTypeWF.
     static void applyDetector(const QVector<float>& input, QVector<float>& output,
                               SpectrumDetector mode, int outputBins);
-    static void applyAveraging(const QVector<float>& newFrame, QVector<float>& state,
-                               SpectrumAveraging mode, float alpha);
 
     // Smoothing time constant for Weighted / Logarithmic / TimeWindow.
     // 0.0 = no smoothing, 1.0 = infinite smoothing.
@@ -819,9 +821,24 @@ public slots:
     // Phase 3Q-8: update connection state for the disconnect overlay.
     void setConnectionState(NereusSDR::ConnectionState s);
 
-    // Feed a new FFT frame. binsDbm are dBm values, one per frequency bin.
-    // Called from the main thread after FFTEngine delivers the frame.
-    void updateSpectrum(int receiverId, const QVector<float>& binsDbm);
+    // Feed a new FFT frame.  binsLinear are |X[k]|² linear-power values,
+    // one per frequency bin (full FFT, neg-freq first then pos-freq).
+    // windowEnb is the Equivalent Noise Bandwidth of the FFT window in
+    // bins; the detector applies invEnb = 1/windowEnb for Average / Sample
+    // / RMS modes (analyzer.c:368-441 [v2.10.3.13]).  dbmOffset is the
+    // window coherent-gain compensation -20·log10(Σw[i]) that the avenger
+    // applies via scale = 10^(dbmOffset/10) so post-pipeline pixels read
+    // calibrated dBm.  Called on the main thread after FFTEngine delivers
+    // the frame via fftReadyLinear.
+    //
+    // Pipeline: visibleBinRange() slice -> applySpectrumDetector() ->
+    // SpectrumAvenger::apply() -> m_renderedPixels (dBm, displayWidth).
+    // Mirrors WDSP analyzer.c detector() at :283 + avenger() at :464
+    // [v2.10.3.13] -- the same two-stage reduction Thetis runs per
+    // display plane.  Same slice feeds the waterfall pipeline (own
+    // detector + avenger) and lands in m_wfRenderedPixels.
+    void updateSpectrumLinear(int receiverId, const QVector<float>& binsLinear,
+                              double windowEnb, double dbmOffset);
 
     // NF-aware grid slot — wired to ClarityController::noiseFloorChanged in MainWindow.
     // From Thetis console.cs:46074-46086 [v2.10.3.13] tmrAutoAGC_Tick NF grid block.
@@ -899,15 +916,17 @@ private:
     void drawSpectrum(QPainter& p, const QRect& specRect);
     // Active Peak Hold separate render pass (Q14.1). Called from drawSpectrum()
     // after the fill path so the peak trace sits on top of fill but below
-    // the live trace line. From Thetis display.cs m_bActivePeakHold [v2.10.3.13].
-    void paintActivePeakHoldTrace(QPainter& p, const QRect& specRect,
-                                  int firstBin, int lastBin, float xStep);
+    // the live trace line.  Iterates the per-display-pixel peak array
+    // (sized to m_renderedPixels.size()).
+    // From Thetis Display.cs:5341 [v2.10.3.13] -- spectralPeaks[i] indexed
+    // by display pixel.
+    void paintActivePeakHoldTrace(QPainter& p, const QRect& specRect);
     // Peak Blobs render pass (Task 2.6). Draws labeled ellipses at the top-N
     // local maxima. Called from drawSpectrum() after the live trace line so
-    // the blobs sit on top of all spectrum content.
-    // From Thetis display.cs:5453-5508 [v2.10.3.13].
-    void paintPeakBlobs(QPainter& p, const QRect& specRect,
-                        int firstBin, int lastBin, float xStep);
+    // the blobs sit on top of all spectrum content.  Blob.binIndex is now
+    // a display-pixel index (0..displayWidth-1) per the pipeline migration.
+    // From Thetis Display.cs:5453-5508 [v2.10.3.13].
+    void paintPeakBlobs(QPainter& p, const QRect& specRect);
     void drawWaterfall(QPainter& p, const QRect& wfRect);
     // HIGH SWR / PA safety overlay — ported from display.cs:4183-4201 [v2.10.3.13]
     void paintHighSwrOverlay(QPainter& p);
@@ -976,12 +995,37 @@ private:
     std::pair<int, int> visibleBinRange(int binCount) const;
 
     // ---- Waterfall helpers ----
-    void   pushWaterfallRow(const QVector<float>& bins);
+    // Feeds a post-pipeline waterfall row (display-pixel dBm, length
+    // displayWidth).  Caller is updateSpectrumLinear after the waterfall
+    // detector + avenger have run.  Inner AGC + NF-AGC + threshold compute
+    // operate on display pixels per Thetis Display.cs:6713-6738
+    // [v2.10.3.13] (waterfall_data[i] indexed by pixel).
+    void   pushWaterfallRow(const QVector<float>& wfPixelsDbm);
     QRgb   dbmToRgb(float dbm) const;
 
-    // ---- FFT data ----
-    QVector<float> m_bins;       // latest raw FFT frame (dBm)
-    QVector<float> m_smoothed;   // exponential-smoothed for display
+    // ---- FFT pipeline state ----
+    // Single Thetis-faithful pipeline: linear-power FFT bins -> visible
+    // slice -> detector -> avenger -> dBm display pixels.  Spectrum and
+    // waterfall keep separate detector + avenger state per WDSP per-plane
+    // model (each ANALYZER_INFO[] entry has its own DetType + AvMode).
+    QVector<float> m_fullLinearBins;       // FFTEngine input cache (|X[k]|²)
+    QVector<float> m_displayLinearPixels;  // spectrum detector output (linear)
+    QVector<float> m_renderedPixels;       // spectrum avenger output (dBm)
+    QVector<float> m_wfDisplayLinearPixels; // waterfall detector output (linear)
+    QVector<float> m_wfRenderedPixels;     // waterfall avenger output (dBm)
+
+    // Equivalent Noise Bandwidth of the current FFT window, in bins.
+    // Refreshed every frame via the windowEnb arg on fftReadyLinear so
+    // the detector's invEnb scaling stays in lock-step with the bins it
+    // just received.  No setter coordination needed.
+    double m_fftWindowEnb{1.0};
+
+    // Per-channel WDSP-style frame averagers.  See SpectrumAvenger.h for
+    // the av_mode wire-format mapping (-1 peak / 0 none / 1 recursive /
+    // 2 window / 3 log-recursive); analyzer.c:464-554 [v2.10.3.13] is the
+    // verbatim port.
+    NereusSDR::SpectrumAvenger m_spectrumAvenger;
+    NereusSDR::SpectrumAvenger m_waterfallAvenger;
 
     // ---- Frequency range ----
     double m_centerHz{14225000.0};    // 14.225 MHz default
@@ -1088,7 +1132,10 @@ private:
 
     bool        m_peakHoldEnabled{false};
     int         m_peakHoldDelayMs{2000};
-    QVector<float> m_peakHoldBins;
+    // Per-display-pixel running max (replaces full-bin m_peakHoldBins).
+    // Sized to displayWidth on first updateSpectrumLinear and re-sized on
+    // resize.  Decay timer below resets it on tick.
+    QVector<float> m_pxPeakHold;
     QTimer*     m_peakHoldDecayTimer{nullptr};
 
     // Active Peak Hold trace (Task 2.5). Separate from the legacy peak hold
@@ -1130,7 +1177,6 @@ private:
     int   m_wfUpdatePeriodMs{30};     // NereusSDR default per §10 divergence
     bool  m_wfUseSpectrumMinMax{false};
     AverageMode m_wfAverageMode{AverageMode::None};
-    QVector<float> m_wfSmoothedBins;  // for wf averaging mode
 
     TimestampPosition m_wfTimestampPos{TimestampPosition::None};
     TimestampMode     m_wfTimestampMode{TimestampMode::UTC};

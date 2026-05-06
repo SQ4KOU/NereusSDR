@@ -157,9 +157,23 @@ signals:
     // conversion only at final pixel output (analyzer.c:464-554
     // [v2.10.3.13] avenger() does the log step per av_mode).
     //
+    // windowEnb is the Equivalent Noise Bandwidth of the window in bins.
+    // The downstream detector applies inv_enb = 1/windowEnb to scale
+    // Average/Sample/RMS modes (analyzer.c:368-441 [v2.10.3.13]).
+    //
+    // dbmOffset is the window coherent-gain compensation -20·log10(Σw[i])
+    // that fftReady's binsDbm[i] adds after 10·log10(|X[k]|²).  The avenger
+    // applies it via its `scale` parameter as scale = 10^(dbmOffset/10) so
+    // the post-avenger pixels read the same dBm as fftReady.
+    //
+    // Both metadata values are emitted in-band so the slot always has the
+    // values matching the bins it just received — no separate setter
+    // coordination needed.
+    //
     // Emitted in lock-step with fftReady — every frame, both signals fire.
-    // Cost: one extra QVector<float> heap allocation per frame.
-    void fftReadyLinear(int receiverId, const QVector<float>& binsLinear);
+    // Cost: one extra QVector<float> heap allocation + 16 bytes per frame.
+    void fftReadyLinear(int receiverId, const QVector<float>& binsLinear,
+                        double windowEnb, double dbmOffset);
 
 private:
     void replanFft();

@@ -119,6 +119,7 @@
 #include "core/AppSettings.h"
 #include "dbm_strip_math.h"
 #include "models/BandPlanManager.h"
+#include "spectrum/SpectrumDetector.h"
 
 #include <QHoverEvent>
 #include <QLabel>
@@ -992,8 +993,10 @@ void SpectrumWidget::setAverageMode(AverageMode m)
     }
     m_averageMode = m;
     // Force a fresh baseline for the new mode so a switch doesn't
-    // carry stale smoothed state forward.
-    m_smoothed.clear();
+    // carry stale averager state forward.  Mirrors WDSP analyzer.c:
+    // SetDisplayAverageMode at :1854 [v2.10.3.13] which re-init's the
+    // av_sum / av_buff accumulators on mode change.
+    m_spectrumAvenger.clear();
     scheduleSettingsSave();
     update();
 }
@@ -1015,8 +1018,9 @@ void SpectrumWidget::setSpectrumAveraging(SpectrumAveraging a)
 {
     if (m_spectrumAveraging == a) { return; }
     m_spectrumAveraging = a;
-    // Reset smoothed state so mode change doesn't carry stale history.
-    m_smoothed.clear();
+    // Reset avenger state so mode change doesn't carry stale history.
+    // From WDSP analyzer.c:1854 [v2.10.3.13] SetDisplayAverageMode re-init.
+    m_spectrumAvenger.clear();
     scheduleSettingsSave();
     update();
 }
@@ -1033,7 +1037,8 @@ void SpectrumWidget::setWaterfallAveraging(SpectrumAveraging a)
 {
     if (m_waterfallAveraging == a) { return; }
     m_waterfallAveraging = a;
-    m_wfSmoothedBins.clear();
+    // Reset waterfall avenger state on mode change (analyzer.c:1854 [v2.10.3.13]).
+    m_waterfallAvenger.clear();
     scheduleSettingsSave();
     update();
 }
@@ -1113,66 +1118,11 @@ void SpectrumWidget::applyDetector(const QVector<float>& input,
     }
 }
 
-// Static helper: apply the frame-averaging policy in-place.
-// state is modified on each call and should persist across frames.
-// alpha is the exponential smoothing weight [0..1]; higher = more responsive.
-// From Thetis specHPSDR.cs AverageMode / AverageModeWF [v2.10.3.13]
-// integer codes 0=None 1=Recursive 2=TimeWindow 3=LogRecursive.
-void SpectrumWidget::applyAveraging(const QVector<float>& newFrame,
-                                    QVector<float>& state,
-                                    SpectrumAveraging mode, float alpha)
-{
-    if (newFrame.isEmpty()) { return; }
-    if (state.size() != newFrame.size()) {
-        // First call or bin count changed — bootstrap state.
-        state = newFrame;
-        return;
-    }
-    alpha = qBound(0.0f, alpha, 1.0f);
-    const float beta = 1.0f - alpha;
-
-    switch (mode) {
-    case SpectrumAveraging::None:
-        // Pass new frame through unchanged (Thetis av_mode 0 = no averaging).
-        state = newFrame;
-        break;
-    case SpectrumAveraging::Recursive:
-        // Exponential decay in linear domain (Thetis "Recursive", av_mode 1).
-        // From Thetis specHPSDR.cs:383-396 [v2.10.3.13] AverageMode setter.
-        for (int i = 0; i < newFrame.size(); ++i) {
-            state[i] = alpha * newFrame[i] + beta * state[i];
-        }
-        break;
-    case SpectrumAveraging::TimeWindow:
-        // Sliding-window approximated as a slower exponential for now.
-        // Thetis "Time Window" (av_mode 2); exact sliding-window deferred
-        // (matches 3G-8 TimeWindow approximation to avoid regression).
-        // From Thetis specHPSDR.cs:383-396 [v2.10.3.13] (av_mode = 2 path).
-        {
-            const float slowAlpha = alpha * 0.33f;
-            const float slowBeta  = 1.0f - slowAlpha;
-            for (int i = 0; i < newFrame.size(); ++i) {
-                state[i] = slowAlpha * newFrame[i] + slowBeta * state[i];
-            }
-        }
-        break;
-    case SpectrumAveraging::LogRecursive:
-        // Exponential decay in log/dB domain (Thetis "Log Recursive", av_mode 3).
-        // From Thetis specHPSDR.cs:383-396 [v2.10.3.13] AverageMode setter
-        // (av_mode = 3, av_sum initialised to -160.0 per SetDisplayAverageMode
-        // analyzer.c:1803 [v2.10.3.13]).
-        for (int i = 0; i < newFrame.size(); ++i) {
-            const float linNew = std::pow(10.0f, newFrame[i] / 10.0f);
-            const float linOld = std::pow(10.0f, state[i]   / 10.0f);
-            const float mix    = alpha * linNew + beta * linOld;
-            state[i] = 10.0f * std::log10(mix > 0.0f ? mix : 1e-30f);
-        }
-        break;
-    default:
-        state = newFrame;
-        break;
-    }
-}
+// Note: the previous static applyAveraging() helper (in-place exponential
+// smoothing on a dBm bin array) was deleted in this commit.  Frame averaging
+// is now performed by SpectrumAvenger (verbatim WDSP analyzer.c:464-554
+// [v2.10.3.13] port), which operates on linear-power display pixels and
+// converts to dB at the end per av_mode.  See updateSpectrumLinear().
 
 void SpectrumWidget::setAverageAlpha(float alpha)
 {
@@ -1237,7 +1187,7 @@ void SpectrumWidget::setPeakHoldEnabled(bool on)
     }
     m_peakHoldEnabled = on;
     if (!on) {
-        m_peakHoldBins.clear();
+        m_pxPeakHold.clear();
         if (m_peakHoldDecayTimer) {
             m_peakHoldDecayTimer->stop();
         }
@@ -1246,10 +1196,11 @@ void SpectrumWidget::setPeakHoldEnabled(bool on)
             m_peakHoldDecayTimer = new QTimer(this);
             m_peakHoldDecayTimer->setSingleShot(false);
             connect(m_peakHoldDecayTimer, &QTimer::timeout, this, [this]() {
-                // Decay: reset peak hold to current smoothed data so fresh
-                // peaks start tracking again from "now".
+                // Decay: reset peak hold to current rendered pixels so fresh
+                // peaks start tracking again from "now".  Pixel-space tracker
+                // since the spectrum trace renders from m_renderedPixels.
                 if (m_peakHoldEnabled) {
-                    m_peakHoldBins = m_smoothed;
+                    m_pxPeakHold = m_renderedPixels;
                     update();
                 }
             });
@@ -1463,7 +1414,13 @@ void SpectrumWidget::setShowBinWidth(bool on)
 
 double SpectrumWidget::binWidthHz() const
 {
-    const int fftSz = m_smoothed.isEmpty() ? 4096 : m_smoothed.size() * 2;
+    // Pre-existing semantic: callers expect "the half-bin width" here per
+    // the legacy m_smoothed.size() * 2 formula.  m_fullLinearBins is the
+    // full FFT (sized fftSize), so multiplying by 2 reproduces the old
+    // returned value bit-for-bit.  Suspicion of a stale * 2 in the legacy
+    // path is documented as a follow-up; this commit preserves behavior.
+    const int fftSz = m_fullLinearBins.isEmpty() ? 4096
+                                                 : m_fullLinearBins.size() * 2;
     if (fftSz <= 0 || m_sampleRateHz <= 0.0) { return 0.0; }
     return m_sampleRateHz / fftSz;
 }
@@ -1576,24 +1533,30 @@ void SpectrumWidget::setShowPeakValueOverlay(bool on)
             m_peakTextTimer = new QTimer(this);
             m_peakTextTimer->setSingleShot(false);
             connect(m_peakTextTimer, &QTimer::timeout, this, [this]() {
-                // Rebuild the cached peak overlay text from the current smoothed bins.
-                if (m_smoothed.isEmpty()) {
+                // Rebuild the cached peak overlay text from the post-pipeline
+                // rendered pixels.  m_renderedPixels spans the visible window
+                // (m_centerHz +/- m_bandwidthHz/2) at displayWidth resolution
+                // post detector + avenger, mirroring Thetis's per-pixel scan
+                // (Display.cs:5249-5316 [v2.10.3.13] inside the per-pixel
+                // render loop).
+                if (m_renderedPixels.isEmpty()) {
                     m_peakTextCache.clear();
                     return;
                 }
-                auto [firstBin, lastBin] = visibleBinRange(m_smoothed.size());
+                const int n = m_renderedPixels.size();
                 float peakDbm = std::numeric_limits<float>::lowest();
-                int   peakBin = firstBin;
-                for (int b = firstBin; b <= lastBin; ++b) {
-                    if (m_smoothed[b] > peakDbm) {
-                        peakDbm = m_smoothed[b];
-                        peakBin = b;
+                int   peakPx  = 0;
+                for (int i = 0; i < n; ++i) {
+                    if (m_renderedPixels[i] > peakDbm) {
+                        peakDbm = m_renderedPixels[i];
+                        peakPx  = i;
                     }
                 }
-                // Convert bin index to frequency using DDC center + sample rate.
-                const double binWidth  = m_sampleRateHz / m_smoothed.size();
-                const double fftLowHz  = m_ddcCenterHz - m_sampleRateHz / 2.0;
-                const double peakHz    = fftLowHz + (peakBin + 0.5) * binWidth;
+                // Convert pixel index to frequency.  The visible window
+                // is m_centerHz +/- m_bandwidthHz/2 mapped across n pixels.
+                const double leftHz   = m_centerHz - m_bandwidthHz / 2.0;
+                const double pxWidth  = (n > 1) ? m_bandwidthHz / (n - 1) : 0.0;
+                const double peakHz   = leftHz + peakPx * pxWidth;
                 m_peakTextCache = QStringLiteral("Peak: ")
                     + QString::number(static_cast<double>(peakDbm), 'f', 1)
                     + QStringLiteral(" dBm @ ")
@@ -1794,7 +1757,8 @@ void SpectrumWidget::setWfAverageMode(AverageMode m)
 {
     if (m_wfAverageMode == m) { return; }
     m_wfAverageMode = m;
-    m_wfSmoothedBins.clear();
+    // Reset waterfall avenger on mode change (analyzer.c:1854 [v2.10.3.13]).
+    m_waterfallAvenger.clear();
     scheduleSettingsSave();
     update();
 }
@@ -2071,111 +2035,200 @@ void SpectrumWidget::setBandEdgeColor(const QColor& c)
     markOverlayDirty();
 }
 
-// Feed new FFT frame — apply detector (bin reduction) then averaging
-// (frame smoothing), track peak hold, push waterfall row, repaint.
-// From AetherSDR SpectrumWidget::updateSpectrum() + gpu-waterfall.md:895-911.
-// Averaging mode added in Phase 3G-8 commit 3; split into Detector +
-// Averaging in Task 2.1 (handwave fix) per Thetis specHPSDR.cs:302-415
-// [v2.10.3.13] DetTypePan / AverageMode.
-void SpectrumWidget::updateSpectrum(int receiverId, const QVector<float>& binsDbm)
+// Feed new FFT frame -- single Thetis-faithful pipeline.
+//
+// Mirrors Thetis Display.cs:4970-5378 [v2.10.3.13] DrawPanadapterDX2D's
+// data flow: WDSP analyzer pre-computes display-pixel data
+// (current_display_data[i], indexed by pixel 0..nDecimatedWidth-1, sized
+// W / m_nDecimation) and the per-pixel render loop iterates that array.
+// Our split-pipeline equivalent: FFTEngine emits raw |X[k]|² linear bins;
+// SpectrumWidget runs the WDSP detector + avenger ports
+// (analyzer.c:283-462 / :464-554 [v2.10.3.13]) on a visible-bin slice
+// and lands the result in m_renderedPixels (dBm, displayWidth).
+// Spectrum and waterfall share the slice but run independent detector
+// + avenger instances per WDSP per-plane model -- analyzer.c configures
+// each ANALYZER_INFO[] entry with its own DetType + AvMode.
+//
+// All visible-window overlay consumers (legacy peak hold, ActivePeakHold,
+// PeakBlobs, show-NF readout, cursor peak text) read m_renderedPixels.
+// Full-band dBm chrome (ClarityController, NoiseFloorTracker) stay on
+// fftReady (full-bin dBm) via independent connects in MainWindow --
+// they're band-wide noise estimators by design and migrating them to
+// visible-window pixels would lose information when the user zooms in.
+void SpectrumWidget::updateSpectrumLinear(int receiverId,
+                                          const QVector<float>& binsLinear,
+                                          double windowEnb,
+                                          double dbmOffset)
 {
     Q_UNUSED(receiverId);
-    m_bins = binsDbm;
+    if (binsLinear.isEmpty()) { return; }
 
-    // --- Stage 1: Detector (bin reduction) ---
-    // If the display pixel count differs from the FFT bin count, apply the
-    // detector to map N bins → M pixels. When 1:1, detector is a no-op
-    // (all policies reduce to identity at ratio=1). For now we keep the
-    // internal m_smoothed at full FFT resolution and let the renderer
-    // subsample via visibleBinRange(); actual pixel-count reduction is
-    // deferred to the display step. This matches the 3G-8 behavior so
-    // existing tests are unaffected. The detector is wired for future use
-    // and is exercised by the unit tests via the static helper.
-    // From Thetis specHPSDR.cs:302-321 [v2.10.3.13] DetTypePan / DetTypeWF.
-    //
-    // Legacy path: m_averageMode still drives the smoothing switch so old
-    // callers (DisplaySetupPages not yet updated) continue to work. The new
-    // m_spectrumAveraging takes priority when it differs from the legacy
-    // mapping. Migration to pure new path completes in Task 5.1.
+    m_fullLinearBins = binsLinear;
+    m_fftWindowEnb   = qMax(windowEnb, 1e-9);
 
-    // --- Stage 2: Averaging (frame smoothing) via new split path ---
-    // From Thetis specHPSDR.cs:383-415 [v2.10.3.13] AverageMode setter.
-    // Spectrum and waterfall use independent alphas computed from per-side
-    // time constants — see recomputeAverageAlphas().
-    applyAveraging(binsDbm, m_smoothed, m_spectrumAveraging, m_spectrumAverageAlpha);
+    // Display pixel count -- spectrum panel width minus dBm strip column.
+    // Per Thetis Display.cs:4970 DrawPanadapterDX2D(int W, ...) signature
+    // and :4993 nDecimatedWidth = W / m_nDecimation [v2.10.3.13].  Thetis
+    // S16 display-side decimation (an additional W / N reduction) is a
+    // Phase 2 follow-up; for now we use the full panel width.
+    const int displayWidth = qMax(width() - effectiveStripW(), 800);
 
-    // Peak hold: track per-bin maximum over the decay window.
+    // Visible bin slice -- CTUN zoom support.  visibleBinRange() maps the
+    // current m_centerHz +/- m_bandwidthHz/2 window against m_ddcCenterHz
+    // + m_sampleRateHz.  When zoomed out, slice == full FFT.
+    auto [firstBin, lastBin] = visibleBinRange(binsLinear.size());
+    const int sliceCount = lastBin - firstBin + 1;
+    if (sliceCount <= 0) { return; }
+
+    const double pixPerBin = static_cast<double>(displayWidth) / sliceCount;
+    const double binPerPix = (pixPerBin > 0.0) ? 1.0 / pixPerBin : 1.0;
+    const double invEnb    = 1.0 / m_fftWindowEnb;
+    // dbmOffset folded into the avenger's power-domain scale so that
+    // 10·log10(linear · scale) == 10·log10(linear) + dbmOffset, matching
+    // FFTEngine.cpp:348 [v2.10.3.13] (binsDbm = 10·log10 + offset).
+    const double dbmScale  = std::pow(10.0, dbmOffset / 10.0);
+
+    auto avengerMode = [](SpectrumAveraging m) -> int {
+        // Wire-format integer codes per WDSP analyzer.c:464 [v2.10.3.13].
+        switch (m) {
+        case SpectrumAveraging::None:         return 0;
+        case SpectrumAveraging::Recursive:    return 1;
+        case SpectrumAveraging::TimeWindow:   return 2;
+        case SpectrumAveraging::LogRecursive: return 3;
+        default: return 0;
+        }
+    };
+
+    const QVector<double> noCorrection;  // per-pixel sub-band gain compensation
+
+    // --- Spectrum plane: detector -> avenger -> m_renderedPixels (dBm) ---
+    if (m_displayLinearPixels.size() != displayWidth) {
+        m_displayLinearPixels.resize(displayWidth);
+    }
+    if (m_spectrumAvenger.numPixels() != displayWidth) {
+        m_spectrumAvenger.resize(displayWidth);
+    }
+    NereusSDR::applySpectrumDetector(m_spectrumDetector,
+                                     sliceCount,
+                                     displayWidth,
+                                     pixPerBin,
+                                     binPerPix,
+                                     m_fullLinearBins.constData() + firstBin,
+                                     m_displayLinearPixels.data(),
+                                     invEnb,
+                                     0.0,
+                                     static_cast<double>(sliceCount),
+                                     0.0);
+    m_spectrumAvenger.apply(m_displayLinearPixels,
+                            avengerMode(m_spectrumAveraging),
+                            static_cast<double>(m_spectrumAverageAlpha),
+                            dbmScale,
+                            noCorrection,
+                            false,
+                            0.0,
+                            m_renderedPixels);
+
+    // --- Waterfall plane: own detector + avenger -> m_wfRenderedPixels ---
+    // Thetis runs separate analyzer planes for spectrum and waterfall (see
+    // ANALYZER_INFO[] in analyzer.c).  DetType + AvMode are independent.
+    if (m_wfDisplayLinearPixels.size() != displayWidth) {
+        m_wfDisplayLinearPixels.resize(displayWidth);
+    }
+    if (m_waterfallAvenger.numPixels() != displayWidth) {
+        m_waterfallAvenger.resize(displayWidth);
+    }
+    NereusSDR::applySpectrumDetector(m_waterfallDetector,
+                                     sliceCount,
+                                     displayWidth,
+                                     pixPerBin,
+                                     binPerPix,
+                                     m_fullLinearBins.constData() + firstBin,
+                                     m_wfDisplayLinearPixels.data(),
+                                     invEnb,
+                                     0.0,
+                                     static_cast<double>(sliceCount),
+                                     0.0);
+    m_waterfallAvenger.apply(m_wfDisplayLinearPixels,
+                             avengerMode(m_waterfallAveraging),
+                             static_cast<double>(m_waterfallAverageAlpha),
+                             dbmScale,
+                             noCorrection,
+                             false,
+                             0.0,
+                             m_wfRenderedPixels);
+
+    // Legacy per-pixel peak hold -- track running max in display-pixel
+    // space.  Replaces the old per-bin m_peakHoldBins.
     if (m_peakHoldEnabled) {
-        if (m_peakHoldBins.size() != binsDbm.size()) {
-            m_peakHoldBins = binsDbm;
+        if (m_pxPeakHold.size() != m_renderedPixels.size()) {
+            m_pxPeakHold = m_renderedPixels;
         } else {
-            for (int i = 0; i < binsDbm.size(); ++i) {
-                if (binsDbm[i] > m_peakHoldBins[i]) {
-                    m_peakHoldBins[i] = binsDbm[i];
+            for (int i = 0; i < m_renderedPixels.size(); ++i) {
+                if (m_renderedPixels[i] > m_pxPeakHold[i]) {
+                    m_pxPeakHold[i] = m_renderedPixels[i];
                 }
             }
         }
     }
 
-    // Active Peak Hold trace update (Task 2.5).
-    // Resize if bin count changed, then feed the smoothed bins and tick decay.
-    // From Thetis display.cs m_bActivePeakHold [v2.10.3.13].
+    // Active Peak Hold trace -- per-display-pixel decay.  From Thetis
+    // Display.cs:5341 [v2.10.3.13] spectralPeaks[i] is indexed by pixel
+    // (i runs 0..nDecimatedWidth-1) and the y-mapping uses the per-pixel
+    // peak.max_dBm value.  Display.cs:5356 decays peak.max_dBm by
+    // dBmSpectralPeakFall per second -> /fps per frame (analyzer-adjacent).
     const int intervalMs = m_displayTimer.interval();
     const int fps = (intervalMs > 0) ? qMax(1, 1000 / intervalMs) : 30;
 
     if (m_activePeakHold.enabled()) {
-        if (m_activePeakHold.size() != m_smoothed.size()) {
-            m_activePeakHold.resize(m_smoothed.size());
+        if (m_activePeakHold.size() != m_renderedPixels.size()) {
+            m_activePeakHold.resize(m_renderedPixels.size());
         }
-        m_activePeakHold.update(m_smoothed);
-        // Tick decay using the current display FPS (derived from timer interval).
-        // 33 ms default → ~30 fps; avoid division by zero.
+        m_activePeakHold.update(m_renderedPixels);
         m_activePeakHold.tickFrame(fps);
     }
 
-    // Peak Blob detector update (Task 2.6).
-    // Compute filter passband bin range from m_vfoHz + m_filterLowHz/HighHz,
-    // then convert Hz offsets to bin indices using DDC center + sample rate.
-    // From Thetis display.cs:5453-5508 [v2.10.3.13].
-    if (m_peakBlobs.enabled() && !m_smoothed.isEmpty()) {
-        int filterLowBin  = 0;
-        int filterHighBin = m_smoothed.size() - 1;
-        if (m_peakBlobs.insideOnly() && m_sampleRateHz > 0.0) {
-            const double binWidth = m_sampleRateHz / m_smoothed.size();
-            const double fftLowHz = m_ddcCenterHz - m_sampleRateHz / 2.0;
+    // Peak Blob detector -- pixel-space local maxima with hold/decay.
+    // Filter-passband math becomes pixel-space: visible window is
+    // m_centerHz +/- m_bandwidthHz/2 mapped across displayWidth pixels.
+    // From Thetis Display.cs:5453-5508 [v2.10.3.13].
+    if (m_peakBlobs.enabled() && !m_renderedPixels.isEmpty()) {
+        const int n = m_renderedPixels.size();
+        int filterLowPx  = 0;
+        int filterHighPx = n - 1;
+        if (m_peakBlobs.insideOnly() && m_bandwidthHz > 0.0) {
+            const double leftHz  = m_centerHz - m_bandwidthHz / 2.0;
+            const double pxWidth = m_bandwidthHz / static_cast<double>(n);
             const double loHz = m_vfoHz + m_filterLowHz;
             const double hiHz = m_vfoHz + m_filterHighHz;
-            filterLowBin  = qBound(0,
-                static_cast<int>(std::floor((loHz - fftLowHz) / binWidth)),
-                m_smoothed.size() - 1);
-            filterHighBin = qBound(0,
-                static_cast<int>(std::ceil((hiHz - fftLowHz) / binWidth)),
-                m_smoothed.size() - 1);
+            filterLowPx  = qBound(0,
+                static_cast<int>(std::floor((loHz - leftHz) / pxWidth)),
+                n - 1);
+            filterHighPx = qBound(0,
+                static_cast<int>(std::ceil((hiHz - leftHz) / pxWidth)),
+                n - 1);
         }
-        m_peakBlobs.update(m_smoothed, filterLowBin, filterHighBin);
+        m_peakBlobs.update(m_renderedPixels, filterLowPx, filterHighPx);
         m_peakBlobs.tickFrame(fps, intervalMs > 0 ? intervalMs : 33);
     }
 
-    // Force the GPU overlay texture to re-render every spectrum frame when
-    // any per-frame overlay feature is active. paintEvent's CPU path runs
-    // drawSpectrum() (which calls paintActivePeakHoldTrace + paintPeakBlobs)
-    // every frame, but the GPU path bakes overlays into m_overlayStatic
-    // which is only re-rendered when m_overlayStaticDirty is set. Without
-    // this nudge, peak hold + blobs would only update on Setup-driven state
-    // changes (Bug discovered post-merge, 2026-05-02).
+    // Force GPU overlay texture re-render when any per-frame overlay is
+    // active -- paintEvent's CPU path calls paintActivePeakHoldTrace +
+    // paintPeakBlobs from drawSpectrum() every frame, but the GPU path
+    // bakes overlays into m_overlayStatic.  Without this nudge, peak
+    // indicators only update on Setup-driven state changes (bug from
+    // 2026-05-02).
     //
-    // TODO: refactor to a separate m_overlayDynamic layer so the static
-    // chrome (grid, scales, band plan) doesn't repaint every frame. For
-    // now, accept the per-frame full-overlay re-render — it's still cheap
-    // (small QImage, single texture upload) and the alternative is no
-    // visible peak indicator at all in GPU mode.
+    // TODO: separate m_overlayDynamic layer so static chrome (grid,
+    // scales, band plan) doesn't repaint every frame.
     if (m_activePeakHold.enabled() || m_peakBlobs.enabled()) {
         m_overlayStaticDirty = true;
     }
 
-    // Push unsmoothed data to waterfall (sharper signal edges)
-    // From gpu-waterfall.md:908
-    pushWaterfallRow(binsDbm);
+    // Push display-pixel waterfall row -- waterfall AGC + NF-AGC +
+    // threshold compute now operate on display pixels per Thetis
+    // Display.cs:6713-6738 [v2.10.3.13] (waterfall_data[i] indexed by
+    // pixel).
+    pushWaterfallRow(m_wfRenderedPixels);
     m_hasNewSpectrum = true;
 }
 
@@ -2333,26 +2386,22 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
         }
     }
 
-    // ShowNoiseFloor — render noise floor estimate as corner text.
-    // From Thetis display.cs:2304-2308 [v2.10.3.13] m_bShowNoiseFloorDBM.
-    // NereusSDR: noise floor value comes from NoiseFloorEstimator (Phase 3G-9c).
-    // For now, derive a rough estimate from the bottom 10th percentile of the
-    // visible bins if no dedicated estimator has pushed a value.
-    if (m_showNoiseFloor && !m_smoothed.isEmpty()) {
-        auto [firstBin, lastBin] = visibleBinRange(m_smoothed.size());
-        const int nBins = lastBin - firstBin + 1;
-        if (nBins > 0) {
-            QVector<float> sorted(m_smoothed.constBegin() + firstBin,
-                                  m_smoothed.constBegin() + lastBin + 1);
-            std::sort(sorted.begin(), sorted.end());
-            // Use 10th percentile as noise floor estimate (simple approximation)
-            const float nf = sorted[qBound(0, sorted.size() / 10, sorted.size() - 1)];
-            const QString nfText = QStringLiteral("NF: ")
-                + QString::number(static_cast<double>(nf), 'f', 1)
-                + QStringLiteral(" dBm");
-            drawTextOverlay(p, specRect, m_noiseFloorPosition,
-                            nfText, m_gridTextColor);
-        }
+    // ShowNoiseFloor -- render noise floor estimate as corner text.
+    // From Thetis Display.cs:2304-2308 [v2.10.3.13] m_bShowNoiseFloorDBM.
+    // NereusSDR: derives a rough estimate from the bottom 10th percentile
+    // of the post-pipeline display pixels.  Mirrors Thetis Display.cs:5385
+    // [v2.10.3.13] which calls processNoiseFloor(rx, averageCount,
+    // averageSum, nDecimatedWidth, ...) -- the per-pixel running stat
+    // accumulated inside the per-pixel render loop, not raw bins.
+    if (m_showNoiseFloor && !m_renderedPixels.isEmpty()) {
+        QVector<float> sorted = m_renderedPixels;
+        std::sort(sorted.begin(), sorted.end());
+        const float nf = sorted[qBound(0, sorted.size() / 10, sorted.size() - 1)];
+        const QString nfText = QStringLiteral("NF: ")
+            + QString::number(static_cast<double>(nf), 'f', 1)
+            + QStringLiteral(" dBm");
+        drawTextOverlay(p, specRect, m_noiseFloorPosition,
+                        nfText, m_gridTextColor);
     }
 
     // ShowPeakValueOverlay — render cached peak text (refreshed by timer).
@@ -2445,28 +2494,29 @@ void SpectrumWidget::drawGrid(QPainter& p, const QRect& specRect)
 // in commit 5.
 void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
 {
-    if (m_smoothed.isEmpty()) {
+    // Display-pixel iteration -- mirrors Thetis Display.cs:5249-5378
+    // [v2.10.3.13] which loops `for (int i = 0; i < nDecimatedWidth; i++)`
+    // over the post-analyzer current_display_data[] array.  Our
+    // m_renderedPixels is the equivalent (post detector + avenger), sized
+    // to displayWidth.
+    const int n = m_renderedPixels.size();
+    if (n < 2) {
         return;
     }
 
-    auto [firstBin, lastBin] = visibleBinRange(m_smoothed.size());
-    int count = lastBin - firstBin + 1;
-    if (count < 2) {
-        return;
-    }
+    const float xStep = static_cast<float>(specRect.width())
+                      / static_cast<float>(n - 1);
 
-    float xStep = static_cast<float>(specRect.width()) / static_cast<float>(count - 1);
-
-    // Build polyline for visible bin subset
-    QVector<QPointF> points(count);
-    for (int j = 0; j < count; ++j) {
-        float x = specRect.left() + static_cast<float>(j) * xStep;
-        float y = dbmToYf(m_smoothed[firstBin + j], specRect);
+    // Build polyline across display pixels.
+    QVector<QPointF> points(n);
+    for (int j = 0; j < n; ++j) {
+        const float x = specRect.left() + static_cast<float>(j) * xStep;
+        const float y = dbmToYf(m_renderedPixels[j], specRect);
         points[j] = QPointF(x, y);
     }
 
-    // Fill under the trace (if enabled)
-    // From AetherSDR: fill alpha 0.70, cyan color
+    // Fill under the trace (if enabled).
+    // From AetherSDR: fill alpha 0.70, cyan color.
     if (m_panFill) {
         QPainterPath fillPath;
         fillPath.moveTo(points.first().x(), specRect.bottom());
@@ -2477,7 +2527,6 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
         fillPath.closeSubpath();
 
         if (m_gradientEnabled) {
-            // Vertical gradient: transparent at baseline → fillColor at top.
             QLinearGradient grad(QPointF(0, specRect.top()),
                                  QPointF(0, specRect.bottom()));
             QColor topCol = m_fillColor;
@@ -2489,18 +2538,17 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
             p.fillPath(fillPath, QBrush(grad));
         } else {
             QColor fill = m_fillColor;
-            fill.setAlphaF(m_fillAlpha * 0.4f);  // softer fill
+            fill.setAlphaF(m_fillAlpha * 0.4f);
             p.fillPath(fillPath, fill);
         }
     }
 
-    // Peak hold trace underneath the main trace so the live line stays
-    // visually on top.
-    if (m_peakHoldEnabled && m_peakHoldBins.size() == m_smoothed.size()) {
-        QVector<QPointF> peakPoints(count);
-        for (int j = 0; j < count; ++j) {
-            float x = specRect.left() + static_cast<float>(j) * xStep;
-            float y = dbmToYf(m_peakHoldBins[firstBin + j], specRect);
+    // Legacy per-pixel peak hold trace, drawn underneath the live trace.
+    if (m_peakHoldEnabled && m_pxPeakHold.size() == n) {
+        QVector<QPointF> peakPoints(n);
+        for (int j = 0; j < n; ++j) {
+            const float x = specRect.left() + static_cast<float>(j) * xStep;
+            const float y = dbmToYf(m_pxPeakHold[j], specRect);
             peakPoints[j] = QPointF(x, y);
         }
         QColor peakCol = m_fillColor;
@@ -2508,30 +2556,29 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
         QPen peakPen(peakCol, qMax(1.0f, m_lineWidth * 0.75f));
         peakPen.setStyle(Qt::DotLine);
         p.setPen(peakPen);
-        p.drawPolyline(peakPoints.data(), count);
+        p.drawPolyline(peakPoints.data(), n);
     }
 
-    // Draw trace line
-    // From Thetis display.cs:2184 — data_line_color = Color.White
-    // We use the fill color for consistency with AetherSDR style.
+    // Draw live trace line.
+    // From Thetis Display.cs:5376 [v2.10.3.13] DrawLine(previousPoint, point, lineBrush, ...)
+    // -- a polyline through display-pixel points.  We use m_fillColor for
+    // consistency with AetherSDR style.
     QPen tracePen(m_fillColor, m_lineWidth);
     p.setPen(tracePen);
-    p.drawPolyline(points.data(), count);
+    p.drawPolyline(points.data(), n);
 
-    // Active Peak Hold trace (Task 2.5) — Q14.1 separate pass. Drawn AFTER
-    // the live trace so the dashed peak line sits on top and stays visible
-    // even when peaks ≈ live bins (decay catches up to current spectrum
-    // values). Uses m_activePeakHoldColor for contrast against m_fillColor.
-    // From Thetis display.cs m_bActivePeakHold [v2.10.3.13].
-    if (m_activePeakHold.enabled() &&
-        m_activePeakHold.size() == m_smoothed.size()) {
-        paintActivePeakHoldTrace(p, specRect, firstBin, lastBin, xStep);
+    // Active Peak Hold trace -- separate pass per Q14.1.  Drawn AFTER
+    // the live trace so the peak line sits on top.  From Thetis
+    // Display.cs:5341 [v2.10.3.13] -- per-pixel peak.max_dBm, y mapped
+    // via dbmToPixel.
+    if (m_activePeakHold.enabled() && m_activePeakHold.size() == n) {
+        paintActivePeakHoldTrace(p, specRect);
     }
 
-    // Peak Blobs render pass (Task 2.6) — drawn on top of the live trace line.
-    // From Thetis display.cs:5453-5508 [v2.10.3.13].
+    // Peak Blobs render pass.  Drawn on top of the live trace line.
+    // From Thetis Display.cs:5453-5508 [v2.10.3.13].
     if (m_peakBlobs.enabled() && !m_peakBlobs.blobs().isEmpty()) {
-        paintPeakBlobs(p, specRect, firstBin, lastBin, xStep);
+        paintPeakBlobs(p, specRect);
     }
 
     // Zero line (0 dBm) — Phase 3G-8 commit 5 (G7).
@@ -2558,98 +2605,91 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
 }
 
 // ---- Active Peak Hold trace render pass (Q14.1 separate pass) ----
-// Ported from Thetis display.cs m_bActivePeakHold decay/render path [v2.10.3.13].
-// Draws a polyline through the per-bin peak values. When fill mode is enabled,
-// shades the region between the peak trace and the current live trace.
-// Called from drawSpectrum() with the same firstBin/lastBin/xStep so both
-// traces use identical x/y coordinate mapping.
-void SpectrumWidget::paintActivePeakHoldTrace(QPainter& p, const QRect& specRect,
-                                              int firstBin, int lastBin, float xStep)
+// Iterates the per-display-pixel peak array (m_activePeakHold sized to
+// m_renderedPixels.size()).  Mirrors Thetis Display.cs:5341 [v2.10.3.13]
+// which renders spectralPeaks[i] (i = display pixel) through the same
+// dbmToPixel y-mapping as the live trace.  Optional fill shades the
+// region between the peak trace and the current live trace.
+void SpectrumWidget::paintActivePeakHoldTrace(QPainter& p, const QRect& specRect)
 {
-    const int count = lastBin - firstBin + 1;
-    if (count < 2) {
+    const int n = m_renderedPixels.size();
+    if (n < 2 || m_activePeakHold.size() != n) {
         return;
     }
 
+    const float xStep = static_cast<float>(specRect.width())
+                      / static_cast<float>(n - 1);
+
     // Build polyline for the peak trace (same x mapping as main trace).
-    QVector<QPointF> peakPoints(count);
-    for (int j = 0; j < count; ++j) {
-        float x = specRect.left() + static_cast<float>(j) * xStep;
-        float peakDbm = m_activePeakHold.peak(firstBin + j);
+    QVector<QPointF> peakPoints(n);
+    for (int j = 0; j < n; ++j) {
+        const float x = specRect.left() + static_cast<float>(j) * xStep;
+        float peakDbm = m_activePeakHold.peak(j);
         // Clamp -inf to display bottom so the fill path closes cleanly.
         if (!std::isfinite(peakDbm)) {
             peakDbm = m_refLevel - m_dynamicRange;
         }
-        float y = dbmToYf(peakDbm, specRect);
+        const float y = dbmToYf(peakDbm, specRect);
         peakPoints[j] = QPointF(x, y);
     }
 
     // Optional fill between peak trace and current live trace.
-    // Only drawn when both traces are available and fill mode is on.
-    if (m_activePeakHold.fill() && !m_smoothed.isEmpty()) {
-        auto [fb, lb] = visibleBinRange(m_smoothed.size());
-        const int liveCount = lb - fb + 1;
-        if (liveCount == count) {
-            QPainterPath fillPath;
-            // Trace from left along the peak trace...
-            fillPath.moveTo(peakPoints.first());
-            for (int j = 1; j < count; ++j) {
-                fillPath.lineTo(peakPoints[j]);
-            }
-            // ...then back along the live trace in reverse.
-            for (int j = count - 1; j >= 0; --j) {
-                float x = specRect.left() + static_cast<float>(j) * xStep;
-                float y = dbmToYf(m_smoothed[fb + j], specRect);
-                fillPath.lineTo(QPointF(x, y));
-            }
-            fillPath.closeSubpath();
-
-            QColor fillCol = m_activePeakHoldColor;
-            fillCol.setAlphaF(0.18f);  // subtle fill between traces
-            p.fillPath(fillPath, fillCol);
+    if (m_activePeakHold.fill()) {
+        QPainterPath fillPath;
+        fillPath.moveTo(peakPoints.first());
+        for (int j = 1; j < n; ++j) {
+            fillPath.lineTo(peakPoints[j]);
         }
+        for (int j = n - 1; j >= 0; --j) {
+            const float x = specRect.left() + static_cast<float>(j) * xStep;
+            const float y = dbmToYf(m_renderedPixels[j], specRect);
+            fillPath.lineTo(QPointF(x, y));
+        }
+        fillPath.closeSubpath();
+
+        QColor fillCol = m_activePeakHoldColor;
+        fillCol.setAlphaF(0.18f);
+        p.fillPath(fillPath, fillCol);
     }
 
-    // Draw the peak trace line in its own colour so it stays visible against
-    // the live data-line trace (which inherits m_fillColor). Dashed style
-    // makes it easy to distinguish from the solid live trace.
+    // Draw the peak trace line in its own colour so it stays visible
+    // against the live data-line trace (which inherits m_fillColor).
     QPen peakPen(m_activePeakHoldColor, qMax(1.0f, m_lineWidth));
     peakPen.setStyle(Qt::DashLine);
     p.setPen(peakPen);
-    p.drawPolyline(peakPoints.data(), count);
+    p.drawPolyline(peakPoints.data(), n);
 }
 
 // ---- Peak Blobs render pass (Task 2.6) ----
-// Ported from Thetis display.cs:5507-5508 [v2.10.3.13] — ellipse + text labels
-// at each local-maximum blob position. Called from drawSpectrum() after the
-// live trace line so blobs sit on top of all other spectrum content.
-void SpectrumWidget::paintPeakBlobs(QPainter& p, const QRect& specRect,
-                                    int firstBin, int lastBin, float xStep)
+// Ported from Thetis Display.cs:5507-5508 [v2.10.3.13] -- ellipse + text
+// labels at each local-maximum blob position.  Called from drawSpectrum()
+// after the live trace line so blobs sit on top of all other spectrum
+// content.  Blob.binIndex is now a display-pixel index 0..n-1 (post
+// pipeline migration), not a raw FFT bin -- pixel-to-x via direct
+// proportional mapping across specRect.
+void SpectrumWidget::paintPeakBlobs(QPainter& p, const QRect& specRect)
 {
-    Q_UNUSED(xStep)  // x is computed from bin→Hz→pixel via hzToX for accuracy
-
-    if (m_smoothed.isEmpty() || m_sampleRateHz <= 0.0) {
+    const int n = m_renderedPixels.size();
+    if (n < 2) {
         return;
     }
 
-    const int  nBins      = m_smoothed.size();
-    const double binWidth  = m_sampleRateHz / nBins;
-    const double fftLowHz  = m_ddcCenterHz - m_sampleRateHz / 2.0;
+    const float xStep = static_cast<float>(specRect.width())
+                      / static_cast<float>(n - 1);
 
     p.setRenderHint(QPainter::Antialiasing, true);
 
     for (const auto& blob : m_peakBlobs.blobs()) {
-        // Guard: only render blobs whose bin falls within the visible range.
-        if (blob.binIndex < firstBin || blob.binIndex > lastBin) {
+        // Guard: only render blobs whose pixel falls within the array.
+        if (blob.binIndex < 0 || blob.binIndex >= n) {
             continue;
         }
 
-        // Bin center frequency → pixel X.
-        const double freqHz = fftLowHz + (blob.binIndex + 0.5) * binWidth;
-        const int x = hzToX(freqHz, specRect);
+        const int x = static_cast<int>(specRect.left()
+                       + static_cast<float>(blob.binIndex) * xStep);
 
-        // dBm value → pixel Y.
-        // From Thetis display.cs:5507 [v2.10.3.13] — position at the peak dBm.
+        // dBm value -> pixel Y.
+        // From Thetis Display.cs:5507 [v2.10.3.13] -- position at the peak dBm.
         const int y = dbmToY(blob.max_dBm, specRect);
 
         // Draw ellipse — From Thetis display.cs:5507 [v2.10.3.13]
@@ -3422,23 +3462,22 @@ void SpectrumWidget::reprojectWaterfall(double oldCenterHz, double oldBandwidthH
 }
 
 // ---- Waterfall row push ----
-// From Thetis display.cs:7719 — new row at top, old content shifts down.
+// From Thetis Display.cs:7719 -- new row at top, old content shifts down.
 // Ring buffer equivalent: decrement write pointer so newest row is always
 // at m_wfWriteRow, and display reads forward from there (wrapping).
 //
-// Phase 3G-8 commit 4: respects m_wfUpdatePeriodMs (rate-limit),
-// m_wfAverageMode (waterfall-specific averaging), m_wfAgcEnabled (auto
-// level tracking), m_wfUseSpectrumMinMax (borrow spectrum thresholds).
-// Task 2.8: m_wfStopOnTx gates push during TX; m_wfNfAgcEnabled drives
-// thresholds from 10th-percentile noise floor + m_wfNfAgcOffsetDb.
-// W5 (m_wfReverseScroll) removed — key migration deferred to Task 5.1.
-void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
+// Input is the post-pipeline waterfall row (display-pixel dBm, length
+// m_wfRenderedPixels.size() == displayWidth) produced by the waterfall
+// detector + avenger in updateSpectrumLinear().  AGC + NF-AGC + threshold
+// compute iterate display pixels per Thetis Display.cs:6713-6738
+// [v2.10.3.13] (waterfall_data[i] indexed by pixel).
+void SpectrumWidget::pushWaterfallRow(const QVector<float>& wfPixelsDbm)
 {
-    if (m_waterfall.isNull()) {
+    if (m_waterfall.isNull() || wfPixelsDbm.isEmpty()) {
         return;
     }
 
-    // Task 2.8: Stop-on-TX — skip if TX active and feature enabled.
+    // Task 2.8: Stop-on-TX -- skip if TX active and feature enabled.
     if (m_wfStopOnTx && m_activePeakHold.txActive()) {
         return;
     }
@@ -3451,47 +3490,16 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
     }
     m_wfLastPushMs = now;
 
-    auto [firstBin, lastBin] = visibleBinRange(bins.size());
-    int subsetCount = lastBin - firstBin + 1;
-    if (subsetCount <= 0) {
-        return;
-    }
+    const int n = wfPixelsDbm.size();
 
-    // Waterfall-specific averaging. Applied to a local smoothed copy so
-    // the spectrum trace and waterfall can diverge in smoothing.
-    // Task 2.1: use new m_waterfallAveraging path; legacy m_wfAverageMode
-    // kept for backward compat until Task 5.1 migration.
-    // From Thetis specHPSDR.cs:402-415 [v2.10.3.13] AverageModeWF setter.
-    const QVector<float>* src = &bins;
-    QVector<float> wfLocal;
-    if (m_waterfallAveraging != SpectrumAveraging::None) {
-        applyAveraging(bins, m_wfSmoothedBins, m_waterfallAveraging, m_waterfallAverageAlpha);
-        wfLocal = m_wfSmoothedBins;
-        src = &wfLocal;
-    } else if (m_wfAverageMode != AverageMode::None) {
-        // Legacy path: retain old behavior for callers using setWfAverageMode().
-        if (m_wfSmoothedBins.size() != bins.size()) {
-            m_wfSmoothedBins = bins;
-        } else {
-            const float a = qBound(0.0f, m_waterfallAverageAlpha, 1.0f);
-            for (int i = 0; i < bins.size(); ++i) {
-                m_wfSmoothedBins[i] = a * bins[i]
-                                    + (1.0f - a) * m_wfSmoothedBins[i];
-            }
-        }
-        wfLocal = m_wfSmoothedBins;
-        src = &wfLocal;
-    }
-
-    // AGC: track a slow envelope of visible-range min/max and bias the
+    // AGC: track a slow envelope of display-pixel min/max and bias the
     // effective thresholds toward it. Simple one-pole follower.
-    // Phase 3G-9c: skipped when Clarity is actively driving thresholds —
-    // both can be enabled but Clarity takes priority when active.
+    // Phase 3G-9c: skipped when Clarity is actively driving thresholds.
     if (m_wfAgcEnabled && !m_clarityActive) {
-        float mn = (*src)[firstBin];
+        float mn = wfPixelsDbm[0];
         float mx = mn;
-        for (int i = firstBin + 1; i <= lastBin; ++i) {
-            const float v = (*src)[i];
+        for (int i = 1; i < n; ++i) {
+            const float v = wfPixelsDbm[i];
             if (v < mn) { mn = v; }
             if (v > mx) { mx = v; }
         }
@@ -3509,49 +3517,38 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins)
         m_wfLowThreshold  = m_wfAgcRunMin - margin;
         m_wfHighThreshold = m_wfAgcRunMax + margin;
     } else if (m_wfUseSpectrumMinMax) {
-        // Borrow spectrum grid thresholds.
         m_wfHighThreshold = m_refLevel;
         m_wfLowThreshold  = m_refLevel - m_dynamicRange;
     }
 
-    // Task 2.8: NF-AGC — override thresholds from 10th-percentile noise floor
-    // + configured offset.  Takes priority over spectrum-min-max but yields to
-    // the existing legacy AGC (which is a different feature).  When both NF-AGC
-    // and legacy AGC are enabled, legacy AGC already ran above and this block
-    // re-applies on top; they address different use-cases so co-existence is
-    // intentional (NF-AGC is the Thetis-parity "noise floor tracker" variant).
+    // Task 2.8: NF-AGC -- override thresholds from 10th-percentile noise
+    // floor + configured offset.  Takes priority over spectrum-min-max
+    // but yields to the existing legacy AGC (which is a different
+    // feature).  Sort over the full pixel array for the percentile.
     if (m_wfNfAgcEnabled && !m_clarityActive) {
-        auto [fb, lb] = visibleBinRange(src->size());
-        const int nv = lb - fb + 1;
-        if (nv > 0) {
-            QVector<float> sorted(src->constBegin() + fb,
-                                  src->constBegin() + lb + 1);
-            std::sort(sorted.begin(), sorted.end());
-            // 10th-percentile as noise floor proxy (same approximation used in
-            // the ShowNoiseFloor overlay — consistent per-widget convention).
-            const float nf = sorted[qBound(0, sorted.size() / 10, sorted.size() - 1)];
-            const float offsetF = static_cast<float>(m_wfNfAgcOffsetDb);
-            // Low threshold = noise floor + offset (typically negative, e.g. -10)
-            // High threshold = low + 60 dB palette range so colours don't collapse.
-            m_wfLowThreshold  = nf + offsetF;
-            m_wfHighThreshold = m_wfLowThreshold + 60.0f;
-        }
+        QVector<float> sorted = wfPixelsDbm;
+        std::sort(sorted.begin(), sorted.end());
+        const float nf = sorted[qBound(0, sorted.size() / 10, sorted.size() - 1)];
+        const float offsetF = static_cast<float>(m_wfNfAgcOffsetDb);
+        m_wfLowThreshold  = nf + offsetF;
+        m_wfHighThreshold = m_wfLowThreshold + 60.0f;
     }
 
     int h = m_waterfall.height();
-    // Decrement write pointer so newest row is always at m_wfWriteRow (normal
-    // scroll: newest row at top, content shifts down toward older rows).
-    // W5 (reverse scroll) removed in Task 2.8; migration in Task 5.1.
+    // Decrement write pointer so newest row is always at m_wfWriteRow.
     m_wfWriteRow = (m_wfWriteRow - 1 + h) % h;
 
     int w = m_waterfall.width();
     QRgb* scanline = reinterpret_cast<QRgb*>(m_waterfall.scanLine(m_wfWriteRow));
-    float binScale = static_cast<float>(subsetCount) / static_cast<float>(w);
-
+    // Map source-pixel range to scanline pixels.  When pipeline displayWidth
+    // matches m_waterfall.width() (typical case: both = panel width minus
+    // strip), this is a 1:1 copy; if widths diverge (e.g. resize race),
+    // proportional sampling preserves visual continuity.
+    const float pxScale = static_cast<float>(n) / static_cast<float>(w);
     for (int x = 0; x < w; ++x) {
-        int srcBin = firstBin + static_cast<int>(static_cast<float>(x) * binScale);
-        srcBin = qBound(firstBin, srcBin, lastBin);
-        scanline[x] = dbmToRgb((*src)[srcBin]);
+        int srcPx = static_cast<int>(static_cast<float>(x) * pxScale);
+        srcPx = qBound(0, srcPx, n - 1);
+        scanline[x] = dbmToRgb(wfPixelsDbm[srcPx]);
     }
 
     // ── Sub-epic E: mirror the just-written row into the history ring ───
@@ -5235,20 +5232,16 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             // Per-frame dynamic overlays — Active Peak Hold trace + Peak
             // Blobs (Tasks 2.5/2.6). The CPU paintEvent path calls these
             // from drawSpectrum() every frame; the GPU path needs them
-            // baked into the overlay texture. updateSpectrum() forces
-            // m_overlayStaticDirty=true when either is enabled so this
-            // block runs every frame in that mode.
+            // baked into the overlay texture. updateSpectrumLinear()
+            // forces m_overlayStaticDirty=true when either is enabled so
+            // this block runs every frame in that mode.
             if ((m_activePeakHold.enabled() || m_peakBlobs.enabled()) &&
-                !m_smoothed.isEmpty()) {
-                auto [firstBin, lastBin] = visibleBinRange(m_smoothed.size());
-                const int count = lastBin - firstBin + 1;
-                const float xStep = static_cast<float>(specRect.width()) /
-                                    qMax(1, count);
+                !m_renderedPixels.isEmpty()) {
                 if (m_activePeakHold.enabled() && m_activePeakHold.size() > 0) {
-                    paintActivePeakHoldTrace(p, specRect, firstBin, lastBin, xStep);
+                    paintActivePeakHoldTrace(p, specRect);
                 }
                 if (m_peakBlobs.enabled() && !m_peakBlobs.blobs().isEmpty()) {
-                    paintPeakBlobs(p, specRect, firstBin, lastBin, xStep);
+                    paintPeakBlobs(p, specRect);
                 }
             }
 
@@ -5299,16 +5292,17 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     }
 
     // ---- FFT spectrum vertices ----
-    // Phase 3G-8 commit 10: the vertex generation now honours:
-    //   - m_dbmCalOffset (shifts every bin's dBm before y mapping)
+    // GPU vertex generation -- one vertex per display pixel.  Mirrors
+    // Thetis Display.cs:5249-5378 [v2.10.3.13] per-pixel render loop
+    // (DrawLine over current_display_data[i], i = 0..nDecimatedWidth-1).
+    // Honours:
+    //   - m_dbmCalOffset (shifts every pixel's dBm before y mapping)
     //   - m_gradientEnabled (off = flat m_fillColor, on = heatmap)
     //   - m_panFill (skips fill VBO update when disabled)
     //   - m_fillColor / m_fillAlpha (used for the flat-fill path)
     //   - m_peakHoldEnabled (generates a second line VBO for peak hold)
-    if (!m_smoothed.isEmpty() && m_fftLineVbo && m_fftFillVbo) {
-        auto [firstBin, lastBin] = visibleBinRange(m_smoothed.size());
-        const int count = lastBin - firstBin + 1;
-        const int n = qMin(count, kMaxFftBins);
+    if (!m_renderedPixels.isEmpty() && m_fftLineVbo && m_fftFillVbo) {
+        const int n = qMin(m_renderedPixels.size(), kMaxFftBins);
         m_visibleBinCount = n;
         const float minDbm = m_refLevel - m_dynamicRange;
         const float range  = m_dynamicRange;
@@ -5327,9 +5321,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         QVector<float> fillVerts(n * 2 * kFftVertStride);
 
         for (int j = 0; j < n; ++j) {
-            int i = firstBin + j;
             float x = (n > 1) ? 2.0f * j / (n - 1) - 1.0f : 0.0f;
-            float t = qBound(0.0f, ((m_smoothed[i] + cal) - minDbm) / range, 1.0f);
+            float t = qBound(0.0f, ((m_renderedPixels[j] + cal) - minDbm) / range, 1.0f);
             float y = yBot + t * (yTop - yBot);
 
             float cr, cg, cb2;
@@ -5383,18 +5376,18 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         batch->updateDynamicBuffer(m_fftFillVbo, 0,
             n * 2 * kFftVertStride * sizeof(float), fillVerts.constData());
 
-        // Peak hold VBO lives alongside the line VBO — generated here,
+        // Peak hold VBO lives alongside the line VBO -- generated here,
         // drawn in the render pass after the main line. When peak hold
         // is off we leave the buffer stale and skip the draw call via
-        // m_peakHoldHasData.
+        // m_peakHoldHasData.  Per-display-pixel array (m_pxPeakHold) is
+        // sized to m_renderedPixels in updateSpectrumLinear.
         m_peakHoldHasData = false;
-        if (m_peakHoldEnabled && m_peakHoldBins.size() == m_smoothed.size()
+        if (m_peakHoldEnabled && m_pxPeakHold.size() == m_renderedPixels.size()
             && m_fftPeakVbo) {
             QVector<float> peakVerts(n * kFftVertStride);
             for (int j = 0; j < n; ++j) {
-                int i = firstBin + j;
                 float x = (n > 1) ? 2.0f * j / (n - 1) - 1.0f : 0.0f;
-                float t = qBound(0.0f, ((m_peakHoldBins[i] + cal) - minDbm) / range, 1.0f);
+                float t = qBound(0.0f, ((m_pxPeakHold[j] + cal) - minDbm) / range, 1.0f);
                 float y = yBot + t * (yTop - yBot);
                 int li = j * kFftVertStride;
                 peakVerts[li]     = x;
