@@ -46,6 +46,12 @@ struct AutoZoomResult {
     bool replanned;  // true when ratio fell outside hysteresis band
 };
 
+// Auto-zoom cap (NereusSDR-original): bounds the buffer-fill pause on
+// every replan to ~85 ms at 768 kHz DDC.  Slider may go higher manually
+// (up to FFTEngine::kMaxFftSize=262144); auto-zoom won't push above the
+// cap unless the slider already did.
+constexpr int kAutoZoomMaxFftSize = 65536;
+
 AutoZoomResult computeAutoZoomFftSize(int baseline,
                                       int currentSize,
                                       double sampleRate,
@@ -56,11 +62,13 @@ AutoZoomResult computeAutoZoomFftSize(int baseline,
     const double scale = sampleRate / bwHz;
     double desired = static_cast<double>(baseline) * scale;
     int targetSize = 1024;
-    while (targetSize < desired && targetSize < 262144) {
+    while (targetSize < desired && targetSize < kAutoZoomMaxFftSize) {
         targetSize *= 2;
     }
     targetSize = std::max(targetSize, baseline);
-    targetSize = std::clamp(targetSize, 1024, 262144);
+    // Cap at max(baseline, autoZoomMax): when the user picks a slider
+    // value above the auto-zoom cap, baseline wins (their explicit choice).
+    targetSize = std::min(targetSize, std::max(baseline, kAutoZoomMaxFftSize));
     if (currentSize > 0) {
         const double ratio = static_cast<double>(targetSize)
                              / static_cast<double>(currentSize);
@@ -145,21 +153,44 @@ private slots:
         QCOMPARE(r.size, 16384);
     }
 
-    void formula_caps_at_max_fft_size()
+    void formula_caps_at_auto_zoom_max()
     {
-        // Slider=4096 + 64x zoom (12 kHz visible at 768k DDC) -> 262144 cap.
-        const auto r = computeAutoZoomFftSize(4096, 0, 768000.0, 12000.0);
-        QCOMPARE(r.size, 262144);
+        // Slider=4096 + 16x zoom (48 kHz visible at 768k DDC) -> hits cap
+        // exactly at 65536.  Past this point K starts dropping (auto-zoom
+        // can't push higher; user must move slider manually for more).
+        const auto r = computeAutoZoomFftSize(4096, 0, 768000.0, 48000.0);
+        QCOMPARE(r.size, 65536);
     }
 
-    void formula_floors_at_baseline_when_baseline_high()
+    void formula_holds_at_cap_at_deeper_zoom()
     {
-        // Slider=131072 at full bw: formula gives 131072, no change.
-        // Slider=131072 at half bw: formula computes 262144, capped, fine.
-        // Slider=131072 at QUADRUPLE bw (e.g., panning past DDC): scale
-        // is 0.25 so bare formula gives 32768.  Floor at baseline brings
-        // it back to 131072.
+        // Slider=4096 + 64x zoom (12 kHz visible at 768k DDC).  Without
+        // a cap the formula would request 262144; auto-zoom cap pins it
+        // at 65536, accepting graceful K degradation past this point in
+        // exchange for a sub-100 ms replan pause.
+        const auto r = computeAutoZoomFftSize(4096, 0, 768000.0, 12000.0);
+        QCOMPARE(r.size, 65536);
+    }
+
+    void formula_baseline_above_cap_is_authoritative()
+    {
+        // Slider=131072 (manually set above the auto-zoom cap of 65536):
+        // auto-zoom respects baseline and never reduces below it.  This
+        // is the "user opted in to large FFT" path -- they accepted the
+        // longer one-time pause when they moved the slider.
         const auto r = computeAutoZoomFftSize(131072, 0, 192000.0, 768000.0);
+        QCOMPARE(r.size, 131072);
+    }
+
+    void formula_baseline_above_cap_grows_with_zoom()
+    {
+        // Slider=131072, zoom in (bwHz < sampleRate): target ramps above
+        // baseline up to the implied K, with the *baseline* defining the
+        // upper bound (not the cap, since baseline > cap).
+        // sampleRate=768k, bwHz=192k -> scale=4 -> desired=524288 -> next
+        // pow2=524288 (above kMaxFftSize=262144).  Upper bound = max(
+        // baseline=131072, autoZoomCap=65536) = 131072.  Final=131072.
+        const auto r = computeAutoZoomFftSize(131072, 0, 768000.0, 192000.0);
         QCOMPARE(r.size, 131072);
     }
 

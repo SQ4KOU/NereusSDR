@@ -1328,17 +1328,23 @@ void MainWindow::buildUI()
     // inversely with bwHz:
     //   targetSize = baseline * sampleRate / bwHz
     //
-    // Cap at kMaxFftSize (262144) -- with the FFTEngine overlap path,
-    // 30 fps is sustainable to the cap.  Floor at the slider baseline
-    // (we never replan BELOW the user's chosen value, even if the
-    // formula computes lower at very wide bandwidth).
+    // Cap at kAutoZoomMaxFftSize = 65536.  Set well below kMaxFftSize
+    // (262144) to bound the buffer-fill pause on every replan: at
+    // 768 kHz DDC, 65536 fills in 85 ms (barely perceptible).  262144
+    // would take 340 ms (jarring) and create a multi-frame avenger
+    // ghost in the waterfall as the smoothed state crosses fftSize
+    // resolutions.  Users who want larger FFTs explicitly opt in via
+    // the slider (one-time pause they chose); auto-zoom won't push
+    // above the cap automatically.
+    //
+    // Floor at the slider baseline (we never replan BELOW the user's
+    // chosen value).
     //
     // Hysteresis: only replan when computed/current is outside
-    // [0.66, 1.5].  This avoids replan thrash on smooth zoom drag --
-    // a small bandwidth change that would land within the same power-
-    // of-two bracket gets ignored.
+    // [0.66, 1.5].  Avoids replan thrash on smooth zoom drag.
+    constexpr int kAutoZoomMaxFftSize = 65536;
     connect(m_spectrumWidget, &SpectrumWidget::bandwidthChangeRequested,
-            this, [this](double bwHz) {
+            this, [this, kAutoZoomMaxFftSize](double bwHz) {
         if (!m_fftEngine || !m_spectrumWidget) { return; }
         const double sampleRate = m_spectrumWidget->sampleRate();
         if (sampleRate <= 0.0 || bwHz <= 0.0) { return; }
@@ -1349,13 +1355,15 @@ void MainWindow::buildUI()
 
         // Round up to next power of 2.
         int targetSize = 1024;
-        while (targetSize < desired && targetSize < 262144) {
+        while (targetSize < desired && targetSize < kAutoZoomMaxFftSize) {
             targetSize *= 2;
         }
-        // Floor at baseline (slider's choice always honoured).
+        // Floor at baseline (slider's choice always honoured), then cap at
+        // auto-zoom max.  When baseline > cap (user explicitly picked a
+        // larger size via the slider), baseline wins and auto-zoom is a
+        // no-op for that range.
         targetSize = std::max(targetSize, baseline);
-        // Cap at kMaxFftSize.
-        targetSize = std::clamp(targetSize, 1024, 262144);
+        targetSize = std::min(targetSize, std::max(baseline, kAutoZoomMaxFftSize));
 
         // Hysteresis: only replan if outside [current * 2/3, current * 3/2].
         const int currentSize = m_fftEngine->fftSize();

@@ -2065,6 +2065,21 @@ void SpectrumWidget::updateSpectrumLinear(int receiverId,
     Q_UNUSED(receiverId);
     if (binsLinear.isEmpty()) { return; }
 
+    // FFT size change detection.  When the FFTEngine replans (e.g. via
+    // auto-zoom on bandwidth change), the per-pixel resolution shifts:
+    // each output pixel now represents a different number of input bins.
+    // The avenger's running per-pixel state becomes stale -- old smoothed
+    // values reflect the OLD resolution and cross-blend with NEW values
+    // for ~10 frames, manifesting as a "ghost smear" in the waterfall
+    // and a visible step in the spectrum trace.  Clearing both avengers
+    // here trades a brief 1-2 frame flicker of un-smoothed data for the
+    // cleaner cross-resolution transition.
+    if (!m_fullLinearBins.isEmpty()
+        && m_fullLinearBins.size() != binsLinear.size()) {
+        m_spectrumAvenger.clear();
+        m_waterfallAvenger.clear();
+    }
+
     m_fullLinearBins = binsLinear;
     m_fftWindowEnb   = qMax(windowEnb, 1e-9);
 
