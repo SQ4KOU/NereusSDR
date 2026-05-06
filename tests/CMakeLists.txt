@@ -313,6 +313,19 @@ nereus_add_test(tst_p2_codec_orionmkii)
 # ── Phase 3P-B Task 5: P2CodecSaturn — Saturn BPF1 band-edge override ──
 nereus_add_test(tst_p2_codec_saturn)
 
+# ── Phase 3M-4 Task 5: per-board PsDdcConfig codec dispatch ──
+# Verifies every codec subclass (P1CodecStandard / P1CodecHl2 /
+# P1CodecAnvelinaPro3 / P1CodecRedPitaya / P2CodecOrionMkII /
+# P2CodecSaturn) emits the wire-byte map matching its branch in Thetis
+# console.cs:8186-8538 UpdateDDCs() [v2.10.3.13] (and mi0bot
+# console.cs:8409-8488 [v2.10.3.13-beta2] for HL2).  ~25 cases covering:
+#   - G2-class (PS-on/off, MOX/no-MOX, diversity, RX2)
+#   - HL2 (rx1_rate vs ps_rate distinction at 96k/192k)
+#   - HermesII-class (p1DdcConfig=5 vs Hermes p1DdcConfig=6)
+#   - RedPitaya (Rate[1] = rx1_rate in PS-off cases per REDPITAYA PAVEL)
+#   - HPSDR (Atlas) returns all zeros sentinel
+nereus_add_test(tst_codec_ps_ddc_config)
+
 # ── Phase 3P-B Task 7: regression-freeze gate ────────────────────────────
 nereus_add_test(tst_p2_regression_freeze)
 

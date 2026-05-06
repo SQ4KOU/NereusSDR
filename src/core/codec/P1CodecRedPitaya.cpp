@@ -58,4 +58,115 @@ void P1CodecRedPitaya::bank12(const CodecContext& ctx, quint8 out[5]) const
     out[4] = 0;
 }
 
+// =================================================================
+// Phase 3M-4 Task 5: PureSignal DDC config — RedPitaya branch
+// =================================================================
+//
+// Verbatim port of the RedPitaya branch in Thetis console.cs UpdateDDCs().
+// Differs from the G2-class branch only by setting Rate[1] = rx1_rate
+// in the PS-off MOX cases (REDPITAYA PAVEL inline notes in upstream).
+//
+// Source: Thetis console.cs:8296-8377 [v2.10.3.13]
+//
+// case HPSDRModel.REDPITAYA: //DH1KLM
+//     P1_rxcount = 5;                     // RX5 used for puresignal feedback
+//     nddc = 5;
+//     ...
+//
+// `ps_rate` from cmaster.cs:424 [v2.10.3.13]: private static int ps_rate = 192000;
+PsDdcConfig P1CodecRedPitaya::applyPureSignalDdcConfig(
+    HPSDRModel /*model*/,
+    bool psEnabled,
+    bool diversityEnabled,
+    bool moxState,
+    int rx1Rate,
+    int rx2Rate,
+    bool rx2Enabled,
+    quint8 adcCtrl1,
+    quint8 adcCtrl2) const
+{
+    PsDdcConfig cfg;
+    constexpr uint8_t DDC0 = 1, DDC1 = 2, DDC2 = 4, DDC3 = 8;
+    constexpr int ps_rate = 192000;
+
+    // From console.cs:8297-8298 [v2.10.3.13]
+    cfg.p1RxCount = 5;
+    cfg.nDdc      = 5;
+
+    if (!moxState) {
+        if (diversityEnabled) {
+            // From console.cs:8301-8311 [v2.10.3.13]
+            cfg.p1DdcConfig = 2; // REDPITAYA PAVEL
+            cfg.ddcEnable   = DDC0;
+            cfg.syncEnable  = DDC1;
+            cfg.rate[0]     = static_cast<uint32_t>(rx1Rate);
+            cfg.rate[1]     = static_cast<uint32_t>(rx1Rate);
+            cfg.rate[2]     = static_cast<uint32_t>(rx1Rate); // REDPITAYA PAVEL
+            cfg.cntrl1      = static_cast<uint8_t>(adcCtrl1 & 0xff);
+            cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+        } else {
+            // From console.cs:8312-8322 [v2.10.3.13]
+            cfg.p1DdcConfig = 1;
+            cfg.ddcEnable   = DDC2;
+            cfg.syncEnable  = 0;
+            cfg.rate[0]     = static_cast<uint32_t>(rx1Rate); // REDPITAYA PAVEL
+            cfg.rate[1]     = static_cast<uint32_t>(rx1Rate); // REDPITAYA PAVEL
+            cfg.rate[2]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = static_cast<uint8_t>(adcCtrl1 & 0xff);
+            cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+        }
+    } else {
+        if (!diversityEnabled && !psEnabled) {
+            // From console.cs:8326-8336 [v2.10.3.13]
+            cfg.p1DdcConfig = 1;
+            cfg.ddcEnable   = DDC2;
+            cfg.syncEnable  = 0;
+            cfg.rate[0]     = static_cast<uint32_t>(rx1Rate); // REDPITAYA PAVEL
+            cfg.rate[1]     = static_cast<uint32_t>(rx1Rate); // REDPITAYA PAVEL
+            cfg.rate[2]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = static_cast<uint8_t>(adcCtrl1 & 0xff);
+            cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+        } else if (!diversityEnabled && psEnabled) {
+            // From console.cs:8337-8347 [v2.10.3.13]
+            cfg.p1DdcConfig = 3;
+            cfg.ddcEnable   = static_cast<uint8_t>(DDC0 + DDC2);
+            cfg.syncEnable  = DDC1;
+            cfg.rate[0]     = ps_rate;
+            cfg.rate[1]     = ps_rate;
+            cfg.rate[2]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = static_cast<uint8_t>((adcCtrl1 & 0xf3) | 0x08);
+            cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+        } else if (diversityEnabled && psEnabled) {
+            // From console.cs:8348-8358 [v2.10.3.13]
+            cfg.p1DdcConfig = 3;
+            cfg.ddcEnable   = static_cast<uint8_t>(DDC0 + DDC2);
+            cfg.syncEnable  = DDC1;
+            cfg.rate[0]     = ps_rate;
+            cfg.rate[1]     = ps_rate;
+            cfg.rate[2]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = static_cast<uint8_t>((adcCtrl1 & 0xf3) | 0x08);
+            cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+        } else {
+            // diversity_enabled && !puresignal_enabled
+            // From console.cs:8359-8369 [v2.10.3.13]
+            cfg.p1DdcConfig = 2;
+            cfg.ddcEnable   = DDC0;
+            cfg.syncEnable  = DDC1;
+            cfg.rate[0]     = static_cast<uint32_t>(rx1Rate);
+            cfg.rate[1]     = static_cast<uint32_t>(rx1Rate);
+            cfg.rate[2]     = static_cast<uint32_t>(rx1Rate); // REDPITAYA PAVEL
+            cfg.cntrl1      = static_cast<uint8_t>(adcCtrl1 & 0xff);
+            cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+        }
+    }
+
+    // From console.cs:8372-8376 [v2.10.3.13]
+    if (rx2Enabled) {
+        cfg.ddcEnable = static_cast<uint8_t>(cfg.ddcEnable + DDC3);
+        cfg.rate[3]   = static_cast<uint32_t>(rx2Rate);
+    }
+
+    return cfg;
+}
+
 } // namespace NereusSDR

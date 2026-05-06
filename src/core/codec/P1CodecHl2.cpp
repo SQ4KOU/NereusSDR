@@ -421,4 +421,142 @@ bool P1CodecHl2::tryComposeI2cFrame(quint8 out[5], bool mox) const
     return true;
 }
 
+// =================================================================
+// Phase 3M-4 Task 5: PureSignal DDC config — HL2 branch
+// =================================================================
+//
+// Verbatim port of the HL2 branch in mi0bot console.cs UpdateDDCs().
+// In mi0bot, HpsdrModel.HERMESLITE is grouped with HERMES/ANAN10/ANAN100
+// at line 8408-8409, so this method ports the full HERMES-class branch
+// PLUS the HL2-specific rate override at lines 8476-8485.
+//
+// Source: mi0bot console.cs:8408-8490 [v2.10.3.13-beta2]
+//
+// case HPSDRModel.HERMES:
+// case HPSDRModel.HERMESLITE:     // MI0BOT: HL2
+// case HPSDRModel.ANAN10:
+// case HPSDRModel.ANAN100:
+//     P1_rxcount = 4;             // RX4 used for puresignal feedback
+//     nddc = 4;
+//     ...
+//     else // transmitting and PS is ON
+//     {
+//         P1_DDCConfig = 6;
+//         DDCEnable = DDC0;
+//         SyncEnable = DDC1;
+//         Rate[0] = ps_rate;
+//         Rate[1] = ps_rate;
+//         if (hpsdr_model == HPSDRModel.HERMESLITE) // MI0BOT: HL2 can work at a high sample rate
+//         {
+//             Rate[0] = rx1_rate;
+//             Rate[1] = rx1_rate;
+//         }
+//         ...
+//         cntrl1 = 4;
+//         cntrl2 = 0;
+//     }
+//
+// `ps_rate` is the static cmaster.PSrate = 192000
+// (cmaster.cs:424 [v2.10.3.13-beta2], unchanged from ramdor).
+PsDdcConfig P1CodecHl2::applyPureSignalDdcConfig(
+    HPSDRModel /*model*/,
+    bool psEnabled,
+    bool diversityEnabled,
+    bool moxState,
+    int rx1Rate,
+    int rx2Rate,
+    bool rx2Enabled,
+    quint8 /*adcCtrl1*/,
+    quint8 /*adcCtrl2*/) const
+{
+    PsDdcConfig cfg;
+    constexpr uint8_t DDC0 = 1, DDC1 = 2;
+
+    // From mi0bot console.cs:8412-8413 [v2.10.3.13-beta2]
+    cfg.p1RxCount = 4;                     // RX4 used for puresignal feedback
+    cfg.nDdc      = 4;
+
+    if (!moxState) {
+        if (!diversityEnabled) {
+            // From mi0bot console.cs:8416-8429 [v2.10.3.13-beta2]
+            cfg.p1DdcConfig = 4;
+            cfg.ddcEnable   = DDC0;
+            cfg.syncEnable  = 0;
+            cfg.rate[0]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = 0;
+            cfg.cntrl2      = 0;
+
+            if (rx2Enabled) {
+                cfg.ddcEnable = static_cast<uint8_t>(cfg.ddcEnable + DDC1);
+                cfg.rate[1]   = static_cast<uint32_t>(rx2Rate);
+            }
+        } else {
+            // From mi0bot console.cs:8430-8440 [v2.10.3.13-beta2]
+            cfg.p1DdcConfig = 5;
+            cfg.ddcEnable   = DDC0;
+            cfg.syncEnable  = DDC1;
+            cfg.rate[0]     = static_cast<uint32_t>(rx1Rate);
+            cfg.rate[1]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = 0;
+            cfg.cntrl2      = 0;
+        }
+    } else {
+        if (!diversityEnabled && !psEnabled) {
+            // From mi0bot console.cs:8444-8457 [v2.10.3.13-beta2]
+            cfg.p1DdcConfig = 4;
+            cfg.ddcEnable   = DDC0;
+            cfg.syncEnable  = 0;
+            cfg.rate[0]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = 0;
+            cfg.cntrl2      = 0;
+
+            if (rx2Enabled) {
+                cfg.ddcEnable = static_cast<uint8_t>(cfg.ddcEnable + DDC1);
+                cfg.rate[1]   = static_cast<uint32_t>(rx2Rate);
+            }
+        } else if (diversityEnabled && !psEnabled) {
+            // From mi0bot console.cs:8458-8467 [v2.10.3.13-beta2]
+            cfg.p1DdcConfig = 5;
+            cfg.ddcEnable   = DDC0;
+            cfg.syncEnable  = DDC1;
+            cfg.rate[0]     = static_cast<uint32_t>(rx1Rate);
+            cfg.rate[1]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = 0;
+            cfg.cntrl2      = 0;
+        } else { // transmitting and PS is ON
+            // From mi0bot console.cs:8469-8488 [v2.10.3.13-beta2]
+            //   else // transmitting and PS is ON
+            //   {
+            //       P1_DDCConfig = 6;
+            //       DDCEnable = DDC0;
+            //       SyncEnable = DDC1;
+            //       Rate[0] = ps_rate;
+            //       Rate[1] = ps_rate;
+            //       if (hpsdr_model == HPSDRModel.HERMESLITE) // MI0BOT: HL2 can work at a high sample rate
+            //       {
+            //           Rate[0] = rx1_rate;
+            //           Rate[1] = rx1_rate;
+            //       }
+            //       else
+            //       {
+            //           Rate[0] = ps_rate;
+            //           Rate[1] = ps_rate;
+            //       }
+            //       cntrl1 = 4;
+            //       cntrl2 = 0;
+            //   }
+            cfg.p1DdcConfig = 6;
+            cfg.ddcEnable   = DDC0;
+            cfg.syncEnable  = DDC1;
+            // MI0BOT: HL2 can work at a high sample rate — always rx1_rate for HL2
+            cfg.rate[0]     = static_cast<uint32_t>(rx1Rate);
+            cfg.rate[1]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = 4;
+            cfg.cntrl2      = 0;
+        }
+    }
+
+    return cfg;
+}
+
 } // namespace NereusSDR

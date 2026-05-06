@@ -18,6 +18,7 @@
 #pragma once
 
 #include <QtGlobal>
+#include <cstdint>
 
 namespace NereusSDR {
 
@@ -277,6 +278,35 @@ struct CodecContext {
     int     hl2PttHang{0};       // 5-bit
     int     hl2TxLatency{0};     // 7-bit
     bool    hl2ResetOnDisconnect{false};
+};
+
+// PureSignal DDC config bytes/words emitted by per-board codec.
+// Consumed by ReceiverManager::updateDdcAssignment() (Phase 3M-4 Task 6)
+// during MOX+PS-on transitions.
+//
+// Field semantics: ported verbatim from Thetis console.cs:8186-8538
+// UpdateDDCs() [v2.10.3.13] (and mi0bot console.cs:8409-8488
+// [v2.10.3.13-beta2] for HL2 deltas).  Each codec subclass returns a
+// PsDdcConfig populated to match its per-HpsdrModel branch in the
+// upstream switch statement.
+//
+// This is the wire-byte map; the consumer applies it via:
+//   NetworkIO.EnableRxs(ddcEnable)            // console.cs:8527
+//   NetworkIO.EnableRxSync(0, syncEnable)     // console.cs:8528
+//   NetworkIO.SetDDCRate(i, rate[i]) for i<4  // console.cs:8529-8530
+//   NetworkIO.SetADC_cntrl1(cntrl1)           // console.cs:8531
+//   NetworkIO.SetADC_cntrl2(cntrl2)           // console.cs:8532
+//   NetworkIO.Protocol1DDCConfig(p1DdcConfig, P1_diversity, p1RxCount, nDdc)
+//                                             // console.cs:8534
+struct PsDdcConfig {
+    uint8_t  cntrl1     = 0;     // ADC control register 1
+    uint8_t  cntrl2     = 0;     // ADC control register 2
+    uint32_t rate[8]    = {};    // Per-DDC sample rates (Hz)
+    uint8_t  ddcEnable  = 0;     // Bit mask of enabled DDCs (DDC0=1, DDC1=2, DDC2=4, DDC3=8)
+    uint8_t  syncEnable = 0;     // Bit mask of synced DDCs
+    int      p1DdcConfig = 0;    // P1-only board-config code (see UpdateDDCs branches)
+    int      p1RxCount  = 0;     // P1-only RX count for state-machine
+    int      nDdc       = 0;     // Total DDC count for this board family
 };
 
 } // namespace NereusSDR

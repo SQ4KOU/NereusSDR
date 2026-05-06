@@ -46,6 +46,11 @@ namespace NereusSDR {
 // with a 17th bank carrying extra OC pin outputs (4 bits in C1).
 //
 // Source: networkproto1.c:668-674 + 682 [@501e3f5]
+//
+// Phase 3M-4 Task 5: applyPureSignalDdcConfig is INHERITED unchanged from
+// P1CodecStandard.  Its switch dispatches HpsdrModel::ANVELINAPRO3 into
+// the G2-class branch, matching Thetis console.cs:8218 [v2.10.3.13]
+// which lists ANVELINAPRO3 in the same case as ANAN_G2 / 7000D / 8000D.
 class P1CodecAnvelinaPro3 : public P1CodecStandard {
 public:
     void composeCcForBank(int bank, const CodecContext& ctx, quint8 out[5]) const override;
