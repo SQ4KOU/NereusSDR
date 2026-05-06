@@ -182,6 +182,16 @@ private:
     /// Resize m_blobs to m_count entries on configuration change.
     /// Excess slots are disabled and reset to max_dBm = -200.
     void ensureBlobsSized();
+    /// Per-frame reset of expired / hold-off blobs.  Verbatim port of
+    /// Thetis Display.cs:4536-4556 [v2.10.3.13] ResetBlobMaximums(bClear=false).
+    /// Disables a blob when:
+    ///   - hold is OFF (no hold/decay machinery) -> always disable
+    ///   - hold ON + drop OFF + elapsed since last upgrade > holdMs ->
+    ///     hard-cut (the "off = hard cut" UI path)
+    /// Leaves the blob alone when hold ON + drop ON (decay handles it
+    /// in tickFrame).  Called at the START of update() so the per-pixel
+    /// scan can re-add or upgrade slots that survived the reset.
+    void resetBlobMaximums();
 };
 
 }  // namespace NereusSDR

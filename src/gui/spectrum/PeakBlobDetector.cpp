@@ -99,6 +99,37 @@ void PeakBlobDetector::ensureBlobsSized()
     // PeakBlob's member initialisers; truncated slots are simply gone.
 }
 
+// From Thetis Display.cs:4536-4556 [v2.10.3.13] ResetBlobMaximums().
+// Verbatim port of the bClear=false disable logic.  Per Thetis the
+// per-frame entry point at Display.cs:5177 calls this BEFORE the
+// per-pixel scan so the scan re-adds (or upgrades) blobs at the
+// current frame's peaks; blobs that didn't survive the reset
+// disappear cleanly.
+//
+// Three disable conditions (any of):
+//   bClear:                 explicit clear (not used in the per-frame path)
+//   !m_bBlobPeakHold:       hold is OFF -> blobs only live for one frame
+//   m_bBlobPeakHold && !m_bBlobPeakHoldDrop &&
+//       (now - blob.timeMs >= m_fBlobPeakHoldMS):
+//       hold is ON, drop is OFF, hold time elapsed -> hard cut
+//
+// When hold ON + drop ON: blob is preserved here; tickFrame() handles
+// the gradual decay.
+void PeakBlobDetector::resetBlobMaximums()
+{
+    for (auto& entry : m_blobs) {
+        const bool holdOff = !m_holdEnabled;
+        const bool hardCutExpired = m_holdEnabled
+            && !m_holdDrop
+            && (m_currentTimeMs - entry.timeMs)
+                   >= static_cast<qint64>(m_holdMs);
+        if (holdOff || hardCutExpired) {
+            entry.enabled = false;
+            entry.max_dBm = kPeakBlobDisableThresholdDb;
+        }
+    }
+}
+
 // From Thetis Display.cs:4429-4448 [v2.10.3.13] isOccupied().
 // Verbatim port: scan the m_count slots for an enabled blob whose X
 // is within kPeakBlobOccupancyRadiusPx pixels of nX.
@@ -180,6 +211,15 @@ void PeakBlobDetector::update(const QVector<float>& bins,
         return;  // leave m_blobs untouched (cleared by setEnabled(false))
     }
     ensureBlobsSized();
+
+    // Per-frame reset BEFORE the scan.  Mirrors Thetis Display.cs:5177
+    // [v2.10.3.13] which calls ResetBlobMaximums(rx) at the top of the
+    // per-pixel render loop in DrawPanadapterDX2D.  Disables blobs that
+    // failed the hold/drop conditions (hard-cut when hold ON + drop OFF
+    // + elapsed > holdMs; reset-every-frame when hold OFF).  Surviving
+    // blobs get upgraded by processMaximum() during the scan that
+    // follows.
+    resetBlobMaximums();
 
     const int n = bins.size();
 

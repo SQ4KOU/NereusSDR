@@ -291,34 +291,63 @@ private slots:
         QVERIFY(det.blobs()[0].max_dBm < -40.0f);
     }
 
-    void hold_disabled_blob_max_persists_until_replaced_by_higher()
+    void hold_drop_off_hard_cuts_after_hold_expires()
     {
-        // Per Thetis Display.cs:4467-4485 [v2.10.3.13] processMaximums()
-        // updates an existing slot ONLY when the new dbm is >= stored.
-        // The hold-enabled flag does NOT affect this -- it only gates
-        // the per-frame decay.  So with hold OFF, blobs stay at their
-        // peak value indefinitely (no decay running).  This is opposite
-        // to the pre-rewrite "hold off = always replace" behaviour the
-        // old NereusSDR port had.
+        // Per Thetis Display.cs:4550 [v2.10.3.13] ResetBlobMaximums()
+        // disable condition for the "off = hard cut" UI path:
+        //   m_bBlobPeakHold && !m_bBlobPeakHoldDrop &&
+        //   (now - blob.Time) >= m_fBlobPeakHoldMS
+        QVector<float> bins(256, -100.0f);
+        bins[100] = -40.0f;  // peak
+
+        PeakBlobDetector det;
+        det.setEnabled(true);
+        det.setCount(1);
+        det.setHoldEnabled(true);    // hold ON
+        det.setHoldDrop(false);      // drop OFF -> hard cut path
+        det.setHoldMs(500);
+        det.update(bins, 0, 255);
+        QVERIFY(det.blobs()[0].enabled);
+        QCOMPARE(det.blobs()[0].max_dBm, -40.0f);
+
+        // Signal disappears.  Within hold window the blob is preserved
+        // (resetBlobMaximums leaves it alone -- elapsed < holdMs).
+        QVector<float> noPeak(256, -100.0f);
+        det.tickFrame(30, 100);   // advance 100 ms (still within hold)
+        det.update(noPeak, 0, 255);
+        QVERIFY(det.blobs()[0].enabled);
+        QCOMPARE(det.blobs()[0].max_dBm, -40.0f);
+
+        // After hold window expires, hard cut: resetBlobMaximums disables
+        // the blob.  The next scan finds no peak (flat -100 noise floor),
+        // so no replacement.
+        det.tickFrame(30, 500);   // total 600 ms > 500 ms hold
+        det.update(noPeak, 0, 255);
+        QVERIFY(!det.blobs()[0].enabled);
+    }
+
+    void hold_disabled_blob_follows_current_frame_peak()
+    {
+        // Per Thetis Display.cs:4536-4556 [v2.10.3.13] ResetBlobMaximums()
+        // disables ALL slots at the start of every frame when hold is OFF
+        // (the !m_bBlobPeakHold branch).  The per-pixel scan then re-adds
+        // blobs at the current frame's detected peaks, so blobs follow
+        // the live spectrum with no memory.
         QVector<float> bins(256, -100.0f);
         bins[100] = -40.0f;
 
         PeakBlobDetector det;
         det.setEnabled(true);
         det.setCount(1);
-        det.setHoldEnabled(false);   // hold OFF -> no decay
+        det.setHoldEnabled(false);   // hold OFF -> reset every frame
         det.update(bins, 0, 255);
         QCOMPARE(det.blobs()[0].max_dBm, -40.0f);
 
-        // Lower signal at same X -- ignored, max stays at -40.
+        // Lower signal at same X -- with hold off the previous blob is
+        // wiped before the scan, so the new lower peak shows up.
         bins[100] = -60.0f;
         det.update(bins, 0, 255);
-        QCOMPARE(det.blobs()[0].max_dBm, -40.0f);
-
-        // Higher signal at same X -- replaces the held value.
-        bins[100] = -30.0f;
-        det.update(bins, 0, 255);
-        QCOMPARE(det.blobs()[0].max_dBm, -30.0f);
+        QCOMPARE(det.blobs()[0].max_dBm, -60.0f);
     }
 
     // ── tick without update ───────────────────────────────────────────────────
