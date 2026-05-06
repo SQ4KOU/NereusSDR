@@ -490,6 +490,7 @@ set(GUI_SOURCES
     src/gui/spectrum/ActivePeakHoldTrace.cpp
     src/gui/spectrum/PeakBlobDetector.cpp
     src/gui/spectrum/SpectrumDetector.cpp
+    src/gui/spectrum/SpectrumAvenger.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/dbm_strip_math.cpp
     src/gui/SpectrumOverlayMenu.cpp
