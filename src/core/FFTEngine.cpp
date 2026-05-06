@@ -434,7 +434,13 @@ void FFTEngine::processFrame()
     // Safety cap: never emit faster than 60 fps to avoid flooding the main thread
     // at very small FFT sizes or very high sample rates. Display-side timer in
     // SpectrumWidget controls the actual repaint rate independently.
+    //
+    // NB: dropping the frame here also resets m_iqWritePos so the next feedIQ
+    // sample starts a fresh buffer.  Without this reset we'd write past
+    // m_iqRaw[fftSize-1] on the next feedIQ iteration since the overlap-shift
+    // tail of processFrame is the only other path that resets the write head.
     if (m_frameTimerStarted && m_frameTimer.elapsed() < 16) {
+        m_iqWritePos = 0;
         return;
     }
 
