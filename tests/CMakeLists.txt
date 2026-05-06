@@ -150,6 +150,19 @@ nereus_add_test(tst_psform)
 # 457-463 [v2.10.3.13].
 nereus_add_test(tst_ampview_window)
 
+# ── Phase 3M-4 Task 10: PsaIndicatorWidget bottom-banner FB+PS pair ──────────
+# Source-first port of Thetis ucInfoBar.cs:820-1098 [v2.10.3.13] (lblFB +
+# lblPS sub-controls).  Tests cover the full 6-state machine (PS off /
+# RX idle / TX hide-feedback / TX numeric / TX correcting / TX corrections-
+# applied not-correcting), the 4 color thresholds with default + swapped
+# variants (PSForm.cs:1123-1138 [v2.10.3.13]), left/right click handlers
+# routed to invertRedBlueRequested / hideFeedbackToggleRequested
+# (ucInfoBar.cs:1042-1054 [v2.10.3.13]), passive PS label (no signals on
+# click), compact-fonts threshold for "FB"/"Correct", and tooltip text
+# verbatim from ucInfoBar.cs:1081-1096 [v2.10.3.13] including the
+# "Showing level, " prefix gating.
+nereus_add_test(tst_psa_indicator)
+
 # ── Phase 3M-1b Task B.1: BoardCapabilities::hasMicJack flag ─────────────────
 # Parametrized over all HPSDRHW enum values.
 # HL2 and HermesLiteRxOnly → false; all other boards → true.

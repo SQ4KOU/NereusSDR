@@ -483,6 +483,8 @@ set(GUI_SOURCES
     src/gui/MainWindow.cpp
     src/gui/AmpViewChart.cpp
     src/gui/AmpViewWindow.cpp
+    src/gui/PsaIndicatorWidget.cpp
+    src/gui/PsaIndicatorWidget.h
     src/gui/PsForm.cpp
     src/gui/TitleBar.cpp
     src/gui/ConnectionPanel.cpp

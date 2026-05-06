@@ -102,6 +102,7 @@ class MetricLabel;
 class StatusBadge;
 class AdcOverloadBadge;
 class OverflowChip;
+class PsaIndicatorWidget;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -393,6 +394,13 @@ private:
     // Bound to RadioModel::slices().at(0) in buildStatusBar(); rebinds are not
     // needed today (single-slice, RX2 is Phase 3F).
     RxDashboard* m_rxDashboard{nullptr};
+
+    // Phase 3M-4 Task 10: PSA bottom-banner indicator pair (FB + PS labels).
+    // Inserted between m_rxDashboard and m_stationBlock per design doc §4 #5
+    // (option B).  Visibility gated on caps.hasPureSignal in
+    // onConnectionStateChanged().  Wired to PureSignal coordinator + MOX
+    // controller from inside the widget (auto-wired via RadioModel).
+    PsaIndicatorWidget* m_psaIndicator{nullptr};
 
     // VFO flag widget (Phase 3E)
     class VfoWidget* m_vfoWidget{nullptr};

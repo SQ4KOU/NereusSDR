@@ -280,6 +280,8 @@ warren@wpratt.com
 #include "applets/TxApplet.h"
 #include "applets/TxEqDialog.h"
 #include "PsForm.h"
+#include "PsaIndicatorWidget.h"
+#include "core/PureSignal.h"
 #include "applets/PhoneCwApplet.h"
 #include "applets/EqApplet.h"
 #include "applets/VaxApplet.h"
@@ -2698,6 +2700,30 @@ void MainWindow::buildStatusBar()
     }
     hbox->addWidget(m_rxDashboard);
 
+    // ── Phase 3M-4 Task 10: PSA bottom-banner pair (FB + PS) ──────────────────
+    // Source-first port of Thetis ucInfoBar.cs:820-1098 [v2.10.3.13].
+    // The widget auto-wires to RadioModel's PureSignal coordinator and
+    // MoxController on construction; click signals route back to
+    // PureSignal::setInvertRedBlue / setHideFeedback below.
+    // Visibility is gated on caps.hasPureSignal in
+    // onConnectionStateChanged().  Hidden by default until a PS-capable
+    // board is connected.
+    m_psaIndicator = new PsaIndicatorWidget(m_radioModel, barWidget);
+    m_psaIndicator->setVisible(false);
+    if (auto* ps = m_radioModel->pureSignal()) {
+        connect(m_psaIndicator,
+                &PsaIndicatorWidget::invertRedBlueRequested,
+                this, [ps]() {
+                    ps->setInvertRedBlue(!ps->invertRedBlue());
+                });
+        connect(m_psaIndicator,
+                &PsaIndicatorWidget::hideFeedbackToggleRequested,
+                this, [ps]() {
+                    ps->setHideFeedback(!ps->hideFeedback());
+                });
+    }
+    hbox->addWidget(m_psaIndicator);
+
     // ── Stretch ───────────────────────────────────────────────────────────────
     hbox->addStretch(1);
 
@@ -4331,6 +4357,15 @@ void MainWindow::onConnectionStateChanged()
         //   if (HardwareSpecific.Model == HPSDRModel.HPSDR) { ... }).
         m_stepAttController->setIsHpsdrBoard(
             m_radioModel->connection()->radioInfo().boardType == HPSDRHW::Atlas);
+
+        // Phase 3M-4 Task 10: gate the PSA bottom-banner indicator on the
+        // current board's PureSignal capability.  Boards without PS support
+        // (HL2 / Atlas) hide the FB+PS pair entirely; PS-capable boards
+        // (Hermes II / Angelia / Orion / Saturn / G2 etc.) show it.  See
+        // BoardCapabilities.h §286 for the per-board flag.
+        if (m_psaIndicator) {
+            m_psaIndicator->setVisible(caps.hasPureSignal);
+        }
         // P1 full-parity §4.1: gate AutoAttMode::Adaptive on per-step
         // calibration support.  Must be set BEFORE loadSettings() so a
         // persisted "Adaptive" string is clamped to Classic when the
@@ -4363,6 +4398,13 @@ void MainWindow::onConnectionStateChanged()
 
         // Disconnect step attenuator from radio
         m_stepAttController->setRadioConnection(nullptr);
+
+        // Phase 3M-4 Task 10: hide the PSA indicator on disconnect.  When
+        // the user reconnects, onConnectionStateChanged() re-evaluates
+        // caps.hasPureSignal for the new board.
+        if (m_psaIndicator) {
+            m_psaIndicator->setVisible(false);
+        }
 
         // Phase 3Q Sub-PR-6 (F.1): RxDashboard shows placeholder "—" when
         // disconnected automatically (slice values reset to defaults). No
