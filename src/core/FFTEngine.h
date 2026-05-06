@@ -233,10 +233,27 @@ private:
     int m_decimationCounter{0};  // counts input sample pairs; reset each decimation pass
 
 #ifdef HAVE_FFTW3
+    // Raw (un-windowed) I/Q ring buffer.  feedIQ writes here.  processFrame
+    // copies into m_fftIn applying the window function.  Keeping the raw
+    // samples in a separate buffer allows overlap-style frame advance:
+    // after each FFT we copy the trailing (fftSize - advance) samples
+    // back to the head so successive FFT frames share data.  Mirrors
+    // WDSP analyzer.c overlap behaviour driven by Thetis specHPSDR.cs:155
+    // [v2.10.3.13] private int overlap = 30000.
+    fftwf_complex* m_iqRaw{nullptr};
+    // Windowed FFT input + output buffers.  m_fftIn is overwritten each
+    // frame (window applied to m_iqRaw on the way in).
     fftwf_complex* m_fftIn{nullptr};
     fftwf_complex* m_fftOut{nullptr};
     fftwf_plan     m_plan{nullptr};
 #endif
+
+    // Window-recompute flag.  Set by setWindowFunction / setKaiserPi
+    // (main thread); checked + cleared at the top of processFrame
+    // (FFT worker thread).  Without this, window changes via the combo
+    // are silently ignored until the FFT size also changes -- the only
+    // other path that re-runs computeWindow().
+    std::atomic<bool> m_windowDirty{true};
 
     // Window function coefficients (precomputed for current fftSize)
     QVector<float> m_window;

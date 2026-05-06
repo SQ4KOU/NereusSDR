@@ -78,6 +78,9 @@ FFTEngine::~FFTEngine()
     if (m_plan) {
         fftwf_destroy_plan(m_plan);
     }
+    if (m_iqRaw) {
+        fftwf_free(m_iqRaw);
+    }
     if (m_fftIn) {
         fftwf_free(m_fftIn);
     }
@@ -118,6 +121,10 @@ void FFTEngine::setFftSize(int size)
 void FFTEngine::setWindowFunction(WindowFunction wf)
 {
     m_windowFunc.store(static_cast<int>(wf));
+    // Trigger window recompute on next FFT frame.  Without this the new
+    // window function would be silently ignored until the FFT size also
+    // changes (which is the only other path that calls computeWindow).
+    m_windowDirty.store(true);
 }
 
 // From Thetis specHPSDR.cs:145 [v2.10.3.13] -- Kaiser window shape parameter.
@@ -127,6 +134,9 @@ void FFTEngine::setKaiserPi(double pi)
 {
     if (pi <= 0.0) { return; }
     m_kaiserPi.store(pi);
+    // Kaiser shape parameter feeds the bessi0 coefficients in computeWindow;
+    // changing it requires the same recompute as a window-function change.
+    m_windowDirty.store(true);
 }
 
 // FFT size display calibration offset.  Mirrors Thetis Display.cs:1393-1396
@@ -195,13 +205,16 @@ void FFTEngine::feedIQ(const QVector<float>& interleavedIQ)
         replanFft();
     }
 
-    // Append interleaved I/Q to accumulation buffer, honouring decimation.
+    // Append interleaved I/Q to RAW ring buffer (m_iqRaw), honouring
+    // decimation.  processFrame() applies the window into m_fftIn just
+    // before fftwf_execute and then shifts the trailing overlap region
+    // back to the head -- mirrors the WDSP analyzer overlap pattern
+    // driven by Thetis specHPSDR.cs:155 [v2.10.3.13] overlap=30000.
     // From Thetis setup.designer.cs:33732 udDisplayDecimation [v2.10.3.13]:
-    // only every Nth sample pair is passed to the FFT accumulator (N=decimation).
+    // only every Nth sample pair is passed to the FFT accumulator.
     const int dec = m_decimation.load();
-    int numPairs = interleavedIQ.size() / 2;
+    const int numPairs = interleavedIQ.size() / 2;
     for (int i = 0; i < numPairs; ++i) {
-        // Decimation: skip all but every Nth pair
         if (dec > 1) {
             if (m_decimationCounter != 0) {
                 m_decimationCounter = (m_decimationCounter + 1) % dec;
@@ -210,14 +223,16 @@ void FFTEngine::feedIQ(const QVector<float>& interleavedIQ)
             m_decimationCounter = (m_decimationCounter + 1) % dec;
         }
         if (m_iqWritePos >= m_currentFftSize) {
-            // Buffer full — process and reset
+            // Buffer full -- process and shift overlap region back to head.
             processFrame();
-            m_iqWritePos = 0;
         }
-        // Swap I↔Q for spectrum display — matches Thetis analyzer.c:1757-1758
-        // Audio path (WDSP fexchange2) uses normal I/Q order; display is inverted.
-        m_fftIn[m_iqWritePos][0] = interleavedIQ[i * 2 + 1] * m_window[m_iqWritePos];  // Q→I
-        m_fftIn[m_iqWritePos][1] = interleavedIQ[i * 2]     * m_window[m_iqWritePos];  // I→Q
+        // Swap I<->Q for spectrum display.  Matches Thetis analyzer.c:
+        // 1757-1758 [v2.10.3.13].  Audio path (WDSP fexchange2) uses
+        // normal I/Q order; display is inverted.  Window is applied later
+        // in processFrame so we can reuse raw samples after the overlap
+        // shift.
+        m_iqRaw[m_iqWritePos][0] = interleavedIQ[i * 2 + 1];  // Q -> I
+        m_iqRaw[m_iqWritePos][1] = interleavedIQ[i * 2];      // I -> Q
         m_iqWritePos++;
     }
 #else
@@ -236,6 +251,10 @@ void FFTEngine::replanFft()
         fftwf_destroy_plan(m_plan);
         m_plan = nullptr;
     }
+    if (m_iqRaw) {
+        fftwf_free(m_iqRaw);
+        m_iqRaw = nullptr;
+    }
     if (m_fftIn) {
         fftwf_free(m_fftIn);
         m_fftIn = nullptr;
@@ -245,7 +264,10 @@ void FFTEngine::replanFft()
         m_fftOut = nullptr;
     }
 
-    // Allocate aligned buffers
+    // Allocate aligned buffers.  m_iqRaw holds the un-windowed sliding
+    // sample window so we can overlap successive FFT frames without
+    // losing data to the per-frame window multiply.
+    m_iqRaw  = fftwf_alloc_complex(size);
     m_fftIn  = fftwf_alloc_complex(size);
     m_fftOut = fftwf_alloc_complex(size);
 
@@ -258,6 +280,7 @@ void FFTEngine::replanFft()
 
     // Recompute window coefficients
     computeWindow();
+    m_windowDirty.store(false);  // computeWindow just ran; clear pending bit
 
     qCInfo(lcDsp) << "FFTEngine: plan created, window computed";
 #endif
@@ -415,7 +438,23 @@ void FFTEngine::processFrame()
         return;
     }
 
-    // Execute FFT (window already applied during accumulation in feedIQ)
+    // Window-recompute pending?  Set by setWindowFunction or setKaiserPi
+    // since the last FFT frame.  Without this check, window changes via
+    // the combo are silently ignored until the FFT size also changes.
+    if (m_windowDirty.exchange(false)) {
+        computeWindow();
+    }
+
+    // Apply window function to raw I/Q -> windowed FFT input.  m_iqRaw
+    // holds the un-windowed sliding sample window; the multiply happens
+    // here so the un-windowed tail can be overlapped into the next FFT
+    // frame's head without needing to undo a window multiply.
+    for (int i = 0; i < m_currentFftSize; ++i) {
+        m_fftIn[i][0] = m_iqRaw[i][0] * m_window[i];
+        m_fftIn[i][1] = m_iqRaw[i][1] * m_window[i];
+    }
+
+    // Execute FFT
     fftwf_execute(m_plan);
 
     // Convert to dBm: 10 * log10(I² + Q²) + normalization
@@ -468,6 +507,32 @@ void FFTEngine::processFrame()
     emit fftReady(m_receiverId, binsDbm);
     emit fftReadyLinear(m_receiverId, binsLinear,
                         m_windowEnb, static_cast<double>(m_dbmOffset));
+
+    // Overlap shift: copy the trailing (fftSize - advance) samples of
+    // m_iqRaw back to the head, then resume writing at position 'overlap'.
+    // 'advance' is the number of NEW samples consumed per FFT frame =
+    // sampleRate / targetFps, clamped to the FFT size so very small
+    // FFTs don't get pinned to a 1-sample advance.  This decouples FFT
+    // frame rate from FFT size: at fftSize=262144 with sampleRate=768k
+    // and target 30 fps, advance ~ 25600, frame rate stays ~30 fps
+    // (vs ~3 fps without overlap).  Mirrors the WDSP analyzer overlap
+    // pattern driven by Thetis specHPSDR.cs:155 [v2.10.3.13]
+    // private int overlap = 30000.
+    const double sr  = m_sampleRate.load();
+    const int    fps = qMax(1, m_targetFps.load());
+    int advance = (sr > 0.0)
+        ? static_cast<int>(std::round(sr / static_cast<double>(fps)))
+        : m_currentFftSize;
+    advance = qBound(1, advance, m_currentFftSize);
+    const int overlap = m_currentFftSize - advance;
+    if (overlap > 0) {
+        std::memmove(m_iqRaw,
+                     m_iqRaw + advance,
+                     static_cast<size_t>(overlap) * sizeof(fftwf_complex));
+        m_iqWritePos = overlap;
+    } else {
+        m_iqWritePos = 0;
+    }
 #endif
 }
 
