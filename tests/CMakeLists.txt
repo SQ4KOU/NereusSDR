@@ -129,6 +129,14 @@ nereus_add_test(tst_ps_feedback_channel)
 # auto-attention machine (PSForm.cs:97-122 + 729-790 [v2.10.3.13]).
 nereus_add_test(tst_puresignal_coordinator)
 
+# ── Phase 3M-4 Task 8: PsForm modeless dialog ────────────────────────────────
+# Source-first port of Thetis PSForm.cs (1,164 LOC) [v2.10.3.13].  Tests verify
+# all 23 designer controls exist by objectName, defaults match Thetis verbatim,
+# Advanced toggle collapses/restores body widgets, and every action button
+# routes to the PureSignal coordinator (Task 7).  Save button gating mirrors
+# Thetis PSForm.cs:574-590 [v2.10.3.13] CorrectionsBeingApplied predicate.
+nereus_add_test(tst_psform)
+
 # ── Phase 3M-1b Task B.1: BoardCapabilities::hasMicJack flag ─────────────────
 # Parametrized over all HPSDRHW enum values.
 # HL2 and HermesLiteRxOnly → false; all other boards → true.

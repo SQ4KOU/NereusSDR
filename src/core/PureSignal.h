@@ -232,6 +232,87 @@ public:
     bool hideFeedback() const noexcept { return m_hideFeedback; }
     void setHideFeedback(bool on);
 
+    // ── Calibration option setters (PsForm-driven, Task 8) ────────────────
+    //
+    // Thin pass-throughs to TxChannel calcc setters.  Each caches the value
+    // for read-back (so PsForm can sync controls on open) and forwards to
+    // the WDSP entry when m_tx is wired.  These mirror the chk* / ud*
+    // controls in PSForm.designer.cs [v2.10.3.13].  Defaults match the
+    // Thetis designer values verbatim:
+    //   pin             default true   (PSForm.designer.cs:210-211)
+    //   map             default true   (PSForm.designer.cs:193-194)
+    //   stabilize       default false  (PSForm.designer.cs:177)
+    //   autoAttenuate   default true   (PSForm.designer.cs:227-228)
+    //   relaxTolerance  default false  (PSForm.designer.cs:257)
+    //   quickAttenuate  default false  (PSForm.designer.cs:809)
+    //   moxDelay        default 2.0    (PSForm.designer.cs:368-372)
+    //   calDelay        default 0.0    (PSForm.designer.cs:801-805)
+    //   ampDelay        default 150    (PSForm.designer.cs:409-413)
+    //   tint            default 0.5    (PSForm.designer.cs:172)
+    //   loopback        default false  (PSForm.designer.cs:466-479)
+    //   show2Tone       default false  (PSForm.designer.cs:846-857)
+    bool pinMode()        const noexcept { return m_pinMode; }
+    bool mapMode()        const noexcept { return m_mapMode; }
+    bool stabilize()      const noexcept { return m_stabilize; }
+    bool autoAttenuate()  const noexcept { return m_autoAttenuate; }
+    bool relaxTolerance() const noexcept { return m_relaxTolerance; }
+    bool quickAttenuate() const noexcept { return m_quickAttenuate; }
+    double moxDelay()     const noexcept { return m_moxDelay; }
+    double calDelay()     const noexcept { return m_calDelay; }
+    int    ampDelay()     const noexcept { return m_ampDelay; }
+    double tint()         const noexcept { return m_tint; }
+    bool loopback()       const noexcept { return m_loopback; }
+    bool show2ToneMeasurements() const noexcept { return m_show2Tone; }
+    double hwPeak()       const noexcept { return m_hwPeak; }
+
+    // From Thetis PSForm.cs:chkPSPin_CheckedChanged [v2.10.3.13] →
+    // puresignal.SetPSPinMode(_txachannel, chkPSPin.Checked).
+    void setPinMode(bool on);
+    // From Thetis PSForm.cs:chkPSMap_CheckedChanged [v2.10.3.13] →
+    // puresignal.SetPSMapMode(_txachannel, chkPSMap.Checked).
+    void setMapMode(bool on);
+    // From Thetis PSForm.cs:chkPSStbl_CheckedChanged [v2.10.3.13] →
+    // puresignal.SetPSStabilize(_txachannel, chkPSStbl.Checked).
+    void setStabilize(bool on);
+    // From Thetis PSForm.cs:chkPSAutoAttenuate_CheckedChanged [v2.10.3.13] —
+    // toggles auto-attention behaviour; UI-only, no direct WDSP setter.
+    void setAutoAttenuate(bool on);
+    // From Thetis PSForm.cs:chkPSRelaxPtol_CheckedChanged [v2.10.3.13] →
+    // puresignal.SetPSPtol(_txachannel, chkPSRelaxPtol.Checked ? 0.8 : 0.4).
+    // Designer tooltip "Allow for more dynamic variation in feedback".
+    void setRelaxTolerance(bool on);
+    // From Thetis PSForm.cs:chkQuickAttenuate_CheckedChanged [v2.10.3.13]
+    // PSForm.cs:958-961 — QuickAttenuate property mirror; drives the
+    // auto-attention timer cadence.  UI-only, no direct WDSP setter.
+    void setQuickAttenuate(bool on);
+    // From Thetis PSForm.cs:493-496 udPSMoxDelay_ValueChanged [v2.10.3.13]
+    // → puresignal.SetPSMoxDelay(_txachannel, value).
+    void setMoxDelay(double seconds);
+    // From Thetis PSForm.cs:498-501 udPSCalWait_ValueChanged [v2.10.3.13]
+    // → puresignal.SetPSLoopDelay(_txachannel, value).
+    void setCalDelay(double seconds);
+    // From Thetis PSForm.cs:503-506 udPSPhnum_ValueChanged [v2.10.3.13]
+    // → puresignal.SetPSTXDelay(_txachannel, value * 1.0e-09).  Stored as
+    // ns int because the spinbox is integer-valued; conversion to seconds
+    // happens at the WDSP boundary.
+    void setAmpDelay(int ns);
+    // From Thetis PSForm.cs:comboPSTint_SelectedIndexChanged [v2.10.3.13]
+    // — PtolMin/PtolMax tweak; index choices "0.5", "1.1", "2.5".
+    void setTint(double db);
+    // From Thetis PSForm.cs:checkLoopback_CheckedChanged [v2.10.3.13] —
+    // routes feedback streams to the panadapter.  UI-only here; the
+    // panadapter wire-through is Task 13.
+    void setLoopback(bool on);
+    // From Thetis PSForm.cs:968-971 chkShow2ToneMeasurements_CheckedChanged
+    // [v2.10.3.13] → Display.ShowIMDMeasurments = checked.  UI-only here;
+    // the IMD-overlay wire-through is Task 12.
+    void setShow2ToneMeasurements(bool on);
+    // From Thetis PSForm.cs:792-803 PSpeak_TextChanged [v2.10.3.13] →
+    // puresignal.SetPSHWPeak(_txachannel, value).  Stored for UI read-back.
+    // (//MW0LGE attribution preserved — author tag from upstream
+    // //[2.10.3.7]MW0LGE version-stamped comment at PSForm.cs:802.)
+    void setHwPeak(double peak);
+
     // ── Per-board defaults ─────────────────────────────────────────────────
     //
     // Pushes psDefaultPeak + psSampleRate from BoardCapabilities (Task 1)
@@ -268,6 +349,21 @@ signals:
     void calibrationStarted();
     void calibrationComplete(bool success);
     void feedbackError(const QString& message);
+
+    // ── Calibration option change signals (Task 8) ─────────────────────────
+    void pinModeChanged(bool);
+    void mapModeChanged(bool);
+    void stabilizeChanged(bool);
+    void autoAttenuateChanged(bool);
+    void relaxToleranceChanged(bool);
+    void quickAttenuateChanged(bool);
+    void moxDelayChanged(double);
+    void calDelayChanged(double);
+    void ampDelayChanged(int);
+    void tintChanged(double);
+    void loopbackChanged(bool);
+    void show2ToneMeasurementsChanged(bool);
+    void hwPeakChanged(double);
 
 private:
     // From Thetis PSForm.cs:79-89 [v2.10.3.13] — eCMDState enum.  The
@@ -348,6 +444,22 @@ private:
     // UI mirror state
     bool m_invertRedBlue{false};
     bool m_hideFeedback{false};
+
+    // ── Calibration option cache (Task 8 PsForm-driven) ────────────────────
+    // Defaults match Thetis PSForm.designer.cs [v2.10.3.13] verbatim.
+    bool   m_pinMode{true};         // chkPSPin default Checked
+    bool   m_mapMode{true};         // chkPSMap default Checked
+    bool   m_stabilize{false};      // chkPSStbl default unchecked
+    bool   m_autoAttenuate{true};   // chkPSAutoAttenuate default Checked
+    bool   m_relaxTolerance{false}; // chkPSRelaxPtol default unchecked
+    bool   m_quickAttenuate{false}; // chkQuickAttenuate default unchecked
+    double m_moxDelay{2.0};         // udPSMoxDelay default 2.0
+    double m_calDelay{0.0};         // udPSCalWait default 0.0
+    int    m_ampDelay{150};         // udPSPhnum default 150
+    double m_tint{0.5};             // comboPSTint default "0.5"
+    bool   m_loopback{false};       // checkLoopback default unchecked
+    bool   m_show2Tone{false};      // chkShow2ToneMeasurements default unchecked
+    double m_hwPeak{0.0};           // populated by applyBoardCapabilities
 
     // Per-tick info[] snapshots for HasInfoChanged equivalence.  Sized 16
     // per Thetis _info / _oldInfo layout (PSForm.cs:1061-1062 [v2.10.3.13]).

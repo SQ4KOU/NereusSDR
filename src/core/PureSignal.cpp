@@ -381,6 +381,148 @@ void PureSignal::setHideFeedback(bool on)
     emit hideFeedbackChanged(m_hideFeedback);
 }
 
+// ── Calibration option setters (Task 8 PsForm-driven) ────────────────────
+//
+// Each setter early-returns when the new value matches the cached value.
+// When m_tx is wired, the value is forwarded to the corresponding TxChannel
+// calcc setter; otherwise the cache is updated and the WDSP push happens
+// later via forcePS() (which the UI will call after wiring lands).
+//
+// The forwarding maps mirror PSForm.cs *_CheckedChanged / *_ValueChanged
+// handlers byte-for-byte [v2.10.3.13] — see the inline cite in each
+// declaration block in PureSignal.h.
+
+void PureSignal::setPinMode(bool on)
+{
+    if (on == m_pinMode) { return; }
+    m_pinMode = on;
+    if (m_tx) {
+        m_tx->setPSPinMode(on);
+    }
+    emit pinModeChanged(on);
+}
+
+void PureSignal::setMapMode(bool on)
+{
+    if (on == m_mapMode) { return; }
+    m_mapMode = on;
+    if (m_tx) {
+        m_tx->setPSMapMode(on);
+    }
+    emit mapModeChanged(on);
+}
+
+void PureSignal::setStabilize(bool on)
+{
+    if (on == m_stabilize) { return; }
+    m_stabilize = on;
+    if (m_tx) {
+        m_tx->setPSStabilize(on);
+    }
+    emit stabilizeChanged(on);
+}
+
+void PureSignal::setAutoAttenuate(bool on)
+{
+    if (on == m_autoAttenuate) { return; }
+    m_autoAttenuate = on;
+    // No direct WDSP setter — gates the auto-attention timer behaviour.
+    // The autoAttentionTick body honours this flag.
+    emit autoAttenuateChanged(on);
+}
+
+void PureSignal::setRelaxTolerance(bool on)
+{
+    if (on == m_relaxTolerance) { return; }
+    m_relaxTolerance = on;
+    if (m_tx) {
+        // From Thetis PSForm.cs chkPSRelaxPtol_CheckedChanged [v2.10.3.13]:
+        //   puresignal.SetPSPtol(_txachannel, chkPSRelaxPtol.Checked ? 0.8 : 0.4);
+        m_tx->setPSPtol(on ? 0.8 : 0.4);
+    }
+    emit relaxToleranceChanged(on);
+}
+
+void PureSignal::setQuickAttenuate(bool on)
+{
+    if (on == m_quickAttenuate) { return; }
+    m_quickAttenuate = on;
+    // No direct WDSP setter — drives the autoAttentionTick cadence.
+    emit quickAttenuateChanged(on);
+}
+
+void PureSignal::setMoxDelay(double seconds)
+{
+    if (seconds == m_moxDelay) { return; }
+    m_moxDelay = seconds;
+    if (m_tx) {
+        m_tx->setPSMoxDelay(seconds);
+    }
+    emit moxDelayChanged(seconds);
+}
+
+void PureSignal::setCalDelay(double seconds)
+{
+    if (seconds == m_calDelay) { return; }
+    m_calDelay = seconds;
+    if (m_tx) {
+        m_tx->setPSLoopDelay(seconds);
+    }
+    emit calDelayChanged(seconds);
+}
+
+void PureSignal::setAmpDelay(int ns)
+{
+    if (ns == m_ampDelay) { return; }
+    m_ampDelay = ns;
+    if (m_tx) {
+        // From Thetis PSForm.cs:503-506 udPSPhnum_ValueChanged [v2.10.3.13]:
+        //   double actual_delay = puresignal.SetPSTXDelay(_txachannel,
+        //       (double)udPSPhnum.Value * 1.0e-09);
+        m_tx->setPSTXDelay(static_cast<double>(ns) * 1.0e-9);
+    }
+    emit ampDelayChanged(ns);
+}
+
+void PureSignal::setTint(double db)
+{
+    if (db == m_tint) { return; }
+    m_tint = db;
+    // No direct TxChannel setter today — the Thetis comboPSTint handler
+    // (PSForm.cs comboPSTint_SelectedIndexChanged [v2.10.3.13]) drives
+    // ints / spi changes on the engine via puresignal.SetPSIntsAndSpi.
+    // Wire-through is deferred until the calcc test bench at Task 11.
+    emit tintChanged(db);
+}
+
+void PureSignal::setLoopback(bool on)
+{
+    if (on == m_loopback) { return; }
+    m_loopback = on;
+    // UI-only mirror; the panadapter wire-through is Task 13.
+    emit loopbackChanged(on);
+}
+
+void PureSignal::setShow2ToneMeasurements(bool on)
+{
+    if (on == m_show2Tone) { return; }
+    m_show2Tone = on;
+    // UI-only mirror; the SpectrumWidget IMD overlay is Task 12.  From
+    // Thetis PSForm.cs:968-971 chkShow2ToneMeasurements_CheckedChanged
+    // [v2.10.3.13]: Display.ShowIMDMeasurments = chkShow2ToneMeasurements.Checked;
+    emit show2ToneMeasurementsChanged(on);
+}
+
+void PureSignal::setHwPeak(double peak)
+{
+    if (peak == m_hwPeak) { return; }
+    m_hwPeak = peak;
+    if (m_tx) {
+        m_tx->setPSHWPeak(peak);
+    }
+    emit hwPeakChanged(peak);
+}
+
 // ── Per-board defaults ────────────────────────────────────────────────────
 
 void PureSignal::applyBoardCapabilities(const BoardCapabilities& caps)
@@ -389,6 +531,7 @@ void PureSignal::applyBoardCapabilities(const BoardCapabilities& caps)
     // Push the per-board default peak through the calcc engine.  The
     // Thetis equivalent is psdefpeak (PSForm.cs:371-381 [v2.10.3.13])
     // chained from setDefaultPeaks; here we apply it directly.
+    m_hwPeak = m_caps.psDefaultPeak;
     if (m_tx) {
         m_tx->setPSHWPeak(m_caps.psDefaultPeak);
     }

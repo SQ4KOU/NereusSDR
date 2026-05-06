@@ -94,6 +94,8 @@ class MeterWidget;
 class MeterPoller;
 class TitleBar;
 class VaxFirstRunDialog;
+class PsForm;
+
 class RxDashboard;
 class StationBlock;
 class MetricLabel;
@@ -141,6 +143,10 @@ private slots:
     void showAudioDiagnoseDialog();
     void showFeatureRequestDialog();
     void showFeatureRequestDialogImpl();
+    // Phase 3M-4 Task 8: open the modeless PureSignal dialog (Tools menu).
+    // Lazy-constructs on first invocation; subsequent calls show + raise the
+    // existing instance so geometry persists across opens.
+    void openPureSignalDialog();
     // Phase 3Q Sub-PR-4 D.2: right-click context menu on the TitleBar
     // ConnectionSegment. Items: Disconnect / Connect-to-other / Diagnostics /
     // Copy IP / Copy MAC. "Reconnect" omitted — no RadioModel::reconnect() API.
@@ -207,6 +213,12 @@ private:
     RadioModel* m_radioModel{nullptr};
     ConnectionPanel* m_connectionPanel{nullptr};
     SupportDialog* m_supportDialog{nullptr};
+
+    // Phase 3M-4 Task 8: PsForm modeless dialog (Tools > PureSignal...).
+    // Lazy-constructed on first openPureSignalDialog() call; lives for the
+    // lifetime of MainWindow.  Hidden on close, never destroyed.
+    PsForm* m_psForm{nullptr};
+    QAction* m_actPureSignal{nullptr};
 
     // Status bar widgets (double-height AetherSDR design, 46px)
     QLabel* m_connStatusLabel{nullptr};

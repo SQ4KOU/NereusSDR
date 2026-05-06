@@ -279,6 +279,7 @@ warren@wpratt.com
 #include "applets/RxApplet.h"
 #include "applets/TxApplet.h"
 #include "applets/TxEqDialog.h"
+#include "PsForm.h"
 #include "applets/PhoneCwApplet.h"
 #include "applets/EqApplet.h"
 #include "applets/VaxApplet.h"
@@ -2205,9 +2206,15 @@ void MainWindow::buildMenuBar()
         eqAction->setToolTip(QStringLiteral("NYI — Phase 3I-3"));
     }
     {
+        // Phase 3M-4 Task 8: wire DSP > PureSignal... to the modeless dialog.
+        // Both this entry and Tools > PureSignal... below open the same
+        // singleton dialog (DSP for discoverability under the existing
+        // DSP-feature menu, Tools per the per-task plan §8.4).
         QAction* psAction = dspMenu->addAction(QStringLiteral("&PureSignal..."));
-        psAction->setEnabled(false);
-        psAction->setToolTip(QStringLiteral("NYI — Phase 3I-4"));
+        psAction->setToolTip(
+            QStringLiteral("Open the PureSignal pre-distortion control dialog."));
+        connect(psAction, &QAction::triggered,
+                this, &MainWindow::openPureSignalDialog);
     }
     {
         QAction* divAction = dspMenu->addAction(QStringLiteral("&Diversity..."));
@@ -2441,6 +2448,18 @@ void MainWindow::buildMenuBar()
             dlg->raise();
             dlg->activateWindow();
         });
+    }
+
+    // Phase 3M-4 Task 8: PureSignal — modeless singleton dialog.
+    // Same target as DSP > PureSignal... above; this entry per design doc
+    // §4 #3 ("Tools > PureSignal..." for higher discoverability than the
+    // DSP-buried path).
+    {
+        m_actPureSignal = toolsMenu->addAction(QStringLiteral("&PureSignal..."));
+        m_actPureSignal->setToolTip(QStringLiteral(
+            "Open the PureSignal pre-distortion control dialog."));
+        connect(m_actPureSignal, &QAction::triggered,
+                this, &MainWindow::openPureSignalDialog);
     }
 
     toolsMenu->addSeparator();
@@ -4224,6 +4243,34 @@ void MainWindow::showSupportDialog()
     m_supportDialog->show();
     m_supportDialog->raise();
     m_supportDialog->activateWindow();
+}
+
+// Phase 3M-4 Task 8: open the modeless PureSignal dialog (Tools >
+// PureSignal... and DSP > PureSignal...).  Lazy-constructs on the first
+// call; subsequent calls show + raise the existing instance so geometry
+// persists across opens.  Source-first port of Thetis console.cs:43099-
+// 43104 linearityToolStripMenuItem_Click [v2.10.3.13]:
+//
+//   if (psform == null) psform = new PSForm(this);
+//   psform.Show();
+//   psform.Focus();
+//
+// NereusSDR mirrors via raise()+activateWindow() instead of Focus().
+void MainWindow::openPureSignalDialog()
+{
+    if (!m_psForm) {
+        // PureSignal coordinator is owned by RadioModel; pass it directly so
+        // the dialog can wire signal/slot bindings even before connect.
+        // RadioModel is the owner; we keep a non-owning pointer so the
+        // dialog tolerates RadioModel-less startup (covered by tst_psform
+        // construction-time test).
+        PureSignal* coordinator =
+            (m_radioModel ? m_radioModel->pureSignal() : nullptr);
+        m_psForm = new PsForm(m_radioModel, coordinator, this);
+    }
+    m_psForm->show();
+    m_psForm->raise();
+    m_psForm->activateWindow();
 }
 
 void MainWindow::showAudioDiagnoseDialog()
