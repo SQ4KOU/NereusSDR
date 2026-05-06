@@ -1283,26 +1283,22 @@ void TransmitModel::loadFromSettings(const QString& mac)
                                      QStringLiteral("0")).toInt();
     setUserDigOut(userDigOut);
 
-    // ── pureSig (Task 2.5 of P1 full-parity epic) ────────────────────────
-    // Loads the user PureSignal-enable toggle from the existing per-MAC
-    // hardware/<mac>/pureSignal/enabled key.  The model property is the
-    // single source of truth at runtime; the load here seeds it on connect
-    // so the initial-push in RadioModel::connectToRadio carries the
-    // persisted state to the wire-bit setter.
+    // ── pureSig — Phase 3M-4 Task 15: per-MAC read removed ───────────────
+    // The hardware/<mac>/pureSignal/enabled key was the original Task 2.5
+    // P1-full-parity proxy bridge driven by the (now-retired) Setup →
+    // Hardware → PureSignal tab.  Phase 3M-4 Task 14 retired that tab; no
+    // live writer of the per-MAC key remains in the codebase.
     //
-    // Default false = PureSignal feedback DDC NOT routing.  Matches Thetis
-    // PSForm.cs:234 [v2.10.3.13] _psenabled = false initial state.
+    // Per Phase 3M-4 design doc §9.1 the canonical PS-enable persistence
+    // path is per-TX-profile via MicProfileManager Pure_Signal_Enabled
+    // (Task 7) — Thetis matches: PSEnabled is implicit-via-profile-recall,
+    // not stored as a per-radio sticky.  All 19+ stock factory profiles
+    // default to false, matching PSForm.cs:234 [v2.10.3.13] _psenabled =
+    // false initial state.
     //
-    // NOTE: this read uses the pureSignal/ namespace (NOT tx/).  Phase 3M-4
-    // Task 14 retired the Setup → Hardware → PureSignal tab that previously
-    // wrote this key; PsForm + General Options are the live writers in the
-    // PsForm-as-control-surface design.  setPureSigEnabled intentionally
-    // does NOT auto-persist — the writer owns persistence; the model is
-    // read-only on connect.
-    const bool pureSigOn = s.value(
-        QStringLiteral("hardware/%1/pureSignal/enabled").arg(mac),
-        QStringLiteral("False")).toString() == QLatin1String("True");
-    setPureSigEnabled(pureSigOn);
+    // The model property remains the single source of truth at runtime;
+    // PsForm + the PureSignal coordinator write through the model API,
+    // and per-profile recall flips it via the existing setter.
 
     // ── VOX properties (voxEnabled NOT loaded — safety: always false) ─────
     const int voxThresholdDb = s.value(pfx + QLatin1String("Dexp_Threshold"),

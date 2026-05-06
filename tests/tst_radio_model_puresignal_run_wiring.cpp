@@ -218,17 +218,23 @@ private slots:
         QCOMPARE(int(quint8(bank11[2])), 0x40);
     }
 
-    // ── 8. Persistence load: pureSignal/enabled key seeds the model ─────────
-    // TransmitModel::loadFromSettings(mac) reads the existing
-    // hardware/<mac>/pureSignal/enabled key (Phase 3M-4 Task 14 retired the
-    // Setup → Hardware → PureSignal tab; PsForm + General Options are now
-    // the writers).  Verifies the single-source-of-truth contract: persist
-    // on toggle, model loads on connect.
-    void loadFromSettings_readsPureSignalEnabledKey()
+    // ── 8. Persistence load: per-MAC key is NOT read (Task 15) ──────────────
+    // Phase 3M-4 Task 15 removed the dead per-MAC pureSignal/enabled read
+    // from TransmitModel::loadFromSettings.  Per design doc §9.1 the
+    // canonical PS-enable persistence path is per-TX-profile via
+    // MicProfileManager Pure_Signal_Enabled (Task 7); Thetis matches —
+    // PSEnabled is implicit-via-profile-recall, not stored as a per-radio
+    // sticky.  These tests assert the dead read is gone: even if the
+    // (orphaned) per-MAC key is set, loadFromSettings() must NOT seed the
+    // model from it — the model's pureSigEnabled() must remain at whatever
+    // value it had before the load call.
+    void loadFromSettings_doesNotReadPerMacKey()
     {
         const QString mac = QStringLiteral("aa:bb:cc:11:22:33");
 
-        // Pre-seed the AppSettings as the live PS-enable writer does.
+        // Pre-seed the orphaned per-MAC key (no live writer exists; this
+        // simulates a stale entry left over from an old install or a
+        // future wayward writer regression).
         AppSettings::instance().setHardwareValue(
             mac, QStringLiteral("pureSignal/enabled"),
             QStringLiteral("True"));
@@ -239,21 +245,23 @@ private slots:
 
         tm.loadFromSettings(mac);
 
-        // Model picks up the persisted state.
-        QCOMPARE(tm.pureSigEnabled(), true);
+        // Per Task 15: the dead read is removed.  The orphaned per-MAC
+        // key MUST NOT seed the model; pureSigEnabled stays at default.
+        QCOMPARE(tm.pureSigEnabled(), false);
     }
 
-    void loadFromSettings_defaultFalseWhenKeyAbsent()
+    void loadFromSettings_preservesPriorPureSigStateWhenKeyAbsent()
     {
         const QString mac = QStringLiteral("aa:bb:cc:11:22:33");
-        // Don't set the key — defaults to "False" → false.
+        // Don't set the key.
 
         TransmitModel tm;
-        tm.setPureSigEnabled(true);  // pre-load state to verify load overrides
+        tm.setPureSigEnabled(true);  // pre-load state
         tm.loadFromSettings(mac);
 
-        // Absent key → false default per Thetis PSForm.cs:234 [v2.10.3.13].
-        QCOMPARE(tm.pureSigEnabled(), false);
+        // loadFromSettings must NOT touch pureSigEnabled (Task 15: dead read
+        // removed).  Pre-load state survives.
+        QCOMPARE(tm.pureSigEnabled(), true);
     }
 };
 
