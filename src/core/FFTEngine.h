@@ -124,6 +124,18 @@ public:
     void setDecimation(int factor);
     int  decimation() const { return m_decimation.load(); }
 
+    // Equivalent Noise Bandwidth of the current window function, expressed
+    // as a multiplier on the natural per-bin bandwidth (sample_rate / N).
+    //
+    //   ENB_bins = N × Σ(w[i]²) / (Σ w[i])²
+    //
+    // For typical windows: rectangular = 1.00, Hann = 1.50, Hamming ≈ 1.36,
+    // Blackman-Harris 4-term ≈ 2.00, Flat-Top ≈ 3.77.  Used by the Thetis
+    // detector function (analyzer.c:283-462 [v2.10.3.13]) to scale Average
+    // / Sample / RMS modes via inv_enb so that integrated noise reads
+    // independent of window choice.  Computed inside computeWindow().
+    double windowEnb() const { return m_windowEnb; }
+
 public slots:
     // Feed raw interleaved I/Q samples from RadioConnection.
     // Format: [I0, Q0, I1, Q1, ...] as float pairs.
@@ -132,9 +144,22 @@ public slots:
 
 signals:
     // Emitted when a new FFT frame is ready.
-    // binsDbm contains fftSize/2 float values (positive frequencies only),
-    // representing power in dBm at each frequency bin.
+    // binsDbm contains fftSize float values (full FFT-shifted bins, neg-freq
+    // first then pos-freq), representing power in dBm at each frequency bin.
     void fftReady(int receiverId, const QVector<float>& binsDbm);
+
+    // Linear-power side-channel for the Thetis-faithful display pipeline.
+    //
+    // binsLinear contains the same length and ordering as binsDbm but values
+    // are |X[k]|² (linear power, no log conversion, no dBm normalization).
+    // Required by the Thetis WDSP analyzer detector + averaging pipeline
+    // which operates on linear-domain bins and applies the 10×log₁₀
+    // conversion only at final pixel output (analyzer.c:464-554
+    // [v2.10.3.13] avenger() does the log step per av_mode).
+    //
+    // Emitted in lock-step with fftReady — every frame, both signals fire.
+    // Cost: one extra QVector<float> heap allocation per frame.
+    void fftReadyLinear(int receiverId, const QVector<float>& binsLinear);
 
 private:
     void replanFft();
@@ -176,6 +201,13 @@ private:
 
     // dBm calibration offset (accounts for window gain + FFT normalization)
     float m_dbmOffset{0.0f};
+
+    // Equivalent Noise Bandwidth of the current window in bins:
+    //   m_windowEnb = N × Σ(w[i]²) / (Σ w[i])²
+    // Recomputed every time the window changes (computeWindow()).  Used by
+    // downstream consumers (e.g. SpectrumDetector) for inv_enb scaling
+    // matching analyzer.c:368-441 [v2.10.3.13].
+    double m_windowEnb{1.0};
 
     // From Thetis display.cs:215
     static constexpr int kMaxFftSize = 65536;

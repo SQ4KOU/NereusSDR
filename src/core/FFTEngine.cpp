@@ -277,13 +277,25 @@ void FFTEngine::computeWindow()
     // Compute window coherent gain for dBm normalization.
     // Power normalization: divide |X[k]|² by (sum of window)² to get
     // correct absolute power. The dBm offset accounts for this.
-    float sum = 0.0f;
+    double sum = 0.0;       // Σw[i]
+    double sumSq = 0.0;     // Σw[i]²  — needed for ENB
     for (float w : m_window) {
-        sum += w;
+        sum   += w;
+        sumSq += static_cast<double>(w) * static_cast<double>(w);
     }
     // dbmOffset: 10*log10(1/sum²) = -20*log10(sum)
     // This normalizes the FFT output so a full-scale sine reads 0 dBFS.
-    m_dbmOffset = -20.0f * std::log10(sum > 0.0f ? sum : 1.0f);
+    m_dbmOffset = -20.0f * std::log10(sum > 0.0 ? static_cast<float>(sum) : 1.0f);
+
+    // Equivalent Noise Bandwidth — N × Σw[i]² / (Σw[i])²  (in bins).
+    // Required by Thetis WDSP analyzer detector function for inv_enb scaling
+    // of Average / Sample / RMS modes (analyzer.c:368-441 [v2.10.3.13]).
+    // For rectangular ENB = 1.0; Hann ≈ 1.50; BH-4T ≈ 2.00; Flat-Top ≈ 3.77.
+    if (sum > 0.0) {
+        m_windowEnb = static_cast<double>(m_window.size()) * sumSq / (sum * sum);
+    } else {
+        m_windowEnb = 1.0;
+    }
 }
 
 void FFTEngine::processFrame()
@@ -310,6 +322,11 @@ void FFTEngine::processFrame()
     int N = m_currentFftSize;
     int half = N / 2;
     QVector<float> binsDbm(N);
+    // Linear-power side-channel for the Thetis-faithful detector + avenger
+    // pipeline (analyzer.c:283-554 [v2.10.3.13]).  Same FFT-shifted ordering
+    // as binsDbm; values are |X[k]|² post-FFT, no log conversion, no dBm
+    // offset (the avenger applies window-gain scaling and 10·log₁₀ later).
+    QVector<float> binsLinear(N);
 
     // Normalization: the FFT output magnitude needs to be divided by the
     // window's coherent gain (sum of window coefficients) to get correct
@@ -321,6 +338,7 @@ void FFTEngine::processFrame()
         float re = m_fftOut[srcIdx][0];
         float im = m_fftOut[srcIdx][1];
         float powerSq = re * re + im * im;
+        binsLinear[i] = powerSq;
 
         // Avoid log(0) — floor at -200 dBm
         // From Thetis display.cs:2842 — initializes display data to -200
@@ -335,7 +353,11 @@ void FFTEngine::processFrame()
     m_frameTimer.restart();
     m_frameTimerStarted = true;
 
+    // Emit both signals in lock-step.  Existing dBm consumers stay on
+    // fftReady; the new Thetis-faithful detector/avenger pipeline (Phase
+    // 1A.4) subscribes to fftReadyLinear.
     emit fftReady(m_receiverId, binsDbm);
+    emit fftReadyLinear(m_receiverId, binsLinear);
 #endif
 }
 
