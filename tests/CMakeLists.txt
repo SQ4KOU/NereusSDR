@@ -3535,3 +3535,11 @@ nereus_add_test(tst_transmit_model_hl2_dbm)
 #                                           differs from the HL2 formula value.
 # Source: mi0bot-Thetis console.cs:47775-47778 [v2.10.3.13-beta2].
 nereus_add_test(tst_transmit_model_hl2_audio_volume)
+
+# ── Phase 3M-4 Task 12: two-tone IMD overlay ────────────────────────────────
+# 12 tests covering the ImdOverlay peak-detection state machine + IMD3/IMD5
+# labeling + EMA smoothing + readout text formatting.  Pure C++ math; no
+# Qt-widget instantiation, no PureSignal coordinator dependency.
+# Source: Thetis display.cs:5008/5210-5316/5453-5475/5512-5685/5725-5760
+#         [v2.10.3.13].
+nereus_add_test(tst_imd_overlay)

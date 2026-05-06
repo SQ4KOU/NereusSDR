@@ -282,6 +282,7 @@ warren@wpratt.com
 #include "PsForm.h"
 #include "PsaIndicatorWidget.h"
 #include "core/PureSignal.h"
+#include "core/TwoToneController.h"
 #include "applets/PhoneCwApplet.h"
 #include "applets/EqApplet.h"
 #include "applets/VaxApplet.h"
@@ -1040,6 +1041,30 @@ void MainWindow::buildUI()
             connect(mox, &MoxController::moxStateChanged,
                     m_spectrumWidget, &SpectrumWidget::setMoxOverlay,
                     Qt::QueuedConnection);
+        }
+
+        // ── Phase 3M-4 Task 12: SpectrumWidget IMD overlay state wiring ──────
+        // From Thetis display.cs:5008 [v2.10.3.13] show condition:
+        //   show_imd_measurements = local_mox && _testing_imd
+        //                           && _show_imd_measurements && displayduplex;
+        // local_mox is already wired above. Wire the other two flags from
+        // their authoritative coordinators:
+        //   testing_imd            <- TwoToneController::twoToneActiveChanged
+        //                              (mirrors Thetis Display.TestingIMD,
+        //                              display.cs:296-302 [v2.10.3.13])
+        //   show_imd_measurements  <- PureSignal::show2ToneMeasurementsChanged
+        //                              (mirrors Thetis Display.ShowIMDMeasurments,
+        //                              display.cs:304-311 [v2.10.3.13])
+        // displayduplex stays at SpectrumWidget's default (true) — see header.
+        if (m_spectrumWidget) {
+            if (auto* tt = m_radioModel->twoToneController()) {
+                connect(tt, &TwoToneController::twoToneActiveChanged,
+                        m_spectrumWidget, &SpectrumWidget::setTestingIMD);
+            }
+            if (auto* ps = m_radioModel->pureSignal()) {
+                connect(ps, &PureSignal::show2ToneMeasurementsChanged,
+                        m_spectrumWidget, &SpectrumWidget::setShowIMDMeasurements);
+            }
         }
 
         // ── 3M-1c Phase L.3: VFO TX badge routing ─────────────────────────────
