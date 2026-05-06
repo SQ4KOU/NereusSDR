@@ -50,7 +50,8 @@ private slots:
         // pin assignments — mi0bot setup.cs:20232 [v2.10.3.13-beta2].
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::OcOutputs));
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Xvtr));
-        QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::PureSignal));
+        // Setup → Hardware → PureSignal tab retired in Phase 3M-4 Task 14;
+        // no Tab::PureSignal enum value to assert against any more.
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Diversity));
         // Calibration tab is always visible after IA reshape Phase 5 —
         // PA-specific groups moved to PA → Watt Meter, so the per-board
@@ -112,7 +113,8 @@ private slots:
 
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::AntennaAlex));
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::OcOutputs));
-        QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::PureSignal));
+        // Setup → Hardware → PureSignal tab retired in Phase 3M-4 Task 14;
+        // PsForm at Tools > PureSignal is the entire PS control surface.
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::Diversity));
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::Calibration));
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Hl2IoBoard));
@@ -136,7 +138,7 @@ private slots:
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::AntennaAlex));
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::OcOutputs));
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Xvtr));
-        QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::PureSignal));
+        // Setup → Hardware → PureSignal tab retired in Phase 3M-4 Task 14.
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Diversity));
         // Calibration tab is always visible after IA reshape Phase 5 —
         // PA-specific groups moved to PA → Watt Meter, so the per-board
@@ -159,7 +161,7 @@ private slots:
 
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::AntennaAlex));
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::OcOutputs));
-        QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::PureSignal));
+        // Setup → Hardware → PureSignal tab retired in Phase 3M-4 Task 14.
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::Diversity));
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::Calibration));
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Hl2IoBoard));

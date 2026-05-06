@@ -77,8 +77,8 @@ private slots:
     }
 
     // ── 2. Initial connect: persisted true → wire bit set on first frame ────
-    // Models the case where pureSig was persisted true (PureSignalTab
-    // "Enable" was on at last save) and a fresh connect cycle pushes it.
+    // Models the case where pureSig was persisted true (user PS-enable toggle
+    // was on at last save) and a fresh connect cycle pushes it.
     void initialPush_persistedTrue_setsBit6()
     {
         P1RadioConnection conn;
@@ -220,15 +220,15 @@ private slots:
 
     // ── 8. Persistence load: pureSignal/enabled key seeds the model ─────────
     // TransmitModel::loadFromSettings(mac) reads the existing
-    // hardware/<mac>/pureSignal/enabled key (set by HardwarePage's
-    // PureSignalTab "Enable" checkbox via setHardwareValue).  Verifies the
-    // single-source-of-truth contract: Setup persists, model loads on
-    // connect.
+    // hardware/<mac>/pureSignal/enabled key (Phase 3M-4 Task 14 retired the
+    // Setup → Hardware → PureSignal tab; PsForm + General Options are now
+    // the writers).  Verifies the single-source-of-truth contract: persist
+    // on toggle, model loads on connect.
     void loadFromSettings_readsPureSignalEnabledKey()
     {
         const QString mac = QStringLiteral("aa:bb:cc:11:22:33");
 
-        // Pre-seed the AppSettings as the PureSignalTab "Enable" toggle does.
+        // Pre-seed the AppSettings as the live PS-enable writer does.
         AppSettings::instance().setHardwareValue(
             mac, QStringLiteral("pureSignal/enabled"),
             QStringLiteral("True"));

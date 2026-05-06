@@ -374,7 +374,9 @@ void SetupDialog::buildTree()
         selectPage(page);
     });
 
-    add(transmit, "PureSignal",         new PureSignalPage(m_model));
+    // Note: Setup → Transmit → PureSignal page retired in Phase 3M-4 Task 14
+    // (no Thetis equivalent; PsForm at Tools > PureSignal is the entire PS
+    // control surface — design §4.2).
 
     // Phase 3M-3a-iii Task 14: full DexpVoxPage that mirrors Thetis tpDSPVOXDE
     // 1:1 (setup.designer.cs:44763-45260 [v2.10.3.13]).  Registered as the

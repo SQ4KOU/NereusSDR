@@ -1285,20 +1285,20 @@ void TransmitModel::loadFromSettings(const QString& mac)
 
     // ── pureSig (Task 2.5 of P1 full-parity epic) ────────────────────────
     // Loads the user PureSignal-enable toggle from the existing per-MAC
-    // hardware/<mac>/pureSignal/enabled key (set by HardwarePage's
-    // PureSignalTab "Enable" checkbox via setHardwareValue).  The model
-    // property is the single source of truth at runtime; the load here
-    // seeds it on connect so the initial-push in
-    // RadioModel::connectToRadio carries the persisted state to the
-    // wire-bit setter.
+    // hardware/<mac>/pureSignal/enabled key.  The model property is the
+    // single source of truth at runtime; the load here seeds it on connect
+    // so the initial-push in RadioModel::connectToRadio carries the
+    // persisted state to the wire-bit setter.
     //
     // Default false = PureSignal feedback DDC NOT routing.  Matches Thetis
     // PSForm.cs:234 [v2.10.3.13] _psenabled = false initial state.
     //
-    // NOTE: this read uses the pureSignal/ namespace (NOT tx/) to share
-    // storage with HardwarePage::onTabSettingChanged.  setPureSigEnabled
-    // intentionally does NOT auto-persist — HardwarePage owns persistence
-    // for this key, model is read-only on connect.
+    // NOTE: this read uses the pureSignal/ namespace (NOT tx/).  Phase 3M-4
+    // Task 14 retired the Setup → Hardware → PureSignal tab that previously
+    // wrote this key; PsForm + General Options are the live writers in the
+    // PsForm-as-control-surface design.  setPureSigEnabled intentionally
+    // does NOT auto-persist — the writer owns persistence; the model is
+    // read-only on connect.
     const bool pureSigOn = s.value(
         QStringLiteral("hardware/%1/pureSignal/enabled").arg(mac),
         QStringLiteral("False")).toString() == QLatin1String("True");

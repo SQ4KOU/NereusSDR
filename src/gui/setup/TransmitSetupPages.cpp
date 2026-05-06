@@ -1245,61 +1245,11 @@ void SpeechProcessorPage::buildQuickNotesSection()
     }
 }
 
-// ---------------------------------------------------------------------------
-// PureSignalPage
-// ---------------------------------------------------------------------------
-
-PureSignalPage::PureSignalPage(RadioModel* model, QWidget* parent)
-    : SetupPage(QStringLiteral("PureSignal"), model, parent)
-{
-    buildUI();
-}
-
-void PureSignalPage::buildUI()
-{
-    NereusSDR::Style::applyDarkPageStyle(this);
-
-    // --- Section: PureSignal ---
-    auto* psGroup = new QGroupBox(QStringLiteral("PureSignal"), this);
-    auto* psForm  = new QFormLayout(psGroup);
-    psForm->setSpacing(6);
-
-    m_enableToggle = new QCheckBox(QStringLiteral("Enable PureSignal"), psGroup);
-    m_enableToggle->setEnabled(false);  // NYI — requires Phase 3I-4
-    m_enableToggle->setToolTip(QStringLiteral("PureSignal linearization — not yet implemented (Phase 3I-4)"));
-    psForm->addRow(QString(), m_enableToggle);
-
-    m_autoCalToggle = new QCheckBox(QStringLiteral("Auto-calibrate"), psGroup);
-    m_autoCalToggle->setEnabled(false);  // NYI
-    m_autoCalToggle->setToolTip(QStringLiteral("PureSignal auto-calibration — not yet implemented"));
-    psForm->addRow(QString(), m_autoCalToggle);
-
-    m_feedbackDdcCombo = new QComboBox(psGroup);
-    // From Thetis setup.cs: PS feedback DDC choices depend on board DDC count
-    m_feedbackDdcCombo->addItems({QStringLiteral("DDC 0"), QStringLiteral("DDC 1"),
-                                  QStringLiteral("DDC 2"), QStringLiteral("DDC 3"),
-                                  QStringLiteral("DDC 4"), QStringLiteral("DDC 5"),
-                                  QStringLiteral("DDC 6"), QStringLiteral("DDC 7")});
-    m_feedbackDdcCombo->setEnabled(false);  // NYI
-    m_feedbackDdcCombo->setToolTip(QStringLiteral("Feedback DDC selection — not yet implemented"));
-    psForm->addRow(QStringLiteral("Feedback DDC:"), m_feedbackDdcCombo);
-
-    m_attentionSlider = new QSlider(Qt::Horizontal, psGroup);
-    m_attentionSlider->setRange(0, 31);
-    m_attentionSlider->setValue(0);
-    m_attentionSlider->setEnabled(false);  // NYI
-    m_attentionSlider->setToolTip(QStringLiteral("PureSignal feedback attention (dB) — not yet implemented"));
-    psForm->addRow(QStringLiteral("Attention (dB):"), m_attentionSlider);
-
-    m_infoLabel = new QLabel(QStringLiteral("Status: Not active"), psGroup);
-    m_infoLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: #607080; font-style: italic; }"));
-    m_infoLabel->setEnabled(false);
-    psForm->addRow(QStringLiteral("Status:"), m_infoLabel);
-
-    contentLayout()->addWidget(psGroup);
-    contentLayout()->addStretch();
-}
+// Note: Setup → Transmit → PureSignal page (PureSignalPage) retired in
+// Phase 3M-4 Task 14.  No Thetis equivalent — PsForm at Tools > PureSignal
+// is the entire PureSignal control surface (design §4.2).  Capability
+// gating moved to Tools menu visibility, PureSignalApplet, TxApplet [PS-A],
+// and PsaIndicatorWidget.
 
 // ══════════════════════════════════════════════════════════════════════════════
 // DexpVoxPage  (Phase 3M-3a-iii Task 14)
@@ -1361,9 +1311,9 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // applying the canonical dark page stylesheet.  Without this the
     // QSpinBox / QDoubleSpinBox / QGroupBox widgets ship with Qt-default
     // borders that look mismatched against CfcSetupPage / AgcAlcSetupPage
-    // and the rest of the Setup pages.  Same one-line call PowerPage
-    // (line 160), TxProfilesPage (543), SpeechProcessorPage (637),
-    // PureSignalPage (1084) all use.
+    // and the rest of the Setup pages.  Same one-line call PowerPage,
+    // TxProfilesPage, SpeechProcessorPage, and other Transmit Setup pages
+    // all use.
     NereusSDR::Style::applyDarkPageStyle(this);
 
     if (!model) {

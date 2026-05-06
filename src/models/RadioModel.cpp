@@ -2898,9 +2898,10 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // Source: Thetis ChannelMaster/networkproto1.c:599-600 [v2.10.3.13]:
     //   case 11:
     //     C2 = (prn->mic.line_in_gain & 0b00011111) | ((prn->puresignal_run & 1) << 6);
-    // Until 3M-4 lights up the actual feedback DDC routing, the user's
-    // PureSignal-enable toggle (PureSignalTab "Enable") is the proxy for
-    // the wire bit — same semantic as Thetis PSForm.cs:240 [v2.10.3.13]
+    // The user's PureSignal-enable toggle (driven from PsForm + persisted
+    // under hardware/<mac>/pureSignal/enabled — Phase 3M-4 retired the
+    // Setup → Hardware → PureSignal tab in favour of PsForm) is the proxy
+    // for the wire bit — same semantic as Thetis PSForm.cs:240 [v2.10.3.13]
     // calling NetworkIO.SetPureSignal(1) when the user enables PS.
     QMetaObject::invokeMethod(m_connection, [conn = m_connection,
                                               ps = m_transmitModel.pureSigEnabled()]() {
@@ -3138,12 +3139,13 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
     //   case 11:
     //     C2 = (prn->mic.line_in_gain & 0b00011111) | ((prn->puresignal_run & 1) << 6);
     //
-    // Until 3M-4 lights up the actual feedback DDC routing, the user's
-    // PureSignal-enable toggle (PureSignalTab "Enable" checkbox) is the proxy
-    // for the wire bit — same semantic as Thetis's PSEnabled property setter
-    // calling NetworkIO.SetPureSignal(1).  The P2 override (Task 2.3) stores
-    // the flag for symmetric API only and emits nothing on the wire until
-    // 3M-4 wires up the feedback DDC routing.
+    // The user's PureSignal-enable toggle (driven from PsForm + persisted
+    // under hardware/<mac>/pureSignal/enabled — Phase 3M-4 retired the
+    // Setup → Hardware → PureSignal tab in favour of PsForm) is the proxy
+    // for the wire bit — same semantic as Thetis's PSEnabled property
+    // setter calling NetworkIO.SetPureSignal(1).  The P2 override (Task
+    // 2.3) stores the flag for symmetric API only and emits nothing on the
+    // wire until the live PS coordinator wires up the feedback DDC routing.
     QObject::connect(&m_transmitModel, &TransmitModel::pureSigChanged,
                      m_connection, &RadioConnection::setPuresignalRun,
                      Qt::QueuedConnection);
