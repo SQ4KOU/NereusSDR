@@ -173,7 +173,11 @@ private slots:
 
     void count_clamped_when_fewer_peaks_than_n()
     {
-        // Only 2 local maxima exist — requesting 5 should return 2
+        // Only 2 peaks exist (at -40 and -50, separated by 100-bin
+        // troughs satisfying the 10 dB trigger-delta hysteresis).
+        // Requesting count=5 should leave 2 slots enabled and 3 unused.
+        // From Thetis Display.cs:4451 [v2.10.3.13] -- m_nRX1Maximums is
+        // a fixed-size 20-element array; unused slots have Enabled=false.
         QVector<float> bins(256, -100.0f);
         bins[50]  = -40.0f;
         bins[150] = -50.0f;
@@ -183,7 +187,14 @@ private slots:
         det.setCount(5);
         det.update(bins, 0, 255);
 
-        QVERIFY(det.blobs().size() <= 2);
+        // Persistent fixed-size array: size == count.
+        QCOMPARE(det.blobs().size(), 5);
+        // Count enabled slots (= peaks actually found).
+        int enabledCount = 0;
+        for (const auto& b : det.blobs()) {
+            if (b.enabled) { ++enabledCount; }
+        }
+        QCOMPARE(enabledCount, 2);
     }
 
     // ── Inside-filter constraint ─────────────────────────────────────────────
@@ -200,8 +211,19 @@ private slots:
         det.setInsideFilterOnly(true);
         det.update(bins, /*filterLowBin=*/100, /*filterHighBin=*/900);
 
-        QCOMPARE(det.blobs().size(), 1);
-        QCOMPARE(det.blobs()[0].binIndex, 600);
+        // Persistent fixed-size array: size == count.
+        QCOMPARE(det.blobs().size(), 2);
+        // Only the inside peak gets enabled.
+        int enabledCount = 0;
+        int firstEnabledIdx = -1;
+        for (int i = 0; i < det.blobs().size(); ++i) {
+            if (det.blobs()[i].enabled) {
+                ++enabledCount;
+                if (firstEnabledIdx < 0) { firstEnabledIdx = i; }
+            }
+        }
+        QCOMPARE(enabledCount, 1);
+        QCOMPARE(det.blobs()[firstEnabledIdx].binIndex, 600);
     }
 
     void inside_filter_false_finds_all_bins()
@@ -269,22 +291,34 @@ private slots:
         QVERIFY(det.blobs()[0].max_dBm < -40.0f);
     }
 
-    void hold_disabled_does_not_merge()
+    void hold_disabled_blob_max_persists_until_replaced_by_higher()
     {
+        // Per Thetis Display.cs:4467-4485 [v2.10.3.13] processMaximums()
+        // updates an existing slot ONLY when the new dbm is >= stored.
+        // The hold-enabled flag does NOT affect this -- it only gates
+        // the per-frame decay.  So with hold OFF, blobs stay at their
+        // peak value indefinitely (no decay running).  This is opposite
+        // to the pre-rewrite "hold off = always replace" behaviour the
+        // old NereusSDR port had.
         QVector<float> bins(256, -100.0f);
         bins[100] = -40.0f;
 
         PeakBlobDetector det;
         det.setEnabled(true);
         det.setCount(1);
-        det.setHoldEnabled(false);   // hold OFF
+        det.setHoldEnabled(false);   // hold OFF -> no decay
         det.update(bins, 0, 255);
         QCOMPARE(det.blobs()[0].max_dBm, -40.0f);
 
-        // Update with weaker signal — no hold, so new (lower) value wins
+        // Lower signal at same X -- ignored, max stays at -40.
         bins[100] = -60.0f;
         det.update(bins, 0, 255);
-        QCOMPARE(det.blobs()[0].max_dBm, -60.0f);
+        QCOMPARE(det.blobs()[0].max_dBm, -40.0f);
+
+        // Higher signal at same X -- replaces the held value.
+        bins[100] = -30.0f;
+        det.update(bins, 0, 255);
+        QCOMPARE(det.blobs()[0].max_dBm, -30.0f);
     }
 
     // ── tick without update ───────────────────────────────────────────────────

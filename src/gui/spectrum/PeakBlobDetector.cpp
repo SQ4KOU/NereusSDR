@@ -73,77 +73,210 @@
 
 namespace NereusSDR {
 
-// From Thetis display.cs:5453-5508 [v2.10.3.13]
-// C# loop searched m_RX1Maximums for local maxima and kept top-N by magnitude.
+// trigger_delta: the dB drop required to register a peak (and rise to
+// register a trough).  From Thetis Display.cs:5217 [v2.10.3.13]:
+//   float trigger_delta = 10; //db
+// Hardcoded in Thetis; mirrored verbatim here.
+static constexpr float kPeakBlobTriggerDeltaDb = 10.0f;
+
+// Ellipse/circle radius for "near-X" slot occupancy.  From Thetis
+// Display.cs:4441 [v2.10.3.13]:
+//   if (entry.Enabled && p1 < 10) // 10 being the radius of the ellipse/circle
+static constexpr int kPeakBlobOccupancyRadiusPx = 10;
+
+// Disable threshold: a blob whose max_dBm has decayed at or below this
+// value is dropped.  From Thetis Display.cs:5488-5491 [v2.10.3.13]:
+//   else if (entry.max_dBm <= -200.0)
+//     entry.Enabled = false;
+//     entry.max_dBm = float.MinValue;
+static constexpr float kPeakBlobDisableThresholdDb = -200.0f;
+
+void PeakBlobDetector::ensureBlobsSized()
+{
+    if (m_blobs.size() == m_count) { return; }
+    m_blobs.resize(m_count);
+    // Newly-grown slots get the disabled / -200 default already from
+    // PeakBlob's member initialisers; truncated slots are simply gone.
+}
+
+// From Thetis Display.cs:4429-4448 [v2.10.3.13] isOccupied().
+// Verbatim port: scan the m_count slots for an enabled blob whose X
+// is within kPeakBlobOccupancyRadiusPx pixels of nX.
+int PeakBlobDetector::isOccupied(int nX) const
+{
+    for (int n = 0; n < m_count && n < m_blobs.size(); ++n) {
+        const PeakBlob& entry = m_blobs[n];
+        if (!entry.enabled) { continue; }
+        const int p1 = std::abs(nX - entry.binIndex);
+        if (p1 < kPeakBlobOccupancyRadiusPx) {
+            return n;
+        }
+    }
+    return -1;
+}
+
+// From Thetis Display.cs:4456-4518 [v2.10.3.13] processMaximums().
+// Verbatim port (with NereusSDR field names):
+//   - If a slot is occupied near nX:
+//       if dbm >= entry.max_dBm: update entry + bubble-up
+//       (else: do nothing)
+//   - Else (no nearby slot):
+//       walk slots top-down; first slot where dbm > stored, push down
+//       and insert.
+void PeakBlobDetector::processMaximum(float dbm, int nX)
+{
+    ensureBlobsSized();
+
+    const int nOccupiedIndex = isOccupied(nX);
+
+    if (nOccupiedIndex >= 0) {
+        PeakBlob& entry = m_blobs[nOccupiedIndex];
+        if (dbm >= entry.max_dBm) {
+            entry.enabled  = true;
+            entry.max_dBm  = dbm;
+            entry.binIndex = nX;
+            entry.timeMs   = m_currentTimeMs;
+            // Bubble up while higher than the entry above (descending sort).
+            // From Thetis Display.cs:4476-4484 [v2.10.3.13].
+            int pos = nOccupiedIndex;
+            while (pos > 0 && m_blobs[pos].max_dBm > m_blobs[pos - 1].max_dBm) {
+                std::swap(m_blobs[pos - 1], m_blobs[pos]);
+                --pos;
+            }
+        }
+        return;
+    }
+
+    // No nearby slot -- find the first position to insert.
+    // From Thetis Display.cs:4489-4517 [v2.10.3.13].
+    for (int n = 0; n < m_count; ++n) {
+        if (dbm > m_blobs[n].max_dBm) {
+            // Push remaining entries down by one.
+            for (int nn = m_count - 1; nn > n; --nn) {
+                m_blobs[nn] = m_blobs[nn - 1];
+            }
+            // Insert new at position n.
+            m_blobs[n].enabled  = true;
+            m_blobs[n].max_dBm  = dbm;
+            m_blobs[n].binIndex = nX;
+            m_blobs[n].timeMs   = m_currentTimeMs;
+            break;
+        }
+    }
+}
+
+// Per-frame scan + processMaximum dispatch.  Mirrors the per-pixel
+// state machine inside Thetis Display.cs:5245-5316 [v2.10.3.13]'s
+// render loop -- specifically the trigger-delta peak detector that
+// finds peaks AT 10 dB drop from the running max (and troughs at
+// 10 dB rise from the running min).  This is fundamentally different
+// from a "bins[i] > bins[i-1] && bins[i] > bins[i+1]" local-maxima
+// scan: it produces the SAME peaks Thetis's UI shows because both
+// use the same hysteresis state machine.
 void PeakBlobDetector::update(const QVector<float>& bins,
                               int filterLowBin, int filterHighBin)
 {
     if (!m_enabled || bins.isEmpty()) {
-        m_blobs.clear();
-        return;
+        return;  // leave m_blobs untouched (cleared by setEnabled(false))
     }
+    ensureBlobsSized();
 
-    // Clamp search range to valid interior (i ± 1 must be valid).
-    const int low  = m_insideOnly ? qMax(1, filterLowBin)              : 1;
-    const int high = m_insideOnly ? qMin(bins.size() - 1, filterHighBin)
-                                  : bins.size() - 1;
+    const int n = bins.size();
 
-    // Find local maxima — must exceed both immediate neighbours.
-    // From Thetis display.cs:5455-5468 [v2.10.3.13] peak search loop.
-    QVector<PeakBlob> found;
-    found.reserve(qMin(m_count * 4, high - low));  // reasonable pre-alloc
-    for (int i = low; i < high; ++i) {
-        if (bins[i] > bins[i - 1] && bins[i] > bins[i + 1]) {
-            found.append({i, bins[i], m_currentTimeMs});
+    // Filter-passband bounds (only used when m_insideOnly is true).
+    const int filterLo = qBound(0, filterLowBin,  n - 1);
+    const int filterHi = qBound(0, filterHighBin, n - 1);
+
+    // State machine variables.  Names mirror Thetis's locals
+    // (Display.cs:5234-5316 [v2.10.3.13]).
+    float dbm_max          = -1e30f;
+    int   dbm_max_xpos     = 0;
+    float dbm_min          = +1e30f;
+    bool  look_for_max     = true;
+
+    for (int i = 0; i < n; ++i) {
+        // Inside-filter gate: when on, ignore pixels outside the
+        // filter passband.  Mirrors Thetis Display.cs:5272 [v2.10.3.13]:
+        //   if (peaks_imds && (!m_bInsideFilterOnly ||
+        //                      (point.X >= filter_left_x &&
+        //                       point.X <= filter_right_x)))
+        if (m_insideOnly && (i < filterLo || i > filterHi)) {
+            continue;
         }
-    }
 
-    // Sort descending by dBm.
-    std::sort(found.begin(), found.end(),
-              [](const PeakBlob& a, const PeakBlob& b) {
-                  return a.max_dBm > b.max_dBm;
-              });
+        const float v = bins[i];
 
-    // Keep top N.
-    if (found.size() > m_count) {
-        found.resize(m_count);
-    }
+        if (v > dbm_max) {
+            dbm_max      = v;
+            dbm_max_xpos = i;
+        }
+        if (v < dbm_min) {
+            dbm_min = v;
+        }
 
-    // Hold merge: if a prior blob for the same bin index had a higher dBm,
-    // preserve that maximum and its original timestamp so the hold window
-    // continues from the time the maximum was last seen.
-    // From Thetis display.cs:5475-5484 [v2.10.3.13] hold logic.
-    if (m_holdEnabled) {
-        for (auto& nb : found) {
-            for (const auto& ob : m_blobs) {
-                if (ob.binIndex == nb.binIndex && ob.max_dBm > nb.max_dBm) {
-                    nb.max_dBm = ob.max_dBm;
-                    nb.timeMs  = ob.timeMs;
-                    break;
-                }
+        if (look_for_max) {
+            // Trigger: dBm has fallen kPeakBlobTriggerDeltaDb below the
+            // running max.  Record the peak and switch to looking for
+            // the next minimum.
+            // From Thetis Display.cs:5287-5307 [v2.10.3.13].
+            if (v < dbm_max - kPeakBlobTriggerDeltaDb) {
+                processMaximum(dbm_max, dbm_max_xpos);
+                dbm_min      = v;
+                look_for_max = false;
+            }
+        } else {
+            // Trigger: dBm has risen kPeakBlobTriggerDeltaDb above the
+            // running min.  Record the trough boundary and resume
+            // looking for the next max.
+            // From Thetis Display.cs:5309-5315 [v2.10.3.13].
+            if (v > dbm_min + kPeakBlobTriggerDeltaDb) {
+                dbm_max      = v;
+                dbm_max_xpos = i;
+                look_for_max = true;
             }
         }
     }
-
-    m_blobs = std::move(found);
 }
 
-// From Thetis display.cs:5483 [v2.10.3.13]:
-//   entry.max_dBm -= m_dBmPerSecondPeakBlobFall / (float)m_nFps;
+// Per-frame decay + disable.  Mirrors Thetis Display.cs:5469-5493
+// [v2.10.3.13] -- the per-blob block inside the render loop:
+//
+//   bool blob_drop = m_bBlobPeakHold && m_bBlobPeakHoldDrop;
+//   for (int n = 0; n < maxblobs; n++) {
+//     ref Maximums entry = ref maximums[n];
+//     if (entry.Enabled) {
+//       if (blob_drop) {
+//         double dElapsed = local_frame_start - entry.Time;
+//         if (entry.max_dBm > -200.0 && dElapsed > m_fBlobPeakHoldMS) {
+//           entry.max_dBm -= m_dBmPerSecondPeakBlobFall / (float)m_nFps;
+//         } else if (entry.max_dBm <= -200.0) {
+//           entry.Enabled = false;
+//           entry.max_dBm = float.MinValue;
+//         }
+//       }
+//       ...
+//     }
+//   }
 void PeakBlobDetector::tickFrame(int fps, int elapsedMs)
 {
     m_currentTimeMs += elapsedMs;
 
-    if (!m_enabled || !m_holdEnabled || fps <= 0) {
-        return;
-    }
+    if (!m_enabled || fps <= 0) { return; }
 
-    for (auto& b : m_blobs) {
-        const qint64 ageMs = m_currentTimeMs - b.timeMs;
-        if (ageMs > static_cast<qint64>(m_holdMs) && m_holdDrop) {
-            // From Thetis Display.cs:5483 [v2.10.3.13]
-            //   entry.max_dBm -= m_dBmPerSecondPeakBlobFall / (float)m_nFps;
-            b.max_dBm -= static_cast<float>(m_fallDbPerSec / fps);
+    const bool blob_drop = m_holdEnabled && m_holdDrop;
+    if (!blob_drop) { return; }
+
+    for (auto& entry : m_blobs) {
+        if (!entry.enabled) { continue; }
+
+        const qint64 dElapsed = m_currentTimeMs - entry.timeMs;
+        if (entry.max_dBm > kPeakBlobDisableThresholdDb
+            && dElapsed > static_cast<qint64>(m_holdMs)) {
+            entry.max_dBm -= static_cast<float>(m_fallDbPerSec
+                                                / static_cast<double>(fps));
+        } else if (entry.max_dBm <= kPeakBlobDisableThresholdDb) {
+            entry.enabled = false;
+            entry.max_dBm = kPeakBlobDisableThresholdDb;
         }
     }
 }

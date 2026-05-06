@@ -76,11 +76,21 @@
 namespace NereusSDR {
 
 /// One detected peak blob entry.
-/// From Thetis display.cs:5453-5508 [v2.10.3.13] m_RX1Maximums array.
+/// From Thetis Display.cs:4421-4428 [v2.10.3.13] Maximums struct (X /
+/// max_dBm / Time / Enabled / MaxY_pixel; we omit MaxY_pixel since
+/// SpectrumWidget recomputes Y from max_dBm in paintPeakBlobs).
+///
+/// Persistence across frames: a blob added by processMaximum stays in
+/// the array until its max_dBm decays below -200 (the disable
+/// threshold per Display.cs:5488-5491).  Blobs do NOT get deleted when
+/// the spectrum's local maxima happen to miss them on a given frame --
+/// that's how the hold-and-decay timer can actually accumulate hold
+/// time and then start dropping.
 struct PeakBlob {
-    int    binIndex   = 0;
-    float  max_dBm    = 0.0f;
-    qint64 timeMs     = 0;    // wall-clock ms when this blob was last refreshed
+    int    binIndex   = 0;        // display-pixel X coord (1A.4 migration)
+    float  max_dBm    = -200.0f;  // disable threshold; "empty slot" reads as -200
+    qint64 timeMs     = 0;        // ms timestamp of the last UPGRADE (new max)
+    bool   enabled    = false;    // false = unused slot; true = active blob
 };
 
 /// Top-N peak detector with optional hold + decay state machine.
@@ -157,6 +167,21 @@ private:
     QVector<PeakBlob> m_blobs;
     // Monotonically increasing wall-clock counter advanced by tickFrame().
     qint64 m_currentTimeMs = 0;
+
+    // Verbatim port of Thetis's blob-array maintenance helpers.
+    // From Thetis Display.cs:4429-4448 [v2.10.3.13] isOccupied().
+    /// Returns index of an enabled blob whose X is within 10 pixels of nX,
+    /// or -1 if no such blob.  10-pixel radius matches the ellipse/circle
+    /// radius of the rendered blob.
+    int  isOccupied(int nX) const;
+    /// From Thetis Display.cs:4456-4518 [v2.10.3.13] processMaximums().
+    /// If a slot is occupied near nX with a lower max_dBm, update it and
+    /// bubble-sort up.  Otherwise, insert the new peak at the first slot
+    /// where it exceeds the existing max_dBm (push remaining entries down).
+    void processMaximum(float dbm, int nX);
+    /// Resize m_blobs to m_count entries on configuration change.
+    /// Excess slots are disabled and reset to max_dBm = -200.
+    void ensureBlobsSized();
 };
 
 }  // namespace NereusSDR

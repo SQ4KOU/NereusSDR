@@ -2697,6 +2697,13 @@ void SpectrumWidget::paintPeakBlobs(QPainter& p, const QRect& specRect)
     p.setRenderHint(QPainter::Antialiasing, true);
 
     for (const auto& blob : m_peakBlobs.blobs()) {
+        // Skip disabled slots in the persistent blob array (post-Phase 2
+        // PeakBlobDetector rewrite mirrors Thetis's fixed-size m_RX1Maximums
+        // array with an Enabled flag rather than rebuilding the vector
+        // every frame).
+        if (!blob.enabled) {
+            continue;
+        }
         // Guard: only render blobs whose pixel falls within the array.
         if (blob.binIndex < 0 || blob.binIndex >= n) {
             continue;
