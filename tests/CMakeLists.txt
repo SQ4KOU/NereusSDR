@@ -116,6 +116,19 @@ nereus_add_test(tst_tx_channel_ps_setters)
 #         WDSP channels via ChannelMaster.dll (see ps_sync_stub.c).
 nereus_add_test(tst_ps_feedback_channel)
 
+# ── Phase 3M-4 Task 7: PureSignal coordinator class ──────────────────────────
+# Cal lifecycle (singleCalibrate / setAutoCalEnabled / reset / setEnabled) +
+# MOX integration (onMoxChanged → SetPSMox forward) + auto-attention 3-state
+# machine (Monitor → SetNewValues → RestoreOperation → Monitor) + status
+# polling (pollTimerTick → getPSInfo + Q_PROPERTY signal emission) +
+# save/restore (psSaveCorr / psRestoreCorr forwarding) + two-tone wiring +
+# UI mirror state (invertRedBlue / hideFeedback) + per-board capability
+# application (psDefaultPeak / psSampleRate fan-out).
+# Ports the host-side logic from Thetis PSForm.cs timer1code (PSForm.cs:555-
+# 728 [v2.10.3.13]), ForcePS (PSForm.cs:920-955), and the eAAState 3-state
+# auto-attention machine (PSForm.cs:97-122 + 729-790 [v2.10.3.13]).
+nereus_add_test(tst_puresignal_coordinator)
+
 # ── Phase 3M-1b Task B.1: BoardCapabilities::hasMicJack flag ─────────────────
 # Parametrized over all HPSDRHW enum values.
 # HL2 and HermesLiteRxOnly → false; all other boards → true.

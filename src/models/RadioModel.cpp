@@ -255,6 +255,8 @@ warren@wpratt.com
 #include "core/PaProfile.h"
 #include "core/PaProfileManager.h"
 #include "core/PaTelemetryScaling.h"
+#include "core/PsFeedbackChannel.h"
+#include "core/PureSignal.h"
 #include "core/StepAttenuatorController.h"
 #include "core/TwoToneController.h"
 #include "models/FilterPresetStore.h"
@@ -1861,6 +1863,47 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             if (m_twoToneController) {
                 m_twoToneController->setTxChannel(m_txChannel);
             }
+
+            // ── 3M-4 Task 7: PureSignal coordinator ────────────────────────────
+            //
+            // Lazy-construct here once both m_txChannel and (if available)
+            // PsFeedbackChannel are live.  Both come up through WdspEngine's
+            // initialization sequence (createTxChannel + openPsFeedbackChannel
+            // — see WdspEngine.cpp:228 + 264).  Late-binding via setTxChannel /
+            // setPsFeedbackChannel keeps the dependency wiring explicit and
+            // makes teardown order safe (PureSignal::dtor draws timers down
+            // before our raw TxChannel pointer dies).
+            //
+            // Constructor pulls construction-time deps (engine, mox, stepAtt,
+            // twoTone) from RadioModel; tx + fb are passed as nullptr-safe
+            // pointers and reset by setTxChannel/setPsFeedbackChannel below.
+            //
+            // Per-board capability application happens in onConnected — the
+            // BoardCapabilities are not yet finalised in the WDSP-init lambda
+            // (Task 5 / Task 6 set ps_rate via the per-board codec hook).
+            if (!m_pureSignal) {
+                m_pureSignal = std::make_unique<PureSignal>(
+                    m_wdspEngine,
+                    m_txChannel,
+                    m_wdspEngine ? m_wdspEngine->psFeedbackChannel() : nullptr,
+                    m_moxController,
+                    m_stepAttController,
+                    m_twoToneController,
+                    /*parent=*/nullptr);
+            } else {
+                // Reconnect path — pointers may have changed under us.
+                m_pureSignal->setTxChannel(m_txChannel);
+                m_pureSignal->setPsFeedbackChannel(
+                    m_wdspEngine ? m_wdspEngine->psFeedbackChannel() : nullptr);
+            }
+
+            // Flip the TransmitModel pureSignalActive() seam from the test
+            // stub default (returns false) to the live PureSignal read.
+            // The ATT-on-TX-on-power-change safety gate inside
+            // TransmitModel::setPowerUsingTargetDbm now fires correctly when
+            // calcc has corrections in flight (#167 follow-up:
+            // console.cs:46740-46748 [v2.10.3.13]).
+            m_transmitModel.setPureSignal(m_pureSignal.get());
 
             // ── 3M-1c L.2 fixup: 5 TransmitModel two-tone signal connects + ──
             //                   initial-state pushes to TxChannel TXPostGen
@@ -4453,6 +4496,16 @@ void RadioModel::teardownConnection()
             m_twoToneController->setActive(false);
         }
     }
+
+    // 3M-4 Task 7: tear down PureSignal before the TxChannel pointer dies.
+    // PureSignal::dtor stops its polling timers and issues a final
+    // SetPSControl(1, 0, 0, 0) + SetPSMox(false) to leave the WDSP engine
+    // in a known state.  Reset before the TxChannel teardown below so the
+    // dtor's setPSControl call still routes to a live channel.  Detach the
+    // TransmitModel seam first so any late-firing setPowerUsingTargetDbm
+    // doesn't dereference a half-destructed PureSignal.
+    m_transmitModel.setPureSignal(nullptr);
+    m_pureSignal.reset();
 
     // 3M-1c L.1: drop the per-MAC scope on the profile manager so subsequent
     // mutators silently no-op until the next connectToRadio() sets a new MAC.

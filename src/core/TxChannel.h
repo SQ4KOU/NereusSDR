@@ -314,6 +314,7 @@ warren@wpratt.com
 #pragma once
 
 #include <QObject>
+#include <QString>
 #include <QTimer>
 
 #include <array>    // std::array — TX EQ 10-band graphic vector (3M-3a-i B-1)
@@ -1964,6 +1965,27 @@ public:
     /// Set per-FFT-mask interval count and SPI flag together.  Wraps
     /// SetPSIntsAndSpi.  From Thetis wdsp/calcc.c:1140 [v2.10.3.13].
     void setPSIntsAndSpi(int ints, int spi);
+
+    /// Save the active correction tables to a user-chosen file.  Wraps
+    /// PSSaveCorr(channelId, filename).  Used by PsForm Save button and the
+    /// PureSignalApplet Save button — see PSForm.cs btnPSSave_Click
+    /// [v2.10.3.13].  Calcc spawns a detached thread for the disk I/O
+    /// (calcc.c:567 PSSaveCorrection [v2.10.3.13]); this wrapper returns
+    /// after the thread is started, NOT after the file is fully written.
+    /// From Thetis wdsp/calcc.c:888 [v2.10.3.13].
+    void psSaveCorr(const QString& filename);
+
+    /// Restore correction tables from a user-chosen file.  Wraps
+    /// PSRestoreCorr(channelId, filename).  Used by PsForm Restore button
+    /// and the PureSignalApplet Restore button — see PSForm.cs
+    /// btnPSRestore_Click [v2.10.3.13].  As with psSaveCorr the underlying
+    /// calcc routine spawns a detached thread (calcc.c:600
+    /// PSRestoreCorrection [v2.10.3.13]); the wrapper returns after thread
+    /// start.  Caller should set `_restoreON=true` after invoking so the
+    /// host coordinator's command-state machine routes the next pump cycle
+    /// through eCMDState::IntiateRestoredCorrection.
+    /// From Thetis wdsp/calcc.c:900 [v2.10.3.13].
+    void psRestoreCorr(const QString& filename);
 
     // Channel routing (STATIC — global, not per-channel).  Called once at
     // PS init.  Per Thetis cmaster.cs:533-534 [v2.10.3.13] "txid = 0, all

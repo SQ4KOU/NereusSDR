@@ -1194,6 +1194,16 @@ void SetPSMapMode(int channel, int map);
 void SetPSStabilize(int channel, int stbl);
 void SetPSIntsAndSpi(int channel, int ints, int spi);
 
+// Save / restore the calcc correction tables to / from disk.  Both spawn a
+// detached thread inside calcc.c (PSSaveCorrection / PSRestoreCorrection at
+// calcc.c:567/600 [v2.10.3.13]) that writes / reads the binary `correctionsX`
+// blob.  PSForm.cs btnPSSave_Click / btnPSRestore_Click wire `_txachannel`
+// + the user-chosen filename through these.
+//
+// From Thetis wdsp/calcc.c:888 / 900 [v2.10.3.13].
+void PSSaveCorr(int channel, char* filename);
+void PSRestoreCorr(int channel, char* filename);
+
 // Channel routing.  From Thetis cmaster.cs:143-147 [v2.10.3.13].  Comment in
 // cmaster.cs:533-534: "txid = 0, all current models use Stream0 for RX
 // feedback / Stream1 for TX feedback" — mi0bot HL2 fork unchanged.

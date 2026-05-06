@@ -227,6 +227,7 @@
 #include "TransmitModel.h"
 #include "core/AppSettings.h"
 #include "core/PaProfile.h"
+#include "core/PureSignal.h"
 #include "core/StepAttenuatorController.h"
 
 #include <algorithm>
@@ -677,19 +678,34 @@ void TransmitModel::setLastPower(int value)
 
 bool TransmitModel::pureSignalActive() const noexcept
 {
-    // Stub for Phase 3A scaffolding.  Phase 3M-4 (PureSignal feedback DDC
-    // wiring) replaces this with the live PS-A check
-    // (chkFWCATUBypass.Checked equivalent).  Until then the ATT-on-TX
-    // gate stays dormant — matches plan §"ATT-on-TX-on-power-change":
-    // "Returns false until 3M-4 PureSignal lands ... the gate is dormant
-    // but present."
+    // Phase 3M-4 Task 7 — live read of PureSignal::correctionsBeingApplied.
+    // From Thetis console.cs:46740-46748 [v2.10.3.13]:
+    //   //[2.10.3.5]MW0LGE max tx attenuation when power is increased and PS is enabled
+    //   if (new_pwr != _lastPower && chkFWCATUBypass.Checked && _forceATTwhenPowerChangesWhenPSAon) ...
+    // setPowerUsingTargetDbm uses chkFWCATUBypass.Checked as the predicate
+    // (active when PS-A is enabled).  The Thetis predicate is "PS-A
+    // enabled" (UI-state); NereusSDR uses "calcc has corrections in
+    // flight" (PSForm.cs:1100-1102 [v2.10.3.13] CorrectionsBeingApplied
+    // == _info[14] == 1) which is the runtime equivalent: only when
+    // calcc has a valid correction set does the safety lift to 31 dB
+    // make sense (the gate exists to prevent power surges destabilising
+    // the live correction).
 #ifdef NEREUS_BUILD_TESTS
-    // Phase 3C test seam — exercise the ATT-on-TX gate without 3M-4
-    // wiring.  Tri-state: -1 = use Phase 3A default, 0 = false, 1 = true.
+    // Phase 3C test seam — exercise the ATT-on-TX gate without
+    // constructing a full RadioModel + PureSignal coordinator.  Tri-state:
+    //   -1 = no override → fall through to live read (or false if not
+    //        yet wired).
+    //    0 = force false.
+    //    1 = force true.
     if (m_pureSignalActiveOverride >= 0) {
         return m_pureSignalActiveOverride == 1;
     }
 #endif
+    if (m_pureSignal != nullptr) {
+        // PureSignal::correctionsBeingApplied is std::atomic<bool>::load,
+        // safe to call from any thread.  noexcept-compatible.
+        return m_pureSignal->correctionsBeingApplied();
+    }
     return false;
 }
 

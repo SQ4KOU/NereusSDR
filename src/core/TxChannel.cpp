@@ -335,6 +335,7 @@ warren@wpratt.com
 #include "RadioConnection.h"
 #include "TxMicRouter.h"
 
+#include <QByteArray>   // toUtf8() return type for psSaveCorr / psRestoreCorr (Task 7)
 #include <algorithm>
 #include <cmath>        // std::isnan — NaN sentinel for double idempotent guards (D.3)
 #include <cstring>
@@ -3872,6 +3873,39 @@ void TxChannel::setPSIntsAndSpi(int ints, int spi)
 #else
     Q_UNUSED(ints);
     Q_UNUSED(spi);
+#endif
+}
+
+// Save / restore correction tables (Phase 3M-4 Task 7 follow-up — missed in
+// Task 3, picked up here as the consumer).  Mirrors PSForm.cs btnPSSave_Click
+// (PSForm.cs:524-532) and btnPSRestore_Click (PSForm.cs:534-545)
+// [v2.10.3.13]: a user-chosen path goes straight to the WDSP entry point.
+// Calcc spawns a detached thread internally; these wrappers return after
+// thread start.  Empty filename short-circuits — calcc's PSSaveCorrection /
+// PSRestoreCorrection thread bodies fopen() the path verbatim and treat
+// failure as a silent no-op.
+
+void TxChannel::psSaveCorr(const QString& filename)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (filename.isEmpty()) return;
+    QByteArray utf8 = filename.toUtf8();
+    ::PSSaveCorr(m_channelId, utf8.data());
+#else
+    Q_UNUSED(filename);
+#endif
+}
+
+void TxChannel::psRestoreCorr(const QString& filename)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (filename.isEmpty()) return;
+    QByteArray utf8 = filename.toUtf8();
+    ::PSRestoreCorr(m_channelId, utf8.data());
+#else
+    Q_UNUSED(filename);
 #endif
 }
 

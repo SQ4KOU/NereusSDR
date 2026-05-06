@@ -242,6 +242,7 @@
 namespace NereusSDR {
 
 class PaProfile;
+class PureSignal;
 class StepAttenuatorController;
 
 // VAX slot: which audio source owns the transmitter.
@@ -477,11 +478,25 @@ public:
     int  lastPower() const noexcept { return m_lastPower; }
     void setLastPower(int value);
 
-    /// PureSignal-active predicate.  Returns FALSE until 3M-4 wires the
-    /// live PS feedback DDC.  The ATT-on-TX gate uses this to decide
-    /// whether the gate fires.  For Phase 3A scaffolding only — Phase
-    /// 3M-4 will replace the body with the live PS-A check.
+    /// PureSignal-active predicate.  Reads the live PureSignal coordinator
+    /// (3M-4 Task 7) when wired via setPureSignal(); falls back to the
+    /// test-seam override (NEREUS_BUILD_TESTS only) for unit tests that
+    /// don't construct a full RadioModel + PureSignal.  When neither is
+    /// set, returns false (matches Phase 3A pre-3M-4 behaviour: gate
+    /// dormant but present).
+    ///
+    /// "Active" tracks PureSignal::correctionsBeingApplied — true ⟺ calcc
+    /// has a valid correction set in flight (PSForm.cs:1100-1102
+    /// CorrectionsBeingApplied [v2.10.3.13]).  Mirrors Thetis's
+    /// chkFWCATUBypass.Checked-and-actively-correcting semantics.
     bool pureSignalActive() const noexcept;
+
+    /// Inject the PureSignal coordinator (Phase 3M-4 Task 7).  Non-owning
+    /// pointer; RadioModel owns via std::unique_ptr.  Pass nullptr to
+    /// detach (e.g. on disconnect).  When non-null, pureSignalActive()
+    /// reads PureSignal::correctionsBeingApplied().
+    void setPureSignal(PureSignal* ps) noexcept { m_pureSignal = ps; }
+    PureSignal* pureSignal() const noexcept { return m_pureSignal; }
 
     /// Compute the normalized audio output level for the given (band,
     /// sliderWatts) using the supplied active PA profile.
@@ -2013,6 +2028,14 @@ private:
     // Non-owning pointer; nullptr until RadioModel injects via
     // setStepAttenuatorController(); when nullptr the gate becomes a no-op.
     StepAttenuatorController* m_stepAttCtrl{nullptr};
+
+    // 3M-4 Task 7: live PureSignal coordinator.  Non-owning view; owned by
+    // RadioModel via std::unique_ptr.  Read by pureSignalActive() — the
+    // ATT-on-TX-on-power-change gate inside setPowerUsingTargetDbm uses
+    // this to decide whether the safety force-31-dB lift fires.  When
+    // null (pre-connect or post-teardown), pureSignalActive() falls back
+    // to the test seam (NEREUS_BUILD_TESTS) or returns false (production).
+    PureSignal* m_pureSignal{nullptr};
 
 #ifdef NEREUS_BUILD_TESTS
     // Test seam (Phase 3C) — overrides pureSignalActive() return when set.
