@@ -120,6 +120,7 @@ class TxChannel;
 // 3M-1b L.1: forward declarations for mic-source strategy objects.
 class PcMicSource;
 class RadioMicSource;
+class VaxTxMicSource;  // VAX TX consumer (added 2026-05-06).
 class CompositeTxMicRouter;
 // 3M-1c L.1 / L.2: forward declarations for the MicProfileManager bank
 // (chunk F) + the TwoToneController activation orchestrator (chunk I).
@@ -1190,6 +1191,12 @@ private:
     // Plan: 3M-1b Task L.1. Pre-code review §0.3 + master design §5.2.4.
     std::unique_ptr<PcMicSource>           m_pcMicSource;
     std::unique_ptr<RadioMicSource>        m_radioMicSource;
+    // VAX TX consumer (added 2026-05-06, eager-borg-d64bed).  Pulls
+    // audio from /nereussdr-vax-tx shared memory via AudioEngine and
+    // is registered with m_compositeMicRouter via setVaxSource().
+    // Reset before m_compositeMicRouter on teardown — see notes
+    // around teardownConnection().
+    std::unique_ptr<VaxTxMicSource>        m_vaxTxMicSource;
     std::unique_ptr<CompositeTxMicRouter>  m_compositeMicRouter;
 
     // ── 3M-1c Phase L: cross-cutting ownership ──────────────────────────────

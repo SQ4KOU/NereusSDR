@@ -242,6 +242,11 @@ public:
     // Plan: 3M-1b E.1.
     void setTxInputBusForTest(std::unique_ptr<IAudioBus> bus);
 
+    // Test seam — inject a fake IAudioBus into the VAX-TX slot so unit
+    // tests can exercise pullVaxTxMic without standing up a real
+    // CoreAudioHalBus / PipeWireBus. Takes ownership of `bus`.
+    void setVaxTxBusForTest(std::unique_ptr<IAudioBus> bus);
+
     // Test seam — expose m_masterMix so tests can call mixInto() to verify
     // that txMonitorBlockReady accumulated audio into the correct slot.
     // Plan: 3M-1b E.3.
@@ -313,6 +318,36 @@ public:
     // redesign (removal of accumulator side effects).
     int pullTxMic(float* dst, int n);
 
+    // Pull VAX-TX audio samples from the VAX TX shared-memory bus.
+    //
+    // This is the consumer side of the VAX TX route: 3rd-party apps
+    // write audio to the "NereusSDR TX" CoreAudio device on macOS (or
+    // the equivalent virtual sink on Linux/PipeWire); the HAL plugin
+    // captures it into /nereussdr-vax-tx shared memory; this accessor
+    // pulls from that shm.
+    //
+    // Closes the long-standing TODO at AudioEngine.cpp:306 ("pull TX
+    // audio from m_vaxTxBus when [...] consumer that pulls from
+    // m_vaxTxBus / mic lives — Sub-Phase 9").
+    //
+    // Drains m_vaxTxBus->pull(...), downmixes interleaved stereo
+    // float32 → mono float32 by averaging L+R, and writes up to `n`
+    // samples to `dst`. Returns the number of mono samples written;
+    // returns 0 if m_vaxTxBus is null, not open, dst is null, n <= 0,
+    // or no data is ready.
+    //
+    // Format contract: VAX TX shm is fixed at 48 kHz stereo float32 by
+    // the plugin↔CoreAudioHalBus contract (hal-plugin/NereusSDRVAX.cpp
+    // makePCMFormat + CoreAudioHalBus negotiated format); other
+    // formats are not expected and treated as "no data".
+    //
+    // Threading: called from the WDSP audio thread (via
+    // VaxTxMicSource::pullSamples → CompositeTxMicRouter dispatch).
+    // Audio-thread-safe: m_vaxTxBus->pull is lock-free (POSIX shm
+    // ring); a thread_local scratch buffer absorbs the stereo source
+    // bytes so we do not allocate per call.
+    int pullVaxTxMic(float* dst, int n);
+
     /// Phase 3M-1c TX pump v3 — PC mic override gate.
     ///
     /// Returns true when the worker should overlay PC mic samples on
@@ -325,6 +360,22 @@ public:
     /// the conditional invocation of `asioIN(pcm->in[stream])` at
     /// Thetis cmaster.c:379 [v2.10.3.13].
     bool isPcMicOverrideActive() const noexcept;
+
+    /// Phase VAX-TX (eager-borg-d64bed, 2026-05-06) — VAX mic override gate.
+    ///
+    /// Returns true when the worker should overlay VAX TX samples (audio
+    /// routed by a 3rd-party app to "NereusSDR TX") on top of the radio
+    /// mic samples in m_in.  Gated by:
+    ///   1. m_micSourceWantsVax (true iff TransmitModel::micSource ==
+    ///      MicSource::Vax; updated by onMicSourceChanged()).
+    ///   2. m_vaxTxBus exists and is open.
+    ///
+    /// Mutually exclusive with isPcMicOverrideActive() at the source-
+    /// selector level — TransmitModel::micSource is a single enum value,
+    /// so only one of the two flags is ever true at a time.  The worker
+    /// checks the VAX gate first since selecting MicSource::Vax means
+    /// the user explicitly chose VAX over PC mic.
+    bool isVaxMicOverrideActive() const noexcept;
 
     // Master volume (0.0–1.0). Read on the DSP thread, written on the
     // main thread. Preserves the existing AF-gain wiring in
@@ -456,6 +507,13 @@ public slots:
     /// TransmitModel::micSourceChanged.  Updates m_micSourceWantsPc.
     /// `selectedSourceIsPc == true` means the user picked PC mic.
     void onMicSourceChanged(bool selectedSourceIsPc);
+
+    /// Phase VAX-TX — companion to onMicSourceChanged for the VAX
+    /// override gate.  RadioModel's micSourceChanged lambda calls
+    /// both onMicSourceChanged(src == Pc) and onMicSourceChangedVax(src == Vax)
+    /// so the two gates are kept in sync without a public enum-shaped
+    /// API change.
+    void onMicSourceChangedVax(bool selectedSourceIsVax);
 
 signals:
     // Emitted when the audio pipeline health state changes.
@@ -613,6 +671,13 @@ private:
     // micSource=PC via setMicSourceLocked, and the resulting
     // micSourceChanged emit lands here as true.
     std::atomic<bool> m_micSourceWantsPc{false};
+
+    // Phase VAX-TX (eager-borg-d64bed, 2026-05-06) — VAX mic override gate.
+    // Written by onMicSourceChangedVax() on the main thread (slot wired by
+    // RadioModel to TransmitModel::micSourceChanged).  Read by the worker
+    // thread via isVaxMicOverrideActive().  Mutually exclusive with
+    // m_micSourceWantsPc at the source-selector level.
+    std::atomic<bool> m_micSourceWantsVax{false};
 
     // Plan: 3M-1b E.2. Pre-code review §4.4.
     // Written by setTxMonitorEnabled() on the main thread, read by the

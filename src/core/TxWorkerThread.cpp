@@ -244,7 +244,26 @@ void TxWorkerThread::dispatchOneBlock()
     // user expects "the PC mic" — if the bus stalls, what they hear on
     // the air is silence, not their radio's hand mic on top of dead
     // audio).  Q channel always stays zero (real-only TX input).
-    if (m_audioEngine != nullptr && m_audioEngine->isPcMicOverrideActive()) {
+    if (m_audioEngine != nullptr && m_audioEngine->isVaxMicOverrideActive()) {
+        // VAX TX override (eager-borg-d64bed, 2026-05-06).  Mirrors the
+        // PC mic override path below, but pulls from the VAX TX shared-
+        // memory bus that the HAL plugin populates from a 3rd-party
+        // app's writes to "NereusSDR TX".  Same partial-pull / zero-fill
+        // policy: VAX is the user's chosen TX input, so a short pull
+        // must NOT leak radio mic samples through; we zero-fill the
+        // remainder of the block.
+        const int got = m_audioEngine->pullVaxTxMic(m_pcMicBuf.data(), kBlockFrames);
+        const int n   = std::clamp(got, 0, kBlockFrames);
+        for (int i = 0; i < n; ++i) {
+            m_in[static_cast<size_t>(2 * i + 0)] =
+                static_cast<double>(m_pcMicBuf[static_cast<size_t>(i)]);
+            m_in[static_cast<size_t>(2 * i + 1)] = 0.0;
+        }
+        for (int i = n; i < kBlockFrames; ++i) {
+            m_in[static_cast<size_t>(2 * i + 0)] = 0.0;
+            m_in[static_cast<size_t>(2 * i + 1)] = 0.0;
+        }
+    } else if (m_audioEngine != nullptr && m_audioEngine->isPcMicOverrideActive()) {
         const int got = m_audioEngine->pullTxMic(m_pcMicBuf.data(), kBlockFrames);
         const int n   = std::clamp(got, 0, kBlockFrames);
         for (int i = 0; i < n; ++i) {
