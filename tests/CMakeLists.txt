@@ -79,6 +79,15 @@ nereus_add_test(tst_board_capabilities)
 #         mi0bot clsHardwareSpecific.cs:300-330 [v2.10.3.13-beta2].
 nereus_add_test(tst_puresignal_caps)
 
+# ── Phase 3M-4 Task 2: PureSignal calcc.c + iqc.c vendored verbatim ──
+# Smoke test: confirms calcc.c (1,164 LOC) + iqc.c (315 LOC) are picked up
+# by the third_party/wdsp/CMakeLists.txt GLOB and that the SetPS* public
+# API exported by calcc.c is reachable through wdsp_static (which is
+# PUBLIC-linked into NereusSDRObjs). Does NOT exercise DSP behavior;
+# that requires an opened channel and is covered by Tasks 3+.
+# Source: Thetis wdsp/calcc.c:891-1132 [v2.10.3.13] @501e3f51.
+nereus_add_test(tst_wdsp_ps_smoke)
+
 # ── Phase 3M-1b Task B.1: BoardCapabilities::hasMicJack flag ─────────────────
 # Parametrized over all HPSDRHW enum values.
 # HL2 and HermesLiteRxOnly → false; all other boards → true.

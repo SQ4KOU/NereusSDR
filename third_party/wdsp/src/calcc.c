@@ -24,6 +24,14 @@ warren@wpratt.com
 
 */
 
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-05-06: Vendored verbatim from Thetis v2.10.3.13 @501e3f51 by
+//                J.J. Boyd (KG4VCF), with AI-assisted source-first
+//                protocol via Anthropic Claude Code. No source-level
+//                modifications. Cross-platform compatibility via
+//                existing third_party/wdsp/src/linux_port.h shim.
+// =================================================================
 #define _CRT_SECURE_NO_WARNINGS
 #include "comm.h"
 
@@ -548,23 +556,23 @@ void __cdecl PSSaveCorrection (void *pargs)
 			FILE* file = fopen(a->util.savefile, "w");
 			if (file)
 			{
-				GetTXAiqcValues(a->util.channel, a->util.pm, a->util.pc, a->util.ps);
-				for (i = 0; i < a->util.ints; i++)
-				{
-					for (k = 0; k < 4; k++)
-						fprintf(file, "%.17e\t", a->util.pm[4 * i + k]);
-					fprintf(file, "\n");
-					for (k = 0; k < 4; k++)
-						fprintf(file, "%.17e\t", a->util.pc[4 * i + k]);
-					fprintf(file, "\n");
-					for (k = 0; k < 4; k++)
-						fprintf(file, "%.17e\t", a->util.ps[4 * i + k]);
-					fprintf(file, "\n\n");
-				}
-				fflush(file);
-				fclose(file);
+			GetTXAiqcValues(a->util.channel, a->util.pm, a->util.pc, a->util.ps);
+			for (i = 0; i < a->util.ints; i++)
+			{
+				for (k = 0; k < 4; k++)
+					fprintf(file, "%.17e\t", a->util.pm[4 * i + k]);
+				fprintf(file, "\n");
+				for (k = 0; k < 4; k++)
+					fprintf(file, "%.17e\t", a->util.pc[4 * i + k]);
+				fprintf(file, "\n");
+				for (k = 0; k < 4; k++)
+					fprintf(file, "%.17e\t", a->util.ps[4 * i + k]);
+				fprintf(file, "\n\n");
 			}
+			fflush(file);
+			fclose(file);
 		}
+	}
 	}
 	InterlockedBitTestAndReset(&a->savecorr_bypass, 0);
 }
@@ -582,25 +590,25 @@ void __cdecl PSRestoreCorrection(void *pargs)
 			if (file)
 			{
 				int error = 0;
-				for (i = 0; i < a->util.ints; i++)
-				{
+			for (i = 0; i < a->util.ints; i++)
+			{
 					// no additional reads after first error occurs
-					for (k = 0; k < 4; k++)
+				for (k = 0; k < 4; k++)
 						if (error == 0 && fscanf(file, "%le", &(a->util.pm[4 * i + k])) != 1) error = 1;
-					for (k = 0; k < 4; k++)
+				for (k = 0; k < 4; k++)
 						if (error == 0 && fscanf(file, "%le", &(a->util.pc[4 * i + k])) != 1) error = 1;
-					for (k = 0; k < 4; k++)
+				for (k = 0; k < 4; k++)
 						if (error == 0 && fscanf(file, "%le", &(a->util.ps[4 * i + k])) != 1) error = 1;
-				}
-				fclose(file);
+			}
+			fclose(file);
 				if (!error)
 				{
-					if (!InterlockedBitTestAndSet(&a->ctrl.running, 0))
-						SetTXAiqcStart(a->channel, a->util.pm, a->util.pc, a->util.ps);
-					else
-						SetTXAiqcSwap(a->channel, a->util.pm, a->util.pc, a->util.ps);
-				}
-			}
+			if (!InterlockedBitTestAndSet(&a->ctrl.running, 0))
+				SetTXAiqcStart(a->channel, a->util.pm, a->util.pc, a->util.ps);
+			else
+				SetTXAiqcSwap(a->channel, a->util.pm, a->util.pc, a->util.ps);
+		}
+	}
 		}
 	}
 	InterlockedBitTestAndReset(&a->restcorr_bypass, 0);

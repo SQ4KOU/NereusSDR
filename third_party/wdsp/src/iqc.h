@@ -24,6 +24,14 @@ warren@wpratt.com
 
 */
 
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-05-06: Vendored verbatim from Thetis v2.10.3.13 @501e3f51 by
+//                J.J. Boyd (KG4VCF), with AI-assisted source-first
+//                protocol via Anthropic Claude Code. No source-level
+//                modifications. Cross-platform compatibility via
+//                existing third_party/wdsp/src/linux_port.h shim.
+// =================================================================
 #ifndef _iqc_h
 #define _iqc_h
 
@@ -76,15 +84,15 @@ extern void desize_iqc (IQC a);
 
 // TXA Properties
 
-extern  void GetTXAiqcValues (int channel, double* cm, double* cc, double* cs);
+extern __declspec (dllexport)  void GetTXAiqcValues (int channel, double* cm, double* cc, double* cs);
 
-extern  void SetTXAiqcValues (int channel, double* cm, double* cc, double* cs);
+extern __declspec (dllexport)  void SetTXAiqcValues (int channel, double* cm, double* cc, double* cs);
 
-extern  void SetTXAiqcSwap (int channel, double* cm, double* cc, double* cs);
+extern __declspec (dllexport)  void SetTXAiqcSwap (int channel, double* cm, double* cc, double* cs);
 
-extern  void SetTXAiqcStart (int channel, double* cm, double* cc, double* cs);
+extern __declspec (dllexport)  void SetTXAiqcStart (int channel, double* cm, double* cc, double* cs);
 
-extern  void SetTXAiqcEnd (int channel);
+extern __declspec (dllexport)  void SetTXAiqcEnd (int channel);
 
 void GetTXAiqcDogCount (int channel, int* count);
 

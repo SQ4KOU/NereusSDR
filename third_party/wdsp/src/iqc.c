@@ -24,6 +24,14 @@ warren@wpratt.com
 
 */
 
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-05-06: Vendored verbatim from Thetis v2.10.3.13 @501e3f51 by
+//                J.J. Boyd (KG4VCF), with AI-assisted source-first
+//                protocol via Anthropic Claude Code. No source-level
+//                modifications. Cross-platform compatibility via
+//                existing third_party/wdsp/src/linux_port.h shim.
+// =================================================================
 #include "comm.h"
 
 void size_iqc (IQC a)
