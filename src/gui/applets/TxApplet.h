@@ -146,6 +146,7 @@
 
 #include "AppletWidget.h"
 #include "models/Band.h"
+#include "core/BoardCapabilities.h"  // setBoardCapabilities slot
 #include "core/HpsdrModel.h"   // HPSDRModel for rescaleFwdGaugeForModel
 #include "core/WdspTypes.h"
 
@@ -160,6 +161,7 @@ namespace NereusSDR {
 
 class HGauge;
 class MicProfileManager;
+class PureSignal;
 class TwoToneController;
 class TxCfcDialog;
 class DexpPeakMeter;
@@ -252,6 +254,22 @@ public:
     // null (no-op).
 public slots:
     void requestOpenCfcDialog();
+
+    // ── Phase 3M-4 Task 13: capability-gated PS-A button visibility ────────
+    // Called by MainWindow on RadioModel::currentRadioChanged (and once at
+    // startup) so the [PS-A] toggle hides on boards without PureSignal
+    // support (HL2 / Atlas) and shows on PS-capable boards (G2-class /
+    // Hermes II / Angelia / Orion / Saturn).  Mirrors the existing
+    // RxApplet::setBoardCapabilities pattern.
+    void setBoardCapabilities(const NereusSDR::BoardCapabilities& caps);
+
+    // ── Phase 3M-4 Task 13: late-bound PureSignal coordinator wiring ───────
+    // PureSignal is constructed by RadioModel inside the WDSP-init lambda
+    // AFTER the TxApplet exists.  TxApplet listens to
+    // RadioModel::pureSignalCoordinatorReady to wire the [PS-A] toggle
+    // when the coordinator becomes available.  Tests call this slot
+    // directly with their own coordinator instance.
+    void setPureSignal(NereusSDR::PureSignal* coordinator);
 public:
 
     // ── Test accessors ──────────────────────────────────────────────────────
@@ -307,6 +325,15 @@ signals:
     /// "Transmit"); `page` is the SetupDialog leaf-item label (currently
     /// always "DEXP/VOX").
     void openSetupRequested(const QString& category, const QString& page);
+
+    // ── Phase 3M-4 Task 13: PS-A right-click → open PsForm ─────────────────
+    // Mirrors Thetis chkFWCATUBypass_MouseDown (console.cs:46149-46152
+    // [v2.10.3.13]):
+    //   if (IsRightButton(e)) linearityToolStripMenuItem_Click(null, EventArgs.Empty);
+    // MainWindow connects this signal to openPureSignalDialog (Tools →
+    // PureSignal…); the same singleton dialog instance is opened by the
+    // [PS-A] button right-click and the matching control on PureSignalApplet.
+    void openPureSignalDialogRequested();
 
 private slots:
     /// Phase 3M-3a-iii bench polish (2026-05-04): 100 ms timer slot — pulls
@@ -413,8 +440,13 @@ private:
     QComboBox*   m_profileCombo = nullptr;
     // 8. 2-Tone test
     QPushButton* m_twoToneBtn = nullptr;
-    // 9. PS-A (hidden until 3M-4 PureSignal)
+    // 9. PS-A (Phase 3M-4 Task 13)
     QPushButton* m_psaBtn     = nullptr;
+    // Late-bound PureSignal coordinator pointer.  Set by setPureSignal()
+    // (test seam) or by RadioModel::pureSignalCoordinatorReady on connect.
+    // Null until WDSP-init lambda fires; the m_psaBtn::toggled lambda
+    // null-guards on this so pre-coordinator clicks are safely no-op'd.
+    NereusSDR::PureSignal* m_ps{nullptr};
     // ── Plan 4 Cluster C (Task 4 / D2+D3+D9-status): TX BW spinbox row ─────────
     // Low/High cutoff spinboxes (Hz) — bidirectional with TransmitModel::filterLow
     // and filterHigh via the filterChanged(int,int) signal.

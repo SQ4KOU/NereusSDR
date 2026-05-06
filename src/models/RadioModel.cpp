@@ -1905,6 +1905,12 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             // console.cs:46740-46748 [v2.10.3.13]).
             m_transmitModel.setPureSignal(m_pureSignal.get());
 
+            // Phase 3M-4 Task 13: late-bound coordinator handoff for the
+            // PureSignal-aware applets.  PureSignalApplet + TxApplet [PS-A]
+            // listen to this signal so they can wire their controls now
+            // that the coordinator is live.
+            emit pureSignalCoordinatorReady(m_pureSignal.get());
+
             // ── 3M-1c L.2 fixup: 5 TransmitModel two-tone signal connects + ──
             //                   initial-state pushes to TxChannel TXPostGen
             //                   wrappers (Phase L spec gap closure).
@@ -4506,6 +4512,10 @@ void RadioModel::teardownConnection()
     // doesn't dereference a half-destructed PureSignal.
     m_transmitModel.setPureSignal(nullptr);
     m_pureSignal.reset();
+    // Phase 3M-4 Task 13: notify subscribers that the coordinator is gone
+    // so they can disconnect their wiring cleanly (the applets re-arm on
+    // the next pureSignalCoordinatorReady emit at reconnect).
+    emit pureSignalCoordinatorReady(nullptr);
 
     // 3M-1c L.1: drop the per-MAC scope on the profile manager so subsequent
     // mutators silently no-op until the next connectToRadio() sets a new MAC.

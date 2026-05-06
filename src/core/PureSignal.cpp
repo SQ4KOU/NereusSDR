@@ -701,6 +701,36 @@ void PureSignal::pollTimerTick()
     // PsaIndicatorWidget + Task 8 PsForm.  The colour value itself is
     // available via feedbackColour() / feedbackColourChanged.
 
+    // ── Phase 3M-4 Task 13: applet-driven derived signals ──────────────────
+    // calStateChanged carries the raw EngineState (info[15]).  Emitted on
+    // every transition so the PureSignalApplet Cal/Run LEDs flip state as
+    // calcc walks LRESET → LWAIT → LSETUP → LCOLLECT → LCALC → LSTAYON.
+    // correctionPeakChanged carries the calcc HW peak (TxChannel::getPSHWPeak)
+    // when it differs by > 0.001 from the prior reading; bound to the
+    // PureSignalApplet correction gauge.
+    // feedbackActiveChanged fires when (correcting && MOX) flips; bound to
+    // the PureSignalApplet Fbk LED.
+    {
+        const int engineStateNow = newInfo[15];
+        if (engineStateNow != m_lastEngineState) {
+            m_lastEngineState = engineStateNow;
+            emit calStateChanged(engineStateNow);
+        }
+
+        const double newPeak = m_tx ? m_tx->getPSHWPeak() : 0.0;
+        if (std::abs(newPeak - m_lastCorrectionPeak) > 0.001) {
+            m_lastCorrectionPeak = newPeak;
+            emit correctionPeakChanged(newPeak);
+        }
+
+        const bool moxNow = (m_mox && m_mox->isMox());
+        const bool feedbackActive = m_correcting.load() && moxNow;
+        if (feedbackActive != m_lastFeedbackActive) {
+            m_lastFeedbackActive = feedbackActive;
+            emit feedbackActiveChanged(feedbackActive);
+        }
+    }
+
     // Step 5: cmd-state machine.  From Thetis PSForm.cs:632-727
     // [v2.10.3.13].  Use m_oldInfo[15] for the comparison since the
     // Thetis switch reads puresignal.State (info[15]) AFTER GetInfo, so

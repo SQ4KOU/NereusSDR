@@ -383,6 +383,28 @@ signals:
     void calibrationComplete(bool success);
     void feedbackError(const QString& message);
 
+    // ── Phase 3M-4 Task 13: applet-driven LED + correction-gauge signals ──
+    //
+    // calStateChanged carries the raw EngineState (info[15]) value from
+    // GetPSInfo on every poll tick where the value differs from the prior
+    // tick.  Subscribers (PureSignalApplet) translate the value into Cal LED
+    // (LSETUP=3 / LCOLLECT=4 / LCALC=6) and Run LED (LSTAYON=8) state.
+    //
+    // correctionPeakChanged carries the calcc HW peak (TxChannel::getPSHWPeak)
+    // when it differs from the prior poll by more than 0.001.  Subscribers
+    // map the raw [0..1] envelope into the 0..100 PureSignalApplet correction
+    // gauge.  Source: NereusSDR-native — Thetis exposes the value via the
+    // PSpeak text box (PSForm.cs:792-803 PSpeak_TextChanged [v2.10.3.13]) but
+    // not as a coordinated signal; we add the signal seam here so the Phase
+    // 3M-4 applet can bind without polling its own timer.
+    //
+    // feedbackActiveChanged fires when the predicate (m_correcting && MOX is
+    // up) flips.  Subscribers (PureSignalApplet Fbk LED) light up while
+    // feedback samples are flowing through PsFeedbackChannel into calcc.
+    void calStateChanged(int engineState);
+    void correctionPeakChanged(double peak);
+    void feedbackActiveChanged(bool active);
+
     // ── Calibration option change signals (Task 8) ─────────────────────────
     void pinModeChanged(bool);
     void mapModeChanged(bool);
@@ -508,6 +530,14 @@ private:
     // per Thetis _info / _oldInfo layout (PSForm.cs:1061-1062 [v2.10.3.13]).
     int m_info[16] = {};
     int m_oldInfo[16] = {};
+
+    // ── Phase 3M-4 Task 13: applet-driven signal change-detection ─────────
+    // Per-tick caches so emit calStateChanged / correctionPeakChanged /
+    // feedbackActiveChanged only fire on actual state transitions.  Tied to
+    // the new public signals above; not part of the Thetis port.
+    int    m_lastEngineState{-1};         // -1 sentinel forces first emit
+    double m_lastCorrectionPeak{-1.0};    // -1 sentinel forces first emit
+    bool   m_lastFeedbackActive{false};
 
     BoardCapabilities m_caps;
 };

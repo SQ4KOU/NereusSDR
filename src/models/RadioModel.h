@@ -708,6 +708,20 @@ signals:
     // connection. HardwarePage (Phase 3I) listens to this to repopulate
     // sub-tabs with per-radio fields.
     void currentRadioChanged(const NereusSDR::RadioInfo& info);
+
+    // ── Phase 3M-4 Task 13: late-bound PureSignal coordinator handoff ──────
+    // Fires when m_pureSignal is created (post-WDSP-init) or torn down.
+    // Carries the live PureSignal* (nullptr on disconnect).  Subscribers
+    // (PureSignalApplet, TxApplet [PS-A]) re-wire their controls when the
+    // coordinator becomes available.
+    //
+    // The coordinator does not exist at MainWindow construction time
+    // (RadioModel::pureSignal() returns nullptr until connectToRadio()'s
+    // WDSP-init lambda fires, see RadioModel.cpp:1884 [v2.10.3.13]).  This
+    // signal is the late-binding seam.  Tests call
+    // emit pureSignalCoordinatorReady(...) directly to inject a test-owned
+    // coordinator into the applet wiring.
+    void pureSignalCoordinatorReady(NereusSDR::PureSignal* coordinator);
     void sliceAdded(int index);
     void sliceRemoved(int index);
     void activeSliceChanged(int index);

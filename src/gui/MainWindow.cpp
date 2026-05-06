@@ -1595,6 +1595,30 @@ void MainWindow::populateDefaultMeter()
         dialog->show();
     });
 
+    // ── Phase 3M-4 Task 13: PS-A right-click → open PsForm ─────────────────
+    // Mirrors Thetis chkFWCATUBypass_MouseDown (console.cs:46149-46152
+    // [v2.10.3.13]).  PsForm is the same singleton dialog opened from the
+    // Tools / DSP menu and from PureSignalApplet right-click handlers.
+    connect(txApplet, &TxApplet::openPureSignalDialogRequested,
+            this, &MainWindow::openPureSignalDialog);
+
+    // Phase 3M-4 Task 13 — capability-gated PS-A visibility.  Push initial
+    // caps + keep them in sync on RadioModel::currentRadioChanged.  TxApplet
+    // hides m_psaBtn when caps.hasPureSignal == false (HL2 / Atlas).
+    txApplet->setBoardCapabilities(m_radioModel->boardCapabilities());
+    connect(m_radioModel, &RadioModel::currentRadioChanged, txApplet,
+            [this, txApplet]() {
+        txApplet->setBoardCapabilities(m_radioModel->boardCapabilities());
+    });
+
+    // Phase 3M-4 Task 13 — late-bound coordinator handoff.  TxApplet
+    // already self-subscribes inside its ctor (see TxApplet.cpp wireControls
+    // PS-A block), so no explicit connect needed here.  Still: push the
+    // current coordinator at startup in case it's already live (test path).
+    if (PureSignal* ps = m_radioModel->pureSignal()) {
+        txApplet->setPureSignal(ps);
+    }
+
     // 3M-1a H.1-H.4 fixup: wire panadapter band changes to TxApplet so
     // the per-band Tune Power slider tracks the active band.
     // Without this, m_currentBand stays at Band::Band20m permanently.
@@ -1662,12 +1686,30 @@ void MainWindow::populateDefaultMeter()
                                 m_radioModel->audioEngine(), nullptr);
     panel->addApplet(m_vaxApplet);
 
+    // Phase 3M-4 Task 13 — PureSignalApplet quick-access surface.
+    //
+    // Constructed unconditionally and added to the right panel, but
+    // visibility is gated on caps.hasPureSignal in onConnectionStateChanged
+    // (HL2 / Atlas hide the applet entirely; G2-class boards show it).
+    // Right-click on every PureSignalApplet control opens PsForm via the
+    // openPureSignalDialogRequested signal, which MainWindow forwards to
+    // openPureSignalDialog (same singleton dialog as Tools / DSP menu).
+    m_pureSignalApplet = new PureSignalApplet(m_radioModel, nullptr);
+    panel->addApplet(m_pureSignalApplet);
+    connect(m_pureSignalApplet,
+            &PureSignalApplet::openPureSignalDialogRequested,
+            this, &MainWindow::openPureSignalDialog);
+    // Initial visibility from current board caps; tracked thereafter via
+    // onConnectionStateChanged (where hasPureSignal is also gated on the
+    // PSA bottom-banner indicator).
+    m_pureSignalApplet->setVisible(
+        m_radioModel->boardCapabilities().hasPureSignal);
+
     // Ghost applets: constructed but not added to the panel or the Containers menu
     // until their feature phases ship. Uncomment the construction + addContainerToggle
     // call (in buildMenuBar) together when the feature lands.
     //
     // m_digitalApplet    = new DigitalApplet(m_radioModel, nullptr);    // TODO 3-VAX
-    // m_pureSignalApplet = new PureSignalApplet(m_radioModel, nullptr); // TODO 3M-4 (PureSignal)
     // m_diversityApplet  = new DiversityApplet(m_radioModel, nullptr);  // TODO 3F (multi-RX)
     // m_cwxApplet        = new CwxApplet(m_radioModel, nullptr);        // TODO 3M-2 (CW TX)
     // m_dvkApplet        = new DvkApplet(m_radioModel, nullptr);        // TODO 3M-1 (DVK)
@@ -4391,6 +4433,15 @@ void MainWindow::onConnectionStateChanged()
         if (m_psaIndicator) {
             m_psaIndicator->setVisible(caps.hasPureSignal);
         }
+        // Phase 3M-4 Task 13: gate PureSignalApplet + TxApplet [PS-A] on
+        // the same board capability.  PureSignalApplet hides itself; the
+        // TxApplet [PS-A] button hides via its setBoardCapabilities slot.
+        if (m_pureSignalApplet) {
+            m_pureSignalApplet->setVisible(caps.hasPureSignal);
+        }
+        if (m_txApplet) {
+            m_txApplet->setBoardCapabilities(caps);
+        }
         // P1 full-parity §4.1: gate AutoAttMode::Adaptive on per-step
         // calibration support.  Must be set BEFORE loadSettings() so a
         // persisted "Adaptive" string is clamped to Classic when the
@@ -4429,6 +4480,20 @@ void MainWindow::onConnectionStateChanged()
         // caps.hasPureSignal for the new board.
         if (m_psaIndicator) {
             m_psaIndicator->setVisible(false);
+        }
+        // Phase 3M-4 Task 13: hide PureSignalApplet + TxApplet [PS-A] on
+        // disconnect.  Same lifetime model as the PSA indicator above.
+        // Re-evaluation happens on next reconnect via the connected-branch
+        // gating block.
+        if (m_pureSignalApplet) {
+            m_pureSignalApplet->setVisible(false);
+        }
+        if (m_txApplet) {
+            // Push the unknown-board defaults (hasPureSignal == false) so
+            // [PS-A] hides.  RadioModel::boardCapabilities() returns the
+            // unknown-board fallback when m_hardwareProfile.caps is null
+            // (RadioModel.cpp:1016 [v2.10.3.13] equivalent).
+            m_txApplet->setBoardCapabilities(m_radioModel->boardCapabilities());
         }
 
         // Phase 3Q Sub-PR-6 (F.1): RxDashboard shows placeholder "—" when

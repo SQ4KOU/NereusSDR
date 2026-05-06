@@ -170,6 +170,7 @@
 #include "core/audio/CompositeTxMicRouter.h"
 #include "core/MicProfileManager.h"
 #include "core/MoxController.h"
+#include "core/PureSignal.h"
 #include "core/RadioStatus.h"
 #include "core/TwoToneController.h"
 #include "core/TxChannel.h"
@@ -730,9 +731,12 @@ void TxApplet::buildUI()
         row->addWidget(m_twoToneBtn, 1);
 
         // PS-A: green when checked — #006030/#008040 are a darker green than kGreenBg=#006040.
-        // Flagged for 3M-4 PureSignal phase review; do NOT snap to Style::kGreenBg/kGreenBorder
-        // until PureSignal colors are audited against Thetis APD button palette.
+        // Phase 3M-4 Task 13: un-hidden under capability gating.  Visibility
+        // is set by setBoardCapabilities() / MainWindow board-change handler;
+        // hidden by default until that fires (matches the Phase 3M-1a comment
+        // pattern of hidden-until-capability-known).
         m_psaBtn = new QPushButton(QStringLiteral("PS-A"), this);
+        m_psaBtn->setObjectName(QStringLiteral("TxAppletPsaBtn"));
         m_psaBtn->setCheckable(true);
         m_psaBtn->setFixedHeight(22);
         m_psaBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
@@ -740,9 +744,9 @@ void TxApplet::buildUI()
             + QStringLiteral("QPushButton:checked {"
                              " background: #006030; border: 1px solid #008040; color: #fff; }"));
         m_psaBtn->setAccessibleName(QStringLiteral("PS-A PureSignal"));
-        m_psaBtn->setToolTip(QStringLiteral("PureSignal — not yet implemented (Phase 3M-4)"));
-        m_psaBtn->setVisible(false);  // TODO [3M-4]: visible when PureSignal lands
-        NyiOverlay::markNyi(m_psaBtn, QStringLiteral("Phase 3M-4"));
+        m_psaBtn->setToolTip(QStringLiteral(
+            "Toggle PureSignal auto-calibration. Right-click to open PureSignal..."));
+        m_psaBtn->setVisible(false);  // gated on caps.hasPureSignal in MainWindow
         row->addWidget(m_psaBtn, 1);
 
         vbox->addLayout(row);
@@ -1387,6 +1391,50 @@ void TxApplet::wireControls()
         m_twoToneCtrl->setActive(on);
     });
 
+    // ── Phase 3M-4 Task 13: PS-A button wiring ───────────────────────────────
+    // Source-first port of Thetis chkFWCATUBypass:
+    //   - Left-click toggle drives PureSignal::setAutoCalEnabled (mirrors
+    //     chkFWCATUBypass_Click, console.cs:36762 [v2.10.3.13]).
+    //   - Right-click opens PsForm via openPureSignalDialogRequested (mirrors
+    //     chkFWCATUBypass_MouseDown, console.cs:46149-46152 [v2.10.3.13]:
+    //       if (IsRightButton(e)) linearityToolStripMenuItem_Click(null,
+    //                                                              EventArgs.Empty);
+    //     ).
+    //
+    // Coordinator is late-bound — wired via setPureSignal() when
+    // RadioModel::pureSignalCoordinatorReady fires post-WDSP-init.  The
+    // toggled lambda below null-guards on m_ps so pre-coordinator clicks
+    // are safely no-op'd.
+    if (m_psaBtn) {
+        // Right-click → emit openPureSignalDialogRequested.  Wired
+        // unconditionally so the seam exists even when no PureSignal
+        // coordinator is bound (test harness verifies the signal emit).
+        m_psaBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(m_psaBtn, &QWidget::customContextMenuRequested, this,
+                [this](const QPoint&) {
+            emit openPureSignalDialogRequested();
+        });
+
+        // Left-click toggle → PureSignal::setAutoCalEnabled (when bound).
+        // Guarded on m_updatingFromModel to prevent echo loops when the
+        // coordinator's autoCalEnabledChanged signal flips us back.
+        connect(m_psaBtn, &QPushButton::toggled, this, [this](bool on) {
+            if (m_updatingFromModel) { return; }
+            if (m_ps) { m_ps->setAutoCalEnabled(on); }
+        });
+
+        // If a coordinator is already live (e.g. test injects via
+        // RadioModel::pureSignal() returning non-null at construction),
+        // wire it now.  Otherwise wait for the late-bind signal.
+        if (m_model) {
+            if (PureSignal* ps = m_model->pureSignal()) {
+                setPureSignal(ps);
+            }
+            connect(m_model, &RadioModel::pureSignalCoordinatorReady, this,
+                    &TxApplet::setPureSignal);
+        }
+    }
+
     // ── Initial sync from model ──────────────────────────────────────────────
     syncFromModel();
 }
@@ -1924,6 +1972,67 @@ void TxApplet::requestOpenCfcDialog()
     m_cfcDialog->show();
     m_cfcDialog->raise();
     m_cfcDialog->activateWindow();
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3M-4 Task 13 — setBoardCapabilities
+//
+// Hide / show the [PS-A] button based on caps.hasPureSignal.  Called by
+// MainWindow on RadioModel::currentRadioChanged (and once on startup).
+// Mirrors the RxApplet::setBoardCapabilities pattern.  No-op when m_psaBtn
+// is null (e.g. during early construction or after teardown).
+// ---------------------------------------------------------------------------
+void TxApplet::setBoardCapabilities(const NereusSDR::BoardCapabilities& caps)
+{
+    if (!m_psaBtn) { return; }
+    m_psaBtn->setVisible(caps.hasPureSignal);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3M-4 Task 13 — setPureSignal (late-bound coordinator)
+//
+// Re-arm the [PS-A] toggle's bidirectional binding when the PureSignal
+// coordinator becomes available (post-WDSP-init).  Disconnects the prior
+// coordinator's autoCalEnabledChanged echo before rewiring; the toggled
+// lambda in wireControls() reads m_ps live so it picks up the new pointer
+// without rewiring.
+//
+// Pass nullptr to clear bindings on teardown (RadioModel emits this at
+// disconnect via pureSignalCoordinatorReady(nullptr)).
+// ---------------------------------------------------------------------------
+void TxApplet::setPureSignal(NereusSDR::PureSignal* coordinator)
+{
+    if (m_ps == coordinator) { return; }
+
+    if (m_ps) {
+        // Drop the prior coordinator's signal subscriptions targeting us.
+        disconnect(m_ps, nullptr, this, nullptr);
+    }
+    m_ps = coordinator;
+
+    if (!m_psaBtn) { return; }
+
+    if (m_ps) {
+        connect(m_ps, &NereusSDR::PureSignal::autoCalEnabledChanged, this,
+                [this](bool on) {
+            if (!m_psaBtn) { return; }
+            QSignalBlocker blk(m_psaBtn);
+            m_updatingFromModel = true;
+            m_psaBtn->setChecked(on);
+            m_updatingFromModel = false;
+        });
+        // Initial sync from coordinator state.
+        QSignalBlocker blk(m_psaBtn);
+        m_updatingFromModel = true;
+        m_psaBtn->setChecked(m_ps->isAutoCalEnabled());
+        m_updatingFromModel = false;
+    } else {
+        // Coordinator gone — reset toggle state (safe default).
+        QSignalBlocker blk(m_psaBtn);
+        m_updatingFromModel = true;
+        m_psaBtn->setChecked(false);
+        m_updatingFromModel = false;
+    }
 }
 
 // ---------------------------------------------------------------------------

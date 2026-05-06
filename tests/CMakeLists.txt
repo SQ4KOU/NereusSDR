@@ -178,6 +178,31 @@ nereus_add_test(tst_psa_indicator)
 # QMessageBox::exec() modal.
 nereus_add_test(tst_setup_deltas)
 
+# ── Phase 3M-4 Task 13: applet wiring (PureSignalApplet + TxApplet [PS-A]) ───
+# Replaces NyiOverlay::markNyi scaffolding in two applets with live wiring to
+# the PureSignal coordinator (Task 7).
+#
+# PureSignalApplet (NereusSDR-native quick-access surface):
+#   7 buttons (Calibrate / Auto / Save / Restore / 2-Tone) + 2 gauges (FB /
+#   Correction) + 3 LEDs (Cal / Run / Fbk) + 3 info labels (Iterations /
+#   Feedback dB / Correction dB).  Right-click on every control emits
+#   openPureSignalDialogRequested → MainWindow::openPureSignalDialog.  Save
+#   button gated on PureSignal::correctingChanged (mirrors PSForm.cs:574-590
+#   [v2.10.3.13]).
+#
+# TxApplet [PS-A] toggle (source-first port of Thetis chkFWCATUBypass):
+#   Visibility gated on caps.hasPureSignal (TxApplet::setBoardCapabilities).
+#   Left-click toggle drives PureSignal::setAutoCalEnabled (mirrors
+#   chkFWCATUBypass_Click, console.cs:36762 [v2.10.3.13]).  Right-click
+#   opens PsForm via openPureSignalDialogRequested signal (mirrors
+#   chkFWCATUBypass_MouseDown, console.cs:46149-46152 [v2.10.3.13]).
+#
+# PureSignal coordinator extended with 3 new signals: calStateChanged
+# (engine state for Cal/Run LEDs), correctionPeakChanged (HW peak for
+# Correction gauge), and feedbackActiveChanged (correcting && MOX for
+# Fbk LED).  All three fired from existing pollTimerTick.
+nereus_add_test(tst_applet_ps_wiring)
+
 # ── Phase 3M-1b Task B.1: BoardCapabilities::hasMicJack flag ─────────────────
 # Parametrized over all HPSDRHW enum values.
 # HL2 and HermesLiteRxOnly → false; all other boards → true.
