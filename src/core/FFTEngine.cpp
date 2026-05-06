@@ -237,6 +237,15 @@ void FFTEngine::feedIQ(const QVector<float>& interleavedIQ)
         if (m_iqWritePos >= m_currentFftSize) {
             // Buffer full -- process and shift overlap region back to head.
             processFrame();
+            // If processFrame returned WITHOUT running the FFT (defensive
+            // 5 ms cap fired), m_iqWritePos is still at fftSize.  Drop
+            // the rest of this batch; buffer stays full; next feedIQ
+            // call retries processFrame (timer will have advanced past
+            // the cap by then).  Without this guard we'd overflow
+            // m_iqRaw on the next sample write.
+            if (m_iqWritePos >= m_currentFftSize) {
+                return;
+            }
         }
         // Swap I<->Q for spectrum display.  Matches Thetis analyzer.c:
         // 1757-1758 [v2.10.3.13].  Audio path (WDSP fexchange2) uses
@@ -458,17 +467,30 @@ void FFTEngine::processFrame()
         return;
     }
 
-    // Safety cap: never emit faster than 60 fps to avoid flooding the main thread
-    // at very small FFT sizes or very high sample rates. Display-side timer in
-    // SpectrumWidget controls the actual repaint rate independently.
+    // Defensive emit-rate ceiling.  With the overlap design (advance =
+    // sampleRate / targetFps, see overlap-shift block at the bottom of
+    // this function) the natural FFT emit rate equals targetFps, which
+    // setOutputFps clamps to [1, 60].  In steady-state operation this
+    // cap is dead code.  It exists as a safety net for burst-processing
+    // jitter where two buffer-full events arrive within microseconds
+    // of each other.
     //
-    // NB: dropping the frame here also resets m_iqWritePos so the next feedIQ
-    // sample starts a fresh buffer.  Without this reset we'd write past
-    // m_iqRaw[fftSize-1] on the next feedIQ iteration since the overlap-shift
-    // tail of processFrame is the only other path that resets the write head.
-    if (m_frameTimerStarted && m_frameTimer.elapsed() < 16) {
-        m_iqWritePos = 0;
-        return;
+    // Threshold: 5 ms (= 200 fps cap).  Old code used 16 ms, which sat
+    // right at the natural 16.67 ms emit interval at targetFps=60 and
+    // tripped on small timing jitter -- and that cap-fire path used to
+    // reset m_iqWritePos = 0, discarding the accumulated overlap region
+    // (~13k samples worth of progress).  At 768 kHz DDC + 60 fps that
+    // discard caused visible frame drops on JJ's bench when zooming
+    // (each cap-fire silently lost 17 ms of accumulated samples).
+    //
+    // Cap-fire NO LONGER resets the buffer.  m_iqWritePos stays at
+    // fftSize so the next feedIQ call sees a full buffer and retries
+    // processFrame; the feedIQ loop has a matching guard that drops
+    // its remaining batch samples when processFrame returned without
+    // running the FFT.  This preserves the overlap region across the
+    // (rare) cap fire.
+    if (m_frameTimerStarted && m_frameTimer.elapsed() < 5) {
+        return;  // buffer stays full; next feedIQ call retries
     }
 
     // Window-recompute pending?  Set by setWindowFunction or setKaiserPi
