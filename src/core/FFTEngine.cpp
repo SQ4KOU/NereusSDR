@@ -295,6 +295,21 @@ void FFTEngine::computeWindow()
 
     WindowFunction wf = static_cast<WindowFunction>(m_windowFunc.load());
 
+    // Diagnostic log -- helps confirm the dirty-flag path runs when the
+    // user changes the window combo.  Static last-logged value avoids
+    // log spam from same-window FFT-size changes (which also re-run
+    // computeWindow via replanFft).
+    static int lastLoggedWf = -1;
+    static int lastLoggedSize = 0;
+    const int wfInt = static_cast<int>(wf);
+    if (wfInt != lastLoggedWf || size != lastLoggedSize) {
+        qCInfo(lcDsp) << "FFTEngine::computeWindow: window=" << wfInt
+                      << " size=" << size
+                      << " kaiserPi=" << m_kaiserPi.load();
+        lastLoggedWf = wfInt;
+        lastLoggedSize = size;
+    }
+
     // All 7 cases mirror WDSP analyzer.c:52-173 [v2.10.3.13] new_window()
     // switch ordering exactly (case 0 = Rectangular ... case 6 = BH-7T).
     // WDSP normalises the window in-place by inv_coherent_gain at line 79
