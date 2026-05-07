@@ -319,6 +319,17 @@ private:
     QCheckBox*      m_chkSCFEnable{nullptr};
     QSpinBox*       m_udSCFLowCut{nullptr};             // Hz      int (range 100..10000, step 10)
     QSpinBox*       m_udSCFHighCut{nullptr};            // Hz      int (range 100..10000, step 10)
+
+    // ── grpAntiVOX ───────────────────────────────────────────────────────────
+    // Phase 3M-3a-iv Task 10: Tau (ms) spinbox.  Mirrors Thetis grpAntiVOX
+    // (setup.designer.cs:44634-44698 [v2.10.3.13]).  The full Thetis group
+    // also contains Enable / Source-toggle / Gain controls; those are wired
+    // through MoxController + TransmitModel today but not yet exposed on the
+    // Setup page — they land in a follow-up sub-task.  Tau is added now so
+    // operators can adjust the smoothing time-constant for the anti-VOX
+    // detector, which is the gating constant for the new cancellation feed
+    // landed in 3M-3a-iv Tasks 1-9.
+    QSpinBox*       m_udAntiVoxTau{nullptr};            // ms      int (range 1..500)
 };
 
 } // namespace NereusSDR

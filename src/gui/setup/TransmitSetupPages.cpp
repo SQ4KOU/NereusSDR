@@ -1658,6 +1658,49 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // ── Group 4: Anti-VOX (Phase 3M-3a-iv Task 10) ───────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    //
+    // From Thetis setup.designer.cs:44634-44698 [v2.10.3.13] — grpAntiVOX.
+    // Title "Anti-VOX" verbatim from line 44644.
+    //
+    // Phase 3M-3a-iv lands the Tau (ms) control here so operators can adjust
+    // the smoothing time-constant on the WDSP DEXP anti-VOX detector.  The
+    // remaining Thetis grpAntiVOX controls (chkAntiVoxEnable, chkAntiVoxSource,
+    // udAntiVoxGain) are already wired to TransmitModel + MoxController but
+    // not yet exposed on this Setup page — they land in a follow-up sub-task.
+
+    auto* antiVoxGrp = new QGroupBox(QStringLiteral("Anti-VOX"));
+    antiVoxGrp->setObjectName(QStringLiteral("grpAntiVOX"));
+    auto* antiVoxLay = new QVBoxLayout(antiVoxGrp);
+
+    // udAntiVoxTau — range 1..500 default 20 step 1 — line 44660-44688
+    m_udAntiVoxTau = new QSpinBox;
+    m_udAntiVoxTau->setObjectName(QStringLiteral("udAntiVoxTau"));
+    m_udAntiVoxTau->setRange(TransmitModel::kAntiVoxTauMsMin,
+                             TransmitModel::kAntiVoxTauMsMax);
+    m_udAntiVoxTau->setSingleStep(1);
+    m_udAntiVoxTau->setValue(tx.antiVoxTauMs());
+    // From Thetis setup.designer.cs:44681 [v2.10.3.13] — udAntiVoxTau tooltip.
+    m_udAntiVoxTau->setToolTip(QStringLiteral(
+        "Time-constant used in smoothing Anti-VOX data"));
+
+    auto* antiVoxGrid = new QGridLayout;
+    antiVoxGrid->setHorizontalSpacing(10);
+    antiVoxGrid->setVerticalSpacing(6);
+    // "Tau (ms)" — verbatim from lblAntiVoxTau.Text:44697
+    addLabelledRow(antiVoxGrid, 0, QStringLiteral("Tau (ms)"), m_udAntiVoxTau);
+    antiVoxLay->addLayout(antiVoxGrid);
+    antiVoxLay->addStretch();
+
+    // Insert grpAntiVOX BEFORE the trailing stretch (same pattern as the 2x2
+    // grid above).
+    {
+        const int stretchIndex = contentLayout()->count() - 1;
+        contentLayout()->insertWidget(stretchIndex, antiVoxGrp);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // ── Bidirectional bindings ───────────────────────────────────────────────
     // ══════════════════════════════════════════════════════════════════════════
 
@@ -1786,6 +1829,17 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
             m_udSCFHighCut, [this](double hz) {
         QSignalBlocker b(m_udSCFHighCut);
         m_udSCFHighCut->setValue(static_cast<int>(hz));
+    });
+
+    // udAntiVoxTau <-> antiVoxTauMs (Phase 3M-3a-iv Task 10).  Bidirectional
+    // round-trip with QSignalBlocker guard, matching the pattern used by the
+    // other anti-VOX-adjacent spinboxes above.
+    connect(m_udAntiVoxTau, QOverload<int>::of(&QSpinBox::valueChanged),
+            &tx, &TransmitModel::setAntiVoxTauMs);
+    connect(&tx, &TransmitModel::antiVoxTauMsChanged,
+            m_udAntiVoxTau, [this](int ms) {
+        QSignalBlocker b(m_udAntiVoxTau);
+        m_udAntiVoxTau->setValue(ms);
     });
 }
 

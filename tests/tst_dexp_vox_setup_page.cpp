@@ -265,6 +265,75 @@ private slots:
         QVERIFY2(titles.contains(QStringLiteral("Side-Channel Trigger Filter")),
                  qPrintable("Missing 'Side-Channel Trigger Filter' group; saw: " + titles.join(", ")));
     }
+
+    // ── 6-9. Phase 3M-3a-iv Task 10: Anti-VOX Tau (ms) spinbox ───────────────
+    //
+    // The Anti-VOX group lives below the 2x2 DEXP/VOX grid.  It currently
+    // hosts a single Tau (ms) spinbox; remaining Thetis grpAntiVOX controls
+    // (Enable / Source / Gain) ship in a follow-up sub-task.
+
+    // Default value: 20 ms — Thetis udAntiVoxTau.Value (setup.designer.cs:44682
+    // [v2.10.3.13]) and TransmitModel::kAntiVoxTauMsDefault.
+    void tauSpinbox_defaultIs20()
+    {
+        RadioModel model;
+        DexpVoxPage page(&model);
+        page.show();
+
+        auto* spin = page.findChild<QSpinBox*>(QStringLiteral("udAntiVoxTau"));
+        QVERIFY(spin != nullptr);
+        QCOMPARE(spin->value(), 20);
+    }
+
+    // Spinbox -> TransmitModel direction.
+    void tauSpinbox_writesTransmitModel()
+    {
+        RadioModel model;
+        DexpVoxPage page(&model);
+        page.show();
+
+        auto* spin = page.findChild<QSpinBox*>(QStringLiteral("udAntiVoxTau"));
+        QVERIFY(spin != nullptr);
+
+        spin->setValue(80);
+        QCoreApplication::processEvents();
+
+        QCOMPARE(model.transmitModel().antiVoxTauMs(), 80);
+    }
+
+    // TransmitModel -> spinbox direction.  QSignalBlocker round-trip should
+    // not echo back into TM.
+    void tauSpinbox_readsTransmitModel()
+    {
+        RadioModel model;
+        DexpVoxPage page(&model);
+        page.show();
+
+        auto* spin = page.findChild<QSpinBox*>(QStringLiteral("udAntiVoxTau"));
+        QVERIFY(spin != nullptr);
+
+        model.transmitModel().setAntiVoxTauMs(120);
+        QCoreApplication::processEvents();
+
+        QCOMPARE(spin->value(), 120);
+        QCOMPARE(model.transmitModel().antiVoxTauMs(), 120);
+    }
+
+    // Tooltip is the Thetis verbatim string (no source-citation embedded in
+    // the user-visible text — that goes in the source comment next to the
+    // setToolTip call).
+    void tauSpinbox_tooltipMatchesThetisVerbatim()
+    {
+        RadioModel model;
+        DexpVoxPage page(&model);
+        page.show();
+
+        auto* spin = page.findChild<QSpinBox*>(QStringLiteral("udAntiVoxTau"));
+        QVERIFY(spin != nullptr);
+        // From Thetis setup.designer.cs:44681 [v2.10.3.13].
+        QCOMPARE(spin->toolTip(),
+                 QStringLiteral("Time-constant used in smoothing Anti-VOX data"));
+    }
 };
 
 QTEST_MAIN(TestDexpVoxSetupPage)
