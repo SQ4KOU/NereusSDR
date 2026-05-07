@@ -85,7 +85,7 @@ class HGauge;
 //   4. Correction mag gauge  — HGauge (0-100, yellow@80, red@95, title "Correction")
 //                              ← correctionPeakChanged 0..1 → 0..100
 //   5. Save coefficients     — QPushButton "Save"  → saveCorrections (file dialog)
-//                              gated on correctingChanged
+//                              gated on correctionsBeingAppliedChanged
 //   6. Restore coefficients  — QPushButton "Restore" → restoreCorrections (file dialog)
 //   7. Two-tone test         — QPushButton green toggle "2-Tone" ↔ setTwoToneOn
 //   8. Status LEDs           — 3x QLabel (24x14 rounded: "Cal", "Run", "Fbk")

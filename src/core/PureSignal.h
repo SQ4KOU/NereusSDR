@@ -89,7 +89,13 @@ class PureSignal : public QObject {
 
     Q_PROPERTY(bool enabled READ isEnabled WRITE setEnabled NOTIFY enabledChanged)
     Q_PROPERTY(bool autoCalEnabled READ isAutoCalEnabled WRITE setAutoCalEnabled NOTIFY autoCalEnabledChanged)
-    Q_PROPERTY(bool correctionsApplied READ correctionsBeingApplied NOTIFY correctingChanged)
+    // Codex Fix D: split predicates per Thetis PSForm.cs:1100-1108 [v2.10.3.13]:
+    //   CorrectionsBeingApplied { _info[14] == 1; }   → gates Save / CO badge
+    //   Correcting              { FeedbackLevel > 90; } → Lime vs Yellow CO state
+    // The legacy code emitted correctingChanged for both predicates, so Save
+    // could enable from feedback level alone (without corrections) and the CO
+    // badge could never reach the Yellow "applied-but-not-correcting" state.
+    Q_PROPERTY(bool correctionsApplied READ correctionsBeingApplied NOTIFY correctionsBeingAppliedChanged)
     Q_PROPERTY(bool correcting READ isCorrecting NOTIFY correctingChanged)
     Q_PROPERTY(int feedbackLevel READ feedbackLevel NOTIFY feedbackLevelChanged)
     Q_PROPERTY(int calibrationCount READ calibrationCount NOTIFY calibrationCountChanged)
@@ -381,7 +387,12 @@ public slots:
 signals:
     void enabledChanged(bool);
     void autoCalEnabledChanged(bool);
+    // Codex Fix D: distinct predicates per Thetis PSForm.cs:1100-1108
+    // [v2.10.3.13].  correctingChanged fires only on FeedbackLevel > 90
+    // crossings.  correctionsBeingAppliedChanged fires only on _info[14]
+    // toggles.  See Q_PROPERTY block above for the split rationale.
     void correctingChanged(bool);
+    void correctionsBeingAppliedChanged(bool);
     void feedbackLevelChanged(int);
     void calibrationCountChanged(int);
     void feedbackColourChanged(QColor);

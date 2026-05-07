@@ -1038,6 +1038,118 @@ private slots:
         QCOMPARE(stepAtt.attOnTxValue(), 0);
     }
 
+    // ── Fix D: split correctionsBeingAppliedChanged from correctingChanged ──
+    //
+    // Codex review identified that the legacy code emitted correctingChanged
+    // twice with two DIFFERENT semantic predicates:
+    //   - PureSignal.cpp:741   correctingChanged(newCorr)        // FB > 90
+    //   - PureSignal.cpp:758   correctingChanged(newCorrApplied) // _info[14]==1
+    //
+    // Thetis treats these as two distinct getters:
+    //   PSForm.cs:1100-1102 CorrectionsBeingApplied { _info[14] == 1; }
+    //   PSForm.cs:1106-1108 Correcting             { FeedbackLevel > 90; }
+    //
+    // The fix: emit correctionsBeingAppliedChanged for the info[14] path and
+    // keep correctingChanged only for the FeedbackLevel > 90 path.
+
+    void correctionsBeingAppliedChanged_emittedOnInfo14Toggle()
+    {
+        // Toggling _info[14] between 0 and 1 must emit
+        // correctionsBeingAppliedChanged on each transition, with no spurious
+        // correctingChanged fires from this same path (FB stays at 0 here, so
+        // FB>90 stays false → correctingChanged should not fire).
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+        ps.setAutoCalEnabled(true);
+        ps.setTimersEnabled(false);
+
+        QSignalSpy applied(&ps, &PureSignal::correctionsBeingAppliedChanged);
+        QSignalSpy correcting(&ps, &PureSignal::correctingChanged);
+
+        // Tick 1: info[14]=1 → applied transitions false → true.
+        // info[4] (FeedbackLevel) stays 0 so FB > 90 = false (no change from
+        // ctor default false → no correctingChanged emit).
+        int info[16] = {};
+        info[4]  = 0;
+        info[14] = 1;
+        ps.processNewInfo(info);
+        QCOMPARE(applied.count(), 1);
+        QCOMPARE(applied.takeFirst().at(0).toBool(), true);
+        QCOMPARE(correcting.count(), 0);
+
+        // Tick 2: info[14]=0 → applied transitions true → false.
+        info[14] = 0;
+        info[5]  = 1;   // bump calCount so HasInfoChanged passes
+        ps.processNewInfo(info);
+        QCOMPARE(applied.count(), 1);
+        QCOMPARE(applied.takeFirst().at(0).toBool(), false);
+        QCOMPARE(correcting.count(), 0);
+    }
+
+    void correctingChanged_emittedOnFeedbackLevelCrossing90()
+    {
+        // From Thetis PSForm.cs:1106-1108 [v2.10.3.13]:
+        //   public static bool Correcting { get { return FeedbackLevel > 90; } }
+        // Crossing the 90-line in either direction must emit correctingChanged
+        // exactly once.  No correctionsBeingAppliedChanged from this path.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+        ps.setAutoCalEnabled(true);
+        ps.setTimersEnabled(false);
+
+        // Tick 1: prime with fb=80, info[14]=0.  Default state was already
+        // correcting=false / correctionsApplied=false, so neither signal
+        // should fire because no transition occurred.
+        QSignalSpy applied(&ps, &PureSignal::correctionsBeingAppliedChanged);
+        QSignalSpy correcting(&ps, &PureSignal::correctingChanged);
+
+        int info[16] = {};
+        info[4]  = 80;       // fb < 90 → correcting=false (no change)
+        info[5]  = 1;
+        info[14] = 0;
+        ps.processNewInfo(info);
+        QCOMPARE(correcting.count(), 0);    // no transition (false→false)
+        QCOMPARE(applied.count(),    0);    // no transition (false→false)
+
+        // Tick 2: fb=100 crosses 90 → correctingChanged(true) fires once.
+        // info[14] still 0 → no correctionsBeingAppliedChanged.
+        info[4] = 100;
+        info[5] = 2;
+        ps.processNewInfo(info);
+        QCOMPARE(correcting.count(), 1);
+        QCOMPARE(correcting.takeFirst().at(0).toBool(), true);
+        QCOMPARE(applied.count(), 0);
+    }
+
+    void correctingChanged_andCorrectionsBeingAppliedChanged_areDistinct()
+    {
+        // Drive each input independently and verify the OTHER signal does
+        // not fire.  Single test that pins the contract: the two predicates
+        // are completely orthogonal.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+        ps.setAutoCalEnabled(true);
+        ps.setTimersEnabled(false);
+
+        QSignalSpy applied(&ps, &PureSignal::correctionsBeingAppliedChanged);
+        QSignalSpy correcting(&ps, &PureSignal::correctingChanged);
+
+        // Step A: flip info[14] only (fb stays 0 → no correcting transition).
+        int info[16] = {};
+        info[14] = 1;
+        ps.processNewInfo(info);
+        QCOMPARE(applied.count(),    1);
+        QCOMPARE(correcting.count(), 0);
+        applied.clear();
+
+        // Step B: flip fb above 90 (info[14] stays 1 → no applied transition).
+        info[4] = 150;
+        info[5] = 1;
+        ps.processNewInfo(info);
+        QCOMPARE(correcting.count(), 1);
+        QCOMPARE(applied.count(),    0);
+    }
+
 };
 
 // QTEST_GUILESS_MAIN constructs a QCoreApplication so the internal QTimers

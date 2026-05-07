@@ -649,14 +649,21 @@ void PsForm::wireToPureSignal()
     // machine output).  Per PSForm.cs:574-590 [v2.10.3.13]:
     //   if (puresignal.CorrectionsBeingApplied) btnPSSave.Enabled = true;
     //   else                                    btnPSSave.Enabled = false;
-    connect(m_pureSignal, &PureSignal::correctingChanged,
+    // Codex Fix D: route from correctionsBeingAppliedChanged (info[14]==1
+    // predicate), NOT correctingChanged (FeedbackLevel > 90 predicate).
+    connect(m_pureSignal, &PureSignal::correctionsBeingAppliedChanged,
             m_btnSave,           &QPushButton::setEnabled);
 
     // PureSignal -> UI label updates
     connect(m_pureSignal, &PureSignal::feedbackLevelChanged,
             this, &PsForm::onFeedbackLevelChanged);
+    // Codex Fix D: CO badge depends on BOTH predicates (Lime when both,
+    // Yellow when applied-but-not-correcting, Black when neither).  Wire to
+    // both signals so a flip in either retriggers the slot.
     connect(m_pureSignal, &PureSignal::correctingChanged,
-            this, &PsForm::onCorrectingChanged);
+            this, &PsForm::refreshCoBadge);
+    connect(m_pureSignal, &PureSignal::correctionsBeingAppliedChanged,
+            this, &PsForm::refreshCoBadge);
     connect(m_pureSignal, &PureSignal::calibrationCountChanged,
             this, &PsForm::onCalibrationCountChanged);
     connect(m_pureSignal, &PureSignal::feedbackColourChanged,
@@ -969,24 +976,38 @@ void PsForm::onFeedbackLevelChanged(int level)
     }
 }
 
-void PsForm::onCorrectingChanged(bool correcting)
+void PsForm::refreshCoBadge()
 {
     // From Thetis PSForm.cs:574-593 [v2.10.3.13]:
     //   if (CorrectionsBeingApplied) {
     //       if (Correcting) lblPSInfoCO.BackColor = Color.Lime;
     //       else            lblPSInfoCO.BackColor = Color.Yellow;
     //   } else {            lblPSInfoCO.BackColor = Color.Black; }
+    //
+    // Codex Fix D: full Thetis 3-state logic.  Pre-fix this slot took a
+    // single bool that conflated CorrectionsBeingApplied (info[14]==1) with
+    // Correcting (FeedbackLevel > 90), and the Yellow case was unreachable.
+    // Now driven by both correctionsBeingAppliedChanged AND correctingChanged
+    // signals; reads both predicates from the coordinator's atomic getters.
+    if (!m_lblCo || !m_pureSignal) {
+        return;
+    }
     QString css;
-    if (correcting) {
-        css = QStringLiteral(
-            "QLabel { background-color: #00FF00; border: 1px inset; "
-            "min-width: 12px; min-height: 12px; }");
+    if (m_pureSignal->correctionsBeingApplied()) {
+        if (m_pureSignal->isCorrecting()) {
+            css = QStringLiteral(
+                "QLabel { background-color: #00FF00; border: 1px inset; "
+                "min-width: 12px; min-height: 12px; }");
+        } else {
+            // Yellow — corrections applied but feedback level not yet > 90.
+            css = QStringLiteral(
+                "QLabel { background-color: #FFFF00; border: 1px inset; "
+                "min-width: 12px; min-height: 12px; }");
+        }
     } else {
         css = blackBadgeStyle();
     }
-    if (m_lblCo) {
-        m_lblCo->setStyleSheet(css);
-    }
+    m_lblCo->setStyleSheet(css);
 }
 
 void PsForm::onCalibrationCountChanged(int count)

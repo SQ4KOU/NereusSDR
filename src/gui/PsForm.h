@@ -181,7 +181,12 @@ private slots:
 
     // PureSignal -> UI sync
     void onFeedbackLevelChanged(int level);
-    void onCorrectingChanged(bool correcting);
+    // Codex Fix D: CO badge follows BOTH predicates per Thetis PSForm.cs:
+    // 574-593 [v2.10.3.13] — Lime/Yellow/Black 3-state logic depends on
+    // correctionsBeingApplied AND isCorrecting.  Slot reads both from the
+    // PureSignal coordinator's getters; wired to both signals so a flip in
+    // either predicate retriggers the colour computation.
+    void refreshCoBadge();
     void onCalibrationCountChanged(int count);
     void onFeedbackColourChanged(const QColor& colour);
 

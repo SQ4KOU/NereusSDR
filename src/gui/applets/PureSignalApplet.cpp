@@ -423,9 +423,12 @@ void PureSignalApplet::wireCoordinator(PureSignal* ps)
         }
     });
 
-    // Save enabled state ← correctingChanged.  Mirrors PSForm.cs:
-    // 574-590 btnPSSave gating [v2.10.3.13].
-    connect(ps, &PureSignal::correctingChanged,
+    // Save enabled state ← correctionsBeingAppliedChanged.  Mirrors PSForm.cs:
+    // 574-590 btnPSSave gating [v2.10.3.13]:
+    //   if (puresignal.CorrectionsBeingApplied) btnPSSave.Enabled = true;
+    // Codex Fix D: route from correctionsBeingAppliedChanged (info[14]==1
+    // predicate), NOT correctingChanged (FeedbackLevel > 90 predicate).
+    connect(ps, &PureSignal::correctionsBeingAppliedChanged,
             m_saveBtn, &QPushButton::setEnabled);
     m_saveBtn->setEnabled(ps->correctionsBeingApplied());
 

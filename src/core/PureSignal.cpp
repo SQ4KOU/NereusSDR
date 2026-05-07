@@ -751,11 +751,15 @@ void PureSignal::processNewInfo(const int newInfo[16])
     // Step 3: CorrectionsBeingApplied flag — info[14] == 1 per
     // PSForm.cs:1100-1102 [v2.10.3.13].  Drives the Save-button
     // gating + PS-state colour box.
+    //
+    // Codex Fix D: emit correctionsBeingAppliedChanged (NOT correctingChanged)
+    // to keep this predicate distinct from Correcting (FeedbackLevel > 90).
+    // The legacy code crossed wires here — Save button could enable from
+    // feedback level alone, and the CO badge never reached the Yellow
+    // "applied-but-not-correcting" state per PSForm.cs:574-593 [v2.10.3.13].
     const bool newCorrApplied = (newInfo[14] == 1);
     if (newCorrApplied != m_correctionsApplied.exchange(newCorrApplied)) {
-        // Same correctingChanged signal carries this — UI subscribers
-        // poll correctionsBeingApplied() and isCorrecting() separately.
-        emit correctingChanged(newCorrApplied);
+        emit correctionsBeingAppliedChanged(newCorrApplied);
     }
 
     // Step 4: feedback-colour-fade is a UI concern — handled by Task 10
