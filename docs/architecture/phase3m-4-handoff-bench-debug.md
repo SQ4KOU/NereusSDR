@@ -242,6 +242,130 @@ Connect to HL2 (mi0bot firmware ≥ v72).  Open Tools → PureSignal.
    Wireshark + filter `udp.port == 1024`, watch for C0=0x04 / 0x06 →
    frequency bytes match TX VFO.
 
+## mi0bot source-first audit (per-board PS DDC pair + HL2 ATT bounds)
+
+Discovered during the post-Task-17-P1 audit (2026-05-07):
+
+### Gap 1: per-board PS DDC pair indices
+
+mi0bot's `MetisReadThreadMainLoop` dispatch (networkproto1.c:380-392
+[v2.10.3.13-beta2]) places the PureSignal pair on different DDC slots
+per `nddc` value:
+
+| `nddc` | Boards | PS pair (psFb / txMon) | Source |
+| --- | --- | --- | --- |
+| 2 | HermesII / ANAN-10E / ANAN-100B | DDC0 / DDC1 | `twist(spr, 0, 1, 0)` line 380-381 |
+| 4 | Hermes / HL2 / ANAN-10 / ANAN-100 | **DDC2 / DDC3** | `twist(spr, 2, 3, 1)` line 385 + 551 |
+| 5 P1 | Orion-class P1 (rare) | DDC3 / DDC4 | `twist(spr, 3, 4, 1)` line 390 |
+| 5 P2 | Saturn / Orion / etc. | DDC0 / DDC1 | `network.c:936-945` freq override [v2.10.3.13] |
+
+Cross-referenced with mi0bot `console.cs:8579+ GetDDC()` table:
+HL2 P1 case 5 (MOX+PS): `rx1=0, rx2=1, psrx=2, pstx=3`.
+HermesII P1 case 5: `psrx=0, pstx=1`.
+Orion-class P1 case 5: `psrx=3, pstx=4`.
+
+Pre-audit, NereusSDR's `PsccPump` defaulted to `psFbDdc=0, txMonDdc=1`
+unconditionally (cmaster.cs:533-534 [v2.10.3.13]) — correct for nddc=2
+boards and Saturn-class P2, but **silently broken on HL2 / Hermes /
+ANAN-10 / ANAN-100** (would have paired DDC0+DDC1 — both at RX1/RX2
+freq during PS-MOX, no PS feedback signal in the stream).
+
+**Fix landed:** `PsDdcConfig` gains `psFbDdc / txMonDdc` fields; each
+per-board codec's `applyPureSignalDdcConfig` populates them per the
+Thetis dispatch table; `PsccPump::onDdcConfigChanged` reads them
+instead of hard-coding (0, 1).  Codecs updated:
+
+- `P1CodecHl2` PS-on branch → (2, 3)
+- `P1CodecStandard::psDdcConfigHermesClass` → (2, 3)
+- `P1CodecStandard::psDdcConfigHermesIIClass` → (0, 1) explicit
+- `P1CodecStandard::psDdcConfigG2Class` → (3, 4)
+- `P1CodecRedPitaya` → (3, 4)
+- `P2CodecOrionMkII` → (0, 1) explicit
+
+8 new tests in `tst_ps_ddc_indices_per_board` pin the per-board
+indices.
+
+### Gap 2: HL2 NeedToRecalibrate lower-bound
+
+mi0bot has a separate HL2 variant of NeedToRecalibrate at
+`PSForm.cs:1142-1144 [v2.10.3.13-beta2]`:
+
+```csharp
+// MI0BOT: Needed seperate function for HL2
+public static bool NeedToRecalibrate_HL2(int nCurrentATTonTX) {
+    return (FeedbackLevel > 181 ||
+            (FeedbackLevel <= 128 && nCurrentATTonTX > -28));
+}
+```
+
+`> -28` instead of the legacy `> 0` because HL2's signed ATT range is
+`[-28, +31]`.  Pre-audit, NereusSDR used hardcoded `> 0` in
+`autoAttentionTick`'s needRecal predicate — **HL2 with ATT in [-28, -1]
+would silently skip recalibration** even when feedbackLevel was ≤128.
+
+**Fix landed:** unified predicate
+`currentAttOnTx > m_stepAtt->minAttenuation()`.  StepAttenuator's
+`minAttenuation()` returns the per-board floor (0 for legacy, -28 for
+HL2 set in BoardCapsTable's attenuator min), so the unified predicate
+is byte-for-byte equivalent to both Thetis branches without an
+explicit board check.
+
+### Gap 3: HL2 SetNewValues clamp
+
+mi0bot HL2 bypasses the `> 0` clamp entirely at PSForm.cs:786-790:
+
+```csharp
+if (HPSDRModel.HERMESLITE == HardwareSpecific.Model)
+{
+    newAtten = oldAtten + _deltadB;
+    //MI0BOT: HL2 can handle negative up to -28, just let it be handled
+    //in ATTOnTx section
+}
+else
+{
+    if ((oldAtten + _deltadB) > 0) newAtten = oldAtten + _deltadB;
+    else                           newAtten = 0;
+}
+```
+
+**Fix landed:** unified clamp `max(oldAtten + deltaDb, minAttenuation())`.
+Same `minAttenuation()` per-board floor.  HL2 lets the value pass
+through to `setAttOnTxValue`, which has its own [-28, +31] clamp.
+
+### Verified-correct (no gap)
+
+- **calcc.c / iqc.c / sync.c** — byte-identical between mi0bot and
+  ramdor; no HL2-specific divergence.
+- **PSDefaultPeak** — already 0.233 for HL2 in `kHermesLite`
+  (Phase 3M-4 Task 1 commit `1bbb85a`).
+- **psSampleRate=0 sentinel** — already handled in `P1CodecHl2`'s
+  PS-on branch (rate[0]=rate[1]=rx1Rate per mi0bot console.cs:8478-8479).
+- **HL2 cntrl1=4 ADC steering** — already populated by
+  `P1CodecHl2::applyPureSignalDdcConfig`; now actually reaches the wire
+  via `P1RadioConnection::applyPsDdcConfig` (Task 17 P1 follow-up).
+- **HL2 6-bit step ATT field** — bank 4 C3 mask `& 0x1F` (5-bit) is
+  correct for HL2 because the HL2 codec subclass's bank 4 doesn't
+  override.  HL2 firmware accepts 0-31; signed range `-28..-1` is
+  encoded via `31 - userDb` in `setAttOnTxValue` chain (BoardCaps
+  attenuator wire-encoding).
+
+### Verification matrix updates
+
+After this audit, the bench tester checklist gains two new checks:
+
+7. **HL2 PS-MOX pscc consumes DDC2+DDC3** (not DDC0+DDC1).  Confirm via
+   `nereus.dsp: PureSignal info[]: state=...` log lines fluctuating —
+   if calcc never advances past state=2 (LSETUP), PsccPump may still be
+   wired to wrong DDCs.  Cross-check: log
+   `nereus.connection: P1: applyPsDdcConfig nDdc=4 ...` should appear
+   on first MOX with PS-A enabled, AND `PsccPump: setActive(true)
+   txMonDdc=3 psFbDdc=2` should appear immediately after.
+8. **HL2 ATT goes negative under auto-att**: with PS active and a
+   well-tuned PA, `nereus.dsp: PureSignal: AutoAtt setAttOnTx X → Y dB`
+   may show Y in `[-28, -1]`.  Pre-audit, the clamp would have stopped
+   at 0 — so seeing a negative postcondition confirms the new
+   `minAttenuation()` clamp path is live.
+
 ---
 
 ## What's done (original handoff text below)

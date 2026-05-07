@@ -319,6 +319,23 @@ target_compile_definitions(tst_p1_puresignal_run_setter PRIVATE NEREUS_BUILD_TES
 nereus_add_test(tst_p1_puresignal_ddc_freq)
 target_compile_definitions(tst_p1_puresignal_ddc_freq PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-4 mi0bot audit: per-board PS DDC pair index verification ────────
+# 8 tests cover psFbDdc/txMonDdc population by each per-board codec's
+# applyPureSignalDdcConfig(), against the Thetis MetisReadThreadMainLoop
+# twist() dispatch + console.cs GetDDC() table.
+#
+# Source map (per assertion):
+#   nddc=2 PS pair:        mi0bot networkproto1.c:380-381 [v2.10.3.13-beta2]
+#                          + console.cs:8798-8800 GetDDC HermesII case 5
+#   nddc=4 PS pair:        mi0bot networkproto1.c:383-387 [v2.10.3.13-beta2]
+#                          + console.cs:8757-8762 GetDDC HL2/Hermes case 5
+#   nddc=5 P1 PS pair:     mi0bot networkproto1.c:388-392 [v2.10.3.13-beta2]
+#                          + console.cs:8710-8714 GetDDC Orion-class case 5
+#   P2 PS pair:            network.c:936-945 freq override [v2.10.3.13]
+#                          + console.cs:8623 GetDDC P2 case 5
+nereus_add_test(tst_ps_ddc_indices_per_board)
+target_compile_definitions(tst_ps_ddc_indices_per_board PRIVATE NEREUS_BUILD_TESTS)
+
 # ── P1 full-parity Task 2.5: TransmitModel::pureSig → setPuresignalRun wiring ─
 # 8 tests pin the model-to-connection wiring installed in
 # RadioModel::wireConnectionSignals + the initial-push pattern in
