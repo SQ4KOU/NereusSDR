@@ -144,11 +144,31 @@ void P2CodecOrionMkII::composeCmdHighPriority(const CodecContext& ctx, quint8 bu
     // RX frequencies — 4 bytes each, big-endian phase words.
     // General cmd byte 37 = 0x08 (bit 3) means frequencies are NCO phase words.
     // From pcap analysis: phase_word = freq_hz * 2^32 / 122880000
-    // RX0-RX1 have PureSignal override logic; for now use straight frequency
+    //
+    // Phase 3M-4 Task 17 fix: RX0/RX1 have a PureSignal override.  When
+    // (ptt_out && puresignal_run) both true, DDC0 and DDC1 frequencies
+    // are overridden to TX freq so both DDCs down-convert at the TX
+    // signal's centre — that's what feeds calcc the post-PA loopback
+    // (DDC0) and TX-monitor (DDC1) at the right baseband.  Mirrors
+    // Thetis network.c:936-945 [v2.10.3.13]:
+    //   packetbuf[9..12]  = (ptt_out && puresignal_run)
+    //                       ? tx_freq_phase : rx0_freq_phase;
+    //   packetbuf[13..16] = (ptt_out && puresignal_run)
+    //                       ? tx_freq_phase : rx1_freq_phase;
+    // RX2..RX6 are not overridden — they always use their own freq.
+    const bool psFreqOverride = (ctx.p2PttOut != 0) && ctx.puresignalRun;
+    const quint32 txPhaseWord =
+        hzToPhaseWord(ctx.txFreqHz, ctx.freqCorrectionFactor);
     for (int i = 0; i < kMaxDdc; ++i) {
         int offset = 9 + (i * 4);
         if (offset + 3 < kBufLen) {
-            quint32 phaseWord = hzToPhaseWord(ctx.rxFreqHz[i], ctx.freqCorrectionFactor);
+            quint32 phaseWord;
+            if (psFreqOverride && (i == 0 || i == 1)) {
+                phaseWord = txPhaseWord;
+            } else {
+                phaseWord = hzToPhaseWord(ctx.rxFreqHz[i],
+                                          ctx.freqCorrectionFactor);
+            }
             writeBE32(buf, offset, phaseWord);
         }
     }

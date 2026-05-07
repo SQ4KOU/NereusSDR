@@ -80,6 +80,16 @@ struct CodecContext {
     int     p2Dot{0};
     int     p2Dash{0};
 
+    // P2 PureSignal run flag — prn->puresignal_run.  When this AND
+    // p2PttOut are both true, CmdHighPriority bytes 9-16 (DDC0 + DDC1
+    // frequencies) are overridden to TX freq instead of RX freqs, so
+    // both DDCs sample at the TX frequency for PA-feedback / TX-monitor
+    // capture.  From Thetis network.c:936-945 [v2.10.3.13]:
+    //   packetbuf[9..12] = (prn->tx[0].ptt_out && prn->puresignal_run)
+    //                      ? tx_freq_phase_word : rx0_freq_phase_word;
+    //   packetbuf[13..16] = same gate, rx1 freq fallback.
+    bool    puresignalRun{false};
+
     // P2 TX drive level — prn->tx[0].drive_level. Byte 345 of CmdHighPriority.
     int     p2DriveLevel{0};
 
