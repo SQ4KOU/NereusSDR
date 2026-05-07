@@ -14,6 +14,12 @@ range-clamps at 1 and 500. Confirm the tooltip text matches Thetis verbatim
 ("Time-constant used in smoothing Anti-VOX data" from
 `setup.designer.cs:44681 [v2.10.3.13]`).
 
+**Engage path note:** Anti-VOX engage is currently only reachable via a
+developer path (programmatic `MoxController::setAntiVoxSourceVax(false)`)
+because the `chkAntiVoxEnable` / `chkAntiVoxSource` UI controls land in
+3M-3c. This bench matrix is still runnable, just requires a temporary code
+hook or a ctest-style dev fixture to flip the source-what flag.
+
 ## Per-radio matrix
 
 For each radio (ANAN-G2, then HL2 mi0bot), run rows 1-5 in order. Record

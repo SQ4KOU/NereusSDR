@@ -3150,6 +3150,19 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
                 m_txWorker.get(), &TxWorkerThread::setAntiVoxBlockGeometry,
                 Qt::QueuedConnection);
 
+        // 3M-3a-iv: initial push of geometry so DEXP antivox_size /
+        // antivox_rate are aligned with the RX block produced by the
+        // setBufferSizes() call earlier in this method (line ~2946),
+        // whose emission predated the connect above.  Without this push,
+        // m_antiVoxSize stays 0 and every sendAntiVoxData rejects on the
+        // size-mismatch guard, defeating the cancellation feed.  Both
+        // m_dspWorker and m_txWorker live on the main thread at this
+        // point (moveToThread happens later for m_dspWorker, and
+        // m_txWorker the QObject stays on main thread — only m_txChannel
+        // is moveToThread'd into m_txWorker).  Direct call is safe.
+        m_txWorker->setAntiVoxBlockGeometry(m_dspWorker->outSize(),
+                                            m_dspWorker->sampleRate());
+
         // 3M-3a-iv: TransmitModel::antiVoxTauMsChanged → MoxController::setAntiVoxTau.
         //
         // Both objects live on main thread; direct connection.

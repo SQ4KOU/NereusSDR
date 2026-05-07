@@ -179,16 +179,28 @@ void TxWorkerThread::run()
     //         MoxController::antiVoxGainRequested   → TxChannel::setAntiVoxGain
     //         MoxController::antiVoxSourceWhatRequested → TxChannel::setAntiVoxRun
     //
-    //   (b) NEW (3M-3a-iv) → TxWorkerThread anti-VOX slots (queued; the
-    //       wrappers forward to TxChannel and additionally maintain the
-    //       worker-local m_antiVoxRun atomic gate):
+    //   (b) NEW (3M-3a-iv) → TxWorkerThread anti-VOX slots.  The
+    //       TxWorkerThread QObject itself lives on the MAIN thread (only
+    //       m_txChannel is moveToThread'd into this worker via
+    //       RadioModel.cpp:2686), so these slots execute on main thread
+    //       when the queued connections deliver.  The wrappers forward
+    //       to TxChannel (which IS on this worker thread, so the forward
+    //       crosses thread boundaries via Qt's auto-queueing) and also
+    //       maintain the worker-local m_antiVoxRun atomic gate.  The
+    //       atomic's release-store happens on the TX worker thread (via
+    //       the RadioModel.cpp:2131 lambda whose receiver context is
+    //       m_txChannel); the acquire-load happens on main thread inside
+    //       onAntiVoxSamplesReady — release/acquire ordering correctly
+    //       handles the cross-thread visibility.  No mutex is held in
+    //       any audio-thread path:
     //         RxDspWorker::antiVoxSampleReady          → onAntiVoxSamplesReady
     //         RxDspWorker::bufferSizesChanged          → setAntiVoxBlockGeometry
     //         MoxController::antiVoxDetectorTauRequested → setAntiVoxDetectorTau
     //
-    // Once moveToThread runs, AutoConnection auto-resolves to
-    // QueuedConnection because the receiver lives on this thread but the
-    // sender (TransmitModel / MoxController) lives on the main thread.
+    // Once moveToThread runs for m_txChannel, AutoConnection auto-resolves
+    // to QueuedConnection for group (a) because the receiver lives on
+    // this thread but the sender (TransmitModel / MoxController) lives on
+    // the main thread.
     // Each emission posts a QMetaCallEvent into THIS thread's event
     // queue.  Without a pumper, those events sit in the queue forever
     // and the lambda / setter NEVER fires — UI changes during active TX
@@ -345,6 +357,15 @@ void TxWorkerThread::tickForTest()
 // release-store so onAntiVoxSamplesReady can short-circuit via
 // acquire-load when anti-VOX is disabled.
 //
+// Thread affinity: this method is invoked by the lambda at
+// RadioModel.cpp:2131-2135 whose receiver context is m_txChannel (TX
+// worker thread).  The release-store therefore happens on TX worker
+// thread.  onAntiVoxSamplesReady (where the acquire-load lives) runs on
+// MAIN thread because the TxWorkerThread QObject is parented to
+// RadioModel and is NOT itself moveToThread'd — only m_txChannel is.
+// Release/acquire ordering correctly handles this cross-thread
+// visibility.
+//
 // The atomic gate is the worker-local optimisation that skips the
 // float→double conversion in TxChannel::sendAntiVoxData entirely when
 // anti-VOX is off; DEXP itself has an inner state-gate at
@@ -355,12 +376,15 @@ void TxWorkerThread::tickForTest()
 // ---------------------------------------------------------------------------
 void TxWorkerThread::setAntiVoxRun(bool run)
 {
-    // release-store ahead of the forward so a concurrent
-    // onAntiVoxSamplesReady acquire-load that observes the new flag is
-    // guaranteed to see m_txChannel's anti-VOX state already updated by
-    // the time the forwarded setter returns (forward runs on this
-    // thread; queued onAntiVoxSamplesReady serialises behind it via the
-    // event queue).
+    // release-store ahead of the forward so a subsequent
+    // onAntiVoxSamplesReady acquire-load (on main thread) that observes
+    // the new flag is guaranteed to see m_txChannel's anti-VOX state
+    // already updated by the time the forwarded setter returns.  Both
+    // this method and the forwarded m_txChannel->setAntiVoxRun run on
+    // TX worker thread (this method is invoked from the m_txChannel
+    // receiver-context lambda, the forward is a same-thread direct
+    // call); onAntiVoxSamplesReady on main thread serialises behind the
+    // release via the cross-thread acquire.
     m_antiVoxRun.store(run, std::memory_order_release);
     if (m_txChannel != nullptr) {
         m_txChannel->setAntiVoxRun(run);
@@ -375,6 +399,15 @@ void TxWorkerThread::setAntiVoxRun(bool run)
 // SendAntiVOXData callback.  Skipped when anti-VOX is off (acquire-load
 // of m_antiVoxRun) to avoid the float→double conversion cost in
 // TxChannel::sendAntiVoxData.
+//
+// Thread affinity: this slot runs on the MAIN thread because the
+// TxWorkerThread QObject lives on main thread (only m_txChannel is
+// moveToThread'd into the worker).  The forwarded
+// m_txChannel->sendAntiVoxData call therefore crosses thread boundaries
+// — but Qt's direct-call dispatch is fine here: TxChannel's
+// sendAntiVoxData is documented audio-safe (no allocation, no mutex,
+// resident scratch buffer) and pdexp[] is null-guarded.  No mic-input
+// audio callback is involved at any point in this path.
 //
 // The sliceId == 0 gate scopes 3M-3a-iv to a single RX feeding the
 // single TX; multi-RX mux (where N RXs combine into one anti-VOX

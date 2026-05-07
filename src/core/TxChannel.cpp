@@ -1762,7 +1762,7 @@ void TxChannel::setAntiVoxSize(int size)
     m_antiVoxSize = size;
     m_antiVoxScratch.resize(static_cast<std::size_t>(2 * size));  // I and Q doubles
 #ifdef HAVE_WDSP
-    // From Thetis cmaster.cs:154 (call-site) -> dexp.c:666 (impl) [v2.10.3.13]
+    // From Thetis cmaster.c:154 (create_dexp arg) -> dexp.c:666 (setter impl) [v2.10.3.13]
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // Phase 3M-1c TX pump v3: pdexp[ch] null-guard — see setVoxRun for rationale.
     if (pdexp[m_channelId] == nullptr) return;
@@ -1790,7 +1790,7 @@ void TxChannel::setAntiVoxRate(double rate)
     }
     m_antiVoxRate = rate;
 #ifdef HAVE_WDSP
-    // From Thetis cmaster.cs:155 (call-site) -> dexp.c:677 (impl) [v2.10.3.13]
+    // From Thetis cmaster.c:155 (create_dexp arg) -> dexp.c:677 (setter impl) [v2.10.3.13]
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // Phase 3M-1c TX pump v3: pdexp[ch] null-guard — see setVoxRun for rationale.
     if (pdexp[m_channelId] == nullptr) return;
@@ -1853,7 +1853,15 @@ void TxChannel::setAntiVoxDetectorTau(double seconds)
 //
 // Float -> double conversion writes into the resident scratch buffer
 // m_antiVoxScratch (sized 2 * m_antiVoxSize on every accepted
-// setAntiVoxSize call), so no allocation occurs in the audio path.
+// setAntiVoxSize call), so no allocation occurs in this hot path.
+//
+// Thread affinity: invoked by TxWorkerThread::onAntiVoxSamplesReady,
+// which runs on the MAIN thread (the TxWorkerThread QObject is parented
+// to RadioModel and not moveToThread'd; only m_txChannel is).  No
+// mic-input audio callback is involved.  The audio-thread reader of
+// pdexp[] state is the WDSP TXA pump on TX worker thread, which sees a
+// stable antivox_data buffer because cs_update inside dexp.c serialises
+// the memcpy from antivox_data into the detector path.
 //
 // In NereusSDR the equivalent of Thetis ChannelMaster aamix is the direct
 // RxDspWorker -> TxWorkerThread queued connection.  See
