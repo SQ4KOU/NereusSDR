@@ -1829,6 +1829,65 @@ void TxChannel::setAntiVoxDetectorTau(double seconds)
 }
 
 // ---------------------------------------------------------------------------
+// sendAntiVoxData()  — Phase 3M-3a-iv Task 3
+//
+// From Thetis dexp.c:708-715 [v2.10.3.13]:
+//
+//   void SendAntiVOXData (int id, int nsamples, double* data)
+//   {
+//       // note:  'nsamples' is not used as it has been previously specified
+//       DEXP a = pdexp[id];
+//       EnterCriticalSection (&a->cs_update);
+//       memcpy (a->antivox_data, data, a->antivox_size * sizeof (complex));
+//       a->antivox_new = 1;
+//       LeaveCriticalSection (&a->cs_update);
+//   }
+//
+// The nsamples argument is unused by Thetis; the memcpy length is fixed
+// at antivox_size complex samples.  We enforce nsamples == m_antiVoxSize
+// here so a caller mismatch logs and skips rather than corrupting memory
+// past the end of antivox_data.  A pre-configuration call (m_antiVoxSize
+// == 0) is also rejected, since SendAntiVOXData would memcpy 0 bytes into
+// a zero-sized antivox_data buffer (silently a no-op inside WDSP, but a
+// programmer error here).
+//
+// Float -> double conversion writes into the resident scratch buffer
+// m_antiVoxScratch (sized 2 * m_antiVoxSize on every accepted
+// setAntiVoxSize call), so no allocation occurs in the audio path.
+//
+// In NereusSDR the equivalent of Thetis ChannelMaster aamix is the direct
+// RxDspWorker -> TxWorkerThread queued connection.  See
+// docs/architecture/phase3m-3a-iv-antivox-feed-design.md §4.2.
+// ---------------------------------------------------------------------------
+void TxChannel::sendAntiVoxData(const float* interleaved, int nsamples)
+{
+    if (m_antiVoxSize <= 0) {
+        qCWarning(lcDsp) << "TxChannel::sendAntiVoxData: m_antiVoxSize unset, ignoring"
+                         << "channel" << m_channelId;
+        return;
+    }
+    if (nsamples != m_antiVoxSize) {
+        qCWarning(lcDsp) << "TxChannel::sendAntiVoxData: size mismatch,"
+                         << nsamples << "vs expected" << m_antiVoxSize
+                         << "channel" << m_channelId;
+        return;
+    }
+    // Float -> double conversion into the resident scratch buffer.  Size
+    // 2*nsamples to cover I and Q (interleaved L/R floats).
+    const std::size_t total = static_cast<std::size_t>(2 * nsamples);
+    for (std::size_t i = 0; i < total; ++i) {
+        m_antiVoxScratch[i] = static_cast<double>(interleaved[i]);
+    }
+#ifdef HAVE_WDSP
+    // From Thetis dexp.c:708-715 [v2.10.3.13] — SendAntiVOXData impl.
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    // Phase 3M-1c TX pump v3: pdexp[ch] null-guard — see setVoxRun for rationale.
+    if (pdexp[m_channelId] == nullptr) return;
+    ::SendAntiVOXData(m_channelId, nsamples, m_antiVoxScratch.data());
+#endif
+}
+
+// ---------------------------------------------------------------------------
 // setDexpRun()  — Phase 3M-3a-iii Task 1
 //
 // Enable or disable DEXP audio-domain expansion (the master "noise gate" gate).

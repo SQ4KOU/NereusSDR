@@ -798,6 +798,23 @@ public:
     double antiVoxRate()        const noexcept { return m_antiVoxRate; }
     double antiVoxDetectorTau() const noexcept { return m_antiVoxTauSec; }
 
+    // ── Anti-VOX detector audio feed (3M-3a-iv Task 3) ──────────────────────
+    //
+    // Push one block of interleaved L/R float audio into the WDSP DEXP
+    // anti-VOX detector.  Buffer size MUST match the most-recent
+    // setAntiVoxSize() value or the call is rejected with qCWarning(lcDsp)
+    // (no partial memcpy into antivox_data).
+    //
+    // Conversion: float -> double, in-order, into m_antiVoxScratch.  No
+    // allocation in the audio path provided setAntiVoxSize was called once.
+    //
+    // From Thetis dexp.c:708-715 [v2.10.3.13]: SendAntiVOXData ignores its
+    // nsamples arg and memcpys exactly antivox_size complex samples.  We
+    // enforce nsamples == m_antiVoxSize at the wrapper boundary so a caller
+    // mismatch logs and skips rather than corrupting memory past the end of
+    // antivox_data.
+    void sendAntiVoxData(const float* interleaved, int nsamples);
+
     // ── DEXP envelope/timing WDSP wrappers (3M-3a-iii Tasks 1-2) ────────────
 
     /// DEXP master enable (gate the audio downward expansion).
@@ -1914,6 +1931,14 @@ public:
     double lastVoxHangTimeForTest()           const noexcept { return m_voxHangTimeLast; }
     bool   lastAntiVoxRunForTest()            const noexcept { return m_antiVoxRunLast; }
     double lastAntiVoxGainForTest()           const noexcept { return m_antiVoxGainLast; }
+
+    // ── Test seam (Phase 3M-3a-iv Task 3) — anti-VOX scratch buffer ─────────
+    //
+    // Inspect the resident float -> double conversion buffer that
+    // sendAntiVoxData() writes before forwarding to WDSP SendAntiVOXData.
+    // NEVER consume in production code; the m_antiVoxScratch lifetime is
+    // managed exclusively on the TX worker thread.
+    const std::vector<double>& antiVoxScratchForTest() const { return m_antiVoxScratch; }
 
     // ── Test seams (Phase 3M-3a-iii Tasks 1-2) — DEXP envelope/timing ──────
     bool   lastDexpRunForTest()               const noexcept { return m_dexpRunLast; }

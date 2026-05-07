@@ -371,6 +371,67 @@ private slots:
         ch.setAntiVoxDetectorTau(-0.005);
         QCOMPARE(ch.antiVoxDetectorTau(), 0.01);
     }
+
+    // ── sendAntiVoxData ───────────────────────────────────────────────────────
+    //
+    // Pumps interleaved L/R float audio into the WDSP DEXP anti-VOX detector
+    // via SendAntiVOXData. The wrapper enforces nsamples == m_antiVoxSize
+    // before invoking WDSP (which would otherwise memcpy past
+    // antivox_data — see dexp.c:713 [v2.10.3.13]).
+    //
+    // From Thetis dexp.c:708-715 [v2.10.3.13]:
+    //   void SendAntiVOXData (int id, int nsamples, double* data)
+    //   {
+    //       // note:  'nsamples' is not used as it has been previously specified
+    //       DEXP a = pdexp[id];
+    //       memcpy (a->antivox_data, data, a->antivox_size * sizeof (complex));
+    //       a->antivox_new = 1;
+    //   }
+
+    void sendAntiVoxData_pumpsWdsp_whenSizeMatches()
+    {
+        // Verifies SendAntiVOXData is invoked when nsamples == m_antiVoxSize.
+        // We can't intercept the WDSP call directly, but we can verify the
+        // float->double conversion path by inspecting m_antiVoxScratch via
+        // the antiVoxScratchForTest accessor.
+        // From Thetis dexp.c:708-715 [v2.10.3.13].
+        TxChannel ch(kChannelId);
+        ch.setAntiVoxSize(4);  // deliberately tiny for test brevity
+        const float interleaved[8] = { 0.1f, 0.2f, 0.3f, 0.4f,
+                                       0.5f, 0.6f, 0.7f, 0.8f };
+        ch.sendAntiVoxData(interleaved, /*nsamples=*/4);
+        const auto& scratch = ch.antiVoxScratchForTest();
+        QCOMPARE(scratch.size(), std::size_t{8});
+        for (std::size_t i = 0; i < 8; ++i) {
+            QCOMPARE(scratch[i], static_cast<double>(interleaved[i]));
+        }
+    }
+
+    void sendAntiVoxData_skipsWdsp_whenSizeMismatches()
+    {
+        // Verifies the size-mismatch guard rejects mismatched buffers and
+        // does NOT touch m_antiVoxScratch (no partial conversion).
+        TxChannel ch(kChannelId);
+        ch.setAntiVoxSize(4);
+        const float interleaved[10] = {};  // 5 stereo samples instead of 4
+        ch.sendAntiVoxData(interleaved, /*nsamples=*/5);
+        const auto& scratch = ch.antiVoxScratchForTest();
+        QCOMPARE(scratch.size(), std::size_t{8});
+        for (double v : scratch) {
+            QCOMPARE(v, 0.0);  // initial zero-fill from std::vector<double>
+        }
+    }
+
+    void sendAntiVoxData_skipsWdsp_whenSizeUnconfigured()
+    {
+        // First call with m_antiVoxSize == 0 (no setAntiVoxSize) must reject
+        // rather than memcpy into a zero-sized antivox_data buffer.
+        TxChannel ch(kChannelId);
+        const float interleaved[2] = { 1.0f, 1.0f };
+        ch.sendAntiVoxData(interleaved, /*nsamples=*/1);
+        const auto& scratch = ch.antiVoxScratchForTest();
+        QCOMPARE(scratch.size(), std::size_t{0});
+    }
 };
 
 QTEST_APPLESS_MAIN(TestTxChannelVoxAntiVox)
