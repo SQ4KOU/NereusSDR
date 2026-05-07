@@ -83,6 +83,78 @@ running:
 - GetPk drift across Save/Restore — verify the 0.6121 value persists
   after PS Save Corr, app restart, PS Restore Corr.
 
+## Task 17 status (2026-05-07) — calcc data path + SATT verbatim port
+
+Six commits landed on `claude/wizardly-poitras-dbab75` (29 commits ahead
+of main).  Closes the data-path gap (calcc was unwired from the P2
+multi-stream UDP) and the SATT auto-attenuate gap (was firing on every
+100 ms tick instead of once per calcc cycle):
+
+| SHA | Scope | Commit |
+| --- | --- | --- |
+| `1972888` | TransmitModel | fix(transmit): TwoToneLevel default 0 dB (Thetis-faithful) |
+| `8c5132a` | CodecContext + P2CodecOrionMkII | feat(codec): puresignalRun freq override on CmdHighPriority DDC0/DDC1 |
+| `9943c68` | P2RadioConnection | feat(p2): PS DDC config, multi-stream sync de-interleave, CmdTx for SATT |
+| `fdd22c2` | PsccPump (new) + CMakeLists | feat(core): PsccPump driver — pscc(channel, size, tx, rx) for calcc |
+| `7012814` | PureSignal coordinator | feat(puresignal): runcal gates + AutoAtt CalibrationAttemptsChanged guard |
+| `f29ac6d` | RadioModel wiring | feat(radio-model): wire PureSignal/StepAtt/PsccPump for calcc convergence |
+
+### Bench convergence
+
+Latest run (2026-05-07): `state=6` (LCALC), `corrApplied=1`,
+`calCount=872`, `feedbackLevel=164`.  Inside Thetis's
+`IsFeedbackLevelOK` target window `[128, 181]` (PSForm.cs:1109-1112
+[v2.10.3.13]).  PureSignal calibration converges from cold MOX-on
+within ~2 seconds on ANAN-G2 (Saturn).
+
+### SATT verbatim-port review
+
+Reviewed `autoAttentionTick` against `PSForm.timer2code` (PSForm.cs:728-784
+[v2.10.3.13]) and `shouldForce31Db` against `HdwMOXChanged` force-31
+logic (console.cs:29563-29565 [v2.10.3.13]).
+
+**Auto-attenuate three-state machine** (Monitor → SetNewValues →
+RestoreOperation → Monitor): byte-for-byte port.  All Thetis constants
+preserved verbatim (`152.293`, `31.1`, `±100`).  `std::lround` mirrors
+`Math.Round(..., MidpointRounding.AwayFromZero)`.  Inline tags
+(`//MW0LGE`, `//[2.10.3.12]MW0LGE`) preserved per CLAUDE.md "Inline
+comment preservation".
+
+**Force-31 predicate**: `shouldForce31Db(dspMode, isPsOff)` is a verbatim
+port of:
+
+```csharp
+if ((!chkFWCATUBypass.Checked && _forceATTwhenPSAoff) ||
+    (CWL || CWU)) txAtt = 31;
+```
+
+with the mapping:
+
+| Thetis | NereusSDR |
+| --- | --- |
+| `!chkFWCATUBypass.Checked` (PS-A NOT active — checkbox repurposed at console.cs:43714) | `!m_psActive` |
+| `_forceATTwhenPSAoff` | `m_forceAttWhenPsOff` |
+| `CWL || CWU` | `dspMode == DSPMode::CWL || DSPMode::CWU` |
+
+### Known Thetis-faithfulness gap (corner case)
+
+`PureSignal.cpp:1044` does NOT mirror Thetis PSForm.cs:738
+(`if (!console.ATTOnTX) AutoAttenuate = true; //MW0LGE`).  When the user
+has AutoAttenuate enabled in PsForm but ATT-on-TX disabled in Setup,
+Thetis self-heals by force-enabling the master toggle.  NereusSDR
+currently skips this — the user has to enable both manually.  Bench is
+converging without it because `m_attOnTxEnabled{true}` is the default;
+fix would be a one-liner in the Monitor branch:
+
+```cpp
+if (m_stepAtt && !m_stepAtt->attOnTxEnabled()) {
+    m_stepAtt->setAttOnTxEnabled(true);
+}
+```
+
+Filed as a follow-up rather than blocking ship since the corner case
+requires the user to actively misconfigure two related controls.
+
 ---
 
 ## What's done (original handoff text below)
