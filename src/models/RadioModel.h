@@ -128,6 +128,7 @@ class TwoToneController;
 // 3M-4 Task 7: PureSignal coordinator (cal lifecycle, MOX integration,
 // auto-attention, polling, save/restore, two-tone wiring).
 class PureSignal;
+class PsccPump;
 // Phase 4 Agent 4A of issue #167: PaProfileManager forward declaration.
 // RadioModel owns the per-MAC PA gain profile bank (parallel to
 // MicProfileManager); the active profile is passed by reference to
@@ -1249,6 +1250,14 @@ private:
     // PureSignal.h for the design.  Constructed inside the WDSP-init
     // lambda alongside TwoToneController; reset() in teardown.
     std::unique_ptr<PureSignal> m_pureSignal;
+
+    // 3M-4 Task 17 chunk C: pscc() driver — pairs per-DDC IQ streams
+    // (PS-feedback on DDC0, TX-monitor on DDC1) into paired blocks for
+    // calcc.  Without this driver, calcc never runs and info[16] stays
+    // at zero.  See PsccPump.h for the architectural narrative.  Owned
+    // via unique_ptr alongside m_pureSignal so destruction ordering is
+    // explicit (drain pump before TxChannel goes away).
+    std::unique_ptr<PsccPump> m_psccPump;
     //
     // (Phase 3M-1c L.4 introduced a `std::unique_ptr<MicReBlocker>` here
     //  to bridge AudioEngine 720-sample emits to TxChannel 256-sample

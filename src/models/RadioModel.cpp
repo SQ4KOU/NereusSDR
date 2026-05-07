@@ -274,6 +274,7 @@ warren@wpratt.com
 #include "core/RadioConnectionTeardown.h"
 #include "core/P1RadioConnection.h"
 #include "core/P2RadioConnection.h"
+#include "core/PsccPump.h"   // Phase 3M-4 Task 17 chunk C — pscc() driver
 #include "core/RadioDiscovery.h"
 #include "core/BoardCapabilities.h"
 #include "core/HardwareProfile.h"
@@ -624,6 +625,20 @@ RadioModel::RadioModel(QObject* parent)
     //[2.10.3.6]MW0LGE att_fixes  [original inline comment from console.cs:29567-29576]
     connect(m_moxController, &MoxController::hardwareFlipped,
             this, &RadioModel::onMoxHardwareFlipped,
+            Qt::QueuedConnection);
+
+    // Phase 3M-4 Task 17 chunk A — wire MOX state into ReceiverManager so
+    // the per-board codec re-emits PsDdcConfig on TX/RX transitions.  The
+    // codec output flow is:
+    //   ReceiverManager::setMox(on)
+    //     → updateDdcAssignment()
+    //     → m_p2Codec->applyPureSignalDdcConfig(...)        // PsDdcConfig out
+    //     → emit ddcConfigChanged(config)                   // chunk B consumer
+    // Mirrors Thetis console.cs:8186-8538 UpdateDDCs() [v2.10.3.13] firing
+    // on MOX edge: in Thetis the call goes through `chkMOX_CheckedChanged`
+    // → `UpdateDDCs(false)` immediately after `mox = chkMOX.Checked`.
+    connect(m_moxController, &MoxController::hardwareFlipped,
+            m_receiverManager, &ReceiverManager::setMox,
             Qt::QueuedConnection);
 
     // Issue #177 fix — Thetis-faithful TUN-off ordering.
@@ -1915,6 +1930,113 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             // from mi0bot-Thetis cmaster.cs:566]
             m_pureSignal->applyBoardCapabilities(boardCapabilities());
 
+            // ── Task 17 chunk A — wire PS-A toggle into ReceiverManager ────────
+            //
+            // From Thetis console.cs:43712 chkFWCATUBypass_CheckedChanged
+            // [v2.10.3.13]:
+            //   psform.AutoCalEnabled = chkFWCATUBypass.Checked;
+            //   ...
+            //   UpdateDDCs(false);
+            // The PSAEnabled fan-out fires UpdateDDCs which cascades into the
+            // per-board DDC config switch.  In NereusSDR, ReceiverManager's
+            // setPureSignalEnabled() is the equivalent — calls the codec's
+            // applyPureSignalDdcConfig() and emits ddcConfigChanged for the
+            // chunk-B consumer (P2RadioConnection::applyPsDdcConfig).
+            //
+            // Qt::UniqueConnection because the WDSP-init lambda may fire on
+            // reconnect (ctor branch above) without tearing down the existing
+            // PureSignal — same idempotency pattern as the other late-bind
+            // seams in this lambda.
+            connect(m_pureSignal.get(), &PureSignal::autoCalEnabledChanged,
+                    m_receiverManager, &ReceiverManager::setPureSignalEnabled,
+                    Qt::UniqueConnection);
+
+            // Phase 3M-4 Task 17 fix: also push the PS run flag through to
+            // the radio connection so byte-9..16 of CmdHighPriority swap
+            // DDC0/DDC1 frequencies to TX freq during MOX (Thetis
+            // network.c:936-945 [v2.10.3.13] gate is
+            // (ptt_out && puresignal_run)).  Without this, DDC0/DDC1
+            // stay tuned to RX freq during TX and never see the actual
+            // TX signal — the bench shows DDC1's PA-feedback ADC
+            // returning ~zero envelope because nothing's at RX freq.
+            // From Thetis PSForm.cs:246 [v2.10.3.13]:
+            //   NetworkIO.SetPureSignal(1);
+            connect(m_pureSignal.get(), &PureSignal::autoCalEnabledChanged,
+                    m_connection, &RadioConnection::setPuresignalRun,
+                    Qt::UniqueConnection);
+
+            // Phase 3M-4 Task 17 fix: tell StepAttenuatorController that PS
+            // is active.  Without this, m_psActive stays false → on every
+            // MOX-on edge, onMoxHardwareFlipped sees psOff=true and forces
+            // setTxStepAttenuation(31) (the "PS off, force 31 dB" Thetis
+            // safety per console.cs:29562-29568 [v2.10.3.13]).  That
+            // OVERRIDES PureSignal::autoAttentionTick's adjustments,
+            // pinning ATT-on-TX at 31 forever and starving the PS feedback
+            // ADC so calcc never converges feedbackLevel into [128, 181].
+            // Bench evidence: setTxStepAttenuation(31) fired on every
+            // MOX-on edge regardless of AutoAtt state.
+            if (m_stepAttController) {
+                connect(m_pureSignal.get(),
+                        &PureSignal::autoCalEnabledChanged,
+                        m_stepAttController,
+                        &StepAttenuatorController::setPsActive,
+                        Qt::UniqueConnection);
+                // Sync initial state: if the user has PS-A enabled in
+                // persisted settings, the coordinator's autoCalEnabled is
+                // already true at this point — push it through so
+                // m_psActive matches before the first MOX-on edge.
+                m_stepAttController->setPsActive(
+                    m_pureSignal->isAutoCalEnabled());
+            }
+
+            // ── Task 17 chunk C/D/E — pscc() driver (PsccPump) ─────────────────
+            //
+            // Without PsccPump, the WDSP calcc engine never receives any
+            // paired TX-monitor + PS-feedback samples → info[16] stays at
+            // zero → all PsForm Calibration Information fields, the
+            // bottom-banner FB number, the IMD overlay, and GetPk are
+            // blocked on info[] becoming non-zero.  PsccPump is the
+            // host-side equivalent of Thetis's ChannelMaster
+            // sync.c InboundBlock(id=1) call (sync.c:53-58 [v2.10.3.13]).
+            //
+            // Construction: same pattern as PureSignal — late-binding
+            // alongside TxChannel.  Unique-pointer ordering guarantees
+            // teardown drains the pump before TxChannel goes away.
+            if (!m_psccPump) {
+                m_psccPump = std::make_unique<PsccPump>(/*parent=*/nullptr);
+                m_psccPump->setMoxController(m_moxController);
+                m_psccPump->setTxChannelId(/*WDSP TX channel*/1);
+
+                // Chunk D — iqDataReceived is forked to PsccPump from the
+                // existing wireConnectionSignals lambda (the one wired in
+                // RadioModel::wireConnectionSignals around RadioConnection::
+                // iqDataReceived).  PsccPump filters by ddcIndex (only acts
+                // on DDC0=PS-fb and DDC1=TX-mon by default per cmaster.cs:
+                // 533-534 [v2.10.3.13]); other DDCs fall through unchanged.
+                //
+                // The earlier separate Qt::QueuedConnection (m_connection
+                // → m_psccPump.get()) was a bench-bug: Qt6 multi-listener
+                // dispatch needs Q_DECLARE_METATYPE for QVector<float>,
+                // which we don't have, so the second consumer silently
+                // dropped packets and starved the connection thread's read
+                // loop → connect watchdog timeout.  Inline call from the
+                // existing lambda is metatype-free and bench-validated.
+
+                // Chunk E — codec config tells the pump when PS DDCs go
+                // live and which is which.  PsccPump activates only when
+                // (psEnabled && mox) per the codec's applyPureSignalDdcConfig
+                // output for OrionMkII / G2.
+                //
+                // ReceiverManager and PsccPump are both on the main thread
+                // so AutoConnection becomes DirectConnection — no metatype
+                // bootstrap needed.  PsDdcConfig is metatyped at
+                // CodecContext.h:318, so even if a future thread move
+                // converts this to a queued connection it will still work.
+                connect(m_receiverManager,
+                        &ReceiverManager::ddcConfigChanged,
+                        m_psccPump.get(), &PsccPump::onDdcConfigChanged);
+            }
+
             // Flip the TransmitModel pureSignalActive() seam from the test
             // stub default (returns false) to the live PureSignal read.
             // The ATT-on-TX-on-power-change safety gate inside
@@ -2872,6 +2994,15 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     QMetaObject::invokeMethod(m_connection, [conn = m_connection, wireSampleRate]() {
         conn->setSampleRate(wireSampleRate);
     });
+
+    // Phase 3M-4 Task 17 — keep ReceiverManager's m_rx1Rate in sync with
+    // the connection sample rate so the per-board codec's
+    // applyPureSignalDdcConfig() emits the correct rate[2] = rx1Rate
+    // (e.g. 192000 for 192 kHz, NOT the default 48000).  Without this,
+    // P2RadioConnection::applyPsDdcConfig writes m_rx[2].samplingRate=48
+    // and breaks RX1 audio.  Same wireSampleRate value used for the
+    // connection setSampleRate above so both stay aligned.
+    m_receiverManager->setRx1Rate(wireSampleRate);
     // Push active receiver count to the connection. P1 uses this to encode
     // nrx bits in the C&C bank 0 frame. P2 DDC assignment is more complex
     // (Thetis console.cs:8216 UpdateDDCs — DDC2 is primary, not DDC0) and
@@ -2970,10 +3101,62 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
     // Step 1: RadioConnection I/Q → ReceiverManager (DDC routing).
     // Auto connection: m_connection is on its worker thread, this is on
     // main, so the slot is queued onto the main thread.
+    //
+    // Phase 3M-4 Task 17 chunk D — also forks the same packet to the
+    // PsccPump driver inline.  An earlier attempt connected
+    // iqDataReceived directly to PsccPump::onIqData with a second
+    // Qt::QueuedConnection, but Qt6 dispatches multi-listener queued
+    // connections by registering each slot's argument types via
+    // QMetaType — and `QVector<float>` is NOT auto-metatyped (no
+    // Q_DECLARE_METATYPE), so the second consumer was silently
+    // dropping packets and starving the connection thread's read
+    // loop (bench observed 2 s of no DDC packets → connect watchdog
+    // timeout).  Folding the call into the existing lambda avoids
+    // the metatype bootstrap entirely; PsccPump runs synchronously
+    // on the main thread alongside ReceiverManager::feedIqData.
     connect(m_connection, &RadioConnection::iqDataReceived,
             this, [this](int ddcIndex, const QVector<float>& samples) {
         m_receiverManager->feedIqData(ddcIndex, samples);
+        if (m_psccPump) {
+            m_psccPump->onIqData(ddcIndex, samples);
+        }
     });
+
+    // ── Phase 3M-4 Task 17 chunk B — wire ReceiverManager::ddcConfigChanged
+    //                                   → P2RadioConnection::applyPsDdcConfig
+    //
+    // When ReceiverManager::setMox / setPureSignalEnabled fires (chunk A),
+    // updateDdcAssignment() asks the per-board codec for the new
+    // PsDdcConfig and emits ddcConfigChanged.  P2RadioConnection consumes
+    // it: writes the wire-byte map into m_rx[i] state and resends CmdRx so
+    // the radio reconfigures its DDCs in real time.
+    //
+    // P1 does its own thing (bank 11 wire bit via setPuresignalRun); only
+    // P2 needs this DDC-level reconfig because P2 PureSignal routes the
+    // feedback through DDC0/DDC1 (the codec returns ddcEnable=DDC0+DDC2,
+    // syncEnable=DDC1, rate[0]=rate[1]=192000 during PS+MOX).
+    if (auto* p2 = qobject_cast<NereusSDR::P2RadioConnection*>(m_connection)) {
+        connect(m_receiverManager, &ReceiverManager::ddcConfigChanged,
+                p2, &P2RadioConnection::applyPsDdcConfig,
+                Qt::QueuedConnection);
+
+        // Phase 3M-4 Task 17 — feed the per-board codec into ReceiverManager
+        // so updateDdcAssignment() can produce a non-empty PsDdcConfig.
+        // Without this, ReceiverManager::m_p2Codec stays null and
+        // applyPureSignalDdcConfig is never invoked → ddcConfigChanged
+        // never fires → applyPsDdcConfig above is dead wire.  Fires once
+        // when selectCodec runs at connectToRadio time.
+        connect(p2, &P2RadioConnection::p2CodecChanged, this, [this, p2]() {
+            m_receiverManager->setP2Codec(p2->p2Codec());
+        });
+        // Race: if selectCodec already fired before this connect (the
+        // codec is selected on the connection thread, signal posted via
+        // queued auto-connection — should be after our connect), poll
+        // once to catch up.  Cheap idempotent setter.
+        if (auto* codec = p2->p2Codec()) {
+            m_receiverManager->setP2Codec(codec);
+        }
+    }
 
     // Step 2a: ReceiverManager → spectrum fork (main thread, fast).
     // Kept on the main thread so rawIqData → FFTEngine routing stays
@@ -4532,6 +4715,10 @@ void RadioModel::teardownConnection()
     // doesn't dereference a half-destructed PureSignal.
     m_transmitModel.setPureSignal(nullptr);
     m_pureSignal.reset();
+    // Phase 3M-4 Task 17 chunk C: drain the pscc() driver before TxChannel
+    // teardown so any in-flight pump drains cleanly.  PsccPump::~ default
+    // destructor releases the rings; no explicit deactivate needed.
+    m_psccPump.reset();
     // Phase 3M-4 Task 13: notify subscribers that the coordinator is gone
     // so they can disconnect their wiring cleanly (the applets re-arm on
     // the next pureSignalCoordinatorReady emit at reconnect).
