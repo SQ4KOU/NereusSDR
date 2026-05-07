@@ -946,6 +946,32 @@ public:
     /// (setup.designer.cs:44682 [v2.10.3.13]).
     int antiVoxTauMs() const noexcept { return m_antiVoxTauMs; }
 
+    // ── Anti-VOX run flag (3M-3a-iv scope-expansion) ──────────────────────
+    //
+    // From Thetis setup.designer.cs:44740-44751 [v2.10.3.13]: chkAntiVoxEnable
+    // is the master enable for the WDSP DEXP anti-VOX detector.  Independent
+    // of chkAntiVoxSource (the source toggle).  Default unchecked (no
+    // .Checked= setter in Designer).
+    //
+    // Handler at setup.cs:18980-18984 [v2.10.3.13]:
+    //   private void chkAntiVoxEnable_CheckedChanged(object sender, EventArgs e)
+    //   {
+    //       if (initializing) return;
+    //       cmaster.SetAntiVOXRun(0, chkAntiVoxEnable.Checked);
+    //   }
+    //
+    // Persistence: per-MAC key AntiVox_Enable (default False).
+    // RadioModel wires antiVoxRunChanged → MoxController::setAntiVoxRun in
+    // the 3M-3a-iv scope-expansion, replacing the older collapsed wiring
+    // where antiVoxSourceWhatRequested drove TxWorkerThread::setAntiVoxRun.
+
+    Q_PROPERTY(bool antiVoxRun READ antiVoxRun WRITE setAntiVoxRun
+                               NOTIFY antiVoxRunChanged)
+
+    /// Anti-VOX master run flag.
+    /// false (default) = anti-VOX detector OFF.  true = detector running.
+    bool antiVoxRun() const noexcept { return m_antiVoxRun; }
+
     // ── MON properties (3M-1b C.5) ────────────────────────────────────────
     //
     // Porting from Thetis audio.cs:406 [v2.10.3.13]:
@@ -1804,6 +1830,12 @@ public slots:
     // udAntiVoxTau range (setup.designer.cs:44661-44688 [v2.10.3.13]).
     void setAntiVoxTauMs(int ms);
 
+    // ── Anti-VOX run flag setter (3M-3a-iv scope-expansion) ──────────────────
+    // Sets the master enable.  Idempotent guard.  Auto-persists.
+    // Mirrors Thetis chkAntiVoxEnable_CheckedChanged at setup.cs:18980-18984
+    // [v2.10.3.13]: cmaster.SetAntiVOXRun(0, chkAntiVoxEnable.Checked).
+    void setAntiVoxRun(bool run);
+
     // ── MON setters (3M-1b C.5) ──────────────────────────────────────────────
     void setMonEnabled(bool on);
     void setMonitorVolume(float volume);
@@ -1917,6 +1949,13 @@ signals:
     // ── Anti-VOX detector tau signal (Phase 3M-3a-iv Task 8) ────────────────
     // RadioModel wires this to MoxController::setAntiVoxTau in Task 9.
     void antiVoxTauMsChanged(int ms);
+
+    // ── Anti-VOX run flag signal (3M-3a-iv scope-expansion) ─────────────────
+    // RadioModel wires antiVoxRunChanged → MoxController::setAntiVoxRun;
+    // MoxController emits antiVoxRunRequested → TxWorkerThread::setAntiVoxRun
+    // (which forwards to TxChannel::setAntiVoxRun AND flips the worker's
+    //  m_antiVoxRun atomic gate).
+    void antiVoxRunChanged(bool run);
 
     // ── MON signals (3M-1b C.5) ──────────────────────────────────────────────
     void monEnabledChanged(bool on);
@@ -2117,6 +2156,10 @@ private:
     // From Thetis setup.designer.cs:44661-44688 [v2.10.3.13] (udAntiVoxTau):
     //   Min=1, Max=500, Default=20 (ms).
     int  m_antiVoxTauMs     = kAntiVoxTauMsDefault;
+    // ── Anti-VOX run flag (3M-3a-iv scope-expansion) ─────────────────────
+    // From Thetis setup.designer.cs:44740-44751 [v2.10.3.13]: chkAntiVoxEnable
+    // has no .Checked= setter -> default false.
+    bool m_antiVoxRun       = false;
 
     // ── MON properties (3M-1b C.5) ────────────────────────────────────────
     // From Thetis audio.cs:406 [v2.10.3.13]: private bool mon = false;

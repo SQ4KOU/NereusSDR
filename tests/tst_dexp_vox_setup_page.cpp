@@ -334,6 +334,159 @@ private slots:
         QCOMPARE(spin->toolTip(),
                  QStringLiteral("Time-constant used in smoothing Anti-VOX data"));
     }
+
+    // ── Phase 3M-3a-iv scope-expansion: chkAntiVoxEnable / chkAntiVoxSource /
+    //    udAntiVoxGain land in grpAntiVOX above the existing Tau row ────────
+    //
+    // Layout order (matching Thetis Y-coord ordering at
+    // setup.designer.cs:44650 / 44666 / 44707 / 44744 [v2.10.3.13]):
+    //   Y=19  chkAntiVoxEnable  ("Anti-VOX Enable")
+    //   Y=41  chkAntiVoxSource  ("Use VAC Audio")
+    //   Y=71  udAntiVoxGain     ("Gain (dB)")
+    //   Y=96  udAntiVoxTau      ("Tau (ms)")  -- existing
+    //
+    // Defaults verified against Thetis chkAntiVoxEnable (initially unchecked
+    // -- no Checked= setter), chkAntiVoxSource (initially unchecked -- no
+    // Checked= setter), udAntiVoxGain (Value=10 -- but NereusSDR-original
+    // divergence retains shipped default 0; see TransmitModel C.4 comment).
+
+    void enableCheckbox_defaultUnchecked()
+    {
+        RadioModel model;
+        DexpVoxPage page(&model);
+        page.show();
+
+        auto* chk = page.findChild<QCheckBox*>(QStringLiteral("chkAntiVoxEnable"));
+        QVERIFY(chk != nullptr);
+        QCOMPARE(chk->isChecked(), false);
+        QCOMPARE(chk->text(), QStringLiteral("Anti-VOX Enable"));
+    }
+
+    void enableCheckbox_writesTransmitModel()
+    {
+        RadioModel model;
+        DexpVoxPage page(&model);
+        page.show();
+
+        auto* chk = page.findChild<QCheckBox*>(QStringLiteral("chkAntiVoxEnable"));
+        QVERIFY(chk != nullptr);
+
+        chk->setChecked(true);
+        QCoreApplication::processEvents();
+        QCOMPARE(model.transmitModel().antiVoxRun(), true);
+    }
+
+    void enableCheckbox_readsTransmitModel()
+    {
+        RadioModel model;
+        DexpVoxPage page(&model);
+        page.show();
+
+        auto* chk = page.findChild<QCheckBox*>(QStringLiteral("chkAntiVoxEnable"));
+        QVERIFY(chk != nullptr);
+
+        model.transmitModel().setAntiVoxRun(true);
+        QCoreApplication::processEvents();
+
+        QCOMPARE(chk->isChecked(), true);
+    }
+
+    void enableCheckbox_tooltipMatchesThetisVerbatim()
+    {
+        RadioModel model;
+        DexpVoxPage page(&model);
+        page.show();
+
+        auto* chk = page.findChild<QCheckBox*>(QStringLiteral("chkAntiVoxEnable"));
+        QVERIFY(chk != nullptr);
+        // From Thetis setup.designer.cs:44749 [v2.10.3.13].
+        QCOMPARE(chk->toolTip(),
+                 QStringLiteral("Enable prevention measures for RX audio tripping VOX"));
+    }
+
+    void sourceCheckbox_defaultUnchecked()
+    {
+        RadioModel model;
+        DexpVoxPage page(&model);
+        page.show();
+
+        auto* chk = page.findChild<QCheckBox*>(QStringLiteral("chkAntiVoxSource"));
+        QVERIFY(chk != nullptr);
+        QCOMPARE(chk->isChecked(), false);
+        QCOMPARE(chk->text(), QStringLiteral("Use VAC Audio"));
+    }
+
+    void sourceCheckbox_tooltipStartsWithThetisVerbatim()
+    {
+        RadioModel model;
+        DexpVoxPage page(&model);
+        page.show();
+
+        auto* chk = page.findChild<QCheckBox*>(QStringLiteral("chkAntiVoxSource"));
+        QVERIFY(chk != nullptr);
+        // Tooltip leads with the Thetis verbatim string from
+        // setup.designer.cs:44655 [v2.10.3.13]; NereusSDR-spin appends a
+        // note about the 3M-3c VAC-routing deferral.  We assert startsWith.
+        QVERIFY(chk->toolTip().startsWith(
+            QStringLiteral("Use VAC as Anti-VOX source")));
+    }
+
+    void gainSpinbox_defaultZero()
+    {
+        // NereusSDR-original divergence: int default 0 (vs Thetis decimal 10).
+        RadioModel model;
+        DexpVoxPage page(&model);
+        page.show();
+
+        auto* spin = page.findChild<QSpinBox*>(QStringLiteral("udAntiVoxGain"));
+        QVERIFY(spin != nullptr);
+        QCOMPARE(spin->value(), 0);
+        QCOMPARE(spin->minimum(), -60);
+        QCOMPARE(spin->maximum(), 60);
+    }
+
+    void gainSpinbox_writesTransmitModel()
+    {
+        RadioModel model;
+        DexpVoxPage page(&model);
+        page.show();
+
+        auto* spin = page.findChild<QSpinBox*>(QStringLiteral("udAntiVoxGain"));
+        QVERIFY(spin != nullptr);
+
+        spin->setValue(-12);
+        QCoreApplication::processEvents();
+
+        QCOMPARE(model.transmitModel().antiVoxGainDb(), -12);
+    }
+
+    void gainSpinbox_readsTransmitModel()
+    {
+        RadioModel model;
+        DexpVoxPage page(&model);
+        page.show();
+
+        auto* spin = page.findChild<QSpinBox*>(QStringLiteral("udAntiVoxGain"));
+        QVERIFY(spin != nullptr);
+
+        model.transmitModel().setAntiVoxGainDb(15);
+        QCoreApplication::processEvents();
+
+        QCOMPARE(spin->value(), 15);
+    }
+
+    void gainSpinbox_tooltipMatchesThetisVerbatim()
+    {
+        RadioModel model;
+        DexpVoxPage page(&model);
+        page.show();
+
+        auto* spin = page.findChild<QSpinBox*>(QStringLiteral("udAntiVoxGain"));
+        QVERIFY(spin != nullptr);
+        // From Thetis setup.designer.cs:44722 [v2.10.3.13].
+        QCOMPARE(spin->toolTip(),
+                 QStringLiteral("Gain applied to Anti-VOX audio (Anti-VOX sensitivity)"));
+    }
 };
 
 QTEST_MAIN(TestDexpVoxSetupPage)

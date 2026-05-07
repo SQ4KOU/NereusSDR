@@ -1359,6 +1359,12 @@ void TransmitModel::loadFromSettings(const QString& mac)
     const int antiVoxTauMs = s.value(pfx + QLatin1String("AntiVox_Tau_Ms"),
                                       QString::number(kAntiVoxTauMsDefault)).toInt();
     setAntiVoxTauMs(antiVoxTauMs);
+    // antiVoxRun: default false from Thetis chkAntiVoxEnable (initially
+    // unchecked; no .Checked= setter at setup.designer.cs:44740-44751
+    // [v2.10.3.13]).  3M-3a-iv scope-expansion.
+    const bool antiVoxRun = s.value(pfx + QLatin1String("AntiVox_Enable"),
+                                     QStringLiteral("False")).toString() == QLatin1String("True");
+    setAntiVoxRun(antiVoxRun);
 
     // ── MON properties (monEnabled NOT loaded — safety: always false) ─────
     // monitorVolume: default 0.5f (audio.cs:417 [v2.10.3.13] literal)
@@ -1638,6 +1644,8 @@ void TransmitModel::persistToSettings(const QString& mac) const
     s.setValue(pfx + QLatin1String("AntiVox_Gain"),    QString::number(m_antiVoxGainDb));
     s.setValue(pfx + QLatin1String("AntiVox_Source_VAX"), m_antiVoxSourceVax ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(pfx + QLatin1String("AntiVox_Tau_Ms"),  QString::number(m_antiVoxTauMs));
+    s.setValue(pfx + QLatin1String("AntiVox_Enable"),
+               m_antiVoxRun ? QStringLiteral("True") : QStringLiteral("False"));
 
     // ── MON properties (monEnabled excluded — safety) ─────────────────────
     s.setValue(pfx + QLatin1String("MonitorVolume"),    QString::number(static_cast<double>(m_monitorVolume)));
@@ -1822,6 +1830,33 @@ void TransmitModel::setAntiVoxTauMs(int ms)
     m_antiVoxTauMs = clamped;
     persistOne(QStringLiteral("AntiVox_Tau_Ms"), QString::number(m_antiVoxTauMs));  // auto-persist
     emit antiVoxTauMsChanged(clamped);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// setAntiVoxRun() — 3M-3a-iv scope-expansion.
+//
+// Porting from Thetis setup.cs:18980-18984 [v2.10.3.13]:
+//   private void chkAntiVoxEnable_CheckedChanged(object sender, EventArgs e)
+//   {
+//       if (initializing) return;
+//       cmaster.SetAntiVOXRun(0, chkAntiVoxEnable.Checked);
+//   }
+//
+// This is the model-side property; RadioModel wires
+// antiVoxRunChanged → MoxController::setAntiVoxRun (3M-3a-iv scope-expansion),
+// MoxController emits antiVoxRunRequested, TxWorkerThread::setAntiVoxRun
+// forwards to TxChannel::setAntiVoxRun (the WDSP wrapper that calls
+// SetAntiVOXRun) AND flips the worker-local m_antiVoxRun atomic gate.
+//
+// Auto-persists via persistOne; load handled in loadFromSettings(mac).
+// ─────────────────────────────────────────────────────────────────────────────
+void TransmitModel::setAntiVoxRun(bool run)
+{
+    if (run == m_antiVoxRun) { return; }  // idempotent guard
+    m_antiVoxRun = run;
+    persistOne(QStringLiteral("AntiVox_Enable"),
+               run ? QStringLiteral("True") : QStringLiteral("False"));  // auto-persist
+    emit antiVoxRunChanged(run);
 }
 
 // ── MON properties (3M-1b C.5) ───────────────────────────────────────────────

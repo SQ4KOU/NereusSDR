@@ -491,6 +491,32 @@ public slots:
     //   MoxController::antiVoxDetectorTauRequested → TxWorkerThread::setAntiVoxDetectorTau
     void setAntiVoxTau(int ms);
 
+    // setAntiVoxRun: master enable for the WDSP DEXP anti-VOX detector.
+    //
+    // Mirrors chkAntiVoxEnable_CheckedChanged from Thetis setup.cs:18980-18984
+    // [v2.10.3.13]:
+    //   private void chkAntiVoxEnable_CheckedChanged(object sender, EventArgs e)
+    //   {
+    //       if (initializing) return;
+    //       cmaster.SetAntiVOXRun(0, chkAntiVoxEnable.Checked);
+    //   }
+    //
+    // Independent of setAntiVoxSourceVax (the source toggle).  3M-3a-iv
+    // scope-expansion: this slot replaces the older collapsed wiring where
+    // antiVoxSourceWhatRequested drove TxWorkerThread::setAntiVoxRun via a
+    // !useVax inversion.
+    //
+    // First-call emit guard m_antiVoxRunInitialized mirrors the
+    // m_antiVoxSourceVaxInitialized pattern: once any accepted call has run,
+    // subsequent same-value calls are suppressed.  The first call always
+    // emits so TxWorkerThread/TxChannel are primed at startup regardless of
+    // default match.
+    //
+    // Wired by RadioModel (3M-3a-iv scope-expansion):
+    //   TransmitModel::antiVoxRunChanged → MoxController::setAntiVoxRun
+    //   MoxController::antiVoxRunRequested → TxWorkerThread::setAntiVoxRun
+    void setAntiVoxRun(bool run);
+
     // ── H.4: PTT-source dispatch slots ───────────────────────────────────────
     //
     // Each slot routes an external PTT event through the MoxController state
@@ -787,12 +813,23 @@ signals:
     // Carries the new useVax value.  Only emitted with false in 3M-1b
     // (true is rejected with qCWarning; deferred to 3M-3a).
     //
-    // Subscribers: RadioModel H.3 lambda collapses the Thetis
-    //   CMSetAntiVoxSourceWhat RX-slot iteration
-    //   (cmaster.cs:937-942 [v2.10.3.13]) to TxChannel::setAntiVoxRun(true)
-    //   for the single-TX 3M-1b layout.  Full per-WDSP-channel iteration
-    //   is a 3F multi-pan concern.
+    // 3M-3a-iv scope-expansion: previously drove the worker setAntiVoxRun
+    // gate via !useVax inversion in RadioModel; now that
+    // antiVoxRunRequested has its own dedicated chain, this signal is
+    // preserved for 3F multi-pan source mux (cmaster.CMSetAntiVoxSourceWhat
+    // per-RX iteration) but its RadioModel lambda body is a no-op for
+    // single-RX layouts.
     void antiVoxSourceWhatRequested(bool useVax);
+
+    // antiVoxRunRequested: emitted when the master anti-VOX enable changes.
+    //
+    // Subscribers: RadioModel (3M-3a-iv scope-expansion) connects this
+    // queued to TxWorkerThread::setAntiVoxRun(bool), which forwards to
+    // TxChannel::setAntiVoxRun(bool) AND flips the worker-local
+    // m_antiVoxRun atomic gate that onAntiVoxSamplesReady checks.
+    //
+    // From Thetis cmaster.SetAntiVOXRun call at setup.cs:18983 [v2.10.3.13].
+    void antiVoxRunRequested(bool run);
 
     // ── TUN state signal (diagnostic) ────────────────────────────────────────
     // manualMoxChanged is NOT a Codex P1 phase signal. F.1 subscribers should
@@ -1012,6 +1049,16 @@ private:
     // setAntiVoxSourceVax().  Forces first-call emit even when useVax==false
     // matches the default m_antiVoxSourceVax value, so WDSP is primed.
     bool     m_antiVoxSourceVaxInitialized{false};
+    //
+    // m_antiVoxRun: mirrors TransmitModel::antiVoxRun(). Default false.
+    //   3M-3a-iv scope-expansion.
+    bool     m_antiVoxRun{false};
+    //
+    // m_antiVoxRunInitialized: false until the first accepted call to
+    // setAntiVoxRun().  Forces first-call emit so TxWorkerThread/TxChannel
+    // are primed even when the value matches the default.
+    // Mirrors m_antiVoxSourceVaxInitialized.
+    bool     m_antiVoxRunInitialized{false};
 
     // ── MOX core state ────────────────────────────────────────────────────────
     bool     m_mox{false};               // single source of truth for MOX

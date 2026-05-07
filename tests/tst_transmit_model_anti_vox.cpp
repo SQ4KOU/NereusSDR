@@ -243,6 +243,56 @@ private slots:
 
         AppSettings::instance().clear();
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // antiVoxRun (3M-3a-iv scope-expansion — chkAntiVoxEnable)
+    //
+    // From Thetis setup.designer.cs:44740-44751 [v2.10.3.13]: chkAntiVoxEnable
+    // is initially unchecked.  Persistence + UI default both follow.
+    //
+    // Handler at setup.cs:18980-18984 [v2.10.3.13]:
+    //   private void chkAntiVoxEnable_CheckedChanged(object sender, EventArgs e)
+    //   {
+    //       if (initializing) return;
+    //       cmaster.SetAntiVOXRun(0, chkAntiVoxEnable.Checked);
+    //   }
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    void antiVoxRun_defaultFalse() {
+        TransmitModel m;
+        QCOMPARE(m.antiVoxRun(), false);
+    }
+
+    void antiVoxRun_changedSignal_idempotentGuard() {
+        TransmitModel m;
+        QSignalSpy spy(&m, &TransmitModel::antiVoxRunChanged);
+        m.setAntiVoxRun(true);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).toBool(), true);
+        m.setAntiVoxRun(true);  // no change
+        QCOMPARE(spy.count(), 1);
+        m.setAntiVoxRun(false);
+        QCOMPARE(spy.count(), 2);
+        QCOMPARE(spy.last().at(0).toBool(), false);
+    }
+
+    void antiVoxRun_persistsAcrossLoad() {
+        AppSettings::instance().clear();
+
+        const QString mac = QStringLiteral("aa:bb:cc:dd:ee:ff");
+
+        {
+            TransmitModel m1;
+            m1.loadFromSettings(mac);  // activates per-MAC auto-persist
+            m1.setAntiVoxRun(true);    // → persistOne(AntiVox_Enable, "True")
+        }
+
+        TransmitModel m2;
+        m2.loadFromSettings(mac);
+        QCOMPARE(m2.antiVoxRun(), true);
+
+        AppSettings::instance().clear();
+    }
 };
 
 QTEST_APPLESS_MAIN(TstTransmitModelAntiVox)

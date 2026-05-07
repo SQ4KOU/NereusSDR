@@ -419,6 +419,61 @@ private slots:
         ctrl.setAntiVoxTau(20);  // default; sentinel forces emit
         QCOMPARE(spy.count(), 1);
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // § E — setAntiVoxRun tests (3M-3a-iv scope-expansion)
+    //
+    // From Thetis setup.cs:18980-18984 [v2.10.3.13]:
+    //   private void chkAntiVoxEnable_CheckedChanged(object sender, EventArgs e)
+    //   {
+    //       if (initializing) return;
+    //       cmaster.SetAntiVOXRun(0, chkAntiVoxEnable.Checked);
+    //   }
+    //
+    // Independent of setAntiVoxSourceVax (the source toggle).  First-call
+    // emit guard (m_antiVoxRunInitialized) mirrors the
+    // m_antiVoxSourceVaxInitialized pattern from §C so TxWorkerThread is
+    // primed at startup regardless of default match.
+    // ════════════════════════════════════════════════════════════════════════
+
+    // §E.1 — Default state: setAntiVoxRun(false) emits false on first call.
+    //
+    // m_antiVoxRunInitialized starts false; first accepted call must emit
+    // even when run==false matches the default field value.
+    void antiVoxRun_default_emitsFalseFirstCall()
+    {
+        MoxController ctrl;
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxRunRequested);
+
+        ctrl.setAntiVoxRun(false);  // default; init guard forces emit
+
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toBool(), false);
+    }
+
+    // §E.2 — Idempotent: once initialized, repeat same value does not re-emit.
+    void antiVoxRun_idempotent()
+    {
+        MoxController ctrl;
+        ctrl.setAntiVoxRun(true);  // primes state; emits once
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxRunRequested);
+        ctrl.setAntiVoxRun(true);  // same → no emit
+        QCOMPARE(spy.count(), 0);
+        ctrl.setAntiVoxRun(false);  // change → emit
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toBool(), false);
+    }
+
+    // §E.3 — First call always emits, even at default value.
+    //
+    // Spy attached before any setAntiVoxRun call → fresh init guard.
+    void antiVoxRun_firstCallAlwaysEmits()
+    {
+        MoxController ctrl;
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxRunRequested);
+        ctrl.setAntiVoxRun(false);  // first call; init guard forces emit
+        QCOMPARE(spy.count(), 1);
+    }
 };
 
 QTEST_MAIN(TestMoxControllerAntiVox)

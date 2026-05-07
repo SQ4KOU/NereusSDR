@@ -321,14 +321,20 @@ private:
     QSpinBox*       m_udSCFHighCut{nullptr};            // Hz      int (range 100..10000, step 10)
 
     // ── grpAntiVOX ───────────────────────────────────────────────────────────
-    // Phase 3M-3a-iv Task 10: Tau (ms) spinbox.  Mirrors Thetis grpAntiVOX
-    // (setup.designer.cs:44634-44698 [v2.10.3.13]).  The full Thetis group
-    // also contains Enable / Source-toggle / Gain controls; those are wired
-    // through MoxController + TransmitModel today but not yet exposed on the
-    // Setup page — they land in a follow-up sub-task.  Tau is added now so
-    // operators can adjust the smoothing time-constant for the anti-VOX
-    // detector, which is the gating constant for the new cancellation feed
-    // landed in 3M-3a-iv Tasks 1-9.
+    // Mirrors Thetis grpAntiVOX (setup.designer.cs:44631-44760 [v2.10.3.13]).
+    //
+    // Phase 3M-3a-iv Task 10 landed Tau (ms) only.  3M-3a-iv scope-expansion
+    // adds chkAntiVoxEnable / chkAntiVoxSource / udAntiVoxGain so the bench
+    // verification matrix is runnable from a fresh install.  Layout order
+    // matches Thetis Y-coordinates: Enable (Y=19) -> Source (Y=41) ->
+    // Gain (Y=71) -> Tau (Y=96).
+    QCheckBox*      m_chkAntiVoxEnable{nullptr};        // chkAntiVoxEnable
+    QCheckBox*      m_chkAntiVoxSource{nullptr};        // chkAntiVoxSource
+    // NereusSDR-original divergence (already shipped in 3M-1b H.3): TM uses
+    // int dB rather than Thetis decimal-with-0.1-step.  Default 0 dB rather
+    // than Thetis +10 dB.  Both are kept here for consistency with shipped
+    // behavior; full Thetis parity (decimal + default 10) is a follow-up.
+    QSpinBox*       m_udAntiVoxGain{nullptr};           // dB      int (range -60..60)
     QSpinBox*       m_udAntiVoxTau{nullptr};            // ms      int (range 1..500)
 };
 

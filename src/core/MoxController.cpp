@@ -1047,6 +1047,35 @@ void MoxController::setAntiVoxSourceVax(bool useVax)
     emit antiVoxSourceWhatRequested(useVax);  // false = local-RX antivox
 }
 
+// ---------------------------------------------------------------------------
+// setAntiVoxRun() — 3M-3a-iv scope-expansion.
+//
+// Mirrors Thetis chkAntiVoxEnable_CheckedChanged at setup.cs:18980-18984
+// [v2.10.3.13]:
+//   private void chkAntiVoxEnable_CheckedChanged(object sender, EventArgs e)
+//   {
+//       if (initializing) return;
+//       cmaster.SetAntiVOXRun(0, chkAntiVoxEnable.Checked);
+//   }
+//
+// Independent of setAntiVoxSourceVax (the source toggle).  Replaces the
+// older collapsed wiring where antiVoxSourceWhatRequested drove
+// TxWorkerThread::setAntiVoxRun via a !useVax inversion.
+//
+// First-call emit guard m_antiVoxRunInitialized mirrors the
+// m_antiVoxSourceVaxInitialized pattern; the very first accepted call
+// always emits, even when run==false matches the default field value.
+// ---------------------------------------------------------------------------
+void MoxController::setAntiVoxRun(bool run)
+{
+    if (m_antiVoxRunInitialized && run == m_antiVoxRun) {
+        return;  // idempotent guard
+    }
+    m_antiVoxRun = run;
+    m_antiVoxRunInitialized = true;
+    emit antiVoxRunRequested(run);
+}
+
 // ===========================================================================
 // H.4 — PTT-source dispatch slots (MIC / CAT / VOX / SPACE / X2)
 //

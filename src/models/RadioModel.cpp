@@ -743,9 +743,16 @@ RadioModel::RadioModel(QObject* parent)
     //   TransmitModel::voxHangTimeMsChanged    → MoxController::setVoxHangTime
     //   TransmitModel::antiVoxGainDbChanged    → MoxController::setAntiVoxGain
     //   TransmitModel::antiVoxSourceVaxChanged → MoxController::setAntiVoxSourceVax
+    //   TransmitModel::antiVoxRunChanged       → MoxController::setAntiVoxRun
+    //                                                (3M-3a-iv scope-expansion;
+    //                                                 wired below in the
+    //                                                 cancellation-feed block)
     //   MoxController::voxHangTimeRequested    → TxChannel::setVoxHangTime
     //   MoxController::antiVoxGainRequested    → TxChannel::setAntiVoxGain
-    //   MoxController::antiVoxSourceWhatRequested → TxChannel::setAntiVoxRun
+    //   MoxController::antiVoxSourceWhatRequested → no-op for single-RX
+    //                                                (preserved for 3F multi-pan)
+    //   MoxController::antiVoxRunRequested     → TxWorkerThread::setAntiVoxRun
+    //                                                (3M-3a-iv scope-expansion)
     //
     // MoxController handles ms→seconds and dB→linear conversions; TxChannel
     // wrappers (D.3) are thin WDSP delegates.
@@ -2112,26 +2119,24 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 m_txChannel->setAntiVoxGain(gain);
             });
 
-            // H.3 — antiVoxSourceWhatRequested → setAntiVoxRun.
-            // useVax==false: per cmaster.cs:937-942 [v2.10.3.13], all RX slots
-            // (RX1, RX1S, RX2) get source=1 (local-RX audio for antivox
-            // reference).  3M-1b has one TxChannel paired with the active
-            // slice; the three-slot iteration collapses to setAntiVoxRun(!useVax)
-            // for the single-TX layout.  Full per-WDSP-channel
-            // SetAntiVOXSourceWhat iteration is a 3F multi-pan concern.
+            // 3M-3a-iv scope-expansion: previously drove
+            // m_txWorker->setAntiVoxRun(!useVax) (the older collapsed wiring),
+            // but with TransmitModel::antiVoxRun now an independent property,
+            // the run flag has its own dedicated chain through
+            // MoxController::setAntiVoxRun -> antiVoxRunRequested ->
+            // TxWorkerThread::setAntiVoxRun (wired below near the cancellation
+            // feed connects).
             //
-            // 3M-3a-iv: rewire from direct m_txChannel call to TxWorkerThread
-            // wrapper.  TxWorkerThread::setAntiVoxRun forwards to
-            // m_txChannel->setAntiVoxRun AND flips the m_antiVoxRun atomic
-            // gate that onAntiVoxSamplesReady checks.  Without this rewire,
-            // the atomic stays false and the anti-VOX cancellation feed
-            // never runs.  See TxWorkerThread.cpp:356-368 [3M-3a-iv Task 6]
-            // for the wrapper's release-store semantics.
+            // The antiVoxSourceWhatRequested signal is preserved for 3F
+            // multi-pan source mux: cmaster.CMSetAntiVoxSourceWhat
+            // (cmaster.cs:937-942 [v2.10.3.13]) iterates per-RX
+            // (RX1, RX1S, RX2) and calls SetAntiVOXSourceWhat per slot.
+            // For single-RX 3M-1b/3M-3a-iv layouts this lambda is a no-op.
             connect(m_moxController, &MoxController::antiVoxSourceWhatRequested,
-                    m_txChannel, [this](bool useVax) {
-                if (m_txWorker) {
-                    m_txWorker->setAntiVoxRun(!useVax);
-                }
+                    m_txChannel, [](bool useVax) {
+                Q_UNUSED(useVax);
+                // 3M-3a-iv scope-expansion: no-op for single-RX layouts.
+                // 3F multi-pan will iterate per WDSP channel here.
             });
 
             // ── 3M-3 — TransmitModel → TxChannel TX processing chain wiring ─────
@@ -3186,6 +3191,33 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
         // AppSettings restored.  The NaN sentinel inside MoxController
         // forces the emit even if the value matches its default.
         m_moxController->setAntiVoxTau(m_transmitModel.antiVoxTauMs());
+
+        // 3M-3a-iv scope-expansion: TransmitModel::antiVoxRunChanged ->
+        // MoxController::setAntiVoxRun.
+        //
+        // Independent run flag wired to chkAntiVoxEnable in DexpVoxPage.
+        // Mirrors the existing antiVoxGainDbChanged -> setAntiVoxGain pattern.
+        // Both objects on main thread; direct connection.
+        connect(&m_transmitModel, &TransmitModel::antiVoxRunChanged,
+                m_moxController,  &MoxController::setAntiVoxRun);
+
+        // 3M-3a-iv scope-expansion: MoxController::antiVoxRunRequested ->
+        // TxWorkerThread::setAntiVoxRun.
+        //
+        // TxWorkerThread::setAntiVoxRun forwards to TxChannel::setAntiVoxRun
+        // AND flips the m_antiVoxRun atomic gate that onAntiVoxSamplesReady
+        // checks.  From Thetis cmaster.SetAntiVOXRun call at
+        // setup.cs:18983 [v2.10.3.13].
+        connect(m_moxController, &MoxController::antiVoxRunRequested,
+                m_txWorker.get(), &TxWorkerThread::setAntiVoxRun,
+                Qt::QueuedConnection);
+
+        // 3M-3a-iv scope-expansion: initial push of TM antiVoxRun into
+        // MoxController so the first emission of antiVoxRunRequested aligns
+        // TxChannel/atomic gate with whatever AppSettings restored.  The
+        // init guard inside MoxController forces the emit even if value
+        // matches default.
+        m_moxController->setAntiVoxRun(m_transmitModel.antiVoxRun());
     }
 }
 
