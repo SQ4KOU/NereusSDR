@@ -76,6 +76,7 @@ public:
 
     qint64 push(const char* data, qint64 bytes) override;
     qint64 pull(char* data, qint64 maxBytes) override;
+    void   flush() override;
 
     float rxLevel() const override { return m_rxLevel.load(std::memory_order_acquire); }
     float txLevel() const override { return m_txLevel.load(std::memory_order_acquire); }
