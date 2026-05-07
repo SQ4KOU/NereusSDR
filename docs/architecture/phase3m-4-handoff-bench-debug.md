@@ -166,6 +166,82 @@ byte across all six Thetis cite sites:
 | PSForm.cs:756 `Math.Round(ddB, MidpointRounding.AwayFromZero) //[2.10.3.12]MW0LGE` | `std::lround(ddB)` |
 | console.cs:29563-29566 force-31 predicate | StepAttenuatorController::shouldForce31Db |
 
+## P1 / HL2 PureSignal bring-up
+
+Task 17 P1 follow-up extends PureSignal coverage from P2-only (Saturn /
+ANAN-G2 family) to the full P1 PureSignal-capable lineup: HL2, plain Hermes,
+ANAN-10, ANAN-100 (all nddc=4) and HermesII / ANAN-10E / ANAN-100B
+(nddc=2).
+
+### Source-first cite map
+
+| Thetis cite | NereusSDR mirror |
+| --- | --- |
+| `mi0bot networkproto1.c:982-993` [v2.10.3.13-beta2] case 2 — `if ((nddc == 2) && XmitBit && puresignal_run) ddc_freq = tx_freq` | `P1CodecStandard::composeCcForBank` case 2/3 + `P1CodecHl2::composeCcForBank` case 2/3 (gated on `ctx.p1PsNDdc == 2 && ctx.mox && ctx.p1PuresignalRun`) |
+| `mi0bot console.cs:8408-8488` [v2.10.3.13-beta2] HL2 PS-on UpdateDDCs branch (`P1_DDCConfig=6, DDCEnable=DDC0, SyncEnable=DDC1, cntrl1=4`) | `P1CodecHl2::applyPureSignalDdcConfig` (already ported in Phase 3M-4 Task 5; was unwired pre-Task-17 P1 follow-up) |
+| `Thetis console.cs:8527-8534 UpdateDDCs()` [v2.10.3.13] — `EnableRxs/EnableRxSync/SetDDCRate/SetADC_cntrl1/SetADC_cntrl2/Protocol1DDCConfig` | `P1RadioConnection::applyPsDdcConfig` writes `m_adcCtrl` (cntrl1+cntrl2 packed), `m_psNDdc` (PS gate), `m_activeRxCount` (EP6 layout) — plus arms bank 0 + bank 4 flush flags |
+| `Thetis netInterface.c:1006-1016 SetTxAttenData()` [v2.10.3.13] — explicit `CmdTx()` flush | `P1RadioConnection::setTxStepAttenuation` arms `m_forceBank4Next=true` (Codex P2 ordering: flush before idempotent guard) |
+| `Thetis PSForm.cs:246-247` [v2.10.3.13] — `SetPureSignal(1) + SendHighPriority(1)` explicit flush | `P1RadioConnection::setPuresignalRun` arms `m_forceBank0Next + m_forceBank11Next` so freq-override gate state lands within ≤2 frames |
+
+### Per-board PS support matrix
+
+| Board family | nddc | Bank 2/3 freq override applies? | NereusSDR `hasPureSignal` | Notes |
+| --- | --- | --- | --- | --- |
+| Atlas (Metis kit) | 1 | n/a (single ADC, no PS) | false | Correctly disabled (no PS path in Thetis) |
+| HermesLiteRxOnly | n/a | n/a (RX-only SKU) | false | Correctly disabled (no TX) |
+| Hermes (orig) | 4 | No (firmware handles cntrl1=4) | **true** (flipped Task 17) | mi0bot console.cs:8408-8413 grouping — same UpdateDDCs branch as HL2 |
+| HermesLite (HL2) | 4 | No (firmware handles cntrl1=4) | **true** (flipped Task 17) | psDefaultPeak=0.233; psSampleRate=0 sentinel = "use rx1_rate" (HL2 high-rate path) |
+| HermesII / ANAN-10E / ANAN-100B | 2 | YES — host-side override on bank 2 + bank 3 | true (was already on) | Was wire-broken before Task 17 (bank 2/3 didn't honor puresignal_run); now fixed |
+| Angelia / Orion / OrionMKII / Saturn / SaturnMkII / Andromeda | 5 | No (DDC0+DDC2 dedicated PS, host doesn't override) | true | P2 path covered by main Task 17 commits (commit `f29ac6d` etc.) |
+
+### Out-of-scope / future work
+
+- **EP6 frame layout vs nddc=4 boards**: P1 EP6 frame slot count
+  (`slotBytes = 6*nddc + 2`) is driven by `m_activeRxCount`.  HL2 PS-MOX
+  in Thetis sets `nddc=4` at the C# layer but only DDC0+DDC1 carry real
+  data (DDC2/DDC3 are effectively zeros).  NereusSDR's
+  `applyPsDdcConfig` updates `m_activeRxCount` to `cfg.p1RxCount` (4 for
+  HL2) — so EP6 parses 4 slots.  This may produce zero-valued samples
+  for DDC2/3 during MOX, which is harmless for PsccPump (only consumes
+  DDC0 + DDC1).  Bench-validate that frame parsing remains stable at
+  nddc=4 with only DDC0+DDC1 populated; if not, lower `m_activeRxCount`
+  back to 2 in PS-MOX (mi0bot bench traces show nddc=2 on the wire for
+  HL2 PS — likely a firmware compaction).
+- **HL2 6-bit step ATT field**: P1RadioConnection clamps TX ATT to
+  `[0, 63]` (6-bit field per mi0bot WriteMainLoop_HL2) but bank-4 C3
+  emits `& 0x1F` (5-bit). HL2 codec needs to override case 4 to widen
+  the mask if HL2 ATT > 31 is desired.
+- **Plain Hermes bench validation**: the `kHermes` flag flip is
+  source-faithful but no bench has been run against an actual original
+  Hermes board.  ANAN-10/100 share the same `kHermes` family caps —
+  they piggyback on the bench validation target.
+
+### Bench tester checklist (P1 / HL2 PS validation)
+
+Connect to HL2 (mi0bot firmware ≥ v72).  Open Tools → PureSignal.
+
+1. **PS-A button visible** in TxApplet — pre-Task-17 it was hidden because
+   `caps.hasPureSignal=false`.  Now visible per `kHermesLite.hasPureSignal=true`.
+2. **PS Setup → Calibration Information populates** non-zero values within
+   ~2 s of MOX-on.  Pre-Task-17 these stayed at zero because
+   `applyPsDdcConfig` was a dead wire on P1 — the codec path was
+   correctly computing `cntrl1=4` but no consumer applied it to the
+   wire.
+3. **TX 2-tone → bottom-banner FB number tracks calcc**: should show an
+   integer feedback level (e.g. `163`) and update on every
+   `info[5]` increment.
+4. **SATT auto-attenuate engages on HL2**: feedbackLevel converges into
+   `[128, 181]` within ~2-5 s of MOX-on.  HL2's `m_minAttDb=-28`
+   widens the lower bound vs other boards (signed range).
+5. **EP6 frames still parse cleanly during PS-MOX**: log
+   `nereus.connection: P1: parseEp6Frame ...` lines should NOT show
+   `parseEp6Frame rejected frame`.  If they do, see "Out-of-scope"
+   note above re: nddc=4 vs DDC1-only data layout.
+6. **HermesII bench validation** (if hardware available): bank 2 + bank 3
+   wire-byte capture should show TX freq during PS-MOX.  pcap with
+   Wireshark + filter `udp.port == 1024`, watch for C0=0x04 / 0x06 →
+   frequency bytes match TX VFO.
+
 ---
 
 ## What's done (original handoff text below)

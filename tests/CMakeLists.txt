@@ -297,6 +297,28 @@ target_compile_definitions(tst_p1_user_dig_out_setter PRIVATE NEREUS_BUILD_TESTS
 nereus_add_test(tst_p1_puresignal_run_setter)
 target_compile_definitions(tst_p1_puresignal_run_setter PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3M-4 Task 17 P1 follow-up: bank 2/3 PS DDC freq override ───────────
+# 10 tests cover the verbatim port of the puresignal_run freq override:
+#
+#   1.  No MOX: bank 2 emits RX freq even with PS armed.
+#   2.  HermesII PS-MOX: bank 2 → TX freq override.
+#   3.  HermesII PS-MOX: bank 3 → TX freq override.
+#   4.  HermesII no-PS MOX: bank 3 emits RX2 freq (Hermes default path).
+#   5.  HL2 PS-MOX: bank 2 does NOT override (nDdc=4 disables gate).
+#   6.  applyPsDdcConfig packs cntrl1+cntrl2 into m_adcCtrl + bank 4 emit.
+#   7.  applyPsDdcConfig arms bank 0 + bank 4 flush flags.
+#   8.  setTxStepAttenuation arms m_forceBank4Next.
+#   9.  setTxStepAttenuation idempotent: flush flag set even on no-op.
+#   10. setPuresignalRun arms bank 0 + bank 11 flush flags.
+#
+# Source map (per assertion):
+#   Bank 2/3 override:           mi0bot networkproto1.c:982-1009 [v2.10.3.13-beta2]
+#   Bank 4 ADC routing:          mi0bot console.cs:8531-8532 [v2.10.3.13-beta2]
+#   setTxStepAttenuation flush:  Thetis netInterface.c:1006-1016 [v2.10.3.13]
+#   setPuresignalRun flush:      Thetis PSForm.cs:246-247 [v2.10.3.13]
+nereus_add_test(tst_p1_puresignal_ddc_freq)
+target_compile_definitions(tst_p1_puresignal_ddc_freq PRIVATE NEREUS_BUILD_TESTS)
+
 # ── P1 full-parity Task 2.5: TransmitModel::pureSig → setPuresignalRun wiring ─
 # 8 tests pin the model-to-connection wiring installed in
 # RadioModel::wireConnectionSignals + the initial-push pattern in
