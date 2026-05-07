@@ -189,6 +189,11 @@ private slots:
     void refreshCoBadge();
     void onCalibrationCountChanged(int count);
     void onFeedbackColourChanged(const QColor& colour);
+    // Codex Fix F: Save+Restore buttons gated by BOTH correctionsBeingApplied
+    // (Thetis PSForm.cs:574-590 [v2.10.3.13]) AND saveRestoreEnabled (Thetis
+    // PSForm.cs:865/871/877/883 [v2.10.3.13] — TINT combo index gating).
+    // Slot reads both predicates from the coordinator and AND-combines them.
+    void refreshSaveRestoreButtons();
 
 private:
     void buildUi();

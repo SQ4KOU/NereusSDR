@@ -314,9 +314,44 @@ public:
     // ns int because the spinbox is integer-valued; conversion to seconds
     // happens at the WDSP boundary.
     void setAmpDelay(int ns);
-    // From Thetis PSForm.cs:comboPSTint_SelectedIndexChanged [v2.10.3.13]
-    // — PtolMin/PtolMax tweak; index choices "0.5", "1.1", "2.5".
+    // From Thetis PSForm.cs:857-885 [v2.10.3.13]
+    // comboPSTint_SelectedIndexChanged — combo entries from
+    // PSForm.designer.cs:164-167 [v2.10.3.13] are "0.5", "1.1", "2.5".
+    //
+    // Codex Fix F: setTint(double db) is the legacy public API the existing
+    // PsForm wiring uses.  Per Codex review on PR #212, the pre-fix
+    // implementation only stored m_tint and emitted tintChanged(db) — the
+    // calcc engine call SetPSIntsAndSpi was deferred and AmpView used the
+    // hardcoded default (16, 256) regardless of selection.  Post-fix:
+    // setTint(double) maps the dB label to the matching index (0.5→0,
+    // 1.1→1, 2.5→2) and routes through setTintIndex.  Out-of-range
+    // double values fall back to index 0 (Thetis default branch at
+    // PSForm.cs:879-884).
     void setTint(double db);
+
+    // Codex Fix F: setTintIndex(int idx) is the post-fix entry point that
+    // mirrors comboPSTint_SelectedIndexChanged byte-for-byte.  Routes:
+    //   idx 0 → setPSIntsAndSpi(16, 256), saveRestoreEnabled = true
+    //   idx 1 → setPSIntsAndSpi(8, 512),  saveRestoreEnabled = false
+    //   idx 2 → setPSIntsAndSpi(4, 1024), saveRestoreEnabled = false
+    //   default → mirrors idx 0 (PSForm.cs:879-884 default case).
+    // Updates m_psInts / m_psSpi cache + m_saveRestoreEnabled flag, emits
+    // tintChanged / saveRestoreEnabledChanged on transitions.
+    void setTintIndex(int idx);
+
+    // Read-back of the current TINT combo index (0..2).  Used by
+    // PsForm to sync the combo's currentIndex on dialog open.  Default 0
+    // matches Thetis PSForm.designer.cs:172 [v2.10.3.13]:
+    //   this.comboPSTint.Text = "0.5";
+    int tintIndex() const noexcept { return m_tintIndex; }
+
+    // Codex Fix F: Save/Restore button enabled-state mirror.  Per Thetis
+    // PSForm.cs:865/871/877/883 [v2.10.3.13], only TINT index 0 (default
+    // 16/256 buffer dimensions) keeps the persisted-corrections file format
+    // compatible — other intervals produce stored corrections that can't
+    // be loaded back.  PsForm subscribes to saveRestoreEnabledChanged and
+    // gates btnPSSave / btnPSRestore.
+    bool saveRestoreEnabled() const noexcept { return m_saveRestoreEnabled; }
     // From Thetis PSForm.cs:checkLoopback_CheckedChanged [v2.10.3.13] —
     // routes feedback streams to the panadapter.  UI-only here; the
     // panadapter wire-through is Task 13.
@@ -343,10 +378,10 @@ public:
     //
     // Thetis defaults are ints=16, spi=256 (PSForm.cs:351-369 [v2.10.3.13]).
     // The comboPSTint handler at PSForm.cs:857-885 [v2.10.3.13] mutates them
-    // when the user changes the index; for Phase 3M-4 we keep the ints/spi
-    // pair fixed at the Thetis default (the combo wire-through is deferred
-    // per the comment in setTint() in this file).  AmpView reads back via
-    // the accessors below for buffer sizing.
+    // when the user changes the index.  Codex Fix F (post-fix) wires the
+    // setTintIndex setter to push (ints, spi) through TxChannel::
+    // setPSIntsAndSpi, so AmpView's buffer dimensions track the user's TINT
+    // selection live.  AmpView reads back via the accessors below.
     int    psInts() const noexcept { return m_psInts; }
     int    psSpi()  const noexcept { return m_psSpi;  }
 
@@ -477,6 +512,14 @@ signals:
     void calDelayChanged(double);
     void ampDelayChanged(int);
     void tintChanged(double);
+    // Codex Fix F: per-index combo signal (the dB-double signal above stays
+    // live for backward compat with PsForm wiring + tests).  Both fire on
+    // index transitions via setTintIndex / setTint.
+    void tintIndexChanged(int index);
+    // Codex Fix F: Save/Restore enabled-state mirror.  Bound by PsForm to
+    // gate btnPSSave / btnPSRestore enabled-state.  Mirrors PSForm.cs:865/
+    // 871/877/883 [v2.10.3.13]: only index 0 (16/256) keeps Save+Restore on.
+    void saveRestoreEnabledChanged(bool enabled);
     void loopbackChanged(bool);
     void show2ToneMeasurementsChanged(bool);
     void hwPeakChanged(double);
@@ -608,6 +651,17 @@ private:
     double m_calDelay{0.0};         // udPSCalWait default 0.0
     int    m_ampDelay{150};         // udPSPhnum default 150
     double m_tint{0.5};             // comboPSTint default "0.5"
+    // Codex Fix F: per-index combo state mirror — m_tint stays as the
+    // dB-label cache for backward compat (legacy setTint/tintChanged API),
+    // m_tintIndex is the post-fix integer index (0..2) that drives the
+    // (ints, spi) pair via setTintIndex.  Default 0 ("0.5" dB → 16/256)
+    // matches PSForm.designer.cs:172 [v2.10.3.13].
+    int    m_tintIndex{0};
+    // Codex Fix F: Save/Restore enabled-state mirror.  PSForm.cs:865 default
+    // for case 0 is true; m_tintIndex starts at 0 so this starts true.
+    // PSForm.cs:871/877 disable for indexes 1 / 2; the default branch
+    // (PSForm.cs:879-884) re-enables.
+    bool   m_saveRestoreEnabled{true};
     bool   m_loopback{false};       // checkLoopback default unchecked
     bool   m_show2Tone{false};      // chkShow2ToneMeasurements default unchecked
     double m_hwPeak{0.0};           // populated by applyBoardCapabilities
@@ -617,8 +671,9 @@ private:
     //   private int _ints = 16;
     //   private int _spi  = 256;
     // The comboPSTint handler (PSForm.cs:857-885 [v2.10.3.13]) cycles
-    // between (16,256) / (8,512) / (4,1024); NereusSDR keeps the default
-    // pair until the combo wire-through is implemented.
+    // between (16,256) / (8,512) / (4,1024); Codex Fix F now wires
+    // setTintIndex / setTint into setPSIntsAndSpi(ints, spi) so AmpView's
+    // buffer dimensions track the user's TINT selection live.
     int m_psInts{16};
     int m_psSpi{256};
 

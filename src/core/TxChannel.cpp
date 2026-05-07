@@ -3871,6 +3871,13 @@ void TxChannel::setPSStabilize(bool stbl)
 
 void TxChannel::setPSIntsAndSpi(int ints, int spi)
 {
+    // Codex Fix F: cache the (ints, spi) pair last forwarded so the
+    // tst_puresignal_coordinator test seams (lastPSIntsForTest /
+    // lastPSSpiForTest) can verify PureSignal::setTintIndex(idx) routes
+    // through to WDSP.  Caching is unconditional regardless of WDSP
+    // build mode (matches m_lastPSFeedbackRate pattern at line 3833).
+    m_lastPSInts = ints;
+    m_lastPSSpi  = spi;
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     ::SetPSIntsAndSpi(m_channelId, ints, spi);

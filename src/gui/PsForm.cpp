@@ -645,14 +645,19 @@ void PsForm::wireToPureSignal()
     if (!m_pureSignal) {
         return;
     }
-    // Save button enabled state mirrors correctionsBeingApplied (cmd-state
-    // machine output).  Per PSForm.cs:574-590 [v2.10.3.13]:
-    //   if (puresignal.CorrectionsBeingApplied) btnPSSave.Enabled = true;
-    //   else                                    btnPSSave.Enabled = false;
+    // Save / Restore button enabled state.  Two gates per Thetis:
+    //   1. PSForm.cs:574-590 [v2.10.3.13] — Save tracks CorrectionsBeingApplied.
+    //   2. PSForm.cs:865/871/877/883 [v2.10.3.13] — both Save+Restore gated by
+    //      TINT combo index (only idx 0 / default keeps the file format
+    //      compatible).
     // Codex Fix D: route from correctionsBeingAppliedChanged (info[14]==1
     // predicate), NOT correctingChanged (FeedbackLevel > 90 predicate).
+    // Codex Fix F: combine both gates via refreshSaveRestoreButtons slot so
+    // a flip in EITHER signal reruns the AND.
     connect(m_pureSignal, &PureSignal::correctionsBeingAppliedChanged,
-            m_btnSave,           &QPushButton::setEnabled);
+            this, &PsForm::refreshSaveRestoreButtons);
+    connect(m_pureSignal, &PureSignal::saveRestoreEnabledChanged,
+            this, &PsForm::refreshSaveRestoreButtons);
 
     // PureSignal -> UI label updates
     connect(m_pureSignal, &PureSignal::feedbackLevelChanged,
@@ -690,21 +695,23 @@ void PsForm::syncFromPureSignal()
     m_chkShow2ToneMeasurements->setChecked(
         m_pureSignal->show2ToneMeasurements());
 
-    // TINT combo: snap to nearest preset value.
-    const double tint = m_pureSignal->tint();
-    if (tint >= 2.5 - 0.05) {
-        m_comboTint->setCurrentIndex(2);
-    } else if (tint >= 1.1 - 0.05) {
-        m_comboTint->setCurrentIndex(1);
-    } else {
-        m_comboTint->setCurrentIndex(0);
-    }
+    // TINT combo: read directly from the tintIndex() accessor (Codex Fix F
+    // post-fix API).  Mirrors PSForm.designer.cs:172 [v2.10.3.13]
+    // initial Text="0.5" when tintIndex()==0.
+    m_comboTint->setCurrentIndex(m_pureSignal->tintIndex());
 
     // SetPk readout
     m_lblTxPSpeak->setText(QString::number(m_pureSignal->hwPeak(), 'f', 4));
 
-    // Save button initial gating
-    m_btnSave->setEnabled(m_pureSignal->correctionsBeingApplied());
+    // Save button initial gating: PSForm.cs:574-590 [v2.10.3.13] sets
+    // btnPSSave.Enabled to CorrectionsBeingApplied, AND PSForm.cs:865/871/
+    // 877 sets it false unconditionally for TINT indexes 1+2 (regardless
+    // of corrections-applied state).  Mirror both gates here.
+    m_btnSave->setEnabled(m_pureSignal->correctionsBeingApplied()
+                          && m_pureSignal->saveRestoreEnabled());
+    // Restore button gating: PSForm.cs:865/871/877/883 [v2.10.3.13] —
+    // tracks the same Save/Restore enabled state.
+    m_btnRestore->setEnabled(m_pureSignal->saveRestoreEnabled());
 
     m_updatingFromModel = false;
 }
@@ -956,11 +963,11 @@ void PsForm::onAmpDelayChanged(int v)
 void PsForm::onTintIndexChanged(int idx)
 {
     if (m_updatingFromModel || !m_pureSignal) { return; }
-    // Items: "0.5", "1.1", "2.5" per PSForm.designer.cs:164-167 [v2.10.3.13]
-    static const double kTintValues[3] = {0.5, 1.1, 2.5};
-    if (idx >= 0 && idx < 3) {
-        m_pureSignal->setTint(kTintValues[idx]);
-    }
+    // Codex Fix F: route through the new setTintIndex post-fix API which
+    // pushes (ints, spi) to the calcc engine via TxChannel::setPSIntsAndSpi.
+    // Mirrors the comboPSTint handler at PSForm.cs:857-885 [v2.10.3.13]
+    // verbatim including the default-case fallback for out-of-range idx.
+    m_pureSignal->setTintIndex(idx);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1008,6 +1015,31 @@ void PsForm::refreshCoBadge()
         css = blackBadgeStyle();
     }
     m_lblCo->setStyleSheet(css);
+}
+
+void PsForm::refreshSaveRestoreButtons()
+{
+    // Codex Fix F: combined gate for Save / Restore button enabled-state.
+    //
+    // Save button: PSForm.cs:574-590 [v2.10.3.13] sets btnPSSave.Enabled to
+    // CorrectionsBeingApplied; PSForm.cs:865/871/877/883 [v2.10.3.13]
+    // additionally forces it false when TINT index is 1 or 2 (saveRestoreEnabled
+    // = false).  AND-combine both gates here.
+    //
+    // Restore button: PSForm.cs:865/871/877/883 [v2.10.3.13] gates it on
+    // saveRestoreEnabled alone — Restore is always available so long as the
+    // file format is compatible (idx 0 / default), regardless of whether
+    // calibration is currently producing corrections.
+    if (!m_pureSignal) {
+        return;
+    }
+    if (m_btnSave) {
+        m_btnSave->setEnabled(m_pureSignal->correctionsBeingApplied()
+                              && m_pureSignal->saveRestoreEnabled());
+    }
+    if (m_btnRestore) {
+        m_btnRestore->setEnabled(m_pureSignal->saveRestoreEnabled());
+    }
 }
 
 void PsForm::onCalibrationCountChanged(int count)

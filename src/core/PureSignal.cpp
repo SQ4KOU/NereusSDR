@@ -524,13 +524,91 @@ void PureSignal::setAmpDelay(int ns)
 
 void PureSignal::setTint(double db)
 {
-    if (db == m_tint) { return; }
-    m_tint = db;
-    // No direct TxChannel setter today — the Thetis comboPSTint handler
-    // (PSForm.cs comboPSTint_SelectedIndexChanged [v2.10.3.13]) drives
-    // ints / spi changes on the engine via puresignal.SetPSIntsAndSpi.
-    // Wire-through is deferred until the calcc test bench at Task 11.
-    emit tintChanged(db);
+    // Codex Fix F: legacy public API kept for backward compat with PsForm
+    // wiring + tests.  Maps the dB label to the matching combo index and
+    // routes through setTintIndex (where the real (ints, spi) push lives).
+    //
+    // From Thetis PSForm.designer.cs:164-167 [v2.10.3.13] combo entries:
+    //   "0.5" → idx 0 → (16, 256)
+    //   "1.1" → idx 1 → (8, 512)
+    //   "2.5" → idx 2 → (4, 1024)
+    // Out-of-range double falls back to idx 0, which routes to the
+    // default branch behaviour at PSForm.cs:879-884 [v2.10.3.13] (mirrors
+    // case 0 — 16/256, save+restore enabled).
+    int idx = 0;
+    if (db >= 2.5 - 0.05) {
+        idx = 2;
+    } else if (db >= 1.1 - 0.05) {
+        idx = 1;
+    } else {
+        idx = 0;
+    }
+    setTintIndex(idx);
+    // Update the m_tint cache + emit the legacy tintChanged signal even when
+    // the index didn't move (so existing PsForm sync paths see the explicit
+    // double round-trip).
+    if (db != m_tint) {
+        m_tint = db;
+        emit tintChanged(db);
+    }
+}
+
+void PureSignal::setTintIndex(int idx)
+{
+    // From Thetis PSForm.cs:857-885 [v2.10.3.13]
+    // comboPSTint_SelectedIndexChanged — verbatim port:
+    //   case 0:  SetPSIntsAndSpi(16, 256);  Save+Restore enabled = true
+    //   case 1:  SetPSIntsAndSpi(8, 512);   Save+Restore enabled = false
+    //   case 2:  SetPSIntsAndSpi(4, 1024);  Save+Restore enabled = false
+    //   default: SetPSIntsAndSpi(16, 256);  Save+Restore enabled = true
+    //
+    // Save/Restore gating per PSForm.cs:865/871/877/883 [v2.10.3.13]:
+    // only index 0 keeps the persisted-corrections file format compatible.
+    int ints = 16;
+    int spi  = 256;
+    bool srEnabled = true;
+    int storedIdx = 0;
+    switch (idx) {
+    case 0:
+        ints = 16;  spi = 256;  srEnabled = true;  storedIdx = 0;
+        break;
+    case 1:
+        ints = 8;   spi = 512;  srEnabled = false; storedIdx = 1;
+        break;
+    case 2:
+        ints = 4;   spi = 1024; srEnabled = false; storedIdx = 2;
+        break;
+    default:
+        // PSForm.cs:879-884 [v2.10.3.13] default case mirrors case 0 verbatim.
+        ints = 16;  spi = 256;  srEnabled = true;  storedIdx = 0;
+        break;
+    }
+
+    // Forward to TxChannel (calcc engine).  Mirrors PSForm.cs:862/868/874/
+    // 880 [v2.10.3.13]:
+    //   puresignal.SetPSIntsAndSpi(_txachannel, ints, spi);
+    if (m_tx) {
+        m_tx->setPSIntsAndSpi(ints, spi);
+    }
+
+    // Cache the (ints, spi) pair for AmpView buffer sizing readback per
+    // PSForm.cs:863-864 / 869-870 / 875-876 [v2.10.3.13]:
+    //   _ints = ints;  _spi = spi;
+    m_psInts = ints;
+    m_psSpi  = spi;
+
+    // Emit tintIndexChanged on transitions (PsForm syncs its combo).
+    if (storedIdx != m_tintIndex) {
+        m_tintIndex = storedIdx;
+        emit tintIndexChanged(storedIdx);
+    }
+
+    // Emit saveRestoreEnabledChanged on transitions (PsForm gates Save+Restore
+    // buttons per PSForm.cs:865/871/877/883 [v2.10.3.13]).
+    if (srEnabled != m_saveRestoreEnabled) {
+        m_saveRestoreEnabled = srEnabled;
+        emit saveRestoreEnabledChanged(srEnabled);
+    }
 }
 
 void PureSignal::setLoopback(bool on)

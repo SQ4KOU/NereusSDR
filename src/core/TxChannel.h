@@ -2131,6 +2131,14 @@ public:
     // Sentinel -1: distinguishes "never called" from "called with 0".
     // Tests asserting non-zero rates use a 0/-1 guard if they care.
     int lastPSFeedbackRateForTest()           const noexcept { return m_lastPSFeedbackRate; }
+
+    // Codex Fix F seam: observe the (ints, spi) pair the wrapper last
+    // forwarded to WDSP via setPSIntsAndSpi.  Used by
+    // tst_puresignal_coordinator to verify PureSignal::setTintIndex(idx)
+    // routes through to the calcc engine.  Sentinels -1 distinguish
+    // "never called" from explicit zero.
+    int lastPSIntsForTest()                   const noexcept { return m_lastPSInts; }
+    int lastPSSpiForTest()                    const noexcept { return m_lastPSSpi; }
 #endif // NEREUS_BUILD_TESTS
 
 public slots:
@@ -2597,6 +2605,12 @@ private:
     // Source: NereusSDR-original test seam.  No Thetis equivalent (Thetis
     // doesn't have unit tests for PS feedback rate).
     int m_lastPSFeedbackRate = -1;
+
+    // Codex Fix F: per-call cache of the (ints, spi) pair last forwarded
+    // through setPSIntsAndSpi.  Read by lastPSInts/SpiForTest seams above.
+    // Sentinels -1 distinguish "never called" from explicit zero.
+    int m_lastPSInts = -1;
+    int m_lastPSSpi  = -1;
 
     // ── TXA PostGen split-property cache (3M-1c E.3 / E.4) ──────────────────
     //

@@ -1549,6 +1549,170 @@ private slots:
                  "FB=182 must retry (fails IsFeedbackLevelOKRange's <=181)");
     }
 
+    // ── Codex Fix F: setTintIndex routes (ints, spi) to TxChannel ──────────
+    //
+    // From Thetis PSForm.cs:351-369 [v2.10.3.13]:
+    //   private int _ints = 16;
+    //   private int _spi  = 256;
+    // From Thetis PSForm.cs:857-885 [v2.10.3.13] comboPSTint_SelectedIndexChanged:
+    //   case 0: SetPSIntsAndSpi(16, 256); _ints=16; _spi=256;
+    //           btnPSSave.Enabled = btnPSRestore.Enabled = true;
+    //   case 1: SetPSIntsAndSpi(8, 512);  _ints=8;  _spi=512;
+    //           btnPSSave.Enabled = btnPSRestore.Enabled = false;
+    //   case 2: SetPSIntsAndSpi(4, 1024); _ints=4;  _spi=1024;
+    //           btnPSSave.Enabled = btnPSRestore.Enabled = false;
+    //   default: SetPSIntsAndSpi(16, 256); _ints=16; _spi=256;
+    //            btnPSSave.Enabled = btnPSRestore.Enabled = true;
+    //
+    // Pre-fix: setTint(double) only stored the dB value and emitted
+    // tintChanged(db) — comment at PureSignal.cpp:531 explicitly deferred
+    // the engine call.  AmpView used default (16,256) regardless of TINT.
+    // Post-fix: setTintIndex(idx) maps the user-facing combo index to
+    // (ints, spi) and forwards through TxChannel::setPSIntsAndSpi.
+    // Save/Restore enabled-state mirrors index 0 only (per PSForm.cs:865/
+    // 871/877/883).
+    //
+    // Combo entries from PSForm.designer.cs:164-167 [v2.10.3.13]:
+    //   "0.5", "1.1", "2.5"
+    // — the dB labels for the three preset modes; index 0 = default 0.5 dB.
+
+    void setTintIndex_zero_setsInts16Spi256_andCallsTxChannel()
+    {
+        // From PSForm.cs:861-866 [v2.10.3.13] — case 0:
+        //   puresignal.SetPSIntsAndSpi(_txachannel, 16, 256);
+        //   _ints = 16; _spi = 256;
+        //   btnPSSave.Enabled = btnPSRestore.Enabled = true;
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+
+        ps.setTintIndex(0);
+
+        QCOMPARE(tx.lastPSIntsForTest(), 16);
+        QCOMPARE(tx.lastPSSpiForTest(),  256);
+        QCOMPARE(ps.psInts(),            16);
+        QCOMPARE(ps.psSpi(),             256);
+        QCOMPARE(ps.saveRestoreEnabled(), true);
+    }
+
+    void setTintIndex_one_setsInts8Spi512_andCallsTxChannel()
+    {
+        // From PSForm.cs:867-872 [v2.10.3.13] — case 1:
+        //   puresignal.SetPSIntsAndSpi(_txachannel, 8, 512);
+        //   _ints = 8; _spi = 512;
+        //   btnPSSave.Enabled = btnPSRestore.Enabled = false;
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+
+        ps.setTintIndex(1);
+
+        QCOMPARE(tx.lastPSIntsForTest(), 8);
+        QCOMPARE(tx.lastPSSpiForTest(),  512);
+        QCOMPARE(ps.psInts(),            8);
+        QCOMPARE(ps.psSpi(),             512);
+        QCOMPARE(ps.saveRestoreEnabled(), false);
+    }
+
+    void setTintIndex_two_setsInts4Spi1024_andCallsTxChannel()
+    {
+        // From PSForm.cs:873-878 [v2.10.3.13] — case 2:
+        //   puresignal.SetPSIntsAndSpi(_txachannel, 4, 1024);
+        //   _ints = 4; _spi = 1024;
+        //   btnPSSave.Enabled = btnPSRestore.Enabled = false;
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+
+        ps.setTintIndex(2);
+
+        QCOMPARE(tx.lastPSIntsForTest(), 4);
+        QCOMPARE(tx.lastPSSpiForTest(),  1024);
+        QCOMPARE(ps.psInts(),            4);
+        QCOMPARE(ps.psSpi(),             1024);
+        QCOMPARE(ps.saveRestoreEnabled(), false);
+    }
+
+    void setTintIndex_outOfRange_fallsBackToZero()
+    {
+        // From PSForm.cs:879-884 [v2.10.3.13] — default case:
+        //   puresignal.SetPSIntsAndSpi(_txachannel, 16, 256);
+        //   _ints = 16; _spi = 256;
+        //   btnPSSave.Enabled = btnPSRestore.Enabled = true;
+        // The Thetis switch has a default that mirrors case 0 verbatim.
+        // Out-of-range index in NereusSDR must reach the same behaviour.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+
+        ps.setTintIndex(99);
+
+        QCOMPARE(tx.lastPSIntsForTest(), 16);
+        QCOMPARE(tx.lastPSSpiForTest(),  256);
+        QCOMPARE(ps.psInts(),            16);
+        QCOMPARE(ps.psSpi(),             256);
+        QCOMPARE(ps.saveRestoreEnabled(), true);
+    }
+
+    void setTintIndex_emitsSaveRestoreEnabledChanged_onTransitions()
+    {
+        // The combo handler unconditionally writes btnPSSave/Restore.Enabled
+        // for each case.  Wire the equivalent NereusSDR signal so subscribers
+        // (PsForm) can react.  Default state must come from initial value;
+        // we test transitions: 0 → 1 (true → false), 1 → 0 (false → true).
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+
+        // Drive to a known starting state.
+        ps.setTintIndex(0);   // ensures saveRestoreEnabled = true
+
+        QSignalSpy spy(&ps, &PureSignal::saveRestoreEnabledChanged);
+
+        // 0 → 1: true → false
+        ps.setTintIndex(1);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toBool(), false);
+
+        // 1 → 0: false → true
+        ps.setTintIndex(0);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toBool(), true);
+    }
+
+    void setTintIndex_legacy_setTint_doubleAPI_stillWorks()
+    {
+        // Backward-compat: the existing PsForm wires the combo through
+        // PureSignal::setTint(double).  We need to keep that public API
+        // alive so the existing PsForm wiring + tintChanged(double)
+        // listeners don't break.  setTint(0.5/1.1/2.5) MUST map to
+        // setTintIndex(0/1/2) and produce the expected (ints, spi) pair.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+
+        ps.setTint(0.5);
+        QCOMPARE(tx.lastPSIntsForTest(), 16);
+        QCOMPARE(tx.lastPSSpiForTest(),  256);
+
+        ps.setTint(1.1);
+        QCOMPARE(tx.lastPSIntsForTest(), 8);
+        QCOMPARE(tx.lastPSSpiForTest(),  512);
+
+        ps.setTint(2.5);
+        QCOMPARE(tx.lastPSIntsForTest(), 4);
+        QCOMPARE(tx.lastPSSpiForTest(),  1024);
+    }
+
+    void setTintIndex_default_isZero_at_construction()
+    {
+        // From PSForm.cs:351-368 [v2.10.3.13]:
+        //   private int _ints = 16;   // default
+        //   private int _spi  = 256;  // default
+        // The accessors must return the defaults BEFORE any setTintIndex
+        // call.  Existing test (psInts/psSpi default to 16/256) covers this
+        // already; we add an explicit accessor check on tintIndex().
+        PureSignal ps(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+        QCOMPARE(ps.tintIndex(), 0);
+        QCOMPARE(ps.psInts(),    16);
+        QCOMPARE(ps.psSpi(),     256);
+        QCOMPARE(ps.saveRestoreEnabled(), true);
+    }
+
 };
 
 // QTEST_GUILESS_MAIN constructs a QCoreApplication so the internal QTimers
