@@ -1395,8 +1395,11 @@ void TransmitModel::loadFromSettings(const QString& mac)
     const int twoToneFreq2 = s.value(pfx + QLatin1String("TwoToneFreq2"),
                                        QStringLiteral("1900")).toInt();
     setTwoToneFreq2(twoToneFreq2);
+    // From Thetis setup.Designer.cs:61994-62003 [v2.10.3.13] udTwoToneLevel
+    // default 0 dB.  Phase 3M-4 Task 17: was NereusSDR-original -6 dB which
+    // halved the 2-tone envelope and starved calcc LCOLLECT bin filling.
     const double twoToneLevel = s.value(pfx + QLatin1String("TwoToneLevel"),
-                                         QStringLiteral("-6")).toDouble();
+                                         QStringLiteral("0")).toDouble();
     setTwoToneLevel(twoToneLevel);
     const int twoTonePower = s.value(pfx + QLatin1String("TwoTonePower"),
                                       QStringLiteral("50")).toInt();

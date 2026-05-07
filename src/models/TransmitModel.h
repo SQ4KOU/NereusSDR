@@ -2175,7 +2175,16 @@ private:
     // Defaults per design spec §4.4 / pre-code review §2.3 (option C).
     int    m_twoToneFreq1      =   700;   // Designer + Defaults preset
     int    m_twoToneFreq2      =  1900;   // Designer + Defaults preset
-    double m_twoToneLevel      =  -6.0;   // NereusSDR-original; Designer = 0 dB
+    // From Thetis setup.Designer.cs:61994-62003 [v2.10.3.13] udTwoToneLevel:
+    //   Maximum = 0, Minimum = -96, Value = 0.
+    // Phase 3M-4 Task 17 (2026-05-06): previously NereusSDR-original -6 dB
+    // which under-drove the 2-tone envelope by 6 dB.  Result on bench:
+    // pscc() saw txEnvMax=0.306 instead of Thetis's ~0.6+, calcc LCOLLECT
+    // never filled past bin 2-3 (out of 16), state machine stuck.
+    // Restoring Thetis-faithful 0 dB default so PureSignal calibration
+    // converges on a fresh 2-Tone test.  See docs/architecture/
+    // phase3m-4-handoff-bench-debug.md "Round 2 / Task 17 status".
+    double m_twoToneLevel      =   0.0;
     int    m_twoTonePower      =    50;   // NereusSDR-original; Designer = 10 %
     int    m_twoToneFreq2Delay =     0;   // matches Thetis Designer
     bool   m_twoToneInvert     =  true;   // setup.Designer.cs:61963 [v2.10.3.13]
