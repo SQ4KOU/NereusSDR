@@ -29,9 +29,12 @@ WDSP_SRC = REPO / "third_party" / "wdsp" / "src"
 # Updated 2026-05-04: issue #167 Phase 1 Agent 1C added txgain_stub.c
 # (NereusSDR-original glue stub authored by J.J. Boyd KG4VCF, GPLv2-or-later
 # permission block) bumping the count from 132 to 133.
+# Updated 2026-05-07: Phase 3M-4 Task 3 added ps_sync_stub.c
+# (NereusSDR-original glue stub authored by J.J. Boyd KG4VCF, GPLv2-or-later
+# permission block) bumping the count from 133 to 134.
 # Used to flag drift when the census shifts without a docs update.
 EXPECTED = {
-    "gpl2-or-later": 133,
+    "gpl2-or-later": 134,
     "copyright-no-permission-block": 0,
     "no-header": 10,
 }

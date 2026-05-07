@@ -55,13 +55,14 @@ port.
 
 ### Survey of Vendored Sources
 
-All 143 source files in `third_party/wdsp/src/` were examined:
+All 144 source files in `third_party/wdsp/src/` were examined:
 
-- **133 files** carry the full GPLv2-or-later permission block:
+- **134 files** carry the full GPLv2-or-later permission block:
   - `"either version 2 of the License, or (at your option) any later version"`
   - All signal processing core: `channel.c`, `RXA.c`, `TXA.c`, `bandpass.c`, `amd.c`, `anf.c`, `anr.c`, and 125 others
   - `rnnr.c` + `rnnr.h` + `sbnr.c` + `sbnr.h` ported in Sub-epic C-1 (NR3/NR4 backends), carry verbatim Thetis GPLv2-or-later + MW0LGE dual-license headers.
   - `txgain_stub.c` (issue #167 Phase 1 Agent 1C, NereusSDR-original glue stub authored by J.J. Boyd KG4VCF, GPLv2-or-later — see row at top of "Vendored Source Files" table).
+  - `ps_sync_stub.c` (Phase 3M-4 Task 3, NereusSDR-original glue stub authored by J.J. Boyd KG4VCF, GPLv2-or-later — see row in the "NereusSDR-original glue (not from upstream)" section: provides `SetPSRxIdx` / `SetPSTxIdx` symbols so the bundled wdsp_static library exposes the API surface that ChannelMaster's `sync.c:69-79 [v2.10.3.13]` exports).
   - The other 132 files are Warren Pratt, NR0V, Copyright 2012–2025.
   - **Conclusion: GPLv2-or-later**
 
