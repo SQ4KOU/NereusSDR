@@ -1074,6 +1074,30 @@ void PureSignal::autoAttentionTick()
             << " currentAttOnTx=" << currentAttOnTx
             << " → SetNewValues";
 
+        // From Thetis PSForm.cs:738 [v2.10.3.13]:
+        //   if (!console.ATTOnTX) AutoAttenuate = true; //MW0LGE
+        // The AutoAttenuate setter (PSForm.cs:295-314 [v2.10.3.13]) chains:
+        //   _autoattenuate = value;
+        //   if (_autoattenuate) console.ATTOnTX = _autoattenuate;
+        // i.e. setting AutoAttenuate=true when console.ATTOnTX is false
+        // force-enables the ATT-on-TX master toggle.
+        //
+        // Mapping in NereusSDR:
+        //   console.ATTOnTX  ≡  m_stepAtt->attOnTxEnabled()
+        //   AutoAttenuate=true setter side-effect on console.ATTOnTX
+        //                    ≡  m_stepAtt->setAttOnTxEnabled(true)
+        //
+        // _autoattenuate is already true at this point (we passed the
+        // m_autoAttenuate guard above), so the only setter side-effect
+        // we need to mirror is the master-toggle force-enable.
+        //
+        // Inline tag preserved verbatim per CLAUDE.md "Inline comment
+        // preservation":
+        //   //MW0LGE  [original inline comment from PSForm.cs:738]
+        if (!m_stepAtt->attOnTxEnabled()) {
+            m_stepAtt->setAttOnTxEnabled(true); //MW0LGE
+        }
+
         m_aaState = AutoAttenuateState::SetNewValues;
 
         // From Thetis PSForm.cs:743-754 [v2.10.3.13]:

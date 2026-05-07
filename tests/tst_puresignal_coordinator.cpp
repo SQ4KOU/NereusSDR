@@ -439,6 +439,81 @@ private slots:
                  static_cast<int>(PureSignal::AutoAttenuateState::Monitor));
     }
 
+    // ── Phase 3M-4 Task 17: PSForm.cs:738 force-enable verbatim port ────────
+    //
+    // From Thetis PSForm.cs:738 [v2.10.3.13]:
+    //   if (!console.ATTOnTX) AutoAttenuate = true; //MW0LGE
+    //
+    // The AutoAttenuate setter (PSForm.cs:295-314) chains:
+    //   _autoattenuate = value;
+    //   if (_autoattenuate) console.ATTOnTX = _autoattenuate;
+    //
+    // i.e. when the auto-att tick advances to SetNewValues, it force-enables
+    // the ATT-on-TX master toggle so subsequent setAttOnTxValue calls
+    // actually push to hardware.  NereusSDR mirrors this directly via
+    // m_stepAtt->setAttOnTxEnabled(true) at the equivalent point in the
+    // Monitor → SetNewValues transition.
+    void autoAttentionTick_forceEnablesAttOnTxMaster()
+    {
+        TxChannel tx(kTxChannelId);
+        StepAttenuatorController stepAtt;
+        MoxController mox;
+        PureSignal ps(nullptr, &tx, nullptr, &mox, &stepAtt, nullptr);
+
+        ps.setEnabled(true);
+        ps.setAutoAttenuate(true);
+        ps.setTimersEnabled(false);
+
+        // Drive isMox()=true so the autoAttentionTick gate passes.
+        mox.setMox(true);
+
+        // needRecal predicate (PSForm.cs:743-754 IsFeedbackLevelOK + the
+        // PSForm.cs:1109-1112 NeedToRecalibrate range check):
+        //   (fbLevel > 181) || (fbLevel <= 128 && currentAttOnTx > 0)
+        // Default fbLevel is 0 (atomic init); push currentAttOnTx > 0 to
+        // make the second clause trigger.
+        stepAtt.setAttOnTxValue(15);
+
+        // Precondition: master toggle OFF — mirrors Thetis "console.ATTOnTX
+        // is false" branch where PSForm.cs:738 force-flips it back to true.
+        stepAtt.setAttOnTxEnabled(false);
+        QVERIFY(!stepAtt.attOnTxEnabled());
+
+        ps.autoAttentionTick();
+
+        // Postcondition: tick advanced past Monitor (so we know the
+        // PSForm.cs:738 line ran), AND the master toggle is now ON.
+        QCOMPARE(static_cast<int>(ps.autoAttenuateState()),
+                 static_cast<int>(PureSignal::AutoAttenuateState::SetNewValues));
+        QVERIFY(stepAtt.attOnTxEnabled()); //MW0LGE force-enable verified
+    }
+
+    void autoAttentionTick_leavesAttOnTxMasterAloneWhenAlreadyOn()
+    {
+        // Sanity: the force-enable line is conditional (`if !attOnTxEnabled`),
+        // so when the master toggle is already ON it must remain ON without
+        // any side-effect on neighbouring state.  Mirrors Thetis's no-op
+        // case: the AutoAttenuate setter only writes console.ATTOnTX when
+        // the flag changes (the chain at PSForm.cs:297-301 always assigns
+        // but the underlying ATTOnTX setter at console.cs:19048 silently
+        // accepts the same value).
+        TxChannel tx(kTxChannelId);
+        StepAttenuatorController stepAtt;
+        MoxController mox;
+        PureSignal ps(nullptr, &tx, nullptr, &mox, &stepAtt, nullptr);
+
+        ps.setEnabled(true);
+        ps.setAutoAttenuate(true);
+        ps.setTimersEnabled(false);
+        mox.setMox(true);
+        stepAtt.setAttOnTxValue(15);
+
+        stepAtt.setAttOnTxEnabled(true);  // already ON
+        ps.autoAttentionTick();
+
+        QVERIFY(stepAtt.attOnTxEnabled());
+    }
+
     // ── Test 15: late-bound setters wire TxChannel + PsFeedbackChannel ──────
 
     void setTxChannel_lateBindingDoesNotCrash()
