@@ -2119,9 +2119,19 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             // slice; the three-slot iteration collapses to setAntiVoxRun(!useVax)
             // for the single-TX layout.  Full per-WDSP-channel
             // SetAntiVOXSourceWhat iteration is a 3F multi-pan concern.
+            //
+            // 3M-3a-iv: rewire from direct m_txChannel call to TxWorkerThread
+            // wrapper.  TxWorkerThread::setAntiVoxRun forwards to
+            // m_txChannel->setAntiVoxRun AND flips the m_antiVoxRun atomic
+            // gate that onAntiVoxSamplesReady checks.  Without this rewire,
+            // the atomic stays false and the anti-VOX cancellation feed
+            // never runs.  See TxWorkerThread.cpp:356-368 [3M-3a-iv Task 6]
+            // for the wrapper's release-store semantics.
             connect(m_moxController, &MoxController::antiVoxSourceWhatRequested,
                     m_txChannel, [this](bool useVax) {
-                m_txChannel->setAntiVoxRun(!useVax);
+                if (m_txWorker) {
+                    m_txWorker->setAntiVoxRun(!useVax);
+                }
             });
 
             // ── 3M-3 — TransmitModel → TxChannel TX processing chain wiring ─────
@@ -3098,6 +3108,72 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
     QObject::connect(&m_transmitModel, &TransmitModel::pureSigChanged,
                      m_connection, &RadioConnection::setPuresignalRun,
                      Qt::QueuedConnection);
+
+    // ── Phase 3M-3a-iv Task 9: anti-VOX cancellation feed wiring ─────────
+    //
+    // Closes the cancellation-feed wire chain end-to-end: the post-
+    // decimation RX audio block produced by RxDspWorker is forked into
+    // TxWorkerThread, which (when m_antiVoxRun is true) pumps it into
+    // TxChannel::sendAntiVoxData → WDSP DEXP's anti-VOX detector.  The
+    // detector then biases the VOX threshold downward so RX-bleed bursts
+    // no longer trip VOX.
+    //
+    // Single-RX equivalent of Thetis ChannelMaster aamix output stage
+    // (cmaster.c:159-175 [v2.10.3.13]) — aamix mixes N RXs into one
+    // anti-VOX stream and calls SendAntiVOXData; with one RX in 3M-3a-iv
+    // we skip the mixer entirely and pump the single RX block directly.
+    //
+    // Placement note: these connects live at the end of
+    // wireConnectionSignals (rather than the txSetup lambda where the
+    // existing antiVoxGainRequested connect sits) because m_dspWorker is
+    // not constructed until earlier in this same wireConnectionSignals
+    // method (line ~2928).  By the time we reach this point, both
+    // m_dspWorker (sender) and m_txWorker (constructed in the txSetup
+    // lambda before connectToRadio called us) are alive.
+    if (m_dspWorker != nullptr && m_txWorker != nullptr && m_moxController != nullptr) {
+        // 3M-3a-iv: RxDspWorker::antiVoxSampleReady → TxWorkerThread::onAntiVoxSamplesReady.
+        //
+        // Single-RX equivalent of Thetis ChannelMaster aamix output stage
+        // (cmaster.c:171 [v2.10.3.13]).  Queued so the DSP thread doesn't
+        // block on TxWorkerThread.
+        connect(m_dspWorker, &RxDspWorker::antiVoxSampleReady,
+                m_txWorker.get(), &TxWorkerThread::onAntiVoxSamplesReady,
+                Qt::QueuedConnection);
+
+        // 3M-3a-iv: RxDspWorker::bufferSizesChanged → TxWorkerThread::setAntiVoxBlockGeometry.
+        //
+        // Aligns DEXP's antivox_size / antivox_rate with the post-
+        // decimation RX block geometry.  From Thetis cmaster.c:154-155
+        // [v2.10.3.13]: audio_outsize / audio_outrate are the canonical
+        // anti-VOX detector dimensions, not TX in_size / in_rate.
+        connect(m_dspWorker, &RxDspWorker::bufferSizesChanged,
+                m_txWorker.get(), &TxWorkerThread::setAntiVoxBlockGeometry,
+                Qt::QueuedConnection);
+
+        // 3M-3a-iv: TransmitModel::antiVoxTauMsChanged → MoxController::setAntiVoxTau.
+        //
+        // Both objects live on main thread; direct connection.
+        // Mirrors the existing antiVoxGainDbChanged → setAntiVoxGain pattern.
+        connect(&m_transmitModel, &TransmitModel::antiVoxTauMsChanged,
+                m_moxController,  &MoxController::setAntiVoxTau);
+
+        // 3M-3a-iv: MoxController::antiVoxDetectorTauRequested → TxWorkerThread::setAntiVoxDetectorTau.
+        //
+        // MoxController emits seconds (post ms/1000.0 conversion);
+        // TxWorkerThread queued slot pass-through to
+        // TxChannel::setAntiVoxDetectorTau.
+        //
+        // From Thetis setup.cs:18992-18996 [v2.10.3.13].
+        connect(m_moxController, &MoxController::antiVoxDetectorTauRequested,
+                m_txWorker.get(), &TxWorkerThread::setAntiVoxDetectorTau,
+                Qt::QueuedConnection);
+
+        // 3M-3a-iv: initial push of TM tau into MoxController so the first
+        // emission of antiVoxDetectorTauRequested aligns DEXP with whatever
+        // AppSettings restored.  The NaN sentinel inside MoxController
+        // forces the emit even if the value matches its default.
+        m_moxController->setAntiVoxTau(m_transmitModel.antiVoxTauMs());
+    }
 }
 
 // P1 full-parity §3.4: per-sample PA telemetry handler.
