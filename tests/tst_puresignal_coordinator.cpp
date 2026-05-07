@@ -952,9 +952,15 @@ private slots:
         // From mi0bot PSForm.cs:765-768 [v2.10.3.13-beta2] —
         // !IsFeedbackLevelOK branch (FeedbackLevel > 256):
         //   if (HPSDRModel.HERMESLITE == HardwareSpecific.Model)
-        //       ddB = 10.0;
+        //       ddB = 10.0;             // MI0BOT: HL2 fallback (not 31.1)
         //   else
-        //       ddB = 31.1;
+        //       ddB = 31.1;             // [2.10.3.12]MW0LGE legacy fallback
+        //
+        // Inline tags preserved per CLAUDE.md "Inline comment preservation":
+        //MI0BOT   [PSForm.cs:760 + 766 HL2-specific clamp / fallback values]
+        //MW0LGE   [PSForm.cs:772 `_deltadB = (int)Math.Round(ddB, ...) //
+        //          [2.10.3.12]MW0LGE use rounding, to fix Banker's rounding`
+        //          rounding-mode attribution that this test path verifies]
         //
         // HL2 with fbLevel=300 (>256, IsFeedbackLevelOK false) →
         // ddB=10 (HL2 clamp), NOT 31.1 (legacy fallback).
