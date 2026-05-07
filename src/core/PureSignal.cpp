@@ -1064,8 +1064,23 @@ void PureSignal::autoAttentionTick()
         const int fbLevel = m_feedbackLevel.load();
         // From Thetis PSForm.cs:1109-1112 NeedToRecalibrate [v2.10.3.13]:
         //   return (FeedbackLevel > 181 || (FeedbackLevel <= 128 && nCurrentATTonTX > 0));
+        //
+        // Phase 3M-4 mi0bot audit: HL2 has its own NeedToRecalibrate_HL2
+        // variant at mi0bot PSForm.cs:1142-1144 [v2.10.3.13-beta2]:
+        //   return (FeedbackLevel > 181 || (FeedbackLevel <= 128 && nCurrentATTonTX > -28));
+        //   // MI0BOT: Needed seperate function for HL2 as ...
+        //
+        // The two predicates differ only in the lower-bound: standard boards
+        // use `> 0` (the floor of their 0..31 ATT range), HL2 uses `> -28`
+        // (the floor of its signed -28..+31 range).  StepAttenuatorController
+        // exposes the per-board floor via minAttenuation() — which already
+        // returns 0 for legacy boards and -28 for HL2 (set in
+        // BoardCapsTable's attenuator min).  So the unified predicate
+        // `currentAttOnTx > minAttenuation()` is the byte-for-byte port of
+        // both Thetis branches without an explicit board check.
+        const int minAtt = m_stepAtt->minAttenuation();
         const bool needRecal = (fbLevel > 181)
-            || (fbLevel <= 128 && currentAttOnTx > 0);
+            || (fbLevel <= 128 && currentAttOnTx > minAtt);
         if (!needRecal) {
             return;
         }
@@ -1156,16 +1171,44 @@ void PureSignal::autoAttentionTick()
         //       console.SetupForm.ATTOnTX = newAtten;
         //       if (m_bQuckAttenuate) Thread.Sleep(100);
         //   }
+        //
+        // Phase 3M-4 mi0bot audit: HL2 has a different clamp at
+        // mi0bot PSForm.cs:786-790 [v2.10.3.13-beta2]:
+        //   if (HPSDRModel.HERMESLITE == HardwareSpecific.Model)
+        //   {
+        //       newAtten = oldAtten + _deltadB;
+        //       //MI0BOT: HL2 can handle negative up to -28, just let it be
+        //       //handled in ATTOnTx section
+        //   }
+        //   else
+        //   {
+        //       if ((oldAtten + _deltadB) > 0)
+        //           newAtten = oldAtten + _deltadB;
+        //       else
+        //           newAtten = 0;
+        //   }
+        //
+        // The two branches differ only in the lower bound: standard boards
+        // clamp to 0 (their ATT floor), HL2 lets values pass through to its
+        // [-28, +31] range.  StepAttenuatorController exposes the per-board
+        // floor via minAttenuation() — 0 for legacy boards, -28 for HL2.
+        // So the unified clamp `max(oldAtten + deltaDb, minAttenuation())`
+        // is the byte-for-byte port of both Thetis branches.  HL2's
+        // SetupForm.ATTOnTX setter (m_stepAtt->setAttOnTxValue downstream)
+        // does its own additional clamp at the [m_minAttDb, 31] range —
+        // matching Thetis's "just let it be handled in ATTOnTx section"
+        // comment.
         m_aaState = AutoAttenuateState::RestoreOperation;
         if (!m_stepAtt) {
             break;
         }
         const int oldAtten = m_stepAtt->attOnTxValue();
+        const int minAtt   = m_stepAtt->minAttenuation();
         int newAtten;
-        if ((oldAtten + m_deltaDb) > 0) {
+        if ((oldAtten + m_deltaDb) > minAtt) {
             newAtten = oldAtten + m_deltaDb;
         } else {
-            newAtten = 0;
+            newAtten = minAtt; //MI0BOT HL2: handled by setAttOnTxValue clamp
         }
         if (oldAtten != newAtten) {
             qCInfo(lcDsp).nospace()
