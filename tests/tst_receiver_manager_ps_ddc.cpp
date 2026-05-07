@@ -172,6 +172,11 @@ void TstReceiverManagerPsDdc::hl2PsOnMoxEmitsExpectedPsDdcConfig()
     // HL2 PS-on MOX expected wire bytes (mi0bot delta: rx1_rate not ps_rate)
     // Source: mi0bot console.cs:8469-8488 [v2.10.3.13-beta2]
     //   p1DdcConfig=6, cntrl1=4, rate[0]=rate[1]=rx1_rate
+    //
+    // Inline tag preserved per CLAUDE.md "Inline comment preservation":
+    //MI0BOT  [console.cs:8476 `if (hpsdr_model == HPSDRModel.HERMESLITE)
+    //          // MI0BOT: HL2 can work at a high sample rate` — HL2-only
+    //          rx1_rate override that this test pins]
     P1CodecHl2 codec;
     ReceiverManager mgr;
     mgr.setP1Codec(&codec);

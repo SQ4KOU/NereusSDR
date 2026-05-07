@@ -81,6 +81,11 @@ void PsccPump::onDdcConfigChanged(const PsDdcConfig& cfg)
 {
     // From Thetis console.cs:8186-8538 UpdateDDCs [v2.10.3.13] +
     // P2CodecOrionMkII::applyPureSignalDdcConfig:469-488 [v2.10.3.13 port].
+    //MW0LGE   [console.cs:8238 + 8268 inline `// [2.10.3.13]MW0LGE p1 !`
+    //          attribution on the P1 rate-fixup `if (p1) Rate[0] = rx1_rate`]
+    //DH1KLM   [console.cs:8296 `case HPSDRModel.REDPITAYA: //DH1KLM`
+    //          attribution on the RedPitaya-specific PS branch]
+    //
     // PureSignal MOX state populates the codec config with:
     //   ddcEnable = DDC0 + DDC2     (bits 0 and 2 set)
     //   syncEnable = DDC1           (bit 1 set)

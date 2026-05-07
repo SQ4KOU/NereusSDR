@@ -520,7 +520,11 @@ private slots:
     //   public static bool NeedToRecalibrate_HL2(int nCurrentATTonTX) {
     //       return (FeedbackLevel > 181 ||
     //               (FeedbackLevel <= 128 && nCurrentATTonTX > -28));
+    //       // MI0BOT: Needed seperate function for HL2
     //   }
+    //
+    // Inline tag preserved: //MI0BOT (HL2-only NeedToRecalibrate variant
+    // attribution at PSForm.cs:1144).
     //
     // NereusSDR uses StepAttenuatorController::minAttenuation() (per-board
     // floor — 0 for legacy boards, -28 for HL2) to unify both Thetis

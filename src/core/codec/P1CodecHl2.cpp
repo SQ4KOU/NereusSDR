@@ -501,7 +501,11 @@ PsDdcConfig P1CodecHl2::applyPureSignalDdcConfig(
     PsDdcConfig cfg;
     constexpr uint8_t DDC0 = 1, DDC1 = 2;
 
-    // From mi0bot console.cs:8412-8413 [v2.10.3.13-beta2]
+    // From mi0bot console.cs:8409-8413 [v2.10.3.13-beta2]
+    //   case HPSDRModel.HERMESLITE: // MI0BOT: HL2
+    //
+    // Inline tag preserved per CLAUDE.md "Inline comment preservation":
+    //MI0BOT  [HL2 case-statement marker at console.cs:8409]
     cfg.p1RxCount = 4;                     // RX4 used for puresignal feedback
     cfg.nDdc      = 4;
 

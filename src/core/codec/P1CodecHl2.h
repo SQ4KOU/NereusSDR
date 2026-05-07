@@ -77,6 +77,12 @@ public:
     // Source: mi0bot console.cs:8409-8488 [v2.10.3.13-beta2] (HL2 grouped
     // with HERMES/ANAN10/ANAN100 case; mi0bot adds HL2-specific rate
     // override at lines 8476-8485).
+    //
+    // Inline tags preserved per CLAUDE.md "Inline comment preservation":
+    //MI0BOT   [console.cs:8409 `case HPSDRModel.HERMESLITE: // MI0BOT: HL2`
+    //          + 8476 `if (hpsdr_model == HPSDRModel.HERMESLITE) // MI0BOT:
+    //          HL2 can work at a high sample rate` — HL2 case-statement
+    //          marker + high-rate branch attribution]
     PsDdcConfig applyPureSignalDdcConfig(
         HPSDRModel model,
         bool psEnabled,

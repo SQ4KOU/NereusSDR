@@ -367,6 +367,10 @@ const BoardCapabilities kHermes = {
     // syncEnable=DDC1, cntrl1=4 ADC steering for the PS feedback path.
     // P1CodecStandard handles the wire compose; P1RadioConnection
     // ::applyPsDdcConfig consumes the codec output.
+    //
+    // Inline tag preserved per CLAUDE.md "Inline comment preservation":
+    //MI0BOT  [original `case HPSDRModel.HERMESLITE: // MI0BOT: HL2`
+    //         attribution at console.cs:8409 — HL2 case-statement marker]
     .hasPureSignal    = true,
     .hasDiversityReceiver = false,
     .hasStepAttenuatorCal = false,

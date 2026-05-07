@@ -127,14 +127,16 @@ private slots:
 
     // ── 5. HL2 PS-MOX: bank 2/3 do NOT trigger override (nDdc=4) ────────────
     //
-    // Source: mi0bot console.cs:8412-8413 [v2.10.3.13-beta2]:
-    //   case HPSDRModel.HERMESLITE:
+    // Source: mi0bot console.cs:8409-8413 [v2.10.3.13-beta2]:
+    //   case HPSDRModel.HERMESLITE:     // MI0BOT: HL2
     //       P1_rxcount = 4;
     //       nddc = 4;
     // The (nddc == 2) gate at networkproto1.c:985 is false for HL2 →
     // DDC0 stays at RX1 freq during PS-MOX.  HL2 firmware handles freq
     // routing internally via cntrl1=4 ADC steering set by
     // P1CodecHl2::applyPureSignalDdcConfig (console.cs:8486).
+    //
+    // Inline tag preserved: //MI0BOT (HL2 case-statement marker at line 8409).
     void hl2_psMox_bank2_doesNotOverride() {
         P1RadioConnection conn;
         conn.setBoardForTest(HPSDRHW::HermesLite);  // → P1CodecHl2
