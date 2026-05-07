@@ -587,10 +587,19 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
         0.060,                    // audio delay set to 60ms
         nullptr,                  // pushvox: registered later by TxChannel::registerVoxCallback
         0,                        // anti-vox 'run' flag
-        inputBufferSize,          // anti-vox data buffer size (complex samples)
-        inputSampleRate,          // anti-vox data sample-rate
-        0.01,                     // anti-vox gain
-        0.01);                    // anti-vox smoothing time-constant
+        inputBufferSize,          // anti-vox data buffer size (placeholder; overridden
+                                  // by setAntiVoxSize once RxDspWorker geometry is known)
+        inputSampleRate,          // anti-vox data sample-rate (placeholder; overridden
+                                  // by setAntiVoxRate at the same point)
+        0.01,                     // anti-vox gain (linear, -40 dB; overridden by
+                                  // udAntiVoxGain handler at first paint)
+        // From Thetis setup.designer.cs:44682-44686 [v2.10.3.13]:
+        //   udAntiVoxTau default 20 ms (= 0.02 s).  Thetis ChannelMaster
+        //   cmaster.c:157 passes 0.01 at create time but the spinbox-applied
+        //   value overrides it on every Thetis startup; we initialize at the
+        //   spinbox value so behavior is identical with or without an open
+        //   Setup page.
+        0.02);                    // anti-vox smoothing time-constant
     qCInfo(lcDsp) << "TX channel" << channelId
                   << "DEXP created (parallel-only buffer architecture):"
                   << "size=" << inputBufferSize
