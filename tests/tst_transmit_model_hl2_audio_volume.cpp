@@ -99,18 +99,22 @@ private slots:
     }
 
     // §5 Non-HL2 model — must NOT use the HL2 formula.  ANAN-100 (or any
-    // non-HERMESLITE model) should run through the legacy gbb >= 99.5
-    // sentinel fallback / dBm-target math.  Concretely: assert the result
-    // differs from what the HL2 formula would have returned.
+    // non-HERMESLITE model) runs through the canonical Thetis dBm-target
+    // kernel (console.cs:46720-46758 [v2.10.3.13]).  Concretely: assert
+    // the result differs from what the HL2 formula would have returned.
     //
-    // Build a profile whose 40m gbb=100 (sentinel) so the legacy path
-    // hits the linear fallback (50/100 = 0.5), which differs from the HL2
-    // formula value of (50 * 100/100)/93.75 = 0.5333.
+    // Issue #202 deep-fix: a previous NereusSDR-original short-circuit
+    //   if (gbb >= 99.5f) return clamp(sliderWatts/100.0, 0, 1);
+    // was removed because it inverted the Thetis semantic "100 = no output
+    // power" (clsHardwareSpecific.cs:463-466 [v2.10.3.13]) into "100 =
+    // full output (linear identity)".  With the short-circuit gone, gbb=100
+    // now produces audio_volume ≈ 0.000625 at slider 50 (target_dbm = 47 -
+    // 100 = -53 dBm; volts ≈ 0.0005; audio = 0.000625) — matching Thetis,
+    // which interprets a residual 100 as "no output power".
     void nonHl2_unchanged_path() {
         TransmitModel m;
-        // ANAN100 default profile: kAnan100Row 40m has a real gain entry,
-        // not a sentinel.  Use a Bypass-style construction (FIRST inherits
-        // HERMES values which are NOT all-100; we override via setGain).
+        // Bypass-style construction with explicit gbb=100 on 40m to force
+        // the "no PA gain row" semantic.
         PaProfile p(QStringLiteral("Bypass"), HPSDRModel::FIRST, true);
         p.setGainForBand(Band::Band40m, 100.0f);
         const double vHl2Formula = (50.0 * 100.0 / 100.0) / 93.75;
@@ -118,9 +122,12 @@ private slots:
                                                   Band::Band40m,
                                                   50,
                                                   HPSDRModel::ANAN100);
+        // Different from the HL2 formula value.
         QVERIFY(std::abs(vReal - vHl2Formula) > 1e-6);
-        // And the legacy linear fallback returns 50/100 = 0.5 exactly.
-        QCOMPARE(vReal, 0.5);
+        // gbb=100 with 50 W slider → target_dbm = 10*log10(50000) - 100 ≈ -53.
+        // target_volts = sqrt(10^-5.3 * 0.05) ≈ 0.0005.  audio = 0.000625.
+        // Per Thetis "100 = no output power" semantic — essentially silent.
+        QVERIFY(vReal < 1.0e-3);
     }
 };
 
