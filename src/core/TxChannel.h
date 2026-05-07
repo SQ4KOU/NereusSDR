@@ -2117,6 +2117,20 @@ public:
     //   (c) Identical second call is a no-op (idempotent guard fires).
     //   (d) Different value updates the stored last-value.
     double lastFixedGainForTest()             const noexcept { return m_lastFixedGain; }
+
+    // ── Test seam (PR #212 codex-fix A) — PS feedback rate last-value ───────
+    //
+    // Allow tests to verify the rate that PureSignal::applyBoardCapabilities
+    // pushed through to setPSFeedbackRate.  Critical for the HL2 sentinel
+    // resolution: kHermesLite.psSampleRate=0 (NereusSDR sentinel meaning
+    // "use rx1_rate at the codec/DDC layer") must be resolved to the
+    // universal Thetis ps_rate (192000) BEFORE reaching WDSP, since
+    // calcc.c:1069 stores `a->rate = rate;` and uses it as the delay-time
+    // divisor (passing 0 produces moxsamps=0 + waitsamps=0).
+    //
+    // Sentinel -1: distinguishes "never called" from "called with 0".
+    // Tests asserting non-zero rates use a 0/-1 guard if they care.
+    int lastPSFeedbackRateForTest()           const noexcept { return m_lastPSFeedbackRate; }
 #endif // NEREUS_BUILD_TESTS
 
 public slots:
@@ -2571,6 +2585,18 @@ private:
     //   double level = Audio.RadioVolume * Audio.HighSWRScale;
     //   cmaster.SetTXFixedGain(0, level, level);
     double m_lastFixedGain = std::numeric_limits<double>::quiet_NaN();
+
+    // ── PS feedback rate last-value (PR #212 codex-fix A) ──────────────────
+    //
+    // setPSFeedbackRate stores the rate it was last called with into this
+    // member regardless of WDSP build mode, so that the unit test for the
+    // HL2 sentinel-resolution fix can verify PureSignal::applyBoardCapabilities
+    // pushed 192000 (not 0) when the board is HL2.  Sentinel -1 distinguishes
+    // "never called" from "called with 0".
+    //
+    // Source: NereusSDR-original test seam.  No Thetis equivalent (Thetis
+    // doesn't have unit tests for PS feedback rate).
+    int m_lastPSFeedbackRate = -1;
 
     // ── TXA PostGen split-property cache (3M-1c E.3 / E.4) ──────────────────
     //

@@ -49,6 +49,7 @@
 #include <QColor>
 #include <QSignalSpy>
 
+#include "core/BoardCapabilities.h"
 #include "core/MoxController.h"
 #include "core/PureSignal.h"
 #include "core/StepAttenuatorController.h"
@@ -785,6 +786,68 @@ private slots:
         QCOMPARE(args.at(0).toInt(),  160);    // level
         QCOMPARE(args.at(3).toBool(), false);  // calAttemptsChanged (1 == 1)
     }
+
+    // ── PR #212 codex-fix A: HL2 psSampleRate=0 sentinel resolution ─────────
+    //
+    // kHermesLite.psSampleRate = 0 is a NereusSDR sentinel meaning "use
+    // rx1_rate at the codec/DDC layer per mi0bot console.cs:8472-8488
+    // [v2.10.3.13-beta2]".  It is NOT a valid value for the calcc feedback
+    // clock — calcc.c:1069 [v2.10.3.13] stores `a->rate = rate;` and uses
+    // it as the divisor for `moxsamps = rate * moxdelay` (line 1070) and
+    // `waitsamps = rate * loopdelay` (line 1071).  Passing 0 produces
+    // moxsamps=0 + waitsamps=0 → state-machine timeouts on every cycle.
+    //
+    // Thetis itself doesn't branch on board for ps_rate — cmaster.cs:535
+    // [v2.10.3.13] always passes ps_rate=192000:
+    //   private static int ps_rate = 192000;             // cmaster.cs:424
+    //   ...
+    //   puresignal.SetPSFeedbackRate(txch, ps_rate);     // cmaster.cs:535
+    //
+    // So PureSignal::applyBoardCapabilities must resolve the HL2 sentinel
+    // BEFORE the WDSP call, falling back to the Thetis universal 192000.
+
+    void applyBoardCapabilities_hl2SentinelResolvesTo192k()
+    {
+        // Pre-fix: the 0 sentinel flowed straight to WDSP → calcc.c:1069
+        // a->rate=0 → broken delay calculations.  Post-fix: 0 is replaced
+        // with cmaster.cs:424 ps_rate=192000.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+
+        ps.applyBoardCapabilities(BoardCapsTable::forBoard(HPSDRHW::HermesLite));
+
+        // setPSFeedbackRate must have been called with 192000, NOT 0.
+        QCOMPARE(tx.lastPSFeedbackRateForTest(), 192000);
+    }
+
+    void applyBoardCapabilities_hl2RxOnlySentinelResolvesTo192k()
+    {
+        // HermesLiteRxOnly mirrors HermesLite's psSampleRate=0 sentinel
+        // (BoardCapabilities.cpp:771).  Same resolution path — the kit
+        // can't TX, but the cap-table is populated for table consistency
+        // and the resolution must still be correct.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+
+        ps.applyBoardCapabilities(
+            BoardCapsTable::forBoard(HPSDRHW::HermesLiteRxOnly));
+
+        QCOMPARE(tx.lastPSFeedbackRateForTest(), 192000);
+    }
+
+    void applyBoardCapabilities_legacyBoardKeepsExplicitRate()
+    {
+        // Sanity: non-HL2 boards have psSampleRate=192000 explicit
+        // (BoardCapabilities.cpp:428/480/530/583/827/880/933).  The
+        // sentinel-resolution path must be a NO-OP for them.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+
+        ps.applyBoardCapabilities(BoardCapsTable::forBoard(HPSDRHW::Saturn));
+
+        QCOMPARE(tx.lastPSFeedbackRateForTest(), 192000);
+    }
+
 };
 
 // QTEST_GUILESS_MAIN constructs a QCoreApplication so the internal QTimers

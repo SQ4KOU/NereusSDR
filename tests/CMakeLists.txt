@@ -127,7 +127,10 @@ nereus_add_test(tst_ps_feedback_channel)
 # Ports the host-side logic from Thetis PSForm.cs timer1code (PSForm.cs:555-
 # 728 [v2.10.3.13]), ForcePS (PSForm.cs:920-955), and the eAAState 3-state
 # auto-attention machine (PSForm.cs:97-122 + 729-790 [v2.10.3.13]).
+# NEREUS_BUILD_TESTS exposes lastPSFeedbackRateForTest seam used by the PR
+# #212 codex-fix A test (HL2 sentinel resolution to cmaster.cs:424 ps_rate).
 nereus_add_test(tst_puresignal_coordinator)
+target_compile_definitions(tst_puresignal_coordinator PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3M-4 Task 8: PsForm modeless dialog ────────────────────────────────
 # Source-first port of Thetis PSForm.cs (1,164 LOC) [v2.10.3.13].  Tests verify

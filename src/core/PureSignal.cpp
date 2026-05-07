@@ -547,11 +547,30 @@ void PureSignal::applyBoardCapabilities(const BoardCapabilities& caps)
     if (m_tx) {
         m_tx->setPSHWPeak(m_caps.psDefaultPeak);
     }
-    // Push the per-board feedback rate to the feedback channel.  Mirrors
-    // Thetis cmaster.cs:535 [v2.10.3.13]:
-    //   puresignal.SetPSFeedbackRate(txch, ps_rate);
+    // Push the per-board feedback rate to the feedback channel.
+    //
+    // From Thetis cmaster.cs:535 [v2.10.3.13]:
+    //   puresignal.SetPSFeedbackRate(txch, ps_rate);   // ps_rate=192000 universally
+    // The cmaster.cs:424 [v2.10.3.13] declaration:
+    //   private static int ps_rate = 192000;
+    // shows the rate is a SINGLE universal constant — Thetis does NOT
+    // branch on board for SetPSFeedbackRate.
+    //
+    // HL2's psSampleRate=0 sentinel applies to the DDC sample rate (codec
+    // sets rate[0]=rate[1]=rx1Rate per mi0bot console.cs:8472-8488
+    // [v2.10.3.13-beta2] "HL2 can work at a high sample rate"), NOT to the
+    // calcc feedback-rate clock — calcc.c:1069 [v2.10.3.13] stores
+    // `a->rate = rate;` and uses it as the delay-time divisor:
+    //   a->ctrl.moxsamps  = (int)(a->rate * a->ctrl.moxdelay);   // calcc.c:1070
+    //   a->ctrl.waitsamps = (int)(a->rate * a->ctrl.loopdelay);  // calcc.c:1071
+    // Passing 0 produces moxsamps=0 + waitsamps=0 + bogus state-machine
+    // timeouts.  Resolve the sentinel here to the universal Thetis value.
+    constexpr int kThetisPsRate = 192000;   // cmaster.cs:424 [v2.10.3.13]
+    const int psFeedbackRateHz = (m_caps.psSampleRate > 0)
+                                  ? m_caps.psSampleRate
+                                  : kThetisPsRate;
     if (m_tx) {
-        m_tx->setPSFeedbackRate(m_caps.psSampleRate);
+        m_tx->setPSFeedbackRate(psFeedbackRateHz);
     }
     if (m_fb && m_caps.psSampleRate > 0) {
         m_fb->setSampleRate(m_caps.psSampleRate);

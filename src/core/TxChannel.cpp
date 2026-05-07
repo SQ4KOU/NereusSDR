@@ -3827,6 +3827,10 @@ void TxChannel::getPSDisp(double* x, double* ym, double* yc, double* ys,
 
 void TxChannel::setPSFeedbackRate(int rate)
 {
+    // Record the rate last seen by this wrapper regardless of WDSP build
+    // mode so the PR #212 codex-fix A test (HL2 sentinel resolution) can
+    // observe what PureSignal::applyBoardCapabilities pushed through.
+    m_lastPSFeedbackRate = rate;
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     ::SetPSFeedbackRate(m_channelId, rate);
