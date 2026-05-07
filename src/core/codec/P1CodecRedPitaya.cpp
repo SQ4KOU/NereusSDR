@@ -136,6 +136,18 @@ PsDdcConfig P1CodecRedPitaya::applyPureSignalDdcConfig(
             cfg.rate[2]     = static_cast<uint32_t>(rx1Rate);
             cfg.cntrl1      = static_cast<uint8_t>((adcCtrl1 & 0xf3) | 0x08);
             cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+
+            // Phase 3M-4 mi0bot audit: PS DDC pair indices for nddc=5
+            // (RedPitaya P1 mode).  Same dispatch as the G2-class branch
+            // in P1CodecStandard — all nddc=5 P1 boards go through
+            // MetisReadThreadMainLoop case 5: twist(spr, 3, 4, 1) which
+            // pairs DDC3+DDC4 for PS.
+            //
+            // Source: mi0bot networkproto1.c:388-392 [v2.10.3.13-beta2]
+            // + console.cs:8710-8714 [v2.10.3.13-beta2] GetDDC P1 case 5
+            // Orion-class: rx1=0, rx2=2, psrx=3, pstx=4.
+            cfg.psFbDdc  = 3;
+            cfg.txMonDdc = 4;
         } else if (diversityEnabled && psEnabled) {
             // From console.cs:8348-8358 [v2.10.3.13]
             cfg.p1DdcConfig = 3;
@@ -146,6 +158,10 @@ PsDdcConfig P1CodecRedPitaya::applyPureSignalDdcConfig(
             cfg.rate[2]     = static_cast<uint32_t>(rx1Rate);
             cfg.cntrl1      = static_cast<uint8_t>((adcCtrl1 & 0xf3) | 0x08);
             cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+
+            // Same PS DDC layout as the !diversity && PS branch above.
+            cfg.psFbDdc  = 3;
+            cfg.txMonDdc = 4;
         } else {
             // diversity_enabled && !puresignal_enabled
             // From console.cs:8359-8369 [v2.10.3.13]

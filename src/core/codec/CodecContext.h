@@ -336,6 +336,41 @@ struct PsDdcConfig {
     int      p1DdcConfig = 0;    // P1-only board-config code (see UpdateDDCs branches)
     int      p1RxCount  = 0;     // P1-only RX count for state-machine
     int      nDdc       = 0;     // Total DDC count for this board family
+
+    // Phase 3M-4 mi0bot audit: per-board PS feedback / TX-monitor DDC indices
+    // for PsccPump dispatch.  Different board families place the PS pair on
+    // different DDC slots:
+    //
+    //   nddc=2 (HermesII / ANAN-10E / ANAN-100B):
+    //       psFbDdc=0, txMonDdc=1 — networkproto1.c:984 bank-2/3 freq override
+    //       forces DDC0+DDC1 to TX freq during PS-MOX
+    //   nddc=4 (Hermes / HL2 / ANAN-10 / ANAN-100):
+    //       psFbDdc=2, txMonDdc=3 — networkproto1.c MetisRead case 4
+    //       `twist(spr, 2, 3, 1)` pairs DDC2+DDC3 (and console.cs
+    //       GetDDC():8757-8762 confirms `psrx=2, pstx=3` for HL2 PS-MOX)
+    //   nddc=5 (Orion / Saturn / Andromeda / etc.):
+    //       psFbDdc=0, txMonDdc=1 — P2 network.c:936-945 unconditional
+    //       freq override; P1 case 5 in MetisRead twists DDC0+DDC1
+    //
+    // From Thetis cmaster.cs:533-534 [v2.10.3.13]:
+    //   SetPSRxIdx(0, 0);   // ps_rx_idx points to data[0] in InboundBlock
+    //   SetPSTxIdx(0, 1);   // ps_tx_idx points to data[1]
+    // Those constants refer to STREAM indices in the InboundBlock data**
+    // array (always 0/1 because twist() always pairs into data[0]+data[1]).
+    // NereusSDR's PsccPump consumes raw per-DDC streams from
+    // RadioConnection::iqDataReceived(ddcIndex, samples) so it needs the
+    // actual DDC indices, which depend on the per-board read-loop dispatch.
+    //
+    // From Thetis console.cs:8579 GetDDC() [v2.10.3.13]:
+    //   HL2 P1 PS-MOX (case 5):  rx1=0, rx2=1, psrx=2, pstx=3
+    //   HermesII P1 PS-MOX:      psrx=0, pstx=1
+    //   Saturn-class P2 PS-MOX:  rx1=2, rx2=3 (DDC0+DDC1 implicit PS pair)
+    //
+    // Defaults match cmaster.cs:533-534 (Stream0/Stream1) which is correct
+    // for nddc=2 boards and Saturn-class P2.  Per-board codec overrides for
+    // the nddc=4 family (HL2 / Hermes / ANAN10 / ANAN100).
+    int      psFbDdc    = 0;     // PS feedback DDC index (Stream0 default)
+    int      txMonDdc   = 1;     // TX monitor DDC index (Stream1 default)
 };
 
 } // namespace NereusSDR

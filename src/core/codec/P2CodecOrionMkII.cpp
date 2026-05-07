@@ -496,6 +496,21 @@ PsDdcConfig P2CodecOrionMkII::applyPureSignalDdcConfig(
             cfg.rate[2]     = static_cast<uint32_t>(rx1Rate);
             cfg.cntrl1      = static_cast<uint8_t>((adcCtrl1 & 0xf3) | 0x08);
             cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+
+            // Phase 3M-4 mi0bot audit: PS DDC pair indices for P2 G2-class.
+            //
+            // P2 PS-MOX uses the network.c:936-945 [v2.10.3.13] freq override
+            // to force DDC0+DDC1 to TX freq during MOX, so the PS pair on the
+            // wire is DDC0 (PS feedback) + DDC1 (TX monitor) regardless of
+            // the DDC count.  Different from P1 G2-class which uses DDC3+DDC4.
+            //
+            // Confirmed by mi0bot console.cs:8623 [v2.10.3.13-beta2] GetDDC()
+            // P2 case 5: rx1=2, rx2=3 (no explicit psrx/pstx — implicit DDC0/DDC1).
+            //
+            // Matches PsccPump default cmaster.cs:533-534 [v2.10.3.13].
+            // Explicit assignment for documentation + cross-codec consistency.
+            cfg.psFbDdc  = 0;
+            cfg.txMonDdc = 1;
         } else if (diversityEnabled && psEnabled) {
             // From console.cs:8267-8277 [v2.10.3.13]
             cfg.p1DdcConfig = 3;
@@ -506,6 +521,10 @@ PsDdcConfig P2CodecOrionMkII::applyPureSignalDdcConfig(
             cfg.rate[2]     = static_cast<uint32_t>(rx1Rate);
             cfg.cntrl1      = static_cast<uint8_t>((adcCtrl1 & 0xf3) | 0x08);
             cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+
+            // Same PS DDC layout as the !diversity && PS branch above.
+            cfg.psFbDdc  = 0;
+            cfg.txMonDdc = 1;
         } else {
             // diversity_enabled && !puresignal_enabled
             // From console.cs:8278-8287 [v2.10.3.13]

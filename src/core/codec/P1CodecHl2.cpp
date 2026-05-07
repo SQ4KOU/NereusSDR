@@ -582,6 +582,28 @@ PsDdcConfig P1CodecHl2::applyPureSignalDdcConfig(
             cfg.rate[1]     = static_cast<uint32_t>(rx1Rate);
             cfg.cntrl1      = 4;
             cfg.cntrl2      = 0;
+
+            // Phase 3M-4 mi0bot audit: PS DDC pair indices for HL2 / Hermes /
+            // ANAN-10 / ANAN-100 (nddc=4 family).
+            //
+            // From mi0bot ChannelMaster/networkproto1.c:549-553
+            // [v2.10.3.13-beta2] MetisReadThreadMainLoop_HL2 case 4:
+            //   xrouter(0, 0, 0, spr, prn->RxBuff[0]);   // DDC0 → main RX
+            //   twist(spr, 2, 3, 1);                      // DDC2+DDC3 → PS pair
+            //   xrouter(0, 0, 2, spr, prn->RxBuff[1]);    // DDC1 → secondary RX
+            //
+            // Plus mi0bot console.cs:8757-8762 [v2.10.3.13-beta2] GetDDC()
+            // HL2 P1 PS-MOX (tot=5: MOX=1, Diversity=0, PS=1):
+            //   rx1 = 0; rx2 = 1; psrx = 2; pstx = 3;
+            //
+            // psFbDdc=2 (PS feedback / loopback from PA — the ADC1-routed
+            // path enabled by cntrl1=4) and txMonDdc=3 (TX monitor — direct
+            // sample of the TX I/Q feed).  PsccPump consumes
+            // iqDataReceived(2, ...) and iqDataReceived(3, ...) as the
+            // pscc(channel, size, tx, rx) pair.
+            cfg.psFbDdc  = 2;     // RX2 audio (rx2=1) but during PS-MOX the
+                                  // firmware routes loopback into slot 2
+            cfg.txMonDdc = 3;     // TX monitor in slot 3
         }
     }
 

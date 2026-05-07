@@ -462,6 +462,23 @@ PsDdcConfig P1CodecStandard::psDdcConfigG2Class(
             cfg.rate[2]     = static_cast<uint32_t>(rx1Rate);
             cfg.cntrl1      = static_cast<uint8_t>((adcCtrl1 & 0xf3) | 0x08);
             cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+
+            // Phase 3M-4 mi0bot audit: PS DDC pair indices for nddc=5
+            // (G2-class P1 — Orion/MKII/ANAN-7000D/8000D/G2/G2_1K/AnvelinaPro3
+            // running in P1 mode, rare).
+            //
+            // From mi0bot networkproto1.c:388-392 [v2.10.3.13-beta2]
+            // MetisReadThreadMainLoop case 5:
+            //   case 5:
+            //       twist(spr, 0, 1, 0);           // DDC0+DDC1 → source 0 (synchronous, NOT PS)
+            //       twist(spr, 3, 4, 1);           // DDC3+DDC4 → source 1 (PS pair!)
+            //       xrouter(0, 0, 2, spr, prn->RxBuff[2]);  // DDC2 → source 2 (main RX)
+            //
+            // Plus mi0bot console.cs:8710-8714 [v2.10.3.13-beta2] GetDDC()
+            // Orion-class P1 PS-MOX (tot=5):
+            //   rx1 = 0; rx2 = 2; psrx = 3; pstx = 4;
+            cfg.psFbDdc  = 3;
+            cfg.txMonDdc = 4;
         } else if (diversityEnabled && psEnabled) {
             // From console.cs:8267-8277 [v2.10.3.13]
             cfg.p1DdcConfig = 3;
@@ -472,6 +489,12 @@ PsDdcConfig P1CodecStandard::psDdcConfigG2Class(
             cfg.rate[2]     = static_cast<uint32_t>(rx1Rate);
             cfg.cntrl1      = static_cast<uint8_t>((adcCtrl1 & 0xf3) | 0x08);
             cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+
+            // Same PS DDC layout as the !diversity && PS branch above —
+            // diversity affects only the routing of RX1+RX2 audio paths,
+            // not the PS feedback DDC indices.
+            cfg.psFbDdc  = 3;
+            cfg.txMonDdc = 4;
         } else {
             // diversity_enabled && !puresignal_enabled
             // From console.cs:8278-8287 [v2.10.3.13]
@@ -582,6 +605,25 @@ PsDdcConfig P1CodecStandard::psDdcConfigHermesClass(
             cfg.rate[1]     = ps_rate;
             cfg.cntrl1      = 4;
             cfg.cntrl2      = 0;
+
+            // Phase 3M-4 mi0bot audit: PS DDC pair indices for HERMES /
+            // ANAN-10 / ANAN-100 (nddc=4 family — same as HL2).
+            //
+            // From mi0bot ChannelMaster/networkproto1.c:383-387
+            // [v2.10.3.13-beta2] MetisReadThreadMainLoop case 4 (also
+            // appears at 549-553 in the HL2 read loop, byte-identical):
+            //   xrouter(0, 0, 0, spr, prn->RxBuff[0]);   // DDC0 → main RX
+            //   twist(spr, 2, 3, 1);                      // DDC2+DDC3 → PS pair
+            //   xrouter(0, 0, 2, spr, prn->RxBuff[1]);    // DDC1 → secondary RX
+            //
+            // Plus mi0bot console.cs:8757-8762 [v2.10.3.13-beta2] GetDDC()
+            // Hermes P1 PS-MOX (tot=5: MOX=1, Diversity=0, PS=1):
+            //   rx1 = 0; rx2 = 1; psrx = 2; pstx = 3;
+            //
+            // Same DDC layout as HL2 — the cntrl1=4 ADC routing puts the
+            // PS feedback on slots 2 (loopback) + 3 (TX monitor).
+            cfg.psFbDdc  = 2;
+            cfg.txMonDdc = 3;
         }
     }
 
@@ -675,6 +717,25 @@ PsDdcConfig P1CodecStandard::psDdcConfigHermesIIClass(
             cfg.rate[1]     = ps_rate;
             cfg.cntrl1      = 4;
             cfg.cntrl2      = 0;
+
+            // Phase 3M-4 mi0bot audit: PS DDC pair indices for HermesII /
+            // ANAN-10E / ANAN-100B (nddc=2 family).
+            //
+            // From mi0bot ChannelMaster/networkproto1.c:380-381
+            // [v2.10.3.13-beta2] MetisReadThreadMainLoop case 2:
+            //   case 2:
+            //       twist(spr, 0, 1, 0);     // DDC0+DDC1 → PS pair (source 0)
+            //       break;
+            //
+            // Plus mi0bot console.cs:8798-8800 [v2.10.3.13-beta2] GetDDC()
+            // HermesII P1 PS-MOX (tot=5: MOX=1, Diversity=0, PS=1):
+            //   psrx = 0;  pstx = 1;
+            //
+            // The bank-2/3 freq override (commit `9bde052`) forces DDC0+DDC1
+            // to TX freq during PS-MOX, so DDC0 = PS feedback, DDC1 = TX
+            // monitor.  These match the global cmaster.cs:533-534 defaults.
+            cfg.psFbDdc  = 0;     // explicit for documentation; matches default
+            cfg.txMonDdc = 1;     // explicit for documentation; matches default
         }
     }
 

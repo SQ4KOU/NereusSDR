@@ -101,12 +101,33 @@ void PsccPump::onDdcConfigChanged(const PsDdcConfig& cfg)
                                   && cfg.rate[0] == cfg.rate[1]);
 
     const bool wantActive = ddc0OnEnable && ddc1OnSync && psRatesPresent;
-    if (wantActive != m_active) {
-        // Default DDC assignment per cmaster.cs:533-534 [v2.10.3.13].  No
-        // current OpenHPSDR model deviates from this Stream0/Stream1
-        // split; if a future board does, this block will need a per-board
-        // override (likely via PsDdcConfig fields TBD).
-        setActive(wantActive, /*txMonDdc=*/1, /*psFbDdc=*/0);
+
+    // Phase 3M-4 mi0bot audit: per-board PS DDC pair indices.
+    //
+    // From mi0bot networkproto1.c:380-392 [v2.10.3.13-beta2]
+    // MetisReadThreadMainLoop dispatch by nddc:
+    //   case 2: twist(spr, 0, 1, 0)        // HermesII / ANAN-10E / 100B
+    //   case 4: twist(spr, 2, 3, 1)        // Hermes / HL2 / ANAN-10 / 100
+    //   case 5: twist(spr, 3, 4, 1)        // Orion-class P1 (rare)
+    //
+    // For P2 boards the network.c:936-945 freq override forces DDC0+DDC1
+    // to TX freq — pscc pair is DDC0+DDC1 universally on P2.
+    //
+    // The per-board codec encodes the correct indices in
+    // PsDdcConfig.psFbDdc / .txMonDdc; if neither has been set (e.g.
+    // codec hasn't been wired yet, or fallback pre-PS state), we use the
+    // cmaster.cs:533-534 [v2.10.3.13] default of (0, 1).
+    const int newPsFbDdc  = (cfg.psFbDdc  >= 0) ? cfg.psFbDdc  : 0;
+    const int newTxMonDdc = (cfg.txMonDdc >= 0) ? cfg.txMonDdc : 1;
+
+    // Re-arm the pump if active state changes OR if the DDC indices change
+    // mid-session (e.g. a board switches PS modes — unusual but cheap to
+    // handle).  setActive(false, ...) drops the rings; setActive(true, ...)
+    // resets them.
+    if (wantActive != m_active
+        || newPsFbDdc != m_psFbDdc
+        || newTxMonDdc != m_txMonDdc) {
+        setActive(wantActive, newTxMonDdc, newPsFbDdc);
     }
 }
 
