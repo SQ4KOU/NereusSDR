@@ -1,8 +1,91 @@
 # Phase 3M-4 PureSignal: Bench-Debug Handoff (Session 2)
 
-> **For the next session.** Read this top-to-bottom before touching any code.
+> **Round 2 landed 2026-05-06.** See "Round 2 status" below before reading
+> the original handoff text.  The five gaps in the table at §"Gaps in the
+> port" are all addressed in code; remaining work is the bench-driven
+> verification matrix (does GetPk really show 0.6121 on ANAN-G2, does the
+> banner number update mid-cal, etc.).
 
-## What's done
+## Round 2 status (2026-05-06)
+
+Three commits landed on `claude/wizardly-poitras-dbab75`:
+
+| SHA | Scope | Commit |
+| --- | --- | --- |
+| `404ade8` | PureSignal coordinator + PsaIndicatorWidget consolidated PSInfo dispatch | fix(puresignal): consolidated PSInfo dispatch + drop phantom m_correcting |
+| `51afae6` | RadioModel applyBoardCapabilities call site | fix(puresignal): wire applyBoardCapabilities() so SetPSHWPeak fires |
+| `10f0bc1` | SpectrumWidget IMD overlay gate-state diagnostic logging | fix(spectrum): IMD overlay gate-state logging for bench debug |
+
+Code-level coverage of the 6-gap table:
+
+| Gap | Round 2 disposition |
+| --- | --- |
+| Split Q_PROPERTY signals | Closed by new `PureSignal::psInfoChanged(level, ok, corrApplied, calChanged, color)` signal — 5 fields atomically, gated on `(m_autoCalEnabled && hasInfoChanged)` per Thetis PSForm.cs:614-619 [v2.10.3.13]. |
+| Phantom `m_correcting` field | Removed.  PsaIndicatorWidget's updateDisplay now branches on `m_correctionsApplied` only, byte-for-byte with ucInfoBar.cs:856-865 [v2.10.3.13]. |
+| `m_calChangedSinceLastDraw` local mishandling | Closed.  Driven exclusively by psInfo()'s `calibrationAttemptsChanged` parameter; the auto-set-on-setFeedbackLevel side effect is gone. |
+| No autocal+HasInfoChanged gate | Closed.  PureSignal::processNewInfo emits psInfoChanged only when both gates pass. |
+| No SetPSHWPeak auto-init | Closed.  `RadioModel::connectToRadio` WDSP-init lambda now calls `m_pureSignal->applyBoardCapabilities(boardCapabilities())` after setTxChannel + setPsFeedbackChannel.  Per-board defaults from BoardCapsTable now flow through to calcc. |
+| HasInfoChanged delta computation | Already present (PureSignal.cpp `hasInfoChanged()`).  Round 2 added `calAttemptsChanged` derived from `info[5] != m_oldInfo[5]` per PSForm.cs:1097-1098 [v2.10.3.13], emitted alongside `psInfoChanged`. |
+
+Plus a bonus fix found during investigation: `PsaIndicatorWidget` had been
+subscribing to `enabledChanged` instead of `autoCalEnabledChanged` — wrong
+semantic (PSAEnabled in Thetis tracks `psform.AutoCalEnabled` per
+console.cs:2280-2284 [v2.10.3.13], not the master enable).  Round 1 worked
+around it by seeding `isEnabled()=true` on the late-bind seam, but the
+badge never followed PS-A toggles.  Now wired correctly.
+
+ctest: 366/366 PASS.  +9 new test cases (5 PsaIndicatorWidget psInfo()
+variants, 4 PureSignal psInfoChanged gate + applyBoardCapabilities side-
+effect tests).  No regressions.
+
+### Bench tester checklist (Round 2 verification)
+
+Connect to ANAN-G2 (Saturn).  Open Tools → PureSignal.
+
+1. **GetPk readout** in PsForm Calibration Information should show
+   **`0.6121`** (or whatever the per-board value is — 0.2899 for Orion-MkII,
+   0.233 for HL2, 0.4072 for legacy P1 — see BoardCapsTable Task 1 commit
+   1bbb85a).  Pre-Round-2 it stuck at `0.0`.
+2. **Click PS-A** in TxApplet: bottom-banner FB+PS pair turns **SeaGreen**
+   (idle, PS-A enabled, no MOX).  Pre-Round-2 it followed the master
+   `enabledChanged` instead of `autoCalEnabledChanged`, so the badge would
+   stick at SeaGreen permanently and not gray out on PS-A off.
+3. **Click 2-Tone** (engages MOX).  Banner FB color tracks
+   FeedbackColourLevel: Red <91, Yellow 91-128, Green 129-181, Blue >181.
+   Banner PS turns **Lime "Correcting"** when calcc reports
+   `info[14] == 1` (CorrectionsBeingApplied).  Pre-Round-2 the per-field
+   correctingChanged lambda mis-routed values: PS could show "Pure
+   Signal2"+SeaGreen even when correctionsApplied was true, and FB stayed
+   on the word "Feedback" instead of the numeric level.
+4. **FB numeric value**: while 2-Tone is running and calcc is iterating,
+   FB label should show the integer feedback level (e.g. `163`) and update
+   on every cal-attempt cycle (info[5] increments → calAttemptsChanged).
+   Pre-Round-2 it showed "Feedback" because the per-tick gate was missing.
+5. **Calibration Information group** (PsForm body): all six labels should
+   populate with non-zero values.  Pre-Round-2 they stayed at zeros
+   because the polling loop was driven but the gate to PSInfo was broken.
+6. **PsForm "Show 2Tone measurements" checkbox** + spectrum overlay:
+   open ~/.config/NereusSDR/NereusSDR.log (or run from terminal to see
+   stderr).  Look for lines like
+       `nereus.spectrum: IMD overlay gate: mox=true testIMD=true showImd=true duplex=true`.
+   When **all four** are `true` and the overlay still doesn't render, the
+   bug is in the data path (m_smoothed during MOX) — file follow-up issue
+   with the log lines attached.  When one of the four is `false`, the
+   diagnostic tells us which gate to chase.
+
+Spec-driven items NOT verified by ctest because they need calcc to be
+running:
+
+- The Lime "Correcting" badge transition only fires when calcc actually
+  asserts `info[14] == 1`.  Smoke-test by running 2-Tone for ~30 s; the
+  PS label should toggle Lime Correcting → SeaGreen Pure Signal2 as
+  calibration cycles through Setup → Collect → Calc → StayOn.
+- GetPk drift across Save/Restore — verify the 0.6121 value persists
+  after PS Save Corr, app restart, PS Restore Corr.
+
+---
+
+## What's done (original handoff text below)
 
 Phase 3M-4 PureSignal port. **15 task-commits + 1 bench-fix round** landed on
 branch `claude/wizardly-poitras-dbab75` (ahead of `main` by 18 commits).

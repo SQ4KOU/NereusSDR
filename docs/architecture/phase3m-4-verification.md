@@ -4,9 +4,35 @@
 > and [phase3m-4-puresignal-plan.md](phase3m-4-puresignal-plan.md).
 > Run on real hardware before merging the 3M-4 PR to main.
 
-**Status:** Drafted at end-of-epic (Task 15). Bench validation pending hardware
-access. All 14 PS-related test executables pass under `ctest`; full suite at
-366/366 PASS as of Task 15.
+**Status:** Round 2 bench-fix landed 2026-05-06 (Task 16, three commits
+404ade8 / 51afae6 / 10f0bc1).  All 14 PS-related test executables pass
+under `ctest`; full suite at 366/366 PASS post-Round-2.
+
+## Round 2 hot items
+
+Run these first — they target the five gaps from
+[phase3m-4-handoff-bench-debug.md](phase3m-4-handoff-bench-debug.md):
+
+- [ ] **GetPk readout** in PsForm Calibration Information shows the per-board
+      default (0.6121 ANAN-G2 / 0.2899 Orion-MkII / 0.233 HL2 / 0.4072 P1).
+      Pre-Round-2 stuck at 0.0.
+- [ ] **PS-A toggle** in TxApplet greys/un-greys the bottom-banner FB+PS
+      pair via `autoCalEnabledChanged` (was wired to `enabledChanged` in
+      Round 1, semantic mismatch — badge never followed PS-A).
+- [ ] **2-Tone TX** populates the PsForm Calibration Information group with
+      non-zero values (state, sln.chk, cor.cnt, dg.cnt, GetPk, SetPk,
+      feedbk).  Pre-Round-2 stuck at zeros.
+- [ ] **Banner FB numeric** updates on every cal-attempt cycle while 2-Tone
+      runs.  Pre-Round-2 stuck on the word "Feedback".
+- [ ] **Banner PS Lime "Correcting"** when calcc reports `info[14] == 1`.
+      Pre-Round-2 the per-field `correctingChanged` lambda mis-routed
+      values; PS could show "Pure Signal2" + SeaGreen even when
+      correctionsApplied was true.
+- [ ] **IMD overlay**: when 2-Tone is on AND "Show 2Tone measurements" is
+      checked AND MOX engaged, run app from terminal and watch for
+      `nereus.spectrum: IMD overlay gate: mox=N testIMD=N showImd=N
+      duplex=N` lines.  All four `true` + no overlay = data-path issue
+      (m_smoothed during MOX); file follow-up issue.
 
 ---
 
