@@ -445,8 +445,16 @@ set(CORE_SOURCES
 # NereusSDRVAX HAL plugin via POSIX shared memory. The header is
 # cross-platform-safe (falls through to error stubs off macOS) but the .cpp
 # pulls in <sys/mman.h> / shm_open, so only compile it on Apple targets.
+#
+# MacMicPermission — Objective-C++ helper that calls
+# AVCaptureDevice.requestAccessForMediaType:AVMediaTypeAudio at app launch so
+# macOS surfaces the microphone permission dialog deterministically (issue
+# #203). Without it, the prompt only fires as a side effect of opening a
+# hardware mic, which silently fails on Mac mini / Mac Studio rigs and on
+# machines whose only inputs are audio interfaces.
 if(APPLE)
     list(APPEND CORE_SOURCES src/core/audio/CoreAudioHalBus.cpp)
+    list(APPEND CORE_SOURCES src/core/MacMicPermission.mm)
 endif()
 
 # LinuxPipeBus — Linux-only IAudioBus implementation bridging to PulseAudio /
@@ -769,6 +777,12 @@ target_link_libraries(NereusSDRObjs PUBLIC
 if(WIN32)
     # Needed by RadioDiscovery.cpp's setsockopt() call for SO_BROADCAST.
     target_link_libraries(NereusSDR PRIVATE ws2_32)
+endif()
+
+if(APPLE)
+    # AVFoundation provides AVCaptureDevice for the launch-time mic-permission
+    # prompt (src/core/MacMicPermission.mm, issue #203).
+    target_link_libraries(NereusSDRObjs PUBLIC "-framework AVFoundation")
 endif()
 
 if(Qt6SerialPort_FOUND)

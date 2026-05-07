@@ -2,6 +2,7 @@
 #include "gui/styles/AppTheme.h"
 #include "core/AppSettings.h"
 #include "core/AudioDeviceConfig.h"
+#include "core/MacMicPermission.h"
 #include "core/RadioConnection.h"
 #include "core/mmio/ExternalVariableEngine.h"
 #include "core/LogCategories.h"
@@ -134,6 +135,12 @@ int main(int argc, char* argv[])
     app.setApplicationVersion(NEREUSSDR_VERSION);
     app.setOrganizationName("NereusSDR");
     app.setWindowIcon(QIcon(":/icons/NereusSDR.png"));
+
+    // Trigger the macOS microphone permission dialog deterministically
+    // (issue #203). The OS only prompts when something actually engages
+    // TCC; relying on PortAudio's CoreAudio backend to do so is unreliable
+    // on machines without a built-in mic, so call AVCaptureDevice directly.
+    NereusSDR::requestMicrophonePermission();
 
     // Re-parse properly so --help / --version / unknown options surface
     // via Qt's standard machinery. The earlyProfile pass above already
