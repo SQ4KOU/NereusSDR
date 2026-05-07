@@ -219,7 +219,13 @@ struct SaturnBpf1Edge {
 };
 
 struct BoardCapabilities {
-    HPSDRHW         board;
+    // Default-init to Unknown so PureSignal::m_caps (default-constructed
+    // BoardCapabilities) doesn't read uninitialized memory in the HL2
+    // clamp branch added by PR #212 codex-fix B.  Production code always
+    // overwrites this via applyBoardCapabilities() before the auto-att
+    // path runs; the default protects against test fixtures that skip
+    // the apply-caps call.
+    HPSDRHW         board{HPSDRHW::Unknown};
     ProtocolVersion protocol;
 
     int  adcCount;

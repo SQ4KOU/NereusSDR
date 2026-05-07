@@ -1134,28 +1134,81 @@ void PureSignal::autoAttentionTick()
 
         m_aaState = AutoAttenuateState::SetNewValues;
 
-        // From Thetis PSForm.cs:743-754 [v2.10.3.13]:
+        // From Thetis PSForm.cs:743-754 [v2.10.3.13] (legacy, non-HL2):
         //   if (puresignal.IsFeedbackLevelOK)  (FeedbackLevel <= 256)
         //       ddB = 20.0 * Math.Log10((double)puresignal.FeedbackLevel / 152.293);
         //   else
         //       ddB = 31.1;
         // Constants 152.293 + 31.1 are calcc-derived calibration anchors —
         // preserve verbatim per CLAUDE.md "Constants and Magic Numbers".
-        // Inline tag preserved: //[2.10.3.12]MW0LGE  [original from PSForm.cs:754]
+        //
+        // PR #212 codex-fix B: mi0bot PSForm.cs:744-769 [v2.10.3.13-beta2]
+        // splits the four clamp/fallback lines on HL2:
+        //   if (HPSDRModel.HERMESLITE != HardwareSpecific.Model)
+        //   {
+        //       if (Double.IsNaN(ddB)) ddB = 31.1;
+        //       if (ddB < -100.0) ddB = -100.0;
+        //       if (ddB > +100.0) ddB = +100.0;
+        //   }
+        //   else
+        //   {
+        //       if (Double.IsNaN(ddB)) ddB = 10.0;  // MI0BOT: Handle the Not A Number situation
+        //       if (ddB < -100.0) ddB = -10.0;      // MI0BOT: Handle - infinity
+        //       if (ddB > +100.0) ddB = 10.0;       // MI0BOT: Handle + infinity
+        //   }
+        //   ...
+        //   else  // !IsFeedbackLevelOK
+        //   {
+        //       if (HPSDRModel.HERMESLITE == HardwareSpecific.Model)
+        //           ddB = 10.0;
+        //       else
+        //           ddB = 31.1;
+        //   }
+        //
+        // The HL2 ATT range is signed [-28, +31] vs legacy unsigned [0, 31].
+        // A transient bad feedback reading on HL2 with the legacy ±100 clamp
+        // would slam ATT to the -28 floor instead of a -10 dB nudge.  The
+        // HL2 clamps keep deltaDb in a much tighter envelope so each cycle
+        // converges instead of flapping floor-to-ceiling.
+        //
+        // Inline tags preserved verbatim per CLAUDE.md "Inline comment
+        // preservation":
+        //   //[2.10.3.12]MW0LGE  [original from PSForm.cs:754]
+        //   //MI0BOT             [originals from mi0bot PSForm.cs:758-760, 766]
+        const bool isHl2 = (m_caps.board == HPSDRHW::HermesLite
+                            || m_caps.board == HPSDRHW::HermesLiteRxOnly);
         double ddB;
         if (fbLevel <= 256) {
-            // Guard log10(0) → -inf.  Thetis trusts the FB level to be
-            // non-zero when reaching this branch, but defensively clamp
-            // to 1 to avoid the divide-by-zero pathological case.
-            const int safeFb = (fbLevel < 1) ? 1 : fbLevel;
-            ddB = 20.0 * std::log10(static_cast<double>(safeFb) / 152.293);
-            if (std::isnan(ddB)) {
-                ddB = 31.1;
+            // Thetis casts the int through double directly:
+            //   ddB = 20.0 * Math.Log10((double)FeedbackLevel / 152.293);
+            // C# Math.Log10(0.0) returns -Infinity; C++ std::log10(0.0)
+            // likewise returns -infinity per IEEE 754.  The downstream
+            // `if (ddB < -100.0)` clamp is the actual sentinel-handler for
+            // that path — it's what fires the per-board fallback (-100 vs
+            // -10).  We must NOT clamp safeFb up to 1 here: that would
+            // mask the -inf path and prevent the HL2 -10 clamp from ever
+            // firing on real fbLevel=0 readings (a documented HL2 mode
+            // when calcc is mid-dropout).
+            ddB = 20.0 * std::log10(static_cast<double>(fbLevel) / 152.293);
+            if (!isHl2) {
+                if (std::isnan(ddB)) {
+                    ddB = 31.1;
+                }
+                if (ddB < -100.0) ddB = -100.0;
+                if (ddB > +100.0) ddB = +100.0;
+            } else {
+                if (std::isnan(ddB)) ddB = 10.0;  // MI0BOT: Handle the Not A Number situation
+                if (ddB < -100.0)    ddB = -10.0; // MI0BOT: Handle - infinity
+                if (ddB > +100.0)    ddB = 10.0;  // MI0BOT: Handle + infinity
             }
-            if (ddB < -100.0) ddB = -100.0;
-            if (ddB > +100.0) ddB = +100.0;
         } else {
-            ddB = 31.1;
+            // !IsFeedbackLevelOK (FeedbackLevel > 256) — mi0bot
+            // PSForm.cs:765-768 [v2.10.3.13-beta2]:
+            //   if (HPSDRModel.HERMESLITE == HardwareSpecific.Model)
+            //       ddB = 10.0;
+            //   else
+            //       ddB = 31.1;
+            ddB = isHl2 ? 10.0 : 31.1;
         }
         // From Thetis PSForm.cs:756 [v2.10.3.13] —
         //   _deltadB = (int)Math.Round(ddB, MidpointRounding.AwayFromZero);

@@ -848,6 +848,196 @@ private slots:
         QCOMPARE(tx.lastPSFeedbackRateForTest(), 192000);
     }
 
+    // ── PR #212 codex-fix B: HL2-specific deltaDb clamps in autoAttentionTick ─
+    //
+    // Inline tags preserved verbatim per CLAUDE.md "Inline comment
+    // preservation" within ±5 lines of upstream cite range:
+    //   //MW0LGE             [from mi0bot PSForm.cs:740 + 772 — surrounding the cite block]
+    //   //MI0BOT             [from mi0bot PSForm.cs:758-760, 766 — verbatim within block]
+    //
+    // From mi0bot PSForm.cs:744-769 [v2.10.3.13-beta2]:
+    //   double ddB;
+    //   if (puresignal.IsFeedbackLevelOK)
+    //   {
+    //       ddB = 20.0 * Math.Log10((double)puresignal.FeedbackLevel / 152.293);
+    //
+    //       if (HPSDRModel.HERMESLITE != HardwareSpecific.Model)
+    //       {
+    //           if (Double.IsNaN(ddB)) ddB = 31.1;
+    //           if (ddB < -100.0) ddB = -100.0;
+    //           if (ddB > +100.0) ddB = +100.0;
+    //       }
+    //       else
+    //       {
+    //           if (Double.IsNaN(ddB)) ddB = 10.0;  // MI0BOT
+    //           if (ddB < -100.0) ddB = -10.0;      // MI0BOT
+    //           if (ddB > +100.0) ddB = 10.0;       // MI0BOT
+    //       }
+    //   }
+    //   else
+    //   {
+    //       if (HPSDRModel.HERMESLITE == HardwareSpecific.Model)
+    //           ddB = 10.0;
+    //       else
+    //           ddB = 31.1;
+    //   }
+    //
+    // Pre-fix: NereusSDR used the legacy clamps universally; a transient
+    // bad feedback reading on HL2 slammed ATT to the -28 floor instead of
+    // a -10 dB nudge.  Post-fix: branch the four clamp/fallback lines on
+    // HL2 board membership.
+    //
+    // We OBSERVE deltaDb via the post-tick newAtten = oldAtten + deltaDb
+    // computation at SetNewValues (PSForm.cs:786-790, NereusSDR
+    // PureSignal.cpp:1208-1212).  oldAtten=0 + deltaDb=-100 → newAtten=-100
+    // (clamped to minAtt=-28 in HL2 case via the existing minAttenuation
+    // unification).  oldAtten=0 + deltaDb=-10 → newAtten=-10 (HL2 fix).
+
+    void autoAttentionTick_hl2ClampsMinusInfinityToMinusTen()
+    {
+        // HL2 board with fbLevel=0 (transient mid-dropout reading):
+        // Thetis (and our port) computes
+        //   ddB = 20 * log10(0/152.293) = 20 * log10(0) = -Infinity
+        // Legacy clamp:  if (ddB < -100.0) ddB = -100.0;
+        //   → newAtten = 0 + (-100) clamped to floor -28 = -28 (full slam).
+        // HL2 clamp:     if (ddB < -100.0) ddB = -10.0;     // MI0BOT
+        //   → newAtten = 0 + (-10) = -10 (gentle nudge).
+        //
+        // This is exactly the path mi0bot PSForm.cs:759 [v2.10.3.13-beta2]
+        // "Handle - infinity" describes — the -Infinity-from-log10(0)
+        // sentinel-handler, NOT a generic ddB-out-of-range clamp.
+        TxChannel tx(kTxChannelId);
+        StepAttenuatorController stepAtt;
+        MoxController mox;
+        PureSignal ps(nullptr, &tx, nullptr, &mox, &stepAtt, nullptr);
+
+        // Identify the board as HL2 BEFORE driving the tick — the clamp
+        // branch reads m_caps.board.
+        ps.applyBoardCapabilities(
+            BoardCapsTable::forBoard(HPSDRHW::HermesLite));
+
+        // HL2 floor at -28
+        stepAtt.setMinAttenuation(-28);
+        stepAtt.setAttOnTxValue(0);
+
+        ps.setEnabled(true);
+        ps.setAutoAttenuate(true);
+        ps.setTimersEnabled(false);
+        mox.setMox(true);
+
+        // Inject feedbackLevel=0 (calcc mid-dropout).  needRecal predicate
+        // requires fbLevel>181 OR (fbLevel<=128 && currentAtt > minAtt).
+        // currentAtt=0, minAtt=-28 → second clause fires.  calCount changed
+        // satisfies CalibrationAttemptsChanged.
+        int info[16] = {};
+        info[4] = 0;        // FeedbackLevel=0 → log10(0) = -Infinity
+        info[5] = 1;        // CalibrationCount changed
+        info[14] = 1;       // corrApplied
+        info[15] = 6;       // state
+        ps.processNewInfo(info);
+
+        ps.autoAttentionTick();   // Monitor → SetNewValues
+        QCOMPARE(static_cast<int>(ps.autoAttenuateState()),
+                 static_cast<int>(PureSignal::AutoAttenuateState::SetNewValues));
+
+        ps.autoAttentionTick();   // SetNewValues → applies newAtten
+
+        // HL2 post-fix: -Infinity clamped to -10 → newAtten = 0 + (-10) = -10.
+        // Pre-fix would have produced -28 (legacy -100 clamp hits the -28 floor).
+        QCOMPARE(stepAtt.attOnTxValue(), -10);
+    }
+
+    void autoAttentionTick_hl2ClampsNanFallbackToTen()
+    {
+        // From mi0bot PSForm.cs:765-768 [v2.10.3.13-beta2] —
+        // !IsFeedbackLevelOK branch (FeedbackLevel > 256):
+        //   if (HPSDRModel.HERMESLITE == HardwareSpecific.Model)
+        //       ddB = 10.0;
+        //   else
+        //       ddB = 31.1;
+        //
+        // HL2 with fbLevel=300 (>256, IsFeedbackLevelOK false) →
+        // ddB=10 (HL2 clamp), NOT 31.1 (legacy fallback).
+        //
+        // Note: needRecal predicate gate (`fbLevel > 181`) fires for
+        // fbLevel=300, so the tick advances.
+        TxChannel tx(kTxChannelId);
+        StepAttenuatorController stepAtt;
+        MoxController mox;
+        PureSignal ps(nullptr, &tx, nullptr, &mox, &stepAtt, nullptr);
+
+        ps.applyBoardCapabilities(
+            BoardCapsTable::forBoard(HPSDRHW::HermesLite));
+
+        stepAtt.setMinAttenuation(-28);
+        stepAtt.setAttOnTxValue(0);
+
+        ps.setEnabled(true);
+        ps.setAutoAttenuate(true);
+        ps.setTimersEnabled(false);
+        mox.setMox(true);
+
+        int info[16] = {};
+        info[4]  = 300;     // FeedbackLevel > 256 (IsFeedbackLevelOK false)
+        info[5]  = 1;       // calCount changed
+        info[14] = 1;
+        info[15] = 6;
+        ps.processNewInfo(info);
+
+        ps.autoAttentionTick();   // Monitor → SetNewValues
+        QCOMPARE(static_cast<int>(ps.autoAttenuateState()),
+                 static_cast<int>(PureSignal::AutoAttenuateState::SetNewValues));
+
+        ps.autoAttentionTick();   // SetNewValues → applies newAtten
+
+        // HL2 post-fix: ddB=10 → newAtten = 0 + 10 = 10.
+        // Pre-fix would have produced 0 + 31 = 31 (legacy fallback).
+        QCOMPARE(stepAtt.attOnTxValue(), 10);
+    }
+
+    void autoAttentionTick_legacyClampsMinusInfinityToMinus100()
+    {
+        // Sanity: non-HL2 boards keep the legacy ±100 clamp + 31.1 NaN/
+        // fallback.  fbLevel=0 → log10(0) = -Infinity → legacy clamp
+        // fires `if (ddB < -100.0) ddB = -100.0;` → deltaDb=-100.
+        // oldAtten=5 + deltaDb=-100 = -95, clamped to legacy floor 0
+        // (Saturn minAttenuation()=0).  This proves the legacy clamp
+        // branch is still reached and the HL2-only -10 clamp doesn't
+        // bleed across.
+        TxChannel tx(kTxChannelId);
+        StepAttenuatorController stepAtt;
+        MoxController mox;
+        PureSignal ps(nullptr, &tx, nullptr, &mox, &stepAtt, nullptr);
+
+        // Saturn = ANAN-G2 board → legacy clamp branch.
+        ps.applyBoardCapabilities(
+            BoardCapsTable::forBoard(HPSDRHW::Saturn));
+
+        // Legacy floor: 0 (default)
+        stepAtt.setAttOnTxValue(5);
+
+        ps.setEnabled(true);
+        ps.setAutoAttenuate(true);
+        ps.setTimersEnabled(false);
+        mox.setMox(true);
+
+        int info[16] = {};
+        info[4]  = 0;       // FeedbackLevel=0 → log10(0) = -Infinity
+        info[5]  = 1;
+        info[14] = 1;
+        info[15] = 6;
+        ps.processNewInfo(info);
+
+        ps.autoAttentionTick();   // Monitor → SetNewValues
+        QCOMPARE(static_cast<int>(ps.autoAttenuateState()),
+                 static_cast<int>(PureSignal::AutoAttenuateState::SetNewValues));
+
+        ps.autoAttentionTick();   // SetNewValues — clamps to floor=0
+
+        // 5 + (-100) = -95, clamped to legacy floor 0.
+        QCOMPARE(stepAtt.attOnTxValue(), 0);
+    }
+
 };
 
 // QTEST_GUILESS_MAIN constructs a QCoreApplication so the internal QTimers
