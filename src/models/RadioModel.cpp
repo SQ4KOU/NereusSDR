@@ -3158,6 +3158,32 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
         }
     }
 
+    // Phase 3M-4 Task 17 P1 follow-up: P1 mirror of the P2 block above.
+    //
+    // For P1 boards the PureSignal DDC routing lands in a mix of bank-byte
+    // updates rather than a single CmdRx — but the dispatch chain is the
+    // same: ReceiverManager::ddcConfigChanged →
+    // P1RadioConnection::applyPsDdcConfig writes m_adcCtrl / m_psNDdc /
+    // m_activeRxCount, then arms bank 0 + bank 4 flush flags so the new
+    // routing lands within ≤2 frames.
+    //
+    // Required for HL2 / Hermes / ANAN10 / ANAN100 (nddc=4 boards — DDC
+    // routing needs cntrl1=4 ADC steering during PS-MOX) and HermesII /
+    // ANAN10E / ANAN100B (nddc=2 boards — same plus the bank 2/3 freq
+    // override which fires off m_psNDdc + m_mox + m_puresignalRun).
+    if (auto* p1 = qobject_cast<NereusSDR::P1RadioConnection*>(m_connection)) {
+        connect(m_receiverManager, &ReceiverManager::ddcConfigChanged,
+                p1, &P1RadioConnection::applyPsDdcConfig,
+                Qt::QueuedConnection);
+
+        connect(p1, &P1RadioConnection::p1CodecChanged, this, [this, p1]() {
+            m_receiverManager->setP1Codec(p1->p1Codec());
+        });
+        if (auto* codec = p1->p1Codec()) {
+            m_receiverManager->setP1Codec(codec);
+        }
+    }
+
     // Step 2a: ReceiverManager → spectrum fork (main thread, fast).
     // Kept on the main thread so rawIqData → FFTEngine routing stays
     // unchanged. FFTEngine lives on its own SpectrumThread and the
