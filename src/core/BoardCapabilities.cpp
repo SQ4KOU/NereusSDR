@@ -617,7 +617,14 @@ const BoardCapabilities kOrionMKII = {
 // hasSidetoneGenerator: true — HL2 firmware implements sidetone
 //   (IoBoardHl2.cs references sidetone register)
 // maxReceivers: 4 for HL2 (console.cs GetDDC HermesLite branch:8734, same as Hermes)
-// Firmware: HL2 v72+ recommended (mi0bot Thetis-HL2 release notes)
+// Firmware floor: NONE — both ramdor and mi0bot accept any HL2 firmware version
+//   (NetworkIO.cs:136-143 [v2.10.3.13] guards only `HermesII && CodeVersion < 103`,
+//   no HL2 branch).  Therefore minFirmwareVersion=0 / knownGoodFirmware=0
+//   below are source-first correct: NereusSDR mirrors mi0bot by NOT enforcing
+//   a firmware floor for HL2.  External (non-source) HL2 community
+//   recommendations exist around mi0bot HL2 firmware versions but are
+//   intentionally not encoded here per the source-first rule — recommending
+//   versions the upstream doesn't enforce would be NereusSDR-original gating.
 //
 // Phase 3P-F Task 2 (accessories):
 //   hasApollo=false — HL2 is not in the RadioModelChanged() switch; no Apollo

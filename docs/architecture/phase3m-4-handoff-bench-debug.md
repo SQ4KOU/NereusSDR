@@ -218,7 +218,11 @@ ANAN-10, ANAN-100 (all nddc=4) and HermesII / ANAN-10E / ANAN-100B
 
 ### Bench tester checklist (P1 / HL2 PS validation)
 
-Connect to HL2 (mi0bot firmware ≥ v72).  Open Tools → PureSignal.
+Connect to HL2.  No firmware floor is enforced — both ramdor and mi0bot
+accept any HL2 firmware version (Thetis NetworkIO.cs:136-143 [v2.10.3.13]
+guards only `HermesII && CodeVersion < 103`, no HL2 branch).  Bench tester
+should record the actual HL2 firmware version they tested with for
+reproducibility.  Open Tools → PureSignal.
 
 1. **PS-A button visible** in TxApplet — pre-Task-17 it was hidden because
    `caps.hasPureSignal=false`.  Now visible per `kHermesLite.hasPureSignal=true`.
