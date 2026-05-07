@@ -136,24 +136,35 @@ with the mapping:
 | `_forceATTwhenPSAoff` | `m_forceAttWhenPsOff` |
 | `CWL || CWU` | `dspMode == DSPMode::CWL || DSPMode::CWU` |
 
-### Known Thetis-faithfulness gap (corner case)
+### Verbatim-port closure: PSForm.cs:738 (commit `6094024`)
 
-`PureSignal.cpp:1044` does NOT mirror Thetis PSForm.cs:738
-(`if (!console.ATTOnTX) AutoAttenuate = true; //MW0LGE`).  When the user
-has AutoAttenuate enabled in PsForm but ATT-on-TX disabled in Setup,
-Thetis self-heals by force-enabling the master toggle.  NereusSDR
-currently skips this — the user has to enable both manually.  Bench is
-converging without it because `m_attOnTxEnabled{true}` is the default;
-fix would be a one-liner in the Monitor branch:
+The previously documented gap (`if (!console.ATTOnTX) AutoAttenuate = true;`)
+is now ported verbatim in `PureSignal::autoAttentionTick`'s Monitor →
+SetNewValues transition.  When the ATT-on-TX master toggle is OFF on
+entry and the calcc cycle has advanced + needs recalibration, the tick
+force-enables the master toggle to mirror Thetis's
+`AutoAttenuate.setter → console.ATTOnTX = true` chain.  The setter is
+conditional (`if (!attOnTxEnabled())`) so it's a no-op when already ON,
+matching Thetis's silent-accept semantics at console.cs:19048.
 
-```cpp
-if (m_stepAtt && !m_stepAtt->attOnTxEnabled()) {
-    m_stepAtt->setAttOnTxEnabled(true);
-}
-```
+Two regression tests in `tst_puresignal_coordinator`:
 
-Filed as a follow-up rather than blocking ship since the corner case
-requires the user to actively misconfigure two related controls.
+- `autoAttentionTick_forceEnablesAttOnTxMaster` — precondition OFF →
+  tick advances to SetNewValues → postcondition ON.
+- `autoAttentionTick_leavesAttOnTxMasterAloneWhenAlreadyOn` — idempotent
+  when the toggle is already ON.
+
+With this commit, the SATT auto-attenuate path matches Thetis byte-for-
+byte across all six Thetis cite sites:
+
+| Thetis cite | NereusSDR mirror |
+| --- | --- |
+| PSForm.cs:728-784 timer2code | PureSignal::autoAttentionTick (Monitor → SetNewValues → RestoreOperation) |
+| PSForm.cs:735 `if (_autoattenuate && CalibrationAttemptsChanged && NeedToRecalibrate)` | m_autoAttenuate + m_aaLastSeenCalCount + needRecal predicate |
+| PSForm.cs:738 `if (!console.ATTOnTX) AutoAttenuate = true; //MW0LGE` | `m_stepAtt->setAttOnTxEnabled(true)` force-enable |
+| PSForm.cs:743-754 (deltaDb formula + IsFeedbackLevelOK) | `20.0 * std::log10(fbLevel / 152.293.0)` + `±100` clamp + `31.1` ceiling |
+| PSForm.cs:756 `Math.Round(ddB, MidpointRounding.AwayFromZero) //[2.10.3.12]MW0LGE` | `std::lround(ddB)` |
+| console.cs:29563-29566 force-31 predicate | StepAttenuatorController::shouldForce31Db |
 
 ---
 
