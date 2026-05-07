@@ -375,20 +375,37 @@ private slots:
         model.transmitModel().setPower(100);
         pump();
 
-        // Wire byte: same as §2 (~68; SWR factor does NOT affect it).
+        // Issue #202 deep-fix — SWR topology corrected to match Thetis.
+        //
+        // From Thetis NetworkIO.cs:201-211 [v2.10.3.13]:
+        //   int i = (int)(255 * f * _swr_protect);   // WIRE BYTE sees SWR.
+        // From Thetis cmaster.cs:1115-1119 [v2.10.3.13]:
+        //   double level = Audio.RadioVolume * Audio.HighSWRScale;
+        // where HighSWRScale is set to 1.0 once at console.cs:29194 and
+        // never reassigned in baseline Thetis — IQ side is no-op.  So
+        // the SWR factor multiplies the wire byte, NOT the IQ gain.
+        //
+        // For ANAN-8000D 80m @ 100W with swrProtect=0.5:
+        //   audio_volume ≈ 0.2639 (gbb=50.5; computeAudioVolume).
+        //   wire = int(0.2639 * 1.02 * 0.5 * 255) ≈ 34 (HALVED by SWR).
+        //   iqGain = audio_volume = 0.2639 (no SWR factor).
         QVERIFY(!conn->txDriveLog.isEmpty());
         const int wireByte = conn->txDriveLog.last();
-        QVERIFY2(wireByte >= 67 && wireByte <= 69,
-                 qPrintable(QStringLiteral("SWR foldback bled into wire byte: "
-                            "got %1, expected ~68. Topology violation — "
-                            "audio.cs:268 does NOT see SWR factor.")
+        QVERIFY2(wireByte >= 33 && wireByte <= 35,
+                 qPrintable(QStringLiteral("Wire byte %1 outside expected "
+                            "[~34] for ANAN-8000D 80m@100W with SWR=0.5. "
+                            "Thetis NetworkIO.cs:210 puts _swr_protect on "
+                            "the wire byte (audio.cs:268 -> SetOutputPower "
+                            "with the 1.02-scaled value).")
                             .arg(wireByte)));
 
-        // IQ gain: should be ~0.5 * audio_volume (~0.2639 * 0.5 = 0.1319).
+        // IQ gain: pure audio_volume per Thetis cmaster.cs:1117 with
+        // HighSWRScale=1.0 baseline (~0.2639).
         const double iqGain = txCh.lastFixedGainForTest();
-        QVERIFY2(iqGain > 0.12 && iqGain < 0.145,
+        QVERIFY2(iqGain > 0.25 && iqGain < 0.28,
                  qPrintable(QStringLiteral("IQ gain %1 outside expected "
-                            "[~0.13] for ANAN-8000D 80m@100W * SWR=0.5")
+                            "[~0.264] for ANAN-8000D 80m@100W (pure "
+                            "audio_volume; no SWR factor on IQ side).")
                             .arg(iqGain)));
 
         // Detach before scope-exit destroys the TxChannel.
