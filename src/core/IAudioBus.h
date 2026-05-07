@@ -42,6 +42,15 @@ public:
     // Consumer side (TX). Returns bytes read, or -1 on error. Audio-thread safe.
     virtual qint64 pull(char* data, qint64 maxBytes) = 0;
 
+    // Drop any samples queued in the bus's internal buffer that have been
+    // pushed but not yet consumed (or pulled but not yet read).  Used by
+    // AudioEngine::setMasterMuted to stop already-buffered pre-mute audio
+    // from draining out the speakers device after the mute click — see
+    // issue #201.  Default no-op for buses without an internal ring (HAL
+    // shm, PipeWire, FIFO).  PortAudioBus overrides to atomically equalize
+    // its ring read/write cursors.  Safe to call from any thread.
+    virtual void flush() {}
+
     // Metering (RMS of last block). 0.0–1.0. Published atomically for UI.
     virtual float rxLevel() const = 0;
     virtual float txLevel() const = 0;
