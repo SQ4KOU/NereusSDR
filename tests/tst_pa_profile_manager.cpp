@@ -480,8 +480,12 @@ private slots:
         const PaProfile* bypass = mgr.activeProfile();
         QVERIFY(bypass != nullptr);
         QCOMPARE(bypass->name(), QStringLiteral("Bypass"));
-        // Bypass row is all-100.0 sentinel.
-        QCOMPARE(bypass->getGainForBand(Band::Band20m), 100.0f);
+        // Issue #202 deep-fix: Bypass profile uses the Hermes 41.x dB row,
+        // matching Thetis setup.cs:23314 [v2.10.3.13] which constructs
+        // Bypass with HPSDRModel.FIRST → DefaultPAGainsForBands(FIRST) →
+        // FIRST/HERMES/HPSDR/ORIONMKII shared 41.x row at
+        // clsHardwareSpecific.cs:471-486 [v2.10.3.13].  20m gbb = 40.5 dB.
+        QCOMPARE(bypass->getGainForBand(Band::Band20m), 40.5f);
     }
 
     // Sanity: profileByName(unknown) returns nullptr.
@@ -491,6 +495,84 @@ private slots:
         mgr.setMacAddress(kMacA);
         mgr.load(HPSDRModel::ANAN8000D);
         QCOMPARE(mgr.profileByName(QStringLiteral("DoesNotExist")), nullptr);
+    }
+
+    // ── #202 deep-fix: userVisibleProfileNames combo filter ──────────────────
+    //
+    // Mirrors Thetis setup.cs:23341-23344 [v2.10.3.13]:
+    //   if ((p.IsDefault && p.Model == HardwareSpecific.Model) || !p.IsDefault)
+    //       comboPAProfile.Items.Add(p.ProfileName);
+    //
+    // The connected radio sees: exactly one factory `Default - <model>` row
+    // + every user-customised (non-default) profile.  All other
+    // `Default - *` rows are hidden so a user on a 7000DLE can't pick
+    // `Default - HERMES` (Hermes 41 dB row) and over-drive their ~50 dB PA.
+    void userVisibleProfileNames_filters_to_connected_model()
+    {
+        PaProfileManager mgr;
+        mgr.setMacAddress(kMacA);
+        mgr.load(HPSDRModel::ANAN8000D);
+
+        // Default behaviour: connected ANAN8000D + no Bypass-mode → only
+        // `Default - ANAN8000D` is visible.
+        const QStringList visible =
+            mgr.userVisibleProfileNames(HPSDRModel::ANAN8000D);
+        QCOMPARE(visible.size(), 1);
+        QCOMPARE(visible.first(), QStringLiteral("Default - ANAN8000D"));
+    }
+
+    void userVisibleProfileNames_includes_user_profiles()
+    {
+        PaProfileManager mgr;
+        mgr.setMacAddress(kMacA);
+        mgr.load(HPSDRModel::ANAN8000D);
+
+        // User saves a non-default profile.
+        PaProfile myProfile(QStringLiteral("MyTune"),
+                            HPSDRModel::ANAN8000D,
+                            /*isFactoryDefault=*/false);
+        mgr.saveProfile(QStringLiteral("MyTune"), myProfile);
+
+        const QStringList visible =
+            mgr.userVisibleProfileNames(HPSDRModel::ANAN8000D);
+        // Both `Default - ANAN8000D` and `MyTune` visible (sorted).
+        QCOMPARE(visible.size(), 2);
+        QVERIFY(visible.contains(QStringLiteral("Default - ANAN8000D")));
+        QVERIFY(visible.contains(QStringLiteral("MyTune")));
+    }
+
+    void userVisibleProfileNames_hides_other_model_defaults()
+    {
+        PaProfileManager mgr;
+        mgr.setMacAddress(kMacA);
+        mgr.load(HPSDRModel::ANAN8000D);
+
+        const QStringList visible =
+            mgr.userVisibleProfileNames(HPSDRModel::ANAN8000D);
+        // Hermes 41 dB row would over-drive an 8000DLE PA — must be hidden.
+        QVERIFY(!visible.contains(QStringLiteral("Default - HERMES")));
+        // ORIONMKII (also 41 dB) hidden too — defence in depth even though
+        // ORIONMKII is no longer auto-pickable per the
+        // HardwareProfile.cpp::defaultModelForBoard #202 fix.
+        QVERIFY(!visible.contains(QStringLiteral("Default - ORIONMKII")));
+    }
+
+    void userVisibleProfileNames_bypass_mode_shows_only_bypass()
+    {
+        PaProfileManager mgr;
+        mgr.setMacAddress(kMacA);
+        mgr.load(HPSDRModel::ANAN8000D);
+
+        // Mirrors Thetis setup.cs:23335-23339 [v2.10.3.13]:
+        //   if (sSelectProfile == _sPA_PROFILE_BYPASS) {
+        //       if (p.ProfileName == _sPA_PROFILE_BYPASS)
+        //           comboPAProfile.Items.Add(p.ProfileName);
+        //   }
+        const QStringList visible =
+            mgr.userVisibleProfileNames(HPSDRModel::ANAN8000D,
+                                         QStringLiteral("Bypass"));
+        QCOMPARE(visible.size(), 1);
+        QCOMPARE(visible.first(), QStringLiteral("Bypass"));
     }
 };
 
