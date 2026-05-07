@@ -455,6 +455,138 @@ private slots:
         PureSignal ps(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
         ps.setPsFeedbackChannel(nullptr);
     }
+
+    // ── Phase 3M-4 bench-fix Round 2: applyBoardCapabilities push ──────────
+
+    void applyBoardCapabilities_setsHwPeakFromCaps()
+    {
+        // From Thetis cmaster.cs:566 [v2.10.3.13-beta2] (mi0bot):
+        //   puresignal.SetPSHWPeak(txch, HardwareSpecific.PSDefaultPeak);
+        // Bench-fix Round 2 wired RadioModel's WDSP-init lambda to call
+        // PureSignal::applyBoardCapabilities so the per-board peak (e.g.
+        // 0.6121 for ANAN-G2) actually reaches calcc.  Verify the cached
+        // m_hwPeak side effect (the TxChannel::setPSHWPeak call is a
+        // pass-through to WDSP that's null-safe in test mode).
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+
+        BoardCapabilities caps{};
+        caps.psDefaultPeak = 0.6121;     // ANAN-G2 / Saturn (Task 1 1bbb85a)
+        caps.psSampleRate  = 192000;
+
+        ps.applyBoardCapabilities(caps);
+
+        QCOMPARE(ps.hwPeak(), 0.6121);
+    }
+
+    // ── Phase 3M-4 bench-fix Round 2: processNewInfo + psInfoChanged ───────
+
+    void processNewInfo_emitsPsInfoChanged_whenAutoCalAndInfoChanged()
+    {
+        // From Thetis PSForm.cs:614-619 timer1code [v2.10.3.13]:
+        //   if (_autocal_enabled)
+        //       if (puresignal.HasInfoChanged)
+        //           console.InfoBarFeedbackLevel(...);
+        // psInfoChanged is the NereusSDR analogue, gated identically.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+        ps.setAutoCalEnabled(true);
+        ps.setTimersEnabled(false);
+
+        QSignalSpy spy(&ps, &PureSignal::psInfoChanged);
+
+        // info[4] = FeedbackLevel = 150
+        // info[5] = CalibrationCount = 1 (was 0)
+        // info[14] = CorrectionsBeingApplied = 1
+        int info[16] = {};
+        info[4] = 150;
+        info[5] = 1;
+        info[14] = 1;
+        ps.processNewInfo(info);
+
+        QCOMPARE(spy.count(), 1);
+        const auto args = spy.takeFirst();
+        QCOMPARE(args.at(0).toInt(),  150);   // level
+        QCOMPARE(args.at(1).toBool(), true);  // ok (level <= 256)
+        QCOMPARE(args.at(2).toBool(), true);  // corrApplied
+        QCOMPARE(args.at(3).toBool(), true);  // calAttemptsChanged (1 != 0)
+        // colour for level=150 is Lime per PSForm.cs:1130 [v2.10.3.13]
+        QCOMPARE(args.at(4).value<QColor>(), QColor(0x00, 0xFF, 0x00));
+    }
+
+    void processNewInfo_doesNotEmit_whenAutoCalDisabled()
+    {
+        // Gate: m_autoCalEnabled gates the emit.  Default is false.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+        ps.setTimersEnabled(false);
+        // Do NOT call setAutoCalEnabled(true).
+
+        QSignalSpy spy(&ps, &PureSignal::psInfoChanged);
+
+        int info[16] = {};
+        info[4] = 150;
+        info[5] = 1;
+        info[14] = 1;
+        ps.processNewInfo(info);
+
+        QCOMPARE(spy.count(), 0);
+    }
+
+    void processNewInfo_doesNotEmit_whenInfoUnchanged()
+    {
+        // Gate: HasInfoChanged.  Calling processNewInfo twice with the
+        // same info[] array should only fire psInfoChanged on the first
+        // call (which is itself gated; second call sees newInfo == oldInfo
+        // because the trailing memcpy stashed it).
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+        ps.setAutoCalEnabled(true);
+        ps.setTimersEnabled(false);
+
+        int info[16] = {};
+        info[4] = 150;
+        info[5] = 1;
+        info[14] = 1;
+        ps.processNewInfo(info);   // first call, info changed (vs zeros)
+
+        QSignalSpy spy(&ps, &PureSignal::psInfoChanged);
+        ps.processNewInfo(info);   // second call, info unchanged
+        QCOMPARE(spy.count(), 0);
+    }
+
+    void processNewInfo_carriesCalAttemptsChangedCorrectly()
+    {
+        // From Thetis PSForm.cs:1097-1098 [v2.10.3.13]:
+        //   public static bool CalibrationAttemptsChanged
+        //     { get { return _info[5] != _oldInfo[5]; } }
+        // First call: info[5]=1 vs oldInfo[5]=0 → calChanged=true.
+        // Second call: info[5]=1 unchanged, info[4] flipped to trip
+        // HasInfoChanged → calChanged=false in payload.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+        ps.setAutoCalEnabled(true);
+        ps.setTimersEnabled(false);
+
+        int info1[16] = {};
+        info1[4] = 150;
+        info1[5] = 1;
+        info1[14] = 1;
+        ps.processNewInfo(info1);   // calChanged=true
+
+        QSignalSpy spy(&ps, &PureSignal::psInfoChanged);
+
+        int info2[16] = {};
+        info2[4] = 160;             // FeedbackLevel changed → HasInfoChanged
+        info2[5] = 1;               // CalibrationCount unchanged
+        info2[14] = 1;
+        ps.processNewInfo(info2);
+
+        QCOMPARE(spy.count(), 1);
+        const auto args = spy.takeFirst();
+        QCOMPARE(args.at(0).toInt(),  160);    // level
+        QCOMPARE(args.at(3).toBool(), false);  // calAttemptsChanged (1 == 1)
+    }
 };
 
 // QTEST_GUILESS_MAIN constructs a QCoreApplication so the internal QTimers

@@ -209,47 +209,50 @@ void PsaIndicatorWidget::wireToModel()
     }
     m_pureSignal = m_radioModel->pureSignal();
     if (m_pureSignal) {
-        // Primary state-driver signals.  These map 1:1 to the inputs of
-        // the 6-state machine.  When PureSignal::setEnabled() etc. fire,
-        // the widget redraws.
-        connect(m_pureSignal, &PureSignal::enabledChanged,
-                this, &PsaIndicatorWidget::setPsEnabled);
-        connect(m_pureSignal, &PureSignal::correctingChanged, this,
-                [this](bool on) {
-                    // PureSignal emits correctingChanged for both
-                    // CorrectionsBeingApplied and Correcting transitions
-                    // (Q_PROPERTY surface §92-93).  Push both into the
-                    // widget's state.
-                    setCorrectionsBeingApplied(
-                        m_pureSignal->correctionsBeingApplied());
-                    setCorrecting(on);
-                });
-        connect(m_pureSignal, &PureSignal::feedbackLevelChanged,
-                this, &PsaIndicatorWidget::setFeedbackLevel);
+        // Phase 3M-4 bench-fix Round 2: PSAEnabled in Thetis tracks
+        // PSForm.AutoCalEnabled, NOT the master enable.  From console.cs:
+        // 2280-2284 [v2.10.3.13]: `infoBar.PSAEnabled = psform.AutoCalEnabled;`.
+        // Round 1 wired this to enabledChanged which auto-fires true on
+        // ctor (PureSignal.cpp:98 [v2.10.3.13 port]) — that made the badge
+        // visible but at the wrong semantic layer.  The correct seam is
+        // autoCalEnabledChanged so the badge greys out when the user
+        // toggles PS-A off in TxApplet.
+        connect(m_pureSignal, &PureSignal::autoCalEnabledChanged,
+                this, &PsaIndicatorWidget::setPsEnabled,
+                Qt::UniqueConnection);
+
+        // Phase 3M-4 bench-fix Round 2: consolidated PSInfo dispatch.
+        // PureSignal::psInfoChanged fires only when (m_autoCalEnabled &&
+        // HasInfoChanged) per PSForm.cs:614-619 timer1code [v2.10.3.13]
+        // — exactly the gate Thetis uses before calling
+        // console.InfoBarFeedbackLevel.  All five fields arrive atomically,
+        // matching ucInfoBar.PSInfo() (ucInfoBar.cs:808-825 [v2.10.3.13]).
+        connect(m_pureSignal, &PureSignal::psInfoChanged,
+                this, &PsaIndicatorWidget::psInfo,
+                Qt::UniqueConnection);
+
+        // Out-of-band UI mirror state.  invertRedBlueChanged and
+        // hideFeedbackChanged update the badge colours and tooltip text
+        // independent of the polling cadence — keep these as direct
+        // subscriptions.  The previous per-field signals
+        // (correctingChanged / feedbackLevelChanged / calibrationCount-
+        // Changed) were dropped: psInfoChanged carries the same data
+        // atomically and avoids the lossy lambda that ping-ponged
+        // correctingChanged values into the wrong setters.
         connect(m_pureSignal, &PureSignal::invertRedBlueChanged,
-                this, &PsaIndicatorWidget::setInvertRedBlue);
+                this, &PsaIndicatorWidget::setInvertRedBlue,
+                Qt::UniqueConnection);
         connect(m_pureSignal, &PureSignal::hideFeedbackChanged,
-                this, &PsaIndicatorWidget::setHideFeedback);
-        connect(m_pureSignal, &PureSignal::calibrationCountChanged, this,
-                [this](int) {
-                    // From Thetis ucInfoBar.cs:812-823 [v2.10.3.13]:
-                    //   _bCalibrationAttemptsChanged drives whether
-                    //   FB shows numeric level (true) or "Feedback"
-                    //   (false).  Set on every PSInfo call when the
-                    //   cal-count delta is non-zero, reset by
-                    //   setPSboolsToFalse() on MOX-off / PS-off.
-                    m_calChangedSinceLastDraw = true;
-                    updateDisplay();
-                });
+                this, &PsaIndicatorWidget::setHideFeedback,
+                Qt::UniqueConnection);
 
         // Seed initial state from the coordinator (covers the case where
         // the widget is constructed mid-session, e.g. after reconnect).
-        m_psEnabled        = m_pureSignal->isEnabled();
+        m_psEnabled          = m_pureSignal->isAutoCalEnabled();
         m_correctionsApplied = m_pureSignal->correctionsBeingApplied();
-        m_correcting       = m_pureSignal->isCorrecting();
-        m_feedbackLevel    = m_pureSignal->feedbackLevel();
-        m_invertRedBlue    = m_pureSignal->invertRedBlue();
-        m_hideFeedback     = m_pureSignal->hideFeedback();
+        m_feedbackLevel      = m_pureSignal->feedbackLevel();
+        m_invertRedBlue      = m_pureSignal->invertRedBlue();
+        m_hideFeedback       = m_pureSignal->hideFeedback();
     }
 
     // MoxController for MOX state.  Routed via hardwareFlipped(bool isTx)
@@ -297,10 +300,11 @@ void PsaIndicatorWidget::setPsEnabled(bool on)
     if (!m_psEnabled) {
         // From Thetis ucInfoBar.cs:832-833 [v2.10.3.13]:
         //   if (!_psEnabled) setPSboolsToFalse();
-        // Reset all PS-derived flags so a future PSAEnabled=true
-        // starts from a clean slate.
+        // setPSboolsToFalse (ucInfoBar.cs:562-567 [v2.10.3.13]) clears
+        // _bCalibrationAttemptsChanged + _bCorrectionsBeingApplied +
+        // _bFeedbackLevelOk.  m_correcting was a NereusSDR-only field
+        // dropped in Round 2.
         m_correctionsApplied      = false;
-        m_correcting              = false;
         m_calChangedSinceLastDraw = false;
     }
     updateDisplay();
@@ -316,7 +320,6 @@ void PsaIndicatorWidget::setMox(bool on)
     //   if (!_mox) setPSboolsToFalse();
     if (!m_mox) {
         m_correctionsApplied      = false;
-        m_correcting              = false;
         m_calChangedSinceLastDraw = false;
     }
     updateDisplay();
@@ -331,26 +334,71 @@ void PsaIndicatorWidget::setCorrectionsBeingApplied(bool on)
     updateDisplay();
 }
 
-void PsaIndicatorWidget::setCorrecting(bool on)
-{
-    if (on == m_correcting) {
-        return;
-    }
-    m_correcting = on;
-    updateDisplay();
-}
-
 void PsaIndicatorWidget::setFeedbackLevel(int level)
 {
+    // Phase 3M-4 bench-fix Round 2: setFeedbackLevel only stores the
+    // numeric value and refreshes the colour through computeFeedbackColour().
+    // The FB label "Feedback" → numeric flip is now driven exclusively by
+    // psInfo()'s calibrationAttemptsChanged path (matches Thetis
+    // ucInfoBar.cs:812-823 [v2.10.3.13] PSInfo body — _bCalibration-
+    // AttemptsChanged is set per-call from a parameter, not bumped from
+    // level changes).
     if (level == m_feedbackLevel) {
         return;
     }
     m_feedbackLevel = level;
-    // From Thetis ucInfoBar.cs:812 [v2.10.3.13] — every PSInfo call
-    // bumps _bCalibrationAttemptsChanged.  Mirror that here so the
-    // FB label flips from "Feedback" to numeric on first reading.
-    m_calChangedSinceLastDraw = true;
     updateDisplay();
+}
+
+void PsaIndicatorWidget::psInfo(int level, bool feedbackLevelOk,
+                                 bool correctionsApplied,
+                                 bool calibrationAttemptsChanged,
+                                 const QColor& feedbackColour)
+{
+    // From Thetis ucInfoBar.cs:808-825 PSInfo() [v2.10.3.13]:
+    //   public void PSInfo(int level, bool bFeedbackLevelOk,
+    //                      bool bCorrectionsBeingApplied,
+    //                      bool bCalibrationAttemptsChanged,
+    //                      Color feedbackColour)
+    //   {
+    //       if (_shutDown) return;
+    //       _bCalibrationAttemptsChanged = bCalibrationAttemptsChanged;
+    //       if (_bCalibrationAttemptsChanged && _mox) {
+    //           _nFeedbackLevel = level;
+    //           _feedbackColour = feedbackColour;
+    //           _bCorrectionsBeingApplied = bCorrectionsBeingApplied;
+    //           _bFeedbackLevelOk = bFeedbackLevelOk;
+    //           updatePSDisplay();
+    //           _psTimer.Start();
+    //       }
+    //   }
+    //
+    // Two parameters Thetis stores but updatePSDisplay() does not read:
+    //   - _bFeedbackLevelOk: kept for API parity, no widget effect.
+    //   - _feedbackColour:  Thetis's updatePSDisplay applies this
+    //     directly to lblFB.BackColor.  NereusSDR derives the colour
+    //     locally via computeFeedbackColour() from m_feedbackLevel +
+    //     m_invertRedBlue and the two agree by construction (the
+    //     coordinator emits the colour computed from its own
+    //     m_invertRedBlue, and the widget subscribes to
+    //     invertRedBlueChanged so they stay synchronised).  Accepting
+    //     the parameter for byte-for-byte signature parity.
+    //
+    // The fade timer (_psTimer) that gradually dims lblFB.BackColor
+    // between PSInfo() calls is intentionally deferred — colour stays
+    // sticky until the next psInfo() with calChanged=true OR a state
+    // change (setMox / setPsEnabled).  Track as a UX follow-up if bench
+    // shows the fade is needed.
+    Q_UNUSED(feedbackLevelOk);
+    Q_UNUSED(feedbackColour);
+
+    m_calChangedSinceLastDraw = calibrationAttemptsChanged;
+
+    if (m_calChangedSinceLastDraw && m_mox) {
+        m_feedbackLevel      = level;
+        m_correctionsApplied = correctionsApplied;
+        updateDisplay();
+    }
 }
 
 void PsaIndicatorWidget::setInvertRedBlue(bool on)
@@ -490,26 +538,26 @@ void PsaIndicatorWidget::updateDisplay()
     }
 
     if (m_mox) {
+        // From Thetis ucInfoBar.cs:856-865 updatePSDisplay [v2.10.3.13]:
+        //   if (_bCorrectionsBeingApplied) {
+        //       lblPS.Text = _useSmallFonts ? "Correct" : "Correcting";
+        //       lblPS.BackColor = Lime;
+        //   } else {
+        //       lblPS.Text = "Pure Signal2";
+        //       lblPS.BackColor = SeaGreen;
+        //   }
+        // The Lime/SeaGreen split is decided purely by
+        // _bCorrectionsBeingApplied — Thetis has no separate "Correcting"
+        // sub-flag.  Phase 3M-4 bench-fix Round 2 dropped NereusSDR's
+        // earlier nested m_correcting branch (a phantom flag that mirrored
+        // the puresignal helper's `Correcting` derived property at
+        // PSForm.cs:1106-1108 [v2.10.3.13], but that property is consumed
+        // by PSForm.timer1code's PSInfo CO indicator at PSForm.cs:577-585
+        // — NOT by ucInfoBar.PSInfo).
         if (m_correctionsApplied) {
-            // From Thetis ucInfoBar.cs:856-865 [v2.10.3.13] — note that
-            // _bCorrectionsBeingApplied gates the Lime/SeaGreen split.
-            // Within that branch, the inner Correcting? toggle does NOT
-            // appear in Thetis — Thetis maps "corrections applied AND
-            // not just-finished-cal" to Lime "Correcting".  Track our
-            // m_correcting separately so test expectations align with
-            // the design doc (correcting=true → Lime; corrections-
-            // applied-but-not-correcting → SeaGreen).  Behavior matches
-            // Thetis's runtime: in Thetis, _bCorrectionsBeingApplied is
-            // only set while feedback is active, so the two flags
-            // co-vary.
-            if (m_correcting) {
-                m_lblPs->setText(m_useSmallFonts ? tr("Correct")
-                                                 : tr("Correcting"));
-                applyBackground(m_lblPs, kLime());
-            } else {
-                m_lblPs->setText(tr("Pure Signal2"));
-                applyBackground(m_lblPs, kSeaGreen());
-            }
+            m_lblPs->setText(m_useSmallFonts ? tr("Correct")
+                                             : tr("Correcting"));
+            applyBackground(m_lblPs, kLime());
         } else {
             m_lblPs->setText(tr("Pure Signal2"));
             applyBackground(m_lblPs, kSeaGreen());

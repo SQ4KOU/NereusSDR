@@ -154,10 +154,22 @@ public:
     void setPsEnabled(bool on);
     void setMox(bool on);
     void setCorrectionsBeingApplied(bool on);
-    void setCorrecting(bool on);
     void setFeedbackLevel(int level);     // 0..255
     void setInvertRedBlue(bool on);
     void setHideFeedback(bool on);
+
+    // Phase 3M-4 bench-fix Round 2: byte-for-byte port of Thetis
+    // ucInfoBar.PSInfo (ucInfoBar.cs:808-825 [v2.10.3.13]).  Updates all 5
+    // UI state fields atomically and gates the redraw on
+    // (calibrationAttemptsChanged && m_mox).  Wired in wireToModel() to
+    // PureSignal::psInfoChanged which itself fires only when the coordinator
+    // has m_autoCalEnabled true and HasInfoChanged true (PSForm.cs:614-619
+    // [v2.10.3.13]).  Tests drive this slot directly to exercise the
+    // 6-state machine without spinning up a coordinator.
+    void psInfo(int level, bool feedbackLevelOk,
+                bool correctionsApplied,
+                bool calibrationAttemptsChanged,
+                const QColor& feedbackColour);
 
     // From Thetis ucInfoBar.cs:1236-1243 [v2.10.3.13] —
     // _useSmallFonts toggle.  Compact "FB"/"Correct" vs full
@@ -217,11 +229,20 @@ private:
     QLabel* m_lblFb{nullptr};
     QLabel* m_lblPs{nullptr};
 
-    // State (mirrors ucInfoBar.cs members from line 802-806 + 1186)
+    // State (mirrors ucInfoBar.cs members from lines 802-806 + 1186
+    // [v2.10.3.13]).  Phase 3M-4 bench-fix Round 2 dropped the
+    // NereusSDR-only `m_correcting` field — Thetis ucInfoBar has only
+    // 5 PS state fields and the Lime/SeaGreen split is decided purely
+    // by `_bCorrectionsBeingApplied` (ucInfoBar.cs:856-865 [v2.10.3.13]).
+    // The FB-label background colour is recomputed locally from
+    // m_feedbackLevel + m_invertRedBlue via computeFeedbackColour();
+    // psInfo()'s `feedbackColour` parameter is accepted for API parity
+    // but not stored (the local computation matches the coordinator's
+    // emit by construction — both use the same PSForm.cs:1123-1138
+    // [v2.10.3.13] formula).
     bool m_psEnabled{false};
     bool m_mox{false};
     bool m_correctionsApplied{false};
-    bool m_correcting{false};
     bool m_calChangedSinceLastDraw{false};
     int  m_feedbackLevel{0};
     bool m_invertRedBlue{false};

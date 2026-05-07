@@ -125,43 +125,55 @@ private slots:
     void psOnTxNumericFeedback_showsLevelAsString()
     {
         // Source: ucInfoBar.cs:877-880 [v2.10.3.13] — numeric path.
+        // Phase 3M-4 bench-fix Round 2: m_calChangedSinceLastDraw is now
+        // driven exclusively by psInfo()'s calibrationAttemptsChanged
+        // parameter (matches Thetis ucInfoBar.cs:812 [v2.10.3.13] PSInfo
+        // body — the flag was previously bumped on every setFeedbackLevel
+        // call, which was a NereusSDR-only deviation that the bench user
+        // tripped on when the FB label showed "Feedback" instead of the
+        // numeric value).  Tests now drive the slot directly.
         PsaIndicatorWidget w(nullptr);
         w.setPsEnabled(true);
         w.setMox(true);
         w.setHideFeedback(false);
-        w.setFeedbackLevel(163);
+        w.psInfo(/*level=*/163, /*ok=*/true, /*corrApp=*/true,
+                 /*calChanged=*/true, kLime);
         QCOMPARE(w.fbText(), QStringLiteral("163"));
     }
 
-    // ── State 5: TX + corrections-applied + correcting → PS Lime "Correcting" ─
+    // ── State 5: TX + corrections-applied → PS Lime "Correcting" ────────────
 
     void psOnTxCorrecting_showsLimeAndCorrectingText()
     {
-        // Source: ucInfoBar.cs:856-860 [v2.10.3.13] — _bCorrectionsBeingApplied
-        // branch; widget extends with m_correcting toggle so PS label flips
-        // between Lime "Correcting" and SeaGreen "Pure Signal2" per design
-        // doc §4.1.
+        // Source: ucInfoBar.cs:856-860 updatePSDisplay [v2.10.3.13]:
+        //   if (_bCorrectionsBeingApplied) {
+        //       lblPS.Text = "Correcting"; lblPS.BackColor = Lime;
+        //   }
+        // Phase 3M-4 bench-fix Round 2: dropped the NereusSDR-only
+        // m_correcting nested branch.  Lime/SeaGreen split is decided
+        // purely by m_correctionsApplied per upstream byte-for-byte.
         PsaIndicatorWidget w(nullptr);
         w.setPsEnabled(true);
         w.setMox(true);
         w.setCorrectionsBeingApplied(true);
-        w.setCorrecting(true);
         w.setFeedbackLevel(150);
         QCOMPARE(w.psText(), QStringLiteral("Correcting"));
         QCOMPARE(w.psBackgroundColor(), kLime);
     }
 
-    // ── State 6: TX + corrections-applied, NOT correcting → SeaGreen "Pure Signal2" ─
+    // ── State 6: TX + NOT corrections-applied → SeaGreen "Pure Signal2" ─────
 
-    void psOnTxCorrectionsAppliedNotCorrecting_showsSeaGreen()
+    void psOnTxCorrectionsAppliedFalse_showsSeaGreen()
     {
-        // Source: ucInfoBar.cs:861-865 [v2.10.3.13] — !_bCorrectionsBeingApplied
-        // inner branch.
+        // Source: ucInfoBar.cs:861-865 updatePSDisplay [v2.10.3.13] —
+        // !_bCorrectionsBeingApplied else branch.  When the calcc engine is
+        // not actively applying corrections (info[14] == 0 per
+        // PSForm.cs:1100-1102 [v2.10.3.13] CorrectionsBeingApplied), the
+        // PS label drops back to the SeaGreen "Pure Signal2" idle look.
         PsaIndicatorWidget w(nullptr);
         w.setPsEnabled(true);
         w.setMox(true);
-        w.setCorrectionsBeingApplied(true);
-        w.setCorrecting(false);
+        w.setCorrectionsBeingApplied(false);
         QCOMPARE(w.psText(), QStringLiteral("Pure Signal2"));
         QCOMPARE(w.psBackgroundColor(), kSeaGreen);
     }
@@ -293,7 +305,6 @@ private slots:
         w.setPsEnabled(true);
         w.setMox(true);
         w.setCorrectionsBeingApplied(true);
-        w.setCorrecting(true);
         w.setUseSmallFonts(true);
         QCOMPARE(w.psText(), QStringLiteral("Correct"));
     }
@@ -338,6 +349,113 @@ private slots:
         QLabel* fb = w.findChild<QLabel*>(QStringLiteral("lblFB"));
         QVERIFY(fb != nullptr);
         QVERIFY(fb->toolTip().startsWith(QStringLiteral("Showing level, ")));
+    }
+
+    // ── Phase 3M-4 bench-fix Round 2: psInfo() consolidated slot ───────────
+
+    void psInfo_withMoxAndCalChanged_showsNumericFeedbackAndLime()
+    {
+        // Source: ucInfoBar.cs:808-825 PSInfo() [v2.10.3.13].
+        // calibrationAttemptsChanged && _mox is the gate that pushes all
+        // 5 fields into the widget.  After this call:
+        //   _nFeedbackLevel = 150
+        //   _bCorrectionsBeingApplied = true
+        //   _bCalibrationAttemptsChanged = true
+        // updatePSDisplay then renders the numeric path:
+        //   PS  → Lime "Correcting"
+        //   FB  → 150 (numeric since !_hideFeedback && _bCalibrationAttempts)
+        PsaIndicatorWidget w(nullptr);
+        w.setPsEnabled(true);
+        w.setMox(true);
+        w.psInfo(/*level=*/150, /*ok=*/true, /*corrApp=*/true,
+                 /*calChanged=*/true, kLime);
+        QCOMPARE(w.fbText(), QStringLiteral("150"));
+        QCOMPARE(w.psText(), QStringLiteral("Correcting"));
+        QCOMPARE(w.psBackgroundColor(), kLime);
+    }
+
+    void psInfo_withMoxAndCalChangedFalse_doesNotUpdateFields()
+    {
+        // Source: ucInfoBar.cs:814 [v2.10.3.13]:
+        //   if (_bCalibrationAttemptsChanged && _mox) { ... updatePSDisplay(); }
+        // When calChanged is false, the inner block is skipped entirely —
+        // _nFeedbackLevel + _bCorrectionsBeingApplied stay at their prior
+        // values.  We verify by seeding state via a calChanged=true call,
+        // then checking that calChanged=false leaves the fields untouched.
+        PsaIndicatorWidget w(nullptr);
+        w.setPsEnabled(true);
+        w.setMox(true);
+        w.psInfo(150, true, true, true, kLime);    // seed state
+        QCOMPARE(w.fbText(), QStringLiteral("150"));
+        QCOMPARE(w.psText(), QStringLiteral("Correcting"));
+
+        // Second call with calChanged=false: the `if (calChanged && mox)`
+        // gate fails, so _nFeedbackLevel + _bCorrectionsBeingApplied keep
+        // their prior values and updatePSDisplay() is NOT called.  The
+        // sticky state survives.
+        w.psInfo(50, true, false, false, kRed);
+        QCOMPARE(w.fbText(), QStringLiteral("150"));   // sticky
+        QCOMPARE(w.psText(), QStringLiteral("Correcting")); // sticky
+    }
+
+    void psInfo_withoutMox_doesNotUpdateFields()
+    {
+        // Source: ucInfoBar.cs:814 [v2.10.3.13] — `&& _mox` half of the
+        // gate.  PSInfo() always sets _bCalibrationAttemptsChanged but
+        // only consumes the rest when _mox is true.  Verify by calling
+        // psInfo() before setMox(true) is issued.
+        PsaIndicatorWidget w(nullptr);
+        w.setPsEnabled(true);
+        // m_mox stays at default (false)
+        w.psInfo(150, true, true, true, kLime);
+        QCOMPARE(w.psText(), QStringLiteral("Pure Signal2")); // !_mox branch
+        QCOMPARE(w.psBackgroundColor(), kSeaGreen);
+        // FB also takes the !_mox branch
+        QCOMPARE(w.fbText(), QStringLiteral("Feedback"));
+        QCOMPARE(w.fbBackgroundColor(), kSeaGreen);
+    }
+
+    void psInfo_withCorrectionsAppliedFalse_showsSeaGreen()
+    {
+        // Source: ucInfoBar.cs:861-865 [v2.10.3.13] — _bCorrectionsBeingApplied
+        // false branch.  Even with calChanged=true and mox=true, the PS
+        // label drops to SeaGreen "Pure Signal2" when the calcc engine is
+        // not actively applying corrections (info[14] == 0).
+        PsaIndicatorWidget w(nullptr);
+        w.setPsEnabled(true);
+        w.setMox(true);
+        w.psInfo(150, true, /*corrApplied=*/false, true, kLime);
+        QCOMPARE(w.psText(), QStringLiteral("Pure Signal2"));
+        QCOMPARE(w.psBackgroundColor(), kSeaGreen);
+        // FB still shows numeric (calChanged=true && !hideFeedback)
+        QCOMPARE(w.fbText(), QStringLiteral("150"));
+    }
+
+    void psInfo_setMoxFalse_clearsCalibrationAttemptsChanged()
+    {
+        // Source: ucInfoBar.cs:554-567 [v2.10.3.13] OnMoxChangeHandler.
+        // When MOX flips off, setPSboolsToFalse() clears
+        // _bCalibrationAttemptsChanged + _bCorrectionsBeingApplied +
+        // _bFeedbackLevelOk.  After MOX flips back on, the FB label
+        // correctly shows "Feedback" until a fresh psInfo() with
+        // calChanged=true arrives — this is the path that prevents stale
+        // numeric values from re-appearing post-MOX-cycle.
+        PsaIndicatorWidget w(nullptr);
+        w.setPsEnabled(true);
+        w.setMox(true);
+        w.psInfo(/*level=*/150, /*ok=*/true, /*corrApp=*/true,
+                 /*calChanged=*/true, kLime);
+        QCOMPARE(w.fbText(), QStringLiteral("150"));     // numeric
+
+        w.setMox(false);
+        // !_mox branch (ucInfoBar.cs:882-897 [v2.10.3.13]) always sets
+        // lblFB.Text to "Feedback" regardless of stale state.
+        QCOMPARE(w.fbText(), QStringLiteral("Feedback"));
+
+        w.setMox(true);
+        // Cal-attempts-changed was reset by setPSboolsToFalse on the MOX
+        // edge.  No fresh psInfo() yet → numeric path is gated off.
+        QCOMPARE(w.fbText(), QStringLiteral("Feedback"));
     }
 };
 

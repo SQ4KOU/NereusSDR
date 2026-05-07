@@ -365,6 +365,14 @@ public:
     // setTimersEnabled(false) and drive the ticks manually.
     void setTimersEnabled(bool on);
 
+    // Test seam — pollTimerTick() reads info[] from m_tx->getPSInfo().
+    // Tests bypass that read by passing a synthetic info[] directly into
+    // processNewInfo().  Mirrors the Thetis split where the coordinator
+    // could in principle be tested with a stubbed GetInfo (PSForm.cs:1076-
+    // 1085 [v2.10.3.13] — GetInfo is the only call that touches WDSP, the
+    // rest of timer1code operates on the cached _info / _oldInfo arrays).
+    void processNewInfo(const int newInfo[16]);
+
 public slots:
     void onMoxChanged(bool mox);
     void pollTimerTick();        // PSForm.cs:555-728 [v2.10.3.13] timer1code
@@ -404,6 +412,24 @@ signals:
     void calStateChanged(int engineState);
     void correctionPeakChanged(double peak);
     void feedbackActiveChanged(bool active);
+
+    // ── Phase 3M-4 bench-fix Round 2: consolidated PSInfo dispatch ────────
+    //
+    // psInfoChanged carries the same 5 fields that Thetis's
+    // ucInfoBar.PSInfo(int level, bool ok, bool corrApplied, bool calChanged,
+    // Color colour) takes (ucInfoBar.cs:808-825 [v2.10.3.13]).  Per Thetis
+    // PSForm.cs:614-619 [v2.10.3.13] timer1code:
+    //   if (_autocal_enabled)
+    //       if (puresignal.HasInfoChanged)
+    //           console.InfoBarFeedbackLevel(...);   // → ucInfoBar.PSInfo
+    // The signal is emitted only when BOTH gates pass, so subscribers
+    // (PsaIndicatorWidget) get the atomic 5-field bundle the way
+    // ucInfoBar.PSInfo expects.  Per-field signals above stay live for
+    // PsForm and PureSignalApplet which use them differently.
+    void psInfoChanged(int level, bool feedbackLevelOk,
+                       bool correctionsBeingApplied,
+                       bool calibrationAttemptsChanged,
+                       const QColor& feedbackColour);
 
     // ── Calibration option change signals (Task 8) ─────────────────────────
     void pinModeChanged(bool);

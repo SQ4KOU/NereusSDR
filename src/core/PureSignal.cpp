@@ -631,6 +631,31 @@ bool PureSignal::hasInfoChanged(const int* current16) const
 
 void PureSignal::pollTimerTick()
 {
+    // Phase 3M-4 bench-fix Round 2: thin wrapper.  Reads the info[]
+    // vector from WDSP via TxChannel::getPSInfo, then dispatches to
+    // processNewInfo() which holds change detection, signal emission,
+    // and the cmd-state machine.  Tests bypass the WDSP read by calling
+    // processNewInfo() directly with a synthetic info[] buffer.
+    if (!m_enabled) {
+        return;
+    }
+    if (!m_tx) {
+        return;
+    }
+    // Step 1: snapshot old info, read new info.  From Thetis PSForm.cs:
+    // 1077-1085 GetInfo [v2.10.3.13]:
+    //   fixed (void* dest = &_oldInfo[0])
+    //   fixed (void* src  = &_info[0])
+    //     Win32.memcpy(dest, src, 16 * sizeof(int));
+    //   fixed (int* ptr = &(_info[0]))
+    //     GetPSInfo(txachannel, ptr);
+    int newInfo[16] = {};
+    m_tx->getPSInfo(newInfo);
+    processNewInfo(newInfo);
+}
+
+void PureSignal::processNewInfo(const int newInfo[16])
+{
     // From Thetis PSForm.cs:555-728 timer1code [v2.10.3.13].  Skeleton:
     //   1) puresignal.GetInfo(_txachannel)  — copies _info → _oldInfo,
     //      then GetPSInfo into _info.
@@ -642,29 +667,20 @@ void PureSignal::pollTimerTick()
     //
     // NereusSDR splits the UI updates out (Q_PROPERTY + signals) but the
     // info[] read + flag derivation + cmd-state machine port verbatim.
-    if (!m_enabled) {
-        return;
-    }
-
-    if (!m_tx) {
-        return;
-    }
-
-    // Step 1: snapshot old info, read new info.  From Thetis PSForm.cs:
-    // 1077-1085 GetInfo [v2.10.3.13]:
-    //   fixed (void* dest = &_oldInfo[0])
-    //   fixed (void* src  = &_info[0])
-    //     Win32.memcpy(dest, src, 16 * sizeof(int));
-    //   fixed (int* ptr = &(_info[0]))
-    //     GetPSInfo(txachannel, ptr);
-    int newInfo[16] = {};
-    m_tx->getPSInfo(newInfo);
 
     // Step 2: HasInfoChanged check.  Per Thetis PSForm.cs:1086-1095, the
     // check compares _info vs _oldInfo BEFORE the GetInfo memcpy/GetPSInfo
     // overwrite.  Here we already have the new values in newInfo and the
     // previous in m_oldInfo, so the comparison is the same.
     const bool changed = hasInfoChanged(newInfo);
+
+    // From Thetis PSForm.cs:1097-1098 CalibrationAttemptsChanged
+    // [v2.10.3.13]:
+    //   public static bool CalibrationAttemptsChanged
+    //     { get { return _info[5] != _oldInfo[5]; } }
+    // Compute BEFORE the trailing memcpy at the end of this function
+    // overwrites m_oldInfo with newInfo for the next tick.
+    const bool calAttemptsChanged = (newInfo[5] != m_oldInfo[5]);
 
     if (changed) {
         // Mirror the field assignments from PSForm.cs:561-573 [v2.10.3.13]:
@@ -713,6 +729,32 @@ void PureSignal::pollTimerTick()
     // PsaIndicatorWidget + Task 8 PsForm.  The colour value itself is
     // available via feedbackColour() / feedbackColourChanged.
 
+    // ── Phase 3M-4 bench-fix Round 2: consolidated PSInfo dispatch ────────
+    //
+    // From Thetis PSForm.cs:614-619 timer1code [v2.10.3.13]:
+    //   if (_autocal_enabled)
+    //   {
+    //       if (puresignal.HasInfoChanged)
+    //           console.InfoBarFeedbackLevel(
+    //               puresignal.FeedbackLevel,
+    //               puresignal.IsFeedbackLevelOK,
+    //               puresignal.CorrectionsBeingApplied,
+    //               puresignal.CalibrationAttemptsChanged,
+    //               puresignal.FeedbackColourLevel);
+    //   }
+    // Fan-out goes through console.InfoBarFeedbackLevel → infoBar.PSInfo
+    // (console.cs:2307-2313 [v2.10.3.13]).  In NereusSDR the equivalent is
+    // PureSignal::psInfoChanged → PsaIndicatorWidget::psInfo.  Per
+    // PSForm.cs:1113-1115 [v2.10.3.13]:
+    //   public static bool IsFeedbackLevelOK
+    //     { get { return FeedbackLevel <= 256; } }
+    if (m_autoCalEnabled && changed) {
+        const int level = newInfo[4];
+        const bool feedbackLevelOk = (level <= 256);
+        emit psInfoChanged(level, feedbackLevelOk, newCorrApplied,
+                           calAttemptsChanged, computeFeedbackColour(level));
+    }
+
     // ── Phase 3M-4 Task 13: applet-driven derived signals ──────────────────
     // calStateChanged carries the raw EngineState (info[15]).  Emitted on
     // every transition so the PureSignalApplet Cal/Run LEDs flip state as
@@ -748,6 +790,18 @@ void PureSignal::pollTimerTick()
     // Thetis switch reads puresignal.State (info[15]) AFTER GetInfo, so
     // it should look at the new value — capture into a local first.
     const int engineStateRaw = newInfo[15];
+
+    // Phase 3M-4 bench-fix Round 2: processNewInfo is now publicly callable
+    // for tests, so guard the cmd-state machine's unguarded m_tx->setPSControl
+    // calls.  Production always reaches this through pollTimerTick which
+    // checks m_tx; this guard covers tests that drive signal emit gates
+    // with a null TxChannel.  Save the info[] snapshot first so the
+    // next-tick HasInfoChanged comparison still sees the right oldInfo.
+    if (!m_tx) {
+        std::memcpy(m_oldInfo, newInfo, sizeof(m_oldInfo));
+        std::memcpy(m_info, newInfo, sizeof(m_info));
+        return;
+    }
 
     switch (m_cmdState) {
     case CommandState::Off:
