@@ -89,9 +89,44 @@ void P1CodecStandard::composeCcForBank(int bank, const CodecContext& ctx,
             static const quint8 kRx01C0[] = { 0x04, 0x06 };
             const int rxIdx = bank - 2;
             out[0] = quint8(C0base | kRx01C0[rxIdx]);
-            const quint64 freq = (rxIdx < ctx.activeRxCount)
-                                  ? ctx.rxFreqHz[rxIdx]
-                                  : ctx.txFreqHz;  // unused DDCs default to TX freq
+
+            // Phase 3M-4 Task 17 P1 follow-up: PureSignal DDC0/DDC1 freq override.
+            //
+            // From mi0bot ChannelMaster/networkproto1.c:982-1009 [v2.10.3.13-beta2]
+            // (byte-for-byte identical to ramdor :484-511 [v2.10.3.13]):
+            //   case 2: //RX1 VFO (DDC0)
+            //       if ((nddc == 2) && (XmitBit == 1) && (prn->puresignal_run))
+            //           ddc_freq = prn->tx[0].frequency;
+            //       else
+            //           ddc_freq = prn->rx[0].frequency;
+            //   case 3: //RX2 VFO (DDC1)
+            //       if ((nddc == 2) && (XmitBit == 1) && (prn->puresignal_run))
+            //           ddc_freq = prn->tx[0].frequency;
+            //       else if (nddc == 5)
+            //           ddc_freq = prn->rx[0].frequency;
+            //       else
+            //           ddc_freq = prn->rx[1].frequency; //Hermes RX2 freq
+            //
+            // Mapping (CodecContext fields populated by P1RadioConnection
+            // ::buildCodecContext from m_psNDdc / m_mox / m_puresignalRun):
+            //   nddc                  ≡  ctx.p1PsNDdc
+            //   XmitBit == 1          ≡  ctx.mox
+            //   prn->puresignal_run   ≡  ctx.p1PuresignalRun
+            //
+            // For nddc==4 boards (HL2 / Hermes / ANAN10 / ANAN100), the
+            // override is NOT applied — the firmware handles freq routing
+            // internally via cntrl1=4 ADC-to-DDC steering (mi0bot
+            // console.cs:8486 [v2.10.3.13-beta2]).
+            quint64 freq;
+            if (rxIdx >= ctx.activeRxCount) {
+                freq = ctx.txFreqHz;  // unused DDCs default to TX freq
+            } else if (ctx.p1PsNDdc == 2 && ctx.mox && ctx.p1PuresignalRun) {
+                freq = ctx.txFreqHz;  // HermesII PS-MOX override (both DDC0 + DDC1)
+            } else if (rxIdx == 1 && ctx.p1PsNDdc == 5) {
+                freq = ctx.rxFreqHz[0];  // Orion: DDC1 = RX1 freq (case 3 nddc==5 branch)
+            } else {
+                freq = ctx.rxFreqHz[rxIdx];  // standard: DDC{rxIdx} = RX{rxIdx} VFO
+            }
             const quint32 hz = quint32(freq);
             out[1] = quint8((hz >> 24) & 0xFF);
             out[2] = quint8((hz >> 16) & 0xFF);

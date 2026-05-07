@@ -105,8 +105,23 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
         // Slot 2 = DDC0/RX1 freq        (C0|0x04)
         case 2: {
             out[0] = C0base | 0x04;
-            const quint64 freq = (0 < ctx.activeRxCount) ? ctx.rxFreqHz[0]
-                                                          : ctx.txFreqHz;
+            // Phase 3M-4 Task 17 P1 follow-up: bank 2/3 PS freq override
+            // for HermesII (nddc==2).  Source: mi0bot networkproto1.c:985
+            // [v2.10.3.13-beta2].  Mirrors P1CodecStandard's identical
+            // override; HL2 itself sets nDdc=4 in
+            // P1CodecHl2::applyPureSignalDdcConfig (line 477) so this gate
+            // is normally false on HL2 — the firmware handles freq routing
+            // via cntrl1=4 ADC steering.  But HL2's codec is also used for
+            // any P1 board whose physical wire dialect maps to HermesLite,
+            // so the gate is kept honest by reading ctx.p1PsNDdc.
+            quint64 freq;
+            if (0 >= ctx.activeRxCount) {
+                freq = ctx.txFreqHz;
+            } else if (ctx.p1PsNDdc == 2 && ctx.mox && ctx.p1PuresignalRun) {
+                freq = ctx.txFreqHz;  //MW0LGE PS DDC0 override (mirror of networkproto1.c:986)
+            } else {
+                freq = ctx.rxFreqHz[0];
+            }
             out[1] = quint8((freq >> 24) & 0xFF);
             out[2] = quint8((freq >> 16) & 0xFF);
             out[3] = quint8((freq >>  8) & 0xFF);
@@ -117,8 +132,22 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
         // Slot 3 = DDC1/RX2 freq        (C0|0x06)
         case 3: {
             out[0] = C0base | 0x06;
-            const quint64 freq = (1 < ctx.activeRxCount) ? ctx.rxFreqHz[1]
-                                                          : ctx.txFreqHz;
+            // Phase 3M-4 Task 17 P1 follow-up: bank 2/3 PS freq override.
+            // Source: mi0bot networkproto1.c:1000-1005 [v2.10.3.13-beta2].
+            // Same gate as bank 2 above; on HL2 (nDdc=4 from
+            // applyPureSignalDdcConfig) this falls through to the standard
+            // ctx.rxFreqHz[1] path, so HL2 PS-MOX behaviour is unchanged
+            // — the firmware handles DDC1 routing via cntrl1=4.
+            quint64 freq;
+            if (1 >= ctx.activeRxCount) {
+                freq = ctx.txFreqHz;
+            } else if (ctx.p1PsNDdc == 2 && ctx.mox && ctx.p1PuresignalRun) {
+                freq = ctx.txFreqHz;  //MW0LGE PS DDC1 override (mirror of networkproto1.c:1001)
+            } else if (ctx.p1PsNDdc == 5) {
+                freq = ctx.rxFreqHz[0];  // Orion: DDC1 = RX1 freq (networkproto1.c:1003)
+            } else {
+                freq = ctx.rxFreqHz[1];  // Hermes default: RX2 VFO
+            }
             out[1] = quint8((freq >> 24) & 0xFF);
             out[2] = quint8((freq >> 16) & 0xFF);
             out[3] = quint8((freq >>  8) & 0xFF);

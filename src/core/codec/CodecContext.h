@@ -234,6 +234,24 @@ struct CodecContext {
     // up the actual feedback DDC routing.
     bool    p1PuresignalRun{false};
 
+    // Phase 3M-4 Task 17 P1 follow-up: PureSignal nDdc state for the
+    // bank-2/3 (RX1/RX2 VFO DDC) freq-override gate.  Captured from
+    // P1RadioConnection::m_psNDdc by buildCodecContext() — itself populated
+    // from PsDdcConfig.nDdc when the per-board P1 codec
+    // (P1CodecHl2/P1CodecStandard) runs applyPureSignalDdcConfig.
+    //
+    // Source: mi0bot ChannelMaster/networkproto1.c:985 + 1000
+    // [v2.10.3.13-beta2] (byte-for-byte identical to ramdor :487 + :502
+    // [v2.10.3.13]):
+    //   if ((nddc == 2) && (XmitBit == 1) && (prn->puresignal_run))
+    //       ddc_freq = prn->tx[0].frequency;
+    // Triggers on HermesII / ANAN10E / ANAN100B (nddc==2 boards) only;
+    // HL2 / Hermes / ANAN10 / ANAN100 (nddc==4) skip the override because
+    // the firmware handles freq routing internally via cntrl1=4 ADC-to-DDC
+    // steering set in P1CodecHl2::applyPureSignalDdcConfig from mi0bot
+    // console.cs:8486 [v2.10.3.13-beta2].
+    int     p1PsNDdc{2};
+
     // User digital outputs — prn->user_dig_out, low 4 bits (0-15).
     // Source: Thetis ChannelMaster/networkproto1.c:601 [v2.10.3.13+501e3f51]
     //   C3 = prn->user_dig_out & 0b00001111;
