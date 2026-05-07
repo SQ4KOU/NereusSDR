@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **3M-3a-iv anti-VOX cancellation feed wired end-to-end.** Closes the gap left
+  by 3M-3a-iii where the gain control was plumbed but the RX-audio feedback path
+  into DEXP was never connected. Moving the anti-VOX gain slider with VOX
+  engaged now audibly suppresses RX-bleed false-trips. Adds 4 WDSP wrappers
+  (`SetAntiVOXSize` / `SetAntiVOXRate` / `SetAntiVOXDetectorTau` /
+  `SendAntiVOXData`), wires `RxDspWorker -> TxWorkerThread ->
+  TxChannel::sendAntiVoxData` per chunk (single-RX direct pump; aamix port
+  deferred to 3F multi-pan), exposes Tau (ms) on Setup -> Transmit -> DEXP/VOX
+  with persistence under per-MAC key `AntiVox_Tau_Ms`. Bench-verification
+  matrix at `docs/architecture/phase3m-3a-iv-verification/README.md`.
+
+### Fixed
+- **Anti-VOX tau default 10 ms -> 20 ms.** WdspEngine create_dexp passed
+  `0.01` for the smoothing time-constant; Thetis spinbox default is 20 ms
+  (= 0.02 s) per `setup.designer.cs:44682-44686 [v2.10.3.13]`. Fresh users
+  with no Setup-page interaction now get the Thetis-faithful default.
+
 ## [0.3.2] - 2026-05-05
 
 > [!NOTE]
