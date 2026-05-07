@@ -109,6 +109,7 @@ private slots:
     void reset_defaults_regenerates_canonical_values();
     void auto_cal_checkbox_present_and_toggleable();
     void warning_label_visible_when_profile_diverges();
+    void gain_spinbox_bounds_match_thetis_minimum_38_8();  // issue #199
 };
 
 // ---------------------------------------------------------------------------
@@ -465,10 +466,12 @@ void TstPaGainByBandPageEditor::warning_label_visible_when_profile_diverges()
                  || !warningLabel->isVisibleTo(&page),
              "Warning label should be hidden for canonical factory profile");
 
-    // Mutate a gain value so the active profile no longer matches canonical.
+    // Mutate a gain value so the active profile no longer matches canonical
+    // (ANAN8000D 80m default = 50.5; 45.0 is in-range per #199 spinbox
+    // bounds [38.8, 100.0] and still divergent).
     auto* spin = page.gainSpinForTest(Band::Band80m);
     QVERIFY(spin != nullptr);
-    spin->setValue(10.0);
+    spin->setValue(45.0);
 
     // The warning should now be visible (page recomputes on every spinbox edit).
     QVERIFY2(warningLabel->isVisibleTo(&page),
@@ -482,6 +485,34 @@ void TstPaGainByBandPageEditor::warning_label_visible_when_profile_diverges()
 
     QVERIFY2(!warningLabel->isVisibleTo(&page),
              "Warning label must be hidden after Reset Defaults");
+}
+
+// ---------------------------------------------------------------------------
+// 14. Per-band gain spinbox bounds match Thetis (issue #199). Thetis
+//     hard-clamps every nud<Band>M / nudVHF<n> spinbox at minimum 38.8 dB
+//     and maximum 100.0 dB (setup.designer.cs:48537-48546 [v2.10.3.13] for
+//     nudVHF1, with 24 sibling sites configured identically). The
+//     pre-#199 NereusSDR port used minimum 0.0, which let users enter
+//     values where computeAudioVolume saturates the drive byte at 1.0 with
+//     no further effect on RF power output (funsutton field report:
+//     ANAN-10E 80m, value 30.8 produced same RF as 38.8).
+// ---------------------------------------------------------------------------
+void TstPaGainByBandPageEditor::gain_spinbox_bounds_match_thetis_minimum_38_8()
+{
+    RadioModel model;
+    primeModelWithProfiles(model);
+
+    PaGainByBandPage page(&model);
+
+    for (int n = 0; n < PaGainByBandPage::kPaBandCount; ++n) {
+        const Band band = static_cast<Band>(n);
+        auto* spin = page.gainSpinForTest(band);
+        QVERIFY2(spin != nullptr,
+                 qPrintable(QStringLiteral("Missing gain spinbox for band %1")
+                                .arg(bandLabel(band))));
+        QCOMPARE(spin->minimum(), 38.8);
+        QCOMPARE(spin->maximum(), 100.0);
+    }
 }
 
 QTEST_MAIN(TstPaGainByBandPageEditor)

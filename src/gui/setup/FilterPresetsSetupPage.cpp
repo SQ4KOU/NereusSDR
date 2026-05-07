@@ -52,14 +52,20 @@ void FilterPresetsSetupPage::buildUi()
 {
     // ── Mode selector ─────────────────────────────────────────────────────────
     QGroupBox* modeBox = addSection(QStringLiteral("Mode"));
+    auto* modeBoxLayout = qobject_cast<QBoxLayout*>(modeBox->layout());
     auto* modeRow = new QHBoxLayout;
     modeRow->setContentsMargins(0, 0, 0, 0);
     modeRow->setSpacing(8);
 
-    auto* modeLbl = new QLabel(QStringLiteral("DSP Mode:"), this);
+    // Parent widgets to the group box so that QBoxLayout::addLayout()
+    // re-parents them properly under modeBox. Constructing with `this`
+    // and then calling layout->addItem() does NOT reparent — that path
+    // leaves the widgets pinned to the SetupPage origin and they overlap
+    // the title bar. (Qt: only addLayout/addWidget call adoptLayout.)
+    auto* modeLbl = new QLabel(QStringLiteral("DSP Mode:"), modeBox);
     modeLbl->setStyleSheet(QStringLiteral("color: #c8d8e8;"));
 
-    m_modeCombo = new QComboBox(this);
+    m_modeCombo = new QComboBox(modeBox);
     m_modeCombo->setStyleSheet(
         QStringLiteral("QComboBox { background: #1a2030; color: #c8d8e8; "
                        "border: 1px solid #304050; border-radius: 3px; padding: 2px 6px; }"
@@ -84,15 +90,16 @@ void FilterPresetsSetupPage::buildUi()
     modeRow->addWidget(m_modeCombo);
     modeRow->addStretch();
 
-    modeBox->layout()->addItem(modeRow);
+    if (modeBoxLayout) { modeBoxLayout->addLayout(modeRow); }
 
     connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &FilterPresetsSetupPage::onModeChanged);
 
     // ── Preset table ──────────────────────────────────────────────────────────
     QGroupBox* tableBox = addSection(QStringLiteral("Presets"));
+    auto* tableBoxLayout = qobject_cast<QBoxLayout*>(tableBox->layout());
 
-    m_table = new QTableWidget(0, 6, this);  // rows filled by populateTable()
+    m_table = new QTableWidget(0, 6, tableBox);  // rows filled by populateTable()
     m_table->setHorizontalHeaderLabels({
         QStringLiteral("#"),
         QStringLiteral("Name"),
@@ -123,10 +130,11 @@ void FilterPresetsSetupPage::buildUi()
     m_table->setColumnWidth(5, 70);
     m_table->verticalHeader()->setVisible(false);
 
-    tableBox->layout()->addItem(new QWidgetItem(m_table));
+    if (tableBoxLayout) { tableBoxLayout->addWidget(m_table); }
 
     // ── Row/Mode reset buttons ────────────────────────────────────────────────
     QGroupBox* actBox = addSection(QStringLiteral("Actions"));
+    auto* actBoxLayout = qobject_cast<QBoxLayout*>(actBox->layout());
     auto* actRow = new QHBoxLayout;
     actRow->setContentsMargins(0, 0, 0, 0);
     actRow->setSpacing(8);
@@ -137,8 +145,8 @@ void FilterPresetsSetupPage::buildUi()
         "QPushButton:hover { background: #2a4060; }"
         "QPushButton:pressed { background: #1a2840; }");
 
-    auto* resetRowBtn  = new QPushButton(QStringLiteral("Reset Selected Row"), this);
-    auto* resetModeBtn = new QPushButton(QStringLiteral("Reset All Rows for This Mode"), this);
+    auto* resetRowBtn  = new QPushButton(QStringLiteral("Reset Selected Row"), actBox);
+    auto* resetModeBtn = new QPushButton(QStringLiteral("Reset All Rows for This Mode"), actBox);
     resetRowBtn->setStyleSheet(kBtnStyle);
     resetModeBtn->setStyleSheet(kBtnStyle);
 
@@ -146,25 +154,26 @@ void FilterPresetsSetupPage::buildUi()
     actRow->addWidget(resetModeBtn);
     actRow->addStretch();
 
-    actBox->layout()->addItem(actRow);
+    if (actBoxLayout) { actBoxLayout->addLayout(actRow); }
 
     connect(resetRowBtn,  &QPushButton::clicked, this, &FilterPresetsSetupPage::onResetThisRow);
     connect(resetModeBtn, &QPushButton::clicked, this, &FilterPresetsSetupPage::onResetThisMode);
 
     // ── Global reset ─────────────────────────────────────────────────────────
     QGroupBox* globalBox = addSection(QStringLiteral("Global"));
+    auto* globalBoxLayout = qobject_cast<QBoxLayout*>(globalBox->layout());
     auto* globalRow = new QHBoxLayout;
     globalRow->setContentsMargins(0, 0, 0, 0);
     globalRow->setSpacing(8);
 
     auto* resetAllBtn = new QPushButton(
-        QStringLiteral("Reset Every Mode to Thetis Defaults"), this);
+        QStringLiteral("Reset Every Mode to Thetis Defaults"), globalBox);
     resetAllBtn->setStyleSheet(kBtnStyle);
 
     globalRow->addWidget(resetAllBtn);
     globalRow->addStretch();
 
-    globalBox->layout()->addItem(globalRow);
+    if (globalBoxLayout) { globalBoxLayout->addLayout(globalRow); }
 
     connect(resetAllBtn, &QPushButton::clicked, this, &FilterPresetsSetupPage::onResetAll);
 
