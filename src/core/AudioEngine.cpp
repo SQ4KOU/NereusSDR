@@ -865,6 +865,11 @@ void AudioEngine::setTxInputBusForTest(std::unique_ptr<IAudioBus> bus)
     m_txInputBus = std::move(bus);
 }
 
+void AudioEngine::setVaxTxBusForTest(std::unique_ptr<IAudioBus> bus)
+{
+    m_vaxTxBus = std::move(bus);
+}
+
 #endif
 
 void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
@@ -1022,6 +1027,24 @@ void AudioEngine::onMicSourceChanged(bool selectedSourceIsPc)
     m_micSourceWantsPc.store(selectedSourceIsPc, std::memory_order_release);
 }
 
+bool AudioEngine::isVaxMicOverrideActive() const noexcept
+{
+    // Phase VAX-TX (eager-borg-d64bed, 2026-05-06).  Both conditions must
+    // hold for the worker to overlay VAX TX samples on radio mic samples:
+    //   - the user explicitly selected MicSource::Vax (m_micSourceWantsVax)
+    //   - the VAX TX bus exists and is open (so pullVaxTxMic has somewhere
+    //     to read from)
+    if (!m_micSourceWantsVax.load(std::memory_order_acquire)) {
+        return false;
+    }
+    return (m_vaxTxBus != nullptr) && m_vaxTxBus->isOpen();
+}
+
+void AudioEngine::onMicSourceChangedVax(bool selectedSourceIsVax)
+{
+    m_micSourceWantsVax.store(selectedSourceIsVax, std::memory_order_release);
+}
+
 int AudioEngine::pullTxMic(float* dst, int n)
 {
     // Plan: 3M-1b E.1. Pre-code review §0.3 (PcMicSource arch).
@@ -1082,6 +1105,61 @@ int AudioEngine::pullTxMic(float* dst, int n)
     // sole caller and uses the returned sample count directly.
 
     return gotMonoSamples;
+}
+
+int AudioEngine::pullVaxTxMic(float* dst, int n)
+{
+    // VaxTxMicSource → CompositeTxMicRouter → TxChannel mic input.
+    // Closes the AudioEngine.cpp:306 TODO ("pull TX audio from
+    // m_vaxTxBus when [...] consumer that pulls from m_vaxTxBus / mic
+    // lives — Sub-Phase 9").
+    //
+    // VAX TX shm is fixed at 48 kHz stereo float32 by the
+    // plugin↔CoreAudioHalBus contract (see makePCMFormat in
+    // hal-plugin/NereusSDRVAX.cpp + CoreAudioHalBus negotiated
+    // format).  We assume that contract here — if a Linux backend
+    // ever negotiates a different format, this method will need the
+    // same dispatch shape as pullTxMic.
+    if (m_vaxTxBus == nullptr || dst == nullptr || n <= 0) {
+        return 0;
+    }
+    if (!m_vaxTxBus->isOpen()) {
+        return 0;
+    }
+
+    constexpr int kVaxTxChannels        = 2;
+    constexpr int kVaxTxBytesPerSample  = static_cast<int>(sizeof(float));
+    constexpr int kVaxTxBytesPerFrame   = kVaxTxChannels * kVaxTxBytesPerSample;
+
+    // To produce n mono output samples we pull n stereo frames.
+    const qint64 needBytes = static_cast<qint64>(n) * kVaxTxBytesPerFrame;
+
+    // thread_local scratch avoids heap allocation on every audio-thread call.
+    // Grows once per thread; zero-alloc thereafter.
+    static thread_local std::vector<char> scratch;
+    if (static_cast<qint64>(scratch.size()) < needBytes) {
+        scratch.resize(static_cast<size_t>(needBytes));
+    }
+
+    const qint64 gotBytes = m_vaxTxBus->pull(scratch.data(), needBytes);
+    if (gotBytes <= 0) {
+        return 0;
+    }
+
+    const int gotFrames = static_cast<int>(gotBytes / kVaxTxBytesPerFrame);
+    const float* src = reinterpret_cast<const float*>(scratch.data());
+
+    // Stereo → mono via 0.5 * (L + R).  Apps writing to "NereusSDR
+    // TX" send stereo (FreeDV/WSJT-X usually mirror to both channels);
+    // averaging is the conservative downmix that preserves level when
+    // both channels carry the same content and avoids one-sided clipping
+    // when only one channel is active.
+    for (int i = 0; i < gotFrames; ++i) {
+        const float l = src[i * 2];
+        const float r = src[i * 2 + 1];
+        dst[i] = 0.5f * (l + r);
+    }
+    return gotFrames;
 }
 
 void AudioEngine::setVolume(float volume)

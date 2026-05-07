@@ -316,10 +316,16 @@ void AudioTxInputPage::buildPage(bool hasMicJack, HPSDRHW hw)
 
     m_pcMicBtn    = new QRadioButton(QStringLiteral("PC Mic"), srcGrp);
     m_radioMicBtn = new QRadioButton(QStringLiteral("Radio Mic"), srcGrp);
+    m_vaxMicBtn   = new QRadioButton(QStringLiteral("VAX TX (virtual device)"), srcGrp);
+    m_vaxMicBtn->setToolTip(QStringLiteral(
+        "Use audio routed to the \"NereusSDR TX\" CoreAudio device by a "
+        "3rd-party app (FreeDV, WSJT-X, etc.) as the TX mic input. "
+        "Pulled from /nereussdr-vax-tx shared memory."));
 
     m_buttonGroup = new QButtonGroup(this);
     m_buttonGroup->addButton(m_pcMicBtn,    static_cast<int>(MicSource::Pc));
     m_buttonGroup->addButton(m_radioMicBtn, static_cast<int>(MicSource::Radio));
+    m_buttonGroup->addButton(m_vaxMicBtn,   static_cast<int>(MicSource::Vax));
 
     // PC Mic is selected by default.
     m_pcMicBtn->setChecked(true);
@@ -333,6 +339,7 @@ void AudioTxInputPage::buildPage(bool hasMicJack, HPSDRHW hw)
 
     srcLayout->addWidget(m_pcMicBtn);
     srcLayout->addWidget(m_radioMicBtn);
+    srcLayout->addWidget(m_vaxMicBtn);
 
     contentLayout()->insertWidget(0, srcGrp);
 

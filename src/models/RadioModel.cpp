@@ -266,6 +266,7 @@ warren@wpratt.com
 // 3M-1b L.1: concrete mic-source strategy objects.
 #include "core/audio/PcMicSource.h"
 #include "core/audio/RadioMicSource.h"
+#include "core/audio/VaxTxMicSource.h"
 #include "core/audio/CompositeTxMicRouter.h"
 #include "core/audio/TxMicSource.h"
 #include "core/RadioConnection.h"
@@ -1733,11 +1734,18 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             // Plan: 3M-1b Task L.1. Pre-code review §0.3 + master design §5.2.4.
             m_pcMicSource = std::make_unique<PcMicSource>(m_audioEngine);
             m_radioMicSource = std::make_unique<RadioMicSource>(m_connection, nullptr);
+            // VAX TX mic source — pulls audio from /nereussdr-vax-tx
+            // shared memory (written by 3rd-party apps via the HAL
+            // plugin's "NereusSDR TX" device).  Registered with the
+            // composite router via setVaxSource() so MicSource::Vax
+            // selection routes to it.
+            m_vaxTxMicSource = std::make_unique<VaxTxMicSource>(m_audioEngine);
             const bool hasMicJack = m_hardwareProfile.caps
                                         ? m_hardwareProfile.caps->hasMicJack
                                         : true;  // safe default: assume mic jack present
             m_compositeMicRouter = std::make_unique<CompositeTxMicRouter>(
                 m_pcMicSource.get(), m_radioMicSource.get(), hasMicJack);
+            m_compositeMicRouter->setVaxSource(m_vaxTxMicSource.get());
 
             // Replace the 3M-1a NullMicSource stub with the composite router.
             m_txChannel->setMicRouter(m_compositeMicRouter.get());
@@ -2665,9 +2673,12 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 connect(&m_transmitModel, &TransmitModel::micSourceChanged,
                         m_audioEngine, [this](MicSource src) {
                             m_audioEngine->onMicSourceChanged(src == MicSource::Pc);
+                            m_audioEngine->onMicSourceChangedVax(src == MicSource::Vax);
                         });
                 m_audioEngine->onMicSourceChanged(
                     m_transmitModel.micSource() == MicSource::Pc);
+                m_audioEngine->onMicSourceChangedVax(
+                    m_transmitModel.micSource() == MicSource::Vax);
 
                 m_txWorker = std::make_unique<TxWorkerThread>(this);
                 m_txWorker->setTxChannel(m_txChannel);
@@ -4495,11 +4506,13 @@ void RadioModel::teardownConnection()
     }
 
     // 3M-1b L.1: destroy mic-source strategy objects in reverse-construction order
-    // so CompositeTxMicRouter (which holds raw pointers to pc + radio sources)
-    // is released BEFORE the sources it points into.
+    // so CompositeTxMicRouter (which holds raw pointers to pc + radio sources
+    // + the VAX TX source registered via setVaxSource) is released BEFORE the
+    // sources it points into.
     // After reset(), pullSamples() on the composite is unreachable (TxChannel
     // already has setMicRouter(nullptr) above).
     m_compositeMicRouter.reset();
+    m_vaxTxMicSource.reset();
     m_radioMicSource.reset();
     m_pcMicSource.reset();
 
