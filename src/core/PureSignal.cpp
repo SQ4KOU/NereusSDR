@@ -156,6 +156,32 @@ void PureSignal::singleCalibrate()
     emit calibrationStarted();
 }
 
+void PureSignal::setPsEnabledWithFanOut(bool on)
+{
+    // Codex Fix C — emit psEnabledChanged when the cmd-state machine flips
+    // PSEnabled.  Ports the entry-condition check in every cmd-state case:
+    //
+    //   PSForm.cs:634  case eCMDState.OFF:                       if (PSEnabled)  PSEnabled = false;
+    //   PSForm.cs:646  case eCMDState.TurnOnAutoCalibrate:       if (!PSEnabled) PSEnabled = true;
+    //   PSForm.cs:662  case eCMDState.TurnOnSingleCalibrate:     if (!PSEnabled) PSEnabled = true;
+    //   PSForm.cs:678  case eCMDState.StayON:                    if (PSEnabled)  PSEnabled = false;
+    //   PSForm.cs:705  case eCMDState.TurnOFF:                   if (!PSEnabled) PSEnabled = true;
+    //   PSForm.cs:720  case eCMDState.IntiateRestoredCorrection: if (!PSEnabled) PSEnabled = true;
+    //                                                                  [all v2.10.3.13]
+    //
+    // The PSEnabled property setter at PSForm.cs:235-269 [v2.10.3.13] is the
+    // fan-out itself — it calls UpdateDDCs / SetPureSignal / SendHighPriority
+    // / setPSRunCal.  In NereusSDR the calcc-side setPSRunCal is already
+    // wired inline at each cmd-state case (see pollTimerTick); the radio /
+    // DDC / step-attenuator side moves to subscribers of psEnabledChanged
+    // (RadioModel::wireConnectionSignals).
+    if (on == m_psEnabled) {
+        return;
+    }
+    m_psEnabled = on;
+    emit psEnabledChanged(on);
+}
+
 void PureSignal::setEnabled(bool enabled)
 {
     if (enabled == m_enabled) {
@@ -857,6 +883,10 @@ void PureSignal::processNewInfo(const int newInfo[16])
         m_tx->setPSControl(/*reset=*/1, /*mancal=*/0,
                            /*automode=*/0, /*turnon=*/0);
         m_tx->setPSRunCal(0);
+        // Codex Fix C — PSForm.cs:634 [v2.10.3.13]:
+        //   if (PSEnabled) PSEnabled = false;
+        // Fans out the radio/DDC OFF state to subscribers of psEnabledChanged.
+        setPsEnabledWithFanOut(false);
         if (m_restoreON) {
             m_cmdState = CommandState::InitiateRestoredCorrection;
         } else if (m_autoON) {
@@ -879,6 +909,11 @@ void PureSignal::processNewInfo(const int newInfo[16])
         m_tx->setPSControl(/*reset=*/1, /*mancal=*/0,
                            /*automode=*/1, /*turnon=*/0);
         m_tx->setPSRunCal(1);
+        // Codex Fix C — PSForm.cs:646 [v2.10.3.13]:
+        //   if (!PSEnabled) PSEnabled = true;
+        // Fans out the radio/DDC ON state to subscribers of psEnabledChanged
+        // (UpdateDDCs / SetPureSignal / setPuresignalRun / setPsActive).
+        setPsEnabledWithFanOut(true);
         m_cmdState = CommandState::AutoCalibrate;
         break;
 
@@ -908,6 +943,12 @@ void PureSignal::processNewInfo(const int newInfo[16])
         m_tx->setPSControl(/*reset=*/1, /*mancal=*/1,
                            /*automode=*/0, /*turnon=*/0);
         m_tx->setPSRunCal(1);
+        // Codex Fix C — PSForm.cs:662 [v2.10.3.13]:
+        //   if (!PSEnabled) PSEnabled = true;
+        // Same radio/DDC fan-out as TurnOnAutoCalibrate; pre-fix Single Cal
+        // never fired this branch because the wiring was bound only to
+        // autoCalEnabledChanged.
+        setPsEnabledWithFanOut(true);
         m_cmdState = CommandState::SingleCalibrate;
         break;
 
@@ -943,6 +984,12 @@ void PureSignal::processNewInfo(const int newInfo[16])
         // corrections continue to be applied passively to TX without
         // further pscc() processing.
         m_tx->setPSRunCal(0);
+        // Codex Fix C — PSForm.cs:678 [v2.10.3.13]:
+        //   if (PSEnabled) PSEnabled = false;
+        // Calibration converged: drop the radio-side fan-out (corrections
+        // continue passively).  Subscribers (UpdateDDCs / SetPureSignal)
+        // see the radio leave puresignal_run mode.
+        setPsEnabledWithFanOut(false);
         if (m_OFF) {
             m_cmdState = CommandState::TurnOff;
         } else if (m_restoreON) {
@@ -972,6 +1019,14 @@ void PureSignal::processNewInfo(const int newInfo[16])
         m_tx->setPSControl(/*reset=*/1, /*mancal=*/0,
                            /*automode=*/0, /*turnon=*/0);
         m_tx->setPSRunCal(1);   // PSForm.cs:710 [v2.10.3.13] PSEnabled=true
+        // Codex Fix C — PSForm.cs:705 [v2.10.3.13]:
+        //   if (!PSEnabled) PSEnabled = true;
+        // TurnOFF re-enables PSEnabled — counterintuitive at first glance,
+        // but this is the engine's reset-to-LRESET sequence: PSEnabled goes
+        // true here so calcc.runcal=1 stays live while the engine drains.
+        // The next visit to Off (when state==LRESET && !corrApplied) issues
+        // PSEnabled=false to fully tear down.
+        setPsEnabledWithFanOut(true);
         m_OFF = false;
         if (m_restoreON) {
             m_cmdState = CommandState::InitiateRestoredCorrection;
@@ -997,6 +1052,13 @@ void PureSignal::processNewInfo(const int newInfo[16])
         m_tx->setPSControl(/*reset=*/0, /*mancal=*/0,
                            /*automode=*/0, /*turnon=*/1);
         m_tx->setPSRunCal(1);
+        // Codex Fix C — PSForm.cs:720 [v2.10.3.13]:
+        //   if (!PSEnabled) PSEnabled = true;
+        // Restored-correction path also needs the radio/DDC fan-out — pre-fix
+        // this branch only set calcc flags via setPSRunCal but never fired
+        // UpdateDDCs / setPuresignalRun on the radio side because the wiring
+        // was bound only to autoCalEnabledChanged.
+        setPsEnabledWithFanOut(true);
         m_restoreON = false;
         if (engineStateRaw == static_cast<int>(EngineState::LSTAYON)) {
             m_cmdState = CommandState::StayOn;

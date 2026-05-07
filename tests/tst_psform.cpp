@@ -24,7 +24,8 @@
 //
 //   6. The Two-tone toggle invokes PureSignal::setTwoToneOn(checked).
 //
-//   7. The Save button is gated on PureSignal::correctingChanged.
+//   7. The Save button is gated on PureSignal::correctionsBeingAppliedChanged
+//      (post-Codex Fix D — see PR #212 comments).
 //
 //   8. The Always On Top checkbox toggles Qt::WindowStaysOnTopHint.
 //

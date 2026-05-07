@@ -190,8 +190,10 @@ nereus_add_test(tst_setup_deltas)
 #   Correction) + 3 LEDs (Cal / Run / Fbk) + 3 info labels (Iterations /
 #   Feedback dB / Correction dB).  Right-click on every control emits
 #   openPureSignalDialogRequested → MainWindow::openPureSignalDialog.  Save
-#   button gated on PureSignal::correctingChanged (mirrors PSForm.cs:574-590
-#   [v2.10.3.13]).
+#   button gated on PureSignal::correctionsBeingAppliedChanged post-Codex Fix
+#   D (mirrors PSForm.cs:574-590 [v2.10.3.13] CorrectionsBeingApplied
+#   getter; pre-fix the wire was correctingChanged which conflated two
+#   distinct Thetis predicates).
 #
 # TxApplet [PS-A] toggle (source-first port of Thetis chkFWCATUBypass):
 #   Visibility gated on caps.hasPureSignal (TxApplet::setBoardCapabilities).

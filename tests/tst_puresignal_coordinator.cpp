@@ -1150,6 +1150,155 @@ private slots:
         QCOMPARE(applied.count(),    0);
     }
 
+    // ── Codex Fix C: psEnabledChanged fan-out for cmd-state transitions ────
+    //
+    // Codex review identified that the radio/DDC fan-out (UpdateDDCs /
+    // SetPureSignal / SendHighPriority / setPSRunCal) was wired only to
+    // autoCalEnabledChanged.  Per Thetis PSForm.cs:235-269 PSEnabled
+    // property setter [v2.10.3.13], that setter is THE fan-out for ALL 5
+    // cmd-state transitions:
+    //
+    //   case TurnOnAutoCalibrate (PSForm.cs:646)        → PSEnabled=true
+    //   case TurnOnSingleCalibrate (PSForm.cs:662)      → PSEnabled=true
+    //   case IntiateRestoredCorrection (PSForm.cs:720)  → PSEnabled=true
+    //   case StayON (PSForm.cs:678)                     → PSEnabled=false
+    //   case TurnOFF (PSForm.cs:705)                    → PSEnabled=true
+    //
+    // Without the new signal, Single Cal / Restore / Stay-on / Turn-off
+    // paths only set calcc flags via setPSRunCal but never fired the
+    // radio-side (UpdateDDCs / SetPureSignal high-priority push) or the
+    // StepAttenuatorController setPsActive path that the autoCalEnabled
+    // wiring carried.  Result: PsccPump never sees the puresignal_run wire
+    // bit, the PA-feedback ADC path is silent during single-cal, and the
+    // step attenuator pinning logic mis-fires.
+    //
+    // Fix introduces a real psEnabledChanged signal emitted by the cmd-state
+    // machine on each PSEnabled flip.  RadioModel reroutes the radio/DDC
+    // fan-out from autoCalEnabledChanged to psEnabledChanged.
+    // autoCalEnabledChanged stays live for the PS-A button visual state.
+
+    void psEnabledChanged_emittedOnTurnOnAutoCalibrate()
+    {
+        // setAutoCalEnabled(true) sets _autoON=true; the next pollTimerTick
+        // transitions Off → TurnOnAutoCalibrate, where Thetis PSForm.cs:646
+        // [v2.10.3.13] fires `if (!PSEnabled) PSEnabled = true;`.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+        ps.setEnabled(true);
+        ps.setTimersEnabled(false);
+
+        QSignalSpy psEnabled(&ps, &PureSignal::psEnabledChanged);
+
+        ps.setAutoCalEnabled(true);   // sets _autoON=true (no PS fan-out yet)
+
+        // At this stage psEnabledChanged should not have fired — the cmd-state
+        // machine hasn't tickled the transition yet.
+        QCOMPARE(psEnabled.count(), 0);
+
+        // Drive cmd-state ticks: Off → TurnOnAutoCalibrate transition fires
+        // PSEnabled=true on entry to TurnOnAutoCalibrate.
+        int info[16] = {};
+        ps.processNewInfo(info);   // tick 1: Off → next tick sets up TurnOn
+        ps.processNewInfo(info);   // tick 2: TurnOnAutoCalibrate → PSEnabled=true
+
+        // Either tick may fire psEnabledChanged depending on transition order.
+        // We just require it fired with true.
+        QVERIFY(psEnabled.count() >= 1);
+        QCOMPARE(psEnabled.takeFirst().at(0).toBool(), true);
+    }
+
+    void psEnabledChanged_emittedOnTurnOnSingleCalibrate()
+    {
+        // singleCalibrate() sets _singleCalON=true.  The next pollTimerTick
+        // transitions Off → TurnOnSingleCalibrate, where Thetis PSForm.cs:662
+        // [v2.10.3.13] fires `if (!PSEnabled) PSEnabled = true;`.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+        ps.setEnabled(true);
+        ps.setTimersEnabled(false);
+
+        QSignalSpy psEnabled(&ps, &PureSignal::psEnabledChanged);
+
+        ps.singleCalibrate();   // sets _singleCalON=true
+
+        // Drive cmd-state ticks until PSEnabled flips.
+        int info[16] = {};
+        ps.processNewInfo(info);   // Off → next has _singleCalON
+        ps.processNewInfo(info);   // TurnOnSingleCalibrate → PSEnabled=true
+
+        QVERIFY(psEnabled.count() >= 1);
+        QCOMPARE(psEnabled.takeFirst().at(0).toBool(), true);
+    }
+
+    void psEnabledChanged_emittedOnTurnOff()
+    {
+        // Enable then disable cycle: psEnabledChanged must fire with true on
+        // the way up (TurnOnAutoCalibrate) and then with the StayOn / TurnOff
+        // exit branches on the way down.  Thetis PSForm.cs:678 [v2.10.3.13]
+        // fires `if (PSEnabled) PSEnabled = false;` at StayON; PSForm.cs:705
+        // fires `if (!PSEnabled) PSEnabled = true;` at TurnOFF (yes —
+        // TurnOFF re-enables: it's the engine's reset-to-LRESET sequence).
+        // After draining we expect at least one true→false transition.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+        ps.setEnabled(true);
+        ps.setTimersEnabled(false);
+
+        // Drive auto-cal up.
+        ps.setAutoCalEnabled(true);
+        int info[16] = {};
+        ps.processNewInfo(info);
+        ps.processNewInfo(info);   // TurnOnAutoCalibrate fires PSEnabled=true
+
+        QSignalSpy psEnabled(&ps, &PureSignal::psEnabledChanged);
+
+        // Drive auto-cal down.  The cmd-state machine walks the chain:
+        //   AutoCalibrate → TurnOff (re-enables PSEnabled=true) → Off
+        //   (PSEnabled=false at next visit if _info[15]==LRESET).
+        ps.setAutoCalEnabled(false);
+
+        // To reach Off we need _info[14]=0 AND state=LRESET (per PSForm.cs:
+        // 714-715 [v2.10.3.13]).  Drive ticks with that combination.
+        info[14] = 0;
+        info[15] = 0;   // LRESET
+        for (int i = 0; i < 8; ++i) {
+            ps.processNewInfo(info);
+        }
+
+        // Expect at least one psEnabledChanged(false) emit during teardown.
+        bool sawFalse = false;
+        for (int i = 0; i < psEnabled.count(); ++i) {
+            if (psEnabled.at(i).at(0).toBool() == false) {
+                sawFalse = true;
+                break;
+            }
+        }
+        QVERIFY2(sawFalse, "Expected psEnabledChanged(false) during teardown");
+    }
+
+    void psEnabledChanged_separateFromAutoCalEnabledChanged()
+    {
+        // Verify the two signals are distinct emitters: setAutoCalEnabled(x)
+        // ALONE (without a poll tick) must emit autoCalEnabledChanged but NOT
+        // psEnabledChanged.  Only the cmd-state machine emits
+        // psEnabledChanged.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+        ps.setEnabled(true);
+        ps.setTimersEnabled(false);
+
+        QSignalSpy autoCal(&ps, &PureSignal::autoCalEnabledChanged);
+        QSignalSpy psEnabled(&ps, &PureSignal::psEnabledChanged);
+
+        ps.setAutoCalEnabled(true);
+
+        // setAutoCalEnabled fires autoCalEnabledChanged immediately, but
+        // psEnabledChanged is gated on the cmd-state machine's TurnOn*
+        // visits which only happen during a poll tick.
+        QCOMPARE(autoCal.count(),   1);
+        QCOMPARE(psEnabled.count(), 0);
+    }
+
 };
 
 // QTEST_GUILESS_MAIN constructs a QCoreApplication so the internal QTimers

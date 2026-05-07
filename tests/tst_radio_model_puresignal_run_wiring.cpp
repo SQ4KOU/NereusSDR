@@ -40,6 +40,8 @@
 
 #include "core/AppSettings.h"
 #include "core/P1RadioConnection.h"
+#include "core/PureSignal.h"
+#include "core/TxChannel.h"
 #include "models/TransmitModel.h"
 
 using namespace NereusSDR;
@@ -262,6 +264,59 @@ private slots:
         // loadFromSettings must NOT touch pureSigEnabled (Task 15: dead read
         // removed).  Pre-load state survives.
         QCOMPARE(tm.pureSigEnabled(), true);
+    }
+
+    // ── Codex Fix C: Single Cal triggers setPuresignalRun(true) via the
+    //                 new PureSignal::psEnabledChanged fan-out ─────────────
+    //
+    // The legacy wiring connected autoCalEnabledChanged → setPuresignalRun.
+    // Single Cal does NOT toggle autoCalEnabled, so under the legacy wiring
+    // a Single Cal would leave bank 11 C2 bit 6 clear on the wire — i.e.
+    // PsccPump would never see the radio in puresignal_run mode and DDC0
+    // / DDC1 would not swap to TX freq during MOX.
+    //
+    // After Fix C, the cmd-state machine's TurnOnSingleCalibrate visit
+    // emits psEnabledChanged(true) per Thetis PSForm.cs:662 [v2.10.3.13]
+    // `if (!PSEnabled) PSEnabled = true;` inside case eCMDState
+    // .TurnOnSingleCalibrate.  RadioModel::wireConnectionSignals reroutes
+    // the connection's setPuresignalRun slot to psEnabledChanged so Single
+    // Cal lands bank 11 C2 bit 6 = 0x40 on the wire.
+
+    void singleCal_triggersPuresignalRunOnWire_viaPsEnabledChanged()
+    {
+        P1RadioConnection conn;
+        conn.setBoardForTest(HPSDRHW::HermesII);
+
+        // Construct a PureSignal coordinator with a real TxChannel so the
+        // cmd-state machine's m_tx-guarded transitions execute.
+        TxChannel tx(/*WDSP TX channel*/ 1);
+        PureSignal ps(/*engine=*/nullptr, &tx, /*fb=*/nullptr,
+                      /*mox=*/nullptr, /*stepAtt=*/nullptr,
+                      /*twoTone=*/nullptr);
+
+        // Mirror the post-Fix-C wiring in RadioModel::wireConnectionSignals —
+        // psEnabledChanged is the radio/DDC fan-out, NOT autoCalEnabledChanged.
+        QObject::connect(&ps,   &PureSignal::psEnabledChanged,
+                         &conn, &RadioConnection::setPuresignalRun,
+                         Qt::DirectConnection);
+
+        ps.setEnabled(true);
+        ps.setTimersEnabled(false);
+
+        // Sanity: bit 6 starts clear before any cal kicks off.
+        QCOMPARE(int(quint8(conn.captureBank11ForTest()[2]) & 0x40), 0);
+
+        // Single-cal entry path: no auto-cal, just btnPSCalibrate.
+        ps.singleCalibrate();   // sets _singleCalON=true
+
+        // Drive cmd-state ticks until the TurnOnSingleCalibrate visit fires
+        // psEnabledChanged(true), which routes through to setPuresignalRun.
+        int info[16] = {};
+        ps.processNewInfo(info);   // Off → next has _singleCalON
+        ps.processNewInfo(info);   // TurnOnSingleCalibrate → PSEnabled=true
+
+        // Bank 11 C2 bit 6 must reflect 0x40 now.
+        QCOMPARE(int(quint8(conn.captureBank11ForTest()[2]) & 0x40), 0x40);
     }
 };
 

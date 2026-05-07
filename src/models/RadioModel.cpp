@@ -1938,63 +1938,71 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             // from mi0bot-Thetis cmaster.cs:566]
             m_pureSignal->applyBoardCapabilities(boardCapabilities());
 
-            // ── Task 17 chunk A — wire PS-A toggle into ReceiverManager ────────
+            // ── Task 17 chunk A — wire PSEnabled fan-out into ReceiverManager ──
             //
-            // From Thetis console.cs:43712 chkFWCATUBypass_CheckedChanged
+            // From Thetis PSForm.cs:235-269 PSEnabled property setter
             // [v2.10.3.13]:
-            //   psform.AutoCalEnabled = chkFWCATUBypass.Checked;
-            //   ...
-            //   UpdateDDCs(false);
-            // The PSAEnabled fan-out fires UpdateDDCs which cascades into the
-            // per-board DDC config switch.  In NereusSDR, ReceiverManager's
-            // setPureSignalEnabled() is the equivalent — calls the codec's
-            // applyPureSignalDdcConfig() and emits ddcConfigChanged for the
-            // chunk-B consumer (P2RadioConnection::applyPsDdcConfig).
+            //   if (_psenabled) { console.UpdateDDCs(...); NetworkIO.SetPureSignal(1);
+            //                     NetworkIO.SendHighPriority(1); ... }
+            // The PSEnabled property setter is THE radio/DDC fan-out, fired
+            // by the cmd-state machine on every PSEnabled flip:
+            //
+            //   case TurnOnAutoCalibrate (PSForm.cs:646)        → PSEnabled=true
+            //   case TurnOnSingleCalibrate (PSForm.cs:662)      → PSEnabled=true
+            //   case IntiateRestoredCorrection (PSForm.cs:720)  → PSEnabled=true
+            //   case StayON (PSForm.cs:678)                     → PSEnabled=false
+            //   case TurnOFF (PSForm.cs:705)                    → PSEnabled=true
+            //
+            // Codex Fix C: previously these wires bound to autoCalEnabledChanged,
+            // so Single Cal / Restore / Stay-on / Turn-off paths only set calcc
+            // flags via setPSRunCal but never fired the radio-side fan-out.
+            // Now bound to psEnabledChanged.  autoCalEnabledChanged stays live
+            // for the PS-A button visual state at the UI layer.
             //
             // Qt::UniqueConnection because the WDSP-init lambda may fire on
             // reconnect (ctor branch above) without tearing down the existing
             // PureSignal — same idempotency pattern as the other late-bind
             // seams in this lambda.
-            connect(m_pureSignal.get(), &PureSignal::autoCalEnabledChanged,
+            connect(m_pureSignal.get(), &PureSignal::psEnabledChanged,
                     m_receiverManager, &ReceiverManager::setPureSignalEnabled,
                     Qt::UniqueConnection);
 
-            // Phase 3M-4 Task 17 fix: also push the PS run flag through to
-            // the radio connection so byte-9..16 of CmdHighPriority swap
-            // DDC0/DDC1 frequencies to TX freq during MOX (Thetis
-            // network.c:936-945 [v2.10.3.13] gate is
-            // (ptt_out && puresignal_run)).  Without this, DDC0/DDC1
-            // stay tuned to RX freq during TX and never see the actual
-            // TX signal — the bench shows DDC1's PA-feedback ADC
-            // returning ~zero envelope because nothing's at RX freq.
+            // Push the PS run flag through to the radio connection so
+            // byte-9..16 of CmdHighPriority swap DDC0/DDC1 frequencies to TX
+            // freq during MOX (Thetis network.c:936-945 [v2.10.3.13] gate is
+            // (ptt_out && puresignal_run)).  Without this, DDC0/DDC1 stay
+            // tuned to RX freq during TX and never see the actual TX signal.
             // From Thetis PSForm.cs:246 [v2.10.3.13]:
             //   NetworkIO.SetPureSignal(1);
-            connect(m_pureSignal.get(), &PureSignal::autoCalEnabledChanged,
+            // Codex Fix C: rerouted from autoCalEnabledChanged to
+            // psEnabledChanged so Single Cal also sets the wire bit.
+            connect(m_pureSignal.get(), &PureSignal::psEnabledChanged,
                     m_connection, &RadioConnection::setPuresignalRun,
                     Qt::UniqueConnection);
 
-            // Phase 3M-4 Task 17 fix: tell StepAttenuatorController that PS
-            // is active.  Without this, m_psActive stays false → on every
-            // MOX-on edge, onMoxHardwareFlipped sees psOff=true and forces
+            // Tell StepAttenuatorController that PS is active.  Without this,
+            // m_psActive stays false → on every MOX-on edge,
+            // onMoxHardwareFlipped sees psOff=true and forces
             // setTxStepAttenuation(31) (the "PS off, force 31 dB" Thetis
-            // safety per console.cs:29562-29568 [v2.10.3.13]).  That
-            // OVERRIDES PureSignal::autoAttentionTick's adjustments,
-            // pinning ATT-on-TX at 31 forever and starving the PS feedback
-            // ADC so calcc never converges feedbackLevel into [128, 181].
-            // Bench evidence: setTxStepAttenuation(31) fired on every
-            // MOX-on edge regardless of AutoAtt state.
+            // safety per console.cs:29562-29568 [v2.10.3.13]).  That OVERRIDES
+            // PureSignal::autoAttentionTick's adjustments, pinning ATT-on-TX
+            // at 31 forever and starving the PS feedback ADC so calcc never
+            // converges feedbackLevel into [128, 181].
+            // Codex Fix C: rerouted from autoCalEnabledChanged to
+            // psEnabledChanged so Single Cal / Restore paths also lift the
+            // 31 dB safety pin.
             if (m_stepAttController) {
                 connect(m_pureSignal.get(),
-                        &PureSignal::autoCalEnabledChanged,
+                        &PureSignal::psEnabledChanged,
                         m_stepAttController,
                         &StepAttenuatorController::setPsActive,
                         Qt::UniqueConnection);
-                // Sync initial state: if the user has PS-A enabled in
-                // persisted settings, the coordinator's autoCalEnabled is
-                // already true at this point — push it through so
-                // m_psActive matches before the first MOX-on edge.
-                m_stepAttController->setPsActive(
-                    m_pureSignal->isAutoCalEnabled());
+                // Initial state push: psEnabledChanged only fires when the
+                // cmd-state machine flips PSEnabled, so a connect-time sync
+                // for the controller starts from false (the cmd-state
+                // machine starts in Off; PSEnabled flips on the first
+                // TurnOn* visit after singleCalibrate / setAutoCalEnabled).
+                m_stepAttController->setPsActive(false);
             }
 
             // ── Task 17 chunk C/D/E — pscc() driver (PsccPump) ─────────────────

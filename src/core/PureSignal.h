@@ -387,6 +387,18 @@ public slots:
 signals:
     void enabledChanged(bool);
     void autoCalEnabledChanged(bool);
+    // Codex Fix C: psEnabledChanged is the radio/DDC fan-out signal that
+    // ports Thetis PSForm.cs:235-269 PSEnabled property setter
+    // [v2.10.3.13].  Emitted by the cmd-state machine on every PSEnabled
+    // transition (TurnOnAutoCalibrate / TurnOnSingleCalibrate /
+    // IntiateRestoredCorrection / StayON / TurnOFF).  Subscribers
+    // (ReceiverManager::setPureSignalEnabled, RadioConnection::
+    // setPuresignalRun, StepAttenuatorController::setPsActive) connect to
+    // THIS signal — not autoCalEnabledChanged — so Single Cal / Restore /
+    // Stay-on / Turn-off paths fire the radio/DDC routing alongside the
+    // setPSRunCal calcc-side update.  autoCalEnabledChanged stays bound to
+    // the PS-A button visual state.
+    void psEnabledChanged(bool);
     // Codex Fix D: distinct predicates per Thetis PSForm.cs:1100-1108
     // [v2.10.3.13].  correctingChanged fires only on FeedbackLevel > 90
     // crossings.  correctionsBeingAppliedChanged fires only on _info[14]
@@ -535,6 +547,20 @@ private:
     // Master enable + auto-cal mirrors (drive Q_PROPERTY signals)
     bool m_enabled{false};
     bool m_autoCalEnabled{false};
+
+    // Codex Fix C: PSEnabled mirror for the cmd-state machine's per-
+    // transition fan-out.  Ports the static `_psenabled` field at Thetis
+    // PSForm.cs:234 [v2.10.3.13].  Updated only by setPsEnabledWithFanOut.
+    bool m_psEnabled{false};
+
+    // Codex Fix C helper — emit psEnabledChanged on a PSEnabled flip.
+    // Mirrors the entry-condition check in each cmd-state case
+    // (PSForm.cs:634/646/662/678/705/720 [v2.10.3.13]):
+    //   if (!PSEnabled) PSEnabled = true;
+    //   if (PSEnabled)  PSEnabled = false;
+    // Runs the same idempotency guard so repeat-flips with the same value
+    // stay silent on the wire.
+    void setPsEnabledWithFanOut(bool on);
 
     // Atomic status mirrors (cross-thread cheap reads)
     std::atomic<int>  m_feedbackLevel{0};
