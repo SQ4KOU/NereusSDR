@@ -58,13 +58,15 @@ private slots:
         QCOMPARE(t.twoToneFreq2(), 1900);
     }
 
-    void default_twoToneLevel_isMinus6() {
-        // NereusSDR-original safer default: -6 dB.
-        // Thetis Designer udTwoToneLevel.Value = 0 dB at startup (full
-        // amplitude).  NereusSDR uses -6 dB as a conservative starting
-        // point per design spec §4.4 / pre-code review §2.3 (option C).
+    void default_twoToneLevel_isZero() {
+        // From Thetis setup.Designer.cs:61994-62003 [v2.10.3.13]
+        // udTwoToneLevel: Maximum=0, Minimum=-96, Value=0.
+        // Phase 3M-4 Task 17: previously NereusSDR-original -6 dB which
+        // under-drove the 2-tone envelope and starved calcc LCOLLECT.
+        // Restored Thetis-faithful 0 dB so PureSignal calibration
+        // converges out-of-the-box on bench.
         TransmitModel t;
-        QCOMPARE(t.twoToneLevel(), -6.0);
+        QCOMPARE(t.twoToneLevel(), 0.0);
     }
 
     void default_twoTonePower_is50() {
@@ -188,7 +190,7 @@ private slots:
     void idempotent_twoToneLevel_atDefault_noSignal() {
         TransmitModel t;
         QSignalSpy spy(&t, &TransmitModel::twoToneLevelChanged);
-        t.setTwoToneLevel(-6.0);  // matches default
+        t.setTwoToneLevel(0.0);  // matches default (Phase 3M-4 Task 17)
         QCOMPARE(spy.count(), 0);
     }
 
