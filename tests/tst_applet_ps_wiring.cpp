@@ -178,11 +178,19 @@ private slots:
         QCOMPARE(btn->isChecked(), false);
     }
 
-    // ── Test 5: Save button is gated on correctingChanged ──────────────────
+    // ── Test 5: Save button is gated on correctionsBeingAppliedChanged ─────
     //
     // Mirrors PSForm.cs:574-590 btnPSSave gating [v2.10.3.13]:
     //   if (puresignal.CorrectionsBeingApplied) btnPSSave.Enabled = true;
-    void saveButton_gatedOnCorrectingChanged()
+    //
+    // Codex Fix D (PR #212 commit b7fafaa): the gating signal split into
+    // correctionsBeingAppliedChanged (info[14]==1, gates Save) vs
+    // correctingChanged (FeedbackLevel > 90, gates Lime/Yellow badge).
+    // The Save button connects to correctionsBeingAppliedChanged in
+    // PureSignalApplet.cpp:431.  Pre-split this test emitted
+    // correctingChanged; post-split that signal no longer carries the
+    // Save semantic.
+    void saveButton_gatedOnCorrectionsBeingApplied()
     {
         TxChannel tx(kTxChannelId);
         PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
@@ -198,11 +206,11 @@ private slots:
         // Default: not applying corrections → Save disabled.
         QCOMPARE(btn->isEnabled(), false);
 
-        // Emit correctingChanged(true) → Save enabled.
-        emit ps.correctingChanged(true);
+        // Emit correctionsBeingAppliedChanged(true) → Save enabled.
+        emit ps.correctionsBeingAppliedChanged(true);
         QCOMPARE(btn->isEnabled(), true);
 
-        emit ps.correctingChanged(false);
+        emit ps.correctionsBeingAppliedChanged(false);
         QCOMPARE(btn->isEnabled(), false);
     }
 
