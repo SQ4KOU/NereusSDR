@@ -360,7 +360,14 @@ const BoardCapabilities kHermes = {
     .hasAlex2         = false,
     .hasRxBypassRelay = true,
     .rxOnlyAntennaCount = 3,
-    .hasPureSignal    = false,
+    // Phase 3M-4 Task 17 P1 follow-up: enable PureSignal for plain Hermes.
+    // From mi0bot console.cs:8408-8413 [v2.10.3.13-beta2] HERMES is grouped
+    // with HL2 / ANAN10 / ANAN100 (nddc=4 family), all of which hit the
+    // PS-on UpdateDDCs branch at line 8469-8488 with ddcEnable=DDC0,
+    // syncEnable=DDC1, cntrl1=4 ADC steering for the PS feedback path.
+    // P1CodecStandard handles the wire compose; P1RadioConnection
+    // ::applyPsDdcConfig consumes the codec output.
+    .hasPureSignal    = true,
     .hasDiversityReceiver = false,
     .hasStepAttenuatorCal = false,
     .hasPaProfile     = true,
@@ -647,11 +654,35 @@ const BoardCapabilities kHermesLite = {
     .hasAlex2         = false,
     .hasRxBypassRelay = false,
     .rxOnlyAntennaCount = 0,
-    .hasPureSignal    = false,
-    // Phase 3M-4 Task 1: HL2 PureSignal capability fields populated for
-    // forward-compat — when HL2 PureSignal is enabled in a future task, the
-    // mi0bot HL2 override values are already in place.
+    // Phase 3M-4 Task 17 P1 follow-up: enable PureSignal for HL2.
     //
+    // From mi0bot console.cs:8409-8488 [v2.10.3.13-beta2]:
+    //   case HPSDRModel.HERMES:
+    //   case HPSDRModel.HERMESLITE:     // MI0BOT: HL2
+    //   case HPSDRModel.ANAN10:
+    //   case HPSDRModel.ANAN100:
+    //       P1_rxcount = 4;
+    //       nddc = 4;
+    //       ...
+    //       else // transmitting and PS is ON
+    //       {
+    //           P1_DDCConfig = 6;
+    //           DDCEnable = DDC0;
+    //           SyncEnable = DDC1;
+    //           if (hpsdr_model == HPSDRModel.HERMESLITE)  // HL2 high-rate
+    //           { Rate[0] = rx1_rate; Rate[1] = rx1_rate; }
+    //           else
+    //           { Rate[0] = ps_rate; Rate[1] = ps_rate; }
+    //           cntrl1 = 4;
+    //           cntrl2 = 0;
+    //       }
+    //
+    // P1CodecHl2::applyPureSignalDdcConfig (port at P1CodecHl2.cpp:461)
+    // already implements this branch.  The previously-deferred work was
+    // wiring P1RadioConnection::applyPsDdcConfig to consume that output —
+    // landed in this commit.  Bench validation pending; see
+    // docs/architecture/phase3m-4-handoff-bench-debug.md "P1/HL2 PS bring-up".
+    .hasPureSignal    = true,
     // PureSignal hardware-default peak: HL2-specific 0.233.  MI0BOT.
     // From mi0bot-Thetis clsHardwareSpecific.cs:312 [v2.10.3.13-beta2]
     //   if (NetworkIO.CurrentRadioProtocol == RadioProtocol.USB) // protocol 1
