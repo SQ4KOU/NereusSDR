@@ -406,6 +406,11 @@ private slots:
 
     void sourceCheckbox_defaultUnchecked()
     {
+        // NereusSDR-spin label: Thetis says "Use VAC Audio" but NereusSDR
+        // has VAX (a native virtual-audio bus, not a port of Thetis VAC)
+        // per memory feedback_vax_not_vac_port.md.  The user-facing string
+        // says VAX so the operator sees terminology consistent with the
+        // rest of the app (VaxApplet, IAudioBus, AppSettings keys).
         RadioModel model;
         DexpVoxPage page(&model);
         page.show();
@@ -413,10 +418,10 @@ private slots:
         auto* chk = page.findChild<QCheckBox*>(QStringLiteral("chkAntiVoxSource"));
         QVERIFY(chk != nullptr);
         QCOMPARE(chk->isChecked(), false);
-        QCOMPARE(chk->text(), QStringLiteral("Use VAC Audio"));
+        QCOMPARE(chk->text(), QStringLiteral("Use VAX Audio"));
     }
 
-    void sourceCheckbox_tooltipStartsWithThetisVerbatim()
+    void sourceCheckbox_tooltipStartsWithVaxLabel()
     {
         RadioModel model;
         DexpVoxPage page(&model);
@@ -424,11 +429,11 @@ private slots:
 
         auto* chk = page.findChild<QCheckBox*>(QStringLiteral("chkAntiVoxSource"));
         QVERIFY(chk != nullptr);
-        // Tooltip leads with the Thetis verbatim string from
-        // setup.designer.cs:44655 [v2.10.3.13]; NereusSDR-spin appends a
-        // note about the 3M-3c VAC-routing deferral.  We assert startsWith.
+        // NereusSDR-original tooltip (not Thetis-verbatim): the Thetis
+        // string mentions VAC, but NereusSDR has VAX.  feedback_vax_not_vac_port.md
+        // requires the user-facing string to say VAX.
         QVERIFY(chk->toolTip().startsWith(
-            QStringLiteral("Use VAC as Anti-VOX source")));
+            QStringLiteral("Use VAX as Anti-VOX source")));
     }
 
     void gainSpinbox_defaultZero()

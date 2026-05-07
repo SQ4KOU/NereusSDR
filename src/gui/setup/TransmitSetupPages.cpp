@@ -1689,18 +1689,26 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
 
     // chkAntiVoxSource — Y=41 in Thetis Designer.  Default unchecked
     // (no .Checked= setter at setup.designer.cs:44646-44657 [v2.10.3.13]).
-    m_chkAntiVoxSource = new QCheckBox(QStringLiteral("Use VAC Audio"));
+    //
+    // NereusSDR-spin label: Thetis says "Use VAC Audio" but NereusSDR has
+    // VAX (a native virtual-audio bus, not a port of Thetis VAC) per
+    // memory feedback_vax_not_vac_port.md.  The user-facing string says
+    // VAX so the operator sees terminology consistent with the rest of
+    // the app (VaxApplet, IAudioBus, AppSettings keys).  Source-comment
+    // cite preserved for upstream traceability.
+    m_chkAntiVoxSource = new QCheckBox(QStringLiteral("Use VAX Audio"));
     m_chkAntiVoxSource->setObjectName(QStringLiteral("chkAntiVoxSource"));
-    // Tooltip starts with the Thetis verbatim string per
-    // setup.designer.cs:44655 [v2.10.3.13]; NereusSDR-spin appends a note
-    // about the 3M-3c VAC-routing deferral so the user understands why
-    // the toggle currently has no audible effect on single-RX systems.
+    // Tooltip is NereusSDR-original (no Thetis verbatim) because the
+    // upstream string mentions VAC; spin to VAX matches the label and
+    // honors feedback_vax_not_vac_port.md.  The 3M-3c deferral note
+    // explains why the toggle currently has no audible effect on
+    // single-RX systems (VAX -> anti-VOX detector routing lands later).
     m_chkAntiVoxSource->setToolTip(QStringLiteral(
-        "Use VAC as Anti-VOX source.\n"
-        "(VAC routing into the anti-VOX detector lands in 3M-3c. "
+        "Use VAX as Anti-VOX source.\n"
+        "(VAX routing into the anti-VOX detector lands in 3M-3c. "
         "Toggling this currently has no audible effect on single-RX "
-        "systems because the anti-VOX feed is sourced from the RX speaker "
-        "bus regardless.)"));
+        "systems because the anti-VOX feed is sourced from the RX "
+        "speaker bus regardless.)"));
     m_chkAntiVoxSource->setChecked(tx.antiVoxSourceVax());
 
     // udAntiVoxGain — Y=71 in Thetis Designer.  Range -60..60 from
