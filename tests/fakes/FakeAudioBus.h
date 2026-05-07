@@ -52,6 +52,10 @@ public:
         return bytes;
     }
 
+    void flush() override {
+        ++m_flushes;
+    }
+
     qint64 pull(char* data, qint64 maxBytes) override {
         if (!m_open || data == nullptr || maxBytes <= 0) {
             return 0;
@@ -83,6 +87,7 @@ public:
     const QByteArray& buffer() const { return m_buffer; }
 
     int pullCount() const { return m_pulls; }
+    int flushCount() const { return m_flushes; }
 
     // Force-toggle isOpen() to false so AudioEngine::rxBlockReady's
     // isOpen() guard skips the push.
@@ -116,6 +121,7 @@ private:
     QByteArray  m_buffer;
     int         m_pushes{0};
     qint64      m_lastPushBytes{0};
+    int         m_flushes{0};
 
     // Pull-side state
     QByteArray  m_pullData;
