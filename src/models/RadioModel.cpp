@@ -1878,9 +1878,17 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             // twoTone) from RadioModel; tx + fb are passed as nullptr-safe
             // pointers and reset by setTxChannel/setPsFeedbackChannel below.
             //
-            // Per-board capability application happens in onConnected — the
-            // BoardCapabilities are not yet finalised in the WDSP-init lambda
-            // (Task 5 / Task 6 set ps_rate via the per-board codec hook).
+            // Per-board capability application happens here — BoardCapabilities
+            // is populated from m_hardwareProfile.caps by the time the
+            // WDSP-init lambda runs (the discovery + hardware profile
+            // exchange has completed before WDSP channels open).  Phase 3M-4
+            // bench-fix Round 2: previously the doc said "happens in
+            // onConnected" but no actual call site existed in the source
+            // tree (grep for applyBoardCapabilities returned 0 hits before
+            // this fix).  Result: SetPSHWPeak never ran, so calcc's GetPSHWPeak
+            // returned 0.0 instead of the per-board default (0.6121 for
+            // ANAN-G2 / 0.2899 for OrionMkII / 0.233 for HL2 / 0.4072 for
+            // legacy P1 boards — Task 1 commit 1bbb85a [v2.10.3.13]).
             if (!m_pureSignal) {
                 m_pureSignal = std::make_unique<PureSignal>(
                     m_wdspEngine,
@@ -1896,6 +1904,16 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 m_pureSignal->setPsFeedbackChannel(
                     m_wdspEngine ? m_wdspEngine->psFeedbackChannel() : nullptr);
             }
+
+            // From Thetis cmaster.cs:566 [v2.10.3.13-beta2] (mi0bot):
+            //   puresignal.SetPSHWPeak(txch, HardwareSpecific.PSDefaultPeak);
+            //   // MI0BOT: Correct for correct PS value
+            // applyBoardCapabilities also pushes psSampleRate to the
+            // PsFeedbackChannel + TxChannel calcc (mirrors cmaster.cs:535
+            // [v2.10.3.13]: puresignal.SetPSFeedbackRate(txch, ps_rate);).
+            // Inline tag preservation: //MI0BOT  [original inline comment
+            // from mi0bot-Thetis cmaster.cs:566]
+            m_pureSignal->applyBoardCapabilities(boardCapabilities());
 
             // Flip the TransmitModel pureSignalActive() seam from the test
             // stub default (returns false) to the live PureSignal read.
