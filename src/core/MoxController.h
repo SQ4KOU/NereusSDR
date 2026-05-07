@@ -465,6 +465,32 @@ public slots:
     //   TransmitModel::antiVoxSourceVaxChanged → MoxController::setAntiVoxSourceVax
     void setAntiVoxSourceVax(bool useVax);
 
+    // setAntiVoxTau: set the anti-VOX detector smoothing time-constant in ms.
+    //
+    // Mirrors udAntiVoxTau_ValueChanged from Thetis
+    // Project Files/Source/Console/setup.cs:18992-18996 [v2.10.3.13]:
+    //   private void udAntiVoxTau_ValueChanged(object sender, EventArgs e)
+    //   {
+    //       if (initializing) return;
+    //       cmaster.SetAntiVOXDetectorTau(0, (double)udAntiVoxTau.Value / 1000.0);
+    //   }
+    //
+    // Range from setup.designer.cs:44661-44688 [v2.10.3.13]:
+    //   Minimum=1, Maximum=500, Increment=1, default Value=20.
+    //
+    // Emits antiVoxDetectorTauRequested(seconds) only when the converted
+    // (ms / 1000.0) value changes vs the most recent emission.  NaN sentinel
+    // m_lastAntiVoxTauEmitted forces first-call emit so the WDSP DEXP block
+    // is primed at startup.
+    //
+    // Range is clamped defensively to [1, 500] in case the upstream caller
+    // (TransmitModel::setAntiVoxTauMs) ever emits an out-of-range value.
+    //
+    // Wired by RadioModel H.3 (Phase 3M-3a-iv Task 9):
+    //   TransmitModel::antiVoxTauMsChanged → MoxController::setAntiVoxTau
+    //   MoxController::antiVoxDetectorTauRequested → TxWorkerThread::setAntiVoxDetectorTau
+    void setAntiVoxTau(int ms);
+
     // ── H.4: PTT-source dispatch slots ───────────────────────────────────────
     //
     // Each slot routes an external PTT event through the MoxController state
@@ -741,6 +767,20 @@ signals:
     //   cmaster.SetAntiVOXGain(0, Math.Pow(10.0, (double)udAntiVoxGain.Value / 20.0));
     void antiVoxGainRequested(double gain);
 
+    // antiVoxDetectorTauRequested: emitted when the anti-VOX detector tau
+    // changes (post ms/1000.0 scaling).
+    //
+    // Carries the time-constant in seconds (range [0.001, 0.500]).
+    // Idempotent on the EMITTED double (NaN sentinel forces first-call emit
+    // so the WDSP DEXP block is primed at startup).
+    //
+    // Subscribers (RadioModel H.3, wired in Phase 3M-3a-iv Task 9):
+    //   TxWorkerThread::setAntiVoxDetectorTau(double seconds) — queued.
+    //
+    // From Thetis Project Files/Source/Console/setup.cs:18995 [v2.10.3.13]:
+    //   cmaster.SetAntiVOXDetectorTau(0, (double)udAntiVoxTau.Value / 1000.0);
+    void antiVoxDetectorTauRequested(double seconds);
+
     // antiVoxSourceWhatRequested: emitted when the anti-VOX source path is
     // accepted and applied.
     //
@@ -952,6 +992,16 @@ private:
     //
     // m_lastAntiVoxGainEmitted: NAN sentinel forces first-call emit.
     double   m_lastAntiVoxGainEmitted{std::numeric_limits<double>::quiet_NaN()};
+    //
+    // m_antiVoxTauMs: raw ms from TransmitModel::antiVoxTauMs(). Range [1,500].
+    //   Default 20 matches Thetis udAntiVoxTau designer default
+    //   (setup.designer.cs:44685-44688 [v2.10.3.13]).
+    int      m_antiVoxTauMs{20};
+    //
+    // m_lastAntiVoxTauEmitted: NAN sentinel forces first-call emit so the
+    // WDSP DEXP block is primed at startup.  Mirrors the
+    // m_lastAntiVoxGainEmitted pattern from H.3.
+    double   m_lastAntiVoxTauEmitted{std::numeric_limits<double>::quiet_NaN()};
     //
     // m_antiVoxSourceVax: mirrors TransmitModel::antiVoxSourceVax().
     //   Default false matches audio.cs:447 [v2.10.3.13]:

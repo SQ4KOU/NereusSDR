@@ -327,6 +327,98 @@ private slots:
 
         QLoggingCategory::setFilterRules(QString());
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // § D — setAntiVoxTau tests (Phase 3M-3a-iv Task 7)
+    //
+    // From Thetis Project Files/Source/Console/setup.cs:18992-18996 [v2.10.3.13]:
+    //   private void udAntiVoxTau_ValueChanged(object sender, EventArgs e)
+    //   {
+    //       if (initializing) return;
+    //       cmaster.SetAntiVOXDetectorTau(0, (double)udAntiVoxTau.Value / 1000.0);
+    //   }
+    //
+    // Range from setup.designer.cs:44661-44688 [v2.10.3.13]:
+    //   Minimum=1, Maximum=500, Increment=1, default Value=20.
+    //
+    // ms→seconds (/1000.0) lives in MoxController; TxChannel takes seconds
+    // directly.  NaN sentinel forces first-call emit so WDSP DEXP block is
+    // primed.
+    // ════════════════════════════════════════════════════════════════════════
+
+    // §D.1 — Default 20 ms emits 0.020 seconds
+    //
+    // From setup.designer.cs:44685-44688 [v2.10.3.13]: udAntiVoxTau.Value = 20.
+    // 20 ms / 1000.0 = 0.020 s.  NaN sentinel forces first-call emit.
+    void antiVoxTau_default20ms_emits20ThousandthsSecond()
+    {
+        MoxController ctrl;
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxDetectorTauRequested);
+
+        ctrl.setAntiVoxTau(20);  // ms; default; NaN sentinel forces emit
+
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toDouble(), 0.020);
+    }
+
+    // §D.2 — ms→seconds scaling: 80 ms emits 0.080
+    //
+    // Mirrors the /1000.0 conversion at setup.cs:18995 [v2.10.3.13].
+    void antiVoxTau_msToSeconds_scaling()
+    {
+        MoxController ctrl;
+        ctrl.setAntiVoxTau(20);  // prime NaN sentinel
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxDetectorTauRequested);
+
+        ctrl.setAntiVoxTau(80);  // ms
+
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toDouble(), 0.080);
+    }
+
+    // §D.3 — Idempotent: repeat same ms does not re-emit
+    void antiVoxTau_idempotent_noDoubleEmit()
+    {
+        MoxController ctrl;
+        ctrl.setAntiVoxTau(20);  // prime NaN; emits 0.020
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxDetectorTauRequested);
+
+        ctrl.setAntiVoxTau(20);  // same → no emit
+
+        QCOMPARE(spy.count(), 0);
+    }
+
+    // §D.4 — Boundary: 1 ms → 0.001 s (Min from setup.designer.cs:44676)
+    void antiVoxTau_boundary_1ms()
+    {
+        MoxController ctrl;
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxDetectorTauRequested);
+        ctrl.setAntiVoxTau(1);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toDouble(), 0.001);
+    }
+
+    // §D.5 — Boundary: 500 ms → 0.500 s (Max from setup.designer.cs:44666)
+    void antiVoxTau_boundary_500ms()
+    {
+        MoxController ctrl;
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxDetectorTauRequested);
+        ctrl.setAntiVoxTau(500);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toDouble(), 0.500);
+    }
+
+    // §D.6 — NaN sentinel: first call emits even at default value
+    //
+    // Spy attached before any setAntiVoxTau call → fresh NaN state.  Emit
+    // primes the WDSP DEXP block at startup regardless of default match.
+    void antiVoxTau_nanSentinel_firstCallAlwaysEmits()
+    {
+        MoxController ctrl;
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxDetectorTauRequested);
+        ctrl.setAntiVoxTau(20);  // default; sentinel forces emit
+        QCOMPARE(spy.count(), 1);
+    }
 };
 
 QTEST_MAIN(TestMoxControllerAntiVox)

@@ -107,6 +107,8 @@
 #include "core/MoxController.h"
 #include "core/LogCategories.h"
 
+#include <algorithm>
+
 #include <cmath>
 
 namespace NereusSDR {
@@ -951,6 +953,49 @@ void MoxController::setAntiVoxGain(int dB)
 {
     m_antiVoxGainDb = dB;
     recomputeAntiVoxGain();
+}
+
+// ---------------------------------------------------------------------------
+// setAntiVoxTau — set anti-VOX detector smoothing time-constant in ms.
+//
+// Mirrors udAntiVoxTau_ValueChanged from Thetis
+// Project Files/Source/Console/setup.cs:18992-18996 [v2.10.3.13]:
+//   private void udAntiVoxTau_ValueChanged(object sender, EventArgs e)
+//   {
+//       if (initializing) return;
+//       cmaster.SetAntiVOXDetectorTau(0, (double)udAntiVoxTau.Value / 1000.0);
+//   }
+//
+// Range [1, 500] ms from setup.designer.cs:44661-44688 [v2.10.3.13].
+// Defensive clamp here repeats the work TransmitModel::setAntiVoxTauMs already
+// does, but stays robust against accidental out-of-range emits.
+//
+// NaN sentinel m_lastAntiVoxTauEmitted forces first-call emit so WDSP DEXP
+// block is primed at startup.
+//
+// Wired by RadioModel H.3 (Phase 3M-3a-iv Task 9):
+//   TransmitModel::antiVoxTauMsChanged → MoxController::setAntiVoxTau
+//   MoxController::antiVoxDetectorTauRequested → TxWorkerThread::setAntiVoxDetectorTau
+// ---------------------------------------------------------------------------
+void MoxController::setAntiVoxTau(int ms)
+{
+    // Defensive clamp — primary clamp lives at TransmitModel::setAntiVoxTauMs.
+    // Range from setup.designer.cs:44666-44680 [v2.10.3.13]: Min=1, Max=500.
+    const int clamped = std::clamp(ms, 1, 500);
+
+    // ms→seconds conversion: setup.cs:18995 [v2.10.3.13]
+    //   (double)udAntiVoxTau.Value / 1000.0
+    const double seconds = static_cast<double>(clamped) / 1000.0;
+
+    // NaN sentinel: first call always emits (primes WDSP DEXP regardless of value).
+    if (!std::isnan(m_lastAntiVoxTauEmitted)
+        && seconds == m_lastAntiVoxTauEmitted) {
+        return;  // idempotent on emitted double; no spurious emit
+    }
+
+    m_antiVoxTauMs = clamped;
+    m_lastAntiVoxTauEmitted = seconds;
+    emit antiVoxDetectorTauRequested(seconds);
 }
 
 // ---------------------------------------------------------------------------
