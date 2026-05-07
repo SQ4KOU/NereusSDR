@@ -86,6 +86,18 @@ PureSignal::PureSignal(WdspEngine* engine,
         connect(m_mox, &MoxController::hardwareFlipped, this,
                 &PureSignal::onMoxChanged);
     }
+
+    // Phase 3M-4 bench-fix: auto-start the poll + auto-attention timers
+    // on construction.  Earlier comment said "don't start them in the ctor
+    // so a freshly-constructed PureSignal sitting idle doesn't burn CPU"
+    // — but no UI path calls setEnabled(true), so the poll loop never ran
+    // and getPSInfo / FB level / corrections-being-applied / cal counters
+    // never updated.  Mirrors Thetis PSForm starting timer1 on Show.
+    // 100ms timer reading getPSInfo is trivially cheap; calcc returns
+    // LRESET (zero-fill) when no TX so emit traffic is also zero.
+    m_enabled = true;
+    m_pollTimer.start();
+    m_autoAttTimer.start();
 }
 
 PureSignal::~PureSignal()

@@ -79,7 +79,10 @@ private slots:
                       /*mox=*/nullptr,
                       /*stepAtt=*/nullptr,
                       /*twoTone=*/nullptr);
-        QCOMPARE(ps.isEnabled(), false);
+        // Phase 3M-4 bench-fix: ctor auto-starts the coordinator
+        // (m_enabled=true) so the poll loop animates without an
+        // explicit setEnabled(true) call.  See PureSignal.cpp:88+.
+        QCOMPARE(ps.isEnabled(), true);
         QCOMPARE(ps.isAutoCalEnabled(), false);
         QCOMPARE(ps.feedbackLevel(), 0);
         QCOMPARE(ps.calibrationCount(), 0);
@@ -181,6 +184,11 @@ private slots:
     {
         TxChannel tx(kTxChannelId);
         PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+
+        // Phase 3M-4 bench-fix: ctor auto-enables; clear first so the
+        // setEnabled(true) call is a state change that emits.
+        ps.setEnabled(false);
+        QCOMPARE(ps.isEnabled(), false);
 
         QSignalSpy spy(&ps, &PureSignal::enabledChanged);
         ps.setEnabled(true);

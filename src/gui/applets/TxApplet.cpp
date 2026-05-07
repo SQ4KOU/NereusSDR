@@ -746,7 +746,10 @@ void TxApplet::buildUI()
         m_psaBtn->setAccessibleName(QStringLiteral("PS-A PureSignal"));
         m_psaBtn->setToolTip(QStringLiteral(
             "Toggle PureSignal auto-calibration. Right-click to open PureSignal..."));
-        m_psaBtn->setVisible(false);  // gated on caps.hasPureSignal in MainWindow
+        // Phase 3M-4 bench-fix: default visible so the button shows on every
+        // PS-capable board even if MainWindow's capability gate fires after
+        // applet construction (timing race observed at bench).  setBoardCapabilities
+        // (TxApplet.cpp:1985) hides for caps.hasPureSignal=false (Atlas/HL2).
         row->addWidget(m_psaBtn, 1);
 
         vbox->addLayout(row);

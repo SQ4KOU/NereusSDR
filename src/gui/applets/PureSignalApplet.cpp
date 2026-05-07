@@ -153,7 +153,11 @@ void PureSignalApplet::buildUI()
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
-    root->addWidget(appletTitleBar(QStringLiteral("PureSignal")));
+    // Phase 3M-4 bench-fix: AppletPanelWidget::wrapWithTitleBar (AppletPanelWidget.cpp:155)
+    // already prepends a host-side title bar from appletTitle().  Adding our own
+    // appletTitleBar() here resulted in a double header.  Same-shape bug exists
+    // in DiversityApplet / DigitalApplet / TunerApplet / CwxApplet / CatApplet /
+    // DvkApplet — fix here is PureSignal-scoped; flag for follow-up sweep.
 
     auto* body = new QWidget(this);
     auto* vbox = new QVBoxLayout(body);

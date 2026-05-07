@@ -180,6 +180,22 @@ PsaIndicatorWidget::PsaIndicatorWidget(RadioModel* model, QWidget* parent)
     wireToModel();
     updateDisplay();
     updateTooltip();
+
+    // Phase 3M-4 bench-fix: PureSignal coordinator is constructed
+    // late inside RadioModel's WDSP-init lambda — AFTER PsaIndicator-
+    // Widget is built.  Subscribe to the late-bind seam (RadioModel::
+    // pureSignalCoordinatorReady, added in Task 13 commit 2271f8a) so
+    // we re-wire when the coordinator becomes available.  Mirrors the
+    // PureSignalApplet pattern at PureSignalApplet.cpp:118-123.
+    if (m_radioModel) {
+        connect(m_radioModel, &RadioModel::pureSignalCoordinatorReady,
+                this, [this](PureSignal* /*ps*/) {
+                    if (m_pureSignal) { return; }   // already wired
+                    wireToModel();
+                    updateDisplay();
+                    updateTooltip();
+                });
+    }
 }
 
 PsaIndicatorWidget::~PsaIndicatorWidget() = default;
@@ -238,9 +254,12 @@ void PsaIndicatorWidget::wireToModel()
 
     // MoxController for MOX state.  Routed via hardwareFlipped(bool isTx)
     // per Thetis OnMoxChangeHandler at ucInfoBar.cs:554-561 [v2.10.3.13].
+    // Phase 3M-4 bench-fix: Qt::UniqueConnection makes wireToModel() safe
+    // to call twice (ctor + pureSignalCoordinatorReady late-bind seam).
     if (auto* mox = m_radioModel->moxController()) {
         connect(mox, &MoxController::hardwareFlipped,
-                this, &PsaIndicatorWidget::setMox);
+                this, &PsaIndicatorWidget::setMox,
+                Qt::UniqueConnection);
         m_mox = mox->isMox();
     }
 }

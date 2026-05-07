@@ -148,6 +148,11 @@ private slots:
     // Lazy-constructs on first invocation; subsequent calls show + raise the
     // existing instance so geometry persists across opens.
     void openPureSignalDialog();
+    // Phase 3M-4 bench-fix: gate m_psaIndicator visibility on
+    // caps.hasPureSignal && PureSignal::isAutoCalEnabled.  Called from
+    // PureSignal::autoCalEnabledChanged + RadioModel::pureSignalCoordinator-
+    // Ready + onConnectionStateChanged.
+    void updatePsaIndicatorVisibility();
     // Phase 3Q Sub-PR-4 D.2: right-click context menu on the TitleBar
     // ConnectionSegment. Items: Disconnect / Connect-to-other / Diagnostics /
     // Copy IP / Copy MAC. "Reconnect" omitted — no RadioModel::reconnect() API.

@@ -1061,10 +1061,27 @@ void MainWindow::buildUI()
                 connect(tt, &TwoToneController::twoToneActiveChanged,
                         m_spectrumWidget, &SpectrumWidget::setTestingIMD);
             }
-            if (auto* ps = m_radioModel->pureSignal()) {
+            // Phase 3M-4 bench-fix: PureSignal coordinator is late-bound
+            // during WDSP-init — at MainWindow build time it's typically
+            // nullptr, so the connection below never gets made and the
+            // IMD overlay show condition stays at m_showIMDMeasurements=
+            // false even after the user checks chkShow2ToneMeasurements.
+            // Subscribe to RadioModel::pureSignalCoordinatorReady so we
+            // re-attempt the connect when the coordinator becomes available.
+            // Mirrors the pattern in PureSignalApplet.cpp:118-123 +
+            // PsaIndicatorWidget bench-fix.
+            auto wireSpectrumToPs = [this](PureSignal* ps) {
+                if (!ps || !m_spectrumWidget) { return; }
                 connect(ps, &PureSignal::show2ToneMeasurementsChanged,
-                        m_spectrumWidget, &SpectrumWidget::setShowIMDMeasurements);
-            }
+                        m_spectrumWidget,
+                        &SpectrumWidget::setShowIMDMeasurements,
+                        Qt::UniqueConnection);
+            };
+            wireSpectrumToPs(m_radioModel->pureSignal());
+            connect(m_radioModel, &RadioModel::pureSignalCoordinatorReady,
+                    this, [wireSpectrumToPs](PureSignal* ps) {
+                        wireSpectrumToPs(ps);
+                    });
         }
 
         // ── 3M-1c Phase L.3: VFO TX badge routing ─────────────────────────────
@@ -2772,12 +2789,18 @@ void MainWindow::buildStatusBar()
     // The widget auto-wires to RadioModel's PureSignal coordinator and
     // MoxController on construction; click signals route back to
     // PureSignal::setInvertRedBlue / setHideFeedback below.
-    // Visibility is gated on caps.hasPureSignal in
-    // onConnectionStateChanged().  Hidden by default until a PS-capable
-    // board is connected.
+    //
+    // Phase 3M-4 bench-fix: visibility is gated on
+    //   caps.hasPureSignal && pureSignal->isAutoCalEnabled()
+    // (NereusSDR-specific UX: hide the banner unless the user has
+    // explicitly armed PS-A; reduces clutter for non-PS workflows on
+    // PS-capable boards).  updatePsaIndicatorVisibility() centralises the
+    // condition; called from autoCalEnabledChanged + connection-state +
+    // pureSignalCoordinatorReady (late-bind seam, Task 13).
     m_psaIndicator = new PsaIndicatorWidget(m_radioModel, barWidget);
     m_psaIndicator->setVisible(false);
-    if (auto* ps = m_radioModel->pureSignal()) {
+    auto wirePsaCoordinator = [this](PureSignal* ps) {
+        if (!ps) return;
         connect(m_psaIndicator,
                 &PsaIndicatorWidget::invertRedBlueRequested,
                 this, [ps]() {
@@ -2788,7 +2811,15 @@ void MainWindow::buildStatusBar()
                 this, [ps]() {
                     ps->setHideFeedback(!ps->hideFeedback());
                 });
-    }
+        connect(ps, &PureSignal::autoCalEnabledChanged,
+                this, &MainWindow::updatePsaIndicatorVisibility);
+    };
+    wirePsaCoordinator(m_radioModel->pureSignal());
+    connect(m_radioModel, &RadioModel::pureSignalCoordinatorReady,
+            this, [this, wirePsaCoordinator](PureSignal* ps) {
+                wirePsaCoordinator(ps);
+                updatePsaIndicatorVisibility();
+            });
     hbox->addWidget(m_psaIndicator);
 
     // ── Stretch ───────────────────────────────────────────────────────────────
@@ -4366,6 +4397,22 @@ void MainWindow::openPureSignalDialog()
     m_psForm->activateWindow();
 }
 
+// Phase 3M-4 bench-fix: PSA bottom-banner indicator visibility
+// gated on (caps.hasPureSignal && PureSignal::isAutoCalEnabled).
+// Centralised so onConnectionStateChanged + autoCalEnabledChanged +
+// pureSignalCoordinatorReady can all share one truth-source.
+void MainWindow::updatePsaIndicatorVisibility()
+{
+    if (!m_psaIndicator) { return; }
+    const bool caps =
+        m_radioModel
+        && m_radioModel->isConnected()
+        && m_radioModel->boardCapabilities().hasPureSignal;
+    auto* ps = m_radioModel ? m_radioModel->pureSignal() : nullptr;
+    const bool armed = ps && ps->isAutoCalEnabled();
+    m_psaIndicator->setVisible(caps && armed);
+}
+
 void MainWindow::showAudioDiagnoseDialog()
 {
 #if defined(Q_OS_LINUX)
@@ -4425,14 +4472,13 @@ void MainWindow::onConnectionStateChanged()
         m_stepAttController->setIsHpsdrBoard(
             m_radioModel->connection()->radioInfo().boardType == HPSDRHW::Atlas);
 
-        // Phase 3M-4 Task 10: gate the PSA bottom-banner indicator on the
-        // current board's PureSignal capability.  Boards without PS support
-        // (HL2 / Atlas) hide the FB+PS pair entirely; PS-capable boards
-        // (Hermes II / Angelia / Orion / Saturn / G2 etc.) show it.  See
-        // BoardCapabilities.h §286 for the per-board flag.
-        if (m_psaIndicator) {
-            m_psaIndicator->setVisible(caps.hasPureSignal);
-        }
+        // Phase 3M-4 Task 10 + bench-fix: PSA bottom-banner indicator is
+        // gated on caps.hasPureSignal AND pureSignal->isAutoCalEnabled().
+        // Boards without PS support (HL2 / Atlas) hide the FB+PS pair
+        // entirely; PS-capable boards (Hermes II / Angelia / Orion /
+        // Saturn / G2) show it only when the user has armed PS-A.
+        // updatePsaIndicatorVisibility centralises the condition.
+        updatePsaIndicatorVisibility();
         // Phase 3M-4 Task 13: gate PureSignalApplet + TxApplet [PS-A] on
         // the same board capability.  PureSignalApplet hides itself; the
         // TxApplet [PS-A] button hides via its setBoardCapabilities slot.
@@ -4475,12 +4521,10 @@ void MainWindow::onConnectionStateChanged()
         // Disconnect step attenuator from radio
         m_stepAttController->setRadioConnection(nullptr);
 
-        // Phase 3M-4 Task 10: hide the PSA indicator on disconnect.  When
-        // the user reconnects, onConnectionStateChanged() re-evaluates
-        // caps.hasPureSignal for the new board.
-        if (m_psaIndicator) {
-            m_psaIndicator->setVisible(false);
-        }
+        // Phase 3M-4 Task 10 + bench-fix: hide the PSA indicator on
+        // disconnect.  Re-evaluated via updatePsaIndicatorVisibility on
+        // next reconnect (which now also checks PureSignal::isAutoCalEnabled).
+        updatePsaIndicatorVisibility();
         // Phase 3M-4 Task 13: hide PureSignalApplet + TxApplet [PS-A] on
         // disconnect.  Same lifetime model as the PSA indicator above.
         // Re-evaluation happens on next reconnect via the connected-branch
