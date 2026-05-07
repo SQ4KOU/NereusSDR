@@ -13,6 +13,18 @@
   deferred to 3F multi-pan), exposes Tau (ms) on Setup -> Transmit -> DEXP/VOX
   with persistence under per-MAC key `AntiVox_Tau_Ms`. Bench-verification
   matrix at `docs/architecture/phase3m-3a-iv-verification/README.md`.
+- **Setup -> Transmit -> DEXP/VOX gains full grpAntiVOX parity.** Beyond the
+  Tau (ms) spinbox above, also adds `chkAntiVoxEnable` ("Anti-VOX Enable"),
+  `chkAntiVoxSource` ("Use VAC Audio"), and `udAntiVoxGain` ("Gain (dB)") to
+  match Thetis grpAntiVOX (`setup.designer.cs:44631-44760 [v2.10.3.13]`)
+  1:1. All four tooltips are verbatim from Thetis. Source-toggle currently
+  has no audible effect on single-RX (VAC routing into the anti-VOX
+  detector lands in 3M-3c); tooltip note explains the limitation. Independent
+  enable flag refactor: `TransmitModel::antiVoxRun` Q_PROPERTY (persisted
+  per-MAC under `AntiVox_Enable`), `MoxController::setAntiVoxRun` slot +
+  `antiVoxRunRequested` signal. Closes the M2 finding from the end-of-epic
+  code review (bench-verification matrix is now runnable from a fresh
+  install without a developer-only hook).
 
 ### Fixed
 - **Anti-VOX tau default 10 ms -> 20 ms.** WdspEngine create_dexp passed
