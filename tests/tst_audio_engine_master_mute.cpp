@@ -153,6 +153,50 @@ private slots:
         QCOMPARE(h.speakers->pushCount(), 1);
     }
 
+    // ── 7. setMasterMuted(true) flushes the speakers bus's queued samples
+    //      so any pre-mute audio already in the output ring stops draining
+    //      out the device.  Issue #201 (macOS Intel / Core Audio): without
+    //      the flush, the PortAudio ring (1 s capacity) keeps playing its
+    //      buffered tail after the mute click — surfaced as a "repeating
+    //      echo" before silence took over.  Skipping pushes alone (test
+    //      #2 above) is necessary but not sufficient; the flush drops the
+    //      already-queued samples so the gate is audibly instant. ─────────
+
+    void setMutedFlushesSpeakers() {
+        Harness h = makeHarness();
+        const int s = h.addSlice(/*vaxChannel=*/0);
+
+        // Simulate steady-state operation: a few audio blocks have been
+        // pushed before the user clicks mute.  These leave samples queued
+        // in the (real) PortAudio ring; with the FakeAudioBus they show up
+        // as accumulated push count.
+        h.engine->rxBlockReady(s, kTestSamples.data(), kTestFrames);
+        h.engine->rxBlockReady(s, kTestSamples.data(), kTestFrames);
+        const int pushesBeforeMute = h.speakers->pushCount();
+
+        // Reset the flush counter so we observe ONLY the mute-driven
+        // flush, not any incidental flushes from earlier setup.
+        const int flushesBeforeMute = h.speakers->flushCount();
+
+        h.engine->setMasterMuted(true);
+
+        // The mute transition must call flush() on the speakers bus
+        // exactly once.  Pushes are unaffected by flush — this is purely
+        // a "drop already-queued samples" signal.
+        QCOMPARE(h.speakers->flushCount(), flushesBeforeMute + 1);
+        QCOMPARE(h.speakers->pushCount(), pushesBeforeMute);
+
+        // Redundant set to true — same value, no second flush.
+        h.engine->setMasterMuted(true);
+        QCOMPARE(h.speakers->flushCount(), flushesBeforeMute + 1);
+
+        // Unmute must NOT flush — the writer resuming pushes is enough,
+        // and a flush on unmute would create an audible click by dropping
+        // any already-pushed-but-not-yet-played zero tail.
+        h.engine->setMasterMuted(false);
+        QCOMPARE(h.speakers->flushCount(), flushesBeforeMute + 1);
+    }
+
     // ── 5. masterMutedChanged emits once per distinct state change ─────────
 
     void emitsSignalOnChange() {

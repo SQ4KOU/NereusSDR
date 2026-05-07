@@ -544,8 +544,15 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
         bandLbl->setFixedWidth(kBandLabelWidth);
         grid->addWidget(bandLbl, row, kColBand);
 
-        // Per-band gain spinbox (0..100 dB, 0.1 step, 1 decimal).
-        m_gainSpins[n] = buildSpin(0.0, 100.0, 0.1, 1, gainGroup);
+        // Per-band gain spinbox (38.8..100 dB, 0.1 step, 1 decimal).
+        // Issue #199: Thetis hard-clamps the minimum at 38.8 across all 25
+        // PA-gain spinboxes (11 HF nud<Band>M + 14 nudVHF<n>) — values below
+        // 38.8 saturate computeAudioVolume's drive byte at 1.0 with no
+        // further effect on RF output (funsutton field report on ANAN-10E:
+        // 30.8 produced same RF as 38.8 on 80m).
+        // From Thetis setup.designer.cs:48537-48546 [v2.10.3.13] — nudVHF1
+        // (`Maximum = 100`, `Minimum = 38.8`) and 24 sibling sites match.
+        m_gainSpins[n] = buildSpin(38.8, 100.0, 0.1, 1, gainGroup);
         m_gainSpins[n]->setFixedWidth(kGainSpinWidth);
         m_gainSpins[n]->setToolTip(QStringLiteral(
             "PA gain compensation for %1 in dB.  Subtracted from the "

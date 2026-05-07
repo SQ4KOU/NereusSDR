@@ -92,6 +92,15 @@
 //                 returns to a pure drain (no accumulator side effects).
 //                 TX pump now lives in src/core/TxWorkerThread.{h,cpp}.
 //                 Plan: docs/architecture/phase3m-1c-tx-pump-architecture-plan.md
+//   2026-05-07 — Issue #201 (master-mute echo tail) by J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.  setMasterMuted(true)
+//                 now calls m_speakersBus->flush() under m_speakersBusMutex on
+//                 the false→true transition so already-queued samples in the
+//                 PortAudio output ring don't keep draining out the device
+//                 after the mute click — surfaced as a ~1 s "echo" tail on
+//                 macOS Intel / Core Audio.  Pairs with new IAudioBus::flush()
+//                 (default no-op) and PortAudioBus::flush() (atomic
+//                 ringRead := ringWrite).
 // =================================================================
 
 #include "AudioEngine.h"
@@ -856,6 +865,11 @@ void AudioEngine::setTxInputBusForTest(std::unique_ptr<IAudioBus> bus)
     m_txInputBus = std::move(bus);
 }
 
+void AudioEngine::setVaxTxBusForTest(std::unique_ptr<IAudioBus> bus)
+{
+    m_vaxTxBus = std::move(bus);
+}
+
 #endif
 
 void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
@@ -968,7 +982,11 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // accumulate() above and the VAX tap earlier in this method run
     // unconditionally, so 3rd-party apps consuming a VAX channel keep
     // receiving audio while the local monitor is muted. No alloc, no
-    // logging — RT-safety preserved.
+    // logging — RT-safety preserved.  setMasterMuted(true) also flushes
+    // the speakers bus's queued samples (issue #201) so already-buffered
+    // pre-mute audio doesn't keep draining out the device after the
+    // gate engages — see PortAudioBus::flush() and the call site in
+    // setMasterMuted().
     //
     // Sub-Phase 12 live-reconfig: try_lock the speakers bus mutex only
     // around the push itself.  Previously this was held for the entire
@@ -1007,6 +1025,24 @@ bool AudioEngine::isPcMicOverrideActive() const noexcept
 void AudioEngine::onMicSourceChanged(bool selectedSourceIsPc)
 {
     m_micSourceWantsPc.store(selectedSourceIsPc, std::memory_order_release);
+}
+
+bool AudioEngine::isVaxMicOverrideActive() const noexcept
+{
+    // Phase VAX-TX (eager-borg-d64bed, 2026-05-06).  Both conditions must
+    // hold for the worker to overlay VAX TX samples on radio mic samples:
+    //   - the user explicitly selected MicSource::Vax (m_micSourceWantsVax)
+    //   - the VAX TX bus exists and is open (so pullVaxTxMic has somewhere
+    //     to read from)
+    if (!m_micSourceWantsVax.load(std::memory_order_acquire)) {
+        return false;
+    }
+    return (m_vaxTxBus != nullptr) && m_vaxTxBus->isOpen();
+}
+
+void AudioEngine::onMicSourceChangedVax(bool selectedSourceIsVax)
+{
+    m_micSourceWantsVax.store(selectedSourceIsVax, std::memory_order_release);
 }
 
 int AudioEngine::pullTxMic(float* dst, int n)
@@ -1071,6 +1107,61 @@ int AudioEngine::pullTxMic(float* dst, int n)
     return gotMonoSamples;
 }
 
+int AudioEngine::pullVaxTxMic(float* dst, int n)
+{
+    // VaxTxMicSource → CompositeTxMicRouter → TxChannel mic input.
+    // Closes the AudioEngine.cpp:306 TODO ("pull TX audio from
+    // m_vaxTxBus when [...] consumer that pulls from m_vaxTxBus / mic
+    // lives — Sub-Phase 9").
+    //
+    // VAX TX shm is fixed at 48 kHz stereo float32 by the
+    // plugin↔CoreAudioHalBus contract (see makePCMFormat in
+    // hal-plugin/NereusSDRVAX.cpp + CoreAudioHalBus negotiated
+    // format).  We assume that contract here — if a Linux backend
+    // ever negotiates a different format, this method will need the
+    // same dispatch shape as pullTxMic.
+    if (m_vaxTxBus == nullptr || dst == nullptr || n <= 0) {
+        return 0;
+    }
+    if (!m_vaxTxBus->isOpen()) {
+        return 0;
+    }
+
+    constexpr int kVaxTxChannels        = 2;
+    constexpr int kVaxTxBytesPerSample  = static_cast<int>(sizeof(float));
+    constexpr int kVaxTxBytesPerFrame   = kVaxTxChannels * kVaxTxBytesPerSample;
+
+    // To produce n mono output samples we pull n stereo frames.
+    const qint64 needBytes = static_cast<qint64>(n) * kVaxTxBytesPerFrame;
+
+    // thread_local scratch avoids heap allocation on every audio-thread call.
+    // Grows once per thread; zero-alloc thereafter.
+    static thread_local std::vector<char> scratch;
+    if (static_cast<qint64>(scratch.size()) < needBytes) {
+        scratch.resize(static_cast<size_t>(needBytes));
+    }
+
+    const qint64 gotBytes = m_vaxTxBus->pull(scratch.data(), needBytes);
+    if (gotBytes <= 0) {
+        return 0;
+    }
+
+    const int gotFrames = static_cast<int>(gotBytes / kVaxTxBytesPerFrame);
+    const float* src = reinterpret_cast<const float*>(scratch.data());
+
+    // Stereo → mono via 0.5 * (L + R).  Apps writing to "NereusSDR
+    // TX" send stereo (FreeDV/WSJT-X usually mirror to both channels);
+    // averaging is the conservative downmix that preserves level when
+    // both channels carry the same content and avoids one-sided clipping
+    // when only one channel is active.
+    for (int i = 0; i < gotFrames; ++i) {
+        const float l = src[i * 2];
+        const float r = src[i * 2 + 1];
+        dst[i] = 0.5f * (l + r);
+    }
+    return gotFrames;
+}
+
 void AudioEngine::setVolume(float volume)
 {
     volume = std::clamp(volume, 0.0f, 1.0f);
@@ -1090,9 +1181,36 @@ void AudioEngine::setMasterMuted(bool muted)
     // would not synchronize the read-side observation order on weak
     // memory models.
     const bool prev = m_masterMuted.exchange(muted, std::memory_order_acq_rel);
-    if (prev != muted) {
-        emit masterMutedChanged(muted);
+    if (prev == muted) {
+        return;
     }
+
+    // Issue #201 (macOS Intel / Core Audio): on the false→true
+    // transition, drop any samples already queued in the speakers bus's
+    // internal ring.  rxBlockReady's mute gate stops NEW pushes, but
+    // the PortAudio output ring (1 s capacity — see PortAudioBus.cpp)
+    // can hold up to a second of pre-mute audio that would otherwise
+    // keep playing out the device after the click, surfacing as a
+    // ~1 s "echo" tail.  The flush atomically equalizes the ring's
+    // read/write cursors so the next paCallback iteration sees no
+    // unread samples and outputs silence.  No flush on unmute — the
+    // DSP thread resuming pushes is enough, and a flush there would
+    // create an audible click.
+    //
+    // Hold m_speakersBusMutex around the flush so a concurrent
+    // setSpeakersConfig (which tears down + rebuilds m_speakersBus)
+    // can't free the bus out from under us.  rxBlockReady try_locks
+    // this same mutex; ≤1 ms of dropped speakers-push from contention
+    // here is inaudible (and only happens on the rare race of mute +
+    // device-reconfigure simultaneously).
+    if (muted) {
+        std::lock_guard<std::mutex> lk(m_speakersBusMutex);
+        if (m_speakersBus) {
+            m_speakersBus->flush();
+        }
+    }
+
+    emit masterMutedChanged(muted);
 }
 
 // Plan: 3M-1b E.4. Pre-code review §10.3 + §10.4.

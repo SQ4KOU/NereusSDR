@@ -320,6 +320,37 @@ qint64 PortAudioBus::push(const char* data, qint64 bytes) {
     return bytes;
 }
 
+void PortAudioBus::flush() {
+    // Issue #201: drop any unread samples queued in the ring so they
+    // don't keep draining out the device after a mute click.  Output
+    // mode: callers (AudioEngine on mute) want unread samples dropped.
+    // Input mode: callers (a future Setup → Audio "drop stale capture"
+    // path) want unread captured samples dropped.  In both modes the
+    // operation is the same: equalize read/write cursors atomically.
+    //
+    // Race with the audio thread:
+    //  - Output mode: paCallback advances m_ringRead; push() advances
+    //    m_ringWrite.  If we set ringRead := ringWrite atomically, the
+    //    callback may have JUST advanced ringRead one tick before our
+    //    store; the store still leaves r ≤ w, so the next callback
+    //    iteration reads `r < w` as false and outputs silence.  No
+    //    torn-read window.
+    //  - Input mode: paCallback advances m_ringWrite; pull() advances
+    //    m_ringRead.  Symmetric reasoning applies.
+    //
+    // No mutex needed — the cursors are std::atomic<qint64> and the
+    // single store is sequenced after the load by acquire/release
+    // ordering.  The PortAudio device's own internal output buffer
+    // (~5–20 ms latency on Core Audio / WASAPI) still plays its
+    // already-handed-off samples; that's below the threshold of
+    // perception and outside this layer's reach.
+    if (!m_stream) {
+        return;
+    }
+    const qint64 w = m_ringWrite.load(std::memory_order_acquire);
+    m_ringRead.store(w, std::memory_order_release);
+}
+
 qint64 PortAudioBus::pull(char* data, qint64 maxBytes) {
     if (!m_stream) { return 0; }
     if (m_cfg.direction != AudioDirection::Input) { return 0; }

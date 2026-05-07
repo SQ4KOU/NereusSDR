@@ -46,6 +46,7 @@ namespace NereusSDR {
 
 class PcMicSource;
 class RadioMicSource;
+class VaxTxMicSource;
 
 /// MicSource — strategy-pattern enum for which mic source is active.
 ///
@@ -53,9 +54,19 @@ class RadioMicSource;
 ///          Always available. Used by default and forced on HL2.
 /// Radio — Radio mic-jack input via P1/P2 mic-frame stream.
 ///          Requires hasMicJack == true (not available on HL2).
+/// Vax   — Audio routed to "NereusSDR TX" virtual device by a 3rd-
+///          party app (FreeDV, WSJT-X, etc.).  Pulled from
+///          /nereussdr-vax-tx shared memory by the HAL plugin →
+///          CoreAudioHalBus → VaxTxMicSource.  Requires the VAX TX
+///          mic source to have been registered via setVaxSource()
+///          (called by RadioModel after engine start). If the VAX
+///          source is null when MicSource::Vax is selected, the
+///          router falls through to Pc as a safety default rather
+///          than emitting silence.
 enum class MicSource : int {
     Pc    = 0,  ///< PC microphone (host audio device)
     Radio = 1,  ///< Radio mic-jack input via P1/P2 mic-frame stream
+    Vax   = 2,  ///< VAX TX virtual device (3rd-party app → /nereussdr-vax-tx)
 };
 
 /// CompositeTxMicRouter — selector that holds PcMicSource + RadioMicSource
@@ -134,6 +145,31 @@ public:
     /// transition there is no effect on the active source.
     void setMoxActive(bool active);
 
+    /// Register the VAX TX mic source (additive — the existing
+    /// constructor signature is preserved so existing tests and
+    /// callers compile unchanged). Pass nullptr to clear.
+    ///
+    /// VAX is always treated as available when registered: there is
+    /// no per-board capability gate analogous to hasMicJack — every
+    /// supported macOS / Linux build publishes a "NereusSDR TX"
+    /// device and any user can opt in. Windows builds will gain a
+    /// VAX TX path once the BYO virtual-cable wiring lands; until
+    /// then setVaxSource(nullptr) keeps Vax selection a safe
+    /// no-op (falls back to Pc).
+    ///
+    /// Called from the main thread after RadioModel constructs
+    /// VaxTxMicSource. Audio-thread reads the pointer via
+    /// std::atomic with acquire ordering so a mid-session register
+    /// is safe.
+    void setVaxSource(VaxTxMicSource* source);
+
+    /// Currently registered VAX TX source pointer (may be null).
+    /// Audio-thread accessor for tests.
+    VaxTxMicSource* vaxSource() const
+    {
+        return m_vaxSource.load(std::memory_order_acquire);
+    }
+
 #ifdef NEREUS_BUILD_TESTS
     /// True iff a source switch was deferred because MOX was active
     /// and has not yet been applied. For test inspection only.
@@ -153,6 +189,7 @@ private:
     std::atomic<MicSource> m_pendingSource;    // queued switch (when MOX-locked)
     std::atomic<bool>      m_hasPendingSwitch {false};
     std::atomic<bool>      m_moxActive {false};
+    std::atomic<VaxTxMicSource*> m_vaxSource {nullptr};  // non-owning; registered post-ctor
 };
 
 } // namespace NereusSDR

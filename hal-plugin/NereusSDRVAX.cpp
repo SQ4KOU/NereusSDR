@@ -53,6 +53,21 @@
 #include <cstddef>
 #include <cstring>
 #include <cmath>
+#include <cerrno>
+
+// ── Diagnostic logging (NereusSDR debug build, 2026-05-06) ──────────────────
+//
+// Plugin runs inside coreaudiod and has no stdout/stderr; route diagnostics to
+// the macOS unified log. Subsystem "com.nereussdr.vax" matches the bundle id;
+// view live with:
+//   log stream --predicate 'subsystem == "com.nereussdr.vax"'
+// or grep historical:
+//   log show --predicate 'subsystem == "com.nereussdr.vax"' --last 5m
+//
+// Per-callback logs are rate-limited so they do not flood the unified log on
+// the audio realtime thread (~94 Hz callback rate).
+#include <os/log.h>
+static os_log_t s_log = os_log_create("com.nereussdr.vax", "plugin");
 
 // ── Shared memory layout — must match src/core/audio/CoreAudioHalBus.h
 //    (Sub-Phase 5.3; not yet landed). Any field change here requires the
@@ -92,10 +107,14 @@ class VaxRxHandler : public aspl::IORequestHandler {
 public:
     explicit VaxRxHandler(int channel)
         : m_channel(channel)
-    {}
+    {
+        os_log(s_log, "VaxRxHandler ch=%{public}d constructed", m_channel);
+    }
 
     ~VaxRxHandler() override
     {
+        os_log(s_log, "VaxRxHandler ch=%{public}d destructed (m_shmBlock=%{public}p)",
+               m_channel, static_cast<void*>(m_shmBlock));
         unmapShm();
     }
 
@@ -109,14 +128,35 @@ public:
         auto* dst = static_cast<float*>(bytes);
         const UInt32 totalSamples = bytesCount / sizeof(float);
 
+        // First-call log: confirm CoreAudio is invoking our handler at all.
+        if (m_callCount == 0) {
+            os_log(s_log,
+                   "VaxRx[%{public}d] FIRST OnReadClientInput call: bytesCount=%{public}u",
+                   m_channel, bytesCount);
+        }
+        ++m_callCount;
+
         if (!ensureShm()) {
             std::memset(dst, 0, bytesCount);
+            // Rate-limited: log once per ~96 calls (~1 sec) when failing.
+            if ((m_callCount % 96) == 1) {
+                os_log_error(s_log,
+                             "VaxRx[%{public}d] ensureShm() FAILED at call #%{public}llu — returning silence",
+                             m_channel, m_callCount);
+            }
             return;
         }
 
         auto* block = m_shmBlock;
         if (!block->active.load(std::memory_order_acquire)) {
             std::memset(dst, 0, bytesCount);
+            if ((m_callCount % 96) == 1) {
+                os_log(s_log,
+                       "VaxRx[%{public}d] active=0 (call #%{public}llu) — returning silence (mapping wp=%{public}u rp=%{public}u)",
+                       m_channel, m_callCount,
+                       block->writePos.load(std::memory_order_relaxed),
+                       block->readPos.load(std::memory_order_relaxed));
+            }
             return;
         }
 
@@ -149,28 +189,97 @@ public:
         }
 
         block->readPos.store(rp, std::memory_order_release);
+
+        // Periodic summary so we can see whether the read path is actually
+        // doing work over time.  Once per ~96 calls ≈ once per second.
+        if ((m_callCount % 96) == 1) {
+            os_log(s_log,
+                   "VaxRx[%{public}d] read OK: call=%{public}llu bytesCount=%{public}u toRead=%{public}u wp=%{public}u rp=%{public}u",
+                   m_channel, m_callCount, bytesCount, toRead, wp, rp);
+        }
     }
 
 private:
+    // Stale-mmap re-validation interval (in OnReadClientInput call counts).
+    // CoreAudio drives reads at ~94 Hz at the typical 1024-sample buffer, so
+    // 96*5 ≈ 5 seconds.  Each re-validation costs one shm_open + fstat +
+    // mmap + munmap pair; on a healthy mapping the new region maps the same
+    // kernel pages so wp/rp keep their values, and on a stale mapping we
+    // recover audio within one buffer.
+    static constexpr int kReattachIntervalCalls = 96 * 5;
+
     bool ensureShm()
     {
-        if (m_shmBlock) return true;
+        if (m_shmBlock != nullptr) {
+            // Periodic stale-mmap check (added 2026-05-06, eager-borg-d64bed).
+            //
+            // macOS POSIX shm has an edge case where the plugin's cached
+            // mapping can become disconnected from the live shm — confirmed
+            // in the field when NereusSDR is killed and relaunched while
+            // the plugin host (coreaudiod helper) is still alive.  After
+            // the producer process churn the kernel object the plugin
+            // mapped at attach-time can be recycled, leaving m_shmBlock
+            // pointing at memory that the new NereusSDR instance does
+            // not write to.  Symptom: plugin's writePos is frozen at a
+            // large historical value while the live shm's writePos is
+            // advancing — both processes have shm_open'd the same name
+            // but resolved to different kernel objects.
+            //
+            // We can't observe this directly via fstat (st_ino is 0 for
+            // POSIX shm on macOS), so we periodically force a fresh
+            // attach.  If the mapping is healthy the new attach lands on
+            // the same kernel pages and is effectively idempotent (cost:
+            // a few syscalls per ~5 sec); if it's stale we re-attach to
+            // the live shm and reads resume on the next call.
+            if (++m_validateCounter < kReattachIntervalCalls) {
+                return true;
+            }
+            m_validateCounter = 0;
 
-        // Retry periodically — NereusSDR may not have created the segment yet.
-        auto now = std::chrono::steady_clock::now();
-        if (now - m_lastRetry < std::chrono::seconds(1)) return false;
-        m_lastRetry = now;
+            os_log(s_log,
+                   "VaxRx[%{public}d] re-validating shm mapping (call=%{public}llu)",
+                   m_channel, m_callCount);
+
+            // Drop the cached mapping so the attach path below runs
+            // unconditionally.  Skip the m_lastRetry throttle since we
+            // know NereusSDR was up the moment we last read from this
+            // name — there is no startup race to wait out here.
+            unmapShm();
+        } else {
+            // Initial-attach throttle: avoid hammering shm_open during the
+            // first-startup race when NereusSDR hasn't created the segment
+            // yet.  Only applies on first attach (m_shmBlock was already
+            // null on entry), not on staleness re-attach above.
+            auto now = std::chrono::steady_clock::now();
+            if (now - m_lastRetry < std::chrono::seconds(1)) return false;
+            m_lastRetry = now;
+        }
 
         char name[64];
         snprintf(name, sizeof(name), "/nereussdr-vax-%d", m_channel);
 
         int fd = shm_open(name, O_RDWR, 0666);
-        if (fd < 0) return false;
+        if (fd < 0) {
+            os_log_error(s_log,
+                         "VaxRx[%{public}d] shm_open(%{public}s, O_RDWR) FAILED errno=%{public}d (%{public}s)",
+                         m_channel, name, errno, strerror(errno));
+            return false;
+        }
 
         struct stat st;
-        if (fstat(fd, &st) != 0 || static_cast<size_t>(st.st_size) < sizeof(VaxShmBlock)) {
-            // Stale or undersized segment — refuse to mmap past the end.
-            // A SIGBUS here would crash coreaudiod. Try again next retry cycle.
+        if (fstat(fd, &st) != 0) {
+            os_log_error(s_log,
+                         "VaxRx[%{public}d] fstat(%{public}s) FAILED errno=%{public}d (%{public}s)",
+                         m_channel, name, errno, strerror(errno));
+            ::close(fd);
+            return false;
+        }
+        if (static_cast<size_t>(st.st_size) < sizeof(VaxShmBlock)) {
+            os_log_error(s_log,
+                         "VaxRx[%{public}d] shm size=%{public}lld < required=%{public}zu — refusing mmap",
+                         m_channel,
+                         static_cast<long long>(st.st_size),
+                         sizeof(VaxShmBlock));
             ::close(fd);
             return false;
         }
@@ -179,9 +288,28 @@ private:
                          MAP_SHARED, fd, 0);
         ::close(fd);
 
-        if (ptr == MAP_FAILED) return false;
+        if (ptr == MAP_FAILED) {
+            os_log_error(s_log,
+                         "VaxRx[%{public}d] mmap(%{public}s) FAILED errno=%{public}d (%{public}s)",
+                         m_channel, name, errno, strerror(errno));
+            return false;
+        }
 
         m_shmBlock = static_cast<VaxShmBlock*>(ptr);
+
+        // Snapshot the freshly-attached header for diagnostics. We log st_ino
+        // so a later "stale mapping" investigation can compare it against a
+        // fresh shm_open's inode to detect divergence.
+        const auto wpInit = m_shmBlock->writePos.load(std::memory_order_relaxed);
+        const auto rpInit = m_shmBlock->readPos.load(std::memory_order_relaxed);
+        const auto actInit = m_shmBlock->active.load(std::memory_order_relaxed);
+        os_log(s_log,
+               "VaxRx[%{public}d] shm ATTACHED: name=%{public}s ino=%{public}llu size=%{public}lld ptr=%{public}p initial wp=%{public}u rp=%{public}u active=%{public}u",
+               m_channel, name,
+               static_cast<unsigned long long>(st.st_ino),
+               static_cast<long long>(st.st_size),
+               ptr,
+               wpInit, rpInit, actInit);
         return true;
     }
 
@@ -196,16 +324,25 @@ private:
     int m_channel{1};
     VaxShmBlock* m_shmBlock{nullptr};
     std::chrono::steady_clock::time_point m_lastRetry{};
+    uint64_t m_callCount{0};
+    // Stale-mmap re-validation counter (ticked per OnReadClientInput call;
+    // forces a fresh shm_open + mmap when it crosses kReattachIntervalCalls).
+    int m_validateCounter{0};
 };
 
 // ── VAX TX Handler: receives audio from apps → writes to shared memory ──────
 
 class VaxTxHandler : public aspl::IORequestHandler {
 public:
-    VaxTxHandler() = default;
+    VaxTxHandler()
+    {
+        os_log(s_log, "VaxTxHandler constructed");
+    }
 
     ~VaxTxHandler() override
     {
+        os_log(s_log, "VaxTxHandler destructed (m_shmBlock=%{public}p)",
+               static_cast<void*>(m_shmBlock));
         unmapShm();
     }
 
@@ -215,7 +352,21 @@ public:
                             const void* bytes,
                             UInt32 bytesCount) override
     {
-        if (!ensureShm()) return;
+        if (m_callCount == 0) {
+            os_log(s_log,
+                   "VaxTx FIRST OnWriteMixedOutput call: bytesCount=%{public}u",
+                   bytesCount);
+        }
+        ++m_callCount;
+
+        if (!ensureShm()) {
+            if ((m_callCount % 96) == 1) {
+                os_log_error(s_log,
+                             "VaxTx ensureShm() FAILED at call #%{public}llu — dropping audio",
+                             m_callCount);
+            }
+            return;
+        }
 
         auto* block = m_shmBlock;
         const auto* src = static_cast<const float*>(bytes);
@@ -230,24 +381,66 @@ public:
 
         block->writePos.store(wp, std::memory_order_release);
         block->active.store(1, std::memory_order_release);
+
+        // Periodic summary so we can see whether the write path is doing
+        // work over time. Once per ~96 calls ≈ once per second.
+        if ((m_callCount % 96) == 1) {
+            os_log(s_log,
+                   "VaxTx write OK: call=%{public}llu bytesCount=%{public}u wp=%{public}u",
+                   m_callCount, bytesCount, wp);
+        }
     }
 
 private:
+    // Stale-mmap re-validation interval (mirrors VaxRxHandler).
+    static constexpr int kReattachIntervalCalls = 96 * 5;
+
     bool ensureShm()
     {
-        if (m_shmBlock) return true;
+        if (m_shmBlock != nullptr) {
+            // Periodic stale-mmap check (added 2026-05-06, eager-borg-d64bed).
+            // Same rationale as VaxRxHandler::ensureShm — macOS can disconnect
+            // the cached mapping from the live shm when NereusSDR restarts;
+            // periodic re-attach keeps writes flowing without manual
+            // intervention.
+            if (++m_validateCounter < kReattachIntervalCalls) {
+                return true;
+            }
+            m_validateCounter = 0;
 
-        auto now = std::chrono::steady_clock::now();
-        if (now - m_lastRetry < std::chrono::seconds(1)) return false;
-        m_lastRetry = now;
+            os_log(s_log,
+                   "VaxTx re-validating shm mapping (call=%{public}llu)",
+                   m_callCount);
+
+            unmapShm();
+            // Fall through; skip retry throttle (we just had a healthy mapping).
+        } else {
+            auto now = std::chrono::steady_clock::now();
+            if (now - m_lastRetry < std::chrono::seconds(1)) return false;
+            m_lastRetry = now;
+        }
 
         int fd = shm_open("/nereussdr-vax-tx", O_RDWR, 0666);
-        if (fd < 0) return false;
+        if (fd < 0) {
+            os_log_error(s_log,
+                         "VaxTx shm_open(/nereussdr-vax-tx, O_RDWR) FAILED errno=%{public}d (%{public}s)",
+                         errno, strerror(errno));
+            return false;
+        }
 
         struct stat st;
-        if (fstat(fd, &st) != 0 || static_cast<size_t>(st.st_size) < sizeof(VaxShmBlock)) {
-            // Stale or undersized segment — refuse to mmap past the end.
-            // A SIGBUS here would crash coreaudiod. Try again next retry cycle.
+        if (fstat(fd, &st) != 0) {
+            os_log_error(s_log,
+                         "VaxTx fstat(/nereussdr-vax-tx) FAILED errno=%{public}d (%{public}s)",
+                         errno, strerror(errno));
+            ::close(fd);
+            return false;
+        }
+        if (static_cast<size_t>(st.st_size) < sizeof(VaxShmBlock)) {
+            os_log_error(s_log,
+                         "VaxTx shm size=%{public}lld < required=%{public}zu — refusing mmap",
+                         static_cast<long long>(st.st_size),
+                         sizeof(VaxShmBlock));
             ::close(fd);
             return false;
         }
@@ -256,9 +449,24 @@ private:
                          MAP_SHARED, fd, 0);
         ::close(fd);
 
-        if (ptr == MAP_FAILED) return false;
+        if (ptr == MAP_FAILED) {
+            os_log_error(s_log,
+                         "VaxTx mmap(/nereussdr-vax-tx) FAILED errno=%{public}d (%{public}s)",
+                         errno, strerror(errno));
+            return false;
+        }
 
         m_shmBlock = static_cast<VaxShmBlock*>(ptr);
+
+        const auto wpInit = m_shmBlock->writePos.load(std::memory_order_relaxed);
+        const auto rpInit = m_shmBlock->readPos.load(std::memory_order_relaxed);
+        const auto actInit = m_shmBlock->active.load(std::memory_order_relaxed);
+        os_log(s_log,
+               "VaxTx shm ATTACHED: name=/nereussdr-vax-tx ino=%{public}llu size=%{public}lld ptr=%{public}p initial wp=%{public}u rp=%{public}u active=%{public}u",
+               static_cast<unsigned long long>(st.st_ino),
+               static_cast<long long>(st.st_size),
+               ptr,
+               wpInit, rpInit, actInit);
         return true;
     }
 
@@ -271,6 +479,8 @@ private:
     }
 
     VaxShmBlock* m_shmBlock{nullptr};
+    uint64_t m_callCount{0};
+    int m_validateCounter{0};
     std::chrono::steady_clock::time_point m_lastRetry{};
 };
 
@@ -304,6 +514,9 @@ public:
     {
         // Called by HAL after driver is fully initialized and host is available.
         // Safe to add devices here — PropertiesChanged notifications will work.
+
+        os_log(s_log, "VaxDriverHandler::OnInitialize entry — pid=%{public}d uid=%{public}d",
+               static_cast<int>(getpid()), static_cast<int>(getuid()));
 
         // 4 VAX RX input devices (radio → apps receive audio)
         for (int ch = 1; ch <= 4; ++ch) {
