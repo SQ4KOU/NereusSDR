@@ -117,6 +117,7 @@
 #include "ImdOverlay.h"
 #include "widgets/VfoWidget.h"
 #include "core/AppSettings.h"
+#include "core/LogCategories.h"   // Phase 3M-4 bench-fix Round 2: lcSpectrum
 #include "dbm_strip_math.h"
 #include "models/BandPlanManager.h"
 
@@ -2833,6 +2834,17 @@ void SpectrumWidget::setMoxOverlay(bool isTx)
     if (!isTx && m_imdOverlay) {
         m_imdOverlay->reset();
     }
+
+    // Phase 3M-4 bench-fix Round 2: log all 4 IMD-overlay gate transitions
+    // so bench testers can see in the terminal exactly which gate is
+    // failing when the overlay doesn't appear.  All four conditions must
+    // be true at paintEvent time for drawImdOverlay to fire (gate at
+    // SpectrumWidget.cpp:1438 + GPU mirror at :4369).
+    qCInfo(lcSpectrum) << "IMD overlay gate: mox=" << m_moxOverlay
+                       << "testIMD=" << m_testingIMD
+                       << "showImd=" << m_showIMDMeasurements
+                       << "duplex=" << m_displayDuplex
+                       << " (after setMoxOverlay)";
 }
 
 // ── Two-tone IMD overlay state slots (Phase 3M-4 Task 12) ──────────────────
@@ -2851,6 +2863,11 @@ void SpectrumWidget::setTestingIMD(bool on)
     if (!on && m_imdOverlay) {
         m_imdOverlay->reset();  // EMA reset, see setMoxOverlay note above.
     }
+    qCInfo(lcSpectrum) << "IMD overlay gate: mox=" << m_moxOverlay
+                       << "testIMD=" << m_testingIMD
+                       << "showImd=" << m_showIMDMeasurements
+                       << "duplex=" << m_displayDuplex
+                       << " (after setTestingIMD)";
     update();
 }
 
@@ -2863,6 +2880,11 @@ void SpectrumWidget::setShowIMDMeasurements(bool on)
     if (!on && m_imdOverlay) {
         m_imdOverlay->reset();
     }
+    qCInfo(lcSpectrum) << "IMD overlay gate: mox=" << m_moxOverlay
+                       << "testIMD=" << m_testingIMD
+                       << "showImd=" << m_showIMDMeasurements
+                       << "duplex=" << m_displayDuplex
+                       << " (after setShowIMDMeasurements)";
     update();
 }
 
