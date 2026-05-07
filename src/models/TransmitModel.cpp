@@ -1362,12 +1362,36 @@ void TransmitModel::loadFromSettings(const QString& mac)
     setMonitorVolume(monitorVolume);
 
     // ── Mic source ────────────────────────────────────────────────────────
-    // micSource: default Pc (NereusSDR-native; always safe and available)
-    const QString micSourceStr = s.value(pfx + QLatin1String("Mic_Source"),
-                                          QStringLiteral("Pc")).toString();
-    const MicSource micSource = (micSourceStr == QLatin1String("Radio"))
-                                    ? MicSource::Radio
-                                    : MicSource::Pc;
+    // micSource: default Pc (NereusSDR-native; always safe and available).
+    //
+    // Lookup order (eager-borg-d64bed, 2026-05-06):
+    //   1. Per-MAC key (hardware/<mac>/tx/Mic_Source) — explicit choice for
+    //      this radio.  Always wins when present.
+    //   2. Pre-connect global key (tx/preconnect/Mic_Source) — set by
+    //      setMicSource() when the user picks a source before connecting
+    //      to any radio.  Acts as a fallback so the choice survives an
+    //      app restart and carries to the first connected radio.
+    //   3. Default "Pc" — first-run, never-clicked baseline.
+    //
+    // Step 1 uses an empty-string sentinel rather than "Pc" so an actually-
+    // missing per-MAC key falls through to step 2; an explicit per-MAC "Pc"
+    // (user clicked PC Mic for this specific radio) wins over preconnect.
+    const QString perMacStr = s.value(pfx + QLatin1String("Mic_Source"),
+                                       QString()).toString();
+    QString micSourceStr;
+    if (perMacStr.isEmpty()) {
+        micSourceStr = AppSettings::instance().value(
+            QStringLiteral("tx/preconnect/Mic_Source"),
+            QStringLiteral("Pc")).toString();
+    } else {
+        micSourceStr = perMacStr;
+    }
+    MicSource micSource = MicSource::Pc;
+    if (micSourceStr == QLatin1String("Radio")) {
+        micSource = MicSource::Radio;
+    } else if (micSourceStr == QLatin1String("Vax")) {
+        micSource = MicSource::Vax;
+    }
     setMicSource(micSource);
 
     // ── Two-tone test properties (3M-1c B.2) ──────────────────────────────
@@ -1637,8 +1661,16 @@ void TransmitModel::persistToSettings(const QString& mac) const
     s.setValue(pfx + QLatin1String("MonitorVolume"),    QString::number(static_cast<double>(m_monitorVolume)));
 
     // ── Mic source ────────────────────────────────────────────────────────
-    s.setValue(pfx + QLatin1String("Mic_Source"),
-               m_micSource == MicSource::Radio ? QStringLiteral("Radio") : QStringLiteral("Pc"));
+    {
+        QString micSourceStr;
+        switch (m_micSource) {
+            case MicSource::Radio: micSourceStr = QStringLiteral("Radio"); break;
+            case MicSource::Vax:   micSourceStr = QStringLiteral("Vax");   break;
+            case MicSource::Pc:
+            default:               micSourceStr = QStringLiteral("Pc");    break;
+        }
+        s.setValue(pfx + QLatin1String("Mic_Source"), micSourceStr);
+    }
 
     // ── Two-tone test properties (3M-1c B.2) ──────────────────────────────
     s.setValue(pfx + QLatin1String("TwoToneFreq1"),       QString::number(m_twoToneFreq1));
@@ -2218,8 +2250,28 @@ void TransmitModel::setMicSource(MicSource source)
 
     if (source == m_micSource) { return; }  // idempotent guard
     m_micSource = source;
-    persistOne(QStringLiteral("Mic_Source"),
-               source == MicSource::Radio ? QStringLiteral("Radio") : QStringLiteral("Pc"));  // L.2 auto-persist
+    QString persistStr;
+    switch (source) {
+        case MicSource::Radio: persistStr = QStringLiteral("Radio"); break;
+        case MicSource::Vax:   persistStr = QStringLiteral("Vax");   break;
+        case MicSource::Pc:
+        default:               persistStr = QStringLiteral("Pc");    break;
+    }
+    if (m_persistMac.isEmpty()) {
+        // Pre-connect fallback (eager-borg-d64bed, 2026-05-06).  When the
+        // user clicks the radio button in Setup -> Audio -> TX Input
+        // before connecting to a radio, persistOne early-returns (no MAC
+        // bound yet) so the choice would normally be lost on app restart.
+        // Write to a global "tx/preconnect/Mic_Source" key instead;
+        // loadFromSettings reads it as a fallback when the per-MAC key is
+        // absent so the choice carries forward to whatever radio they
+        // connect next.  Per-MAC values always take precedence over the
+        // preconnect key once written.
+        AppSettings::instance().setValue(
+            QStringLiteral("tx/preconnect/Mic_Source"), persistStr);
+    } else {
+        persistOne(QStringLiteral("Mic_Source"), persistStr);  // L.2 auto-persist
+    }
     emit micSourceChanged(source);
 }
 

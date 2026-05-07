@@ -12,6 +12,7 @@
 #include "core/audio/CompositeTxMicRouter.h"
 #include "core/audio/PcMicSource.h"
 #include "core/audio/RadioMicSource.h"
+#include "core/audio/VaxTxMicSource.h"
 
 namespace NereusSDR {
 
@@ -64,6 +65,16 @@ void CompositeTxMicRouter::setMoxActive(bool active)
     }
 }
 
+void CompositeTxMicRouter::setVaxSource(VaxTxMicSource* source)
+{
+    // Release ordering pairs with the audio-thread acquire load in
+    // pullSamples(). RadioModel calls this from the main thread once
+    // VaxTxMicSource is constructed; the audio thread may already be
+    // dispatching to Pc/Radio so we must publish the pointer safely
+    // before the next read.
+    m_vaxSource.store(source, std::memory_order_release);
+}
+
 int CompositeTxMicRouter::pullSamples(float* dst, int n)
 {
     if (dst == nullptr || n <= 0) {
@@ -74,6 +85,16 @@ int CompositeTxMicRouter::pullSamples(float* dst, int n)
 
     if (source == MicSource::Radio && m_radioSource != nullptr) {
         return m_radioSource->pullSamples(dst, n);
+    }
+
+    if (source == MicSource::Vax) {
+        VaxTxMicSource* vax = m_vaxSource.load(std::memory_order_acquire);
+        if (vax != nullptr) {
+            return vax->pullSamples(dst, n);
+        }
+        // Vax selected but unregistered — fall through to Pc rather
+        // than emitting silence so a misconfiguration is at least
+        // audible rather than dead-air-mysterious.
     }
 
     if (m_pcSource != nullptr) {
