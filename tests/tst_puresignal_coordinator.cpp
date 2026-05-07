@@ -1299,6 +1299,256 @@ private slots:
         QCOMPARE(psEnabled.count(), 0);
     }
 
+    // ── Codex Fix E: _performing_single_cal retry loop in StayON ───────────
+    //
+    // From Thetis PSForm.cs:553-554 [v2.10.3.13]:
+    //   private bool _performing_single_cal = false;
+    //   private int _performing_single_cal_retries = 0;
+    //
+    // From Thetis PSForm.cs:658-665 [v2.10.3.13] (TurnOnSingleCalibrate case):
+    //   _autoON = false;
+    //   _performing_single_cal = true;            // ← enter the retry-tracked window
+    //   puresignal.SetPSControl(_txachannel, 1, 1, 0, 0);
+    //   if (!PSEnabled) PSEnabled = true;
+    //   ...
+    //   _cmdstate = eCMDState.SingleCalibrate;
+    //
+    // From Thetis PSForm.cs:677-700 [v2.10.3.13] (StayON case) —
+    //   case eCMDState.StayON://5:     // Stay-ON
+    //       if (PSEnabled) PSEnabled = false;
+    //       ...
+    //       else if (_performing_single_cal)
+    //       {
+    //           // fix for when we were performing a single cal, but needed to change attenuation
+    //           _performing_single_cal = false;
+    //           if (!puresignal.IsFeedbackLevelOKRange && _performing_single_cal_retries < 5)
+    //           {
+    //               _performing_single_cal_retries++;
+    //               _singlecalON = true;
+    //           }
+    //           else
+    //               _performing_single_cal_retries = 0;
+    //       }
+    //       break;
+    //
+    // From Thetis PSForm.cs:1116-1119 IsFeedbackLevelOKRange [v2.10.3.13]:
+    //   public static bool IsFeedbackLevelOKRange
+    //   { get { return FeedbackLevel > 128 && FeedbackLevel <= 181; } }
+    //
+    // Pre-fix NereusSDR: never recorded the single-cal attempt nor retried
+    // bad-feedback runs.  Post-fix: track _performing_single_cal across
+    // TurnOnSingleCalibrate -> StayOn, then retry up to 5x on bad feedback
+    // (range = (128, 181] for IsFeedbackLevelOKRange).
+
+    // Test scaffolding: drive a single-cal-then-StayOn cycle of cmd-state
+    // ticks.  These tests run BELOW the singleCalibrate() user-toggle so
+    // they invoke the cmd-state machine directly and observe the StayOn
+    // retry branch (Codex Fix E).  Per Thetis PSForm.cs:677-699 the retry
+    // re-arms `m_singleCalON = true` from inside StayOn; the next StayOn
+    // tick consumes it and transitions to TurnOnSingleCalibrate.
+    //
+    // A "complete cycle" walks:
+    //   tick A: Off                  (_singleCalON consumed, → TurnOnSingleCalibrate)
+    //   tick B: TurnOnSingleCalibrate (sets _performing_single_cal=true, → SingleCalibrate)
+    //   tick C: SingleCalibrate      (info[14]=1 → StayOn, calibrationComplete fires)
+    //   tick D: StayOn               (with FB level: retry branch fires)
+    //   tick E: StayOn               (if retry: _singleCalON=true → TurnOnSingleCalibrate next)
+
+    // Drive ticks A-D for ONE single-cal cycle.  Caller is responsible for
+    // calling ps.singleCalibrate() ONCE before the FIRST cycle; subsequent
+    // retry cycles are driven by the StayOn re-arming m_singleCalON
+    // automatically.  feedbackLevel sets info[4] for the StayOn evaluation.
+    static void driveOneSingleCalCycle(PureSignal& ps, int& counter,
+                                       int feedbackLevel) {
+        int info[16] = {};
+        ++counter;
+        info[5] = counter;
+        ps.processNewInfo(info);   // Off → TurnOnSingleCalibrate
+        ++counter;
+        info[5] = counter;
+        ps.processNewInfo(info);   // TurnOnSingleCalibrate → SingleCalibrate
+        info[14] = 1;
+        ++counter;
+        info[5] = counter;
+        ps.processNewInfo(info);   // SingleCalibrate → StayOn (corrApplied)
+        info[4] = feedbackLevel;
+        ++counter;
+        info[5] = counter;
+        ps.processNewInfo(info);   // StayOn evaluates _performing_single_cal
+    }
+
+    void singleCal_retriesOnBadFeedback_upToFiveTimes()
+    {
+        // Drive 5 retries of bad feedback (FB=80, !IsFeedbackLevelOKRange).
+        // Each cycle's StayOn branch fires the retry — m_singleCalON gets
+        // re-armed → next tick chain enters TurnOnSingleCalibrate again.
+        //
+        // After 5 retries, counter is at 5; the 6th StayOn evaluation hits
+        // the cap and resets the counter to 0 instead of re-arming.
+        //
+        // Observable: calibrationComplete fires on each SingleCalibrate →
+        // StayOn transition.  6 cycles total = 6 calibrationComplete emits
+        // (initial + 5 retries).  After cycle 6, no further retry → no
+        // 7th calibrationComplete from natural cmd-state progression.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+        ps.setEnabled(true);
+        ps.setTimersEnabled(false);
+
+        QSignalSpy completeSpy(&ps, &PureSignal::calibrationComplete);
+
+        ps.singleCalibrate();   // initial: _singleCalON=true
+
+        int counter = 0;
+        // Cycle 0: initial single-cal.  After this, retries=0, retry fires
+        // (FB=80 fails IsFeedbackLevelOKRange) → re-arms _singleCalON.
+        driveOneSingleCalCycle(ps, counter, /*fb=*/80);
+        QCOMPARE(completeSpy.count(), 1);
+
+        // Cycles 1-5: retries++ each cycle (1, 2, 3, 4, 5).  Each completes
+        // (corrApplied=1 in tick C → StayOn → calibrationComplete emits).
+        for (int i = 1; i <= 5; ++i) {
+            driveOneSingleCalCycle(ps, counter, /*fb=*/80);
+            QCOMPARE(completeSpy.count(), i + 1);
+        }
+        // After cycle 5: retries was already 5 → cap hit → reset to 0,
+        // m_singleCalON NOT re-armed.  6 completes total (cycle 0 + cycles 1-5).
+        QCOMPARE(completeSpy.count(), 6);
+    }
+
+    void singleCal_retriesResetAfterFiveAttempts()
+    {
+        // Pin the contract: after 5 retries, m_singleCalON is NOT re-armed
+        // by the StayOn retry branch.  Verify by attempting a 7th cycle
+        // and observing it is NOT auto-driven.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+        ps.setEnabled(true);
+        ps.setTimersEnabled(false);
+
+        QSignalSpy completeSpy(&ps, &PureSignal::calibrationComplete);
+
+        ps.singleCalibrate();   // initial trigger
+        int counter = 0;
+
+        // Run 6 cycles total (initial + 5 retries).  Each cycle adds one
+        // calibrationComplete fire.
+        for (int i = 0; i < 6; ++i) {
+            driveOneSingleCalCycle(ps, counter, /*fb=*/80);
+        }
+        QCOMPARE(completeSpy.count(), 6);
+        completeSpy.clear();
+
+        // 7th cycle attempt — but m_singleCalON should NOT have been
+        // re-armed.  Drive ticks A and B: from StayOn the next tick should
+        // stay in StayOn (no _singleCalON to consume).  No calibrationComplete.
+        int info[16] = {};
+        ++counter;
+        info[5] = counter;
+        info[14] = 1;
+        ps.processNewInfo(info);   // StayOn re-eval — no transition
+        ++counter;
+        info[5] = counter;
+        ps.processNewInfo(info);   // StayOn re-eval — no transition
+
+        QCOMPARE(completeSpy.count(), 0);
+    }
+
+    void singleCal_doesNotRetry_whenFeedbackIsInOkRange()
+    {
+        // From PSForm.cs:1116-1119 IsFeedbackLevelOKRange [v2.10.3.13]:
+        //   FeedbackLevel > 128 && FeedbackLevel <= 181
+        // FB=150 sits in the OK range → !IsFeedbackLevelOKRange = false →
+        // the retry branch's `if` is false → else { _retries = 0; } runs;
+        // _singleCalON is NOT re-armed.  No further single-cal cycle.
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+        ps.setEnabled(true);
+        ps.setTimersEnabled(false);
+
+        QSignalSpy completeSpy(&ps, &PureSignal::calibrationComplete);
+
+        ps.singleCalibrate();
+        int counter = 0;
+        driveOneSingleCalCycle(ps, counter, /*fb=*/150);
+        QCOMPARE(completeSpy.count(), 1);
+        completeSpy.clear();
+
+        // After StayOn with good feedback, no retry queued.  Drive more
+        // ticks — should stay in StayOn, no calibrationComplete.
+        int info[16] = {};
+        ++counter;
+        info[5] = counter;
+        info[14] = 1;
+        info[4] = 150;
+        ps.processNewInfo(info);
+        ++counter;
+        info[5] = counter;
+        ps.processNewInfo(info);
+
+        QCOMPARE(completeSpy.count(), 0);
+    }
+
+    void singleCal_isFeedbackLevelOKRange_boundariesMatchThetis()
+    {
+        // From PSForm.cs:1116-1119 [v2.10.3.13] IsFeedbackLevelOKRange =
+        //   FeedbackLevel > 128 && FeedbackLevel <= 181
+        // Boundary table:
+        //   128 → false (fails > 128)  → retry
+        //   129 → true                  → no retry
+        //   181 → true                  → no retry
+        //   182 → false (fails <= 181) → retry
+        //
+        // Drive one cycle.  Look at calibrationComplete count after
+        // additional StayOn ticks: if no retry, count stays at 1; if retry,
+        // count climbs.
+        auto runAndCheckRetried = [](int feedbackLevel) -> bool {
+            TxChannel tx(kTxChannelId);
+            PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+            ps.setEnabled(true);
+            ps.setTimersEnabled(false);
+
+            QSignalSpy completeSpy(&ps, &PureSignal::calibrationComplete);
+
+            ps.singleCalibrate();
+            int counter = 0;
+            // Run cycle 1 to land in StayOn at the supplied FB level.
+            driveOneSingleCalCycle(ps, counter, feedbackLevel);
+
+            // Run a 2nd cycle's worth of ticks. If retry was queued, this
+            // drives the cmd-state machine through the retry chain and
+            // calibrationComplete fires AGAIN (count goes 1 → 2).
+            // If no retry, count stays at 1.
+            int info[16] = {};
+            // Tick: StayOn → if retried, m_singleCalON now true → next tick:
+            //                 TurnOnSingleCalibrate
+            ++counter;
+            info[5] = counter;
+            info[14] = 1;
+            info[4] = feedbackLevel;
+            ps.processNewInfo(info);
+            // Tick: TurnOnSingleCalibrate → SingleCalibrate
+            ++counter;
+            info[5] = counter;
+            ps.processNewInfo(info);
+            // Tick: SingleCalibrate sees corrApplied=1 → StayOn (fires complete)
+            ++counter;
+            info[5] = counter;
+            ps.processNewInfo(info);
+
+            return completeSpy.count() >= 2;
+        };
+
+        QVERIFY2( runAndCheckRetried(128),
+                 "FB=128 must retry (fails IsFeedbackLevelOKRange's >128)");
+        QVERIFY2(!runAndCheckRetried(129),
+                 "FB=129 must NOT retry (passes IsFeedbackLevelOKRange)");
+        QVERIFY2(!runAndCheckRetried(181),
+                 "FB=181 must NOT retry (passes IsFeedbackLevelOKRange's <=181)");
+        QVERIFY2( runAndCheckRetried(182),
+                 "FB=182 must retry (fails IsFeedbackLevelOKRange's <=181)");
+    }
+
 };
 
 // QTEST_GUILESS_MAIN constructs a QCoreApplication so the internal QTimers

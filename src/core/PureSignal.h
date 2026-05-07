@@ -214,6 +214,18 @@ public:
     //   public static bool Correcting { get { return FeedbackLevel > 90; } }
     bool isCorrecting() const noexcept { return m_correcting.load(); }
 
+    // From Thetis PSForm.cs:1116-1119 [v2.10.3.13]:
+    //   public static bool IsFeedbackLevelOKRange
+    //     { get { return FeedbackLevel > 128 && FeedbackLevel <= 181; } }
+    // Tighter window than IsFeedbackLevelOK (`<= 256`).  Used by Codex Fix
+    // E's single-cal retry branch (PSForm.cs:692 [v2.10.3.13]) to decide
+    // whether the converged FB landed in the calcc happy-path band; if not,
+    // retry up to 5 times before giving up.
+    bool isFeedbackLevelOKRange() const noexcept {
+        const int fb = m_feedbackLevel.load();
+        return fb > 128 && fb <= 181;
+    }
+
     // From Thetis PSForm.cs:1103-1105 [v2.10.3.13]:
     //   public static int CalibrationCount { get { return _info[5]; } }
     int calibrationCount() const noexcept { return m_calCount.load(); }
@@ -543,6 +555,18 @@ private:
     // deltaDb on stale data → ATT oscillates 0↔31.  Sentinel -1 forces
     // first-tick acceptance.
     int m_aaLastSeenCalCount{-1};
+
+    // Codex Fix E: single-cal retry tracking.  Mirrors Thetis PSForm.cs:
+    // 553-554 [v2.10.3.13]:
+    //   private bool _performing_single_cal = false;
+    //   private int _performing_single_cal_retries = 0;
+    // Set true in TurnOnSingleCalibrate (PSForm.cs:660), cleared in StayOn
+    // (PSForm.cs:691).  Retries cap at 5 (PSForm.cs:692-698) — the typical
+    // trigger is AutoAttenuate adjusting ATT mid-cal, which resets calcc
+    // and re-issues single-cal.  After 5 attempts of bad-feedback, the
+    // counter resets and the user must manually re-trigger another cal.
+    bool m_performingSingleCal{false};
+    int  m_performingSingleCalRetries{0};
 
     // Master enable + auto-cal mirrors (drive Q_PROPERTY signals)
     bool m_enabled{false};

@@ -932,7 +932,7 @@ void PureSignal::processNewInfo(const int newInfo[16])
         break;
 
     case CommandState::TurnOnSingleCalibrate:
-        // From Thetis PSForm.cs:667-673 [v2.10.3.13]:
+        // From Thetis PSForm.cs:658-665 [v2.10.3.13]:
         //   _autoON = false;
         //   _performing_single_cal = true;
         //   puresignal.SetPSControl(_txachannel, 1, 1, 0, 0);
@@ -940,6 +940,11 @@ void PureSignal::processNewInfo(const int newInfo[16])
         //   _cmdstate = eCMDState.SingleCalibrate;
         // PSEnabled=true → calcc.runcal=1 (see Off-case comment above).
         m_autoON = false;
+        // Codex Fix E — PSForm.cs:660 [v2.10.3.13]:
+        //   _performing_single_cal = true;
+        // Marks the entry into the retry-tracked window.  The flag is read
+        // by the StayOn branch below to decide whether to re-arm m_singleCalON.
+        m_performingSingleCal = true;
         m_tx->setPSControl(/*reset=*/1, /*mancal=*/1,
                            /*automode=*/0, /*turnon=*/0);
         m_tx->setPSRunCal(1);
@@ -974,12 +979,27 @@ void PureSignal::processNewInfo(const int newInfo[16])
         break;
 
     case CommandState::StayOn:
-        // From Thetis PSForm.cs:685-700 [v2.10.3.13]:
-        //   if (PSEnabled) PSEnabled = false;
-        //   if (_OFF)              _cmdstate = eCMDState.TurnOFF;
-        //   else if (_restoreON)   _cmdstate = eCMDState.IntiateRestoredCorrection;
-        //   else if (_autoON)      _cmdstate = eCMDState.TurnOnAutoCalibrate;
-        //   else if (_singlecalON) _cmdstate = eCMDState.TurnOnSingleCalibrate;
+        // From Thetis PSForm.cs:677-700 [v2.10.3.13]:
+        //   case eCMDState.StayON://5:     // Stay-ON
+        //       if (PSEnabled) PSEnabled = false;
+        //       btnPSCalibrate.BackColor = SystemColors.Control;
+        //       if (_OFF)              _cmdstate = eCMDState.TurnOFF;
+        //       else if (_restoreON)   _cmdstate = eCMDState.IntiateRestoredCorrection;
+        //       else if (_autoON)      _cmdstate = eCMDState.TurnOnAutoCalibrate;
+        //       else if (_singlecalON) _cmdstate = eCMDState.TurnOnSingleCalibrate;
+        //       else if (_performing_single_cal)
+        //       {
+        //           // fix for when we were performing a single cal, but needed to change attenuation
+        //           _performing_single_cal = false;
+        //           if (!puresignal.IsFeedbackLevelOKRange && _performing_single_cal_retries < 5)
+        //           {
+        //               _performing_single_cal_retries++;
+        //               _singlecalON = true;
+        //           }
+        //           else
+        //               _performing_single_cal_retries = 0;
+        //       }
+        //       break;
         // PSEnabled=false → calcc.runcal=0.  Calibration is converged;
         // corrections continue to be applied passively to TX without
         // further pscc() processing.
@@ -998,6 +1018,33 @@ void PureSignal::processNewInfo(const int newInfo[16])
             m_cmdState = CommandState::TurnOnAutoCalibrate;
         } else if (m_singleCalON) {
             m_cmdState = CommandState::TurnOnSingleCalibrate;
+        } else if (m_performingSingleCal) {
+            // Codex Fix E — PSForm.cs:688-699 [v2.10.3.13]:
+            //   else if (_performing_single_cal)
+            //   {
+            //       // fix for when we were performing a single cal, but needed to change attenuation
+            //       _performing_single_cal = false;
+            //       if (!puresignal.IsFeedbackLevelOKRange && _performing_single_cal_retries < 5)
+            //       {
+            //           _performing_single_cal_retries++;
+            //           _singlecalON = true;
+            //       }
+            //       else
+            //           _performing_single_cal_retries = 0;
+            //   }
+            // Typical trigger: AutoAttenuate adjusted ATT mid-cal, calcc
+            // resets, single-cal re-issued.  After 5 retries with FB still
+            // outside (128, 181] we give up and reset the counter so the
+            // next user-triggered single-cal starts fresh.
+            //
+            // fix for when we were performing a single cal, but needed to change attenuation [original from PSForm.cs:690]
+            m_performingSingleCal = false;
+            if (!isFeedbackLevelOKRange() && m_performingSingleCalRetries < 5) {
+                m_performingSingleCalRetries++;
+                m_singleCalON = true;
+            } else {
+                m_performingSingleCalRetries = 0;
+            }
         }
         break;
 
