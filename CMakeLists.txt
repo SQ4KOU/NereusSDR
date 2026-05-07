@@ -400,6 +400,8 @@ set(CORE_SOURCES
     src/core/TxChannel.cpp
     src/core/PsFeedbackChannel.cpp
     src/core/PureSignal.cpp
+    src/core/PsccPump.cpp
+    src/core/PsccPump.h
     src/core/TxWorkerThread.cpp
     src/core/NbFamily.cpp
     src/core/NbFamily.h
