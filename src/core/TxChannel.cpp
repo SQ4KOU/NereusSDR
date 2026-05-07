@@ -1731,6 +1731,104 @@ void TxChannel::setAntiVoxGain(double gain)
 }
 
 // ---------------------------------------------------------------------------
+// setAntiVoxSize()  — Phase 3M-3a-iv Task 2
+//
+// From Thetis dexp.c:666 [v2.10.3.13]: SetAntiVOXSize reallocs antivox_data
+// to `size` complex samples and recomputes antivox_mult via decalc/calc.
+// Per cmaster.c:154 [v2.10.3.13], the size source is `pcm->audio_outsize`
+// (the audio path's post-decimation block size), NOT TX in_size.
+//
+// This wrapper mirrors the WDSP block's internal size in m_antiVoxSize so
+// sendAntiVoxData() (Task 3) can run a size-mismatch guard without
+// invoking SendAntiVOXData (which would memcpy past the end of
+// antivox_data — see dexp.c:713 "memcpy(... antivox_size * sizeof(complex))").
+// We also pre-size m_antiVoxScratch to 2*size doubles (I and Q) so the
+// float -> double conversion in sendAntiVoxData() avoids per-call
+// allocation in the audio path.
+//
+// Non-positive sizes are rejected with a qCWarning; WDSP would alloc-zero
+// or underflow.  No idempotent guard: WDSP's decalc/calc is cheap (no
+// alloc churn for unchanged size since `safefree(antivox_data)` +
+// `malloc0(size * sizeof(complex))` is the same total cost), and skipping
+// the resize on m_antiVoxScratch when the requested size matches saves
+// nothing measurable.
+// ---------------------------------------------------------------------------
+void TxChannel::setAntiVoxSize(int size)
+{
+    if (size <= 0) {
+        qCWarning(lcDsp) << "TxChannel::setAntiVoxSize: rejecting non-positive size" << size;
+        return;
+    }
+    m_antiVoxSize = size;
+    m_antiVoxScratch.resize(static_cast<std::size_t>(2 * size));  // I and Q doubles
+#ifdef HAVE_WDSP
+    // From Thetis cmaster.cs:154 (call-site) -> dexp.c:666 (impl) [v2.10.3.13]
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    // Phase 3M-1c TX pump v3: pdexp[ch] null-guard — see setVoxRun for rationale.
+    if (pdexp[m_channelId] == nullptr) return;
+    SetAntiVOXSize(m_channelId, size);
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// setAntiVoxRate()  — Phase 3M-3a-iv Task 2
+//
+// From Thetis dexp.c:677 [v2.10.3.13]: SetAntiVOXRate updates antivox_rate
+// and recomputes antivox_mult so the smoothing tau remains correct in
+// absolute seconds.  Per cmaster.c:155 [v2.10.3.13], the rate source is
+// `pcm->audio_outrate` (the audio path's post-decimation panel rate),
+// NOT TX in_rate.
+//
+// Non-positive rates are rejected with a qCWarning; calc_antivox would
+// produce a divide-by-zero / NaN antivox_mult.
+// ---------------------------------------------------------------------------
+void TxChannel::setAntiVoxRate(double rate)
+{
+    if (rate <= 0.0) {
+        qCWarning(lcDsp) << "TxChannel::setAntiVoxRate: rejecting non-positive rate" << rate;
+        return;
+    }
+    m_antiVoxRate = rate;
+#ifdef HAVE_WDSP
+    // From Thetis cmaster.cs:155 (call-site) -> dexp.c:677 (impl) [v2.10.3.13]
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    // Phase 3M-1c TX pump v3: pdexp[ch] null-guard — see setVoxRun for rationale.
+    if (pdexp[m_channelId] == nullptr) return;
+    SetAntiVOXRate(m_channelId, rate);
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// setAntiVoxDetectorTau()  — Phase 3M-3a-iv Task 2
+//
+// From Thetis dexp.c:697 [v2.10.3.13]: SetAntiVOXDetectorTau updates the
+// smoothing tau and recomputes antivox_mult.  Thetis converts the spinbox
+// ms value via /1000.0 at the Setup page handler:
+//     cmaster.SetAntiVOXDetectorTau(0, (double)udAntiVoxTau.Value / 1000.0);
+//   — Thetis setup.cs:18995 [v2.10.3.13]
+// This wrapper takes seconds directly; the ms->s conversion lives at the
+// Setup page handler in NereusSDR (mirroring Thetis), not here.
+//
+// Non-positive tau is rejected with a qCWarning; calc_antivox would
+// produce NaN.
+// ---------------------------------------------------------------------------
+void TxChannel::setAntiVoxDetectorTau(double seconds)
+{
+    if (seconds <= 0.0) {
+        qCWarning(lcDsp) << "TxChannel::setAntiVoxDetectorTau: rejecting non-positive tau" << seconds;
+        return;
+    }
+    m_antiVoxTauSec = seconds;
+#ifdef HAVE_WDSP
+    // From Thetis setup.cs:18995 (call-site) -> dexp.c:697 (impl) [v2.10.3.13]
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    // Phase 3M-1c TX pump v3: pdexp[ch] null-guard — see setVoxRun for rationale.
+    if (pdexp[m_channelId] == nullptr) return;
+    SetAntiVOXDetectorTau(m_channelId, seconds);
+#endif
+}
+
+// ---------------------------------------------------------------------------
 // setDexpRun()  — Phase 3M-3a-iii Task 1
 //
 // Enable or disable DEXP audio-domain expansion (the master "noise gate" gate).

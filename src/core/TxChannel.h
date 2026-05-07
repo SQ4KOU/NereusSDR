@@ -759,6 +759,45 @@ public:
     /// From Thetis cmaster.cs:211-212 [v2.10.3.13] — SetAntiVOXGain DLL import.
     void setAntiVoxGain(double gain);
 
+    // ── Anti-VOX detector dimension setters (3M-3a-iv Task 2) ───────────────
+    //
+    // Drive the WDSP DEXP block's anti-VOX detector to align with the
+    // post-decimation RX block geometry (out_size / out_rate).  Per Thetis
+    // cmaster.c:154-155 [v2.10.3.13], DEXP's antivox_size / antivox_rate are
+    // sourced from `pcm->audio_outsize` / `pcm->audio_outrate` (the audio
+    // path's post-decimation block size / rate), NOT from the TX in_size /
+    // in_rate.  In NereusSDR's single-RX path, audio_outsize == the RX
+    // worker's output block size and audio_outrate == the post-decimation
+    // panel rate.
+    //
+    // setAntiVoxSize() pre-sizes m_antiVoxScratch so Task 3's
+    // sendAntiVoxData() can do float -> double conversion without per-call
+    // allocation in the audio path.  m_antiVoxSize itself becomes the
+    // size-mismatch guard input for sendAntiVoxData.
+    //
+    // setAntiVoxDetectorTau() takes seconds directly.  Thetis converts the
+    // spinbox ms value via /1000.0 at the Setup page handler
+    // (setup.cs:18995 [v2.10.3.13]); the ms->s conversion lives there, not
+    // in this wrapper.
+
+    /// Set the anti-VOX detector buffer size (complex samples).
+    /// From Thetis dexp.c:666 [v2.10.3.13] — SetAntiVOXSize impl.
+    void setAntiVoxSize(int size);
+
+    /// Set the anti-VOX detector sample-rate (Hz).
+    /// From Thetis dexp.c:677 [v2.10.3.13] — SetAntiVOXRate impl.
+    void setAntiVoxRate(double rate);
+
+    /// Set the anti-VOX smoothing time-constant (seconds).
+    /// From Thetis dexp.c:697 [v2.10.3.13] — SetAntiVOXDetectorTau impl.
+    void setAntiVoxDetectorTau(double seconds);
+
+    /// Cached anti-VOX dimension accessors.  Used by the size-mismatch
+    /// guard in sendAntiVoxData() (3M-3a-iv Task 3) and by tests.
+    int    antiVoxSize()        const noexcept { return m_antiVoxSize; }
+    double antiVoxRate()        const noexcept { return m_antiVoxRate; }
+    double antiVoxDetectorTau() const noexcept { return m_antiVoxTauSec; }
+
     // ── DEXP envelope/timing WDSP wrappers (3M-3a-iii Tasks 1-2) ────────────
 
     /// DEXP master enable (gate the audio downward expansion).
@@ -2320,6 +2359,33 @@ private:
     double m_voxHangTimeLast        = std::numeric_limits<double>::quiet_NaN();
     bool   m_antiVoxRunLast         = false;
     double m_antiVoxGainLast        = std::numeric_limits<double>::quiet_NaN();
+
+    // ── Anti-VOX detector dimension cache (3M-3a-iv Task 2) ─────────────────
+    //
+    // m_antiVoxSize is consulted by sendAntiVoxData() (Task 3) to reject
+    // size-mismatched buffers without invoking SendAntiVOXData (which would
+    // memcpy past the end of antivox_data — see dexp.c:713 [v2.10.3.13]).
+    // Initialised to 0 so the first sendAntiVoxData call before
+    // setAntiVoxSize is rejected with a single qCWarning.
+    //
+    // m_antiVoxRate initialises to 0.0 (no valid rate yet); the wrapper
+    // rejects any setAntiVoxRate(<=0) so 0.0 stays as a "rate not yet
+    // pushed" sentinel.
+    //
+    // m_antiVoxTauSec initialises to 0.01 s, matching the WDSP create-time
+    // default at cmaster.c:157 [v2.10.3.13] (anti-vox smoothing
+    // time-constant, last argument to create_dexp).  Until the first
+    // setAntiVoxDetectorTau() call, the WDSP block is using this value;
+    // mirroring it here keeps the cache truthful for tests that read back
+    // before any setter call.
+    //
+    // m_antiVoxScratch is the float -> double conversion buffer used by
+    // sendAntiVoxData() (Task 3) to feed WDSP's `double*` interface.
+    // Sized to 2*size doubles (I and Q) on every accepted setAntiVoxSize.
+    int    m_antiVoxSize{0};
+    double m_antiVoxRate{0.0};
+    double m_antiVoxTauSec{0.01};                   // matches cmaster.c:157 [v2.10.3.13]
+    std::vector<double> m_antiVoxScratch;           // resized on setAntiVoxSize
 
     // ── DEXP envelope/timing last-set values (3M-3a-iii Tasks 1-2) ──────────
     //

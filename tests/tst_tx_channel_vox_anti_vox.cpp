@@ -291,6 +291,86 @@ private slots:
         ch.setAntiVoxGain(0.10);  // idempotent guard fires
         QCOMPARE(ch.lastAntiVoxGainForTest(), 0.10);
     }
+
+    // ── setAntiVoxSize ────────────────────────────────────────────────────────
+    //
+    // Anti-VOX detector buffer size — wires WDSP SetAntiVOXSize.
+    // From Thetis dexp.c:666 [v2.10.3.13] — SetAntiVOXSize impl.
+    // Per cmaster.c:154 [v2.10.3.13] this is sourced from audio_outsize
+    // (the post-decimation RX block size), NOT TX in_size.
+
+    void setAntiVoxSize_callsWdsp()
+    {
+        // Verifies SetAntiVOXSize is invoked with the size value, and the
+        // internal m_antiVoxSize tracks the value for the size-mismatch guard
+        // that Task 3's sendAntiVoxData() will consult.
+        TxChannel ch(kChannelId);
+        ch.setAntiVoxSize(2048);
+        QCOMPARE(ch.antiVoxSize(), 2048);
+    }
+
+    void setAntiVoxSize_rejectsNonPositive()
+    {
+        // size <= 0 must be rejected (would alloc-zero / underflow inside WDSP).
+        // The cached size remains at its 0 init.
+        TxChannel ch(kChannelId);
+        ch.setAntiVoxSize(0);
+        QCOMPARE(ch.antiVoxSize(), 0);
+        ch.setAntiVoxSize(-1);
+        QCOMPARE(ch.antiVoxSize(), 0);
+    }
+
+    // ── setAntiVoxRate ────────────────────────────────────────────────────────
+    //
+    // Anti-VOX detector sample-rate — wires WDSP SetAntiVOXRate.
+    // From Thetis dexp.c:677 [v2.10.3.13] — SetAntiVOXRate impl.
+    // Per cmaster.c:155 [v2.10.3.13] this is sourced from audio_outrate
+    // (the post-decimation RX block rate), NOT TX in_rate.
+
+    void setAntiVoxRate_callsWdsp()
+    {
+        // Verifies SetAntiVOXRate is invoked with the rate value (Hz).
+        TxChannel ch(kChannelId);
+        ch.setAntiVoxRate(96000.0);
+        QCOMPARE(ch.antiVoxRate(), 96000.0);
+    }
+
+    void setAntiVoxRate_rejectsNonPositive()
+    {
+        // rate <= 0 must be rejected (divide-by-zero inside WDSP calc_antivox).
+        TxChannel ch(kChannelId);
+        ch.setAntiVoxRate(0.0);
+        QCOMPARE(ch.antiVoxRate(), 0.0);  // unchanged from 0.0 init
+        ch.setAntiVoxRate(-48000.0);
+        QCOMPARE(ch.antiVoxRate(), 0.0);
+    }
+
+    // ── setAntiVoxDetectorTau ─────────────────────────────────────────────────
+    //
+    // Anti-VOX smoothing time-constant — wires WDSP SetAntiVOXDetectorTau.
+    // From Thetis dexp.c:697 [v2.10.3.13] — SetAntiVOXDetectorTau impl.
+    // Thetis converts the spinbox ms value via /1000.0 (setup.cs:18995
+    // [v2.10.3.13]); this wrapper takes seconds directly.  WDSP create-time
+    // default is 0.01 s (cmaster.c:157 [v2.10.3.13]).
+
+    void setAntiVoxDetectorTau_callsWdsp()
+    {
+        // Verifies SetAntiVOXDetectorTau is invoked with the tau (seconds).
+        TxChannel ch(kChannelId);
+        ch.setAntiVoxDetectorTau(0.020);
+        QCOMPARE(ch.antiVoxDetectorTau(), 0.020);
+    }
+
+    void setAntiVoxDetectorTau_rejectsNonPositive()
+    {
+        // tau <= 0 must be rejected (calc_antivox would divide by zero / NaN).
+        // The cached tau remains at its 0.01 s init (WDSP create-time default).
+        TxChannel ch(kChannelId);
+        ch.setAntiVoxDetectorTau(0.0);
+        QCOMPARE(ch.antiVoxDetectorTau(), 0.01);  // unchanged from cmaster.c:157 init
+        ch.setAntiVoxDetectorTau(-0.005);
+        QCOMPARE(ch.antiVoxDetectorTau(), 0.01);
+    }
 };
 
 QTEST_APPLESS_MAIN(TestTxChannelVoxAntiVox)
