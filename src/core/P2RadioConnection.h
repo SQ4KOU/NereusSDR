@@ -235,6 +235,25 @@ public slots:
     void setMicPTTDisabled(bool disabled) override;
     void setMicXlr(bool xlrJack) override;
 
+    // Phase 3M-4 Task 17 chunk B — apply per-board PS DDC config.
+    //
+    // Receives the wire-byte map computed by the per-board codec
+    // (P2CodecOrionMkII::applyPureSignalDdcConfig and friends), translates
+    // it into m_rx[i] state, and re-sends CmdRx so the radio reconfigures
+    // its DDCs in real time.
+    //
+    // Mirrors Thetis console.cs:8527-8534 UpdateDDCs() [v2.10.3.13]:
+    //   NetworkIO.EnableRxs(ddcEnable);
+    //   NetworkIO.EnableRxSync(0, syncEnable);
+    //   for (int i = 0; i < 4; i++) NetworkIO.SetDDCRate(i, rate[i]);
+    //   NetworkIO.SetADC_cntrl1(cntrl1);
+    //   NetworkIO.SetADC_cntrl2(cntrl2);
+    // In NereusSDR these wire bytes are emitted via the next CmdRx packet
+    // (composeCmdRx reads ctx.p2RxEnable / p2RxSamplingRate / p2RxSync from
+    // m_rx[i] state).  Wired in RadioModel::wireConnectionSignals to
+    // ReceiverManager::ddcConfigChanged.
+    void applyPsDdcConfig(const NereusSDR::PsDdcConfig& cfg);
+
     // Bench fix round 3 (Issue B): P2 TX I/Q output is always at 192 kHz.
     // This rate is used by WdspEngine::createTxChannel() to open the WDSP
     // TX channel with the correct outputSampleRate so WDSP's rsmpout stage
@@ -278,6 +297,19 @@ public slots:
     static bool decodeMicFrame132(const QByteArray& data,
                                   std::array<float, 64>& outSamples,
                                   quint32* outSeq = nullptr) noexcept;
+
+    // Phase 3M-4 Task 17 chunk B/E: read-only access to the per-board
+    // codec for ReceiverManager::setP2Codec injection.  Returns nullptr
+    // until selectCodec() runs at connectToRadio time; subscribers
+    // should listen to p2CodecChanged() to know when this becomes valid.
+    NereusSDR::IP2Codec* p2Codec() const { return m_codec.get(); }
+
+signals:
+    // Phase 3M-4 Task 17 chunk B/E: emitted from selectCodec() once
+    // m_codec is assigned.  RadioModel::wireConnectionSignals subscribes
+    // and forwards p2Codec() into ReceiverManager::setP2Codec so the
+    // ddcConfigChanged dispatch path becomes live.
+    void p2CodecChanged();
 
 private slots:
     void onReadyRead();
