@@ -674,6 +674,20 @@ void PureSignal::processNewInfo(const int newInfo[16])
     // previous in m_oldInfo, so the comparison is the same.
     const bool changed = hasInfoChanged(newInfo);
 
+    // BENCH DIAGNOSTIC (Phase 3M-4 Task 17): log info[] every ~10 ticks
+    // (~1 sec) so the bench can see whether calcc is progressing.
+    static int diagCounter = 0;
+    if (++diagCounter % 10 == 0) {
+        qCInfo(lcDsp).nospace()
+            << "PureSignal info[]: state=" << newInfo[15]
+            << " corrApplied=" << newInfo[14]
+            << " calCount=" << newInfo[5]
+            << " feedbackLevel=" << newInfo[4]
+            << " dogCount=" << newInfo[13]
+            << " (mox=" << (m_mox && m_mox->isMox())
+            << " autoCal=" << m_autoCalEnabled << ")";
+    }
+
     // From Thetis PSForm.cs:1097-1098 CalibrationAttemptsChanged
     // [v2.10.3.13]:
     //   public static bool CalibrationAttemptsChanged
@@ -813,8 +827,13 @@ void PureSignal::processNewInfo(const int newInfo[16])
         //   else if (_autoON)      _cmdstate = eCMDState.TurnOnAutoCalibrate;
         //   else if (_singlecalON) _cmdstate = eCMDState.TurnOnSingleCalibrate;
         //   _OFF = false;
+        // PSEnabled=false ports to PSForm.cs:235-263 [v2.10.3.13]:
+        //   console.radio.GetDSPTX(0).PSRunCal = false;
+        // which calls puresignal.SetPSRunCal(WDSP.id(thread, 0), false)
+        // → calcc.c:891-898 SetPSRunCal sets runcal=0, gating pscc().
         m_tx->setPSControl(/*reset=*/1, /*mancal=*/0,
                            /*automode=*/0, /*turnon=*/0);
+        m_tx->setPSRunCal(0);
         if (m_restoreON) {
             m_cmdState = CommandState::InitiateRestoredCorrection;
         } else if (m_autoON) {
@@ -830,8 +849,13 @@ void PureSignal::processNewInfo(const int newInfo[16])
         //   puresignal.SetPSControl(_txachannel, 1, 0, 1, 0);
         //   if (!PSEnabled) PSEnabled = true;
         //   _cmdstate = eCMDState.AutoCalibrate;
+        // PSEnabled=true ports to PSForm.cs:235-252 [v2.10.3.13]:
+        //   console.radio.GetDSPTX(0).PSRunCal = true;
+        // which sets calcc.runcal=1 — without it, pscc() returns
+        // immediately and info[16] never updates (cor.cnt etc. stay 0).
         m_tx->setPSControl(/*reset=*/1, /*mancal=*/0,
                            /*automode=*/1, /*turnon=*/0);
+        m_tx->setPSRunCal(1);
         m_cmdState = CommandState::AutoCalibrate;
         break;
 
@@ -856,9 +880,11 @@ void PureSignal::processNewInfo(const int newInfo[16])
         //   puresignal.SetPSControl(_txachannel, 1, 1, 0, 0);
         //   if (!PSEnabled) PSEnabled = true;
         //   _cmdstate = eCMDState.SingleCalibrate;
+        // PSEnabled=true → calcc.runcal=1 (see Off-case comment above).
         m_autoON = false;
         m_tx->setPSControl(/*reset=*/1, /*mancal=*/1,
                            /*automode=*/0, /*turnon=*/0);
+        m_tx->setPSRunCal(1);
         m_cmdState = CommandState::SingleCalibrate;
         break;
 
@@ -890,6 +916,10 @@ void PureSignal::processNewInfo(const int newInfo[16])
         //   else if (_restoreON)   _cmdstate = eCMDState.IntiateRestoredCorrection;
         //   else if (_autoON)      _cmdstate = eCMDState.TurnOnAutoCalibrate;
         //   else if (_singlecalON) _cmdstate = eCMDState.TurnOnSingleCalibrate;
+        // PSEnabled=false → calcc.runcal=0.  Calibration is converged;
+        // corrections continue to be applied passively to TX without
+        // further pscc() processing.
+        m_tx->setPSRunCal(0);
         if (m_OFF) {
             m_cmdState = CommandState::TurnOff;
         } else if (m_restoreON) {
@@ -918,6 +948,7 @@ void PureSignal::processNewInfo(const int newInfo[16])
         }
         m_tx->setPSControl(/*reset=*/1, /*mancal=*/0,
                            /*automode=*/0, /*turnon=*/0);
+        m_tx->setPSRunCal(1);   // PSForm.cs:710 [v2.10.3.13] PSEnabled=true
         m_OFF = false;
         if (m_restoreON) {
             m_cmdState = CommandState::InitiateRestoredCorrection;
@@ -942,6 +973,7 @@ void PureSignal::processNewInfo(const int newInfo[16])
         m_autoON = false;
         m_tx->setPSControl(/*reset=*/0, /*mancal=*/0,
                            /*automode=*/0, /*turnon=*/1);
+        m_tx->setPSRunCal(1);
         m_restoreON = false;
         if (engineStateRaw == static_cast<int>(EngineState::LSTAYON)) {
             m_cmdState = CommandState::StayOn;
@@ -1005,6 +1037,28 @@ void PureSignal::autoAttentionTick()
         if (!m_mox || !m_mox->isMox()) {
             return;
         }
+        // Phase 3M-4 Task 17 fix: honour the m_autoAttenuate flag per
+        // Thetis PSForm.cs:735 [v2.10.3.13] (`if (_autoattenuate && ...)`).
+        // The earlier port omitted this check — auto-att fired even when
+        // the user unchecked the AutoAttenuate box in PsForm Advanced.
+        if (!m_autoAttenuate) {
+            return;
+        }
+        // Phase 3M-4 Task 17 fix: gate on CalibrationAttemptsChanged per
+        // Thetis PSForm.cs:735 [v2.10.3.13] — auto-att fires once per
+        // calcc cycle, not on every 100 ms timer tick.  Without this,
+        // multiple ticks per cycle compute fresh deltaDb on stale
+        // transient fbLevel readings (e.g. fbLevel=1 right after an
+        // ATT bump but before pscc resyncs), causing ATT to oscillate
+        // 0↔31 instead of converging to mid-band [128, 181].  Bench
+        // evidence: ATT toggled 0↔31 every ~0.3-1 s at calCount=180
+        // with fbLevel stuck at 20 — exactly the over-correction
+        // pattern this guard prevents.
+        const int curCalCount = m_calCount.load();
+        if (curCalCount == m_aaLastSeenCalCount) {
+            return;
+        }
+        m_aaLastSeenCalCount = curCalCount;
 
         const int currentAttOnTx = m_stepAtt->attOnTxValue();
         const int fbLevel = m_feedbackLevel.load();
@@ -1015,6 +1069,10 @@ void PureSignal::autoAttentionTick()
         if (!needRecal) {
             return;
         }
+        qCInfo(lcDsp).nospace()
+            << "PureSignal: AutoAtt fbLevel=" << fbLevel
+            << " currentAttOnTx=" << currentAttOnTx
+            << " → SetNewValues";
 
         m_aaState = AutoAttenuateState::SetNewValues;
 
@@ -1086,6 +1144,9 @@ void PureSignal::autoAttentionTick()
             newAtten = 0;
         }
         if (oldAtten != newAtten) {
+            qCInfo(lcDsp).nospace()
+                << "PureSignal: AutoAtt setAttOnTx " << oldAtten
+                << " → " << newAtten << " dB (deltaDb=" << m_deltaDb << ")";
             m_stepAtt->setAttOnTxValue(newAtten);
             // The Thetis Thread.Sleep(100) for QuickAttenuate is omitted
             // — NereusSDR doesn't block the main thread.  The next

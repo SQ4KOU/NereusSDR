@@ -512,6 +512,15 @@ private:
     int m_saveSingleCalOn{0};
     int m_deltaDb{0};
 
+    // Phase 3M-4 Task 17 fix: track calCount across autoAttentionTick
+    // invocations so we only act ONCE per calcc cycle (mirrors Thetis
+    // PSForm.cs:735 [v2.10.3.13] `puresignal.CalibrationAttemptsChanged`
+    // guard).  Without this, the 100 ms timer fires multiple times per
+    // calcc cycle on transient fbLevel readings, computing fresh
+    // deltaDb on stale data → ATT oscillates 0↔31.  Sentinel -1 forces
+    // first-tick acceptance.
+    int m_aaLastSeenCalCount{-1};
+
     // Master enable + auto-cal mirrors (drive Q_PROPERTY signals)
     bool m_enabled{false};
     bool m_autoCalEnabled{false};
