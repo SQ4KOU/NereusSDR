@@ -5,10 +5,10 @@
 // tests/tst_transmit_model_anti_vox.cpp  (NereusSDR)
 // =================================================================
 //
-// Unit tests for TransmitModel anti-VOX properties (2x):
-//   antiVoxGainDb / antiVoxSourceVax
+// Unit tests for TransmitModel anti-VOX properties:
+//   antiVoxGainDb / antiVoxSourceVax / antiVoxTauMs
 //
-// Phase 3M-1b C.4.
+// Phase 3M-1b C.4 (gain + source) + Phase 3M-3a-iv Task 8 (tau).
 //
 // Source references (cited for traceability; logic ported in TransmitModel.cpp):
 //   audio.cs:446-454 [v2.10.3.13]  — Audio.AntiVOXSourceVAC:
@@ -16,6 +16,8 @@
 //   setup.designer.cs:44699-44728 [v2.10.3.13]  — udAntiVoxGain:
 //     Minimum = -60, Maximum = 60 (decoded from C# decimal int[4] format;
 //     DecimalPlaces=1 so the display unit is dB×0.1; NereusSDR stores as int dB).
+//   setup.designer.cs:44661-44688 [v2.10.3.13]  — udAntiVoxTau:
+//     Minimum = 1, Maximum = 500, Increment = 1, Value = 20.
 //   setup.cs:18986-18989 [v2.10.3.13]  — udAntiVoxGain_ValueChanged:
 //     cmaster.SetAntiVOXGain(0, Math.Pow(10.0, (double)udAntiVoxGain.Value / 20.0));
 //   phase3m-1b-thetis-pre-code-review.md §1.4 (mapping table) + §3.4
@@ -23,6 +25,7 @@
 // =================================================================
 
 #include <QtTest/QtTest>
+#include "core/AppSettings.h"
 #include "models/TransmitModel.h"
 
 using namespace NereusSDR;
@@ -187,6 +190,58 @@ private slots:
         //  matching the WDSP SetAntiVOXGain power-of-10 formula in setup.cs:18989.)
         QCOMPARE(TransmitModel::kAntiVoxGainDbMin, -60);
         QCOMPARE(TransmitModel::kAntiVoxGainDbMax,  60);
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // antiVoxTauMs (Phase 3M-3a-iv Task 8)
+    // (udAntiVoxTau: Min=1, Max=500, Increment=1, Default=20 per
+    //  setup.designer.cs:44661-44688 [v2.10.3.13])
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    void antiVoxTauMs_default20() {
+        // From Thetis setup.designer.cs:44682 [v2.10.3.13]: udAntiVoxTau.Value=20.
+        TransmitModel m;
+        QCOMPARE(m.antiVoxTauMs(), 20);
+    }
+
+    void antiVoxTauMs_clampsToRange() {
+        // From Thetis setup.designer.cs:44672 / 44667 [v2.10.3.13]: Min=1, Max=500.
+        TransmitModel m;
+        m.setAntiVoxTauMs(0);     QCOMPARE(m.antiVoxTauMs(), 1);
+        m.setAntiVoxTauMs(-100);  QCOMPARE(m.antiVoxTauMs(), 1);
+        m.setAntiVoxTauMs(501);   QCOMPARE(m.antiVoxTauMs(), 500);
+        m.setAntiVoxTauMs(50000); QCOMPARE(m.antiVoxTauMs(), 500);
+    }
+
+    void antiVoxTauMs_changedSignal_idempotentGuard() {
+        TransmitModel m;
+        QSignalSpy spy(&m, &TransmitModel::antiVoxTauMsChanged);
+        m.setAntiVoxTauMs(50);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).toInt(), 50);
+        m.setAntiVoxTauMs(50);  // no change → no second emission
+        QCOMPARE(spy.count(), 1);
+    }
+
+    void antiVoxTauMs_persistsAcrossLoad() {
+        // Round-trip through AppSettings via loadFromSettings(mac) + auto-persist.
+        // Pattern mirrors tst_tx_applet_rf_power_per_band.cpp::
+        // slider_writes_roundtripAcrossReload (Phase A write, Phase B reload).
+        AppSettings::instance().clear();
+
+        const QString mac = QStringLiteral("aa:bb:cc:dd:ee:ff");
+
+        {
+            TransmitModel m1;
+            m1.loadFromSettings(mac);  // activates per-MAC auto-persist
+            m1.setAntiVoxTauMs(80);    // → persistOne(AntiVox_Tau_Ms, "80")
+        }
+
+        TransmitModel m2;
+        m2.loadFromSettings(mac);
+        QCOMPARE(m2.antiVoxTauMs(), 80);
+
+        AppSettings::instance().clear();
     }
 };
 

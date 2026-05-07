@@ -1354,6 +1354,11 @@ void TransmitModel::loadFromSettings(const QString& mac)
     const bool antiVoxSourceVax = s.value(pfx + QLatin1String("AntiVox_Source_VAX"),
                                            QStringLiteral("False")).toString() == QLatin1String("True");
     setAntiVoxSourceVax(antiVoxSourceVax);
+    // antiVoxTauMs: default kAntiVoxTauMsDefault (=20) from Thetis
+    // setup.designer.cs:44682 [v2.10.3.13] (udAntiVoxTau.Value=20).  Phase 3M-3a-iv Task 8.
+    const int antiVoxTauMs = s.value(pfx + QLatin1String("AntiVox_Tau_Ms"),
+                                      QString::number(kAntiVoxTauMsDefault)).toInt();
+    setAntiVoxTauMs(antiVoxTauMs);
 
     // ── MON properties (monEnabled NOT loaded — safety: always false) ─────
     // monitorVolume: default 0.5f (audio.cs:417 [v2.10.3.13] literal)
@@ -1632,6 +1637,7 @@ void TransmitModel::persistToSettings(const QString& mac) const
     // ── Anti-VOX properties ───────────────────────────────────────────────
     s.setValue(pfx + QLatin1String("AntiVox_Gain"),    QString::number(m_antiVoxGainDb));
     s.setValue(pfx + QLatin1String("AntiVox_Source_VAX"), m_antiVoxSourceVax ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("AntiVox_Tau_Ms"),  QString::number(m_antiVoxTauMs));
 
     // ── MON properties (monEnabled excluded — safety) ─────────────────────
     s.setValue(pfx + QLatin1String("MonitorVolume"),    QString::number(static_cast<double>(m_monitorVolume)));
@@ -1793,6 +1799,29 @@ void TransmitModel::setAntiVoxSourceVax(bool useVax)
     m_antiVoxSourceVax = useVax;
     persistOne(QStringLiteral("AntiVox_Source_VAX"), useVax ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
     emit antiVoxSourceVaxChanged(useVax);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// setAntiVoxTauMs() — Phase 3M-3a-iv Task 8.
+//
+// Porting from Thetis setup.designer.cs:44661-44688 [v2.10.3.13]:
+//   udAntiVoxTau.Minimum   = decimal{1,0,0,0}   = 1
+//   udAntiVoxTau.Maximum   = decimal{500,0,0,0} = 500
+//   udAntiVoxTau.Increment = decimal{1,0,0,0}   = 1
+//   udAntiVoxTau.Value     = decimal{20,0,0,0}  = 20
+//
+// This is the model-side property; RadioModel wires
+// antiVoxTauMsChanged → MoxController::setAntiVoxTau in Task 9.
+// MoxController converts to seconds and forwards to TxWorkerThread which
+// calls the WDSP DEXP detector setter (RXA path; the radio's anti-VOX feed).
+// ─────────────────────────────────────────────────────────────────────────────
+void TransmitModel::setAntiVoxTauMs(int ms)
+{
+    const int clamped = std::clamp(ms, kAntiVoxTauMsMin, kAntiVoxTauMsMax);
+    if (clamped == m_antiVoxTauMs) { return; }  // idempotent guard
+    m_antiVoxTauMs = clamped;
+    persistOne(QStringLiteral("AntiVox_Tau_Ms"), QString::number(m_antiVoxTauMs));  // auto-persist
+    emit antiVoxTauMsChanged(clamped);
 }
 
 // ── MON properties (3M-1b C.5) ───────────────────────────────────────────────

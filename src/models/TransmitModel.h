@@ -919,6 +919,33 @@ public:
     static constexpr int kAntiVoxGainDbMin = -60;
     static constexpr int kAntiVoxGainDbMax =  60;
 
+    // ── Anti-VOX detector smoothing tau (Phase 3M-3a-iv Task 8) ──────────
+    //
+    // Porting from Thetis setup.designer.cs:44661-44688 [v2.10.3.13]
+    // (udAntiVoxTau):
+    //   udAntiVoxTau.Minimum   = decimal{1,0,0,0}   = 1
+    //   udAntiVoxTau.Maximum   = decimal{500,0,0,0} = 500
+    //   udAntiVoxTau.Increment = decimal{1,0,0,0}   = 1
+    //   udAntiVoxTau.Value     = decimal{20,0,0,0}  = 20
+    //   ToolTip: "Time-constant used in smoothing Anti-VOX data"
+    //
+    // The model stores the detector smoothing time-constant in milliseconds.
+    // RadioModel wires antiVoxTauMsChanged → MoxController::setAntiVoxTau in
+    // Task 9; MoxController converts to seconds (×1e-3) and forwards to the
+    // TX worker thread which calls the WDSP DEXP detector setter.
+    static constexpr int kAntiVoxTauMsMin     = 1;
+    static constexpr int kAntiVoxTauMsMax     = 500;
+    static constexpr int kAntiVoxTauMsDefault = 20;
+
+    Q_PROPERTY(int antiVoxTauMs READ antiVoxTauMs WRITE setAntiVoxTauMs
+                                NOTIFY antiVoxTauMsChanged)
+
+    /// Anti-VOX detector smoothing time-constant in ms.
+    /// Clamped to [kAntiVoxTauMsMin, kAntiVoxTauMsMax].
+    /// Default kAntiVoxTauMsDefault matches Thetis udAntiVoxTau.Value=20
+    /// (setup.designer.cs:44682 [v2.10.3.13]).
+    int antiVoxTauMs() const noexcept { return m_antiVoxTauMs; }
+
     // ── MON properties (3M-1b C.5) ────────────────────────────────────────
     //
     // Porting from Thetis audio.cs:406 [v2.10.3.13]:
@@ -1772,6 +1799,11 @@ public slots:
     void setAntiVoxGainDb(int dB);
     void setAntiVoxSourceVax(bool useVax);
 
+    // ── Anti-VOX detector tau setter (Phase 3M-3a-iv Task 8) ─────────────────
+    // Sets the smoothing time-constant in ms; clamps to [1, 500] per Thetis
+    // udAntiVoxTau range (setup.designer.cs:44661-44688 [v2.10.3.13]).
+    void setAntiVoxTauMs(int ms);
+
     // ── MON setters (3M-1b C.5) ──────────────────────────────────────────────
     void setMonEnabled(bool on);
     void setMonitorVolume(float volume);
@@ -1881,6 +1913,10 @@ signals:
     // ── Anti-VOX signals (3M-1b C.4) ─────────────────────────────────────────
     void antiVoxGainDbChanged(int dB);
     void antiVoxSourceVaxChanged(bool useVax);
+
+    // ── Anti-VOX detector tau signal (Phase 3M-3a-iv Task 8) ────────────────
+    // RadioModel wires this to MoxController::setAntiVoxTau in Task 9.
+    void antiVoxTauMsChanged(int ms);
 
     // ── MON signals (3M-1b C.5) ──────────────────────────────────────────────
     void monEnabledChanged(bool on);
@@ -2077,6 +2113,10 @@ private:
     // setup.designer.cs:44699-44728 [v2.10.3.13] (udAntiVoxGain range -60..60).
     int  m_antiVoxGainDb    = 0;      // NereusSDR-original default; range [-60,60]
     bool m_antiVoxSourceVax = false;  // audio.cs:446: antivox_source_VAC = false
+    // ── Anti-VOX detector tau (Phase 3M-3a-iv Task 8) ────────────────────
+    // From Thetis setup.designer.cs:44661-44688 [v2.10.3.13] (udAntiVoxTau):
+    //   Min=1, Max=500, Default=20 (ms).
+    int  m_antiVoxTauMs     = kAntiVoxTauMsDefault;
 
     // ── MON properties (3M-1b C.5) ────────────────────────────────────────
     // From Thetis audio.cs:406 [v2.10.3.13]: private bool mon = false;
