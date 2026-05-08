@@ -75,6 +75,7 @@
 #include <QHBoxLayout>
 #include <QFormLayout>
 #include <QGridLayout>
+#include <QFrame>
 #include <QGroupBox>
 #include <QLabel>
 #include <QSlider>
@@ -229,9 +230,12 @@ void SpectrumDefaultsPage::loadFromRenderer()
     // Colour pickers (S11/S12/S13) moved to Setup → Appearance → Colors & Theme.
 
     // Task 2.3: sync overlay controls.
+    // m_showMHzOnCursorToggle now drives the visibility flag
+    // m_showCursorFreq (single source of truth, shared with the
+    // SpectrumOverlayPanel button).
     if (m_showMHzOnCursorToggle) {
         QSignalBlocker b(m_showMHzOnCursorToggle);
-        m_showMHzOnCursorToggle->setChecked(sw->showMHzOnCursor());
+        m_showMHzOnCursorToggle->setChecked(sw->cursorFreqVisible());
     }
     if (m_showBinWidthToggle) {
         QSignalBlocker b(m_showBinWidthToggle);
@@ -798,19 +802,23 @@ void SpectrumDefaultsPage::buildUI()
     auto* overlayForm  = new QFormLayout(overlayGroup);
     overlayForm->setSpacing(6);
 
-    // ShowMHzOnCursor — always show the cursor freq label.
-    // From Thetis setup.designer.cs:33043 [v2.10.3.13] chkShowMHzOnCursor.
-    // Thetis original: "Show Frequency in MHz"
+    // Show cursor frequency — visibility-only toggle.  Originally drove the
+    // retired m_showMHzOnCursor format flag (Thetis chkShowMHzOnCursor,
+    // setup.designer.cs:33043), but the Hz alternative was dropped in
+    // 2026-05 and the flag retired; this checkbox now drives the same
+    // visibility state as the SpectrumOverlayPanel "Cursor Freq" button
+    // (m_showCursorFreq / DisplayShowCursorFreq) — single source of truth.
     m_showMHzOnCursorToggle = new QCheckBox(
         QStringLiteral("Show cursor frequency"), overlayGroup);
     m_showMHzOnCursorToggle->setToolTip(QStringLiteral(
-        "Always display the frequency at the cursor position in the spectrum area."));
+        "Display the frequency at the cursor position (always in MHz). "
+        "Same toggle as the on-spectrum overlay-panel Cursor Freq button."));
     connect(m_showMHzOnCursorToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
-            w->setShowMHzOnCursor(on);
+            w->setCursorFreqVisible(on);
         }
         AppSettings::instance().setValue(
-            QStringLiteral("DisplayShowMHzOnCursor"),
+            QStringLiteral("DisplayShowCursorFreq"),
             on ? QStringLiteral("True") : QStringLiteral("False"));
     });
     overlayForm->addRow(QString(), m_showMHzOnCursorToggle);
@@ -1765,12 +1773,23 @@ void GridScalesPage::applyBandSlot(PanadapterModel* pan)
     if (!pan || !m_dbMaxSpin || !m_dbMinSpin || !m_editingBandLabel) { return; }
     const Band b = pan->band();
     const BandGridSettings slot = pan->perBandGrid(b);
+    const QString bandName = bandLabel(b);
     QSignalBlocker bMax(m_dbMaxSpin);
     QSignalBlocker bMin(m_dbMinSpin);
     m_dbMaxSpin->setValue(slot.dbMax);
     m_dbMinSpin->setValue(slot.dbMin);
+    // Prominent header — large + bracketed so the user can spot which band
+    // they're editing at a glance without having to scan row labels.
     m_editingBandLabel->setText(
-        QStringLiteral("Editing band: %1").arg(bandLabel(b)));
+        QStringLiteral("◆ Editing per-band grid: %1 ◆").arg(bandName));
+    // Row-label fallback: include the band name next to each spinbox so the
+    // association is unambiguous from any focal point on the page.
+    if (m_dbMaxRowLabel) {
+        m_dbMaxRowLabel->setText(QStringLiteral("dB Max (%1):").arg(bandName));
+    }
+    if (m_dbMinRowLabel) {
+        m_dbMinRowLabel->setText(QStringLiteral("dB Min (%1):").arg(bandName));
+    }
 }
 
 void GridScalesPage::loadFromRenderer()
@@ -1844,9 +1863,24 @@ void GridScalesPage::buildUI()
     });
     gridForm->addRow(QString(), m_dbmScaleVisibleToggle);
 
-    m_editingBandLabel = new QLabel(QStringLiteral("Editing band: —"), gridGroup);
-    m_editingBandLabel->setStyleSheet(QStringLiteral("QLabel { color: #00b4d8; font-weight: bold; }"));
-    gridForm->addRow(QString(), m_editingBandLabel);
+    // Section divider above the per-band controls so the section break is
+    // visually obvious — applyBandSlot updates the label text live as the
+    // user tunes across a band boundary.
+    auto* bandSeparator = new QFrame(gridGroup);
+    bandSeparator->setFrameShape(QFrame::HLine);
+    bandSeparator->setFrameShadow(QFrame::Sunken);
+    bandSeparator->setStyleSheet(QStringLiteral(
+        "QFrame { color: #2a3a4a; background: #2a3a4a; max-height: 1px; }"));
+    gridForm->addRow(bandSeparator);
+
+    m_editingBandLabel = new QLabel(QStringLiteral("◆ Editing per-band grid: — ◆"), gridGroup);
+    m_editingBandLabel->setAlignment(Qt::AlignCenter);
+    // Larger + brighter than before — section-header style instead of an
+    // inline note.  Cyan picks up the existing accent palette.
+    m_editingBandLabel->setStyleSheet(QStringLiteral(
+        "QLabel { color: #00d4f0; font-size: 13px; font-weight: bold;"
+        " padding: 4px 0; }"));
+    gridForm->addRow(m_editingBandLabel);
 
     m_dbMaxSpin = new QSpinBox(gridGroup);
     m_dbMaxSpin->setRange(-200, 0);
@@ -1854,14 +1888,15 @@ void GridScalesPage::buildUI()
     m_dbMaxSpin->setSuffix(QStringLiteral(" dB"));
     // Thetis: setup.designer.cs:34745 (udDisplayGridMax) — rewritten
     // Thetis original: "Signal level at top of display in dB."
-    m_dbMaxSpin->setToolTip(QStringLiteral("Signal level at the top of the display in dB. Edits the current band's grid slot — see the band indicator above."));
+    m_dbMaxSpin->setToolTip(QStringLiteral("Signal level at the top of the display in dB. Edits the current band's grid slot — band shown in the row label and the section header above."));
     connect(m_dbMaxSpin, qOverload<int>(&QSpinBox::valueChanged),
             this, [this](int v) {
         if (auto* pan = firstPan(model())) {
             pan->setPerBandDbMax(pan->band(), v);
         }
     });
-    gridForm->addRow(QStringLiteral("dB Max (per band):"), m_dbMaxSpin);
+    m_dbMaxRowLabel = new QLabel(QStringLiteral("dB Max (per band):"), gridGroup);
+    gridForm->addRow(m_dbMaxRowLabel, m_dbMaxSpin);
 
     m_dbMinSpin = new QSpinBox(gridGroup);
     m_dbMinSpin->setRange(-200, 0);
@@ -1869,14 +1904,15 @@ void GridScalesPage::buildUI()
     m_dbMinSpin->setSuffix(QStringLiteral(" dB"));
     // Thetis: setup.designer.cs:34714 (udDisplayGridMin) — rewritten
     // Thetis original: "Signal Level at bottom of display in dB."
-    m_dbMinSpin->setToolTip(QStringLiteral("Signal level at the bottom of the display in dB. Edits the current band's grid slot — see the band indicator above."));
+    m_dbMinSpin->setToolTip(QStringLiteral("Signal level at the bottom of the display in dB. Edits the current band's grid slot — band shown in the row label and the section header above."));
     connect(m_dbMinSpin, qOverload<int>(&QSpinBox::valueChanged),
             this, [this](int v) {
         if (auto* pan = firstPan(model())) {
             pan->setPerBandDbMin(pan->band(), v);
         }
     });
-    gridForm->addRow(QStringLiteral("dB Min (per band):"), m_dbMinSpin);
+    m_dbMinRowLabel = new QLabel(QStringLiteral("dB Min (per band):"), gridGroup);
+    gridForm->addRow(m_dbMinRowLabel, m_dbMinSpin);
 
     m_dbStepSpin = new QSpinBox(gridGroup);
     m_dbStepSpin->setRange(1, 40);

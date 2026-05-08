@@ -623,16 +623,13 @@ public:
     // NereusSDR-native enum; Thetis uses fixed positions (e.g. infoBar is top).
     enum class OverlayPosition { TopLeft, TopRight, BottomLeft, BottomRight };
 
-    // ShowMHzOnCursor — always display the cursor freq label (not just on Shift).
-    // From Thetis display.cs:8692-8696 [v2.10.3.13] AlwaysShowCursorInfo;
-    // wired from setup.cs:22283 chkShowMHzOnCursor_CheckedChanged.
-    void setShowMHzOnCursor(bool on);
-    bool showMHzOnCursor() const { return m_showMHzOnCursor; }
-
     // formatCursorFreq — format a frequency value for the cursor label.
-    // When m_showMHzOnCursor is true: "7.1735 MHz"; otherwise: "7173500 Hz".
-    // Exposed for unit tests (pure function, no widget state side-effects).
-    // From Thetis display.cs:8693 [v2.10.3.13] AlwaysShowCursorInfo.
+    // Always returns MHz format ("7.1735 MHz") — earlier integer-Hz path
+    // ("7173500 Hz") was retired because it duplicated the visibility-only
+    // toggle in SpectrumOverlayPanel and confused users (two controls with
+    // the same name driving different state).  The Setup → Display →
+    // Spectrum Defaults checkbox now controls visibility (m_showCursorFreq)
+    // alongside the overlay-panel button — single source of truth.
     QString formatCursorFreq(double hz) const;
 
     // ShowBinWidth — toggle bin-width readout label in spectrum corner.
@@ -1052,6 +1049,13 @@ private:
     // strip still lands at the panel bottom.
     int bandPlanStripHeight() const;
 
+    // 1-Hz-bandwidth normalisation shift — returns -10*log10(binWidthHz)
+    // when m_dispNormalize is on, 0 otherwise.  Applied inside dbmToY /
+    // dbmToYf so the entire spectrum (trace + every overlay derived from
+    // these helpers) renormalises in lockstep when the toggle flips.
+    // Mirrors Thetis SetDisplayNormOneHz (specHPSDR.cs:325) at render time.
+    float normalizeShiftDb() const;
+
     // Returns kDbmStripW when the dBm scale strip is visible, 0 otherwise.
     // Used everywhere a rect excludes the right-edge strip so that hiding
     // the strip automatically gives the spectrum full widget width.
@@ -1321,8 +1325,7 @@ private:
 
     // ---- Task 2.3: Spectrum text overlay state ----
 
-    // From Thetis display.cs:8692 [v2.10.3.13] AlwaysShowCursorInfo
-    bool m_showMHzOnCursor{false};
+    // (m_showMHzOnCursor retired in 2026-05 — see formatCursorFreq comment.)
 
     // From Thetis setup.cs:7061 [v2.10.3.13] lblDisplayBinWidth
     bool m_showBinWidth{false};
@@ -1359,6 +1362,17 @@ private:
     QColor m_noiseFloorFastColor {0xC8, 0xC8, 0xC8};
     // From Thetis display.cs:2310 [v2.10.3.13] m_fNoiseFloorLineWidth=1.0f.
     float  m_noiseFloorLineWidth {1.0f};
+
+    // FFT-replan crossfade — when auto-zoom replans the FFT (or the user
+    // moves the size slider), the avenger's history is cleared to avoid
+    // cross-resolution ghosting.  Without smoothing, the first new frame
+    // would snap into place ("trace drops in from sky").  We capture the
+    // last good rendered pixels at the moment of replan and crossfade the
+    // first kReplanFadeFrames frames of the new resolution against them so
+    // the trace dissolves smoothly into the new layout.
+    QVector<float> m_postReplanFrozenDb;
+    int            m_postReplanFrameCount{0};
+    static constexpr int kReplanFadeFrames = 8;
 
     // Per-frame + smoothed noise-floor estimates — source-first port of
     // Thetis display.cs:4633-4636 [v2.10.3.13]:

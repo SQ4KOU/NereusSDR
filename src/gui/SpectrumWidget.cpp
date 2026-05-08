@@ -649,9 +649,9 @@ void SpectrumWidget::loadSettings()
     m_subRxFilterColor = readColor(QStringLiteral("DisplaySubRxFilterColor"), m_subRxFilterColor);
 
     // Task 2.3: spectrum text overlay settings.
-    // From Thetis display.cs:8692 [v2.10.3.13] AlwaysShowCursorInfo.
-    m_showMHzOnCursor = s.value(QStringLiteral("DisplayShowMHzOnCursor"),
-                                QStringLiteral("False")).toString() == QStringLiteral("True");
+    // (DisplayShowMHzOnCursor key retired in 2026-05 — cursor is now
+    // always MHz-formatted; visibility is handled by m_showCursorFreq /
+    // DisplayShowCursorFreq below.)
     // From Thetis setup.cs:7061 [v2.10.3.13] lblDisplayBinWidth.
     m_showBinWidth = s.value(QStringLiteral("DisplayShowBinWidth"),
                              QStringLiteral("False")).toString() == QStringLiteral("True");
@@ -849,9 +849,7 @@ void SpectrumWidget::saveSettings()
     writeColor(QStringLiteral("DisplaySubRxFilterColor"), m_subRxFilterColor);
 
     // Task 2.3: spectrum text overlay keys.
-    // From Thetis display.cs:8692 [v2.10.3.13] AlwaysShowCursorInfo.
-    s.setValue(QStringLiteral("DisplayShowMHzOnCursor"),
-               m_showMHzOnCursor ? QStringLiteral("True") : QStringLiteral("False"));
+    // (DisplayShowMHzOnCursor save retired — cursor format is always MHz now.)
     s.setValue(QStringLiteral("DisplayShowBinWidth"),
                m_showBinWidth ? QStringLiteral("True") : QStringLiteral("False"));
     // From Thetis display.cs:2304 [v2.10.3.13] m_bShowNoiseFloorDBM.
@@ -1440,14 +1438,8 @@ void SpectrumWidget::setFillColor(const QColor& c)
 
 // ---- Task 2.3: Spectrum text overlay setters ----
 
-// From Thetis display.cs:8692-8696 [v2.10.3.13] AlwaysShowCursorInfo;
-// wired via setup.cs:22283 chkShowMHzOnCursor_CheckedChanged.
-void SpectrumWidget::setShowMHzOnCursor(bool on)
-{
-    if (m_showMHzOnCursor == on) { return; }
-    m_showMHzOnCursor = on;
-    update();
-}
+// (setShowMHzOnCursor retired in 2026-05 — cursor format unified to always
+// MHz; the Setup checkbox now drives m_showCursorFreq for visibility.)
 
 // From Thetis setup.cs:7061 [v2.10.3.13] lblDisplayBinWidth.Text.
 void SpectrumWidget::setShowBinWidth(bool on)
@@ -1473,14 +1465,13 @@ double SpectrumWidget::binWidthHz() const
     return m_sampleRateHz / fftSz;
 }
 
-// formatCursorFreq — MHz vs Hz format for the cursor label.
-// From Thetis display.cs:8693 [v2.10.3.13] AlwaysShowCursorInfo toggle.
+// formatCursorFreq — always MHz format (4 decimal places, e.g. "14.2700 MHz").
+// Earlier integer-Hz alternative dropped to unify with the SpectrumOverlayPanel
+// "Cursor Freq" button: both UI surfaces now drive a single visibility flag
+// (m_showCursorFreq), the format is fixed.
 QString SpectrumWidget::formatCursorFreq(double hz) const
 {
-    if (m_showMHzOnCursor) {
-        return QString::number(hz / 1.0e6, 'f', 4) + QStringLiteral(" MHz");
-    }
-    return QString::number(static_cast<qint64>(std::round(hz))) + QStringLiteral(" Hz");
+    return QString::number(hz / 1.0e6, 'f', 4) + QStringLiteral(" MHz");
 }
 
 // From Thetis display.cs:2304 [v2.10.3.13] m_bShowNoiseFloorDBM.
@@ -1715,7 +1706,15 @@ void SpectrumWidget::setDispNormalize(bool on)
 {
     if (m_dispNormalize == on) { return; }
     m_dispNormalize = on;
-    // TODO(task-5.x): call FFTEngine or WDSP SetDisplayNormOneHz here.
+    // The shift is applied at render time inside dbmToY / dbmToYf
+    // (-10 * log10(binWidthHz)) so the entire spectrum trace, NF line,
+    // peak hold, peak blobs, dBm-scale labels, and grid lines all
+    // recompose to a 1-Hz reference bandwidth in lockstep.  The WDSP
+    // SetDisplayNormOneHz path (Thetis specHPSDR.cs:325) would do the
+    // same thing inside the analyzer; doing it at the rendering stage
+    // keeps the FFT engine untouched and the toggle is reversible
+    // without a channel rebuild.
+    markOverlayDirty();
     update();
 }
 
@@ -1725,6 +1724,7 @@ void SpectrumWidget::setShowPeakValueOverlay(bool on)
 {
     if (m_showPeakValueOverlay == on) { return; }
     m_showPeakValueOverlay = on;
+    markOverlayDirty();
     if (on) {
         if (!m_peakTextTimer) {
             m_peakTextTimer = new QTimer(this);
@@ -1759,6 +1759,7 @@ void SpectrumWidget::setShowPeakValueOverlay(bool on)
                     + QStringLiteral(" dBm @ ")
                     + QString::number(peakHz / 1.0e6, 'f', 4)
                     + QStringLiteral(" MHz");
+                markOverlayDirty();
                 update();
             });
         }
@@ -1768,6 +1769,7 @@ void SpectrumWidget::setShowPeakValueOverlay(bool on)
             m_peakTextTimer->stop();
         }
         m_peakTextCache.clear();
+        markOverlayDirty();
         update();
     }
 }
@@ -1776,7 +1778,7 @@ void SpectrumWidget::setPeakValuePosition(OverlayPosition pos)
 {
     if (m_peakValuePosition == pos) { return; }
     m_peakValuePosition = pos;
-    if (m_showPeakValueOverlay) { update(); }
+    if (m_showPeakValueOverlay) { markOverlayDirty(); }
 }
 
 // From Thetis console.cs:20073-20080 [v2.10.3.13] PeakTextDelay default=500.
@@ -1795,7 +1797,7 @@ void SpectrumWidget::setPeakValueColor(const QColor& c)
 {
     if (!c.isValid() || m_peakValueColor == c) { return; }
     m_peakValueColor = c;
-    if (m_showPeakValueOverlay) { update(); }
+    if (m_showPeakValueOverlay) { markOverlayDirty(); }
 }
 
 // drawTextOverlay — renders text at a corner of specRect with a semi-transparent
@@ -2271,6 +2273,17 @@ void SpectrumWidget::updateSpectrumLinear(int receiverId,
     // cleaner cross-resolution transition.
     if (!m_fullLinearBins.isEmpty()
         && m_fullLinearBins.size() != binsLinear.size()) {
+        // Capture the last good trace BEFORE clearing the avenger.  The
+        // first kReplanFadeFrames frames at the new resolution will blend
+        // against this snapshot so the new trace dissolves in instead of
+        // snapping into place.  No fade if m_renderedPixels was empty
+        // (cold start — no prior frame to blend against).
+        if (!m_renderedPixels.isEmpty()) {
+            m_postReplanFrozenDb = m_renderedPixels;
+            m_postReplanFrameCount = 0;
+        } else {
+            m_postReplanFrozenDb.clear();
+        }
         m_spectrumAvenger.clear();
         m_waterfallAvenger.clear();
     }
@@ -2339,6 +2352,28 @@ void SpectrumWidget::updateSpectrumLinear(int receiverId,
                             false,
                             0.0,
                             m_renderedPixels);
+
+    // FFT-replan crossfade (Option A from the 2026-05-08 design).  For the
+    // first kReplanFadeFrames after a resolution change, blend the
+    // avenger's output with the frozen pre-replan trace using a linear
+    // ramp so the new trace dissolves in instead of snapping.  The
+    // avenger's own history rebuilds during these same frames; by the
+    // time the fade finishes the smoothed values are real.
+    if (!m_postReplanFrozenDb.isEmpty()
+        && m_postReplanFrozenDb.size() == m_renderedPixels.size()
+        && m_postReplanFrameCount < kReplanFadeFrames) {
+        const float t = static_cast<float>(m_postReplanFrameCount + 1)
+                      / static_cast<float>(kReplanFadeFrames);
+        const float oneMinusT = 1.0f - t;
+        for (int i = 0; i < m_renderedPixels.size(); ++i) {
+            m_renderedPixels[i] = t * m_renderedPixels[i]
+                                + oneMinusT * m_postReplanFrozenDb[i];
+        }
+        ++m_postReplanFrameCount;
+        if (m_postReplanFrameCount >= kReplanFadeFrames) {
+            m_postReplanFrozenDb.clear();  // free the buffer once done
+        }
+    }
 
     // --- Waterfall plane: own detector + avenger -> m_wfRenderedPixels ---
     // Thetis runs separate analyzer planes for spectrum and waterfall (see
@@ -3477,11 +3512,26 @@ int SpectrumWidget::bandPlanStripHeight() const
            ? (m_bandPlanFontSize + 4) : 0;
 }
 
+// 1-Hz-bandwidth normalisation shift.  When m_dispNormalize is on, every
+// dB value gets shifted by -10*log10(binWidthHz) — equivalent to dividing
+// the linear power per bin by the bin width before logging, so the trace
+// represents power-spectral-density referenced to 1 Hz instead of per-bin.
+// Mirrors Thetis SetDisplayNormOneHz (specHPSDR.cs:325) but applied at the
+// Qt rendering stage so the toggle is instantly reversible without a WDSP
+// channel rebuild.
+float SpectrumWidget::normalizeShiftDb() const
+{
+    if (!m_dispNormalize) { return 0.0f; }
+    const double bw = binWidthHz();
+    if (bw <= 0.0) { return 0.0f; }
+    return -10.0f * std::log10(static_cast<float>(bw));
+}
+
 int SpectrumWidget::dbmToY(float dbm, const QRect& r) const
 {
     // Phase 3G-8: apply display calibration offset before mapping to Y.
     // From Thetis display.cs:1372 Display.RX1DisplayCalOffset.
-    const float calibrated = dbm + m_dbmCalOffset;
+    const float calibrated = dbm + m_dbmCalOffset + normalizeShiftDb();
     float bottom = m_refLevel - m_dynamicRange;
     float frac = (calibrated - bottom) / m_dynamicRange;
     frac = qBound(0.0f, frac, 1.0f);
@@ -3496,7 +3546,7 @@ int SpectrumWidget::dbmToY(float dbm, const QRect& r) const
 
 float SpectrumWidget::dbmToYf(float dbm, const QRect& r) const
 {
-    const float calibrated = dbm + m_dbmCalOffset;
+    const float calibrated = dbm + m_dbmCalOffset + normalizeShiftDb();
     float bottom = m_refLevel - m_dynamicRange;
     float frac = (calibrated - bottom) / m_dynamicRange;
     frac = qBound(0.0f, frac, 1.0f);
@@ -4104,10 +4154,8 @@ void SpectrumWidget::drawCursorInfo(QPainter& p, const QRect& specRect)
 
     double hz = xToHz(m_mousePos.x(), specRect);
 
-    // From Thetis display.cs:8692-8696 [v2.10.3.13] AlwaysShowCursorInfo:
-    // when m_showMHzOnCursor is false, the cursor tooltip only shows on hover
-    // (m_mouseInWidget is already true here) and formats in MHz.
-    // When m_showMHzOnCursor is true it always shows and uses formatCursorFreq().
+    // formatCursorFreq always returns MHz format ("14.2700 MHz") — see its
+    // doc comment for why the Hz alternative was retired.
     QString label = formatCursorFreq(hz);
 
     QFont font = p.font();
@@ -5579,6 +5627,30 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 }
             }
             paintNoiseFloorOverlay(p, specRect);
+
+            // Bin width corner readout — Thetis lblDisplayBinWidth
+            // (setup.cs:7061 [v2.10.3.13]).  Mirrors the CPU drawSpectrum
+            // call; GPU overlay was missing it before this commit so the
+            // toggle silently did nothing in the default Metal path.
+            if (m_showBinWidth) {
+                const double bw = binWidthHz();
+                if (bw > 0.0) {
+                    const QString bwText = QString::number(bw, 'f', 3)
+                                         + QStringLiteral(" Hz/bin");
+                    drawTextOverlay(p, specRect, OverlayPosition::BottomRight,
+                                    bwText, m_gridTextColor);
+                }
+            }
+
+            // Peak value overlay — Thetis console.cs:20073 PeakTextDelay
+            // (refresh interval).  m_peakTextCache is rebuilt by the
+            // m_peakTextTimer slot (SpectrumWidget.cpp:1735+) when the
+            // toggle is on; this just renders the cached string through
+            // drawTextOverlay so the GPU path has parity with CPU.
+            if (m_showPeakValueOverlay && !m_peakTextCache.isEmpty()) {
+                drawTextOverlay(p, specRect, m_peakValuePosition,
+                                m_peakTextCache, m_peakValueColor);
+            }
 
             // FPS overlay for GPU mode (QPainter path draws its own
             // counter in paintEvent). Drawn into the cached overlay

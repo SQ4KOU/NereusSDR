@@ -255,6 +255,10 @@ private:
     QCheckBox*      m_gridToggle{nullptr};
     QCheckBox*      m_dbmScaleVisibleToggle{nullptr};
     QLabel*         m_editingBandLabel{nullptr};
+    // Per-band spinbox row labels — hold a reference so they update with the
+    // active band name when the user tunes across a band boundary.
+    QLabel*         m_dbMaxRowLabel{nullptr};
+    QLabel*         m_dbMinRowLabel{nullptr};
     QSpinBox*       m_dbMaxSpin{nullptr};
     QSpinBox*       m_dbMinSpin{nullptr};
     QSpinBox*       m_dbStepSpin{nullptr};
