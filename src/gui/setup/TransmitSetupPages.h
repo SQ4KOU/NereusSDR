@@ -25,6 +25,13 @@
 //                 Tune Power Defaults button + slot, and Block-TX-on-RX
 //                 antennas group.  TX TUN Meter combo items now
 //                 mi0bot-verbatim.
+//   2026-05-07 — Phase 3M-3a-iv post-bench refactor (Option A): dropped
+//                 m_chkAntiVoxSource member from DexpVoxPage; replaced the
+//                 chkAntiVoxSource checkbox with a static info-row label.
+//                 Thetis chkAntiVoxSource (RX vs VAC) does not map to
+//                 NereusSDR's architecture; see TransmitSetupPages.cpp info
+//                 row tooltip for the rationale.  J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -324,12 +331,14 @@ private:
     // Mirrors Thetis grpAntiVOX (setup.designer.cs:44631-44760 [v2.10.3.13]).
     //
     // Phase 3M-3a-iv Task 10 landed Tau (ms) only.  3M-3a-iv scope-expansion
-    // adds chkAntiVoxEnable / chkAntiVoxSource / udAntiVoxGain so the bench
-    // verification matrix is runnable from a fresh install.  Layout order
-    // matches Thetis Y-coordinates: Enable (Y=19) -> Source (Y=41) ->
-    // Gain (Y=71) -> Tau (Y=96).
+    // adds chkAntiVoxEnable / udAntiVoxGain so the bench verification matrix
+    // is runnable from a fresh install.  Layout order matches Thetis Y-coords:
+    // Enable (Y=19) -> [Source info row, NereusSDR-spin] -> Gain (Y=71)
+    // -> Tau (Y=96).  3M-3a-iv post-bench refactor (Option A) replaced the
+    // chkAntiVoxSource checkbox with a static info-row label explaining the
+    // architectural divergence from Thetis (VAX is not a mic-feedback path,
+    // so the audio output device is the only valid source).
     QCheckBox*      m_chkAntiVoxEnable{nullptr};        // chkAntiVoxEnable
-    QCheckBox*      m_chkAntiVoxSource{nullptr};        // chkAntiVoxSource
     // NereusSDR-original divergence (already shipped in 3M-1b H.3): TM uses
     // int dB rather than Thetis decimal-with-0.1-step.  Default 0 dB rather
     // than Thetis +10 dB.  Both are kept here for consistency with shipped

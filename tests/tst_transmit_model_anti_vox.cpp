@@ -6,13 +6,17 @@
 // =================================================================
 //
 // Unit tests for TransmitModel anti-VOX properties:
-//   antiVoxGainDb / antiVoxSourceVax / antiVoxTauMs
+//   antiVoxGainDb / antiVoxTauMs
 //
-// Phase 3M-1b C.4 (gain + source) + Phase 3M-3a-iv Task 8 (tau).
+// Phase 3M-1b C.4 (gain) + Phase 3M-3a-iv Task 8 (tau).
+//
+// 3M-3a-iv post-bench refactor (Option A): the antiVoxSourceVax property
+// and its tests have been removed.  Thetis chkAntiVoxSource (RX vs VAC
+// at audio.cs:446-454 / setup.designer.cs:44646-44657 [v2.10.3.13]) does
+// not map to NereusSDR's architecture; see the architectural-divergence
+// section in docs/architecture/phase3m-3a-iv-antivox-feed-design.md §18.
 //
 // Source references (cited for traceability; logic ported in TransmitModel.cpp):
-//   audio.cs:446-454 [v2.10.3.13]  — Audio.AntiVOXSourceVAC:
-//     private static bool antivox_source_VAC = false;
 //   setup.designer.cs:44699-44728 [v2.10.3.13]  — udAntiVoxGain:
 //     Minimum = -60, Maximum = 60 (decoded from C# decimal int[4] format;
 //     DecimalPlaces=1 so the display unit is dB×0.1; NereusSDR stores as int dB).
@@ -20,8 +24,6 @@
 //     Minimum = 1, Maximum = 500, Increment = 1, Value = 20.
 //   setup.cs:18986-18989 [v2.10.3.13]  — udAntiVoxGain_ValueChanged:
 //     cmaster.SetAntiVOXGain(0, Math.Pow(10.0, (double)udAntiVoxGain.Value / 20.0));
-//   phase3m-1b-thetis-pre-code-review.md §1.4 (mapping table) + §3.4
-//     (CMSetAntiVoxSourceWhat — path-agnostic anti-VOX state machine).
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -48,14 +50,8 @@ private slots:
         QCOMPARE(t.antiVoxGainDb(), 0);
     }
 
-    void default_antiVoxSourceVax_isFalse() {
-        // Matches Thetis audio.cs:446 [v2.10.3.13]:
-        //   private static bool antivox_source_VAC = false;
-        // false = local-RX source (not VAX/VAC).
-        // NereusSDR renames VAC→VAX for consistency with the rest of the project.
-        TransmitModel t;
-        QCOMPARE(t.antiVoxSourceVax(), false);
-    }
+    // 3M-3a-iv post-bench refactor (Option A): default_antiVoxSourceVax_isFalse
+    // removed alongside the antiVoxSourceVax property.
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // ROUND-TRIP SETTERS (set → get → matches)
@@ -67,11 +63,8 @@ private slots:
         QCOMPARE(t.antiVoxGainDb(), -20);
     }
 
-    void setAntiVoxSourceVax_true_roundTrip() {
-        TransmitModel t;
-        t.setAntiVoxSourceVax(true);
-        QCOMPARE(t.antiVoxSourceVax(), true);
-    }
+    // 3M-3a-iv post-bench refactor (Option A): setAntiVoxSourceVax_true_roundTrip
+    // removed alongside the antiVoxSourceVax property.
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // SIGNAL EMISSION
@@ -85,13 +78,8 @@ private slots:
         QCOMPARE(spy.first().at(0).toInt(), -30);
     }
 
-    void setAntiVoxSourceVax_emitsSignal() {
-        TransmitModel t;
-        QSignalSpy spy(&t, &TransmitModel::antiVoxSourceVaxChanged);
-        t.setAntiVoxSourceVax(true);
-        QCOMPARE(spy.count(), 1);
-        QCOMPARE(spy.first().at(0).toBool(), true);
-    }
+    // 3M-3a-iv post-bench refactor (Option A): setAntiVoxSourceVax_emitsSignal
+    // removed alongside the antiVoxSourceVax property.
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // IDEMPOTENT GUARD (no signal on same-value set)
@@ -105,13 +93,8 @@ private slots:
         QCOMPARE(spy.count(), 0);
     }
 
-    void idempotent_antiVoxSourceVax_default_noSignal() {
-        // setAntiVoxSourceVax(false) on fresh model (default = false) must NOT emit.
-        TransmitModel t;
-        QSignalSpy spy(&t, &TransmitModel::antiVoxSourceVaxChanged);
-        t.setAntiVoxSourceVax(false);
-        QCOMPARE(spy.count(), 0);
-    }
+    // 3M-3a-iv post-bench refactor (Option A): idempotent_antiVoxSourceVax_default_noSignal
+    // removed alongside the antiVoxSourceVax property.
 
     void idempotent_antiVoxGainDb_atMin_noSignal() {
         // Set to kAntiVoxGainDbMin, then set again — must NOT emit second time.

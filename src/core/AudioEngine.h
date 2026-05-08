@@ -148,6 +148,18 @@ class SliceModel;
 // mixed master to m_speakersBus synchronously on the DSP thread. No
 // QTimer, no QAudioSink, no m_rxBuffer, no mutex — RT-safety rests on
 // PortAudioBus's lock-free SPSC ring.
+//
+// ── Anti-VOX tap-point signpost (3M-3a-iv post-bench refactor) ──────────
+// The anti-VOX cancellation reference is forked from RxDspWorker's demod
+// output BEFORE it reaches AudioEngine.  This is correct as long as the
+// audio bus stage applies no processing that diverges between outputs
+// (per-bus EQ, gain, mute beyond master).  Today's single-output PC speaker
+// path satisfies this assumption.  WHEN OUTPUT DIVERGENCE LANDS (radio-
+// speaker output with independent processing, or per-bus EQ/gain), the
+// anti-VOX tap MUST move from RxDspWorker to AudioEngine's post-mixer
+// summing point so the cancellation reference matches the audio actually
+// leaving the speakers.  This is a tap-point relocation only; the WDSP
+// DEXP block and TxChannel::sendAntiVoxData wrapper stay unchanged.
 class AudioEngine : public QObject {
     Q_OBJECT
 
@@ -257,6 +269,10 @@ public:
 
     // Called by RxDspWorker when a slice produces an RX audio block.
     // samples is interleaved stereo float32, length = frames * 2.
+    //
+    // (Anti-VOX shares the same demod block via RxDspWorker::antiVoxSampleReady.
+    //  See RxDspWorker.cpp tap-point note for the future tap-point-move scenario
+    //  when output divergence lands.)
     void rxBlockReady(int sliceId, const float* samples, int frames);
 
     /// TX-monitor block consumer. Called via Qt::DirectConnection from

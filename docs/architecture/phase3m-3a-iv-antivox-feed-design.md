@@ -477,3 +477,95 @@ Two GPG-signed commits planned:
 - Spec status updated to "Implemented".
 
 PR is opened after Commit 2. Bench verification on ANAN-G2 + HL2 by maintainer is required for merge. CHANGELOG line records v0.3.3 (or whatever the next patch tag is) with "Anti-VOX cancellation feed wired (closes 3M-3a-iii gap)".
+
+## 18. Architectural divergence from Thetis: anti-VOX source selector
+
+After bench verification of the cancellation feed (sections 1-17 above) the
+plan added a third implementation pass to clean up an architectural mismatch
+that the original design carried over from Thetis without questioning.
+
+### What Thetis does
+
+Thetis exposes `chkAntiVoxSource` ("Use VAC Audio") at
+`setup.designer.cs:44646-44657 [v2.10.3.13]`. The handler at
+`setup.cs:18998-19002` flips the `AntiVOXSourceVAC` property in `audio.cs:446-454`,
+which `cmaster.CMSetAntiVoxSourceWhat` (`cmaster.cs:912-943`) routes per WDSP
+channel:
+
+- `useVAC == false`: anti-VOX feed is the audio going to hardware (RX1, RX1S, RX2).
+- `useVAC == true`: anti-VOX feed is the VAC TX-input bus.
+
+Thetis lets the user choose which one is active because Thetis VAC is not just
+a digital-mode bus; in some Thetis routings it can carry locally-monitored
+audio that could feed back through the local mic during digital ops, and the
+user wants to be able to subtract that as well.
+
+### Why it does not map to NereusSDR
+
+NereusSDR's audio architecture diverged from Thetis on this point. We have two
+distinct speaker paths and one digital-mode bus:
+
+- **Audio output device (PC speakers, the IAudioBus speakers path).** Wired
+  today. This is the only path that can produce a mic-feedback loop.
+- **Radio-attached speaker output.** Future, not wired.
+- **VAX (digital-mode app bus).** Output-only to apps. No mic-feedback path:
+  apps consuming VAX never loop back into the local mic. Documented in
+  `feedback_vax_not_vac_port.md` ("VAX is not a VAC port") — VAX diverged
+  intentionally from Thetis's VAC during NereusSDR design.
+
+Anti-VOX exists to prevent **speaker bleed → local mic → false VOX trigger**.
+The cancellation reference must be the audio about to be played through
+speakers. There is no user choice to expose:
+
+- VAX is never a valid anti-VOX source (no mic-feedback path).
+- Audio output device is always the right source.
+
+Exposing the Thetis chkAntiVoxSource toggle would be misleading — it would
+look like a meaningful choice but flipping to "VAX" would degrade anti-VOX
+without any compensating benefit.
+
+### What was removed (Option A refactor)
+
+Single GPG-signed commit in 3M-3a-iv (post-bench), removing the entire
+source-selector plumbing:
+
+- `TransmitModel::antiVoxSourceVax` Q_PROPERTY + getter + setter + signal +
+  member + `AntiVox_Source_VAX` persistence read/write. Existing user
+  settings carrying `AntiVox_Source_VAX` will see the key as an orphan in
+  AppSettings (harmless; ignored on load — no migration logic needed).
+- `MoxController::setAntiVoxSourceVax(bool)` slot + `antiVoxSourceWhatRequested`
+  signal + `m_antiVoxSourceVax` / `m_antiVoxSourceVaxInitialized` state.
+- `RadioModel.cpp` connect lambdas for the source chain (the `antiVoxSourceVaxChanged
+  → setAntiVoxSourceVax` wire and the no-op `antiVoxSourceWhatRequested`
+  lambda preserved for 3F multi-pan).
+- `DexpVoxPage::m_chkAntiVoxSource` checkbox + bidirectional binding.
+- `MicProfileManager` bundle key + factory-profile defaults + load/save.
+- All `antiVoxSource*` test cases (3 from `tst_transmit_model_anti_vox`,
+  5 from `tst_mox_controller_anti_vox`, 2 from `tst_dexp_vox_setup_page`,
+  2 persistence tests, 2 from `tst_mic_profile_manager`).
+
+### What replaced the checkbox
+
+A static `QLabel` info row at the same Y-position (between the Enable
+checkbox and the Gain spinbox) reading **"Source: Audio Output Device(s)"**.
+The label's tooltip explains the architectural divergence verbatim (see
+`TransmitSetupPages.cpp` — the tooltip cites Thetis `setup.designer.cs:44646-44657
+[v2.10.3.13]` and explains why VAX is intentionally not subject to anti-VOX
+treatment).
+
+### Future tap-point signpost
+
+The anti-VOX cancellation reference is forked from `RxDspWorker`'s demod
+output **before** it reaches `AudioEngine`. Today's single-output PC speaker
+path satisfies the assumption that "the demod block IS what plays through
+speakers." When radio-speaker output with output divergence lands (per-bus
+EQ, gain, mute beyond master, or independent processing for the radio's own
+speaker), the anti-VOX tap MUST move from `RxDspWorker` to `AudioEngine`'s
+post-mixer summing point so the cancellation reference matches the audio
+actually leaving the speakers.
+
+This is a tap-point relocation only; the WDSP DEXP block and
+`TxChannel::sendAntiVoxData` wrapper stay unchanged. Signposted with verbatim
+comment blocks in `RxDspWorker.cpp` (at the `antiVoxSampleReady` emit) and
+`AudioEngine.h` (at the IAudioBus / MasterMixer description) so a future
+maintainer can find both ends of the move with one grep.

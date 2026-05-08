@@ -1964,3 +1964,45 @@ EOF
 ```
 
 Return the PR URL when done.
+
+## Post-bench refactor (Option A): drop anti-VOX source-selector plumbing
+
+After the bench-verification matrix passed, a third commit landed to fix
+an architectural mismatch the original plan had carried over from Thetis
+without questioning: the `chkAntiVoxSource` (RX vs VAC) toggle.
+
+Thetis exposes the toggle because Thetis VAC can carry locally-monitored
+audio that may feed back through the local mic during digital ops, and the
+user wants to be able to subtract that. NereusSDR's architecture has only
+one valid anti-VOX source — the audio output device — because VAX (the
+digital-mode app bus) is output-only to apps and has no mic-feedback path.
+Per memory `feedback_vax_not_vac_port.md`, "VAX is not a VAC port"; VAX
+diverged intentionally from Thetis's VAC during NereusSDR design.
+
+The refactor removed the entire source-selector chain in a single GPG-signed
+commit:
+
+- `TransmitModel::antiVoxSourceVax` Q_PROPERTY + setter + signal + member +
+  `AntiVox_Source_VAX` persistence (read & write). Existing user settings
+  carrying the orphan key are harmless — AppSettings ignores unknown keys
+  on load, no migration logic needed.
+- `MoxController::setAntiVoxSourceVax` slot + `antiVoxSourceWhatRequested`
+  signal + `m_antiVoxSourceVax` / `m_antiVoxSourceVaxInitialized` state.
+- `RadioModel.cpp` source-chain wiring (the change-signal pipe and the
+  no-op single-RX lambda).
+- `DexpVoxPage::m_chkAntiVoxSource` checkbox + its bidirectional binding.
+  Replaced with a static `QLabel` "Source: Audio Output Device(s)" info
+  row at the same Y position; the label's tooltip explains the divergence
+  verbatim.
+- `MicProfileManager` bundle key + default seed + load/save.
+- All `antiVoxSource*` test cases (10 dropped across 5 test files; 2
+  `sourceInfoRow_*` cases added).
+- Tap-point signpost comments added at `RxDspWorker.cpp` (anti-VOX feed
+  fork) and `AudioEngine.h` (IAudioBus / MasterMixer description) so a
+  future maintainer can locate both ends of the move when output
+  divergence (radio-speaker output with independent processing) lands and
+  the anti-VOX tap must relocate from `RxDspWorker` to `AudioEngine`'s
+  post-mixer summing point.
+
+Full architectural rationale captured in
+`docs/architecture/phase3m-3a-iv-antivox-feed-design.md` §18.

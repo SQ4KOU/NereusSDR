@@ -22,6 +22,7 @@
 #include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QGroupBox>
+#include <QLabel>
 #include <QSignalSpy>
 #include <QSpinBox>
 
@@ -335,19 +336,24 @@ private slots:
                  QStringLiteral("Time-constant used in smoothing Anti-VOX data"));
     }
 
-    // ── Phase 3M-3a-iv scope-expansion: chkAntiVoxEnable / chkAntiVoxSource /
-    //    udAntiVoxGain land in grpAntiVOX above the existing Tau row ────────
+    // ── Phase 3M-3a-iv scope-expansion: chkAntiVoxEnable / udAntiVoxGain
+    //    land in grpAntiVOX above the existing Tau row ────────────────────
     //
     // Layout order (matching Thetis Y-coord ordering at
     // setup.designer.cs:44650 / 44666 / 44707 / 44744 [v2.10.3.13]):
-    //   Y=19  chkAntiVoxEnable  ("Anti-VOX Enable")
-    //   Y=41  chkAntiVoxSource  ("Use VAC Audio")
-    //   Y=71  udAntiVoxGain     ("Gain (dB)")
-    //   Y=96  udAntiVoxTau      ("Tau (ms)")  -- existing
+    //   Y=19  chkAntiVoxEnable     ("Anti-VOX Enable")
+    //   Y=41  [Source info row]    NereusSDR-spin replacing chkAntiVoxSource
+    //   Y=71  udAntiVoxGain        ("Gain (dB)")
+    //   Y=96  udAntiVoxTau         ("Tau (ms)")  -- existing
+    //
+    // 3M-3a-iv post-bench refactor (Option A): the Y=41 chkAntiVoxSource
+    // checkbox has been replaced with a static info-row label.  Thetis
+    // chkAntiVoxSource (RX vs VAC at setup.designer.cs:44646-44657
+    // [v2.10.3.13]) does not map to NereusSDR's architecture (VAX is a
+    // digital-mode app bus with no mic-feedback path).
     //
     // Defaults verified against Thetis chkAntiVoxEnable (initially unchecked
-    // -- no Checked= setter), chkAntiVoxSource (initially unchecked -- no
-    // Checked= setter), udAntiVoxGain (Value=10 -- but NereusSDR-original
+    // -- no Checked= setter), udAntiVoxGain (Value=10 -- but NereusSDR-original
     // divergence retains shipped default 0; see TransmitModel C.4 comment).
 
     void enableCheckbox_defaultUnchecked()
@@ -404,36 +410,64 @@ private slots:
                  QStringLiteral("Enable prevention measures for RX audio tripping VOX"));
     }
 
-    void sourceCheckbox_defaultUnchecked()
+    // 3M-3a-iv post-bench refactor (Option A): sourceCheckbox_defaultUnchecked
+    // and sourceCheckbox_tooltipStartsWithVaxLabel removed alongside the
+    // chkAntiVoxSource checkbox.  Replaced with a static info-row label
+    // (lblAntiVoxSourceInfo) verified by sourceInfoRow_* below.
+
+    void sourceInfoRow_existsAndShowsExpectedText()
     {
-        // NereusSDR-spin label: Thetis says "Use VAC Audio" but NereusSDR
-        // has VAX (a native virtual-audio bus, not a port of Thetis VAC)
-        // per memory feedback_vax_not_vac_port.md.  The user-facing string
-        // says VAX so the operator sees terminology consistent with the
-        // rest of the app (VaxApplet, IAudioBus, AppSettings keys).
+        // NereusSDR-original info row replaces Thetis chkAntiVoxSource
+        // (setup.designer.cs:44646-44657 [v2.10.3.13]) per the 3M-3a-iv
+        // post-bench Option A refactor.  Anti-VOX always references the
+        // audio output device(s) — VAX is a digital-mode app bus with no
+        // mic-feedback path, so there is no user choice to expose.
         RadioModel model;
         DexpVoxPage page(&model);
         page.show();
 
-        auto* chk = page.findChild<QCheckBox*>(QStringLiteral("chkAntiVoxSource"));
-        QVERIFY(chk != nullptr);
-        QCOMPARE(chk->isChecked(), false);
-        QCOMPARE(chk->text(), QStringLiteral("Use VAX Audio"));
+        auto* lbl = page.findChild<QLabel*>(QStringLiteral("lblAntiVoxSourceInfo"));
+        QVERIFY(lbl != nullptr);
+        QCOMPARE(lbl->text(), QStringLiteral("Source: Audio Output Device(s)"));
     }
 
-    void sourceCheckbox_tooltipStartsWithVaxLabel()
+    void sourceInfoRow_isStaticLabelNotCheckbox()
+    {
+        // The Y=41 grpAntiVOX row must be a read-only QLabel, NOT a
+        // QCheckBox.  This guards against regression: anyone re-adding a
+        // chkAntiVoxSource toggle would re-introduce the "VAX as anti-VOX
+        // source" misconception we deliberately closed in the Option A
+        // refactor.  See class header + design doc §18 [v2.10.3.13].
+        RadioModel model;
+        DexpVoxPage page(&model);
+        page.show();
+
+        // The expected info-row widget is a QLabel.
+        auto* lbl = page.findChild<QLabel*>(QStringLiteral("lblAntiVoxSourceInfo"));
+        QVERIFY(lbl != nullptr);
+
+        // No QCheckBox with the historical objectName must exist on the
+        // page — its presence would mean the checkbox came back.
+        auto* oldCheckbox = page.findChild<QCheckBox*>(QStringLiteral("chkAntiVoxSource"));
+        QVERIFY(oldCheckbox == nullptr);
+    }
+
+    void sourceInfoRow_tooltipExplainsArchitecturalDivergence()
     {
         RadioModel model;
         DexpVoxPage page(&model);
         page.show();
 
-        auto* chk = page.findChild<QCheckBox*>(QStringLiteral("chkAntiVoxSource"));
-        QVERIFY(chk != nullptr);
-        // NereusSDR-original tooltip (not Thetis-verbatim): the Thetis
-        // string mentions VAC, but NereusSDR has VAX.  feedback_vax_not_vac_port.md
-        // requires the user-facing string to say VAX.
-        QVERIFY(chk->toolTip().startsWith(
-            QStringLiteral("Use VAX as Anti-VOX source")));
+        auto* lbl = page.findChild<QLabel*>(QStringLiteral("lblAntiVoxSourceInfo"));
+        QVERIFY(lbl != nullptr);
+        // The tooltip should explain why this is an info row rather than a
+        // Thetis-style RX/VAC selector — i.e. cite the architectural
+        // divergence and mention VAX explicitly so the operator understands
+        // why no toggle is offered.
+        const QString tip = lbl->toolTip();
+        QVERIFY(tip.contains(QStringLiteral("VAX")));
+        QVERIFY(tip.contains(QStringLiteral("speaker bleed")));
+        QVERIFY(tip.contains(QStringLiteral("chkAntiVoxSource")));
     }
 
     void gainSpinbox_defaultZero()

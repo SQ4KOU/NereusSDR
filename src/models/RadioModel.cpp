@@ -736,23 +736,27 @@ RadioModel::RadioModel(QObject* parent)
     //     cmaster.SetDEXPHoldTime(0, Value / 1000.0)
     //   dB→linear for SetAntiVOXGain (setup.cs:18989 [v2.10.3.13]):
     //     cmaster.SetAntiVOXGain(0, Math.Pow(10.0, dB / 20.0))
-    //   CMSetAntiVoxSourceWhat useVAC=false (cmaster.cs:937-942 [v2.10.3.13]):
-    //     all RX slots (RX1, RX1S, RX2) get source=1.
     //
     // Signal chain:
     //   TransmitModel::voxHangTimeMsChanged    → MoxController::setVoxHangTime
     //   TransmitModel::antiVoxGainDbChanged    → MoxController::setAntiVoxGain
-    //   TransmitModel::antiVoxSourceVaxChanged → MoxController::setAntiVoxSourceVax
     //   TransmitModel::antiVoxRunChanged       → MoxController::setAntiVoxRun
     //                                                (3M-3a-iv scope-expansion;
     //                                                 wired below in the
     //                                                 cancellation-feed block)
     //   MoxController::voxHangTimeRequested    → TxChannel::setVoxHangTime
     //   MoxController::antiVoxGainRequested    → TxChannel::setAntiVoxGain
-    //   MoxController::antiVoxSourceWhatRequested → no-op for single-RX
-    //                                                (preserved for 3F multi-pan)
     //   MoxController::antiVoxRunRequested     → TxWorkerThread::setAntiVoxRun
     //                                                (3M-3a-iv scope-expansion)
+    //
+    // 3M-3a-iv post-bench refactor (Option A) removed the antiVoxSourceVax
+    // chain (TransmitModel::antiVoxSourceVaxChanged →
+    // MoxController::setAntiVoxSourceVax → antiVoxSourceWhatRequested) entirely.
+    // Thetis chkAntiVoxSource (RX vs VAC at cmaster.cs:912-943 [v2.10.3.13])
+    // does not map to NereusSDR's architecture: VAX is a digital-mode app bus
+    // with no mic-feedback path, so the audio output device is the only valid
+    // anti-VOX cancellation reference.  See commit message and DexpVoxPage
+    // info-row for the architectural rationale.
     //
     // MoxController handles ms→seconds and dB→linear conversions; TxChannel
     // wrappers (D.3) are thin WDSP delegates.
@@ -760,13 +764,10 @@ RadioModel::RadioModel(QObject* parent)
             m_moxController,  &MoxController::setVoxHangTime);
     connect(&m_transmitModel, &TransmitModel::antiVoxGainDbChanged,
             m_moxController,  &MoxController::setAntiVoxGain);
-    connect(&m_transmitModel, &TransmitModel::antiVoxSourceVaxChanged,
-            m_moxController,  &MoxController::setAntiVoxSourceVax);
 
-    // MoxController::voxHangTimeRequested / antiVoxGainRequested /
-    // antiVoxSourceWhatRequested → TxChannel setters are wired in
-    // connectToRadio() once m_txChannel is live — same reason as txReady /
-    // txaFlushed above.
+    // MoxController::voxHangTimeRequested / antiVoxGainRequested →
+    // TxChannel setters are wired in connectToRadio() once m_txChannel is
+    // live — same reason as txReady / txaFlushed above.
 
     // ── H.5: P1/P2 status-frame mic_ptt → MoxController PTT-source dispatch ──
     //
@@ -2119,25 +2120,17 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 m_txChannel->setAntiVoxGain(gain);
             });
 
-            // 3M-3a-iv scope-expansion: previously drove
-            // m_txWorker->setAntiVoxRun(!useVax) (the older collapsed wiring),
-            // but with TransmitModel::antiVoxRun now an independent property,
-            // the run flag has its own dedicated chain through
-            // MoxController::setAntiVoxRun -> antiVoxRunRequested ->
-            // TxWorkerThread::setAntiVoxRun (wired below near the cancellation
-            // feed connects).
+            // 3M-3a-iv: the antiVoxRun chain (TransmitModel::antiVoxRunChanged
+            // -> MoxController::setAntiVoxRun -> antiVoxRunRequested ->
+            // TxWorkerThread::setAntiVoxRun) is wired below near the
+            // cancellation-feed connects.
             //
-            // The antiVoxSourceWhatRequested signal is preserved for 3F
-            // multi-pan source mux: cmaster.CMSetAntiVoxSourceWhat
-            // (cmaster.cs:937-942 [v2.10.3.13]) iterates per-RX
-            // (RX1, RX1S, RX2) and calls SetAntiVOXSourceWhat per slot.
-            // For single-RX 3M-1b/3M-3a-iv layouts this lambda is a no-op.
-            connect(m_moxController, &MoxController::antiVoxSourceWhatRequested,
-                    m_txChannel, [](bool useVax) {
-                Q_UNUSED(useVax);
-                // 3M-3a-iv scope-expansion: no-op for single-RX layouts.
-                // 3F multi-pan will iterate per WDSP channel here.
-            });
+            // 3M-3a-iv post-bench refactor (Option A) removed the
+            // antiVoxSourceWhatRequested no-op lambda that previously sat
+            // here for 3F multi-pan source mux.  Thetis chkAntiVoxSource
+            // (RX vs VAC at cmaster.cs:912-943 [v2.10.3.13]) does not map
+            // to NereusSDR's architecture; see commit message and
+            // DexpVoxPage info-row for the architectural rationale.
 
             // ── 3M-3 — TransmitModel → TxChannel TX processing chain wiring ─────
             //

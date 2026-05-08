@@ -1687,29 +1687,26 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
         "Enable prevention measures for RX audio tripping VOX"));
     m_chkAntiVoxEnable->setChecked(tx.antiVoxRun());
 
-    // chkAntiVoxSource — Y=41 in Thetis Designer.  Default unchecked
-    // (no .Checked= setter at setup.designer.cs:44646-44657 [v2.10.3.13]).
-    //
-    // NereusSDR-spin label: Thetis says "Use VAC Audio" but NereusSDR has
-    // VAX (a native virtual-audio bus, not a port of Thetis VAC) per
-    // memory feedback_vax_not_vac_port.md.  The user-facing string says
-    // VAX so the operator sees terminology consistent with the rest of
-    // the app (VaxApplet, IAudioBus, AppSettings keys).  Source-comment
-    // cite preserved for upstream traceability.
-    m_chkAntiVoxSource = new QCheckBox(QStringLiteral("Use VAX Audio"));
-    m_chkAntiVoxSource->setObjectName(QStringLiteral("chkAntiVoxSource"));
-    // Tooltip is NereusSDR-original (no Thetis verbatim) because the
-    // upstream string mentions VAC; spin to VAX matches the label and
-    // honors feedback_vax_not_vac_port.md.  The 3M-3c deferral note
-    // explains why the toggle currently has no audible effect on
-    // single-RX systems (VAX -> anti-VOX detector routing lands later).
-    m_chkAntiVoxSource->setToolTip(QStringLiteral(
-        "Use VAX as Anti-VOX source.\n"
-        "(VAX routing into the anti-VOX detector lands in 3M-3c. "
-        "Toggling this currently has no audible effect on single-RX "
-        "systems because the anti-VOX feed is sourced from the RX "
-        "speaker bus regardless.)"));
-    m_chkAntiVoxSource->setChecked(tx.antiVoxSourceVax());
+    // NereusSDR-original info row replacing Thetis chkAntiVoxSource
+    // (setup.designer.cs:44646-44657 [v2.10.3.13]).  See commit message for
+    // architectural rationale: Thetis chkAntiVoxSource selects between RX
+    // and VAC as the anti-VOX cancellation reference; that choice does not
+    // map to NereusSDR's architecture, where VAX is a digital-mode app bus
+    // with no mic-feedback path and the audio output device is the only
+    // valid source.
+    auto* antiVoxSourceInfo = new QLabel(
+        QStringLiteral("Source: Audio Output Device(s)"));
+    antiVoxSourceInfo->setObjectName(QStringLiteral("lblAntiVoxSourceInfo"));
+    antiVoxSourceInfo->setToolTip(QStringLiteral(
+        "Anti-VOX always references audio about to play through the configured\n"
+        "audio output device(s).  This prevents speaker bleed from triggering\n"
+        "VOX through the local mic.  VAX is intentionally not subject to anti-VOX\n"
+        "treatment because VAX feeds digital-mode apps (no mic-feedback path).\n"
+        "\n"
+        "NereusSDR-original divergence from Thetis chkAntiVoxSource\n"
+        "(setup.designer.cs:44646-44657 [v2.10.3.13]): Thetis selects between RX\n"
+        "and VAC; in NereusSDR, the audio output device is the only valid\n"
+        "cancellation reference."));
 
     // udAntiVoxGain — Y=71 in Thetis Designer.  Range -60..60 from
     // setup.designer.cs:44708-44717 [v2.10.3.13].
@@ -1742,9 +1739,11 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     m_udAntiVoxTau->setToolTip(QStringLiteral(
         "Time-constant used in smoothing Anti-VOX data"));
 
-    // Stack: 2 checkboxes (full row) then 2 labelled spinbox rows.
+    // Stack: Enable checkbox, info row (NereusSDR-spin replacing
+    // Thetis chkAntiVoxSource — see info row block above), then 2 labelled
+    // spinbox rows.
     antiVoxLay->addWidget(m_chkAntiVoxEnable);
-    antiVoxLay->addWidget(m_chkAntiVoxSource);
+    antiVoxLay->addWidget(antiVoxSourceInfo);
 
     auto* antiVoxGrid = new QGridLayout;
     antiVoxGrid->setHorizontalSpacing(10);
@@ -1917,16 +1916,10 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
         m_chkAntiVoxEnable->setChecked(run);
     });
 
-    // chkAntiVoxSource <-> antiVoxSourceVax (the source toggle; useVax=true
-    // is rejected at MoxController per plan §3 H.3 — see TransmitModel and
-    // tooltip).  From Thetis setup.cs:18998-19002 [v2.10.3.13].
-    connect(m_chkAntiVoxSource, &QCheckBox::toggled,
-            &tx, &TransmitModel::setAntiVoxSourceVax);
-    connect(&tx, &TransmitModel::antiVoxSourceVaxChanged,
-            m_chkAntiVoxSource, [this](bool useVax) {
-        QSignalBlocker b(m_chkAntiVoxSource);
-        m_chkAntiVoxSource->setChecked(useVax);
-    });
+    // 3M-3a-iv post-bench refactor (Option A): chkAntiVoxSource <-> antiVoxSourceVax
+    // bidirectional bindings removed.  Thetis source-toggle does not map to
+    // NereusSDR's architecture (see info-row block earlier in this method
+    // and commit message for rationale).
 
     // udAntiVoxGain <-> antiVoxGainDb (Anti-VOX sensitivity in dB).
     // From Thetis setup.cs:18986-18990 [v2.10.3.13].

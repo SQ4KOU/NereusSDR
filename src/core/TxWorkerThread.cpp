@@ -177,7 +177,10 @@ void TxWorkerThread::run()
     //         MoxController::voxThresholdRequested  → TxChannel::setVoxAttackThreshold
     //         MoxController::voxHangTimeRequested   → TxChannel::setVoxHangTime
     //         MoxController::antiVoxGainRequested   → TxChannel::setAntiVoxGain
-    //         MoxController::antiVoxSourceWhatRequested → TxChannel::setAntiVoxRun
+    //         (3M-3a-iv post-bench refactor (Option A) removed the
+    //          MoxController::antiVoxSourceWhatRequested → TxChannel::setAntiVoxRun
+    //          wire that previously lived here; see MoxController.h header
+    //          comment for the architectural rationale.)
     //
     //   (b) NEW (3M-3a-iv) → TxWorkerThread anti-VOX slots.  The
     //       TxWorkerThread QObject itself lives on the MAIN thread (only

@@ -73,7 +73,9 @@
 //                 effects; on rejection emits moxRejected(reason) and returns.
 //   2026-04-28 — Phase 3M-1b Task H.3 — recomputeVoxHangTime(),
 //                 recomputeAntiVoxGain(), setVoxHangTime(int ms),
-//                 setAntiVoxGain(int dB), setAntiVoxSourceVax(bool) implemented.
+//                 setAntiVoxGain(int dB) implemented.  Originally also added
+//                 setAntiVoxSourceVax(bool); removed by 3M-3a-iv post-bench
+//                 refactor (see 2026-05-07 entry below).
 //                 Ports the Thetis formulae:
 //                   ms→seconds (setup.cs:18899 [v2.10.3.13]):
 //                     cmaster.SetDEXPHoldTime(0, Value / 1000.0)
@@ -99,6 +101,13 @@
 //                     added so RadioModel can keep activeRxForTx() current.
 //                   activeRxForTx() = (m_rx2Enabled && m_vfobTx) ? 2 : 1
 //                     matches the Thetis dispatch expression verbatim.
+//   2026-05-07 — Phase 3M-3a-iv post-bench refactor (Option A): removed
+//                 setAntiVoxSourceVax(bool) implementation, antiVoxSourceWhatRequested
+//                 emit, and m_antiVoxSourceVax / m_antiVoxSourceVaxInitialized state.
+//                 NereusSDR-architectural divergence from Thetis chkAntiVoxSource
+//                 (RX vs VAC at cmaster.cs:912-943 [v2.10.3.13]); see commit
+//                 message for rationale.  J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -999,53 +1008,14 @@ void MoxController::setAntiVoxTau(int ms)
 }
 
 // ---------------------------------------------------------------------------
-// setAntiVoxSourceVax — choose anti-VOX reference audio source.
-//
-// Ports the path-agnostic CMSetAntiVoxSourceWhat logic from
-// Thetis Project Files/Source/Console/cmaster.cs:912-943 [v2.10.3.13].
-//
-// useVax == false (default, "use audio going to hardware minus MON"):
-//   Ports cmaster.cs:937-942 [v2.10.3.13]:
-//     cmaster.SetAntiVOXSourceWhat(0, RX1,  1);
-//     cmaster.SetAntiVOXSourceWhat(0, RX1S, 1);
-//     cmaster.SetAntiVOXSourceWhat(0, RX2,  1);
-//   MoxController emits antiVoxSourceWhatRequested(false).  RadioModel
-//   lambda collapses the three-slot iteration to TxChannel::setAntiVoxRun(true)
-//   in the 3M-1b single-TX layout.  Full per-WDSP-channel iteration is a
-//   3F multi-pan concern.
-//
-// useVax == true:
-//   Deferred to 3M-3a (requires VAX TX-input bus integration per plan §3 H.3
-//   + audio.cs:27602-27721 state machine port).  NereusSDR style guide
-//   (CLAUDE.md) prohibits C++ exceptions.  Logs qCWarning and returns
-//   without updating m_antiVoxSourceVax or emitting any signal.
-//
-// Wired by RadioModel H.3:
-//   TransmitModel::antiVoxSourceVaxChanged → MoxController::setAntiVoxSourceVax
+// 3M-3a-iv post-bench refactor (Option A): setAntiVoxSourceVax body removed
+// alongside the antiVoxSourceWhatRequested signal and m_antiVoxSourceVax /
+// m_antiVoxSourceVaxInitialized members.  Thetis chkAntiVoxSource (RX vs VAC
+// at cmaster.cs:912-943 [v2.10.3.13]) does not map to NereusSDR's
+// architecture: VAX is a digital-mode app bus with no mic-feedback path, so
+// the audio output device is the only valid anti-VOX cancellation reference.
+// See commit message and DexpVoxPage info-row for the architectural rationale.
 // ---------------------------------------------------------------------------
-void MoxController::setAntiVoxSourceVax(bool useVax)
-{
-    if (useVax) {
-        // Deferred to 3M-3a per plan §3 H.3 + pre-code review §3.4.
-        // VAX anti-VOX source requires the full VAX TX-input bus integration
-        // (Thetis audio.cs:27602-27721 state machine port, deferred).
-        // cmaster.cs:920-935 [v2.10.3.13] useVAC=true path:
-        //   routes based on VACEn/VAC2En flags, which are not yet wired.
-        qCWarning(lcDsp) << "MoxController::setAntiVoxSourceVax(true) not implemented"
-                            " in 3M-1b — deferred to 3M-3a."
-                            " Defaulting to local-RX anti-VOX source (useVax=false path).";
-        return;  // do NOT update m_antiVoxSourceVax or emit
-    }
-
-    // useVax == false path.  Emit if state changed or first call.
-    if (m_antiVoxSourceVax == useVax && m_antiVoxSourceVaxInitialized) {
-        return;  // idempotent
-    }
-
-    m_antiVoxSourceVax = useVax;              // false: local-RX source
-    m_antiVoxSourceVaxInitialized = true;
-    emit antiVoxSourceWhatRequested(useVax);  // false = local-RX antivox
-}
 
 // ---------------------------------------------------------------------------
 // setAntiVoxRun() — 3M-3a-iv scope-expansion.
@@ -1058,13 +1028,13 @@ void MoxController::setAntiVoxSourceVax(bool useVax)
 //       cmaster.SetAntiVOXRun(0, chkAntiVoxEnable.Checked);
 //   }
 //
-// Independent of setAntiVoxSourceVax (the source toggle).  Replaces the
-// older collapsed wiring where antiVoxSourceWhatRequested drove
-// TxWorkerThread::setAntiVoxRun via a !useVax inversion.
+// 3M-3a-iv: replaces the older collapsed wiring where
+// antiVoxSourceWhatRequested drove TxWorkerThread::setAntiVoxRun via a
+// !useVax inversion.  The post-bench Option A refactor then dropped the
+// source-selector entirely.
 //
-// First-call emit guard m_antiVoxRunInitialized mirrors the
-// m_antiVoxSourceVaxInitialized pattern; the very first accepted call
-// always emits, even when run==false matches the default field value.
+// First-call emit guard m_antiVoxRunInitialized: the very first accepted
+// call always emits, even when run==false matches the default field value.
 // ---------------------------------------------------------------------------
 void MoxController::setAntiVoxRun(bool run)
 {
@@ -1114,7 +1084,8 @@ void MoxController::setAntiVoxRun(bool run)
 // REJECTION PATTERN (2 rejected slots):
 //   qCWarning(lcDsp) << "... rejected — deferred to 3M-2/3J";
 //   return;  — no setMox(), no setPttMode() update
-//   Matches setAntiVoxSourceVax(true) rejection from H.3.
+//   (qCWarning-and-return shape; formerly modeled on the
+//   setAntiVoxSourceVax(true) rejection from H.3, removed in 3M-3a-iv.)
 //
 // CROSS-SOURCE SWITCHING SEMANTIC: last-setter-wins.  The slots do not
 // refcount or arbitrate — callers (PollPTT equivalent in NereusSDR) are
@@ -1248,7 +1219,8 @@ void MoxController::onX2Ptt(bool pressed)
 // 3M-2 will implement the CW keyer, sidetone, and QSK/break-in state
 // machine.  This slot rejects the call to prevent accidental CW MOX
 // assertion before the full CW infrastructure is ready.
-// Rejection matches setAntiVoxSourceVax(true) from H.3.
+// Rejection follows the qCWarning-and-return shape (formerly modeled on
+// setAntiVoxSourceVax(true) from H.3, removed in 3M-3a-iv).
 // ---------------------------------------------------------------------------
 void MoxController::onCwPtt(bool /*pressed*/)
 {
@@ -1267,7 +1239,8 @@ void MoxController::onCwPtt(bool /*pressed*/)
 //
 // 3J will implement the TCI server.  This slot rejects the call to prevent
 // accidental TCI MOX assertion before the full TCI infrastructure is ready.
-// Rejection matches setAntiVoxSourceVax(true) from H.3.
+// Rejection follows the qCWarning-and-return shape (formerly modeled on
+// setAntiVoxSourceVax(true) from H.3, removed in 3M-3a-iv).
 // ---------------------------------------------------------------------------
 void MoxController::onTciPtt(bool /*pressed*/)
 {

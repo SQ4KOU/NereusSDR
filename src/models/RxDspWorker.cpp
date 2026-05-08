@@ -185,6 +185,20 @@ void RxDspWorker::processIqBatch(int receiverIndex,
         // aamix port. When 3F multi-pan ships, this connection is replaced
         // by a real aamix port; the TxWorkerThread side stays unchanged.
         //
+        // ── Tap-point signpost (3M-3a-iv post-bench refactor) ────────────
+        // The anti-VOX cancellation reference is forked here from
+        // RxDspWorker's demod output before it reaches AudioEngine.  This
+        // is correct as long as the audio bus stage applies no processing
+        // that diverges between outputs (per-bus EQ, gain, mute beyond
+        // master).  Today's single-output PC speaker path satisfies this
+        // assumption.  WHEN OUTPUT DIVERGENCE LANDS (radio-speaker output
+        // with independent processing, or per-bus EQ/gain), the anti-VOX
+        // tap MUST move from RxDspWorker to AudioEngine's post-mixer
+        // summing point so the cancellation reference matches the audio
+        // actually leaving the speakers.  This is a tap-point relocation
+        // only; the WDSP DEXP block and TxChannel::sendAntiVoxData wrapper
+        // stay unchanged.
+        //
         // Fires regardless of WDSP wiring (mirrors chunkDrained's
         // contract): when engines are wired, the buffer carries the
         // freshly decoded WDSP audio in m_interleavedOut; when not, a

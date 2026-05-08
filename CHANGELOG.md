@@ -13,18 +13,33 @@
   deferred to 3F multi-pan), exposes Tau (ms) on Setup -> Transmit -> DEXP/VOX
   with persistence under per-MAC key `AntiVox_Tau_Ms`. Bench-verification
   matrix at `docs/architecture/phase3m-3a-iv-verification/README.md`.
-- **Setup -> Transmit -> DEXP/VOX gains full grpAntiVOX parity.** Beyond the
-  Tau (ms) spinbox above, also adds `chkAntiVoxEnable` ("Anti-VOX Enable"),
-  `chkAntiVoxSource` ("Use VAC Audio"), and `udAntiVoxGain` ("Gain (dB)") to
-  match Thetis grpAntiVOX (`setup.designer.cs:44631-44760 [v2.10.3.13]`)
-  1:1. All four tooltips are verbatim from Thetis. Source-toggle currently
-  has no audible effect on single-RX (VAC routing into the anti-VOX
-  detector lands in 3M-3c); tooltip note explains the limitation. Independent
-  enable flag refactor: `TransmitModel::antiVoxRun` Q_PROPERTY (persisted
-  per-MAC under `AntiVox_Enable`), `MoxController::setAntiVoxRun` slot +
+- **Setup -> Transmit -> DEXP/VOX gains grpAntiVOX parity (sans source toggle).**
+  Beyond the Tau (ms) spinbox above, also adds `chkAntiVoxEnable` ("Anti-VOX
+  Enable") and `udAntiVoxGain` ("Gain (dB)") to align with Thetis grpAntiVOX
+  (`setup.designer.cs:44631-44760 [v2.10.3.13]`). All three tooltips
+  (Enable / Gain / Tau) are verbatim from Thetis. Independent enable-flag
+  refactor: `TransmitModel::antiVoxRun` Q_PROPERTY (persisted per-MAC under
+  `AntiVox_Enable`), `MoxController::setAntiVoxRun` slot +
   `antiVoxRunRequested` signal. Closes the M2 finding from the end-of-epic
   code review (bench-verification matrix is now runnable from a fresh
   install without a developer-only hook).
+
+### Changed
+- **Removed anti-VOX source-selector plumbing.** Thetis chkAntiVoxSource
+  (RX vs VAC at `setup.designer.cs:44646-44657 [v2.10.3.13]`) does not map
+  to NereusSDR's architecture: VAX feeds digital-mode apps with no
+  mic-feedback path, so the audio output device is the only valid anti-VOX
+  reference. Dropped `TransmitModel::antiVoxSourceVax`,
+  `MoxController::setAntiVoxSourceVax`, the `antiVoxSourceWhatRequested`
+  signal, the `chkAntiVoxSource` UI, and the rejected-VAX scaffolding.
+  Setup -> Transmit -> DEXP/VOX now shows a static "Source: Audio Output
+  Device(s)" info row instead. Existing users with `AntiVox_Source_VAX`
+  persisted will see an orphan AppSettings key (harmless, ignored on load).
+  Tap-point signpost comments added at `RxDspWorker.cpp` and
+  `AudioEngine.h` for the future radio-speaker output work (the anti-VOX
+  tap relocates from `RxDspWorker` to `AudioEngine`'s post-mixer summing
+  point when per-bus processing diverges between outputs). Full rationale
+  in `docs/architecture/phase3m-3a-iv-antivox-feed-design.md` §18.
 
 ### Fixed
 - **Anti-VOX tau default 10 ms -> 20 ms.** WdspEngine create_dexp passed
