@@ -191,40 +191,53 @@ private slots:
     }
 
     // =========================================================================
-    // §3  HL2 sentinel — linear fallback (gbb >= 99.5)
+    // §3  gbb=100 sentinel — Thetis "no output power" path
     // =========================================================================
     //
-    // mi0bot clsHardwareSpecific.cs:484 [v2.10.3.13-beta2] sets HL2 HF gain
-    // rows to 100.0f ("100 is no output power" sentinel).  NereusSDR-original
-    // deviation: gbb >= 99.5 short-circuits to linear fallback
-    // clamp(sliderWatts/100, 0, 1) so HL2 users don't regress on HF transmit
-    // until they calibrate.
-    void hl2_80m_at_100w_linear_fallback_returns_one() {
+    // Issue #202 deep-fix: removed a NereusSDR-original `gbb >= 99.5`
+    // linear-identity short-circuit.  Thetis (clsHardwareSpecific.cs:463-
+    // 466 [v2.10.3.13]) initialises the gain array to 100.0f with the
+    // explicit comment: "100 is no output power".  With the short-circuit
+    // gone, gbb=100 now runs through the dBm kernel and produces
+    // audio_volume ≈ 0 (target_dbm = log10(W*1000)*10 - 100 → very
+    // negative; volts → tiny; audio → ≈ 0).
+    //
+    // These tests use HPSDRModel::FIRST (the default arg) so the HL2
+    // branch is bypassed; the HL2 mi0bot formula has its own coverage
+    // in tst_transmit_model_hl2_audio_volume.
+    void gbb_100_at_100w_thetis_no_output_path() {
         TransmitModel t;
-        const PaProfile p(QStringLiteral("Default - HERMESLITE"),
-                          HPSDRModel::HERMESLITE, true);
-        // gbb @ 80m = 100.0f sentinel → short-circuit hits linear fallback.
-        // 100/100 = 1.0.
+        // Force gbb=100 on every band.
+        PaProfile p(QStringLiteral("AllSentinel"), HPSDRModel::FIRST, true);
+        for (int i = 0; i < PaProfile::kBandCount; ++i) {
+            p.setGainForBand(static_cast<Band>(i), 100.0f);
+        }
         const double v = t.computeAudioVolume(p, Band::Band80m, 100);
-        QCOMPARE(v, 1.0);
+        // target_dbm = 50 - 100 = -50; volts ≈ 7.07e-4; audio ≈ 8.84e-4.
+        // Per Thetis "100 = no output power" — essentially silent.
+        QVERIFY(v < 1.0e-3);
     }
 
-    void hl2_80m_at_50w_linear_fallback_returns_0_5() {
+    void gbb_100_at_50w_thetis_no_output_path() {
         TransmitModel t;
-        const PaProfile p(QStringLiteral("Default - HERMESLITE"),
-                          HPSDRModel::HERMESLITE, true);
-        // 50/100 = 0.5.
+        PaProfile p(QStringLiteral("AllSentinel"), HPSDRModel::FIRST, true);
+        for (int i = 0; i < PaProfile::kBandCount; ++i) {
+            p.setGainForBand(static_cast<Band>(i), 100.0f);
+        }
         const double v = t.computeAudioVolume(p, Band::Band80m, 50);
-        QCOMPARE(v, 0.5);
+        // target_dbm = 47 - 100 = -53; audio ≈ 6.25e-4.
+        QVERIFY(v < 1.0e-3);
     }
 
-    void hl2_80m_at_200w_linear_fallback_clamped_to_one() {
+    void gbb_100_at_200w_thetis_no_output_path() {
         TransmitModel t;
-        const PaProfile p(QStringLiteral("Default - HERMESLITE"),
-                          HPSDRModel::HERMESLITE, true);
-        // 200/100 = 2.0 → clamp to 1.0.
+        PaProfile p(QStringLiteral("AllSentinel"), HPSDRModel::FIRST, true);
+        for (int i = 0; i < PaProfile::kBandCount; ++i) {
+            p.setGainForBand(static_cast<Band>(i), 100.0f);
+        }
         const double v = t.computeAudioVolume(p, Band::Band80m, 200);
-        QCOMPARE(v, 1.0);
+        // target_dbm = 53 - 100 = -47; audio ≈ 1.25e-3.
+        QVERIFY(v < 2.0e-3);
     }
 
     // =========================================================================
@@ -254,25 +267,32 @@ private slots:
     }
 
     // =========================================================================
-    // §5  NereusSDR Bypass profile (all-100.0f) — same linear fallback
+    // §5  NereusSDR Bypass profile — Thetis-faithful Hermes 41.x dB row
     // =========================================================================
     //
-    // The Bypass factory profile has every band at 100.0f — Thetis-
-    // sentinel "no output power".  Same gbb >= 99.5 short-circuit path
-    // as HL2 HF.
-    void bypass_profile_any_band_50w_linear_fallback_returns_0_5() {
+    // Issue #202 deep-fix: bypassPaGainsForBand now returns the Hermes 41.x
+    // dB row (matching Thetis setup.cs:23314 [v2.10.3.13] which constructs
+    // Bypass with HPSDRModel.FIRST → DefaultPAGainsForBands(FIRST) →
+    // FIRST/HERMES/HPSDR/ORIONMKII shared 41.x dB row at
+    // clsHardwareSpecific.cs:471-486 [v2.10.3.13]).
+    //
+    // The previous all-100.0f sentinel + linear-identity short-circuit
+    // produced wire byte 255 at slider 100 on Bypass — exactly the
+    // "max-regardless-of-slider" trapdoor reported in #202.  With Bypass
+    // on the Hermes row, slider 50 on 20m (gbb=40.5) yields a sensible
+    // ~0.55 audio_volume.
+    void bypass_profile_uses_hermes_row() {
         TransmitModel t;
-        // Bypass profile: name doesn't matter, but model FIRST inherits
-        // HERMES values from kHermesRow which would NOT be all-100.
-        // We override via setGainForBand to mirror what
-        // PaProfileManager does for the Bypass slot.
+        // PaProfile constructor with FIRST loads kHermesRow via
+        // resetGainDefaultsForModel(FIRST) — same row Thetis uses for Bypass.
         PaProfile p(QStringLiteral("Bypass"), HPSDRModel::FIRST, true);
-        for (int i = 0; i < PaProfile::kBandCount; ++i) {
-            p.setGainForBand(static_cast<Band>(i), 100.0f);
-        }
-        QCOMPARE(t.computeAudioVolume(p, Band::Band20m, 50), 0.5);
-        QCOMPARE(t.computeAudioVolume(p, Band::Band15m, 75), 0.75);
-        QCOMPARE(t.computeAudioVolume(p, Band::Band6m, 100), 1.0);
+        // 20m gbb = 40.5 dB.  At 50 W slider:
+        //   target_dbm = 47 - 40.5 = 6.5; volts = sqrt(10^0.65 * 0.05) ≈ 0.473
+        //   audio = 0.473 / 0.8 ≈ 0.591.
+        const double v20m_50w = t.computeAudioVolume(p, Band::Band20m, 50);
+        QVERIFY(v20m_50w > 0.55 && v20m_50w < 0.65);
+        // Specifically: NOT 1.0 (the bug).  Pin upper bound.
+        QVERIFY(v20m_50w < 0.99);
     }
 
     // =========================================================================
@@ -359,27 +379,27 @@ private slots:
     }
 
     // =========================================================================
-    // §7  Out-of-range Band hits sentinel
+    // §7  Out-of-range Band hits 1000.0f sentinel — Thetis silent path
     // =========================================================================
     //
     // PaProfile::getGainForBand returns 1000.0f sentinel for Band values
     // outside the 14-band PA window (Band::Band120m and later, plus any
-    // raw int cast outside [0, 14)).  Math kernel sees gbb >= 99.5 and
-    // takes the linear fallback path.
-    void out_of_range_band_hits_sentinel_via_linear_fallback() {
+    // raw int cast outside [0, 14)).  Mirrors Thetis setup.cs:23866
+    // [v2.10.3.13] which returns 1000 for Band ≤ FIRST or ≥ LAST.
+    //
+    // Issue #202 deep-fix: with the gbb>=99.5 short-circuit removed, the
+    // dBm kernel runs.  target_dbm = 50 - 1000 = -950; volts ≈ 0;
+    // audio_volume → 0.  Fail-loud-silent: a programming error (raw int
+    // cast outside Band range) produces no output rather than full-rail.
+    void out_of_range_band_hits_sentinel_silent() {
         TransmitModel t;
         const PaProfile p(QStringLiteral("Default - ANAN8000D"),
                           HPSDRModel::ANAN8000D, true);
-        // Cast raw int to a Band value outside the enum range.  This
-        // would be a programming error, but the kernel must fail-safe
-        // (not produce audio_volume = 1.0 silently — pre-fix behavior).
         const auto badBand = static_cast<Band>(99);
-        // Linear fallback: 50/100 = 0.5.
-        QCOMPARE(t.computeAudioVolume(p, badBand, 50), 0.5);
-        // 100/100 = 1.0.
-        QCOMPARE(t.computeAudioVolume(p, badBand, 100), 1.0);
-        // 200/100 clamped to 1.0.
-        QCOMPARE(t.computeAudioVolume(p, badBand, 200), 1.0);
+        // dBm kernel with gbb=1000 produces audio_volume effectively 0.
+        QVERIFY(t.computeAudioVolume(p, badBand, 50) < 1.0e-30);
+        QVERIFY(t.computeAudioVolume(p, badBand, 100) < 1.0e-30);
+        QVERIFY(t.computeAudioVolume(p, badBand, 200) < 1.0e-30);
     }
 
     // =========================================================================

@@ -3388,6 +3388,14 @@ nereus_add_test(tst_filter_preset_store)
 #         console.cs:29245-29274 [v2.10.3.13-beta2].
 nereus_add_test(tst_hpsdr_model_pa_constants)
 
+# ── Issue #202 deep-fix: defaultModelForBoard auto-pick regression ──────────
+# Pins the OrionMKII boardtype → HPSDRModel::ANAN7000D mapping (not the bare
+# ORIONMKII enum, which Thetis excludes from its user-facing combo per
+# setup.Designer.cs:8515-8528 [v2.10.3.13]).  Plus coverage for the other
+# board → model auto-defaults so future enum reordering can't silently
+# regress the auto-detect path.
+nereus_add_test(tst_default_model_for_board)
+
 # ── Issue #175 Task 2: TxChannel::setPostGenToneMag WDSP wrapper ──────────────
 # 2 tests asserting round-trip store-and-retrieve for the thin C++ wrapper
 # around SetTXAPostGenToneMag (third_party/wdsp/src/gen.c:800-805 [v2.10.3.13]).

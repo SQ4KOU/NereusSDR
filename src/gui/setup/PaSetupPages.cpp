@@ -703,6 +703,11 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
             this, &PaGainByBandPage::rebuildProfileCombo);
     connect(m_paProfileManager, &PaProfileManager::activeProfileChanged,
             this, [this](const QString& name) {
+                // #202 deep-fix: rebuild the combo whenever the active
+                // profile changes so the Bypass-mode special case can take
+                // effect (when active == "Bypass", combo shows only
+                // Bypass per Thetis setup.cs:23335-23339 [v2.10.3.13]).
+                rebuildProfileCombo();
                 if (m_profileCombo && m_profileCombo->currentText() != name) {
                     QSignalBlocker blocker(m_profileCombo);
                     m_profileCombo->setCurrentText(name);
@@ -905,7 +910,14 @@ void PaGainByBandPage::rebuildProfileCombo()
 
     const QString prevActive = m_paProfileManager->activeProfileName();
     m_profileCombo->clear();
-    const QStringList names = m_paProfileManager->profileNames();
+    // #202 deep-fix: filter to `Default - <connectedModel>` + every
+    // user-customised profile (hide all other `Default - *`).  Mirrors
+    // Thetis setup.cs:23341-23344 [v2.10.3.13].  Bypass-mode special case
+    // (when prevActive == "Bypass", show only "Bypass") is handled inside
+    // userVisibleProfileNames per setup.cs:23335-23339 [v2.10.3.13].
+    const QStringList names =
+        m_paProfileManager->userVisibleProfileNames(m_connectedModel,
+                                                     prevActive);
     for (const QString& n : names) {
         m_profileCombo->addItem(n);
     }

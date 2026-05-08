@@ -157,6 +157,19 @@ private:
     void tryAutoReconnect();
     void wireSliceToSpectrum();
 
+    // Issue #206 — persist the main window's position, size, and
+    // maximized/fullscreen state across launches. Stored in AppSettings
+    // under MainWindowGeometry / MainWindowState (base64 of Qt's native
+    // QByteArray blobs). restoreMainWindowGeometry() returns true if a
+    // valid saved geometry was applied, false otherwise (first launch
+    // or corrupted blob); buildUI() uses the return to decide whether
+    // to keep the 1280×800 default. Multi-screen safety clamp: if the
+    // restored geometry sits entirely outside every connected screen
+    // (monitor disconnected since last save), fall back to centering
+    // on the primary screen at the default size.
+    void saveMainWindowGeometry();
+    bool restoreMainWindowGeometry();
+
     // Re-runs the right-side strip's progressive-drop logic per design
     // §286-294. Restores all drop candidates first (in case the window
     // grew), then walks the priority order — PA OK → CAT/TCI →

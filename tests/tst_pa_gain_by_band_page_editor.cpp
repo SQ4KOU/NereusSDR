@@ -68,6 +68,12 @@ void primeModelWithProfiles(RadioModel& model)
     Q_ASSERT(mgr != nullptr);  // RadioModel must construct PaProfileManager
     mgr->setMacAddress(testMac());
     mgr->load(HPSDRModel::ANAN8000D);
+    // #202 deep-fix: PaGainByBandPage's combo filter (userVisibleProfileNames)
+    // reads RadioModel::hardwareProfile().model to decide which factory
+    // default is visible.  Sync the test seam so the page sees ANAN8000D
+    // as the connected model (matching PaProfileManager::load(ANAN8000D)
+    // above).
+    model.setHpsdrModelForTest(HPSDRModel::ANAN8000D);
 }
 
 }  // namespace
@@ -113,9 +119,18 @@ private slots:
 };
 
 // ---------------------------------------------------------------------------
-// 1. Combo populates from PaProfileManager profile names. After load(), the
-//    manager seeds 16 Default-<model> + Bypass = 17 entries; combo shows them
-//    all and selects the active one.
+// 1. Combo populates from PaProfileManager filtered profile names.
+//
+//    Issue #202 deep-fix: combo is filtered via
+//    PaProfileManager::userVisibleProfileNames so the user sees:
+//      - exactly one factory-default entry: `Default - <connectedModel>`
+//      - all user-customised (non-default) profiles
+//    Other `Default - *` entries are hidden — mirrors Thetis's filter at
+//    setup.cs:23341-23344 [v2.10.3.13].  PaProfileManager seeds 16 factory
+//    rows + Bypass, but only 1 (`Default - ANAN8000D` for the test radio)
+//    is visible to the user.  Bypass is also a factory-default and gets
+//    hidden when the connected model isn't FIRST — matches Thetis where
+//    Bypass appears only when explicitly selected (setup.cs:23335-23339).
 // ---------------------------------------------------------------------------
 void TstPaGainByBandPageEditor::combo_populates_from_profile_manager()
 {
@@ -127,21 +142,25 @@ void TstPaGainByBandPageEditor::combo_populates_from_profile_manager()
     auto* combo = page.profileComboForTest();
     QVERIFY2(combo != nullptr, "PaGainByBandPage must own a QComboBox profile selector");
 
-    // Default-ANAN8000D + Bypass at minimum, plus the 15 other Default-<model>
-    // factory rows (17 total).
-    QCOMPARE(combo->count(), 17);
+    // Only `Default - ANAN8000D` is visible (Bypass is HPSDRModel::FIRST,
+    // not the connected model, so it's filtered out unless currently
+    // selected per the Thetis-faithful Bypass-mode special case).
+    QCOMPARE(combo->count(), 1);
     QVERIFY(combo->findText(QStringLiteral("Default - ANAN8000D")) >= 0);
-    QVERIFY(combo->findText(QStringLiteral("Bypass")) >= 0);
 
     // Active profile (set by load(ANAN8000D)) must be the current selection.
     QCOMPARE(combo->currentText(), QStringLiteral("Default - ANAN8000D"));
 }
 
 // ---------------------------------------------------------------------------
-// 2. Selecting a different profile via the combo loads its values into the
-//    14 gain spinboxes. Bypass is the all-100.0 sentinel row (per
-//    PaProfileManager::seedFactoryProfile bypass branch); switching to it
-//    must show 100.0 on every band spinbox.
+// 2. Selecting Bypass via the combo loads the Hermes 41.x dB row.
+//
+//    Issue #202 deep-fix: Bypass profile no longer uses the all-100.0f
+//    sentinel.  Per Thetis setup.cs:23314 [v2.10.3.13] Bypass is constructed
+//    with HPSDRModel.FIRST, which falls through to the FIRST/HERMES/HPSDR/
+//    ORIONMKII shared 41.x dB row at clsHardwareSpecific.cs:471-486
+//    [v2.10.3.13].  Switching to Bypass must show those values on the
+//    HF spinboxes.
 // ---------------------------------------------------------------------------
 void TstPaGainByBandPageEditor::selecting_profile_loads_gain_spinbox_values()
 {
@@ -153,17 +172,27 @@ void TstPaGainByBandPageEditor::selecting_profile_loads_gain_spinbox_values()
     auto* combo = page.profileComboForTest();
     QVERIFY(combo != nullptr);
 
-    combo->setCurrentText(QStringLiteral("Bypass"));
+    // Selecting "Bypass" via setCurrentText only works when it's in the
+    // combo's items.  Push it through the manager: setActiveProfile fires
+    // activeProfileChanged which rebuilds the combo with the Bypass-mode
+    // special case (only Bypass visible — Thetis setup.cs:23335-23339
+    // [v2.10.3.13]).
+    auto* mgr = model.paProfileManager();
+    QVERIFY(mgr != nullptr);
+    mgr->setActiveProfile(QStringLiteral("Bypass"));
 
-    // All 11 HF + 6m + GEN + WWV + XVTR spinboxes show the 100.0 sentinel.
-    for (int n = 0; n <= static_cast<int>(Band::XVTR); ++n) {
-        const Band band = static_cast<Band>(n);
-        auto* spin = page.gainSpinForTest(band);
-        QVERIFY2(spin != nullptr,
-                 qPrintable(QStringLiteral("Missing gain spinbox for band %1")
-                                .arg(bandLabel(band))));
-        QCOMPARE(spin->value(), 100.0);
-    }
+    // Hermes 41.x dB row from clsHardwareSpecific.cs:475-485 [v2.10.3.13]:
+    //   B160M=41.0, B80M=41.2, B60M=41.3, B40M=41.3, B30M=41.0,
+    //   B20M=40.5,  B17M=39.9, B15M=38.8, B12M=38.8, B10M=38.8, B6M=38.8
+    QCOMPARE(page.gainSpinForTest(Band::Band160m)->value(), 41.0);
+    QCOMPARE(page.gainSpinForTest(Band::Band80m)->value(),  41.2);
+    QCOMPARE(page.gainSpinForTest(Band::Band20m)->value(),  40.5);
+    QCOMPARE(page.gainSpinForTest(Band::Band6m)->value(),   38.8);
+    // GEN/WWV/XVTR retain the kPaGainSentinel = 100.0f (no Thetis
+    // equivalent in the gain table; lookupHfBand fall-through).
+    QCOMPARE(page.gainSpinForTest(Band::GEN)->value(),  100.0);
+    QCOMPARE(page.gainSpinForTest(Band::WWV)->value(),  100.0);
+    QCOMPARE(page.gainSpinForTest(Band::XVTR)->value(), 100.0);
 }
 
 // ---------------------------------------------------------------------------
@@ -390,7 +419,10 @@ void TstPaGainByBandPageEditor::delete_button_removes_other_profile()
     auto* mgr = model.paProfileManager();
     QVERIFY(mgr != nullptr);
 
-    // Manager dropped from 17 -> 16 and active fell back per its own logic.
+    // Manager-level manifest is unchanged-by-filter (profileNames returns
+    // the full manifest; the page combo uses userVisibleProfileNames for
+    // filtering — Issue #202 deep-fix).  Manifest dropped 17 -> 16 after
+    // the delete.
     QCOMPARE(mgr->profileNames().size(), 16);
     QVERIFY(!mgr->profileNames().contains(QStringLiteral("Default - ANAN8000D")));
     QVERIFY(!mgr->activeProfileName().isEmpty());
