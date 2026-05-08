@@ -651,6 +651,36 @@ public:
     void setShowNoiseFloorPosition(OverlayPosition pos);
     OverlayPosition showNoiseFloorPosition() const { return m_noiseFloorPosition; }
 
+    // NF shift offset — From Thetis display.cs:5763 [v2.10.3.13] _fNFshiftDBM.
+    // Operator-tunable shift in dB applied to the rendered NF level (line +
+    // text + connector).  Clamped to [-12, +12]; default 0.
+    void  setNFShiftDbm(float db);
+    float nfShiftDbm() const { return m_nfShiftDbm; }
+
+    // Fast-attack flag — From Thetis display.cs:917-927 [v2.10.3.13]
+    // m_bFastAttackNoiseFloorRX1.  When true the line + text render gray
+    // (m_noiseFloorFastColor) instead of red/yellow to signal the smoothed
+    // average is still settling.  Caller (MainWindow) sets on band/freq
+    // change and clears after attack-time elapses.
+    void setNoiseFloorFastAttack(bool on);
+    bool noiseFloorFastAttack() const { return m_noiseFloorFastAttack; }
+
+    // NF colour customisation — From Thetis display.cs:2316/2329 [v2.10.3.13]:
+    //   noisefloor_color      = Color.Red     (line + box)
+    //   noisefloor_color_text = Color.Yellow  (dBm label)
+    // Fast-attack swap colour is NereusSDR-original (Thetis hard-codes gray).
+    void   setNoiseFloorColor(const QColor& c);
+    QColor noiseFloorColor() const { return m_noiseFloorColor; }
+    void   setNoiseFloorTextColor(const QColor& c);
+    QColor noiseFloorTextColor() const { return m_noiseFloorTextColor; }
+    void   setNoiseFloorFastColor(const QColor& c);
+    QColor noiseFloorFastColor() const { return m_noiseFloorFastColor; }
+
+    // NF line width — From Thetis display.cs:2310 [v2.10.3.13]
+    // m_fNoiseFloorLineWidth=1.0f.  Range 1..5 in NereusSDR.
+    void  setNoiseFloorLineWidth(float w);
+    float noiseFloorLineWidth() const { return m_noiseFloorLineWidth; }
+
     // ---- NF-aware grid (Task 2.9) ----
     // When enabled, the grid lower bound auto-tracks the live noise floor
     // estimate delivered via onNoiseFloorChanged(). Ported from Thetis
@@ -936,6 +966,23 @@ private:
     // a display-pixel index (0..displayWidth-1) per the pipeline migration.
     // From Thetis Display.cs:5453-5508 [v2.10.3.13].
     void paintPeakBlobs(QPainter& p, const QRect& specRect);
+    // Noise-floor overlay: horizontal dashed line across the spectrum at the
+    // estimated NF level + corner text label.  Called from both CPU drawSpectrum
+    // and GPU renderGpuFrame overlay block so the same NF visuals appear
+    // regardless of paint backend.  Reads the state maintained by
+    // processNoiseFloor() (m_nfLerpAverage / m_nfFftBinAverage).
+    // From Thetis display.cs:5423-5448 [v2.10.3.13] (line + text combined).
+    void paintNoiseFloorOverlay(QPainter& p, const QRect& specRect);
+
+    // Source-first port of Thetis processNoiseFloor — display.cs:5866-5912
+    // [v2.10.3.13].  Called once per spectrum frame from
+    // updateSpectrumLinear after m_renderedPixels is finalised; iterates
+    // those pixels to accumulate (count, linear-sum) of bins below the
+    // previous-frame estimate (averageCount/averageSum), then updates
+    // m_nfFftBinAverage (per-frame) and m_nfLerpAverage (smoothed).
+    // Also runs the fast-attack convergence-gated auto-clear from
+    // display.cs:5904-5908.
+    void processNoiseFloor();
     void drawWaterfall(QPainter& p, const QRect& wfRect);
     // HIGH SWR / PA safety overlay — ported from display.cs:4183-4201 [v2.10.3.13]
     void paintHighSwrOverlay(QPainter& p);
@@ -992,6 +1039,18 @@ private:
     double xToHz(int x, const QRect& r) const;
     int    dbmToY(float dbm, const QRect& r) const;
     float  dbmToYf(float dbm, const QRect& r) const; // sub-pixel variant for antialiased trace
+
+    // Band plan strip height — when the band plan is enabled, the bottom
+    // m_bandPlanFontSize + 4 pixels of every spectrum-coordinate rect are
+    // RESERVED for the strip.  dbmToY / dbmToYf subtract this from the
+    // effective drawing area so the dBm floor maps to the TOP edge of the
+    // band plan strip rather than the bottom of the panel.  Result: every
+    // spectrum overlay (trace, NF line+box+text, peak hold, peak blobs,
+    // grid lines, dBm-scale labels) automatically anchors at the band plan
+    // top — they all derive their Y from these helpers.  drawBandPlan
+    // itself paints below this carve-out using r.bottom() directly so the
+    // strip still lands at the panel bottom.
+    int bandPlanStripHeight() const;
 
     // Returns kDbmStripW when the dBm scale strip is visible, 0 otherwise.
     // Used everywhere a rect excludes the right-edge strip so that hiding
@@ -1272,6 +1331,74 @@ private:
     // NereusSDR defaults off so the overlay is opt-in rather than on by default)
     bool            m_showNoiseFloor{false};
     OverlayPosition m_noiseFloorPosition{OverlayPosition::BottomLeft};
+
+    // NF render colours — From Thetis display.cs:2316-2337 [v2.10.3.13]:
+    //   private static Color noisefloor_color      = Color.Red;
+    //   private static Color noisefloor_color_text = Color.Yellow;
+    // Defaults match Thetis exactly so the line is visually distinct from
+    // grid text (yellow) and from the spectrum trace.  Made configurable
+    // via setNoiseFloorColor / setNoiseFloorTextColor when Setup wires them.
+    // Default line + text colour — NereusSDR-tweaked from Thetis red/yellow
+    // (display.cs:2316/2329 [v2.10.3.13]).  Thetis renders against a
+    // configurable trace colour; NereusSDR's stock spectrum trace is cyan
+    // (#00E5FF, see m_fillColor), and Thetis-default red dashes blend with
+    // both cyan-trace fill and the brown band-plan strip beneath.  Default
+    // tweak: bright magenta line + yellow text.  Both still match Thetis
+    // semantics (warm/distinctive line, separate-colour text label) and
+    // give the user clearly visible defaults that they can dial back to red
+    // via the colour picker if they prefer Thetis-stock colours.
+    QColor m_noiseFloorColor     {0xFF, 0x40, 0xFF};   // bright magenta
+    QColor m_noiseFloorTextColor {Qt::yellow};
+    // Fast-attack swap colour — From Thetis display.cs:5431-5432 [v2.10.3.13]:
+    //   nf_colour      = bFast ? m_bDX2_Gray : m_bDX2_noisefloor;
+    //   nf_colour_text = bFast ? m_bDX2_Gray : m_bDX2_noisefloor_text;
+    // Lightened from Qt::gray (160,160,164) to #C8C8C8 so the swatch and
+    // the rendered overlay both stand out against NereusSDR's dark UI
+    // background; Thetis renders against a lighter-grey grid backdrop where
+    // medium-grey reads fine.
+    QColor m_noiseFloorFastColor {0xC8, 0xC8, 0xC8};
+    // From Thetis display.cs:2310 [v2.10.3.13] m_fNoiseFloorLineWidth=1.0f.
+    float  m_noiseFloorLineWidth {1.0f};
+
+    // Per-frame + smoothed noise-floor estimates — source-first port of
+    // Thetis display.cs:4633-4636 [v2.10.3.13]:
+    //   m_fFFTBinAverageRX1 — current per-frame avg of bins below the
+    //                         previous-frame estimate (linear-power blend)
+    //   m_fLerpAverageRX1   — exponentially smoothed toward fftBinAverage
+    //                         with framesInAttack-rate (display.cs:5901-5902)
+    // Updated each spectrum frame in processNoiseFloor() after
+    // updateSpectrumLinear finalises m_renderedPixels.  paintNoiseFloorOverlay
+    // uses m_nfLerpAverage for line/box Y and m_nfFftBinAverage for actual Y.
+    float m_nfFftBinAverage{-200.0f};
+    float m_nfLerpAverage{-200.0f};
+
+    // From Thetis display.cs:4638 [v2.10.3.13] m_fAttackTimeInMSForRX1=2000.
+    float m_nfAttackTimeMs{2000.0f};
+
+    // From Thetis display.cs:5775 + 5783 [v2.10.3.13]:
+    //   _NFsensitivity = 3 (default), clamped to [0, 19] in setter.
+    // requireSamples = (int)(width * (sensitivity / 20)) — with default 3
+    // that's ~15% of pixels, achievable on any normal band.  Higher values
+    // make the estimate harder to converge; values >= 20 make it unreachable
+    // (requireSamples > width) and fftBinAverage perpetually drifts to +200.
+    int m_nfSensitivity{3};
+
+    // Operator-tunable NF shift — From Thetis display.cs:5763 [v2.10.3.13]:
+    //   private static float _fNFshiftDBM = 0;
+    // Clamped to [-12, +12] in the setter (Thetis clamps to 12 at
+    // display.cs:5771).  Applied to both lerp and actual values per
+    // display.cs:5400 + 5403.
+    float m_nfShiftDbm{0.0f};
+
+    // Fast-attack flag — From Thetis display.cs:917-927 [v2.10.3.13]
+    // m_bFastAttackNoiseFloorRX1.  Set on band change / freq jump / MOX
+    // transition.  Auto-clear is now Thetis-faithful: gated on
+    // |fftBinAverage - lerpAverage| < 1.0 AND elapsed > kFastAttackMinMs
+    // (display.cs:5904-5908) — the convergence check is what tells Thetis
+    // the smoothed estimate has settled to the new band.
+    bool   m_noiseFloorFastAttack{false};
+    qint64 m_nfLastFastAttackMs{0};
+    static constexpr qint64 kFastAttackMinMs = 1000;  // display.cs:5906 Math.Max(1000, ...)
 
     // ---- NF-aware grid (Task 2.9) ----
     // From Thetis console.cs:46025-46085 [v2.10.3.13] GridMinFollowsNFRX1,

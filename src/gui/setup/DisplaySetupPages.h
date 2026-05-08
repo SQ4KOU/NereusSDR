@@ -72,6 +72,7 @@ class QPushButton;
 namespace NereusSDR {
 
 class PanadapterModel;
+class ColorSwatchButton;
 
 // ---------------------------------------------------------------------------
 // Display > Spectrum Defaults
@@ -163,6 +164,12 @@ private:
     // From Thetis display.cs:2304 [v2.10.3.13] m_bShowNoiseFloorDBM
     QCheckBox* m_showNoiseFloorToggle{nullptr};
     QComboBox* m_noiseFloorPositionCombo{nullptr};
+    // NF render parameters — From Thetis display.cs:2310-2337 + 5763 [v2.10.3.13].
+    QDoubleSpinBox*    m_nfShiftSpin{nullptr};        // [-12, +12] dB
+    QDoubleSpinBox*    m_nfLineWidthSpin{nullptr};    // [1.0, 5.0]
+    ColorSwatchButton* m_nfLineColorBtn{nullptr};
+    ColorSwatchButton* m_nfTextColorBtn{nullptr};
+    ColorSwatchButton* m_nfFastColorBtn{nullptr};
     // From Thetis specHPSDR.cs:325 [v2.10.3.13] NormOneHzPan
     QCheckBox* m_dispNormalizeToggle{nullptr};
     // From Thetis console.cs:20073 [v2.10.3.13] PeakTextDelay

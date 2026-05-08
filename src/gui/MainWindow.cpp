@@ -1251,7 +1251,73 @@ void MainWindow::buildUI()
                 const float storedNF = pan0->bandNFEstimate(newBand);
                 m_clarityController->snapToFloor(storedNF);
             });
+
+            // NF fast-attack triggers — From Thetis display.cs:879-905
+            // [v2.10.3.13]:
+            //   if (rx == 1) FastAttackNoiseFloorRX1 = true;  // band change
+            //   if (Math.Abs(oldFreq - newFreq) > 0.5)         // freq jump
+            //       FastAttackNoiseFloorRX1 = true;
+            // While in fast-attack state SpectrumWidget renders the NF
+            // line/box/text in gray to signal the smoothed estimate is
+            // still settling.  Auto-clear is internal to the setter (see
+            // SpectrumWidget::setNoiseFloorFastAttack — 1000ms timer
+            // matching Thetis display.cs:5906 minimum delay).
+            if (m_spectrumWidget) {
+                connect(pan0, &PanadapterModel::bandChanged,
+                        this, [this](NereusSDR::Band) {
+                    m_spectrumWidget->setNoiseFloorFastAttack(true);
+                });
+            }
         }
+    }
+
+    // Slice freq-jump > 0.5 MHz fast-attack trigger — Thetis display.cs:905
+    // [v2.10.3.13]: if (Math.Abs(oldFreq - newFreq) > 0.5) FastAttack = true.
+    // Smaller jumps (in-band tuning) don't shift the noise floor enough to
+    // warrant resetting the smoothed estimate.
+    //
+    // Stores the last-trigger frequency as a QObject dynamic property on
+    // the slice itself — Qt cleans it up when the slice is destroyed, and
+    // the same wiring works for slices added later via RadioModel::sliceAdded.
+    if (m_spectrumWidget) {
+        // 500 kHz threshold matches Thetis display.cs:905: > 0.5 MHz.
+        constexpr double kFastAttackFreqJumpHz = 500000.0;
+        constexpr const char* kLastFreqProp = "nfLastFastAttackFreq";
+
+        auto subscribeSlice = [this](SliceModel* slice) {
+            if (!slice) { return; }
+            slice->setProperty(kLastFreqProp, slice->frequency());
+            connect(slice, &SliceModel::frequencyChanged, this,
+                    [this, slice](double freq) {
+                const double last =
+                    slice->property(kLastFreqProp).toDouble();
+                if (std::abs(last - freq) > kFastAttackFreqJumpHz) {
+                    m_spectrumWidget->setNoiseFloorFastAttack(true);
+                }
+                slice->setProperty(kLastFreqProp, freq);
+            });
+        };
+        for (SliceModel* slice : m_radioModel->slices()) {
+            subscribeSlice(slice);
+        }
+        connect(m_radioModel, &RadioModel::sliceAdded, this,
+                [this, subscribeSlice](int index) {
+            const auto slices = m_radioModel->slices();
+            if (index >= 0 && index < slices.size()) {
+                subscribeSlice(slices.at(index));
+            }
+        });
+    }
+
+    // MOX transition fast-attack trigger — Thetis display.cs:889-892:
+    //   if (rx == 1) FastAttackNoiseFloorRX1 = true;
+    // Fires on both RX→TX and TX→RX transitions; the buffer-clear pulse on
+    // either edge resets the noise-floor settling window.
+    if (m_spectrumWidget) {
+        connect(&m_radioModel->transmitModel(), &TransmitModel::moxChanged,
+                this, [this](bool) {
+            m_spectrumWidget->setNoiseFloorFastAttack(true);
+        });
     }
 
     // When Clarity pauses or is disabled, let legacy AGC resume.

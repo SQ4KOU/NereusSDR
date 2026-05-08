@@ -664,6 +664,39 @@ void SpectrumWidget::loadSettings()
         m_noiseFloorPosition = static_cast<OverlayPosition>(
             qBound(0, nfPos, static_cast<int>(OverlayPosition::BottomRight)));
     }
+    // NF render parameters — From Thetis display.cs:2310-2337 + 5763 [v2.10.3.13].
+    // Persisted format matches the rest of the codebase: c.name(HexArgb)
+    // → "#AARRGGBB" via QColor::fromString round-trip.  The earlier
+    // ColorSwatchButton::colorFromHex helper used a "#RRGGBBAA"
+    // rearrangement that misinterpreted Thetis-red ("#FFFF0000" =
+    // alpha=FF, R=FF, G=00, B=00) as transparent yellow (R=FF, G=FF,
+    // B=00, alpha=00) — leaving the line invisible.  Stay on the
+    // codebase-standard HexArgb format for consistency.
+    auto readNfColor = [&s](const QString& key, const QColor& def) -> QColor {
+        const QString hex = s.value(key).toString();
+        if (hex.isEmpty()) { return def; }
+        const QColor c = QColor::fromString(hex);
+        // Reject zero-alpha colours (a previous format mismatch persisted
+        // these and they render invisible).  Fallback to the default.
+        if (!c.isValid() || c.alpha() == 0) { return def; }
+        return c;
+    };
+    {
+        m_noiseFloorColor     = readNfColor(
+            QStringLiteral("DisplayNoiseFloorColor"),     m_noiseFloorColor);
+        m_noiseFloorTextColor = readNfColor(
+            QStringLiteral("DisplayNoiseFloorTextColor"), m_noiseFloorTextColor);
+        m_noiseFloorFastColor = readNfColor(
+            QStringLiteral("DisplayNoiseFloorFastColor"), m_noiseFloorFastColor);
+        m_noiseFloorLineWidth = qBound(1.0f,
+            static_cast<float>(s.value(QStringLiteral("DisplayNoiseFloorLineWidth"),
+                                       QStringLiteral("1.0")).toFloat()),
+            5.0f);
+        m_nfShiftDbm = qBound(-12.0f,
+            static_cast<float>(s.value(QStringLiteral("DisplayNoiseFloorShiftDb"),
+                                       QStringLiteral("0.0")).toFloat()),
+            12.0f);
+    }
     // From Thetis specHPSDR.cs:325 [v2.10.3.13] NormOneHzPan.
     m_dispNormalize = s.value(QStringLiteral("DisplayDispNormalize"),
                               QStringLiteral("False")).toString() == QStringLiteral("True");
@@ -826,6 +859,19 @@ void SpectrumWidget::saveSettings()
                m_showNoiseFloor ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(QStringLiteral("DisplayShowNoiseFloorPosition"),
                QString::number(static_cast<int>(m_noiseFloorPosition)));
+    // HexArgb format ("#AARRGGBB") matches the rest of SpectrumWidget's
+    // colour persistence (m_bandEdgeColor, m_gridColor, etc.) so the file
+    // stays internally consistent.
+    s.setValue(QStringLiteral("DisplayNoiseFloorColor"),
+               m_noiseFloorColor.name(QColor::HexArgb));
+    s.setValue(QStringLiteral("DisplayNoiseFloorTextColor"),
+               m_noiseFloorTextColor.name(QColor::HexArgb));
+    s.setValue(QStringLiteral("DisplayNoiseFloorFastColor"),
+               m_noiseFloorFastColor.name(QColor::HexArgb));
+    s.setValue(QStringLiteral("DisplayNoiseFloorLineWidth"),
+               QString::number(static_cast<double>(m_noiseFloorLineWidth)));
+    s.setValue(QStringLiteral("DisplayNoiseFloorShiftDb"),
+               QString::number(static_cast<double>(m_nfShiftDbm)));
     // From Thetis specHPSDR.cs:325 [v2.10.3.13] NormOneHzPan.
     s.setValue(QStringLiteral("DisplayDispNormalize"),
                m_dispNormalize ? QStringLiteral("True") : QStringLiteral("False"));
@@ -1442,14 +1488,155 @@ void SpectrumWidget::setShowNoiseFloor(bool on)
 {
     if (m_showNoiseFloor == on) { return; }
     m_showNoiseFloor = on;
-    update();
+    // markOverlayDirty() invalidates the GPU overlay cache so the line/text
+    // appears (or disappears) on toggle change.  Bare update() alone wasn't
+    // sufficient: the GPU path's renderGpuFrame only re-runs the overlay
+    // build block when m_overlayStaticDirty is set, so toggling NF without
+    // the dirty mark left the cached overlay stale.
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setShowNoiseFloorPosition(OverlayPosition pos)
 {
     if (m_noiseFloorPosition == pos) { return; }
     m_noiseFloorPosition = pos;
-    if (m_showNoiseFloor) { update(); }
+    if (m_showNoiseFloor) { markOverlayDirty(); }
+}
+
+// From Thetis display.cs:5763-5773 [v2.10.3.13] _fNFshiftDBM setter:
+//   if (t < -12f) t = -12f;
+//   if (t > 12f) t = 12f;
+//   _fNFshiftDBM = t;
+void SpectrumWidget::setNFShiftDbm(float db)
+{
+    const float clamped = qBound(-12.0f, db, 12.0f);
+    if (m_nfShiftDbm == clamped) { return; }
+    m_nfShiftDbm = clamped;
+    if (m_showNoiseFloor) { markOverlayDirty(); }
+}
+
+void SpectrumWidget::setNoiseFloorColor(const QColor& c)
+{
+    if (!c.isValid() || m_noiseFloorColor == c) { return; }
+    m_noiseFloorColor = c;
+    if (m_showNoiseFloor) { markOverlayDirty(); }
+}
+
+void SpectrumWidget::setNoiseFloorTextColor(const QColor& c)
+{
+    if (!c.isValid() || m_noiseFloorTextColor == c) { return; }
+    m_noiseFloorTextColor = c;
+    if (m_showNoiseFloor) { markOverlayDirty(); }
+}
+
+void SpectrumWidget::setNoiseFloorFastColor(const QColor& c)
+{
+    if (!c.isValid() || m_noiseFloorFastColor == c) { return; }
+    m_noiseFloorFastColor = c;
+    if (m_showNoiseFloor && m_noiseFloorFastAttack) { markOverlayDirty(); }
+}
+
+void SpectrumWidget::setNoiseFloorLineWidth(float w)
+{
+    const float clamped = qBound(1.0f, w, 5.0f);
+    if (m_noiseFloorLineWidth == clamped) { return; }
+    m_noiseFloorLineWidth = clamped;
+    if (m_showNoiseFloor) { markOverlayDirty(); }
+}
+
+// From Thetis display.cs:917-927 [v2.10.3.13] FastAttackNoiseFloorRX1 setter.
+// Also records m_nfLastFastAttackMs — Thetis _fLastFastAttackEnabledTimeRX1
+// (display.cs:4641) — so processNoiseFloor's convergence-gated auto-clear
+// (display.cs:5904-5908) can measure elapsed time since the last trigger.
+void SpectrumWidget::setNoiseFloorFastAttack(bool on)
+{
+    if (on) {
+        // Stamp every trigger; consecutive band/freq/MOX events all reset
+        // the elapsed clock so the gray window covers the full settling
+        // period regardless of how many triggers fired.
+        m_nfLastFastAttackMs = QDateTime::currentMSecsSinceEpoch();
+    }
+    if (m_noiseFloorFastAttack == on) { return; }
+    m_noiseFloorFastAttack = on;
+    if (m_showNoiseFloor) { markOverlayDirty(); }
+}
+
+// Source-first port of Thetis processNoiseFloor — display.cs:5866-5912 [v2.10.3.13].
+// Iterates m_renderedPixels to count + linear-sum bins below the previous
+// frame's estimate, then updates m_nfFftBinAverage (per-frame avg) and
+// m_nfLerpAverage (smoothed).  Mirrors the per-pixel accumulator that lives
+// in Thetis's render loop at display.cs:5253-5258 (averageSum += 10^(dB/10),
+// averageCount++ when max_copy < currentAverage), folded into one helper here
+// because NereusSDR's renderer doesn't share the averaging loop.
+void SpectrumWidget::processNoiseFloor()
+{
+    const int width = m_renderedPixels.size();
+    if (width <= 0) { return; }
+
+    // Per-pixel accumulator — Thetis display.cs:5253-5258 [v2.10.3.13]:
+    //   if (!mox && max_copy < currentAverage) {
+    //       averageSum += fastPow10Raw(max_copy);
+    //       averageCount++;
+    //   }
+    // currentAverage = previous-frame fftBinAverage (the running estimate);
+    // bins below it are the "quiet" ones we want to characterise.
+    const float currentAverage = m_nfFftBinAverage;
+    double averageSum = 0.0;
+    int    averageCount = 0;
+    for (int i = 0; i < width; ++i) {
+        const float dB = m_renderedPixels[i];
+        if (dB < currentAverage) {
+            averageSum += std::pow(10.0, static_cast<double>(dB) / 10.0);
+            averageCount++;
+        }
+    }
+
+    const int fps = qMax(1, 1000 / qMax(1, m_displayTimer.interval()));
+    // Thetis default _NFsensitivity=3, clamp [0,19] (display.cs:5775+5783).
+    // Match the formula exactly: int truncation of (width * sens / 20).
+    const int requireSamples = qMax(1,
+        (width * m_nfSensitivity) / 20);
+
+    // Per-frame fftBinAverage update — display.cs:5883-5896.
+    if (averageCount >= requireSamples) {
+        const float linearAverage =
+            static_cast<float>(averageSum / static_cast<double>(averageCount));
+        const float oldLinear = std::pow(10.0f, m_nfFftBinAverage / 10.0f);
+        const float newLinear = (linearAverage + oldLinear) * 0.5f;
+        m_nfFftBinAverage = 10.0f *
+            std::log10(static_cast<double>(newLinear) + 1e-60);
+    } else {
+        // Not enough quiet bins (signal-dense band, or estimate stuck below
+        // the true floor).  Drift up by 1 dB/frame (3 dB in fast-attack to
+        // re-acquire faster).  display.cs:5893.
+        m_nfFftBinAverage += m_noiseFloorFastAttack ? 3.0f : 1.0f;
+    }
+    m_nfFftBinAverage = qBound(-200.0f, m_nfFftBinAverage, 200.0f);
+
+    // Lerp smoothing — display.cs:5898-5902.
+    int framesInAttack = m_noiseFloorFastAttack ? 0 :
+        static_cast<int>((static_cast<float>(fps) / 1000.0f) * m_nfAttackTimeMs);
+    framesInAttack += 1;
+    const float difference = m_nfLerpAverage - m_nfFftBinAverage;
+    m_nfLerpAverage -= difference / static_cast<float>(framesInAttack);
+
+    // Fast-attack convergence-gated auto-clear — display.cs:5904-5908:
+    //   if (fastAttack && abs(fft - lerp) < 1.0) {
+    //       float tmpDelay = Math.Max(1000, fftFillTime + ...);
+    //       if (elapsed > tmpDelay) fastAttack = false;
+    //   }
+    // Clears the gray flag once the smoothed estimate has caught up to the
+    // per-frame estimate AND at least 1 second has passed since the trigger.
+    if (m_noiseFloorFastAttack &&
+        std::abs(m_nfFftBinAverage - m_nfLerpAverage) < 1.0f)
+    {
+        const qint64 elapsed =
+            QDateTime::currentMSecsSinceEpoch() - m_nfLastFastAttackMs;
+        if (elapsed > kFastAttackMinMs) {
+            m_noiseFloorFastAttack = false;
+            if (m_showNoiseFloor) { markOverlayDirty(); }
+        }
+    }
 }
 
 // ---- NF-aware grid (Task 2.9) ----
@@ -1491,6 +1678,14 @@ void SpectrumWidget::setMaintainNFAdjustDelta(bool on)
 // default +5); semantically equivalent when user enters a negative offset value.
 void SpectrumWidget::onNoiseFloorChanged(float nfDbm)
 {
+    // ClarityController's NF estimate drives ONLY the optional grid
+    // auto-tracking feature.  The NF overlay (line + box + text) uses
+    // m_nfLerpAverage / m_nfFftBinAverage maintained by processNoiseFloor
+    // for true Thetis parity (display.cs:5866-5912 [v2.10.3.13]) — the
+    // ClarityController percentile + EWMA produces a different value than
+    // Thetis's bins-below-estimate-mean, so previously the overlay line
+    // floated above the visible noise on bands with non-trivial signal
+    // density.
     if (!m_adjustGridMinToNF) { return; }
 
     const float oldMin = m_refLevel - m_dynamicRange;
@@ -2237,7 +2432,15 @@ void SpectrumWidget::updateSpectrumLinear(int receiverId,
     //
     // TODO: separate m_overlayDynamic layer so static chrome (grid,
     // scales, band plan) doesn't repaint every frame.
-    if (m_activePeakHold.enabled() || m_peakBlobs.enabled()) {
+    // Per-frame NF estimate update — Thetis display.cs:5385 [v2.10.3.13]
+    // calls processNoiseFloor at the same point in its render loop (after
+    // the per-pixel accumulator finishes).  Always runs (not gated on
+    // m_showNoiseFloor) so the lerp/fft state stays current even when the
+    // overlay is toggled off — saves a cold-start visual jump on toggle on.
+    processNoiseFloor();
+
+    if (m_activePeakHold.enabled() || m_peakBlobs.enabled()
+        || m_showNoiseFloor) {
         m_overlayStaticDirty = true;
     }
 
@@ -2403,23 +2606,12 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
         }
     }
 
-    // ShowNoiseFloor -- render noise floor estimate as corner text.
-    // From Thetis Display.cs:2304-2308 [v2.10.3.13] m_bShowNoiseFloorDBM.
-    // NereusSDR: derives a rough estimate from the bottom 10th percentile
-    // of the post-pipeline display pixels.  Mirrors Thetis Display.cs:5385
-    // [v2.10.3.13] which calls processNoiseFloor(rx, averageCount,
-    // averageSum, nDecimatedWidth, ...) -- the per-pixel running stat
-    // accumulated inside the per-pixel render loop, not raw bins.
-    if (m_showNoiseFloor && !m_renderedPixels.isEmpty()) {
-        QVector<float> sorted = m_renderedPixels;
-        std::sort(sorted.begin(), sorted.end());
-        const float nf = sorted[qBound(0, sorted.size() / 10, sorted.size() - 1)];
-        const QString nfText = QStringLiteral("NF: ")
-            + QString::number(static_cast<double>(nf), 'f', 1)
-            + QStringLiteral(" dBm");
-        drawTextOverlay(p, specRect, m_noiseFloorPosition,
-                        nfText, m_gridTextColor);
-    }
+    // ShowNoiseFloor -- render NF horizontal line + corner text overlay.
+    // Both visuals share m_showNoiseFloor in NereusSDR; Thetis splits this
+    // into ShowRX1NoiseFloor (line) + m_bShowNoiseFloorDBM (text), but
+    // they're typically toggled together and a single flag matches the
+    // existing Setup → Display → Spectrum Defaults checkbox.
+    paintNoiseFloorOverlay(p, specRect);
 
     // ShowPeakValueOverlay — render cached peak text (refreshed by timer).
     // From Thetis console.cs:20073 PeakTextDelay=500ms [v2.10.3.13].
@@ -2738,6 +2930,107 @@ void SpectrumWidget::paintPeakBlobs(QPainter& p, const QRect& specRect)
     }
 
     p.setRenderHint(QPainter::Antialiasing, false);
+}
+
+// Noise-floor overlay (8×8 box + horizontal dashed line + dBm text).
+// Source-first port of Thetis display.cs:5423-5448 [v2.10.3.13]:
+//   Rectangle nf_box = new Rectangle(40, 0, 8, 8);            // ctor:5219
+//   ...
+//   int yP = (int)yPixelLerp;
+//   nf_box.Y = yP - 8;
+//   drawFillRectangleDX2D(nf_colour, nf_box);                              // 5437
+//   drawLineDX2D(nf_colour, 40, yP, W - 40, yP, m_styleDots,               // 5438
+//                m_fNoiseFloorLineWidth);                  // horiz line
+//   if (m_bShowNoiseFloorDBM) {
+//       drawStringDX2D(lerp.ToString("F1"), fontDX2d_font9b, nf_colour_text,
+//                      nf_box.X + nf_box.Width, nf_box.Y - 6);             // 5443
+//   }
+// Where:
+//   noisefloor_color      = Color.Red                     // display.cs:2316
+//   noisefloor_color_text = Color.Yellow                  // display.cs:2329
+//   m_styleDots = StrokeStyle { DashOffset=2, DashStyle=Dash }  // 8464
+//   m_fNoiseFloorLineWidth = 1.0f                         // display.cs:2310
+//
+// Lerp/actual/connector/fast-attack/NF-shift port complete; fast-attack
+// trigger sources (band change, MOX, freq jump) wire from MainWindow via
+// setNoiseFloorFastAttack — auto-clear logic still lives in NoiseFloorTracker.
+void SpectrumWidget::paintNoiseFloorOverlay(QPainter& p, const QRect& specRect)
+{
+    if (!m_showNoiseFloor || m_renderedPixels.isEmpty()) {
+        return;
+    }
+
+    // Both estimates come from processNoiseFloor — display.cs:5400 + 5403
+    // [v2.10.3.13]:
+    //   lerp        = m_fLerpAverageRX1   + _fNFshiftDBM;
+    //   yPixelActual= dBToPixel(m_fFFTBinAverageRX1 + _fNFshiftDBM, H);
+    // m_nfFftBinAverage / m_nfLerpAverage are the byte-for-byte ports of
+    // those Thetis statics maintained per-frame in processNoiseFloor().
+    const float lerp   = m_nfLerpAverage  + m_nfShiftDbm;
+    const float actual = m_nfFftBinAverage + m_nfShiftDbm;
+
+    const int yPLerp   = dbmToY(lerp,   specRect);
+    const int yPActual = dbmToY(actual, specRect);
+
+    // Fast-attack colour swap — Thetis display.cs:5431-5432 [v2.10.3.13]:
+    //   nf_colour      = bFast ? m_bDX2_Gray : m_bDX2_noisefloor;
+    //   nf_colour_text = bFast ? m_bDX2_Gray : m_bDX2_noisefloor_text;
+    const QColor lineCol = m_noiseFloorFastAttack
+        ? m_noiseFloorFastColor : m_noiseFloorColor;
+    const QColor textCol = m_noiseFloorFastAttack
+        ? m_noiseFloorFastColor : m_noiseFloorTextColor;
+
+    // 8×8 NF box at lerp Y — Thetis display.cs:5219 + 5436-5437 [v2.10.3.13].
+    constexpr int kNfBoxSize = 8;
+    const int boxX = specRect.left() + 40;
+    const int boxY = yPLerp - kNfBoxSize;
+    const QRect nfBox(boxX, boxY, kNfBoxSize, kNfBoxSize);
+    p.fillRect(nfBox, lineCol);
+
+    // Horizontal dashed line at lerp Y — Thetis display.cs:5438 [v2.10.3.13].
+    // m_styleDots = StrokeStyleProperties { DashOffset=2, DashStyle=Dash }
+    // (display.cs:8464); Direct2D's Dash style is a 2-on/2-off pattern,
+    // replicated via QPen dashPattern({2,2}) + dashOffset(2).
+    const int x0 = specRect.left() + 40;
+    const int x1 = specRect.right() - 40;
+    if (x1 > x0) {
+        QPen nfPen(lineCol, m_noiseFloorLineWidth);
+        nfPen.setStyle(Qt::CustomDashLine);
+        nfPen.setDashPattern({2.0, 2.0});
+        nfPen.setDashOffset(2.0);
+        nfPen.setCapStyle(Qt::FlatCap);
+        p.setPen(nfPen);
+        p.drawLine(x0, yPLerp, x1, yPLerp);
+    }
+
+    // Vertical connector between actual and lerp — Thetis display.cs:5442
+    // [v2.10.3.13]:
+    //   drawLineDX2D(nf_colour, nf_box.X - 3, (int)yPixelActual,
+    //                nf_box.X - 3, yP, 2);  // direction up/down line
+    // Width 2.  Solid (no dash).  Only visible when actual != lerp.  Thetis
+    // gates this on m_bShowNoiseFloorDBM (the text flag) — we honour the
+    // same gate via m_showNoiseFloor since both controls collapse to one
+    // toggle in NereusSDR.
+    if (yPActual != yPLerp) {
+        QPen connectorPen(lineCol, 2);
+        connectorPen.setCapStyle(Qt::FlatCap);
+        p.setPen(connectorPen);
+        p.drawLine(boxX - 3, yPActual, boxX - 3, yPLerp);
+    }
+
+    // NF dBm text anchored to the box — Thetis display.cs:5443:
+    //   drawStringDX2D(lerp.ToString("F1"), fontDX2d_font9b, nf_colour_text,
+    //                  nf_box.X + nf_box.Width, nf_box.Y - 6);
+    // F1 format only; Thetis omits the "dBm" suffix (the dBm scale is
+    // adjacent on the spectrum strip).
+    const QString nfText = QString::number(static_cast<double>(lerp), 'f', 1);
+    QFont nfFont = p.font();
+    nfFont.setPixelSize(11);
+    nfFont.setBold(true);
+    p.setFont(nfFont);
+    p.setPen(textCol);
+    p.drawText(boxX + kNfBoxSize + 2, boxY - 6 + p.fontMetrics().ascent(),
+               nfText);
 }
 
 // ---- Waterfall drawing ----
@@ -3176,6 +3469,14 @@ std::pair<int, int> SpectrumWidget::visibleBinRange(int binCount) const
     return {firstBin, lastBin};
 }
 
+int SpectrumWidget::bandPlanStripHeight() const
+{
+    // Mirrors drawBandPlan's height calc (display.cpp:3280):
+    //   bandH = m_bandPlanFontSize + 4 when a bandplan manager is bound.
+    return (m_bandPlanMgr && m_bandPlanFontSize > 0)
+           ? (m_bandPlanFontSize + 4) : 0;
+}
+
 int SpectrumWidget::dbmToY(float dbm, const QRect& r) const
 {
     // Phase 3G-8: apply display calibration offset before mapping to Y.
@@ -3184,7 +3485,13 @@ int SpectrumWidget::dbmToY(float dbm, const QRect& r) const
     float bottom = m_refLevel - m_dynamicRange;
     float frac = (calibrated - bottom) / m_dynamicRange;
     frac = qBound(0.0f, frac, 1.0f);
-    return r.bottom() - static_cast<int>(frac * r.height());
+    // Reserve the band plan strip height — the dBm floor must map to the
+    // TOP of the band plan strip, not the panel bottom, so spectrum
+    // overlays don't render on top of (or below) the strip.
+    const int bandH = bandPlanStripHeight();
+    const int contentBottom = r.bottom() - bandH;
+    const int contentH      = qMax(1, r.height() - bandH);
+    return contentBottom - static_cast<int>(frac * contentH);
 }
 
 float SpectrumWidget::dbmToYf(float dbm, const QRect& r) const
@@ -3193,7 +3500,10 @@ float SpectrumWidget::dbmToYf(float dbm, const QRect& r) const
     float bottom = m_refLevel - m_dynamicRange;
     float frac = (calibrated - bottom) / m_dynamicRange;
     frac = qBound(0.0f, frac, 1.0f);
-    return static_cast<float>(r.bottom()) - frac * static_cast<float>(r.height());
+    const int   bandH        = bandPlanStripHeight();
+    const float contentBottom = static_cast<float>(r.bottom() - bandH);
+    const float contentH      = static_cast<float>(qMax(1, r.height() - bandH));
+    return contentBottom - frac * contentH;
 }
 
 // ─── Waterfall scrollback math helpers (sub-epic E) ───────────────────
@@ -5254,11 +5564,11 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             drawWaterfallChrome(p, wfRect);
 
             // Per-frame dynamic overlays — Active Peak Hold trace + Peak
-            // Blobs (Tasks 2.5/2.6). The CPU paintEvent path calls these
-            // from drawSpectrum() every frame; the GPU path needs them
-            // baked into the overlay texture. updateSpectrumLinear()
-            // forces m_overlayStaticDirty=true when either is enabled so
-            // this block runs every frame in that mode.
+            // Blobs (Tasks 2.5/2.6) + Noise-floor line/text. The CPU
+            // paintEvent path calls these from drawSpectrum() every frame;
+            // the GPU path needs them baked into the overlay texture.
+            // updateSpectrumLinear() forces m_overlayStaticDirty=true when
+            // any of them is enabled so this block runs every frame.
             if ((m_activePeakHold.enabled() || m_peakBlobs.enabled()) &&
                 !m_renderedPixels.isEmpty()) {
                 if (m_activePeakHold.enabled() && m_activePeakHold.size() > 0) {
@@ -5268,6 +5578,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                     paintPeakBlobs(p, specRect);
                 }
             }
+            paintNoiseFloorOverlay(p, specRect);
 
             // FPS overlay for GPU mode (QPainter path draws its own
             // counter in paintEvent). Drawn into the cached overlay

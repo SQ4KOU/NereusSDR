@@ -69,6 +69,7 @@
 #include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
 #include "core/NoiseFloorTracker.h"
+#include "gui/ColorSwatchButton.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -195,6 +196,15 @@ void SpectrumDefaultsPage::loadFromRenderer()
     m_windowCombo->setCurrentIndex(static_cast<int>(fe->windowFunction()));
 
     m_fpSlider->setValue(fe->outputFps());
+    // Defensive: mirror to spin readout.  QSignalBlocker on m_fpSlider above
+    // blocks the slider->spin sync wired by makeSliderRow (SetupHelpers.cpp:47),
+    // so without this explicit setValue the spin would stick at the
+    // makeSliderRow constructor default (30) on every dialog reopen even when
+    // the slider correctly tracks the persisted output FPS.
+    if (m_fpSpin) {
+        QSignalBlocker bspin(m_fpSpin);
+        m_fpSpin->setValue(fe->outputFps());
+    }
     // Task 2.1: sync new split combos.
     if (m_spectrumDetectorCombo) {
         QSignalBlocker bd(m_spectrumDetectorCombo);
@@ -242,6 +252,26 @@ void SpectrumDefaultsPage::loadFromRenderer()
         QSignalBlocker b(m_noiseFloorPositionCombo);
         m_noiseFloorPositionCombo->setCurrentIndex(
             static_cast<int>(sw->showNoiseFloorPosition()));
+    }
+    if (m_nfShiftSpin) {
+        QSignalBlocker b(m_nfShiftSpin);
+        m_nfShiftSpin->setValue(static_cast<double>(sw->nfShiftDbm()));
+    }
+    if (m_nfLineWidthSpin) {
+        QSignalBlocker b(m_nfLineWidthSpin);
+        m_nfLineWidthSpin->setValue(static_cast<double>(sw->noiseFloorLineWidth()));
+    }
+    if (m_nfLineColorBtn) {
+        QSignalBlocker b(m_nfLineColorBtn);
+        m_nfLineColorBtn->setColor(sw->noiseFloorColor());
+    }
+    if (m_nfTextColorBtn) {
+        QSignalBlocker b(m_nfTextColorBtn);
+        m_nfTextColorBtn->setColor(sw->noiseFloorTextColor());
+    }
+    if (m_nfFastColorBtn) {
+        QSignalBlocker b(m_nfFastColorBtn);
+        m_nfFastColorBtn->setColor(sw->noiseFloorFastColor());
     }
     if (m_dispNormalizeToggle) {
         QSignalBlocker b(m_dispNormalizeToggle);
@@ -819,16 +849,25 @@ void SpectrumDefaultsPage::buildUI()
         overlayForm->addRow(QString(), row);
     }
 
-    // ShowNoiseFloor + position.
-    // From Thetis display.cs:2304-2308 [v2.10.3.13] m_bShowNoiseFloorDBM.
-    // Thetis original: rendered in DrawSpectrumDX2D at display.cs:5440.
+    // ShowNoiseFloor — toggle + position (deprecated) + NF render parameters.
+    // From Thetis display.cs:2304-2337 + 5400-5448 + 5763 [v2.10.3.13]:
+    //   m_bShowNoiseFloorDBM   — toggle
+    //   noisefloor_color       — line + box colour (default red)
+    //   noisefloor_color_text  — dBm label colour (default yellow)
+    //   m_fNoiseFloorLineWidth — line width (default 1.0)
+    //   _fNFshiftDBM           — operator shift, [-12, +12]
+    // Position combo is dead (text now anchors to the box per Thetis layout)
+    // — kept for settings round-trip but disabled in UI.
     m_showNoiseFloorToggle = new QCheckBox(
         QStringLiteral("Show noise floor"), overlayGroup);
     m_showNoiseFloorToggle->setToolTip(QStringLiteral(
-        "Display the estimated noise floor level as a text readout in the spectrum corner."));
+        "Display the noise floor as a horizontal dashed line + dBm box+text."));
     m_noiseFloorPositionCombo = makeOverlayPositionCombo(overlayGroup);
     m_noiseFloorPositionCombo->setCurrentIndex(2);  // Bottom Left default
-    m_noiseFloorPositionCombo->setToolTip(QStringLiteral("Corner position for the noise floor readout."));
+    m_noiseFloorPositionCombo->setEnabled(false);
+    m_noiseFloorPositionCombo->setToolTip(QStringLiteral(
+        "Deprecated. Text now anchors to the NF box per Thetis "
+        "(display.cs:5443). Setting persists but has no visual effect."));
     connect(m_showNoiseFloorToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setShowNoiseFloor(on);
@@ -854,6 +893,115 @@ void SpectrumDefaultsPage::buildUI()
         hl->addWidget(m_showNoiseFloorToggle);
         hl->addSpacing(8);
         hl->addWidget(m_noiseFloorPositionCombo);
+        hl->addStretch();
+        overlayForm->addRow(QString(), row);
+    }
+
+    // NF Shift + Line Width — Thetis display.cs:5400 + 2310.
+    {
+        m_nfShiftSpin = new QDoubleSpinBox(overlayGroup);
+        m_nfShiftSpin->setRange(-12.0, 12.0);
+        m_nfShiftSpin->setSingleStep(0.5);
+        m_nfShiftSpin->setDecimals(1);
+        m_nfShiftSpin->setSuffix(QStringLiteral(" dB"));
+        m_nfShiftSpin->setToolTip(QStringLiteral(
+            "Operator-tunable offset added to the rendered NF level. "
+            "Thetis _fNFshiftDBM, clamped to [-12, +12]."));
+        connect(m_nfShiftSpin, qOverload<double>(&QDoubleSpinBox::valueChanged),
+                this, [this](double v) {
+            if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+                w->setNFShiftDbm(static_cast<float>(v));
+            }
+            AppSettings::instance().setValue(
+                QStringLiteral("DisplayNoiseFloorShiftDb"),
+                QString::number(v));
+        });
+
+        m_nfLineWidthSpin = new QDoubleSpinBox(overlayGroup);
+        m_nfLineWidthSpin->setRange(1.0, 5.0);
+        m_nfLineWidthSpin->setSingleStep(0.5);
+        m_nfLineWidthSpin->setDecimals(1);
+        m_nfLineWidthSpin->setSuffix(QStringLiteral(" px"));
+        m_nfLineWidthSpin->setToolTip(QStringLiteral(
+            "Width of the horizontal NF dashed line. "
+            "Thetis m_fNoiseFloorLineWidth, default 1.0."));
+        connect(m_nfLineWidthSpin, qOverload<double>(&QDoubleSpinBox::valueChanged),
+                this, [this](double v) {
+            if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+                w->setNoiseFloorLineWidth(static_cast<float>(v));
+            }
+            AppSettings::instance().setValue(
+                QStringLiteral("DisplayNoiseFloorLineWidth"),
+                QString::number(v));
+        });
+
+        auto* row = new QWidget(overlayGroup);
+        auto* hl  = new QHBoxLayout(row);
+        hl->setContentsMargins(20, 0, 0, 0);  // indent under the toggle
+        hl->addWidget(new QLabel(QStringLiteral("NF shift:"), row));
+        hl->addWidget(m_nfShiftSpin);
+        hl->addSpacing(12);
+        hl->addWidget(new QLabel(QStringLiteral("Line width:"), row));
+        hl->addWidget(m_nfLineWidthSpin);
+        hl->addStretch();
+        overlayForm->addRow(QString(), row);
+    }
+
+    // NF colour pickers — Thetis display.cs:2316/2329 + NereusSDR fast-attack.
+    {
+        m_nfLineColorBtn = new ColorSwatchButton(Qt::red, overlayGroup);
+        m_nfLineColorBtn->setToolTip(QStringLiteral(
+            "Colour for the NF line + 8x8 box. Thetis default red."));
+        connect(m_nfLineColorBtn, &ColorSwatchButton::colorChanged,
+                this, [this](const QColor& c) {
+            if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+                w->setNoiseFloorColor(c);
+            }
+            // HexArgb keeps NF colour storage in the same format as the
+            // rest of SpectrumWidget's persisted colours.
+            AppSettings::instance().setValue(
+                QStringLiteral("DisplayNoiseFloorColor"),
+                c.name(QColor::HexArgb));
+        });
+
+        m_nfTextColorBtn = new ColorSwatchButton(Qt::yellow, overlayGroup);
+        m_nfTextColorBtn->setToolTip(QStringLiteral(
+            "Colour for the NF dBm label text. Thetis default yellow."));
+        connect(m_nfTextColorBtn, &ColorSwatchButton::colorChanged,
+                this, [this](const QColor& c) {
+            if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+                w->setNoiseFloorTextColor(c);
+            }
+            AppSettings::instance().setValue(
+                QStringLiteral("DisplayNoiseFloorTextColor"),
+                c.name(QColor::HexArgb));
+        });
+
+        m_nfFastColorBtn = new ColorSwatchButton(Qt::gray, overlayGroup);
+        m_nfFastColorBtn->setToolTip(QStringLiteral(
+            "Colour shown during fast-attack (band/freq/MOX change). "
+            "Default gray, mirroring Thetis m_bDX2_Gray."));
+        connect(m_nfFastColorBtn, &ColorSwatchButton::colorChanged,
+                this, [this](const QColor& c) {
+            if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
+                w->setNoiseFloorFastColor(c);
+            }
+            AppSettings::instance().setValue(
+                QStringLiteral("DisplayNoiseFloorFastColor"),
+                c.name(QColor::HexArgb));
+        });
+
+        auto* row = new QWidget(overlayGroup);
+        auto* hl  = new QHBoxLayout(row);
+        hl->setContentsMargins(20, 0, 0, 0);  // indent under the toggle
+        hl->addWidget(new QLabel(QStringLiteral("Line:"), row));
+        hl->addWidget(m_nfLineColorBtn);
+        hl->addSpacing(8);
+        hl->addWidget(new QLabel(QStringLiteral("Text:"), row));
+        hl->addWidget(m_nfTextColorBtn);
+        hl->addSpacing(8);
+        hl->addWidget(new QLabel(QStringLiteral("Fast-attack:"), row));
+        hl->addWidget(m_nfFastColorBtn);
         hl->addStretch();
         overlayForm->addRow(QString(), row);
     }
