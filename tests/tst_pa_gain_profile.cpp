@@ -241,21 +241,38 @@ private slots:
         QCOMPARE(defaultPaGainsForBand(HPSDRModel::HERMESLITE,   Band::Band6m),   38.8f);
     }
 
-    // ── Bypass profile is all 100.0f sentinel ─────────────────────────────
-    void bypass_returns_100_for_every_ham_band() {
-        QCOMPARE(bypassPaGainsForBand(Band::Band160m), 100.0f);
-        QCOMPARE(bypassPaGainsForBand(Band::Band80m),  100.0f);
-        QCOMPARE(bypassPaGainsForBand(Band::Band60m),  100.0f);
-        QCOMPARE(bypassPaGainsForBand(Band::Band40m),  100.0f);
-        QCOMPARE(bypassPaGainsForBand(Band::Band30m),  100.0f);
-        QCOMPARE(bypassPaGainsForBand(Band::Band20m),  100.0f);
-        QCOMPARE(bypassPaGainsForBand(Band::Band17m),  100.0f);
-        QCOMPARE(bypassPaGainsForBand(Band::Band15m),  100.0f);
-        QCOMPARE(bypassPaGainsForBand(Band::Band12m),  100.0f);
-        QCOMPARE(bypassPaGainsForBand(Band::Band10m),  100.0f);
-        QCOMPARE(bypassPaGainsForBand(Band::Band6m),   100.0f);
+    // ── Bypass profile uses the Hermes 41.x dB row ────────────────────────
+    //
+    // Issue #202 deep-fix: previously NereusSDR returned the all-100.0f
+    // sentinel for Bypass (paired with a NereusSDR-original `gbb >= 99.5`
+    // linear-identity short-circuit in computeAudioVolume).  That combination
+    // inverted the Thetis semantic ("100 = no output power",
+    // clsHardwareSpecific.cs:463-466 [v2.10.3.13]) into "Bypass = full
+    // output".  Bypass now returns the Hermes 41.x dB row, matching Thetis
+    // setup.cs:23314 [v2.10.3.13]:
+    //   _PAProfiles.Add(_sPA_PROFILE_BYPASS,
+    //       new PAProfile(_sPA_PROFILE_BYPASS, HPSDRModel.FIRST, true));
+    // PAProfile constructor calls ResetGainDefaultsForModel(FIRST) which
+    // calls DefaultPAGainsForBands(FIRST) — that switch arm groups
+    // FIRST/HERMES/HPSDR/ORIONMKII under the 41.x dB row at
+    // clsHardwareSpecific.cs:471-486 [v2.10.3.13].
+    void bypass_returns_hermes_row_for_every_ham_band() {
+        QCOMPARE(bypassPaGainsForBand(Band::Band160m), 41.0f);
+        QCOMPARE(bypassPaGainsForBand(Band::Band80m),  41.2f);
+        QCOMPARE(bypassPaGainsForBand(Band::Band60m),  41.3f);
+        QCOMPARE(bypassPaGainsForBand(Band::Band40m),  41.3f);
+        QCOMPARE(bypassPaGainsForBand(Band::Band30m),  41.0f);
+        QCOMPARE(bypassPaGainsForBand(Band::Band20m),  40.5f);
+        QCOMPARE(bypassPaGainsForBand(Band::Band17m),  39.9f);
+        QCOMPARE(bypassPaGainsForBand(Band::Band15m),  38.8f);
+        QCOMPARE(bypassPaGainsForBand(Band::Band12m),  38.8f);
+        QCOMPARE(bypassPaGainsForBand(Band::Band10m),  38.8f);
+        QCOMPARE(bypassPaGainsForBand(Band::Band6m),   38.8f);
     }
-    void bypass_returns_100_for_nereus_specific_slots() {
+    void bypass_returns_sentinel_for_nereus_specific_slots() {
+        // GEN/WWV/XVTR have no Thetis equivalent in the gain table; they
+        // inherit the kPaGainSentinel = 100.0f from the lookupHfBand
+        // fall-through (PaGainProfile.cpp:262-296).
         QCOMPARE(bypassPaGainsForBand(Band::GEN),  100.0f);
         QCOMPARE(bypassPaGainsForBand(Band::WWV),  100.0f);
         QCOMPARE(bypassPaGainsForBand(Band::XVTR), 100.0f);
@@ -263,9 +280,10 @@ private slots:
 
     // ── NereusSDR-specific Band slots (GEN/WWV/XVTR) ──────────────────────
     // No equivalent exists in the Thetis gain table; return the 100.0f
-    // sentinel. Documented divergence — the HL2 sentinel short-circuit
-    // (gbb >= 99.5) in TransmitModel::computeAudioVolume routes these to
-    // the linear-fallback branch downstream.
+    // sentinel.  With the gbb>=99.5 short-circuit removed (#202), the
+    // canonical Thetis dBm kernel runs and gbb=100 produces audio_volume
+    // ≈ 0 — i.e. "no output power", matching the Thetis comment at
+    // clsHardwareSpecific.cs:466 [v2.10.3.13].
     void anan8000d_gen_returns_sentinel() {
         QCOMPARE(defaultPaGainsForBand(HPSDRModel::ANAN8000D, Band::GEN),  100.0f);
     }

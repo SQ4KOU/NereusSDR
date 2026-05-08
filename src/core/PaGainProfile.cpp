@@ -391,14 +391,38 @@ float defaultPaGainsForBand(HPSDRModel model, Band band) noexcept {
 
 // --- bypassPaGainsForBand ---------------------------------------------------
 //
-// Returns the all-100.0f sentinel profile used for the "Bypass" factory
-// entry in PaProfileManager. This is the same sentinel value Thetis uses
-// to initialize the gain array (clsHardwareSpecific.cs:466 [v2.10.3.13])
-// before the per-model switch fills it in. Picking this profile turns off
-// the dBm-target compensation entirely — the linear-fallback
-// (gbb >= 99.5) branch in TransmitModel::computeAudioVolume takes over.
-float bypassPaGainsForBand(Band /*band*/) noexcept {
-    return kPaGainSentinel;
+// Returns the gain row Thetis assigns to the "Bypass" factory entry.
+//
+// From Thetis setup.cs:23314 [v2.10.3.13] — initPAProfiles seeds Bypass via
+//   _PAProfiles.Add(_sPA_PROFILE_BYPASS,
+//       new PAProfile(_sPA_PROFILE_BYPASS, HPSDRModel.FIRST, true));
+// The PAProfile constructor calls ResetGainDefaultsForModel(HPSDRModel.FIRST)
+// which calls DefaultPAGainsForBands(HPSDRModel.FIRST).  The clsHardwareSpecific
+// switch at :471-486 [v2.10.3.13] groups
+//   case HPSDRModel.FIRST:
+//   case HPSDRModel.HERMES:
+//   case HPSDRModel.HPSDR:
+//   case HPSDRModel.ORIONMKII:
+// under the same Hermes 41.x dB HF row.  So Thetis's Bypass profile is NOT
+// an "all-100.0f" sentinel — it's the Hermes row.
+//
+// The init loop at clsHardwareSpecific.cs:463-466 [v2.10.3.13] does fill
+// the gain array with 100.0f first ("max them out, these gains are PA
+// attenuations, so 100 is no output power"), but the per-model switch
+// then overwrites those with the actual gains.  In Thetis a residual
+// 100.0f (band not handled by any switch case) means NO output power —
+// the dBm kernel's `target_dbm -= 100` produces audio_volume ≈ 0.
+//
+// NereusSDR previously returned kPaGainSentinel (100.0f) here and combined
+// with a NereusSDR-original `gbb >= 99.5 → linear identity sliderWatts/100`
+// short-circuit in TransmitModel::computeAudioVolume.  That short-circuit
+// inverted the Thetis semantic ("100 = no output") into "100 = full output"
+// and made any user picking the Bypass profile emit wire byte 255 at
+// slider 100.  That short-circuit is being removed concurrently
+// (TransmitModel.cpp), and this function now returns the Thetis-faithful
+// Hermes row by delegating to defaultPaGainsForBand(HPSDRModel::FIRST, band).
+float bypassPaGainsForBand(Band band) noexcept {
+    return defaultPaGainsForBand(HPSDRModel::FIRST, band);
 }
 
 }  // namespace NereusSDR

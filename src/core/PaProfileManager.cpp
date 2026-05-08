@@ -258,6 +258,58 @@ QStringList PaProfileManager::profileNames() const
     return names;
 }
 
+QStringList PaProfileManager::userVisibleProfileNames(
+    HPSDRModel connectedModel,
+    const QString& currentSelectedName) const
+{
+    // Faithful port of Thetis's combo filter at setup.cs:23335-23344
+    // [v2.10.3.13]:
+    //   if (sSelectProfile == _sPA_PROFILE_BYPASS)
+    //   {
+    //       if (p.ProfileName == _sPA_PROFILE_BYPASS)
+    //           comboPAProfile.Items.Add(p.ProfileName);
+    //   }
+    //   else
+    //   {
+    //       if ((p.IsDefault && p.Model == HardwareSpecific.Model) || !p.IsDefault)
+    //           comboPAProfile.Items.Add(p.ProfileName);
+    //   }
+    QStringList allNames = readManifest();
+    QStringList out;
+
+    const QString bypassName = QString::fromLatin1(kBypassProfileName);
+    const bool bypassMode = (currentSelectedName == bypassName);
+
+    for (const QString& name : allNames) {
+        if (bypassMode) {
+            if (name == bypassName) {
+                out.append(name);
+            }
+            continue;
+        }
+        const PaProfile* p = profileByName(name);
+        if (!p) {
+            // Manifest entry without a loaded blob — shouldn't happen but
+            // skip defensively to avoid emitting ghost names.
+            continue;
+        }
+        const bool isDefault = p->isFactoryDefault();
+        if (isDefault) {
+            if (p->model() == connectedModel) {
+                out.append(name);
+            }
+            // Else: hidden — `Default - <other model>` would apply the
+            // wrong gain row to this radio.
+        } else {
+            // User-customised profile — always visible.
+            out.append(name);
+        }
+    }
+
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 QString PaProfileManager::activeProfileName() const
 {
     return m_activeProfileName;
