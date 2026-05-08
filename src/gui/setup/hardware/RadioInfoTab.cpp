@@ -338,6 +338,17 @@ void RadioInfoTab::onSampleRateChanged(int index)
         // Mirror into RX2 stub visually.
         QSignalBlocker blocker(m_sampleRateRx2Combo);
         m_sampleRateRx2Combo->setCurrentIndex(index);
+        // Apply live via the RadioModel coordinator (Task 1.6) when a
+        // radio is connected.  Returns >= 0 ms on success — the banner
+        // then hides itself once wireSampleRateChanged fires from the
+        // updated connection — or -1 when no active connection / WDSP
+        // not ready (banner stays up; setting still persists for next
+        // connect via settingChanged above).  Without this call the
+        // live-apply infrastructure added in PR #219 (Task 1.6) was
+        // unreachable from the UI; codex post-merge review flagged as P2.
+        if (m_model) {
+            m_model->setSampleRateLive(rate);
+        }
         updateReconnectBanner();
     }
 }
@@ -346,6 +357,12 @@ void RadioInfoTab::onActiveRxCountChanged(int count)
 {
     if (count < 1) { return; }
     emit settingChanged(QStringLiteral("radioInfo/activeRxCount"), count);
+    // Apply live via the RadioModel coordinator (Task 1.7).  Same
+    // negative-return-means-disconnected contract as setSampleRateLive
+    // above; setting persists either way for next connect.
+    if (m_model) {
+        m_model->setActiveRxCountLive(count);
+    }
 }
 
 void RadioInfoTab::onWireSampleRateChanged(double hz)

@@ -1,5 +1,7 @@
-// NereusSDR-original test — no Thetis source ported here.
+// no-port-check: NereusSDR-original test — no Thetis source ported here.
 // No upstream attribution required (NereusSDR per-mode live-apply test).
+// Comments below cite Thetis source paths (radio.cs, etc.) for context
+// only — they are reference pointers, not ports.
 //
 // Tests for Task 4.2: per-mode buffer/filter/filter-type live-apply via
 // RxChannel::onModeChanged() and TxChannel::onModeChanged().
