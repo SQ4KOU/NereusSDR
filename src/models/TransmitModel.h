@@ -225,6 +225,15 @@
 //                 mi0bot console.cs verbatim header below complete the
 //                 GPL attribution.  J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-05-07 — Phase 3M-3a-iv post-bench refactor (Option A): dropped
+//                 antiVoxSourceVax property + setter + signal + member +
+//                 persistence (NereusSDR-architectural divergence from
+//                 Thetis chkAntiVoxSource at setup.designer.cs:44646-44657
+//                 [v2.10.3.13]).  VAX is a digital-mode app bus with no
+//                 mic-feedback path, so the audio output device is the only
+//                 valid anti-VOX cancellation reference; there is no user
+//                 choice to expose.  J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -864,13 +873,6 @@ public:
 
     // ── Anti-VOX properties (3M-1b C.4) ──────────────────────────────────────
     //
-    // Porting from Thetis audio.cs:446-454 [v2.10.3.13]:
-    //   private static bool antivox_source_VAC = false;
-    //   public static bool AntiVOXSourceVAC {
-    //     get { return antivox_source_VAC; }
-    //     set { antivox_source_VAC = value; cmaster.CMSetAntiVoxSourceWhat(); }
-    //   }
-    //
     // Porting from Thetis setup.designer.cs:44699-44728 [v2.10.3.13]:
     //   udAntiVoxGain.Minimum = decimal{60,0,0,-2147483648} = -60
     //   udAntiVoxGain.Maximum = decimal{60,0,0,0}           = +60
@@ -880,16 +882,16 @@ public:
     //   cmaster.SetAntiVOXGain(0, Math.Pow(10.0, (double)udAntiVoxGain.Value / 20.0));
     //   (WDSP wiring arrives in Phase H.3; model just stores + signals.)
     //
-    // "VAC->VAX" rename: Thetis calls this antivox_source_VAC (Virtual Audio
-    // Cable, i.e. the IVAC-mediated digital-mode TX path).  NereusSDR's
-    // equivalent is VAX (Virtual Audio Crossbar -- different design, but same
-    // conceptual role).  The rename keeps naming consistent with the rest of
-    // the project.  The default (false = use local-RX) is identical to Thetis.
-    //
     // AppSettings persistence arrives in Phase L.2.
-    // WDSP wiring (SetAntiVOXGain + CMSetAntiVoxSourceWhat) arrives in Phase H.3.
-    // Full VAX-source state machine (RX2 / dual-VAX source composition)
-    // is deferred to 3M-3a.
+    //
+    // 3M-3a-iv post-bench refactor (Option A): the source-selector property
+    // (antiVoxSourceVax) and its associated plumbing have been removed.
+    // Thetis chkAntiVoxSource at setup.designer.cs:44646-44657 [v2.10.3.13]
+    // selects between RX and VAC as the anti-VOX cancellation reference;
+    // that choice does not map to NereusSDR's architecture, where VAX is
+    // a digital-mode app bus with no mic-feedback path and the audio output
+    // device is therefore the only valid anti-VOX source.  See commit message
+    // and DexpVoxPage info-row for the architectural rationale.
 
     /// Anti-VOX gain in dB.  Clamped to [kAntiVoxGainDbMin, kAntiVoxGainDbMax].
     /// Default 0 dB -- NereusSDR-original safe starting point.
@@ -901,16 +903,6 @@ public:
     ///   udAntiVoxGain.Minimum = -60, udAntiVoxGain.Maximum = 60.
     int antiVoxGainDb() const noexcept { return m_antiVoxGainDb; }
 
-    /// Anti-VOX source selector.
-    /// false = use local-RX (default; matches Thetis
-    ///         audio.cs:446 [v2.10.3.13]: antivox_source_VAC = false).
-    /// true  = use VAX audio (NereusSDR-renamed; was VAC in Thetis).
-    ///
-    /// Path-agnostic anti-VOX (default false = local-RX) is implemented in
-    /// Phase H.3 via CMSetAntiVoxSourceWhat port.  The full VAX-source state
-    /// machine is deferred to 3M-3a.
-    bool antiVoxSourceVax() const noexcept { return m_antiVoxSourceVax; }
-
     // Anti-VOX gain range constants.
     // From Thetis setup.designer.cs:44708-44717 [v2.10.3.13]:
     //   udAntiVoxGain.Minimum = decimal{60,0,0,-2147483648} = -60
@@ -918,6 +910,61 @@ public:
     //   (DecimalPlaces=1; display unit is x0.1 dB; NereusSDR stores as int dB.)
     static constexpr int kAntiVoxGainDbMin = -60;
     static constexpr int kAntiVoxGainDbMax =  60;
+
+    // ── Anti-VOX detector smoothing tau (Phase 3M-3a-iv Task 8) ──────────
+    //
+    // Porting from Thetis setup.designer.cs:44661-44688 [v2.10.3.13]
+    // (udAntiVoxTau):
+    //   udAntiVoxTau.Minimum   = decimal{1,0,0,0}   = 1
+    //   udAntiVoxTau.Maximum   = decimal{500,0,0,0} = 500
+    //   udAntiVoxTau.Increment = decimal{1,0,0,0}   = 1
+    //   udAntiVoxTau.Value     = decimal{20,0,0,0}  = 20
+    //   ToolTip: "Time-constant used in smoothing Anti-VOX data"
+    //
+    // The model stores the detector smoothing time-constant in milliseconds.
+    // RadioModel wires antiVoxTauMsChanged → MoxController::setAntiVoxTau in
+    // Task 9; MoxController converts to seconds (×1e-3) and forwards to the
+    // TX worker thread which calls the WDSP DEXP detector setter.
+    static constexpr int kAntiVoxTauMsMin     = 1;
+    static constexpr int kAntiVoxTauMsMax     = 500;
+    static constexpr int kAntiVoxTauMsDefault = 20;
+
+    Q_PROPERTY(int antiVoxTauMs READ antiVoxTauMs WRITE setAntiVoxTauMs
+                                NOTIFY antiVoxTauMsChanged)
+
+    /// Anti-VOX detector smoothing time-constant in ms.
+    /// Clamped to [kAntiVoxTauMsMin, kAntiVoxTauMsMax].
+    /// Default kAntiVoxTauMsDefault matches Thetis udAntiVoxTau.Value=20
+    /// (setup.designer.cs:44682 [v2.10.3.13]).
+    int antiVoxTauMs() const noexcept { return m_antiVoxTauMs; }
+
+    // ── Anti-VOX run flag (3M-3a-iv scope-expansion) ──────────────────────
+    //
+    // From Thetis setup.designer.cs:44740-44751 [v2.10.3.13]: chkAntiVoxEnable
+    // is the master enable for the WDSP DEXP anti-VOX detector.  Default
+    // unchecked (no .Checked= setter in Designer).
+    //
+    // Handler at setup.cs:18980-18984 [v2.10.3.13]:
+    //   private void chkAntiVoxEnable_CheckedChanged(object sender, EventArgs e)
+    //   {
+    //       if (initializing) return;
+    //       cmaster.SetAntiVOXRun(0, chkAntiVoxEnable.Checked);
+    //   }
+    //
+    // Persistence: per-MAC key AntiVox_Enable (default False).
+    // RadioModel wires antiVoxRunChanged → MoxController::setAntiVoxRun.
+    //
+    // 3M-3a-iv post-bench refactor (Option A): chkAntiVoxSource (the source
+    // toggle in Thetis) has been removed entirely; this run flag is now the
+    // only anti-VOX user toggle in NereusSDR.  See commit message for the
+    // architectural rationale.
+
+    Q_PROPERTY(bool antiVoxRun READ antiVoxRun WRITE setAntiVoxRun
+                               NOTIFY antiVoxRunChanged)
+
+    /// Anti-VOX master run flag.
+    /// false (default) = anti-VOX detector OFF.  true = detector running.
+    bool antiVoxRun() const noexcept { return m_antiVoxRun; }
 
     // ── MON properties (3M-1b C.5) ────────────────────────────────────────
     //
@@ -1769,8 +1816,20 @@ public slots:
     void setUserDigOut(int dig);
 
     // ── Anti-VOX setters (3M-1b C.4) ─────────────────────────────────────────
+    // 3M-3a-iv post-bench refactor (Option A): setAntiVoxSourceVax dropped.
+    // See commit message and class comment block for architectural rationale.
     void setAntiVoxGainDb(int dB);
-    void setAntiVoxSourceVax(bool useVax);
+
+    // ── Anti-VOX detector tau setter (Phase 3M-3a-iv Task 8) ─────────────────
+    // Sets the smoothing time-constant in ms; clamps to [1, 500] per Thetis
+    // udAntiVoxTau range (setup.designer.cs:44661-44688 [v2.10.3.13]).
+    void setAntiVoxTauMs(int ms);
+
+    // ── Anti-VOX run flag setter (3M-3a-iv scope-expansion) ──────────────────
+    // Sets the master enable.  Idempotent guard.  Auto-persists.
+    // Mirrors Thetis chkAntiVoxEnable_CheckedChanged at setup.cs:18980-18984
+    // [v2.10.3.13]: cmaster.SetAntiVOXRun(0, chkAntiVoxEnable.Checked).
+    void setAntiVoxRun(bool run);
 
     // ── MON setters (3M-1b C.5) ──────────────────────────────────────────────
     void setMonEnabled(bool on);
@@ -1879,8 +1938,19 @@ signals:
     void userDigOutChanged(int dig);
 
     // ── Anti-VOX signals (3M-1b C.4) ─────────────────────────────────────────
+    // 3M-3a-iv post-bench refactor (Option A): antiVoxSourceVaxChanged dropped.
     void antiVoxGainDbChanged(int dB);
-    void antiVoxSourceVaxChanged(bool useVax);
+
+    // ── Anti-VOX detector tau signal (Phase 3M-3a-iv Task 8) ────────────────
+    // RadioModel wires this to MoxController::setAntiVoxTau in Task 9.
+    void antiVoxTauMsChanged(int ms);
+
+    // ── Anti-VOX run flag signal (3M-3a-iv scope-expansion) ─────────────────
+    // RadioModel wires antiVoxRunChanged → MoxController::setAntiVoxRun;
+    // MoxController emits antiVoxRunRequested → TxWorkerThread::setAntiVoxRun
+    // (which forwards to TxChannel::setAntiVoxRun AND flips the worker's
+    //  m_antiVoxRun atomic gate).
+    void antiVoxRunChanged(bool run);
 
     // ── MON signals (3M-1b C.5) ──────────────────────────────────────────────
     void monEnabledChanged(bool on);
@@ -2073,10 +2143,19 @@ private:
     int    m_userDigOut     = 0;      // bank 11 C3 low 4 bits, range [0, 15]
 
     // ── Anti-VOX properties (3M-1b C.4) ──────────────────────────────────
-    // From Thetis audio.cs:446-454 [v2.10.3.13] (antivox_source_VAC) and
-    // setup.designer.cs:44699-44728 [v2.10.3.13] (udAntiVoxGain range -60..60).
+    // From Thetis setup.designer.cs:44699-44728 [v2.10.3.13] (udAntiVoxGain
+    // range -60..60).  3M-3a-iv post-bench refactor (Option A) dropped the
+    // m_antiVoxSourceVax companion field — see header comment block on the
+    // anti-VOX getter for rationale.
     int  m_antiVoxGainDb    = 0;      // NereusSDR-original default; range [-60,60]
-    bool m_antiVoxSourceVax = false;  // audio.cs:446: antivox_source_VAC = false
+    // ── Anti-VOX detector tau (Phase 3M-3a-iv Task 8) ────────────────────
+    // From Thetis setup.designer.cs:44661-44688 [v2.10.3.13] (udAntiVoxTau):
+    //   Min=1, Max=500, Default=20 (ms).
+    int  m_antiVoxTauMs     = kAntiVoxTauMsDefault;
+    // ── Anti-VOX run flag (3M-3a-iv scope-expansion) ─────────────────────
+    // From Thetis setup.designer.cs:44740-44751 [v2.10.3.13]: chkAntiVoxEnable
+    // has no .Checked= setter -> default false.
+    bool m_antiVoxRun       = false;
 
     // ── MON properties (3M-1b C.5) ────────────────────────────────────────
     // From Thetis audio.cs:406 [v2.10.3.13]: private bool mon = false;

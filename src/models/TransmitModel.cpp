@@ -29,6 +29,8 @@
 //   2026-04-27 — Anti-VOX properties: antiVoxGainDb / antiVoxSourceVax
 //                 (C.4, Phase 3M-1b) ported by J.J. Boyd (KG4VCF), with
 //                 AI-assisted transformation via Anthropic Claude Code.
+//                 (antiVoxSourceVax subsequently removed in 3M-3a-iv
+//                 post-bench refactor — see 2026-05-07 entry below.)
 //   2026-04-27 — MON properties: monEnabled / monitorVolume
 //                 (C.5, Phase 3M-1b) ported by J.J. Boyd (KG4VCF), with
 //                 AI-assisted transformation via Anthropic Claude Code.
@@ -57,6 +59,15 @@
 //                 TwoToneDrivePowerOrigin AppSettings load/persist
 //                 (B.3, Phase 3M-1c).  J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-05-07 — Phase 3M-3a-iv post-bench refactor (Option A): removed
+//                 setAntiVoxSourceVax / antiVoxSourceVaxChanged + the
+//                 AntiVox_Source_VAX persistence read/write.  Existing
+//                 user settings carrying this key will leave it as an
+//                 orphan in AppSettings; ignored on load (no migration).
+//                 NereusSDR-architectural divergence from Thetis
+//                 chkAntiVoxSource at setup.designer.cs:44646-44657
+//                 [v2.10.3.13]; see commit message for rationale.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs (Thetis v2.10.3.13) ---
@@ -1361,10 +1372,20 @@ void TransmitModel::loadFromSettings(const QString& mac)
     const int antiVoxGainDb = s.value(pfx + QLatin1String("AntiVox_Gain"),
                                        QStringLiteral("0")).toInt();
     setAntiVoxGainDb(antiVoxGainDb);
-    // antiVoxSourceVax: default false (audio.cs:446 [v2.10.3.13])
-    const bool antiVoxSourceVax = s.value(pfx + QLatin1String("AntiVox_Source_VAX"),
-                                           QStringLiteral("False")).toString() == QLatin1String("True");
-    setAntiVoxSourceVax(antiVoxSourceVax);
+    // 3M-3a-iv post-bench refactor (Option A): AntiVox_Source_VAX read dropped.
+    // Existing user settings carrying this key will leave it as an orphan in
+    // AppSettings; AppSettings ignores unknown keys on load (no migration).
+    // antiVoxTauMs: default kAntiVoxTauMsDefault (=20) from Thetis
+    // setup.designer.cs:44682 [v2.10.3.13] (udAntiVoxTau.Value=20).  Phase 3M-3a-iv Task 8.
+    const int antiVoxTauMs = s.value(pfx + QLatin1String("AntiVox_Tau_Ms"),
+                                      QString::number(kAntiVoxTauMsDefault)).toInt();
+    setAntiVoxTauMs(antiVoxTauMs);
+    // antiVoxRun: default false from Thetis chkAntiVoxEnable (initially
+    // unchecked; no .Checked= setter at setup.designer.cs:44740-44751
+    // [v2.10.3.13]).  3M-3a-iv scope-expansion.
+    const bool antiVoxRun = s.value(pfx + QLatin1String("AntiVox_Enable"),
+                                     QStringLiteral("False")).toString() == QLatin1String("True");
+    setAntiVoxRun(antiVoxRun);
 
     // ── MON properties (monEnabled NOT loaded — safety: always false) ─────
     // monitorVolume: default 0.5f (audio.cs:417 [v2.10.3.13] literal)
@@ -1665,8 +1686,12 @@ void TransmitModel::persistToSettings(const QString& mac) const
                m_dexpSideChannelFilterEnabled ? QStringLiteral("True") : QStringLiteral("False"));
 
     // ── Anti-VOX properties ───────────────────────────────────────────────
+    // 3M-3a-iv post-bench refactor (Option A): AntiVox_Source_VAX write dropped
+    // alongside the antiVoxSourceVax property.
     s.setValue(pfx + QLatin1String("AntiVox_Gain"),    QString::number(m_antiVoxGainDb));
-    s.setValue(pfx + QLatin1String("AntiVox_Source_VAX"), m_antiVoxSourceVax ? QStringLiteral("True") : QStringLiteral("False"));
+    s.setValue(pfx + QLatin1String("AntiVox_Tau_Ms"),  QString::number(m_antiVoxTauMs));
+    s.setValue(pfx + QLatin1String("AntiVox_Enable"),
+               m_antiVoxRun ? QStringLiteral("True") : QStringLiteral("False"));
 
     // ── MON properties (monEnabled excluded — safety) ─────────────────────
     s.setValue(pfx + QLatin1String("MonitorVolume"),    QString::number(static_cast<double>(m_monitorVolume)));
@@ -1796,19 +1821,20 @@ void TransmitModel::persistToSettings(const QString& mac) const
 
 // ── Anti-VOX properties (3M-1b C.4) ─────────────────────────────────────────
 //
-// Porting from Thetis audio.cs:446-454 [v2.10.3.13] (AntiVOXSourceVAC property):
-//   private static bool antivox_source_VAC = false;
-//   public static bool AntiVOXSourceVAC {
-//     get { return antivox_source_VAC; }
-//     set { antivox_source_VAC = value; cmaster.CMSetAntiVoxSourceWhat(); }
-//   }
 // Porting from Thetis setup.designer.cs:44699-44728 [v2.10.3.13] (udAntiVoxGain):
 //   Minimum = decimal{60,0,0,-2147483648} = -60; Maximum = decimal{60,0,0,0} = 60.
 // Porting from Thetis setup.cs:18986-18989 [v2.10.3.13] (udAntiVoxGain_ValueChanged):
 //   cmaster.SetAntiVOXGain(0, Math.Pow(10.0, (double)udAntiVoxGain.Value / 20.0));
 //
-// WDSP wiring (SetAntiVOXGain + CMSetAntiVoxSourceWhat) deferred to Phase H.3.
+// WDSP wiring (SetAntiVOXGain) deferred to Phase H.3.
 // AppSettings persistence deferred to Phase L.2.
+//
+// 3M-3a-iv post-bench refactor (Option A): setAntiVoxSourceVax(bool) and the
+// antiVoxSourceVaxChanged signal have been removed.  Thetis chkAntiVoxSource
+// (RX vs VAC at audio.cs:446-454 [v2.10.3.13]) does not map to NereusSDR's
+// architecture: VAX is a digital-mode app bus with no mic-feedback path, so
+// the audio output device is the only valid anti-VOX cancellation reference.
+// See commit message and DexpVoxPage info-row for the architectural rationale.
 
 void TransmitModel::setAntiVoxGainDb(int dB)
 {
@@ -1826,16 +1852,54 @@ void TransmitModel::setAntiVoxGainDb(int dB)
     emit antiVoxGainDbChanged(clamped);
 }
 
-void TransmitModel::setAntiVoxSourceVax(bool useVax)
+// ─────────────────────────────────────────────────────────────────────────────
+// setAntiVoxTauMs() — Phase 3M-3a-iv Task 8.
+//
+// Porting from Thetis setup.designer.cs:44661-44688 [v2.10.3.13]:
+//   udAntiVoxTau.Minimum   = decimal{1,0,0,0}   = 1
+//   udAntiVoxTau.Maximum   = decimal{500,0,0,0} = 500
+//   udAntiVoxTau.Increment = decimal{1,0,0,0}   = 1
+//   udAntiVoxTau.Value     = decimal{20,0,0,0}  = 20
+//
+// This is the model-side property; RadioModel wires
+// antiVoxTauMsChanged → MoxController::setAntiVoxTau in Task 9.
+// MoxController converts to seconds and forwards to TxWorkerThread which
+// calls the WDSP DEXP detector setter (RXA path; the radio's anti-VOX feed).
+// ─────────────────────────────────────────────────────────────────────────────
+void TransmitModel::setAntiVoxTauMs(int ms)
 {
-    if (useVax == m_antiVoxSourceVax) { return; }  // idempotent guard
-    // Porting from Thetis audio.cs:446-454 [v2.10.3.13]:
-    //   antivox_source_VAC = value; cmaster.CMSetAntiVoxSourceWhat();
-    // VAC->VAX rename: same conceptual role, NereusSDR-native design.
-    // CMSetAntiVoxSourceWhat port (path-agnostic version) deferred to Phase H.3.
-    m_antiVoxSourceVax = useVax;
-    persistOne(QStringLiteral("AntiVox_Source_VAX"), useVax ? QStringLiteral("True") : QStringLiteral("False"));  // L.2 auto-persist
-    emit antiVoxSourceVaxChanged(useVax);
+    const int clamped = std::clamp(ms, kAntiVoxTauMsMin, kAntiVoxTauMsMax);
+    if (clamped == m_antiVoxTauMs) { return; }  // idempotent guard
+    m_antiVoxTauMs = clamped;
+    persistOne(QStringLiteral("AntiVox_Tau_Ms"), QString::number(m_antiVoxTauMs));  // auto-persist
+    emit antiVoxTauMsChanged(clamped);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// setAntiVoxRun() — 3M-3a-iv scope-expansion.
+//
+// Porting from Thetis setup.cs:18980-18984 [v2.10.3.13]:
+//   private void chkAntiVoxEnable_CheckedChanged(object sender, EventArgs e)
+//   {
+//       if (initializing) return;
+//       cmaster.SetAntiVOXRun(0, chkAntiVoxEnable.Checked);
+//   }
+//
+// This is the model-side property; RadioModel wires
+// antiVoxRunChanged → MoxController::setAntiVoxRun (3M-3a-iv scope-expansion),
+// MoxController emits antiVoxRunRequested, TxWorkerThread::setAntiVoxRun
+// forwards to TxChannel::setAntiVoxRun (the WDSP wrapper that calls
+// SetAntiVOXRun) AND flips the worker-local m_antiVoxRun atomic gate.
+//
+// Auto-persists via persistOne; load handled in loadFromSettings(mac).
+// ─────────────────────────────────────────────────────────────────────────────
+void TransmitModel::setAntiVoxRun(bool run)
+{
+    if (run == m_antiVoxRun) { return; }  // idempotent guard
+    m_antiVoxRun = run;
+    persistOne(QStringLiteral("AntiVox_Enable"),
+               run ? QStringLiteral("True") : QStringLiteral("False"));  // auto-persist
+    emit antiVoxRunChanged(run);
 }
 
 // ── MON properties (3M-1b C.5) ───────────────────────────────────────────────

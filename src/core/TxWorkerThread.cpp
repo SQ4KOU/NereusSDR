@@ -34,6 +34,20 @@
 //                 (xdexp(tx) before fexchange0).  Replaces the placeholder
 //                 comment that documented the gap.  J.J. Boyd (KG4VCF),
 //                 with AI-assisted implementation via Anthropic Claude Code.
+//   2026-05-07 — Phase 3M-3a-iv Task 6 — added 4 anti-VOX queued slots
+//                 (setAntiVoxRun, onAntiVoxSamplesReady,
+//                 setAntiVoxBlockGeometry, setAntiVoxDetectorTau) plus
+//                 the m_antiVoxRun atomic gate.  setAntiVoxRun mirrors
+//                 the bool into m_antiVoxRun (release) so
+//                 onAntiVoxSamplesReady can short-circuit via
+//                 acquire-load when anti-VOX is off.  Single-RX
+//                 equivalent of Thetis ChannelMaster aamix output stage
+//                 (cmaster.c:159-175 [v2.10.3.13]).  RadioModel wires
+//                 the actual signal connections in 3M-3a-iv Task 9.
+//                 Plan:
+//                 docs/superpowers/plans/2026-05-07-phase3m-3a-iv-antivox-feed.md
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file.  The Thetis cmbuffs.c /
@@ -152,18 +166,44 @@ void TxWorkerThread::run()
     // ── Why processEvents() inside the loop ──────────────────────────────
     //
     // RadioModel::connectToRadio() calls m_txChannel->moveToThread(this)
-    // AFTER establishing the cross-thread connect()s at RadioModel.cpp:
-    //   - 1463-1464  TransmitModel::micPreampChanged → setMicPreamp
-    //   - 1673-1676  MoxController::txaFlushed       → setRunning(false)
-    //   - 1680-1683  voxRunRequested                  → setVoxRun
-    //   - 1687-1690  voxThresholdRequested            → setVoxAttackThreshold
-    //   - 1695-1698  voxHangTimeRequested             → setVoxHangTime
-    //   - 1703-1706  antiVoxGainRequested             → setAntiVoxGain
-    //   - 1715-1718  antiVoxSourceWhatRequested       → setAntiVoxRun
+    // AFTER establishing the cross-thread connect()s at RadioModel.cpp.
+    // Two flavours of receivers:
     //
-    // Once moveToThread runs, AutoConnection auto-resolves to
-    // QueuedConnection because the receiver lives on this thread but the
-    // sender (TransmitModel / MoxController) lives on the main thread.
+    //   (a) Direct → TxChannel slots (queued because TxChannel lives on
+    //       this worker after moveToThread):
+    //         TransmitModel::micPreampChanged       → TxChannel::setMicPreamp
+    //         MoxController::txaFlushed             → TxChannel::setRunning(false)
+    //         MoxController::voxRunRequested        → TxChannel::setVoxRun
+    //         MoxController::voxThresholdRequested  → TxChannel::setVoxAttackThreshold
+    //         MoxController::voxHangTimeRequested   → TxChannel::setVoxHangTime
+    //         MoxController::antiVoxGainRequested   → TxChannel::setAntiVoxGain
+    //         (3M-3a-iv post-bench refactor (Option A) removed the
+    //          MoxController::antiVoxSourceWhatRequested → TxChannel::setAntiVoxRun
+    //          wire that previously lived here; see MoxController.h header
+    //          comment for the architectural rationale.)
+    //
+    //   (b) NEW (3M-3a-iv) → TxWorkerThread anti-VOX slots.  The
+    //       TxWorkerThread QObject itself lives on the MAIN thread (only
+    //       m_txChannel is moveToThread'd into this worker via
+    //       RadioModel.cpp:2686), so these slots execute on main thread
+    //       when the queued connections deliver.  The wrappers forward
+    //       to TxChannel (which IS on this worker thread, so the forward
+    //       crosses thread boundaries via Qt's auto-queueing) and also
+    //       maintain the worker-local m_antiVoxRun atomic gate.  The
+    //       atomic's release-store happens on the TX worker thread (via
+    //       the RadioModel.cpp:2131 lambda whose receiver context is
+    //       m_txChannel); the acquire-load happens on main thread inside
+    //       onAntiVoxSamplesReady — release/acquire ordering correctly
+    //       handles the cross-thread visibility.  No mutex is held in
+    //       any audio-thread path:
+    //         RxDspWorker::antiVoxSampleReady          → onAntiVoxSamplesReady
+    //         RxDspWorker::bufferSizesChanged          → setAntiVoxBlockGeometry
+    //         MoxController::antiVoxDetectorTauRequested → setAntiVoxDetectorTau
+    //
+    // Once moveToThread runs for m_txChannel, AutoConnection auto-resolves
+    // to QueuedConnection for group (a) because the receiver lives on
+    // this thread but the sender (TransmitModel / MoxController) lives on
+    // the main thread.
     // Each emission posts a QMetaCallEvent into THIS thread's event
     // queue.  Without a pumper, those events sit in the queue forever
     // and the lambda / setter NEVER fires — UI changes during active TX
@@ -330,5 +370,118 @@ void TxWorkerThread::tickForTest()
     dispatchOneBlock();
 }
 #endif
+
+// ---------------------------------------------------------------------------
+// setAntiVoxRun()  — Phase 3M-3a-iv Task 6
+//
+// Forwards the run flag to TxChannel::setAntiVoxRun (the WDSP wrapper
+// that calls SetAntiVOXRun) AND mirrors it into m_antiVoxRun via a
+// release-store so onAntiVoxSamplesReady can short-circuit via
+// acquire-load when anti-VOX is disabled.
+//
+// Thread affinity: this method is invoked by the lambda at
+// RadioModel.cpp:2131-2135 whose receiver context is m_txChannel (TX
+// worker thread).  The release-store therefore happens on TX worker
+// thread.  onAntiVoxSamplesReady (where the acquire-load lives) runs on
+// MAIN thread because the TxWorkerThread QObject is parented to
+// RadioModel and is NOT itself moveToThread'd — only m_txChannel is.
+// Release/acquire ordering correctly handles this cross-thread
+// visibility.
+//
+// The atomic gate is the worker-local optimisation that skips the
+// float→double conversion in TxChannel::sendAntiVoxData entirely when
+// anti-VOX is off; DEXP itself has an inner state-gate at
+// dexp.c:288-297 [v2.10.3.13] that runs after the buffer copy, so the
+// outer atomic saves both the conversion and the memcpy.
+//
+// From Thetis cmaster.cs:208-209 [v2.10.3.13] — SetAntiVOXRun.
+// ---------------------------------------------------------------------------
+void TxWorkerThread::setAntiVoxRun(bool run)
+{
+    // release-store ahead of the forward so a subsequent
+    // onAntiVoxSamplesReady acquire-load (on main thread) that observes
+    // the new flag is guaranteed to see m_txChannel's anti-VOX state
+    // already updated by the time the forwarded setter returns.  Both
+    // this method and the forwarded m_txChannel->setAntiVoxRun run on
+    // TX worker thread (this method is invoked from the m_txChannel
+    // receiver-context lambda, the forward is a same-thread direct
+    // call); onAntiVoxSamplesReady on main thread serialises behind the
+    // release via the cross-thread acquire.
+    m_antiVoxRun.store(run, std::memory_order_release);
+    if (m_txChannel != nullptr) {
+        m_txChannel->setAntiVoxRun(run);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// onAntiVoxSamplesReady()  — Phase 3M-3a-iv Task 6
+//
+// Queued slot from RxDspWorker::antiVoxSampleReady.  Single-RX
+// equivalent of Thetis cmaster.c:171 [v2.10.3.13]: aamix's
+// SendAntiVOXData callback.  Skipped when anti-VOX is off (acquire-load
+// of m_antiVoxRun) to avoid the float→double conversion cost in
+// TxChannel::sendAntiVoxData.
+//
+// Thread affinity: this slot runs on the MAIN thread because the
+// TxWorkerThread QObject lives on main thread (only m_txChannel is
+// moveToThread'd into the worker).  The forwarded
+// m_txChannel->sendAntiVoxData call therefore crosses thread boundaries
+// — but Qt's direct-call dispatch is fine here: TxChannel's
+// sendAntiVoxData is documented audio-safe (no allocation, no mutex,
+// resident scratch buffer) and pdexp[] is null-guarded.  No mic-input
+// audio callback is involved at any point in this path.
+//
+// The sliceId == 0 gate scopes 3M-3a-iv to a single RX feeding the
+// single TX; multi-RX mux (where N RXs combine into one anti-VOX
+// stream via aamix) is a 3F multi-pan concern.
+// ---------------------------------------------------------------------------
+void TxWorkerThread::onAntiVoxSamplesReady(int sliceId,
+                                           const QVector<float>& interleaved,
+                                           int sampleCount)
+{
+    if (!m_antiVoxRun.load(std::memory_order_acquire)) { return; }
+    if (m_txChannel == nullptr) { return; }
+    if (sliceId != 0) { return; }  // single-RX gate; multi-RX mux is 3F
+    m_txChannel->sendAntiVoxData(interleaved.constData(), sampleCount);
+}
+
+// ---------------------------------------------------------------------------
+// setAntiVoxBlockGeometry()  — Phase 3M-3a-iv Task 6
+//
+// Queued slot from RxDspWorker::bufferSizesChanged.  Calls both
+// TxChannel::setAntiVoxSize and TxChannel::setAntiVoxRate so DEXP's
+// antivox_size and antivox_rate stay aligned with the post-decimation
+// RX block geometry.
+//
+// From Thetis cmaster.c:154-155 [v2.10.3.13]: DEXP create-time uses
+// pcm->audio_outsize / pcm->audio_outrate (the post-decimation audio
+// output dimensions) — not TX in_size / in_rate — for anti-VOX
+// detector geometry.  When the RX path renegotiates its output
+// geometry (e.g. on bandwidth change), DEXP must follow.
+// ---------------------------------------------------------------------------
+void TxWorkerThread::setAntiVoxBlockGeometry(int outSize, double outRate)
+{
+    if (m_txChannel == nullptr) { return; }
+    m_txChannel->setAntiVoxSize(outSize);
+    m_txChannel->setAntiVoxRate(outRate);
+}
+
+// ---------------------------------------------------------------------------
+// setAntiVoxDetectorTau()  — Phase 3M-3a-iv Task 6
+//
+// Queued slot from MoxController::antiVoxDetectorTauRequested.
+// Pass-through to TxChannel::setAntiVoxDetectorTau (which calls WDSP
+// SetAntiVOXDetectorTau).  Tau here is in seconds; ms→s conversion is
+// done at the controller, this slot takes seconds directly.
+//
+// From Thetis setup.cs:18992-18996 [v2.10.3.13] —
+//   private void udAntiVoxTau_ValueChanged(...)
+//   { cmaster.SetAntiVOXDetectorTau(0, (double)udAntiVoxTau.Value / 1000.0); }
+// ---------------------------------------------------------------------------
+void TxWorkerThread::setAntiVoxDetectorTau(double seconds)
+{
+    if (m_txChannel == nullptr) { return; }
+    m_txChannel->setAntiVoxDetectorTau(seconds);
+}
 
 } // namespace NereusSDR

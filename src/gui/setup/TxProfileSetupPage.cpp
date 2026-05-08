@@ -231,7 +231,8 @@ void TxProfileSetupPage::wireDirtyTracking()
     connect(m_tx, &TransmitModel::voxGainScalarChanged,     this, markDirty);
     connect(m_tx, &TransmitModel::voxHangTimeMsChanged,     this, markDirty);
     connect(m_tx, &TransmitModel::antiVoxGainDbChanged,     this, markDirty);
-    connect(m_tx, &TransmitModel::antiVoxSourceVaxChanged,  this, markDirty);
+    // 3M-3a-iv post-bench refactor (Option A): antiVoxSourceVaxChanged dirty
+    // wire dropped alongside the antiVoxSourceVax property.
     connect(m_tx, &TransmitModel::monitorVolumeChanged,     this, markDirty);
     connect(m_tx, &TransmitModel::micSourceChanged,         this, markDirty);
 

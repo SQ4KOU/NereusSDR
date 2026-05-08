@@ -6,24 +6,25 @@
 // file. The test exercises:
 //   - MoxController::setVoxHangTime(int ms)              — H.3 Phase 3M-1b
 //   - MoxController::setAntiVoxGain(int dB)              — H.3 Phase 3M-1b
-//   - MoxController::setAntiVoxSourceVax(bool useVax)    — H.3 Phase 3M-1b
 //   - MoxController::voxHangTimeRequested(double seconds) — H.3 signal
 //   - MoxController::antiVoxGainRequested(double gain)    — H.3 signal
-//   - MoxController::antiVoxSourceWhatRequested(bool)     — H.3 signal
+//
+// 3M-3a-iv post-bench refactor (Option A): setAntiVoxSourceVax tests
+// (formerly §C) and the antiVoxSourceWhatRequested signal tests have
+// been removed alongside the slot+signal in MoxController.  Thetis
+// chkAntiVoxSource (RX vs VAC at cmaster.cs:912-943 [v2.10.3.13]) does
+// not map to NereusSDR's architecture; see the architectural-divergence
+// section in docs/architecture/phase3m-3a-iv-antivox-feed-design.md §18.
 //
 // Source references (for traceability):
 //   Thetis Project Files/Source/Console/setup.cs:18896-18900 [v2.10.3.13]
 //     — udDEXPHold_ValueChanged: ms→seconds before SetDEXPHoldTime.
 //   Thetis Project Files/Source/Console/setup.cs:18986-18990 [v2.10.3.13]
 //     — udAntiVoxGain_ValueChanged: dB→linear (/20.0) before SetAntiVOXGain.
-//   Thetis Project Files/Source/Console/cmaster.cs:912-943 [v2.10.3.13]
-//     — CMSetAntiVoxSourceWhat: useVAC=false → all RX slots get source=1.
-//   Plan §3 H.3 + pre-code review §3.4: useVax=true deferred to 3M-3a.
 //
 // Default member values (from Thetis source + TransmitModel):
 //   m_voxHangTimeMs      = 500   (udDEXPHold designer default)
 //   m_antiVoxGainDb      = 0     (TransmitModel default)
-//   m_antiVoxSourceVax   = false (audio.cs:447 [v2.10.3.13]: antivox_source_VAC = false)
 //   m_micBoost           = true  (console.cs:13237 [v2.10.3.13]: mic_boost = true)
 //
 // Formulae verified against Thetis:
@@ -231,101 +232,160 @@ private slots:
 
     // ════════════════════════════════════════════════════════════════════════
     // § C — setAntiVoxSourceVax tests
+    //
+    // 3M-3a-iv post-bench refactor (Option A) removed the
+    // setAntiVoxSourceVax slot, the antiVoxSourceWhatRequested signal, and
+    // their associated state.  Thetis chkAntiVoxSource (RX vs VAC at
+    // cmaster.cs:912-943 [v2.10.3.13]) does not map to NereusSDR's
+    // architecture; see commit message and DexpVoxPage info-row for the
+    // architectural rationale.  All §C test cases dropped.
     // ════════════════════════════════════════════════════════════════════════
 
-    // §C.1 — Default useVax=false emits antiVoxSourceWhatRequested(false)
+    // ════════════════════════════════════════════════════════════════════════
+    // § D — setAntiVoxTau tests (Phase 3M-3a-iv Task 7)
     //
-    // Matches Thetis cmaster.cs:937-942 [v2.10.3.13] else branch
-    // (use audio going to hardware minus MON): all RX slots get source=1.
-    // First call must emit even though false matches the default field value
-    // because m_antiVoxSourceVaxInitialized starts as false.
-    void antiVoxSource_false_emitsSignal()
+    // From Thetis Project Files/Source/Console/setup.cs:18992-18996 [v2.10.3.13]:
+    //   private void udAntiVoxTau_ValueChanged(object sender, EventArgs e)
+    //   {
+    //       if (initializing) return;
+    //       cmaster.SetAntiVOXDetectorTau(0, (double)udAntiVoxTau.Value / 1000.0);
+    //   }
+    //
+    // Range from setup.designer.cs:44661-44688 [v2.10.3.13]:
+    //   Minimum=1, Maximum=500, Increment=1, default Value=20.
+    //
+    // ms→seconds (/1000.0) lives in MoxController; TxChannel takes seconds
+    // directly.  NaN sentinel forces first-call emit so WDSP DEXP block is
+    // primed.
+    // ════════════════════════════════════════════════════════════════════════
+
+    // §D.1 — Default 20 ms emits 0.020 seconds
+    //
+    // From setup.designer.cs:44685-44688 [v2.10.3.13]: udAntiVoxTau.Value = 20.
+    // 20 ms / 1000.0 = 0.020 s.  NaN sentinel forces first-call emit.
+    void antiVoxTau_default20ms_emits20ThousandthsSecond()
     {
         MoxController ctrl;
-        QSignalSpy spy(&ctrl, &MoxController::antiVoxSourceWhatRequested);
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxDetectorTauRequested);
 
-        ctrl.setAntiVoxSourceVax(false);
+        ctrl.setAntiVoxTau(20);  // ms; default; NaN sentinel forces emit
 
         QCOMPARE(spy.count(), 1);
-        QCOMPARE(spy.at(0).at(0).toBool(), false);
+        QCOMPARE(spy.takeFirst().at(0).toDouble(), 0.020);
     }
 
-    // §C.2 — useVax=true is rejected: no signal emitted
+    // §D.2 — ms→seconds scaling: 80 ms emits 0.080
     //
-    // Deferred to 3M-3a per plan §3 H.3. The setAntiVoxSourceVax(true) call
-    // must log qCWarning and return WITHOUT updating m_antiVoxSourceVax or
-    // emitting antiVoxSourceWhatRequested(true).  Verified by spy count == 0.
-    void antiVoxSource_trueRejected_noSignalEmitted()
+    // Mirrors the /1000.0 conversion at setup.cs:18995 [v2.10.3.13].
+    void antiVoxTau_msToSeconds_scaling()
     {
-        // Suppress the qCWarning so test output is clean.
-        QLoggingCategory::setFilterRules(QStringLiteral("nereus.dsp=false"));
-
         MoxController ctrl;
-        QSignalSpy spy(&ctrl, &MoxController::antiVoxSourceWhatRequested);
+        ctrl.setAntiVoxTau(20);  // prime NaN sentinel
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxDetectorTauRequested);
 
-        ctrl.setAntiVoxSourceVax(true);
-
-        QCOMPARE(spy.count(), 0);
-
-        // Restore logging so other tests are unaffected.
-        QLoggingCategory::setFilterRules(QString());
-    }
-
-    // §C.3 — useVax=true rejected does NOT update the state field
-    //
-    // After a rejected true call, a subsequent false call must still emit
-    // (because m_antiVoxSourceVax remained false and !m_antiVoxSourceVaxInitialized
-    // — the first valid call to setAntiVoxSourceVax(false) primes the state).
-    void antiVoxSource_trueRejectedDoesNotUpdateState()
-    {
-        QLoggingCategory::setFilterRules(QStringLiteral("nereus.dsp=false"));
-
-        MoxController ctrl;
-        ctrl.setAntiVoxSourceVax(true);  // rejected; state stays uninitialized
-
-        QSignalSpy spy(&ctrl, &MoxController::antiVoxSourceWhatRequested);
-        ctrl.setAntiVoxSourceVax(false);  // first valid call; must emit
+        ctrl.setAntiVoxTau(80);  // ms
 
         QCOMPARE(spy.count(), 1);
-        QCOMPARE(spy.at(0).at(0).toBool(), false);
-
-        QLoggingCategory::setFilterRules(QString());
+        QCOMPARE(spy.takeFirst().at(0).toDouble(), 0.080);
     }
 
-    // §C.4 — Idempotent: second false call after initialized does not re-emit
-    //
-    // Once m_antiVoxSourceVaxInitialized=true and m_antiVoxSourceVax=false,
-    // a second setAntiVoxSourceVax(false) must be suppressed.
-    void antiVoxSource_idempotent_noDoubleEmit()
+    // §D.3 — Idempotent: repeat same ms does not re-emit
+    void antiVoxTau_idempotent_noDoubleEmit()
     {
         MoxController ctrl;
-        ctrl.setAntiVoxSourceVax(false);  // prime; emits once
+        ctrl.setAntiVoxTau(20);  // prime NaN; emits 0.020
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxDetectorTauRequested);
 
-        QSignalSpy spy(&ctrl, &MoxController::antiVoxSourceWhatRequested);
-        ctrl.setAntiVoxSourceVax(false);  // same value → no emit
+        ctrl.setAntiVoxTau(20);  // same → no emit
 
         QCOMPARE(spy.count(), 0);
     }
 
-    // §C.5 — Toggle false → true → false
-    //
-    // First false emits.  True is rejected (spy unchanged).
-    // Second false: state is still false AND initialized → idempotent → no emit.
-    void antiVoxSource_toggleFalseTrueFalse()
+    // §D.4 — Boundary: 1 ms → 0.001 s (Min from setup.designer.cs:44676)
+    void antiVoxTau_boundary_1ms()
     {
-        QLoggingCategory::setFilterRules(QStringLiteral("nereus.dsp=false"));
-
         MoxController ctrl;
-        ctrl.setAntiVoxSourceVax(false);  // emits; initializes
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxDetectorTauRequested);
+        ctrl.setAntiVoxTau(1);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toDouble(), 0.001);
+    }
 
-        QSignalSpy spy(&ctrl, &MoxController::antiVoxSourceWhatRequested);
-        ctrl.setAntiVoxSourceVax(true);   // rejected; no emit; state still false
-        ctrl.setAntiVoxSourceVax(false);  // state was false + initialized → idempotent
+    // §D.5 — Boundary: 500 ms → 0.500 s (Max from setup.designer.cs:44666)
+    void antiVoxTau_boundary_500ms()
+    {
+        MoxController ctrl;
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxDetectorTauRequested);
+        ctrl.setAntiVoxTau(500);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toDouble(), 0.500);
+    }
 
-        // true was rejected, second false was idempotent → spy must be empty.
+    // §D.6 — NaN sentinel: first call emits even at default value
+    //
+    // Spy attached before any setAntiVoxTau call → fresh NaN state.  Emit
+    // primes the WDSP DEXP block at startup regardless of default match.
+    void antiVoxTau_nanSentinel_firstCallAlwaysEmits()
+    {
+        MoxController ctrl;
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxDetectorTauRequested);
+        ctrl.setAntiVoxTau(20);  // default; sentinel forces emit
+        QCOMPARE(spy.count(), 1);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // § E — setAntiVoxRun tests (3M-3a-iv scope-expansion)
+    //
+    // From Thetis setup.cs:18980-18984 [v2.10.3.13]:
+    //   private void chkAntiVoxEnable_CheckedChanged(object sender, EventArgs e)
+    //   {
+    //       if (initializing) return;
+    //       cmaster.SetAntiVOXRun(0, chkAntiVoxEnable.Checked);
+    //   }
+    //
+    // 3M-3a-iv post-bench refactor (Option A) removed the
+    // setAntiVoxSourceVax source-selector slot.  First-call emit guard
+    // (m_antiVoxRunInitialized) ensures TxWorkerThread is primed at startup
+    // regardless of default match.
+    // ════════════════════════════════════════════════════════════════════════
+
+    // §E.1 — Default state: setAntiVoxRun(false) emits false on first call.
+    //
+    // m_antiVoxRunInitialized starts false; first accepted call must emit
+    // even when run==false matches the default field value.
+    void antiVoxRun_default_emitsFalseFirstCall()
+    {
+        MoxController ctrl;
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxRunRequested);
+
+        ctrl.setAntiVoxRun(false);  // default; init guard forces emit
+
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toBool(), false);
+    }
+
+    // §E.2 — Idempotent: once initialized, repeat same value does not re-emit.
+    void antiVoxRun_idempotent()
+    {
+        MoxController ctrl;
+        ctrl.setAntiVoxRun(true);  // primes state; emits once
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxRunRequested);
+        ctrl.setAntiVoxRun(true);  // same → no emit
         QCOMPARE(spy.count(), 0);
+        ctrl.setAntiVoxRun(false);  // change → emit
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toBool(), false);
+    }
 
-        QLoggingCategory::setFilterRules(QString());
+    // §E.3 — First call always emits, even at default value.
+    //
+    // Spy attached before any setAntiVoxRun call → fresh init guard.
+    void antiVoxRun_firstCallAlwaysEmits()
+    {
+        MoxController ctrl;
+        QSignalSpy spy(&ctrl, &MoxController::antiVoxRunRequested);
+        ctrl.setAntiVoxRun(false);  // first call; init guard forces emit
+        QCOMPARE(spy.count(), 1);
     }
 };
 
