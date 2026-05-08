@@ -91,10 +91,15 @@ void SpectrumAvenger::resize(int numPixels)
         m_avOutIdx = 0;
         return;
     }
-    m_avSum.assign(numPixels, 0.0);
+    // resize() + fill() instead of assign() — QVector::assign was added in
+    // Qt 6.6 but Linux CI runs on Qt 6.4 (deb12 default).  Same effect,
+    // wider compatibility.
+    m_avSum.resize(numPixels);
+    m_avSum.fill(0.0);
     m_avBuff.resize(kMaxAverage);
     for (int j = 0; j < kMaxAverage; ++j) {
-        m_avBuff[j].assign(numPixels, 0.0);
+        m_avBuff[j].resize(numPixels);
+        m_avBuff[j].fill(0.0);
     }
     m_availFrames = 0;
     m_avInIdx = 0;

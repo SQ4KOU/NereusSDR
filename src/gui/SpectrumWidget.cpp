@@ -1279,9 +1279,9 @@ void SpectrumWidget::setActivePeakHoldEnabled(bool on)
     }
     // Force GPU overlay rebuild now — the per-frame nudge in updateSpectrum()
     // only fires once spectrum frames arrive, leaving a stale overlay between
-    // the toggle and the next frame.
-    m_overlayStaticDirty = true;
-    update();
+    // the toggle and the next frame.  markOverlayDirty() is guarded for
+    // CPU-only builds (Linux without NEREUS_GPU_SPECTRUM).
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setActivePeakHoldDurationMs(int ms)
@@ -1314,8 +1314,7 @@ void SpectrumWidget::setActivePeakHoldColor(const QColor& c)
 {
     m_activePeakHoldColor = c;
     // Force GPU overlay rebuild so the new colour shows immediately.
-    m_overlayStaticDirty = true;
-    update();
+    markOverlayDirty();
 }
 
 // ---- Peak Blobs (Task 2.6) ----
@@ -1325,8 +1324,7 @@ void SpectrumWidget::setPeakBlobsEnabled(bool e)
 {
     m_peakBlobs.setEnabled(e);
     // Force GPU overlay rebuild now (see setActivePeakHoldEnabled comment).
-    m_overlayStaticDirty = true;
-    update();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setPeakBlobsCount(int n)
@@ -2474,10 +2472,16 @@ void SpectrumWidget::updateSpectrumLinear(int receiverId,
     // overlay is toggled off — saves a cold-start visual jump on toggle on.
     processNoiseFloor();
 
+    // Per-frame force-dirty for any overlay that updates every spectrum
+    // frame (APH trace decay, peak blobs, NF lerp position).  GPU-only
+    // optimization — CPU paint path repaints the overlay every frame
+    // anyway, so the dirty flag has no analogue.
+#ifdef NEREUS_GPU_SPECTRUM
     if (m_activePeakHold.enabled() || m_peakBlobs.enabled()
         || m_showNoiseFloor) {
         m_overlayStaticDirty = true;
     }
+#endif
 
     // Push display-pixel waterfall row -- waterfall AGC + NF-AGC +
     // threshold compute now operate on display pixels per Thetis
