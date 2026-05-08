@@ -4054,6 +4054,13 @@ QString txModeKeyPart(DSPMode mode)
 
 qint64 TxChannel::onModeChanged(DSPMode newMode)
 {
+    // Engine guard: no engine attached → return 0.  Mirror of
+    // RxChannel::onModeChanged at src/core/RxChannel.cpp:1875.  Matches
+    // tst_dsp_options_per_mode_apply.cpp::tx_no_engine_returns_zero.
+    if (!m_wdspEngine) {
+        return 0;
+    }
+
     auto& s = AppSettings::instance();
     const QString modeKey = txModeKeyPart(newMode);
 
@@ -4079,9 +4086,18 @@ qint64 TxChannel::onModeChanged(DSPMode newMode)
     const QString typeStr  = s.value(typeKey, QStringLiteral("Low Latency")).toString();
     const int newFiltType  = (typeStr == QStringLiteral("Low Latency")) ? 0 : 1;
 
-    // Skip if nothing changed.
+    // No-change check: settings already match channel state → return 0
+    // (no rebuild).  Mirror of RxChannel.  RadioModel gates
+    // dspChangeMeasured on `elapsed > 0` so 0-return doesn't emit.
     if (newBufSize == m_txDspBlockSize && newFiltSize == m_txFilterSize &&
         newFiltType == m_txFilterType) {
+        return 0;
+    }
+
+    // Channel-in-map guard: settings differ → rebuild required.  Mirror
+    // of RxChannel.  Avoids UB at the in-place WDSP setters below when
+    // m_channelId is not registered with the engine.
+    if (!m_wdspEngine->txChannel(m_channelId)) {
         return -1;
     }
 

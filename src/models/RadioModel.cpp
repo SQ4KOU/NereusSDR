@@ -3749,9 +3749,13 @@ void RadioModel::wireSliceSignals()
         if (rxCh) {
             rxCh->setMode(mode);
             const qint64 elapsed = rxCh->onModeChanged(mode);
-            // -1 = no change; 0+ = applied (in-place WDSP setters routinely
-            // finish sub-millisecond, so 0 ms is a legitimate elapsed time).
-            if (elapsed >= 0) {
+            // 0 = no change / no engine; -1 = rebuild attempted but
+            // channel not in engine map; > 0 = rebuild ran in N ms.
+            // Only emit dspChangeMeasured when an actual rebuild
+            // happened (elapsed > 0).  In-place WDSP setters that
+            // finish sub-millisecond will report 1 ms via QElapsedTimer
+            // since the surrounding setter calls take real time.
+            if (elapsed > 0) {
                 emit dspChangeMeasured(elapsed);
             }
         }
@@ -3770,7 +3774,8 @@ void RadioModel::wireSliceSignals()
         // the in-place setters, so the live-apply is safe to restore.
         if (m_txChannel) {
             const qint64 txElapsed = m_txChannel->onModeChanged(mode);
-            if (txElapsed >= 0) {
+            // Same return-code convention as the RX path above.
+            if (txElapsed > 0) {
                 emit dspChangeMeasured(txElapsed);
             }
         }

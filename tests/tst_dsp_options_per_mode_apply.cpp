@@ -46,15 +46,30 @@ void setAppSettingsDefault()
 {
     auto& s = AppSettings::instance();
     // Reset all DspOptions keys to known defaults so tests are hermetic.
-    s.setValue("DspOptionsBufferSizePhone", "256");
-    s.setValue("DspOptionsBufferSizeCw",    "256");
-    s.setValue("DspOptionsBufferSizeDig",   "256");
-    s.setValue("DspOptionsBufferSizeFm",    "256");
+    //
+    // Schema-v5 split: separate Rx/Tx keys per mode (radio.cs:519-574 +
+    // 2604-2662 [v2.10.3.13]).  RxChannel::onModeChanged reads keys
+    // suffixed `Rx`; TxChannel::onModeChanged reads keys suffixed `Tx`.
+    // Earlier revisions of this file used the unsuffixed names (e.g.
+    // `DspOptionsBufferSizePhone`) which the code never reads — so the
+    // defaults from s.value(..., 64).toInt() were silently applied and
+    // the tests' "matching" assertion only "passed" by coincidence of
+    // memory layout when the WDSP setters dereferenced ch[97] (UB).
+    //
+    // Set values to NOT match m_dspBlockSize (4096 RX / 2048 TX) so
+    // tests that intentionally trigger a rebuild ("changed_*" tests)
+    // still see a mismatch.  "Same settings" tests override on top.
+    s.setValue("DspOptionsBufferSizePhoneRx", "256");
+    s.setValue("DspOptionsBufferSizeCwRx",    "256");
+    s.setValue("DspOptionsBufferSizeDigRx",   "256");
+    s.setValue("DspOptionsBufferSizeFmRx",    "256");
+    s.setValue("DspOptionsBufferSizePhoneTx", "256");
 
-    s.setValue("DspOptionsFilterSizePhone", "4096");
-    s.setValue("DspOptionsFilterSizeCw",    "4096");
-    s.setValue("DspOptionsFilterSizeDig",   "4096");
-    s.setValue("DspOptionsFilterSizeFm",    "4096");
+    s.setValue("DspOptionsFilterSizePhoneRx", "4096");
+    s.setValue("DspOptionsFilterSizeCwRx",    "4096");
+    s.setValue("DspOptionsFilterSizeDigRx",   "4096");
+    s.setValue("DspOptionsFilterSizeFmRx",    "4096");
+    s.setValue("DspOptionsFilterSizePhoneTx", "2048");
 
     s.setValue("DspOptionsFilterTypePhoneRx", "Low Latency");
     s.setValue("DspOptionsFilterTypePhoneTx", "Linear Phase");
@@ -115,38 +130,39 @@ private slots:
 
     // If the per-mode AppSettings values exactly match the current channel
     // config, onModeChanged() must return 0 (no rebuild).
+    //
+    // RxChannel defaults: m_dspBlockSize=4096, m_filterSize=4096,
+    // m_filterType=0 (LowLatency).  Set AppSettings keys to those values
+    // using the schema-v5 `Rx` suffix that RxChannel::onModeChanged
+    // actually reads.
     void rx_same_settings_returns_zero_no_rebuild()
     {
-        // kTestBufSize = 64. Set AppSettings to 64 as well so equality guard fires.
-        AppSettings::instance().setValue("DspOptionsBufferSizePhone", "64");
-        // filterSize default = 4096 (matches ChannelConfig default + m_filterSize init).
-        AppSettings::instance().setValue("DspOptionsFilterSizePhone", "4096");
-        // filterType: RxChannel m_filterType=0 (LowLatency); "Low Latency" maps to 0.
+        AppSettings::instance().setValue("DspOptionsBufferSizePhoneRx", "4096");
+        AppSettings::instance().setValue("DspOptionsFilterSizePhoneRx", "4096");
         AppSettings::instance().setValue("DspOptionsFilterTypePhoneRx", "Low Latency");
 
-        RxChannel ch(kTestChannel, kTestBufSize /* 64 */, kTestRate);
+        RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
 
         WdspEngine engine;
         ch.setWdspEngine(&engine);
 
         const qint64 r = ch.onModeChanged(DSPMode::USB);
-        // bufferSize 64==64, filterSize 4096==4096, filterType 0==0 → no rebuild.
+        // All three values match channel state → no rebuild → 0.
         QCOMPARE(r, qint64(0));
     }
 
-    // CW mode uses the "Cw" key suffix. Verify the key-part routing.
+    // CW mode uses the "Cw" key suffix.  Verify the key-part routing.
     void rx_cw_mode_reads_cw_key_suffix()
     {
-        // Set CW buffer to 64 (matches kTestBufSize), filterSize and type match defaults.
-        AppSettings::instance().setValue("DspOptionsBufferSizeCw",    "64");
-        AppSettings::instance().setValue("DspOptionsFilterSizeCw",    "4096");
+        AppSettings::instance().setValue("DspOptionsBufferSizeCwRx",  "4096");
+        AppSettings::instance().setValue("DspOptionsFilterSizeCwRx",  "4096");
         AppSettings::instance().setValue("DspOptionsFilterTypeCwRx",  "Low Latency");
 
-        RxChannel ch(kTestChannel, kTestBufSize /* 64 */, kTestRate);
+        RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
         WdspEngine engine;
         ch.setWdspEngine(&engine);
 
-        // All values match → no rebuild → 0.
+        // All values match channel state → no rebuild → 0.
         QCOMPARE(ch.onModeChanged(DSPMode::CWU), qint64(0));
         QCOMPARE(ch.onModeChanged(DSPMode::CWL), qint64(0));
     }
@@ -154,9 +170,9 @@ private slots:
     // Dig mode uses "Dig" suffix.
     void rx_dig_mode_reads_dig_key_suffix()
     {
-        AppSettings::instance().setValue("DspOptionsBufferSizeDig",   "64");
-        AppSettings::instance().setValue("DspOptionsFilterSizeDig",   "4096");
-        AppSettings::instance().setValue("DspOptionsFilterTypeDigRx", "Low Latency");  // 0 = LowLatency
+        AppSettings::instance().setValue("DspOptionsBufferSizeDigRx", "4096");
+        AppSettings::instance().setValue("DspOptionsFilterSizeDigRx", "4096");
+        AppSettings::instance().setValue("DspOptionsFilterTypeDigRx", "Low Latency");
 
         RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
         WdspEngine engine;
@@ -169,8 +185,8 @@ private slots:
     // FM mode uses "Fm" suffix.
     void rx_fm_mode_reads_fm_key_suffix()
     {
-        AppSettings::instance().setValue("DspOptionsBufferSizeFm",    "64");
-        AppSettings::instance().setValue("DspOptionsFilterSizeFm",    "4096");
+        AppSettings::instance().setValue("DspOptionsBufferSizeFmRx",  "4096");
+        AppSettings::instance().setValue("DspOptionsFilterSizeFmRx",  "4096");
         AppSettings::instance().setValue("DspOptionsFilterTypeFmRx",  "Low Latency");
 
         RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
@@ -185,16 +201,17 @@ private slots:
     void rx_changed_filter_size_triggers_rebuild_attempt()
     {
         // 8192 != 4096 (m_filterSize default) → rebuild is attempted.
-        AppSettings::instance().setValue("DspOptionsFilterSizePhone", "8192");
-        // Keep bufferSize matching kTestBufSize so only filterSize differs.
-        AppSettings::instance().setValue("DspOptionsBufferSizePhone", "64");
-        AppSettings::instance().setValue("DspOptionsFilterTypePhoneRx", "Low Latency");
+        // Keep bufferSize / filterType matching defaults so only filterSize
+        // differs from channel state.
+        AppSettings::instance().setValue("DspOptionsFilterSizePhoneRx",  "8192");
+        AppSettings::instance().setValue("DspOptionsBufferSizePhoneRx",  "4096");
+        AppSettings::instance().setValue("DspOptionsFilterTypePhoneRx",  "Low Latency");
 
         RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
         WdspEngine engine;
         ch.setWdspEngine(&engine);
 
-        // filterSize 8192 != 4096 → rebuild attempted → -1 (not in map).
+        // filterSize 8192 != 4096 → channel-in-map check fires → -1.
         QCOMPARE(ch.onModeChanged(DSPMode::USB), qint64(-1));
     }
 
@@ -202,16 +219,16 @@ private slots:
     // triggers a rebuild attempt.
     void rx_changed_filter_type_triggers_rebuild_attempt()
     {
-        AppSettings::instance().setValue("DspOptionsBufferSizePhone",   "64");
-        AppSettings::instance().setValue("DspOptionsFilterSizePhone",   "4096");
+        AppSettings::instance().setValue("DspOptionsBufferSizePhoneRx",  "4096");
+        AppSettings::instance().setValue("DspOptionsFilterSizePhoneRx",  "4096");
         // "Linear Phase" maps to filterType=1; m_filterType default is 0.
-        AppSettings::instance().setValue("DspOptionsFilterTypePhoneRx", "Linear Phase");
+        AppSettings::instance().setValue("DspOptionsFilterTypePhoneRx",  "Linear Phase");
 
         RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
         WdspEngine engine;
         ch.setWdspEngine(&engine);
 
-        // filterType 1 != 0 → rebuild attempted → -1.
+        // filterType 1 != 0 → channel-in-map check fires → -1.
         QCOMPARE(ch.onModeChanged(DSPMode::USB), qint64(-1));
     }
 
@@ -228,19 +245,21 @@ private slots:
 
     // TxChannel: filter size matching kTxDspBufferSize (2048) + Low Latency (0)
     // → no rebuild (idempotent guard fires).
-    // m_txFilterSize initialises to WdspEngine::kTxDspBufferSize = 2048.
-    // m_txFilterType initialises to 0 (LowLatency). "Low Latency" maps to 0.
+    // m_txDspBlockSize / m_txFilterSize initialise to
+    // WdspEngine::kTxDspBufferSize = 2048; m_txFilterType to 0
+    // (LowLatency).  Schema-v5 reads `Tx`-suffixed keys.
     void tx_same_settings_returns_zero()
     {
-        AppSettings::instance().setValue("DspOptionsFilterSizePhone",   "2048");
-        // "Low Latency" → filterType=0 == m_txFilterType default 0 → no rebuild.
+        AppSettings::instance().setValue("DspOptionsBufferSizePhoneTx", "2048");
+        AppSettings::instance().setValue("DspOptionsFilterSizePhoneTx", "2048");
         AppSettings::instance().setValue("DspOptionsFilterTypePhoneTx", "Low Latency");
 
         TxChannel tx(97, 64, 64);
         WdspEngine engine;
         tx.setWdspEngine(&engine);
 
-        // filterSize 2048 == 2048, filterType 0 == 0 → no rebuild → 0.
+        // bufSize 2048 == 2048, filterSize 2048 == 2048, filterType 0 == 0
+        // → no rebuild → 0.
         QCOMPARE(tx.onModeChanged(DSPMode::USB), qint64(0));
     }
 
@@ -248,7 +267,8 @@ private slots:
     void tx_changed_filter_size_triggers_rebuild_attempt()
     {
         // 4096 != kTxDspBufferSize (2048) → rebuild attempted.
-        AppSettings::instance().setValue("DspOptionsFilterSizePhone",   "4096");
+        AppSettings::instance().setValue("DspOptionsBufferSizePhoneTx", "2048");
+        AppSettings::instance().setValue("DspOptionsFilterSizePhoneTx", "4096");
         AppSettings::instance().setValue("DspOptionsFilterTypePhoneTx", "Low Latency");
 
         TxChannel tx(97, 64, 64);
