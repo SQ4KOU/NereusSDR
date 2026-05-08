@@ -118,6 +118,11 @@ private:
     // case codes).
     QComboBox* m_windowCombo{nullptr};
 
+    // Hz/bin target spinbox (Option 3 — 2026-05-08 design).  0 = off
+    // (use bins-in-window default); > 0 = override the auto-zoom replan
+    // formula to deliver constant Hz/bin regardless of zoom level.
+    QDoubleSpinBox* m_hzPerBinTargetSpin{nullptr};
+
     // Section: Rendering
     QSlider*   m_fpSlider{nullptr};          // 10–60 fps
     // Defensive secondary reference to the FPS spin readout cell.  The

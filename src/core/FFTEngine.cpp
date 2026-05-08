@@ -160,6 +160,17 @@ void FFTEngine::setFftSizeBaseline(int size)
     m_fftSizeBaseline.store(size);
 }
 
+// Atomic store; the auto-zoom lambda in MainWindow reads it on each
+// bandwidthChangeRequested signal.  Negative or NaN inputs are clamped
+// to 0 (disabled).  Atypically large values (>200 Hz/bin) round-trip
+// fine but produce sub-baseline FFT sizes which the MainWindow floor
+// will overwrite — effectively a no-op.
+void FFTEngine::setHzPerBinTarget(double hzPerBin)
+{
+    if (!(hzPerBin > 0.0)) { hzPerBin = 0.0; }  // catches NaN + negatives
+    m_hzPerBinTarget.store(hzPerBin);
+}
+
 // Modified Bessel function of the first kind, order 0.  Verbatim port of
 // WDSP analyzer.c:33-50 [v2.10.3.13] (Numerical Recipes polynomial
 // approximations: low-x branch via 6th-order series in (x/3.75)^2,

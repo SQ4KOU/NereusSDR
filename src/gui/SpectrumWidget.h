@@ -314,6 +314,11 @@ public:
     void setCenterFrequency(double centerHz);
     double centerFrequency() const { return m_centerHz; }
     double bandwidth() const { return m_bandwidthHz; }
+
+    // Re-fire the auto-zoom replan with the current bandwidth.  Used by
+    // setup pages (e.g. when the user changes the Hz/bin target) to kick
+    // the FFTEngine into recomputing targetSize without a zoom action.
+    void requestAutoZoomReplan() { emit bandwidthChangeRequested(m_bandwidthHz); }
     void setDdcCenterFrequency(double hz);
     double ddcCenterFrequency() const { return m_ddcCenterHz; }
     void setSampleRate(double hz);

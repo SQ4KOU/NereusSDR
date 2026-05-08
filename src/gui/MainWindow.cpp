@@ -1019,6 +1019,11 @@ void MainWindow::buildUI()
     });
     m_fftEngine->setFftSize(4096);
     m_fftEngine->setOutputFps(30);
+    // Hz/bin target — persisted in Setup → Display → Spectrum Defaults.
+    // 0 = bins-in-window default (2026-05-08 Option 3).
+    m_fftEngine->setHzPerBinTarget(
+        AppSettings::instance().value(QStringLiteral("DisplayHzPerBinTarget"),
+                                      QStringLiteral("0")).toString().toDouble());
 
     m_fftThread = new QThread(this);
     m_fftThread->setObjectName(QStringLiteral("SpectrumThread"));
@@ -1473,8 +1478,25 @@ void MainWindow::buildUI()
         if (sampleRate <= 0.0 || bwHz <= 0.0) { return; }
 
         const int baseline = m_fftEngine->fftSizeBaseline();
-        const double scale = sampleRate / bwHz;        // 1.0 at full bw
-        double desired = static_cast<double>(baseline) * scale;
+
+        // Hz/bin override (Option 3 from the 2026-05-08 design).  When the
+        // user has set a non-zero target Hz/bin in
+        // Setup → Display → Spectrum Defaults, the auto-zoom formula
+        // becomes zoom-INDEPENDENT:
+        //   targetSize = sampleRate / hzPerBinTarget
+        // The FFT delivers the requested resolution at any zoom — useful
+        // for hunting narrow features (CW, digital).  Floor at baseline
+        // still applies, so the FFT slider remains a minimum-FFT-size
+        // knob.  When hzPerBinTarget == 0 we use the original
+        // bins-in-window default (constant K = baseline).
+        const double hzPerBinTarget = m_fftEngine->hzPerBinTarget();
+        double desired;
+        if (hzPerBinTarget > 0.0) {
+            desired = sampleRate / hzPerBinTarget;
+        } else {
+            const double scale = sampleRate / bwHz;        // 1.0 at full bw
+            desired = static_cast<double>(baseline) * scale;
+        }
 
         // Round up to next power of 2.
         int targetSize = 1024;

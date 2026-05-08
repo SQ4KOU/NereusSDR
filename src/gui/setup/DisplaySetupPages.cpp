@@ -158,6 +158,7 @@ void SpectrumDefaultsPage::loadFromRenderer()
     QSignalBlocker b1(m_fftSizeSlider);
     QSignalBlocker b2(m_windowCombo);
     QSignalBlocker b3(m_fpSlider);
+    QSignalBlocker bHz(m_hzPerBinTargetSpin);
     QSignalBlocker b5(m_fillToggle);
     QSignalBlocker b6(m_fillAlphaSlider);
     QSignalBlocker b7(m_lineWidthSlider);
@@ -197,6 +198,9 @@ void SpectrumDefaultsPage::loadFromRenderer()
     m_windowCombo->setCurrentIndex(static_cast<int>(fe->windowFunction()));
 
     m_fpSlider->setValue(fe->outputFps());
+    if (m_hzPerBinTargetSpin) {
+        m_hzPerBinTargetSpin->setValue(fe->hzPerBinTarget());
+    }
     // Defensive: mirror to spin readout.  QSignalBlocker on m_fpSlider above
     // blocks the slider->spin sync wired by makeSliderRow (SetupHelpers.cpp:47),
     // so without this explicit setValue the spin would stick at the
@@ -500,6 +504,44 @@ void SpectrumDefaultsPage::buildUI()
         "Kaiser is parameterised (KaiserPi shape parameter)."));
     fftGrid->addWidget(windowPrefix,  3, 0);
     fftGrid->addWidget(m_windowCombo, 3, 1, 1, 3);  // span cols 1-3
+
+    // Row 4: Hz/bin Target — NereusSDR-original auto-zoom override (Option
+    // 3, 2026-05-08).  0 = off (bins-in-window default behaviour: FFT
+    // replans on zoom to keep ~baseline bins in the visible window, Hz/bin
+    // varies).  > 0 = lock Hz/bin at the given value regardless of zoom
+    // (useful for hunting narrow CW/digital signals where you want the
+    // same frequency resolution at any zoom).
+    auto* hzPerBinPrefix = new QLabel(QStringLiteral("Hz/bin Target"), fftGroup);
+    m_hzPerBinTargetSpin = new QDoubleSpinBox(fftGroup);
+    m_hzPerBinTargetSpin->setRange(0.0, 200.0);
+    m_hzPerBinTargetSpin->setSingleStep(0.5);
+    m_hzPerBinTargetSpin->setDecimals(2);
+    m_hzPerBinTargetSpin->setSpecialValueText(QStringLiteral("Off"));
+    m_hzPerBinTargetSpin->setSuffix(QStringLiteral(" Hz/bin"));
+    m_hzPerBinTargetSpin->setToolTip(QStringLiteral(
+        "Auto-zoom override: target a constant Hz/bin regardless of zoom. "
+        "Set to 0 (\"Off\") to use the default bins-in-window behaviour "
+        "(FFT replans on zoom). When > 0, the FFT size is fixed at "
+        "sampleRate / target so the trace delivers the requested resolution "
+        "at any zoom level — handy for hunting narrow signals (CW, digital). "
+        "Floor at the FFT slider value still applies (slider sets the "
+        "minimum FFT size)."));
+    connect(m_hzPerBinTargetSpin, qOverload<double>(&QDoubleSpinBox::valueChanged),
+            this, [this](double v) {
+        if (auto* fe = model() ? model()->fftEngine() : nullptr) {
+            fe->setHzPerBinTarget(v);
+        }
+        AppSettings::instance().setValue(
+            QStringLiteral("DisplayHzPerBinTarget"),
+            QString::number(v));
+        // Trigger immediate replan so the new policy applies without
+        // waiting for the next zoom action.
+        if (auto* sw = model() ? model()->spectrumWidget() : nullptr) {
+            sw->requestAutoZoomReplan();
+        }
+    });
+    fftGrid->addWidget(hzPerBinPrefix,        4, 0);
+    fftGrid->addWidget(m_hzPerBinTargetSpin,  4, 1, 1, 3);  // span cols 1-3
 
     // Slider valueChanged handler.  Mirrors Thetis tbDisplayFFTSize_Scroll
     // at setup.cs:16142-16166 [v2.10.3.13] -- the nine-action sequence
@@ -1796,10 +1838,9 @@ void GridScalesPage::loadFromRenderer()
 {
     auto* sw  = model() ? model()->spectrumWidget() : nullptr;
     auto* pan = firstPan(model());
-    if (!sw || !pan) { return; }
+    if (!sw) { return; }  // pan-dependent loads gated below
 
     QSignalBlocker b1(m_gridToggle);
-    QSignalBlocker b2(m_dbStepSpin);
     QSignalBlocker b3(m_freqLabelAlignCombo);
     QSignalBlocker b4(m_zeroLineToggle);
     QSignalBlocker b5(m_showFpsToggle);
@@ -1807,29 +1848,42 @@ void GridScalesPage::loadFromRenderer()
 
     m_gridToggle->setChecked(sw->gridEnabled());
     m_dbmScaleVisibleToggle->setChecked(sw->dbmScaleVisible());
-    m_dbStepSpin->setValue(pan->gridStep());
     m_freqLabelAlignCombo->setCurrentIndex(static_cast<int>(sw->freqLabelAlign()));
     m_zeroLineToggle->setChecked(sw->showZeroLine());
     m_showFpsToggle->setChecked(sw->showFps());
 
     // Colour pickers (G6/G9–G13) moved to Setup → Appearance → Colors & Theme.
 
-    applyBandSlot(pan);
-
-    // Task 2.9: NF tracking controls.
-    // From Thetis setup.cs:24202-24213 [v2.10.3.13] chkAdjustGridMinToNFRX1.
+    // Task 2.9: NF tracking controls — SpectrumWidget-only state, must
+    // load even when pan is null (otherwise the bug from 2026-05-08:
+    // toggle showed unchecked on dialog reopen even though disk had True
+    // because the early-return on !pan skipped the entire NF block).
+    const bool nfTrackingOn = sw->adjustGridMinToNoiseFloor();
     if (m_adjustGridMinToNF) {
         QSignalBlocker bNf(m_adjustGridMinToNF);
-        m_adjustGridMinToNF->setChecked(sw->adjustGridMinToNoiseFloor());
+        m_adjustGridMinToNF->setChecked(nfTrackingOn);
     }
     if (m_nfOffsetGridFollow) {
         QSignalBlocker bOff(m_nfOffsetGridFollow);
         m_nfOffsetGridFollow->setValue(sw->nfOffsetGridFollow());
+        // Mirror the toggle->dependent enabled-state gate from the
+        // m_adjustGridMinToNF::toggled handler.  The toggle's setChecked
+        // call above runs inside a QSignalBlocker so the handler doesn't
+        // fire — without this re-sync the dependents stay disabled even
+        // when the toggle restores to ON.
+        m_nfOffsetGridFollow->setEnabled(nfTrackingOn);
     }
     if (m_maintainNFAdjustDelta) {
         QSignalBlocker bMaint(m_maintainNFAdjustDelta);
         m_maintainNFAdjustDelta->setChecked(sw->maintainNFAdjustDelta());
+        m_maintainNFAdjustDelta->setEnabled(nfTrackingOn);
     }
+
+    // Per-band loads — gated on pan availability.
+    if (!pan) { return; }
+    QSignalBlocker b2(m_dbStepSpin);
+    m_dbStepSpin->setValue(pan->gridStep());
+    applyBandSlot(pan);
 }
 
 void GridScalesPage::buildUI()

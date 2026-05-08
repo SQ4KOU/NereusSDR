@@ -144,6 +144,19 @@ public:
     void setFftSizeBaseline(int size);
     int  fftSizeBaseline() const { return m_fftSizeBaseline.load(); }
 
+    // Hz-per-bin auto-zoom override.  When > 0, the auto-zoom replan
+    // formula (in MainWindow) targets this Hz/bin instead of the default
+    // bins-in-window = baseline policy:
+    //   targetSize = sampleRate / hzPerBinTarget
+    // The FFT size becomes effectively zoom-INDEPENDENT — same FFT delivers
+    // the requested resolution regardless of visible bandwidth.  Set to 0
+    // to disable (fall back to bins-in-window default).  Useful for
+    // hunting narrow signals (CW, digital modes) where you want the same
+    // frequency resolution at any zoom level.  Floor at baseline still
+    // applies, so the slider remains a minimum-FFT-size knob.
+    void  setHzPerBinTarget(double hzPerBin);
+    double hzPerBinTarget() const { return m_hzPerBinTarget.load(); }
+
     void setSampleRate(double rateHz);
     double sampleRate() const { return m_sampleRate.load(); }
 
@@ -237,6 +250,8 @@ private:
     // anchor).  Default matches m_fftSize so first-launch behavior is
     // identical to a system without auto-zoom (slider == FFT size).
     std::atomic<int>    m_fftSizeBaseline{4096};
+    // 0 = disabled (use bins-in-window auto-zoom).  > 0 = target Hz/bin.
+    std::atomic<double> m_hzPerBinTarget{0.0};
     std::atomic<double> m_sampleRate{48000.0};
     std::atomic<int>    m_targetFps{30};
     // From Thetis setup.designer.cs:33732 udDisplayDecimation [v2.10.3.13].
