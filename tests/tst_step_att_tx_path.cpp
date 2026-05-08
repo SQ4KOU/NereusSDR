@@ -701,6 +701,64 @@ private slots:
         QCOMPARE(spy.count(), 1);
         QCOMPARE(spy.takeFirst().at(0).toInt(), 22);
     }
+
+    // ── Issue #200: RX S-ATT must survive a MOX cycle when the per-band slot
+    // is populated and diverges from the live RX att value.
+    //
+    // Reporter: funsutton on ANAN-10E.  Steps: set S-ATT > 0 (e.g. 5) on
+    // RxApplet, hit MOX/TUNE/VOX, after TX completes the spinbox shows 0
+    // instead of 5.
+    //
+    // Root cause: setAttenuation() never wrote into m_bandState, so the
+    // user's spinbox change diverged from m_bandState[currentBand].attDb.
+    // The TX→RX restore path's "defensive" resync then snapped m_attDb
+    // back to the stale slot value (often 0 from a never-touched persisted
+    // slot) on every MOX un-key.
+    //
+    // Fix: setAttenuation now mirrors live → per-band when not in MOX,
+    // matching Thetis console.cs:11050-11051 [v2.10.3.13]:
+    //   if (!_mox)
+    //       setRX1stepAttenuatorForBand(rx1_band, _rx1_attenuator_data);
+    //
+    // Test seeds a populated band-state slot with 0 (via the setBand
+    // round-trip that the reporter would hit on a real session), then has
+    // the user set S-ATT to 5, then runs a MOX cycle, and asserts the live
+    // value is back to 5 — not the stale 0.
+    void issue200_satt_survives_mox_with_populated_bandstate()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setIsHpsdrBoard(false);
+        ctrl.setAttOnTxEnabled(true);
+        ctrl.setForceAttWhenPsOff(true);
+        ctrl.setPsActive(false);                 // PS off → force-31 path armed
+        ctrl.setCurrentDspMode(DSPMode::USB);
+
+        // Seed the 20m band-state slot with 0 by visiting it once (defaults
+        // to {attDb=0, preamp=Off}) then leaving and returning.  This
+        // simulates a session where the reporter's persisted slot for 20m
+        // is 0 (default) before they touch the spinbox.
+        ctrl.setBand(Band::Band20m);             // m_currentBand = 20m
+        ctrl.setBand(Band::Band40m);             // saves 20m={0, Off}
+        ctrl.setBand(Band::Band20m);             // back on 20m, slot = {0, Off}
+        QCOMPARE(ctrl.attenuatorDb(), 0);        // restored from slot
+
+        // User sets S-ATT to 5 on 20m.  With the fix, this writes m_attDb=5
+        // AND m_bandState[20m].attDb=5.  Without the fix, m_bandState[20m]
+        // stayed at 0, setting up the MOX-cycle clobber.
+        ctrl.setAttenuation(5, /*rx=*/0);
+        QCOMPARE(ctrl.attenuatorDb(), 5);
+
+        // MOX cycle: force-31 fires on key, then on un-key the stash
+        // restores m_attDb to 5.
+        ctrl.onMoxHardwareFlipped(true);
+        QCOMPARE(ctrl.attenuatorDb(), 31);
+        ctrl.onMoxHardwareFlipped(false);
+
+        // Crucial assertion: m_attDb stays at 5.  Pre-fix, the inverted
+        // defensive resync would have snapped it back to the stale 0.
+        QCOMPARE(ctrl.attenuatorDb(), 5);
+    }
 };
 
 QTEST_MAIN(TestStepAttTxPath)
