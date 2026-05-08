@@ -1231,6 +1231,31 @@ void RxChannel::setMuted(bool muted)
 #endif
 }
 
+void RxChannel::setAfGain(double gain)
+{
+    // Clamp into the same 0.0..1.0 envelope Thetis enforces upstream by
+    // dividing slider/Maximum at the call site (console.cs:36701, 38717
+    // [v2.10.3.14]). WDSP itself does not range-check gain1, so a stray
+    // value above 1.0 would re-introduce the +12 dB hot-output behaviour
+    // we are explicitly fixing.
+    gain = std::clamp(gain, 0.0, 1.0);
+    if (gain == m_afGain.load()) {
+        return;
+    }
+    m_afGain.store(gain);
+
+#ifdef HAVE_WDSP
+    // From Thetis Project Files/Source/Console/radio.cs:1077-1107 [v2.10.3.14]
+    //   rx_output_gain_dsp = 1.0 + WDSP.SetRXAPanelGain1(WDSP.id(thread, subrx), value)
+    //   //[2.10.3.5]MW0LGE wave recorder volume normalise  — wave recorder
+    //     branch deliberately not ported here; NereusSDR has no wave_file_writer
+    //     yet, and recorder gain hooks belong in the recorder module when it lands.
+    // WDSP: third_party/wdsp/src/patchpanel.c:142 — assigns directly to
+    //   rxa[channel].panel.p->gain1 under csDSP critical section.
+    SetRXAPanelGain1(m_channelId, gain);
+#endif
+}
+
 void RxChannel::setAudioPan(double pan)
 {
 #ifdef HAVE_WDSP
@@ -1304,6 +1329,17 @@ void RxChannel::setActive(bool active)
 #ifdef HAVE_WDSP
     // state=1 on, state=0 off; dmode=0 for no drain, dmode=1 for drain
     SetChannelState(m_channelId, active ? 1 : 0, active ? 0 : 1);
+
+    // wdsp/rxa.c:538 [v2.10.3.14] seeds the audio panel with gain1 = 4.0
+    // (+12 dB).  Push our cached m_afGain once the channel is alive so the
+    // default never reaches the audio sink.  Thetis equivalent: radio.cs
+    // initializer at radio.cs:318 + rebroadcast on Update() at radio.cs:422.
+    // The model layer will follow up with the persisted slice gain; this
+    // is a defence-in-depth seed for the gap between createRxChannel and
+    // the first slice sync.
+    if (active) {
+        SetRXAPanelGain1(m_channelId, m_afGain.load());
+    }
 #endif
 
     qCDebug(lcDsp) << "RxChannel" << m_channelId

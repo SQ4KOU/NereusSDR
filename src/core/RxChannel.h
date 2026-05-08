@@ -514,6 +514,18 @@ public:
     bool muted() const { return m_muted.load(); }
     void setMuted(bool muted);
 
+    // AF Gain: 0.0..1.0 linear, fed straight to the WDSP RX audio panel.
+    // wdsp/rxa.c:538 [v2.10.3.14] initializes panel.gain1 = 4.0 (+12 dB),
+    // so the host MUST call this to bring the panel down to a sane unity
+    // level — without it, downstream audio peaks ~4× hot and clips on the
+    // device. Thetis routes the per-slice AF slider through the same
+    // setter via the RXOutputGain property at radio.cs:1089 [v2.10.3.14],
+    // with slider/Maximum yielding 0.0..1.0.
+    // From Thetis Project Files/Source/Console/radio.cs:1077-1107
+    // WDSP: third_party/wdsp/src/patchpanel.c:142
+    double afGain() const { return m_afGain.load(); }
+    void setAfGain(double gain);  // gain ∈ [0.0, 1.0], clamped
+
     // Audio pan: NereusSDR range -1.0..+1.0 (0.0 = center).
     // Converted to WDSP 0.0..1.0 via wdsp_pan = (pan + 1.0) / 2.0.
     // From Thetis Project Files/Source/Console/radio.cs:1386-1403
@@ -602,6 +614,12 @@ private:
     // muted: audio panel mute — off by default (panel runs)
     // From Thetis Project Files/Source/Console/dsp.cs:393-394
     std::atomic<bool> m_muted{false};
+    // afGain: 0.0..1.0 linear, mirrors Thetis radio.cs:1078 rx_output_gain
+    // [v2.10.3.14] (default 1.0 = unity panel gain). The WDSP RX panel
+    // initializes its internal gain1 to 4.0 in rxa.c:538, so setActive()
+    // pushes m_afGain via SetRXAPanelGain1 to override the default before
+    // any audio flows.
+    std::atomic<double> m_afGain{1.0};
     // binauralEnabled: binaural audio — off by default (dual-mono)
     // From Thetis radio.cs:1145-1162 — bin_on = false
     std::atomic<bool> m_binauralEnabled{false};

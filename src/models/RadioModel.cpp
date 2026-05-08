@@ -1611,13 +1611,21 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 rxCh->setMuted(m_activeSlice->muted());
                 rxCh->setAudioPan(m_activeSlice->audioPan());
                 rxCh->setBinauralEnabled(m_activeSlice->binauralEnabled());
+                // AF Gain: route the slice slider through the WDSP RX panel
+                // (SetRXAPanelGain1) — Thetis radio.cs:1077-1107 [v2.10.3.14]
+                // RXOutputGain pattern — instead of multiplying it onto the
+                // post-DSP master mix.  setActive(true) below will re-push
+                // m_afGain regardless, but seeding it first means the channel
+                // never runs even one block at WDSP's default gain1=4.0.
+                rxCh->setAfGain(m_activeSlice->afGain() / 100.0);
             }
             rxCh->setActive(true);
         }
-        // Apply volume from slice
-        if (m_activeSlice) {
-            m_audioEngine->setVolume(m_activeSlice->afGain() / 100.0f);
-        }
+        // Master output volume (MasterOutputWidget) is the only writer to
+        // AudioEngine::setVolume; the per-slice afGain seeded above lives
+        // in WDSP, not in the post-DSP scalar.  Don't overwrite the master
+        // value the widget restored from AppSettings here — that was the
+        // distortion-at-high-volume root cause prior to 2026-05-07.
         // Start audio output
         m_audioEngine->start();
         qCInfo(lcDsp) << "WDSP ready — RX channel 0 active, audio started";
@@ -3920,9 +3928,22 @@ void RadioModel::wireSliceSignals()
 
     // XIT stored for 3M-1 (TX phase) to consume on keydown. No RX effect in 3G-10.
 
-    // AF gain → AudioEngine volume
+    // AF gain → WDSP RX panel gain1 (SetRXAPanelGain1).
+    // From Thetis radio.cs:1077-1107 [v2.10.3.14] RXOutputGain setter:
+    //   WDSP.SetRXAPanelGain1(WDSP.id(thread, subrx), value);
+    // Per-slice AF runs INSIDE the WDSP audio panel; the post-DSP master
+    // scalar (AudioEngine::setVolume) belongs to MasterOutputWidget alone.
+    // Earlier wiring routed afGain to AudioEngine::setVolume too, which
+    // (a) fought the master slider for the same atomic and (b) left WDSP's
+    // panel.gain1 at its rxa.c:538 default of 4.0 (+12 dB), causing the
+    // distortion-at-high-volume bug surfaced 2026-05-07.
     connect(slice, &SliceModel::afGainChanged, this, [this](int gain) {
-        m_audioEngine->setVolume(gain / 100.0f);
+        if (m_wdspEngine) {
+            RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+            if (rxCh) {
+                rxCh->setAfGain(gain / 100.0);
+            }
+        }
         scheduleSettingsSave();
     });
 

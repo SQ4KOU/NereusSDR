@@ -108,6 +108,16 @@
 //                 caller per console.cs:28952-28954; wdsp/dexp.c:647-654;
 //                 cmaster.cs:163-164).  All signatures [v2.10.3.13].
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-05-07 — SetRXAPanelGain1 declaration added by J.J. Boyd (KG4VCF)
+//                 to route the per-slice AF Gain slider through the WDSP
+//                 RX audio panel instead of an external post-DSP scalar.
+//                 wdsp/rxa.c:538 [v2.10.3.14] initializes panel.gain1 = 4.0
+//                 (+12 dB), so a host that never calls SetRXAPanelGain1
+//                 ships hot — that's the distortion-at-high-volume bug
+//                 surfaced 2026-05-07.  Thetis radio.cs:1089 [v2.10.3.14]
+//                 RXOutputGain setter is the canonical call site; signature
+//                 matches dsp.cs:399-400 P/Invoke decl and wdsp/patchpanel.c:142.
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -319,6 +329,14 @@ void RXANBPSetShiftFrequency(int channel, double shift);
 // From Thetis Project Files/Source/Console/dsp.cs:393-394 — P/Invoke decl
 // WDSP: third_party/wdsp/src/patchpanel.c:126
 void SetRXAPanelRun(int channel, int run);
+
+// AF Gain — final scalar applied to the RXA audio panel output. WDSP rxa.c:538
+// initializes gain1 = 4.0 (+12 dB), so the host MUST call this to bring the
+// audio panel to a sane unity level. Thetis's RXOutputGain setter passes
+// slider/Maximum (0.0..1.0) here directly; see radio.cs:1089 [v2.10.3.14].
+// From Thetis Project Files/Source/Console/dsp.cs:399-400 — P/Invoke decl
+// WDSP: third_party/wdsp/src/patchpanel.c:142
+void SetRXAPanelGain1(int channel, double gain);
 
 // Set stereo pan position. pan=0.0 → full left, pan=0.5 → center, pan=1.0 → full right.
 // WDSP applies sin-law panning: adjusts gain2I/gain2Q via sin(pan*PI).
