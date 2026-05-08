@@ -78,7 +78,6 @@ class RadioInfoTab;
 class AntennaAlexTab;
 class OcOutputsTab;
 class XvtrTab;
-class PureSignalTab;
 class DiversityTab;
 class CalibrationTab;
 class Hl2IoBoardTab;
@@ -99,7 +98,7 @@ public:
 
 #ifdef NEREUS_BUILD_TESTS
     enum class Tab {
-        RadioInfo, AntennaAlex, OcOutputs, Xvtr, PureSignal,
+        RadioInfo, AntennaAlex, OcOutputs, Xvtr,
         Diversity, Calibration, Hl2Options, Hl2IoBoard, BandwidthMonitor
     };
     bool isTabVisibleForTest(Tab t) const;
@@ -107,6 +106,12 @@ public:
 #endif
 
 signals:
+    // Phase 3M-4 Task 11: pass-through for the IMD-warning-gated HPF Bypass
+    // on PureSignal feedback toggle.  Originates in AntennaAlexAlex1Tab,
+    // re-emitted by AntennaAlexTab; HardwarePage forwards to SetupDialog
+    // which wires it to the live PureSignal coordinator.
+    void hpfBypassOnPsChanged(bool checked);
+
     // Task 3.6: forwarded from RadioInfoTab::anan8000DleVoltsAmpsChanged.
     // SetupDialog connects this to SetupDialog::anan8000DleVoltsAmpsChanged.
     void anan8000DleVoltsAmpsChanged(bool visible);
@@ -138,7 +143,6 @@ private:
     AntennaAlexTab*      m_antennaAlexTab{nullptr};
     OcOutputsTab*        m_ocOutputsTab{nullptr};
     XvtrTab*             m_xvtrTab{nullptr};
-    PureSignalTab*       m_pureSignalTab{nullptr};
     DiversityTab*        m_diversityTab{nullptr};
     CalibrationTab*      m_paCalTab{nullptr};
     Hl2OptionsTab*       m_hl2OptionsTab{nullptr};
@@ -149,7 +153,6 @@ private:
     int m_antennaAlexIdx{-1};
     int m_ocOutputsIdx{-1};
     int m_xvtrIdx{-1};
-    int m_pureSignalIdx{-1};
     int m_diversityIdx{-1};
     int m_paCalIdx{-1};
     int m_hl2OptionsIdx{-1};

@@ -94,12 +94,15 @@ class MeterWidget;
 class MeterPoller;
 class TitleBar;
 class VaxFirstRunDialog;
+class PsForm;
+
 class RxDashboard;
 class StationBlock;
 class MetricLabel;
 class StatusBadge;
 class AdcOverloadBadge;
 class OverflowChip;
+class PsaIndicatorWidget;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -151,6 +154,15 @@ private slots:
     void showAudioDiagnoseDialog();
     void showFeatureRequestDialog();
     void showFeatureRequestDialogImpl();
+    // Phase 3M-4 Task 8: open the modeless PureSignal dialog (Tools menu).
+    // Lazy-constructs on first invocation; subsequent calls show + raise the
+    // existing instance so geometry persists across opens.
+    void openPureSignalDialog();
+    // Phase 3M-4 bench-fix: gate m_psaIndicator visibility on
+    // caps.hasPureSignal && PureSignal::isAutoCalEnabled.  Called from
+    // PureSignal::autoCalEnabledChanged + RadioModel::pureSignalCoordinator-
+    // Ready + onConnectionStateChanged.
+    void updatePsaIndicatorVisibility();
     // Phase 3Q Sub-PR-4 D.2: right-click context menu on the TitleBar
     // ConnectionSegment. Items: Disconnect / Connect-to-other / Diagnostics /
     // Copy IP / Copy MAC. "Reconnect" omitted — no RadioModel::reconnect() API.
@@ -230,6 +242,12 @@ private:
     RadioModel* m_radioModel{nullptr};
     ConnectionPanel* m_connectionPanel{nullptr};
     SupportDialog* m_supportDialog{nullptr};
+
+    // Phase 3M-4 Task 8: PsForm modeless dialog (Tools > PureSignal...).
+    // Lazy-constructed on first openPureSignalDialog() call; lives for the
+    // lifetime of MainWindow.  Hidden on close, never destroyed.
+    PsForm* m_psForm{nullptr};
+    QAction* m_actPureSignal{nullptr};
 
     // Status bar widgets (double-height AetherSDR design, 46px)
     QLabel* m_connStatusLabel{nullptr};
@@ -404,6 +422,13 @@ private:
     // Bound to RadioModel::slices().at(0) in buildStatusBar(); rebinds are not
     // needed today (single-slice, RX2 is Phase 3F).
     RxDashboard* m_rxDashboard{nullptr};
+
+    // Phase 3M-4 Task 10: PSA bottom-banner indicator pair (FB + PS labels).
+    // Inserted between m_rxDashboard and m_stationBlock per design doc §4 #5
+    // (option B).  Visibility gated on caps.hasPureSignal in
+    // onConnectionStateChanged().  Wired to PureSignal coordinator + MOX
+    // controller from inside the widget (auto-wired via RadioModel).
+    PsaIndicatorWidget* m_psaIndicator{nullptr};
 
     // VFO flag widget (Phase 3E)
     class VfoWidget* m_vfoWidget{nullptr};

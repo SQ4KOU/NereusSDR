@@ -131,6 +131,12 @@ namespace NereusSDR {
 // parent's behavior otherwise.
 //
 // Source: console.cs:6944-7040 [@501e3f5] (G8NJJ setBPF1ForOrionIISaturn)
+//
+// Phase 3M-4 Task 5: applyPureSignalDdcConfig is INHERITED unchanged from
+// P2CodecOrionMkII.  Thetis console.cs:8211-8295 [v2.10.3.13] groups
+// HPSDRModel.ANAN_G2 and HPSDRModel.ANAN_G2_1K into the same G2-class
+// switch case as the OrionMkII family, so no Saturn-specific PS DDC
+// override is needed.
 class P2CodecSaturn : public P2CodecOrionMkII {
 protected:
     // Override the Alex1 (RX) byte builder to optionally substitute

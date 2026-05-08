@@ -251,6 +251,7 @@
 namespace NereusSDR {
 
 class PaProfile;
+class PureSignal;
 class StepAttenuatorController;
 
 // VAX slot: which audio source owns the transmitter.
@@ -486,11 +487,25 @@ public:
     int  lastPower() const noexcept { return m_lastPower; }
     void setLastPower(int value);
 
-    /// PureSignal-active predicate.  Returns FALSE until 3M-4 wires the
-    /// live PS feedback DDC.  The ATT-on-TX gate uses this to decide
-    /// whether the gate fires.  For Phase 3A scaffolding only — Phase
-    /// 3M-4 will replace the body with the live PS-A check.
+    /// PureSignal-active predicate.  Reads the live PureSignal coordinator
+    /// (3M-4 Task 7) when wired via setPureSignal(); falls back to the
+    /// test-seam override (NEREUS_BUILD_TESTS only) for unit tests that
+    /// don't construct a full RadioModel + PureSignal.  When neither is
+    /// set, returns false (matches Phase 3A pre-3M-4 behaviour: gate
+    /// dormant but present).
+    ///
+    /// "Active" tracks PureSignal::correctionsBeingApplied — true ⟺ calcc
+    /// has a valid correction set in flight (PSForm.cs:1100-1102
+    /// CorrectionsBeingApplied [v2.10.3.13]).  Mirrors Thetis's
+    /// chkFWCATUBypass.Checked-and-actively-correcting semantics.
     bool pureSignalActive() const noexcept;
+
+    /// Inject the PureSignal coordinator (Phase 3M-4 Task 7).  Non-owning
+    /// pointer; RadioModel owns via std::unique_ptr.  Pass nullptr to
+    /// detach (e.g. on disconnect).  When non-null, pureSignalActive()
+    /// reads PureSignal::correctionsBeingApplied().
+    void setPureSignal(PureSignal* ps) noexcept { m_pureSignal = ps; }
+    PureSignal* pureSignal() const noexcept { return m_pureSignal; }
 
     /// Compute the normalized audio output level for the given (band,
     /// sliderWatts) using the supplied active PA profile.
@@ -1354,7 +1369,17 @@ public:
 
     /// Two-tone test magnitude (dB).  Used in setup.cs:11056 [v2.10.3.13]:
     ///   ttmag1 = ttmag2 = 0.49999 * pow(10, level / 20)
-    /// NereusSDR default -6 dB (Thetis Designer udTwoToneLevel.Value = 0 dB).
+    /// Default 0 dB (matches Thetis Designer udTwoToneLevel.Value = 0).
+    /// PR #212 follow-up bench: an earlier NereusSDR-original default of
+    /// -6 dB halved the 2-tone envelope (peak 0.5 vs 1.0) which starved
+    /// calcc LCOLLECT bin filling on HL2 — psHWPeak=0.233 expects peak
+    /// envelope to reach ~0.234, but at -6 dB it tops out at ~0.117 →
+    /// only bins 0-7 fill, full_ints stuck at 8, state never advances
+    /// past LCOLLECT.  The -6 dB default was corrected to 0 dB in the
+    /// load() default earlier; legacy persisted -6 dB values from
+    /// pre-fix sessions stay until the user opens Setup → Test/2-Tone
+    /// and re-saves.  No auto-migration to keep the setting honest as
+    /// a user preference.
     double twoToneLevel() const noexcept { return m_twoToneLevel; }
 
     /// TX power (%) used during the two-tone test when
@@ -2084,6 +2109,14 @@ private:
     // setStepAttenuatorController(); when nullptr the gate becomes a no-op.
     StepAttenuatorController* m_stepAttCtrl{nullptr};
 
+    // 3M-4 Task 7: live PureSignal coordinator.  Non-owning view; owned by
+    // RadioModel via std::unique_ptr.  Read by pureSignalActive() — the
+    // ATT-on-TX-on-power-change gate inside setPowerUsingTargetDbm uses
+    // this to decide whether the safety force-31-dB lift fires.  When
+    // null (pre-connect or post-teardown), pureSignalActive() falls back
+    // to the test seam (NEREUS_BUILD_TESTS) or returns false (production).
+    PureSignal* m_pureSignal{nullptr};
+
 #ifdef NEREUS_BUILD_TESTS
     // Test seam (Phase 3C) — overrides pureSignalActive() return when set.
     // Phase 3A's predicate returns false unconditionally; this seam lets
@@ -2231,7 +2264,16 @@ private:
     // Defaults per design spec §4.4 / pre-code review §2.3 (option C).
     int    m_twoToneFreq1      =   700;   // Designer + Defaults preset
     int    m_twoToneFreq2      =  1900;   // Designer + Defaults preset
-    double m_twoToneLevel      =  -6.0;   // NereusSDR-original; Designer = 0 dB
+    // From Thetis setup.Designer.cs:61994-62003 [v2.10.3.13] udTwoToneLevel:
+    //   Maximum = 0, Minimum = -96, Value = 0.
+    // Phase 3M-4 Task 17 (2026-05-06): previously NereusSDR-original -6 dB
+    // which under-drove the 2-tone envelope by 6 dB.  Result on bench:
+    // pscc() saw txEnvMax=0.306 instead of Thetis's ~0.6+, calcc LCOLLECT
+    // never filled past bin 2-3 (out of 16), state machine stuck.
+    // Restoring Thetis-faithful 0 dB default so PureSignal calibration
+    // converges on a fresh 2-Tone test.  See docs/architecture/
+    // phase3m-4-handoff-bench-debug.md "Round 2 / Task 17 status".
+    double m_twoToneLevel      =   0.0;
     int    m_twoTonePower      =    50;   // NereusSDR-original; Designer = 10 %
     int    m_twoToneFreq2Delay =     0;   // matches Thetis Designer
     bool   m_twoToneInvert     =  true;   // setup.Designer.cs:61963 [v2.10.3.13]

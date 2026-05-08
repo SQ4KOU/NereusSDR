@@ -1910,6 +1910,13 @@ QString rxModeKeyPart(DSPMode mode)
 
 qint64 RxChannel::onModeChanged(DSPMode newMode)
 {
+    // Engine guard: no engine attached → return 0 (no rebuild possible).
+    // Matches the function-header contract block and
+    // tst_dsp_options_per_mode_apply.cpp::rx_no_engine_returns_zero.
+    if (!m_wdspEngine) {
+        return 0;
+    }
+
     auto& s = AppSettings::instance();
     const QString modeKey = rxModeKeyPart(newMode);
 
@@ -1929,12 +1936,25 @@ qint64 RxChannel::onModeChanged(DSPMode newMode)
     const QString typeStr  = s.value(typeKey, QStringLiteral("Low Latency")).toString();
     const int newFiltType  = (typeStr == QStringLiteral("Low Latency")) ? 0 : 1;
 
-    // Skip if nothing changed.  Each setter has its own idempotent guard,
-    // but bailing here avoids the timer/log overhead.  Sentinel -1 means
-    // "no change" so RadioModel can distinguish from "applied in 0 ms"
-    // (in-place WDSP setters routinely finish sub-millisecond).
+    // No-change check: settings already match channel state → return 0
+    // (no rebuild).  Matches the function-header contract block and
+    // tst_dsp_options_per_mode_apply.cpp::rx_same_settings_returns_zero_no_rebuild.
+    // RadioModel.cpp:3754 gates dspChangeMeasured on `elapsed > 0` so a
+    // 0-return here doesn't emit a spurious "0 ms applied" UI update.
     if (newBufSize == m_dspBlockSize && newFiltSize == m_filterSize &&
         newFiltType == m_filterType) {
+        return 0;
+    }
+
+    // Channel-in-map guard: settings differ → rebuild is required, but
+    // the channel must exist in the engine's map first.  Without this,
+    // the in-place WDSP setters below would dereference ch[channelId]
+    // past MAX_CHANNELS=32 (UB; SIGBUS on macOS arm64 strict-alignment;
+    // silent corruption elsewhere).  Matches the contract block and
+    // tst_dsp_options_per_mode_apply.cpp::rx_engine_attached_channel_not_
+    // in_map_returns_minus_one + the changed_filter_size /
+    // changed_filter_type "rebuild attempt" tests.
+    if (!m_wdspEngine->rxChannel(m_channelId)) {
         return -1;
     }
 

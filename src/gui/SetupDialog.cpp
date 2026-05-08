@@ -31,6 +31,7 @@
 #include "SetupDialog.h"
 #include "SetupPage.h"
 #include "core/BoardCapabilities.h"
+#include "core/PureSignal.h"
 #include "models/RadioModel.h"
 
 // General
@@ -239,14 +240,29 @@ void SetupDialog::buildTree()
     add(general, "Startup & Preferences", new StartupPrefsPage(m_model));
     add(general, "UI Scale & Theme",       new UiScalePage(m_model));
     add(general, "Navigation",             new NavigationPage(m_model));
-
-    // Task 3.6: CPU meter rate spinbox — forward signal up to SetupDialog so
-    // MainWindow's wireSetupDialog() can connect it to setCpuTimerIntervalHz().
     {
-        auto* optionsPage = new GeneralOptionsPage(m_model);
-        add(general, "Options", optionsPage);
-        connect(optionsPage, &GeneralOptionsPage::cpuMeterRateChanged,
-                this,        &SetupDialog::cpuMeterRateChanged);
+        // Phase 3M-4 Task 11: forward GeneralOptionsPage's PureSignal Info
+        // Bar checkbox signals to the live PureSignal coordinator so the
+        // bottom-banner FB indicator reflects the new state without having
+        // to close the Setup dialog.  The page handles its own AppSettings
+        // persistence; this connect handles the live wire only.
+        // Mirrors Thetis chkHideFeebackLevel_CheckedChanged + chkSwapREDBluePSAColours_CheckedChanged
+        // (setup.cs handlers fan out to puresignal.HideFeedback / InvertRedBlue).
+        //
+        // Task 3.6 (origin/main): also forward CPU meter rate spinbox so
+        // MainWindow's wireSetupDialog() can connect to setCpuTimerIntervalHz.
+        auto* genOpts = new GeneralOptionsPage(m_model);
+        if (m_model) {
+            if (auto* ps = m_model->pureSignal()) {
+                connect(genOpts, &GeneralOptionsPage::hideFeedbackLevelChanged,
+                        ps,      &PureSignal::setHideFeedback);
+                connect(genOpts, &GeneralOptionsPage::invertRedBluePsaChanged,
+                        ps,      &PureSignal::setInvertRedBlue);
+            }
+        }
+        connect(genOpts, &GeneralOptionsPage::cpuMeterRateChanged,
+                this,    &SetupDialog::cpuMeterRateChanged);
+        add(general, "Options", genOpts);
     }
 
     // ── Hardware ─────────────────────────────────────────────────────────────
@@ -405,7 +421,9 @@ void SetupDialog::buildTree()
         selectPage(page);
     });
 
-    add(transmit, "PureSignal",         new PureSignalPage(m_model));
+    // Note: Setup → Transmit → PureSignal page retired in Phase 3M-4 Task 14
+    // (no Thetis equivalent; PsForm at Tools > PureSignal is the entire PS
+    // control surface — design §4.2).
 
     // Phase 3M-3a-iii Task 14: full DexpVoxPage that mirrors Thetis tpDSPVOXDE
     // 1:1 (setup.designer.cs:44763-45260 [v2.10.3.13]).  Registered as the

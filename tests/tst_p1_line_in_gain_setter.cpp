@@ -185,23 +185,26 @@ private slots:
         QCOMPARE(int(quint8(bank11[2]) & 0x1F), 15);
     }
 
-    // ── 12. Codec path (HL2): setLineInGain stores but C2=0 unchanged ────────
-    // HL2 firmware has no mic jack and the P1CodecHl2 bank-11 case emits
-    // out[2] = 0 unconditionally (see P1CodecHl2.cpp:238) — line_in_gain is
-    // a non-feature on HL2.  This test pins the cross-codec contract: the
-    // setter still stores the value (and bank-10 flush flag fires) but the
-    // HL2 codec deliberately does not propagate it.  Documents the
-    // intentional codec divergence and prevents future regressions if
-    // someone extends the HL2 codec to honour the field.
-    void setLineInGain_hl2CodecPath_c2RemainsZero() {
+    // ── 12. Codec path (HL2): setLineInGain propagates to bank 11 C2 ─────────
+    // PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07): the previous
+    // version of P1CodecHl2 emitted out[2] = 0 unconditionally and this test
+    // pinned that buggy behaviour.  Per mi0bot networkproto1.c:1097
+    // [v2.10.3.13-beta2]:
+    //   C2 = (mic.line_in_gain & 0b00011111) | ((puresignal_run & 1) << 6);
+    // HL2 firmware does honour the field (the mic jack is repurposed for
+    // line-in on the N2ADR add-on, and the field also carries the
+    // puresignal_run bit which is critical to PS calibration).  This test
+    // verifies the correct propagation.
+    void setLineInGain_hl2CodecPath_propagatesToC2() {
         P1RadioConnection conn;
         conn.setBoardForTest(HPSDRHW::HermesLite);  // → P1CodecHl2
         conn.setLineInGain(7);
 
         const QByteArray bank11 = conn.captureBank11ForTest();
         QCOMPARE(bank11.size(), 5);
-        // HL2 codec emits out[2] = 0 regardless of ctx.p1LineInGain.
-        QCOMPARE(int(quint8(bank11[2])), 0);
+        // HL2 codec emits out[2] = (line_in_gain & 0x1F) | (ps_run << 6).
+        // ps_run defaults to 0 (no PS active), so C2 = 7 (line_in_gain only).
+        QCOMPARE(int(quint8(bank11[2]) & 0x1F), 7);
         // Flush flag still fires — Codex P2 safety contract is independent
         // of the codec's emission decision.
         QCOMPARE(conn.forceBank11NextForTest(), true);

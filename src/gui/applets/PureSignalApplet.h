@@ -11,6 +11,14 @@
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
 //                 Layout ports Thetis PSForm.cs (PureSignal feedback/correction controls). All controls NYI — wired in later phase (3M-4).
+//   2026-05-06 — Phase 3M-4 Task 13: replaced NyiOverlay::markNyi calls with
+//                 live wiring to the PureSignal coordinator (Task 7).  Added
+//                 right-click pattern (every control routes to
+//                 openPureSignalDialogRequested signal; MainWindow connects
+//                 it to openPureSignalDialog) per design doc §8.4.2.  Save /
+//                 Restore use QFileDialog with default folder
+//                 ~/.config/NereusSDR/PureSignal/.  J.J. Boyd (KG4VCF), with
+//                 AI-assisted source-first protocol via Anthropic Claude Code.
 // =================================================================
 
 /*  PSForm.cs
@@ -56,6 +64,7 @@ mw0lge@grange-lane.co.uk
 
 #pragma once
 #include "AppletWidget.h"
+#include <QPointer>
 
 class QPushButton;
 class QLabel;
@@ -65,19 +74,35 @@ namespace NereusSDR {
 class HGauge;
 
 // PureSignal / PS-A feedback predistortion controls.
-// NYI — Phase 3I-4 (PureSignal DDC + calcc/IQC engine).
+//
+// Phase 3M-4 Task 13: live wiring to the PureSignal coordinator
+// (src/core/PureSignal.h, Task 7).
 //
 // Controls:
-//   1. Calibrate button      — QPushButton (non-toggle)
-//   2. Auto-cal toggle       — QPushButton green "Auto"
+//   1. Calibrate button      — QPushButton (non-toggle) → singleCalibrate
+//   2. Auto-cal toggle       — QPushButton green "Auto" ↔ setAutoCalEnabled
 //   3. Feedback level gauge  — HGauge (0-100, yellow@70, red@90, title "FB Level")
+//                              ← feedbackLevelChanged 0..255 → 0..100
 //   4. Correction mag gauge  — HGauge (0-100, yellow@80, red@95, title "Correction")
-//   5. Save coefficients     — QPushButton "Save"
-//   6. Restore coefficients  — QPushButton "Restore"
-//   7. Two-tone test         — QPushButton green toggle "2-Tone"
-//   8. Status LEDs           — 3x QLabel (8x8 circles: "Cal", "Run", "Fbk")
+//                              ← correctionPeakChanged 0..1 → 0..100
+//   5. Save coefficients     — QPushButton "Save"  → saveCorrections (file dialog)
+//                              gated on correctionsBeingAppliedChanged
+//   6. Restore coefficients  — QPushButton "Restore" → restoreCorrections (file dialog)
+//   7. Two-tone test         — QPushButton green toggle "2-Tone" ↔ setTwoToneOn
+//   8. Status LEDs           — 3x QLabel (24x14 rounded: "Cal", "Run", "Fbk")
+//      Cal LED active during LSETUP/LCOLLECT/LCALC (driven by calStateChanged)
+//      Run LED active during LSTAYON
+//      Fbk LED active when feedback samples flow (feedbackActiveChanged)
 //
-// Plus: info readout labels (Iterations, Feedback dB, Correction dB).
+// Plus: info readout labels (Iterations, Feedback dB, Correction dB) — driven
+// by calibrationCountChanged + feedbackLevelChanged + correctionPeakChanged.
+//
+// Right-click on every control emits openPureSignalDialogRequested, which
+// MainWindow routes to openPureSignalDialog (Tools → PureSignal…) per the
+// Thetis right-click-to-associated-window pattern (cf. chkFWCATUBypass_MouseDown
+// at console.cs:46149-46152 [v2.10.3.13]).
+class PureSignal;
+
 class PureSignalApplet : public AppletWidget {
     Q_OBJECT
 public:
@@ -87,8 +112,45 @@ public:
     QString appletTitle() const override { return QStringLiteral("PureSignal"); }
     void    syncFromModel() override;
 
+public slots:
+    // ── Phase 3M-4 Task 13: late-bound coordinator wiring ──────────────────
+    //
+    // PureSignal is constructed by RadioModel inside the WDSP-init lambda
+    // AFTER MainWindow / applet construction.  The applet listens to
+    // RadioModel::pureSignalCoordinatorReady to (re)wire its controls.
+    // Tests call this slot directly with their own coordinator instance.
+    //
+    // Calling with nullptr disconnects the prior coordinator's bindings
+    // (subscribers must safely tolerate later signal firings).
+    void setPureSignal(PureSignal* coordinator);
+
+signals:
+    // ── Phase 3M-4 Task 13: right-click → open PsForm ──────────────────────
+    // Mirrors the Thetis right-click-to-associated-window pattern (e.g.
+    // chkFWCATUBypass_MouseDown at console.cs:46149-46152 [v2.10.3.13]).
+    // MainWindow connects this signal to openPureSignalDialog (Tools →
+    // PureSignal…); the same singleton dialog instance services every right-
+    // click on every PureSignalApplet control.
+    void openPureSignalDialogRequested();
+
 private:
     void buildUI();
+    void wireRightClicks();
+    void wireCoordinator(PureSignal* ps);
+    void setLedActive(QLabel* led, bool active);
+    void setupRightClick(QWidget* widget);
+
+    // Non-owning pointer to the live PureSignal coordinator.  Set by
+    // setPureSignal() (test seam) or RadioModel::pureSignalCoordinatorReady.
+    // Null until the WDSP-init lambda fires (production) or until the
+    // test injects its own.
+    //
+    // PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07): converted to
+    // QPointer for stale-pointer safety on radio-disconnect teardown
+    // (RadioModel destroys PureSignal then emits coordinatorReady(nullptr);
+    // setPureSignal's `disconnect(m_ps, ...)` previously dereferenced freed
+    // memory).  Same fix applied to TxApplet::m_ps.
+    QPointer<PureSignal> m_ps;
 
     // Control 1 — calibrate button (non-toggle)
     QPushButton* m_calibrateBtn  = nullptr;

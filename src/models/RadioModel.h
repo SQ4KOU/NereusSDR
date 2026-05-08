@@ -126,6 +126,10 @@ class CompositeTxMicRouter;
 // (chunk F) + the TwoToneController activation orchestrator (chunk I).
 class MicProfileManager;
 class TwoToneController;
+// 3M-4 Task 7: PureSignal coordinator (cal lifecycle, MOX integration,
+// auto-attention, polling, save/restore, two-tone wiring).
+class PureSignal;
+class PsccPump;
 // Phase 4 Agent 4A of issue #167: PaProfileManager forward declaration.
 // RadioModel owns the per-MAC PA gain profile bank (parallel to
 // MicProfileManager); the active profile is passed by reference to
@@ -336,6 +340,15 @@ public:
     // TxApplet (J.2 setter) for the 2-TONE button + status mirror.
     // Non-owning; lifetime is RadioModel's lifetime.
     TwoToneController* twoToneController() const { return m_twoToneController; }
+
+    // 3M-4 Task 7: expose PureSignal coordinator so PsForm, PureSignalApplet,
+    // TxApplet [PS-A], and PsaIndicatorWidget can subscribe to its
+    // Q_PROPERTY signals (cal lifecycle, MOX integration, FB level updates).
+    // Non-owning view; RadioModel owns via std::unique_ptr.
+    // Cited in design §8 + plan §Task 7.  Created lazily inside the WDSP-init
+    // lambda once m_txChannel + m_psFeedbackChannel are live.  Returns nullptr
+    // before that point (and after teardown).
+    PureSignal* pureSignal() const { return m_pureSignal.get(); }
 
     // Stage C2: expose FilterPresetStore so RxApplet, VfoWidget, and
     // FilterPresetsSetupPage can read/write user-customised presets.
@@ -802,6 +815,20 @@ signals:
     // connection. HardwarePage (Phase 3I) listens to this to repopulate
     // sub-tabs with per-radio fields.
     void currentRadioChanged(const NereusSDR::RadioInfo& info);
+
+    // ── Phase 3M-4 Task 13: late-bound PureSignal coordinator handoff ──────
+    // Fires when m_pureSignal is created (post-WDSP-init) or torn down.
+    // Carries the live PureSignal* (nullptr on disconnect).  Subscribers
+    // (PureSignalApplet, TxApplet [PS-A]) re-wire their controls when the
+    // coordinator becomes available.
+    //
+    // The coordinator does not exist at MainWindow construction time
+    // (RadioModel::pureSignal() returns nullptr until connectToRadio()'s
+    // WDSP-init lambda fires, see RadioModel.cpp:1884 [v2.10.3.13]).  This
+    // signal is the late-binding seam.  Tests call
+    // emit pureSignalCoordinatorReady(...) directly to inject a test-owned
+    // coordinator into the applet wiring.
+    void pureSignalCoordinatorReady(NereusSDR::PureSignal* coordinator);
     void sliceAdded(int index);
     void sliceRemoved(int index);
     void activeSliceChanged(int index);
@@ -1380,6 +1407,22 @@ private:
     // ctor; setTxChannel(...) is called inside the WDSP-init lambda once
     // m_txChannel is live.  setTxChannel(nullptr) is called in teardown.
     TwoToneController* m_twoToneController{nullptr};
+
+    // 3M-4 Task 7: PureSignal coordinator.  Owned via unique_ptr (NOT a
+    // raw QObject child) so the destructor can drain the polling timers
+    // before the WdspEngine / TxChannel pointers are torn down — the
+    // QObject child-deletion path doesn't guarantee that ordering.  See
+    // PureSignal.h for the design.  Constructed inside the WDSP-init
+    // lambda alongside TwoToneController; reset() in teardown.
+    std::unique_ptr<PureSignal> m_pureSignal;
+
+    // 3M-4 Task 17 chunk C: pscc() driver — pairs per-DDC IQ streams
+    // (PS-feedback on DDC0, TX-monitor on DDC1) into paired blocks for
+    // calcc.  Without this driver, calcc never runs and info[16] stays
+    // at zero.  See PsccPump.h for the architectural narrative.  Owned
+    // via unique_ptr alongside m_pureSignal so destruction ordering is
+    // explicit (drain pump before TxChannel goes away).
+    std::unique_ptr<PsccPump> m_psccPump;
     //
     // (Phase 3M-1c L.4 introduced a `std::unique_ptr<MicReBlocker>` here
     //  to bridge AudioEngine 720-sample emits to TxChannel 256-sample

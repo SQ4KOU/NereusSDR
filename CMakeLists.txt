@@ -398,6 +398,10 @@ set(CORE_SOURCES
     src/core/WdspEngine.cpp
     src/core/RxChannel.cpp
     src/core/TxChannel.cpp
+    src/core/PsFeedbackChannel.cpp
+    src/core/PureSignal.cpp
+    src/core/PsccPump.cpp
+    src/core/PsccPump.h
     src/core/TxWorkerThread.cpp
     src/core/NbFamily.cpp
     src/core/NbFamily.h
@@ -490,6 +494,11 @@ set(MODEL_SOURCES
 
 set(GUI_SOURCES
     src/gui/MainWindow.cpp
+    src/gui/AmpViewChart.cpp
+    src/gui/AmpViewWindow.cpp
+    src/gui/PsaIndicatorWidget.cpp
+    src/gui/PsaIndicatorWidget.h
+    src/gui/PsForm.cpp
     src/gui/TitleBar.cpp
     src/gui/ConnectionPanel.cpp
     src/gui/AddCustomRadioDialog.cpp
@@ -501,6 +510,8 @@ set(GUI_SOURCES
     src/gui/spectrum/SpectrumDetector.cpp
     src/gui/spectrum/SpectrumAvenger.cpp
     src/gui/SpectrumWidget.cpp
+    src/gui/ImdOverlay.h
+    src/gui/ImdOverlay.cpp
     src/gui/dbm_strip_math.cpp
     src/gui/SpectrumOverlayMenu.cpp
     src/gui/widgets/CenterMarkSlider.h
@@ -637,7 +648,6 @@ set(GUI_SOURCES
     src/gui/setup/hardware/OcOutputsHfTab.cpp
     src/gui/setup/hardware/OcOutputsSwlTab.cpp
     src/gui/setup/hardware/XvtrTab.cpp
-    src/gui/setup/hardware/PureSignalTab.cpp
     src/gui/setup/hardware/DiversityTab.cpp
     src/gui/setup/hardware/CalibrationTab.cpp
     src/gui/setup/hardware/PaCalibrationGroup.cpp

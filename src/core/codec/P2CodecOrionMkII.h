@@ -54,6 +54,21 @@ public:
     void composeCmdRx          (const CodecContext& ctx, quint8 buf[1444]) const override;
     void composeCmdTx          (const CodecContext& ctx, quint8 buf[60])   const override;
 
+    // Phase 3M-4 Task 5: PureSignal DDC config emission for the G2-class
+    // branch (ANAN-100D / 200D / OrionMkII / 7000D / 8000D / G2 / G2-1K /
+    // ANVELINAPRO3).  Source: Thetis console.cs:8211-8295 [v2.10.3.13].
+    PsDdcConfig applyPureSignalDdcConfig(
+        HPSDRModel model,
+        bool psEnabled,
+        bool diversityEnabled,
+        bool moxState,
+        int rx1Rate,
+        int rx2Rate,
+        bool rx2Enabled,
+        quint8 adcCtrl1,
+        quint8 adcCtrl2
+    ) const override;
+
 protected:
     // Build Alex0 (bytes 1432-1435) and Alex1 (bytes 1428-1431) 32-bit registers.
     // Protected so P2CodecSaturn can override Alex1 with Saturn BPF1 band-edge bits.

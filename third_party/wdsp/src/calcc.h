@@ -1,3 +1,14 @@
+// =================================================================
+// third_party/wdsp/src/calcc.h  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis source:
+//   Project Files/Source/wdsp/calcc.h @ v2.10.3.13 (commit 501e3f5)
+//   Verbatim vendor alongside calcc.c (Phase 3M-4 Task 2).  No
+//   NereusSDR-level edits.  Original NR0V GPLv2-or-later license
+//   header preserved verbatim below.
+// =================================================================
+
 /*  calcc.h
 
 This file is part of a program that implements a Software-Defined Radio.
@@ -18,12 +29,24 @@ You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-The author can be reached by email at  
+The author can be reached by email at
 
 warren@wpratt.com
 
 */
 
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-05-06 — Phase 3M-4 Task 2: vendored verbatim from Thetis
+//                v2.10.3.13 @501e3f51 by J.J. Boyd (KG4VCF), with
+//                AI-assisted source-first protocol via Anthropic
+//                Claude Code. No source-level modifications.
+//                Cross-platform compatibility via existing
+//                third_party/wdsp/src/linux_port.h shim.
+//   2026-05-06 — Phase 3M-4 Task 3 attribution fix: NereusSDR-block
+//                "Ported from Thetis source" preamble added above the
+//                original NR0V license header, mirroring cfcomp.h.
+// =================================================================
 #ifndef _calcc_h
 #define _calcc_h
 #include "delay.h"
@@ -140,7 +163,7 @@ extern void destroy_calcc (CALCC a);
 
 extern void flush_calcc (CALCC a);
 
-extern void pscc (int channel, int size, double* tx, double* rx);
+extern __declspec(dllexport) void pscc (int channel, int size, double* tx, double* rx);
 
 extern void __cdecl PSSaveCorrection(void* pargs);
 

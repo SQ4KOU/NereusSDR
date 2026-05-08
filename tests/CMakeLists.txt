@@ -77,6 +77,143 @@ nereus_add_test(tst_clarity_nf_grid_coexistence)
 nereus_add_test(tst_hpsdr_enums)
 nereus_add_test(tst_board_capabilities)
 
+# ── Phase 3M-4 Task 1: PureSignal cap fields (psDefaultPeak + psSampleRate) ──
+# 3 tests covering ANAN-G2 (P2 default 0.2899, psSampleRate=192000),
+# HermesLite (mi0bot HL2 override 0.233, psSampleRate=0 sentinel for
+# rx1_rate per mi0bot console.cs:8472-8488), and Atlas (no PureSignal).
+# Source: ramdor clsHardwareSpecific.cs:285-310 [v2.10.3.13] +
+#         mi0bot clsHardwareSpecific.cs:300-330 [v2.10.3.13-beta2].
+nereus_add_test(tst_puresignal_caps)
+
+# ── Phase 3M-4 Task 2: PureSignal calcc.c + iqc.c vendored verbatim ──
+# Smoke test: confirms calcc.c (1,164 LOC) + iqc.c (315 LOC) are picked up
+# by the third_party/wdsp/CMakeLists.txt GLOB and that the SetPS* public
+# API exported by calcc.c is reachable through wdsp_static (which is
+# PUBLIC-linked into NereusSDRObjs). Does NOT exercise DSP behavior;
+# that requires an opened channel and is covered by Tasks 3+.
+# Source: Thetis wdsp/calcc.c:891-1132 [v2.10.3.13] @501e3f51.
+nereus_add_test(tst_wdsp_ps_smoke)
+
+# ── Phase 3M-4 Task 3: TxChannel PureSignal API wrappers (22 functions) ──
+# Smoke tests for the 22 PS API wrappers added in Task 3:
+#   19 calcc setters/readers (setPSRunCal, setPSMox, setPSReset, setPSMancal,
+#     setPSAutomode, setPSTurnon, setPSControl, setPSLoopDelay, setPSMoxDelay,
+#     setPSTXDelay → returns double, setPSHWPeak, getPSHWPeak, getPSMaxTX,
+#     setPSPtol, getPSDisp → 7 buffers, setPSFeedbackRate, setPSPinMode,
+#     setPSMapMode, setPSStabilize, setPSIntsAndSpi, getPSInfo → int[16])
+#   plus 2 static channel-routing helpers (setPSRxIdx, setPSTxIdx) for the
+#     Stream0/Stream1 RX/TX feedback wiring per cmaster.cs:533-534.
+# Same does-not-crash strategy as B-1/B-2/B-3 PS smoke tests.  Wrappers
+# null-guard on `txa[m_channelId].rsmpin.p == nullptr` so calls on a bare
+# `TxChannel ch(1)` are safe in HAVE_WDSP-linked builds.
+# Source: Thetis wdsp/calcc.c:891-1132 [v2.10.3.13] +
+#         Thetis cmaster.cs:143-147 [v2.10.3.13].
+nereus_add_test(tst_tx_channel_ps_setters)
+
+# ── Phase 3M-4 Task 4: PsFeedbackChannel wrapper (WDSP feedback RX channel) ──
+# 4 tests covering channel-id uniqueness, sample-rate round-trip, activity
+# counter, and distinctness from the existing TX channel id (1).  The
+# PsFeedbackChannel is the host-side handle to the WDSP feedback RX channel
+# that calcc reads autonomously via pscc() (calcc.c:617 [v2.10.3.13]).
+# WdspEngine owns one instance, opened during initialize() (or via
+# openPsFeedbackChannelForTesting() in the test path) at channel id 5 per
+# the wdsp-integration.md §11.1 documented design.
+# Source: NereusSDR-original wrapper.  No Thetis source; Thetis manages
+#         WDSP channels via ChannelMaster.dll (see ps_sync_stub.c).
+nereus_add_test(tst_ps_feedback_channel)
+
+# ── Phase 3M-4 Task 7: PureSignal coordinator class ──────────────────────────
+# Cal lifecycle (singleCalibrate / setAutoCalEnabled / reset / setEnabled) +
+# MOX integration (onMoxChanged → SetPSMox forward) + auto-attention 3-state
+# machine (Monitor → SetNewValues → RestoreOperation → Monitor) + status
+# polling (pollTimerTick → getPSInfo + Q_PROPERTY signal emission) +
+# save/restore (psSaveCorr / psRestoreCorr forwarding) + two-tone wiring +
+# UI mirror state (invertRedBlue / hideFeedback) + per-board capability
+# application (psDefaultPeak / psSampleRate fan-out).
+# Ports the host-side logic from Thetis PSForm.cs timer1code (PSForm.cs:555-
+# 728 [v2.10.3.13]), ForcePS (PSForm.cs:920-955), and the eAAState 3-state
+# auto-attention machine (PSForm.cs:97-122 + 729-790 [v2.10.3.13]).
+# NEREUS_BUILD_TESTS exposes lastPSFeedbackRateForTest seam used by the PR
+# #212 codex-fix A test (HL2 sentinel resolution to cmaster.cs:424 ps_rate).
+nereus_add_test(tst_puresignal_coordinator)
+target_compile_definitions(tst_puresignal_coordinator PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-4 Task 8: PsForm modeless dialog ────────────────────────────────
+# Source-first port of Thetis PSForm.cs (1,164 LOC) [v2.10.3.13].  Tests verify
+# all 23 designer controls exist by objectName, defaults match Thetis verbatim,
+# Advanced toggle collapses/restores body widgets, and every action button
+# routes to the PureSignal coordinator (Task 7).  Save button gating mirrors
+# Thetis PSForm.cs:574-590 [v2.10.3.13] CorrectionsBeingApplied predicate.
+nereus_add_test(tst_psform)
+
+# ── Phase 3M-4 Task 9: AmpViewWindow modeless dialog ─────────────────────────
+# Source-first port of Thetis AmpView.cs (528 LOC) [v2.10.3.13].  Tests verify
+# title "AmpView 1.0" verbatim, ClientSize 564x401 / MinSize 440x380, 4 toolbar
+# checkboxes exist by objectName at exact Thetis x positions
+# (chkAVShowGain @ 7,378 / chkAVPhaseZoom @ 242,378 / chkAVLowRes @ 404,378
+# / chkStayOnTop @ 490,378), 5 named chart series (Ref / MagAmp / PhsAmp /
+# MagCorr / PhsCorr), default chkAVLowRes Checked per AmpView.Designer.cs:
+# 182-183 [v2.10.3.13], toggle persistence to AppSettings, stay-on-top window
+# flag application, chart axis ranges (Mag 1.0/2.0 + Phase 180/45) matching
+# AmpView.cs:435-482 [v2.10.3.13], and lowResStride() == 4 per AmpView.cs:
+# 457-463 [v2.10.3.13].
+nereus_add_test(tst_ampview_window)
+
+# ── Phase 3M-4 Task 10: PsaIndicatorWidget bottom-banner FB+PS pair ──────────
+# Source-first port of Thetis ucInfoBar.cs:820-1098 [v2.10.3.13] (lblFB +
+# lblPS sub-controls).  Tests cover the full 6-state machine (PS off /
+# RX idle / TX hide-feedback / TX numeric / TX correcting / TX corrections-
+# applied not-correcting), the 4 color thresholds with default + swapped
+# variants (PSForm.cs:1123-1138 [v2.10.3.13]), left/right click handlers
+# routed to invertRedBlueRequested / hideFeedbackToggleRequested
+# (ucInfoBar.cs:1042-1054 [v2.10.3.13]), passive PS label (no signals on
+# click), compact-fonts threshold for "FB"/"Correct", and tooltip text
+# verbatim from ucInfoBar.cs:1081-1096 [v2.10.3.13] including the
+# "Showing level, " prefix gating.
+nereus_add_test(tst_psa_indicator)
+
+# ── Phase 3M-4 Task 11: Setup deltas for PureSignal ──────────────────────────
+# (1) AntennaAlexAlex1Tab "HPF Bypass on PureSignal feedback" toggle now
+#     shows the IMD warning dialog when un-checked (multi-paragraph text
+#     verbatim from Thetis setup.cs:29274-29292 [v2.10.3.13]).  Cancel
+#     reverts via QSignalBlocker.  Emits new hpfBypassOnPsChanged signal.
+# (2) GeneralOptionsPage gains 2 PureSignal Info Bar checkboxes that
+#     mirror Thetis groupBoxTS23 controls (setup.designer.cs:10567-10632
+#     [v2.10.3.13]): chkHideFeebackLevel + chkSwapREDBluePSAColours.
+#     User-visible text uses corrected spelling; Thetis typo "Feeback"
+#     preserved only in source-cite for traceability.
+# Test seam (setImdWarningResultForTest) lets tests drive both the
+# Cancel-revert path and the OK-persist path without invoking a real
+# QMessageBox::exec() modal.
+nereus_add_test(tst_setup_deltas)
+
+# ── Phase 3M-4 Task 13: applet wiring (PureSignalApplet + TxApplet [PS-A]) ───
+# Replaces NyiOverlay::markNyi scaffolding in two applets with live wiring to
+# the PureSignal coordinator (Task 7).
+#
+# PureSignalApplet (NereusSDR-native quick-access surface):
+#   7 buttons (Calibrate / Auto / Save / Restore / 2-Tone) + 2 gauges (FB /
+#   Correction) + 3 LEDs (Cal / Run / Fbk) + 3 info labels (Iterations /
+#   Feedback dB / Correction dB).  Right-click on every control emits
+#   openPureSignalDialogRequested → MainWindow::openPureSignalDialog.  Save
+#   button gated on PureSignal::correctionsBeingAppliedChanged post-Codex Fix
+#   D (mirrors PSForm.cs:574-590 [v2.10.3.13] CorrectionsBeingApplied
+#   getter; pre-fix the wire was correctingChanged which conflated two
+#   distinct Thetis predicates).
+#
+# TxApplet [PS-A] toggle (source-first port of Thetis chkFWCATUBypass):
+#   Visibility gated on caps.hasPureSignal (TxApplet::setBoardCapabilities).
+#   Left-click toggle drives PureSignal::setAutoCalEnabled (mirrors
+#   chkFWCATUBypass_Click, console.cs:36762 [v2.10.3.13]).  Right-click
+#   opens PsForm via openPureSignalDialogRequested signal (mirrors
+#   chkFWCATUBypass_MouseDown, console.cs:46149-46152 [v2.10.3.13]).
+#
+# PureSignal coordinator extended with 3 new signals: calStateChanged
+# (engine state for Cal/Run LEDs), correctionPeakChanged (HW peak for
+# Correction gauge), and feedbackActiveChanged (correcting && MOX for
+# Fbk LED).  All three fired from existing pollTimerTick.
+nereus_add_test(tst_applet_ps_wiring)
+
 # ── Phase 3M-1b Task B.1: BoardCapabilities::hasMicJack flag ─────────────────
 # Parametrized over all HPSDRHW enum values.
 # HL2 and HermesLiteRxOnly → false; all other boards → true.
@@ -170,6 +307,45 @@ target_compile_definitions(tst_p1_user_dig_out_setter PRIVATE NEREUS_BUILD_TESTS
 # Source: Thetis ChannelMaster/networkproto1.c:600 [v2.10.3.13].
 nereus_add_test(tst_p1_puresignal_run_setter)
 target_compile_definitions(tst_p1_puresignal_run_setter PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-4 Task 17 P1 follow-up: bank 2/3 PS DDC freq override ───────────
+# 10 tests cover the verbatim port of the puresignal_run freq override:
+#
+#   1.  No MOX: bank 2 emits RX freq even with PS armed.
+#   2.  HermesII PS-MOX: bank 2 → TX freq override.
+#   3.  HermesII PS-MOX: bank 3 → TX freq override.
+#   4.  HermesII no-PS MOX: bank 3 emits RX2 freq (Hermes default path).
+#   5.  HL2 PS-MOX: bank 2 does NOT override (nDdc=4 disables gate).
+#   6.  applyPsDdcConfig packs cntrl1+cntrl2 into m_adcCtrl + bank 4 emit.
+#   7.  applyPsDdcConfig arms bank 0 + bank 4 flush flags.
+#   8.  setTxStepAttenuation arms m_forceBank4Next.
+#   9.  setTxStepAttenuation idempotent: flush flag set even on no-op.
+#   10. setPuresignalRun arms bank 0 + bank 11 flush flags.
+#
+# Source map (per assertion):
+#   Bank 2/3 override:           mi0bot networkproto1.c:982-1009 [v2.10.3.13-beta2]
+#   Bank 4 ADC routing:          mi0bot console.cs:8531-8532 [v2.10.3.13-beta2]
+#   setTxStepAttenuation flush:  Thetis netInterface.c:1006-1016 [v2.10.3.13]
+#   setPuresignalRun flush:      Thetis PSForm.cs:246-247 [v2.10.3.13]
+nereus_add_test(tst_p1_puresignal_ddc_freq)
+target_compile_definitions(tst_p1_puresignal_ddc_freq PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3M-4 mi0bot audit: per-board PS DDC pair index verification ────────
+# 8 tests cover psFbDdc/txMonDdc population by each per-board codec's
+# applyPureSignalDdcConfig(), against the Thetis MetisReadThreadMainLoop
+# twist() dispatch + console.cs GetDDC() table.
+#
+# Source map (per assertion):
+#   nddc=2 PS pair:        mi0bot networkproto1.c:380-381 [v2.10.3.13-beta2]
+#                          + console.cs:8798-8800 GetDDC HermesII case 5
+#   nddc=4 PS pair:        mi0bot networkproto1.c:383-387 [v2.10.3.13-beta2]
+#                          + console.cs:8757-8762 GetDDC HL2/Hermes case 5
+#   nddc=5 P1 PS pair:     mi0bot networkproto1.c:388-392 [v2.10.3.13-beta2]
+#                          + console.cs:8710-8714 GetDDC Orion-class case 5
+#   P2 PS pair:            network.c:936-945 freq override [v2.10.3.13]
+#                          + console.cs:8623 GetDDC P2 case 5
+nereus_add_test(tst_ps_ddc_indices_per_board)
+target_compile_definitions(tst_ps_ddc_indices_per_board PRIVATE NEREUS_BUILD_TESTS)
 
 # ── P1 full-parity Task 2.5: TransmitModel::pureSig → setPuresignalRun wiring ─
 # 8 tests pin the model-to-connection wiring installed in
@@ -273,6 +449,28 @@ nereus_add_test(tst_p2_codec_orionmkii)
 
 # ── Phase 3P-B Task 5: P2CodecSaturn — Saturn BPF1 band-edge override ──
 nereus_add_test(tst_p2_codec_saturn)
+
+# ── Phase 3M-4 Task 5: per-board PsDdcConfig codec dispatch ──
+# Verifies every codec subclass (P1CodecStandard / P1CodecHl2 /
+# P1CodecAnvelinaPro3 / P1CodecRedPitaya / P2CodecOrionMkII /
+# P2CodecSaturn) emits the wire-byte map matching its branch in Thetis
+# console.cs:8186-8538 UpdateDDCs() [v2.10.3.13] (and mi0bot
+# console.cs:8409-8488 [v2.10.3.13-beta2] for HL2).  ~25 cases covering:
+#   - G2-class (PS-on/off, MOX/no-MOX, diversity, RX2)
+#   - HL2 (rx1_rate vs ps_rate distinction at 96k/192k)
+#   - HermesII-class (p1DdcConfig=5 vs Hermes p1DdcConfig=6)
+#   - RedPitaya (Rate[1] = rx1_rate in PS-off cases per REDPITAYA PAVEL)
+#   - HPSDR (Atlas) returns all zeros sentinel
+nereus_add_test(tst_codec_ps_ddc_config)
+
+# ── Phase 3M-4 Task 6: ReceiverManager UpdateDDCs PS branch ──────────────
+# Verifies the ReceiverManager state setters (PS / MOX / diversity / RX
+# rates / RX2 enable / ADC ctrl shadow) dispatch through the injected
+# per-board codec's applyPureSignalDdcConfig() and re-emit the resulting
+# PsDdcConfig via ddcConfigChanged for RadioConnection consumption (a
+# follow-up task wires that up).  Ports the orchestration of Thetis
+# console.cs:8186-8538 UpdateDDCs() [v2.10.3.13].
+nereus_add_test(tst_receiver_manager_ps_ddc)
 
 # ── Phase 3P-B Task 7: regression-freeze gate ────────────────────────────
 nereus_add_test(tst_p2_regression_freeze)
@@ -3684,3 +3882,11 @@ nereus_add_test(tst_transmit_model_hl2_dbm)
 #                                           differs from the HL2 formula value.
 # Source: mi0bot-Thetis console.cs:47775-47778 [v2.10.3.13-beta2].
 nereus_add_test(tst_transmit_model_hl2_audio_volume)
+
+# ── Phase 3M-4 Task 12: two-tone IMD overlay ────────────────────────────────
+# 12 tests covering the ImdOverlay peak-detection state machine + IMD3/IMD5
+# labeling + EMA smoothing + readout text formatting.  Pure C++ math; no
+# Qt-widget instantiation, no PureSignal coordinator dependency.
+# Source: Thetis display.cs:5008/5210-5316/5453-5475/5512-5685/5725-5760
+#         [v2.10.3.13].
+nereus_add_test(tst_imd_overlay)

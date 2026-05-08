@@ -279,6 +279,10 @@ warren@wpratt.com
 #include "applets/RxApplet.h"
 #include "applets/TxApplet.h"
 #include "applets/TxEqDialog.h"
+#include "PsForm.h"
+#include "PsaIndicatorWidget.h"
+#include "core/PureSignal.h"
+#include "core/TwoToneController.h"
 #include "applets/PhoneCwApplet.h"
 #include "applets/EqApplet.h"
 #include "applets/VaxApplet.h"
@@ -1114,6 +1118,47 @@ void MainWindow::buildUI()
                     Qt::QueuedConnection);
         }
 
+        // ── Phase 3M-4 Task 12: SpectrumWidget IMD overlay state wiring ──────
+        // From Thetis display.cs:5008 [v2.10.3.13] show condition:
+        //   show_imd_measurements = local_mox && _testing_imd
+        //                           && _show_imd_measurements && displayduplex;
+        // local_mox is already wired above. Wire the other two flags from
+        // their authoritative coordinators:
+        //   testing_imd            <- TwoToneController::twoToneActiveChanged
+        //                              (mirrors Thetis Display.TestingIMD,
+        //                              display.cs:296-302 [v2.10.3.13])
+        //   show_imd_measurements  <- PureSignal::show2ToneMeasurementsChanged
+        //                              (mirrors Thetis Display.ShowIMDMeasurments,
+        //                              display.cs:304-311 [v2.10.3.13])
+        // displayduplex stays at SpectrumWidget's default (true) — see header.
+        if (m_spectrumWidget) {
+            if (auto* tt = m_radioModel->twoToneController()) {
+                connect(tt, &TwoToneController::twoToneActiveChanged,
+                        m_spectrumWidget, &SpectrumWidget::setTestingIMD);
+            }
+            // Phase 3M-4 bench-fix: PureSignal coordinator is late-bound
+            // during WDSP-init — at MainWindow build time it's typically
+            // nullptr, so the connection below never gets made and the
+            // IMD overlay show condition stays at m_showIMDMeasurements=
+            // false even after the user checks chkShow2ToneMeasurements.
+            // Subscribe to RadioModel::pureSignalCoordinatorReady so we
+            // re-attempt the connect when the coordinator becomes available.
+            // Mirrors the pattern in PureSignalApplet.cpp:118-123 +
+            // PsaIndicatorWidget bench-fix.
+            auto wireSpectrumToPs = [this](PureSignal* ps) {
+                if (!ps || !m_spectrumWidget) { return; }
+                connect(ps, &PureSignal::show2ToneMeasurementsChanged,
+                        m_spectrumWidget,
+                        &SpectrumWidget::setShowIMDMeasurements,
+                        Qt::UniqueConnection);
+            };
+            wireSpectrumToPs(m_radioModel->pureSignal());
+            connect(m_radioModel, &RadioModel::pureSignalCoordinatorReady,
+                    this, [wireSpectrumToPs](PureSignal* ps) {
+                        wireSpectrumToPs(ps);
+                    });
+        }
+
         // ── 3M-1c Phase L.3: VFO TX badge routing ─────────────────────────────
         //
         // MoxController::moxChanged(rx, oldMox, newMox) → VfoDisplayItem
@@ -1843,6 +1888,30 @@ void MainWindow::populateDefaultMeter()
         dialog->show();
     });
 
+    // ── Phase 3M-4 Task 13: PS-A right-click → open PsForm ─────────────────
+    // Mirrors Thetis chkFWCATUBypass_MouseDown (console.cs:46149-46152
+    // [v2.10.3.13]).  PsForm is the same singleton dialog opened from the
+    // Tools / DSP menu and from PureSignalApplet right-click handlers.
+    connect(txApplet, &TxApplet::openPureSignalDialogRequested,
+            this, &MainWindow::openPureSignalDialog);
+
+    // Phase 3M-4 Task 13 — capability-gated PS-A visibility.  Push initial
+    // caps + keep them in sync on RadioModel::currentRadioChanged.  TxApplet
+    // hides m_psaBtn when caps.hasPureSignal == false (HL2 / Atlas).
+    txApplet->setBoardCapabilities(m_radioModel->boardCapabilities());
+    connect(m_radioModel, &RadioModel::currentRadioChanged, txApplet,
+            [this, txApplet]() {
+        txApplet->setBoardCapabilities(m_radioModel->boardCapabilities());
+    });
+
+    // Phase 3M-4 Task 13 — late-bound coordinator handoff.  TxApplet
+    // already self-subscribes inside its ctor (see TxApplet.cpp wireControls
+    // PS-A block), so no explicit connect needed here.  Still: push the
+    // current coordinator at startup in case it's already live (test path).
+    if (PureSignal* ps = m_radioModel->pureSignal()) {
+        txApplet->setPureSignal(ps);
+    }
+
     // 3M-1a H.1-H.4 fixup: wire panadapter band changes to TxApplet so
     // the per-band Tune Power slider tracks the active band.
     // Without this, m_currentBand stays at Band::Band20m permanently.
@@ -1910,12 +1979,30 @@ void MainWindow::populateDefaultMeter()
                                 m_radioModel->audioEngine(), nullptr);
     panel->addApplet(m_vaxApplet);
 
+    // Phase 3M-4 Task 13 — PureSignalApplet quick-access surface.
+    //
+    // Constructed unconditionally and added to the right panel, but
+    // visibility is gated on caps.hasPureSignal in onConnectionStateChanged
+    // (HL2 / Atlas hide the applet entirely; G2-class boards show it).
+    // Right-click on every PureSignalApplet control opens PsForm via the
+    // openPureSignalDialogRequested signal, which MainWindow forwards to
+    // openPureSignalDialog (same singleton dialog as Tools / DSP menu).
+    m_pureSignalApplet = new PureSignalApplet(m_radioModel, nullptr);
+    panel->addApplet(m_pureSignalApplet);
+    connect(m_pureSignalApplet,
+            &PureSignalApplet::openPureSignalDialogRequested,
+            this, &MainWindow::openPureSignalDialog);
+    // Initial visibility from current board caps; tracked thereafter via
+    // onConnectionStateChanged (where hasPureSignal is also gated on the
+    // PSA bottom-banner indicator).
+    m_pureSignalApplet->setVisible(
+        m_radioModel->boardCapabilities().hasPureSignal);
+
     // Ghost applets: constructed but not added to the panel or the Containers menu
     // until their feature phases ship. Uncomment the construction + addContainerToggle
     // call (in buildMenuBar) together when the feature lands.
     //
     // m_digitalApplet    = new DigitalApplet(m_radioModel, nullptr);    // TODO 3-VAX
-    // m_pureSignalApplet = new PureSignalApplet(m_radioModel, nullptr); // TODO 3M-4 (PureSignal)
     // m_diversityApplet  = new DiversityApplet(m_radioModel, nullptr);  // TODO 3F (multi-RX)
     // m_cwxApplet        = new CwxApplet(m_radioModel, nullptr);        // TODO 3M-2 (CW TX)
     // m_dvkApplet        = new DvkApplet(m_radioModel, nullptr);        // TODO 3M-1 (DVK)
@@ -2481,9 +2568,15 @@ void MainWindow::buildMenuBar()
         eqAction->setToolTip(QStringLiteral("NYI — Phase 3I-3"));
     }
     {
+        // Phase 3M-4 Task 8: wire DSP > PureSignal... to the modeless dialog.
+        // Both this entry and Tools > PureSignal... below open the same
+        // singleton dialog (DSP for discoverability under the existing
+        // DSP-feature menu, Tools per the per-task plan §8.4).
         QAction* psAction = dspMenu->addAction(QStringLiteral("&PureSignal..."));
-        psAction->setEnabled(false);
-        psAction->setToolTip(QStringLiteral("NYI — Phase 3I-4"));
+        psAction->setToolTip(
+            QStringLiteral("Open the PureSignal pre-distortion control dialog."));
+        connect(psAction, &QAction::triggered,
+                this, &MainWindow::openPureSignalDialog);
     }
     {
         QAction* divAction = dspMenu->addAction(QStringLiteral("&Diversity..."));
@@ -2717,6 +2810,18 @@ void MainWindow::buildMenuBar()
             dlg->raise();
             dlg->activateWindow();
         });
+    }
+
+    // Phase 3M-4 Task 8: PureSignal — modeless singleton dialog.
+    // Same target as DSP > PureSignal... above; this entry per design doc
+    // §4 #3 ("Tools > PureSignal..." for higher discoverability than the
+    // DSP-buried path).
+    {
+        m_actPureSignal = toolsMenu->addAction(QStringLiteral("&PureSignal..."));
+        m_actPureSignal->setToolTip(QStringLiteral(
+            "Open the PureSignal pre-distortion control dialog."));
+        connect(m_actPureSignal, &QAction::triggered,
+                this, &MainWindow::openPureSignalDialog);
     }
 
     toolsMenu->addSeparator();
@@ -2954,6 +3059,44 @@ void MainWindow::buildStatusBar()
         m_rxDashboard->bindSlice(slices.at(0));
     }
     hbox->addWidget(m_rxDashboard);
+
+    // ── Phase 3M-4 Task 10: PSA bottom-banner pair (FB + PS) ──────────────────
+    // Source-first port of Thetis ucInfoBar.cs:820-1098 [v2.10.3.13].
+    // The widget auto-wires to RadioModel's PureSignal coordinator and
+    // MoxController on construction; click signals route back to
+    // PureSignal::setInvertRedBlue / setHideFeedback below.
+    //
+    // Phase 3M-4 bench-fix: visibility is gated on
+    //   caps.hasPureSignal && pureSignal->isAutoCalEnabled()
+    // (NereusSDR-specific UX: hide the banner unless the user has
+    // explicitly armed PS-A; reduces clutter for non-PS workflows on
+    // PS-capable boards).  updatePsaIndicatorVisibility() centralises the
+    // condition; called from autoCalEnabledChanged + connection-state +
+    // pureSignalCoordinatorReady (late-bind seam, Task 13).
+    m_psaIndicator = new PsaIndicatorWidget(m_radioModel, barWidget);
+    m_psaIndicator->setVisible(false);
+    auto wirePsaCoordinator = [this](PureSignal* ps) {
+        if (!ps) return;
+        connect(m_psaIndicator,
+                &PsaIndicatorWidget::invertRedBlueRequested,
+                this, [ps]() {
+                    ps->setInvertRedBlue(!ps->invertRedBlue());
+                });
+        connect(m_psaIndicator,
+                &PsaIndicatorWidget::hideFeedbackToggleRequested,
+                this, [ps]() {
+                    ps->setHideFeedback(!ps->hideFeedback());
+                });
+        connect(ps, &PureSignal::autoCalEnabledChanged,
+                this, &MainWindow::updatePsaIndicatorVisibility);
+    };
+    wirePsaCoordinator(m_radioModel->pureSignal());
+    connect(m_radioModel, &RadioModel::pureSignalCoordinatorReady,
+            this, [this, wirePsaCoordinator](PureSignal* ps) {
+                wirePsaCoordinator(ps);
+                updatePsaIndicatorVisibility();
+            });
+    hbox->addWidget(m_psaIndicator);
 
     // ── Stretch ───────────────────────────────────────────────────────────────
     hbox->addStretch(1);
@@ -4559,6 +4702,50 @@ void MainWindow::showSupportDialog()
     m_supportDialog->activateWindow();
 }
 
+// Phase 3M-4 Task 8: open the modeless PureSignal dialog (Tools >
+// PureSignal... and DSP > PureSignal...).  Lazy-constructs on the first
+// call; subsequent calls show + raise the existing instance so geometry
+// persists across opens.  Source-first port of Thetis console.cs:43099-
+// 43104 linearityToolStripMenuItem_Click [v2.10.3.13]:
+//
+//   if (psform == null) psform = new PSForm(this);
+//   psform.Show();
+//   psform.Focus();
+//
+// NereusSDR mirrors via raise()+activateWindow() instead of Focus().
+void MainWindow::openPureSignalDialog()
+{
+    if (!m_psForm) {
+        // PureSignal coordinator is owned by RadioModel; pass it directly so
+        // the dialog can wire signal/slot bindings even before connect.
+        // RadioModel is the owner; we keep a non-owning pointer so the
+        // dialog tolerates RadioModel-less startup (covered by tst_psform
+        // construction-time test).
+        PureSignal* coordinator =
+            (m_radioModel ? m_radioModel->pureSignal() : nullptr);
+        m_psForm = new PsForm(m_radioModel, coordinator, this);
+    }
+    m_psForm->show();
+    m_psForm->raise();
+    m_psForm->activateWindow();
+}
+
+// Phase 3M-4 bench-fix: PSA bottom-banner indicator visibility
+// gated on (caps.hasPureSignal && PureSignal::isAutoCalEnabled).
+// Centralised so onConnectionStateChanged + autoCalEnabledChanged +
+// pureSignalCoordinatorReady can all share one truth-source.
+void MainWindow::updatePsaIndicatorVisibility()
+{
+    if (!m_psaIndicator) { return; }
+    const bool caps =
+        m_radioModel
+        && m_radioModel->isConnected()
+        && m_radioModel->boardCapabilities().hasPureSignal;
+    auto* ps = m_radioModel ? m_radioModel->pureSignal() : nullptr;
+    const bool armed = ps && ps->isAutoCalEnabled();
+    m_psaIndicator->setVisible(caps && armed);
+}
+
 void MainWindow::showAudioDiagnoseDialog()
 {
 #if defined(Q_OS_LINUX)
@@ -4617,6 +4804,23 @@ void MainWindow::onConnectionStateChanged()
         //   if (HardwareSpecific.Model == HPSDRModel.HPSDR) { ... }).
         m_stepAttController->setIsHpsdrBoard(
             m_radioModel->connection()->radioInfo().boardType == HPSDRHW::Atlas);
+
+        // Phase 3M-4 Task 10 + bench-fix: PSA bottom-banner indicator is
+        // gated on caps.hasPureSignal AND pureSignal->isAutoCalEnabled().
+        // Boards without PS support (HL2 / Atlas) hide the FB+PS pair
+        // entirely; PS-capable boards (Hermes II / Angelia / Orion /
+        // Saturn / G2) show it only when the user has armed PS-A.
+        // updatePsaIndicatorVisibility centralises the condition.
+        updatePsaIndicatorVisibility();
+        // Phase 3M-4 Task 13: gate PureSignalApplet + TxApplet [PS-A] on
+        // the same board capability.  PureSignalApplet hides itself; the
+        // TxApplet [PS-A] button hides via its setBoardCapabilities slot.
+        if (m_pureSignalApplet) {
+            m_pureSignalApplet->setVisible(caps.hasPureSignal);
+        }
+        if (m_txApplet) {
+            m_txApplet->setBoardCapabilities(caps);
+        }
         // P1 full-parity §4.1: gate AutoAttMode::Adaptive on per-step
         // calibration support.  Must be set BEFORE loadSettings() so a
         // persisted "Adaptive" string is clamped to Classic when the
@@ -4649,6 +4853,25 @@ void MainWindow::onConnectionStateChanged()
 
         // Disconnect step attenuator from radio
         m_stepAttController->setRadioConnection(nullptr);
+
+        // Phase 3M-4 Task 10 + bench-fix: hide the PSA indicator on
+        // disconnect.  Re-evaluated via updatePsaIndicatorVisibility on
+        // next reconnect (which now also checks PureSignal::isAutoCalEnabled).
+        updatePsaIndicatorVisibility();
+        // Phase 3M-4 Task 13: hide PureSignalApplet + TxApplet [PS-A] on
+        // disconnect.  Same lifetime model as the PSA indicator above.
+        // Re-evaluation happens on next reconnect via the connected-branch
+        // gating block.
+        if (m_pureSignalApplet) {
+            m_pureSignalApplet->setVisible(false);
+        }
+        if (m_txApplet) {
+            // Push the unknown-board defaults (hasPureSignal == false) so
+            // [PS-A] hides.  RadioModel::boardCapabilities() returns the
+            // unknown-board fallback when m_hardwareProfile.caps is null
+            // (RadioModel.cpp:1016 [v2.10.3.13] equivalent).
+            m_txApplet->setBoardCapabilities(m_radioModel->boardCapabilities());
+        }
 
         // Phase 3Q Sub-PR-6 (F.1): RxDashboard shows placeholder "—" when
         // disconnected automatically (slice values reset to defaults). No

@@ -23,6 +23,7 @@
 
 #include <QtGlobal>
 #include "CodecContext.h"
+#include "../HpsdrModel.h"
 
 namespace NereusSDR {
 
@@ -39,6 +40,39 @@ public:
     virtual void composeCmdHighPriority(const CodecContext& ctx, quint8 buf[1444]) const = 0;
     virtual void composeCmdRx          (const CodecContext& ctx, quint8 buf[1444]) const = 0;
     virtual void composeCmdTx          (const CodecContext& ctx, quint8 buf[60])   const = 0;
+
+    // PureSignal DDC config emission. Phase 3M-4 Task 5.
+    // Returns the wire-byte map describing how this board configures its
+    // DDCs when PureSignal is active. Called from
+    // ReceiverManager::updateDdcAssignment() (Task 6) to drive the PS
+    // branches of per-board UpdateDDCs.
+    //
+    // The `model` parameter is included for symmetry with IP1Codec
+    // (where P1CodecStandard handles multiple HpsdrModel values).  P2
+    // codec subclasses currently map 1:1 to single board families —
+    // P2CodecOrionMkII covers ANAN-100D/200D/ORIONMKII/7000D/8000D/
+    // ANVELINAPRO3, P2CodecSaturn covers ANAN-G2/G2-1K — and the Thetis
+    // switch lumps both into the same G2-class branch
+    // (console.cs:8211-8295 [v2.10.3.13]).  Reserved for future
+    // per-model divergence.
+    //
+    // The `adcCtrl1` / `adcCtrl2` parameters carry the live ADC control
+    // bytes (Thetis console.cs `rx_adc_ctrl1` / `rx_adc_ctrl2` members
+    // [v2.10.3.13]) into the masked emission formulas.
+    //
+    // Source: ports the per-board branches in Thetis console.cs UpdateDDCs()
+    // (lines 8186-8538) [v2.10.3.13].
+    virtual PsDdcConfig applyPureSignalDdcConfig(
+        HPSDRModel model,
+        bool psEnabled,
+        bool diversityEnabled,
+        bool moxState,
+        int rx1Rate,
+        int rx2Rate,
+        bool rx2Enabled,
+        quint8 adcCtrl1,
+        quint8 adcCtrl2
+    ) const = 0;
 };
 
 } // namespace NereusSDR

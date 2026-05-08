@@ -144,11 +144,31 @@ void P2CodecOrionMkII::composeCmdHighPriority(const CodecContext& ctx, quint8 bu
     // RX frequencies — 4 bytes each, big-endian phase words.
     // General cmd byte 37 = 0x08 (bit 3) means frequencies are NCO phase words.
     // From pcap analysis: phase_word = freq_hz * 2^32 / 122880000
-    // RX0-RX1 have PureSignal override logic; for now use straight frequency
+    //
+    // Phase 3M-4 Task 17 fix: RX0/RX1 have a PureSignal override.  When
+    // (ptt_out && puresignal_run) both true, DDC0 and DDC1 frequencies
+    // are overridden to TX freq so both DDCs down-convert at the TX
+    // signal's centre — that's what feeds calcc the post-PA loopback
+    // (DDC0) and TX-monitor (DDC1) at the right baseband.  Mirrors
+    // Thetis network.c:936-945 [v2.10.3.13]:
+    //   packetbuf[9..12]  = (ptt_out && puresignal_run)
+    //                       ? tx_freq_phase : rx0_freq_phase;
+    //   packetbuf[13..16] = (ptt_out && puresignal_run)
+    //                       ? tx_freq_phase : rx1_freq_phase;
+    // RX2..RX6 are not overridden — they always use their own freq.
+    const bool psFreqOverride = (ctx.p2PttOut != 0) && ctx.puresignalRun;
+    const quint32 txPhaseWord =
+        hzToPhaseWord(ctx.txFreqHz, ctx.freqCorrectionFactor);
     for (int i = 0; i < kMaxDdc; ++i) {
         int offset = 9 + (i * 4);
         if (offset + 3 < kBufLen) {
-            quint32 phaseWord = hzToPhaseWord(ctx.rxFreqHz[i], ctx.freqCorrectionFactor);
+            quint32 phaseWord;
+            if (psFreqOverride && (i == 0 || i == 1)) {
+                phaseWord = txPhaseWord;
+            } else {
+                phaseWord = hzToPhaseWord(ctx.rxFreqHz[i],
+                                          ctx.freqCorrectionFactor);
+            }
             writeBE32(buf, offset, phaseWord);
         }
     }
@@ -386,6 +406,145 @@ quint32 P2CodecOrionMkII::buildAlex1(const CodecContext& ctx) const
     if (ctx.alexHpfBits & 0x40) { reg |= (1u << 3);  }
 
     return reg;
+}
+
+// =================================================================
+// Phase 3M-4 Task 5: PureSignal DDC config — G2-class branch
+// =================================================================
+//
+// Verbatim port of the G2-class branch in Thetis console.cs UpdateDDCs().
+// Covers HpsdrModel values: ANAN100D, ANAN200D, ORIONMKII, ANAN7000D,
+// ANAN8000D, ANAN_G2, ANAN_G2_1K, ANVELINAPRO3.  P2CodecSaturn inherits
+// this method unchanged (G2 / G2-1K share the same PS DDC layout).
+//
+// Source: Thetis console.cs:8211-8295 [v2.10.3.13]
+//
+// case HPSDRModel.ANAN100D:
+// case HPSDRModel.ANAN200D:
+// case HPSDRModel.ORIONMKII:
+// case HPSDRModel.ANAN7000D:
+// case HPSDRModel.ANAN8000D:
+// case HPSDRModel.ANAN_G2:
+// case HPSDRModel.ANAN_G2_1K:
+// case HPSDRModel.ANVELINAPRO3:
+//     P1_rxcount = 5;                     // RX5 used for puresignal feedback
+//     nddc = 5;
+//     ...
+//
+// `ps_rate` is the static cmaster.PSrate = 192000 (cmaster.cs:424
+// [v2.10.3.13]).
+PsDdcConfig P2CodecOrionMkII::applyPureSignalDdcConfig(
+    HPSDRModel /*model*/,
+    bool psEnabled,
+    bool diversityEnabled,
+    bool moxState,
+    int rx1Rate,
+    int rx2Rate,
+    bool rx2Enabled,
+    quint8 adcCtrl1,
+    quint8 adcCtrl2) const
+{
+    PsDdcConfig cfg;
+    constexpr uint8_t DDC0 = 1, DDC1 = 2, DDC2 = 4, DDC3 = 8;
+    // From Thetis cmaster.cs:424 [v2.10.3.13]: private static int ps_rate = 192000;
+    constexpr int ps_rate = 192000;
+
+    // From console.cs:8219-8220 [v2.10.3.13]
+    cfg.p1RxCount = 5;                     // RX5 used for puresignal feedback
+    cfg.nDdc      = 5;
+
+    if (!moxState) {
+        if (diversityEnabled) {
+            // From console.cs:8223-8232 [v2.10.3.13]
+            // P1_DDCConfig =
+            // DDCEnable = DDC0;            (note: P1_DDCConfig defaulted to 0 here per Thetis fall-through)
+            cfg.p1DdcConfig = 0;
+            cfg.ddcEnable   = DDC0;
+            cfg.syncEnable  = DDC1;
+            cfg.rate[0]     = static_cast<uint32_t>(rx1Rate);
+            cfg.rate[1]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = static_cast<uint8_t>(adcCtrl1 & 0xff);
+            cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+        } else {
+            // From console.cs:8233-8242 [v2.10.3.13]
+            cfg.p1DdcConfig = 1;
+            cfg.ddcEnable   = DDC2;
+            cfg.syncEnable  = 0;
+            // [2.10.3.13]MW0LGE p1 !
+            // (P2 path doesn't set Rate[0] here — Thetis only sets Rate[0] when p1==true)
+            cfg.rate[2]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = static_cast<uint8_t>(adcCtrl1 & 0xff);
+            cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+        }
+    } else {
+        if (!diversityEnabled && !psEnabled) {
+            // From console.cs:8246-8255 [v2.10.3.13]
+            cfg.p1DdcConfig = 1;
+            cfg.ddcEnable   = DDC2;
+            cfg.syncEnable  = 0;
+            // [2.10.3.13]MW0LGE p1 !  (Rate[0] only set on P1 path; codec is P2 here)
+            cfg.rate[2]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = static_cast<uint8_t>(adcCtrl1 & 0xff);
+            cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+        } else if (!diversityEnabled && psEnabled) {
+            // From console.cs:8256-8266 [v2.10.3.13]
+            cfg.p1DdcConfig = 3;
+            cfg.ddcEnable   = static_cast<uint8_t>(DDC0 + DDC2);
+            cfg.syncEnable  = DDC1;
+            cfg.rate[0]     = ps_rate;
+            cfg.rate[1]     = ps_rate;
+            cfg.rate[2]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = static_cast<uint8_t>((adcCtrl1 & 0xf3) | 0x08);
+            cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+
+            // Phase 3M-4 mi0bot audit: PS DDC pair indices for P2 G2-class.
+            //
+            // P2 PS-MOX uses the network.c:936-945 [v2.10.3.13] freq override
+            // to force DDC0+DDC1 to TX freq during MOX, so the PS pair on the
+            // wire is DDC0 (PS feedback) + DDC1 (TX monitor) regardless of
+            // the DDC count.  Different from P1 G2-class which uses DDC3+DDC4.
+            //
+            // Confirmed by mi0bot console.cs:8623 [v2.10.3.13-beta2] GetDDC()
+            // P2 case 5: rx1=2, rx2=3 (no explicit psrx/pstx — implicit DDC0/DDC1).
+            //
+            // Matches PsccPump default cmaster.cs:533-534 [v2.10.3.13].
+            // Explicit assignment for documentation + cross-codec consistency.
+            cfg.psFbDdc  = 0;
+            cfg.txMonDdc = 1;
+        } else if (diversityEnabled && psEnabled) {
+            // From console.cs:8267-8277 [v2.10.3.13]
+            cfg.p1DdcConfig = 3;
+            cfg.ddcEnable   = static_cast<uint8_t>(DDC0 + DDC2);
+            cfg.syncEnable  = DDC1;
+            cfg.rate[0]     = ps_rate;
+            cfg.rate[1]     = ps_rate;
+            cfg.rate[2]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = static_cast<uint8_t>((adcCtrl1 & 0xf3) | 0x08);
+            cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+
+            // Same PS DDC layout as the !diversity && PS branch above.
+            cfg.psFbDdc  = 0;
+            cfg.txMonDdc = 1;
+        } else {
+            // diversity_enabled && !puresignal_enabled
+            // From console.cs:8278-8287 [v2.10.3.13]
+            cfg.p1DdcConfig = 2;
+            cfg.ddcEnable   = DDC0;
+            cfg.syncEnable  = DDC1;
+            cfg.rate[0]     = static_cast<uint32_t>(rx1Rate);
+            cfg.rate[1]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = static_cast<uint8_t>(adcCtrl1 & 0xff);
+            cfg.cntrl2      = static_cast<uint8_t>(adcCtrl2 & 0x3f);
+        }
+    }
+
+    // From console.cs:8290-8294 [v2.10.3.13]
+    if (rx2Enabled) {
+        cfg.ddcEnable = static_cast<uint8_t>(cfg.ddcEnable + DDC3);
+        cfg.rate[3]   = static_cast<uint32_t>(rx2Rate);
+    }
+
+    return cfg;
 }
 
 } // namespace NereusSDR

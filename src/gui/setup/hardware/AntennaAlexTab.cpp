@@ -109,6 +109,13 @@ AntennaAlexTab::AntennaAlexTab(RadioModel* model, QWidget* parent)
                 emit settingChanged(QStringLiteral("alex1/") + key, value);
             });
 
+    // Phase 3M-4 Task 11: pass-through for the IMD-warning-gated HPF Bypass
+    // on PureSignal feedback toggle.  Lets SetupDialog wire this directly to
+    // the PureSignal coordinator without reaching down through three layers
+    // of setting key strings.
+    connect(m_alex1Tab, &AntennaAlexAlex1Tab::hpfBypassOnPsChanged,
+            this,       &AntennaAlexTab::hpfBypassOnPsChanged);
+
     // ── Tab 2: Alex-2 Filters ─────────────────────────────────────────────────
     // Source: Thetis tpAlex2FilterControl (setup.designer.cs:25539-26857) [@501e3f5]
     m_alex2FiltersTab = new AntennaAlexAlex2Tab(model, m_subTabs);

@@ -1,3 +1,16 @@
+// =================================================================
+// third_party/wdsp/src/calcc.c  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis source:
+//   Project Files/Source/wdsp/calcc.c @ v2.10.3.13 (commit 501e3f5)
+//   Verbatim vendor of the PureSignal calcc engine (TAPR v1.29 has no
+//   calcc/iqc — the entire PS subsystem must come from Thetis upstream).
+//   No NereusSDR-level edits. Original NR0V GPLv2-or-later license header
+//   preserved verbatim below.  See docs/attribution/WDSP-PROVENANCE.md
+//   "Partial sync record" for the line-level scope of this vendor.
+// =================================================================
+
 /*  calcc.c
 
 This file is part of a program that implements a Software-Defined Radio.
@@ -18,12 +31,27 @@ You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-The author can be reached by email at  
+The author can be reached by email at
 
 warren@wpratt.com
 
 */
 
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-05-06 — Phase 3M-4 Task 2: vendored verbatim from Thetis
+//                v2.10.3.13 @501e3f51 by J.J. Boyd (KG4VCF), with
+//                AI-assisted source-first protocol via Anthropic
+//                Claude Code. No source-level modifications.
+//                Cross-platform compatibility via existing
+//                third_party/wdsp/src/linux_port.h shim.
+//   2026-05-06 — Phase 3M-4 Task 3 attribution fix: NereusSDR-block
+//                "Ported from Thetis source" preamble added above the
+//                original NR0V license header, mirroring the cfcomp.c
+//                convention so verify-thetis-headers.py and
+//                check-new-ports.py both clear after the file landed
+//                in THETIS-PROVENANCE.md / WDSP-PROVENANCE.md.
+// =================================================================
 #define _CRT_SECURE_NO_WARNINGS
 #include "comm.h"
 
@@ -548,23 +576,23 @@ void __cdecl PSSaveCorrection (void *pargs)
 			FILE* file = fopen(a->util.savefile, "w");
 			if (file)
 			{
-				GetTXAiqcValues(a->util.channel, a->util.pm, a->util.pc, a->util.ps);
-				for (i = 0; i < a->util.ints; i++)
-				{
-					for (k = 0; k < 4; k++)
-						fprintf(file, "%.17e\t", a->util.pm[4 * i + k]);
-					fprintf(file, "\n");
-					for (k = 0; k < 4; k++)
-						fprintf(file, "%.17e\t", a->util.pc[4 * i + k]);
-					fprintf(file, "\n");
-					for (k = 0; k < 4; k++)
-						fprintf(file, "%.17e\t", a->util.ps[4 * i + k]);
-					fprintf(file, "\n\n");
-				}
-				fflush(file);
-				fclose(file);
+			GetTXAiqcValues(a->util.channel, a->util.pm, a->util.pc, a->util.ps);
+			for (i = 0; i < a->util.ints; i++)
+			{
+				for (k = 0; k < 4; k++)
+					fprintf(file, "%.17e\t", a->util.pm[4 * i + k]);
+				fprintf(file, "\n");
+				for (k = 0; k < 4; k++)
+					fprintf(file, "%.17e\t", a->util.pc[4 * i + k]);
+				fprintf(file, "\n");
+				for (k = 0; k < 4; k++)
+					fprintf(file, "%.17e\t", a->util.ps[4 * i + k]);
+				fprintf(file, "\n\n");
 			}
+			fflush(file);
+			fclose(file);
 		}
+	}
 	}
 	InterlockedBitTestAndReset(&a->savecorr_bypass, 0);
 }
@@ -582,25 +610,25 @@ void __cdecl PSRestoreCorrection(void *pargs)
 			if (file)
 			{
 				int error = 0;
-				for (i = 0; i < a->util.ints; i++)
-				{
+			for (i = 0; i < a->util.ints; i++)
+			{
 					// no additional reads after first error occurs
-					for (k = 0; k < 4; k++)
+				for (k = 0; k < 4; k++)
 						if (error == 0 && fscanf(file, "%le", &(a->util.pm[4 * i + k])) != 1) error = 1;
-					for (k = 0; k < 4; k++)
+				for (k = 0; k < 4; k++)
 						if (error == 0 && fscanf(file, "%le", &(a->util.pc[4 * i + k])) != 1) error = 1;
-					for (k = 0; k < 4; k++)
+				for (k = 0; k < 4; k++)
 						if (error == 0 && fscanf(file, "%le", &(a->util.ps[4 * i + k])) != 1) error = 1;
-				}
-				fclose(file);
+			}
+			fclose(file);
 				if (!error)
 				{
-					if (!InterlockedBitTestAndSet(&a->ctrl.running, 0))
-						SetTXAiqcStart(a->channel, a->util.pm, a->util.pc, a->util.ps);
-					else
-						SetTXAiqcSwap(a->channel, a->util.pm, a->util.pc, a->util.ps);
-				}
-			}
+			if (!InterlockedBitTestAndSet(&a->ctrl.running, 0))
+				SetTXAiqcStart(a->channel, a->util.pm, a->util.pc, a->util.ps);
+			else
+				SetTXAiqcSwap(a->channel, a->util.pm, a->util.pc, a->util.ps);
+		}
+	}
 		}
 	}
 	InterlockedBitTestAndReset(&a->restcorr_bypass, 0);

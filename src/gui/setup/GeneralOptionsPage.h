@@ -87,6 +87,22 @@ public:
     void setReceiveOnlyVisible(bool visible);
 
 signals:
+    // Phase 3M-4 Task 11: PureSignal Info Bar checkboxes.
+    // Mirror Thetis groupBoxTS23 controls on tpOptions2 ("Info Bar (below
+    // spectrum)") setup.designer.cs:10560-10632 [v2.10.3.13].  RadioModel /
+    // MainWindow routes both signals to PureSignal::setHideFeedback /
+    // PureSignal::setInvertRedBlue so the live banner updates without a
+    // Setup dialog close.
+
+    // Mirror of Thetis chkHideFeebackLevel (typo "Feeback" preserved in
+    // source-cite for traceability; corrected spelling used in user text).
+    // From setup.designer.cs:10571 [v2.10.3.13].
+    void hideFeedbackLevelChanged(bool on);
+
+    // Mirror of Thetis chkSwapREDBluePSAColours.
+    // From setup.designer.cs:10572 [v2.10.3.13].
+    void invertRedBluePsaChanged(bool on);
+
     // Emitted when the CPU meter rate spinbox value changes.
     // Value is in Hz (1-30). Forwarded by SetupDialog →
     // MainWindow::setCpuTimerIntervalHz().
@@ -119,6 +135,15 @@ private:
     // From Thetis setup.designer.cs:9050-9059 [v2.10.3.13] (grpGeneralOptions)
     QCheckBox* m_chkPreventTXonDifferentBandToRX{nullptr};
     QSpinBox*  m_cpuMeterRateHz{nullptr};
+
+    // Phase 3M-4 Task 11: PureSignal Info Bar checkboxes.
+    // Mirror of Thetis groupBoxTS23 ("Info Bar (below spectrum)") controls
+    // chkHideFeebackLevel + chkSwapREDBluePSAColours on tpOptions2
+    // (setup.designer.cs:10560-10632 [v2.10.3.13]).  Thetis places these
+    // on a dedicated Info Bar groupbox; NereusSDR's IA folds them into the
+    // existing General Options group to keep the Setup tree shallow.
+    QCheckBox* m_chkHideFeedback{nullptr};
+    QCheckBox* m_chkSwapRedBlue{nullptr};
 
     // Step Attenuator group
     QCheckBox* m_chkRx1StepAttEnable{nullptr};
