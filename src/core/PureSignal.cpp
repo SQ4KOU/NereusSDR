@@ -679,6 +679,37 @@ void PureSignal::applyBoardCapabilities(const BoardCapabilities& caps)
     if (m_fb && m_caps.psSampleRate > 0) {
         m_fb->setSampleRate(m_caps.psSampleRate);
     }
+
+    // Bulk push the three PS timing parameters to WDSP — mirrors the
+    // udPS*_ValueChanged(this, e) chain Thetis fires at PSForm.cs:942-944
+    // [v2.10.3.13] when the form initializes.  Without these pushes, WDSP
+    // sits at its create_calcc / create_delay zero defaults (calcc.c:190-205
+    // [v2.10.3.13]) regardless of what the C++ Q_PROPERTY mirror values
+    // are.  The setAmpDelay/setMoxDelay/setCalDelay setters all early-return
+    // when called with the value they already have, so a "click button"
+    // user flow never re-pushes initial values either.
+    //
+    // Concrete failure mode pre-fix (HL2 bench, 7 MHz, 2-Tone):
+    //   - WDSP txdelay=0 (we never pushed 150 ns); calcc compares TX[t]
+    //     vs FB[t] (no cable-delay compensation) → iqc LUT cc[0]≈-0.54,
+    //     cs[0]≈-0.85 → constant ~120° phase rotation across envelope
+    //     range.  Thetis on the same radio shows AmpView Phs Corr flat
+    //     near 0° because Thetis pushed 150 ns at PSForm init.
+    //   - calcc moxdelay=0 (we never pushed 0.2 s) → LMOXDELAY state
+    //     short-circuits immediately into LSETUP without the settling
+    //     pause Thetis uses.
+    if (m_tx) {
+        // From Thetis PSForm.cs:505 udPSPhnum_ValueChanged [v2.10.3.13]:
+        //   double actual_delay = puresignal.SetPSTXDelay(_txachannel,
+        //       (double)udPSPhnum.Value * 1.0e-09);
+        m_tx->setPSTXDelay(static_cast<double>(m_ampDelay) * 1.0e-9);
+        // From Thetis PSForm.cs:495 udPSMoxDelay_ValueChanged [v2.10.3.13]:
+        //   puresignal.SetPSMoxDelay(_txachannel, (double)udPSMoxDelay.Value);
+        m_tx->setPSMoxDelay(m_moxDelay);
+        // From Thetis PSForm.cs:500 udPSCalWait_ValueChanged [v2.10.3.13]:
+        //   puresignal.SetPSLoopDelay(_txachannel, (double)udPSCalWait.Value);
+        m_tx->setPSLoopDelay(m_calDelay);
+    }
 }
 
 // ── AmpView buffer feed (Task 9) ───────────────────────────────────────────

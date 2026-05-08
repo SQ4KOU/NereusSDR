@@ -272,7 +272,8 @@ public:
     //   autoAttenuate   default true   (PSForm.designer.cs:227-228)
     //   relaxTolerance  default false  (PSForm.designer.cs:257)
     //   quickAttenuate  default false  (PSForm.designer.cs:809)
-    //   moxDelay        default 2.0    (PSForm.designer.cs:368-372)
+    //   moxDelay        default 0.2    (PSForm.designer.cs:368-372 —
+    //                                   decimal{2,0,0,65536} = 2 with scale 1)
     //   calDelay        default 0.0    (PSForm.designer.cs:801-805)
     //   ampDelay        default 150    (PSForm.designer.cs:409-413)
     //   tint            default 0.5    (PSForm.designer.cs:172)
@@ -671,9 +672,23 @@ private:
     bool   m_autoAttenuate{true};   // chkPSAutoAttenuate default Checked
     bool   m_relaxTolerance{false}; // chkPSRelaxPtol default unchecked
     bool   m_quickAttenuate{false}; // chkQuickAttenuate default unchecked
-    double m_moxDelay{2.0};         // udPSMoxDelay default 2.0
-    double m_calDelay{0.0};         // udPSCalWait default 0.0
-    int    m_ampDelay{150};         // udPSPhnum default 150
+    // Defaults verified against Thetis PSForm.designer.cs [v2.10.3.13]:
+    //   udPSMoxDelay.Value = decimal(2, 0, 0, 65536) = 2 with scale=1 → 0.2 sec
+    //                        (designer.cs:368-372)
+    //   udPSPhnum.Value    = decimal(150, 0, 0, 0)            = 150 ns
+    //                        (designer.cs:409-413)
+    //   udPSCalWait.Value  = decimal(0, 0, 0, 0)              = 0.0 sec
+    //                        (designer.cs:801-805)
+    // PureSignal::applyBoardCapabilities() pushes these to WDSP at init —
+    // matching the bulk push Thetis does via udPS*_ValueChanged(this, e) at
+    // PSForm.cs:942-944 [v2.10.3.13].  Without that push, WDSP runs with its
+    // own zero defaults (calcc.c:190-205 txdelay=0/rxdelay=0; calcc state
+    // machine moxdelay=0) — calcc converges with mis-aligned TX/FB samples,
+    // baking a ~120° constant phase rotation into the iqc LUT (cc[0]/cs[0])
+    // and producing correction that doesn't reduce IMD3 on the wire.
+    double m_moxDelay{0.2};         // udPSMoxDelay default 0.2 sec
+    double m_calDelay{0.0};         // udPSCalWait default 0.0 sec
+    int    m_ampDelay{150};         // udPSPhnum default 150 ns
     double m_tint{0.5};             // comboPSTint default "0.5"
     // Codex Fix F: per-index combo state mirror — m_tint stays as the
     // dB-label cache for backward compat (legacy setTint/tintChanged API),
