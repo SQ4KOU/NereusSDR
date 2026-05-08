@@ -59,6 +59,7 @@
 
 #include "RadioInfoTab.h"
 
+#include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
 #include "core/HardwareProfile.h"
 #include "core/HpsdrModel.h"
@@ -66,6 +67,7 @@
 #include "core/SampleRateCatalog.h"
 #include "models/RadioModel.h"
 
+#include <QCheckBox>
 #include <QClipboard>
 #include <QComboBox>
 #include <QFormLayout>
@@ -168,6 +170,36 @@ RadioInfoTab::RadioInfoTab(RadioModel* model, QWidget* parent)
     m_reconnectBanner->setVisible(false);
     outerLayout->addWidget(m_reconnectBanner);
 
+    // ── ANAN-8000DLE volts/amps toggle ────────────────────────────────────────
+    // Capability-gated checkbox: visible only when the connected radio is an
+    // ANAN-8000D.  Controls whether the chrome title bar shows the PA voltage
+    // / current readout (which Thetis gates behind HardwareSpecific.HasVolts).
+    // The PA voltage widget in the chrome bar is already auto-shown/hidden by
+    // the userAdc0Changed signal (MKII-class gate in P2RadioConnection); this
+    // checkbox provides an additional user override for ANAN-8000D specifically.
+    // Persists: HardwareAnan8000DleShowVoltsAmps ("True"/"False", default "True").
+    {
+        auto& s = AppSettings::instance();
+        m_anan8000DleVoltsAmpsToggle = new QCheckBox(
+            tr("Show volts/amps in title bar"), this);
+        m_anan8000DleVoltsAmpsToggle->setToolTip(
+            tr("ANAN-8000DLE only — display power supply voltage and current "
+               "draw in the chrome title bar."));
+        m_anan8000DleVoltsAmpsToggle->setChecked(
+            s.value(QStringLiteral("HardwareAnan8000DleShowVoltsAmps"),
+                    QStringLiteral("True")).toString() == QStringLiteral("True"));
+        // Hidden by default; populate() shows it when the radio is an ANAN-8000D.
+        m_anan8000DleVoltsAmpsToggle->setVisible(false);
+
+        connect(m_anan8000DleVoltsAmpsToggle, &QCheckBox::toggled, this, [this](bool v) {
+            AppSettings::instance().setValue(
+                QStringLiteral("HardwareAnan8000DleShowVoltsAmps"),
+                v ? QStringLiteral("True") : QStringLiteral("False"));
+            emit anan8000DleVoltsAmpsChanged(v);
+        });
+        outerLayout->addWidget(m_anan8000DleVoltsAmpsToggle);
+    }
+
     // ── Support info button ───────────────────────────────────────────────────
     m_copySupportInfoButton = new QPushButton(tr("Copy Support Info to Clipboard"), this);
     m_copySupportInfoButton->setToolTip(
@@ -264,6 +296,15 @@ void RadioInfoTab::populate(const RadioInfo& info, const BoardCapabilities& caps
         m_activeRxSpin->setRange(1, caps.maxReceivers);
         m_activeRxSpin->setValue(1);
         m_activeRxSpin->setEnabled(true);
+    }
+
+    // ANAN-8000DLE volts/amps toggle: visible only for ANAN8000D model.
+    // HPSDRModel::ANAN8000D (value 10) is the OrionMKII-family SKU that
+    // Thetis ships as the "ANAN-8000DLE"; gated here to avoid showing this
+    // option on 7000DLE / AnvelinaPro3 (same OrionMKII board, different label).
+    if (m_anan8000DleVoltsAmpsToggle) {
+        const bool is8000D = (model == HPSDRModel::ANAN8000D);
+        m_anan8000DleVoltsAmpsToggle->setVisible(is8000D);
     }
 
     // Build clipboard text for Copy Support Info button

@@ -59,6 +59,7 @@ mw0lge@grange-lane.co.uk
 #include <QPainter>
 #include <QStringList>
 #include <cmath>
+#include <algorithm>
 
 namespace NereusSDR {
 
@@ -83,6 +84,33 @@ void HistoryGraphItem::setCapacity(int cap)
     m_capacity = cap;
     m_buf0.resize(cap);
     m_buf1.resize(cap);
+}
+
+// ---------------------------------------------------------------------------
+// setDurationMs() — Task 3.3
+// Convert duration (milliseconds) to capacity (sample count).
+// Capacity = durationMs * pollHz / 1000, where pollHz = 1000 / pollIntervalMs.
+// Default poll interval is 100 ms (10 Hz), but MeterPoller may change it.
+// We conservatively assume 10 Hz and allow some slack for timing variations.
+//
+// Formula: capacity = durationMs / (1000 / 10) = durationMs / 100
+// Minimum capacity is 2; maximum is clamped by practical display limits.
+// ---------------------------------------------------------------------------
+void HistoryGraphItem::setDurationMs(int ms)
+{
+    // Clamp to valid range (1 s — 10 min)
+    if (ms < 1000) { ms = 1000; }
+    if (ms > 600000) { ms = 600000; }
+
+    m_durationMs = ms;
+
+    // Compute capacity from duration assuming 10 Hz poll (100 ms interval).
+    // Thetis clsHistoryItem stores ~300 samples (30 s at 100 ms),
+    // so factor of 10 per second is established.
+    const int pollIntervalMs = 100;
+    const int newCapacity = std::max(2, (ms / pollIntervalMs) + 1);
+
+    setCapacity(newCapacity);
 }
 
 // ---------------------------------------------------------------------------
@@ -283,11 +311,12 @@ void HistoryGraphItem::paintLine(QPainter& p, const QRect& rect,
 // serialize()
 // Tag: HISTORY
 // Format: HISTORY|x|y|w|h|bindingId|zOrder|capacity|lineColor0|lineColor1|
-//         showGrid|autoScale0|autoScale1|showScale0|showScale1|bindingId1
+//         showGrid|autoScale0|autoScale1|showScale0|showScale1|bindingId1|durationMs (v2)
+// Task 3.3: durationMs appended for forward compatibility
 // ---------------------------------------------------------------------------
 QString HistoryGraphItem::serialize() const
 {
-    return QStringLiteral("HISTORY|%1|%2|%3|%4|%5|%6|%7|%8|%9|%10|%11|%12|%13|%14|%15")
+    return QStringLiteral("HISTORY|%1|%2|%3|%4|%5|%6|%7|%8|%9|%10|%11|%12|%13|%14|%15|%16")
         .arg(static_cast<double>(m_x))
         .arg(static_cast<double>(m_y))
         .arg(static_cast<double>(m_w))
@@ -302,20 +331,24 @@ QString HistoryGraphItem::serialize() const
         .arg(m_autoScale1 ? 1 : 0)
         .arg(m_showScale0 ? 1 : 0)
         .arg(m_showScale1 ? 1 : 0)
-        .arg(m_bindingId1);
+        .arg(m_bindingId1)
+        .arg(m_durationMs);  // Task 3.3: new in v2
 }
 
 // ---------------------------------------------------------------------------
 // deserialize()
-// Expected parts (16 total):
-// [0]=HISTORY [1]=x [2]=y [3]=w [4]=h [5]=bindingId [6]=zOrder
-// [7]=capacity [8]=lineColor0 [9]=lineColor1
-// [10]=showGrid [11]=autoScale0 [12]=autoScale1
-// [13]=showScale0 [14]=showScale1 [15]=bindingId1
+// Expected parts:
+// v1 (15 fields): [0]=HISTORY [1]=x [2]=y [3]=w [4]=h [5]=bindingId [6]=zOrder
+//                 [7]=capacity [8]=lineColor0 [9]=lineColor1
+//                 [10]=showGrid [11]=autoScale0 [12]=autoScale1
+//                 [13]=showScale0 [14]=showScale1 [15]=bindingId1
+// v2 (17 fields): ...all v1... [16]=durationMs
+// Task 3.3: both v1 and v2 supported for backward compatibility
 // ---------------------------------------------------------------------------
 bool HistoryGraphItem::deserialize(const QString& data)
 {
     const QStringList parts = data.split(QLatin1Char('|'));
+    // Accept 16 parts (v1) or 17 parts (v2)
     if (parts.size() < 16 || parts[0] != QLatin1String("HISTORY")) {
         return false;
     }
@@ -343,6 +376,12 @@ bool HistoryGraphItem::deserialize(const QString& data)
     const int showScale1 = parts[14].toInt(&ok);  if (!ok) { return false; }
     const int bindingId1 = parts[15].toInt(&ok);  if (!ok) { return false; }
 
+    // Task 3.3: optional durationMs (v2 format)
+    int durationMs = m_durationMs;  // default to current value
+    if (parts.size() >= 17) {
+        durationMs = parts[16].toInt(&ok);  if (!ok) { durationMs = m_durationMs; }
+    }
+
     setRect(x, y, w, h);
     setBindingId(bindingId);
     setZOrder(zOrder);
@@ -356,6 +395,9 @@ bool HistoryGraphItem::deserialize(const QString& data)
     m_showScale0 = (showScale0 != 0);
     m_showScale1 = (showScale1 != 0);
     m_bindingId1 = bindingId1;
+
+    // Task 3.3: apply duration (which updates capacity via setDurationMs)
+    setDurationMs(durationMs);
 
     return true;
 }

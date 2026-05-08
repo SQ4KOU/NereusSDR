@@ -68,6 +68,7 @@ namespace NereusSDR {
 
 class ContainerWidget;
 class FloatingContainer;
+class MeterItem;
 class MeterWidget;
 enum class DockMode;
 
@@ -125,6 +126,13 @@ public:
     ContainerWidget* container(const QString& id) const;
     ContainerWidget* panelContainer() const;
     int containerCount() const;
+
+    // --- Unit-mode fan-out (Task 3.2) ---
+    // Iterates every MeterItem across all containers and invokes fn on each.
+    // Used by MultimeterPage to broadcast unit-mode / show-decimal changes
+    // to all live MeterItem instances without requiring the items to poll
+    // AppSettings on every paint.
+    void forEachMeterItem(std::function<void(MeterItem*)> fn);
 
     // --- Visibility ---
     void setContainerVisible(const QString& id, bool visible);

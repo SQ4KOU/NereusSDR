@@ -135,6 +135,11 @@ void ClarityController::feedBins(const QVector<float>& bins, qint64 nowMs)
     m_hasSmoothed   = true;
     m_lastPollMs    = nowMs;
 
+    // Emit the smoothed floor before the deadband gate so NF-aware grid
+    // and per-band NF priming (Tasks 2.9/2.10) receive every cadence tick.
+    // NereusSDR-original — no Thetis equivalent.
+    emit noiseFloorChanged(smoothed);
+
     // Deadband gate: suppress emission when floor hasn't drifted enough.
     if (m_hasEmitted && std::abs(smoothed - m_lastEmittedFloor) < m_deadbandDb) {
         return;

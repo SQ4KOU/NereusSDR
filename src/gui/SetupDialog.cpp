@@ -51,9 +51,12 @@
 #include "setup/AudioAdvancedPage.h"
 // DSP
 #include "setup/DspSetupPages.h"
+#include "setup/DspOptionsPage.h"   // Task 4.1
 #include "setup/FilterPresetsSetupPage.h"
 // Display
 #include "setup/DisplaySetupPages.h"
+#include "setup/SpectrumPeaksPage.h"
+#include "setup/MultimeterPage.h"     // Task 3.1
 // Transmit
 #include "setup/TransmitSetupPages.h"
 // Appearance
@@ -236,11 +239,28 @@ void SetupDialog::buildTree()
     add(general, "Startup & Preferences", new StartupPrefsPage(m_model));
     add(general, "UI Scale & Theme",       new UiScalePage(m_model));
     add(general, "Navigation",             new NavigationPage(m_model));
-    add(general, "Options",                new GeneralOptionsPage(m_model));
+
+    // Task 3.6: CPU meter rate spinbox — forward signal up to SetupDialog so
+    // MainWindow's wireSetupDialog() can connect it to setCpuTimerIntervalHz().
+    {
+        auto* optionsPage = new GeneralOptionsPage(m_model);
+        add(general, "Options", optionsPage);
+        connect(optionsPage, &GeneralOptionsPage::cpuMeterRateChanged,
+                this,        &SetupDialog::cpuMeterRateChanged);
+    }
 
     // ── Hardware ─────────────────────────────────────────────────────────────
     QTreeWidgetItem* hardware = addCategory("Hardware");
-    add(hardware, "Hardware Config", new HardwarePage(m_model));
+
+    // Task 3.6: ANAN-8000DLE volts/amps toggle — forward signal up to
+    // SetupDialog so MainWindow's wireSetupDialog() can connect it to
+    // setVoltsAmpsVisible().
+    {
+        auto* hwPage = new HardwarePage(m_model);
+        add(hardware, "Hardware Config", hwPage);
+        connect(hwPage, &HardwarePage::anan8000DleVoltsAmpsChanged,
+                this,   &SetupDialog::anan8000DleVoltsAmpsChanged);
+    }
 
     // ── PA ────────────────────────────────────────────────────────────────────
     // Top-level PA category mirrors Thetis tpPowerAmplifier
@@ -331,11 +351,41 @@ void SetupDialog::buildTree()
             m_model ? m_model->filterPresetStore() : nullptr,
             m_model));
 
+    // Task 4.1: DSP → Options page (buffer/filter size+type, impulse cache,
+    // high-res filter characteristics, time-to-last-change readout).
+    // Mirrors Thetis tpDSPOptions tab (design Section 4A).
+    add(dsp, "Options",  new DspOptionsPage(m_model));
+
     // ── Display ───────────────────────────────────────────────────────────────
     QTreeWidgetItem* display = addCategory("Display");
-    add(display, "Spectrum Defaults",  new SpectrumDefaultsPage(m_model));
+
+    // Task 2.4: SpectrumDefaultsPage gains cross-link buttons to Spectrum Peaks
+    // (and a forward-reference to Multimeter which lands in Task 3.1).
+    auto* specDefaultsPage = new SpectrumDefaultsPage(m_model);
+    add(display, "Spectrum Defaults", specDefaultsPage);
+    connect(specDefaultsPage, &SpectrumDefaultsPage::navigateToSpectrumPeaksRequested,
+            this, [this]() { selectPage(QStringLiteral("Spectrum Peaks")); });
+    // Task 3.1: Multimeter page now exists — wire the cross-link.
+    connect(specDefaultsPage, &SpectrumDefaultsPage::navigateToMultimeterRequested,
+            this, [this]() { selectPage(QStringLiteral("Multimeter")); });
+
+    // Task 2.4: Spectrum Peaks page — skeleton with APH + Blob controls + back cross-link.
+    auto* specPeaksPage = new SpectrumPeaksPage(m_model);
+    add(display, "Spectrum Peaks",    specPeaksPage);
+    connect(specPeaksPage, &SpectrumPeaksPage::backToSpectrumDefaultsRequested,
+            this, [this]() { selectPage(QStringLiteral("Spectrum Defaults")); });
+
     add(display, "Waterfall Defaults", new WaterfallDefaultsPage(m_model));
     add(display, "Grid & Scales",      new GridScalesPage(m_model));
+
+    // Task 3.1: Display → Multimeter — 8 multimeter globals + unit-mode + signal history.
+    // Folded from Thetis Display→General Multimeter group per design Section 3A.
+    // Cross-link: ← Spectrum Defaults / SpectrumDefaultsPage → Multimeter.
+    auto* multimeterPage = new MultimeterPage(m_model);
+    add(display, "Multimeter", multimeterPage);
+    connect(multimeterPage, &MultimeterPage::backToSpectrumDefaultsRequested,
+            this, [this]() { selectPage(QStringLiteral("Spectrum Defaults")); });
+
     add(display, "RX2 Display",        new Rx2DisplayPage(m_model));
     add(display, "TX Display",         new TxDisplayPage(m_model));
 
@@ -399,7 +449,7 @@ void SetupDialog::buildTree()
     add(diagnostics, "Logs",               new LogsPage);
     add(diagnostics, "Signal Generator",   new DiagSignalGeneratorPage);
     add(diagnostics, "Hardware Tests",     new DiagHardwareTestsPage);
-    add(diagnostics, "Logging",            new DiagLoggingPage);
+    add(diagnostics, "Logging & Performance", new DiagLoggingPage);
 
     m_tree->expandAll();
 }

@@ -56,6 +56,8 @@ mw0lge@grange-lane.co.uk
 
 // From Thetis clsFilterItem (MeterManager.cs:16852+)
 
+#include "core/RxChannel.h"
+
 #include <QPainter>
 #include <QPolygonF>
 #include <QStringList>
@@ -78,6 +80,35 @@ FilterDisplayItem::FilterDisplayItem(QObject* parent)
     // Waterfall image: kSpectrumPixels wide, 200 rows tall, RGB32
     m_waterfallImage = QImage(kSpectrumPixels, 200, QImage::Format_RGB32);
     m_waterfallImage.fill(Qt::black);
+}
+
+// ---------------------------------------------------------------------------
+// setHighResolution() — Task 4.4
+// Toggle high-resolution FIR magnitude rendering on/off.
+// When on, paintFilterEdges() calls paintHighResolutionFilterCurve() instead
+// of the simplified box passband.  Calls update() so the host MeterWidget
+// repaints on the next frame.
+// ---------------------------------------------------------------------------
+void FilterDisplayItem::setHighResolution(bool h)
+{
+    if (m_highResolution == h) {
+        return;
+    }
+    m_highResolution = h;
+    // MeterItem is not a QWidget — the host MeterWidget repaints on its own
+    // timer, so no explicit update() call is needed here.  The new mode takes
+    // effect on the next paint frame automatically.
+}
+
+// ---------------------------------------------------------------------------
+// bindRxChannel() — Task 4.4
+// Bind the RxChannel whose filterResponseMagnitudes() supplies the FIR curve.
+// Non-owning pointer — caller must clear (bindRxChannel(nullptr)) before the
+// channel is destroyed.
+// ---------------------------------------------------------------------------
+void FilterDisplayItem::bindRxChannel(RxChannel* channel)
+{
+    m_rxChannel = channel;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,14 +275,22 @@ QColor FilterDisplayItem::dbToWaterfallColor(float db) const
 
 // ---------------------------------------------------------------------------
 // paintFilterEdges()
-// Draw RX and TX filter edge markers.
+// Draw RX and TX filter edge markers, and (when high-res mode is active) the
+// computed FIR magnitude curve.
 // From Thetis clsFilterItem _edges_colour_rx/_edges_colour_tx (MeterManager.cs:16951+)
 // Pixel positions (0-511) are mapped to the item's pixel rect width.
+// High-res path added in Task 4.4 (design Section 4D).
 // ---------------------------------------------------------------------------
 void FilterDisplayItem::paintFilterEdges(QPainter& p, const QRect& rect)
 {
     if (rect.isEmpty()) {
         return;
+    }
+
+    // Task 4.4: render the actual FIR magnitude curve when high-res is enabled.
+    // Drawn before the edge markers so the edge lines appear on top.
+    if (m_highResolution) {
+        paintHighResolutionFilterCurve(p, rect);
     }
 
     const float scale = static_cast<float>(rect.width()) / static_cast<float>(kSpectrumPixels);
@@ -276,6 +315,65 @@ void FilterDisplayItem::paintFilterEdges(QPainter& p, const QRect& rect)
         p.drawLine(pixelToX(m_txLow),  rect.top(), pixelToX(m_txLow),  rect.bottom());
         p.drawLine(pixelToX(m_txHigh), rect.top(), pixelToX(m_txHigh), rect.bottom());
     }
+}
+
+// ---------------------------------------------------------------------------
+// paintHighResolutionFilterCurve() — Task 4.4, design Section 4D
+// Render the actual computed FIR magnitude response from
+// RxChannel::filterResponseMagnitudes(nPoints) as a poly-line overlay.
+//
+// The magnitude vector is sampled at rect.width() points covering the
+// positive half-spectrum [0 .. sampleRate/2).  Each value is in dB.
+// We map the dB range [kHighResCurveDbFloor .. 0] to [rect.bottom() .. rect.top()].
+// Values above 0 dB are clamped to the top; values below the floor are clamped
+// to the bottom.
+//
+// The curve is drawn in a distinct "filter-response" cyan so it stands out from
+// the ordinary spectrum trace (m_dataLineColour) without conflicting with the
+// RX/TX edge markers.
+// ---------------------------------------------------------------------------
+void FilterDisplayItem::paintHighResolutionFilterCurve(QPainter& p, const QRect& rect)
+{
+    if (!m_rxChannel || rect.isEmpty()) {
+        return;
+    }
+
+    const int nPoints = rect.width();
+    if (nPoints <= 0) {
+        return;
+    }
+
+    const QVector<float> mag = m_rxChannel->filterResponseMagnitudes(nPoints);
+    if (mag.size() != nPoints) {
+        // filterResponseMagnitudes() returns empty when WDSP/FFTW3 unavailable
+        // or when nPoints is invalid — silently skip.
+        return;
+    }
+
+    // dB range for the high-res curve display.
+    // 0 dB = passband; -80 dB covers the stopband for typical windowed-sinc FIRs.
+    static constexpr float kHighResCurveDbFloor = -80.0f;
+    const float dbRange = 0.0f - kHighResCurveDbFloor; // 80 dB window
+
+    QPolygonF curve;
+    curve.reserve(nPoints);
+
+    for (int x = 0; x < nPoints; ++x) {
+        const float dB      = mag[x];
+        const float frac    = (dB - kHighResCurveDbFloor) / dbRange; // 0..1
+        const float fracClamped = std::clamp(frac, 0.0f, 1.0f);
+        // frac = 1.0 → top of rect (0 dB), frac = 0.0 → bottom (−80 dB)
+        const float y = static_cast<float>(rect.bottom())
+                        - fracClamped * static_cast<float>(rect.height());
+        curve.append(QPointF(rect.left() + x, y));
+    }
+
+    p.setRenderHint(QPainter::Antialiasing, true);
+    // Distinct cyan colour — contrasts with the yellow/red edge markers and the
+    // lime-green spectrum trace.
+    p.setPen(QPen(QColor(0x78, 0xc8, 0xff), 1));  // #78C8FF light-blue
+    p.setBrush(Qt::NoBrush);
+    p.drawPolyline(curve);
 }
 
 // ---------------------------------------------------------------------------

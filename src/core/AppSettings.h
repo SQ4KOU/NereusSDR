@@ -302,6 +302,17 @@ public:
     // See docs/architecture/2026-04-19-vax-design.md §5.5.
     static void migrateVaxSchemaV1ToV2();
 
+    // v0.3.0 settings schema migration. Call once at app startup (after load()).
+    // Detects pre-v0.3.0 state (SettingsSchemaVersion missing or < currentVersion)
+    // and applies all pending migrations in version order. Idempotent.
+    //
+    // Currently: v0 → v3 (covers v0.2.x → v0.3.0)
+    //   - Removes DisplayAverageMode (split into Detector + Averaging in Task 2.1)
+    //   - Removes DisplayPeakHold + DisplayPeakHoldDelayMs (→ ActivePeakHold keys, Task 2.5)
+    //   - Removes DisplayReverseWaterfallScroll (W5 removed in Task 2.8)
+    //   - Sets SettingsSchemaVersion=currentVersion
+    void ensureSettingsAtVersion(int currentVersion);
+
     // One-shot migration: legacy global "hl2IoBoard/n2adrFilter" (Bug 2 in
     // hermes-filter-debug) → per-MAC "hardware/<mac>/hl2IoBoard/n2adrFilter"
     // for every saved radio whose boardType is HermesLite. Removes the global

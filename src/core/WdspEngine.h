@@ -89,6 +89,7 @@ warren@wpratt.com
 */
 
 #include "WdspTypes.h"
+#include "dsp/ChannelConfig.h"
 
 #include <QObject>
 #include <QString>
@@ -170,6 +171,17 @@ public:
     // Look up an existing RX channel by WDSP channel ID.
     RxChannel* rxChannel(int channelId) const;
 
+    // Rebuild an RX channel in-place: capture state, destroy the existing
+    // WDSP channel, recreate with new config, reapply state.
+    //
+    // Returns elapsed milliseconds (≥ 0 on success). Returns -1 if the
+    // channel ID is not found or WdspEngine is not initialized.
+    //
+    // Thread safety: call on main thread only. The audio thread must not
+    // be feeding samples into the channel during rebuild (caller is
+    // responsible for pausing the feed).
+    qint64 rebuildRxChannel(int channelId, const ChannelConfig& cfg);
+
     // --- TX Channel management ---
 
     // TX channel constants derived from Thetis cmaster.c:177-190 [v2.10.3.13].
@@ -239,6 +251,16 @@ public:
     // always non-null (wrapper is always constructed alongside the WDSP channel).
     TxChannel* txChannel(int channelId) const;
 
+    // Rebuild a TX channel in-place: capture state, destroy the existing
+    // WDSP channel, recreate with new config, reapply state.
+    //
+    // Returns elapsed milliseconds (≥ 0 on success). Returns -1 if the
+    // channel ID is not found or WdspEngine is not initialized.
+    //
+    // Thread safety: call on main thread only. The TX worker thread must not
+    // be running (setRunning(false) + thread stop before calling this).
+    qint64 rebuildTxChannel(int channelId, const ChannelConfig& cfg);
+
 signals:
     void initializedChanged(bool initialized);
     // Emitted during wisdom generation. percent=0-100, status=what's being planned.
@@ -248,8 +270,14 @@ private:
     bool m_initialized{false};
     QString m_configDir;
 
-    // Finish initialization after WDSPwisdom completes (called from timer)
-    void finishInitialization();
+    // True when wisdom was regenerated this session.
+    // Used by finishInitialization() to skip loading a now-stale impulse
+    // cache file (mirrors Thetis radio.cs:151-158 [v2.10.3.13] rebuilt guard).
+    bool m_wisdomWasRebuilt{false};
+
+    // Finish initialization after WDSPwisdom completes.
+    // wisdomWasRebuilt: true when WDSPwisdom generated a new file this session.
+    void finishInitialization(bool wisdomWasRebuilt);
 
     // RX channels keyed by WDSP channel ID.
     std::map<int, std::unique_ptr<RxChannel>> m_rxChannels;
