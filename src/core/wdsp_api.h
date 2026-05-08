@@ -334,7 +334,7 @@ void SetRXAPanelRun(int channel, int run);
 // initializes gain1 = 4.0 (+12 dB), so the host MUST call this to bring the
 // audio panel to a sane unity level. Thetis's RXOutputGain setter passes
 // slider/Maximum (0.0..1.0) here directly; see radio.cs:1089 [v2.10.3.14].
-// From Thetis Project Files/Source/Console/dsp.cs:399-400 — P/Invoke decl
+// From Thetis Project Files/Source/Console/dsp.cs:399-400 [v2.10.3.14] — P/Invoke decl
 // WDSP: third_party/wdsp/src/patchpanel.c:142
 void SetRXAPanelGain1(int channel, double gain);
 

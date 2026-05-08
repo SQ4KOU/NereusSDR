@@ -521,7 +521,7 @@ public:
     // device. Thetis routes the per-slice AF slider through the same
     // setter via the RXOutputGain property at radio.cs:1089 [v2.10.3.14],
     // with slider/Maximum yielding 0.0..1.0.
-    // From Thetis Project Files/Source/Console/radio.cs:1077-1107
+    // From Thetis Project Files/Source/Console/radio.cs:1077-1107 [v2.10.3.14]
     // WDSP: third_party/wdsp/src/patchpanel.c:142
     double afGain() const { return m_afGain.load(); }
     void setAfGain(double gain);  // gain ∈ [0.0, 1.0], clamped
