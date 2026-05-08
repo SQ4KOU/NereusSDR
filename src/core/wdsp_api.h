@@ -2,6 +2,14 @@
 // src/core/wdsp_api.h  (NereusSDR)
 // =================================================================
 //
+// This file aggregates C API declarations ported from four Thetis
+// source files.  The verbatim upstream Copyright (C) lines and the
+// full GNU General Public License v2-or-later permission block from
+// each source (plus the Richard Samphire MW0LGE dual licensing
+// statement where applicable) are preserved below the modification
+// history block.  See docs/attribution/HOW-TO-PORT.md for the
+// multi-source header convention.
+//
 // Ported from Thetis sources:
 //   Project Files/Source/Console/dsp.cs, original licence from Thetis source is included below
 //   Project Files/Source/Console/radio.cs, original licence from Thetis source is included below
