@@ -198,6 +198,8 @@ warren@wpratt.com
 
 #include "NbFamily.h"
 #include "WdspTypes.h"
+#include "dsp/ChannelConfig.h"
+#include "dsp/RxChannelState.h"
 
 #ifdef HAVE_DFNR
 #include "DeepFilterFilter.h"
@@ -214,6 +216,8 @@ warren@wpratt.com
 #include <memory>
 
 namespace NereusSDR {
+
+class WdspEngine;  // forward declaration for rebuild()
 
 // Per-receiver WDSP channel wrapper.
 //
@@ -514,6 +518,18 @@ public:
     bool muted() const { return m_muted.load(); }
     void setMuted(bool muted);
 
+    // AF Gain: 0.0..1.0 linear, fed straight to the WDSP RX audio panel.
+    // wdsp/rxa.c:538 [v2.10.3.14] initializes panel.gain1 = 4.0 (+12 dB),
+    // so the host MUST call this to bring the panel down to a sane unity
+    // level — without it, downstream audio peaks ~4× hot and clips on the
+    // device. Thetis routes the per-slice AF slider through the same
+    // setter via the RXOutputGain property at radio.cs:1089 [v2.10.3.14],
+    // with slider/Maximum yielding 0.0..1.0.
+    // From Thetis Project Files/Source/Console/radio.cs:1077-1107 [v2.10.3.14]
+    // WDSP: third_party/wdsp/src/patchpanel.c:142
+    double afGain() const { return m_afGain.load(); }
+    void setAfGain(double gain);  // gain ∈ [0.0, 1.0], clamped
+
     // Audio pan: NereusSDR range -1.0..+1.0 (0.0 = center).
     // Converted to WDSP 0.0..1.0 via wdsp_pan = (pan + 1.0) / 2.0.
     // From Thetis Project Files/Source/Console/radio.cs:1386-1403
@@ -532,6 +548,115 @@ public:
     // --- Frequency shift (for pan offset from VFO) ---
 
     void setShiftFrequency(double offsetHz);
+
+    // --- Filter convenience setters (single-axis) ---
+    // Thin wrappers that remember the pending low/high and call setFilterFreqs.
+    // Carry-only for state preservation in captureState/applyState; WDSP wiring
+    // is via setFilterFreqs which is called when both low+high are applied.
+    void setFilterLow(int lowHz);
+    void setFilterHigh(int highHz);
+
+    // --- EQ carry fields (wired to WDSP in a later task) ---
+    // Carry-only for state preservation; no WDSP calls until EQ task lands.
+    void setEqEnabled(bool enabled);
+    void setEqPreamp(int preampDb);
+    void setEqBand(int bandIndex, int gainDb);
+
+    // --- Squelch carry (single unified squelch for state round-trip) ---
+    // Carry-only; per-mode squelch (SSQL/AMSQ/FMSQ) is still the primary API.
+    void setSquelchEnabled(bool enabled);
+    void setSquelchThreshold(int thresholdDb);
+
+    // --- RIT offset (carry; wired to WDSP in RIT task) ---
+    void setRitOffset(int ritHz);
+
+    // --- Antenna index (carry; routed via AlexController in antenna task) ---
+    void setAntennaIndex(int index);
+
+    // --- Shift offset (convenience alias for setShiftFrequency) ---
+    void setShiftOffset(double offsetHz);
+
+    // --- NB enabled (carry; NbFamily is the primary API) ---
+    void setNbEnabled(bool enabled);
+
+    // --- NR mode (carry; setActiveNr(NrSlot) is the primary API) ---
+    void setNrMode(int nrMode);
+
+    // --- Filter frequency response (Task 1.5) ---
+
+    /// Returns the FFT magnitude (in dB) of the current filter taps, sampled
+    /// at nPoints uniformly across [0, sampleRate/2].  For the high-resolution
+    /// filter graph (Section 4D, DspOptionsHighResFilterCharacteristics).
+    ///
+    /// Implementation:
+    ///   Option B (synthesized) — uses WDSP's fir_bandpass() with the same
+    ///   arguments that the internal BANDPASS struct uses, then computes the
+    ///   DFT magnitude via FFTW3 double-precision.  This matches the actual
+    ///   WDSP filter response because fir_bandpass() is the exact function
+    ///   that CalcBandpassFilter() calls internally.
+    ///
+    ///   Requires HAVE_WDSP and HAVE_FFTW3.  Returns an empty vector when
+    ///   either is absent or when nPoints <= 0.
+    ///
+    /// NereusSDR-original — no Thetis source ported; algorithm is generic.
+    QVector<float> filterResponseMagnitudes(int nPoints) const;
+
+    // --- State snapshot / restore (Task 1.2) ---
+    // Capture all DSP state into a portable struct.
+    // Restore the same state (calls all setters above).
+    RxChannelState captureState() const;
+    void applyState(const RxChannelState& state);
+
+    // --- Channel rebuild (Task 1.3) ---
+    // Tear down the WDSP channel, recreate with new config, reapply
+    // captured state. Delegates to WdspEngine::rebuildRxChannel().
+    //
+    // Returns elapsed milliseconds (≥ 0 on success). Returns -1 if
+    // the channel was not found in the engine (should not happen in
+    // normal operation — the engine owns all channels).
+    //
+    // Thread safety: call on main thread only. Caller must ensure the
+    // audio thread is not currently processing samples on this channel.
+    qint64 rebuild(WdspEngine& engine, const ChannelConfig& cfg);
+
+    // ── In-place filter resize / filter type change ─────────────────────────
+    //
+    // Wraps the WDSP entry points that Thetis calls from its DSPRX property
+    // setters at radio.cs:540 / 559 [v2.10.3.13]:
+    //   FilterSize → WDSP.RXASetNC
+    //   FilterType → WDSP.RXASetMP
+    //
+    // These are SAFE to call from the main thread while the audio worker is
+    // alive — RXASetNC/RXASetMP internally quiesce via SetChannelState's
+    // flushflag handshake (third_party/wdsp/src/channel.c:259-297
+    // [v2.10.3.13]) before reconfiguring all dependent subsystems, then
+    // restore the prior run state.  No external worker quiesce required.
+    //
+    // Idempotent: a no-op when the new value matches the cached current value.
+    void setFilterSizeSamples(int nc);
+    void setFilterTypeLinearPhase(bool linearPhase);
+
+    // ── DSP block size (live-apply via WDSP SetDSPBuffsize) ─────────────────
+    //
+    // Wraps the WDSP entry point Thetis calls from DSPRX.BufferSize setter
+    // at radio.cs:521 [v2.10.3.13]:
+    //   WDSP.SetDSPBuffsize(WDSP.id(thread, subrx), value);
+    //
+    // Thetis invariant from console.cs:38911 [v2.10.3.13]:
+    //   if (filtsize < bufsize) bufsize = filtsize;
+    // i.e. buffer size must never exceed filter size.  Required by WDSP
+    // fircore — firmin.c:135 [v2.10.3.13] computes nfor = nc / size and
+    // crashes at fftw_execute(NULL) if nc < size.  This setter silently
+    // clamps `size` down to `m_filterSize` to maintain the invariant
+    // (matches Thetis behaviour exactly — user's selection in the UI
+    // combo may differ from the actual applied value).
+    //
+    // Internally calls SetDSPBuffsize, which quiesces via SetChannelState
+    // and rebuilds the DSP graph with the new block size — heavier than
+    // RXASetNC but still safe to call while the audio worker is alive.
+    // Channel.c:181-194 [v2.10.3.13] for the WDSP-side semantics.
+    void setDspBufferSizeSamples(int size);
+    int  dspBlockSize() const { return m_dspBlockSize; }
 
     // --- Channel state ---
 
@@ -564,6 +689,23 @@ public:
     // --- Metering ---
 
     double getMeter(RxMeterType type) const;
+
+    // --- Per-mode DSP-Options live-apply (Task 4.2) ---
+    //
+    // Called when SliceModel emits dspModeChanged. Reads per-mode DSP-Options
+    // AppSettings keys (DspOptionsBufferSize<Mode>, DspOptionsFilterSize<Mode>,
+    // DspOptionsFilterType<Mode>Rx) for the new mode and triggers rebuild()
+    // if any buffer/filter/filter-type setting differs from the currently
+    // active channel config.
+    //
+    // Returns elapsed milliseconds if a rebuild occurred (≥ 0), 0 if nothing
+    // changed, or -1 if the channel was not found in the engine.
+    //
+    // Thread safety: call on main thread only. Requires m_wdspEngine to have
+    // been set via setWdspEngine() before this slot fires.
+    void setWdspEngine(WdspEngine* engine) { m_wdspEngine = engine; }
+
+    qint64 onModeChanged(DSPMode newMode);
 
 signals:
     void modeChanged(NereusSDR::DSPMode mode);
@@ -602,6 +744,12 @@ private:
     // muted: audio panel mute — off by default (panel runs)
     // From Thetis Project Files/Source/Console/dsp.cs:393-394
     std::atomic<bool> m_muted{false};
+    // afGain: 0.0..1.0 linear, mirrors Thetis radio.cs:1078 rx_output_gain
+    // [v2.10.3.14] (default 1.0 = unity panel gain). The WDSP RX panel
+    // initializes its internal gain1 to 4.0 in rxa.c:538, so setActive()
+    // pushes m_afGain via SetRXAPanelGain1 to override the default before
+    // any audio flows.
+    std::atomic<double> m_afGain{1.0};
     // binauralEnabled: binaural audio — off by default (dual-mono)
     // From Thetis radio.cs:1145-1162 — bin_on = false
     std::atomic<bool> m_binauralEnabled{false};
@@ -665,6 +813,56 @@ private:
     // Cached filter state
     double m_filterLow{150.0};
     double m_filterHigh{2850.0};
+
+    // --- Carry-only fields for captureState/applyState round-trip ---
+    // These hold state that will be wired to WDSP in later tasks.
+    // The single-axis filter setters below store here and feed setFilterFreqs.
+    int  m_filterLowInt{150};     // mirror of m_filterLow as int (setFilterLow/High carry)
+    int  m_filterHighInt{2850};   // mirror of m_filterHigh as int
+
+    // EQ — carry until EQ task wires SetRXAGrphEQ
+    bool m_eqEnabled{false};
+    int  m_eqPreampDb{0};
+    int  m_eqBandsDb[10]{0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+    // Squelch unified carry (per-mode SSQL/AMSQ/FMSQ are still primary)
+    bool m_squelchEnabled{false};
+    int  m_squelchThresholdDb{-150};
+
+    // RIT offset carry (wired in RIT task)
+    int  m_ritOffsetHz{0};
+
+    // Antenna index carry (routed via AlexController in antenna task)
+    int  m_antennaIndex{0};
+
+    // Shift offset carry (mirrors what was last passed to setShiftFrequency)
+    double m_shiftOffsetHz{0.0};
+
+    // NB enabled carry (NbFamily is the primary API; this is a convenience bool
+    // that reflects whether NbMode != Off)
+    bool m_nbEnabled{false};
+
+    // NR mode carry (setActiveNr(NrSlot) is the primary API)
+    int  m_nrMode{0};
+
+    // ── Task 4.2: per-mode DSP-Options live-apply ────────────────────────────
+    // Non-owning pointer to the WdspEngine set by RadioModel after channel
+    // creation. Required for onModeChanged() to call rebuild().
+    WdspEngine* m_wdspEngine{nullptr};
+
+    // Current filter size, filter type, and DSP block size — tracked here
+    // so the in-place WDSP setters can skip when nothing changed and so
+    // setFilterSizeSamples can enforce the Thetis invariant
+    // (filter >= buffer per console.cs:38911 [v2.10.3.13]).
+    //
+    // Defaults: filterSize=4096 + filterType=0 from ChannelConfig defaults.
+    // m_dspBlockSize=4096 matches the value RadioModel::connectToRadio
+    // passes to WdspEngine::createRxChannel (RadioModel.cpp:1445 — the
+    // dsp_size argument to OpenChannel).  WDSP fircore.size is set there
+    // and stays in sync with m_dspBlockSize through setDspBufferSizeSamples.
+    int m_filterSize{4096};
+    int m_filterType{0};      // 0 = LowLatency, 1 = LinearPhase
+    int m_dspBlockSize{4096}; // matches createRxChannel dsp_size
 };
 
 } // namespace NereusSDR

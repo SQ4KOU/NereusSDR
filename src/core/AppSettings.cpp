@@ -866,7 +866,6 @@ void AppSettings::migrateLegacyN2adrFilter(AppSettings& s)
     s.save();
 }
 
-// ---------------------------------------------------------------------------
 // Issue #174: orphan-key cleanup for hardware/oc/n2adrFilter
 // ---------------------------------------------------------------------------
 
@@ -880,6 +879,103 @@ void AppSettings::removeOrphanOcN2adrFilter(AppSettings& s)
     qDebug() << "Removed orphan settings key" << QString(kOrphanKey)
              << "(issue #174 — OcOutputsHfTab N2ADR checkbox had no consumer)";
     s.save();
+}
+
+// ---------------------------------------------------------------------------
+// v0.3.0 / v0.3.x settings schema migrations
+// ---------------------------------------------------------------------------
+
+void AppSettings::ensureSettingsAtVersion(int currentVersion)
+{
+    const QString versionKey = QStringLiteral("SettingsSchemaVersion");
+    const int storedVersion = value(versionKey, QStringLiteral("0")).toString().toInt();
+
+    if (storedVersion >= currentVersion) {
+        return;  // already at-or-past current version
+    }
+
+    // v0 → v3 migration (covers v0.2.x → v0.3.0)
+    if (storedVersion < 3 && currentVersion >= 3) {
+        qDebug() << "Migrating settings to schema v3 (NereusSDR v0.3.0)";
+
+        // Retire keys whose semantics changed in v0.3.0:
+        remove(QStringLiteral("DisplayAverageMode"));           // split into Detector + Averaging (Task 2.1)
+        remove(QStringLiteral("DisplayPeakHold"));              // promoted to ActivePeakHold... (Task 2.5)
+        remove(QStringLiteral("DisplayPeakHoldDelayMs"));       // → DisplayActivePeakHoldDurationMs (Task 2.5)
+        remove(QStringLiteral("DisplayReverseWaterfallScroll")); // W5 removed (Task 2.8)
+
+        qDebug() << "Settings migration to schema v3 complete";
+    }
+
+    // v3 → v4 migration (averaging-math fix). Retires the bare alpha key —
+    // alpha is now derived per-side from millisecond time constants via
+    // Thetis math (specHPSDR.cs:351-380 [v2.10.3.13]). Anyone with a v3
+    // settings file gets default 30 ms / 120 ms (Thetis defaults) on next
+    // load; the old alpha value is unrecoverable as a τ without knowing the
+    // historical fps, and the math was wrong anyway.
+    if (storedVersion < 4 && currentVersion >= 4) {
+        qDebug() << "Migrating settings to schema v4 (averaging math fix)";
+        remove(QStringLiteral("DisplayAverageAlpha"));
+        qDebug() << "Settings migration to schema v4 complete";
+    }
+
+    // v4 → v5 migration (Thetis-faithful DSP-Options layout).
+    //
+    // Thetis's Display → DSP Options page exposes separate RX and TX combos
+    // for buffer size and filter size on every mode that has TX (Phone, FM,
+    // Digital — CW TX is firmware-handled per Thetis console.cs:38891-38897
+    // [v2.10.3.13]).  NereusSDR collapsed those into single <Mode> keys
+    // shared between RX and TX channels.  This migration splits them back:
+    //
+    //   DspOptionsBufferSize<Mode>   → <Mode>Rx + <Mode>Tx (preserved value)
+    //   DspOptionsFilterSize<Mode>   → <Mode>Rx + <Mode>Tx (preserved value)
+    //
+    // Strategy: read old shared value, seed BOTH new keys with it, remove
+    // the old key.  Existing customisation carries forward identically;
+    // users can later differentiate RX vs TX in the new UI.  For CW we
+    // only seed <Mode>Rx — there is no TX combo to populate.
+    //
+    // From Thetis radio.cs:519-574 / 2604-2662 [v2.10.3.13] — DSPRX/DSPTX
+    // each persist BufferSize / FilterSize independently.
+    if (storedVersion < 5 && currentVersion >= 5) {
+        qDebug() << "Migrating settings to schema v5 (DSP-Options RX/TX split)";
+
+        struct ModeSpec {
+            QString modeKey;     // "Phone", "Cw", "Dig", "Fm"
+            bool    hasTx;       // false for Cw — firmware-handled
+        };
+        const ModeSpec modes[] = {
+            { QStringLiteral("Phone"), true  },
+            { QStringLiteral("Cw"),    false },
+            { QStringLiteral("Dig"),   true  },
+            { QStringLiteral("Fm"),    true  },
+        };
+
+        auto split = [&](const QString& family, const ModeSpec& spec) {
+            const QString oldKey = family + spec.modeKey;
+            const QString rxKey  = family + spec.modeKey + QStringLiteral("Rx");
+            const QString txKey  = family + spec.modeKey + QStringLiteral("Tx");
+            if (contains(oldKey)) {
+                const QString val = value(oldKey).toString();
+                if (!contains(rxKey)) {
+                    setValue(rxKey, val);
+                }
+                if (spec.hasTx && !contains(txKey)) {
+                    setValue(txKey, val);
+                }
+                remove(oldKey);
+            }
+        };
+
+        for (const auto& spec : modes) {
+            split(QStringLiteral("DspOptionsBufferSize"), spec);
+            split(QStringLiteral("DspOptionsFilterSize"), spec);
+        }
+
+        qDebug() << "Settings migration to schema v5 complete";
+    }
+
+    setValue(versionKey, QString::number(currentVersion));
 }
 
 } // namespace NereusSDR

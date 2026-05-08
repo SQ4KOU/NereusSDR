@@ -159,6 +159,10 @@ mw0lge@grange-lane.co.uk
 #include <QTimer>
 #include <QPropertyAnimation>
 
+#include "spectrum/ActivePeakHoldTrace.h"
+#include "spectrum/PeakBlobDetector.h"
+#include "spectrum/SpectrumAvenger.h"
+
 #include <utility>
 
 #include "core/ConnectionState.h"
@@ -230,6 +234,39 @@ enum class AverageMode : int {
     Count
 };
 
+// Spectrum detector type. Ported from Thetis comboDispPanDetector /
+// comboDispWFDetector (setup.designer.cs:34876 + setup.designer.cs:34461
+// [v2.10.3.13]).  Thetis items: Peak / Rosenfell / Average / Sample / RMS
+// (Pan only has RMS; WF has 4 items).
+// Applied during bin reduction: when N FFT bins are mapped to M display
+// pixels, this policy decides which value is chosen.
+// From Thetis specHPSDR.cs:302-321 [v2.10.3.13] DetTypePan / DetTypeWF
+// → SetDisplayDetectorMode(disp, pixout, mode).
+enum class SpectrumDetector : int {
+    Peak       = 0, // take max bin in window (Thetis "Peak")
+    Rosenfell  = 1, // Rosenfell: alternate max/min per pixel (Thetis "Rosenfell")
+    Average    = 2, // arithmetic mean of bins in window (Thetis "Average")
+    Sample     = 3, // take first bin in window (Thetis "Sample")
+    RMS        = 4, // root-mean-square of bins in window — Pan only; Thetis "RMS"
+    Count
+};
+
+// Spectrum averaging mode (split from legacy AverageMode for Thetis parity).
+// Ported from Thetis comboDispPanAveraging / comboDispWFAveraging
+// (setup.designer.cs:34835 / setup.designer.cs:34436 [v2.10.3.13]).
+// Items: None / Recursive / Time Window / Log Recursive (4 items, both combos).
+// Applied across frames: each new FFT result is mixed with the running
+// history buffer per the chosen policy.
+// From Thetis specHPSDR.cs:383-415 [v2.10.3.13] AverageMode / AverageModeWF
+// → SetDisplayAverageMode(disp, pixout, mode).
+enum class SpectrumAveraging : int {
+    None         = 0, // pass frame through unchanged (Thetis "None")
+    Recursive    = 1, // exponential decay in linear domain (Thetis "Recursive")
+    TimeWindow   = 2, // sliding time window (Thetis "Time Window")
+    LogRecursive = 3, // exponential decay in log/dB domain (Thetis "Log Recursive")
+    Count
+};
+
 // Gradient stop for waterfall color mapping.
 struct WfGradientStop { float pos; int r, g, b; };
 
@@ -277,6 +314,11 @@ public:
     void setCenterFrequency(double centerHz);
     double centerFrequency() const { return m_centerHz; }
     double bandwidth() const { return m_bandwidthHz; }
+
+    // Re-fire the auto-zoom replan with the current bandwidth.  Used by
+    // setup pages (e.g. when the user changes the Hz/bin target) to kick
+    // the FFTEngine into recomputing targetSize without a zoom action.
+    void requestAutoZoomReplan() { emit bandwidthChangeRequested(m_bandwidthHz); }
     void setDdcCenterFrequency(double hz);
     double ddcCenterFrequency() const { return m_ddcCenterHz; }
     void setSampleRate(double hz);
@@ -297,20 +339,129 @@ public:
 
     // ---- Spectrum renderer controls (Phase 3G-8 commit 3) ----
 
-    // Averaging mode applied in updateSpectrum() before drawing.
+    // Legacy combined averaging mode — kept for backward compat (existing
+    // callers not yet migrated).  Routes internally to setSpectrumAveraging().
+    // Retired key: DisplayAverageMode (migration in Task 5.1).
     void setAverageMode(AverageMode m);
     AverageMode averageMode() const { return m_averageMode; }
 
+    // ---- Detector + Averaging split (Task 2.1, handwave fix from 3G-8) ----
+    // Ported from Thetis specHPSDR.cs:302-415 [v2.10.3.13] DetTypePan /
+    // DetTypeWF / AverageMode / AverageModeWF.
+    // RX1 scope dropped; NereusSDR applies as global panadapter default
+    // with per-pan override via ContainerSettings dialog (3G-6 pattern).
+
+    // Spectrum (panadapter) detector — bin-reduction policy.
+    // From Thetis comboDispPanDetector [v2.10.3.13] (setup.designer.cs:34876).
+    void setSpectrumDetector(SpectrumDetector d);
+    SpectrumDetector spectrumDetector() const { return m_spectrumDetector; }
+
+    // Spectrum (panadapter) averaging — frame-smoothing policy.
+    // From Thetis comboDispPanAveraging [v2.10.3.13] (setup.designer.cs:34835).
+    void setSpectrumAveraging(SpectrumAveraging a);
+    SpectrumAveraging spectrumAveraging() const { return m_spectrumAveraging; }
+
+    // Waterfall detector — bin-reduction policy for waterfall rows.
+    // From Thetis comboDispWFDetector [v2.10.3.13] (setup.designer.cs:34461).
+    void setWaterfallDetector(SpectrumDetector d);
+    SpectrumDetector waterfallDetector() const { return m_waterfallDetector; }
+
+    // Waterfall averaging — frame-smoothing policy for waterfall rows.
+    // From Thetis comboDispWFAveraging [v2.10.3.13] (setup.designer.cs:34436).
+    void setWaterfallAveraging(SpectrumAveraging a);
+    SpectrumAveraging waterfallAveraging() const { return m_waterfallAveraging; }
+
+    // Read-only access to post-pipeline output arrays (dBm display pixels).
+    // Exposed for tests that drive updateSpectrumLinear() and need to
+    // assert the avenger output for a given detector + averaging combo.
+    // Pipeline contract: m_renderedPixels is sized to displayWidth and
+    // contains the spectrum trace data; m_wfRenderedPixels is the same
+    // shape for the waterfall plane.
+    const QVector<float>& renderedPixels()   const { return m_renderedPixels;   }
+    const QVector<float>& wfRenderedPixels() const { return m_wfRenderedPixels; }
+
+    // Static helper for detector math. Exposed for unit tests.
+    // Note: legacy bin-reduction helper, kept for tst_detector_modes;
+    // production rendering uses applySpectrumDetector() (free function in
+    // spectrum/SpectrumDetector.h, verbatim WDSP analyzer.c port) instead.
+    // From Thetis specHPSDR.cs:302-321 [v2.10.3.13] DetTypePan / DetTypeWF.
+    static void applyDetector(const QVector<float>& input, QVector<float>& output,
+                              SpectrumDetector mode, int outputBins);
+
     // Smoothing time constant for Weighted / Logarithmic / TimeWindow.
-    // 0.0 = no smoothing, 1.0 = infinite smoothing. Default kSmoothAlpha.
+    // 0.0 = no smoothing, 1.0 = infinite smoothing.
+    //
+    // DEPRECATED: use setSpectrumAverageTimeMs / setWaterfallAverageTimeMs
+    // — those compute alpha from the time constant + frame rate via the
+    // Thetis formula α = exp(-1 / (fps × τ)) per specHPSDR.cs:351-380
+    // [v2.10.3.13]. The bare alpha setter is kept only for callers not yet
+    // migrated; it overwrites the spectrum alpha and is clobbered on the
+    // next time-spin or fps change.
     void setAverageAlpha(float alpha);
-    float averageAlpha() const { return m_averageAlpha; }
+    float averageAlpha() const { return m_spectrumAverageAlpha; }
+
+    // Per-side averaging time constants (milliseconds, ms→τ via /1000).
+    // Drives both spectrum and waterfall paths independently — Thetis
+    // specHPSDR.cs has separate AvTau / AvTauWF setters that each compute
+    // a back-multiplier α via Math.Exp(-1.0 / (frame_rate * tau)).
+    // From Thetis specHPSDR.cs:351-380 [v2.10.3.13] — AvTau / AvTauWF.
+    // From Thetis setup.cs udDisplayAVGTime_ValueChanged (default 30 ms)
+    // and udDisplayAVTimeWF_ValueChanged (default 120 ms).
+    void setSpectrumAverageTimeMs(int ms);
+    int  spectrumAverageTimeMs() const { return m_spectrumAverageTimeMs; }
+    void setWaterfallAverageTimeMs(int ms);
+    int  waterfallAverageTimeMs() const { return m_waterfallAverageTimeMs; }
+    float spectrumAverageAlpha() const { return m_spectrumAverageAlpha; }
+    float waterfallAverageAlpha() const { return m_waterfallAverageAlpha; }
 
     // Peak hold: track per-bin max, decay after delay.
     void setPeakHoldEnabled(bool on);
     bool peakHoldEnabled() const { return m_peakHoldEnabled; }
     void setPeakHoldDelayMs(int ms);
     int  peakHoldDelayMs() const { return m_peakHoldDelayMs; }
+
+    // ---- Active Peak Hold trace (Task 2.5) ----
+    // Per-bin max tracking with configurable hold / decay / fill / TX gating.
+    // Rendered as a separate pass in drawSpectrum() (Q14.1 locked decision).
+    // From Thetis display.cs m_bActivePeakHold [v2.10.3.13].
+    void setActivePeakHoldEnabled(bool on);
+    void setActivePeakHoldDurationMs(int ms);
+    void setActivePeakHoldDropDbPerSec(double r);
+    void setActivePeakHoldFill(bool on);
+    void setActivePeakHoldOnTx(bool on);
+    // NereusSDR-original — Thetis ties the peak trace colour to the data-line
+    // colour. We expose it separately so the user can keep a distinct peak
+    // hold colour even when "Reset to Smooth Defaults" recolours the live
+    // trace (which would otherwise hide the peak trace behind a same-coloured
+    // solid line).
+    void setActivePeakHoldColor(const QColor& c);
+    // Called by RadioModel on MOX state change (MoxController::moxStateChanged).
+    void setActivePeakHoldTxActive(bool tx);
+
+    bool   activePeakHoldEnabled()    const { return m_activePeakHold.enabled(); }
+    int    activePeakHoldDurationMs() const { return m_activePeakHold.durationMs(); }
+    double activePeakHoldDropDbPerSec() const { return m_activePeakHold.dropDbPerSec(); }
+    bool   activePeakHoldFill()        const { return m_activePeakHold.fill(); }
+    QColor activePeakHoldColor()      const { return m_activePeakHoldColor; }
+
+    // ---- Peak Blobs (Task 2.6) ----
+    // Top-N peak markers with labeled ellipses. Rendered as a separate QPainter
+    // pass in drawSpectrum() after the Active Peak Hold trace.
+    // Defaults mirror Thetis Display.cs:4395-4714 [v2.10.3.13].
+    void setPeakBlobsEnabled(bool e);
+    void setPeakBlobsCount(int n);
+    void setPeakBlobsInsideFilterOnly(bool i);
+    void setPeakBlobsHoldEnabled(bool h);
+    void setPeakBlobsHoldMs(int ms);
+    void setPeakBlobsHoldDrop(bool d);
+    void setPeakBlobsFallDbPerSec(double r);
+    void setPeakBlobColor(const QColor& c);
+    void setPeakBlobTextColor(const QColor& c);
+
+    bool   peakBlobsEnabled()     const { return m_peakBlobs.enabled(); }
+    int    peakBlobsCount()       const { return m_peakBlobs.count(); }
+    QColor peakBlobColor()        const { return m_peakBlobColor; }
+    QColor peakBlobTextColor()    const { return m_peakBlobTextColor; }
 
     // Trace fill (under-the-curve shaded region).
     void setPanFillEnabled(bool on);
@@ -352,8 +503,14 @@ public:
     bool wfAgcEnabled() const { return m_wfAgcEnabled; }
     void setClarityActive(bool on);
     bool clarityActive() const { return m_clarityActive; }
-    void setWfReverseScroll(bool on);
-    bool wfReverseScroll() const { return m_wfReverseScroll; }
+    // NF-AGC: auto-track waterfall thresholds to noise floor + offset.
+    void setWaterfallNFAGCEnabled(bool on);
+    bool waterfallNFAGCEnabled() const { return m_wfNfAgcEnabled; }
+    void setWaterfallAGCOffsetDb(int db);
+    int  waterfallAGCOffsetDb() const { return m_wfNfAgcOffsetDb; }
+    // Stop-on-TX: pause pushWaterfallRow() while TX is active.
+    void setWaterfallStopOnTx(bool on);
+    bool waterfallStopOnTx() const { return m_wfStopOnTx; }
     void setWfOpacity(int percent);          // 0..100
     int  wfOpacity() const { return m_wfOpacity; }
     void setWfUpdatePeriodMs(int ms);
@@ -463,6 +620,129 @@ public:
     void setBandEdgeColor(const QColor& c);
     QColor bandEdgeColor() const { return m_bandEdgeColor; }
 
+    // ---- Task 2.3: Spectrum text overlays ----
+    // Corner-text overlays: noise floor dBm, peak dBm @ MHz, bin width readout.
+    // MHz cursor format is applied to the cursor-hover label in drawCursorInfo.
+
+    // OverlayPosition: 4-corner placement for corner-text overlays.
+    // NereusSDR-native enum; Thetis uses fixed positions (e.g. infoBar is top).
+    enum class OverlayPosition { TopLeft, TopRight, BottomLeft, BottomRight };
+
+    // formatCursorFreq — format a frequency value for the cursor label.
+    // Always returns MHz format ("7.1735 MHz") — earlier integer-Hz path
+    // ("7173500 Hz") was retired because it duplicated the visibility-only
+    // toggle in SpectrumOverlayPanel and confused users (two controls with
+    // the same name driving different state).  The Setup → Display →
+    // Spectrum Defaults checkbox now controls visibility (m_showCursorFreq)
+    // alongside the overlay-panel button — single source of truth.
+    QString formatCursorFreq(double hz) const;
+
+    // ShowBinWidth — toggle bin-width readout label in spectrum corner.
+    // Displays sampleRate / fftSize in kHz (e.g. "11.719 Hz/bin").
+    // From Thetis setup.cs:7061 lblDisplayBinWidth.Text [v2.10.3.13].
+    void setShowBinWidth(bool on);
+    bool showBinWidth() const { return m_showBinWidth; }
+    // binWidthHz — returns current bin width; exposed for unit tests.
+    double binWidthHz() const;
+
+    // ShowNoiseFloor — render noise-floor estimate as corner text overlay.
+    // From Thetis display.cs:2304-2308 ShowNoiseFloorDBM [v2.10.3.13];
+    // rendered at display.cs:5440 in DrawSpectrumDX2D.
+    void setShowNoiseFloor(bool on);
+    bool showNoiseFloor() const { return m_showNoiseFloor; }
+    void setShowNoiseFloorPosition(OverlayPosition pos);
+    OverlayPosition showNoiseFloorPosition() const { return m_noiseFloorPosition; }
+
+    // NF shift offset — From Thetis display.cs:5763 [v2.10.3.13] _fNFshiftDBM.
+    // Operator-tunable shift in dB applied to the rendered NF level (line +
+    // text + connector).  Clamped to [-12, +12]; default 0.
+    void  setNFShiftDbm(float db);
+    float nfShiftDbm() const { return m_nfShiftDbm; }
+
+    // Fast-attack flag — From Thetis display.cs:917-927 [v2.10.3.13]
+    // m_bFastAttackNoiseFloorRX1.  When true the line + text render gray
+    // (m_noiseFloorFastColor) instead of red/yellow to signal the smoothed
+    // average is still settling.  Caller (MainWindow) sets on band/freq
+    // change and clears after attack-time elapses.
+    void setNoiseFloorFastAttack(bool on);
+    bool noiseFloorFastAttack() const { return m_noiseFloorFastAttack; }
+
+    // NF colour customisation — From Thetis display.cs:2316/2329 [v2.10.3.13]:
+    //   noisefloor_color      = Color.Red     (line + box)
+    //   noisefloor_color_text = Color.Yellow  (dBm label)
+    // Fast-attack swap colour is NereusSDR-original (Thetis hard-codes gray).
+    void   setNoiseFloorColor(const QColor& c);
+    QColor noiseFloorColor() const { return m_noiseFloorColor; }
+    void   setNoiseFloorTextColor(const QColor& c);
+    QColor noiseFloorTextColor() const { return m_noiseFloorTextColor; }
+    void   setNoiseFloorFastColor(const QColor& c);
+    QColor noiseFloorFastColor() const { return m_noiseFloorFastColor; }
+
+    // NF line width — From Thetis display.cs:2310 [v2.10.3.13]
+    // m_fNoiseFloorLineWidth=1.0f.  Range 1..5 in NereusSDR.
+    void  setNoiseFloorLineWidth(float w);
+    float noiseFloorLineWidth() const { return m_noiseFloorLineWidth; }
+
+    // ---- NF-aware grid (Task 2.9) ----
+    // When enabled, the grid lower bound auto-tracks the live noise floor
+    // estimate delivered via onNoiseFloorChanged(). Ported from Thetis
+    // console.cs:46074-46086 [v2.10.3.13] GridMinFollowsNFRX1 / tmrAutoAGC_Tick.
+    // RX1 scope dropped; NereusSDR applies as a global panadapter default
+    // with per-pan override via ContainerSettings dialog (3G-6 pattern).
+    // From Thetis setup.cs:24202-24213 [v2.10.3.13]
+    // — RX1 scope dropped; NereusSDR applies as global panadapter default
+    //   with per-pan override via ContainerSettings dialog (3G-6 pattern).
+    void setAdjustGridMinToNoiseFloor(bool on);
+    bool adjustGridMinToNoiseFloor() const { return m_adjustGridMinToNF; }
+
+    // Offset added to the NF estimate to compute the new grid min.
+    // From Thetis console.cs:46035 _RX1NFoffsetGridFollow = 5f [v2.10.3.13]
+    // — NereusSDR uses a range of -60..+60 with default 0 (see design 2E).
+    //   Thetis subtracts the offset (setPoint = nf - offset) with default +5;
+    //   NereusSDR adds the offset (proposedMin = nf + offset) with default 0,
+    //   preserving equivalent semantics when the user enters a negative value.
+    void setNFOffsetGridFollow(int db);
+    int  nfOffsetGridFollow() const { return m_nfOffsetGridFollow; }
+
+    // When true, move grid max by the same delta to preserve the dB range.
+    // From Thetis console.cs:46085 _maintainNFAdjustDeltaRX1 [v2.10.3.13].
+    // NF grid range guard: abs incase //MW0LGE [2.9.0.7] [original inline comment from console.cs:46081]
+    void setMaintainNFAdjustDelta(bool on);
+    bool maintainNFAdjustDelta() const { return m_maintainNFAdjustDelta; }
+
+    // Accessors for the current grid min/max in dBm (derived from
+    // m_refLevel / m_dynamicRange). Read back by tests and GridScalesPage.
+    int gridMin() const { return qRound(m_refLevel - m_dynamicRange); }
+    int gridMax() const { return qRound(m_refLevel); }
+
+    // Test helper: directly fire the NF-changed handler without needing
+    // a live ClarityController. Exposed in tests only; production code
+    // uses the onNoiseFloorChanged() slot via signal/slot connection.
+    void testApplyNoiseFloor(float nfDbm) { onNoiseFloorChanged(nfDbm); }
+
+    // DispNormalize — normalize-to-1-Hz before display.
+    // Routes to SetDisplayNormOneHz in the WDSP spectrum engine.
+    // From Thetis specHPSDR.cs:291-293 [v2.10.3.13] NormOneHzPan property;
+    // wired from setup.cs:18093-18099 chkDispNormalize_CheckedChanged.
+    // Note: In Thetis this calls SpecHPSDRDLL.SetDisplayNormOneHz (a WDSP
+    // call); NereusSDR stores the flag and propagates it to FFTEngine when
+    // the WDSP spectrum engine is integrated (Task 5.x).
+    void setDispNormalize(bool on);
+    bool dispNormalize() const { return m_dispNormalize; }
+
+    // ShowPeakValueOverlay — scan visible bins, render "Peak: X.X dBm @ Y.YYYY MHz"
+    // as corner text. Refreshed on a timer throttled by m_peakTextDelayMs.
+    // From Thetis console.cs:20073 PeakTextDelay default=500ms [v2.10.3.13].
+    // PeakTextColor default DodgerBlue from console.cs:20278 [v2.10.3.13].
+    void setShowPeakValueOverlay(bool on);
+    bool showPeakValueOverlay() const { return m_showPeakValueOverlay; }
+    void setPeakValuePosition(OverlayPosition pos);
+    OverlayPosition peakValuePosition() const { return m_peakValuePosition; }
+    void setPeakTextDelayMs(int ms);
+    int  peakTextDelayMs() const { return m_peakTextDelayMs; }
+    void setPeakValueColor(const QColor& c);
+    QColor peakValueColor() const { return m_peakValueColor; }
+
     // ---- HIGH SWR / PA safety overlay ----
     // Ported from Thetis display.cs:4183-4201 [v2.10.3.13]
     // Mirrors the DX2D "HIGH SWR" warning block: red centred text +
@@ -554,6 +834,10 @@ public slots:
     int  panIndex() const { return m_panIndex; }
     void loadSettings();
     void saveSettings();
+    // Public coalesced-save trigger. Used by setup pages that call setDbmRange()
+    // directly (which has no internal save) and need to ensure the new range
+    // is persisted (e.g. Task 2.9 Copy button, per-band NF priming).
+    void requestSettingsSave() { scheduleSettingsSave(); }
 
     // ---- VFO / filter overlay ----
     void setVfoFrequency(double hz);
@@ -578,9 +862,30 @@ public slots:
     // Phase 3Q-8: update connection state for the disconnect overlay.
     void setConnectionState(NereusSDR::ConnectionState s);
 
-    // Feed a new FFT frame. binsDbm are dBm values, one per frequency bin.
-    // Called from the main thread after FFTEngine delivers the frame.
-    void updateSpectrum(int receiverId, const QVector<float>& binsDbm);
+    // Feed a new FFT frame.  binsLinear are |X[k]|² linear-power values,
+    // one per frequency bin (full FFT, neg-freq first then pos-freq).
+    // windowEnb is the Equivalent Noise Bandwidth of the FFT window in
+    // bins; the detector applies invEnb = 1/windowEnb for Average / Sample
+    // / RMS modes (analyzer.c:368-441 [v2.10.3.13]).  dbmOffset is the
+    // window coherent-gain compensation -20·log10(Σw[i]) that the avenger
+    // applies via scale = 10^(dbmOffset/10) so post-pipeline pixels read
+    // calibrated dBm.  Called on the main thread after FFTEngine delivers
+    // the frame via fftReadyLinear.
+    //
+    // Pipeline: visibleBinRange() slice -> applySpectrumDetector() ->
+    // SpectrumAvenger::apply() -> m_renderedPixels (dBm, displayWidth).
+    // Mirrors WDSP analyzer.c detector() at :283 + avenger() at :464
+    // [v2.10.3.13] -- the same two-stage reduction Thetis runs per
+    // display plane.  Same slice feeds the waterfall pipeline (own
+    // detector + avenger) and lands in m_wfRenderedPixels.
+    void updateSpectrumLinear(int receiverId, const QVector<float>& binsLinear,
+                              double windowEnb, double dbmOffset);
+
+    // NF-aware grid slot — wired to ClarityController::noiseFloorChanged in MainWindow.
+    // From Thetis console.cs:46074-46086 [v2.10.3.13] tmrAutoAGC_Tick NF grid block.
+    // Range delta uses std::abs() — abs incase //MW0LGE [2.9.0.7] [original inline comment from console.cs:46081]
+    // NereusSDR-original: global panadapter default, no RX1/RX2 split.
+    void onNoiseFloorChanged(float nfDbm);
 
     // ── Waterfall scrollback (sub-epic E) ─────────────────────────────────
     // Reset the rewind ring buffer back to empty + live state. Public so
@@ -650,6 +955,36 @@ private:
     // ---- Drawing helpers ----
     void drawGrid(QPainter& p, const QRect& specRect);
     void drawSpectrum(QPainter& p, const QRect& specRect);
+    // Active Peak Hold separate render pass (Q14.1). Called from drawSpectrum()
+    // after the fill path so the peak trace sits on top of fill but below
+    // the live trace line.  Iterates the per-display-pixel peak array
+    // (sized to m_renderedPixels.size()).
+    // From Thetis Display.cs:5341 [v2.10.3.13] -- spectralPeaks[i] indexed
+    // by display pixel.
+    void paintActivePeakHoldTrace(QPainter& p, const QRect& specRect);
+    // Peak Blobs render pass (Task 2.6). Draws labeled ellipses at the top-N
+    // local maxima. Called from drawSpectrum() after the live trace line so
+    // the blobs sit on top of all spectrum content.  Blob.binIndex is now
+    // a display-pixel index (0..displayWidth-1) per the pipeline migration.
+    // From Thetis Display.cs:5453-5508 [v2.10.3.13].
+    void paintPeakBlobs(QPainter& p, const QRect& specRect);
+    // Noise-floor overlay: horizontal dashed line across the spectrum at the
+    // estimated NF level + corner text label.  Called from both CPU drawSpectrum
+    // and GPU renderGpuFrame overlay block so the same NF visuals appear
+    // regardless of paint backend.  Reads the state maintained by
+    // processNoiseFloor() (m_nfLerpAverage / m_nfFftBinAverage).
+    // From Thetis display.cs:5423-5448 [v2.10.3.13] (line + text combined).
+    void paintNoiseFloorOverlay(QPainter& p, const QRect& specRect);
+
+    // Source-first port of Thetis processNoiseFloor — display.cs:5866-5912
+    // [v2.10.3.13].  Called once per spectrum frame from
+    // updateSpectrumLinear after m_renderedPixels is finalised; iterates
+    // those pixels to accumulate (count, linear-sum) of bins below the
+    // previous-frame estimate (averageCount/averageSum), then updates
+    // m_nfFftBinAverage (per-frame) and m_nfLerpAverage (smoothed).
+    // Also runs the fast-attack convergence-gated auto-clear from
+    // display.cs:5904-5908.
+    void processNoiseFloor();
     void drawWaterfall(QPainter& p, const QRect& wfRect);
     // HIGH SWR / PA safety overlay — ported from display.cs:4183-4201 [v2.10.3.13]
     void paintHighSwrOverlay(QPainter& p);
@@ -707,6 +1042,25 @@ private:
     int    dbmToY(float dbm, const QRect& r) const;
     float  dbmToYf(float dbm, const QRect& r) const; // sub-pixel variant for antialiased trace
 
+    // Band plan strip height — when the band plan is enabled, the bottom
+    // m_bandPlanFontSize + 4 pixels of every spectrum-coordinate rect are
+    // RESERVED for the strip.  dbmToY / dbmToYf subtract this from the
+    // effective drawing area so the dBm floor maps to the TOP edge of the
+    // band plan strip rather than the bottom of the panel.  Result: every
+    // spectrum overlay (trace, NF line+box+text, peak hold, peak blobs,
+    // grid lines, dBm-scale labels) automatically anchors at the band plan
+    // top — they all derive their Y from these helpers.  drawBandPlan
+    // itself paints below this carve-out using r.bottom() directly so the
+    // strip still lands at the panel bottom.
+    int bandPlanStripHeight() const;
+
+    // 1-Hz-bandwidth normalisation shift — returns -10*log10(binWidthHz)
+    // when m_dispNormalize is on, 0 otherwise.  Applied inside dbmToY /
+    // dbmToYf so the entire spectrum (trace + every overlay derived from
+    // these helpers) renormalises in lockstep when the toggle flips.
+    // Mirrors Thetis SetDisplayNormOneHz (specHPSDR.cs:325) at render time.
+    float normalizeShiftDb() const;
+
     // Returns kDbmStripW when the dBm scale strip is visible, 0 otherwise.
     // Used everywhere a rect excludes the right-edge strip so that hiding
     // the strip automatically gives the spectrum full widget width.
@@ -718,12 +1072,37 @@ private:
     std::pair<int, int> visibleBinRange(int binCount) const;
 
     // ---- Waterfall helpers ----
-    void   pushWaterfallRow(const QVector<float>& bins);
+    // Feeds a post-pipeline waterfall row (display-pixel dBm, length
+    // displayWidth).  Caller is updateSpectrumLinear after the waterfall
+    // detector + avenger have run.  Inner AGC + NF-AGC + threshold compute
+    // operate on display pixels per Thetis Display.cs:6713-6738
+    // [v2.10.3.13] (waterfall_data[i] indexed by pixel).
+    void   pushWaterfallRow(const QVector<float>& wfPixelsDbm);
     QRgb   dbmToRgb(float dbm) const;
 
-    // ---- FFT data ----
-    QVector<float> m_bins;       // latest raw FFT frame (dBm)
-    QVector<float> m_smoothed;   // exponential-smoothed for display
+    // ---- FFT pipeline state ----
+    // Single Thetis-faithful pipeline: linear-power FFT bins -> visible
+    // slice -> detector -> avenger -> dBm display pixels.  Spectrum and
+    // waterfall keep separate detector + avenger state per WDSP per-plane
+    // model (each ANALYZER_INFO[] entry has its own DetType + AvMode).
+    QVector<float> m_fullLinearBins;       // FFTEngine input cache (|X[k]|²)
+    QVector<float> m_displayLinearPixels;  // spectrum detector output (linear)
+    QVector<float> m_renderedPixels;       // spectrum avenger output (dBm)
+    QVector<float> m_wfDisplayLinearPixels; // waterfall detector output (linear)
+    QVector<float> m_wfRenderedPixels;     // waterfall avenger output (dBm)
+
+    // Equivalent Noise Bandwidth of the current FFT window, in bins.
+    // Refreshed every frame via the windowEnb arg on fftReadyLinear so
+    // the detector's invEnb scaling stays in lock-step with the bins it
+    // just received.  No setter coordination needed.
+    double m_fftWindowEnb{1.0};
+
+    // Per-channel WDSP-style frame averagers.  See SpectrumAvenger.h for
+    // the av_mode wire-format mapping (-1 peak / 0 none / 1 recursive /
+    // 2 window / 3 log-recursive); analyzer.c:464-554 [v2.10.3.13] is the
+    // verbatim port.
+    NereusSDR::SpectrumAvenger m_spectrumAvenger;
+    NereusSDR::SpectrumAvenger m_waterfallAvenger;
 
     // ---- Frequency range ----
     double m_centerHz{14225000.0};    // 14.225 MHz default
@@ -810,12 +1189,51 @@ private:
     // ---- Phase 3G-8 commit 3: spectrum renderer state ----
 
     AverageMode m_averageMode{AverageMode::Logarithmic};
-    float       m_averageAlpha{0.05f};  // 0..1 exp-smoothing factor
+    // Spectrum + waterfall averaging time constants in milliseconds, with
+    // per-side back-multiplier alphas computed via Thetis math:
+    //   α = exp(-1 / (fps × τ))  [specHPSDR.cs:358 / :374, v2.10.3.13]
+    // Defaults match Thetis (setup.cs udDisplayAVGTime_ValueChanged = 30 ms,
+    // udDisplayAVTimeWF_ValueChanged = 120 ms).
+    int         m_spectrumAverageTimeMs{30};
+    int         m_waterfallAverageTimeMs{120};
+    // Recomputed by recomputeAverageAlphas() whenever fps or time changes.
+    float       m_spectrumAverageAlpha{0.0f};
+    float       m_waterfallAverageAlpha{0.0f};
+
+    // ---- Task 2.1: Detector + Averaging split (handwave fix from 3G-8) ----
+    // Ported from Thetis specHPSDR.cs:302-415 [v2.10.3.13].
+    SpectrumDetector  m_spectrumDetector{SpectrumDetector::Peak};
+    SpectrumAveraging m_spectrumAveraging{SpectrumAveraging::LogRecursive};
+    SpectrumDetector  m_waterfallDetector{SpectrumDetector::Peak};
+    SpectrumAveraging m_waterfallAveraging{SpectrumAveraging::None};
 
     bool        m_peakHoldEnabled{false};
     int         m_peakHoldDelayMs{2000};
-    QVector<float> m_peakHoldBins;
+    // Per-display-pixel running max (replaces full-bin m_peakHoldBins).
+    // Sized to displayWidth on first updateSpectrumLinear and re-sized on
+    // resize.  Decay timer below resets it on tick.
+    QVector<float> m_pxPeakHold;
     QTimer*     m_peakHoldDecayTimer{nullptr};
+
+    // Active Peak Hold trace (Task 2.5). Separate from the legacy peak hold
+    // above; rendered as a distinct pass per Q14.1.
+    // From Thetis display.cs m_bActivePeakHold [v2.10.3.13].
+    ActivePeakHoldTrace m_activePeakHold;
+    // NereusSDR-original — distinct trace colour so the peak trace stays
+    // visible even when the data-line colour is changed (e.g. "Reset to
+    // Smooth Defaults" sets the data line to white). Default gold for high
+    // contrast against the typical clarity-blue palette and against white.
+    QColor m_activePeakHoldColor{0xFF, 0xD7, 0x00, 0xFF};
+
+    // Peak Blobs detector (Task 2.6). Top-N local maxima with hold/decay.
+    // From Thetis display.cs:4395-4714, 5453-5508 [v2.10.3.13].
+    // Inline attribution from ported range — display.cs:4829 //MW0LGE [2.10.1.0] fix issue #137;
+    // display.cs:4972 //[2.10.3.9]MW0LGE raw grid control option; display.cs:5109 //MW0LGE not used.
+    PeakBlobDetector m_peakBlobs;
+    // From Thetis display.cs:8434 [v2.10.3.13] m_bDX2_PeakBlob = Color.OrangeRed
+    QColor m_peakBlobColor{0xFF, 0x45, 0x00, 0xFF};
+    // From Thetis display.cs:8435 [v2.10.3.13] m_bDX2_PeakBlobText = Color.Chartreuse
+    QColor m_peakBlobTextColor{0x7F, 0xFF, 0x00, 0xFF};
 
     float       m_lineWidth{1.5f};
     bool        m_gradientEnabled{false};
@@ -827,12 +1245,15 @@ private:
 
     bool  m_wfAgcEnabled{true};
     bool  m_clarityActive{false};     // Phase 3G-9c: suppresses legacy AGC when Clarity drives thresholds
-    bool  m_wfReverseScroll{false};
+    // NF-AGC: Task 2.8 — auto-track thresholds to noise floor + offset.
+    bool  m_wfNfAgcEnabled{false};
+    int   m_wfNfAgcOffsetDb{0};       // offset applied above/below noise floor
+    // Stop-on-TX: Task 2.8 — gate pushWaterfallRow() while TX is active.
+    bool  m_wfStopOnTx{false};
     int   m_wfOpacity{100};           // 0..100
     int   m_wfUpdatePeriodMs{30};     // NereusSDR default per §10 divergence
     bool  m_wfUseSpectrumMinMax{false};
     AverageMode m_wfAverageMode{AverageMode::None};
-    QVector<float> m_wfSmoothedBins;  // for wf averaging mode
 
     TimestampPosition m_wfTimestampPos{TimestampPosition::None};
     TimestampMode     m_wfTimestampMode{TimestampMode::UTC};
@@ -907,9 +1328,137 @@ private:
     // ---- Overlay menu ----
     SpectrumOverlayMenu* m_overlayMenu{nullptr};
 
+    // ---- Task 2.3: Spectrum text overlay state ----
+
+    // (m_showMHzOnCursor retired in 2026-05 — see formatCursorFreq comment.)
+
+    // From Thetis setup.cs:7061 [v2.10.3.13] lblDisplayBinWidth
+    bool m_showBinWidth{false};
+
+    // From Thetis display.cs:2304 [v2.10.3.13] m_bShowNoiseFloorDBM (default true in Thetis;
+    // NereusSDR defaults off so the overlay is opt-in rather than on by default)
+    bool            m_showNoiseFloor{false};
+    OverlayPosition m_noiseFloorPosition{OverlayPosition::BottomLeft};
+
+    // NF render colours — From Thetis display.cs:2316-2337 [v2.10.3.13]:
+    //   private static Color noisefloor_color      = Color.Red;
+    //   private static Color noisefloor_color_text = Color.Yellow;
+    // Defaults match Thetis exactly so the line is visually distinct from
+    // grid text (yellow) and from the spectrum trace.  Made configurable
+    // via setNoiseFloorColor / setNoiseFloorTextColor when Setup wires them.
+    // Default line + text colour — NereusSDR-tweaked from Thetis red/yellow
+    // (display.cs:2316/2329 [v2.10.3.13]).  Thetis renders against a
+    // configurable trace colour; NereusSDR's stock spectrum trace is cyan
+    // (#00E5FF, see m_fillColor), and Thetis-default red dashes blend with
+    // both cyan-trace fill and the brown band-plan strip beneath.  Default
+    // tweak: bright magenta line + yellow text.  Both still match Thetis
+    // semantics (warm/distinctive line, separate-colour text label) and
+    // give the user clearly visible defaults that they can dial back to red
+    // via the colour picker if they prefer Thetis-stock colours.
+    QColor m_noiseFloorColor     {0xFF, 0x40, 0xFF};   // bright magenta
+    QColor m_noiseFloorTextColor {Qt::yellow};
+    // Fast-attack swap colour — From Thetis display.cs:5431-5432 [v2.10.3.13]:
+    //   nf_colour      = bFast ? m_bDX2_Gray : m_bDX2_noisefloor;
+    //   nf_colour_text = bFast ? m_bDX2_Gray : m_bDX2_noisefloor_text;
+    // Lightened from Qt::gray (160,160,164) to #C8C8C8 so the swatch and
+    // the rendered overlay both stand out against NereusSDR's dark UI
+    // background; Thetis renders against a lighter-grey grid backdrop where
+    // medium-grey reads fine.
+    QColor m_noiseFloorFastColor {0xC8, 0xC8, 0xC8};
+    // From Thetis display.cs:2310 [v2.10.3.13] m_fNoiseFloorLineWidth=1.0f.
+    float  m_noiseFloorLineWidth {1.0f};
+
+    // FFT-replan crossfade — when auto-zoom replans the FFT (or the user
+    // moves the size slider), the avenger's history is cleared to avoid
+    // cross-resolution ghosting.  Without smoothing, the first new frame
+    // would snap into place ("trace drops in from sky").  We capture the
+    // last good rendered pixels at the moment of replan and crossfade the
+    // first kReplanFadeFrames frames of the new resolution against them so
+    // the trace dissolves smoothly into the new layout.
+    QVector<float> m_postReplanFrozenDb;
+    int            m_postReplanFrameCount{0};
+    static constexpr int kReplanFadeFrames = 8;
+
+    // Per-frame + smoothed noise-floor estimates — source-first port of
+    // Thetis display.cs:4633-4636 [v2.10.3.13]:
+    //   m_fFFTBinAverageRX1 — current per-frame avg of bins below the
+    //                         previous-frame estimate (linear-power blend)
+    //   m_fLerpAverageRX1   — exponentially smoothed toward fftBinAverage
+    //                         with framesInAttack-rate (display.cs:5901-5902)
+    // Updated each spectrum frame in processNoiseFloor() after
+    // updateSpectrumLinear finalises m_renderedPixels.  paintNoiseFloorOverlay
+    // uses m_nfLerpAverage for line/box Y and m_nfFftBinAverage for actual Y.
+    float m_nfFftBinAverage{-200.0f};
+    float m_nfLerpAverage{-200.0f};
+
+    // From Thetis display.cs:4638 [v2.10.3.13] m_fAttackTimeInMSForRX1=2000.
+    float m_nfAttackTimeMs{2000.0f};
+
+    // From Thetis display.cs:5775 + 5783 [v2.10.3.13]:
+    //   _NFsensitivity = 3 (default), clamped to [0, 19] in setter.
+    // requireSamples = (int)(width * (sensitivity / 20)) — with default 3
+    // that's ~15% of pixels, achievable on any normal band.  Higher values
+    // make the estimate harder to converge; values >= 20 make it unreachable
+    // (requireSamples > width) and fftBinAverage perpetually drifts to +200.
+    int m_nfSensitivity{3};
+
+    // Operator-tunable NF shift — From Thetis display.cs:5763 [v2.10.3.13]:
+    //   private static float _fNFshiftDBM = 0;
+    // Clamped to [-12, +12] in the setter (Thetis clamps to 12 at
+    // display.cs:5771).  Applied to both lerp and actual values per
+    // display.cs:5400 + 5403.
+    float m_nfShiftDbm{0.0f};
+
+    // Fast-attack flag — From Thetis display.cs:917-927 [v2.10.3.13]
+    // m_bFastAttackNoiseFloorRX1.  Set on band change / freq jump / MOX
+    // transition.  Auto-clear is now Thetis-faithful: gated on
+    // |fftBinAverage - lerpAverage| < 1.0 AND elapsed > kFastAttackMinMs
+    // (display.cs:5904-5908) — the convergence check is what tells Thetis
+    // the smoothed estimate has settled to the new band.
+    bool   m_noiseFloorFastAttack{false};
+    qint64 m_nfLastFastAttackMs{0};
+    static constexpr qint64 kFastAttackMinMs = 1000;  // display.cs:5906 Math.Max(1000, ...)
+
+    // ---- NF-aware grid (Task 2.9) ----
+    // From Thetis console.cs:46025-46085 [v2.10.3.13] GridMinFollowsNFRX1,
+    // _RX1NFoffsetGridFollow, _maintainNFAdjustDeltaRX1.
+    // abs() guard on fDelta: abs incase //MW0LGE [2.9.0.7] [original inline comment from console.cs:46081]
+    // NereusSDR-original: applied as global default; RX1-scope dropped.
+    bool m_adjustGridMinToNF{false};
+    int  m_nfOffsetGridFollow{0};    // dB offset added to NF estimate (default 0)
+    bool m_maintainNFAdjustDelta{false};
+
+    // From Thetis specHPSDR.cs:325 [v2.10.3.13] NormOneHzPan
+    bool m_dispNormalize{false};
+
+    // From Thetis console.cs:20073 peak_text_delay=500 [v2.10.3.13]
+    // Color from console.cs:20278 Color.DodgerBlue [v2.10.3.13]
+    bool            m_showPeakValueOverlay{false};
+    OverlayPosition m_peakValuePosition{OverlayPosition::TopRight};
+    int             m_peakTextDelayMs{500};
+    // From Thetis console.cs:20278 [v2.10.3.13]: Color.DodgerBlue = #1E90FF
+    QColor          m_peakValueColor{0x1E, 0x90, 0xFF};
+
+    // Peak text overlay refresh timer — throttled by m_peakTextDelayMs.
+    QTimer*         m_peakTextTimer{nullptr};
+    // Current cached peak overlay text (refreshed by timer, rendered every frame).
+    QString         m_peakTextCache;
+
+    // drawTextOverlay helper — renders a text string at a corner position on
+    // the spectrum rect, using the given colour.
+    void drawTextOverlay(QPainter& p, const QRect& specRect,
+                         OverlayPosition pos, const QString& text,
+                         const QColor& color);
+
     // ---- Coalesced settings save ----
     void scheduleSettingsSave();
     bool m_settingsSaveScheduled{false};
+
+    // Recompute m_spectrumAverageAlpha + m_waterfallAverageAlpha from the
+    // current per-side time constants and live FPS using the Thetis formula:
+    //   α = exp(-1 / (fps × τ_seconds))
+    // From Thetis specHPSDR.cs:351-380 [v2.10.3.13] AvTau / AvTauWF setters.
+    void recomputeAverageAlphas();
 
     // ---- Mouse state ----
     bool   m_draggingDbm{false};

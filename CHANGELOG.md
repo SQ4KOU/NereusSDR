@@ -1251,6 +1251,128 @@ through mi0bot to settle.
 
   Closes the last item in the Phase 3G RX Experience Epic.
 
+## [0.3.0] — TBD
+
+This release delivers the **Thetis Display + DSP Parity Audit** (the v0.3.0
+epic): every display control that existed in Thetis but was missing from
+NereusSDR's Setup → Display pages is now wired, two entirely new setup pages
+are added (Spectrum Peaks and Multimeter), and the **WDSP channel rebuild
+infrastructure** lands as the engine that makes sample-rate and active-RX-count
+changes apply live without a disconnect/reconnect cycle. The DSP Options page
+ports 18 Thetis DSP controls with full filter-type combos and an impulse-cache
+workflow. Totals: ~37 new source files, ~35 new test executables.
+
+### Added
+
+**Setup → Display → Spectrum Peaks (new page)**
+- Active Peak Hold per-bin decay trace (5 controls): per-bin maximum tracking
+  with configurable hold time + decay rate, optional fill, optional TX-state
+  gating. Ported from Thetis `display.cs` `m_bActivePeakHold` /
+  `m_dBmPerSecondPeakBlobFall` state machine.
+- Peak Blobs top-N markers (7 controls + 2 color pickers): ellipse + dBm text
+  overlay on spectrum; defaults match Thetis `display.cs:8434-8435`
+  (OrangeRed blob, Chartreuse text).
+
+**Setup → Display → Multimeter (new page, folded from Thetis Display→General)**
+- 8 multimeter polling/display globals: delay, peak hold time, text hold time,
+  average window, digital delay, show decimal, and signal history enable +
+  duration.
+- S / dBm / µV unit selector with full fan-out across all MeterItem subclasses
+  that display signal levels.
+
+**Setup → Display → Spectrum Defaults — new controls**
+- New "Spectrum Overlays" group: ShowMHzOnCursor, ShowBinWidth,
+  ShowNoiseFloor + position, DispNormalize, ShowPeakValueOverlay + position +
+  delay + color.
+- Get-Monitor-Hz button: snaps the display FPS to the screen refresh rate.
+- Decimation control wired through to FFTEngine.
+- Detector and Averaging Method split into separate combos (previously a single
+  combined averaging-mode combo; matches Thetis layout).
+
+**Setup → Display → Waterfall Defaults — new controls**
+- NF-AGC group: auto-tracks waterfall low/high thresholds to the live noise
+  floor estimate so the waterfall stays calibrated as band conditions change.
+- Stop-on-TX: pauses waterfall scrolling during transmit.
+- Calculated-Delay readout: live millisecond estimate derived from FFT size /
+  decimation / sample rate.
+- Copy spectrum min/max → waterfall thresholds button (and reverse direction).
+- Reverse Waterfall Scroll (W5) removed — see "Removed" below.
+
+**Setup → Display → Grid & Scales — new controls**
+- Noise-floor-aware grid: AdjustGridMinToNoiseFloor + offset + maintain-delta
+  flag; auto-tracks grid min to live noise-floor estimate so the S-0 line stays
+  at the noise floor as conditions change.
+
+**Setup → DSP → Options (new page)**
+- 18 controls ported from Thetis `setup.cs` DSP Options tab:
+  per-mode (Phone / CW / Dig / FM) buffer-size combos, filter-size combos,
+  and filter-type combos (LowLatency vs LinearPhase).
+- Filter Impulse Cache: enable toggle + persist-to-disk toggle (saves/restores
+  the computed FIR impulse across sessions, eliminating the per-launch filter
+  compile cost).
+- High-resolution filter characteristics: increases the frequency resolution of
+  the FilterDisplayItem passband/stopband visualization.
+- "Time to last change" live readout: displays the measured rebuild time in
+  milliseconds after any DSP option change.
+- 3 warning icons driven by Thetis validity rules (buffer/filter size
+  combinations that WDSP rejects).
+
+**WDSP channel rebuild infrastructure (Phase 1 — enables live-apply features)**
+- `RxChannel::rebuild()` and `TxChannel::rebuild()`: capture all DSP state,
+  destroy the WDSP channel, recreate it with new `ChannelConfig` parameters,
+  and reapply the captured state — all without audio dropout on other channels.
+- `WdspEngine::rebuildRxChannel()` / `rebuildTxChannel()`: engine-level
+  orchestration that holds the audio lock, calls rebuild, and resumes.
+- Sample-rate live-apply: 48k / 96k / 192k / 384k can now switch while a
+  radio is connected. A 8-step coordinator in `RadioModel::setSampleRateLive()`
+  handles the channel teardown/rebuild sequence.
+- Active-RX-count live-apply: the RX2 toggle no longer requires a
+  disconnect/reconnect cycle.
+- `RadioModel::dspChangeMeasured(qint64 ms)` signal: broadcasts the measured
+  rebuild time so the DspOptionsPage "Time to last change" readout stays live.
+
+**Per-band noise-floor priming (NereusSDR-original)**
+- Stores the last-seen noise-floor estimate per band in AppSettings; primes
+  the `NoiseFloorEstimator` when the user changes band. Eliminates the visual
+  cold-start jump where the waterfall would appear fully white for 1–2 seconds
+  after a band change.
+
+**Relocations from Thetis Display→General (housekeeping)**
+- ANAN-8000DLE PA volts/amps toggle moved to Setup → Hardware → Radio Info tab
+  (capability-gated; only visible on ANAN-8000DLE SKUs).
+- CPU meter rate spinbox moved to Setup → General → Options.
+- "Small filter display on VFOs" moved to Setup → Appearance → Meter Styles.
+- Setup → Diagnostics → Logging page renamed "Logging & Performance"; new
+  Performance group adds Spectral Warning LEDs toggle and Purge Buffers button.
+
+### Changed
+
+- **Spectrum + waterfall averaging mode** split into separate Detector combo
+  and Averaging Method combo, matching the Thetis `setup.cs` DSP Options
+  layout. Existing saved values are migrated to the new keys on first launch
+  (see Settings migration below).
+- **Active-RX-count toggle** now applies live (no disconnect/reconnect needed).
+- **Sample-rate change** now applies live (no disconnect/reconnect needed).
+
+### Settings migration (v0.3.0 schema bump)
+
+On first launch of v0.3.0 the settings schema version is bumped from 2 to 3.
+The following keys are retired and reset to defaults automatically:
+
+- `DisplayAverageMode` → replaced by `DisplayDetectorMode` + `DisplayAveragingMethod`
+- `SpectrumPeakHold` → replaced by the new Active Peak Hold per-bin trace
+  (configure under Setup → Display → Spectrum Peaks)
+- `WaterfallReverseScroll` → removed (see below)
+
+No manual action required. Reconfigure your preferences under Setup → Display.
+
+### Removed
+
+- **Reverse Waterfall Scroll (W5)** — removed after a source-first audit
+  found the Thetis feature is controlled by a single `chkWaveformReverseScroll`
+  checkbox with no meaningful user base on NereusSDR (no persisted settings
+  observed in the field). Can be reintroduced if users request it.
+
 ## [0.2.3] - 2026-04-24
 
 This release rounds out the **Phase 3G RX experience epic** (AetherSDR-style

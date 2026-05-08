@@ -126,6 +126,14 @@ signals:
     // receive a stable stream, not per-frame jitter.
     void waterfallThresholdsChanged(float lowDbm, float highDbm);
 
+    // Smoothed noise-floor estimate. Emitted on every cadence tick
+    // (after EWMA smoothing but before the deadband gate that suppresses
+    // waterfallThresholdsChanged). Used by NF-aware grid (Task 2.9) and
+    // per-band NF priming (Task 2.10) which need the running floor at
+    // full cadence rather than the deadband-throttled threshold stream.
+    // NereusSDR-original — no Thetis equivalent.
+    void noiseFloorChanged(float nfDbm);
+
     // Status badge feed for SpectrumOverlayPanel. Green when active, amber
     // when paused (TX, manual override, or disabled).
     void pausedChanged(bool paused);

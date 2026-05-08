@@ -527,6 +527,27 @@ void ContainerManager::setContainerVisible(const QString& id, bool visible)
     }
 }
 
+// ---------------------------------------------------------------------------
+// forEachMeterItem — Task 3.2 unit-mode fan-out helper
+//
+// Walks every container, extracts its MeterWidget via innerMeterWidget(),
+// and invokes fn on each MeterItem in that widget.  Used by MultimeterPage
+// to broadcast setUnitMode / setShowDecimal to all live items without the
+// items having to poll AppSettings on every paint redraw.
+// ---------------------------------------------------------------------------
+void ContainerManager::forEachMeterItem(std::function<void(MeterItem*)> fn)
+{
+    for (ContainerWidget* container : m_containers) {
+        MeterWidget* meter = innerMeterWidget(container->content());
+        if (!meter) {
+            continue;
+        }
+        for (MeterItem* item : meter->items()) {
+            fn(item);
+        }
+    }
+}
+
 void ContainerManager::setContentFactory(ContainerContentFactory factory)
 {
     m_contentFactory = std::move(factory);

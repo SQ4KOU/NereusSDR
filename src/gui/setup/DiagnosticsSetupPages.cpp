@@ -1,5 +1,6 @@
 #include "DiagnosticsSetupPages.h"
 #include "gui/StyleConstants.h"
+#include "core/AppSettings.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -171,7 +172,7 @@ void DiagHardwareTestsPage::buildUI()
 // ---------------------------------------------------------------------------
 
 DiagLoggingPage::DiagLoggingPage(QWidget* parent)
-    : SetupPage(QStringLiteral("Logging"), parent)
+    : SetupPage(QStringLiteral("Logging & Performance"), parent)
 {
     buildUI();
 }
@@ -240,6 +241,72 @@ void DiagLoggingPage::buildUI()
         vLayout->addWidget(m_filterLabel);
 
         contentLayout()->addWidget(group);
+    }
+
+    // --- Performance section (Design Section 3B — folded from Thetis Display→General) ---
+    {
+        auto* group = new QGroupBox(QStringLiteral("Performance"), this);
+        group->setStyleSheet(QString::fromLatin1(Style::kGroupBoxStyle));
+
+        auto* vLayout = new QVBoxLayout(group);
+        vLayout->setSpacing(6);
+
+        m_specWarningRenderDelay = new QCheckBox(
+            tr("Warn when spectrum render delay exceeds threshold"), group);
+        m_specWarningRenderDelay->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
+        m_specWarningRenderDelay->setToolTip(
+            tr("Logs a warning if a spectrum frame takes longer than expected to render."));
+        vLayout->addWidget(m_specWarningRenderDelay);
+
+        m_specWarningGetPixels = new QCheckBox(
+            tr("Warn on long pixel-fetch operations"), group);
+        m_specWarningGetPixels->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
+        m_specWarningGetPixels->setToolTip(
+            tr("Logs a warning if a pixel-fetch operation blocks for too long."));
+        vLayout->addWidget(m_specWarningGetPixels);
+
+        m_purgeBuffers = new QCheckBox(
+            tr("Purge FFT buffers periodically (debugging)"), group);
+        m_purgeBuffers->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
+        m_purgeBuffers->setToolTip(
+            tr("Force-clear FFT engine buffers between updates. Diagnostic only."));
+        vLayout->addWidget(m_purgeBuffers);
+
+        contentLayout()->addWidget(group);
+
+        // Restore persisted values
+        auto& s = AppSettings::instance();
+        m_specWarningRenderDelay->setChecked(
+            s.value(QStringLiteral("DiagnosticsSpecWarningLedRenderDelay"),
+                    QStringLiteral("False")).toString() == QStringLiteral("True"));
+        m_specWarningGetPixels->setChecked(
+            s.value(QStringLiteral("DiagnosticsSpecWarningLedGetPixels"),
+                    QStringLiteral("False")).toString() == QStringLiteral("True"));
+        m_purgeBuffers->setChecked(
+            s.value(QStringLiteral("DiagnosticsPurgeBuffers"),
+                    QStringLiteral("False")).toString() == QStringLiteral("True"));
+
+        connect(m_specWarningRenderDelay, &QCheckBox::toggled, this,
+            [](bool v) {
+                AppSettings::instance().setValue(
+                    QStringLiteral("DiagnosticsSpecWarningLedRenderDelay"),
+                    v ? QStringLiteral("True") : QStringLiteral("False"));
+                // TODO(future): wire to SpectrumWidget render-delay monitor
+            });
+        connect(m_specWarningGetPixels, &QCheckBox::toggled, this,
+            [](bool v) {
+                AppSettings::instance().setValue(
+                    QStringLiteral("DiagnosticsSpecWarningLedGetPixels"),
+                    v ? QStringLiteral("True") : QStringLiteral("False"));
+                // TODO(future): wire to SpectrumWidget pixel-fetch monitor
+            });
+        connect(m_purgeBuffers, &QCheckBox::toggled, this,
+            [](bool v) {
+                AppSettings::instance().setValue(
+                    QStringLiteral("DiagnosticsPurgeBuffers"),
+                    v ? QStringLiteral("True") : QStringLiteral("False"));
+                // TODO(future): wire to FFTEngine buffer reset
+            });
     }
 
     contentLayout()->addStretch();
