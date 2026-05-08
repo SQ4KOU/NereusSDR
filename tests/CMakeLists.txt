@@ -2702,6 +2702,26 @@ target_compile_definitions(tst_audio_engine_rx_leak_during_mox PRIVATE NEREUS_BU
 nereus_add_test(tst_pc_mic_source)
 target_compile_definitions(tst_pc_mic_source PRIVATE NEREUS_BUILD_TESTS)
 
+# ── VAX TX → mic source (eager-borg-d64bed, 2026-05-06) ──────────────────────
+# Verifies VaxTxMicSource (mirrors PcMicSource pattern) and the
+# stereo→mono downmix in AudioEngine::pullVaxTxMic. Uses FakeAudioBus
+# injected via the setVaxTxBusForTest seam.
+#
+# Closes the long-standing TODO at AudioEngine.cpp:306 (Sub-Phase 9
+# VAX TX consumer) — the path 3rd-party-app audio → "NereusSDR TX"
+# CoreAudio device → /nereussdr-vax-tx shm → CompositeTxMicRouter →
+# TxChannel → VOX.
+nereus_add_test(tst_vax_tx_mic_source)
+target_compile_definitions(tst_vax_tx_mic_source PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Mic_Source pre-connect persistence fallback (eager-borg-d64bed) ──────────
+# Verifies the pre-connect global key fallback added so the user's
+# Setup -> Audio -> TX Input click survives even when no radio is
+# bound at click time.  Cases: pre-connect click writes global,
+# load with no per-MAC uses fallback, per-MAC overrides preconnect,
+# post-connect writes don't touch preconnect, first-run defaults to Pc.
+nereus_add_test(tst_transmit_model_mic_source_preconnect)
+
 # ── Phase 3M-1b Task F.4: RadioConnection::micFrameDecoded signal ─────────────
 # Verifies the micFrameDecoded Qt signal added to the RadioConnection base class.
 # Uses TestRadioConnection minimal concrete subclass (stubs all pure-virtuals).
