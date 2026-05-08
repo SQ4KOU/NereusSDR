@@ -73,6 +73,7 @@ mw0lge@grange-lane.co.uk
 class QCheckBox;
 class QCloseEvent;
 class QComboBox;
+class QLineEdit;
 class QDoubleSpinBox;
 class QGroupBox;
 class QLabel;
@@ -161,6 +162,9 @@ private slots:
     void onResetClicked();
     void onAmpViewClicked();
     void onDefaultPeaksClicked();
+    // PR #212 follow-up bench fix: editable PSpeak field setter.
+    // Mirrors Thetis PSForm.cs:815-827 PSpeak_TextChanged [v2.10.3.13].
+    void onPSpeakEditingFinished();
 
     // Toggles
     void onAlwaysOnTopToggled(bool on);
@@ -260,7 +264,13 @@ private:
     QLabel*    m_lblInfo13{nullptr};             // PSForm.designer.cs:505-516 lblPSInfo13 (dg.cnt)
     QLabel*    m_lblInfo15{nullptr};             // PSForm.designer.cs:618-629 lblPSInfo15 (state)
     QLabel*    m_lblGetPSpeak{nullptr};          // PSForm.designer.cs:553-561 GetPSpeak (read-only)
-    QLabel*    m_lblTxPSpeak{nullptr};           // PSForm.designer.cs:573-582 txtPSpeak (SetPk read-only mirror)
+    // PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07): converted from
+    // QLabel to QLineEdit to match Thetis PSForm.designer.cs:573-582 txtPSpeak
+    // which is a TextBox the user can edit.  PS hardware peak is bench-
+    // dependent (HL2 + N2ADR users typically need 0.117 vs the spec 0.233
+    // default); without a user-tunable input the AutoAtt loop can't converge
+    // on hardware where the feedback path differs from spec.
+    QLineEdit* m_txtPSpeak{nullptr};             // PSForm.designer.cs:573-582 txtPSpeak (SetPk editable)
 
     // Advanced collapse: vector of every widget that disappears in
     // collapsed mode (everything except the top action row).  Built in

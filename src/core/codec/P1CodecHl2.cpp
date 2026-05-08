@@ -258,7 +258,19 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
                           | (!ctx.p1MicTipRing      ? 0x10 : 0x00)   // mic_trs (inverted) — 3M-1b G.3
                           | (ctx.p1MicBias          ? 0x20 : 0x00)   // mic_bias (no inversion) — 3M-1b G.4
                           | (ctx.p1MicPTTDisabled   ? 0x40 : 0x00)); // mic_ptt (direct, issue #182)
-            out[2] = 0;
+            // C2: line_in_gain (low 5 bits) | puresignal_run (bit 6).
+            // Source: mi0bot ChannelMaster/networkproto1.c:1097 [v2.10.3.13-beta2]
+            //   C2 = (prn->mic.line_in_gain & 0b00011111) | ((prn->puresignal_run & 1) << 6);
+            //
+            // PR #212 follow-up bench-fix (J.J. KG4VCF, 2026-05-07):
+            // Pre-fix this was hardcoded `out[2] = 0` (cargo-culted scaffold from
+            // an early HL2 codec stub).  Wire-pcap of working Thetis HL2 PS-MOX
+            // session showed C2=0x57 (line_in_gain=0x17 + ps_run=1).  HL2 firmware
+            // engages PureSignal feedback routing on this bit; without it,
+            // calcc/pscc receive paired streams of identical RX1-audio data and
+            // the calibration state machine can't compute corrections.
+            out[2] = quint8((ctx.p1LineInGain & 0x1F)
+                          | (ctx.p1PuresignalRun ? 0x40 : 0x00));
             out[3] = 0;
             // MI0BOT: Different read loop for HL2 — Larger range for the HL2 attenuator
             // [original inline comment from networkproto1.c:1100,1102]
@@ -344,12 +356,40 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
             return;
         }
 
-        // Banks 13-16 — CW / EER / BPF2 (identical to Standard)
-        // Source: mi0bot networkproto1.c:1126-1159 [@c26a8a4 / matches @501e3f5]
+        // Banks 13-15 — CW / EER (HL2 has no CW state surface yet — emit C0 only)
+        // Source: mi0bot networkproto1.c:1127-1149 [v2.10.3.13-beta2]
         case 13: out[0] = C0base | 0x1E; return;
         case 14: out[0] = C0base | 0x20; return;
         case 15: out[0] = C0base | 0x22; return;
-        case 16: out[0] = C0base | 0x24; return;
+
+        // Bank 16 — BPF2 + xvtr_enable + puresignal_run
+        // Source: mi0bot networkproto1.c:1151-1160 [v2.10.3.13-beta2]:
+        //   case 16: // BPF2 0x12
+        //       C0 |= 0x24;
+        //       C1 = (BPF2 HPF/LPF/preamp bits + rx2_gnd<<7);
+        //       C2 = (xvtr_enable & 1) | ((prn->puresignal_run & 1) << 6);
+        //       C3 = 0;
+        //       C4 = 0;
+        //
+        // PR #212 follow-up bench-fix (J.J. KG4VCF, 2026-05-07):
+        // Pre-fix this was a stub (C0 only, C1-C4 = 0).  Wire-pcap of working
+        // Thetis HL2 PS-MOX session showed bank 16 carrying ps_run=1 in C2 bit 6
+        // (alongside bank 11 C2 — Thetis emits the bit on TWO banks).  HL2
+        // firmware appears to engage PureSignal feedback routing only when
+        // BOTH bank 11 and bank 16 carry the bit; without bank 16, calcc state
+        // machine stalls at LCOLLECT with txEnvMax == rxEnvMax.
+        //
+        // BPF2 (HL2's secondary BPF board) state isn't tracked in NereusSDR
+        // yet — emit C1 = 0 (no BPF2 routing) until BPF2 support lands.
+        // xvtr_enable is also not yet plumbed — emit 0.  Only the ps_run bit
+        // is wired; that's what HL2 firmware needs for PS to engage.
+        case 16:
+            out[0] = C0base | 0x24;
+            out[1] = 0;     // BPF2 filter bits — not plumbed in NereusSDR yet
+            out[2] = quint8(ctx.p1PuresignalRun ? 0x40 : 0x00);  // ps_run only
+            out[3] = 0;
+            out[4] = 0;
+            return;
 
         // Bank 17 — TX latency + PTT hang (HL2-only, NOT AnvelinaPro3 extra OC)
         // Source: mi0bot networkproto1.c:1162-1168 [@c26a8a4]
@@ -584,6 +624,21 @@ PsDdcConfig P1CodecHl2::applyPureSignalDdcConfig(
             // MI0BOT: HL2 can work at a high sample rate — always rx1_rate for HL2
             cfg.rate[0]     = static_cast<uint32_t>(rx1Rate);
             cfg.rate[1]     = static_cast<uint32_t>(rx1Rate);
+            // From mi0bot console.cs:8486 [v2.10.3.13-beta2]:
+            //   cntrl1 = 4;
+            //   cntrl2 = 0;
+            //
+            // Earlier PR #212 bench-fix (since reverted, J.J. KG4VCF,
+            // 2026-05-07) changed this to `cntrl1 = 0` citing a "ramdor-
+            // Thetis HL2 PS-MOX session" pcap.  The deep cross-codebase
+            // review (PR #212 follow-up) found ramdor-Thetis has no HL2
+            // case in UpdateDDCs at all, so the comparison was invalid;
+            // mi0bot Thetis (the working reference on the user's HL2 +
+            // N2ADR + amp bench) explicitly emits cntrl1=4.  Restored
+            // here to match mi0bot byte-for-byte.  The actual PureSignal
+            // breakthrough on user's bench came from the
+            // setTxStepAttenuation negative-clamp fix in
+            // P1RadioConnection.cpp, NOT this byte.
             cfg.cntrl1      = 4;
             cfg.cntrl2      = 0;
 

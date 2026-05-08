@@ -984,8 +984,32 @@ void P1RadioConnection::setTxDrive(int level)
 // ---------------------------------------------------------------------------
 void P1RadioConnection::setTxStepAttenuation(int dB)
 {
-    if (dB < 0)  { dB = 0; }
-    if (dB > 63) { dB = 63; }  // HL2 has 6-bit field; standard boards 5-bit
+    // PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07):
+    // The HL2 PureSignal AutoAtt loop drives SATT into the negative range
+    // (mi0bot HL2 signed ATT semantics: 0..31 = attenuation, -1..-28 = preamp
+    // gain — see P1CodecHl2.cpp bank 11 C4 emission).  Pre-fix this clamped
+    // negative dB to 0 unconditionally, silently dropping every preamp-gain
+    // request.  AutoAtt would step the user-facing scalar from 0 to -28
+    // searching for adequate feedback level, but the wire byte stayed at
+    // (31 - 0) | 0x40 = 0x5F = no attenuation, so HL2 firmware never engaged
+    // any preamp gain.  fbLevel pinned at the no-preamp value (~77 on the
+    // user's 40m bench) and AutoAtt ran to the floor without converging.
+    //
+    // Mi0bot Thetis SetTxAttenData (netInterface.c:1027-1041) has NO clamp
+    // at the equivalent layer — it forwards the user-facing signed value
+    // straight through to the bank emission code, which performs the
+    // (31 - userDb) inversion to produce the wire byte.  We mirror that
+    // here: HL2 gets the signed [-28, +31] range; non-HL2 P1 boards keep
+    // the original [0, 31] unsigned range (5-bit attenuator only).
+    //
+    // The codec-side qBound at P1CodecHl2.cpp:335 still clamps to
+    // [-28, +31] as a defense-in-depth — that's the value the (31 - userDb)
+    // inversion needs to produce wire bits in [0, 59].
+    const bool isHl2 = (m_hardwareProfile.model == HPSDRModel::HERMESLITE);
+    const int loBound = isHl2 ? -28 : 0;
+    const int hiBound = isHl2 ?  31 : 31;  // standard boards 5-bit; HL2 6-bit signed range -28..+31
+    if (dB < loBound) { dB = loBound; }
+    if (dB > hiBound) { dB = hiBound; }
 
     // Phase 3M-4 Task 17 P1 follow-up: arm bank-4 flush BEFORE the
     // idempotent guard (Codex P2 ordering) so PureSignal auto-attenuate

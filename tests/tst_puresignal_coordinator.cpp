@@ -480,6 +480,13 @@ private slots:
         stepAtt.setAttOnTxEnabled(false);
         QVERIFY(!stepAtt.attOnTxEnabled());
 
+        // PR #212 follow-up: m_aaLastSeenCalCount initial value changed
+        // from -1 to 0 so the FIRST autoAttentionTick is properly gated
+        // when calCount is still 0 (calcc hasn't run yet).  Bump
+        // calCount via the test seam to simulate a completed calcc cycle
+        // and trigger the calCount-changed branch.
+        ps.setCalCountForTest(1);
+
         ps.autoAttentionTick();
 
         // Postcondition: tick advanced past Monitor (so we know the
@@ -553,6 +560,9 @@ private slots:
         // currentAttOnTx > minAtt)` evaluates as
         // `(false) || (true && (-15 > -28))` = true.  Tick MUST advance
         // to SetNewValues.
+        // PR #212 follow-up: bump calCount via test seam since
+        // m_aaLastSeenCalCount initial value changed from -1 to 0.
+        ps.setCalCountForTest(1);
         ps.autoAttentionTick();
 
         QCOMPARE(static_cast<int>(ps.autoAttenuateState()),
@@ -633,6 +643,9 @@ private slots:
 
         // fbLevel=0, currentAtt=5 → needRecal = (false) || (true && (5 > 0))
         // = true.  Tick advances to SetNewValues.
+        // PR #212 follow-up: bump calCount via test seam since
+        // m_aaLastSeenCalCount initial value changed from -1 to 0.
+        ps.setCalCountForTest(1);
         ps.autoAttentionTick();
         QCOMPARE(static_cast<int>(ps.autoAttenuateState()),
                  static_cast<int>(PureSignal::AutoAttenuateState::SetNewValues));

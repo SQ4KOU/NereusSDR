@@ -1369,7 +1369,17 @@ public:
 
     /// Two-tone test magnitude (dB).  Used in setup.cs:11056 [v2.10.3.13]:
     ///   ttmag1 = ttmag2 = 0.49999 * pow(10, level / 20)
-    /// NereusSDR default -6 dB (Thetis Designer udTwoToneLevel.Value = 0 dB).
+    /// Default 0 dB (matches Thetis Designer udTwoToneLevel.Value = 0).
+    /// PR #212 follow-up bench: an earlier NereusSDR-original default of
+    /// -6 dB halved the 2-tone envelope (peak 0.5 vs 1.0) which starved
+    /// calcc LCOLLECT bin filling on HL2 — psHWPeak=0.233 expects peak
+    /// envelope to reach ~0.234, but at -6 dB it tops out at ~0.117 →
+    /// only bins 0-7 fill, full_ints stuck at 8, state never advances
+    /// past LCOLLECT.  The -6 dB default was corrected to 0 dB in the
+    /// load() default earlier; legacy persisted -6 dB values from
+    /// pre-fix sessions stay until the user opens Setup → Test/2-Tone
+    /// and re-saves.  No auto-migration to keep the setting honest as
+    /// a user preference.
     double twoToneLevel() const noexcept { return m_twoToneLevel; }
 
     /// TX power (%) used during the two-tone test when

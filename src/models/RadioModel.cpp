@@ -982,6 +982,47 @@ RadioModel::RadioModel(QObject* parent)
         pumpAudioVolume(m_lastAudioVolume);
     });
 
+    // ── PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07) ────────────
+    // Listener for TransmitModel::audioVolumeChanged.  Documented in
+    // TransmitModel.h:659 ("Emits audioVolumeChanged so RadioModel can
+    // pump") and TwoToneController.h:43 ("audio_volume through
+    // TransmitModel::audioVolumeChanged"), but the connect was never wired
+    // in the original port — voice TX and TUNE paths apply the result
+    // inline (above and at the TUNE handler), but TwoToneController calls
+    // setPowerUsingTargetDbm and discards the result with `(void)`.  Result:
+    // when 2-tone activates, setTxFixedGain + setTxDrive retain stale
+    // values from the last voice/TUNE click — TX I/Q amplitude pinned at
+    // some old level regardless of RF Power slider.
+    //
+    // This listener catches the 2-tone path AND any future code that emits
+    // audioVolumeChanged without applying inline.  Voice TX and TUNE paths
+    // still apply inline (idempotent guards in TxChannel::setTxFixedGain
+    // line 3617 and P1RadioConnection::setTxDrive line 959 dedup the
+    // double-application — second call is no-op).
+    //
+    // From Thetis cmaster.cs:1115-1119 [v2.10.3.13] CMSetTXOutputLevel
+    // topology: iq_gain = audioVolume * swrProtect; wire_byte never sees
+    // SWR foldback, only iq_gain does (preserves K2GX safety hotfix).
+    connect(&m_transmitModel, &TransmitModel::audioVolumeChanged, this,
+            [this](double audioVolume) {
+        const float swrProtect =
+            std::clamp(m_transmitModel.swrProtectFactor(), 0.0f, 1.0f);
+        const int wireDrive = std::clamp(
+            int(audioVolume * 1.02 * 255.0), 0, 255);
+        const double iqGain =
+            audioVolume * static_cast<double>(swrProtect);
+
+        if (m_txChannel) {
+            m_txChannel->setTxFixedGain(iqGain);
+        }
+        if (m_connection) {
+            auto* conn = m_connection;
+            QMetaObject::invokeMethod(conn, [conn, wireDrive]() {
+                conn->setTxDrive(wireDrive);
+            });
+        }
+    });
+
     // Bench-reported #167 follow-up: power meters stick after un-key.
     // Root cause: handlePaTelemetry only fires while the radio is sending
     // PA telemetry (typically only during transmit).  When transmit ends

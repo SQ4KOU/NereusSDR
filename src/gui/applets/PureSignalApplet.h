@@ -64,6 +64,7 @@ mw0lge@grange-lane.co.uk
 
 #pragma once
 #include "AppletWidget.h"
+#include <QPointer>
 
 class QPushButton;
 class QLabel;
@@ -143,7 +144,13 @@ private:
     // setPureSignal() (test seam) or RadioModel::pureSignalCoordinatorReady.
     // Null until the WDSP-init lambda fires (production) or until the
     // test injects its own.
-    PureSignal* m_ps{nullptr};
+    //
+    // PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07): converted to
+    // QPointer for stale-pointer safety on radio-disconnect teardown
+    // (RadioModel destroys PureSignal then emits coordinatorReady(nullptr);
+    // setPureSignal's `disconnect(m_ps, ...)` previously dereferenced freed
+    // memory).  Same fix applied to TxApplet::m_ps.
+    QPointer<PureSignal> m_ps;
 
     // Control 1 — calibrate button (non-toggle)
     QPushButton* m_calibrateBtn  = nullptr;

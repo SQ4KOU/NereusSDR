@@ -71,6 +71,7 @@ mw0lge@grange-lane.co.uk
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSpinBox>
@@ -461,6 +462,12 @@ void PsForm::buildUi()
             this, &PsForm::onAmpViewClicked);
     connect(m_btnDefaultPeaks, &QPushButton::clicked,
             this, &PsForm::onDefaultPeaksClicked);
+    // PR #212 follow-up bench fix: PSpeak text edit → PureSignal::setHwPeak.
+    // Mirrors Thetis PSForm.cs:815-827 PSpeak_TextChanged [v2.10.3.13].
+    // editingFinished fires on Enter or focus loss — matches WinForms
+    // TextChanged-followed-by-Validating semantics.
+    connect(m_txtPSpeak, &QLineEdit::editingFinished,
+            this, &PsForm::onPSpeakEditingFinished);
 
     // ── Wire toggle signals ───────────────────────────────────────────────
     connect(m_chkOnTop,                &QCheckBox::toggled,
@@ -616,14 +623,34 @@ QGroupBox* PsForm::buildCalibrationInfoGroup(QWidget* parent)
 
     auto* lblSetPk = new QLabel(tr("SetPk"), grp);
     g->addWidget(lblSetPk, 2, 4);
-    m_lblTxPSpeak = new QLabel(grp);
-    m_lblTxPSpeak->setObjectName(QStringLiteral("txtPSpeak"));
-    m_lblTxPSpeak->setStyleSheet(bisqueLabelStyle());
-    m_lblTxPSpeak->setToolTip(tr(
-        "Indicator:  Peak level of expected digital TX feedback.  (Should be "
-        "close to GetPk; Can be set manually for non-recognized "
-        "hardware/firmware.)"));
-    g->addWidget(m_lblTxPSpeak, 2, 5);
+    // PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07):
+    // SetPk converted from QLabel (read-only mirror) to QLineEdit (user-
+    // editable) — matches Thetis PSForm.designer.cs:573-582 txtPSpeak which
+    // is a TextBox.  Wired to PureSignal::setHwPeak via editingFinished so
+    // bench-tuned values stick (HL2 + N2ADR users typically need ~0.117 vs
+    // the spec 0.233 default — the AutoAtt loop can't converge on hardware
+    // where the feedback signal differs from spec without this).
+    // From Thetis PSForm.cs:815-827 PSpeak_TextChanged [v2.10.3.13]:
+    //   private void PSpeak_TextChanged(object sender, EventArgs e) {
+    //       bool bOk = double.TryParse(txtPSpeak.Text, out double tmp);
+    //       if (bOk) {
+    //           _PShwpeak = tmp;
+    //           puresignal.SetPSHWPeak(_txachannel, _PShwpeak);
+    //           UpdateWarningSetPk();
+    //       }
+    //   }
+    m_txtPSpeak = new QLineEdit(grp);
+    m_txtPSpeak->setObjectName(QStringLiteral("txtPSpeak"));
+    m_txtPSpeak->setStyleSheet(bisqueLabelStyle());
+    m_txtPSpeak->setToolTip(tr(
+        "PS hardware peak (editable).  Peak level of expected digital TX "
+        "feedback for the current hardware.  Should be close to GetPk; can "
+        "be tuned manually for non-recognized hardware/firmware or unusual "
+        "feedback paths (e.g. HL2 + N2ADR + amp benches typically need "
+        "~0.117 vs the 0.233 HL2 default).  Press Enter or click outside "
+        "the field to apply."));
+    m_txtPSpeak->setMaximumWidth(80);
+    g->addWidget(m_txtPSpeak, 2, 5);
 
     // Default Peaks button
     m_btnDefaultPeaks = new QPushButton(tr("Default"), grp);
@@ -700,8 +727,8 @@ void PsForm::syncFromPureSignal()
     // initial Text="0.5" when tintIndex()==0.
     m_comboTint->setCurrentIndex(m_pureSignal->tintIndex());
 
-    // SetPk readout
-    m_lblTxPSpeak->setText(QString::number(m_pureSignal->hwPeak(), 'f', 4));
+    // SetPk readout (editable QLineEdit; user can override per-bench)
+    m_txtPSpeak->setText(QString::number(m_pureSignal->hwPeak(), 'f', 4));
 
     // Save button initial gating: PSForm.cs:574-590 [v2.10.3.13] sets
     // btnPSSave.Enabled to CorrectionsBeingApplied, AND PSForm.cs:865/871/
@@ -863,8 +890,52 @@ void PsForm::onDefaultPeaksClicked()
     //   psdefpeak(HardwareSpecific.PSDefaultPeak);
     if (m_pureSignal) {
         m_pureSignal->setDefaultPeaks();
-        // Mirror the new SetPk into the read-only label.
-        m_lblTxPSpeak->setText(QString::number(m_pureSignal->hwPeak(), 'f', 4));
+        // Mirror the new SetPk back into the editable field.
+        m_txtPSpeak->setText(QString::number(m_pureSignal->hwPeak(), 'f', 4));
+    }
+}
+
+// PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07).
+// From Thetis PSForm.cs:815-827 PSpeak_TextChanged [v2.10.3.13]:
+//   private void PSpeak_TextChanged(object sender, EventArgs e) {
+//       bool bOk = double.TryParse(txtPSpeak.Text, out double tmp);
+//       if (bOk) {
+//           _PShwpeak = tmp;
+//           puresignal.SetPSHWPeak(_txachannel, _PShwpeak);
+//           UpdateWarningSetPk();
+//       }
+//   }
+// Qt translation: editingFinished fires on Enter or focus loss (vs Thetis
+// TextChanged which fires per keystroke).  Cleaner UX — user types the
+// full number then commits, vs racing the parser per keystroke.  Invalid
+// input is silently ignored; the displayed text snaps back to the
+// model's hwPeak on the next updateFromModel() pass.  No persistence
+// here — PureSignal::setHwPeak is non-persisted runtime state, matching
+// Thetis (txtPSpeak's value is restored from `_PShwpeak` field which is
+// itself rebuilt from per-board defaults on connect).
+void PsForm::onPSpeakEditingFinished()
+{
+    if (m_updatingFromModel || !m_pureSignal || !m_txtPSpeak) {
+        return;
+    }
+    bool ok = false;
+    const double value = m_txtPSpeak->text().toDouble(&ok);
+    if (!ok) {
+        // Reject invalid input; snap back to current model value.
+        m_txtPSpeak->setText(
+            QString::number(m_pureSignal->hwPeak(), 'f', 4));
+        return;
+    }
+    // Sanity clamp: psHWPeak must be positive.  Thetis allows any double
+    // (including 0 or negative) but those crash calcc with
+    // hw_scale = 1/peak.  We clamp to (0.001, 2.0] which covers all
+    // realistic HL2/ANAN/Saturn values (HL2 default 0.233, Saturn default
+    // 0.6121, ANAN-G2 0.4072 — all in this range).
+    const double clamped = std::clamp(value, 0.001, 2.0);
+    m_pureSignal->setHwPeak(clamped);
+    if (clamped != value) {
+        // Show the clamped value back to the user.
+        m_txtPSpeak->setText(QString::number(clamped, 'f', 4));
     }
 }
 

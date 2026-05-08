@@ -230,6 +230,15 @@ public:
     //   public static int CalibrationCount { get { return _info[5]; } }
     int calibrationCount() const noexcept { return m_calCount.load(); }
 
+#ifdef NEREUS_BUILD_TESTS
+    // Test seam (PR #212 follow-up bench fix, J.J. KG4VCF, 2026-05-07):
+    // simulate calcc completing a calibration cycle so unit tests can drive
+    // the autoAttentionTick gate (curCalCount != m_aaLastSeenCalCount).
+    // Production code populates m_calCount via pollTimerTick from WDSP's
+    // info[5] — tests don't have WDSP available so they bump it directly.
+    void setCalCountForTest(int n) { m_calCount.store(n); }
+#endif
+
     // From Thetis PSForm.cs:1123-1138 [v2.10.3.13] — FeedbackColourLevel:
     //   FB > 181 → DodgerBlue (or Red when InvertRedBlue)
     //   FB > 128 → Lime
@@ -595,9 +604,24 @@ private:
     // PSForm.cs:735 [v2.10.3.13] `puresignal.CalibrationAttemptsChanged`
     // guard).  Without this, the 100 ms timer fires multiple times per
     // calcc cycle on transient fbLevel readings, computing fresh
-    // deltaDb on stale data → ATT oscillates 0↔31.  Sentinel -1 forces
-    // first-tick acceptance.
-    int m_aaLastSeenCalCount{-1};
+    // deltaDb on stale data → ATT oscillates 0↔31.
+    //
+    // PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07): initialize to
+    // 0 (matching calcc.c calCount initial value) instead of -1 so the
+    // FIRST auto-att tick is properly gated by the calCount-unchanged
+    // check.  Pre-fix: sentinel -1 made the first tick fire spuriously
+    // when calcc had never advanced past LIDLE — fbLevel=0 → deltaDb=-10
+    // (HL2 -∞ sentinel from PureSignal.cpp:1392) → SATT=-10 dB → HL2
+    // firmware applies ~20 dB TX-path attenuation → DDC3 envelope halved
+    // to ~0.117 → calcc can't fill bins 8-15 → LCOLLECT stalls forever.
+    // Mirrors Thetis PSForm.cs:1097 NeedToRecalibrate gate where
+    // _info[5] and _oldInfo[5] both start at 0 (calcc's binfo[5] init
+    // value via calloc'd array), so the first 0==0 tick is properly
+    // skipped.  HL2 in particular is sensitive because its 0→-10 first-
+    // tick response transitions through enough TX attenuation to drop
+    // the feedback ADC envelope below the threshold needed for calcc's
+    // LCOLLECT bin-fill across all 16 amplitude bins.
+    int m_aaLastSeenCalCount{0};
 
     // Codex Fix E: single-cal retry tracking.  Mirrors Thetis PSForm.cs:
     // 553-554 [v2.10.3.13]:
