@@ -463,7 +463,7 @@ void PsForm::buildUi()
     connect(m_btnDefaultPeaks, &QPushButton::clicked,
             this, &PsForm::onDefaultPeaksClicked);
     // PR #212 follow-up bench fix: PSpeak text edit → PureSignal::setHwPeak.
-    // Mirrors Thetis PSForm.cs:815-827 PSpeak_TextChanged [v2.10.3.13].
+    // Mirrors Thetis PSForm.cs:787-794 PSpeak_TextChanged [v2.10.3.13].
     // editingFinished fires on Enter or focus loss — matches WinForms
     // TextChanged-followed-by-Validating semantics.
     connect(m_txtPSpeak, &QLineEdit::editingFinished,
@@ -630,7 +630,7 @@ QGroupBox* PsForm::buildCalibrationInfoGroup(QWidget* parent)
     // bench-tuned values stick (HL2 + N2ADR users typically need ~0.117 vs
     // the spec 0.233 default — the AutoAtt loop can't converge on hardware
     // where the feedback signal differs from spec without this).
-    // From Thetis PSForm.cs:815-827 PSpeak_TextChanged [v2.10.3.13]:
+    // From Thetis PSForm.cs:787-794 PSpeak_TextChanged [v2.10.3.13]:
     //   private void PSpeak_TextChanged(object sender, EventArgs e) {
     //       bool bOk = double.TryParse(txtPSpeak.Text, out double tmp);
     //       if (bOk) {
@@ -896,7 +896,7 @@ void PsForm::onDefaultPeaksClicked()
 }
 
 // PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07).
-// From Thetis PSForm.cs:815-827 PSpeak_TextChanged [v2.10.3.13]:
+// From Thetis PSForm.cs:787-794 PSpeak_TextChanged [v2.10.3.13]:
 //   private void PSpeak_TextChanged(object sender, EventArgs e) {
 //       bool bOk = double.TryParse(txtPSpeak.Text, out double tmp);
 //       if (bOk) {
