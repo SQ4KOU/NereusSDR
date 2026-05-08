@@ -96,7 +96,8 @@ const QStringList& liveKeyList()
         QStringLiteral("VOX_GainScalar"),
         QStringLiteral("VOX_HangTime"),
         QStringLiteral("AntiVox_Gain"),
-        QStringLiteral("AntiVox_Source_VAX"),
+        // 3M-3a-iv post-bench refactor (Option A): AntiVox_Source_VAX bundle
+        // key dropped alongside the antiVoxSourceVax property.
         QStringLiteral("MonitorVolume"),
         QStringLiteral("Mic_Source"),
         // Two-tone (7 properties + 1 enum)
@@ -1049,7 +1050,8 @@ QHash<QString, QVariant> MicProfileManager::defaultProfileValues()
     out.insert(QStringLiteral("VOX_GainScalar"),       QStringLiteral("1"));             // audio.cs:194 [v2.10.3.13]
     out.insert(QStringLiteral("VOX_HangTime"),         QStringLiteral("500"));           // setup.designer.cs:45020-45024 [v2.10.3.13]
     out.insert(QStringLiteral("AntiVox_Gain"),         QStringLiteral("0"));             // NereusSDR-original (Thetis udAntiVoxGain=1.0dB)
-    out.insert(QStringLiteral("AntiVox_Source_VAX"),   QStringLiteral("False"));         // audio.cs:446 [v2.10.3.13]
+    // 3M-3a-iv post-bench refactor (Option A): AntiVox_Source_VAX default
+    // seed dropped alongside the antiVoxSourceVax property.
     out.insert(QStringLiteral("MonitorVolume"),        QStringLiteral("0.5"));           // audio.cs:417 [v2.10.3.13]
     out.insert(QStringLiteral("Mic_Source"),           QStringLiteral("Pc"));            // NereusSDR-native (always-safe)
 
@@ -1187,7 +1189,8 @@ QHash<QString, QVariant> MicProfileManager::captureLiveValues(const TransmitMode
     out.insert(QStringLiteral("VOX_GainScalar"),       QString::number(static_cast<double>(tx->voxGainScalar())));
     out.insert(QStringLiteral("VOX_HangTime"),         QString::number(tx->voxHangTimeMs()));
     out.insert(QStringLiteral("AntiVox_Gain"),         QString::number(tx->antiVoxGainDb()));
-    out.insert(QStringLiteral("AntiVox_Source_VAX"),   tx->antiVoxSourceVax() ? QStringLiteral("True") : QStringLiteral("False"));
+    // 3M-3a-iv post-bench refactor (Option A): AntiVox_Source_VAX bundle
+    // write dropped alongside the antiVoxSourceVax property.
     out.insert(QStringLiteral("MonitorVolume"),        QString::number(static_cast<double>(tx->monitorVolume())));
     out.insert(QStringLiteral("Mic_Source"),
                tx->micSource() == MicSource::Radio ? QStringLiteral("Radio") : QStringLiteral("Pc"));
@@ -1326,7 +1329,8 @@ void MicProfileManager::applyValuesToModel(const QHash<QString, QVariant>& value
     tx->setVoxGainScalar(take(QStringLiteral("VOX_GainScalar"), QStringLiteral("1")).toFloat());
     tx->setVoxHangTimeMs(take(QStringLiteral("VOX_HangTime"), QStringLiteral("500")).toInt());
     tx->setAntiVoxGainDb(take(QStringLiteral("AntiVox_Gain"), QStringLiteral("0")).toInt());
-    tx->setAntiVoxSourceVax(take(QStringLiteral("AntiVox_Source_VAX"), QStringLiteral("False")) == QLatin1String("True"));
+    // 3M-3a-iv post-bench refactor (Option A): AntiVox_Source_VAX bundle
+    // load dropped alongside the antiVoxSourceVax property.
     tx->setMonitorVolume(take(QStringLiteral("MonitorVolume"), QStringLiteral("0.5")).toFloat());
 
     const QString micSrc = take(QStringLiteral("Mic_Source"), QStringLiteral("Pc"));

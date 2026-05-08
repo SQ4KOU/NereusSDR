@@ -88,6 +88,22 @@ void RxDspWorker::setBufferSizes(int inSize, int outSize)
 {
     m_inSize.store(inSize, std::memory_order_relaxed);
     m_outSize.store(outSize, std::memory_order_relaxed);
+
+    // Phase 3M-3a-iv: emit only on change so steady-state operation does
+    // not spam TxWorkerThread::setAntiVoxBlockGeometry with no-op
+    // SetAntiVOXSize/SetAntiVOXRate calls. Sentinel m_lastEmittedInSize=-1
+    // guarantees the first call always fires, even if it matches the
+    // kDefault* defaults that m_inSize/m_outSize started at.
+    if (inSize != m_lastEmittedInSize || outSize != m_lastEmittedOutSize) {
+        m_lastEmittedInSize  = inSize;
+        m_lastEmittedOutSize = outSize;
+        emit bufferSizesChanged(outSize, m_sampleRate);
+    }
+}
+
+void RxDspWorker::setSampleRate(double rate)
+{
+    m_sampleRate = rate;
 }
 
 void RxDspWorker::processIqBatch(int receiverIndex,
@@ -157,6 +173,48 @@ void RxDspWorker::processIqBatch(int receiverIndex,
         m_iqAccumI.remove(0, inSize);
         m_iqAccumQ.remove(0, inSize);
         emit chunkDrained(inSize);
+
+        // Phase 3M-3a-iv: fork the same RX audio block to TxWorkerThread
+        // for the WDSP DEXP anti-VOX detector. Slice 0 is the only consumer
+        // in the single-RX path; multi-RX mux lands with 3F.
+        //
+        // From Thetis ChannelMaster cmaster.c:159-175 [v2.10.3.13]: this
+        // is the single-RX equivalent of pavoxmix → SendAntiVOXData.
+        // No aamix instance is needed because there is one input, one
+        // sample rate, and no mixing — a queued signal/slot replaces the
+        // aamix port. When 3F multi-pan ships, this connection is replaced
+        // by a real aamix port; the TxWorkerThread side stays unchanged.
+        //
+        // ── Tap-point signpost (3M-3a-iv post-bench refactor) ────────────
+        // The anti-VOX cancellation reference is forked here from
+        // RxDspWorker's demod output before it reaches AudioEngine.  This
+        // is correct as long as the audio bus stage applies no processing
+        // that diverges between outputs (per-bus EQ, gain, mute beyond
+        // master).  Today's single-output PC speaker path satisfies this
+        // assumption.  WHEN OUTPUT DIVERGENCE LANDS (radio-speaker output
+        // with independent processing, or per-bus EQ/gain), the anti-VOX
+        // tap MUST move from RxDspWorker to AudioEngine's post-mixer
+        // summing point so the cancellation reference matches the audio
+        // actually leaving the speakers.  This is a tap-point relocation
+        // only; the WDSP DEXP block and TxChannel::sendAntiVoxData wrapper
+        // stay unchanged.
+        //
+        // Fires regardless of WDSP wiring (mirrors chunkDrained's
+        // contract): when engines are wired, the buffer carries the
+        // freshly decoded WDSP audio in m_interleavedOut; when not, a
+        // zero-filled stereo buffer of the correct outSize*2 floats is
+        // emitted so test fixtures without fake engines still observe
+        // the signal shape. The QVector<float> deep-copies on the queued
+        // connection, leaving m_interleavedOut owned by this thread.
+        QVector<float> antiVoxBuffer(outSize * 2, 0.0f);
+        if (m_wdspEngine != nullptr && m_audioEngine != nullptr
+            && m_interleavedOut.size() >= outSize * 2) {
+            const float* src = m_interleavedOut.constData();
+            for (int i = 0; i < outSize * 2; ++i) {
+                antiVoxBuffer[i] = src[i];
+            }
+        }
+        emit antiVoxSampleReady(0, antiVoxBuffer, outSize);
     }
 
     emit batchProcessed();

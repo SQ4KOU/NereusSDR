@@ -237,8 +237,8 @@ private slots:
                  QStringLiteral("500"));
         QCOMPARE(s.value(profileKey(kMacA, "Default", "AntiVox_Gain")).toString(),
                  QStringLiteral("0"));
-        QCOMPARE(s.value(profileKey(kMacA, "Default", "AntiVox_Source_VAX")).toString(),
-                 QStringLiteral("False"));
+        // 3M-3a-iv post-bench refactor (Option A): AntiVox_Source_VAX bundle
+        // key dropped alongside the antiVoxSourceVax property.
         QCOMPARE(s.value(profileKey(kMacA, "Default", "MonitorVolume")).toString(),
                  QStringLiteral("0.5"));
         QCOMPARE(s.value(profileKey(kMacA, "Default", "Mic_Source")).toString(),
@@ -304,13 +304,14 @@ private slots:
         QCOMPARE(defs.value("TwoToneFreq1").toString(), QStringLiteral("700"));
         QCOMPARE(defs.value("TwoToneDrivePowerOrigin").toString(),
                  QStringLiteral("DriveSlider"));
-        // 107 keys total: 23 mic/VOX/MON/two-tone (3M-1c) + 27 EQ/Lev/ALC
+        // 106 keys total: 22 mic/VOX/MON/two-tone (3M-1c, was 23 — dropped
+        // AntiVox_Source_VAX in 3M-3a-iv Option A refactor) + 27 EQ/Lev/ALC
         // (3M-3a-i G) + 1 TXParaEQData (3M-3a-ii follow-up Batch 6) +
         // 41 CFC/CPDR/CESSB/PhRot (3M-3a-ii G) +
         // 2 FilterLow/FilterHigh (Plan 4 Cluster A D1) +
         // 2 line_in_gain/user_dig_out (P1 full-parity Task 2.4) +
         // 11 DEXP envelope/ratios/look-ahead/SCF (3M-3a-iii Tasks 7-10).
-        QCOMPARE(defs.size(), 107);
+        QCOMPARE(defs.size(), 106);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -496,7 +497,8 @@ private slots:
         tx.setVoxGainScalar(2.5f);
         tx.setVoxHangTimeMs(1000);
         tx.setAntiVoxGainDb(12);
-        tx.setAntiVoxSourceVax(true);
+        // 3M-3a-iv post-bench refactor (Option A): setAntiVoxSourceVax call
+        // dropped alongside the antiVoxSourceVax property.
         tx.setMonitorVolume(0.75f);
         tx.setMicSource(MicSource::Radio);
         tx.setTwoToneFreq1(800);
@@ -539,8 +541,8 @@ private slots:
                  QStringLiteral("1000"));
         QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "AntiVox_Gain")).toString(),
                  QStringLiteral("12"));
-        QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "AntiVox_Source_VAX")).toString(),
-                 QStringLiteral("True"));
+        // 3M-3a-iv post-bench refactor (Option A): AntiVox_Source_VAX bundle
+        // assertion dropped alongside the antiVoxSourceVax property.
         QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "MonitorVolume")).toString(),
                  QStringLiteral("0.75"));
         QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "Mic_Source")).toString(),
