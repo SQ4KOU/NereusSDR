@@ -227,6 +227,19 @@ void StepAttenuatorController::setAttenuation(int dB, int rx)
 
     emit attenuationChanged(m_attDb);
 
+    // Issue #200 fix — mirror live RX value into the per-band slot when not
+    // in MOX, so the band-state stays coherent with m_attDb.  Without this,
+    // the user's spinbox change diverges from m_bandState[currentBand], and
+    // the TX→RX restore path's "defensive" resync could snap m_attDb back
+    // to the stale slot value (often 0 from a never-touched persisted slot).
+    // From Thetis console.cs:11050-11051 [v2.10.3.13]:
+    //   if (!_mox) //[2.10.3.9]MW0LGE note, this is not technically required
+    //              //  for all radios except for the RedPitaya. See BODGE
+    //       setRX1stepAttenuatorForBand(rx1_band, _rx1_attenuator_data);
+    if (!m_isMox) {
+        m_bandState[static_cast<int>(m_currentBand)].attDb = m_attDb;
+    }
+
     // ADC-linked: force the other RX to match.
     if (m_adcLinked && (rx == 0 || rx == 1)) {
         // Prevent infinite recursion — only propagate once.
@@ -560,23 +573,24 @@ void StepAttenuatorController::onMoxHardwareFlipped(bool isTx)
             // the RX att will get re-pushed on the next CC bank that reads
             // m_stepAttn — already-stored unchanged from before MOX).
             //
-            // Then re-sync m_bandState entry in case the band-state RX att
-            // diverged during MOX (defensive — should not happen in 3M-1
-            // single-RX scope, but cheap to verify).
-            //
             // #175 PR #194 review fix (2026-05-04): gate on
             // m_savedRxAttDbValid so the restore only runs when the matching
             // RX→TX branch actually populated the stash.  Without this
             // gate, MOX cycles with ATT-on-TX OFF clobbered the user's RX
             // att with the default-zero (or stale) stash value.
+            //
+            // Issue #200 fix (2026-05-08): the previous "defensive" band-state
+            // re-sync below this line ran in the WRONG direction (band-state
+            // → live), which clobbered the user's RX att with the stale
+            // per-band slot value (often 0 from a never-touched persisted
+            // slot) on every MOX cycle.  setAttenuation() now mirrors live →
+            // per-band when not in MOX (Thetis-faithful, console.cs:11050-11051
+            // [v2.10.3.13]), so the slot always matches the live value at
+            // MOX-entry time and the stash is the only restore source needed.
             if (m_savedRxAttDbValid) {
                 if (m_attDb != m_savedRxAttDbForTx) {
                     m_attDb = m_savedRxAttDbForTx;
                     emit attenuationChanged(m_attDb);
-                }
-                auto it = m_bandState.find(static_cast<int>(m_currentBand));
-                if (it != m_bandState.end() && it->second.attDb != m_attDb) {
-                    setAttenuation(it->second.attDb, 0);
                 }
                 m_savedRxAttDbValid = false;
             }
