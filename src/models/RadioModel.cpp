@@ -4074,6 +4074,13 @@ void RadioModel::wireSliceSignals()
     // (a) fought the master slider for the same atomic and (b) left WDSP's
     // panel.gain1 at its rxa.c:538 default of 4.0 (+12 dB), causing the
     // distortion-at-high-volume bug surfaced 2026-05-07.
+    //
+    // [2.10.3.5]MW0LGE wave recorder volume normalise  [original inline tag
+    //   from radio.cs:1091; the wave_file_writer branch is intentionally
+    //   not ported here. NereusSDR has no WaveThing recorder module yet,
+    //   so there is no RecordGain to mirror. Tag preserved verbatim per
+    //   CLAUDE.md inline-comment-preservation rule; restore the branch
+    //   when the recorder lands.]
     connect(slice, &SliceModel::afGainChanged, this, [this](int gain) {
         if (m_wdspEngine) {
             RxChannel* rxCh = m_wdspEngine->rxChannel(0);
