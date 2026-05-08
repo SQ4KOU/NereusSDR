@@ -129,6 +129,16 @@ public slots:
     // TxInhibitMonitor::txInhibitedChanged.
     void setTxInhibited(bool inhibited);
 
+    // Task 3.6: live-apply CPU meter update rate from GeneralOptionsPage spinbox.
+    // hz is clamped to [1, 30]. Restarts m_cpuTimer with the new interval.
+    void setCpuTimerIntervalHz(int hz);
+
+    // Task 3.6: live-apply ANAN-8000DLE volts/amps visibility preference.
+    // Called when the "Show volts/amps in title bar" checkbox changes.
+    // Only has visible effect when the connected radio is an ANAN-8000D
+    // (the m_paVoltLabel is already auto-hidden for non-MKII boards).
+    void setVoltsAmpsVisible(bool visible);
+
 protected:
     void closeEvent(QCloseEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;

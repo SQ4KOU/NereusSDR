@@ -248,6 +248,7 @@ warren@wpratt.com
 #include "RadioModel.h"
 #include "BandDefaults.h"
 #include "RxDspWorker.h"
+#include "core/FFTEngine.h"
 // 3M-1a G.1: TX-side integration — MoxController + TxChannel view.
 // TxMicRouter is already included via RadioModel.h (for std::unique_ptr destructor).
 #include "core/MoxController.h"
@@ -293,6 +294,7 @@ warren@wpratt.com
 #include <cmath>
 
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QMetaObject>
 #include <QStandardPaths>
@@ -1509,6 +1511,10 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // moved there.  See the "TX channel creation deferred" block right
         // after m_connection = conn.release().
         if (rxCh) {
+            // Task 4.2: give RxChannel a handle to WdspEngine so onModeChanged()
+            // can call rebuild() when the active mode's DSP-Options settings change.
+            rxCh->setWdspEngine(m_wdspEngine);
+
             // Apply slice state to WDSP channel (no longer hardcoded)
             if (m_activeSlice) {
                 rxCh->setMode(m_activeSlice->dspMode());
@@ -1752,6 +1758,10 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 return;
             }
             m_txChannel->setConnection(m_connection);
+
+            // Task 4.2: give TxChannel a handle to WdspEngine so onModeChanged()
+            // can call rebuild() when the active mode's DSP-Options settings change.
+            m_txChannel->setWdspEngine(m_wdspEngine);
 
             // ── L.1: construct Pc + Radio mic sources + composite router ──────────
             // Construct after m_connection is live so RadioMicSource has a valid
@@ -2921,6 +2931,10 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     m_connectionSampleRateHz = wireSampleRate;
     emit wireSampleRateChanged(static_cast<double>(wireSampleRate));
 
+    // Task 1.7: record active-RX count so setActiveRxCountLive() can
+    // report idempotent (same-count) calls correctly.
+    m_connectionActiveRxCount = activeRxCount;
+
     qCDebug(lcConnection) << "Connecting to" << info.displayName()
                           << "P" << static_cast<int>(info.protocol);
 }
@@ -3437,10 +3451,39 @@ void RadioModel::wireSliceSignals()
     });
 
     // Mode → WDSP
+    // setMode: push the demodulation mode to WDSP immediately.
+    // onModeChanged (Task 4.2): read per-mode DSP-Options AppSettings (buffer/
+    // filter/filter-type) and rebuild the WDSP channel if any setting changed.
+    // dspChangeMeasured is emitted with elapsed ms when a rebuild occurs.
     connect(slice, &SliceModel::dspModeChanged, this, [this](DSPMode mode) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setMode(mode);
+            const qint64 elapsed = rxCh->onModeChanged(mode);
+            // -1 = no change; 0+ = applied (in-place WDSP setters routinely
+            // finish sub-millisecond, so 0 ms is a legitimate elapsed time).
+            if (elapsed >= 0) {
+                emit dspChangeMeasured(elapsed);
+            }
+        }
+        // TX channel: live-apply per-mode filter size + filter type via the
+        // in-place WDSP entry points (TXASetNC / TXASetMP — radio.cs:2628 /
+        // 2647 [v2.10.3.13]).  Each setter internally quiesces the channel
+        // via SetChannelState's flushflag handshake (channel.c:259-297
+        // [v2.10.3.13]) — safe to call from the main thread while
+        // TxWorkerThread is alive.
+        //
+        // The earlier 2026-05-05 hot-fix that disabled this call was
+        // working around a different bug: TxChannel::onModeChanged called
+        // WdspEngine::rebuildTxChannel() (close-and-reopen) which raced
+        // with the running worker and SIGSEGV'd on band change.
+        // commits 1ed5464/1b4ba06/fd5c807 swapped the rebuild path for
+        // the in-place setters, so the live-apply is safe to restore.
+        if (m_txChannel) {
+            const qint64 txElapsed = m_txChannel->onModeChanged(mode);
+            if (txElapsed >= 0) {
+                emit dspChangeMeasured(txElapsed);
+            }
         }
         // Issue #153 sub-bug 2 — TX-side mode + bandpass push (trigger #2
         // of 3).  Mirrors Thetis console.cs:33937 [v2.10.3.13] mode-change
@@ -3585,11 +3628,27 @@ void RadioModel::wireSliceSignals()
         const double noiseFloor = static_cast<double>(m_noiseFloorTracker->noiseFloor());
 
         // From Thetis v2.10.3.13 console.cs:33292-33319 — agcCalOffset(rx)
-        // Simplified: 0.0f for FIXD (NereusSDR AGCMode::Off), 2.0f for others
-        // Full formula: 2.0f + (DisplayCalOffset + PreampOffset - AlexPreampOffset - FFTSizeOffset)
-        // Alex/preamp/FFT-size offsets land with spectrum knee line overlay
-        const float calOffset = (slice->agcMode() == AGCMode::Off)
-            ? 0.0f : 2.0f;
+        // Full Thetis formula:
+        //   FIXD:    0.0
+        //   default: 2.0 + (DisplayCalOffset + PreampOffset - AlexPreampOffset
+        //                    - FFTSizeOffset)
+        //
+        // FFTSizeOffset (Display.cs:1389-1397 [v2.10.3.13]) is set to
+        // slider.Value * 2 dB on every FFT slider scroll (setup.cs:16154).
+        // Without subtracting it, the AGC threshold drifts up to 12 dB
+        // across the slider's 0..6 range (each step adds 2 dB to the
+        // visible noise floor as bin width halves).
+        //
+        // PreampOffset / AlexPreampOffset still TBD (separate scope: lands
+        // with the spectrum knee-line overlay work).  They sum to ~0 on
+        // most current radios so the AGC drift was negligible until the
+        // FFT slider made FFTSizeOffset user-tunable.
+        float calOffset = 0.0f;
+        if (slice->agcMode() != AGCMode::Off) {
+            const double fftOffsetDb = m_fftEngine
+                ? m_fftEngine->fftSizeOffsetDb() : 0.0;
+            calOffset = 2.0f - static_cast<float>(fftOffsetDb);
+        }
 
         // From Thetis v2.10.3.13 console.cs:45965-45968 — apply cal offset
         const double threshold = (noiseFloor + slice->autoAgcOffset())
@@ -4768,6 +4827,7 @@ void RadioModel::setConnectionState(ConnectionState s)
     } else {
         m_connectionStartedAt = QDateTime{}; // clear — uptime is meaningless
         m_connectionSampleRateHz = 0;
+        m_connectionActiveRxCount = 0;       // Task 1.7: reset on disconnect
     }
     emit connectionStateChanged(s);
 }
@@ -5698,6 +5758,364 @@ QString RadioModel::connectionSampleRateText() const
         return QString::number(rateHz / 1000) + QStringLiteral(" kHz");
     }
     return QString::number(rateHz) + QStringLiteral(" Hz");
+}
+
+// ---------------------------------------------------------------------------
+// setSampleRateLive — Task 1.6
+//
+// Sample-rate live-apply coordinator.  Implements the 7-step sequence
+// described in the design doc (thetis-display-dsp-parity-design.md §5C).
+//
+// NereusSDR-original infrastructure — no Thetis source ported here.
+// The P1 restart pattern mirrors the onReconnectTimeout() sequence in
+// P1RadioConnection (itself ported from networkproto1.c SendStopToMetis /
+// SendStartToMetis [v2.10.3.13]).
+// ---------------------------------------------------------------------------
+qint64 RadioModel::setSampleRateLive(int newRateHz)
+{
+    QElapsedTimer t;
+    t.start();
+
+    // Idempotent check first — safe even when disconnected, avoids the
+    // spurious warning log on redundant calls from the settings-restore path.
+    if (newRateHz == m_connectionSampleRateHz) {
+        return 0;
+    }
+
+    // Guard: nothing to do if disconnected or WDSP not initialized.
+    if (!m_connection || !m_wdspEngine || !m_wdspEngine->isInitialized()) {
+        qCWarning(lcConnection) << "setSampleRateLive: no active connection "
+                                   "or WDSP not initialized — ignoring";
+        return -1;
+    }
+
+    qCInfo(lcConnection) << "setSampleRateLive:" << m_connectionSampleRateHz
+                         << "Hz ->" << newRateHz << "Hz";
+
+    // ── Step 1: Quiesce DSP worker ────────────────────────────────────────
+    // Disconnect the I/Q feed so no new batches land in the worker while
+    // the WDSP channel is being rebuilt.  resetAccumulator() via
+    // BlockingQueuedConnection ensures any in-flight batch completes
+    // before we proceed.
+    if (m_dspWorker && m_receiverManager) {
+        QObject::disconnect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
+                            m_dspWorker, &RxDspWorker::processIqBatch);
+        if (m_dspThread && m_dspThread->isRunning()) {
+            QMetaObject::invokeMethod(m_dspWorker,
+                                      &RxDspWorker::resetAccumulator,
+                                      Qt::BlockingQueuedConnection);
+        }
+    }
+
+    // Stop TX pump before touching the TX channel.
+    // TODO(Task 1.6): emit tuneRefused / drop MOX if m_isTuning — for now
+    // callers should ensure MOX is off before calling setSampleRateLive.
+    if (m_txWorker) {
+        m_txWorker->stopPump();
+        if (m_txChannel) {
+            m_txChannel->moveToThread(this->thread());
+        }
+    }
+
+    // ── Step 2: Pause AudioEngine (hook for future active-drain impl) ─────
+    m_audioEngine->pauseInput();
+
+    // ── Step 3: Rebuild WDSP channels ─────────────────────────────────────
+    const int newInSize = bufferSizeForRate(newRateHz);
+    {
+        ChannelConfig rxCfg;
+        rxCfg.sampleRate = newRateHz;
+        rxCfg.bufferSize = newInSize;
+        // filterSize and filterType: keep existing values (rebuild reads them
+        // from AppSettings in the production DspOptionsPage path; here we use
+        // the WDSP defaults so the caller only has to pass the rate).
+        m_wdspEngine->rebuildRxChannel(0, rxCfg);
+    }
+    if (m_txChannel) {
+        ChannelConfig txCfg;
+        // TX channel uses fixed DSP rate (96 kHz) and output rate from the
+        // connection (P1 = 48 kHz, P2 = 192 kHz).  Only the input rate tracks
+        // the wire sample rate.
+        txCfg.sampleRate = newRateHz;
+        txCfg.bufferSize = 256;  // From WdspEngine::createTxChannel default
+        m_wdspEngine->rebuildTxChannel(1, txCfg);
+    }
+
+    // ── Step 4: Reconfigure hardware ──────────────────────────────────────
+    // P2: setSampleRate() already calls sendCmdRx() + sendCmdTx() when running.
+    // P1: stop + update rate + priming burst + start via restartStreamWithRate.
+    //
+    // Both calls are queued to the connection thread via invokeMethod.
+    if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+        // restartStreamWithRate performs the stop/prime/start cycle.
+        // Must run on the connection thread; use QueuedConnection — we do
+        // NOT block here to avoid holding the main thread during the radio
+        // restart latency (~10-50 ms).
+        //
+        // TODO(Task 1.6 follow-up): consider BlockingQueuedConnection if
+        // tests need deterministic ordering.  For now the DSP worker is
+        // already stopped so there is no race between the restart and
+        // incoming EP6 frames.
+        QMetaObject::invokeMethod(p1, [p1, newRateHz]() {
+            p1->restartStreamWithRate(newRateHz);
+        }, Qt::QueuedConnection);
+    } else {
+        // P2 (and future protocol variants): setSampleRate sends the updated
+        // command packets from the connection thread.
+        QMetaObject::invokeMethod(m_connection,
+                                  [conn = m_connection, newRateHz]() {
+            conn->setSampleRate(newRateHz);
+        }, Qt::QueuedConnection);
+    }
+
+    // ── Step 5: AudioEngine reinit (hook) ─────────────────────────────────
+    // WDSP always outputs 64 samples @ 48 kHz regardless of wire rate, so
+    // AudioEngine's speakers bus does not need to be reopened.
+    m_audioEngine->reinitForSampleRate(newRateHz);
+
+    // ── Step 6: Update RxDspWorker buffer sizes ───────────────────────────
+    if (m_dspWorker) {
+        m_dspWorker->setBufferSizes(newInSize, 64);
+    }
+
+    // ── Step 7: Restart TX pump ───────────────────────────────────────────
+    if (m_txWorker && m_txChannel) {
+        m_txChannel->moveToThread(m_txWorker.get());
+        m_txWorker->startPump();
+    }
+
+    // ── Step 8: Reconnect DSP worker I/Q feed ────────────────────────────
+    if (m_dspWorker && m_receiverManager) {
+        connect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
+                m_dspWorker, &RxDspWorker::processIqBatch,
+                Qt::QueuedConnection);
+    }
+
+    // Resume AudioEngine (hook — no-op in current implementation).
+    m_audioEngine->resumeInput();
+
+    // ── Step 9: Update state and emit ─────────────────────────────────────
+    m_connectionSampleRateHz = newRateHz;
+    emit wireSampleRateChanged(static_cast<double>(newRateHz));
+
+    // Persist the new rate per-MAC so the next connect picks it up.
+    if (!m_lastRadioInfo.macAddress.isEmpty()) {
+        AppSettings::instance().setHardwareValue(
+            m_lastRadioInfo.macAddress,
+            QStringLiteral("radioInfo/sampleRate"),
+            newRateHz);
+    }
+
+    const qint64 elapsedMs = t.elapsed();
+    qCInfo(lcConnection) << "setSampleRateLive: done in" << elapsedMs << "ms";
+
+    emit dspChangeMeasured(elapsedMs);
+    return elapsedMs;
+}
+
+// ---------------------------------------------------------------------------
+// setActiveRxCountLive — Task 1.7
+//
+// Active-RX-count live-apply coordinator.  Enables/disables the secondary
+// receiver without disconnect/reconnect.  Strategy A (both P1 and P2):
+//
+//   P1 note: The plan (design §5D) flagged a potential need to rework
+//   "MetisFrameParser" for mid-stream count changes.  Investigation found no
+//   separate MetisFrameParser class — EP6 parsing lives in P1RadioConnection::
+//   parseEp6Frame(frame, numRx, ...) which accepts numRx as a parameter on
+//   every call and reads m_activeRxCount from the instance overload.  There is
+//   no per-receiver cache to invalidate.  Full live-apply (Strategy A) is
+//   therefore possible without any parser rework.
+//
+//   P2 note: setActiveReceiverCount() already calls sendCmdRx() when running,
+//   which re-encodes the DDC enable bits in the next CmdRx packet.  No
+//   additional stop/start cycle is needed on P2.
+//
+// NereusSDR-original infrastructure — no Thetis source ported here.
+// Mirrors setSampleRateLive() (Task 1.6) in structure.
+// ---------------------------------------------------------------------------
+qint64 RadioModel::setActiveRxCountLive(int newCount)
+{
+    QElapsedTimer t;
+    t.start();
+
+    // Idempotent — safe when disconnected; avoids spurious warning on redundant
+    // calls from the settings-restore path.
+    if (newCount == m_connectionActiveRxCount) {
+        return 0;
+    }
+
+    // Guard: nothing to do if disconnected or WDSP not initialized.
+    if (!m_connection || !m_wdspEngine || !m_wdspEngine->isInitialized()) {
+        qCWarning(lcConnection) << "setActiveRxCountLive: no active connection "
+                                   "or WDSP not initialized — ignoring";
+        return -1;
+    }
+
+    // Clamp to board capability.
+    const int maxRx = m_hardwareProfile.caps ? m_hardwareProfile.caps->maxReceivers : 1;
+    const int clamped = qBound(1, newCount, maxRx);
+    qCInfo(lcConnection) << "setActiveRxCountLive:" << m_connectionActiveRxCount
+                         << "->" << clamped;
+
+    // ── Step 1: Quiesce DSP worker ────────────────────────────────────────────
+    // Same pattern as setSampleRateLive step 1: disconnect I/Q feed and flush.
+    if (m_dspWorker && m_receiverManager) {
+        QObject::disconnect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
+                            m_dspWorker, &RxDspWorker::processIqBatch);
+        if (m_dspThread && m_dspThread->isRunning()) {
+            QMetaObject::invokeMethod(m_dspWorker,
+                                      &RxDspWorker::resetAccumulator,
+                                      Qt::BlockingQueuedConnection);
+        }
+    }
+
+    // Stop TX pump — defensive; setActiveRxCountLive shouldn't be called
+    // while transmitting, but guard here as in setSampleRateLive.
+    if (m_txWorker) {
+        m_txWorker->stopPump();
+        if (m_txChannel) {
+            m_txChannel->moveToThread(this->thread());
+        }
+    }
+
+    // ── Step 2: Pause AudioEngine ─────────────────────────────────────────────
+    m_audioEngine->pauseInput();
+
+    // ── Step 3: Create / destroy WDSP RX channels ────────────────────────────
+    // For each newly-needed receiver (index 1..clamped-1): create RxChannel.
+    // For each receiver being removed (index clamped..m_connectionActiveRxCount-1):
+    // destroy RxChannel.
+    //
+    // Channel 0 always exists and is never touched here.
+    const int wdspRate   = m_connectionSampleRateHz > 0 ? m_connectionSampleRateHz : 48000;
+    const int wdspInSize = bufferSizeForRate(wdspRate);
+
+    if (clamped > m_connectionActiveRxCount) {
+        // Adding receivers.
+        for (int ch = m_connectionActiveRxCount; ch < clamped; ++ch) {
+            if (!m_wdspEngine->rxChannel(ch)) {
+                m_wdspEngine->createRxChannel(ch, wdspInSize, 4096,
+                                              wdspRate, 48000, 48000);
+                qCInfo(lcConnection) << "setActiveRxCountLive: created WDSP RX channel" << ch;
+            }
+        }
+    } else {
+        // Removing receivers.
+        for (int ch = m_connectionActiveRxCount - 1; ch >= clamped; --ch) {
+            if (ch > 0 && m_wdspEngine->rxChannel(ch)) {
+                m_wdspEngine->destroyRxChannel(ch);
+                qCInfo(lcConnection) << "setActiveRxCountLive: destroyed WDSP RX channel" << ch;
+            }
+        }
+    }
+
+    // ── Step 4: Reconfigure ReceiverManager DDC mapping ──────────────────────
+    if (m_receiverManager) {
+        if (clamped > m_connectionActiveRxCount) {
+            // Activate receivers 1..clamped-1.  Create them if they don't exist.
+            for (int rx = m_connectionActiveRxCount; rx < clamped; ++rx) {
+                if (m_receiverManager->receiverConfig(rx).receiverIndex < 0) {
+                    int created = m_receiverManager->createReceiver();
+                    Q_UNUSED(created)
+                }
+                m_receiverManager->activateReceiver(rx);
+            }
+        } else {
+            // Deactivate receivers clamped..m_connectionActiveRxCount-1.
+            for (int rx = m_connectionActiveRxCount - 1; rx >= clamped; --rx) {
+                m_receiverManager->deactivateReceiver(rx);
+            }
+        }
+    }
+
+    // ── Step 5: Update hardware ───────────────────────────────────────────────
+    if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+        // P1: update m_activeRxCount and restart the EP6 stream so the radio
+        // re-arms with the new per-frame slot count.  restartStreamWithCount()
+        // mirrors restartStreamWithRate(): stop + prime(3) + start + prime(3).
+        // Must run on the connection thread.
+        QMetaObject::invokeMethod(p1, [p1, clamped]() {
+            p1->restartStreamWithCount(clamped);
+        }, Qt::QueuedConnection);
+    } else {
+        // P2 (and future protocol variants): setActiveReceiverCount() calls
+        // sendCmdRx() when running — no stop/start cycle needed.
+        QMetaObject::invokeMethod(m_connection,
+                                  [conn = m_connection, clamped]() {
+            conn->setActiveReceiverCount(clamped);
+        }, Qt::QueuedConnection);
+    }
+
+    // ── Step 6: Restart TX pump ───────────────────────────────────────────────
+    if (m_txWorker && m_txChannel) {
+        m_txChannel->moveToThread(m_txWorker.get());
+        m_txWorker->startPump();
+    }
+
+    // ── Step 7: Reconnect DSP worker I/Q feed ─────────────────────────────────
+    if (m_dspWorker && m_receiverManager) {
+        connect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
+                m_dspWorker, &RxDspWorker::processIqBatch,
+                Qt::QueuedConnection);
+    }
+
+    // Resume AudioEngine.
+    m_audioEngine->resumeInput();
+
+    // ── Step 8: Update state, persist, emit ──────────────────────────────────
+    m_connectionActiveRxCount = clamped;
+    emit activeRxCountChanged(clamped);
+
+    if (!m_lastRadioInfo.macAddress.isEmpty()) {
+        AppSettings::instance().setHardwareValue(
+            m_lastRadioInfo.macAddress,
+            QStringLiteral("radioInfo/activeRxCount"),
+            clamped);
+    }
+
+    const qint64 elapsedMs = t.elapsed();
+    qCInfo(lcConnection) << "setActiveRxCountLive: done in" << elapsedMs << "ms";
+
+    emit dspChangeMeasured(elapsedMs);
+    return elapsedMs;
+}
+
+// ---------------------------------------------------------------------------
+// Task 4.2 — rebuildDspOptionsForMode
+//
+// Called from DspOptionsPage when a per-mode combo changes and the combo's
+// mode matches the current active slice mode (design Section 4B).
+// Delegates to RxChannel::onModeChanged() and TxChannel::onModeChanged(),
+// then emits dspChangeMeasured(ms) if a rebuild occurred.
+//
+// No-op guard: returns immediately if WDSP is not initialized or no
+// RxChannel exists (e.g., disconnected, during teardown).
+//
+// NereusSDR-original infrastructure — no Thetis source ported here.
+// ---------------------------------------------------------------------------
+void RadioModel::rebuildDspOptionsForMode(DSPMode forMode)
+{
+    if (!m_wdspEngine || !m_wdspEngine->isInitialized()) {
+        return;
+    }
+
+    // -1 = no change; 0+ = applied (in-place WDSP setters routinely finish
+    // sub-millisecond, so 0 ms is a legitimate elapsed time).
+    if (RxChannel* rxCh = m_wdspEngine->rxChannel(0)) {
+        const qint64 elapsed = rxCh->onModeChanged(forMode);
+        if (elapsed >= 0) {
+            emit dspChangeMeasured(elapsed);
+        }
+    }
+
+    // TX channel — guard: may be null (not created until radio connects).
+    if (m_txChannel) {
+        const qint64 txElapsed = m_txChannel->onModeChanged(forMode);
+        if (txElapsed >= 0) {
+            emit dspChangeMeasured(txElapsed);
+        }
+    }
 }
 
 // Phase 3Q Sub-PR-4 D.3 — Segment hover tooltip.

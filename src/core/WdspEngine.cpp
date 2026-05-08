@@ -55,10 +55,13 @@ warren@wpratt.com
 #include "WdspEngine.h"
 #include "RxChannel.h"
 #include "TxChannel.h"
+#include "AppSettings.h"
 #include "LogCategories.h"
 #include "wdsp_api.h"
 
 #include <QDir>
+#include <QElapsedTimer>
+#include <QFile>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QThread>
@@ -155,10 +158,28 @@ bool WdspEngine::initialize(const QString& configDir)
     // so a genuinely cached/fast load that completes before the 250 ms poll
     // never pops a dialog.  Only sub-poll fast loads stay silent — which is
     // fine, the user doesn't need feedback for a sub-second operation.
+    // Detect whether wisdom file already exists — controls impulse-cache
+    // deletion AND the wisdomWasRebuilt flag passed to finishInitialization()
+    // (Task 4.3 needs this to decide whether to load a stale on-disk impulse
+    // cache after a wisdom rebuild).
+    const bool needsGeneration = needsWisdomGeneration(m_configDir);
+
+    // Wisdom rebuild also invalidates any saved impulse cache —
+    // From Thetis radio.cs:140-152 [v2.10.3.13]: delete impulse_cache.bin
+    // when wisdom is rebuilt so we start afresh.
+    if (needsGeneration) {
+        QString cacheFile = m_configDir + QStringLiteral("impulse_cache.bin");
+        if (QFile::exists(cacheFile)) {
+            QFile::remove(cacheFile);
+            qCInfo(lcDsp) << "Deleted stale impulse cache (wisdom rebuilt)";
+        }
+    }
+
     QByteArray configPath = m_configDir.toUtf8();
 
     qCInfo(lcDsp) << "Initializing WDSP wisdom on background thread"
-                  << "(load if cached, regenerate any missing plans)";
+                  << "(load if cached, regenerate any missing plans)"
+                  << "needsGeneration=" << needsGeneration;
 
     auto* wisdomThread = QThread::create([configPath]() {
         WDSPwisdom(const_cast<char*>(configPath.constData()));
@@ -169,12 +190,13 @@ bool WdspEngine::initialize(const QString& configDir)
     auto* pollTimer = new QTimer(this);
     pollTimer->setInterval(250);
 
-    connect(wisdomThread, &QThread::finished, this, [this, wisdomThread, pollTimer]() {
+    connect(wisdomThread, &QThread::finished, this,
+            [this, wisdomThread, pollTimer, needsGeneration]() {
         pollTimer->stop();
         pollTimer->deleteLater();
         wisdomThread->deleteLater();
         emit wisdomProgress(100, QStringLiteral("FFTW planning complete"));
-        finishInitialization();
+        finishInitialization(/*wisdomWasRebuilt=*/needsGeneration);
     });
 
     connect(pollTimer, &QTimer::timeout, this, [this]() {
@@ -199,25 +221,45 @@ bool WdspEngine::initialize(const QString& configDir)
 #endif
 }
 
-void WdspEngine::finishInitialization()
+void WdspEngine::finishInitialization(bool wisdomWasRebuilt)
 {
 #ifdef HAVE_WDSP
     qCInfo(lcDsp) << "WDSP wisdom initialized";
 
-    // Initialize impulse cache for faster filter coefficient computation
-    init_impulse_cache(1);
+    // Read AppSettings flags.
+    // From Thetis radio.cs:153-158 [v2.10.3.13] — CacheImpulse/CacheImpulseSaveRestore.
+    const auto& s = AppSettings::instance();
+    const bool cacheEnabled  = s.value("DspOptionsCacheImpulse",            "False").toString() == "True";
+    const bool saveRestore   = s.value("DspOptionsCacheImpulseSaveRestore",  "False").toString() == "True";
 
-    // Load cached impulse data if available
-    QString cacheFile = m_configDir + QStringLiteral("/impulse_cache.bin");
-    QByteArray cachePath = cacheFile.toUtf8();
-    if (QFile::exists(cacheFile)) {
-        int cacheResult = read_impulse_cache(cachePath.constData());
-        qCDebug(lcDsp) << "Impulse cache loaded, result:" << cacheResult;
+    // From Thetis radio.cs:153 [v2.10.3.13]:
+    //   WDSP.init_impulse_cache(_cache_impulse ? 1 : 0);
+    // init_impulse_cache allocates the internal cache structure (use=1) or
+    // sets it up in disabled mode (use=0). Must be called before any channel
+    // is opened. Takes effect at channel-create time.
+    init_impulse_cache(cacheEnabled ? 1 : 0);
+    qCInfo(lcDsp) << "WDSP impulse cache" << (cacheEnabled ? "enabled" : "disabled");
+
+    // From Thetis radio.cs:155-158 [v2.10.3.13]:
+    //   if (_cache_impulse_save_restore && !rebuilt)
+    //       WDSP.read_impulse_cache(...);
+    // Skip loading if wisdom was just rebuilt — the old cache is stale.
+    if (saveRestore && !wisdomWasRebuilt) {
+        QString cacheFile = m_configDir + QStringLiteral("impulse_cache.bin");
+        if (QFile::exists(cacheFile)) {
+            QByteArray cachePath = cacheFile.toUtf8();
+            int cacheResult = read_impulse_cache(cachePath.constData());
+            qCDebug(lcDsp) << "Impulse cache loaded from disk, result:" << cacheResult;
+        }
     }
 
     m_initialized = true;
     emit initializedChanged(true);
     qCInfo(lcDsp) << "WDSP initialized successfully";
+#else
+    Q_UNUSED(wisdomWasRebuilt);
+    m_initialized = true;
+    emit initializedChanged(true);
 #endif
 }
 
@@ -257,11 +299,33 @@ void WdspEngine::shutdown()
     }
 
 #ifdef HAVE_WDSP
-    // Save impulse cache for next startup
-    QString cacheFile = m_configDir + QStringLiteral("/impulse_cache.bin");
-    QByteArray cachePath = cacheFile.toUtf8();
-    save_impulse_cache(cachePath.constData());
-    qCDebug(lcDsp) << "Impulse cache saved";
+    // From Thetis radio.cs:163-177 [v2.10.3.13] (DestroyDSP):
+    //   if (_cache_impulse && _cache_impulse_save_restore)
+    //       WDSP.save_impulse_cache(...)
+    //   else
+    //       // try to remove file if exists
+    //       File.Delete(file)
+    {
+        const auto& s = AppSettings::instance();
+        const bool cacheEnabled = s.value("DspOptionsCacheImpulse",           "False").toString() == "True";
+        const bool saveRestore  = s.value("DspOptionsCacheImpulseSaveRestore", "False").toString() == "True";
+
+        QString cacheFile = m_configDir + QStringLiteral("impulse_cache.bin");
+
+        if (cacheEnabled && saveRestore) {
+            QByteArray cachePath = cacheFile.toUtf8();
+            int saveResult = save_impulse_cache(cachePath.constData());
+            qCInfo(lcDsp) << "Impulse cache saved to disk, result:" << saveResult;
+        } else {
+            // Remove any stale file so a future session with save-restore
+            // disabled doesn't accidentally load old data.
+            // From Thetis radio.cs:170-175 [v2.10.3.13].
+            if (QFile::exists(cacheFile)) {
+                QFile::remove(cacheFile);
+                qCDebug(lcDsp) << "Removed stale impulse cache file (save-restore disabled)";
+            }
+        }
+    }
 
     destroy_impulse_cache();
 #endif
@@ -382,6 +446,93 @@ RxChannel* WdspEngine::rxChannel(int channelId) const
         return it->second.get();
     }
     return nullptr;
+}
+
+qint64 WdspEngine::rebuildRxChannel(int channelId, const ChannelConfig& cfg)
+{
+    if (!m_initialized) {
+        qCWarning(lcDsp) << "rebuildRxChannel: WDSP not initialized";
+        return -1;
+    }
+
+    auto it = m_rxChannels.find(channelId);
+    if (it == m_rxChannels.end()) {
+        qCWarning(lcDsp) << "rebuildRxChannel: channel" << channelId << "not found";
+        return -1;
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+
+    // Capture DSP state before tearing down the channel.
+    const RxChannelState state = it->second->captureState();
+
+#ifdef HAVE_WDSP
+    // Deactivate with drain before closing (mirrors destroyRxChannel).
+    SetChannelState(channelId, 0, 1);
+
+    // NB / NB2 destroy is owned by ~NbFamily inside ~RxChannel destructor.
+    // Do NOT add destroy_anbEXT/nobEXT here.
+
+    // Close the old WDSP channel.
+    CloseChannel(channelId);
+#endif
+
+    // Destroy the old RxChannel C++ wrapper (runs ~NbFamily, ~DeepFilterFilter, etc.).
+    m_rxChannels.erase(it);
+    qCInfo(lcDsp) << "Rebuild: closed RX channel" << channelId;
+
+#ifdef HAVE_WDSP
+    // Recreate the WDSP channel with the new config.
+    OpenChannel(
+        channelId,
+        cfg.bufferSize,             // in_size
+        cfg.filterSize,             // dsp_size
+        cfg.sampleRate,             // input sample rate
+        cfg.sampleRate,             // dsp sample rate
+        cfg.sampleRate,             // output sample rate
+        0,                          // type: 0=RX
+        0,                          // state: 0=off initially
+        0.010,                      // tdelayup  — from Thetis cmaster.c:82
+        0.025,                      // tslewup   — from Thetis cmaster.c:83
+        0.000,                      // tdelaydown — from Thetis cmaster.c:84
+        0.010,                      // tslewdown — from Thetis cmaster.c:85
+        1);                         // bfo: block until output available
+
+    // Re-seed WDSP defaults to match the RxChannel constructor defaults —
+    // same pattern as createRxChannel() so that applyState() early-return
+    // guards fire correctly for values that haven't changed.
+    SetRXAMode(channelId, static_cast<int>(DSPMode::LSB));
+    SetRXABandpassFreqs(channelId, -2850.0, -150.0);
+    RXANBPSetFreqs(channelId, -2850.0, -150.0);
+    SetRXAAGCMode(channelId, static_cast<int>(AGCMode::Med));
+    SetRXAAGCTop(channelId, 80.0);
+    SetRXAPanelBinaural(channelId, 0);
+
+    qCInfo(lcDsp) << "Rebuild: opened RX channel" << channelId
+                  << "bufSize=" << cfg.bufferSize
+                  << "rate=" << cfg.sampleRate;
+#endif
+
+    // Construct a new RxChannel C++ wrapper.
+    auto channel = std::make_unique<RxChannel>(channelId, cfg.bufferSize,
+                                               cfg.sampleRate, this);
+    RxChannel* ptr = channel.get();
+
+#ifdef HAVE_WDSP
+    // Re-seed SNB defaults (same pattern as createRxChannel).
+    if (auto* nb = ptr->nb()) { nb->seedSnbFromSettings(); }
+#endif
+
+    m_rxChannels.emplace(channelId, std::move(channel));
+
+    // Reapply captured DSP state to the new channel.
+    ptr->applyState(state);
+
+    const qint64 elapsedMs = timer.elapsed();
+    qCInfo(lcDsp) << "Rebuild: RX channel" << channelId << "ready in"
+                  << elapsedMs << "ms";
+    return elapsedMs;
 }
 
 // ---------------------------------------------------------------------------
@@ -715,6 +866,104 @@ TxChannel* WdspEngine::txChannel(int channelId) const
         return it->second.get();
     }
     return nullptr;
+}
+
+qint64 WdspEngine::rebuildTxChannel(int channelId, const ChannelConfig& cfg)
+{
+    if (!m_initialized) {
+        qCWarning(lcDsp) << "rebuildTxChannel: WDSP not initialized";
+        return -1;
+    }
+
+    auto it = m_txChannels.find(channelId);
+    if (it == m_txChannels.end()) {
+        qCWarning(lcDsp) << "rebuildTxChannel: channel" << channelId << "not found";
+        return -1;
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+
+    // Capture DSP state before tearing down the channel.
+    const TxChannelState state = it->second->captureState();
+
+#ifdef HAVE_WDSP
+    // Deactivate with drain before closing (mirrors destroyTxChannel).
+    // dmode=1: drain-mode close per Thetis console.cs:29607 [v2.10.3.13].
+    SetChannelState(channelId, 0, 1);
+
+    // Close the old WDSP TX channel.
+    CloseChannel(channelId);
+#endif
+
+    // Destroy the old TxChannel C++ wrapper.
+    m_txChannels.erase(it);
+    qCInfo(lcDsp) << "Rebuild: closed TX channel" << channelId;
+
+#ifdef HAVE_WDSP
+    // Recreate the WDSP TX channel with the new config.
+    // Use the same OpenChannel arguments as createTxChannel() — kTxChannelType=1,
+    // kTxBlockOnOutput=1, and the TX-specific slew constants.
+    // cfg.bufferSize = new in_size; cfg.filterSize = new dsp_size.
+    // For TX dsp_rate we reuse kTxDspSampleRate (96000) — the ChannelConfig
+    // struct carries a single sampleRate field intended for the I/O rates.
+    OpenChannel(
+        channelId,
+        cfg.bufferSize,             // in_size (new input block size)
+        cfg.filterSize,             // dsp_size
+        cfg.sampleRate,             // input sample rate
+        kTxDspSampleRate,           // dsp sample rate — always 96 kHz for TX
+        cfg.sampleRate,             // output sample rate
+        kTxChannelType,             // type=1 (TX)
+        0,                          // initial state: off
+        0.000,                      // tdelayup  — from cmaster.c:186
+        kTxTSlewUpSecs,             // tslewup 0.010 s — from cmaster.c:187
+        0.000,                      // tdelaydown — from cmaster.c:188
+        kTxTSlewDownSecs,           // tslewdown 0.010 s — from cmaster.c:189
+        kTxBlockOnOutput);          // bfo=1 — from cmaster.c:190
+
+    // Re-seed TX defaults — same block as createTxChannel() so that
+    // applyState() setter guards fire correctly for unchanged values.
+    SetTXABandpassWindow(channelId, 1);
+    SetTXABandpassRun(channelId, 1);
+    SetTXAAMSQRun(channelId, 0);
+    SetTXAALCAttack(channelId, 1);
+    SetTXAALCDecay(channelId, 10);
+    SetTXAALCMaxGain(channelId, 0.0);
+    SetTXAALCSt(channelId, 1);
+    SetTXALevelerAttack(channelId, 1);
+    SetTXALevelerDecay(channelId, 100);
+    SetTXALevelerTop(channelId, 15.0);
+    SetTXALevelerSt(channelId, 1);
+    SetTXAPreGenMode(channelId, 0);
+    SetTXAPreGenToneMag(channelId, 0.0);
+    SetTXAPreGenToneFreq(channelId, 0.0);
+    SetTXAPreGenRun(channelId, 0);
+    SetTXAPanelRun(channelId, 1);
+    SetTXAPanelSelect(channelId, 2);
+    SetTXAPostGenRun(channelId, 0);
+
+    qCInfo(lcDsp) << "Rebuild: opened TX channel" << channelId
+                  << "bufSize=" << cfg.bufferSize
+                  << "rate=" << cfg.sampleRate;
+#endif
+
+    // Construct a new TxChannel C++ wrapper.
+    // outputBufferSize = inputBufferSize × outputSampleRate / inputSampleRate
+    // (same ratio math as createTxChannel — integer multiply-then-divide is safe).
+    const int outputBufferSize = cfg.bufferSize * cfg.sampleRate / cfg.sampleRate;
+    auto channel = std::make_unique<TxChannel>(channelId, cfg.bufferSize,
+                                               outputBufferSize, this);
+    TxChannel* ptr = channel.get();
+    m_txChannels.emplace(channelId, std::move(channel));
+
+    // Reapply captured DSP state to the new channel.
+    ptr->applyState(state);
+
+    const qint64 elapsedMs = timer.elapsed();
+    qCInfo(lcDsp) << "Rebuild: TX channel" << channelId << "ready in"
+                  << elapsedMs << "ms";
+    return elapsedMs;
 }
 
 } // namespace NereusSDR

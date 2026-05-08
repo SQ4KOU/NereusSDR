@@ -168,6 +168,56 @@ QString readingName(int bindingId)
 
 
 // ---------------------------------------------------------------------------
+// MeterItem::formatValue — Task 3.2 unit-mode fan-out helper
+//
+// Converts a raw signal-level dBm value to the user-selected display unit.
+//
+// S:   IARU S-meter scale — S9 = -73 dBm at HF, each S unit = 6 dB.
+//      S0..S9 are shown as "S0".."S9".  Above S9: "S9+10", "S9+20" …
+//      Clamps to [0..19] to stay finite (S9+60 = S19 internally).
+//      Derived from Thetis console.cs radSReading / getMeterData dBm→S path
+//      [v2.10.3.13].
+// dBm: plain numeric — decimal flag controls .1 vs integer rounding.
+// uV:  µV at 50 Ω — V = sqrt(P * R), P = 10^(dBm/10) * 1e-3.
+//      Derived from Thetis Common.UVfromDBM which uses (dBm + 107) / 20
+//      (a -107 dBm = 1 µV at 50 Ω simplification).  The full physics formula
+//      is preserved here for accuracy; both agree to <1% across the ham-band
+//      signal range.
+// ---------------------------------------------------------------------------
+QString MeterItem::formatValue(float dBm, MeterUnit unit, bool decimal)
+{
+    switch (unit) {
+        case MeterUnit::S: {
+            // IARU S-meter: S9 = -73 dBm, 6 dB/S-unit
+            // From Thetis console.cs getMeterData dBm→S conversion [v2.10.3.13]
+            const float diff = dBm - (-73.0f);
+            const int sUnits = qBound(0, qRound(9.0f + diff / 6.0f), 19);
+            if (sUnits <= 9) {
+                return QStringLiteral("S%1").arg(sUnits);
+            } else {
+                const int over = (sUnits - 9) * 6;  // S9+10, S9+20, etc.
+                return QStringLiteral("S9+%1").arg(over);
+            }
+        }
+        case MeterUnit::dBm:
+            return decimal ? QString::number(static_cast<double>(dBm), 'f', 1)
+                           : QString::number(qRound(dBm));
+        case MeterUnit::uV: {
+            // µV at 50Ω: V = sqrt(P * R), P = 10^(dBm/10) * 1e-3
+            // From Thetis Common.UVfromDBM [v2.10.3.13]
+            const double powerW = std::pow(10.0, static_cast<double>(dBm) / 10.0) * 1e-3;
+            const double volts  = std::sqrt(powerW * 50.0);
+            const double uV     = volts * 1e6;
+            if (uV < 1.0) {
+                return QString::number(uV, 'f', decimal ? 2 : 0) + QStringLiteral(" µV");
+            }
+            return QString::number(uV, 'f', decimal ? 1 : 0) + QStringLiteral(" µV");
+        }
+    }
+    return QString::number(static_cast<double>(dBm), 'f', 1);
+}
+
+// ---------------------------------------------------------------------------
 // MeterItem base — serialize / deserialize
 // Format: x|y|w|h|bindingId|zOrder
 // ---------------------------------------------------------------------------
@@ -564,14 +614,18 @@ void BarItem::paint(QPainter& p, int widgetW, int widgetH)
 
         if (m_showValue && std::isfinite(m_smoothedValue)) {
             p.setPen(m_fontColour);
-            const QString s = QString::number(m_smoothedValue, 'f', 1);
+            // Task 3.2 — unit-mode fan-out: signal-level bars route through
+            // formatValue so the MultimeterPage unit combo drives the readout.
+            const QString s = formatValue(static_cast<float>(m_smoothedValue),
+                                          m_unitMode, m_showDecimal);
             p.drawText(rect.left() + 2,
                        rect.top() + fm.ascent(),
                        s);
         }
         if (m_showPeakValue) {
             const QString s = std::isfinite(m_peakValue)
-                ? QString::number(m_peakValue, 'f', 1)
+                // Task 3.2 — peak value also routed through formatValue
+                ? formatValue(static_cast<float>(m_peakValue), m_unitMode, m_showDecimal)
                 : QStringLiteral("--");
             p.setPen(peakFontColour());
             const int w = fm.horizontalAdvance(s);
@@ -1173,7 +1227,22 @@ void TextItem::paint(QPainter& p, int widgetW, int widgetH)
     if (m_bindingId >= 0 && m_value < m_minValidValue && !m_idleText.isEmpty()) {
         text = m_idleText;
     } else if (m_bindingId >= 0) {
-        text = QString::number(m_value, 'f', m_decimals) + m_suffix;
+        // Task 3.2 — unit-mode fan-out: when this TextItem carries a signal-
+        // level dBm readout (detected by the canonical " dBm" suffix), route
+        // through formatValue so the MultimeterPage unit combo drives the
+        // display.  Non-signal items (SWR "1.5", voltage "13.3 V", etc.) keep
+        // their own suffix/decimals path unchanged.
+        if (m_suffix == QStringLiteral(" dBm") &&
+            (m_unitMode == MeterUnit::S || m_unitMode == MeterUnit::uV))
+        {
+            text = formatValue(static_cast<float>(m_value), m_unitMode, m_showDecimal);
+        } else {
+            // Honor m_showDecimal for dBm mode — matches Thetis
+            // chkDisplayMeterShowDecimal [v2.10.3.13]
+            const int dec = (m_suffix == QStringLiteral(" dBm") && !m_showDecimal)
+                            ? 0 : m_decimals;
+            text = QString::number(m_value, 'f', dec) + m_suffix;
+        }
     } else {
         text = m_label;
     }
@@ -1761,9 +1830,14 @@ void NeedleItem::paintOverlayDynamic(QPainter& p, int widgetW, int widgetH)
     p.setPen(QColor(0x00, 0xb4, 0xd8));
     p.drawText(QPointF(rect.left() + 6.0f, topY), sText);
 
-    // dBm text (right, light steel) — from AetherSDR SMeterWidget.cpp line 537
-    const QString dbmText = QString::number(static_cast<int>(std::round(m_smoothedDbm)))
-                          + QStringLiteral(" dBm");
+    // Right-side readout (light steel) — from AetherSDR SMeterWidget.cpp line 537
+    // Task 3.2: honor m_unitMode so the MultimeterPage unit combo drives this
+    // secondary readout.  dBm (default): integer dBm string as before.
+    // S / uV: route through formatValue.
+    const QString dbmText = (m_unitMode == MeterUnit::dBm)
+        ? (QString::number(static_cast<int>(std::round(m_smoothedDbm)))
+           + QStringLiteral(" dBm"))
+        : formatValue(m_smoothedDbm, m_unitMode, m_showDecimal);
     p.setPen(QColor(0xc8, 0xd8, 0xe8));
     const int dbmW = valFm.horizontalAdvance(dbmText);
     p.drawText(QPointF(rect.right() - dbmW - 6.0f, topY), dbmText);

@@ -401,6 +401,8 @@ set(CORE_SOURCES
     src/core/TxWorkerThread.cpp
     src/core/NbFamily.cpp
     src/core/NbFamily.h
+    src/core/dsp/ChannelConfig.h
+    src/core/dsp/RxChannelState.h
     src/core/MoxController.cpp
     src/core/MicProfileManager.cpp
     src/core/ParaEqEnvelope.cpp
@@ -494,6 +496,10 @@ set(GUI_SOURCES
     src/gui/SupportDialog.cpp
     src/gui/AboutDialog.cpp
     src/gui/VaxFirstRunDialog.cpp
+    src/gui/spectrum/ActivePeakHoldTrace.cpp
+    src/gui/spectrum/PeakBlobDetector.cpp
+    src/gui/spectrum/SpectrumDetector.cpp
+    src/gui/spectrum/SpectrumAvenger.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/dbm_strip_math.cpp
     src/gui/SpectrumOverlayMenu.cpp
@@ -648,8 +654,11 @@ set(GUI_SOURCES
     src/gui/setup/AudioVaxPage.cpp
     src/gui/setup/DeviceCard.cpp
     src/gui/setup/DspSetupPages.cpp
+    src/gui/setup/DspOptionsPage.cpp
     src/gui/setup/FilterPresetsSetupPage.cpp
     src/gui/setup/DisplaySetupPages.cpp
+    src/gui/setup/SpectrumPeaksPage.cpp
+    src/gui/setup/MultimeterPage.cpp
     src/gui/setup/SetupHelpers.cpp
     src/gui/setup/TransmitSetupPages.cpp
     src/gui/setup/AppearanceSetupPages.cpp

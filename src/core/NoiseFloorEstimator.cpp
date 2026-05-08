@@ -15,6 +15,7 @@
 #include <QtNumeric>
 
 #include <algorithm>
+#include <limits>
 
 namespace NereusSDR {
 
@@ -41,6 +42,16 @@ float NoiseFloorEstimator::estimate(const QVector<float>& bins)
                      m_workBuf.begin() + k,
                      m_workBuf.end());
     return m_workBuf[k];
+}
+
+void NoiseFloorEstimator::prime(double initialDb)
+{
+    // NereusSDR-original — no Thetis equivalent.
+    // Seed the estimator with a known noise-floor value so that the next
+    // ClarityController poll cycle starts from this floor rather than
+    // performing a cold-start ramp from an uninitialised state.
+    // Task 2.10 calls this on band change to eliminate the visual jump.
+    m_primedValue = static_cast<float>(initialDb);
 }
 
 }  // namespace NereusSDR

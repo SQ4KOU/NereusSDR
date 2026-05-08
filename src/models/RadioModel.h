@@ -297,6 +297,18 @@ public:
     void setStepAttController(class StepAttenuatorController* c);
     NoiseFloorTracker* noiseFloorTracker() const { return m_noiseFloorTracker; }
     void setNoiseFloorTracker(NoiseFloorTracker* t) { m_noiseFloorTracker = t; }
+    // Task 3.1: MeterPoller view hook so MultimeterPage can apply live
+    // polling-interval and averaging-window changes without a MainWindow
+    // round-trip.  Non-owning; MainWindow calls setMeterPoller() after
+    // creating MeterPoller (see MainWindow.cpp construction block).
+    class MeterPoller* meterPoller() const { return m_meterPoller; }
+    void setMeterPoller(class MeterPoller* p) { m_meterPoller = p; }
+    // Task 3.2: ContainerManager view hook so MultimeterPage can broadcast
+    // unit-mode changes to all live MeterItems via forEachMeterItem().
+    // Non-owning; MainWindow calls setContainerManager() after creating
+    // ContainerManager (same pattern as setMeterPoller above).
+    class ContainerManager* containerManager() const { return m_containerManager; }
+    void setContainerManager(class ContainerManager* cm) { m_containerManager = cm; }
     QTimer* autoAgcTimer() const { return m_autoAgcTimer; }
 
     // 3M-1a G.1: expose MoxController so MainWindow can wire
@@ -377,6 +389,96 @@ public:
     QString connectionMacText() const;        // "AA:BB:CC:DD:EE:FF" / "—"
     int     connectionSampleRateHz() const;   // 0 if disconnected
     QString connectionSampleRateText() const; // "192 kHz" / "—"
+
+    // Task 1.6 — Sample-rate live-apply coordinator.
+    //
+    // Changes the sample rate of the active radio connection without
+    // disconnecting.  The sequence is:
+    //   1. Quiesce the DSP worker (stop I/Q feed into RxDspWorker).
+    //   2. Notify AudioEngine of the impending change (pauseInput hook).
+    //   3. Rebuild all WDSP channels with the new rate.
+    //   4. Update the hardware:
+    //      - P1: stop + re-arm EP6 sender with new rate + start.
+    //      - P2: send updated CmdRx/CmdTx (already contains new rate).
+    //   5. Update RxDspWorker buffer sizes to match the new rate.
+    //   6. Reconnect the I/Q feed into RxDspWorker (resume DSP worker).
+    //   7. Notify AudioEngine (resumeInput hook).
+    //   8. Persist the new rate, update m_connectionSampleRateHz, and
+    //      emit wireSampleRateChanged(newRateHz).
+    //
+    // Returns elapsed milliseconds for the whole operation.  Returns -1
+    // if no connection is active or WDSP is not initialized.
+    //
+    // Must be called on the main thread.
+    //
+    // Caveats:
+    //   - P1 restart is untested on live hardware (design §5C risk note).
+    //     A brief audio dropout (one buffer interval) is expected on P1;
+    //     P2 is glitch-free in practice.
+    //   - TxWorkerThread is stopped before TX channel rebuild and restarted
+    //     after.  If MOX is asserted during the change, MOX is silently
+    //     dropped.  Callers should ensure MOX is off before calling.
+    //   - dspChangeMeasured(qint64) signal (Task 1.8) is emitted on completion.
+    //     The elapsed time is also returned synchronously.
+    qint64 setSampleRateLive(int newRateHz);
+
+    // Task 1.7 — Active-RX-count live-apply coordinator.
+    //
+    // Enables or disables the secondary receiver (RX2) without disconnecting.
+    // The sequence mirrors setSampleRateLive() (Task 1.6):
+    //   1. Quiesce the DSP worker (stop I/Q feed into RxDspWorker).
+    //   2. Pause AudioEngine.
+    //   3. Create/destroy WDSP RX channels to match the new count.
+    //   4. Update ReceiverManager DDC mapping (activate/deactivate receivers).
+    //   5. Update the hardware:
+    //      - P1: update m_activeRxCount in P1RadioConnection so the next
+    //            bank-0 C&C frame encodes the correct nrx bits, then issue
+    //            a stop+prime+start cycle so the radio re-arms EP6 with the
+    //            new per-frame slot count.  The static parseEp6Frame already
+    //            accepts numRx as a parameter; m_activeRxCount in the instance
+    //            is used on every parse call, so updating it is sufficient —
+    //            no MetisFrameParser rework required (MetisFrameParser does not
+    //            exist as a separate class; parsing is in P1RadioConnection).
+    //      - P2: setActiveReceiverCount() already sends sendCmdRx() when
+    //            running, which updates DDC enable bits in the hardware.
+    //   6. Reconnect DSP worker I/Q feed (resume DSP worker).
+    //   7. Resume AudioEngine.
+    //   8. Persist the new count per-MAC, update m_connectionActiveRxCount, and
+    //      emit activeRxCountChanged(newCount).
+    //
+    // Returns elapsed milliseconds.  Returns -1 if no connection is active or
+    // WDSP is not initialized.  Returns 0 if newCount == current count
+    // (idempotent).
+    //
+    // Must be called on the main thread.
+    //
+    // Note on P1 MetisFrameParser: the plan (design §5D) flagged a potential
+    // need to rework MetisFrameParser to handle mid-stream RX-count changes.
+    // Investigation found that no separate MetisFrameParser class exists —
+    // EP6 parsing is in P1RadioConnection::parseEp6Frame(frame, numRx, ...)
+    // which accepts numRx as a parameter on every call and reads
+    // m_activeRxCount from the instance.  There is no per-receiver cache to
+    // invalidate.  Strategy A (full live-apply, both protocols) is therefore
+    // possible without any parser rework.
+    qint64 setActiveRxCountLive(int newCount);
+
+    // Returns the active-RX count last pushed to hardware (0 when disconnected).
+    int connectionActiveRxCount() const { return m_connectionActiveRxCount; }
+
+    // Task 4.2 — Per-mode DSP-Options live-apply (called from DspOptionsPage).
+    //
+    // Reads the per-mode AppSettings keys for forMode and calls
+    // RxChannel::onModeChanged() (+ TxChannel::onModeChanged()) if WDSP is
+    // initialized and a channel exists.  No-op if disconnected or uninitialized.
+    //
+    // Emits dspChangeMeasured(elapsedMs) if a WDSP channel rebuild occurred.
+    //
+    // DspOptionsPage calls this when a combo changes and the combo's mode
+    // matches the current slice mode (design Section 4B: live-apply if same
+    // mode, persist-only otherwise — applies on next mode-switch).
+    //
+    // Must be called on the main thread.
+    void rebuildDspOptionsForMode(DSPMode forMode);
 
     // Phase 3Q Sub-PR-4 D.3: Hover tooltip for the TitleBar ConnectionSegment.
     // Returns a multi-line string with radio name, uptime, IP, MAC, protocol,
@@ -693,6 +795,9 @@ signals:
     // known. MainWindow reacts by updating FFTEngine + SpectrumWidget so
     // bin math matches the wire rate (P1=192k, P2=768k).
     void wireSampleRateChanged(double rateHz);
+    // Task 1.7: emitted after setActiveRxCountLive() successfully applies
+    // the new receiver count to both hardware and WDSP channels.
+    void activeRxCountChanged(int newCount);
     // Fires on each transition to Connected with the RadioInfo of the live
     // connection. HardwarePage (Phase 3I) listens to this to repopulate
     // sub-tabs with per-radio fields.
@@ -740,6 +845,13 @@ signals:
     // From Thetis Andromeda/Andromeda.cs:914-920 [v2.10.3.13]
     // (CATHandleAmplifierTripMessage). G8NJJ: handlers for Ganymede 500W PA protection.
     void paTrippedChanged(bool tripped);
+
+    // Task 1.8: DSP rebuild elapsed time signal.
+    // Emitted whenever a live DSP change (sample rate, active RX count,
+    // DSP-Options buffer/filter changes) completes. The argument is the
+    // elapsed wall-clock milliseconds for the rebuild. Used by
+    // DspOptionsPage's "Time to last change" readout.
+    void dspChangeMeasured(qint64 elapsedMs);
 
     // Phase 3Q Task 10: auto-connect failure signals.
     //
@@ -1039,6 +1151,11 @@ private:
     // connectionSampleRateHz() / connectionSampleRateText() read this.
     int m_connectionSampleRateHz{0};
 
+    // Task 1.7: active-RX count last pushed to the wire (0 = disconnected).
+    // Updated by setActiveRxCountLive() after hardware reconfiguration completes.
+    // Also written by connectToRadio() via the resolveActiveRxCount() call.
+    int m_connectionActiveRxCount{0};
+
     // Reconnect state
     RadioInfo m_lastRadioInfo;
     bool m_intentionalDisconnect{false};
@@ -1102,6 +1219,10 @@ private:
     // From Thetis v2.10.3.13 console.cs:46057 — tmrAutoAGC (500ms interval)
     QTimer* m_autoAgcTimer{nullptr};
     NoiseFloorTracker* m_noiseFloorTracker{nullptr};
+    // Task 3.1 view hook — non-owning, set by MainWindow.
+    class MeterPoller*      m_meterPoller{nullptr};
+    // Task 3.2 view hook — non-owning, set by MainWindow.
+    class ContainerManager* m_containerManager{nullptr};
 
     // ── 3M-1a G.4: TUN state save/restore ───────────────────────────────────
     // Fields that preserve pre-TUN state across the setTune(true)/setTune(false)

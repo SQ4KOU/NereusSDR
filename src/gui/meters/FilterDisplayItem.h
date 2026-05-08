@@ -57,9 +57,12 @@ mw0lge@grange-lane.co.uk
 #include "MeterItem.h"
 #include <QColor>
 #include <QImage>
+#include <QVector>
 #include <vector>
 
 namespace NereusSDR {
+
+class RxChannel;
 
 // From Thetis clsFilterItem (MeterManager.cs:16852+)
 // Mini passband spectrum/waterfall display with filter edge markers.
@@ -118,6 +121,17 @@ public:
     float specMinDb() const { return m_specMinDb; }
     float specMaxDb() const { return m_specMaxDb; }
 
+    // ── High-resolution filter characteristics (Task 4.4) ─────────────────────
+    // When enabled, paintFilterEdges overlays the actual computed FIR magnitude
+    // curve from RxChannel::filterResponseMagnitudes() in addition to the edge
+    // markers.  The change takes effect on the next paint frame.
+    void setHighResolution(bool h);
+    bool highResolution() const { return m_highResolution; }
+
+    // Bind the RxChannel whose filterResponseMagnitudes() provides the FIR curve.
+    // Non-owning — caller is responsible for clearing before the channel is destroyed.
+    void bindRxChannel(RxChannel* channel);
+
     Layer renderLayer() const override { return Layer::OverlayDynamic; }
     void paint(QPainter& p, int widgetW, int widgetH) override;
     QString serialize() const override;
@@ -127,6 +141,9 @@ private:
     void paintSpectrum(QPainter& p, const QRect& rect);
     void paintWaterfall(QPainter& p, const QRect& rect);
     void paintFilterEdges(QPainter& p, const QRect& rect);
+    // High-res FIR magnitude curve overlay (Task 4.4, design Section 4D).
+    // Called from paintFilterEdges() when m_highResolution && m_rxChannel.
+    void paintHighResolutionFilterCurve(QPainter& p, const QRect& rect);
     void paintNotches(QPainter& p, const QRect& rect);
     QColor dbToWaterfallColor(float db) const;
 
@@ -162,6 +179,10 @@ private:
     float  m_padding{0.02f};
     float  m_specMinDb{-140.0f};
     float  m_specMaxDb{-40.0f};
+
+    // High-resolution filter characteristics (Task 4.4)
+    bool      m_highResolution{false};
+    RxChannel* m_rxChannel{nullptr};  // non-owning
 };
 
 } // namespace NereusSDR

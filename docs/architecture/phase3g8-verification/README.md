@@ -103,3 +103,21 @@ one band, switch to another, switch back — persistent.
   GPU pipeline wire-up in a future polish commit.
 - Data Line / Data Fill colour split — shares `m_fillColor`
   until UX feedback justifies splitting them.
+
+---
+
+## v0.3.0 — Display + DSP Parity Extensions
+
+Verification matrices for controls added in v0.3.0 (Phases 2–4 of the Thetis
+Display + DSP parity audit, design doc
+`docs/architecture/thetis-display-dsp-parity-design.md`):
+
+- [Spectrum Defaults extensions](spectrum-defaults-extensions.md) — 11 rows (Section 2B)
+- [Spectrum Peaks](spectrum-peaks.md) — 14 rows (Section 2C)
+- [Waterfall Defaults changes](waterfall-defaults-changes.md) — 7 rows (Section 2D)
+- [Grid & Scales extensions](grid-scales-extensions.md) — 4 rows (Section 2E)
+- [Multimeter](multimeter.md) — 15 rows (Section 3A + relocations)
+- [DSP Options](dsp-options.md) — 22 rows (Phase 4)
+- [Infrastructure live-apply](infrastructure-live-apply.md) — 6 checks (Phase 1 manual)
+
+Total new rows: **~79** (plus 6 auditory/behavioral manual checks).

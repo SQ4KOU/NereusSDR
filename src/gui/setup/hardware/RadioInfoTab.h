@@ -62,6 +62,7 @@
 #include <QWidget>
 #include <QVariant>
 
+class QCheckBox;
 class QLabel;
 class QComboBox;
 class QSpinBox;
@@ -86,6 +87,10 @@ public:
 
 signals:
     void settingChanged(const QString& key, const QVariant& value);
+    // Emitted when the ANAN-8000DLE "Show volts/amps" checkbox is toggled.
+    // Only reachable when the connected radio is an ANAN-8000D; forwarded by
+    // SetupDialog → MainWindow::setVoltsAmpsVisible().
+    void anan8000DleVoltsAmpsChanged(bool visible);
 
 private slots:
     void onSampleRateChanged(int index);
@@ -111,6 +116,9 @@ private:
     int          m_activeWireRate{0}; // last rate reported via wireSampleRateChanged
     QSpinBox*    m_activeRxSpin{nullptr};
     QPushButton* m_copySupportInfoButton{nullptr};
+
+    // ANAN-8000DLE only — shown via capability gate in populate()
+    QCheckBox*   m_anan8000DleVoltsAmpsToggle{nullptr};
 
     // Cached for copy-to-clipboard
     QString m_currentInfo;

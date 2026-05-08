@@ -276,6 +276,26 @@ void SetDSPSamplerate(int channel, int samplerate);
 void SetOutputSamplerate(int channel, int samplerate);
 
 // ---------------------------------------------------------------------------
+// In-place filter-size / filter-type reconfigure (RXA.c / TXA.c)
+//
+// "NC" = number of coefficients (FIR filter taps); "MP" = minimum-phase
+// (Linear vs Low-Latency).  Each entry point internally calls
+// SetChannelState(channel, 0, 1) to quiesce the channel via cm_main's
+// flushflag handshake, reconfigures every subsystem that depends on the
+// new value, then SetChannelState(channel, oldstate, 0) to restore the
+// prior run state.  Safe to call from the main thread while the WDSP
+// worker is alive — that's how Thetis radio.cs:519-574 / 2604-2662
+// [v2.10.3.13] uses them.
+// From third_party/wdsp/src/RXA.c:1040-1056 [v2.10.3.13]
+//      third_party/wdsp/src/TXA.c:909-928 [v2.10.3.13]
+// ---------------------------------------------------------------------------
+
+void RXASetNC(int channel, int nc);
+void RXASetMP(int channel, int mp);
+void TXASetNC(int channel, int nc);
+void TXASetMP(int channel, int mp);
+
+// ---------------------------------------------------------------------------
 // I/Q exchange (iobuffs.h) — INREAL=float, OUTREAL=float
 // ---------------------------------------------------------------------------
 
