@@ -127,10 +127,22 @@ public:
     // thread — m_inSize/m_outSize are std::atomic<int>, and
     // processIqBatch snapshots both at batch start so a concurrent
     // setBufferSizes() takes effect no earlier than the next batch.
+    //
+    // Phase 3M-3a-iv: also fires bufferSizesChanged(outSize, sampleRate)
+    // when the (in, out) pair actually changes (idempotent re-calls are
+    // suppressed). Consumed by TxWorkerThread::setAntiVoxBlockGeometry
+    // to align WDSP DEXP detector dimensions with RX block geometry.
     void setBufferSizes(int inSize, int outSize);
+
+    // Configure the post-decimation panel sample rate (Hz, default 48 kHz).
+    // Used as the rate component of the bufferSizesChanged() emission.
+    // The WDSP RX channel decimates input_rate → 48 kHz internally, so
+    // 48000.0 is the panel-side rate seen by AudioEngine and DEXP.
+    void setSampleRate(double rate);
 
     int inSize() const { return m_inSize.load(std::memory_order_relaxed); }
     int outSize() const { return m_outSize.load(std::memory_order_relaxed); }
+    double sampleRate() const { return m_sampleRate; }
 
 public slots:
     // Receive a batch of interleaved I/Q from ReceiverManager. Runs
@@ -158,6 +170,37 @@ signals:
     // test that pins the per-rate accumulator-drain contract.
     void chunkDrained(int sampleCount);
 
+    // Phase 3M-3a-iv: fires whenever setBufferSizes() actually changes
+    // the (inSize, outSize) pair. Consumed by
+    // TxWorkerThread::setAntiVoxBlockGeometry to align WDSP DEXP's
+    // anti-VOX detector dimensions with the post-decimation RX block.
+    //
+    // Payload: (outSize_complexSamples, outRate_Hz).
+    //
+    // From Thetis ChannelMaster cmaster.c:159-175 [v2.10.3.13]: aamix is
+    // configured with audio_outsize / audio_outrate, which in NereusSDR's
+    // single-RX path correspond to RxDspWorker::outSize and the post-
+    // decimation panel rate.
+    void bufferSizesChanged(int outSize, double outRate);
+
+    // Phase 3M-3a-iv: fires per drained chunk after the existing
+    // chunkDrained / rxBlockReady delivery. Consumed by
+    // TxWorkerThread::onAntiVoxSamplesReady to feed WDSP DEXP.
+    //
+    // Payload: (sliceId, interleaved L/R float buffer, sampleCount).
+    //
+    // From Thetis ChannelMaster cmaster.c:171 [v2.10.3.13]: aamix's
+    // SendAntiVOXData callback delivers exactly one audio_outsize block
+    // at audio_outrate. Single-RX equivalent here — no resample, no mix,
+    // one source — replaces the aamix port with a direct queued signal.
+    //
+    // Fires regardless of WDSP/AudioEngine wiring, mirroring chunkDrained,
+    // so tests without fake engines still observe the contract. When
+    // engines are wired the buffer carries the WDSP-decoded interleaved
+    // audio; when they are not, a zero-filled stereo buffer of the
+    // correct size is emitted instead.
+    void antiVoxSampleReady(int sliceId, const QVector<float>& interleaved, int sampleCount);
+
 private:
     WdspEngine*      m_wdspEngine{nullptr};
     AudioEngine*     m_audioEngine{nullptr};
@@ -174,6 +217,22 @@ private:
     // published alongside these values.
     std::atomic<int> m_inSize{kDefaultInSize};
     std::atomic<int> m_outSize{kDefaultOutSize};
+
+    // Phase 3M-3a-iv: post-decimation panel sample rate emitted as the
+    // rate component of bufferSizesChanged(). 48 kHz matches the WDSP
+    // RX channel's internal decimation target (input_rate → 48000).
+    // Plain double, not atomic: only setBufferSizes() reads it, and
+    // setSampleRate() / setBufferSizes() are both expected to run on
+    // the configuring thread (typically main).
+    double m_sampleRate{48000.0};
+
+    // Phase 3M-3a-iv: tracks the last (in, out) pair emitted via
+    // bufferSizesChanged so identical re-calls don't spam
+    // TxWorkerThread::setAntiVoxBlockGeometry. -1 sentinel means "no
+    // emission yet" — guarantees the first setBufferSizes() call always
+    // fires regardless of whether it matches the kDefault* defaults.
+    int m_lastEmittedInSize{-1};
+    int m_lastEmittedOutSize{-1};
 };
 
 } // namespace NereusSDR

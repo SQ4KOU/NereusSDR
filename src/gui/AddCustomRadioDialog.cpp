@@ -494,8 +494,20 @@ void AddCustomRadioDialog::populateModelCombo()
     addSku(HPSDRModel::ANAN200D);        // "ANAN-200D"
 
     // --- Orion MkII (2 ADC · MKII BPF) ---
+    //
+    // ORIONMKII is intentionally NOT user-selectable here.  Mirrors
+    // Thetis's comboRadioModel.Items list at setup.Designer.cs:8515-8528
+    // [v2.10.3.13], which omits "ORIONMKII" entirely — Thetis's
+    // StringModelToEnum (clsHardwareSpecific.cs:316-351 [v2.10.3.13]) has
+    // no string entry for it either, and database.cs:10350 [v2.10.3.13]
+    // confirms: "not implemented in comboRadioModel list items".  The
+    // bare ORIONMKII enum exists only as a code-internal value used in
+    // some PA-gain switch fall-throughs (the Hermes 41.x dB row at
+    // clsHardwareSpecific.cs:471-486).  Productized OrionMKII boards all
+    // have ~50 dB PA gain (kAnan7000dRow / kAnan8000dRow), and letting a
+    // user pick "Orion MkII" produces the same K2GX/issue-#202 over-drive
+    // class as auto-detect did before HardwareProfile.cpp's skip.
     addFamilyHeader(QStringLiteral("Orion MkII (2 ADC · MKII BPF)"));
-    addSku(HPSDRModel::ORIONMKII);       // "Orion MkII"
     addSku(HPSDRModel::ANAN7000D);       // "ANAN-7000DLE"
     addSku(HPSDRModel::ANAN8000D);       // "ANAN-8000DLE"
     addSku(HPSDRModel::ANVELINAPRO3);    // "Anvelina Pro 3"

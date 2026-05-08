@@ -1658,6 +1658,111 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // ── Group 4: Anti-VOX (Phase 3M-3a-iv Task 10 + scope-expansion) ─────────
+    // ══════════════════════════════════════════════════════════════════════════
+    //
+    // From Thetis setup.designer.cs:44631-44760 [v2.10.3.13] — grpAntiVOX.
+    // Title "Anti-VOX" verbatim from line 44644.
+    //
+    // Layout order matches Thetis Y-coordinates:
+    //   Y=19  chkAntiVoxEnable  ("Anti-VOX Enable")    line 44740-44751
+    //   Y=41  chkAntiVoxSource  ("Use VAC Audio")      line 44646-44657
+    //   Y=71  udAntiVoxGain     ("Gain (dB)")          line 44699-44728
+    //   Y=96  udAntiVoxTau      ("Tau (ms)")           line 44660-44688
+    //
+    // Phase 3M-3a-iv Task 10 landed Tau (ms) only; the scope-expansion adds
+    // Enable / Source / Gain so the bench-verification matrix is runnable
+    // from a fresh install (closes M2 finding from end-of-epic review).
+
+    auto* antiVoxGrp = new QGroupBox(QStringLiteral("Anti-VOX"));
+    antiVoxGrp->setObjectName(QStringLiteral("grpAntiVOX"));
+    auto* antiVoxLay = new QVBoxLayout(antiVoxGrp);
+
+    // chkAntiVoxEnable — Y=19 in Thetis Designer.  Default unchecked
+    // (no .Checked= setter at setup.designer.cs:44740-44751 [v2.10.3.13]).
+    m_chkAntiVoxEnable = new QCheckBox(QStringLiteral("Anti-VOX Enable"));
+    m_chkAntiVoxEnable->setObjectName(QStringLiteral("chkAntiVoxEnable"));
+    // Tooltip from Thetis setup.designer.cs:44749 [v2.10.3.13].
+    m_chkAntiVoxEnable->setToolTip(QStringLiteral(
+        "Enable prevention measures for RX audio tripping VOX"));
+    m_chkAntiVoxEnable->setChecked(tx.antiVoxRun());
+
+    // NereusSDR-original info row replacing Thetis chkAntiVoxSource
+    // (setup.designer.cs:44646-44657 [v2.10.3.13]).  See commit message for
+    // architectural rationale: Thetis chkAntiVoxSource selects between RX
+    // and VAC as the anti-VOX cancellation reference; that choice does not
+    // map to NereusSDR's architecture, where VAX is a digital-mode app bus
+    // with no mic-feedback path and the audio output device is the only
+    // valid source.
+    auto* antiVoxSourceInfo = new QLabel(
+        QStringLiteral("Source: Audio Output Device(s)"));
+    antiVoxSourceInfo->setObjectName(QStringLiteral("lblAntiVoxSourceInfo"));
+    antiVoxSourceInfo->setToolTip(QStringLiteral(
+        "Anti-VOX always references audio about to play through the configured\n"
+        "audio output device(s).  This prevents speaker bleed from triggering\n"
+        "VOX through the local mic.  VAX is intentionally not subject to anti-VOX\n"
+        "treatment because VAX feeds digital-mode apps (no mic-feedback path).\n"
+        "\n"
+        "NereusSDR-original divergence from Thetis chkAntiVoxSource\n"
+        "(setup.designer.cs:44646-44657 [v2.10.3.13]): Thetis selects between RX\n"
+        "and VAC; in NereusSDR, the audio output device is the only valid\n"
+        "cancellation reference."));
+
+    // udAntiVoxGain — Y=71 in Thetis Designer.  Range -60..60 from
+    // setup.designer.cs:44708-44717 [v2.10.3.13].
+    //
+    // NereusSDR-original divergence (already shipped in 3M-1b H.3): TM uses
+    // int dB rather than Thetis decimal-with-0.1-step (Increment={1,0,0,65536}
+    // = 0.1, DecimalPlaces=1).  Default 0 dB rather than Thetis Value=10
+    // (setup.designer.cs:44723-44727 [v2.10.3.13]: Value={10,0,0,0}).  Both
+    // kept for consistency with shipped behavior; full Thetis parity
+    // (decimal + default 10) is a follow-up.
+    m_udAntiVoxGain = new QSpinBox;
+    m_udAntiVoxGain->setObjectName(QStringLiteral("udAntiVoxGain"));
+    m_udAntiVoxGain->setRange(TransmitModel::kAntiVoxGainDbMin,
+                              TransmitModel::kAntiVoxGainDbMax);
+    m_udAntiVoxGain->setSingleStep(1);
+    m_udAntiVoxGain->setValue(tx.antiVoxGainDb());
+    // Tooltip from Thetis setup.designer.cs:44722 [v2.10.3.13].
+    m_udAntiVoxGain->setToolTip(QStringLiteral(
+        "Gain applied to Anti-VOX audio (Anti-VOX sensitivity)"));
+
+    // udAntiVoxTau — Y=96 in Thetis Designer.  Range 1..500 default 20
+    // from setup.designer.cs:44660-44688 [v2.10.3.13].
+    m_udAntiVoxTau = new QSpinBox;
+    m_udAntiVoxTau->setObjectName(QStringLiteral("udAntiVoxTau"));
+    m_udAntiVoxTau->setRange(TransmitModel::kAntiVoxTauMsMin,
+                             TransmitModel::kAntiVoxTauMsMax);
+    m_udAntiVoxTau->setSingleStep(1);
+    m_udAntiVoxTau->setValue(tx.antiVoxTauMs());
+    // Tooltip from Thetis setup.designer.cs:44681 [v2.10.3.13].
+    m_udAntiVoxTau->setToolTip(QStringLiteral(
+        "Time-constant used in smoothing Anti-VOX data"));
+
+    // Stack: Enable checkbox, info row (NereusSDR-spin replacing
+    // Thetis chkAntiVoxSource — see info row block above), then 2 labelled
+    // spinbox rows.
+    antiVoxLay->addWidget(m_chkAntiVoxEnable);
+    antiVoxLay->addWidget(antiVoxSourceInfo);
+
+    auto* antiVoxGrid = new QGridLayout;
+    antiVoxGrid->setHorizontalSpacing(10);
+    antiVoxGrid->setVerticalSpacing(6);
+    // "Gain (dB)" — verbatim from lblAntiVoxGain.Text:44760
+    addLabelledRow(antiVoxGrid, 0, QStringLiteral("Gain (dB)"), m_udAntiVoxGain);
+    // "Tau (ms)" — verbatim from lblAntiVoxTau.Text:44697
+    addLabelledRow(antiVoxGrid, 1, QStringLiteral("Tau (ms)"), m_udAntiVoxTau);
+    antiVoxLay->addLayout(antiVoxGrid);
+    antiVoxLay->addStretch();
+
+    // Insert grpAntiVOX BEFORE the trailing stretch (same pattern as the 2x2
+    // grid above).
+    {
+        const int stretchIndex = contentLayout()->count() - 1;
+        contentLayout()->insertWidget(stretchIndex, antiVoxGrp);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // ── Bidirectional bindings ───────────────────────────────────────────────
     // ══════════════════════════════════════════════════════════════════════════
 
@@ -1786,6 +1891,44 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
             m_udSCFHighCut, [this](double hz) {
         QSignalBlocker b(m_udSCFHighCut);
         m_udSCFHighCut->setValue(static_cast<int>(hz));
+    });
+
+    // udAntiVoxTau <-> antiVoxTauMs (Phase 3M-3a-iv Task 10).  Bidirectional
+    // round-trip with QSignalBlocker guard, matching the pattern used by the
+    // other anti-VOX-adjacent spinboxes above.
+    connect(m_udAntiVoxTau, QOverload<int>::of(&QSpinBox::valueChanged),
+            &tx, &TransmitModel::setAntiVoxTauMs);
+    connect(&tx, &TransmitModel::antiVoxTauMsChanged,
+            m_udAntiVoxTau, [this](int ms) {
+        QSignalBlocker b(m_udAntiVoxTau);
+        m_udAntiVoxTau->setValue(ms);
+    });
+
+    // ── 3M-3a-iv scope-expansion bindings ────────────────────────────────────
+
+    // chkAntiVoxEnable <-> antiVoxRun (the master enable).
+    // From Thetis setup.cs:18980-18984 [v2.10.3.13].
+    connect(m_chkAntiVoxEnable, &QCheckBox::toggled,
+            &tx, &TransmitModel::setAntiVoxRun);
+    connect(&tx, &TransmitModel::antiVoxRunChanged,
+            m_chkAntiVoxEnable, [this](bool run) {
+        QSignalBlocker b(m_chkAntiVoxEnable);
+        m_chkAntiVoxEnable->setChecked(run);
+    });
+
+    // 3M-3a-iv post-bench refactor (Option A): chkAntiVoxSource <-> antiVoxSourceVax
+    // bidirectional bindings removed.  Thetis source-toggle does not map to
+    // NereusSDR's architecture (see info-row block earlier in this method
+    // and commit message for rationale).
+
+    // udAntiVoxGain <-> antiVoxGainDb (Anti-VOX sensitivity in dB).
+    // From Thetis setup.cs:18986-18990 [v2.10.3.13].
+    connect(m_udAntiVoxGain, QOverload<int>::of(&QSpinBox::valueChanged),
+            &tx, &TransmitModel::setAntiVoxGainDb);
+    connect(&tx, &TransmitModel::antiVoxGainDbChanged,
+            m_udAntiVoxGain, [this](int dB) {
+        QSignalBlocker b(m_udAntiVoxGain);
+        m_udAntiVoxGain->setValue(dB);
     });
 }
 

@@ -30,7 +30,9 @@
 #pragma once
 
 #include <QThread>
+#include <QVector>
 
+#include <atomic>
 #include <vector>
 
 namespace NereusSDR {
@@ -119,6 +121,61 @@ public:
     void tickForTest();
 #endif
 
+public slots:
+    // ── Anti-VOX queued slots (3M-3a-iv) ─────────────────────────────────
+    //
+    // These four slots form the worker-thread proxy for anti-VOX state and
+    // sample-feed.  Wired in RadioModel (Task 9) via QueuedConnection so
+    // emissions from the main thread (MoxController, RxDspWorker) deliver
+    // onto the worker's event queue and apply between waitForBlock cycles
+    // (cf. the run() narrative on cross-thread queued setter delivery).
+    //
+    // Architecture: TxChannel itself lives on this worker thread once
+    // RadioModel::connectToRadio() runs moveToThread().  These wrappers
+    // exist on TxWorkerThread (a QThread) rather than TxChannel because
+    // (a) TxChannel methods are not declared as Qt slots, and (b) the
+    // m_antiVoxRun atomic gate is a worker-local optimisation that skips
+    // the float→double conversion in TxChannel::sendAntiVoxData when the
+    // user has anti-VOX off.
+
+    // setAntiVoxRun: forwards run flag to TxChannel::setAntiVoxRun AND
+    // mirrors it into m_antiVoxRun (release-store) so onAntiVoxSamplesReady
+    // can short-circuit via acquire-load when anti-VOX is disabled.
+    //
+    // From Thetis cmaster.cs:208-209 [v2.10.3.13] — SetAntiVOXRun.
+    void setAntiVoxRun(bool run);
+
+    // onAntiVoxSamplesReady: receive RX audio fork from RxDspWorker and
+    // pump it into TxChannel::sendAntiVoxData when anti-VOX is enabled.
+    // Gates on m_antiVoxRun (acquire) so the float→double conversion in
+    // TxChannel is skipped when the user has anti-VOX off.
+    //
+    // Single-RX equivalent of Thetis ChannelMaster aamix output stage
+    // (cmaster.c:159-175 [v2.10.3.13]) — aamix mixes N RXs into one
+    // anti-VOX stream and calls SendAntiVOXData; with one RX in 3M-3a-iv
+    // we skip the mixer entirely and pump the single RX block directly.
+    void onAntiVoxSamplesReady(int sliceId, const QVector<float>& interleaved, int sampleCount);
+
+    // setAntiVoxBlockGeometry: queued slot for RxDspWorker::bufferSizesChanged.
+    // Calls both TxChannel::setAntiVoxSize and TxChannel::setAntiVoxRate so
+    // DEXP's antivox_size and antivox_rate stay aligned with the RX-side
+    // post-decimation block.
+    //
+    // From Thetis cmaster.c:154-155 [v2.10.3.13] — DEXP create-time uses
+    // pcm->audio_outsize / pcm->audio_outrate (the post-decimation audio
+    // output dimensions) for anti-VOX detector geometry.
+    void setAntiVoxBlockGeometry(int outSize, double outRate);
+
+    // setAntiVoxDetectorTau: queued slot for MoxController::antiVoxDetectorTauRequested.
+    // Pass-through to TxChannel::setAntiVoxDetectorTau (which calls WDSP
+    // SetAntiVOXDetectorTau).  Tau here is in seconds; ms→s conversion
+    // already done by MoxController.
+    //
+    // From Thetis setup.cs:18992-18996 [v2.10.3.13] —
+    //   private void udAntiVoxTau_ValueChanged(...)
+    //   { cmaster.SetAntiVOXDetectorTau(0, (double)udAntiVoxTau.Value / 1000.0); }
+    void setAntiVoxDetectorTau(double seconds);
+
 protected:
     /// QThread entry point.  Runs the cm_main-equivalent loop:
     ///   while (m_micSource->isRunning())
@@ -143,6 +200,21 @@ private:
     // PC-mic-override scratch — float buffer for AudioEngine::pullTxMic.
     // Sized kBlockFrames floats.
     std::vector<float> m_pcMicBuf;
+
+    // Anti-VOX run gate (3M-3a-iv).  Mirrors the most-recent
+    // setAntiVoxRun(bool) call.  Read with acquire in
+    // onAntiVoxSamplesReady, written with release in setAntiVoxRun.
+    // Default false matches the existing TxChannel::m_antiVoxRunLast
+    // default and the WDSP DEXP create-time `antivox_run = 0` argument
+    // (cmaster.c:153 [v2.10.3.13]).
+    //
+    // Skipping the float→double conversion in TxChannel::sendAntiVoxData
+    // when anti-VOX is off is a worker-local optimisation; DEXP itself
+    // also has a state-gate at dexp.c:288-297 [v2.10.3.13]
+    // (`if (a->state == DEXP_LOW && a->antivox_new != 0)`), but that
+    // gate fires AFTER the buffer copy, so the outer atomic saves the
+    // conversion + memcpy entirely.
+    std::atomic<bool> m_antiVoxRun{false};
 };
 
 } // namespace NereusSDR
