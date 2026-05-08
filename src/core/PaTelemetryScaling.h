@@ -125,4 +125,33 @@ double scaleFwdPowerWatts(HPSDRModel model, quint16 raw) noexcept;
 /// SetupForm.textFwdVoltage at console.cs:25068).
 double scaleFwdRevVoltage(HPSDRModel model, quint16 raw) noexcept;
 
+/// Scale a raw HL2 temperature ADC reading (0..4095) to degrees Celsius.
+///
+/// HL2 firmware overloads the C&C status frame's exciter_power AIN5
+/// field to carry the FPGA on-die temperature ADC reading.  Other
+/// boards do not surface PA temperature through this path; the caller
+/// (RadioModel::handlePaTelemetry HL2 branch) is responsible for
+/// gating on HPSDRModel::HERMESLITE before calling this function.
+///
+/// Formula (LM35-style 10 mV/°C diode with 0.5 V bias at 0 °C, against
+/// a 3.26 V ADC reference and a 12-bit code-space normalised by 4096):
+///   T(°C) = (3.26 * (raw / 4096.0) - 0.5) / 0.01
+///
+/// Sanity points:
+///   raw=628  → ~0 °C
+///   raw=942  → ~25 °C   (typical HL2 idle)
+///   raw=2048 → 113 °C   (mid-scale)
+///   raw=0    → -50 °C   (full-scale low)
+///   raw=4095 → ~275.9 °C (full-scale high)
+///
+/// No clamping — matches mi0bot computeMKIIPAVoltsAmps verbatim.  The
+/// display layer is expected to format unconditionally; absurd values
+/// during transient ADC noise correct themselves on the next averaging
+/// window.
+///
+/// From mi0bot console.cs:25079 [v2.10.3.13-beta2 @c26a8a4]:
+///   _MKIIHL2Temp = (3.26f * (tempAverage / 4096.0f) - 0.5f) / 0.01f;
+///   // MI0BOT: temp for HL2
+double scaleHermesLiteTempCelsius(quint16 raw) noexcept;
+
 }  // namespace NereusSDR

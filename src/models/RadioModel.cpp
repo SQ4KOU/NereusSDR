@@ -3589,6 +3589,45 @@ void RadioModel::handlePaTelemetry(quint16 fwdRaw, quint16 revRaw,
     const double paV    = scalePaVolts(userAdc0Raw, model);
     const double paA    = scalePaAmps(userAdc1Raw, model);
     const double paTemp = scalePaTemperatureCelsius(0, model);
+
+    // HL2 firmware overloads the C&C status frame's exciter_power AIN5
+    // field to carry the FPGA on-die temperature ADC reading; the value
+    // we just stored in `exciterRaw` is therefore not exciter mW on
+    // HL2.  Mirror mi0bot's 100-sample averaging window before the
+    // scale + push to RadioStatus.  The non-HL2 branch below keeps
+    // setExciterPowerMw(exciterRaw) as before; we only divert HL2.
+    //
+    // From mi0bot console.cs:24937-24941 [v2.10.3.13-beta2 @c26a8a4]:
+    //   if (HardwareSpecific.Model == HPSDRModel.HERMESLITE)       // MI0BOT: HL2 temperature & current
+    //   {
+    //       _ampsQueue.Enqueue(NetworkIO.getUserADC0());
+    //       _tempQueue.Enqueue(NetworkIO.getExciterPower());
+    //   }
+    // and console.cs:25073-25079:
+    //   float tempAverage = _tempQueue.Count > 0 ? (float)_tempQueue.Average() : 0;     // MI0BOT: HL2 temperature
+    //   ...
+    //   // MI0BOT: temp for HL2
+    //   _MKIIHL2Temp = (3.26f * (tempAverage / 4096.0f) - 0.5f) / 0.01f;
+    double hl2TempC = 0.0;
+    bool   hl2TempValid = false;
+    if (model == HPSDRModel::HERMESLITE) {
+        m_hl2TempRing[static_cast<std::size_t>(m_hl2TempHead)] = exciterRaw;
+        m_hl2TempHead = (m_hl2TempHead + 1) %
+                        static_cast<int>(m_hl2TempRing.size());
+        if (m_hl2TempCount < static_cast<int>(m_hl2TempRing.size())) {
+            ++m_hl2TempCount;
+        }
+        quint64 sum = 0;
+        for (int i = 0; i < m_hl2TempCount; ++i) {
+            sum += m_hl2TempRing[static_cast<std::size_t>(i)];
+        }
+        const double avgRaw = static_cast<double>(sum) /
+                              static_cast<double>(m_hl2TempCount);
+        const auto avgQuantised =
+            static_cast<quint16>(qBound(0.0, qRound(avgRaw) + 0.0, 65535.0));
+        hl2TempC = NereusSDR::scaleHermesLiteTempCelsius(avgQuantised);
+        hl2TempValid = true;
+    }
     Q_UNUSED(paV);       // RadioStatus does not expose PA volts directly (per its design header)
     Q_UNUSED(supplyRaw); // supply_volts surfaced via RadioConnection::supplyVoltsChanged signal (sub-PR-2 B.3)
 
@@ -3625,13 +3664,25 @@ void RadioModel::handlePaTelemetry(quint16 fwdRaw, quint16 revRaw,
                             && m_moxController->state() == MoxState::Tx);
     m_radioStatus.setForwardPower(inTx ? fwdWCal : 0.0);
     m_radioStatus.setReflectedPower(inTx ? revW : 0.0);
-    m_radioStatus.setExciterPowerMw(inTx ? static_cast<int>(exciterRaw) : 0);
+    // HL2 reuses the exciter_power C&C bytes for the FPGA temperature
+    // ADC, so the same wire bytes mean different things across the
+    // family.  Suppress setExciterPowerMw on HL2 so PaValuesPage /
+    // RadioStatusPage don't show "exciter = 942 mW" when 942 is the
+    // raw temp ADC count.  Other boards keep the existing semantic.
+    if (model != HPSDRModel::HERMESLITE) {
+        m_radioStatus.setExciterPowerMw(inTx ? static_cast<int>(exciterRaw) : 0);
+    } else if (!inTx) {
+        m_radioStatus.setExciterPowerMw(0);
+    }
     m_radioStatus.setPaCurrent(paA);
     // Only push temp when we have a real source (non-zero); leaves the
     // last-known value alone otherwise so a stale 0 doesn't overwrite a
     // good HL2 reading from another path.
     if (paTemp > 0.0) {
         m_radioStatus.setPaTemperature(paTemp);
+    }
+    if (hl2TempValid) {
+        m_radioStatus.setPaTemperature(hl2TempC);
     }
 
     // Phase 3M-0 Task 17 + Codex P1 follow-up: feed SwrProtectionController

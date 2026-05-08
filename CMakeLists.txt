@@ -422,6 +422,7 @@ set(CORE_SOURCES
     src/core/PaProfile.cpp
     src/core/PaProfileManager.cpp
     src/core/PaTelemetryScaling.cpp
+    src/core/PaTempUnit.cpp
     src/core/OcMatrix.cpp
     src/core/RadioStatus.cpp
     src/core/SettingsHygiene.cpp

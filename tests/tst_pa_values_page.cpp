@@ -161,7 +161,17 @@ void TstPaValuesPage::pa_temperature_updates_on_signal()
 
     model.radioStatus().setPaTemperature(45.5);
 
-    QCOMPARE(page.paTempTextForTest(), QStringLiteral("45.5 \xC2\xB0""C"));
+    // Pre-existing test had the degree sign as a raw UTF-8 byte pair
+    // (`\xC2\xB0`) inside QStringLiteral, which encoded as Â° (two
+    // separate codepoints).  The shipped string has always rendered the
+    // proper U+00B0 degree sign on screen; the test's expected value
+    // was the byte-buggy form.  Now that PaValuesPage formats via
+    // PaTempUnitNotifier (which uses QString::asprintf with the same
+    // UTF-8 source bytes interpreted correctly) the comparison must
+    // assert on the proper character.  QString::fromUtf8 decodes the
+    // \xC2\xB0 byte pair to the single U+00B0 codepoint.
+    QCOMPARE(page.paTempTextForTest(),
+             QString::fromUtf8("45.5 \xC2\xB0""C"));
 }
 
 // ---------------------------------------------------------------------------

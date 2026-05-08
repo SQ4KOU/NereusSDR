@@ -42,6 +42,12 @@ private slots:
     void orionMkII_fwd_rev_voltage_two_raw_values();
     void ananG2_fwd_rev_voltage_two_raw_values();
     void hl2_fwd_rev_voltage_two_raw_values();
+
+    // ─── scaleHermesLiteTempCelsius (port of mi0bot _MKIIHL2Temp formula) ─
+    void hl2_temp_at_zero_raw_is_minus_fifty_c();
+    void hl2_temp_at_typical_idle_raw_is_room_temperature();
+    void hl2_temp_at_mid_scale_is_one_thirteen_c();
+    void hl2_temp_at_full_scale_is_about_two_seventy_six_c();
 };
 
 // ─── scaleFwdPowerWatts ─────────────────────────────────────────────────
@@ -178,6 +184,52 @@ void TestPaTelemetryScaling::hl2_fwd_rev_voltage_two_raw_values()
     const double v_2048 = scaleFwdRevVoltage(HPSDRModel::HERMESLITE, 2048);
     QVERIFY2(v_2048 > 1.64 && v_2048 < 1.66,
              qPrintable(QString("HL2 raw=2048 volts=%1").arg(v_2048)));
+}
+
+// ─── scaleHermesLiteTempCelsius ─────────────────────────────────────────
+//
+// Port of mi0bot console.cs:25079 [v2.10.3.13-beta2 @c26a8a4]:
+//   _MKIIHL2Temp = (3.26f * (tempAverage / 4096.0f) - 0.5f) / 0.01f;
+//
+// Single-sample inputs (averaging is the caller's job):
+//   raw=0    -> (3.26 * 0      - 0.5) / 0.01 = -50.0 °C
+//   raw=628  -> (3.26 * 0.1533 - 0.5) / 0.01 ≈   0.0 °C
+//   raw=942  -> (3.26 * 0.2300 - 0.5) / 0.01 ≈  25.0 °C   (typical idle)
+//   raw=2048 -> (3.26 * 0.5    - 0.5) / 0.01 = 113.0 °C
+//   raw=4095 -> (3.26 * 0.99975- 0.5) / 0.01 ≈ 275.92 °C
+
+void TestPaTelemetryScaling::hl2_temp_at_zero_raw_is_minus_fifty_c()
+{
+    const double t_zero = scaleHermesLiteTempCelsius(0);
+    QCOMPARE(t_zero, -50.0);
+}
+
+void TestPaTelemetryScaling::hl2_temp_at_typical_idle_raw_is_room_temperature()
+{
+    // raw=942 hits ~25 °C (room temperature), the value an idle HL2
+    // FPGA reads on the bench. Pin it tight to catch sign/scale errors.
+    const double t = scaleHermesLiteTempCelsius(942);
+    QVERIFY2(t > 24.5 && t < 25.5,
+             qPrintable(QString("HL2 raw=942 temp=%1°C, expected ~25").arg(t)));
+}
+
+void TestPaTelemetryScaling::hl2_temp_at_mid_scale_is_one_thirteen_c()
+{
+    // raw=2048 -> exact mid of (raw / 4096) so the formula simplifies
+    // to (3.26 * 0.5 - 0.5) / 0.01 = 113.0 °C exactly.
+    const double t = scaleHermesLiteTempCelsius(2048);
+    QCOMPARE(t, 113.0);
+}
+
+void TestPaTelemetryScaling::hl2_temp_at_full_scale_is_about_two_seventy_six_c()
+{
+    // raw=4095 -> well above any plausible FPGA junction temperature,
+    // but pinned here to catch off-by-one /4095-vs-/4096 errors.  The
+    // mi0bot port divides by 4096 (not 4095), so raw=4095 is just below
+    // 3.26 V, not at it.
+    const double t = scaleHermesLiteTempCelsius(4095);
+    QVERIFY2(t > 275.5 && t < 276.0,
+             qPrintable(QString("HL2 raw=4095 temp=%1°C, expected ~275.92").arg(t)));
 }
 
 QTEST_GUILESS_MAIN(TestPaTelemetryScaling)
