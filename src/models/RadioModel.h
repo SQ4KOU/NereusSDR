@@ -105,6 +105,7 @@
 //  redesign (2026-04-29) deleted MicReBlocker; replaced with
 //  TxWorkerThread which drives TxChannel directly.)
 #include <algorithm>  // std::clamp (used by computeWireDriveForTest)
+#include <array>      // std::array (HL2 temp averaging ring)
 #include <memory>  // std::unique_ptr
 
 namespace NereusSDR {
@@ -981,6 +982,25 @@ private:
     // Live PA telemetry + PTT state from status packets.
     // Phase 3P-H Task 2.
     RadioStatus m_radioStatus;
+
+    // HL2 temperature averaging ring (only populated when model ==
+    // HPSDRModel::HERMESLITE). HL2 firmware overloads the C&C
+    // exciter_power AIN5 field to carry on-die FPGA temperature ADC
+    // counts; we mirror mi0bot's 100-sample averaging window before
+    // publishing to RadioStatus to suppress per-frame noise.
+    //
+    // Port of mi0bot console.cs:24917-24985 + 25069-25082
+    // [v2.10.3.13-beta2 @c26a8a4]:
+    //   private ConcurrentQueue<int> _tempQueue = new ConcurrentQueue<int>();   // MI0BOT: HL2 temperature
+    //   ...
+    //   _tempQueue.Enqueue(NetworkIO.getExciterPower());
+    //   while (_tempQueue.Count > 100 && nTries < 100) //  MI0BOT: HL2 temperature, keep max 100 in the queue
+    //       _tempQueue.TryDequeue(out int tmp);
+    //   ...
+    //   float tempAverage = _tempQueue.Count > 0 ? (float)_tempQueue.Average() : 0;     // MI0BOT: HL2 temperature
+    std::array<quint16, 100> m_hl2TempRing{};
+    int m_hl2TempCount{0};   // 0..100 — slots filled
+    int m_hl2TempHead{0};    // next slot to write
 
     // Settings hygiene — validated against caps at connect time.
     // Phase 3P-H Task 2.

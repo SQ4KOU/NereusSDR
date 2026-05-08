@@ -20,6 +20,7 @@
 #include "RadioStatusPage.h"
 
 #include "models/RadioModel.h"
+#include "core/PaTempUnit.h"
 #include "core/RadioStatus.h"
 #include "core/SettingsHygiene.h"
 #include "core/HermesLiteBandwidthMonitor.h"
@@ -178,6 +179,16 @@ RadioStatusPage::RadioStatusPage(RadioModel* model, QWidget* parent)
         RadioStatus& rs = m_model->radioStatus();
         connect(&rs, &RadioStatus::paTemperatureChanged,
                 this, &RadioStatusPage::onPaTemperatureChanged);
+        // Live re-format on °C / °F toggle. The progress bar stays in
+        // °C; only the text label converts.
+        connect(&PaTempUnitNotifier::instance(),
+                &PaTempUnitNotifier::unitChanged, this,
+                [this](PaTempUnit /*unit*/) {
+            if (m_paTemperatureLabel) {
+                m_paTemperatureLabel->setText(
+                    PaTempUnitNotifier::format(m_paTempLastCelsius));
+            }
+        });
         connect(&rs, &RadioStatus::paCurrentChanged,
                 this, &RadioStatusPage::onPaCurrentChanged);
         connect(&rs, &RadioStatus::powerChanged,
@@ -653,7 +664,8 @@ void RadioStatusPage::buildHygieneCard(QFrame* card)
 
 void RadioStatusPage::onPaTemperatureChanged(double celsius)
 {
-    m_paTemperatureLabel->setText(QStringLiteral("%1 °C").arg(celsius, 0, 'f', 1));
+    m_paTempLastCelsius = celsius;
+    m_paTemperatureLabel->setText(PaTempUnitNotifier::format(celsius));
     m_paTempBar->setValue(static_cast<int>(celsius));
 
     // Color shift: green → amber → red based on temperature

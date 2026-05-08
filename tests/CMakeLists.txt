@@ -1520,6 +1520,8 @@ nereus_add_test(tst_pa_scaling)
 # (computeAlexFwdPower) — RadioModel.cpp call-site migration deferred to
 # Phase 4 Agent 4A.
 nereus_add_test(tst_pa_telemetry_scaling)
+nereus_add_test(tst_pa_temp_unit)
+nereus_add_test(tst_radio_model_hl2_temp_routing)
 
 # ── Phase 3M-0 Task 8: SpectrumWidget "HIGH SWR" overlay state ───────────────
 # Verifies setHighSwrOverlay(active, foldback) stores state, foldback flag

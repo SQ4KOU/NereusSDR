@@ -755,6 +755,17 @@ private:
                                      const PeakMin& pm,
                                      const QString& unit,
                                      int precision);
+
+    // PA temperature variant — converts the °C-canonical current/peak/min
+    // values to the user-selected unit (°C or °F) via PaTempUnitNotifier
+    // before formatting.  Output shape matches formatWithPeakMin:
+    //   "42.5°C  (P 47.0°C / M 38.2°C)"
+    //   "108.5°F  (P 116.6°F / M 100.8°F)"
+    // PeakMin entries are stored in °C internally — the conversion is
+    // applied at format time so toggling the unit pref re-renders without
+    // losing peak/min history.
+    static QString formatPaTempWithPeakMin(double currentC,
+                                           const PeakMin& pmCelsius);
 };
 
 } // namespace NereusSDR

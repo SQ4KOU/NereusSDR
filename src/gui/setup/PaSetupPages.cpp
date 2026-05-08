@@ -168,6 +168,7 @@
 #include "core/PaCalProfile.h"
 #include "core/PaGainProfile.h"
 #include "core/PaProfile.h"
+#include "core/PaTempUnit.h"
 #include "core/PaProfileManager.h"
 #include "core/PaTelemetryScaling.h"
 #include "core/RadioConnection.h"
@@ -2140,11 +2141,22 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
                 m_paTempCurrent = celsius;
                 m_paTempPeakMin.update(celsius);
                 if (m_paTempLabel) {
-                    m_paTempLabel->setValue(formatWithPeakMin(
-                        celsius, m_paTempPeakMin,
-                        QStringLiteral(" \xC2\xB0""C"), 1));
+                    m_paTempLabel->setValue(
+                        formatPaTempWithPeakMin(celsius, m_paTempPeakMin));
                 }
             });
+
+    // Live re-format on °C / °F toggle without waiting for the next
+    // telemetry sample — the peak/min trackers stay in their canonical
+    // °C representation; formatPaTempWithPeakMin converts at format time.
+    connect(&PaTempUnitNotifier::instance(),
+            &PaTempUnitNotifier::unitChanged, this,
+            [this](PaTempUnit /*unit*/) {
+        if (m_paTempLabel) {
+            m_paTempLabel->setValue(
+                formatPaTempWithPeakMin(m_paTempCurrent, m_paTempPeakMin));
+        }
+    });
 
     // Populate from current state so the page renders meaningful values
     // even when no signal has fired yet (e.g. opened mid-session after
@@ -2164,9 +2176,8 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
         m_swrCurrent, m_swrPeakMin, QString(), 2));
     m_paCurrentLabel->setValue(formatWithPeakMin(
         m_paCurrentCurrent, m_paCurrentPeakMin, QStringLiteral(" A"), 2));
-    m_paTempLabel->setValue(formatWithPeakMin(
-        m_paTempCurrent, m_paTempPeakMin,
-        QStringLiteral(" \xC2\xB0""C"), 1));
+    m_paTempLabel->setValue(
+        formatPaTempWithPeakMin(m_paTempCurrent, m_paTempPeakMin));
 
     // ── TransmitModel drive subscription (Phase 5B #167) ─────────────────
     // The Drive label tracks the user's TX power slider position via
@@ -2373,6 +2384,30 @@ QString PaValuesPage::formatWithPeakMin(double current,
         + QStringLiteral("  (P ") + peakStr
         + QStringLiteral(" / M ") + minStr
         + QStringLiteral(")");
+}
+
+QString PaValuesPage::formatPaTempWithPeakMin(double currentC,
+                                              const PeakMin& pmCelsius)
+{
+    const PaTempUnit unit = PaTempUnitNotifier::currentUnit();
+    auto convert = [unit](double c) -> double {
+        return (unit == PaTempUnit::Fahrenheit)
+                   ? PaTempUnitNotifier::celsiusToFahrenheit(c)
+                   : c;
+    };
+    const QString unitSuffix = (unit == PaTempUnit::Fahrenheit)
+                                   ? QString::fromUtf8(" \xC2\xB0""F")
+                                   : QString::fromUtf8(" \xC2\xB0""C");
+    PeakMin convertedPm;
+    if (pmCelsius.valid()) {
+        // PeakMin's update() seeds the trackers; we set the converted
+        // values directly so we don't have to clone the class. valid()
+        // returns true once both peak and min have been set to non-
+        // sentinel values, so once-valid stays valid through conversion.
+        convertedPm.peak = convert(pmCelsius.peak);
+        convertedPm.min  = convert(pmCelsius.min);
+    }
+    return formatWithPeakMin(convert(currentC), convertedPm, unitSuffix, 1);
 }
 
 #ifdef NEREUS_BUILD_TESTS

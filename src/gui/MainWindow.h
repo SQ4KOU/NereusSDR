@@ -357,7 +357,23 @@ private:
     QAction* m_actProtocolInfo = nullptr;
 
     // Status bar members (Task 13 / sub-PR-8 restyle)
-    MetricLabel* m_paVoltLabel{nullptr};    // "PA  13.8V"  — MKII-class only (Saturn / G2 / 8000D / 7000DLE / OrionMkII / Anvelina Pro 3); Thetis-faithful — see PSU drop note above
+    //
+    // PA telemetry tile: a 2-row vertical stack.  Top row is PA voltage
+    // (MKII-class boards only — Saturn / G2 / 8000D / 7000DLE /
+    // OrionMkII / Anvelina Pro 3; Thetis-faithful via convertToVolts).
+    // Bottom row is PA temperature (HL2 today; future PureSignal-feedback
+    // boards may surface a real temp source via Phase 3M-4).  Each row
+    // hides independently based on its data source; the container hides
+    // when both rows are hidden so non-MKII non-HL2 boards (Atlas /
+    // Hermes / Angelia / Orion) get no PA tile, same as before.
+    //
+    // The PA-T row is also click-to-toggle °C / °F via PaTempUnitNotifier.
+    // Tooltip explains the toggle.  Source-of-truth value lives in
+    // RadioStatus::paTemperatureCelsius (always °C); display formatting
+    // happens at paint time via PaTempUnitNotifier::format.
+    QWidget*     m_paStackWidget{nullptr};  // vertical container (PA-V on top, PA-T below)
+    MetricLabel* m_paVoltLabel{nullptr};    // "PA   13.8V"  — MKII-class only
+    MetricLabel* m_paTempLabel{nullptr};    // "PA T 42.5°C" — HL2 today; click toggles °C / °F
     MetricLabel* m_cpuMetric{nullptr};      // "CPU  19.1%"
     QTimer*      m_cpuTimer{nullptr};
 

@@ -254,6 +254,8 @@ warren@wpratt.com
 #include "core/TxChannel.h"  // H.2: setTxChannel wiring
 #include "core/ReceiverManager.h"
 #include "core/AppSettings.h"
+#include "core/PaTempUnit.h"
+#include "core/RadioStatus.h"
 #include "core/RadioDiscovery.h"
 #include "core/WdspEngine.h"
 #include "core/FFTEngine.h"
@@ -2817,59 +2819,125 @@ void MainWindow::buildStatusBar()
     m_tciSep = makeSep();
     hbox->addWidget(m_tciSep);
 
-    // ── PA / supply voltage (MKII-class boards only) ──────────────────────
-    // Earlier revisions of this section showed a "PSU" widget driven by
-    // the supply_volts (AIN6) channel. Source-first audit against Thetis
+    // ── PA telemetry tile (volts + temperature, vertically stacked) ───────
+    // Earlier revisions showed only a single "PSU" widget driven by the
+    // supply_volts (AIN6) channel.  Source-first audit against Thetis
     // [v2.10.3.13] proved that channel is never displayed in Thetis —
     // computeHermesDCVoltage() exists but has zero callers, and the only
     // voltage status indicator (toolStripStatusLabel_Volts) reads
     // _MKIIPAVolts which is convertToVolts(getUserADC0()) — i.e. the PA
-    // drain voltage on AIN3. On a G2 / 8000D / 7000DLE the PA drain IS
+    // drain voltage on AIN3.  On a G2 / 8000D / 7000DLE the PA drain IS
     // the supply voltage minus a small drop, so this single number
     // covers what the user wants to know.
     //
-    // This widget is hidden by default and shown on the first
-    // userAdc0Changed signal (which only fires for MKII-class boards
-    // per the gate at P2RadioConnection.cpp:2153-2164). Non-MKII
-    // boards (Hermes, Atlas) get no voltage display, matching Thetis
-    // (HardwareSpecific.HasVolts gate).
-    m_paVoltLabel = new MetricLabel(QStringLiteral("PA"),
-                                    QStringLiteral("—"), barWidget);
-    m_paVoltLabel->setVisible(false);
-    hbox->addWidget(m_paVoltLabel);
+    // The HL2 fork (mi0bot) extends this slot for HermesLite by reusing
+    // the volts label to show FPGA on-die temperature (HL2 has no PA
+    // volts ADC, but does carry a temperature ADC value in the C&C
+    // exciter_power AIN5 field).  See mi0bot console.cs:26758-26762
+    // [v2.10.3.13-beta2 @c26a8a4]:
+    //   if (HardwareSpecific.Model == HPSDRModel.HERMESLITE)
+    //   {
+    //       toolStripStatusLabel_Volts.Text = String.Format("{0:#0.0}C", _MKIIHL2Temp);
+    //       ...
+    //   }
+    //
+    // NereusSDR splits this into a 2-row stacked tile so MKII boards keep
+    // their PA-V row, HL2 gets a dedicated PA-T row, and a future
+    // PureSignal-feedback board (Phase 3M-4) can surface temp on
+    // non-HL2 hardware without crowding the volts slot.  Both rows hide
+    // independently based on data source; the container hides when
+    // neither has data so non-MKII non-HL2 boards (Atlas, plain Hermes,
+    // Angelia, Orion) get no tile.
+    m_paStackWidget = new QWidget(barWidget);
+    {
+        QVBoxLayout* paStack = new QVBoxLayout(m_paStackWidget);
+        paStack->setContentsMargins(0, 0, 0, 0);
+        paStack->setSpacing(0);
+
+        m_paVoltLabel = new MetricLabel(QStringLiteral("PA"),
+                                        QStringLiteral("—"), m_paStackWidget);
+        m_paVoltLabel->setVisible(false);
+        paStack->addWidget(m_paVoltLabel);
+
+        m_paTempLabel = new MetricLabel(QStringLiteral("PA T"),
+                                        QStringLiteral("—"), m_paStackWidget);
+        m_paTempLabel->setVisible(false);
+        m_paTempLabel->setCursor(Qt::PointingHandCursor);
+        m_paTempLabel->setToolTip(tr("Click to toggle °C / °F"));
+        // Click anywhere on the PA-T row toggles the persisted unit
+        // preference; PaTempUnitNotifier::unitChanged is wired below to
+        // re-format every PA-temperature surface app-wide.
+        m_paTempLabel->installEventFilter(this);
+        m_paTempLabel->setProperty("isPaTempToggle", true);
+        // MetricLabel has child QLabels that would otherwise eat the
+        // mouse press before it reaches our event filter on the parent.
+        // WA_TransparentForMouseEvents on each child makes the click
+        // pass through to m_paTempLabel itself.
+        for (QLabel* child : m_paTempLabel->findChildren<QLabel*>()) {
+            child->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        }
+        paStack->addWidget(m_paTempLabel);
+    }
+    m_paStackWidget->setVisible(false);
+    hbox->addWidget(m_paStackWidget);
     m_paVoltLabelSep = makeSep();
     m_paVoltLabelSep->setVisible(false);
     hbox->addWidget(m_paVoltLabelSep);
 
+    // Helper: reflect current row visibility back onto the container, so
+    // when both rows are hidden the trailing separator collapses too.
+    auto refreshPaStackVisibility = [this]() {
+        const bool anyRow = (m_paVoltLabel && m_paVoltLabel->isVisible()) ||
+                            (m_paTempLabel && m_paTempLabel->isVisible());
+        const bool wasShown = m_paStackWidget->isVisible();
+        m_paStackWidget->setVisible(anyRow);
+        if (m_paVoltLabelSep) { m_paVoltLabelSep->setVisible(anyRow); }
+        if (wasShown != anyRow) {
+            // Tile width changed — drops may need to unwind / re-apply.
+            // force=true: budget hasn't moved but content width has.
+            reapplyRightStripDropPriority(/*force=*/true);
+        }
+    };
+
     // Wire voltage signals: re-bind on every new connection, reset on disconnect.
     connect(m_radioModel, &RadioModel::connectionStateChanged, this,
-            [this](ConnectionState s) {
+            [this, refreshPaStackVisibility](ConnectionState s) {
         if (s != ConnectionState::Connected) {
-            const bool wasShown = m_paVoltLabel->isVisible();
             m_paVoltLabel->setVisible(false);
-            if (m_paVoltLabelSep) { m_paVoltLabelSep->setVisible(false); }
-            if (wasShown) {
-                // PA volt widget just disappeared — drops may unwind.
-                // force=true: budget hasn't moved but content width has.
-                reapplyRightStripDropPriority(/*force=*/true);
-            }
+            m_paTempLabel->setVisible(false);
+            refreshPaStackVisibility();
         }
         if (auto* conn = m_radioModel->connection()) {
             // conn is a new object on each reconnect — no deduplication needed.
             // Qt::UniqueConnection is not supported for lambda connects anyway.
             connect(conn, &RadioConnection::userAdc0Changed, this,
-                    [this](float v) {
-                const bool wasHidden = !m_paVoltLabel->isVisible();
+                    [this, refreshPaStackVisibility](float v) {
                 m_paVoltLabel->setValue(QString::asprintf("%.1fV", static_cast<double>(v)));
                 m_paVoltLabel->setVisible(true);
-                if (m_paVoltLabelSep) { m_paVoltLabelSep->setVisible(true); }
-                if (wasHidden) {
-                    // PA volt widget just appeared — recompute drops.
-                    // force=true: budget hasn't moved but content width has.
-                    reapplyRightStripDropPriority(/*force=*/true);
-                }
+                refreshPaStackVisibility();
             });
         }
+    });
+
+    // PA temperature row — driven by RadioStatus::paTemperatureChanged
+    // (HL2 publishes via the handlePaTelemetry HL2 branch; future boards
+    // may publish via the same RadioStatus signal).  The label
+    // formatting respects PaTempUnitNotifier::currentUnit() so a
+    // °C / °F toggle reformats live.
+    connect(&m_radioModel->radioStatus(), &RadioStatus::paTemperatureChanged,
+            this, [this, refreshPaStackVisibility](double celsius) {
+        m_paTempLabel->setValue(PaTempUnitNotifier::format(celsius));
+        m_paTempLabel->setVisible(true);
+        refreshPaStackVisibility();
+    });
+
+    // Live re-format on °C / °F toggle without waiting for the next
+    // telemetry sample.  Reads the cached °C value out of RadioStatus.
+    connect(&PaTempUnitNotifier::instance(),
+            &PaTempUnitNotifier::unitChanged, this,
+            [this](PaTempUnit /*unit*/) {
+        const double cachedC = m_radioModel->radioStatus().paTemperatureCelsius();
+        m_paTempLabel->setValue(PaTempUnitNotifier::format(cachedC));
     });
 
     // ── sub-PR-8: CPU MetricLabel ─────────────────────────────────────────
@@ -3822,9 +3890,11 @@ void MainWindow::reapplyRightStripDropPriority(bool force)
             { m_catIndicator, m_catSep, tr("CAT") },
             { m_tciIndicator, m_tciSep, tr("TCI") },
         },
-        // 3. PA voltage (MKII-class only; widget is hidden on non-MKII boards
-        //    — drop logic skips invisible widgets so this is a no-op there).
-        {{ m_paVoltLabel, m_paVoltLabelSep, tr("PA voltage") }},
+        // 3. PA telemetry tile (volts + temp stack; container is hidden
+        //    when both rows are hidden, so this is a no-op for boards
+        //    with no PA-V and no PA-T data — Atlas / Hermes / Angelia /
+        //    Orion).
+        {{ m_paStackWidget, m_paVoltLabelSep, tr("PA telemetry") }},
         // 4. CPU.
         {{ m_cpuMetric, m_cpuMetricSep, tr("CPU") }},
         // 5. Time — drops last; if it goes the strip is essentially empty.
@@ -4118,6 +4188,21 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
                            m_radioModel->buildConnectionTooltip(),
                            m_titleBar->connectionSegment());
         return true;
+    }
+
+    // PA-T row click → toggle persisted °C / °F preference. The widget
+    // we watch is a MetricLabel (not a QLabel), so use the property
+    // marker rather than a qobject_cast to a single concrete class.
+    if (event->type() == QEvent::MouseButtonPress) {
+        auto* w = qobject_cast<QWidget*>(watched);
+        if (w && w->property("isPaTempToggle").toBool()) {
+            const PaTempUnit cur = PaTempUnitNotifier::currentUnit();
+            const PaTempUnit next = (cur == PaTempUnit::Celsius)
+                                      ? PaTempUnit::Fahrenheit
+                                      : PaTempUnit::Celsius;
+            PaTempUnitNotifier::setUnit(next);
+            return true;  // event consumed
+        }
     }
 
     // Handle ☰ panel toggle click — label has property "isPanelToggle"

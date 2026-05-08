@@ -85,6 +85,12 @@ private:
     QProgressBar* m_paTempBar{nullptr};
     QProgressBar* m_paCurrentBar{nullptr};
 
+    // Last published °C value, cached so the °C / °F toggle can re-format
+    // the label without waiting for the next telemetry sample.  The
+    // progress bar always renders against the °C-canonical scale; only
+    // the text label converts.
+    double m_paTempLastCelsius{0.0};
+
     // ── Power card ────────────────────────────────────────────────────────
     QLabel*       m_forwardLabel{nullptr};
     QLabel*       m_reflectedLabel{nullptr};

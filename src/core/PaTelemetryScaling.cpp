@@ -186,4 +186,29 @@ double scaleFwdRevVoltage(HPSDRModel model, quint16 raw) noexcept
     return volts;
 }
 
+// From mi0bot console.cs:25069-25083 computeMKIIPAVoltsAmps [v2.10.3.13-beta2 @c26a8a4]:
+//   private void computeMKIIPAVoltsAmps()
+//   {
+//       float voltAverage = _voltsQueue.Count > 0 ? (float)_voltsQueue.Average() : 0;
+//       float ampAverage = _ampsQueue.Count > 0 ? (float)_ampsQueue.Average() : 0;
+//       float tempAverage = _tempQueue.Count > 0 ? (float)_tempQueue.Average() : 0;     // MI0BOT: HL2 temperature
+//
+//       //volts
+//       _MKIIPAVolts = convertToVolts(voltAverage);
+//
+//       // MI0BOT: temp for HL2
+//       _MKIIHL2Temp = (3.26f * (tempAverage / 4096.0f) - 0.5f) / 0.01f;
+//
+//       //amps
+//       _MKIIPAAmps = convertToAmps(ampAverage);
+//   }
+//
+// The averaging step (100-sample queue) is the caller's responsibility —
+// RadioModel::handlePaTelemetry maintains the ring buffer and calls this
+// function with the windowed mean each frame.
+double scaleHermesLiteTempCelsius(quint16 raw) noexcept
+{
+    return (3.26 * (static_cast<double>(raw) / 4096.0) - 0.5) / 0.01;
+}
+
 }  // namespace NereusSDR
