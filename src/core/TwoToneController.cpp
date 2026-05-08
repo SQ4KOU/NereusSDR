@@ -446,17 +446,22 @@ void TwoToneController::continueActivation()
             // From Thetis console.cs:46693-46708 [v2.10.3.13] —
             // chk2TONE.Checked txMode=2 drive-source enum routing.  Caller
             // composes wire_byte + iq_gain from result.audioVolume; that's
-            // RadioModel's job (wired in Phase 4A).  Here we just need the
-            // audioVolumeChanged signal to fire so the TX path picks up the
-            // PA-cal-corrected volume.
-            // TODO(#175): thread connected model through if HL2 path needed
-            // here.  bTwoTone=true → txMode 2; the HL2 sub-step branch lives
-            // inside txMode 1 TuneSlider, so default FIRST is safe today.
+            // RadioModel's job — see RadioModel.cpp connect block subscribing
+            // to TransmitModel::audioVolumeChanged.
+            //
+            // PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07): pass the
+            // connected HPSDRModel so the HL2 audio-volume formula
+            // `(hl2Power * gbb/100) / 93.75` engages instead of the linear
+            // fallback when model defaults to FIRST.  Combined with the
+            // RadioModel audioVolumeChanged listener fix, this closes the
+            // 2-tone TX-amplitude gap that pinned txEnv at ~0.117 regardless
+            // of slider position (calcc LCOLLECT bins 8-15 never filled).
             (void) m_tx->setPowerUsingTargetDbm(
                 *profile, band,
                 /*bSetPower=*/true,
                 /*bFromTune=*/false,
-                /*bTwoTone=*/true);
+                /*bTwoTone=*/true,
+                m_tx->hpsdrModel());
         }
     }
 

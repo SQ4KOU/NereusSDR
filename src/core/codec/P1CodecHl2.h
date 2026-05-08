@@ -73,6 +73,28 @@ public:
     int  maxBank() const override { return 18; }
     bool usesI2cIntercept() const override { return true; }
 
+    // Phase 3M-4 Task 5: PureSignal DDC config emission for HL2.
+    // Source: mi0bot console.cs:8409-8488 [v2.10.3.13-beta2] (HL2 grouped
+    // with HERMES/ANAN10/ANAN100 case; mi0bot adds HL2-specific rate
+    // override at lines 8476-8485).
+    //
+    // Inline tags preserved per CLAUDE.md "Inline comment preservation":
+    //MI0BOT   [console.cs:8409 `case HPSDRModel.HERMESLITE: // MI0BOT: HL2`
+    //          + 8476 `if (hpsdr_model == HPSDRModel.HERMESLITE) // MI0BOT:
+    //          HL2 can work at a high sample rate` — HL2 case-statement
+    //          marker + high-rate branch attribution]
+    PsDdcConfig applyPureSignalDdcConfig(
+        HPSDRModel model,
+        bool psEnabled,
+        bool diversityEnabled,
+        bool moxState,
+        int rx1Rate,
+        int rx2Rate,
+        bool rx2Enabled,
+        quint8 adcCtrl1,
+        quint8 adcCtrl2
+    ) const override;
+
     // Phase 3P-E Task 2: wire to IoBoardHl2 for I2C intercept.
     // Called by P1RadioConnection::setIoBoard() at connect time.
     void setIoBoard(IoBoardHl2* io) { m_io = io; }

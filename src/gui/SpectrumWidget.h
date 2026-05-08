@@ -188,6 +188,7 @@ namespace NereusSDR {
 class BandPlanManager;
 class SpectrumOverlayMenu;
 class VfoWidget;
+class ImdOverlay;  // Phase 3M-4 Task 12 — two-tone IMD overlay analytical core
 
 // Waterfall color scheme presets.
 // Default matches AetherSDR/SmartSDR style.
@@ -794,6 +795,34 @@ public slots:
     // From Thetis display.cs:2481 [v2.10.3.13].
     void setTxFilterVisible(bool on);
 
+    // ---- Two-tone IMD overlay state slots (Phase 3M-4 Task 12) ----
+    //
+    // From Thetis display.cs:5008 [v2.10.3.13] show condition:
+    //   show_imd_measurements = local_mox && _testing_imd
+    //                           && _show_imd_measurements && displayduplex;
+    //
+    // Three of the four flags come from external coordinators wired by
+    // MainWindow:
+    //   setMoxOverlay(bool)            <- already exists; drives local_mox
+    //   setTestingIMD(bool)            <- TwoToneController::twoToneActiveChanged
+    //                                      (mirrors Thetis Display.TestingIMD,
+    //                                      display.cs:296-302 [v2.10.3.13])
+    //   setShowIMDMeasurements(bool)   <- PureSignal::show2ToneMeasurementsChanged
+    //                                      (mirrors Thetis Display.ShowIMDMeasurments,
+    //                                      display.cs:304-311 [v2.10.3.13])
+    //   setDisplayDuplex(bool)         <- console.cs:15363-15369 [v2.10.3.13]
+    //                                      DisplayDuplex; defaults to true in
+    //                                      NereusSDR (panadapter stays live
+    //                                      during MOX, equivalent to Thetis
+    //                                      duplex mode).
+    //
+    // setShowIMDMeasurements(false) calls ImdOverlay::reset() to clear EMA
+    // state, mirroring the Thetis display.cs:5680 [v2.10.3.13] behaviour:
+    //   else if (_ema_dbc != -999) _ema_dbc = -999;
+    void setTestingIMD(bool on);
+    void setShowIMDMeasurements(bool on);
+    void setDisplayDuplex(bool on);
+
     // ---- TX filter overlay (Plan 4 D9, Cluster E) ----
 
     /// Set the TX filter audio-Hz range.  Triggers a panadapter overlay
@@ -1030,6 +1059,15 @@ private:
     // Per deskhpsdr/transmitter.c:2136-2186 [@120188f] for IQ-space mapping.
     void drawTxFilterOverlay(QPainter& p, const QRect& specRect);
     void drawTxFilterWaterfallColumn(QPainter& p, const QRect& wfRect);
+
+    // ---- Two-tone IMD overlay (Phase 3M-4 Task 12) ----
+    // From Thetis display.cs:5008 [v2.10.3.13]:
+    //   show_imd_measurements = local_mox && _testing_imd
+    //                           && _show_imd_measurements && displayduplex;
+    // Renders peak markers + readout box driven by ImdOverlay state.
+    // Called from paintEvent (CPU path) and from the GPU overlay rebuild
+    // (live, uncached because spectrum changes every frame).
+    void drawImdOverlay(QPainter& p, const QRect& specRect);
 
     // Shared audio→IQ-space conversion used by both draw methods.
     // Returns {iqLowHz, iqHighHz} signed offsets from the VFO center.
@@ -1506,6 +1544,25 @@ private:
     // TX filter visibility in spectrum panel.
     // From Thetis display.cs:2481 [v2.10.3.13]: DrawTXFilter flag.
     bool  m_txFilterVisible{false};
+
+    // ---- Two-tone IMD overlay state (Phase 3M-4 Task 12) ----
+    // From Thetis display.cs:5008 [v2.10.3.13] show condition. Owns an
+    // ImdOverlay analytical core (peak detection + EMA + readout) that
+    // is invoked from drawImdOverlay() each paint cycle when all four
+    // flags below are true.
+    bool m_testingIMD{false};            // Display.TestingIMD mirror
+    bool m_showIMDMeasurements{false};   // Display.ShowIMDMeasurments mirror
+    // displayduplex defaults to true in NereusSDR — the panadapter stays
+    // live during MOX (the trace switches from RX to TX feedback), which
+    // is the equivalent of Thetis's "duplex" mode where DisplayDuplex=true
+    // routes feedback DDC streams to the RX1 panadapter window.  Wire
+    // setDisplayDuplex(false) only if a Setup checkbox is added later.
+    bool m_displayDuplex{true};
+    // Allocated in the constructor (init list) so the include stays in
+    // the .cpp.  std::unique_ptr would require pulling ImdOverlay.h into
+    // the header.  Raw pointer with QObject parenting is the established
+    // pattern for SpectrumWidget owned helpers.
+    ImdOverlay* m_imdOverlay{nullptr};
 
     // ---- TX filter overlay range + mode (Plan 4 D9, Cluster E) ----
     // Audio-Hz edges of the TX passband; updated by setTxFilterRange().

@@ -77,6 +77,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMessageBox>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QTimer>
@@ -336,9 +337,56 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
     };
     wireMaster(m_hpfBypass,        QStringLiteral("alex/master/hpfBypass"));
     wireMaster(m_hpfBypassOnTx,    QStringLiteral("alex/master/hpfBypassOnTx"));
-    wireMaster(m_hpfBypassOnPs,    QStringLiteral("alex/master/hpfBypassOnPs"));
     wireMaster(m_disable6mLnaOnTx, QStringLiteral("alex/master/disable6mLnaOnTx"));
     wireMaster(m_disable6mLnaOnRx, QStringLiteral("alex/master/disable6mLnaOnRx"));
+
+    // Phase 3M-4 Task 11: m_hpfBypassOnPs gets its own toggled handler that
+    // shows an IMD warning dialog when un-checked (i.e. the user is choosing
+    // to INCLUDE the BPFs during a PureSignal feedback path).  Cancel reverts
+    // the toggle.
+    // From Thetis setup.cs:29274-29292 [v2.10.3.13] (chkDisableHPFonPS_CheckedChanged).
+    connect(m_hpfBypassOnPs, &QCheckBox::toggled, this, [this](bool checked) {
+        if (!checked) {
+            // From Thetis setup.cs:29278-29286 [v2.10.3.13]: warning dialog.
+            // Multi-paragraph text reproduced below preserves Thetis spelling
+            // ONLY in the source-cite reference.  User-visible text uses
+            // the corrected spelling ("transmission", "including").
+            // Thetis uses MessageBoxButtons.OKCancel with Button2 (Cancel)
+            // as the default focus and Common.MB_TOPMOST flag.
+            QMessageBox::StandardButton choice = QMessageBox::Cancel;
+            if (m_imdAutoResult == ImdAutoResult::None) {
+                QMessageBox box(QMessageBox::Warning,
+                    tr("PureSignal Issue"),
+                    tr("Including the BPFs during a PureSignal transmission may "
+                       "produce passive Inter-Modulation Distortion in the "
+                       "inductors of the bandpass filters.\n\n"
+                       "You will NOT be able to observe this degraded performance "
+                       "on the panadapter because PS is correcting to the distorted "
+                       "feedback and the panadapter is \"seeing\" that same "
+                       "distorted feedback. It can only be observed with an "
+                       "external spectrum analyzer.\n\n"
+                       "Please ensure you understand the implications of including "
+                       "the BPFs when transmitting a PureSignal based signal. "
+                       "It is not recommended."),
+                    QMessageBox::Ok | QMessageBox::Cancel, this);
+                box.setDefaultButton(QMessageBox::Cancel);          // Button2 per Thetis
+                box.setWindowFlag(Qt::WindowStaysOnTopHint);        // MB_TOPMOST per Thetis
+                choice = static_cast<QMessageBox::StandardButton>(box.exec());
+            } else {
+                choice = (m_imdAutoResult == ImdAutoResult::Ok)
+                             ? QMessageBox::Ok
+                             : QMessageBox::Cancel;
+            }
+            if (choice == QMessageBox::Cancel) {
+                QSignalBlocker block(m_hpfBypassOnPs);
+                m_hpfBypassOnPs->setChecked(true);
+                return;
+            }
+        }
+        // Persist via the master-check pattern + emit the live PureSignal hook.
+        onMasterCheckChanged(checked, QStringLiteral("alex/master/hpfBypassOnPs"));
+        emit hpfBypassOnPsChanged(checked);
+    });
 
     // HPF band rows
     auto* hpfFormWidget = new QWidget(hpfGroup);
@@ -865,6 +913,16 @@ void AntennaAlexAlex1Tab::onMasterCheckChanged(bool checked, const QString& sett
 bool AntennaAlexAlex1Tab::isSaturnBpf1Visible() const
 {
     return m_bpf1Group && !m_bpf1Group->isHidden();
+}
+
+// Phase 3M-4 Task 11 — IMD warning dialog auto-confirm seam for tests.
+// Lets tst_setup_deltas verify both the "Cancel reverts" and the
+// "OK persists" paths without driving a real modal dialog.
+void AntennaAlexAlex1Tab::setImdWarningResultForTest(TestImdResult result)
+{
+    m_imdAutoResult = (result == TestImdResult::ConfirmOk)
+                          ? ImdAutoResult::Ok
+                          : ImdAutoResult::Cancel;
 }
 
 } // namespace NereusSDR

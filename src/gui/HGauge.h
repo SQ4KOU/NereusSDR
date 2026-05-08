@@ -19,6 +19,12 @@ public:
     void setPeakValue(double val);
     void setTickLabels(const QStringList& labels);
 
+    // Read-only accessor for unit tests + state inspection.  No
+    // corresponding signal — HGauge is a passive read-only widget driven
+    // only by its setValue setter.  Phase 3M-4 Task 13 (added for
+    // PureSignalApplet wiring tests).
+    double value() const noexcept { return m_value; }
+
     QSize sizeHint() const override { return {200, 30}; }
     QSize minimumSizeHint() const override { return {100, 26}; }
 

@@ -40,6 +40,8 @@
 
 #include "core/AppSettings.h"
 #include "core/P1RadioConnection.h"
+#include "core/PureSignal.h"
+#include "core/TxChannel.h"
 #include "models/TransmitModel.h"
 
 using namespace NereusSDR;
@@ -77,8 +79,8 @@ private slots:
     }
 
     // ── 2. Initial connect: persisted true → wire bit set on first frame ────
-    // Models the case where pureSig was persisted true (PureSignalTab
-    // "Enable" was on at last save) and a fresh connect cycle pushes it.
+    // Models the case where pureSig was persisted true (user PS-enable toggle
+    // was on at last save) and a fresh connect cycle pushes it.
     void initialPush_persistedTrue_setsBit6()
     {
         P1RadioConnection conn;
@@ -218,17 +220,23 @@ private slots:
         QCOMPARE(int(quint8(bank11[2])), 0x40);
     }
 
-    // ── 8. Persistence load: pureSignal/enabled key seeds the model ─────────
-    // TransmitModel::loadFromSettings(mac) reads the existing
-    // hardware/<mac>/pureSignal/enabled key (set by HardwarePage's
-    // PureSignalTab "Enable" checkbox via setHardwareValue).  Verifies the
-    // single-source-of-truth contract: Setup persists, model loads on
-    // connect.
-    void loadFromSettings_readsPureSignalEnabledKey()
+    // ── 8. Persistence load: per-MAC key is NOT read (Task 15) ──────────────
+    // Phase 3M-4 Task 15 removed the dead per-MAC pureSignal/enabled read
+    // from TransmitModel::loadFromSettings.  Per design doc §9.1 the
+    // canonical PS-enable persistence path is per-TX-profile via
+    // MicProfileManager Pure_Signal_Enabled (Task 7); Thetis matches —
+    // PSEnabled is implicit-via-profile-recall, not stored as a per-radio
+    // sticky.  These tests assert the dead read is gone: even if the
+    // (orphaned) per-MAC key is set, loadFromSettings() must NOT seed the
+    // model from it — the model's pureSigEnabled() must remain at whatever
+    // value it had before the load call.
+    void loadFromSettings_doesNotReadPerMacKey()
     {
         const QString mac = QStringLiteral("aa:bb:cc:11:22:33");
 
-        // Pre-seed the AppSettings as the PureSignalTab "Enable" toggle does.
+        // Pre-seed the orphaned per-MAC key (no live writer exists; this
+        // simulates a stale entry left over from an old install or a
+        // future wayward writer regression).
         AppSettings::instance().setHardwareValue(
             mac, QStringLiteral("pureSignal/enabled"),
             QStringLiteral("True"));
@@ -239,21 +247,76 @@ private slots:
 
         tm.loadFromSettings(mac);
 
-        // Model picks up the persisted state.
+        // Per Task 15: the dead read is removed.  The orphaned per-MAC
+        // key MUST NOT seed the model; pureSigEnabled stays at default.
+        QCOMPARE(tm.pureSigEnabled(), false);
+    }
+
+    void loadFromSettings_preservesPriorPureSigStateWhenKeyAbsent()
+    {
+        const QString mac = QStringLiteral("aa:bb:cc:11:22:33");
+        // Don't set the key.
+
+        TransmitModel tm;
+        tm.setPureSigEnabled(true);  // pre-load state
+        tm.loadFromSettings(mac);
+
+        // loadFromSettings must NOT touch pureSigEnabled (Task 15: dead read
+        // removed).  Pre-load state survives.
         QCOMPARE(tm.pureSigEnabled(), true);
     }
 
-    void loadFromSettings_defaultFalseWhenKeyAbsent()
+    // ── Codex Fix C: Single Cal triggers setPuresignalRun(true) via the
+    //                 new PureSignal::psEnabledChanged fan-out ─────────────
+    //
+    // The legacy wiring connected autoCalEnabledChanged → setPuresignalRun.
+    // Single Cal does NOT toggle autoCalEnabled, so under the legacy wiring
+    // a Single Cal would leave bank 11 C2 bit 6 clear on the wire — i.e.
+    // PsccPump would never see the radio in puresignal_run mode and DDC0
+    // / DDC1 would not swap to TX freq during MOX.
+    //
+    // After Fix C, the cmd-state machine's TurnOnSingleCalibrate visit
+    // emits psEnabledChanged(true) per Thetis PSForm.cs:662 [v2.10.3.13]
+    // `if (!PSEnabled) PSEnabled = true;` inside case eCMDState
+    // .TurnOnSingleCalibrate.  RadioModel::wireConnectionSignals reroutes
+    // the connection's setPuresignalRun slot to psEnabledChanged so Single
+    // Cal lands bank 11 C2 bit 6 = 0x40 on the wire.
+
+    void singleCal_triggersPuresignalRunOnWire_viaPsEnabledChanged()
     {
-        const QString mac = QStringLiteral("aa:bb:cc:11:22:33");
-        // Don't set the key — defaults to "False" → false.
+        P1RadioConnection conn;
+        conn.setBoardForTest(HPSDRHW::HermesII);
 
-        TransmitModel tm;
-        tm.setPureSigEnabled(true);  // pre-load state to verify load overrides
-        tm.loadFromSettings(mac);
+        // Construct a PureSignal coordinator with a real TxChannel so the
+        // cmd-state machine's m_tx-guarded transitions execute.
+        TxChannel tx(/*WDSP TX channel*/ 1);
+        PureSignal ps(/*engine=*/nullptr, &tx, /*fb=*/nullptr,
+                      /*mox=*/nullptr, /*stepAtt=*/nullptr,
+                      /*twoTone=*/nullptr);
 
-        // Absent key → false default per Thetis PSForm.cs:234 [v2.10.3.13].
-        QCOMPARE(tm.pureSigEnabled(), false);
+        // Mirror the post-Fix-C wiring in RadioModel::wireConnectionSignals —
+        // psEnabledChanged is the radio/DDC fan-out, NOT autoCalEnabledChanged.
+        QObject::connect(&ps,   &PureSignal::psEnabledChanged,
+                         &conn, &RadioConnection::setPuresignalRun,
+                         Qt::DirectConnection);
+
+        ps.setEnabled(true);
+        ps.setTimersEnabled(false);
+
+        // Sanity: bit 6 starts clear before any cal kicks off.
+        QCOMPARE(int(quint8(conn.captureBank11ForTest()[2]) & 0x40), 0);
+
+        // Single-cal entry path: no auto-cal, just btnPSCalibrate.
+        ps.singleCalibrate();   // sets _singleCalON=true
+
+        // Drive cmd-state ticks until the TurnOnSingleCalibrate visit fires
+        // psEnabledChanged(true), which routes through to setPuresignalRun.
+        int info[16] = {};
+        ps.processNewInfo(info);   // Off → next has _singleCalON
+        ps.processNewInfo(info);   // TurnOnSingleCalibrate → PSEnabled=true
+
+        // Bank 11 C2 bit 6 must reflect 0x40 now.
+        QCOMPARE(int(quint8(conn.captureBank11ForTest()[2]) & 0x40), 0x40);
     }
 };
 

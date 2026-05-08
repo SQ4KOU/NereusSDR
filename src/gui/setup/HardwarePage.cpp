@@ -63,7 +63,6 @@
 #include "hardware/AntennaAlexTab.h"
 #include "hardware/OcOutputsTab.h"
 #include "hardware/XvtrTab.h"
-#include "hardware/PureSignalTab.h"
 #include "hardware/DiversityTab.h"
 #include "hardware/CalibrationTab.h"
 #include "hardware/Hl2IoBoardTab.h"
@@ -101,7 +100,6 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
     m_antennaAlexTab  = new AntennaAlexTab(model, this);
     m_ocOutputsTab    = new OcOutputsTab(model, this);
     m_xvtrTab         = new XvtrTab(model, this);
-    m_pureSignalTab   = new PureSignalTab(model, this);
     m_diversityTab    = new DiversityTab(model, this);
     m_paCalTab        = new CalibrationTab(model, this);
     m_hl2OptionsTab   = new Hl2OptionsTab(model, this);
@@ -109,11 +107,13 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
     m_bwMonitorTab    = new BandwidthMonitorTab(model, this);
 
     // ── Add tabs — order mirrors Thetis Setup.cs Hardware Config tab strip ────
+    // Note: Setup → Hardware → PureSignal tab retired in Phase 3M-4 Task 14
+    // (no Thetis equivalent; PsForm at Tools > PureSignal is the entire PS
+    // control surface — design §4.2).
     m_radioInfoIdx   = m_tabs->addTab(m_radioInfoTab,   tr("Radio Info"));
     m_antennaAlexIdx = m_tabs->addTab(m_antennaAlexTab, tr("Antenna / ALEX"));
     m_ocOutputsIdx   = m_tabs->addTab(m_ocOutputsTab,   tr("OC Outputs"));
     m_xvtrIdx        = m_tabs->addTab(m_xvtrTab,        tr("XVTR"));
-    m_pureSignalIdx  = m_tabs->addTab(m_pureSignalTab,  tr("PureSignal"));
     m_diversityIdx   = m_tabs->addTab(m_diversityTab,   tr("Diversity"));
     m_paCalIdx       = m_tabs->addTab(m_paCalTab,       tr("Calibration"));
     m_hl2OptionsIdx  = m_tabs->addTab(m_hl2OptionsTab,  tr("HL2 Options"));
@@ -138,9 +138,16 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
             this,           &HardwarePage::anan8000DleVoltsAmpsChanged);
 
     wire(m_antennaAlexTab, QStringLiteral("antennaAlex"));
+
+    // Phase 3M-4 Task 11: pass-through for the IMD-warning-gated HPF Bypass
+    // on PureSignal feedback toggle.  Originates in AntennaAlexAlex1Tab,
+    // bubbles through AntennaAlexTab; HardwarePage re-emits so SetupDialog
+    // can wire it to the live PureSignal coordinator without traversing the
+    // settingChanged key namespace.
+    connect(m_antennaAlexTab, &AntennaAlexTab::hpfBypassOnPsChanged,
+            this,             &HardwarePage::hpfBypassOnPsChanged);
     wire(m_ocOutputsTab,   QStringLiteral("ocOutputs"));
     wire(m_xvtrTab,        QStringLiteral("xvtr"));
-    wire(m_pureSignalTab,  QStringLiteral("pureSignal"));
     wire(m_diversityTab,   QStringLiteral("diversity"));
     wire(m_paCalTab,       QStringLiteral("paCalibration"));
     wire(m_hl2OptionsTab,  QStringLiteral("hl2Options"));
@@ -198,21 +205,13 @@ void HardwarePage::onTabSettingChanged(const QString& tabKey,
     AppSettings::instance().setHardwareValue(m_currentMac, fullKey, value);
     AppSettings::instance().save();
 
-    // ── Task 2.5 of P1 full-parity epic: PureSignal "Enable" → TransmitModel ─
-    // When the user toggles the Setup → Hardware → PureSignal "Enable"
-    // checkbox, also drive the TransmitModel::pureSig property so the
-    // model→connection wiring (RadioModel::wireConnectionSignals) emits
-    // setPuresignalRun on the wire bit.  TransmitModel::loadFromSettings
-    // reads the same hardware/<mac>/pureSignal/enabled key on connect, so
-    // persistence stays single-sourced from this writer.
-    //
-    // Source: Thetis PSForm.cs:240 [v2.10.3.13] — _psenabled = value
-    // is the user-facing PS-enable toggle that drives prn->puresignal_run
-    // via NetworkIO.SetPureSignal.
-    if (m_model && tabKey == QLatin1String("pureSignal")
-                && bareKey == QLatin1String("enabled")) {
-        m_model->transmitModel().setPureSigEnabled(value.toBool());
-    }
+    // Note: Phase 3M-4 Task 14 retired the Setup → Hardware → PureSignal tab.
+    // The previous Task-2.5-of-P1-full-parity bridge that drove
+    // TransmitModel::setPureSigEnabled from the tab's settingChanged signal
+    // is gone with the tab — no other tab emits tabKey == "pureSignal".
+    // Persistence of the user PS-enable proxy now lives outside this page
+    // (PsForm + General Options); TransmitModel::loadFromSettings still
+    // reads the same hardware/<mac>/pureSignal/enabled key on connect.
 }
 
 // ── onCurrentRadioChanged ─────────────────────────────────────────────────────
@@ -238,7 +237,6 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
         caps.hasIoBoardHl2 ? tr("Hermes Lite Control") : tr("OC Outputs"));
 
     m_tabs->setTabVisible(m_xvtrIdx,        caps.xvtrJackCount > 0);
-    m_tabs->setTabVisible(m_pureSignalIdx,  caps.hasPureSignal);
     m_tabs->setTabVisible(m_diversityIdx,   caps.hasDiversityReceiver);
     // Calibration tab is always visible — its 4 remaining groups (Freq Cal,
     // Level Cal, HPSDR Diag, TX Display) apply to every board, and Group 5
@@ -255,7 +253,6 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
     m_antennaAlexTab->populate(info, caps);
     m_ocOutputsTab->populate(info, caps);
     m_xvtrTab->populate(info, caps);
-    m_pureSignalTab->populate(info, caps);
     m_diversityTab->populate(info, caps);
     m_paCalTab->populate(info, caps);
     m_hl2OptionsTab->populate(info, caps);
@@ -269,7 +266,6 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
         m_antennaAlexTab->restoreSettings( filterPrefix(all, QStringLiteral("antennaAlex/")));
         m_ocOutputsTab->restoreSettings(   filterPrefix(all, QStringLiteral("ocOutputs/")));
         m_xvtrTab->restoreSettings(        filterPrefix(all, QStringLiteral("xvtr/")));
-        m_pureSignalTab->restoreSettings(  filterPrefix(all, QStringLiteral("pureSignal/")));
         m_diversityTab->restoreSettings(   filterPrefix(all, QStringLiteral("diversity/")));
         m_paCalTab->restoreSettings(       filterPrefix(all, QStringLiteral("paCalibration/")));
         m_hl2OptionsTab->restoreSettings(  filterPrefix(all, QStringLiteral("hl2Options/")));
@@ -288,7 +284,6 @@ bool HardwarePage::isTabVisibleForTest(Tab t) const
         case Tab::AntennaAlex:      return m_tabs->isTabVisible(m_antennaAlexIdx);
         case Tab::OcOutputs:        return m_tabs->isTabVisible(m_ocOutputsIdx);
         case Tab::Xvtr:             return m_tabs->isTabVisible(m_xvtrIdx);
-        case Tab::PureSignal:       return m_tabs->isTabVisible(m_pureSignalIdx);
         case Tab::Diversity:        return m_tabs->isTabVisible(m_diversityIdx);
         case Tab::Calibration:      return m_tabs->isTabVisible(m_paCalIdx);
         case Tab::Hl2Options:       return m_tabs->isTabVisible(m_hl2OptionsIdx);
@@ -305,7 +300,6 @@ QString HardwarePage::tabTextForTest(Tab t) const
         case Tab::AntennaAlex:      return m_tabs->tabText(m_antennaAlexIdx);
         case Tab::OcOutputs:        return m_tabs->tabText(m_ocOutputsIdx);
         case Tab::Xvtr:             return m_tabs->tabText(m_xvtrIdx);
-        case Tab::PureSignal:       return m_tabs->tabText(m_pureSignalIdx);
         case Tab::Diversity:        return m_tabs->tabText(m_diversityIdx);
         case Tab::Calibration:      return m_tabs->tabText(m_paCalIdx);
         case Tab::Hl2Options:       return m_tabs->tabText(m_hl2OptionsIdx);

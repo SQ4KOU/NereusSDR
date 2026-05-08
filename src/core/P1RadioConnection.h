@@ -237,6 +237,41 @@ public slots:
     void setMicPTTDisabled(bool disabled) override;
     void setMicXlr(bool xlrJack) override;
 
+    // Phase 3M-4 Task 17 P1 follow-up — apply per-board PS DDC config.
+    //
+    // P1 mirror of P2RadioConnection::applyPsDdcConfig.  Receives the
+    // wire-byte map computed by the per-board P1 codec
+    // (P1CodecHl2::applyPureSignalDdcConfig and friends) and applies it
+    // to the connection-thread state that downstream bank composers
+    // read from buildCodecContext().
+    //
+    // Mirrors Thetis console.cs:8527-8534 UpdateDDCs() [v2.10.3.13]:
+    //   NetworkIO.EnableRxs(ddcEnable);
+    //   NetworkIO.EnableRxSync(0, syncEnable);
+    //   for (int i = 0; i < 4; i++) NetworkIO.SetDDCRate(i, rate[i]);
+    //   NetworkIO.SetADC_cntrl1(cntrl1);
+    //   NetworkIO.SetADC_cntrl2(cntrl2);
+    //   NetworkIO.Protocol1DDCConfig(p1DdcConfig, P1_diversity, p1RxCount, nDdc);
+    //
+    // For P1, m_adcCtrl absorbs cntrl1+cntrl2 (bank 4 C1/C2),
+    // m_psNDdc captures cfg.nDdc for the bank-2/3 freq-override gate
+    // ((nddc==2 && XmitBit && puresignal_run) per networkproto1.c:985-1000),
+    // and m_activeRxCount is updated from cfg.p1RxCount so EP6 frame
+    // parsing layout matches what the radio sends during PS-MOX.
+    //
+    // P1 has no single CmdRx-equivalent — the 17/18 bank round-robin
+    // picks up the new state on the next cycle.  setMox / setPuresignalRun
+    // already arm m_forceBank0Next / m_forceBank11Next so the gating
+    // bits land within ≤1 frame; the per-DDC freq overrides land in
+    // banks 2-9 over the next 4-9 frames (~10-25 ms at 380.95 fps).
+    void applyPsDdcConfig(const NereusSDR::PsDdcConfig& cfg);
+
+    // Phase 3M-4 Task 17 P1 follow-up — read-only access to the per-board
+    // codec for ReceiverManager::setP1Codec injection.  Returns nullptr
+    // until selectCodec() runs at applyBoardQuirks() time; subscribers
+    // listen to p1CodecChanged() to know when this becomes valid.
+    NereusSDR::IP1Codec* p1Codec() const { return m_codec.get(); }
+
     // HL2-specific: enqueue the I/O board probe (HW version + FW major/minor
     // reads). Public entry point for the Setup → Hardware → HL2 I/O Board
     // tab's "Probe" button; also called from connectToRadio() at startup.
@@ -249,6 +284,13 @@ public slots:
     // The IoBoardHl2 dispatch will route each response into the lastI2cRead
     // signal which the Setup → HL2 I/O page logs raw.
     void requestI2cBusScan();
+
+signals:
+    // Phase 3M-4 Task 17 P1 follow-up — emitted from selectCodec() once
+    // m_codec is assigned.  RadioModel::wireConnectionSignals subscribes
+    // and forwards p1Codec() into ReceiverManager::setP1Codec so the
+    // ddcConfigChanged dispatch path becomes live.
+    void p1CodecChanged();
 
 private slots:
     void onReadyRead();
@@ -425,6 +467,42 @@ private:
     // Set by setMicTipRing() on every call (Codex P2: safety effect before guard).
     // Cleared by sendCommandFrame() after it emits bank 11.
     bool    m_forceBank11Next{false};
+
+    // Phase 3M-4 Task 17 P1 follow-up: force the next sendCommandFrame() to
+    // jump to bank 4 so the TX step attenuator value (bank 4 C3) lands on
+    // the wire within ≤1 frame of setTxStepAttenuation().  Mirrors the
+    // m_forceBank0/10/11Next pattern.  Required for PureSignal auto-attenuate
+    // tick (PSForm.cs:763-778 SetNewValues transition) where the 100 ms
+    // tick computes a fresh deltaDb from feedbackLevel and pushes it via
+    // setAttOnTxValue → setTxStepAttenuation; without this flush, the new
+    // ATT value waits up to ~16 frames (~42 ms) for bank 4 to come around
+    // in the round-robin, which adds non-determinism to convergence
+    // measurements on bench.  Set by setTxStepAttenuation() on every call
+    // (Codex P2 ordering: flush flag before idempotent guard).  Cleared by
+    // sendCommandFrame() after it emits bank 4.
+    //
+    // Mirrors Thetis ChannelMaster/netInterface.c:1006-1016 SetTxAttenData()
+    // [v2.10.3.13] which fires CmdTx() (the P1-equivalent of an explicit
+    // bank-4 send) immediately after writing prn->adc[i].tx_step_attn.
+    bool    m_forceBank4Next{false};
+
+    // Phase 3M-4 Task 17 P1 follow-up: PureSignal nDdc state for the
+    // bank 2/3 (RX1/RX2 VFO DDC) freq-override gate.  Captured from
+    // PsDdcConfig.nDdc by applyPsDdcConfig().  When (m_psNDdc == 2 &&
+    // m_mox && m_puresignalRun), banks 2 and 3 emit prn->tx[0].frequency
+    // for DDC0/DDC1 instead of prn->rx[0/1].frequency.  Mirrors the
+    // (nddc == 2) gate in mi0bot networkproto1.c:985 + 1000
+    // [v2.10.3.13-beta2].
+    //
+    // Default 2 matches the connect-time default of m_activeRxCount=2
+    // (P1RadioConnection.cpp:686 [HermesII Hermes/Hermes]) so the gate
+    // remains correct for HermesII boards even before the codec layer
+    // pushes a PsDdcConfig.  HL2 / Hermes / ANAN10 / ANAN100 will set
+    // this to 4 once the codec config arrives, disabling the override
+    // (correct: the firmware handles freq routing internally for nddc==4
+    // boards via cntrl1=4 ADC-to-DDC steering, console.cs:8486
+    // [v2.10.3.13-beta2]).
+    int     m_psNDdc{2};
 
     // Phase 3P-A: per-board codec chosen at applyBoardQuirks() time.
     // Null when m_caps is null (pre-connect) or env var
@@ -663,6 +741,28 @@ public:
     // forceBank11NextForTest — returns m_forceBank11Next (the bank-11 flush
     // flag state).  Used by tst_p1_mic_tip_ring_wire to verify Codex P2 pattern.
     bool forceBank11NextForTest() const { return m_forceBank11Next; }
+
+    // Phase 3M-4 Task 17 P1 follow-up — bank 2/3/4 capture + bank-4 flush
+    // flag exposed for the P1 PureSignal regression tests.
+    QByteArray captureBank2ForTest() const {
+        quint8 out[5] = {};
+        composeCcForBankForTest(2, out);
+        return QByteArray(reinterpret_cast<const char*>(out), 5);
+    }
+    QByteArray captureBank3ForTest() const {
+        quint8 out[5] = {};
+        composeCcForBankForTest(3, out);
+        return QByteArray(reinterpret_cast<const char*>(out), 5);
+    }
+    QByteArray captureBank4ForTest() const {
+        quint8 out[5] = {};
+        composeCcForBankForTest(4, out);
+        return QByteArray(reinterpret_cast<const char*>(out), 5);
+    }
+    bool forceBank4NextForTest() const { return m_forceBank4Next; }
+    int  psNDdcForTest() const { return m_psNDdc; }
+    int  activeRxCountForTest() const { return m_activeRxCount; }
+    quint16 adcCtrlForTest() const { return m_adcCtrl; }
 
     // ── 3M-1a E.2 TX I/Q test seams ─────────────────────────────────────────
     // sendTxIqAndCapture — feeds n interleaved float I/Q samples through the

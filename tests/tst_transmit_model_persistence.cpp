@@ -176,12 +176,15 @@ private slots:
         QCOMPARE(t.twoToneFreq2(), 1900);
     }
 
-    void firstRunDefaults_twoToneLevel_minus6()
+    void firstRunDefaults_twoToneLevel_zero()
     {
         TransmitModel t;
         t.loadFromSettings(kMacA);
-        // NereusSDR-original safer default (Thetis Designer = 0 dB).
-        QCOMPARE(t.twoToneLevel(), -6.0);
+        // From Thetis setup.Designer.cs:61994-62003 [v2.10.3.13]
+        // udTwoToneLevel.Value = 0 dB.  Phase 3M-4 Task 17 restored
+        // Thetis-faithful default (was NereusSDR-original -6 dB which
+        // under-drove calcc LCOLLECT).
+        QCOMPARE(t.twoToneLevel(), 0.0);
     }
 
     void firstRunDefaults_twoTonePower_50()

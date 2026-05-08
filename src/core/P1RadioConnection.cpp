@@ -1048,8 +1048,52 @@ void P1RadioConnection::setTxDrive(int level)
 // ---------------------------------------------------------------------------
 void P1RadioConnection::setTxStepAttenuation(int dB)
 {
-    if (dB < 0)  { dB = 0; }
-    if (dB > 63) { dB = 63; }  // HL2 has 6-bit field; standard boards 5-bit
+    // PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07):
+    // The HL2 PureSignal AutoAtt loop drives SATT into the negative range
+    // (mi0bot HL2 signed ATT semantics: 0..31 = attenuation, -1..-28 = preamp
+    // gain — see P1CodecHl2.cpp bank 11 C4 emission).  Pre-fix this clamped
+    // negative dB to 0 unconditionally, silently dropping every preamp-gain
+    // request.  AutoAtt would step the user-facing scalar from 0 to -28
+    // searching for adequate feedback level, but the wire byte stayed at
+    // (31 - 0) | 0x40 = 0x5F = no attenuation, so HL2 firmware never engaged
+    // any preamp gain.  fbLevel pinned at the no-preamp value (~77 on the
+    // user's 40m bench) and AutoAtt ran to the floor without converging.
+    //
+    // Mi0bot Thetis SetTxAttenData (netInterface.c:1027-1041) has NO clamp
+    // at the equivalent layer — it forwards the user-facing signed value
+    // straight through to the bank emission code, which performs the
+    // (31 - userDb) inversion to produce the wire byte.  We mirror that
+    // here: HL2 gets the signed [-28, +31] range; non-HL2 P1 boards keep
+    // the original [0, 31] unsigned range (5-bit attenuator only).
+    //
+    // The codec-side qBound at P1CodecHl2.cpp:335 still clamps to
+    // [-28, +31] as a defense-in-depth — that's the value the (31 - userDb)
+    // inversion needs to produce wire bits in [0, 59].
+    const bool isHl2 = (m_hardwareProfile.model == HPSDRModel::HERMESLITE);
+    const int loBound = isHl2 ? -28 : 0;
+    const int hiBound = isHl2 ?  31 : 31;  // standard boards 5-bit; HL2 6-bit signed range -28..+31
+    if (dB < loBound) { dB = loBound; }
+    if (dB > hiBound) { dB = hiBound; }
+
+    // Phase 3M-4 Task 17 P1 follow-up: arm bank-4 flush BEFORE the
+    // idempotent guard (Codex P2 ordering) so PureSignal auto-attenuate
+    // tick gets deterministic ≤1-frame ATT updates instead of waiting
+    // for bank 4 to come around in the round-robin (~16 frames / ~42 ms).
+    //
+    // Mirrors Thetis ChannelMaster/netInterface.c:1006-1016 SetTxAttenData()
+    // [v2.10.3.13]:
+    //   void SetTxAttenData(int bits) {
+    //     for (i = 0; i < MAX_ADC; i++) prn->adc[i].tx_step_attn = bits;
+    //     if (listenSock != INVALID_SOCKET) CmdTx();   // ← explicit send
+    //   }
+    // CmdTx() in P1 land is the equivalent of "flush a fresh bank 4
+    // packet"; sendCommandFrame() with m_forceBank4Next=true is our
+    // round-robin equivalent.
+    m_forceBank4Next = true;
+
+    if (m_txStepAttn == dB) {
+        return;  // idempotent — flush flag already set above
+    }
     m_txStepAttn = dB;
 }
 // ---------------------------------------------------------------------------
@@ -1557,6 +1601,101 @@ void P1RadioConnection::setPuresignalRun(bool run)
         return;  // idempotent — flush flag already set above
     }
     m_puresignalRun = run;
+
+    // Phase 3M-4 Task 17 P1 follow-up: also flush bank 2 + bank 3 indirectly
+    // by arming bank-0 next; on the next round-robin cycle, banks 2/3 carry
+    // the freq override (when m_psNDdc == 2 + m_mox + m_puresignalRun).
+    // Bank 0 has the highest priority in the flush hierarchy, so it'll come
+    // first; banks 2/3 land within ≤4 frames after.  Without the bank-0
+    // flush, banks 2/3 already pick up the new state next cycle (380 fps),
+    // but flushing makes the latency deterministic for tests.  Cheap.
+    m_forceBank0Next = true;
+}
+
+// ---------------------------------------------------------------------------
+// applyPsDdcConfig (Phase 3M-4 Task 17 P1 follow-up)
+//
+// P1 mirror of P2RadioConnection::applyPsDdcConfig.  Receives the wire-byte
+// map computed by the per-board P1 codec (P1CodecHl2 / P1CodecStandard's
+// applyPureSignalDdcConfig) and applies it to the connection-thread state
+// that downstream bank composers read from buildCodecContext().
+//
+// Source map (mirrors Thetis console.cs:8527-8534 UpdateDDCs() [v2.10.3.13]):
+//   NetworkIO.EnableRxs(ddcEnable)             → P1: implicit in m_activeRxCount
+//                                                    + bank-0 nddc encoding
+//   NetworkIO.EnableRxSync(0, syncEnable)      → P1: no per-stream sync
+//                                                    on USB protocol — DDC1
+//                                                    samples are interleaved
+//                                                    in the EP6 frame slot
+//                                                    layout when activeRxCount>=2
+//   for (i<4) NetworkIO.SetDDCRate(i, rate[i]) → P1: single global m_sampleRate
+//                                                    (P1 sends one rate via
+//                                                    bank-0 C1 SampleRateIn2Bits)
+//   NetworkIO.SetADC_cntrl1(cntrl1)            → m_adcCtrl low byte
+//                                                    (bank-4 C1)
+//   NetworkIO.SetADC_cntrl2(cntrl2)            → m_adcCtrl high bits
+//                                                    (bank-4 C2 [5:0])
+//   NetworkIO.Protocol1DDCConfig(p1DdcConfig,  → m_psNDdc (PS gate)
+//     P1_diversity, p1RxCount, nDdc)             m_activeRxCount (EP6 layout)
+//
+// For HL2 in PS-MOX, the codec returns:
+//   ddcEnable=DDC0, syncEnable=DDC1, rate[0]=rate[1]=rx1Rate,
+//   cntrl1=4, cntrl2=0, nDdc=4, p1RxCount=4
+// (mi0bot console.cs:8469-8488 [v2.10.3.13-beta2]).
+//
+// applyPsDdcConfig writes those into m_adcCtrl=4 (bank 4 will emit C1=0x04,
+// C2=0x00) so the radio routes DDC1's input to the PS feedback path on
+// the next round-robin cycle.  m_psNDdc=4 disables the bank-2/3 freq
+// override (correct: HL2 firmware handles freq routing internally).
+// ---------------------------------------------------------------------------
+void P1RadioConnection::applyPsDdcConfig(const NereusSDR::PsDdcConfig& cfg)
+{
+    bool changed = false;
+
+    // From mi0bot console.cs:8531-8532 [v2.10.3.13-beta2]:
+    //   NetworkIO.SetADC_cntrl1(cntrl1);
+    //   NetworkIO.SetADC_cntrl2(cntrl2);
+    // P1 packs both into bank 4 C1/C2 — m_adcCtrl is the 14-bit
+    // composite read by composeCcForBank case 4
+    // (P1RadioConnection.cpp:2647-2651 + codec equivalents):
+    //   bank 4 C1 = adcCtrl & 0xFF      (cntrl1)
+    //   bank 4 C2 = (adcCtrl >> 8) & 0x3F (cntrl2 low 6 bits)
+    const quint16 newAdcCtrl = static_cast<quint16>(
+        (static_cast<quint16>(cfg.cntrl1) & 0x00FF) |
+        ((static_cast<quint16>(cfg.cntrl2) & 0x003F) << 8));
+    if (m_adcCtrl != newAdcCtrl) {
+        m_adcCtrl = newAdcCtrl;
+        changed = true;
+    }
+
+    // From mi0bot console.cs:8534 [v2.10.3.13-beta2]:
+    //   NetworkIO.Protocol1DDCConfig(p1DdcConfig, P1_diversity, p1RxCount, nDdc);
+    // We capture p1RxCount → m_activeRxCount so EP6 frame parsing
+    // (parseEp6Frame's slotBytes = 6*numRx + 2) matches what the radio
+    // actually sends during PS-MOX, and nDdc → m_psNDdc for the bank-2/3
+    // freq override gate.
+    if (cfg.p1RxCount > 0 && m_activeRxCount != cfg.p1RxCount) {
+        m_activeRxCount = cfg.p1RxCount;
+        changed = true;
+    }
+    if (cfg.nDdc > 0 && m_psNDdc != cfg.nDdc) {
+        m_psNDdc = cfg.nDdc;
+        changed = true;
+    }
+
+    if (changed) {
+        // Flush bank 0 (carries nddc encoding) + bank 4 (ADC routing).
+        // Bank 0 has highest priority; bank 4 fires next round-robin.
+        m_forceBank0Next = true;
+        m_forceBank4Next = true;
+
+        qCInfo(lcConnection).nospace()
+            << "P1: applyPsDdcConfig nDdc=" << cfg.nDdc
+            << " activeRx=" << m_activeRxCount
+            << " adcCtrl=0x" << QString::number(m_adcCtrl, 16)
+            << " (cntrl1=" << cfg.cntrl1 << " cntrl2=" << cfg.cntrl2 << ")"
+            << " p1DdcConfig=" << cfg.p1DdcConfig;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1699,6 +1838,14 @@ void P1RadioConnection::selectCodec()
         }
     }
     qCInfo(lcConnection) << "P1: selected codec for HPSDRModel" << int(m_hardwareProfile.model);
+
+    // Phase 3M-4 Task 17 P1 follow-up: notify RadioModel that m_codec is now
+    // valid so ReceiverManager::setP1Codec can be called.  Without this,
+    // ReceiverManager::m_p1Codec stays null, updateDdcAssignment() never
+    // calls applyPureSignalDdcConfig, ddcConfigChanged never fires, and the
+    // P1 PS DDC routing stays stuck at the RX-only steady state.  Mirror of
+    // P2RadioConnection's p2CodecChanged() emit pattern.
+    emit p1CodecChanged();
 }
 
 // ---------------------------------------------------------------------------
@@ -1835,6 +1982,7 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.p1LineInGain   = m_lineInGain;  // Task 2.1 of P1 full-parity epic
     ctx.p1UserDigOut   = m_userDigOut;  // Task 2.2 of P1 full-parity epic
     ctx.p1PuresignalRun = m_puresignalRun;  // Task 2.3 of P1 full-parity epic
+    ctx.p1PsNDdc       = m_psNDdc;          // Task 17 P1 follow-up: bank 2/3 PS gate
     ctx.p1MicPTTDisabled = m_micPTTDisabled;  // 3M-1b G.5; renamed for issue #182
     ctx.duplex         = m_duplex;
     ctx.diversity      = m_diversity;
@@ -2323,6 +2471,14 @@ void P1RadioConnection::sendCommandFrame()
     } else if (m_forceBank11Next) {
         m_ccRoundRobinIdx = 11;
         m_forceBank11Next = false;
+    } else if (m_forceBank4Next) {
+        // Phase 3M-4 Task 17 P1 follow-up: priority just below bank 0/10/11
+        // (which carry safety bits — MOX, T/R relay, mic_trs).  Bank 4
+        // carries TX step attenuator (C3 bits 0-4) for PS auto-att updates.
+        // Mirrors Thetis ChannelMaster/netInterface.c:1010 CmdTx() after
+        // SetTxAttenData [v2.10.3.13].
+        m_ccRoundRobinIdx = 4;
+        m_forceBank4Next  = false;
     }
 
     // Subframe 0: current bank
@@ -2669,13 +2825,74 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
         composeCcBankTxFreq(out, m_txFreqHz);
         return;
 
-    case 2: // RX1 VFO DDC0 (networkproto1.c:484-494)
-        composeCcBankRxFreq(out, 0, m_rxFreqHz[0]);
+    case 2: { // RX1 VFO DDC0 (networkproto1.c:484-494)
+        // Phase 3M-4 Task 17 P1 follow-up: PureSignal DDC0 freq override
+        // for HermesII / ANAN10E / ANAN100B (nddc==2 boards).
+        //
+        // From mi0bot ChannelMaster/networkproto1.c:982-993 [v2.10.3.13-beta2]
+        // (byte-for-byte identical to ramdor :484-494 [v2.10.3.13]):
+        //   case 2: //RX1 VFO (DDC0) 0x02
+        //       C0 |= 4;
+        //       // DDC0 is always RX0 freqency, except if Puresignal TX with hermes-II
+        //       if ((nddc == 2) && (XmitBit == 1) && (prn->puresignal_run))
+        //           ddc_freq = prn->tx[0].frequency;
+        //       else
+        //           ddc_freq = prn->rx[0].frequency;
+        //
+        // NereusSDR mapping:
+        //   nddc                    ≡  m_psNDdc (2 by default; 4 once HL2/Hermes
+        //                              codec config arrives — disabling override
+        //                              for those boards, correct per source).
+        //   XmitBit == 1            ≡  m_mox
+        //   prn->puresignal_run     ≡  m_puresignalRun
+        //   prn->tx[0].frequency    ≡  m_txFreqHz
+        //   prn->rx[0].frequency    ≡  m_rxFreqHz[0]
+        //
+        // For nddc==4 boards (HL2 / Hermes / ANAN10 / ANAN100), the firmware
+        // handles DDC0/DDC1 routing internally via cntrl1=4 (ADC-to-DDC
+        // steering set in P1CodecHl2::applyPureSignalDdcConfig from mi0bot
+        // console.cs:8486 [v2.10.3.13-beta2]); no host-side freq override
+        // is needed, hence the gate (m_psNDdc == 2).
+        const quint64 freq = (m_psNDdc == 2 && m_mox && m_puresignalRun)
+                           ? m_txFreqHz
+                           : m_rxFreqHz[0];
+        composeCcBankRxFreq(out, 0, freq);
         return;
+    }
 
     case 3: { // RX2 VFO DDC1 (networkproto1.c:497-511)
-        // RX2 frequency uses the same phase-word encoding as RX1.
-        composeCcBankRxFreq(out, 1, m_rxFreqHz[1]);
+        // Phase 3M-4 Task 17 P1 follow-up: PureSignal DDC1 freq override
+        // for nddc==2 boards (mirrors the case 2 logic above).
+        //
+        // From mi0bot ChannelMaster/networkproto1.c:995-1009 [v2.10.3.13-beta2]
+        // (byte-for-byte identical to ramdor :497-511 [v2.10.3.13]):
+        //   case 3: //RX2 VFO (DDC1) 0x03
+        //       C0 |= 6;
+        //       // DDC1 is TX freq if Hermes-II && TX && Puresignal;
+        //       // RX1 freq if Orion;
+        //       // else RX2 freq if Hermes
+        //       if ((nddc == 2) && (XmitBit == 1) && (prn->puresignal_run))
+        //           ddc_freq = prn->tx[0].frequency;
+        //       else if (nddc == 5)
+        //           ddc_freq = prn->rx[0].frequency;
+        //       else
+        //           ddc_freq = prn->rx[1].frequency; //Hermes RX2 freq
+        //
+        // The nddc==5 branch (Orion-class P1 — uses P1 wire dialect with
+        // 5-DDC config; very rare) selects rx[0].frequency to mirror the
+        // single-VFO panadapter mode.  P1RadioConnection has m_rxFreqHz[1]
+        // set by upstream callers; m_rxFreqHz[0] is the same value the
+        // bank-2 path uses.  Default Hermes path uses m_rxFreqHz[1] for
+        // RX2 VFO.
+        quint64 freq;
+        if (m_psNDdc == 2 && m_mox && m_puresignalRun) {
+            freq = m_txFreqHz;            // Hermes-II PS override
+        } else if (m_psNDdc == 5) {
+            freq = m_rxFreqHz[0];         // Orion: DDC1 = RX1 freq
+        } else {
+            freq = m_rxFreqHz[1];         // Hermes (default): RX2 VFO
+        }
+        composeCcBankRxFreq(out, 1, freq);
         return;
     }
 

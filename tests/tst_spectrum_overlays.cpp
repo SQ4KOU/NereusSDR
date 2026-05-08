@@ -81,37 +81,21 @@ class TestSpectrumOverlays : public QObject
 
 private slots:
 
-    // ── ShowMHzOnCursor / formatCursorFreq ─────────────────────────────────
+    // ── formatCursorFreq ───────────────────────────────────────────────────
+    //
+    // (Earlier `showMHzOnCursor` toggle retired by main commit 4651e51 —
+    // formatCursorFreq always returns MHz format now.  The visibility-only
+    // toggle moved to `m_showCursorFreq` driven from the SpectrumOverlayPanel
+    // button + Setup → Display → Spectrum Defaults checkbox.  See
+    // SpectrumWidget.h formatCursorFreq comment.)
 
-    // From Thetis display.cs:8692-8696 [v2.10.3.13] AlwaysShowCursorInfo.
-    void show_mhz_on_cursor_false_formats_hz()
+    void format_cursor_freq_always_returns_mhz()
     {
         SpectrumWidget w;
-        w.setShowMHzOnCursor(false);
         const QString s = w.formatCursorFreq(7173500.0);
-        // When off, format should include "Hz" and the raw Hz integer value.
-        QVERIFY(s.contains(QStringLiteral("Hz")));
-        QVERIFY(s.contains(QStringLiteral("7173500")));
-    }
-
-    void show_mhz_on_cursor_true_formats_mhz()
-    {
-        SpectrumWidget w;
-        w.setShowMHzOnCursor(true);
-        const QString s = w.formatCursorFreq(7173500.0);
-        // When on, format must include "MHz" and 4-decimal MHz value.
+        // Format must include "MHz" and the 4-decimal MHz value.
         QVERIFY(s.contains(QStringLiteral("MHz")));
         QVERIFY(s.contains(QStringLiteral("7.1735")));
-    }
-
-    void show_mhz_on_cursor_roundtrip()
-    {
-        SpectrumWidget w;
-        QCOMPARE(w.showMHzOnCursor(), false);  // default off
-        w.setShowMHzOnCursor(true);
-        QCOMPARE(w.showMHzOnCursor(), true);
-        w.setShowMHzOnCursor(false);
-        QCOMPARE(w.showMHzOnCursor(), false);
     }
 
     // ── ShowBinWidth / binWidthHz ───────────────────────────────────────────

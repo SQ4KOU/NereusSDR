@@ -20,6 +20,7 @@
 
 #include <QtGlobal>
 #include "CodecContext.h"
+#include "../HpsdrModel.h"
 
 namespace NereusSDR {
 
@@ -40,6 +41,40 @@ public:
     // compose is overridden to carry I2C TLV bytes instead of normal
     // C&C. False for Standard / AnvelinaPro3 / RedPitaya.
     virtual bool usesI2cIntercept() const { return false; }
+
+    // PureSignal DDC config emission. Phase 3M-4 Task 5.
+    // Returns the wire-byte map describing how this board configures its
+    // DDCs when PureSignal is active. Called from
+    // ReceiverManager::updateDdcAssignment() (Task 6) to drive the PS
+    // branches of per-board UpdateDDCs.
+    //
+    // The `model` parameter is required because P1CodecStandard maps to
+    // multiple HpsdrModel values (HERMES/ANAN10/ANAN100/HermesII/ANAN10E/
+    // ANAN100B), each with a distinct PS branch in Thetis UpdateDDCs.
+    // Subclasses that map 1:1 to a single board family (P1CodecHl2,
+    // P1CodecAnvelinaPro3, P1CodecRedPitaya) ignore the parameter.
+    //
+    // The `adcCtrl1` / `adcCtrl2` parameters carry the live ADC control
+    // bytes (Thetis console.cs `rx_adc_ctrl1` / `rx_adc_ctrl2` members
+    // at lines 8230, 8254, 8264-8265, etc. [v2.10.3.13]) into the masked
+    // emission formulas.  The PS-on G2-class branch substitutes its own
+    // bit pattern into bits 2-3 of cntrl1 while preserving the caller's
+    // other bits; the HermesII/HL2 branches override to literals.
+    //
+    // Source: ports the per-board branches in Thetis console.cs UpdateDDCs()
+    // (lines 8186-8538) [v2.10.3.13] + mi0bot deltas at 8409-8488
+    // [v2.10.3.13-beta2] for HL2.
+    virtual PsDdcConfig applyPureSignalDdcConfig(
+        HPSDRModel model,
+        bool psEnabled,
+        bool diversityEnabled,
+        bool moxState,
+        int rx1Rate,
+        int rx2Rate,
+        bool rx2Enabled,
+        quint8 adcCtrl1,
+        quint8 adcCtrl2
+    ) const = 0;
 };
 
 } // namespace NereusSDR

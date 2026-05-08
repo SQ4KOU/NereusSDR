@@ -267,24 +267,9 @@ private:
     QPushButton* m_openTxEqBtn{nullptr};
 };
 
-// ---------------------------------------------------------------------------
-// Transmit > PureSignal
-// ---------------------------------------------------------------------------
-class PureSignalPage : public SetupPage {
-    Q_OBJECT
-public:
-    explicit PureSignalPage(RadioModel* model, QWidget* parent = nullptr);
-
-private:
-    void buildUI();
-
-    // Section: PureSignal
-    QCheckBox* m_enableToggle{nullptr};
-    QCheckBox* m_autoCalToggle{nullptr};
-    QComboBox* m_feedbackDdcCombo{nullptr};  // DDC selection
-    QSlider*   m_attentionSlider{nullptr};
-    QLabel*    m_infoLabel{nullptr};         // status/info placeholder
-};
+// Note: Setup → Transmit → PureSignal page retired in Phase 3M-4 Task 14
+// (no Thetis equivalent; PsForm at Tools > PureSignal is the entire PS
+// control surface — design §4.2).
 
 // ---------------------------------------------------------------------------
 // Transmit > DEXP/VOX

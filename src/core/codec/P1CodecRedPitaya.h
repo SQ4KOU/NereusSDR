@@ -47,7 +47,26 @@ namespace NereusSDR {
 // it respects the user-set rxStepAttn[1] masked to 5 bits.
 //
 // Source: networkproto1.c:611-613 [@501e3f5] (DH1KLM contribution)
+//
+// Phase 3M-4 Task 5: applyPureSignalDdcConfig overridden because
+// RedPitaya has its own per-board branch in Thetis console.cs:8296-8377
+// [v2.10.3.13] (DH1KLM contribution).  Differs from G2-class branch by
+// setting Rate[1] = rx1_rate in PS-off MOX cases (REDPITAYA PAVEL inline
+// notes in upstream).
 class P1CodecRedPitaya : public P1CodecStandard {
+public:
+    PsDdcConfig applyPureSignalDdcConfig(
+        HPSDRModel model,
+        bool psEnabled,
+        bool diversityEnabled,
+        bool moxState,
+        int rx1Rate,
+        int rx2Rate,
+        bool rx2Enabled,
+        quint8 adcCtrl1,
+        quint8 adcCtrl2
+    ) const override;
+
 protected:
     void bank12(const CodecContext& ctx, quint8 out[5]) const override;
 };

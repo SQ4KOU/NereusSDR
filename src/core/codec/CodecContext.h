@@ -18,6 +18,8 @@
 #pragma once
 
 #include <QtGlobal>
+#include <QMetaType>
+#include <cstdint>
 
 namespace NereusSDR {
 
@@ -77,6 +79,16 @@ struct CodecContext {
     int     p2Cwx{0};
     int     p2Dot{0};
     int     p2Dash{0};
+
+    // P2 PureSignal run flag — prn->puresignal_run.  When this AND
+    // p2PttOut are both true, CmdHighPriority bytes 9-16 (DDC0 + DDC1
+    // frequencies) are overridden to TX freq instead of RX freqs, so
+    // both DDCs sample at the TX frequency for PA-feedback / TX-monitor
+    // capture.  From Thetis network.c:936-945 [v2.10.3.13]:
+    //   packetbuf[9..12] = (prn->tx[0].ptt_out && prn->puresignal_run)
+    //                      ? tx_freq_phase_word : rx0_freq_phase_word;
+    //   packetbuf[13..16] = same gate, rx1 freq fallback.
+    bool    puresignalRun{false};
 
     // P2 TX drive level — prn->tx[0].drive_level. Byte 345 of CmdHighPriority.
     int     p2DriveLevel{0};
@@ -222,6 +234,24 @@ struct CodecContext {
     // up the actual feedback DDC routing.
     bool    p1PuresignalRun{false};
 
+    // Phase 3M-4 Task 17 P1 follow-up: PureSignal nDdc state for the
+    // bank-2/3 (RX1/RX2 VFO DDC) freq-override gate.  Captured from
+    // P1RadioConnection::m_psNDdc by buildCodecContext() — itself populated
+    // from PsDdcConfig.nDdc when the per-board P1 codec
+    // (P1CodecHl2/P1CodecStandard) runs applyPureSignalDdcConfig.
+    //
+    // Source: mi0bot ChannelMaster/networkproto1.c:985 + 1000
+    // [v2.10.3.13-beta2] (byte-for-byte identical to ramdor :487 + :502
+    // [v2.10.3.13]):
+    //   if ((nddc == 2) && (XmitBit == 1) && (prn->puresignal_run))
+    //       ddc_freq = prn->tx[0].frequency;
+    // Triggers on HermesII / ANAN10E / ANAN100B (nddc==2 boards) only;
+    // HL2 / Hermes / ANAN10 / ANAN100 (nddc==4) skip the override because
+    // the firmware handles freq routing internally via cntrl1=4 ADC-to-DDC
+    // steering set in P1CodecHl2::applyPureSignalDdcConfig from mi0bot
+    // console.cs:8486 [v2.10.3.13-beta2].
+    int     p1PsNDdc{2};
+
     // User digital outputs — prn->user_dig_out, low 4 bits (0-15).
     // Source: Thetis ChannelMaster/networkproto1.c:601 [v2.10.3.13+501e3f51]
     //   C3 = prn->user_dig_out & 0b00001111;
@@ -279,4 +309,73 @@ struct CodecContext {
     bool    hl2ResetOnDisconnect{false};
 };
 
+// PureSignal DDC config bytes/words emitted by per-board codec.
+// Consumed by ReceiverManager::updateDdcAssignment() (Phase 3M-4 Task 6)
+// during MOX+PS-on transitions.
+//
+// Field semantics: ported verbatim from Thetis console.cs:8186-8538
+// UpdateDDCs() [v2.10.3.13] (and mi0bot console.cs:8409-8488
+// [v2.10.3.13-beta2] for HL2 deltas).  Each codec subclass returns a
+// PsDdcConfig populated to match its per-HpsdrModel branch in the
+// upstream switch statement.
+//
+// This is the wire-byte map; the consumer applies it via:
+//   NetworkIO.EnableRxs(ddcEnable)            // console.cs:8527
+//   NetworkIO.EnableRxSync(0, syncEnable)     // console.cs:8528
+//   NetworkIO.SetDDCRate(i, rate[i]) for i<4  // console.cs:8529-8530
+//   NetworkIO.SetADC_cntrl1(cntrl1)           // console.cs:8531
+//   NetworkIO.SetADC_cntrl2(cntrl2)           // console.cs:8532
+//   NetworkIO.Protocol1DDCConfig(p1DdcConfig, P1_diversity, p1RxCount, nDdc)
+//                                             // console.cs:8534
+struct PsDdcConfig {
+    uint8_t  cntrl1     = 0;     // ADC control register 1
+    uint8_t  cntrl2     = 0;     // ADC control register 2
+    uint32_t rate[8]    = {};    // Per-DDC sample rates (Hz)
+    uint8_t  ddcEnable  = 0;     // Bit mask of enabled DDCs (DDC0=1, DDC1=2, DDC2=4, DDC3=8)
+    uint8_t  syncEnable = 0;     // Bit mask of synced DDCs
+    int      p1DdcConfig = 0;    // P1-only board-config code (see UpdateDDCs branches)
+    int      p1RxCount  = 0;     // P1-only RX count for state-machine
+    int      nDdc       = 0;     // Total DDC count for this board family
+
+    // Phase 3M-4 mi0bot audit: per-board PS feedback / TX-monitor DDC indices
+    // for PsccPump dispatch.  Different board families place the PS pair on
+    // different DDC slots:
+    //
+    //   nddc=2 (HermesII / ANAN-10E / ANAN-100B):
+    //       psFbDdc=0, txMonDdc=1 — networkproto1.c:984 bank-2/3 freq override
+    //       forces DDC0+DDC1 to TX freq during PS-MOX
+    //   nddc=4 (Hermes / HL2 / ANAN-10 / ANAN-100):
+    //       psFbDdc=2, txMonDdc=3 — networkproto1.c MetisRead case 4
+    //       `twist(spr, 2, 3, 1)` pairs DDC2+DDC3 (and console.cs
+    //       GetDDC():8757-8762 confirms `psrx=2, pstx=3` for HL2 PS-MOX)
+    //   nddc=5 (Orion / Saturn / Andromeda / etc.):
+    //       psFbDdc=0, txMonDdc=1 — P2 network.c:936-945 unconditional
+    //       freq override; P1 case 5 in MetisRead twists DDC0+DDC1
+    //
+    // From Thetis cmaster.cs:533-534 [v2.10.3.13]:
+    //   SetPSRxIdx(0, 0);   // ps_rx_idx points to data[0] in InboundBlock
+    //   SetPSTxIdx(0, 1);   // ps_tx_idx points to data[1]
+    // Those constants refer to STREAM indices in the InboundBlock data**
+    // array (always 0/1 because twist() always pairs into data[0]+data[1]).
+    // NereusSDR's PsccPump consumes raw per-DDC streams from
+    // RadioConnection::iqDataReceived(ddcIndex, samples) so it needs the
+    // actual DDC indices, which depend on the per-board read-loop dispatch.
+    //
+    // From Thetis console.cs:8579 GetDDC() [v2.10.3.13]:
+    //   HL2 P1 PS-MOX (case 5):  rx1=0, rx2=1, psrx=2, pstx=3
+    //   HermesII P1 PS-MOX:      psrx=0, pstx=1
+    //   Saturn-class P2 PS-MOX:  rx1=2, rx2=3 (DDC0+DDC1 implicit PS pair)
+    //
+    // Defaults match cmaster.cs:533-534 (Stream0/Stream1) which is correct
+    // for nddc=2 boards and Saturn-class P2.  Per-board codec overrides for
+    // the nddc=4 family (HL2 / Hermes / ANAN10 / ANAN100).
+    int      psFbDdc    = 0;     // PS feedback DDC index (Stream0 default)
+    int      txMonDdc   = 1;     // TX monitor DDC index (Stream1 default)
+};
+
 } // namespace NereusSDR
+
+// Phase 3M-4 Task 6: PsDdcConfig must round-trip through Qt's signal/slot
+// queue (ReceiverManager::ddcConfigChanged → RadioConnection consumer) and
+// through QSignalSpy in tests, so it needs a metatype declaration.
+Q_DECLARE_METATYPE(NereusSDR::PsDdcConfig)

@@ -314,6 +314,20 @@ warren@wpratt.com
 //                 (= 0, peak) — the existing getTxMicMeter() reads
 //                 the peak; Thetis's UpdateNoiseGate uses the average.
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-05-06 — Phase 3M-4 Task 3 by J.J. Boyd (KG4VCF): 22 PureSignal API
+//                 wrappers implemented (setPSRunCal/Mox/Reset/Mancal/Automode/
+//                 Turnon/Control/LoopDelay/MoxDelay/TXDelay/HWPeak/Ptol/
+//                 FeedbackRate/PinMode/MapMode/Stabilize/IntsAndSpi setters,
+//                 getPSInfo/HWPeak/MaxTX/Disp readers, setPSRxIdx/setPSTxIdx
+//                 static routing helpers).  Each instance method delegates
+//                 to the matching WDSP entry point with m_channelId; all
+//                 instance wrappers null-guard via `txa[m_channelId].rsmpin.p`
+//                 (matches the existing CFC/DEXP convention — calcc.p is
+//                 created in the same create_txa() pass as rsmpin.p, so
+//                 the rsmpin sentinel covers both pointers).
+//                 Source: Thetis wdsp/calcc.c:891-1132 [v2.10.3.13] +
+//                 Thetis cmaster.cs:143-147 [v2.10.3.13].  AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
@@ -325,6 +339,7 @@ warren@wpratt.com
 
 #include <QElapsedTimer>
 
+#include <QByteArray>   // toUtf8() return type for psSaveCorr / psRestoreCorr (Task 7)
 #include <algorithm>
 #include <cmath>        // std::isnan — NaN sentinel for double idempotent guards (D.3)
 #include <cstring>
@@ -4039,6 +4054,13 @@ QString txModeKeyPart(DSPMode mode)
 
 qint64 TxChannel::onModeChanged(DSPMode newMode)
 {
+    // Engine guard: no engine attached → return 0.  Mirror of
+    // RxChannel::onModeChanged at src/core/RxChannel.cpp:1875.  Matches
+    // tst_dsp_options_per_mode_apply.cpp::tx_no_engine_returns_zero.
+    if (!m_wdspEngine) {
+        return 0;
+    }
+
     auto& s = AppSettings::instance();
     const QString modeKey = txModeKeyPart(newMode);
 
@@ -4064,9 +4086,18 @@ qint64 TxChannel::onModeChanged(DSPMode newMode)
     const QString typeStr  = s.value(typeKey, QStringLiteral("Low Latency")).toString();
     const int newFiltType  = (typeStr == QStringLiteral("Low Latency")) ? 0 : 1;
 
-    // Skip if nothing changed.
+    // No-change check: settings already match channel state → return 0
+    // (no rebuild).  Mirror of RxChannel.  RadioModel gates
+    // dspChangeMeasured on `elapsed > 0` so 0-return doesn't emit.
     if (newBufSize == m_txDspBlockSize && newFiltSize == m_txFilterSize &&
         newFiltType == m_txFilterType) {
+        return 0;
+    }
+
+    // Channel-in-map guard: settings differ → rebuild required.  Mirror
+    // of RxChannel.  Avoids UB at the in-place WDSP setters below when
+    // m_channelId is not registered with the engine.
+    if (!m_wdspEngine->txChannel(m_channelId)) {
         return -1;
     }
 
@@ -4152,6 +4183,320 @@ void TxChannel::setTxFixedGain(double level)
     //       LeaveCriticalSection (&a->cs_update0);
     //   }
     SetTXFixedGain(m_channelId, level, level);
+#endif
+}
+
+// ===========================================================================
+// PureSignal API wrappers (Phase 3M-4 Task 3)
+//
+// Each instance method delegates to the matching WDSP entry point with
+// m_channelId as the channel arg.  All wrappers guard the WDSP call with
+// `txa[m_channelId].rsmpin.p == nullptr` (matching the existing CFC / DEXP
+// wrapper convention — a null rsmpin means create_txa() was never called for
+// this channel id, in which case calcc.p is also null).
+//
+// The 2 static routing helpers wire the CMaster RX/TX feedback streams.
+// They take an explicit txid (always 0 for the primary transmitter at the
+// callsite — cmaster.cs:533-534 [v2.10.3.13]).
+//
+// From Thetis wdsp/calcc.c:891-1132 [v2.10.3.13]
+// + Thetis cmaster.cs:143-147 [v2.10.3.13] (channel routing).
+// ===========================================================================
+
+void TxChannel::setPSRunCal(int run)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::SetPSRunCal(m_channelId, run);
+#else
+    Q_UNUSED(run);
+#endif
+}
+
+void TxChannel::setPSMox(bool mox)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::SetPSMox(m_channelId, mox ? 1 : 0);
+#else
+    Q_UNUSED(mox);
+#endif
+}
+
+void TxChannel::getPSInfo(int* info16)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::GetPSInfo(m_channelId, info16);
+#else
+    Q_UNUSED(info16);
+#endif
+}
+
+void TxChannel::setPSReset(bool reset)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::SetPSReset(m_channelId, reset ? 1 : 0);
+#else
+    Q_UNUSED(reset);
+#endif
+}
+
+void TxChannel::setPSMancal(bool mancal)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::SetPSMancal(m_channelId, mancal ? 1 : 0);
+#else
+    Q_UNUSED(mancal);
+#endif
+}
+
+void TxChannel::setPSAutomode(bool automode)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::SetPSAutomode(m_channelId, automode ? 1 : 0);
+#else
+    Q_UNUSED(automode);
+#endif
+}
+
+void TxChannel::setPSTurnon(bool turnon)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::SetPSTurnon(m_channelId, turnon ? 1 : 0);
+#else
+    Q_UNUSED(turnon);
+#endif
+}
+
+void TxChannel::setPSControl(int reset, int mancal, int automode, int turnon)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::SetPSControl(m_channelId, reset, mancal, automode, turnon);
+#else
+    Q_UNUSED(reset);
+    Q_UNUSED(mancal);
+    Q_UNUSED(automode);
+    Q_UNUSED(turnon);
+#endif
+}
+
+void TxChannel::setPSLoopDelay(double seconds)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::SetPSLoopDelay(m_channelId, seconds);
+#else
+    Q_UNUSED(seconds);
+#endif
+}
+
+void TxChannel::setPSMoxDelay(double seconds)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::SetPSMoxDelay(m_channelId, seconds);
+#else
+    Q_UNUSED(seconds);
+#endif
+}
+
+double TxChannel::setPSTXDelay(double seconds)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return 0.0;
+    return ::SetPSTXDelay(m_channelId, seconds);
+#else
+    Q_UNUSED(seconds);
+    return 0.0;
+#endif
+}
+
+void TxChannel::setPSHWPeak(double peak)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::SetPSHWPeak(m_channelId, peak);
+#else
+    Q_UNUSED(peak);
+#endif
+}
+
+double TxChannel::getPSHWPeak()
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return 0.0;
+    double peak = 0.0;
+    ::GetPSHWPeak(m_channelId, &peak);
+    return peak;
+#else
+    return 0.0;
+#endif
+}
+
+double TxChannel::getPSMaxTX()
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return 0.0;
+    double maxtx = 0.0;
+    ::GetPSMaxTX(m_channelId, &maxtx);
+    return maxtx;
+#else
+    return 0.0;
+#endif
+}
+
+void TxChannel::setPSPtol(double ptol)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::SetPSPtol(m_channelId, ptol);
+#else
+    Q_UNUSED(ptol);
+#endif
+}
+
+void TxChannel::getPSDisp(double* x, double* ym, double* yc, double* ys,
+                          double* cm, double* cc, double* cs)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::GetPSDisp(m_channelId, x, ym, yc, ys, cm, cc, cs);
+#else
+    Q_UNUSED(x);
+    Q_UNUSED(ym);
+    Q_UNUSED(yc);
+    Q_UNUSED(ys);
+    Q_UNUSED(cm);
+    Q_UNUSED(cc);
+    Q_UNUSED(cs);
+#endif
+}
+
+void TxChannel::setPSFeedbackRate(int rate)
+{
+    // Record the rate last seen by this wrapper regardless of WDSP build
+    // mode so the PR #212 codex-fix A test (HL2 sentinel resolution) can
+    // observe what PureSignal::applyBoardCapabilities pushed through.
+    m_lastPSFeedbackRate = rate;
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::SetPSFeedbackRate(m_channelId, rate);
+#else
+    Q_UNUSED(rate);
+#endif
+}
+
+void TxChannel::setPSPinMode(bool pin)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::SetPSPinMode(m_channelId, pin ? 1 : 0);
+#else
+    Q_UNUSED(pin);
+#endif
+}
+
+void TxChannel::setPSMapMode(bool map)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::SetPSMapMode(m_channelId, map ? 1 : 0);
+#else
+    Q_UNUSED(map);
+#endif
+}
+
+void TxChannel::setPSStabilize(bool stbl)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::SetPSStabilize(m_channelId, stbl ? 1 : 0);
+#else
+    Q_UNUSED(stbl);
+#endif
+}
+
+void TxChannel::setPSIntsAndSpi(int ints, int spi)
+{
+    // Codex Fix F: cache the (ints, spi) pair last forwarded so the
+    // tst_puresignal_coordinator test seams (lastPSIntsForTest /
+    // lastPSSpiForTest) can verify PureSignal::setTintIndex(idx) routes
+    // through to WDSP.  Caching is unconditional regardless of WDSP
+    // build mode (matches m_lastPSFeedbackRate pattern at line 3833).
+    m_lastPSInts = ints;
+    m_lastPSSpi  = spi;
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    ::SetPSIntsAndSpi(m_channelId, ints, spi);
+#else
+    Q_UNUSED(ints);
+    Q_UNUSED(spi);
+#endif
+}
+
+// Save / restore correction tables (Phase 3M-4 Task 7 follow-up — missed in
+// Task 3, picked up here as the consumer).  Mirrors PSForm.cs btnPSSave_Click
+// (PSForm.cs:524-532) and btnPSRestore_Click (PSForm.cs:534-545)
+// [v2.10.3.13]: a user-chosen path goes straight to the WDSP entry point.
+// Calcc spawns a detached thread internally; these wrappers return after
+// thread start.  Empty filename short-circuits — calcc's PSSaveCorrection /
+// PSRestoreCorrection thread bodies fopen() the path verbatim and treat
+// failure as a silent no-op.
+
+void TxChannel::psSaveCorr(const QString& filename)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (filename.isEmpty()) return;
+    QByteArray utf8 = filename.toUtf8();
+    ::PSSaveCorr(m_channelId, utf8.data());
+#else
+    Q_UNUSED(filename);
+#endif
+}
+
+void TxChannel::psRestoreCorr(const QString& filename)
+{
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (filename.isEmpty()) return;
+    QByteArray utf8 = filename.toUtf8();
+    ::PSRestoreCorr(m_channelId, utf8.data());
+#else
+    Q_UNUSED(filename);
+#endif
+}
+
+// Static channel routing.  Called once at PS init; not gated on a TX channel
+// state (these go to ChannelMaster, not TXA).
+//
+// From Thetis cmaster.cs:533-534 [v2.10.3.13]:
+//   SetPSRxIdx(0, 0);   // txid = 0, all current models use Stream0 for RX feedback
+//   SetPSTxIdx(0, 1);   // txid = 0, all current models use Stream1 for TX feedback
+
+void TxChannel::setPSRxIdx(int txid, int idx)
+{
+#ifdef HAVE_WDSP
+    ::SetPSRxIdx(txid, idx);
+#else
+    Q_UNUSED(txid);
+    Q_UNUSED(idx);
+#endif
+}
+
+void TxChannel::setPSTxIdx(int txid, int idx)
+{
+#ifdef HAVE_WDSP
+    ::SetPSTxIdx(txid, idx);
+#else
+    Q_UNUSED(txid);
+    Q_UNUSED(idx);
 #endif
 }
 

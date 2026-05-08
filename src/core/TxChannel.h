@@ -298,11 +298,23 @@ warren@wpratt.com
 //                 Qt signal to MoxController::onVoxActive instead of
 //                 Thetis's Audio.VOXActive + PollPTT polling loop.
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-05-06 — Phase 3M-4 Task 3 by J.J. Boyd (KG4VCF): 22 PureSignal API
+//                 wrappers declared (setPSRunCal/Mox/Reset/Mancal/Automode/
+//                 Turnon/Control/LoopDelay/MoxDelay/TXDelay/HWPeak/Ptol/
+//                 FeedbackRate/PinMode/MapMode/Stabilize/IntsAndSpi setters,
+//                 getPSInfo/HWPeak/MaxTX/Disp readers, plus 2 static
+//                 setPSRxIdx/setPSTxIdx routing helpers).  Each instance
+//                 method delegates to the matching WDSP entry point
+//                 with m_channelId as the channel arg.  Source: Thetis
+//                 wdsp/calcc.c:891-1132 [v2.10.3.13] + Thetis
+//                 cmaster.cs:143-147 [v2.10.3.13].  AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
 
 #include <QObject>
+#include <QString>
 #include <QTimer>
 
 #include <array>    // std::array — TX EQ 10-band graphic vector (3M-3a-i B-1)
@@ -1955,6 +1967,173 @@ public:
     // From Thetis wdsp/ source files [v2.10.3.13] — individual Set*Run APIs.
     void setStageRunning(Stage s, bool run);
 
+    // ── PureSignal API (Phase 3M-4 Task 3) ──────────────────────────────────
+    //
+    // Adaptive-predistortion calibration engine wrappers.  Each instance
+    // method delegates to the matching WDSP entry point with m_channelId as
+    // the channel arg.  All 19 instance setters/readers operate on the
+    // CALCC struct created by create_calcc inside create_txa() at
+    // wdsp/TXA.c:405 [v2.10.3.13]; calls are csDSP-protected at the WDSP
+    // boundary.  Each wrapper guards against an unopened TX channel via
+    // `txa[m_channelId].rsmpin.p == nullptr` (matches the existing CFC /
+    // DEXP wrapper convention; the calcc pointer is created together with
+    // rsmpin inside create_txa, so the rsmpin sentinel covers both).
+    //
+    // The 2 static routing helpers (setPSRxIdx / setPSTxIdx) wire the
+    // CMaster RX/TX feedback streams; per Thetis cmaster.cs:533-534
+    // [v2.10.3.13] "all current models use Stream0 for RX feedback /
+    // Stream1 for TX feedback" — fixed at PS init, never per-channel.
+    //
+    // setPSTXDelay returns the actual delay applied (calcc.c:1001-1021
+    // [v2.10.3.13] — the engine snaps to a fractional 20 ns step derived
+    // from the feedback sample rate).  getPSDisp's seven output buffers
+    // feed AmpView's Ref / MagAmp / PhsAmp / MagCorr / PhsCorr /
+    // MagCorrSmooth / PhsCorrSmooth display series; sizing is `nsamps`
+    // doubles for x/ym/yc/ys and `ints * 4` doubles for cm/cc/cs.
+    // getPSInfo writes 16 ints (calcc.c:927 [v2.10.3.13] — `memcpy(info,
+    // a->info, 16 * sizeof(int))`).
+    //
+    // From Thetis wdsp/calcc.c:891-1132 [v2.10.3.13] +
+    //      Thetis cmaster.cs:143-147 [v2.10.3.13] (channel routing).
+
+    /// Set the calcc run flag.  Wraps SetPSRunCal(channelId, run).
+    /// From Thetis wdsp/calcc.c:899 [v2.10.3.13].
+    void setPSRunCal(int run);
+
+    /// Set the calcc MOX flag (engages PS calibration when MOX is up).
+    /// Wraps SetPSMox(channelId, mox ? 1 : 0).
+    /// From Thetis wdsp/calcc.c:909 [v2.10.3.13].
+    void setPSMox(bool mox);
+
+    /// Read the 16-int CALCC info status array.  `info16` MUST point to
+    /// at least int[16].  Wraps GetPSInfo.
+    /// From Thetis wdsp/calcc.c:922 [v2.10.3.13].
+    void getPSInfo(int* info16);
+
+    /// Set the calcc reset gate.  Wraps SetPSReset(channelId, reset ? 1 : 0).
+    /// From Thetis wdsp/calcc.c:932 [v2.10.3.13].
+    void setPSReset(bool reset);
+
+    /// Set the calcc manual-cal gate.  Wraps SetPSMancal.
+    /// From Thetis wdsp/calcc.c:942 [v2.10.3.13].
+    void setPSMancal(bool mancal);
+
+    /// Set the calcc automode gate.  Wraps SetPSAutomode.
+    /// From Thetis wdsp/calcc.c:950 [v2.10.3.13].
+    void setPSAutomode(bool automode);
+
+    /// Set the calcc turnon gate.  Wraps SetPSTurnon.
+    /// From Thetis wdsp/calcc.c:958 [v2.10.3.13].
+    void setPSTurnon(bool turnon);
+
+    /// Set all four CALCC control gates atomically (held under cs_update).
+    /// Wraps SetPSControl(channelId, reset, mancal, automode, turnon).
+    /// Thetis ForcePS pattern (PSForm.cs ForcePS [v2.10.3.13]) calls
+    /// `SetPSControl(_txachannel, 1, 0, 0, 0)` to force the engine to LRESET.
+    /// From Thetis wdsp/calcc.c:966 [v2.10.3.13].
+    void setPSControl(int reset, int mancal, int automode, int turnon);
+
+    /// Set the loop-delay seconds (sample count = rate * delay).
+    /// Wraps SetPSLoopDelay.
+    /// From Thetis wdsp/calcc.c:979 [v2.10.3.13].
+    void setPSLoopDelay(double seconds);
+
+    /// Set the MOX-delay seconds (sample count = rate * moxdelay).
+    /// Wraps SetPSMoxDelay.
+    /// From Thetis wdsp/calcc.c:990 [v2.10.3.13].
+    void setPSMoxDelay(double seconds);
+
+    /// Set the TX-vs-RX feedback delay seconds and return the engine-
+    /// applied value (snaps to 20 ns fractional steps inside WDSP).
+    /// Negative values shift to RX delay path.  Wraps SetPSTXDelay.
+    /// From Thetis wdsp/calcc.c:1001 [v2.10.3.13] — returns double.
+    double setPSTXDelay(double seconds);
+
+    /// Set the hardware peak normalisation point (default 0.2899 for ANAN-G2,
+    /// per cmaster.cs:536 [v2.10.3.13]).  Wraps SetPSHWPeak; the engine
+    /// stores `hw_scale = 1.0 / peak` internally (calcc.c:1029).
+    /// From Thetis wdsp/calcc.c:1024 [v2.10.3.13].
+    void setPSHWPeak(double peak);
+
+    /// Read back the configured HW peak (`peak = 1.0 / hw_scale`).
+    /// Wraps GetPSHWPeak; returns the round-trip value of the last
+    /// setPSHWPeak.  From Thetis wdsp/calcc.c:1034 [v2.10.3.13].
+    double getPSHWPeak();
+
+    /// Read the live envelope-max-TX scalar observed by calcc since the last
+    /// reset.  Wraps GetPSMaxTX (returns `ctrl.env_maxtx`).
+    /// From Thetis wdsp/calcc.c:1042 [v2.10.3.13].
+    double getPSMaxTX();
+
+    /// Set the calibration-tolerance threshold.  Wraps SetPSPtol.
+    /// From Thetis wdsp/calcc.c:1050 [v2.10.3.13].
+    void setPSPtol(double ptol);
+
+    /// Read seven AmpView display arrays (Ref / MagAmp / PhsAmp / MagCorr /
+    /// PhsCorr / MagCorrSmooth / PhsCorrSmooth).  Each pointer must address
+    /// at least `nsamps` (x/ym/yc/ys) or `ints * 4` (cm/cc/cs) doubles.
+    /// Wraps GetPSDisp; csDSP-protected at the WDSP boundary.
+    /// From Thetis wdsp/calcc.c:1058 [v2.10.3.13] — 7 output buffers.
+    void getPSDisp(double* x, double* ym, double* yc, double* ys,
+                   double* cm, double* cc, double* cs);
+
+    /// Set the feedback sample rate (Hz).  Recomputes loopdelay/moxdelay
+    /// sample counts and rebuilds the TX/RX delay lines.  Cmaster.cs:535
+    /// calls this with `ps_rate` (192000 for ANAN-G2).
+    /// Wraps SetPSFeedbackRate.
+    /// From Thetis wdsp/calcc.c:1073 [v2.10.3.13].
+    void setPSFeedbackRate(int rate);
+
+    /// Set the PIN-aware mode flag.  Wraps SetPSPinMode.
+    /// From Thetis wdsp/calcc.c:1102 [v2.10.3.13].
+    void setPSPinMode(bool pin);
+
+    /// Set the calcc map mode.  Wraps SetPSMapMode.
+    /// From Thetis wdsp/calcc.c:1110 [v2.10.3.13].
+    void setPSMapMode(bool map);
+
+    /// Set the calcc stabilization flag.  Wraps SetPSStabilize.
+    /// From Thetis wdsp/calcc.c:1118 [v2.10.3.13].
+    void setPSStabilize(bool stbl);
+
+    /// Set per-FFT-mask interval count and SPI flag together.  Wraps
+    /// SetPSIntsAndSpi.  From Thetis wdsp/calcc.c:1140 [v2.10.3.13].
+    void setPSIntsAndSpi(int ints, int spi);
+
+    /// Save the active correction tables to a user-chosen file.  Wraps
+    /// PSSaveCorr(channelId, filename).  Used by PsForm Save button and the
+    /// PureSignalApplet Save button — see PSForm.cs btnPSSave_Click
+    /// [v2.10.3.13].  Calcc spawns a detached thread for the disk I/O
+    /// (calcc.c:567 PSSaveCorrection [v2.10.3.13]); this wrapper returns
+    /// after the thread is started, NOT after the file is fully written.
+    /// From Thetis wdsp/calcc.c:888 [v2.10.3.13].
+    void psSaveCorr(const QString& filename);
+
+    /// Restore correction tables from a user-chosen file.  Wraps
+    /// PSRestoreCorr(channelId, filename).  Used by PsForm Restore button
+    /// and the PureSignalApplet Restore button — see PSForm.cs
+    /// btnPSRestore_Click [v2.10.3.13].  As with psSaveCorr the underlying
+    /// calcc routine spawns a detached thread (calcc.c:600
+    /// PSRestoreCorrection [v2.10.3.13]); the wrapper returns after thread
+    /// start.  Caller should set `_restoreON=true` after invoking so the
+    /// host coordinator's command-state machine routes the next pump cycle
+    /// through eCMDState::IntiateRestoredCorrection.
+    /// From Thetis wdsp/calcc.c:900 [v2.10.3.13].
+    void psRestoreCorr(const QString& filename);
+
+    // Channel routing (STATIC — global, not per-channel).  Called once at
+    // PS init.  Per Thetis cmaster.cs:533-534 [v2.10.3.13] "txid = 0, all
+    // current models use Stream0 for RX feedback / Stream1 for TX feedback"
+    // — values fixed across all current OpenHPSDR boards.
+    //
+    /// Wraps SetPSRxIdx(txid, idx).
+    /// From Thetis cmaster.cs:146-147 [v2.10.3.13].
+    static void setPSRxIdx(int txid, int idx);
+
+    /// Wraps SetPSTxIdx(txid, idx).
+    /// From Thetis cmaster.cs:143-144 [v2.10.3.13].
+    static void setPSTxIdx(int txid, int idx);
+
 #ifdef NEREUS_BUILD_TESTS
     // ── Test seam (Phase 3M-1b D.1, updated for 3M-1c E.1 push model) ─────
     //
@@ -2080,6 +2259,28 @@ public:
     //   (c) Identical second call is a no-op (idempotent guard fires).
     //   (d) Different value updates the stored last-value.
     double lastFixedGainForTest()             const noexcept { return m_lastFixedGain; }
+
+    // ── Test seam (PR #212 codex-fix A) — PS feedback rate last-value ───────
+    //
+    // Allow tests to verify the rate that PureSignal::applyBoardCapabilities
+    // pushed through to setPSFeedbackRate.  Critical for the HL2 sentinel
+    // resolution: kHermesLite.psSampleRate=0 (NereusSDR sentinel meaning
+    // "use rx1_rate at the codec/DDC layer") must be resolved to the
+    // universal Thetis ps_rate (192000) BEFORE reaching WDSP, since
+    // calcc.c:1069 stores `a->rate = rate;` and uses it as the delay-time
+    // divisor (passing 0 produces moxsamps=0 + waitsamps=0).
+    //
+    // Sentinel -1: distinguishes "never called" from "called with 0".
+    // Tests asserting non-zero rates use a 0/-1 guard if they care.
+    int lastPSFeedbackRateForTest()           const noexcept { return m_lastPSFeedbackRate; }
+
+    // Codex Fix F seam: observe the (ints, spi) pair the wrapper last
+    // forwarded to WDSP via setPSIntsAndSpi.  Used by
+    // tst_puresignal_coordinator to verify PureSignal::setTintIndex(idx)
+    // routes through to the calcc engine.  Sentinels -1 distinguish
+    // "never called" from explicit zero.
+    int lastPSIntsForTest()                   const noexcept { return m_lastPSInts; }
+    int lastPSSpiForTest()                    const noexcept { return m_lastPSSpi; }
 #endif // NEREUS_BUILD_TESTS
 
 public slots:
@@ -2561,6 +2762,24 @@ private:
     //   double level = Audio.RadioVolume * Audio.HighSWRScale;
     //   cmaster.SetTXFixedGain(0, level, level);
     double m_lastFixedGain = std::numeric_limits<double>::quiet_NaN();
+
+    // ── PS feedback rate last-value (PR #212 codex-fix A) ──────────────────
+    //
+    // setPSFeedbackRate stores the rate it was last called with into this
+    // member regardless of WDSP build mode, so that the unit test for the
+    // HL2 sentinel-resolution fix can verify PureSignal::applyBoardCapabilities
+    // pushed 192000 (not 0) when the board is HL2.  Sentinel -1 distinguishes
+    // "never called" from "called with 0".
+    //
+    // Source: NereusSDR-original test seam.  No Thetis equivalent (Thetis
+    // doesn't have unit tests for PS feedback rate).
+    int m_lastPSFeedbackRate = -1;
+
+    // Codex Fix F: per-call cache of the (ints, spi) pair last forwarded
+    // through setPSIntsAndSpi.  Read by lastPSInts/SpiForTest seams above.
+    // Sentinels -1 distinguish "never called" from explicit zero.
+    int m_lastPSInts = -1;
+    int m_lastPSSpi  = -1;
 
     // ── TXA PostGen split-property cache (3M-1c E.3 / E.4) ──────────────────
     //

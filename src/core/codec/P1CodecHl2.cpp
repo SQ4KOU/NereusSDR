@@ -105,8 +105,23 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
         // Slot 2 = DDC0/RX1 freq        (C0|0x04)
         case 2: {
             out[0] = C0base | 0x04;
-            const quint64 freq = (0 < ctx.activeRxCount) ? ctx.rxFreqHz[0]
-                                                          : ctx.txFreqHz;
+            // Phase 3M-4 Task 17 P1 follow-up: bank 2/3 PS freq override
+            // for HermesII (nddc==2).  Source: mi0bot networkproto1.c:985
+            // [v2.10.3.13-beta2].  Mirrors P1CodecStandard's identical
+            // override; HL2 itself sets nDdc=4 in
+            // P1CodecHl2::applyPureSignalDdcConfig (line 477) so this gate
+            // is normally false on HL2 — the firmware handles freq routing
+            // via cntrl1=4 ADC steering.  But HL2's codec is also used for
+            // any P1 board whose physical wire dialect maps to HermesLite,
+            // so the gate is kept honest by reading ctx.p1PsNDdc.
+            quint64 freq;
+            if (0 >= ctx.activeRxCount) {
+                freq = ctx.txFreqHz;
+            } else if (ctx.p1PsNDdc == 2 && ctx.mox && ctx.p1PuresignalRun) {
+                freq = ctx.txFreqHz;  //MW0LGE PS DDC0 override (mirror of networkproto1.c:986)
+            } else {
+                freq = ctx.rxFreqHz[0];
+            }
             out[1] = quint8((freq >> 24) & 0xFF);
             out[2] = quint8((freq >> 16) & 0xFF);
             out[3] = quint8((freq >>  8) & 0xFF);
@@ -117,8 +132,22 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
         // Slot 3 = DDC1/RX2 freq        (C0|0x06)
         case 3: {
             out[0] = C0base | 0x06;
-            const quint64 freq = (1 < ctx.activeRxCount) ? ctx.rxFreqHz[1]
-                                                          : ctx.txFreqHz;
+            // Phase 3M-4 Task 17 P1 follow-up: bank 2/3 PS freq override.
+            // Source: mi0bot networkproto1.c:1000-1005 [v2.10.3.13-beta2].
+            // Same gate as bank 2 above; on HL2 (nDdc=4 from
+            // applyPureSignalDdcConfig) this falls through to the standard
+            // ctx.rxFreqHz[1] path, so HL2 PS-MOX behaviour is unchanged
+            // — the firmware handles DDC1 routing via cntrl1=4.
+            quint64 freq;
+            if (1 >= ctx.activeRxCount) {
+                freq = ctx.txFreqHz;
+            } else if (ctx.p1PsNDdc == 2 && ctx.mox && ctx.p1PuresignalRun) {
+                freq = ctx.txFreqHz;  //MW0LGE PS DDC1 override (mirror of networkproto1.c:1001)
+            } else if (ctx.p1PsNDdc == 5) {
+                freq = ctx.rxFreqHz[0];  // Orion: DDC1 = RX1 freq (networkproto1.c:1003)
+            } else {
+                freq = ctx.rxFreqHz[1];  // Hermes default: RX2 VFO
+            }
             out[1] = quint8((freq >> 24) & 0xFF);
             out[2] = quint8((freq >> 16) & 0xFF);
             out[3] = quint8((freq >>  8) & 0xFF);
@@ -229,7 +258,19 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
                           | (!ctx.p1MicTipRing      ? 0x10 : 0x00)   // mic_trs (inverted) — 3M-1b G.3
                           | (ctx.p1MicBias          ? 0x20 : 0x00)   // mic_bias (no inversion) — 3M-1b G.4
                           | (ctx.p1MicPTTDisabled   ? 0x40 : 0x00)); // mic_ptt (direct, issue #182)
-            out[2] = 0;
+            // C2: line_in_gain (low 5 bits) | puresignal_run (bit 6).
+            // Source: mi0bot ChannelMaster/networkproto1.c:1097 [v2.10.3.13-beta2]
+            //   C2 = (prn->mic.line_in_gain & 0b00011111) | ((prn->puresignal_run & 1) << 6);
+            //
+            // PR #212 follow-up bench-fix (J.J. KG4VCF, 2026-05-07):
+            // Pre-fix this was hardcoded `out[2] = 0` (cargo-culted scaffold from
+            // an early HL2 codec stub).  Wire-pcap of working Thetis HL2 PS-MOX
+            // session showed C2=0x57 (line_in_gain=0x17 + ps_run=1).  HL2 firmware
+            // engages PureSignal feedback routing on this bit; without it,
+            // calcc/pscc receive paired streams of identical RX1-audio data and
+            // the calibration state machine can't compute corrections.
+            out[2] = quint8((ctx.p1LineInGain & 0x1F)
+                          | (ctx.p1PuresignalRun ? 0x40 : 0x00));
             out[3] = 0;
             // MI0BOT: Different read loop for HL2 — Larger range for the HL2 attenuator
             // [original inline comment from networkproto1.c:1100,1102]
@@ -315,12 +356,40 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
             return;
         }
 
-        // Banks 13-16 — CW / EER / BPF2 (identical to Standard)
-        // Source: mi0bot networkproto1.c:1126-1159 [@c26a8a4 / matches @501e3f5]
+        // Banks 13-15 — CW / EER (HL2 has no CW state surface yet — emit C0 only)
+        // Source: mi0bot networkproto1.c:1127-1149 [v2.10.3.13-beta2]
         case 13: out[0] = C0base | 0x1E; return;
         case 14: out[0] = C0base | 0x20; return;
         case 15: out[0] = C0base | 0x22; return;
-        case 16: out[0] = C0base | 0x24; return;
+
+        // Bank 16 — BPF2 + xvtr_enable + puresignal_run
+        // Source: mi0bot networkproto1.c:1151-1160 [v2.10.3.13-beta2]:
+        //   case 16: // BPF2 0x12
+        //       C0 |= 0x24;
+        //       C1 = (BPF2 HPF/LPF/preamp bits + rx2_gnd<<7);
+        //       C2 = (xvtr_enable & 1) | ((prn->puresignal_run & 1) << 6);
+        //       C3 = 0;
+        //       C4 = 0;
+        //
+        // PR #212 follow-up bench-fix (J.J. KG4VCF, 2026-05-07):
+        // Pre-fix this was a stub (C0 only, C1-C4 = 0).  Wire-pcap of working
+        // Thetis HL2 PS-MOX session showed bank 16 carrying ps_run=1 in C2 bit 6
+        // (alongside bank 11 C2 — Thetis emits the bit on TWO banks).  HL2
+        // firmware appears to engage PureSignal feedback routing only when
+        // BOTH bank 11 and bank 16 carry the bit; without bank 16, calcc state
+        // machine stalls at LCOLLECT with txEnvMax == rxEnvMax.
+        //
+        // BPF2 (HL2's secondary BPF board) state isn't tracked in NereusSDR
+        // yet — emit C1 = 0 (no BPF2 routing) until BPF2 support lands.
+        // xvtr_enable is also not yet plumbed — emit 0.  Only the ps_run bit
+        // is wired; that's what HL2 firmware needs for PS to engage.
+        case 16:
+            out[0] = C0base | 0x24;
+            out[1] = 0;     // BPF2 filter bits — not plumbed in NereusSDR yet
+            out[2] = quint8(ctx.p1PuresignalRun ? 0x40 : 0x00);  // ps_run only
+            out[3] = 0;
+            out[4] = 0;
+            return;
 
         // Bank 17 — TX latency + PTT hang (HL2-only, NOT AnvelinaPro3 extra OC)
         // Source: mi0bot networkproto1.c:1162-1168 [@c26a8a4]
@@ -419,6 +488,185 @@ bool P1CodecHl2::tryComposeI2cFrame(quint8 out[5], bool mox) const
            out[0], out[1], out[2], out[3], out[4],
            txn.bus, txn.address, txn.control, int(txn.isRead), int(txn.needsResponse));
     return true;
+}
+
+// =================================================================
+// Phase 3M-4 Task 5: PureSignal DDC config — HL2 branch
+// =================================================================
+//
+// Verbatim port of the HL2 branch in mi0bot console.cs UpdateDDCs().
+// In mi0bot, HpsdrModel.HERMESLITE is grouped with HERMES/ANAN10/ANAN100
+// at line 8408-8409, so this method ports the full HERMES-class branch
+// PLUS the HL2-specific rate override at lines 8476-8485.
+//
+// Source: mi0bot console.cs:8408-8490 [v2.10.3.13-beta2]
+//
+// case HPSDRModel.HERMES:
+// case HPSDRModel.HERMESLITE:     // MI0BOT: HL2
+// case HPSDRModel.ANAN10:
+// case HPSDRModel.ANAN100:
+//     P1_rxcount = 4;             // RX4 used for puresignal feedback
+//     nddc = 4;
+//     ...
+//     else // transmitting and PS is ON
+//     {
+//         P1_DDCConfig = 6;
+//         DDCEnable = DDC0;
+//         SyncEnable = DDC1;
+//         Rate[0] = ps_rate;
+//         Rate[1] = ps_rate;
+//         if (hpsdr_model == HPSDRModel.HERMESLITE) // MI0BOT: HL2 can work at a high sample rate
+//         {
+//             Rate[0] = rx1_rate;
+//             Rate[1] = rx1_rate;
+//         }
+//         ...
+//         cntrl1 = 4;
+//         cntrl2 = 0;
+//     }
+//
+// `ps_rate` is the static cmaster.PSrate = 192000
+// (cmaster.cs:424 [v2.10.3.13-beta2], unchanged from ramdor).
+PsDdcConfig P1CodecHl2::applyPureSignalDdcConfig(
+    HPSDRModel /*model*/,
+    bool psEnabled,
+    bool diversityEnabled,
+    bool moxState,
+    int rx1Rate,
+    int rx2Rate,
+    bool rx2Enabled,
+    quint8 /*adcCtrl1*/,
+    quint8 /*adcCtrl2*/) const
+{
+    PsDdcConfig cfg;
+    constexpr uint8_t DDC0 = 1, DDC1 = 2;
+
+    // From mi0bot console.cs:8409-8413 [v2.10.3.13-beta2]
+    //   case HPSDRModel.HERMESLITE: // MI0BOT: HL2
+    //
+    // Inline tag preserved per CLAUDE.md "Inline comment preservation":
+    //MI0BOT  [HL2 case-statement marker at console.cs:8409]
+    cfg.p1RxCount = 4;                     // RX4 used for puresignal feedback
+    cfg.nDdc      = 4;
+
+    if (!moxState) {
+        if (!diversityEnabled) {
+            // From mi0bot console.cs:8416-8429 [v2.10.3.13-beta2]
+            cfg.p1DdcConfig = 4;
+            cfg.ddcEnable   = DDC0;
+            cfg.syncEnable  = 0;
+            cfg.rate[0]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = 0;
+            cfg.cntrl2      = 0;
+
+            if (rx2Enabled) {
+                cfg.ddcEnable = static_cast<uint8_t>(cfg.ddcEnable + DDC1);
+                cfg.rate[1]   = static_cast<uint32_t>(rx2Rate);
+            }
+        } else {
+            // From mi0bot console.cs:8430-8440 [v2.10.3.13-beta2]
+            cfg.p1DdcConfig = 5;
+            cfg.ddcEnable   = DDC0;
+            cfg.syncEnable  = DDC1;
+            cfg.rate[0]     = static_cast<uint32_t>(rx1Rate);
+            cfg.rate[1]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = 0;
+            cfg.cntrl2      = 0;
+        }
+    } else {
+        if (!diversityEnabled && !psEnabled) {
+            // From mi0bot console.cs:8444-8457 [v2.10.3.13-beta2]
+            cfg.p1DdcConfig = 4;
+            cfg.ddcEnable   = DDC0;
+            cfg.syncEnable  = 0;
+            cfg.rate[0]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = 0;
+            cfg.cntrl2      = 0;
+
+            if (rx2Enabled) {
+                cfg.ddcEnable = static_cast<uint8_t>(cfg.ddcEnable + DDC1);
+                cfg.rate[1]   = static_cast<uint32_t>(rx2Rate);
+            }
+        } else if (diversityEnabled && !psEnabled) {
+            // From mi0bot console.cs:8458-8467 [v2.10.3.13-beta2]
+            cfg.p1DdcConfig = 5;
+            cfg.ddcEnable   = DDC0;
+            cfg.syncEnable  = DDC1;
+            cfg.rate[0]     = static_cast<uint32_t>(rx1Rate);
+            cfg.rate[1]     = static_cast<uint32_t>(rx1Rate);
+            cfg.cntrl1      = 0;
+            cfg.cntrl2      = 0;
+        } else { // transmitting and PS is ON
+            // From mi0bot console.cs:8469-8488 [v2.10.3.13-beta2]
+            //   else // transmitting and PS is ON
+            //   {
+            //       P1_DDCConfig = 6;
+            //       DDCEnable = DDC0;
+            //       SyncEnable = DDC1;
+            //       Rate[0] = ps_rate;
+            //       Rate[1] = ps_rate;
+            //       if (hpsdr_model == HPSDRModel.HERMESLITE) // MI0BOT: HL2 can work at a high sample rate
+            //       {
+            //           Rate[0] = rx1_rate;
+            //           Rate[1] = rx1_rate;
+            //       }
+            //       else
+            //       {
+            //           Rate[0] = ps_rate;
+            //           Rate[1] = ps_rate;
+            //       }
+            //       cntrl1 = 4;
+            //       cntrl2 = 0;
+            //   }
+            cfg.p1DdcConfig = 6;
+            cfg.ddcEnable   = DDC0;
+            cfg.syncEnable  = DDC1;
+            // MI0BOT: HL2 can work at a high sample rate — always rx1_rate for HL2
+            cfg.rate[0]     = static_cast<uint32_t>(rx1Rate);
+            cfg.rate[1]     = static_cast<uint32_t>(rx1Rate);
+            // From mi0bot console.cs:8486 [v2.10.3.13-beta2]:
+            //   cntrl1 = 4;
+            //   cntrl2 = 0;
+            //
+            // Earlier PR #212 bench-fix (since reverted, J.J. KG4VCF,
+            // 2026-05-07) changed this to `cntrl1 = 0` citing a "ramdor-
+            // Thetis HL2 PS-MOX session" pcap.  The deep cross-codebase
+            // review (PR #212 follow-up) found ramdor-Thetis has no HL2
+            // case in UpdateDDCs at all, so the comparison was invalid;
+            // mi0bot Thetis (the working reference on the user's HL2 +
+            // N2ADR + amp bench) explicitly emits cntrl1=4.  Restored
+            // here to match mi0bot byte-for-byte.  The actual PureSignal
+            // breakthrough on user's bench came from the
+            // setTxStepAttenuation negative-clamp fix in
+            // P1RadioConnection.cpp, NOT this byte.
+            cfg.cntrl1      = 4;
+            cfg.cntrl2      = 0;
+
+            // Phase 3M-4 mi0bot audit: PS DDC pair indices for HL2 / Hermes /
+            // ANAN-10 / ANAN-100 (nddc=4 family).
+            //
+            // From mi0bot ChannelMaster/networkproto1.c:549-553
+            // [v2.10.3.13-beta2] MetisReadThreadMainLoop_HL2 case 4:
+            //   xrouter(0, 0, 0, spr, prn->RxBuff[0]);   // DDC0 → main RX
+            //   twist(spr, 2, 3, 1);                      // DDC2+DDC3 → PS pair
+            //   xrouter(0, 0, 2, spr, prn->RxBuff[1]);    // DDC1 → secondary RX
+            //
+            // Plus mi0bot console.cs:8757-8762 [v2.10.3.13-beta2] GetDDC()
+            // HL2 P1 PS-MOX (tot=5: MOX=1, Diversity=0, PS=1):
+            //   rx1 = 0; rx2 = 1; psrx = 2; pstx = 3;
+            //
+            // psFbDdc=2 (PS feedback / loopback from PA — the ADC1-routed
+            // path enabled by cntrl1=4) and txMonDdc=3 (TX monitor — direct
+            // sample of the TX I/Q feed).  PsccPump consumes
+            // iqDataReceived(2, ...) and iqDataReceived(3, ...) as the
+            // pscc(channel, size, tx, rx) pair.
+            cfg.psFbDdc  = 2;     // RX2 audio (rx2=1) but during PS-MOX the
+                                  // firmware routes loopback into slot 2
+            cfg.txMonDdc = 3;     // TX monitor in slot 3
+        }
+    }
+
+    return cfg;
 }
 
 } // namespace NereusSDR

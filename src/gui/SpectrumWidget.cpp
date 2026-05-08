@@ -114,9 +114,11 @@
 
 #include "SpectrumWidget.h"
 #include "SpectrumOverlayMenu.h"
+#include "ImdOverlay.h"
 #include "widgets/VfoWidget.h"
 #include "ColorSwatchButton.h"
 #include "core/AppSettings.h"
+#include "core/LogCategories.h"   // Phase 3M-4 bench-fix Round 2: lcSpectrum
 #include "dbm_strip_math.h"
 #include "models/BandPlanManager.h"
 #include "spectrum/SpectrumDetector.h"
@@ -358,6 +360,10 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         " letter-spacing: 8px; }"));
     m_disconnectLabel->hide();
     m_disconnectLabel->installEventFilter(this);
+
+    // Phase 3M-4 Task 12 — two-tone IMD overlay analytical core.
+    // Owned via QObject parenting; raw pointer mirrors m_bandPlanManager.
+    m_imdOverlay = new ImdOverlay(this);
 }
 
 SpectrumWidget::~SpectrumWidget() = default;
@@ -2588,6 +2594,14 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
         drawTxFilterOverlay(p, specRect);
     }
 
+    // Phase 3M-4 Task 12 — two-tone IMD overlay show condition.
+    // From Thetis display.cs:5008 [v2.10.3.13]:
+    //   show_imd_measurements = local_mox && _testing_imd
+    //                           && _show_imd_measurements && displayduplex;
+    if (m_moxOverlay && m_testingIMD && m_showIMDMeasurements && m_displayDuplex) {
+        drawImdOverlay(p, specRect);
+    }
+
     drawFreqScale(p, freqRect);
     if (m_dbmScaleVisible) {
         // drawDbmScale needs the FULL-WIDTH spectrum-vertical rect so the strip
@@ -4248,6 +4262,81 @@ void SpectrumWidget::setMoxOverlay(bool isTx)
                 // markOverlayDirty alone waits for the next natural QRhi
                 // frame and was visibly laggy on bench (the panadapter went
                 // "clear" briefly between cyan RX shadow + orange TX band).
+
+    // Phase 3M-4 Task 12 — IMD overlay show condition includes local_mox.
+    // When MOX flips off, clear EMA state so the next MOX-on transition
+    // re-seeds from raw values (mirrors Thetis display.cs:5680 [v2.10.3.13]
+    // "_ema_dbc != -999" reset path).
+    if (!isTx && m_imdOverlay) {
+        m_imdOverlay->reset();
+    }
+
+    // Phase 3M-4 bench-fix Round 2: log all 4 IMD-overlay gate transitions
+    // so bench testers can see in the terminal exactly which gate is
+    // failing when the overlay doesn't appear.  All four conditions must
+    // be true at paintEvent time for drawImdOverlay to fire (gate at
+    // SpectrumWidget.cpp:1438 + GPU mirror at :4369).
+    qCInfo(lcSpectrum) << "IMD overlay gate: mox=" << m_moxOverlay
+                       << "testIMD=" << m_testingIMD
+                       << "showImd=" << m_showIMDMeasurements
+                       << "duplex=" << m_displayDuplex
+                       << " (after setMoxOverlay)";
+}
+
+// ── Two-tone IMD overlay state slots (Phase 3M-4 Task 12) ──────────────────
+//
+// Wired in MainWindow:
+//   TwoToneController::twoToneActiveChanged    -> setTestingIMD
+//   PureSignal::show2ToneMeasurementsChanged   -> setShowIMDMeasurements
+// Mirrors Thetis Display.TestingIMD (display.cs:296-302 [v2.10.3.13]) and
+// Display.ShowIMDMeasurments (display.cs:304-311 [v2.10.3.13]).
+void SpectrumWidget::setTestingIMD(bool on)
+{
+    if (m_testingIMD == on) {
+        return;
+    }
+    m_testingIMD = on;
+    if (!on && m_imdOverlay) {
+        m_imdOverlay->reset();  // EMA reset, see setMoxOverlay note above.
+    }
+    qCInfo(lcSpectrum) << "IMD overlay gate: mox=" << m_moxOverlay
+                       << "testIMD=" << m_testingIMD
+                       << "showImd=" << m_showIMDMeasurements
+                       << "duplex=" << m_displayDuplex
+                       << " (after setTestingIMD)";
+    update();
+}
+
+void SpectrumWidget::setShowIMDMeasurements(bool on)
+{
+    if (m_showIMDMeasurements == on) {
+        return;
+    }
+    m_showIMDMeasurements = on;
+    if (!on && m_imdOverlay) {
+        m_imdOverlay->reset();
+    }
+    qCInfo(lcSpectrum) << "IMD overlay gate: mox=" << m_moxOverlay
+                       << "testIMD=" << m_testingIMD
+                       << "showImd=" << m_showIMDMeasurements
+                       << "duplex=" << m_displayDuplex
+                       << " (after setShowIMDMeasurements)";
+    update();
+}
+
+void SpectrumWidget::setDisplayDuplex(bool on)
+{
+    // From Thetis console.cs:15363-15369 [v2.10.3.13]:
+    //   private bool _display_duplex = false;
+    //   public bool DisplayDuplex { get; set; }
+    // NereusSDR defaults this to true since the panadapter stays live
+    // during MOX (see SpectrumWidget header note).  Setter is provided for
+    // a potential future Setup checkbox.
+    if (m_displayDuplex == on) {
+        return;
+    }
+    m_displayDuplex = on;
+    update();
 }
 
 // From Thetis display.cs:4840 [v2.10.3.13]:
@@ -4515,6 +4604,138 @@ void SpectrumWidget::drawTxFilterOverlay(QPainter& p, const QRect& specRect)
         }
         p.restore();
     }
+}
+
+// ---------------------------------------------------------------------------
+// drawImdOverlay()
+//
+// Phase 3M-4 Task 12.  Two-tone IMD overlay: peak markers + readout box.
+// Only called when m_moxOverlay && m_testingIMD && m_showIMDMeasurements
+// && m_displayDuplex.
+//
+// Source-first port of Thetis display.cs [v2.10.3.13]:
+//   :5008       show condition (caller gates this — see paintEvent)
+//   :5283-5298  peak detection (delegated to ImdOverlay::detectPeaks)
+//   :5453-5475  peak ellipse markers
+//   :5512-5560  IMD3/IMD5 sort + findImd labeling (delegated to
+//                  ImdOverlay::labelImdProducts)
+//   :5520       readout box rect (260x180 px, X=50, Y=50, R=14)
+//   :5650-5685  3-column readout text (delegated to
+//                  ImdOverlay::formatReadout)
+// ---------------------------------------------------------------------------
+void SpectrumWidget::drawImdOverlay(QPainter& p, const QRect& specRect)
+{
+    if (!m_imdOverlay || m_renderedPixels.isEmpty()) {
+        return;
+    }
+
+    // Peak-detect on the visible bin subset so the X coordinates we get
+    // back are bin offsets relative to firstBin.  Mirrors the existing
+    // drawSpectrum bin-to-pixel mapping at line 1564 [SpectrumWidget.cpp].
+    const auto [firstBin, lastBin] = visibleBinRange(m_renderedPixels.size());
+    const int count = lastBin - firstBin + 1;
+    if (count < 2) {
+        return;
+    }
+
+    std::vector<float> visible;
+    visible.reserve(count);
+    for (int i = 0; i < count; ++i) {
+        visible.push_back(m_renderedPixels[firstBin + i]);
+    }
+
+    // From Thetis display.cs:5217 [v2.10.3.13]: trigger_delta = 10 dB.
+    constexpr float kTriggerDelta = 10.0f;
+    const auto peaks = ImdOverlay::detectPeaks(visible, kTriggerDelta);
+
+    Maximum f0L, f0U, imd3L, imd3U, imd5L, imd5U;
+    if (!ImdOverlay::labelImdProducts(peaks,
+                                      f0L, f0U, imd3L, imd3U, imd5L, imd5U)) {
+        // Failure modes (Thetis display.cs:5666-5673 [v2.10.3.13] fallback
+        // text "Peaks not found !") are intentionally silent here — the
+        // user already sees a stale readout box from the previous frame
+        // until peaks return.  A future polish PR can render a hint.
+        return;
+    }
+    m_imdOverlay->updateReadout(f0L, f0U, imd3L, imd3U, imd5L, imd5U);
+
+    // Map bin indices -> pixel X using the same formula as drawSpectrum.
+    const float xStep = static_cast<float>(specRect.width())
+                      / static_cast<float>(count - 1);
+    auto binToPx = [&](int binIdx) {
+        return specRect.left() + static_cast<float>(binIdx) * xStep;
+    };
+    auto dbmToPx = [&](float dbm) {
+        return static_cast<float>(dbmToY(dbm, specRect));
+    };
+
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    // From Thetis display.cs:5453-5475 [v2.10.3.13] peak markers.
+    // Ellipse colour palette matches the visual companion mockup at
+    // .superpowers/brainstorm/92020-1778073191/content/imd-overlay.html
+    // (Thetis uses m_bDX2_PeakBlob brush).
+    auto drawMarker = [&](const Maximum& m, const QColor& c, float radius) {
+        const QPointF pt(binToPx(m.x), dbmToPx(m.dBm));
+        p.setPen(QPen(c, 1.6));
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(pt, radius, radius);
+    };
+    drawMarker(f0L,   QColor("#ffd24a"), 6.0f);
+    drawMarker(f0U,   QColor("#ffd24a"), 6.0f);
+    drawMarker(imd3L, QColor("#ff8a8a"), 5.0f);
+    drawMarker(imd3U, QColor("#ff8a8a"), 5.0f);
+    drawMarker(imd5L, QColor("#cc6680"), 4.0f);
+    drawMarker(imd5U, QColor("#cc6680"), 4.0f);
+
+    // From Thetis display.cs:5520 [v2.10.3.13]:
+    //   RoundedRectangle rr = new RoundedRectangle();
+    //   rr.Rect = new RectangleF(_two_tone_readings_X_offset, 50, 260, 180);
+    //   rr.RadiusX = 14f; rr.RadiusY = 14f;
+    // _two_tone_readings_X_offset starts at 50 (display.cs:4948 [v2.10.3.13]).
+    // Thetis adjusts the X offset to dodge IMD5 markers (display.cs:5584-5585);
+    // NereusSDR keeps the simple fixed-50 placement for now.
+    constexpr int kBoxX = 50;
+    constexpr int kBoxY = 50;
+    constexpr int kBoxW = 260;
+    constexpr int kBoxH = 180;
+    constexpr int kBoxR = 14;
+    const QRectF box(specRect.left() + kBoxX, specRect.top() + kBoxY,
+                     kBoxW, kBoxH);
+    p.setBrush(QColor(20, 28, 40, 240));
+    p.setPen(QPen(QColor("#5fb0d8"), 1.5));
+    p.drawRoundedRect(box, kBoxR, kBoxR);
+
+    // From Thetis display.cs:5683-5687 [v2.10.3.13] DrawText calls.
+    // 4 columns: "dBm dBc frequency" header (NereusSDR drops the freq
+    // column for now — that requires hz_per_pixel + DDC center plumbing
+    // which the current mockup doesn't model), then label/val1/val2.
+    const auto t = m_imdOverlay->formatReadout();
+    p.setPen(QColor("#cfe1f0"));
+    QFont mono(QStringLiteral("Menlo"));
+    mono.setPointSize(9);
+    mono.setStyleHint(QFont::Monospace);
+    p.setFont(mono);
+
+    // Header row mirrors display.cs:5683 "dBm        dBc           frequency"
+    // (without the frequency column).
+    p.drawText(QPointF(box.left() + 70, box.top() + 16),
+               QStringLiteral("dBm           dBc"));
+
+    // Label / val1 / val2 columns at the same offsets the Thetis box uses
+    // (display.cs:5684-5686 +10/+64/+114 horizontal stride).
+    const QRectF readingsCol(box.left() + 10, box.top() + 28,
+                             box.width() - 20, box.height() - 36);
+    const QRectF val1Col(box.left() + 64, box.top() + 28,
+                         box.width() - 70, box.height() - 36);
+    const QRectF val2Col(box.left() + 130, box.top() + 28,
+                         box.width() - 130, box.height() - 36);
+    p.drawText(readingsCol, Qt::AlignLeft | Qt::TextDontClip, t.readings);
+    p.drawText(val1Col,     Qt::AlignLeft | Qt::TextDontClip, t.val1);
+    p.drawText(val2Col,     Qt::AlignLeft | Qt::TextDontClip, t.val2);
+
+    p.restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -5570,6 +5791,16 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             m_overlayStaticDirty = true;
         }
 
+        // Phase 3M-4 Task 12 — IMD overlay needs live re-rendering each
+        // frame because peak detection runs against the current spectrum
+        // buffer. Force the otherwise-static overlay to rebuild while the
+        // IMD show condition is satisfied. Cost is one QImage repaint per
+        // frame; only paid during PureSignal two-tone calibration.
+        if (m_moxOverlay && m_testingIMD && m_showIMDMeasurements
+                && m_displayDuplex) {
+            m_overlayStaticDirty = true;
+        }
+
         if (m_overlayStaticDirty) {
             m_overlayStatic.fill(Qt::transparent);
             QPainter p(&m_overlayStatic);
@@ -5589,6 +5820,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             // QPainter call site to keep both paths in lockstep.
             if (m_txFilterVisible && m_moxOverlay) {
                 drawTxFilterOverlay(p, specRect);
+            }
+            // Phase 3M-4 Task 12 — IMD overlay (peak markers + readout box).
+            // Show condition mirrors paintEvent (CPU path) and Thetis
+            // display.cs:5008 [v2.10.3.13] verbatim.
+            if (m_moxOverlay && m_testingIMD && m_showIMDMeasurements
+                    && m_displayDuplex) {
+                drawImdOverlay(p, specRect);
             }
             drawBandPlan(p, specRect);
             // Sub-epic E: time-scale + LIVE button on the right edge of the
