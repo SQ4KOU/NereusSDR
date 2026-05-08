@@ -448,8 +448,16 @@ set(CORE_SOURCES
 # NereusSDRVAX HAL plugin via POSIX shared memory. The header is
 # cross-platform-safe (falls through to error stubs off macOS) but the .cpp
 # pulls in <sys/mman.h> / shm_open, so only compile it on Apple targets.
+#
+# MacMicPermission — Objective-C++ helper that calls
+# AVCaptureDevice.requestAccessForMediaType:AVMediaTypeAudio at app launch so
+# macOS surfaces the microphone permission dialog deterministically (issue
+# #203). Without it, the prompt only fires as a side effect of opening a
+# hardware mic, which silently fails on Mac mini / Mac Studio rigs and on
+# machines whose only inputs are audio interfaces.
 if(APPLE)
     list(APPEND CORE_SOURCES src/core/audio/CoreAudioHalBus.cpp)
+    list(APPEND CORE_SOURCES src/core/MacMicPermission.mm)
 endif()
 
 # LinuxPipeBus — Linux-only IAudioBus implementation bridging to PulseAudio /
@@ -703,15 +711,20 @@ endif()
 # the same translation units are compiled once and consumed by both
 # (Phase 3I test infrastructure). Properties on NereusSDRObjs propagate
 # to consumers (PUBLIC) via the CMake INTERFACE; the thin executable just
-# links src/main.cpp on top. Bundles the per-platform APP_ICON_SOURCES so
-# the icon lands in both the .app and the test binaries.
+# links src/main.cpp on top.
+#
+# APP_ICON_SOURCES is intentionally NOT in the OBJECT library: CMake's
+# MACOSX_PACKAGE_LOCATION property only takes effect when the file is a
+# direct source of a MACOSX_BUNDLE TRUE target. OBJECT libraries propagate
+# compiled object files, not bundle-resource sources. Attach the icon to
+# the executable target below so .icns lands in Contents/Resources/ and
+# Windows .rc lands on the linker line.
 # --------------------------------------------------------------------------
 add_library(NereusSDRObjs OBJECT
     ${CORE_SOURCES}
     ${MODEL_SOURCES}
     ${GUI_SOURCES}
     ${RESOURCES}
-    ${APP_ICON_SOURCES}
 )
 
 # Linux-only sources: the PipeWire/pactl first-run + diagnose dialog uses
@@ -722,7 +735,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_sources(NereusSDRObjs PRIVATE src/gui/VaxLinuxFirstRunDialog.cpp)
 endif()
 
-add_executable(NereusSDR src/main.cpp)
+add_executable(NereusSDR src/main.cpp ${APP_ICON_SOURCES})
 target_link_libraries(NereusSDR PRIVATE NereusSDRObjs)
 
 set_target_properties(NereusSDR PROPERTIES
@@ -774,6 +787,12 @@ target_link_libraries(NereusSDRObjs PUBLIC
 if(WIN32)
     # Needed by RadioDiscovery.cpp's setsockopt() call for SO_BROADCAST.
     target_link_libraries(NereusSDR PRIVATE ws2_32)
+endif()
+
+if(APPLE)
+    # AVFoundation provides AVCaptureDevice for the launch-time mic-permission
+    # prompt (src/core/MacMicPermission.mm, issue #203).
+    target_link_libraries(NereusSDRObjs PUBLIC "-framework AVFoundation")
 endif()
 
 if(Qt6SerialPort_FOUND)

@@ -145,6 +145,26 @@ public:
     /// List all profile names currently in the manager (sorted).
     QStringList profileNames() const;
 
+    /// List profile names filtered for the user-facing PA profile combo.
+    ///
+    /// Mirrors Thetis's filter at setup.cs:23341-23344 [v2.10.3.13]:
+    ///   if ((p.IsDefault && p.Model == HardwareSpecific.Model) || !p.IsDefault)
+    ///       comboPAProfile.Items.Add(p.ProfileName);
+    ///
+    /// i.e. the user sees:
+    ///   - exactly one factory-default entry — `Default - <connectedModel>`,
+    ///   - plus every user-customised (non-default) profile.
+    /// All other `Default - *` entries are hidden.  This prevents a user on
+    /// (e.g.) a 7000DLE from accidentally selecting `Default - HERMES`
+    /// (Hermes 41 dB gain row) and over-driving the actual ~50 dB PA.
+    ///
+    /// The Bypass-mode special case at setup.cs:23335-23339 [v2.10.3.13]
+    /// (when the currently-selected profile is `Bypass`, only `Bypass`
+    /// appears in the combo) is also implemented here: if
+    /// `currentSelectedName == "Bypass"`, only `Bypass` is returned.
+    QStringList userVisibleProfileNames(HPSDRModel connectedModel,
+                                         const QString& currentSelectedName = {}) const;
+
     /// The currently-active profile name, or empty string if no MAC scope
     /// has been set / no load has run yet.
     QString activeProfileName() const;

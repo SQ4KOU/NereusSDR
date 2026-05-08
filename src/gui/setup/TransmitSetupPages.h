@@ -15,6 +15,23 @@
 //   2026-05-03 — Phase 3M-3a-iii Task 14: added DexpVoxPage (mirrors
 //                 Thetis tpDSPVOXDE 1:1 — setup.designer.cs:44763-45260
 //                 [v2.10.3.13]).
+//   2026-05-04 — Issue #175 Wave 1: TxProfilesPage placeholder body
+//                 dropped (5 disabled-stub controls with no Thetis
+//                 upstream).  Live TX-profile editor lives at Setup →
+//                 Audio → TX Profile.
+//   2026-05-04 — Issue #175 Wave 1 (cont): PowerPage source-first
+//                 strip-out — dropped dead "SWR Protection" slider stub,
+//                 per-band Tune Power 14-spinbox grid + helpers, Reset
+//                 Tune Power Defaults button + slot, and Block-TX-on-RX
+//                 antennas group.  TX TUN Meter combo items now
+//                 mi0bot-verbatim.
+//   2026-05-07 — Phase 3M-3a-iv post-bench refactor (Option A): dropped
+//                 m_chkAntiVoxSource member from DexpVoxPage; replaced the
+//                 chkAntiVoxSource checkbox with a static info-row label.
+//                 Thetis chkAntiVoxSource (RX vs VAC) does not map to
+//                 NereusSDR's architecture; see TransmitSetupPages.cpp info
+//                 row tooltip for the rationale.  J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -63,9 +80,8 @@
 //============================================================================================//
 
 #include "gui/SetupPage.h"
-#include "models/Band.h"
-
-#include <array>
+#include "models/TransmitModel.h"   // DrivePowerSource enum (Issue #175 Task 8)
+#include "core/HpsdrModel.h"        // HPSDRModel enum + spinbox helpers (Issue #175 Task 8)
 
 class QSlider;
 class QComboBox;
@@ -73,8 +89,9 @@ class QSpinBox;
 class QDoubleSpinBox;
 class QCheckBox;
 class QLabel;
-class QLineEdit;
 class QPushButton;
+class QRadioButton;
+class QButtonGroup;
 
 namespace NereusSDR {
 
@@ -90,18 +107,40 @@ class PowerPage : public SetupPage {
 public:
     explicit PowerPage(RadioModel* model, QWidget* parent = nullptr);
 
+    // Issue #175 Task 8 — reconfigure the udTXTunePower spinbox bounds /
+    // step / decimals / suffix for the given SKU.  Mirrors mi0bot
+    // setup.cs:20328-20331 [v2.10.3.13-beta2] HERMESLITE branch.
+    // Called from the constructor and from RadioModel::currentRadioChanged.
+    void applyHpsdrModel(HPSDRModel m);
+
 private:
     void buildUI();
     void buildPowerGroup();         // H.4: Max Power slider + ATT-on-TX + Force-ATT
-    void buildTunePowerGroup();     // H.4: Per-band tune-power spinboxes
+    void buildTuneGroup();          // Issue #175 Task 8: grpPATune (Tune source + meter + fixed-mode pwr)
     void buildSwrProtectionGroup();
     void buildExternalTxInhibitGroup();
-    void buildBlockTxAntennaGroup();
     void buildHfPaGroup();
+
+    // Issue #175 Task 8 helper — flip enabled state on the Fixed-mode
+    // spinbox so it tracks the active drive source.
+    void onTuneDriveSourceChanged(DrivePowerSource src);
+
+    // Issue #175 PR #194 review fix — SKU-aware unit conversion for the
+    // udTXTunePower Fixed-mode spinbox.  Storage is the int slider scale
+    // (TransmitModel::tunePower(): 0..100 watts on non-HL2, 0..99 mi0bot
+    // sub-step units on HL2).  Display unit polymorphs by SKU:
+    //   - non-HL2: identity (display == stored, watts)
+    //   - HL2:     dB attenuation, formulae from mi0bot setup.cs:5305-5311
+    //              and 9395-9398 [v2.10.3.13-beta2]:
+    //                stored→display: (stored / 3.0 - 33.0) / 2.0
+    //                display→stored: (int)((33.0 + display * 2.0) * 3.0)
+    // Both helpers consult the live TransmitModel::hpsdrModel() so the same
+    // displayed-value cell maps correctly when the connected SKU changes.
+    double tunePowerDisplayFromStored(int stored);
+    int    tunePowerStoredFromDisplay(double display);
 
     // Section: Power (H.4 — wired)
     QSlider*   m_maxPowerSlider{nullptr};        // 0–100 W — wired to TransmitModel::setPower
-    QSlider*   m_swrProtectionSlider{nullptr};   // SWR threshold (future)
 
     // Section: ATT-on-TX (H.4 — wired)
     // chkATTOnTX — Thetis setup.designer.cs:5926-5939 [v2.10.3.13] (tpAlexAntCtrl).
@@ -112,15 +151,17 @@ private:
     // //MW0LGE [2.9.0.7] added  [original inline comment from console.cs:29285]
     QCheckBox* m_chkForceAttWhenPsOff{nullptr};
 
-    // Section: Per-band tune power (H.4 — wired)
-    // NereusSDR extension: exposes tunePower_by_band[] (console.cs:12094 [v2.10.3.13])
-    // per-band in the setup dialog. Thetis uses a single udTXTunePower (setup.cs:5262
-    // [v2.10.3.13]) that updates one slot on band change; NereusSDR lets the user
-    // view and edit all 14 slots simultaneously.
-    // HF amateur + GEN/WWV/XVTR only (Band::SwlFirst == 14).  SWL bands
-    // (Phase 3L extension) have no TX power slot — TX is HF-only on HL2.
-    static constexpr int kBandCount = static_cast<int>(Band::SwlFirst);  // 14
-    std::array<QSpinBox*, kBandCount> m_tunePwrSpins{};
+    // Section: grpPATune "Tune" group (Issue #175 Task 8)
+    // From mi0bot-Thetis setup.designer.cs:47874-47930 [v2.10.3.13-beta2].
+    // Three drive-source radios + TX TUN Meter combo + Fixed-mode tune power
+    // spinbox.  Spinbox bounds polymorph by SKU via applyHpsdrModel().
+    QGroupBox*       m_grpPATune{nullptr};
+    QRadioButton*    m_radFixedDrive{nullptr};
+    QRadioButton*    m_radDriveSlider{nullptr};
+    QRadioButton*    m_radTuneSlider{nullptr};
+    QButtonGroup*    m_tuneDriveButtons{nullptr};
+    QComboBox*       m_comboTxTunMeter{nullptr};
+    QDoubleSpinBox*  m_fixedTunePwrSpin{nullptr};
 
     // Section: SWR Protection (Task 9)
     // grpSWRProtectionControl per setup.designer.cs:5793-5924 [v2.10.3.13]
@@ -135,12 +176,6 @@ private:
     QCheckBox* m_chkTXInhibit{nullptr};
     QCheckBox* m_chkTXInhibitReverse{nullptr};
 
-    // Section: Block TX on RX antennas (Task 11)
-    // chkBlockTxAnt2/3 per setup.designer.cs:6704-6724 [v2.10.3.13]
-    // (NereusSDR-original labels — Thetis ships unlabelled column-header checkboxes)
-    QCheckBox* m_chkBlockTxAnt2{nullptr};
-    QCheckBox* m_chkBlockTxAnt3{nullptr};
-
     // Section: PA Control (Task 11)
     // chkHFTRRelay per setup.designer.cs:5780-5791 [v2.10.3.13]
     QCheckBox* m_chkHFTRRelay{nullptr};
@@ -148,6 +183,14 @@ private:
 
 // ---------------------------------------------------------------------------
 // Transmit > TX Profiles
+//
+// Issue #175 Wave 1 follow-up — page body reduced to a single explanatory
+// label.  The live TX-profile editor lives at Setup → Audio → TX Profile
+// (TxProfileSetupPage, fully wired to MicProfileManager).  Thetis ships
+// grpTXProfile (combo + Save/Delete) directly on tpTransmit at mi0bot
+// setup.designer.cs:47829-47836 [v2.10.3.13-beta2]; no dedicated "TX
+// Profiles" tab page exists upstream.  Leaf retained in SetupDialog tree
+// per JJ's direction (IA reshape decisions deferred to a separate audit).
 // ---------------------------------------------------------------------------
 class TxProfilesPage : public SetupPage {
     Q_OBJECT
@@ -156,20 +199,6 @@ public:
 
 private:
     void buildUI();
-
-    // Section: Profile
-    QLabel*      m_profileListLabel{nullptr};  // placeholder for future list
-    QLineEdit*   m_nameEdit{nullptr};
-    QPushButton* m_newBtn{nullptr};
-    QPushButton* m_deleteBtn{nullptr};
-    QPushButton* m_copyBtn{nullptr};
-
-    // ── Phase 3M-3a-ii Batch 5: Compression section removed.
-    // CPDR + CESSB controls now live on Setup → DSP → CFC (CESSB group)
-    // and on the dashboard / TxApplet [PROC] toggle.  The orphan
-    // m_compressorToggle / m_gainSlider / m_cessbToggle disabled stubs
-    // violated master-design meta rule §2.2.1 (no half-shipped
-    // placeholders) and have been removed.
 };
 
 // ---------------------------------------------------------------------------
@@ -297,6 +326,25 @@ private:
     QCheckBox*      m_chkSCFEnable{nullptr};
     QSpinBox*       m_udSCFLowCut{nullptr};             // Hz      int (range 100..10000, step 10)
     QSpinBox*       m_udSCFHighCut{nullptr};            // Hz      int (range 100..10000, step 10)
+
+    // ── grpAntiVOX ───────────────────────────────────────────────────────────
+    // Mirrors Thetis grpAntiVOX (setup.designer.cs:44631-44760 [v2.10.3.13]).
+    //
+    // Phase 3M-3a-iv Task 10 landed Tau (ms) only.  3M-3a-iv scope-expansion
+    // adds chkAntiVoxEnable / udAntiVoxGain so the bench verification matrix
+    // is runnable from a fresh install.  Layout order matches Thetis Y-coords:
+    // Enable (Y=19) -> [Source info row, NereusSDR-spin] -> Gain (Y=71)
+    // -> Tau (Y=96).  3M-3a-iv post-bench refactor (Option A) replaced the
+    // chkAntiVoxSource checkbox with a static info-row label explaining the
+    // architectural divergence from Thetis (VAX is not a mic-feedback path,
+    // so the audio output device is the only valid source).
+    QCheckBox*      m_chkAntiVoxEnable{nullptr};        // chkAntiVoxEnable
+    // NereusSDR-original divergence (already shipped in 3M-1b H.3): TM uses
+    // int dB rather than Thetis decimal-with-0.1-step.  Default 0 dB rather
+    // than Thetis +10 dB.  Both are kept here for consistency with shipped
+    // behavior; full Thetis parity (decimal + default 10) is a follow-up.
+    QSpinBox*       m_udAntiVoxGain{nullptr};           // dB      int (range -60..60)
+    QSpinBox*       m_udAntiVoxTau{nullptr};            // ms      int (range 1..500)
 };
 
 } // namespace NereusSDR

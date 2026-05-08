@@ -94,9 +94,10 @@ private slots:
         QVERIFY(defs.contains(QStringLiteral("DEXP_HighCutHz")));
         QVERIFY(defs.contains(QStringLiteral("DEXP_SideChannelFilterEnabled")));
 
-        // Total bundle was 96 (CFC round-trip baseline);
-        // adding 11 DEXP keys brings it to 107.
-        QCOMPARE(defs.size(), 107);
+        // Total bundle was 95 (CFC round-trip baseline — was 96, dropped
+        // AntiVox_Source_VAX in 3M-3a-iv Option A refactor);
+        // adding 11 DEXP keys brings it to 106.
+        QCOMPARE(defs.size(), 106);
     }
 
     // =========================================================================

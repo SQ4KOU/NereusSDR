@@ -3,22 +3,44 @@
 **A cross-platform SDR console for OpenHPSDR radios**
 
 > [!IMPORTANT]
-> 📖 **Alpha testers — start here:** [docs/debugging/v0.3.1-alpha-tester-smoketest.md](docs/debugging/v0.3.1-alpha-tester-smoketest.md)
+> 📖 **Alpha testers, start here:** [docs/debugging/v0.3.2-alpha-tester-smoketest.md](docs/debugging/v0.3.2-alpha-tester-smoketest.md)
 >
-> v0.3.1 carries forward everything v0.3.0 was supposed to deliver (SSB voice
-> transmit with the broadcast-grade audio chain, the rebuilt VPN-reach
-> connection workflow, the expanded Hermes Lite 2 configuration tabs, the
-> PA-voltage regression fix, the status-bar redesign) plus the post-0.3.0
-> polish: per-profile TX bandwidth control, user-editable filter presets,
-> TX filter overlay on the panadapter and waterfall, mode-aware filter
-> grids, the per-board PA forward-power calibration system, and the
-> Hermes Lite 2 ATT/filter safety audit closure. **HL2 SSB transmit is now
-> bench-cleared.** Earlier-release walkthroughs remain at
+> v0.3.2 is a substantial point release on top of v0.3.1 with four pieces of
+> work landing together:
+>
+> 1. **DEXP/VOX speech processor (3M-3a-iii):** VOX and DEXP work
+>    end-to-end for the first time. The DSP is ported from Thetis, the VOX
+>    callback is wired to the MOX state machine, and a new Setup → Transmit
+>    → DEXP/VOX page mirrors Thetis 1:1.
+> 2. **Hermes Lite 2 maturity push:** RF and Tune Power slider encoding
+>    aligned with the mi0bot fork (RF Power 0 to 90 step 6, Tune Power 0 to
+>    99 step 3, per-band grid in dB). Connect-time init parity (resolves
+>    cold-start issues). A-ATT label, N2ADR default, RX attenuator max +31
+>    dB, P1 ADC overload byte offset, HL2 PA fwd/rev scaling all corrected.
+> 3. **PA Setup parity + safety hotfix:** Setup → PA pages rebuilt for
+>    full Thetis parity (PA Gain page with auto-cal sweep, Watt Meter page
+>    enhancements, PA Values page gap closure). Kernel of the work is also
+>    a PA over-drive safety hotfix for high-gain finals (notably
+>    ANAN-8000DLE) at low TUNE-slider positions.
+> 4. **Persistence and stability fixes:** per-band TX RF Power, OC matrix
+>    pins, mic-jack PTT default, TUN-off cold-start, audio bus reconfigure,
+>    NR3 dev-build path, step-attenuator MOX gating, SWR foldback topology
+>    correction.
+>
+> **Existing users: no action required.** Saved radios, mic profiles, DSP
+> settings, PA cal-points, and per-band tune power carry forward exactly as
+> they were.
+>
+> Returning testers: most of v0.3.1's surface didn't change. The v0.3.1
+> doc at [docs/debugging/v0.3.1-alpha-tester-smoketest.md](docs/debugging/v0.3.1-alpha-tester-smoketest.md)
+> is still the right reference for the connection workflow, RX, the speech
+> processor, the filter preset store, the TX filter overlay, and the
+> per-board PA cal grid. Earlier-release walkthroughs remain at
 > [docs/debugging/v0.2.3-alpha-tester-smoketest.md](docs/debugging/v0.2.3-alpha-tester-smoketest.md)
 > and [docs/debugging/alpha-tester-hl2-smoke-test.md](docs/debugging/alpha-tester-hl2-smoke-test.md)
 > for historical reference and unchanged receive-side coverage.
 >
-> — J.J. Boyd ~ KG4VCF
+> J.J. Boyd ~ KG4VCF
 
 [![CI](https://github.com/boydsoftprez/NereusSDR/actions/workflows/ci.yml/badge.svg)](https://github.com/boydsoftprez/NereusSDR/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
@@ -63,17 +85,16 @@ sha256sum -c SHA256SUMS.txt
 > launch, and Windows users will see a SmartScreen warning to click through.
 > Linux is unaffected. See the per-release notes for details.
 >
-> **v0.3.1 status:** macOS DMG and PKG are Apple Developer ID-signed and
-> notarized — Gatekeeper accepts them on first launch. Windows installer
+> **v0.3.2 status:** macOS DMG and PKG remain Apple Developer ID-signed and
+> notarized; Gatekeeper accepts them on first launch. Windows installer
 > remains unsigned (Authenticode certificate pending); SmartScreen "More
-> info → Run anyway" still applies. The v0.3.0 Windows portable bundle was
-> missing MinGW runtime DLLs; v0.3.1 fixes the bundle.
+> info → Run anyway" still applies.
 
 ---
 
 ## Current Status
 
-**Current release: v0.3.1** (2026-05-03). The first transmit-capable build people will actually use — v0.3.0 was pulled within hours of release for a packaging fix and effectively never reached testers. v0.3.1 carries forward everything 0.3.0 was supposed to deliver (SSB voice transmit on every supported board, the rebuilt VPN-reach connection workflow, the expanded HL2 configuration surface, status-bar redesign, signed/notarized macOS builds) **plus** the post-0.3.0 polish: **per-profile TX bandwidth control** (TxApplet TX BW spinboxes, TxProfileSetupPage TX Filter group, debounced WDSP path, FilterLow/FilterHigh on every mic profile), a **user-editable filter preset store** (per-mode lists in Setup → Filters → Filter Presets, mode-aware preset grid on RxApplet, shift+click to snap TX BW to RX), **TX filter overlay on the panadapter and waterfall** (orange when transmitting, cyan otherwise, z-ordered under bandplan/frequency labels), **per-board PA forward-power calibration** (PaCalProfile model, CalibrationController, Setup → PA → Watt Meter and PA Values pages, calibrated FWD reading routed through interpolation), and the **Setup IA reshape** that mirrors Thetis (PA top-level category, Hardware → Calibration always visible). The **Hermes Lite 2 ATT/filter safety audit closed** — HL2 SSB transmit is now bench-cleared. Earlier-shipped 3G RX-Epic, 3P-A…I antenna integration, 3O VAX + Linux PipeWire, and the v0.2.x maintenance fixes still apply. **3M-2 CW TX** is next up; **3M-4 PureSignal**, **3F multi-panadapter**, **3H skins**, **3J TCI**, **3K CAT** remain not-started.
+**Current release: v0.3.2** (2026-05-05). Substantial point release on top of v0.3.1 with four pieces of work landing together: **3M-3a-iii DEXP/VOX speech processing** (VOX and DEXP work end-to-end for the first time; the DSP wasn't actually wired up in v0.3.1 even though the menus existed), a **Hermes Lite 2 maturity push** (RF/Tune Power slider rework matching the mi0bot fork: RF Power 0 to 90 step 6, Tune Power 0 to 99 step 3, per-band Tune Power grid in dB; connect-time init parity; A-ATT label, N2ADR default, RX att max +31 dB, P1 ADC overload byte offset, HL2 PA fwd/rev scaling all corrected), **PA Setup parity + safety hotfix** (Setup → PA pages rebuilt for full Thetis parity; the kernel doubles as a PA over-drive safety hotfix for high-gain finals like the ANAN-8000DLE), and a **long tail of persistence and stability fixes** (per-band TX RF Power, OC matrix pins, mic-jack PTT default, TUN-off cold-start, audio bus reconfigure, NR3 dev-build path). **v0.3.1** (2026-05-03) carried forward everything 0.3.0 was supposed to deliver plus per-profile TX bandwidth control, the user-editable filter preset store, TX filter overlay on the panadapter and waterfall, the per-board PA forward-power calibration system, and the Setup IA reshape. **HL2 SSB transmit is bench-cleared** since v0.3.1's ATT/filter safety audit. Earlier-shipped 3G RX-Epic, 3P-A…I antenna integration, 3O VAX + Linux PipeWire, and the v0.2.x maintenance fixes still apply. **3M-2 CW TX** is next up; **3M-4 PureSignal**, **3F multi-panadapter**, **3H skins**, **3J TCI**, **3K CAT** remain not-started.
 
 ### What's working end-to-end today
 

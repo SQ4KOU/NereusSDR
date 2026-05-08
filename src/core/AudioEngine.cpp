@@ -92,6 +92,15 @@
 //                 returns to a pure drain (no accumulator side effects).
 //                 TX pump now lives in src/core/TxWorkerThread.{h,cpp}.
 //                 Plan: docs/architecture/phase3m-1c-tx-pump-architecture-plan.md
+//   2026-05-07 — Issue #201 (master-mute echo tail) by J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.  setMasterMuted(true)
+//                 now calls m_speakersBus->flush() under m_speakersBusMutex on
+//                 the false→true transition so already-queued samples in the
+//                 PortAudio output ring don't keep draining out the device
+//                 after the mute click — surfaced as a ~1 s "echo" tail on
+//                 macOS Intel / Core Audio.  Pairs with new IAudioBus::flush()
+//                 (default no-op) and PortAudioBus::flush() (atomic
+//                 ringRead := ringWrite).
 // =================================================================
 
 #include "AudioEngine.h"
@@ -1024,7 +1033,11 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // accumulate() above and the VAX tap earlier in this method run
     // unconditionally, so 3rd-party apps consuming a VAX channel keep
     // receiving audio while the local monitor is muted. No alloc, no
-    // logging — RT-safety preserved.
+    // logging — RT-safety preserved.  setMasterMuted(true) also flushes
+    // the speakers bus's queued samples (issue #201) so already-buffered
+    // pre-mute audio doesn't keep draining out the device after the
+    // gate engages — see PortAudioBus::flush() and the call site in
+    // setMasterMuted().
     //
     // Sub-Phase 12 live-reconfig: try_lock the speakers bus mutex only
     // around the push itself.  Previously this was held for the entire
@@ -1219,9 +1232,36 @@ void AudioEngine::setMasterMuted(bool muted)
     // would not synchronize the read-side observation order on weak
     // memory models.
     const bool prev = m_masterMuted.exchange(muted, std::memory_order_acq_rel);
-    if (prev != muted) {
-        emit masterMutedChanged(muted);
+    if (prev == muted) {
+        return;
     }
+
+    // Issue #201 (macOS Intel / Core Audio): on the false→true
+    // transition, drop any samples already queued in the speakers bus's
+    // internal ring.  rxBlockReady's mute gate stops NEW pushes, but
+    // the PortAudio output ring (1 s capacity — see PortAudioBus.cpp)
+    // can hold up to a second of pre-mute audio that would otherwise
+    // keep playing out the device after the click, surfacing as a
+    // ~1 s "echo" tail.  The flush atomically equalizes the ring's
+    // read/write cursors so the next paCallback iteration sees no
+    // unread samples and outputs silence.  No flush on unmute — the
+    // DSP thread resuming pushes is enough, and a flush there would
+    // create an audible click.
+    //
+    // Hold m_speakersBusMutex around the flush so a concurrent
+    // setSpeakersConfig (which tears down + rebuilds m_speakersBus)
+    // can't free the bus out from under us.  rxBlockReady try_locks
+    // this same mutex; ≤1 ms of dropped speakers-push from contention
+    // here is inaudible (and only happens on the rare race of mute +
+    // device-reconfigure simultaneously).
+    if (muted) {
+        std::lock_guard<std::mutex> lk(m_speakersBusMutex);
+        if (m_speakersBus) {
+            m_speakersBus->flush();
+        }
+    }
+
+    emit masterMutedChanged(muted);
 }
 
 // Plan: 3M-1b E.4. Pre-code review §10.3 + §10.4.

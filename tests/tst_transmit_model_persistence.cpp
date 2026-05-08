@@ -141,13 +141,8 @@ private slots:
         QCOMPARE(t.antiVoxGainDb(), 0);
     }
 
-    void firstRunDefaults_antiVoxSourceVax_false()
-    {
-        TransmitModel t;
-        t.loadFromSettings(kMacA);
-        // Default false — audio.cs:446 [v2.10.3.13]
-        QVERIFY(!t.antiVoxSourceVax());
-    }
+    // 3M-3a-iv post-bench refactor (Option A): firstRunDefaults_antiVoxSourceVax_false
+    // removed alongside the antiVoxSourceVax property.
 
     void firstRunDefaults_monitorVolume_half()
     {
@@ -382,17 +377,8 @@ private slots:
         QCOMPARE(t2.antiVoxGainDb(), 12);
     }
 
-    void roundTrip_antiVoxSourceVax()
-    {
-        {
-            TransmitModel t;
-            t.loadFromSettings(kMacA);
-            t.setAntiVoxSourceVax(true);  // flip from default false
-        }
-        TransmitModel t2;
-        t2.loadFromSettings(kMacA);
-        QVERIFY(t2.antiVoxSourceVax());
-    }
+    // 3M-3a-iv post-bench refactor (Option A): roundTrip_antiVoxSourceVax
+    // removed alongside the antiVoxSourceVax property.
 
     void roundTrip_monitorVolume()
     {

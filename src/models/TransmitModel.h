@@ -5,7 +5,119 @@
 // Ported from Thetis source:
 //   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
 //
+// Ported from mi0bot-Thetis source:
+//   Project Files/Source/Console/console.cs:47660-47673, 47666, 47775-47778
+//     (HL2 setPowerUsingTargetDbm tune-slider sub-step DSP modulation;
+//      setTxPostGenToneMag property/signal; computeAudioVolume HL2 branch)
+//   original licence from mi0bot-Thetis source is included below
+//
 // =================================================================
+// --- From console.cs (Thetis v2.10.3.13) ---
+
+//=================================================================
+// console.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
+// Credit is given to Sizenko Alexander of Style-7 (http://www.styleseven.com/) for the Digital-7 font.
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to:
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Modifications to support the Behringer Midi controllers
+// by Chris Codella, W2PA, May 2017.  Indicated by //-W2PA comment lines.
+// Modifications for using the new database import function.  W2PA, 29 May 2017
+// Support QSK, possible with Protocol-2 firmware v1.7 (Orion-MkI and Orion-MkII), and later.  W2PA, 5 April 2019
+// Modfied heavily - Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+// Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
+
+// --- From mi0bot-Thetis console.cs [v2.10.3.13-beta2] ---
+
+//=================================================================
+// console.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
+// Credit is given to Sizenko Alexander of Style-7 (http://www.styleseven.com/) for the Digital-7 font.
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to:
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Modifications to support the Behringer Midi controllers
+// by Chris Codella, W2PA, May 2017.  Indicated by //-W2PA comment lines.
+// Modifications for using the new database import function.  W2PA, 29 May 2017
+// Support QSK, possible with Protocol-2 firmware v1.7 (Orion-MkI and Orion-MkII), and later.  W2PA, 5 April 2019
+// Modfied heavily - Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+// Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
+
 // Modification history (NereusSDR):
 //   2026-04-26 — tunePowerByBand[14] + per-MAC persistence (G.3, Phase 3M-1a)
 //                 ported by J.J. Boyd (KG4VCF), with AI-assisted transformation
@@ -99,62 +211,34 @@
 //                 ported — sentinel fallback in computeAudioVolume
 //                 catches Band::XVTR.  J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-05-04 — Issue #175: HL2 TX mi0bot parity port.  Declares
+//                 setTxPostGenToneMag property + signal; declares
+//                 m_hpsdrModel field + setHpsdrModel/hpsdrModel
+//                 accessors used by polymorphic [0, 99] HL2 clamp in
+//                 setTunePowerForBand and (post-review) setTunePower /
+//                 load.  Cites mi0bot-Thetis console.cs:47660-47673 +
+//                 47775-47778 [v2.10.3.13-beta2].  J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-05-04 — Issue #175 review fix: declares the global Fixed-mode
+//                 setTunePower clamp now polymorphs (impl in .cpp).
+//                 Multi-source NereusSDR header block above + appended
+//                 mi0bot console.cs verbatim header below complete the
+//                 GPL attribution.  J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-05-07 — Phase 3M-3a-iv post-bench refactor (Option A): dropped
+//                 antiVoxSourceVax property + setter + signal + member +
+//                 persistence (NereusSDR-architectural divergence from
+//                 Thetis chkAntiVoxSource at setup.designer.cs:44646-44657
+//                 [v2.10.3.13]).  VAX is a digital-mode app bus with no
+//                 mic-feedback path, so the audio output device is the only
+//                 valid anti-VOX cancellation reference; there is no user
+//                 choice to expose.  J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
-
-//=================================================================
-// console.cs
-//=================================================================
-// Thetis is a C# implementation of a Software Defined Radio.
-// Copyright (C) 2004-2009  FlexRadio Systems
-// Copyright (C) 2010-2020  Doug Wigley
-// Credit is given to Sizenko Alexander of Style-7 (http://www.styleseven.com/) for the Digital-7 font.
-//
-// This program is free software; you can redistribute it and/or
-// modify it under the terms of the GNU General Public License
-// as published by the Free Software Foundation; either version 2
-// of the License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program; if not, write to the Free Software
-// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
-//
-// You may contact us via email at: sales@flex-radio.com.
-// Paper mail may be sent to:
-//    FlexRadio Systems
-//    8900 Marybank Dr.
-//    Austin, TX 78750
-//    USA
-//
-//=================================================================
-// Modifications to support the Behringer Midi controllers
-// by Chris Codella, W2PA, May 2017.  Indicated by //-W2PA comment lines.
-// Modifications for using the new database import function.  W2PA, 29 May 2017
-// Support QSK, possible with Protocol-2 firmware v1.7 (Orion-MkI and Orion-MkII), and later.  W2PA, 5 April 2019
-// Modfied heavily - Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
-//
-//============================================================================================//
-// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
-// ------------------------------------------------------------------------------------------ //
-// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
-// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
-// right to use, license, and distribute such code under different terms, including           //
-// closed-source and proprietary licences, in addition to the GNU General Public License      //
-// granted above. Nothing in this statement restricts any rights granted to recipients under  //
-// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
-// its original terms and is not affected by this dual-licensing statement in any way.        //
-// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
-//============================================================================================//
-
-// Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
-
 #pragma once
 
 #include "Band.h"
+#include "core/HpsdrModel.h"
 #include "core/WdspTypes.h"
 #include "core/audio/CompositeTxMicRouter.h"
 
@@ -303,9 +387,20 @@ public:
     int tunePowerForBand(Band band) const;
 
     /// Set the tune-power value (watts) for the given band.
-    /// Clamped to [0, 100].  Emits tunePowerByBandChanged when the value
-    /// actually changes.  No-op for out-of-range band values.
+    /// Clamp ceiling polymorphs by SKU: HERMESLITE [0,99], others [0,100].
+    /// Emits tunePowerByBandChanged when the value actually changes.
+    /// No-op for out-of-range band values.
     void setTunePowerForBand(Band band, int watts);
+
+    /// Return the connected radio model (defaults to HPSDRModel::FIRST).
+    /// Used to polymorph SKU-specific behaviour (e.g. tune-power clamp
+    /// ceiling, HL2 sub-step DSP modulation).
+    HPSDRModel hpsdrModel() const noexcept { return m_hpsdrModel; }
+
+    /// Set the connected radio model.  Call before setTunePowerForBand or
+    /// setPowerUsingTargetDbm to engage SKU-specific behaviour.
+    /// No signal needed for Task 6 — wired from RadioModel in Task 10.
+    void setHpsdrModel(HPSDRModel m) noexcept { m_hpsdrModel = m; }
 
     /// Set the per-MAC AppSettings scope.  Must be called before load() / save().
     /// Mirrors the AlexController::setMacAddress() pattern.
@@ -438,9 +533,16 @@ public:
     /// placement on TransmitModel matches Thetis topology
     /// (Console::SetPowerUsingTargetDBM is a Console method) and lets
     /// Phase 3C's setPowerUsingTargetDbm wrapper call it inline.
+    /// `model` selects between the legacy NereusSDR-original sentinel-fallback
+    /// path and mi0bot's HL2-specific audio-volume formula
+    /// ((hl2Power * gbb/100) / 93.75 — see implementation comment).
+    /// Defaults to HPSDRModel::FIRST so the legacy 3-arg call sites keep
+    /// working unchanged; HL2 callers (RadioModel TX path) thread the live
+    /// hardware model through.  Issue #175 Task 5.
     double computeAudioVolume(const PaProfile& profile,
                               Band band,
-                              int sliderWatts) const noexcept;
+                              int sliderWatts,
+                              HPSDRModel model = HPSDRModel::FIRST) const noexcept;
 
     // ── Two-tone active state (#167 Phase 3C scaffolding) ────────────────
     //
@@ -486,6 +588,17 @@ public:
     // defaults to 0 which is non-functional).
     int  tunePower() const noexcept { return m_tunePower; }
     void setTunePower(int watts);
+
+    // ── HL2 sub-step DSP audio-gain modulation (#175 Task 3) ─────────────────
+    //
+    // From mi0bot-Thetis console.cs:47666 [v2.10.3.13-beta2]:
+    //   SetTXAPostGenToneMag(0, postGenToneMag);
+    // HL2 sub-step DSP audio-gain modulation parameter. Set by
+    // setPowerUsingTargetDbm in HL2 tune-slider mode. Propagates to
+    // WDSP via TxChannel::setPostGenToneMag (Task 10). Range 0.4..0.9999 on
+    // HL2 sub-step path; 1.0 means "no modulation" (default, used on non-HL2).
+    double txPostGenToneMag() const noexcept { return m_txPostGenToneMag; }
+    void   setTxPostGenToneMag(double mag);
 
     /// Inject the StepAttenuatorController for the ATT-on-TX safety gate.
     /// nullptr -> gate becomes no-op (used in tests + before RadioModel
@@ -547,11 +660,16 @@ public:
     ///   wire_byte = clamp(int(audioVolume * 1.02 * 255), 0, 255)
     ///                                                    // audio.cs:268
     ///   iq_gain   = audioVolume * swrProtect             // cmaster.cs:1117
+    /// `model` selects radio-specific TUNE_SLIDER behavior (Issue #175 Task 4).
+    /// HERMESLITE engages the mi0bot HL2 sub-step DSP audio-gain modulation
+    /// path (console.cs:47660-47673 [v2.10.3.13-beta2]); every other value
+    /// (default FIRST = -1 sentinel) leaves the slider value untouched.
     TxPowerResult setPowerUsingTargetDbm(const PaProfile& activeProfile,
                                          Band currentBand,
                                          bool bSetPower,
                                          bool bFromTune,
-                                         bool bTwoTone);
+                                         bool bTwoTone,
+                                         HPSDRModel model = HPSDRModel::FIRST);
 
     /// Restore all per-band tune-power values from AppSettings under the
     /// current MAC scope.  No-op when no MAC has been set.
@@ -755,13 +873,6 @@ public:
 
     // ── Anti-VOX properties (3M-1b C.4) ──────────────────────────────────────
     //
-    // Porting from Thetis audio.cs:446-454 [v2.10.3.13]:
-    //   private static bool antivox_source_VAC = false;
-    //   public static bool AntiVOXSourceVAC {
-    //     get { return antivox_source_VAC; }
-    //     set { antivox_source_VAC = value; cmaster.CMSetAntiVoxSourceWhat(); }
-    //   }
-    //
     // Porting from Thetis setup.designer.cs:44699-44728 [v2.10.3.13]:
     //   udAntiVoxGain.Minimum = decimal{60,0,0,-2147483648} = -60
     //   udAntiVoxGain.Maximum = decimal{60,0,0,0}           = +60
@@ -771,16 +882,16 @@ public:
     //   cmaster.SetAntiVOXGain(0, Math.Pow(10.0, (double)udAntiVoxGain.Value / 20.0));
     //   (WDSP wiring arrives in Phase H.3; model just stores + signals.)
     //
-    // "VAC->VAX" rename: Thetis calls this antivox_source_VAC (Virtual Audio
-    // Cable, i.e. the IVAC-mediated digital-mode TX path).  NereusSDR's
-    // equivalent is VAX (Virtual Audio Crossbar -- different design, but same
-    // conceptual role).  The rename keeps naming consistent with the rest of
-    // the project.  The default (false = use local-RX) is identical to Thetis.
-    //
     // AppSettings persistence arrives in Phase L.2.
-    // WDSP wiring (SetAntiVOXGain + CMSetAntiVoxSourceWhat) arrives in Phase H.3.
-    // Full VAX-source state machine (RX2 / dual-VAX source composition)
-    // is deferred to 3M-3a.
+    //
+    // 3M-3a-iv post-bench refactor (Option A): the source-selector property
+    // (antiVoxSourceVax) and its associated plumbing have been removed.
+    // Thetis chkAntiVoxSource at setup.designer.cs:44646-44657 [v2.10.3.13]
+    // selects between RX and VAC as the anti-VOX cancellation reference;
+    // that choice does not map to NereusSDR's architecture, where VAX is
+    // a digital-mode app bus with no mic-feedback path and the audio output
+    // device is therefore the only valid anti-VOX source.  See commit message
+    // and DexpVoxPage info-row for the architectural rationale.
 
     /// Anti-VOX gain in dB.  Clamped to [kAntiVoxGainDbMin, kAntiVoxGainDbMax].
     /// Default 0 dB -- NereusSDR-original safe starting point.
@@ -792,16 +903,6 @@ public:
     ///   udAntiVoxGain.Minimum = -60, udAntiVoxGain.Maximum = 60.
     int antiVoxGainDb() const noexcept { return m_antiVoxGainDb; }
 
-    /// Anti-VOX source selector.
-    /// false = use local-RX (default; matches Thetis
-    ///         audio.cs:446 [v2.10.3.13]: antivox_source_VAC = false).
-    /// true  = use VAX audio (NereusSDR-renamed; was VAC in Thetis).
-    ///
-    /// Path-agnostic anti-VOX (default false = local-RX) is implemented in
-    /// Phase H.3 via CMSetAntiVoxSourceWhat port.  The full VAX-source state
-    /// machine is deferred to 3M-3a.
-    bool antiVoxSourceVax() const noexcept { return m_antiVoxSourceVax; }
-
     // Anti-VOX gain range constants.
     // From Thetis setup.designer.cs:44708-44717 [v2.10.3.13]:
     //   udAntiVoxGain.Minimum = decimal{60,0,0,-2147483648} = -60
@@ -809,6 +910,61 @@ public:
     //   (DecimalPlaces=1; display unit is x0.1 dB; NereusSDR stores as int dB.)
     static constexpr int kAntiVoxGainDbMin = -60;
     static constexpr int kAntiVoxGainDbMax =  60;
+
+    // ── Anti-VOX detector smoothing tau (Phase 3M-3a-iv Task 8) ──────────
+    //
+    // Porting from Thetis setup.designer.cs:44661-44688 [v2.10.3.13]
+    // (udAntiVoxTau):
+    //   udAntiVoxTau.Minimum   = decimal{1,0,0,0}   = 1
+    //   udAntiVoxTau.Maximum   = decimal{500,0,0,0} = 500
+    //   udAntiVoxTau.Increment = decimal{1,0,0,0}   = 1
+    //   udAntiVoxTau.Value     = decimal{20,0,0,0}  = 20
+    //   ToolTip: "Time-constant used in smoothing Anti-VOX data"
+    //
+    // The model stores the detector smoothing time-constant in milliseconds.
+    // RadioModel wires antiVoxTauMsChanged → MoxController::setAntiVoxTau in
+    // Task 9; MoxController converts to seconds (×1e-3) and forwards to the
+    // TX worker thread which calls the WDSP DEXP detector setter.
+    static constexpr int kAntiVoxTauMsMin     = 1;
+    static constexpr int kAntiVoxTauMsMax     = 500;
+    static constexpr int kAntiVoxTauMsDefault = 20;
+
+    Q_PROPERTY(int antiVoxTauMs READ antiVoxTauMs WRITE setAntiVoxTauMs
+                                NOTIFY antiVoxTauMsChanged)
+
+    /// Anti-VOX detector smoothing time-constant in ms.
+    /// Clamped to [kAntiVoxTauMsMin, kAntiVoxTauMsMax].
+    /// Default kAntiVoxTauMsDefault matches Thetis udAntiVoxTau.Value=20
+    /// (setup.designer.cs:44682 [v2.10.3.13]).
+    int antiVoxTauMs() const noexcept { return m_antiVoxTauMs; }
+
+    // ── Anti-VOX run flag (3M-3a-iv scope-expansion) ──────────────────────
+    //
+    // From Thetis setup.designer.cs:44740-44751 [v2.10.3.13]: chkAntiVoxEnable
+    // is the master enable for the WDSP DEXP anti-VOX detector.  Default
+    // unchecked (no .Checked= setter in Designer).
+    //
+    // Handler at setup.cs:18980-18984 [v2.10.3.13]:
+    //   private void chkAntiVoxEnable_CheckedChanged(object sender, EventArgs e)
+    //   {
+    //       if (initializing) return;
+    //       cmaster.SetAntiVOXRun(0, chkAntiVoxEnable.Checked);
+    //   }
+    //
+    // Persistence: per-MAC key AntiVox_Enable (default False).
+    // RadioModel wires antiVoxRunChanged → MoxController::setAntiVoxRun.
+    //
+    // 3M-3a-iv post-bench refactor (Option A): chkAntiVoxSource (the source
+    // toggle in Thetis) has been removed entirely; this run flag is now the
+    // only anti-VOX user toggle in NereusSDR.  See commit message for the
+    // architectural rationale.
+
+    Q_PROPERTY(bool antiVoxRun READ antiVoxRun WRITE setAntiVoxRun
+                               NOTIFY antiVoxRunChanged)
+
+    /// Anti-VOX master run flag.
+    /// false (default) = anti-VOX detector OFF.  true = detector running.
+    bool antiVoxRun() const noexcept { return m_antiVoxRun; }
 
     // ── MON properties (3M-1b C.5) ────────────────────────────────────────
     //
@@ -1660,8 +1816,20 @@ public slots:
     void setUserDigOut(int dig);
 
     // ── Anti-VOX setters (3M-1b C.4) ─────────────────────────────────────────
+    // 3M-3a-iv post-bench refactor (Option A): setAntiVoxSourceVax dropped.
+    // See commit message and class comment block for architectural rationale.
     void setAntiVoxGainDb(int dB);
-    void setAntiVoxSourceVax(bool useVax);
+
+    // ── Anti-VOX detector tau setter (Phase 3M-3a-iv Task 8) ─────────────────
+    // Sets the smoothing time-constant in ms; clamps to [1, 500] per Thetis
+    // udAntiVoxTau range (setup.designer.cs:44661-44688 [v2.10.3.13]).
+    void setAntiVoxTauMs(int ms);
+
+    // ── Anti-VOX run flag setter (3M-3a-iv scope-expansion) ──────────────────
+    // Sets the master enable.  Idempotent guard.  Auto-persists.
+    // Mirrors Thetis chkAntiVoxEnable_CheckedChanged at setup.cs:18980-18984
+    // [v2.10.3.13]: cmaster.SetAntiVOXRun(0, chkAntiVoxEnable.Checked).
+    void setAntiVoxRun(bool run);
 
     // ── MON setters (3M-1b C.5) ──────────────────────────────────────────────
     void setMonEnabled(bool on);
@@ -1739,6 +1907,10 @@ signals:
     /// Emitted when tunePower() (fixed) changes.  Mirrors Thetis
     /// tune_power setter at console.cs:17229-17242 [v2.10.3.13].
     void tunePowerChanged(int watts);
+    /// Emitted when txPostGenToneMag() changes.  From mi0bot-Thetis
+    /// console.cs:47666 [v2.10.3.13-beta2].  Wired to
+    /// TxChannel::setPostGenToneMag in Task 10.
+    void txPostGenToneMagChanged(double mag);
     /// Emitted by setPowerUsingTargetDbm when bSetPower=true.
     /// Caller (RadioModel drive-slider lambda + TUNE handler) pumps:
     ///   wire_byte = clamp(int(volume * 1.02 * 255), 0, 255) -> setTxDrive
@@ -1766,8 +1938,19 @@ signals:
     void userDigOutChanged(int dig);
 
     // ── Anti-VOX signals (3M-1b C.4) ─────────────────────────────────────────
+    // 3M-3a-iv post-bench refactor (Option A): antiVoxSourceVaxChanged dropped.
     void antiVoxGainDbChanged(int dB);
-    void antiVoxSourceVaxChanged(bool useVax);
+
+    // ── Anti-VOX detector tau signal (Phase 3M-3a-iv Task 8) ────────────────
+    // RadioModel wires this to MoxController::setAntiVoxTau in Task 9.
+    void antiVoxTauMsChanged(int ms);
+
+    // ── Anti-VOX run flag signal (3M-3a-iv scope-expansion) ─────────────────
+    // RadioModel wires antiVoxRunChanged → MoxController::setAntiVoxRun;
+    // MoxController emits antiVoxRunRequested → TxWorkerThread::setAntiVoxRun
+    // (which forwards to TxChannel::setAntiVoxRun AND flips the worker's
+    //  m_antiVoxRun atomic gate).
+    void antiVoxRunChanged(bool run);
 
     // ── MON signals (3M-1b C.5) ──────────────────────────────────────────────
     void monEnabledChanged(bool on);
@@ -1840,10 +2023,20 @@ private:
     float m_swrProtectFactor{1.0f};
     std::atomic<VaxSlot> m_txOwnerSlot{VaxSlot::MicDirect};  // Atomic for lock-free reads from the audio thread.
 
-    // Per-band tune power storage.
-    // From Thetis console.cs:12094 [v2.10.3.13]: private int[] tunePower_by_band;
+    // Connected radio model.  Defaults to HPSDRModel::FIRST (non-HL2 path).
+    // Injected by RadioModel via setHpsdrModel() on connect (Task 10).
+    // Used to polymorph: tune-power clamp ceiling (#175 Task 6) and
+    // HL2 sub-step DSP modulation (#175 Task 4).
+    HPSDRModel m_hpsdrModel{HPSDRModel::FIRST};
+
+    // Per-band tune power storage.  NereusSDR-original per-band extension:
+    // Thetis console.cs:12094 [v2.10.3.13] declares a flat tunePower_by_band[]
+    // but persists/restores it as a pipe-delimited block (console.cs:3087-3091
+    // save, :4904-4910 restore) — NereusSDR uses scalar per-band AppSettings
+    // keys instead.  Clamp ceiling polymorphs by SKU in setTunePowerForBand
+    // (#175 Task 6); Thetis has no equivalent polymorphic clamp.
     // Initialised to 50W per band in the constructor
-    // (console.cs:1819-1820 [v2.10.3.13]).
+    // (Thetis console.cs:1819-1820 [v2.10.3.13]).
     // HF amateur + GEN/WWV/XVTR only (Band::SwlFirst == 14).  Phase 3L
     // SWL bands inherit ham-band values — no separate per-SWL TX power.
     std::array<int, static_cast<std::size_t>(Band::SwlFirst)> m_tunePowerByBand{};
@@ -1880,6 +2073,12 @@ private:
     // [v2.10.3.13]).  Default 10 W (NereusSDR-original safer; Thetis
     // Designer ships 0).
     int  m_tunePower{10};
+    // HL2 sub-step DSP audio-gain modulation parameter (#175 Task 3).
+    // From mi0bot-Thetis console.cs:47666 [v2.10.3.13-beta2].
+    // Default 1.0 = no modulation (non-HL2 path).  HL2 path writes
+    // 0.4..0.9999 per mi0bot formula.  Wired to TxChannel::setPostGenToneMag
+    // in Task 10.
+    double m_txPostGenToneMag{1.0};
     // StepAttenuatorController for ATT-on-TX safety gate (#167 Phase 3C).
     // Non-owning pointer; nullptr until RadioModel injects via
     // setStepAttenuatorController(); when nullptr the gate becomes a no-op.
@@ -1944,10 +2143,19 @@ private:
     int    m_userDigOut     = 0;      // bank 11 C3 low 4 bits, range [0, 15]
 
     // ── Anti-VOX properties (3M-1b C.4) ──────────────────────────────────
-    // From Thetis audio.cs:446-454 [v2.10.3.13] (antivox_source_VAC) and
-    // setup.designer.cs:44699-44728 [v2.10.3.13] (udAntiVoxGain range -60..60).
+    // From Thetis setup.designer.cs:44699-44728 [v2.10.3.13] (udAntiVoxGain
+    // range -60..60).  3M-3a-iv post-bench refactor (Option A) dropped the
+    // m_antiVoxSourceVax companion field — see header comment block on the
+    // anti-VOX getter for rationale.
     int  m_antiVoxGainDb    = 0;      // NereusSDR-original default; range [-60,60]
-    bool m_antiVoxSourceVax = false;  // audio.cs:446: antivox_source_VAC = false
+    // ── Anti-VOX detector tau (Phase 3M-3a-iv Task 8) ────────────────────
+    // From Thetis setup.designer.cs:44661-44688 [v2.10.3.13] (udAntiVoxTau):
+    //   Min=1, Max=500, Default=20 (ms).
+    int  m_antiVoxTauMs     = kAntiVoxTauMsDefault;
+    // ── Anti-VOX run flag (3M-3a-iv scope-expansion) ─────────────────────
+    // From Thetis setup.designer.cs:44740-44751 [v2.10.3.13]: chkAntiVoxEnable
+    // has no .Checked= setter -> default false.
+    bool m_antiVoxRun       = false;
 
     // ── MON properties (3M-1b C.5) ────────────────────────────────────────
     // From Thetis audio.cs:406 [v2.10.3.13]: private bool mon = false;

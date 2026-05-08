@@ -291,6 +291,147 @@ private slots:
         ch.setAntiVoxGain(0.10);  // idempotent guard fires
         QCOMPARE(ch.lastAntiVoxGainForTest(), 0.10);
     }
+
+    // ── setAntiVoxSize ────────────────────────────────────────────────────────
+    //
+    // Anti-VOX detector buffer size — wires WDSP SetAntiVOXSize.
+    // From Thetis dexp.c:666 [v2.10.3.13] — SetAntiVOXSize impl.
+    // Per cmaster.c:154 [v2.10.3.13] this is sourced from audio_outsize
+    // (the post-decimation RX block size), NOT TX in_size.
+
+    void setAntiVoxSize_callsWdsp()
+    {
+        // Verifies SetAntiVOXSize is invoked with the size value, and the
+        // internal m_antiVoxSize tracks the value for the size-mismatch guard
+        // that Task 3's sendAntiVoxData() will consult.
+        TxChannel ch(kChannelId);
+        ch.setAntiVoxSize(2048);
+        QCOMPARE(ch.antiVoxSize(), 2048);
+    }
+
+    void setAntiVoxSize_rejectsNonPositive()
+    {
+        // size <= 0 must be rejected (would alloc-zero / underflow inside WDSP).
+        // The cached size remains at its 0 init.
+        TxChannel ch(kChannelId);
+        ch.setAntiVoxSize(0);
+        QCOMPARE(ch.antiVoxSize(), 0);
+        ch.setAntiVoxSize(-1);
+        QCOMPARE(ch.antiVoxSize(), 0);
+    }
+
+    // ── setAntiVoxRate ────────────────────────────────────────────────────────
+    //
+    // Anti-VOX detector sample-rate — wires WDSP SetAntiVOXRate.
+    // From Thetis dexp.c:677 [v2.10.3.13] — SetAntiVOXRate impl.
+    // Per cmaster.c:155 [v2.10.3.13] this is sourced from audio_outrate
+    // (the post-decimation RX block rate), NOT TX in_rate.
+
+    void setAntiVoxRate_callsWdsp()
+    {
+        // Verifies SetAntiVOXRate is invoked with the rate value (Hz).
+        TxChannel ch(kChannelId);
+        ch.setAntiVoxRate(96000.0);
+        QCOMPARE(ch.antiVoxRate(), 96000.0);
+    }
+
+    void setAntiVoxRate_rejectsNonPositive()
+    {
+        // rate <= 0 must be rejected (divide-by-zero inside WDSP calc_antivox).
+        TxChannel ch(kChannelId);
+        ch.setAntiVoxRate(0.0);
+        QCOMPARE(ch.antiVoxRate(), 0.0);  // unchanged from 0.0 init
+        ch.setAntiVoxRate(-48000.0);
+        QCOMPARE(ch.antiVoxRate(), 0.0);
+    }
+
+    // ── setAntiVoxDetectorTau ─────────────────────────────────────────────────
+    //
+    // Anti-VOX smoothing time-constant — wires WDSP SetAntiVOXDetectorTau.
+    // From Thetis dexp.c:697 [v2.10.3.13] — SetAntiVOXDetectorTau impl.
+    // Thetis converts the spinbox ms value via /1000.0 (setup.cs:18995
+    // [v2.10.3.13]); this wrapper takes seconds directly.  WDSP create-time
+    // default is 0.01 s (cmaster.c:157 [v2.10.3.13]).
+
+    void setAntiVoxDetectorTau_callsWdsp()
+    {
+        // Verifies SetAntiVOXDetectorTau is invoked with the tau (seconds).
+        TxChannel ch(kChannelId);
+        ch.setAntiVoxDetectorTau(0.020);
+        QCOMPARE(ch.antiVoxDetectorTau(), 0.020);
+    }
+
+    void setAntiVoxDetectorTau_rejectsNonPositive()
+    {
+        // tau <= 0 must be rejected (calc_antivox would divide by zero / NaN).
+        // The cached tau remains at its 0.01 s init (WDSP create-time default).
+        TxChannel ch(kChannelId);
+        ch.setAntiVoxDetectorTau(0.0);
+        QCOMPARE(ch.antiVoxDetectorTau(), 0.01);  // unchanged from cmaster.c:157 init
+        ch.setAntiVoxDetectorTau(-0.005);
+        QCOMPARE(ch.antiVoxDetectorTau(), 0.01);
+    }
+
+    // ── sendAntiVoxData ───────────────────────────────────────────────────────
+    //
+    // Pumps interleaved L/R float audio into the WDSP DEXP anti-VOX detector
+    // via SendAntiVOXData. The wrapper enforces nsamples == m_antiVoxSize
+    // before invoking WDSP (which would otherwise memcpy past
+    // antivox_data — see dexp.c:713 [v2.10.3.13]).
+    //
+    // From Thetis dexp.c:708-715 [v2.10.3.13]:
+    //   void SendAntiVOXData (int id, int nsamples, double* data)
+    //   {
+    //       // note:  'nsamples' is not used as it has been previously specified
+    //       DEXP a = pdexp[id];
+    //       memcpy (a->antivox_data, data, a->antivox_size * sizeof (complex));
+    //       a->antivox_new = 1;
+    //   }
+
+    void sendAntiVoxData_pumpsWdsp_whenSizeMatches()
+    {
+        // Verifies SendAntiVOXData is invoked when nsamples == m_antiVoxSize.
+        // We can't intercept the WDSP call directly, but we can verify the
+        // float->double conversion path by inspecting m_antiVoxScratch via
+        // the antiVoxScratchForTest accessor.
+        // From Thetis dexp.c:708-715 [v2.10.3.13].
+        TxChannel ch(kChannelId);
+        ch.setAntiVoxSize(4);  // deliberately tiny for test brevity
+        const float interleaved[8] = { 0.1f, 0.2f, 0.3f, 0.4f,
+                                       0.5f, 0.6f, 0.7f, 0.8f };
+        ch.sendAntiVoxData(interleaved, /*nsamples=*/4);
+        const auto& scratch = ch.antiVoxScratchForTest();
+        QCOMPARE(scratch.size(), std::size_t{8});
+        for (std::size_t i = 0; i < 8; ++i) {
+            QCOMPARE(scratch[i], static_cast<double>(interleaved[i]));
+        }
+    }
+
+    void sendAntiVoxData_skipsWdsp_whenSizeMismatches()
+    {
+        // Verifies the size-mismatch guard rejects mismatched buffers and
+        // does NOT touch m_antiVoxScratch (no partial conversion).
+        TxChannel ch(kChannelId);
+        ch.setAntiVoxSize(4);
+        const float interleaved[10] = {};  // 5 stereo samples instead of 4
+        ch.sendAntiVoxData(interleaved, /*nsamples=*/5);
+        const auto& scratch = ch.antiVoxScratchForTest();
+        QCOMPARE(scratch.size(), std::size_t{8});
+        for (double v : scratch) {
+            QCOMPARE(v, 0.0);  // initial zero-fill from std::vector<double>
+        }
+    }
+
+    void sendAntiVoxData_skipsWdsp_whenSizeUnconfigured()
+    {
+        // First call with m_antiVoxSize == 0 (no setAntiVoxSize) must reject
+        // rather than memcpy into a zero-sized antivox_data buffer.
+        TxChannel ch(kChannelId);
+        const float interleaved[2] = { 1.0f, 1.0f };
+        ch.sendAntiVoxData(interleaved, /*nsamples=*/1);
+        const auto& scratch = ch.antiVoxScratchForTest();
+        QCOMPARE(scratch.size(), std::size_t{0});
+    }
 };
 
 QTEST_APPLESS_MAIN(TestTxChannelVoxAntiVox)

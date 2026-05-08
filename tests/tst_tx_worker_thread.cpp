@@ -33,6 +33,15 @@
 //       lambda-connect, the MoxController routing form) — same
 //       regression trap as case 10, exercises the lambda receiver
 //       form rather than direct member-pointer.
+//  11.  Anti-VOX gate OFF — onAntiVoxSamplesReady is a no-op when
+//       m_antiVoxRun is false (default).  Verifies the float→double
+//       conversion in TxChannel::sendAntiVoxData is skipped.
+//  12.  Anti-VOX gate ON — onAntiVoxSamplesReady forwards to
+//       TxChannel::sendAntiVoxData after setAntiVoxRun(true).
+//  13.  setAntiVoxBlockGeometry calls BOTH setAntiVoxSize and
+//       setAntiVoxRate so DEXP's antivox_size / antivox_rate stay
+//       aligned with the RX-side post-decimation block.
+//  14.  setAntiVoxDetectorTau pass-through to TxChannel.
 //
 // =================================================================
 //
@@ -41,6 +50,11 @@
 //                 Rewritten same day for v3 semaphore-driven design.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation
 //                 via Anthropic Claude Code.
+//   2026-05-07 — Phase 3M-3a-iv Task 6: extend with 4 cases covering
+//                 the new anti-VOX queued slots (onAntiVoxSamplesReady,
+//                 setAntiVoxBlockGeometry, setAntiVoxDetectorTau) and
+//                 the m_antiVoxRun atomic gate.  Same author / same
+//                 AI tooling.
 // =================================================================
 
 // no-port-check: NereusSDR-original test file.  No Thetis logic ported.
@@ -580,6 +594,100 @@ private slots:
         // Cleanup (see case 10 for rationale).
         w.stopPump();
         src.stop();
+    }
+
+    // ── 11. Anti-VOX gate: onAntiVoxSamplesReady is a no-op when off ────────
+    //
+    // m_antiVoxRun starts false (default).  onAntiVoxSamplesReady(...) is a
+    // no-op until setAntiVoxRun(true) flips the gate.  We verify the gate by
+    // first calling setAntiVoxSize(2) so a forwarded call WOULD populate
+    // m_antiVoxScratch with the float→double conversion result.  Because
+    // anti-VOX is OFF, the scratch must remain zero (default-constructed).
+    //
+    // This is the architectural payoff of §5.6 of the design doc — when the
+    // user has anti-VOX disabled, the float→double conversion in
+    // TxChannel::sendAntiVoxData is skipped entirely.
+    void onAntiVoxSamplesReady_skipsTxChannel_whenAntiVoxOff()
+    {
+        TxChannel ch(kChannelId, kBufSize, kBufSize);
+        // Pre-size the anti-VOX buffer so a forwarded call WOULD overwrite
+        // m_antiVoxScratch[0] with 0.5 (in double form).  The gate must
+        // prevent that.
+        ch.setAntiVoxSize(2);
+
+        TxWorkerThread w;
+        w.setTxChannel(&ch);
+
+        // Default state: setAntiVoxRun has never been called.
+        QVector<float> samples{ 0.5f, 0.6f, 0.7f, 0.8f };
+        w.onAntiVoxSamplesReady(/*sliceId=*/0, samples, /*sampleCount=*/2);
+
+        // Scratch buffer was zero-initialised on setAntiVoxSize(2).  If the
+        // gate failed and sendAntiVoxData ran, scratch[0] would be 0.5.
+        const auto& scratch = ch.antiVoxScratchForTest();
+        QCOMPARE(static_cast<int>(scratch.size()), 4);  // 2 * antiVoxSize
+        QCOMPARE(scratch[0], 0.0);
+        QCOMPARE(scratch[1], 0.0);
+        QCOMPARE(scratch[2], 0.0);
+        QCOMPARE(scratch[3], 0.0);
+    }
+
+    // ── 12. Anti-VOX gate: onAntiVoxSamplesReady forwards when on ───────────
+    //
+    // After setAntiVoxRun(true), onAntiVoxSamplesReady(...) must forward to
+    // TxChannel::sendAntiVoxData.  We verify by inspecting m_antiVoxScratch
+    // for the float→double conversion result.
+    void onAntiVoxSamplesReady_callsTxChannel_whenAntiVoxOn()
+    {
+        TxChannel ch(kChannelId, kBufSize, kBufSize);
+        ch.setAntiVoxSize(2);
+
+        TxWorkerThread w;
+        w.setTxChannel(&ch);
+        w.setAntiVoxRun(true);  // flip the atomic
+
+        QVector<float> samples{ 0.5f, 0.6f, 0.7f, 0.8f };
+        w.onAntiVoxSamplesReady(/*sliceId=*/0, samples, /*sampleCount=*/2);
+
+        const auto& scratch = ch.antiVoxScratchForTest();
+        QCOMPARE(static_cast<int>(scratch.size()), 4);
+        QCOMPARE(scratch[0], static_cast<double>(0.5f));
+        QCOMPARE(scratch[1], static_cast<double>(0.6f));
+        QCOMPARE(scratch[2], static_cast<double>(0.7f));
+        QCOMPARE(scratch[3], static_cast<double>(0.8f));
+    }
+
+    // ── 13. setAntiVoxBlockGeometry — calls both setters ───────────────────
+    //
+    // Mirrors RxDspWorker::bufferSizesChanged(outSize, outRate) into
+    // TxChannel::setAntiVoxSize + setAntiVoxRate so DEXP's antivox_size /
+    // antivox_rate stay aligned with the post-decimation RX block geometry.
+    void setAntiVoxBlockGeometry_callsBothSetters()
+    {
+        TxChannel ch(kChannelId, kBufSize, kBufSize);
+        TxWorkerThread w;
+        w.setTxChannel(&ch);
+
+        w.setAntiVoxBlockGeometry(/*outSize=*/1024, /*outRate=*/48000.0);
+
+        QCOMPARE(ch.antiVoxSize(), 1024);
+        QCOMPARE(ch.antiVoxRate(), 48000.0);
+    }
+
+    // ── 14. setAntiVoxDetectorTau — pass-through to TxChannel ──────────────
+    //
+    // Pass-through to TxChannel::setAntiVoxDetectorTau (which calls WDSP
+    // SetAntiVOXDetectorTau).  Tau is in seconds; ms→s conversion happens
+    // upstream in MoxController.
+    void setAntiVoxDetectorTau_passesThrough()
+    {
+        TxChannel ch(kChannelId, kBufSize, kBufSize);
+        TxWorkerThread w;
+        w.setTxChannel(&ch);
+
+        w.setAntiVoxDetectorTau(0.020);
+
+        QCOMPARE(ch.antiVoxDetectorTau(), 0.020);
     }
 };
 

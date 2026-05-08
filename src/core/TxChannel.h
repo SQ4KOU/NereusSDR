@@ -762,6 +762,62 @@ public:
     /// From Thetis cmaster.cs:211-212 [v2.10.3.13] — SetAntiVOXGain DLL import.
     void setAntiVoxGain(double gain);
 
+    // ── Anti-VOX detector dimension setters (3M-3a-iv Task 2) ───────────────
+    //
+    // Drive the WDSP DEXP block's anti-VOX detector to align with the
+    // post-decimation RX block geometry (out_size / out_rate).  Per Thetis
+    // cmaster.c:154-155 [v2.10.3.13], DEXP's antivox_size / antivox_rate are
+    // sourced from `pcm->audio_outsize` / `pcm->audio_outrate` (the audio
+    // path's post-decimation block size / rate), NOT from the TX in_size /
+    // in_rate.  In NereusSDR's single-RX path, audio_outsize == the RX
+    // worker's output block size and audio_outrate == the post-decimation
+    // panel rate.
+    //
+    // setAntiVoxSize() pre-sizes m_antiVoxScratch so Task 3's
+    // sendAntiVoxData() can do float -> double conversion without per-call
+    // allocation in the audio path.  m_antiVoxSize itself becomes the
+    // size-mismatch guard input for sendAntiVoxData.
+    //
+    // setAntiVoxDetectorTau() takes seconds directly.  Thetis converts the
+    // spinbox ms value via /1000.0 at the Setup page handler
+    // (setup.cs:18995 [v2.10.3.13]); the ms->s conversion lives there, not
+    // in this wrapper.
+
+    /// Set the anti-VOX detector buffer size (complex samples).
+    /// From Thetis dexp.c:666 [v2.10.3.13] — SetAntiVOXSize impl.
+    void setAntiVoxSize(int size);
+
+    /// Set the anti-VOX detector sample-rate (Hz).
+    /// From Thetis dexp.c:677 [v2.10.3.13] — SetAntiVOXRate impl.
+    void setAntiVoxRate(double rate);
+
+    /// Set the anti-VOX smoothing time-constant (seconds).
+    /// From Thetis dexp.c:697 [v2.10.3.13] — SetAntiVOXDetectorTau impl.
+    void setAntiVoxDetectorTau(double seconds);
+
+    /// Cached anti-VOX dimension accessors.  Used by the size-mismatch
+    /// guard in sendAntiVoxData() (3M-3a-iv Task 3) and by tests.
+    int    antiVoxSize()        const noexcept { return m_antiVoxSize; }
+    double antiVoxRate()        const noexcept { return m_antiVoxRate; }
+    double antiVoxDetectorTau() const noexcept { return m_antiVoxTauSec; }
+
+    // ── Anti-VOX detector audio feed (3M-3a-iv Task 3) ──────────────────────
+    //
+    // Push one block of interleaved L/R float audio into the WDSP DEXP
+    // anti-VOX detector.  Buffer size MUST match the most-recent
+    // setAntiVoxSize() value or the call is rejected with qCWarning(lcDsp)
+    // (no partial memcpy into antivox_data).
+    //
+    // Conversion: float -> double, in-order, into m_antiVoxScratch.  No
+    // allocation in the audio path provided setAntiVoxSize was called once.
+    //
+    // From Thetis dexp.c:708-715 [v2.10.3.13]: SendAntiVOXData ignores its
+    // nsamples arg and memcpys exactly antivox_size complex samples.  We
+    // enforce nsamples == m_antiVoxSize at the wrapper boundary so a caller
+    // mismatch logs and skips rather than corrupting memory past the end of
+    // antivox_data.
+    void sendAntiVoxData(const float* interleaved, int nsamples);
+
     // ── DEXP envelope/timing WDSP wrappers (3M-3a-iii Tasks 1-2) ────────────
 
     /// DEXP master enable (gate the audio downward expansion).
@@ -1337,6 +1393,40 @@ public:
     /// From Thetis wdsp/gen.c:784-789 [v2.10.3.13] — SetTXAPostGenRun impl.
     /// 'virtual' for the I.1 TwoToneController test seam.
     virtual void setTxPostGenRun(bool on);
+
+    // ── HL2 sub-step DSP audio-gain modulation (Issue #175 Task 2) ──────────
+    //
+    // From mi0bot-Thetis console.cs:47666 [v2.10.3.13-beta2] — HL2 TUNE path:
+    //   if (new_pwr <= 51) {
+    //       radio.GetDSPTX(0).TXPostGenToneMag = (double)(new_pwr + 40) / 100;
+    //       new_pwr = 0;
+    //   } else {
+    //       radio.GetDSPTX(0).TXPostGenToneMag = 0.9999;
+    //       new_pwr = (new_pwr - 54) * 2;
+    //   }
+    //
+    // DSP audio-gain modulation parameter for HL2 sub-step tune.
+    // Range 0.4..0.9999 on HL2 sub-step path; 1.0 on non-HL2 (no effect).
+    // Wrapper for WDSP SetTXAPostGenToneMag (third_party/wdsp/src/gen.c:800).
+    //
+    // The value is stored so Task 4 (TransmitModel::setPowerUsingTargetDbm)
+    // can read it back via postGenToneMag() for persistence / display.
+
+    /// HL2 sub-step tone magnitude setter.
+    ///
+    /// Wraps SetTXAPostGenToneMag(channel, mag).
+    /// Stores the value in m_postGenToneMag for retrieval via postGenToneMag().
+    ///
+    /// From mi0bot-Thetis console.cs:47666 [v2.10.3.13-beta2].
+    /// WDSP: third_party/wdsp/src/gen.c:800-805 [v2.10.3.13].
+    void setPostGenToneMag(double mag);
+
+    /// Returns the most recently set PostGen tone magnitude (default 1.0).
+    ///
+    /// Default 1.0 matches kMaxToneMag used in the non-HL2 path and the
+    /// setTuneTone(true) call in chkTUN_CheckedChanged (console.cs:30039
+    /// [v2.10.3.13]).
+    double postGenToneMag() const noexcept { return m_postGenToneMag; }
 
     // ── TX EQ wrappers (3M-3a-i Task B-1) ───────────────────────────────────
     //
@@ -1920,6 +2010,14 @@ public:
     bool   lastAntiVoxRunForTest()            const noexcept { return m_antiVoxRunLast; }
     double lastAntiVoxGainForTest()           const noexcept { return m_antiVoxGainLast; }
 
+    // ── Test seam (Phase 3M-3a-iv Task 3) — anti-VOX scratch buffer ─────────
+    //
+    // Inspect the resident float -> double conversion buffer that
+    // sendAntiVoxData() writes before forwarding to WDSP SendAntiVOXData.
+    // NEVER consume in production code; the m_antiVoxScratch lifetime is
+    // managed exclusively on the TX worker thread.
+    const std::vector<double>& antiVoxScratchForTest() const { return m_antiVoxScratch; }
+
     // ── Test seams (Phase 3M-3a-iii Tasks 1-2) — DEXP envelope/timing ──────
     bool   lastDexpRunForTest()               const noexcept { return m_dexpRunLast; }
     double lastDexpDetectorTauForTest()       const noexcept { return m_dexpDetectorTauMsLast; }
@@ -2365,6 +2463,33 @@ private:
     bool   m_antiVoxRunLast         = false;
     double m_antiVoxGainLast        = std::numeric_limits<double>::quiet_NaN();
 
+    // ── Anti-VOX detector dimension cache (3M-3a-iv Task 2) ─────────────────
+    //
+    // m_antiVoxSize is consulted by sendAntiVoxData() (Task 3) to reject
+    // size-mismatched buffers without invoking SendAntiVOXData (which would
+    // memcpy past the end of antivox_data — see dexp.c:713 [v2.10.3.13]).
+    // Initialised to 0 so the first sendAntiVoxData call before
+    // setAntiVoxSize is rejected with a single qCWarning.
+    //
+    // m_antiVoxRate initialises to 0.0 (no valid rate yet); the wrapper
+    // rejects any setAntiVoxRate(<=0) so 0.0 stays as a "rate not yet
+    // pushed" sentinel.
+    //
+    // m_antiVoxTauSec initialises to 0.01 s, matching the WDSP create-time
+    // default at cmaster.c:157 [v2.10.3.13] (anti-vox smoothing
+    // time-constant, last argument to create_dexp).  Until the first
+    // setAntiVoxDetectorTau() call, the WDSP block is using this value;
+    // mirroring it here keeps the cache truthful for tests that read back
+    // before any setter call.
+    //
+    // m_antiVoxScratch is the float -> double conversion buffer used by
+    // sendAntiVoxData() (Task 3) to feed WDSP's `double*` interface.
+    // Sized to 2*size doubles (I and Q) on every accepted setAntiVoxSize.
+    int    m_antiVoxSize{0};
+    double m_antiVoxRate{0.0};
+    double m_antiVoxTauSec{0.01};                   // matches cmaster.c:157 [v2.10.3.13]
+    std::vector<double> m_antiVoxScratch;           // resized on setAntiVoxSize
+
     // ── DEXP envelope/timing last-set values (3M-3a-iii Tasks 1-2) ──────────
     //
     // Same NaN-init pattern as the VOX double cache members above.  Bool
@@ -2537,6 +2662,11 @@ private:
     // setTxDspBufferSizeSamples + setTxFilterSizeSamples cascade to keep
     // the Thetis invariant filter >= buffer (console.cs:38911 [v2.10.3.13]).
     int m_txDspBlockSize{2048};
+
+    // HL2 sub-step tone magnitude (Issue #175 Task 2).
+    // Default 1.0 matches kMaxToneMag (non-HL2 path and setTuneTone default).
+    // From mi0bot-Thetis console.cs:47666 [v2.10.3.13-beta2].
+    double m_postGenToneMag               = 1.0;
 
     // ── Per-profile TX filter debounce (Plan 4 D8) ───────────────────────────
     //

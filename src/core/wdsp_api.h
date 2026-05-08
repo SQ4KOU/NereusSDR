@@ -1057,6 +1057,24 @@ void SetDEXPAudioDelay(int id, double delay);
 void SetAntiVOXRun(int id, int run);
 void SetAntiVOXGain(int id, double gain);
 
+// Anti-VOX detector dimensions, smoothing tau, and audio feed.
+// From Thetis dexp.c:666 [v2.10.3.13]. antivox_size: complex-sample buffer
+//   size; setting it forces realloc of antivox_data + recompute of antivox_mult.
+void SetAntiVOXSize(int id, int size);
+
+// From Thetis dexp.c:677 [v2.10.3.13]. antivox_rate: sample rate of incoming
+//   anti-vox data, used to recompute antivox_mult = exp(-1/(rate*tau)).
+void SetAntiVOXRate(int id, double rate);
+
+// From Thetis dexp.c:697 [v2.10.3.13]. antivox_tau: smoothing time-constant
+//   in seconds.  Setup page passes ms/1000.0 (setup.cs:18995).
+void SetAntiVOXDetectorTau(int id, double tau);
+
+// From Thetis dexp.c:708 [v2.10.3.13]. Push one block of L/R audio (as
+//   complex pairs) into DEXP's anti-VOX detector.  nsamples is ignored;
+//   buffer MUST be exactly antivox_size complex samples wide.
+void SendAntiVOXData(int id, int nsamples, double* data);
+
 // DEXP lifecycle + per-block driver (Phase 3M-3a-iii Task 20 — bench fix).
 //
 // The DEXP DSP module instantiation that was missing from NereusSDR's

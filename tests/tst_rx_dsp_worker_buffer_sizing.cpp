@@ -44,6 +44,17 @@ private slots:
     // still drains at the 1024-sample default (matches the pre-fix
     // behavior so existing call sites keep working until updated).
     void defaultInSizeRemains1024_for_backCompat();
+
+    // Phase 3M-3a-iv: setBufferSizes() must emit bufferSizesChanged with
+    // (outSize, sampleRate). Consumed by TxWorkerThread to align DEXP
+    // anti-VOX detector dimensions with RX block geometry.
+    void setBufferSizes_emitsBufferSizesChanged();
+
+    // Idempotency: if setBufferSizes() is called twice with the same
+    // (in, out) pair, only the first call fires bufferSizesChanged. This
+    // avoids spamming TxWorkerThread::setAntiVoxBlockGeometry with no-op
+    // SetAntiVOXSize/SetAntiVOXRate calls during steady-state operation.
+    void setBufferSizes_idempotent_noDuplicateEmit();
 };
 
 namespace {
@@ -141,6 +152,35 @@ void TestRxDspWorkerBufferSizing::defaultInSizeRemains1024_for_backCompat()
     delete spy;
 
     h.teardown();
+}
+
+void TestRxDspWorkerBufferSizing::setBufferSizes_emitsBufferSizesChanged()
+{
+    // Direct in-thread test: no QThread/queued-connection harness needed
+    // because setBufferSizes() is documented as safe to call from any
+    // thread, and the emit happens synchronously inside the call.
+    RxDspWorker worker;
+    worker.setSampleRate(48000.0);
+    QSignalSpy spy(&worker, &RxDspWorker::bufferSizesChanged);
+
+    worker.setBufferSizes(2048, 1024);
+
+    QCOMPARE(spy.count(), 1);
+    const auto args = spy.takeFirst();
+    QCOMPARE(args.at(0).toInt(), 1024);
+    QCOMPARE(args.at(1).toDouble(), 48000.0);
+}
+
+void TestRxDspWorkerBufferSizing::setBufferSizes_idempotent_noDuplicateEmit()
+{
+    RxDspWorker worker;
+    worker.setSampleRate(48000.0);
+    worker.setBufferSizes(2048, 1024);  // primes the last-emitted state
+    QSignalSpy spy(&worker, &RxDspWorker::bufferSizesChanged);
+
+    worker.setBufferSizes(2048, 1024);  // identical — must not fire
+
+    QCOMPARE(spy.count(), 0);
 }
 
 QTEST_MAIN(TestRxDspWorkerBufferSizing)

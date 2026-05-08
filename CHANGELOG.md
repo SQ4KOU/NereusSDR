@@ -1,12 +1,72 @@
 # Changelog
 
-## [0.3.2] - 2026-05-03 - PA Calibration Safety Hotfix (#167)
+## [Unreleased]
+
+### Added
+- **3M-3a-iv anti-VOX cancellation feed wired end-to-end.** Closes the gap left
+  by 3M-3a-iii where the gain control was plumbed but the RX-audio feedback path
+  into DEXP was never connected. Moving the anti-VOX gain slider with VOX
+  engaged now audibly suppresses RX-bleed false-trips. Adds 4 WDSP wrappers
+  (`SetAntiVOXSize` / `SetAntiVOXRate` / `SetAntiVOXDetectorTau` /
+  `SendAntiVOXData`), wires `RxDspWorker -> TxWorkerThread ->
+  TxChannel::sendAntiVoxData` per chunk (single-RX direct pump; aamix port
+  deferred to 3F multi-pan), exposes Tau (ms) on Setup -> Transmit -> DEXP/VOX
+  with persistence under per-MAC key `AntiVox_Tau_Ms`. Bench-verification
+  matrix at `docs/architecture/phase3m-3a-iv-verification/README.md`.
+- **Setup -> Transmit -> DEXP/VOX gains grpAntiVOX parity (sans source toggle).**
+  Beyond the Tau (ms) spinbox above, also adds `chkAntiVoxEnable` ("Anti-VOX
+  Enable") and `udAntiVoxGain` ("Gain (dB)") to align with Thetis grpAntiVOX
+  (`setup.designer.cs:44631-44760 [v2.10.3.13]`). All three tooltips
+  (Enable / Gain / Tau) are verbatim from Thetis. Independent enable-flag
+  refactor: `TransmitModel::antiVoxRun` Q_PROPERTY (persisted per-MAC under
+  `AntiVox_Enable`), `MoxController::setAntiVoxRun` slot +
+  `antiVoxRunRequested` signal. Closes the M2 finding from the end-of-epic
+  code review (bench-verification matrix is now runnable from a fresh
+  install without a developer-only hook).
+
+### Changed
+- **Removed anti-VOX source-selector plumbing.** Thetis chkAntiVoxSource
+  (RX vs VAC at `setup.designer.cs:44646-44657 [v2.10.3.13]`) does not map
+  to NereusSDR's architecture: VAX feeds digital-mode apps with no
+  mic-feedback path, so the audio output device is the only valid anti-VOX
+  reference. Dropped `TransmitModel::antiVoxSourceVax`,
+  `MoxController::setAntiVoxSourceVax`, the `antiVoxSourceWhatRequested`
+  signal, the `chkAntiVoxSource` UI, and the rejected-VAX scaffolding.
+  Setup -> Transmit -> DEXP/VOX now shows a static "Source: Audio Output
+  Device(s)" info row instead. Existing users with `AntiVox_Source_VAX`
+  persisted will see an orphan AppSettings key (harmless, ignored on load).
+  Tap-point signpost comments added at `RxDspWorker.cpp` and
+  `AudioEngine.h` for the future radio-speaker output work (the anti-VOX
+  tap relocates from `RxDspWorker` to `AudioEngine`'s post-mixer summing
+  point when per-bus processing diverges between outputs). Full rationale
+  in `docs/architecture/phase3m-3a-iv-antivox-feed-design.md` §18.
+
+### Fixed
+- **Anti-VOX tau default 10 ms -> 20 ms.** WdspEngine create_dexp passed
+  `0.01` for the smoothing time-constant; Thetis spinbox default is 20 ms
+  (= 0.02 s) per `setup.designer.cs:44682-44686 [v2.10.3.13]`. Fresh users
+  with no Setup-page interaction now get the Thetis-faithful default.
+
+## [0.3.2] - 2026-05-05
+
+> [!NOTE]
+> **A substantial point release on top of v0.3.1.** Four pieces of work landed together:
+>
+> 1. **DEXP/VOX speech processor (3M-3a-iii).** VOX and DEXP work end-to-end for the first time. v0.3.1 had the menus and toggles in place but the WDSP DSP wasn't wired up. v0.3.2 ports the DEXP DSP from Thetis, connects the VOX callback to the MOX state machine, lands a dedicated Setup → Transmit → DEXP/VOX page mirroring Thetis 1:1, a live DexpPeakMeter strip, and a dedicated VOX row on the TxApplet.
+> 2. **Hermes Lite 2 maturity push.** The RF and Tune Power sliders now match the mi0bot fork (the de facto HL2 console) exactly: RF Power 0 to 90 in steps of 6, Tune Power 0 to 99 in steps of 3, per-band Tune Power grid in dB. Connect-time init now matches Thetis (resolves cold-start and SSB MOX path issues). A-ATT label corrected, N2ADR default flipped to True, RX attenuator max capped at +31 dB, P1 ADC overload byte offset corrected, HL2 PA forward and reverse power readings (which were 16.7x over-read) fixed.
+> 3. **PA Setup parity + safety hotfix.** Setup → PA pages rebuilt for full Thetis parity: PA Gain page with 14-band gain grid + 14×9 drive-step adjust matrix + auto-cal sweep state machine; Watt Meter page with new toggles; PA Values page closes the 4-label gap from v0.3.1. The kernel of this work doubles as a **PA over-drive safety hotfix** for high-gain finals (notably the ANAN-8000DLE) at low TUNE-slider positions. See CAUTION below.
+> 4. **Persistence and stability fixes.** Per-band TX RF Power across band changes and restart (#192), OC matrix pin persistence (#191), mic-jack PTT default behavior (#182), TUN-off cold-start (#177), audio bus reconfigure on Settings open (#172), NR3 dev-build model path (#184, thanks **KM4BLG**). Plus step-attenuator MOX gating, SWR foldback topology correction, TX meter rescaling per-SKU.
 
 > [!CAUTION]
-> **Safety hotfix.** v0.3.1 could drive an ANAN-8000DLE PA past its rated 200 W ceiling at low TUNE-slider positions. K2GX measured >300 W on 80 m TUNE at slider 50 %. Root cause: the drive byte applied no per-band PA gain compensation, so high-gain PAs (8000DLE 80 m PA = 50.5 dB) reached full output well below slider 100 %. v0.3.2 ports Thetis SetPowerUsingTargetDBM faithfully and applies the per-band PA gain table at the audio output level, exactly as Thetis has done for years. Pre-hotfix wire byte 127 at slider 50 % / 80 m / 8000DLE now reads ~49.
+> **PA over-drive safety hotfix for high-power radios.** v0.3.1 could over-drive the PA on radios with high-gain finals (notably the ANAN-8000DLE) at low TUNE-slider positions. K2GX measured over 300 W out on a 200 W radio at slider 50%. Root cause: the drive value sent to the radio applied no per-band PA gain compensation, so high-gain PAs reached full output well below slider 100%. v0.3.2 ports Thetis's per-band PA gain table and the audio-volume math behind it. Lower-power radios (HL2, Hermes, Hermes II, Angelia, Orion) were never at risk.
 
 > [!IMPORTANT]
-> **Existing users — no action required.** Your saved radios, mic profiles, DSP settings, PA forward-power calibration (Watt Meter cal-points), and per-band tune power carry forward byte-identical. The new per-MAC PA Gain profiles seed automatically on first connect (16 factory rows + Bypass) and pick `Default - <connected model>` as the active profile. HL2 cannot regress on HF transmit — a sentinel deviation (gbb >= 99.5 -> linear fallback) preserves the v0.3.1 linear behaviour on bands where the factory PA gain row is 100.0 (HL2's "no compensation" marker on HF).
+> **Existing users: no action required.** Saved radios, mic profiles, DSP settings, PA forward-power calibration, and per-band tune power carry forward exactly as they were. New PA Gain profiles seed automatically on first connect. Hermes Lite 2 users: existing per-band Tune Power values reinterpret as int (0-99 mi0bot encoding) to dB at the UI boundary; no migration step required.
+
+> [!IMPORTANT]
+> 📖 **Alpha testers, start here:** [docs/debugging/v0.3.2-alpha-tester-smoketest.md](https://github.com/boydsoftprez/NereusSDR/blob/main/docs/debugging/v0.3.2-alpha-tester-smoketest.md)
+>
+> Bench-test walkthrough for the new DEXP/VOX DSP, the HL2 mi0bot slider rework, the PA-cal forward-power verification, and the persistence-fix regression sweep. Returning testers: most of v0.3.1's surface didn't change, so the v0.3.1 doc is still the right reference for connection workflow, RX, the speech processor (TX EQ / Leveler / ALC / CFC), the filter preset store, the TX filter overlay, and the per-board PA cal grid.
 
 ### Safety
 - **Per-band PA gain compensation now applied** at the audio output level, not the wire-byte path. Faithful port of Thetis SetPowerUsingTargetDBM (console.cs:46645-46762 [v2.10.3.13]). Per-band gain table from clsHardwareSpecific.cs:459-751 (and mi0bot HL2 row at v2.10.3.13-beta2). The math: `target_dBm = 10*log10(slider_W*1000) - gbb; audio_volume = min(sqrt(10^(target_dBm/10) * 0.05) / 0.8, 1.0)`. Resolves K2GX (ANAN-8000DLE, P2) field report of >300 W output on a 200 W radio at low TUNE slider positions.
@@ -18,7 +78,7 @@
 - **PA Values page** (NereusSDR-spin promotion): closed the 4-label gap from v0.3.1 (Raw FWD power, Drive, FWD voltage, REV voltage) via the new public PaTelemetryScaling helpers (lifted from RadioModel.cpp private helpers). Running peak/min tracking on six telemetry values + in-page Reset button.
 - **Per-SKU visibility**: `BoardCapabilities`-driven. PA category hidden on RX-only SKUs; editor controls disabled with "no PA support" banner when `caps.hasPaProfile=false` (Atlas / RedPitaya); informational warnings for Ganymede 500 W follow-up and PureSignal recovery linkage. Mirrors Thetis comboRadioModel_SelectedIndexChanged (setup.cs:19812-20310 [v2.10.3.13]).
 
-### TX
+### TX (PA-cal kernel)
 - **TwoToneController** routes through the new math kernel (`bTwoTone=true` so txMode=2 selects `_2ToneDrivePowerSource`; gain compensation applies during the IMD test).
 - **ATT-on-TX-on-power-change safety scaffolding** added: when PureSignal arrives in
   Phase 3M-4, the safety gate that forces TX attenuator to 31 dB on drive-power changes
@@ -31,10 +91,53 @@
 - New `TransmitModel::setPowerUsingTargetDbm(...)` deep-parity wrapper (all txMode branches + drive-source enum routing + power_by_band write side-effect on txMode 0 + ATT-on-TX gate + audioVolumeChanged signal).
 - New `m_powerByBand[14]` per-band normal-mode power array (default 100 W per `limitPower_by_band` console.cs:1817 [v2.10.3.13]).
 
+### 3M-3a-iii: DEXP/VOX + AMSQ
+- **Full WDSP DEXP DSP** ported from Thetis `create_dexp` + `xdexp` driver. v0.3.1 had no DEXP DSP at all; the wrappers existed but the underlying DSP didn't. v0.3.2 lands the actual signal-processing block.
+- **Thetis-faithful VOX wiring**: WDSP `pushvox` callback routes through `MoxController::onVoxActive`; TXA pipeline pumps continuously while VOX is enabled (boot defaults `run_vox=0`, DEXP-meter MOX-or-VOX gate).
+- **Setup → Transmit → DEXP/VOX page** mirrors Thetis `tpDSPVOXDE` 1:1, with three group boxes (`grpDEXPVOX` + `grpDEXPLookAhead` + AMSQ NereusSDR-spin section), 2×2 grid layout, top-justified, dark page style.
+- **DexpPeakMeter** widget: live VOX/DEXP peak strip on the Setup page.
+- **TxApplet** gains a dedicated VOX row (relocated from PhoneCwApplet during bench polish), exposing the consolidated VOX label + ON button as a single button.
+- **PhoneCwApplet** VOX + DEXP rows wired with right-click DspParamPopup quick controls.
+- **TransmitModel** gains 14 DEXP setters per `cmaster.cs:160-206 [v2.10.3.13]` (3 already shipped in 3M-1b, 11 added now): envelope (attack/release/detector tau), gate ratio (expansion/hysteresis), audio look-ahead, side-channel filter properties; plus 3 AMSQ setters (`SetTXAAMSQRun/MutedGain/Threshold`).
+- **MicProfileManager** bundle gains 11 DEXP keys.
+- **Retired:** `VoxSettingsPopup` + legacy `VoxDexpSetupPage` (duplicate VOX surfaces dropped in favor of the unified DexpVoxPage).
+
+### HL2 TX UI parity with mi0bot-Thetis (#175)
+- **RF Power slider 0-90 step 6** (16-step output attenuator, 0.5 dB/step) on HL2; **Tune Power slider 0-99 step 3** (33 sub-steps; 0-51 = DSP audio gain modulation, 52-99 = PA attenuator territory); Fixed-mode Tune Power spinbox -16.5 to 0 dB in 0.5 dB increments.
+- **Setup → Transmit → Power** gains a new "Tune" group (`grpPATune` port) with 3 drive-source radios + TX TUN Meter combo + Fixed-mode spinbox + Reset Tune Power Defaults button, sitting above the existing per-band grid. The per-band Tune Power grid is now SKU-aware (HL2 dB / others W).
+- **TX volume on the wire matches mi0bot exactly** via the new `setPowerUsingTargetDbm` HL2 sub-step DSP modulation and `computeAudioVolume` HL2 audio-volume formula `(hl2Power * gbb / 100) / 93.75` (`mi0bot-Thetis console.cs:47660-47673 + 47775-47778 [v2.10.3.13-beta2]`).
+- **Per-SKU PA UI constants** on `HpsdrModel` for HL2 mi0bot parity; per-SKU visibility wiring across PA Setup pages.
+- **Slider rescale + dB label + Thetis-faithful tooltips** on HL2 TxApplet.
+- **Polymorphic per-band tune-power clamp** in TransmitModel.
+- **Tooltip wording** on RF Power and Tune Power sliders rewritten across every SKU to match Thetis upstream: "Transmit Drive: relative value, not watts unless the PA profile is configured with MAX watts at 100%". Replaces the previous misleading "RF output power (0-100 W)" wording.
+
+### HL2 stability fixes
+- **Connect-init parity (#189)**: HL2 cold-start init sequence now matches Thetis (resolves Bug 1 + #153 cold-start + #153 SSB MOX). TUN-off must complete when MOX is already RX; TUN-off restore now routes through dBm path.
+- **A-ATT label, N2ADR default-True, dead-checkbox cleanup (#174)**: A-ATT label corrected, N2ADR default flipped to True, dead checkbox removed; N2ADR connect-time reconcile gated on `hasIoBoardHl2`.
+- **P1 ADC-overload byte offset (#176, PR #187)**: corrected.
+- **HL2 RX att max** capped at +31 instead of +32 (was off-by-one).
+- **Step-attenuator gating** during MOX (#175 follow-up): auto-att gated, `attenuationChanged` emits on MOX, HL2 TX wire fixed; TX→RX restore gated on stash-valid flag.
+
+### TX persistence + behavior fixes
+- **Per-band RF power persists across band changes and app restart (#192)**: uses active-slice band; Codex P1 fix included. Default `powerByBand` corrected to 50 W per Thetis `power_by_band` parity.
+- **Mic-jack PTT enabled at firmware by default (#182)**: UI wired through to wire; `setMicPTT(bool enabled)` renamed to `setMicPTTDisabled(bool disabled)` to match the wire semantics.
+- **TUN-off gen1 + power-restore deferred until rxReady + 100 ms (#177)**.
+- **Tune slider was inert.** Auto-switch tune drive source on slider use.
+- **TX meter rescaling per-SKU** on radio swap (TxApplet RF Pwr gauge + top MeterPanel Power BarItem).
+- **TX bar snapping** on MOX falling edge (snap to 0, bypass attack/decay smoothing); TX telemetry pump gated on `isMox` so late samples don't refill bars; TX-active predicate broadened to cover TUNE; PA meters cleared on un-key + HL2 SWR transient suppressed.
+
+### General fixes
+- **Audio bus reconfigure** dropped on Settings open (#172); was triggering spurious bus reconfigure events.
+- **NR3 dev-build model path (#180, #184)**: probes `<exe>/../third_party` for the rnnoise model when running an unpackaged dev build (thanks **KM4BLG** for the patch).
+- **OC matrix pins persist (#191, PR #195)**: `setPin`, `setPinAction`, and `resetDefaults` now write to AppSettings; previously these mutations were lost on app restart.
+- **HL2 PA forward and reverse power scaling corrected**: both readings were 16.7x over-read pre-hotfix.
+- **PA Setup styling**: aligned with `StyleConstants` + `STYLEGUIDE`; bypass last-profile QMessageBox in headless tests.
+
 ### NereusSDR-original deviations (justified inline)
 - **HL2 sentinel**: `gbb >= 99.5` short-circuits `computeAudioVolume` to a linear fallback (`clamp(sliderWatts/100, 0, 1)`). Preserves the pre-v0.3.2 HF-transmit behaviour on HL2, whose factory PA gain row at clsHardwareSpecific.cs:484 [v2.10.3.13-beta2 @c26a8a4] is 100.0 on HF as a "no compensation" marker (Thetis HL2 users live with `audio_volume ~= 0.0009`; NereusSDR's existing v0.3.1 users must not regress). Bypass profile (all-100.0 sentinel) trips the same fallback.
 - **NereusSDR-canonical PA profile serialization** (27-entry → 171-pipe-delimited fields). NOT byte-compatible with Thetis 423/507. Thetis profile-string import is a deferred follow-up.
 - **PA Values page promoted to its own dialog page** (Thetis hosts `panelPAValues` inline on the Watt Meter page). Cross-page wiring routes Reset PA Values from the WattMeter page to the Values page's `resetPaValues()` slot.
+- **HL2 RF Power / Tune Power encoding**: ported from `mi0bot-Thetis` instead of canonical ramdor/Thetis (mi0bot is the authoritative HL2 fork). Per-band Tune Power values reinterpret as int 0-99 (mi0bot encoding) to dB at the UI boundary; matches mi0bot's polymorphic-key pattern.
 
 ### Known limitations / deferred
 - ChannelMaster `SetTXFixedGain` is a glue stub at `third_party/wdsp/src/txgain_stub.c` that stores the IQ scalar but doesn't apply DSP attenuation. The wire-byte path is the primary K2GX safety lever; full DSP attenuation lands when ChannelMaster is ported (3L).
@@ -44,7 +147,8 @@
 - Thetis profile-string import deferred.
 
 ### Acknowledgments
-Thanks to **K2GX** for the field report that triggered this hotfix.
+- **K2GX** for the field report on ANAN-8000DLE PA over-drive that triggered the PA-cal hotfix kernel.
+- **KM4BLG** for the NR3 dev-build model path patch (#184).
 
 ## [0.3.1] - 2026-05-03
 
@@ -52,7 +156,7 @@ Thanks to **K2GX** for the field report that triggered this hotfix.
 > **You can transmit SSB now, on every board including the Hermes Lite 2.** v0.3.0 was pulled within hours of release for a packaging fix and effectively never reached testers. v0.3.1 is the first build most users will see — it carries forward everything 0.3.0 was supposed to deliver (SSB voice transmit with broadcast-grade processing, the rebuilt VPN-reach connection workflow, the expanded HL2 configuration surface, status-bar redesign, signed/notarized macOS builds) **plus** the post-0.3.0 polish: per-profile TX bandwidth control, user-editable filter presets, TX filter overlay on the panadapter and waterfall, mode-aware filter grids, the per-board PA forward-power calibration system (Watt Meter / PA Values pages), the Setup IA reshape, and the Hermes Lite 2 ATT/filter safety audit closure that clears HL2 SSB transmit for bench testing.
 
 > [!IMPORTANT]
-> 📖 **Alpha testers — start here:** [docs/debugging/v0.3.1-alpha-tester-smoketest.md](https://github.com/boydsoftprez/NereusSDR/blob/main/docs/debugging/v0.3.1-alpha-tester-smoketest.md)
+> 📖 **Alpha testers, start here:** [docs/debugging/v0.3.1-alpha-tester-smoketest.md](https://github.com/boydsoftprez/NereusSDR/blob/main/docs/debugging/v0.3.1-alpha-tester-smoketest.md)
 >
 > Walkthrough of what to try, what "success" looks like on your radio, and what's intentionally cold so you don't file bugs against it. v0.3.1 expands the v0.3.0 doc with the new TX bandwidth controls, filter preset editor, TX filter overlay, and **clears HL2 for bench-TX** with the ATT/filter safety steps the audit produced. Returning testers — receive-side coverage didn't move; the v0.2.3 doc is still the right reference for RX-side behavior.
 
