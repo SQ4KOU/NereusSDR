@@ -293,11 +293,16 @@ void PureSignal::setDefaultPeaks()
     // From Thetis PSForm.cs:547-550 SetDefaultPeaks [v2.10.3.13]:
     //   psdefpeak(HardwareSpecific.PSDefaultPeak);
     // psdefpeak (PSForm.cs:371-381 [v2.10.3.13]) writes the value into
-    // txtPSpeak, which fires PSpeak_TextChanged (PSForm.cs:792-803),
-    // which calls puresignal.SetPSHWPeak.
-    if (m_tx) {
-        m_tx->setPSHWPeak(m_caps.psDefaultPeak);
-    }
+    // txtPSpeak, which fires PSpeak_TextChanged (PSForm.cs:787-794
+    // [v2.10.3.13]), which updates _PShwpeak, calls SetPSHWPeak, and
+    // refreshes pbWarningSetPk via UpdateWarningSetPk.
+    //
+    // Route through setHwPeak() so the m_hwPeak cache + hwPeakChanged
+    // signal fire alongside the WDSP push.  Otherwise PsForm's editable
+    // txtPSpeak field — which subscribes to hwPeakChanged — would
+    // continue to display the old per-bench value after a Default click,
+    // even though WDSP itself is using the new psDefaultPeak.
+    setHwPeak(m_caps.psDefaultPeak);
 }
 
 // ── Save / restore ─────────────────────────────────────────────────────────
