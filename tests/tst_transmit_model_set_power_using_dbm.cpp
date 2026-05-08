@@ -550,8 +550,13 @@ private slots:
             /*bSetPower=*/true, /*bFromTune=*/false, /*bTwoTone=*/false);
 
         QCOMPARE(result.newPower, 50);
-        // XVTR factory gbb=100 (sentinel), so 50/100 = 0.5 linear fallback.
-        QCOMPARE(result.audioVolume, 0.5);
+        // Issue #202 deep-fix: XVTR factory gbb=100 (sentinel) now runs
+        // through the dBm kernel after the gbb>=99.5 short-circuit was
+        // removed (it inverted Thetis's "100 = no output power" semantic
+        // — clsHardwareSpecific.cs:463-466 [v2.10.3.13]).  audio_volume
+        // ≈ 6.25e-4 at slider 50 — i.e. essentially silent, matching
+        // Thetis's "no PA gain row → no output" behavior.
+        QVERIFY(result.audioVolume < 1.0e-3);
         QVERIFY(std::isfinite(result.audioVolume));
     }
 

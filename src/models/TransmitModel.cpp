@@ -706,7 +706,7 @@ bool TransmitModel::pureSignalActive() const noexcept
 // that drives both the wire byte (audio.cs:268) and the IQ gain
 // (cmaster.cs:1117).
 //
-// Two NereusSDR-original safety short-circuits run BEFORE the dBm math:
+// Two short-circuits run BEFORE the dBm math:
 //
 //   1. sliderWatts <= 0 returns 0.0 exactly.  Matches Thetis's
 //      console.cs:46749-46751 branch:
@@ -717,16 +717,21 @@ bool TransmitModel::pureSignalActive() const noexcept
 //      can be called from tests + external callers, so failing-loud-zero is
 //      the safe behavior.
 //
-//   2. gbb >= 99.5 returns clamp(sliderWatts / 100.0, 0, 1) linear fallback.
-//      NereusSDR-original deviation: HL2 PA-bypass sentinel preserves
-//      pre-v0.3.2 transmit behavior.  See mi0bot
-//      clsHardwareSpecific.cs:484 [v2.10.3.13-beta2] "100 is no output power".
-//      The 99.5 threshold catches: (a) HL2 HF bands (gbb=100), (b) NereusSDR
-//      Bypass profile (every band gbb=100), (c) any out-of-range Band cast
-//      (PaProfile::getGainForBand sentinel = 1000).  Without this short-
-//      circuit, HL2 80m at 100 W slider would produce audio_volume ≈ 0.0009
-//      (effectively silent on the air) — a regression from v0.3.1 which
-//      worked for HL2 users by virtue of having no PA-gain compensation.
+//   2. HERMESLITE branch — full mi0bot-Thetis HL2 audio-volume formula
+//      `(hl2Power * gbb/100) / 93.75` (mi0bot-Thetis console.cs:47775-47778
+//      [v2.10.3.13-beta2]).  Runs BEFORE the dBm math because HL2's PA
+//      attenuator topology is fundamentally different (signed dB attenuator
+//      vs. analog PA gain compensation).  Non-HL2 paths fall through to
+//      the canonical Thetis dBm kernel below.
+//
+// Removed in #202 deep-fix: a NereusSDR-original `gbb >= 99.5 → linear
+// identity sliderWatts/100` short-circuit.  It inverted the Thetis semantic
+// "100 = no output power" (clsHardwareSpecific.cs:463-466 [v2.10.3.13])
+// into "100 = full output", which made the Bypass profile and any
+// out-of-range Band cast emit wire byte 255 at slider 100.  The Thetis
+// kernel at console.cs:46720-46758 always runs; with gbb=100 it produces
+// audio_volume ≈ 0.0009 (essentially silent), which is the correct
+// "this band has no PA gain row" behavior.
 //
 // The math itself is the canonical Thetis sequence:
 //
@@ -775,19 +780,25 @@ double TransmitModel::computeAudioVolume(const PaProfile& profile,
         return std::clamp(v, 0.0, 1.0);
     }
 
-    // NereusSDR-original deviation: HL2 PA-bypass sentinel preserves pre-
-    // v0.3.2 transmit behavior. See mi0bot clsHardwareSpecific.cs:484
-    // [v2.10.3.13-beta2] "100 is no output power".
+    // No `gbb >= 99.5` linear-identity short-circuit here.  In Thetis
+    // (clsHardwareSpecific.cs:463-466 [v2.10.3.13]) the gains array is
+    // initialised to 100.0f with the explicit comment:
+    //   "max them out, these gains are PA attenuations, so 100 is no output power"
+    // and SetPowerUsingTargetDBM (console.cs:46720-46758 [v2.10.3.13]) always
+    // runs the dBm kernel — it never short-circuits to a linear identity
+    // path.  With gbb=100 the kernel produces target_dbm = -50 dBm at
+    // sliderWatts=100, target_volts ≈ 0.0007, audio_volume ≈ 0.0009 — i.e.
+    // essentially zero output, which is the correct semantic for the
+    // "this band is not handled by my PA gain row" case.
     //
-    // The 99.5 threshold (vs. exact == 100.0f) handles float-precision noise
-    // from UI round-trips.  Out-of-range Band hits this path via
-    // PaProfile::getGainForBand returning the 1000 sentinel — the safety
-    // net catches programming errors (raw int casts to Band) instead of
-    // silently producing audio_volume = 1.0.
-    if (gbb >= 99.5f) {
-        const double linear = static_cast<double>(sliderWatts) / 100.0;
-        return std::clamp(linear, 0.0, 1.0);
-    }
+    // A previous NereusSDR-original short-circuit
+    //   if (gbb >= 99.5f) return std::clamp(sliderWatts / 100.0, 0.0, 1.0);
+    // inverted that semantic to "100 = full output (linear identity)".
+    // That made the Bypass profile (kPaGainSentinel = 100.0f every band) and
+    // any out-of-range Band emit wire byte 255 at slider 100 — the issue
+    // #202 trapdoor.  Removed; the Thetis kernel below now runs for all
+    // non-HL2 paths.  HL2 retains its mi0bot-Thetis formula above
+    // (TransmitModel.cpp:772-776).
 
     // From Thetis console.cs:46720-46724 [v2.10.3.13]:
     //   double target_dbm = 10 * (double)Math.Log10((double)new_pwr * 1000);

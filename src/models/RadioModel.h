@@ -785,6 +785,36 @@ signals:
 private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
 
+    // ── #202 deep-fix: Audio.RadioVolume setter analogue ─────────────────────
+    //
+    // Mirrors Thetis audio.cs:262-271 [v2.10.3.13]:
+    //   public static double RadioVolume {
+    //       set {
+    //           radio_volume = value;
+    //           NetworkIO.SetOutputPower((float)(value * 1.02));   // wire byte
+    //           cmaster.CMSetTXOutputLevel();                       // IQ scalar
+    //       }
+    //   }
+    //
+    // Connected to TransmitModel::audioVolumeChanged so every call to
+    // setPowerUsingTargetDbm (drive slider, TUNE-on, TUN-off restore,
+    // two-tone) and any future audio_volume mutator pumps the wire byte +
+    // IQ scalar uniformly.  Also re-pumped on TransmitModel::
+    // swrProtectFactorChanged (mirrors console.cs:26102-26109 [v2.10.3.13]
+    // `Audio.RadioVolume = Audio.RadioVolume` re-emission when SWRProtect
+    // changes mid-TX).
+    //
+    // Wire byte composition is byte-for-byte equivalent to Thetis
+    // NetworkIO.cs:201-211 [v2.10.3.13]:
+    //   if (f < 0.0) f = 0.0F;
+    //   if (f >= 1.0) f = 1.0F;
+    //   int i = (int)(255 * f * _swr_protect);
+    // IQ scalar mirrors cmaster.cs:1115-1119 [v2.10.3.13]:
+    //   double level = Audio.RadioVolume * Audio.HighSWRScale;
+    // where HighSWRScale is set to 1.0 once at console.cs:29194 and never
+    // reassigned anywhere in baseline Thetis — effectively no-op.
+    void pumpAudioVolume(double audioVolume);
+
 private:
     // Phase 3Q-1: drives the RadioModel-level connection state machine.
     // Guards against redundant transitions (no emit if state unchanged).
@@ -1099,6 +1129,13 @@ private:
     //   exported for H.3 UI polling.
     //   Cite: Thetis console.cs:30010 [v2.10.3.13] — _tuning = true.
     bool m_isTuning{false};
+
+    // m_lastAudioVolume: cache of the most recent value emitted by
+    //   TransmitModel::audioVolumeChanged.  Used by the swrProtectFactorChanged
+    //   re-pump path (mirrors Thetis console.cs:26108 [v2.10.3.13]
+    //   `Audio.RadioVolume = Audio.RadioVolume` self-assign re-emission when
+    //   SWRProtect changes mid-TX).  Updated only by pumpAudioVolume.
+    double m_lastAudioVolume{0.0};
 
     // ── Issue #177 fix — Thetis-faithful TUN-off ordering ────────────────────
     //

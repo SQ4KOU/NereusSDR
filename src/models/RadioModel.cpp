@@ -865,25 +865,31 @@ RadioModel::RadioModel(QObject* parent)
     // accepted into the model but not pushed to the wire, matching
     // Thetis behaviour.
     //
-    // Phase 4 Agent 4A of issue #167 (K2GX safety hotfix) — replaces the
-    // previous linear `wire = clamp(int(255*f*swrProtect),0,255)` formula
-    // (cited to mi0bot NetworkIO.cs:209-211 [v2.10.3.14-beta1] — fork-
-    // specific divergence) with the Thetis-canonical dBm-target chain:
+    // Phase 4 Agent 4A of issue #167 (K2GX safety hotfix) introduced the
+    // Thetis-canonical dBm-target chain (replacing a previous linear
+    // `wire = clamp(int(255*f*swrProtect),0,255)` formula that had no
+    // per-band PA-gain compensation).  Issue #202 deep-fix reverted a
+    // mistaken SWR-topology comment that previously claimed the wire
+    // byte should NOT see SWR foldback.  The actual Thetis topology
+    // (NetworkIO.cs:201-211 [v2.10.3.13]) puts SWR foldback on the
+    // wire byte:
     //
-    //   wire_byte = clamp(int(audio_volume * 1.02 * 255), 0, 255)
-    //               From Thetis audio.cs:262-271 [v2.10.3.13] —
-    //               `NetworkIO.SetOutputPower((float)(value * 1.02))`.
-    //               NO SWR factor on wire byte (MW0LGE-canonical topology).
+    //   wire_byte = (int)(255 * clamp(audio_volume * 1.02, 0, 1) * _swr_protect)
+    //               From Thetis audio.cs:262-271 [v2.10.3.13]
+    //               `NetworkIO.SetOutputPower((float)(value * 1.02))`
+    //               and NetworkIO.cs:201-211 [v2.10.3.13] which clamps
+    //               and applies _swr_protect.
     //
-    //   iq_gain   = audio_volume * swrProtect
-    //               From Thetis cmaster.cs:1115-1119 [v2.10.3.13] —
-    //               `level = RadioVolume * HighSWRScale` ->
-    //               `SetTXFixedGain(0, level, level)`. SWR factor lives HERE.
+    //   iq_gain   = audio_volume * Audio.HighSWRScale
+    //               From Thetis cmaster.cs:1115-1119 [v2.10.3.13].
+    //               HighSWRScale is set to 1.0 once at console.cs:29194
+    //               [v2.10.3.13] and never reassigned anywhere in
+    //               baseline Thetis — IQ-side path is effectively no-op.
     //
-    // The asymmetry is intentional per MW0LGE topology — the wire byte
-    // never sees the SWR foldback, only the IQ scalar fed into the WDSP
-    // TX chain does.  DO NOT "fix" this by adding swrProtect to the wire
-    // byte; doing so reverts the K2GX safety regression.
+    // Wire+IQ composition lives in RadioModel::pumpAudioVolume (one
+    // helper), wired below to TransmitModel::audioVolumeChanged so every
+    // setPowerUsingTargetDbm callsite + future audio_volume mutator
+    // pumps both paths uniformly.
     //
     // Pre-hotfix: ANAN-8000DLE 80m TUN at slider=50 produced wire_byte=127
     // (=> ~300W on a 200W radio).  Post-hotfix: wire_byte=49 (=> ~85W).
@@ -917,21 +923,38 @@ RadioModel::RadioModel(QObject* parent)
             /*bFromTune=*/false, /*bTwoTone=*/false,
             m_hardwareProfile.model);
 
-        // Compose wire byte + IQ scalar per Thetis topology cited above.
-        const float swrProtect =
-            std::clamp(m_transmitModel.swrProtectFactor(), 0.0f, 1.0f);
-        const int wireDrive = std::clamp(
-            int(result.audioVolume * 1.02 * 255.0), 0, 255);
-        const double iqGain =
-            result.audioVolume * static_cast<double>(swrProtect);
+        // Wire byte + IQ scalar pump now happens inside pumpAudioVolume,
+        // wired below to TransmitModel::audioVolumeChanged.  setPowerUsingTargetDbm
+        // emits that signal at TransmitModel.cpp:1129, which fires the
+        // listener synchronously (Qt::AutoConnection on same thread).
+        (void)result;
+    });
 
-        if (m_txChannel) {
-            m_txChannel->setTxFixedGain(iqGain);
-        }
-        auto* conn = m_connection;
-        QMetaObject::invokeMethod(conn, [conn, wireDrive]() {
-            conn->setTxDrive(wireDrive);
-        });
+    // ── #202 deep-fix: Audio.RadioVolume setter analogue ─────────────────────
+    //
+    // Connect TransmitModel::audioVolumeChanged → RadioModel::pumpAudioVolume
+    // so every call to setPowerUsingTargetDbm (drive slider, TUNE-on, TUN-off
+    // restore, two-tone) and any future audio_volume mutator pumps wire byte
+    // + IQ scalar uniformly.  Mirrors Thetis audio.cs:262-271 [v2.10.3.13]
+    // setter side-effects.
+    connect(&m_transmitModel, &TransmitModel::audioVolumeChanged,
+            this, &RadioModel::pumpAudioVolume);
+
+    // Connect TransmitModel::swrProtectFactorChanged → re-pump current
+    // audio_volume through the new SWR factor.  Mirrors Thetis
+    // console.cs:26102-26109 [v2.10.3.13]:
+    //   if (_swr_wind_back_power && swrprotection && old_swr_protect != NetworkIO.SWRProtect)
+    //   {
+    //       // setting SWRProtect does nothing unless power is changed,
+    //       // RadioVolume is the only code that uses SWRProtect using
+    //       // NetworkIO.SetOutputPower.
+    //       Audio.RadioVolume = Audio.RadioVolume;  // self-assign re-emits
+    //   }
+    // The NereusSDR cache (m_lastAudioVolume, updated inside pumpAudioVolume)
+    // stands in for Thetis's `radio_volume` backing field.
+    connect(&m_transmitModel, &TransmitModel::swrProtectFactorChanged,
+            this, [this](float /*factor*/) {
+        pumpAudioVolume(m_lastAudioVolume);
     });
 
     // Bench-reported #167 follow-up: power meters stick after un-key.
@@ -4692,6 +4715,80 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
     }
 }
 
+// ── #202 deep-fix: pumpAudioVolume — Audio.RadioVolume setter analogue ──────
+//
+// Direct port of the Thetis `Audio.RadioVolume` setter side-effects
+// (audio.cs:262-271 [v2.10.3.13]):
+//   set {
+//       radio_volume = value;
+//       NetworkIO.SetOutputPower((float)(value * 1.02));
+//       cmaster.CMSetTXOutputLevel();
+//   }
+//
+// Wire byte path mirrors NetworkIO.cs:201-211 [v2.10.3.13]:
+//   public static void SetOutputPower(float f) {
+//       if (f < 0.0) f = 0.0F;
+//       if (f >= 1.0) f = 1.0F;
+//       int i = (int)(255 * f * _swr_protect);
+//       SetOutputPowerFactor(i);
+//   }
+// — note `f` is the audio_volume * 1.02 already.  SWR foldback (`_swr_protect`)
+// multiplies the wire byte HERE, NOT the IQ scalar.  This is the opposite of
+// what the prior NereusSDR code did (it placed swrProtect on the IQ scalar).
+// The earlier "MW0LGE-canonical topology" comment was a misreading of the
+// upstream source — Thetis's `Audio.HighSWRScale` (the IQ-side multiplier in
+// cmaster.cs:1117) is set to 1.0 once at console.cs:29194 [v2.10.3.13] and
+// never reassigned anywhere in baseline Thetis, making the IQ-side path a
+// no-op.  Real SWR foldback in Thetis is wire-byte only.
+//
+// IQ scalar path mirrors cmaster.cs:1115-1119 [v2.10.3.13]:
+//   public static void CMSetTXOutputLevel() {
+//       double level = Audio.RadioVolume * Audio.HighSWRScale;
+//       cmaster.SetTXFixedGain(0, level, level);
+//   }
+// With HighSWRScale baseline-1.0, the IQ scalar is just audio_volume.
+//
+// Caches the value into m_lastAudioVolume so a subsequent
+// swrProtectFactorChanged emit can re-pump the same audio_volume through
+// updated SWR protect (mirrors console.cs:26102-26109 [v2.10.3.13]
+// `Audio.RadioVolume = Audio.RadioVolume` re-emit on _swr_protect change).
+void RadioModel::pumpAudioVolume(double audioVolume)
+{
+    if (!m_connection) {
+        // No live connection — cache the value but skip the wire write.
+        // The next setPowerUsingTargetDbm after Connected will re-emit
+        // and reach the wire path.
+        m_lastAudioVolume = audioVolume;
+        return;
+    }
+
+    m_lastAudioVolume = audioVolume;
+
+    const float swrProtect =
+        std::clamp(m_transmitModel.swrProtectFactor(), 0.0f, 1.0f);
+
+    // Byte-for-byte port of NetworkIO.SetOutputPower(float f) at
+    // NetworkIO.cs:201-211 [v2.10.3.13].  `f` is `audioVolume * 1.02`
+    // (audio.cs:268 passes that argument).
+    double f = audioVolume * 1.02;
+    if (f < 0.0) { f = 0.0; }
+    if (f >= 1.0) { f = 1.0; }
+    const int wireDrive = static_cast<int>(255.0 * f
+                                            * static_cast<double>(swrProtect));
+
+    // IQ scalar — Audio.RadioVolume * Audio.HighSWRScale, with
+    // HighSWRScale = 1.0 (baseline Thetis).  No SWR factor.
+    const double iqGain = audioVolume;
+
+    if (m_txChannel) {
+        m_txChannel->setTxFixedGain(iqGain);
+    }
+    auto* conn = m_connection;
+    QMetaObject::invokeMethod(conn, [conn, wireDrive]() {
+        conn->setTxDrive(wireDrive);
+    });
+}
+
 // ── Phase 3M-0 Task 6: Ganymede PA-trip live state ──────────────────────────
 // Porting from Thetis Andromeda/Andromeda.cs:914-948 [v2.10.3.13]
 // (CATHandleAmplifierTripMessage + GanymedeResetPressed).
@@ -4838,6 +4935,16 @@ void RadioModel::setTune(bool on)
         // matches Thetis ordering for future maintainers reading side-by-side.
         m_isTuning = true;
 
+        // #202 deep-fix: propagate TUNE state to TransmitModel so its
+        // m_tune flag (read by SetPowerUsingTargetDBM at TransmitModel.cpp:935-945)
+        // tracks Thetis's `chkTUN.Checked` semantic.  Without this, a
+        // power-slider movement during active TUNE would route through
+        // setPowerUsingTargetDbm's txMode-0 (drive-slider) branch instead
+        // of staying on the tune-power source — sending the wrong drive
+        // byte mid-TUN.  Mirrors Thetis console.cs:46665 [v2.10.3.13]
+        // which reads `chkTUN.Checked` directly.
+        m_transmitModel.setTune(true);
+
         // Issue #177 — cancel any pending TUN-off completion.  If the user
         // double-clicks TUN (off → on within the rxReady + 100 ms settle
         // window) we are mid-walk: the rxReady slot has not yet fired or has
@@ -4889,6 +4996,18 @@ void RadioModel::setTune(bool on)
         //   radio.GetDSPTX(0).TXPostGenMode = 0;
         //   radio.GetDSPTX(0).TXPostGenToneMag = MAX_TONE_MAG;
         //   radio.GetDSPTX(0).TXPostGenRun = 1;
+        //
+        // Tone gen runs by default on TUN-on; the new_pwr==0 path below
+        // (after setPowerUsingTargetDbm) flips TXPostGenRun back to 0 if the
+        // resolved tune power happens to be zero, mirroring Thetis
+        // console.cs:46749-46758 [v2.10.3.13]:
+        //   if (new_pwr == 0) {
+        //       Audio.RadioVolume = 0.0;
+        //       if (chkTUN.Checked) radio.GetDSPTX(0).TXPostGenRun = 0;
+        //   } else {
+        //       if (chkTUN.Checked) radio.GetDSPTX(0).TXPostGenRun = 1;
+        //       Audio.RadioVolume = ...;
+        //   }
         if (m_txChannel) {
             m_txChannel->setTuneTone(true, signedFreq, TxChannel::kMaxToneMag);
         }
@@ -4957,26 +5076,27 @@ void RadioModel::setTune(bool on)
                 // Issue #175 Task 4: thread connected model so HL2
                 // sub-step DSP audio-gain modulation engages on the TUN
                 // path (mi0bot console.cs:47660-47673 [v2.10.3.13-beta2]).
+                //
+                // setPowerUsingTargetDbm emits audioVolumeChanged at
+                // TransmitModel.cpp:1129; the listener wired in the
+                // constructor (RadioModel::pumpAudioVolume) composes the
+                // wire byte + IQ scalar Thetis-faithfully and pushes them.
                 const auto result = m_transmitModel.setPowerUsingTargetDbm(
                     *activeProfile, currentBand, /*bSetPower=*/true,
                     /*bFromTune=*/true, /*bTwoTone=*/false,
                     m_hardwareProfile.model);
 
-                const float swrProtect =
-                    std::clamp(m_transmitModel.swrProtectFactor(), 0.0f, 1.0f);
-                const int wireTuneDrive = std::clamp(
-                    int(result.audioVolume * 1.02 * 255.0), 0, 255);
-                const double iqGain =
-                    result.audioVolume * static_cast<double>(swrProtect);
-
-                if (m_txChannel) {
-                    m_txChannel->setTxFixedGain(iqGain);
-                }
-                if (m_connection) {
-                    auto* conn = m_connection;
-                    QMetaObject::invokeMethod(conn, [conn, wireTuneDrive]() {
-                        conn->setTxDrive(wireTuneDrive);
-                    });
+                // #202 deep-fix: TXPostGenRun=0 case for new_pwr==0 during TUNE.
+                // Mirrors Thetis console.cs:46749-46752 [v2.10.3.13]:
+                //   if (new_pwr == 0) {
+                //       Audio.RadioVolume = 0.0;
+                //       if (chkTUN.Checked) radio.GetDSPTX(0).TXPostGenRun = 0;
+                //   }
+                // setTuneTone(false, ...) maps to TXPostGenRun=0 in NereusSDR's
+                // TxChannel wrapper (sets the run flag while leaving freq/mag).
+                if (result.newPower == 0 && m_txChannel) {
+                    m_txChannel->setTuneTone(false, signedFreq,
+                                             TxChannel::kMaxToneMag);
                 }
             }
             // No active profile loaded -> silently no-op the TUNE power
@@ -5083,6 +5203,16 @@ void RadioModel::setTune(bool on)
         // Until then, the rest of the TUN-off work (gen1 off, mode restore,
         // power restore, VFO un-offset) is deferred.
         m_pendingTuneOff = true;
+
+        // #202 deep-fix: clear TransmitModel's m_tune flag — symmetric with
+        // setTune(true) in the TUN-on branch.  Mirrors Thetis user-click
+        // semantic at console.cs:30106 [v2.10.3.13]: chkTUN.Checked = false
+        // is the user intent that the TUN-off branch responds to.  Cleared
+        // here (synchronously at user click) rather than inside
+        // completeTuneOff (deferred ~130 ms later) so a power-slider event
+        // arriving in the gap correctly routes through txMode-0 (drive-
+        // slider) rather than txMode-1 (TUNE).
+        m_transmitModel.setTune(false);
 
         // Capture MOX state BEFORE calling MoxController::setTune so we can
         // detect the "MOX already RX" path that would otherwise strand the
@@ -5227,25 +5357,16 @@ void RadioModel::completeTuneOff()
             // Issue #175 Task 4: thread connected model so the TUN-off
             // restore (txMode 0 path back to drive slider) is uniform
             // with the TUN-on path; non-HL2 SKUs unaffected.
+            //
+            // setPowerUsingTargetDbm emits audioVolumeChanged at
+            // TransmitModel.cpp:1129; the listener wired in the
+            // constructor (RadioModel::pumpAudioVolume) composes the wire
+            // byte + IQ scalar Thetis-faithfully and pushes them.
             const auto result = m_transmitModel.setPowerUsingTargetDbm(
                 *activeProfile, offBand, /*bSetPower=*/true,
                 /*bFromTune=*/false, /*bTwoTone=*/false,
                 m_hardwareProfile.model);
-            const float swrProtectSaved =
-                std::clamp(m_transmitModel.swrProtectFactor(), 0.0f, 1.0f);
-            const int savedWireDrive = std::clamp(
-                int(result.audioVolume * 1.02 * 255.0), 0, 255);
-            const double iqGain = result.audioVolume
-                                   * static_cast<double>(swrProtectSaved);
-            if (m_txChannel) {
-                m_txChannel->setTxFixedGain(iqGain);
-            }
-            if (m_connection) {
-                auto* conn = m_connection;
-                QMetaObject::invokeMethod(conn, [conn, savedWireDrive]() {
-                    conn->setTxDrive(savedWireDrive);
-                });
-            }
+            (void)result;
         }
     }
 

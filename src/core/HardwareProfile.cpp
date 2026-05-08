@@ -206,9 +206,29 @@ HardwareProfile profileForModel(HPSDRModel model)
 HPSDRModel defaultModelForBoard(HPSDRHW board)
 {
     // Walk HPSDRModel enum, return first match.
+    //
+    // Skip ORIONMKII: Thetis's user-facing comboRadioModel.Items list
+    // intentionally omits "ORIONMKII"
+    // (setup.Designer.cs:8515-8528 [v2.10.3.13] — only ANAN-7000DLE,
+    // ANAN-8000DLE, ANVELINA-PRO3, RED-PITAYA appear for the OrionMKII PCB)
+    // and StringModelToEnum has no string entry for it
+    // (clsHardwareSpecific.cs:316-351 [v2.10.3.13]).  database.cs:10350
+    // [v2.10.3.13] explicitly notes: "not implemented in comboRadioModel
+    // list items".  The bare ORIONMKII enum is kept in code only as a
+    // legacy switch fall-through (its DefaultPAGainsForBands row groups
+    // with FIRST/HERMES/HPSDR at clsHardwareSpecific.cs:471-486 — the
+    // Hermes 41 dB row).  Productized OrionMKII boards (ANAN-7000DLE /
+    // 8000DLE / AnvelinaPro3 / RedPitaya) all have ~50 dB PA gain rather
+    // than 41 dB, so auto-defaulting to ORIONMKII over-drives those PAs.
+    // Skip it on the auto-pick walk to mirror Thetis's user-facing
+    // exclusion; the iteration naturally lands on ANAN7000D for the
+    // OrionMKII boardtype, which carries the correct kAnan7000dRow gains.
     for (int i = static_cast<int>(HPSDRModel::FIRST) + 1;
          i < static_cast<int>(HPSDRModel::LAST); ++i) {
         auto m = static_cast<HPSDRModel>(i);
+        if (m == HPSDRModel::ORIONMKII) {
+            continue;
+        }
         if (boardForModel(m) == board) {
             return m;
         }
