@@ -308,6 +308,8 @@ warren@wpratt.com
 #include "core/audio/VirtualCableDetector.h"
 
 #include <QApplication>
+#include <QGuiApplication>
+#include <QScreen>
 #include <QSlider>
 #include <QCloseEvent>
 #include <QResizeEvent>
@@ -679,11 +681,59 @@ MainWindow::MainWindow(QWidget* parent)
         if (m_containerManager) {
             m_containerManager->saveState();
         }
+        // Issue #206 — also flush window geometry on signal-based
+        // shutdown (SIGTERM / force-quit). Idempotent with the
+        // closeEvent path above.
+        saveMainWindowGeometry();
         AppSettings::instance().save();
     });
 }
 
 MainWindow::~MainWindow() = default;
+
+// Issue #206 — main-window geometry persistence. Qt's saveGeometry()
+// returns a versioned QByteArray that already encodes position, size,
+// AND window state (Normal/Maximized/FullScreen) plus screen identity
+// for multi-monitor setups. We base64-encode it so AppSettings (which
+// stores QString values) can round-trip the blob unmodified.
+void MainWindow::saveMainWindowGeometry()
+{
+    auto& s = AppSettings::instance();
+    s.setValue(QStringLiteral("MainWindowGeometry"),
+               QString::fromLatin1(saveGeometry().toBase64()));
+}
+
+bool MainWindow::restoreMainWindowGeometry()
+{
+    auto& s = AppSettings::instance();
+    const QString blob = s.value(QStringLiteral("MainWindowGeometry")).toString();
+    if (blob.isEmpty()) {
+        return false;
+    }
+    const QByteArray bytes = QByteArray::fromBase64(blob.toLatin1());
+    if (bytes.isEmpty() || !restoreGeometry(bytes)) {
+        return false;
+    }
+
+    // Multi-screen safety: if the restored frame's center sits outside
+    // every connected screen (monitor disconnected since last save),
+    // fall back to the centered 1280×800 default rather than parking
+    // the window offscreen where the user can't reach it.
+    const QPoint center = frameGeometry().center();
+    if (!QGuiApplication::screenAt(center)) {
+        resize(1280, 800);
+        if (auto* primary = QGuiApplication::primaryScreen()) {
+            const QRect avail = primary->availableGeometry();
+            move(avail.center() - QPoint(width() / 2, height() / 2));
+        }
+        // Drop any saved Maximized/FullScreen bit so we don't immediately
+        // re-maximize onto a screen layout that no longer matches.
+        setWindowState(Qt::WindowNoState);
+        return false;
+    }
+
+    return true;
+}
 
 void MainWindow::buildUI()
 {
@@ -699,6 +749,13 @@ void MainWindow::buildUI()
     }
     setMinimumSize(800, 600);
     resize(1280, 800);
+
+    // Issue #206 — restore last session's window position, size, and
+    // maximized/fullscreen state. The 1280×800 above stays as the
+    // first-launch fallback; restoreMainWindowGeometry() returns false
+    // when no saved blob exists or the blob is corrupted, in which
+    // case Qt centers the default size on the primary screen as before.
+    restoreMainWindowGeometry();
 
     // --- Main QSplitter: spectrum (left) + container panel (right) ---
     // AetherSDR pattern: right panel is a proper layout element, not an overlay.
@@ -4709,6 +4766,11 @@ void MainWindow::closeEvent(QCloseEvent* event)
     if (m_containerManager) {
         m_containerManager->saveState();
     }
+
+    // Issue #206 — persist window geometry + maximized/fullscreen
+    // state. Captured BEFORE close so the saved blob reflects the
+    // user-visible state, not Qt's mid-teardown geometry.
+    saveMainWindowGeometry();
 
     AppSettings::instance().save();
     event->accept();
