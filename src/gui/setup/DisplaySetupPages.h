@@ -67,10 +67,12 @@ class QSpinBox;
 class QDoubleSpinBox;
 class QCheckBox;
 class QLabel;
+class QPushButton;
 
 namespace NereusSDR {
 
 class PanadapterModel;
+class ColorSwatchButton;
 
 // ---------------------------------------------------------------------------
 // Display > Spectrum Defaults
@@ -82,18 +84,61 @@ class SpectrumDefaultsPage : public SetupPage {
 public:
     explicit SpectrumDefaultsPage(RadioModel* model, QWidget* parent = nullptr);
 
+signals:
+    /// Emitted when the user clicks "Configure peaks →".
+    /// SetupDialog connects to selectPage("Spectrum Peaks").
+    void navigateToSpectrumPeaksRequested();
+
+    /// Emitted when the user clicks "Configure multimeter →".
+    /// SetupDialog will connect to selectPage("Multimeter") in Task 3.1.
+    void navigateToMultimeterRequested();
+
 private:
     void buildUI();
     void loadFromRenderer();
     void pushFps(int fps);
 
     // Section: FFT
-    QComboBox* m_fftSizeCombo{nullptr};      // 1024/2048/4096/8192/16384
-    QComboBox* m_windowCombo{nullptr};       // Blackman-Harris/Hann/Hamming/Flat-Top
+    // Phase 2: FFT size is a 0..6 slider (Thetis tbDisplayFFTSize per
+    // setup.designer.cs:35043 [v2.10.3.13]).  Slider value maps to
+    // 4096 << v -> {4096, 8192, 16384, 32768, 65536, 131072, 262144}.
+    // m_fftSizeReadout shows the current size as text alongside the slider.
+    QSlider*   m_fftSizeSlider{nullptr};
+    QLabel*    m_fftSizeReadout{nullptr};
+    // Always-visible bin-width readout in the FFT group, paired with the
+    // "Bin Width (Hz)" prefix label.  Mirrors Thetis lblDisplayBinWidth at
+    // setup.designer.cs:35010-35021 [v2.10.3.13].  Distinct from
+    // m_binWidthReadout (Overlays group, gates the on-spectrum corner
+    // overlay -- a NereusSDR-original control).
+    QLabel*    m_binWidthLabel{nullptr};
+    // Window combo: 7 Thetis-faithful items (Rectangular / Blackman-Harris
+    // 4T / Hann / Flat-Top / Hamming / Kaiser / Blackman-Harris 7T) per
+    // setup.designer.cs:34966-34973 [v2.10.3.13].  Combo index maps 1:1
+    // to WindowFunction enum integer value (both follow WDSP analyzer.c
+    // case codes).
+    QComboBox* m_windowCombo{nullptr};
+
+    // Hz/bin target spinbox (Option 3 — 2026-05-08 design).  0 = off
+    // (use bins-in-window default); > 0 = override the auto-zoom replan
+    // formula to deliver constant Hz/bin regardless of zoom level.
+    QDoubleSpinBox* m_hzPerBinTargetSpin{nullptr};
 
     // Section: Rendering
     QSlider*   m_fpSlider{nullptr};          // 10–60 fps
-    QComboBox* m_averagingCombo{nullptr};    // None/Weighted/Logarithmic/TimeWindow
+    // Defensive secondary reference to the FPS spin readout cell.  The
+    // bidirectional slider-spin sync wired in makeSliderRow should keep
+    // them in lockstep, but pushFps explicitly sets m_fpSpin->setValue()
+    // as a belt-and-braces measure -- JJ reported the spin readout
+    // sticking at 30 even when slider was at 60, suggesting the
+    // makeSliderRow connect doesn't fire reliably under some conditions.
+    QSpinBox*  m_fpSpin{nullptr};
+    // Legacy "Averaging" combo removed in v0.3.0; setAverageMode() no longer
+    // drives the renderer. m_spectrumAveragingCombo + m_spectrumAvgTimeSpin
+    // (Thetis-faithful split) are the canonical controls.
+    // Task 2.1: Detector + Averaging split (handwave fix from 3G-8).
+    // From Thetis comboDispPanDetector/comboDispPanAveraging [v2.10.3.13].
+    QComboBox* m_spectrumDetectorCombo{nullptr};  // Peak/Rosenfell/Average/Sample/RMS
+    QComboBox* m_spectrumAveragingCombo{nullptr}; // None/Recursive/Time Window/Log Recursive
     QSpinBox*  m_averagingTimeSpin{nullptr}; // S15 avg time (ms)
     QSpinBox*  m_decimationSpin{nullptr};    // S16 decimation
     QCheckBox* m_fillToggle{nullptr};        // Fill under spectrum trace
@@ -110,6 +155,32 @@ private:
 
     // Section: Thread (S17)
     QComboBox*      m_threadPriorityCombo{nullptr};
+
+    // Section: Cross-links (Task 2.4)
+    QPushButton*    m_configurePeaksBtn{nullptr};
+    QPushButton*    m_configureMultimeterBtn{nullptr};
+
+    // Section: Spectrum Overlays (Task 2.3)
+    // From Thetis setup.designer.cs:33043 [v2.10.3.13] chkShowMHzOnCursor
+    QCheckBox* m_showMHzOnCursorToggle{nullptr};
+    // From Thetis setup.cs:7061 [v2.10.3.13] lblDisplayBinWidth
+    QCheckBox* m_showBinWidthToggle{nullptr};
+    QLabel*    m_binWidthReadout{nullptr};
+    // From Thetis display.cs:2304 [v2.10.3.13] m_bShowNoiseFloorDBM
+    QCheckBox* m_showNoiseFloorToggle{nullptr};
+    QComboBox* m_noiseFloorPositionCombo{nullptr};
+    // NF render parameters — From Thetis display.cs:2310-2337 + 5763 [v2.10.3.13].
+    QDoubleSpinBox*    m_nfShiftSpin{nullptr};        // [-12, +12] dB
+    QDoubleSpinBox*    m_nfLineWidthSpin{nullptr};    // [1.0, 5.0]
+    ColorSwatchButton* m_nfLineColorBtn{nullptr};
+    ColorSwatchButton* m_nfTextColorBtn{nullptr};
+    ColorSwatchButton* m_nfFastColorBtn{nullptr};
+    // From Thetis specHPSDR.cs:325 [v2.10.3.13] NormOneHzPan
+    QCheckBox* m_dispNormalizeToggle{nullptr};
+    // From Thetis console.cs:20073 [v2.10.3.13] PeakTextDelay
+    QCheckBox* m_showPeakValueOverlayToggle{nullptr};
+    QComboBox* m_peakValuePositionCombo{nullptr};
+    QSpinBox*  m_peakTextDelaySpin{nullptr};
 };
 
 // ---------------------------------------------------------------------------
@@ -125,6 +196,7 @@ private:
     void buildUI();
     void loadFromRenderer();
     void updateEffectiveDepthLabel();
+    void updateDelayLabel();          // Task 2.8: live "Delay: NN.N s" readout
 
     // Section: Levels
     QSlider*           m_highThresholdSlider{nullptr};
@@ -133,12 +205,28 @@ private:
     // W10 Low Color moved to Setup → Appearance → Colors & Theme.
     QCheckBox*         m_useSpectrumMinMaxToggle{nullptr};    // W15
 
+    // Section: NF-AGC (Task 2.8)
+    QCheckBox* m_wfNfAgcEnable{nullptr};   // WaterfallNFAGCEnabled
+    QSpinBox*  m_wfAgcOffsetDb{nullptr};   // WaterfallAGCOffsetDb (-60..+60)
+
     // Section: Display
     QSlider*   m_updatePeriodSlider{nullptr};
-    QCheckBox* m_reverseToggle{nullptr};
+    QLabel*    m_delayLabel{nullptr};      // Task 2.8: live "Delay: NN.N s" readout
+    QCheckBox* m_wfStopOnTx{nullptr};      // Task 2.8: WaterfallStopOnTx
     QSlider*   m_opacitySlider{nullptr};
     QComboBox* m_colorSchemeCombo{nullptr};  // 7 schemes
-    QComboBox* m_wfAveragingCombo{nullptr};  // W16
+    // W16 legacy combo removed in v0.3.0; the Thetis-faithful split combos
+    // m_waterfallDetectorCombo + m_waterfallAveragingCombo (below) replace it.
+    // Task 2.1: Detector + Averaging split for waterfall.
+    // From Thetis comboDispWFDetector/comboDispWFAveraging [v2.10.3.13].
+    QComboBox* m_waterfallDetectorCombo{nullptr};  // Peak/Rosenfell/Average/Sample
+    QComboBox* m_waterfallAveragingCombo{nullptr}; // None/Recursive/Time Window/Log Recursive
+    // Waterfall averaging time constant (independent from spectrum).
+    // From Thetis udDisplayAVTimeWF [v2.10.3.13] (setup.designer.cs:2086).
+    QSpinBox*  m_waterfallAvgTimeSpin{nullptr};
+
+    // Task 2.8: Copy spectrum min/max → waterfall thresholds button
+    QPushButton* m_copySpecMinMaxBtn{nullptr};
 
     // Section: Overlays
     QCheckBox* m_showRxFilterToggle{nullptr};
@@ -172,6 +260,10 @@ private:
     QCheckBox*      m_gridToggle{nullptr};
     QCheckBox*      m_dbmScaleVisibleToggle{nullptr};
     QLabel*         m_editingBandLabel{nullptr};
+    // Per-band spinbox row labels — hold a reference so they update with the
+    // active band name when the user tunes across a band boundary.
+    QLabel*         m_dbMaxRowLabel{nullptr};
+    QLabel*         m_dbMinRowLabel{nullptr};
     QSpinBox*       m_dbMaxSpin{nullptr};
     QSpinBox*       m_dbMinSpin{nullptr};
     QSpinBox*       m_dbStepSpin{nullptr};
@@ -181,6 +273,16 @@ private:
     QCheckBox*      m_zeroLineToggle{nullptr};
     QCheckBox*      m_showFpsToggle{nullptr};
     // G6/G9–G13 colour pickers moved to Setup → Appearance → Colors & Theme.
+
+    // Section: Noise-Floor Tracking (Task 2.9)
+    // From Thetis setup.cs:24202-24213 [v2.10.3.13] chkAdjustGridMinToNFRX1.
+    // RX1 scope dropped; NereusSDR applies as global panadapter default.
+    QCheckBox*   m_adjustGridMinToNF{nullptr};  // DisplayAdjustGridMinToNoiseFloor
+    QSpinBox*    m_nfOffsetGridFollow{nullptr}; // DisplayNFOffsetGridFollow (dB, -60..+60)
+    QCheckBox*   m_maintainNFAdjustDelta{nullptr}; // DisplayMaintainNFAdjustDelta
+
+    // Task 2.9: Copy waterfall thresholds → spectrum min/max (reverse of Task 2.8).
+    QPushButton* m_copyWfToSpecBtn{nullptr};
 };
 
 // ---------------------------------------------------------------------------

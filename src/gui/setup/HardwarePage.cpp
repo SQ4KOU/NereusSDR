@@ -131,6 +131,12 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
                 });
     };
     wire(m_radioInfoTab,   QStringLiteral("radioInfo"));
+
+    // Task 3.6: forward ANAN-8000DLE volts/amps toggle from RadioInfoTab up
+    // through HardwarePage so SetupDialog can route it to MainWindow.
+    connect(m_radioInfoTab, &RadioInfoTab::anan8000DleVoltsAmpsChanged,
+            this,           &HardwarePage::anan8000DleVoltsAmpsChanged);
+
     wire(m_antennaAlexTab, QStringLiteral("antennaAlex"));
     wire(m_ocOutputsTab,   QStringLiteral("ocOutputs"));
     wire(m_xvtrTab,        QStringLiteral("xvtr"));

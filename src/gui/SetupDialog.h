@@ -44,6 +44,14 @@ signals:
     // on the TxApplet.
     void cfcDialogRequested();
 
+    // Task 3.6: forwarded from GeneralOptionsPage — CPU meter rate spinbox.
+    // MainWindow::setCpuTimerIntervalHz() is the handler.
+    void cpuMeterRateChanged(int hz);
+
+    // Task 3.6: forwarded from RadioInfoTab — ANAN-8000DLE volts/amps toggle.
+    // MainWindow::setVoltsAmpsVisible() is the handler.
+    void anan8000DleVoltsAmpsChanged(bool visible);
+
 protected:
     void showEvent(QShowEvent* event) override;
 

@@ -886,6 +886,13 @@ void MainWindow::buildUI()
     // container's meter sat orphaned and bars never received setValue()
     // calls, the root of the "BarMeter not drawing" symptom.
     m_meterPoller = new MeterPoller(this);
+    // Task 3.1: expose MeterPoller via RadioModel so MultimeterPage can
+    // apply live interval + averaging-window changes without a MainWindow
+    // round-trip.  Non-owning; RadioModel stores the pointer only.
+    m_radioModel->setMeterPoller(m_meterPoller);
+    // Task 3.2: expose ContainerManager via RadioModel so MultimeterPage
+    // can broadcast unit-mode changes to all live MeterItems.
+    m_radioModel->setContainerManager(m_containerManager);
     connect(m_containerManager, &ContainerManager::meterReadyForPolling,
             this, [this](MeterWidget* meter) {
         if (!meter || !m_meterPoller) { return; }
@@ -1012,6 +1019,11 @@ void MainWindow::buildUI()
     });
     m_fftEngine->setFftSize(4096);
     m_fftEngine->setOutputFps(30);
+    // Hz/bin target — persisted in Setup → Display → Spectrum Defaults.
+    // 0 = bins-in-window default (2026-05-08 Option 3).
+    m_fftEngine->setHzPerBinTarget(
+        AppSettings::instance().value(QStringLiteral("DisplayHzPerBinTarget"),
+                                      QStringLiteral("0")).toString().toDouble());
 
     m_fftThread = new QThread(this);
     m_fftThread->setObjectName(QStringLiteral("SpectrumThread"));
@@ -1024,9 +1036,15 @@ void MainWindow::buildUI()
     connect(m_radioModel, &RadioModel::rawIqData,
             m_fftEngine, &FFTEngine::feedIQ);
 
-    // Wire: FFTEngine FFT bins → SpectrumWidget (auto-queued: spectrum → main thread)
-    connect(m_fftEngine, &FFTEngine::fftReady,
-            m_spectrumWidget, &SpectrumWidget::updateSpectrum);
+    // Wire: FFTEngine linear-power frame -> SpectrumWidget render pipeline
+    // (auto-queued: spectrum thread -> main thread).  fftReadyLinear carries
+    // the raw |X[k]|² bins plus windowEnb + dbmOffset metadata so the
+    // detector + avenger pipeline reproduces the legacy fftReady dBm output
+    // (FFTEngine.cpp:348 [v2.10.3.13]) at display-pixel resolution.  fftReady
+    // (full-bin dBm) is kept as a separate signal for chrome / AGC consumers
+    // (ClarityController, NoiseFloorTracker) wired below.
+    connect(m_fftEngine, &FFTEngine::fftReadyLinear,
+            m_spectrumWidget, &SpectrumWidget::updateSpectrumLinear);
 
     // Phase 3G-8: expose view hooks on RadioModel so Display setup pages can
     // reach the renderer / FFT engine without depending on MainWindow.
@@ -1222,6 +1240,148 @@ void MainWindow::buildUI()
         m_spectrumWidget->setWfHighThreshold(high);
     });
 
+    // Clarity → SpectrumWidget NF-aware grid (Task 2.9).
+    // NereusSDR-original — no Thetis equivalent.
+    // noiseFloorChanged fires after EWMA smoothing but before the deadband
+    // gate so the grid tracks the floor at every cadence tick.
+    connect(m_clarityController, &ClarityController::noiseFloorChanged,
+            m_spectrumWidget, &SpectrumWidget::onNoiseFloorChanged);
+
+    // Task 2.10: per-band NF priming — settle detector.
+    // NereusSDR-original — no Thetis equivalent.
+    //
+    // On each noiseFloorChanged tick, keep a 2-second sliding window of NF
+    // samples. When variance drops below 1 dB for a sustained window of ≥30
+    // samples (≈ 15 s / cadence-0.5s = 30 ticks), save the current floor to
+    // the panadapter's per-band NF slot so the next band-switch can snap
+    // instantly instead of cold-starting from zero.
+    {
+        struct NFHistoryEntry { qint64 t; float value; };
+        struct SettleState {
+            QList<NFHistoryEntry> history;
+        };
+        auto settle = QSharedPointer<SettleState>::create();
+
+        PanadapterModel* pan0 = m_radioModel->panadapters().isEmpty()
+                                ? nullptr
+                                : m_radioModel->panadapters().first();
+        if (pan0) {
+            connect(m_clarityController, &ClarityController::noiseFloorChanged,
+                    this, [pan0, settle](float nf) {
+                const qint64 now = QDateTime::currentMSecsSinceEpoch();
+                settle->history.append({now, nf});
+
+                // Trim to 2-second window.
+                const qint64 cutoff = now - 2000;
+                while (!settle->history.isEmpty() && settle->history.first().t < cutoff) {
+                    settle->history.removeFirst();
+                }
+
+                // Compute variance when we have ≥30 samples (~30 cadence ticks).
+                if (settle->history.size() >= 30) {
+                    float sum = 0.0f;
+                    for (const auto& e : std::as_const(settle->history)) { sum += e.value; }
+                    const float mean = sum / static_cast<float>(settle->history.size());
+                    float sqSum = 0.0f;
+                    for (const auto& e : std::as_const(settle->history)) {
+                        const float d = e.value - mean;
+                        sqSum += d * d;
+                    }
+                    const float variance = sqSum / static_cast<float>(settle->history.size());
+
+                    if (variance < 1.0f) {
+                        // NereusSDR-original — no Thetis equivalent.
+                        // NF settled within 1 dB variance over 2s; save for this band.
+                        pan0->setBandNFEstimate(pan0->band(), nf);
+                    }
+                }
+            });
+
+            // Task 2.10: band-change → prime ClarityController EWMA with stored NF.
+            // NereusSDR-original — no Thetis equivalent.
+            //
+            // PanadapterModel::bandChanged fires when the pan center crosses a band
+            // boundary. snapToFloor() seeds the EWMA (m_smoothedFloor) and emits
+            // waterfallThresholdsChanged immediately so the waterfall snaps to the
+            // remembered state rather than cold-starting from an uninitialized floor.
+            // NaN is ignored by snapToFloor (band with no stored data is a no-op).
+            connect(pan0, &PanadapterModel::bandChanged,
+                    this, [this, pan0](NereusSDR::Band newBand) {
+                // NereusSDR-original — no Thetis equivalent.
+                // Prime estimator with last-seen NF for this band to eliminate
+                // cold-start visual jump after band change.
+                const float storedNF = pan0->bandNFEstimate(newBand);
+                m_clarityController->snapToFloor(storedNF);
+            });
+
+            // NF fast-attack triggers — From Thetis display.cs:879-905
+            // [v2.10.3.13]:
+            //   if (rx == 1) FastAttackNoiseFloorRX1 = true;  // band change
+            //   if (Math.Abs(oldFreq - newFreq) > 0.5)         // freq jump
+            //       FastAttackNoiseFloorRX1 = true;
+            // While in fast-attack state SpectrumWidget renders the NF
+            // line/box/text in gray to signal the smoothed estimate is
+            // still settling.  Auto-clear is internal to the setter (see
+            // SpectrumWidget::setNoiseFloorFastAttack — 1000ms timer
+            // matching Thetis display.cs:5906 minimum delay).
+            if (m_spectrumWidget) {
+                connect(pan0, &PanadapterModel::bandChanged,
+                        this, [this](NereusSDR::Band) {
+                    m_spectrumWidget->setNoiseFloorFastAttack(true);
+                });
+            }
+        }
+    }
+
+    // Slice freq-jump > 0.5 MHz fast-attack trigger — Thetis display.cs:905
+    // [v2.10.3.13]: if (Math.Abs(oldFreq - newFreq) > 0.5) FastAttack = true.
+    // Smaller jumps (in-band tuning) don't shift the noise floor enough to
+    // warrant resetting the smoothed estimate.
+    //
+    // Stores the last-trigger frequency as a QObject dynamic property on
+    // the slice itself — Qt cleans it up when the slice is destroyed, and
+    // the same wiring works for slices added later via RadioModel::sliceAdded.
+    if (m_spectrumWidget) {
+        // 500 kHz threshold matches Thetis display.cs:905: > 0.5 MHz.
+        constexpr double kFastAttackFreqJumpHz = 500000.0;
+        constexpr const char* kLastFreqProp = "nfLastFastAttackFreq";
+
+        auto subscribeSlice = [this](SliceModel* slice) {
+            if (!slice) { return; }
+            slice->setProperty(kLastFreqProp, slice->frequency());
+            connect(slice, &SliceModel::frequencyChanged, this,
+                    [this, slice](double freq) {
+                const double last =
+                    slice->property(kLastFreqProp).toDouble();
+                if (std::abs(last - freq) > kFastAttackFreqJumpHz) {
+                    m_spectrumWidget->setNoiseFloorFastAttack(true);
+                }
+                slice->setProperty(kLastFreqProp, freq);
+            });
+        };
+        for (SliceModel* slice : m_radioModel->slices()) {
+            subscribeSlice(slice);
+        }
+        connect(m_radioModel, &RadioModel::sliceAdded, this,
+                [this, subscribeSlice](int index) {
+            const auto slices = m_radioModel->slices();
+            if (index >= 0 && index < slices.size()) {
+                subscribeSlice(slices.at(index));
+            }
+        });
+    }
+
+    // MOX transition fast-attack trigger — Thetis display.cs:889-892:
+    //   if (rx == 1) FastAttackNoiseFloorRX1 = true;
+    // Fires on both RX→TX and TX→RX transitions; the buffer-clear pulse on
+    // either edge resets the noise-floor settling window.
+    if (m_spectrumWidget) {
+        connect(&m_radioModel->transmitModel(), &TransmitModel::moxChanged,
+                this, [this](bool) {
+            m_spectrumWidget->setNoiseFloorFastAttack(true);
+        });
+    }
+
     // When Clarity pauses or is disabled, let legacy AGC resume.
     connect(m_clarityController, &ClarityController::pausedChanged,
             m_spectrumWidget, [this](bool paused) {
@@ -1286,22 +1446,81 @@ void MainWindow::buildUI()
         });
     }
 
-    // Wire: zoom changes → adjust FFT size for appropriate bin resolution
-    // Target: ~500-1000 bins across the visible bandwidth for good detail
+    // Wire: zoom changes -> auto-replan FFT size to maintain constant
+    // bins-per-pixel across zoom levels.  NereusSDR-original (Thetis
+    // does not auto-replan on zoom; the user manually picks FFT size).
+    //
+    // Math: the slider's "FFT size at full DDC bandwidth" baseline
+    // implies a target K = baseline / displayWidth bins per pixel.
+    // To maintain K as bwHz narrows (zoom in), the FFT size must scale
+    // inversely with bwHz:
+    //   targetSize = baseline * sampleRate / bwHz
+    //
+    // Cap at kAutoZoomMaxFftSize = 65536.  Set well below kMaxFftSize
+    // (262144) to bound the buffer-fill pause on every replan: at
+    // 768 kHz DDC, 65536 fills in 85 ms (barely perceptible).  262144
+    // would take 340 ms (jarring) and create a multi-frame avenger
+    // ghost in the waterfall as the smoothed state crosses fftSize
+    // resolutions.  Users who want larger FFTs explicitly opt in via
+    // the slider (one-time pause they chose); auto-zoom won't push
+    // above the cap automatically.
+    //
+    // Floor at the slider baseline (we never replan BELOW the user's
+    // chosen value).
+    //
+    // Hysteresis: only replan when computed/current is outside
+    // [0.66, 1.5].  Avoids replan thrash on smooth zoom drag.
+    constexpr int kAutoZoomMaxFftSize = 65536;
     connect(m_spectrumWidget, &SpectrumWidget::bandwidthChangeRequested,
-            this, [this](double bwHz) {
-        // Pick FFT size so bin_width ≈ bw / 1000 (aim for ~1000 bins across display)
-        // bin_width = sampleRate / fftSize → fftSize = sampleRate / bin_width
-        double sampleRate = m_spectrumWidget->sampleRate();
-        int targetBins = 1000;
-        int desiredSize = static_cast<int>(sampleRate * targetBins / bwHz);
-        // Round up to next power of 2, clamp to valid range
-        int fftSize = 1024;
-        while (fftSize < desiredSize && fftSize < 65536) {
-            fftSize *= 2;
+            this, [this, kAutoZoomMaxFftSize](double bwHz) {
+        if (!m_fftEngine || !m_spectrumWidget) { return; }
+        const double sampleRate = m_spectrumWidget->sampleRate();
+        if (sampleRate <= 0.0 || bwHz <= 0.0) { return; }
+
+        const int baseline = m_fftEngine->fftSizeBaseline();
+
+        // Hz/bin override (Option 3 from the 2026-05-08 design).  When the
+        // user has set a non-zero target Hz/bin in
+        // Setup → Display → Spectrum Defaults, the auto-zoom formula
+        // becomes zoom-INDEPENDENT:
+        //   targetSize = sampleRate / hzPerBinTarget
+        // The FFT delivers the requested resolution at any zoom — useful
+        // for hunting narrow features (CW, digital).  Floor at baseline
+        // still applies, so the FFT slider remains a minimum-FFT-size
+        // knob.  When hzPerBinTarget == 0 we use the original
+        // bins-in-window default (constant K = baseline).
+        const double hzPerBinTarget = m_fftEngine->hzPerBinTarget();
+        double desired;
+        if (hzPerBinTarget > 0.0) {
+            desired = sampleRate / hzPerBinTarget;
+        } else {
+            const double scale = sampleRate / bwHz;        // 1.0 at full bw
+            desired = static_cast<double>(baseline) * scale;
         }
-        fftSize = std::clamp(fftSize, 1024, 65536);
-        m_fftEngine->setFftSize(fftSize);
+
+        // Round up to next power of 2.
+        int targetSize = 1024;
+        while (targetSize < desired && targetSize < kAutoZoomMaxFftSize) {
+            targetSize *= 2;
+        }
+        // Floor at baseline (slider's choice always honoured), then cap at
+        // auto-zoom max.  When baseline > cap (user explicitly picked a
+        // larger size via the slider), baseline wins and auto-zoom is a
+        // no-op for that range.
+        targetSize = std::max(targetSize, baseline);
+        targetSize = std::min(targetSize, std::max(baseline, kAutoZoomMaxFftSize));
+
+        // Hysteresis: only replan if outside [current * 2/3, current * 3/2].
+        const int currentSize = m_fftEngine->fftSize();
+        if (currentSize > 0) {
+            const double ratio = static_cast<double>(targetSize)
+                                 / static_cast<double>(currentSize);
+            if (ratio > 0.66 && ratio < 1.5) {
+                return;  // small enough change to ignore
+            }
+        }
+
+        m_fftEngine->setFftSize(targetSize);
     });
 
     m_fftThread->start();
@@ -2859,6 +3078,18 @@ void MainWindow::buildStatusBar()
             // Qt::UniqueConnection is not supported for lambda connects anyway.
             connect(conn, &RadioConnection::userAdc0Changed, this,
                     [this](float v) {
+                // Task 3.6: ANAN-8000DLE user preference gate.
+                // For ANAN-8000D radios, consult the "Show volts/amps in title
+                // bar" AppSettings key (default true). For other MKII-class
+                // boards (7000DLE, AnvelinaPro3) the gate is always open —
+                // those boards don't have the per-SKU preference checkbox.
+                const bool is8000D = (m_radioModel &&
+                    m_radioModel->hardwareProfile().model == HPSDRModel::ANAN8000D);
+                const bool showVolts = !is8000D ||
+                    AppSettings::instance().value(
+                        QStringLiteral("HardwareAnan8000DleShowVoltsAmps"),
+                        QStringLiteral("True")).toString() == QStringLiteral("True");
+                if (!showVolts) { return; }
                 const bool wasHidden = !m_paVoltLabel->isVisible();
                 m_paVoltLabel->setValue(QString::asprintf("%.1fV", static_cast<double>(v)));
                 m_paVoltLabel->setVisible(true);
@@ -3107,7 +3338,13 @@ void MainWindow::buildStatusBar()
                                                     m_cpuSmoothedPct));
         }
     });
-    m_cpuTimer->start(1000);
+    // Task 3.6: restore persisted rate (default 1 Hz = 1000 ms interval).
+    {
+        const int savedHz = AppSettings::instance().value(
+            QStringLiteral("GeneralCpuMeterUpdateRateHz"), 1).toInt();
+        const int clampedHz = qBound(1, savedHz, 30);
+        m_cpuTimer->start(1000 / clampedHz);
+    }
 
     // Add the full-width bar widget to the status bar
     sb->addWidget(barWidget, 1);
@@ -3138,6 +3375,39 @@ void MainWindow::setTxInhibited(bool inhibited)
     m_txInhibitLabel->setVisible(inhibited);
 }
 
+// ── Task 3.6: CPU meter rate ─────────────────────────────────────────────────
+// Live-applies the CPU meter update interval from GeneralOptionsPage spinbox.
+// Restarts m_cpuTimer with the new period. hz is clamped to [1, 30] so a
+// zero or negative value from a misconfigured spinbox cannot stop the timer.
+void MainWindow::setCpuTimerIntervalHz(int hz)
+{
+    if (!m_cpuTimer) { return; }
+    const int clamped = qBound(1, hz, 30);
+    m_cpuTimer->setInterval(1000 / clamped);
+}
+
+// ── Task 3.6: ANAN-8000DLE volts/amps visibility ────────────────────────────
+// Called when the "Show volts/amps in title bar" checkbox on Hardware →
+// Radio Info is toggled.  Only has visible effect for ANAN-8000D radios
+// (m_paVoltLabel is already hidden for non-MKII boards by the hardware gate
+// in buildStatusBar(); this gives the user an additional opt-out).
+void MainWindow::setVoltsAmpsVisible(bool visible)
+{
+    if (!m_paVoltLabel) { return; }
+    // Only change visibility when the widget is already populated (i.e. a
+    // MKII-class radio is connected and has sent at least one userAdc0Changed
+    // signal). If not yet shown, the user preference is stored in AppSettings
+    // and consulted by the userAdc0Changed lambda in buildStatusBar().
+    if (!visible && m_paVoltLabel->isVisible()) {
+        m_paVoltLabel->setVisible(false);
+        if (m_paVoltLabelSep) { m_paVoltLabelSep->setVisible(false); }
+        reapplyRightStripDropPriority(/*force=*/true);
+    }
+    // Note: toggling back to visible=true does not force-show the widget;
+    // the next userAdc0Changed will re-show it. This avoids showing a stale
+    // "—" value before the first ADC reading arrives.
+}
+
 // ---------------------------------------------------------------------------
 // Phase 3M-3a-ii Batch 6 (Task 3) — wireSetupDialog
 //
@@ -3156,6 +3426,12 @@ void MainWindow::wireSetupDialog(SetupDialog* dialog)
         connect(dialog, &SetupDialog::cfcDialogRequested,
                 m_txApplet, &TxApplet::requestOpenCfcDialog);
     }
+    // Task 3.6: CPU meter rate live-apply.
+    connect(dialog, &SetupDialog::cpuMeterRateChanged,
+            this,   &MainWindow::setCpuTimerIntervalHz);
+    // Task 3.6: ANAN-8000DLE volts/amps live-apply.
+    connect(dialog, &SetupDialog::anan8000DleVoltsAmpsChanged,
+            this,   &MainWindow::setVoltsAmpsVisible);
 }
 
 void MainWindow::wireSliceToSpectrum()

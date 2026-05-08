@@ -86,6 +86,12 @@ public:
     /// (NereusSDR-original) is the authoritative source.
     void setReceiveOnlyVisible(bool visible);
 
+signals:
+    // Emitted when the CPU meter rate spinbox value changes.
+    // Value is in Hz (1-30). Forwarded by SetupDialog →
+    // MainWindow::setCpuTimerIntervalHz().
+    void cpuMeterRateChanged(int hz);
+
 private slots:
     // 3M-1a G.2 fixup: named slot mirrors HardwarePage::onCurrentRadioChanged.
     // Eliminates the capture-by-pointer shutdown race of the original lambda
@@ -112,6 +118,7 @@ private:
     // Options group
     // From Thetis setup.designer.cs:9050-9059 [v2.10.3.13] (grpGeneralOptions)
     QCheckBox* m_chkPreventTXonDifferentBandToRX{nullptr};
+    QSpinBox*  m_cpuMeterRateHz{nullptr};
 
     // Step Attenuator group
     QCheckBox* m_chkRx1StepAttEnable{nullptr};

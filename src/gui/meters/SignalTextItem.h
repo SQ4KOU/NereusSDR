@@ -128,6 +128,19 @@ public:
     void setUnits(Units u) { m_units = u; }
     Units units() const { return m_units; }
 
+    // Task 3.2 — unit-mode fan-out: override base setUnitMode() to sync the
+    // Thetis-faithful per-item Units enum when the MultimeterPage combo
+    // broadcasts to all MeterItems via ContainerManager::forEachMeterItem().
+    // MeterUnit ↔ Units mapping: S↔SUnits, dBm↔Dbm, uV↔Uv (1:1).
+    void setUnitMode(MeterUnit u) override {
+        MeterItem::setUnitMode(u);
+        switch (u) {
+            case MeterUnit::S:   m_units = Units::SUnits; break;
+            case MeterUnit::uV:  m_units = Units::Uv;     break;
+            default:             m_units = Units::Dbm;    break;
+        }
+    }
+
     void setShowValue(bool s) { m_showValue = s; }
     bool showValue() const { return m_showValue; }
 

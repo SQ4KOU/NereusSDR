@@ -114,6 +114,9 @@ public:
     int capacity() const { return m_capacity; }
     void setCapacity(int cap);
 
+    int durationMs() const { return m_durationMs; }
+    void setDurationMs(int ms);
+
     QColor lineColor0() const { return m_lineColor0; }
     void setLineColor0(const QColor& c) { m_lineColor0 = c; }
 
@@ -151,7 +154,8 @@ public:
     // --- Serialization ---
     // Tag: HISTORY
     // Format: HISTORY|x|y|w|h|bindingId|zOrder|capacity|lineColor0|lineColor1|
-    //         showGrid|autoScale0|autoScale1|showScale0|showScale1|bindingId1
+    //         showGrid|autoScale0|autoScale1|showScale0|showScale1|bindingId1|durationMs (v2)
+    // (v2 adds durationMs at index [16]; v1 stops at [15])
     QString serialize() const override;
     bool deserialize(const QString& data) override;
 
@@ -162,6 +166,7 @@ private:
     void computeScale(const RingBuffer& buf, float& yMin, float& yMax) const;
 
     int     m_capacity{kDefaultCapacity};
+    int     m_durationMs{60000};  // Task 3.3: default 60 s, corresponds to AppSettings default
     // From Thetis clsHistoryItem _history_data_list_0 / _history_data_list_1
     RingBuffer m_buf0;
     RingBuffer m_buf1;

@@ -348,6 +348,39 @@ void GeneralOptionsPage::buildOptionsGroup()
     });
     vbox->addWidget(m_chkPreventTXonDifferentBandToRX);
 
+    // --- CPU meter rate ---
+    // Controls the update rate of the CPU usage indicator in the chrome
+    // title bar. Persists as GeneralCpuMeterUpdateRateHz (int, default 1).
+    // Range: 1-30 Hz.  Thetis equivalent: toolStripStatusLabel_CPU timer,
+    // which fires every 1 s by default (console.cs [v2.10.3.13]).
+    {
+        auto* rateRow = new QHBoxLayout;
+        auto* rateLabel = new QLabel(tr("CPU meter rate:"), group);
+        m_cpuMeterRateHz = new QSpinBox(group);
+        m_cpuMeterRateHz->setRange(1, 30);
+        m_cpuMeterRateHz->setSuffix(QStringLiteral(" Hz"));
+        m_cpuMeterRateHz->setFixedWidth(80);
+        m_cpuMeterRateHz->setToolTip(
+            tr("Update rate for the CPU usage indicator in the title bar (1-30 Hz)."));
+
+        // Restore persisted value; default 1 Hz (matches Thetis 1 s timer).
+        m_cpuMeterRateHz->setValue(
+            AppSettings::instance().value(
+                QStringLiteral("GeneralCpuMeterUpdateRateHz"), 1).toInt());
+
+        connect(m_cpuMeterRateHz, QOverload<int>::of(&QSpinBox::valueChanged),
+                this, [this](int v) {
+            AppSettings::instance().setValue(
+                QStringLiteral("GeneralCpuMeterUpdateRateHz"), v);
+            emit cpuMeterRateChanged(v);
+        });
+
+        rateRow->addWidget(rateLabel);
+        rateRow->addWidget(m_cpuMeterRateHz);
+        rateRow->addStretch();
+        vbox->addLayout(rateRow);
+    }
+
     contentLayout()->addWidget(group);
 }
 

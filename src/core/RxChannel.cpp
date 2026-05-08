@@ -246,9 +246,13 @@ warren@wpratt.com
 */
 
 #include "RxChannel.h"
+#include "AppSettings.h"
 #include "LogCategories.h"
 #include "NbFamily.h"
+#include "WdspEngine.h"
 #include "wdsp_api.h"
+
+#include <QElapsedTimer>
 
 #ifdef HAVE_DFNR
 #include "DeepFilterFilter.h"
@@ -256,6 +260,15 @@ warren@wpratt.com
 
 #ifdef HAVE_MNR
 #include "MacNRFilter.h"
+#endif
+
+// filterResponseMagnitudes() uses fir_bandpass() from WDSP and fftw_* from FFTW3.
+// Both are guarded below with #if defined(HAVE_WDSP) && defined(HAVE_FFTW3).
+#if defined(HAVE_WDSP) && defined(HAVE_FFTW3)
+extern "C" {
+#include "fir.h"         // fir_bandpass() — third_party/wdsp/src/fir.h (C linkage)
+}
+#include <fftw3.h>       // fftw_plan_dft_1d, fftw_execute, fftw_alloc_complex, etc.
 #endif
 
 #include <cmath>
@@ -336,8 +349,13 @@ void RxChannel::setFilterFreqs(double lowHz, double highHz)
         return;
     }
 
-    m_filterLow = lowHz;
+    m_filterLow  = lowHz;
     m_filterHigh = highHz;
+    // Keep int carry fields in sync so captureState() sees consistent values
+    // regardless of whether the caller used setFilterFreqs() directly or
+    // went through setFilterLow/setFilterHigh first.
+    m_filterLowInt  = static_cast<int>(std::round(lowHz));
+    m_filterHighInt = static_cast<int>(std::round(highHz));
 
 #ifdef HAVE_WDSP
     // From Thetis rxa.cs:110-111, radio.cs:603-604 — both bp1 and nbp0
@@ -589,6 +607,10 @@ NereusSDR::NbMode RxChannel::nbMode() const
 
 void RxChannel::setNrEnabled(bool enabled)
 {
+    if (enabled == m_nrEnabled.load()) {
+        return;
+    }
+
     m_nrEnabled.store(enabled);
 
 #ifdef HAVE_WDSP
@@ -598,6 +620,10 @@ void RxChannel::setNrEnabled(bool enabled)
 
 void RxChannel::setAnfEnabled(bool enabled)
 {
+    if (enabled == m_anfEnabled.load()) {
+        return;
+    }
+
     m_anfEnabled.store(enabled);
 
 #ifdef HAVE_WDSP
@@ -1274,6 +1300,12 @@ void RxChannel::setBinauralEnabled(bool enabled)
 
 void RxChannel::setShiftFrequency(double offsetHz)
 {
+    if (offsetHz == m_shiftOffsetHz) {
+        return;
+    }
+
+    m_shiftOffsetHz = offsetHz;
+
 #ifdef HAVE_WDSP
     if (std::abs(offsetHz) < 0.5) {
         // No offset — disable shift for efficiency
@@ -1459,5 +1491,586 @@ void RxChannel::setMnrAlpha(float) {}
 void RxChannel::setMnrBias(float) {}
 void RxChannel::setMnrGsmooth(float) {}
 #endif
+
+// ---------------------------------------------------------------------------
+// Filter convenience setters — single-axis carry setters (Task 1.2)
+// Store int mirror values and sync the double carries; do NOT call WDSP.
+// These are used by callers (e.g. SliceModel filter-preset machinery) that
+// need to update one edge without triggering a WDSP push. A subsequent call
+// to setFilterFreqs() will push both edges together in one WDSP call.
+// applyState() uses setFilterFreqs() directly — not these setters.
+// ---------------------------------------------------------------------------
+
+void RxChannel::setFilterLow(int lowHz)
+{
+    m_filterLowInt = lowHz;
+    m_filterLow = static_cast<double>(lowHz);  // keep double carry in sync
+}
+
+void RxChannel::setFilterHigh(int highHz)
+{
+    m_filterHighInt = highHz;
+    m_filterHigh = static_cast<double>(highHz);  // keep double carry in sync
+}
+
+// ---------------------------------------------------------------------------
+// EQ carry setters (Task 1.2 — no WDSP wiring yet)
+// Carry-only for state preservation; WDSP SetRXAGrphEQ wiring in EQ task.
+// ---------------------------------------------------------------------------
+
+void RxChannel::setEqEnabled(bool enabled)
+{
+    m_eqEnabled = enabled;
+}
+
+void RxChannel::setEqPreamp(int preampDb)
+{
+    m_eqPreampDb = preampDb;
+}
+
+void RxChannel::setEqBand(int bandIndex, int gainDb)
+{
+    if (bandIndex >= 0 && bandIndex < 10) {
+        m_eqBandsDb[bandIndex] = gainDb;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Squelch unified carry setters (Task 1.2)
+// Carry-only; per-mode SSQL/AMSQ/FMSQ are still the primary API.
+// ---------------------------------------------------------------------------
+
+void RxChannel::setSquelchEnabled(bool enabled)
+{
+    m_squelchEnabled = enabled;
+}
+
+void RxChannel::setSquelchThreshold(int thresholdDb)
+{
+    m_squelchThresholdDb = thresholdDb;
+}
+
+// ---------------------------------------------------------------------------
+// RIT offset carry setter (Task 1.2 — no WDSP wiring yet)
+// ---------------------------------------------------------------------------
+
+void RxChannel::setRitOffset(int ritHz)
+{
+    m_ritOffsetHz = ritHz;
+}
+
+// ---------------------------------------------------------------------------
+// Antenna index carry setter (Task 1.2 — routed via AlexController)
+// ---------------------------------------------------------------------------
+
+void RxChannel::setAntennaIndex(int index)
+{
+    m_antennaIndex = index;
+}
+
+// ---------------------------------------------------------------------------
+// Shift offset convenience alias (Task 1.2)
+// Delegates to setShiftFrequency and keeps the carry field in sync.
+// ---------------------------------------------------------------------------
+
+void RxChannel::setShiftOffset(double offsetHz)
+{
+    // setShiftFrequency now maintains m_shiftOffsetHz and has the WDSP call.
+    setShiftFrequency(offsetHz);
+}
+
+// ---------------------------------------------------------------------------
+// NB enabled carry setter (Task 1.2)
+// Carry-only bool; NbFamily::setMode is the primary API.
+// ---------------------------------------------------------------------------
+
+void RxChannel::setNbEnabled(bool enabled)
+{
+    m_nbEnabled = enabled;
+}
+
+// ---------------------------------------------------------------------------
+// NR mode carry setter (Task 1.2)
+// Carry-only int; setActiveNr(NrSlot) is the primary API.
+// ---------------------------------------------------------------------------
+
+void RxChannel::setNrMode(int nrMode)
+{
+    m_nrMode = nrMode;
+}
+
+// ---------------------------------------------------------------------------
+// State snapshot / restore (Task 1.2)
+// captureState() reads all DSP state into a portable RxChannelState struct.
+// applyState() restores from that struct by calling all individual setters.
+// ---------------------------------------------------------------------------
+
+RxChannelState RxChannel::captureState() const
+{
+    RxChannelState s;
+
+    s.mode                = static_cast<SliceModel::Mode>(m_mode.load());
+    s.filterLowHz         = m_filterLowInt;
+    s.filterHighHz        = m_filterHighInt;
+
+    // AGC
+    s.agcMode             = m_agcMode.load();
+    s.agcAttackMs         = m_agcAttack.load();
+    s.agcDecayMs          = m_agcDecay.load();
+    s.agcHangMs           = m_agcHang.load();
+    s.agcSlope            = m_agcSlope.load();
+    s.agcMaxGainDb        = m_agcMaxGain.load();
+    s.agcFixedGainDb      = m_agcFixedGain.load();
+    s.agcHangThresholdPct = m_agcHangThreshold.load();
+
+    // Noise blanker
+    s.nbEnabled           = m_nbEnabled;
+    s.nbMode              = static_cast<int>(nbMode());
+
+    // Noise reduction
+    s.nrEnabled           = m_nrEnabled.load();
+    s.nrMode              = m_nrMode;
+    s.anfEnabled          = m_anfEnabled.load();
+
+    // EQ
+    s.eqEnabled           = m_eqEnabled;
+    s.eqPreampDb          = m_eqPreampDb;
+    for (int i = 0; i < 10; ++i) {
+        s.eqBandsDb[i] = m_eqBandsDb[i];
+    }
+
+    // Squelch
+    s.squelchEnabled      = m_squelchEnabled;
+    s.squelchThresholdDb  = m_squelchThresholdDb;
+
+    // RIT, antenna, shift offset
+    s.ritOffsetHz         = m_ritOffsetHz;
+    s.antennaIndex        = m_antennaIndex;
+    s.shiftOffsetHz       = m_shiftOffsetHz;
+
+    return s;
+}
+
+void RxChannel::applyState(const RxChannelState& s)
+{
+    setMode(s.mode);
+    // setFilterFreqs is the canonical live-apply path: pushes both edges to
+    // WDSP in one call and emits filterChanged. The carry-only setFilterLow/
+    // setFilterHigh setters are NOT called here — calling them first would
+    // sync m_filterLow/m_filterHigh to the new values, causing setFilterFreqs
+    // to hit its equality guard and early-return without touching WDSP.
+    // setFilterFreqs() also updates m_filterLowInt/m_filterHighInt, so
+    // captureState() after applyState() sees consistent int carry values.
+    setFilterFreqs(static_cast<double>(s.filterLowHz),
+                   static_cast<double>(s.filterHighHz));
+
+    // AGC
+    setAgcMode(static_cast<AGCMode>(s.agcMode));
+    setAgcAttack(s.agcAttackMs);
+    setAgcDecay(s.agcDecayMs);
+    setAgcHang(s.agcHangMs);
+    setAgcSlope(s.agcSlope);
+    setAgcMaxGain(s.agcMaxGainDb);
+    setAgcFixedGain(s.agcFixedGainDb);
+    setAgcHangThreshold(s.agcHangThresholdPct);
+
+    // Noise blanker
+    setNbEnabled(s.nbEnabled);
+    setNbMode(static_cast<NbMode>(s.nbMode));
+
+    // Noise reduction
+    setNrEnabled(s.nrEnabled);
+    setNrMode(s.nrMode);
+    setAnfEnabled(s.anfEnabled);
+
+    // EQ
+    setEqEnabled(s.eqEnabled);
+    setEqPreamp(s.eqPreampDb);
+    for (int i = 0; i < 10; ++i) {
+        setEqBand(i, s.eqBandsDb[i]);
+    }
+
+    // Squelch
+    setSquelchEnabled(s.squelchEnabled);
+    setSquelchThreshold(s.squelchThresholdDb);
+
+    // RIT, antenna, shift offset
+    setRitOffset(s.ritOffsetHz);
+    setAntennaIndex(s.antennaIndex);
+    setShiftOffset(s.shiftOffsetHz);
+}
+
+// ---------------------------------------------------------------------------
+// In-place RX filter resize / filter type change
+// ---------------------------------------------------------------------------
+//
+// These two setters wrap the WDSP entry points that Thetis calls from its
+// DSPRX property setters at radio.cs:540-574 [v2.10.3.13]:
+//
+//   public int FilterSize {
+//       set {
+//           filter_size = value;
+//           if (update) {
+//               if (value != filter_size_dsp || force) {
+//                   WDSP.RXASetNC(WDSP.id(thread, subrx), value);
+//                   filter_size_dsp = value;
+//               }
+//           }
+//       }
+//   }
+//   public DSPFilterType FilterType {
+//       set {
+//           filter_type = value;
+//           if (update) {
+//               if (value != filter_type_dsp || force) {
+//                   WDSP.RXASetMP(WDSP.id(thread, subrx), Convert.ToBoolean(value));
+//                   filter_type_dsp = value;
+//               }
+//           }
+//       }
+//   }
+//
+// RXASetNC and RXASetMP at third_party/wdsp/src/RXA.c:1040-1056 [v2.10.3.13]
+// internally quiesce the channel via SetChannelState(channel, 0, 1) — the
+// cm_main flushflag handshake at channel.c:259-297 [v2.10.3.13] — reconfigure
+// every dependent subsystem, then restore the prior run state.  Safe to call
+// from the main thread while the WDSP worker is alive.
+
+void RxChannel::setDspBufferSizeSamples(int size)
+{
+    if (size <= 0) {
+        return;
+    }
+    // Thetis invariant (console.cs:38911 [v2.10.3.13]):
+    //   if (filtsize < bufsize) bufsize = filtsize;
+    // Equivalent to: buffer must never exceed filter.  WDSP fircore relies
+    // on this — nfor = nc/size in firmin.c:135 [v2.10.3.13] gives 0 when
+    // nc < size, leading to null FFTW plans and SIGSEGV in the audio
+    // thread.  Mirror Thetis: silently clamp buffer down to filter.
+    if (size > m_filterSize) {
+        qCWarning(lcDsp) << "RxChannel::setDspBufferSizeSamples: requested size="
+                          << size << "exceeds current filter size=" << m_filterSize
+                          << "— clamping to filter (Thetis console.cs:38911 invariant).";
+        size = m_filterSize;
+    }
+    if (size == m_dspBlockSize) {
+        return;
+    }
+    m_dspBlockSize = size;
+#ifdef HAVE_WDSP
+    // From Thetis radio.cs:521 [v2.10.3.13] DSPRX.BufferSize setter:
+    //   WDSP.SetDSPBuffsize(WDSP.id(thread, subrx), value);
+    // SetDSPBuffsize at channel.c:181 [v2.10.3.13] internally quiesces via
+    // SetChannelState's flushflag handshake, then runs a full DSP destroy
+    // + rebuild with the new dsp_size.  Heavier than RXASetNC but still
+    // safe to call from main thread while audio worker is alive.
+    SetDSPBuffsize(m_channelId, size);
+#endif
+}
+
+void RxChannel::setFilterSizeSamples(int nc)
+{
+    if (nc <= 0 || nc == m_filterSize) {
+        return;
+    }
+    // Thetis invariant (console.cs:38911 [v2.10.3.13]): filter >= buffer.
+    // If new filter is smaller than the current DSP block size, shrink
+    // the buffer FIRST so the WDSP fircore precondition (nc >= size,
+    // firmin.c:135 [v2.10.3.13]) is satisfied when RXASetNC runs.  Order
+    // mirrors Thetis UpdateDSP: BufferSize setter (radio.cs:521) is
+    // called before FilterSize setter (radio.cs:540) at console.cs:38918+.
+    if (nc < m_dspBlockSize) {
+        m_dspBlockSize = nc;
+#ifdef HAVE_WDSP
+        // From Thetis radio.cs:521 [v2.10.3.13] DSPRX.BufferSize setter.
+        SetDSPBuffsize(m_channelId, nc);
+#endif
+    }
+    m_filterSize = nc;
+#ifdef HAVE_WDSP
+    // From Thetis radio.cs:540 [v2.10.3.13] DSPRX.FilterSize setter.
+    RXASetNC(m_channelId, nc);
+#endif
+}
+
+void RxChannel::setFilterTypeLinearPhase(bool linearPhase)
+{
+    const int newType = linearPhase ? 1 : 0;
+    if (newType == m_filterType) {
+        return;
+    }
+    m_filterType = newType;
+#ifdef HAVE_WDSP
+    // From Thetis radio.cs:559 [v2.10.3.13] DSPRX.FilterType setter:
+    //   WDSP.RXASetMP(WDSP.id(thread, subrx), Convert.ToBoolean(value));
+    // C# Convert.ToBoolean((int)DSPFilterType) maps Low_Latency=0 → false,
+    // Linear_Phase=1 → true.  We pass the already-translated 0/1.
+    RXASetMP(m_channelId, newType);
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Channel rebuild (Task 1.3)
+//
+// LEGACY heavy-rebuild path retained for sample-rate live-apply where a
+// full close-and-reopen may be required.  NOT USED for filter size / filter
+// type changes — those go through setFilterSizeSamples / setFilterTypeLinearPhase
+// above which use the in-place WDSP entry points (mirrors Thetis radio.cs:540
+// + 559 [v2.10.3.13]).
+// ---------------------------------------------------------------------------
+
+qint64 RxChannel::rebuild(WdspEngine& engine, const ChannelConfig& cfg)
+{
+    return engine.rebuildRxChannel(m_channelId, cfg);
+}
+
+// ---------------------------------------------------------------------------
+// Per-mode DSP-Options live-apply (Task 4.2)
+// ---------------------------------------------------------------------------
+//
+// Reads the per-mode AppSettings keys for newMode and calls rebuild() if any
+// value differs from the current channel config (m_bufferSize, m_filterSize,
+// m_filterType). The cacheImpulse / highResFilterCharacteristics keys are
+// global (not per-mode) and are also forwarded to ChannelConfig.
+//
+// Returns elapsed ms if rebuild occurred, 0 if nothing changed, -1 if no
+// engine is attached or the channel is not in the engine.
+//
+// NereusSDR-original — no Thetis source ported; the per-mode key naming
+// mirrors the DspOptionsPage AppSettings keys (design Section 4B).
+
+namespace {
+
+// Maps DSPMode to the DspOptions key suffix used in AppSettings.
+// From design Section 4B — Phone covers SSB/AM/SAM/DSB, CW covers
+// CWU/CWL, Dig covers DIGU/DIGL/DSB/SPEC/DRM, FM covers FM.
+//
+// NereusSDR-original helper — no Thetis source ported.
+QString rxModeKeyPart(DSPMode mode)
+{
+    switch (mode) {
+        case DSPMode::USB:
+        case DSPMode::LSB:
+        case DSPMode::AM:
+        case DSPMode::SAM:
+        case DSPMode::DSB:
+            return QStringLiteral("Phone");
+        case DSPMode::CWU:
+        case DSPMode::CWL:
+            return QStringLiteral("Cw");
+        case DSPMode::DIGU:
+        case DSPMode::DIGL:
+        case DSPMode::SPEC:
+        case DSPMode::DRM:
+            return QStringLiteral("Dig");
+        case DSPMode::FM:
+            return QStringLiteral("Fm");
+        default:
+            return QStringLiteral("Phone");
+    }
+}
+
+}  // namespace
+
+qint64 RxChannel::onModeChanged(DSPMode newMode)
+{
+    auto& s = AppSettings::instance();
+    const QString modeKey = rxModeKeyPart(newMode);
+
+    // Read per-mode RX-side DSP settings — Thetis-faithful split keys
+    // post schema-v5 (radio.cs:519-574 [v2.10.3.13] DSPRX persists
+    // BufferSize, FilterSize, and FilterType independently from DSPTX).
+    const int newBufSize   =
+        s.value(QStringLiteral("DspOptionsBufferSize") + modeKey + QStringLiteral("Rx"),
+                64).toInt();
+
+    const int newFiltSize  =
+        s.value(QStringLiteral("DspOptionsFilterSize") + modeKey + QStringLiteral("Rx"),
+                4096).toInt();
+
+    const QString typeKey  =
+        QStringLiteral("DspOptionsFilterType") + modeKey + QStringLiteral("Rx");
+    const QString typeStr  = s.value(typeKey, QStringLiteral("Low Latency")).toString();
+    const int newFiltType  = (typeStr == QStringLiteral("Low Latency")) ? 0 : 1;
+
+    // Skip if nothing changed.  Each setter has its own idempotent guard,
+    // but bailing here avoids the timer/log overhead.  Sentinel -1 means
+    // "no change" so RadioModel can distinguish from "applied in 0 ms"
+    // (in-place WDSP setters routinely finish sub-millisecond).
+    if (newBufSize == m_dspBlockSize && newFiltSize == m_filterSize &&
+        newFiltType == m_filterType) {
+        return -1;
+    }
+
+    qCInfo(lcDsp) << "RxChannel::onModeChanged: mode=" << static_cast<int>(newMode)
+                  << "key=" << modeKey
+                  << "bufSize:" << m_dspBlockSize << "->" << newBufSize
+                  << "filtSize:" << m_filterSize << "->" << newFiltSize
+                  << "filtType:" << m_filterType << "->" << newFiltType;
+
+    // Apply order matters — Thetis pushes BufferSize first, FilterSize
+    // second (UpdateDSP at console.cs:38918+ [v2.10.3.13]).  Each setter
+    // internally enforces the filter >= buffer invariant (radio.cs:521 +
+    // 540 [v2.10.3.13] respectively) so out-of-order user input still
+    // produces a valid WDSP state.  Each WDSP entry point quiesces via
+    // SetChannelState's flushflag handshake — safe to call from the main
+    // thread while audio worker is alive.
+    QElapsedTimer t;
+    t.start();
+    // setFilterSizeSamples cascades a buffer shrink internally when filter
+    // < dsp_size, so apply filter BEFORE buffer.  If we did it the Thetis
+    // order (buffer first), a smaller filter coming later would still
+    // trigger its own internal buffer shrink — same end state, but the
+    // filter-first path avoids one redundant SetDSPBuffsize call.  When
+    // buffer is going LARGER (or equal), the filter setter doesn't
+    // cascade and the explicit buffer setter does the work.
+    setFilterSizeSamples(newFiltSize);
+    setDspBufferSizeSamples(newBufSize);
+    setFilterTypeLinearPhase(newFiltType == 1);
+    return t.elapsed();
+}
+
+// ---------------------------------------------------------------------------
+// Filter frequency response (Task 1.5)
+// ---------------------------------------------------------------------------
+//
+// NereusSDR-original — no Thetis source ported; algorithm is generic FFT-of-
+// filter-taps.  Uses WDSP fir_bandpass() because it is the exact function
+// that WDSP's CalcBandpassFilter() calls internally, so the synthesized taps
+// match the filter WDSP is actually running.  The taps are zero-padded into a
+// double-precision FFTW3 FFT of size fftSize, then the positive half-spectrum
+// magnitude is decimated to nPoints output samples.
+//
+// Approach: Option B (synthesized via fir_bandpass).
+// Fallback:  returns empty QVector when HAVE_WDSP or HAVE_FFTW3 absent.
+
+QVector<float> RxChannel::filterResponseMagnitudes(int nPoints) const
+{
+    if (nPoints <= 0) {
+        return {};
+    }
+
+#if defined(HAVE_WDSP) && defined(HAVE_FFTW3)
+    // Number of FIR taps.  The default WDSP BANDPASS uses nc = 1025 taps
+    // (a power-of-two-plus-one) with wintype=1 (7-term Blackman-Harris) and
+    // rtype=0 (real output) at gain=1.  We replicate those choices here.
+    // WDSP fir_bandpass() normalises frequencies in [0, 0.5) relative to
+    // samplerate (it computes ft = (f_high - f_low) / (2.0 * samplerate)).
+    static constexpr int kTapCount = 1025;  // nc default for BANDPASS struct
+
+    // f_low and f_high in Hz (signed; can be negative for LSB).
+    const double fLow  = m_filterLow;
+    const double fHigh = m_filterHigh;
+    const double sr    = static_cast<double>(m_sampleRate);
+
+    // Synthesise filter taps using the exact WDSP function.
+    // rtype=0 → real coefficients (N doubles), not complex pairs.
+    // scale=1.0 (no gain correction needed here; we normalise the response).
+    // The return pointer is owned by WDSP's impulse cache — do NOT free it.
+    const double* taps = fir_bandpass(kTapCount, fLow, fHigh, sr,
+                                      /*wintype=*/ 1,
+                                      /*rtype=*/   0,
+                                      /*scale=*/   1.0);
+    if (!taps) {
+        return {};
+    }
+
+    // Zero-pad taps into a double-precision FFTW3 buffer.
+    // FFT size must be >= kTapCount; use next power-of-two >= 4096 to ensure
+    // sufficient frequency resolution for the display (≥ 4 Hz/bin at 48 kHz).
+    // A 4096-point FFT gives 48000 / 4096 ≈ 11.7 Hz/bin.
+    constexpr int kFftSize = 4096;
+    static_assert(kFftSize >= kTapCount, "FFT size must exceed tap count");
+
+    // Allocate aligned FFTW3 buffers.
+    fftw_complex* in  = fftw_alloc_complex(kFftSize);
+    fftw_complex* out = fftw_alloc_complex(kFftSize);
+    if (!in || !out) {
+        if (in)  { fftw_free(in);  }
+        if (out) { fftw_free(out); }
+        return {};
+    }
+
+    // Zero-fill, then copy real taps into the real part of the input buffer.
+    for (int i = 0; i < kFftSize; ++i) {
+        in[i][0] = 0.0;
+        in[i][1] = 0.0;
+    }
+    for (int i = 0; i < kTapCount; ++i) {
+        in[i][0] = taps[i];
+    }
+
+    // Use FFTW_ESTIMATE to avoid touching the global FFTW wisdom/mutex.
+    fftw_plan plan = fftw_plan_dft_1d(kFftSize, in, out, FFTW_FORWARD, FFTW_ESTIMATE);
+    if (!plan) {
+        fftw_free(in);
+        fftw_free(out);
+        return {};
+    }
+
+    fftw_execute(plan);
+    fftw_destroy_plan(plan);
+
+    // Compute magnitude in dB for the positive half-spectrum [0, sampleRate/2].
+    // out[0..kFftSize/2] covers DC to Nyquist — kFftSize/2 + 1 unique bins.
+    const int halfSize = kFftSize / 2 + 1;  // DC + positive frequencies
+
+    // Decimate to nPoints output samples by linear interpolation over the
+    // positive half-spectrum.  Index j in [0, halfSize-1] maps to frequency
+    // j * (sampleRate/2) / (halfSize - 1).  We want nPoints uniformly
+    // spaced samples of the magnitude from 0 Hz to sampleRate/2.
+    QVector<float> result(nPoints);
+
+    const double floatHalfSize = static_cast<double>(halfSize - 1);
+    const double floatNPoints  = static_cast<double>(nPoints - 1 > 0 ? nPoints - 1 : 1);
+
+    // Find peak magnitude for normalisation (reference = peak = 0 dB).
+    double peakMag = 0.0;
+    for (int j = 0; j < halfSize; ++j) {
+        const double re  = out[j][0];
+        const double im  = out[j][1];
+        const double mag = std::sqrt(re * re + im * im);
+        if (mag > peakMag) {
+            peakMag = mag;
+        }
+    }
+    if (peakMag < 1e-30) {
+        peakMag = 1e-30;  // Guard against all-zero filter (no crash)
+    }
+
+    for (int i = 0; i < nPoints; ++i) {
+        // Map output sample index i → fractional bin index in [0, halfSize-1].
+        const double fracIdx = static_cast<double>(i) / floatNPoints * floatHalfSize;
+        const int    idx0    = static_cast<int>(fracIdx);
+        const int    idx1    = (idx0 + 1 < halfSize) ? idx0 + 1 : idx0;
+        const double frac    = fracIdx - static_cast<double>(idx0);
+
+        // Linear-interpolate magnitude (not dB) for smooth curve.
+        auto binMag = [&](int j) -> double {
+            const double re = out[j][0];
+            const double im = out[j][1];
+            return std::sqrt(re * re + im * im);
+        };
+
+        const double mag = binMag(idx0) * (1.0 - frac) + binMag(idx1) * frac;
+
+        // Convert to dB, normalised to peak (0 dB = passband).
+        // Clamp at -120 dB to avoid -inf in dead stopband.
+        const double magDb = 20.0 * std::log10(mag / peakMag);
+        result[i] = static_cast<float>(std::max(magDb, -120.0));
+    }
+
+    fftw_free(in);
+    fftw_free(out);
+
+    return result;
+
+#else
+    // WDSP or FFTW3 not available — return empty vector so callers can
+    // gracefully skip high-resolution rendering.
+    Q_UNUSED(nPoints);
+    return {};
+#endif
+}
 
 } // namespace NereusSDR

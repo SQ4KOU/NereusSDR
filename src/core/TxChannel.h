@@ -312,12 +312,15 @@ warren@wpratt.com
 #include <vector>
 
 #include "WdspTypes.h"
+#include "dsp/ChannelConfig.h"
+#include "dsp/TxChannelState.h"
 #include "wdsp_api.h"  // NEREUS_STDCALL macro for s_pushVoxCallback (Task 17)
 
 namespace NereusSDR {
 
 class RadioConnection;
 class TxMicRouter;
+class WdspEngine;  // forward declaration for rebuild()
 
 // Per-transmitter WDSP channel wrapper.
 //
@@ -1804,6 +1807,81 @@ public:
     /// false without touching WDSP.
     bool getCfcDisplayCompression(double* compValues, int bufferSize) noexcept;
 
+    // ── State snapshot / restore (Task 1.4) ─────────────────────────────────
+    //
+    // captureState() snapshots all per-channel TX DSP carry state into a
+    // portable struct.  applyState() restores it by calling all setters.
+    //
+    // These are the building blocks for WdspEngine::rebuildTxChannel():
+    //   1. captureState() before CloseChannel
+    //   2. OpenChannel + seed WDSP defaults
+    //   3. applyState() on the new TxChannel wrapper
+    //
+    // Thread safety: call on main thread only.
+    TxChannelState captureState() const;
+    void applyState(const TxChannelState& state);
+
+    // ── Channel rebuild (Task 1.4) ────────────────────────────────────────────
+    //
+    // Tear down the WDSP TX channel, recreate with new config, reapply
+    // captured state.  Delegates to WdspEngine::rebuildTxChannel().
+    //
+    // Returns elapsed milliseconds (≥ 0 on success).  Returns -1 if the
+    // channel was not found in the engine (should not happen in normal
+    // operation — the engine owns all channels).
+    //
+    // Thread safety: call on main thread only.  Caller must ensure the
+    // TX worker thread is not currently running (setRunning(false) first).
+    qint64 rebuild(WdspEngine& engine, const ChannelConfig& cfg);
+
+    // ── In-place filter resize / filter type change ─────────────────────────
+    //
+    // Wraps the WDSP entry points that Thetis calls from its DSPTX property
+    // setters at radio.cs:2628 / 2647 [v2.10.3.13]:
+    //   FilterSize → WDSP.TXASetNC
+    //   FilterType → WDSP.TXASetMP
+    //
+    // These are SAFE to call from the main thread while the TxWorkerThread
+    // is running — TXASetNC/TXASetMP internally quiesce via SetChannelState's
+    // flushflag handshake (third_party/wdsp/src/channel.c:259-297
+    // [v2.10.3.13]) before reconfiguring all dependent subsystems, then
+    // restore the prior run state.  No external worker quiesce required.
+    //
+    // Idempotent: a no-op when the new value matches the cached current value.
+    void setTxFilterSizeSamples(int nc);
+    void setTxFilterTypeLinearPhase(bool linearPhase);
+
+    // ── DSP block size (live-apply via WDSP SetDSPBuffsize) ─────────────────
+    //
+    // Wraps the WDSP entry point Thetis calls from DSPTX.BufferSize setter
+    // at radio.cs:2606 [v2.10.3.13]:
+    //   WDSP.SetDSPBuffsize(WDSP.id(thread, 0), value);
+    //
+    // Thetis invariant from console.cs:38911 [v2.10.3.13]: buffer must
+    // never exceed filter (otherwise fircore nfor = nc/size = 0 →
+    // SIGSEGV — firmin.c:135 [v2.10.3.13]).  Setter silently clamps
+    // `size` down to m_txFilterSize.  Internally calls SetDSPBuffsize
+    // (channel.c:181 [v2.10.3.13]) which quiesces via SetChannelState
+    // and rebuilds the DSP graph — heavier than TXASetNC but safe to
+    // call from main thread while TxWorkerThread is running.
+    void setTxDspBufferSizeSamples(int size);
+    int  txDspBlockSize() const { return m_txDspBlockSize; }
+
+    // ── Per-mode DSP-Options live-apply (Task 4.2) ───────────────────────────
+    //
+    // Called when SliceModel emits dspModeChanged. Reads per-mode DSP-Options
+    // AppSettings keys (DspOptionsBufferSize<Mode>, DspOptionsFilterSize<Mode>,
+    // DspOptionsFilterType<Mode>Tx) for the new mode and triggers rebuild()
+    // if any value differs from the currently active channel config.
+    //
+    // Returns elapsed milliseconds if a rebuild occurred (≥ 0), 0 if nothing
+    // changed, or -1 if the channel was not found in the engine.
+    //
+    // Thread safety: call on main thread only; caller must ensure the TX
+    // worker thread is quiesced (setRunning(false)) before calling.
+    void setWdspEngine(WdspEngine* engine) { m_wdspEngine = engine; }
+    qint64 onModeChanged(DSPMode newMode);
+
     // ── TX fixed-gain output level (issue #167 Phase 1 Agent 1C) ────────────
     //
     // Sets the TXA fixed-gain scalar applied uniformly to the I and Q audio
@@ -2507,6 +2585,83 @@ private:
     double m_postGenTTPulseToneFreq2Cache = 0.0;
     double m_postGenTTPulseMag1Cache      = 0.0;
     double m_postGenTTPulseMag2Cache      = 0.0;
+
+    // ── Carry-only fields for captureState/applyState round-trip (Task 1.4) ───
+    //
+    // These fields hold state that either:
+    //   (a) has no WDSP change-detection guard (setTxBandpass calls WDSP
+    //       unconditionally, so we only ever call it with the same value that
+    //       WDSP already has — carry stores the last-set int pair), or
+    //   (b) is not yet wired to WDSP (EQ, micGain, pureSignal).
+    //
+    // The leveler/ALC/CFC/phrot/cessb/cpdr fields shadow the corresponding
+    // WDSP-wired setters (setTxLevelerOn etc.) so captureState() can read them
+    // back without querying WDSP.  Each carry field is updated by its setter
+    // in TxChannel.cpp alongside the WDSP call.
+
+    // Mode + filter carry
+    DSPMode m_mode         {DSPMode::USB};   // carry; setTxMode also calls WDSP
+    int     m_filterLowHz  {200};            // carry; setTxBandpass also calls WDSP
+    int     m_filterHighHz {2700};           // carry; setTxBandpass also calls WDSP
+
+    // Mic / EQ carry — wired to WDSP in later tasks
+    int     m_micGainDb    {0};
+    bool    m_eqEnabled    {false};
+    int     m_eqPreampDb   {0};
+    int     m_eqBandsDb[10]{0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+    // Leveler carry (mirrors WDSP-wired setTxLevelerOn/TopDb/DecayMs)
+    bool    m_levelerOn        {false};
+    double  m_levelerMaxGainDb {15.0};
+    int     m_levelerDecayMs   {100};
+
+    // ALC carry (mirrors WDSP-wired setTxAlcMaxGainDb/DecayMs)
+    double  m_alcMaxGainDb     {3.0};
+    int     m_alcDecayMs       {10};
+
+    // CFC carry (mirrors WDSP-wired setTxCfcRunning/PostEqRunning/PrecompDb/PrePeqDb)
+    bool    m_cfcOn            {false};
+    bool    m_cfcPostEqOn      {false};
+    double  m_cfcPrecompDb     {0.0};
+    double  m_cfcPostEqGainDb  {0.0};
+
+    // Phase rotator carry (mirrors WDSP-wired setTxPhrotCornerHz/Nstages/Reverse)
+    bool    m_phaseRotatorOn      {false};
+    double  m_phaseRotatorFreqHz  {338.0};
+    int     m_phaseRotatorStages  {8};
+    bool    m_phaseRotatorReverse {false};
+
+    // CESSB carry (mirrors WDSP-wired setTxCessbOn)
+    bool    m_cessbOn  {false};
+
+    // CPDR carry (mirrors WDSP-wired setTxCpdrOn/GainDb)
+    bool    m_cpdrOn       {false};
+    double  m_cpdrLevelDb  {0.0};
+
+    // PureSignal carry — 3M-4 work
+    bool    m_pureSignalEnabled {false};
+
+    // ── Task 4.2: per-mode DSP-Options live-apply ────────────────────────────
+    // Non-owning pointer to the WdspEngine set by RadioModel after channel
+    // creation. Required for onModeChanged() to call rebuild().
+    WdspEngine* m_wdspEngine{nullptr};
+
+    // Current filter size and filter type — tracked here so onModeChanged()
+    // can skip rebuild when nothing actually changed.
+    // Default matches WdspEngine::kTxDspBufferSize (2048, deskhpsdr-derived);
+    // see WdspEngine.h for canonical definition. Buffer size is not tracked
+    // because TxChannel is always created with a fixed 64-sample input buffer
+    // (RadioModel: createTxChannel(1, 64, ...)).
+    // From WdspEngine.h kTxDspBufferSize = 2048 [NereusSDR-original].
+    int m_txFilterSize{2048};
+    int m_txFilterType{0};   // 0 = LowLatency, 1 = LinearPhase
+    // m_txDspBlockSize defaults to WdspEngine::kTxDspBufferSize (2048,
+    // deskhpsdr-derived) — matches the dsp_size argument
+    // WdspEngine::createTxChannel passes to OpenChannel (createTxChannel
+    // at WdspEngine.cpp:566 [@HEAD]).  Tracked through
+    // setTxDspBufferSizeSamples + setTxFilterSizeSamples cascade to keep
+    // the Thetis invariant filter >= buffer (console.cs:38911 [v2.10.3.13]).
+    int m_txDspBlockSize{2048};
 
     // HL2 sub-step tone magnitude (Issue #175 Task 2).
     // Default 1.0 matches kMaxToneMag (non-HL2 path and setTuneTone default).

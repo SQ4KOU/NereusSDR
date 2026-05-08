@@ -2540,6 +2540,15 @@ void VfoWidget::setRxBypassActive(bool on)
     m_updatingFromModel = prev;
 }
 
+// --- Task 3.4: Small filter display mode (Appearance > Meter Styles) ---
+
+void VfoWidget::setSmallFilterMode(bool small)
+{
+    if (m_smallFilterMode == small) { return; }
+    m_smallFilterMode = small;
+    update();   // trigger repaint to apply visual changes
+}
+
 // ---- Sub-epic C-1: NR bank DspParamPopup builders (Task 15) ----
 // Each popup shows the 3-5 most-adjusted knobs for the given NR slot.
 // "More Settings…" fires openNrSetupRequested(slot) routed by MainWindow in Task 18.

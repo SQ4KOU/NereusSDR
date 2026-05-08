@@ -67,6 +67,12 @@ nereus_add_test(tst_noise_floor_estimator)
 nereus_add_test(tst_noise_floor_tracker)
 nereus_add_test(tst_clarity_controller)
 
+# ── Task 2.10: per-band NF-estimate priming (NereusSDR-original) ─────────
+nereus_add_test(tst_per_band_nf_priming)
+
+# ── Task 2.11: Clarity + NF-aware grid coexistence (NereusSDR-original) ────
+nereus_add_test(tst_clarity_nf_grid_coexistence)
+
 # ── Phase 3I radio-connector tests ────────────────────────────────────────
 nereus_add_test(tst_hpsdr_enums)
 nereus_add_test(tst_board_capabilities)
@@ -1297,6 +1303,19 @@ nereus_add_test(tst_bandplan_manager)
 # drift in the cap is caught by the build.
 nereus_add_test(tst_waterfall_scrollback)
 
+# ── Task 2.8: WaterfallDefaultsPage changes (NF-AGC, Stop-on-TX, W5 removal) ─
+# NF-AGC setter round-trips, offset clamp, stop-on-TX setter round-trips,
+# and smoke test for setActivePeakHoldTxActive + setWaterfallStopOnTx combo.
+nereus_add_test(tst_waterfall_defaults_changes)
+
+# ── Task 2.9: NF-aware grid + Copy button + NoiseFloorEstimator::prime() ─────
+# Thetis source: console.cs:46074-46086 [v2.10.3.13] GridMinFollowsNFRX1 /
+# tmrAutoAGC_Tick NF grid block. NereusSDR-original: global panadapter default.
+# Tests: offset_shifts_grid_min, maintain_delta, disabled_no_change, deadband
+# suppression + allow at 2dB, positive offset, prime() store + update + no
+# interference with estimate().
+nereus_add_test(tst_nf_aware_grid)
+
 # ── Phase 3M-0 Task 2: BandPlanGuard region tables + 60m channels ─────────
 # Pure data + pure predicates; no Qt parent, no signals.
 # 12 table-driven tests cover US/UK/Japan 60m channelization, extended bypass,
@@ -1804,6 +1823,13 @@ nereus_add_test(tst_connection_panel_state_pills)
 # Uses QTemporaryDir for full isolation; QTEST_APPLESS_MAIN (no QApplication).
 # NereusSDR-original; no Thetis attribution needed.
 nereus_add_test(tst_app_settings_migration)
+
+# ── Task 5.1: SettingsSchemaVersion + v0.3.0 migration ────────────────────────
+# 5 tests: retired keys removed on v<3 → v3 migration, idempotency, fresh-install
+# (no version key), no-op when already at v3, version-zero path.
+# Uses QTemporaryDir for full isolation; QTEST_APPLESS_MAIN (no QApplication).
+# NereusSDR-original; no Thetis attribution needed.
+nereus_add_test(tst_settings_migration_v0_3_0)
 
 # ── Phase 3M-1a Task B.1: PttMode enum (Thetis PTTMode port) ─────────────────
 # Verifies all 9 values (None/Manual/Mic/Cw/X2/Cat/Vox/Space/Tci) have
@@ -3295,6 +3321,233 @@ nereus_add_test(tst_parametric_eq_widget_interaction)
 
 # -- Phase 3M-3a-ii follow-up Batch 5: ParametricEqWidget JSON marshal + public API --
 nereus_add_test(tst_parametric_eq_widget_json)
+
+# ── Task 1.2: RxChannel captureState/applyState round-trip ───────────────
+nereus_add_test(tst_rx_channel_rebuild)
+
+# ── Task 1.4: TxChannel captureState/applyState + WdspEngine::rebuildTxChannel
+nereus_add_test(tst_tx_channel_rebuild)
+
+# ── Task 1.5: RxChannel::filterResponseMagnitudes() accessor ─────────────
+# Verifies: (a) correct nPoints output size, (b) passband > stopband by ≥ 10 dB,
+# (c) nPoints ≤ 0 returns empty.  Guarded with HAVE_WDSP + HAVE_FFTW3.
+nereus_add_test(tst_filter_high_resolution)
+
+# ── Task 4.4: FilterDisplayItem high-resolution mode ─────────────────────
+# Verifies: setHighResolution/highResolution round-trip, idempotency,
+# bindRxChannel(nullptr) safety, paint-with-nullptr-channel no-crash,
+# bind-and-clear lifecycle.
+nereus_add_test(tst_filter_display_high_resolution)
+
+# ── Task 1.6: RadioModel::setSampleRateLive() coordinator ────────────────
+# Guard-path contracts (no live WDSP or connection required):
+#   changes_rate_without_dropping_channel — unconnected → returns -1,
+#     connectionSampleRateHz() stays at 0.
+#   idempotent_same_rate_returns_zero — same rate as current → returns 0.
+#   rebuild_completes_under_glitch_budget — elapsed < 200 ms (guard path
+#     returns immediately; full timing verified on bench in Task 1.8).
+#   signal_not_emitted_when_guard_fires — wireSampleRateChanged not emitted.
+#   signal_not_emitted_on_same_rate — wireSampleRateChanged not emitted.
+nereus_add_test(tst_sample_rate_live_apply)
+
+# ── Task 1.7: RadioModel::setActiveRxCountLive() coordinator ─────────────
+# Guard-path contracts (no live WDSP or connection required):
+#   not_connected_returns_minus_one — disconnected → returns -1,
+#     connectionActiveRxCount() stays at 0.
+#   idempotent_same_count_returns_zero — same count as current → returns 0.
+#   rebuild_completes_under_glitch_budget — elapsed < 200 ms (guard path
+#     returns immediately; full timing verified on bench in Task 1.8).
+#   signal_not_emitted_when_guard_fires — activeRxCountChanged not emitted.
+#   signal_not_emitted_on_same_count — activeRxCountChanged not emitted.
+nereus_add_test(tst_active_rx_count_live_apply)
+
+# Task 1.8: dspChangeMeasured signal existence and emission test.
+# Tests that RadioModel::dspChangeMeasured(qint64) signal exists
+# and can be spied on. Actual emission is tested on live hardware;
+# these tests verify the signal protocol.
+nereus_add_test(tst_dsp_change_timer)
+
+# ── Task 4.2: Per-mode buffer/filter/filter-type live-apply ─────────────────
+# Tests RxChannel::onModeChanged() and TxChannel::onModeChanged() guard paths
+# (no WDSP required — verifies the equality guard, key-part routing, and the
+# rebuild call path). Also verifies RadioModel::rebuildDspOptionsForMode()
+# no-ops when disconnected.
+#
+# Test cases:
+#   rx_no_engine_returns_zero — no WdspEngine attached → 0
+#   rx_engine_attached_channel_not_in_map_returns_minus_one — engine attached,
+#     channel not created → rebuild returns -1
+#   rx_same_settings_returns_zero_no_rebuild — bufSize/filtSize/filtType all
+#     match AppSettings → equality guard fires → 0
+#   rx_cw_mode_reads_cw_key_suffix — CWU/CWL use "Cw" key suffix → 0
+#   rx_dig_mode_reads_dig_key_suffix — DIGU/DIGL use "Dig" key suffix → 0
+#   rx_fm_mode_reads_fm_key_suffix — FM uses "Fm" key suffix → 0
+#   rx_changed_filter_size_triggers_rebuild_attempt — 8192!=4096 → -1
+#   rx_changed_filter_type_triggers_rebuild_attempt — LinearPhase!=LowLatency → -1
+#   tx_no_engine_returns_zero — TxChannel without engine → 0
+#   tx_same_settings_returns_zero — both values match → 0
+#   tx_changed_filter_size_triggers_rebuild_attempt — 4096!=2048 → -1
+#   radiomodel_rebuild_noop_when_disconnected — no emission when disconnected
+nereus_add_test(tst_dsp_options_per_mode_apply)
+
+# ── Task 4.3: Filter Impulse Cache toggle persistence ─────────────────────────
+# AppSettings round-trip for DspOptionsCacheImpulse and
+# DspOptionsCacheImpulseSaveRestore. Both default to "False". The WdspEngine
+# reads these flags at finishInitialization() and shutdown(); they take effect
+# at engine-init time, not live (see design Section 4C).
+#
+# Tests:
+#   cache_impulse_default_false — remove key → default is "False"
+#   cache_impulse_round_trip_true — set "True" → reads back "True"
+#   cache_impulse_round_trip_false — set "False" → reads back "False"
+#   cache_save_restore_default_false — remove key → default is "False"
+#   cache_save_restore_round_trip_true — set "True" → reads back "True"
+#   cache_save_restore_round_trip_false — set "False" → reads back "False"
+#   cache_impulse_and_save_restore_are_independent — orthogonal flags
+nereus_add_test(tst_dsp_options_persistence)
+
+# ── Task 4.5: Warning icon logic — Thetis validity rules ──────────────────────
+# Ported from Thetis console.cs:38797-38807 + setup.cs:22391-22400 [v2.10.3.13].
+#
+# Validity rules: warnings show when settings differ across modes:
+#   bufferSizeDifferentRX  = !(phone==fm && fm==cw && cw==dig)  (4-way RX)
+#   bufferSizeDifferentTX  = !(phone==fm && fm==dig)            (3-way TX; no CW TX)
+#   (same pattern for filter size; filter type uses separate RX/TX type combos)
+#   pbWarningBufferSize.Visible = bufferSizeDifferentRX || bufferSizeDifferentTX
+#   pbWarningFilterSize.Visible = filterSizeDifferentRX || filterSizeDifferentTX
+#   pbWarningBufferType.Visible = filterTypeDifferentRX || filterTypeDifferentTX
+#
+# Tests the static helpers DspOptionsPage::comboValuesDiffer4 / comboValuesDiffer3
+# and the composite OR logic for each warning label.
+#
+#   differ4_all_equal_returns_false — 4 equal combos → false
+#   differ4_one_different_returns_true — 1 of 4 differs → true
+#   differ4_two_different_returns_true — 2 of 4 differ → true
+#   differ4_all_different_returns_true — all 4 differ → true
+#   differ3_all_equal_returns_false — 3 equal combos → false
+#   differ3_one_different_returns_true — 1 of 3 differs → true
+#   differ3_two_different_returns_true — 2 of 3 differ → true
+#   buffer_warn_fires_on_rx_side_only — RX side differs, TX uniform → warning
+#   buffer_warn_fires_on_tx_side_only — FM differs → both sides diverge → warning
+#   buffer_warn_hidden_when_all_match — all 4 equal → no warning
+#   filter_size_same_logic_as_buffer — all equal: no warn; CW changed: warn
+#   filter_type_rx_3_of_4_equal_fires — 3 of 4 RX types equal, 1 differs → warn
+#   filter_type_all_rx_equal_no_warning — all RX equal AND all TX equal → no warn
+nereus_add_test(tst_dsp_options_warning_logic)
+
+# ── Task 2.1: Detector + Averaging split (handwave fix from 3G-8) ─────────
+# Ported from Thetis specHPSDR.cs:302-415 [v2.10.3.13] DetTypePan / DetTypeWF
+# / AverageMode / AverageModeWF integer codes.
+#
+# tst_detector_modes: pure math over SpectrumWidget::applyDetector().
+#   Peak returns max in window; Rosenfell alternates max/min per pixel;
+#   Average computes arithmetic mean; Sample takes first bin;
+#   RMS computes root-mean-square; empty input / zero outputBins are no-ops.
+#   Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free).
+#
+# Note: tst_averaging_modes was retired with the SpectrumWidget::applyAveraging
+# static helper.  Frame averaging is now performed by SpectrumAvenger
+# (verbatim WDSP analyzer.c:464-554 [v2.10.3.13] port) on linear-power
+# display pixels; coverage of that path is exercised end-to-end via the
+# running app.  Direct SpectrumAvenger unit tests are a follow-up item.
+nereus_add_test(tst_detector_modes)
+
+# Phase 1B verification -- exhaustive sweep of every detector x averaging
+# combination through SpectrumWidget::updateSpectrumLinear():
+#   spectrum  5 detectors x 4 averagings = 20
+#   waterfall 4 detectors x 4 averagings = 16
+#   total                                = 36
+# Plus mode-switch / averaging-switch / empty-input edge cases.
+# Mirrors the Thetis Pan / WF combo item lists from
+# setup.designer.cs:34843-34847 / :34868-34873 / :34436-34440 / :34461-34465
+# [v2.10.3.13].  Asserts pipeline output is sized to displayWidth and all
+# pixels finite (no NaN / Inf from any detector x averaging combo).
+nereus_add_test(tst_spectrum_pipeline_modes)
+
+# Phase 2 -- FFTEngine window function ports (Rectangular / BH-4T / Hann /
+# Flat-Top / Hamming / Kaiser / BH-7T) per WDSP analyzer.c:52-173 +
+# Thetis combo item ordering (setup.designer.cs:34966-34973 [v2.10.3.13]).
+# Verifies enum values match WDSP wire format, ENB falls in the published
+# range for each window, Kaiser PiAlpha setter clamps non-positive input.
+nereus_add_test(tst_window_functions)
+
+# Phase 2-polish -- FFT size slider semantics.  Verifies slider 0..6 maps
+# to {4096..262144} per Thetis setup.cs:16148 [v2.10.3.13]; fftSizeOffsetDb
+# round-trips per setup.cs:16154 (slider.Value * 2); spectrumSettingsChanged
+# fires only on actual size change per setup.cs:16162-16165; binWidthHz()
+# returns plain sampleRate / fftSize (legacy * 2 bug removed).
+nereus_add_test(tst_fft_size_slider)
+
+# Phase 2-polish-3 -- auto-zoom FFT math.  NereusSDR-original (Thetis does
+# not auto-replan on zoom).  Verifies setFftSizeBaseline round-trip +
+# rejection rules, and exercises the bandwidthChangeRequested lambda's
+# formula via an inline copy: targetSize = baseline * sampleRate / bwHz,
+# floored at baseline, capped at 262144, with [0.66, 1.5] hysteresis
+# bracket.
+nereus_add_test(tst_auto_zoom_fft)
+
+# ── Task 2.5: ActivePeakHoldTrace ────────────────────────────────────────────
+# Unit tests for the per-bin peak-hold trace:
+#   peak_value_persists_until_decay: hold + 0.2 dB/frame decay verified
+#   on_tx_state_disables_update: onTx=false freezes peaks during TX
+#   on_tx_state_allows_update_when_onTx_true: onTx=true keeps updating
+#   clear_resets_peaks: all bins back to -inf
+#   resize_updates_size_and_clears: size changes + implicit clear
+#   disabled_does_not_update_or_decay: no-op when !enabled
+#   Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure data logic).
+nereus_add_test(tst_active_peak_hold)
+
+# ── Task 2.6: PeakBlobDetector — top-N peak detector with hold/decay ────────
+# Verifies: default construction, disabled clears blobs, empty bins, top-N
+# selection + sort, count-clamp, inside-filter constraint, hold merge,
+# post-hold decay, hold-disabled path, and the Thetis verbatim decay formula
+# (entry.max_dBm -= m_dBmPerSecondPeakBlobFall / (float)m_nFps;
+#  Display.cs:5483 [v2.10.3.13]).
+# Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure data logic).
+nereus_add_test(tst_peak_blob_detector)
+
+# ── Task 2.3: Spectrum Defaults overlay group + decimation wire-up ──────────
+# Tests for SpectrumWidget overlay setters (ShowMHzOnCursor / ShowBinWidth /
+# ShowNoiseFloor / DispNormalize / ShowPeakValueOverlay) and FFTEngine
+# decimation (setDecimation range clamp + roundtrip).
+#
+# tst_spectrum_overlays: accessor roundtrips + default-value asserts.
+#   formatCursorFreq Hz vs MHz format verified for on/off states.
+#   PeakTextDelay default=500ms from Thetis console.cs:20073 [v2.10.3.13].
+#   PeakValueColor default DodgerBlue (#1E90FF) from console.cs:20278 [v2.10.3.13].
+#   FFTEngine::setDecimation range [1..32] enforced; out-of-range rejected.
+#   Uses QTEST_MAIN (QApplication required for SpectrumWidget construction).
+nereus_add_test(tst_spectrum_overlays)
+
+# ── Task 3.1: MultimeterPage + configurable MeterPoller timing ───────────────
+# Verifies new setIntervalMs/intervalMs and setAverageWindow/averageWindow
+# round-trip accessors on MeterPoller (added for MultimeterPage live wire-up).
+#   poll_interval_round_trips: setIntervalMs(50) → intervalMs() == 50
+#   poll_interval_default_is_100ms: default matches Thetis 100ms [v2.10.3.13]
+#   interval_clamped_below_minimum: 0 → clamped to ≥ 10ms
+#   interval_clamped_above_maximum: 99999 → clamped to ≤ 2000ms
+#   interval_boundary_10ms/2000ms_accepted: exact boundary values accepted
+#   average_window_round_trips: setAverageWindow(8) → averageWindow() == 8
+#   average_window_default_is_1: default 1 (no averaging) [v2.10.3.13]
+#   average_window clamped [1..32] + boundary tests
+#   interval_and_window_are_independent: both setters coexist without clobbering
+#   Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure accessor logic).
+nereus_add_test(tst_multimeter_timing)
+
+# ── Task 3.2: MeterItem unit-mode fan-out (S / dBm / µV) ────────────────────
+# formatValue() static helper for all three units.
+# S-meter boundary values: S0 = -127 dBm, S9 = -73 dBm, S9+30 = -43 dBm.
+# µV formula: V = sqrt(P * 50 Ω), P = 10^(dBm/10) * 1e-3 W.  -73 dBm ≈ 50 µV.
+# setUnitMode / unitMode / setShowDecimal / showDecimal round-trips.
+# SignalTextItem::setUnitMode() overrides base to sync per-item Units enum.
+# Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure data logic).
+nereus_add_test(tst_multimeter_unit_conversion)
+
+# HistoryGraphItem duration setting (Task 3.3).
+# setDurationMs / durationMs round-trips, serialization v1/v2, capacity computation,
+# AppSettings persistence of MultimeterSignalHistoryDurationMs + Enable flag.
+# Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure MeterItem logic).
+nereus_add_test(tst_signal_history)
 
 # -- Phase 3M-3a-iii Task 13: DexpPeakMeter widget (VOX/DEXP live peak strip) --
 # 5 tests: default-construct paint safety, signal-level clamp to [0,1], green
