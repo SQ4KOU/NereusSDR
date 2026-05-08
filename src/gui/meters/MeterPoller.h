@@ -146,6 +146,23 @@ public:
     void addTarget(MeterWidget* widget);
     void removeTarget(MeterWidget* widget);
 
+    // ── Polling interval (Task 3.1, MultimeterPage wire-up) ──────────────────
+    // setIntervalMs / intervalMs: new preferred interface used by MultimeterPage.
+    // Corresponds to Thetis udDisplayMeterDelay (display.cs) which sets the
+    // UpdateInterval property that drives the meter polling timer.
+    // Default 100ms (10 fps) from Thetis MeterManager.cs [v2.10.3.13].
+    // setInterval / interval kept for internal callers (backward-compat).
+    void setIntervalMs(int ms);
+    int  intervalMs() const;
+
+    // ── Averaging window (Task 3.1, forward-looking for Task 3.2) ────────────
+    // setAverageWindow: controls how many poll samples are averaged before
+    // dispatch.  Currently stored; full averaging dispatch lands in Task 3.2.
+    // Corresponds to Thetis udDisplayMeterAvg (display.cs) [v2.10.3.13].
+    // Default 1 (no averaging).
+    void setAverageWindow(int n);
+    int  averageWindow() const;
+
     void setInterval(int ms);
     int interval() const;
 
@@ -183,6 +200,11 @@ private:
     // registered MeterWidget targets.
     // Porting from Thetis dsp.cs:999-1050 [v2.10.3.13] CalculateTXMeter.
     void pollTxMeters();
+
+    // m_avgWindow: averaging window size set by MultimeterPage (Task 3.1).
+    // Task 3.2 will use this value in dispatch; stored here for round-trip.
+    // From Thetis udDisplayMeterAvg (display.cs) [v2.10.3.13].
+    int    m_avgWindow{1};
 
     QTimer m_timer;
     QPointer<RxChannel> m_rxChannel;

@@ -85,6 +85,8 @@ constexpr int kDefaultGridStep    = 10;  // NereusSDR divergence (§10).
 QString gridMaxKey(Band b)      { return QStringLiteral("DisplayGridMax_") + bandKeyName(b); }
 QString gridMinKey(Band b)      { return QStringLiteral("DisplayGridMin_") + bandKeyName(b); }
 QString clarityFloorKey(Band b) { return QStringLiteral("ClarityFloor_")   + bandKeyName(b); }
+// NereusSDR-original — no Thetis equivalent.
+QString bandNFKey(Band b)       { return QStringLiteral("DisplayBandNFEstimate_") + bandKeyName(b); }
 
 } // namespace
 
@@ -223,6 +225,26 @@ void PanadapterModel::setClarityFloor(Band b, float floor)
     saveBandGridToSettings(b);
 }
 
+// NereusSDR-original — no Thetis equivalent.
+float PanadapterModel::bandNFEstimate(Band b) const
+{
+    return m_perBandGrid.value(b).bandNFEstimate;
+}
+
+// NereusSDR-original — no Thetis equivalent.
+void PanadapterModel::setBandNFEstimate(Band b, float nf)
+{
+    BandGridSettings& slot = m_perBandGrid[b];
+    if ((!qIsNaN(nf) && !qIsNaN(slot.bandNFEstimate) && qFuzzyCompare(slot.bandNFEstimate, nf)) ||
+        (qIsNaN(nf) && qIsNaN(slot.bandNFEstimate))) {
+        return;
+    }
+    slot.bandNFEstimate = nf;
+    if (!qIsNaN(nf)) {
+        AppSettings::instance().setValue(bandNFKey(b), nf);
+    }
+}
+
 void PanadapterModel::setGridStep(int step)
 {
     if (step <= 0 || m_gridStep == step) {
@@ -248,13 +270,17 @@ void PanadapterModel::loadPerBandGridFromSettings()
     // panadapter buttons and inherit the GEN grid slot when tuned.
     for (int i = 0; i < static_cast<int>(Band::SwlFirst); ++i) {
         const Band b = static_cast<Band>(i);
-        const QVariant maxV = s.value(gridMaxKey(b));
-        const QVariant minV = s.value(gridMinKey(b));
-        const QVariant cfV  = s.value(clarityFloorKey(b));
+        const QVariant maxV  = s.value(gridMaxKey(b));
+        const QVariant minV  = s.value(gridMinKey(b));
+        const QVariant cfV   = s.value(clarityFloorKey(b));
+        const QVariant nfV   = s.value(bandNFKey(b));
         BandGridSettings slot = m_perBandGrid.value(b, BandGridSettings{ kThetisDefaultDbMax, kThetisDefaultDbMin });
-        if (maxV.isValid()) { slot.dbMax = maxV.toInt(); }
-        if (minV.isValid()) { slot.dbMin = minV.toInt(); }
-        if (cfV.isValid())  { slot.clarityFloor = cfV.toFloat(); }
+        if (maxV.isValid())  { slot.dbMax          = maxV.toInt();   }
+        if (minV.isValid())  { slot.dbMin          = minV.toInt();   }
+        if (cfV.isValid())   { slot.clarityFloor   = cfV.toFloat();  }
+        // NereusSDR-original — no Thetis equivalent.
+        // Load per-band NF estimates persisted from previous sessions for priming.
+        if (nfV.isValid())   { slot.bandNFEstimate = nfV.toFloat();  }
         m_perBandGrid.insert(b, slot);
     }
 

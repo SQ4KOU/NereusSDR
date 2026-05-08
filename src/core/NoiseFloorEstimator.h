@@ -61,6 +61,7 @@
 #pragma once
 
 #include <QVector>
+#include <limits>
 
 namespace NereusSDR {
 
@@ -79,9 +80,21 @@ public:
     // Returns qQNaN() if `bins` is empty.
     float estimate(const QVector<float>& bins);
 
+    // Seed the estimator with a known noise-floor value. Used by per-band NF
+    // priming (Task 2.10) to eliminate the cold-start visual jump on band
+    // change. Stores the value so the next estimate() call is pre-seeded.
+    // NereusSDR-original — no Thetis equivalent.
+    void prime(double initialDb);
+
+    // Last primed value (qQNaN if never primed). Checked by callers that
+    // want to push the seeded floor before any frame arrives.
+    float primedValue() const noexcept { return m_primedValue; }
+    bool  hasPrimedValue() const noexcept { return !qIsNaN(m_primedValue); }
+
 private:
     float          m_percentile;
     QVector<float> m_workBuf;
+    float          m_primedValue{std::numeric_limits<float>::quiet_NaN()};
 };
 
 }  // namespace NereusSDR

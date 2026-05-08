@@ -131,6 +131,12 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
                 });
     };
     wire(m_radioInfoTab,   QStringLiteral("radioInfo"));
+
+    // Task 3.6: forward ANAN-8000DLE volts/amps toggle from RadioInfoTab up
+    // through HardwarePage so SetupDialog can route it to MainWindow.
+    connect(m_radioInfoTab, &RadioInfoTab::anan8000DleVoltsAmpsChanged,
+            this,           &HardwarePage::anan8000DleVoltsAmpsChanged);
+
     wire(m_antennaAlexTab, QStringLiteral("antennaAlex"));
 
     // Phase 3M-4 Task 11: pass-through for the IMD-warning-gated HPF Bypass

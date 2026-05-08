@@ -112,6 +112,10 @@ signals:
     // which wires it to the live PureSignal coordinator.
     void hpfBypassOnPsChanged(bool checked);
 
+    // Task 3.6: forwarded from RadioInfoTab::anan8000DleVoltsAmpsChanged.
+    // SetupDialog connects this to SetupDialog::anan8000DleVoltsAmpsChanged.
+    void anan8000DleVoltsAmpsChanged(bool visible);
+
 public slots:
     // Reconciles tab visibility from BoardCapabilities flags and restores
     // persisted values for the incoming radio's MAC.

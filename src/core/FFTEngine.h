@@ -73,16 +73,20 @@
 namespace NereusSDR {
 
 // Window function types for FFT pre-processing.
-// From Thetis: these match the WDSP SetAnalyzer window options.
+// Integer values match Thetis WDSP analyzer.c:52-173 [v2.10.3.13]
+// new_window() switch type codes exactly, so the values are wire-compatible
+// with Thetis's combo and any future WDSP API surface.  Enum order also
+// matches Thetis comboDispWinType item ordering (setup.designer.cs:34966-
+// 34973 [v2.10.3.13]) so combo-index == enum-value with no remap.
 enum class WindowFunction : int {
-    None = 0,
-    Hanning,
-    Hamming,
-    BlackmanHarris4,   // 4-term Blackman-Harris (default, -92 dB sidelobes)
-    BlackmanHarris7,   // 7-term Blackman-Harris
-    Kaiser,
-    Flat,              // flat-top for calibration
-    Count
+    Rectangular        = 0,  // analyzer.c case 0
+    BlackmanHarris4    = 1,  // 4-term Blackman-Harris, analyzer.c case 1
+    Hann               = 2,  // analyzer.c case 2
+    FlatTop            = 3,  // flat-top for calibration, analyzer.c case 3
+    Hamming            = 4,  // analyzer.c case 4
+    Kaiser             = 5,  // parameterised by KaiserPi, analyzer.c case 5
+    BlackmanHarris7    = 6,  // 7-term Blackman-Harris, analyzer.c case 6
+    Count              = 7
 };
 
 // Per-receiver FFT computation engine.
@@ -111,11 +115,72 @@ public:
         return static_cast<WindowFunction>(m_windowFunc.load());
     }
 
+    // Kaiser window shape parameter (PiAlpha = pi * alpha).  Higher values
+    // narrow the main lobe + raise sidelobes; lower values widen.  Only
+    // applied when windowFunction() == Kaiser.
+    // From Thetis specHPSDR.cs:145 [v2.10.3.13] private double kaiser_pi = 14.0;
+    void setKaiserPi(double pi);
+    double kaiserPi() const { return m_kaiserPi.load(); }
+
+    // FFT size display calibration offset, in dB.  Higher FFT sizes raise
+    // the noise floor on the spectrum render (because each bin sees a
+    // smaller slice of the input power).  Thetis compensates by setting
+    // this offset to slider.Value * 2 dB on every FFT slider scroll
+    // (setup.cs:16154 [v2.10.3.13]) and subtracting it from agc_cal_offset
+    // (console.cs:33304).  Without the compensation, the AGC threshold
+    // drifts up to 12 dB across the slider's 0..6 range.
+    // From Thetis Display.cs:1389-1397 [v2.10.3.13] RX1FFTSizeOffset.
+    void setFftSizeOffsetDb(double db);
+    double fftSizeOffsetDb() const { return m_fftSizeOffsetDb.load(); }
+
+    // FFT-size baseline -- the user's slider-set "FFT size at full DDC
+    // bandwidth (bwHz == sampleRate)" choice.  NereusSDR-original auto-zoom
+    // (no Thetis equivalent) uses this as the target K = baseline /
+    // displayWidth bins-per-pixel; on zoom, computes the FFT size needed
+    // to maintain the same K and replans accordingly.  Slider handler
+    // sets this, auto-zoom reads it as the floor (fftSize never goes
+    // below baseline).  See MainWindow auto-zoom lambda for the
+    // baseline * sampleRate / bwHz formula.
+    void setFftSizeBaseline(int size);
+    int  fftSizeBaseline() const { return m_fftSizeBaseline.load(); }
+
+    // Hz-per-bin auto-zoom override.  When > 0, the auto-zoom replan
+    // formula (in MainWindow) targets this Hz/bin instead of the default
+    // bins-in-window = baseline policy:
+    //   targetSize = sampleRate / hzPerBinTarget
+    // The FFT size becomes effectively zoom-INDEPENDENT — same FFT delivers
+    // the requested resolution regardless of visible bandwidth.  Set to 0
+    // to disable (fall back to bins-in-window default).  Useful for
+    // hunting narrow signals (CW, digital modes) where you want the same
+    // frequency resolution at any zoom level.  Floor at baseline still
+    // applies, so the slider remains a minimum-FFT-size knob.
+    void  setHzPerBinTarget(double hzPerBin);
+    double hzPerBinTarget() const { return m_hzPerBinTarget.load(); }
+
     void setSampleRate(double rateHz);
     double sampleRate() const { return m_sampleRate.load(); }
 
     void setOutputFps(int fps);
     int  outputFps() const { return m_targetFps.load(); }
+
+    // setDecimation — apply I/Q decimation before FFT processing.
+    // Only every Nth I/Q sample pair is passed to the FFT accumulator.
+    // Higher decimation reduces effective bandwidth and FFT resolution,
+    // mirroring Thetis setup.designer.cs:33732 udDisplayDecimation [v2.10.3.13].
+    void setDecimation(int factor);
+    int  decimation() const { return m_decimation.load(); }
+
+    // Equivalent Noise Bandwidth of the current window function, expressed
+    // as a multiplier on the natural per-bin bandwidth (sample_rate / N).
+    //
+    //   ENB_bins = N × Σ(w[i]²) / (Σ w[i])²
+    //
+    // For typical windows: rectangular = 1.00, Hann = 1.50, Hamming ≈ 1.36,
+    // Blackman-Harris 4-term ≈ 2.00, Flat-Top ≈ 3.77.  Used by the Thetis
+    // detector function (analyzer.c:283-462 [v2.10.3.13]) to scale Average
+    // / Sample / RMS modes via inv_enb so that integrated noise reads
+    // independent of window choice.  Computed inside computeWindow().
+    double windowEnb() const { return m_windowEnb; }
 
 public slots:
     // Feed raw interleaved I/Q samples from RadioConnection.
@@ -125,9 +190,44 @@ public slots:
 
 signals:
     // Emitted when a new FFT frame is ready.
-    // binsDbm contains fftSize/2 float values (positive frequencies only),
-    // representing power in dBm at each frequency bin.
+    // binsDbm contains fftSize float values (full FFT-shifted bins, neg-freq
+    // first then pos-freq), representing power in dBm at each frequency bin.
     void fftReady(int receiverId, const QVector<float>& binsDbm);
+
+    // Linear-power side-channel for the Thetis-faithful display pipeline.
+    //
+    // binsLinear contains the same length and ordering as binsDbm but values
+    // are |X[k]|² (linear power, no log conversion, no dBm normalization).
+    // Required by the Thetis WDSP analyzer detector + averaging pipeline
+    // which operates on linear-domain bins and applies the 10×log₁₀
+    // conversion only at final pixel output (analyzer.c:464-554
+    // [v2.10.3.13] avenger() does the log step per av_mode).
+    //
+    // windowEnb is the Equivalent Noise Bandwidth of the window in bins.
+    // The downstream detector applies inv_enb = 1/windowEnb to scale
+    // Average/Sample/RMS modes (analyzer.c:368-441 [v2.10.3.13]).
+    //
+    // dbmOffset is the window coherent-gain compensation -20·log10(Σw[i])
+    // that fftReady's binsDbm[i] adds after 10·log10(|X[k]|²).  The avenger
+    // applies it via its `scale` parameter as scale = 10^(dbmOffset/10) so
+    // the post-avenger pixels read the same dBm as fftReady.
+    //
+    // Both metadata values are emitted in-band so the slot always has the
+    // values matching the bins it just received — no separate setter
+    // coordination needed.
+    //
+    // Emitted in lock-step with fftReady — every frame, both signals fire.
+    // Cost: one extra QVector<float> heap allocation + 16 bytes per frame.
+    void fftReadyLinear(int receiverId, const QVector<float>& binsLinear,
+                        double windowEnb, double dbmOffset);
+
+    // Emitted whenever a setFftSize() call results in an actual size
+    // change (oldSize != newSize).  Mirrors Thetis
+    // SpectrumSettingsChangedHandlers?.Invoke(rx) at setup.cs:16164
+    // [v2.10.3.13] -- Thetis subscribers (chrome / waterfall / AGC panel)
+    // refresh their derived state.  NereusSDR has no subscribers today;
+    // emitted for forward compatibility.
+    void spectrumSettingsChanged(int receiverId);
 
 private:
     void replanFft();
@@ -140,17 +240,50 @@ private:
     std::atomic<int>    m_fftSize{4096};
     std::atomic<int>    m_pendingFftSize{0};  // 0 = no change pending
     std::atomic<int>    m_windowFunc{static_cast<int>(WindowFunction::BlackmanHarris4)};
+    // Kaiser window shape parameter.  Default 14.0 from Thetis specHPSDR.cs:
+    // 145 [v2.10.3.13] private double kaiser_pi = 14.0.
+    std::atomic<double> m_kaiserPi{14.0};
+    // FFT size display calibration offset (dB).  Updated by the slider
+    // handler to slider.Value * 2 per Thetis setup.cs:16154 [v2.10.3.13].
+    std::atomic<double> m_fftSizeOffsetDb{0.0};
+    // User's slider-set FFT size baseline (NereusSDR-original auto-zoom
+    // anchor).  Default matches m_fftSize so first-launch behavior is
+    // identical to a system without auto-zoom (slider == FFT size).
+    std::atomic<int>    m_fftSizeBaseline{4096};
+    // 0 = disabled (use bins-in-window auto-zoom).  > 0 = target Hz/bin.
+    std::atomic<double> m_hzPerBinTarget{0.0};
     std::atomic<double> m_sampleRate{48000.0};
     std::atomic<int>    m_targetFps{30};
+    // From Thetis setup.designer.cs:33732 udDisplayDecimation [v2.10.3.13].
+    // Range 1..32; 1 = no decimation (pass every sample).
+    std::atomic<int>    m_decimation{1};
 
     // Internal state (only accessed on worker thread)
     int m_currentFftSize{0};  // last planned size (triggers replan on mismatch)
+    int m_decimationCounter{0};  // counts input sample pairs; reset each decimation pass
 
 #ifdef HAVE_FFTW3
+    // Raw (un-windowed) I/Q ring buffer.  feedIQ writes here.  processFrame
+    // copies into m_fftIn applying the window function.  Keeping the raw
+    // samples in a separate buffer allows overlap-style frame advance:
+    // after each FFT we copy the trailing (fftSize - advance) samples
+    // back to the head so successive FFT frames share data.  Mirrors
+    // WDSP analyzer.c overlap behaviour driven by Thetis specHPSDR.cs:155
+    // [v2.10.3.13] private int overlap = 30000.
+    fftwf_complex* m_iqRaw{nullptr};
+    // Windowed FFT input + output buffers.  m_fftIn is overwritten each
+    // frame (window applied to m_iqRaw on the way in).
     fftwf_complex* m_fftIn{nullptr};
     fftwf_complex* m_fftOut{nullptr};
     fftwf_plan     m_plan{nullptr};
 #endif
+
+    // Window-recompute flag.  Set by setWindowFunction / setKaiserPi
+    // (main thread); checked + cleared at the top of processFrame
+    // (FFT worker thread).  Without this, window changes via the combo
+    // are silently ignored until the FFT size also changes -- the only
+    // other path that re-runs computeWindow().
+    std::atomic<bool> m_windowDirty{true};
 
     // Window function coefficients (precomputed for current fftSize)
     QVector<float> m_window;
@@ -166,8 +299,19 @@ private:
     // dBm calibration offset (accounts for window gain + FFT normalization)
     float m_dbmOffset{0.0f};
 
-    // From Thetis display.cs:215
-    static constexpr int kMaxFftSize = 65536;
+    // Equivalent Noise Bandwidth of the current window in bins:
+    //   m_windowEnb = N × Σ(w[i]²) / (Σ w[i])²
+    // Recomputed every time the window changes (computeWindow()).  Used by
+    // downstream consumers (e.g. SpectrumDetector) for inv_enb scaling
+    // matching analyzer.c:368-441 [v2.10.3.13].
+    double m_windowEnb{1.0};
+
+    // Maximum FFT size.  Sized to match the Thetis FFT slider's high end
+    // (4096 << 6 = 262144 bins).  Setting fftSize beyond this is rejected
+    // by setFftSize().
+    // From Thetis tbDisplayFFTSize.Maximum=6 + setup.cs:16148 [v2.10.3.13]
+    // FFTSize = 4096 * Math.Pow(2, slider.Value).
+    static constexpr int kMaxFftSize = 262144;
 };
 
 } // namespace NereusSDR

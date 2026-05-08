@@ -84,7 +84,11 @@ namespace NereusSDR {
 struct BandGridSettings {
     int   dbMax;
     int   dbMin;
-    float clarityFloor = std::numeric_limits<float>::quiet_NaN();
+    float clarityFloor   = std::numeric_limits<float>::quiet_NaN();
+    // NereusSDR-original — no Thetis equivalent.
+    // Last-seen noise-floor estimate for this band, persisted across sessions.
+    // NaN until at least one 2s settle window has been observed on this band.
+    float bandNFEstimate = std::numeric_limits<float>::quiet_NaN();
 };
 
 // Represents a single panadapter display.
@@ -146,6 +150,14 @@ public:
     // Clarity per-band floor memory (Phase 3G-9c). NaN = no data yet.
     float clarityFloor(Band b) const;
     void setClarityFloor(Band b, float floor);
+
+    // NereusSDR-original — no Thetis equivalent.
+    // Per-band noise-floor estimate (Task 2.10). NaN until the settle
+    // detector has observed a stable floor on this band. Read by the
+    // band-change handler (MainWindow) to prime ClarityController's EWMA
+    // so the waterfall snaps to the remembered state rather than cold-starting.
+    float bandNFEstimate(Band b) const;
+    void setBandNFEstimate(Band b, float nf);
 
     // Grid step (single global value, matches Thetis). Persisted under
     // the "DisplayGridStep" key.

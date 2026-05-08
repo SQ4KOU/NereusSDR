@@ -2,6 +2,7 @@
 #include "gui/ColorSwatchButton.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/StyleConstants.h"
+#include "core/AppSettings.h"
 #include "models/RadioModel.h"
 
 #include <QVBoxLayout>
@@ -261,6 +262,33 @@ void MeterStylesPage::buildUI()
     smForm->addRow(QStringLiteral("Decay Rate:"), m_decayRateSlider);
 
     contentLayout()->addWidget(smGroup);
+
+    // --- Section: VFO Flag ---
+    auto* vfoGroup = new QGroupBox(QStringLiteral("VFO Flag"), this);
+    auto* vfoLayout = new QVBoxLayout(vfoGroup);
+
+    m_smallModeFilterToggle = new QCheckBox(
+        QStringLiteral("Small filter display on VFO flag"), vfoGroup);
+    m_smallModeFilterToggle->setToolTip(
+        QStringLiteral("Compact filter readout under the VFO frequency."));
+
+    vfoLayout->addWidget(m_smallModeFilterToggle);
+
+    // Persist setting
+    auto& s = AppSettings::instance();
+    m_smallModeFilterToggle->setChecked(
+        s.value(QStringLiteral("AppearanceSmallModeFilterOnVfos"), QStringLiteral("False")).toString() == QStringLiteral("True"));
+
+    connect(m_smallModeFilterToggle, &QCheckBox::toggled, this,
+        [this](bool v) {
+            AppSettings::instance().setValue(
+                QStringLiteral("AppearanceSmallModeFilterOnVfos"),
+                v ? QStringLiteral("True") : QStringLiteral("False"));
+            // TODO(future): wire to VfoWidget::setSmallFilterMode(v) for live-apply
+            // once VfoWidget has a clean accessor path from MainWindow or SetupDialog
+        });
+
+    contentLayout()->addWidget(vfoGroup);
     contentLayout()->addStretch();
 }
 
