@@ -57,6 +57,7 @@
 
 #include "core/BoardCapabilities.h"
 #include "core/RadioDiscovery.h"
+#include "gui/ComboStyle.h"
 #include "models/RadioModel.h"
 
 #include <QCheckBox>
@@ -107,6 +108,9 @@ DiversityTab::DiversityTab(RadioModel* model, QWidget* parent)
 
     // Reference ADC combo
     m_referenceAdcCombo = new QComboBox(enableGroup);
+    applyComboStyle(m_referenceAdcCombo);
+    m_referenceAdcCombo->setMinimumWidth(120);
+    m_referenceAdcCombo->setMaximumWidth(160);
     m_referenceAdcCombo->addItem(QStringLiteral("ADC0"), 0);
     m_referenceAdcCombo->addItem(QStringLiteral("ADC1"), 1);
     enableForm->addRow(tr("Reference ADC:"), m_referenceAdcCombo);

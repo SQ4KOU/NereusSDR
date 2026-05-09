@@ -14,8 +14,13 @@ inline void applyComboStyle(QComboBox* combo)
         "  border: 1px solid %3; border-radius: 3px;"
         "  padding: 2px 6px; font-size: 10px;"
         "}"
-        "QComboBox::drop-down { border: none; width: 16px; }"
-        "QComboBox::down-arrow { image: none; border: none; }"
+        "QComboBox::drop-down { border: none; width: 18px; }"
+        // Reuse the spin-down arrow asset (shared with QSpinBox styling)
+        // so combos pick up the same visual language as the rest of the
+        // app's arrow controls.
+        "QComboBox::down-arrow {"
+        "  image: url(:/icons/spin-down.svg); width: 10px; height: 10px;"
+        "}"
         "QComboBox QAbstractItemView {"
         "  background: %1; color: %2;"
         "  selection-background-color: %4;"

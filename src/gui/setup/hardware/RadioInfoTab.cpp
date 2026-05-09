@@ -65,6 +65,7 @@
 #include "core/HpsdrModel.h"
 #include "core/RadioDiscovery.h"
 #include "core/SampleRateCatalog.h"
+#include "gui/ComboStyle.h"
 #include "models/RadioModel.h"
 
 #include <QCheckBox>
@@ -124,7 +125,9 @@ RadioInfoTab::RadioInfoTab(RadioModel* model, QWidget* parent)
     // RX1 sample rate combo — entries populated in populate() from
     // allowedSampleRates(proto, caps, model). Matches Thetis setup.cs:847-852.
     m_sampleRateRx1Combo = new QComboBox(paramGroup);
+    applyComboStyle(m_sampleRateRx1Combo);
     m_sampleRateRx1Combo->setMinimumWidth(120);
+    m_sampleRateRx1Combo->setMaximumWidth(160);
 
     // RX2 sample rate combo — disabled stub in PR #35. Thetis exposes an
     // independent RX2 rate (setup.cs comboAudioSampleRateRX2). When Phase 3F
@@ -134,21 +137,20 @@ RadioInfoTab::RadioInfoTab(RadioModel* model, QWidget* parent)
     //   • P2 ANAN-10E / ANAN-100B: RX2 forced equal to RX1 (single-ADC).
     //   • P2 other boards: RX2 independent.
     m_sampleRateRx2Combo = new QComboBox(paramGroup);
+    applyComboStyle(m_sampleRateRx2Combo);
     m_sampleRateRx2Combo->setMinimumWidth(120);
+    m_sampleRateRx2Combo->setMaximumWidth(160);
     m_sampleRateRx2Combo->setEnabled(false);
     m_sampleRateRx2Combo->setToolTip(
         tr("Enabled when Phase 3F multi-panadapter support lands."));
 
-    // Active RX count spinbox — capped at caps.maxReceivers in populate()
-    // Source: Thetis Setup.cs numericUpDownNr, range 1..board_max_rx
-    m_activeRxSpin = new QSpinBox(paramGroup);
-    m_activeRxSpin->setRange(1, 1);
-    m_activeRxSpin->setValue(1);
-    m_activeRxSpin->setEnabled(false); // enabled when a radio is present
+    // Active RX count widget removed from UI 2026-05-08 — non-functional in
+    // single-RX builds (capped at 1, disabled until a radio is connected).
+    // The underlying RadioModel::setActiveRxCountLive coordinator stays
+    // wired and re-exposes when Phase 3F multi-panadapter lands.
 
     paramForm->addRow(tr("RX1 sample rate (Hz):"), m_sampleRateRx1Combo);
     paramForm->addRow(tr("RX2 sample rate (Hz):"), m_sampleRateRx2Combo);
-    paramForm->addRow(tr("Active RX count:"),  m_activeRxSpin);
 
     outerLayout->addWidget(paramGroup);
 
@@ -201,18 +203,19 @@ RadioInfoTab::RadioInfoTab(RadioModel* model, QWidget* parent)
     }
 
     // ── Support info button ───────────────────────────────────────────────────
+    // Left-aligned page-level action.  setSizePolicy(Maximum, Fixed) prevents
+    // QVBoxLayout from stretching the button to the dialog's full width.
     m_copySupportInfoButton = new QPushButton(tr("Copy Support Info to Clipboard"), this);
     m_copySupportInfoButton->setToolTip(
         tr("Copies board identity and firmware version to the clipboard for bug reports."));
-    outerLayout->addWidget(m_copySupportInfoButton);
+    m_copySupportInfoButton->setFixedHeight(Style::kButtonH);
+    m_copySupportInfoButton->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+    outerLayout->addWidget(m_copySupportInfoButton, 0, Qt::AlignLeft);
     outerLayout->addStretch();
 
     // ── Connections ───────────────────────────────────────────────────────────
     connect(m_sampleRateRx1Combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &RadioInfoTab::onSampleRateChanged);
-
-    connect(m_activeRxSpin, QOverload<int>::of(&QSpinBox::valueChanged),
-            this, &RadioInfoTab::onActiveRxCountChanged);
 
     if (m_model) {
         connect(m_model, &RadioModel::wireSampleRateChanged,
@@ -289,15 +292,6 @@ void RadioInfoTab::populate(const RadioInfo& info, const BoardCapabilities& caps
         m_sampleRateRx2Combo->setCurrentIndex(m_sampleRateRx1Combo->currentIndex());
     }
 
-    // Active-RX spinbox range 1..caps.maxReceivers
-    // Source: Thetis Setup.cs numericUpDownNr
-    {
-        QSignalBlocker blocker(m_activeRxSpin);
-        m_activeRxSpin->setRange(1, caps.maxReceivers);
-        m_activeRxSpin->setValue(1);
-        m_activeRxSpin->setEnabled(true);
-    }
-
     // ANAN-8000DLE volts/amps toggle: visible only for ANAN8000D model.
     // HPSDRModel::ANAN8000D (value 10) is the OrionMKII-family SKU that
     // Thetis ships as the "ANAN-8000DLE"; gated here to avoid showing this
@@ -353,18 +347,6 @@ void RadioInfoTab::onSampleRateChanged(int index)
     }
 }
 
-void RadioInfoTab::onActiveRxCountChanged(int count)
-{
-    if (count < 1) { return; }
-    emit settingChanged(QStringLiteral("radioInfo/activeRxCount"), count);
-    // Apply live via the RadioModel coordinator (Task 1.7).  Same
-    // negative-return-means-disconnected contract as setSampleRateLive
-    // above; setting persists either way for next connect.
-    if (m_model) {
-        m_model->setActiveRxCountLive(count);
-    }
-}
-
 void RadioInfoTab::onWireSampleRateChanged(double hz)
 {
     m_activeWireRate = static_cast<int>(hz);
@@ -412,12 +394,8 @@ void RadioInfoTab::restoreSettings(const QMap<QString, QVariant>& settings)
         }
     }
 
-    // activeRxCount
-    auto rxIt = settings.constFind(QStringLiteral("activeRxCount"));
-    if (rxIt != settings.constEnd()) {
-        QSignalBlocker blocker(m_activeRxSpin);
-        m_activeRxSpin->setValue(rxIt.value().toInt());
-    }
+    // activeRxCount widget removed from UI; persisted value (if any)
+    // is honored by RadioModel via the connection-init path.
 }
 
 } // namespace NereusSDR
