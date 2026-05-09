@@ -176,9 +176,33 @@ NereusSDR is an independent cross-platform SDR client deeply informed by the wor
 
 **RxApplet Tier 1 wired:** mode, AGC, AF gain, and filter presets fully wired to SliceModel
 
-### Up Next (parallel pair after v0.2.3)
-- **Phase 3Q — Connection Workflow Refactor** (in progress on `feature/phase3q-connection-workflow-refactor`; chrome layer landing first). Triggered by user report of WireGuard-tunneled HL2 not connecting via manual entry. Spec: [docs/architecture/2026-04-26-connection-workflow-refactor-design.md](architecture/2026-04-26-connection-workflow-refactor-design.md). The shell-chrome / status-bar / dashboard / SVG-icon work + ship-default calibration (commit c656fad + follow-ups) is the first PR; the unicast-probe + ConnectionPanel + AddRadioDialog rebuild + spectrum disconnect overlay land in subsequent PRs on the same branch.
-- **Phase 3M-1 — Basic SSB TX** (next major epic). TxChannel WDSP wrapper, MOX state machine, TX I/Q output. No file overlap with 3Q.
+### Up Next (post-v0.3.2)
+- **Phase 3M-2 — CW TX** (next major epic). Sidetone, firmware keyer, QSK / break-in. Absorbs the HL2 CWX bit-3 follow-up (`networkproto1.c:1247-1252 [@c26a8a4]`). Detail in §"Phase 3M-2".
+- **Phase 3M-3b — FM pre-emphasis** (de-scoped from 3M-3a-ii during v0.3.1; runs after 3M-2).
+- **Phase 3M-4 — PureSignal** (after 3M-2 / 3M-3b). Note: substantial PureSignal hardening already shipped post-v0.3.2 (HL2 AutoAtt, init timing, cmd-state machine fan-out, single-cal retry, TINT setter — see "Post-v0.3.2 work" below); 3M-4 is the full feedback-DDC + PSForm + AmpView arc.
+- **Phase 3F — Multi-panadapter** (after 3M-4). Re-exposes the Active RX count widget (removed from UI 2026-05-08 because it was stuck-at-1 in single-RX) and finally exercises `RadioModel::setActiveRxCountLive`.
+
+### Post-v0.3.2 work in flight (2026-05-05 → 2026-05-08)
+
+**Committed on `main`** (~22 commits / 5 PRs):
+
+- **3M-3a-iv anti-VOX cancellation feed.** Closed the gap from 3M-3a-iii where the gain control was wired but `SendAntiVOXData` was never called. RxDspWorker → TxWorkerThread → TxChannel pump per chunk. `grpAntiVOX` UI parity on Setup → Transmit → DEXP/VOX (Enable / Gain / Tau) with verbatim Thetis tooltips. Source-selector dropped (Option A NereusSDR-architectural divergence — VAX is a digital-mode bus, not a Thetis-VAC port).  **Status: complete pending bench.**
+- **PR #219 + #221 — Live-apply infrastructure + Radio Info UI hook.** `WdspEngine::rebuildRx/TxChannel`, `RadioModel::setSampleRateLive`, `setActiveRxCountLive`. Crashed on first combo-change because the rebuild path destroyed the C++ wrapper out from under seven raw-pointer holders. Hot-fix landed in the 2026-05-08 worktree (see below).
+- **PR #218 — AF Gain rewire (KM4BLG).** `RxChannel::setAfGain` → `WDSP.SetRXAPanelGain1` instead of the post-DSP setVolume scalar. Closes a long-standing distortion bug. Side-effect: VAX inherited the same attenuation; VAX-bypass landed 2026-05-08.
+- **PR #220 — Step-att MOX clobber (issue #200).** RX step-attenuator survives an MOX cycle.
+- **HL2 FPGA temperature on bottom banner** (commit f50f29d).
+- **PureSignal hardening on HL2.** AutoAtt convergence + disconnect crash, init timing parameters, dup audio-volume listener removed, `correctingChanged` split, cmd-state-machine fan-out, single-cal retry, TINT setter via `SetPSIntsAndSpi`.
+- **Spectrum polish batch.** Cursor-freq unification, `dispNormalize` port, peak/binwidth GPU paths, grid band header, replan crossfade, source-first `processNoiseFloor` for the NF overlay, Hz/bin auto-zoom override, NF dialog-reopen restore.
+- **DSP correctness (bed0bd2).** Deterministic `onModeChanged` contract + UB-free test setup.
+- **Compliance / cite touchups.** `[v2.10.3.14]` stamps, retired-test provenance row, `//MW0LGE` wave-recorder tag preserved across the AF-Gain port, license markers aggregated in `wdsp_api.h`.
+
+**Uncommitted in worktree (2026-05-08):**
+
+1. **Sample-rate-live crash hot-fix.** Replaces PR #219's destroy-and-recreate path with the Thetis-faithful `SetXcmInrate` (`cmaster.c:453-507 [v2.10.3.13]`). New `RxChannel::setSampleRate` (carry-only) + `WdspEngine::setRxChannelRate` (calls `SetInputSamplerate` + `SetInputBuffsize` on the live channel). `RadioModel::setSampleRateLive` rewritten as the 12-step sequence from Thetis `setup.cs:7003-7159 [v2.10.3.13]`. TX channel untouched (Thetis `audio.cs:637-672` routes RX-only). New test `tst_set_sample_rate_live.cpp` (7 cases). 19/19 pre-existing catalog tests still green.
+2. **HL2 sample-rate parity.** P1 master list extended for HL2 to include 384 k, per `mi0bot-Thetis setup.cs:849-851 [v2.10.3.13]`. Renamed `kP1RatesRedPitaya` → `kP1RatesWithExtra384k`. New test `p1_hermes_lite_gets_extra_384`.
+3. **Setup → Hardware styling.** `applyComboStyle` extended to include the SVG dropdown arrow; new `gui/SpinBoxStyle.h` sibling helper paints SVG up/down arrows per-widget (the QApplication-baseline cascade was unreliable for spinboxes inside SetupDialog). Five combos + one spinbox styled across `RadioInfoTab` / `DiversityTab` / `OcOutputsHfTab` and width-capped at 160 px.
+4. **Active RX count widget removed** from Radio Info tab. Backend stays wired; widget re-exposes when 3F arrives. Copy Support Info button repositioned to left-aligned natural width.
+5. **VAX AF-Gain bypass.** `AudioEngine::rxBlockReady` inverse-scales the VAX tap by `1/afGain` so the digital-mode bus level stays calibrated regardless of speaker slider position. Restores the pre-PR-#218 baseline that WSJT-X depended on. Pre-`PanelGain1` tap (full decoupling including AF=mute) is the architecturally cleaner option, deferred.
 
 ### CI Status: GREEN
 - Build passes on Ubuntu 24.04 with Qt6, cmake, ninja, fftw3
