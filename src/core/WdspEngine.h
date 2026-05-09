@@ -183,7 +183,25 @@ public:
     // Thread safety: call on main thread only. The audio thread must not
     // be feeding samples into the channel during rebuild (caller is
     // responsible for pausing the feed).
+    //
+    // ⚠ Avoid for live rate changes — destroying the C++ wrapper
+    // invalidates every cached raw pointer (RadioModel, TxWorkerThread,
+    // PureSignal, MeterPoller, TwoToneController, TxCfcDialog,
+    // TxChannel::s_voxKeyInstance).  Use setRxChannelRate / Thetis-style
+    // SetInputSamplerate path for live rate changes instead.
     qint64 rebuildRxChannel(int channelId, const ChannelConfig& cfg);
+
+    // Live sample-rate change for an existing RX channel.  Mirrors
+    // ChannelMaster/cmaster.c::SetXcmInrate at lines 453-507 [v2.10.3.13]:
+    // updates the channel's input rate / input buffsize without destroying
+    // the C++ wrapper.  RxChannel raw pointers stay valid across the call.
+    //
+    // Returns true on success, false if the channel ID is not found.
+    // Thread safety: call on main thread only.  Caller is responsible for
+    // draining the channel via SetChannelState(0, drain=1) and stopping
+    // the radio data flow before calling — see RadioModel::setSampleRateLive
+    // for the full Thetis-faithful sequence ported from setup.cs:7003-7159.
+    bool setRxChannelRate(int channelId, int newRateHz);
 
     // --- TX Channel management ---
 
