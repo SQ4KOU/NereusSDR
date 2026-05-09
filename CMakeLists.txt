@@ -9,11 +9,15 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)  # for clangd / IDE integration
 
 # Windows: prevent windows.h from defining min/max preprocessor macros
-# (collides with std::min / std::max) and trim the windows.h include surface.
-# Standard pattern for Qt apps; applied globally so any TU that transitively
-# pulls in <windows.h> gets safe defaults.
+# (collides with std::min / std::max). Standard pattern for Qt apps;
+# applied globally so any TU that transitively pulls in <windows.h>
+# gets safe defaults.
+#
+# Intentionally NOT defining WIN32_LEAN_AND_MEAN: PortAudio's DirectSound
+# backend (third_party dsound.h) depends on LPWAVEFORMATEX which lives in
+# mmreg.h / mmsystem.h, both of which WIN32_LEAN_AND_MEAN excludes.
 if(WIN32)
-    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+    add_compile_definitions(NOMINMAX)
 endif()
 
 # macOS: ensure Homebrew lib/include paths are in the search path
