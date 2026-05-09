@@ -78,8 +78,13 @@ namespace {
 std::span<const int> masterListFor(ProtocolVersion proto, HPSDRModel model) noexcept
 {
     if (proto == ProtocolVersion::Protocol1) {
-        if (model == HPSDRModel::REDPITAYA) {
-            return {kP1RatesRedPitaya, std::size(kP1RatesRedPitaya)};
+        // Two boards qualify for the extra 384k rate on P1.  See the
+        // header constant kP1RatesWithExtra384k for the per-board cites
+        // (Thetis setup.cs:847 for RedPitaya / mi0bot setup.cs:849-851
+        // [v2.10.3.13] for HermesLite).
+        if (model == HPSDRModel::REDPITAYA ||
+            model == HPSDRModel::HERMESLITE) {
+            return {kP1RatesWithExtra384k, std::size(kP1RatesWithExtra384k)};
         }
         return {kP1RatesBase, std::size(kP1RatesBase)};
     }

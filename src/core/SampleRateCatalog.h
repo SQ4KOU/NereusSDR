@@ -84,12 +84,18 @@ class AppSettings;
 
 // Thetis-source constants.
 //
-// From setup.cs:849 — P1 base list (every non-RedPitaya board).
+// From setup.cs:849 [v2.10.3.13] — P1 base list (every non-RedPitaya,
+// non-HermesLite board).
 inline constexpr int kP1RatesBase[] = {48000, 96000, 192000};
 
-// From setup.cs:847-849 — P1 list when include_extra_p1_rate is true
-// (only HPSDRModel::REDPITAYA).
-inline constexpr int kP1RatesRedPitaya[] = {48000, 96000, 192000, 384000};
+// P1 list when include_extra_p1_rate is true.  Two boards qualify:
+//   * RedPitaya   — From Thetis setup.cs:847 [v2.10.3.13] (DH1KLM contribution)
+//   * HermesLite  — From mi0bot-Thetis setup.cs:849-851 [v2.10.3.13]
+//                     // The HL supports 384K
+//                     if (HardwareSpecific.Model == HPSDRModel.HERMESLITE)
+//                         include_extra_p1_rate = true;
+// (HL2-authoritative source per CLAUDE.md feedback rule.)
+inline constexpr int kP1RatesWithExtra384k[] = {48000, 96000, 192000, 384000};
 
 // From setup.cs:850 — P2 list, every ETH board.
 inline constexpr int kP2Rates[] = {48000, 96000, 192000, 384000, 768000, 1536000};
