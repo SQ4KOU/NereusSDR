@@ -247,6 +247,28 @@ public:
     int bufferSize() const { return m_bufferSize; }
     int sampleRate() const { return m_sampleRate; }
 
+    // --- Live sample-rate change (Thetis-faithful, replaces rebuild) ---
+    //
+    // Apply a new wire input rate to the existing WDSP channel without
+    // destroying the C++ wrapper.  Mirrors the pattern at
+    // ChannelMaster/cmaster.c:453-507 [v2.10.3.13] (SetXcmInrate):
+    //   SetInputSamplerate(channelId, rate)
+    //   SetInputBuffsize(channelId, bufferSizeForRate(rate))
+    //
+    // The WDSP channel object stays alive across the call — no holders of
+    // the RxChannel raw pointer are invalidated.  This is the property the
+    // post-v0.3.2 destroy-and-recreate path violated, causing the
+    // setSampleRateLive crash on PR #221.
+    //
+    // Idempotent: a no-op when newRate equals the cached current rate.
+    // Caller is responsible for the surrounding orchestration (drain via
+    // setActive(false), stop radio, wait for inflight, then call this,
+    // then restart radio, then setActive(true)) — see
+    // RadioModel::setSampleRateLive for the full sequence ported from
+    // setup.cs::comboAudioSampleRate1_SelectedIndexChanged
+    // [v2.10.3.13:7003-7159].
+    void setSampleRate(int newRateHz);
+
     // --- Demodulation ---
 
     DSPMode mode() const { return static_cast<DSPMode>(m_mode.load()); }
@@ -715,8 +737,12 @@ signals:
 
 private:
     const int m_channelId;
-    const int m_bufferSize;
-    const int m_sampleRate;
+    // m_bufferSize and m_sampleRate are mutated by setSampleRate() — they
+    // were const in the original construction-time-immutable design, but
+    // live rate change (Thetis cmaster.c:453-507 [v2.10.3.13]) mutates the
+    // WDSP-side rate/size so the cached values must follow.
+    int m_bufferSize;
+    int m_sampleRate;
 
     // Atomic flags for lock-free audio thread reads
     std::atomic<int> m_mode{static_cast<int>(DSPMode::LSB)};  // Must match WdspEngine::createRxChannel init

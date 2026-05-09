@@ -46,6 +46,63 @@
   `0.01` for the smoothing time-constant; Thetis spinbox default is 20 ms
   (= 0.02 s) per `setup.designer.cs:44682-44686 [v2.10.3.13]`. Fresh users
   with no Setup-page interaction now get the Thetis-faithful default.
+- **Sample-rate-live crash hot-fix.** PR #219 + #221 wired
+  `RadioModel::setSampleRateLive` to `WdspEngine::rebuildRx/TxChannel`,
+  which destroys the C++ wrapper and constructs a new one. Seven raw-
+  pointer holders (`RadioModel::m_txChannel`, `TxWorkerThread`,
+  `PureSignal`, `MeterPoller`, `TwoToneController`, `TxCfcDialog`,
+  `TxChannel::s_voxKeyInstance`) were left dangling; first combo-change
+  on the Radio Info page SIGSEGV'd inside `moveToThread` on the dead
+  pointer. Replaced with the Thetis-faithful `SetXcmInrate` path
+  (`cmaster.c:453-507 [v2.10.3.13]`): new `RxChannel::setSampleRate`
+  (carry-only state mutation, idempotent guard) + new
+  `WdspEngine::setRxChannelRate` (calls `SetInputSamplerate` and
+  `SetInputBuffsize` on the live channel). `setSampleRateLive` rewritten
+  as the 12-step sequence from `setup.cs:7003-7159 [v2.10.3.13]`
+  (drain channel -> stop radio -> wait inflight -> WDSP rate update ->
+  reconfigure AudioEngine + DSP worker -> restart radio -> re-enable
+  channel -> reconnect I/Q -> resume audio). TX channel intentionally
+  untouched (Thetis `audio.cs:637-672` routes `SetXcmInrate(0|1)` for
+  RX1/RX2 only; TX input is mic at fixed 48 kHz). New test
+  `tst_set_sample_rate_live.cpp` (7 cases). Underlying
+  `WdspEngine::rebuildRx/TxChannel` API kept in tree but documented as
+  "avoid for live rate changes".
+- **Setup -> Hardware combo + spinbox styling.** `RadioInfoTab`,
+  `DiversityTab`, and `OcOutputsHfTab` were creating raw `QComboBox` /
+  `QSpinBox` with `setMinimumWidth(120)` and no theme styling. Result:
+  macOS-default combo-popup contrast (white-on-white selection),
+  spinbox arrows missing entirely, controls stretching to full dialog
+  width. `applyComboStyle` extended to put `spin-down.svg` on the
+  dropdown arrow (was `image: none`); new sibling helper
+  `gui/SpinBoxStyle.h` paints SVG up/down arrows directly per-widget so
+  Setup-dialog cascade quirks can't drop them. All five combos +
+  the one Hardware-tab spinbox now styled and width-capped at 160 px.
+
+### Changed
+- **Hermes Lite 2 P1 sample-rate parity (`mi0bot-Thetis setup.cs:849-851
+  [v2.10.3.13]`).** HL2 now offers 48 kHz / 96 kHz / 192 kHz / **384 kHz**
+  on P1, matching mi0bot. NereusSDR previously dropped HL2 into the
+  3-rate base list (only RedPitaya got the extra 384 k). Renamed
+  `kP1RatesRedPitaya` to `kP1RatesWithExtra384k` since two boards now
+  share that list. The HL2 `BoardCapabilities::sampleRates` already
+  advertised 384 k correctly; only the master-list filter was stale.
+  New test `p1_hermes_lite_gets_extra_384`.
+- **VAX bus level decoupled from speaker AF slider.** PR #218's AF-Gain
+  rewire moved the slider attenuation upstream of `AudioEngine::
+  rxBlockReady` via `WDSP.SetRXAPanelGain1`, which is the right thing
+  for headphone output but caused the VAX tap to inherit speaker
+  attenuation — digital-mode apps suddenly heard ~18 dB less than
+  before. `rxBlockReady` now inverse-scales the VAX push by
+  `1 / afGain` (clamped at 0.001 to avoid div-by-zero) so VAX level
+  stays calibrated independent of where the AF slider sits. Edge case
+  acknowledged: AF=0 full mute also silences VAX; full decoupling
+  requires a pre-`PanelGain1` WDSP tap, deferred.
+- **Active RX count widget removed from Radio Info tab.** Was disabled
+  and stuck at 1 in single-RX builds. Underlying
+  `RadioModel::setActiveRxCountLive` coordinator stays wired; widget
+  will be re-exposed when Phase 3F multi-panadapter lands and RX2
+  actually streams. Copy Support Info button alongside repositioned
+  to left-aligned natural width (was full-dialog-width).
 
 ## [0.3.2] - 2026-05-05
 

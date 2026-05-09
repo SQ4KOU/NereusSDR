@@ -6163,11 +6163,37 @@ qint64 RadioModel::setSampleRateLive(int newRateHz)
     qCInfo(lcConnection) << "setSampleRateLive:" << m_connectionSampleRateHz
                          << "Hz ->" << newRateHz << "Hz";
 
-    // ── Step 1: Quiesce DSP worker ────────────────────────────────────────
-    // Disconnect the I/Q feed so no new batches land in the worker while
-    // the WDSP channel is being rebuilt.  resetAccumulator() via
-    // BlockingQueuedConnection ensures any in-flight batch completes
-    // before we proceed.
+    // Source-first port of Thetis setup.cs::comboAudioSampleRate1_SelectedIndexChanged
+    // [v2.10.3.13:7003-7159].  The Thetis path mutates the running WDSP
+    // channel via cmaster.SetXcmInrate (cmaster.c:453-507) — the channel
+    // object stays alive across the call.  This replaces the post-v0.3.2
+    // destroy-and-recreate path that invalidated 7+ raw-pointer holders
+    // (RadioModel::m_txChannel, TxWorkerThread, PureSignal, MeterPoller,
+    // TwoToneController, TxCfcDialog, TxChannel::s_voxKeyInstance) and
+    // crashed when step 7 moved the dangling m_txChannel back to its
+    // worker thread.  TX channel is intentionally untouched here:
+    // audio.cs::SampleRate1 setter [v2.10.3.13:637-649] only calls
+    // SetXcmInrate(0, ...) for RX1 and SetXcmInrate(1, ...) for RX2;
+    // SampleRateTX setter (lines 663-672) does NOT call SetXcmInrate.
+
+    const int newInSize = bufferSizeForRate(newRateHz);
+
+    // ── Step 1: Drain the RX channel ──────────────────────────────────────
+    // Thetis setup.cs:7010 / 7081 [v2.10.3.13]: SetChannelState(id, 0, 1)
+    // — off + drain to flush the slew envelope cleanly.  RxChannel is owned
+    // by WdspEngine; look it up by channel ID rather than caching a raw
+    // pointer (the previous pattern's failure mode is exactly what this
+    // fix replaces).
+    RxChannel* rxCh = m_wdspEngine->rxChannel(0);
+    if (rxCh && rxCh->isActive()) {
+        rxCh->setActive(false);
+    }
+    QThread::msleep(10);  // setup.cs:7011 / 7082 [v2.10.3.13]: Thread.Sleep(10)
+
+    // ── Step 2: Quiesce DSP worker ────────────────────────────────────────
+    // Disconnect the I/Q feed so no new batches land while the WDSP channel
+    // is being reconfigured.  resetAccumulator() via BlockingQueuedConnection
+    // ensures any in-flight batch completes before we proceed.
     if (m_dspWorker && m_receiverManager) {
         QObject::disconnect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
                             m_dspWorker, &RxDspWorker::processIqBatch);
@@ -6178,94 +6204,70 @@ qint64 RadioModel::setSampleRateLive(int newRateHz)
         }
     }
 
-    // Stop TX pump before touching the TX channel.
-    // TODO(Task 1.6): emit tuneRefused / drop MOX if m_isTuning — for now
-    // callers should ensure MOX is off before calling setSampleRateLive.
-    if (m_txWorker) {
-        m_txWorker->stopPump();
-        if (m_txChannel) {
-            m_txChannel->moveToThread(this->thread());
-        }
-    }
-
-    // ── Step 2: Pause AudioEngine (hook for future active-drain impl) ─────
+    // ── Step 3: Pause AudioEngine ─────────────────────────────────────────
     m_audioEngine->pauseInput();
 
-    // ── Step 3: Rebuild WDSP channels ─────────────────────────────────────
-    const int newInSize = bufferSizeForRate(newRateHz);
-    {
-        ChannelConfig rxCfg;
-        rxCfg.sampleRate = newRateHz;
-        rxCfg.bufferSize = newInSize;
-        // filterSize and filterType: keep existing values (rebuild reads them
-        // from AppSettings in the production DspOptionsPage path; here we use
-        // the WDSP defaults so the caller only has to pass the rate).
-        m_wdspEngine->rebuildRxChannel(0, rxCfg);
-    }
-    if (m_txChannel) {
-        ChannelConfig txCfg;
-        // TX channel uses fixed DSP rate (96 kHz) and output rate from the
-        // connection (P1 = 48 kHz, P2 = 192 kHz).  Only the input rate tracks
-        // the wire sample rate.
-        txCfg.sampleRate = newRateHz;
-        txCfg.bufferSize = 256;  // From WdspEngine::createTxChannel default
-        m_wdspEngine->rebuildTxChannel(1, txCfg);
-    }
-
-    // ── Step 4: Reconfigure hardware ──────────────────────────────────────
-    // P2: setSampleRate() already calls sendCmdRx() + sendCmdTx() when running.
-    // P1: stop + update rate + priming burst + start via restartStreamWithRate.
-    //
-    // Both calls are queued to the connection thread via invokeMethod.
+    // ── Step 4: Stop radio data flow ──────────────────────────────────────
+    // Thetis setup.cs:7020-7022 (P2 EnableRx) / 7092 (P1 SendStopToMetis)
+    // [v2.10.3.13].  In NereusSDR the stop+set-rate+start cycle is wrapped
+    // by P1RadioConnection::restartStreamWithRate (P1) or atomic-rate-update
+    // inside RadioConnection::setSampleRate (P2).  Both paths are queued
+    // to the connection thread; we wait below for inflight packets to drain.
     if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
-        // restartStreamWithRate performs the stop/prime/start cycle.
-        // Must run on the connection thread; use QueuedConnection — we do
-        // NOT block here to avoid holding the main thread during the radio
-        // restart latency (~10-50 ms).
-        //
-        // TODO(Task 1.6 follow-up): consider BlockingQueuedConnection if
-        // tests need deterministic ordering.  For now the DSP worker is
-        // already stopped so there is no race between the restart and
-        // incoming EP6 frames.
         QMetaObject::invokeMethod(p1, [p1, newRateHz]() {
             p1->restartStreamWithRate(newRateHz);
         }, Qt::QueuedConnection);
     } else {
-        // P2 (and future protocol variants): setSampleRate sends the updated
-        // command packets from the connection thread.
         QMetaObject::invokeMethod(m_connection,
                                   [conn = m_connection, newRateHz]() {
             conn->setSampleRate(newRateHz);
         }, Qt::QueuedConnection);
     }
 
-    // ── Step 5: AudioEngine reinit (hook) ─────────────────────────────────
-    // WDSP always outputs 64 samples @ 48 kHz regardless of wire rate, so
-    // AudioEngine's speakers bus does not need to be reopened.
-    m_audioEngine->reinitForSampleRate(newRateHz);
+    // ── Step 5: Wait for inflight I/Q packets to clear ─────────────────────
+    // Thetis setup.cs:7025 / 7095 [v2.10.3.13]:
+    //   Thread.Sleep(20);   // P2 (ETH)
+    //   Thread.Sleep(25);   // P1 (USB)
+    QThread::msleep(25);  // P1 conservative bound covers both protocols
 
-    // ── Step 6: Update RxDspWorker buffer sizes ───────────────────────────
+    // ── Step 6: Update the live WDSP channel rate ─────────────────────────
+    // Thetis cmaster.c:473-474 [v2.10.3.13] via WdspEngine::setRxChannelRate.
+    // No destroy-and-recreate — the RxChannel C++ wrapper stays alive,
+    // m_rxChannel raw pointer (and every other holder) remains valid.
+    m_wdspEngine->setRxChannelRate(0, newRateHz);
+
+    // ── Step 7: Reconfigure AudioEngine and DSP worker for new rate ───────
+    // WDSP always outputs 64 samples @ 48 kHz; AudioEngine's speakers bus
+    // doesn't need reopening but the input geometry follows the wire rate.
+    m_audioEngine->reinitForSampleRate(newRateHz);
     if (m_dspWorker) {
         m_dspWorker->setBufferSizes(newInSize, 64);
     }
 
-    // ── Step 7: Restart TX pump ───────────────────────────────────────────
-    if (m_txWorker && m_txChannel) {
-        m_txChannel->moveToThread(m_txWorker.get());
-        m_txWorker->startPump();
+    // ── Step 8: Brief wait for samples at the new rate to arrive ─────────
+    // Thetis setup.cs:7046 / 7129 [v2.10.3.13]:
+    //   Thread.Sleep(1);  // P2
+    //   Thread.Sleep(5);  // P1
+    QThread::msleep(5);
+
+    // ── Step 9: Re-enable the RX channel ─────────────────────────────────
+    // Thetis setup.cs:7056 / 7141 [v2.10.3.13]: SetChannelState(id, 1, 0).
+    // Re-look-up rather than reuse rxCh in case the engine state shifted.
+    if (RxChannel* rx = m_wdspEngine->rxChannel(0)) {
+        rx->setActive(true);
     }
 
-    // ── Step 8: Reconnect DSP worker I/Q feed ────────────────────────────
+    // ── Step 10: Reconnect I/Q feed ──────────────────────────────────────
     if (m_dspWorker && m_receiverManager) {
         connect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
                 m_dspWorker, &RxDspWorker::processIqBatch,
                 Qt::QueuedConnection);
     }
 
-    // Resume AudioEngine (hook — no-op in current implementation).
+    // ── Step 11: Resume audio ────────────────────────────────────────────
     m_audioEngine->resumeInput();
 
-    // ── Step 9: Update state and emit ─────────────────────────────────────
+    // ── Step 12: Update state and emit ───────────────────────────────────
     m_connectionSampleRateHz = newRateHz;
     emit wireSampleRateChanged(static_cast<double>(newRateHz));
 

@@ -53,6 +53,16 @@ private slots:
         QCOMPARE(got, std::vector<int>({48000, 96000, 192000, 384000}));
     }
 
+    // mi0bot setup.cs:849-851 [v2.10.3.13] — HermesLite 2 also qualifies
+    // for the extra 384k rate on P1.  Pre-fix, NereusSDR only honoured the
+    // RedPitaya branch and silently dropped HL2's 384k.
+    void p1_hermes_lite_gets_extra_384()
+    {
+        const auto& caps = BoardCapsTable::forModel(HPSDRModel::HERMESLITE);
+        const auto got   = allowedSampleRates(ProtocolVersion::Protocol1, caps, HPSDRModel::HERMESLITE);
+        QCOMPARE(got, std::vector<int>({48000, 96000, 192000, 384000}));
+    }
+
     void p1_orionmkii_does_not_get_extra_384()
     {
         // OrionMKII and RedPitaya share HPSDRHW::OrionMKII but only

@@ -3525,6 +3525,11 @@ nereus_add_test(tst_parametric_eq_widget_json)
 # ── Task 1.2: RxChannel captureState/applyState round-trip ───────────────
 nereus_add_test(tst_rx_channel_rebuild)
 
+# ── Post-v0.3.2 sample-rate-live crash regression ───────────────────────
+# Verifies RxChannel::setSampleRate keeps the same object alive (Thetis
+# cmaster.c::SetXcmInrate pattern, NOT destroy-and-recreate).
+nereus_add_test(tst_set_sample_rate_live)
+
 # ── Task 1.4: TxChannel captureState/applyState + WdspEngine::rebuildTxChannel
 nereus_add_test(tst_tx_channel_rebuild)
 

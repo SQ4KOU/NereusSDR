@@ -94,7 +94,6 @@ signals:
 
 private slots:
     void onSampleRateChanged(int index);
-    void onActiveRxCountChanged(int count);
     void onWireSampleRateChanged(double hz);
 
 private:
@@ -114,7 +113,6 @@ private:
     QFrame*      m_reconnectBanner{nullptr};
     QLabel*      m_reconnectBannerLabel{nullptr};
     int          m_activeWireRate{0}; // last rate reported via wireSampleRateChanged
-    QSpinBox*    m_activeRxSpin{nullptr};
     QPushButton* m_copySupportInfoButton{nullptr};
 
     // ANAN-8000DLE only — shown via capability gate in populate()

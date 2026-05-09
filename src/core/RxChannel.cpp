@@ -249,6 +249,7 @@ warren@wpratt.com
 #include "AppSettings.h"
 #include "LogCategories.h"
 #include "NbFamily.h"
+#include "SampleRateCatalog.h"  // bufferSizeForRate() — for setSampleRate()
 #include "WdspEngine.h"
 #include "wdsp_api.h"
 
@@ -317,6 +318,39 @@ RxChannel::RxChannel(int channelId, int bufferSize, int sampleRate,
 }
 
 RxChannel::~RxChannel() = default;
+
+// ---------------------------------------------------------------------------
+// Live sample-rate change (Thetis-faithful, carry-only)
+//
+// Replaces the destroy-and-recreate path that crashed on PR #221 (a4d076f)
+// when setSampleRateLive moved the dangling m_txChannel to its worker
+// thread.  Mirrors the Thetis split between audio.cs::SampleRate1 setter
+// (state mutation) and ChannelMaster/cmaster.c::SetXcmInrate (the WDSP-side
+// rate work) [v2.10.3.13]:
+//
+//   This method:        carry-only state update on the C++ wrapper.
+//                       Idempotent on equality.
+//   WdspEngine path:    SetInputSamplerate + SetInputBuffsize on the same
+//                       channel ID — channel object stays alive, no holders
+//                       of the RxChannel raw pointer are invalidated.
+//
+// Splitting the responsibilities lets unit tests exercise the state path
+// without dragging an opened WDSP channel along.  The production caller
+// (RadioModel::setSampleRateLive) goes through WdspEngine which performs
+// both the WDSP call and the state update.
+// ---------------------------------------------------------------------------
+
+void RxChannel::setSampleRate(int newRateHz)
+{
+    if (newRateHz == m_sampleRate) {
+        // Mirrors SetXcmInrate guard: cmaster.c:457 [v2.10.3.13]
+        //   if (pcm->xcm_inrate[in_id] != rate) { ... }
+        return;
+    }
+
+    m_sampleRate = newRateHz;
+    m_bufferSize = bufferSizeForRate(newRateHz);
+}
 
 // ---------------------------------------------------------------------------
 // Demodulation

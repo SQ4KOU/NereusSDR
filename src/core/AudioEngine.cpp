@@ -107,6 +107,8 @@
 
 #include "AppSettings.h"
 #include "LogCategories.h"
+#include "RxChannel.h"        // afGain() — for VAX AF-bypass
+#include "WdspEngine.h"       // rxChannel(0) lookup
 #include "audio/PortAudioBus.h"
 #include "../models/RadioModel.h"
 #include "../models/SliceModel.h"
@@ -978,12 +980,45 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
             // eliminates any torn-read window should a caller violate it.
             IAudioBus* vaxBus = m_vaxBus[vaxIdx].get();
             if (vaxBus != nullptr && vaxBus->isOpen()) {
-                const float gain =
+                const float gainUser =
                     m_vaxRxGain[vaxIdx].load(std::memory_order_acquire);
+
+                // AF-Gain bypass for VAX (post-v0.3.2 AF-Gain rewire fix).
+                //
+                // Commit e61658f routed AF Gain through WDSP's PanelGain1
+                // stage (third_party/wdsp/src/rxa.c:538 [v2.10.3.14]),
+                // which is upstream of `samples` here.  Pre-fix WDSP shipped
+                // PanelGain1=4.0 (+12 dB) silently and the AF slider acted
+                // as a post-DSP scalar elsewhere — VAX inherited the +12 dB
+                // and felt "really hot".  Post-fix, VAX inherits whatever
+                // attenuation the speaker slider is currently applying,
+                // which is wrong for digital-mode apps that expect a stable
+                // calibrated level.
+                //
+                // Inverse-scale by 1/afGain so VAX recovers the pre-
+                // PanelGain1 signal level.  Clamped to skip compensation
+                // when the slider is essentially muted (≤ 0.001) — div-
+                // by-zero guard.  At full mute VAX goes silent (samples
+                // were already multiplied by ~0 inside WDSP); proper
+                // VAX-independent-of-mute requires the larger pre-PanelGain1
+                // tap (Option C in 2026-05-08 design discussion).
+                float afInverse = 1.0f;
+                if (m_radio && m_radio->wdspEngine()) {
+                    if (RxChannel* rx = m_radio->wdspEngine()->rxChannel(0)) {
+                        const double afGain = rx->afGain();
+                        if (afGain > 0.001) {
+                            afInverse = static_cast<float>(1.0 / afGain);
+                        }
+                    }
+                }
+
+                const float gain = gainUser * afInverse;
+
                 const qint64 payloadBytes =
                     static_cast<qint64>(frames) * 2 * sizeof(float);
                 if (gain == 1.0f) {
-                    // Fast path — raw samples, zero copy.
+                    // Fast path — raw samples, zero copy.  Hit when both
+                    // the per-channel VAX gain and AF slider are at 1.0.
                     vaxBus->push(reinterpret_cast<const char*>(samples),
                                  payloadBytes);
                 } else {

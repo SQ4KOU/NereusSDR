@@ -554,6 +554,64 @@ qint64 WdspEngine::rebuildRxChannel(int channelId, const ChannelConfig& cfg)
 }
 
 // ---------------------------------------------------------------------------
+// Live sample-rate change for an existing RX channel.
+//
+// Source-first port of the RX path inside ChannelMaster/cmaster.c::
+// SetXcmInrate at lines 453-507 [v2.10.3.13].  The relevant excerpt
+// (NereusSDR ports the WDSP-channel calls; ANB/NOB/Siphon/IVAC are
+// either NereusSDR-original infrastructure or covered by separate ports):
+//
+//   case 0:  // receiver
+//       SetRCVRANBBuffsize  (0, rx, pcm->xcm_insize[in_id]);  // anb size
+//       SetRCVRANBSamplerate(0, rx, rate);                    // anb rate
+//       SetRCVRNOBBuffsize  (0, rx, pcm->xcm_insize[in_id]);  // nob size
+//       SetRCVRNOBSamplerate(0, rx, rate);                    // nob rate
+//       for (i = 0; i < pcm->cmSubRCVR; i++) {
+//           SetInputSamplerate (chid (in_id, i), rate);                     // dsp channel input rate
+//           SetInputBuffsize   (chid (in_id, i), pcm->xcm_insize[in_id]);   // dsp channel input size
+//       }
+//       SetIVACiqSizeAndRate (rx, pcm->xcm_insize[in_id], pcm->xcm_inrate[in_id]);
+//
+// NereusSDR scope here:
+//   * SetInputSamplerate / SetInputBuffsize on the channel — full port.
+//   * ANB / NOB rate-and-size — deferred (NbFamily currently re-seeds these
+//     at construction; live propagation requires per-instance setters).
+//   * Siphon / IVAC — NereusSDR uses different display + VAC paths.
+// ---------------------------------------------------------------------------
+
+bool WdspEngine::setRxChannelRate(int channelId, int newRateHz)
+{
+    auto it = m_rxChannels.find(channelId);
+    if (it == m_rxChannels.end()) {
+        qCWarning(lcDsp) << "setRxChannelRate: channel" << channelId << "not found";
+        return false;
+    }
+
+    RxChannel* ch = it->second.get();
+
+    // Idempotent guard mirrors cmaster.c:457 [v2.10.3.13]
+    //   if (pcm->xcm_inrate[in_id] != rate) { ... }
+    if (ch->sampleRate() == newRateHz) {
+        return true;
+    }
+
+    // Update the C++-side carry first so the wrapper's accessors agree
+    // with the WDSP-side state if a reader peeks between calls.
+    ch->setSampleRate(newRateHz);
+    const int newSize = ch->bufferSize();
+
+#ifdef HAVE_WDSP
+    // From Thetis cmaster.c:473-474 [v2.10.3.13]
+    SetInputSamplerate(channelId, newRateHz);
+    SetInputBuffsize(channelId, newSize);
+#endif
+
+    qCInfo(lcDsp) << "setRxChannelRate: channel" << channelId
+                  << "->" << newRateHz << "Hz, in_size=" << newSize;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // TX Channel management
 // ---------------------------------------------------------------------------
 

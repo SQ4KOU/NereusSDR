@@ -59,6 +59,7 @@
 
 #include "core/AppSettings.h"
 #include "core/OcMatrix.h"
+#include "gui/ComboStyle.h"
 #include "models/Band.h"
 #include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
@@ -247,6 +248,9 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
             auto* fmtRow = new QHBoxLayout();
             fmtRow->addWidget(new QLabel(tr("Format:"), bcdGroup));
             m_usbBcdFormat = new QComboBox(bcdGroup);
+            applyComboStyle(m_usbBcdFormat);
+            m_usbBcdFormat->setMinimumWidth(120);
+            m_usbBcdFormat->setMaximumWidth(160);
             m_usbBcdFormat->addItem(tr("4-bit binary"));
             m_usbBcdFormat->addItem(tr("BCD"));
             fmtRow->addWidget(m_usbBcdFormat);
@@ -287,6 +291,9 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
             auto* modelRow = new QHBoxLayout();
             modelRow->addWidget(new QLabel(tr("PA model:"), paGroup));
             m_extPaModel = new QComboBox(paGroup);
+            applyComboStyle(m_extPaModel);
+            m_extPaModel->setMinimumWidth(120);
+            m_extPaModel->setMaximumWidth(160);
             m_extPaModel->addItem(tr("None"));
             // Future entries (Phase H) will populate from a PA registry
             modelRow->addWidget(m_extPaModel);
