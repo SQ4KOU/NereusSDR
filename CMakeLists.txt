@@ -8,6 +8,14 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)  # for clangd / IDE integration
 
+# Windows: prevent windows.h from defining min/max preprocessor macros
+# (collides with std::min / std::max) and trim the windows.h include surface.
+# Standard pattern for Qt apps; applied globally so any TU that transitively
+# pulls in <windows.h> gets safe defaults.
+if(WIN32)
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
 # macOS: ensure Homebrew lib/include paths are in the search path
 if(APPLE)
     execute_process(COMMAND brew --prefix OUTPUT_VARIABLE HOMEBREW_PREFIX OUTPUT_STRIP_TRAILING_WHITESPACE)
