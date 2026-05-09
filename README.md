@@ -3,41 +3,48 @@
 **A cross-platform SDR console for OpenHPSDR radios**
 
 > [!IMPORTANT]
-> 📖 **Alpha testers, start here:** [docs/debugging/v0.3.2-alpha-tester-smoketest.md](docs/debugging/v0.3.2-alpha-tester-smoketest.md)
+> 📖 **Alpha testers, start here:** [docs/debugging/v0.4.0-alpha-tester-smoketest.md](docs/debugging/v0.4.0-alpha-tester-smoketest.md)
 >
-> v0.3.2 is a substantial point release on top of v0.3.1 with four pieces of
-> work landing together:
+> v0.4.0 is a substantial minor release on top of v0.3.2 with five pieces
+> of work landing together:
 >
-> 1. **DEXP/VOX speech processor (3M-3a-iii):** VOX and DEXP work
->    end-to-end for the first time. The DSP is ported from Thetis, the VOX
->    callback is wired to the MOX state machine, and a new Setup → Transmit
->    → DEXP/VOX page mirrors Thetis 1:1.
-> 2. **Hermes Lite 2 maturity push:** RF and Tune Power slider encoding
->    aligned with the mi0bot fork (RF Power 0 to 90 step 6, Tune Power 0 to
->    99 step 3, per-band grid in dB). Connect-time init parity (resolves
->    cold-start issues). A-ATT label, N2ADR default, RX attenuator max +31
->    dB, P1 ADC overload byte offset, HL2 PA fwd/rev scaling all corrected.
-> 3. **PA Setup parity + safety hotfix:** Setup → PA pages rebuilt for
->    full Thetis parity (PA Gain page with auto-cal sweep, Watt Meter page
->    enhancements, PA Values page gap closure). Kernel of the work is also
->    a PA over-drive safety hotfix for high-gain finals (notably
->    ANAN-8000DLE) at low TUNE-slider positions.
-> 4. **Persistence and stability fixes:** per-band TX RF Power, OC matrix
->    pins, mic-jack PTT default, TUN-off cold-start, audio bus reconfigure,
->    NR3 dev-build path, step-attenuator MOX gating, SWR foldback topology
->    correction.
+> 1. **3M-4 PureSignal arrives:** feedback DDC plumbing on Protocol 1 and
+>    Protocol 2, calcc/IQC engine vendored verbatim from Thetis, PsForm
+>    dialog (Tools → PureSignal), AmpView modeless dialog, two-tone IMD
+>    overlay on the spectrum, bottom-banner FB+PS indicator pair. Enabled
+>    on every supported P1 and P2 SKU including Hermes Lite 2 and plain
+>    Hermes (with HL2 negative-ATT support, AutoAtt convergence, ATT-on-TX
+>    master force-enable, and HL2 psSampleRate=0 sentinel resolution).
+> 2. **Display + DSP-Options refactor:** WDSP `avenger()` and `detector()`
+>    ported. New Setup → DSP page (18 controls, RX/TX combo split, in-place
+>    filter resize, Filter Impulse Cache). Spectrum gains a Thetis-faithful
+>    FFT slider with 7 windows + live bin width, NF-aware grid, Hz/bin
+>    auto-zoom override, SpectrumPeaksPage with PeakBlobDetector + Active
+>    Peak Hold, and a new Multimeter page. SettingsSchemaVersion v5
+>    migrates DSP-Options Buffer/Filter Size to per-direction.
+> 3. **Anti-VOX cancellation feed (3M-3a-iv):** closes the v0.3.2 gap so
+>    the Anti-VOX gain control actually works. Setup → Transmit → DEXP/VOX
+>    gains the full grpAntiVOX trio (Enable + Gain + Tau).
+> 4. **Live-apply sample rate (no disconnect):** Radio Info combo no longer
+>    requires reconnect. 12-step Thetis-faithful coordinator routes through
+>    WDSP's `SetXcmInrate` path. HL2 P1 384 kHz parity (mi0bot-authoritative).
+> 5. **AF Gain audio fix (KM4BLG) + VAX bus calibration:** AF slider routes
+>    through WDSP `SetRXAPanelGain1`. Closes a long-standing distortion
+>    bug. VAX tap inverse-scales by `1 / afGain` so digital-mode apps stay
+>    calibrated regardless of speaker AF slider position.
 >
 > **Existing users: no action required.** Saved radios, mic profiles, DSP
-> settings, PA cal-points, and per-band tune power carry forward exactly as
-> they were.
+> settings, PA cal-points, container layout, and per-band tune power carry
+> forward exactly. SettingsSchemaVersion bumps from v4 to v5 automatically
+> on first launch.
 >
-> Returning testers: most of v0.3.1's surface didn't change. The v0.3.1
-> doc at [docs/debugging/v0.3.1-alpha-tester-smoketest.md](docs/debugging/v0.3.1-alpha-tester-smoketest.md)
-> is still the right reference for the connection workflow, RX, the speech
-> processor, the filter preset store, the TX filter overlay, and the
-> per-board PA cal grid. Earlier-release walkthroughs remain at
-> [docs/debugging/v0.2.3-alpha-tester-smoketest.md](docs/debugging/v0.2.3-alpha-tester-smoketest.md)
-> and [docs/debugging/alpha-tester-hl2-smoke-test.md](docs/debugging/alpha-tester-hl2-smoke-test.md)
+> Returning testers: most of v0.3.2's surface didn't change. The v0.3.2
+> doc at [docs/debugging/v0.3.2-alpha-tester-smoketest.md](docs/debugging/v0.3.2-alpha-tester-smoketest.md)
+> is still the right reference for DEXP/VOX baseline, the HL2 mi0bot
+> RF/Tune slider rework, the PA Setup pages, and the PA-cal hotfix
+> verification. Earlier-release walkthroughs remain at
+> [docs/debugging/v0.3.1-alpha-tester-smoketest.md](docs/debugging/v0.3.1-alpha-tester-smoketest.md)
+> and [docs/debugging/v0.2.3-alpha-tester-smoketest.md](docs/debugging/v0.2.3-alpha-tester-smoketest.md)
 > for historical reference and unchanged receive-side coverage.
 >
 > J.J. Boyd ~ KG4VCF
@@ -85,7 +92,7 @@ sha256sum -c SHA256SUMS.txt
 > launch, and Windows users will see a SmartScreen warning to click through.
 > Linux is unaffected. See the per-release notes for details.
 >
-> **v0.3.2 status:** macOS DMG and PKG remain Apple Developer ID-signed and
+> **v0.4.0 status:** macOS DMG and PKG remain Apple Developer ID-signed and
 > notarized; Gatekeeper accepts them on first launch. Windows installer
 > remains unsigned (Authenticode certificate pending); SmartScreen "More
 > info → Run anyway" still applies.
@@ -94,7 +101,7 @@ sha256sum -c SHA256SUMS.txt
 
 ## Current Status
 
-**Current release: v0.3.2** (2026-05-05). Substantial point release on top of v0.3.1 with four pieces of work landing together: **3M-3a-iii DEXP/VOX speech processing** (VOX and DEXP work end-to-end for the first time; the DSP wasn't actually wired up in v0.3.1 even though the menus existed), a **Hermes Lite 2 maturity push** (RF/Tune Power slider rework matching the mi0bot fork: RF Power 0 to 90 step 6, Tune Power 0 to 99 step 3, per-band Tune Power grid in dB; connect-time init parity; A-ATT label, N2ADR default, RX att max +31 dB, P1 ADC overload byte offset, HL2 PA fwd/rev scaling all corrected), **PA Setup parity + safety hotfix** (Setup → PA pages rebuilt for full Thetis parity; the kernel doubles as a PA over-drive safety hotfix for high-gain finals like the ANAN-8000DLE), and a **long tail of persistence and stability fixes** (per-band TX RF Power, OC matrix pins, mic-jack PTT default, TUN-off cold-start, audio bus reconfigure, NR3 dev-build path). **v0.3.1** (2026-05-03) carried forward everything 0.3.0 was supposed to deliver plus per-profile TX bandwidth control, the user-editable filter preset store, TX filter overlay on the panadapter and waterfall, the per-board PA forward-power calibration system, and the Setup IA reshape. **HL2 SSB transmit is bench-cleared** since v0.3.1's ATT/filter safety audit. Earlier-shipped 3G RX-Epic, 3P-A…I antenna integration, 3O VAX + Linux PipeWire, and the v0.2.x maintenance fixes still apply. **3M-2 CW TX** is next up; **3M-4 PureSignal**, **3F multi-panadapter**, **3H skins**, **3J TCI**, **3K CAT** remain not-started.
+**Current release: v0.4.0** (2026-05-08). Substantial minor release on top of v0.3.2 with five pieces of work landing together: **3M-4 PureSignal** (the big new feature: feedback DDC plumbing on Protocol 1 and Protocol 2, `calcc.c` + `iqc.c` vendored verbatim from Thetis, PsForm dialog at Tools → PureSignal, AmpView modeless dialog, two-tone IMD overlay on the spectrum, bottom-banner FB+PS indicator pair, enabled on every supported P1 and P2 SKU including HL2 and plain Hermes), a **Display + DSP-Options refactor** (WDSP `avenger()` and `detector()` ports, new Setup → DSP page with 18 controls and RX/TX combo split, in-place filter resize, Filter Impulse Cache, Thetis-faithful FFT slider with 7 windows, NF-aware grid, SpectrumPeaksPage, Multimeter page, SettingsSchemaVersion v5 migration), **3M-3a-iv anti-VOX cancellation feed** (closes the v0.3.2 gap so the Anti-VOX gain control actually works; full grpAntiVOX trio on Setup → Transmit → DEXP/VOX), **live-apply sample rate** (no disconnect needed; 12-step Thetis-faithful coordinator routes through WDSP's `SetXcmInrate` path; HL2 P1 384 kHz parity), and the **AF Gain rewire (KM4BLG) + VAX bus calibration** (AF slider through `SetRXAPanelGain1` closes a long-standing distortion bug; VAX tap inverse-scales by `1 / afGain` so digital-mode apps stay calibrated). **v0.3.2** (2026-05-05) shipped DEXP/VOX speech processing end-to-end for the first time, the HL2 mi0bot RF/Tune slider maturity push, full Setup → PA parity + the PA over-drive safety hotfix for high-gain finals (notably the ANAN-8000DLE), and a long tail of persistence and stability fixes. **v0.3.1** (2026-05-03) carried forward everything 0.3.0 was supposed to deliver plus per-profile TX bandwidth control, the user-editable filter preset store, TX filter overlay on the panadapter and waterfall, the per-board PA forward-power calibration system, and the Setup IA reshape. **HL2 SSB transmit is bench-cleared** since v0.3.1's ATT/filter safety audit. Earlier-shipped 3G RX-Epic, 3P-A…I antenna integration, 3O VAX + Linux PipeWire, and the v0.2.x maintenance fixes still apply. **3M-2 CW TX** is next up; **3F multi-panadapter**, **3H skins**, **3J TCI**, **3K CAT** remain not-started.
 
 ### What's working end-to-end today
 
@@ -118,9 +125,12 @@ sha256sum -c SHA256SUMS.txt
 ### Deferred / not yet implemented
 
 - ~~**TX pipeline 3M-1 (Basic SSB TX)** + **3M-3a-i / 3M-3a-ii (TX Processing — EQ / Leveler / ALC / CFC / CPDR / CESSB / Phase Rotator)**~~ — shipped in v0.3.0.
+- ~~**TX pipeline 3M-3a-iii (DEXP/VOX + AMSQ)**~~ — shipped in v0.3.2.
+- ~~**TX pipeline 3M-3a-iv (Anti-VOX cancellation feed)**~~ — shipped in v0.4.0.
+- ~~**TX pipeline 3M-4 (PureSignal)**~~ — shipped in v0.4.0. Feedback DDC, `calcc.c` / `iqc.c` engine vendored verbatim from Thetis, PsForm, AmpView, two-tone IMD overlay; enabled across the ANAN family + HL2 + plain Hermes.
 - **TX pipeline 3M-2 (CW TX)** — sidetone, firmware keyer, QSK / break-in. Next major epic.
-- **TX pipeline 3M-4 (PureSignal)** — feedback DDC, calcc / IQC engine, PSForm, AmpView.
-- **Multi-panadapter** (Phase 3F) — DDC assignment, FFTRouter, PanadapterStack, RX2 enable.
+- **TX pipeline 3M-3b (FM-mode pre-emphasis)** — de-scoped from 3M-3a-ii to FM-mode follow-up.
+- **Multi-panadapter** (Phase 3F) — DDC assignment, FFTRouter, PanadapterStack, RX2 enable. Anti-VOX aamix path also waits on this.
 - ~~**HL2 `IoBoardHl2`** (Phase 3L)~~ — completed via Phase 3P-E: I2C TLV queue + 12-step state machine + bandwidth-monitor two-pointer byte-rate compute + NereusSDR throttle-detection layer; `P1CodecHl2` now intercepts C&C frames to inject I2C TLV payloads.
 - **Skin system** (Phase 3H), **TCI + Spots** (Phase 3J), **CAT/rigctld** (Phase 3K), **WAV/IQ recording** (Phase 3M-recording).
 
@@ -161,11 +171,9 @@ sha256sum -c SHA256SUMS.txt
 - GPG-signed cross-platform builds — Linux AppImage ×2 archs, macOS DMG + PKG ×2 archs (Apple Silicon + Intel; Developer ID-signed + notarized in v0.3.0+), Windows portable ZIP + NSIS installer
 
 **Planned (see Roadmap):**
-- **Phase 3M-3a-iii TX Processing tail** — DEXP/VOX + AM-Squelch (next up)
+- **Phase 3M-2 CW TX** — sidetone, firmware keyer, QSK/break-in (next major TX epic)
 - **Phase 3M-3b FM-mode work** — pre-emphasis (deferred from 3M-3a-ii)
-- **Phase 3M-2 CW TX** — sidetone, firmware keyer, QSK/break-in
-- **Phase 3M-4 PureSignal** — feedback DDC, calcc/IQC engine, PA linearization
-- **Phase 3F Multi-Panadapter** — DDC assignment (including PS states), FFTRouter, PanadapterStack, RX2 enable
+- **Phase 3F Multi-Panadapter** — DDC assignment (including PS states), FFTRouter, PanadapterStack, RX2 enable. Anti-VOX aamix path also waits on this.
 - **Phase 3H Skin System** — Thetis-inspired skin format with 4-pan support and legacy-skin import
 - **Phase 3J TCI + Spots** — TCI v2.0 WebSocket server, DX Cluster / RBN clients, spot overlay
 - **Phase 3K CAT / rigctld** — 4-channel rigctld, TCP CAT server
@@ -226,10 +234,13 @@ sha256sum -c SHA256SUMS.txt
 | **3Q: Connection Workflow Refactor** | Single ConnectionState state machine + unicast probe (works through Layer-3 VPNs) + Add Radio dialog rebuild (16-SKU model picker) + ConnectionPanel polish + auto-connect-on-launch + spectrum disconnect overlay + status-bar chrome layer (ConnectionSegment / RxDashboard / StationBlock / AdcOverloadBadge / SVG icon system / CPU toggle / min-filtered RTT) + PA voltage formula correction + macOS Developer ID signing + notarization. | **Complete (shipped in v0.3.0)** |
 | **3M-3a-i: TX Speech Processor I** | TX EQ (10-band parametric) + TX Leveler + TX ALC. TxChannel WDSP wrappers, TransmitModel schema, MicProfileManager bundles 27 EQ/Lev/ALC keys, 20 Thetis factory mic profiles ported verbatim, AgcAlcSetupPage TX sections, TxApplet `[LEV] [EQ] [PROC]` toggle row, TxEqDialog modeless editor, SpeechProcessorPage rewrite as TX dashboard. | **Complete (shipped in v0.3.0)** |
 | **3M-3a-ii: TX Speech Processor II** | CFC (Continuous Frequency Compressor) + CPDR (Compander Pre-Distortion / drive ratio) + CESSB (Controlled-Envelope SSB) + Phase Rotator. TxChannel wrappers, TransmitModel +15 properties, MicProfileManager +41 keys, 21st mic profile, CfcSetupPage rewrite, TxCfcDialog modeless editor, full ParametricEqWidget Qt6 port (~3160 LOC, used by TxEq + TxCfc dialogs), ParaEqEnvelope (gzip + base64url helper). | **Complete (shipped in v0.3.0)** |
-| **3M-3a-iii: TX Speech Processor III** | DEXP/VOX + AM-Squelch (AMSQ) WDSP setters + dialogs. | **Next** |
+| **3M-3a-iii: TX Speech Processor III** | DEXP/VOX + AM-Squelch (AMSQ) WDSP setters + dialogs. | **Complete (shipped in v0.3.2)** |
+| **3M-3a-iv: Anti-VOX Cancellation Feed** | Closes the 3M-3a-iii gap so the anti-VOX gain control actually works. 4 WDSP wrappers, RxDspWorker → TxWorkerThread → TxChannel pump, full grpAntiVOX trio (Enable + Gain + Tau) on Setup → Transmit → DEXP/VOX. Source-selector dropped (NereusSDR-architectural divergence: VAX is a digital-mode app bus with no mic-feedback path). | **Complete (shipped in v0.4.0)** |
 | **3M-3b: FM-mode TX work** | Pre-emphasis (de-scoped from 3M-3a-ii to FM-mode follow-up). | Planned |
-| 3M-2: CW TX | Sidetone, firmware keyer, QSK/break-in. Absorbs the HL2 CWX bit-3 follow-up. Next major epic after v0.3.1. | Planned |
-| 3M-4: PureSignal | Feedback DDC, calcc/IQC engine, PA linearization | Planned |
+| 3M-2: CW TX | Sidetone, firmware keyer, QSK/break-in. Absorbs the HL2 CWX bit-3 follow-up. Next major epic after v0.4.0. | Planned |
+| **3M-4: PureSignal** | Feedback DDC plumbing on P1 and P2. `calcc.c` + `iqc.c` vendored verbatim from Thetis. PureSignal coordinator class. PsccPump driver. Per-board PsDdcConfig. PsForm modeless dialog (Tools → PureSignal). AmpView modeless dialog. Two-tone IMD overlay on the spectrum. PsaIndicatorWidget bottom-banner FB+PS pair. Enabled on every supported P1 and P2 SKU including HL2 (with HL2-specific negative-ATT support, AutoAtt convergence, ATT-on-TX master force-enable, psSampleRate=0 sentinel resolution) and plain Hermes. | **Complete (shipped in v0.4.0)** |
+| **3-Display: Display + DSP-Options refactor** | WDSP `avenger()` and `detector()` ports. Setup → DSP page (18 controls, RX/TX combo split, in-place filter resize, Filter Impulse Cache, per-mode buffer/filter/filter-type live-apply). Spectrum: Thetis-faithful FFT slider with 7 windows + live bin width, NF-aware grid, Hz/bin auto-zoom override, SpectrumPeaksPage with PeakBlobDetector + ActivePeakHoldTrace, Multimeter page. SettingsSchemaVersion v5 migration. | **Complete (shipped in v0.4.0)** |
+| **3-LiveApply: Live-apply infrastructure** | Sample-rate-live coordinator (12-step Thetis-faithful path through `SetXcmInrate`); active-RX-count coordinator (held for 3F multi-panadapter); HL2 P1 384 kHz parity (mi0bot-authoritative). | **Complete (shipped in v0.4.0)** |
 | 3F: Multi-Panadapter | DDC assignment (incl. PS states), FFTRouter, PanadapterStack, enable RX2 | Planned |
 | 3H: Skin System | Thetis-inspired skins with 4-pan support + legacy import | Planned |
 | 3J: TCI + Spots | TCI v2.0 WebSocket, DX Cluster/RBN clients, spot overlay | Planned |

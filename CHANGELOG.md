@@ -1,108 +1,127 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.0] - 2026-05-08
 
-### Added
-- **3M-3a-iv anti-VOX cancellation feed wired end-to-end.** Closes the gap left
-  by 3M-3a-iii where the gain control was plumbed but the RX-audio feedback path
-  into DEXP was never connected. Moving the anti-VOX gain slider with VOX
-  engaged now audibly suppresses RX-bleed false-trips. Adds 4 WDSP wrappers
-  (`SetAntiVOXSize` / `SetAntiVOXRate` / `SetAntiVOXDetectorTau` /
-  `SendAntiVOXData`), wires `RxDspWorker -> TxWorkerThread ->
-  TxChannel::sendAntiVoxData` per chunk (single-RX direct pump; aamix port
-  deferred to 3F multi-pan), exposes Tau (ms) on Setup -> Transmit -> DEXP/VOX
-  with persistence under per-MAC key `AntiVox_Tau_Ms`. Bench-verification
-  matrix at `docs/architecture/phase3m-3a-iv-verification/README.md`.
-- **Setup -> Transmit -> DEXP/VOX gains grpAntiVOX parity (sans source toggle).**
-  Beyond the Tau (ms) spinbox above, also adds `chkAntiVoxEnable` ("Anti-VOX
-  Enable") and `udAntiVoxGain` ("Gain (dB)") to align with Thetis grpAntiVOX
-  (`setup.designer.cs:44631-44760 [v2.10.3.13]`). All three tooltips
-  (Enable / Gain / Tau) are verbatim from Thetis. Independent enable-flag
-  refactor: `TransmitModel::antiVoxRun` Q_PROPERTY (persisted per-MAC under
-  `AntiVox_Enable`), `MoxController::setAntiVoxRun` slot +
-  `antiVoxRunRequested` signal. Closes the M2 finding from the end-of-epic
-  code review (bench-verification matrix is now runnable from a fresh
-  install without a developer-only hook).
+> [!NOTE]
+> **A substantial minor release on top of v0.3.2.** Five pieces of work landed together:
+>
+> 1. **3M-4 PureSignal arrives.** Feedback DDC plumbing on Protocol 1 and Protocol 2, calcc/IQC engine vendored verbatim from Thetis, PsForm dialog (Tools -> PureSignal), AmpView modeless dialog, two-tone IMD overlay on the spectrum, bottom-banner FB+PS indicator pair. PureSignal coordinator class drives the cmd state machine; PsccPump driver feeds calcc per chunk for convergence. Per-board PsDdcConfig with C&C-frame DDC pair indices. Enabled on every supported P1 and P2 SKU including Hermes Lite 2 and plain Hermes (with HL2 negative-ATT support, AutoAtt convergence, ATT-on-TX master force-enable, and HL2 psSampleRate=0 sentinel resolution).
+> 2. **Display + DSP-Options refactor.** WDSP `avenger()` and `detector()` ported (Thetis-faithful frame averaging + bin-to-pixel reduction). New Setup -> DSP page with 18 controls, warning icons, time-to-last-change readout, RX/TX combo split. Filter Impulse Cache, in-place filter resize, per-mode buffer/filter/filter-type live-apply. SettingsSchemaVersion v5 migrates DSP-Options Buffer/Filter Size to per-direction. Spectrum gains a full Thetis-faithful FFT slider with 7 windows + live bin width, K-based auto-zoom, NF-aware grid (auto-track noise floor), per-band NF priming, Hz/bin auto-zoom override, SpectrumPeaksPage with PeakBlobDetector + ActivePeakHoldTrace, and a new Multimeter page.
+> 3. **Anti-VOX cancellation feed (3M-3a-iv).** Closes the gap from v0.3.2's 3M-3a-iii where the gain control was plumbed but the RX-audio feedback path into DEXP was never connected. Moving the anti-VOX gain slider with VOX engaged now audibly suppresses RX-bleed false-trips. Setup -> Transmit -> DEXP/VOX gains the full grpAntiVOX trio (Enable + Gain + Tau) with verbatim Thetis tooltips.
+> 4. **Live-apply sample rate (no disconnect).** Switching sample rate on the Radio Info combo no longer requires a disconnect/reconnect cycle. 12-step Thetis-faithful coordinator routes through WDSP's `SetXcmInrate` path. HL2 P1 384 kHz parity (mi0bot-authoritative).
+> 5. **AF Gain audio fix (KM4BLG) + VAX bus calibration.** AF slider routes through WDSP `SetRXAPanelGain1` instead of fighting the master-volume atomic post-DSP. Closes a long-standing distortion bug. VAX tap inverse-scales by `1 / afGain` so digital-mode apps stay calibrated regardless of speaker AF slider position.
 
-### Changed
-- **Removed anti-VOX source-selector plumbing.** Thetis chkAntiVoxSource
-  (RX vs VAC at `setup.designer.cs:44646-44657 [v2.10.3.13]`) does not map
-  to NereusSDR's architecture: VAX feeds digital-mode apps with no
-  mic-feedback path, so the audio output device is the only valid anti-VOX
-  reference. Dropped `TransmitModel::antiVoxSourceVax`,
-  `MoxController::setAntiVoxSourceVax`, the `antiVoxSourceWhatRequested`
-  signal, the `chkAntiVoxSource` UI, and the rejected-VAX scaffolding.
-  Setup -> Transmit -> DEXP/VOX now shows a static "Source: Audio Output
-  Device(s)" info row instead. Existing users with `AntiVox_Source_VAX`
-  persisted will see an orphan AppSettings key (harmless, ignored on load).
-  Tap-point signpost comments added at `RxDspWorker.cpp` and
-  `AudioEngine.h` for the future radio-speaker output work (the anti-VOX
-  tap relocates from `RxDspWorker` to `AudioEngine`'s post-mixer summing
-  point when per-bus processing diverges between outputs). Full rationale
-  in `docs/architecture/phase3m-3a-iv-antivox-feed-design.md` §18.
+> [!IMPORTANT]
+> **Existing users: no action required.** Saved radios, mic profiles, DSP settings, PA forward-power calibration, per-band tune power, container layout, spectrum / waterfall settings carry forward exactly. SettingsSchemaVersion bumps from v4 to v5 automatically on first launch and migrates the DSP-Options Buffer/Filter Size keys to per-direction.
 
-### Fixed
-- **Anti-VOX tau default 10 ms -> 20 ms.** WdspEngine create_dexp passed
-  `0.01` for the smoothing time-constant; Thetis spinbox default is 20 ms
-  (= 0.02 s) per `setup.designer.cs:44682-44686 [v2.10.3.13]`. Fresh users
-  with no Setup-page interaction now get the Thetis-faithful default.
-- **Sample-rate-live crash hot-fix.** PR #219 + #221 wired
-  `RadioModel::setSampleRateLive` to `WdspEngine::rebuildRx/TxChannel`,
-  which destroys the C++ wrapper and constructs a new one. Seven raw-
-  pointer holders (`RadioModel::m_txChannel`, `TxWorkerThread`,
-  `PureSignal`, `MeterPoller`, `TwoToneController`, `TxCfcDialog`,
-  `TxChannel::s_voxKeyInstance`) were left dangling; first combo-change
-  on the Radio Info page SIGSEGV'd inside `moveToThread` on the dead
-  pointer. Replaced with the Thetis-faithful `SetXcmInrate` path
-  (`cmaster.c:453-507 [v2.10.3.13]`): new `RxChannel::setSampleRate`
-  (carry-only state mutation, idempotent guard) + new
-  `WdspEngine::setRxChannelRate` (calls `SetInputSamplerate` and
-  `SetInputBuffsize` on the live channel). `setSampleRateLive` rewritten
-  as the 12-step sequence from `setup.cs:7003-7159 [v2.10.3.13]`
-  (drain channel -> stop radio -> wait inflight -> WDSP rate update ->
-  reconfigure AudioEngine + DSP worker -> restart radio -> re-enable
-  channel -> reconnect I/Q -> resume audio). TX channel intentionally
-  untouched (Thetis `audio.cs:637-672` routes `SetXcmInrate(0|1)` for
-  RX1/RX2 only; TX input is mic at fixed 48 kHz). New test
-  `tst_set_sample_rate_live.cpp` (7 cases). Underlying
-  `WdspEngine::rebuildRx/TxChannel` API kept in tree but documented as
-  "avoid for live rate changes".
-- **Setup -> Hardware combo + spinbox styling.** `RadioInfoTab`,
-  `DiversityTab`, and `OcOutputsHfTab` were creating raw `QComboBox` /
-  `QSpinBox` with `setMinimumWidth(120)` and no theme styling. Result:
-  macOS-default combo-popup contrast (white-on-white selection),
-  spinbox arrows missing entirely, controls stretching to full dialog
-  width. `applyComboStyle` extended to put `spin-down.svg` on the
-  dropdown arrow (was `image: none`); new sibling helper
-  `gui/SpinBoxStyle.h` paints SVG up/down arrows directly per-widget so
-  Setup-dialog cascade quirks can't drop them. All five combos +
-  the one Hardware-tab spinbox now styled and width-capped at 160 px.
+### 3M-4 PureSignal (the big new feature)
+- **`PureSignal` coordinator class** owns the cmd-state machine; splits `correctingChanged` from `correctionsBeingAppliedChanged` for cleaner UI binding; pumps `psEnabledChanged` fan-out from the cmd-state machine; ports the single-cal retry loop in `StayOn`; adds the AutoAtt `CalibrationAttemptsChanged` guard, per-board `deltaDb` clamps in `autoAttentionTick`, and consolidated `PSInfo` dispatch (drops the phantom `m_correcting`).
+- **`calcc.c` + `iqc.c` vendored verbatim** from Thetis ramdor v2.10.3.13. Full GPL attribution preserved per source-first protocol.
+- **`PsccPump` driver**: `pscc(channel, size, tx, rx)` per-chunk feed driving calcc convergence.
+- **Per-board `PsDdcConfig`**: P1 and P2 codecs inject DDC pair indices via `applyPureSignalDdcConfig` at C&C frame build time. P1 bank 2/3 frequency override on `CmdHighPriority` routes the feedback DDC tracking. P2 PS DDC config + multi-stream sync de-interleave + `CmdTx` for SATT.
+- **Tools -> PureSignal** opens `PsForm` modeless dialog (port of Thetis `PsForm`). `btnPSAmpView` opens `AmpView` modeless dialog (port of Thetis `AmpView`).
+- **Spectrum two-tone IMD overlay**: peak markers + readout box; gate-state logging for bench debug; per-frame `ResetBlobMaximums` with hard-cut + hold-off reset.
+- **`PsaIndicatorWidget`**: bottom-banner FB+PS pair status indicators.
+- **HL2 PureSignal enabled** with HL2-specific support: `minAttenuation()` unification for negative ATT range; AutoAtt convergence (Setup -> General -> Options PS checkboxes); ATT-on-TX master force-enable (PSForm.cs:738 verbatim port); HL2 `psSampleRate=0` sentinel resolution before WDSP call. **Plain Hermes also enabled.**
+- **HPF Bypass on PS warning** wired in Setup -> General -> Options.
+- **`PureSignalApplet`** + TxApplet `[PS-A]` button wire to live PureSignal state.
+- **`TxChannel` +22 PureSignal API wrappers**.
+- **`TINT` setter** wired through `SetPSIntsAndSpi`.
+- **Default `SetPk`** routed via `setHwPeak` (drops a duplicate audio-volume listener).
+- **Initial PS timing parameters** pushed to WDSP at init.
+- **NereusSDR-only PureSignal Setup pages retired** in favour of the Thetis-parity PsForm dialog.
+- **`BoardCapabilities`**: adds `psDefaultPeak` + `psSampleRate`.
+- **ReceiverManager `UpdateDDCs` PS branch** ported (consumes `PsDdcConfig` from codec).
+- **RadioModel** wires `PureSignal/StepAtt/PsccPump` for calcc convergence; codec injection mirror for PureSignal.
 
-### Changed
-- **Hermes Lite 2 P1 sample-rate parity (`mi0bot-Thetis setup.cs:849-851
-  [v2.10.3.13]`).** HL2 now offers 48 kHz / 96 kHz / 192 kHz / **384 kHz**
-  on P1, matching mi0bot. NereusSDR previously dropped HL2 into the
-  3-rate base list (only RedPitaya got the extra 384 k). Renamed
-  `kP1RatesRedPitaya` to `kP1RatesWithExtra384k` since two boards now
-  share that list. The HL2 `BoardCapabilities::sampleRates` already
-  advertised 384 k correctly; only the master-list filter was stale.
-  New test `p1_hermes_lite_gets_extra_384`.
-- **VAX bus level decoupled from speaker AF slider.** PR #218's AF-Gain
-  rewire moved the slider attenuation upstream of `AudioEngine::
-  rxBlockReady` via `WDSP.SetRXAPanelGain1`, which is the right thing
-  for headphone output but caused the VAX tap to inherit speaker
-  attenuation — digital-mode apps suddenly heard ~18 dB less than
-  before. `rxBlockReady` now inverse-scales the VAX push by
-  `1 / afGain` (clamped at 0.001 to avoid div-by-zero) so VAX level
-  stays calibrated independent of where the AF slider sits. Edge case
-  acknowledged: AF=0 full mute also silences VAX; full decoupling
-  requires a pre-`PanelGain1` WDSP tap, deferred.
-- **Active RX count widget removed from Radio Info tab.** Was disabled
-  and stuck at 1 in single-RX builds. Underlying
-  `RadioModel::setActiveRxCountLive` coordinator stays wired; widget
-  will be re-exposed when Phase 3F multi-panadapter lands and RX2
-  actually streams. Copy Support Info button alongside repositioned
-  to left-aligned natural width (was full-dialog-width).
+### Display + DSP-Options refactor
+- **`DspOptionsPage`** (Setup -> DSP): 18 controls + warning icons + time-to-last-change readout + Thetis-faithful 3-column / 4-row layout + RX/TX combo split. Validity-rule warning icons ported from Thetis. `bindRxChannel` + initial-bind in DspOptionsPage high-res fan-out. Canonical dark page stylesheet.
+- **Filter Impulse Cache toggles** + WDSP cache load/save plumbing.
+- **High-resolution filter characteristics** + `FilterDisplayItem` high-res mode + `RxChannel::filterResponseMagnitudes()` accessor.
+- **In-place filter resize / type setters** on `RxChannel` + `TxChannel`.
+- **Per-mode buffer/filter/filter-type live-apply** via Phase 1 rebuild.
+- **Thetis-faithful filter/buffer cascade**: drops the clamp shortcut.
+- **Restored TX live-apply on band/mode change** (race resolved). Deterministic `onModeChanged` contract + UB-free test setup. Swap from heavy-rebuild to in-place setters.
+- **SettingsSchemaVersion v5 migration**: split DSP-Options Buffer/Filter Size into RX/TX (retire global keys).
+- **Full Thetis-faithful FFT slider + Pan-group layout** + 7 windows + live bin width.
+- **WDSP `avenger()` + `detector()` ports**: Thetis-faithful frame averaging + linear-to-dB stage and bin-to-pixel reduction. Single Thetis-faithful pipeline (Phase 1A.4 atomic).
+- **Linear-power side-channel + window ENB** exposed on FFT.
+- **K-based auto-zoom** maintains visual consistency across zoom; bound auto-zoom replan pause + reset avengers on `fftSize` change.
+- **Apply window changes immediately + add overlap** + preserve overlap state on safety-cap fire (60 fps zoom slowdown). Reset write head on 16ms-cap early-return.
+- **`PeakBlobDetector` class** + ellipse/text rendering + per-frame `ResetBlobMaximums`. Render Peak Blobs + Active Peak Hold in GPU overlay path. Persistence + default-off + immediate-render on toggle. Distinct trace colour for Active Peak Hold.
+- **Source-first port of Thetis `processNoiseFloor`** for NF overlay.
+- **NF-aware grid (auto-track noise floor)** + Copy button + `NoiseFloorEstimator::prime()` + per-band NF-estimate priming (NereusSDR-original). NF-tracking dialog-reopen restore.
+- **Hz/bin auto-zoom override**.
+- **Cursor frequency unify** + `dispNormalize` port + peak/binwidth GPU paths + grid band header + replan crossfade.
+- **WF NF-AGC + Stop-on-TX + Delay readout + Copy** on the waterfall; W5 dropped.
+- **Spectrum Defaults overlay group** + decimation wire-up.
+- **`SpectrumPeaksPage`**: cross-link buttons + hint lines.
+- **`MultimeterPage`** + configurable `MeterPoller` + `HistoryGraphItem` duration setting + `MeterItem` unit-mode fan-out (S / dBm / µV).
+- **Thetis-faithful averaging math + per-side time constants** + `DisplayAverageMode` split into Detector + Averaging (spectrum + waterfall).
+- **Logging & Performance page rename** + 3 perf-monitor toggles.
+- **`MeterStylesPage` VFO Flag group**: `SmallModeFilteronVFOs` toggle.
+- **Setup -> Hardware**: ANAN-8000DLE volts/amps toggle + CPU meter rate spinbox.
+- **Filter Presets widgets placement fix**: now sit inside their group boxes.
+- **Defensive FPS spin sync from `pushFps`**.
+
+### 3M-3a-iv anti-VOX cancellation feed
+- **Wired end-to-end.** Closes the gap left by 3M-3a-iii where the gain control was plumbed but the RX-audio feedback path into DEXP was never connected. Moving the anti-VOX gain slider with VOX engaged now audibly suppresses RX-bleed false-trips. Adds 4 WDSP wrappers (`SetAntiVOXSize` / `SetAntiVOXRate` / `SetAntiVOXDetectorTau` / `SendAntiVOXData`), wires `RxDspWorker -> TxWorkerThread -> TxChannel::sendAntiVoxData` per chunk (single-RX direct pump; aamix port deferred to 3F multi-pan), exposes Tau (ms) on Setup -> Transmit -> DEXP/VOX with persistence under per-MAC key `AntiVox_Tau_Ms`. Bench-verification matrix at `docs/architecture/phase3m-3a-iv-verification/README.md`.
+- **Setup -> Transmit -> DEXP/VOX gains grpAntiVOX parity** (sans source toggle). Beyond the Tau (ms) spinbox above, also adds `chkAntiVoxEnable` ("Anti-VOX Enable") and `udAntiVoxGain` ("Gain (dB)") to align with Thetis grpAntiVOX (`setup.designer.cs:44631-44760 [v2.10.3.13]`). All three tooltips (Enable / Gain / Tau) are verbatim from Thetis. Independent enable-flag refactor: `TransmitModel::antiVoxRun` Q_PROPERTY (persisted per-MAC under `AntiVox_Enable`), `MoxController::setAntiVoxRun` slot + `antiVoxRunRequested` signal.
+- **Anti-VOX tau default 10 ms -> 20 ms.** WdspEngine `create_dexp` passed `0.01` for the smoothing time-constant; Thetis spinbox default is 20 ms (= 0.02 s) per `setup.designer.cs:44682-44686 [v2.10.3.13]`. Fresh users with no Setup-page interaction now get the Thetis-faithful default.
+
+### Live-apply infrastructure (sample rate + active RX count)
+- **Sample-rate-live crash hot-fix.** PR #219 + #221 wired `RadioModel::setSampleRateLive` to `WdspEngine::rebuildRx/TxChannel`, which destroys the C++ wrapper and constructs a new one. Seven raw-pointer holders (`RadioModel::m_txChannel`, `TxWorkerThread`, `PureSignal`, `MeterPoller`, `TwoToneController`, `TxCfcDialog`, `TxChannel::s_voxKeyInstance`) were left dangling; first combo-change on the Radio Info page SIGSEGV'd inside `moveToThread` on the dead pointer. Replaced with the Thetis-faithful `SetXcmInrate` path (`cmaster.c:453-507 [v2.10.3.13]`): new `RxChannel::setSampleRate` (carry-only state mutation, idempotent guard) + new `WdspEngine::setRxChannelRate` (calls `SetInputSamplerate` and `SetInputBuffsize` on the live channel). `setSampleRateLive` rewritten as the 12-step sequence from `setup.cs:7003-7159 [v2.10.3.13]` (drain channel -> stop radio -> wait inflight -> WDSP rate update -> reconfigure AudioEngine + DSP worker -> restart radio -> re-enable channel -> reconnect I/Q -> resume audio). TX channel intentionally untouched (Thetis `audio.cs:637-672` routes `SetXcmInrate(0|1)` for RX1/RX2 only; TX input is mic at fixed 48 kHz). New test `tst_set_sample_rate_live.cpp` (7 cases). Underlying `WdspEngine::rebuildRx/TxChannel` API kept in tree but documented as "avoid for live rate changes".
+- **Hermes Lite 2 P1 sample-rate parity (`mi0bot-Thetis setup.cs:849-851 [v2.10.3.13]`).** HL2 now offers 48 kHz / 96 kHz / 192 kHz / **384 kHz** on P1, matching mi0bot. NereusSDR previously dropped HL2 into the 3-rate base list. Renamed `kP1RatesRedPitaya` to `kP1RatesWithExtra384k` since two boards now share that list. The HL2 `BoardCapabilities::sampleRates` already advertised 384 k correctly; only the master-list filter was stale. New test `p1_hermes_lite_gets_extra_384`.
+- **`RadioModel::setActiveRxCountLive()` coordinator** stays wired; Active RX count widget removed from Radio Info tab in single-RX builds. Will re-expose when Phase 3F multi-panadapter lands and RX2 actually streams. Copy Support Info button alongside repositioned to left-aligned natural width.
+- **`RadioModel::dspChangeMeasured(qint64)` signal** for time-to-last-change readout.
+- **Channel rebuild API in tree (held for now)**: `RxChannel::rebuild()` + `WdspEngine::rebuildRxChannel()`, `TxChannel::rebuild()` + `WdspEngine::rebuildTxChannel`, `RxChannel::captureState`/`applyState` round-trip, `ChannelConfig` and `RxChannelState` structs.
+
+### AF Gain rewire + VAX bus calibration (PR #218, KM4BLG)
+- **AF Gain via WDSP `SetRXAPanelGain1`**: routes the AF slider through panel gain rather than fighting the master-volume atomic post-DSP. Closes a long-standing distortion bug where `panel.gain1=4.0` default leaked +12 dB silently.
+- **VAX bus level decoupled from speaker AF slider.** PR #218's AF-Gain rewire moved the slider attenuation upstream of `AudioEngine::rxBlockReady` via `WDSP.SetRXAPanelGain1`, which is the right thing for headphone output but caused the VAX tap to inherit speaker attenuation; digital-mode apps suddenly heard ~18 dB less than before. `rxBlockReady` now inverse-scales the VAX push by `1 / afGain` (clamped at 0.001 to avoid div-by-zero) so VAX level stays calibrated independent of where the AF slider sits. Edge case acknowledged: AF=0 full mute also silences VAX; full decoupling requires a pre-`PanelGain1` WDSP tap, deferred.
+
+### Persistence + stability
+- **MainWindow position, size, and maximized state** persist across launches (#206).
+- **Audio bus on master mute** flushes the speakers ring (#201) so an unmute does not briefly play stale audio.
+- **PA Gain spinbox** clamps minimum to 38.8 dB (#199) per Thetis range.
+- **PA profile model auto-pick** (#202): filter Setup combo to connected model + non-default; ORIONMKII skipped in `defaultModelForBoard` auto-pick. Restore Thetis "100 = no output power" semantic. SWR topology + audio-volume signal pump + `m_tune`.
+- **Pre-connect Mic_Source survives app restart** (TransmitModel persistence fix).
+- **macOS mic-permission dialog** triggered deterministically at launch.
+- **macOS app icon wired into bundle**, DMG background + volicon added.
+- **Step-att MOX clobber** (#200): RX step-attenuator value survives an MOX cycle. Closes a regression where the TX-side ATT-on-TX safety scaffolding was over-writing the persisted RX ATT.
+- **HL2 FPGA temperature** published on the bottom banner.
+- **TwoToneLevel default 0 dB** (Thetis-faithful).
+- **Spectrum Linux build**: guard GPU-only field + drop `QVector::assign`.
+
+### Setup -> Hardware UI polish
+- **Combo + spinbox styling.** `RadioInfoTab`, `DiversityTab`, and `OcOutputsHfTab` were creating raw `QComboBox` / `QSpinBox` with `setMinimumWidth(120)` and no theme styling. Result: macOS-default combo-popup contrast (white-on-white selection), spinbox arrows missing entirely, controls stretching to full dialog width. `applyComboStyle` extended to put `spin-down.svg` on the dropdown arrow (was `image: none`); new sibling helper `gui/SpinBoxStyle.h` paints SVG up/down arrows directly per-widget so Setup-dialog cascade quirks can't drop them. All five combos + the one Hardware-tab spinbox now styled and width-capped at 160 px.
+
+### NereusSDR-original deviations (justified inline)
+- **Anti-VOX source-selector dropped.** Thetis `chkAntiVoxSource` (RX vs VAC at `setup.designer.cs:44646-44657 [v2.10.3.13]`) does not map to NereusSDR's architecture: VAX feeds digital-mode apps with no mic-feedback path, so the audio output device is the only valid anti-VOX reference. Dropped `TransmitModel::antiVoxSourceVax`, `MoxController::setAntiVoxSourceVax`, the `antiVoxSourceWhatRequested` signal, the `chkAntiVoxSource` UI, and the rejected-VAX scaffolding. Setup -> Transmit -> DEXP/VOX now shows a static "Source: Audio Output Device(s)" info row instead. Existing users with `AntiVox_Source_VAX` persisted will see an orphan AppSettings key (harmless, ignored on load). Tap-point signpost comments added at `RxDspWorker.cpp` and `AudioEngine.h` for the future radio-speaker output work. Full rationale in `docs/architecture/phase3m-3a-iv-antivox-feed-design.md` §18.
+- **PureSignal Setup pages retired** in favour of Thetis-parity PsForm dialog (Tools -> PureSignal). The previous setup-page model was a NereusSDR divergence; we never matched Thetis here.
+- **Active RX Count widget hidden** in single-RX builds. Re-exposes when Phase 3F multi-panadapter lands.
+- **VAX tap inverse-scaled by `1 / afGain`** post-PR #218. Deviates from the new "AF Gain through WDSP" architecture for the speaker path; preserves pre-PR-#218 calibrated VAX levels until per-bus processing diverges.
+
+### Compliance + cite touchups
+- Wave-recorder `//MW0LGE` tag preserved in AF Gain port.
+- License markers aggregated in `wdsp_api.h` header window.
+- `//MI0BOT` + `//MW0LGE` + `//DH1KLM` tags preserved near PSForm cites.
+- `ps_sync_stub.c` GPLv2-or-later census bumped to 134.
+- `PSpeak_TextChanged` cite line range corrected.
+- `[v2.10.3.14]` stamps added to two new Thetis cites.
+- S2 FFT Window provenance corrected to comboDispWinType.
+- Orphan PROVENANCE rows for retired PureSignalTab + `tst_averaging_modes` pruned.
+
+### Known limitations / deferred
+- Multi-panadapter (Phase 3F) still pending. Single-pan, single-RX. RX2 not yet enabled; aamix anti-VOX path waits on it.
+- Pre-emphasis on FM (3M-3b) still de-scoped from 3M-3a-ii.
+- CW transmit (3M-2) not yet implemented; SSB is the only voice mode.
+- Skin system (3H), TCI server (3J), CAT/rigctld (3K), recording (3M-recording) all still planned.
+- Anti-VOX aamix port deferred to Phase 3F (single-RX direct pump shipped).
+- Pre-`PanelGain1` VAX tap deferred (today's VAX path inverse-scales by `1 / afGain`).
+
+### Acknowledgments
+- **KM4BLG** for the AF Gain via WDSP `SetRXAPanelGain1` fix (PR #218) that closed a long-standing distortion bug.
 
 ## [0.3.2] - 2026-05-05
 
