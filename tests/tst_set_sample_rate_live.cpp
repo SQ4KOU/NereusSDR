@@ -1,4 +1,8 @@
-// NereusSDR-original test — no Thetis source ported here.
+// no-port-check: NereusSDR-original Qt test.  The cmaster.c filenames
+// in the comments below are reference cites pointing at the Thetis source
+// the production code ports from; this test file ports nothing itself.
+//
+// NereusSDR-original test, no Thetis source ported here.
 //
 // Regression test for the live sample-rate-change crash that shipped after
 // v0.3.2 (PR #219 + a4d076f).  The previous WdspEngine::rebuildRxChannel /
