@@ -183,6 +183,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <QVariant>
 #include <QtEndian>
 
+#include <bit>
+
 namespace NereusSDR {
 
 P2RadioConnection::P2RadioConnection(QObject* parent)
@@ -2284,7 +2286,7 @@ void P2RadioConnection::processIqPacket(const QByteArray& data, int ddcIndex)
     if (ddcIndex == 0 && m_rx[0].sync != 0) {
         // popcount of sync byte + 1 for DDC0 itself.  Stream 0 is always
         // DDC0; streams 1+ map to the sync'd DDCs in ascending bit order.
-        nstreams = 1 + __builtin_popcount(static_cast<unsigned int>(m_rx[0].sync));
+        nstreams = 1 + std::popcount(static_cast<unsigned int>(m_rx[0].sync));
     }
 
     if (nstreams == 1) {
