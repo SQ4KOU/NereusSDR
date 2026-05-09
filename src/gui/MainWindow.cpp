@@ -1554,8 +1554,8 @@ void MainWindow::buildUI()
         // auto-zoom max.  When baseline > cap (user explicitly picked a
         // larger size via the slider), baseline wins and auto-zoom is a
         // no-op for that range.
-        targetSize = std::max(targetSize, baseline);
-        targetSize = std::min(targetSize, std::max(baseline, kAutoZoomMaxFftSize));
+        targetSize = (std::max)(targetSize, baseline);
+        targetSize = (std::min)(targetSize, (std::max)(baseline, kAutoZoomMaxFftSize));
 
         // Hysteresis: only replan if outside [current * 2/3, current * 3/2].
         const int currentSize = m_fftEngine->fftSize();
