@@ -16,6 +16,7 @@
 
 #include "TciProtocol.h"
 #include "AppSettings.h"
+#include "TciVolume.h"
 
 namespace NereusSDR {
 

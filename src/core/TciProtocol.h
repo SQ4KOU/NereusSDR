@@ -23,8 +23,6 @@
 #include <QString>
 #include <QStringList>
 
-#include "TciVolume.h"
-
 namespace NereusSDR {
 
 // ─────────────────────────────────────────────────────────────────────────
