@@ -152,6 +152,13 @@ signals:
     // Emitted when a TCI client disconnects (cleanly or on error).
     void clientDisconnected(QWebSocket* socket);
 
+    // Emitted when the TX audio mutex changes hands.
+    // newOwner is null when no client holds the mutex (released or
+    // disconnected); non-null when a client acquires it.
+    // Phase 23: used by MainWindow::updateTciIndicator() for the
+    // "On · N ▸TX" indicator state.
+    void txAudioActiveClientChanged(QWebSocket* newOwner);
+
     // Emitted when the server fails to bind.
     void errorOccurred(const QString& errStr);
 

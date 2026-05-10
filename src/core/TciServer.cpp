@@ -511,6 +511,8 @@ void TciServer::onClientDisconnected()
     if (!m_txAudioActiveClient.isNull() && m_txAudioActiveClient.data() == ws) {
         m_txAudioActiveClient = nullptr;
         qCInfo(lcTci) << "TciServer: TX audio mutex released on disconnect";
+        // Phase 23: notify indicator / MainWindow.
+        emit txAudioActiveClientChanged(nullptr);
     }
 
     // Phase 16 Task 16.3 (sub-commit b): destroy all RESAMPLEF instances for
@@ -908,6 +910,8 @@ void TciServer::onTextMessageReceived(const QString& msg)
                             m_txAudioActiveClient = ws;
                             qCInfo(lcTci) << "TciServer: TX audio mutex acquired by"
                                           << session->peer;
+                            // Phase 23: notify indicator / MainWindow.
+                            emit txAudioActiveClientChanged(ws);
                         } else {
                             qCInfo(lcTci) << "TciServer: TX audio mutex denied for"
                                           << session->peer
@@ -925,6 +929,8 @@ void TciServer::onTextMessageReceived(const QString& msg)
                             m_txAudioActiveClient = nullptr;
                             qCInfo(lcTci) << "TciServer: TX audio mutex released by"
                                           << session->peer;
+                            // Phase 23: notify indicator / MainWindow.
+                            emit txAudioActiveClientChanged(nullptr);
                         }
                     }
                 }

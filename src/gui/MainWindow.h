@@ -104,6 +104,13 @@ class AdcOverloadBadge;
 class OverflowChip;
 class PsaIndicatorWidget;
 
+// Phase 23: TCI server + applets forward declarations (all inside NereusSDR
+// namespace — TciServer only exists when HAVE_WEBSOCKETS is defined but we
+// forward-declare unconditionally; m_tciServer is nullptr in non-WebSocket builds).
+class TciServer;
+class TciApplet;
+class ClientChainApplet;
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -170,6 +177,12 @@ private slots:
     // Phase 3Q Sub-PR-7 G.1: right-click context menu on the StationBlock.
     // Items: Disconnect / Edit radio… / Forget radio.
     void showStationContextMenu(const QPoint& globalPos);
+    // Phase 23: update m_tciIndicator bottom label + tooltip for the 4 states
+    // (Off / On / On·N / On·N ▸TX).  Connected to TciServer signals.
+    void updateTciIndicator();
+    // Phase 23: open Setup dialog at "TCI Server" page.  Wired to
+    // tciAction triggered + m_tciIndicator click + TciApplet::setupRequested.
+    void openTciSetupPage();
 
 private:
     void buildUI();
@@ -467,6 +480,22 @@ private:
     class DvkApplet*        m_dvkApplet{nullptr};
     class CatApplet*        m_catApplet{nullptr};
     class TunerApplet*      m_tunerApplet{nullptr};
+
+    // Phase 23: TCI server + applets.
+    // m_tciServer is nullptr in non-WebSocket builds (HAVE_WEBSOCKETS not defined).
+    TciServer*         m_tciServer{nullptr};
+    TciApplet*         m_tciApplet{nullptr};
+    ClientChainApplet* m_clientChainApplet{nullptr};
+
+    // Bottom label of the TCI indicator tile — captured from makeIndicator()
+    // so updateTciIndicator() can change color + text without a findChild scan.
+    QLabel* m_tciIndicatorBotLabel{nullptr};
+
+    // Live connection-count cache for updateTciIndicator().  Updated from
+    // clientConnected / clientDisconnected signals.
+    int  m_tciClientCount{0};
+    bool m_tciServerRunning{false};
+    bool m_tciHasTxClient{false};
 
     // Spectrum overlay panel
     class SpectrumOverlayPanel* m_overlayPanel{nullptr};

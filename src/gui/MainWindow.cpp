@@ -295,6 +295,12 @@ warren@wpratt.com
 #include "applets/DvkApplet.h"
 #include "applets/CatApplet.h"
 #include "applets/TunerApplet.h"
+// Phase 23: TCI server + applets (guarded so non-WebSocket builds still compile)
+#ifdef HAVE_WEBSOCKETS
+#  include "applets/TciApplet.h"
+#  include "applets/ClientChainApplet.h"
+#  include "core/TciServer.h"
+#endif
 #include "SpectrumOverlayPanel.h"
 #include "SetupDialog.h"
 #include "setup/DspSetupPages.h"   // NrAnfSetupPage::selectSubtab
@@ -665,6 +671,41 @@ MainWindow::MainWindow(QWidget* parent)
                                           QStringLiteral("False")).toString()
                != QStringLiteral("True")) {
         QTimer::singleShot(0, this, &MainWindow::showAudioDiagnoseDialog);
+    }
+#endif
+
+    // ── Phase 23: TCI Server instantiation ───────────────────────────────────
+    // Constructed after RadioModel is fully built so TciServer can hold a
+    // valid m_radioModel pointer. Auto-starts when TciServerEnabled=True.
+#ifdef HAVE_WEBSOCKETS
+    {
+        auto& s = AppSettings::instance();
+        const bool enabled = s.value(QStringLiteral("TciServerEnabled"),
+                                     QStringLiteral("False")).toString()
+                             == QStringLiteral("True");
+        const quint16 port = static_cast<quint16>(
+            s.value(QStringLiteral("TciServerPort"),
+                    QStringLiteral("50001")).toString().toUShort());
+        m_tciServer = new TciServer(m_radioModel, this);
+        connect(m_tciServer, &TciServer::serverStarted,
+                this, [this](quint16) { m_tciServerRunning = true;  updateTciIndicator(); });
+        connect(m_tciServer, &TciServer::serverStopped,
+                this, [this]()        { m_tciServerRunning = false; updateTciIndicator(); });
+        connect(m_tciServer, &TciServer::clientConnected,
+                this, [this](QWebSocket*) { ++m_tciClientCount; updateTciIndicator(); });
+        connect(m_tciServer, &TciServer::clientDisconnected,
+                this, [this](QWebSocket*) {
+                    if (m_tciClientCount > 0) { --m_tciClientCount; }
+                    updateTciIndicator();
+                });
+        connect(m_tciServer, &TciServer::txAudioActiveClientChanged,
+                this, [this](QWebSocket* owner) {
+                    m_tciHasTxClient = (owner != nullptr);
+                    updateTciIndicator();
+                });
+        if (enabled) {
+            m_tciServer->start(port);
+        }
     }
 #endif
 
@@ -2000,6 +2041,43 @@ void MainWindow::populateDefaultMeter()
     m_pureSignalApplet->setVisible(
         m_radioModel->boardCapabilities().hasPureSignal);
 
+    // Phase 23: TCI applets — live in Container #0 below the existing applets.
+    // Visibility default from AppSettings (TciApplet_Visible / ClientChainApplet_Visible).
+#ifdef HAVE_WEBSOCKETS
+    if (m_tciServer) {
+        {
+            auto& s = AppSettings::instance();
+            const bool vis = s.value(QStringLiteral("TciApplet_Visible"),
+                                     QStringLiteral("True")).toString()
+                             == QStringLiteral("True");
+            m_tciApplet = new TciApplet(m_tciServer, nullptr);
+            panel->addApplet(m_tciApplet);
+            m_tciApplet->setVisible(vis);
+            connect(m_tciApplet, &TciApplet::setupRequested,
+                    this, &MainWindow::openTciSetupPage);
+            // showClientsRequested: scroll/show the ClientChainApplet.
+            // ClientChainApplet is constructed immediately below, so capture
+            // by pointer — the lambda runs only after full construction.
+            connect(m_tciApplet, &TciApplet::showClientsRequested,
+                    this, [this]() {
+                        if (m_clientChainApplet) {
+                            m_clientChainApplet->setVisible(true);
+                            m_clientChainApplet->raise();
+                        }
+                    });
+        }
+        {
+            auto& s = AppSettings::instance();
+            const bool vis = s.value(QStringLiteral("ClientChainApplet_Visible"),
+                                     QStringLiteral("True")).toString()
+                             == QStringLiteral("True");
+            m_clientChainApplet = new ClientChainApplet(m_tciServer, nullptr);
+            panel->addApplet(m_clientChainApplet);
+            m_clientChainApplet->setVisible(vis);
+        }
+    }
+#endif
+
     // Ghost applets: constructed but not added to the panel or the Containers menu
     // until their feature phases ship. Uncomment the construction + addContainerToggle
     // call (in buildMenuBar) together when the feature lands.
@@ -2013,7 +2091,7 @@ void MainWindow::populateDefaultMeter()
 
     c0->setContent(panel);
     qCDebug(lcMeter) << "Installed default meter layout: S-Meter + Power/SWR + ALC";
-    qCDebug(lcContainer) << "Container #0: Meters + RxApplet + TxApplet + PhoneCwApplet + VaxApplet";
+    qCDebug(lcContainer) << "Container #0: Meters + RxApplet + TxApplet + PhoneCwApplet + VaxApplet + TciApplet + ClientChainApplet";
 }
 
 void MainWindow::buildMenuBar()
@@ -2306,6 +2384,59 @@ void MainWindow::buildMenuBar()
             if (s.isDefault) { a->setChecked(true); }
             scaleGroup->addAction(a);
         }
+    }
+
+    viewMenu->addSeparator();
+
+    // Phase 23: View → Network Applets ▶ submenu.
+    // TCI Server and TCI Clients toggles are enabled; CAT + MIDI are greyed
+    // placeholders until phases 3K-1 and 3K-3 ship.
+    {
+        QMenu* netAppletsMenu = viewMenu->addMenu(QStringLiteral("&Network Applets"));
+
+        auto* tciServerToggle = netAppletsMenu->addAction(QStringLiteral("&TCI Server"));
+        tciServerToggle->setCheckable(true);
+        {
+            auto& s = AppSettings::instance();
+            const bool dflt = s.value(QStringLiteral("TciApplet_Visible"),
+                                      QStringLiteral("True")).toString() == QStringLiteral("True");
+            tciServerToggle->setChecked(dflt);
+        }
+        connect(tciServerToggle, &QAction::toggled, this, [this](bool show) {
+            auto& s = AppSettings::instance();
+            s.setValue(QStringLiteral("TciApplet_Visible"),
+                       show ? QStringLiteral("True") : QStringLiteral("False"));
+#ifdef HAVE_WEBSOCKETS
+            if (m_tciApplet) { m_tciApplet->setVisible(show); }
+#endif
+        });
+
+        auto* tciClientsToggle = netAppletsMenu->addAction(QStringLiteral("TCI &Clients"));
+        tciClientsToggle->setCheckable(true);
+        {
+            auto& s = AppSettings::instance();
+            const bool dflt = s.value(QStringLiteral("ClientChainApplet_Visible"),
+                                      QStringLiteral("True")).toString() == QStringLiteral("True");
+            tciClientsToggle->setChecked(dflt);
+        }
+        connect(tciClientsToggle, &QAction::toggled, this, [this](bool show) {
+            auto& s = AppSettings::instance();
+            s.setValue(QStringLiteral("ClientChainApplet_Visible"),
+                       show ? QStringLiteral("True") : QStringLiteral("False"));
+#ifdef HAVE_WEBSOCKETS
+            if (m_clientChainApplet) { m_clientChainApplet->setVisible(show); }
+#endif
+        });
+
+        netAppletsMenu->addSeparator();
+
+        auto* catItem = netAppletsMenu->addAction(QStringLiteral("&CAT"));
+        catItem->setEnabled(false);
+        catItem->setToolTip(QStringLiteral("Phase 3K-1 (post-3J)"));
+
+        auto* midiItem = netAppletsMenu->addAction(QStringLiteral("&MIDI"));
+        midiItem->setEnabled(false);
+        midiItem->setToolTip(QStringLiteral("Phase 3K-3 (post-3K-2)"));
     }
 
     viewMenu->addSeparator();
@@ -2845,9 +2976,10 @@ void MainWindow::buildMenuBar()
         catAction->setToolTip(QStringLiteral("NYI — Phase 3K"));
     }
     {
+        // Phase 23: TCI Server action — enabled, opens Setup → TCI Server.
         QAction* tciAction = toolsMenu->addAction(QStringLiteral("&TCI Server..."));
-        tciAction->setEnabled(false);
-        tciAction->setToolTip(QStringLiteral("NYI — Phase 3J"));
+        tciAction->setToolTip(QStringLiteral("Open TCI Server Setup"));
+        connect(tciAction, &QAction::triggered, this, &MainWindow::openTciSetupPage);
     }
     {
         QAction* daxAction = toolsMenu->addAction(QStringLiteral("&VAX Audio..."));
@@ -3175,8 +3307,11 @@ void MainWindow::buildStatusBar()
     m_catSep = makeSep();
     hbox->addWidget(m_catSep);
 
-    // TCI — NYI until Phase 3J; kept as static indicator, no live signal
-    m_tciIndicator = makeIndicator(QStringLiteral("TCI"), QStringLiteral("Off"));
+    // TCI — Phase 23: capture bottom label for updateTciIndicator() + install
+    // event filter for click-to-Setup navigation.
+    m_tciIndicator = makeIndicator(QStringLiteral("TCI"), QStringLiteral("Off"),
+                                   nullptr, &m_tciIndicatorBotLabel);
+    m_tciIndicator->installEventFilter(this);
     hbox->addWidget(m_tciIndicator);
     m_tciSep = makeSep();
     hbox->addWidget(m_tciSep);
@@ -3584,6 +3719,83 @@ void MainWindow::setTxInhibited(bool inhibited)
 {
     if (!m_txInhibitLabel) { return; }
     m_txInhibitLabel->setVisible(inhibited);
+}
+
+// ── Phase 23: TCI indicator update + Setup navigation ────────────────────────
+//
+// updateTciIndicator() — 4 states per design doc §8.4.
+// Reads m_tciServerRunning / m_tciClientCount / m_tciHasTxClient (all updated
+// by TciServer signal lambdas) and applies color + text + tooltip.
+//
+// Colors:
+//   Off:       #404858 (dim grey)
+//   On:        #6f6    (green)
+//   On · N:    #6cf    (cyan)
+//   On · N TX: #ec6    (orange)
+void MainWindow::updateTciIndicator()
+{
+    if (!m_tciIndicatorBotLabel) { return; }
+
+    QString text;
+    QString color;
+    QString tooltip;
+
+#ifdef HAVE_WEBSOCKETS
+    const quint16 port = m_tciServer ? m_tciServer->port() : 50001;
+    const QString addr = QStringLiteral("127.0.0.1:%1").arg(port);
+#else
+    const QString addr = QStringLiteral("127.0.0.1:50001");
+#endif
+
+    if (!m_tciServerRunning) {
+        text    = QStringLiteral("Off");
+        color   = QStringLiteral("#404858");
+        tooltip = QStringLiteral("TCI Server stopped. Click to open Setup.");
+    } else if (m_tciClientCount == 0) {
+        text    = QStringLiteral("On");
+        color   = QStringLiteral("#6f6");
+        tooltip = QStringLiteral("TCI Server listening on %1. No clients.").arg(addr);
+    } else if (!m_tciHasTxClient) {
+        text    = QStringLiteral("On · %1").arg(m_tciClientCount);
+        color   = QStringLiteral("#6cf");
+        tooltip = QStringLiteral("TCI Server listening on %1. %2 client%3 connected.")
+                      .arg(addr)
+                      .arg(m_tciClientCount)
+                      .arg(m_tciClientCount == 1 ? QString{} : QStringLiteral("s"));
+    } else {
+        text    = QStringLiteral("On · %1 ▸TX").arg(m_tciClientCount);
+        color   = QStringLiteral("#ec6");
+        QString txPeer;
+#ifdef HAVE_WEBSOCKETS
+        if (m_tciServer) {
+            txPeer = m_tciServer->activeTxClientPeer();
+        }
+#endif
+        tooltip = QStringLiteral("TCI Server listening on %1. %2 client%3. %4 holds TX audio.")
+                      .arg(addr)
+                      .arg(m_tciClientCount)
+                      .arg(m_tciClientCount == 1 ? QString{} : QStringLiteral("s"))
+                      .arg(txPeer.isEmpty() ? QStringLiteral("A client") : txPeer);
+    }
+
+    m_tciIndicatorBotLabel->setText(text);
+    m_tciIndicatorBotLabel->setStyleSheet(
+        QStringLiteral("QLabel { color: %1; font-size: 11px; }").arg(color));
+    if (m_tciIndicator) {
+        m_tciIndicator->setToolTip(tooltip);
+    }
+}
+
+// openTciSetupPage() — open Setup dialog at "TCI Server" page.
+// Pattern-matched from the many other "open setup" sites in MainWindow.cpp
+// (e.g. vfoWidget::openSetupRequested, m_overlayPanel::openSetupRequested).
+void MainWindow::openTciSetupPage()
+{
+    auto* dialog = new SetupDialog(m_radioModel, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    wireSetupDialog(dialog);
+    dialog->selectPage(QStringLiteral("TCI Server"));
+    dialog->show();
 }
 
 // ── Task 3.6: CPU meter rate ─────────────────────────────────────────────────
@@ -4628,6 +4840,15 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
                                       ? PaTempUnit::Fahrenheit
                                       : PaTempUnit::Celsius;
             PaTempUnitNotifier::setUnit(next);
+            return true;  // event consumed
+        }
+    }
+
+    // Phase 23: m_tciIndicator click → open Setup → TCI Server.
+    // The indicator is a QWidget (not a QLabel) so we match by pointer identity.
+    if (event->type() == QEvent::MouseButtonPress) {
+        if (watched == m_tciIndicator) {
+            openTciSetupPage();
             return true;  // event consumed
         }
     }
