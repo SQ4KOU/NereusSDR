@@ -24,7 +24,6 @@
 #include <cstdint>
 #include <cstring>
 #include <climits>
-#include <cmath>
 
 #include "core/TciBinaryFrame.h"
 
