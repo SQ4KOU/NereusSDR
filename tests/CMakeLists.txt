@@ -3986,6 +3986,13 @@ endif()
 # match the expected columns. Passes vacuously until Phase 5 adds data rows.
 # SETUP:Key=Value;;command convention: SETUP: segments apply AppSettings
 # preconditions before the actual command (final ";;" segment) is dispatched.
-nereus_add_test(tst_tci_matrix_runner)
+nereus_add_test(tst_tci_matrix_runner TestMockRadioModel.cpp)
 target_compile_definitions(tst_tci_matrix_runner PRIVATE
     NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
+
+# ── Phase 3J-1 Task 3.1: TciProtocol dispatch seam ────────────────────────────
+# Verifies two-switch routing: query path (no ':'), set path (with ':'), silent-
+# error invariant for unknown commands, and trailing-';' stripping. Transport-
+# blind: no Qt6WebSockets dependency.
+# TestMockRadioModel.cpp provides the moc vtable for the QObject-derived mock.
+nereus_add_test(tst_tci_dispatch_seam TestMockRadioModel.cpp)

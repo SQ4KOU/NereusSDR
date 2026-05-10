@@ -69,7 +69,7 @@ private slots:
     void allRowsPass()
     {
         TestMockRadioModel mock;
-        TciProtocol p(reinterpret_cast<QObject*>(&mock));
+        TciProtocol p(&mock);
         for (const auto& r : loadMatrix()) {
             mock.resetToBaseline();
 

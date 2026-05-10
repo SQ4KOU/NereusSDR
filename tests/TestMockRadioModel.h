@@ -1,24 +1,31 @@
 // tests/TestMockRadioModel.h  (NereusSDR)
 // NereusSDR-original test helper — no Thetis upstream port.
 //
-// Minimal in-process mock for TciProtocol tests. Not a QObject; the
-// TciProtocol stub and eventual Thetis port accept QObject*, so this
-// mock is passed as QObject* in tests. Extended per phase as new
-// command families need additional accessors.
+// Minimal in-process mock for TciProtocol tests. Inherits QObject so tests
+// can pass `&mock` directly to TciProtocol (no reinterpret_cast hazard).
+// Phase 6+ will mark accessors as Q_INVOKABLE so QMetaObject::invokeMethod
+// can dispatch from TciProtocol. Extended per phase as new command families
+// need additional accessors.
 //
 // Phase 1: 7 accessors (VFO hz, mode, MOX) + resetToBaseline().
+// Phase 3: now inherits QObject; resolves Task 1.1 reinterpret_cast<QObject*>
+//           workaround in tst_tci_matrix_runner.cpp.
 // Aim: ~30 accessors total by end of Phase 14. Each commit that adds
 // accessors should note the addition in the commit message.
 
 #pragma once
 
+#include <QObject>
 #include <QString>
 #include <array>
 
 namespace NereusSDR {
 
-class TestMockRadioModel {
+class TestMockRadioModel : public QObject {
+    Q_OBJECT
 public:
+    explicit TestMockRadioModel(QObject* parent = nullptr) : QObject(parent) {}
+
     // Set the VFO frequency for a given slice (0-based) and channel (0=A,1=B).
     void setVfoHz(int slice, int chan, qint64 hz)
     {

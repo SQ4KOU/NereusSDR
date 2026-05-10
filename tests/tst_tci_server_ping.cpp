@@ -1,3 +1,7 @@
+// no-port-check: NereusSDR-original test file. Contains the string "Thetis"
+// only as the literal WebSocket ping payload per TCI wire spec, not as a
+// Thetis source port. No logic ported from TCIServer.cs or any upstream file.
+
 // tests/tst_tci_server_ping.cpp  (NereusSDR)
 // NereusSDR-original — no Thetis upstream port in this file.
 //
