@@ -276,16 +276,53 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         }
     });
 
+    // Phase 3J-1 review P2.3: wire the DSP-thread audio tap and the IQ tap at
+    // construction time via the shared helper.  The helper is also called from
+    // start() so that a stop() → start() cycle reconnects the taps that stop()
+    // explicitly severs.
+    hookAudioAndIqTaps();
+}
+
+// ── hookAudioAndIqTaps() ─────────────────────────────────────────────────────
+//
+// Phase 3J-1 review P2.3: extracted from the original constructor tap-wiring
+// block.  Connect:
+//   (a) RxChannel::audioFrameReady → TciServer::onAudioFrameReady
+//       (Qt::DirectConnection — runs on the DSP thread)
+//   (b) RadioModel::rawIqData → TciServer::onRawIqDataReceived
+//       (Qt::QueuedConnection — marshals to main thread; see note below)
+//
+// This method is idempotent: if m_audioTapSources is non-empty the audio tap
+// is already connected; if m_iqTapConnected is true the IQ tap is already
+// connected.  The double-start guard in start() (m_server already non-null →
+// return false) prevents re-entry in production, but idempotency here is the
+// belt to the suspenders.
+//
+// Called from: constructor AND start().
+// Taps are severed in stop():
+//   - audio: QObject::disconnect(rxCh, nullptr, this, nullptr) for each source
+//   - IQ:    QObject::disconnect(m_model, nullptr, this, nullptr)
+// After stop() + start() this method reconnects them.
+
+void TciServer::hookAudioAndIqTaps()
+{
+    if (!m_model) { return; }
+
+    // ── (a) RX audio tap ────────────────────────────────────────────────────
+    //
     // Phase 16 Task 16.3 (sub-commit c): hook the RX audio tap from RxChannel.
-    // WdspEngine may not be initialized yet at construction time. We connect
+    // WdspEngine may not be initialized yet at call time. We connect
     // once it is, then hook audioFrameReady with Qt::DirectConnection so the
     // slot runs on the DSP thread and can push into AudioRingSpsc non-blockingly.
-    if (m_model) {
+    //
+    // Idempotency guard: if m_audioTapSources is already non-empty, the tap is
+    // connected — skip to avoid double-signal.
+    if (m_audioTapSources.isEmpty()) {
         WdspEngine* wdsp = m_model->wdspEngine();
         if (wdsp) {
             auto hookAudioTap = [this, wdsp]() {
                 RxChannel* rxCh = wdsp->rxChannel(0);
-                if (rxCh) {
+                if (rxCh && !m_audioTapSources.contains(rxCh)) {
                     connect(rxCh, &RxChannel::audioFrameReady,
                             this, &TciServer::onAudioFrameReady,
                             Qt::DirectConnection);
@@ -308,27 +345,23 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 });
             }
         }
+    }
 
-        // Phase 18 Task 18.1: hook the IQ tap from RadioModel::rawIqData.
-        // Qt::DirectConnection: the slot fires on whichever thread emits
-        // rawIqData (FFTEngine thread).  The slot only reads m_clients and
-        // calls QWebSocket::sendBinaryMessage, both of which must be called
-        // on the thread that owns TciServer (main thread). Using
-        // Qt::QueuedConnection here instead so the slot always fires on the
-        // main thread and we don't need to worry about cross-thread access
-        // to m_clients or QWebSocket.
-        //
-        // Note: design doc says Qt::DirectConnection for this tap.  That is
-        // safe only if m_clients and QWebSocket are accessed on the emitter's
-        // thread — which is not the case here (RadioModel emits rawIqData on
-        // the FFT worker thread).  We use Qt::QueuedConnection instead so the
-        // slot marshals back to the main thread.  The IQ data QVector is
-        // implicitly shared so the copy through the queued connection is O(1)
-        // until the slot mutates it.  Divergence from design doc §Phase 18
-        // noted here.
+    // ── (b) IQ tap ───────────────────────────────────────────────────────────
+    //
+    // Phase 18 Task 18.1: hook the IQ tap from RadioModel::rawIqData.
+    // We use Qt::QueuedConnection so the slot always fires on the main thread
+    // (TciServer owner thread).  RadioModel emits rawIqData on the FFT worker
+    // thread; m_clients and QWebSocket must only be accessed on the main thread.
+    // The QVector is implicitly shared so the queued copy is O(1).
+    // Divergence from design doc §Phase 18 Qt::DirectConnection noted here.
+    //
+    // Idempotency guard: m_iqTapConnected — reset in stop(), set here.
+    if (!m_iqTapConnected) {
         connect(m_model, &RadioModel::rawIqData,
                 this, &TciServer::onRawIqDataReceived,
                 Qt::QueuedConnection);
+        m_iqTapConnected = true;
         qCInfo(lcTci) << "TciServer: IQ tap connected to RadioModel::rawIqData";
     }
 }
@@ -400,6 +433,12 @@ bool TciServer::start(quint16 port)
     m_rxSensorTimer->start();
     m_txSensorTimer->start();
 
+    // Phase 3J-1 review P2.3: reconnect DSP audio tap + IQ tap after a
+    // stop() → start() cycle.  stop() severs these connections; hookAudioAndIqTaps
+    // re-establishes them idempotently (no-op on the first start() call, since
+    // the constructor already called hookAudioAndIqTaps).
+    hookAudioAndIqTaps();
+
     return true;
 }
 
@@ -422,13 +461,17 @@ void TciServer::stop()
     // RadioModel::rawIqData uses Qt::QueuedConnection so its slot is marshalled
     // to the main thread and cannot race with destruction, but we disconnect it
     // here for symmetry and safety.
+    //
+    // Phase 3J-1 review P2.3: reset guard flags so hookAudioAndIqTaps() re-arms
+    // on the next start() call.
     if (m_model) {
         QObject::disconnect(m_model, nullptr, this, nullptr);
+        m_iqTapConnected = false;  // P2.3: reset so start() can reconnect
     }
     for (RxChannel* rxCh : std::as_const(m_audioTapSources)) {
         QObject::disconnect(rxCh, nullptr, this, nullptr);
     }
-    m_audioTapSources.clear();
+    m_audioTapSources.clear();  // P2.3: reset so hookAudioAndIqTaps() re-arms
 
     m_pingTimer->stop();
     m_drainTimer->stop();        // Phase 14: stop drain before disconnecting clients

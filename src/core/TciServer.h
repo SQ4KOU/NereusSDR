@@ -205,6 +205,20 @@ private slots:
     // Called from onClientDisconnected and stop().
     void cleanupResamplers(std::shared_ptr<TciClientSession>& session);
 
+    // Phase 3J-1 review P2.3: connect RX audio tap (RxChannel::audioFrameReady
+    // → onAudioFrameReady) and IQ tap (RadioModel::rawIqData →
+    // onRawIqDataReceived).  Called from BOTH the constructor AND start() so
+    // that a stop() → start() cycle reconnects the taps that stop() severs.
+    //
+    // If WDSP is not yet initialized at call time, defers the audio tap via
+    // WdspEngine::initializedChanged (same lazy-connect path as the constructor
+    // originally used).  The IQ tap is always eager (RadioModel is always ready
+    // when TciServer is constructed/started).
+    //
+    // Idempotent: if the taps are already connected (m_audioTapSources non-empty
+    // / m_iqTapConnected true) this method is a no-op.
+    void hookAudioAndIqTaps();
+
 private:
     RadioModel*        m_model;
     QWebSocketServer*  m_server{nullptr};
@@ -261,6 +275,12 @@ private:
     // stop() iterates and calls QObject::disconnect(rxCh, nullptr, this, nullptr).
     // The set is cleared last so the disconnect calls are always valid.
     QSet<RxChannel*> m_audioTapSources;
+
+    // Phase 3J-1 review P2.3: guard flag for the IQ tap connection.
+    // hookAudioAndIqTaps() sets this to true after connecting
+    // RadioModel::rawIqData → onRawIqDataReceived; stop() resets it when it
+    // disconnects the signal.  Prevents double-connect on repeated start() calls.
+    bool m_iqTapConnected{false};
 
     // ── Phase 17: TX audio single-client mutex ───────────────────────────────
     //
