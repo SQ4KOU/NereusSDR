@@ -234,6 +234,36 @@ private:
     //       directly without the Thetis pan-slider calibration (deferred to Phase 20).
     QString handleRxBalanceCommand(const QStringList& args);
 
+    // ── IQ stream family handlers (Phase 11) ─────────────────────────────────
+    // From Thetis TCIServer.cs:5016-5026 [v2.10.3.13] — set-switch IQ cases.
+    // Plan corrections: "iq_stream" is not a real Thetis case (skipped);
+    //   "iq_sample_rate" Thetis spelling is iq_samplerate (one word, line 5016).
+    // IQSwap + AlwaysStreamIQ effect-sites deferred to Phase 18 (binary IQ
+    // frame builder) and Phase 16/18 (wantsIQStream early-out) respectively.
+
+    // From Thetis TCIServer.cs:5016 [v2.10.3.13] — iq_samplerate set case.
+    // handleIQSampleRate at TCIServer.cs:5705-5722 [v2.10.3.13]:
+    //   1-arg set (int). Thetis does NOT clamp to specific rates — it accepts any
+    //   int, stores it, and echoes it back unchanged (the hardware-rate coupling
+    //   code is commented out at TCIServer.cs:5712-5719 [v2.10.3.13]).
+    //   Phase 11 faithful: parse int, store if valid, always echo current value.
+    //   Query: TCIServer.cs:5175 [v2.10.3.13] — sendIQSampleRate(getPublishedIQSampleRate()).
+    QString handleIqSampleRateCommand(const QStringList& args);
+    // From Thetis TCIServer.cs:5175 [v2.10.3.13] — iq_samplerate query case.
+    // sendIQSampleRate(getPublishedIQSampleRate()) → direct unicast response.
+    QString handleIqSampleRateQueryCommand();
+
+    // From Thetis TCIServer.cs:5022-5026 [v2.10.3.13] — iq_start/iq_stop cases.
+    // dispatch through handleIQStart at TCIServer.cs:5797-5813 [v2.10.3.13].
+    //
+    // Phase 11 STUB: validate args parses an int receiver and return empty.
+    // DEFERRED to Phase 18 (IQ binary stream pipeline): per-client subscription
+    // tracking via m_iqStreamEnabled HashSet (Thetis TCIServer.cs:766).
+    // AlwaysStreamIQ flag effect (Thetis TCIServer.cs:5401) lands at the same
+    // time. Phase 11's placeholder rows for compat_always_stream_iq_on are
+    // updated in this commit's matrix.csv to reflect Phase 18 deferral.
+    QString handleIqStartStopCommand(const QStringList& args, bool enable);
+
     // ── Audio stream family handlers (Phase 10) ───────────────────────────────
     // From Thetis TCIServer.cs:5019-5041 [v2.10.3.13] — set-switch audio cases.
     // Corrections vs. plan: "audio_stream" → "audio_start"/"audio_stop";

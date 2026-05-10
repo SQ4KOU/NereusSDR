@@ -38,6 +38,8 @@
 //           setAudioStreamChannels/audioStreamChannels,
 //           setAudioStreamSamples/audioStreamSamples,
 //           setAfLinear/afLinear, setMonLinear/monLinear.
+// Phase 11: 44 accessors total — added 1 IQ-stream accessor pair:
+//           setIqSampleRate/iqSampleRate.
 // Aim: ~50 accessors total by end of Phase 14. Each commit that adds
 // accessors should note the addition in the commit message.
 
@@ -407,6 +409,14 @@ public:
     Q_INVOKABLE void setMonLinear(int v) { m_monLinear = v; }
     Q_INVOKABLE int monLinear() const { return m_monLinear; }
 
+    // ── Phase 11: IQ stream config accessors ──────────────────────────────────
+
+    // IQ sample rate (Hz). Default 192000 (common HPSDR rate; Thetis does not
+    // clamp — see handleIQSampleRate at TCIServer.cs:5705-5722 [v2.10.3.13]).
+    // Q_INVOKABLE: called via QMetaObject::invokeMethod from TciProtocol.
+    Q_INVOKABLE void setIqSampleRate(int sr) { m_iqSampleRate = sr; }
+    Q_INVOKABLE int iqSampleRate() const { return m_iqSampleRate; }
+
     // Reset all state to baseline (zeros/empty). Called before each matrix row.
     void resetToBaseline()
     {
@@ -446,6 +456,8 @@ public:
         m_audioStreamSamples = 2048;
         m_afLinear  = 50;
         m_monLinear = 50;
+        // Phase 11: IQ stream state resets.
+        m_iqSampleRate = 192000;
     }
 
 private:
@@ -487,6 +499,8 @@ private:
     int     m_audioStreamSamples{2048};
     int     m_afLinear{50};
     int     m_monLinear{50};
+    // Phase 11: IQ stream state.
+    int     m_iqSampleRate{192000};
 };
 
 } // namespace NereusSDR

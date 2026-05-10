@@ -923,6 +923,14 @@ QString TciProtocol::handleSetCommand(const QString& name, const QStringList& ar
     // From Thetis TCIServer.cs:5109 [v2.10.3.13] — rx_balance case in set switch.
     if (name == QStringLiteral("rx_balance"))      { return handleRxBalanceCommand(args); }
 
+    // Phase 11: IQ stream family.
+    // From Thetis TCIServer.cs:5016 [v2.10.3.13] — iq_samplerate case in set switch.
+    if (name == QStringLiteral("iq_samplerate"))             { return handleIqSampleRateCommand(args); }
+    // From Thetis TCIServer.cs:5022 [v2.10.3.13] — iq_start case (STUB Phase 11).
+    if (name == QStringLiteral("iq_start"))                  { return handleIqStartStopCommand(args, true); }
+    // From Thetis TCIServer.cs:5025 [v2.10.3.13] — iq_stop case (STUB Phase 11).
+    if (name == QStringLiteral("iq_stop"))                   { return handleIqStartStopCommand(args, false); }
+
     // Phase 10: audio stream family.
     // From Thetis TCIServer.cs:5019 [v2.10.3.13] — audio_samplerate case in set switch.
     if (name == QStringLiteral("audio_samplerate"))          { return handleAudioSampleRateCommand(args); }
@@ -957,6 +965,12 @@ QString TciProtocol::handleQueryCommand(const QString& name)
     // From Thetis TCIServer.cs:5145 [v2.10.3.13] — case "mute" in 1-arg query switch.
     if (name == QStringLiteral("mute")) {
         return handleMuteQueryCommand();
+    }
+
+    // Phase 11: IQ stream query cases.
+    // From Thetis TCIServer.cs:5175 [v2.10.3.13] — iq_samplerate query case.
+    if (name == QStringLiteral("iq_samplerate")) {
+        return handleIqSampleRateQueryCommand();
     }
 
     // Phase 10: audio stream / volume query cases.
@@ -2242,6 +2256,80 @@ QString TciProtocol::handleMonVolumeQueryCommand()
                               Qt::DirectConnection,
                               Q_RETURN_ARG(int, linear));
     return buildMonVolumeLine(tciLinearToDbVolume(linear));
+}
+
+// ── IQ stream family handlers (Phase 11) ──────────────────────────────────
+
+// From Thetis TCIServer.cs:5705-5722 [v2.10.3.13] — handleIQSampleRate.
+// 1-arg set (int). Thetis does NOT clamp to specific rates — it accepts any
+// int, stores it, and echoes it back unchanged. The hardware-rate coupling
+// that would apply 48000/96000/192000/384000 constraints is commented out at
+// TCIServer.cs:5712-5719 [v2.10.3.13]:
+//     //just echo out that we have changed to keep client happy, we dont change
+//     //Thetis H/W sample rate for now
+// Phase 11 faithful: parse int, store if valid, always echo current value.
+// Notification format: iq_samplerate:<int>; (sendIQSampleRate at TCIServer.cs:5364).
+QString TciProtocol::handleIqSampleRateCommand(const QStringList& args)
+{
+    if (args.size() != 1) { return {}; }
+    bool ok = false;
+    // From Thetis TCIServer.cs:5708 [v2.10.3.13] — int.TryParse(args[0], out int sampleRate).
+    const int sr = args.at(0).trimmed().toInt(&ok);
+    if (ok) {
+        // From Thetis TCIServer.cs:5710 [v2.10.3.13] — no rate gate; any int stored.
+        QMetaObject::invokeMethod(m_radio, "setIqSampleRate",
+                                  Qt::DirectConnection,
+                                  Q_ARG(int, sr));
+    }
+    int current = 192000;
+    QMetaObject::invokeMethod(m_radio, "iqSampleRate",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(int, current));
+    // From Thetis TCIServer.cs:5720 [v2.10.3.13] — sendIQSampleRate(sampleRate).
+    m_pendingNotifications << buildIqSampleRateLine(current);
+    return {};
+}
+
+// From Thetis TCIServer.cs:5175-5176 [v2.10.3.13] — iq_samplerate query case.
+// sendIQSampleRate(getPublishedIQSampleRate()) → direct unicast response.
+// getPublishedIQSampleRate at TCIServer.cs:5925-5938 [v2.10.3.13] returns the
+// max hardware sample rate across active receivers; Phase 11 returns the stored
+// value directly (hardware query path deferred to Phase 18).
+QString TciProtocol::handleIqSampleRateQueryCommand()
+{
+    int sr = 192000;
+    QMetaObject::invokeMethod(m_radio, "iqSampleRate",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(int, sr));
+    return buildIqSampleRateLine(sr);
+}
+
+// From Thetis TCIServer.cs:5022-5026 [v2.10.3.13] — iq_start/iq_stop cases
+// dispatch through handleIQStart at TCIServer.cs:5797-5813 [v2.10.3.13].
+//
+// Phase 11 STUB: validate args parses an int receiver and return empty.
+// DEFERRED to Phase 18 (IQ binary stream pipeline): per-client subscription
+// tracking via m_iqStreamEnabled HashSet (Thetis TCIServer.cs:766).
+// AlwaysStreamIQ flag effect (Thetis TCIServer.cs:5401) lands at the same
+// time. Phase 11's placeholder rows for compat_always_stream_iq_on are
+// updated in this commit's matrix.csv to reflect Phase 18 deferral.
+//
+// When Phase 18 wires this:
+//   lock (m_objStreamLock) {
+//     if (enable) m_iqStreamEnabled.Add(receiver);
+//     else         m_iqStreamEnabled.Remove(receiver);
+//   }
+//   sendIQStartStop(receiver, enable);
+//   m_server?.RefreshStreamRunState();
+QString TciProtocol::handleIqStartStopCommand(const QStringList& args, bool enable)
+{
+    // Validate args contains a parseable int receiver; silently ignore bad inputs.
+    if (args.size() != 1) { return {}; }
+    bool ok = false;
+    (void)args.at(0).trimmed().toInt(&ok);
+    // Intentionally no notification — per-client subscription model deferred to Phase 18.
+    (void)enable;
+    return {};
 }
 
 } // namespace NereusSDR
