@@ -130,6 +130,9 @@ private slots:
                     // Phase 6: dispatch non-SETUP early segments as commands
                     // so set;;query chain patterns work (e.g. vfo:0,0,14250000;;vfo:0,0;).
                     p.handleCommand(parts[i]);
+                    // Phase 15: drain coalesced VFO updates before checking
+                    // notifications (synchronous test model — no 5ms timer here).
+                    p.drainCoalescedNotifications();
                     // Drain notifications from the early segment so they don't
                     // accumulate into the final assertion.
                     while (p.hasPendingNotification()) {
@@ -139,6 +142,10 @@ private slots:
             }
 
             const QString actualResponse = p.handleCommand(parts.last());
+            // Phase 15: drain coalesced VFO updates into m_pendingNotifications
+            // before asserting on the notification queue. The matrix runner is
+            // synchronous (no 5ms drain timer); this call replicates the tick.
+            p.drainCoalescedNotifications();
             QStringList notifs;
             while (p.hasPendingNotification()) {
                 notifs.append(p.takePendingNotification());

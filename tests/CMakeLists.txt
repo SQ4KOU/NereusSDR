@@ -4000,6 +4000,13 @@ target_compile_definitions(tst_tci_matrix_runner PRIVATE
 # Transport-blind: no Qt6WebSockets dependency.
 nereus_add_test(tst_tci_priority_queues)
 
+# ── Phase 3J-1 Task 15.1: TciVfoCoalescer (pure logic, no WebSockets) ────────
+# Layer 3 outbound-coalesced map per Thetis TCIServer.cs:1722-1727 [v2.10.3.13].
+# Verifies: latest-wins replacement, arrival-order drain, 200-update burst
+# collapses to 1 per key, clear() drops without emitting.
+# Transport-blind: no Qt6WebSockets dependency.
+nereus_add_test(tst_tci_vfo_coalescer)
+
 # ── Phase 3J-1 Task 10: TCI volume dB math (pure logic, no WebSockets) ───────
 # Tests tciLinearToDbVolume / tciDbToLinearVolume from TciVolume.h.
 # Port of Thetis TCIServer.cs:4110-4132 [v2.10.3.13] linearToDbVolume /

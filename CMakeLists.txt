@@ -410,6 +410,7 @@ set(CORE_SOURCES
     src/core/RadioConnection.cpp
     src/core/TciProtocol.cpp
     src/core/TciSendQueue.cpp
+    src/core/TciVfoCoalescer.cpp
     src/core/TciServer.cpp
     src/core/codec/AlexFilterMap.cpp
     src/core/codec/P1CodecStandard.cpp

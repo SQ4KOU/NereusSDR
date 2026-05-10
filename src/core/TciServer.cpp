@@ -76,6 +76,22 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     m_drainTimer = new QTimer(this);
     m_drainTimer->setInterval(5);   // 5ms drain tick; see rationale above
     connect(m_drainTimer, &QTimer::timeout, this, [this]() {
+        // Phase 15: collapse coalesced VFO updates into pending notifications
+        // BEFORE per-client drain so the just-drained frames participate in
+        // this tick. From Thetis TCIServer.cs:1722-1727 [v2.10.3.13].
+        m_protocol->drainCoalescedNotifications();
+
+        // Broadcast any drained notifications to all clients.
+        // Without this, drainCoalescedNotifications() populates
+        // m_pendingNotifications but nothing pumps it to the send queues.
+        while (m_protocol->hasPendingNotification()) {
+            const QString notif = m_protocol->takePendingNotification();
+            for (auto sit = m_clients.cbegin(); sit != m_clients.cend(); ++sit) {
+                sit.value()->sendQueue.push(TciSendQueue::Priority::Control, notif);
+            }
+        }
+
+        // Phase 14 per-client send-queue drain (unchanged):
         constexpr int kDrainMaxPerTick = 64;
         for (auto it = m_clients.begin(); it != m_clients.end(); ++it) {
             QWebSocket* ws    = it.key();

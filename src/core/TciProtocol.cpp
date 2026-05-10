@@ -18,6 +18,7 @@
 #include "AppSettings.h"
 #include "LogCategories.h"
 #include "TciVolume.h"
+#include "TciVfoCoalescer.h"
 
 namespace NereusSDR {
 
@@ -77,6 +78,19 @@ QString TciProtocol::takePendingNotification()
         return {};
     }
     return m_pendingNotifications.takeFirst();
+}
+
+// Phase 15: drain coalesced VFO updates into m_pendingNotifications.
+// Called by TciServer from the 5ms drain timer (and by tst_tci_matrix_runner
+// after each handleCommand for synchronous test-model compatibility).
+// From Thetis TCIServer.cs:1722-1727 [v2.10.3.13] — outbound-coalesced map.
+void TciProtocol::drainCoalescedNotifications()
+{
+    QStringList drained;
+    m_vfoCoalescer.drainAll(&drained);
+    for (const auto& frame : drained) {
+        m_pendingNotifications.append(frame);
+    }
 }
 
 // From Thetis TCIServer.cs:2512-2552 [v2.10.3.13] — sendInitialisationData
@@ -1072,9 +1086,13 @@ QString TciProtocol::handleVfoCommand(const QStringList& args)
                                   Q_ARG(int, rx),
                                   Q_ARG(int, chan),
                                   Q_ARG(qint64, hz));
-        // Broadcast notification — Phase 14 adds priority-queue coalescing.
+        // Phase 15: route through coalescer (Layer 3 of Thetis 3-layer throttle
+        // at TCIServer.cs:1722-1727 [v2.10.3.13]) instead of direct enqueue.
+        // Rapid VFO bursts within a 5ms drain tick collapse to 1 frame per key.
         // From Thetis sendVFO at TCIServer.cs:2061-2093 [v2.10.3.13] — format string.
-        m_pendingNotifications << QStringLiteral("vfo:%1,%2,%3;").arg(rx).arg(chan).arg(hz);
+        const QString vfoKey   = QStringLiteral("vfo:%1,%2").arg(rx).arg(chan);
+        const QString vfoFrame = QStringLiteral("vfo:%1,%2,%3;").arg(rx).arg(chan).arg(hz);
+        m_vfoCoalescer.update(vfoKey, vfoFrame);
         return {};
     }
 

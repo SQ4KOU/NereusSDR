@@ -23,6 +23,8 @@
 #include <QString>
 #include <QStringList>
 
+#include "TciVfoCoalescer.h"
+
 namespace NereusSDR {
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -67,6 +69,12 @@ public:
     // Notification queue — drained by TciServer after each handleCommand.
     bool hasPendingNotification() const;
     QString takePendingNotification();
+
+    // Drain coalesced VFO updates into the pending notification queue.
+    // Called by TciServer from the 5ms drain timer; ensures rapid VFO bursts
+    // collapse to ≤ 1 frame per (rx, chan) per drain tick.
+    // From Thetis TCIServer.cs:1722-1727 [v2.10.3.13] — outbound-coalesced map.
+    void drainCoalescedNotifications();
 
     // Build the post-connect init burst. Stub returns empty list in Phase 3;
     // Phase 4 Task 4.1 replaces with the 8-line wrapper from
@@ -557,6 +565,10 @@ private:
 
     QObject* m_radio{nullptr};
     QStringList m_pendingNotifications;
+    // Phase 15: coalescer for rapid VFO updates (Layer 3 of Thetis 3-layer
+    // throttle at TCIServer.cs:1722-1727 [v2.10.3.13]). Layers 1+2 subsumed
+    // by Qt event loop + 5ms TciServer drain timer.
+    TciVfoCoalescer m_vfoCoalescer;
     int m_setDispatchCount{0};
     int m_queryDispatchCount{0};
 };
