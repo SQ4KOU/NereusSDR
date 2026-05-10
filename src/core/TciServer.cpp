@@ -486,6 +486,21 @@ void TciServer::onNewConnection()
 {
     while (m_server->hasPendingConnections()) {
         auto* ws = m_server->nextPendingConnection();
+
+        // Phase 26 review finding #7: bound incoming binary (and text) frame
+        // size against hostile or malformed frames from a misbehaving local
+        // client.  Legitimate TCI audio is ≤ 2048 samples × 2 ch × 4 bytes =
+        // 16 KiB + 64-byte header.  2 MiB gives 128× headroom while preventing
+        // pathological heap allocations from oversized frames.
+        //
+        // QWebSocket::setMaxAllowedIncomingMessageSize is per-socket;
+        // QWebSocketServer has no equivalent in this Qt6 version.
+        //
+        // NereusSDR-original (Thetis hand-rolls RFC 6455 framing with no cap;
+        // we're 127.0.0.1-only but a misbehaving local process can still send).
+        static constexpr quint64 kMaxIncomingMessageBytes = 2u * 1024u * 1024u;  // 2 MiB
+        ws->setMaxAllowedIncomingMessageSize(kMaxIncomingMessageBytes);
+
         auto session = std::make_shared<TciClientSession>();
         session->socket = ws;
         session->peer   = ws->peerAddress().toString()
