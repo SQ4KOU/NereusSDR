@@ -290,8 +290,8 @@ cmake --build build -j$(nproc)
 ./build/NereusSDR
 ```
 
-Dependencies (Arch): `qt6-base qt6-multimedia qt6-svg cmake ninja pkgconf fftw alsa-lib jack2 pipewire`
-Dependencies (Ubuntu/Debian): `qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-shadertools-dev qt6-svg-dev cmake ninja-build pkg-config libfftw3-dev libgl1-mesa-dev libasound2-dev libjack-jackd2-dev libpipewire-0.3-dev`
+Dependencies (Arch): `qt6-base qt6-multimedia qt6-svg qt6-websockets cmake ninja pkgconf fftw alsa-lib jack2 pipewire`
+Dependencies (Ubuntu/Debian): `qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-shadertools-dev qt6-svg-dev qt6-websockets-dev cmake ninja-build pkg-config libfftw3-dev libgl1-mesa-dev libasound2-dev libjack-jackd2-dev libpipewire-0.3-dev`
 Notes:
 * `qt6-svg` / `qt6-svg-dev` is hard-required (`find_package(Qt6 REQUIRED COMPONENTS Svg)`).
 * `alsa-lib` / `libasound2-dev` and `jack2` / `libjack-jackd2-dev` are hard-required on Linux because PortAudio is built with `PA_USE_ALSA=ON` and `PA_USE_JACK=ON FORCE`; without them the static libportaudio links with zero host APIs.
