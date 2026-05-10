@@ -26,6 +26,7 @@
 #include "WdspEngine.h"
 #include "RxChannel.h"
 #include "TxChannel.h"
+#include "AppSettings.h"  // Phase 18: TciIqSwap + TciAlwaysStreamIq flags
 
 // Phase 16 Task 16.3 (sub-commit b): WDSP RESAMPLEF lifecycle.
 // resample.h declares create_resampleF / destroy_resampleF / xresampleF, and
@@ -229,6 +230,28 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 });
             }
         }
+
+        // Phase 18 Task 18.1: hook the IQ tap from RadioModel::rawIqData.
+        // Qt::DirectConnection: the slot fires on whichever thread emits
+        // rawIqData (FFTEngine thread).  The slot only reads m_clients and
+        // calls QWebSocket::sendBinaryMessage, both of which must be called
+        // on the thread that owns TciServer (main thread). Using
+        // Qt::QueuedConnection here instead so the slot always fires on the
+        // main thread and we don't need to worry about cross-thread access
+        // to m_clients or QWebSocket.
+        //
+        // Note: design doc says Qt::DirectConnection for this tap.  That is
+        // safe only if m_clients and QWebSocket are accessed on the emitter's
+        // thread — which is not the case here (RadioModel emits rawIqData on
+        // the FFT worker thread).  We use Qt::QueuedConnection instead so the
+        // slot marshals back to the main thread.  The IQ data QVector is
+        // implicitly shared so the copy through the queued connection is O(1)
+        // until the slot mutates it.  Divergence from design doc §Phase 18
+        // noted here.
+        connect(m_model, &RadioModel::rawIqData,
+                this, &TciServer::onRawIqDataReceived,
+                Qt::QueuedConnection);
+        qCInfo(lcTci) << "TciServer: IQ tap connected to RadioModel::rawIqData";
     }
 }
 
@@ -604,6 +627,8 @@ void TciServer::onTextMessageReceived(const QString& msg)
         }
         const QString kAudioStart = QStringLiteral("audio_start:");
         const QString kAudioStop  = QStringLiteral("audio_stop:");
+        const QString kIqStart    = QStringLiteral("iq_start:");
+        const QString kIqStop     = QStringLiteral("iq_stop:");
         if (trimmed.startsWith(kAudioStart)) {
             bool ok = false;
             const int rx = trimmed.mid(kAudioStart.size()).trimmed().toInt(&ok);
@@ -615,6 +640,29 @@ void TciServer::onTextMessageReceived(const QString& msg)
             const int rx = trimmed.mid(kAudioStop.size()).trimmed().toInt(&ok);
             if (ok && rx >= 0 && rx <= 1) {
                 handleAudioUnsubscribe(session, rx);
+            }
+        } else if (trimmed.startsWith(kIqStart)) {
+            // Phase 18 Task 18.1: promote iq_start:N; stub to real per-client
+            // IQ subscription tracking.  Mirrors audio_start handling above.
+            // From Thetis TCIServer.cs:5022-5025 [v2.10.3.13] — iq_start/stop
+            // update m_iqStreamEnabled per-listener.
+            bool ok = false;
+            const int rx = trimmed.mid(kIqStart.size()).trimmed().toInt(&ok);
+            if (ok && rx >= 0 && rx <= 1) {
+                if (!session->iqStreamEnabled.contains(rx)) {
+                    session->iqStreamEnabled.insert(rx);
+                    qCInfo(lcTci) << "TciServer: IQ stream subscribed rx" << rx
+                                  << "peer" << session->peer;
+                }
+            }
+        } else if (trimmed.startsWith(kIqStop)) {
+            bool ok = false;
+            const int rx = trimmed.mid(kIqStop.size()).trimmed().toInt(&ok);
+            if (ok && rx >= 0 && rx <= 1) {
+                if (session->iqStreamEnabled.remove(rx)) {
+                    qCInfo(lcTci) << "TciServer: IQ stream unsubscribed rx" << rx
+                                  << "peer" << session->peer;
+                }
             }
         }
 
@@ -917,6 +965,140 @@ void TciServer::injectAudioFrameForTest(int slice, const float* L, const float* 
                                          int n, int srcRate)
 {
     onAudioFrameReady(slice, L, R, n, srcRate);
+}
+
+// ── onRawIqDataReceived() ─────────────────────────────────────────────────────
+//
+// Phase 18 Task 18.1: IQ binary stream tap.
+// Connected to RadioModel::rawIqData with Qt::QueuedConnection so this slot
+// always fires on the main thread (where m_clients and QWebSocket live).
+//
+// Porting from Thetis TCIServer.cs:5397-5435 [v2.10.3.13] —
+//   wantsIQStream(receiver): AlwaysStreamIQ override OR per-client
+//   m_iqStreamEnabled.Contains(receiver).
+//   PublishIQSamples: encode + sendBinaryFrame per subscribed client.
+//
+// IQSwap: from Thetis TCIServer.cs:6111 [v2.10.3.13].  When TciIqSwap is
+// True (default), each (I, Q) pair is swapped to (Q, I) before encoding.
+// Default True per design doc §10.
+//
+// Header `length` field: for IQ frames, length = complexSamples * 2 (total
+// floats), NOT per-channel.  Bug-for-bug parity with Thetis which passes
+// complexSamples * 2 at cs:5434 [v2.10.3.13].
+//
+// RadioModel emits rawIqData only for RX1 (slice 0) in the current
+// single-receiver architecture; Phase 3F multi-pan will add per-receiver
+// variants.  This slot therefore treats all incoming data as receiver=0.
+
+void TciServer::onRawIqDataReceived(const QVector<float>& interleavedIQ)
+{
+    if (m_clients.isEmpty()) { return; }
+    if (interleavedIQ.isEmpty()) { return; }
+
+    // Phase 18: RadioModel::rawIqData fires only for RX1 (slice 0).
+    // Phase 3F will add per-receiver variants.
+    constexpr int kReceiver = 0;  // From design doc Phase 18 §Note
+
+    // Read per-call so AppSettings changes take effect immediately.
+    auto& settings = AppSettings::instance();
+
+    // IQSwap flag — From Thetis TCIServer.cs:6111 [v2.10.3.13].
+    // Default True per design doc §10.
+    const bool iqSwap = settings.value(QStringLiteral("TciIqSwap"),
+                                        QStringLiteral("True")).toString()
+                         == QStringLiteral("True");
+
+    // AlwaysStreamIQ override — From Thetis TCIServer.cs:5401 [v2.10.3.13]:
+    //   if (m_server != null && m_server.AlwaysStreamIQ) return true;
+    const bool alwaysStream = settings.value(QStringLiteral("TciAlwaysStreamIq"),
+                                              QStringLiteral("False")).toString()
+                              == QStringLiteral("True");
+
+    // Apply IQSwap in-place on a copy so the original QVector stays unchanged.
+    // From Thetis TCIServer.cs:6111 [v2.10.3.13] — swap I/Q sample order.
+    QVector<float> outBuf = interleavedIQ;
+    if (iqSwap) {
+        const int pairs = outBuf.size() / 2;
+        for (int i = 0; i < pairs; ++i) {
+            std::swap(outBuf[i * 2], outBuf[i * 2 + 1]);
+        }
+    }
+
+    // complexSamples is the number of (I, Q) pairs.
+    // length field for IQ frames = complexSamples * 2 (total floats).
+    // From Thetis TCIServer.cs:5434 [v2.10.3.13]:
+    //   sendBinaryFrame(buildStreamPayload(receiver, sampleRate,
+    //       TCISampleType.FLOAT32, complexSamples * 2, TCIStreamType.IQ_STREAM,
+    //       2, encoded));
+    // NOTE: audio uses perChSamples * channels (same math but different semantic
+    // labelling); IQ uses complexSamples * 2.  Bug-for-bug parity with Thetis.
+    const int complexSamples = outBuf.size() / 2;
+    const int lengthField    = complexSamples * 2;  // total floats in the IQ frame
+
+    // IQ sample rate: 192000 Hz is the typical HPSDR DDC rate and the default
+    // Thetis negotiates via iq_samplerate:.  Phase 3F multi-pan will pass the
+    // actual per-receiver rate here.  For now, match the Thetis Phase 11 default
+    // of 192000 from TciProtocol.cpp:265 [v2.10.3.13 port].
+    constexpr int iqSampleRate = 192000;
+
+    for (auto it = m_clients.cbegin(); it != m_clients.cend(); ++it) {
+        QWebSocket* ws     = it.key();
+        const auto& session = it.value();
+
+        // wantsIQStream(kReceiver) — From Thetis TCIServer.cs:5397-5404 [v2.10.3.13]:
+        //   if (AlwaysStreamIQ) return true;
+        //   return m_iqStreamEnabled.Contains(receiver);
+        const bool wants = alwaysStream || session->iqStreamEnabled.contains(kReceiver);
+        if (!wants) { continue; }
+
+        // Encode and send.  Always FLOAT32, always 2 channels for IQ.
+        // From Thetis TCIServer.cs:5430-5434 [v2.10.3.13] — encodeSamples +
+        // buildStreamPayload(receiver, sampleRate, FLOAT32, complexSamples*2,
+        //                    IQ_STREAM, 2, encoded).
+        const QByteArray frame = TciBinaryFrame::buildStreamPayload(
+            kReceiver,
+            iqSampleRate,
+            static_cast<int>(TciSampleType::Float32),
+            lengthField,
+            static_cast<int>(TciStreamType::IqStream),
+            2,             // always 2 channels for IQ (I + Q)
+            outBuf.constData());
+
+        ws->sendBinaryMessage(frame);
+    }
+}
+
+// ── injectRawIqForTest() ──────────────────────────────────────────────────────
+//
+// Phase 18 Task 18.1: test-only hook.  Delegates directly to
+// onRawIqDataReceived so integration tests can feed synthetic IQ into the
+// pipeline without needing a real RadioModel / FFTEngine.
+//
+// This wrapper exists because onRawIqDataReceived is a private slot
+// (Qt-connected internally).  Production code never calls this method;
+// the only caller is tst_tci_iq_roundtrip.
+
+void TciServer::injectRawIqForTest(const QVector<float>& interleavedIQ)
+{
+    onRawIqDataReceived(interleavedIQ);
+}
+
+// ── activeIqSubscriberCount() ─────────────────────────────────────────────────
+//
+// Phase 18 Task 18.1: count of sessions currently subscribed to IQ stream
+// for the given receiver index.  Counts per-client iqStreamEnabled hits;
+// does NOT add 1 for AlwaysStreamIQ (that flag applies globally, not per
+// session count).  Exposed for tst_tci_iq_roundtrip assertions.
+
+int TciServer::activeIqSubscriberCount(int receiver) const
+{
+    int count = 0;
+    for (auto it = m_clients.cbegin(); it != m_clients.cend(); ++it) {
+        if (it.value()->iqStreamEnabled.contains(receiver)) {
+            ++count;
+        }
+    }
+    return count;
 }
 
 } // namespace NereusSDR

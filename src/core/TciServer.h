@@ -114,6 +114,19 @@ public:
     void injectAudioFrameForTest(int slice, const float* L, const float* R,
                                  int n, int srcRate);
 
+    // Phase 18 Task 18.1: test-only hook — bypass the RadioModel::rawIqData
+    // signal chain and inject IQ directly.  Used by tst_tci_iq_roundtrip;
+    // production code goes through the Qt::DirectConnection signal at
+    // RadioModel::rawIqData → TciServer::onRawIqDataReceived.
+    void injectRawIqForTest(const QVector<float>& interleavedIQ);
+
+    // Phase 18 Task 18.1: count of sessions currently subscribed to IQ
+    // stream for the given receiver index.  Exposed for test assertions.
+    // Returns the number of connected clients whose iqStreamEnabled set
+    // contains `receiver`, plus 1 if TciAlwaysStreamIq is True (simulating
+    // the AlwaysStreamIQ override path).
+    int activeIqSubscriberCount(int receiver) const;
+
 signals:
     // Emitted after the server begins listening.  port is the actual bound port
     // (useful when start() was called with port=0).
@@ -160,6 +173,13 @@ private slots:
     // From Thetis TCIServer.cs:4406-4440 [v2.10.3.13] — audio_start/stop handlers.
     void handleAudioSubscribe(std::shared_ptr<TciClientSession>& session, int rx);
     void handleAudioUnsubscribe(std::shared_ptr<TciClientSession>& session, int rx);
+
+    // Phase 18 Task 18.1: IQ binary stream tap.
+    // Connected to RadioModel::rawIqData with Qt::DirectConnection.
+    // Applies IQSwap, then broadcasts IQ frames to subscribed clients.
+    // From Thetis TCIServer.cs:5397-5435 [v2.10.3.13] — wantsIQStream +
+    // PublishIQSamples.
+    void onRawIqDataReceived(const QVector<float>& interleavedIQ);
 
     // Destroys all RESAMPLEF instances for the given session and clears the map.
     // Called from onClientDisconnected and stop().

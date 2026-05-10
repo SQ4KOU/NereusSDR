@@ -4013,6 +4013,19 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tst_tci_audio_roundtrip PRIVATE Qt6::WebSockets)
 endif()
 
+# ── Phase 3J-1 Task 18.1: IQ binary stream pipeline + IQSwap + AlwaysStreamIQ ──
+# Spins up a real TciServer + real QWebSocket client, subscribes to IQ for
+# slice 0, injects synthetic I/Q via the test-only injectRawIqForTest hook,
+# then asserts the client receives ≥ 1 binary frame with streamType==0
+# (IQ_STREAM) and a valid 64-byte LE header.  Validates the Phase 18 IQ tap,
+# wantsIQStream early-out, IQSwap flag, and AlwaysStreamIQ override.
+# From Thetis TCIServer.cs:5397-5435 + 6111 [v2.10.3.13].
+# Gated on Qt6WebSockets_FOUND (TciServer requires HAVE_WEBSOCKETS).
+if(Qt6WebSockets_FOUND)
+    nereus_add_test(tst_tci_iq_roundtrip)
+    target_link_libraries(tst_tci_iq_roundtrip PRIVATE Qt6::WebSockets)
+endif()
+
 # ── Phase 3J-1 Task 17.1: TX audio binary pipeline + single-client mutex ──────
 # Tests: TX mutex acquire/release, active-client-frame-lands, non-active-client-
 # frame-dropped (ring invariant).
