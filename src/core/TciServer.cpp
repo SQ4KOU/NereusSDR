@@ -635,6 +635,22 @@ void TciServer::setPingIntervalMs(int ms)
     }
 }
 
+// ── injectAudioFrameForTest() ─────────────────────────────────────────────────
+//
+// Phase 16 Task 16.4: test-only hook.  Delegates to the private
+// onAudioFrameReady slot so integration tests can feed synthetic audio into
+// the per-slice ring buffer without needing a real RxChannel / WdspEngine.
+//
+// This wrapper exists because onAudioFrameReady is private (signal-connected
+// internally via Qt::DirectConnection).  Production code never calls this
+// method; the only caller is tst_tci_audio_roundtrip.
+
+void TciServer::injectAudioFrameForTest(int slice, const float* L, const float* R,
+                                         int n, int srcRate)
+{
+    onAudioFrameReady(slice, L, R, n, srcRate);
+}
+
 } // namespace NereusSDR
 
 #endif // HAVE_WEBSOCKETS

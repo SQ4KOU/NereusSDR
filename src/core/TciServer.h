@@ -85,6 +85,19 @@ public:
     // interval takes effect immediately.
     void setPingIntervalMs(int ms);
 
+    // Test-only: bypass the RxChannel signal chain and inject audio directly
+    // into the per-slice ring buffer.  Used by tst_tci_audio_roundtrip;
+    // production code paths go through the Qt::DirectConnection signal at
+    // RxChannel::audioFrameReady → TciServer::onAudioFrameReady.
+    //
+    // Audio thread safety: this method must only be called from the audio
+    // thread (or in tests, the main test thread which substitutes for the
+    // audio thread).  It delegates to onAudioFrameReady which writes only
+    // to m_audioRing[slice] — the lock-free SPSC ring safe for one producer
+    // (the caller) and one consumer (the main thread drain timer).
+    void injectAudioFrameForTest(int slice, const float* L, const float* R,
+                                 int n, int srcRate);
+
 signals:
     // Emitted after the server begins listening.  port is the actual bound port
     // (useful when start() was called with port=0).

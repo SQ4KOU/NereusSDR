@@ -4000,6 +4000,19 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tst_tci_resampler_lifecycle PRIVATE Qt6::WebSockets)
 endif()
 
+# ── Phase 3J-1 Task 16.4: PCM round-trip integration test ─────────────────────
+# Spins up a real TciServer + real QWebSocket client, subscribes to audio for
+# slice 0, injects 250ms of synthetic 1 kHz sine via the test-only
+# injectAudioFrameForTest hook, then asserts the client receives ≥ 1 binary
+# frame with streamType==1 (RX_AUDIO_STREAM), a valid 64-byte LE header, and a
+# decoded Float32 payload with peak amplitude ≥ 0.5.  Validates the Phase 16.2
+# AudioRingSpsc + Phase 16.3 drain timer + TciBinaryFrame pipeline end-to-end.
+# Gated on Qt6WebSockets_FOUND (TciServer requires HAVE_WEBSOCKETS).
+if(Qt6WebSockets_FOUND)
+    nereus_add_test(tst_tci_audio_roundtrip)
+    target_link_libraries(tst_tci_audio_roundtrip PRIVATE Qt6::WebSockets)
+endif()
+
 # ── Phase 3J-1 Task 1.1: TCI verification matrix runner ──────────────────────
 # Loads tests/data/tci/matrix.csv and feeds each row's command into
 # TciProtocol::handleCommand(), asserting the response + notification queue
